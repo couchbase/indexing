@@ -407,7 +407,7 @@ func restful_lookup(ids []string) error {
 	log.Println("LOOKUP with stale as false")
 	reqbody = restful_clonebody(reqlookup)
 	reqbody["equal"] = `["Pyongyang"]`
-	reqbody["distinct"] = true
+	reqbody["distinct"] = false
 	reqbody["stale"] = "false"
 	entries, err = getl(ids[0], reqbody)
 	if err != nil {
@@ -424,7 +424,7 @@ func restful_lookup(ids []string) error {
 	log.Println("LOOKUP with Rome")
 	reqbody = restful_clonebody(reqlookup)
 	reqbody["equal"] = `["Rome"]`
-	reqbody["distinct"] = true
+	reqbody["distinct"] = false
 	reqbody["stale"] = "false"
 	entries, err = getl(ids[0], reqbody)
 	if err != nil {

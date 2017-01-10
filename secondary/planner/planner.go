@@ -194,6 +194,7 @@ type Solution struct {
 	sizing      SizingMethod
 	isLiveData  bool
 	useLiveData bool
+	initialPlan bool
 
 	// placement of indexes	in nodes
 	Placement []*IndexerNode `json:"placement,omitempty"`
@@ -355,6 +356,7 @@ func (p *SAPlanner) planSingleRun(command CommandType, solution *Solution) (*Sol
 	move := uint64(0)
 	iteration := uint64(0)
 	positiveMove := uint64(0)
+	initialPlan := solution.initialPlan
 
 	temperature := p.initialTemperature(command, old_cost)
 	startTemp := temperature
@@ -402,6 +404,11 @@ func (p *SAPlanner) planSingleRun(command CommandType, solution *Solution) (*Sol
 		}
 
 		temperature = temperature * Alpha
+
+		if command == CommandPlan && initialPlan {
+			// adjust temperature based on score for faster convergence
+			temperature = temperature * old_cost
+		}
 	}
 
 	p.ElapseTime = uint64(time.Now().Sub(startTime).Nanoseconds())
@@ -600,6 +607,7 @@ func newSolution(constraint ConstraintMethod, sizing SizingMethod, indexers []*I
 		// create at least one indexer if none exist
 		nodeId := strconv.FormatUint(uint64(rand.Uint32()), 10)
 		r.addNewNode(nodeId)
+		r.initialPlan = true
 	} else {
 		// initialize placement from the current set of indexers
 		for i, _ := range indexers {
@@ -721,6 +729,7 @@ func (s *Solution) clone() *Solution {
 		Placement:   ([]*IndexerNode)(nil),
 		isLiveData:  s.isLiveData,
 		useLiveData: s.useLiveData,
+		initialPlan: s.initialPlan,
 	}
 
 	for _, node := range s.Placement {
@@ -1723,13 +1732,36 @@ func (p *RandomPlacement) Validate(s *Solution) error {
 	for _, index := range p.indexes {
 
 		if index.GetMemTotal(s.UseLiveData()) > memQuota || index.CpuUsage > cpuQuota {
-			return errors.New(fmt.Sprintf("Cannot place index exceeding quota. Index=%v Bucket=%v Memory=%v Cpu=%v MemoryQuota=%v CpuQuota=%v",
+			return errors.New(fmt.Sprintf("Index exceeding quota. Index=%v Bucket=%v Memory=%v Cpu=%v MemoryQuota=%v CpuQuota=%v",
 				index.Name, index.Bucket, index.GetMemTotal(s.UseLiveData()), index.CpuUsage, s.getConstraintMethod().GetMemQuota(),
 				s.getConstraintMethod().GetCpuQuota()))
 		}
 
 		if !s.getConstraintMethod().CanAddNode(s) && s.findNumEquivalentIndex(index) > len(s.Placement) {
-			return errors.New(fmt.Sprintf("Cannot place index with more replica (or equivalent index) than indexer nodes. Index=%v Bucket=%v",
+			return errors.New(fmt.Sprintf("Index has more replica (or equivalent index) than indexer nodes. Index=%v Bucket=%v",
+				index.Name, index.Bucket))
+		}
+
+		found := false
+		for _, indexer := range s.Placement {
+			freeMem := s.getConstraintMethod().GetMemQuota()
+			freeCpu := s.getConstraintMethod().GetCpuQuota()
+
+			for _, index2 := range indexer.Indexes {
+				if !p.isEligibleIndex(index2) {
+					freeMem -= index2.GetMemTotal(s.UseLiveData())
+					freeCpu -= index2.CpuUsage
+				}
+			}
+
+			if freeMem >= index.GetMemTotal(s.UseLiveData()) && freeCpu >= index.CpuUsage {
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			return errors.New(fmt.Sprintf("Cannot find an indexer with enough free memory or cpu for index. Index=%v Bucket=%v",
 				index.Name, index.Bucket))
 		}
 	}
@@ -1829,7 +1861,7 @@ func (p *RandomPlacement) randomMoveByLoad(s *Solution, checkConstraint bool) (b
 		return false, false
 	}
 
-	// Find a set of candidates (indexer node) that has movable index
+	// Find a set of candidates (indexer node) that has eligible index
 	// From the set of candidates, find those that are under resource constraint.
 	// Compute the loads for every constrained candidate
 	candidates := p.findCandidates(s)

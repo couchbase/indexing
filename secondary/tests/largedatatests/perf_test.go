@@ -111,7 +111,7 @@ func SkipTestPerfRangeWithoutMutations_1M(t *testing.T) {
 	FailTestIfError(err, "Error in creating the index", t)
 
 	start := time.Now()
-	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{"E"}, []interface{}{"N"}, 3, true, defaultlimit, c.AnyConsistency, nil)
+	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{"E"}, []interface{}{"N"}, 3, false, defaultlimit, c.AnyConsistency, nil)
 	elapsed := time.Since(start)
 	log.Printf("RangeScan:: Len of scanResults is: %d", len(scanResults))
 	log.Printf("Range Scan of %d user documents took %s\n", count, elapsed)
@@ -139,7 +139,7 @@ func SkipTestPerfLookupWithoutMutations_1M(t *testing.T) {
 	FailTestIfError(err, "Error in creating the index", t)
 
 	start := time.Now()
-	scanResults, err := secondaryindex.Lookup(indexName, bucketName, indexScanAddress, []interface{}{"AQUACINE"}, true, defaultlimit, c.AnyConsistency, nil)
+	scanResults, err := secondaryindex.Lookup(indexName, bucketName, indexScanAddress, []interface{}{"AQUACINE"}, false, defaultlimit, c.AnyConsistency, nil)
 	elapsed := time.Since(start)
 	log.Printf("Lookup:: Len of scanResults is: %d", len(scanResults))
 	log.Printf("Lookup of %d user documents took %s\n", count, elapsed)
@@ -193,7 +193,7 @@ func SkipTestPerfRangeWithoutMutations_10M(t *testing.T) {
 	FailTestIfError(err, "Error in creating the index", t)
 
 	start := time.Now()
-	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{"E"}, []interface{}{"N"}, 3, true, defaultlimit, c.AnyConsistency, nil)
+	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{"E"}, []interface{}{"N"}, 3, false, defaultlimit, c.AnyConsistency, nil)
 	elapsed := time.Since(start)
 	log.Printf("RangeScan:: Len of scanResults is: %d", len(scanResults))
 	log.Printf("Range Scan of %d user documents took %s\n", count, elapsed)

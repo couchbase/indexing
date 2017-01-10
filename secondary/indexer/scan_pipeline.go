@@ -28,6 +28,7 @@ type ScanPipeline struct {
 
 	rowsReturned uint64
 	bytesRead    uint64
+	currOffset   int64
 }
 
 func (p *ScanPipeline) Cancel(err error) {
@@ -92,12 +93,13 @@ func (s *IndexScanSource) Routine() error {
 
 	r := s.p.req
 	var currentScan Scan
-	offset := int64(0)
+	s.p.currOffset = 0
 	buf := secKeyBufPool.Get()
 	r.keyBufList = append(r.keyBufList, buf)
+	previousRow := secKeyBufPool.Get()
+	r.keyBufList = append(r.keyBufList, previousRow)
 
 	fn := func(entry []byte) error {
-
 		skipRow := false
 		if currentScan.ScanType == FilterRangeReq {
 			skipRow, err = filterScanRow(entry, currentScan, (*buf)[:0])
@@ -106,22 +108,23 @@ func (s *IndexScanSource) Routine() error {
 			}
 		}
 
-		if !skipRow {
-			if offset >= r.Offset {
-				s.p.rowsReturned++
+		if skipRow {
+			return nil
+		}
 
-				wrErr := s.WriteItem(entry)
-				if wrErr != nil {
-					return wrErr
-				}
-
-				if s.p.rowsReturned == uint64(s.p.req.Limit) {
-					return ErrLimitReached
-				}
-			} else {
-				offset++
+		if r.Distinct && !r.isPrimary {
+			if len(*previousRow) != 0 && distinctCompare(entry, *previousRow) {
+				return nil // Ignore the entry as it is same as previous entry
 			}
+		}
 
+		wrErr := s.WriteItem(entry)
+		if wrErr != nil {
+			return wrErr
+		}
+
+		if r.Distinct {
+			*previousRow = append((*previousRow)[:0], entry...)
 		}
 
 		return nil
@@ -185,9 +188,21 @@ loop:
 
 		d.p.bytesRead += uint64(len(sk) + len(docid))
 		for i := 0; i < count; i++ {
-			err = d.WriteItem(sk, docid)
-			if err != nil {
+			if d.p.req.Distinct && i > 0 {
 				break
+			}
+			if d.p.currOffset >= d.p.req.Offset {
+				d.p.rowsReturned++
+				err = d.WriteItem(sk, docid)
+				if err != nil {
+					break // TODO: Old code. Should it be ClosedWithError
+				}
+
+				if d.p.rowsReturned == uint64(d.p.req.Limit) {
+					break loop
+				}
+			} else {
+				d.p.currOffset++
 			}
 		}
 	}
@@ -349,4 +364,15 @@ func applyFilter(compositekeys [][]byte, compositefilters []CompositeElementFilt
 	}
 
 	return true
+}
+
+// Compare secondary entries and return true
+// if the secondary keys of entries are equal
+func distinctCompare(entryBytes1, entryBytes2 []byte) bool {
+	entry1 := secondaryIndexEntry(entryBytes1)
+	entry2 := secondaryIndexEntry(entryBytes2)
+	if bytes.Compare(entryBytes1[:entry1.lenKey()], entryBytes2[:entry2.lenKey()]) == 0 {
+		return true
+	}
+	return false
 }

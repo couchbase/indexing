@@ -14,9 +14,9 @@ func TestScanAfterBucketPopulate(t *testing.T) {
 	log.Printf("Create an index on empty bucket, populate the bucket and Run a scan on the index")
 	var indexName = "index_eyeColor"
 	var bucketName = "default"
-	
+
 	docScanResults := datautility.ExpectedScanResponse_string(docs, "eyeColor", "b", "c", 3)
-	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{"b"}, []interface{}{"c"}, 3, true, defaultlimit, c.SessionConsistency, nil)
+	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{"b"}, []interface{}{"c"}, 3, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation: ", t)
@@ -37,7 +37,7 @@ func TestThreeIndexCreates(t *testing.T) {
 	CreateDocs(100)
 
 	docScanResults := datautility.ExpectedScanResponse_string(docs, "balance", "$1", "$2", 2)
-	scanResults, err := secondaryindex.Range(i1, bucketName, indexScanAddress, []interface{}{"$1"}, []interface{}{"$2"}, 2, true, defaultlimit, c.SessionConsistency, nil)
+	scanResults, err := secondaryindex.Range(i1, bucketName, indexScanAddress, []interface{}{"$1"}, []interface{}{"$2"}, 2, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
@@ -50,7 +50,7 @@ func TestThreeIndexCreates(t *testing.T) {
 	CreateDocs(100)
 
 	docScanResults = datautility.ExpectedScanResponse_string(docs, "email", "p", "w", 1)
-	scanResults, err = secondaryindex.Range(i2, bucketName, indexScanAddress, []interface{}{"p"}, []interface{}{"w"}, 1, true, defaultlimit, c.SessionConsistency, nil)
+	scanResults, err = secondaryindex.Range(i2, bucketName, indexScanAddress, []interface{}{"p"}, []interface{}{"w"}, 1, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
@@ -63,7 +63,7 @@ func TestThreeIndexCreates(t *testing.T) {
 	DeleteDocs(150)
 
 	docScanResults = datautility.ExpectedScanResponse_float64(docs, "address.pin", 2222, 5555, 3)
-	scanResults, err = secondaryindex.Range(i3, bucketName, indexScanAddress, []interface{}{2222}, []interface{}{5555}, 3, true, defaultlimit, c.SessionConsistency, nil)
+	scanResults, err = secondaryindex.Range(i3, bucketName, indexScanAddress, []interface{}{2222}, []interface{}{5555}, 3, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
@@ -92,7 +92,7 @@ func TestMultipleIndexCreatesDropsWithMutations(t *testing.T) {
 	CreateDocs(100)
 
 	docScanResults := datautility.ExpectedScanResponse_string(docs, "address.street", "F", "X", 2)
-	scanResults, err := secondaryindex.Range(i1, bucketName, indexScanAddress, []interface{}{"F"}, []interface{}{"X"}, 2, true, defaultlimit, c.SessionConsistency, nil)
+	scanResults, err := secondaryindex.Range(i1, bucketName, indexScanAddress, []interface{}{"F"}, []interface{}{"X"}, 2, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
@@ -105,7 +105,7 @@ func TestMultipleIndexCreatesDropsWithMutations(t *testing.T) {
 	CreateDocs(100)
 
 	docScanResults = datautility.ExpectedScanResponse_string(docs, "registered", "2014-01", "2014-09", 1)
-	scanResults, err = secondaryindex.Range(i2, bucketName, indexScanAddress, []interface{}{"2014-01"}, []interface{}{"2014-09"}, 1, true, defaultlimit, c.SessionConsistency, nil)
+	scanResults, err = secondaryindex.Range(i2, bucketName, indexScanAddress, []interface{}{"2014-01"}, []interface{}{"2014-09"}, 1, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
@@ -118,7 +118,7 @@ func TestMultipleIndexCreatesDropsWithMutations(t *testing.T) {
 	CreateDocs(100)
 
 	docScanResults = datautility.ExpectedScanResponse_string(docs, "gender", "male", "male", 3)
-	scanResults, err = secondaryindex.Lookup(i3, bucketName, indexScanAddress, []interface{}{"male"}, true, defaultlimit, c.SessionConsistency, nil)
+	scanResults, err = secondaryindex.Lookup(i3, bucketName, indexScanAddress, []interface{}{"male"}, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
@@ -135,7 +135,7 @@ func TestMultipleIndexCreatesDropsWithMutations(t *testing.T) {
 	DeleteDocs(150)
 
 	docScanResults = datautility.ExpectedScanResponse_string(docs, "address.street", "F", "X", 2)
-	scanResults, err = secondaryindex.Range(i1, bucketName, indexScanAddress, []interface{}{"F"}, []interface{}{"X"}, 2, true, defaultlimit, c.SessionConsistency, nil)
+	scanResults, err = secondaryindex.Range(i1, bucketName, indexScanAddress, []interface{}{"F"}, []interface{}{"X"}, 2, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
@@ -148,7 +148,7 @@ func TestMultipleIndexCreatesDropsWithMutations(t *testing.T) {
 	CreateDocs(100)
 
 	docScanResults = datautility.ExpectedScanResponse_float64(docs, "longitude", -50, 200, 3)
-	scanResults, err = secondaryindex.Range(i4, bucketName, indexScanAddress, []interface{}{-50}, []interface{}{200}, 3, true, defaultlimit, c.SessionConsistency, nil)
+	scanResults, err = secondaryindex.Range(i4, bucketName, indexScanAddress, []interface{}{-50}, []interface{}{200}, 3, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
@@ -163,7 +163,7 @@ func TestCreateDropScan(t *testing.T) {
 	FailTestIfError(err, "Error in creating the index", t)
 
 	docScanResults := datautility.ExpectedScanResponse_string(docs, "company", "FI", "SR", 1)
-	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{"FI"}, []interface{}{"SR"}, 1, true, defaultlimit, c.SessionConsistency, nil)
+	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{"FI"}, []interface{}{"SR"}, 1, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan 1", t)
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
@@ -171,7 +171,7 @@ func TestCreateDropScan(t *testing.T) {
 	err = secondaryindex.DropSecondaryIndex(indexName, bucketName, indexManagementAddress)
 
 	docScanResults = datautility.ExpectedScanResponse_string(docs, "company", "BIOSPAN", "ZILLANET", 1)
-	scanResults, e := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{"BIOSPAN"}, []interface{}{"ZILLANET"}, 1, true, defaultlimit, c.SessionConsistency, nil)
+	scanResults, e := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{"BIOSPAN"}, []interface{}{"ZILLANET"}, 1, false, defaultlimit, c.SessionConsistency, nil)
 	if e == nil {
 		t.Fatal("Error excpected when scanning for dropped index but scan didnt fail \n")
 	} else {
@@ -190,7 +190,7 @@ func TestCreateDropCreate(t *testing.T) {
 
 	// Scan after index create
 	docScanResults := datautility.ExpectedScanResponse_string(docs, "company", "FI", "SR", 2)
-	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{"FI"}, []interface{}{"SR"}, 2, true, defaultlimit, c.SessionConsistency, nil)
+	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{"FI"}, []interface{}{"SR"}, 2, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan 1: ", t)
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan 1 result validation: ", t)
@@ -200,7 +200,7 @@ func TestCreateDropCreate(t *testing.T) {
 
 	// Scan after dropping the index. Error expected
 	docScanResults = datautility.ExpectedScanResponse_string(docs, "company", "BIOSPAN", "ZILLANET", 0)
-	scanResults, err = secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{"BIOSPAN"}, []interface{}{"ZILLANET"}, 0, true, defaultlimit, c.SessionConsistency, nil)
+	scanResults, err = secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{"BIOSPAN"}, []interface{}{"ZILLANET"}, 0, false, defaultlimit, c.SessionConsistency, nil)
 	if err == nil {
 		t.Fatal("Scan 2: Error excpected when scanning for dropped index but scan didnt fail \n")
 	} else {
@@ -213,7 +213,7 @@ func TestCreateDropCreate(t *testing.T) {
 
 	// Scan the created index with inclusion 1
 	docScanResults = datautility.ExpectedScanResponse_string(docs, "company", "FI", "SR", 1)
-	scanResults, err = secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{"FI"}, []interface{}{"SR"}, 1, true, defaultlimit, c.SessionConsistency, nil)
+	scanResults, err = secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{"FI"}, []interface{}{"SR"}, 1, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan 3: ", t)
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan 3 result validation: ", t)
@@ -221,7 +221,7 @@ func TestCreateDropCreate(t *testing.T) {
 
 	// Scan the created index with inclusion 3
 	docScanResults = datautility.ExpectedScanResponse_string(docs, "company", "FI", "SR", 3)
-	scanResults, err = secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{"FI"}, []interface{}{"SR"}, 3, true, defaultlimit, c.SessionConsistency, nil)
+	scanResults, err = secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{"FI"}, []interface{}{"SR"}, 3, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan 4: ", t)
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan 4 result validation: ", t)
@@ -240,13 +240,13 @@ func TestCreate2Drop1Scan2(t *testing.T) {
 	FailTestIfError(err, "Error in creating the index", t)
 
 	docScanResults := datautility.ExpectedScanResponse_string(docs, "company", "FI", "SR", 1)
-	scanResults, err := secondaryindex.Range(index1, bucketName, indexScanAddress, []interface{}{"FI"}, []interface{}{"SR"}, 1, true, defaultlimit, c.SessionConsistency, nil)
+	scanResults, err := secondaryindex.Range(index1, bucketName, indexScanAddress, []interface{}{"FI"}, []interface{}{"SR"}, 1, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan 1", t)
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
 
 	docScanResults = datautility.ExpectedScanResponse_float64(docs, "age", 30, 50, 1)
-	scanResults, err = secondaryindex.Range(index2, bucketName, indexScanAddress, []interface{}{30}, []interface{}{50}, 1, true, defaultlimit, c.SessionConsistency, nil)
+	scanResults, err = secondaryindex.Range(index2, bucketName, indexScanAddress, []interface{}{30}, []interface{}{50}, 1, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan 2", t)
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
@@ -254,7 +254,7 @@ func TestCreate2Drop1Scan2(t *testing.T) {
 	err = secondaryindex.DropSecondaryIndex(index1, bucketName, indexManagementAddress)
 
 	docScanResults = datautility.ExpectedScanResponse_float64(docs, "age", 0, 60, 1)
-	scanResults, err = secondaryindex.Range(index2, bucketName, indexScanAddress, []interface{}{0}, []interface{}{60}, 1, true, defaultlimit, c.SessionConsistency, nil)
+	scanResults, err = secondaryindex.Range(index2, bucketName, indexScanAddress, []interface{}{0}, []interface{}{60}, 1, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan 2", t)
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
@@ -269,12 +269,12 @@ func TestIndexNameCaseSensitivity(t *testing.T) {
 	FailTestIfError(err, "Error in creating the index", t)
 
 	docScanResults := datautility.ExpectedScanResponse_float64(docs, "age", 35, 40, 1)
-	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{35}, []interface{}{40}, 1, true, defaultlimit, c.SessionConsistency, nil)
+	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{35}, []interface{}{40}, 1, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
 
-	scanResults, err = secondaryindex.Range("index_Age", bucketName, indexScanAddress, []interface{}{35}, []interface{}{40}, 1, true, defaultlimit, c.SessionConsistency, nil)
+	scanResults, err = secondaryindex.Range("index_Age", bucketName, indexScanAddress, []interface{}{35}, []interface{}{40}, 1, false, defaultlimit, c.SessionConsistency, nil)
 	if err == nil {
 		t.Fatal("Error excpected when scanning for non existent index but scan didnt fail \n")
 	} else {
@@ -331,7 +331,7 @@ func TestScanWithNoTimeout(t *testing.T) {
 
 	CreateDocs(100)
 	docScanResults := datautility.ExpectedScanResponse_string(docs, "eyeColor", "b", "c", 3)
-	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{"b"}, []interface{}{"c"}, 3, true, defaultlimit, c.SessionConsistency, nil)
+	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{"b"}, []interface{}{"c"}, 3, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation: ", t)

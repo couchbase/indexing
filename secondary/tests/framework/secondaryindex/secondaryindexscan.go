@@ -12,6 +12,7 @@ import (
 )
 
 var CheckCollation = false
+var UseClient = "gsi"
 
 func RangeWithClient(indexName, bucketName, server string, low, high []interface{}, inclusion uint32,
 	distinct bool, limit int64, consistency c.Consistency, vector *qc.TsConsistency, client *qc.GsiClient) (tc.ScanResponse, error) {
@@ -60,6 +61,14 @@ func RangeWithClient(indexName, bucketName, server string, low, high []interface
 
 func Range(indexName, bucketName, server string, low, high []interface{}, inclusion uint32,
 	distinct bool, limit int64, consistency c.Consistency, vector *qc.TsConsistency) (tc.ScanResponse, error) {
+
+	distinct = false
+	if UseClient == "n1ql" {
+		log.Printf("Using n1ql client")
+		return N1QLRange(indexName, bucketName, server, low, high, inclusion,
+			distinct, limit, consistency, vector)
+	}
+
 	var scanErr error
 	scanErr = nil
 	var previousSecKey value.Value
@@ -126,6 +135,15 @@ func Range(indexName, bucketName, server string, low, high []interface{}, inclus
 }
 
 func Lookup(indexName, bucketName, server string, values []interface{}, distinct bool, limit int64, consistency c.Consistency, vector *qc.TsConsistency) (tc.ScanResponse, error) {
+
+	distinct = false
+	if UseClient == "n1ql" {
+		log.Printf("Using n1ql client")
+		return N1QLLookup(indexName, bucketName, server, values,
+			distinct, limit, consistency, vector)
+
+	}
+
 	var scanErr error
 	scanErr = nil
 	// ToDo: Create a client pool
@@ -177,6 +195,12 @@ func Lookup(indexName, bucketName, server string, values []interface{}, distinct
 }
 
 func ScanAll(indexName, bucketName, server string, limit int64, consistency c.Consistency, vector *qc.TsConsistency) (tc.ScanResponse, error) {
+
+	if UseClient == "n1ql" {
+		log.Printf("Using n1ql client")
+		return N1QLScanAll(indexName, bucketName, server, limit, consistency, vector)
+	}
+
 	var scanErr error
 	scanErr = nil
 	var previousSecKey value.Value
@@ -299,6 +323,13 @@ func RangeStatistics(indexName, bucketName, server string, low, high []interface
 
 func Scans(indexName, bucketName, server string, scans qc.Scans, reverse, distinct bool,
 	offset, limit int64, consistency c.Consistency, vector *qc.TsConsistency) (tc.ScanResponse, error) {
+
+	if UseClient == "n1ql" {
+		log.Printf("Using n1ql client")
+		return N1QLScans(indexName, bucketName, server, scans, reverse, distinct,
+			offset, limit, consistency, vector)
+	}
+
 	var scanErr error
 	scanErr = nil
 	var previousSecKey value.Value
@@ -313,18 +344,10 @@ func Scans(indexName, bucketName, server string, scans qc.Scans, reverse, distin
 	defnID, _ := GetDefnID(client, bucketName, indexName)
 	scanResults := make(tc.ScanResponse)
 
-	entrykeys := make([]int64, 1)
-	entrykeys[0] = 47
-
-	proj := &qc.IndexProjection{
-		EntryKeys:  entrykeys,
-		PrimaryKey: false,
-	}
-
 	count := 0
 	start := time.Now()
 	connErr := client.MultiScan(
-		defnID, "", scans, reverse, distinct, proj, offset, limit,
+		defnID, "", scans, reverse, distinct, nil, offset, limit,
 		consistency, vector,
 		func(response qc.ResponseReader) bool {
 			if err := response.Error(); err != nil {
@@ -340,7 +363,6 @@ func Scans(indexName, bucketName, server string, scans qc.Scans, reverse, distin
 					primaryKey := string(pkeys[i])
 					//log.Printf("Scanresult count = %v: %v  : %v ", count, skey, primaryKey)
 					count++
-					//log.Printf("Scanresults so far = %v", scanResults)
 					if _, keyPresent := scanResults[primaryKey]; keyPresent {
 						// Duplicate primary key found
 						dupError := errors.New("Duplicate primary key found")

@@ -526,13 +526,14 @@ func ExpectedArrayScanResponse_string(docs tc.KeyValues, jsonPath string, low, h
 
 func ExpectedMultiScanResponse(docs tc.KeyValues, compositeFieldPaths []string, scans qc.Scans,
 	reverse, distinct bool, offset, limit int64, isScanAll bool) tc.ScanResponse {
-
+	log.Printf("distinct = %v", distinct)
 	results := make(tc.ScanResponse)
 	var json map[string]interface{}
 	var f string
 	var i int
 	offsetCount := int64(0)
 
+	resultList := make(ResultList, 0, len(docs))
 	for k, v := range docs {
 		var compositeValues []interface{}
 		for _, compositeFieldPath := range compositeFieldPaths {
@@ -551,10 +552,22 @@ func ExpectedMultiScanResponse(docs tc.KeyValues, compositeFieldPaths []string, 
 			}
 			compositeValues = append(compositeValues, json[fields[i]])
 		}
+		r := Result{PrimaryKey: k, SecondaryKey: compositeValues}
+		resultList = append(resultList, r)
+	}
+	sort.Sort(resultList)
 
+	var previousValue []interface{}
+	for _, res := range resultList {
 		if isScanAll {
+			if distinct {
+				if compareSecondaryKeys(res.SecondaryKey, previousValue) == 0 {
+					continue
+				}
+			}
 			if offsetCount >= offset {
-				results[k] = compositeValues
+				results[res.PrimaryKey] = res.SecondaryKey
+				previousValue = res.SecondaryKey
 			} else {
 				offsetCount++
 			}
@@ -564,12 +577,12 @@ func ExpectedMultiScanResponse(docs tc.KeyValues, compositeFieldPaths []string, 
 		skipDoc := true
 		for _, scan := range scans {
 			if scan.Seek != nil { // Equals
-				if isEqual(scan.Seek, compositeValues) {
+				if isEqual(scan.Seek, res.SecondaryKey) {
 					skipDoc = false
 					break
 				}
 			} else { // Composite filtering
-				if applyFilters(compositeValues, scan.Filter) {
+				if applyFilters(res.SecondaryKey, scan.Filter) {
 					skipDoc = false
 					break
 				}
@@ -577,10 +590,61 @@ func ExpectedMultiScanResponse(docs tc.KeyValues, compositeFieldPaths []string, 
 		}
 
 		if !skipDoc {
+			if distinct {
+				if compareSecondaryKeys(res.SecondaryKey, previousValue) == 0 {
+					continue
+				}
+			}
 			if offsetCount >= offset {
-				results[k] = compositeValues
+				results[res.PrimaryKey] = res.SecondaryKey
+				previousValue = res.SecondaryKey
 			} else {
 				offsetCount++
+			}
+		}
+	}
+	return results
+}
+
+// MultiScan for Primary index
+func ExpectedMultiScanResponse_Primary(docs tc.KeyValues, scans qc.Scans,
+	reverse, distinct bool, offset, limit int64) tc.ScanResponse {
+
+	results := make(tc.ScanResponse)
+
+	for k, _ := range docs {
+		field := k
+
+		for _, scan := range scans {
+			if len(scan.Filter) == 0 {
+				results[k] = nil
+				continue
+			}
+
+			low := scan.Filter[0].Low.(string)
+			high := scan.Filter[0].High.(string)
+			inclusion := scan.Filter[0].Inclusion
+			switch inclusion {
+			case 0:
+				if field > low && field < high {
+					results[k] = nil
+				}
+			case 1:
+				if field >= low && field < high {
+					results[k] = nil
+				}
+			case 2:
+				if field > low && field <= high {
+					results[k] = nil
+				}
+			case 3:
+				if field >= low && field <= high {
+					results[k] = nil
+				}
+			default:
+				if field > low && field < high {
+					results[k] = nil
+				}
 			}
 		}
 	}
@@ -601,6 +665,9 @@ func applyFilters(compositekeys []interface{}, compositefilters []*qc.CompositeE
 	var err error
 	var low, high, ck []byte
 	for i, filter := range compositefilters {
+		checkLow := (filter.Low != c.MinUnbounded)
+		checkHigh := (filter.High != c.MaxUnbounded)
+
 		ck, err = json.Marshal(compositekeys[i])
 		if err != nil {
 			log.Printf("Error in marshalling value %v", compositekeys[i])
@@ -622,23 +689,51 @@ func applyFilters(compositekeys []interface{}, compositefilters []*qc.CompositeE
 		switch filter.Inclusion {
 		case 0:
 			// if ck > low and ck < high
-			if !(bytes.Compare(ck, low) > 0 && bytes.Compare(ck, high) < 0) {
-				return false
+			if checkLow {
+				if bytes.Compare(ck, low) <= 0 {
+					return false
+				}
+			}
+			if checkHigh {
+				if bytes.Compare(ck, high) >= 0 {
+					return false
+				}
 			}
 		case 1:
 			// if ck >= low and ck < high
-			if !(bytes.Compare(ck, low) >= 0 && bytes.Compare(ck, high) < 0) {
-				return false
+			if checkLow {
+				if bytes.Compare(ck, low) < 0 {
+					return false
+				}
+			}
+			if checkHigh {
+				if bytes.Compare(ck, high) >= 0 {
+					return false
+				}
 			}
 		case 2:
 			// if ck > low and ck <= high
-			if !(bytes.Compare(ck, low) > 0 && bytes.Compare(ck, high) <= 0) {
-				return false
+			if checkLow {
+				if bytes.Compare(ck, low) <= 0 {
+					return false
+				}
+			}
+			if checkHigh {
+				if bytes.Compare(ck, high) > 0 {
+					return false
+				}
 			}
 		case 3:
 			// if ck >= low and ck <= high
-			if !(bytes.Compare(ck, low) >= 0 && bytes.Compare(ck, high) <= 0) {
-				return false
+			if checkLow {
+				if bytes.Compare(ck, low) < 0 {
+					return false
+				}
+			}
+			if checkHigh {
+				if bytes.Compare(ck, high) > 0 {
+					return false
+				}
 			}
 		}
 	}
@@ -646,33 +741,71 @@ func applyFilters(compositekeys []interface{}, compositefilters []*qc.CompositeE
 	return true
 }
 
-/*func applyFilter(compositekeys [][]byte, compositefilters []CompositeElementFilter) bool {
-
-	for i, filter := range compositefilters {
-		ck := compositekeys[i]
-		switch filter.Inclusion {
-		case Neither:
-			// if ck > low and ck < high
-			if !(bytes.Compare(ck, filter.Low.Bytes()) > 0 && bytes.Compare(ck, filter.High.Bytes()) < 0) {
-				return false
-			}
-		case Low:
-			// if ck >= low and ck < high
-			if !(bytes.Compare(ck, filter.Low.Bytes()) >= 0 && bytes.Compare(ck, filter.High.Bytes()) < 0) {
-				return false
-			}
-		case High:
-			// if ck > low and ck <= high
-			if !(bytes.Compare(ck, filter.Low.Bytes()) > 0 && bytes.Compare(ck, filter.High.Bytes()) <= 0) {
-				return false
-			}
-		case Both:
-			// if ck >= low and ck <= high
-			if !(bytes.Compare(ck, filter.Low.Bytes()) >= 0 && bytes.Compare(ck, filter.High.Bytes()) <= 0) {
-				return false
-			}
+func scanResponseContains(results tc.ScanResponse, secKey []interface{}) bool {
+	for _, sc := range results {
+		if compareSecondaryKeys(sc, secKey) == 0 {
+			return true
 		}
 	}
+	return false
+}
 
-	return true
-}*/
+func compareSecondaryKeys(key1, key2 []interface{}) int {
+	k1, err := json.Marshal(key1)
+	if err != nil {
+		log.Printf("Error in marshalling key1 %v", key1)
+		tc.HandleError(err, "Error in compareSecondaryKey")
+	}
+	k2, err := json.Marshal(key2)
+	if err != nil {
+		log.Printf("Error in marshalling key2 %v", key2)
+		tc.HandleError(err, "Error in compareSecondaryKey")
+	}
+	return bytes.Compare(k1, k2)
+}
+
+func compareResult(res1, res2 Result) int {
+	res1sk, err := json.Marshal(res1.SecondaryKey)
+	if err != nil {
+		log.Printf("Error in marshalling res1.SecondaryKey %v", res1.SecondaryKey)
+		tc.HandleError(err, "Error in compareResult")
+	}
+	res1pk, err := json.Marshal(res1.PrimaryKey)
+	if err != nil {
+		log.Printf("Error in marshalling res1.PrimaryKey %v", res1.PrimaryKey)
+		tc.HandleError(err, "Error in compareResult")
+	}
+
+	res2sk, err := json.Marshal(res2.SecondaryKey)
+	if err != nil {
+		log.Printf("Error in marshalling res2.SecondaryKey %v", res2.SecondaryKey)
+		tc.HandleError(err, "Error in compareResult")
+	}
+	res2pk, err := json.Marshal(res2.PrimaryKey)
+	if err != nil {
+		log.Printf("Error in marshalling res2.PrimaryKey %v", res2.PrimaryKey)
+		tc.HandleError(err, "Error in compareResult")
+	}
+	k1 := append(res1sk, res1pk...)
+	k2 := append(res2sk, res2pk...)
+
+	return bytes.Compare(k1, k2)
+}
+
+type Result struct {
+	PrimaryKey   string
+	SecondaryKey []interface{}
+}
+
+type ResultList []Result
+
+func (r ResultList) Len() int           { return len(r) }
+func (r ResultList) Less(i, j int) bool { return compareResult(r[i], r[j]) < 0 }
+func (r ResultList) Swap(i, j int)      { r[i], r[j] = r[j], r[i] }
+
+func PrintResultList(resultList ResultList) {
+	log.Printf("resultList = ")
+	for _, r := range resultList {
+		log.Printf("%v", r)
+	}
+}

@@ -34,7 +34,7 @@ func TestRangeArrayIndex_Distinct(t *testing.T) {
 	FailTestIfError(err, "Error in creating the index", t)
 
 	docScanResults := datautility.ExpectedArrayScanResponse_string(kvdocs, "friends", "A", "zzz", 3, true)
-	scanResults, err := secondaryindex.ArrayIndex_Range(indexName, bucketName, indexScanAddress, []interface{}{"A"}, []interface{}{"zzz"}, 1, true, defaultlimit, c.SessionConsistency, nil)
+	scanResults, err := secondaryindex.ArrayIndex_Range(indexName, bucketName, indexScanAddress, []interface{}{"A"}, []interface{}{"zzz"}, 1, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
 	err = tv.ValidateArrayResult(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
@@ -58,7 +58,7 @@ func TestUpdateArrayIndex_Distinct(t *testing.T) {
 	FailTestIfError(err, "Error in creating the index", t)
 
 	docScanResults := datautility.ExpectedArrayScanResponse_string(kvdocs, "friends", "A", "zzz", 3, true)
-	scanResults, err := secondaryindex.ArrayIndex_Range(indexName, bucketName, indexScanAddress, []interface{}{"A"}, []interface{}{"zzz"}, 1, true, defaultlimit, c.SessionConsistency, nil)
+	scanResults, err := secondaryindex.ArrayIndex_Range(indexName, bucketName, indexScanAddress, []interface{}{"A"}, []interface{}{"zzz"}, 1, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
 	err = tv.ValidateArrayResult(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
@@ -81,7 +81,7 @@ func TestUpdateArrayIndex_Distinct(t *testing.T) {
 
 	kvutility.SetKeyValues(kvdocs, bucketName, "", clusterconfig.KVAddress)
 	docScanResults = datautility.ExpectedArrayScanResponse_string(kvdocs, "friends", "A", "zzz", 3, true)
-	scanResults, err = secondaryindex.ArrayIndex_Range(indexName, bucketName, indexScanAddress, []interface{}{"A"}, []interface{}{"zzz"}, 1, true, defaultlimit, c.SessionConsistency, nil)
+	scanResults, err = secondaryindex.ArrayIndex_Range(indexName, bucketName, indexScanAddress, []interface{}{"A"}, []interface{}{"zzz"}, 1, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
 	err = tv.ValidateArrayResult(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
@@ -106,7 +106,7 @@ func TestRangeArrayIndex_Duplicate(t *testing.T) {
 	FailTestIfError(err, "Error in creating the index", t)
 
 	docScanResults := datautility.ExpectedArrayScanResponse_string(kvdocs, "friends", "A", "zzz", 3, false)
-	scanResults, err := secondaryindex.ArrayIndex_Range(indexName, bucketName, indexScanAddress, []interface{}{"A"}, []interface{}{"zzz"}, 1, true, defaultlimit, c.SessionConsistency, nil)
+	scanResults, err := secondaryindex.ArrayIndex_Range(indexName, bucketName, indexScanAddress, []interface{}{"A"}, []interface{}{"zzz"}, 1, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
 	err = tv.ValidateArrayResult(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
@@ -130,7 +130,7 @@ func TestUpdateArrayIndex_Duplicate(t *testing.T) {
 	FailTestIfError(err, "Error in creating the index", t)
 
 	docScanResults := datautility.ExpectedArrayScanResponse_string(kvdocs, "friends", "A", "zzz", 3, false)
-	scanResults, err := secondaryindex.ArrayIndex_Range(indexName, bucketName, indexScanAddress, []interface{}{"A"}, []interface{}{"zzz"}, 1, true, defaultlimit, c.SessionConsistency, nil)
+	scanResults, err := secondaryindex.ArrayIndex_Range(indexName, bucketName, indexScanAddress, []interface{}{"A"}, []interface{}{"zzz"}, 1, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
 	err = tv.ValidateArrayResult(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
@@ -147,7 +147,7 @@ func TestUpdateArrayIndex_Duplicate(t *testing.T) {
 	}
 	kvutility.SetKeyValues(kvdocs, bucketName, "", clusterconfig.KVAddress)
 	docScanResults = datautility.ExpectedArrayScanResponse_string(kvdocs, "friends", "A", "zzz", 3, false)
-	scanResults, err = secondaryindex.ArrayIndex_Range(indexName, bucketName, indexScanAddress, []interface{}{"A"}, []interface{}{"zzz"}, 1, true, defaultlimit, c.SessionConsistency, nil)
+	scanResults, err = secondaryindex.ArrayIndex_Range(indexName, bucketName, indexScanAddress, []interface{}{"A"}, []interface{}{"zzz"}, 1, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
 	err = tv.ValidateArrayResult(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
@@ -157,6 +157,9 @@ func TestUpdateArrayIndex_Duplicate(t *testing.T) {
 // in cases of leading and non-leading key
 func TestArrayIndexCornerCases(t *testing.T) {
 	log.Printf("In TestArrayIndexCornerCases()")
+
+	tmp := secondaryindex.UseClient
+	secondaryindex.UseClient = "gsi"
 
 	bucketName, field_name, field_tags := "default", "arr_name", "arr_tags"
 	missing := "~[]{}falsenilNA~"
@@ -196,6 +199,7 @@ func TestArrayIndexCornerCases(t *testing.T) {
 	scanAllAndValidate(indexName1, bucketName, key, []interface{}{docs[key].(map[string]interface{})[field_tags]}, t)
 	scanAllAndValidate(indexName2, bucketName, key, []interface{}{docs[key].(map[string]interface{})[field_tags], docs[key].(map[string]interface{})[field_name]}, t)
 	scanAllAndValidate(indexName3, bucketName, key, []interface{}{docs[key].(map[string]interface{})[field_name], docs[key].(map[string]interface{})[field_tags]}, t)
+	secondaryindex.UseClient = tmp
 }
 
 func TestArraySizeIncreaseDecrease(t *testing.T) {
@@ -219,7 +223,7 @@ func TestArraySizeIncreaseDecrease(t *testing.T) {
 	err = secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{indexExpr}, false, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
-	scanResults, err := secondaryindex.ArrayIndex_Range(indexName, bucketName, indexScanAddress, []interface{}{"#"}, []interface{}{"zzz"}, 1, true, defaultlimit, c.SessionConsistency, nil)
+	scanResults, err := secondaryindex.ArrayIndex_Range(indexName, bucketName, indexScanAddress, []interface{}{"#"}, []interface{}{"zzz"}, 1, false, defaultlimit, c.SessionConsistency, nil)
 	if len(scanResults) != 0 {
 		FailTestIfError(errors.New("Expected 0 results due to size limit"), "Error in scan result validation", t)
 	}
@@ -232,7 +236,7 @@ func TestArraySizeIncreaseDecrease(t *testing.T) {
 	// Update docs
 	kvdocs = updateDocsArrayField(kvdocs, bucketName)
 	docScanResults := datautility.ExpectedArrayScanResponse_string(kvdocs, "friends", "a", "g", 1, false)
-	scanResults, err = secondaryindex.ArrayIndex_Range(indexName, bucketName, indexScanAddress, []interface{}{"a"}, []interface{}{"g"}, 1, true, defaultlimit, c.SessionConsistency, nil)
+	scanResults, err = secondaryindex.ArrayIndex_Range(indexName, bucketName, indexScanAddress, []interface{}{"a"}, []interface{}{"g"}, 1, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
 	err = tv.ValidateArrayResult(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
@@ -244,7 +248,7 @@ func TestArraySizeIncreaseDecrease(t *testing.T) {
 
 	// Update docs
 	kvdocs = updateDocsArrayField(kvdocs, bucketName)
-	scanResults, err = secondaryindex.ArrayIndex_Range(indexName, bucketName, indexScanAddress, []interface{}{"#"}, []interface{}{"zzz"}, 1, true, defaultlimit, c.SessionConsistency, nil)
+	scanResults, err = secondaryindex.ArrayIndex_Range(indexName, bucketName, indexScanAddress, []interface{}{"#"}, []interface{}{"zzz"}, 1, false, defaultlimit, c.SessionConsistency, nil)
 	if len(scanResults) != 0 {
 		FailTestIfError(errors.New("Expected 0 results due to size limit"), "Error in scan result validation", t)
 	}

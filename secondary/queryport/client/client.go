@@ -580,6 +580,11 @@ func (c *GsiClient) MultiScan(
 			}
 
 			// TODO: Handle RangePrimary
+			if c.bridge.IsPrimary(uint64(index.DefnId)) {
+				return qc.MultiScanPrimary(
+					uint64(index.DefnId), requestId, scans, reverse, distinct,
+					projection, offset, limit, cons, vector, callb)
+			}
 
 			return qc.MultiScan(
 				uint64(index.DefnId), requestId, scans, reverse, distinct,
