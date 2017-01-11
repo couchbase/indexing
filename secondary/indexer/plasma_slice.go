@@ -359,19 +359,20 @@ func (mdb *plasmaSlice) insertPrimaryIndex(key []byte, docid []byte, workerId in
 
 func (mdb *plasmaSlice) insertSecIndex(key []byte, docid []byte, workerId int) int {
 	t0 := time.Now()
+
+	ndel := mdb.deleteSecIndex(docid, workerId)
 	entry, err := NewSecondaryIndexEntry(key, docid, mdb.idxDefn.IsArrayIndex,
 		1, mdb.encodeBuf[workerId])
 	if err != nil {
 		logging.Errorf("plasmaSlice::insertSecIndex Slice Id %v IndexInstId %v "+
 			"Skipping docid:%s (%v)", mdb.Id, mdb.idxInstId, docid, err)
-		return mdb.deleteSecIndex(docid, workerId)
+		return ndel
 	}
 
-	mdb.deleteSecIndex(docid, workerId)
-
 	if len(key) > 0 {
-		mdb.back[workerId].InsertKV(docid, entry)
 		mdb.main[workerId].InsertKV(entry, nil)
+		backEntry := entry2BackEntry(entry)
+		mdb.back[workerId].InsertKV(docid, backEntry)
 
 		mdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
 		platform.AddInt64(&mdb.insert_bytes, int64(len(docid)+len(entry)))
@@ -422,16 +423,16 @@ func (mdb *plasmaSlice) deletePrimaryIndex(docid []byte, workerId int) (nmut int
 }
 
 func (mdb *plasmaSlice) deleteSecIndex(docid []byte, workerId int) int {
-	var val []byte
-	var err error
+	buf := mdb.encodeBuf[workerId]
 
 	// Delete entry from back and main index if present
-	val, err = mdb.back[workerId].LookupKV(docid)
+	backEntry, err := mdb.back[workerId].LookupKV(docid)
 	if err != plasma.ErrItemNotFound {
 		t0 := time.Now()
 		platform.AddInt64(&mdb.delete_bytes, int64(len(docid)))
 		mdb.back[workerId].DeleteKV(docid)
-		mdb.main[workerId].DeleteKV(val)
+		entry := backEntry2entry(docid, backEntry, buf)
+		mdb.main[workerId].DeleteKV(entry)
 		mdb.idxStats.Timings.stKVDelete.Put(time.Since(t0))
 	}
 
@@ -1192,4 +1193,31 @@ func (s *plasmaSnapshot) iterEqualKeys(k IndexKey, it *plasma.MVCCIterator,
 	}
 
 	return err
+}
+
+// TODO: Cleanup the leaky hack to reuse the buffer
+// Extract only secondary key
+func entry2BackEntry(entry secondaryIndexEntry) []byte {
+	buf := entry.Bytes()
+	kl := entry.lenKey()
+	if entry.isCountEncoded() {
+		// Store count
+		dl := entry.lenDocId()
+		copy(buf[kl:kl+2], buf[kl+dl:kl+dl+2])
+		return buf[:kl+2]
+	} else {
+		// Set count to 0
+		buf[kl] = 0
+		buf[kl+1] = 0
+	}
+
+	return buf[:kl+2]
+}
+
+// Reformat secondary key to entry
+func backEntry2entry(docid []byte, bentry []byte, buf []byte) []byte {
+	l := len(bentry)
+	count := int(binary.LittleEndian.Uint16(buf[l-2 : l]))
+	entry, _ := NewSecondaryIndexEntry(bentry[:l-2], docid, false, count, buf[:0])
+	return entry.Bytes()
 }
