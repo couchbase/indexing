@@ -41,27 +41,51 @@ type MetadataProvider struct {
 	watcherCount int
 }
 
+//
+// 1) Each index definition has a logical identifer (IndexDefnId).
+// 2) The logical definition can have multiple instances or replica.
+//    Each index instance is identified by IndexInstId.
+// 3) Each instance may reside in different nodes for HA or
+//    load balancing purpose.
+// 4) Each instance can have different version.  Many versions can
+//    co-exist in the cluster at a given time, but only one version can be
+//    active (State == active) and valid (RState = active).
+// 5) In steady state, there should be only one version for each instance, but
+//    during rebalance, index can be moved from one node to another, with
+//    multiple versions representing the same index instance being "in-transit"
+//    (occupying both source and destination nodes during rebalancing).
+// 6) A definition can have multiple physical identical copies, residing
+//    along with each instance.  The physical copies will have the same
+//    definition id as well as definition/structure.
+// 7) An observer (metadataRepo) can only determine the "consistent" state of
+//    metadata with a full participation.  Full participation means that the obsever
+//    is see the local metadata state of each indexer node.
+// 8) At full participation, if an index definiton does not have any instance, the
+//    index definition is considered as deleted.    The side effect is an index
+//    could be implicitly dropped if it loses all its replica.
+//
 type metadataRepo struct {
 	definitions map[c.IndexDefnId]*c.IndexDefn
-	instances   map[c.IndexDefnId]*IndexInstDistribution
+	instances   map[c.IndexDefnId]map[c.IndexInstId]map[uint64]*IndexInstDistribution
 	indices     map[c.IndexDefnId]*IndexMetadata
 	version     uint64
 	mutex       sync.RWMutex
 }
 
 type watcher struct {
-	provider    *MetadataProvider
-	leaderAddr  string
-	factory     protocol.MsgFactory
-	pendings    map[common.Txnid]protocol.LogEntryMsg
-	killch      chan bool
-	alivech     chan bool
-	pingch      chan bool
-	mutex       sync.Mutex
-	indices     map[c.IndexDefnId]interface{}
-	timerKillCh chan bool
-	isClosed    bool
-	serviceMap  *ServiceMap
+	provider     *MetadataProvider
+	leaderAddr   string
+	factory      protocol.MsgFactory
+	pendings     map[common.Txnid]protocol.LogEntryMsg
+	killch       chan bool
+	alivech      chan bool
+	pingch       chan bool
+	mutex        sync.Mutex
+	indices      map[c.IndexDefnId]interface{}
+	timerKillCh  chan bool
+	isClosed     bool
+	serviceMap   *ServiceMap
+	lastSeenTxid common.Txnid
 
 	incomingReqs chan *protocol.RequestHandle
 	pendingReqs  map[uint64]*protocol.RequestHandle // key : request id
@@ -82,6 +106,7 @@ type InstanceDefn struct {
 	BuildTime []uint64
 	IndexerId c.IndexerId
 	Endpts    []c.Endpoint
+	Version   uint64
 }
 
 type event struct {
@@ -824,7 +849,7 @@ func newMetadataRepo() *metadataRepo {
 
 	return &metadataRepo{
 		definitions: make(map[c.IndexDefnId]*c.IndexDefn),
-		instances:   make(map[c.IndexDefnId]*IndexInstDistribution),
+		instances:   make(map[c.IndexDefnId]map[c.IndexInstId]map[uint64]*IndexInstDistribution),
 		indices:     make(map[c.IndexDefnId]*IndexMetadata),
 		version:     uint64(0)}
 }
@@ -850,14 +875,52 @@ func (r *metadataRepo) addDefn(defn *c.IndexDefn) {
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
 
-	r.definitions[defn.DefnId] = defn
-	r.indices[defn.DefnId] = r.makeIndexMetadata(defn)
+	// A definition can have mutliple physical copies.  If
+	// we have seen a copy already, then it is not necessary
+	// to add another copy again.
+	if _, ok := r.definitions[defn.DefnId]; !ok {
+		r.definitions[defn.DefnId] = defn
+		r.indices[defn.DefnId] = r.makeIndexMetadata(defn)
 
-	inst, ok := r.instances[defn.DefnId]
-	if ok {
-		r.updateIndexMetadataNoLock(defn.DefnId, inst)
+		// update the index metadata using the most recent valid
+		// version of index instance
+		inst := r.findRecentValidIndexInstNoLock(defn.DefnId)
+		if inst != nil {
+			r.updateIndexMetadataNoLock(defn.DefnId, inst)
+		}
+		r.version++
 	}
-	r.version++
+}
+
+// TODO: return a list of index definition
+func (r *metadataRepo) findRecentValidIndexInstNoLock(defnId c.IndexDefnId) *IndexInstDistribution {
+
+	var recent *IndexInstDistribution
+	instsByInstId := r.instances[defnId]
+	for _, instsByVersion := range instsByInstId {
+		for _, inst := range instsByVersion {
+			if inst.RState == uint32(c.REBAL_ACTIVE) { // valid
+				if recent == nil || inst.Version > recent.Version { // recent
+					recent = inst
+				}
+			}
+		}
+	}
+
+	return recent
+}
+
+func (r *metadataRepo) getNumIndexInstNoLock(defnId c.IndexDefnId) int {
+
+	count := 0
+	instsByInstId := r.instances[defnId]
+	for _, instsByVersion := range instsByInstId {
+		if len(instsByVersion) != 0 {
+			count++
+		}
+	}
+
+	return count
 }
 
 func (r *metadataRepo) hasDefnIgnoreStatus(indexerId c.IndexerId, defnId c.IndexDefnId) bool {
@@ -917,11 +980,41 @@ func (r *metadataRepo) removeDefn(defnId c.IndexDefnId) {
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
 
-	delete(r.definitions, defnId)
-	delete(r.instances, defnId)
-	delete(r.indices, defnId)
+	count := r.getNumIndexInstNoLock(defnId)
+	if count <= 1 {
+		delete(r.definitions, defnId)
+		delete(r.instances, defnId)
+		delete(r.indices, defnId)
 
-	r.version++
+		r.version++
+	}
+}
+
+func (r *metadataRepo) removeInstForIndexerNoLock(indexerId string) {
+
+	newInstsByDefnId := make(map[c.IndexDefnId]map[c.IndexInstId]map[uint64]*IndexInstDistribution)
+	for defnId, instsByDefnId := range r.instances {
+
+		newInstsByInstId := make(map[c.IndexInstId]map[uint64]*IndexInstDistribution)
+		for instId, instsByInstId := range instsByDefnId {
+
+			newInstsByVersion := make(map[uint64]*IndexInstDistribution)
+			for version, instByVersion := range instsByInstId {
+				instIndexerId := instByVersion.findIndexerId()
+				if instIndexerId != indexerId {
+					newInstsByVersion[version] = instByVersion
+				}
+			}
+			if len(newInstsByVersion) != 0 {
+				newInstsByInstId[instId] = newInstsByVersion
+			}
+		}
+		if len(newInstsByInstId) != 0 {
+			newInstsByDefnId[defnId] = newInstsByInstId
+		}
+	}
+
+	r.instances = newInstsByDefnId
 }
 
 func (r *metadataRepo) updateTopology(topology *IndexTopology) {
@@ -929,11 +1022,26 @@ func (r *metadataRepo) updateTopology(topology *IndexTopology) {
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
 
+	indexerId := topology.findIndexerId()
+	if len(indexerId) != 0 {
+		r.removeInstForIndexerNoLock(indexerId)
+	}
+
 	for _, defnRef := range topology.Definitions {
 		defnId := c.IndexDefnId(defnRef.DefnId)
 		for _, instRef := range defnRef.Instances {
-			r.instances[defnId] = &instRef
-			r.updateIndexMetadataNoLock(defnId, &instRef)
+			if _, ok := r.instances[defnId]; !ok {
+				r.instances[defnId] = make(map[c.IndexInstId]map[uint64]*IndexInstDistribution)
+				r.instances[defnId][c.IndexInstId(instRef.InstId)] = make(map[uint64]*IndexInstDistribution)
+			}
+			r.instances[defnId][c.IndexInstId(instRef.InstId)][instRef.Version] = &instRef
+
+			// update the index metadata using the most recent valid
+			// version of index instance
+			recent := r.findRecentValidIndexInstNoLock(defnId)
+			if recent == &instRef {
+				r.updateIndexMetadataNoLock(defnId, &instRef)
+			}
 		}
 	}
 
@@ -958,7 +1066,7 @@ func (r *metadataRepo) unmarshallAndAddDefn(content []byte) error {
 	return nil
 }
 
-func (r *metadataRepo) unmarshallAndAddInst(content []byte) error {
+func (r *metadataRepo) unmarshallAndUpdateTopology(content []byte) error {
 
 	topology, err := unmarshallIndexTopology(content)
 	if err != nil {
@@ -982,6 +1090,7 @@ func (r *metadataRepo) updateIndexMetadataNoLock(defnId c.IndexDefnId, inst *Ind
 		idxInst.State = c.IndexState(inst.State)
 		idxInst.Error = inst.Error
 		idxInst.BuildTime = inst.BuildTime
+		idxInst.Version = inst.Version
 
 		for _, partition := range inst.Partitions {
 			for _, slice := range partition.SinglePartition.Slices {
@@ -1013,6 +1122,7 @@ func newWatcher(o *MetadataProvider, addr string) *watcher {
 	s.notifiers = make(map[c.IndexDefnId]*event)
 	s.indices = make(map[c.IndexDefnId]interface{})
 	s.isClosed = false
+	s.lastSeenTxid = common.Txnid(0)
 
 	return s
 }
@@ -1564,7 +1674,7 @@ func (w *watcher) Commit(txid common.Txnid) error {
 	}
 
 	delete(w.pendings, txid)
-	err := w.processChange(msg.GetOpCode(), msg.GetKey(), msg.GetContent())
+	err := w.processChange(txid, msg.GetOpCode(), msg.GetKey(), msg.GetContent())
 
 	handle, ok := w.loggedReqs[txid]
 	if ok {
@@ -1641,10 +1751,12 @@ func (w *watcher) GetNextTxnId() common.Txnid {
 ///////////////////////////////////////////////////////
 
 func (w *watcher) GetLastLoggedTxid() (common.Txnid, error) {
+	// need to stream from txnid 0 since this is supported by TransientCommitLog
 	return common.Txnid(0), nil
 }
 
 func (w *watcher) GetLastCommittedTxid() (common.Txnid, error) {
+	// need to stream from txnid 0 since this is supported by TransientCommitLog
 	return common.Txnid(0), nil
 }
 
@@ -1684,19 +1796,26 @@ func (w *watcher) GetCommitedEntries(txid1, txid2 common.Txnid) (<-chan protocol
 
 func (w *watcher) LogAndCommit(txid common.Txnid, op uint32, key string, content []byte, toCommit bool) error {
 
-	if err := w.processChange(op, key, content); err != nil {
+	if err := w.processChange(txid, op, key, content); err != nil {
 		logging.Errorf("watcher.LogAndCommit(): receive error when processing log entry from server.  Error = %v", err)
 	}
 
 	return nil
 }
 
-func (w *watcher) processChange(op uint32, key string, content []byte) error {
+func (w *watcher) processChange(txid common.Txnid, op uint32, key string, content []byte) error {
 
-	logging.Debugf("watcher.processChange(): key = %v", key)
+	logging.Debugf("watcher.processChange(): key = %v txid=%v last_seen_txid=%v", key, txid, w.lastSeenTxid)
 	defer logging.Debugf("watcher.processChange(): done -> key = %v", key)
 
 	opCode := common.OpCode(op)
+
+	// have we seen this txid before?
+	if txid <= w.lastSeenTxid {
+		logging.Debugf("watcher.processChange(): encountering repeated txid.  Incoming txid = %v, last seen txid %v",
+			txid, w.lastSeenTxid)
+		return nil
+	}
 
 	switch opCode {
 	case common.OPCODE_ADD, common.OPCODE_SET:
@@ -1715,14 +1834,22 @@ func (w *watcher) processChange(op uint32, key string, content []byte) error {
 			}
 			w.notifyEventNoLock()
 
+			if txid > w.lastSeenTxid {
+				w.lastSeenTxid = txid
+			}
+
 		} else if isIndexTopologyKey(key) {
 			if len(content) == 0 {
 				logging.Debugf("watcher.processChange(): content of key = %v is empty.", key)
 			}
-			if err := w.provider.repo.unmarshallAndAddInst(content); err != nil {
+			if err := w.provider.repo.unmarshallAndUpdateTopology(content); err != nil {
 				return err
 			}
 			w.notifyEventNoLock()
+
+			if txid > w.lastSeenTxid {
+				w.lastSeenTxid = txid
+			}
 		}
 	case common.OPCODE_DELETE:
 		if isIndexDefnKey(key) {
@@ -1734,6 +1861,10 @@ func (w *watcher) processChange(op uint32, key string, content []byte) error {
 			w.removeDefnWithNoLock(c.IndexDefnId(id))
 			w.provider.repo.removeDefn(c.IndexDefnId(id))
 			w.notifyEventNoLock()
+
+			if txid > w.lastSeenTxid {
+				w.lastSeenTxid = txid
+			}
 		}
 	}
 

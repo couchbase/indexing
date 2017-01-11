@@ -392,7 +392,7 @@ func (m *LifecycleMgr) BuildIndexes(ids []common.IndexDefnId) error {
 				defnId := common.IndexDefnId(instId)
 
 				if defn, err := m.repo.GetIndexDefnById(defnId); err == nil {
-					m.UpdateIndexInstance(defn.Bucket, defnId, common.INDEX_STATE_NIL, common.NIL_STREAM, build_err.Error(), nil)
+					m.UpdateIndexInstance(defn.Bucket, defnId, common.INDEX_STATE_NIL, common.NIL_STREAM, build_err.Error(), nil, uint32(common.REBAL_PENDING))
 				}
 
 				if result == nil {

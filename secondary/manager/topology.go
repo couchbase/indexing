@@ -10,10 +10,10 @@
 package manager
 
 import (
-	"github.com/golang/protobuf/proto"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
+	"github.com/golang/protobuf/proto"
 )
 
 /////////////////////////////////////////////////////////////////////////
@@ -43,6 +43,8 @@ type IndexInstDistribution struct {
 	StreamId   uint32                  `json:"steamId,omitempty"`
 	Error      string                  `json:"error,omitempty"`
 	Partitions []IndexPartDistribution `json:"partitions,omitempty"`
+	RState     uint32                  `json:"rRtate,omitempty"`
+	Version    uint64                  `json:"version,omitempty"`
 }
 
 type IndexPartDistribution struct {
