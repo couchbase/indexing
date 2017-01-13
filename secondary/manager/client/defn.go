@@ -62,6 +62,7 @@ type IndexInstDistribution struct {
 	Partitions []IndexPartDistribution `json:"partitions,omitempty"`
 	RState     uint32                  `json:"rRtate,omitempty"`
 	Version    uint64                  `json:"version,omitempty"`
+	ReplicaId  uint64                  `json:"replicaId,omitempty"`
 }
 
 type IndexPartDistribution struct {

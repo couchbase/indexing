@@ -295,19 +295,29 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn) error {
 		}
 	}
 
+	// create index id
+	instId, err := common.NewIndexInstId()
+	if err != nil {
+		return err
+	}
+
+	// create replica id
+	replicaId := defn.ReplicaId
+	defn.ReplicaId = -1
+
 	if err := m.repo.CreateIndex(defn); err != nil {
 		logging.Errorf("LifecycleMgr.handleCreateIndex() : createIndex fails. Reason = %v", err)
 		return err
 	}
 
-	if err := m.repo.addIndexToTopology(defn, common.IndexInstId(defn.DefnId)); err != nil {
+	if err := m.repo.addIndexToTopology(defn, instId, replicaId); err != nil {
 		logging.Errorf("LifecycleMgr.handleCreateIndex() : createIndex fails. Reason = %v", err)
 		m.repo.DropIndexById(defn.DefnId)
 		return err
 	}
 
 	if m.notifier != nil {
-		if err := m.notifier.OnIndexCreate(defn); err != nil {
+		if err := m.notifier.OnIndexCreate(defn, instId, replicaId); err != nil {
 			logging.Errorf("LifecycleMgr.handleCreateIndex() : createIndex fails. Reason = %v", err)
 			m.repo.DropIndexById(defn.DefnId)
 			m.repo.deleteIndexFromTopology(defn.Bucket, defn.DefnId)
@@ -319,7 +329,7 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn) error {
 		logging.Errorf("LifecycleMgr.handleCreateIndex() : createIndex fails. Reason = %v", err)
 
 		if m.notifier != nil {
-			m.notifier.OnIndexDelete(defn.DefnId, defn.Bucket)
+			m.notifier.OnIndexDelete(instId, defn.Bucket)
 		}
 		m.repo.DropIndexById(defn.DefnId)
 		m.repo.deleteIndexFromTopology(defn.Bucket, defn.DefnId)
@@ -329,11 +339,11 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn) error {
 	if !defn.Deferred {
 		if m.notifier != nil {
 			logging.Debugf("LifecycleMgr.handleCreateIndex() : start Index Build")
-			if errMap := m.notifier.OnIndexBuild([]common.IndexDefnId{defn.DefnId}, []string{defn.Bucket}); len(errMap) != 0 {
-				err := errMap[common.IndexInstId(defn.DefnId)]
+			if errMap := m.notifier.OnIndexBuild([]common.IndexInstId{instId}, []string{defn.Bucket}); len(errMap) != 0 {
+				err := errMap[instId]
 				logging.Errorf("LifecycleMgr.hanaleCreateIndex() : createIndex fails. Reason = %v", err)
 
-				m.notifier.OnIndexDelete(defn.DefnId, defn.Bucket)
+				m.notifier.OnIndexDelete(instId, defn.Bucket)
 				m.repo.DropIndexById(defn.DefnId)
 				m.repo.deleteIndexFromTopology(defn.Bucket, defn.DefnId)
 				return err
@@ -364,6 +374,7 @@ func (m *LifecycleMgr) handleBuildIndexes(content []byte) error {
 
 func (m *LifecycleMgr) BuildIndexes(ids []common.IndexDefnId) error {
 
+	instIdList := []common.IndexInstId(nil)
 	buckets := []string(nil)
 	for _, id := range ids {
 		defn, err := m.repo.GetIndexDefnById(id)
@@ -382,18 +393,35 @@ func (m *LifecycleMgr) BuildIndexes(ids []common.IndexDefnId) error {
 		if !found {
 			buckets = append(buckets, defn.Bucket)
 		}
+
+		instId, err := m.FindLocalIndexInstId(defn.Bucket, id)
+		if err != nil {
+			logging.Errorf("LifecycleMgr.handleBuildIndexes() : buildIndex fails. Reason = %v", err)
+			return err
+		}
+
+		instIdList = append(instIdList, instId)
 	}
 
 	if m.notifier != nil {
-		if errMap := m.notifier.OnIndexBuild(ids, buckets); len(errMap) != 0 {
+
+		if errMap := m.notifier.OnIndexBuild(instIdList, buckets); len(errMap) != 0 {
 			logging.Errorf("LifecycleMgr.hanaleBuildIndexes() : buildIndex fails. Reason = %v", errMap)
 			result := error(nil)
 
 			for instId, build_err := range errMap {
-				defnId := common.IndexDefnId(instId)
+				defnId := common.IndexDefnId(0)
+				for i, instId2 := range instIdList {
+					if instId == instId2 {
+						defnId = ids[i]
+					}
+				}
 
 				if defn, err := m.repo.GetIndexDefnById(defnId); err == nil {
-					m.UpdateIndexInstance(defn.Bucket, defnId, common.INDEX_STATE_NIL, common.NIL_STREAM, build_err.Error(), nil, uint32(common.REBAL_PENDING))
+					inst, err := m.FindLocalIndexInst(defn.Bucket, defnId)
+					if inst != nil && err == nil {
+						m.UpdateIndexInstance(defn.Bucket, defnId, common.INDEX_STATE_NIL, common.NIL_STREAM, build_err.Error(), nil, inst.RState)
+					}
 				}
 
 				if result == nil {
@@ -446,9 +474,15 @@ func (m *LifecycleMgr) DeleteIndex(id common.IndexDefnId, notify bool) error {
 		return err
 	}
 
+	instId, err := m.FindLocalIndexInstId(defn.Bucket, id)
+	if err != nil {
+		logging.Errorf("LifecycleMgr.handleDeleteIndex() : deleteIndex fails. Reason = %v", err)
+		return err
+	}
+
 	// Can call index delete again on already deleted defn
 	if notify && m.notifier != nil {
-		m.notifier.OnIndexDelete(defn.DefnId, defn.Bucket)
+		m.notifier.OnIndexDelete(instId, defn.Bucket)
 	}
 	m.repo.DropIndexById(defn.DefnId)
 	m.repo.deleteIndexFromTopology(defn.Bucket, defn.DefnId)
@@ -498,6 +532,32 @@ func (m *LifecycleMgr) UpdateIndexInstance(bucket string, defnId common.IndexDef
 	}
 
 	return nil
+}
+
+func (m *LifecycleMgr) FindLocalIndexInstId(bucket string, defnId common.IndexDefnId) (common.IndexInstId, error) {
+
+	inst, err := m.FindLocalIndexInst(bucket, defnId)
+	if inst != nil && err == nil {
+		return common.IndexInstId(inst.InstId), nil
+	}
+
+	return common.IndexInstId(0), fmt.Errorf("Fail to find index instance Id for the given index definition %v", defnId)
+}
+
+func (m *LifecycleMgr) FindLocalIndexInst(bucket string, defnId common.IndexDefnId) (*IndexInstDistribution, error) {
+
+	topology, err := m.repo.GetTopologyByBucket(bucket)
+	if err != nil {
+		logging.Errorf("LifecycleMgr.FindLocalIndexInst() : Cannot read topology metadata. Reason = %v", err)
+		return nil, err
+	}
+
+	inst := topology.GetIndexInstByDefn(defnId)
+	if inst != nil {
+		return inst, nil
+	}
+
+	return nil, fmt.Errorf("Fail to find index instance for the given index definition %v", defnId)
 }
 
 func (m *LifecycleMgr) updateIndexState(bucket string, defnId common.IndexDefnId, state common.IndexState) error {

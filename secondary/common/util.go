@@ -567,7 +567,7 @@ func SetNumCPUs(percent int) int {
 	return ncpu
 }
 
-func IndexStatement(def IndexDefn) string {
+func IndexStatement(def IndexDefn, printNodes bool) string {
 	var stmt string
 	primCreate := "CREATE PRIMARY INDEX `%s` ON `%s`"
 	secCreate := "CREATE INDEX `%s` ON `%s`(%s)"
@@ -602,12 +602,28 @@ func IndexStatement(def IndexDefn) string {
 		withExpr += " \"defer_build\":true"
 	}
 
-	if len(def.Nodes) != 0 {
+	if printNodes && len(def.Nodes) != 0 {
+		if len(withExpr) != 0 {
+			withExpr += ","
+		}
+		withExpr += " \"nodes\":[ "
+
+		for i, node := range def.Nodes {
+			withExpr += "\"" + node + "\""
+			if i < len(def.Nodes)-1 {
+				withExpr += ","
+			}
+		}
+
+		withExpr += " ]"
+	}
+
+	if def.NumReplica != 0 {
 		if len(withExpr) != 0 {
 			withExpr += ","
 		}
 
-		withExpr += " \"nodes\":\"" + def.Nodes[0] + "\""
+		withExpr += fmt.Sprintf(" \"num_replica\":%v", def.NumReplica)
 	}
 
 	if len(withExpr) != 0 {

@@ -1034,7 +1034,7 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 		}
 	}
 
-	idx.stats.AddIndex(indexInst.InstId, indexInst.Defn.Bucket, indexInst.Defn.Name)
+	idx.stats.AddIndex(indexInst.InstId, indexInst.Defn.Bucket, indexInst.Defn.Name, indexInst.ReplicaId)
 	//allocate partition/slice
 	var partnInstMap PartitionInstMap
 	var err error
@@ -3351,7 +3351,7 @@ func (idx *indexer) initFromPersistedState() error {
 
 	for _, inst := range idx.indexInstMap {
 		if inst.State != common.INDEX_STATE_DELETED {
-			idx.stats.AddIndex(inst.InstId, inst.Defn.Bucket, inst.Defn.Name)
+			idx.stats.AddIndex(inst.InstId, inst.Defn.Bucket, inst.Defn.Name, inst.ReplicaId)
 		}
 
 		newpc := common.NewKeyPartitionContainer()

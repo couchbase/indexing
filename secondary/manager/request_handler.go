@@ -364,64 +364,69 @@ func (m *requestHandlerContext) getIndexStatus(cinfo *common.ClusterInfoCache, b
 				}
 
 				if topology := m.findTopologyByBucket(localMeta.IndexTopologies, defn.Bucket); topology != nil {
-					state, errStr := topology.GetStatusByDefn(defn.DefnId)
 
-					if state != common.INDEX_STATE_CREATED &&
-						state != common.INDEX_STATE_DELETED &&
-						state != common.INDEX_STATE_NIL {
+					instances := topology.GetIndexInstancesByDefn(defn.DefnId)
+					for _, instance := range instances {
 
-						stateStr := "Not Available"
-						switch state {
-						case common.INDEX_STATE_READY:
-							stateStr = "Created"
-						case common.INDEX_STATE_INITIAL:
-							stateStr = "Building"
-						case common.INDEX_STATE_CATCHUP:
-							stateStr = "Building"
-						case common.INDEX_STATE_ACTIVE:
-							stateStr = "Ready"
-						}
+						state, errStr := topology.GetStatusByDefn(defn.DefnId)
 
-						rstate := topology.GetRStatusByDefn(defn.DefnId)
+						if state != common.INDEX_STATE_CREATED &&
+							state != common.INDEX_STATE_DELETED &&
+							state != common.INDEX_STATE_NIL {
 
-						if rstate == common.REBAL_PENDING && state != common.INDEX_STATE_READY {
-							stateStr = "Replicating"
-						}
-
-						if indexerState, ok := stats.ToMap()["indexer_state"]; ok {
-							if indexerState == "Paused" {
-								stateStr = "Paused"
-							} else if indexerState == "Bootstrap" {
-								stateStr = "Bootstrap"
+							stateStr := "Not Available"
+							switch state {
+							case common.INDEX_STATE_READY:
+								stateStr = "Created"
+							case common.INDEX_STATE_INITIAL:
+								stateStr = "Building"
+							case common.INDEX_STATE_CATCHUP:
+								stateStr = "Building"
+							case common.INDEX_STATE_ACTIVE:
+								stateStr = "Ready"
 							}
-						}
 
-						if len(errStr) != 0 {
-							stateStr = "Error"
-						}
+							if instance.RState == uint32(common.REBAL_PENDING) && state != common.INDEX_STATE_READY {
+								stateStr = "Replicating"
+							}
 
-						completion := int(0)
-						key := fmt.Sprintf("%v:%v:build_progress", defn.Bucket, defn.Name)
-						if progress, ok := stats.ToMap()[key]; ok {
-							completion = int(progress.(float64))
-						}
+							if indexerState, ok := stats.ToMap()["indexer_state"]; ok {
+								if indexerState == "Paused" {
+									stateStr = "Paused"
+								} else if indexerState == "Bootstrap" {
+									stateStr = "Bootstrap"
+								}
+							}
 
-						status := IndexStatus{
-							DefnId:     defn.DefnId,
-							Name:       defn.Name,
-							Bucket:     defn.Bucket,
-							IsPrimary:  defn.IsPrimary,
-							SecExprs:   defn.SecExprs,
-							WhereExpr:  defn.WhereExpr,
-							IndexType:  string(defn.Using),
-							Status:     stateStr,
-							Error:      errStr,
-							Hosts:      []string{curl},
-							Definition: common.IndexStatement(defn),
-							Completion: completion,
-						}
+							if len(errStr) != 0 {
+								stateStr = "Error"
+							}
 
-						list = append(list, status)
+							completion := int(0)
+							key := fmt.Sprintf("%v:%v:build_progress", defn.Bucket, defn.Name)
+							if progress, ok := stats.ToMap()[key]; ok {
+								completion = int(progress.(float64))
+							}
+
+							name := common.FormatIndexInstDisplayName(defn.Name, int(instance.ReplicaId))
+
+							status := IndexStatus{
+								DefnId:     defn.DefnId,
+								Name:       name,
+								Bucket:     defn.Bucket,
+								IsPrimary:  defn.IsPrimary,
+								SecExprs:   defn.SecExprs,
+								WhereExpr:  defn.WhereExpr,
+								IndexType:  string(defn.Using),
+								Status:     stateStr,
+								Error:      errStr,
+								Hosts:      []string{curl},
+								Definition: common.IndexStatement(defn, false),
+								Completion: completion,
+							}
+
+							list = append(list, status)
+						}
 					}
 				}
 			}

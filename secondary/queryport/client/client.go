@@ -136,7 +136,7 @@ type BridgeAccessor interface {
 	GetScanport(
 		defnID uint64,
 		retry int,
-		excludes map[uint64]bool) (queryport string, targetDefnID uint64, ok bool)
+		excludes map[uint64]bool) (queryport string, targetDefnID uint64, targetInstID uint64, ok bool)
 
 	// GetIndex will return the index-definition structure for defnID.
 	GetIndexDefn(defnID uint64) *common.IndexDefn
@@ -148,7 +148,7 @@ type BridgeAccessor interface {
 	IsPrimary(defnID uint64) bool
 
 	// Timeit will add `value` to incrementalAvg for index-load.
-	Timeit(defnID uint64, value float64)
+	Timeit(instID uint64, value float64)
 
 	// Close this accessor.
 	Close()
@@ -227,14 +227,21 @@ type GsiClient struct {
 	queryClients unsafe.Pointer // map[string(queryport)]*GsiScanClient
 	bucketHash   unsafe.Pointer // map[string]uint64 // bucket -> crc64
 	metaCh       chan bool      // listen to metadata changes
+	settings     *ClientSettings
 }
 
 // NewGsiClient returns client to access GSI cluster.
 func NewGsiClient(
 	cluster string, config common.Config) (c *GsiClient, err error) {
 
+	return NewGsiClientWithSettings(cluster, config, false)
+}
+
+func NewGsiClientWithSettings(
+	cluster string, config common.Config, needRefresh bool) (c *GsiClient, err error) {
+
 	if useMetadataProvider {
-		c, err = makeWithMetaProvider(cluster, config)
+		c, err = makeWithMetaProvider(cluster, config, needRefresh)
 	} else {
 		c, err = makeWithCbq(cluster, config)
 	}
@@ -732,6 +739,12 @@ func (c *GsiClient) DescribeError(err error) string {
 
 // Close the client and all open connections with server.
 func (c *GsiClient) Close() {
+	if c == nil {
+		return
+	}
+	if c.settings != nil {
+		c.settings.Close()
+	}
 	if c.bridge == nil {
 		return
 	}
@@ -789,6 +802,7 @@ func (c *GsiClient) doScan(
 	var ok1, ok2, partial bool
 	var queryport string
 	var targetDefnID uint64
+	var targetInstID uint64
 	var scan_err error
 	var excludes map[uint64]bool
 
@@ -798,13 +812,13 @@ func (c *GsiClient) doScan(
 	for i := 0; true; {
 		qcs :=
 			*((*map[string]*GsiScanClient)(atomic.LoadPointer(&c.queryClients)))
-		if queryport, targetDefnID, ok1 = c.bridge.GetScanport(defnID, i, excludes); ok1 {
+		if queryport, targetDefnID, targetInstID, ok1 = c.bridge.GetScanport(defnID, i, excludes); ok1 {
 			index := c.bridge.GetIndexDefn(targetDefnID)
 			if qc, ok2 = qcs[queryport]; ok2 {
 				begin := time.Now()
 				scan_err, partial = callb(qc, index)
 				if c.isTimeit(scan_err) {
-					c.bridge.Timeit(targetDefnID, float64(time.Since(begin)))
+					c.bridge.Timeit(targetInstID, float64(time.Since(begin)))
 					return scan_err
 				}
 				if scan_err != nil && scan_err != io.EOF && partial {
@@ -831,11 +845,11 @@ func (c *GsiClient) doScan(
 			if excludes == nil {
 				excludes = make(map[uint64]bool)
 			}
-			excludes[targetDefnID] = true
+			excludes[targetInstID] = true
 
 			logging.Warnf(
-				"Scan failed with error for index %v.  Trying scan again with replica, reqId:%v : %v ...\n",
-				targetDefnID, requestId, scan_err)
+				"Scan failed with error for index %v:%v.  Trying scan again with replica, reqId:%v : %v ...\n",
+				targetDefnID, targetInstID, requestId, scan_err)
 			continue
 		}
 
@@ -844,8 +858,8 @@ func (c *GsiClient) doScan(
 		if i = i + 1; i < retry {
 			excludes = nil
 			logging.Warnf(
-				"Trying scan again for index %v (%v %v), reqId:%v : %v ...\n",
-				targetDefnID, ok1, ok2, requestId, scan_err)
+				"Trying scan again for index %v:%v (%v %v), reqId:%v : %v ...\n",
+				targetDefnID, targetInstID, ok1, ok2, requestId, scan_err)
 			c.updateScanClients()
 			time.Sleep(time.Duration(wait) * time.Millisecond)
 			continue
@@ -954,16 +968,17 @@ func makeWithCbq(cluster string, config common.Config) (*GsiClient, error) {
 }
 
 func makeWithMetaProvider(
-	cluster string, config common.Config) (c *GsiClient, err error) {
+	cluster string, config common.Config, needRefresh bool) (c *GsiClient, err error) {
 
 	c = &GsiClient{
 		cluster:      cluster,
 		config:       config,
 		queryClients: unsafe.Pointer(new(map[string]*GsiScanClient)),
 		metaCh:       make(chan bool, 1),
+		settings:     NewClientSettings(needRefresh),
 	}
 	platform.StorePointer(&c.bucketHash, (unsafe.Pointer)(new(map[string]uint64)))
-	c.bridge, err = newMetaBridgeClient(cluster, config, c.metaCh)
+	c.bridge, err = newMetaBridgeClient(cluster, config, c.metaCh, c.settings)
 	if err != nil {
 		return nil, err
 	}

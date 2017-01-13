@@ -1267,6 +1267,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.settings.num_replica": ConfigValue{
+		0,
+		"Number of additional replica for each index.",
+		0,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"projector.settings.log_level": ConfigValue{
 		"info",
 		"Projector logging level",

@@ -917,7 +917,7 @@ func unmarshallGlobalTopology(data []byte) (*GlobalTopology, error) {
 //
 // Add Index to Topology
 //
-func (m *MetadataRepo) addIndexToTopology(defn *common.IndexDefn, id common.IndexInstId) error {
+func (m *MetadataRepo) addIndexToTopology(defn *common.IndexDefn, instId common.IndexInstId, replicaId int) error {
 
 	// get existing topology
 	topology, err := m.GetTopologyByBucket(defn.Bucket)
@@ -939,8 +939,8 @@ func (m *MetadataRepo) addIndexToTopology(defn *common.IndexDefn, id common.Inde
 	}
 
 	topology.AddIndexDefinition(defn.Bucket, defn.Name, uint64(defn.DefnId),
-		uint64(id), uint32(common.INDEX_STATE_CREATED), string(indexerId),
-		uint64(defn.InstVersion), rState)
+		uint64(instId), uint32(common.INDEX_STATE_CREATED), string(indexerId),
+		uint64(defn.InstVersion), rState, uint64(replicaId))
 
 	// Add a reference of the bucket-level topology to the global topology.
 	// If it fails later to create bucket-level topology, it will have

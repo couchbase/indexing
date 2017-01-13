@@ -432,46 +432,54 @@ func genCreateIndexDDL(ddl string, solution *Solution) error {
 		return nil
 	}
 
-	var allStmts string
+	replicas := make(map[common.IndexDefnId][]*IndexerNode)
+	newIndexDefns := make(map[common.IndexDefnId]*IndexUsage)
+	buckets := make(map[string][]*IndexUsage)
 
 	for _, indexer := range solution.Placement {
-
-		buckets := make(map[string][]*IndexUsage)
-
 		for _, index := range indexer.Indexes {
 			if index.initialNode == nil && index.Instance != nil {
-				buckets[index.Instance.Defn.Bucket] = append(buckets[index.Instance.Defn.Bucket], index)
-			}
-		}
-
-		for bucket, indexes := range buckets {
-			var stmts string
-
-			for _, index := range indexes {
-				index.Instance.Defn.Nodes = make([]string, 1)
-				index.Instance.Defn.Nodes[0] = indexer.NodeId
-				index.Instance.Defn.Deferred = true
-
-				stmt := common.IndexStatement(index.Instance.Defn) + "\n"
-
-				stmts += stmt
-			}
-
-			buildStmt := fmt.Sprintf("BUILD INDEX ON %v(", bucket)
-			for i := 0; i < len(indexes); i++ {
-				buildStmt += indexes[i].Instance.Defn.Name
-				if i < len(indexes)-1 {
-					buildStmt += ","
+				if _, ok := newIndexDefns[index.DefnId]; !ok {
+					newIndexDefns[index.DefnId] = index
+					buckets[index.Bucket] = append(buckets[index.Bucket], index)
 				}
+				replicas[index.DefnId] = append(replicas[index.DefnId], indexer)
 			}
-			buildStmt += ")\n"
-
-			allStmts += stmts + buildStmt
-			allStmts += "\n"
 		}
 	}
 
-	if err := ioutil.WriteFile(ddl, ([]byte)(allStmts), os.ModePerm); err != nil {
+	var stmts string
+
+	// create index
+	for _, index := range newIndexDefns {
+
+		index.Instance.Defn.Nodes = make([]string, len(replicas[index.DefnId]))
+		for i, indexer := range replicas[index.DefnId] {
+			index.Instance.Defn.Nodes[i] = indexer.NodeId
+		}
+		index.Instance.Defn.Deferred = true
+
+		stmt := common.IndexStatement(index.Instance.Defn, true) + ";\n"
+
+		stmts += stmt
+	}
+
+	// build index
+	for bucket, indexes := range buckets {
+		stmt := fmt.Sprintf("BUILD INDEX ON `%v`(", bucket)
+		for i := 0; i < len(indexes); i++ {
+			stmt += "`" + indexes[i].Instance.Defn.Name + "`"
+			if i < len(indexes)-1 {
+				stmt += ","
+			}
+		}
+		stmt += ");\n"
+
+		stmts += stmt
+	}
+	stmts += "\n"
+
+	if err := ioutil.WriteFile(ddl, ([]byte)(stmts), os.ModePerm); err != nil {
 		return errors.New(fmt.Sprintf("Unable to write DDL statements into %v. err = %s", ddl, err))
 	}
 
@@ -737,7 +745,7 @@ func changeTopology(config *RunConfig, solution *Solution, deletedNodes []string
 //
 func setIndexPlacementStats(s *RunStats, indexes []*IndexUsage, useLive bool) {
 	s.AvgIndexSize, s.StdDevIndexSize = computeIndexMemStats(indexes, useLive)
-	s.AvgIndexCpu, s.StdDevIndexCpu = computeIndexCpuStats(indexes)
+	s.AvgIndexCpu, s.StdDevIndexCpu = computeIndexCpuStats(indexes, useLive)
 	s.IndexCount = uint64(len(indexes))
 }
 
@@ -756,7 +764,7 @@ func setInitialLayoutStats(s *RunStats,
 	s.Initial_avgIndexerSize, s.Initial_stdDevIndexerSize = solution.ComputeMemUsage()
 	s.Initial_avgIndexerCpu, s.Initial_stdDevIndexerCpu = solution.ComputeCpuUsage()
 	s.Initial_avgIndexSize, s.Initial_stdDevIndexSize = computeIndexMemStats(initialIndexes, useLive)
-	s.Initial_avgIndexCpu, s.Initial_stdDevIndexCpu = computeIndexCpuStats(initialIndexes)
+	s.Initial_avgIndexCpu, s.Initial_stdDevIndexCpu = computeIndexCpuStats(initialIndexes, useLive)
 	s.Initial_indexCount = uint64(len(initialIndexes))
 	s.Initial_indexerCount = uint64(len(solution.Placement))
 
@@ -798,18 +806,14 @@ func indexUsageFromSpec(sizing SizingMethod, spec *IndexSpec) ([]*IndexUsage, er
 		index := &IndexUsage{}
 		index.DefnId = common.IndexDefnId(uuid.Uint64())
 		index.InstId = common.IndexInstId(i)
+		index.Name = spec.Name
 		index.Bucket = spec.Bucket
 		index.IsMOI = true
 		index.IsPrimary = spec.IsPrimary
 
-		if i == 0 {
-			index.Name = spec.Name
-		} else {
-			index.Name = fmt.Sprintf("%v_%v", spec.Name, i)
-		}
-
 		index.Instance = &common.IndexInst{}
 		index.Instance.InstId = index.InstId
+		index.Instance.ReplicaId = i
 		index.Instance.Defn.Name = index.Name
 		index.Instance.Defn.Bucket = spec.Bucket
 		index.Instance.Defn.IsPrimary = spec.IsPrimary

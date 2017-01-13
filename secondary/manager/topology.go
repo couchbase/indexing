@@ -45,6 +45,7 @@ type IndexInstDistribution struct {
 	Partitions []IndexPartDistribution `json:"partitions,omitempty"`
 	RState     uint32                  `json:"rRtate,omitempty"`
 	Version    uint64                  `json:"version,omitempty"`
+	ReplicaId  uint64                  `json:"replicaId,omitempty"`
 }
 
 type IndexPartDistribution struct {
@@ -114,7 +115,7 @@ func (g *GlobalTopology) RemoveTopologyKey(key string) {
 // Add an index definition to Topology.
 //
 func (t *IndexTopology) AddIndexDefinition(bucket string, name string, defnId uint64, instId uint64, state uint32, indexerId string,
-	instVersion uint64, rState uint32) {
+	instVersion uint64, rState uint32, replicaId uint64) {
 
 	t.RemoveIndexDefinition(bucket, name)
 
@@ -132,6 +133,7 @@ func (t *IndexTopology) AddIndexDefinition(bucket string, name string, defnId ui
 	inst.State = state
 	inst.Version = instVersion
 	inst.RState = rState
+	inst.ReplicaId = replicaId
 	inst.Partitions = append(inst.Partitions, *part)
 
 	defn := new(IndexDefnDistribution)
@@ -339,6 +341,19 @@ func (t *IndexTopology) GetRStatusByDefn(defnId common.IndexDefnId) common.Rebal
 		}
 	}
 	return common.REBAL_ACTIVE
+}
+
+//
+// Update Index Status on instance
+//
+func (t *IndexTopology) GetIndexInstancesByDefn(defnId common.IndexDefnId) []IndexInstDistribution {
+
+	for i, _ := range t.Definitions {
+		if t.Definitions[i].DefnId == uint64(defnId) {
+			return t.Definitions[i].Instances
+		}
+	}
+	return nil
 }
 
 //

@@ -77,9 +77,9 @@ const (
 	INDEX_STATE_ACTIVE
 	//Drop Index Processed
 	INDEX_STATE_DELETED
-	//Error State
+	//Error State: not a persistent state -- but used in function return value
 	INDEX_STATE_ERROR
-	// Nil State (used for no-op / invalid)
+	// Nil State (used for no-op / invalid) -- not a persistent state
 	INDEX_STATE_NIL
 )
 
@@ -185,22 +185,25 @@ type IndexDefn struct {
 	Immutable       bool            `json:"immutable,omitempty"`
 	Nodes           []string        `json:"nodes,omitempty"`
 	IsArrayIndex    bool            `json:"isArrayIndex,omitempty"`
+	NumReplica      uint32          `json:"numReplica,omitempty"`
 
 	// transient field (not part of index metadata)
 	InstVersion int `json:"instanceVersion,omitempty"`
+	ReplicaId   int `json:"replicaId,omitempty"`
 }
 
 //IndexInst is an instance of an Index(aka replica)
 type IndexInst struct {
-	InstId  IndexInstId
-	Defn    IndexDefn
-	State   IndexState
-	RState  RebalanceState
-	Stream  StreamId
-	Pc      PartitionContainer
-	Error   string
-	BuildTs []uint64
-	Version int
+	InstId    IndexInstId
+	Defn      IndexDefn
+	State     IndexState
+	RState    RebalanceState
+	Stream    StreamId
+	Pc        PartitionContainer
+	Error     string
+	BuildTs   []uint64
+	Version   int
+	ReplicaId int
 }
 
 //IndexInstMap is a map from IndexInstanceId to IndexInstance
@@ -213,6 +216,7 @@ func (idx IndexDefn) String() string {
 	str += fmt.Sprintf("Using: %v ", idx.Using)
 	str += fmt.Sprintf("Bucket: %v ", idx.Bucket)
 	str += fmt.Sprintf("IsPrimary: %v ", idx.IsPrimary)
+	str += fmt.Sprintf("NumReplica: %v ", idx.NumReplica)
 	str += fmt.Sprintf("InstVersion: %v ", idx.InstVersion)
 	str += fmt.Sprintf("\n\t\tSecExprs: %v ", idx.SecExprs)
 	str += fmt.Sprintf("\n\t\tPartitionScheme: %v ", idx.PartitionScheme)
@@ -241,6 +245,7 @@ func (idx IndexDefn) Clone() *IndexDefn {
 		Immutable:       idx.Immutable,
 		Nodes:           idx.Nodes,
 		IsArrayIndex:    idx.IsArrayIndex,
+		NumReplica:      idx.NumReplica,
 	}
 }
 
@@ -252,9 +257,25 @@ func (idx IndexInst) String() string {
 	str += fmt.Sprintf("\tState: %v\n", idx.State)
 	str += fmt.Sprintf("\tRState: %v\n", idx.RState)
 	str += fmt.Sprintf("\tStream: %v\n", idx.Stream)
+	str += fmt.Sprintf("\tVersion: %v\n", idx.Version)
+	str += fmt.Sprintf("\tReplicaId: %v\n", idx.ReplicaId)
 	str += fmt.Sprintf("\tPartitionContainer: %v", idx.Pc)
 	return str
 
+}
+
+func (idx IndexInst) DisplayName() string {
+
+	return FormatIndexInstDisplayName(idx.Defn.Name, idx.ReplicaId)
+}
+
+func FormatIndexInstDisplayName(name string, replicaId int) string {
+
+	if replicaId != 0 {
+		return fmt.Sprintf("%v (replica %v)", name, replicaId)
+	}
+
+	return name
 }
 
 //StreamId represents the possible mutation streams
@@ -313,6 +334,8 @@ func (idx IndexInstMap) String() string {
 		str += fmt.Sprintf("State: %v ", index.State)
 		str += fmt.Sprintf("Stream: %v ", index.Stream)
 		str += fmt.Sprintf("RState: %v ", index.RState)
+		str += fmt.Sprintf("Version: %v ", index.Version)
+		str += fmt.Sprintf("ReplicaId: %v ", index.ReplicaId)
 		str += "\n"
 	}
 	return str
@@ -355,6 +378,15 @@ func NewIndexDefnId() (IndexDefnId, error) {
 	}
 
 	return IndexDefnId(uuid.Uint64()), nil
+}
+
+func NewIndexInstId() (IndexInstId, error) {
+	uuid, err := NewUUID()
+	if err != nil {
+		return IndexInstId(0), err
+	}
+
+	return IndexInstId(uuid.Uint64()), nil
 }
 
 //IndexSnapType represents the snapshot type

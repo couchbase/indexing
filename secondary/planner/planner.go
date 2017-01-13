@@ -700,7 +700,7 @@ func (s *Solution) findIndexOffset(node *IndexerNode, index *IndexUsage) int {
 func (s *Solution) addIndex(n *IndexerNode, idx *IndexUsage) {
 	n.Indexes = append(n.Indexes, idx)
 	n.AddMemUsageOverhead(s, idx.GetMemUsage(s.UseLiveData()), idx.GetMemOverhead(s.UseLiveData()))
-	n.CpuUsage += idx.CpuUsage
+	n.AddCpuUsage(s, idx.GetCpuUsage(s.UseLiveData()))
 }
 
 //
@@ -716,7 +716,7 @@ func (s *Solution) removeIndex(n *IndexerNode, i int) {
 	}
 
 	n.SubtractMemUsageOverhead(s, idx.GetMemUsage(s.UseLiveData()), idx.GetMemOverhead(s.UseLiveData()))
-	n.CpuUsage -= idx.CpuUsage
+	n.SubtractCpuUsage(s, idx.GetCpuUsage(s.UseLiveData()))
 }
 
 //
@@ -812,14 +812,14 @@ func (s *Solution) PrintStats() {
 
 		for _, index := range indexer.Indexes {
 			totalIndexSize += index.GetMemUsage(s.UseLiveData())
-			totalIndexCpu += index.CpuUsage
+			totalIndexCpu += index.GetCpuUsage(s.UseLiveData())
 
 			if index.GetMemUsage(s.UseLiveData()) > maxIndexSize {
 				maxIndexSize = index.GetMemUsage(s.UseLiveData())
 			}
 
-			if index.CpuUsage > maxIndexCpu {
-				maxIndexCpu = index.CpuUsage
+			if index.GetCpuUsage(s.UseLiveData()) > maxIndexCpu {
+				maxIndexCpu = index.GetCpuUsage(s.UseLiveData())
 			}
 		}
 	}
@@ -845,18 +845,20 @@ func (s *Solution) PrintLayout() {
 
 	for _, indexer := range s.Placement {
 
+		logging.Infof("")
 		logging.Infof("Indexer serverGroup:%v, nodeId:%v, useLiveData:%v", indexer.ServerGroup, indexer.NodeId, s.UseLiveData())
-		logging.Infof("\tIndexer total memory:%v (%s) data:%v (%s), overhead:%v (%s), cpu:%v, number of indexes:%v",
+		logging.Infof("Indexer total memory:%v (%s) data:%v (%s), overhead:%v (%s), cpu:%v, number of indexes:%v",
 			indexer.GetMemTotal(s.UseLiveData()), formatMemoryStr(uint64(indexer.GetMemTotal(s.UseLiveData()))),
 			indexer.GetMemUsage(s.UseLiveData()), formatMemoryStr(uint64(indexer.GetMemUsage(s.UseLiveData()))),
 			indexer.GetMemOverhead(s.UseLiveData()), formatMemoryStr(uint64(indexer.GetMemOverhead(s.UseLiveData()))),
-			indexer.CpuUsage, len(indexer.Indexes))
+			indexer.GetCpuUsage(s.UseLiveData()), len(indexer.Indexes))
 
 		for _, index := range indexer.Indexes {
-			logging.Infof("\t\tIndex defnId:%v, instId:%v, name:%v, bucket:%v", index.DefnId, index.InstId, index.Name, index.Bucket)
+			logging.Infof("\t\t------------------------------------------------------------------------------------------------------------------")
+			logging.Infof("\t\tIndex name:%v, bucket:%v, defnId:%v, instId:%v", index.GetDisplayName(), index.Bucket, index.DefnId, index.InstId)
 			logging.Infof("\t\tIndex memory:%v (%s), overhead: %v (%s), cpu:%v",
 				index.GetMemUsage(s.UseLiveData()), formatMemoryStr(uint64(index.GetMemUsage(s.UseLiveData()))),
-				index.GetMemOverhead(s.UseLiveData()), formatMemoryStr(uint64(index.GetMemOverhead(s.UseLiveData()))), index.CpuUsage)
+				index.GetMemOverhead(s.UseLiveData()), formatMemoryStr(uint64(index.GetMemOverhead(s.UseLiveData()))), index.GetCpuUsage(s.UseLiveData()))
 		}
 	}
 }
@@ -895,14 +897,14 @@ func (s *Solution) ComputeCpuUsage() (float64, float64) {
 	// Compute mean cpu usage
 	var meanCpuUsage float64
 	for _, indexerUsage := range s.Placement {
-		meanCpuUsage += float64(indexerUsage.CpuUsage)
+		meanCpuUsage += float64(indexerUsage.GetCpuUsage(s.UseLiveData()))
 	}
 	meanCpuUsage = meanCpuUsage / float64(len(s.Placement))
 
 	// compute cpu variance
 	var varianceCpuUsage float64
 	for _, indexerUsage := range s.Placement {
-		v := float64(indexerUsage.CpuUsage) - meanCpuUsage
+		v := float64(indexerUsage.GetCpuUsage(s.UseLiveData())) - meanCpuUsage
 		varianceCpuUsage += v * v
 	}
 	varianceCpuUsage = varianceCpuUsage / float64(len(s.Placement))
@@ -955,7 +957,7 @@ func (s *Solution) computeFreeRatio() (float64, float64) {
 
 	for _, indexer := range s.Placement {
 
-		cpu := (float64(s.constraint.GetCpuQuota()) - float64(indexer.CpuUsage)) / float64(s.constraint.GetCpuQuota())
+		cpu := (float64(s.constraint.GetCpuQuota()) - float64(indexer.GetCpuUsage(s.UseLiveData()))) / float64(s.constraint.GetCpuQuota())
 		mem := (float64(s.constraint.GetMemQuota()) - float64(indexer.GetMemTotal(s.UseLiveData()))) / float64(s.constraint.GetMemQuota())
 
 		if cpu > 0 && mem > 0 {
@@ -987,7 +989,7 @@ func (s *Solution) findNodeWithFreeUsage(memUsage uint64, cpuUsage uint64) *Inde
 			continue
 		}
 
-		freeCpu := s.constraint.GetCpuQuota() - indexer.CpuUsage
+		freeCpu := s.constraint.GetCpuQuota() - indexer.GetCpuUsage(s.UseLiveData())
 		freeMem := s.constraint.GetMemQuota() - indexer.GetMemTotal(s.UseLiveData())
 
 		if freeCpu >= cpuUsage && freeMem >= memUsage {
@@ -1092,7 +1094,7 @@ func (c *IndexerConstraint) Validate(s *Solution) error {
 	for _, indexer := range s.Placement {
 		for _, index := range indexer.Indexes {
 			totalIndexMem += index.GetMemTotal(s.UseLiveData())
-			totalIndexCpu += index.CpuUsage
+			totalIndexCpu += index.GetCpuUsage(s.UseLiveData())
 		}
 	}
 
@@ -1125,11 +1127,11 @@ func (c *IndexerConstraint) GetViolations(s *Solution, eligibles []*IndexUsage) 
 				if hasIndex(indexer, index) {
 
 					violation := &Violation{
-						Name:     index.Name,
+						Name:     index.GetDisplayName(),
 						Bucket:   index.Bucket,
 						NodeId:   indexer.NodeId,
 						MemUsage: index.GetMemTotal(s.UseLiveData()),
-						CpuUsage: index.CpuUsage,
+						CpuUsage: index.GetCpuUsage(s.UseLiveData()),
 						Details:  nil}
 
 					// If this indexer node has a placeable index, then check if the
@@ -1229,7 +1231,7 @@ func (c *IndexerConstraint) CanAddIndex(s *Solution, n *IndexerNode, u *IndexUsa
 		return ResourceViolation
 	}
 
-	if u.CpuUsage+n.CpuUsage > cpuQuota {
+	if u.GetCpuUsage(s.UseLiveData())+n.GetCpuUsage(s.UseLiveData()) > cpuQuota {
 		return ResourceViolation
 	}
 
@@ -1261,7 +1263,7 @@ func (c *IndexerConstraint) CanSwapIndex(sol *Solution, n *IndexerNode, s *Index
 		return ResourceViolation
 	}
 
-	if s.CpuUsage+n.CpuUsage-t.CpuUsage > cpuQuota {
+	if s.GetCpuUsage(sol.UseLiveData())+n.GetCpuUsage(sol.UseLiveData())-t.GetCpuUsage(sol.UseLiveData()) > cpuQuota {
 		return ResourceViolation
 	}
 
@@ -1302,7 +1304,7 @@ func (c *IndexerConstraint) SatisfyNodeResourceConstraint(s *Solution, n *Indexe
 		return false
 	}
 
-	if n.CpuUsage > cpuQuota {
+	if n.GetCpuUsage(s.UseLiveData()) > cpuQuota {
 		return false
 	}
 
@@ -1329,7 +1331,7 @@ func (c *IndexerConstraint) SatisfyClusterResourceConstraint(s *Solution) bool {
 		if indexer.GetMemTotal(s.UseLiveData()) > memQuota {
 			return false
 		}
-		if indexer.CpuUsage > cpuQuota {
+		if indexer.GetCpuUsage(s.UseLiveData()) > cpuQuota {
 			return false
 		}
 	}
@@ -1364,6 +1366,12 @@ func (c *IndexerConstraint) SatisfyNodeConstraint(s *Solution, n *IndexerNode, e
 
 	for i := 0; i < len(n.Indexes)-1; i++ {
 		for j := i + 1; j < len(n.Indexes); j++ {
+
+			// Ignore any pair of indexes that are not eligible index
+			if !isEligibleIndex(n.Indexes[i], eligibles) &&
+				!isEligibleIndex(n.Indexes[j], eligibles) {
+				continue
+			}
 
 			// check replica
 			if n.Indexes[i].DefnId == n.Indexes[j].DefnId {
@@ -1454,9 +1462,44 @@ func (o *IndexerNode) String() string {
 func (o *IndexerNode) freeUsage(s *Solution, constraint ConstraintMethod) (uint64, uint64) {
 
 	freeMem := constraint.GetMemQuota() - o.GetMemTotal(s.UseLiveData())
-	freeCpu := constraint.GetCpuQuota() - o.CpuUsage
+	freeCpu := constraint.GetCpuQuota() - o.GetCpuUsage(s.UseLiveData())
 
 	return freeMem, freeCpu
+}
+
+//
+// Get cpu usage
+//
+func (o *IndexerNode) GetCpuUsage(useLive bool) uint64 {
+
+	// If using live data, then do not return cpu usage, since there is no reliable way to figure it out.
+	if useLive {
+		return 0
+	}
+
+	return o.CpuUsage
+}
+
+//
+// Add Cpu
+//
+func (o *IndexerNode) AddCpuUsage(s *Solution, usage uint64) {
+
+	// If using live data, then do nothing, since we dont't have cpu stats from live cluster.
+	if !s.UseLiveData() {
+		o.CpuUsage += usage
+	}
+}
+
+//
+// Subtract Cpu
+//
+func (o *IndexerNode) SubtractCpuUsage(s *Solution, usage uint64) {
+
+	// If using live data, then do nothing, since we dont't have cpu stats from live cluster.
+	if !s.UseLiveData() {
+		o.CpuUsage -= usage
+	}
 }
 
 //
@@ -1547,6 +1590,19 @@ func newIndexUsage(defnId common.IndexDefnId, instId common.IndexInstId, name st
 }
 
 //
+// Get cpu usage
+//
+func (o *IndexUsage) GetCpuUsage(useLive bool) uint64 {
+
+	// If using live data, then do not return cpu usage, since there is no reliable way to figure it out.
+	if useLive {
+		return 0
+	}
+
+	return o.CpuUsage
+}
+
+//
 // Get memory usage
 //
 func (o *IndexUsage) GetMemUsage(useLive bool) uint64 {
@@ -1580,6 +1636,15 @@ func (o *IndexUsage) GetMemTotal(useLive bool) uint64 {
 	}
 
 	return o.MemUsage + o.MemOverhead
+}
+
+func (o *IndexUsage) GetDisplayName() string {
+
+	if o.Instance == nil {
+		return o.Name
+	}
+
+	return o.Instance.DisplayName()
 }
 
 //////////////////////////////////////////////////////////////
@@ -1732,15 +1797,15 @@ func (p *RandomPlacement) Validate(s *Solution) error {
 
 	for _, index := range p.indexes {
 
-		if index.GetMemTotal(s.UseLiveData()) > memQuota || index.CpuUsage > cpuQuota {
+		if index.GetMemTotal(s.UseLiveData()) > memQuota || index.GetCpuUsage(s.UseLiveData()) > cpuQuota {
 			return errors.New(fmt.Sprintf("Index exceeding quota. Index=%v Bucket=%v Memory=%v Cpu=%v MemoryQuota=%v CpuQuota=%v",
-				index.Name, index.Bucket, index.GetMemTotal(s.UseLiveData()), index.CpuUsage, s.getConstraintMethod().GetMemQuota(),
+				index.GetDisplayName(), index.Bucket, index.GetMemTotal(s.UseLiveData()), index.GetCpuUsage(s.UseLiveData()), s.getConstraintMethod().GetMemQuota(),
 				s.getConstraintMethod().GetCpuQuota()))
 		}
 
 		if !s.getConstraintMethod().CanAddNode(s) && s.findNumEquivalentIndex(index) > len(s.Placement) {
 			return errors.New(fmt.Sprintf("Index has more replica (or equivalent index) than indexer nodes. Index=%v Bucket=%v",
-				index.Name, index.Bucket))
+				index.GetDisplayName(), index.Bucket))
 		}
 
 		found := false
@@ -1751,11 +1816,11 @@ func (p *RandomPlacement) Validate(s *Solution) error {
 			for _, index2 := range indexer.Indexes {
 				if !p.isEligibleIndex(index2) {
 					freeMem -= index2.GetMemTotal(s.UseLiveData())
-					freeCpu -= index2.CpuUsage
+					freeCpu -= index2.GetCpuUsage(s.UseLiveData())
 				}
 			}
 
-			if freeMem >= index.GetMemTotal(s.UseLiveData()) && freeCpu >= index.CpuUsage {
+			if freeMem >= index.GetMemTotal(s.UseLiveData()) && freeCpu >= index.GetCpuUsage(s.UseLiveData()) {
 				found = true
 				break
 			}
@@ -1763,7 +1828,7 @@ func (p *RandomPlacement) Validate(s *Solution) error {
 
 		if !found {
 			return errors.New(fmt.Sprintf("Cannot find an indexer with enough free memory or cpu for index. Index=%v Bucket=%v",
-				index.Name, index.Bucket))
+				index.GetDisplayName(), index.Bucket))
 		}
 	}
 
@@ -1804,7 +1869,7 @@ func (p *RandomPlacement) swapDeleteNode(s *Solution) bool {
 	for _, outNode := range outNodes {
 
 		memUsage := outNode.GetMemTotal(s.UseLiveData())
-		cpuUsage := outNode.CpuUsage
+		cpuUsage := outNode.GetCpuUsage(s.UseLiveData())
 
 		indexer := s.findNodeWithFreeUsage(memUsage, cpuUsage)
 
@@ -1944,14 +2009,14 @@ func (p *RandomPlacement) randomMoveByLoad(s *Solution, checkConstraint bool) (b
 			}
 
 			logging.Tracef("Planner::no target : index %v mem %v cpu %v source %v",
-				index, formatMemoryStr(index.GetMemTotal(s.UseLiveData())), index.CpuUsage, source.NodeId)
+				index, formatMemoryStr(index.GetMemTotal(s.UseLiveData())), index.GetCpuUsage(s.UseLiveData()), source.NodeId)
 
 			// There could be more candidates, pick another one.
 			continue
 		}
 
 		logging.Tracef("Planner::try move: index %v mem %v cpu %v source %v target %v",
-			index, formatMemoryStr(index.GetMemTotal(s.UseLiveData())), index.CpuUsage, source.NodeId, target.NodeId)
+			index, formatMemoryStr(index.GetMemTotal(s.UseLiveData())), index.GetCpuUsage(s.UseLiveData()), source.NodeId, target.NodeId)
 
 		// See if the index can be moved while obeying resource constraint.
 		violation := s.constraint.CanAddIndex(s, target, index)
@@ -1969,7 +2034,7 @@ func (p *RandomPlacement) randomMoveByLoad(s *Solution, checkConstraint bool) (b
 	if logging.IsEnabled(logging.Trace) {
 		for _, indexer := range s.Placement {
 			logging.Tracef("Planner::no move: indexer %v mem %v cpu %v",
-				indexer.NodeId, formatMemoryStr(indexer.GetMemTotal(s.UseLiveData())), indexer.CpuUsage)
+				indexer.NodeId, formatMemoryStr(indexer.GetMemTotal(s.UseLiveData())), indexer.GetCpuUsage(s.UseLiveData()))
 		}
 	}
 
@@ -2166,8 +2231,8 @@ func (p *RandomPlacement) randomSwap(s *Solution, sources []*IndexerNode, target
 		}
 
 		logging.Tracef("Planner::try swap: source index %v (mem %v cpu %v) target index %v (mem %v cpu %v) source %v target %v",
-			sourceIndex, formatMemoryStr(sourceIndex.GetMemTotal(s.UseLiveData())), sourceIndex.CpuUsage,
-			targetIndex, formatMemoryStr(targetIndex.GetMemTotal(s.UseLiveData())), targetIndex.CpuUsage,
+			sourceIndex, formatMemoryStr(sourceIndex.GetMemTotal(s.UseLiveData())), sourceIndex.GetCpuUsage(s.UseLiveData()),
+			targetIndex, formatMemoryStr(targetIndex.GetMemTotal(s.UseLiveData())), targetIndex.GetCpuUsage(s.UseLiveData()),
 			source.NodeId, target.NodeId)
 
 		sourceViolation := s.constraint.CanSwapIndex(s, target, sourceIndex, targetIndex)
@@ -2188,7 +2253,7 @@ func (p *RandomPlacement) randomSwap(s *Solution, sources []*IndexerNode, target
 	if logging.IsEnabled(logging.Trace) {
 		for _, indexer := range s.Placement {
 			logging.Tracef("Planner::no swap: indexer %v mem %v cpu %v",
-				indexer.NodeId, formatMemoryStr(indexer.GetMemTotal(s.UseLiveData())), indexer.CpuUsage)
+				indexer.NodeId, formatMemoryStr(indexer.GetMemTotal(s.UseLiveData())), indexer.GetCpuUsage(s.UseLiveData()))
 		}
 	}
 
@@ -2234,14 +2299,14 @@ func (p *RandomPlacement) exhaustiveSwap(s *Solution, sources []*IndexerNode, ta
 					}
 
 					if sourceIndex.GetMemTotal(s.UseLiveData()) >= targetIndex.GetMemTotal(s.UseLiveData()) &&
-						sourceIndex.CpuUsage >= targetIndex.CpuUsage {
+						sourceIndex.GetCpuUsage(s.UseLiveData()) >= targetIndex.GetCpuUsage(s.UseLiveData()) {
 
 						targetViolation := s.constraint.CanSwapIndex(s, target, sourceIndex, targetIndex)
 						sourceViolation := s.constraint.CanSwapIndex(s, source, targetIndex, sourceIndex)
 
 						logging.Tracef("Planner::try exhaustive swap: source index %v (mem %v cpu %v) target index %v (mem %v cpu %v) source %v target %v",
-							sourceIndex, formatMemoryStr(sourceIndex.GetMemTotal(s.UseLiveData())), sourceIndex.CpuUsage,
-							targetIndex, formatMemoryStr(targetIndex.GetMemTotal(s.UseLiveData())), targetIndex.CpuUsage,
+							sourceIndex, formatMemoryStr(sourceIndex.GetMemTotal(s.UseLiveData())), sourceIndex.GetCpuUsage(s.UseLiveData()),
+							targetIndex, formatMemoryStr(targetIndex.GetMemTotal(s.UseLiveData())), targetIndex.GetCpuUsage(s.UseLiveData()),
 							source.NodeId, target.NodeId)
 
 						if !checkConstraint || (targetViolation == NoViolation && sourceViolation == NoViolation) {
@@ -2289,7 +2354,7 @@ func (p *RandomPlacement) exhaustiveMove(s *Solution, sources []*IndexerNode, ta
 				}
 
 				logging.Tracef("Planner::try exhaustive move: index %v mem %v cpu %v source %v target %v",
-					sourceIndex, formatMemoryStr(sourceIndex.GetMemTotal(s.UseLiveData())), sourceIndex.CpuUsage,
+					sourceIndex, formatMemoryStr(sourceIndex.GetMemTotal(s.UseLiveData())), sourceIndex.GetCpuUsage(s.UseLiveData()),
 					source.NodeId, target.NodeId)
 
 				// See if the index can be moved while obeying resource constraint.
@@ -2366,10 +2431,15 @@ func newMOISizingMethod() *MOISizingMethod {
 //
 func (s *MOISizingMethod) Validate(solution *Solution) error {
 
+	// If using cpu/mem usage from live cluster, no need to validate.
+	if solution.UseLiveData() {
+		return nil
+	}
+
 	for _, indexer := range solution.Placement {
 		for _, index := range indexer.Indexes {
 			if !index.IsMOI {
-				return errors.New(fmt.Sprintf("Planner does not support non-MOI index. Index=%v Bucket=%v", index.Name, index.Bucket))
+				return errors.New(fmt.Sprintf("Planner does not support non-MOI index. Index=%v Bucket=%v", index.GetDisplayName(), index.Bucket))
 			}
 		}
 	}
@@ -2499,8 +2569,8 @@ func (s *MOISizingMethod) ComputeMinQuota(indexes []*IndexUsage, useLive bool) (
 			maxMemUsage = index.GetMemTotal(useLive)
 		}
 
-		if index.CpuUsage > maxCpuUsage {
-			maxCpuUsage = index.CpuUsage
+		if index.GetCpuUsage(useLive) > maxCpuUsage {
+			maxCpuUsage = index.GetCpuUsage(useLive)
 		}
 	}
 

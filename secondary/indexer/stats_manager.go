@@ -86,6 +86,7 @@ func (it *IndexTimingStats) Init() {
 
 type IndexStats struct {
 	name, bucket string
+	replicaId    int
 
 	scanDuration          stats.Int64Val
 	scanReqDuration       stats.Int64Val
@@ -220,12 +221,13 @@ func (s *IndexerStats) Reset() {
 	*s = IndexerStats{}
 	s.Init()
 	for k, v := range old.indexes {
-		s.AddIndex(k, v.bucket, v.name)
+		s.AddIndex(k, v.bucket, v.name, v.replicaId)
 	}
 }
 
-func (s *IndexerStats) AddIndex(id common.IndexInstId, bucket string, name string) {
-	idxStats := &IndexStats{name: name, bucket: bucket}
+func (s *IndexerStats) AddIndex(id common.IndexInstId, bucket string, name string, replicaId int) {
+
+	idxStats := &IndexStats{name: name, bucket: bucket, replicaId: replicaId}
 	idxStats.Init()
 	s.indexes[id] = idxStats
 
@@ -296,7 +298,9 @@ func (is IndexerStats) MarshalJSON() ([]byte, error) {
 			scanReqAllocLat = scanReqAllocDur / reqs
 		}
 
-		prefix = fmt.Sprintf("%s:%s:", s.bucket, s.name)
+		name := common.FormatIndexInstDisplayName(s.name, s.replicaId)
+		prefix = fmt.Sprintf("%s:%s:", s.bucket, name)
+
 		addStat("total_scan_duration", s.scanDuration.Value())
 		addStat("total_scan_request_duration", s.scanReqDuration.Value())
 		addStat("insert_bytes", s.insertBytes.Value())
