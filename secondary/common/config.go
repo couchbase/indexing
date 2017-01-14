@@ -851,6 +851,13 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
+	"indexer.plasma.flushBufferSize": ConfigValue{
+		1024 * 1024,
+		"Flush buffer size",
+		1024 * 1024,
+		false,
+		false,
+	},
 
 	//end of moi specific config
 
