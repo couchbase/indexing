@@ -28,7 +28,6 @@ type ScanPipeline struct {
 
 	rowsReturned uint64
 	bytesRead    uint64
-	currOffset   int64
 }
 
 func (p *ScanPipeline) Cancel(err error) {
@@ -93,7 +92,9 @@ func (s *IndexScanSource) Routine() error {
 
 	r := s.p.req
 	var currentScan Scan
-	s.p.currOffset = 0
+	currOffset := int64(0)
+	count := 1
+	checkDistinct := r.Distinct && !r.isPrimary
 	buf := secKeyBufPool.Get()
 	r.keyBufList = append(r.keyBufList, buf)
 	previousRow := secKeyBufPool.Get()
@@ -107,23 +108,40 @@ func (s *IndexScanSource) Routine() error {
 				return err
 			}
 		}
-
 		if skipRow {
 			return nil
 		}
 
-		if r.Distinct && !r.isPrimary {
+		if checkDistinct {
 			if len(*previousRow) != 0 && distinctCompare(entry, *previousRow) {
 				return nil // Ignore the entry as it is same as previous entry
 			}
 		}
 
-		wrErr := s.WriteItem(entry)
-		if wrErr != nil {
-			return wrErr
+		if !r.isPrimary {
+			e := secondaryIndexEntry(entry)
+			count = e.Count()
 		}
 
-		if r.Distinct {
+		for i := 0; i < count; i++ {
+			if r.Distinct && i > 0 {
+				break
+			}
+			if currOffset >= r.Offset {
+				s.p.rowsReturned++
+				wrErr := s.WriteItem(entry)
+				if wrErr != nil {
+					return wrErr
+				}
+				if s.p.rowsReturned == uint64(r.Limit) {
+					return ErrLimitReached
+				}
+			} else {
+				currOffset++
+			}
+		}
+
+		if checkDistinct {
 			*previousRow = append((*previousRow)[:0], entry...)
 		}
 
@@ -162,7 +180,6 @@ func (d *IndexScanDecoder) Routine() error {
 	defer d.CloseRead()
 
 	var sk, docid []byte
-	var count int
 	tmpBuf := p.GetBlock()
 	defer p.PutBlock(tmpBuf)
 
@@ -179,31 +196,16 @@ loop:
 		}
 
 		t := (*tmpBuf)[:0]
-		count = 1
 		if d.p.req.isPrimary {
 			sk, docid = piSplitEntry(row, t)
 		} else {
-			sk, docid, count = siSplitEntry(row, t)
+			sk, docid, _ = siSplitEntry(row, t)
 		}
 
 		d.p.bytesRead += uint64(len(sk) + len(docid))
-		for i := 0; i < count; i++ {
-			if d.p.req.Distinct && i > 0 {
-				break
-			}
-			if d.p.currOffset >= d.p.req.Offset {
-				d.p.rowsReturned++
-				err = d.WriteItem(sk, docid)
-				if err != nil {
-					break // TODO: Old code. Should it be ClosedWithError
-				}
-
-				if d.p.rowsReturned == uint64(d.p.req.Limit) {
-					break loop
-				}
-			} else {
-				d.p.currOffset++
-			}
+		err = d.WriteItem(sk, docid)
+		if err != nil {
+			break // TODO: Old code. Should it be ClosedWithError?
 		}
 	}
 
