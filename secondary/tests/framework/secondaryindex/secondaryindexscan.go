@@ -322,12 +322,13 @@ func RangeStatistics(indexName, bucketName, server string, low, high []interface
 }
 
 func Scans(indexName, bucketName, server string, scans qc.Scans, reverse, distinct bool,
-	offset, limit int64, consistency c.Consistency, vector *qc.TsConsistency) (tc.ScanResponse, error) {
+	projection *qc.IndexProjection, offset, limit int64,
+	consistency c.Consistency, vector *qc.TsConsistency) (tc.ScanResponse, error) {
 
 	if UseClient == "n1ql" {
 		log.Printf("Using n1ql client")
 		return N1QLScans(indexName, bucketName, server, scans, reverse, distinct,
-			offset, limit, consistency, vector)
+			projection, offset, limit, consistency, vector)
 	}
 
 	var scanErr error
@@ -347,7 +348,7 @@ func Scans(indexName, bucketName, server string, scans qc.Scans, reverse, distin
 	count := 0
 	start := time.Now()
 	connErr := client.MultiScan(
-		defnID, "", scans, reverse, distinct, nil, offset, limit,
+		defnID, "", scans, reverse, distinct, projection, offset, limit,
 		consistency, vector,
 		func(response qc.ResponseReader) bool {
 			if err := response.Error(); err != nil {

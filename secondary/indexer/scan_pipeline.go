@@ -12,9 +12,11 @@ package indexer
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"github.com/couchbase/indexing/secondary/collatejson"
 	c "github.com/couchbase/indexing/secondary/common"
 	p "github.com/couchbase/indexing/secondary/pipeline"
+	protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
 )
 
 var (
@@ -102,14 +104,22 @@ func (s *IndexScanSource) Routine() error {
 
 	fn := func(entry []byte) error {
 		skipRow := false
+		var ck [][]byte
 		if currentScan.ScanType == FilterRangeReq {
-			skipRow, err = filterScanRow(entry, currentScan, (*buf)[:0])
+			skipRow, ck, err = filterScanRow(entry, currentScan, (*buf)[:0])
 			if err != nil {
 				return err
 			}
 		}
 		if skipRow {
 			return nil
+		}
+
+		if !r.isPrimary && r.Indexprojection != nil && len(r.Indexprojection.EntryKeys) != 0 {
+			entry, err = projectKeys(ck, entry, (*buf)[:0], r.Indexprojection)
+			if err != nil {
+				return err
+			}
 		}
 
 		if checkDistinct {
@@ -203,6 +213,9 @@ loop:
 		}
 
 		d.p.bytesRead += uint64(len(sk) + len(docid))
+		if !d.p.req.isPrimary && !d.p.req.projectPrimaryKey {
+			docid = nil
+		}
 		err = d.WriteItem(sk, docid)
 		if err != nil {
 			break // TODO: Old code. Should it be ClosedWithError?
@@ -283,11 +296,11 @@ func siSplitEntry(entry []byte, tmp []byte) ([]byte, []byte, int) {
 }
 
 // Return true if the row needs to be skipped based on the filter
-func filterScanRow(key []byte, scan Scan, buf []byte) (bool, error) {
+func filterScanRow(key []byte, scan Scan, buf []byte) (bool, [][]byte, error) {
 	codec := collatejson.NewCodec(16)
 	compositekeys, err := codec.ExplodeArray(key, buf)
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 
 	var filtermatch bool
@@ -295,15 +308,15 @@ func filterScanRow(key []byte, scan Scan, buf []byte) (bool, error) {
 		if len(filtercollection.CompositeFilters) > len(compositekeys) {
 			// There cannot be more ranges than number of composite keys
 			err = errors.New("There are more ranges than number of composite elements in the index")
-			return false, err
+			return false, nil, err
 		}
 		filtermatch = applyFilter(compositekeys, filtercollection.CompositeFilters)
 		if filtermatch {
-			return false, nil
+			return false, compositekeys, nil
 		}
 	}
 
-	return true, nil
+	return true, compositekeys, nil
 }
 
 // Return true if filter matches the composite keys
@@ -377,4 +390,36 @@ func distinctCompare(entryBytes1, entryBytes2 []byte) bool {
 		return true
 	}
 	return false
+}
+
+func projectKeys(compositekeys [][]byte, key, buf []byte, projection *protobuf.IndexProjection) ([]byte, error) {
+	var err error
+	codec := collatejson.NewCodec(16)
+	if compositekeys == nil {
+		compositekeys, err = codec.ExplodeArray(key, buf)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	var keysToJoin [][]byte
+	cklen := len(compositekeys)
+	if len(projection.EntryKeys) > cklen {
+		e := errors.New(fmt.Sprintf("Invalid number of Entry Keys %v in IndexProjection", len(projection.EntryKeys)))
+		return nil, e
+	}
+	for _, position := range projection.EntryKeys {
+		if position >= int64(cklen) || position < 0 {
+			e := errors.New(fmt.Sprintf("Invalid Entry Key %v in IndexProjection", position))
+			return nil, e
+		}
+		keysToJoin = append(keysToJoin, compositekeys[position])
+	}
+	if buf, err = codec.JoinArray(keysToJoin, buf); err != nil {
+		return nil, err
+	}
+
+	entry := secondaryIndexEntry(key)
+	buf = append(buf, key[entry.lenKey():]...)
+	return buf, nil
 }

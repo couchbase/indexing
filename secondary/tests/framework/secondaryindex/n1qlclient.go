@@ -141,7 +141,8 @@ func N1QLScanAll(indexName, bucketName, server string, limit int64,
 }
 
 func N1QLScans(indexName, bucketName, server string, scans qc.Scans, reverse, distinct bool,
-	offset, limit int64, consistency c.Consistency, vector *qc.TsConsistency) (tc.ScanResponse, error) {
+	projection *qc.IndexProjection, offset, limit int64,
+	consistency c.Consistency, vector *qc.TsConsistency) (tc.ScanResponse, error) {
 
 	client, err := nclient.NewGSIIndexer(server, "default", bucketName)
 	if err != nil {
@@ -169,11 +170,12 @@ func N1QLScans(indexName, bucketName, server string, scans qc.Scans, reverse, di
 			spans2[i].Ranges = filtertoranges2(scan.Filter)
 		}
 
+		proj := projectionton1ql(projection)
 		cons := getConsistency(consistency)
 		ordered := true
 		if useScan2 {
 			start = time.Now()
-			index2.Scan2(requestid, spans2, reverse, distinct, ordered, nil,
+			index2.Scan2(requestid, spans2, reverse, distinct, ordered, proj,
 				offset, limit, cons, nil, conn)
 		} else {
 			log.Fatalf("Indexer does not support Index2 API. Cannot call Scan2 method.")
@@ -199,6 +201,24 @@ func filtertoranges2(filters []*qc.CompositeElementFilter) datastore.Ranges2 {
 	}
 
 	return ranges2
+}
+
+func projectionton1ql(projection *qc.IndexProjection) *datastore.IndexProjection {
+	if projection == nil {
+		return nil
+	}
+
+	entrykeys := make([]int, 0, len(projection.EntryKeys))
+	for _, ek := range projection.EntryKeys {
+		entrykeys = append(entrykeys, int(ek))
+	}
+
+	n1qlProj := &datastore.IndexProjection{
+		EntryKeys:  entrykeys,
+		PrimaryKey: projection.PrimaryKey,
+	}
+
+	return n1qlProj
 }
 
 func getrequestid() string {
