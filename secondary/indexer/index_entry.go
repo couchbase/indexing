@@ -131,8 +131,8 @@ func NewSecondaryIndexEntry(key []byte, docid []byte, isArray bool, count int, b
 			if len(key) > maxArrayIndexEntrySize {
 				return nil, errors.New(fmt.Sprintf("Encoded secondary array key is too long (> %d)", maxArrayIndexEntrySize))
 			}
-		} else if len(key) > maxIndexEntrySize {
-			return nil, errors.New(fmt.Sprintf("Encoded secondary key is too long (> %d)", maxIndexEntrySize))
+		} else if len(key) > MAX_SEC_KEY_BUFFER_LEN {
+			return nil, errors.New(fmt.Sprintf("Encoded secondary key is too long (> %d)", MAX_SEC_KEY_BUFFER_LEN))
 		}
 		buf = append(buf, key...)
 	}
