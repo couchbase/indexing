@@ -40,7 +40,7 @@ var (
 
 func init() {
 	jsonEncoder = collatejson.NewCodec(16)
-	encBufPool = common.NewByteBufferPool(maxIndexEntrySize)
+	encBufPool = common.NewByteBufferPool(maxIndexEntrySize + ENCODE_BUF_SAFE_PAD)
 }
 
 // Generic index entry abstraction (primary or secondary)

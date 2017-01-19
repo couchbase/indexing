@@ -88,8 +88,8 @@ func ArrayIndexItems(bs []byte, arrPos int, buf []byte,
 			return nil, nil, err
 		}
 		l := len(buf)
-		if checkSize && (l-from) > maxIndexEntrySize {
-			logging.Errorf("Encoded array item key too long. Length of key = %v, Limit = %v", buf[from:l], maxIndexEntrySize)
+		if checkSize && (l-from) > MAX_SEC_KEY_BUFFER_LEN {
+			logging.Errorf("Encoded array item key too long. Length of key = %v, Limit = %v", buf[from:l], MAX_SEC_KEY_BUFFER_LEN)
 			return nil, nil, ErrArrayItemKeyTooLong
 		}
 		if checkSize && l > maxArrayIndexEntrySize {

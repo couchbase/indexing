@@ -57,6 +57,8 @@ const MAX_DOCID_LEN = 256
 //Buffer Length for encoded Sec Key
 const MAX_SEC_KEY_BUFFER_LEN = MAX_SEC_KEY_LEN * 3
 
+const ENCODE_BUF_SAFE_PAD = 512
+
 const INDEXER_ID_KEY = "IndexerId"
 
 const INDEXER_STATE_KEY = "IndexerState"
