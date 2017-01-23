@@ -396,7 +396,7 @@ func runMultiScan(scans qc.Scans, reverse, distinct bool,
 	log.Printf("\n--- %v ---", scenario)
 
 	docScanResults := datautility.ExpectedMultiScanResponse(docs, []string{"company", "name"}, scans, reverse, distinct, projection, offset, limit, isScanAll)
-	scanResults, err := secondaryindex.Scans(indexName, bucketName, "127.0.0.1:9000", scans, reverse, distinct, projection, offset, limit, c.SessionConsistency, nil)
+	scanResults, err := secondaryindex.Scans(indexName, bucketName, indexScanAddress, scans, reverse, distinct, projection, offset, limit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
 	if validateOnlyCount {
 		if len(scanResults) != len(docScanResults) {
@@ -416,7 +416,7 @@ func runMultiScanWithIndex(indexName string, fields []string, scans qc.Scans,
 	log.Printf("\n--- %v ---", scenario)
 
 	docScanResults := datautility.ExpectedMultiScanResponse(docs, fields, scans, reverse, distinct, projection, offset, limit, isScanAll)
-	scanResults, err := secondaryindex.Scans(indexName, bucketName, "127.0.0.1:9000", scans, reverse, distinct, projection, offset, limit, c.SessionConsistency, nil)
+	scanResults, err := secondaryindex.Scans(indexName, bucketName, indexScanAddress, scans, reverse, distinct, projection, offset, limit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
 	if validateOnlyCount {
 		if len(scanResults) != len(docScanResults) {
@@ -436,7 +436,7 @@ func runMultiScanForPrimaryIndex(indexName string, scans qc.Scans,
 	log.Printf("\n--- %v ---", scenario)
 
 	docScanResults := datautility.ExpectedMultiScanResponse_Primary(docs, scans, reverse, distinct, offset, limit)
-	scanResults, err := secondaryindex.Scans(indexName, bucketName, "127.0.0.1:9000", scans, reverse, distinct, projection, offset, limit, c.SessionConsistency, nil)
+	scanResults, err := secondaryindex.Scans(indexName, bucketName, indexScanAddress, scans, reverse, distinct, projection, offset, limit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
 	if validateOnlyCount {
 		if len(scanResults) != len(docScanResults) {
