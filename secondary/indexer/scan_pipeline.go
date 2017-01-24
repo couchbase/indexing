@@ -12,9 +12,11 @@ package indexer
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"github.com/couchbase/indexing/secondary/collatejson"
 	c "github.com/couchbase/indexing/secondary/common"
 	p "github.com/couchbase/indexing/secondary/pipeline"
+	protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
 )
 
 var (
@@ -28,7 +30,6 @@ type ScanPipeline struct {
 
 	rowsReturned uint64
 	bytesRead    uint64
-	currOffset   int64
 }
 
 func (p *ScanPipeline) Cancel(err error) {
@@ -93,7 +94,9 @@ func (s *IndexScanSource) Routine() error {
 
 	r := s.p.req
 	var currentScan Scan
-	s.p.currOffset = 0
+	currOffset := int64(0)
+	count := 1
+	checkDistinct := r.Distinct && !r.isPrimary
 	buf := secKeyBufPool.Get()
 	r.keyBufList = append(r.keyBufList, buf)
 	previousRow := secKeyBufPool.Get()
@@ -101,29 +104,54 @@ func (s *IndexScanSource) Routine() error {
 
 	fn := func(entry []byte) error {
 		skipRow := false
+		var ck [][]byte
 		if currentScan.ScanType == FilterRangeReq {
-			skipRow, err = filterScanRow(entry, currentScan, (*buf)[:0])
+			skipRow, ck, err = filterScanRow(entry, currentScan, (*buf)[:0])
+			if err != nil {
+				return err
+			}
+		}
+		if skipRow {
+			return nil
+		}
+
+		if !r.isPrimary && r.Indexprojection != nil && len(r.Indexprojection.EntryKeys) != 0 {
+			entry, err = projectKeys(ck, entry, (*buf)[:0], r.Indexprojection)
 			if err != nil {
 				return err
 			}
 		}
 
-		if skipRow {
-			return nil
-		}
-
-		if r.Distinct && !r.isPrimary {
+		if checkDistinct {
 			if len(*previousRow) != 0 && distinctCompare(entry, *previousRow) {
 				return nil // Ignore the entry as it is same as previous entry
 			}
 		}
 
-		wrErr := s.WriteItem(entry)
-		if wrErr != nil {
-			return wrErr
+		if !r.isPrimary {
+			e := secondaryIndexEntry(entry)
+			count = e.Count()
 		}
 
-		if r.Distinct {
+		for i := 0; i < count; i++ {
+			if r.Distinct && i > 0 {
+				break
+			}
+			if currOffset >= r.Offset {
+				s.p.rowsReturned++
+				wrErr := s.WriteItem(entry)
+				if wrErr != nil {
+					return wrErr
+				}
+				if s.p.rowsReturned == uint64(r.Limit) {
+					return ErrLimitReached
+				}
+			} else {
+				currOffset++
+			}
+		}
+
+		if checkDistinct {
 			*previousRow = append((*previousRow)[:0], entry...)
 		}
 
@@ -162,7 +190,6 @@ func (d *IndexScanDecoder) Routine() error {
 	defer d.CloseRead()
 
 	var sk, docid []byte
-	var count int
 	tmpBuf := p.GetBlock()
 	defer p.PutBlock(tmpBuf)
 
@@ -179,31 +206,19 @@ loop:
 		}
 
 		t := (*tmpBuf)[:0]
-		count = 1
 		if d.p.req.isPrimary {
 			sk, docid = piSplitEntry(row, t)
 		} else {
-			sk, docid, count = siSplitEntry(row, t)
+			sk, docid, _ = siSplitEntry(row, t)
 		}
 
 		d.p.bytesRead += uint64(len(sk) + len(docid))
-		for i := 0; i < count; i++ {
-			if d.p.req.Distinct && i > 0 {
-				break
-			}
-			if d.p.currOffset >= d.p.req.Offset {
-				d.p.rowsReturned++
-				err = d.WriteItem(sk, docid)
-				if err != nil {
-					break // TODO: Old code. Should it be ClosedWithError
-				}
-
-				if d.p.rowsReturned == uint64(d.p.req.Limit) {
-					break loop
-				}
-			} else {
-				d.p.currOffset++
-			}
+		if !d.p.req.isPrimary && !d.p.req.projectPrimaryKey {
+			docid = nil
+		}
+		err = d.WriteItem(sk, docid)
+		if err != nil {
+			break // TODO: Old code. Should it be ClosedWithError?
 		}
 	}
 
@@ -281,11 +296,11 @@ func siSplitEntry(entry []byte, tmp []byte) ([]byte, []byte, int) {
 }
 
 // Return true if the row needs to be skipped based on the filter
-func filterScanRow(key []byte, scan Scan, buf []byte) (bool, error) {
+func filterScanRow(key []byte, scan Scan, buf []byte) (bool, [][]byte, error) {
 	codec := collatejson.NewCodec(16)
 	compositekeys, err := codec.ExplodeArray(key, buf)
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 
 	var filtermatch bool
@@ -293,15 +308,15 @@ func filterScanRow(key []byte, scan Scan, buf []byte) (bool, error) {
 		if len(filtercollection.CompositeFilters) > len(compositekeys) {
 			// There cannot be more ranges than number of composite keys
 			err = errors.New("There are more ranges than number of composite elements in the index")
-			return false, err
+			return false, nil, err
 		}
 		filtermatch = applyFilter(compositekeys, filtercollection.CompositeFilters)
 		if filtermatch {
-			return false, nil
+			return false, compositekeys, nil
 		}
 	}
 
-	return true, nil
+	return true, compositekeys, nil
 }
 
 // Return true if filter matches the composite keys
@@ -375,4 +390,36 @@ func distinctCompare(entryBytes1, entryBytes2 []byte) bool {
 		return true
 	}
 	return false
+}
+
+func projectKeys(compositekeys [][]byte, key, buf []byte, projection *protobuf.IndexProjection) ([]byte, error) {
+	var err error
+	codec := collatejson.NewCodec(16)
+	if compositekeys == nil {
+		compositekeys, err = codec.ExplodeArray(key, buf)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	var keysToJoin [][]byte
+	cklen := len(compositekeys)
+	if len(projection.EntryKeys) > cklen {
+		e := errors.New(fmt.Sprintf("Invalid number of Entry Keys %v in IndexProjection", len(projection.EntryKeys)))
+		return nil, e
+	}
+	for _, position := range projection.EntryKeys {
+		if position >= int64(cklen) || position < 0 {
+			e := errors.New(fmt.Sprintf("Invalid Entry Key %v in IndexProjection", position))
+			return nil, e
+		}
+		keysToJoin = append(keysToJoin, compositekeys[position])
+	}
+	if buf, err = codec.JoinArray(keysToJoin, buf); err != nil {
+		return nil, err
+	}
+
+	entry := secondaryIndexEntry(key)
+	buf = append(buf, key[entry.lenKey():]...)
+	return buf, nil
 }

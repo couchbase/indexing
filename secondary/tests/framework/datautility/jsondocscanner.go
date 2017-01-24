@@ -525,13 +525,16 @@ func ExpectedArrayScanResponse_string(docs tc.KeyValues, jsonPath string, low, h
 }
 
 func ExpectedMultiScanResponse(docs tc.KeyValues, compositeFieldPaths []string, scans qc.Scans,
-	reverse, distinct bool, offset, limit int64, isScanAll bool) tc.ScanResponse {
+	reverse, distinct bool, projection *qc.IndexProjection, offset, limit int64, isScanAll bool) tc.ScanResponse {
 	log.Printf("distinct = %v", distinct)
 	results := make(tc.ScanResponse)
 	var json map[string]interface{}
 	var f string
 	var i int
 	offsetCount := int64(0)
+	if projection != nil && len(projection.EntryKeys) != 0 {
+		distinct = false
+	}
 
 	resultList := make(ResultList, 0, len(docs))
 	for k, v := range docs {
@@ -560,14 +563,22 @@ func ExpectedMultiScanResponse(docs tc.KeyValues, compositeFieldPaths []string, 
 	var previousValue []interface{}
 	for _, res := range resultList {
 		if isScanAll {
+			var projectedSecondaryKey []interface{}
+			if projection != nil && len(projection.EntryKeys) != 0 {
+				for _, entrypos := range projection.EntryKeys {
+					projectedSecondaryKey = append(projectedSecondaryKey, res.SecondaryKey[entrypos])
+				}
+			} else {
+				projectedSecondaryKey = res.SecondaryKey
+			}
 			if distinct {
-				if compareSecondaryKeys(res.SecondaryKey, previousValue) == 0 {
+				if compareSecondaryKeys(projectedSecondaryKey, previousValue) == 0 {
 					continue
 				}
 			}
 			if offsetCount >= offset {
-				results[res.PrimaryKey] = res.SecondaryKey
-				previousValue = res.SecondaryKey
+				results[res.PrimaryKey] = projectedSecondaryKey
+				previousValue = projectedSecondaryKey
 			} else {
 				offsetCount++
 			}
@@ -590,14 +601,22 @@ func ExpectedMultiScanResponse(docs tc.KeyValues, compositeFieldPaths []string, 
 		}
 
 		if !skipDoc {
+			var projectedSecondaryKey []interface{}
+			if projection != nil && len(projection.EntryKeys) != 0 {
+				for _, entrypos := range projection.EntryKeys {
+					projectedSecondaryKey = append(projectedSecondaryKey, res.SecondaryKey[entrypos])
+				}
+			} else {
+				projectedSecondaryKey = res.SecondaryKey
+			}
 			if distinct {
-				if compareSecondaryKeys(res.SecondaryKey, previousValue) == 0 {
+				if compareSecondaryKeys(projectedSecondaryKey, previousValue) == 0 {
 					continue
 				}
 			}
 			if offsetCount >= offset {
-				results[res.PrimaryKey] = res.SecondaryKey
-				previousValue = res.SecondaryKey
+				results[res.PrimaryKey] = projectedSecondaryKey
+				previousValue = projectedSecondaryKey
 			} else {
 				offsetCount++
 			}

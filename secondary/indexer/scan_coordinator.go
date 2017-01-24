@@ -76,11 +76,12 @@ type ScanRequest struct {
 	isPrimary bool
 
 	// New parameters for spock
-	Scans           []Scan
-	Indexprojection *protobuf.IndexProjection
-	Reverse         bool
-	Distinct        bool
-	Offset          int64
+	Scans             []Scan
+	Indexprojection   *protobuf.IndexProjection
+	Reverse           bool
+	Distinct          bool
+	Offset            int64
+	projectPrimaryKey bool
 
 	ScanId      uint64
 	ExpiredTime time.Time
@@ -470,6 +471,7 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 	r.CancelCh = cancelCh
 
 	isBootstrapMode := s.isBootstrapMode()
+	r.projectPrimaryKey = true
 
 	isNil := func(k []byte) bool {
 		if len(k) == 0 || (!r.isPrimary && string(k) == "[]") {
@@ -981,14 +983,19 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 		r.Incl = Inclusion(req.GetSpan().GetRange().GetInclusion())
 		r.Limit = req.GetLimit()
 		r.Reverse = req.GetReverse()
-		r.Distinct = req.GetDistinct()
 		r.Indexprojection = req.GetIndexprojection()
+		if r.Indexprojection == nil || (r.Indexprojection != nil && len(r.Indexprojection.EntryKeys) == 0) {
+			r.Distinct = req.GetDistinct()
+		}
+		if r.Indexprojection != nil {
+			r.projectPrimaryKey = *r.Indexprojection.PrimaryKey
+		}
+
 		r.Offset = req.GetOffset()
 		if isBootstrapMode {
 			err = common.ErrIndexerInBootstrap
 			return
 		}
-
 		setIndexParams()
 		setConsistency(cons, vector)
 		fillRanges(
