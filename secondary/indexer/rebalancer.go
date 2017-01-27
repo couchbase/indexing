@@ -416,7 +416,7 @@ func (r *Rebalancer) buildAcceptedIndexes() {
 	var errStr string
 	r.mu.Lock()
 	for _, tt := range r.acceptedTokens {
-		idList.DefnIds = append(idList.DefnIds, uint64(tt.InstId))
+		idList.DefnIds = append(idList.DefnIds, uint64(tt.IndexInst.Defn.DefnId))
 	}
 	r.mu.Unlock()
 
@@ -518,7 +518,7 @@ loop:
 				}
 				allTokensReady = false
 
-				status, err := getIndexStatusFromMeta(tt.InstId, localMeta)
+				status, err := getIndexStatusFromMeta(&tt.IndexInst.Defn, localMeta)
 				if err != "" {
 					l.Errorf("Rebalancer::waitForIndexBuild Error Fetching Index Status %v %v", r.localaddr+url, err)
 					break
@@ -531,7 +531,7 @@ loop:
 				num_queued := statsMap[sname_queued].(float64)
 				tot_queued := num_pend + num_queued
 
-				l.Infof("Index %s Pending %s", sname, tot_queued)
+				l.Infof("Index %s State %v Pending %v", sname, c.IndexState(status), tot_queued)
 
 				if c.IndexState(status) == c.INDEX_STATE_ACTIVE && tot_queued < MaxPendingBeforeReady {
 					respch := make(chan bool)
@@ -729,10 +729,14 @@ func (r *Rebalancer) computeProgress() (progress float64) {
 	return
 }
 
-func getIndexStatusFromMeta(instId c.IndexInstId, localMeta *manager.LocalIndexMetadata) (c.IndexState, string) {
+func getIndexStatusFromMeta(defn *c.IndexDefn, localMeta *manager.LocalIndexMetadata) (c.IndexState, string) {
 
-	topology := localMeta.IndexTopologies[0]
-	return topology.GetStatusByDefn(c.IndexDefnId(instId))
+	topology := findTopologyByBucket(localMeta.IndexTopologies, defn.Bucket)
+	if topology == nil {
+		return c.INDEX_STATE_NIL, fmt.Sprintf("Topology Information Missing for %v Bucket", defn.Bucket)
+	}
+
+	return topology.GetStatusByDefn(defn.DefnId)
 }
 
 func getBuildProgressFromStatus(status *manager.IndexStatusResponse, instId c.IndexInstId) int {

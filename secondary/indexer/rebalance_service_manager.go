@@ -849,6 +849,8 @@ func (m *ServiceMgr) cleanupTransferTokens(tts map[string]*c.TransferToken) erro
 
 	for ttid, tt := range tts {
 
+		l.Infof("ServiceMgr::cleanupTransferTokens Cleaning Up %v %v", ttid, tt)
+
 		if tt.MasterId == string(m.nodeInfo.NodeID) {
 			m.cleanupTransferTokensForMaster(ttid, tt)
 		}
