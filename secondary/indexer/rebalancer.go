@@ -377,9 +377,18 @@ func (r *Rebalancer) processTokenAsDest(ttid string, tt *c.TransferToken) bool {
 			r.setTransferTokenError(ttid, tt, "Unknown TransferToken For Initiate")
 			return true
 		}
-		att.State = c.TransferTokenInProgress
-
-		tt.State = c.TransferTokenInProgress
+		if tt.IndexInst.Defn.Deferred && tt.IndexInst.State == c.INDEX_STATE_READY {
+			respch := make(chan bool)
+			r.supvMsgch <- &MsgUpdateIndexRState{defnId: tt.IndexInst.Defn.DefnId,
+				rstate: c.REBAL_ACTIVE,
+				respch: respch}
+			<-respch
+			tt.State = c.TransferTokenReady
+			att.State = c.TransferTokenReady
+		} else {
+			att.State = c.TransferTokenInProgress
+			tt.State = c.TransferTokenInProgress
+		}
 		r.setTransferTokenInMetakv(ttid, tt)
 
 		if r.checkIndexReadyToBuild() == true {
@@ -399,7 +408,7 @@ func (r *Rebalancer) processTokenAsDest(ttid string, tt *c.TransferToken) bool {
 func (r *Rebalancer) checkIndexReadyToBuild() bool {
 
 	for ttid, tt := range r.acceptedTokens {
-		if tt.State != c.TransferTokenInProgress {
+		if tt.State != c.TransferTokenInProgress && tt.State != c.TransferTokenReady {
 			l.Infof("Rebalancer::checkIndexReadyToBuild Not ready to build %v %v", ttid, tt)
 			return false
 		}
@@ -416,7 +425,9 @@ func (r *Rebalancer) buildAcceptedIndexes() {
 	var errStr string
 	r.mu.Lock()
 	for _, tt := range r.acceptedTokens {
-		idList.DefnIds = append(idList.DefnIds, uint64(tt.IndexInst.Defn.DefnId))
+		if tt.State != c.TransferTokenReady {
+			idList.DefnIds = append(idList.DefnIds, uint64(tt.IndexInst.Defn.DefnId))
+		}
 	}
 	r.mu.Unlock()
 
@@ -535,7 +546,7 @@ loop:
 
 				if c.IndexState(status) == c.INDEX_STATE_ACTIVE && tot_queued < MaxPendingBeforeReady {
 					respch := make(chan bool)
-					r.supvMsgch <- &MsgUpdateIndexRState{instId: tt.InstId,
+					r.supvMsgch <- &MsgUpdateIndexRState{defnId: tt.IndexInst.Defn.DefnId,
 						rstate: c.REBAL_ACTIVE,
 						respch: respch}
 					<-respch
@@ -575,16 +586,7 @@ func (r *Rebalancer) processTokenAsMaster(ttid string, tt *c.TransferToken) bool
 	switch tt.State {
 
 	case c.TransferTokenAccepted:
-		if tt.IndexInst.Defn.Deferred && tt.IndexInst.State == c.INDEX_STATE_READY {
-			respch := make(chan bool)
-			r.supvMsgch <- &MsgUpdateIndexRState{instId: tt.InstId,
-				rstate: c.REBAL_ACTIVE,
-				respch: respch}
-			<-respch
-			tt.State = c.TransferTokenReady
-		} else {
-			tt.State = c.TransferTokenInitate
-		}
+		tt.State = c.TransferTokenInitate
 		r.setTransferTokenInMetakv(ttid, tt)
 
 		if r.cb.progress != nil {

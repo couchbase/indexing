@@ -2403,8 +2403,16 @@ func (idx *indexer) handleUpdateIndexRState(msg Message) {
 
 	updateMsg := msg.(*MsgUpdateIndexRState)
 	respCh := updateMsg.GetRespCh()
-	instId := updateMsg.GetInstId()
+	defnId := updateMsg.GetDefnId()
 	rstate := updateMsg.GetRState()
+
+	instId := idx.getInstIdFromDefnId(defnId)
+
+	if instId == 0 {
+		logging.Errorf("Indexer::handleUpdateIndexRState Unable to find Index For DefnId %v", defnId)
+		respCh <- false
+		return
+	}
 
 	inst := idx.indexInstMap[instId]
 	inst.RState = rstate
@@ -4677,4 +4685,14 @@ func (idx *indexer) canSetStorageMode(sm string) bool {
 	}
 
 	return true
+}
+
+func (idx *indexer) getInstIdFromDefnId(defnId common.IndexDefnId) common.IndexInstId {
+
+	for instId, inst := range idx.indexInstMap {
+		if inst.Defn.DefnId == defnId {
+			return instId
+		}
+	}
+	return 0
 }

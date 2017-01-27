@@ -1189,7 +1189,7 @@ func (m *MsgCheckDDLInProgress) GetRespCh() chan bool {
 }
 
 type MsgUpdateIndexRState struct {
-	instId common.IndexInstId
+	defnId common.IndexDefnId
 	respch chan bool
 	rstate common.RebalanceState
 }
@@ -1198,8 +1198,8 @@ func (m *MsgUpdateIndexRState) GetMsgType() MsgType {
 	return INDEXER_UPDATE_RSTATE
 }
 
-func (m *MsgUpdateIndexRState) GetInstId() common.IndexInstId {
-	return m.instId
+func (m *MsgUpdateIndexRState) GetDefnId() common.IndexDefnId {
+	return m.defnId
 }
 
 func (m *MsgUpdateIndexRState) GetRespCh() chan bool {
