@@ -85,6 +85,7 @@ type metadataRepo struct {
 	definitions map[c.IndexDefnId]*c.IndexDefn
 	instances   map[c.IndexDefnId]map[c.IndexInstId]map[uint64]*IndexInstDistribution
 	indices     map[c.IndexDefnId]*IndexMetadata
+	topology    map[c.IndexerId]map[c.IndexDefnId]bool
 	version     uint64
 	mutex       sync.RWMutex
 }
@@ -1184,6 +1185,7 @@ func newMetadataRepo(provider *MetadataProvider) *metadataRepo {
 		definitions: make(map[c.IndexDefnId]*c.IndexDefn),
 		instances:   make(map[c.IndexDefnId]map[c.IndexInstId]map[uint64]*IndexInstDistribution),
 		indices:     make(map[c.IndexDefnId]*IndexMetadata),
+		topology:    make(map[c.IndexerId]map[c.IndexDefnId]bool),
 		version:     uint64(0),
 		provider:    provider,
 	}
@@ -1389,10 +1391,11 @@ func (r *metadataRepo) getValidDefnCount(indexerId c.IndexerId) int {
 	return count
 }
 
-func (r *metadataRepo) removeInstForIndexerNoLock(indexerId string) {
+func (r *metadataRepo) removeInstForIndexerNoLock(indexerId c.IndexerId, bucket string) {
 
 	newInstsByDefnId := make(map[c.IndexDefnId]map[c.IndexInstId]map[uint64]*IndexInstDistribution)
 	for defnId, instsByDefnId := range r.instances {
+		defn := r.definitions[defnId]
 
 		newInstsByInstId := make(map[c.IndexInstId]map[uint64]*IndexInstDistribution)
 		for instId, instsByInstId := range instsByDefnId {
@@ -1400,10 +1403,10 @@ func (r *metadataRepo) removeInstForIndexerNoLock(indexerId string) {
 			newInstsByVersion := make(map[uint64]*IndexInstDistribution)
 			for version, instByVersion := range instsByInstId {
 				instIndexerId := instByVersion.findIndexerId()
-				if instIndexerId != indexerId {
-					newInstsByVersion[version] = instByVersion
-				} else {
+				if instIndexerId == string(indexerId) && (len(bucket) == 0 || defn.Bucket == bucket) {
 					logging.Debugf("remove index for indexerId : defnId %v instId %v indexerId %v", defnId, instId, instIndexerId)
+				} else {
+					newInstsByVersion[version] = instByVersion
 				}
 			}
 			if len(newInstsByVersion) != 0 {
@@ -1418,20 +1421,30 @@ func (r *metadataRepo) removeInstForIndexerNoLock(indexerId string) {
 	r.instances = newInstsByDefnId
 }
 
-func (r *metadataRepo) cleanupOrphanDefnNoLock() {
+func (r *metadataRepo) cleanupOrphanDefnNoLock(indexerId c.IndexerId, bucket string) {
 
 	deleteDefn := ([]c.IndexDefnId)(nil)
 
-	for defnId, _ := range r.definitions {
-		if len(r.instances[defnId]) == 0 {
-			deleteDefn = append(deleteDefn, defnId)
+	for defnId, _ := range r.topology[indexerId] {
+		defn := r.definitions[defnId]
+		if len(bucket) == 0 || defn.Bucket == bucket {
+
+			if len(r.instances[defnId]) == 0 {
+				deleteDefn = append(deleteDefn, defnId)
+			}
 		}
 	}
 
 	for _, defnId := range deleteDefn {
+		logging.Debugf("removing orphan defn with no instance %v", defnId)
 		delete(r.definitions, defnId)
 		delete(r.instances, defnId)
 		delete(r.indices, defnId)
+		delete(r.topology[indexerId], defnId)
+	}
+
+	if len(r.topology[indexerId]) == 0 {
+		delete(r.topology, indexerId)
 	}
 }
 
@@ -1440,8 +1453,8 @@ func (r *metadataRepo) cleanupIndicesForIndexer(indexerId c.IndexerId) {
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
 
-	r.removeInstForIndexerNoLock(string(indexerId))
-	r.cleanupOrphanDefnNoLock()
+	r.removeInstForIndexerNoLock(indexerId, "")
+	r.cleanupOrphanDefnNoLock(indexerId, "")
 
 	for defnId, _ := range r.indices {
 		logging.Debugf("update topology during cleanup: defn %v", defnId)
@@ -1449,23 +1462,29 @@ func (r *metadataRepo) cleanupIndicesForIndexer(indexerId c.IndexerId) {
 	}
 }
 
-func (r *metadataRepo) updateTopology(topology *IndexTopology, indexerId string) {
+func (r *metadataRepo) updateTopology(topology *IndexTopology, indexerId c.IndexerId) {
 
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
 
 	if len(indexerId) == 0 {
-		indexerId = topology.findIndexerId()
+		indexerId = c.IndexerId(topology.findIndexerId())
 	}
 
 	if len(indexerId) != 0 {
-		r.removeInstForIndexerNoLock(indexerId)
+		r.removeInstForIndexerNoLock(indexerId, topology.Bucket)
 	}
 
 	logging.Debugf("new topology change from %v", indexerId)
 
 	for _, defnRef := range topology.Definitions {
 		defnId := c.IndexDefnId(defnRef.DefnId)
+
+		if _, ok := r.topology[indexerId]; !ok {
+			r.topology[indexerId] = make(map[c.IndexDefnId]bool)
+		}
+		r.topology[indexerId][defnId] = true
+
 		for _, instRef := range defnRef.Instances {
 			if _, ok := r.instances[defnId]; !ok {
 				r.instances[defnId] = make(map[c.IndexInstId]map[uint64]*IndexInstDistribution)
@@ -1480,7 +1499,10 @@ func (r *metadataRepo) updateTopology(topology *IndexTopology, indexerId string)
 		r.updateIndexMetadataNoLock(defnId)
 	}
 
-	r.cleanupOrphanDefnNoLock()
+	if len(indexerId) != 0 {
+		r.cleanupOrphanDefnNoLock(indexerId, topology.Bucket)
+	}
+
 	r.version++
 }
 
@@ -1502,7 +1524,7 @@ func (r *metadataRepo) unmarshallAndAddDefn(content []byte) error {
 	return nil
 }
 
-func (r *metadataRepo) unmarshallAndUpdateTopology(content []byte, indexerId string) error {
+func (r *metadataRepo) unmarshallAndUpdateTopology(content []byte, indexerId c.IndexerId) error {
 
 	topology, err := unmarshallIndexTopology(content)
 	if err != nil {
@@ -2349,6 +2371,20 @@ func (w *watcher) GetCommitedEntries(txid1, txid2 common.Txnid) (<-chan protocol
 
 func (w *watcher) LogAndCommit(txid common.Txnid, op uint32, key string, content []byte, toCommit bool) error {
 
+	// LogAndCommit is invoked when the server is trying to sync with the client.   The first entry of metadata
+	// always has txnid 1 (based on gometa.TransitCommitLog).  Cleanup any existing metadata for the same indexerId.
+	// If the watcher does not now its indexerId, then it means that it is the first connection to the indexer.
+	if txid == common.Txnid(1) {
+		var indexerId c.IndexerId
+		if w.serviceMap != nil {
+			indexerId = c.IndexerId(w.serviceMap.IndexerId)
+		}
+		logging.Debugf("watcher.LogAndCommit(): cleanup indices after receiving new commit of txnid 1")
+		if len(indexerId) != 0 {
+			w.provider.repo.cleanupIndicesForIndexer(indexerId)
+		}
+	}
+
 	if _, err := w.processChange(txid, op, key, content); err != nil {
 		logging.Errorf("watcher.LogAndCommit(): receive error when processing log entry from server.  Error = %v", err)
 	}
@@ -2361,19 +2397,12 @@ func (w *watcher) processChange(txid common.Txnid, op uint32, key string, conten
 	logging.Debugf("watcher.processChange(): key = %v txid=%v last_seen_txid=%v", key, txid, w.lastSeenTxid)
 	defer logging.Debugf("watcher.processChange(): done -> key = %v", key)
 
-	var indexerId string
+	var indexerId c.IndexerId
 	if w.serviceMap != nil {
-		indexerId = w.serviceMap.IndexerId
+		indexerId = c.IndexerId(w.serviceMap.IndexerId)
 	}
 
 	opCode := common.OpCode(op)
-
-	// have we seen this txid before?
-	if txid <= w.lastSeenTxid {
-		logging.Debugf("watcher.processChange(): encountering repeated txid.  Incoming txid = %v, last seen txid %v",
-			txid, w.lastSeenTxid)
-		return false, nil
-	}
 
 	switch opCode {
 	case common.OPCODE_ADD, common.OPCODE_SET:
