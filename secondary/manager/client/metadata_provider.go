@@ -1303,32 +1303,6 @@ func (r *metadataRepo) findRecentValidIndexInstNoLock(defnId c.IndexDefnId) []*I
 	return recent
 }
 
-func (r *metadataRepo) getNumValidIndexInstNoLock(defnId c.IndexDefnId) int {
-
-	count := 0
-	instsByInstId := r.instances[defnId]
-	for _, instsByVersion := range instsByInstId {
-		hasValidInst := false
-		for _, inst := range instsByVersion {
-
-			if c.IndexState(inst.State) != c.INDEX_STATE_NIL &&
-				c.IndexState(inst.State) != c.INDEX_STATE_CREATED &&
-				c.IndexState(inst.State) != c.INDEX_STATE_DELETED &&
-				c.IndexState(inst.State) != c.INDEX_STATE_ERROR {
-
-				hasValidInst = true
-				break
-			}
-		}
-
-		if hasValidInst {
-			count++
-		}
-	}
-
-	return count
-}
-
 // Only Consider instance with Active RState
 func (r *metadataRepo) hasDefnIgnoreStatus(indexerId c.IndexerId, defnId c.IndexDefnId) bool {
 
@@ -1415,24 +1389,6 @@ func (r *metadataRepo) getValidDefnCount(indexerId c.IndexerId) int {
 	return count
 }
 
-func (r *metadataRepo) removeDefn(defnId c.IndexDefnId) {
-
-	r.mutex.Lock()
-	defer r.mutex.Unlock()
-
-	// Get the number of valid index inst (regardless of RState).
-	// If number of valid inst is 1, then delete the index defn.
-	count := r.getNumValidIndexInstNoLock(defnId)
-
-	if count <= 1 {
-		delete(r.definitions, defnId)
-		delete(r.instances, defnId)
-		delete(r.indices, defnId)
-
-		r.version++
-	}
-}
-
 func (r *metadataRepo) removeInstForIndexerNoLock(indexerId string) {
 
 	newInstsByDefnId := make(map[c.IndexDefnId]map[c.IndexInstId]map[uint64]*IndexInstDistribution)
@@ -1462,25 +1418,46 @@ func (r *metadataRepo) removeInstForIndexerNoLock(indexerId string) {
 	r.instances = newInstsByDefnId
 }
 
+func (r *metadataRepo) cleanupOrphanDefnNoLock() {
+
+	deleteDefn := ([]c.IndexDefnId)(nil)
+
+	for defnId, _ := range r.definitions {
+		if len(r.instances[defnId]) == 0 {
+			deleteDefn = append(deleteDefn, defnId)
+		}
+	}
+
+	for _, defnId := range deleteDefn {
+		delete(r.definitions, defnId)
+		delete(r.instances, defnId)
+		delete(r.indices, defnId)
+	}
+}
+
 func (r *metadataRepo) cleanupIndicesForIndexer(indexerId c.IndexerId) {
 
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
 
 	r.removeInstForIndexerNoLock(string(indexerId))
+	r.cleanupOrphanDefnNoLock()
 
 	for defnId, _ := range r.indices {
-		logging.Debugf("clean up indices: defn %v", defnId)
+		logging.Debugf("update topology during cleanup: defn %v", defnId)
 		r.updateIndexMetadataNoLock(defnId)
 	}
 }
 
-func (r *metadataRepo) updateTopology(topology *IndexTopology) {
+func (r *metadataRepo) updateTopology(topology *IndexTopology, indexerId string) {
 
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
 
-	indexerId := topology.findIndexerId()
+	if len(indexerId) == 0 {
+		indexerId = topology.findIndexerId()
+	}
+
 	if len(indexerId) != 0 {
 		r.removeInstForIndexerNoLock(indexerId)
 	}
@@ -1503,6 +1480,7 @@ func (r *metadataRepo) updateTopology(topology *IndexTopology) {
 		r.updateIndexMetadataNoLock(defnId)
 	}
 
+	r.cleanupOrphanDefnNoLock()
 	r.version++
 }
 
@@ -1524,13 +1502,13 @@ func (r *metadataRepo) unmarshallAndAddDefn(content []byte) error {
 	return nil
 }
 
-func (r *metadataRepo) unmarshallAndUpdateTopology(content []byte) error {
+func (r *metadataRepo) unmarshallAndUpdateTopology(content []byte, indexerId string) error {
 
 	topology, err := unmarshallIndexTopology(content)
 	if err != nil {
 		return err
 	}
-	r.updateTopology(topology)
+	r.updateTopology(topology, indexerId)
 	return nil
 }
 
@@ -2383,6 +2361,11 @@ func (w *watcher) processChange(txid common.Txnid, op uint32, key string, conten
 	logging.Debugf("watcher.processChange(): key = %v txid=%v last_seen_txid=%v", key, txid, w.lastSeenTxid)
 	defer logging.Debugf("watcher.processChange(): done -> key = %v", key)
 
+	var indexerId string
+	if w.serviceMap != nil {
+		indexerId = w.serviceMap.IndexerId
+	}
+
 	opCode := common.OpCode(op)
 
 	// have we seen this txid before?
@@ -2420,7 +2403,7 @@ func (w *watcher) processChange(txid common.Txnid, op uint32, key string, conten
 			if len(content) == 0 {
 				logging.Debugf("watcher.processChange(): content of key = %v is empty.", key)
 			}
-			if err := w.provider.repo.unmarshallAndUpdateTopology(content); err != nil {
+			if err := w.provider.repo.unmarshallAndUpdateTopology(content, indexerId); err != nil {
 				return false, err
 			}
 			w.notifyEventNoLock()
@@ -2435,11 +2418,10 @@ func (w *watcher) processChange(txid common.Txnid, op uint32, key string, conten
 	case common.OPCODE_DELETE:
 		if isIndexDefnKey(key) {
 
-			id, err := extractDefnIdFromKey(key)
+			_, err := extractDefnIdFromKey(key)
 			if err != nil {
 				return false, err
 			}
-			w.provider.repo.removeDefn(c.IndexDefnId(id))
 			w.notifyEventNoLock()
 
 			if txid > w.lastSeenTxid {
