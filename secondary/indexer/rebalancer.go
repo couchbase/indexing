@@ -669,13 +669,17 @@ func (r *Rebalancer) updateProgress() {
 	r.wg.Add(1)
 	defer r.wg.Done()
 
+	var lastProgress float64
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ticker.C:
 			progress := r.computeProgress()
-			r.cb.progress(progress, r.cancel)
+			if progress > lastProgress {
+				lastProgress = progress
+				r.cb.progress(progress, r.cancel)
+			}
 		case <-r.cancel:
 			l.Infof("Rebalancer::updateProgress Cancel Received")
 			return
@@ -716,7 +720,7 @@ func (r *Rebalancer) computeProgress() (progress float64) {
 		if state == c.TransferTokenCommit || state == c.TransferTokenDeleted {
 			totalProgress += 100
 		} else {
-			totalProgress = getBuildProgressFromStatus(statusResp, tt.InstId)
+			totalProgress = getBuildProgressFromStatus(statusResp, tt.IndexInst.Defn.DefnId)
 		}
 	}
 
@@ -741,10 +745,10 @@ func getIndexStatusFromMeta(defn *c.IndexDefn, localMeta *manager.LocalIndexMeta
 	return topology.GetStatusByDefn(defn.DefnId)
 }
 
-func getBuildProgressFromStatus(status *manager.IndexStatusResponse, instId c.IndexInstId) int {
+func getBuildProgressFromStatus(status *manager.IndexStatusResponse, defnId c.IndexDefnId) int {
 
 	for _, idx := range status.Status {
-		if idx.DefnId == c.IndexDefnId(instId) && idx.Status == "Replicating" {
+		if idx.DefnId == defnId && idx.Status == "Replicating" {
 			l.Infof("Rebalancer::getBuildProgressFromStatus %v %v", idx.DefnId, idx.Completion)
 			return idx.Completion
 		}
