@@ -329,6 +329,7 @@ func (r *Rebalancer) processTokenAsDest(ttid string, tt *c.TransferToken) bool {
 		indexDefn := tt.IndexInst.Defn
 		indexDefn.Nodes = nil
 		indexDefn.Deferred = true
+		indexDefn.InstId = tt.InstId
 
 		ir := manager.IndexRequest{Index: indexDefn}
 		body, err := json.Marshal(&ir)

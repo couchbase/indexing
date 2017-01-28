@@ -295,11 +295,18 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn) error {
 		}
 	}
 
-	// create index id
-	instId, err := common.NewIndexInstId()
-	if err != nil {
-		return err
+	var instId common.IndexInstId
+	if defn.InstId > 0 {
+		//use already supplied instance id (e.g. rebalance case)
+		instId = defn.InstId
+	} else {
+		// create index id
+		instId, err = common.NewIndexInstId()
+		if err != nil {
+			return err
+		}
 	}
+	defn.InstId = 0
 
 	// create replica id
 	replicaId := defn.ReplicaId
