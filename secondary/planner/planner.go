@@ -183,11 +183,13 @@ type IndexUsage struct {
 	ActualKeySize     uint64 `json:"actualKeySize"`
 
 	// input: index definition (optional)
-	//Definition *common.IndexDefn `json:"definition,omitempty"`
 	Instance *common.IndexInst `json:"instance,omitempty"`
 
 	// input: node where index initially placed (optional)
 	initialNode *IndexerNode
+
+	// input: hint for placement / constraint
+	suppressEquivIdxCheck bool
 }
 
 type Solution struct {
@@ -317,6 +319,9 @@ func (p *SAPlanner) Plan(command CommandType, solution *Solution) (*Solution, er
 	var result *Solution
 	var err error
 
+	eligibles := p.placement.GetEligibleIndexes()
+	solution.RelaxConstraintIfNecessary(eligibles)
+
 	for i := 0; i < RunPerPlan; i++ {
 		p.Try++
 		startTime := time.Now()
@@ -340,7 +345,10 @@ func (p *SAPlanner) Plan(command CommandType, solution *Solution) (*Solution, er
 //
 func (p *SAPlanner) planSingleRun(command CommandType, solution *Solution) (*Solution, error) {
 
-	if err := p.Validate(solution); err != nil {
+	current := solution.clone()
+	initialPlan := solution.initialPlan
+
+	if err := p.Validate(current); err != nil {
 		return nil, errors.New(fmt.Sprintf("Validation fails: %s", err))
 	}
 
@@ -349,7 +357,6 @@ func (p *SAPlanner) planSingleRun(command CommandType, solution *Solution) (*Sol
 
 	rs := rand.New(rand.NewSource(time.Now().UnixNano()))
 
-	current := solution.clone()
 	old_cost := p.cost.Cost(current)
 	startScore := old_cost
 	startTime := time.Now()
@@ -357,7 +364,6 @@ func (p *SAPlanner) planSingleRun(command CommandType, solution *Solution) (*Sol
 	move := uint64(0)
 	iteration := uint64(0)
 	positiveMove := uint64(0)
-	initialPlan := solution.initialPlan
 
 	temperature := p.initialTemperature(command, old_cost)
 	startTemp := temperature
@@ -1030,6 +1036,25 @@ func (s *Solution) findNumEquivalentIndex(u *IndexUsage) int {
 }
 
 //
+// Find the number of replica (including itself).
+//
+func (s *Solution) findNumReplica(u *IndexUsage) int {
+
+	count := 0
+	for _, indexer := range s.Placement {
+		for _, index := range indexer.Indexes {
+
+			// check replica
+			if index.DefnId == u.DefnId {
+				count++
+			}
+		}
+	}
+
+	return count
+}
+
+//
 // This function recalculates the index and indexer sizes baesd on sizing formula.
 // Data captured from live cluser will not be overwritten.
 //
@@ -1044,6 +1069,116 @@ func (s *Solution) calculateSize() {
 	for _, indexer := range s.Placement {
 		s.sizing.ComputeIndexerSize(indexer)
 	}
+}
+
+//
+// Relax constraint depending on the solution and command.
+//
+func (s *Solution) RelaxConstraintIfNecessary(eligibles []*IndexUsage) {
+
+	// If not using live data, then no need to relax constraint.
+	if !s.UseLiveData() {
+		return
+	}
+
+	numLiveNode := s.findNumLiveNode()
+
+	// Check to see if it is needed to drop replica from a ejected node
+	for _, indexer := range s.Placement {
+		deleteCandidates := make(map[*IndexUsage]bool)
+
+		for _, index := range indexer.Indexes {
+			if isEligibleIndex(index, eligibles) {
+
+				// if there are more replica than the number of nodes, then
+				// do not move this index if this node is going away.  If the
+				// node is not going away, then do nothing and let validation
+				// fails later.
+				if (s.findNumReplica(index) > numLiveNode) && indexer.delete {
+					deleteCandidates[index] = true
+				}
+			}
+		}
+
+		if len(deleteCandidates) != 0 {
+			keepCandidates := ([]*IndexUsage)(nil)
+
+			for _, index := range indexer.Indexes {
+				if !deleteCandidates[index] {
+					keepCandidates = append(keepCandidates, index)
+				} else {
+					logging.Warnf("There is more replia than available nodes.  Will not move index replica (%v,%v) from ejected node %v",
+						index.Bucket, index.Name, indexer.NodeId)
+				}
+			}
+			indexer.Indexes = keepCandidates
+		}
+	}
+
+	// Check to see if need to suppress equivalent index.
+	for _, indexer := range s.Placement {
+		for _, index := range indexer.Indexes {
+
+			if isEligibleIndex(index, eligibles) {
+
+				// if there are more equiv idx than number of nodes, then
+				// allow placement of this index over equiv index
+				// (but not over replica).
+				if s.findNumEquivalentIndex(index) > numLiveNode {
+					index.suppressEquivIdxCheck = true
+				}
+			}
+		}
+	}
+}
+
+//
+// is this a MOI Cluster?
+//
+func (s *Solution) isMOICluster() bool {
+
+	for _, indexer := range s.Placement {
+		for _, index := range indexer.Indexes {
+			if index.IsMOI {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+//
+// Find num of deleted node
+//
+func (s *Solution) findNumDeleteNodes() int {
+
+	count := 0
+	for _, indexer := range s.Placement {
+		if indexer.delete {
+			count++
+		}
+	}
+
+	return count
+}
+
+//
+// find number of live node (excluding ejected node)
+//
+func (s *Solution) findNumLiveNode() int {
+
+	return len(s.Placement) - s.findNumDeleteNodes()
+}
+
+//
+// ignore resource constraint if
+// 1) use live data (command == rebalance and live cluster)
+// 2) is not a MOI cluster
+//
+func (s *Solution) ignoreResourceConstraint() bool {
+
+	return s.UseLiveData() && !s.isMOICluster()
 }
 
 //////////////////////////////////////////////////////////////
@@ -1088,6 +1223,10 @@ func (c *IndexerConstraint) Validate(s *Solution) error {
 		return nil
 	}
 
+	if s.ignoreResourceConstraint() {
+		return nil
+	}
+
 	var totalIndexMem uint64
 	var totalIndexCpu uint64
 
@@ -1098,11 +1237,11 @@ func (c *IndexerConstraint) Validate(s *Solution) error {
 		}
 	}
 
-	if totalIndexMem > (c.MemQuota * uint64(len(s.Placement))) {
+	if totalIndexMem > (c.MemQuota * uint64(s.findNumLiveNode())) {
 		return errors.New(fmt.Sprintf("Total memory usage of all indexes exceed aggregated memory quota of all indexer nodes"))
 	}
 
-	if totalIndexCpu > (c.CpuQuota * uint64(len(s.Placement))) {
+	if totalIndexCpu > (c.CpuQuota * uint64(s.findNumLiveNode())) {
 		return errors.New(fmt.Sprintf("Total cpu usage of all indexes exceed aggregated cpu quota of all indexer nodes"))
 	}
 
@@ -1209,11 +1348,17 @@ func (c *IndexerConstraint) CanAddIndex(s *Solution, n *IndexerNode, u *IndexUsa
 		}
 
 		// check equivalent index
-		if index.Instance != nil &&
-			u.Instance != nil &&
-			common.IsEquivalentIndex(&index.Instance.Defn, &u.Instance.Defn) {
-			return AvailabilityViolation
+		if !index.suppressEquivIdxCheck && !u.suppressEquivIdxCheck {
+			if index.Instance != nil &&
+				u.Instance != nil &&
+				common.IsEquivalentIndex(&index.Instance.Defn, &u.Instance.Defn) {
+				return AvailabilityViolation
+			}
 		}
+	}
+
+	if s.ignoreResourceConstraint() {
+		return NoViolation
 	}
 
 	memQuota := c.MemQuota
@@ -1248,6 +1393,26 @@ func (c *IndexerConstraint) CanSwapIndex(sol *Solution, n *IndexerNode, s *Index
 		return DeleteNodeViolation
 	}
 
+	for _, index := range n.Indexes {
+		// check replica
+		if index.DefnId == s.DefnId {
+			return AvailabilityViolation
+		}
+
+		// check equivalent index
+		if !index.suppressEquivIdxCheck && !s.suppressEquivIdxCheck {
+			if index.Instance != nil &&
+				s.Instance != nil &&
+				common.IsEquivalentIndex(&index.Instance.Defn, &s.Instance.Defn) {
+				return AvailabilityViolation
+			}
+		}
+	}
+
+	if sol.ignoreResourceConstraint() {
+		return NoViolation
+	}
+
 	memQuota := c.MemQuota
 	cpuQuota := c.CpuQuota
 
@@ -1267,20 +1432,6 @@ func (c *IndexerConstraint) CanSwapIndex(sol *Solution, n *IndexerNode, s *Index
 		return ResourceViolation
 	}
 
-	for _, index := range n.Indexes {
-		// check replica
-		if index.DefnId == s.DefnId {
-			return AvailabilityViolation
-		}
-
-		// check equivalent index
-		if index.Instance != nil &&
-			s.Instance != nil &&
-			common.IsEquivalentIndex(&index.Instance.Defn, &s.Instance.Defn) {
-			return AvailabilityViolation
-		}
-	}
-
 	return NoViolation
 }
 
@@ -1288,6 +1439,10 @@ func (c *IndexerConstraint) CanSwapIndex(sol *Solution, n *IndexerNode, s *Index
 // This function determines if a node constraint is satisfied.
 //
 func (c *IndexerConstraint) SatisfyNodeResourceConstraint(s *Solution, n *IndexerNode) bool {
+
+	if s.ignoreResourceConstraint() {
+		return true
+	}
 
 	memQuota := c.MemQuota
 	cpuQuota := c.CpuQuota
@@ -1315,6 +1470,10 @@ func (c *IndexerConstraint) SatisfyNodeResourceConstraint(s *Solution, n *Indexe
 // This function determines if cluster wide constraint is satisifed.
 //
 func (c *IndexerConstraint) SatisfyClusterResourceConstraint(s *Solution) bool {
+
+	if s.ignoreResourceConstraint() {
+		return true
+	}
 
 	memQuota := c.MemQuota
 	cpuQuota := c.CpuQuota
@@ -1379,10 +1538,12 @@ func (c *IndexerConstraint) SatisfyNodeConstraint(s *Solution, n *IndexerNode, e
 			}
 
 			// check equivalent index
-			if n.Indexes[i].Instance != nil &&
-				n.Indexes[j].Instance != nil &&
-				common.IsEquivalentIndex(&n.Indexes[i].Instance.Defn, &n.Indexes[j].Instance.Defn) {
-				return false
+			if !n.Indexes[i].suppressEquivIdxCheck && !n.Indexes[j].suppressEquivIdxCheck {
+				if n.Indexes[i].Instance != nil &&
+					n.Indexes[j].Instance != nil &&
+					common.IsEquivalentIndex(&n.Indexes[i].Instance.Defn, &n.Indexes[j].Instance.Defn) {
+					return false
+				}
 			}
 		}
 	}
@@ -1792,6 +1953,10 @@ func (p *RandomPlacement) GetEligibleIndexes() []*IndexUsage {
 //
 func (p *RandomPlacement) Validate(s *Solution) error {
 
+	if s.ignoreResourceConstraint() {
+		return nil
+	}
+
 	memQuota := s.getConstraintMethod().GetMemQuota()
 	cpuQuota := s.getConstraintMethod().GetCpuQuota()
 
@@ -1803,7 +1968,7 @@ func (p *RandomPlacement) Validate(s *Solution) error {
 				s.getConstraintMethod().GetCpuQuota()))
 		}
 
-		if !s.getConstraintMethod().CanAddNode(s) && s.findNumEquivalentIndex(index) > len(s.Placement) {
+		if !s.getConstraintMethod().CanAddNode(s) && s.findNumEquivalentIndex(index) > s.findNumLiveNode() {
 			return errors.New(fmt.Sprintf("Index has more replica (or equivalent index) than indexer nodes. Index=%v Bucket=%v",
 				index.GetDisplayName(), index.Bucket))
 		}
