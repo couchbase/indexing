@@ -894,7 +894,7 @@ func (m *ServiceMgr) cleanupTransferTokensForSource(ttid string, tt *c.TransferT
 		var err error
 		l.Infof("ServiceMgr::cleanupTransferTokensForSource Cleanup Token %v %v", ttid, tt)
 		err = m.cleanupIndex(tt.IndexInst.Defn)
-		if err != nil {
+		if err == nil {
 			err = MetakvDel(RebalanceMetakvDir + ttid)
 			if err != nil {
 				l.Errorf("ServiceMgr::cleanupTransferTokensForSource Unable to delete TransferToken In "+
@@ -917,7 +917,7 @@ func (m *ServiceMgr) cleanupTransferTokensForDest(ttid string, tt *c.TransferTok
 		var err error
 		l.Infof("ServiceMgr::cleanupTransferTokensForDest Cleanup Token %v %v", ttid, tt)
 		err = m.cleanupIndex(tt.IndexInst.Defn)
-		if err != nil {
+		if err == nil {
 			err = MetakvDel(RebalanceMetakvDir + ttid)
 			if err != nil {
 				l.Errorf("ServiceMgr::cleanupTransferTokensForDest Unable to delete TransferToken In "+

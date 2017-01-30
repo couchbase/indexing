@@ -103,7 +103,9 @@ func NewRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *Rebal
 
 func (r *Rebalancer) Cancel() {
 	l.Infof("Rebalancer::Cancel Exiting")
-	close(r.metakvCancel)
+	if r.metakvCancel != nil {
+		close(r.metakvCancel)
+	}
 	close(r.cancel)
 	r.wg.Wait()
 }
@@ -119,7 +121,9 @@ func (r *Rebalancer) doFinish() {
 
 	l.Infof("Rebalancer::doFinish Cleanup %v", r.retErr)
 	close(r.done)
-	close(r.metakvCancel)
+	if r.metakvCancel != nil {
+		close(r.metakvCancel)
+	}
 	r.wg.Wait()
 	r.cb.done(r.retErr, r.cancel)
 
@@ -194,16 +198,16 @@ func (r *Rebalancer) processTransferToken(ttid string, tt *c.TransferToken) {
 	defer r.wg.Done()
 
 	var processed bool
-	if tt.SourceId == r.nodeId {
+	if tt.MasterId == r.nodeId {
+		processed = r.processTokenAsMaster(ttid, tt)
+	}
+
+	if tt.SourceId == r.nodeId && !processed {
 		processed = r.processTokenAsSource(ttid, tt)
 	}
 
 	if tt.DestId == r.nodeId && !processed {
 		processed = r.processTokenAsDest(ttid, tt)
-	}
-
-	if tt.MasterId == r.nodeId && !processed {
-		processed = r.processTokenAsMaster(ttid, tt)
 	}
 
 }
@@ -584,6 +588,14 @@ func (r *Rebalancer) processTokenAsMaster(ttid string, tt *c.TransferToken) bool
 		return true
 	}
 
+	if tt.Error != "" {
+		l.Errorf("Rebalancer::processTokenAsMaster Detected TransferToken in Error state %v. Abort.", tt)
+		close(r.metakvCancel)
+		r.metakvCancel = nil
+		go r.finish(errors.New(tt.Error))
+		return true
+	}
+
 	switch tt.State {
 
 	case c.TransferTokenAccepted:
@@ -617,10 +629,6 @@ func (r *Rebalancer) processTokenAsMaster(ttid string, tt *c.TransferToken) bool
 			go r.finish(nil)
 		}
 
-	case c.TransferTokenError:
-		l.Errorf("Rebalancer::processTokenAsMaster Detected TransferToken in Error state %v", tt)
-		go r.finish(errors.New(tt.Error))
-
 	default:
 		return false
 	}
@@ -629,7 +637,6 @@ func (r *Rebalancer) processTokenAsMaster(ttid string, tt *c.TransferToken) bool
 }
 
 func (r *Rebalancer) setTransferTokenError(ttid string, tt *c.TransferToken, err string) {
-	tt.State = c.TransferTokenError
 	tt.Error = err
 	r.setTransferTokenInMetakv(ttid, tt)
 
