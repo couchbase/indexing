@@ -1426,17 +1426,20 @@ func (r *metadataRepo) cleanupOrphanDefnNoLock(indexerId c.IndexerId, bucket str
 	deleteDefn := ([]c.IndexDefnId)(nil)
 
 	for defnId, _ := range r.topology[indexerId] {
-		defn := r.definitions[defnId]
-		if len(bucket) == 0 || defn.Bucket == bucket {
+		if defn, ok := r.definitions[defnId]; ok {
+			if len(bucket) == 0 || defn.Bucket == bucket {
 
-			if len(r.instances[defnId]) == 0 {
-				deleteDefn = append(deleteDefn, defnId)
+				if len(r.instances[defnId]) == 0 {
+					deleteDefn = append(deleteDefn, defnId)
+				}
 			}
+		} else {
+			logging.Verbosef("Find orphan index %v in topology but watcher has not recieved corresponding definition", defnId)
 		}
 	}
 
 	for _, defnId := range deleteDefn {
-		logging.Debugf("removing orphan defn with no instance %v", defnId)
+		logging.Verbosef("removing orphan defn with no instance %v", defnId)
 		delete(r.definitions, defnId)
 		delete(r.instances, defnId)
 		delete(r.indices, defnId)
@@ -1471,6 +1474,18 @@ func (r *metadataRepo) updateTopology(topology *IndexTopology, indexerId c.Index
 		indexerId = c.IndexerId(topology.findIndexerId())
 	}
 
+	// IndexerId is known when
+	// 1) Ater watcher has successfully re-connected to the indexer.  The indexerId
+	//    is kept with watcher until UnwatchMetadata().    Therefore, even if watcher
+	//    is re-connected (re-sync) with the indexer, watcher knows the indexerId during resync.
+	// 2) IndexTopology (per bucket) is not empty.  Each index inst contains the indexerId.
+	//
+	// IndexerId is not known when
+	// 1) When the watcher is first syncronized with the indexer (WatchMetadata) AND IndexTopology is emtpy.
+	//    Even after sync is done (but service map is not yet refreshed), there is a small window that indexerId
+	//    is not known when processing Commit message from indexer.   But there is no residual metadata to clean up
+	//    during WatchMetadata (previous UnwatchMetadata haved removed metadata for same indexerId).
+	//
 	if len(indexerId) != 0 {
 		r.removeInstForIndexerNoLock(indexerId, topology.Bucket)
 	}
@@ -2245,8 +2260,13 @@ func (w *watcher) Commit(txid common.Txnid) error {
 		return nil
 	}
 
+	var indexerId c.IndexerId
+	if w.serviceMap != nil {
+		indexerId = c.IndexerId(w.serviceMap.IndexerId)
+	}
+
 	delete(w.pendings, txid)
-	needRefresh, err := w.processChange(txid, msg.GetOpCode(), msg.GetKey(), msg.GetContent())
+	needRefresh, err := w.processChange(txid, msg.GetOpCode(), msg.GetKey(), msg.GetContent(), indexerId)
 	if needRefresh {
 		w.provider.needRefresh()
 	}
@@ -2371,36 +2391,27 @@ func (w *watcher) GetCommitedEntries(txid1, txid2 common.Txnid) (<-chan protocol
 
 func (w *watcher) LogAndCommit(txid common.Txnid, op uint32, key string, content []byte, toCommit bool) error {
 
-	// LogAndCommit is invoked when the server is trying to sync with the client.   The first entry of metadata
-	// always has txnid 1 (based on gometa.TransitCommitLog).  Cleanup any existing metadata for the same indexerId.
-	// If the watcher does not now its indexerId, then it means that it is the first connection to the indexer.
-	if txid == common.Txnid(1) {
-		var indexerId c.IndexerId
+	var indexerId c.IndexerId
+	func() {
+		w.mutex.Lock()
+		defer w.mutex.Unlock()
+
 		if w.serviceMap != nil {
 			indexerId = c.IndexerId(w.serviceMap.IndexerId)
 		}
-		logging.Debugf("watcher.LogAndCommit(): cleanup indices after receiving new commit of txnid 1")
-		if len(indexerId) != 0 {
-			w.provider.repo.cleanupIndicesForIndexer(indexerId)
-		}
-	}
+	}()
 
-	if _, err := w.processChange(txid, op, key, content); err != nil {
+	if _, err := w.processChange(txid, op, key, content, indexerId); err != nil {
 		logging.Errorf("watcher.LogAndCommit(): receive error when processing log entry from server.  Error = %v", err)
 	}
 
 	return nil
 }
 
-func (w *watcher) processChange(txid common.Txnid, op uint32, key string, content []byte) (bool, error) {
+func (w *watcher) processChange(txid common.Txnid, op uint32, key string, content []byte, indexerId c.IndexerId) (bool, error) {
 
 	logging.Debugf("watcher.processChange(): key = %v txid=%v last_seen_txid=%v", key, txid, w.lastSeenTxid)
 	defer logging.Debugf("watcher.processChange(): done -> key = %v", key)
-
-	var indexerId c.IndexerId
-	if w.serviceMap != nil {
-		indexerId = c.IndexerId(w.serviceMap.IndexerId)
-	}
 
 	opCode := common.OpCode(op)
 

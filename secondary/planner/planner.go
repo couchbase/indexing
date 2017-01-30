@@ -1968,8 +1968,8 @@ func (p *RandomPlacement) Validate(s *Solution) error {
 				s.getConstraintMethod().GetCpuQuota()))
 		}
 
-		if !s.getConstraintMethod().CanAddNode(s) && s.findNumEquivalentIndex(index) > s.findNumLiveNode() {
-			return errors.New(fmt.Sprintf("Index has more replica (or equivalent index) than indexer nodes. Index=%v Bucket=%v",
+		if !s.getConstraintMethod().CanAddNode(s) && s.findNumReplica(index) > s.findNumLiveNode() {
+			return errors.New(fmt.Sprintf("Index has more replica than indexer nodes. Index=%v Bucket=%v",
 				index.GetDisplayName(), index.Bucket))
 		}
 
