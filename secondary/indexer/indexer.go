@@ -23,7 +23,6 @@ import (
 	"github.com/couchbase/indexing/secondary/memdb/nodetable"
 	projClient "github.com/couchbase/indexing/secondary/projector/client"
 	"github.com/t3rm1n4l/nitro/plasma"
-	"math/rand"
 	"net"
 	"net/http"
 	"os"
@@ -31,7 +30,6 @@ import (
 	"runtime"
 	"runtime/debug"
 	"runtime/pprof"
-	//	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -4123,12 +4121,13 @@ func NewSlice(id SliceId, indInst *common.IndexInst,
 	}
 	path := filepath.Join(storage_dir, IndexPath(indInst, id))
 
-	if indInst.Defn.Using == common.MemDB ||
-		indInst.Defn.Using == common.MemoryOptimized {
-		// slice, err = NewMemDBSlice(path, id, indInst.Defn, indInst.InstId, indInst.Defn.IsPrimary, conf, stats.indexes[indInst.InstId])
-		slice, err = NewPlasmaSlice(path, id, indInst.Defn, indInst.InstId, indInst.Defn.IsPrimary, conf, stats.indexes[indInst.InstId])
-	} else {
+	switch indInst.Defn.Using {
+	case common.MemDB, common.MemoryOptimized:
+		slice, err = NewMemDBSlice(path, id, indInst.Defn, indInst.InstId, indInst.Defn.IsPrimary, conf, stats.indexes[indInst.InstId])
+	case common.ForestDB:
 		slice, err = NewForestDBSlice(path, id, indInst.Defn, indInst.InstId, indInst.Defn.IsPrimary, conf, stats.indexes[indInst.InstId])
+	case common.PlasmaDB:
+		slice, err = NewPlasmaSlice(path, id, indInst.Defn, indInst.InstId, indInst.Defn.IsPrimary, conf, stats.indexes[indInst.InstId])
 	}
 
 	return

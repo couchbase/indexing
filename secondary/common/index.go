@@ -426,6 +426,7 @@ const (
 	ForestDB        = "forestdb"
 	MemDB           = "memdb"
 	MemoryOptimized = "memory_optimized"
+	PlasmaDB        = "plasma"
 )
 
 func IsValidIndexType(t string) bool {
