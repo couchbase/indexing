@@ -436,6 +436,11 @@ func (r *Rebalancer) buildAcceptedIndexes() {
 	}
 	r.mu.Unlock()
 
+	if len(idList.DefnIds) == 0 {
+		l.Infof("Rebalancer::buildAcceptedIndexes Nothing to build")
+		return
+	}
+
 	response := new(manager.IndexResponse)
 	url := "/buildIndex"
 
