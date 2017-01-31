@@ -1280,10 +1280,14 @@ func (r *metadataRepo) addDefn(defn *c.IndexDefn) {
 func (r *metadataRepo) findRecentValidIndexInstNoLock(defnId c.IndexDefnId) []*IndexInstDistribution {
 
 	var recent []*IndexInstDistribution
+
+	count := 0
 	instsByInstId := r.instances[defnId]
 	for _, instsByVersion := range instsByInstId {
 		var chosen *IndexInstDistribution
 		for _, inst := range instsByVersion {
+
+			count++
 
 			if c.IndexState(inst.State) != c.INDEX_STATE_NIL &&
 				c.IndexState(inst.State) != c.INDEX_STATE_CREATED &&
@@ -1302,6 +1306,7 @@ func (r *metadataRepo) findRecentValidIndexInstNoLock(defnId c.IndexDefnId) []*I
 		}
 	}
 
+	logging.Debugf("defnId %v has (%v total instances) and (%v recent and active instances)", defnId, count, len(recent))
 	return recent
 }
 
@@ -1403,7 +1408,7 @@ func (r *metadataRepo) removeInstForIndexerNoLock(indexerId c.IndexerId, bucket 
 			newInstsByVersion := make(map[uint64]*IndexInstDistribution)
 			for version, instByVersion := range instsByInstId {
 				instIndexerId := instByVersion.findIndexerId()
-				if instIndexerId == string(indexerId) && (len(bucket) == 0 || defn.Bucket == bucket) {
+				if instIndexerId == string(indexerId) && (len(bucket) == 0 || (defn != nil && defn.Bucket == bucket)) {
 					logging.Debugf("remove index for indexerId : defnId %v instId %v indexerId %v", defnId, instId, instIndexerId)
 				} else {
 					newInstsByVersion[version] = instByVersion
