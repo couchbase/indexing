@@ -177,7 +177,7 @@ func genTransferToken(solution *Solution, masterId string, topologyChange servic
 					IndexInst: *index.Instance,
 				}
 
-				token.IndexInst.Defn.InstVersion++
+				token.IndexInst.Defn.InstVersion = token.IndexInst.Version + 1
 
 				ustr, _ := common.NewUUID()
 				ttid := fmt.Sprintf("TransferToken%s", ustr.Str())
