@@ -667,6 +667,7 @@ func (api *restServer) doMultiScan(w http.ResponseWriter, request *http.Request)
 	var params map[string]interface{}
 	var ts *qclient.TsConsistency
 	distinct, limit, offset, stale, reverse := false, int64(100), int64(0), "ok", false
+	var projection *qclient.IndexProjection
 
 	bytes, err := ioutil.ReadAll(request.Body)
 	if err := json.Unmarshal(bytes, &params); err != nil {
@@ -683,13 +684,14 @@ func (api *restServer) doMultiScan(w http.ResponseWriter, request *http.Request)
 	}
 	scansParam := []byte(value.(string))
 
-	value, ok = params["projection"]
-	if !ok {
-		msg := "missing field ``projection``"
-		http.Error(w, jsonstr(msg), http.StatusBadRequest)
-		return
+	if value, ok = params["projection"]; ok && value != nil {
+		projection, err = getProjection([]byte(value.(string)))
+		if err != nil {
+			msg := "invalid projection: %v"
+			http.Error(w, jsonstr(msg, err), http.StatusBadRequest)
+			return
+		}
 	}
-	projectionParam := []byte(value.(string))
 
 	if value, ok = params["reverse"]; ok && value != nil {
 		reverse = value.(bool)
@@ -732,13 +734,6 @@ func (api *restServer) doMultiScan(w http.ResponseWriter, request *http.Request)
 		return
 	}
 
-	projection, err := getProjection(projectionParam)
-	if err != nil {
-		msg := "invalid projection: %v"
-		http.Error(w, jsonstr(msg, err), http.StatusBadRequest)
-		return
-	}
-
 	cons := stale2consistency(stale)
 
 	var skeys []c.SecondaryKey
@@ -749,7 +744,7 @@ func (api *restServer) doMultiScan(w http.ResponseWriter, request *http.Request)
 	err = nil
 	e := api.client.MultiScan(
 		uint64(index.Definition.DefnId), "", scans, reverse,
-		distinct, &projection, offset, limit,
+		distinct, projection, offset, limit,
 		cons, ts,
 		func(res qclient.ResponseReader) bool {
 			if err = res.Error(); err != nil {
@@ -1050,12 +1045,12 @@ func getScans(arg []byte) (qclient.Scans, error) {
 	return scans, nil
 }
 
-func getProjection(arg []byte) (qclient.IndexProjection, error) {
+func getProjection(arg []byte) (*qclient.IndexProjection, error) {
 	var proj qclient.IndexProjection
 	if err := json.Unmarshal(arg, &proj); err != nil {
-		return proj, err
+		return &proj, err
 	}
-	return proj, nil
+	return &proj, nil
 }
 
 var mstale2consistency = map[string]c.Consistency{
