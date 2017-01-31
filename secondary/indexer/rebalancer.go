@@ -240,6 +240,7 @@ func (r *Rebalancer) processTokenAsSource(ttid string, tt *c.TransferToken) bool
 
 	case c.TransferTokenReady:
 		r.wg.Add(1)
+		//TODO batch this rather than one per index
 		go r.dropIndexWhenIdle(ttid, tt)
 
 	default:
@@ -270,18 +271,29 @@ loop:
 			}
 
 			statsMap := stats.ToMap()
+			if statsMap == nil {
+				l.Infof("Rebalancer::dropIndexWhenIdle Nil Stats. Retrying...")
+				break
+			}
+
 			sname := fmt.Sprintf("%s:%s:", tt.IndexInst.Defn.Bucket, tt.IndexInst.Defn.Name)
 			sname_completed := sname + "num_completed_requests"
 			sname_requests := sname + "num_requests"
 
-			num_completed := statsMap[sname_completed].(float64)
-			num_requests := statsMap[sname_requests].(float64)
+			var num_completed, num_requests float64
+			if _, ok := statsMap[sname_completed]; ok {
+				num_completed = statsMap[sname_completed].(float64)
+				num_requests = statsMap[sname_requests].(float64)
+			} else {
+				l.Infof("Rebalancer::dropIndexWhenIdle Missing Stats %v %v. Retrying...", sname_completed, sname_requests)
+				break
+			}
 
 			pending := num_requests - num_completed
 
 			if pending > 0 {
 				l.Infof("Rebalancer::dropIndexWhenIdle Index %v:%v Pending Scan %v", tt.IndexInst.Defn.Bucket, tt.IndexInst.Defn.Name, pending)
-				continue
+				break
 			}
 
 			req := manager.IndexRequest{Index: tt.IndexInst.Defn}
@@ -512,6 +524,10 @@ loop:
 			}
 
 			statsMap := stats.ToMap()
+			if statsMap == nil {
+				l.Infof("Rebalancer::waitForIndexBuild Nil Stats. Retrying...")
+				break
+			}
 
 			if state, ok := statsMap["indexer_state"]; ok {
 				if state == "Paused" {
@@ -558,11 +574,18 @@ loop:
 				sname_pend := sname + "num_docs_pending"
 				sname_queued := sname + "num_docs_queued"
 
-				num_pend := statsMap[sname_pend].(float64)
-				num_queued := statsMap[sname_queued].(float64)
+				var num_pend, num_queued float64
+				if _, ok := statsMap[sname_pend]; ok {
+					num_pend = statsMap[sname_pend].(float64)
+					num_queued = statsMap[sname_queued].(float64)
+				} else {
+					l.Infof("Rebalancer::waitForIndexBuild Missing Stats %v %v. Retrying...", sname_queued, sname_pend)
+					break
+				}
+
 				tot_queued := num_pend + num_queued
 
-				l.Infof("Index %s State %v Pending %v", sname, c.IndexState(status), tot_queued)
+				l.Infof("Rebalancer::waitForIndexBuild Index %s State %v Pending %v", sname, c.IndexState(status), tot_queued)
 
 				if c.IndexState(status) == c.INDEX_STATE_ACTIVE && tot_queued < MaxPendingBeforeReady {
 					respch := make(chan bool)
