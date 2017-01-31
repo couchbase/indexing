@@ -228,6 +228,7 @@ type GsiClient struct {
 	bucketHash   unsafe.Pointer // map[string]uint64 // bucket -> crc64
 	metaCh       chan bool      // listen to metadata changes
 	settings     *ClientSettings
+	killch       chan bool
 }
 
 // NewGsiClient returns client to access GSI cluster.
@@ -753,6 +754,7 @@ func (c *GsiClient) Close() {
 	for _, qc := range qcs {
 		qc.Close()
 	}
+	close(c.killch)
 }
 
 func (c *GsiClient) updateScanClients() {
@@ -976,6 +978,7 @@ func makeWithMetaProvider(
 		queryClients: unsafe.Pointer(new(map[string]*GsiScanClient)),
 		metaCh:       make(chan bool, 1),
 		settings:     NewClientSettings(needRefresh),
+		killch:       make(chan bool, 1),
 	}
 	platform.StorePointer(&c.bucketHash, (unsafe.Pointer)(new(map[string]uint64)))
 	c.bridge, err = newMetaBridgeClient(cluster, config, c.metaCh, c.settings)
@@ -983,15 +986,17 @@ func makeWithMetaProvider(
 		return nil, err
 	}
 	c.updateScanClients()
-	go c.listenMetaChange()
+	go c.listenMetaChange(c.killch)
 	return c, nil
 }
 
-func (c *GsiClient) listenMetaChange() {
+func (c *GsiClient) listenMetaChange(killch chan bool) {
 	for {
 		select {
 		case <-c.metaCh:
 			c.updateScanClients()
+		case <-killch:
+			return
 		}
 	}
 }
