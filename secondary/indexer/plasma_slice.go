@@ -161,8 +161,6 @@ func (slice *plasmaSlice) initStores() error {
 	var err error
 	cfg := plasma.DefaultConfig()
 	cfg.FlushBufferSize = int(slice.sysconf["plasma.flushBufferSize"].Int())
-	cfg.TriggerSwapper = plasma.QuotaSwapper
-	cfg.ContinueSwapper = func() bool { return true }
 	cfg.AutoSwapper = true
 	cfg.LSSCleanerThreshold = 30
 
