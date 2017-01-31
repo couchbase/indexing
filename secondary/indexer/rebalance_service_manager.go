@@ -2029,12 +2029,13 @@ func (m *ServiceMgr) generateTransferTokenForMoveIndex(req *manager.IndexRequest
 					}
 
 					localInst := &c.IndexInst{
-						InstId:  c.IndexInstId(inst.InstId),
-						Defn:    index,
-						State:   c.IndexState(inst.State),
-						Stream:  c.StreamId(inst.StreamId),
-						Error:   inst.Error,
-						Version: inst.Version,
+						InstId:    c.IndexInstId(inst.InstId),
+						Defn:      index,
+						State:     c.IndexState(inst.State),
+						Stream:    c.StreamId(inst.StreamId),
+						Error:     inst.Error,
+						Version:   int(inst.Version),
+						ReplicaId: int(inst.ReplicaId),
 					}
 
 					ttid, tt := m.genTransferToken(index, localInst, localMeta.IndexerId, destUUID)
