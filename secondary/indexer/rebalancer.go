@@ -64,6 +64,8 @@ type Rebalancer struct {
 	progressInitOnce sync.Once
 	cleanupOnce      sync.Once
 
+	waitForTokenPublish chan struct{}
+
 	retErr error
 }
 
@@ -89,10 +91,14 @@ func NewRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *Rebal
 
 		acceptedTokens: make(map[string]*c.TransferToken),
 		localaddr:      localaddr,
+
+		waitForTokenPublish: make(chan struct{}),
 	}
 
 	if master {
 		go r.doRebalance()
+	} else {
+		close(r.waitForTokenPublish)
 	}
 
 	if r.transferTokens != nil || !master {
@@ -137,6 +143,8 @@ func (r *Rebalancer) doRebalance() {
 		r.cb.progress(1.0, r.cancel)
 		r.finish(nil)
 	}
+
+	close(r.waitForTokenPublish)
 }
 
 func (r *Rebalancer) publishTransferTokens() {
@@ -152,6 +160,8 @@ func (r *Rebalancer) publishTransferTokens() {
 func (r *Rebalancer) observeRebalance() {
 
 	l.Infof("Rebalancer::observeRebalance %v master:%v", r.rebalToken, r.master)
+
+	<-r.waitForTokenPublish
 
 	err := metakv.RunObserveChildren(RebalanceMetakvDir, r.processTokens, r.metakvCancel)
 	if err != nil {
