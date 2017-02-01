@@ -144,20 +144,23 @@ func NewRebalanceMgr(supvCmdch MsgChannel, supvMsgch MsgChannel, config c.Config
 	mgr.localhttp = mgr.getLocalHttpAddr()
 
 	go mgr.recoverRebalance()
-
-	//start Rebalance Manager loop which listens to commands from its supervisor
-	go mgr.registerWithServer()
 	go mgr.run()
-	go mgr.listenMoveIndex()
-
-	http.HandleFunc("/registerRebalanceToken", mgr.handleRegisterRebalanceToken)
-	http.HandleFunc("/listRebalanceTokens", mgr.handleListRebalanceTokens)
-	http.HandleFunc("/cleanupRebalance", mgr.handleCleanupRebalance)
-	http.HandleFunc("/moveIndex", mgr.handleMoveIndex)
-	http.HandleFunc("/nodeuuid", mgr.handleNodeuuid)
 
 	return mgr, &MsgSuccess{}
+}
 
+func (m *ServiceMgr) initService() {
+
+	l.Infof("RebalanceMgr::initService Init")
+
+	go m.registerWithServer()
+	go m.listenMoveIndex()
+
+	http.HandleFunc("/registerRebalanceToken", m.handleRegisterRebalanceToken)
+	http.HandleFunc("/listRebalanceTokens", m.handleListRebalanceTokens)
+	http.HandleFunc("/cleanupRebalance", m.handleCleanupRebalance)
+	http.HandleFunc("/moveIndex", m.handleMoveIndex)
+	http.HandleFunc("/nodeuuid", m.handleNodeuuid)
 }
 
 //run starts the rebalance manager loop which listens to messages
@@ -1535,6 +1538,8 @@ func (m *ServiceMgr) recoverRebalance() {
 	if m.rebalanceRunning {
 		m.runCleanupPhaseLOCKED(RebalanceTokenPath, false)
 	}
+
+	go m.initService()
 }
 
 func (m *ServiceMgr) doRecoverRebalance(gtoken *RebalanceToken) {
