@@ -179,13 +179,10 @@ func (r *Rebalancer) processTokens(path string, value []byte, rev interface{}) e
 		l.Infof("Rebalancer::processTokens RebalanceToken %v %v", path, value)
 
 		if value == nil {
-			if !r.master {
-				l.Infof("Rebalancer::processTokens Rebalance Token Deleted. Mark Done.")
-				close(r.metakvCancel)
-				r.metakvCancel = nil
-				r.finish(nil)
-			}
-
+			l.Infof("Rebalancer::processTokens Rebalance Token Deleted. Mark Done.")
+			close(r.metakvCancel)
+			r.metakvCancel = nil
+			r.finish(nil)
 		}
 	} else if strings.Contains(path, TransferTokenTag) {
 		if value != nil {
