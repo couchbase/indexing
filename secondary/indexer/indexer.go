@@ -1172,7 +1172,7 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 		//check if Initial Build is already running for this index's bucket
 		if ok := idx.checkDuplicateInitialBuildRequest(bucket, instIdList, clientCh, errMap); !ok {
 			logging.Errorf("Indexer::handleBuildIndex \n\tBuild Already In"+
-				"Progress. Bucket %v.", bucket)
+				"Progress. Bucket %v. Inst %v", bucket, instIdList)
 			if idx.enableManager {
 				delete(bucketIndexList, bucket)
 				continue
@@ -2360,6 +2360,7 @@ func (idx *indexer) checkDuplicateInitialBuildRequest(bucket string,
 			idx.checkStreamRequestPending(index.Stream, bucket) {
 
 			errStr := fmt.Sprintf("Build Already In Progress. Bucket %v", bucket)
+			logging.Errorf("Indexer::checkDuplicateInitialBuildRequest %v, %v", index, bucket)
 			if idx.enableManager {
 				idx.bulkUpdateError(instIdList, errStr)
 				for _, instId := range instIdList {
@@ -3766,6 +3767,7 @@ func (idx *indexer) checkStreamRequestPending(streamId common.StreamId, bucket s
 	if bmap, ok := idx.streamBucketRequestStopCh[streamId]; ok {
 		if stopCh, ok := bmap[bucket]; ok {
 			if stopCh != nil {
+				logging.Errorf("Indexer::checkStreamRequestPending %v %v %v", bucket, streamId, idx.streamBucketRequestStopCh)
 				return true
 			}
 		}
