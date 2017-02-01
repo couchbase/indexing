@@ -745,17 +745,13 @@ func (m *ServiceMgr) cleanupGlobalRToken(path string) error {
 	}
 
 	if found {
-		l.Infof("ServiceMgr::cleanupGlobalRToken Found Global Rebalance Token In Metakv %v", rtoken)
+		l.Infof("ServiceMgr::cleanupGlobalRToken Delete Global Rebalance Token %v", rtoken)
 
-		if rtoken.MasterId == string(m.nodeInfo.NodeID) {
-			l.Infof("ServiceMgr::cleanupGlobalRToken Delete Global Rebalance Token As Master %v", rtoken)
-
-			err := MetakvDel(path)
-			if err != nil {
-				l.Fatalf("ServiceMgr::cleanupGlobalRToken Unable to delete RebalanceToken from "+
-					"Meta Storage. %v. Err %v", rtoken, err)
-				return err
-			}
+		err := MetakvDel(path)
+		if err != nil {
+			l.Fatalf("ServiceMgr::cleanupGlobalRToken Unable to delete RebalanceToken from "+
+				"Meta Storage. %v. Err %v", rtoken, err)
+			return err
 		}
 	}
 	return nil
