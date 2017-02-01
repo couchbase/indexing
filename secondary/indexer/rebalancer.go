@@ -181,6 +181,8 @@ func (r *Rebalancer) processTokens(path string, value []byte, rev interface{}) e
 		if value == nil {
 			if !r.master {
 				l.Infof("Rebalancer::processTokens Rebalance Token Deleted. Mark Done.")
+				close(r.metakvCancel)
+				r.metakvCancel = nil
 				r.finish(nil)
 			}
 
@@ -665,6 +667,8 @@ func (r *Rebalancer) processTokenAsMaster(ttid string, tt *c.TransferToken) bool
 				r.cb.progress(1.0, r.cancel)
 			}
 			l.Infof("Rebalancer::processTokenAsMaster No Tokens Found. Mark Done.")
+			close(r.metakvCancel)
+			r.metakvCancel = nil
 			go r.finish(nil)
 		}
 
