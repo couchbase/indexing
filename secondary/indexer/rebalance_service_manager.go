@@ -870,8 +870,7 @@ func (m *ServiceMgr) cleanupTransferTokensForMaster(ttid string, tt *c.TransferT
 
 	switch tt.State {
 
-	case c.TransferTokenCommit:
-	case c.TransferTokenDeleted:
+	case c.TransferTokenCommit, c.TransferTokenDeleted:
 		l.Infof("ServiceMgr::cleanupTransferTokensForMaster Cleanup Token %v %v", ttid, tt)
 		err := MetakvDel(RebalanceMetakvDir + ttid)
 		if err != nil {

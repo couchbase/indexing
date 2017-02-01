@@ -664,6 +664,7 @@ func (r *Rebalancer) processTokenAsMaster(ttid string, tt *c.TransferToken) bool
 			if r.cb.progress != nil {
 				r.cb.progress(1.0, r.cancel)
 			}
+			l.Infof("Rebalancer::processTokenAsMaster No Tokens Found. Mark Done.")
 			go r.finish(nil)
 		}
 
