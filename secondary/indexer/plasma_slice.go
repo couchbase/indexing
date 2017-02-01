@@ -902,10 +902,15 @@ func tryDeleteplasmaSlice(mdb *plasmaSlice) {
 
 func tryCloseplasmaSlice(mdb *plasmaSlice) {
 	mdb.mainstore.Close()
+	for i := 0; i < mdb.numWriters; i++ {
+		mdb.main[i].Close()
+	}
+
 	if !mdb.isPrimary {
 		for i := 0; i < mdb.numWriters; i++ {
 			mdb.back[i].Close()
 		}
+		mdb.backstore.Close()
 	}
 }
 
