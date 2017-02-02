@@ -386,7 +386,11 @@ func rebalance(config *RunConfig, plan *Plan, indexes []*IndexUsage, deletedNode
 		return nil, nil, err
 	}
 
+	//
 	// create placement method
+	// 1) Swap rebalancing:  If there are any nodes being ejected, only consider those indexes.
+	// 2) General Rebalancing: If option EjectOnly is true, then this is no-op.  Otherwise consider all indexes in all nodes.
+	//
 	if len(outIndexes) != 0 {
 		indexes = outIndexes
 	} else if !config.EjectOnly {
@@ -668,6 +672,10 @@ func computeQuota(config *RunConfig, sizing SizingMethod, indexes []*IndexUsage,
 	return memQuota, cpuQuota
 }
 
+//
+// This function is only called during placement to make existing index as
+// eligible candidate for planner.
+//
 func filterPinnedIndexes(config *RunConfig, indexes []*IndexUsage) []*IndexUsage {
 
 	result := ([]*IndexUsage)(nil)
