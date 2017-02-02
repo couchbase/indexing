@@ -156,16 +156,21 @@ func (ip IndexPoints) Swap(i, j int) {
 // IndexKey to IndexKey comparison method
 // which needs to be added
 func (ip IndexPoints) Less(i, j int) bool {
-	if ip[i].Value == MinIndexKey {
+	return IndexKeyLessThan(ip[i].Value, ip[j].Value)
+}
+
+// Return true if a < b
+func IndexKeyLessThan(a, b IndexKey) bool {
+	if a == MinIndexKey {
 		return true
-	} else if ip[i].Value == MaxIndexKey {
+	} else if a == MaxIndexKey {
 		return false
-	} else if ip[j].Value == MinIndexKey {
+	} else if b == MinIndexKey {
 		return false
-	} else if ip[j].Value == MaxIndexKey {
+	} else if b == MaxIndexKey {
 		return true
 	}
-	return (bytes.Compare(ip[i].Value.Bytes(), ip[j].Value.Bytes()) < 0)
+	return (bytes.Compare(a.Bytes(), b.Bytes()) < 0)
 }
 
 func (r ScanRequest) String() string {
@@ -581,12 +586,9 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 
 		codec := collatejson.NewCodec(16)
 		if joinLowKey {
-			for _, f := range compFilters {
-				if f.Low == MinIndexKey {
-					break
-				}
-				lows = append(lows, f.Low.Bytes())
-			}
+			// TODO: Use IndexKey Prefix comparison for sorting
+			// Until then use first low as overall low
+			lows = append(lows, compFilters[0].Low.Bytes())
 			buf1 := secKeyBufPool.Get()
 			r.keyBufList = append(r.keyBufList, buf1)
 
@@ -598,12 +600,9 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 			filter.Low = &lowKey
 		}
 		if joinHighKey {
-			for _, f := range compFilters {
-				if f.High == MaxIndexKey {
-					break
-				}
-				highs = append(highs, f.High.Bytes())
-			}
+			// TODO: Use IndexKey Prefix comparison for sorting
+			// Until then use first high as overall high
+			highs = append(highs, compFilters[0].High.Bytes())
 			buf2 := secKeyBufPool.Get()
 			r.keyBufList = append(r.keyBufList, buf2)
 
@@ -624,6 +623,7 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 	fillFilterEquals := func(protoScan *protobuf.Scan, filter *Filter) error {
 		var e error
 		var equals [][]byte
+
 		for _, k := range protoScan.Equals {
 			var key IndexKey
 			if key, e = newKey(k); e != nil {
@@ -632,15 +632,19 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 			}
 			equals = append(equals, key.Bytes())
 		}
+
+		var equals2 [][]byte
+		equals2 = append(equals2, equals[0])
 		codec := collatejson.NewCodec(16)
 		buf1 := secKeyBufPool.Get()
 		r.keyBufList = append(r.keyBufList, buf1)
 		var equalsKey []byte
-		if equalsKey, e = codec.JoinArray(equals, (*buf1)[:0]); e != nil {
+		if equalsKey, e = codec.JoinArray(equals2, (*buf1)[:0]); e != nil {
 			e = fmt.Errorf("Error in forming equals key %s", e)
 			return e
 		}
 		eqKey := secondaryKey(equalsKey)
+
 		var compFilters []CompositeElementFilter
 		for _, k := range equals {
 			ek := secondaryKey(k)
@@ -656,7 +660,6 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 		filter.High = &eqKey
 		filter.Inclusion = Both
 		filter.CompositeFilters = compFilters
-		filter.ScanType = LookupReq
 		return nil
 	}
 
@@ -696,16 +699,6 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 							scan.Filters = append(scan.Filters, filters[fl])
 						}
 
-						if len(scan.Filters) == 1 && scan.Filters[0].ScanType == LookupReq {
-							scan.Equals = low
-							scan.ScanType = LookupReq
-						}
-
-						if len(scan.Filters) == 1 && len(scan.Filters[0].CompositeFilters) == 1 {
-							scan.Incl = scan.Filters[0].CompositeFilters[0].Inclusion
-							scan.ScanType = RangeReq
-						}
-
 						if r.isPrimary {
 							scan.ScanType = RangeReq
 						}
@@ -719,6 +712,14 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 				filtersList = append(filtersList, filterid)
 			}
 		}
+		for i, _ := range scans {
+			if scans[i].ScanType == FilterRangeReq && len(scans[i].Filters) == 1 &&
+				len(scans[i].Filters[0].CompositeFilters) == 1 {
+				scans[i].Incl = scans[i].Filters[0].CompositeFilters[0].Inclusion
+				scans[i].ScanType = RangeReq
+			}
+		}
+
 		return scans
 	}
 
@@ -793,6 +794,11 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 					localErr = fmt.Errorf("Invalid high key %s (%s)", string(fl.High), localErr)
 					return
 				}
+
+				if IndexKeyLessThan(h, l) {
+					continue
+				}
+
 				filter := Filter{
 					CompositeFilters: nil,
 					Inclusion:        Inclusion(fl.GetInclusion()),
@@ -806,7 +812,7 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 			}
 		} else {
 			for _, protoScan := range protoScans {
-
+				skipScan := false
 				if len(protoScan.Equals) != 0 {
 					//Encode the equals keys
 					var filter Filter
@@ -848,12 +854,21 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 						return
 					}
 
+					if IndexKeyLessThan(h, l) {
+						skipScan = true
+						break
+					}
+
 					compfil := CompositeElementFilter{
 						Low:       l,
 						High:      h,
 						Inclusion: Inclusion(fl.GetInclusion()),
 					}
 					compFilters = append(compFilters, compfil)
+				}
+
+				if skipScan {
+					continue
 				}
 
 				filter := Filter{
