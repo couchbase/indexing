@@ -191,8 +191,8 @@ func NewMemDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 
 	for i := 0; i < slice.numWriters; i++ {
 		slice.cmdCh[i] = make(chan indexMutation, sliceBufSize/uint64(slice.numWriters))
-		slice.encodeBuf[i] = make([]byte, 0, maxIndexEntrySize)
-		slice.arrayBuf[i] = make([]byte, 0, maxArrayIndexEntrySize)
+		slice.encodeBuf[i] = make([]byte, 0, maxIndexEntrySize+ENCODE_BUF_SAFE_PAD)
+		slice.arrayBuf[i] = make([]byte, 0, maxArrayIndexEntrySize+ENCODE_BUF_SAFE_PAD)
 	}
 	slice.workerDone = make([]chan bool, slice.numWriters)
 	slice.stopCh = make([]DoneChannel, slice.numWriters)
