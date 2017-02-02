@@ -322,7 +322,7 @@ func initGlobalSettings(oldCfg, newCfg common.Config) {
 	maxArrayKeyLength = newCfg["indexer.settings.max_array_seckey_size"].Int()
 	maxArrayKeyBufferLength = maxArrayKeyLength * 3
 	maxArrayIndexEntrySize = maxArrayKeyBufferLength + MAX_DOCID_LEN + 2
-	arrayEncBufPool = common.NewByteBufferPool(maxArrayIndexEntrySize)
+	arrayEncBufPool = common.NewByteBufferPool(maxArrayIndexEntrySize + ENCODE_BUF_SAFE_PAD)
 }
 
 func validateSettings(value []byte) error {
