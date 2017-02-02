@@ -25,7 +25,6 @@ import (
 
 // - retry proxy when there is transient netowrk error
 // - tuning parameter (spock)
-// - support server group during planning (spock+)
 // - generate cpu usage stats for index (spock)
 // - generate move index statement (spock)
 // - handle cloned index in proxy (spock)
@@ -95,6 +94,9 @@ type PlacementMethod interface {
 	InitialPlace(s *Solution, indexes []*IndexUsage)
 	Validate(s *Solution) error
 	GetEligibleIndexes() []*IndexUsage
+	AddOptionalIndexes([]*IndexUsage)
+	RemoveOptionalIndexes()
+	HasOptionalIndexes() bool
 }
 
 type ConstraintMethod interface {
@@ -272,6 +274,7 @@ type RandomPlacement struct {
 	rs        *rand.Rand
 	indexes   map[*IndexUsage]*IndexUsage
 	eligibles []*IndexUsage
+	optionals []*IndexUsage
 	allowSwap bool
 }
 
@@ -321,8 +324,7 @@ func (p *SAPlanner) Plan(command CommandType, solution *Solution) (*Solution, er
 	var result *Solution
 	var err error
 
-	eligibles := p.placement.GetEligibleIndexes()
-	solution.RelaxConstraintIfNecessary(eligibles)
+	solution = p.adjustInitialSolutionIfNecessary(solution)
 
 	for i := 0; i < RunPerPlan; i++ {
 		p.Try++
@@ -332,6 +334,13 @@ func (p *SAPlanner) Plan(command CommandType, solution *Solution) (*Solution, er
 		// if err == nil, type assertion will return !ok
 		if _, ok := err.(*Violations); !ok {
 			return result, err
+		}
+
+		// If planner get to this point, it means we see violation errors.
+		// If planner has retries 3 times, then remove any optional indexes.
+		if i > 3 && p.placement.HasOptionalIndexes() {
+			logging.Infof("Cannot rebuild lost replica due to resource constraint in cluster.  Will not rebuild lost replica.")
+			p.placement.RemoveOptionalIndexes()
 		}
 
 		logging.Infof("Planner::Fail to create plan satisyfig constraint. Re-planning. Num of Try=%v.  Elapsed Time=%v",
@@ -592,6 +601,166 @@ func (p *SAPlanner) getAcceptProbability(old_cost float64, new_cost float64, tem
 	// 2) differnce between new_cost and old_cost are high
 	cost := (old_cost - new_cost)
 	return math.Exp(cost / temperature)
+}
+
+//
+// Adjust solution constraint depending on the solution and command.
+//
+func (p *SAPlanner) adjustInitialSolutionIfNecessary(s *Solution) *Solution {
+
+	// If not using live data, then no need to relax constraint.
+	if !s.UseLiveData() {
+		return s
+	}
+
+	if p.constraint.CanAddNode(s) {
+		return s
+	}
+
+	cloned := s.clone()
+
+	p.dropReplicaIfNecessary(cloned)
+	p.addReplicaIfNecessary(cloned)
+	p.suppressEqivIndexIfNecessary(cloned)
+
+	if p.Validate(cloned) == nil {
+		return cloned
+	}
+
+	return s
+}
+
+//
+// Drop replica from ejected node if there is not enough nodes in the cluster.
+//
+func (p *SAPlanner) dropReplicaIfNecessary(s *Solution) {
+
+	eligibles := p.placement.GetEligibleIndexes()
+	numLiveNode := s.findNumLiveNode()
+
+	// Check to see if it is needed to drop replica from a ejected node
+	for _, indexer := range s.Placement {
+		deleteCandidates := make(map[*IndexUsage]bool)
+
+		for _, index := range indexer.Indexes {
+			if isEligibleIndex(index, eligibles) {
+
+				// if there are more replica than the number of nodes, then
+				// do not move this index if this node is going away.
+				numReplica := s.findNumReplica(index)
+				if (numReplica > numLiveNode) && indexer.delete {
+					deleteCandidates[index] = true
+				}
+			}
+		}
+
+		if len(deleteCandidates) != 0 {
+			keepCandidates := ([]*IndexUsage)(nil)
+
+			for _, index := range indexer.Indexes {
+				if !deleteCandidates[index] {
+					keepCandidates = append(keepCandidates, index)
+				} else {
+					logging.Warnf("There is more replia than available nodes.  Will not move index replica (%v,%v) from ejected node %v",
+						index.Bucket, index.Name, indexer.NodeId)
+				}
+			}
+			indexer.Indexes = keepCandidates
+		}
+	}
+}
+
+//
+// Suppress equivalent index check if there are not enough nodes in the cluster to host all
+// equivalent index.
+//
+func (p *SAPlanner) suppressEqivIndexIfNecessary(s *Solution) {
+
+	eligibles := p.placement.GetEligibleIndexes()
+	numLiveNode := s.findNumLiveNode()
+
+	// Check to see if need to suppress equivalent index.
+	for _, indexer := range s.Placement {
+		for _, index := range indexer.Indexes {
+
+			if isEligibleIndex(index, eligibles) {
+
+				// if there are more equiv idx than number of nodes, then
+				// allow placement of this index over equiv index
+				// (but not over replica).
+				if s.findNumEquivalentIndex(index) > numLiveNode {
+					index.suppressEquivIdxCheck = true
+				} else {
+					index.suppressEquivIdxCheck = false
+				}
+			}
+		}
+	}
+}
+
+//
+// Add replica if there is enough nodes in the cluster.
+//
+func (p *SAPlanner) addReplicaIfNecessary(s *Solution) {
+
+	numLiveNode := s.findNumLiveNode()
+
+	// Check to see if it is needed to drop replica from a ejected node
+	for _, indexer := range s.Placement {
+		addCandidates := make(map[*IndexUsage]*IndexerNode)
+
+		for _, index := range indexer.Indexes {
+			// If the number of replica in cluster is smaller than the desired number
+			// of replica (from index definition), and there is enough nodes in the
+			// cluster to host all the replica.
+			numReplica := s.findNumReplica(index)
+			if index.Instance != nil && int(index.Instance.Defn.NumReplica+1) > numReplica &&
+				numReplica < numLiveNode {
+				addCandidates[index] = indexer
+			}
+		}
+
+		if len(addCandidates) != 0 {
+			clonedCandidates := ([]*IndexUsage)(nil)
+
+			for index, indexer := range addCandidates {
+				numReplica := s.findNumReplica(index)
+				missing := s.findMissingReplica(index)
+
+				for _, replicaId := range missing {
+					if numReplica < numLiveNode {
+
+						if index.Instance != nil {
+
+							// clone the original and update the replicaId
+							cloned := index.clone()
+							cloned.Instance.ReplicaId = replicaId
+							cloned.initialNode = nil
+
+							// generate a new instance id for the new replica
+							instId, err := common.NewIndexInstId()
+							if err != nil {
+								continue
+							}
+							cloned.InstId = instId
+							cloned.Instance.InstId = instId
+
+							// add the new replica to the solution
+							indexer.Indexes = append(indexer.Indexes, cloned)
+							clonedCandidates = append(clonedCandidates, cloned)
+							numReplica++
+
+							logging.Infof("Rebuilding lost replica for (%v,%v,%v)", index.Bucket, index.Name, replicaId)
+						}
+					}
+				}
+			}
+
+			if len(clonedCandidates) != 0 {
+				p.placement.AddOptionalIndexes(clonedCandidates)
+			}
+		}
+	}
 }
 
 //////////////////////////////////////////////////////////////
@@ -1060,7 +1229,43 @@ func (s *Solution) findNumReplica(u *IndexUsage) int {
 }
 
 //
-// Find the number of server group
+// Find the missing replica.  Return a list of replicaId
+//
+func (s *Solution) findMissingReplica(u *IndexUsage) []int {
+
+	found := make(map[int]bool)
+	for _, indexer := range s.Placement {
+		for _, index := range indexer.Indexes {
+
+			// check replica (including self)
+			if index.DefnId == u.DefnId {
+				if index.Instance == nil {
+					logging.Warnf("Cannot determinte replicaId for index (%v,%v)", index.Name, index.Bucket)
+					return ([]int)(nil)
+				}
+				found[index.Instance.ReplicaId] = true
+			}
+		}
+	}
+
+	// replicaId starts with 0
+	// numReplica excludes itself
+	missing := ([]int)(nil)
+	if u.Instance != nil {
+		for i := 0; i < int(u.Instance.Defn.NumReplica+1); i++ {
+			if !found[i] {
+				missing = append(missing, i)
+			}
+		}
+	}
+
+	return missing
+}
+
+//
+// Find the number of server group.   If a
+// server group consists of only ejected node,
+// this server group will be skipped.
 //
 func (s *Solution) findNumServerGroup() int {
 
@@ -1092,72 +1297,6 @@ func (s *Solution) calculateSize() {
 
 	for _, indexer := range s.Placement {
 		s.sizing.ComputeIndexerSize(indexer)
-	}
-}
-
-//
-// Relax constraint depending on the solution and command.
-//
-func (s *Solution) RelaxConstraintIfNecessary(eligibles []*IndexUsage) {
-
-	// If not using live data, then no need to relax constraint.
-	if !s.UseLiveData() {
-		return
-	}
-
-	if s.constraint.CanAddNode(s) {
-		return
-	}
-
-	numLiveNode := s.findNumLiveNode()
-
-	// Check to see if it is needed to drop replica from a ejected node
-	for _, indexer := range s.Placement {
-		deleteCandidates := make(map[*IndexUsage]bool)
-
-		for _, index := range indexer.Indexes {
-			if isEligibleIndex(index, eligibles) {
-
-				// if there are more replica than the number of nodes, then
-				// do not move this index if this node is going away.
-				numReplica := s.findNumReplica(index)
-				if (numReplica > numLiveNode) && indexer.delete {
-					deleteCandidates[index] = true
-				}
-			}
-		}
-
-		if len(deleteCandidates) != 0 {
-			keepCandidates := ([]*IndexUsage)(nil)
-
-			for _, index := range indexer.Indexes {
-				if !deleteCandidates[index] {
-					keepCandidates = append(keepCandidates, index)
-				} else {
-					logging.Warnf("There is more replia than available nodes.  Will not move index replica (%v,%v) from ejected node %v",
-						index.Bucket, index.Name, indexer.NodeId)
-				}
-			}
-			indexer.Indexes = keepCandidates
-		}
-	}
-
-	// Check to see if need to suppress equivalent index.
-	for _, indexer := range s.Placement {
-		for _, index := range indexer.Indexes {
-
-			if isEligibleIndex(index, eligibles) {
-
-				// if there are more equiv idx than number of nodes, then
-				// allow placement of this index over equiv index
-				// (but not over replica).
-				if s.findNumEquivalentIndex(index) > numLiveNode {
-					index.suppressEquivIdxCheck = true
-				} else {
-					index.suppressEquivIdxCheck = false
-				}
-			}
-		}
 	}
 }
 
@@ -1383,11 +1522,14 @@ func (c *IndexerConstraint) CanAddNode(s *Solution) bool {
 }
 
 //
-// Check replica server group
+// Check if there is any replica (excluding serlf) in the server group
 //
 func (c *IndexerConstraint) hasReplicaInServerGroup(s *Solution, u *IndexUsage, group string) bool {
 
 	for _, indexer := range s.Placement {
+		if indexer.delete {
+			continue
+		}
 		for _, index := range indexer.Indexes {
 			if index != u && index.DefnId == u.DefnId { // replica
 				if group == indexer.ServerGroup {
@@ -1401,17 +1543,58 @@ func (c *IndexerConstraint) hasReplicaInServerGroup(s *Solution, u *IndexUsage, 
 }
 
 //
+// Check if any server group without this replica
+//
+func (c *IndexerConstraint) hasServerGroupWithNoReplica(s *Solution, u *IndexUsage) bool {
+
+	counts := make(map[string]int)
+
+	for _, indexer := range s.Placement {
+		if indexer.delete {
+			continue
+		}
+
+		if _, ok := counts[indexer.ServerGroup]; !ok {
+			counts[indexer.ServerGroup] = 0
+		}
+
+		for _, index := range indexer.Indexes {
+			if index != u && index.DefnId == u.DefnId { // replica
+				counts[indexer.ServerGroup] = counts[indexer.ServerGroup] + 1
+			}
+		}
+	}
+
+	for _, count := range counts {
+		if count == 0 {
+			return true
+		}
+	}
+
+	return false
+}
+
+//
 // Check replica server group
 //
 func (c *IndexerConstraint) SatisfyServerGroupConstraint(s *Solution, u *IndexUsage, group string) bool {
 
-	// If there are more replica than server group, allow replica to be placed in the same server group.
-	numReplica := s.findNumReplica(u)
-	if numReplica > s.numServerGroup {
+	// If there is no replica (excluding self) in the server group.
+	hasReplicaInServerGroup := c.hasReplicaInServerGroup(s, u, group)
+	if !hasReplicaInServerGroup {
+		// no replica in this server group
 		return true
 	}
 
-	return !c.hasReplicaInServerGroup(s, u, group)
+	// There are replica in this server group. Check to see if there are any server group without this index.
+	hasServerGroupWithNoReplica := c.hasServerGroupWithNoReplica(s, u)
+	if !hasServerGroupWithNoReplica {
+		// every server group has a replica of this index
+		return true
+	}
+
+	// There is replica in this server group and there is other server group without this replica.
+	return false
 }
 
 //
@@ -1830,6 +2013,23 @@ func (o *IndexerNode) SubtractMemUsageOverhead(s *Solution, usage uint64, overhe
 //////////////////////////////////////////////////////////////
 
 //
+// This function makes a copy of a index usage
+//
+func (o *IndexUsage) clone() *IndexUsage {
+
+	r := *o
+	r.Hosts = nil
+	r.initialNode = nil // should set to nil
+
+	if o.Instance != nil {
+		inst := *o.Instance
+		r.Instance = &inst
+	}
+
+	return &r
+}
+
+//
 // This function returns a string representing the index
 //
 func (o *IndexUsage) String() string {
@@ -2026,6 +2226,7 @@ func newRandomPlacement(indexes []*IndexUsage, allowSwap bool) *RandomPlacement 
 		rs:        rand.New(rand.NewSource(time.Now().UnixNano())),
 		indexes:   make(map[*IndexUsage]*IndexUsage),
 		eligibles: make([]*IndexUsage, len(indexes)),
+		optionals: nil,
 		allowSwap: allowSwap,
 	}
 
@@ -2043,7 +2244,40 @@ func newRandomPlacement(indexes []*IndexUsage, allowSwap bool) *RandomPlacement 
 //
 func (p *RandomPlacement) GetEligibleIndexes() []*IndexUsage {
 
-	return p.eligibles
+	return append(p.eligibles, p.optionals...)
+}
+
+//
+// Add optional index for placement
+//
+func (p *RandomPlacement) AddOptionalIndexes(indexes []*IndexUsage) {
+
+	p.RemoveOptionalIndexes()
+
+	p.optionals = indexes
+	for _, index := range indexes {
+		p.indexes[index] = index
+	}
+}
+
+//
+// Remove optional index for placement
+//
+func (p *RandomPlacement) RemoveOptionalIndexes() {
+
+	for _, index := range p.optionals {
+		delete(p.indexes, index)
+	}
+
+	p.optionals = nil
+}
+
+//
+// Is there any optional index for placement
+//
+func (p *RandomPlacement) HasOptionalIndexes() bool {
+
+	return len(p.optionals) > 0
 }
 
 //
@@ -2118,11 +2352,18 @@ func (p *RandomPlacement) Validate(s *Solution) error {
 }
 
 //
+// Has any eligible index?
+//
+func (p *RandomPlacement) hasEligibleIndex() bool {
+	return len(p.indexes) != 0
+}
+
+//
 // Randomly select a single index to move to a different node
 //
 func (p *RandomPlacement) Move(s *Solution) (bool, bool) {
 
-	if len(p.eligibles) == 0 {
+	if !p.hasEligibleIndex() {
 		return false, true
 	}
 
@@ -2178,7 +2419,7 @@ func (p *RandomPlacement) swapDeleteNode(s *Solution) bool {
 }
 
 //
-// Remove Eligible Index
+// Remove Eligible Index.  It does not remove "optional eligible" index.
 //
 func (p *RandomPlacement) removeEligibleIndex(indexes []*IndexUsage) {
 

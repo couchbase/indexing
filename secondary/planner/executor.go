@@ -184,6 +184,31 @@ func genTransferToken(solution *Solution, masterId string, topologyChange servic
 				ttid := fmt.Sprintf("TransferToken%s", ustr.Str())
 
 				tokens[ttid] = token
+
+				logging.Infof("Generating Transfer Token for rebalance (%v)", token)
+
+			} else if index.initialNode == nil {
+				// There is no source node (index is added during rebalance).
+				token := &common.TransferToken{
+					MasterId:     masterId,
+					SourceId:     "",
+					DestId:       indexer.NodeUUID,
+					RebalId:      topologyChange.ID,
+					State:        common.TransferTokenCreated,
+					InstId:       index.InstId,
+					IndexInst:    *index.Instance,
+					TransferMode: common.TokenTransferModeCopy,
+				}
+
+				token.IndexInst.Defn.InstVersion = 1
+				token.IndexInst.Defn.ReplicaId = token.IndexInst.ReplicaId
+
+				ustr, _ := common.NewUUID()
+				ttid := fmt.Sprintf("TransferToken%s", ustr.Str())
+
+				tokens[ttid] = token
+
+				logging.Infof("Generating Transfer Token for rebuilding lost replica (%v)", token)
 			}
 		}
 	}
