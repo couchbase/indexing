@@ -275,7 +275,7 @@ loop:
 				break
 			}
 
-			sname := fmt.Sprintf("%s:%s:", tt.IndexInst.Defn.Bucket, tt.IndexInst.Defn.Name)
+			sname := fmt.Sprintf("%s:%s:", tt.IndexInst.Defn.Bucket, tt.IndexInst.DisplayName())
 			sname_completed := sname + "num_completed_requests"
 			sname_requests := sname + "num_requests"
 
@@ -569,7 +569,7 @@ loop:
 					l.Errorf("Rebalancer::waitForIndexBuild Error Fetching Index Status %v %v", r.localaddr+url, err)
 					break
 				}
-				sname := fmt.Sprintf("%s:%s:", tt.IndexInst.Defn.Bucket, tt.IndexInst.Defn.Name)
+				sname := fmt.Sprintf("%s:%s:", tt.IndexInst.Defn.Bucket, tt.IndexInst.DisplayName())
 				sname_pend := sname + "num_docs_pending"
 				sname_queued := sname + "num_docs_queued"
 
