@@ -589,7 +589,10 @@ func (o *MetadataProvider) findWatchersWithRetry(nodes []string, numReplica int)
 RETRY1:
 	errCode := 0
 	if len(nodes) == 0 {
-		watcher, numWatcher := o.findNextAvailWatcher(watchers)
+		watcher, numWatcher := o.findNextAvailWatcher(watchers, true)
+		if watcher == nil {
+			watcher, numWatcher = o.findNextAvailWatcher(watchers, false)
+		}
 		if watcher == nil {
 			watchers = nil
 			if numWatcher == 0 {
@@ -993,7 +996,7 @@ func (o *MetadataProvider) findIndexIgnoreStatus(id c.IndexDefnId) *IndexMetadat
 	return nil
 }
 
-func (o *MetadataProvider) findNextAvailWatcher(excludes []*watcher) (*watcher, int) {
+func (o *MetadataProvider) findNextAvailWatcher(excludes []*watcher, checkServerGroup bool) (*watcher, int) {
 	o.mutex.Lock()
 	defer o.mutex.Unlock()
 
@@ -1004,6 +1007,8 @@ func (o *MetadataProvider) findNextAvailWatcher(excludes []*watcher) (*watcher, 
 		found := false
 		for _, exclude := range excludes {
 			if watcher == exclude {
+				found = true
+			} else if checkServerGroup && watcher.getServerGroup() == exclude.getServerGroup() {
 				found = true
 			}
 		}
@@ -1925,6 +1930,18 @@ func (w *watcher) getIndexerIdNoLock() c.IndexerId {
 	}
 
 	return c.IndexerId(w.serviceMap.IndexerId)
+}
+
+func (w *watcher) getServerGroup() string {
+
+	w.mutex.Lock()
+	defer w.mutex.Unlock()
+
+	if w.serviceMap == nil {
+		panic("Index node metadata is not initialized")
+	}
+
+	return w.serviceMap.ServerGroup
 }
 
 func (w *watcher) getNodeAddr() string {

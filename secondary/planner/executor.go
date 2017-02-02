@@ -166,7 +166,7 @@ func genTransferToken(solution *Solution, masterId string, topologyChange servic
 
 	for _, indexer := range solution.Placement {
 		for _, index := range indexer.Indexes {
-			if index.initialNode.NodeId != indexer.NodeId {
+			if index.initialNode != nil && index.initialNode.NodeId != indexer.NodeId {
 				token := &common.TransferToken{
 					MasterId:  masterId,
 					SourceId:  index.initialNode.NodeUUID,

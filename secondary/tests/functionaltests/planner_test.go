@@ -71,6 +71,10 @@ var incrPlacementTestCases = []incrPlacementTestCase{
 		"../testdata/planner/index/small-2M-5-1.json", 0.1, 0.1},
 	{"incr placement - mixed small/medium, 6 2M index, 1 replica, 1x", 1, 1, "../testdata/planner/plan/mixed-small-medium-30-3.json",
 		"../testdata/planner/index/small-2M-6-1.json", 0.1, 0.1},
+	{"incr placement - 3 server group, 3 replica, 1x", 1, 1, "../testdata/planner/plan/empty-3-zone.json",
+		"../testdata/planner/index/replica-3.json", 0, 0},
+	{"incr placement - 2 server group, 3 replica, 1x", 1, 1, "../testdata/planner/plan/empty-2-zone.json",
+		"../testdata/planner/index/replica-3.json", 0, 0},
 }
 
 var rebalanceTestCases = []rebalanceTestCase{

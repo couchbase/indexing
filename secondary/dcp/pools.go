@@ -79,7 +79,8 @@ type Pool struct {
 	BucketMap map[string]Bucket
 	Nodes     []Node
 
-	BucketURL map[string]string `json:"buckets"`
+	BucketURL       map[string]string `json:"buckets"`
+	ServerGroupsUri string            `json:"serverGroupsUri"`
 
 	client Client
 }
@@ -135,6 +136,15 @@ type NodeServices struct {
 	Services map[string]int `json:"services,omitempty"`
 	Hostname string         `json:"hostname"`
 	ThisNode bool           `json:"thisNode"`
+}
+
+type ServerGroups struct {
+	Groups []ServerGroup `json:"groups"`
+}
+
+type ServerGroup struct {
+	Name  string `json:"name"`
+	Nodes []Node `json:"nodes"`
 }
 
 // VBServerMap returns the current VBucketServerMap.
@@ -540,6 +550,13 @@ loop:
 		p.BucketMap[b.Name] = b
 	}
 	return nil
+}
+
+func (p *Pool) GetServerGroups() (groups ServerGroups, err error) {
+
+	err = p.client.parseURLResponse(p.ServerGroupsUri, &groups)
+	return
+
 }
 
 // GetPool gets a pool from within the couchbase cluster (usually

@@ -634,6 +634,11 @@ func (m *LifecycleMgr) handleServiceMap(content []byte) ([]byte, error) {
 		return nil, err
 	}
 
+	srvMap.ServerGroup, err = m.addrProvider.GetLocalServerGroup()
+	if err != nil {
+		return nil, err
+	}
+
 	return client.MarshallServiceMap(srvMap)
 }
 

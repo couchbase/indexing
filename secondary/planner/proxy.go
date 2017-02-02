@@ -110,6 +110,9 @@ func getIndexLayout(clusterUrl string) ([]*IndexerNode, error) {
 			return nil, err
 		}
 
+		// assign server group
+		node.ServerGroup = cinfo.GetServerGroup(nid)
+
 		// obtain the admin port for the indexer node
 		addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE)
 		if err != nil {
@@ -368,6 +371,9 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 		// compute the estimated memory overhead for each index
 		for _, index := range indexer.Indexes {
 			ratio := float64(index.ActualMemUsage) / float64(totalDataSize)
+			if totalDataSize == 0 {
+				ratio = 0
+			}
 
 			index.ActualMemUsage = uint64(float64(actualStorageMem) * ratio)
 			index.ActualMemOverhead = uint64(float64(actualTotalMem-actualStorageMem) * ratio)

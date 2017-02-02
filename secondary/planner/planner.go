@@ -104,6 +104,7 @@ type ConstraintMethod interface {
 	SatisfyNodeResourceConstraint(s *Solution, n *IndexerNode) bool
 	SatisfyClusterConstraint(s *Solution, eligibles []*IndexUsage) bool
 	SatisfyNodeConstraint(s *Solution, n *IndexerNode, eligibles []*IndexUsage) bool
+	SatisfyServerGroupConstraint(s *Solution, n *IndexUsage, group string) bool
 	CanAddIndex(s *Solution, n *IndexerNode, u *IndexUsage) ViolationCode
 	CanSwapIndex(s *Solution, n *IndexerNode, t *IndexUsage, i *IndexUsage) ViolationCode
 	CanAddNode(s *Solution) bool
@@ -188,16 +189,17 @@ type IndexUsage struct {
 	// input: node where index initially placed (optional)
 	initialNode *IndexerNode
 
-	// input: hint for placement / constraint
+	// mutable: hint for placement / constraint
 	suppressEquivIdxCheck bool
 }
 
 type Solution struct {
-	constraint  ConstraintMethod
-	sizing      SizingMethod
-	isLiveData  bool
-	useLiveData bool
-	initialPlan bool
+	constraint     ConstraintMethod
+	sizing         SizingMethod
+	isLiveData     bool
+	useLiveData    bool
+	initialPlan    bool
+	numServerGroup int
 
 	// placement of indexes	in nodes
 	Placement []*IndexerNode `json:"placement,omitempty"`
@@ -622,6 +624,8 @@ func newSolution(constraint ConstraintMethod, sizing SizingMethod, indexers []*I
 		}
 	}
 
+	r.numServerGroup = r.findNumServerGroup()
+
 	return r
 }
 
@@ -731,12 +735,13 @@ func (s *Solution) removeIndex(n *IndexerNode, i int) {
 func (s *Solution) clone() *Solution {
 
 	r := &Solution{
-		constraint:  s.constraint,
-		sizing:      s.sizing,
-		Placement:   ([]*IndexerNode)(nil),
-		isLiveData:  s.isLiveData,
-		useLiveData: s.useLiveData,
-		initialPlan: s.initialPlan,
+		constraint:     s.constraint,
+		sizing:         s.sizing,
+		Placement:      ([]*IndexerNode)(nil),
+		isLiveData:     s.isLiveData,
+		useLiveData:    s.useLiveData,
+		initialPlan:    s.initialPlan,
+		numServerGroup: s.numServerGroup,
 	}
 
 	for _, node := range s.Placement {
@@ -1055,6 +1060,25 @@ func (s *Solution) findNumReplica(u *IndexUsage) int {
 }
 
 //
+// Find the number of server group
+//
+func (s *Solution) findNumServerGroup() int {
+
+	groups := make(map[string]bool)
+	for _, indexer := range s.Placement {
+		if indexer.delete {
+			continue
+		}
+
+		if _, ok := groups[indexer.ServerGroup]; !ok {
+			groups[indexer.ServerGroup] = true
+		}
+	}
+
+	return len(groups)
+}
+
+//
 // This function recalculates the index and indexer sizes baesd on sizing formula.
 // Data captured from live cluser will not be overwritten.
 //
@@ -1081,6 +1105,10 @@ func (s *Solution) RelaxConstraintIfNecessary(eligibles []*IndexUsage) {
 		return
 	}
 
+	if s.constraint.CanAddNode(s) {
+		return
+	}
+
 	numLiveNode := s.findNumLiveNode()
 
 	// Check to see if it is needed to drop replica from a ejected node
@@ -1091,10 +1119,9 @@ func (s *Solution) RelaxConstraintIfNecessary(eligibles []*IndexUsage) {
 			if isEligibleIndex(index, eligibles) {
 
 				// if there are more replica than the number of nodes, then
-				// do not move this index if this node is going away.  If the
-				// node is not going away, then do nothing and let validation
-				// fails later.
-				if (s.findNumReplica(index) > numLiveNode) && indexer.delete {
+				// do not move this index if this node is going away.
+				numReplica := s.findNumReplica(index)
+				if (numReplica > numLiveNode) && indexer.delete {
 					deleteCandidates[index] = true
 				}
 			}
@@ -1126,6 +1153,8 @@ func (s *Solution) RelaxConstraintIfNecessary(eligibles []*IndexUsage) {
 				// (but not over replica).
 				if s.findNumEquivalentIndex(index) > numLiveNode {
 					index.suppressEquivIdxCheck = true
+				} else {
+					index.suppressEquivIdxCheck = false
 				}
 			}
 		}
@@ -1265,6 +1294,10 @@ func (c *IndexerConstraint) GetViolations(s *Solution, eligibles []*IndexUsage) 
 			for _, index := range eligibles {
 				if hasIndex(indexer, index) {
 
+					if !c.acceptViolation(s, index) {
+						continue
+					}
+
 					violation := &Violation{
 						Name:     index.GetDisplayName(),
 						Bucket:   index.Bucket,
@@ -1311,6 +1344,24 @@ func (c *IndexerConstraint) GetViolations(s *Solution, eligibles []*IndexUsage) 
 }
 
 //
+// Is this a violation?
+//
+func (c *IndexerConstraint) acceptViolation(s *Solution, index *IndexUsage) bool {
+
+	if s.getConstraintMethod().CanAddNode(s) {
+		return true
+	}
+
+	numReplica := s.findNumReplica(index)
+
+	if s.UseLiveData() && numReplica > s.findNumLiveNode() {
+		return false
+	}
+
+	return true
+}
+
+//
 // Get memory quota
 //
 func (c *IndexerConstraint) GetMemQuota() uint64 {
@@ -1329,6 +1380,38 @@ func (c *IndexerConstraint) GetCpuQuota() uint64 {
 //
 func (c *IndexerConstraint) CanAddNode(s *Solution) bool {
 	return c.canResize && len(s.Placement) < int(c.maxNumNode)
+}
+
+//
+// Check replica server group
+//
+func (c *IndexerConstraint) hasReplicaInServerGroup(s *Solution, u *IndexUsage, group string) bool {
+
+	for _, indexer := range s.Placement {
+		for _, index := range indexer.Indexes {
+			if index != u && index.DefnId == u.DefnId { // replica
+				if group == indexer.ServerGroup {
+					return true
+				}
+			}
+		}
+	}
+
+	return false
+}
+
+//
+// Check replica server group
+//
+func (c *IndexerConstraint) SatisfyServerGroupConstraint(s *Solution, u *IndexUsage, group string) bool {
+
+	// If there are more replica than server group, allow replica to be placed in the same server group.
+	numReplica := s.findNumReplica(u)
+	if numReplica > s.numServerGroup {
+		return true
+	}
+
+	return !c.hasReplicaInServerGroup(s, u, group)
 }
 
 //
@@ -1355,6 +1438,11 @@ func (c *IndexerConstraint) CanAddIndex(s *Solution, n *IndexerNode, u *IndexUsa
 				return AvailabilityViolation
 			}
 		}
+	}
+
+	// Are replica in the same server group?
+	if !c.SatisfyServerGroupConstraint(s, u, n.ServerGroup) {
+		return AvailabilityViolation
 	}
 
 	if s.ignoreResourceConstraint() {
@@ -1407,6 +1495,11 @@ func (c *IndexerConstraint) CanSwapIndex(sol *Solution, n *IndexerNode, s *Index
 				return AvailabilityViolation
 			}
 		}
+	}
+
+	// Are replica in the same server group?
+	if !c.SatisfyServerGroupConstraint(sol, s, n.ServerGroup) {
+		return AvailabilityViolation
 	}
 
 	if sol.ignoreResourceConstraint() {
@@ -1545,6 +1638,11 @@ func (c *IndexerConstraint) SatisfyNodeConstraint(s *Solution, n *IndexerNode, e
 					return false
 				}
 			}
+		}
+
+		// Are replica in the same server group?
+		if isEligibleIndex(n.Indexes[i], eligibles) && !c.SatisfyServerGroupConstraint(s, n.Indexes[i], n.ServerGroup) {
+			return false
 		}
 	}
 
@@ -1953,6 +2051,28 @@ func (p *RandomPlacement) GetEligibleIndexes() []*IndexUsage {
 //
 func (p *RandomPlacement) Validate(s *Solution) error {
 
+	if !s.getConstraintMethod().CanAddNode(s) {
+
+		for _, index := range p.indexes {
+			numReplica := s.findNumReplica(index)
+
+			if numReplica > s.findNumLiveNode() {
+				if s.UseLiveData() {
+					logging.Warnf("Index has more replica than indexer nodes. Index=%v Bucket=%v",
+						index.GetDisplayName(), index.Bucket)
+				} else {
+					return errors.New(fmt.Sprintf("Index has more replica than indexer nodes. Index=%v Bucket=%v",
+						index.GetDisplayName(), index.Bucket))
+				}
+			}
+
+			if s.numServerGroup > 1 && numReplica > s.numServerGroup {
+				logging.Warnf("Index has more replica than server group. Index=%v Bucket=%v",
+					index.GetDisplayName(), index.Bucket)
+			}
+		}
+	}
+
 	if s.ignoreResourceConstraint() {
 		return nil
 	}
@@ -1968,32 +2088,29 @@ func (p *RandomPlacement) Validate(s *Solution) error {
 				s.getConstraintMethod().GetCpuQuota()))
 		}
 
-		if !s.getConstraintMethod().CanAddNode(s) && s.findNumReplica(index) > s.findNumLiveNode() {
-			return errors.New(fmt.Sprintf("Index has more replica than indexer nodes. Index=%v Bucket=%v",
-				index.GetDisplayName(), index.Bucket))
-		}
+		if !s.constraint.CanAddNode(s) {
+			found := false
+			for _, indexer := range s.Placement {
+				freeMem := s.getConstraintMethod().GetMemQuota()
+				freeCpu := s.getConstraintMethod().GetCpuQuota()
 
-		found := false
-		for _, indexer := range s.Placement {
-			freeMem := s.getConstraintMethod().GetMemQuota()
-			freeCpu := s.getConstraintMethod().GetCpuQuota()
+				for _, index2 := range indexer.Indexes {
+					if !p.isEligibleIndex(index2) {
+						freeMem -= index2.GetMemTotal(s.UseLiveData())
+						freeCpu -= index2.GetCpuUsage(s.UseLiveData())
+					}
+				}
 
-			for _, index2 := range indexer.Indexes {
-				if !p.isEligibleIndex(index2) {
-					freeMem -= index2.GetMemTotal(s.UseLiveData())
-					freeCpu -= index2.GetCpuUsage(s.UseLiveData())
+				if freeMem >= index.GetMemTotal(s.UseLiveData()) && freeCpu >= index.GetCpuUsage(s.UseLiveData()) {
+					found = true
+					break
 				}
 			}
 
-			if freeMem >= index.GetMemTotal(s.UseLiveData()) && freeCpu >= index.GetCpuUsage(s.UseLiveData()) {
-				found = true
-				break
+			if !found {
+				return errors.New(fmt.Sprintf("Cannot find an indexer with enough free memory or cpu for index. Index=%v Bucket=%v",
+					index.GetDisplayName(), index.Bucket))
 			}
-		}
-
-		if !found {
-			return errors.New(fmt.Sprintf("Cannot find an indexer with enough free memory or cpu for index. Index=%v Bucket=%v",
-				index.GetDisplayName(), index.Bucket))
 		}
 	}
 

@@ -99,11 +99,12 @@ type IndexIdList struct {
 ////////////////////////////////////////////////////////////////////////
 
 type ServiceMap struct {
-	IndexerId string `json:"indexerId,omitempty"`
-	ScanAddr  string `json:"scanAddr,omitempty"`
-	HttpAddr  string `json:"httpAddr,omitempty"`
-	AdminAddr string `json:"adminAddr,omitempty"`
-	NodeAddr  string `json:"nodeAddr,omitempty"`
+	IndexerId   string `json:"indexerId,omitempty"`
+	ScanAddr    string `json:"scanAddr,omitempty"`
+	HttpAddr    string `json:"httpAddr,omitempty"`
+	AdminAddr   string `json:"adminAddr,omitempty"`
+	NodeAddr    string `json:"nodeAddr,omitempty"`
+	ServerGroup string `json:"serverGroup,omitempty"`
 }
 
 /////////////////////////////////////////////////////////////////////////
