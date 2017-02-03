@@ -1267,6 +1267,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.settings.num_replica": ConfigValue{
+		0,
+		"Number of additional replica for each index.",
+		0,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"projector.settings.log_level": ConfigValue{
 		"info",
 		"Projector logging level",
@@ -1287,6 +1294,30 @@ var SystemConfig = Config{
 		false,
 		false, // mutable
 		false, // case-interface
+	},
+	"indexer.rebalance.use_simple_planner": ConfigValue{
+		false,
+		"use simple round-robin planner for index placement." +
+			"otherwise a sophisticated planner is used.",
+		false,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.rebalance.node_eject_only": ConfigValue{
+		true,
+		"indexes are moved for only the nodes being ejected." +
+			"If false, indexes will be moved to new nodes being added " +
+			"to achieve a balanced distribution.",
+		true,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.rebalance.disable_index_move": ConfigValue{
+		false,
+		"disable index movement on node add/remove",
+		false,
+		false, // mutable
+		false, // case-insensitive
 	},
 }
 

@@ -176,6 +176,11 @@ func (b *cbqClient) BuildIndexes(defnID []uint64) error {
 	panic("cbqClient does not implement build-indexes")
 }
 
+// MoveIndexes implement BridgeAccessor{} interface.
+func (b *cbqClient) MoveIndexes(defnID []uint64, plan map[string]interface{}) error {
+	panic("cbqClient does not implement build-indexes")
+}
+
 // DropIndex implement BridgeAccessor{} interface.
 func (b *cbqClient) DropIndex(defnID uint64) error {
 	var resp *http.Response
@@ -213,9 +218,9 @@ func (b *cbqClient) GetScanports() (queryports []string) {
 func (b *cbqClient) GetScanport(
 	defnID uint64,
 	retry int,
-	excludes map[uint64]bool) (queryport string, targetDefnID uint64, ok bool) {
+	excludes map[uint64]bool) (queryport string, targetDefnID uint64, targetIndstID uint64, ok bool) {
 
-	return b.queryport, defnID, true
+	return b.queryport, defnID, 0, true
 }
 
 // GetIndexDefn implements BridgeAccessor{} interface.

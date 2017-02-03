@@ -360,7 +360,7 @@ func (t *simulator) RunSingleTest(config *RunConfig, command CommandType, spec *
 				return nil, nil, err
 			}
 
-		} else if plan == nil {
+		} else if p == nil {
 			return nil, nil, errors.New("missing argument: either workload or plan must be present")
 		}
 

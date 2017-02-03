@@ -72,6 +72,8 @@ func TestBufferedScan_BackfillDisabled(t *testing.T) {
 	if err != nil {
 		FailTestIfError(err, "TestBufferedScan_BackfillDisabled failed in getting IndexByName", t)
 	}
+	index, err = secondaryindex.WaitForIndexOnline(n1qlclient, indexName, index)
+	FailTestIfError(err, "TestBufferedScan_BackfillDisabled failed in waiting for index on line", t)
 
 	// query setup
 	//low := value.Values{value.NewValue("A")}
@@ -178,6 +180,8 @@ func TestBufferedScan_BackfillEnabled(t *testing.T) {
 	if err != nil {
 		FailTestIfError(err, "TestBufferedScan_BackfillEnabled failed in getting IndexByName", t)
 	}
+	index, err = secondaryindex.WaitForIndexOnline(n1qlclient, indexName, index)
+	FailTestIfError(err, "TestBufferedScan_BackfillEnabled failed in waiting for index on line", t)
 
 	// query setup
 	//low := value.Values{value.NewValue("A")}

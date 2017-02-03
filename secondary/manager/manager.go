@@ -90,9 +90,9 @@ type IndexManager struct {
 //    B) Index Instance is not in INDEX_STATE_CREATE or INDEX_STATE_DELETED.
 //
 type MetadataNotifier interface {
-	OnIndexCreate(*common.IndexDefn) error
-	OnIndexDelete(common.IndexDefnId, string) error
-	OnIndexBuild([]common.IndexDefnId, []string) map[common.IndexInstId]error
+	OnIndexCreate(*common.IndexDefn, common.IndexInstId, int) error
+	OnIndexDelete(common.IndexInstId, string) error
+	OnIndexBuild([]common.IndexInstId, []string) map[common.IndexInstId]error
 }
 
 type RequestServer interface {
@@ -403,8 +403,28 @@ func (m *IndexManager) HandleDeleteIndexDDL(defnId common.IndexDefnId) error {
 	return nil
 }
 
+func (m *IndexManager) HandleBuildIndexDDL(indexIds client.IndexIdList) error {
+
+	key := fmt.Sprintf("%d", indexIds.DefnIds[0])
+	content, _ := client.MarshallIndexIdList(&indexIds)
+	//TODO handle err
+
+	/*
+		if USE_MASTER_REPO {
+
+			if !m.coordinator.NewRequest(uint32(OPCODE_DEL_IDX_DEFN), indexDefnIdStr(defnId), nil) {
+				// TODO: double check if it exists in the dictionary
+				return NewError(ERROR_MGR_DDL_DROP_IDX, NORMAL, INDEX_MANAGER, nil,
+					fmt.Sprintf("Fail to complete processing build index statement for index id = '%d'", defnId))
+			}
+		} else {
+	*/
+	return m.requestServer.MakeRequest(client.OPCODE_BUILD_INDEX, key, content)
+
+	return nil
+}
 func (m *IndexManager) UpdateIndexInstance(bucket string, defnId common.IndexDefnId, state common.IndexState,
-	streamId common.StreamId, err string, buildTime []uint64) error {
+	streamId common.StreamId, err string, buildTime []uint64, rState common.RebalanceState) error {
 
 	inst := &topologyChange{
 		Bucket:    bucket,
@@ -412,7 +432,8 @@ func (m *IndexManager) UpdateIndexInstance(bucket string, defnId common.IndexDef
 		State:     uint32(state),
 		StreamId:  uint32(streamId),
 		Error:     err,
-		BuildTime: buildTime}
+		BuildTime: buildTime,
+		RState:    uint32(rState)}
 
 	buf, e := json.Marshal(&inst)
 	if e != nil {
@@ -583,7 +604,7 @@ func (m *IndexManager) notify(evtType EventType, obj interface{}) {
 }
 
 func (m *IndexManager) startMasterService() error {
-       return nil
+	return nil
 }
 
 func (m *IndexManager) stopMasterService() {

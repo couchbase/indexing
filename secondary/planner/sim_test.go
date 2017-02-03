@@ -50,6 +50,7 @@ var gCpuQuota int
 var gDataCostWeight float64
 var gCpuCostWeight float64
 var gMemCostWeight float64
+var gGenStmt string
 
 //////////////////////////////////////////////////////////////
 // Manual Simulation Test
@@ -60,6 +61,7 @@ func init() {
 	flag.BoolVar(&gDetail, "layout", false, "print simulation result with index layout plan")
 	flag.StringVar(&gLogLevel, "logLevel", "INFO", "log level")
 	flag.StringVar(&gOutput, "output", "", "file for saving simultation result as index layout plan")
+	flag.StringVar(&gGenStmt, "ddl", "", "generate DDL statement after planning for new/moved indexes")
 
 	// command + index specification
 	flag.StringVar(&gCommand, "command", "", "command = plan, rebalance")
@@ -159,6 +161,7 @@ func TestSimulation(t *testing.T) {
 
 	config := &RunConfig{
 		Detail:         gDetail,
+		GenStmt:        gGenStmt,
 		MemQuotaFactor: gMemQuotaFactor,
 		CpuQuotaFactor: gCpuQuotaFactor,
 		Resize:         gResize,

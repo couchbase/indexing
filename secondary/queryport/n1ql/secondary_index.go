@@ -479,10 +479,10 @@ func newSecondaryIndexFromMetaData(
 	gsi *gsiKeyspace,
 	imd *mclient.IndexMetadata) (si *secondaryIndex, err errors.Error) {
 
-	if len(imd.Instances) < 1 {
+	if len(imd.Instances) < 1 && len(imd.InstsInRebalance) < 1 {
 		return nil, errors.NewError(nil, "no instance are created by GSI")
 	}
-	instn, indexDefn := imd.Instances[0], imd.Definition
+	indexDefn := imd.Definition
 	defnID := uint64(indexDefn.DefnId)
 	si = &secondaryIndex{
 		gsi:       gsi,
@@ -494,13 +494,13 @@ func newSecondaryIndexFromMetaData(
 		partnExpr: indexDefn.PartitionKey,
 		secExprs:  indexDefn.SecExprs,
 		whereExpr: indexDefn.WhereExpr,
-		state:     gsi2N1QLState[instn.State],
-		err:       instn.Error,
+		state:     gsi2N1QLState[imd.State],
+		err:       imd.Error,
 		deferred:  indexDefn.Deferred,
 	}
 	if indexDefn.Deferred &&
-		(instn.State == c.INDEX_STATE_CREATED ||
-			instn.State == c.INDEX_STATE_READY) {
+		(imd.State == c.INDEX_STATE_CREATED ||
+			imd.State == c.INDEX_STATE_READY) {
 		si.state = datastore.DEFERRED
 	}
 	return si, nil
@@ -1150,7 +1150,7 @@ func getSingletonClient(
 	defer muclient.Unlock()
 	if singletonClient == nil {
 		l.Debugf("creating singleton for URL %v", clusterURL)
-		client, err := qclient.NewGsiClient(clusterURL, qconf)
+		client, err := qclient.NewGsiClientWithSettings(clusterURL, qconf, true)
 		if err != nil {
 			return nil, fmt.Errorf("in NewGsiClient(): %v", err)
 		}

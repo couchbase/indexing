@@ -10,10 +10,10 @@
 package manager
 
 import (
-	"github.com/golang/protobuf/proto"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
+	"github.com/golang/protobuf/proto"
 )
 
 /////////////////////////////////////////////////////////////////////////
@@ -43,6 +43,9 @@ type IndexInstDistribution struct {
 	StreamId   uint32                  `json:"steamId,omitempty"`
 	Error      string                  `json:"error,omitempty"`
 	Partitions []IndexPartDistribution `json:"partitions,omitempty"`
+	RState     uint32                  `json:"rRtate,omitempty"`
+	Version    uint64                  `json:"version,omitempty"`
+	ReplicaId  uint64                  `json:"replicaId,omitempty"`
 }
 
 type IndexPartDistribution struct {
@@ -111,7 +114,8 @@ func (g *GlobalTopology) RemoveTopologyKey(key string) {
 //
 // Add an index definition to Topology.
 //
-func (t *IndexTopology) AddIndexDefinition(bucket string, name string, defnId uint64, instId uint64, state uint32, indexerId string) {
+func (t *IndexTopology) AddIndexDefinition(bucket string, name string, defnId uint64, instId uint64, state uint32, indexerId string,
+	instVersion uint64, rState uint32, replicaId uint64) {
 
 	t.RemoveIndexDefinition(bucket, name)
 
@@ -127,6 +131,9 @@ func (t *IndexTopology) AddIndexDefinition(bucket string, name string, defnId ui
 	inst := new(IndexInstDistribution)
 	inst.InstId = instId
 	inst.State = state
+	inst.Version = instVersion
+	inst.RState = rState
+	inst.ReplicaId = replicaId
 	inst.Partitions = append(inst.Partitions, *part)
 
 	defn := new(IndexDefnDistribution)
@@ -233,6 +240,27 @@ func (t *IndexTopology) UpdateStateForIndexInstByDefn(defnId common.IndexDefnId,
 }
 
 //
+// Update Index Rebalance Status on instance
+//
+func (t *IndexTopology) UpdateRebalanceStateForIndexInstByDefn(defnId common.IndexDefnId, state common.RebalanceState) bool {
+
+	changed := false
+	for i, _ := range t.Definitions {
+		if t.Definitions[i].DefnId == uint64(defnId) {
+			for j, _ := range t.Definitions[i].Instances {
+				if t.Definitions[i].Instances[j].RState != uint32(state) {
+					t.Definitions[i].Instances[j].RState = uint32(state)
+					logging.Debugf("IndexTopology.UpdateRebalanceStateForIndexInstByDefn(): Update index '%v' inst '%v' rebalance state to '%v'",
+						defnId, t.Definitions[i].Instances[j].InstId, t.Definitions[i].Instances[j].RState)
+					changed = true
+				}
+			}
+		}
+	}
+	return changed
+}
+
+//
 // Update StreamId on instance
 //
 func (t *IndexTopology) UpdateStreamForIndexInstByDefn(defnId common.IndexDefnId, stream common.StreamId) bool {
@@ -303,6 +331,29 @@ func (t *IndexTopology) GetStatusByDefn(defnId common.IndexDefnId) (common.Index
 		}
 	}
 	return common.INDEX_STATE_NIL, ""
+}
+
+func (t *IndexTopology) GetRStatusByDefn(defnId common.IndexDefnId) common.RebalanceState {
+
+	for i, _ := range t.Definitions {
+		if t.Definitions[i].DefnId == uint64(defnId) {
+			return common.RebalanceState(t.Definitions[i].Instances[0].RState)
+		}
+	}
+	return common.REBAL_ACTIVE
+}
+
+//
+// Update Index Status on instance
+//
+func (t *IndexTopology) GetIndexInstancesByDefn(defnId common.IndexDefnId) []IndexInstDistribution {
+
+	for i, _ := range t.Definitions {
+		if t.Definitions[i].DefnId == uint64(defnId) {
+			return t.Definitions[i].Instances
+		}
+	}
+	return nil
 }
 
 //

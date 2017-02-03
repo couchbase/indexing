@@ -17,6 +17,7 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager"
+	"net"
 	"net/http"
 	"runtime"
 	"strings"
@@ -151,6 +152,7 @@ func getIndexLayout(clusterUrl string) ([]*IndexerNode, error) {
 			state, _ := topology.GetStatusByDefn(defn.DefnId)
 			if state != common.INDEX_STATE_CREATED &&
 				state != common.INDEX_STATE_DELETED &&
+				state != common.INDEX_STATE_ERROR &&
 				state != common.INDEX_STATE_NIL {
 
 				// create an index usage object
@@ -166,8 +168,17 @@ func getIndexLayout(clusterUrl string) ([]*IndexerNode, error) {
 				index.IsMOI = (defn.Using == common.IndexType(common.MemoryOptimized) || defn.Using == common.IndexType(common.MemDB))
 
 				// update internal info
-				index.Definition = defn
 				index.initialNode = node
+				index.Instance = &common.IndexInst{
+					InstId:    common.IndexInstId(inst.InstId),
+					Defn:      *defn,
+					State:     common.IndexState(inst.State),
+					Stream:    common.StreamId(inst.StreamId),
+					Error:     inst.Error,
+					ReplicaId: int(inst.ReplicaId),
+					Version:   int(inst.Version),
+					RState:    common.RebalanceState(inst.RState),
+				}
 
 				node.Indexes = append(node.Indexes, index)
 			}
@@ -267,8 +278,10 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 
 			var key string
 
+			indexName := index.GetDisplayName()
+
 			// items_count captures number of key per index
-			key = fmt.Sprintf("%v:%v:items_count", index.Bucket, index.Name)
+			key = fmt.Sprintf("%v:%v:items_count", index.Bucket, indexName)
 			if itemsCount, ok := statsMap[key]; ok {
 				index.NumOfDocs = uint64(itemsCount.(float64))
 			}
@@ -276,7 +289,7 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 			// data_size is the total key size of index, excluding back index overhead.
 			// Therefore data_size is typically smaller than index sizing equation which
 			// includes overhead for back-index.
-			key = fmt.Sprintf("%v:%v:data_size", index.Bucket, index.Name)
+			key = fmt.Sprintf("%v:%v:data_size", index.Bucket, indexName)
 			if dataSize, ok := statsMap[key]; ok {
 				index.ActualMemUsage = uint64(dataSize.(float64))
 				totalDataSize += index.ActualMemUsage
@@ -286,7 +299,7 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 			// the key size, it divides index data_size by items_count.  This
 			// contains sec key size + doc key size + main index overhead (74 bytes).
 			// Subtract 74 bytes to get sec key size.
-			key = fmt.Sprintf("%v:%v:avg_sec_key_size", index.Bucket, index.Name)
+			key = fmt.Sprintf("%v:%v:avg_sec_key_size", index.Bucket, indexName)
 			if avgSecKeySize, ok := statsMap[key]; ok {
 				index.AvgSecKeySize = uint64(avgSecKeySize.(float64))
 			} else if !index.IsPrimary {
@@ -298,7 +311,7 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 			}
 
 			// These stats are currently unavailable in 4.5.
-			key = fmt.Sprintf("%v:%v:avg_doc_key_size", index.Bucket, index.Name)
+			key = fmt.Sprintf("%v:%v:avg_doc_key_size", index.Bucket, indexName)
 			if avgDocKeySize, ok := statsMap[key]; ok {
 				index.AvgDocKeySize = uint64(avgDocKeySize.(float64))
 			} else if index.IsPrimary {
@@ -310,23 +323,23 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 			}
 
 			// These stats are currently unavailable in 4.5.
-			key = fmt.Sprintf("%v:%v:avg_arr_size", index.Bucket, index.Name)
+			key = fmt.Sprintf("%v:%v:avg_arr_size", index.Bucket, indexName)
 			if avgArrSize, ok := statsMap[key]; ok {
 				index.AvgArrSize = uint64(avgArrSize.(float64))
 			}
 
 			// These stats are currently unavailable in 4.5.
-			key = fmt.Sprintf("%v:%v:avg_arr_key_size", index.Bucket, index.Name)
+			key = fmt.Sprintf("%v:%v:avg_arr_key_size", index.Bucket, indexName)
 			if avgArrKeySize, ok := statsMap[key]; ok {
 				index.AvgArrKeySize = uint64(avgArrKeySize.(float64))
 			}
 
 			// These stats are currently unavailable in 4.5.
-			key = fmt.Sprintf("%v:%v:avg_mutation_rate", index.Bucket, index.Name)
+			key = fmt.Sprintf("%v:%v:avg_mutation_rate", index.Bucket, indexName)
 			if avgMutationRate, ok := statsMap[key]; ok {
 				index.MutationRate = uint64(avgMutationRate.(float64))
 			} else {
-				key = fmt.Sprintf("%v:%v:num_flush_queued", index.Bucket, index.Name)
+				key = fmt.Sprintf("%v:%v:num_flush_queued", index.Bucket, indexName)
 				if flushQueuedStat, ok := statsMap[key]; ok {
 					flushQueued := uint64(flushQueuedStat.(float64))
 
@@ -337,11 +350,11 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 			}
 
 			// These stats are currently unavailable in 4.5.
-			key = fmt.Sprintf("%v:%v:avg_scan_rate", index.Bucket, index.Name)
+			key = fmt.Sprintf("%v:%v:avg_scan_rate", index.Bucket, indexName)
 			if avgScanRate, ok := statsMap[key]; ok {
 				index.ScanRate = uint64(avgScanRate.(float64))
 			} else {
-				key = fmt.Sprintf("%v:%v:num_rows_returned", index.Bucket, index.Name)
+				key = fmt.Sprintf("%v:%v:num_rows_returned", index.Bucket, indexName)
 				if rowReturnedStat, ok := statsMap[key]; ok {
 					rowReturned := uint64(rowReturnedStat.(float64))
 
@@ -472,13 +485,12 @@ func getIndexerHost(cinfo *common.ClusterInfoCache, nid common.NodeId) (string, 
 		return "", err
 	}
 
-	/*
-		host, _, err := net.SplitHostPort(addr)
-		if err != nil {
-			return "", err
+	host, port, err := net.SplitHostPort(addr)
+	if err == nil {
+		if host == "localhost" {
+			addr = net.JoinHostPort("127.0.0.1", port)
 		}
-		return host, nil
-	*/
+	}
 
 	return addr, nil
 }

@@ -154,6 +154,9 @@ func (c *clustMgrAgent) handleSupvervisorCommands(cmd Message) {
 	case CLUST_MGR_SET_LOCAL:
 		c.handleSetLocalValue(cmd)
 
+	case CLUST_MGR_DEL_LOCAL:
+		c.handleDelLocalValue(cmd)
+
 	case CLUST_MGR_DEL_BUCKET:
 		c.handleDeleteBucket(cmd)
 
@@ -176,6 +179,8 @@ func (c *clustMgrAgent) handleUpdateTopologyForIndex(cmd Message) {
 	updatedState := common.INDEX_STATE_NIL
 	updatedStream := common.NIL_STREAM
 	updatedError := ""
+	//TODO is this ok?
+	updatedRState := common.REBAL_ACTIVE
 
 	for _, index := range indexList {
 		if updatedFields.state {
@@ -187,11 +192,14 @@ func (c *clustMgrAgent) handleUpdateTopologyForIndex(cmd Message) {
 		if updatedFields.err {
 			updatedError = index.Error
 		}
+		if updatedFields.rstate {
+			updatedRState = index.RState
+		}
 
 		updatedBuildTs := index.BuildTs
 
 		err := c.mgr.UpdateIndexInstance(index.Defn.Bucket, index.Defn.DefnId,
-			updatedState, updatedStream, updatedError, updatedBuildTs)
+			updatedState, updatedStream, updatedError, updatedBuildTs, updatedRState)
 		common.CrashOnError(err)
 	}
 
@@ -231,9 +239,12 @@ func (c *clustMgrAgent) handleGetGlobalTopology(cmd Message) {
 		}
 
 		idxInst := common.IndexInst{InstId: common.IndexInstId(inst.InstId),
-			Defn:   idxDefn,
-			State:  common.IndexState(inst.State),
-			Stream: common.StreamId(inst.StreamId),
+			Defn:      idxDefn,
+			State:     common.IndexState(inst.State),
+			Stream:    common.StreamId(inst.StreamId),
+			ReplicaId: int(inst.ReplicaId),
+			Version:   int(inst.Version),
+			RState:    common.RebalanceState(inst.RState),
 		}
 
 		indexInstMap[idxInst.InstId] = idxInst
@@ -273,6 +284,22 @@ func (c *clustMgrAgent) handleSetLocalValue(cmd Message) {
 		mType: CLUST_MGR_SET_LOCAL,
 		key:   key,
 		value: val,
+		err:   err,
+	}
+
+}
+
+func (c *clustMgrAgent) handleDelLocalValue(cmd Message) {
+
+	key := cmd.(*MsgClustMgrLocal).GetKey()
+
+	logging.Infof("ClustMgr:handleDelLocalValue Key %v", key)
+
+	err := c.mgr.DeleteLocalValue(key)
+
+	c.supvCmdch <- &MsgClustMgrLocal{
+		mType: CLUST_MGR_DEL_LOCAL,
+		key:   key,
 		err:   err,
 	}
 
@@ -360,17 +387,22 @@ func NewMetaNotifier(adminCh MsgChannel, config common.Config) *metaNotifier {
 
 }
 
-func (meta *metaNotifier) OnIndexCreate(indexDefn *common.IndexDefn) error {
+func (meta *metaNotifier) OnIndexCreate(indexDefn *common.IndexDefn, instId common.IndexInstId, replicaId int) error {
 
 	logging.Infof("clustMgrAgent::OnIndexCreate Notification "+
 		"Received for Create Index %v", indexDefn)
 
 	pc := meta.makeDefaultPartitionContainer()
 
-	idxInst := common.IndexInst{InstId: common.IndexInstId(indexDefn.DefnId),
-		Defn:  *indexDefn,
-		State: common.INDEX_STATE_CREATED,
-		Pc:    pc,
+	idxInst := common.IndexInst{InstId: instId,
+		Defn:      *indexDefn,
+		State:     common.INDEX_STATE_CREATED,
+		Pc:        pc,
+		ReplicaId: replicaId,
+	}
+
+	if idxInst.Defn.InstVersion != 0 {
+		idxInst.RState = common.REBAL_PENDING
 	}
 
 	respCh := make(MsgChannel)
@@ -411,17 +443,12 @@ func (meta *metaNotifier) OnIndexCreate(indexDefn *common.IndexDefn) error {
 
 	return nil
 }
-func (meta *metaNotifier) OnIndexBuild(indexDefnList []common.IndexDefnId, buckets []string) map[common.IndexInstId]error {
+func (meta *metaNotifier) OnIndexBuild(indexInstList []common.IndexInstId, buckets []string) map[common.IndexInstId]error {
 
 	logging.Infof("clustMgrAgent::OnIndexBuild Notification "+
-		"Received for Build Index %v", indexDefnList)
+		"Received for Build Index %v", indexInstList)
 
 	respCh := make(MsgChannel)
-
-	var indexInstList []common.IndexInstId
-	for _, defnId := range indexDefnList {
-		indexInstList = append(indexInstList, common.IndexInstId(defnId))
-	}
 
 	meta.adminCh <- &MsgBuildIndex{indexInstList: indexInstList,
 		respCh:     respCh,
@@ -435,22 +462,22 @@ func (meta *metaNotifier) OnIndexBuild(indexDefnList []common.IndexDefnId, bucke
 		case CLUST_MGR_BUILD_INDEX_DDL_RESPONSE:
 			errMap := res.(*MsgBuildIndexResponse).GetErrorMap()
 			logging.Infof("clustMgrAgent::OnIndexBuild returns "+
-				"for Build Index %v", indexDefnList)
+				"for Build Index %v", indexInstList)
 			return errMap
 
 		case MSG_ERROR:
 			logging.Errorf("clustMgrAgent::OnIndexBuild Error "+
-				"for Build Index %v. Error %v.", indexDefnList, res)
+				"for Build Index %v. Error %v.", indexInstList, res)
 			err := res.(*MsgError).GetError()
 			errMap := make(map[common.IndexInstId]error)
-			for _, instId := range indexDefnList {
-				errMap[common.IndexInstId(instId)] = errors.New(err.String())
+			for _, instId := range indexInstList {
+				errMap[instId] = errors.New(err.String())
 			}
 			return errMap
 
 		default:
 			logging.Fatalf("clustMgrAgent::OnIndexBuild Unknown Response "+
-				"Received for Build Index %v. Response %v", indexDefnList, res)
+				"Received for Build Index %v. Response %v", indexInstList, res)
 			common.CrashOnError(errors.New("Unknown Response"))
 
 		}
@@ -458,23 +485,23 @@ func (meta *metaNotifier) OnIndexBuild(indexDefnList []common.IndexDefnId, bucke
 	} else {
 
 		logging.Fatalf("clustMgrAgent::OnIndexBuild Unexpected Channel Close "+
-			"for Create Index %v", indexDefnList)
+			"for Create Index %v", indexInstList)
 		common.CrashOnError(errors.New("Unknown Response"))
 	}
 
 	return nil
 }
 
-func (meta *metaNotifier) OnIndexDelete(defnId common.IndexDefnId, bucket string) error {
+func (meta *metaNotifier) OnIndexDelete(instId common.IndexInstId, bucket string) error {
 
 	logging.Infof("clustMgrAgent::OnIndexDelete Notification "+
-		"Received for Drop IndexId %v", defnId)
+		"Received for Drop IndexId %v", instId)
 
 	respCh := make(MsgChannel)
 
 	//Treat DefnId as InstId for now
 	meta.adminCh <- &MsgDropIndex{mType: CLUST_MGR_DROP_INDEX_DDL,
-		indexInstId: common.IndexInstId(defnId),
+		indexInstId: instId,
 		respCh:      respCh,
 		bucket:      bucket}
 
@@ -485,25 +512,25 @@ func (meta *metaNotifier) OnIndexDelete(defnId common.IndexDefnId, bucket string
 
 		case MSG_SUCCESS:
 			logging.Infof("clustMgrAgent::OnIndexDelete Success "+
-				"for Drop IndexId %v", defnId)
+				"for Drop IndexId %v", instId)
 			return nil
 
 		case MSG_ERROR:
 			logging.Errorf("clustMgrAgent::OnIndexDelete Error "+
-				"for Drop IndexId %v. Error %v", defnId, res)
+				"for Drop IndexId %v. Error %v", instId, res)
 			err := res.(*MsgError).GetError()
 			return err.cause
 
 		default:
 			logging.Fatalf("clustMgrAgent::OnIndexDelete Unknown Response "+
-				"Received for Drop IndexId %v. Response %v", defnId, res)
+				"Received for Drop IndexId %v. Response %v", instId, res)
 			common.CrashOnError(errors.New("Unknown Response"))
 
 		}
 
 	} else {
 		logging.Fatalf("clustMgrAgent::OnIndexDelete Unexpected Channel Close "+
-			"for Drop IndexId %v", defnId)
+			"for Drop IndexId %v", instId)
 		common.CrashOnError(errors.New("Unknown Response"))
 
 	}

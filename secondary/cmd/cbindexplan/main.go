@@ -264,9 +264,9 @@ func main() {
 			logging.Infof("Transfer Token Source ID: %v", token.SourceId)
 			logging.Infof("Transfer Token Dest ID: %v", token.DestId)
 			logging.Infof("Transfer Token State: %v", token.State)
-			logging.Infof("Transfer Token Index Name: %v", token.IndexDefn.Name)
-			logging.Infof("Transfer Token Index Bucket: %v", token.IndexDefn.Bucket)
-			logging.Infof("Transfer Token Index DefnId : %v", token.IndexDefn.DefnId)
+			logging.Infof("Transfer Token Index Name: %v", token.IndexInst.Defn.Name)
+			logging.Infof("Transfer Token Index Bucket: %v", token.IndexInst.Defn.Bucket)
+			logging.Infof("Transfer Token Index DefnId : %v", token.IndexInst.Defn.DefnId)
 			logging.Infof("Transfer Token Index InstId : %v", token.InstId)
 		}
 

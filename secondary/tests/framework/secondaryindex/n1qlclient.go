@@ -57,6 +57,12 @@ func N1QLRange(indexName, bucketName, server string, low, high []interface{}, in
 		return nil, err
 	}
 
+	var err1 error
+	index, err1 = WaitForIndexOnline(client, indexName, index)
+	if err1 != nil {
+		return nil, err1
+	}
+
 	var start time.Time
 	go func() {
 		l, h := skey2qkey(low), skey2qkey(high)
@@ -89,6 +95,12 @@ func N1QLLookup(indexName, bucketName, server string, values []interface{},
 	index, err := client.IndexByName(indexName)
 	if err != nil {
 		return nil, err
+	}
+
+	var err1 error
+	index, err1 = WaitForIndexOnline(client, indexName, index)
+	if err1 != nil {
+		return nil, err1
 	}
 
 	var start time.Time
@@ -125,6 +137,12 @@ func N1QLScanAll(indexName, bucketName, server string, limit int64,
 		return nil, err
 	}
 
+	var err1 error
+	index, err1 = WaitForIndexOnline(client, indexName, index)
+	if err1 != nil {
+		return nil, err1
+	}
+
 	var start time.Time
 	go func() {
 		rng := datastore.Range{Low: nil, High: nil, Inclusion: datastore.BOTH}
@@ -154,6 +172,13 @@ func N1QLScans(indexName, bucketName, server string, scans qc.Scans, reverse, di
 	}
 	requestid := getrequestid()
 	index, err := client.IndexByName(indexName)
+
+	var err1 error
+	index, err1 = WaitForIndexOnline(client, indexName, index)
+	if err1 != nil {
+		return nil, err1
+	}
+
 	index2, useScan2 := index.(datastore.Index2)
 	if err != nil {
 		return nil, err
@@ -293,4 +318,26 @@ func (ctxt *testContext) Warning(wrn errors.Error) {
 
 func (ctxt *testContext) Fatal(fatal errors.Error) {
 	fmt.Printf("scan fatal: %v\n", fatal)
+}
+
+func WaitForIndexOnline(n1qlclient datastore.Indexer, indexName string, index datastore.Index) (datastore.Index, error) {
+
+	var err error
+	for i := 0; i < 30; i++ {
+		if s, _, _ := index.State(); s == datastore.ONLINE {
+			return index, nil
+		}
+
+		time.Sleep(1 * time.Second)
+		if err := n1qlclient.Refresh(); err != nil {
+			return nil, err
+		}
+
+		index, err = n1qlclient.IndexByName(indexName)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return nil, fmt.Errorf("index %v fails to come online after 30s", indexName)
 }

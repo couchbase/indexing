@@ -81,7 +81,7 @@ func formatTimeStr(time uint64) string {
 func computeIndexerUsage(s *Solution, indexer *IndexerNode) float64 {
 
 	memUsage := float64(indexer.GetMemTotal(s.UseLiveData())) / float64(s.constraint.GetMemQuota())
-	cpuUsage := float64(indexer.CpuUsage) / float64(s.constraint.GetCpuQuota())
+	cpuUsage := float64(indexer.GetCpuUsage(s.UseLiveData())) / float64(s.constraint.GetCpuQuota())
 
 	return memUsage + cpuUsage
 }
@@ -96,7 +96,7 @@ func computeIndexerFreeQuota(s *Solution, indexer *IndexerNode) float64 {
 		memUsage = 0
 	}
 
-	cpuUsage := (float64(s.constraint.GetCpuQuota()) - float64(indexer.CpuUsage)) / float64(s.constraint.GetCpuQuota())
+	cpuUsage := (float64(s.constraint.GetCpuQuota()) - float64(indexer.GetCpuUsage(s.UseLiveData()))) / float64(s.constraint.GetCpuQuota())
 	if cpuUsage < 0 {
 		cpuUsage = 0
 	}
@@ -110,7 +110,7 @@ func computeIndexerFreeQuota(s *Solution, indexer *IndexerNode) float64 {
 func computeIndexUsage(s *Solution, index *IndexUsage) float64 {
 
 	memUsage := float64(index.GetMemTotal(s.UseLiveData())) / float64(s.constraint.GetMemQuota())
-	cpuUsage := float64(index.CpuUsage) / float64(s.constraint.GetCpuQuota())
+	cpuUsage := float64(index.GetCpuUsage(s.UseLiveData())) / float64(s.constraint.GetCpuQuota())
 
 	return memUsage + cpuUsage
 }
@@ -258,6 +258,20 @@ func getEligibleIndexes(indexes []*IndexUsage, eligibles []*IndexUsage) []*Index
 }
 
 //
+// This function checks is the index is an eligible index
+//
+func isEligibleIndex(index *IndexUsage, eligibles []*IndexUsage) bool {
+
+	for _, eligible := range eligibles {
+		if index == eligible {
+			return true
+		}
+	}
+
+	return false
+}
+
+//
 // Find a random index
 //
 func getRandomIndex(rs *rand.Rand, indexes []*IndexUsage) *IndexUsage {
@@ -314,19 +328,19 @@ func computeIndexMemStats(indexes []*IndexUsage, useLive bool) (float64, float64
 //
 // compute index cpu stats
 //
-func computeIndexCpuStats(indexes []*IndexUsage) (float64, float64) {
+func computeIndexCpuStats(indexes []*IndexUsage, useLive bool) (float64, float64) {
 
 	// Compute mean cpu usage
 	var meanCpuUsage float64
 	for _, index := range indexes {
-		meanCpuUsage += float64(index.CpuUsage)
+		meanCpuUsage += float64(index.GetCpuUsage(useLive))
 	}
 	meanCpuUsage = meanCpuUsage / float64(len(indexes))
 
 	// compute cpu variance
 	var varianceCpuUsage float64
 	for _, index := range indexes {
-		v := float64(index.CpuUsage) - meanCpuUsage
+		v := float64(index.GetCpuUsage(useLive)) - meanCpuUsage
 		varianceCpuUsage += v * v
 	}
 	varianceCpuUsage = varianceCpuUsage / float64(len(indexes))
@@ -400,9 +414,9 @@ func violateHA(indexers []*IndexerNode) bool {
 				}
 
 				// check equivalent index
-				if n.Indexes[i].Definition != nil &&
-					n.Indexes[j].Definition != nil &&
-					common.IsEquivalentIndex(n.Indexes[i].Definition, n.Indexes[j].Definition) {
+				if n.Indexes[i].Instance != nil &&
+					n.Indexes[j].Instance != nil &&
+					common.IsEquivalentIndex(&n.Indexes[i].Instance.Defn, &n.Indexes[j].Instance.Defn) {
 					return false
 				}
 			}
@@ -469,7 +483,7 @@ func ValidateSolution(s *Solution) error {
 		for _, index := range indexer.Indexes {
 			totalMem += index.GetMemUsage(s.UseLiveData())
 			totalOverhead += index.GetMemOverhead(s.UseLiveData())
-			totalCpu += index.CpuUsage
+			totalCpu += index.GetCpuUsage(s.UseLiveData())
 		}
 
 		if !s.UseLiveData() {
@@ -480,7 +494,7 @@ func ValidateSolution(s *Solution) error {
 			return errors.New("validation fails: memory usage of indexer does not match sum of index memory use")
 		}
 
-		if indexer.CpuUsage != totalCpu {
+		if indexer.GetCpuUsage(s.UseLiveData()) != totalCpu {
 			return errors.New("validation fails: cpu usage of indexer does not match sum of index cpu use")
 		}
 

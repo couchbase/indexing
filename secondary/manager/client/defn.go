@@ -21,15 +21,15 @@ import (
 ////////////////////////////////////////////////////////////////////////
 
 const (
-	OPCODE_CREATE_INDEX      common.OpCode = common.OPCODE_CUSTOM + 1
-	OPCODE_DROP_INDEX                      = OPCODE_CREATE_INDEX + 1
-	OPCODE_BUILD_INDEX                     = OPCODE_DROP_INDEX + 1
-	OPCODE_UPDATE_INDEX_INST               = OPCODE_BUILD_INDEX + 1
-	OPCODE_SERVICE_MAP                     = OPCODE_UPDATE_INDEX_INST + 1
-	OPCODE_DELETE_BUCKET                   = OPCODE_SERVICE_MAP + 1
-	OPCODE_INDEXER_READY                   = OPCODE_DELETE_BUCKET + 1
-	OPCODE_CLEANUP_INDEX                   = OPCODE_INDEXER_READY + 1
-	OPCODE_CLEANUP_DEFER_INDEX             = OPCODE_CLEANUP_INDEX + 1
+	OPCODE_CREATE_INDEX        common.OpCode = common.OPCODE_CUSTOM + 1
+	OPCODE_DROP_INDEX                        = OPCODE_CREATE_INDEX + 1
+	OPCODE_BUILD_INDEX                       = OPCODE_DROP_INDEX + 1
+	OPCODE_UPDATE_INDEX_INST                 = OPCODE_BUILD_INDEX + 1
+	OPCODE_SERVICE_MAP                       = OPCODE_UPDATE_INDEX_INST + 1
+	OPCODE_DELETE_BUCKET                     = OPCODE_SERVICE_MAP + 1
+	OPCODE_INDEXER_READY                     = OPCODE_DELETE_BUCKET + 1
+	OPCODE_CLEANUP_INDEX                     = OPCODE_INDEXER_READY + 1
+	OPCODE_CLEANUP_DEFER_INDEX               = OPCODE_CLEANUP_INDEX + 1
 )
 
 /////////////////////////////////////////////////////////////////////////
@@ -60,6 +60,9 @@ type IndexInstDistribution struct {
 	Error      string                  `json:"error,omitempty"`
 	BuildTime  []uint64                `json:"buildTime,omitempty"`
 	Partitions []IndexPartDistribution `json:"partitions,omitempty"`
+	RState     uint32                  `json:"rRtate,omitempty"`
+	Version    uint64                  `json:"version,omitempty"`
+	ReplicaId  uint64                  `json:"replicaId,omitempty"`
 }
 
 type IndexPartDistribution struct {
@@ -178,4 +181,31 @@ func MarshallServiceMap(srvMap *ServiceMap) ([]byte, error) {
 	logging.Debugf("MarshallServiceMap: %v", string(buf))
 
 	return buf, nil
+}
+
+func (t *IndexTopology) findIndexerId() string {
+
+	for _, defn := range t.Definitions {
+		for _, inst := range defn.Instances {
+			indexerId := inst.findIndexerId()
+			if len(indexerId) != 0 {
+				return indexerId
+			}
+		}
+	}
+
+	return ""
+}
+
+func (inst IndexInstDistribution) findIndexerId() string {
+
+	for _, part := range inst.Partitions {
+		for _, slice := range part.SinglePartition.Slices {
+			if len(slice.IndexerId) != 0 {
+				return slice.IndexerId
+			}
+		}
+	}
+
+	return ""
 }

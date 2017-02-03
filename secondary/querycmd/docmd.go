@@ -72,14 +72,14 @@ func ParseArgs(arguments []string) (*Command, []string, *flag.FlagSet, error) {
 	fset.StringVar(&cmdOptions.Server, "server", "", "Cluster server address")
 	fset.StringVar(&cmdOptions.Auth, "auth", "", "Auth user and password")
 	fset.StringVar(&cmdOptions.Bucket, "bucket", "", "Bucket name")
-	fset.StringVar(&cmdOptions.OpType, "type", "", "Command: scan|stats|scanAll|count|nodes|create|build|drop|list|config")
+	fset.StringVar(&cmdOptions.OpType, "type", "", "Command: scan|stats|scanAll|count|nodes|create|build|move|drop|list|config")
 	fset.StringVar(&cmdOptions.IndexName, "index", "", "Index name")
 	// options for create-index
 	fset.StringVar(&cmdOptions.WhereStr, "where", "", "where clause for create index")
 	fset.StringVar(&fields, "fields", "", "Comma separated on-index fields") // secStrs
 	fset.BoolVar(&cmdOptions.IsPrimary, "primary", false, "Is primary index")
 	fset.StringVar(&cmdOptions.With, "with", "", "index specific properties")
-	// options for build-indexes, drop-indexes
+	// options for build-indexes, move-indexes, drop-indexes
 	fset.StringVar(&bindexes, "indexes", "", "csv list of bucket:index to build")
 	// options for Range, Statistics, Count
 	fset.StringVar(&low, "low", "[]", "Span.Range: [low]")
@@ -259,6 +259,27 @@ func HandleCommand(
 		if err == nil {
 			err = client.BuildIndexes(defnIDs)
 			fmt.Fprintf(w, "Index building for: %v\n", defnIDs)
+		}
+
+	case "move":
+		defnIDs := make([]uint64, 0, len(cmd.Bindexes))
+		for _, bindex := range cmd.Bindexes {
+			v := strings.Split(bindex, ":")
+			if len(v) < 0 {
+				return fmt.Errorf("invalid index specified : %v", bindex)
+			}
+			bucket, iname = v[0], v[1]
+			index, ok := GetIndex(client, bucket, iname)
+			if ok {
+				defnIDs = append(defnIDs, uint64(index.Definition.DefnId))
+			} else {
+				err = fmt.Errorf("index %v/%v unknown", bucket, iname)
+				break
+			}
+		}
+		if err == nil {
+			fmt.Fprintf(w, "Moving Index for: %v %v\n", defnIDs, cmd.With)
+			err = client.MoveIndexes(defnIDs, cmd.WithPlan)
 		}
 
 	case "drop":
@@ -566,6 +587,10 @@ func validate(cmd *Command, fset *flag.FlagSet) error {
 	case "build":
 		have = []string{"type", "server", "auth", "indexes"}
 		dont = []string{"h", "index", "bucket", "where", "fields", "primary", "with", "low", "high", "equal", "incl", "limit", "ckey", "cval"}
+
+	case "move":
+		have = []string{"type", "server", "auth", "indexes"}
+		dont = []string{"h", "index", "bucket", "where", "fields", "primary", "low", "high", "equal", "incl", "limit", "ckey", "cval"}
 
 	case "drop":
 		have = []string{"type", "server", "auth", "index", "bucket"}
