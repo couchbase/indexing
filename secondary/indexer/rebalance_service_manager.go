@@ -381,14 +381,14 @@ func (m *ServiceMgr) prepareFailover(change service.TopologyChange) error {
 			if m.rebalancer != nil {
 				m.rebalancer.Cancel()
 			}
-			if err = m.runCleanupPhaseLOCKED(RebalanceTokenPath, true); err != nil {
+			if err = m.runCleanupPhaseLOCKED(MoveIndexTokenPath, true); err != nil {
 				return err
 			}
 		} else {
 			if m.rebalancerF != nil {
 				m.rebalancerF.Cancel()
 			}
-			if err = m.runCleanupPhaseLOCKED(RebalanceTokenPath, false); err != nil {
+			if err = m.runCleanupPhaseLOCKED(MoveIndexTokenPath, false); err != nil {
 				return err
 			}
 		}
@@ -402,7 +402,7 @@ func (m *ServiceMgr) prepareFailover(change service.TopologyChange) error {
 		}
 		if !masterAlive {
 			l.Infof("ServiceMgr::prepareFailover Master Missing From Cluster Node List. Cleanup MoveIndex")
-			err = m.runCleanupPhaseLOCKED(RebalanceTokenPath, true)
+			err = m.runCleanupPhaseLOCKED(MoveIndexTokenPath, true)
 		}
 		return err
 	}
