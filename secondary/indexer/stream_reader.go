@@ -856,30 +856,30 @@ func copyVbList(vbList []uint16) []Vbucket {
 
 func getSyncBatchInterval(config common.Config) uint64 {
 
-	if common.GetStorageMode() == common.MOI {
-		return config["stream_reader.moi.syncBatchInterval"].Uint64()
-	} else {
+	if common.GetStorageMode() == common.FORESTDB {
 		return config["stream_reader.fdb.syncBatchInterval"].Uint64()
+	} else {
+		return config["stream_reader.moi.syncBatchInterval"].Uint64()
 	}
 
 }
 
 func getMutationBufferSize(config common.Config) uint64 {
 
-	if common.GetStorageMode() == common.MOI {
-		return config["stream_reader.moi.mutationBuffer"].Uint64()
-	} else {
+	if common.GetStorageMode() == common.FORESTDB {
 		return config["stream_reader.fdb.mutationBuffer"].Uint64()
+	} else {
+		return config["stream_reader.moi.mutationBuffer"].Uint64()
 	}
 
 }
 
 func getWorkerBufferSize(config common.Config) uint64 {
 
-	if common.GetStorageMode() == common.MOI {
-		return config["stream_reader.moi.workerBuffer"].Uint64()
-	} else {
+	if common.GetStorageMode() == common.FORESTDB {
 		return config["stream_reader.fdb.workerBuffer"].Uint64()
+	} else {
+		return config["stream_reader.moi.workerBuffer"].Uint64()
 	}
 
 }

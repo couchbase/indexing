@@ -2113,7 +2113,7 @@ func (tk *timekeeper) setSnapshotType(streamId common.StreamId, bucket string,
 			}
 
 			// if storage type is MOI, then also generate snapshot during initial build.
-			if common.GetStorageMode() == common.MOI {
+			if common.GetStorageMode() != common.FORESTDB {
 				flushTs.SetSnapType(common.INMEM_SNAP)
 			}
 
@@ -3105,28 +3105,28 @@ func (tk *timekeeper) checkIndexerState(state common.IndexerState) bool {
 
 func (tk *timekeeper) getPersistInterval() uint64 {
 
-	if common.GetStorageMode() == common.MOI {
-		return tk.config["settings.persisted_snapshot.moi.interval"].Uint64()
-	} else {
+	if common.GetStorageMode() == common.FORESTDB {
 		return tk.config["settings.persisted_snapshot.fdb.interval"].Uint64()
+	} else {
+		return tk.config["settings.persisted_snapshot.moi.interval"].Uint64()
 	}
 
 }
 func (tk *timekeeper) getPersistIntervalInitBuild() uint64 {
 
-	if common.GetStorageMode() == common.MOI {
-		return tk.config["settings.persisted_snapshot_init_build.moi.interval"].Uint64()
-	} else {
+	if common.GetStorageMode() == common.FORESTDB {
 		return tk.config["settings.persisted_snapshot_init_build.fdb.interval"].Uint64()
+	} else {
+		return tk.config["settings.persisted_snapshot_init_build.moi.interval"].Uint64()
 	}
 
 }
 func (tk *timekeeper) getInMemSnapInterval() uint64 {
 
-	if common.GetStorageMode() == common.MOI {
-		return tk.config["settings.inmemory_snapshot.moi.interval"].Uint64()
-	} else {
+	if common.GetStorageMode() == common.FORESTDB {
 		return tk.config["settings.inmemory_snapshot.fdb.interval"].Uint64()
+	} else {
+		return tk.config["settings.inmemory_snapshot.moi.interval"].Uint64()
 	}
 
 }
