@@ -22,7 +22,7 @@ import (
 	"github.com/couchbase/indexing/secondary/memdb/mm"
 	"github.com/couchbase/indexing/secondary/memdb/nodetable"
 	projClient "github.com/couchbase/indexing/secondary/projector/client"
-	"github.com/t3rm1n4l/nitro/plasma"
+	"github.com/couchbase/nitro/plasma"
 	"net"
 	"net/http"
 	"os"

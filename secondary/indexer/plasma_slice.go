@@ -18,7 +18,7 @@ import (
 	"github.com/couchbase/indexing/secondary/common/queryutil"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/platform"
-	"github.com/t3rm1n4l/nitro/plasma"
+	"github.com/couchbase/nitro/plasma"
 	"os"
 	"path/filepath"
 	"sync"
