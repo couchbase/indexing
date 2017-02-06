@@ -41,7 +41,7 @@ var (
 var secKeyBufPool *common.BytesBufPool
 
 func init() {
-	secKeyBufPool = common.NewByteBufferPool(MAX_SEC_KEY_BUFFER_LEN)
+	secKeyBufPool = common.NewByteBufferPool(MAX_SEC_KEY_BUFFER_LEN + ENCODE_BUF_SAFE_PAD)
 }
 
 type ScanReqType string
