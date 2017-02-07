@@ -431,7 +431,7 @@ const (
 
 func IsValidIndexType(t string) bool {
 	switch strings.ToLower(t) {
-	case ForestDB, MemDB, MemoryOptimized:
+	case ForestDB, MemDB, MemoryOptimized, PlasmaDB:
 		return true
 	}
 
