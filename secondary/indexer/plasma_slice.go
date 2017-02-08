@@ -426,7 +426,7 @@ func (mdb *plasmaSlice) deleteSecIndex(docid []byte, workerId int) int {
 
 	// Delete entry from back and main index if present
 	backEntry, err := mdb.back[workerId].LookupKV(docid)
-	if err != plasma.ErrItemNotFound {
+	if err == nil {
 		t0 := time.Now()
 		platform.AddInt64(&mdb.delete_bytes, int64(len(docid)))
 		mdb.back[workerId].DeleteKV(docid)
@@ -1215,7 +1215,7 @@ func entry2BackEntry(entry secondaryIndexEntry) []byte {
 // Reformat secondary key to entry
 func backEntry2entry(docid []byte, bentry []byte, buf []byte) []byte {
 	l := len(bentry)
-	count := int(binary.LittleEndian.Uint16(buf[l-2 : l]))
+	count := int(binary.LittleEndian.Uint16(bentry[l-2 : l]))
 	entry, _ := NewSecondaryIndexEntry(bentry[:l-2], docid, false, count, buf[:0])
 	return entry.Bytes()
 }
