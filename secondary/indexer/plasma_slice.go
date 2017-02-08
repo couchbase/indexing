@@ -413,12 +413,15 @@ func (mdb *plasmaSlice) deletePrimaryIndex(docid []byte, workerId int) (nmut int
 	// Delete from main index
 	t0 := time.Now()
 	itm := entry.Bytes()
-	mdb.main[workerId].DeleteKV(itm)
-	mdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
-	platform.AddInt64(&mdb.delete_bytes, int64(len(entry.Bytes())))
-	mdb.isDirty = true
-	return 1
+	if _, err := mdb.main[workerId].LookupKV(entry); err == plasma.ErrItemNoValue {
+		mdb.main[workerId].DeleteKV(itm)
+		mdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
+		platform.AddInt64(&mdb.delete_bytes, int64(len(entry.Bytes())))
+		mdb.isDirty = true
+		return 1
+	}
 
+	return 0
 }
 
 func (mdb *plasmaSlice) deleteSecIndex(docid []byte, workerId int) int {

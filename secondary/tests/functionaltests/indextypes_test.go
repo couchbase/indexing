@@ -503,6 +503,8 @@ func TestBasicPrimaryIndex(t *testing.T) {
 	tmp := secondaryindex.UseClient
 	secondaryindex.UseClient = "gsi"
 
+	DeleteDocs(500)
+
 	// Create a primary index
 	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", nil, true, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
