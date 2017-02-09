@@ -11,8 +11,9 @@ if [ "$INSTALL_PATH" = "" ]; then
   INSTALL_PATH="/opt/couchbase"
 fi
 
+
 if [ "$STORAGE" = "" ]; then
-  STORAGE="memdb"
+  STORAGE="plasma"
 fi
 
 if [ "$TS" = "" ]; then

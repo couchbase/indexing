@@ -10,7 +10,7 @@ error_exit() {
   exit 2
 }
 
-export RELEASE=4.5.35007
+export RELEASE=5.0.35007
 export BLD_NUM="`date +%s`"
 
 echo '</pre><h3>Building</h3><pre>'
