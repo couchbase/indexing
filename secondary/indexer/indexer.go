@@ -22,7 +22,7 @@ import (
 	"github.com/couchbase/indexing/secondary/memdb/mm"
 	"github.com/couchbase/indexing/secondary/memdb/nodetable"
 	projClient "github.com/couchbase/indexing/secondary/projector/client"
-	//	"math/rand"
+	"github.com/couchbase/nitro/plasma"
 	"net"
 	"net/http"
 	"os"
@@ -30,7 +30,6 @@ import (
 	"runtime"
 	"runtime/debug"
 	"runtime/pprof"
-	//	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -205,7 +204,9 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	NewRestServer(idx.config["clusterAddr"].String())
 
 	// Read memquota setting
-	idx.stats.memoryQuota.Set(int64(idx.config["settings.memory_quota"].Uint64()))
+	memQuota := int64(idx.config["settings.memory_quota"].Uint64())
+	idx.stats.memoryQuota.Set(memQuota)
+	plasma.SetMemoryQuota(int64(float64(memQuota) * PLASMA_MEMQUOTA_FRAC))
 	memdb.Debug(idx.config["settings.moi.debug"].Bool())
 	logging.Infof("Indexer::NewIndexer Starting with Vbuckets %v", idx.config["numVbuckets"].Int())
 
@@ -850,7 +851,9 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 	if newConfig["settings.memory_quota"].Uint64() !=
 		idx.config["settings.memory_quota"].Uint64() {
 
-		idx.stats.memoryQuota.Set(int64(newConfig["settings.memory_quota"].Uint64()))
+		memQuota := int64(newConfig["settings.memory_quota"].Uint64())
+		idx.stats.memoryQuota.Set(memQuota)
+		plasma.SetMemoryQuota(int64(float64(memQuota) * PLASMA_MEMQUOTA_FRAC))
 
 		if common.GetStorageMode() == common.FORESTDB ||
 			common.GetStorageMode() == common.NOT_SET {
@@ -4118,11 +4121,13 @@ func NewSlice(id SliceId, indInst *common.IndexInst,
 	}
 	path := filepath.Join(storage_dir, IndexPath(indInst, id))
 
-	if indInst.Defn.Using == common.MemDB ||
-		indInst.Defn.Using == common.MemoryOptimized {
+	switch indInst.Defn.Using {
+	case common.MemDB, common.MemoryOptimized:
 		slice, err = NewMemDBSlice(path, id, indInst.Defn, indInst.InstId, indInst.Defn.IsPrimary, conf, stats.indexes[indInst.InstId])
-	} else {
+	case common.ForestDB:
 		slice, err = NewForestDBSlice(path, id, indInst.Defn, indInst.InstId, indInst.Defn.IsPrimary, conf, stats.indexes[indInst.InstId])
+	case common.PlasmaDB:
+		slice, err = NewPlasmaSlice(path, id, indInst.Defn, indInst.InstId, indInst.Defn.IsPrimary, conf, stats.indexes[indInst.InstId])
 	}
 
 	return

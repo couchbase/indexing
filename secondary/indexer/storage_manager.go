@@ -567,9 +567,15 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 
 	sm.updateIndexSnapMap(sm.indexPartnMap, streamId, bucket)
 
+	stats := sm.stats.Get()
+	if bStats, ok := stats.buckets[bucket]; ok {
+		bStats.numRollbacks.Add(1)
+	}
+
 	sm.supvCmdch <- &MsgRollback{streamId: streamId,
 		bucket:     bucket,
 		rollbackTs: respTs}
+
 }
 
 func (s *storageMgr) addNilSnapshot(idxInstId common.IndexInstId, bucket string) {

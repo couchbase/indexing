@@ -1071,6 +1071,11 @@ func (m *mutationMgr) setMaxMemoryFromQuota() {
 	fracQueueMem := getMutationQueueMemFrac(m.config)
 
 	maxMem := int64(fracQueueMem * float64(memQuota))
+	maxMemHard := int64(m.config["mutation_manager.maxQueueMem"].Uint64())
+	if maxMem > maxMemHard {
+		maxMem = maxMemHard
+	}
+
 	platform.StoreInt64(&m.maxMemory, maxMem)
 	logging.Infof("MutationMgr::MaxQueueMemoryQuota %v", maxMem)
 
@@ -1114,20 +1119,20 @@ func (m *mutationMgr) handleIndexerResume(cmd Message) {
 
 func getMutationQueueMemFrac(config common.Config) float64 {
 
-	if common.GetStorageMode() == common.MOI {
-		return config["mutation_manager.moi.fracMutationQueueMem"].Float64()
-	} else {
+	if common.GetStorageMode() == common.FORESTDB {
 		return config["mutation_manager.fdb.fracMutationQueueMem"].Float64()
+	} else {
+		return config["mutation_manager.moi.fracMutationQueueMem"].Float64()
 	}
 
 }
 
 func getNumStreamWorkers(config common.Config) int {
 
-	if common.GetStorageMode() == common.MOI {
-		return config["stream_reader.moi.numWorkers"].Int()
-	} else {
+	if common.GetStorageMode() == common.FORESTDB {
 		return config["stream_reader.fdb.numWorkers"].Int()
+	} else {
+		return config["stream_reader.moi.numWorkers"].Int()
 	}
 
 }

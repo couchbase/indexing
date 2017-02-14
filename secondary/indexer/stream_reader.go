@@ -49,7 +49,7 @@ type mutationStreamReader struct {
 	stats IndexerStatsHolder
 
 	indexerState common.IndexerState
-	stateLock    sync.Mutex
+	stateLock    sync.RWMutex
 
 	queueMapLock sync.RWMutex
 	stopch       StopChannel
@@ -417,8 +417,8 @@ func (r *mutationStreamReader) logReaderStat() {
 }
 
 func (r *mutationStreamReader) getIndexerState() common.IndexerState {
-	r.stateLock.Lock()
-	defer r.stateLock.Unlock()
+	r.stateLock.RLock()
+	defer r.stateLock.RUnlock()
 	return r.indexerState
 }
 
@@ -856,30 +856,30 @@ func copyVbList(vbList []uint16) []Vbucket {
 
 func getSyncBatchInterval(config common.Config) uint64 {
 
-	if common.GetStorageMode() == common.MOI {
-		return config["stream_reader.moi.syncBatchInterval"].Uint64()
-	} else {
+	if common.GetStorageMode() == common.FORESTDB {
 		return config["stream_reader.fdb.syncBatchInterval"].Uint64()
+	} else {
+		return config["stream_reader.moi.syncBatchInterval"].Uint64()
 	}
 
 }
 
 func getMutationBufferSize(config common.Config) uint64 {
 
-	if common.GetStorageMode() == common.MOI {
-		return config["stream_reader.moi.mutationBuffer"].Uint64()
-	} else {
+	if common.GetStorageMode() == common.FORESTDB {
 		return config["stream_reader.fdb.mutationBuffer"].Uint64()
+	} else {
+		return config["stream_reader.moi.mutationBuffer"].Uint64()
 	}
 
 }
 
 func getWorkerBufferSize(config common.Config) uint64 {
 
-	if common.GetStorageMode() == common.MOI {
-		return config["stream_reader.moi.workerBuffer"].Uint64()
-	} else {
+	if common.GetStorageMode() == common.FORESTDB {
 		return config["stream_reader.fdb.workerBuffer"].Uint64()
+	} else {
+		return config["stream_reader.moi.workerBuffer"].Uint64()
 	}
 
 }

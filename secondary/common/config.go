@@ -844,6 +844,20 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.plasma.disablePersistence": ConfigValue{
+		false,
+		"Disable persistence",
+		false,
+		false,
+		false,
+	},
+	"indexer.plasma.flushBufferSize": ConfigValue{
+		1024 * 1024,
+		"Flush buffer size",
+		1024 * 1024,
+		false,
+		false,
+	},
 
 	//end of moi specific config
 
@@ -928,6 +942,13 @@ var SystemConfig = Config{
 		0.1,
 		false, // mutable
 		false, // case-insensitive
+	},
+	"indexer.mutation_manager.maxQueueMem": ConfigValue{
+		uint64(512 * 1024 * 1024),
+		"Max memory used by the mutation queue",
+		uint64(512 * 1024 * 1024),
+		false,
+		false,
 	},
 	"indexer.settings.gc_percent": ConfigValue{
 		100,

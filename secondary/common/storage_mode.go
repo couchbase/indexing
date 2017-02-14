@@ -19,6 +19,7 @@ type StorageMode byte
 const (
 	NOT_SET = iota
 	MOI
+	PLASMA
 	FORESTDB
 )
 
@@ -30,6 +31,8 @@ func (s StorageMode) String() string {
 		return "memory_optimized"
 	case FORESTDB:
 		return "forestdb"
+	case PLASMA:
+		return "plasma"
 	default:
 		return "invalid"
 	}
@@ -41,6 +44,7 @@ var smStrMap = map[string]StorageMode{
 	"memdb":            MOI,
 	"memory_optimized": MOI,
 	"forestdb":         FORESTDB,
+	"plasma":           PLASMA,
 }
 
 //Global Storage Mode
@@ -84,6 +88,8 @@ func IndexTypeToStorageMode(t IndexType) StorageMode {
 		return MOI
 	case ForestDB:
 		return FORESTDB
+	case PlasmaDB:
+		return PLASMA
 	default:
 		return NOT_SET
 	}

@@ -441,10 +441,10 @@ func (q *atomicMutationQueue) Destroy() {
 
 func getAllocPollInterval(config common.Config) uint64 {
 
-	if common.GetStorageMode() == common.MOI {
-		return config["mutation_queue.moi.allocPollInterval"].Uint64()
-	} else {
+	if common.GetStorageMode() == common.FORESTDB {
 		return config["mutation_queue.fdb.allocPollInterval"].Uint64()
+	} else {
+		return config["mutation_queue.moi.allocPollInterval"].Uint64()
 	}
 
 }
