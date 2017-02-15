@@ -520,7 +520,7 @@ func (s *statsManager) getStorageStats() string {
 	res := <-replych
 
 	for _, sts := range res {
-		result += fmt.Sprintf("==== Index Instance %d ====\n", sts.InstId)
+		result += fmt.Sprintf("==== Index Instance %s:%s (%d) ====\n", sts.Bucket, sts.Name, sts.InstId)
 		for _, data := range sts.GetInternalData() {
 			result += data
 		}
