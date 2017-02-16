@@ -41,10 +41,11 @@ type ClusterInfoCache struct {
 	useStaticPorts bool
 	servicePortMap map[string]string
 
-	client  couchbase.Client
-	pool    couchbase.Pool
-	nodes   []couchbase.Node
-	nodesvs []couchbase.NodeServices
+	client     couchbase.Client
+	pool       couchbase.Pool
+	nodes      []couchbase.Node
+	nodesvs    []couchbase.NodeServices
+	node2group map[NodeId]string // node->group
 }
 
 type ServiceAddressProvider interface {
@@ -52,15 +53,17 @@ type ServiceAddressProvider interface {
 	GetLocalServicePort(srvc string) (string, error)
 	GetLocalServiceHost(srvc string) (string, error)
 	GetLocalHostAddress() (string, error)
+	GetLocalServerGroup() (string, error)
 }
 
 type NodeId int
 
 func NewClusterInfoCache(clusterUrl string, pool string) (*ClusterInfoCache, error) {
 	c := &ClusterInfoCache{
-		url:      clusterUrl,
-		poolName: pool,
-		retries:  CLUSTER_INFO_INIT_RETRIES,
+		url:        clusterUrl,
+		poolName:   pool,
+		retries:    CLUSTER_INFO_INIT_RETRIES,
+		node2group: make(map[NodeId]string),
 	}
 
 	return c, nil
@@ -127,6 +130,10 @@ func (c *ClusterInfoCache) Fetch() error {
 		}
 		c.nodesvs = poolServs.NodesExt
 
+		if err := c.fetchServerGroups(); err != nil {
+			return err
+		}
+
 		if !c.validateCache() {
 			if vretry < CLUSTER_INFO_VALIDATION_RETRIES {
 				vretry++
@@ -145,6 +152,38 @@ func (c *ClusterInfoCache) Fetch() error {
 
 	rh := NewRetryHelper(c.retries, time.Second, 1, fn)
 	return rh.Run()
+}
+
+func (c *ClusterInfoCache) fetchServerGroups() error {
+
+	groups, err := c.pool.GetServerGroups()
+	if err != nil {
+		return err
+	}
+
+	result := make(map[NodeId]string)
+	for nid, cached := range c.nodes {
+		found := false
+		for _, group := range groups.Groups {
+			for _, node := range group.Nodes {
+				if node.Hostname == cached.Hostname {
+					result[NodeId(nid)] = group.Name
+					found = true
+				}
+			}
+		}
+		if !found {
+			logging.Warnf("ClusterInfoCache Initialization: Unable to identify server group for node %v.", cached.Hostname)
+		}
+	}
+
+	c.node2group = result
+	return nil
+}
+
+func (c *ClusterInfoCache) GetServerGroup(nid NodeId) string {
+
+	return c.node2group[nid]
 }
 
 func (c *ClusterInfoCache) GetNodesByServiceType(srvc string) (nids []NodeId) {
@@ -346,6 +385,11 @@ func (c *ClusterInfoCache) GetLocalServiceHost(srvc string) (string, error) {
 	}
 
 	return h, nil
+}
+
+func (c *ClusterInfoCache) GetLocalServerGroup() (string, error) {
+	node := c.GetCurrentNode()
+	return c.GetServerGroup(node), nil
 }
 
 func (c *ClusterInfoCache) GetLocalHostAddress() (string, error) {

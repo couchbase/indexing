@@ -36,6 +36,7 @@ func usage() {
 - Plan 
     cbindexplan -command=plan -indexes="indexes.json" -memQuota="10G" -cpuQuota=16
     cbindexplan -command=plan -cluster="127.0.0.1:8091" -username="<user>" -password="<pwd>" -indexes="indexes.json"
+    cbindexplan -command=plan -cluster="127.0.0.1:8091" -username="<user>" -password="<pwd>" -indexes="indexes.json" -allowUnpin
     cbindexplan -command=plan -indexes="indexes.json" -memQuota="10G" -cpuQuota=16 -ddl="saved-ddl.txt"
     cbindexplan -command=plan -indexes="indexes.json" -memQuota="10G" -cpuQuota=16 -output="saved-plan.json"
     cbindexplan -command=plan -plan="saved-plan.json" -indexes="indexes.json"
@@ -45,7 +46,6 @@ func usage() {
     cbindexplan -command=rebalance-cluster="127.0.0.1:8091" -username="<user>" -password="<pwd>" -addNode=3 -output="saved-plan.json"
     cbindexplan -command=rebalance -plan="saved-plan.json"
     cbindexplan -command=rebalance -plan="saved-plan.json" -output="newplan.json"
-    cbindexplan -command=rebalance -plan="saved-plan.json" -allowUnpin
     cbindexplan -command=rebalance -plan="saved-plan.json" -addNode=1
     `)
 	fmt.Fprintln(os.Stderr, `Usage Note:
@@ -124,8 +124,8 @@ func init() {
 	// cluster size
 	flag.IntVar(&gAddNode, "addNode", 0, "number of indexer to add before running the planner")
 
-	// rebalance
-	flag.BoolVar(&gAllowUnpin, "allowUnpin", false, "flag to tell if planner should ignore pinned index during rebalancing.")
+	// placement
+	flag.BoolVar(&gAllowUnpin, "allowUnpin", false, "flag to tell if planner should allow existing index to move during placement.")
 
 	// swap
 	flag.StringVar(&gEjectedNode, "ejectNode", "", "node to be ejected from cluster")

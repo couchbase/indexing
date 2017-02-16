@@ -89,10 +89,10 @@ func init() {
 	// rebalance
 	flag.IntVar(&gShuffle, "shuffle", 0, "percentage of index to shuffle in the initial index layout. Use with arugment 'plan'.")
 	flag.BoolVar(&gAllowSwap, "allowSwap", true, "flag to tell if planner can swap index between nodes during planning.")
-	flag.BoolVar(&gAllowUnpin, "allowUnpin", false, "flag to tell if planner should ignore pinned index during rebalancing.")
 
 	// placement
 	flag.BoolVar(&gAllowMove, "allowMove", false, "flag to tell if planner can move existing index (on initial layout) when placing new index.")
+	flag.BoolVar(&gAllowUnpin, "allowUnpin", false, "flag to tell if planner should allow existing index to move during placement.")
 
 	// cost
 	flag.Float64Var(&gDataCostWeight, "dataCostWeight", 1, "Adjusted weight for data movement cost.")

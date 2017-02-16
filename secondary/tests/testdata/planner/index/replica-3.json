@@ -1,0 +1,13 @@
+[{"name" 		 : "index1",
+  "bucket"       : "bucket2",
+  "isPrimary"    : false,
+  "secExprs"     : ["name"],
+  "isArrayIndex" : false,
+  "replica" 	 : 3,
+  "numDoc"       : 5000,
+  "DocKeySize"   : 200,
+  "SecKeySize"   : 200,
+  "ArrKeySize"   : 0,
+  "ArrSize"      : 0,
+  "MutationRate" : 0,
+  "ScanRate"     : 0}]

@@ -592,7 +592,11 @@ loop:
 						rstate: c.REBAL_ACTIVE,
 						respch: respch}
 					<-respch
-					tt.State = c.TransferTokenReady
+					if tt.TransferMode == c.TokenTransferModeMove {
+						tt.State = c.TransferTokenReady
+					} else {
+						tt.State = c.TransferTokenCommit
+					}
 					r.setTransferTokenInMetakv(ttid, tt)
 				}
 			}

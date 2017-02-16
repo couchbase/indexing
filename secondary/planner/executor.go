@@ -166,7 +166,7 @@ func genTransferToken(solution *Solution, masterId string, topologyChange servic
 
 	for _, indexer := range solution.Placement {
 		for _, index := range indexer.Indexes {
-			if index.initialNode.NodeId != indexer.NodeId {
+			if index.initialNode != nil && index.initialNode.NodeId != indexer.NodeId {
 				token := &common.TransferToken{
 					MasterId:  masterId,
 					SourceId:  index.initialNode.NodeUUID,
@@ -184,6 +184,31 @@ func genTransferToken(solution *Solution, masterId string, topologyChange servic
 				ttid := fmt.Sprintf("TransferToken%s", ustr.Str())
 
 				tokens[ttid] = token
+
+				logging.Infof("Generating Transfer Token for rebalance (%v)", token)
+
+			} else if index.initialNode == nil {
+				// There is no source node (index is added during rebalance).
+				token := &common.TransferToken{
+					MasterId:     masterId,
+					SourceId:     "",
+					DestId:       indexer.NodeUUID,
+					RebalId:      topologyChange.ID,
+					State:        common.TransferTokenCreated,
+					InstId:       index.InstId,
+					IndexInst:    *index.Instance,
+					TransferMode: common.TokenTransferModeCopy,
+				}
+
+				token.IndexInst.Defn.InstVersion = 1
+				token.IndexInst.Defn.ReplicaId = token.IndexInst.ReplicaId
+
+				ustr, _ := common.NewUUID()
+				ttid := fmt.Sprintf("TransferToken%s", ustr.Str())
+
+				tokens[ttid] = token
+
+				logging.Infof("Generating Transfer Token for rebuilding lost replica (%v)", token)
 			}
 		}
 	}
@@ -386,7 +411,11 @@ func rebalance(config *RunConfig, plan *Plan, indexes []*IndexUsage, deletedNode
 		return nil, nil, err
 	}
 
+	//
 	// create placement method
+	// 1) Swap rebalancing:  If there are any nodes being ejected, only consider those indexes.
+	// 2) General Rebalancing: If option EjectOnly is true, then this is no-op.  Otherwise consider all indexes in all nodes.
+	//
 	if len(outIndexes) != 0 {
 		indexes = outIndexes
 	} else if !config.EjectOnly {
@@ -668,6 +697,10 @@ func computeQuota(config *RunConfig, sizing SizingMethod, indexes []*IndexUsage,
 	return memQuota, cpuQuota
 }
 
+//
+// This function is only called during placement to make existing index as
+// eligible candidate for planner.
+//
 func filterPinnedIndexes(config *RunConfig, indexes []*IndexUsage) []*IndexUsage {
 
 	result := ([]*IndexUsage)(nil)
