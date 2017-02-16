@@ -99,14 +99,6 @@ func ArrayIndexItems(bs []byte, arrPos int, buf []byte,
 		items = append(items, buf[from:l])
 	}
 
-	if isDistinct {
-		keyCount := make([]int, len(items))
-		for i, _ := range items {
-			keyCount[i] = 1
-		}
-		return items, keyCount, nil
-	}
-
 	arrayKey := items
 	arrayItemsWithCount := make([][]byte, 0, len(arrayKey))
 	keyCount := make([]int, 0, len(arrayKey))
@@ -127,6 +119,12 @@ func ArrayIndexItems(bs []byte, arrPos int, buf []byte,
 		arrayItemsWithCount = append(arrayItemsWithCount, arrayKey[i])
 		keyCount = append(keyCount, count)
 		i = j
+	}
+
+	if isDistinct {
+		for i, _ := range arrayItemsWithCount {
+			keyCount[i] = 1
+		}
 	}
 	return arrayItemsWithCount, keyCount, nil
 }

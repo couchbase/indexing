@@ -10,6 +10,7 @@
 package indexer
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -80,7 +81,8 @@ type plasmaSlice struct {
 	isArrayDistinct   bool
 
 	encodeBuf [][]byte
-	arrayBuf  [][]byte
+	arrayBuf1 [][]byte
+	arrayBuf2 [][]byte
 
 	hasPersistence bool
 }
@@ -121,13 +123,15 @@ func NewPlasmaSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	}
 
 	slice.encodeBuf = make([][]byte, slice.numWriters)
-	slice.arrayBuf = make([][]byte, slice.numWriters)
+	slice.arrayBuf1 = make([][]byte, slice.numWriters)
+	slice.arrayBuf2 = make([][]byte, slice.numWriters)
 	slice.cmdCh = make([]chan indexMutation, slice.numWriters)
 
 	for i := 0; i < slice.numWriters; i++ {
 		slice.cmdCh[i] = make(chan indexMutation, sliceBufSize/uint64(slice.numWriters))
 		slice.encodeBuf[i] = make([]byte, 0, maxIndexEntrySize)
-		slice.arrayBuf[i] = make([]byte, 0, maxArrayIndexEntrySize)
+		slice.arrayBuf1[i] = make([]byte, 0, maxArrayIndexEntrySize)
+		slice.arrayBuf2[i] = make([]byte, 0, maxArrayIndexEntrySize)
 	}
 
 	slice.workerDone = make([]chan bool, slice.numWriters)
@@ -381,8 +385,154 @@ func (mdb *plasmaSlice) insertSecIndex(key []byte, docid []byte, workerId int) i
 	return 1
 }
 
-func (mdb *plasmaSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId int) int {
-	return 0
+func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId int) (nmut int) {
+	var err error
+	var oldkey []byte
+
+	if len(key) > maxArrayIndexEntrySize {
+		logging.Errorf("plasmaSlice::insertSecArrayIndex Error indexing docid: %s in Slice: %v. Error: Encoded array key (size %v) too long (> %v). Skipped.",
+			docid, mdb.id, len(key), maxArrayIndexEntrySize)
+		mdb.deleteSecArrayIndex(docid, workerId)
+		return 0
+	}
+
+	oldkey, err = mdb.back[workerId].LookupKV(docid)
+	if err == plasma.ErrItemNotFound {
+		oldkey = nil
+	}
+
+	var oldEntriesBytes, newEntriesBytes [][]byte
+	var oldKeyCount, newKeyCount []int
+	if oldkey != nil {
+		if bytes.Equal(oldkey, key) {
+			logging.Tracef("plasmaSlice::insertSecArrayIndex \n\tSliceId %v IndexInstId %v Received Unchanged Key for "+
+				"Doc Id %s. Key %v. Skipped.", mdb.id, mdb.idxInstId, docid, key)
+			return
+		}
+
+		var tmpBuf []byte
+		if len(oldkey) > maxArrayIndexEntrySize {
+			tmpBuf = make([]byte, 0, len(oldkey)*3) //TODO: Revisit the size of tmpBuf
+		} else {
+			tmpBuf = mdb.arrayBuf1[workerId]
+		}
+
+		if oldEntriesBytes, oldKeyCount, err = ArrayIndexItems(oldkey, mdb.arrayExprPosition,
+			tmpBuf, mdb.isArrayDistinct, false); err != nil {
+			logging.Errorf("plasmaSlice::insertSecArrayIndex SliceId %v IndexInstId %v Error in retrieving "+
+				"compostite old secondary keys. Skipping docid:%s Error: %v", mdb.id, mdb.idxInstId, docid, err)
+			mdb.deleteSecArrayIndex(docid, workerId)
+			return 0
+		}
+	}
+
+	if key != nil {
+		newEntriesBytes, newKeyCount, err = ArrayIndexItems(key, mdb.arrayExprPosition,
+			mdb.arrayBuf2[workerId], mdb.isArrayDistinct, true)
+		if err != nil {
+			logging.Errorf("plasmaSlice::insertSecArrayIndex SliceId %v IndexInstId %v Error in creating "+
+				"compostite new secondary keys. Skipping docid:%s Error: %v", mdb.id, mdb.idxInstId, docid, err)
+			mdb.deleteSecArrayIndex(docid, workerId)
+			return 0
+		}
+	}
+
+	var indexEntriesToBeAdded, indexEntriesToBeDeleted [][]byte
+	if len(oldEntriesBytes) == 0 { // It is a new key. Nothing to delete
+		indexEntriesToBeDeleted = nil
+		indexEntriesToBeAdded = newEntriesBytes
+	} else if len(newEntriesBytes) == 0 { // New key is nil. Nothing to add
+		indexEntriesToBeAdded = nil
+		indexEntriesToBeDeleted = oldEntriesBytes
+	} else {
+		indexEntriesToBeAdded, indexEntriesToBeDeleted = CompareArrayEntriesWithCount(newEntriesBytes, oldEntriesBytes, newKeyCount, oldKeyCount)
+	}
+
+	nmut = 0
+
+	rollbackDeletes := func(upto int) {
+		for i := 0; i <= upto; i++ {
+			item := indexEntriesToBeDeleted[i]
+			if item != nil { // nil item indicates it should be ignored
+				entry, err := NewSecondaryIndexEntry(item, docid, false,
+					oldKeyCount[i], mdb.encodeBuf[workerId][:0])
+				common.CrashOnError(err)
+				// Add back
+				mdb.main[workerId].InsertKV(entry, nil)
+			}
+		}
+	}
+
+	rollbackAdds := func(upto int) {
+		for i := 0; i <= upto; i++ {
+			key := indexEntriesToBeAdded[i]
+			if key != nil { // nil item indicates it should be ignored
+				entry, err := NewSecondaryIndexEntry(key, docid, false,
+					newKeyCount[i], mdb.encodeBuf[workerId][:0])
+				common.CrashOnError(err)
+				// Delete back
+				mdb.main[workerId].DeleteKV(entry)
+			}
+		}
+	}
+
+	// Delete each of indexEntriesToBeDeleted from main index
+	for i, item := range indexEntriesToBeDeleted {
+		if item != nil { // nil item indicates it should not be deleted
+			var keyToBeDeleted []byte
+			if keyToBeDeleted, err = GetIndexEntryBytes2(item, docid, false, false, oldKeyCount[i], mdb.encodeBuf[workerId]); err != nil {
+				rollbackDeletes(i - 1)
+				logging.Errorf("plasmaSlice::insertSecArrayIndex SliceId %v IndexInstId %v Error forming entry "+
+					"to be added to main index. Skipping docid:%s Error: %v", mdb.id, mdb.idxInstId, docid, err)
+				mdb.deleteSecArrayIndex(docid, workerId)
+				return 0
+			}
+			t0 := time.Now()
+			mdb.main[workerId].DeleteKV(keyToBeDeleted)
+			mdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
+			platform.AddInt64(&mdb.delete_bytes, int64(len(keyToBeDeleted)))
+			nmut++
+		}
+	}
+
+	// Insert each of indexEntriesToBeAdded into main index
+	for i, item := range indexEntriesToBeAdded {
+		if item != nil { // nil item indicates it should not be added
+			var keyToBeAdded []byte
+			if keyToBeAdded, err = GetIndexEntryBytes2(item, docid, false, false, newKeyCount[i], mdb.encodeBuf[workerId]); err != nil {
+				rollbackDeletes(len(indexEntriesToBeDeleted) - 1)
+				rollbackAdds(i - 1)
+				logging.Errorf("plasmaSlice::insertSecArrayIndex SliceId %v IndexInstId %v Error forming entry "+
+					"to be added to main index. Skipping docid:%s Error: %v", mdb.id, mdb.idxInstId, docid, err)
+				mdb.deleteSecArrayIndex(docid, workerId)
+				return 0
+			}
+			t0 := time.Now()
+			mdb.main[workerId].InsertKV(keyToBeAdded, nil)
+			mdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
+			platform.AddInt64(&mdb.insert_bytes, int64(len(keyToBeAdded)))
+			nmut++
+		}
+	}
+
+	// If a field value changed from "existing" to "missing" (ie, key = nil),
+	// we need to remove back index entry corresponding to the previous "existing" value.
+	if key == nil {
+		if oldkey != nil {
+			t0 := time.Now()
+			mdb.back[workerId].DeleteKV(docid)
+			mdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
+			platform.AddInt64(&mdb.delete_bytes, int64(len(docid)))
+		}
+	} else { //set the back index entry <docid, encodedkey>
+		t0 := time.Now()
+		mdb.back[workerId].InsertKV(docid, key)
+		mdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
+		platform.AddInt64(&mdb.insert_bytes, int64(len(docid)+len(key)))
+	}
+
+	mdb.isDirty = true
+	return nmut
 }
 
 func (mdb *plasmaSlice) delete(docid []byte, workerId int) int {
@@ -443,7 +593,67 @@ func (mdb *plasmaSlice) deleteSecIndex(docid []byte, workerId int) int {
 }
 
 func (mdb *plasmaSlice) deleteSecArrayIndex(docid []byte, workerId int) (nmut int) {
-	return 0
+	var olditm []byte
+	var err error
+
+	olditm, err = mdb.back[workerId].LookupKV(docid)
+	if err == plasma.ErrItemNotFound {
+		olditm = nil
+	}
+
+	if olditm == nil {
+		logging.Tracef("plasmaSlice::deleteSecArrayIndex \n\tSliceId %v IndexInstId %v Received NIL Key for "+
+			"Doc Id %v. Skipped.", mdb.id, mdb.idxInstId, docid)
+		return
+	}
+
+	var tmpBuf []byte
+	if len(olditm) > maxArrayIndexEntrySize {
+		tmpBuf = make([]byte, 0, len(olditm)*3)
+	} else {
+		tmpBuf = mdb.arrayBuf1[workerId]
+	}
+
+	indexEntriesToBeDeleted, keyCount, err := ArrayIndexItems(olditm, mdb.arrayExprPosition,
+		tmpBuf, mdb.isArrayDistinct, false)
+	if err != nil {
+		// TODO: Do not crash for non-storage operation. Force delete the old entries
+		common.CrashOnError(err)
+		logging.Errorf("plasmaSlice::deleteSecArrayIndex \n\tSliceId %v IndexInstId %v Error in retrieving "+
+			"compostite old secondary keys %v", mdb.id, mdb.idxInstId, err)
+		return
+	}
+
+	var t0 time.Time
+	// Delete each of indexEntriesToBeDeleted from main index
+	for i, item := range indexEntriesToBeDeleted {
+		var keyToBeDeleted []byte
+		var tmpBuf []byte
+		if len(item) > MAX_SEC_KEY_BUFFER_LEN {
+			tmpBuf = make([]byte, 0, len(item)+MAX_DOCID_LEN+2)
+		} else {
+			tmpBuf = mdb.encodeBuf[workerId]
+		}
+		// TODO: Use method that skips size check for bug MB-22183
+		if keyToBeDeleted, err = GetIndexEntryBytes2(item, docid, false, false, keyCount[i], tmpBuf); err != nil {
+			common.CrashOnError(err)
+			logging.Errorf("plasmaSlice::deleteSecArrayIndex \n\tSliceId %v IndexInstId %v Error from GetIndexEntryBytes2 "+
+				"for entry to be deleted from main index %v", mdb.id, mdb.idxInstId, err)
+			return
+		}
+		t0 := time.Now()
+		mdb.main[workerId].DeleteKV(keyToBeDeleted)
+		mdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
+		platform.AddInt64(&mdb.delete_bytes, int64(len(keyToBeDeleted)))
+	}
+
+	//delete from the back index
+	t0 = time.Now()
+	mdb.back[workerId].DeleteKV(docid)
+	mdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
+	platform.AddInt64(&mdb.delete_bytes, int64(len(docid)))
+	mdb.isDirty = true
+	return len(indexEntriesToBeDeleted)
 }
 
 //checkFatalDbError checks if the error returned from DB
