@@ -308,6 +308,10 @@ func values2SKey(vals value.Values) c.SecondaryKey {
 
 type testContext struct{}
 
+func (ctxt *testContext) GetScanCap() int64 {
+	return 512 // Default index scan request size
+}
+
 func (ctxt *testContext) Error(err errors.Error) {
 	fmt.Printf("Scan error: %v\n", err)
 }
