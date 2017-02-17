@@ -85,6 +85,7 @@ type plasmaSlice struct {
 	arrayBuf2 [][]byte
 
 	hasPersistence bool
+	useMM          bool
 }
 
 func NewPlasmaSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
@@ -114,6 +115,9 @@ func NewPlasmaSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	slice.id = sliceId
 	slice.numWriters = sysconf["numSliceWriters"].Int()
 	slice.hasPersistence = !sysconf["plasma.disablePersistence"].Bool()
+	slice.useMM = sysconf["plasma.useMemMgmt"].Bool()
+
+	// FIXME: Enable rollback config
 	// slice.maxRollbacks = sysconf["settings.recovery.max_rollbacks"].Int()
 	slice.maxRollbacks = 2
 
@@ -164,6 +168,7 @@ func NewPlasmaSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 func (slice *plasmaSlice) initStores() error {
 	var err error
 	cfg := plasma.DefaultConfig()
+	cfg.UseMemoryMgmt = slice.useMM
 	cfg.FlushBufferSize = int(slice.sysconf["plasma.flushBufferSize"].Int())
 	cfg.AutoSwapper = true
 	cfg.LSSCleanerThreshold = 30
@@ -347,6 +352,9 @@ func (mdb *plasmaSlice) insertPrimaryIndex(key []byte, docid []byte, workerId in
 	entry, err := NewPrimaryIndexEntry(docid)
 	common.CrashOnError(err)
 
+	tok := mdb.mainstore.BeginTx()
+	defer mdb.mainstore.EndTx(tok)
+
 	_, err = mdb.main[workerId].LookupKV(entry)
 	if err == plasma.ErrItemNotFound {
 		t0 := time.Now()
@@ -373,6 +381,11 @@ func (mdb *plasmaSlice) insertSecIndex(key []byte, docid []byte, workerId int) i
 	}
 
 	if len(key) > 0 {
+		tokM := mdb.mainstore.BeginTx()
+		defer mdb.mainstore.EndTx(tokM)
+		tokB := mdb.backstore.BeginTx()
+		defer mdb.backstore.EndTx(tokB)
+
 		mdb.main[workerId].InsertKV(entry, nil)
 		backEntry := entry2BackEntry(entry)
 		mdb.back[workerId].InsertKV(docid, backEntry)
@@ -395,6 +408,11 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 		mdb.deleteSecArrayIndex(docid, workerId)
 		return 0
 	}
+
+	tokM := mdb.mainstore.BeginTx()
+	defer mdb.mainstore.EndTx(tokM)
+	tokB := mdb.backstore.BeginTx()
+	defer mdb.backstore.EndTx(tokB)
 
 	oldkey, err = mdb.back[workerId].LookupKV(docid)
 	if err == plasma.ErrItemNotFound {
@@ -563,6 +581,10 @@ func (mdb *plasmaSlice) deletePrimaryIndex(docid []byte, workerId int) (nmut int
 	// Delete from main index
 	t0 := time.Now()
 	itm := entry.Bytes()
+
+	tok := mdb.mainstore.BeginTx()
+	defer mdb.mainstore.EndTx(tok)
+
 	if _, err := mdb.main[workerId].LookupKV(entry); err == plasma.ErrItemNoValue {
 		mdb.main[workerId].DeleteKV(itm)
 		mdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
@@ -578,10 +600,14 @@ func (mdb *plasmaSlice) deleteSecIndex(docid []byte, workerId int) int {
 	buf := mdb.encodeBuf[workerId]
 
 	// Delete entry from back and main index if present
+	tokB := mdb.backstore.BeginTx()
+	defer mdb.backstore.EndTx(tokB)
 	backEntry, err := mdb.back[workerId].LookupKV(docid)
 	if err == nil {
 		t0 := time.Now()
 		platform.AddInt64(&mdb.delete_bytes, int64(len(docid)))
+		tokM := mdb.mainstore.BeginTx()
+		defer mdb.mainstore.EndTx(tokM)
 		mdb.back[workerId].DeleteKV(docid)
 		entry := backEntry2entry(docid, backEntry, buf)
 		mdb.main[workerId].DeleteKV(entry)
@@ -596,6 +622,8 @@ func (mdb *plasmaSlice) deleteSecArrayIndex(docid []byte, workerId int) (nmut in
 	var olditm []byte
 	var err error
 
+	tokB := mdb.backstore.BeginTx()
+	defer mdb.backstore.EndTx(tokB)
 	olditm, err = mdb.back[workerId].LookupKV(docid)
 	if err == plasma.ErrItemNotFound {
 		olditm = nil
@@ -623,6 +651,9 @@ func (mdb *plasmaSlice) deleteSecArrayIndex(docid []byte, workerId int) (nmut in
 			"compostite old secondary keys %v", mdb.id, mdb.idxInstId, err)
 		return
 	}
+
+	tokM := mdb.mainstore.BeginTx()
+	defer mdb.mainstore.EndTx(tokM)
 
 	var t0 time.Time
 	// Delete each of indexEntriesToBeDeleted from main index
@@ -1317,6 +1348,7 @@ func (s *plasmaSnapshot) Iterate(low, high IndexKey, inclusion Inclusion,
 	var entry IndexEntry
 	var err error
 	t0 := time.Now()
+
 	it := s.MainSnap.NewIterator()
 	defer it.Close()
 
