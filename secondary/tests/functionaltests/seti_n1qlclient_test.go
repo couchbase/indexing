@@ -329,6 +329,10 @@ type qcmdContext struct {
 	err error
 }
 
+func (ctxt *qcmdContext) GetScanCap() int64 {
+	return 512 // Default index scan request size
+}
+
 func (ctxt *qcmdContext) Error(err qerrors.Error) {
 	ctxt.err = err
 	fmt.Printf("Scan error: %v\n", err)
