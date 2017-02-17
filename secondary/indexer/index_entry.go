@@ -149,7 +149,7 @@ func NewSecondaryIndexEntry(key []byte, docid []byte, isArray bool, count int, b
 	offset = len(buf) - 2
 	binary.LittleEndian.PutUint16(buf[offset:offset+2], uint16(len(docid)))
 	if count > 1 {
-		buf[offset+1] = byte(uint8(1) << 7)
+		buf[offset+1] |= byte(uint8(1) << 7)
 	}
 
 	e := secondaryIndexEntry(buf)

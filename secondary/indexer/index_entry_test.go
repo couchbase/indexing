@@ -171,3 +171,18 @@ func TestSecondaryIndexEntryMatch(t *testing.T) {
 		t.Errorf("Expected mismatch")
 	}
 }
+
+func TestLongDocIdEntry(t *testing.T) {
+	key := []byte(`["field1","field2"]`)
+	docid := make([]byte, 258, 300)
+	buf := make([]byte, 0, 4096)
+
+	e, err := NewSecondaryIndexEntry(key, docid, false, 2, buf)
+	if err != nil {
+		t.Errorf("Got error %v", err)
+		return
+	}
+	if e.lenDocId() != 258 {
+		t.Errorf("Expected lenght to be 258 but instead got ", e.lenDocId())
+	}
+}
