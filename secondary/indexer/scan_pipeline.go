@@ -115,7 +115,7 @@ func (s *IndexScanSource) Routine() error {
 			return nil
 		}
 
-		if !r.isPrimary && r.Indexprojection != nil && len(r.Indexprojection.EntryKeys) != 0 {
+		if !r.isPrimary && r.Indexprojection != nil {
 			entry, err = projectKeys(ck, entry, (*buf)[:0], r.Indexprojection)
 			if err != nil {
 				return err
@@ -394,6 +394,13 @@ func distinctCompare(entryBytes1, entryBytes2 []byte) bool {
 
 func projectKeys(compositekeys [][]byte, key, buf []byte, projection *protobuf.IndexProjection) ([]byte, error) {
 	var err error
+
+	if len(projection.EntryKeys) == 0 {
+		entry := secondaryIndexEntry(key)
+		buf = append(buf, key[entry.lenKey():]...)
+		return buf, nil
+	}
+
 	codec := collatejson.NewCodec(16)
 	if compositekeys == nil {
 		compositekeys, err = codec.ExplodeArray(key, buf)

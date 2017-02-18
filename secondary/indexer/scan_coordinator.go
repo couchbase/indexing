@@ -999,7 +999,7 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 		r.Limit = req.GetLimit()
 		r.Reverse = req.GetReverse()
 		r.Indexprojection = req.GetIndexprojection()
-		if r.Indexprojection == nil || (r.Indexprojection != nil && len(r.Indexprojection.EntryKeys) == 0) {
+		if r.Indexprojection == nil {
 			r.Distinct = req.GetDistinct()
 		}
 		if r.Indexprojection != nil {
