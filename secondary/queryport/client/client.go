@@ -204,6 +204,12 @@ type GsiAccessor interface {
 		defnID uint64, requestId string,
 		low, high common.SecondaryKey, inclusion Inclusion,
 		cons common.Consistency, vector *TsConsistency) (int64, error)
+
+	// Count using MultiScan
+	MultiScanCount(
+		defnID uint64, requestId string,
+		scans Scans, distinct bool,
+		cons common.Consistency, vector *TsConsistency) (int64, error)
 }
 
 var useMetadataProvider = true
@@ -602,7 +608,6 @@ func (c *GsiClient) MultiScan(
 				return err, false
 			}
 
-			// TODO: Handle RangePrimary
 			if c.bridge.IsPrimary(uint64(index.DefnId)) {
 				return qc.MultiScanPrimary(
 					uint64(index.DefnId), requestId, scans, reverse, distinct,
@@ -726,6 +731,47 @@ func (c *GsiClient) CountRange(
 		})
 
 	fmsg := "CountRange {%v,%v} - elapsed(%v) err(%v)"
+	logging.Verbosef(fmsg, defnID, requestId, time.Since(begin), err)
+	return count, err
+}
+
+func (c *GsiClient) MultiScanCount(
+	defnID uint64, requestId string,
+	scans Scans, distinct bool,
+	cons common.Consistency, vector *TsConsistency) (count int64, err error) {
+
+	if c.bridge == nil {
+		return count, ErrorClientUninitialized
+	}
+
+	// check whether the index is present and available.
+	if _, err := c.bridge.IndexState(defnID); err != nil {
+		return 0, err
+	}
+
+	begin := time.Now()
+
+	err = c.doScan(
+		defnID, requestId,
+		func(qc *GsiScanClient, index *common.IndexDefn) (error, bool) {
+			var err error
+
+			vector, err = c.getConsistency(qc, cons, vector, index.Bucket)
+			if err != nil {
+				return err, false
+			}
+			if c.bridge.IsPrimary(uint64(index.DefnId)) {
+				count, err = qc.MultiScanCountPrimary(
+					uint64(index.DefnId), requestId, scans, distinct, cons, vector)
+				return err, false
+			}
+
+			count, err = qc.MultiScanCount(
+				uint64(index.DefnId), requestId, scans, distinct, cons, vector)
+			return err, false
+		})
+
+	fmsg := "MultiScanCount {%v,%v} - elapsed(%v) err(%v)"
 	logging.Verbosef(fmsg, defnID, requestId, time.Since(begin), err)
 	return count, err
 }

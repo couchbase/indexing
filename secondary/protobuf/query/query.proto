@@ -99,6 +99,8 @@ message CountRequest {
     required uint32        cons      = 3;
     optional TsConsistency vector    = 4;
     optional string        requestId = 5;
+    optional bool          distinct  = 6;
+    repeated Scan          scans     = 7;
 }
 
 // total number of entries in index.

@@ -53,6 +53,60 @@ func (s *fdbSnapshot) CountRange(low, high IndexKey, inclusion Inclusion,
 	return count, err
 }
 
+func (s *fdbSnapshot) MultiScanCount(low, high IndexKey, inclusion Inclusion,
+	scan Scan, distinct bool,
+	stopch StopChannel) (uint64, error) {
+
+	var err error
+	var scancount uint64
+	count := 1
+	checkDistinct := distinct && !s.isPrimary()
+	buf := secKeyBufPool.Get()
+	defer secKeyBufPool.Put(buf)
+	previousRow := secKeyBufPool.Get()
+	defer secKeyBufPool.Put(previousRow)
+
+	callb := func(entry []byte) error {
+		select {
+		case <-stopch:
+			return common.ErrClientCancel
+		default:
+			skipRow := false
+			if scan.ScanType == FilterRangeReq {
+				skipRow, _, err = filterScanRow(entry, scan, (*buf)[:0])
+				if err != nil {
+					return err
+				}
+			}
+			if skipRow {
+				return nil
+			}
+
+			if checkDistinct {
+				if len(*previousRow) != 0 && distinctCompare(entry, *previousRow) {
+					return nil // Ignore the entry as it is same as previous entry
+				}
+			}
+
+			if !s.isPrimary() {
+				e := secondaryIndexEntry(entry)
+				count = e.Count()
+			}
+
+			if checkDistinct {
+				scancount++
+				*previousRow = append((*previousRow)[:0], entry...)
+			} else {
+				scancount += uint64(count)
+			}
+		}
+		return nil
+	}
+
+	e := s.Range(low, high, inclusion, callb)
+	return scancount, e
+}
+
 func (s *fdbSnapshot) CountLookup(keys []IndexKey, stopch StopChannel) (uint64, error) {
 	var err error
 	var count uint64

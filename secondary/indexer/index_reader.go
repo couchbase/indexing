@@ -63,6 +63,9 @@ type RangeCounter interface {
 	CountRange(low, high IndexKey, inclusion Inclusion, stopch StopChannel) (
 		uint64, error)
 	CountLookup(keys []IndexKey, stopch StopChannel) (uint64, error)
+	MultiScanCount(low, high IndexKey, inclusion Inclusion,
+		scan Scan, distinct bool, stopch StopChannel) (
+		uint64, error)
 }
 
 type IndexReader interface {
