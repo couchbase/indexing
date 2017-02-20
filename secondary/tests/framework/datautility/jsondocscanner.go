@@ -564,7 +564,10 @@ func ExpectedMultiScanResponse(docs tc.KeyValues, compositeFieldPaths []string, 
 	for _, res := range resultList {
 		if isScanAll {
 			var projectedSecondaryKey []interface{}
-			if projection != nil && len(projection.EntryKeys) != 0 {
+			if projection != nil {
+				if len(projection.EntryKeys) == 0 {
+					projectedSecondaryKey = []interface{}{}
+				}
 				for _, entrypos := range projection.EntryKeys {
 					projectedSecondaryKey = append(projectedSecondaryKey, res.SecondaryKey[entrypos])
 				}
@@ -604,7 +607,7 @@ func ExpectedMultiScanResponse(docs tc.KeyValues, compositeFieldPaths []string, 
 			var projectedSecondaryKey []interface{}
 			if projection != nil {
 				if len(projection.EntryKeys) == 0 {
-					projectedSecondaryKey = nil
+					projectedSecondaryKey = []interface{}{}
 				} else {
 					for _, entrypos := range projection.EntryKeys {
 						projectedSecondaryKey = append(projectedSecondaryKey, res.SecondaryKey[entrypos])
