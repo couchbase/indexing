@@ -1,1 +1,0 @@
-memcapable.WarmUpMemcachedTest.do_warmup_100k
