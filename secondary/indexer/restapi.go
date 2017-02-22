@@ -507,6 +507,7 @@ func (api *restServer) doLookup(w http.ResponseWriter, request *http.Request) {
 
 	w.WriteHeader(http.StatusOK)
 
+	empty := true
 	err = nil
 	e := api.client.Lookup(
 		uint64(index.Definition.DefnId), "", equals, distinct, limit, cons, ts,
@@ -518,6 +519,7 @@ func (api *restServer) doLookup(w http.ResponseWriter, request *http.Request) {
 			}
 			//nil means no more data
 			if skeys != nil {
+				empty = false
 				data, err := api.makeEntries(skeys, pkeys)
 				if err != nil {
 					w.Write([]byte(api.makeError(err)))
@@ -532,6 +534,8 @@ func (api *restServer) doLookup(w http.ResponseWriter, request *http.Request) {
 	}
 	if err != nil {
 		w.Write([]byte(api.makeError(err)))
+	} else if empty {
+		w.Write([]byte("[]"))
 	}
 }
 
@@ -623,6 +627,7 @@ func (api *restServer) doRange(w http.ResponseWriter, request *http.Request) {
 
 	w.WriteHeader(http.StatusOK)
 
+	empty := true
 	err = nil
 	e := api.client.Range(
 		uint64(index.Definition.DefnId), "", low, high,
@@ -636,6 +641,7 @@ func (api *restServer) doRange(w http.ResponseWriter, request *http.Request) {
 			}
 			//nil means no more data
 			if skeys != nil {
+				empty = false
 				data, err := api.makeEntries(skeys, pkeys)
 				if err != nil {
 					w.Write([]byte(api.makeError(err)))
@@ -650,6 +656,8 @@ func (api *restServer) doRange(w http.ResponseWriter, request *http.Request) {
 	}
 	if err != nil {
 		w.Write([]byte(api.makeError(err)))
+	} else if empty {
+		w.Write([]byte("[]"))
 	}
 }
 
@@ -741,6 +749,7 @@ func (api *restServer) doMultiScan(w http.ResponseWriter, request *http.Request)
 
 	w.WriteHeader(http.StatusOK)
 
+	empty := true
 	err = nil
 	e := api.client.MultiScan(
 		uint64(index.Definition.DefnId), "", scans, reverse,
@@ -754,6 +763,7 @@ func (api *restServer) doMultiScan(w http.ResponseWriter, request *http.Request)
 			}
 			//nil means no more data
 			if skeys != nil {
+				empty = false
 				data, err := api.makeEntries(skeys, pkeys)
 				if err != nil {
 					w.Write([]byte(api.makeError(err)))
@@ -768,6 +778,8 @@ func (api *restServer) doMultiScan(w http.ResponseWriter, request *http.Request)
 	}
 	if err != nil {
 		w.Write([]byte(api.makeError(err)))
+	} else if empty {
+		w.Write([]byte("[]"))
 	}
 }
 
@@ -822,6 +834,7 @@ func (api *restServer) doScanall(w http.ResponseWriter, request *http.Request) {
 
 	w.WriteHeader(http.StatusOK)
 
+	empty := true
 	err = nil
 	e := api.client.ScanAll(
 		uint64(index.Definition.DefnId), "", limit, cons, ts,
@@ -833,6 +846,7 @@ func (api *restServer) doScanall(w http.ResponseWriter, request *http.Request) {
 			}
 			//nil means no more data
 			if skeys != nil {
+				empty = false
 				data, err := api.makeEntries(skeys, pkeys)
 				if err != nil {
 					w.Write([]byte(api.makeError(err)))
@@ -847,6 +861,8 @@ func (api *restServer) doScanall(w http.ResponseWriter, request *http.Request) {
 	}
 	if err != nil {
 		w.Write([]byte(api.makeError(err)))
+	} else if empty {
+		w.Write([]byte("[]"))
 	}
 }
 
