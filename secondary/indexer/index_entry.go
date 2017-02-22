@@ -107,7 +107,7 @@ func (e *primaryIndexEntry) String() string {
 // The MSB of right byte of docid length indicates whether count is encoded or not
 type secondaryIndexEntry []byte
 
-func NewSecondaryIndexEntry(key []byte, docid []byte, isArray bool, count int, buf []byte) (secondaryIndexEntry, error) {
+func NewSecondaryIndexEntry(key []byte, docid []byte, isArray bool, count int, desc []bool, buf []byte) (secondaryIndexEntry, error) {
 	var err error
 	var offset int
 
@@ -135,6 +135,10 @@ func NewSecondaryIndexEntry(key []byte, docid []byte, isArray bool, count int, b
 			return nil, errors.New(fmt.Sprintf("Encoded secondary key is too long (> %d)", MAX_SEC_KEY_BUFFER_LEN))
 		}
 		buf = append(buf, key...)
+	}
+
+	if desc != nil {
+		buf = jsonEncoder.ReverseCollate(buf, desc)
 	}
 
 	buf = append(buf, docid...)
@@ -214,6 +218,7 @@ func (e secondaryIndexEntry) ReadSecKey(buf []byte) ([]byte, error) {
 	} else {
 		encoded = e[0 : len(e)-doclen-2]
 	}
+
 	if buf, err = jsonEncoder.Decode(encoded, buf); err != nil {
 		return nil, err
 	}
@@ -229,7 +234,6 @@ func (e *secondaryIndexEntry) String() string {
 	buf, _ = e.ReadSecKey(buf)
 	buf = append(buf, ':')
 	buf, _ = e.ReadDocId(buf)
-
 	return string(buf)
 }
 
@@ -376,12 +380,12 @@ func IndexEntrySize(key []byte, docid []byte) int {
 }
 
 func GetIndexEntryBytes2(key []byte, docid []byte,
-	isPrimary bool, isArray bool, count int, buf []byte) (bs []byte, err error) {
+	isPrimary bool, isArray bool, count int, desc []bool, buf []byte) (bs []byte, err error) {
 
 	if isPrimary {
 		bs, err = NewPrimaryIndexEntry(docid)
 	} else {
-		bs, err = NewSecondaryIndexEntry(key, docid, isArray, count, buf)
+		bs, err = NewSecondaryIndexEntry(key, docid, isArray, count, desc, buf)
 		if err == ErrSecKeyNil {
 			return nil, nil
 		}
@@ -391,7 +395,7 @@ func GetIndexEntryBytes2(key []byte, docid []byte,
 }
 
 func GetIndexEntryBytes(key []byte, docid []byte,
-	isPrimary bool, isArray bool, count int) (entry []byte, err error) {
+	isPrimary bool, isArray bool, count int, desc []bool) (entry []byte, err error) {
 
 	var bufPool *common.BytesBufPool
 	var bufPtr *[]byte
@@ -412,6 +416,6 @@ func GetIndexEntryBytes(key []byte, docid []byte,
 		}()
 	}
 
-	entry, err = GetIndexEntryBytes2(key, docid, isPrimary, isArray, count, buf)
+	entry, err = GetIndexEntryBytes2(key, docid, isPrimary, isArray, count, desc, buf)
 	return append([]byte(nil), entry...), err
 }

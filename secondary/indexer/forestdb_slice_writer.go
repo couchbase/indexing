@@ -272,7 +272,7 @@ func (fdb *fdbSlice) DecrRef() {
 //If forestdb has encountered any fatal error condition,
 //it will be returned as error.
 func (fdb *fdbSlice) Insert(rawKey []byte, docid []byte, meta *MutationMeta) error {
-	key, err := GetIndexEntryBytes(rawKey, docid, fdb.idxDefn.IsPrimary, fdb.idxDefn.IsArrayIndex, 1)
+	key, err := GetIndexEntryBytes(rawKey, docid, fdb.idxDefn.IsPrimary, fdb.idxDefn.IsArrayIndex, 1, fdb.idxDefn.Desc)
 	if err != nil {
 		return err
 	}
@@ -512,6 +512,11 @@ func (fdb *fdbSlice) insertSecArrayIndex(key []byte, rawKey []byte, docid []byte
 			tmpBuf = (*tmpBufPtr)[:0]
 		}
 
+		//get the key in original form
+		if fdb.idxDefn.Desc != nil {
+			jsonEncoder.ReverseCollate(oldkey, fdb.idxDefn.Desc)
+		}
+
 		if oldEntriesBytes, oldKeyCount, err = ArrayIndexItems(oldkey, fdb.arrayExprPosition,
 			tmpBuf, fdb.isArrayDistinct, false); err != nil {
 			logging.Errorf("ForestDBSlice::insert SliceId %v IndexInstId %v Error in retrieving "+
@@ -520,6 +525,12 @@ func (fdb *fdbSlice) insertSecArrayIndex(key []byte, rawKey []byte, docid []byte
 		}
 	}
 	if key != nil {
+
+		//get the key in original form
+		if fdb.idxDefn.Desc != nil {
+			jsonEncoder.ReverseCollate(key, fdb.idxDefn.Desc)
+		}
+
 		tmpBufPtr := arrayEncBufPool.Get()
 		defer arrayEncBufPool.Put(tmpBufPtr)
 		newEntriesBytes, newKeyCount, err = ArrayIndexItems(key, fdb.arrayExprPosition,
@@ -551,8 +562,11 @@ func (fdb *fdbSlice) insertSecArrayIndex(key []byte, rawKey []byte, docid []byte
 			var keyToBeDeleted []byte
 			tmpBufPtr := encBufPool.Get()
 			defer encBufPool.Put(tmpBufPtr)
+
 			// TODO: Ensure sufficient buffer size and use method that skips size check for bug MB-22183
-			if keyToBeDeleted, err = GetIndexEntryBytes2(item, docid, false, false, oldKeyCount[i], (*tmpBufPtr)[:0]); err != nil {
+			if keyToBeDeleted, err = GetIndexEntryBytes2(item, docid, false, false,
+				oldKeyCount[i], fdb.idxDefn.Desc, (*tmpBufPtr)[:0]); err != nil {
+
 				encBufPool.Put(tmpBufPtr)
 				// TODO: Handle skipped item here
 				logging.Errorf("ForestDBSlice::insert SliceId %v IndexInstId %v Error forming entry "+
@@ -570,7 +584,9 @@ func (fdb *fdbSlice) insertSecArrayIndex(key []byte, rawKey []byte, docid []byte
 			var keyToBeAdded []byte
 			tmpBufPtr := encBufPool.Get()
 			defer encBufPool.Put(tmpBufPtr)
-			if keyToBeAdded, err = GetIndexEntryBytes2(item, docid, false, false, newKeyCount[i], (*tmpBufPtr)[:0]); err != nil {
+			if keyToBeAdded, err = GetIndexEntryBytes2(item, docid, false, false,
+				newKeyCount[i], fdb.idxDefn.Desc, (*tmpBufPtr)[:0]); err != nil {
+
 				encBufPool.Put(tmpBufPtr)
 				// TODO: Handle skipped item here
 				logging.Errorf("ForestDBSlice::insert SliceId %v IndexInstId %v Error forming entry "+
@@ -622,6 +638,12 @@ func (fdb *fdbSlice) insertSecArrayIndex(key []byte, rawKey []byte, docid []byte
 		platform.AddInt64(&fdb.delete_bytes, int64(len(docid)))
 	} else { //set the back index entry <docid, encodedkey>
 		t0 := time.Now()
+
+		//convert to storage format
+		if fdb.idxDefn.Desc != nil {
+			jsonEncoder.ReverseCollate(key, fdb.idxDefn.Desc)
+		}
+
 		if err = fdb.back[workerId].SetKV(docid, key); err != nil {
 			fdb.checkFatalDbError(err)
 			logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error in Back Index Set. "+
@@ -759,6 +781,11 @@ func (fdb *fdbSlice) deleteSecArrayIndex(docid []byte, workerId int) (nmut int) 
 		tmpBuf = (*tmpBufPtr)[:0]
 	}
 
+	//get the key in original form
+	if fdb.idxDefn.Desc != nil {
+		jsonEncoder.ReverseCollate(olditm, fdb.idxDefn.Desc)
+	}
+
 	indexEntriesToBeDeleted, keyCount, err := ArrayIndexItems(olditm, fdb.arrayExprPosition,
 		tmpBuf, fdb.isArrayDistinct, false)
 
@@ -785,7 +812,8 @@ func (fdb *fdbSlice) deleteSecArrayIndex(docid []byte, workerId int) (nmut int) 
 			tmpBuf = (*tmpBufPtr)[:0]
 		}
 		// TODO: Use method that skips size check for bug MB-22183
-		if keyToBeDeleted, err = GetIndexEntryBytes2(item, docid, false, false, keyCount[i], tmpBuf); err != nil {
+		if keyToBeDeleted, err = GetIndexEntryBytes2(item, docid, false, false, keyCount[i],
+			fdb.idxDefn.Desc, tmpBuf); err != nil {
 			encBufPool.Put(tmpBufPtr)
 			fdb.checkFatalDbError(err)
 			logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error from GetIndexEntryBytes2 for entry to be deleted from main index %v", fdb.id, fdb.idxInstId, err)

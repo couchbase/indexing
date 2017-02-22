@@ -103,10 +103,23 @@ func (s *IndexScanSource) Routine() error {
 	buf2 := secKeyBufPool.Get()
 	r.keyBufList = append(r.keyBufList, buf2)
 	previousRow := (*buf2)[:0]
+	revbuf := secKeyBufPool.Get()
+	r.keyBufList = append(r.keyBufList, revbuf)
 
 	fn := func(entry []byte) error {
 		skipRow := false
 		var ck [][]byte
+
+		//get the key in original format
+		if s.p.req.IndexInst.Defn.Desc != nil {
+			revbuf := (*revbuf)[:0]
+			//copy is required, otherwise storage may get updated if storage
+			//returns pointer to original item(e.g. memdb)
+			revbuf = append(revbuf, entry...)
+			jsonEncoder.ReverseCollate(revbuf, s.p.req.IndexInst.Defn.Desc)
+			entry = revbuf
+		}
+
 		if currentScan.ScanType == FilterRangeReq {
 			skipRow, ck, err = filterScanRow(entry, currentScan, (*buf)[:0])
 			if err != nil {
@@ -327,6 +340,7 @@ func applyFilter(compositekeys [][]byte, compositefilters []CompositeElementFilt
 		ck := compositekeys[i]
 		checkLow := (filter.Low != MinIndexKey)
 		checkHigh := (filter.High != MaxIndexKey)
+
 		switch filter.Inclusion {
 		case Neither:
 			// if ck > low and ck < high

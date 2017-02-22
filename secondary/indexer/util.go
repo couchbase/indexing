@@ -145,3 +145,13 @@ func ValidateBucket(cluster, bucket string, uuids []string) bool {
 	}
 
 }
+
+//flip bits in-place for a given byte slice
+func FlipBits(code []byte) {
+
+	for i, b := range code {
+		code[i] = ^b
+	}
+	return
+
+}

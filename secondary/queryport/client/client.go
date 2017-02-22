@@ -109,7 +109,7 @@ type BridgeAccessor interface {
 	//      JSON marshalled description about index deployment (and more...).
 	CreateIndex(
 		name, bucket, using, exprType, partnExpr, whereExpr string,
-		secExprs []string, isPrimary bool,
+		secExprs []string, desc []bool, isPrimary bool,
 		with []byte) (defnID uint64, err error)
 
 	// BuildIndexes to build a deferred set of indexes. This call implies
@@ -345,6 +345,16 @@ func (c *GsiClient) CreateIndex(
 	secExprs []string, isPrimary bool,
 	with []byte) (defnID uint64, err error) {
 
+	return c.CreateIndex2(name, bucket, using, exprType,
+		partnExpr, whereExpr, secExprs, nil, isPrimary, with)
+}
+
+// CreateIndex implements BridgeAccessor{} interface.
+func (c *GsiClient) CreateIndex2(
+	name, bucket, using, exprType, partnExpr, whereExpr string,
+	secExprs []string, desc []bool, isPrimary bool,
+	with []byte) (defnID uint64, err error) {
+
 	err = common.IsValidIndexName(name)
 	if err != nil {
 		return 0, err
@@ -356,13 +366,13 @@ func (c *GsiClient) CreateIndex(
 	begin := time.Now()
 	defnID, err = c.bridge.CreateIndex(
 		name, bucket, using, exprType, partnExpr, whereExpr,
-		secExprs, isPrimary, with)
+		secExprs, desc, isPrimary, with)
 	fmsg := "CreateIndex %v %v/%v using:%v exprType:%v partnExpr:%v " +
-		"whereExpr:%v secExprs:%v isPrimary:%v with:%v - " +
+		"whereExpr:%v secExprs:%v desc:%v isPrimary:%v with:%v - " +
 		"elapsed(%v) err(%v)"
 	logging.Infof(
 		fmsg, defnID, bucket, name, using, exprType, partnExpr, whereExpr,
-		secExprs, isPrimary, string(with), time.Since(begin), err)
+		secExprs, desc, isPrimary, string(with), time.Since(begin), err)
 	return defnID, err
 }
 

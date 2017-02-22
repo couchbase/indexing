@@ -288,7 +288,7 @@ func (o *MetadataProvider) CheckIndexerStatusNoLock() []IndexerStatus {
 
 func (o *MetadataProvider) CreateIndexWithPlan(
 	name, bucket, using, exprType, partnExpr, whereExpr string,
-	secExprs []string, isPrimary bool, plan map[string]interface{}) (c.IndexDefnId, error, bool) {
+	secExprs []string, desc []bool, isPrimary bool, plan map[string]interface{}) (c.IndexDefnId, error, bool) {
 
 	// FindIndexByName will only return valid index
 	if o.FindIndexByName(name, bucket) != nil {
@@ -411,6 +411,10 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 		return c.IndexDefnId(0), errors.New("Multiple expressions with ALL are found. Only one array expression is supported per index."), false
 	}
 
+	if desc != nil && len(secExprs) != len(desc) {
+		return c.IndexDefnId(0), errors.New("Collation order is required for all expressions in the index."), false
+	}
+
 	idxDefn := &c.IndexDefn{
 		DefnId:          defnID,
 		Name:            name,
@@ -418,6 +422,7 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 		Bucket:          bucket,
 		IsPrimary:       isPrimary,
 		SecExprs:        secExprs,
+		Desc:            desc,
 		ExprType:        c.ExprType(exprType),
 		PartitionScheme: c.SINGLE,
 		PartitionKey:    partnExpr,

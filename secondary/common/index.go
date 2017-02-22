@@ -181,6 +181,7 @@ type IndexDefn struct {
 	PartitionScheme PartitionScheme `json:"partitionScheme,omitempty"`
 	PartitionKey    string          `json:"partitionKey,omitempty"`
 	WhereExpr       string          `json:"where,omitempty"`
+	Desc            []bool          `json:"desc,omitempty"`
 	Deferred        bool            `json:"deferred,omitempty"`
 	Immutable       bool            `json:"immutable,omitempty"`
 	Nodes           []string        `json:"nodes,omitempty"`
@@ -220,6 +221,7 @@ func (idx IndexDefn) String() string {
 	str += fmt.Sprintf("NumReplica: %v ", idx.NumReplica)
 	str += fmt.Sprintf("InstVersion: %v ", idx.InstVersion)
 	str += fmt.Sprintf("\n\t\tSecExprs: %v ", idx.SecExprs)
+	str += fmt.Sprintf("\n\t\tDesc: %v", idx.Desc)
 	str += fmt.Sprintf("\n\t\tPartitionScheme: %v ", idx.PartitionScheme)
 	str += fmt.Sprintf("PartitionKey: %v ", idx.PartitionKey)
 	str += fmt.Sprintf("WhereExpr: %v ", idx.WhereExpr)
@@ -238,6 +240,7 @@ func (idx IndexDefn) Clone() *IndexDefn {
 		BucketUUID:      idx.BucketUUID,
 		IsPrimary:       idx.IsPrimary,
 		SecExprs:        idx.SecExprs,
+		Desc:            idx.Desc,
 		ExprType:        idx.ExprType,
 		PartitionScheme: idx.PartitionScheme,
 		PartitionKey:    idx.PartitionKey,
@@ -248,6 +251,19 @@ func (idx IndexDefn) Clone() *IndexDefn {
 		IsArrayIndex:    idx.IsArrayIndex,
 		NumReplica:      idx.NumReplica,
 	}
+}
+
+func (idx *IndexDefn) HasDescending() bool {
+
+	if idx.Desc != nil {
+		for _, d := range idx.Desc {
+			if d {
+				return true
+			}
+		}
+	}
+	return false
+
 }
 
 func (idx IndexInst) String() string {
