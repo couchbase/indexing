@@ -38,6 +38,14 @@ func TestRangeArrayIndex_Distinct(t *testing.T) {
 	FailTestIfError(err, "Error in scan", t)
 	err = tv.ValidateArrayResult(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
+
+	// Delete some docs
+	kvdocs = deleteArrayDocs(100, kvdocs)
+	docScanResults = datautility.ExpectedArrayScanResponse_string(kvdocs, "friends", "#haw", "6h25", 1, true)
+	scanResults, err = secondaryindex.ArrayIndex_Range(indexName, bucketName, indexScanAddress, []interface{}{"#haw"}, []interface{}{"6h25"}, 1, false, defaultlimit, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in scan", t)
+	err = tv.ValidateArrayResult(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan result validation", t)
 }
 
 func TestUpdateArrayIndex_Distinct(t *testing.T) {
@@ -85,6 +93,14 @@ func TestUpdateArrayIndex_Distinct(t *testing.T) {
 	FailTestIfError(err, "Error in scan", t)
 	err = tv.ValidateArrayResult(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
+
+	// Delete some docs
+	kvdocs = deleteArrayDocs(100, kvdocs)
+	docScanResults = datautility.ExpectedArrayScanResponse_string(kvdocs, "friends", "sutq", "xq25", 2, true)
+	scanResults, err = secondaryindex.ArrayIndex_Range(indexName, bucketName, indexScanAddress, []interface{}{"sutq"}, []interface{}{"xq25"}, 2, false, defaultlimit, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in scan", t)
+	err = tv.ValidateArrayResult(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan result validation", t)
 }
 
 // Simple array with string array items
@@ -107,6 +123,14 @@ func TestRangeArrayIndex_Duplicate(t *testing.T) {
 
 	docScanResults := datautility.ExpectedArrayScanResponse_string(kvdocs, "friends", "A", "zzz", 3, false)
 	scanResults, err := secondaryindex.ArrayIndex_Range(indexName, bucketName, indexScanAddress, []interface{}{"A"}, []interface{}{"zzz"}, 1, false, defaultlimit, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in scan", t)
+	err = tv.ValidateArrayResult(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan result validation", t)
+
+	// Delete some docs
+	kvdocs = deleteArrayDocs(100, kvdocs)
+	docScanResults = datautility.ExpectedArrayScanResponse_string(kvdocs, "friends", "dsfsdf", "kluilh", 0, false)
+	scanResults, err = secondaryindex.ArrayIndex_Range(indexName, bucketName, indexScanAddress, []interface{}{"dsfsdf"}, []interface{}{"kluilh"}, 0, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
 	err = tv.ValidateArrayResult(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
@@ -148,6 +172,14 @@ func TestUpdateArrayIndex_Duplicate(t *testing.T) {
 	kvutility.SetKeyValues(kvdocs, bucketName, "", clusterconfig.KVAddress)
 	docScanResults = datautility.ExpectedArrayScanResponse_string(kvdocs, "friends", "A", "zzz", 3, false)
 	scanResults, err = secondaryindex.ArrayIndex_Range(indexName, bucketName, indexScanAddress, []interface{}{"A"}, []interface{}{"zzz"}, 1, false, defaultlimit, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in scan", t)
+	err = tv.ValidateArrayResult(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan result validation", t)
+
+	// Delete some docs
+	kvdocs = deleteArrayDocs(100, kvdocs)
+	docScanResults = datautility.ExpectedArrayScanResponse_string(kvdocs, "friends", "454fds", "ghgsd", 3, false)
+	scanResults, err = secondaryindex.ArrayIndex_Range(indexName, bucketName, indexScanAddress, []interface{}{"454fds"}, []interface{}{"ghgsd"}, 3, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
 	err = tv.ValidateArrayResult(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
@@ -288,6 +320,24 @@ func createArrayDocs(numDocs, numArrayItems int) tc.KeyValues {
 	}
 	log.Printf("End of createArrayDocs()")
 	return arrDocs
+}
+
+func deleteArrayDocs(numDocs int, kvdocs tc.KeyValues) tc.KeyValues {
+	i := 0
+	keysToBeDeleted := make(tc.KeyValues)
+	for key, value := range kvdocs {
+		keysToBeDeleted[key] = value
+		i++
+		if i == numDocs {
+			break
+		}
+	}
+	kvutility.DeleteKeys(keysToBeDeleted, "default", "", clusterconfig.KVAddress)
+	// Update docs object with deleted keys
+	for key, _ := range keysToBeDeleted {
+		delete(kvdocs, key)
+	}
+	return kvdocs
 }
 
 type ArrayType int

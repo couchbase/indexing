@@ -57,6 +57,8 @@ type Rebalancer struct {
 
 	mu sync.RWMutex
 
+	muCleanup sync.RWMutex
+
 	localaddr string
 
 	wg sync.WaitGroup
@@ -109,9 +111,9 @@ func NewRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *Rebal
 
 func (r *Rebalancer) Cancel() {
 	l.Infof("Rebalancer::Cancel Exiting")
-	if r.metakvCancel != nil {
-		close(r.metakvCancel)
-	}
+
+	r.cancelMetakv()
+
 	close(r.cancel)
 	r.wg.Wait()
 }
@@ -126,12 +128,38 @@ func (r *Rebalancer) finish(err error) {
 func (r *Rebalancer) doFinish() {
 
 	l.Infof("Rebalancer::doFinish Cleanup %v", r.retErr)
+
 	close(r.done)
-	if r.metakvCancel != nil {
-		close(r.metakvCancel)
-	}
+	r.cancelMetakv()
+
 	r.wg.Wait()
 	r.cb.done(r.retErr, r.cancel)
+
+}
+
+func (r *Rebalancer) cancelMetakv() {
+
+	r.muCleanup.Lock()
+	defer r.muCleanup.Unlock()
+
+	if r.metakvCancel != nil {
+		close(r.metakvCancel)
+		r.metakvCancel = nil
+	}
+
+}
+
+func (r *Rebalancer) addToWaitGroup() bool {
+
+	r.muCleanup.Lock()
+	defer r.muCleanup.Unlock()
+
+	if r.metakvCancel != nil {
+		r.wg.Add(1)
+		return true
+	} else {
+		return false
+	}
 
 }
 
@@ -180,8 +208,7 @@ func (r *Rebalancer) processTokens(path string, value []byte, rev interface{}) e
 
 		if value == nil {
 			l.Infof("Rebalancer::processTokens Rebalance Token Deleted. Mark Done.")
-			close(r.metakvCancel)
-			r.metakvCancel = nil
+			r.cancelMetakv()
 			r.finish(nil)
 		}
 	} else if strings.Contains(path, TransferTokenTag) {
@@ -203,7 +230,10 @@ func (r *Rebalancer) processTokens(path string, value []byte, rev interface{}) e
 
 func (r *Rebalancer) processTransferToken(ttid string, tt *c.TransferToken) {
 
-	r.wg.Add(1)
+	if !r.addToWaitGroup() {
+		return
+	}
+
 	defer r.wg.Done()
 
 	var processed bool
@@ -238,7 +268,9 @@ func (r *Rebalancer) processTokenAsSource(ttid string, tt *c.TransferToken) bool
 	switch tt.State {
 
 	case c.TransferTokenReady:
-		r.wg.Add(1)
+		if !r.addToWaitGroup() {
+			return true
+		}
 		//TODO batch this rather than one per index
 		go r.dropIndexWhenIdle(ttid, tt)
 
@@ -418,7 +450,9 @@ func (r *Rebalancer) processTokenAsDest(ttid string, tt *c.TransferToken) bool {
 		r.setTransferTokenInMetakv(ttid, tt)
 
 		if r.checkIndexReadyToBuild() == true {
-			r.wg.Add(1)
+			if !r.addToWaitGroup() {
+				return true
+			}
 			go r.buildAcceptedIndexes()
 		}
 
@@ -631,8 +665,8 @@ func (r *Rebalancer) processTokenAsMaster(ttid string, tt *c.TransferToken) bool
 
 	if tt.Error != "" {
 		l.Errorf("Rebalancer::processTokenAsMaster Detected TransferToken in Error state %v. Abort.", tt)
-		close(r.metakvCancel)
-		r.metakvCancel = nil
+
+		r.cancelMetakv()
 		go r.finish(errors.New(tt.Error))
 		return true
 	}
@@ -668,8 +702,7 @@ func (r *Rebalancer) processTokenAsMaster(ttid string, tt *c.TransferToken) bool
 				r.cb.progress(1.0, r.cancel)
 			}
 			l.Infof("Rebalancer::processTokenAsMaster No Tokens Found. Mark Done.")
-			close(r.metakvCancel)
-			r.metakvCancel = nil
+			r.cancelMetakv()
 			go r.finish(nil)
 		}
 
@@ -718,7 +751,10 @@ func (r *Rebalancer) decodeTransferToken(path string, value []byte) (string, *c.
 
 func (r *Rebalancer) updateProgress() {
 
-	r.wg.Add(1)
+	if !r.addToWaitGroup() {
+		return
+	}
+
 	defer r.wg.Done()
 
 	var lastProgress float64

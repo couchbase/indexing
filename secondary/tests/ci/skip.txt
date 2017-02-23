@@ -1,1 +1,3 @@
-memcapable.WarmUpMemcachedTest.do_warmup_100k
+TestArraySizeIncreaseDecrease
+TestStat_ItemsCount
+github.com/couchbase/indexing/secondary/tests/functionaltests

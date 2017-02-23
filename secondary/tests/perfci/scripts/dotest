@@ -158,10 +158,8 @@ cd $WORKSPACE/couchdb
 git rev-parse HEAD > ~/couchdb.good
 cd $WORKSPACE/couchstore
 git rev-parse HEAD > ~/couchstore.good
-if [ "$STORAGE" = "fdb" ]; then
-  cd $WORKSPACE/forestdb
-  git rev-parse HEAD > ~/forestdb.good
-fi
+cd $WORKSPACE/forestdb
+git rev-parse HEAD > ~/forestdb.good
 cd $WORKSPACE/testrunner
 git rev-parse HEAD > ~/testrunner.good
 cd $WORKSPACE/ep-engine

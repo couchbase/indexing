@@ -89,7 +89,7 @@ func ArrayIndexItems(bs []byte, arrPos int, buf []byte,
 		}
 		l := len(buf)
 		if checkSize && (l-from) > MAX_SEC_KEY_BUFFER_LEN {
-			logging.Errorf("Encoded array item key too long. Length of key = %v, Limit = %v", buf[from:l], MAX_SEC_KEY_BUFFER_LEN)
+			logging.Errorf("Encoded array item key too long. Length of key = %v, Limit = %v", l-from, MAX_SEC_KEY_BUFFER_LEN)
 			return nil, nil, ErrArrayItemKeyTooLong
 		}
 		if checkSize && l > maxArrayIndexEntrySize {
@@ -97,14 +97,6 @@ func ArrayIndexItems(bs []byte, arrPos int, buf []byte,
 			return nil, nil, ErrArrayKeyTooLong
 		}
 		items = append(items, buf[from:l])
-	}
-
-	if isDistinct {
-		keyCount := make([]int, len(items))
-		for i, _ := range items {
-			keyCount[i] = 1
-		}
-		return items, keyCount, nil
 	}
 
 	arrayKey := items
@@ -127,6 +119,12 @@ func ArrayIndexItems(bs []byte, arrPos int, buf []byte,
 		arrayItemsWithCount = append(arrayItemsWithCount, arrayKey[i])
 		keyCount = append(keyCount, count)
 		i = j
+	}
+
+	if isDistinct {
+		for i, _ := range arrayItemsWithCount {
+			keyCount[i] = 1
+		}
 	}
 	return arrayItemsWithCount, keyCount, nil
 }

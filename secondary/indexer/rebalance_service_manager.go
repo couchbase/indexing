@@ -1898,6 +1898,7 @@ func (m *ServiceMgr) handleMoveIndex(w http.ResponseWriter, r *http.Request) {
 			}
 
 			if err = m.genMoveIndexToken(); err != nil {
+				m.rebalanceToken = nil
 				sendIndexResponseWithError(http.StatusInternalServerError, w, err.Error())
 				return
 			}
@@ -1906,12 +1907,14 @@ func (m *ServiceMgr) handleMoveIndex(w http.ResponseWriter, r *http.Request) {
 
 			transferTokens, err := m.generateTransferTokenForMoveIndex(&req)
 			if err != nil {
+				m.rebalanceToken = nil
 				l.Errorf("ServiceMgr::handleMoveIndex %v %v", err, m.rebalanceToken)
 				sendIndexResponseWithError(http.StatusInternalServerError, w, err.Error())
 				return
 			}
 
 			if len(transferTokens) == 0 {
+				m.rebalanceToken = nil
 				l.Errorf("ServiceMgr::handleMoveIndex No TransferTokens Generated. Skip Move Index.")
 				sendIndexResponse(w)
 				return

@@ -11,8 +11,10 @@ if [ "$INSTALL_PATH" = "" ]; then
   INSTALL_PATH="/opt/couchbase"
 fi
 
+
 if [ "$STORAGE" = "" ]; then
-  STORAGE="memdb"
+  echo 'STORAGE not set'
+  exit 2
 fi
 
 if [ "$TS" = "" ]; then
@@ -182,10 +184,18 @@ cd $WORKSPACE/goproj/src/github.com/couchbase/query
 git rev-parse HEAD > ~/query.good
 cd $WORKSPACE/goproj/src/github.com/couchbase/gometa
 git rev-parse HEAD > ~/gometa.good
+cd $WORKSPACE/ns_server
+git rev-parse HEAD > ~/ns_server.good
 cd $WORKSPACE/couchdb
 git rev-parse HEAD > ~/couchdb.good
 cd $WORKSPACE/couchstore
 git rev-parse HEAD > ~/couchstore.good
+cd $WORKSPACE/memcached
+git rev-parse HEAD > ~/memcached.good
+if [ "$STORAGE" = "plasma" ]; then
+  cd $WORKSPACE/goproj/src/github.com/couchbase/nitro
+  git rev-parse HEAD > ~/nitro.good
+fi
 if [ "$STORAGE" = "fdb" ]; then
   cd $WORKSPACE/forestdb
   git rev-parse HEAD > ~/forestdb.good
