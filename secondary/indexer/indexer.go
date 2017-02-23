@@ -4107,7 +4107,7 @@ func (idx *indexer) handleResetStats() {
 }
 
 func (idx *indexer) memoryUsedStorage() int64 {
-	mem_used := int64(forestdb.BufferCacheUsed()) + int64(memdb.MemoryInUse()) + int64(nodetable.MemoryInUse())
+	mem_used := int64(forestdb.BufferCacheUsed()) + int64(memdb.MemoryInUse()) + int64(plasma.MemoryInUse()) + int64(nodetable.MemoryInUse())
 	return mem_used
 }
 
@@ -4565,7 +4565,8 @@ func (idx *indexer) memoryUsed(forceRefresh bool) (uint64, uint64) {
 	}
 
 	mem_used := ms.HeapInuse + ms.HeapIdle - ms.HeapReleased + ms.GCSys + forestdb.BufferCacheUsed()
-	if common.GetStorageMode() == common.MOI {
+	mode := common.GetStorageMode()
+	if mode == common.MOI || mode == common.PLASMA {
 		mem_used += mm.Size()
 	}
 
