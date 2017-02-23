@@ -1,5 +1,0 @@
-#!/bin/bash
-
-cd /home/buildbot/bin
-go run perfstat.go /var/www/gsi-*.pass.html > /tmp/timing.html
-cat /tmp/timing.html > /var/www/watson-timing.html

@@ -1,6 +1,7 @@
 package main
 
 import "os"
+//import "encoding/json"
 import "fmt"
 import "io/ioutil"
 import "regexp"
@@ -204,7 +205,7 @@ func main() {
 		agg.data[fn] = result
 	}
 	mtx := transform(&agg)
-	htm := html(mtx, &agg)
+        htm := html(mtx, &agg)
 	fmt.Println(htm)
 }
 
@@ -217,6 +218,7 @@ func processBuild(fn filename) *filestat {
 	for _, line := range strings.Split(string(data), "\n") {
 		result.processLine(line)
 	}
+        // fmt.Println("\n\nprocessBuild :: result is ", result)
 	return &result
 }
 
@@ -285,24 +287,27 @@ func (buf bytesBuffer) Printf(spec string, args ...interface{}) {
 }
 
 func prettyLabel(fn filename) string {
-	ts := timestamp(fn)
+	// fmt.Println("\n\nfunc prettyLabel :: filename is ", fn)
+        ts := timestamp(fn)
 	label := ts.Format("Jan 2, 2006 3pm")
 	return label
 }
 
-var reTimestamp = regexp.MustCompile(`.+?-(.+?)-(.+?)\.(?:htm|pass\.html)`)
+var reTimestamp = regexp.MustCompile(`.+?-(.+?)-(.+?)\.(?:htm|perf\.html)`)
 
 func timestamp(fn filename) time.Time {
 	ets := time.Date(1970, time.January, 1, 0, 0, 0, 0, time.UTC)
 	result := reTimestamp.FindStringSubmatch(string(fn))
-	if len(result) != 3 {
+	//fmt.Println("\n\ntimestamp :: result is ", result)
+        if len(result) != 3 {
 		fmt.Println("Could not parse timestamp:", string(fn))
 		return ets
 	}
-	label := result[1] + " " + result[2]
-	ts, err := time.Parse("02.01.2006 15.04", label)
+	label := result[2]
+        //fmt.Println("func timestamp:: label is ", label) 
+	ts, err := time.Parse("02.01.2006-15.04", label)
 	if err != nil {
-		fmt.Println("Could not parse label:", label)
+		fmt.Println("Could not parse label: %v, Error = %v", label, err)
 		return ets
 	}
 	return ts
