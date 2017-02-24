@@ -460,22 +460,35 @@ func (api *restServer) doLookup(w http.ResponseWriter, request *http.Request) {
 
 	value, ok := params["equal"]
 	if !ok {
-		msg := `"missing field equal"`
-		http.Error(w, msg, http.StatusBadRequest)
+		http.Error(w, `"missing field equal"`, http.StatusBadRequest)
+		return
+	} else if _, ok = value.(string); ok == false {
+		http.Error(w, `"invalid equal type"`, http.StatusBadRequest)
 		return
 	}
 	matchequal := []byte(value.(string))
 
 	if value, ok = params["distinct"]; ok {
-		distinct = value.(bool)
+		if distinct, ok = value.(bool); ok == false {
+			http.Error(w, `"invalid distinct type"`, http.StatusBadRequest)
+			return
+		}
 	}
 
 	if value, ok = params["limit"]; ok {
+		if _, ok := value.(float64); ok == false {
+			http.Error(w, `"invalid limit type"`, http.StatusBadRequest)
+			return
+		}
 		limit = int64(value.(float64))
 	}
 
 	if value, ok = params["stale"]; ok {
-		stale = value.(string)
+		if stale, ok = value.(string); ok == false {
+			msg := `stale expected as string`
+			http.Error(w, jsonstr(msg), http.StatusBadRequest)
+			return
+		}
 	}
 
 	if value, ok = params["timestamp"]; stale == "partial" {
@@ -500,13 +513,18 @@ func (api *restServer) doLookup(w http.ResponseWriter, request *http.Request) {
 	}
 	equals := []c.SecondaryKey{c.SecondaryKey(equal)}
 
-	cons := stale2consistency(stale)
+	cons, ok := stale2consistency(stale)
+	if ok == false {
+		http.Error(w, jsonstr(`invalid stale option`), http.StatusBadRequest)
+		return
+	}
 
 	var skeys []c.SecondaryKey
 	var pkeys [][]byte
 
 	w.WriteHeader(http.StatusOK)
 
+	empty := true
 	err = nil
 	e := api.client.Lookup(
 		uint64(index.Definition.DefnId), "", equals, distinct, limit, cons, ts,
@@ -518,6 +536,7 @@ func (api *restServer) doLookup(w http.ResponseWriter, request *http.Request) {
 			}
 			//nil means no more data
 			if skeys != nil {
+				empty = false
 				data, err := api.makeEntries(skeys, pkeys)
 				if err != nil {
 					w.Write([]byte(api.makeError(err)))
@@ -532,6 +551,8 @@ func (api *restServer) doLookup(w http.ResponseWriter, request *http.Request) {
 	}
 	if err != nil {
 		w.Write([]byte(api.makeError(err)))
+	} else if empty {
+		w.Write([]byte("[]"))
 	}
 }
 
@@ -562,6 +583,10 @@ func (api *restServer) doRange(w http.ResponseWriter, request *http.Request) {
 		msg := "missing field ``startkey``"
 		http.Error(w, jsonstr(msg), http.StatusBadRequest)
 		return
+	} else if _, ok = value.(string); ok == false {
+		msg := "invalid `startkey` type"
+		http.Error(w, jsonstr(msg), http.StatusBadRequest)
+		return
 	}
 	startkey := []byte(value.(string))
 
@@ -570,22 +595,45 @@ func (api *restServer) doRange(w http.ResponseWriter, request *http.Request) {
 		msg := "missing field ``endkey``"
 		http.Error(w, jsonstr(msg), http.StatusBadRequest)
 		return
+	} else if _, ok = value.(string); ok == false {
+		msg := "invalid `endkey` type"
+		http.Error(w, jsonstr(msg), http.StatusBadRequest)
+		return
 	}
 	endkey := []byte(value.(string))
 
 	if value, ok = params["stale"]; ok && value != nil {
-		stale = value.(string)
+		if stale, ok = value.(string); ok == false {
+			msg := `stale expected as string`
+			http.Error(w, jsonstr(msg), http.StatusBadRequest)
+			return
+		}
 	}
 
 	if value, ok = params["distinct"]; ok && value != nil {
+		if _, ok = value.(bool); ok == false {
+			msg := `invalid distinct type`
+			http.Error(w, jsonstr(msg), http.StatusBadRequest)
+			return
+		}
 		distinct = value.(bool)
 	}
 
 	if value, ok = params["limit"]; ok && value != nil {
+		if _, ok = value.(float64); ok == false {
+			msg := `invalid limit type`
+			http.Error(w, jsonstr(msg), http.StatusBadRequest)
+			return
+		}
 		limit = int64(value.(float64))
 	}
 
 	if value, ok = params["inclusion"]; ok && value != nil {
+		if _, ok = value.(string); ok == false {
+			msg := `invalid inclusion type`
+			http.Error(w, jsonstr(msg), http.StatusBadRequest)
+			return
+		}
 		inclusion = value.(string)
 	}
 
@@ -616,13 +664,18 @@ func (api *restServer) doRange(w http.ResponseWriter, request *http.Request) {
 		return
 	}
 	low, high := c.SecondaryKey(begin), c.SecondaryKey(end)
-	cons := stale2consistency(stale)
+	cons, ok := stale2consistency(stale)
+	if ok == false {
+		http.Error(w, jsonstr(`invalid stale option`), http.StatusBadRequest)
+		return
+	}
 
 	var skeys []c.SecondaryKey
 	var pkeys [][]byte
 
 	w.WriteHeader(http.StatusOK)
 
+	empty := true
 	err = nil
 	e := api.client.Range(
 		uint64(index.Definition.DefnId), "", low, high,
@@ -636,6 +689,7 @@ func (api *restServer) doRange(w http.ResponseWriter, request *http.Request) {
 			}
 			//nil means no more data
 			if skeys != nil {
+				empty = false
 				data, err := api.makeEntries(skeys, pkeys)
 				if err != nil {
 					w.Write([]byte(api.makeError(err)))
@@ -650,6 +704,8 @@ func (api *restServer) doRange(w http.ResponseWriter, request *http.Request) {
 	}
 	if err != nil {
 		w.Write([]byte(api.makeError(err)))
+	} else if empty {
+		w.Write([]byte("[]"))
 	}
 }
 
@@ -681,10 +737,19 @@ func (api *restServer) doMultiScan(w http.ResponseWriter, request *http.Request)
 		msg := "missing field ``scans``"
 		http.Error(w, jsonstr(msg), http.StatusBadRequest)
 		return
+	} else if _, ok = value.(string); ok == false {
+		msg := "invalid scans type"
+		http.Error(w, jsonstr(msg), http.StatusBadRequest)
+		return
 	}
 	scansParam := []byte(value.(string))
 
 	if value, ok = params["projection"]; ok && value != nil {
+		if _, ok = value.(string); ok == false {
+			msg := "invalid projection type"
+			http.Error(w, jsonstr(msg), http.StatusBadRequest)
+			return
+		}
 		projection, err = getProjection([]byte(value.(string)))
 		if err != nil {
 			msg := "invalid projection: %v"
@@ -694,22 +759,46 @@ func (api *restServer) doMultiScan(w http.ResponseWriter, request *http.Request)
 	}
 
 	if value, ok = params["reverse"]; ok && value != nil {
+		if _, ok = value.(bool); ok == false {
+			msg := "invalid reverse type"
+			http.Error(w, jsonstr(msg), http.StatusBadRequest)
+			return
+		}
 		reverse = value.(bool)
 	}
 
 	if value, ok = params["stale"]; ok && value != nil {
-		stale = value.(string)
+		if stale, ok = value.(string); ok == false {
+			msg := `stale expected as string`
+			http.Error(w, jsonstr(msg), http.StatusBadRequest)
+			return
+		}
 	}
 
 	if value, ok = params["distinct"]; ok && value != nil {
+		if _, ok = value.(bool); ok == false {
+			msg := `invalid distinct type`
+			http.Error(w, jsonstr(msg), http.StatusBadRequest)
+			return
+		}
 		distinct = value.(bool)
 	}
 
 	if value, ok = params["offset"]; ok && value != nil {
+		if _, ok = value.(float64); ok == false {
+			msg := `invalid offset type`
+			http.Error(w, jsonstr(msg), http.StatusBadRequest)
+			return
+		}
 		offset = int64(value.(float64))
 	}
 
 	if value, ok = params["limit"]; ok && value != nil {
+		if _, ok = value.(float64); ok == false {
+			msg := `invalid limit type`
+			http.Error(w, jsonstr(msg), http.StatusBadRequest)
+			return
+		}
 		limit = int64(value.(float64))
 	}
 
@@ -734,13 +823,18 @@ func (api *restServer) doMultiScan(w http.ResponseWriter, request *http.Request)
 		return
 	}
 
-	cons := stale2consistency(stale)
+	cons, ok := stale2consistency(stale)
+	if ok == false {
+		http.Error(w, jsonstr(`invalid stale option`), http.StatusBadRequest)
+		return
+	}
 
 	var skeys []c.SecondaryKey
 	var pkeys [][]byte
 
 	w.WriteHeader(http.StatusOK)
 
+	empty := true
 	err = nil
 	e := api.client.MultiScan(
 		uint64(index.Definition.DefnId), "", scans, reverse,
@@ -754,6 +848,7 @@ func (api *restServer) doMultiScan(w http.ResponseWriter, request *http.Request)
 			}
 			//nil means no more data
 			if skeys != nil {
+				empty = false
 				data, err := api.makeEntries(skeys, pkeys)
 				if err != nil {
 					w.Write([]byte(api.makeError(err)))
@@ -768,6 +863,8 @@ func (api *restServer) doMultiScan(w http.ResponseWriter, request *http.Request)
 	}
 	if err != nil {
 		w.Write([]byte(api.makeError(err)))
+	} else if empty {
+		w.Write([]byte("[]"))
 	}
 }
 
@@ -794,11 +891,20 @@ func (api *restServer) doScanall(w http.ResponseWriter, request *http.Request) {
 	}
 
 	if value, ok := params["limit"]; ok && value != nil {
+		if _, ok = value.(float64); ok == false {
+			msg := `invalid limit type`
+			http.Error(w, jsonstr(msg), http.StatusBadRequest)
+			return
+		}
 		limit = int64(value.(float64))
 	}
 
 	if value, ok := params["stale"]; ok && value != nil {
-		stale = value.(string)
+		if stale, ok = value.(string); ok == false {
+			msg := `stale expected as string`
+			http.Error(w, jsonstr(msg), http.StatusBadRequest)
+			return
+		}
 	}
 
 	if value, ok := params["timestamp"]; stale == "partial" {
@@ -815,13 +921,18 @@ func (api *restServer) doScanall(w http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	cons := stale2consistency(stale)
+	cons, ok := stale2consistency(stale)
+	if ok == false {
+		http.Error(w, jsonstr(`invalid stale option`), http.StatusBadRequest)
+		return
+	}
 
 	var skeys []c.SecondaryKey
 	var pkeys [][]byte
 
 	w.WriteHeader(http.StatusOK)
 
+	empty := true
 	err = nil
 	e := api.client.ScanAll(
 		uint64(index.Definition.DefnId), "", limit, cons, ts,
@@ -833,6 +944,7 @@ func (api *restServer) doScanall(w http.ResponseWriter, request *http.Request) {
 			}
 			//nil means no more data
 			if skeys != nil {
+				empty = false
 				data, err := api.makeEntries(skeys, pkeys)
 				if err != nil {
 					w.Write([]byte(api.makeError(err)))
@@ -847,6 +959,8 @@ func (api *restServer) doScanall(w http.ResponseWriter, request *http.Request) {
 	}
 	if err != nil {
 		w.Write([]byte(api.makeError(err)))
+	} else if empty {
+		w.Write([]byte("[]"))
 	}
 }
 
@@ -893,7 +1007,11 @@ func (api *restServer) doCount(w http.ResponseWriter, request *http.Request) {
 	}
 
 	if value, ok := params["stale"]; ok {
-		stale = value.(string)
+		if stale, ok = value.(string); ok == false {
+			msg := `stale expected as string`
+			http.Error(w, jsonstr(msg), http.StatusBadRequest)
+			return
+		}
 	}
 
 	if value, ok := params["timestamp"]; stale == "partial" {
@@ -923,7 +1041,11 @@ func (api *restServer) doCount(w http.ResponseWriter, request *http.Request) {
 		return
 	}
 	low, high := c.SecondaryKey(begin), c.SecondaryKey(end)
-	cons := stale2consistency(stale)
+	cons, ok := stale2consistency(stale)
+	if ok == false {
+		http.Error(w, jsonstr(`invalid stale option`), http.StatusBadRequest)
+		return
+	}
 
 	w.WriteHeader(http.StatusOK)
 
@@ -1059,8 +1181,9 @@ var mstale2consistency = map[string]c.Consistency{
 	"partial": c.QueryConsistency,
 }
 
-func stale2consistency(stale string) c.Consistency {
-	return mstale2consistency[stale]
+func stale2consistency(stale string) (c.Consistency, bool) {
+	cons, ok := mstale2consistency[stale]
+	return cons, ok
 }
 
 func incl2incl(inclusion string) qclient.Inclusion {

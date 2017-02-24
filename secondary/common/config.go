@@ -858,6 +858,13 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
+	"indexer.plasma.useMemMgmt": ConfigValue{
+		true,
+		"Use jemalloc based manual memory management",
+		true,
+		false, // mutable
+		false, // case-insensitive
+	},
 
 	//end of moi specific config
 
