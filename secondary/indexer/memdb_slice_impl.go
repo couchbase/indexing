@@ -1275,18 +1275,13 @@ func (s *memdbSnapshot) MultiScanCount(low, high IndexKey, inclusion Inclusion,
 				count = e.Count()
 			}
 
-			for i := 0; i < count; i++ {
-				if distinct && i > 0 {
-					break
-				}
-				scancount++
-			}
-
 			if checkDistinct {
+				scancount++
 				*previousRow = append((*previousRow)[:0], entry...)
+			} else {
+				scancount += uint64(count)
 			}
 		}
-
 		return nil
 	}
 
