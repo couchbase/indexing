@@ -31,6 +31,7 @@ var clusterconfig tc.ClusterConfiguration
 var dataFilePath, mutationFilePath string
 var defaultIndexActiveTimeout int64 = 600 // 10 mins to wait for index to become active
 var skipsetup bool
+var indexerLogLevel string
 
 func init() {
 	log.Printf("In init()")
@@ -40,6 +41,7 @@ func init() {
 	flag.StringVar(&configpath, "cbconfig", "../config/clusterrun_conf.json", "Path of the configuration file with data about Couchbase Cluster")
 	flag.StringVar(&secondaryindex.UseClient, "useclient", "gsi", "Client to be used for tests. Values can be gsi or n1ql")
 	flag.BoolVar(&skipsetup, "skipsetup", false, "Skip setup steps like flush and drop all indexes")
+	flag.StringVar(&indexerLogLevel, "loglevel", "info", "indexer.settings.log_level. info / debug")
 	flag.Parse()
 	clusterconfig = tc.GetClusterConfFromFile(configpath)
 	kvaddress = clusterconfig.KVAddress
@@ -60,6 +62,9 @@ func init() {
 	tc.HandleError(err, "Error in ChangeIndexerSettings")
 
 	err = secondaryindex.ChangeIndexerSettings("indexer.settings.persisted_snapshot.moi.interval", float64(60000), clusterconfig.Username, clusterconfig.Password, kvaddress)
+	tc.HandleError(err, "Error in ChangeIndexerSettings")
+
+	err = secondaryindex.ChangeIndexerSettings("indexer.settings.log_level", indexerLogLevel, clusterconfig.Username, clusterconfig.Password, kvaddress)
 	tc.HandleError(err, "Error in ChangeIndexerSettings")
 
 	if clusterconfig.IndexUsing != "" {
