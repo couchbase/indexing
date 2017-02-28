@@ -1289,10 +1289,12 @@ func (s *plasmaSnapshot) MultiScanCount(low, high IndexKey, inclusion Inclusion,
 	var scancount uint64
 	count := 1
 	checkDistinct := distinct && !s.isPrimary()
+
 	buf := secKeyBufPool.Get()
 	defer secKeyBufPool.Put(buf)
-	previousRow := secKeyBufPool.Get()
-	defer secKeyBufPool.Put(previousRow)
+	buf2 := secKeyBufPool.Get()
+	defer secKeyBufPool.Put(buf2)
+	previousRow := (*buf2)[:0]
 
 	callb := func(entry []byte) error {
 		select {
@@ -1311,7 +1313,7 @@ func (s *plasmaSnapshot) MultiScanCount(low, high IndexKey, inclusion Inclusion,
 			}
 
 			if checkDistinct {
-				if len(*previousRow) != 0 && distinctCompare(entry, *previousRow) {
+				if len(previousRow) != 0 && distinctCompare(entry, previousRow) {
 					return nil // Ignore the entry as it is same as previous entry
 				}
 			}
@@ -1323,14 +1325,13 @@ func (s *plasmaSnapshot) MultiScanCount(low, high IndexKey, inclusion Inclusion,
 
 			if checkDistinct {
 				scancount++
-				*previousRow = append((*previousRow)[:0], entry...)
+				previousRow = append(previousRow[:0], entry...)
 			} else {
 				scancount += uint64(count)
 			}
 		}
 		return nil
 	}
-
 	e := s.Range(low, high, inclusion, callb)
 	return scancount, e
 }

@@ -97,10 +97,12 @@ func (s *IndexScanSource) Routine() error {
 	currOffset := int64(0)
 	count := 1
 	checkDistinct := r.Distinct && !r.isPrimary
+
 	buf := secKeyBufPool.Get()
 	r.keyBufList = append(r.keyBufList, buf)
-	previousRow := secKeyBufPool.Get()
-	r.keyBufList = append(r.keyBufList, previousRow)
+	buf2 := secKeyBufPool.Get()
+	r.keyBufList = append(r.keyBufList, buf2)
+	previousRow := (*buf2)[:0]
 
 	fn := func(entry []byte) error {
 		skipRow := false
@@ -123,7 +125,7 @@ func (s *IndexScanSource) Routine() error {
 		}
 
 		if checkDistinct {
-			if len(*previousRow) != 0 && distinctCompare(entry, *previousRow) {
+			if len(previousRow) != 0 && distinctCompare(entry, previousRow) {
 				return nil // Ignore the entry as it is same as previous entry
 			}
 		}
@@ -152,7 +154,7 @@ func (s *IndexScanSource) Routine() error {
 		}
 
 		if checkDistinct {
-			*previousRow = append((*previousRow)[:0], entry...)
+			previousRow = append(previousRow[:0], entry...)
 		}
 
 		return nil
@@ -181,7 +183,6 @@ loop:
 			}
 		}
 	}
-
 	return nil
 }
 
