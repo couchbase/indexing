@@ -753,6 +753,178 @@ func (c *GsiScanClient) CountRangePrimary(
 	return countResp.GetCount(), nil
 }
 
+func (c *GsiScanClient) MultiScanCount(
+	defnID uint64, requestId string, scans Scans, distinct bool,
+	cons common.Consistency, vector *TsConsistency) (int64, error) {
+
+	// serialize scans
+	protoScans := make([]*protobuf.Scan, len(scans))
+	for i, scan := range scans {
+		if scan != nil {
+			var equals [][]byte
+			var filters []*protobuf.CompositeElementFilter
+
+			// If Seek is there, then do not marshall Range
+			if len(scan.Seek) > 0 {
+				equals = make([][]byte, len(scan.Seek))
+				for i, seek := range scan.Seek {
+					s, err := json.Marshal(seek)
+					if err != nil {
+						return 0, err
+					}
+					equals[i] = s
+				}
+			} else {
+				filters = make([]*protobuf.CompositeElementFilter, len(scan.Filter))
+				if scan.Filter != nil {
+					for j, f := range scan.Filter {
+						var l, h []byte
+						var err error
+						if f.Low != common.MinUnbounded { // Do not encode if unbounded
+							l, err = json.Marshal(f.Low)
+							if err != nil {
+								return 0, err
+							}
+						}
+						if f.High != common.MaxUnbounded { // Do not encode if unbounded
+							h, err = json.Marshal(f.High)
+							if err != nil {
+								return 0, err
+							}
+						}
+
+						fl := &protobuf.CompositeElementFilter{
+							Low: l, High: h, Inclusion: proto.Uint32(uint32(f.Inclusion)),
+						}
+
+						filters[j] = fl
+					}
+				}
+			}
+			s := &protobuf.Scan{
+				Filters: filters,
+				Equals:  equals,
+			}
+			protoScans[i] = s
+		}
+	}
+
+	req := &protobuf.CountRequest{
+		DefnID:    proto.Uint64(defnID),
+		RequestId: proto.String(requestId),
+		Span: &protobuf.Span{
+			Range: nil,
+		},
+		Distinct: proto.Bool(distinct),
+		Scans:    protoScans,
+		Cons:     proto.Uint32(uint32(cons)),
+	}
+
+	if vector != nil {
+		req.Vector = protobuf.NewTsConsistency(
+			vector.Vbnos, vector.Seqnos, vector.Vbuuids, vector.Crc64)
+	}
+
+	resp, err := c.doRequestResponse(req, requestId)
+	if err != nil {
+		return 0, err
+	}
+	countResp := resp.(*protobuf.CountResponse)
+	if countResp.GetErr() != nil {
+		err = errors.New(countResp.GetErr().GetError())
+		return 0, err
+	}
+	return countResp.GetCount(), nil
+}
+
+func (c *GsiScanClient) MultiScanCountPrimary(
+	defnID uint64, requestId string, scans Scans, distinct bool,
+	cons common.Consistency, vector *TsConsistency) (int64, error) {
+
+	var what string
+	// serialize scans
+	protoScans := make([]*protobuf.Scan, len(scans))
+	for i, scan := range scans {
+		if scan != nil {
+			var equals [][]byte
+			var filters []*protobuf.CompositeElementFilter
+
+			// If Seek is there, then ignore Range
+			if len(scan.Seek) > 0 {
+				equals = make([][]byte, 1)
+				var k []byte
+				key := scan.Seek[0]
+				if key != nil {
+					if k, what = curePrimaryKey(key); what == "after" {
+						return 0, nil
+					}
+				}
+				equals[0] = k
+
+			} else {
+				filters = make([]*protobuf.CompositeElementFilter, len(scan.Filter))
+				if scan.Filter != nil {
+					for j, f := range scan.Filter {
+						var l, h []byte
+						if f.Low != common.MinUnbounded { // Ignore if unbounded
+							if f.Low != nil {
+								if l, what = curePrimaryKey(f.Low); what == "after" {
+									return 0, nil
+								}
+							}
+						}
+						if f.High != common.MaxUnbounded { // Ignore if unbounded
+							if f.High != nil {
+								if h, what = curePrimaryKey(f.High); what == "before" {
+									return 0, nil
+								}
+							}
+						}
+
+						fl := &protobuf.CompositeElementFilter{
+							Low: l, High: h, Inclusion: proto.Uint32(uint32(f.Inclusion)),
+						}
+
+						filters[j] = fl
+					}
+				}
+			}
+			s := &protobuf.Scan{
+				Filters: filters,
+				Equals:  equals,
+			}
+			protoScans[i] = s
+		}
+	}
+
+	req := &protobuf.CountRequest{
+		DefnID:    proto.Uint64(defnID),
+		RequestId: proto.String(requestId),
+		Span: &protobuf.Span{
+			Range: nil,
+		},
+		Distinct: proto.Bool(distinct),
+		Scans:    protoScans,
+		Cons:     proto.Uint32(uint32(cons)),
+	}
+
+	if vector != nil {
+		req.Vector = protobuf.NewTsConsistency(
+			vector.Vbnos, vector.Seqnos, vector.Vbuuids, vector.Crc64)
+	}
+
+	resp, err := c.doRequestResponse(req, requestId)
+	if err != nil {
+		return 0, err
+	}
+	countResp := resp.(*protobuf.CountResponse)
+	if countResp.GetErr() != nil {
+		err = errors.New(countResp.GetErr().GetError())
+		return 0, err
+	}
+	return countResp.GetCount(), nil
+}
+
 func (c *GsiScanClient) Close() error {
 	return c.pool.Close()
 }

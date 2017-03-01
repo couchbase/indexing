@@ -47,11 +47,12 @@ func init() {
 type ScanReqType string
 
 const (
-	StatsReq   ScanReqType = "stats"
-	CountReq               = "count"
-	ScanReq                = "scan"
-	ScanAllReq             = "scanAll"
-	HeloReq                = "helo"
+	StatsReq          ScanReqType = "stats"
+	CountReq                      = "count"
+	ScanReq                       = "scan"
+	ScanAllReq                    = "scanAll"
+	HeloReq                       = "helo"
+	MultiScanCountReq             = "multiscancount"
 )
 
 type ScanRequest struct {
@@ -988,6 +989,12 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 			req.GetSpan().GetRange().GetLow(),
 			req.GetSpan().GetRange().GetHigh(),
 			req.GetSpan().GetEquals())
+		sc := req.GetScans()
+		if len(sc) != 0 {
+			fillScans(sc)
+			r.ScanType = MultiScanCountReq
+			r.Distinct = req.GetDistinct()
+		}
 
 	case *protobuf.ScanRequest:
 		r.DefnID = req.GetDefnID()
@@ -1259,6 +1266,8 @@ func (s *scanCoordinator) processRequest(req *ScanRequest, w ScanResponseWriter,
 		s.handleScanRequest(req, w, is, t0)
 	case CountReq:
 		s.handleCountRequest(req, w, is, t0)
+	case MultiScanCountReq:
+		s.handleMultiScanCountRequest(req, w, is, t0)
 	case StatsReq:
 		s.handleStatsRequest(req, w, is)
 	}
@@ -1336,6 +1345,46 @@ func (s *scanCoordinator) handleCountRequest(req *ScanRequest, w ScanResponseWri
 		}
 
 		rows += r
+	}
+
+	if s.tryRespondWithError(w, req, err) {
+		return
+	}
+
+	logging.Verbosef("%s RESPONSE count:%d status:ok", req.LogPrefix, rows)
+	err = w.Count(rows)
+	s.handleError(req.LogPrefix, err)
+}
+
+func (s *scanCoordinator) handleMultiScanCountRequest(req *ScanRequest, w ScanResponseWriter,
+	is IndexSnapshot, t0 time.Time) {
+	var rows uint64
+	var err error
+	stopch := make(StopChannel)
+	cancelCb := NewCancelCallback(req, func(e error) {
+		err = e
+		close(stopch)
+	})
+	cancelCb.Run()
+	defer cancelCb.Done()
+
+	for _, scan := range req.Scans {
+		for _, s := range GetSliceSnapshots(is) {
+			var r uint64
+			snap := s.Snapshot()
+			if scan.ScanType == AllReq {
+				r, err = snap.MultiScanCount(MinIndexKey, MaxIndexKey, Both, scan, req.Distinct, stopch)
+			} else if scan.ScanType == LookupReq || scan.ScanType == RangeReq ||
+				scan.ScanType == FilterRangeReq {
+				r, err = snap.MultiScanCount(scan.Low, scan.High, scan.Incl, scan, req.Distinct, stopch)
+			}
+
+			if err != nil {
+				break
+			}
+
+			rows += r
+		}
 	}
 
 	if s.tryRespondWithError(w, req, err) {

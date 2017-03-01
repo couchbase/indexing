@@ -500,6 +500,8 @@ type CountRequest struct {
 	Cons             *uint32        `protobuf:"varint,3,req,name=cons" json:"cons,omitempty"`
 	Vector           *TsConsistency `protobuf:"bytes,4,opt,name=vector" json:"vector,omitempty"`
 	RequestId        *string        `protobuf:"bytes,5,opt,name=requestId" json:"requestId,omitempty"`
+	Distinct         *bool          `protobuf:"varint,6,opt,name=distinct" json:"distinct,omitempty"`
+	Scans            []*Scan        `protobuf:"bytes,7,rep,name=scans" json:"scans,omitempty"`
 	XXX_unrecognized []byte         `json:"-"`
 }
 
@@ -540,6 +542,20 @@ func (m *CountRequest) GetRequestId() string {
 		return *m.RequestId
 	}
 	return ""
+}
+
+func (m *CountRequest) GetDistinct() bool {
+	if m != nil && m.Distinct != nil {
+		return *m.Distinct
+	}
+	return false
+}
+
+func (m *CountRequest) GetScans() []*Scan {
+	if m != nil {
+		return m.Scans
+	}
+	return nil
 }
 
 // total number of entries in index.

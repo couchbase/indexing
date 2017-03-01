@@ -768,6 +768,49 @@ func (si *secondaryIndex) RangeKey2() datastore.IndexKeys {
 	return nil
 }
 
+// Count2 implement CountIndex2 interface.
+func (si *secondaryIndex) Count2(requestId string, spans datastore.Spans2,
+	cons datastore.ScanConsistency, vector timestamp.Vector) (int64, errors.Error) {
+
+	if si == nil {
+		return 0, ErrorIndexEmpty
+	}
+	client := si.gsi.gsiClient
+
+	gsiscans := n1qlspanstogsi(spans)
+
+	count, e := client.MultiScanCount(si.defnID, requestId, gsiscans, false,
+		n1ql2GsiConsistency[cons], vector2ts(vector))
+	if e != nil {
+		return 0, n1qlError(client, e)
+	}
+	return count, nil
+}
+
+// CanCountDistinct implement CountIndex2 interface.
+func (si *secondaryIndex) CanCountDistinct() bool {
+	return true
+}
+
+// CountDistinct implement CountIndex2 interface.
+func (si *secondaryIndex) CountDistinct(requestId string, spans datastore.Spans2,
+	cons datastore.ScanConsistency, vector timestamp.Vector) (int64, errors.Error) {
+
+	if si == nil {
+		return 0, ErrorIndexEmpty
+	}
+	client := si.gsi.gsiClient
+
+	gsiscans := n1qlspanstogsi(spans)
+
+	count, e := client.MultiScanCount(si.defnID, requestId, gsiscans, true,
+		n1ql2GsiConsistency[cons], vector2ts(vector))
+	if e != nil {
+		return 0, n1qlError(client, e)
+	}
+	return count, nil
+}
+
 // Scan implement PrimaryIndex{} interface.
 func (si *secondaryIndex) ScanEntries(
 	requestId string, limit int64, cons datastore.ScanConsistency,

@@ -35,7 +35,7 @@ func TestIndexerSettings(t *testing.T) {
 	err = secondaryindex.ChangeIndexerSettings("indexer.settings.recovery.max_rollbacks", float64(3), clusterconfig.Username, clusterconfig.Password, kvaddress)
 	FailTestIfError(err, "Error in ChangeIndexerSettings", t)
 
-	// Indexer Log Level: "indexer.settings.log_level" : "debug",
+	// Indexer Log Level: "indexer.settings.log_level"
 	err = secondaryindex.ChangeIndexerSettings("indexer.settings.log_level", "error", clusterconfig.Username, clusterconfig.Password, kvaddress)
 	FailTestIfError(err, "Error in ChangeIndexerSettings", t)
 }
@@ -44,7 +44,7 @@ func TestRestoreDefaultSettings(t *testing.T) {
 	log.Printf("In TestIndexerSettings_RestoreDefault()")
 
 	// Indexer CPU Cores: "indexer.settings.max_cpu_percent"
-	err := secondaryindex.ChangeIndexerSettings("indexer.settings.max_cpu_percent", float64(400), clusterconfig.Username, clusterconfig.Password, kvaddress)
+	err := secondaryindex.ChangeIndexerSettings("indexer.settings.max_cpu_percent", float64(0), clusterconfig.Username, clusterconfig.Password, kvaddress)
 	FailTestIfError(err, "Error in ChangeIndexerSettings", t)
 
 	// In Memory Snapshot Interval: "indexer.settings.inmemory_snapshot.interval"
@@ -52,15 +52,15 @@ func TestRestoreDefaultSettings(t *testing.T) {
 	FailTestIfError(err, "Error in ChangeIndexerSettings", t)
 
 	// Stable Snapshot Interval: "indexer.settings.persisted_snapshot.interval"
-	err = secondaryindex.ChangeIndexerSettings("indexer.settings.persisted_snapshot.interval", float64(30000), clusterconfig.Username, clusterconfig.Password, kvaddress)
+	err = secondaryindex.ChangeIndexerSettings("indexer.settings.persisted_snapshot.interval", float64(5000), clusterconfig.Username, clusterconfig.Password, kvaddress)
 	FailTestIfError(err, "Error in ChangeIndexerSettings", t)
 
 	// Max Rollback Points:  "indexer.settings.recovery.max_rollbacks",
 	err = secondaryindex.ChangeIndexerSettings("indexer.settings.recovery.max_rollbacks", float64(5), clusterconfig.Username, clusterconfig.Password, kvaddress)
 	FailTestIfError(err, "Error in ChangeIndexerSettings", t)
 
-	// Indexer Log Level: "indexer.settings.log_level" : "debug",
-	err = secondaryindex.ChangeIndexerSettings("indexer.settings.log_level", "debug", clusterconfig.Username, clusterconfig.Password, kvaddress)
+	// Indexer Log Level: "indexer.settings.log_level",
+	err = secondaryindex.ChangeIndexerSettings("indexer.settings.log_level", indexerLogLevel, clusterconfig.Username, clusterconfig.Password, kvaddress)
 	FailTestIfError(err, "Error in ChangeIndexerSettings", t)
 }
 

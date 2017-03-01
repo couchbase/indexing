@@ -404,6 +404,31 @@ func Scans(indexName, bucketName, server string, scans qc.Scans, reverse, distin
 	return scanResults, nil
 }
 
+func MultiScanCount(indexName, bucketName, server string, scans qc.Scans, distinct bool,
+	consistency c.Consistency, vector *qc.TsConsistency) (int64, error) {
+
+	if UseClient == "n1ql" {
+		log.Printf("Using n1ql client")
+		return N1QLMultiScanCount(indexName, bucketName, server, scans, distinct,
+			consistency, vector)
+	}
+
+	// ToDo: Create a client pool
+	client, e := CreateClient(server, "2itest")
+	if e != nil {
+		return 0, e
+	}
+	defer client.Close()
+
+	defnID, _ := GetDefnID(client, bucketName, indexName)
+	count, err := client.MultiScanCount(defnID, "", scans, distinct, consistency, vector)
+	if err != nil {
+		return 0, err
+	} else {
+		return count, nil
+	}
+}
+
 func skey2Values(skey c.SecondaryKey) []value.Value {
 	vals := make([]value.Value, len(skey))
 	for i := 0; i < len(skey); i++ {

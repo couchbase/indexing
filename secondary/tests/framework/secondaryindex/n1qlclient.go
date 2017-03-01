@@ -200,6 +200,8 @@ func N1QLScans(indexName, bucketName, server string, scans qc.Scans, reverse, di
 		ordered := true
 		if useScan2 {
 			start = time.Now()
+			// TODO: pass the vector instead of nil.
+			// Currently go tests do not pass timestamp vector
 			index2.Scan2(requestid, spans2, reverse, distinct, ordered, proj,
 				offset, limit, cons, nil, conn)
 		} else {
@@ -211,6 +213,57 @@ func N1QLScans(indexName, bucketName, server string, scans qc.Scans, reverse, di
 	elapsed := time.Since(start)
 	tc.LogPerfStat("MultiScan", elapsed)
 	return results, nil
+}
+
+func N1QLMultiScanCount(indexName, bucketName, server string, scans qc.Scans, distinct bool,
+	consistency c.Consistency, vector *qc.TsConsistency) (int64, error) {
+	var count int64
+	client, err := nclient.NewGSIIndexer(server, "default", bucketName)
+	if err != nil {
+		return 0, err
+	}
+
+	requestid := getrequestid()
+	index, err := client.IndexByName(indexName)
+
+	var err1 error
+	index, err1 = WaitForIndexOnline(client, indexName, index)
+	if err1 != nil {
+		return 0, err1
+	}
+
+	index2, useScan2 := index.(datastore.CountIndex2)
+	if err != nil {
+		return 0, err
+	}
+
+	var start time.Time
+	spans2 := make(datastore.Spans2, len(scans))
+	for i, scan := range scans {
+		spans2[i] = &datastore.Span2{}
+		if len(scan.Seek) != 0 {
+			spans2[i].Seek = skey2qkey(scan.Seek)
+		}
+		spans2[i].Ranges = filtertoranges2(scan.Filter)
+	}
+
+	cons := getConsistency(consistency)
+	if useScan2 {
+		start = time.Now()
+		if distinct {
+			// TODO: pass the vector instead of nil.
+			// Currently go tests do not pass timestamp vector
+			count, err = index2.CountDistinct(requestid, spans2, cons, nil)
+		} else {
+			count, err = index2.Count2(requestid, spans2, cons, nil)
+		}
+	} else {
+		log.Fatalf("Indexer does not support CountIndex2 interface. Cannot call Count2 method.")
+	}
+
+	elapsed := time.Since(start)
+	tc.LogPerfStat("MultiScanCount", elapsed)
+	return count, err
 }
 
 func filtertoranges2(filters []*qc.CompositeElementFilter) datastore.Ranges2 {
@@ -299,6 +352,9 @@ func skey2qkey(skey c.SecondaryKey) value.Values {
 }
 
 func values2SKey(vals value.Values) c.SecondaryKey {
+	if len(vals) == 0 {
+		return nil
+	}
 	skey := make(c.SecondaryKey, 0, len(vals))
 	for _, val := range []value.Value(vals) {
 		skey = append(skey, val.Actual())
