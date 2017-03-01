@@ -1298,7 +1298,18 @@ func (m *ServiceMgr) updateRebalanceProgressLOCKED(progress float64) {
 }
 
 func (m *ServiceMgr) rebalanceDoneCallback(err error, cancel <-chan struct{}) {
-	m.runRebalanceCallback(cancel, func() { m.onRebalanceDoneLOCKED(err) })
+
+	m.runRebalanceCallback(cancel, func() {
+
+		if m.rebalancer != nil {
+			change := &m.rebalanceCtx.change
+			defer func() {
+				go notifyRebalanceDone(change, err != nil)
+			}()
+		}
+
+		m.onRebalanceDoneLOCKED(err)
+	})
 }
 
 func (m *ServiceMgr) onRebalanceDoneLOCKED(err error) {
@@ -1425,6 +1436,13 @@ func (m *ServiceMgr) copyStateLOCKED() state {
 }
 
 func (m *ServiceMgr) cancelActualTaskLOCKED(task *service.Task) error {
+	if m.rebalancer != nil {
+		change := &m.rebalanceCtx.change
+		defer func() {
+			go notifyRebalanceDone(change, true)
+		}()
+	}
+
 	switch task.Type {
 	case service.TaskTypePrepared:
 		return m.cancelPrepareTaskLOCKED()

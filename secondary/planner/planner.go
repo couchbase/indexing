@@ -191,6 +191,9 @@ type IndexUsage struct {
 	// input: node where index initially placed (optional)
 	initialNode *IndexerNode
 
+	// input: has the user tryign to delete the index?
+	pendingDelete bool
+
 	// mutable: hint for placement / constraint
 	suppressEquivIdxCheck bool
 }
@@ -705,17 +708,18 @@ func (p *SAPlanner) addReplicaIfNecessary(s *Solution) {
 
 	numLiveNode := s.findNumLiveNode()
 
-	// Check to see if it is needed to drop replica from a ejected node
+	// Check to see if it is needed to add replica
 	for _, indexer := range s.Placement {
 		addCandidates := make(map[*IndexUsage]*IndexerNode)
 
 		for _, index := range indexer.Indexes {
 			// If the number of replica in cluster is smaller than the desired number
 			// of replica (from index definition), and there is enough nodes in the
-			// cluster to host all the replica.
+			// cluster to host all the replica.  Also do not repair if the index
+			// could be deleted by user.
 			numReplica := s.findNumReplica(index)
 			if index.Instance != nil && int(index.Instance.Defn.NumReplica+1) > numReplica &&
-				numReplica < numLiveNode {
+				numReplica < numLiveNode && !index.pendingDelete {
 				addCandidates[index] = indexer
 			}
 		}

@@ -63,6 +63,7 @@ type IndexInstDistribution struct {
 	RState     uint32                  `json:"rRtate,omitempty"`
 	Version    uint64                  `json:"version,omitempty"`
 	ReplicaId  uint64                  `json:"replicaId,omitempty"`
+	Scheduled  bool                    `json:"scheduled,omitempty"`
 }
 
 type IndexPartDistribution struct {
@@ -105,6 +106,7 @@ type ServiceMap struct {
 	AdminAddr   string `json:"adminAddr,omitempty"`
 	NodeAddr    string `json:"nodeAddr,omitempty"`
 	ServerGroup string `json:"serverGroup,omitempty"`
+	NodeUUID    string `json:"nodeUUID,omitempty"`
 }
 
 /////////////////////////////////////////////////////////////////////////

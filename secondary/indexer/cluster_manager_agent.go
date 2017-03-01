@@ -229,6 +229,11 @@ func (c *clustMgrAgent) handleGetGlobalTopology(cmd Message) {
 		if e != nil {
 			common.CrashOnError(e)
 		}
+		if t == nil {
+			logging.Warnf("ClustMgr:handleGetGlobalTopology Index Instance Not "+
+				"Found For Index Definition %v. Ignored.", idxDefn)
+			continue
+		}
 
 		inst := t.GetIndexInstByDefn(idxDefn.DefnId)
 
@@ -245,6 +250,7 @@ func (c *clustMgrAgent) handleGetGlobalTopology(cmd Message) {
 			ReplicaId: int(inst.ReplicaId),
 			Version:   int(inst.Version),
 			RState:    common.RebalanceState(inst.RState),
+			Scheduled: inst.Scheduled,
 		}
 
 		indexInstMap[idxInst.InstId] = idxInst
@@ -471,8 +477,9 @@ func (meta *metaNotifier) OnIndexBuild(indexInstList []common.IndexInstId, bucke
 			err := res.(*MsgError).GetError()
 			errMap := make(map[common.IndexInstId]error)
 			for _, instId := range indexInstList {
-				errMap[instId] = errors.New(err.String())
+				errMap[instId] = &common.IndexerError{Reason: err.String(), Code: err.convertError()}
 			}
+
 			return errMap
 
 		default:
@@ -519,7 +526,7 @@ func (meta *metaNotifier) OnIndexDelete(instId common.IndexInstId, bucket string
 			logging.Errorf("clustMgrAgent::OnIndexDelete Error "+
 				"for Drop IndexId %v. Error %v", instId, res)
 			err := res.(*MsgError).GetError()
-			return err.cause
+			return &common.IndexerError{Reason: err.String(), Code: err.convertError()}
 
 		default:
 			logging.Fatalf("clustMgrAgent::OnIndexDelete Unknown Response "+

@@ -206,6 +206,7 @@ type IndexInst struct {
 	BuildTs   []uint64
 	Version   int
 	ReplicaId int
+	Scheduled bool
 }
 
 //IndexInstMap is a map from IndexInstanceId to IndexInstance
@@ -476,4 +477,34 @@ func IsEquivalentIndex(d1, d2 *IndexDefn) bool {
 	}
 
 	return true
+}
+
+//
+// IndexerError - Runtime Error between indexer and other modules
+//
+type IndexerErrCode int
+
+const (
+	TransientError IndexerErrCode = iota
+	IndexNotExist
+	InvalidBucket
+	IndexerInRecovery
+	IndexBuildInProgress
+	IndexerNotActive
+	RebalanceInProgress
+	IndexAlreadyExist
+	DropIndexInProgress
+)
+
+type IndexerError struct {
+	Reason string
+	Code   IndexerErrCode
+}
+
+func (e *IndexerError) Error() string {
+	return e.Reason
+}
+
+func (e *IndexerError) ErrCode() IndexerErrCode {
+	return e.Code
 }

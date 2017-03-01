@@ -167,7 +167,7 @@ func NewIndexManagerInternal(
 	}
 
 	// start lifecycle manager
-	mgr.lifecycleMgr.Run(mgr.repo)
+	mgr.lifecycleMgr.Run(mgr.repo, mgr.requestServer)
 
 	// register request handler
 	clusterAddr := config["clusterAddr"].String()
@@ -524,6 +524,9 @@ func (m *IndexManager) getBucketForCleanup() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	if globalTop == nil {
+		return result, nil
+	}
 
 	// iterate through each bucket
 	for _, key := range globalTop.TopologyKeys {
@@ -538,7 +541,7 @@ func (m *IndexManager) getBucketForCleanup() ([]string, error) {
 		}
 
 		topology, err := m.repo.GetTopologyByBucket(bucket)
-		if err == nil {
+		if err == nil && topology != nil {
 
 			definitions := make([]IndexDefnDistribution, len(topology.Definitions))
 			copy(definitions, topology.Definitions)
@@ -558,7 +561,7 @@ func (m *IndexManager) getBucketForCleanup() ([]string, error) {
 
 				// Check if this is a defer index from a non-existent bucket. If so, this could be a candidate
 				// for cleanup.
-				if defn, err := m.repo.GetIndexDefnById(common.IndexDefnId(defnRef.DefnId)); err == nil {
+				if defn, err := m.repo.GetIndexDefnById(common.IndexDefnId(defnRef.DefnId)); err == nil && defn != nil {
 					if defn.BucketUUID != currentUUID && defn.Deferred &&
 						defnRef.Instances[0].State != uint32(common.INDEX_STATE_DELETED) &&
 						common.StreamId(defnRef.Instances[0].StreamId) == common.NIL_STREAM {

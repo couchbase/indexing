@@ -242,7 +242,9 @@ func (c *MetadataRepo) GetIndexDefnById(id common.IndexDefnId) (*common.IndexDef
 
 	lookupName := indexDefnKeyById(id)
 	data, err := c.getMeta(lookupName)
-	if err != nil {
+	if err != nil && strings.Contains(err.Error(), "FDB_RESULT_KEY_NOT_FOUND") {
+		return nil, nil
+	} else if err != nil {
 		return nil, err
 	}
 
@@ -284,7 +286,9 @@ func (c *MetadataRepo) GetTopologyByBucket(bucket string) (*IndexTopology, error
 
 	lookupName := indexTopologyKey(bucket)
 	data, err := c.getMeta(lookupName)
-	if err != nil {
+	if err != nil && strings.Contains(err.Error(), "FDB_RESULT_KEY_NOT_FOUND") {
+		return nil, nil
+	} else if err != nil {
 		return nil, err
 	}
 
@@ -310,6 +314,8 @@ func (c *MetadataRepo) SetTopologyByBucket(bucket string, topology *IndexTopolog
 
 	lookupName := indexTopologyKey(bucket)
 	if err := c.setMeta(lookupName, data); err != nil {
+		// clear the cache if there is any error
+		delete(c.topoCache, bucket)
 		return err
 	}
 
@@ -327,7 +333,9 @@ func (c *MetadataRepo) GetGlobalTopology() (*GlobalTopology, error) {
 
 	lookupName := globalTopologyKey()
 	data, err := c.getMeta(lookupName)
-	if err != nil {
+	if err != nil && strings.Contains(err.Error(), "FDB_RESULT_KEY_NOT_FOUND") {
+		return nil, nil
+	} else if err != nil {
 		return nil, err
 	}
 
@@ -917,12 +925,14 @@ func unmarshallGlobalTopology(data []byte) (*GlobalTopology, error) {
 //
 // Add Index to Topology
 //
-func (m *MetadataRepo) addIndexToTopology(defn *common.IndexDefn, instId common.IndexInstId, replicaId int) error {
+func (m *MetadataRepo) addIndexToTopology(defn *common.IndexDefn, instId common.IndexInstId, replicaId int, scheduled bool) error {
 
 	// get existing topology
 	topology, err := m.GetTopologyByBucket(defn.Bucket)
 	if err != nil {
-		// TODO: Need to check what type of error before creating a new topologyi
+		return err
+	}
+	if topology == nil {
 		topology = new(IndexTopology)
 		topology.Bucket = defn.Bucket
 		topology.Version = 0
@@ -940,7 +950,7 @@ func (m *MetadataRepo) addIndexToTopology(defn *common.IndexDefn, instId common.
 
 	topology.AddIndexDefinition(defn.Bucket, defn.Name, uint64(defn.DefnId),
 		uint64(instId), uint32(common.INDEX_STATE_CREATED), string(indexerId),
-		uint64(defn.InstVersion), rState, uint64(replicaId))
+		uint64(defn.InstVersion), rState, uint64(replicaId), scheduled)
 
 	// Add a reference of the bucket-level topology to the global topology.
 	// If it fails later to create bucket-level topology, it will have
@@ -967,6 +977,9 @@ func (m *MetadataRepo) deleteIndexFromTopology(bucket string, id common.IndexDef
 	if err != nil {
 		return err
 	}
+	if topology == nil {
+		return nil
+	}
 
 	topology.RemoveIndexDefinitionById(id)
 
@@ -985,6 +998,9 @@ func (m *MetadataRepo) addToGlobalTopologyIfNecessary(bucket string) error {
 
 	globalTop, err := m.GetGlobalTopology()
 	if err != nil {
+		return err
+	}
+	if globalTop == nil {
 		globalTop = new(GlobalTopology)
 	}
 
