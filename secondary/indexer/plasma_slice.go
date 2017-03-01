@@ -173,35 +173,63 @@ func (slice *plasmaSlice) initStores() error {
 	cfg.AutoSwapper = true
 	cfg.LSSCleanerThreshold = 30
 
+	var mCfg, bCfg plasma.Config
+
+	mCfg = cfg
+	bCfg = cfg
+
+	bCfg.MaxPageItems = 300
+	bCfg.MaxDeltaChainLen = 30
+
 	if slice.hasPersistence {
-		cfg.File = filepath.Join(slice.path, "mainIndex")
+		mCfg.File = filepath.Join(slice.path, "mainIndex")
+		bCfg.File = filepath.Join(slice.path, "docIndex")
 	}
 
+	var wg sync.WaitGroup
+	var mErr, bErr error
 	t0 := time.Now()
-	slice.mainstore, err = plasma.New(cfg)
-	if err != nil {
-		return fmt.Errorf("Unable to initialize %s, err = %v", cfg.File, err)
-	}
-	slice.main = make([]*plasma.Writer, slice.numWriters)
-	for i := 0; i < slice.numWriters; i++ {
-		slice.main[i] = slice.mainstore.NewWriter()
-	}
+
+	// Recover mainindex
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+
+		slice.mainstore, err = plasma.New(mCfg)
+		if err != nil {
+			mErr = fmt.Errorf("Unable to initialize %s, err = %v", mCfg.File, err)
+			return
+		}
+
+		slice.main = make([]*plasma.Writer, slice.numWriters)
+		for i := 0; i < slice.numWriters; i++ {
+			slice.main[i] = slice.mainstore.NewWriter()
+		}
+	}()
 
 	if !slice.isPrimary {
-		cfg.MaxPageItems = 300
-		cfg.MaxDeltaChainLen = 30
-		if slice.hasPersistence {
-			cfg.File = filepath.Join(slice.path, "docIndex")
-		}
+		// Recover backindex
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			slice.backstore, err = plasma.New(bCfg)
+			if err != nil {
+				bErr = fmt.Errorf("Unable to initialize %s, err = %v", bCfg.File, err)
+				return
+			}
 
-		slice.backstore, err = plasma.New(cfg)
-		if err != nil {
-			return fmt.Errorf("Unable to initialize %s, err = %v", cfg.File, err)
-		}
-		slice.back = make([]*plasma.Writer, slice.numWriters)
-		for i := 0; i < slice.numWriters; i++ {
-			slice.back[i] = slice.backstore.NewWriter()
-		}
+			slice.back = make([]*plasma.Writer, slice.numWriters)
+			for i := 0; i < slice.numWriters; i++ {
+				slice.back[i] = slice.backstore.NewWriter()
+			}
+		}()
+	}
+
+	wg.Wait()
+	if mErr != nil {
+		return mErr
+	} else if bErr != nil {
+		return bErr
 	}
 
 	if !slice.newBorn {
@@ -923,16 +951,33 @@ func (mdb *plasmaSlice) Rollback(o SnapshotInfo) error {
 }
 
 func (mdb *plasmaSlice) restore(o SnapshotInfo) error {
+	var wg sync.WaitGroup
+	var mErr, bErr error
 	info := o.(*plasmaSnapshotInfo)
-	if s, err := mdb.mainstore.Rollback(info.mRP); err != nil {
-		s.Close()
-		return err
-	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if s, err := mdb.mainstore.Rollback(info.mRP); err != nil {
+			s.Close()
+			mErr = err
+		}
+	}()
 
 	if !mdb.isPrimary {
-		s, err := mdb.backstore.Rollback(info.bRP)
-		s.Close()
-		return err
+
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s, err := mdb.backstore.Rollback(info.bRP)
+			s.Close()
+			bErr = err
+		}()
+	}
+
+	wg.Wait()
+
+	if mErr != nil || bErr != nil {
+		return fmt.Errorf("Rollback error %v %v", mErr, bErr)
 	}
 
 	return nil
