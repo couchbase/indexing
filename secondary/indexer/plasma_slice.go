@@ -891,12 +891,8 @@ func (mdb *plasmaSlice) GetSnapshots() ([]SnapshotInfo, error) {
 }
 
 func (mdb *plasmaSlice) setCommittedCount() {
-	/*
-		prev := platform.LoadUint64(&mdb.committedCount)
-		curr := mdb.mainstore.ItemsCount()
-		platform.AddInt64(&totalplasmaItems, int64(curr)-int64(prev))
-		platform.StoreUint64(&mdb.committedCount, uint64(curr))
-	*/
+	curr := mdb.mainstore.ItemsCount()
+	platform.StoreUint64(&mdb.committedCount, uint64(curr))
 }
 
 func (mdb *plasmaSlice) GetCommittedCount() uint64 {
@@ -1259,7 +1255,7 @@ func (s *plasmaSnapshot) StatCountTotal() (uint64, error) {
 }
 
 func (s *plasmaSnapshot) CountTotal(stopch StopChannel) (uint64, error) {
-	return s.CountRange(MinIndexKey, MaxIndexKey, Both, stopch)
+	return uint64(s.MainSnap.Count()), nil
 }
 
 func (s *plasmaSnapshot) CountRange(low, high IndexKey, inclusion Inclusion,
