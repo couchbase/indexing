@@ -762,6 +762,7 @@ func (mdb *plasmaSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 
 	logging.Infof("plasmaSlice::OpenSnapshot SliceId %v IndexInstId %v Creating New "+
 		"Snapshot %v", mdb.id, mdb.idxInstId, snapInfo)
+	mdb.setCommittedCount()
 
 	return s, nil
 }
@@ -987,7 +988,6 @@ func (mdb *plasmaSlice) NewSnapshot(ts *common.TsVbuuid, commit bool) (SnapshotI
 		Ts:        ts,
 		Committed: commit,
 	}
-	mdb.setCommittedCount()
 
 	return newSnapshotInfo, nil
 }
