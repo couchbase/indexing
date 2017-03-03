@@ -1645,6 +1645,10 @@ func (fdb *fdbSlice) canRunCompaction(abortTime time.Time) bool {
 	return true
 }
 
+func (fdb *fdbSlice) GetReaderContext() IndexReaderContext {
+	return nil
+}
+
 func (fdb *fdbSlice) cancelCompact() {
 
 	logging.Infof("ForestDBSlice::cancelCompact Cancel Compaction Slice Id %v, "+

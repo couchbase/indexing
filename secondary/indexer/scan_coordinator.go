@@ -941,7 +941,7 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 		defer s.mu.RUnlock()
 
 		stats := s.stats.Get()
-		indexInst, localErr = s.findIndexInstance(r.DefnID)
+		indexInst, r.ctx, localErr = s.findIndexInstance(r.DefnID)
 		if localErr == nil {
 			r.isPrimary = indexInst.Defn.IsPrimary
 			r.IndexName, r.Bucket = indexInst.Defn.Name, indexInst.Defn.Bucket
@@ -953,6 +953,12 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 			r.Stats = stats.indexes[r.IndexInstId]
 		}
 	}
+
+	defer func() {
+		if r.ctx != nil {
+			r.ctx.Init()
+		}
+	}()
 
 	switch req := protoReq.(type) {
 	case *protobuf.HeloRequest:
@@ -1203,6 +1209,11 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, conn net.Conn,
 	ttime := time.Now()
 
 	req, err := s.newRequest(protoReq, cancelCh)
+	defer func() {
+		if req.ctx != nil {
+			req.ctx.Done()
+		}
+	}()
 
 	atime := time.Now()
 	w := NewProtoWriter(req.ScanType, conn)
@@ -1438,17 +1449,19 @@ func (s *scanCoordinator) handleStatsRequest(req *ScanRequest, w ScanResponseWri
 
 // Find and return data structures for the specified index
 func (s *scanCoordinator) findIndexInstance(
-	defnID uint64) (*common.IndexInst, error) {
+	defnID uint64) (*common.IndexInst, IndexReaderContext, error) {
 
 	for _, inst := range s.indexInstMap {
 		if inst.Defn.DefnId == common.IndexDefnId(defnID) {
-			if _, ok := s.indexPartnMap[inst.InstId]; ok {
-				return &inst, nil
+			if pmap, ok := s.indexPartnMap[inst.InstId]; ok {
+				ctx := pmap[0].Sc.GetSliceById(0).GetReaderContext()
+
+				return &inst, ctx, nil
 			}
-			return nil, ErrNotMyIndex
+			return nil, nil, ErrNotMyIndex
 		}
 	}
-	return nil, common.ErrIndexNotFound
+	return nil, nil, common.ErrIndexNotFound
 }
 
 func (s *scanCoordinator) handleUpdateIndexInstMap(cmd Message) {
