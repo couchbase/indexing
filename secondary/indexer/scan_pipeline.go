@@ -167,11 +167,11 @@ loop:
 		currentScan = scan
 		for _, snap := range sliceSnapshots {
 			if scan.ScanType == AllReq {
-				err = snap.Snapshot().All(fn)
+				err = snap.Snapshot().All(r.ctx, fn)
 			} else if scan.ScanType == LookupReq {
-				err = snap.Snapshot().Lookup(scan.Equals, fn)
+				err = snap.Snapshot().Lookup(r.ctx, scan.Equals, fn)
 			} else if scan.ScanType == RangeReq || scan.ScanType == FilterRangeReq {
-				err = snap.Snapshot().Range(scan.Low, scan.High, scan.Incl, fn)
+				err = snap.Snapshot().Range(r.ctx, scan.Low, scan.High, scan.Incl, fn)
 			}
 			switch err {
 			case nil:
