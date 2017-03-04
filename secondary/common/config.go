@@ -872,8 +872,92 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.plasma.LSSSegmentFileSize": ConfigValue{
+		4294967296,
+		"LSS log segment maxsize per file",
+		4294967296,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.useMmapReads": ConfigValue{
+		false,
+		"Use mmap for reads",
+		false,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.mainIndex.maxNumPageDeltas": ConfigValue{
+		200,
+		"Maximum number of page deltas",
+		200,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.mainIndex.pageSplitThreshold": ConfigValue{
+		400,
+		"Threshold for triggering page split",
+		400,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.mainIndex.pageMergeThreshold": ConfigValue{
+		25,
+		"Threshold for triggering page merge",
+		25,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.mainIndex.maxLSSPageSegments": ConfigValue{
+		4,
+		"Maximum number of page segments on LSS for a page",
+		4,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.mainIndex.LSSFragmentation": ConfigValue{
+		30,
+		"Desired LSS fragmentation percent",
+		30,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.backIndex.maxNumPageDeltas": ConfigValue{
+		30,
+		"Maximum number of page deltas",
+		30,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.backIndex.pageSplitThreshold": ConfigValue{
+		300,
+		"Threshold for triggering page split",
+		300,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.backIndex.pageMergeThreshold": ConfigValue{
+		5,
+		"Threshold for triggering page merge",
+		5,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.backIndex.maxLSSPageSegments": ConfigValue{
+		4,
+		"Maximum number of page segments on LSS for a page",
+		4,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.backIndex.LSSFragmentation": ConfigValue{
+		30,
+		"Desired LSS fragmentation percent",
+		30,
+		false, // mutable
+		false, // case-insensitive
+	},
 
-	//end of moi specific config
+	//end of plasma specific config
 
 	"indexer.mutation_queue.dequeuePollInterval": ConfigValue{
 		uint64(1),

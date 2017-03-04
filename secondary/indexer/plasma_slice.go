@@ -87,7 +87,6 @@ type plasmaSlice struct {
 	arrayBuf2 [][]byte
 
 	hasPersistence bool
-	useMM          bool
 }
 
 func NewPlasmaSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
@@ -117,7 +116,6 @@ func NewPlasmaSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	slice.id = sliceId
 	slice.numWriters = sysconf["numSliceWriters"].Int()
 	slice.hasPersistence = !sysconf["plasma.disablePersistence"].Bool()
-	slice.useMM = sysconf["plasma.useMemMgmt"].Bool()
 
 	// FIXME: Enable rollback config
 	// slice.maxRollbacks = sysconf["settings.recovery.max_rollbacks"].Int()
@@ -170,18 +168,28 @@ func NewPlasmaSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 func (slice *plasmaSlice) initStores() error {
 	var err error
 	cfg := plasma.DefaultConfig()
-	cfg.UseMemoryMgmt = slice.useMM
+	cfg.UseMemoryMgmt = slice.sysconf["plasma.useMemMgmt"].Bool()
 	cfg.FlushBufferSize = int(slice.sysconf["plasma.flushBufferSize"].Int())
+	cfg.LSSLogSegmentSize = int64(slice.sysconf["plasma.LSSSegmentFileSize"].Int())
+	cfg.UseMmap = slice.sysconf["plasma.useMmapReads"].Bool()
 	cfg.AutoSwapper = true
-	cfg.LSSCleanerThreshold = 30
 
 	var mCfg, bCfg plasma.Config
 
 	mCfg = cfg
 	bCfg = cfg
 
-	bCfg.MaxPageItems = 300
-	bCfg.MaxDeltaChainLen = 30
+	mCfg.MaxDeltaChainLen = slice.sysconf["plasma.mainIndex.maxNumPageDeltas"].Int()
+	mCfg.MaxPageItems = slice.sysconf["plasma.mainIndex.pageSplitThreshold"].Int()
+	mCfg.MinPageItems = slice.sysconf["plasma.mainIndex.pageMergeThreshold"].Int()
+	mCfg.MaxPageLSSSegments = slice.sysconf["plasma.mainIndex.maxLSSPageSegments"].Int()
+	mCfg.LSSCleanerThreshold = slice.sysconf["plasma.mainIndex.LSSFragmentation"].Int()
+
+	bCfg.MaxDeltaChainLen = slice.sysconf["plasma.backIndex.maxNumPageDeltas"].Int()
+	bCfg.MaxPageItems = slice.sysconf["plasma.backIndex.pageSplitThreshold"].Int()
+	bCfg.MinPageItems = slice.sysconf["plasma.backIndex.pageMergeThreshold"].Int()
+	bCfg.MaxPageLSSSegments = slice.sysconf["plasma.backIndex.maxLSSPageSegments"].Int()
+	bCfg.LSSCleanerThreshold = slice.sysconf["plasma.backIndex.LSSFragmentation"].Int()
 
 	if slice.hasPersistence {
 		mCfg.File = filepath.Join(slice.path, "mainIndex")
