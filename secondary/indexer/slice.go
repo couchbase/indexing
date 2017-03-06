@@ -42,4 +42,5 @@ type Slice interface {
 	UpdateConfig(common.Config)
 
 	IndexWriter
+	GetReaderContext() IndexReaderContext
 }

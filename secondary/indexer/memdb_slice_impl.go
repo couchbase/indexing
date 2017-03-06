@@ -1077,6 +1077,10 @@ func (mdb *memdbSlice) UpdateConfig(cfg common.Config) {
 	mdb.sysconf = cfg
 }
 
+func (mdb *memdbSlice) GetReaderContext() IndexReaderContext {
+	return nil
+}
+
 func (mdb *memdbSlice) String() string {
 
 	str := fmt.Sprintf("SliceId: %v ", mdb.id)
@@ -1212,11 +1216,11 @@ func (s *memdbSnapshot) StatCountTotal() (uint64, error) {
 	return c, nil
 }
 
-func (s *memdbSnapshot) CountTotal(stopch StopChannel) (uint64, error) {
+func (s *memdbSnapshot) CountTotal(ctx IndexReaderContext, stopch StopChannel) (uint64, error) {
 	return uint64(s.info.MainSnap.Count()), nil
 }
 
-func (s *memdbSnapshot) CountRange(low, high IndexKey, inclusion Inclusion,
+func (s *memdbSnapshot) CountRange(ctx IndexReaderContext, low, high IndexKey, inclusion Inclusion,
 	stopch StopChannel) (uint64, error) {
 
 	var count uint64
@@ -1231,11 +1235,11 @@ func (s *memdbSnapshot) CountRange(low, high IndexKey, inclusion Inclusion,
 		return nil
 	}
 
-	err := s.Range(low, high, inclusion, callb)
+	err := s.Range(ctx, low, high, inclusion, callb)
 	return count, err
 }
 
-func (s *memdbSnapshot) MultiScanCount(low, high IndexKey, inclusion Inclusion,
+func (s *memdbSnapshot) MultiScanCount(ctx IndexReaderContext, low, high IndexKey, inclusion Inclusion,
 	scan Scan, distinct bool,
 	stopch StopChannel) (uint64, error) {
 
@@ -1287,11 +1291,11 @@ func (s *memdbSnapshot) MultiScanCount(low, high IndexKey, inclusion Inclusion,
 		return nil
 	}
 
-	e := s.Range(low, high, inclusion, callb)
+	e := s.Range(ctx, low, high, inclusion, callb)
 	return scancount, e
 }
 
-func (s *memdbSnapshot) CountLookup(keys []IndexKey, stopch StopChannel) (uint64, error) {
+func (s *memdbSnapshot) CountLookup(ctx IndexReaderContext, keys []IndexKey, stopch StopChannel) (uint64, error) {
 	var err error
 	var count uint64
 
@@ -1307,7 +1311,7 @@ func (s *memdbSnapshot) CountLookup(keys []IndexKey, stopch StopChannel) (uint64
 	}
 
 	for _, k := range keys {
-		if err = s.Lookup(k, callb); err != nil {
+		if err = s.Lookup(ctx, k, callb); err != nil {
 			break
 		}
 	}
@@ -1315,7 +1319,7 @@ func (s *memdbSnapshot) CountLookup(keys []IndexKey, stopch StopChannel) (uint64
 	return count, err
 }
 
-func (s *memdbSnapshot) Exists(key IndexKey, stopch StopChannel) (bool, error) {
+func (s *memdbSnapshot) Exists(ctx IndexReaderContext, key IndexKey, stopch StopChannel) (bool, error) {
 	var count uint64
 	callb := func([]byte) error {
 		select {
@@ -1328,15 +1332,15 @@ func (s *memdbSnapshot) Exists(key IndexKey, stopch StopChannel) (bool, error) {
 		return nil
 	}
 
-	err := s.Lookup(key, callb)
+	err := s.Lookup(ctx, key, callb)
 	return count != 0, err
 }
 
-func (s *memdbSnapshot) Lookup(key IndexKey, callb EntryCallback) error {
-	return s.Iterate(key, key, Both, compareExact, callb)
+func (s *memdbSnapshot) Lookup(ctx IndexReaderContext, key IndexKey, callb EntryCallback) error {
+	return s.Iterate(ctx, key, key, Both, compareExact, callb)
 }
 
-func (s *memdbSnapshot) Range(low, high IndexKey, inclusion Inclusion,
+func (s *memdbSnapshot) Range(ctx IndexReaderContext, low, high IndexKey, inclusion Inclusion,
 	callb EntryCallback) error {
 
 	var cmpFn CmpEntry
@@ -1346,14 +1350,14 @@ func (s *memdbSnapshot) Range(low, high IndexKey, inclusion Inclusion,
 		cmpFn = comparePrefix
 	}
 
-	return s.Iterate(low, high, inclusion, cmpFn, callb)
+	return s.Iterate(ctx, low, high, inclusion, cmpFn, callb)
 }
 
-func (s *memdbSnapshot) All(callb EntryCallback) error {
-	return s.Range(MinIndexKey, MaxIndexKey, Both, callb)
+func (s *memdbSnapshot) All(ctx IndexReaderContext, callb EntryCallback) error {
+	return s.Range(ctx, MinIndexKey, MaxIndexKey, Both, callb)
 }
 
-func (s *memdbSnapshot) Iterate(low, high IndexKey, inclusion Inclusion,
+func (s *memdbSnapshot) Iterate(ctx IndexReaderContext, low, high IndexKey, inclusion Inclusion,
 	cmpFn CmpEntry, callback EntryCallback) error {
 	var entry IndexEntry
 	var err error

@@ -1,5 +1,10 @@
 #!/bin/bash
 
-cd
-go run ~buildbot/bin/perfstat.go /var/www/watson-*.pass.html > /tmp/timing.html
-cat /tmp/timing.html > /var/www/watson-timing.html
+if [ "$STORAGE" = "" ]; then
+  echo 'STORAGE not set'
+  exit 2
+fi
+
+cd /home/buildbot/bin
+go run perfstat.go /var/www/gsi-$STORAGE-*.perf.html > /tmp/timing.html
+cat /tmp/timing.html > /var/www/timing-$STORAGE.html

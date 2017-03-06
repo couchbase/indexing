@@ -68,6 +68,8 @@ type ScanRequest struct {
 	Consistency *common.Consistency
 	Stats       *IndexStats
 
+	ctx IndexReaderContext
+
 	// user supplied
 	LowBytes, HighBytes []byte
 	KeysBytes           [][]byte
@@ -939,7 +941,7 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 		defer s.mu.RUnlock()
 
 		stats := s.stats.Get()
-		indexInst, localErr = s.findIndexInstance(r.DefnID)
+		indexInst, r.ctx, localErr = s.findIndexInstance(r.DefnID)
 		if localErr == nil {
 			r.isPrimary = indexInst.Defn.IsPrimary
 			r.IndexName, r.Bucket = indexInst.Defn.Name, indexInst.Defn.Bucket
@@ -951,6 +953,12 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 			r.Stats = stats.indexes[r.IndexInstId]
 		}
 	}
+
+	defer func() {
+		if r.ctx != nil {
+			r.ctx.Init()
+		}
+	}()
 
 	switch req := protoReq.(type) {
 	case *protobuf.HeloRequest:
@@ -1201,6 +1209,11 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, conn net.Conn,
 	ttime := time.Now()
 
 	req, err := s.newRequest(protoReq, cancelCh)
+	defer func() {
+		if req.ctx != nil {
+			req.ctx.Done()
+		}
+	}()
 
 	atime := time.Now()
 	w := NewProtoWriter(req.ScanType, conn)
@@ -1333,11 +1346,11 @@ func (s *scanCoordinator) handleCountRequest(req *ScanRequest, w ScanResponseWri
 		var r uint64
 		snap := s.Snapshot()
 		if len(req.Keys) > 0 {
-			r, err = snap.CountLookup(req.Keys, stopch)
+			r, err = snap.CountLookup(req.ctx, req.Keys, stopch)
 		} else if req.Low.Bytes() == nil && req.High.Bytes() == nil {
-			r, err = snap.CountTotal(stopch)
+			r, err = snap.CountTotal(req.ctx, stopch)
 		} else {
-			r, err = snap.CountRange(req.Low, req.High, req.Incl, stopch)
+			r, err = snap.CountRange(req.ctx, req.Low, req.High, req.Incl, stopch)
 		}
 
 		if err != nil {
@@ -1373,10 +1386,10 @@ func (s *scanCoordinator) handleMultiScanCountRequest(req *ScanRequest, w ScanRe
 			var r uint64
 			snap := s.Snapshot()
 			if scan.ScanType == AllReq {
-				r, err = snap.MultiScanCount(MinIndexKey, MaxIndexKey, Both, scan, req.Distinct, stopch)
+				r, err = snap.MultiScanCount(req.ctx, MinIndexKey, MaxIndexKey, Both, scan, req.Distinct, stopch)
 			} else if scan.ScanType == LookupReq || scan.ScanType == RangeReq ||
 				scan.ScanType == FilterRangeReq {
-				r, err = snap.MultiScanCount(scan.Low, scan.High, scan.Incl, scan, req.Distinct, stopch)
+				r, err = snap.MultiScanCount(req.ctx, scan.Low, scan.High, scan.Incl, scan, req.Distinct, stopch)
 			}
 
 			if err != nil {
@@ -1415,7 +1428,7 @@ func (s *scanCoordinator) handleStatsRequest(req *ScanRequest, w ScanResponseWri
 		if req.Low.Bytes() == nil && req.Low.Bytes() == nil {
 			r, err = snap.StatCountTotal()
 		} else {
-			r, err = snap.CountRange(req.Low, req.High, req.Incl, stopch)
+			r, err = snap.CountRange(req.ctx, req.Low, req.High, req.Incl, stopch)
 		}
 
 		if err != nil {
@@ -1436,17 +1449,19 @@ func (s *scanCoordinator) handleStatsRequest(req *ScanRequest, w ScanResponseWri
 
 // Find and return data structures for the specified index
 func (s *scanCoordinator) findIndexInstance(
-	defnID uint64) (*common.IndexInst, error) {
+	defnID uint64) (*common.IndexInst, IndexReaderContext, error) {
 
 	for _, inst := range s.indexInstMap {
 		if inst.Defn.DefnId == common.IndexDefnId(defnID) {
-			if _, ok := s.indexPartnMap[inst.InstId]; ok {
-				return &inst, nil
+			if pmap, ok := s.indexPartnMap[inst.InstId]; ok {
+				ctx := pmap[0].Sc.GetSliceById(0).GetReaderContext()
+
+				return &inst, ctx, nil
 			}
-			return nil, ErrNotMyIndex
+			return nil, nil, ErrNotMyIndex
 		}
 	}
-	return nil, common.ErrIndexNotFound
+	return nil, nil, common.ErrIndexNotFound
 }
 
 func (s *scanCoordinator) handleUpdateIndexInstMap(cmd Message) {

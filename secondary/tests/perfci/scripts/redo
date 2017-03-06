@@ -1,6 +1,0 @@
-#!/bin/bash
-cd /home/buildbot/bin
-kick
-sleep 3
-build &
-
