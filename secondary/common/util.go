@@ -577,11 +577,14 @@ func IndexStatement(def IndexDefn, printNodes bool) string {
 		stmt = fmt.Sprintf(primCreate, def.Name, def.Bucket)
 	} else {
 		exprs := ""
-		for _, exp := range def.SecExprs {
+		for i, exp := range def.SecExprs {
 			if exprs != "" {
 				exprs += ","
 			}
 			exprs += exp
+			if def.Desc != nil && def.Desc[i] {
+				exprs += " DESC"
+			}
 		}
 		stmt = fmt.Sprintf(secCreate, def.Name, def.Bucket, exprs)
 		if def.WhereExpr != "" {
