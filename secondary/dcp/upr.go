@@ -479,6 +479,7 @@ func purgeFeed(nodeFeeds []*FeedInfo, singleFeed *FeedInfo) []*FeedInfo {
 	name := singleFeed.dcpFeed.Name()
 	for i, nodeFeed := range nodeFeeds {
 		if nodeFeed.dcpFeed.Name() == name {
+			nodeFeed.dcpFeed.Close()
 			copy(nodeFeeds[i:], nodeFeeds[i+1:])
 			return nodeFeeds[:len(nodeFeeds)-1]
 		}
