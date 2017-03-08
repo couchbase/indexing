@@ -99,7 +99,7 @@ func js(mtx *aggmtx, agg *aggstats) string {
 			}
 		}
 
-		buf.Printf("var options_%v = {title:'%v', curveType:'function', legend:{position:'right'}, hAxis:{showTextEvery:%v}};\n", lbl, prettyName(test), lint)
+		buf.Printf("var options_%v = {title:'%v', curveType:'none', legend:{position:'right'}, hAxis:{showTextEvery:%v}};\n", lbl, prettyName(test), lint)
 		buf.Printf("var chart_%v = new google.visualization.LineChart(document.getElementById('curve_chart_%v'));\n", lbl, lbl)
 		buf.Printf("chart_%v.draw(data_%v, options_%v);\n", lbl, lbl, lbl)
 		buf.Printf("google.visualization.events.addListener(chart_%v, 'select', function() {\n", lbl)
