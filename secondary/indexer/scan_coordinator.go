@@ -582,7 +582,7 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 		joinLowKey, joinHighKey := true, true
 
 		//for desc leading key, reverse high/low and flip bits
-		if r.IndexInst.Defn.Desc!=nil && r.IndexInst.Defn.Desc[0] {
+		if r.IndexInst.Defn.Desc != nil && r.IndexInst.Defn.Desc[0] {
 
 			if compFilters[0].High == MaxIndexKey &&
 				compFilters[0].Low == MinIndexKey {
@@ -677,10 +677,10 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 			equals = append(equals, key.Bytes())
 		}
 
-		var equals2 [][]byte
-		equals2 = append(equals2, equals[0])
+		equals2 := make([][]byte, 1)
+		equals2[0] = append(equals2[0], equals[0]...)
 
-		if r.IndexInst.Defn.Desc!=nil && r.IndexInst.Defn.Desc[0] {
+		if r.IndexInst.Defn.Desc != nil && r.IndexInst.Defn.Desc[0] {
 			FlipBits(equals2[0])
 		}
 		codec := collatejson.NewCodec(16)
@@ -709,6 +709,7 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 		filter.High = &eqKey
 		filter.Inclusion = Both
 		filter.CompositeFilters = compFilters
+
 		return nil
 	}
 
