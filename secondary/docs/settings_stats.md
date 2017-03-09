@@ -1,4 +1,4 @@
-## Indes Status
+## Index Status
 
 ### Status can be obtained from:
 
