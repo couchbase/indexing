@@ -795,6 +795,7 @@ func (mdb *plasmaSlice) checkFatalDbError(err error) {
 type plasmaSnapshotInfo struct {
 	Ts        *common.TsVbuuid
 	Committed bool
+	Count     int64
 
 	mRP, bRP *plasma.RecoveryPoint
 }
@@ -1089,6 +1090,7 @@ func (mdb *plasmaSlice) NewSnapshot(ts *common.TsVbuuid, commit bool) (SnapshotI
 	newSnapshotInfo := &plasmaSnapshotInfo{
 		Ts:        ts,
 		Committed: commit,
+		Count:     mdb.mainstore.ItemsCount(),
 	}
 
 	return newSnapshotInfo, nil
@@ -1285,7 +1287,7 @@ func (info *plasmaSnapshotInfo) IsCommitted() bool {
 }
 
 func (info *plasmaSnapshotInfo) String() string {
-	return fmt.Sprintf("SnapshotInfo: count:%v committed:%v", 0, info.Committed)
+	return fmt.Sprintf("SnapshotInfo: count:%v committed:%v", info.Count, info.Committed)
 }
 
 func (s *plasmaSnapshot) Create() error {
