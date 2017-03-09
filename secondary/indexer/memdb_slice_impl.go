@@ -1269,14 +1269,27 @@ func (s *memdbSnapshot) MultiScanCount(ctx IndexReaderContext, low, high IndexKe
 	buf2 := secKeyBufPool.Get()
 	defer secKeyBufPool.Put(buf2)
 	previousRow := (*buf2)[:0]
+	revbuf := secKeyBufPool.Get()
+	defer secKeyBufPool.Put(revbuf)
 
 	callb := func(entry []byte) error {
 		select {
 		case <-stopch:
 			return common.ErrClientCancel
 		default:
+
 			skipRow := false
 			if scan.ScanType == FilterRangeReq {
+
+				//get the key in original format
+				if s.slice.idxDefn.Desc != nil {
+					revbuf := (*revbuf)[:0]
+					//copy is required, otherwise storage may get updated
+					revbuf = append(revbuf, entry...)
+					jsonEncoder.ReverseCollate(revbuf, s.slice.idxDefn.Desc)
+					entry = revbuf
+				}
+
 				skipRow, _, err = filterScanRow(entry, scan, (*buf)[:0])
 				if err != nil {
 					return err
