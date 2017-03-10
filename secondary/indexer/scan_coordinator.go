@@ -98,7 +98,6 @@ type ScanRequest struct {
 	keyBufList []*[]byte
 }
 
-// Revisit Scan in the end
 type Scan struct {
 	Low      IndexKey  // Overall Low for a Span. Computed from composite filters (Ranges)
 	High     IndexKey  // Overall High for a Span. Computed from composite filters (Ranges)
@@ -143,6 +142,7 @@ type CompositeElementFilter struct {
 type IndexPoint struct {
 	Value    IndexKey
 	FilterId int
+	Type     string
 }
 
 // Implements sort Interface
@@ -156,11 +156,51 @@ func (ip IndexPoints) Swap(i, j int) {
 	ip[i], ip[j] = ip[j], ip[i]
 }
 
-// TODO: Replace the below comparisons with
-// IndexKey to IndexKey comparison method
-// which needs to be added
 func (ip IndexPoints) Less(i, j int) bool {
-	return IndexKeyLessThan(ip[i].Value, ip[j].Value)
+	return IndexPointLessThan(ip[i], ip[j])
+}
+
+// Return true if x < y
+func IndexPointLessThan(x, y IndexPoint) bool {
+	a := x.Value
+	b := y.Value
+	if a == MinIndexKey {
+		return true
+	} else if a == MaxIndexKey {
+		return false
+	} else if b == MinIndexKey {
+		return false
+	} else if b == MaxIndexKey {
+		return true
+	}
+
+	if a.ComparePrefixIndexKey(b) < 0 {
+		return true
+	} else if a.ComparePrefixIndexKey(b) == 0 {
+		if len(a.Bytes()) == len(b.Bytes()) {
+			return false
+		}
+		inclusiveKey := minlen(x, y)
+		switch inclusiveKey.Type {
+		case "low":
+			if inclusiveKey == x {
+				return true
+			}
+		case "high":
+			if inclusiveKey == y {
+				return true
+			}
+		}
+		return false
+	}
+	return false
+}
+
+func minlen(x, y IndexPoint) IndexPoint {
+	if len(x.Value.Bytes()) < len(y.Value.Bytes()) {
+		return x
+	}
+	return y
 }
 
 // Return true if a < b
@@ -553,6 +593,35 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 		}
 	}
 
+	joinKeys := func(keys [][]byte) ([]byte, error) {
+		buf1 := secKeyBufPool.Get()
+		r.keyBufList = append(r.keyBufList, buf1)
+
+		joined, e := jsonEncoder.JoinArray(keys, (*buf1)[:0])
+		if e != nil {
+			e = fmt.Errorf("Error in joining keys: %s", e)
+			return nil, e
+		}
+		return joined, nil
+	}
+
+	getReverseCollatedIndexKey := func(input []byte, desc []bool) IndexKey {
+		reversed := jsonEncoder.ReverseCollate(input, desc)
+		key := secondaryKey(reversed)
+		return &key
+	}
+
+	flipInclusion := func(incl Inclusion, desc []bool) Inclusion {
+		if desc != nil && desc[0] {
+			if incl == Low {
+				return High
+			} else if incl == High {
+				return Low
+			}
+		}
+		return incl
+	}
+
 	getScanAll := func() Scan {
 		s := Scan{
 			ScanType: AllReq,
@@ -574,90 +643,127 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 	// Compute the overall low, high for a Filter
 	// based on composite filter ranges
 	fillFilterLowHigh := func(compFilters []CompositeElementFilter, filter *Filter) error {
-		var lows, highs [][]byte
-		var l, h []byte
-		var cfLow, cfHigh IndexKey
-		var e error
-		var flipLow, flipHigh bool
-		joinLowKey, joinHighKey := true, true
+		if !r.IndexInst.Defn.HasDescending() {
+			var lows, highs [][]byte
+			var e error
+			joinLowKey, joinHighKey := true, true
 
-		//for desc leading key, reverse high/low and flip bits
-		if r.IndexInst.Defn.Desc != nil && r.IndexInst.Defn.Desc[0] {
+			if compFilters[0].Low == MinIndexKey {
+				filter.Low = MinIndexKey
+				joinLowKey = false
+			}
+			if compFilters[0].High == MaxIndexKey {
+				filter.High = MaxIndexKey
+				joinHighKey = false
+			}
 
-			if compFilters[0].High == MaxIndexKey &&
-				compFilters[0].Low == MinIndexKey {
-				cfHigh = MaxIndexKey
-				cfLow = MinIndexKey
-			} else if compFilters[0].High == MaxIndexKey {
-				cfHigh = compFilters[0].Low
-				cfLow = MinIndexKey
-				flipHigh = true
-			} else if compFilters[0].Low == MinIndexKey {
-				cfLow = compFilters[0].High
-				cfHigh = MaxIndexKey
-				flipLow = true
+			var l, h []byte
+			codec := collatejson.NewCodec(16)
+			if joinLowKey {
+				for _, f := range compFilters {
+					if f.Low == MinIndexKey {
+						break
+					}
+					lows = append(lows, f.Low.Bytes())
+				}
+				buf1 := secKeyBufPool.Get()
+				r.keyBufList = append(r.keyBufList, buf1)
+
+				if l, e = codec.JoinArray(lows, (*buf1)[:0]); e != nil {
+					e = fmt.Errorf("Error in forming low key %s", e)
+					return e
+				}
+				lowKey := secondaryKey(l)
+				filter.Low = &lowKey
+			}
+			if joinHighKey {
+				for _, f := range compFilters {
+					if f.High == MaxIndexKey {
+						break
+					}
+					highs = append(highs, f.High.Bytes())
+				}
+				buf2 := secKeyBufPool.Get()
+				r.keyBufList = append(r.keyBufList, buf2)
+
+				if h, e = codec.JoinArray(highs, (*buf2)[:0]); e != nil {
+					e = fmt.Errorf("Error in forming high key %s", e)
+					return e
+				}
+
+				highKey := secondaryKey(h)
+				filter.High = &highKey
+			}
+			return nil
+		}
+
+		//********** Reverse Collation fix **********//
+
+		// Step 1: Form lows and highs keys
+		var lows, highs []IndexKey
+		for _, f := range compFilters {
+			lows = append(lows, f.Low)
+			highs = append(highs, f.High)
+		}
+
+		// Step 2: Exchange lows and highs depending on []desc
+		var lows2, highs2 []IndexKey
+		for i, _ := range compFilters {
+			if r.IndexInst.Defn.Desc[i] {
+				lows2 = append(lows2, highs[i])
+				highs2 = append(highs2, lows[i])
 			} else {
-				cfLow = compFilters[0].High
-				cfHigh = compFilters[0].Low
-				flipLow = true
-				flipHigh = true
+				lows2 = append(lows2, lows[i])
+				highs2 = append(highs2, highs[i])
 			}
+		}
 
+		// Step 3: Prune lows2 and highs2 if Min/Max present
+		for i, l := range lows2 {
+			if l == MinIndexKey || l == MaxIndexKey {
+				lows2 = lows2[:i]
+				break
+			}
+		}
+		for i, h := range highs2 {
+			if h == MinIndexKey || h == MaxIndexKey {
+				highs2 = highs2[:i]
+				break
+			}
+		}
+
+		// Step 4: Join lows2 and highs2
+		var joinedLow, joinedHigh []byte
+		var e error
+		var lowKey, highKey IndexKey
+		if len(lows2) > 0 {
+			var lows2bytes [][]byte
+			for _, l := range lows2 {
+				lows2bytes = append(lows2bytes, l.Bytes())
+			}
+			if joinedLow, e = joinKeys(lows2bytes); e != nil {
+				return e
+			}
+			lowKey = getReverseCollatedIndexKey(joinedLow, r.IndexInst.Defn.Desc[:len(lows2)])
 		} else {
-			cfLow = compFilters[0].Low
-			cfHigh = compFilters[0].High
+			lowKey = MinIndexKey
 		}
 
-		if cfLow == MinIndexKey {
-			filter.Low = MinIndexKey
-			joinLowKey = false
-		}
-		if cfHigh == MaxIndexKey {
-			filter.High = MaxIndexKey
-			joinHighKey = false
-		}
-
-		codec := collatejson.NewCodec(16)
-		if joinLowKey {
-			// TODO: Use IndexKey Prefix comparison for sorting
-			// Until then use first low as overall low
-			lows = make([][]byte, 1)
-			lows[0] = append(lows[0], cfLow.Bytes()...)
-
-			if flipLow {
-				FlipBits(lows[0])
+		if len(highs2) > 0 {
+			var highs2bytes [][]byte
+			for _, l := range highs2 {
+				highs2bytes = append(highs2bytes, l.Bytes())
 			}
-			buf1 := secKeyBufPool.Get()
-			r.keyBufList = append(r.keyBufList, buf1)
-
-			if l, e = codec.JoinArray(lows, (*buf1)[:0]); e != nil {
-				e = fmt.Errorf("Error in forming low key %s", e)
+			if joinedHigh, e = joinKeys(highs2bytes); e != nil {
 				return e
 			}
-			lowKey := secondaryKey(l)
-			filter.Low = &lowKey
+			highKey = getReverseCollatedIndexKey(joinedHigh, r.IndexInst.Defn.Desc[:len(highs2)])
+		} else {
+			highKey = MaxIndexKey
 		}
-		if joinHighKey {
-			// TODO: Use IndexKey Prefix comparison for sorting
-			// Until then use first high as overall high
-			highs = make([][]byte, 1)
-			highs[0] = append(highs[0], cfHigh.Bytes()...)
-
-			if flipHigh {
-				FlipBits(highs[0])
-			}
-
-			buf2 := secKeyBufPool.Get()
-			r.keyBufList = append(r.keyBufList, buf2)
-
-			if h, e = codec.JoinArray(highs, (*buf2)[:0]); e != nil {
-				e = fmt.Errorf("Error in forming high key %s", e)
-				return e
-			}
-
-			highKey := secondaryKey(h)
-			filter.High = &highKey
-		}
+		filter.Low = lowKey
+		filter.High = highKey
+		//********** End of Reverse Collation fix **********//
 
 		// TODO: Calculate the right inclusion
 		// Right now using Both inclusion
@@ -667,7 +773,6 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 	fillFilterEquals := func(protoScan *protobuf.Scan, filter *Filter) error {
 		var e error
 		var equals [][]byte
-
 		for _, k := range protoScan.Equals {
 			var key IndexKey
 			if key, e = newKey(k); e != nil {
@@ -677,22 +782,20 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 			equals = append(equals, key.Bytes())
 		}
 
-		equals2 := make([][]byte, 1)
-		equals2[0] = append(equals2[0], equals[0]...)
-
-		if r.IndexInst.Defn.Desc != nil && r.IndexInst.Defn.Desc[0] {
-			FlipBits(equals2[0])
-		}
 		codec := collatejson.NewCodec(16)
 		buf1 := secKeyBufPool.Get()
 		r.keyBufList = append(r.keyBufList, buf1)
-		var equalsKey []byte
-		if equalsKey, e = codec.JoinArray(equals2, (*buf1)[:0]); e != nil {
+		var equalsKey, eqReverse []byte
+		if equalsKey, e = codec.JoinArray(equals, (*buf1)[:0]); e != nil {
 			e = fmt.Errorf("Error in forming equals key %s", e)
 			return e
 		}
-
-		eqKey := secondaryKey(equalsKey)
+		if !r.IndexInst.Defn.HasDescending() {
+			eqReverse = equalsKey
+		} else {
+			eqReverse = jsonEncoder.ReverseCollate(equalsKey, r.IndexInst.Defn.Desc[:len(equals)])
+		}
+		eqKey := secondaryKey(eqReverse)
 
 		var compFilters []CompositeElementFilter
 		for _, k := range equals {
@@ -709,7 +812,7 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 		filter.High = &eqKey
 		filter.Inclusion = Both
 		filter.CompositeFilters = compFilters
-
+		filter.ScanType = LookupReq
 		return nil
 	}
 
@@ -730,7 +833,7 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 				delete(filtersMap, filterid)
 				if len(filtersMap) == 0 { // Empty filtersMap indicates end of overlapping region
 					if len(scans) > 0 &&
-						bytes.Compare(scans[len(scans)-1].High.Bytes(), low.Bytes()) == 0 {
+						scans[len(scans)-1].High.ComparePrefixIndexKey(low) == 0 {
 						// If high of previous scan == low of next scan, then
 						// merge the filters instead of creating a new scan
 						for _, fl := range filtersList {
@@ -762,17 +865,18 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 				filtersList = append(filtersList, filterid)
 			}
 		}
-
-		//TODO: enable this optimization for desc indexes as well
-		if !r.IndexInst.Defn.HasDescending() {
-			for i, _ := range scans {
-				if scans[i].ScanType == FilterRangeReq && len(scans[i].Filters) == 1 &&
-					len(scans[i].Filters[0].CompositeFilters) == 1 {
-					scans[i].Incl = scans[i].Filters[0].CompositeFilters[0].Inclusion
-					scans[i].ScanType = RangeReq
-				}
+		for i, _ := range scans {
+			if len(scans[i].Filters) == 1 && scans[i].Filters[0].ScanType == LookupReq {
+				scans[i].Equals = scans[i].Low
+				scans[i].ScanType = LookupReq
 			}
-
+			if scans[i].ScanType == FilterRangeReq && len(scans[i].Filters) == 1 &&
+				len(scans[i].Filters[0].CompositeFilters) == 1 {
+				// Flip inclusion if first element is descending
+				scans[i].Incl = flipInclusion(scans[i].Filters[0].CompositeFilters[0].Inclusion, r.IndexInst.Defn.Desc)
+				scans[i].ScanType = RangeReq
+			}
+			// TODO: Optimzation if single CEF in all filters (for both primary and secondary)
 		}
 
 		return scans
@@ -819,8 +923,8 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 					filter.High = key
 					filters = append(filters, filter)
 
-					p1 := IndexPoint{Value: filter.Low, FilterId: len(filters) - 1}
-					p2 := IndexPoint{Value: filter.High, FilterId: len(filters) - 1}
+					p1 := IndexPoint{Value: filter.Low, FilterId: len(filters) - 1, Type: "low"}
+					p2 := IndexPoint{Value: filter.High, FilterId: len(filters) - 1, Type: "high"}
 					points = append(points, p1, p2)
 					continue
 				}
@@ -861,8 +965,8 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 					High:             h,
 				}
 				filters = append(filters, filter)
-				p1 := IndexPoint{Value: filter.Low, FilterId: len(filters) - 1}
-				p2 := IndexPoint{Value: filter.High, FilterId: len(filters) - 1}
+				p1 := IndexPoint{Value: filter.Low, FilterId: len(filters) - 1, Type: "low"}
+				p2 := IndexPoint{Value: filter.High, FilterId: len(filters) - 1, Type: "high"}
 				points = append(points, p1, p2)
 			}
 		} else {
@@ -876,8 +980,8 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 					}
 					filters = append(filters, filter)
 
-					p1 := IndexPoint{Value: filter.Low, FilterId: len(filters) - 1}
-					p2 := IndexPoint{Value: filter.High, FilterId: len(filters) - 1}
+					p1 := IndexPoint{Value: filter.Low, FilterId: len(filters) - 1, Type: "low"}
+					p2 := IndexPoint{Value: filter.High, FilterId: len(filters) - 1, Type: "high"}
 					points = append(points, p1, p2)
 					continue
 				}
@@ -897,7 +1001,6 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 				}
 
 				var compFilters []CompositeElementFilter
-
 				// Encode Filters
 				for _, fl := range protoScan.Filters {
 					if l, localErr = newLowKey(fl.Low); localErr != nil {
@@ -938,8 +1041,8 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 
 				filters = append(filters, filter)
 
-				p1 := IndexPoint{Value: filter.Low, FilterId: len(filters) - 1}
-				p2 := IndexPoint{Value: filter.High, FilterId: len(filters) - 1}
+				p1 := IndexPoint{Value: filter.Low, FilterId: len(filters) - 1, Type: "low"}
+				p2 := IndexPoint{Value: filter.High, FilterId: len(filters) - 1, Type: "high"}
 				points = append(points, p1, p2)
 
 				// TODO: Does single Composite Element Filter

@@ -58,6 +58,8 @@ type IndexEntry interface {
 type IndexKey interface {
 	Compare(IndexEntry) int
 	ComparePrefixFields(IndexEntry) int
+	CompareIndexKey(IndexKey) int
+	ComparePrefixIndexKey(IndexKey) int
 	Bytes() []byte
 	String() string
 }
@@ -250,6 +252,34 @@ func (k *NilIndexKey) ComparePrefixFields(entry IndexEntry) int {
 	return k.pcmp
 }
 
+func (k *NilIndexKey) CompareIndexKey(k1 IndexKey) int {
+	key, ok := k1.(*NilIndexKey)
+	if ok {
+		if k.cmp < key.cmp {
+			return -1
+		} else if k.cmp == key.cmp {
+			return 0
+		} else if k.cmp > key.cmp {
+			return 1
+		}
+	}
+	return k.cmp
+}
+
+func (k *NilIndexKey) ComparePrefixIndexKey(k1 IndexKey) int {
+	key, ok := k1.(*NilIndexKey)
+	if ok {
+		if k.pcmp < key.pcmp {
+			return -1
+		} else if k.pcmp == key.pcmp {
+			return 0
+		} else if k.pcmp > key.pcmp {
+			return 1
+		}
+	}
+	return k.pcmp
+}
+
 func (k *NilIndexKey) Bytes() []byte {
 	return nil
 }
@@ -276,6 +306,22 @@ func (k *primaryKey) Compare(entry IndexEntry) int {
 // for primary keys.
 func (k *primaryKey) ComparePrefixFields(entry IndexEntry) (r int) {
 	panic("prefix compare is not implemented for primary key")
+}
+
+func (k *primaryKey) CompareIndexKey(k1 IndexKey) (r int) {
+	key, ok := k1.(*NilIndexKey)
+	if ok {
+		return key.cmp * -1
+	}
+	return bytes.Compare(*k, k1.Bytes())
+}
+
+func (k *primaryKey) ComparePrefixIndexKey(k1 IndexKey) (r int) {
+	key, ok := k1.(*NilIndexKey)
+	if ok {
+		return key.pcmp * -1
+	}
+	return bytes.Compare(*k, k1.Bytes())
 }
 
 func (k *primaryKey) Bytes() []byte {
@@ -347,6 +393,36 @@ func (k *secondaryKey) ComparePrefixFields(entry IndexEntry) int {
 		prefixLen = entryKeylen
 	}
 	return bytes.Compare(kbytes[:prefixLen], entry.Bytes()[:prefixLen])
+}
+
+func (k *secondaryKey) CompareIndexKey(k1 IndexKey) int {
+	key, ok := k1.(*NilIndexKey)
+	if ok {
+		return key.cmp * -1
+	}
+
+	return bytes.Compare(k.Bytes(), k1.Bytes())
+}
+
+func (k *secondaryKey) ComparePrefixIndexKey(k1 IndexKey) int {
+	key, ok := k1.(*NilIndexKey)
+	if ok {
+		return key.pcmp * -1
+	}
+
+	kbytes := []byte(*k)
+	klen := len(kbytes)
+
+	k1bytes := k1.Bytes()
+	k1len := len(k1bytes)
+
+	kprefixLen := klen - 1 // Ignore last byte
+	k1prefixLen := k1len - 1
+	if kprefixLen > k1prefixLen {
+		kprefixLen = k1prefixLen
+	}
+
+	return bytes.Compare(kbytes[:kprefixLen], k1bytes[:kprefixLen])
 }
 
 func (k *secondaryKey) Bytes() []byte {
