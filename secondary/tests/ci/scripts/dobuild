@@ -10,26 +10,50 @@ error_exit() {
   exit 2
 }
 
-export RELEASE=5.0.35007
-export BLD_NUM="`date +%s`"
+export RELEASE=5.0.0
+export BLD_NUM=0
 
 echo '</pre><h3>Building</h3><pre>'
 > $WORKSPACE/versions.cfg
 > $WORKSPACE/make.log
 
-if [ ! -d $WORKSPACE/.repo ]; then
-  mkdir -p $WORKSPACE
-  cd $WORKSPACE
-  repo init -u git://github.com/couchbase/manifest -b master -m couchbase-server/spock.xml -g all 1>>$WORKSPACE/make.log 2>&1
+if [ ! -d ~/.reference ]; then
+  mkdir ~/.reference
+  cd ~/.reference
+  repo init -u https://github.com/couchbase/manifest -b master -m couchbase-server/spock.xml -g all --mirror 1>>$WORKSPACE/make.log 2>&1
   test $? -eq 0 || error_exit "Repo Init"
 fi
 
-cd $WORKSPACE
-if [ "$1" = "clean" ]; then
-  find . -maxdepth 1 -type d -and -not -name '.*' -exec rm -rf {} \;
+echo "Calculating base"
+if [ ! -d ~/.mfmirror ]; then
+  mkdir ~/.mfmirror
+  cd ~/.mfmirror
+  git clone --mirror https://github.com/couchbase/build-team-manifests . 1>>$WORKSPACE/make.log 2>&1
 fi
+cd ~/.mfmirror
+git pull 1>>$WORKSPACE/make.log 2>&1
+
+rm -rf ~/.manifests
+git clone ~/.mfmirror ~/.manifests 1>>$WORKSPACE/make.log 2>&1
+cd ~/.manifests
+
+test "$BLD_NUM" = "0" && BLD_NUM="`git log --oneline | grep "couchbase-server" | grep "$RELEASE-[0-9]" | head -1 | awk -F- '{print $3}'`"
+SHA=`git log --oneline | grep "couchbase-server" | grep "$RELEASE-$BLD_NUM" | head -1 | awk '{print $1}'`
+git branch thisrun $SHA 1>>$WORKSPACE/make.log 2>&1
+
+echo "Updating mirror"
+cd ~/.reference
+repo sync --jobs=32 1>>$WORKSPACE/make.log 2>&1
+
+echo "Basing run on $RELEASE-$BLD_NUM <a href=https://github.com/couchbase/build-team-manifests/blob/$SHA/couchbase-server/spock.xml>$SHA</a>"
+rm -rf $WORKSPACE 1>>$WORKSPACE/make.log 2>&1
+mkdir -p $WORKSPACE 1>>$WORKSPACE/make.log 2>&1
+cd $WORKSPACE
+repo init -u ~/.manifests -b thisrun -m couchbase-server/spock.xml -g all --reference=~/.reference 1>>$WORKSPACE/make.log 2>&1
+test $? -eq 0 || error_exit "Repo Init at $SHA"
 
 echo "Updating tree for run $TS"
+cd $WORKSPACE
 repo sync --jobs=32 1>>$WORKSPACE/make.log 2>&1
 test $? -eq 0 || error_exit "Updating tree"
 test $WORKSPACE/cbbuild && test $WORKSPACE/voltron || error_exit "Unable to find voltron"
@@ -217,7 +241,7 @@ repo manifest -r > manifest.xml
 
 echo "Actual Versions:" >> $WORKSPACE/versions.cfg
 cd $WORKSPACE
-repo forall -c 'echo "$REPO_PROJECT `git log --oneline HEAD...HEAD^`"' >> $WORKSPACE/versions.cfg
+repo forall -c 'echo "$REPO_PROJECT `git log --oneline HEAD...HEAD^`"' 2>/dev/null 1>>$WORKSPACE/versions.cfg
 
 chmod a+r /var/www/*
 
