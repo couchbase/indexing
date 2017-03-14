@@ -518,7 +518,8 @@ type secondaryIndex struct {
 	isPrimary bool
 	using     c.IndexType
 	partnExpr string
-	secExprs  []string
+	secExprs  expression.Expressions
+	desc      []bool
 	whereExpr string
 	state     datastore.IndexState
 	err       string
@@ -543,12 +544,22 @@ func newSecondaryIndexFromMetaData(
 		isPrimary: indexDefn.IsPrimary,
 		using:     indexDefn.Using,
 		partnExpr: indexDefn.PartitionKey,
-		secExprs:  indexDefn.SecExprs,
+		desc:      indexDefn.Desc,
 		whereExpr: indexDefn.WhereExpr,
 		state:     gsi2N1QLState[imd.State],
 		err:       imd.Error,
 		deferred:  indexDefn.Deferred,
 	}
+
+	if indexDefn.SecExprs != nil {
+		exprs := make(expression.Expressions, 0, len(indexDefn.SecExprs))
+		for _, secExpr := range indexDefn.SecExprs {
+			expr, _ := parser.Parse(secExpr)
+			exprs = append(exprs, expr)
+		}
+		si.secExprs = exprs
+	}
+
 	if indexDefn.Deferred &&
 		(imd.State == c.INDEX_STATE_CREATED ||
 			imd.State == c.INDEX_STATE_READY) {
@@ -589,12 +600,7 @@ func (si *secondaryIndex) SeekKey() expression.Expressions {
 // RangeKey implement Index{} interface.
 func (si *secondaryIndex) RangeKey() expression.Expressions {
 	if si != nil && si.secExprs != nil {
-		exprs := make(expression.Expressions, 0, len(si.secExprs))
-		for _, exprS := range si.secExprs {
-			expr, _ := parser.Parse(exprS)
-			exprs = append(exprs, expr)
-		}
-		return exprs
+		return si.secExprs
 	}
 	return nil
 }
@@ -806,11 +812,10 @@ func (si *secondaryIndex) Scan2(
 func (si *secondaryIndex) RangeKey2() datastore.IndexKeys {
 	if si != nil && si.secExprs != nil {
 		idxkeys := make(datastore.IndexKeys, 0, len(si.secExprs))
-		for _, exprS := range si.secExprs {
-			expr, _ := parser.Parse(exprS)
+		for i, exprS := range si.secExprs {
 			idxkey := &datastore.IndexKey{
-				Expr: expr,
-				Desc: false,
+				Expr: exprS,
+				Desc: si.desc != nil && si.desc[i],
 			}
 			idxkeys = append(idxkeys, idxkey)
 		}
