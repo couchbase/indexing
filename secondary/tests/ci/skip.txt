@@ -1,3 +1,0 @@
-TestArraySizeIncreaseDecrease
-TestStat_ItemsCount
-github.com/couchbase/indexing/secondary/tests/functionaltests
