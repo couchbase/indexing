@@ -288,12 +288,88 @@ func (o *MetadataProvider) CheckIndexerStatusNoLock() []IndexerStatus {
 
 func (o *MetadataProvider) CreateIndexWithPlan(
 	name, bucket, using, exprType, partnExpr, whereExpr string,
-	secExprs []string, isPrimary bool, plan map[string]interface{}) (c.IndexDefnId, error, bool) {
+	secExprs []string, desc []bool, isPrimary bool, plan map[string]interface{}) (c.IndexDefnId, error, bool) {
 
 	// FindIndexByName will only return valid index
 	if o.FindIndexByName(name, bucket) != nil {
 		return c.IndexDefnId(0), errors.New(fmt.Sprintf("Index %s already exists.", name)), false
 	}
+
+	// Create index definition
+	idxDefn, err, retry := o.PrepareIndexDefn(name, bucket, using, exprType, partnExpr, whereExpr, secExprs, desc, isPrimary, plan)
+	if err != nil {
+		return c.IndexDefnId(0), err, retry
+	}
+
+	//
+	// Make Index Creation Request
+	//
+
+	watchers := ([]*watcher)(nil)
+	for _, indexerId := range idxDefn.Nodes {
+		watcher, err := o.findWatcherByIndexerId(c.IndexerId(indexerId))
+		if err != nil {
+			return c.IndexDefnId(0), errors.New("Fail to create index.  Internal Error: Cannot locate indexer nodes"), false
+		}
+		watchers = append(watchers, watcher)
+	}
+
+	defnID := idxDefn.DefnId
+	wait := !idxDefn.Deferred
+
+	key := fmt.Sprintf("%d", defnID)
+	errMap := make(map[string]bool)
+	for replicaId, watcher := range watchers {
+		idxDefn.ReplicaId = replicaId
+
+		content, err := c.MarshallIndexDefn(idxDefn)
+		if err != nil {
+			errMap[fmt.Sprintf("Fail to send create index request.  Error=%v", err)] = true
+			continue
+		}
+
+		if _, err := watcher.makeRequest(OPCODE_CREATE_INDEX, key, content); err != nil {
+			errMap[err.Error()] = true
+		}
+	}
+
+	if len(errMap) != 0 {
+		errStr := ""
+		for msg, _ := range errMap {
+			errStr += msg + "\n"
+		}
+
+		if len(errStr) != 0 {
+			return c.IndexDefnId(0), errors.New(fmt.Sprintf("Fail to create index or replcia on some or all indexer nodes.  Error=%s.", errStr)), false
+		}
+	}
+
+	//
+	// Wait for response
+	//
+
+	if wait {
+		var errStr string
+		for _, watcher := range watchers {
+			err := watcher.waitForEvent(defnID, []c.IndexState{c.INDEX_STATE_ACTIVE, c.INDEX_STATE_DELETED})
+			if err != nil {
+				errStr += err.Error() + "\n"
+			}
+		}
+
+		if len(errStr) != 0 {
+			return c.IndexDefnId(0), errors.New(errStr), false
+		}
+
+		return defnID, nil, false
+	}
+
+	return defnID, nil, false
+}
+
+func (o *MetadataProvider) PrepareIndexDefn(
+	name, bucket, using, exprType, partnExpr, whereExpr string,
+	secExprs []string, desc []bool, isPrimary bool, plan map[string]interface{}) (*c.IndexDefn, error, bool) {
 
 	//
 	// Parse WITH CLAUSE
@@ -313,12 +389,12 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 
 		nodes, err, retry = o.getNodesParam(plan)
 		if err != nil {
-			return c.IndexDefnId(0), err, retry
+			return nil, err, retry
 		}
 
 		deferred, err, retry = o.getDeferredParam(plan)
 		if err != nil {
-			return c.IndexDefnId(0), err, retry
+			return nil, err, retry
 		}
 		wait = !deferred
 
@@ -326,24 +402,24 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 			if c.IsValidIndexType(indexType) {
 				using = indexType
 			} else {
-				return c.IndexDefnId(0), errors.New("Fails to create index.  Invalid index_type parameter value specified."), false
+				return nil, errors.New("Fails to create index.  Invalid index_type parameter value specified."), false
 			}
 		}
 
 		immutable, err, retry = o.getImmutableParam(plan)
 		if err != nil {
-			return c.IndexDefnId(0), err, retry
+			return nil, err, retry
 		}
 
 		numReplica, err, retry = o.getReplicaParam(plan)
 		if err != nil {
-			return c.IndexDefnId(0), err, retry
+			return nil, err, retry
 		}
 
 		if _, ok := plan["num_replica"]; ok {
 			if len(nodes) != 0 {
 				if numReplica != len(nodes)-1 {
-					return c.IndexDefnId(0), errors.New("Fails to create index.  Parameter num_replica should be one less than parameter nodes."), false
+					return nil, errors.New("Fails to create index.  Parameter num_replica should be one less than parameter nodes."), false
 				}
 			}
 		}
@@ -361,17 +437,17 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 
 	watchers, err, retry := o.findWatchersWithRetry(nodes, numReplica)
 	if err != nil {
-		return c.IndexDefnId(0), err, retry
+		return nil, err, retry
 	}
 
 	if len(nodes) != 0 && len(watchers) != len(nodes) {
-		return c.IndexDefnId(0),
+		return nil,
 			errors.New(fmt.Sprintf("Fails to create index.  Some indexer node is not available for create index.  Indexers=%v.", nodes)),
 			false
 	}
 
 	if numReplica != 0 && len(watchers) != numReplica+1 {
-		return c.IndexDefnId(0),
+		return nil,
 			errors.New(fmt.Sprintf("Fails to create index.  Cannot find enough indexer node for replica.  numReplica=%v.", numReplica)),
 			false
 	}
@@ -388,8 +464,8 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 
 	defnID, err := c.NewIndexDefnId()
 	if err != nil {
-		return c.IndexDefnId(0),
-			errors.New(fmt.Sprintf("Fails to create index. Fail to create uuid for index definition.")),
+		return nil,
+			errors.New(fmt.Sprintf("Fails to create index. Internal Error: Fail to create uuid for index definition.")),
 			false
 	}
 
@@ -399,7 +475,7 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 	for _, exp := range secExprs {
 		isArray, _, err := queryutil.IsArrayExpression(exp)
 		if err != nil {
-			return c.IndexDefnId(0), errors.New(fmt.Sprintf("Error in parsing expression %v : %v", exp, err)), false
+			return nil, errors.New(fmt.Sprintf("Fails to create index.  Error in parsing expression %v : %v", exp, err)), false
 		}
 		if isArray == true {
 			isArrayIndex = isArray
@@ -408,7 +484,11 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 	}
 
 	if arrayExprCount > 1 {
-		return c.IndexDefnId(0), errors.New("Multiple expressions with ALL are found. Only one array expression is supported per index."), false
+		return nil, errors.New("Fails to create index.  Multiple expressions with ALL are found. Only one array expression is supported per index."), false
+	}
+
+	if desc != nil && len(secExprs) != len(desc) {
+		return nil, errors.New("Collation order is required for all expressions in the index."), false
 	}
 
 	idxDefn := &c.IndexDefn{
@@ -418,6 +498,7 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 		Bucket:          bucket,
 		IsPrimary:       isPrimary,
 		SecExprs:        secExprs,
+		Desc:            desc,
 		ExprType:        c.ExprType(exprType),
 		PartitionScheme: c.SINGLE,
 		PartitionKey:    partnExpr,
@@ -429,45 +510,7 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 		NumReplica:      uint32(numReplica),
 	}
 
-	//
-	// Make Index Creation Request
-	//
-
-	key := fmt.Sprintf("%d", defnID)
-	for replicaId, watcher := range watchers {
-		idxDefn.ReplicaId = replicaId
-
-		content, err := c.MarshallIndexDefn(idxDefn)
-		if err != nil {
-			return 0, err, false
-		}
-
-		if _, err = watcher.makeRequest(OPCODE_CREATE_INDEX, key, content); err != nil {
-			return defnID, err, false
-		}
-	}
-
-	//
-	// Wait for response
-	//
-
-	if wait {
-		var errStr string
-		for _, watcher := range watchers {
-			err := watcher.waitForEvent(defnID, []c.IndexState{c.INDEX_STATE_ACTIVE, c.INDEX_STATE_DELETED})
-			if err != nil {
-				errStr += err.Error() + "\n"
-			}
-		}
-
-		if len(errStr) != 0 {
-			return defnID, errors.New(errStr), false
-		}
-
-		return defnID, nil, false
-	}
-
-	return defnID, nil, false
+	return idxDefn, nil, false
 }
 
 func (o *MetadataProvider) getNodesParam(plan map[string]interface{}) ([]string, error, bool) {
@@ -578,6 +621,10 @@ func (o *MetadataProvider) getReplicaParam(plan map[string]interface{}) (int, er
 		numReplica = int(numReplica2)
 	}
 
+	if numReplica < 0 {
+		return 0, errors.New("Fails to create index.  Parameter num_replica must be a positive value."), false
+	}
+
 	return numReplica, nil, false
 }
 
@@ -665,22 +712,37 @@ func (o *MetadataProvider) DropIndex(defnID c.IndexDefnId) error {
 		return errors.New(fmt.Sprintf("Cannot locate cluster node hosting Index %s.", meta.Definition.Name))
 	}
 
+	// place token for recovery.
+	if err := PostDeleteCommandToken(defnID); err != nil {
+		return errors.New(fmt.Sprintf("Fail to Drop Index due to internal errors.  Error=%v.", err))
+	}
+
 	// Make a request to drop the index, the index may be dropped in parallel before this MetadataProvider
 	// is aware of it.  (e.g. bucket flush).  The server side will have to check for this condition.
+	// If the index is already deleted, indexer WILL NOT return an error.
 	key := fmt.Sprintf("%d", defnID)
-	var errStr string
+	errMap := make(map[string]bool)
 	for _, watcher := range watchers {
 		_, err = watcher.makeRequest(OPCODE_DROP_INDEX, key, []byte(""))
 		if err != nil {
-			errStr += err.Error() + "\n"
+			errMap[err.Error()] = true
 		}
 	}
 
-	if len(errStr) != 0 {
-		return errors.New(errStr)
-	} else {
-		return nil
+	if len(errMap) != 0 {
+		errStr := ""
+		for msg, _ := range errMap {
+			errStr += msg + "\n"
+		}
+
+		if len(errStr) != 0 {
+			msg := fmt.Sprintf("Fail to drop index on some indexer nodes.  Error=%s.  ", errStr)
+			msg += "If cluster or indexer is currently unavailable, the operation will automaticaly retry after cluster is back to normal."
+			return errors.New(msg)
+		}
 	}
+
+	return nil
 }
 
 func (o *MetadataProvider) BuildIndexes(defnIDs []c.IndexDefnId) error {
@@ -742,29 +804,40 @@ func (o *MetadataProvider) BuildIndexes(defnIDs []c.IndexDefnId) error {
 		}
 	}
 
+	errMap := make(map[string]bool)
 	for indexerId, idList := range watcherIndexMap {
 
 		watcher, err := o.findWatcherByIndexerId(indexerId)
 		if err != nil {
-			meta := o.findIndexIgnoreStatus(idList[0])
+			meta := o.FindIndexIgnoreStatus(idList[0])
 			if meta != nil {
-				return errors.New(fmt.Sprintf("Cannot locate cluster node hosting Index %s.", meta.Definition.Name))
+				errMap[fmt.Sprintf("Cannot locate cluster node hosting Index %s.", meta.Definition.Name)] = true
 			} else {
-				return errors.New("Cannot locate cluster node hosting Index.")
+				errMap["Cannot locate cluster node hosting Index."] = true
 			}
+			continue
 		}
 
 		list := BuildIndexIdList(idList)
 
 		content, err := MarshallIndexIdList(list)
 		if err != nil {
-			return err
+			errMap[err.Error()] = true
+			continue
 		}
 
 		_, err = watcher.makeRequest(OPCODE_BUILD_INDEX, "Index Build", content)
 		if err != nil {
-			return err
+			errMap[err.Error()] = true
 		}
+	}
+
+	if len(errMap) != 0 {
+		errStr := ""
+		for msg, _ := range errMap {
+			errStr += msg + "\n"
+		}
+		return errors.New(errStr)
 	}
 
 	return nil
@@ -850,6 +923,22 @@ func (o *MetadataProvider) AllWatchersAlive() bool {
 	defer o.mutex.Unlock()
 
 	return o.AllWatchersAliveNoLock()
+}
+
+//
+// Find out if a watcher is alive
+//
+func (o *MetadataProvider) IsWatcherAlive(nodeUUID string) bool {
+	o.mutex.Lock()
+	defer o.mutex.Unlock()
+
+	for _, watcher := range o.watchers {
+		if nodeUUID == watcher.getNodeUUID() {
+			return watcher.isAliveNoLock()
+		}
+	}
+
+	return false
 }
 
 //
@@ -945,7 +1034,9 @@ func (o *MetadataProvider) retryHelper(watcher *watcher, readych chan bool, inde
 	logging.Infof("WatchMetadata(): Successfully connected to indexer at %v after retry.", indexAdminPort)
 
 	indexerId := watcher.getIndexerId()
-	callback(indexAdminPort, indexerId, tempIndexerId)
+	if callback != nil {
+		callback(indexAdminPort, indexerId, tempIndexerId)
+	}
 }
 
 func (o *MetadataProvider) addWatcherNoLock(watcher *watcher, tempIndexerId c.IndexerId) {
@@ -986,7 +1077,7 @@ func (o *MetadataProvider) startWatcher(addr string) (*watcher, chan bool) {
 	return s, readych
 }
 
-func (o *MetadataProvider) findIndexIgnoreStatus(id c.IndexDefnId) *IndexMetadata {
+func (o *MetadataProvider) FindIndexIgnoreStatus(id c.IndexDefnId) *IndexMetadata {
 
 	indices, _ := o.repo.listAllDefn()
 	if meta, ok := indices[id]; ok {
@@ -1043,7 +1134,7 @@ func (o *MetadataProvider) findAliveWatchersByDefnIdIgnoreStatus(defnId c.IndexD
 		return result, nil, true
 	}
 
-	return nil, errors.New(fmt.Sprintf("MetadataProvider.findWatcher() : Cannot find watcher with index defniton %v", defnId)), true
+	return nil, errors.New("Cannot find indexer node with index."), true
 }
 
 func (o *MetadataProvider) findWatcherByIndexerId(id c.IndexerId) (*watcher, error) {
@@ -1056,7 +1147,20 @@ func (o *MetadataProvider) findWatcherByIndexerId(id c.IndexerId) (*watcher, err
 		}
 	}
 
-	return nil, errors.New(fmt.Sprintf("MetadataProvider.findWatcher() : Cannot find watcher with IndexerId %v", id))
+	return nil, errors.New(fmt.Sprintf("Cannot find watcher with IndexerId %v", id))
+}
+
+func (o *MetadataProvider) findWatcherByNodeUUID(nodeUUID string) (*watcher, error) {
+	o.mutex.Lock()
+	defer o.mutex.Unlock()
+
+	for _, watcher := range o.watchers {
+		if nodeUUID == watcher.getNodeUUID() {
+			return watcher, nil
+		}
+	}
+
+	return nil, errors.New(fmt.Sprintf("Cannot find watcher with nodeUUID %v", nodeUUID))
 }
 
 func (o *MetadataProvider) getWatcherAddr(MetadataProviderId string) (string, error) {
@@ -1083,7 +1187,7 @@ func (o *MetadataProvider) getWatcherAddr(MetadataProviderId string) (string, er
 		}
 	}
 
-	return "", errors.New("MetadataProvider.getWatcherAddr() : Fail to find an IP address")
+	return "", errors.New("Fail to find an IP address")
 }
 
 func (o *MetadataProvider) findWatcherByNodeAddr(nodeAddr string) *watcher {
@@ -1132,9 +1236,11 @@ func (o *MetadataProvider) isValidIndexFromActiveIndexer(meta *IndexMetadata) bo
 //
 func (o *MetadataProvider) needRefresh() {
 
-	select {
-	case o.metaNotifyCh <- true:
-	default:
+	if o.metaNotifyCh != nil {
+		select {
+		case o.metaNotifyCh <- true:
+		default:
+		}
 	}
 }
 
@@ -1294,8 +1400,15 @@ func (r *metadataRepo) findRecentValidIndexInstNoLock(defnId c.IndexDefnId) []*I
 
 			count++
 
+			// Do not filter out CREATED index, even though it is not a "transient"
+			// index state.  A created index can be promoted to a READY index by
+			// indexer upon bootstrap.  An index in CREATED state will be filtered out
+			// in ListIndex() for scanning.
+			// For DELETED index, it needs to be filtered out since/we don't want it to
+			// "pollute" IndexMetadata.State.
+			//
 			if c.IndexState(inst.State) != c.INDEX_STATE_NIL &&
-				c.IndexState(inst.State) != c.INDEX_STATE_CREATED &&
+				//c.IndexState(inst.State) != c.INDEX_STATE_CREATED &&
 				c.IndexState(inst.State) != c.INDEX_STATE_DELETED &&
 				c.IndexState(inst.State) != c.INDEX_STATE_ERROR &&
 				inst.RState == uint32(c.REBAL_ACTIVE) { // valid
@@ -1923,6 +2036,14 @@ func (w *watcher) getIndexerId() c.IndexerId {
 	return w.getIndexerIdNoLock()
 }
 
+func (w *watcher) getNodeUUID() string {
+
+	w.mutex.Lock()
+	defer w.mutex.Unlock()
+
+	return w.getNodeUUIDNoLock()
+}
+
 func (w *watcher) getIndexerIdNoLock() c.IndexerId {
 
 	if w.serviceMap == nil {
@@ -1930,6 +2051,15 @@ func (w *watcher) getIndexerIdNoLock() c.IndexerId {
 	}
 
 	return c.IndexerId(w.serviceMap.IndexerId)
+}
+
+func (w *watcher) getNodeUUIDNoLock() string {
+
+	if w.serviceMap == nil {
+		panic("Index node metadata is not initialized")
+	}
+
+	return w.serviceMap.NodeUUID
 }
 
 func (w *watcher) getServerGroup() string {

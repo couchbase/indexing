@@ -114,6 +114,7 @@ type IndexStatus struct {
 	Hosts      []string           `json:"hosts,omitempty"`
 	Error      string             `json:"error,omitempty"`
 	Completion int                `json:"completion"`
+	Scheduled  bool               `json:"scheduled"`
 }
 
 type indexStatusSorter []IndexStatus
@@ -402,13 +403,13 @@ func (m *requestHandlerContext) getIndexStatus(cinfo *common.ClusterInfoCache, b
 								stateStr = "Error"
 							}
 
+							name := common.FormatIndexInstDisplayName(defn.Name, int(instance.ReplicaId))
+
 							completion := int(0)
-							key := fmt.Sprintf("%v:%v:build_progress", defn.Bucket, defn.Name)
+							key := fmt.Sprintf("%v:%v:build_progress", defn.Bucket, name)
 							if progress, ok := stats.ToMap()[key]; ok {
 								completion = int(progress.(float64))
 							}
-
-							name := common.FormatIndexInstDisplayName(defn.Name, int(instance.ReplicaId))
 
 							status := IndexStatus{
 								DefnId:     defn.DefnId,
@@ -423,6 +424,7 @@ func (m *requestHandlerContext) getIndexStatus(cinfo *common.ClusterInfoCache, b
 								Hosts:      []string{curl},
 								Definition: common.IndexStatement(defn, false),
 								Completion: completion,
+								Scheduled:  instance.Scheduled,
 							}
 
 							list = append(list, status)

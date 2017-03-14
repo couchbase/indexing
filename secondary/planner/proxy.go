@@ -17,6 +17,7 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager"
+	"github.com/couchbase/indexing/secondary/manager/client"
 	"net"
 	"net/http"
 	"runtime"
@@ -169,6 +170,14 @@ func getIndexLayout(clusterUrl string) ([]*IndexerNode, error) {
 				// update sizing
 				index.IsPrimary = defn.IsPrimary
 				index.IsMOI = (defn.Using == common.IndexType(common.MemoryOptimized) || defn.Using == common.IndexType(common.MemDB))
+
+				// Is the index being deleted by user?   Thsi will read the delete token from metakv.  If untable read from metakv,
+				// pendingDelete is false (cannot assert index is to-be-delete).
+				pendingDelete, err := client.DeleteCommandTokenExist(defn.DefnId)
+				if err != nil {
+					return nil, err
+				}
+				index.pendingDelete = pendingDelete
 
 				// update internal info
 				index.initialNode = node

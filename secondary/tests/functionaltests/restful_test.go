@@ -873,6 +873,38 @@ func getscans(id string, body map[string]interface{}) ([]interface{}, error) {
 	return entries, nil
 }
 
+func getscanscount(id string, body map[string]interface{}) (int, error) {
+	url, err := makeurl(fmt.Sprintf("/api/index/%v?multiscancount=true", id))
+	if err != nil {
+		return 0, err
+	}
+	data, _ := json.Marshal(body)
+	req, err := http.NewRequest("GET", url, bytes.NewBuffer(data))
+	if err != nil {
+		return 0, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	log.Printf("Status : %v\n", resp.Status)
+
+	var result interface{}
+
+	respbody, _ := ioutil.ReadAll(resp.Body)
+	if len(respbody) == 0 {
+		return 0, nil
+	}
+	err = json.Unmarshal(respbody, &result)
+	if err != nil {
+		return 0, err
+	}
+	if count, ok := result.(float64); ok {
+		return int(count), nil
+	}
+	return 0, nil
+}
+
 var reqcreate = map[string]interface{}{
 	"name":      "myindex",
 	"bucket":    "default",
@@ -914,6 +946,16 @@ var reqcount = map[string]interface{}{
 }
 
 var reqscans = map[string]interface{}{
+	"scans":      `[{"Seek":null,"Filter":[{"Low":"D","High":"F","Inclusion":3},{"Low":"A","High":"C","Inclusion":3}]},{"Seek":null,"Filter":[{"Low":"S","High":"V","Inclusion":3},{"Low":"A","High":"C","Inclusion":3}]}]`,
+	"projection": `{"EntryKeys":[0],"PrimaryKey":false}`,
+	"distinct":   false,
+	"limit":      1000000,
+	"reverse":    false,
+	"offset":     int64(0),
+	"stale":      "ok",
+}
+
+var reqscanscount = map[string]interface{}{
 	"scans":      `[{"Seek":null,"Filter":[{"Low":"D","High":"F","Inclusion":3},{"Low":"A","High":"C","Inclusion":3}]},{"Seek":null,"Filter":[{"Low":"S","High":"V","Inclusion":3},{"Low":"A","High":"C","Inclusion":3}]}]`,
 	"projection": `{"EntryKeys":[0],"PrimaryKey":false}`,
 	"distinct":   false,

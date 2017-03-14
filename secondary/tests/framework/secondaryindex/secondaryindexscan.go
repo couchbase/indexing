@@ -13,6 +13,7 @@ import (
 
 var CheckCollation = false
 var UseClient = "gsi"
+var DescCollation = false
 
 func RangeWithClient(indexName, bucketName, server string, low, high []interface{}, inclusion uint32,
 	distinct bool, limit int64, consistency c.Consistency, vector *qc.TsConsistency, client *qc.GsiClient) (tc.ScanResponse, error) {
@@ -106,10 +107,18 @@ func Range(indexName, bucketName, server string, low, high []interface{}, inclus
 							if previousSecKey == nil {
 								previousSecKey = secVal
 							} else {
-								if secVal.Collate(previousSecKey) < 0 {
-									errMsg := "Collation check failed. Previous Sec key > Current Sec key"
-									scanErr = errors.New(errMsg)
-									return false
+								if DescCollation {
+									if secVal.Collate(previousSecKey) > 0 {
+										errMsg := "Collation check failed. Previous Sec key < Current Sec key"
+										scanErr = errors.New(errMsg)
+										return false
+									}
+								} else {
+									if secVal.Collate(previousSecKey) < 0 {
+										errMsg := "Collation check failed. Previous Sec key > Current Sec key"
+										scanErr = errors.New(errMsg)
+										return false
+									}
 								}
 							}
 						}

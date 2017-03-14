@@ -151,7 +151,7 @@ func (b *metadataClient) GetIndexDefn(defnID uint64) *common.IndexDefn {
 // CreateIndex implements BridgeAccessor{} interface.
 func (b *metadataClient) CreateIndex(
 	indexName, bucket, using, exprType, partnExpr, whereExpr string,
-	secExprs []string, isPrimary bool,
+	secExprs []string, desc []bool, isPrimary bool,
 	planJSON []byte) (uint64, error) {
 
 	plan := make(map[string]interface{})
@@ -166,7 +166,7 @@ func (b *metadataClient) CreateIndex(
 RETRY:
 	defnID, err, needRefresh := b.mdClient.CreateIndexWithPlan(
 		indexName, bucket, using, exprType, partnExpr, whereExpr,
-		secExprs, isPrimary, plan)
+		secExprs, desc, isPrimary, plan)
 
 	if needRefresh && refreshCnt == 0 {
 		fmsg := "GsiClient: Indexer Node List is out-of-date.  Require refresh."

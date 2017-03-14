@@ -46,6 +46,7 @@ type IndexInstDistribution struct {
 	RState     uint32                  `json:"rRtate,omitempty"`
 	Version    uint64                  `json:"version,omitempty"`
 	ReplicaId  uint64                  `json:"replicaId,omitempty"`
+	Scheduled  bool                    `json:"scheduled,omitempty"`
 }
 
 type IndexPartDistribution struct {
@@ -115,7 +116,7 @@ func (g *GlobalTopology) RemoveTopologyKey(key string) {
 // Add an index definition to Topology.
 //
 func (t *IndexTopology) AddIndexDefinition(bucket string, name string, defnId uint64, instId uint64, state uint32, indexerId string,
-	instVersion uint64, rState uint32, replicaId uint64) {
+	instVersion uint64, rState uint32, replicaId uint64, scheduled bool) {
 
 	t.RemoveIndexDefinition(bucket, name)
 
@@ -134,6 +135,7 @@ func (t *IndexTopology) AddIndexDefinition(bucket string, name string, defnId ui
 	inst.Version = instVersion
 	inst.RState = rState
 	inst.ReplicaId = replicaId
+	inst.Scheduled = scheduled
 	inst.Partitions = append(inst.Partitions, *part)
 
 	defn := new(IndexDefnDistribution)
@@ -231,6 +233,27 @@ func (t *IndexTopology) UpdateStateForIndexInstByDefn(defnId common.IndexDefnId,
 					t.Definitions[i].Instances[j].State = uint32(state)
 					logging.Debugf("IndexTopology.UpdateStateForIndexInstByDefn(): Update index '%v' inst '%v' state to '%v'",
 						defnId, t.Definitions[i].Instances[j].InstId, t.Definitions[i].Instances[j].State)
+					changed = true
+				}
+			}
+		}
+	}
+	return changed
+}
+
+//
+// Set scheduled flag
+//
+func (t *IndexTopology) UpdateScheduledFlagForIndexInstByDefn(defnId common.IndexDefnId, scheduled bool) bool {
+
+	changed := false
+	for i, _ := range t.Definitions {
+		if t.Definitions[i].DefnId == uint64(defnId) {
+			for j, _ := range t.Definitions[i].Instances {
+				if t.Definitions[i].Instances[j].Scheduled != scheduled {
+					t.Definitions[i].Instances[j].Scheduled = scheduled
+					logging.Debugf("IndexTopology.UnsetScheduledFlagForIndexInstByDefn(): Unset scheduled flag for index '%v' inst '%v'",
+						defnId, t.Definitions[i].Instances[j].InstId)
 					changed = true
 				}
 			}
@@ -362,7 +385,7 @@ func (t *IndexTopology) GetIndexInstancesByDefn(defnId common.IndexDefnId) []Ind
 func GetIndexInstancesIdByDefn(mgr *IndexManager, bucket string, defnId common.IndexDefnId) ([]uint64, error) {
 	// Get the topology from the dictionary
 	topology, err := mgr.GetTopologyByBucket(bucket)
-	if err != nil {
+	if err != nil || topology == nil {
 		// TODO: Determine if it is a real error, or just topology does not exist in dictionary
 		// If there is an error, return an empty array.  This assume that the topology does not exist.
 		logging.Debugf("GetIndexInstancesByDefn(): Cannot find topology for bucket %s.  Skip.", bucket)
@@ -393,7 +416,7 @@ func GetAllDeletedIndexInstancesId(mgr *IndexManager, buckets []string) ([]uint6
 	// Get the topology from the dictionary
 	for _, bucket := range buckets {
 		topology, err := mgr.GetTopologyByBucket(bucket)
-		if err != nil {
+		if err != nil || topology == nil {
 			// TODO: Determine if it is a real error, or just topology does not exist in dictionary
 			// If there is an error, return an empty array.  This assume that the topology does not exist.
 			logging.Debugf("GetAllDeletedIndexInstances(): Cannot find topology for bucket %s.  Skip.", bucket)
@@ -424,7 +447,7 @@ func GetTopologyAsInstanceProtoMsg(mgr *IndexManager,
 
 	// Get the topology from the dictionary
 	topology, err := mgr.GetTopologyByBucket(bucket)
-	if err != nil {
+	if err != nil || topology == nil {
 		// TODO: Determine if it is a real error, or just topology does not exist in dictionary
 		// If there is an error, return an empty array.  This assume that the topology does not exist.
 		logging.Debugf("GetTopologyAsInstanceProtoMsg(): Cannot find topology for bucket %s.  Skip.", bucket)
@@ -444,7 +467,7 @@ func GetIndexInstanceAsProtoMsg(mgr *IndexManager,
 	port string) ([]*protobuf.Instance, error) {
 
 	topology, err := mgr.GetTopologyByBucket(bucket)
-	if err != nil {
+	if err != nil || topology == nil {
 		// TODO: Determine if it is a real error, or just topology does not exist in dictionary
 		// If there is an error, return an empty array.  This assume that the topology does not exist.
 		return nil, nil
@@ -459,8 +482,12 @@ func GetIndexInstanceAsProtoMsg(mgr *IndexManager,
 			// look up the index definition from dictionary
 			defn, err := mgr.GetIndexDefnById(common.IndexDefnId(defnRef.DefnId))
 			if err != nil {
-				logging.Debugf("GetIndexInstanceAsProtoMsg(): Cannot find definition id = %v.", defnId)
+				logging.Debugf("GetIndexInstanceAsProtoMsg(): Error = %v.", defnId)
 				return nil, err
+			}
+			if defn == nil {
+				logging.Debugf("GetIndexInstanceAsProtoMsg(): cannot find definition id = %v. Skipping", defnId)
+				continue
 			}
 
 			// Convert definition to protobuf msg
@@ -488,8 +515,12 @@ func GetChangeRecordAsProtoMsg(mgr *IndexManager, changes []*changeRecord, port 
 		// look up the index definition from dictionary
 		defn, err := mgr.GetIndexDefnById(common.IndexDefnId(change.definition.DefnId))
 		if err != nil {
-			logging.Debugf("GetChangeRecordAsProtoMsg(): Cannot find definition id = %v.", change.definition.DefnId)
+			logging.Debugf("GetChangeRecordAsProtoMsg(): Error = %v.", change.definition.DefnId)
 			return nil, err
+		}
+		if defn == nil {
+			logging.Debugf("GetIndexInstanceAsProtoMsg(): cannot find definition id = %v. Skipping", change.definition.DefnId)
+			continue
 		}
 
 		// Convert definition to protobuf msg
@@ -515,7 +546,11 @@ func convertTopologyToIndexInstProtoMsg(mgr *IndexManager,
 		// look up the index definition from dictionary
 		defn, err := mgr.GetIndexDefnById(common.IndexDefnId(defnRef.DefnId))
 		if err != nil {
-			logging.Debugf("convertTopologyToIndexInstProtoMsg(): Cannot find definition id = %v. Skip", defnRef.DefnId)
+			logging.Debugf("convertTopologyToIndexInstProtoMsg(): Error = %v. Skip", defnRef.DefnId)
+			continue
+		}
+		if defn == nil {
+			logging.Debugf("GetIndexInstanceAsProtoMsg(): cannot find definition id = %v. Skipping", defnRef.DefnId)
 			continue
 		}
 

@@ -1,6 +1,8 @@
 #!/bin/bash
 export PATH=$PATH:~/bin
 
+export MODE=test
+
 if [ "$MODE" = "" ]; then
   echo MODE must be set to 'test' or 'perf'
   exit 2

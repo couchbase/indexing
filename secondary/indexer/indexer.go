@@ -105,6 +105,7 @@ type indexer struct {
 	tkCmdCh            MsgChannel //channel to send commands to timekeeper
 	adminMgrCmdCh      MsgChannel //channel to send commands to admin port manager
 	rebalMgrCmdCh      MsgChannel //channel to send commands to rebalance manager
+	ddlSrvMgrCmdCh     MsgChannel //channel to send commands to ddl service manager
 	compactMgrCmdCh    MsgChannel //channel to send commands to compaction manager
 	clustMgrAgentCmdCh MsgChannel //channel to send messages to index coordinator
 	kvSenderCmdCh      MsgChannel //channel to send messages to kv sender
@@ -121,6 +122,7 @@ type indexer struct {
 	mutMgr        MutationManager   //handle to mutation manager
 	adminMgr      AdminManager      //handle to admin port manager
 	rebalMgr      RebalanceMgr      //handle to rebalance manager
+	ddlSrvMgr     *DDLServiceMgr    //handle to ddl service manager
 	clustMgrAgent ClustMgrAgent     //handle to ClustMgrAgent
 	kvSender      KVSender          //handle to KVSender
 	cbqBridge     CbqBridge         //handle to CbqBridge
@@ -164,6 +166,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		tkCmdCh:            make(MsgChannel),
 		adminMgrCmdCh:      make(MsgChannel),
 		rebalMgrCmdCh:      make(MsgChannel),
+		ddlSrvMgrCmdCh:     make(MsgChannel),
 		compactMgrCmdCh:    make(MsgChannel),
 		clustMgrAgentCmdCh: make(MsgChannel),
 		kvSenderCmdCh:      make(MsgChannel),
@@ -330,6 +333,15 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	idx.adminMgr, res = NewAdminManager(idx.adminMgrCmdCh, idx.adminRecvCh)
 	if res.GetMsgType() != MSG_SUCCESS {
 		logging.Fatalf("Indexer::NewIndexer Admin Manager Init Error %+v", res)
+		return nil, res
+	}
+
+	//Start DDL Service Manager
+	//Initialize DDL Service Manager before rebalance manager so DDL service manager is ready
+	//when Rebalancing manager receives ns_server rebalancing callback.
+	idx.ddlSrvMgr, res = NewDDLServiceMgr(idx.ddlSrvMgrCmdCh, idx.wrkrRecvCh, idx.config)
+	if res.GetMsgType() != MSG_SUCCESS {
+		logging.Fatalf("Indexer::NewIndexer DDL Service Manager Init Error %+v", res)
 		return nil, res
 	}
 
@@ -1139,23 +1151,29 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 	initialBuildReqd := true
 	for bucket, instIdList := range bucketIndexList {
 
-		if ok := idx.checkValidIndexInst(bucket, instIdList, clientCh, errMap); !ok {
+		instIdList, ok := idx.checkValidIndexInst(bucket, instIdList, clientCh, errMap)
+		if !ok {
 			logging.Errorf("Indexer::handleBuildIndex \n\tInvalid Index List "+
-				"Bucket %v. IndexList %v", bucket, instIdList)
+				"Bucket %v. Index in error %v.", bucket, errMap)
 			if idx.enableManager {
-				delete(bucketIndexList, bucket)
-				continue
+				if len(instIdList) == 0 {
+					delete(bucketIndexList, bucket)
+					continue
+				}
 			} else {
 				return
 			}
 		}
 
-		if !idx.checkBucketExists(bucket, instIdList, clientCh, errMap) {
+		instIdList, ok = idx.checkBucketExists(bucket, instIdList, clientCh, errMap)
+		if !ok {
 			logging.Errorf("Indexer::handleBuildIndex \n\tCannot Process Build Index."+
 				"Unknown Bucket %v.", bucket)
 			if idx.enableManager {
-				delete(bucketIndexList, bucket)
-				continue
+				if len(instIdList) == 0 {
+					delete(bucketIndexList, bucket)
+					continue
+				}
 			} else {
 				return
 			}
@@ -1163,7 +1181,7 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 
 		if ok := idx.checkBucketInRecovery(bucket, instIdList, clientCh, errMap); ok {
 			logging.Errorf("Indexer::handleBuildIndex \n\tCannot Process Build Index "+
-				"In Recovery Mode. Bucket %v. IndexList %v", bucket, instIdList)
+				"In Recovery Mode. Bucket %v. Index In Error %v", bucket, errMap)
 			if idx.enableManager {
 				delete(bucketIndexList, bucket)
 				continue
@@ -1175,7 +1193,7 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 		//check if Initial Build is already running for this index's bucket
 		if ok := idx.checkDuplicateInitialBuildRequest(bucket, instIdList, clientCh, errMap); !ok {
 			logging.Errorf("Indexer::handleBuildIndex \n\tBuild Already In"+
-				"Progress. Bucket %v. Inst %v", bucket, instIdList)
+				"Progress. Bucket %v. Index in error %v", bucket, errMap)
 			if idx.enableManager {
 				delete(bucketIndexList, bucket)
 				continue
@@ -1194,7 +1212,7 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 			if idx.enableManager {
 				idx.bulkUpdateError(instIdList, errStr)
 				for _, instId := range instIdList {
-					errMap[instId] = errors.New(errStr)
+					errMap[instId] = &common.IndexerError{Reason: errStr, Code: common.TransientError}
 				}
 				delete(bucketIndexList, bucket)
 				continue
@@ -1206,6 +1224,13 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 						category: INDEXER}}
 				return
 			}
+		}
+
+		if len(instIdList) != 0 {
+			bucketIndexList[bucket] = instIdList
+		} else {
+			delete(bucketIndexList, bucket)
+			continue
 		}
 
 		//if there is already an index for this bucket in MAINT_STREAM,
@@ -2367,7 +2392,7 @@ func (idx *indexer) checkDuplicateInitialBuildRequest(bucket string,
 			if idx.enableManager {
 				idx.bulkUpdateError(instIdList, errStr)
 				for _, instId := range instIdList {
-					errMap[instId] = errors.New(errStr)
+					errMap[instId] = &common.IndexerError{Reason: errStr, Code: common.IndexBuildInProgress}
 				}
 			} else if respCh != nil {
 				respCh <- &MsgError{
@@ -3487,7 +3512,7 @@ func (idx *indexer) validateIndexInstMap() {
 		//for deferred index in CREATED state, update the state of the index
 		//to READY in manager, so that build index request can be processed.
 		if index.Stream == common.NIL_STREAM {
-			if index.Defn.Deferred {
+			if index.Defn.Deferred || index.Scheduled {
 				if index.State == common.INDEX_STATE_CREATED {
 					logging.Warnf("Indexer::validateIndexInstMap State %v Stream %v Deferred %v Found. "+
 						"Updating State to Ready %v", index.State, index.Stream, index.Defn.Deferred, index)
@@ -3938,6 +3963,15 @@ func (idx *indexer) bulkUpdateError(instIdList []common.IndexInstId,
 
 }
 
+func (idx *indexer) updateError(instId common.IndexInstId,
+	errStr string) {
+
+	idxInst := idx.indexInstMap[instId]
+	idxInst.Error = errStr
+	idx.indexInstMap[instId] = idxInst
+
+}
+
 func (idx *indexer) bulkUpdateState(instIdList []common.IndexInstId,
 	state common.IndexState) {
 
@@ -4000,7 +4034,7 @@ func (idx *indexer) checkBucketInRecovery(bucket string,
 			errStr := fmt.Sprintf("Bucket %v In Recovery", bucket)
 			idx.bulkUpdateError(instIdList, errStr)
 			for _, instId := range instIdList {
-				errMap[instId] = errors.New(errStr)
+				errMap[instId] = &common.IndexerError{Reason: errStr, Code: common.IndexerInRecovery}
 			}
 		} else if clientCh != nil {
 			clientCh <- &MsgError{
@@ -4015,29 +4049,38 @@ func (idx *indexer) checkBucketInRecovery(bucket string,
 }
 
 func (idx *indexer) checkValidIndexInst(bucket string,
-	instIdList []common.IndexInstId, clientCh MsgChannel, errMap map[common.IndexInstId]error) bool {
+	instIdList []common.IndexInstId, clientCh MsgChannel, errMap map[common.IndexInstId]error) ([]common.IndexInstId, bool) {
+
+	if len(instIdList) == 0 {
+		return instIdList, true
+	}
+
+	newList := make([]common.IndexInstId, len(instIdList))
+	count := 0
 
 	//validate instance list
 	for _, instId := range instIdList {
 		if _, ok := idx.indexInstMap[instId]; !ok {
 			if idx.enableManager {
 				errStr := fmt.Sprintf("Unknown Index Instance %v In Build Request", instId)
-				idx.bulkUpdateError(instIdList, errStr)
-				for _, instId := range instIdList {
-					errMap[instId] = errors.New(errStr)
-				}
+				idx.updateError(instId, errStr)
+				errMap[instId] = &common.IndexerError{Reason: errStr, Code: common.IndexNotExist}
 			} else if clientCh != nil {
 				clientCh <- &MsgError{
 					err: Error{code: ERROR_INDEXER_UNKNOWN_INDEX,
 						severity: FATAL,
 						cause:    common.ErrIndexNotFound,
 						category: INDEXER}}
+				return instIdList, false
 			}
-			return false
+		} else {
+			newList[count] = instId
+			count++
 		}
 	}
 
-	return true
+	newList = newList[0:count]
+	return newList, len(newList) == len(instIdList)
 }
 
 func (idx *indexer) groupIndexListByBucket(instIdList []common.IndexInstId) map[string][]common.IndexInstId {
@@ -4059,33 +4102,40 @@ func (idx *indexer) groupIndexListByBucket(instIdList []common.IndexInstId) map[
 }
 
 func (idx *indexer) checkBucketExists(bucket string,
-	instIdList []common.IndexInstId, clientCh MsgChannel, errMap map[common.IndexInstId]error) bool {
+	instIdList []common.IndexInstId, clientCh MsgChannel, errMap map[common.IndexInstId]error) ([]common.IndexInstId, bool) {
 
-	var bucketUUIDList []string
+	if len(instIdList) == 0 {
+		return instIdList, false
+	}
+
+	newList := make([]common.IndexInstId, len(instIdList))
+	count := 0
+
+	currUUID := GetBucketUUID(idx.config["clusterAddr"].String(), bucket)
 	for _, instId := range instIdList {
 		indexInst := idx.indexInstMap[instId]
-		if indexInst.Defn.Bucket == bucket {
-			bucketUUIDList = append(bucketUUIDList, indexInst.Defn.BucketUUID)
+		if indexInst.Defn.Bucket != bucket || indexInst.Defn.BucketUUID != currUUID {
+
+			if idx.enableManager {
+				errStr := fmt.Sprintf("Unknown Bucket %v In Build Request", bucket)
+				idx.updateError(instId, errStr)
+				errMap[instId] = &common.IndexerError{Reason: errStr, Code: common.InvalidBucket}
+			} else if clientCh != nil {
+				clientCh <- &MsgError{
+					err: Error{code: ERROR_INDEXER_UNKNOWN_BUCKET,
+						severity: FATAL,
+						cause:    ErrUnknownBucket,
+						category: INDEXER}}
+				return instIdList, false
+			}
+		} else {
+			newList[count] = instId
+			count++
 		}
 	}
 
-	if !ValidateBucket(idx.config["clusterAddr"].String(), bucket, bucketUUIDList) {
-		if idx.enableManager {
-			errStr := fmt.Sprintf("Unknown Bucket %v In Build Request", bucket)
-			idx.bulkUpdateError(instIdList, errStr)
-			for _, instId := range instIdList {
-				errMap[instId] = errors.New(errStr)
-			}
-		} else if clientCh != nil {
-			clientCh <- &MsgError{
-				err: Error{code: ERROR_INDEXER_UNKNOWN_BUCKET,
-					severity: FATAL,
-					cause:    ErrUnknownBucket,
-					category: INDEXER}}
-		}
-		return false
-	}
-	return true
+	newList = newList[0:count]
+	return newList, len(newList) == len(instIdList)
 }
 
 func (idx *indexer) handleStats(cmd Message) {

@@ -148,6 +148,13 @@ func (api *restServer) handleIndex(
 				msg := `invalid method, expected GET`
 				http.Error(w, jsonstr(msg), http.StatusMethodNotAllowed)
 			}
+		} else if _, ok := q["multiscancount"]; ok {
+			if request.Method == "GET" || request.Method == "POST" {
+				api.doMultiScanCount(w, request)
+			} else {
+				msg := `invalid method, expected GET`
+				http.Error(w, jsonstr(msg), http.StatusMethodNotAllowed)
+			}
 		} else if _, ok := q["scanall"]; ok {
 			if request.Method == "GET" || request.Method == "POST" {
 				api.doScanall(w, request)
@@ -866,6 +873,100 @@ func (api *restServer) doMultiScan(w http.ResponseWriter, request *http.Request)
 	} else if empty {
 		w.Write([]byte("[]"))
 	}
+}
+
+//GET    /api/index/{id}?multiscancount=true
+func (api *restServer) doMultiScanCount(w http.ResponseWriter, request *http.Request) {
+	index, errmsg := api.getIndex(request.URL.Path)
+	if errmsg != "" && strings.Contains(errmsg, "not found") {
+		http.Error(w, errmsg, http.StatusNotFound)
+		return
+	} else if errmsg != "" {
+		http.Error(w, errmsg, http.StatusBadRequest)
+		return
+	}
+
+	var params map[string]interface{}
+	var ts *qclient.TsConsistency
+	distinct, stale := false, "ok"
+
+	bytes, err := ioutil.ReadAll(request.Body)
+	if err := json.Unmarshal(bytes, &params); err != nil {
+		msg := "invalid request body, unmarshal failed %v"
+		http.Error(w, jsonstr(msg, err), http.StatusBadRequest)
+		return
+	}
+
+	value, ok := params["scans"]
+	if !ok {
+		msg := "missing field ``scans``"
+		http.Error(w, jsonstr(msg), http.StatusBadRequest)
+		return
+	} else if _, ok = value.(string); ok == false {
+		msg := "invalid scans type"
+		http.Error(w, jsonstr(msg), http.StatusBadRequest)
+		return
+	}
+	scansParam := []byte(value.(string))
+
+	if value, ok = params["stale"]; ok && value != nil {
+		if stale, ok = value.(string); ok == false {
+			msg := `stale expected as string`
+			http.Error(w, jsonstr(msg), http.StatusBadRequest)
+			return
+		}
+	}
+
+	if value, ok = params["distinct"]; ok && value != nil {
+		if _, ok = value.(bool); ok == false {
+			msg := `invalid distinct type`
+			http.Error(w, jsonstr(msg), http.StatusBadRequest)
+			return
+		}
+		distinct = value.(bool)
+	}
+
+	if value, ok = params["timestamp"]; stale == "partial" {
+		if !ok {
+			msg := `missing field timestamp for stale="partial"`
+			http.Error(w, jsonstr(msg), http.StatusBadRequest)
+			return
+		}
+		ts, err = vector2tsconsistency(value.(map[string][]string))
+		if err != nil {
+			msg := "invalid timestamp, ParseUint failed %v"
+			http.Error(w, jsonstr(msg, err), http.StatusBadRequest)
+			return
+		}
+	}
+
+	scans, err := getScans(scansParam)
+	if err != nil {
+		msg := "invalid scans: %v"
+		http.Error(w, jsonstr(msg, err), http.StatusBadRequest)
+		return
+	}
+
+	cons, ok := stale2consistency(stale)
+	if ok == false {
+		http.Error(w, jsonstr(`invalid stale option`), http.StatusBadRequest)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+
+	count, err := api.client.MultiScanCount(
+		uint64(index.Definition.DefnId), "", scans,
+		distinct, cons, ts)
+	if err != nil {
+		w.Write([]byte(api.makeError(err)))
+		return
+	}
+
+	data := []byte(strconv.Itoa(int(count)))
+	w.Header().Set("Content-Length", fmt.Sprintf("%v", len(data)))
+	w.WriteHeader(http.StatusOK)
+	w.Write(data)
 }
 
 //GET    /api/index/{id}?scanall=true

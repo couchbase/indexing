@@ -178,7 +178,7 @@ func NewMemDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	slice.idxDefn = idxDefn
 	slice.id = sliceId
 	slice.numWriters = sysconf["numSliceWriters"].Int()
-	slice.maxRollbacks = sysconf["settings.recovery.max_rollbacks"].Int()
+	slice.maxRollbacks = sysconf["settings.moi.recovery.max_rollbacks"].Int()
 
 	sliceBufSize := sysconf["settings.sliceBufSize"].Uint64()
 	if sliceBufSize < uint64(slice.numWriters) {
@@ -367,7 +367,7 @@ func (mdb *memdbSlice) insertSecIndex(key []byte, docid []byte, workerId int) in
 	// a previous mainnode pointer entry
 	t0 := time.Now()
 	entry, err := NewSecondaryIndexEntry(key, docid, mdb.idxDefn.IsArrayIndex,
-		1, mdb.encodeBuf[workerId])
+		1, mdb.idxDefn.Desc, mdb.encodeBuf[workerId])
 	if err != nil {
 		logging.Errorf("MemDBSlice::insertSecIndex Slice Id %v IndexInstId %v "+
 			"Skipping docid:%s (%v)", mdb.Id, mdb.idxInstId, docid, err)
@@ -426,6 +426,14 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 		oldEntriesBytes[i] = oldEntriesBytes[i][:e.lenKey()]
 	}
 
+	//get keys in original form
+	if mdb.idxDefn.Desc != nil {
+		for _, item := range oldEntriesBytes {
+			jsonEncoder.ReverseCollate(item, mdb.idxDefn.Desc)
+		}
+
+	}
+
 	entryBytesToBeAdded, entryBytesToDeleted := CompareArrayEntriesWithCount(newEntriesBytes, oldEntriesBytes, newKeyCount, oldKeyCount)
 	nmut = 0
 
@@ -439,11 +447,19 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 		return 0
 	}
 
+	//convert to storage format
+	if mdb.idxDefn.Desc != nil {
+		for _, item := range list.Keys() {
+			jsonEncoder.ReverseCollate(item, mdb.idxDefn.Desc)
+		}
+
+	}
+
 	// Delete each entry in entryBytesToDeleted
 	for i, item := range entryBytesToDeleted {
 		if item != nil { // nil item indicates it should not be deleted
 			entry, err := NewSecondaryIndexEntry(item, docid, false,
-				oldKeyCount[i], mdb.encodeBuf[workerId][:0])
+				oldKeyCount[i], nil, mdb.encodeBuf[workerId][:0])
 			if err != nil {
 				logging.Errorf("MemDBSlice::insertSecArrayIndex Slice Id %v IndexInstId %v "+
 					"Skipping docid:%s (%v)", mdb.Id, mdb.idxInstId, docid, err)
@@ -460,7 +476,7 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 		if key != nil { // nil item indicates it should not be added
 			t0 := time.Now()
 			entry, err := NewSecondaryIndexEntry(key, docid, false,
-				newKeyCount[i], mdb.encodeBuf[workerId][:0])
+				newKeyCount[i], mdb.idxDefn.Desc, mdb.encodeBuf[workerId][:0])
 			if err != nil {
 				logging.Errorf("MemDBSlice::insertSecArrayIndex Slice Id %v IndexInstId %v "+
 					"Skipping docid:%s (%v)", mdb.Id, mdb.idxInstId, docid, err)
@@ -1253,14 +1269,27 @@ func (s *memdbSnapshot) MultiScanCount(ctx IndexReaderContext, low, high IndexKe
 	buf2 := secKeyBufPool.Get()
 	defer secKeyBufPool.Put(buf2)
 	previousRow := (*buf2)[:0]
+	revbuf := secKeyBufPool.Get()
+	defer secKeyBufPool.Put(revbuf)
 
 	callb := func(entry []byte) error {
 		select {
 		case <-stopch:
 			return common.ErrClientCancel
 		default:
+
 			skipRow := false
 			if scan.ScanType == FilterRangeReq {
+
+				//get the key in original format
+				if s.slice.idxDefn.Desc != nil {
+					revbuf := (*revbuf)[:0]
+					//copy is required, otherwise storage may get updated
+					revbuf = append(revbuf, entry...)
+					jsonEncoder.ReverseCollate(revbuf, s.slice.idxDefn.Desc)
+					entry = revbuf
+				}
+
 				skipRow, _, err = filterScanRow(entry, scan, (*buf)[:0])
 				if err != nil {
 					return err

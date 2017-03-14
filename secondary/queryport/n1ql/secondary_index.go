@@ -351,6 +351,57 @@ func (gsi *gsiKeyspace) CreateIndex(
 	return gsi.IndexById(defnID2String(defnID))
 }
 
+// CreateIndex2 implements datastore.Indexer2{} interface. Create a secondary
+// index on this keyspace
+func (gsi *gsiKeyspace) CreateIndex2(
+	requestId, name string, seekKey expression.Expressions, rangeKey datastore.IndexKeys,
+	where expression.Expression, with value.Value) (
+	datastore.Index, errors.Error) {
+
+	var partnStr string
+	if seekKey != nil && len(seekKey) > 0 {
+		partnStr = expression.NewStringer().Visit(seekKey[0])
+	}
+
+	var whereStr string
+	if where != nil {
+		whereStr = expression.NewStringer().Visit(where)
+	}
+
+	secStrs := make([]string, len(rangeKey))
+	desc := make([]bool, len(rangeKey))
+
+	for i, key := range rangeKey {
+		s := expression.NewStringer().Visit(key.Expr)
+		secStrs[i] = s
+		desc[i] = key.Desc
+	}
+
+	var withJSON []byte
+	var err error
+	if with != nil {
+		if withJSON, err = with.MarshalJSON(); err != nil {
+			return nil, errors.NewError(err, "GSI error marshalling WITH clause")
+		}
+	}
+	defnID, err := gsi.gsiClient.CreateIndex2(
+		name,
+		gsi.keyspace, /*bucket-name*/
+		"GSI",        /*using*/
+		"N1QL",       /*exprType*/
+		partnStr, whereStr, secStrs, desc,
+		false, /*isPrimary*/
+		withJSON)
+	if err != nil {
+		return nil, errors.NewError(err, "GSI CreateIndex()")
+	}
+	// refresh to get back the newly created index.
+	if err := gsi.Refresh(); err != nil {
+		return nil, err
+	}
+	return gsi.IndexById(defnID2String(defnID))
+}
+
 // BuildIndexes implements datastore.Indexer{} interface.
 func (gsi *gsiKeyspace) BuildIndexes(requestId string, names ...string) errors.Error {
 	defnIDs := make([]uint64, len(names))

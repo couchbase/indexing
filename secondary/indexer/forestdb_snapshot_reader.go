@@ -75,6 +75,12 @@ func (s *fdbSnapshot) MultiScanCount(ctx IndexReaderContext, low, high IndexKey,
 		default:
 			skipRow := false
 			if scan.ScanType == FilterRangeReq {
+
+				//get the key in original format
+				if s.slice.idxDefn.Desc != nil {
+					jsonEncoder.ReverseCollate(entry, s.slice.idxDefn.Desc)
+				}
+
 				skipRow, _, err = filterScanRow(entry, scan, (*buf)[:0])
 				if err != nil {
 					return err

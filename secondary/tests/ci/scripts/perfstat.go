@@ -1,6 +1,7 @@
 package main
 
 import "os"
+
 //import "encoding/json"
 import "fmt"
 import "io/ioutil"
@@ -57,7 +58,7 @@ func html(mtx *aggmtx, agg *aggstats) string {
   </head>
   <body>
 `)
-        buf.Printf("   <small><ul style='list-style-type:circle'>\n")
+	buf.Printf("   <small><ul style='list-style-type:circle'>\n")
 	for _, tn := range *tests {
 		buf.Printf("   <li><a href='#%v'>%v</a></li>\n", tn, prettyName(tn))
 	}
@@ -99,7 +100,7 @@ func js(mtx *aggmtx, agg *aggstats) string {
 			}
 		}
 
-		buf.Printf("var options_%v = {title:'%v', curveType:'function', legend:{position:'right'}, hAxis:{showTextEvery:%v}};\n", lbl, prettyName(test), lint)
+		buf.Printf("var options_%v = {title:'%v', curveType:'none', legend:{position:'right'}, hAxis:{showTextEvery:%v}};\n", lbl, prettyName(test), lint)
 		buf.Printf("var chart_%v = new google.visualization.LineChart(document.getElementById('curve_chart_%v'));\n", lbl, lbl)
 		buf.Printf("chart_%v.draw(data_%v, options_%v);\n", lbl, lbl, lbl)
 		buf.Printf("google.visualization.events.addListener(chart_%v, 'select', function() {\n", lbl)
@@ -205,7 +206,7 @@ func main() {
 		agg.data[fn] = result
 	}
 	mtx := transform(&agg)
-        htm := html(mtx, &agg)
+	htm := html(mtx, &agg)
 	fmt.Println(htm)
 }
 
@@ -218,7 +219,7 @@ func processBuild(fn filename) *filestat {
 	for _, line := range strings.Split(string(data), "\n") {
 		result.processLine(line)
 	}
-        // fmt.Println("\n\nprocessBuild :: result is ", result)
+	// fmt.Println("\n\nprocessBuild :: result is ", result)
 	return &result
 }
 
@@ -288,7 +289,7 @@ func (buf bytesBuffer) Printf(spec string, args ...interface{}) {
 
 func prettyLabel(fn filename) string {
 	// fmt.Println("\n\nfunc prettyLabel :: filename is ", fn)
-        ts := timestamp(fn)
+	ts := timestamp(fn)
 	label := ts.Format("Jan 2, 2006 3pm")
 	return label
 }
@@ -299,12 +300,12 @@ func timestamp(fn filename) time.Time {
 	ets := time.Date(1970, time.January, 1, 0, 0, 0, 0, time.UTC)
 	result := reTimestamp.FindStringSubmatch(string(fn))
 	//fmt.Println("\n\ntimestamp :: result is ", result)
-        if len(result) != 3 {
+	if len(result) != 3 {
 		fmt.Println("Could not parse timestamp:", string(fn))
 		return ets
 	}
 	label := result[2]
-        //fmt.Println("func timestamp:: label is ", label) 
+	//fmt.Println("func timestamp:: label is ", label)
 	ts, err := time.Parse("02.01.2006-15.04", label)
 	if err != nil {
 		fmt.Println("Could not parse label: %v, Error = %v", label, err)
@@ -316,7 +317,7 @@ func timestamp(fn filename) time.Time {
 func prettyName(test testname) string {
 	name := string(test)
 	var pretty string
-        spacing := false
+	spacing := false
 	for i := 0; i < len(name); i++ {
 		switch {
 		case name[i] >= 'A' && name[i] <= 'Z':

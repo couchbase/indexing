@@ -86,6 +86,55 @@ func CreateSecondaryIndex(
 	return err
 }
 
+// Creates an index and waits for it to become active
+func CreateSecondaryIndex2(
+	indexName, bucketName, server, whereExpr string, indexFields []string, desc []bool, isPrimary bool, with []byte,
+	skipIfExists bool, indexActiveTimeoutSeconds int64, client *qc.GsiClient) error {
+
+	if client == nil {
+		c, e := CreateClient(server, "2itest")
+		if e != nil {
+			return e
+		}
+		client = c
+		defer client.Close()
+	}
+
+	indexExists := IndexExistsWithClient(indexName, bucketName, server, client)
+	if skipIfExists == true && indexExists == true {
+		return nil
+	}
+	var secExprs []string
+	if isPrimary == false {
+		for _, indexField := range indexFields {
+			expr, err := n1ql.ParseExpression(indexField)
+			if err != nil {
+				log.Printf("Creating index %v. Error while parsing the expression (%v) : %v", indexName, indexField, err)
+			}
+
+			secExprs = append(secExprs, expression.NewStringer().Visit(expr))
+		}
+	}
+	exprType := "N1QL"
+	partnExp := ""
+
+	start := time.Now()
+	defnID, err := client.CreateIndex2(indexName, bucketName, IndexUsing, exprType, partnExp, whereExpr, secExprs, desc, isPrimary, with)
+	if err == nil {
+		log.Printf("Created the secondary index %v. Waiting for it become active", indexName)
+		e := WaitTillIndexActive(defnID, client, indexActiveTimeoutSeconds)
+		if e != nil {
+			return e
+		} else {
+			elapsed := time.Since(start)
+			tc.LogPerfStat("CreateAndBuildIndex", elapsed)
+			return nil
+		}
+	}
+
+	return err
+}
+
 // Creates an index and DOES NOT wait for it to become active
 func CreateSecondaryIndexAsync(
 	indexName, bucketName, server, whereExpr string, indexFields []string, isPrimary bool, with []byte,

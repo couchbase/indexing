@@ -533,6 +533,11 @@ func TestMultiScanRestAPI(t *testing.T) {
 	entries, err := getscans(ids[0], reqbody)
 	FailTestIfError(err, "Error in getscans()", t)
 	log.Printf("number of entries %v\n", len(entries))
+
+	reqbody = restful_clonebody(reqscanscount)
+	count, err := getscanscount(ids[0], reqbody)
+	FailTestIfError(err, "Error in getscanscout()", t)
+	log.Printf("Result from multiscancount API = %v\n", count)
 }
 
 func runMultiScan(scans qc.Scans, reverse, distinct bool,
