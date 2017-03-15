@@ -2113,7 +2113,7 @@ func (tk *timekeeper) setSnapshotType(streamId common.StreamId, bucket string,
 			}
 
 			// if storage type is MOI, then also generate snapshot during initial build.
-			if common.GetStorageMode() != common.FORESTDB {
+			if common.GetStorageMode() == common.MOI {
 				flushTs.SetSnapType(common.INMEM_SNAP)
 			}
 
