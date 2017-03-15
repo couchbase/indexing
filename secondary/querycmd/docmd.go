@@ -50,6 +50,7 @@ type Command struct {
 	Equal       c.SecondaryKey
 	Inclusion   qclient.Inclusion
 	Limit       int64
+	Distinct    bool
 	Consistency c.Consistency
 	// Configuration
 	ConfigKey string
@@ -87,6 +88,7 @@ func ParseArgs(arguments []string) (*Command, []string, *flag.FlagSet, error) {
 	fset.StringVar(&equal, "equal", "", "Span.Lookup: [key]")
 	fset.UintVar(&inclusion, "incl", 0, "Range: 0|1|2|3")
 	fset.Int64Var(&cmdOptions.Limit, "limit", 10, "Row limit")
+	fset.BoolVar(&cmdOptions.Distinct, "distinct", false, "Only distinct entries")
 	fset.BoolVar(&cmdOptions.Help, "h", false, "print help")
 	fset.BoolVar(&useSessionCons, "consistency", false, "Use session consistency")
 	// options for setting configuration
@@ -181,7 +183,7 @@ func HandleCommand(
 	verbose bool,
 	w io.Writer) (err error) {
 
-	iname, bucket, limit := cmd.IndexName, cmd.Bucket, cmd.Limit
+	iname, bucket, limit, distinct := cmd.IndexName, cmd.Bucket, cmd.Limit, cmd.Distinct
 	low, high, equal, incl := cmd.Low, cmd.High, cmd.Equal, cmd.Inclusion
 	cons := cmd.Consistency
 
@@ -311,11 +313,11 @@ func HandleCommand(
 		} else if cmd.Equal != nil {
 			equals := []c.SecondaryKey{cmd.Equal}
 			client.Lookup(
-				uint64(defnID), "", equals, false, limit,
+				uint64(defnID), "", equals, distinct, limit,
 				cons, nil, callb)
 		} else {
 			err = client.Range(
-				uint64(defnID), "", low, high, incl, false, limit,
+				uint64(defnID), "", low, high, incl, distinct, limit,
 				cons, nil, callb)
 		}
 		if err == nil {
@@ -570,31 +572,31 @@ func validate(cmd *Command, fset *flag.FlagSet) error {
 	switch cmd.OpType {
 	case "":
 		have = []string{}
-		dont = []string{"type", "index", "bucket", "where", "fields", "primary", "with", "indexes", "low", "high", "equal", "incl", "limit", "ckey", "cval"}
+		dont = []string{"type", "index", "bucket", "where", "fields", "primary", "with", "indexes", "low", "high", "equal", "incl", "limit", "distinct", "ckey", "cval"}
 
 	case "nodes":
 		have = []string{"type", "server", "auth"}
-		dont = []string{"h", "index", "bucket", "where", "fields", "primary", "with", "indexes", "low", "high", "equal", "incl", "limit", "ckey", "cval"}
+		dont = []string{"h", "index", "bucket", "where", "fields", "primary", "with", "indexes", "low", "high", "equal", "incl", "limit", "distinct", "ckey", "cval"}
 
 	case "list":
 		have = []string{"type", "server", "auth"}
-		dont = []string{"h", "index", "bucket", "where", "fields", "primary", "with", "indexes", "low", "high", "equal", "incl", "limit", "ckey", "cval"}
+		dont = []string{"h", "index", "bucket", "where", "fields", "primary", "with", "indexes", "low", "high", "equal", "incl", "limit", "distinct", "ckey", "cval"}
 
 	case "create":
 		have = []string{"type", "server", "auth", "index", "bucket", "primary"}
-		dont = []string{"h", "indexes", "low", "high", "equal", "incl", "limit", "ckey", "cval"}
+		dont = []string{"h", "indexes", "low", "high", "equal", "incl", "limit", "distinct", "ckey", "cval"}
 
 	case "build":
 		have = []string{"type", "server", "auth", "indexes"}
-		dont = []string{"h", "index", "bucket", "where", "fields", "primary", "with", "low", "high", "equal", "incl", "limit", "ckey", "cval"}
+		dont = []string{"h", "index", "bucket", "where", "fields", "primary", "with", "low", "high", "equal", "incl", "limit", "distinct", "ckey", "cval"}
 
 	case "move":
 		have = []string{"type", "server", "auth", "indexes"}
-		dont = []string{"h", "index", "bucket", "where", "fields", "primary", "low", "high", "equal", "incl", "limit", "ckey", "cval"}
+		dont = []string{"h", "index", "bucket", "where", "fields", "primary", "low", "high", "equal", "incl", "limit", "distinct", "ckey", "cval"}
 
 	case "drop":
 		have = []string{"type", "server", "auth", "index", "bucket"}
-		dont = []string{"h", "where", "fields", "primary", "with", "indexes", "low", "high", "equal", "incl", "limit", "ckey", "cval"}
+		dont = []string{"h", "where", "fields", "primary", "with", "indexes", "low", "high", "equal", "incl", "limit", "distinct", "ckey", "cval"}
 
 	case "scan":
 		have = []string{"type", "server", "auth", "index", "bucket"}
@@ -606,7 +608,7 @@ func validate(cmd *Command, fset *flag.FlagSet) error {
 
 	case "stats":
 		have = []string{"type", "server", "auth", "index", "bucket"}
-		dont = []string{"h", "where", "fields", "primary", "with", "indexes", "limit", "ckey", "cval"}
+		dont = []string{"h", "where", "fields", "primary", "with", "indexes", "limit", "distinct", "ckey", "cval"}
 
 	case "count":
 		have = []string{"type", "server", "auth", "index", "bucket"}
@@ -614,7 +616,7 @@ func validate(cmd *Command, fset *flag.FlagSet) error {
 
 	case "config":
 		have = []string{"type", "server", "auth"}
-		dont = []string{"h", "index", "bucket", "where", "fields", "primary", "with", "indexes", "low", "high", "equal", "incl", "limit"}
+		dont = []string{"h", "index", "bucket", "where", "fields", "primary", "with", "indexes", "low", "high", "equal", "incl", "limit", "distinct"}
 
 	default:
 		return fmt.Errorf("Specified operation type '%s' has no validation rule. Please add one to use.", cmd.OpType)
