@@ -441,8 +441,14 @@ func (r *Rebalancer) processTokenAsDest(ttid string, tt *c.TransferToken) bool {
 				rstate: c.REBAL_ACTIVE,
 				respch: respch}
 			<-respch
-			tt.State = c.TransferTokenReady
-			att.State = c.TransferTokenReady
+
+			if tt.TransferMode == c.TokenTransferModeMove {
+				tt.State = c.TransferTokenReady
+				att.State = c.TransferTokenReady
+			} else {
+				tt.State = c.TransferTokenCommit
+				att.State = c.TransferTokenCommit
+			}
 		} else {
 			att.State = c.TransferTokenInProgress
 			tt.State = c.TransferTokenInProgress
