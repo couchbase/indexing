@@ -1215,11 +1215,13 @@ func (mdb *plasmaSlice) Statistics() (StorageStatistics, error) {
 	}
 
 	sts.InternalData = internalData
-	_, sts.DataSize, sts.DiskSize = mdb.mainstore.GetLSSInfo()
-	if !mdb.isPrimary {
-		_, bsDataSz, bsDiskSz := mdb.backstore.GetLSSInfo()
-		sts.DataSize += bsDataSz
-		sts.DiskSize += bsDiskSz
+	if mdb.hasPersistence {
+		_, sts.DataSize, sts.DiskSize = mdb.mainstore.GetLSSInfo()
+		if !mdb.isPrimary {
+			_, bsDataSz, bsDiskSz := mdb.backstore.GetLSSInfo()
+			sts.DataSize += bsDataSz
+			sts.DiskSize += bsDiskSz
+		}
 	}
 	return sts, nil
 }
