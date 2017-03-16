@@ -193,7 +193,7 @@ func main() {
 			return
 		}
 
-		err = planner.ExecutePlanWithOptions(plan, indexSpecs, gDetail, gGenStmt, gOutput, gAddNode, gCpuQuota, memQuota, gAllowUnpin)
+		_, err = planner.ExecutePlanWithOptions(plan, indexSpecs, gDetail, gGenStmt, gOutput, gAddNode, gCpuQuota, memQuota, gAllowUnpin)
 		if err != nil {
 			logging.Fatalf("Planner error: %v.", err)
 			return
@@ -205,7 +205,7 @@ func main() {
 			logging.Fatalf("Invalid argument: option 'ddl' is not supported for rebalancing.")
 		}
 
-		err := planner.ExecuteRebalanceWithOptions(plan, nil, gDetail, gGenStmt, gOutput, gAddNode, gCpuQuota, memQuota, gAllowUnpin, nil)
+		_, err := planner.ExecuteRebalanceWithOptions(plan, nil, gDetail, gGenStmt, gOutput, gAddNode, gCpuQuota, memQuota, gAllowUnpin, nil)
 		if err != nil {
 			logging.Fatalf("Planner error: %v.", err)
 			return

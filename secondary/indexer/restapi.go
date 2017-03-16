@@ -360,7 +360,6 @@ func (api *restServer) doGetAll(w http.ResponseWriter, request *http.Request) {
 			instance := map[string]interface{}{
 				"instId":    fmt.Sprintf("%v", inst.InstId),
 				"state":     fmt.Sprintf("%v", inst.State),
-				"buildTime": inst.BuildTime,
 				"indexerId": fmt.Sprintf("%v", inst.IndexerId),
 				"endpoints": inst.Endpts,
 			}
@@ -423,7 +422,6 @@ func (api *restServer) doGet(w http.ResponseWriter, request *http.Request) {
 		instance := map[string]interface{}{
 			"instId":    fmt.Sprintf("%v", inst.InstId),
 			"state":     fmt.Sprintf("%v", inst.State),
-			"buildTime": inst.BuildTime,
 			"indexerId": fmt.Sprintf("%v", inst.IndexerId),
 			"endpoints": inst.Endpts,
 		}

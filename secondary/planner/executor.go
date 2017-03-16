@@ -221,7 +221,7 @@ func genTransferToken(solution *Solution, masterId string, topologyChange servic
 /////////////////////////////////////////////////////////////
 
 func ExecutePlanWithOptions(plan *Plan, indexSpecs []*IndexSpec, detail bool, genStmt string,
-	output string, addNode int, cpuQuota int, memQuota int64, allowUnpin bool) error {
+	output string, addNode int, cpuQuota int, memQuota int64, allowUnpin bool) (*Solution, error) {
 
 	resize := false
 	if plan == nil {
@@ -245,11 +245,15 @@ func ExecutePlanWithOptions(plan *Plan, indexSpecs []*IndexSpec, detail bool, ge
 		logging.Infof("****************************************")
 	}
 
-	return err
+	if p != nil {
+		return p.Result, err
+	}
+
+	return nil, err
 }
 
 func ExecuteRebalanceWithOptions(plan *Plan, indexSpecs []*IndexSpec, detail bool, genStmt string,
-	output string, addNode int, cpuQuota int, memQuota int64, allowUnpin bool, deletedNodes []string) error {
+	output string, addNode int, cpuQuota int, memQuota int64, allowUnpin bool, deletedNodes []string) (*Solution, error) {
 
 	config := DefaultRunConfig()
 	config.Detail = detail
@@ -269,7 +273,39 @@ func ExecuteRebalanceWithOptions(plan *Plan, indexSpecs []*IndexSpec, detail boo
 		logging.Infof("****************************************")
 	}
 
-	return err
+	if p != nil {
+		return p.Result, err
+	}
+
+	return nil, err
+}
+
+func ExecuteSwapWithOptions(plan *Plan, detail bool, genStmt string,
+	output string, addNode int, cpuQuota int, memQuota int64, allowUnpin bool, deletedNodes []string) (*Solution, error) {
+
+	config := DefaultRunConfig()
+	config.Detail = detail
+	config.GenStmt = genStmt
+	config.Resize = false
+	config.Output = output
+	config.AddNode = addNode
+	config.MemQuota = memQuota
+	config.CpuQuota = cpuQuota
+	config.AllowUnpin = allowUnpin
+
+	p, _, err := execute(config, CommandSwap, plan, nil, deletedNodes)
+
+	if detail {
+		logging.Infof("************ Indexer Layout *************")
+		p.PrintLayout()
+		logging.Infof("****************************************")
+	}
+
+	if p != nil {
+		return p.Result, err
+	}
+
+	return nil, err
 }
 
 func execute(config *RunConfig, command CommandType, p *Plan, indexSpecs []*IndexSpec, deletedNodes []string) (*SAPlanner, *RunStats, error) {
@@ -291,12 +327,12 @@ func execute(config *RunConfig, command CommandType, p *Plan, indexSpecs []*Inde
 
 		return plan(config, p, indexes)
 
-	} else if command == CommandRebalance {
+	} else if command == CommandRebalance || command == CommandSwap {
 		if plan == nil {
 			return nil, nil, errors.New("missing argument: either workload or plan must be present")
 		}
 
-		return rebalance(config, p, indexes, deletedNodes)
+		return rebalance(command, config, p, indexes, deletedNodes)
 
 	} else {
 		panic(fmt.Sprintf("uknown command: %v", command))
@@ -340,11 +376,11 @@ func plan(config *RunConfig, plan *Plan, indexes []*IndexUsage) (*SAPlanner, *Ru
 		total = append(total, initialIndexes...)
 		total = append(total, indexes...)
 		total = filterPinnedIndexes(config, total)
-		placement = newRandomPlacement(total, config.AllowSwap)
+		placement = newRandomPlacement(total, config.AllowSwap, false)
 	} else {
 		// initial placement
 		indexes = filterPinnedIndexes(config, indexes)
-		placement = newRandomPlacement(indexes, config.AllowSwap)
+		placement = newRandomPlacement(indexes, config.AllowSwap, false)
 	}
 	placement.Add(solution, indexes)
 
@@ -374,7 +410,7 @@ func plan(config *RunConfig, plan *Plan, indexes []*IndexUsage) (*SAPlanner, *Ru
 	return planner, s, nil
 }
 
-func rebalance(config *RunConfig, plan *Plan, indexes []*IndexUsage, deletedNodes []string) (*SAPlanner, *RunStats, error) {
+func rebalance(command CommandType, config *RunConfig, plan *Plan, indexes []*IndexUsage, deletedNodes []string) (*SAPlanner, *RunStats, error) {
 
 	var constraint ConstraintMethod
 	var sizing SizingMethod
@@ -395,7 +431,7 @@ func rebalance(config *RunConfig, plan *Plan, indexes []*IndexUsage, deletedNode
 	if plan != nil {
 		// create an initial solution from plan
 		var movedIndex, movedData uint64
-		solution, constraint, initialIndexes, movedIndex, movedData = solutionFromPlan(CommandRebalance, config, sizing, plan)
+		solution, constraint, initialIndexes, movedIndex, movedData = solutionFromPlan(command, config, sizing, plan)
 		setInitialLayoutStats(s, config, constraint, solution, initialIndexes, movedIndex, movedData, true)
 
 	} else {
@@ -423,12 +459,12 @@ func rebalance(config *RunConfig, plan *Plan, indexes []*IndexUsage, deletedNode
 	} else {
 		indexes = nil
 	}
-	placement = newRandomPlacement(indexes, config.AllowSwap)
+	placement = newRandomPlacement(indexes, config.AllowSwap, command == CommandSwap)
 
 	// run planner
 	cost = newUsageBasedCostMethod(constraint, config.DataCostWeight, config.CpuCostWeight, config.MemCostWeight)
 	planner := newSAPlanner(cost, constraint, placement, sizing)
-	if _, err := planner.Plan(CommandRebalance, solution); err != nil {
+	if _, err := planner.Plan(command, solution); err != nil {
 		return planner, s, err
 	}
 
@@ -598,7 +634,7 @@ func initialSolution(config *RunConfig,
 
 	r := newSolution(constraint, sizing, indexers, false, false)
 
-	placement := newRandomPlacement(indexes, config.AllowSwap)
+	placement := newRandomPlacement(indexes, config.AllowSwap, false)
 	placement.InitialPlace(r, indexes)
 
 	return r, constraint
@@ -645,7 +681,7 @@ func solutionFromPlan(command CommandType, config *RunConfig, sizing SizingMetho
 		}
 	}
 
-	memQuota, cpuQuota := computeQuota(config, sizing, indexes, plan.IsLive && command == CommandRebalance)
+	memQuota, cpuQuota := computeQuota(config, sizing, indexes, plan.IsLive && (command == CommandRebalance || command == CommandSwap))
 
 	if config.MemQuota == -1 && plan.MemQuota != 0 {
 		memQuota = uint64(float64(plan.MemQuota) * memQuotaFactor)
@@ -657,11 +693,11 @@ func solutionFromPlan(command CommandType, config *RunConfig, sizing SizingMetho
 
 	constraint := newIndexerConstraint(memQuota, cpuQuota, resize, maxNumNode, maxCpuUse, maxMemUse)
 
-	r := newSolution(constraint, sizing, plan.Placement, plan.IsLive, command == CommandRebalance)
+	r := newSolution(constraint, sizing, plan.Placement, plan.IsLive, (command == CommandRebalance || command == CommandSwap))
 	r.calculateSize() // in case sizing formula changes
 
 	if shuffle != 0 {
-		placement := newRandomPlacement(indexes, config.AllowSwap)
+		placement := newRandomPlacement(indexes, config.AllowSwap, false)
 		movedIndex, movedData = placement.randomMoveNoConstraint(r, shuffle)
 	}
 

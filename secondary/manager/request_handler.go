@@ -18,7 +18,6 @@ import (
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager/client"
 	"io"
-	"math"
 	"net/http"
 	"sort"
 	"strings"
@@ -82,11 +81,6 @@ type RestoreResponse struct {
 	Version uint64 `json:"version,omitempty"`
 	Code    string `json:"code,omitempty"`
 	Error   string `json:"error,omitempty"`
-}
-
-type RestoreContext struct {
-	idxToRestore map[common.IndexerId][]common.IndexDefn
-	idxToResolve map[common.IndexerId][]common.IndexDefn
 }
 
 //
@@ -364,7 +358,7 @@ func (m *requestHandlerContext) getIndexStatus(cinfo *common.ClusterInfoCache, b
 					continue
 				}
 
-				if topology := m.findTopologyByBucket(localMeta.IndexTopologies, defn.Bucket); topology != nil {
+				if topology := findTopologyByBucket(localMeta.IndexTopologies, defn.Bucket); topology != nil {
 
 					instances := topology.GetIndexInstancesByDefn(defn.DefnId)
 					for _, instance := range instances {
@@ -630,6 +624,7 @@ func (m *requestHandlerContext) handleRestoreIndexMetadataRequest(w http.Respons
 		return
 	}
 
+	// convert backup image into runtime data structure
 	image := m.convertIndexMetadataRequest(r)
 	if image == nil {
 		send(http.StatusBadRequest, w, &RestoreResponse{Code: RESP_ERROR, Error: "Unable to process request input"})
@@ -653,150 +648,25 @@ func (m *requestHandlerContext) handleRestoreIndexMetadataRequest(w http.Respons
 		}
 	}
 
-	indexerHostMap := make(map[common.IndexerId]string)
-	current, err := m.getIndexMetadata(m.mgr.getServiceAddrProvider().(*common.ClusterInfoCache), indexerHostMap, "")
+	// Restore
+	context := createRestoreContext(image, m.clusterUrl)
+	hostIndexMap, err := context.computeIndexLayout()
 	if err != nil {
-		send(http.StatusInternalServerError, w, &RestoreResponse{Code: RESP_ERROR, Error: "Unable to get the latest index metadata for restore"})
-		return
+		send(http.StatusInternalServerError, w, &RestoreResponse{Code: RESP_ERROR, Error: fmt.Sprintf("Unable to restore metadata.  Error=%v", err)})
 	}
 
-	context := &RestoreContext{idxToRestore: make(map[common.IndexerId][]common.IndexDefn),
-		idxToResolve: make(map[common.IndexerId][]common.IndexDefn)}
-
-	// Figure out what index to restore that has the same IndexDefnId
-	for _, imeta := range image.Metadata {
-		found := false
-		for _, cmeta := range current.Metadata {
-			if imeta.IndexerId == cmeta.IndexerId {
-				m.findIndexToRestoreById(&imeta, &cmeta, context)
-				found = true
-			}
-		}
-
-		if !found {
-			logging.Debugf("requestHandler.handleRestoreIndexMetadataRequest(): cannot find matching indexer id %s", imeta.IndexerId)
-			for _, idefn := range imeta.IndexDefinitions {
-				logging.Debugf("requestHandler.handleRestoreIndexMetadataRequest(): adding index definition (%v,%v) to to-be-resolve list", idefn.Bucket, idefn.Name)
-				context.idxToResolve[common.IndexerId(imeta.IndexerId)] =
-					append(context.idxToResolve[common.IndexerId(imeta.IndexerId)], idefn)
+	for host, indexes := range hostIndexMap {
+		for _, index := range indexes {
+			if !m.makeCreateIndexRequest(*index, host) {
+				send(http.StatusInternalServerError, w, &RestoreResponse{Code: RESP_ERROR, Error: "Unable to restore metadata."})
 			}
 		}
 	}
 
-	// Figure out what index to restore that has the same bucket and name
-	for indexerId, idxs := range context.idxToResolve {
-		for _, idx := range idxs {
-			m.findIndexToRestoreByName(current, idx, indexerId, context)
-		}
-	}
-
-	// recreate index
-	success := m.restoreIndex(current, context, indexerHostMap)
-
-	if success {
-		send(http.StatusOK, w, &RestoreResponse{Code: RESP_SUCCESS})
-		return
-	}
-
-	send(http.StatusInternalServerError, w, &RestoreResponse{Code: RESP_ERROR, Error: "Unable to restore metadata"})
-}
-
-func (m *requestHandlerContext) findIndexToRestoreById(image *LocalIndexMetadata,
-	current *LocalIndexMetadata, context *RestoreContext) {
-
-	context.idxToRestore[common.IndexerId(image.IndexerId)] = make([]common.IndexDefn, 0)
-	context.idxToResolve[common.IndexerId(image.IndexerId)] = make([]common.IndexDefn, 0)
-
-	for _, idefn := range image.IndexDefinitions {
-		match := false
-		for _, cdefn := range current.IndexDefinitions {
-			if idefn.DefnId == cdefn.DefnId {
-				// find index defn in the current repository, check the status
-				logging.Debugf("requestHandler.findIndexToRestoreById(): find matching index definition (%v,%v) in repository", idefn.Bucket, idefn.Name)
-
-				if topology := m.findTopologyByBucket(current.IndexTopologies, idefn.Bucket); topology != nil {
-					match = true
-					state, _ := topology.GetStatusByDefn(idefn.DefnId)
-					logging.Debugf("requestHandler.findIndexToRestoreById(): index definition (%v,%v) in repository in state %d", idefn.Bucket, idefn.Name, state)
-
-					if state == common.INDEX_STATE_DELETED || state == common.INDEX_STATE_NIL {
-						// Index Defn exists it the current repository, but it must be
-						// 1) Index Instance does not exist
-						// 2) Index Instance has DELETED state
-						logging.Debugf("requestHandler.findIndexToRestoreById(): adding index definition (%v,%v) to restore list", idefn.Bucket, idefn.Name)
-						context.idxToRestore[common.IndexerId(image.IndexerId)] =
-							append(context.idxToRestore[common.IndexerId(image.IndexerId)], idefn)
-					}
-				}
-			}
-		}
-
-		if !match {
-			// Index Defn does not exist.  Need to find if there is another index with matching <bucket, name>
-			logging.Debugf("requestHandler.findIndexToRestoreById(): adding index definition (%v,%v) to to-be-resolve list", idefn.Bucket, idefn.Name)
-			context.idxToResolve[common.IndexerId(image.IndexerId)] =
-				append(context.idxToResolve[common.IndexerId(image.IndexerId)], idefn)
-		}
-	}
-}
-
-func (m *requestHandlerContext) findIndexToRestoreByName(current *ClusterIndexMetadata,
-	defn common.IndexDefn, indexerId common.IndexerId, context *RestoreContext) {
-
-	logging.Debugf("requestHandler.findIndexToRestoreById(): checking for index definition (%v,%v) in repository by name", defn.Bucket, defn.Name)
-	for _, meta := range current.Metadata {
-		for _, ldefn := range meta.IndexDefinitions {
-			if ldefn.Bucket == defn.Bucket && ldefn.Name == defn.Name {
-				if topology := m.findTopologyByBucket(meta.IndexTopologies, ldefn.Bucket); topology != nil {
-					state, _ := topology.GetStatusByDefn(ldefn.DefnId)
-					if state != common.INDEX_STATE_DELETED && state != common.INDEX_STATE_NIL {
-						logging.Debugf("requestHandler.findIndexToRestoreByName(): find matching index definition (%v,%v) in repository in state %d", ldefn.Bucket, ldefn.Name, state)
-						return
-					}
-				}
-			}
-		}
-	}
-
-	logging.Debugf("requestHandler.findIndexToRestoreByName(): adding index definition (%v,%v) to restore list", defn.Bucket, defn.Name)
-	context.idxToRestore[common.IndexerId(indexerId)] = append(context.idxToRestore[common.IndexerId(indexerId)], defn)
-}
-
-func (m *requestHandlerContext) restoreIndex(current *ClusterIndexMetadata,
-	context *RestoreContext, indexerHostMap map[common.IndexerId]string) bool {
-
-	indexerCountMap := make(map[common.IndexerId]int)
-	for _, meta := range current.Metadata {
-		indexerCountMap[common.IndexerId(meta.IndexerId)] = len(meta.IndexDefinitions)
-	}
-
-	result := true
-	for indexerId, idxs := range context.idxToRestore {
-		for _, defn := range idxs {
-			host, ok := indexerHostMap[indexerId]
-			if !ok {
-				indexerId = m.findMinIndexer(indexerCountMap)
-				host = indexerHostMap[indexerId]
-			}
-
-			logging.Debugf("requestHandler.restoreIndex(): restore index definition (%v,%v) on host %v", defn.Bucket, defn.Name, host)
-			result = result && m.makeCreateIndexRequest(defn, host)
-
-			indexerCountMap[indexerId] = indexerCountMap[indexerId] + 1
-		}
-	}
-
-	return result
+	send(http.StatusOK, w, &RestoreResponse{Code: RESP_SUCCESS})
 }
 
 func (m *requestHandlerContext) makeCreateIndexRequest(defn common.IndexDefn, host string) bool {
-
-	id, err := common.NewIndexDefnId()
-	if err != nil {
-		logging.Debugf("requestHandler.makeCreateIndexRequest(): fail to generate index definition id %v", err)
-		return false
-	}
-	defn.DefnId = id
 
 	// deferred build for restore
 	defn.Deferred = true
@@ -804,7 +674,7 @@ func (m *requestHandlerContext) makeCreateIndexRequest(defn common.IndexDefn, ho
 	req := IndexRequest{Version: uint64(1), Type: CREATE, Index: defn}
 	body, err := json.Marshal(&req)
 	if err != nil {
-		logging.Debugf("requestHandler.makeCreateIndexRequest(): cannot marshall create index request %v", err)
+		logging.Errorf("requestHandler.makeCreateIndexRequest(): cannot marshall create index request %v", err)
 		return false
 	}
 
@@ -812,44 +682,18 @@ func (m *requestHandlerContext) makeCreateIndexRequest(defn common.IndexDefn, ho
 
 	resp, err := postWithAuth(host+"/createIndex", "application/json", bodybuf)
 	if err != nil {
-		logging.Debugf("requestHandler.makeCreateIndexRequest(): create index request fails %v", err)
+		logging.Errorf("requestHandler.makeCreateIndexRequest(): create index request fails for %v/createIndex. Error=%v", host, err)
 		return false
 	}
 
 	response := new(IndexResponse)
 	status := convertResponse(resp, response)
 	if status == RESP_ERROR || response.Code == RESP_ERROR {
-		logging.Debugf("requestHandler.makeCreateIndexRequest(): create index request fails")
+		logging.Errorf("requestHandler.makeCreateIndexRequest(): create index request fails")
 		return false
 	}
 
 	return true
-}
-
-func (m *requestHandlerContext) findTopologyByBucket(topologies []IndexTopology, bucket string) *IndexTopology {
-
-	for _, topology := range topologies {
-		if topology.Bucket == bucket {
-			return &topology
-		}
-	}
-
-	return nil
-}
-
-func (m *requestHandlerContext) findMinIndexer(indexerCountMap map[common.IndexerId]int) common.IndexerId {
-
-	minIndexerId := common.INDEXER_ID_NIL
-	minCount := math.MaxInt32
-
-	for indexerId, count := range indexerCountMap {
-		if count < minCount {
-			minCount = count
-			minIndexerId = indexerId
-		}
-	}
-
-	return minIndexerId
 }
 
 ///////////////////////////////////////////////////////
@@ -948,6 +792,17 @@ func postWithAuth(url string, bodyType string, body io.Reader) (*http.Response, 
 
 	client := http.Client{Timeout: time.Duration(10 * time.Second)}
 	return client.Do(req)
+}
+
+func findTopologyByBucket(topologies []IndexTopology, bucket string) *IndexTopology {
+
+	for _, topology := range topologies {
+		if topology.Bucket == bucket {
+			return &topology
+		}
+	}
+
+	return nil
 }
 
 ///////////////////////////////////////////////////////

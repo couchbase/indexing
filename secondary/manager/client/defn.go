@@ -58,7 +58,6 @@ type IndexInstDistribution struct {
 	State      uint32                  `json:"state,omitempty"`
 	StreamId   uint32                  `json:"streamId,omitempty"`
 	Error      string                  `json:"error,omitempty"`
-	BuildTime  []uint64                `json:"buildTime,omitempty"`
 	Partitions []IndexPartDistribution `json:"partitions,omitempty"`
 	RState     uint32                  `json:"rRtate,omitempty"`
 	Version    uint64                  `json:"version,omitempty"`
@@ -110,7 +109,7 @@ type ServiceMap struct {
 }
 
 /////////////////////////////////////////////////////////////////////////
-// private method : unmarshalling
+// marshalling/unmarshalling
 ////////////////////////////////////////////////////////////////////////
 
 func unmarshallIndexTopology(data []byte) (*IndexTopology, error) {
@@ -186,6 +185,10 @@ func MarshallServiceMap(srvMap *ServiceMap) ([]byte, error) {
 	return buf, nil
 }
 
+/////////////////////////////////////////////////////////////////////////
+// Topology
+////////////////////////////////////////////////////////////////////////
+
 func (t *IndexTopology) findIndexerId() string {
 
 	for _, defn := range t.Definitions {
@@ -211,4 +214,27 @@ func (inst IndexInstDistribution) findIndexerId() string {
 	}
 
 	return ""
+}
+
+func (t *IndexTopology) GetIndexInstByDefn(defnId c.IndexDefnId) *IndexInstDistribution {
+
+	for i, _ := range t.Definitions {
+		if t.Definitions[i].DefnId == uint64(defnId) {
+			for _, inst := range t.Definitions[i].Instances {
+				return &inst
+			}
+		}
+	}
+
+	return nil
+}
+
+func (t *IndexTopology) GetStatusByDefn(defnId c.IndexDefnId) (c.IndexState, string) {
+
+	for i, _ := range t.Definitions {
+		if t.Definitions[i].DefnId == uint64(defnId) {
+			return c.IndexState(t.Definitions[i].Instances[0].State), t.Definitions[i].Instances[0].Error
+		}
+	}
+	return c.INDEX_STATE_NIL, ""
 }

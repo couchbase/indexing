@@ -212,6 +212,34 @@ func sortNodeByUsage(s *Solution) []*IndexerNode {
 }
 
 //
+// This function sorts the indexer node by number of indexes
+//
+func sortNodeByCount(s *Solution) []*IndexerNode {
+
+	numOfIndexers := len(s.Placement)
+	result := make([]*IndexerNode, numOfIndexers)
+	copy(result, s.Placement)
+
+	for i, _ := range result {
+		min := i
+		for j := i + 1; j < numOfIndexers; j++ {
+
+			if len(result[i].Indexes) > len(result[j].Indexes) {
+				min = j
+			}
+		}
+
+		if min != i {
+			tmp := result[i]
+			result[i] = result[min]
+			result[min] = tmp
+		}
+	}
+
+	return result
+}
+
+//
 // This function sorts the index by usage
 //
 func sortIndexByUsage(s *Solution, indexes []*IndexUsage) []*IndexUsage {

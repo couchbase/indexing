@@ -124,7 +124,6 @@ type InstanceDefn struct {
 	InstId    c.IndexInstId
 	State     c.IndexState
 	Error     string
-	BuildTime []uint64
 	IndexerId c.IndexerId
 	Endpts    []c.Endpoint
 	Version   uint64
@@ -1725,7 +1724,6 @@ func (r *metadataRepo) makeInstanceDefn(defnId c.IndexDefnId, inst *IndexInstDis
 	idxInst.InstId = c.IndexInstId(inst.InstId)
 	idxInst.State = c.IndexState(inst.State)
 	idxInst.Error = inst.Error
-	idxInst.BuildTime = inst.BuildTime
 	idxInst.Version = inst.Version
 	idxInst.RState = inst.RState
 
