@@ -11,18 +11,11 @@ package indexer
 
 import (
 	"bytes"
+	"crypto/tls"
 	"encoding/gob"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/fdb"
-	"github.com/couchbase/indexing/secondary/logging"
-	"github.com/couchbase/indexing/secondary/memdb"
-	"github.com/couchbase/indexing/secondary/memdb/nodetable"
-	projClient "github.com/couchbase/indexing/secondary/projector/client"
-	"github.com/couchbase/nitro/mm"
-	"github.com/couchbase/nitro/plasma"
 	"net"
 	"net/http"
 	"os"
@@ -33,6 +26,15 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/fdb"
+	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/memdb"
+	"github.com/couchbase/indexing/secondary/memdb/nodetable"
+	projClient "github.com/couchbase/indexing/secondary/projector/client"
+	"github.com/couchbase/nitro/mm"
+	"github.com/couchbase/nitro/plasma"
 )
 
 type Indexer interface {
@@ -281,6 +283,30 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 			common.CrashOnError(err)
 		}
 	}()
+
+	sslPort := idx.config["httpsPort"].String()
+	if sslPort != "" {
+		certFile := idx.config["certFile"].String()
+		keyFile := idx.config["keyFile"].String()
+		sslAddr := net.JoinHostPort("", sslPort)
+		go func() {
+			// allow only strong ssl as this is an internal API and interop is not a concern
+			sslsrv := &http.Server{
+				Addr:         sslAddr,
+				TLSNextProto: make(map[string]func(*http.Server, *tls.Conn, http.Handler), 0),
+				TLSConfig: &tls.Config{
+					CipherSuites:             []uint16{tls.TLS_RSA_WITH_AES_256_CBC_SHA},
+					MinVersion:               tls.VersionTLS12,
+					PreferServerCipherSuites: true,
+					// ClientAuth:            tls.RequireAndVerifyClientCert,
+				},
+			}
+			if err := sslsrv.ListenAndServeTLS(certFile, keyFile); err != nil {
+				logging.Fatalf("indexer:: Error Starting Https Server: %v", err)
+				common.CrashOnError(err)
+			}
+		}()
+	}
 
 	//read persisted indexer state
 	if err := idx.bootstrap(snapshotNotifych); err != nil {
