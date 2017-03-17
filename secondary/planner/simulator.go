@@ -353,7 +353,7 @@ func (t *simulator) RunSingleTest(config *RunConfig, command CommandType, spec *
 
 		return plan(config, p, indexes)
 
-	} else if command == CommandRebalance {
+	} else if command == CommandRebalance || command == CommandSwap {
 		if spec != nil {
 			indexes, err = t.indexUsages(sizing, spec)
 			if err != nil {
@@ -368,7 +368,7 @@ func (t *simulator) RunSingleTest(config *RunConfig, command CommandType, spec *
 		if err != nil {
 			return nil, nil, err
 		}
-		return rebalance(config, p, indexes, deletedNodes)
+		return rebalance(command, config, p, indexes, deletedNodes)
 
 	} else {
 		return nil, nil, errors.New(fmt.Sprintf("uknown command: %v", command))

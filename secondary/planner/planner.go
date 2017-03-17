@@ -132,6 +132,8 @@ type IndexerNode struct {
 	// input: node identification
 	NodeId      string `json:"nodeId"`
 	NodeUUID    string `json:"nodeUUID"`
+	IndexerId   string `json:"indexerId"`
+	RestUrl     string `json:"restUrl"`
 	ServerGroup string `json:"serverGroup,omitempty"`
 
 	// input/output: resource consumption (from sizing)
@@ -261,6 +263,8 @@ type UsageBasedCostMethod struct {
 	DataMoved      uint64  `json:"dataMoved,omitempty"`
 	TotalIndex     uint64  `json:"totalIndex,omitempty"`
 	IndexMoved     uint64  `json:"indexMoved,omitempty"`
+	IdxMean        float64 `json:"idxMean,omitempty"`
+	IdxStdDev      float64 `json:"idxStdDev,omitempty"`
 	MemFree        float64 `json:"memFree,omitempty"`
 	CpuFree        float64 `json:"cpuFree,omitempty"`
 	constraint     ConstraintMethod
@@ -279,6 +283,7 @@ type RandomPlacement struct {
 	eligibles []*IndexUsage
 	optionals []*IndexUsage
 	allowSwap bool
+	swapOnly  bool
 }
 
 //////////////////////////////////////////////////////////////
@@ -1100,6 +1105,49 @@ func (s *Solution) ComputeCpuUsage() (float64, float64) {
 }
 
 //
+// Compute statistics on number of index. This only consider
+// index that has no stats or sizing information.
+//
+func (s *Solution) ComputeEmptyIndexDistribution() (float64, float64) {
+
+	// Compute mean number of index
+	var meanIdxUsage float64
+	for _, indexer := range s.Placement {
+		meanIdxUsage += float64(s.numEmptyIndex(indexer))
+	}
+	meanIdxUsage = meanIdxUsage / float64(len(s.Placement))
+
+	// compute variance on number of index
+	var varianceIdxUsage float64
+	for _, indexer := range s.Placement {
+		v := float64(s.numEmptyIndex(indexer)) - meanIdxUsage
+		varianceIdxUsage += v * v
+	}
+	varianceIdxUsage = varianceIdxUsage / float64(len(s.Placement))
+
+	// compute std dev on number of index
+	stdDevIdxUsage := math.Sqrt(varianceIdxUsage)
+
+	return meanIdxUsage, stdDevIdxUsage
+}
+
+//
+// Find the number of indexes that has no stats or sizing information.
+// This does not take into consideration for index fixed overhead.
+//
+func (s *Solution) numEmptyIndex(indexer *IndexerNode) int {
+
+	count := 0
+	for _, index := range indexer.Indexes {
+		if index.GetMemUsage(s.UseLiveData()) == 0 && index.GetCpuUsage(s.UseLiveData()) == 0 {
+			count++
+		}
+	}
+
+	return count
+}
+
+//
 // Compute statistics on index movement
 //
 func (s *Solution) computeIndexMovement() (uint64, uint64, uint64, uint64) {
@@ -1182,6 +1230,26 @@ func (s *Solution) findNodeWithFreeUsage(memUsage uint64, cpuUsage uint64) *Inde
 	}
 
 	return nil
+}
+
+//
+// Find emtpy indexer node
+//
+func (s *Solution) findEmptyNode(rs *rand.Rand) *IndexerNode {
+
+	nodes := ([]*IndexerNode)(nil)
+
+	for _, indexer := range s.Placement {
+		if indexer.delete {
+			continue
+		}
+
+		if len(indexer.Indexes) == 0 {
+			nodes = append(nodes, indexer)
+		}
+	}
+
+	return getRandomNode(rs, nodes)
 }
 
 //
@@ -1351,6 +1419,89 @@ func (s *Solution) findNumLiveNode() int {
 func (s *Solution) ignoreResourceConstraint() bool {
 
 	return s.UseLiveData() && !s.isMOICluster()
+}
+
+//
+// Check if there is any replica (excluding serlf) in the server group
+//
+func (s *Solution) hasReplicaInServerGroup(u *IndexUsage, group string) bool {
+
+	for _, indexer := range s.Placement {
+		if indexer.delete {
+			continue
+		}
+		for _, index := range indexer.Indexes {
+			if index != u && index.DefnId == u.DefnId { // replica
+				if group == indexer.ServerGroup {
+					return true
+				}
+			}
+		}
+	}
+
+	return false
+}
+
+//
+// Check if any server group without this replica
+//
+func (s *Solution) hasServerGroupWithNoReplica(u *IndexUsage) bool {
+
+	counts := make(map[string]int)
+
+	for _, indexer := range s.Placement {
+		if indexer.delete {
+			continue
+		}
+
+		if _, ok := counts[indexer.ServerGroup]; !ok {
+			counts[indexer.ServerGroup] = 0
+		}
+
+		for _, index := range indexer.Indexes {
+			if index != u && index.DefnId == u.DefnId { // replica
+				counts[indexer.ServerGroup] = counts[indexer.ServerGroup] + 1
+			}
+		}
+	}
+
+	for _, count := range counts {
+		if count == 0 {
+			return true
+		}
+	}
+
+	return false
+}
+
+//
+// Does the index node has replia?
+//
+func (s *Solution) hasReplia(indexer *IndexerNode, target *IndexUsage) bool {
+
+	for _, index := range indexer.Indexes {
+		if index != target && index.DefnId == target.DefnId {
+			return true
+		}
+	}
+
+	return false
+}
+
+//
+// Find the indexer node that contains the replica
+//
+func (s *Solution) FindIndexerWithReplica(name string, bucket string, replicaId int) *IndexerNode {
+
+	for _, indexer := range s.Placement {
+		for _, index := range indexer.Indexes {
+			if index.Name == name && index.Bucket == bucket && index.Instance != nil && index.Instance.ReplicaId == replicaId {
+				return indexer
+			}
+		}
+	}
+
+	return nil
 }
 
 //////////////////////////////////////////////////////////////
@@ -1526,72 +1677,19 @@ func (c *IndexerConstraint) CanAddNode(s *Solution) bool {
 }
 
 //
-// Check if there is any replica (excluding serlf) in the server group
-//
-func (c *IndexerConstraint) hasReplicaInServerGroup(s *Solution, u *IndexUsage, group string) bool {
-
-	for _, indexer := range s.Placement {
-		if indexer.delete {
-			continue
-		}
-		for _, index := range indexer.Indexes {
-			if index != u && index.DefnId == u.DefnId { // replica
-				if group == indexer.ServerGroup {
-					return true
-				}
-			}
-		}
-	}
-
-	return false
-}
-
-//
-// Check if any server group without this replica
-//
-func (c *IndexerConstraint) hasServerGroupWithNoReplica(s *Solution, u *IndexUsage) bool {
-
-	counts := make(map[string]int)
-
-	for _, indexer := range s.Placement {
-		if indexer.delete {
-			continue
-		}
-
-		if _, ok := counts[indexer.ServerGroup]; !ok {
-			counts[indexer.ServerGroup] = 0
-		}
-
-		for _, index := range indexer.Indexes {
-			if index != u && index.DefnId == u.DefnId { // replica
-				counts[indexer.ServerGroup] = counts[indexer.ServerGroup] + 1
-			}
-		}
-	}
-
-	for _, count := range counts {
-		if count == 0 {
-			return true
-		}
-	}
-
-	return false
-}
-
-//
 // Check replica server group
 //
 func (c *IndexerConstraint) SatisfyServerGroupConstraint(s *Solution, u *IndexUsage, group string) bool {
 
 	// If there is no replica (excluding self) in the server group.
-	hasReplicaInServerGroup := c.hasReplicaInServerGroup(s, u, group)
+	hasReplicaInServerGroup := s.hasReplicaInServerGroup(u, group)
 	if !hasReplicaInServerGroup {
 		// no replica in this server group
 		return true
 	}
 
 	// There are replica in this server group. Check to see if there are any server group without this index.
-	hasServerGroupWithNoReplica := c.hasServerGroupWithNoReplica(s, u)
+	hasServerGroupWithNoReplica := s.hasServerGroupWithNoReplica(u)
 	if !hasServerGroupWithNoReplica {
 		// every server group has a replica of this index
 		return true
@@ -1870,6 +1968,59 @@ func newIndexerNode(nodeId string, sizing SizingMethod) *IndexerNode {
 }
 
 //
+// This function creates a new indexer node.  This function expects that each index is already
+// "sized".   If sizing method is provided, it will compute sizing for indexer as well.
+//
+func CreateIndexerNodeWithIndexes(nodeId string, sizing SizingMethod, indexes []*IndexUsage) *IndexerNode {
+
+	r := &IndexerNode{
+		NodeId:   nodeId,
+		NodeUUID: "tempNodeUUID_" + nodeId,
+		Indexes:  indexes,
+	}
+
+	for _, index := range indexes {
+		index.initialNode = r
+	}
+
+	if sizing != nil {
+		sizing.ComputeIndexerSize(r)
+	}
+
+	return r
+}
+
+//
+// Mark the node as deleted
+//
+func (o *IndexerNode) MarkDeleted() {
+
+	o.delete = true
+}
+
+//
+// Is indexer deleted?
+//
+func (o *IndexerNode) IsDeleted() bool {
+	return o.delete
+}
+
+//
+// Get a list of index usages that are moved to this node
+//
+func (o *IndexerNode) GetMovedIndex() []*IndexUsage {
+
+	result := ([]*IndexUsage)(nil)
+	for _, index := range o.Indexes {
+		if index.initialNode == nil || index.initialNode.NodeId != o.NodeId {
+			result = append(result, index)
+		}
+	}
+
+	return result
+}
+
+//
 // This function makes a copy of a indexer node.
 //
 func (o *IndexerNode) clone() *IndexerNode {
@@ -1877,6 +2028,8 @@ func (o *IndexerNode) clone() *IndexerNode {
 	r := &IndexerNode{
 		NodeId:            o.NodeId,
 		NodeUUID:          o.NodeUUID,
+		IndexerId:         o.IndexerId,
+		RestUrl:           o.RestUrl,
 		ServerGroup:       o.ServerGroup,
 		MemUsage:          o.MemUsage,
 		MemOverhead:       o.MemOverhead,
@@ -2140,11 +2293,13 @@ func (c *UsageBasedCostMethod) Cost(s *Solution) float64 {
 	c.CpuMean, c.CpuStdDev = s.ComputeCpuUsage()
 	c.TotalData, c.DataMoved, c.TotalIndex, c.IndexMoved = s.computeIndexMovement()
 	c.MemFree, c.CpuFree = s.computeFreeRatio()
+	c.IdxMean, c.IdxStdDev = s.ComputeEmptyIndexDistribution()
 
 	memCost := float64(0)
 	cpuCost := float64(0)
 	dataCost := float64(0)
 	indexCost := float64(0)
+	numCost := float64(0)
 	count := 0
 
 	if c.memCostWeight > 0 && c.MemMean != 0 {
@@ -2154,6 +2309,16 @@ func (c *UsageBasedCostMethod) Cost(s *Solution) float64 {
 
 	if c.cpuCostWeight > 0 && c.CpuMean != 0 {
 		cpuCost = c.CpuStdDev / c.CpuMean * c.cpuCostWeight
+		count++
+	}
+
+	// consider the number of "emtpy" index per node.  Empty index
+	// is index with no recored memory or cpu usage (exlcuding mem overhead).
+	// It could be index without stats or sizing information.  This
+	// help to distribute empty index evenly across nodes. Note that if
+	// an index holds no key, it may still have some memory usage from stats.
+	if c.IdxMean != 0 {
+		numCost = c.IdxStdDev / c.IdxMean
 		count++
 	}
 
@@ -2169,7 +2334,7 @@ func (c *UsageBasedCostMethod) Cost(s *Solution) float64 {
 
 	logging.Tracef("Planner::cost: mem cost %v cpu cost %v data moved %v index moved %v count %v", memCost, cpuCost, dataCost, indexCost, count)
 
-	return (memCost + cpuCost + dataCost + indexCost) / float64(count)
+	return (memCost + cpuCost + numCost + dataCost + indexCost) / float64(count)
 }
 
 //
@@ -2225,13 +2390,14 @@ func (c *UsageBasedCostMethod) Validate(s *Solution) error {
 //
 // Constructor
 //
-func newRandomPlacement(indexes []*IndexUsage, allowSwap bool) *RandomPlacement {
+func newRandomPlacement(indexes []*IndexUsage, allowSwap bool, swapOnly bool) *RandomPlacement {
 	p := &RandomPlacement{
 		rs:        rand.New(rand.NewSource(time.Now().UnixNano())),
 		indexes:   make(map[*IndexUsage]*IndexUsage),
 		eligibles: make([]*IndexUsage, len(indexes)),
 		optionals: nil,
 		allowSwap: allowSwap,
+		swapOnly:  swapOnly,
 	}
 
 	// index to be balanced
@@ -2376,6 +2542,10 @@ func (p *RandomPlacement) Move(s *Solution) (bool, bool) {
 		return true, false
 	}
 
+	if p.swapOnly {
+		return false, false
+	}
+
 	success, final := p.randomMoveByLoad(s, true)
 	if success {
 		s.removeEmptyDeletedNode()
@@ -2395,10 +2565,17 @@ func (p *RandomPlacement) swapDeleteNode(s *Solution) bool {
 	outNodes := s.getDeleteNodes()
 	for _, outNode := range outNodes {
 
-		memUsage := outNode.GetMemTotal(s.UseLiveData())
-		cpuUsage := outNode.GetCpuUsage(s.UseLiveData())
+		indexer := (*IndexerNode)(nil)
 
-		indexer := s.findNodeWithFreeUsage(memUsage, cpuUsage)
+		if outNode.GetMemUsage(s.UseLiveData()) == 0 && outNode.GetCpuUsage(s.UseLiveData()) == 0 {
+			// If there is no usage statistics, then swap index to an emtpy node.
+			indexer = s.findEmptyNode(p.rs)
+		} else {
+			memUsage := outNode.GetMemTotal(s.UseLiveData())
+			cpuUsage := outNode.GetCpuUsage(s.UseLiveData())
+
+			indexer = s.findNodeWithFreeUsage(memUsage, cpuUsage)
+		}
 
 		if indexer != nil {
 			if indexer.NodeId == outNode.NodeId {
@@ -2441,6 +2618,42 @@ func (p *RandomPlacement) removeEligibleIndex(indexes []*IndexUsage) {
 	}
 
 	p.eligibles = newEligibles
+}
+
+//
+// Find node that matches the resource usage requirement.  This function will
+// skip over deleted node.
+//
+func (p *RandomPlacement) findLeastPopulatedNode(s *Solution, source *IndexUsage) *IndexerNode {
+
+	indexers := sortNodeByCount(s)
+	for i := 0; i < len(indexers); i++ {
+
+		indexer := indexers[i]
+
+		if indexer.delete {
+			continue
+		}
+
+		// Is there a replica in this node?
+		if s.hasReplia(indexer, source) {
+			continue
+		}
+
+		// If there is no replica (excluding self) in the server group.
+		hasReplicaInServerGroup := s.hasReplicaInServerGroup(source, indexer.ServerGroup)
+
+		// Check to see if there are any server group without this index.
+		hasServerGroupWithNoReplica := s.hasServerGroupWithNoReplica(source)
+
+		if hasReplicaInServerGroup && hasServerGroupWithNoReplica {
+			continue
+		}
+
+		return indexer
+	}
+
+	return nil
 }
 
 //
@@ -2522,9 +2735,16 @@ func (p *RandomPlacement) randomMoveByLoad(s *Solution, checkConstraint bool) (b
 			continue
 		}
 
-		// Select an uncongested indexer which is different from source.
-		// The most uncongested indexer has a higher probability to be selected.
-		target := p.getRandomUncongestedNodeExcluding(s, source)
+		target := (*IndexerNode)(nil)
+		if index.GetMemUsage(s.UseLiveData()) == 0 && index.GetCpuUsage(s.UseLiveData()) == 0 {
+			// If there is no stats for the index, then put it in the least pouplated node.
+			target = p.findLeastPopulatedNode(s, index)
+		} else {
+			// Select an uncongested indexer which is different from source.
+			// The most uncongested indexer has a higher probability to be selected.
+			target = p.getRandomUncongestedNodeExcluding(s, source)
+		}
+
 		if target == nil {
 			// if cannot find a uncongested indexer, then check if there is only
 			// one candidate and it satisfy resource constraint.  If so, there is

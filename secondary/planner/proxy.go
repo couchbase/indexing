@@ -16,7 +16,6 @@ import (
 	"github.com/couchbase/cbauth"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
-	"github.com/couchbase/indexing/secondary/manager"
 	"github.com/couchbase/indexing/secondary/manager/client"
 	"net"
 	"net/http"
@@ -24,6 +23,17 @@ import (
 	"strings"
 	"time"
 )
+
+//////////////////////////////////////////////////////////////
+// Concrete Type/Struct
+//////////////////////////////////////////////////////////////
+
+type LocalIndexMetadata struct {
+	IndexerId        string                 `json:"indexerId,omitempty"`
+	NodeUUID         string                 `json:"nodeUUID,omitempty"`
+	IndexTopologies  []client.IndexTopology `json:"topologies,omitempty"`
+	IndexDefinitions []common.IndexDefn     `json:"definitions,omitempty"`
+}
 
 ///////////////////////////////////////////////////////
 // Function
@@ -120,6 +130,7 @@ func getIndexLayout(clusterUrl string) ([]*IndexerNode, error) {
 			logging.Errorf("Planner::getIndexLayout: Error from getting service address for node %v. Error = %v", node.NodeId, err)
 			return nil, err
 		}
+		node.RestUrl = addr
 
 		// Read the index metadata from the indexer node.
 		localMeta, err := getLocalMetadata(addr)
@@ -130,76 +141,113 @@ func getIndexLayout(clusterUrl string) ([]*IndexerNode, error) {
 
 		// get the node UUID
 		node.NodeUUID = localMeta.NodeUUID
+		node.IndexerId = localMeta.IndexerId
 
-		// Iterate through all the index definition.    For each index definition, create an index usage object.
-		for i := 0; i < len(localMeta.IndexDefinitions); i++ {
-
-			defn := &localMeta.IndexDefinitions[i]
-
-			// find the topology metadata
-			topology := findTopologyByBucket(localMeta.IndexTopologies, defn.Bucket)
-			if topology == nil {
-				logging.Errorf("Planner::getIndexLayout: Fail to find index topology for bucket %v for node %v.", defn.Bucket, node.NodeId)
-				return nil, err
-			}
-
-			// find the index instance from topology metadata
-			inst := topology.GetIndexInstByDefn(defn.DefnId)
-			if inst == nil {
-				logging.Errorf("Planner::getIndexLayout: Fail to find index instance for definition %v for node %v.", defn.DefnId, node.NodeId)
-				return nil, err
-			}
-
-			// Check the index state.  Only handle index that is active or being built.
-			// For index that is in the process of being deleted, planner expects the resource
-			// will eventually be freed, so it won't included in planning.
-			state, _ := topology.GetStatusByDefn(defn.DefnId)
-			if state != common.INDEX_STATE_CREATED &&
-				state != common.INDEX_STATE_DELETED &&
-				state != common.INDEX_STATE_ERROR &&
-				state != common.INDEX_STATE_NIL {
-
-				// create an index usage object
-				index := newIndexUsage(defn.DefnId, common.IndexInstId(inst.InstId), defn.Name, defn.Bucket)
-
-				// index is pinned to a node
-				if len(defn.Nodes) != 0 {
-					index.Hosts = defn.Nodes
-				}
-
-				// update sizing
-				index.IsPrimary = defn.IsPrimary
-				index.IsMOI = (defn.Using == common.IndexType(common.MemoryOptimized) || defn.Using == common.IndexType(common.MemDB))
-
-				// Is the index being deleted by user?   Thsi will read the delete token from metakv.  If untable read from metakv,
-				// pendingDelete is false (cannot assert index is to-be-delete).
-				pendingDelete, err := client.DeleteCommandTokenExist(defn.DefnId)
-				if err != nil {
-					return nil, err
-				}
-				index.pendingDelete = pendingDelete
-
-				// update internal info
-				index.initialNode = node
-				index.Instance = &common.IndexInst{
-					InstId:    common.IndexInstId(inst.InstId),
-					Defn:      *defn,
-					State:     common.IndexState(inst.State),
-					Stream:    common.StreamId(inst.StreamId),
-					Error:     inst.Error,
-					ReplicaId: int(inst.ReplicaId),
-					Version:   int(inst.Version),
-					RState:    common.RebalanceState(inst.RState),
-				}
-
-				node.Indexes = append(node.Indexes, index)
-			}
+		// convert from LocalIndexMetadata to IndexUsage
+		indexes, err := ConvertToIndexUsages(localMeta, node)
+		if err != nil {
+			logging.Errorf("Planner::getIndexLayout: Error for converting index metadata to index usage for node %v. Error = %v", node.NodeId, err)
+			return nil, err
 		}
 
+		node.Indexes = indexes
 		list = append(list, node)
 	}
 
 	return list, nil
+}
+
+//
+// This function convert index defintions from a single metadatda repository to a list of IndexUsage.
+//
+func ConvertToIndexUsages(localMeta *LocalIndexMetadata, node *IndexerNode) ([]*IndexUsage, error) {
+
+	list := ([]*IndexUsage)(nil)
+
+	// Iterate through all the index definition.    For each index definition, create an index usage object.
+	for i := 0; i < len(localMeta.IndexDefinitions); i++ {
+
+		defn := &localMeta.IndexDefinitions[i]
+		index, err := ConvertToIndexUsage(defn, localMeta)
+		if err != nil {
+			return nil, err
+		}
+
+		if index != nil {
+			index.initialNode = node
+			list = append(list, index)
+		}
+	}
+
+	return list, nil
+}
+
+//
+// This function convert a single index defintion to IndexUsage.
+//
+func ConvertToIndexUsage(defn *common.IndexDefn, localMeta *LocalIndexMetadata) (*IndexUsage, error) {
+
+	// find the topology metadata
+	topology := findTopologyByBucket(localMeta.IndexTopologies, defn.Bucket)
+	if topology == nil {
+		logging.Errorf("Planner::getIndexLayout: Fail to find index topology for bucket %v.", defn.Bucket)
+		return nil, nil
+	}
+
+	// find the index instance from topology metadata
+	inst := topology.GetIndexInstByDefn(defn.DefnId)
+	if inst == nil {
+		logging.Errorf("Planner::getIndexLayout: Fail to find index instance for definition %v.", defn.DefnId)
+		return nil, nil
+	}
+
+	// Check the index state.  Only handle index that is active or being built.
+	// For index that is in the process of being deleted, planner expects the resource
+	// will eventually be freed, so it won't included in planning.
+	state, _ := topology.GetStatusByDefn(defn.DefnId)
+	if state != common.INDEX_STATE_CREATED &&
+		state != common.INDEX_STATE_DELETED &&
+		state != common.INDEX_STATE_ERROR &&
+		state != common.INDEX_STATE_NIL {
+
+		// create an index usage object
+		index := newIndexUsage(defn.DefnId, common.IndexInstId(inst.InstId), defn.Name, defn.Bucket)
+
+		// index is pinned to a node
+		if len(defn.Nodes) != 0 {
+			index.Hosts = defn.Nodes
+		}
+
+		// update sizing
+		index.IsPrimary = defn.IsPrimary
+		index.IsMOI = (defn.Using == common.IndexType(common.MemoryOptimized) || defn.Using == common.IndexType(common.MemDB))
+
+		// Is the index being deleted by user?   Thsi will read the delete token from metakv.  If untable read from metakv,
+		// pendingDelete is false (cannot assert index is to-be-delete).
+		pendingDelete, err := client.DeleteCommandTokenExist(defn.DefnId)
+		if err != nil {
+			return nil, err
+		}
+		index.pendingDelete = pendingDelete
+
+		// update internal info
+		index.Instance = &common.IndexInst{
+			InstId:    common.IndexInstId(inst.InstId),
+			Defn:      *defn,
+			State:     common.IndexState(inst.State),
+			Stream:    common.StreamId(inst.StreamId),
+			Error:     inst.Error,
+			ReplicaId: int(inst.ReplicaId),
+			Version:   int(inst.Version),
+			RState:    common.RebalanceState(inst.RState),
+		}
+
+		logging.Debugf("Create Index usage %v %v %v %v", index.Name, index.Bucket, index.Instance.InstId, index.Instance.ReplicaId)
+
+		return index, nil
+	}
+
+	return nil, nil
 }
 
 //
@@ -449,7 +497,7 @@ func getIndexSettings(clusterUrl string, plan *Plan) error {
 //
 // This function extract the topology metadata for a bucket.
 //
-func findTopologyByBucket(topologies []manager.IndexTopology, bucket string) *manager.IndexTopology {
+func findTopologyByBucket(topologies []client.IndexTopology, bucket string) *client.IndexTopology {
 
 	for _, topology := range topologies {
 		if topology.Bucket == bucket {
@@ -463,7 +511,7 @@ func findTopologyByBucket(topologies []manager.IndexTopology, bucket string) *ma
 //
 // This function finds the index instance id from bucket topology.
 //
-func findIndexInstId(topology *manager.IndexTopology, defnId common.IndexDefnId) (common.IndexInstId, error) {
+func findIndexInstId(topology *client.IndexTopology, defnId common.IndexDefnId) (common.IndexInstId, error) {
 
 	for _, defnRef := range topology.Definitions {
 		if defnRef.DefnId == uint64(defnId) {
@@ -513,14 +561,14 @@ func getIndexerHost(cinfo *common.ClusterInfoCache, nid common.NodeId) (string, 
 //
 // This function gets the metadata for a specific indexer host.
 //
-func getLocalMetadata(addr string) (*manager.LocalIndexMetadata, error) {
+func getLocalMetadata(addr string) (*LocalIndexMetadata, error) {
 
 	resp, err := getWithCbauth(addr + "/getLocalIndexMetadata")
 	if err != nil {
 		return nil, err
 	}
 
-	localMeta := new(manager.LocalIndexMetadata)
+	localMeta := new(LocalIndexMetadata)
 	if err := convertResponse(resp, localMeta); err != nil {
 		return nil, err
 	}
