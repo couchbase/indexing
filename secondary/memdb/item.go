@@ -44,13 +44,13 @@ func (m *MemDB) allocItem(l int, useMM bool) (itm *Item) {
 }
 
 func (m *MemDB) EncodeItem(itm *Item, buf []byte, w io.Writer) error {
-	l := 2
+	l := 4
 	if len(buf) < l {
 		return ErrNotEnoughSpace
 	}
 
-	binary.BigEndian.PutUint16(buf[0:2], uint16(itm.dataLen))
-	if _, err := w.Write(buf[0:2]); err != nil {
+	binary.BigEndian.PutUint32(buf[0:4], uint32(itm.dataLen))
+	if _, err := w.Write(buf[0:4]); err != nil {
 		return err
 	}
 	if _, err := w.Write(itm.Bytes()); err != nil {
@@ -60,14 +60,23 @@ func (m *MemDB) EncodeItem(itm *Item, buf []byte, w io.Writer) error {
 	return nil
 }
 
-func (m *MemDB) DecodeItem(buf []byte, r io.Reader) (*Item, error) {
-	if _, err := io.ReadFull(r, buf[0:2]); err != nil {
-		return nil, err
+func (m *MemDB) DecodeItem(ver int, buf []byte, r io.Reader) (*Item, error) {
+	var l int
+
+	if ver == 0 {
+		if _, err := io.ReadFull(r, buf[0:2]); err != nil {
+			return nil, err
+		}
+		l = int(binary.BigEndian.Uint16(buf[0:2]))
+	} else {
+		if _, err := io.ReadFull(r, buf[0:4]); err != nil {
+			return nil, err
+		}
+		l = int(binary.BigEndian.Uint32(buf[0:4]))
 	}
 
-	l := binary.BigEndian.Uint16(buf[0:2])
 	if l > 0 {
-		itm := m.allocItem(int(l), m.useMemoryMgmt)
+		itm := m.allocItem(l, m.useMemoryMgmt)
 		data := itm.Bytes()
 		_, err := io.ReadFull(r, data)
 		return itm, err
