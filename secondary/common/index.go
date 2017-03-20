@@ -127,7 +127,7 @@ func (s IndexerState) String() string {
 	case INDEXER_PREPARE_UNPAUSE:
 		return "PrepareUnpause"
 	case INDEXER_BOOTSTRAP:
-		return "Bootstrap"
+		return "Warmup"
 	default:
 		return "Invalid"
 	}

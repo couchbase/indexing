@@ -193,7 +193,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		bucketCreateClientChMap:      make(map[string]MsgChannel),
 	}
 
-	logging.Infof("Indexer::NewIndexer Status Bootstrap")
+	logging.Infof("Indexer::NewIndexer Status Warmup")
 	snapshotNotifych := make(chan IndexSnapshot, 100)
 
 	var res Message
