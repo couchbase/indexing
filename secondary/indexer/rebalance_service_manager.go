@@ -377,6 +377,20 @@ func (m *ServiceMgr) prepareFailover(change service.TopologyChange) error {
 
 		l.Infof("ServiceMgr::prepareFailover Found Move Index In Progress %v. Aborting.", m.rebalanceToken)
 
+		masterAlive := false
+		masterCleanup := false
+		for _, node := range change.KeepNodes {
+			if m.rebalanceToken.MasterId == string(node.NodeInfo.NodeID) {
+				masterAlive = true
+				break
+			}
+		}
+
+		if !masterAlive {
+			l.Infof("ServiceMgr::prepareFailover Master Missing From Cluster Node List. Cleanup MoveIndex As Master.")
+			masterCleanup =  true
+		}
+
 		if m.rebalanceToken.MasterId == string(m.nodeInfo.NodeID) {
 			if m.rebalancer != nil {
 				m.rebalancer.Cancel()
@@ -388,22 +402,11 @@ func (m *ServiceMgr) prepareFailover(change service.TopologyChange) error {
 			if m.rebalancerF != nil {
 				m.rebalancerF.Cancel()
 			}
-			if err = m.runCleanupPhaseLOCKED(MoveIndexTokenPath, false); err != nil {
+			if err = m.runCleanupPhaseLOCKED(MoveIndexTokenPath, masterCleanup); err != nil {
 				return err
 			}
 		}
 
-		masterAlive := false
-		for _, node := range change.KeepNodes {
-			if m.rebalanceToken.MasterId == string(node.NodeInfo.NodeID) {
-				masterAlive = true
-				break
-			}
-		}
-		if !masterAlive {
-			l.Infof("ServiceMgr::prepareFailover Master Missing From Cluster Node List. Cleanup MoveIndex")
-			err = m.runCleanupPhaseLOCKED(MoveIndexTokenPath, true)
-		}
 		return err
 	}
 
