@@ -69,12 +69,16 @@ type Rebalancer struct {
 	waitForTokenPublish chan struct{}
 
 	retErr error
+
+	config c.ConfigHolder
 }
 
 func NewRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *RebalanceToken,
-	nodeId string, master bool, progress ProgressCallback, done DoneCallback, supvMsgch MsgChannel, localaddr string) *Rebalancer {
+	nodeId string, master bool, progress ProgressCallback, done DoneCallback,
+	supvMsgch MsgChannel, localaddr string, config c.Config) *Rebalancer {
 
-	l.Infof("NewRebalancer nodeId %v rebalToken %v master %v localaddr %v", nodeId, rebalToken, master, localaddr)
+	l.Infof("NewRebalancer nodeId %v rebalToken %v master %v localaddr %v", nodeId,
+		rebalToken, master, localaddr)
 
 	r := &Rebalancer{
 		transferTokens: transferTokens,
@@ -96,6 +100,8 @@ func NewRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *Rebal
 
 		waitForTokenPublish: make(chan struct{}),
 	}
+
+	r.config.Store(config)
 
 	if master {
 		go r.doRebalance()
@@ -545,6 +551,11 @@ func (r *Rebalancer) waitForIndexBuild() {
 
 	allTokensReady := true
 
+	buildStartTime := time.Now()
+
+	cfg := r.config.Load()
+	maxRemainingBuildTime := cfg["rebalance.maxRemainingBuildTime"].Uint64()
+
 loop:
 	for {
 		select {
@@ -612,21 +623,37 @@ loop:
 				sname := fmt.Sprintf("%s:%s:", tt.IndexInst.Defn.Bucket, tt.IndexInst.DisplayName())
 				sname_pend := sname + "num_docs_pending"
 				sname_queued := sname + "num_docs_queued"
+				sname_processed := sname + "num_docs_processed"
 
-				var num_pend, num_queued float64
+				var num_pend, num_queued, num_processed float64
 				if _, ok := statsMap[sname_pend]; ok {
 					num_pend = statsMap[sname_pend].(float64)
 					num_queued = statsMap[sname_queued].(float64)
+					num_processed = statsMap[sname_processed].(float64)
 				} else {
 					l.Infof("Rebalancer::waitForIndexBuild Missing Stats %v %v. Retrying...", sname_queued, sname_pend)
 					break
 				}
 
-				tot_queued := num_pend + num_queued
+				tot_remaining := num_pend + num_queued
 
-				l.Infof("Rebalancer::waitForIndexBuild Index %s State %v Pending %v", sname, c.IndexState(status), tot_queued)
+				elapsed := time.Since(buildStartTime).Seconds()
+				if elapsed == 0 {
+					elapsed = 1
+				}
 
-				if c.IndexState(status) == c.INDEX_STATE_ACTIVE && tot_queued < MaxPendingBeforeReady {
+				processing_rate := num_processed / elapsed
+
+				remainingBuildTime := maxRemainingBuildTime
+
+				if processing_rate != 0 {
+					remainingBuildTime = uint64(tot_remaining / processing_rate)
+				}
+
+				l.Infof("Rebalancer::waitForIndexBuild Index %s State %v Pending %v EstTime %v", sname,
+					c.IndexState(status), tot_remaining, remainingBuildTime)
+
+				if c.IndexState(status) == c.INDEX_STATE_ACTIVE && remainingBuildTime < maxRemainingBuildTime {
 					respch := make(chan bool)
 					r.supvMsgch <- &MsgUpdateIndexRState{defnId: tt.IndexInst.Defn.DefnId,
 						rstate: c.REBAL_ACTIVE,

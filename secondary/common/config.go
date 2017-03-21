@@ -1507,6 +1507,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.rebalance.maxRemainingBuildTime": ConfigValue{
+		uint64(10),
+		"max remaining build time(in seconds) before index state is switched to active",
+		uint64(10),
+		false, // mutable
+		false, // case-insensitive
+	},
 }
 
 // NewConfig from another

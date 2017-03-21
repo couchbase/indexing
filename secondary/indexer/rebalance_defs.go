@@ -32,7 +32,6 @@ const MoveIndexTokenPath = RebalanceMetakvDir + MoveIndexTokenTag
 
 const StartPhaseBeginTimeout = 60
 const RebalanceTokenWaitTimeout = 60
-const MaxPendingBeforeReady = 1000
 
 type RebalSource byte
 
