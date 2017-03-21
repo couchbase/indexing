@@ -187,7 +187,7 @@ func HandleCommand(
 	low, high, equal, incl := cmd.Low, cmd.High, cmd.Equal, cmd.Inclusion
 	cons := cmd.Consistency
 
-	indexes, err := client.Refresh()
+	indexes, _, err := client.Refresh()
 
 	entries := 0
 	callb := func(res qclient.ResponseReader) bool {
@@ -220,7 +220,7 @@ func HandleCommand(
 
 	case "list":
 		time.Sleep(2 * time.Second)
-		indexes, err = client.Refresh()
+		indexes, _, err = client.Refresh()
 		if err != nil {
 			return err
 		}
@@ -494,7 +494,7 @@ func GetIndex(
 	client *qclient.GsiClient,
 	bucket, indexName string) (*mclient.IndexMetadata, bool) {
 
-	indexes, err := client.Refresh()
+	indexes, _, err := client.Refresh()
 	if err != nil {
 		logging.Fatalf("%v\n", err)
 		os.Exit(1)

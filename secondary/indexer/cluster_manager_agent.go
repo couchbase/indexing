@@ -41,34 +41,7 @@ func NewClustMgrAgent(supvCmdch MsgChannel, supvRespch MsgChannel, cfg common.Co
 		config:     cfg,
 	}
 
-	var cinfo *common.ClusterInfoCache
-	url, err := common.ClusterAuthUrl(cfg["clusterAddr"].String())
-	if err == nil {
-		cinfo, err = common.NewClusterInfoCache(url, DEFAULT_POOL)
-		cinfo.SetServicePorts(ServiceAddrMap)
-	}
-	if err != nil {
-		logging.Errorf("ClustMgrAgent::Fail to init ClusterInfoCache : %v", err)
-		return nil, &MsgError{
-			err: Error{code: ERROR_CLUSTER_MGR_AGENT_INIT,
-				severity: FATAL,
-				category: CLUSTER_MGR,
-				cause:    err}}
-	}
-
-	cinfo.Lock()
-	defer cinfo.Unlock()
-
-	if err := cinfo.Fetch(); err != nil {
-		logging.Errorf("ClustMgrAgent::Fail to init ClusterInfoCache : %v", err)
-		return nil, &MsgError{
-			err: Error{code: ERROR_CLUSTER_MGR_AGENT_INIT,
-				severity: FATAL,
-				category: CLUSTER_MGR,
-				cause:    err}}
-	}
-
-	mgr, err := manager.NewIndexManager(cinfo, cfg)
+	mgr, err := manager.NewIndexManager(cfg)
 	if err != nil {
 		logging.Errorf("ClustMgrAgent::NewClustMgrAgent Error In Init %v", err)
 		return nil, &MsgError{

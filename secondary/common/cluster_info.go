@@ -16,6 +16,8 @@ var (
 	ErrValidationFailed    = errors.New("ClusterInfo Validation Failed")
 )
 
+var ServiceAddrMap map[string]string
+
 const (
 	INDEX_ADMIN_SERVICE = "indexAdmin"
 	INDEX_SCAN_SERVICE  = "indexScan"
@@ -41,19 +43,13 @@ type ClusterInfoCache struct {
 	useStaticPorts bool
 	servicePortMap map[string]string
 
-	client     couchbase.Client
-	pool       couchbase.Pool
-	nodes      []couchbase.Node
-	nodesvs    []couchbase.NodeServices
-	node2group map[NodeId]string // node->group
-}
-
-type ServiceAddressProvider interface {
-	GetLocalServiceAddress(srvc string) (string, error)
-	GetLocalServicePort(srvc string) (string, error)
-	GetLocalServiceHost(srvc string) (string, error)
-	GetLocalHostAddress() (string, error)
-	GetLocalServerGroup() (string, error)
+	client      couchbase.Client
+	pool        couchbase.Pool
+	nodes       []couchbase.Node
+	nodesvs     []couchbase.NodeServices
+	node2group  map[NodeId]string // node->group
+	failedNodes []couchbase.Node
+	addNodes    []couchbase.Node
 }
 
 type NodeId int
@@ -67,6 +63,33 @@ func NewClusterInfoCache(clusterUrl string, pool string) (*ClusterInfoCache, err
 	}
 
 	return c, nil
+}
+
+func FetchNewClusterInfoCache(clusterUrl string, pool string) (*ClusterInfoCache, error) {
+
+	url, err := ClusterAuthUrl(clusterUrl)
+	if err != nil {
+		return nil, err
+	}
+
+	c, err := NewClusterInfoCache(url, pool)
+	if err != nil {
+		return nil, err
+	}
+
+	if ServiceAddrMap != nil {
+		c.SetServicePorts(ServiceAddrMap)
+	}
+
+	if err := c.Fetch(); err != nil {
+		return nil, err
+	}
+
+	return c, nil
+}
+
+func SetServicePorts(portMap map[string]string) {
+	ServiceAddrMap = portMap
 }
 
 func (c *ClusterInfoCache) SetLogPrefix(p string) {
@@ -105,12 +128,22 @@ func (c *ClusterInfoCache) Fetch() error {
 		}
 
 		var nodes []couchbase.Node
+		var failedNodes []couchbase.Node
+		var addNodes []couchbase.Node
 		for _, n := range c.pool.Nodes {
 			if n.ClusterMembership == "active" {
 				nodes = append(nodes, n)
+			} else if n.ClusterMembership == "inactiveFailed" {
+				// node being failed over
+				failedNodes = append(failedNodes, n)
+			} else if n.ClusterMembership == "inactiveAdded" {
+				// node being added (but not yet rebalanced in)
+				addNodes = append(addNodes, n)
 			}
 		}
 		c.nodes = nodes
+		c.failedNodes = failedNodes
+		c.addNodes = addNodes
 
 		found := false
 		for _, node := range c.nodes {
@@ -190,6 +223,18 @@ func (c *ClusterInfoCache) GetNodesByServiceType(srvc string) (nids []NodeId) {
 	for i, svs := range c.nodesvs {
 		if _, ok := svs.Services[srvc]; ok {
 			nids = append(nids, NodeId(i))
+		}
+	}
+
+	return
+}
+
+func (c *ClusterInfoCache) GetFailedIndexerNodes() (nodes []couchbase.Node) {
+	for _, n := range c.failedNodes {
+		for _, s := range n.Services {
+			if s == "index" {
+				nodes = append(nodes, n)
+			}
 		}
 	}
 

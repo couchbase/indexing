@@ -79,7 +79,7 @@ type BridgeAccessor interface {
 
 	// Refresh shall refresh to latest set of index managed by GSI
 	// cluster, cache it locally and return the list of index.
-	Refresh() ([]*mclient.IndexMetadata, error)
+	Refresh() ([]*mclient.IndexMetadata, uint64, error)
 
 	// Nodes shall return a map of adminport and queryport for indexer
 	// nodes.
@@ -281,9 +281,9 @@ func (c *GsiClient) Sync() error {
 }
 
 // Refresh implements BridgeAccessor{} interface.
-func (c *GsiClient) Refresh() ([]*mclient.IndexMetadata, error) {
+func (c *GsiClient) Refresh() ([]*mclient.IndexMetadata, uint64, error) {
 	if c.bridge == nil {
-		return nil, ErrorClientUninitialized
+		return nil, 0, ErrorClientUninitialized
 	}
 	return c.bridge.Refresh()
 }

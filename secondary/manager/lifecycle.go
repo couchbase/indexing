@@ -33,7 +33,7 @@ import (
 
 type LifecycleMgr struct {
 	repo          *MetadataRepo
-	addrProvider  common.ServiceAddressProvider
+	cinfo         *common.ClusterInfoCache
 	notifier      MetadataNotifier
 	clusterURL    string
 	incomings     chan *requestHolder
@@ -43,6 +43,7 @@ type LifecycleMgr struct {
 	indexerReady  bool
 	builder       *builder
 	janitor       *janitor
+	updator       *updator
 	requestServer RequestServer
 }
 
@@ -71,14 +72,25 @@ type janitor struct {
 	manager *LifecycleMgr
 }
 
+type updator struct {
+	manager        *LifecycleMgr
+	indexerVersion uint64
+	serverGroup    string
+}
+
 //////////////////////////////////////////////////////////////
 // Lifecycle Mgr - event processing
 //////////////////////////////////////////////////////////////
 
-func NewLifecycleMgr(addrProvider common.ServiceAddressProvider, notifier MetadataNotifier, clusterURL string) *LifecycleMgr {
+func NewLifecycleMgr(notifier MetadataNotifier, clusterURL string) (*LifecycleMgr, error) {
+
+	cinfo, err := common.FetchNewClusterInfoCache(clusterURL, common.DEFAULT_POOL)
+	if err != nil {
+		return nil, err
+	}
 
 	mgr := &LifecycleMgr{repo: nil,
-		addrProvider: addrProvider,
+		cinfo:        cinfo,
 		notifier:     notifier,
 		clusterURL:   clusterURL,
 		incomings:    make(chan *requestHolder, 1000),
@@ -88,8 +100,9 @@ func NewLifecycleMgr(addrProvider common.ServiceAddressProvider, notifier Metada
 		indexerReady: false}
 	mgr.builder = newBuilder(mgr)
 	mgr.janitor = newJanitor(mgr)
+	mgr.updator = newUpdator(mgr)
 
-	return mgr
+	return mgr, nil
 }
 
 func (m *LifecycleMgr) Run(repo *MetadataRepo, requestServer RequestServer) {
@@ -131,6 +144,9 @@ func (m *LifecycleMgr) OnNewRequest(fid string, request protocol.RequestMsg) {
 
 		// allow background build to go through
 		go m.builder.run()
+
+		// detect if there is any change to indexer info (e.g. serverGroup)
+		go m.updator.run()
 
 		// allow request processing to go through
 		close(m.bootstraps)
@@ -978,6 +994,23 @@ func (m *LifecycleMgr) canBuildIndex(bucket string) bool {
 
 func (m *LifecycleMgr) handleServiceMap(content []byte) ([]byte, error) {
 
+	srvMap, err := m.getServiceMap()
+	if err != nil {
+		return nil, err
+	}
+
+	return client.MarshallServiceMap(srvMap)
+}
+
+func (m *LifecycleMgr) getServiceMap() (*client.ServiceMap, error) {
+
+	m.cinfo.Lock()
+	defer m.cinfo.Unlock()
+
+	if err := m.cinfo.Fetch(); err != nil {
+		return nil, err
+	}
+
 	srvMap := new(client.ServiceMap)
 
 	id, err := m.repo.GetLocalIndexerId()
@@ -986,27 +1019,27 @@ func (m *LifecycleMgr) handleServiceMap(content []byte) ([]byte, error) {
 	}
 	srvMap.IndexerId = string(id)
 
-	srvMap.ScanAddr, err = m.addrProvider.GetLocalServiceAddress(common.INDEX_SCAN_SERVICE)
+	srvMap.ScanAddr, err = m.cinfo.GetLocalServiceAddress(common.INDEX_SCAN_SERVICE)
 	if err != nil {
 		return nil, err
 	}
 
-	srvMap.HttpAddr, err = m.addrProvider.GetLocalServiceAddress(common.INDEX_HTTP_SERVICE)
+	srvMap.HttpAddr, err = m.cinfo.GetLocalServiceAddress(common.INDEX_HTTP_SERVICE)
 	if err != nil {
 		return nil, err
 	}
 
-	srvMap.AdminAddr, err = m.addrProvider.GetLocalServiceAddress(common.INDEX_ADMIN_SERVICE)
+	srvMap.AdminAddr, err = m.cinfo.GetLocalServiceAddress(common.INDEX_ADMIN_SERVICE)
 	if err != nil {
 		return nil, err
 	}
 
-	srvMap.NodeAddr, err = m.addrProvider.GetLocalHostAddress()
+	srvMap.NodeAddr, err = m.cinfo.GetLocalHostAddress()
 	if err != nil {
 		return nil, err
 	}
 
-	srvMap.ServerGroup, err = m.addrProvider.GetLocalServerGroup()
+	srvMap.ServerGroup, err = m.cinfo.GetLocalServerGroup()
 	if err != nil {
 		return nil, err
 	}
@@ -1016,7 +1049,9 @@ func (m *LifecycleMgr) handleServiceMap(content []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	return client.MarshallServiceMap(srvMap)
+	srvMap.IndexerVersion = common.INDEXER_CUR_VERSION
+
+	return srvMap, nil
 }
 
 // This function returns an error if it cannot connect for fetching bucket info.
@@ -1313,4 +1348,57 @@ func newBuilder(mgr *LifecycleMgr) *builder {
 	}
 
 	return builder
+}
+
+//////////////////////////////////////////////////////////////
+// Lifecycle Mgr - udpator
+//////////////////////////////////////////////////////////////
+
+func newUpdator(mgr *LifecycleMgr) *updator {
+
+	updator := &updator{
+		manager: mgr,
+	}
+
+	return updator
+}
+
+func (m *updator) run() {
+
+	ticker := time.NewTicker(time.Second * 60)
+	defer ticker.Stop()
+
+	m.check()
+
+	for {
+		select {
+		case <-ticker.C:
+			m.check()
+
+		case <-m.manager.killch:
+			logging.Infof("updator: Index recovery go-routine terminates.")
+		}
+	}
+}
+
+func (m *updator) check() {
+
+	serviceMap, err := m.manager.getServiceMap()
+	if err != nil {
+		logging.Errorf("updator: fail to get indexer serivce map.  Error = %v", err)
+		return
+	}
+
+	if serviceMap.ServerGroup != m.serverGroup || m.indexerVersion != serviceMap.IndexerVersion {
+
+		m.serverGroup = serviceMap.ServerGroup
+		m.indexerVersion = serviceMap.IndexerVersion
+
+		logging.Infof("updator: updating service map.  server group=%v, indexerVersion=%v", m.serverGroup, m.indexerVersion)
+
+		if err := m.manager.repo.SetServiceMap(serviceMap); err != nil {
+			logging.Errorf("updator: fail to set service map.  Error = %v", err)
+			return
+		}
+	}
 }

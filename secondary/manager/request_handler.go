@@ -279,7 +279,7 @@ func (m *requestHandlerContext) handleIndexStatusRequest(w http.ResponseWriter, 
 
 	bucket := m.getBucket(r)
 
-	list, failedNodes, err := m.getIndexStatus(m.mgr.getServiceAddrProvider().(*common.ClusterInfoCache), bucket)
+	list, failedNodes, err := m.getIndexStatus(bucket)
 	if err == nil && len(failedNodes) == 0 {
 		sort.Sort(indexStatusSorter(list))
 		resp := &IndexStatusResponse{Code: RESP_SUCCESS, Status: list}
@@ -298,9 +298,10 @@ func (m *requestHandlerContext) getBucket(r *http.Request) string {
 	return r.FormValue("bucket")
 }
 
-func (m *requestHandlerContext) getIndexStatus(cinfo *common.ClusterInfoCache, bucket string) ([]IndexStatus, []string, error) {
+func (m *requestHandlerContext) getIndexStatus(bucket string) ([]IndexStatus, []string, error) {
 
-	if err := cinfo.Fetch(); err != nil {
+	cinfo, err := m.mgr.FetchNewClusterInfoCache()
+	if err != nil {
 		return nil, nil, err
 	}
 
@@ -449,7 +450,7 @@ func (m *requestHandlerContext) handleIndexMetadataRequest(w http.ResponseWriter
 	bucket := m.getBucket(r)
 
 	indexerHostMap := make(map[common.IndexerId]string)
-	meta, err := m.getIndexMetadata(m.mgr.getServiceAddrProvider().(*common.ClusterInfoCache), indexerHostMap, bucket)
+	meta, err := m.getIndexMetadata(indexerHostMap, bucket)
 	if err == nil {
 		resp := &BackupResponse{Code: RESP_SUCCESS, Result: *meta}
 		send(http.StatusOK, w, resp)
@@ -460,10 +461,10 @@ func (m *requestHandlerContext) handleIndexMetadataRequest(w http.ResponseWriter
 	}
 }
 
-func (m *requestHandlerContext) getIndexMetadata(cinfo *common.ClusterInfoCache,
-	indexerHostMap map[common.IndexerId]string, bucket string) (*ClusterIndexMetadata, error) {
+func (m *requestHandlerContext) getIndexMetadata(indexerHostMap map[common.IndexerId]string, bucket string) (*ClusterIndexMetadata, error) {
 
-	if err := cinfo.Fetch(); err != nil {
+	cinfo, err := m.mgr.FetchNewClusterInfoCache()
+	if err != nil {
 		return nil, err
 	}
 

@@ -2344,6 +2344,7 @@ func (idx *indexer) initServiceAddressMap() {
 	ServiceAddrMap[common.INDEX_SCAN_SERVICE] = idx.config["scanPort"].String()
 	ServiceAddrMap[common.INDEX_HTTP_SERVICE] = idx.config["httpPort"].String()
 
+	common.SetServicePorts(ServiceAddrMap)
 }
 
 func (idx *indexer) initStreamTopicName() {
