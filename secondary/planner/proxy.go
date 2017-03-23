@@ -292,7 +292,6 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 		statsMap := stats.ToMap()
 
 		/*
-			ServerGroup string `json:"serverGroup,omitempty"`
 			CpuUsage    uint64 `json:"cpuUsage,omitempty"`
 			DiskUsage   uint64 `json:"diskUsage,omitempty"`
 		*/
@@ -327,11 +326,26 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 			}
 		}
 
+		// cpu core in host.   This is the actual num of cpu core, not cpu quota.
+		/*
+			var actualCpuCore uint64
+			if cpuCore, ok := statsMap["num_cpu_core"]; ok {
+				actualCpuCore = uint64(cpuCore.(float64))
+			}
+		*/
+
+		// cpu utilization for the indexer process
+		var actualCpuUtil float64
+		if cpuUtil, ok := statsMap["cpu_utilization"]; ok {
+			actualCpuUtil = cpuUtil.(float64)
+		}
+
 		var totalDataSize uint64
+		var totalMutation uint64
+		var totalScan uint64
 		for _, index := range indexer.Indexes {
 
 			/*
-				ServerGroup string `json:"serverGroup,omitempty"`
 				CpuUsage    uint64 `json:"cpuUsage,omitempty"`
 				DiskUsage   uint64 `json:"diskUsage,omitempty"`
 			*/
@@ -403,8 +417,9 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 				if flushQueuedStat, ok := statsMap[key]; ok {
 					flushQueued := uint64(flushQueuedStat.(float64))
 
-					if flushQueued != 0 && elapsed != 0 {
-						index.MutationRate = flushQueued / elapsed
+					if flushQueued != 0 {
+						index.MutationRate = flushQueued
+						totalMutation += flushQueued
 					}
 				}
 			}
@@ -418,18 +433,19 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 				if rowReturnedStat, ok := statsMap[key]; ok {
 					rowReturned := uint64(rowReturnedStat.(float64))
 
-					if rowReturned != 0 && elapsed != 0 {
-						index.ScanRate = rowReturned / elapsed
+					if rowReturned != 0 {
+						index.ScanRate = rowReturned
+						totalScan += rowReturned
 					}
 				}
 			}
 		}
 
-		// compute the estimated memory overhead for each index
+		// compute the estimated memory usage for each index
 		for _, index := range indexer.Indexes {
-			ratio := float64(index.ActualMemUsage) / float64(totalDataSize)
-			if totalDataSize == 0 {
-				ratio = 0
+			ratio := float64(0)
+			if totalDataSize != 0 {
+				ratio = float64(index.ActualMemUsage) / float64(totalDataSize)
 			}
 
 			index.ActualMemUsage = uint64(float64(actualStorageMem) * ratio)
@@ -437,6 +453,50 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 
 			indexer.ActualMemUsage += index.ActualMemUsage
 			indexer.ActualMemOverhead += index.ActualMemOverhead
+		}
+
+		// compute the estimated cpu usage for each index
+		for _, index := range indexer.Indexes {
+
+			mutationRatio := float64(0)
+			if totalMutation != 0 {
+				mutationRatio = float64(index.MutationRate) / float64(totalMutation)
+			}
+
+			if elapsed != 0 {
+				index.MutationRate = index.MutationRate / elapsed
+			} else {
+				index.MutationRate = 0
+			}
+
+			scanRatio := float64(0)
+			if totalScan != 0 {
+				scanRatio = float64(index.ScanRate) / float64(totalScan)
+			}
+
+			if elapsed != 0 {
+				index.ScanRate = index.ScanRate / elapsed
+			} else {
+				index.ScanRate = 0
+			}
+
+			ratio := mutationRatio
+			if scanRatio != 0 {
+				if mutationRatio != 0 {
+					// mutation uses 5 times less cpu than scan
+					ratio = ((mutationRatio / 5) + scanRatio) / 2
+				} else {
+					ratio = scanRatio
+				}
+			}
+
+			usage := float64(actualCpuUtil) / 100 * ratio
+
+			if usage > 0 {
+				index.ActualCpuUsage = usage
+			}
+
+			indexer.ActualCpuUsage += index.ActualCpuUsage
 		}
 	}
 

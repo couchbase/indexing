@@ -506,7 +506,7 @@ func ValidateSolution(s *Solution) error {
 	for _, indexer := range s.Placement {
 		totalMem := uint64(0)
 		totalOverhead := uint64(0)
-		totalCpu := uint64(0)
+		totalCpu := float64(0)
 
 		for _, index := range indexer.Indexes {
 			totalMem += index.GetMemUsage(s.UseLiveData())

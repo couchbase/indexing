@@ -469,8 +469,6 @@ func (t *simulator) indexUsage(s SizingMethod, bucket string, spec *CollectionSp
 		index.MutationRate = t.mutationRate(spec)
 		index.ScanRate = t.scanRate(spec)
 
-		index.ServerGroup = t.serverGroup()
-
 		s.ComputeIndexSize(index)
 
 		result[i] = index
@@ -551,19 +549,6 @@ func (t *simulator) collection(spec *BucketSpec) (*CollectionSpec, error) {
 	}
 
 	return nil, errors.New("collection workload does not sum up to 100")
-}
-
-func (t *simulator) serverGroup() string {
-	switch t.rs.Int63n(3) {
-	case 0:
-		return "serverGroup0"
-	case 1:
-		return "serverGroup1"
-	case 2:
-		return "serverGroup2"
-	}
-
-	return "serverGroup0"
 }
 
 //////////////////////////////////////////////////////////////

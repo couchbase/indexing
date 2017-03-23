@@ -111,7 +111,7 @@ type IndexSpec struct {
 /////////////////////////////////////////////////////////////
 
 func ExecuteRebalance(clusterUrl string, topologyChange service.TopologyChange, masterId string, ejectOnly bool) (map[string]*common.TransferToken, error) {
-	return ExecuteRebalanceInternal(clusterUrl, topologyChange, masterId, false, false, ejectOnly)
+	return ExecuteRebalanceInternal(clusterUrl, topologyChange, masterId, false, true, ejectOnly)
 }
 
 func ExecuteRebalanceInternal(clusterUrl string,
@@ -153,7 +153,7 @@ func ExecuteRebalanceInternal(clusterUrl string,
 
 	if detail {
 		logging.Infof("************ Indexer Layout *************")
-		p.PrintLayout()
+		p.Print()
 		logging.Infof("****************************************")
 	}
 
