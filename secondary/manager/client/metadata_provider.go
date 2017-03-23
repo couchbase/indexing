@@ -2153,7 +2153,12 @@ func (w *watcher) getIndexerId() c.IndexerId {
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
 
-	return w.getIndexerIdNoLock()
+	indexerId := w.getIndexerIdNoLock()
+	if indexerId == c.INDEXER_ID_NIL {
+		panic("Index node metadata is not initialized")
+	}
+
+	return indexerId
 }
 
 func (w *watcher) getNodeUUID() string {
@@ -2167,7 +2172,7 @@ func (w *watcher) getNodeUUID() string {
 func (w *watcher) getIndexerIdNoLock() c.IndexerId {
 
 	if w.serviceMap == nil {
-		panic("Index node metadata is not initialized")
+		return c.INDEXER_ID_NIL
 	}
 
 	return c.IndexerId(w.serviceMap.IndexerId)
@@ -2288,7 +2293,9 @@ func (w *watcher) cleanupIndices(repo *metadataRepo) {
 	// TODO: It is actually possible to wait for gometa to
 	// stop, before cleaning up the indices.
 	indexerId := w.getIndexerIdNoLock()
-	repo.cleanupIndicesForIndexer(indexerId)
+	if indexerId != c.INDEXER_ID_NIL {
+		repo.cleanupIndicesForIndexer(indexerId)
+	}
 }
 
 func (w *watcher) close() {
