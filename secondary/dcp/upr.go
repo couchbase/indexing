@@ -199,6 +199,11 @@ func (feed *DcpFeed) DcpCloseStream(vb, opaqueMSB uint16) error {
 	return opError(err, resp, 0)
 }
 
+// DcpFeedName returns feed name
+func (feed *DcpFeed) DcpFeedName() string {
+	return string(feed.name)
+}
+
 // DcpGetSeqnos return the list of seqno for vbuckets,
 // synchronous call.
 func (feed *DcpFeed) DcpGetSeqnos() (map[uint16]uint64, error) {
