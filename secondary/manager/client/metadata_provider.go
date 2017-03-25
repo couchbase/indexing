@@ -177,12 +177,22 @@ func (o *MetadataProvider) SetTimeout(timeout int64) {
 
 func (o *MetadataProvider) SetClusterStatus(numExpectedWatcher int, numFailedNode int, numUnhealthyNode int) {
 
-	logging.Infof("MetadataProvider.SetClusterStatus(): healthy nodes %v failed node %v unhealthy node %v",
-		numExpectedWatcher, numFailedNode, numUnhealthyNode)
+	if numFailedNode > 0 || numUnhealthyNode > 0 {
+		logging.Warnf("MetadataProvider.SetClusterStatus(): healthy nodes %v failed node %v unhealthy node %v",
+			numExpectedWatcher, numFailedNode, numUnhealthyNode)
+	}
 
-	atomic.StoreInt32(&o.numExpectedWatcher, int32(numExpectedWatcher))
-	atomic.StoreInt32(&o.numFailedNode, int32(numFailedNode))
-	atomic.StoreInt32(&o.numUnhealthyNode, int32(numUnhealthyNode))
+	if numExpectedWatcher != -1 {
+		atomic.StoreInt32(&o.numExpectedWatcher, int32(numExpectedWatcher))
+	}
+
+	if numFailedNode != -1 {
+		atomic.StoreInt32(&o.numFailedNode, int32(numFailedNode))
+	}
+
+	if numUnhealthyNode != -1 {
+		atomic.StoreInt32(&o.numUnhealthyNode, int32(numUnhealthyNode))
+	}
 }
 
 func (o *MetadataProvider) WatchMetadata(indexAdminPort string, callback watcherCallback, numExpectedWatcher int) c.IndexerId {

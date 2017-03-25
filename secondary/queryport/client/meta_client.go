@@ -1029,6 +1029,7 @@ func getIndexerAdminports(cinfo *common.ClusterInfoCache) ([]string, int, int, e
 			logging.Warnf("node %v status: %q", node, status)
 		}
 	}
+
 	return iAdminports, len(cinfo.GetFailedIndexerNodes()), unhealthyNodes, nil
 }
 
@@ -1115,6 +1116,8 @@ func (b *metadataClient) watchClusterChanges() {
 
 			if unhealthyNode != 0 {
 				hasUnhealthyNode = true
+				b.mdClient.SetClusterStatus(-1, -1, unhealthyNode)
+
 			} else if hasUnhealthyNode {
 				// refresh indexer version when there is no more unhealthy node
 				hasUnhealthyNode = false
