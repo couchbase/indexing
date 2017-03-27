@@ -116,8 +116,8 @@ type BridgeAccessor interface {
 	// that indexes specified are already created.
 	BuildIndexes(defnIDs []uint64) error
 
-	// MoveIndexes to move a set of indexes to different node.
-	MoveIndexes(defnIDs []uint64, with map[string]interface{}) error
+	// MoveIndex to move a set of indexes to different node.
+	MoveIndex(defnID uint64, with map[string]interface{}) error
 
 	// DropIndex to drop index specified by `defnID`.
 	// - if index is in deferred build state, it shall be removed
@@ -388,15 +388,15 @@ func (c *GsiClient) BuildIndexes(defnIDs []uint64) error {
 	return err
 }
 
-// MoveIndexes implements BridgeAccessor{} interface.
-func (c *GsiClient) MoveIndexes(defnIDs []uint64, with map[string]interface{}) error {
+// MoveIndex implements BridgeAccessor{} interface.
+func (c *GsiClient) MoveIndex(defnID uint64, with map[string]interface{}) error {
 	if c.bridge == nil {
 		return ErrorClientUninitialized
 	}
 	begin := time.Now()
-	err := c.bridge.MoveIndexes(defnIDs, with)
-	fmsg := "MoveIndexes %v - elapsed(%v), err(%v)"
-	logging.Infof(fmsg, defnIDs, time.Since(begin), err)
+	err := c.bridge.MoveIndex(defnID, with)
+	fmsg := "MoveIndex %v - elapsed(%v), err(%v)"
+	logging.Infof(fmsg, defnID, time.Since(begin), err)
 	return err
 }
 

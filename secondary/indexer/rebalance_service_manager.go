@@ -71,6 +71,8 @@ type ServiceMgr struct {
 	cinfo *c.ClusterInfoCache
 
 	localhttp string
+
+	moveStatusCh chan error
 }
 
 type rebalanceContext struct {
@@ -112,8 +114,9 @@ func NewRebalanceMgr(supvCmdch MsgChannel, supvMsgch MsgChannel, config c.Config
 			rebalanceID:   "",
 			rebalanceTask: nil,
 		},
-		supvCmdch: supvCmdch,
-		supvMsgch: supvMsgch,
+		supvCmdch:    supvCmdch,
+		supvMsgch:    supvMsgch,
+		moveStatusCh: make(chan error),
 	}
 
 	mgr.config.Store(config)
@@ -1890,94 +1893,90 @@ func (m *ServiceMgr) handleMoveIndex(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if len(req.IndexIds.DefnIds) == 0 {
-			err := errors.New("Empty Index List for Move Index")
+		l.Infof("ServiceMgr::handleMoveIndex %v", req)
+
+		nodes, err := validateMoveIndexReq(&req)
+		if err != nil {
 			l.Errorf("ServiceMgr::handleMoveIndex %v", err)
 			sendIndexResponseWithError(http.StatusBadRequest, w, err.Error())
 			return
 		}
 
-		if req.Plan == nil || len(req.Plan) == 0 {
-			err := errors.New("Empty Plan For Move Index")
-			l.Errorf("ServiceMgr::handleMoveIndex %v", err)
-			sendIndexResponseWithError(http.StatusBadRequest, w, err.Error())
+		err, noop := m.initMoveIndex(&req, nodes)
+		if err != nil {
+			l.Errorf("ServiceMgr::handleMoveIndex %v %v", err, m.rebalanceToken)
+			sendIndexResponseWithError(http.StatusInternalServerError, w, err.Error())
 			return
-		}
-
-		if dest, ok := req.Plan["dest"]; ok {
-
-			m.mu.Lock()
-			defer m.mu.Unlock()
-
-			var err error
-
-			if m.checkRebalanceRunning() {
-				err = errors.New("Cannot Process Move Index - Rebalance/MoveIndex In Progress")
-				l.Errorf("ServiceMgr::handleMoveIndex %v %v", err, m.rebalanceToken)
-				sendIndexResponseWithError(http.StatusInternalServerError, w, err.Error())
-				return
-			}
-
-			if err = m.genMoveIndexToken(); err != nil {
-				m.rebalanceToken = nil
-				sendIndexResponseWithError(http.StatusInternalServerError, w, err.Error())
-				return
-			}
-
-			l.Infof("ServiceMgr::handleMoveIndex New Move Index Token %v Dest %v", m.rebalanceToken, dest)
-
-			transferTokens, err := m.generateTransferTokenForMoveIndex(&req)
-			if err != nil {
-				m.rebalanceToken = nil
-				l.Errorf("ServiceMgr::handleMoveIndex %v %v", err, m.rebalanceToken)
-				sendIndexResponseWithError(http.StatusInternalServerError, w, err.Error())
-				return
-			}
-
-			if len(transferTokens) == 0 {
-				m.rebalanceToken = nil
-				l.Errorf("ServiceMgr::handleMoveIndex No TransferTokens Generated. Skip Move Index.")
-				sendIndexResponse(w)
-				return
-			}
-
-			if err = m.registerRebalanceRunning(); err != nil {
-				m.runCleanupPhaseLOCKED(MoveIndexTokenPath, false)
-				sendIndexResponseWithError(http.StatusInternalServerError, w, err.Error())
-				return
-			}
-
-			if err = m.registerLocalRebalanceToken(); err != nil {
-				m.runCleanupPhaseLOCKED(MoveIndexTokenPath, false)
-				sendIndexResponseWithError(http.StatusInternalServerError, w, err.Error())
-				return
-			}
-
-			if err = m.registerMoveIndexTokenInMetakv(); err != nil {
-				m.runCleanupPhaseLOCKED(MoveIndexTokenPath, false)
-				sendIndexResponseWithError(http.StatusInternalServerError, w, err.Error())
-				return
-			}
-
-			rebalancer := NewRebalancer(transferTokens, m.rebalanceToken, string(m.nodeInfo.NodeID),
-				true, nil, m.moveIndexDoneCallback, m.supvMsgch, m.localhttp)
-
-			m.rebalancer = rebalancer
-			m.rebalanceRunning = true
+		} else if noop {
+			l.Warnf("ServiceMgr::handleMoveIndex No TransferTokens Generated. Skip Move Index.")
 			sendIndexResponse(w)
 			return
-
 		} else {
-			err := errors.New("No Destination For Move Index")
-			l.Errorf("ServiceMgr::handleMoveIndex %v, %v", err, req.Plan)
-			sendIndexResponseWithError(http.StatusBadRequest, w, err.Error())
+			select {
+
+			case err := <-m.moveStatusCh:
+				if err != nil {
+					sendIndexResponseWithError(http.StatusInternalServerError, w, err.Error())
+				} else {
+					sendIndexResponse(w)
+				}
+			}
 			return
 		}
-
 	} else {
 		sendIndexResponseWithError(http.StatusBadRequest, w, "Unsupported method")
 		return
 	}
+}
+
+func (m *ServiceMgr) initMoveIndex(req *manager.IndexRequest, nodes []string) (error, bool) {
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.checkRebalanceRunning() {
+		return errors.New("Cannot Process Move Index - Rebalance/MoveIndex In Progress"), false
+	}
+
+	if err := m.genMoveIndexToken(); err != nil {
+		m.rebalanceToken = nil
+		return err, false
+	}
+
+	l.Infof("ServiceMgr::handleMoveIndex New Move Index Token %v Dest %v", m.rebalanceToken, nodes)
+
+	transferTokens, err := m.generateTransferTokenForMoveIndex(req, nodes)
+	if err != nil {
+		m.rebalanceToken = nil
+		return err, false
+	}
+
+	if len(transferTokens) == 0 {
+		m.rebalanceToken = nil
+		return nil, true
+	}
+
+	if err = m.registerRebalanceRunning(); err != nil {
+		m.runCleanupPhaseLOCKED(MoveIndexTokenPath, false)
+		return err, false
+	}
+
+	if err = m.registerLocalRebalanceToken(); err != nil {
+		m.runCleanupPhaseLOCKED(MoveIndexTokenPath, false)
+		return err, false
+	}
+
+	if err = m.registerMoveIndexTokenInMetakv(); err != nil {
+		m.runCleanupPhaseLOCKED(MoveIndexTokenPath, false)
+		return err, false
+	}
+
+	rebalancer := NewRebalancer(transferTokens, m.rebalanceToken, string(m.nodeInfo.NodeID),
+		true, nil, m.moveIndexDoneCallback, m.supvMsgch, m.localhttp)
+
+	m.rebalancer = rebalancer
+	m.rebalanceRunning = true
+	return nil, false
 
 }
 
@@ -1997,85 +1996,114 @@ func (m *ServiceMgr) registerMoveIndexTokenInMetakv() error {
 
 	err := MetakvSet(MoveIndexTokenPath, m.rebalanceToken)
 	if err != nil {
-		l.Errorf("ServiceMgr::registerMoveIndexTokenInMetakv Unable to set RebalanceToken In "+
-			"Meta Storage. Err %v", err)
+		l.Errorf("ServiceMgr::registerMoveIndexTokenInMetakv Unable to set "+
+			"RebalanceToken In Meta Storage. Err %v", err)
 		return err
 	}
-	l.Infof("ServiceMgr::registerMoveIndexTokenInMetakv Registered Global Rebalance Token In Metakv %v %v", MoveIndexTokenPath, m.rebalanceToken)
+	l.Infof("ServiceMgr::registerMoveIndexTokenInMetakv Registered Global Rebalance"+
+		"Token In Metakv %v %v", MoveIndexTokenPath, m.rebalanceToken)
 
 	return nil
 }
 
-func (m *ServiceMgr) generateTransferTokenForMoveIndex(req *manager.IndexRequest) (map[string]*c.TransferToken, error) {
+func (m *ServiceMgr) generateTransferTokenForMoveIndex(req *manager.IndexRequest,
+	reqNodes []string) (map[string]*c.TransferToken, error) {
 
 	topology, err := m.getGlobalTopology()
 	if err != nil {
 		return nil, err
 	}
 
-	dest, _ := req.Plan["dest"]
-	destUUID, err := m.getNodeIdFromDest(dest.(string))
-	if err != nil {
+	reqNodeUUID := make([]string, len(reqNodes))
+	for i, node := range reqNodes {
+		reqNodeUUID[i], err = m.getNodeIdFromDest(node)
+		if err != nil {
+			return nil, err
+		} else if reqNodeUUID[i] == "" {
+			errStr := fmt.Sprintf("Unable to Fetch Node UUID for %v", node)
+			return nil, errors.New(errStr)
+		}
+	}
+
+	l.Infof("ServiceMgr::handleMoveIndex nodes %v uuid %v", reqNodes, reqNodeUUID)
+
+	var currNodeUUID []string
+	var currInst []*c.IndexInst
+	var numCurrInst int
+	for _, localMeta := range topology.Metadata {
+
+	outerloop:
+		for _, index := range localMeta.IndexDefinitions {
+
+			if c.IndexDefnId(req.IndexIds.DefnIds[0]) == index.DefnId {
+
+				numCurrInst++
+				for i, uuid := range reqNodeUUID {
+					if localMeta.IndexerId == uuid {
+						l.Infof("ServiceMgr::generateTransferTokenForMoveIndex Skip Index %v. Already exist on dest %v.", index.DefnId, uuid)
+						reqNodeUUID = append(reqNodeUUID[:i], reqNodeUUID[i+1:]...)
+						break outerloop
+					}
+				}
+
+				topology := findTopologyByBucket(localMeta.IndexTopologies, index.Bucket)
+				if topology == nil {
+					err := errors.New(fmt.Sprintf("Fail to find index topology for bucket %v for node %v.", index.Bucket, localMeta.NodeUUID))
+					l.Errorf("ServiceMgr::generateTransferTokenForMoveIndex %v", err)
+					return nil, err
+				}
+
+				inst := topology.GetIndexInstByDefn(index.DefnId)
+				if inst == nil {
+					err := errors.New(fmt.Sprintf("Fail to find index instance for definition %v for node %v.", index.DefnId, localMeta.NodeUUID))
+					l.Errorf("ServiceMgr::generateTransferTokenForMoveIndex %v", err)
+					return nil, err
+				}
+
+				localInst := &c.IndexInst{
+					InstId:    c.IndexInstId(inst.InstId),
+					Defn:      index,
+					State:     c.IndexState(inst.State),
+					Stream:    c.StreamId(inst.StreamId),
+					Error:     inst.Error,
+					Version:   int(inst.Version),
+					ReplicaId: int(inst.ReplicaId),
+				}
+				currNodeUUID = append(currNodeUUID, localMeta.IndexerId)
+				currInst = append(currInst, localInst)
+			}
+		}
+	}
+
+	if len(reqNodes) != numCurrInst {
+		err := errors.New(fmt.Sprintf("Target node list must specify exactly one destination for each "+
+			"instances of the index. Request Nodes %v", reqNodes))
+		l.Errorf("ServiceMgr::generateTransferTokenForMoveIndex %v", err)
 		return nil, err
-	} else if destUUID == "" {
-		errStr := fmt.Sprintf("Unable to Fetch Node UUID for %v", dest)
-		return nil, errors.New(errStr)
+	}
+
+	if len(currNodeUUID) != len(reqNodeUUID) {
+		err := errors.New(fmt.Sprintf("Server error in computing new destination for index. "+
+			"Request Nodes %v. Curr Nodes %v", reqNodeUUID, currNodeUUID))
+		l.Errorf("ServiceMgr::generateTransferTokenForMoveIndex %v", err)
+		return nil, err
 	}
 
 	transferTokens := make(map[string]*c.TransferToken)
 
-	for _, reqId := range req.IndexIds.DefnIds {
+	for i, _ := range reqNodeUUID {
+		ttid, tt := m.genTransferToken(currInst[i], currNodeUUID[i], reqNodeUUID[i])
 
-	outerloop:
-		for _, localMeta := range topology.Metadata {
-
-			for _, index := range localMeta.IndexDefinitions {
-
-				if c.IndexDefnId(reqId) == index.DefnId {
-
-					if localMeta.IndexerId == destUUID {
-						l.Infof("ServiceMgr::generateTransferTokenForMoveIndex Skip Index %v. Source and Dest are same.", reqId)
-						continue
-					}
-
-					topology := findTopologyByBucket(localMeta.IndexTopologies, index.Bucket)
-					if topology == nil {
-						err := errors.New(fmt.Sprintf("Fail to find index topology for bucket %v for node %v.", index.Bucket, localMeta.NodeUUID))
-						l.Errorf("ServiceMgr::generateTransferTokenForMoveIndex %v", err)
-						return nil, err
-					}
-
-					inst := topology.GetIndexInstByDefn(index.DefnId)
-					if inst == nil {
-						err := errors.New(fmt.Sprintf("Fail to find index instance for definition %v for node %v.", index.DefnId, localMeta.NodeUUID))
-						l.Errorf("ServiceMgr::generateTransferTokenForMoveIndex %v", err)
-						return nil, err
-					}
-
-					localInst := &c.IndexInst{
-						InstId:    c.IndexInstId(inst.InstId),
-						Defn:      index,
-						State:     c.IndexState(inst.State),
-						Stream:    c.StreamId(inst.StreamId),
-						Error:     inst.Error,
-						Version:   int(inst.Version),
-						ReplicaId: int(inst.ReplicaId),
-					}
-
-					ttid, tt := m.genTransferToken(index, localInst, localMeta.IndexerId, destUUID)
-
-					if tt.SourceId == tt.DestId {
-						l.Infof("ServiceMgr::generateTransferTokenForMoveIndex Skip No-op TransferToken %v", tt)
-						continue
-					}
-
-					l.Infof("ServiceMgr::generateTransferTokenForMoveIndex Generated TransferToken %v %v", ttid, tt)
-					transferTokens[ttid] = tt
-					break outerloop
-				}
-			}
+		if tt.SourceId == tt.DestId {
+			l.Infof("ServiceMgr::generateTransferTokenForMoveIndex Skip No-op TransferToken %v", tt)
+			continue
 		}
+
+		l.Infof("ServiceMgr::generateTransferTokenForMoveIndex Generated TransferToken %v %v", ttid, tt)
+		transferTokens[ttid] = tt
+
 	}
+
 	return transferTokens, nil
 
 }
@@ -2125,7 +2153,7 @@ func (m *ServiceMgr) getNodeIdFromDest(dest string) (string, error) {
 	return "", errors.New(errStr)
 }
 
-func (m *ServiceMgr) genTransferToken(indexDefn c.IndexDefn, indexInst *c.IndexInst, sourceId string, destId string) (string, *c.TransferToken) {
+func (m *ServiceMgr) genTransferToken(indexInst *c.IndexInst, sourceId string, destId string) (string, *c.TransferToken) {
 
 	ustr, _ := c.NewUUID()
 
@@ -2141,6 +2169,7 @@ func (m *ServiceMgr) genTransferToken(indexDefn c.IndexDefn, indexInst *c.IndexI
 	}
 
 	tt.IndexInst.Defn.InstVersion = tt.IndexInst.Version + 1
+	tt.IndexInst.Defn.ReplicaId = tt.IndexInst.ReplicaId
 
 	return ttid, tt
 
@@ -2160,11 +2189,62 @@ func (m *ServiceMgr) onMoveIndexDoneLOCKED(err error) {
 
 	if m.rebalancer != nil {
 		m.runCleanupPhaseLOCKED(MoveIndexTokenPath, true)
+		m.moveStatusCh <- err
 	} else {
 		m.runCleanupPhaseLOCKED(MoveIndexTokenPath, false)
 	}
 	m.rebalancer = nil
 	m.rebalancerF = nil
+}
+
+func validateMoveIndexReq(req *manager.IndexRequest) ([]string, error) {
+
+	if len(req.IndexIds.DefnIds) == 0 {
+		return nil, errors.New("Empty Index List for Move Index")
+	}
+
+	if len(req.IndexIds.DefnIds) != 1 {
+		return nil, errors.New("Only 1 Index Can Be Moved Per Command")
+	}
+
+	if req.Plan == nil || len(req.Plan) == 0 {
+		return nil, errors.New("Empty Plan For Move Index")
+	}
+
+	var nodes []string
+
+	ns, ok := req.Plan["nodes"].([]interface{})
+	if ok {
+		for _, nse := range ns {
+			n, ok := nse.(string)
+			if ok {
+				nodes = append(nodes, n)
+			} else {
+				return nil, errors.New(fmt.Sprintf("Node '%v' is not valid", req.Plan["nodes"]))
+			}
+		}
+	} else {
+		n, ok := req.Plan["nodes"].(string)
+		if ok {
+			nodes = []string{n}
+		} else if _, ok := req.Plan["nodes"]; ok {
+			return nil, errors.New(fmt.Sprintf("Node '%v' is not valid", req.Plan["nodes"]))
+		}
+	}
+
+	if len(nodes) != 0 {
+		nodeSet := make(map[string]bool)
+		for _, node := range nodes {
+			if _, ok := nodeSet[node]; ok {
+				return nil, errors.New(fmt.Sprintf("Node '%v' contain duplicate nodes", req.Plan["nodes"]))
+			}
+			nodeSet[node] = true
+		}
+	} else {
+		return nil, errors.New("Missing Node Information For Move Index")
+	}
+
+	return nodes, nil
 
 }
 

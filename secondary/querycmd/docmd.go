@@ -264,24 +264,14 @@ func HandleCommand(
 		}
 
 	case "move":
-		defnIDs := make([]uint64, 0, len(cmd.Bindexes))
-		for _, bindex := range cmd.Bindexes {
-			v := strings.Split(bindex, ":")
-			if len(v) < 0 {
-				return fmt.Errorf("invalid index specified : %v", bindex)
-			}
-			bucket, iname = v[0], v[1]
-			index, ok := GetIndex(client, bucket, iname)
-			if ok {
-				defnIDs = append(defnIDs, uint64(index.Definition.DefnId))
-			} else {
-				err = fmt.Errorf("index %v/%v unknown", bucket, iname)
-				break
-			}
+		index, ok := GetIndex(client, cmd.Bucket, cmd.IndexName)
+		if !ok {
+			return fmt.Errorf("invalid index specified : %v", cmd.IndexName)
 		}
+
 		if err == nil {
-			fmt.Fprintf(w, "Moving Index for: %v %v\n", defnIDs, cmd.With)
-			err = client.MoveIndexes(defnIDs, cmd.WithPlan)
+			fmt.Fprintf(w, "Moving Index for: %v %v\n", index.Definition.DefnId, cmd.With)
+			err = client.MoveIndex(uint64(index.Definition.DefnId), cmd.WithPlan)
 		}
 
 	case "drop":
@@ -591,8 +581,8 @@ func validate(cmd *Command, fset *flag.FlagSet) error {
 		dont = []string{"h", "index", "bucket", "where", "fields", "primary", "with", "low", "high", "equal", "incl", "limit", "distinct", "ckey", "cval"}
 
 	case "move":
-		have = []string{"type", "server", "auth", "indexes"}
-		dont = []string{"h", "index", "bucket", "where", "fields", "primary", "low", "high", "equal", "incl", "limit", "distinct", "ckey", "cval"}
+		have = []string{"type", "server", "auth", "index", "bucket"}
+		dont = []string{"h", "indexes", "where", "fields", "primary", "low", "high", "equal", "incl", "limit", "distinct", "ckey", "cval"}
 
 	case "drop":
 		have = []string{"type", "server", "auth", "index", "bucket"}

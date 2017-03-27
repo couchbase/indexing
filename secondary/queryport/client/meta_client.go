@@ -198,15 +198,13 @@ func (b *metadataClient) BuildIndexes(defnIDs []uint64) error {
 	return b.mdClient.BuildIndexes(ids)
 }
 
-// MoveIndexes implements BridgeAccessor{} interface.
-func (b *metadataClient) MoveIndexes(defnIDs []uint64, planJSON map[string]interface{}) error {
+// MoveIndex implements BridgeAccessor{} interface.
+func (b *metadataClient) MoveIndex(defnID uint64, planJSON map[string]interface{}) error {
 
 	currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
 
-	for _, defnId := range defnIDs {
-		if _, ok := currmeta.defns[common.IndexDefnId(defnId)]; !ok {
-			return ErrorIndexNotFound
-		}
+	if _, ok := currmeta.defns[common.IndexDefnId(defnID)]; !ok {
+		return ErrorIndexNotFound
 	}
 
 	var httpport string
@@ -221,7 +219,14 @@ func (b *metadataClient) MoveIndexes(defnIDs []uint64, planJSON map[string]inter
 		return ErrorNoHost
 	}
 
-	idList := IndexIdList{DefnIds: defnIDs}
+	timeout := time.Duration(120 * time.Second)
+	if planJSON != nil {
+		if t, ok := planJSON["timeout"]; ok {
+			timeout = time.Duration(t.(float64)) * time.Second
+		}
+	}
+
+	idList := IndexIdList{DefnIds: []uint64{defnID}}
 	ir := IndexRequest{IndexIds: idList, Plan: planJSON}
 	body, err := json.Marshal(&ir)
 	if err != nil {
@@ -231,11 +236,11 @@ func (b *metadataClient) MoveIndexes(defnIDs []uint64, planJSON map[string]inter
 	bodybuf := bytes.NewBuffer(body)
 
 	url := "/moveIndex"
-	resp, err := postWithAuth(httpport+url, "application/json", bodybuf)
-	defer resp.Body.Close()
+	resp, err := postWithAuth(httpport+url, "application/json", bodybuf, timeout)
 	if err != nil {
 		return err
 	}
+	defer resp.Body.Close()
 
 	response := new(IndexResponse)
 	bytes, _ := ioutil.ReadAll(resp.Body)
@@ -1133,7 +1138,7 @@ func (b *metadataClient) watchClusterChanges() {
 	}
 }
 
-func postWithAuth(url string, bodyType string, body io.Reader) (*http.Response, error) {
+func postWithAuth(url string, bodyType string, body io.Reader, timeout time.Duration) (*http.Response, error) {
 
 	if !strings.HasPrefix(url, "http://") {
 		url = "http://" + url
@@ -1150,6 +1155,6 @@ func postWithAuth(url string, bodyType string, body io.Reader) (*http.Response, 
 		return nil, err
 	}
 
-	client := http.Client{Timeout: time.Duration(10 * time.Second)}
+	client := http.Client{Timeout: timeout}
 	return client.Do(req)
 }
