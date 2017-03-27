@@ -178,6 +178,9 @@ func IndexPointLessThan(x, y IndexPoint) bool {
 		return true
 	} else if a.ComparePrefixIndexKey(b) == 0 {
 		if len(a.Bytes()) == len(b.Bytes()) {
+			if x.Type == "low" && y.Type == "high" {
+				return true
+			}
 			return false
 		}
 		inclusiveKey := minlen(x, y)

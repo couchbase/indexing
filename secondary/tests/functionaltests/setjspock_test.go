@@ -255,6 +255,9 @@ func TestMultiScanScenarios(t *testing.T) {
 	runManyMultiScanWithIndex(index2, fields2, getCompIndexHighUnbounded4(), false, false, nil, 0, defaultlimit, false, false, "CompIndexHighUnbounded4", t)
 	runManyMultiScanWithIndex(index2, fields2, getCompIndexHighUnbounded5(), false, false, nil, 0, defaultlimit, false, false, "CompIndexHighUnbounded5", t)
 	runManyMultiScanWithIndex(index2, fields2, getSeekBoundaries(), false, false, nil, 0, defaultlimit, false, false, "SeekBoundaries", t)
+
+	// Prefix sort scenarios
+	runManyMultiScanWithIndex(index2, fields2, getPrefixSortVariations(), false, false, nil, 0, defaultlimit, false, false, "PrefixSortVariations", t)
 }
 
 func TestMultiScanOffset(t *testing.T) {
@@ -1216,6 +1219,43 @@ func getSeekBoundaries() []qc.Scans {
 	filter12[1] = &qc.CompositeElementFilter{Low: "Hahn Fletcher", High: c.MaxUnbounded, Inclusion: qc.Inclusion(uint32(3))}
 	scans8[1] = &qc.Scan{Filter: filter12}
 	manyscans = append(manyscans, scans8)
+
+	return manyscans
+}
+
+func getPrefixSortVariations() []qc.Scans {
+	manyscans := make([]qc.Scans, 0, 2)
+
+	//1
+	scans := make(qc.Scans, 2)
+	filter := make([]*qc.CompositeElementFilter, 2)
+	filter[0] = &qc.CompositeElementFilter{Low: "QUALITEX", High: "QUALITEX", Inclusion: qc.Inclusion(uint32(3))}
+	filter[1] = &qc.CompositeElementFilter{Low: "Laurel Kirkland", High: c.MaxUnbounded, Inclusion: qc.Inclusion(uint32(1))}
+	scans[0] = &qc.Scan{Filter: filter}
+
+	filter = make([]*qc.CompositeElementFilter, 1)
+	filter[0] = &qc.CompositeElementFilter{Low: "QUALITEX", High: "QUALITEX", Inclusion: qc.Inclusion(uint32(3))}
+	scans[1] = &qc.Scan{Filter: filter}
+	manyscans = append(manyscans, scans)
+
+	//2
+	scans = make(qc.Scans, 3)
+	filter = make([]*qc.CompositeElementFilter, 2)
+	filter[0] = &qc.CompositeElementFilter{Low: c.MinUnbounded, High: c.MaxUnbounded, Inclusion: qc.Inclusion(uint32(3))}
+	filter[1] = &qc.CompositeElementFilter{Low: "Laurel Kirkland", High: c.MaxUnbounded, Inclusion: qc.Inclusion(uint32(1))}
+	scans[0] = &qc.Scan{Filter: filter}
+
+	filter = make([]*qc.CompositeElementFilter, 2)
+	filter[0] = &qc.CompositeElementFilter{Low: c.MinUnbounded, High: "M", Inclusion: qc.Inclusion(uint32(3))}
+	filter[1] = &qc.CompositeElementFilter{Low: c.MinUnbounded, High: "Pat Sharpe", Inclusion: qc.Inclusion(uint32(3))}
+	scans[1] = &qc.Scan{Filter: filter}
+
+	filter = make([]*qc.CompositeElementFilter, 2)
+	filter[0] = &qc.CompositeElementFilter{Low: "B", High: c.MaxUnbounded, Inclusion: qc.Inclusion(uint32(3))}
+	filter[1] = &qc.CompositeElementFilter{Low: c.MinUnbounded, High: c.MaxUnbounded, Inclusion: qc.Inclusion(uint32(3))}
+	scans[2] = &qc.Scan{Filter: filter}
+
+	manyscans = append(manyscans, scans)
 
 	return manyscans
 }
