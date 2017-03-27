@@ -296,6 +296,7 @@ func (m *requestHandlerContext) getIndexStatus(cinfo *common.ClusterInfoCache, b
 				failedNodes = append(failedNodes, addr)
 				continue
 			}
+			defer resp.Body.Close()
 
 			localMeta := new(LocalIndexMetadata)
 			status := convertResponse(resp, localMeta)
@@ -318,6 +319,7 @@ func (m *requestHandlerContext) getIndexStatus(cinfo *common.ClusterInfoCache, b
 				failedNodes = append(failedNodes, addr)
 				continue
 			}
+			defer resp.Body.Close()
 
 			stats := new(common.Statistics)
 			status = convertResponse(resp, stats)
@@ -450,6 +452,7 @@ func (m *requestHandlerContext) getIndexMetadata(cinfo *common.ClusterInfoCache,
 				logging.Debugf("RequestHandler::getIndexMetadata: Error while retrieving %v with auth %v", addr+"/getLocalIndexMetadata", err)
 				return nil, errors.New(fmt.Sprintf("Fail to retrieve index definition from url %s", addr))
 			}
+			defer resp.Body.Close()
 
 			localMeta := new(LocalIndexMetadata)
 			status := convertResponse(resp, localMeta)
@@ -766,6 +769,7 @@ func (m *requestHandlerContext) makeCreateIndexRequest(defn common.IndexDefn, ho
 		logging.Debugf("requestHandler.makeCreateIndexRequest(): create index request fails %v", err)
 		return false
 	}
+	defer resp.Body.Close()
 
 	response := new(IndexResponse)
 	status := convertResponse(resp, response)
