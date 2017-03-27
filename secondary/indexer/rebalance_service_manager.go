@@ -1235,11 +1235,11 @@ func (m *ServiceMgr) registerGlobalRebalanceToken() error {
 			bodybuf := bytes.NewBuffer(body)
 
 			resp, err := postWithAuth(addr+url, "application/json", bodybuf)
-			defer resp.Body.Close()
 			if err != nil {
 				l.Errorf("ServiceMgr::registerGlobalRebalanceToken Error registering rebalance token on %v %v", addr+url, err)
 				return err
 			}
+			resp.Body.Close()
 
 		} else {
 			l.Errorf("ServiceMgr::registerGlobalRebalanceToken Error Fetching Service Address %v", err)
