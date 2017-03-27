@@ -322,6 +322,7 @@ func (m *requestHandlerContext) getIndexStatus(bucket string) ([]IndexStatus, []
 				failedNodes = append(failedNodes, addr)
 				continue
 			}
+			defer resp.Body.Close()
 
 			localMeta := new(LocalIndexMetadata)
 			status := convertResponse(resp, localMeta)
@@ -344,6 +345,7 @@ func (m *requestHandlerContext) getIndexStatus(bucket string) ([]IndexStatus, []
 				failedNodes = append(failedNodes, addr)
 				continue
 			}
+			defer resp.Body.Close()
 
 			stats := new(common.Statistics)
 			status = convertResponse(resp, stats)
@@ -488,6 +490,7 @@ func (m *requestHandlerContext) getIndexMetadata(indexerHostMap map[common.Index
 				logging.Debugf("RequestHandler::getIndexMetadata: Error while retrieving %v with auth %v", addr+"/getLocalIndexMetadata", err)
 				return nil, errors.New(fmt.Sprintf("Fail to retrieve index definition from url %s", addr))
 			}
+			defer resp.Body.Close()
 
 			localMeta := new(LocalIndexMetadata)
 			status := convertResponse(resp, localMeta)
@@ -686,6 +689,7 @@ func (m *requestHandlerContext) makeCreateIndexRequest(defn common.IndexDefn, ho
 		logging.Errorf("requestHandler.makeCreateIndexRequest(): create index request fails for %v/createIndex. Error=%v", host, err)
 		return false
 	}
+	defer resp.Body.Close()
 
 	response := new(IndexResponse)
 	status := convertResponse(resp, response)
