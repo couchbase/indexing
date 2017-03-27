@@ -929,7 +929,7 @@ func (ts *TsConsistency) Override(
 
 func curePrimaryKey(key interface{}) ([]byte, string) {
 	if key == nil {
-		return nil, "ok"
+		return nil, "before"
 	}
 	switch v := key.(type) {
 	case []byte:
