@@ -473,15 +473,32 @@ func (m *LifecycleMgr) handleBuildIndexes(content []byte) error {
 	if len(retryList) != 0 || len(skipList) != 0 || len(errList) != 0 {
 		msg := "Build index fails."
 
-		if len(retryList) != 0 {
+		if len(retryList) == 1 {
+
+			inst, err := m.FindLocalIndexInst(retryList[0].Bucket, retryList[0].DefnId)
+			if inst != nil && err == nil {
+				msg += fmt.Sprintf("  Index %v will retry building in the background for reason: %v.", retryList[0].Name, inst.Error)
+			}
+		}
+
+		if len(errList) == 1 {
+			msg += fmt.Sprintf("  %v.", errList[0])
+		}
+
+		if len(retryList) > 1 {
 			msg += "  Some index will be retried building in the background."
 		}
 
-		if len(skipList) != 0 {
-			msg += "  Some index cannot be built since it may not exist."
+		if len(errList) > 1 {
+			msg += "  Some index cannot be built due to errors."
+		}
 
-		} else if len(errList) != 0 {
-			msg += "  For other errors, please check index status for more details."
+		if len(skipList) != 0 {
+			msg += "  Some index cannot be built since it may not exist.  Please check if the list of indexes are valid."
+		}
+
+		if len(errList) > 1 || len(retryList) > 1 {
+			msg += "  For more details, please check index status."
 		}
 
 		return errors.New(msg)
@@ -574,7 +591,7 @@ func (m *LifecycleMgr) BuildIndexes(ids []common.IndexDefnId) ([]*common.IndexDe
 						defn.Bucket, defn.Name)
 				}
 
-				if m.canRetryError(build_err) {
+				if m.canRetryError(inst, build_err) {
 					logging.Infof("LifecycleMgr.handleBuildIndexes() : Encounter build error.  Retry building index (%v, %v) at later time.",
 						defn.Bucket, defn.Name)
 
@@ -588,7 +605,7 @@ func (m *LifecycleMgr) BuildIndexes(ids []common.IndexDefnId) ([]*common.IndexDe
 
 					retryList = append(retryList, defn)
 				} else {
-					errList = append(errList, build_err)
+					errList = append(errList, errors.New(fmt.Sprintf("Index %v fails to build for reason: %v", defn.Name, build_err)))
 				}
 			}
 
@@ -849,7 +866,11 @@ func (m *LifecycleMgr) handleCreateIndexScheduledBuild(key string, content []byt
 // Lifecycle Mgr - support functions
 //////////////////////////////////////////////////////////////
 
-func (m *LifecycleMgr) canRetryError(err error) bool {
+func (m *LifecycleMgr) canRetryError(inst *IndexInstDistribution, err error) bool {
+
+	if inst == nil || inst.RState != uint32(common.REBAL_ACTIVE) {
+		return false
+	}
 
 	indexerErr, ok := err.(*common.IndexerError)
 	if !ok {
@@ -858,6 +879,7 @@ func (m *LifecycleMgr) canRetryError(err error) bool {
 
 	if indexerErr.Code == common.IndexNotExist ||
 		indexerErr.Code == common.InvalidBucket ||
+		indexerErr.Code == common.RebalanceInProgress ||
 		indexerErr.Code == common.IndexAlreadyExist {
 		return false
 	}
