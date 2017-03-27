@@ -291,9 +291,6 @@ func (k *NilIndexKey) String() string {
 type primaryKey []byte
 
 func NewPrimaryKey(docid []byte) (IndexKey, error) {
-	if len(docid) == 0 {
-		return &NilIndexKey{}, nil
-	}
 	k := primaryKey(docid)
 	return &k, nil
 }
