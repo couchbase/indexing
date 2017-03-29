@@ -75,6 +75,7 @@ func TestRestfulAPI(t *testing.T) {
 	log.Printf("CREATED indexes: %v\n", ids)
 	log.Println()
 
+	ids = ids[:len(ids)-1]
 	err = restful_lookup(ids)
 	FailTestIfError(err, "Error in restful_lookup", t)
 
@@ -224,6 +225,21 @@ func restful_badcreates() error {
 	if err := post(dst); err != nil {
 		return err
 	}
+
+	log.Println("TEST: incomplete field ``desc``")
+	dst = restful_clonebody(reqcreate)
+	dst["secExprs"] = []string{"address.city", "address.state"}
+	dst["desc"] = []bool{true}
+	if err := post(dst); err != nil {
+		return err
+	}
+
+	log.Println("TEST: invalid field ``desc``")
+	dst["desc"] = []int{1}
+	if err := post(dst); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -288,6 +304,17 @@ func restful_create_andbuild() ([]string, error) {
 	dst = restful_clonebody(reqcreate)
 	dst["with"] = `{"defer_build": true}`
 	dst["name"] = "idx4"
+	id, err = post(dst)
+	if err != nil {
+		return nil, err
+	}
+	ids = append(ids, id)
+
+	log.Println("CREATE INDEX: idx5")
+	dst = restful_clonebody(reqcreate)
+	dst["name"] = "idx5"
+	dst["secExprs"] = []string{"miscol"}
+	dst["desc"] = []bool{true}
 	id, err = post(dst)
 	if err != nil {
 		return nil, err
