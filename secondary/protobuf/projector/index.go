@@ -194,8 +194,8 @@ func (ie *IndexEvaluator) StreamEndData(
 // TransformRoute implement Evaluator{} interface.
 func (ie *IndexEvaluator) TransformRoute(
 	vbuuid uint64, m *mc.DcpEvent, data map[string]interface{},
-	encodeBuf []byte) (err error) {
-
+	encodeBuf []byte) ([]byte, error) {
+	var err error
 	defer func() { // panic safe
 		if r := recover(); r != nil {
 			err = fmt.Errorf("%v", r)
@@ -207,28 +207,29 @@ func (ie *IndexEvaluator) TransformRoute(
 	}
 
 	var npkey /*new-partition*/, opkey /*old-partition*/, nkey, okey []byte
+	var newBuf []byte
 	instn := ie.instance
 
 	meta := dcpEvent2Meta(m)
 	where, err := ie.wherePredicate(m.Value, meta, encodeBuf)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	if where && len(m.Value) > 0 { // project new secondary key
 		if npkey, err = ie.partitionKey(m.Value, meta, encodeBuf); err != nil {
-			return err
+			return nil, err
 		}
-		if nkey, err = ie.evaluate(m.Key, m.Value, meta, encodeBuf); err != nil {
-			return err
+		if nkey, newBuf, err = ie.evaluate(m.Key, m.Value, meta, encodeBuf); err != nil {
+			return nil, err
 		}
 	}
 	if len(m.OldValue) > 0 { // project old secondary key
 		if opkey, err = ie.partitionKey(m.OldValue, meta, encodeBuf); err != nil {
-			return err
+			return nil, err
 		}
-		if okey, err = ie.evaluate(m.Key, m.OldValue, meta, encodeBuf); err != nil {
-			return err
+		if okey, newBuf, err = ie.evaluate(m.Key, m.OldValue, meta, encodeBuf); err != nil {
+			return nil, err
 		}
 	}
 
@@ -289,15 +290,15 @@ func (ie *IndexEvaluator) TransformRoute(
 			data[raddr] = dkv
 		}
 	}
-	return nil
+	return newBuf, nil
 }
 
 func (ie *IndexEvaluator) evaluate(
-	docid, doc []byte, meta map[string]interface{}, encodeBuf []byte) ([]byte, error) {
+	docid, doc []byte, meta map[string]interface{}, encodeBuf []byte) ([]byte, []byte, error) {
 
 	defn := ie.instance.GetDefinition()
 	if defn.GetIsPrimary() { // primary index supported !!
-		return []byte(`["` + string(docid) + `"]`), nil
+		return []byte(`["` + string(docid) + `"]`), nil, nil
 	}
 
 	exprType := defn.GetExprType()
@@ -305,7 +306,7 @@ func (ie *IndexEvaluator) evaluate(
 	case ExprType_N1QL:
 		return N1QLTransform(docid, doc, ie.skExprs, meta, encodeBuf)
 	}
-	return nil, nil
+	return nil, nil, nil
 }
 
 func (ie *IndexEvaluator) partitionKey(
@@ -321,7 +322,8 @@ func (ie *IndexEvaluator) partitionKey(
 	exprType := defn.GetExprType()
 	switch exprType {
 	case ExprType_N1QL:
-		return N1QLTransform(nil, doc, []interface{}{ie.pkExpr}, meta, encodeBuf)
+		out, _, err := N1QLTransform(nil, doc, []interface{}{ie.whExpr}, meta, encodeBuf)
+		return out, err
 	}
 	return nil, nil
 }
@@ -338,7 +340,7 @@ func (ie *IndexEvaluator) wherePredicate(
 	switch exprType {
 	case ExprType_N1QL:
 		// TODO: can be optimized by using a custom N1QL-evaluator.
-		out, err := N1QLTransform(nil, doc, []interface{}{ie.whExpr}, meta, encodeBuf)
+		out, _, err := N1QLTransform(nil, doc, []interface{}{ie.whExpr}, meta, encodeBuf)
 		if out == nil { // missing is treated as false
 			return false, err
 		} else if err != nil { // errors are treated as false

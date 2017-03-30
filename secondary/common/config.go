@@ -1221,7 +1221,20 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
-
+	"indexer.settings.max_seckey_size": ConfigValue{
+		4608,
+		"Maximum size of secondary index key",
+		4608,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.settings.allow_large_keys": ConfigValue{
+		true,
+		"Allow indexing of large index items",
+		true,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.settings.send_buffer_size": ConfigValue{
 		1024,
 		"Buffer size for batching rows during scan result streaming",

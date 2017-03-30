@@ -319,10 +319,26 @@ func initGlobalSettings(oldCfg, newCfg common.Config) {
 
 	setLogger(newCfg)
 	useMutationSyncPool = newCfg["indexer.useMutationSyncPool"].Bool()
-	maxArrayKeyLength = newCfg["indexer.settings.max_array_seckey_size"].Int()
+
+	allowLargeKeys = newCfg["indexer.settings.allow_large_keys"].Bool()
+	if common.GetStorageMode() == common.FORESTDB {
+		allowLargeKeys = false
+	}
+
+	if allowLargeKeys {
+		maxArrayKeyLength = DEFAULT_MAX_ARRAY_KEY_SIZE
+		maxSecKeyLen = DEFAULT_MAX_SEC_KEY_LEN
+	} else {
+		maxArrayKeyLength = newCfg["indexer.settings.max_array_seckey_size"].Int()
+		maxSecKeyLen = newCfg["indexer.settings.max_seckey_size"].Int()
+	}
 	maxArrayKeyBufferLength = maxArrayKeyLength * 3
 	maxArrayIndexEntrySize = maxArrayKeyBufferLength + MAX_DOCID_LEN + 2
 	arrayEncBufPool = common.NewByteBufferPool(maxArrayIndexEntrySize + ENCODE_BUF_SAFE_PAD)
+
+	maxSecKeyBufferLen = maxSecKeyLen * 3
+	maxIndexEntrySize = maxSecKeyBufferLen + MAX_DOCID_LEN + 2
+	encBufPool = common.NewByteBufferPool(maxIndexEntrySize + ENCODE_BUF_SAFE_PAD)
 }
 
 func validateSettings(value []byte) error {

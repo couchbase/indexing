@@ -31,7 +31,7 @@ var missing = qvalue.NewValue(string(collatejson.MissingLiteral))
 //      `nru`, `cas`
 func N1QLTransform(
 	docid, doc []byte, cExprs []interface{},
-	meta map[string]interface{}, encodeBuf []byte) ([]byte, error) {
+	meta map[string]interface{}, encodeBuf []byte) ([]byte, []byte, error) {
 
 	arrValue := make([]interface{}, 0, len(cExprs))
 	context := qexpr.NewIndexContext()
@@ -45,7 +45,7 @@ func N1QLTransform(
 			exprstr := qexpr.NewStringer().Visit(expr)
 			fmsg := "EvaluateForIndex(%q) for docid %v, err: %v skip document"
 			logging.Errorf(fmsg, exprstr, string(docid), err)
-			return nil, nil
+			return nil, nil, nil
 		}
 		isArray, _ := expr.IsArrayIndexKey()
 		if isArray == false {
@@ -53,11 +53,11 @@ func N1QLTransform(
 				exprstr := qexpr.NewStringer().Visit(expr)
 				fmsg := "EvaluateForIndex(%q) scalar=nil, skip document %v"
 				logging.Errorf(fmsg, exprstr, string(docid))
-				return nil, nil
+				return nil, nil, nil
 			}
 			key := scalar
 			if key.Type() == qvalue.MISSING && skip {
-				return nil, nil
+				return nil, nil, nil
 
 			} else if key.Type() == qvalue.MISSING {
 				arrValue = append(arrValue, missing)
@@ -70,15 +70,15 @@ func N1QLTransform(
 				exprstr := qexpr.NewStringer().Visit(expr)
 				fmsg := "EvaluateForIndex(%q) vector=nil, skip document %v"
 				logging.Errorf(fmsg, exprstr, string(docid))
-				return nil, nil
+				return nil, nil, nil
 			}
 
 			if skip { //array is leading
 				if len(vector) == 0 { //array is empty
-					return nil, nil
+					return nil, nil, nil
 				}
 				if len(vector) == 1 && vector[0].Type() == qvalue.MISSING { //array is missing
-					return nil, nil
+					return nil, nil, nil
 				}
 			} else if !skip {
 				if len(vector) == 0 { //array is non-leading and is empty
@@ -98,7 +98,8 @@ func N1QLTransform(
 	if len(cExprs) == 1 && len(arrValue) == 1 && docid == nil {
 		// used for partition-key evaluation and where predicate.
 		// Marshal partition-key and where as a basic JSON data-type.
-		return qvalue.NewValue(arrValue[0]).MarshalJSON()
+		out, err := qvalue.NewValue(arrValue[0]).MarshalJSON()
+		return out, nil, err
 
 	} else if len(arrValue) > 0 {
 		// The shape of the secondary key looks like,
@@ -111,25 +112,36 @@ func N1QLTransform(
 		//    arrValue = append(arrValue, qvalue.NewValue(string(docid)))
 		//}
 		if encodeBuf != nil {
-			out, err := CollateJSONEncode(qvalue.NewValue(arrValue), encodeBuf)
+			out, newBuf, err := CollateJSONEncode(qvalue.NewValue(arrValue), encodeBuf)
 			if err != nil {
 				fmsg := "CollateJSONEncode: index field for docid: %s (err: %v) skip document"
 				logging.Errorf(fmsg, docid, err)
-				return nil, nil
+				return nil, newBuf, nil
 			}
-			return out, err // return as collated JSON array
+			return out, newBuf, err // return as collated JSON array
 		}
 		secKey := qvalue.NewValue(make([]interface{}, len(arrValue)))
 		for i, key := range arrValue {
 			secKey.SetIndex(i, key)
 		}
-		return secKey.MarshalJSON() // return as JSON array
+		out, err := secKey.MarshalJSON()
+		return out, nil, err // return as JSON array
 	}
-	return nil, nil
+	return nil, nil, nil
 }
 
-func CollateJSONEncode(val qvalue.Value, encodeBuf []byte) ([]byte, error) {
+func CollateJSONEncode(val qvalue.Value, encodeBuf []byte) ([]byte, []byte, error) {
 	codec := collatejson.NewCodec(16)
 	encoded, err := codec.EncodeN1QLValue(val, encodeBuf[:0])
-	return append([]byte(nil), encoded...), err
+
+	if err != nil && err.Error() == collatejson.ErrorOutputLen.Error() {
+		valBytes, e1 := val.MarshalJSON()
+		if e1 != nil {
+			return append([]byte(nil), encoded...), nil, err
+		}
+		newBuf := make([]byte, 0, len(valBytes)*3)
+		enc, e2 := codec.EncodeN1QLValue(val, newBuf)
+		return append([]byte(nil), enc...), newBuf, e2
+	}
+	return append([]byte(nil), encoded...), nil, err
 }

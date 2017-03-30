@@ -119,7 +119,7 @@ func (w *protoResponseWriter) RawBytes(b []byte) error {
 
 func (w *protoResponseWriter) Row(pk, sk []byte) error {
 
-	if w.rowSize+len(pk)+len(sk) > len(*w.rowBuf) {
+	if w.rowSize != 0 && w.rowSize+len(pk)+len(sk) > len(*w.rowBuf) {
 		res := &protobuf.ResponseStream{IndexEntries: w.rowEntries}
 		err := protobuf.EncodeAndWrite(w.conn, *w.encBuf, res)
 		if err != nil {
@@ -128,6 +128,11 @@ func (w *protoResponseWriter) Row(pk, sk []byte) error {
 
 		w.rowSize = 0
 		w.rowEntries = nil
+	}
+
+	if w.rowSize == 0 && len(pk)+len(sk) > cap(*w.rowBuf) {
+		newSize := (len(pk) + len(sk))
+		(*w.rowBuf) = make([]byte, newSize, newSize)
 	}
 
 	pkCopy := (*w.rowBuf)[w.rowSize : w.rowSize+len(pk)]
@@ -142,6 +147,7 @@ func (w *protoResponseWriter) Row(pk, sk []byte) error {
 		PrimaryKey: pkCopy,
 	}
 
+	// TODO: remove below line
 	w.rowSize += len(sk) + len(pk)
 	w.rowEntries = append(w.rowEntries, row)
 	return nil

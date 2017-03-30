@@ -245,7 +245,11 @@ func TestArraySizeIncreaseDecrease(t *testing.T) {
 	FailTestIfError(e, "Error in DropAllSecondaryIndexes", t)
 	kvutility.FlushBucket(bucketName, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
 
-	err := secondaryindex.ChangeIndexerSettings("indexer.settings.max_array_seckey_size", float64(5120), clusterconfig.Username, clusterconfig.Password, kvaddress)
+	err := secondaryindex.ChangeIndexerSettings("indexer.settings.allow_large_keys", false, clusterconfig.Username, clusterconfig.Password, kvaddress)
+	FailTestIfError(err, "Error in ChangeIndexerSettings", t)
+	time.Sleep(5 * time.Second) // Wait for restart after this setting change
+
+	err = secondaryindex.ChangeIndexerSettings("indexer.settings.max_array_seckey_size", float64(5120), clusterconfig.Username, clusterconfig.Password, kvaddress)
 	FailTestIfError(err, "Error in ChangeIndexerSettings", t)
 	time.Sleep(2 * time.Second)
 
@@ -284,6 +288,10 @@ func TestArraySizeIncreaseDecrease(t *testing.T) {
 	if len(scanResults) != 0 {
 		FailTestIfError(errors.New("Expected 0 results due to size limit"), "Error in scan result validation", t)
 	}
+
+	err = secondaryindex.ChangeIndexerSettings("indexer.settings.allow_large_keys", true, clusterconfig.Username, clusterconfig.Password, kvaddress)
+	FailTestIfError(err, "Error in ChangeIndexerSettings", t)
+	time.Sleep(5 * time.Second) // Wait for restart after this setting change
 }
 
 func updateDocsArrayField(kvdocs tc.KeyValues, bucketName string) tc.KeyValues {

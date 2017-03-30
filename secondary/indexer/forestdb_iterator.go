@@ -21,7 +21,7 @@ import (
 var docBufPool *common.BytesBufPool
 
 func init() {
-	docBufPool = common.NewByteBufferPool(MAX_SEC_KEY_BUFFER_LEN + MAX_DOCID_LEN + 2)
+	docBufPool = common.NewByteBufferPool(maxIndexEntrySize)
 }
 
 var fdbSnapIterPool *sync.Pool

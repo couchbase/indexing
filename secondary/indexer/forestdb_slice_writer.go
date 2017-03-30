@@ -517,7 +517,7 @@ func (fdb *fdbSlice) insertSecArrayIndex(key []byte, rawKey []byte, docid []byte
 			jsonEncoder.ReverseCollate(oldkey, fdb.idxDefn.Desc)
 		}
 
-		if oldEntriesBytes, oldKeyCount, err = ArrayIndexItems(oldkey, fdb.arrayExprPosition,
+		if oldEntriesBytes, oldKeyCount, _, err = ArrayIndexItems(oldkey, fdb.arrayExprPosition,
 			tmpBuf, fdb.isArrayDistinct, false); err != nil {
 			logging.Errorf("ForestDBSlice::insert SliceId %v IndexInstId %v Error in retrieving "+
 				"compostite old secondary keys. Skipping docid:%s Error: %v", fdb.id, fdb.idxInstId, docid, err)
@@ -533,7 +533,7 @@ func (fdb *fdbSlice) insertSecArrayIndex(key []byte, rawKey []byte, docid []byte
 
 		tmpBufPtr := arrayEncBufPool.Get()
 		defer arrayEncBufPool.Put(tmpBufPtr)
-		newEntriesBytes, newKeyCount, err = ArrayIndexItems(key, fdb.arrayExprPosition,
+		newEntriesBytes, newKeyCount, _, err = ArrayIndexItems(key, fdb.arrayExprPosition,
 			(*tmpBufPtr)[:0], fdb.isArrayDistinct, true)
 		if err != nil {
 			logging.Errorf("ForestDBSlice::insert SliceId %v IndexInstId %v Error in creating "+
@@ -786,7 +786,7 @@ func (fdb *fdbSlice) deleteSecArrayIndex(docid []byte, workerId int) (nmut int) 
 		jsonEncoder.ReverseCollate(olditm, fdb.idxDefn.Desc)
 	}
 
-	indexEntriesToBeDeleted, keyCount, err := ArrayIndexItems(olditm, fdb.arrayExprPosition,
+	indexEntriesToBeDeleted, keyCount, _, err := ArrayIndexItems(olditm, fdb.arrayExprPosition,
 		tmpBuf, fdb.isArrayDistinct, false)
 
 	if err != nil {
@@ -806,7 +806,7 @@ func (fdb *fdbSlice) deleteSecArrayIndex(docid []byte, workerId int) (nmut int) 
 		tmpBufPtr := encBufPool.Get()
 		defer encBufPool.Put(tmpBufPtr)
 
-		if len(item) > MAX_SEC_KEY_BUFFER_LEN {
+		if len(item) > maxSecKeyBufferLen {
 			tmpBuf = make([]byte, 0, len(item)+MAX_DOCID_LEN+2)
 		} else {
 			tmpBuf = (*tmpBufPtr)[:0]
