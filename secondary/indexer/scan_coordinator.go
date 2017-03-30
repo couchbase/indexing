@@ -178,6 +178,9 @@ func IndexPointLessThan(x, y IndexPoint) bool {
 		return true
 	} else if a.ComparePrefixIndexKey(b) == 0 {
 		if len(a.Bytes()) == len(b.Bytes()) {
+			if x.Type == "low" && y.Type == "high" {
+				return true
+			}
 			return false
 		}
 		inclusiveKey := minlen(x, y)
@@ -523,14 +526,14 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 	r.projectPrimaryKey = true
 
 	isNil := func(k []byte) bool {
-		if len(k) == 0 || (!r.isPrimary && string(k) == "[]") {
+		if k == nil || (!r.isPrimary && string(k) == "[]") {
 			return true
 		}
 		return false
 	}
 
 	newKey := func(k []byte) (IndexKey, error) {
-		if len(k) == 0 {
+		if k == nil {
 			return nil, fmt.Errorf("Key is null")
 		}
 

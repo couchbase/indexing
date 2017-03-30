@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	c "github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 )
 
 /////////////////////////////////////////////////////////////////////////
@@ -23,6 +24,10 @@ import (
 const DeleteDDLCommandTokenTag = "commandToken/delete/"
 const DDLMetakvDir = c.IndexingMetaDir + "ddl/"
 const DeleteDDLCommandTokenPath = DDLMetakvDir + DeleteDDLCommandTokenTag
+
+const IndexerVersionTokenTag = "versionToken"
+const InfoMetakvDir = c.IndexingMetaDir + "info/"
+const IndexerVersionTokenPath = InfoMetakvDir + IndexerVersionTokenTag
 
 //////////////////////////////////////////////////////////////
 // Concrete Type
@@ -34,8 +39,12 @@ type DeleteCommandToken struct {
 	DefnId c.IndexDefnId
 }
 
+type IndexerVersionToken struct {
+	Version uint64
+}
+
 //////////////////////////////////////////////////////////////
-// Token Management
+// Delete Token Management
 //////////////////////////////////////////////////////////////
 
 //
@@ -79,6 +88,69 @@ func UnmarshallDeleteCommandToken(data []byte) (*DeleteCommandToken, error) {
 }
 
 func MarshallDeleteCommandToken(r *DeleteCommandToken) ([]byte, error) {
+
+	buf, err := json.Marshal(&r)
+	if err != nil {
+		return nil, err
+	}
+
+	return buf, nil
+}
+
+//////////////////////////////////////////////////////////////
+// Version Management
+//////////////////////////////////////////////////////////////
+
+//
+// Generate a token to metakv for indexer version
+//
+func PostIndexerVersionToken(version uint64) error {
+
+	token := &IndexerVersionToken{
+		Version: version,
+	}
+
+	if err := c.MetakvSet(IndexerVersionTokenPath, token); err != nil {
+		logging.Errorf("Fail to post indexer version to metakv.  Internal Error = %v", err)
+		return err
+	}
+
+	return nil
+}
+
+//
+// Does token exist? Return true only if token exist and there is no error.
+//
+func GetIndexerVersionToken() (uint64, error) {
+
+	token := &IndexerVersionToken{}
+	found, err := c.MetakvGet(IndexerVersionTokenPath, token)
+	if err != nil {
+		logging.Errorf("Fail to get indexer version from metakv.  Internal Error = %v", err)
+		return 0, err
+	}
+
+	if !found {
+		return 0, nil
+	}
+
+	return token.Version, nil
+}
+
+//
+// Unmarshall
+//
+func UnmarshallIndexerVersionToken(data []byte) (*IndexerVersionToken, error) {
+
+	r := new(IndexerVersionToken)
+	if err := json.Unmarshal(data, r); err != nil {
+		return nil, err
+	}
+
+	return r, nil
+}
+
+func MarshallIndexerVersionToken(r *IndexerVersionToken) ([]byte, error) {
 
 	buf, err := json.Marshal(&r)
 	if err != nil {

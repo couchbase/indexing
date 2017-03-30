@@ -51,7 +51,7 @@ func TestBuildDeferredAnotherBuilding(t *testing.T) {
 		e := errors.New("Error excpected when build index while another build is in progress")
 		FailTestIfError(e, "Error in TestBuildDeferredAnotherBuilding", t)
 	} else {
-		if strings.Contains(err.Error(), "retried building in the background") {
+		if strings.Contains(err.Error(), "retry building in the background") {
 			log.Printf("Build index failed as expected: %v", err.Error())
 		} else {
 			log.Printf("Build index did not fail with expected error, instead failed with %v", err)

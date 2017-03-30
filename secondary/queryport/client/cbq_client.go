@@ -88,7 +88,7 @@ func (b *cbqClient) Sync() error {
 }
 
 // Refresh implement BridgeAccessor{} interface.
-func (b *cbqClient) Refresh() ([]*mclient.IndexMetadata, error) {
+func (b *cbqClient) Refresh() ([]*mclient.IndexMetadata, uint64, error) {
 	var resp *http.Response
 	var mresp indexMetaResponse
 
@@ -112,12 +112,12 @@ func (b *cbqClient) Refresh() ([]*mclient.IndexMetadata, error) {
 				b.rw.Lock()
 				defer b.rw.Unlock()
 				b.indexes = indexes
-				return indexes, nil
+				return indexes, common.INDEXER_CUR_VERSION, nil
 			}
-			return nil, err
+			return nil, common.INDEXER_CUR_VERSION, err
 		}
 	}
-	return nil, err
+	return nil, common.INDEXER_CUR_VERSION, err
 }
 
 // Nodes implement BridgeAccessor{} interface.
@@ -176,9 +176,9 @@ func (b *cbqClient) BuildIndexes(defnID []uint64) error {
 	panic("cbqClient does not implement build-indexes")
 }
 
-// MoveIndexes implement BridgeAccessor{} interface.
-func (b *cbqClient) MoveIndexes(defnID []uint64, plan map[string]interface{}) error {
-	panic("cbqClient does not implement build-indexes")
+// MoveIndex implement BridgeAccessor{} interface.
+func (b *cbqClient) MoveIndex(defnID uint64, plan map[string]interface{}) error {
+	panic("cbqClient does not implement move index")
 }
 
 // DropIndex implement BridgeAccessor{} interface.

@@ -279,7 +279,7 @@ func (m *requestHandlerContext) handleIndexStatusRequest(w http.ResponseWriter, 
 
 	bucket := m.getBucket(r)
 
-	list, failedNodes, err := m.getIndexStatus(m.mgr.getServiceAddrProvider().(*common.ClusterInfoCache), bucket)
+	list, failedNodes, err := m.getIndexStatus(bucket)
 	if err == nil && len(failedNodes) == 0 {
 		sort.Sort(indexStatusSorter(list))
 		resp := &IndexStatusResponse{Code: RESP_SUCCESS, Status: list}
@@ -298,9 +298,10 @@ func (m *requestHandlerContext) getBucket(r *http.Request) string {
 	return r.FormValue("bucket")
 }
 
-func (m *requestHandlerContext) getIndexStatus(cinfo *common.ClusterInfoCache, bucket string) ([]IndexStatus, []string, error) {
+func (m *requestHandlerContext) getIndexStatus(bucket string) ([]IndexStatus, []string, error) {
 
-	if err := cinfo.Fetch(); err != nil {
+	cinfo, err := m.mgr.FetchNewClusterInfoCache()
+	if err != nil {
 		return nil, nil, err
 	}
 
@@ -321,6 +322,7 @@ func (m *requestHandlerContext) getIndexStatus(cinfo *common.ClusterInfoCache, b
 				failedNodes = append(failedNodes, addr)
 				continue
 			}
+			defer resp.Body.Close()
 
 			localMeta := new(LocalIndexMetadata)
 			status := convertResponse(resp, localMeta)
@@ -343,6 +345,7 @@ func (m *requestHandlerContext) getIndexStatus(cinfo *common.ClusterInfoCache, b
 				failedNodes = append(failedNodes, addr)
 				continue
 			}
+			defer resp.Body.Close()
 
 			stats := new(common.Statistics)
 			status = convertResponse(resp, stats)
@@ -388,8 +391,8 @@ func (m *requestHandlerContext) getIndexStatus(cinfo *common.ClusterInfoCache, b
 							if indexerState, ok := stats.ToMap()["indexer_state"]; ok {
 								if indexerState == "Paused" {
 									stateStr = "Paused"
-								} else if indexerState == "Bootstrap" {
-									stateStr = "Bootstrap"
+								} else if indexerState == "Bootstrap" || indexerState == "Warmup" {
+									stateStr = "Warmup"
 								}
 							}
 
@@ -449,7 +452,7 @@ func (m *requestHandlerContext) handleIndexMetadataRequest(w http.ResponseWriter
 	bucket := m.getBucket(r)
 
 	indexerHostMap := make(map[common.IndexerId]string)
-	meta, err := m.getIndexMetadata(m.mgr.getServiceAddrProvider().(*common.ClusterInfoCache), indexerHostMap, bucket)
+	meta, err := m.getIndexMetadata(indexerHostMap, bucket)
 	if err == nil {
 		resp := &BackupResponse{Code: RESP_SUCCESS, Result: *meta}
 		send(http.StatusOK, w, resp)
@@ -460,10 +463,10 @@ func (m *requestHandlerContext) handleIndexMetadataRequest(w http.ResponseWriter
 	}
 }
 
-func (m *requestHandlerContext) getIndexMetadata(cinfo *common.ClusterInfoCache,
-	indexerHostMap map[common.IndexerId]string, bucket string) (*ClusterIndexMetadata, error) {
+func (m *requestHandlerContext) getIndexMetadata(indexerHostMap map[common.IndexerId]string, bucket string) (*ClusterIndexMetadata, error) {
 
-	if err := cinfo.Fetch(); err != nil {
+	cinfo, err := m.mgr.FetchNewClusterInfoCache()
+	if err != nil {
 		return nil, err
 	}
 
@@ -487,6 +490,7 @@ func (m *requestHandlerContext) getIndexMetadata(cinfo *common.ClusterInfoCache,
 				logging.Debugf("RequestHandler::getIndexMetadata: Error while retrieving %v with auth %v", addr+"/getLocalIndexMetadata", err)
 				return nil, errors.New(fmt.Sprintf("Fail to retrieve index definition from url %s", addr))
 			}
+			defer resp.Body.Close()
 
 			localMeta := new(LocalIndexMetadata)
 			status := convertResponse(resp, localMeta)
@@ -685,6 +689,7 @@ func (m *requestHandlerContext) makeCreateIndexRequest(defn common.IndexDefn, ho
 		logging.Errorf("requestHandler.makeCreateIndexRequest(): create index request fails for %v/createIndex. Error=%v", host, err)
 		return false
 	}
+	defer resp.Body.Close()
 
 	response := new(IndexResponse)
 	status := convertResponse(resp, response)

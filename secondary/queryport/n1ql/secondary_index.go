@@ -422,7 +422,7 @@ func (gsi *gsiKeyspace) BuildIndexes(requestId string, names ...string) errors.E
 // Refresh list of indexes and scanner clients.
 func (gsi *gsiKeyspace) Refresh() errors.Error {
 	l.Tracef("%v gsiKeyspace.Refresh()", gsi.logPrefix)
-	indexes, err := gsi.gsiClient.Refresh()
+	indexes, version, err := gsi.gsiClient.Refresh()
 	if err != nil {
 		return errors.NewError(err, "GSI Refresh()")
 	}
@@ -431,7 +431,7 @@ func (gsi *gsiKeyspace) Refresh() errors.Error {
 		if index.Definition.Bucket != gsi.keyspace {
 			continue
 		}
-		si, err := newSecondaryIndexFromMetaData(gsi, index)
+		si, err := newSecondaryIndexFromMetaData(gsi, version, index)
 		if err != nil {
 			return err
 		}
@@ -529,6 +529,7 @@ type secondaryIndex struct {
 // for metadata-provider.
 func newSecondaryIndexFromMetaData(
 	gsi *gsiKeyspace,
+	version uint64,
 	imd *mclient.IndexMetadata) (si *secondaryIndex, err errors.Error) {
 
 	if len(imd.Instances) < 1 && len(imd.InstsInRebalance) < 1 {

@@ -39,7 +39,7 @@ type IndexManager struct {
 	requestServer RequestServer
 	basepath      string
 	quota         uint64
-	addrProvider  common.ServiceAddressProvider
+	clusterURL    string
 
 	// bucket monitor
 	monitorKillch chan bool
@@ -107,23 +107,20 @@ type RequestServer interface {
 //
 // Create a new IndexManager
 //
-func NewIndexManager(addrProvider common.ServiceAddressProvider, config common.Config) (mgr *IndexManager, err error) {
+func NewIndexManager(config common.Config) (mgr *IndexManager, err error) {
 
-	return NewIndexManagerInternal(addrProvider, config)
+	return NewIndexManagerInternal(config)
 }
 
 //
 // Create a new IndexManager
 //
-func NewIndexManagerInternal(
-	addrProvider common.ServiceAddressProvider,
-	config common.Config) (mgr *IndexManager, err error) {
+func NewIndexManagerInternal(config common.Config) (mgr *IndexManager, err error) {
 
 	gometaL.Current = &logging.SystemLogger
 
 	mgr = new(IndexManager)
 	mgr.isClosed = false
-	mgr.addrProvider = addrProvider
 	totalQuota := config["settings.memory_quota"].Uint64()
 	storageMode := config["settings.storage_mode"].String()
 
@@ -143,8 +140,13 @@ func NewIndexManagerInternal(
 	}
 
 	// Initialize LifecycleMgr.
-	clusterURL := config["clusterAddr"].String()
-	mgr.lifecycleMgr = NewLifecycleMgr(addrProvider, nil, clusterURL)
+	mgr.clusterURL = config["clusterAddr"].String()
+	lifecycleMgr, err := NewLifecycleMgr(nil, mgr.clusterURL)
+	if err != nil {
+		mgr.Close()
+		return nil, err
+	}
+	mgr.lifecycleMgr = lifecycleMgr
 
 	// Initialize MetadataRepo.  This a blocking call until the
 	// the metadataRepo (including watcher) is operational (e.g.
@@ -154,7 +156,13 @@ func NewIndexManagerInternal(
 	os.Mkdir(mgr.basepath, 0755)
 	repoName := filepath.Join(mgr.basepath, gometaC.REPOSITORY_NAME)
 
-	adminPort, err := addrProvider.GetLocalServicePort(common.INDEX_ADMIN_SERVICE)
+	cinfo, err := common.FetchNewClusterInfoCache(mgr.clusterURL, common.DEFAULT_POOL)
+	if err != nil {
+		mgr.Close()
+		return nil, err
+	}
+
+	adminPort, err := cinfo.GetLocalServicePort(common.INDEX_ADMIN_SERVICE)
 	if err != nil {
 		mgr.Close()
 		return nil, err
@@ -170,8 +178,7 @@ func NewIndexManagerInternal(
 	mgr.lifecycleMgr.Run(mgr.repo, mgr.requestServer)
 
 	// register request handler
-	clusterAddr := config["clusterAddr"].String()
-	registerRequestHandler(mgr, clusterAddr)
+	registerRequestHandler(mgr, mgr.clusterURL)
 
 	// coordinator
 	mgr.coordinator = nil
@@ -251,8 +258,9 @@ func (m *IndexManager) Close() {
 	m.isClosed = true
 }
 
-func (m *IndexManager) getServiceAddrProvider() common.ServiceAddressProvider {
-	return m.addrProvider
+func (m *IndexManager) FetchNewClusterInfoCache() (*common.ClusterInfoCache, error) {
+
+	return common.FetchNewClusterInfoCache(m.clusterURL, common.DEFAULT_POOL)
 }
 
 ///////////////////////////////////////////////////////

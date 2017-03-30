@@ -198,6 +198,7 @@ func (api *restServer) doCreate(w http.ResponseWriter, request *http.Request) {
 	var indexname, bucket string
 	var secExprs []string
 	var with []byte
+	var desc []bool
 
 	using, exprtype, with, isPrimary := "gsi", "N1QL", nil, false
 
@@ -244,6 +245,26 @@ func (api *restServer) doCreate(w http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	value, ok = params["desc"]
+	if ok {
+		descVal, ok := value.([]interface{})
+		if ok {
+			if len(exprs) != len(descVal) {
+				msg := `incomplete desc information %v`
+				http.Error(w, jsonstr(msg, descVal), http.StatusBadRequest)
+				return
+			} else {
+				for _, d := range descVal {
+					desc = append(desc, d.(bool))
+				}
+			}
+		} else {
+			msg := `invalid format for desc %v`
+			http.Error(w, jsonstr(msg, value), http.StatusBadRequest)
+			return
+		}
+	}
+
 	if value, ok := params["using"]; ok && value != nil {
 		using = value.(string)
 	}
@@ -271,9 +292,9 @@ func (api *restServer) doCreate(w http.ResponseWriter, request *http.Request) {
 		whereExpr = value.(string)
 	}
 
-	defnId, err := api.client.CreateIndex(
+	defnId, err := api.client.CreateIndex2(
 		indexname, bucket, using, exprtype, partnExpr, whereExpr, secExprs,
-		isPrimary, with)
+		desc, isPrimary, with)
 	if err != nil {
 		http.Error(w, jsonstr("%v", err), http.StatusInternalServerError)
 		return
@@ -343,7 +364,7 @@ func (api *restServer) doBuildOne(w http.ResponseWriter, request *http.Request) 
 
 //GET    /api/index/{id}
 func (api *restServer) doGetAll(w http.ResponseWriter, request *http.Request) {
-	indexes, err := api.client.Refresh()
+	indexes, _, err := api.client.Refresh()
 	if err != nil {
 		msg := `cannot refresh metadata: %v`
 		http.Error(w, jsonstr(msg, err), http.StatusBadRequest)
@@ -1169,7 +1190,7 @@ func (api *restServer) getIndex(path string) (*mclient.IndexMetadata, string) {
 		return nil, jsonstr(`invalid index id, ParseUint failed %v`, err)
 	}
 
-	indexes, err := api.client.Refresh()
+	indexes, _, err := api.client.Refresh()
 	if err != nil {
 		return nil, jsonstr(`cannot refresh metadata: %v`, err)
 	}

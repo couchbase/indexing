@@ -11,6 +11,7 @@ package indexer
 
 import (
 	"encoding/binary"
+	"github.com/couchbase/indexing/secondary/common"
 	p "github.com/couchbase/indexing/secondary/pipeline"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
 	"github.com/golang/protobuf/proto"
@@ -92,7 +93,7 @@ func (w *protoResponseWriter) Stats(rows, unique uint64, min, max []byte) error 
 
 func (w *protoResponseWriter) Helo() error {
 	res := &protobuf.HeloResponse{
-		Version: proto.Uint32(INDEXER_VERSION),
+		Version: proto.Uint32(common.INDEXER_CUR_VERSION),
 	}
 
 	return protobuf.EncodeAndWrite(w.conn, *w.encBuf, res)

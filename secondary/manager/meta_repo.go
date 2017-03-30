@@ -19,6 +19,7 @@ import (
 	gometa "github.com/couchbase/gometa/server"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/manager/client"
 	"net/rpc"
 	"strconv"
 	"strings"
@@ -32,6 +33,7 @@ type MetadataRepo struct {
 	defnCache  map[common.IndexDefnId]*common.IndexDefn
 	topoCache  map[string]*IndexTopology
 	globalTopo *GlobalTopology
+	serviceMap *client.ServiceMap
 }
 
 type RepoRef interface {
@@ -363,6 +365,53 @@ func (c *MetadataRepo) SetGlobalTopology(topology *GlobalTopology) error {
 	}
 
 	c.globalTopo = topology
+	return nil
+}
+
+///////////////////////////////////////////////////////
+//  Public Function : Indexer Info
+///////////////////////////////////////////////////////
+
+func (c *MetadataRepo) GetServiceMap() (*client.ServiceMap, error) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	if c.serviceMap != nil {
+		return c.serviceMap, nil
+	}
+
+	lookupName := serviceMapKey()
+	data, err := c.getMeta(lookupName)
+	if err != nil && strings.Contains(err.Error(), "FDB_RESULT_KEY_NOT_FOUND") {
+		return nil, nil
+	} else if err != nil {
+		return nil, err
+	}
+
+	serviceMap, err := client.UnmarshallServiceMap(data)
+	if err != nil {
+		return nil, err
+	}
+
+	c.serviceMap = serviceMap
+	return serviceMap, nil
+}
+
+func (c *MetadataRepo) SetServiceMap(serviceMap *client.ServiceMap) error {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	data, err := client.MarshallServiceMap(serviceMap)
+	if err != nil {
+		return err
+	}
+
+	lookupName := serviceMapKey()
+	if err := c.setMeta(lookupName, data); err != nil {
+		return err
+	}
+
+	c.serviceMap = serviceMap
 	return nil
 }
 
@@ -916,6 +965,18 @@ func unmarshallGlobalTopology(data []byte) (*GlobalTopology, error) {
 	}
 
 	return topology, nil
+}
+
+///////////////////////////////////////////////////////
+// package local function : IndexerInfo
+///////////////////////////////////////////////////////
+
+func serviceMapKey() string {
+	return "ServiceMap"
+}
+
+func isServiceMap(key string) bool {
+	return strings.Contains(key, "ServiceMap")
 }
 
 ///////////////////////////////////////////////////////////

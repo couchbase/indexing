@@ -199,6 +199,11 @@ func (feed *DcpFeed) DcpCloseStream(vb, opaqueMSB uint16) error {
 	return opError(err, resp, 0)
 }
 
+// DcpFeedName returns feed name
+func (feed *DcpFeed) DcpFeedName() string {
+	return string(feed.name)
+}
+
 // DcpGetSeqnos return the list of seqno for vbuckets,
 // synchronous call.
 func (feed *DcpFeed) DcpGetSeqnos() (map[uint16]uint64, error) {
@@ -479,6 +484,7 @@ func purgeFeed(nodeFeeds []*FeedInfo, singleFeed *FeedInfo) []*FeedInfo {
 	name := singleFeed.dcpFeed.Name()
 	for i, nodeFeed := range nodeFeeds {
 		if nodeFeed.dcpFeed.Name() == name {
+			nodeFeed.dcpFeed.Close()
 			copy(nodeFeeds[i:], nodeFeeds[i+1:])
 			return nodeFeeds[:len(nodeFeeds)-1]
 		}

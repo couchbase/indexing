@@ -46,6 +46,9 @@ func main() {
 	auth := fset.String("auth", "", "Auth user and password")
 	nodeuuid := fset.String("nodeUUID", "", "UUID of the node")
 	storageMode := fset.String("storageMode", "", "Storage mode of indexer (forestdb/memory_optimized)")
+	httpsPort := fset.String("httpsPort", "", "Index https mgmt port")
+	certFile := fset.String("certFile", "", "Index https X509 certificate file")
+	keyFile := fset.String("keyFile", "", "Index https cert key file")
 
 	for i := 1; i < len(os.Args); i++ {
 		if err := fset.Parse(os.Args[i : i+1]); err != nil {
@@ -78,6 +81,9 @@ func main() {
 	config.SetValue("indexer.adminPort", *adminPort)
 	config.SetValue("indexer.scanPort", *scanPort)
 	config.SetValue("indexer.httpPort", *httpPort)
+	config.SetValue("indexer.httpsPort", *httpsPort)
+	config.SetValue("indexer.certFile", *certFile)
+	config.SetValue("indexer.keyFile", *keyFile)
 	config.SetValue("indexer.streamInitPort", *streamInitPort)
 	config.SetValue("indexer.streamCatchupPort", *streamCatchupPort)
 	config.SetValue("indexer.streamMaintPort", *streamMaintPort)

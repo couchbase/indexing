@@ -186,7 +186,7 @@ func RunCommands(cluster string, cfg *Config, statsW io.Writer) (*Result, error)
 	}
 
 	time.Sleep(time.Second * time.Duration(cfg.ClientBootTime))
-	indexes, err := client.Refresh()
+	indexes, _, err := client.Refresh()
 	if err != nil {
 		return nil, err
 	}

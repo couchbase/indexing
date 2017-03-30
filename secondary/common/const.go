@@ -47,4 +47,10 @@ var ErrIndexNotReady = errors.New("Index not ready for serving queries")
 // ErrClientCancel when query client cancels an ongoing scan request.
 var ErrClientCancel = errors.New("Client requested cancel")
 
-var ErrIndexerInBootstrap = errors.New("Indexer In Bootstrap State. Please retry the request later.")
+var ErrIndexerInBootstrap = errors.New("Indexer In Warmup State. Please retry the request later.")
+
+const INDEXER_45_VERSION = 1
+const INDEXER_50_VERSION = 2
+const INDEXER_CUR_VERSION = INDEXER_50_VERSION
+
+const DEFAULT_POOL = "default"

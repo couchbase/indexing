@@ -623,6 +623,28 @@ var SystemConfig = Config{
 		true,  // immutable
 		false, // case-insensitive
 	},
+	"indexer.httpsPort": ConfigValue{
+		"",
+		"ssl port for external stats and settings",
+		"",
+		true,  // immutable
+		false, // case-insensitive
+	},
+	"indexer.certFile": ConfigValue{
+		"",
+		"ssl certificate",
+		"",
+		true, // immutable
+		true, // case-sensitive
+	},
+	"indexer.keyFile": ConfigValue{
+		"",
+		"ssl certificate key",
+		"",
+		true, // immutable
+		true, // case-sensitive
+	},
+
 	"indexer.streamInitPort": ConfigValue{
 		"9103",
 		"port for inital build stream",

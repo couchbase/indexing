@@ -72,6 +72,7 @@ type Node struct {
 	Uptime               int                `json:"uptime,string"`
 	Version              string             `json:"version"`
 	ThisNode             bool               `json:"thisNode,omitempty"`
+	Services             []string           `json:"services,omitempty"`
 }
 
 // A Pool of nodes and buckets.

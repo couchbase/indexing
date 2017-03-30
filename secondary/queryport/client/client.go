@@ -79,7 +79,7 @@ type BridgeAccessor interface {
 
 	// Refresh shall refresh to latest set of index managed by GSI
 	// cluster, cache it locally and return the list of index.
-	Refresh() ([]*mclient.IndexMetadata, error)
+	Refresh() ([]*mclient.IndexMetadata, uint64, error)
 
 	// Nodes shall return a map of adminport and queryport for indexer
 	// nodes.
@@ -116,8 +116,8 @@ type BridgeAccessor interface {
 	// that indexes specified are already created.
 	BuildIndexes(defnIDs []uint64) error
 
-	// MoveIndexes to move a set of indexes to different node.
-	MoveIndexes(defnIDs []uint64, with map[string]interface{}) error
+	// MoveIndex to move a set of indexes to different node.
+	MoveIndex(defnID uint64, with map[string]interface{}) error
 
 	// DropIndex to drop index specified by `defnID`.
 	// - if index is in deferred build state, it shall be removed
@@ -281,9 +281,9 @@ func (c *GsiClient) Sync() error {
 }
 
 // Refresh implements BridgeAccessor{} interface.
-func (c *GsiClient) Refresh() ([]*mclient.IndexMetadata, error) {
+func (c *GsiClient) Refresh() ([]*mclient.IndexMetadata, uint64, error) {
 	if c.bridge == nil {
-		return nil, ErrorClientUninitialized
+		return nil, 0, ErrorClientUninitialized
 	}
 	return c.bridge.Refresh()
 }
@@ -388,15 +388,15 @@ func (c *GsiClient) BuildIndexes(defnIDs []uint64) error {
 	return err
 }
 
-// MoveIndexes implements BridgeAccessor{} interface.
-func (c *GsiClient) MoveIndexes(defnIDs []uint64, with map[string]interface{}) error {
+// MoveIndex implements BridgeAccessor{} interface.
+func (c *GsiClient) MoveIndex(defnID uint64, with map[string]interface{}) error {
 	if c.bridge == nil {
 		return ErrorClientUninitialized
 	}
 	begin := time.Now()
-	err := c.bridge.MoveIndexes(defnIDs, with)
-	fmsg := "MoveIndexes %v - elapsed(%v), err(%v)"
-	logging.Infof(fmsg, defnIDs, time.Since(begin), err)
+	err := c.bridge.MoveIndex(defnID, with)
+	fmsg := "MoveIndex %v - elapsed(%v), err(%v)"
+	logging.Infof(fmsg, defnID, time.Since(begin), err)
 	return err
 }
 
@@ -1100,7 +1100,7 @@ func (ts *TsConsistency) Override(
 
 func curePrimaryKey(key interface{}) ([]byte, string) {
 	if key == nil {
-		return nil, "ok"
+		return nil, "before"
 	}
 	switch v := key.(type) {
 	case []byte:

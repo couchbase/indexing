@@ -53,8 +53,11 @@ type MetadataProvider struct {
 	watcherCount       int
 	metaNotifyCh       chan bool
 	numExpectedWatcher int32
+	numFailedNode      int32
+	numUnhealthyNode   int32
 	numWatcher         int32
 	settings           Settings
+	indexerVersion     uint64
 }
 
 //
@@ -170,6 +173,26 @@ func NewMetadataProvider(providerId string, changeCh chan bool, settings Setting
 
 func (o *MetadataProvider) SetTimeout(timeout int64) {
 	o.timeout = timeout
+}
+
+func (o *MetadataProvider) SetClusterStatus(numExpectedWatcher int, numFailedNode int, numUnhealthyNode int) {
+
+	if numFailedNode > 0 || numUnhealthyNode > 0 {
+		logging.Warnf("MetadataProvider.SetClusterStatus(): healthy nodes %v failed node %v unhealthy node %v",
+			numExpectedWatcher, numFailedNode, numUnhealthyNode)
+	}
+
+	if numExpectedWatcher != -1 {
+		atomic.StoreInt32(&o.numExpectedWatcher, int32(numExpectedWatcher))
+	}
+
+	if numFailedNode != -1 {
+		atomic.StoreInt32(&o.numFailedNode, int32(numFailedNode))
+	}
+
+	if numUnhealthyNode != -1 {
+		atomic.StoreInt32(&o.numUnhealthyNode, int32(numUnhealthyNode))
+	}
 }
 
 func (o *MetadataProvider) WatchMetadata(indexAdminPort string, callback watcherCallback, numExpectedWatcher int) c.IndexerId {
@@ -380,8 +403,10 @@ func (o *MetadataProvider) PrepareIndexDefn(
 	var nodes []string = nil
 	var numReplica int = 0
 
+	version := o.GetIndexerVersion()
+
 	if plan != nil {
-		logging.Debugf("MetadataProvider:CreateIndexWithPlan(): plan %v", plan)
+		logging.Debugf("MetadataProvider:CreateIndexWithPlan(): plan %v version %v", plan, version)
 
 		var err error
 		var retry bool
@@ -410,7 +435,7 @@ func (o *MetadataProvider) PrepareIndexDefn(
 			return nil, err, retry
 		}
 
-		numReplica, err, retry = o.getReplicaParam(plan)
+		numReplica, err, retry = o.getReplicaParam(plan, version)
 		if err != nil {
 			return nil, err, retry
 		}
@@ -486,8 +511,12 @@ func (o *MetadataProvider) PrepareIndexDefn(
 		return nil, errors.New("Fails to create index.  Multiple expressions with ALL are found. Only one array expression is supported per index."), false
 	}
 
+	if desc != nil && version < c.INDEXER_50_VERSION {
+		return nil, errors.New("Fail to create index with descending order. This option is enabled after cluster is fully upgraded and there is no failed node."), false
+	}
+
 	if desc != nil && len(secExprs) != len(desc) {
-		return nil, errors.New("Collation order is required for all expressions in the index."), false
+		return nil, errors.New("Fail to create index.  Collation order is required for all expressions in the index."), false
 	}
 
 	idxDefn := &c.IndexDefn{
@@ -598,9 +627,12 @@ func (o *MetadataProvider) getDeferredParam(plan map[string]interface{}) (bool, 
 	return deferred, nil, false
 }
 
-func (o *MetadataProvider) getReplicaParam(plan map[string]interface{}) (int, error, bool) {
+func (o *MetadataProvider) getReplicaParam(plan map[string]interface{}, version uint64) (int, error, bool) {
 
-	numReplica := int(o.settings.NumReplica())
+	numReplica := int(0)
+	if version >= c.INDEXER_50_VERSION {
+		numReplica = int(o.settings.NumReplica())
+	}
 
 	numReplica2, ok := plan["num_replica"].(float64)
 	if !ok {
@@ -618,6 +650,10 @@ func (o *MetadataProvider) getReplicaParam(plan map[string]interface{}) (int, er
 		}
 	} else {
 		numReplica = int(numReplica2)
+	}
+
+	if numReplica > 0 && version < c.INDEXER_50_VERSION {
+		return 0, errors.New("Fails to create index with replica.   This option is enabled after cluster is fully upgraded and there is no failed node."), false
 	}
 
 	if numReplica < 0 {
@@ -977,6 +1013,79 @@ func (o *MetadataProvider) allWatchersRunningNoLock() bool {
 	actual := atomic.LoadInt32(&o.numWatcher)
 
 	return expected == actual
+}
+
+//
+// Find the indexer version.  This will look at both
+// metakv and indexers to figure out the latest version.
+// This function still be 0 if (1) there are failed nodes and,
+// (2) during upgrade to 5.0.
+//
+func (o *MetadataProvider) GetIndexerVersion() uint64 {
+	o.mutex.Lock()
+	defer o.mutex.Unlock()
+
+	// Find the version from metakv.  If token not found or error, fromMetakv is 0.
+	fromMetakv, metakvErr := GetIndexerVersionToken()
+
+	// Any failed node?
+	numFailedNode := atomic.LoadInt32(&o.numFailedNode)
+
+	// Any unhealith node?
+	numUnhealthyNode := atomic.LoadInt32(&o.numUnhealthyNode)
+
+	// Find the version from active watchers.  This value is non-zero if
+	// metadata provider has connected to all watchers and there are no
+	// failed nodes and unhealthy nodes in the cluster.  Note that some
+	// watchers could be disconnected when this method is called, but metadata provider
+	// would have gotten the indexer version during initialization.
+	fromWatcher := uint64(0)
+	if o.allWatchersRunningNoLock() && numFailedNode == 0 && numUnhealthyNode == 0 {
+		for _, watcher := range o.watchers {
+			if fromWatcher == 0 || watcher.getIndexerVersion() < fromWatcher {
+				fromWatcher = watcher.getIndexerVersion()
+			}
+		}
+	}
+
+	logging.Debugf("Indexer Version from metakv %v. Indexer Version from watchers %v.  Current version %v.  Num Watcher %v. Failed Node %v. Unhealthy Node %v",
+		fromMetakv, fromWatcher, atomic.LoadUint64(&o.indexerVersion), atomic.LoadInt32(&o.numExpectedWatcher), numFailedNode, numUnhealthyNode)
+
+	latestVersion := atomic.LoadUint64(&o.indexerVersion)
+
+	// If metakv has a higher version, it means that some other nodes have seen indexers converged to a higher
+	// version, so this is the latest version.
+	if fromMetakv > latestVersion && metakvErr == nil {
+		latestVersion = fromMetakv
+	}
+
+	// If watchers have a higher version, then it means that this node has seen all indexers converged to a higher
+	// version, so this is the latest version.
+	if fromWatcher > latestVersion {
+		latestVersion = fromWatcher
+	}
+
+	// make sure that the latest version is not higher than the software version for the current process
+	if latestVersion > c.INDEXER_CUR_VERSION {
+		latestVersion = c.INDEXER_CUR_VERSION
+	}
+
+	// update metakv
+	if latestVersion > fromMetakv {
+		if err := PostIndexerVersionToken(latestVersion); err != nil {
+			logging.Errorf("MetadataProvider: fail to post indexer version. Error = %s", err)
+		} else {
+			logging.Infof("MetadataProvider: Posting indexer version to metakv. Version=%v", latestVersion)
+		}
+	}
+
+	// update the latest version
+	if latestVersion > atomic.LoadUint64(&o.indexerVersion) {
+		logging.Infof("MetadataProvider: Updating indexer version to %v", latestVersion)
+		atomic.StoreUint64(&o.indexerVersion, latestVersion)
+	}
+
+	return latestVersion
 }
 
 ///////////////////////////////////////////////////////
@@ -1981,6 +2090,29 @@ func (w *watcher) updateServiceMap(adminport string) error {
 	return nil
 }
 
+func (w *watcher) updateServiceMapNoLock(serviceMap *ServiceMap) bool {
+
+	needRefresh := false
+
+	if w.serviceMap == nil {
+		return false
+	}
+
+	if w.serviceMap.ServerGroup != serviceMap.ServerGroup {
+		logging.Infof("Received new service map.  Server group=%v", serviceMap.ServerGroup)
+		w.serviceMap.ServerGroup = serviceMap.ServerGroup
+		needRefresh = true
+	}
+
+	if w.serviceMap.IndexerVersion != serviceMap.IndexerVersion {
+		logging.Infof("Received new service map.  Indexer version=%v", serviceMap.IndexerVersion)
+		w.serviceMap.IndexerVersion = serviceMap.IndexerVersion
+		needRefresh = true
+	}
+
+	return needRefresh
+}
+
 func (w *watcher) waitForEvent(defnId c.IndexDefnId, status []c.IndexState) error {
 
 	event := &event{defnId: defnId, status: status, notifyCh: make(chan error, 1)}
@@ -2031,7 +2163,12 @@ func (w *watcher) getIndexerId() c.IndexerId {
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
 
-	return w.getIndexerIdNoLock()
+	indexerId := w.getIndexerIdNoLock()
+	if indexerId == c.INDEXER_ID_NIL {
+		panic("Index node metadata is not initialized")
+	}
+
+	return indexerId
 }
 
 func (w *watcher) getNodeUUID() string {
@@ -2045,7 +2182,7 @@ func (w *watcher) getNodeUUID() string {
 func (w *watcher) getIndexerIdNoLock() c.IndexerId {
 
 	if w.serviceMap == nil {
-		panic("Index node metadata is not initialized")
+		return c.INDEXER_ID_NIL
 	}
 
 	return c.IndexerId(w.serviceMap.IndexerId)
@@ -2070,6 +2207,18 @@ func (w *watcher) getServerGroup() string {
 	}
 
 	return w.serviceMap.ServerGroup
+}
+
+func (w *watcher) getIndexerVersion() uint64 {
+
+	w.mutex.Lock()
+	defer w.mutex.Unlock()
+
+	if w.serviceMap == nil {
+		panic("Index node metadata is not initialized")
+	}
+
+	return w.serviceMap.IndexerVersion
 }
 
 func (w *watcher) getNodeAddr() string {
@@ -2154,7 +2303,9 @@ func (w *watcher) cleanupIndices(repo *metadataRepo) {
 	// TODO: It is actually possible to wait for gometa to
 	// stop, before cleaning up the indices.
 	indexerId := w.getIndexerIdNoLock()
-	repo.cleanupIndicesForIndexer(indexerId)
+	if indexerId != c.INDEXER_ID_NIL {
+		repo.cleanupIndicesForIndexer(indexerId)
+	}
 }
 
 func (w *watcher) close() {
@@ -2298,6 +2449,10 @@ func isIndexDefnKey(key string) bool {
 
 func isIndexTopologyKey(key string) bool {
 	return strings.Contains(key, "IndexTopology/")
+}
+
+func isServiceMapKey(key string) bool {
+	return strings.Contains(key, "ServiceMap")
 }
 
 ///////////////////////////////////////////////////////
@@ -2604,8 +2759,22 @@ func (w *watcher) processChange(txid common.Txnid, op uint32, key string, conten
 
 			// return needRefersh to true
 			return true, nil
+
+		} else if isServiceMapKey(key) {
+			if len(content) == 0 {
+				logging.Debugf("watcher.processChange(): content of key = %v is empty.", key)
+			}
+
+			serviceMap, err := UnmarshallServiceMap(content)
+			if err != nil {
+				return false, err
+			}
+
+			needRefresh := w.updateServiceMapNoLock(serviceMap)
+			return needRefresh, nil
 		}
 	case common.OPCODE_DELETE:
+
 		if isIndexDefnKey(key) {
 
 			_, err := extractDefnIdFromKey(key)

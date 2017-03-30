@@ -101,13 +101,13 @@ func (b *metadataClient) Sync() error {
 }
 
 // Refresh implement BridgeAccessor{} interface.
-func (b *metadataClient) Refresh() ([]*mclient.IndexMetadata, error) {
+func (b *metadataClient) Refresh() ([]*mclient.IndexMetadata, uint64, error) {
 	mindexes, version := b.mdClient.ListIndex()
 	if b.hasIndexesChanged(mindexes, version) {
 		currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
 		b.safeupdate(currmeta.adminports, false)
 	}
-	return mindexes, nil
+	return mindexes, b.mdClient.GetIndexerVersion(), nil
 }
 
 // Nodes implement BridgeAccessor{} interface.
@@ -198,15 +198,13 @@ func (b *metadataClient) BuildIndexes(defnIDs []uint64) error {
 	return b.mdClient.BuildIndexes(ids)
 }
 
-// MoveIndexes implements BridgeAccessor{} interface.
-func (b *metadataClient) MoveIndexes(defnIDs []uint64, planJSON map[string]interface{}) error {
+// MoveIndex implements BridgeAccessor{} interface.
+func (b *metadataClient) MoveIndex(defnID uint64, planJSON map[string]interface{}) error {
 
 	currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
 
-	for _, defnId := range defnIDs {
-		if _, ok := currmeta.defns[common.IndexDefnId(defnId)]; !ok {
-			return ErrorIndexNotFound
-		}
+	if _, ok := currmeta.defns[common.IndexDefnId(defnID)]; !ok {
+		return ErrorIndexNotFound
 	}
 
 	var httpport string
@@ -221,7 +219,14 @@ func (b *metadataClient) MoveIndexes(defnIDs []uint64, planJSON map[string]inter
 		return ErrorNoHost
 	}
 
-	idList := IndexIdList{DefnIds: defnIDs}
+	timeout := time.Duration(120 * time.Second)
+	if planJSON != nil {
+		if t, ok := planJSON["timeout"]; ok {
+			timeout = time.Duration(t.(float64)) * time.Second
+		}
+	}
+
+	idList := IndexIdList{DefnIds: []uint64{defnID}}
 	ir := IndexRequest{IndexIds: idList, Plan: planJSON}
 	body, err := json.Marshal(&ir)
 	if err != nil {
@@ -231,11 +236,11 @@ func (b *metadataClient) MoveIndexes(defnIDs []uint64, planJSON map[string]inter
 	bodybuf := bytes.NewBuffer(body)
 
 	url := "/moveIndex"
-	resp, err := postWithAuth(httpport+url, "application/json", bodybuf)
-	defer resp.Body.Close()
+	resp, err := postWithAuth(httpport+url, "application/json", bodybuf, timeout)
 	if err != nil {
 		return err
 	}
+	defer resp.Body.Close()
 
 	response := new(IndexResponse)
 	bytes, _ := ioutil.ReadAll(resp.Body)
@@ -677,11 +682,12 @@ func (b *metadataClient) updateIndexerList(discardExisting bool) error {
 	defer b.topoChangeLock.Unlock()
 
 	// populate indexers' adminport and queryport
-	adminports, err := getIndexerAdminports(cinfo)
+	adminports, failedNode, unhealthyNode, err := getIndexerAdminports(cinfo)
 	if err != nil {
 		return err
 	}
 	numIndexers := len(adminports)
+	b.mdClient.SetClusterStatus(numIndexers, failedNode, unhealthyNode)
 
 	fmsg := "Refreshing indexer list due to cluster changes or auto-refresh."
 	logging.Infof(fmsg)
@@ -803,6 +809,9 @@ func (b *metadataClient) updateTopology(
 	adminports map[string]common.IndexerId, force bool) *indexTopology {
 
 	currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
+
+	// Refresh indexer version
+	b.mdClient.GetIndexerVersion()
 
 	mindexes, version := b.mdClient.ListIndex()
 	// detect change in indexer cluster or indexes.
@@ -1005,25 +1014,28 @@ func (b *metadataClient) hasIndexesChanged(
 }
 
 // return adminports for all known indexers.
-func getIndexerAdminports(cinfo *common.ClusterInfoCache) ([]string, error) {
+func getIndexerAdminports(cinfo *common.ClusterInfoCache) ([]string, int, int, error) {
 	iAdminports := make([]string, 0)
+	unhealthyNodes := 0
 	for _, node := range cinfo.GetNodesByServiceType("indexAdmin") {
 		status, err := cinfo.GetNodeStatus(node)
 		if err != nil {
-			return nil, err
+			return nil, 0, 0, err
 		}
 		logging.Verbosef("node %v status: %q", node, status)
 		if status == "healthy" || status == "active" || status == "warmup" {
 			adminport, err := cinfo.GetServiceAddress(node, "indexAdmin")
 			if err != nil {
-				return nil, err
+				return nil, 0, 0, err
 			}
 			iAdminports = append(iAdminports, adminport)
 		} else {
+			unhealthyNodes++
 			logging.Warnf("node %v status: %q", node, status)
 		}
 	}
-	return iAdminports, nil
+
+	return iAdminports, len(cinfo.GetFailedIndexerNodes()), unhealthyNodes, nil
 }
 
 // FIXME/TODO: based on discussion with John-
@@ -1067,6 +1079,10 @@ func (b *metadataClient) watchClusterChanges() {
 	}
 	defer scn.Close()
 
+	hasUnhealthyNode := false
+	ticker := time.NewTicker(time.Duration(5) * time.Minute)
+	defer ticker.Stop()
+
 	// For observing node services config
 	ch := scn.GetNotifyCh()
 	for {
@@ -1088,13 +1104,41 @@ func (b *metadataClient) watchClusterChanges() {
 					return
 				}
 			}
+		case <-ticker.C:
+			cinfo, err := common.FetchNewClusterInfoCache(b.cluster, common.DEFAULT_POOL)
+			if err != nil {
+				logging.Errorf("updateIndexerList(): %v\n", err)
+				selfRestart()
+				return
+			}
+
+			_, _, unhealthyNode, err := getIndexerAdminports(cinfo)
+			if err != nil {
+				logging.Errorf("updateIndexerList(): %v\n", err)
+				selfRestart()
+				return
+			}
+
+			if unhealthyNode != 0 {
+				hasUnhealthyNode = true
+				b.mdClient.SetClusterStatus(-1, -1, unhealthyNode)
+
+			} else if hasUnhealthyNode {
+				// refresh indexer version when there is no more unhealthy node
+				hasUnhealthyNode = false
+				if err := b.updateIndexerList(false); err != nil {
+					logging.Errorf("updateIndexerList(): %v\n", err)
+					selfRestart()
+					return
+				}
+			}
 		case <-b.finch:
 			return
 		}
 	}
 }
 
-func postWithAuth(url string, bodyType string, body io.Reader) (*http.Response, error) {
+func postWithAuth(url string, bodyType string, body io.Reader, timeout time.Duration) (*http.Response, error) {
 
 	if !strings.HasPrefix(url, "http://") {
 		url = "http://" + url
@@ -1111,6 +1155,6 @@ func postWithAuth(url string, bodyType string, body io.Reader) (*http.Response, 
 		return nil, err
 	}
 
-	client := http.Client{Timeout: time.Duration(10 * time.Second)}
+	client := http.Client{Timeout: timeout}
 	return client.Do(req)
 }
