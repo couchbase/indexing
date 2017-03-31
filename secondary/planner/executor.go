@@ -742,7 +742,7 @@ func filterPinnedIndexes(config *RunConfig, indexes []*IndexUsage) []*IndexUsage
 	result := ([]*IndexUsage)(nil)
 	for _, index := range indexes {
 
-		if config.AllowUnpin || (index.initialNode != nil && index.initialNode.delete) {
+		if config.AllowUnpin || (index.initialNode != nil && index.initialNode.isDelete) {
 			index.Hosts = nil
 		}
 
@@ -778,7 +778,7 @@ func changeTopology(config *RunConfig, solution *Solution, deletedNodes []string
 				return nil, errors.New(fmt.Sprintf("Cannot find to-be-deleted indexer in solution: %v", nodeId))
 			}
 
-			candidate.delete = true
+			candidate.isDelete = true
 			outNodes = append(outNodes, candidate)
 		}
 

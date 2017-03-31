@@ -13,7 +13,6 @@ package planner
 import (
 	"errors"
 	"fmt"
-	"github.com/couchbase/indexing/secondary/common"
 	"math"
 	"math/rand"
 	"strconv"
@@ -184,27 +183,42 @@ func getWeightedRandomNode(rs *rand.Rand, indexers []*IndexerNode, loads []int64
 }
 
 //
-// This function sorts the indexer node by usage
+// This function sorts the indexer node by usage in ascending order.
+// For indexer usage, it will consider both cpu and memory.
+// For indexer nodes that have the same usage, it will sort by
+// the number of indexes with unkown usage info (index.NoUsage=true).
+// Two indexers could have the same usage if the indexers are emtpy
+// or holding deferred index (no usage stats).
 //
-func sortNodeByUsage(s *Solution) []*IndexerNode {
+func sortNodeByUsage(s *Solution, indexers []*IndexerNode) []*IndexerNode {
 
-	numOfIndexers := len(s.Placement)
+	numOfIndexers := len(indexers)
 	result := make([]*IndexerNode, numOfIndexers)
-	copy(result, s.Placement)
+	copy(result, indexers)
 
 	for i, _ := range result {
-		max := i
+		min := i
 		for j := i + 1; j < numOfIndexers; j++ {
 
-			if computeIndexerUsage(s, result[j]) > computeIndexerUsage(s, result[max]) {
-				max = j
+			minNodeUsage := computeIndexerUsage(s, result[min])
+			newNodeUsage := computeIndexerUsage(s, result[j])
+
+			if newNodeUsage < minNodeUsage {
+				min = j
+
+			} else if newNodeUsage == minNodeUsage {
+				// Tiebreaker: Only consider count of index with no usage info since these
+				// indexes do not contribute to usage stats.
+				if numIndexWithNoUsage(result[j]) < numIndexWithNoUsage(result[min]) {
+					min = j
+				}
 			}
 		}
 
-		if max != i {
+		if min != i {
 			tmp := result[i]
-			result[i] = result[max]
-			result[max] = tmp
+			result[i] = result[min]
+			result[min] = tmp
 		}
 	}
 
@@ -212,19 +226,20 @@ func sortNodeByUsage(s *Solution) []*IndexerNode {
 }
 
 //
-// This function sorts the indexer node by number of indexes
+// This function sorts the indexer node by number of NoUsage indexes
+// in ascending order.
 //
-func sortNodeByCount(s *Solution) []*IndexerNode {
+func sortNodeByNoUsageIndexCount(indexers []*IndexerNode) []*IndexerNode {
 
-	numOfIndexers := len(s.Placement)
+	numOfIndexers := len(indexers)
 	result := make([]*IndexerNode, numOfIndexers)
-	copy(result, s.Placement)
+	copy(result, indexers)
 
 	for i, _ := range result {
 		min := i
 		for j := i + 1; j < numOfIndexers; j++ {
 
-			if len(result[i].Indexes) > len(result[j].Indexes) {
+			if numIndexWithNoUsage(result[j]) < numIndexWithNoUsage(result[min]) {
 				min = j
 			}
 		}
@@ -240,7 +255,8 @@ func sortNodeByCount(s *Solution) []*IndexerNode {
 }
 
 //
-// This function sorts the index by usage
+// This function sorts the index by usage in descending order.  Index
+// with no usage will be placed at the end (0 usage).
 //
 func sortIndexByUsage(s *Solution, indexes []*IndexUsage) []*IndexUsage {
 
@@ -427,34 +443,6 @@ func isSameIndexer(indexer1 *IndexerNode, indexer2 *IndexerNode) bool {
 }
 
 //
-// has replica or equivalent co-located?
-//
-func violateHA(indexers []*IndexerNode) bool {
-
-	for _, n := range indexers {
-
-		for i := 0; i < len(n.Indexes)-1; i++ {
-			for j := i + 1; j < len(n.Indexes); j++ {
-
-				// check replica
-				if n.Indexes[i].DefnId == n.Indexes[j].DefnId {
-					return false
-				}
-
-				// check equivalent index
-				if n.Indexes[i].Instance != nil &&
-					n.Indexes[j].Instance != nil &&
-					common.IsEquivalentIndex(&n.Indexes[i].Instance.Defn, &n.Indexes[j].Instance.Defn) {
-					return false
-				}
-			}
-		}
-	}
-
-	return true
-}
-
-//
 // Shuffle a list of indexer node
 //
 func shuffleNode(rs *rand.Rand, indexers []*IndexerNode) []*IndexerNode {
@@ -522,7 +510,7 @@ func ValidateSolution(s *Solution) error {
 			return errors.New("validation fails: memory usage of indexer does not match sum of index memory use")
 		}
 
-		if indexer.GetCpuUsage(s.UseLiveData()) != totalCpu {
+		if math.Floor(indexer.GetCpuUsage(s.UseLiveData())) != math.Floor(totalCpu) {
 			return errors.New("validation fails: cpu usage of indexer does not match sum of index cpu use")
 		}
 
@@ -536,4 +524,34 @@ func ValidateSolution(s *Solution) error {
 	}
 
 	return nil
+}
+
+//
+// Reverse list of nodes
+//
+func reverseNode(indexers []*IndexerNode) []*IndexerNode {
+
+	numOfNodes := len(indexers)
+	for i := 0; i < numOfNodes/2; i++ {
+		tmp := indexers[i]
+		indexers[i] = indexers[numOfNodes-i-1]
+		indexers[numOfNodes-i-1] = tmp
+	}
+
+	return indexers
+}
+
+//
+// Find the number of indexes that has no stats or sizing information.
+//
+func numIndexWithNoUsage(indexer *IndexerNode) int {
+
+	count := 0
+	for _, index := range indexer.Indexes {
+		if index.NoUsage {
+			count++
+		}
+	}
+
+	return count
 }

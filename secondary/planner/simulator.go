@@ -197,7 +197,7 @@ func (t *simulator) RunSimulation(count int, config *RunConfig, command CommandT
 			needRetry++
 		}
 
-		t1, t2, t3, t4 := p.Result.computeIndexMovement()
+		t1, t2, t3, t4 := p.Result.computeIndexMovement(true)
 		totalData += t1
 		dataMoved += t2
 		indexCanBeMoved += t3

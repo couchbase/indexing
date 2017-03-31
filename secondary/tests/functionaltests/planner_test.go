@@ -13,6 +13,7 @@ import (
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/planner"
 	"log"
+	"math"
 	"testing"
 )
 
@@ -133,7 +134,7 @@ func initialPlacementTest(t *testing.T) {
 		memMean, memDev := p.Result.ComputeMemUsage()
 		cpuMean, cpuDev := p.Result.ComputeCpuUsage()
 
-		if memDev/memMean > testcase.memScore || cpuDev/cpuMean > testcase.cpuScore {
+		if memDev/memMean > testcase.memScore || math.Floor(cpuDev/cpuMean) > testcase.cpuScore {
 			p.Result.PrintLayout()
 			t.Fatal("Score exceed acceptance threshold")
 		}
@@ -177,7 +178,7 @@ func incrPlacementTest(t *testing.T) {
 		memMean, memDev := p.Result.ComputeMemUsage()
 		cpuMean, cpuDev := p.Result.ComputeCpuUsage()
 
-		if memDev/memMean > testcase.memScore || cpuDev/cpuMean > testcase.cpuScore {
+		if memDev/memMean > testcase.memScore || math.Floor(cpuDev/cpuMean) > testcase.cpuScore {
 			p.Result.PrintLayout()
 			t.Fatal("Score exceed acceptance threshold")
 		}
@@ -220,7 +221,7 @@ func rebalanceTest(t *testing.T) {
 		memMean, memDev := p.Result.ComputeMemUsage()
 		cpuMean, cpuDev := p.Result.ComputeCpuUsage()
 
-		if memDev/memMean > testcase.memScore || cpuDev/cpuMean > testcase.cpuScore {
+		if memDev/memMean > testcase.memScore || math.Floor(cpuDev/cpuMean) > testcase.cpuScore {
 			p.Result.PrintLayout()
 			t.Fatal("Score exceed acceptance threshold")
 		}

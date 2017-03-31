@@ -221,6 +221,7 @@ func ConvertToIndexUsage(defn *common.IndexDefn, localMeta *LocalIndexMetadata) 
 		// update sizing
 		index.IsPrimary = defn.IsPrimary
 		index.IsMOI = (defn.Using == common.IndexType(common.MemoryOptimized) || defn.Using == common.IndexType(common.MemDB))
+		index.NoUsage = defn.Deferred && state == common.INDEX_STATE_READY
 
 		// Is the index being deleted by user?   Thsi will read the delete token from metakv.  If untable read from metakv,
 		// pendingDelete is false (cannot assert index is to-be-delete).
@@ -441,7 +442,10 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 			}
 		}
 
-		// compute the estimated memory usage for each index
+		// compute the estimated memory usage for each index.  This also computes
+		// the aggregated indexer mem usage.  Mem usage can be 0 if
+		// 1) there is no index stats
+		// 2) index has no data (datasize = 0) (e.g. deferred index)
 		for _, index := range indexer.Indexes {
 			ratio := float64(0)
 			if totalDataSize != 0 {
@@ -450,12 +454,18 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 
 			index.ActualMemUsage = uint64(float64(actualStorageMem) * ratio)
 			index.ActualMemOverhead = uint64(float64(actualTotalMem-actualStorageMem) * ratio)
+			if index.ActualMemUsage != 0 {
+				index.NoUsage = false
+			}
 
 			indexer.ActualMemUsage += index.ActualMemUsage
 			indexer.ActualMemOverhead += index.ActualMemOverhead
 		}
 
-		// compute the estimated cpu usage for each index
+		// compute the estimated cpu usage for each index.  This also computes the
+		// aggregated indexer cpu usage.  CPU usge can be 0 if
+		// 1) there is no index stats
+		// 2) index has no scan or mutation (e.g. deferred index)
 		for _, index := range indexer.Indexes {
 
 			mutationRatio := float64(0)
@@ -494,6 +504,7 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 
 			if usage > 0 {
 				index.ActualCpuUsage = usage
+				index.NoUsage = false
 			}
 
 			indexer.ActualCpuUsage += index.ActualCpuUsage
