@@ -38,7 +38,7 @@ var (
 var secKeyBufPool *common.BytesBufPool
 
 func init() {
-	secKeyBufPool = common.NewByteBufferPool(MAX_SEC_KEY_BUFFER_LEN)
+	secKeyBufPool = common.NewByteBufferPool(MAX_SEC_KEY_BUFFER_LEN + ENCODE_BUF_SAFE_PAD)
 }
 
 type ScanReqType string
@@ -388,14 +388,14 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 	isBootstrapMode := s.isBootstrapMode()
 
 	isNil := func(k []byte) bool {
-		if len(k) == 0 || (!r.isPrimary && string(k) == "[]") {
+		if k == nil || (!r.isPrimary && string(k) == "[]") {
 			return true
 		}
 		return false
 	}
 
 	newKey := func(k []byte) (IndexKey, error) {
-		if len(k) == 0 {
+		if k == nil {
 			return nil, fmt.Errorf("Key is null")
 		}
 

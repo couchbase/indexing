@@ -497,7 +497,7 @@ func (fdb *fdbSlice) insertSecArrayIndex(key []byte, rawKey []byte, docid []byte
 	if oldkey != nil {
 		if bytes.Equal(oldkey, key) {
 			logging.Tracef("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Received Unchanged Key for "+
-				"Doc Id %v. Key %v. Skipped.", fdb.id, fdb.idxInstId, string(docid), key)
+				"Doc Id %s. Key %v. Skipped.", fdb.id, fdb.idxInstId, docid, key)
 			return
 		}
 
@@ -505,7 +505,7 @@ func (fdb *fdbSlice) insertSecArrayIndex(key []byte, rawKey []byte, docid []byte
 		// If old key is larger than max array limit, always handle it
 		if len(oldkey) > maxArrayIndexEntrySize {
 			// Allocate thrice the size of old key for array explosion
-			tmpBuf = make([]byte, 0, len(oldkey)*3)
+			tmpBuf = make([]byte, 0, len(oldkey)*3) //TODO: Revisit the size of tmpBuf
 		} else {
 			tmpBufPtr := arrayEncBufPool.Get()
 			defer arrayEncBufPool.Put(tmpBufPtr)
@@ -514,10 +514,9 @@ func (fdb *fdbSlice) insertSecArrayIndex(key []byte, rawKey []byte, docid []byte
 
 		if oldEntriesBytes, oldKeyCount, err = ArrayIndexItems(oldkey, fdb.arrayExprPosition,
 			tmpBuf, fdb.isArrayDistinct, false); err != nil {
-			fdb.checkFatalDbError(err)
-			logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error in retrieving "+
-				"compostite old secondary keys %v", fdb.id, fdb.idxInstId, err)
-			return
+			logging.Errorf("ForestDBSlice::insert SliceId %v IndexInstId %v Error in retrieving "+
+				"compostite old secondary keys. Skipping docid:%s Error: %v", fdb.id, fdb.idxInstId, docid, err)
+			return fdb.deleteSecArrayIndex(docid, workerId)
 		}
 	}
 	if key != nil {
@@ -525,23 +524,10 @@ func (fdb *fdbSlice) insertSecArrayIndex(key []byte, rawKey []byte, docid []byte
 		defer arrayEncBufPool.Put(tmpBufPtr)
 		newEntriesBytes, newKeyCount, err = ArrayIndexItems(key, fdb.arrayExprPosition,
 			(*tmpBufPtr)[:0], fdb.isArrayDistinct, true)
-		if err == ErrArrayItemKeyTooLong {
-			logging.Errorf("ForestDBSlice::insert Error indexing docid: %s in Slice: %v. Error: Encoded array item too long (> %v). Skipped.",
-				docid, fdb.id, maxIndexEntrySize)
-			logging.Verbosef("ForestDBSlice::insert Skipped docid: %s Key: %s", docid, string(key))
-			fdb.deleteSecArrayIndex(docid, workerId)
-			return
-		} else if err == ErrArrayKeyTooLong {
-			logging.Errorf("ForestDBSlice::insert Error indexing docid: %s in Slice: %v. Error: Encoded array key too long (> %v). Skipped.",
-				docid, fdb.id, maxArrayIndexEntrySize)
-			logging.Verbosef("ForestDBSlice::insert Skipped docid: %s Key: %s", docid, string(key))
-			fdb.deleteSecArrayIndex(docid, workerId)
-			return
-		} else if err != nil {
-			fdb.checkFatalDbError(err)
-			logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error in creating "+
-				"compostite new secondary keys %v", fdb.id, fdb.idxInstId, err)
-			return
+		if err != nil {
+			logging.Errorf("ForestDBSlice::insert SliceId %v IndexInstId %v Error in creating "+
+				"compostite new secondary keys. Skipping docid:%s Error: %v", fdb.id, fdb.idxInstId, docid, err)
+			return fdb.deleteSecArrayIndex(docid, workerId)
 		}
 	}
 
@@ -558,32 +544,27 @@ func (fdb *fdbSlice) insertSecArrayIndex(key []byte, rawKey []byte, docid []byte
 
 	nmut = 0
 
-	// Delete each of indexEntriesToBeDeleted from main index
+	// Form entries to be deleted from main index
+	var keysToBeDeleted [][]byte
 	for i, item := range indexEntriesToBeDeleted {
 		if item != nil { // nil item indicates it should not be deleted
 			var keyToBeDeleted []byte
 			tmpBufPtr := encBufPool.Get()
 			defer encBufPool.Put(tmpBufPtr)
+			// TODO: Ensure sufficient buffer size and use method that skips size check for bug MB-22183
 			if keyToBeDeleted, err = GetIndexEntryBytes2(item, docid, false, false, oldKeyCount[i], (*tmpBufPtr)[:0]); err != nil {
 				encBufPool.Put(tmpBufPtr)
-				fdb.checkFatalDbError(err)
-				logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error from GetIndexEntryBytes2 for entry to be deleted from main index %v", fdb.id, fdb.idxInstId, err)
-				return
+				// TODO: Handle skipped item here
+				logging.Errorf("ForestDBSlice::insert SliceId %v IndexInstId %v Error forming entry "+
+					"to be deleted from main index. Skipping docid:%s Error: %v", fdb.id, fdb.idxInstId, docid, err)
+				return fdb.deleteSecArrayIndex(docid, workerId)
 			}
-			t0 := time.Now()
-			if err = fdb.main[workerId].DeleteKV(keyToBeDeleted); err != nil {
-				fdb.checkFatalDbError(err)
-				logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error deleting "+
-					"entry from main index %v", fdb.id, fdb.idxInstId, err)
-				return
-			}
-			fdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
-			platform.AddInt64(&fdb.delete_bytes, int64(len(oldkey)))
-			nmut++
+			keysToBeDeleted = append(keysToBeDeleted, keyToBeDeleted)
 		}
 	}
 
-	// Insert each of indexEntriesToBeAdded into main index
+	// Form entries to be inserted into main index
+	var keysToBeAdded [][]byte
 	for i, item := range indexEntriesToBeAdded {
 		if item != nil { // nil item indicates it should not be added
 			var keyToBeAdded []byte
@@ -591,22 +572,40 @@ func (fdb *fdbSlice) insertSecArrayIndex(key []byte, rawKey []byte, docid []byte
 			defer encBufPool.Put(tmpBufPtr)
 			if keyToBeAdded, err = GetIndexEntryBytes2(item, docid, false, false, newKeyCount[i], (*tmpBufPtr)[:0]); err != nil {
 				encBufPool.Put(tmpBufPtr)
-				fdb.checkFatalDbError(err)
-				logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error from GetIndexEntryBytes2 for entry to be added to main index %v", fdb.id, fdb.idxInstId, err)
-				return
+				// TODO: Handle skipped item here
+				logging.Errorf("ForestDBSlice::insert SliceId %v IndexInstId %v Error forming entry "+
+					"to be added to main index. Skipping docid:%s Error: %v", fdb.id, fdb.idxInstId, docid, err)
+				return fdb.deleteSecArrayIndex(docid, workerId)
 			}
-			t0 := time.Now()
-			//set in main index
-			if err = fdb.main[workerId].SetKV(keyToBeAdded, nil); err != nil {
-				fdb.checkFatalDbError(err)
-				logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error in Main Index Set. "+
-					"Skipped Key %v. Error %v", fdb.id, fdb.idxInstId, key, err)
-				return
-			}
-			fdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
-			platform.AddInt64(&fdb.insert_bytes, int64(len(key)))
-			nmut++
+			keysToBeAdded = append(keysToBeAdded, keyToBeAdded)
 		}
+	}
+
+	for _, keyToBeDeleted := range keysToBeDeleted {
+		t0 := time.Now()
+		if err = fdb.main[workerId].DeleteKV(keyToBeDeleted); err != nil {
+			fdb.checkFatalDbError(err)
+			logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error deleting "+
+				"entry from main index %v", fdb.id, fdb.idxInstId, err)
+			return
+		}
+		fdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
+		platform.AddInt64(&fdb.delete_bytes, int64(len(oldkey)))
+		nmut++
+	}
+
+	for _, keyToBeAdded := range keysToBeAdded {
+		t0 := time.Now()
+		//set in main index
+		if err = fdb.main[workerId].SetKV(keyToBeAdded, nil); err != nil {
+			fdb.checkFatalDbError(err)
+			logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error in Main Index Set. "+
+				"Skipped Key %v. Error %v", fdb.id, fdb.idxInstId, key, err)
+			return
+		}
+		fdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
+		platform.AddInt64(&fdb.insert_bytes, int64(len(key)))
+		nmut++
 	}
 
 	// If a field value changed from "existing" to "missing" (ie, key = nil),
@@ -733,10 +732,6 @@ func (fdb *fdbSlice) deleteSecIndex(docid []byte, workerId int) (nmut int) {
 }
 
 func (fdb *fdbSlice) deleteSecArrayIndex(docid []byte, workerId int) (nmut int) {
-
-	//logging.Tracef("ForestDBSlice::delete \n\tSliceId %v IndexInstId %v. Delete Key - %s",
-	//	fdb.id, fdb.idxInstId, docid)
-
 	var olditm []byte
 	var err error
 
@@ -768,6 +763,7 @@ func (fdb *fdbSlice) deleteSecArrayIndex(docid []byte, workerId int) (nmut int) 
 		tmpBuf, fdb.isArrayDistinct, false)
 
 	if err != nil {
+		// TODO: Do not crash for non-storage operation. Force delete the old entries
 		fdb.checkFatalDbError(err)
 		logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error in retrieving "+
 			"compostite old secondary keys %v", fdb.id, fdb.idxInstId, err)
@@ -778,10 +774,19 @@ func (fdb *fdbSlice) deleteSecArrayIndex(docid []byte, workerId int) (nmut int) 
 	// Delete each of indexEntriesToBeDeleted from main index
 	for i, item := range indexEntriesToBeDeleted {
 		var keyToBeDeleted []byte
+		var tmpBuf []byte
+
 		tmpBufPtr := encBufPool.Get()
 		defer encBufPool.Put(tmpBufPtr)
-		if keyToBeDeleted, err = GetIndexEntryBytes2(item, docid, false, false, keyCount[i], (*tmpBufPtr)[:0]); err != nil {
-			arrayEncBufPool.Put(tmpBufPtr)
+
+		if len(item) > MAX_SEC_KEY_BUFFER_LEN {
+			tmpBuf = make([]byte, 0, len(item)+MAX_DOCID_LEN+2)
+		} else {
+			tmpBuf = (*tmpBufPtr)[:0]
+		}
+		// TODO: Use method that skips size check for bug MB-22183
+		if keyToBeDeleted, err = GetIndexEntryBytes2(item, docid, false, false, keyCount[i], tmpBuf); err != nil {
+			encBufPool.Put(tmpBufPtr)
 			fdb.checkFatalDbError(err)
 			logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error from GetIndexEntryBytes2 for entry to be deleted from main index %v", fdb.id, fdb.idxInstId, err)
 			return
