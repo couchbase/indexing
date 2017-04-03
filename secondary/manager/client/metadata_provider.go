@@ -49,7 +49,7 @@ type MetadataProvider struct {
 	pendings           map[c.IndexerId]chan bool
 	timeout            int64
 	repo               *metadataRepo
-	mutex              sync.Mutex
+	mutex              sync.RWMutex
 	watcherCount       int
 	metaNotifyCh       chan bool
 	numExpectedWatcher int32
@@ -1016,14 +1016,25 @@ func (o *MetadataProvider) allWatchersRunningNoLock() bool {
 }
 
 //
-// Find the indexer version.  This will look at both
+// Get the Indexer Version
+//
+func (o *MetadataProvider) GetIndexerVersion() uint64 {
+
+	latestVersion := atomic.LoadUint64(&o.indexerVersion)
+	if latestVersion < c.INDEXER_CUR_VERSION {
+		return latestVersion
+	}
+
+	return c.INDEXER_CUR_VERSION
+}
+
+//
+// Refresh the indexer version.  This will look at both
 // metakv and indexers to figure out the latest version.
 // This function still be 0 if (1) there are failed nodes and,
 // (2) during upgrade to 5.0.
 //
-func (o *MetadataProvider) GetIndexerVersion() uint64 {
-	o.mutex.Lock()
-	defer o.mutex.Unlock()
+func (o *MetadataProvider) RefreshIndexerVersion() uint64 {
 
 	// Find the version from metakv.  If token not found or error, fromMetakv is 0.
 	fromMetakv, metakvErr := GetIndexerVersionToken()
@@ -1040,13 +1051,18 @@ func (o *MetadataProvider) GetIndexerVersion() uint64 {
 	// watchers could be disconnected when this method is called, but metadata provider
 	// would have gotten the indexer version during initialization.
 	fromWatcher := uint64(0)
-	if o.allWatchersRunningNoLock() && numFailedNode == 0 && numUnhealthyNode == 0 {
-		for _, watcher := range o.watchers {
-			if fromWatcher == 0 || watcher.getIndexerVersion() < fromWatcher {
-				fromWatcher = watcher.getIndexerVersion()
+	func() {
+		o.mutex.RLock()
+		defer o.mutex.RUnlock()
+
+		if o.allWatchersRunningNoLock() && numFailedNode == 0 && numUnhealthyNode == 0 {
+			for _, watcher := range o.watchers {
+				if fromWatcher == 0 || watcher.getIndexerVersion() < fromWatcher {
+					fromWatcher = watcher.getIndexerVersion()
+				}
 			}
 		}
-	}
+	}()
 
 	logging.Debugf("Indexer Version from metakv %v. Indexer Version from watchers %v.  Current version %v.  Num Watcher %v. Failed Node %v. Unhealthy Node %v",
 		fromMetakv, fromWatcher, atomic.LoadUint64(&o.indexerVersion), atomic.LoadInt32(&o.numExpectedWatcher), numFailedNode, numUnhealthyNode)
@@ -1316,8 +1332,8 @@ func (o *MetadataProvider) findWatcherByNodeAddr(nodeAddr string) *watcher {
 // valid index instance on a connected indexer/watcher.
 //
 func (o *MetadataProvider) isValidIndexFromActiveIndexer(meta *IndexMetadata) bool {
-	o.mutex.Lock()
-	defer o.mutex.Unlock()
+	o.mutex.RLock()
+	defer o.mutex.RUnlock()
 
 	if !isValidIndex(meta) {
 		return false
