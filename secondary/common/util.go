@@ -17,10 +17,14 @@ import "reflect"
 import "unsafe"
 import "regexp"
 import "time"
+import "os/exec"
+import "bytes"
+import "text/scanner"
 
 import "github.com/couchbase/cbauth"
 import "github.com/couchbase/indexing/secondary/dcp"
 import "github.com/couchbase/indexing/secondary/dcp/transport/client"
+import "github.com/couchbase/indexing/secondary/logging"
 
 const IndexNamePattern = "^[A-Za-z0-9#_-]+$"
 
@@ -853,4 +857,86 @@ func DiskUsage(dir string) (int64, error) {
 	}
 
 	return sz, nil
+}
+
+//
+// Get the CPU Utilization (as percentage) of the current process.
+// This function returns 0 if it cannot execute the command.
+// This is not supported on windows.
+//
+func GetProcessCpuUtilization() float64 {
+
+	// get current process pid
+	mypid := os.Getpid()
+	logging.Debugf("GetProcessCpuUtilization. pid = %v", mypid)
+
+	// execute ps aux.  Not supported for windows.
+	cmd := exec.Command("ps", "aux")
+
+	// write the output to a buffer
+	var out bytes.Buffer
+	cmd.Stdout = &out
+
+	// execute the command.
+	if err := cmd.Run(); err != nil {
+		// return 0 on error
+		logging.Errorf("GetProcessCpuUtilization. Fail to run.  Error = %v", err)
+		return 0
+	}
+
+	// skip first line (header)
+	out.ReadString('\n')
+
+	for {
+		// read each line until end
+		line, err := out.ReadString('\n')
+		if err != nil {
+			return 0
+		}
+
+		logging.Debugf("GetProcessCpuUtilization. parsing line : %v", line)
+
+		sc := new(scanner.Scanner)
+		sc.Init(bytes.NewBufferString(line))
+
+		// scan user
+		if sc.Scan() == scanner.EOF {
+			logging.Errorf("GetProcessCpuUtilization. Fail to find pid.  Skip.")
+			continue
+		}
+
+		// scan pid
+		if sc.Scan() == scanner.EOF {
+			logging.Errorf("GetProcessCpuUtilization. Fail to find pid.  Skip.")
+			continue
+		}
+
+		pid, err := strconv.Atoi(sc.TokenText())
+		if err != nil {
+			logging.Errorf("GetProcessCpuUtilization. Fail to parse pid.  Skip.  Error = %v", err)
+			continue
+		}
+
+		if pid != mypid {
+			continue
+		}
+
+		// scan process cpu
+		if sc.Scan() == scanner.EOF {
+			logging.Errorf("GetProcessCpuUtilization. Fail to find cpu utilization.  Skip.")
+			continue
+		}
+
+		cpu, err := strconv.ParseFloat(sc.TokenText(), 64)
+		if err != nil {
+			logging.Errorf("GetProcessCpuUtilization. Found process %v.  But fail to parse stats.  Error = %v", err)
+			return 0
+		}
+
+		logging.Debugf("GetProcessCpuUtilization. pid = %v. cpu utilization %v", mypid, cpu)
+		return cpu
+	}
+
+	// nothing found
+	return 0
 }

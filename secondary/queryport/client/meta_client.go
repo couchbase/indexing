@@ -811,7 +811,7 @@ func (b *metadataClient) updateTopology(
 	currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
 
 	// Refresh indexer version
-	b.mdClient.GetIndexerVersion()
+	b.mdClient.RefreshIndexerVersion()
 
 	mindexes, version := b.mdClient.ListIndex()
 	// detect change in indexer cluster or indexes.
@@ -1105,6 +1105,9 @@ func (b *metadataClient) watchClusterChanges() {
 				}
 			}
 		case <-ticker.C:
+			// refresh indexer version
+			b.mdClient.RefreshIndexerVersion()
+
 			cinfo, err := common.FetchNewClusterInfoCache(b.cluster, common.DEFAULT_POOL)
 			if err != nil {
 				logging.Errorf("updateIndexerList(): %v\n", err)

@@ -75,7 +75,7 @@ func TestN1QLTransform150(t *testing.T) {
 		t.Fatal(err)
 	}
 	meta := make(map[string]interface{})
-	secKey, err := N1QLTransform([]byte("docid"), doc150, cExprs, meta, buf)
+	secKey, _, err := N1QLTransform([]byte("docid"), doc150, cExprs, meta, buf)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +91,7 @@ func TestN1QLTransform2000(t *testing.T) {
 		t.Fatal(err)
 	}
 	meta := make(map[string]interface{})
-	secKey, err := N1QLTransform([]byte("docid"), doc2000, cExprs, meta, buf)
+	secKey, _, err := N1QLTransform([]byte("docid"), doc2000, cExprs, meta, buf)
 	if err != nil {
 		t.Fatal(err)
 	}

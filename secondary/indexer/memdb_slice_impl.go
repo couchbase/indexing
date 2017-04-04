@@ -93,6 +93,23 @@ func byteItemCompare(a, b []byte) int {
 	return bytes.Compare(a, b)
 }
 
+func resizeEncodeBuf(encodeBuf []byte, keylen int) []byte {
+	if allowLargeKeys && keylen+MAX_KEY_EXTRABYTES_LEN > cap(encodeBuf) {
+		// TODO: Shrink the buffer periodically or as needed
+		newSize := keylen + MAX_KEY_EXTRABYTES_LEN + ENCODE_BUF_SAFE_PAD
+		encodeBuf = make([]byte, 0, newSize)
+	}
+	return encodeBuf
+}
+
+func resizeArrayBuf(arrayBuf []byte, keylen int) []byte {
+	if allowLargeKeys && keylen > cap(arrayBuf) {
+		newSize := keylen + MAX_KEY_EXTRABYTES_LEN + ENCODE_BUF_SAFE_PAD
+		arrayBuf = make([]byte, 0, newSize)
+	}
+	return arrayBuf
+}
+
 var totalMemDBItems = platform.NewAlignedInt64(0)
 
 type memdbSlice struct {
@@ -366,6 +383,8 @@ func (mdb *memdbSlice) insertSecIndex(key []byte, docid []byte, workerId int) in
 	// 3. Delete old entry from main index if back index had
 	// a previous mainnode pointer entry
 	t0 := time.Now()
+
+	mdb.encodeBuf[workerId] = resizeEncodeBuf(mdb.encodeBuf[workerId], len(key))
 	entry, err := NewSecondaryIndexEntry(key, docid, mdb.idxDefn.IsArrayIndex,
 		1, mdb.idxDefn.Desc, mdb.encodeBuf[workerId])
 	if err != nil {
@@ -393,7 +412,10 @@ func (mdb *memdbSlice) insertSecIndex(key []byte, docid []byte, workerId int) in
 }
 
 func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId int) int {
-	if len(keys) > maxArrayIndexEntrySize {
+
+	mdb.arrayBuf[workerId] = resizeArrayBuf(mdb.arrayBuf[workerId], len(keys))
+
+	if !allowLargeKeys && len(keys) > maxArrayIndexEntrySize {
 		logging.Errorf("MemDBSlice::insertSecArrayIndex Error indexing docid: %s in Slice: %v. Error: Encoded array key (size %v) too long (> %v). Skipped.",
 			docid, mdb.id, len(keys), maxArrayIndexEntrySize)
 		logging.Verbosef("MemDBSlice::insertSecArrayIndex Skipped docid: %s Key: %s", docid, string(keys))
@@ -401,8 +423,9 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 	}
 
 	var nmut int
-	newEntriesBytes, newKeyCount, err := ArrayIndexItems(keys, mdb.arrayExprPosition,
-		mdb.arrayBuf[workerId], mdb.isArrayDistinct, true)
+	newEntriesBytes, newKeyCount, newbufLen, err := ArrayIndexItems(keys, mdb.arrayExprPosition,
+		mdb.arrayBuf[workerId], mdb.isArrayDistinct, !allowLargeKeys)
+	mdb.arrayBuf[workerId] = resizeArrayBuf(mdb.arrayBuf[workerId], newbufLen)
 	if err != nil {
 		logging.Errorf("MemDBSlice::insert Error indexing docid: %s in Slice: %v. Error in creating "+
 			"compostite new secondary keys %v. Skipped.", docid, mdb.id, err)
@@ -458,6 +481,7 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 	// Delete each entry in entryBytesToDeleted
 	for i, item := range entryBytesToDeleted {
 		if item != nil { // nil item indicates it should not be deleted
+			mdb.encodeBuf[workerId] = resizeEncodeBuf(mdb.encodeBuf[workerId], len(item))
 			entry, err := NewSecondaryIndexEntry(item, docid, false,
 				oldKeyCount[i], nil, mdb.encodeBuf[workerId][:0])
 			if err != nil {
@@ -475,6 +499,7 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 	for i, key := range entryBytesToBeAdded {
 		if key != nil { // nil item indicates it should not be added
 			t0 := time.Now()
+			mdb.encodeBuf[workerId] = resizeEncodeBuf(mdb.encodeBuf[workerId], len(key))
 			entry, err := NewSecondaryIndexEntry(key, docid, false,
 				newKeyCount[i], mdb.idxDefn.Desc, mdb.encodeBuf[workerId][:0])
 			if err != nil {
@@ -1280,6 +1305,9 @@ func (s *memdbSnapshot) MultiScanCount(ctx IndexReaderContext, low, high IndexKe
 
 			skipRow := false
 			if scan.ScanType == FilterRangeReq {
+				if len(entry) > cap(*buf) {
+					*buf = make([]byte, 0, len(entry)+RESIZE_PAD)
+				}
 
 				//get the key in original format
 				if s.slice.idxDefn.Desc != nil {

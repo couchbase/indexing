@@ -11,7 +11,7 @@ import (
 
 var (
 	ErrSecKeyNil     = errors.New("Secondary key array is empty")
-	ErrSecKeyTooLong = errors.New(fmt.Sprintf("Secondary key is too long (> %d)", MAX_SEC_KEY_LEN))
+	ErrSecKeyTooLong = errors.New(fmt.Sprintf("Secondary key is too long (> %d)", maxSecKeyLen))
 	ErrDocIdTooLong  = errors.New(fmt.Sprintf("DocID is too long (>%d)", MAX_DOCID_LEN))
 )
 
@@ -28,19 +28,25 @@ var (
 	arrayEncBufPool *common.BytesBufPool
 )
 
-const (
-	maxIndexEntrySize = MAX_SEC_KEY_BUFFER_LEN + MAX_DOCID_LEN + 2
-)
-
 var (
 	maxArrayKeyLength       = common.SystemConfig["indexer.settings.max_array_seckey_size"].Int()
 	maxArrayKeyBufferLength = maxArrayKeyLength * 3
 	maxArrayIndexEntrySize  = maxArrayKeyBufferLength + MAX_DOCID_LEN + 2
+
+	maxSecKeyLen       = common.SystemConfig["indexer.settings.max_seckey_size"].Int()
+	maxSecKeyBufferLen = maxSecKeyLen * 3
+	maxIndexEntrySize  = maxSecKeyBufferLen + MAX_DOCID_LEN + 2
+
+	allowLargeKeys = common.SystemConfig["indexer.settings.allow_large_keys"].Bool()
 )
 
 func init() {
 	jsonEncoder = collatejson.NewCodec(16)
-	encBufPool = common.NewByteBufferPool(maxIndexEntrySize + ENCODE_BUF_SAFE_PAD)
+	if allowLargeKeys {
+		encBufPool = common.NewByteBufferPool((DEFAULT_MAX_SEC_KEY_LEN * 3) + MAX_DOCID_LEN + 2)
+	} else {
+		encBufPool = common.NewByteBufferPool(maxIndexEntrySize + ENCODE_BUF_SAFE_PAD)
+	}
 }
 
 // Generic index entry abstraction (primary or secondary)
@@ -119,10 +125,10 @@ func NewSecondaryIndexEntry(key []byte, docid []byte, isArray bool, count int, d
 
 	if key[0] == '[' { // JSON
 		if isArray {
-			if isArraySecKeyLarge(key) {
+			if !allowLargeKeys && isArraySecKeyLarge(key) {
 				return nil, errors.New(fmt.Sprintf("Secondary array key is too long (> %d)", maxArrayKeyLength))
 			}
-		} else if isSecKeyLarge(key) {
+		} else if !allowLargeKeys && isSecKeyLarge(key) {
 			return nil, ErrSecKeyTooLong
 		}
 		if buf, err = jsonEncoder.Encode(key, buf); err != nil {
@@ -130,11 +136,11 @@ func NewSecondaryIndexEntry(key []byte, docid []byte, isArray bool, count int, d
 		}
 	} else { // Encoded
 		if isArray {
-			if len(key) > maxArrayKeyBufferLength {
+			if !allowLargeKeys && len(key) > maxArrayKeyBufferLength {
 				return nil, errors.New(fmt.Sprintf("Encoded secondary array key is too long (> %d)", maxArrayKeyBufferLength))
 			}
-		} else if len(key) > MAX_SEC_KEY_BUFFER_LEN {
-			return nil, errors.New(fmt.Sprintf("Encoded secondary key is too long (> %d)", MAX_SEC_KEY_BUFFER_LEN))
+		} else if !allowLargeKeys && len(key) > maxSecKeyBufferLen {
+			return nil, errors.New(fmt.Sprintf("Encoded secondary key is too long (> %d)", maxSecKeyBufferLen))
 		}
 		buf = append(buf, key...)
 	}
@@ -232,7 +238,7 @@ func (e *secondaryIndexEntry) Bytes() []byte {
 }
 
 func (e *secondaryIndexEntry) String() string {
-	buf := make([]byte, MAX_SEC_KEY_LEN*4)
+	buf := make([]byte, maxSecKeyLen*4)
 	buf, _ = e.ReadSecKey(buf)
 	buf = append(buf, ':')
 	buf, _ = e.ReadDocId(buf)
@@ -427,7 +433,7 @@ func (k *secondaryKey) Bytes() []byte {
 }
 
 func (k *secondaryKey) String() string {
-	buf := make([]byte, 0, MAX_SEC_KEY_LEN)
+	buf := make([]byte, 0, maxSecKeyLen)
 	buf, _ = jsonEncoder.Decode(*k, buf)
 	return string(buf)
 }
@@ -437,7 +443,7 @@ func isNilJsonKey(k []byte) bool {
 }
 
 func isSecKeyLarge(k []byte) bool {
-	return len(k) > MAX_SEC_KEY_LEN
+	return len(k) > maxSecKeyLen
 }
 
 func isArraySecKeyLarge(k []byte) bool {
@@ -483,6 +489,12 @@ func GetIndexEntryBytes(key []byte, docid []byte,
 	if bufPool != nil {
 		bufPtr = bufPool.Get()
 		buf = (*bufPtr)[:0]
+
+		if allowLargeKeys && len(key)+MAX_KEY_EXTRABYTES_LEN > cap(*bufPtr) {
+			newSize := len(key) + MAX_DOCID_LEN + ENCODE_BUF_SAFE_PAD
+			buf = make([]byte, 0, newSize)
+			bufPtr = &buf
+		}
 
 		defer func() {
 			bufPool.Put(bufPtr)

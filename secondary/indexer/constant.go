@@ -49,15 +49,15 @@ const DEFAULT_MAX_SLAB_MEMORY = DEFAULT_SLAB_SIZE * 1024
 //requests
 const SLICE_COMMAND_BUFFER_SIZE = 20000
 
-//Max Length of Secondary Key
-const MAX_SEC_KEY_LEN = 4608
-
 const MAX_DOCID_LEN = 256
 
-//Buffer Length for encoded Sec Key
-const MAX_SEC_KEY_BUFFER_LEN = MAX_SEC_KEY_LEN * 3
-
 const ENCODE_BUF_SAFE_PAD = 512
+
+// Constants for unlimiting entry size
+const DEFAULT_MAX_SEC_KEY_LEN = 4608
+const DEFAULT_MAX_ARRAY_KEY_SIZE = 10240
+const MAX_KEY_EXTRABYTES_LEN = MAX_DOCID_LEN + 2
+const RESIZE_PAD = 1024
 
 const INDEXER_ID_KEY = "IndexerId"
 

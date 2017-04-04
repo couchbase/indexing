@@ -51,12 +51,27 @@ func (w *ItemWriter) sendBlock() error {
 	return nil
 }
 
+func (w *ItemWriter) ResizeBlockBuffer(itmLen int) {
+	if w.wr.IsEmpty() && (itmLen > w.wr.cap-w.wr.len) {
+		newBuf := make([]byte, itmLen+4, itmLen+4)
+		w.wr.Init(&newBuf)
+		w.wblock = &newBuf
+	}
+}
+
 func (w *ItemWriter) WriteItem(itm ...[]byte) error {
 	var err error
 	if w.wblock == nil {
 		w.grabBlock()
 	}
 
+	l := 0
+	for _, it := range itm {
+		l += len(it)
+	}
+
+	itmLen := 4 + l + 4*len(itm)
+	w.ResizeBlockBuffer(itmLen)
 	if w.wr.Put(itm...) == ErrNoBlockSpace {
 		err = w.HasShutdown()
 		if err != nil {
@@ -67,6 +82,8 @@ func (w *ItemWriter) WriteItem(itm ...[]byte) error {
 			return err
 		}
 		w.grabBlock()
+		itmLen = 4 + l + 4*len(itm)
+		w.ResizeBlockBuffer(itmLen)
 		return w.wr.Put(itm...)
 	}
 
@@ -175,7 +192,7 @@ func (r *ItemReader) PeekBlock() ([]byte, error) {
 		}
 	}
 
-	return (*r.rblock)[2 : 2+r.rr.Len()-2], nil
+	return (*r.rblock)[4 : 4+r.rr.Len()-4], nil
 }
 
 func (r *ItemReader) FlushBlock() {

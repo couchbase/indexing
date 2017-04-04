@@ -437,6 +437,8 @@ func (mdb *plasmaSlice) insertSecIndex(key []byte, docid []byte, workerId int) i
 	t0 := time.Now()
 
 	ndel := mdb.deleteSecIndex(docid, workerId)
+
+	mdb.encodeBuf[workerId] = resizeEncodeBuf(mdb.encodeBuf[workerId], len(key))
 	entry, err := NewSecondaryIndexEntry(key, docid, mdb.idxDefn.IsArrayIndex,
 		1, mdb.idxDefn.Desc, mdb.encodeBuf[workerId])
 	if err != nil {
@@ -467,7 +469,9 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 	var err error
 	var oldkey []byte
 
-	if len(key) > maxArrayIndexEntrySize {
+	mdb.arrayBuf2[workerId] = resizeArrayBuf(mdb.arrayBuf2[workerId], len(key))
+
+	if !allowLargeKeys && len(key) > maxArrayIndexEntrySize {
 		logging.Errorf("plasmaSlice::insertSecArrayIndex Error indexing docid: %s in Slice: %v. Error: Encoded array key (size %v) too long (> %v). Skipped.",
 			docid, mdb.id, len(key), maxArrayIndexEntrySize)
 		mdb.deleteSecArrayIndex(docid, workerId)
@@ -486,6 +490,7 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 
 	var oldEntriesBytes, newEntriesBytes [][]byte
 	var oldKeyCount, newKeyCount []int
+	var newbufLen int
 	if oldkey != nil {
 		if bytes.Equal(oldkey, key) {
 			logging.Tracef("plasmaSlice::insertSecArrayIndex \n\tSliceId %v IndexInstId %v Received Unchanged Key for "+
@@ -494,8 +499,8 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 		}
 
 		var tmpBuf []byte
-		if len(oldkey) > maxArrayIndexEntrySize {
-			tmpBuf = make([]byte, 0, len(oldkey)*3) //TODO: Revisit the size of tmpBuf
+		if len(oldkey) > cap(mdb.arrayBuf1[workerId]) {
+			tmpBuf = make([]byte, 0, len(oldkey)*3)
 		} else {
 			tmpBuf = mdb.arrayBuf1[workerId]
 		}
@@ -505,8 +510,11 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 			jsonEncoder.ReverseCollate(oldkey, mdb.idxDefn.Desc)
 		}
 
-		if oldEntriesBytes, oldKeyCount, err = ArrayIndexItems(oldkey, mdb.arrayExprPosition,
-			tmpBuf, mdb.isArrayDistinct, false); err != nil {
+		oldEntriesBytes, oldKeyCount, newbufLen, err = ArrayIndexItems(oldkey, mdb.arrayExprPosition,
+			tmpBuf, mdb.isArrayDistinct, false)
+		mdb.arrayBuf1[workerId] = resizeArrayBuf(mdb.arrayBuf1[workerId], newbufLen)
+
+		if err != nil {
 			logging.Errorf("plasmaSlice::insertSecArrayIndex SliceId %v IndexInstId %v Error in retrieving "+
 				"compostite old secondary keys. Skipping docid:%s Error: %v", mdb.id, mdb.idxInstId, docid, err)
 			mdb.deleteSecArrayIndex(docid, workerId)
@@ -516,8 +524,9 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 
 	if key != nil {
 
-		newEntriesBytes, newKeyCount, err = ArrayIndexItems(key, mdb.arrayExprPosition,
-			mdb.arrayBuf2[workerId], mdb.isArrayDistinct, true)
+		newEntriesBytes, newKeyCount, newbufLen, err = ArrayIndexItems(key, mdb.arrayExprPosition,
+			mdb.arrayBuf2[workerId], mdb.isArrayDistinct, !allowLargeKeys)
+		mdb.arrayBuf2[workerId] = resizeArrayBuf(mdb.arrayBuf2[workerId], newbufLen)
 		if err != nil {
 			logging.Errorf("plasmaSlice::insertSecArrayIndex SliceId %v IndexInstId %v Error in creating "+
 				"compostite new secondary keys. Skipping docid:%s Error: %v", mdb.id, mdb.idxInstId, docid, err)
@@ -569,6 +578,7 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 	for i, item := range indexEntriesToBeDeleted {
 		if item != nil { // nil item indicates it should not be deleted
 			var keyToBeDeleted []byte
+			mdb.encodeBuf[workerId] = resizeEncodeBuf(mdb.encodeBuf[workerId], len(item))
 			if keyToBeDeleted, err = GetIndexEntryBytes2(item, docid, false, false,
 				oldKeyCount[i], mdb.idxDefn.Desc, mdb.encodeBuf[workerId]); err != nil {
 				rollbackDeletes(i - 1)
@@ -589,6 +599,7 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 	for i, item := range indexEntriesToBeAdded {
 		if item != nil { // nil item indicates it should not be added
 			var keyToBeAdded []byte
+			mdb.encodeBuf[workerId] = resizeEncodeBuf(mdb.encodeBuf[workerId], len(item))
 			if keyToBeAdded, err = GetIndexEntryBytes2(item, docid, false, false,
 				newKeyCount[i], mdb.idxDefn.Desc, mdb.encodeBuf[workerId]); err != nil {
 				rollbackDeletes(len(indexEntriesToBeDeleted) - 1)
@@ -676,12 +687,14 @@ func (mdb *plasmaSlice) deletePrimaryIndex(docid []byte, workerId int) (nmut int
 }
 
 func (mdb *plasmaSlice) deleteSecIndex(docid []byte, workerId int) int {
-	buf := mdb.encodeBuf[workerId]
-
 	// Delete entry from back and main index if present
 	tokB := mdb.back[workerId].BeginTx()
 	defer mdb.back[workerId].EndTx(tokB)
+
 	backEntry, err := mdb.back[workerId].LookupKV(docid)
+	mdb.encodeBuf[workerId] = resizeEncodeBuf(mdb.encodeBuf[workerId], len(backEntry))
+	buf := mdb.encodeBuf[workerId]
+
 	if err == nil {
 		t0 := time.Now()
 		platform.AddInt64(&mdb.delete_bytes, int64(len(docid)))
@@ -715,7 +728,7 @@ func (mdb *plasmaSlice) deleteSecArrayIndex(docid []byte, workerId int) (nmut in
 	}
 
 	var tmpBuf []byte
-	if len(olditm) > maxArrayIndexEntrySize {
+	if len(olditm) > cap(mdb.arrayBuf1[workerId]) {
 		tmpBuf = make([]byte, 0, len(olditm)*3)
 	} else {
 		tmpBuf = mdb.arrayBuf1[workerId]
@@ -726,7 +739,7 @@ func (mdb *plasmaSlice) deleteSecArrayIndex(docid []byte, workerId int) (nmut in
 		jsonEncoder.ReverseCollate(olditm, mdb.idxDefn.Desc)
 	}
 
-	indexEntriesToBeDeleted, keyCount, err := ArrayIndexItems(olditm, mdb.arrayExprPosition,
+	indexEntriesToBeDeleted, keyCount, _, err := ArrayIndexItems(olditm, mdb.arrayExprPosition,
 		tmpBuf, mdb.isArrayDistinct, false)
 	if err != nil {
 		// TODO: Do not crash for non-storage operation. Force delete the old entries
@@ -744,7 +757,7 @@ func (mdb *plasmaSlice) deleteSecArrayIndex(docid []byte, workerId int) (nmut in
 	for i, item := range indexEntriesToBeDeleted {
 		var keyToBeDeleted []byte
 		var tmpBuf []byte
-		if len(item) > MAX_SEC_KEY_BUFFER_LEN {
+		if len(item) > cap(mdb.encodeBuf[workerId]) {
 			tmpBuf = make([]byte, 0, len(item)+MAX_DOCID_LEN+2)
 		} else {
 			tmpBuf = mdb.encodeBuf[workerId]
@@ -1418,7 +1431,9 @@ func (s *plasmaSnapshot) MultiScanCount(ctx IndexReaderContext, low, high IndexK
 		default:
 			skipRow := false
 			if scan.ScanType == FilterRangeReq {
-
+				if len(entry) > cap(*buf) {
+					*buf = make([]byte, 0, len(entry)+RESIZE_PAD)
+				}
 				//get the key in original format
 				if s.slice.idxDefn.Desc != nil {
 					revbuf := (*revbuf)[:0]

@@ -121,6 +121,9 @@ func (s *IndexScanSource) Routine() error {
 		}
 
 		if currentScan.ScanType == FilterRangeReq {
+			if len(entry) > cap(*buf) {
+				*buf = make([]byte, 0, len(entry)+1024)
+			}
 			skipRow, ck, err = filterScanRow(entry, currentScan, (*buf)[:0])
 			if err != nil {
 				return err
@@ -217,6 +220,10 @@ loop:
 		default:
 			d.CloseWithError(err)
 			break loop
+		}
+
+		if len(row)*3 > cap(*tmpBuf) {
+			(*tmpBuf) = make([]byte, len(row)*3, len(row)*3)
 		}
 
 		t := (*tmpBuf)[:0]

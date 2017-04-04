@@ -22,5 +22,5 @@ type Evaluator interface {
 
 	// TransformRoute will transform document consumable by
 	// downstream, returns data to be published to endpoints.
-	TransformRoute(vbuuid uint64, m *mc.DcpEvent, data map[string]interface{}, encodeBuf []byte) error
+	TransformRoute(vbuuid uint64, m *mc.DcpEvent, data map[string]interface{}, encodeBuf []byte) ([]byte, error)
 }

@@ -904,6 +904,16 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 		idx.stats.needsRestart.Set(true)
 	}
 
+	if newConfig["settings.max_seckey_size"].Int() !=
+		idx.config["settings.max_seckey_size"].Int() {
+		idx.stats.needsRestart.Set(true)
+	}
+
+	if newConfig["settings.allow_large_keys"].Bool() !=
+		idx.config["settings.allow_large_keys"].Bool() {
+		idx.stats.needsRestart.Set(true)
+	}
+
 	if percent, ok := newConfig["settings.gc_percent"]; ok && percent.Int() > 0 {
 		logging.Infof("Indexer: Setting GC percent to %v", percent.Int())
 		debug.SetGCPercent(percent.Int())
