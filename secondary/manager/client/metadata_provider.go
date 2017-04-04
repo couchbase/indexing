@@ -511,7 +511,7 @@ func (o *MetadataProvider) PrepareIndexDefn(
 		return nil, errors.New("Fails to create index.  Multiple expressions with ALL are found. Only one array expression is supported per index."), false
 	}
 
-	if desc != nil && version < c.INDEXER_50_VERSION {
+	if o.isDecending(desc) && version < c.INDEXER_50_VERSION {
 		return nil, errors.New("Fail to create index with descending order. This option is enabled after cluster is fully upgraded and there is no failed node."), false
 	}
 
@@ -539,6 +539,16 @@ func (o *MetadataProvider) PrepareIndexDefn(
 	}
 
 	return idxDefn, nil, false
+}
+
+func (o *MetadataProvider) isDecending(desc []bool) bool {
+
+	hasDecending := false
+	for _, flag := range desc {
+		hasDecending = hasDecending || flag
+	}
+
+	return hasDecending
 }
 
 func (o *MetadataProvider) getNodesParam(plan map[string]interface{}) ([]string, error, bool) {
