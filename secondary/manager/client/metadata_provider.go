@@ -2126,6 +2126,12 @@ func (w *watcher) updateServiceMapNoLock(serviceMap *ServiceMap) bool {
 		needRefresh = true
 	}
 
+	if w.serviceMap.NodeAddr != serviceMap.NodeAddr {
+		logging.Infof("Received new service map.  Node Addr=%v", serviceMap.NodeAddr)
+		w.serviceMap.NodeAddr = serviceMap.NodeAddr
+		needRefresh = true
+	}
+
 	return needRefresh
 }
 

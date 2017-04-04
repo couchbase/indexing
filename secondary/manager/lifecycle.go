@@ -76,6 +76,7 @@ type updator struct {
 	manager        *LifecycleMgr
 	indexerVersion uint64
 	serverGroup    string
+	nodeAddr       string
 }
 
 //////////////////////////////////////////////////////////////
@@ -1411,12 +1412,13 @@ func (m *updator) check() {
 		return
 	}
 
-	if serviceMap.ServerGroup != m.serverGroup || m.indexerVersion != serviceMap.IndexerVersion {
+	if serviceMap.ServerGroup != m.serverGroup || m.indexerVersion != serviceMap.IndexerVersion || serviceMap.NodeAddr != m.nodeAddr {
 
 		m.serverGroup = serviceMap.ServerGroup
 		m.indexerVersion = serviceMap.IndexerVersion
+		m.nodeAddr = serviceMap.NodeAddr
 
-		logging.Infof("updator: updating service map.  server group=%v, indexerVersion=%v", m.serverGroup, m.indexerVersion)
+		logging.Infof("updator: updating service map.  server group=%v, indexerVersion=%v nodeAddr %v", m.serverGroup, m.indexerVersion, m.nodeAddr)
 
 		if err := m.manager.repo.SetServiceMap(serviceMap); err != nil {
 			logging.Errorf("updator: fail to set service map.  Error = %v", err)
