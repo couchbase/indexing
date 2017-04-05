@@ -1,5 +1,12 @@
-#!/bin/bash
+#!/bin/bash 
 
+if [ "$C_INCLUDE_PATH" == "" ]; then
+  top="`pwd`/../../../../../.."
+  export GOPATH="$top/goproj:$top/godeps"
+  export C_INCLUDE_PATH="$top/install/platform/include:$top/install/include:$top/forestdb/include:$top/install/build/tlm/deps/curl.exploded/include"
+  export CGO_LDFLAGS="-L $top/install/lib"
+  export LD_LIBRARY_PATH="$top/install/lib"
+fi
 
 build_indexer(){
 
