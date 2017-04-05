@@ -7,7 +7,6 @@ import "sync/atomic"
 import "fmt"
 
 import "github.com/couchbase/indexing/secondary/logging"
-import "github.com/couchbase/indexing/secondary/platform"
 import "github.com/couchbase/indexing/secondary/common"
 import "github.com/golang/protobuf/proto"
 import protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
@@ -985,21 +984,21 @@ func (c *GsiClient) getConsistency(
 
 func (c *GsiClient) setBucketHash(bucketn string, crc64 uint64) {
 	for {
-		ptr := platform.LoadPointer(&c.bucketHash)
+		ptr := atomic.LoadPointer(&c.bucketHash)
 		oldm := (*map[string]uint64)(ptr)
 		newm := map[string]uint64{}
 		for k, v := range *oldm {
 			newm[k] = v
 		}
 		newm[bucketn] = crc64
-		if platform.CompareAndSwapPointer(&c.bucketHash, ptr, unsafe.Pointer(&newm)) {
+		if atomic.CompareAndSwapPointer(&c.bucketHash, ptr, unsafe.Pointer(&newm)) {
 			return
 		}
 	}
 }
 
 func (c *GsiClient) getBucketHash(bucketn string) (uint64, bool) {
-	bucketHash := (*map[string]uint64)(platform.LoadPointer(&c.bucketHash))
+	bucketHash := (*map[string]uint64)(atomic.LoadPointer(&c.bucketHash))
 	crc64, ok := (*bucketHash)[bucketn]
 	return crc64, ok
 }
@@ -1011,7 +1010,7 @@ func makeWithCbq(cluster string, config common.Config) (*GsiClient, error) {
 		cluster: cluster,
 		config:  config,
 	}
-	platform.StorePointer(&c.bucketHash, (unsafe.Pointer)(new(map[string]uint64)))
+	atomic.StorePointer(&c.bucketHash, (unsafe.Pointer)(new(map[string]uint64)))
 	if c.bridge, err = newCbqClient(cluster); err != nil {
 		return nil, err
 	}
@@ -1036,7 +1035,7 @@ func makeWithMetaProvider(
 		settings:     NewClientSettings(needRefresh),
 		killch:       make(chan bool, 1),
 	}
-	platform.StorePointer(&c.bucketHash, (unsafe.Pointer)(new(map[string]uint64)))
+	atomic.StorePointer(&c.bucketHash, (unsafe.Pointer)(new(map[string]uint64)))
 	c.bridge, err = newMetaBridgeClient(cluster, config, c.metaCh, c.settings)
 	if err != nil {
 		return nil, err

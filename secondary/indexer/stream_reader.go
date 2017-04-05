@@ -12,14 +12,15 @@ package indexer
 import (
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
+
+	"sync"
 
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/dataport"
 	"github.com/couchbase/indexing/secondary/logging"
-	"github.com/couchbase/indexing/secondary/platform"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/data"
-	"sync"
 )
 
 //MutationStreamReader reads a Dataport and stores the incoming mutations
@@ -29,7 +30,7 @@ type MutationStreamReader interface {
 }
 
 type mutationStreamReader struct {
-	mutationCount     platform.AlignedUint64
+	mutationCount     uint64
 	syncBatchInterval uint64 //batch interval for sync message
 
 	stream   *dataport.Server //handle to the Dataport server
@@ -407,8 +408,8 @@ func (r *mutationStreamReader) maybeSendSync() {
 
 func (r *mutationStreamReader) logReaderStat() {
 
-	platform.AddUint64(&r.mutationCount, 1)
-	c := platform.LoadUint64(&r.mutationCount)
+	atomic.AddUint64(&r.mutationCount, 1)
+	c := atomic.LoadUint64(&r.mutationCount)
 	if (c%10000 == 0) || c == 1 {
 		logging.Infof("logReaderStat:: %v "+
 			"MutationCount %v", r.streamId, c)

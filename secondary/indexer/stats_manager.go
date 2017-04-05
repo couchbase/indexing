@@ -12,16 +12,17 @@ package indexer
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/logging"
-	"github.com/couchbase/indexing/secondary/platform"
-	"github.com/couchbase/indexing/secondary/stats"
-	"github.com/couchbase/nitro/mm"
 	"net/http"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unsafe"
+
+	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/stats"
+	"github.com/couchbase/nitro/mm"
 )
 
 var uptime time.Time
@@ -140,11 +141,11 @@ type IndexerStatsHolder struct {
 }
 
 func (h IndexerStatsHolder) Get() *IndexerStats {
-	return (*IndexerStats)(platform.LoadPointer(&h.ptr))
+	return (*IndexerStats)(atomic.LoadPointer(&h.ptr))
 }
 
 func (h *IndexerStatsHolder) Set(s *IndexerStats) {
-	platform.StorePointer(&h.ptr, unsafe.Pointer(s))
+	atomic.StorePointer(&h.ptr, unsafe.Pointer(s))
 }
 
 func (s *IndexStats) Init() {
@@ -409,18 +410,16 @@ type statsManager struct {
 	supvMsgch             MsgChannel
 	lastStatTime          time.Time
 	cacheUpdateInProgress bool
-
-	statsLogDumpInterval platform.AlignedUint64
+	statsLogDumpInterval  uint64
 }
 
 func NewStatsManager(supvCmdch MsgChannel,
 	supvMsgch MsgChannel, config common.Config) (*statsManager, Message) {
 	s := &statsManager{
-		supvCmdch:    supvCmdch,
-		supvMsgch:    supvMsgch,
-		lastStatTime: time.Unix(0, 0),
-		statsLogDumpInterval: platform.NewAlignedUint64(
-			config["settings.statsLogDumpInterval"].Uint64()),
+		supvCmdch:            supvCmdch,
+		supvMsgch:            supvMsgch,
+		lastStatTime:         time.Unix(0, 0),
+		statsLogDumpInterval: config["settings.statsLogDumpInterval"].Uint64(),
 	}
 
 	s.config.Store(config)
@@ -609,7 +608,7 @@ func (s *statsManager) handleIndexInstanceUpdate(cmd Message) {
 func (s *statsManager) handleConfigUpdate(cmd Message) {
 	cfg := cmd.(*MsgConfigUpdate)
 	s.config.Store(cfg.GetConfig())
-	platform.StoreUint64(&s.statsLogDumpInterval, cfg.GetConfig()["settings.statsLogDumpInterval"].Uint64())
+	atomic.StoreUint64(&s.statsLogDumpInterval, cfg.GetConfig()["settings.statsLogDumpInterval"].Uint64())
 	s.supvCmdch <- &MsgSuccess{}
 }
 
@@ -627,7 +626,7 @@ func (s *statsManager) runStatsDumpLogger() {
 			logging.Infof("PeriodicStats = %s%s", string(bytes), storageStats)
 		}
 
-		time.Sleep(time.Second * time.Duration(platform.LoadUint64(&s.statsLogDumpInterval)))
+		time.Sleep(time.Second * time.Duration(atomic.LoadUint64(&s.statsLogDumpInterval)))
 	}
 }
 

@@ -18,7 +18,7 @@ import "fmt"
 import "reflect"
 import "errors"
 import "github.com/couchbase/indexing/secondary/logging"
-import "github.com/couchbase/indexing/secondary/platform"
+import "sync/atomic"
 import "unsafe"
 import "runtime"
 
@@ -43,11 +43,11 @@ type ConfigHolder struct {
 }
 
 func (h *ConfigHolder) Store(conf Config) {
-	platform.StorePointer(&h.ptr, unsafe.Pointer(&conf))
+	atomic.StorePointer(&h.ptr, unsafe.Pointer(&conf))
 }
 
 func (h *ConfigHolder) Load() Config {
-	confptr := platform.LoadPointer(&h.ptr)
+	confptr := atomic.LoadPointer(&h.ptr)
 	return *(*Config)(confptr)
 }
 

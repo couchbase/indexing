@@ -11,11 +11,12 @@ package indexer
 
 import (
 	"fmt"
+	"strings"
+	"sync/atomic"
+	"time"
+
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
-	"github.com/couchbase/indexing/secondary/platform"
-	"strings"
-	"time"
 )
 
 type CompactionManager interface {
@@ -81,7 +82,7 @@ func (cd *compactionDaemon) ResetConfig(c common.Config) {
 	var last_start_hr, last_start_min, last_end_hr, last_end_min int
 	fmt.Sscanf(last_interval, "%d:%d,%d:%d", &last_start_hr, &last_start_min, &last_end_hr, &last_end_min)
 	if last_start_hr != start_hr || last_start_min != start_min {
-		platform.StoreInt32(&cd.lastCheckDay, -1)
+		atomic.StoreInt32(&cd.lastCheckDay, -1)
 	}
 }
 
@@ -237,9 +238,9 @@ loop:
 					mode := strings.ToLower(conf["compaction_mode"].String())
 					if mode == "circular" {
 						// if circular compaction, run full compaction at most once a day.
-						if platform.LoadInt32(&cd.lastCheckDay) != int32(checkTime.Weekday()) {
+						if atomic.LoadInt32(&cd.lastCheckDay) != int32(checkTime.Weekday()) {
 							hasStartedToday = false
-							platform.StoreInt32(&cd.lastCheckDay, int32(checkTime.Weekday()))
+							atomic.StoreInt32(&cd.lastCheckDay, int32(checkTime.Weekday()))
 						}
 
 						if hasStartedToday {
