@@ -7,3 +7,7 @@
 .DS_Store
 secondary/tests/testdata/Users10k.txt.gz
 secondary/triage
+secondary/bin/indexer
+secondary/bin/projector
+secondary/cmd/indexer/indexer
+secondary/cmd/projector/projector

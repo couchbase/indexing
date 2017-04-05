@@ -152,8 +152,9 @@ type memdbSlice struct {
 
 	fatalDbErr error
 
-	numWriters   int
-	maxRollbacks int
+	numWriters     int
+	maxRollbacks   int
+	hasPersistence bool
 
 	totalFlushTime  time.Duration
 	totalCommitTime time.Duration
@@ -173,7 +174,7 @@ type memdbSlice struct {
 }
 
 func NewMemDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
-	idxInstId common.IndexInstId, isPrimary bool,
+	idxInstId common.IndexInstId, isPrimary bool, hasPersistance bool,
 	sysconf common.Config, idxStats *IndexStats) (*memdbSlice, error) {
 
 	info, err := os.Stat(path)
@@ -216,6 +217,7 @@ func NewMemDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	slice.stopCh = make([]DoneChannel, slice.numWriters)
 
 	slice.isPrimary = isPrimary
+	slice.hasPersistence = hasPersistance
 	slice.initStores()
 
 	// Array related initialization
@@ -225,7 +227,7 @@ func NewMemDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	}
 
 	logging.Infof("MemDBSlice:NewMemDBSlice Created New Slice Id %v IndexInstId %v "+
-		"WriterThreads %v", sliceId, idxInstId, slice.numWriters)
+		"WriterThreads %v Persistence %v", sliceId, idxInstId, slice.numWriters, slice.hasPersistence)
 
 	for i := 0; i < slice.numWriters; i++ {
 		slice.stopCh[i] = make(DoneChannel)
@@ -659,7 +661,7 @@ func (mdb *memdbSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 
 	s.Open()
 	s.slice.IncrRef()
-	if s.committed {
+	if s.committed && mdb.hasPersistence {
 		s.info.MainSnap.Open()
 		go mdb.doPersistSnapshot(s)
 	}

@@ -1,13 +1,17 @@
 package common
 
-import "github.com/couchbase/indexing/secondary/dcp"
-import "github.com/couchbase/indexing/secondary/logging"
-import "errors"
-import "fmt"
-import "time"
-import "net"
-import "net/url"
-import "sync"
+import (
+	"errors"
+	"fmt"
+	"net"
+	"net/url"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/couchbase/indexing/secondary/dcp"
+	"github.com/couchbase/indexing/secondary/logging"
+)
 
 var (
 	ErrInvalidNodeId       = errors.New("Invalid NodeId")
@@ -281,6 +285,15 @@ func (c *ClusterInfoCache) GetBucketUUID(bucket string) (uuid string) {
 
 	// no nodes recognize this bucket
 	return BUCKET_UUID_NIL
+}
+
+func (c *ClusterInfoCache) IsEphemeral(bucket string) (bool, error) {
+	b, err := c.pool.GetBucket(bucket)
+	if err != nil {
+		return false, err
+	}
+	defer b.Close()
+	return strings.EqualFold(b.Type, "ephemeral"), nil
 }
 
 func (c *ClusterInfoCache) GetCurrentNode() NodeId {
