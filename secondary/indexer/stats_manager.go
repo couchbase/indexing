@@ -277,8 +277,8 @@ func (is IndexerStats) MarshalJSON() ([]byte, error) {
 	addStat("needs_restart", is.needsRestart.Value())
 	storageMode := fmt.Sprintf("%s", common.GetStorageMode())
 	addStat("storage_mode", storageMode)
-	//addStat("num_cpu_core", num_cpu_core)
-	//addStat("cpu_utilization", common.GetProcessCpuUtilization())
+	addStat("num_cpu_core", num_cpu_core)
+	addStat("cpu_utilization", getCpuPercentAverage())
 
 	indexerState := common.IndexerState(is.indexerState.Value())
 	if indexerState == common.INDEXER_PREPARE_UNPAUSE {
@@ -431,6 +431,7 @@ func NewStatsManager(supvCmdch MsgChannel,
 	http.HandleFunc("/stats/reset", s.handleStatsResetReq)
 	go s.run()
 	go s.runStatsDumpLogger()
+	StartCpuCollector()
 	return s, &MsgSuccess{}
 }
 
