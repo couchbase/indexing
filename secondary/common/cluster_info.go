@@ -143,6 +143,8 @@ func (c *ClusterInfoCache) Fetch() error {
 			} else if n.ClusterMembership == "inactiveAdded" {
 				// node being added (but not yet rebalanced in)
 				addNodes = append(addNodes, n)
+			} else {
+				logging.Warnf("ClsuterInfoCache: unrecognized node membership %v", n.ClusterMembership)
 			}
 		}
 		c.nodes = nodes
@@ -235,6 +237,18 @@ func (c *ClusterInfoCache) GetNodesByServiceType(srvc string) (nids []NodeId) {
 
 func (c *ClusterInfoCache) GetFailedIndexerNodes() (nodes []couchbase.Node) {
 	for _, n := range c.failedNodes {
+		for _, s := range n.Services {
+			if s == "index" {
+				nodes = append(nodes, n)
+			}
+		}
+	}
+
+	return
+}
+
+func (c *ClusterInfoCache) GetNewIndexerNodes() (nodes []couchbase.Node) {
+	for _, n := range c.addNodes {
 		for _, s := range n.Services {
 			if s == "index" {
 				nodes = append(nodes, n)

@@ -55,6 +55,7 @@ type MetadataProvider struct {
 	numExpectedWatcher int32
 	numFailedNode      int32
 	numUnhealthyNode   int32
+	numAddNode         int32
 	numWatcher         int32
 	settings           Settings
 	indexerVersion     uint64
@@ -175,11 +176,11 @@ func (o *MetadataProvider) SetTimeout(timeout int64) {
 	o.timeout = timeout
 }
 
-func (o *MetadataProvider) SetClusterStatus(numExpectedWatcher int, numFailedNode int, numUnhealthyNode int) {
+func (o *MetadataProvider) SetClusterStatus(numExpectedWatcher int, numFailedNode int, numUnhealthyNode int, numAddNode int) {
 
-	if numFailedNode > 0 || numUnhealthyNode > 0 {
-		logging.Warnf("MetadataProvider.SetClusterStatus(): healthy nodes %v failed node %v unhealthy node %v",
-			numExpectedWatcher, numFailedNode, numUnhealthyNode)
+	if numFailedNode > 0 || numUnhealthyNode > 0 || numAddNode > 0 {
+		logging.Warnf("MetadataProvider.SetClusterStatus(): healthy nodes %v failed node %v unhealthy node %v add node %v",
+			numExpectedWatcher, numFailedNode, numUnhealthyNode, numAddNode)
 	}
 
 	if numExpectedWatcher != -1 {
@@ -192,6 +193,10 @@ func (o *MetadataProvider) SetClusterStatus(numExpectedWatcher int, numFailedNod
 
 	if numUnhealthyNode != -1 {
 		atomic.StoreInt32(&o.numUnhealthyNode, int32(numUnhealthyNode))
+	}
+
+	if numAddNode != -1 {
+		atomic.StoreInt32(&o.numAddNode, int32(numAddNode))
 	}
 }
 
@@ -1055,6 +1060,9 @@ func (o *MetadataProvider) RefreshIndexerVersion() uint64 {
 	// Any unhealith node?
 	numUnhealthyNode := atomic.LoadInt32(&o.numUnhealthyNode)
 
+	// Any add node?
+	numAddNode := atomic.LoadInt32(&o.numAddNode)
+
 	// Find the version from active watchers.  This value is non-zero if
 	// metadata provider has connected to all watchers and there are no
 	// failed nodes and unhealthy nodes in the cluster.  Note that some
@@ -1065,17 +1073,20 @@ func (o *MetadataProvider) RefreshIndexerVersion() uint64 {
 		o.mutex.RLock()
 		defer o.mutex.RUnlock()
 
-		if o.allWatchersRunningNoLock() && numFailedNode == 0 && numUnhealthyNode == 0 {
+		if o.allWatchersRunningNoLock() && numFailedNode == 0 && numUnhealthyNode == 0 && numAddNode == 0 {
 			for _, watcher := range o.watchers {
+				logging.Debugf("Watcher Version %v from %v", watcher.getIndexerVersion(), watcher.getNodeAddr())
 				if fromWatcher == 0 || watcher.getIndexerVersion() < fromWatcher {
 					fromWatcher = watcher.getIndexerVersion()
 				}
 			}
 		}
-	}()
 
-	logging.Debugf("Indexer Version from metakv %v. Indexer Version from watchers %v.  Current version %v.  Num Watcher %v. Failed Node %v. Unhealthy Node %v",
-		fromMetakv, fromWatcher, atomic.LoadUint64(&o.indexerVersion), atomic.LoadInt32(&o.numExpectedWatcher), numFailedNode, numUnhealthyNode)
+		logging.Debugf("Indexer Version from metakv %v. Indexer Version from watchers %v.  Current version %v.",
+			fromMetakv, fromWatcher, atomic.LoadUint64(&o.indexerVersion))
+		logging.Debugf("Num Watcher %v. Expected Watcher %v. Failed Node %v. Unhealthy Node %v.  Add Node %v",
+			atomic.LoadInt32(&o.numWatcher), atomic.LoadInt32(&o.numExpectedWatcher), numFailedNode, numUnhealthyNode, numAddNode)
+	}()
 
 	latestVersion := atomic.LoadUint64(&o.indexerVersion)
 
