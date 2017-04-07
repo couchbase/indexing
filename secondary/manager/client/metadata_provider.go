@@ -200,6 +200,16 @@ func (o *MetadataProvider) SetClusterStatus(numExpectedWatcher int, numFailedNod
 	}
 }
 
+func (o *MetadataProvider) GetMetadataVersion() uint64 {
+
+	return o.repo.getVersion()
+}
+
+func (o *MetadataProvider) IncrementMetadataVersion() {
+
+	o.repo.incrementVersion()
+}
+
 func (o *MetadataProvider) WatchMetadata(indexAdminPort string, callback watcherCallback, numExpectedWatcher int) c.IndexerId {
 
 	o.mutex.Lock()
@@ -1476,7 +1486,7 @@ func (r *metadataRepo) listAllDefn() (map[c.IndexDefnId]*IndexMetadata, uint64) 
 		}
 	}
 
-	return result, r.version
+	return result, r.getVersion()
 }
 
 func (r *metadataRepo) listDefnWithValidInst() (map[c.IndexDefnId]*IndexMetadata, uint64) {
@@ -1513,7 +1523,7 @@ func (r *metadataRepo) listDefnWithValidInst() (map[c.IndexDefnId]*IndexMetadata
 		}
 	}
 
-	return result, r.version
+	return result, r.getVersion()
 }
 
 func (r *metadataRepo) addDefn(defn *c.IndexDefn) {
@@ -1531,7 +1541,7 @@ func (r *metadataRepo) addDefn(defn *c.IndexDefn) {
 		r.indices[defn.DefnId] = r.makeIndexMetadata(defn)
 
 		r.updateIndexMetadataNoLock(defn.DefnId)
-		r.version++
+		r.incrementVersion()
 	}
 }
 
@@ -1788,15 +1798,17 @@ func (r *metadataRepo) updateTopology(topology *IndexTopology, indexerId c.Index
 		r.cleanupOrphanDefnNoLock(indexerId, topology.Bucket)
 	}
 
-	r.version++
+	r.incrementVersion()
 }
 
 func (r *metadataRepo) incrementVersion() {
 
-	r.mutex.Lock()
-	defer r.mutex.Unlock()
+	atomic.AddUint64(&r.version, 1)
+}
 
-	r.version++
+func (r *metadataRepo) getVersion() uint64 {
+
+	return atomic.LoadUint64(&r.version)
 }
 
 func (r *metadataRepo) unmarshallAndAddDefn(content []byte) error {

@@ -91,6 +91,8 @@ type gsiKeyspace struct {
 	indexes        map[uint64]*secondaryIndex // defnID -> index
 	primaryIndexes map[uint64]*secondaryIndex
 	logPrefix      string
+	version        uint64
+	indexerVersion uint64
 }
 
 // NewGSIIndexer manage new set of indexes under namespace->keyspace,
@@ -422,24 +424,36 @@ func (gsi *gsiKeyspace) BuildIndexes(requestId string, names ...string) errors.E
 // Refresh list of indexes and scanner clients.
 func (gsi *gsiKeyspace) Refresh() errors.Error {
 	l.Tracef("%v gsiKeyspace.Refresh()", gsi.logPrefix)
-	indexes, version, err := gsi.gsiClient.Refresh()
+	indexes, version, indexerVersion, err := gsi.gsiClient.Refresh()
 	if err != nil {
 		return errors.NewError(err, "GSI Refresh()")
 	}
-	si_s := make([]*secondaryIndex, 0, len(indexes))
-	for _, index := range indexes {
-		if index.Definition.Bucket != gsi.keyspace {
-			continue
+
+	cachedVersion := atomic.LoadUint64(&gsi.version)
+	cachedIndexerVersion := atomic.LoadUint64(&gsi.indexerVersion)
+
+	// has metadata version changed?
+	if cachedVersion < version || cachedIndexerVersion < indexerVersion {
+
+		si_s := make([]*secondaryIndex, 0, len(indexes))
+		for _, index := range indexes {
+			if index.Definition.Bucket != gsi.keyspace {
+				continue
+			}
+			si, err := newSecondaryIndexFromMetaData(gsi, indexerVersion, index)
+			if err != nil {
+				return err
+			}
+			si_s = append(si_s, si)
 		}
-		si, err := newSecondaryIndexFromMetaData(gsi, version, index)
-		if err != nil {
+		if err := gsi.setIndexes(si_s); err != nil {
 			return err
 		}
-		si_s = append(si_s, si)
+
+		atomic.StoreUint64(&gsi.version, version)
+		atomic.StoreUint64(&gsi.indexerVersion, indexerVersion)
 	}
-	if err := gsi.setIndexes(si_s); err != nil {
-		return err
-	}
+
 	return nil
 }
 
