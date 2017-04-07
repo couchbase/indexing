@@ -262,6 +262,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"projector.dcp.activeVbOnly": ConfigValue{
+		true,
+		"request dcp to process active vbuckets only",
+		true,
+		false, // mutable
+		false, // case-insensitive
+	},
 	// projector adminport parameters
 	"projector.adminport.name": ConfigValue{
 		"projector.adminport",
