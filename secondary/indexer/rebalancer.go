@@ -814,7 +814,7 @@ func (r *Rebalancer) computeProgress() (progress float64) {
 		if state == c.TransferTokenCommit || state == c.TransferTokenDeleted {
 			totalProgress += 100
 		} else {
-			totalProgress = getBuildProgressFromStatus(statusResp, tt.IndexInst.Defn.DefnId)
+			totalProgress += getBuildProgressFromStatus(statusResp, tt.IndexInst.Defn.DefnId)
 		}
 	}
 
