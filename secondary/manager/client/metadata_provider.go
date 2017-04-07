@@ -1068,7 +1068,7 @@ func (o *MetadataProvider) RefreshIndexerVersion() uint64 {
 	// failed nodes and unhealthy nodes in the cluster.  Note that some
 	// watchers could be disconnected when this method is called, but metadata provider
 	// would have gotten the indexer version during initialization.
-	fromWatcher := uint64(0)
+	fromWatcher := uint64(math.MaxUint64)
 	func() {
 		o.mutex.RLock()
 		defer o.mutex.RUnlock()
@@ -1076,10 +1076,12 @@ func (o *MetadataProvider) RefreshIndexerVersion() uint64 {
 		if o.allWatchersRunningNoLock() && numFailedNode == 0 && numUnhealthyNode == 0 && numAddNode == 0 {
 			for _, watcher := range o.watchers {
 				logging.Debugf("Watcher Version %v from %v", watcher.getIndexerVersion(), watcher.getNodeAddr())
-				if fromWatcher == 0 || watcher.getIndexerVersion() < fromWatcher {
+				if watcher.getIndexerVersion() < fromWatcher {
 					fromWatcher = watcher.getIndexerVersion()
 				}
 			}
+		} else {
+			fromWatcher = 0
 		}
 
 		logging.Debugf("Indexer Version from metakv %v. Indexer Version from watchers %v.  Current version %v.",
