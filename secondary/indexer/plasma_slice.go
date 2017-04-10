@@ -1258,12 +1258,6 @@ func (mdb *plasmaSlice) String() string {
 }
 
 func tryDeleteplasmaSlice(mdb *plasmaSlice) {
-	// Reclaim all readers
-	numReaders := mdb.sysconf["plasma.numReaders"].Int()
-	for i := 0; i < numReaders; i++ {
-		<-mdb.readers
-	}
-
 	//cleanup the disk directory
 	if err := os.RemoveAll(mdb.path); err != nil {
 		logging.Errorf("plasmaSlice::Destroy Error Cleaning Up Slice Id %v, "+
