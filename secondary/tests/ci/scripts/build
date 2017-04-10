@@ -3,24 +3,9 @@
 export PATH=$PATH:~/bin
 export WORKSPACE="/opt/build"
 
-refresh() {
-  sd="$WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/tests/ci/scripts"
-  cp $sd/build ~/bin
-  cp $sd/common_test.go ~/bin
-  cp $sd/dobuild ~/bin
-  cp $sd/domain ~/bin
-  cp $sd/dotest ~/bin
-  cp $sd/dotiming ~/bin
-  cp $sd/dowatch ~/bin
-  cp $sd/kick ~/bin
-  cp $sd/perfsanity_test.go ~/bin
-  cp $sd/perfstat.go ~/bin
-  cp $sd/redo ~/bin
-}
-
 while true; do
   domain
-  refresh
+  cp -r $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/tests/ci/scripts/* ~/bin/
   sleep 600
 done
 
