@@ -2,10 +2,10 @@ package randdocs
 
 import "crypto/rand"
 import rnd "math/rand"
-import "github.com/couchbase/go-couchbase"
 import "fmt"
 import "sync"
 import "runtime"
+import "github.com/couchbase/indexing/secondary/common"
 
 type Config struct {
 	ClusterAddr   string
@@ -33,16 +33,7 @@ func randString(n int) string {
 func Run(cfg Config) error {
 	runtime.GOMAXPROCS(cfg.Threads)
 
-	conn, err := couchbase.Connect(fmt.Sprintf("http://%s", cfg.ClusterAddr))
-	if err != nil {
-		return err
-	}
-
-	p, err := conn.GetPool("default")
-	if err != nil {
-		return err
-	}
-	b, err := p.GetBucket(cfg.Bucket)
+	b, err := common.ConnectBucket(cfg.ClusterAddr, "default", cfg.Bucket)
 	if err != nil {
 		return err
 	}
