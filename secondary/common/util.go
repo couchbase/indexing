@@ -17,6 +17,7 @@ import "reflect"
 import "unsafe"
 import "regexp"
 import "time"
+import "math/big"
 
 import "github.com/couchbase/cbauth"
 import "github.com/couchbase/indexing/secondary/dcp"
@@ -853,4 +854,11 @@ func DiskUsage(dir string) (int64, error) {
 	}
 
 	return sz, nil
+}
+
+func GenNextBiggerKey(b []byte) []byte {
+	var x big.Int
+	x.SetBytes(b)
+	x.Add(&x, big.NewInt(1))
+	return x.Bytes()
 }
