@@ -943,6 +943,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.plasma.mainIndex.maxLSSFragmentation": ConfigValue{
+		40,
+		"Desired LSS fragmentation percent",
+		40,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.plasma.mainIndex.LSSFragmentation": ConfigValue{
 		30,
 		"Desired LSS fragmentation percent",
@@ -975,6 +982,13 @@ var SystemConfig = Config{
 		4,
 		"Maximum number of page segments on LSS for a page",
 		4,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.backIndex.maxLSSFragmentation": ConfigValue{
+		40,
+		"Desired LSS fragmentation percent",
+		40,
 		false, // mutable
 		false, // case-insensitive
 	},
@@ -1178,6 +1192,13 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.settings.moi.recovery.max_rollbacks": ConfigValue{
+		2,
+		"Maximum number of committed rollback points",
+		2,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.settings.plasma.recovery.max_rollbacks": ConfigValue{
 		2,
 		"Maximum number of committed rollback points",
 		2,
