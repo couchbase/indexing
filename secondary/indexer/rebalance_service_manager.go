@@ -138,6 +138,7 @@ func NewRebalanceMgr(supvCmdch MsgChannel, supvMsgch MsgChannel, config c.Config
 
 	mgr.nodeInfo = &service.NodeInfo{
 		NodeID: service.NodeID(config["nodeuuid"].String()),
+		Priority: service.Priority(c.INDEXER_CUR_VERSION),
 	}
 
 	mgr.servers = append(mgr.servers, mgr.nodeInfo.NodeID)

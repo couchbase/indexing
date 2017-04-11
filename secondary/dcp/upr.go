@@ -28,6 +28,8 @@ var ErrorTimeoutDcpStats = errors.New("dcp.timeoutDcpStats")
 // ErrorClosed
 var ErrorClosed = errors.New("dcp.closed")
 
+const DCP_ADD_STREAM_ACTIVE_VB_ONLY = uint32(0x10) // 16
+
 // FailoverLog for list of vbuckets.
 type FailoverLog map[uint16]memcached.FailoverLog
 
@@ -114,6 +116,7 @@ type DcpFeed struct {
 	logPrefix string
 	// config
 	numConnections int
+	activeVbOnly   bool
 }
 
 // StartDcpFeed creates and starts a new Dcp feed.
@@ -158,6 +161,8 @@ func (b *Bucket) StartDcpFeedOver(
 		logPrefix: fmt.Sprintf("DCP[%v]", name),
 	}
 	feed.numConnections = config["numConnections"].(int)
+	feed.activeVbOnly = config["activeVbOnly"].(bool)
+
 	feed.C = feed.output
 	if feed.connectToNodes(kvaddrs, opaque, config) != nil {
 		return nil, ErrorInvalidBucket
@@ -180,6 +185,11 @@ const (
 func (feed *DcpFeed) DcpRequestStream(
 	vb uint16, opaque uint16, flags uint32,
 	vbuuid, startSequence, endSequence, snapStart, snapEnd uint64) error {
+
+	// only request active vbucket
+	if feed.activeVbOnly {
+		flags = flags | DCP_ADD_STREAM_ACTIVE_VB_ONLY
+	}
 
 	respch := make(chan []interface{}, 1)
 	cmd := []interface{}{

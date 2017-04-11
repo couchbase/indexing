@@ -13,20 +13,20 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"github.com/couchbase/indexing/secondary/collatejson"
-	"github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/logging"
-	p "github.com/couchbase/indexing/secondary/pipeline"
-	"github.com/couchbase/indexing/secondary/platform"
-	protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
-	"github.com/couchbase/indexing/secondary/queryport"
-	"github.com/golang/protobuf/proto"
 	"net"
 	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/couchbase/indexing/secondary/collatejson"
+	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
+	p "github.com/couchbase/indexing/secondary/pipeline"
+	protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
+	"github.com/couchbase/indexing/secondary/queryport"
+	"github.com/golang/protobuf/proto"
 )
 
 // Errors
@@ -341,7 +341,7 @@ type scanCoordinator struct {
 	indexInstMap  common.IndexInstMap
 	indexPartnMap IndexPartnMap
 
-	reqCounter platform.AlignedUint64
+	reqCounter uint64
 	config     common.ConfigHolder
 
 	stats IndexerStatsHolder
@@ -372,7 +372,7 @@ func NewScanCoordinator(supvCmdch MsgChannel, supvMsgch MsgChannel,
 		lastSnapshot:     make(map[common.IndexInstId]IndexSnapshot),
 		snapshotNotifych: snapshotNotifych,
 		logPrefix:        "ScanCoordinator",
-		reqCounter:       platform.NewAlignedUint64(0),
+		reqCounter:       0,
 	}
 
 	s.config.Store(config)
@@ -508,7 +508,7 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 
 	var indexInst *common.IndexInst
 	r = new(ScanRequest)
-	r.ScanId = platform.AddUint64(&s.reqCounter, 1)
+	r.ScanId = atomic.AddUint64(&s.reqCounter, 1)
 	r.LogPrefix = fmt.Sprintf("SCAN##%d", r.ScanId)
 
 	cfg := s.config.Load()

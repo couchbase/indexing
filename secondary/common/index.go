@@ -476,6 +476,14 @@ func IsEquivalentIndex(d1, d2 *IndexDefn) bool {
 		}
 	}
 
+	for _, b1 := range d1.Desc {
+		for _, b2 := range d2.Desc {
+			if b1 != b2 {
+				return false
+			}
+		}
+	}
+
 	return true
 }
 

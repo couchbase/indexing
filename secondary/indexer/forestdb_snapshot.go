@@ -12,12 +12,13 @@ package indexer
 import (
 	"errors"
 	"fmt"
+	"math"
+	"sync/atomic"
+	"time"
+
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/fdb"
 	"github.com/couchbase/indexing/secondary/logging"
-	"github.com/couchbase/indexing/secondary/platform"
-	"math"
-	"time"
 )
 
 var FORESTDB_INMEMSEQ = forestdb.SeqNum(math.MaxUint64)
@@ -82,20 +83,20 @@ func (s *fdbSnapshot) Create() error {
 	}
 
 	s.slice.IncrRef()
-	platform.StoreInt32(&s.refCount, 1)
+	atomic.StoreInt32(&s.refCount, 1)
 
 	return nil
 }
 
 func (s *fdbSnapshot) Open() error {
-	platform.AddInt32(&s.refCount, int32(1))
+	atomic.AddInt32(&s.refCount, int32(1))
 
 	return nil
 }
 
 func (s *fdbSnapshot) IsOpen() bool {
 
-	count := platform.LoadInt32(&s.refCount)
+	count := atomic.LoadInt32(&s.refCount)
 	return count > 0
 }
 
@@ -122,7 +123,7 @@ func (s *fdbSnapshot) MainIndexSeqNum() forestdb.SeqNum {
 //Close the snapshot
 func (s *fdbSnapshot) Close() error {
 
-	count := platform.AddInt32(&s.refCount, int32(-1))
+	count := atomic.AddInt32(&s.refCount, int32(-1))
 
 	if count < 0 {
 		logging.Errorf("ForestDBSnapshot::Close Close operation requested " +

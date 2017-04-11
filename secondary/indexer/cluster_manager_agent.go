@@ -216,6 +216,11 @@ func (c *clustMgrAgent) handleGetGlobalTopology(cmd Message) {
 			continue
 		}
 
+		//init Desc for pre-Spock indexes
+		if idxDefn.Desc == nil {
+			idxDefn.Desc = make([]bool, len(idxDefn.SecExprs))
+		}
+
 		idxInst := common.IndexInst{InstId: common.IndexInstId(inst.InstId),
 			Defn:      idxDefn,
 			State:     common.IndexState(inst.State),

@@ -70,6 +70,7 @@ var (
 	ErrUnknownBucket            = errors.New("Unknown Bucket")
 	ErrIndexerNotActive         = errors.New("Indexer Not Active")
 	ErrInvalidMetadata          = errors.New("Invalid Metadata")
+	ErrBucketEphemeral          = errors.New("Ephemeral Buckets Must Use MOI Storage")
 )
 
 type indexer struct {
@@ -1010,6 +1011,32 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 		return
 	}
 
+	ephemeral, err := IsEphemeral(idx.config["clusterAddr"].String(), indexInst.Defn.Bucket)
+	if err != nil {
+		errStr := fmt.Sprintf("Cannot Query Bucket Type of %v", indexInst.Defn.Bucket)
+		logging.Errorf(errStr)
+		if clientCh != nil {
+			clientCh <- &MsgError{
+				err: Error{severity: FATAL,
+					cause:    errors.New(errStr),
+					category: INDEXER}}
+
+		}
+		return
+	}
+	if ephemeral && common.GetStorageMode() != common.MOI {
+		logging.Errorf("Indexer::handleCreateIndex \n\t Bucket %v is Ephemeral but GSI storage is not MOI")
+		if clientCh != nil {
+			clientCh <- &MsgError{
+				err: Error{code: ERROR_BUCKET_EPHEMERAL,
+					severity: FATAL,
+					cause:    ErrBucketEphemeral,
+					category: INDEXER}}
+
+		}
+		return
+	}
+
 	if (idx.rebalanceRunning || idx.rebalanceToken != nil) && (indexInst.Defn.InstVersion == 0) {
 
 		errStr := fmt.Sprintf("Indexer Cannot Process Create Index - Rebalance In Progress")
@@ -1024,7 +1051,6 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 
 		}
 		return
-
 	}
 
 	initState := idx.getStreamBucketState(common.INIT_STREAM, indexInst.Defn.Bucket)
@@ -1088,7 +1114,6 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 	idx.stats.AddIndex(indexInst.InstId, indexInst.Defn.Bucket, indexInst.Defn.Name, indexInst.ReplicaId)
 	//allocate partition/slice
 	var partnInstMap PartitionInstMap
-	var err error
 	if partnInstMap, err = idx.initPartnInstance(indexInst, clientCh); err != nil {
 		return
 	}
@@ -4208,9 +4233,14 @@ func NewSlice(id SliceId, indInst *common.IndexInst,
 	}
 	path := filepath.Join(storage_dir, IndexPath(indInst, id))
 
+	ephemeral, err := IsEphemeral(conf["clusterAddr"].String(), indInst.Defn.Bucket)
+	if err != nil {
+		logging.Errorf("Indexer::NewSlice Failed to check bucket type ephemeral: %v\n", err)
+		return nil, err
+	}
 	switch indInst.Defn.Using {
 	case common.MemDB, common.MemoryOptimized:
-		slice, err = NewMemDBSlice(path, id, indInst.Defn, indInst.InstId, indInst.Defn.IsPrimary, conf, stats.indexes[indInst.InstId])
+		slice, err = NewMemDBSlice(path, id, indInst.Defn, indInst.InstId, indInst.Defn.IsPrimary, !ephemeral, conf, stats.indexes[indInst.InstId])
 	case common.ForestDB:
 		slice, err = NewForestDBSlice(path, id, indInst.Defn, indInst.InstId, indInst.Defn.IsPrimary, conf, stats.indexes[indInst.InstId])
 	case common.PlasmaDB:

@@ -1,15 +1,20 @@
 package queryport
 
-import "fmt"
-import "net"
-import "sync"
-import "time"
-import "io"
-import "github.com/couchbase/indexing/secondary/platform"
-import "github.com/couchbase/indexing/secondary/logging"
-import c "github.com/couchbase/indexing/secondary/common"
-import protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
-import "github.com/couchbase/indexing/secondary/transport"
+import (
+	"fmt"
+	"io"
+	"net"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/couchbase/indexing/secondary/logging"
+
+	c "github.com/couchbase/indexing/secondary/common"
+
+	protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
+	"github.com/couchbase/indexing/secondary/transport"
+)
 
 // RequestHandler shall interpret the request message
 // from client and post response message(s) on `respch`
@@ -42,7 +47,7 @@ type Server struct {
 	writeDeadline  time.Duration
 	streamChanSize int
 	logPrefix      string
-	nConnections   platform.AlignedInt64
+	nConnections   int64
 }
 
 type ServerStats struct {
@@ -62,7 +67,7 @@ func NewServer(
 		writeDeadline:  time.Duration(config["writeDeadline"].Int()),
 		streamChanSize: config["streamChanSize"].Int(),
 		logPrefix:      fmt.Sprintf("[Queryport %q]", laddr),
-		nConnections:   platform.NewAlignedInt64(0),
+		nConnections:   0,
 	}
 	if s.lis, err = net.Listen("tcp", laddr); err != nil {
 		logging.Errorf("%v failed starting %v !!\n", s.logPrefix, err)
@@ -76,7 +81,7 @@ func NewServer(
 
 func (s *Server) Statistics() ServerStats {
 	return ServerStats{
-		Connections: platform.LoadInt64(&s.nConnections),
+		Connections: atomic.LoadInt64(&s.nConnections),
 	}
 }
 
@@ -130,9 +135,9 @@ func (s *Server) listener() {
 // handle connection request. connection might be kept open in client's
 // connection pool.
 func (s *Server) handleConnection(conn net.Conn) {
-	platform.AddInt64(&s.nConnections, 1)
+	atomic.AddInt64(&s.nConnections, 1)
 	defer func() {
-		platform.AddInt64(&s.nConnections, -1)
+		atomic.AddInt64(&s.nConnections, -1)
 	}()
 
 	raddr := conn.RemoteAddr()

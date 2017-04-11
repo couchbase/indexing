@@ -364,7 +364,7 @@ func (api *restServer) doBuildOne(w http.ResponseWriter, request *http.Request) 
 
 //GET    /api/index/{id}
 func (api *restServer) doGetAll(w http.ResponseWriter, request *http.Request) {
-	indexes, _, err := api.client.Refresh()
+	indexes, _, _, err := api.client.Refresh()
 	if err != nil {
 		msg := `cannot refresh metadata: %v`
 		http.Error(w, jsonstr(msg, err), http.StatusBadRequest)
@@ -1190,7 +1190,7 @@ func (api *restServer) getIndex(path string) (*mclient.IndexMetadata, string) {
 		return nil, jsonstr(`invalid index id, ParseUint failed %v`, err)
 	}
 
-	indexes, _, err := api.client.Refresh()
+	indexes, _, _, err := api.client.Refresh()
 	if err != nil {
 		return nil, jsonstr(`cannot refresh metadata: %v`, err)
 	}

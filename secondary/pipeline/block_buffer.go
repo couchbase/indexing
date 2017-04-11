@@ -3,8 +3,8 @@ package pipeline
 import (
 	"encoding/binary"
 	"errors"
-	"github.com/couchbase/indexing/secondary/platform"
 	"sync"
+	"sync/atomic"
 	"unsafe"
 )
 
@@ -26,7 +26,7 @@ func SetupBlockPool(sz int) {
 		},
 	}
 
-	platform.StorePointer(&blockPool, unsafe.Pointer(p))
+	atomic.StorePointer(&blockPool, unsafe.Pointer(p))
 }
 
 func init() {
@@ -34,7 +34,7 @@ func init() {
 }
 
 func getBlockPool() *sync.Pool {
-	return (*sync.Pool)(platform.LoadPointer(&blockPool))
+	return (*sync.Pool)(atomic.LoadPointer(&blockPool))
 }
 
 func GetBlock() *[]byte {

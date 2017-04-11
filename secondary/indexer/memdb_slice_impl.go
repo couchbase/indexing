@@ -15,14 +15,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/common/queryutil"
-	"github.com/couchbase/indexing/secondary/logging"
-	"github.com/couchbase/indexing/secondary/memdb"
-	"github.com/couchbase/indexing/secondary/memdb/nodetable"
-	"github.com/couchbase/indexing/secondary/memdb/skiplist"
-	"github.com/couchbase/indexing/secondary/platform"
-	"github.com/couchbase/nitro/mm"
 	"hash/crc32"
 	"io/ioutil"
 	"math"
@@ -31,8 +23,17 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unsafe"
+
+	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/common/queryutil"
+	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/memdb"
+	"github.com/couchbase/indexing/secondary/memdb/nodetable"
+	"github.com/couchbase/indexing/secondary/memdb/skiplist"
+	"github.com/couchbase/nitro/mm"
 )
 
 const (
@@ -110,13 +111,13 @@ func resizeArrayBuf(arrayBuf []byte, keylen int) []byte {
 	return arrayBuf
 }
 
-var totalMemDBItems = platform.NewAlignedInt64(0)
+var totalMemDBItems int64 = 0
 
 type memdbSlice struct {
-	get_bytes, insert_bytes, delete_bytes platform.AlignedInt64
-	flushedCount                          platform.AlignedUint64
-	committedCount                        platform.AlignedUint64
-	qCount                                platform.AlignedInt64
+	get_bytes, insert_bytes, delete_bytes int64
+	flushedCount                          uint64
+	committedCount                        uint64
+	qCount                                int64
 
 	path string
 	id   SliceId
@@ -151,8 +152,9 @@ type memdbSlice struct {
 
 	fatalDbErr error
 
-	numWriters   int
-	maxRollbacks int
+	numWriters     int
+	maxRollbacks   int
+	hasPersistence bool
 
 	totalFlushTime  time.Duration
 	totalCommitTime time.Duration
@@ -172,7 +174,7 @@ type memdbSlice struct {
 }
 
 func NewMemDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
-	idxInstId common.IndexInstId, isPrimary bool,
+	idxInstId common.IndexInstId, isPrimary bool, hasPersistance bool,
 	sysconf common.Config, idxStats *IndexStats) (*memdbSlice, error) {
 
 	info, err := os.Stat(path)
@@ -183,11 +185,11 @@ func NewMemDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	slice := &memdbSlice{}
 	slice.idxStats = idxStats
 
-	slice.get_bytes = platform.NewAlignedInt64(0)
-	slice.insert_bytes = platform.NewAlignedInt64(0)
-	slice.delete_bytes = platform.NewAlignedInt64(0)
-	slice.flushedCount = platform.NewAlignedUint64(0)
-	slice.committedCount = platform.NewAlignedUint64(0)
+	slice.get_bytes = 0
+	slice.insert_bytes = 0
+	slice.delete_bytes = 0
+	slice.flushedCount = 0
+	slice.committedCount = 0
 	slice.sysconf = sysconf
 	slice.path = path
 	slice.idxInstId = idxInstId
@@ -215,6 +217,7 @@ func NewMemDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	slice.stopCh = make([]DoneChannel, slice.numWriters)
 
 	slice.isPrimary = isPrimary
+	slice.hasPersistence = hasPersistance
 	slice.initStores()
 
 	// Array related initialization
@@ -224,7 +227,7 @@ func NewMemDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	}
 
 	logging.Infof("MemDBSlice:NewMemDBSlice Created New Slice Id %v IndexInstId %v "+
-		"WriterThreads %v", sliceId, idxInstId, slice.numWriters)
+		"WriterThreads %v Persistence %v", sliceId, idxInstId, slice.numWriters, slice.hasPersistence)
 
 	for i := 0; i < slice.numWriters; i++ {
 		slice.stopCh[i] = make(DoneChannel)
@@ -289,7 +292,7 @@ func (mdb *memdbSlice) Insert(key []byte, docid []byte, meta *MutationMeta) erro
 		key:   key,
 		docid: docid,
 	}
-	platform.AddInt64(&mdb.qCount, 1)
+	atomic.AddInt64(&mdb.qCount, 1)
 	mdb.cmdCh[int(meta.vbucket)%mdb.numWriters] <- mut
 	mdb.idxStats.numDocsFlushQueued.Add(1)
 	return mdb.fatalDbErr
@@ -297,7 +300,7 @@ func (mdb *memdbSlice) Insert(key []byte, docid []byte, meta *MutationMeta) erro
 
 func (mdb *memdbSlice) Delete(docid []byte, meta *MutationMeta) error {
 	mdb.idxStats.numDocsFlushQueued.Add(1)
-	platform.AddInt64(&mdb.qCount, 1)
+	atomic.AddInt64(&mdb.qCount, 1)
 	mdb.cmdCh[int(meta.vbucket)%mdb.numWriters] <- indexMutation{op: opDelete, docid: docid}
 	return mdb.fatalDbErr
 }
@@ -332,7 +335,7 @@ loop:
 
 			mdb.idxStats.numItemsFlushed.Add(int64(nmut))
 			mdb.idxStats.numDocsIndexed.Add(1)
-			platform.AddInt64(&mdb.qCount, -1)
+			atomic.AddInt64(&mdb.qCount, -1)
 
 		case <-mdb.stopCh[workerId]:
 			mdb.stopCh[workerId] <- true
@@ -372,7 +375,7 @@ func (mdb *memdbSlice) insertPrimaryIndex(key []byte, docid []byte, workerId int
 	t0 := time.Now()
 	mdb.main[workerId].Put(entry)
 	mdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
-	platform.AddInt64(&mdb.insert_bytes, int64(len(entry)))
+	atomic.AddInt64(&mdb.insert_bytes, int64(len(entry)))
 	mdb.isDirty = true
 	return 1
 }
@@ -395,7 +398,7 @@ func (mdb *memdbSlice) insertSecIndex(key []byte, docid []byte, workerId int) in
 
 	newNode := mdb.main[workerId].Put2(entry)
 	mdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
-	platform.AddInt64(&mdb.insert_bytes, int64(len(docid)+len(entry)))
+	atomic.AddInt64(&mdb.insert_bytes, int64(len(docid)+len(entry)))
 
 	// Insert succeeded. Failure means same entry already exist.
 	if newNode != nil {
@@ -403,7 +406,7 @@ func (mdb *memdbSlice) insertSecIndex(key []byte, docid []byte, workerId int) in
 			t0 := time.Now()
 			mdb.main[workerId].DeleteNode((*skiplist.Node)(oldNode))
 			mdb.idxStats.Timings.stKVDelete.Put(time.Since(t0))
-			platform.AddInt64(&mdb.delete_bytes, int64(len(docid)))
+			atomic.AddInt64(&mdb.delete_bytes, int64(len(docid)))
 		}
 	}
 
@@ -512,7 +515,7 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 			if newNode != nil { // Ignore if duplicate key
 				list.Add(newNode)
 				mdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
-				platform.AddInt64(&mdb.insert_bytes, int64(len(entry)))
+				atomic.AddInt64(&mdb.insert_bytes, int64(len(entry)))
 			}
 		}
 	}
@@ -553,7 +556,7 @@ func (mdb *memdbSlice) deletePrimaryIndex(docid []byte, workerId int) (nmut int)
 	itm := entry.Bytes()
 	mdb.main[workerId].Delete(itm)
 	mdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
-	platform.AddInt64(&mdb.delete_bytes, int64(len(entry.Bytes())))
+	atomic.AddInt64(&mdb.delete_bytes, int64(len(entry.Bytes())))
 	mdb.isDirty = true
 	return 1
 
@@ -567,7 +570,7 @@ func (mdb *memdbSlice) deleteSecIndex(docid []byte, workerId int) int {
 	success, node := mdb.back[workerId].Remove(lookupentry)
 	if success {
 		mdb.idxStats.Timings.stKVDelete.Put(time.Since(t0))
-		platform.AddInt64(&mdb.delete_bytes, int64(len(docid)))
+		atomic.AddInt64(&mdb.delete_bytes, int64(len(docid)))
 		t0 = time.Now()
 		mdb.main[workerId].DeleteNode((*skiplist.Node)(node))
 		mdb.idxStats.Timings.stKVDelete.Put(time.Since(t0))
@@ -589,7 +592,7 @@ func (mdb *memdbSlice) deleteSecArrayIndex(docid []byte, workerId int) (nmut int
 	t0 := time.Now()
 	mdb.back[workerId].Remove(lookupentry)
 	mdb.idxStats.Timings.stKVDelete.Put(time.Since(t0))
-	platform.AddInt64(&mdb.delete_bytes, int64(len(lookupentry)))
+	atomic.AddInt64(&mdb.delete_bytes, int64(len(lookupentry)))
 
 	// Delete each entry in oldEntriesBytes
 	for _, item := range oldEntriesBytes {
@@ -658,7 +661,7 @@ func (mdb *memdbSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 
 	s.Open()
 	s.slice.IncrRef()
-	if s.committed {
+	if s.committed && mdb.hasPersistence {
 		s.info.MainSnap.Open()
 		go mdb.doPersistSnapshot(s)
 	}
@@ -676,8 +679,8 @@ func (mdb *memdbSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot) {
 	var concurrency int = 1
 
-	if platform.CompareAndSwapInt32(&mdb.isPersistorActive, 0, 1) {
-		defer platform.StoreInt32(&mdb.isPersistorActive, 0)
+	if atomic.CompareAndSwapInt32(&mdb.isPersistorActive, 0, 1) {
+		defer atomic.StoreInt32(&mdb.isPersistorActive, 0)
 
 		t0 := time.Now()
 		dir := newSnapshotPath(mdb.path)
@@ -686,7 +689,7 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot) {
 		os.RemoveAll(tmpdir)
 		mdb.confLock.RLock()
 		maxThreads := mdb.sysconf["settings.moi.persistence_threads"].Int()
-		total := platform.LoadInt64(&totalMemDBItems)
+		total := atomic.LoadInt64(&totalMemDBItems)
 		indexCount := mdb.GetCommittedCount()
 		// Compute number of workers to be used for taking backup
 		if total > 0 {
@@ -795,14 +798,14 @@ func (mdb *memdbSlice) GetSnapshots() ([]SnapshotInfo, error) {
 }
 
 func (mdb *memdbSlice) setCommittedCount() {
-	prev := platform.LoadUint64(&mdb.committedCount)
+	prev := atomic.LoadUint64(&mdb.committedCount)
 	curr := mdb.mainstore.ItemsCount()
-	platform.AddInt64(&totalMemDBItems, int64(curr)-int64(prev))
-	platform.StoreUint64(&mdb.committedCount, uint64(curr))
+	atomic.AddInt64(&totalMemDBItems, int64(curr)-int64(prev))
+	atomic.StoreUint64(&mdb.committedCount, uint64(curr))
 }
 
 func (mdb *memdbSlice) GetCommittedCount() uint64 {
-	return platform.LoadUint64(&mdb.committedCount)
+	return atomic.LoadUint64(&mdb.committedCount)
 }
 
 func (mdb *memdbSlice) resetStores() {
@@ -826,7 +829,7 @@ func (mdb *memdbSlice) Rollback(info SnapshotInfo) error {
 	//are no flush workers before calling rollback.
 	mdb.waitPersist()
 
-	qc := platform.LoadInt64(&mdb.qCount)
+	qc := atomic.LoadInt64(&mdb.qCount)
 	if qc > 0 {
 		common.CrashOnError(errors.New("Slice Invariant Violation - rollback with pending mutations"))
 	}
@@ -960,7 +963,7 @@ func (mdb *memdbSlice) NewSnapshot(ts *common.TsVbuuid, commit bool) (SnapshotIn
 
 	mdb.waitPersist()
 
-	qc := platform.LoadInt64(&mdb.qCount)
+	qc := atomic.LoadInt64(&mdb.qCount)
 	if qc > 0 {
 		common.CrashOnError(errors.New("Slice Invariant Violation - commit with pending mutations"))
 	}
@@ -1006,8 +1009,8 @@ func (mdb *memdbSlice) Close() {
 	mdb.lock.Lock()
 	defer mdb.lock.Unlock()
 
-	prev := platform.LoadUint64(&mdb.committedCount)
-	platform.AddInt64(&totalMemDBItems, -int64(prev))
+	prev := atomic.LoadUint64(&mdb.committedCount)
+	atomic.AddInt64(&totalMemDBItems, -int64(prev))
 
 	logging.Infof("MemDBSlice::Close Closing Slice Id %v, IndexInstId %v, "+
 		"IndexDefnId %v", mdb.idxInstId, mdb.idxDefnId, mdb.id)
@@ -1151,12 +1154,12 @@ func tryClosememdbSlice(mdb *memdbSlice) {
 }
 
 func (mdb *memdbSlice) getCmdsCount() int {
-	qc := platform.LoadInt64(&mdb.qCount)
+	qc := atomic.LoadInt64(&mdb.qCount)
 	return int(qc)
 }
 
 func (mdb *memdbSlice) logWriterStat() {
-	count := platform.AddUint64(&mdb.flushedCount, 1)
+	count := atomic.AddUint64(&mdb.flushedCount, 1)
 	if (count%10000 == 0) || count == 1 {
 		logging.Infof("logWriterStat:: %v "+
 			"FlushedCount %v QueuedCount %v", mdb.idxInstId,
@@ -1185,14 +1188,14 @@ func (s *memdbSnapshot) Create() error {
 }
 
 func (s *memdbSnapshot) Open() error {
-	platform.AddInt32(&s.refCount, int32(1))
+	atomic.AddInt32(&s.refCount, int32(1))
 
 	return nil
 }
 
 func (s *memdbSnapshot) IsOpen() bool {
 
-	count := platform.LoadInt32(&s.refCount)
+	count := atomic.LoadInt32(&s.refCount)
 	return count > 0
 }
 
@@ -1215,7 +1218,7 @@ func (s *memdbSnapshot) Timestamp() *common.TsVbuuid {
 //Close the snapshot
 func (s *memdbSnapshot) Close() error {
 
-	count := platform.AddInt32(&s.refCount, int32(-1))
+	count := atomic.AddInt32(&s.refCount, int32(-1))
 
 	if count < 0 {
 		logging.Errorf("MemDBSnapshot::Close Close operation requested " +

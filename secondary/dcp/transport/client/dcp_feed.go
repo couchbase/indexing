@@ -722,6 +722,7 @@ type DcpStream struct {
 type DcpEvent struct {
 	Opcode     transport.CommandCode // Type of event
 	Status     transport.Status      // Response status
+	Datatype   uint8                 // Datatype per binary protocol
 	VBucket    uint16                // VBucket this event applies to
 	Opaque     uint16                // 16 MSB of opaque
 	VBuuid     uint64                // This field is set by downstream
@@ -749,11 +750,12 @@ type DcpEvent struct {
 
 func newDcpEvent(rq *transport.MCRequest, stream *DcpStream) *DcpEvent {
 	event := &DcpEvent{
-		Cas:     rq.Cas,
-		Opcode:  rq.Opcode,
-		VBucket: stream.Vbucket,
-		VBuuid:  stream.Vbuuid,
-		Ctime:   time.Now().UnixNano(),
+		Cas:      rq.Cas,
+		Datatype: rq.Datatype,
+		Opcode:   rq.Opcode,
+		VBucket:  stream.Vbucket,
+		VBuuid:   stream.Vbuuid,
+		Ctime:    time.Now().UnixNano(),
 	}
 	event.Key = make([]byte, len(rq.Key))
 	copy(event.Key, rq.Key)

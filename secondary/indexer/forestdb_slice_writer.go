@@ -14,17 +14,19 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/common/queryutil"
-	"github.com/couchbase/indexing/secondary/fdb"
-	"github.com/couchbase/indexing/secondary/logging"
-	"github.com/couchbase/indexing/secondary/natsort"
-	"github.com/couchbase/indexing/secondary/platform"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+
+	"sync/atomic"
+
+	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/common/queryutil"
+	"github.com/couchbase/indexing/secondary/fdb"
+	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/natsort"
 )
 
 var (
@@ -50,12 +52,12 @@ func NewForestDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	slice := &fdbSlice{}
 	slice.idxStats = idxStats
 
-	slice.get_bytes = platform.NewAlignedInt64(0)
-	slice.insert_bytes = platform.NewAlignedInt64(0)
-	slice.delete_bytes = platform.NewAlignedInt64(0)
-	slice.extraSnapDataSize = platform.NewAlignedInt64(0)
-	slice.flushedCount = platform.NewAlignedUint64(0)
-	slice.committedCount = platform.NewAlignedUint64(0)
+	slice.get_bytes = 0
+	slice.insert_bytes = 0
+	slice.delete_bytes = 0
+	slice.extraSnapDataSize = 0
+	slice.flushedCount = 0
+	slice.committedCount = 0
 
 	config := forestdb.DefaultConfig()
 	config.SetDurabilityOpt(forestdb.DRB_ASYNC)
@@ -175,17 +177,17 @@ type indexItem struct {
 
 //fdbSlice represents a forestdb slice
 type fdbSlice struct {
-	get_bytes, insert_bytes, delete_bytes platform.AlignedInt64
+	get_bytes, insert_bytes, delete_bytes int64
 	//flushed count
-	flushedCount platform.AlignedUint64
+	flushedCount uint64
 	// persisted items count
-	committedCount platform.AlignedUint64
+	committedCount uint64
 
 	// Extra data overhead due to additional snapshots
 	// in the file. This is computed immediately after compaction.
-	extraSnapDataSize platform.AlignedInt64
+	extraSnapDataSize int64
 
-	qCount platform.AlignedInt64
+	qCount int64
 
 	path     string
 	currfile string
@@ -278,7 +280,7 @@ func (fdb *fdbSlice) Insert(rawKey []byte, docid []byte, meta *MutationMeta) err
 	}
 
 	fdb.idxStats.numDocsFlushQueued.Add(1)
-	platform.AddInt64(&fdb.qCount, 1)
+	atomic.AddInt64(&fdb.qCount, 1)
 	fdb.cmdCh <- &indexItem{key: key, rawKey: rawKey, docid: docid}
 	return fdb.fatalDbErr
 }
@@ -289,7 +291,7 @@ func (fdb *fdbSlice) Insert(rawKey []byte, docid []byte, meta *MutationMeta) err
 //it will be returned as error.
 func (fdb *fdbSlice) Delete(docid []byte, meta *MutationMeta) error {
 	fdb.idxStats.numDocsFlushQueued.Add(1)
-	platform.AddInt64(&fdb.qCount, 1)
+	atomic.AddInt64(&fdb.qCount, 1)
 	fdb.cmdCh <- docid
 	return fdb.fatalDbErr
 }
@@ -333,7 +335,7 @@ loop:
 
 			fdb.idxStats.numItemsFlushed.Add(int64(nmut))
 			fdb.idxStats.numDocsIndexed.Add(1)
-			platform.AddInt64(&fdb.qCount, -1)
+			atomic.AddInt64(&fdb.qCount, -1)
 
 		case <-fdb.stopCh[workerId]:
 			fdb.stopCh[workerId] <- true
@@ -389,7 +391,7 @@ func (fdb *fdbSlice) insertPrimaryIndex(key []byte, docid []byte, workerId int) 
 				"Skipped Key %s. Error %v", fdb.id, fdb.idxInstId, string(docid), err)
 		}
 		fdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
-		platform.AddInt64(&fdb.insert_bytes, int64(len(key)))
+		atomic.AddInt64(&fdb.insert_bytes, int64(len(key)))
 		fdb.isDirty = true
 	}
 
@@ -428,7 +430,7 @@ func (fdb *fdbSlice) insertSecIndex(key []byte, docid []byte, workerId int) (nmu
 			return
 		}
 		fdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
-		platform.AddInt64(&fdb.delete_bytes, int64(len(oldkey)))
+		atomic.AddInt64(&fdb.delete_bytes, int64(len(oldkey)))
 
 		// If a field value changed from "existing" to "missing" (ie, key = nil),
 		// we need to remove back index entry corresponding to the previous "existing" value.
@@ -442,7 +444,7 @@ func (fdb *fdbSlice) insertSecIndex(key []byte, docid []byte, workerId int) (nmu
 			}
 
 			fdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
-			platform.AddInt64(&fdb.delete_bytes, int64(len(docid)))
+			atomic.AddInt64(&fdb.delete_bytes, int64(len(docid)))
 		}
 		fdb.isDirty = true
 	}
@@ -462,7 +464,7 @@ func (fdb *fdbSlice) insertSecIndex(key []byte, docid []byte, workerId int) (nmu
 		return
 	}
 	fdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
-	platform.AddInt64(&fdb.insert_bytes, int64(len(docid)+len(key)))
+	atomic.AddInt64(&fdb.insert_bytes, int64(len(docid)+len(key)))
 
 	t0 = time.Now()
 	//set in main index
@@ -473,7 +475,7 @@ func (fdb *fdbSlice) insertSecIndex(key []byte, docid []byte, workerId int) (nmu
 		return
 	}
 	fdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
-	platform.AddInt64(&fdb.insert_bytes, int64(len(key)))
+	atomic.AddInt64(&fdb.insert_bytes, int64(len(key)))
 	fdb.isDirty = true
 
 	nmut = 1
@@ -606,7 +608,7 @@ func (fdb *fdbSlice) insertSecArrayIndex(key []byte, rawKey []byte, docid []byte
 			return
 		}
 		fdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
-		platform.AddInt64(&fdb.delete_bytes, int64(len(oldkey)))
+		atomic.AddInt64(&fdb.delete_bytes, int64(len(oldkey)))
 		nmut++
 	}
 
@@ -620,7 +622,7 @@ func (fdb *fdbSlice) insertSecArrayIndex(key []byte, rawKey []byte, docid []byte
 			return
 		}
 		fdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
-		platform.AddInt64(&fdb.insert_bytes, int64(len(key)))
+		atomic.AddInt64(&fdb.insert_bytes, int64(len(key)))
 		nmut++
 	}
 
@@ -635,7 +637,7 @@ func (fdb *fdbSlice) insertSecArrayIndex(key []byte, rawKey []byte, docid []byte
 			return
 		}
 		fdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
-		platform.AddInt64(&fdb.delete_bytes, int64(len(docid)))
+		atomic.AddInt64(&fdb.delete_bytes, int64(len(docid)))
 	} else { //set the back index entry <docid, encodedkey>
 		t0 := time.Now()
 
@@ -651,7 +653,7 @@ func (fdb *fdbSlice) insertSecArrayIndex(key []byte, rawKey []byte, docid []byte
 			return
 		}
 		fdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
-		platform.AddInt64(&fdb.insert_bytes, int64(len(docid)+len(key)))
+		atomic.AddInt64(&fdb.insert_bytes, int64(len(docid)+len(key)))
 	}
 
 	fdb.isDirty = true
@@ -698,7 +700,7 @@ func (fdb *fdbSlice) deletePrimaryIndex(docid []byte, workerId int) (nmut int) {
 		return
 	}
 	fdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
-	platform.AddInt64(&fdb.delete_bytes, int64(len(entry.Bytes())))
+	atomic.AddInt64(&fdb.delete_bytes, int64(len(entry.Bytes())))
 	fdb.isDirty = true
 
 	return 1
@@ -737,7 +739,7 @@ func (fdb *fdbSlice) deleteSecIndex(docid []byte, workerId int) (nmut int) {
 		return
 	}
 	fdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
-	platform.AddInt64(&fdb.delete_bytes, int64(len(olditm)))
+	atomic.AddInt64(&fdb.delete_bytes, int64(len(olditm)))
 
 	//delete from the back index
 	t0 = time.Now()
@@ -748,7 +750,7 @@ func (fdb *fdbSlice) deleteSecIndex(docid []byte, workerId int) (nmut int) {
 		return
 	}
 	fdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
-	platform.AddInt64(&fdb.delete_bytes, int64(len(docid)))
+	atomic.AddInt64(&fdb.delete_bytes, int64(len(docid)))
 	fdb.isDirty = true
 	return 1
 }
@@ -827,7 +829,7 @@ func (fdb *fdbSlice) deleteSecArrayIndex(docid []byte, workerId int) (nmut int) 
 			return
 		}
 		fdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
-		platform.AddInt64(&fdb.delete_bytes, int64(len(keyToBeDeleted)))
+		atomic.AddInt64(&fdb.delete_bytes, int64(len(keyToBeDeleted)))
 
 	}
 
@@ -840,7 +842,7 @@ func (fdb *fdbSlice) deleteSecArrayIndex(docid []byte, workerId int) (nmut int) 
 		return
 	}
 	fdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
-	platform.AddInt64(&fdb.delete_bytes, int64(len(docid)))
+	atomic.AddInt64(&fdb.delete_bytes, int64(len(docid)))
 	fdb.isDirty = true
 	return len(indexEntriesToBeDeleted)
 }
@@ -858,7 +860,7 @@ func (fdb *fdbSlice) getBackIndexEntry(docid []byte, workerId int) ([]byte, erro
 	t0 := time.Now()
 	kbytes, err = fdb.back[workerId].GetKV(docid)
 	fdb.idxStats.Timings.stKVGet.Put(time.Now().Sub(t0))
-	platform.AddInt64(&fdb.get_bytes, int64(len(kbytes)))
+	atomic.AddInt64(&fdb.get_bytes, int64(len(kbytes)))
 
 	//forestdb reports get in a non-existent key as an
 	//error, skip that
@@ -928,7 +930,7 @@ func (fdb *fdbSlice) setCommittedCount() {
 	t0 := time.Now()
 	mainDbInfo, err := fdb.main[0].Info()
 	if err == nil {
-		platform.StoreUint64(&fdb.committedCount, mainDbInfo.DocCount())
+		atomic.StoreUint64(&fdb.committedCount, mainDbInfo.DocCount())
 	} else {
 		logging.Errorf("ForestDB setCommittedCount failed %v", err)
 	}
@@ -936,7 +938,7 @@ func (fdb *fdbSlice) setCommittedCount() {
 }
 
 func (fdb *fdbSlice) GetCommittedCount() uint64 {
-	return platform.LoadUint64(&fdb.committedCount)
+	return atomic.LoadUint64(&fdb.committedCount)
 }
 
 //Rollback slice to given snapshot. Return error if
@@ -948,7 +950,7 @@ func (fdb *fdbSlice) Rollback(info SnapshotInfo) error {
 	//are no flush workers before calling rollback.
 	fdb.waitPersist()
 
-	qc := platform.LoadInt64(&fdb.qCount)
+	qc := atomic.LoadInt64(&fdb.qCount)
 	if qc > 0 {
 		common.CrashOnError(errors.New("Slice Invariant Violation - rollback with pending mutations"))
 	}
@@ -1076,7 +1078,7 @@ func (fdb *fdbSlice) NewSnapshot(ts *common.TsVbuuid, commit bool) (SnapshotInfo
 	fdb.waitPersist()
 	flushTime := time.Since(flushStart)
 
-	qc := platform.LoadInt64(&fdb.qCount)
+	qc := atomic.LoadInt64(&fdb.qCount)
 	if qc > 0 {
 		common.CrashOnError(errors.New("Slice Invariant Violation - commit with pending mutations"))
 	}
@@ -1167,7 +1169,7 @@ func (fdb *fdbSlice) checkAllWorkersDone() bool {
 
 	//if there are mutations in the cmdCh, workers are
 	//not yet done
-	qc := platform.LoadInt64(&fdb.qCount)
+	qc := atomic.LoadInt64(&fdb.qCount)
 	if qc > 0 {
 		return false
 	}
@@ -1378,7 +1380,7 @@ snaploop:
 				extraSnapDataSize = diskSz - dataSz
 			}
 
-			platform.StoreInt64(&fdb.extraSnapDataSize, extraSnapDataSize)
+			atomic.StoreInt64(&fdb.extraSnapDataSize, extraSnapDataSize)
 	*/
 
 	return err
@@ -1397,7 +1399,7 @@ func (fdb *fdbSlice) Statistics() (StorageStatistics, error) {
 	// trivial to compute fragmentation as ration of data size to disk size.
 	// Hence we compute approximate fragmentation by adding overhead data size
 	// caused by extra snapshots.
-	extraSnapDataSize := platform.LoadInt64(&fdb.extraSnapDataSize)
+	extraSnapDataSize := atomic.LoadInt64(&fdb.extraSnapDataSize)
 
 	fdb.statFdLock.Lock()
 	sts.DataSize = int64(fdb.statFd.EstimateSpaceUsed()) + extraSnapDataSize
@@ -1407,9 +1409,9 @@ func (fdb *fdbSlice) Statistics() (StorageStatistics, error) {
 	sts.DiskSize = sz
 	sts.ExtraSnapDataSize = extraSnapDataSize
 
-	sts.GetBytes = platform.LoadInt64(&fdb.get_bytes)
-	sts.InsertBytes = platform.LoadInt64(&fdb.insert_bytes)
-	sts.DeleteBytes = platform.LoadInt64(&fdb.delete_bytes)
+	sts.GetBytes = atomic.LoadInt64(&fdb.get_bytes)
+	sts.InsertBytes = atomic.LoadInt64(&fdb.insert_bytes)
+	sts.DeleteBytes = atomic.LoadInt64(&fdb.delete_bytes)
 
 	if logging.IsEnabled(logging.Timing) {
 		fdb.statFdLock.Lock()
@@ -1576,7 +1578,7 @@ func newFdbFile(dirpath string, newVersion bool) string {
 }
 
 func (fdb *fdbSlice) logWriterStat() {
-	count := platform.AddUint64(&fdb.flushedCount, 1)
+	count := atomic.AddUint64(&fdb.flushedCount, 1)
 	if (count%10000 == 0) || count == 1 {
 		logging.Infof("logWriterStat:: %v "+
 			"FlushedCount %v QueuedCount %v", fdb.idxInstId,

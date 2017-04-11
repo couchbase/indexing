@@ -18,7 +18,7 @@ import "fmt"
 import "reflect"
 import "errors"
 import "github.com/couchbase/indexing/secondary/logging"
-import "github.com/couchbase/indexing/secondary/platform"
+import "sync/atomic"
 import "unsafe"
 import "runtime"
 
@@ -43,11 +43,11 @@ type ConfigHolder struct {
 }
 
 func (h *ConfigHolder) Store(conf Config) {
-	platform.StorePointer(&h.ptr, unsafe.Pointer(&conf))
+	atomic.StorePointer(&h.ptr, unsafe.Pointer(&conf))
 }
 
 func (h *ConfigHolder) Load() Config {
-	confptr := platform.LoadPointer(&h.ptr)
+	confptr := atomic.LoadPointer(&h.ptr)
 	return *(*Config)(confptr)
 }
 
@@ -259,6 +259,13 @@ var SystemConfig = Config{
 		5 * 60 * 1000, // 5 minute
 		"in milliseconds, periodically log cumulative stats of dcp latency",
 		5 * 60 * 1000,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"projector.dcp.activeVbOnly": ConfigValue{
+		true,
+		"request dcp to process active vbuckets only",
+		true,
 		false, // mutable
 		false, // case-insensitive
 	},
@@ -936,6 +943,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.plasma.mainIndex.maxLSSFragmentation": ConfigValue{
+		40,
+		"Desired LSS fragmentation percent",
+		40,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.plasma.mainIndex.LSSFragmentation": ConfigValue{
 		30,
 		"Desired LSS fragmentation percent",
@@ -968,6 +982,13 @@ var SystemConfig = Config{
 		4,
 		"Maximum number of page segments on LSS for a page",
 		4,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.backIndex.maxLSSFragmentation": ConfigValue{
+		40,
+		"Desired LSS fragmentation percent",
+		40,
 		false, // mutable
 		false, // case-insensitive
 	},
@@ -1171,6 +1192,13 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.settings.moi.recovery.max_rollbacks": ConfigValue{
+		2,
+		"Maximum number of committed rollback points",
+		2,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.settings.plasma.recovery.max_rollbacks": ConfigValue{
 		2,
 		"Maximum number of committed rollback points",
 		2,

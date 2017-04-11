@@ -53,6 +53,7 @@ type indexTopology struct {
 	insts           map[common.IndexInstId]*mclient.InstanceDefn
 	defns           map[common.IndexDefnId]*mclient.IndexMetadata
 	replicasInRebal map[common.IndexDefnId][]*mclient.InstanceDefn
+	allIndexes      []*mclient.IndexMetadata
 }
 
 func newMetaBridgeClient(
@@ -101,13 +102,16 @@ func (b *metadataClient) Sync() error {
 }
 
 // Refresh implement BridgeAccessor{} interface.
-func (b *metadataClient) Refresh() ([]*mclient.IndexMetadata, uint64, error) {
-	mindexes, version := b.mdClient.ListIndex()
-	if b.hasIndexesChanged(mindexes, version) {
-		currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
-		b.safeupdate(currmeta.adminports, false)
+func (b *metadataClient) Refresh() ([]*mclient.IndexMetadata, uint64, uint64, error) {
+
+	currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
+
+	if currmeta.version < b.mdClient.GetMetadataVersion() {
+		b.safeupdate(nil, false)
+		currmeta = (*indexTopology)(atomic.LoadPointer(&b.indexers))
 	}
-	return mindexes, b.mdClient.GetIndexerVersion(), nil
+
+	return currmeta.allIndexes, currmeta.version, b.mdClient.GetIndexerVersion(), nil
 }
 
 // Nodes implement BridgeAccessor{} interface.
@@ -258,8 +262,7 @@ func (b *metadataClient) MoveIndex(defnID uint64, planJSON map[string]interface{
 func (b *metadataClient) DropIndex(defnID uint64) error {
 	err := b.mdClient.DropIndex(common.IndexDefnId(defnID))
 	if err == nil { // cleanup index local cache.
-		currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
-		b.safeupdate(currmeta.adminports, true /*force*/)
+		b.safeupdate(nil, false /*force*/)
 	}
 	return err
 }
@@ -682,12 +685,12 @@ func (b *metadataClient) updateIndexerList(discardExisting bool) error {
 	defer b.topoChangeLock.Unlock()
 
 	// populate indexers' adminport and queryport
-	adminports, failedNode, unhealthyNode, err := getIndexerAdminports(cinfo)
+	adminports, failedNode, unhealthyNode, newNode, err := getIndexerAdminports(cinfo)
 	if err != nil {
 		return err
 	}
 	numIndexers := len(adminports)
-	b.mdClient.SetClusterStatus(numIndexers, failedNode, unhealthyNode)
+	b.mdClient.SetClusterStatus(numIndexers, failedNode, unhealthyNode, newNode)
 
 	fmsg := "Refreshing indexer list due to cluster changes or auto-refresh."
 	logging.Infof(fmsg)
@@ -824,6 +827,7 @@ func (b *metadataClient) updateTopology(
 	// create a new topology.
 	newmeta := &indexTopology{
 		version:         version,
+		allIndexes:      mindexes,
 		adminports:      make(map[string]common.IndexerId),
 		topology:        make(map[common.IndexerId][]*mclient.IndexMetadata),
 		replicas:        make(map[common.IndexDefnId][]common.IndexInstId),
@@ -922,36 +926,51 @@ func (b *metadataClient) safeupdate(
 	done := false
 	for done == false {
 		currmeta = (*indexTopology)(atomic.LoadPointer(&b.indexers))
+
+		// no need to update if cached metadata is already up to date
+		if !force && currmeta != nil && b.mdClient.GetMetadataVersion() <= currmeta.version {
+			return
+		}
+
+		// if adminport is nil, then safeupdate is not triggered by
+		// topology change.  Get the adminports from currmeta.
+		if currmeta != nil && adminports == nil {
+			adminports = currmeta.adminports
+		}
+
 		newmeta = b.updateTopology(adminports, force)
 		if currmeta == nil {
+			// This should happen only during bootstrap
 			atomic.StorePointer(&b.indexers, unsafe.Pointer(newmeta))
-			logging.Infof("initialized currmeta %v\n", newmeta.version)
+			logging.Infof("initialized currmeta %v force %v \n", newmeta.version, force)
 			return
 		} else if force {
 			if newmeta.version < currmeta.version {
-				fmsg := "skip newmeta %v <= %v\n"
-				logging.Infof(fmsg, newmeta.version, currmeta.version)
-				return
+				// This should not happen.  But if it does force to increment metadata version.
+				b.mdClient.IncrementMetadataVersion()
+				continue
 			}
 		} else if newmeta.version <= currmeta.version {
-			fmsg := "skip newmeta %v <= %v\n"
-			logging.Infof(fmsg, newmeta.version, currmeta.version)
+			fmsg := "skip newmeta %v <= %v force %v \n"
+			logging.Infof(fmsg, newmeta.version, currmeta.version, force)
 			return
 		}
+
 		oldptr := unsafe.Pointer(currmeta)
 		newptr := unsafe.Pointer(newmeta)
 		done = atomic.CompareAndSwapPointer(&b.indexers, oldptr, newptr)
 
 		// metaCh should never close
-		if b.metaCh != nil {
+		if done && b.metaCh != nil {
 			select {
+			// update scan clients
 			case b.metaCh <- true:
 			default:
 			}
 		}
 	}
-	fmsg := "switched currmeta from %v -> %v\n"
-	logging.Infof(fmsg, currmeta.version, newmeta.version)
+	fmsg := "switched currmeta from %v -> %v force %v \n"
+	logging.Infof(fmsg, currmeta.version, newmeta.version, force)
 }
 
 func (b *metadataClient) hasIndexersChanged(
@@ -1014,19 +1033,19 @@ func (b *metadataClient) hasIndexesChanged(
 }
 
 // return adminports for all known indexers.
-func getIndexerAdminports(cinfo *common.ClusterInfoCache) ([]string, int, int, error) {
+func getIndexerAdminports(cinfo *common.ClusterInfoCache) ([]string, int, int, int, error) {
 	iAdminports := make([]string, 0)
 	unhealthyNodes := 0
 	for _, node := range cinfo.GetNodesByServiceType("indexAdmin") {
 		status, err := cinfo.GetNodeStatus(node)
 		if err != nil {
-			return nil, 0, 0, err
+			return nil, 0, 0, 0, err
 		}
 		logging.Verbosef("node %v status: %q", node, status)
 		if status == "healthy" || status == "active" || status == "warmup" {
 			adminport, err := cinfo.GetServiceAddress(node, "indexAdmin")
 			if err != nil {
-				return nil, 0, 0, err
+				return nil, 0, 0, 0, err
 			}
 			iAdminports = append(iAdminports, adminport)
 		} else {
@@ -1035,7 +1054,8 @@ func getIndexerAdminports(cinfo *common.ClusterInfoCache) ([]string, int, int, e
 		}
 	}
 
-	return iAdminports, len(cinfo.GetFailedIndexerNodes()), unhealthyNodes, nil
+	return iAdminports, len(cinfo.GetFailedIndexerNodes()), unhealthyNodes,
+		len(cinfo.GetNewIndexerNodes()), nil
 }
 
 // FIXME/TODO: based on discussion with John-
@@ -1115,7 +1135,7 @@ func (b *metadataClient) watchClusterChanges() {
 				return
 			}
 
-			_, _, unhealthyNode, err := getIndexerAdminports(cinfo)
+			_, _, unhealthyNode, _, err := getIndexerAdminports(cinfo)
 			if err != nil {
 				logging.Errorf("updateIndexerList(): %v\n", err)
 				selfRestart()
@@ -1124,7 +1144,7 @@ func (b *metadataClient) watchClusterChanges() {
 
 			if unhealthyNode != 0 {
 				hasUnhealthyNode = true
-				b.mdClient.SetClusterStatus(-1, -1, unhealthyNode)
+				b.mdClient.SetClusterStatus(-1, -1, unhealthyNode, -1)
 
 			} else if hasUnhealthyNode {
 				// refresh indexer version when there is no more unhealthy node

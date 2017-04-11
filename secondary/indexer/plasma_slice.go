@@ -15,23 +15,24 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/common/queryutil"
-	"github.com/couchbase/indexing/secondary/logging"
-	"github.com/couchbase/indexing/secondary/platform"
-	"github.com/couchbase/nitro/plasma"
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
+
+	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/common/queryutil"
+	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/nitro/plasma"
 )
 
 type plasmaSlice struct {
 	newBorn                               bool
-	get_bytes, insert_bytes, delete_bytes platform.AlignedInt64
-	flushedCount                          platform.AlignedUint64
-	committedCount                        platform.AlignedUint64
-	qCount                                platform.AlignedInt64
+	get_bytes, insert_bytes, delete_bytes int64
+	flushedCount                          uint64
+	committedCount                        uint64
+	qCount                                int64
 
 	path string
 	id   SliceId
@@ -103,11 +104,11 @@ func NewPlasmaSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 
 	slice.idxStats = idxStats
 
-	slice.get_bytes = platform.NewAlignedInt64(0)
-	slice.insert_bytes = platform.NewAlignedInt64(0)
-	slice.delete_bytes = platform.NewAlignedInt64(0)
-	slice.flushedCount = platform.NewAlignedUint64(0)
-	slice.committedCount = platform.NewAlignedUint64(0)
+	slice.get_bytes = 0
+	slice.insert_bytes = 0
+	slice.delete_bytes = 0
+	slice.flushedCount = 0
+	slice.committedCount = 0
 	slice.sysconf = sysconf
 	slice.path = path
 	slice.idxInstId = idxInstId
@@ -117,9 +118,7 @@ func NewPlasmaSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	slice.numWriters = sysconf["numSliceWriters"].Int()
 	slice.hasPersistence = !sysconf["plasma.disablePersistence"].Bool()
 
-	// FIXME: Enable rollback config
-	// slice.maxRollbacks = sysconf["settings.recovery.max_rollbacks"].Int()
-	slice.maxRollbacks = 2
+	slice.maxRollbacks = sysconf["settings.plasma.recovery.max_rollbacks"].Int()
 
 	sliceBufSize := sysconf["settings.sliceBufSize"].Uint64()
 	if sliceBufSize < uint64(slice.numWriters) {
@@ -184,12 +183,14 @@ func (slice *plasmaSlice) initStores() error {
 	mCfg.MinPageItems = slice.sysconf["plasma.mainIndex.pageMergeThreshold"].Int()
 	mCfg.MaxPageLSSSegments = slice.sysconf["plasma.mainIndex.maxLSSPageSegments"].Int()
 	mCfg.LSSCleanerThreshold = slice.sysconf["plasma.mainIndex.LSSFragmentation"].Int()
+	mCfg.LSSCleanerMaxThreshold = slice.sysconf["plasma.mainIndex.maxLSSFragmentation"].Int()
 
 	bCfg.MaxDeltaChainLen = slice.sysconf["plasma.backIndex.maxNumPageDeltas"].Int()
 	bCfg.MaxPageItems = slice.sysconf["plasma.backIndex.pageSplitThreshold"].Int()
 	bCfg.MinPageItems = slice.sysconf["plasma.backIndex.pageMergeThreshold"].Int()
 	bCfg.MaxPageLSSSegments = slice.sysconf["plasma.backIndex.maxLSSPageSegments"].Int()
 	bCfg.LSSCleanerThreshold = slice.sysconf["plasma.backIndex.LSSFragmentation"].Int()
+	bCfg.LSSCleanerMaxThreshold = slice.sysconf["plasma.backIndex.maxLSSFragmentation"].Int()
 
 	if slice.hasPersistence {
 		mCfg.File = filepath.Join(slice.path, "mainIndex")
@@ -336,7 +337,7 @@ func (mdb *plasmaSlice) Insert(key []byte, docid []byte, meta *MutationMeta) err
 		key:   key,
 		docid: docid,
 	}
-	platform.AddInt64(&mdb.qCount, 1)
+	atomic.AddInt64(&mdb.qCount, 1)
 	mdb.cmdCh[int(meta.vbucket)%mdb.numWriters] <- mut
 	mdb.idxStats.numDocsFlushQueued.Add(1)
 	return mdb.fatalDbErr
@@ -344,7 +345,7 @@ func (mdb *plasmaSlice) Insert(key []byte, docid []byte, meta *MutationMeta) err
 
 func (mdb *plasmaSlice) Delete(docid []byte, meta *MutationMeta) error {
 	mdb.idxStats.numDocsFlushQueued.Add(1)
-	platform.AddInt64(&mdb.qCount, 1)
+	atomic.AddInt64(&mdb.qCount, 1)
 	mdb.cmdCh[int(meta.vbucket)%mdb.numWriters] <- indexMutation{op: opDelete, docid: docid}
 	return mdb.fatalDbErr
 }
@@ -379,7 +380,7 @@ loop:
 
 			mdb.idxStats.numItemsFlushed.Add(int64(nmut))
 			mdb.idxStats.numDocsIndexed.Add(1)
-			platform.AddInt64(&mdb.qCount, -1)
+			atomic.AddInt64(&mdb.qCount, -1)
 
 		case <-mdb.stopCh[workerId]:
 			mdb.stopCh[workerId] <- true
@@ -425,7 +426,7 @@ func (mdb *plasmaSlice) insertPrimaryIndex(key []byte, docid []byte, workerId in
 		t0 := time.Now()
 		mdb.main[workerId].InsertKV(entry, nil)
 		mdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
-		platform.AddInt64(&mdb.insert_bytes, int64(len(entry)))
+		atomic.AddInt64(&mdb.insert_bytes, int64(len(entry)))
 		mdb.isDirty = true
 		return 1
 	}
@@ -458,7 +459,7 @@ func (mdb *plasmaSlice) insertSecIndex(key []byte, docid []byte, workerId int) i
 		mdb.back[workerId].InsertKV(docid, backEntry)
 
 		mdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
-		platform.AddInt64(&mdb.insert_bytes, int64(len(docid)+len(entry)))
+		atomic.AddInt64(&mdb.insert_bytes, int64(len(docid)+len(entry)))
 	}
 
 	mdb.isDirty = true
@@ -590,7 +591,7 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 			t0 := time.Now()
 			mdb.main[workerId].DeleteKV(keyToBeDeleted)
 			mdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
-			platform.AddInt64(&mdb.delete_bytes, int64(len(keyToBeDeleted)))
+			atomic.AddInt64(&mdb.delete_bytes, int64(len(keyToBeDeleted)))
 			nmut++
 		}
 	}
@@ -612,7 +613,7 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 			t0 := time.Now()
 			mdb.main[workerId].InsertKV(keyToBeAdded, nil)
 			mdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
-			platform.AddInt64(&mdb.insert_bytes, int64(len(keyToBeAdded)))
+			atomic.AddInt64(&mdb.insert_bytes, int64(len(keyToBeAdded)))
 			nmut++
 		}
 	}
@@ -624,7 +625,7 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 			t0 := time.Now()
 			mdb.back[workerId].DeleteKV(docid)
 			mdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
-			platform.AddInt64(&mdb.delete_bytes, int64(len(docid)))
+			atomic.AddInt64(&mdb.delete_bytes, int64(len(docid)))
 		}
 	} else { //set the back index entry <docid, encodedkey>
 
@@ -636,7 +637,7 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 		t0 := time.Now()
 		mdb.back[workerId].InsertKV(docid, key)
 		mdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
-		platform.AddInt64(&mdb.insert_bytes, int64(len(docid)+len(key)))
+		atomic.AddInt64(&mdb.insert_bytes, int64(len(docid)+len(key)))
 	}
 
 	mdb.isDirty = true
@@ -678,7 +679,7 @@ func (mdb *plasmaSlice) deletePrimaryIndex(docid []byte, workerId int) (nmut int
 	if _, err := mdb.main[workerId].LookupKV(entry); err == plasma.ErrItemNoValue {
 		mdb.main[workerId].DeleteKV(itm)
 		mdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
-		platform.AddInt64(&mdb.delete_bytes, int64(len(entry.Bytes())))
+		atomic.AddInt64(&mdb.delete_bytes, int64(len(entry.Bytes())))
 		mdb.isDirty = true
 		return 1
 	}
@@ -697,7 +698,7 @@ func (mdb *plasmaSlice) deleteSecIndex(docid []byte, workerId int) int {
 
 	if err == nil {
 		t0 := time.Now()
-		platform.AddInt64(&mdb.delete_bytes, int64(len(docid)))
+		atomic.AddInt64(&mdb.delete_bytes, int64(len(docid)))
 		tokM := mdb.main[workerId].BeginTx()
 		defer mdb.main[workerId].EndTx(tokM)
 		mdb.back[workerId].DeleteKV(docid)
@@ -773,14 +774,14 @@ func (mdb *plasmaSlice) deleteSecArrayIndex(docid []byte, workerId int) (nmut in
 		t0 := time.Now()
 		mdb.main[workerId].DeleteKV(keyToBeDeleted)
 		mdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
-		platform.AddInt64(&mdb.delete_bytes, int64(len(keyToBeDeleted)))
+		atomic.AddInt64(&mdb.delete_bytes, int64(len(keyToBeDeleted)))
 	}
 
 	//delete from the back index
 	t0 = time.Now()
 	mdb.back[workerId].DeleteKV(docid)
 	mdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
-	platform.AddInt64(&mdb.delete_bytes, int64(len(docid)))
+	atomic.AddInt64(&mdb.delete_bytes, int64(len(docid)))
 	mdb.isDirty = true
 	return len(indexEntriesToBeDeleted)
 }
@@ -869,8 +870,8 @@ func (mdb *plasmaSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 func (mdb *plasmaSlice) doPersistSnapshot(s *plasmaSnapshot) {
 	var wg sync.WaitGroup
 
-	if platform.CompareAndSwapInt32(&mdb.isPersistorActive, 0, 1) {
-		defer platform.StoreInt32(&mdb.isPersistorActive, 0)
+	if atomic.CompareAndSwapInt32(&mdb.isPersistorActive, 0, 1) {
+		defer atomic.StoreInt32(&mdb.isPersistorActive, 0)
 
 		logging.Infof("PlasmaSlice Slice Id %v, IndexInstId %v Creating recovery point ...", mdb.id, mdb.idxInstId)
 		t0 := time.Now()
@@ -992,11 +993,11 @@ func (mdb *plasmaSlice) GetSnapshots() ([]SnapshotInfo, error) {
 
 func (mdb *plasmaSlice) setCommittedCount() {
 	curr := mdb.mainstore.ItemsCount()
-	platform.StoreUint64(&mdb.committedCount, uint64(curr))
+	atomic.StoreUint64(&mdb.committedCount, uint64(curr))
 }
 
 func (mdb *plasmaSlice) GetCommittedCount() uint64 {
-	return platform.LoadUint64(&mdb.committedCount)
+	return atomic.LoadUint64(&mdb.committedCount)
 }
 
 func (mdb *plasmaSlice) resetStores() {
@@ -1013,7 +1014,7 @@ func (mdb *plasmaSlice) resetStores() {
 
 func (mdb *plasmaSlice) Rollback(o SnapshotInfo) error {
 	mdb.waitPersist()
-	qc := platform.LoadInt64(&mdb.qCount)
+	qc := atomic.LoadInt64(&mdb.qCount)
 	if qc > 0 {
 		common.CrashOnError(errors.New("Slice Invariant Violation - rollback with pending mutations"))
 	}
@@ -1093,7 +1094,7 @@ func (mdb *plasmaSlice) NewSnapshot(ts *common.TsVbuuid, commit bool) (SnapshotI
 
 	mdb.waitPersist()
 
-	qc := platform.LoadInt64(&mdb.qCount)
+	qc := atomic.LoadInt64(&mdb.qCount)
 	if qc > 0 {
 		common.CrashOnError(errors.New("Slice Invariant Violation - commit with pending mutations"))
 	}
@@ -1257,12 +1258,6 @@ func (mdb *plasmaSlice) String() string {
 }
 
 func tryDeleteplasmaSlice(mdb *plasmaSlice) {
-	// Reclaim all readers
-	numReaders := mdb.sysconf["plasma.numReaders"].Int()
-	for i := 0; i < numReaders; i++ {
-		<-mdb.readers
-	}
-
 	//cleanup the disk directory
 	if err := os.RemoveAll(mdb.path); err != nil {
 		logging.Errorf("plasmaSlice::Destroy Error Cleaning Up Slice Id %v, "+
@@ -1279,12 +1274,12 @@ func tryCloseplasmaSlice(mdb *plasmaSlice) {
 }
 
 func (mdb *plasmaSlice) getCmdsCount() int {
-	qc := platform.LoadInt64(&mdb.qCount)
+	qc := atomic.LoadInt64(&mdb.qCount)
 	return int(qc)
 }
 
 func (mdb *plasmaSlice) logWriterStat() {
-	count := platform.AddUint64(&mdb.flushedCount, 1)
+	count := atomic.AddUint64(&mdb.flushedCount, 1)
 	if (count%10000 == 0) || count == 1 {
 		logging.Infof("logWriterStat:: %v "+
 			"FlushedCount %v QueuedCount %v", mdb.idxInstId,
@@ -1310,14 +1305,14 @@ func (s *plasmaSnapshot) Create() error {
 }
 
 func (s *plasmaSnapshot) Open() error {
-	platform.AddInt32(&s.refCount, int32(1))
+	atomic.AddInt32(&s.refCount, int32(1))
 
 	return nil
 }
 
 func (s *plasmaSnapshot) IsOpen() bool {
 
-	count := platform.LoadInt32(&s.refCount)
+	count := atomic.LoadInt32(&s.refCount)
 	return count > 0
 }
 
@@ -1339,7 +1334,7 @@ func (s *plasmaSnapshot) Timestamp() *common.TsVbuuid {
 
 func (s *plasmaSnapshot) Close() error {
 
-	count := platform.AddInt32(&s.refCount, int32(-1))
+	count := atomic.AddInt32(&s.refCount, int32(-1))
 
 	if count < 0 {
 		logging.Errorf("plasmaSnapshot::Close Close operation requested " +

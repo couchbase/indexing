@@ -245,7 +245,7 @@ func (k *kvSender) openMutationStream(streamId c.StreamId, indexInstList []c.Ind
 	bucket := indexInstList[0].Defn.Bucket
 
 	//use any bucket as list of vbs remain the same for all buckets
-	vbnos, err := k.getAllVbucketsInCluster(bucket)
+	vbnos, addrs, err := k.getAllVbucketsInCluster(bucket)
 	if err != nil {
 		logging.Errorf("KVSender::openMutationStream %v %v Error in fetching vbuckets info %v",
 			streamId, bucket, err)
@@ -259,17 +259,6 @@ func (k *kvSender) openMutationStream(streamId c.StreamId, indexInstList []c.Ind
 	restartTsList, err := k.makeRestartTsForVbs(bucket, restartTs, vbnos)
 	if err != nil {
 		logging.Errorf("KVSender::openMutationStream %v %v Error making restart ts %v",
-			streamId, bucket, err)
-		respCh <- &MsgError{
-			err: Error{code: ERROR_KVSENDER_STREAM_REQUEST_ERROR,
-				severity: FATAL,
-				cause:    err}}
-		return
-	}
-
-	addrs, err := k.getAllProjectorAddrs()
-	if err != nil {
-		logging.Errorf("KVSender::openMutationStream %v %v Error Fetching Projector Addrs %v",
 			streamId, bucket, err)
 		respCh <- &MsgError{
 			err: Error{code: ERROR_KVSENDER_STREAM_REQUEST_ERROR,
@@ -1023,32 +1012,41 @@ loop:
 	return res, err
 }
 
-func (k *kvSender) getAllVbucketsInCluster(bucket string) ([]uint32, error) {
+func (k *kvSender) getAllVbucketsInCluster(bucket string) ([]uint32, []string, error) {
 
 	k.cInfoCache.Lock()
 	defer k.cInfoCache.Unlock()
 
 	err := k.cInfoCache.Fetch()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	//get all kv nodes
 	nodes, err := k.cInfoCache.GetNodesByBucket(bucket)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	var vbs []uint32
+	var addrList []string
+
 	for _, nid := range nodes {
 		//get the list of vbnos for this kv
 		if vbnos, err := k.cInfoCache.GetVBuckets(nid, bucket); err != nil {
-			return nil, err
+			return nil, nil, err
 		} else {
 			vbs = append(vbs, vbnos...)
+			addr, err := k.cInfoCache.GetServiceAddress(nid, "projector")
+			if err != nil {
+				return nil, nil, err
+			}
+			addrList = append(addrList, addr)
+
 		}
 	}
-	return vbs, nil
+
+	return vbs, addrList, nil
 }
 
 func (k *kvSender) getAllProjectorAddrs() ([]string, error) {

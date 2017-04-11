@@ -11,6 +11,7 @@ package indexer
 
 import (
 	"fmt"
+
 	"github.com/couchbase/indexing/secondary/common"
 )
 
@@ -82,6 +83,7 @@ const (
 	ERROR_INDEX_MANAGER_CHANNEL_CLOSE
 
 	ERROR_SCAN_COORD_QUERYPORT_FAIL
+	ERROR_BUCKET_EPHEMERAL
 )
 
 type errSeverity int16

@@ -500,7 +500,7 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 				}
 			}
 
-			usage := float64(actualCpuUtil) / 100 * ratio
+			usage := float64(actualCpuUtil) * ratio
 
 			if usage > 0 {
 				index.ActualCpuUsage = usage

@@ -1,13 +1,17 @@
 package common
 
-import "github.com/couchbase/indexing/secondary/dcp"
-import "github.com/couchbase/indexing/secondary/logging"
-import "errors"
-import "fmt"
-import "time"
-import "net"
-import "net/url"
-import "sync"
+import (
+	"errors"
+	"fmt"
+	"net"
+	"net/url"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/couchbase/indexing/secondary/dcp"
+	"github.com/couchbase/indexing/secondary/logging"
+)
 
 var (
 	ErrInvalidNodeId       = errors.New("Invalid NodeId")
@@ -139,6 +143,8 @@ func (c *ClusterInfoCache) Fetch() error {
 			} else if n.ClusterMembership == "inactiveAdded" {
 				// node being added (but not yet rebalanced in)
 				addNodes = append(addNodes, n)
+			} else {
+				logging.Warnf("ClsuterInfoCache: unrecognized node membership %v", n.ClusterMembership)
 			}
 		}
 		c.nodes = nodes
@@ -241,6 +247,18 @@ func (c *ClusterInfoCache) GetFailedIndexerNodes() (nodes []couchbase.Node) {
 	return
 }
 
+func (c *ClusterInfoCache) GetNewIndexerNodes() (nodes []couchbase.Node) {
+	for _, n := range c.addNodes {
+		for _, s := range n.Services {
+			if s == "index" {
+				nodes = append(nodes, n)
+			}
+		}
+	}
+
+	return
+}
+
 func (c *ClusterInfoCache) GetNodesByBucket(bucket string) (nids []NodeId, err error) {
 	b, berr := c.pool.GetBucket(bucket)
 	if berr != nil {
@@ -281,6 +299,15 @@ func (c *ClusterInfoCache) GetBucketUUID(bucket string) (uuid string) {
 
 	// no nodes recognize this bucket
 	return BUCKET_UUID_NIL
+}
+
+func (c *ClusterInfoCache) IsEphemeral(bucket string) (bool, error) {
+	b, err := c.pool.GetBucket(bucket)
+	if err != nil {
+		return false, err
+	}
+	defer b.Close()
+	return strings.EqualFold(b.Type, "ephemeral"), nil
 }
 
 func (c *ClusterInfoCache) GetCurrentNode() NodeId {

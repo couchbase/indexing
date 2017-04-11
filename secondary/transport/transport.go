@@ -155,10 +155,8 @@ func (pkt *TransportPacket) encode(payload interface{}) (data []byte, err error)
 // a valid type then return `data` as `payload`.
 func (pkt *TransportPacket) decode(data []byte) (payload interface{}, err error) {
 	typ := pkt.flags.GetEncoding()
-	if callb, ok := pkt.decoders[typ]; ok {
+	if callb, ok := pkt.decoders[typ]; ok && callb != nil {
 		return callb(data)
-	} else if callb == nil {
-		return data, nil
 	}
 	return nil, ErrorDecoderUnknown
 }

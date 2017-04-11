@@ -3,11 +3,6 @@ package perftests
 import (
 	"encoding/json"
 	"fmt"
-	c "github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/platform"
-	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
-	kv "github.com/couchbase/indexing/secondary/tests/framework/kvutility"
-	"github.com/couchbase/indexing/secondary/tests/framework/secondaryindex"
 	"io/ioutil"
 	"log"
 	"os"
@@ -18,13 +13,18 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	c "github.com/couchbase/indexing/secondary/common"
+	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
+	kv "github.com/couchbase/indexing/secondary/tests/framework/kvutility"
+	"github.com/couchbase/indexing/secondary/tests/framework/secondaryindex"
 )
 
 var (
-	Throughput_Lookup_StaleOk	int64 = 0
-	Throughput_Range_StaleOk int64 = 0
+	Throughput_Lookup_StaleOk    int64 = 0
+	Throughput_Range_StaleOk     int64 = 0
 	Throughput_Lookup_StaleFalse int64 = 0
-	Throughput_Range_StaleFalse int64 = 0
+	Throughput_Range_StaleFalse  int64 = 0
 )
 
 type ScanResult struct {
@@ -32,7 +32,7 @@ type ScanResult struct {
 	Rows         uint64
 	Duration     int64
 	LatencyHisto string
-	ErrorCount   platform.AlignedUint64
+	ErrorCount   int64
 
 	// periodic stats
 	iter          uint32
@@ -230,8 +230,8 @@ func GetScanStats(summaryfile, statsfile string, t *testing.T) (Result, int64, i
 		latencySum += latency
 	}
 
-	percentile95_ScanLatency := int64 (getPercentile(95, latencies) / 1000000)
-	percentile80_ScanLatency := int64 (getPercentile(80, latencies) / 1000000)
+	percentile95_ScanLatency := int64(getPercentile(95, latencies) / 1000000)
+	percentile80_ScanLatency := int64(getPercentile(80, latencies) / 1000000)
 	meanLatency = latencySum / int64(len(stats)) / 1000000
 	throughput = int64(float64(result.Rows) / result.Duration)
 
