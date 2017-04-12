@@ -709,6 +709,8 @@ func (p *SAPlanner) suppressEqivIndexIfNecessary(s *Solution) {
 				// this does not affect replica (replica will not place over
 				// one another).
 				if s.findNumEquivalentIndex(index) > numLiveNode {
+					logging.Warnf("There are more equivalent index than available nodes.  Allow equivalent index of (%v, %v) to be replaced on same node.",
+						index.Bucket, index.Name)
 					index.suppressEquivIdxCheck = true
 				} else {
 					index.suppressEquivIdxCheck = false
@@ -3235,6 +3237,7 @@ func (p *RandomPlacement) exhaustiveMove(s *Solution, sources []*IndexerNode, ta
 					logging.Tracef("Planner::exhaustive move: source %v index %v target %v checkConstraint %v",
 						source.NodeId, sourceIndex, target.NodeId, checkConstraint)
 					s.moveIndex(source, sourceIndex, target)
+					return true, source.isDelete
 				}
 				continue
 			}
