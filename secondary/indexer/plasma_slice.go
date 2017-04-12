@@ -1543,6 +1543,15 @@ func (s *plasmaSnapshot) Iterate(ctx IndexReaderContext, low, high IndexKey, inc
 	it := reader.r.NewSnapshotIterator(s.MainSnap)
 	defer it.Close()
 
+	endKey := high.Bytes()
+	if endKey != nil {
+		if inclusion == High || inclusion == Both {
+			endKey = common.GenNextBiggerKey(endKey)
+		}
+
+		it.SetEndKey(endKey)
+	}
+
 	if low.Bytes() == nil {
 		it.SeekFirst()
 	} else {
