@@ -42,9 +42,11 @@ type Callbacks struct {
 type Rebalancer struct {
 	transferTokens map[string]*c.TransferToken
 	acceptedTokens map[string]*c.TransferToken
-	rebalToken     *RebalanceToken
-	nodeId         string
-	master         bool
+	sourceTokens   map[string]*c.TransferToken
+
+	rebalToken *RebalanceToken
+	nodeId     string
+	master     bool
 
 	cb Callbacks
 
@@ -96,6 +98,7 @@ func NewRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *Rebal
 		supvMsgch: supvMsgch,
 
 		acceptedTokens: make(map[string]*c.TransferToken),
+		sourceTokens:   make(map[string]*c.TransferToken),
 		localaddr:      localaddr,
 
 		waitForTokenPublish: make(chan struct{}),
@@ -277,6 +280,15 @@ func (r *Rebalancer) processTokenAsSource(ttid string, tt *c.TransferToken) bool
 		if !r.addToWaitGroup() {
 			return true
 		}
+
+		if !r.checkValidNotifyStateSource(ttid, tt) {
+			return true
+		}
+
+		r.mu.Lock()
+		r.sourceTokens[ttid] = tt
+		r.mu.Unlock()
+
 		//TODO batch this rather than one per index
 		go r.dropIndexWhenIdle(ttid, tt)
 
@@ -366,6 +378,11 @@ loop:
 
 			tt.State = c.TransferTokenCommit
 			r.setTransferTokenInMetakv(ttid, tt)
+
+			r.mu.Lock()
+			r.sourceTokens[ttid] = tt
+			r.mu.Unlock()
+
 			break loop
 		}
 		time.Sleep(5 * time.Second)
@@ -383,6 +400,10 @@ func (r *Rebalancer) processTokenAsDest(ttid string, tt *c.TransferToken) bool {
 			l.Errorf("Rebalancer::processTokenAsDest Unable to delete TransferToken "+
 				"In Metakv. %v. Err %v", tt, err)
 		}
+		return true
+	}
+
+	if !r.checkValidNotifyStateDest(ttid, tt) {
 		return true
 	}
 
@@ -475,6 +496,40 @@ func (r *Rebalancer) processTokenAsDest(ttid string, tt *c.TransferToken) bool {
 		return false
 	}
 	return true
+}
+
+func (r *Rebalancer) checkValidNotifyStateDest(ttid string, tt *c.TransferToken) bool {
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if tto, ok := r.acceptedTokens[ttid]; ok {
+		if tt.State <= tto.State {
+			l.Warnf("Rebalancer::checkValidNotifyStateDest Detected Invalid State "+
+				"Change Notification. Token Id %v Local State %v Metakv State %v", ttid,
+				tto.State, tt.State)
+			return false
+		}
+	}
+	return true
+
+}
+
+func (r *Rebalancer) checkValidNotifyStateSource(ttid string, tt *c.TransferToken) bool {
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if tto, ok := r.sourceTokens[ttid]; ok {
+		if tt.State <= tto.State {
+			l.Warnf("Rebalancer::checkValidNotifyStateSource Detected Invalid State "+
+				"Change Notification. Token Id %v Local State %v Metakv State %v", ttid,
+				tto.State, tt.State)
+			return false
+		}
+	}
+	return true
+
 }
 
 func (r *Rebalancer) checkIndexReadyToBuild() bool {
