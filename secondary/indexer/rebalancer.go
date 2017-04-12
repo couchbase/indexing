@@ -809,7 +809,17 @@ func (r *Rebalancer) setTransferTokenError(ttid string, tt *c.TransferToken, err
 
 func (r *Rebalancer) setTransferTokenInMetakv(ttid string, tt *c.TransferToken) {
 
-	err := MetakvSet(RebalanceMetakvDir+ttid, tt)
+	fn := func(r int, err error) error {
+		if r > 0 {
+			l.Warnf("Rebalancer::setTransferTokenInMetakv error=%v Retrying (%d)", err, r)
+		}
+		err = MetakvSet(RebalanceMetakvDir+ttid, tt)
+		return err
+	}
+
+	rh := c.NewRetryHelper(10, time.Second, 1, fn)
+	err := rh.Run()
+
 	if err != nil {
 		l.Fatalf("Rebalancer::setTransferTokenInMetakv Unable to set TransferToken In "+
 			"Meta Storage. %v %v. Err %v", ttid, tt, err)
