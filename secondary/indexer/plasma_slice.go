@@ -1245,6 +1245,16 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 	defer mdb.confLock.Unlock()
 
 	mdb.sysconf = cfg
+
+	mdb.mainstore.MaxPageLSSSegments = mdb.sysconf["plasma.mainIndex.maxLSSPageSegments"].Int()
+	mdb.mainstore.LSSCleanerThreshold = mdb.sysconf["plasma.mainIndex.LSSFragmentation"].Int()
+	mdb.mainstore.LSSCleanerMaxThreshold = mdb.sysconf["plasma.mainIndex.maxLSSFragmentation"].Int()
+
+	if !mdb.isPrimary {
+		mdb.backstore.MaxPageLSSSegments = mdb.sysconf["plasma.backIndex.maxLSSPageSegments"].Int()
+		mdb.backstore.LSSCleanerThreshold = mdb.sysconf["plasma.backIndex.LSSFragmentation"].Int()
+		mdb.backstore.LSSCleanerMaxThreshold = mdb.sysconf["plasma.backIndex.maxLSSFragmentation"].Int()
+	}
 }
 
 func (mdb *plasmaSlice) String() string {
