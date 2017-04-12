@@ -15,7 +15,7 @@ cd /var/www
 (ls -t logs-*.tar* | head -n 30; ls -t logs-*.tar*) | sort | uniq -u | xargs -r rm
 (ls -t make-*.log | head -n 3; ls -t make-*.log) | sort | uniq -u | xargs -r rm
 export TS="`date +%d.%m.%Y-%H.%M`"
-if [ "$STORAGE" = "plasma" ]; then export STORAGE="memdb"; else export STORAGE="plasma"; fi
+if [ $((RANDOM%2)) -eq 0 ]; then export STORAGE="memdb"; else export STORAGE="plasma"; fi
 echo '<html><head></head><body><pre>' > /var/www/gsi-current.html
 chmod a+rx /var/www/gsi-current.html
 dobuild clean 1>>/var/www/gsi-current.html 2>&1; rc=$?
