@@ -22,8 +22,13 @@ import "math/big"
 import "github.com/couchbase/cbauth"
 import "github.com/couchbase/indexing/secondary/dcp"
 import "github.com/couchbase/indexing/secondary/dcp/transport/client"
+import "github.com/couchbase/indexing/secondary/logging"
 
 const IndexNamePattern = "^[A-Za-z0-9#_-]+$"
+
+const (
+	MAX_AUTH_RETRIES = 10
+)
 
 var ErrInvalidIndexName = fmt.Errorf("Invalid index name")
 
@@ -219,7 +224,20 @@ type CbAuthHandler struct {
 }
 
 func (ah *CbAuthHandler) GetCredentials() (string, string) {
-	u, p, err := cbauth.GetHTTPServiceAuth(ah.Hostport)
+
+	var u, p string
+
+	fn := func(r int, err error) error {
+		if r > 0 {
+			logging.Warnf("CbAuthHandler::GetCredentials error=%v Retrying (%d)", err, r)
+		}
+
+		u, p, err = cbauth.GetHTTPServiceAuth(ah.Hostport)
+		return err
+	}
+
+	rh := NewRetryHelper(MAX_AUTH_RETRIES, time.Second, 1, fn)
+	err := rh.Run()
 	if err != nil {
 		panic(err)
 	}
