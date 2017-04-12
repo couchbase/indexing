@@ -132,6 +132,12 @@ type IndexStats struct {
 	diskSnapLoadDuration  stats.Int64Val
 	notReadyError         stats.Int64Val
 	clientCancelError     stats.Int64Val
+	avgScanRate           stats.Int64Val
+	avgMutationRate       stats.Int64Val
+	lastScanGatherTime    stats.Int64Val
+	lastNumRowsReturned   stats.Int64Val
+	lastMutateGatherTime  stats.Int64Val
+	lastNumDocsQueued     stats.Int64Val
 
 	Timings IndexTimingStats
 }
@@ -187,6 +193,12 @@ func (s *IndexStats) Init() {
 	s.diskSnapLoadDuration.Init()
 	s.notReadyError.Init()
 	s.clientCancelError.Init()
+	s.avgScanRate.Init()
+	s.avgMutationRate.Init()
+	s.lastScanGatherTime.Init()
+	s.lastNumRowsReturned.Init()
+	s.lastMutateGatherTime.Init()
+	s.lastNumDocsQueued.Init()
 
 	s.Timings.Init()
 }
@@ -348,6 +360,8 @@ func (is IndexerStats) MarshalJSON() ([]byte, error) {
 		addStat("disk_load_duration", s.diskSnapLoadDuration.Value())
 		addStat("not_ready_errcount", s.notReadyError.Value())
 		addStat("client_cancel_errcount", s.clientCancelError.Value())
+		addStat("avg_scan_rate", s.avgScanRate.Value())
+		addStat("avg_mutation_rate", s.avgMutationRate.Value())
 
 		addStat("timings/dcp_getseqs", s.Timings.dcpSeqs.Value())
 		addStat("timings/storage_clone_handle", s.Timings.stCloneHandle.Value())
@@ -454,6 +468,7 @@ func (s *statsManager) tryUpdateStats(sync bool) {
 		s.Unlock()
 
 		go func() {
+
 			stats_list := []MsgType{STORAGE_STATS, SCAN_STATS, INDEX_PROGRESS_STATS, INDEXER_STATS}
 			for _, t := range stats_list {
 				ch := make(chan bool)

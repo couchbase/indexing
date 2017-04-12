@@ -444,6 +444,17 @@ func (s *scanCoordinator) handleStats(cmd Message) {
 				logging.Errorf("%v: Unable compute index count for %v/%v (%v)", s.logPrefix,
 					idxStats.bucket, idxStats.name, err)
 			}
+
+			// compute scan rate
+			now := time.Now().UnixNano()
+			elapsed := float64(now-idxStats.lastScanGatherTime.Value()) / float64(time.Second)
+			if elapsed > 0 {
+				numRowsReturned := idxStats.numRowsReturned.Value()
+				scanRate := float64(numRowsReturned-idxStats.lastNumRowsReturned.Value()) / elapsed
+				idxStats.avgScanRate.Set(int64((scanRate + float64(idxStats.avgScanRate.Value())) / 2))
+				idxStats.lastScanGatherTime.Set(now)
+				idxStats.lastNumRowsReturned.Set(numRowsReturned)
+			}
 		}
 		replych <- true
 	}()
