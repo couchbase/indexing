@@ -11,7 +11,7 @@ error_exit() {
 }
 
 export RELEASE=5.0.0
-export BLD_NUM=0
+export BLD_NUM=2261
 
 echo '</pre><h3>Building</h3><pre>'
 > $WORKSPACE/versions.cfg
