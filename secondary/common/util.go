@@ -246,10 +246,24 @@ func (ah *CbAuthHandler) GetCredentials() (string, string) {
 }
 
 func (ah *CbAuthHandler) AuthenticateMemcachedConn(host string, conn *memcached.Client) error {
-	u, p, err := cbauth.GetMemcachedServiceAuth(host)
+
+	var u, p string
+
+	fn := func(r int, err error) error {
+		if r > 0 {
+			logging.Warnf("CbAuthHandler::AuthenticateMemcachedConn error=%v Retrying (%d)", err, r)
+		}
+
+		u, p, err = cbauth.GetMemcachedServiceAuth(host)
+		return err
+	}
+
+	rh := NewRetryHelper(MAX_AUTH_RETRIES, time.Second, 1, fn)
+	err := rh.Run()
 	if err != nil {
 		panic(err)
 	}
+
 	_, err = conn.Auth(u, p)
 	_, err = conn.SelectBucket(ah.Bucket)
 	return err
