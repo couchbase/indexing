@@ -159,6 +159,7 @@ func (m *ServiceMgr) initService() {
 
 	go m.registerWithServer()
 	go m.listenMoveIndex()
+	go m.rebalanceJanitor()
 
 	http.HandleFunc("/registerRebalanceToken", m.handleRegisterRebalanceToken)
 	http.HandleFunc("/listRebalanceTokens", m.handleListRebalanceTokens)
@@ -1064,6 +1065,34 @@ loop:
 	}
 
 	return nil
+
+}
+
+func (m *ServiceMgr) rebalanceJanitor() {
+
+	for {
+		time.Sleep(time.Second * 30)
+
+		m.mu.Lock()
+
+		l.Infof("ServiceMgr::rebalanceJanitor Running Periodic Cleanup")
+
+		if !m.rebalanceRunning {
+			rtokens, err := m.getCurrRebalTokens()
+			if err != nil {
+				l.Errorf("ServiceMgr::rebalanceJanitor Error Fetching Metakv Tokens %v", err)
+			}
+
+			if rtokens != nil && len(rtokens.TT) != 0 {
+				l.Infof("ServiceMgr::rebalanceJanitor Found %v tokens. Cleaning up.", len(rtokens.TT))
+				err := m.cleanupTransferTokens(rtokens.TT)
+				if err != nil {
+					l.Errorf("ServiceMgr::rebalanceJanitor Error Cleaning Transfer Tokens %v", err)
+				}
+			}
+		}
+		m.mu.Unlock()
+	}
 
 }
 
