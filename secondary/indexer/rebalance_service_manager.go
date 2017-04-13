@@ -137,7 +137,7 @@ func NewRebalanceMgr(supvCmdch MsgChannel, supvMsgch MsgChannel, config c.Config
 	mgr.waiters = make(waiters)
 
 	mgr.nodeInfo = &service.NodeInfo{
-		NodeID: service.NodeID(config["nodeuuid"].String()),
+		NodeID:   service.NodeID(config["nodeuuid"].String()),
 		Priority: service.Priority(c.INDEXER_CUR_VERSION),
 	}
 
@@ -392,7 +392,7 @@ func (m *ServiceMgr) prepareFailover(change service.TopologyChange) error {
 
 		if !masterAlive {
 			l.Infof("ServiceMgr::prepareFailover Master Missing From Cluster Node List. Cleanup MoveIndex As Master.")
-			masterCleanup =  true
+			masterCleanup = true
 		}
 
 		if m.rebalanceToken.MasterId == string(m.nodeInfo.NodeID) {
@@ -2313,8 +2313,7 @@ func (m *ServiceMgr) writeBytes(w http.ResponseWriter, bytes []byte) {
 }
 
 func (m *ServiceMgr) validateAuth(w http.ResponseWriter, r *http.Request) bool {
-	cfg := m.config.Load()
-	valid, err := c.IsAuthValid(r, cfg["clusterAddr"].String())
+	_, valid, err := c.IsAuthValid(r)
 	if err != nil {
 		m.writeError(w, err)
 	} else if valid == false {

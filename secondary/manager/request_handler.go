@@ -753,7 +753,7 @@ func convertResponse(r *http.Response, resp interface{}) string {
 
 func doAuth(r *http.Request, w http.ResponseWriter, clusterUrl string) bool {
 
-	valid, err := common.IsAuthValid(r, clusterUrl)
+	_, valid, err := common.IsAuthValid(r)
 	if err != nil {
 		sendIndexResponseWithError(http.StatusInternalServerError, w, err.Error())
 		return false

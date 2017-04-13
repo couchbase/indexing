@@ -574,8 +574,7 @@ func (s *statsManager) handleStorageMMStatsReq(w http.ResponseWriter, r *http.Re
 }
 
 func (s *statsManager) handleStatsResetReq(w http.ResponseWriter, r *http.Request) {
-	conf := s.config.Load()
-	valid, _ := common.IsAuthValid(r, conf["clusterAddr"].String())
+	_, valid, _ := common.IsAuthValid(r)
 	if !valid {
 		w.WriteHeader(401)
 		w.Write([]byte("401 Unauthorized"))

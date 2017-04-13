@@ -56,7 +56,7 @@ func (api *restServer) writeError(w http.ResponseWriter, err error) {
 }
 
 func (api *restServer) validateAuth(w http.ResponseWriter, r *http.Request) bool {
-	valid, err := c.IsAuthValid(r, api.config["indexer.clusterAddr"].String())
+	_, valid, err := c.IsAuthValid(r)
 	if err != nil {
 		api.writeError(w, err)
 	} else if valid == false {

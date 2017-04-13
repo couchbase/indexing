@@ -20,6 +20,7 @@ import "time"
 import "math/big"
 
 import "github.com/couchbase/cbauth"
+import "github.com/couchbase/cbauth/cbauthimpl"
 import "github.com/couchbase/indexing/secondary/dcp"
 import "github.com/couchbase/indexing/secondary/dcp/transport/client"
 import "github.com/couchbase/indexing/secondary/logging"
@@ -573,22 +574,17 @@ func BucketTs(bucket *couchbase.Bucket, maxvb int) (seqnos, vbuuids []uint64, er
 	return seqnos, vbuuids, err
 }
 
-func IsAuthValid(r *http.Request, server string) (bool, error) {
-	auth := r.Header.Get("Authorization")
-	url := fmt.Sprintf("http://%s/pools", server)
-	if auth == "" {
-		return false, nil
+func IsAuthValid(r *http.Request) (cbauth.Creds, bool, error) {
+
+	creds, err := cbauth.AuthWebCreds(r)
+	if err != nil {
+		if strings.Contains(err.Error(), cbauthimpl.ErrNoAuth.Error()) {
+			return nil, false, nil
+		}
+		return nil, false, err
 	}
 
-	req, err := http.NewRequest("GET", url, nil)
-	client := http.Client{}
-	req.Header.Set("Authorization", auth)
-	resp, err := client.Do(req)
-	if err != nil {
-		return false, err
-	}
-	defer resp.Body.Close()
-	return resp.StatusCode == http.StatusOK, nil
+	return creds, true, nil
 }
 
 func SetNumCPUs(percent int) int {
