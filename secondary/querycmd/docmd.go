@@ -70,7 +70,7 @@ func ParseArgs(arguments []string) (*Command, []string, *flag.FlagSet, error) {
 	fset := flag.NewFlagSet("cmd", flag.ExitOnError)
 
 	// basic options
-	fset.StringVar(&cmdOptions.Server, "server", "", "Cluster server address")
+	fset.StringVar(&cmdOptions.Server, "server", "localhost:8091", "Cluster server address")
 	fset.StringVar(&cmdOptions.Auth, "auth", "", "Auth user and password")
 	fset.StringVar(&cmdOptions.Bucket, "bucket", "", "Bucket name")
 	fset.StringVar(&cmdOptions.OpType, "type", "", "Command: scan|stats|scanAll|count|nodes|create|build|move|drop|list|config")
@@ -106,22 +106,6 @@ func ParseArgs(arguments []string) (*Command, []string, *flag.FlagSet, error) {
 
 	if useSessionCons {
 		cmdOptions.Consistency = c.SessionConsistency
-	}
-
-	// if server is not specified, try guessing
-	if cmdOptions.Server == "" {
-		if guess := guessServer(); guess != "" {
-			cmdOptions.Server = guess
-			fset.Set("server", guess)
-		}
-	}
-
-	// if server is not specified, try guessing
-	if cmdOptions.Auth == "" {
-		if guess := guessAuth(cmdOptions.Server); guess != "" {
-			cmdOptions.Auth = guess
-			fset.Set("auth", guess)
-		}
 	}
 
 	// validate combinations
@@ -658,38 +642,4 @@ func mustNotHave(fset *flag.FlagSet, keys ...string) error {
 		}
 	}
 	return nil
-}
-
-func guessServer() string {
-	ports := []string{"8091", "9000"}
-	for _, port := range ports {
-		server := "127.0.0.1:" + port
-		resp, err := http.Get("http://" + server + "/pools")
-		if err != nil {
-			continue
-		}
-		resp.Body.Close()
-		return server
-	}
-	return ""
-}
-
-//
-// For ease of testing. Will be removed soon.
-//
-func guessAuth(server string) string {
-	auths := []string{"Administrator:asdasd", "Administrator:couchbase", "Administrator:password"}
-	client := http.Client{}
-	for _, auth := range auths {
-		up := strings.Split(auth, ":")
-		req, err := http.NewRequest("GET", "http://"+server+"/settings/web", nil)
-		req.SetBasicAuth(up[0], up[1])
-		resp, err := client.Do(req)
-		if err != nil || resp.StatusCode != http.StatusOK {
-			continue
-		}
-		resp.Body.Close()
-		return auth
-	}
-	return ""
 }

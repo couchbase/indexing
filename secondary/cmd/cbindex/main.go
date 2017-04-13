@@ -1,14 +1,19 @@
 package main
 
-import "flag"
-import "fmt"
-import "os"
-import "runtime"
+import (
+	"flag"
+	"fmt"
+	"os"
+	"os/exec"
+	"runtime"
+	"syscall"
 
-import c "github.com/couchbase/indexing/secondary/common"
-import qclient "github.com/couchbase/indexing/secondary/queryport/client"
-import "github.com/couchbase/indexing/secondary/logging"
-import "github.com/couchbase/indexing/secondary/querycmd"
+	c "github.com/couchbase/indexing/secondary/common"
+
+	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/querycmd"
+	qclient "github.com/couchbase/indexing/secondary/queryport/client"
+)
 
 func usage(fset *flag.FlagSet) {
 	fmt.Fprintln(os.Stderr, "Usage: cbindex [options]")
@@ -44,6 +49,23 @@ func main() {
 	} else if cmdOptions.Help || len(cmdOptions.OpType) < 1 {
 		usage(fset)
 		os.Exit(0)
+	}
+
+	if os.Getenv("CBAUTH_REVRPC_URL") == "" && cmdOptions.Auth != "" {
+		// unfortunately, above is read at init, so we have to respawn
+		revrpc := fmt.Sprintf("http://%v@%v/query2", cmdOptions.Auth, cmdOptions.Server)
+		os.Setenv("CBAUTH_REVRPC_URL", revrpc)
+		cmd := exec.Command(os.Args[0], os.Args[1:]...)
+		cmd.Stdin = os.Stdin
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		exitcode := 0
+		if err := cmd.Run(); err != nil {
+			if status, ok := err.(*exec.ExitError); ok {
+				exitcode = status.Sys().(syscall.WaitStatus).ExitStatus()
+			}
+		}
+		os.Exit(exitcode)
 	}
 
 	config := c.SystemConfig.SectionConfig("queryport.client.", true)
