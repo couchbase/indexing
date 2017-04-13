@@ -891,3 +891,30 @@ func GenNextBiggerKey(b []byte) []byte {
 	x.Add(&x, big.NewInt(1))
 	return x.Bytes()
 }
+
+func IsAllowed(creds cbauth.Creds, permissions []string, w http.ResponseWriter) bool {
+
+	allow := false
+	err := error(nil)
+
+	for _, permission := range permissions {
+		allow, err = creds.IsAllowed(permission)
+		if allow && err == nil {
+			break
+		}
+	}
+
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(err.Error()))
+		return false
+	}
+
+	if !allow {
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte(http.StatusText(http.StatusUnauthorized)))
+		return false
+	}
+
+	return true
+}
