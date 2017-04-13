@@ -112,7 +112,6 @@ type indexer struct {
 	compactMgrCmdCh    MsgChannel //channel to send commands to compaction manager
 	clustMgrAgentCmdCh MsgChannel //channel to send messages to index coordinator
 	kvSenderCmdCh      MsgChannel //channel to send messages to kv sender
-	cbqBridgeCmdCh     MsgChannel //channel to send message to cbq sender
 	settingsMgrCmdCh   MsgChannel
 	statsMgrCmdCh      MsgChannel
 	scanCoordCmdCh     MsgChannel //chhannel to send messages to scan coordinator
@@ -128,7 +127,6 @@ type indexer struct {
 	ddlSrvMgr     *DDLServiceMgr    //handle to ddl service manager
 	clustMgrAgent ClustMgrAgent     //handle to ClustMgrAgent
 	kvSender      KVSender          //handle to KVSender
-	cbqBridge     CbqBridge         //handle to CbqBridge
 	settingsMgr   settingsManager
 	statsMgr      *statsManager
 	scanCoord     ScanCoordinator //handle to ScanCoordinator
@@ -173,7 +171,6 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		compactMgrCmdCh:    make(MsgChannel),
 		clustMgrAgentCmdCh: make(MsgChannel),
 		kvSenderCmdCh:      make(MsgChannel),
-		cbqBridgeCmdCh:     make(MsgChannel),
 		settingsMgrCmdCh:   make(MsgChannel),
 		statsMgrCmdCh:      make(MsgChannel),
 		scanCoordCmdCh:     make(MsgChannel),
@@ -334,15 +331,6 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 			} else {
 				logging.Warnf("Indexer::NewIndexer Invalid Storage Mode %v. Ignored.", confStorageMode)
 			}
-		}
-	}
-
-	if !idx.enableManager {
-		//Start CbqBridge
-		idx.cbqBridge, res = NewCbqBridge(idx.cbqBridgeCmdCh, idx.adminRecvCh, idx.indexInstMap, idx.config)
-		if res.GetMsgType() != MSG_SUCCESS {
-			logging.Fatalf("Indexer::NewIndexer CbqBridge Init Error %+v", res)
-			return nil, res
 		}
 	}
 
