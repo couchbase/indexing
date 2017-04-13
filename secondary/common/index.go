@@ -468,19 +468,23 @@ func IsEquivalentIndex(d1, d2 *IndexDefn) bool {
 		return false
 	}
 
-	for _, s1 := range d1.SecExprs {
-		for _, s2 := range d2.SecExprs {
-			if s1 != s2 {
-				return false
-			}
+	if len(d1.SecExprs) != len(d2.SecExprs) {
+		return false
+	}
+
+	for i, s1 := range d1.SecExprs {
+		if s1 != d2.SecExprs[i] {
+			return false
 		}
 	}
 
-	for _, b1 := range d1.Desc {
-		for _, b2 := range d2.Desc {
-			if b1 != b2 {
-				return false
-			}
+	if len(d1.Desc) != len(d2.Desc) {
+		return false
+	}
+
+	for i, b1 := range d1.Desc {
+		if b1 != d2.Desc[i] {
+			return false
 		}
 	}
 
