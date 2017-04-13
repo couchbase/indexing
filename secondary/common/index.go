@@ -506,6 +506,7 @@ const (
 	RebalanceInProgress
 	IndexAlreadyExist
 	DropIndexInProgress
+	IndexInvalidState
 )
 
 type IndexerError struct {

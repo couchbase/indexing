@@ -4098,8 +4098,8 @@ func (idx *indexer) checkBucketInRecovery(bucket string,
 	return false
 }
 
-func (idx *indexer) checkValidIndexInst(bucket string,
-	instIdList []common.IndexInstId, clientCh MsgChannel, errMap map[common.IndexInstId]error) ([]common.IndexInstId, bool) {
+func (idx *indexer) checkValidIndexInst(bucket string, instIdList []common.IndexInstId,
+	clientCh MsgChannel, errMap map[common.IndexInstId]error) ([]common.IndexInstId, bool) {
 
 	if len(instIdList) == 0 {
 		return instIdList, true
@@ -4110,7 +4110,7 @@ func (idx *indexer) checkValidIndexInst(bucket string,
 
 	//validate instance list
 	for _, instId := range instIdList {
-		if _, ok := idx.indexInstMap[instId]; !ok {
+		if index, ok := idx.indexInstMap[instId]; !ok {
 			if idx.enableManager {
 				errStr := fmt.Sprintf("Unknown Index Instance %v In Build Request", instId)
 				idx.updateError(instId, errStr)
@@ -4124,8 +4124,17 @@ func (idx *indexer) checkValidIndexInst(bucket string,
 				return instIdList, false
 			}
 		} else {
-			newList[count] = instId
-			count++
+
+			if index.State == common.INDEX_STATE_CREATED ||
+				index.State == common.INDEX_STATE_READY ||
+				index.State == common.INDEX_STATE_ERROR {
+				newList[count] = instId
+				count++
+			} else {
+				errStr := fmt.Sprintf("Invalid Index State %v for %v In Build Request", index.State, instId)
+				idx.updateError(instId, errStr)
+				errMap[instId] = &common.IndexerError{Reason: errStr, Code: common.IndexInvalidState}
+			}
 		}
 	}
 
