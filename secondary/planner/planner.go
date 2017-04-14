@@ -67,10 +67,13 @@ const (
 type ViolationCode string
 
 const (
-	NoViolation           ViolationCode = "NoViolation"
-	ResourceViolation                   = "ResourceViolation"
-	AvailabilityViolation               = "AvailabilityViolation"
-	DeleteNodeViolation                 = "DeleteNodeViolation"
+	NoViolation          ViolationCode = "NoViolation"
+	MemoryViolation                    = "MemoryViolation"
+	CpuViolation                       = "CpuViolation"
+	ReplicaViolation                   = "ReplicaViolation"
+	EquivIndexViolation                = "EquivIndexViolation"
+	ServerGroupViolation               = "ServerGroupViolation"
+	DeleteNodeViolation                = "DeleteNodeViolation"
 )
 
 //////////////////////////////////////////////////////////////
@@ -1730,7 +1733,7 @@ func (c *IndexerConstraint) CanAddIndex(s *Solution, n *IndexerNode, u *IndexUsa
 	for _, index := range n.Indexes {
 		// check replica
 		if index.DefnId == u.DefnId {
-			return AvailabilityViolation
+			return ReplicaViolation
 		}
 
 		// check equivalent index
@@ -1738,14 +1741,14 @@ func (c *IndexerConstraint) CanAddIndex(s *Solution, n *IndexerNode, u *IndexUsa
 			if index.Instance != nil &&
 				u.Instance != nil &&
 				common.IsEquivalentIndex(&index.Instance.Defn, &u.Instance.Defn) {
-				return AvailabilityViolation
+				return EquivIndexViolation
 			}
 		}
 	}
 
 	// Are replica in the same server group?
 	if !c.SatisfyServerGroupConstraint(s, u, n.ServerGroup) {
-		return AvailabilityViolation
+		return ServerGroupViolation
 	}
 
 	if s.ignoreResourceConstraint() {
@@ -1764,11 +1767,11 @@ func (c *IndexerConstraint) CanAddIndex(s *Solution, n *IndexerNode, u *IndexUsa
 	}
 
 	if u.GetMemTotal(s.UseLiveData())+n.GetMemTotal(s.UseLiveData()) > memQuota {
-		return ResourceViolation
+		return MemoryViolation
 	}
 
 	if u.GetCpuUsage(s.UseLiveData())+n.GetCpuUsage(s.UseLiveData()) > cpuQuota {
-		return ResourceViolation
+		return CpuViolation
 	}
 
 	return NoViolation
@@ -1787,7 +1790,7 @@ func (c *IndexerConstraint) CanSwapIndex(sol *Solution, n *IndexerNode, s *Index
 	for _, index := range n.Indexes {
 		// check replica
 		if index.DefnId == s.DefnId {
-			return AvailabilityViolation
+			return ReplicaViolation
 		}
 
 		// check equivalent index
@@ -1795,14 +1798,14 @@ func (c *IndexerConstraint) CanSwapIndex(sol *Solution, n *IndexerNode, s *Index
 			if index.Instance != nil &&
 				s.Instance != nil &&
 				common.IsEquivalentIndex(&index.Instance.Defn, &s.Instance.Defn) {
-				return AvailabilityViolation
+				return EquivIndexViolation
 			}
 		}
 	}
 
 	// Are replica in the same server group?
 	if !c.SatisfyServerGroupConstraint(sol, s, n.ServerGroup) {
-		return AvailabilityViolation
+		return ServerGroupViolation
 	}
 
 	if sol.ignoreResourceConstraint() {
@@ -1821,11 +1824,11 @@ func (c *IndexerConstraint) CanSwapIndex(sol *Solution, n *IndexerNode, s *Index
 	}
 
 	if s.GetMemTotal(sol.UseLiveData())+n.GetMemTotal(sol.UseLiveData())-t.GetMemTotal(sol.UseLiveData()) > memQuota {
-		return ResourceViolation
+		return MemoryViolation
 	}
 
 	if s.GetCpuUsage(sol.UseLiveData())+n.GetCpuUsage(sol.UseLiveData())-t.GetCpuUsage(sol.UseLiveData()) > cpuQuota {
-		return ResourceViolation
+		return CpuViolation
 	}
 
 	return NoViolation
