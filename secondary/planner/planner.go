@@ -1055,17 +1055,17 @@ func (s *Solution) PrintLayout() {
 
 		logging.Infof("")
 		logging.Infof("Indexer serverGroup:%v, nodeId:%v, useLiveData:%v", indexer.ServerGroup, indexer.NodeId, s.UseLiveData())
-		logging.Infof("Indexer total memory:%v (%s), data:%v (%s), overhead:%v (%s), cpu:%.4f, number of indexes:%v",
+		logging.Infof("Indexer total memory:%v (%s), data:%v (%s), overhead:%v (%s), cpu:%.4f, number of indexes:%v isDeleted:%v isNew:%v",
 			indexer.GetMemTotal(s.UseLiveData()), formatMemoryStr(uint64(indexer.GetMemTotal(s.UseLiveData()))),
 			indexer.GetMemUsage(s.UseLiveData()), formatMemoryStr(uint64(indexer.GetMemUsage(s.UseLiveData()))),
 			indexer.GetMemOverhead(s.UseLiveData()), formatMemoryStr(uint64(indexer.GetMemOverhead(s.UseLiveData()))),
-			indexer.GetCpuUsage(s.UseLiveData()), len(indexer.Indexes))
+			indexer.GetCpuUsage(s.UseLiveData()), len(indexer.Indexes), indexer.IsDeleted(), indexer.isNew)
 
 		for _, index := range indexer.Indexes {
 			logging.Infof("\t\t------------------------------------------------------------------------------------------------------------------")
-			logging.Infof("\t\tIndex name:%v, bucket:%v, defnId:%v, instId:%v, new/moved:%v",
+			logging.Infof("\t\tIndex name:%v, bucket:%v, defnId:%v, instId:%v, new/moved:%v defer:%v ignoreEquivCheck:%v",
 				index.GetDisplayName(), index.Bucket, index.DefnId, index.InstId,
-				index.initialNode == nil || index.initialNode.NodeId != indexer.NodeId)
+				index.initialNode == nil || index.initialNode.NodeId != indexer.NodeId, index.NoUsage, index.suppressEquivIdxCheck)
 			logging.Infof("\t\tIndex total memory:%v (%s), data:%v (%s), overhead:%v (%s), cpu:%.4f",
 				index.GetMemTotal(s.UseLiveData()), formatMemoryStr(uint64(index.GetMemTotal(s.UseLiveData()))),
 				index.GetMemUsage(s.UseLiveData()), formatMemoryStr(uint64(index.GetMemUsage(s.UseLiveData()))),
