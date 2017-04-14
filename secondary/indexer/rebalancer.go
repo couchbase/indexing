@@ -705,6 +705,10 @@ loop:
 					remainingBuildTime = uint64(tot_remaining / processing_rate)
 				}
 
+				if tot_remaining == 0 {
+					remainingBuildTime = 0
+				}
+
 				l.Infof("Rebalancer::waitForIndexBuild Index %s State %v Pending %v EstTime %v", sname,
 					c.IndexState(status), tot_remaining, remainingBuildTime)
 
