@@ -2,7 +2,7 @@ package kvutility
 
 import (
 	"encoding/json"
-	"github.com/couchbase/go-couchbase"
+	c "github.com/couchbase/indexing/secondary/common"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 	"io/ioutil"
 	"log"
@@ -16,13 +16,7 @@ import (
 func Set(key string, v interface{}, bucketName string, password string, hostaddress string) {
 	url := "http://" + bucketName + ":" + password + "@" + hostaddress
 
-	c, err := couchbase.Connect(url)
-	tc.HandleError(err, "connect - "+url)
-
-	p, err := c.GetPool("default")
-	tc.HandleError(err, "pool")
-
-	b, err := p.GetBucket(bucketName)
+	b, err := c.ConnectBucket(url, "default", bucketName)
 	tc.HandleError(err, "bucket")
 
 	err = b.Set(key, 0, v)
@@ -32,13 +26,8 @@ func Set(key string, v interface{}, bucketName string, password string, hostaddr
 
 func SetKeyValues(keyValues tc.KeyValues, bucketName string, password string, hostaddress string) {
 	url := "http://" + bucketName + ":" + password + "@" + hostaddress
-	c, err := couchbase.Connect(url)
-	tc.HandleError(err, "connect - "+url)
 
-	p, err := c.GetPool("default")
-	tc.HandleError(err, "pool")
-
-	b, err := p.GetBucket(bucketName)
+	b, err := c.ConnectBucket(url, "default", bucketName)
 	tc.HandleError(err, "bucket")
 
 	for key, value := range keyValues {
@@ -49,16 +38,9 @@ func SetKeyValues(keyValues tc.KeyValues, bucketName string, password string, ho
 }
 
 func Get(key string, rv interface{}, bucketName string, password string, hostaddress string) {
-
 	url := "http://" + bucketName + ":" + password + "@" + hostaddress
 
-	c, err := couchbase.Connect(url)
-	tc.HandleError(err, "connect - "+url)
-
-	p, err := c.GetPool("default")
-	tc.HandleError(err, "pool")
-
-	b, err := p.GetBucket("test")
+	b, err := c.ConnectBucket(url, "default", bucketName)
 	tc.HandleError(err, "bucket")
 
 	err = b.Get(key, &rv)
@@ -66,16 +48,9 @@ func Get(key string, rv interface{}, bucketName string, password string, hostadd
 }
 
 func Delete(key string, bucketName string, password string, hostaddress string) {
-
 	url := "http://" + bucketName + ":" + password + "@" + hostaddress
 
-	c, err := couchbase.Connect(url)
-	tc.HandleError(err, "connect - "+url)
-
-	p, err := c.GetPool("default")
-	tc.HandleError(err, "pool")
-
-	b, err := p.GetBucket(bucketName)
+	b, err := c.ConnectBucket(url, "default", bucketName)
 	tc.HandleError(err, "bucket")
 
 	err = b.Delete(key)
@@ -84,21 +59,14 @@ func Delete(key string, bucketName string, password string, hostaddress string) 
 }
 
 func DeleteKeys(keyValues tc.KeyValues, bucketName string, password string, hostaddress string) {
-
 	url := "http://" + bucketName + ":" + password + "@" + hostaddress
 
-	c, err := couchbase.Connect(url)
-	tc.HandleError(err, "connect - "+url)
-
-	p, err := c.GetPool("default")
-	tc.HandleError(err, "pool")
-
-	b, err := p.GetBucket(bucketName)
+	b, err := c.ConnectBucket(url, "default", bucketName)
 	tc.HandleError(err, "bucket")
 
 	for key, _ := range keyValues {
 		err = b.Delete(key)
-		// tc.HandleError(err, "delete")
+		tc.HandleError(err, "delete")
 	}
 	b.Close()
 }

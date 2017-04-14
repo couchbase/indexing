@@ -512,7 +512,7 @@ func TestBucketFlush(t *testing.T) {
 	tc.ClearMap(docs)
 }
 
-func TestSaslBucket(t *testing.T) {
+func SkipTestSaslBucket(t *testing.T) {
 	log.Printf("In TestSaslBucket()")
 	var bucketName = "BucketA"
 	var bucketPassword = "password1"
@@ -522,7 +522,7 @@ func TestSaslBucket(t *testing.T) {
 	kvutility.DeleteBucket(bucketName, "sasl", clusterconfig.Username, clusterconfig.Password, kvaddress)
 	time.Sleep(30 * time.Second) // Sleep after bucket create or delete
 
-	kvutility.CreateBucket(bucketName, "sasl", bucketPassword, clusterconfig.Username, clusterconfig.Password, kvaddress, "300", "11212")
+	kvutility.CreateBucket(bucketName, "sasl", "", clusterconfig.Username, clusterconfig.Password, kvaddress, "300", "11212")
 	time.Sleep(30 * time.Second) // Sleep after bucket create or delete
 	kvdocs := generateDocs(1000, "users.prod")
 	kvutility.SetKeyValues(kvdocs, bucketName, bucketPassword, clusterconfig.KVAddress)
