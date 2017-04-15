@@ -837,6 +837,11 @@ func (o *MetadataProvider) BuildIndexes(defnIDs []c.IndexDefnId) error {
 			}
 		}
 
+		// place token for recovery.
+		if err := PostBuildCommandToken(id); err != nil {
+			return errors.New(fmt.Sprintf("Fail to Build Index due to internal errors.  Error=%v.", err))
+		}
+
 		// find watcher -- This method does not check index status (return the watcher even
 		// if index is in deleted status). So this return an error if  watcher is dropped
 		// asynchronously (some parallel go-routine unwatchMetadata).

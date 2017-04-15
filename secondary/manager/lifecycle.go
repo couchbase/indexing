@@ -1340,6 +1340,59 @@ func (s *builder) recover() {
 
 	logging.Infof("builder: recovering scheduled index")
 
+	//
+	// Cleanup based on build token
+	//
+	entries, err := metakv.ListAllChildren(client.BuildDDLCommandTokenPath)
+	if err != nil {
+		logging.Warnf("builder: Fail to build index upon recovery.  Internal Error = %v", err)
+		entries = nil
+	}
+
+	for _, entry := range entries {
+
+		if strings.Contains(entry.Path, client.BuildDDLCommandTokenPath) && entry.Value != nil {
+
+			logging.Infof("builder: Processing build token %v", entry.Path)
+
+			command, err := client.UnmarshallBuildCommandToken(entry.Value)
+			if err != nil {
+				logging.Warnf("builder: Fail to build index upon recovery.  Skp command %v.  Internal Error = %v.", entry.Path, err)
+				continue
+			}
+
+			defn, err := s.manager.repo.GetIndexDefnById(command.DefnId)
+			if err != nil {
+				logging.Warnf("builder: Fail to build index upon recovery.  Skp command %v.  Internal Error = %v.", entry.Path, err)
+				continue
+			}
+
+			// index may already be deleted or does not exist in this node
+			if defn == nil {
+				continue
+			}
+
+			inst, err := s.manager.FindLocalIndexInst(defn.Bucket, defn.DefnId)
+			if inst == nil || err != nil {
+				logging.Errorf("builder: Unable to read index instance for definition (%v, %v).   Skipping ...",
+					defn.Bucket, defn.Name)
+				continue
+			}
+
+			if inst.State == uint32(common.INDEX_STATE_READY) {
+				if err := s.manager.SetScheduledFlag(defn.Bucket, defn.DefnId, true); err != nil {
+					logging.Errorf("builder: Unable to set scheduled flag when trying to build index during recovery (%v, %v).  Skipping ...",
+						defn.Bucket, defn.Name)
+					continue
+				}
+				logging.Infof("builder: Schedule index build for (%v, %v).", defn.Bucket, defn.Name)
+			}
+		}
+	}
+
+	//
+	// Cleanup based on index status
+	//
 	metaIter, err := s.manager.repo.NewIterator()
 	if err != nil {
 		logging.Errorf("builder:  Unable to read from metadata repository.   Will not recover scheduled build index from repository.")
