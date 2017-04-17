@@ -10,9 +10,14 @@
 package common
 
 import (
+	"os"
+	"time"
+
 	"github.com/couchbase/cbauth/metakv"
 	"github.com/couchbase/indexing/secondary/logging"
 )
+
+const MAX_METAKV_RETRIES = 100
 
 const (
 	IndexingMetaDir          = "/indexing/"
@@ -45,15 +50,19 @@ func SetupSettingsNotifier(callb func(Config), cancelCh chan struct{}) {
 	}
 
 	go func() {
-		for {
-			err := metakv.RunObserveChildren(IndexingSettingsMetaDir, metaKvCb, cancelCh)
-			if err == nil {
-				return
-			} else {
-				logging.Errorf("Settings metakv notifier failed (%v)..Restarting", err)
+		fn := func(r int, err error) error {
+			if r > 0 {
+				logging.Errorf("metakv notifier failed (%v)..Retrying %v", err, r)
 			}
+			err = metakv.RunObserveChildren(IndexingSettingsMetaDir, metaKvCb, cancelCh)
+			return err
+		}
+		rh := NewRetryHelper(MAX_METAKV_RETRIES, time.Second, 2, fn)
+		err := rh.Run()
+		if err != nil {
+			logging.Fatalf("Settings metakv notifier failed (%v).. Exiting", err)
+			os.Exit(1)
 		}
 	}()
-
 	return
 }
