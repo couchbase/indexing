@@ -112,7 +112,6 @@ type indexer struct {
 	compactMgrCmdCh    MsgChannel //channel to send commands to compaction manager
 	clustMgrAgentCmdCh MsgChannel //channel to send messages to index coordinator
 	kvSenderCmdCh      MsgChannel //channel to send messages to kv sender
-	cbqBridgeCmdCh     MsgChannel //channel to send message to cbq sender
 	settingsMgrCmdCh   MsgChannel
 	statsMgrCmdCh      MsgChannel
 	scanCoordCmdCh     MsgChannel //chhannel to send messages to scan coordinator
@@ -128,7 +127,6 @@ type indexer struct {
 	ddlSrvMgr     *DDLServiceMgr    //handle to ddl service manager
 	clustMgrAgent ClustMgrAgent     //handle to ClustMgrAgent
 	kvSender      KVSender          //handle to KVSender
-	cbqBridge     CbqBridge         //handle to CbqBridge
 	settingsMgr   settingsManager
 	statsMgr      *statsManager
 	scanCoord     ScanCoordinator //handle to ScanCoordinator
@@ -173,7 +171,6 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		compactMgrCmdCh:    make(MsgChannel),
 		clustMgrAgentCmdCh: make(MsgChannel),
 		kvSenderCmdCh:      make(MsgChannel),
-		cbqBridgeCmdCh:     make(MsgChannel),
 		settingsMgrCmdCh:   make(MsgChannel),
 		statsMgrCmdCh:      make(MsgChannel),
 		scanCoordCmdCh:     make(MsgChannel),
@@ -334,15 +331,6 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 			} else {
 				logging.Warnf("Indexer::NewIndexer Invalid Storage Mode %v. Ignored.", confStorageMode)
 			}
-		}
-	}
-
-	if !idx.enableManager {
-		//Start CbqBridge
-		idx.cbqBridge, res = NewCbqBridge(idx.cbqBridgeCmdCh, idx.adminRecvCh, idx.indexInstMap, idx.config)
-		if res.GetMsgType() != MSG_SUCCESS {
-			logging.Fatalf("Indexer::NewIndexer CbqBridge Init Error %+v", res)
-			return nil, res
 		}
 	}
 
@@ -4110,8 +4098,8 @@ func (idx *indexer) checkBucketInRecovery(bucket string,
 	return false
 }
 
-func (idx *indexer) checkValidIndexInst(bucket string,
-	instIdList []common.IndexInstId, clientCh MsgChannel, errMap map[common.IndexInstId]error) ([]common.IndexInstId, bool) {
+func (idx *indexer) checkValidIndexInst(bucket string, instIdList []common.IndexInstId,
+	clientCh MsgChannel, errMap map[common.IndexInstId]error) ([]common.IndexInstId, bool) {
 
 	if len(instIdList) == 0 {
 		return instIdList, true
@@ -4122,7 +4110,7 @@ func (idx *indexer) checkValidIndexInst(bucket string,
 
 	//validate instance list
 	for _, instId := range instIdList {
-		if _, ok := idx.indexInstMap[instId]; !ok {
+		if index, ok := idx.indexInstMap[instId]; !ok {
 			if idx.enableManager {
 				errStr := fmt.Sprintf("Unknown Index Instance %v In Build Request", instId)
 				idx.updateError(instId, errStr)
@@ -4136,8 +4124,17 @@ func (idx *indexer) checkValidIndexInst(bucket string,
 				return instIdList, false
 			}
 		} else {
-			newList[count] = instId
-			count++
+
+			if index.State == common.INDEX_STATE_CREATED ||
+				index.State == common.INDEX_STATE_READY ||
+				index.State == common.INDEX_STATE_ERROR {
+				newList[count] = instId
+				count++
+			} else {
+				errStr := fmt.Sprintf("Invalid Index State %v for %v In Build Request", index.State, instId)
+				idx.updateError(instId, errStr)
+				errMap[instId] = &common.IndexerError{Reason: errStr, Code: common.IndexInvalidState}
+			}
 		}
 	}
 

@@ -137,7 +137,7 @@ func NewRebalanceMgr(supvCmdch MsgChannel, supvMsgch MsgChannel, config c.Config
 	mgr.waiters = make(waiters)
 
 	mgr.nodeInfo = &service.NodeInfo{
-		NodeID: service.NodeID(config["nodeuuid"].String()),
+		NodeID:   service.NodeID(config["nodeuuid"].String()),
 		Priority: service.Priority(c.INDEXER_CUR_VERSION),
 	}
 
@@ -159,6 +159,7 @@ func (m *ServiceMgr) initService() {
 
 	go m.registerWithServer()
 	go m.listenMoveIndex()
+	go m.rebalanceJanitor()
 
 	http.HandleFunc("/registerRebalanceToken", m.handleRegisterRebalanceToken)
 	http.HandleFunc("/listRebalanceTokens", m.handleListRebalanceTokens)
@@ -392,7 +393,7 @@ func (m *ServiceMgr) prepareFailover(change service.TopologyChange) error {
 
 		if !masterAlive {
 			l.Infof("ServiceMgr::prepareFailover Master Missing From Cluster Node List. Cleanup MoveIndex As Master.")
-			masterCleanup =  true
+			masterCleanup = true
 		}
 
 		if m.rebalanceToken.MasterId == string(m.nodeInfo.NodeID) {
@@ -515,7 +516,7 @@ func (m *ServiceMgr) startFailover(change service.TopologyChange) error {
 
 	//TODO Directly call rebalanceDone?
 	m.rebalancer = NewRebalancer(nil, nil, string(m.nodeInfo.NodeID), true,
-		m.rebalanceProgressCallback, m.rebalanceDoneCallback, m.supvMsgch, "")
+		m.rebalanceProgressCallback, m.rebalanceDoneCallback, m.supvMsgch, "", m.config.Load())
 
 	return nil
 }
@@ -606,7 +607,8 @@ func (m *ServiceMgr) startRebalance(change service.TopologyChange) error {
 	m.updateRebalanceProgressLOCKED(0)
 
 	m.rebalancer = NewRebalancer(transferTokens, m.rebalanceToken, string(m.nodeInfo.NodeID),
-		true, m.rebalanceProgressCallback, m.rebalanceDoneCallback, m.supvMsgch, m.localhttp)
+		true, m.rebalanceProgressCallback, m.rebalanceDoneCallback, m.supvMsgch,
+		m.localhttp, m.config.Load())
 
 	return nil
 }
@@ -1063,6 +1065,34 @@ loop:
 	}
 
 	return nil
+
+}
+
+func (m *ServiceMgr) rebalanceJanitor() {
+
+	for {
+		time.Sleep(time.Second * 30)
+
+		m.mu.Lock()
+
+		l.Infof("ServiceMgr::rebalanceJanitor Running Periodic Cleanup")
+
+		if !m.rebalanceRunning {
+			rtokens, err := m.getCurrRebalTokens()
+			if err != nil {
+				l.Errorf("ServiceMgr::rebalanceJanitor Error Fetching Metakv Tokens %v", err)
+			}
+
+			if rtokens != nil && len(rtokens.TT) != 0 {
+				l.Infof("ServiceMgr::rebalanceJanitor Found %v tokens. Cleaning up.", len(rtokens.TT))
+				err := m.cleanupTransferTokens(rtokens.TT)
+				if err != nil {
+					l.Errorf("ServiceMgr::rebalanceJanitor Error Cleaning Transfer Tokens %v", err)
+				}
+			}
+		}
+		m.mu.Unlock()
+	}
 
 }
 
@@ -1766,8 +1796,9 @@ func (m *ServiceMgr) handleRegisterRebalanceToken(w http.ResponseWriter, r *http
 				return
 			}
 
-			m.rebalancerF = NewRebalancer(nil, &rebalToken, string(m.nodeInfo.NodeID), false, nil,
-				m.rebalanceDoneCallback, m.supvMsgch, m.localhttp)
+			m.rebalancerF = NewRebalancer(nil, &rebalToken, string(m.nodeInfo.NodeID),
+				false, nil, m.rebalanceDoneCallback, m.supvMsgch,
+				m.localhttp, m.config.Load())
 			m.writeOk(w)
 			return
 
@@ -1871,7 +1902,9 @@ func (m *ServiceMgr) processMoveIndex(path string, value []byte, rev interface{}
 				m.runCleanupPhaseLOCKED(MoveIndexTokenPath, true)
 				return nil
 			}
-			m.rebalancerF = NewRebalancer(nil, &rebalToken, string(m.nodeInfo.NodeID), false, nil, m.moveIndexDoneCallback, m.supvMsgch, m.localhttp)
+			m.rebalancerF = NewRebalancer(nil, &rebalToken, string(m.nodeInfo.NodeID),
+				false, nil, m.moveIndexDoneCallback, m.supvMsgch,
+				m.localhttp, m.config.Load())
 		}
 	}
 
@@ -1973,7 +2006,7 @@ func (m *ServiceMgr) initMoveIndex(req *manager.IndexRequest, nodes []string) (e
 	}
 
 	rebalancer := NewRebalancer(transferTokens, m.rebalanceToken, string(m.nodeInfo.NodeID),
-		true, nil, m.moveIndexDoneCallback, m.supvMsgch, m.localhttp)
+		true, nil, m.moveIndexDoneCallback, m.supvMsgch, m.localhttp, m.config.Load())
 
 	m.rebalancer = rebalancer
 	m.rebalanceRunning = true
@@ -2313,8 +2346,7 @@ func (m *ServiceMgr) writeBytes(w http.ResponseWriter, bytes []byte) {
 }
 
 func (m *ServiceMgr) validateAuth(w http.ResponseWriter, r *http.Request) bool {
-	cfg := m.config.Load()
-	valid, err := c.IsAuthValid(r, cfg["clusterAddr"].String())
+	_, valid, err := c.IsAuthValid(r)
 	if err != nil {
 		m.writeError(w, err)
 	} else if valid == false {

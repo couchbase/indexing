@@ -881,7 +881,8 @@ func (m *LifecycleMgr) canRetryError(inst *IndexInstDistribution, err error) boo
 	if indexerErr.Code == common.IndexNotExist ||
 		indexerErr.Code == common.InvalidBucket ||
 		indexerErr.Code == common.RebalanceInProgress ||
-		indexerErr.Code == common.IndexAlreadyExist {
+		indexerErr.Code == common.IndexAlreadyExist ||
+		indexerErr.Code == common.IndexInvalidState {
 		return false
 	}
 

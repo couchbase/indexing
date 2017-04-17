@@ -42,9 +42,11 @@ type Callbacks struct {
 type Rebalancer struct {
 	transferTokens map[string]*c.TransferToken
 	acceptedTokens map[string]*c.TransferToken
-	rebalToken     *RebalanceToken
-	nodeId         string
-	master         bool
+	sourceTokens   map[string]*c.TransferToken
+
+	rebalToken *RebalanceToken
+	nodeId     string
+	master     bool
 
 	cb Callbacks
 
@@ -69,12 +71,16 @@ type Rebalancer struct {
 	waitForTokenPublish chan struct{}
 
 	retErr error
+
+	config c.ConfigHolder
 }
 
 func NewRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *RebalanceToken,
-	nodeId string, master bool, progress ProgressCallback, done DoneCallback, supvMsgch MsgChannel, localaddr string) *Rebalancer {
+	nodeId string, master bool, progress ProgressCallback, done DoneCallback,
+	supvMsgch MsgChannel, localaddr string, config c.Config) *Rebalancer {
 
-	l.Infof("NewRebalancer nodeId %v rebalToken %v master %v localaddr %v", nodeId, rebalToken, master, localaddr)
+	l.Infof("NewRebalancer nodeId %v rebalToken %v master %v localaddr %v", nodeId,
+		rebalToken, master, localaddr)
 
 	r := &Rebalancer{
 		transferTokens: transferTokens,
@@ -92,10 +98,13 @@ func NewRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *Rebal
 		supvMsgch: supvMsgch,
 
 		acceptedTokens: make(map[string]*c.TransferToken),
+		sourceTokens:   make(map[string]*c.TransferToken),
 		localaddr:      localaddr,
 
 		waitForTokenPublish: make(chan struct{}),
 	}
+
+	r.config.Store(config)
 
 	if master {
 		go r.doRebalance()
@@ -271,6 +280,15 @@ func (r *Rebalancer) processTokenAsSource(ttid string, tt *c.TransferToken) bool
 		if !r.addToWaitGroup() {
 			return true
 		}
+
+		if !r.checkValidNotifyStateSource(ttid, tt) {
+			return true
+		}
+
+		r.mu.Lock()
+		r.sourceTokens[ttid] = tt
+		r.mu.Unlock()
+
 		//TODO batch this rather than one per index
 		go r.dropIndexWhenIdle(ttid, tt)
 
@@ -360,6 +378,11 @@ loop:
 
 			tt.State = c.TransferTokenCommit
 			r.setTransferTokenInMetakv(ttid, tt)
+
+			r.mu.Lock()
+			r.sourceTokens[ttid] = tt
+			r.mu.Unlock()
+
 			break loop
 		}
 		time.Sleep(5 * time.Second)
@@ -377,6 +400,10 @@ func (r *Rebalancer) processTokenAsDest(ttid string, tt *c.TransferToken) bool {
 			l.Errorf("Rebalancer::processTokenAsDest Unable to delete TransferToken "+
 				"In Metakv. %v. Err %v", tt, err)
 		}
+		return true
+	}
+
+	if !r.checkValidNotifyStateDest(ttid, tt) {
 		return true
 	}
 
@@ -471,6 +498,40 @@ func (r *Rebalancer) processTokenAsDest(ttid string, tt *c.TransferToken) bool {
 	return true
 }
 
+func (r *Rebalancer) checkValidNotifyStateDest(ttid string, tt *c.TransferToken) bool {
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if tto, ok := r.acceptedTokens[ttid]; ok {
+		if tt.State <= tto.State {
+			l.Warnf("Rebalancer::checkValidNotifyStateDest Detected Invalid State "+
+				"Change Notification. Token Id %v Local State %v Metakv State %v", ttid,
+				tto.State, tt.State)
+			return false
+		}
+	}
+	return true
+
+}
+
+func (r *Rebalancer) checkValidNotifyStateSource(ttid string, tt *c.TransferToken) bool {
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if tto, ok := r.sourceTokens[ttid]; ok {
+		if tt.State <= tto.State {
+			l.Warnf("Rebalancer::checkValidNotifyStateSource Detected Invalid State "+
+				"Change Notification. Token Id %v Local State %v Metakv State %v", ttid,
+				tto.State, tt.State)
+			return false
+		}
+	}
+	return true
+
+}
+
 func (r *Rebalancer) checkIndexReadyToBuild() bool {
 
 	for ttid, tt := range r.acceptedTokens {
@@ -545,6 +606,11 @@ func (r *Rebalancer) waitForIndexBuild() {
 
 	allTokensReady := true
 
+	buildStartTime := time.Now()
+
+	cfg := r.config.Load()
+	maxRemainingBuildTime := cfg["rebalance.maxRemainingBuildTime"].Uint64()
+
 loop:
 	for {
 		select {
@@ -612,21 +678,41 @@ loop:
 				sname := fmt.Sprintf("%s:%s:", tt.IndexInst.Defn.Bucket, tt.IndexInst.DisplayName())
 				sname_pend := sname + "num_docs_pending"
 				sname_queued := sname + "num_docs_queued"
+				sname_processed := sname + "num_docs_processed"
 
-				var num_pend, num_queued float64
+				var num_pend, num_queued, num_processed float64
 				if _, ok := statsMap[sname_pend]; ok {
 					num_pend = statsMap[sname_pend].(float64)
 					num_queued = statsMap[sname_queued].(float64)
+					num_processed = statsMap[sname_processed].(float64)
 				} else {
 					l.Infof("Rebalancer::waitForIndexBuild Missing Stats %v %v. Retrying...", sname_queued, sname_pend)
 					break
 				}
 
-				tot_queued := num_pend + num_queued
+				tot_remaining := num_pend + num_queued
 
-				l.Infof("Rebalancer::waitForIndexBuild Index %s State %v Pending %v", sname, c.IndexState(status), tot_queued)
+				elapsed := time.Since(buildStartTime).Seconds()
+				if elapsed == 0 {
+					elapsed = 1
+				}
 
-				if c.IndexState(status) == c.INDEX_STATE_ACTIVE && tot_queued < MaxPendingBeforeReady {
+				processing_rate := num_processed / elapsed
+
+				remainingBuildTime := maxRemainingBuildTime
+
+				if processing_rate != 0 {
+					remainingBuildTime = uint64(tot_remaining / processing_rate)
+				}
+
+				if tot_remaining == 0 {
+					remainingBuildTime = 0
+				}
+
+				l.Infof("Rebalancer::waitForIndexBuild Index %s State %v Pending %v EstTime %v", sname,
+					c.IndexState(status), tot_remaining, remainingBuildTime)
+
+				if c.IndexState(status) == c.INDEX_STATE_ACTIVE && remainingBuildTime < maxRemainingBuildTime {
 					respch := make(chan bool)
 					r.supvMsgch <- &MsgUpdateIndexRState{defnId: tt.IndexInst.Defn.DefnId,
 						rstate: c.REBAL_ACTIVE,
@@ -727,7 +813,17 @@ func (r *Rebalancer) setTransferTokenError(ttid string, tt *c.TransferToken, err
 
 func (r *Rebalancer) setTransferTokenInMetakv(ttid string, tt *c.TransferToken) {
 
-	err := MetakvSet(RebalanceMetakvDir+ttid, tt)
+	fn := func(r int, err error) error {
+		if r > 0 {
+			l.Warnf("Rebalancer::setTransferTokenInMetakv error=%v Retrying (%d)", err, r)
+		}
+		err = MetakvSet(RebalanceMetakvDir+ttid, tt)
+		return err
+	}
+
+	rh := c.NewRetryHelper(10, time.Second, 1, fn)
+	err := rh.Run()
+
 	if err != nil {
 		l.Fatalf("Rebalancer::setTransferTokenInMetakv Unable to set TransferToken In "+
 			"Meta Storage. %v %v. Err %v", ttid, tt, err)

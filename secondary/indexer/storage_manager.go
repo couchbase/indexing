@@ -775,6 +775,17 @@ func (s *storageMgr) handleStats(cmd Message) {
 			idxStats.getBytes.Set(st.Stats.GetBytes)
 			idxStats.insertBytes.Set(st.Stats.InsertBytes)
 			idxStats.deleteBytes.Set(st.Stats.DeleteBytes)
+
+			// compute mutation rate
+			now := time.Now().UnixNano()
+			elapsed := float64(now-idxStats.lastMutateGatherTime.Value()) / float64(time.Second)
+			if elapsed > 0 {
+				numDocsQueued := idxStats.numDocsFlushQueued.Value()
+				mutationRate := float64(numDocsQueued-idxStats.lastNumDocsQueued.Value()) / elapsed
+				idxStats.avgMutationRate.Set(int64((mutationRate + float64(idxStats.avgMutationRate.Value())) / 2))
+				idxStats.lastMutateGatherTime.Set(now)
+				idxStats.lastNumDocsQueued.Set(numDocsQueued)
+			}
 		}
 	}
 

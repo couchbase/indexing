@@ -166,7 +166,8 @@ func registerRequestHandler(mgr *IndexManager, clusterUrl string) {
 
 func (m *requestHandlerContext) createIndexRequest(w http.ResponseWriter, r *http.Request) {
 
-	if !doAuth(r, w, m.clusterUrl) {
+	_, ok := doAuth(r, w)
+	if !ok {
 		return
 	}
 
@@ -203,7 +204,8 @@ func (m *requestHandlerContext) createIndexRequest(w http.ResponseWriter, r *htt
 
 func (m *requestHandlerContext) dropIndexRequest(w http.ResponseWriter, r *http.Request) {
 
-	if !doAuth(r, w, m.clusterUrl) {
+	_, ok := doAuth(r, w)
+	if !ok {
 		return
 	}
 
@@ -216,6 +218,7 @@ func (m *requestHandlerContext) dropIndexRequest(w http.ResponseWriter, r *http.
 
 	// call the index manager to handle the DDL
 	indexDefn := request.Index
+
 	if err := m.mgr.HandleDeleteIndexDDL(indexDefn.DefnId); err == nil {
 		// No error, return success
 		sendIndexResponse(w)
@@ -227,7 +230,8 @@ func (m *requestHandlerContext) dropIndexRequest(w http.ResponseWriter, r *http.
 
 func (m *requestHandlerContext) buildIndexRequest(w http.ResponseWriter, r *http.Request) {
 
-	if !doAuth(r, w, m.clusterUrl) {
+	_, ok := doAuth(r, w)
+	if !ok {
 		return
 	}
 
@@ -273,7 +277,8 @@ func (m *requestHandlerContext) convertIndexRequest(r *http.Request) *IndexReque
 
 func (m *requestHandlerContext) handleIndexStatusRequest(w http.ResponseWriter, r *http.Request) {
 
-	if !doAuth(r, w, m.clusterUrl) {
+	_, ok := doAuth(r, w)
+	if !ok {
 		return
 	}
 
@@ -445,7 +450,8 @@ func (m *requestHandlerContext) getIndexStatus(bucket string) ([]IndexStatus, []
 
 func (m *requestHandlerContext) handleIndexMetadataRequest(w http.ResponseWriter, r *http.Request) {
 
-	if !doAuth(r, w, m.clusterUrl) {
+	_, ok := doAuth(r, w)
+	if !ok {
 		return
 	}
 
@@ -544,7 +550,8 @@ func (m *requestHandlerContext) convertIndexMetadataRequest(r *http.Request) *Cl
 
 func (m *requestHandlerContext) handleLocalIndexMetadataRequest(w http.ResponseWriter, r *http.Request) {
 
-	if !doAuth(r, w, m.clusterUrl) {
+	_, ok := doAuth(r, w)
+	if !ok {
 		return
 	}
 
@@ -624,7 +631,8 @@ func (m *requestHandlerContext) getLocalIndexMetadata(bucket string) (meta *Loca
 //
 func (m *requestHandlerContext) handleRestoreIndexMetadataRequest(w http.ResponseWriter, r *http.Request) {
 
-	if !doAuth(r, w, m.clusterUrl) {
+	_, ok := doAuth(r, w)
+	if !ok {
 		return
 	}
 
@@ -751,15 +759,41 @@ func convertResponse(r *http.Response, resp interface{}) string {
 	return RESP_SUCCESS
 }
 
-func doAuth(r *http.Request, w http.ResponseWriter, clusterUrl string) bool {
+func doAuth(r *http.Request, w http.ResponseWriter) (cbauth.Creds, bool) {
 
-	valid, err := common.IsAuthValid(r, clusterUrl)
+	creds, valid, err := common.IsAuthValid(r)
 	if err != nil {
 		sendIndexResponseWithError(http.StatusInternalServerError, w, err.Error())
-		return false
+		return nil, false
 	} else if valid == false {
 		w.WriteHeader(401)
 		w.Write([]byte("401 Unauthorized\n"))
+		return nil, false
+	}
+
+	return creds, true
+}
+
+func isAllowed(creds cbauth.Creds, permissions []string, w http.ResponseWriter) bool {
+
+	allow := false
+	err := error(nil)
+
+	for _, permission := range permissions {
+		allow, err = creds.IsAllowed(permission)
+		if allow && err == nil {
+			break
+		}
+	}
+
+	if err != nil {
+		sendIndexResponseWithError(http.StatusInternalServerError, w, err.Error())
+		return false
+	}
+
+	if !allow {
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte(http.StatusText(http.StatusUnauthorized)))
 		return false
 	}
 

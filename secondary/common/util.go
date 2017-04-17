@@ -20,10 +20,16 @@ import "time"
 import "math/big"
 
 import "github.com/couchbase/cbauth"
+import "github.com/couchbase/cbauth/cbauthimpl"
 import "github.com/couchbase/indexing/secondary/dcp"
 import "github.com/couchbase/indexing/secondary/dcp/transport/client"
+import "github.com/couchbase/indexing/secondary/logging"
 
 const IndexNamePattern = "^[A-Za-z0-9#_-]+$"
+
+const (
+	MAX_AUTH_RETRIES = 10
+)
 
 var ErrInvalidIndexName = fmt.Errorf("Invalid index name")
 
@@ -219,7 +225,20 @@ type CbAuthHandler struct {
 }
 
 func (ah *CbAuthHandler) GetCredentials() (string, string) {
-	u, p, err := cbauth.GetHTTPServiceAuth(ah.Hostport)
+
+	var u, p string
+
+	fn := func(r int, err error) error {
+		if r > 0 {
+			logging.Warnf("CbAuthHandler::GetCredentials error=%v Retrying (%d)", err, r)
+		}
+
+		u, p, err = cbauth.GetHTTPServiceAuth(ah.Hostport)
+		return err
+	}
+
+	rh := NewRetryHelper(MAX_AUTH_RETRIES, time.Second, 1, fn)
+	err := rh.Run()
 	if err != nil {
 		panic(err)
 	}
@@ -228,10 +247,24 @@ func (ah *CbAuthHandler) GetCredentials() (string, string) {
 }
 
 func (ah *CbAuthHandler) AuthenticateMemcachedConn(host string, conn *memcached.Client) error {
-	u, p, err := cbauth.GetMemcachedServiceAuth(host)
+
+	var u, p string
+
+	fn := func(r int, err error) error {
+		if r > 0 {
+			logging.Warnf("CbAuthHandler::AuthenticateMemcachedConn error=%v Retrying (%d)", err, r)
+		}
+
+		u, p, err = cbauth.GetMemcachedServiceAuth(host)
+		return err
+	}
+
+	rh := NewRetryHelper(MAX_AUTH_RETRIES, time.Second, 1, fn)
+	err := rh.Run()
 	if err != nil {
 		panic(err)
 	}
+
 	_, err = conn.Auth(u, p)
 	_, err = conn.SelectBucket(ah.Bucket)
 	return err
@@ -541,22 +574,17 @@ func BucketTs(bucket *couchbase.Bucket, maxvb int) (seqnos, vbuuids []uint64, er
 	return seqnos, vbuuids, err
 }
 
-func IsAuthValid(r *http.Request, server string) (bool, error) {
-	auth := r.Header.Get("Authorization")
-	url := fmt.Sprintf("http://%s/pools", server)
-	if auth == "" {
-		return false, nil
+func IsAuthValid(r *http.Request) (cbauth.Creds, bool, error) {
+
+	creds, err := cbauth.AuthWebCreds(r)
+	if err != nil {
+		if strings.Contains(err.Error(), cbauthimpl.ErrNoAuth.Error()) {
+			return nil, false, nil
+		}
+		return nil, false, err
 	}
 
-	req, err := http.NewRequest("GET", url, nil)
-	client := http.Client{}
-	req.Header.Set("Authorization", auth)
-	resp, err := client.Do(req)
-	if err != nil {
-		return false, err
-	}
-	defer resp.Body.Close()
-	return resp.StatusCode == http.StatusOK, nil
+	return creds, true, nil
 }
 
 func SetNumCPUs(percent int) int {
@@ -862,4 +890,31 @@ func GenNextBiggerKey(b []byte) []byte {
 	x.SetBytes(b[:len(b)-1])
 	x.Add(&x, big.NewInt(1))
 	return x.Bytes()
+}
+
+func IsAllowed(creds cbauth.Creds, permissions []string, w http.ResponseWriter) bool {
+
+	allow := false
+	err := error(nil)
+
+	for _, permission := range permissions {
+		allow, err = creds.IsAllowed(permission)
+		if allow && err == nil {
+			break
+		}
+	}
+
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(err.Error()))
+		return false
+	}
+
+	if !allow {
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte(http.StatusText(http.StatusUnauthorized)))
+		return false
+	}
+
+	return true
 }

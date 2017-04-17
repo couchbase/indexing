@@ -147,14 +147,14 @@ func ExecuteRebalanceInternal(clusterUrl string,
 	config.EjectOnly = ejectOnly
 
 	p, _, err := execute(config, CommandRebalance, plan, nil, deleteNodes)
-	if err != nil {
-		return nil, err
-	}
-
-	if detail {
+	if p != nil && detail {
 		logging.Infof("************ Indexer Layout *************")
 		p.Print()
 		logging.Infof("****************************************")
+	}
+
+	if err != nil {
+		return nil, err
 	}
 
 	return genTransferToken(p.Result, masterId, topologyChange), nil

@@ -67,10 +67,13 @@ const (
 type ViolationCode string
 
 const (
-	NoViolation           ViolationCode = "NoViolation"
-	ResourceViolation                   = "ResourceViolation"
-	AvailabilityViolation               = "AvailabilityViolation"
-	DeleteNodeViolation                 = "DeleteNodeViolation"
+	NoViolation          ViolationCode = "NoViolation"
+	MemoryViolation                    = "MemoryViolation"
+	CpuViolation                       = "CpuViolation"
+	ReplicaViolation                   = "ReplicaViolation"
+	EquivIndexViolation                = "EquivIndexViolation"
+	ServerGroupViolation               = "ServerGroupViolation"
+	DeleteNodeViolation                = "DeleteNodeViolation"
 )
 
 //////////////////////////////////////////////////////////////
@@ -709,6 +712,8 @@ func (p *SAPlanner) suppressEqivIndexIfNecessary(s *Solution) {
 				// this does not affect replica (replica will not place over
 				// one another).
 				if s.findNumEquivalentIndex(index) > numLiveNode {
+					logging.Warnf("There are more equivalent index than available nodes.  Allow equivalent index of (%v, %v) to be replaced on same node.",
+						index.Bucket, index.Name)
 					index.suppressEquivIdxCheck = true
 				} else {
 					index.suppressEquivIdxCheck = false
@@ -1050,17 +1055,17 @@ func (s *Solution) PrintLayout() {
 
 		logging.Infof("")
 		logging.Infof("Indexer serverGroup:%v, nodeId:%v, useLiveData:%v", indexer.ServerGroup, indexer.NodeId, s.UseLiveData())
-		logging.Infof("Indexer total memory:%v (%s), data:%v (%s), overhead:%v (%s), cpu:%.4f, number of indexes:%v",
+		logging.Infof("Indexer total memory:%v (%s), data:%v (%s), overhead:%v (%s), cpu:%.4f, number of indexes:%v isDeleted:%v isNew:%v",
 			indexer.GetMemTotal(s.UseLiveData()), formatMemoryStr(uint64(indexer.GetMemTotal(s.UseLiveData()))),
 			indexer.GetMemUsage(s.UseLiveData()), formatMemoryStr(uint64(indexer.GetMemUsage(s.UseLiveData()))),
 			indexer.GetMemOverhead(s.UseLiveData()), formatMemoryStr(uint64(indexer.GetMemOverhead(s.UseLiveData()))),
-			indexer.GetCpuUsage(s.UseLiveData()), len(indexer.Indexes))
+			indexer.GetCpuUsage(s.UseLiveData()), len(indexer.Indexes), indexer.IsDeleted(), indexer.isNew)
 
 		for _, index := range indexer.Indexes {
 			logging.Infof("\t\t------------------------------------------------------------------------------------------------------------------")
-			logging.Infof("\t\tIndex name:%v, bucket:%v, defnId:%v, instId:%v, new/moved:%v",
+			logging.Infof("\t\tIndex name:%v, bucket:%v, defnId:%v, instId:%v, new/moved:%v defer:%v ignoreEquivCheck:%v",
 				index.GetDisplayName(), index.Bucket, index.DefnId, index.InstId,
-				index.initialNode == nil || index.initialNode.NodeId != indexer.NodeId)
+				index.initialNode == nil || index.initialNode.NodeId != indexer.NodeId, index.NoUsage, index.suppressEquivIdxCheck)
 			logging.Infof("\t\tIndex total memory:%v (%s), data:%v (%s), overhead:%v (%s), cpu:%.4f",
 				index.GetMemTotal(s.UseLiveData()), formatMemoryStr(uint64(index.GetMemTotal(s.UseLiveData()))),
 				index.GetMemUsage(s.UseLiveData()), formatMemoryStr(uint64(index.GetMemUsage(s.UseLiveData()))),
@@ -1728,7 +1733,7 @@ func (c *IndexerConstraint) CanAddIndex(s *Solution, n *IndexerNode, u *IndexUsa
 	for _, index := range n.Indexes {
 		// check replica
 		if index.DefnId == u.DefnId {
-			return AvailabilityViolation
+			return ReplicaViolation
 		}
 
 		// check equivalent index
@@ -1736,14 +1741,14 @@ func (c *IndexerConstraint) CanAddIndex(s *Solution, n *IndexerNode, u *IndexUsa
 			if index.Instance != nil &&
 				u.Instance != nil &&
 				common.IsEquivalentIndex(&index.Instance.Defn, &u.Instance.Defn) {
-				return AvailabilityViolation
+				return EquivIndexViolation
 			}
 		}
 	}
 
 	// Are replica in the same server group?
 	if !c.SatisfyServerGroupConstraint(s, u, n.ServerGroup) {
-		return AvailabilityViolation
+		return ServerGroupViolation
 	}
 
 	if s.ignoreResourceConstraint() {
@@ -1762,11 +1767,11 @@ func (c *IndexerConstraint) CanAddIndex(s *Solution, n *IndexerNode, u *IndexUsa
 	}
 
 	if u.GetMemTotal(s.UseLiveData())+n.GetMemTotal(s.UseLiveData()) > memQuota {
-		return ResourceViolation
+		return MemoryViolation
 	}
 
 	if u.GetCpuUsage(s.UseLiveData())+n.GetCpuUsage(s.UseLiveData()) > cpuQuota {
-		return ResourceViolation
+		return CpuViolation
 	}
 
 	return NoViolation
@@ -1785,7 +1790,7 @@ func (c *IndexerConstraint) CanSwapIndex(sol *Solution, n *IndexerNode, s *Index
 	for _, index := range n.Indexes {
 		// check replica
 		if index.DefnId == s.DefnId {
-			return AvailabilityViolation
+			return ReplicaViolation
 		}
 
 		// check equivalent index
@@ -1793,14 +1798,14 @@ func (c *IndexerConstraint) CanSwapIndex(sol *Solution, n *IndexerNode, s *Index
 			if index.Instance != nil &&
 				s.Instance != nil &&
 				common.IsEquivalentIndex(&index.Instance.Defn, &s.Instance.Defn) {
-				return AvailabilityViolation
+				return EquivIndexViolation
 			}
 		}
 	}
 
 	// Are replica in the same server group?
 	if !c.SatisfyServerGroupConstraint(sol, s, n.ServerGroup) {
-		return AvailabilityViolation
+		return ServerGroupViolation
 	}
 
 	if sol.ignoreResourceConstraint() {
@@ -1819,11 +1824,11 @@ func (c *IndexerConstraint) CanSwapIndex(sol *Solution, n *IndexerNode, s *Index
 	}
 
 	if s.GetMemTotal(sol.UseLiveData())+n.GetMemTotal(sol.UseLiveData())-t.GetMemTotal(sol.UseLiveData()) > memQuota {
-		return ResourceViolation
+		return MemoryViolation
 	}
 
 	if s.GetCpuUsage(sol.UseLiveData())+n.GetCpuUsage(sol.UseLiveData())-t.GetCpuUsage(sol.UseLiveData()) > cpuQuota {
-		return ResourceViolation
+		return CpuViolation
 	}
 
 	return NoViolation
@@ -3235,6 +3240,7 @@ func (p *RandomPlacement) exhaustiveMove(s *Solution, sources []*IndexerNode, ta
 					logging.Tracef("Planner::exhaustive move: source %v index %v target %v checkConstraint %v",
 						source.NodeId, sourceIndex, target.NodeId, checkConstraint)
 					s.moveIndex(source, sourceIndex, target)
+					return true, source.isDelete
 				}
 				continue
 			}

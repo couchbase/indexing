@@ -413,14 +413,15 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 			key = fmt.Sprintf("%v:%v:avg_mutation_rate", index.Bucket, indexName)
 			if avgMutationRate, ok := statsMap[key]; ok {
 				index.MutationRate = uint64(avgMutationRate.(float64))
+				totalMutation += index.MutationRate
 			} else {
 				key = fmt.Sprintf("%v:%v:num_flush_queued", index.Bucket, indexName)
 				if flushQueuedStat, ok := statsMap[key]; ok {
 					flushQueued := uint64(flushQueuedStat.(float64))
 
 					if flushQueued != 0 {
-						index.MutationRate = flushQueued
-						totalMutation += flushQueued
+						index.MutationRate = flushQueued / elapsed
+						totalMutation += index.MutationRate
 					}
 				}
 			}
@@ -429,14 +430,15 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 			key = fmt.Sprintf("%v:%v:avg_scan_rate", index.Bucket, indexName)
 			if avgScanRate, ok := statsMap[key]; ok {
 				index.ScanRate = uint64(avgScanRate.(float64))
+				totalScan += index.ScanRate
 			} else {
 				key = fmt.Sprintf("%v:%v:num_rows_returned", index.Bucket, indexName)
 				if rowReturnedStat, ok := statsMap[key]; ok {
 					rowReturned := uint64(rowReturnedStat.(float64))
 
 					if rowReturned != 0 {
-						index.ScanRate = rowReturned
-						totalScan += rowReturned
+						index.ScanRate = rowReturned / elapsed
+						totalScan += index.ScanRate
 					}
 				}
 			}
@@ -473,21 +475,9 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 				mutationRatio = float64(index.MutationRate) / float64(totalMutation)
 			}
 
-			if elapsed != 0 {
-				index.MutationRate = index.MutationRate / elapsed
-			} else {
-				index.MutationRate = 0
-			}
-
 			scanRatio := float64(0)
 			if totalScan != 0 {
 				scanRatio = float64(index.ScanRate) / float64(totalScan)
-			}
-
-			if elapsed != 0 {
-				index.ScanRate = index.ScanRate / elapsed
-			} else {
-				index.ScanRate = 0
 			}
 
 			ratio := mutationRatio

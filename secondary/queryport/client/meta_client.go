@@ -459,13 +459,26 @@ func (b *metadataClient) equivalentIndex(
 		return false
 	}
 
-	for _, s1 := range d1.SecExprs {
-		for _, s2 := range d2.SecExprs {
-			if s1 != s2 {
-				return false
-			}
+	if len(d1.SecExprs) != len(d2.SecExprs) {
+		return false
+	}
+
+	for i, s1 := range d1.SecExprs {
+		if s1 != d2.SecExprs[i] {
+			return false
 		}
 	}
+
+	if len(d1.Desc) != len(d2.Desc) {
+		return false
+	}
+
+	for i, b1 := range d1.Desc {
+		if b1 != d2.Desc[i] {
+			return false
+		}
+	}
+
 	return true
 }
 

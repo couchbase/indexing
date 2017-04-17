@@ -103,7 +103,7 @@ func (s *settingsManager) writeJson(w http.ResponseWriter, json []byte) {
 }
 
 func (s *settingsManager) validateAuth(w http.ResponseWriter, r *http.Request) bool {
-	valid, err := common.IsAuthValid(r, s.config["indexer.clusterAddr"].String())
+	_, valid, err := common.IsAuthValid(r)
 	if err != nil {
 		s.writeError(w, err)
 	} else if valid == false {
