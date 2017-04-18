@@ -710,23 +710,6 @@ func (m *requestHandlerContext) handleRestoreIndexMetadataRequest(w http.Respons
 		return
 	}
 
-	//validate using clause with storage mode
-	for _, imeta := range image.Metadata {
-		for _, idefn := range imeta.IndexDefinitions {
-			if !common.IsValidIndexType(strings.ToLower(string(idefn.Using))) {
-				errStr := fmt.Sprintf("Invalid Using Clause %v. IndexDefnId %v.", idefn.Using, idefn.DefnId)
-				send(http.StatusBadRequest, w, &RestoreResponse{Code: RESP_ERROR, Error: errStr})
-				return
-			}
-			if common.IndexTypeToStorageMode(idefn.Using) != common.GetStorageMode() {
-				errStr := fmt.Sprintf("Indexer Storage Mode %v. Cannot Use %v for IndexDefnId %v.", common.GetStorageMode(),
-					idefn.Using, idefn.DefnId)
-				send(http.StatusBadRequest, w, &RestoreResponse{Code: RESP_ERROR, Error: errStr})
-				return
-			}
-		}
-	}
-
 	// Restore
 	context := createRestoreContext(image, m.clusterUrl)
 	hostIndexMap, err := context.computeIndexLayout()
@@ -769,7 +752,7 @@ func (m *requestHandlerContext) makeCreateIndexRequest(defn common.IndexDefn, ho
 	response := new(IndexResponse)
 	status := convertResponse(resp, response)
 	if status == RESP_ERROR || response.Code == RESP_ERROR {
-		logging.Errorf("requestHandler.makeCreateIndexRequest(): create index request fails")
+		logging.Errorf("requestHandler.makeCreateIndexRequest(): create index request fails. Error=%v", response.Error)
 		return false
 	}
 
