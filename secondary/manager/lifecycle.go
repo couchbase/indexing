@@ -291,12 +291,14 @@ func (m *LifecycleMgr) handleCreateIndex(key string, content []byte) error {
 
 func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scheduled bool) error {
 
-	if !defn.Deferred && !m.canBuildIndex(defn.Bucket) {
-		logging.Errorf("LifecycleMgr.handleCreateIndex() : Cannot create index %s.%s while another index is being built",
-			defn.Bucket, defn.Name)
-		return errors.New(fmt.Sprintf("Cannot create Index %s.%s while another index is being built.",
-			defn.Bucket, defn.Name))
-	}
+	/*
+		if !defn.Deferred && !m.canBuildIndex(defn.Bucket) {
+			logging.Errorf("LifecycleMgr.handleCreateIndex() : Cannot create index %s.%s while another index is being built",
+				defn.Bucket, defn.Name)
+			return errors.New(fmt.Sprintf("Cannot create Index %s.%s while another index is being built.",
+				defn.Bucket, defn.Name))
+		}
+	*/
 
 	existDefn, err := m.repo.GetIndexDefnByName(defn.Bucket, defn.Name)
 	if err != nil {
