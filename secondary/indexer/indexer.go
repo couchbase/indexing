@@ -27,6 +27,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/couchbase/cbauth"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/fdb"
 	"github.com/couchbase/indexing/secondary/logging"
@@ -287,21 +288,40 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		certFile := idx.config["certFile"].String()
 		keyFile := idx.config["keyFile"].String()
 		sslAddr := net.JoinHostPort("", sslPort)
-		go func() {
-			// allow only strong ssl as this is an internal API and interop is not a concern
-			sslsrv := &http.Server{
-				Addr:         sslAddr,
-				TLSNextProto: make(map[string]func(*http.Server, *tls.Conn, http.Handler), 0),
-				TLSConfig: &tls.Config{
-					CipherSuites:             []uint16{tls.TLS_RSA_WITH_AES_256_CBC_SHA},
-					MinVersion:               tls.VersionTLS12,
-					PreferServerCipherSuites: true,
-					// ClientAuth:            tls.RequireAndVerifyClientCert,
-				},
+
+		var reload bool = false
+		var sslsrv *http.Server = nil
+
+		cbauth.RegisterCertRefreshCallback(func() error {
+			if sslsrv != nil {
+				reload = true
+				sslsrv.Shutdown(nil)
 			}
-			if err := sslsrv.ListenAndServeTLS(certFile, keyFile); err != nil {
-				logging.Fatalf("indexer:: Error Starting Https Server: %v", err)
-				common.CrashOnError(err)
+			return nil
+		})
+
+		go func() {
+			for {
+				// allow only strong ssl as this is an internal API and interop is not a concern
+				sslsrv = &http.Server{
+					Addr:         sslAddr,
+					TLSNextProto: make(map[string]func(*http.Server, *tls.Conn, http.Handler), 0),
+					TLSConfig: &tls.Config{
+						CipherSuites:             []uint16{tls.TLS_RSA_WITH_AES_256_CBC_SHA},
+						MinVersion:               tls.VersionTLS12,
+						PreferServerCipherSuites: true,
+						// ClientAuth:            tls.RequireAndVerifyClientCert,
+					},
+				}
+				logging.Infof("indexer:: SSL server started: %v", sslAddr)
+				reload = false
+				err := sslsrv.ListenAndServeTLS(certFile, keyFile)
+				if reload {
+					logging.Warnf("indexer:: SSL certificate change: %v", err)
+				} else {
+					logging.Fatalf("indexer:: Error in SSL Server: %v", err)
+					return
+				}
 			}
 		}()
 	}
