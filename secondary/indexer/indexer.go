@@ -290,32 +290,46 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		sslAddr := net.JoinHostPort("", sslPort)
 
 		var reload bool = false
-		var sslsrv *http.Server = nil
+		var tlslsnr *net.Listener = nil
 
 		cbauth.RegisterCertRefreshCallback(func() error {
-			if sslsrv != nil {
+			if tlslsnr != nil {
 				reload = true
-				sslsrv.Shutdown(nil)
+				(*tlslsnr).Close()
 			}
 			return nil
 		})
 
 		go func() {
 			for {
+				cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+				if err != nil {
+					logging.Fatalf("indexer:: Error in loading SSL certificate: %v", err)
+					return
+				}
 				// allow only strong ssl as this is an internal API and interop is not a concern
-				sslsrv = &http.Server{
+				sslsrv := &http.Server{
 					Addr:         sslAddr,
 					TLSNextProto: make(map[string]func(*http.Server, *tls.Conn, http.Handler), 0),
 					TLSConfig: &tls.Config{
+						Certificates:             []tls.Certificate{cert},
 						CipherSuites:             []uint16{tls.TLS_RSA_WITH_AES_256_CBC_SHA},
 						MinVersion:               tls.VersionTLS12,
 						PreferServerCipherSuites: true,
 						// ClientAuth:            tls.RequireAndVerifyClientCert,
 					},
 				}
-				logging.Infof("indexer:: SSL server started: %v", sslAddr)
+				// replace below with ListenAndServeTLS on moving to go1.8
+				lsnr, err := net.Listen("tcp", sslAddr)
+				if err != nil {
+					logging.Fatalf("indexer:: Error in listenting to SSL port: %v", err)
+					return
+				}
+				val := tls.NewListener(lsnr, sslsrv.TLSConfig)
+				tlslsnr = &val
 				reload = false
-				err := sslsrv.ListenAndServeTLS(certFile, keyFile)
+				logging.Infof("indexer:: SSL server started: %v", sslAddr)
+				err = http.Serve(*tlslsnr, nil)
 				if reload {
 					logging.Warnf("indexer:: SSL certificate change: %v", err)
 				} else {
