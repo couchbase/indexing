@@ -11,7 +11,13 @@ IF (APPLE)
   # On OS X 10.11 (El Capitan) upwards we can no longer use DYLD_LIBRARY_PATH to locate
   # runtime dependancies. Instead add the location of forestdb etc to the actual
   # binary itself.
-  SET (_ldflags "-extldflags '-Wl,-rpath,@executable_path/../lib'")
+
+  # TODO: Spock GA
+  # Temporarily adding -s flag to allow 1.7.3 to work on OSX 10.12.4
+  # Remove -s flag (which strips debug info) when we move to 1.8.1
+  # See https://github.com/golang/go/issues/19734
+
+  SET (_ldflags "-s -extldflags '-Wl,-rpath,@executable_path/../lib'")
 ENDIF ()
 
 SET (_indexer_ldflags "${_ldflags}")
@@ -50,16 +56,21 @@ GoInstall (TARGET projector PACKAGE github.com/couchbase/indexing/secondary/cmd/
   CGO_INCLUDE_DIRS "${CGO_INCLUDE_DIRS}"
   CGO_LIBRARY_DIRS "${CGO_LIBRARY_DIRS}"
   GOTAGS "${TAGS}"
+  LDFLAGS "${_indexer_ldflags}"
   INSTALL_PATH bin
   GOVERSION 1.7.3)
 
 GoInstall (TARGET cbindex PACKAGE github.com/couchbase/indexing/secondary/cmd/cbindex
   GOPATH "${PROJECT_SOURCE_DIR}/../../../.." "${GODEPSDIR}"
+  GOTAGS "${TAGS}"
+  LDFLAGS "${_indexer_ldflags}"
   INSTALL_PATH bin
   GOVERSION 1.7.3)
 
 GoInstall (TARGET cbindexperf PACKAGE github.com/couchbase/indexing/secondary/cmd/cbindexperf
   GOPATH "${PROJECT_SOURCE_DIR}/../../../.." "${GODEPSDIR}"
+  GOTAGS "${TAGS}"
+  LDFLAGS "${_indexer_ldflags}"
   INSTALL_PATH bin
   GOVERSION 1.7.3)
 
@@ -75,5 +86,7 @@ GoInstall (TARGET cbindexplan PACKAGE github.com/couchbase/indexing/secondary/cm
 
 GoInstall(TARGET plasma_dump PACKAGE github.com/couchbase/nitro/cmd/plasma_dump
   GOPATH "${CMAKE_SOURCE_DIR}/goproj" "${GODEPSDIR}"
+  GOTAGS "${TAGS}"
+  LDFLAGS "${_indexer_ldflags}"
   INSTALL_PATH bin OUTPUT plasma_dump
   GOVERSION 1.7.3)
