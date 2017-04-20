@@ -1,5 +1,5 @@
 #!/bin/bash
-cd /home/buildbot/bin
+cd $HOME/bin
 kick
 sleep 3
 build &

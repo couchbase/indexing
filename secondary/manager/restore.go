@@ -11,6 +11,7 @@
 package manager
 
 import (
+	"errors"
 	"fmt"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
@@ -56,6 +57,11 @@ func createRestoreContext(image *ClusterIndexMetadata, clusterUrl string) *Resto
 //
 func (m *RestoreContext) computeIndexLayout() (map[string][]*common.IndexDefn, error) {
 
+	// convert storage mode
+	if err := m.convertStorageMode(); err != nil {
+		return nil, err
+	}
+
 	// convert image to IndexUsage
 	m.convertImage()
 
@@ -82,6 +88,29 @@ func (m *RestoreContext) computeIndexLayout() (map[string][]*common.IndexDefn, e
 
 	// invoke placement
 	return m.placeIndex()
+}
+
+//
+// Convert storage mode of index to cluster storage mode
+//
+func (m *RestoreContext) convertStorageMode() error {
+
+	storageMode := common.GetStorageMode()
+	if storageMode == common.NOT_SET {
+		return errors.New("Cluster storage mode not set")
+	}
+
+	for i, _ := range m.image.Metadata {
+		meta := &m.image.Metadata[i]
+		for j, _ := range meta.IndexDefinitions {
+			defn := &meta.IndexDefinitions[j]
+			if common.IndexTypeToStorageMode(defn.Using) != storageMode {
+				defn.Using = common.IndexType(storageMode.String())
+			}
+		}
+	}
+
+	return nil
 }
 
 //

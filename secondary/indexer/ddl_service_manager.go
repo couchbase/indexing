@@ -128,7 +128,7 @@ func notifyRebalanceDone(change *service.TopologyChange, isCancel bool) {
 }
 
 //
-// Recover drop index command
+// Recover DDL command
 //
 func (m *DDLServiceMgr) rebalanceDone(change *service.TopologyChange, isCancel bool) {
 
@@ -144,6 +144,21 @@ func (m *DDLServiceMgr) rebalanceDone(change *service.TopologyChange, isCancel b
 		}
 	}()
 
+	// Refresh metadata provider on topology change
+	if err := m.refreshOnTopologyChange(change, isCancel); err != nil {
+		logging.Warnf("DDLServiceMgr: Fail to clean delete index token upon rebalancing.  Skip Cleanup. Internal Error = %v", err)
+		return
+	}
+
+	m.handleDropCommand()
+	m.handleBuildCommand()
+}
+
+//
+// Recover drop index command
+//
+func (m *DDLServiceMgr) handleDropCommand() {
+
 	entries, err := metakv.ListAllChildren(client.DeleteDDLCommandTokenPath)
 	if err != nil {
 		logging.Warnf("DDLServiceMgr: Fail to cleanup delete index token upon rebalancing.  Skip cleanup.  Internal Error = %v", err)
@@ -151,12 +166,6 @@ func (m *DDLServiceMgr) rebalanceDone(change *service.TopologyChange, isCancel b
 	}
 
 	if len(entries) == 0 {
-		return
-	}
-
-	// Refresh metadata provider on topology change
-	if err := m.refreshOnTopologyChange(change, isCancel); err != nil {
-		logging.Warnf("DDLServiceMgr: Fail to clean delete index token upon rebalancing.  Skip Cleanup. Internal Error = %v", err)
 		return
 	}
 
@@ -190,6 +199,67 @@ func (m *DDLServiceMgr) rebalanceDone(change *service.TopologyChange, isCancel b
 				}
 			} else {
 				logging.Infof("DDLServiceMgr: Indexer still holding index definiton.  Skip removing delete index token %v.", entry.Path)
+			}
+		}
+	}
+}
+
+//
+// Recover build index command
+//
+func (m *DDLServiceMgr) handleBuildCommand() {
+
+	entries, err := metakv.ListAllChildren(client.BuildDDLCommandTokenPath)
+	if err != nil {
+		logging.Warnf("DDLServiceMgr: Fail to cleanup build index token upon rebalancing.  Skip cleanup.  Internal Error = %v", err)
+		return
+	}
+
+	for _, entry := range entries {
+
+		if strings.Contains(entry.Path, client.BuildDDLCommandTokenPath) && entry.Value != nil {
+
+			logging.Infof("DDLServiceMgr: processing build index token %v", entry.Path)
+
+			command, err := client.UnmarshallBuildCommandToken(entry.Value)
+			if err != nil {
+				logging.Warnf("DDLServiceMgr: Fail to clean build index token upon rebalancing.  Skp command %v.  Internal Error = %v.", entry.Path, err)
+				continue
+			}
+
+			//
+			// At this point, the metadata provider has been connected to all indexer at least once (refreshOnTopology gurantees that).   So
+			// metadata provider has a snapshot of the metadata from each indexer at some point in time.   It will return index even if metadata
+			// provider is not connected to the indexer at the exact moment when this call is made.
+			//
+			cleanup := true
+			if index := m.provider.FindIndexIgnoreStatus(command.DefnId); index != nil {
+				for _, inst := range index.Instances {
+					if inst.State == common.INDEX_STATE_READY || inst.State == common.INDEX_STATE_CREATED {
+						// no need to clean up if there is still instance to be built
+						logging.Warnf("DDLServiceMgr: There are still index not yet build.  Skip cleaning up build token %v.", entry.Path)
+						cleanup = false
+						break
+					}
+				}
+
+				for _, inst := range index.InstsInRebalance {
+					if inst.State == common.INDEX_STATE_READY || inst.State == common.INDEX_STATE_CREATED {
+						// no need to clean up if there is still instance to be built
+						logging.Warnf("DDLServiceMgr: There are still index not yet build.  Skip cleaning up build token %v.", entry.Path)
+						cleanup = false
+						break
+					}
+				}
+			}
+
+			// Remove token
+			if cleanup {
+				if err := MetakvDel(entry.Path); err != nil {
+					logging.Warnf("DDLServiceMgr: Fail to remove build index token %v. Error = %v", entry.Path, err)
+				} else {
+					logging.Infof("DDLServiceMgr: Remove build index token %v.", entry.Path)
+				}
 			}
 		}
 	}

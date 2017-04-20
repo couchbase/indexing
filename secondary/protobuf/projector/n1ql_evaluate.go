@@ -60,7 +60,7 @@ func N1QLTransform(
 				return nil, nil, nil
 
 			} else if key.Type() == qvalue.MISSING {
-				arrValue = append(arrValue, missing)
+				arrValue = append(arrValue, key)
 				continue
 			}
 			skip = false

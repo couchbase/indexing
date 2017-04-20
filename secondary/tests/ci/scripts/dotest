@@ -117,8 +117,11 @@ test "$ok_connect" || error_exit "Server connect failed even after 3 tries"
 warmed="`date`"
 sleep 30
 
+cd $WORKSPACE/goproj/src/github.com/couchbase/indexing
+gover="`grep -A20 'TARGET cbindex PACKAGE' CMakeLists.txt  | grep GOVERSION | head -1 | sed 's/^.*\([0-9]\.[0-9].[0-9]\).*$/\1/'`"
+
 mkdir -p "$WORKSPACE/go" 
-export GOROOT=$HOME/.cbdepscache/exploded/x86_64/go-1.7.3/go
+export GOROOT=$HOME/.cbdepscache/exploded/x86_64/go-$gover/go
 export GOPATH=$WORKSPACE/go:$WORKSPACE/godeps:$WORKSPACE/goproj
 export PATH=$PATH:$GOROOT/bin
 export C_INCLUDE_PATH=$WORKSPACE/platform/include/:/opt/couchbase/include/:$WORKSPACE/forestdb/include:$WORKSPACE/build/tlm/deps/curl.exploded/include:$WORKSPACE/sigar/include
@@ -170,7 +173,7 @@ if [ "$MODE" = "perf" ]; then
   go build
   cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/cmd/cbindexperf
   go build
-  cp /home/buildbot/bin/config/* /opt/build/goproj/src/github.com/couchbase/indexing/secondary/tests/perftests/
+  cp $HOME/bin/config/* /opt/build/goproj/src/github.com/couchbase/indexing/secondary/tests/perftests/
   echo "</pre><h4>Performance tests</h4><pre>"
   cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/tests/perftests
   go test -timeout 4h -v -cbconfig ../config/buildtest_memdb.json -perftool cbindexperf -numdocs 2000000 2>&1 | tee -a $WORKSPACE/test.log

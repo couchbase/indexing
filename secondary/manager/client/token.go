@@ -25,6 +25,9 @@ const DeleteDDLCommandTokenTag = "commandToken/delete/"
 const DDLMetakvDir = c.IndexingMetaDir + "ddl/"
 const DeleteDDLCommandTokenPath = DDLMetakvDir + DeleteDDLCommandTokenTag
 
+const BuildDDLCommandTokenTag = "commandToken/build/"
+const BuildDDLCommandTokenPath = DDLMetakvDir + BuildDDLCommandTokenTag
+
 const IndexerVersionTokenTag = "versionToken"
 const InfoMetakvDir = c.IndexingMetaDir + "info/"
 const IndexerVersionTokenPath = InfoMetakvDir + IndexerVersionTokenTag
@@ -34,6 +37,12 @@ const IndexerVersionTokenPath = InfoMetakvDir + IndexerVersionTokenTag
 //////////////////////////////////////////////////////////////
 
 type DeleteCommandToken struct {
+	Name   string
+	Bucket string
+	DefnId c.IndexDefnId
+}
+
+type BuildCommandToken struct {
 	Name   string
 	Bucket string
 	DefnId c.IndexDefnId
@@ -88,6 +97,63 @@ func UnmarshallDeleteCommandToken(data []byte) (*DeleteCommandToken, error) {
 }
 
 func MarshallDeleteCommandToken(r *DeleteCommandToken) ([]byte, error) {
+
+	buf, err := json.Marshal(&r)
+	if err != nil {
+		return nil, err
+	}
+
+	return buf, nil
+}
+
+/////////////////////////////////////////////////////////////
+// Build Token Management
+//////////////////////////////////////////////////////////////
+
+//
+// Generate a token to metakv for recovery purpose
+//
+func PostBuildCommandToken(defnId c.IndexDefnId) error {
+
+	commandToken := &BuildCommandToken{
+		DefnId: defnId,
+	}
+
+	id := fmt.Sprintf("%v", defnId)
+	if err := c.MetakvSet(BuildDDLCommandTokenPath+id, commandToken); err != nil {
+		return errors.New(fmt.Sprintf("Fail to buildindex.  Internal Error = %v", err))
+	}
+
+	return nil
+}
+
+//
+// Does token exist? Return true only if token exist and there is no error.
+//
+func BuildCommandTokenExist(defnId c.IndexDefnId) (bool, error) {
+
+	commandToken := &BuildCommandToken{}
+	id := fmt.Sprintf("%v", defnId)
+	return c.MetakvGet(BuildDDLCommandTokenPath+id, commandToken)
+}
+
+//
+// Unmarshall
+//
+func UnmarshallBuildCommandToken(data []byte) (*BuildCommandToken, error) {
+
+	r := new(BuildCommandToken)
+	if err := json.Unmarshal(data, r); err != nil {
+		return nil, err
+	}
+
+	return r, nil
+}
+
+//
+// Marshall
+//
+func MarshallBuildCommandToken(r *BuildCommandToken) ([]byte, error) {
 
 	buf, err := json.Marshal(&r)
 	if err != nil {
