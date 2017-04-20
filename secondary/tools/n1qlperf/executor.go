@@ -336,6 +336,10 @@ func (ctxt *perfContext) Fatal(fatal errors.Error) {
 	fmt.Printf("scan fatal: %v\n", fatal)
 }
 
+func (ctxt *perfContext) GetScanCap() int64 {
+	return 512 // Default index scan request size
+}
+
 func skey2qkey(skey c.SecondaryKey) value.Values {
 	qkey := make(value.Values, 0, len(skey))
 	for _, x := range skey {

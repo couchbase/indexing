@@ -77,6 +77,7 @@ type updator struct {
 	indexerVersion uint64
 	serverGroup    string
 	nodeAddr       string
+	clusterVersion uint64
 }
 
 //////////////////////////////////////////////////////////////
@@ -291,12 +292,14 @@ func (m *LifecycleMgr) handleCreateIndex(key string, content []byte) error {
 
 func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scheduled bool) error {
 
-	if !defn.Deferred && !m.canBuildIndex(defn.Bucket) {
-		logging.Errorf("LifecycleMgr.handleCreateIndex() : Cannot create index %s.%s while another index is being built",
-			defn.Bucket, defn.Name)
-		return errors.New(fmt.Sprintf("Cannot create Index %s.%s while another index is being built.",
-			defn.Bucket, defn.Name))
-	}
+	/*
+		if !defn.Deferred && !m.canBuildIndex(defn.Bucket) {
+			logging.Errorf("LifecycleMgr.handleCreateIndex() : Cannot create index %s.%s while another index is being built",
+				defn.Bucket, defn.Name)
+			return errors.New(fmt.Sprintf("Cannot create Index %s.%s while another index is being built.",
+				defn.Bucket, defn.Name))
+		}
+	*/
 
 	existDefn, err := m.repo.GetIndexDefnByName(defn.Bucket, defn.Name)
 	if err != nil {
@@ -1075,6 +1078,8 @@ func (m *LifecycleMgr) getServiceMap() (*client.ServiceMap, error) {
 
 	srvMap.IndexerVersion = common.INDEXER_CUR_VERSION
 
+	srvMap.ClusterVersion = m.cinfo.GetClusterVersion()
+
 	return srvMap, nil
 }
 
@@ -1340,6 +1345,59 @@ func (s *builder) recover() {
 
 	logging.Infof("builder: recovering scheduled index")
 
+	//
+	// Cleanup based on build token
+	//
+	entries, err := metakv.ListAllChildren(client.BuildDDLCommandTokenPath)
+	if err != nil {
+		logging.Warnf("builder: Fail to build index upon recovery.  Internal Error = %v", err)
+		entries = nil
+	}
+
+	for _, entry := range entries {
+
+		if strings.Contains(entry.Path, client.BuildDDLCommandTokenPath) && entry.Value != nil {
+
+			logging.Infof("builder: Processing build token %v", entry.Path)
+
+			command, err := client.UnmarshallBuildCommandToken(entry.Value)
+			if err != nil {
+				logging.Warnf("builder: Fail to build index upon recovery.  Skp command %v.  Internal Error = %v.", entry.Path, err)
+				continue
+			}
+
+			defn, err := s.manager.repo.GetIndexDefnById(command.DefnId)
+			if err != nil {
+				logging.Warnf("builder: Fail to build index upon recovery.  Skp command %v.  Internal Error = %v.", entry.Path, err)
+				continue
+			}
+
+			// index may already be deleted or does not exist in this node
+			if defn == nil {
+				continue
+			}
+
+			inst, err := s.manager.FindLocalIndexInst(defn.Bucket, defn.DefnId)
+			if inst == nil || err != nil {
+				logging.Errorf("builder: Unable to read index instance for definition (%v, %v).   Skipping ...",
+					defn.Bucket, defn.Name)
+				continue
+			}
+
+			if inst.State == uint32(common.INDEX_STATE_READY) {
+				if err := s.manager.SetScheduledFlag(defn.Bucket, defn.DefnId, true); err != nil {
+					logging.Errorf("builder: Unable to set scheduled flag when trying to build index during recovery (%v, %v).  Skipping ...",
+						defn.Bucket, defn.Name)
+					continue
+				}
+				logging.Infof("builder: Schedule index build for (%v, %v).", defn.Bucket, defn.Name)
+			}
+		}
+	}
+
+	//
+	// Cleanup based on index status
+	//
 	metaIter, err := s.manager.repo.NewIterator()
 	if err != nil {
 		logging.Errorf("builder:  Unable to read from metadata repository.   Will not recover scheduled build index from repository.")
@@ -1413,13 +1471,18 @@ func (m *updator) check() {
 		return
 	}
 
-	if serviceMap.ServerGroup != m.serverGroup || m.indexerVersion != serviceMap.IndexerVersion || serviceMap.NodeAddr != m.nodeAddr {
+	if serviceMap.ServerGroup != m.serverGroup ||
+		m.indexerVersion != serviceMap.IndexerVersion ||
+		serviceMap.NodeAddr != m.nodeAddr ||
+		serviceMap.ClusterVersion != m.clusterVersion {
 
 		m.serverGroup = serviceMap.ServerGroup
 		m.indexerVersion = serviceMap.IndexerVersion
 		m.nodeAddr = serviceMap.NodeAddr
+		m.clusterVersion = serviceMap.ClusterVersion
 
-		logging.Infof("updator: updating service map.  server group=%v, indexerVersion=%v nodeAddr %v", m.serverGroup, m.indexerVersion, m.nodeAddr)
+		logging.Infof("updator: updating service map.  server group=%v, indexerVersion=%v nodeAddr %v clusterVersion %v",
+			m.serverGroup, m.indexerVersion, m.nodeAddr, m.clusterVersion)
 
 		if err := m.manager.repo.SetServiceMap(serviceMap); err != nil {
 			logging.Errorf("updator: fail to set service map.  Error = %v", err)

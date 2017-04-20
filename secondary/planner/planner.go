@@ -2629,13 +2629,6 @@ func (p *RandomPlacement) Move(s *Solution) (bool, bool, bool) {
 		return done, done, done
 	}
 
-	// Done with basic swap rebalance case?
-	if len(s.getDeleteNodes()) == 0 &&
-		s.numDeletedNode > 0 &&
-		s.numNewNode == s.numDeletedNode {
-		return true, true, true
-	}
-
 	success, final, force := p.randomMoveByLoad(s, true)
 	if success {
 		s.removeEmptyDeletedNode()
@@ -2800,6 +2793,14 @@ func (p *RandomPlacement) randomMoveByLoad(s *Solution, checkConstraint bool) (b
 	constrained := p.findConstrainedNodes(s, s.constraint, candidates)
 	logging.Tracef("Planner::constrained: len=%v, %v", len(constrained), constrained)
 	loads, total := computeLoads(s, constrained)
+
+	// Done with basic swap rebalance case?
+	if len(s.getDeleteNodes()) == 0 &&
+		s.numDeletedNode > 0 &&
+		s.numNewNode == s.numDeletedNode &&
+		len(constrained) == 0 {
+		return true, true, true
+	}
 
 	retryCount := numOfIndexers * 10
 	for i := 0; i < retryCount; i++ {

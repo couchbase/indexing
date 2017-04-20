@@ -3,6 +3,7 @@ package common
 import (
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"net/url"
 	"strings"
@@ -54,6 +55,7 @@ type ClusterInfoCache struct {
 	node2group  map[NodeId]string // node->group
 	failedNodes []couchbase.Node
 	addNodes    []couchbase.Node
+	version     uint64
 }
 
 type NodeId int
@@ -134,6 +136,7 @@ func (c *ClusterInfoCache) Fetch() error {
 		var nodes []couchbase.Node
 		var failedNodes []couchbase.Node
 		var addNodes []couchbase.Node
+		version := uint64(math.MaxUint64)
 		for _, n := range c.pool.Nodes {
 			if n.ClusterMembership == "active" {
 				nodes = append(nodes, n)
@@ -146,10 +149,21 @@ func (c *ClusterInfoCache) Fetch() error {
 			} else {
 				logging.Warnf("ClsuterInfoCache: unrecognized node membership %v", n.ClusterMembership)
 			}
+
+			// Find the minimum cluster compatibility
+			v := uint64(n.ClusterCompatibility / (1024 * 64))
+			if v < version {
+				version = v
+			}
 		}
 		c.nodes = nodes
 		c.failedNodes = failedNodes
 		c.addNodes = addNodes
+
+		c.version = version
+		if c.version == math.MaxUint64 {
+			c.version = 0
+		}
 
 		found := false
 		for _, node := range c.nodes {
@@ -220,6 +234,14 @@ func (c *ClusterInfoCache) fetchServerGroups() error {
 	return nil
 }
 
+func (c *ClusterInfoCache) GetClusterVersion() uint64 {
+	if c.version < 5 {
+		return INDEXER_45_VERSION
+	}
+
+	return INDEXER_50_VERSION
+}
+
 func (c *ClusterInfoCache) GetServerGroup(nid NodeId) string {
 
 	return c.node2group[nid]
@@ -229,6 +251,18 @@ func (c *ClusterInfoCache) GetNodesByServiceType(srvc string) (nids []NodeId) {
 	for i, svs := range c.nodesvs {
 		if _, ok := svs.Services[srvc]; ok {
 			nids = append(nids, NodeId(i))
+		}
+	}
+
+	return
+}
+
+func (c *ClusterInfoCache) GetActiveIndexerNodes() (nodes []couchbase.Node) {
+	for _, n := range c.nodes {
+		for _, s := range n.Services {
+			if s == "index" {
+				nodes = append(nodes, n)
+			}
 		}
 	}
 

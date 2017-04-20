@@ -59,6 +59,7 @@ type MetadataProvider struct {
 	numWatcher         int32
 	settings           Settings
 	indexerVersion     uint64
+	clusterVersion     uint64
 }
 
 //
@@ -178,8 +179,11 @@ func (o *MetadataProvider) SetTimeout(timeout int64) {
 
 func (o *MetadataProvider) SetClusterStatus(numExpectedWatcher int, numFailedNode int, numUnhealthyNode int, numAddNode int) {
 
-	if numFailedNode > 0 || numUnhealthyNode > 0 || numAddNode > 0 {
-		logging.Warnf("MetadataProvider.SetClusterStatus(): healthy nodes %v failed node %v unhealthy node %v add node %v",
+	if (numExpectedWatcher > -1 && int32(numExpectedWatcher) != atomic.LoadInt32(&o.numExpectedWatcher)) ||
+		(numFailedNode > -1 && int32(numFailedNode) != atomic.LoadInt32(&o.numFailedNode)) ||
+		(numUnhealthyNode > -1 && int32(numUnhealthyNode) != atomic.LoadInt32(&o.numUnhealthyNode)) ||
+		(numAddNode > -1 && int32(numAddNode) != atomic.LoadInt32(&o.numAddNode)) {
+		logging.Infof("MetadataProvider.SetClusterStatus(): healthy nodes %v failed node %v unhealthy node %v add node %v",
 			numExpectedWatcher, numFailedNode, numUnhealthyNode, numAddNode)
 	}
 
@@ -419,6 +423,7 @@ func (o *MetadataProvider) PrepareIndexDefn(
 	var numReplica int = 0
 
 	version := o.GetIndexerVersion()
+	clusterVersion := o.GetClusterVersion()
 
 	if plan != nil {
 		logging.Debugf("MetadataProvider:CreateIndexWithPlan(): plan %v version %v", plan, version)
@@ -526,8 +531,10 @@ func (o *MetadataProvider) PrepareIndexDefn(
 		return nil, errors.New("Fails to create index.  Multiple expressions with ALL are found. Only one array expression is supported per index."), false
 	}
 
-	if o.isDecending(desc) && version < c.INDEXER_50_VERSION {
-		return nil, errors.New("Fail to create index with descending order. This option is enabled after cluster is fully upgraded and there is no failed node."), false
+	if o.isDecending(desc) && (version < c.INDEXER_50_VERSION || clusterVersion < c.INDEXER_50_VERSION) {
+		return nil,
+			errors.New("Fail to create index with descending order. This option is enabled after cluster is fully upgraded and there is no failed node."),
+			false
 	}
 
 	if desc != nil && len(secExprs) != len(desc) {
@@ -837,6 +844,11 @@ func (o *MetadataProvider) BuildIndexes(defnIDs []c.IndexDefnId) error {
 			}
 		}
 
+		// place token for recovery.
+		if err := PostBuildCommandToken(id); err != nil {
+			return errors.New(fmt.Sprintf("Fail to Build Index due to internal errors.  Error=%v.", err))
+		}
+
 		// find watcher -- This method does not check index status (return the watcher even
 		// if index is in deleted status). So this return an error if  watcher is dropped
 		// asynchronously (some parallel go-routine unwatchMetadata).
@@ -1054,6 +1066,19 @@ func (o *MetadataProvider) GetIndexerVersion() uint64 {
 }
 
 //
+// Get the Cluster Version
+//
+func (o *MetadataProvider) GetClusterVersion() uint64 {
+
+	clusterVersion := atomic.LoadUint64(&o.clusterVersion)
+	if clusterVersion < c.INDEXER_CUR_VERSION {
+		return clusterVersion
+	}
+
+	return c.INDEXER_CUR_VERSION
+}
+
+//
 // Refresh the indexer version.  This will look at both
 // metakv and indexers to figure out the latest version.
 // This function still be 0 if (1) there are failed nodes and,
@@ -1079,6 +1104,7 @@ func (o *MetadataProvider) RefreshIndexerVersion() uint64 {
 	// watchers could be disconnected when this method is called, but metadata provider
 	// would have gotten the indexer version during initialization.
 	fromWatcher := uint64(math.MaxUint64)
+	clusterVersion := uint64(math.MaxUint64)
 	func() {
 		o.mutex.RLock()
 		defer o.mutex.RUnlock()
@@ -1089,15 +1115,20 @@ func (o *MetadataProvider) RefreshIndexerVersion() uint64 {
 				if watcher.getIndexerVersion() < fromWatcher {
 					fromWatcher = watcher.getIndexerVersion()
 				}
+				if watcher.getClusterVersion() < clusterVersion {
+					clusterVersion = watcher.getClusterVersion()
+				}
 			}
 		} else {
 			fromWatcher = 0
+			clusterVersion = 0
 		}
 
-		logging.Debugf("Indexer Version from metakv %v. Indexer Version from watchers %v.  Current version %v.",
+		logging.Verbosef("Indexer Version from metakv %v. Indexer Version from watchers %v.  Current version %v.",
 			fromMetakv, fromWatcher, atomic.LoadUint64(&o.indexerVersion))
-		logging.Debugf("Num Watcher %v. Expected Watcher %v. Failed Node %v. Unhealthy Node %v.  Add Node %v",
-			atomic.LoadInt32(&o.numWatcher), atomic.LoadInt32(&o.numExpectedWatcher), numFailedNode, numUnhealthyNode, numAddNode)
+		logging.Verbosef("Num Watcher %v. Expected Watcher %v. Failed Node %v. Unhealthy Node %v.  Add Node %v. Cluster version %v.",
+			atomic.LoadInt32(&o.numWatcher), atomic.LoadInt32(&o.numExpectedWatcher), numFailedNode, numUnhealthyNode, numAddNode,
+			clusterVersion)
 	}()
 
 	latestVersion := atomic.LoadUint64(&o.indexerVersion)
@@ -1132,6 +1163,12 @@ func (o *MetadataProvider) RefreshIndexerVersion() uint64 {
 	if latestVersion > atomic.LoadUint64(&o.indexerVersion) {
 		logging.Infof("MetadataProvider: Updating indexer version to %v", latestVersion)
 		atomic.StoreUint64(&o.indexerVersion, latestVersion)
+	}
+
+	// update cluster version
+	if clusterVersion > atomic.LoadUint64(&o.clusterVersion) {
+		logging.Infof("MetadataProvider: Updating cluster version to %v", clusterVersion)
+		atomic.StoreUint64(&o.clusterVersion, clusterVersion)
 	}
 
 	return latestVersion
@@ -2167,6 +2204,12 @@ func (w *watcher) updateServiceMapNoLock(serviceMap *ServiceMap) bool {
 		needRefresh = true
 	}
 
+	if w.serviceMap.ClusterVersion != serviceMap.ClusterVersion {
+		logging.Infof("Received new service map.  Cluster version=%v", serviceMap.ClusterVersion)
+		w.serviceMap.ClusterVersion = serviceMap.ClusterVersion
+		needRefresh = true
+	}
+
 	return needRefresh
 }
 
@@ -2276,6 +2319,18 @@ func (w *watcher) getIndexerVersion() uint64 {
 	}
 
 	return w.serviceMap.IndexerVersion
+}
+
+func (w *watcher) getClusterVersion() uint64 {
+
+	w.mutex.Lock()
+	defer w.mutex.Unlock()
+
+	if w.serviceMap == nil {
+		panic("Index node metadata is not initialized")
+	}
+
+	return w.serviceMap.ClusterVersion
 }
 
 func (w *watcher) getNodeAddr() string {

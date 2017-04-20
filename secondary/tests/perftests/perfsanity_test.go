@@ -25,7 +25,7 @@ type ScanResult struct {
 	Rows         uint64
 	Duration     int64
 	LatencyHisto string
-	ErrorCount   int64
+	ErrorCount   uint64
 
 	// periodic stats
 	iter          uint32

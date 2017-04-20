@@ -154,6 +154,7 @@ func registerRequestHandler(mgr *IndexManager, clusterUrl string) {
 		http.HandleFunc("/getIndexMetadata", handlerContext.handleIndexMetadataRequest)
 		http.HandleFunc("/restoreIndexMetadata", handlerContext.handleRestoreIndexMetadataRequest)
 		http.HandleFunc("/getIndexStatus", handlerContext.handleIndexStatusRequest)
+		http.HandleFunc("/getIndexStatement", handlerContext.handleIndexStatementRequest)
 	})
 
 	handlerContext.mgr = mgr
@@ -444,6 +445,72 @@ func (m *requestHandlerContext) getIndexStatus(bucket string) ([]IndexStatus, []
 	return list, failedNodes, nil
 }
 
+//////////////////////////////////////////////////////
+// Index Statement
+///////////////////////////////////////////////////////
+
+func (m *requestHandlerContext) handleIndexStatementRequest(w http.ResponseWriter, r *http.Request) {
+
+	_, ok := doAuth(r, w)
+	if !ok {
+		return
+	}
+
+	bucket := m.getBucket(r)
+
+	list, err := m.getIndexStatement(bucket)
+	if err == nil {
+		sort.Strings(list)
+		send(http.StatusOK, w, list)
+	} else {
+		send(http.StatusInternalServerError, w, err.Error())
+	}
+}
+
+func (m *requestHandlerContext) getIndexStatement(bucket string) ([]string, error) {
+
+	cinfo, err := m.mgr.FetchNewClusterInfoCache()
+	if err != nil {
+		return nil, err
+	}
+
+	addr, err := cinfo.GetLocalServiceAddress(common.INDEX_HTTP_SERVICE)
+	if err != nil {
+		return nil, err
+	}
+
+	req := addr + "/getIndexStatus"
+	if len(bucket) != 0 {
+		req = fmt.Sprintf("%v?bucket=%v", req, bucket)
+	}
+
+	resp, err := getWithAuth(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	indexes := new(IndexStatusResponse)
+	status := convertResponse(resp, indexes)
+	if status == RESP_ERROR {
+		return nil, errors.New("Fail to unmarshall http response from indexer")
+	}
+	if indexes.Code == RESP_ERROR {
+		return nil, errors.New("Fail to read index status from cluster.")
+	}
+
+	defnMap := make(map[common.IndexDefnId]bool)
+	statements := make([]string, len(indexes.Status))
+	for i, index := range indexes.Status {
+		if _, ok := defnMap[index.DefnId]; !ok {
+			defnMap[index.DefnId] = true
+			statements[i] = index.Definition
+		}
+	}
+
+	return statements, nil
+}
+
 ///////////////////////////////////////////////////////
 // ClusterIndexMetadata
 ///////////////////////////////////////////////////////
@@ -643,23 +710,6 @@ func (m *requestHandlerContext) handleRestoreIndexMetadataRequest(w http.Respons
 		return
 	}
 
-	//validate using clause with storage mode
-	for _, imeta := range image.Metadata {
-		for _, idefn := range imeta.IndexDefinitions {
-			if !common.IsValidIndexType(strings.ToLower(string(idefn.Using))) {
-				errStr := fmt.Sprintf("Invalid Using Clause %v. IndexDefnId %v.", idefn.Using, idefn.DefnId)
-				send(http.StatusBadRequest, w, &RestoreResponse{Code: RESP_ERROR, Error: errStr})
-				return
-			}
-			if common.IndexTypeToStorageMode(idefn.Using) != common.GetStorageMode() {
-				errStr := fmt.Sprintf("Indexer Storage Mode %v. Cannot Use %v for IndexDefnId %v.", common.GetStorageMode(),
-					idefn.Using, idefn.DefnId)
-				send(http.StatusBadRequest, w, &RestoreResponse{Code: RESP_ERROR, Error: errStr})
-				return
-			}
-		}
-	}
-
 	// Restore
 	context := createRestoreContext(image, m.clusterUrl)
 	hostIndexMap, err := context.computeIndexLayout()
@@ -702,7 +752,7 @@ func (m *requestHandlerContext) makeCreateIndexRequest(defn common.IndexDefn, ho
 	response := new(IndexResponse)
 	status := convertResponse(resp, response)
 	if status == RESP_ERROR || response.Code == RESP_ERROR {
-		logging.Errorf("requestHandler.makeCreateIndexRequest(): create index request fails")
+		logging.Errorf("requestHandler.makeCreateIndexRequest(): create index request fails. Error=%v", response.Error)
 		return false
 	}
 

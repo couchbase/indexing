@@ -698,12 +698,11 @@ func (b *metadataClient) updateIndexerList(discardExisting bool) error {
 	defer b.topoChangeLock.Unlock()
 
 	// populate indexers' adminport and queryport
-	adminports, failedNode, unhealthyNode, newNode, err := getIndexerAdminports(cinfo)
+	adminports, activeNode, failedNode, unhealthyNode, newNode, err := getIndexerAdminports(cinfo)
 	if err != nil {
 		return err
 	}
-	numIndexers := len(adminports)
-	b.mdClient.SetClusterStatus(numIndexers, failedNode, unhealthyNode, newNode)
+	b.mdClient.SetClusterStatus(activeNode, failedNode, unhealthyNode, newNode)
 
 	fmsg := "Refreshing indexer list due to cluster changes or auto-refresh."
 	logging.Infof(fmsg)
@@ -720,7 +719,7 @@ func (b *metadataClient) updateIndexerList(discardExisting bool) error {
 
 	if discardExisting {
 		for _, indexerID := range curradmns {
-			b.mdClient.UnwatchMetadata(indexerID, numIndexers)
+			b.mdClient.UnwatchMetadata(indexerID, activeNode)
 		}
 		curradmns = make(map[string]common.IndexerId)
 	}
@@ -752,7 +751,7 @@ func (b *metadataClient) updateIndexerList(discardExisting bool) error {
 
 			// WatchMetadata will "unwatch" an old metadata watcher which
 			// shares the same indexer Id (but the adminport may be different).
-			indexerID = b.mdClient.WatchMetadata(adminport, fn, numIndexers)
+			indexerID = b.mdClient.WatchMetadata(adminport, fn, activeNode)
 			m[adminport] = indexerID
 		} else {
 			err = b.mdClient.UpdateServiceAddrForIndexer(indexerID, adminport)
@@ -774,7 +773,7 @@ func (b *metadataClient) updateIndexerList(discardExisting bool) error {
 			}
 		}
 		if !found {
-			b.mdClient.UnwatchMetadata(indexerID, numIndexers)
+			b.mdClient.UnwatchMetadata(indexerID, activeNode)
 		}
 	}
 	b.safeupdate(m, true /*force*/)
@@ -1046,19 +1045,19 @@ func (b *metadataClient) hasIndexesChanged(
 }
 
 // return adminports for all known indexers.
-func getIndexerAdminports(cinfo *common.ClusterInfoCache) ([]string, int, int, int, error) {
+func getIndexerAdminports(cinfo *common.ClusterInfoCache) ([]string, int, int, int, int, error) {
 	iAdminports := make([]string, 0)
 	unhealthyNodes := 0
 	for _, node := range cinfo.GetNodesByServiceType("indexAdmin") {
 		status, err := cinfo.GetNodeStatus(node)
 		if err != nil {
-			return nil, 0, 0, 0, err
+			return nil, 0, 0, 0, 0, err
 		}
 		logging.Verbosef("node %v status: %q", node, status)
 		if status == "healthy" || status == "active" || status == "warmup" {
 			adminport, err := cinfo.GetServiceAddress(node, "indexAdmin")
 			if err != nil {
-				return nil, 0, 0, 0, err
+				return nil, 0, 0, 0, 0, err
 			}
 			iAdminports = append(iAdminports, adminport)
 		} else {
@@ -1067,8 +1066,12 @@ func getIndexerAdminports(cinfo *common.ClusterInfoCache) ([]string, int, int, i
 		}
 	}
 
-	return iAdminports, len(cinfo.GetFailedIndexerNodes()), unhealthyNodes,
-		len(cinfo.GetNewIndexerNodes()), nil
+	return iAdminports, // active, healthy indexer node with known ports
+		len(cinfo.GetActiveIndexerNodes()), // all active indexer node (known ports + unknown ports)
+		len(cinfo.GetFailedIndexerNodes()), // failover indexer node
+		unhealthyNodes, // active, unhealthy indexer node with known ports
+		len(cinfo.GetNewIndexerNodes()), // new indexer node
+		nil
 }
 
 // FIXME/TODO: based on discussion with John-
@@ -1148,7 +1151,7 @@ func (b *metadataClient) watchClusterChanges() {
 				return
 			}
 
-			_, _, unhealthyNode, _, err := getIndexerAdminports(cinfo)
+			_, _, _, unhealthyNode, _, err := getIndexerAdminports(cinfo)
 			if err != nil {
 				logging.Errorf("updateIndexerList(): %v\n", err)
 				selfRestart()

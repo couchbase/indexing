@@ -3,9 +3,14 @@
 export PATH=$PATH:~/bin
 export WORKSPACE="/opt/build"
 
+rm -rf ~/.ciscripts
+git clone -q git://github.com/couchbase/indexing ~/.ciscripts
+
 while true; do
   domain
-  cp -r $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/tests/ci/scripts/* ~/bin/
+  cd ~/.ciscripts
+  git pull -q
+  cp -r secondary/tests/ci/scripts/* ~/bin/
   sleep 600
 done
 

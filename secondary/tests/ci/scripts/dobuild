@@ -11,7 +11,7 @@ error_exit() {
 }
 
 export RELEASE=5.0.0
-export BLD_NUM=0
+export BLD_NUM=2671
 
 echo '</pre><h3>Building</h3><pre>'
 > $WORKSPACE/versions.cfg
@@ -174,8 +174,6 @@ else
 fi
 
 cd $WORKSPACE/memcached
-#echo "Reverting memcached to 5e05a536"
-#git checkout 5e05a536
 current="`git rev-parse HEAD`"
 test -f ~/memcached.good || (echo $current > ~/memcached.good)
 good="`cat ~/memcached.good`"
