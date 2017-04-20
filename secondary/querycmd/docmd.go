@@ -70,7 +70,7 @@ func ParseArgs(arguments []string) (*Command, []string, *flag.FlagSet, error) {
 	fset := flag.NewFlagSet("cmd", flag.ExitOnError)
 
 	// basic options
-	fset.StringVar(&cmdOptions.Server, "server", "localhost:8091", "Cluster server address")
+	fset.StringVar(&cmdOptions.Server, "server", "127.0.0.1:8091", "Cluster server address")
 	fset.StringVar(&cmdOptions.Auth, "auth", "", "Auth user and password")
 	fset.StringVar(&cmdOptions.Bucket, "bucket", "", "Bucket name")
 	fset.StringVar(&cmdOptions.OpType, "type", "", "Command: scan|stats|scanAll|count|nodes|create|build|move|drop|list|config")
