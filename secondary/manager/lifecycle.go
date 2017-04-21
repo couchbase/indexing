@@ -1501,7 +1501,7 @@ func (m *updator) check() {
 		logging.Infof("updator: updating service map.  server group=%v, indexerVersion=%v nodeAddr %v clusterVersion %v",
 			m.serverGroup, m.indexerVersion, m.nodeAddr, m.clusterVersion)
 
-		if err := m.manager.repo.SetServiceMap(serviceMap); err != nil {
+		if err := m.manager.repo.BroadcastServiceMap(serviceMap); err != nil {
 			logging.Errorf("updator: fail to set service map.  Error = %v", err)
 			return
 		}

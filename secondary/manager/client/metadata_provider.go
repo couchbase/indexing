@@ -2862,7 +2862,7 @@ func (w *watcher) processChange(txid common.Txnid, op uint32, key string, conten
 	opCode := common.OpCode(op)
 
 	switch opCode {
-	case common.OPCODE_ADD, common.OPCODE_SET:
+	case common.OPCODE_ADD, common.OPCODE_SET, common.OPCODE_BROADCAST:
 		if isIndexDefnKey(key) {
 			if len(content) == 0 {
 				logging.Debugf("watcher.processChange(): content of key = %v is empty.", key)
