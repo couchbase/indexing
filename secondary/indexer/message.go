@@ -672,6 +672,7 @@ type MsgCreateIndex struct {
 	mType     MsgType
 	indexInst common.IndexInst
 	respCh    MsgChannel
+	reqCtx    *common.MetadataRequestContext
 }
 
 func (m *MsgCreateIndex) GetMsgType() MsgType {
@@ -684,6 +685,10 @@ func (m *MsgCreateIndex) GetIndexInst() common.IndexInst {
 
 func (m *MsgCreateIndex) GetResponseChannel() MsgChannel {
 	return m.respCh
+}
+
+func (m *MsgCreateIndex) GetRequestCtx() *common.MetadataRequestContext {
+	return m.reqCtx
 }
 
 func (m *MsgCreateIndex) GetString() string {
@@ -699,6 +704,7 @@ type MsgBuildIndex struct {
 	indexInstList []common.IndexInstId
 	bucketList    []string
 	respCh        MsgChannel
+	reqCtx        *common.MetadataRequestContext
 }
 
 func (m *MsgBuildIndex) GetMsgType() MsgType {
@@ -715,6 +721,10 @@ func (m *MsgBuildIndex) GetBucketList() []string {
 
 func (m *MsgBuildIndex) GetRespCh() MsgChannel {
 	return m.respCh
+}
+
+func (m *MsgBuildIndex) GetRequestCtx() *common.MetadataRequestContext {
+	return m.reqCtx
 }
 
 func (m *MsgBuildIndex) GetString() string {
@@ -753,6 +763,7 @@ type MsgDropIndex struct {
 	indexInstId common.IndexInstId
 	bucket      string
 	respCh      MsgChannel
+	reqCtx      *common.MetadataRequestContext
 }
 
 func (m *MsgDropIndex) GetMsgType() MsgType {
@@ -769,6 +780,10 @@ func (m *MsgDropIndex) GetBucket() string {
 
 func (m *MsgDropIndex) GetResponseChannel() MsgChannel {
 	return m.respCh
+}
+
+func (m *MsgDropIndex) GetRequestCtx() *common.MetadataRequestContext {
+	return m.reqCtx
 }
 
 func (m *MsgDropIndex) GetString() string {

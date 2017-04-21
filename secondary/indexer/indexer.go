@@ -1059,20 +1059,25 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 		return
 	}
 
-	if (idx.rebalanceRunning || idx.rebalanceToken != nil) && (indexInst.Defn.InstVersion == 0) {
+	if idx.rebalanceRunning || idx.rebalanceToken != nil {
 
-		errStr := fmt.Sprintf("Indexer Cannot Process Create Index - Rebalance In Progress")
-		logging.Errorf("Indexer::handleCreateIndex %v", errStr)
+		reqCtx := msg.(*MsgCreateIndex).GetRequestCtx()
 
-		if clientCh != nil {
-			clientCh <- &MsgError{
-				err: Error{code: ERROR_INDEXER_REBALANCE_IN_PROGRESS,
-					severity: FATAL,
-					cause:    errors.New(errStr),
-					category: INDEXER}}
+		if reqCtx != nil && reqCtx.ReqSource == common.DDLRequestSourceUser {
 
+			errStr := fmt.Sprintf("Indexer Cannot Process Create Index - Rebalance In Progress")
+			logging.Errorf("Indexer::handleCreateIndex %v", errStr)
+
+			if clientCh != nil {
+				clientCh <- &MsgError{
+					err: Error{code: ERROR_INDEXER_REBALANCE_IN_PROGRESS,
+						severity: FATAL,
+						cause:    errors.New(errStr),
+						category: INDEXER}}
+
+			}
+			return
 		}
-		return
 	}
 
 	initState := idx.getStreamBucketState(common.INIT_STREAM, indexInst.Defn.Bucket)
@@ -1201,17 +1206,10 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 
 	if idx.rebalanceRunning || idx.rebalanceToken != nil {
 
-		notClone := false
-		for _, instIdList := range instIdList {
-			index, ok := idx.indexInstMap[instIdList]
-			if ok {
-				if index.Defn.InstVersion == 0 {
-					notClone = true
-				}
-			}
-		}
+		reqCtx := msg.(*MsgBuildIndex).GetRequestCtx()
 
-		if notClone {
+		if reqCtx != nil && reqCtx.ReqSource == common.DDLRequestSourceUser {
+
 			errStr := fmt.Sprintf("Indexer Cannot Process Build Index - Rebalance In Progress")
 			logging.Errorf("Indexer::handleBuildIndex %v", errStr)
 
@@ -1435,10 +1433,11 @@ func (idx *indexer) handleDropIndex(msg Message) {
 		return
 	}
 
-	//TODO needs to be revisited as InstVersion is not a deterministic version to check
-	//if the drop is coming from user or not
-	/*
-		if (idx.rebalanceRunning || idx.rebalanceToken != nil) && (indexInst.Defn.InstVersion == 0) {
+	if idx.rebalanceRunning || idx.rebalanceToken != nil {
+
+		reqCtx := msg.(*MsgDropIndex).GetRequestCtx()
+
+		if reqCtx != nil && reqCtx.ReqSource == common.DDLRequestSourceUser {
 
 			errStr := fmt.Sprintf("Indexer Cannot Process Drop Index - Rebalance In Progress")
 			logging.Errorf("Indexer::handleDropIndex %v", errStr)
@@ -1452,9 +1451,9 @@ func (idx *indexer) handleDropIndex(msg Message) {
 
 			}
 			return
-
 		}
-	*/
+
+	}
 
 	idx.stats.RemoveIndex(indexInst.InstId)
 	//if the index state is Created/Ready/Deleted, only data cleanup is

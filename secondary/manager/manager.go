@@ -90,9 +90,9 @@ type IndexManager struct {
 //    B) Index Instance is not in INDEX_STATE_CREATE or INDEX_STATE_DELETED.
 //
 type MetadataNotifier interface {
-	OnIndexCreate(*common.IndexDefn, common.IndexInstId, int) error
-	OnIndexDelete(common.IndexInstId, string) error
-	OnIndexBuild([]common.IndexInstId, []string) map[common.IndexInstId]error
+	OnIndexCreate(*common.IndexDefn, common.IndexInstId, int, *common.MetadataRequestContext) error
+	OnIndexDelete(common.IndexInstId, string, *common.MetadataRequestContext) error
+	OnIndexBuild([]common.IndexInstId, []string, *common.MetadataRequestContext) map[common.IndexInstId]error
 }
 
 type RequestServer interface {
@@ -372,7 +372,7 @@ func (m *IndexManager) StopListenTopologyUpdate(id string) {
 // If this node is partitioned from its leader, it can still recieve
 // updates from the dictionary if this node still connects to it.
 //
-func (m *IndexManager) HandleCreateIndexDDL(defn *common.IndexDefn) error {
+func (m *IndexManager) HandleCreateIndexDDL(defn *common.IndexDefn, isRebalReq bool) error {
 
 	key := fmt.Sprintf("%d", defn.DefnId)
 	content, err := common.MarshallIndexDefn(defn)
@@ -387,7 +387,12 @@ func (m *IndexManager) HandleCreateIndexDDL(defn *common.IndexDefn) error {
 				fmt.Sprintf("Fail to complete processing create index statement for index '%s'", defn.Name))
 		}
 	} else {
-		return m.requestServer.MakeRequest(client.OPCODE_CREATE_INDEX, key, content)
+		if isRebalReq {
+			return m.requestServer.MakeRequest(client.OPCODE_CREATE_INDEX_REBAL, key, content)
+
+		} else {
+			return m.requestServer.MakeRequest(client.OPCODE_CREATE_INDEX, key, content)
+		}
 	}
 
 	return nil
@@ -405,7 +410,7 @@ func (m *IndexManager) HandleDeleteIndexDDL(defnId common.IndexDefnId) error {
 				fmt.Sprintf("Fail to complete processing delete index statement for index id = '%d'", defnId))
 		}
 	} else {
-		return m.requestServer.MakeRequest(client.OPCODE_DROP_INDEX, key, []byte(""))
+		return m.requestServer.MakeRequest(client.OPCODE_DROP_INDEX_REBAL, key, []byte(""))
 	}
 
 	return nil
@@ -427,7 +432,7 @@ func (m *IndexManager) HandleBuildIndexDDL(indexIds client.IndexIdList) error {
 			}
 		} else {
 	*/
-	return m.requestServer.MakeRequest(client.OPCODE_BUILD_INDEX, key, content)
+	return m.requestServer.MakeRequest(client.OPCODE_BUILD_INDEX_REBAL, key, content)
 
 	return nil
 }

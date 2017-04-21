@@ -425,7 +425,7 @@ func (r *Rebalancer) processTokenAsDest(ttid string, tt *c.TransferToken) bool {
 
 		bodybuf := bytes.NewBuffer(body)
 
-		url := "/createIndex"
+		url := "/createIndexRebalance"
 		resp, err := postWithAuth(r.localaddr+url, "application/json", bodybuf)
 		if err != nil {
 			l.Errorf("Rebalancer::processTokenAsDest Error register clone index on %v %v", r.localaddr+url, err)

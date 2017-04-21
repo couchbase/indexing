@@ -371,10 +371,11 @@ func NewMetaNotifier(adminCh MsgChannel, config common.Config) *metaNotifier {
 
 }
 
-func (meta *metaNotifier) OnIndexCreate(indexDefn *common.IndexDefn, instId common.IndexInstId, replicaId int) error {
+func (meta *metaNotifier) OnIndexCreate(indexDefn *common.IndexDefn, instId common.IndexInstId,
+	replicaId int, reqCtx *common.MetadataRequestContext) error {
 
 	logging.Infof("clustMgrAgent::OnIndexCreate Notification "+
-		"Received for Create Index %v", indexDefn)
+		"Received for Create Index %v %v", indexDefn, reqCtx)
 
 	pc := meta.makeDefaultPartitionContainer()
 
@@ -393,7 +394,8 @@ func (meta *metaNotifier) OnIndexCreate(indexDefn *common.IndexDefn, instId comm
 
 	meta.adminCh <- &MsgCreateIndex{mType: CLUST_MGR_CREATE_INDEX_DDL,
 		indexInst: idxInst,
-		respCh:    respCh}
+		respCh:    respCh,
+		reqCtx:    reqCtx}
 
 	//wait for response
 	if res, ok := <-respCh; ok {
@@ -427,16 +429,18 @@ func (meta *metaNotifier) OnIndexCreate(indexDefn *common.IndexDefn, instId comm
 
 	return nil
 }
-func (meta *metaNotifier) OnIndexBuild(indexInstList []common.IndexInstId, buckets []string) map[common.IndexInstId]error {
+func (meta *metaNotifier) OnIndexBuild(indexInstList []common.IndexInstId,
+	buckets []string, reqCtx *common.MetadataRequestContext) map[common.IndexInstId]error {
 
 	logging.Infof("clustMgrAgent::OnIndexBuild Notification "+
-		"Received for Build Index %v", indexInstList)
+		"Received for Build Index %v %v", indexInstList, reqCtx)
 
 	respCh := make(MsgChannel)
 
 	meta.adminCh <- &MsgBuildIndex{indexInstList: indexInstList,
 		respCh:     respCh,
-		bucketList: buckets}
+		bucketList: buckets,
+		reqCtx:     reqCtx}
 
 	//wait for response
 	if res, ok := <-respCh; ok {
@@ -477,10 +481,11 @@ func (meta *metaNotifier) OnIndexBuild(indexInstList []common.IndexInstId, bucke
 	return nil
 }
 
-func (meta *metaNotifier) OnIndexDelete(instId common.IndexInstId, bucket string) error {
+func (meta *metaNotifier) OnIndexDelete(instId common.IndexInstId,
+	bucket string, reqCtx *common.MetadataRequestContext) error {
 
 	logging.Infof("clustMgrAgent::OnIndexDelete Notification "+
-		"Received for Drop IndexId %v", instId)
+		"Received for Drop IndexId %v %v", instId, reqCtx)
 
 	respCh := make(MsgChannel)
 
@@ -488,7 +493,8 @@ func (meta *metaNotifier) OnIndexDelete(instId common.IndexInstId, bucket string
 	meta.adminCh <- &MsgDropIndex{mType: CLUST_MGR_DROP_INDEX_DDL,
 		indexInstId: instId,
 		respCh:      respCh,
-		bucket:      bucket}
+		bucket:      bucket,
+		reqCtx:      reqCtx}
 
 	//wait for response
 	if res, ok := <-respCh; ok {

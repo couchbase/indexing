@@ -30,6 +30,9 @@ const (
 	OPCODE_INDEXER_READY                     = OPCODE_DELETE_BUCKET + 1
 	OPCODE_CLEANUP_INDEX                     = OPCODE_INDEXER_READY + 1
 	OPCODE_CLEANUP_DEFER_INDEX               = OPCODE_CLEANUP_INDEX + 1
+	OPCODE_CREATE_INDEX_REBAL                = OPCODE_CLEANUP_DEFER_INDEX + 1
+	OPCODE_BUILD_INDEX_REBAL                 = OPCODE_CREATE_INDEX_REBAL + 1
+	OPCODE_DROP_INDEX_REBAL                  = OPCODE_BUILD_INDEX_REBAL + 1
 )
 
 /////////////////////////////////////////////////////////////////////////

@@ -148,6 +148,7 @@ func registerRequestHandler(mgr *IndexManager, clusterUrl string) {
 		}()
 
 		http.HandleFunc("/createIndex", handlerContext.createIndexRequest)
+		http.HandleFunc("/createIndexRebalance", handlerContext.createIndexRequestRebalance)
 		http.HandleFunc("/dropIndex", handlerContext.dropIndexRequest)
 		http.HandleFunc("/buildIndex", handlerContext.buildIndexRequest)
 		http.HandleFunc("/getLocalIndexMetadata", handlerContext.handleLocalIndexMetadataRequest)
@@ -166,6 +167,19 @@ func registerRequestHandler(mgr *IndexManager, clusterUrl string) {
 ///////////////////////////////////////////////////////
 
 func (m *requestHandlerContext) createIndexRequest(w http.ResponseWriter, r *http.Request) {
+
+	m.doCreateIndex(w, r, false)
+
+}
+
+
+func (m *requestHandlerContext) createIndexRequestRebalance(w http.ResponseWriter, r *http.Request) {
+
+	m.doCreateIndex(w, r, true)
+
+}
+
+func (m *requestHandlerContext) doCreateIndex(w http.ResponseWriter, r *http.Request, isRebalReq bool) {
 
 	_, ok := doAuth(r, w)
 	if !ok {
@@ -194,13 +208,14 @@ func (m *requestHandlerContext) createIndexRequest(w http.ResponseWriter, r *htt
 	logging.Debugf("RequestHandler::createIndexRequest: invoke IndexManager for create index bucket %s name %s",
 		indexDefn.Bucket, indexDefn.Name)
 
-	if err := m.mgr.HandleCreateIndexDDL(&indexDefn); err == nil {
+	if err := m.mgr.HandleCreateIndexDDL(&indexDefn, isRebalReq); err == nil {
 		// No error, return success
 		sendIndexResponse(w)
 	} else {
 		// report failure
 		sendIndexResponseWithError(http.StatusInternalServerError, w, fmt.Sprintf("%v", err))
 	}
+
 }
 
 func (m *requestHandlerContext) dropIndexRequest(w http.ResponseWriter, r *http.Request) {

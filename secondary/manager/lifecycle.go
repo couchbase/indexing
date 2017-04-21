@@ -243,13 +243,13 @@ func (m *LifecycleMgr) dispatchRequest(request *requestHolder, factory *message.
 
 	switch op {
 	case client.OPCODE_CREATE_INDEX:
-		err = m.handleCreateIndexScheduledBuild(key, content)
+		err = m.handleCreateIndexScheduledBuild(key, content, common.NewUserRequestContext())
 	case client.OPCODE_UPDATE_INDEX_INST:
 		err = m.handleTopologyChange(content)
 	case client.OPCODE_DROP_INDEX:
-		err = m.handleDeleteIndex(key)
+		err = m.handleDeleteIndex(key, common.NewUserRequestContext())
 	case client.OPCODE_BUILD_INDEX:
-		err = m.handleBuildIndexes(content)
+		err = m.handleBuildIndexes(content, common.NewUserRequestContext())
 	case client.OPCODE_SERVICE_MAP:
 		result, err = m.handleServiceMap(content)
 	case client.OPCODE_DELETE_BUCKET:
@@ -258,6 +258,13 @@ func (m *LifecycleMgr) dispatchRequest(request *requestHolder, factory *message.
 		err = m.handleCleanupIndex(key)
 	case client.OPCODE_CLEANUP_DEFER_INDEX:
 		err = m.handleCleanupDeferIndexFromBucket(key)
+	case client.OPCODE_CREATE_INDEX_REBAL:
+		err = m.handleCreateIndexScheduledBuild(key, content, common.NewRebalanceRequestContext())
+	case client.OPCODE_BUILD_INDEX_REBAL:
+		err = m.handleBuildIndexes(content, common.NewRebalanceRequestContext())
+	case client.OPCODE_DROP_INDEX_REBAL:
+		err = m.handleDeleteIndex(key, common.NewRebalanceRequestContext())
+
 	}
 
 	logging.Debugf("LifecycleMgr.dispatchRequest () : send response for requestId %d, op %d, len(result) %d", reqId, op, len(result))
@@ -287,10 +294,11 @@ func (m *LifecycleMgr) handleCreateIndex(key string, content []byte) error {
 		return err
 	}
 
-	return m.CreateIndex(defn, false)
+	return m.CreateIndex(defn, false, nil)
 }
 
-func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scheduled bool) error {
+func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scheduled bool,
+	reqCtx *common.MetadataRequestContext) error {
 
 	/*
 		if !defn.Deferred && !m.canBuildIndex(defn.Bucket) {
@@ -410,10 +418,10 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scheduled bool) error
 	//    during indexer bootstrap or implicit dropIndex.
 	// 2) Index definition is deleted.  This effectively "delete index".
 	if m.notifier != nil {
-		if err := m.notifier.OnIndexCreate(defn, instId, replicaId); err != nil {
+		if err := m.notifier.OnIndexCreate(defn, instId, replicaId, reqCtx); err != nil {
 			logging.Errorf("LifecycleMgr.handleCreateIndex() : createIndex fails. Reason = %v", err)
 
-			m.DeleteIndex(defn.DefnId, false)
+			m.DeleteIndex(defn.DefnId, false, nil)
 			return err
 		}
 	}
@@ -425,7 +433,7 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scheduled bool) error
 	if err := m.updateIndexState(defn.Bucket, defn.DefnId, common.INDEX_STATE_READY); err != nil {
 		logging.Errorf("LifecycleMgr.handleCreateIndex() : createIndex fails. Reason = %v", err)
 
-		m.DeleteIndex(defn.DefnId, true)
+		m.DeleteIndex(defn.DefnId, true, reqCtx)
 		return err
 	}
 
@@ -434,7 +442,7 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scheduled bool) error
 		if m.notifier != nil {
 			logging.Debugf("LifecycleMgr.handleCreateIndex() : start Index Build")
 
-			retryList, skipList, errList := m.BuildIndexes([]common.IndexDefnId{defn.DefnId})
+			retryList, skipList, errList := m.BuildIndexes([]common.IndexDefnId{defn.DefnId}, reqCtx)
 
 			if len(retryList) != 0 {
 				return errors.New("Fail to build index.  Index build will retry in background.")
@@ -442,13 +450,13 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scheduled bool) error
 
 			if len(errList) != 0 {
 				logging.Errorf("LifecycleMgr.hanaleCreateIndex() : build index fails.  Reason = %v", errList[0])
-				m.DeleteIndex(defn.DefnId, true)
+				m.DeleteIndex(defn.DefnId, true, reqCtx)
 				return errList[0]
 			}
 
 			if len(skipList) != 0 {
 				logging.Errorf("LifecycleMgr.hanaleCreateIndex() : build index fails due to internal errors.")
-				m.DeleteIndex(defn.DefnId, true)
+				m.DeleteIndex(defn.DefnId, true, reqCtx)
 				return errors.New("Fail to create index due to internal build error.  Please retry the operation.")
 			}
 		}
@@ -459,7 +467,7 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scheduled bool) error
 	return nil
 }
 
-func (m *LifecycleMgr) handleBuildIndexes(content []byte) error {
+func (m *LifecycleMgr) handleBuildIndexes(content []byte, reqCtx *common.MetadataRequestContext) error {
 
 	list, err := client.UnmarshallIndexIdList(content)
 	if err != nil {
@@ -472,7 +480,7 @@ func (m *LifecycleMgr) handleBuildIndexes(content []byte) error {
 		input[i] = common.IndexDefnId(id)
 	}
 
-	retryList, skipList, errList := m.BuildIndexes(input)
+	retryList, skipList, errList := m.BuildIndexes(input, reqCtx)
 
 	if len(retryList) != 0 || len(skipList) != 0 || len(errList) != 0 {
 		msg := "Build index fails."
@@ -511,7 +519,8 @@ func (m *LifecycleMgr) handleBuildIndexes(content []byte) error {
 	return nil
 }
 
-func (m *LifecycleMgr) BuildIndexes(ids []common.IndexDefnId) ([]*common.IndexDefn, []common.IndexDefnId, []error) {
+func (m *LifecycleMgr) BuildIndexes(ids []common.IndexDefnId,
+	reqCtx *common.MetadataRequestContext) ([]*common.IndexDefn, []common.IndexDefnId, []error) {
 
 	retryList := ([]*common.IndexDefn)(nil)
 	errList := ([]error)(nil)
@@ -569,7 +578,7 @@ func (m *LifecycleMgr) BuildIndexes(ids []common.IndexDefnId) ([]*common.IndexDe
 
 	if m.notifier != nil && len(instIdList) != 0 {
 
-		if errMap := m.notifier.OnIndexBuild(instIdList, buckets); len(errMap) != 0 {
+		if errMap := m.notifier.OnIndexBuild(instIdList, buckets, reqCtx); len(errMap) != 0 {
 			logging.Errorf("LifecycleMgr.hanaleBuildIndexes() : buildIndex fails. Reason = %v", errMap)
 
 			for instId, build_err := range errMap {
@@ -625,7 +634,7 @@ func (m *LifecycleMgr) BuildIndexes(ids []common.IndexDefnId) ([]*common.IndexDe
 	return retryList, skipList, errList
 }
 
-func (m *LifecycleMgr) handleDeleteIndex(key string) error {
+func (m *LifecycleMgr) handleDeleteIndex(key string, reqCtx *common.MetadataRequestContext) error {
 
 	id, err := indexDefnId(key)
 	if err != nil {
@@ -633,7 +642,7 @@ func (m *LifecycleMgr) handleDeleteIndex(key string) error {
 		return err
 	}
 
-	return m.DeleteIndex(id, true)
+	return m.DeleteIndex(id, true, reqCtx)
 }
 
 func (m *LifecycleMgr) handleCleanupIndex(key string) error {
@@ -644,10 +653,11 @@ func (m *LifecycleMgr) handleCleanupIndex(key string) error {
 		return err
 	}
 
-	return m.DeleteIndex(id, false)
+	return m.DeleteIndex(id, false, nil)
 }
 
-func (m *LifecycleMgr) DeleteIndex(id common.IndexDefnId, notify bool) error {
+func (m *LifecycleMgr) DeleteIndex(id common.IndexDefnId, notify bool,
+	reqCtx *common.MetadataRequestContext) error {
 
 	defn, err := m.repo.GetIndexDefnById(id)
 	if err != nil {
@@ -682,7 +692,7 @@ func (m *LifecycleMgr) DeleteIndex(id common.IndexDefnId, notify bool) error {
 		if inst != nil {
 			// Can call index delete again even after indexer has cleaned up -- if indexer crashes after
 			// this point but before it can delete the index definition.
-			if err := m.notifier.OnIndexDelete(common.IndexInstId(inst.InstId), defn.Bucket); err != nil {
+			if err := m.notifier.OnIndexDelete(common.IndexInstId(inst.InstId), defn.Bucket, reqCtx); err != nil {
 				// Do not remove index defnition if indexer is unable to delete the index.   This is to ensure the
 				// the client can call DeleteIndex again and free up indexer resource.
 				indexerErr, ok := err.(*common.IndexerError)
@@ -795,7 +805,7 @@ func (m *LifecycleMgr) handleDeleteBucket(bucket string, content []byte) error {
 				if /* (uuid == common.BUCKET_UUID_NIL || defn.BucketUUID != uuid) && */
 				streamId == common.NIL_STREAM || (common.StreamId(defnRef.Instances[0].StreamId) == streamId ||
 					common.StreamId(defnRef.Instances[0].StreamId) == common.NIL_STREAM) {
-					if err := m.DeleteIndex(common.IndexDefnId(defn.DefnId), false); err != nil {
+					if err := m.DeleteIndex(common.IndexDefnId(defn.DefnId), false, nil); err != nil {
 						result = err
 					}
 				}
@@ -842,7 +852,7 @@ func (m *LifecycleMgr) handleCleanupDeferIndexFromBucket(bucket string) error {
 					if defn.BucketUUID != currentUUID && defn.Deferred &&
 						defnRef.Instances[0].State != uint32(common.INDEX_STATE_DELETED) &&
 						common.StreamId(defnRef.Instances[0].StreamId) == common.NIL_STREAM {
-						if err := m.DeleteIndex(common.IndexDefnId(defn.DefnId), true); err != nil {
+						if err := m.DeleteIndex(common.IndexDefnId(defn.DefnId), true, common.NewUserRequestContext()); err != nil {
 							return err
 						}
 					}
@@ -854,7 +864,8 @@ func (m *LifecycleMgr) handleCleanupDeferIndexFromBucket(bucket string) error {
 	return nil
 }
 
-func (m *LifecycleMgr) handleCreateIndexScheduledBuild(key string, content []byte) error {
+func (m *LifecycleMgr) handleCreateIndexScheduledBuild(key string, content []byte,
+	reqCtx *common.MetadataRequestContext) error {
 
 	defn, err := common.UnmarshallIndexDefn(content)
 	if err != nil {
@@ -863,7 +874,7 @@ func (m *LifecycleMgr) handleCreateIndexScheduledBuild(key string, content []byt
 	}
 
 	// Create index with the scheduled flag.
-	return m.CreateIndex(defn, true)
+	return m.CreateIndex(defn, true, reqCtx)
 }
 
 //////////////////////////////////////////////////////////////
