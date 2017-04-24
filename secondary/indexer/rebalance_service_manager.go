@@ -354,6 +354,7 @@ func (m *ServiceMgr) prepareFailover(change service.TopologyChange) error {
 
 		if m.rebalancerF != nil {
 			m.rebalancerF.Cancel()
+			m.rebalancerF = nil
 		}
 
 		masterAlive := false
@@ -399,6 +400,8 @@ func (m *ServiceMgr) prepareFailover(change service.TopologyChange) error {
 		if m.rebalanceToken.MasterId == string(m.nodeInfo.NodeID) {
 			if m.rebalancer != nil {
 				m.rebalancer.Cancel()
+				m.rebalancer = nil
+				m.moveStatusCh <- errors.New("Move Index Aborted due to Node Failover")
 			}
 			if err = m.runCleanupPhaseLOCKED(MoveIndexTokenPath, true); err != nil {
 				return err
@@ -406,6 +409,7 @@ func (m *ServiceMgr) prepareFailover(change service.TopologyChange) error {
 		} else {
 			if m.rebalancerF != nil {
 				m.rebalancerF.Cancel()
+				m.rebalancerF = nil
 			}
 			if err = m.runCleanupPhaseLOCKED(MoveIndexTokenPath, masterCleanup); err != nil {
 				return err
@@ -437,6 +441,7 @@ func (m *ServiceMgr) prepareRebalance(change service.TopologyChange) error {
 		l.Warnf("ServiceMgr::prepareRebalance Found Rebalance In Progress. Cleanup.")
 		if m.rebalancerF != nil {
 			m.rebalancerF.Cancel()
+			m.rebalancerF = nil
 		}
 		if err = m.runCleanupPhaseLOCKED(RebalanceTokenPath, false); err != nil {
 			return err
