@@ -19,6 +19,7 @@ func usage(fset *flag.FlagSet) {
 	fmt.Fprintln(os.Stderr, "Usage: cbindex [options]")
 	fset.PrintDefaults()
 	fmt.Fprintln(os.Stderr, `Examples:
+
 - Scan
     cbindex -type=scanAll -bucket default -index abcd
     cbindex -type=scanAll -index abcd -limit 0
@@ -26,13 +27,25 @@ func usage(fset *flag.FlagSet) {
     cbindex -type=scan -index state -low='["Ar"]' -high='["Co"]' -buffersz=300
     cbindex -type=scan -index name_state_age -low='["Ar"]' -high='["Arlette", "N"]'
     cbindex -type scan -index '#primary' -equal='["Adena_54605074"]'
+
 - Create/Drop
     cbindex -type create -bucket default -using memdb -index first_name -fields=first_name,last_name
     cbindex -type create -bucket default -primary=true -index primary
     cbindex -type drop -instanceid 1234
+
 - List
     cbindex -type list
     cbindex -type nodes
+
+- Move
+    Single Index:
+    cbindex -type move -index 'def_airportname' -bucket default -with '{"nodes":"10.17.6.32:8091"}'
+
+    Index And 1 Replica:
+    ./cbindex -type move -index 'def_airportname' -bucket default -with '{"nodes":["10.17.6.32:8091","10.17.6.33:8091"]}'
+
+    Move Index supports moving only 1 index(and its replicas) at a time.
+
 - Misc
     cbindex -par 100 -duration 10 benchmark
     `)
