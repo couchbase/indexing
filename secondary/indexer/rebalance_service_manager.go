@@ -1947,8 +1947,9 @@ func (m *ServiceMgr) handleMoveIndex(w http.ResponseWriter, r *http.Request) {
 			sendIndexResponseWithError(http.StatusInternalServerError, w, err.Error())
 			return
 		} else if noop {
-			l.Warnf("ServiceMgr::handleMoveIndex No TransferTokens Generated. Skip Move Index.")
-			sendIndexResponse(w)
+			warnStr := "No Index Movement Required for Specified Destination List"
+			l.Warnf("ServiceMgr::handleMoveIndex %v", warnStr)
+			sendIndexResponseWithError(http.StatusBadRequest, w, warnStr)
 			return
 		} else {
 			select {
