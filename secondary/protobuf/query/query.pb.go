@@ -310,6 +310,7 @@ type ScanRequest struct {
 	Indexprojection  *IndexProjection `protobuf:"bytes,9,opt,name=indexprojection" json:"indexprojection,omitempty"`
 	Reverse          *bool            `protobuf:"varint,10,opt,name=reverse" json:"reverse,omitempty"`
 	Offset           *int64           `protobuf:"varint,11,opt,name=offset" json:"offset,omitempty"`
+	RollbackTime     *int64           `protobuf:"varint,12,opt,name=rollbackTime" json:"rollbackTime,omitempty"`
 	XXX_unrecognized []byte           `json:"-"`
 }
 
@@ -394,6 +395,13 @@ func (m *ScanRequest) GetOffset() int64 {
 	return 0
 }
 
+func (m *ScanRequest) GetRollbackTime() int64 {
+	if m != nil && m.RollbackTime != nil {
+		return *m.RollbackTime
+	}
+	return 0
+}
+
 // Full table scan request from indexer.
 type ScanAllRequest struct {
 	DefnID           *uint64        `protobuf:"varint,1,req,name=defnID" json:"defnID,omitempty"`
@@ -401,6 +409,7 @@ type ScanAllRequest struct {
 	Cons             *uint32        `protobuf:"varint,3,req,name=cons" json:"cons,omitempty"`
 	Vector           *TsConsistency `protobuf:"bytes,4,opt,name=vector" json:"vector,omitempty"`
 	RequestId        *string        `protobuf:"bytes,5,opt,name=requestId" json:"requestId,omitempty"`
+	RollbackTime     *int64         `protobuf:"varint,6,opt,name=rollbackTime" json:"rollbackTime,omitempty"`
 	XXX_unrecognized []byte         `json:"-"`
 }
 
@@ -441,6 +450,13 @@ func (m *ScanAllRequest) GetRequestId() string {
 		return *m.RequestId
 	}
 	return ""
+}
+
+func (m *ScanAllRequest) GetRollbackTime() int64 {
+	if m != nil && m.RollbackTime != nil {
+		return *m.RollbackTime
+	}
+	return 0
 }
 
 // Request by client to stop streaming the query results.
@@ -502,6 +518,7 @@ type CountRequest struct {
 	RequestId        *string        `protobuf:"bytes,5,opt,name=requestId" json:"requestId,omitempty"`
 	Distinct         *bool          `protobuf:"varint,6,opt,name=distinct" json:"distinct,omitempty"`
 	Scans            []*Scan        `protobuf:"bytes,7,rep,name=scans" json:"scans,omitempty"`
+	RollbackTime     *int64         `protobuf:"varint,8,opt,name=rollbackTime" json:"rollbackTime,omitempty"`
 	XXX_unrecognized []byte         `json:"-"`
 }
 
@@ -556,6 +573,13 @@ func (m *CountRequest) GetScans() []*Scan {
 		return m.Scans
 	}
 	return nil
+}
+
+func (m *CountRequest) GetRollbackTime() int64 {
+	if m != nil && m.RollbackTime != nil {
+		return *m.RollbackTime
+	}
+	return 0
 }
 
 // total number of entries in index.

@@ -21,7 +21,8 @@ import (
 )
 
 var (
-	ErrIndexRollback = errors.New("Indexer rollback")
+	ErrIndexRollback            = errors.New("Indexer rollback")
+	ErrIndexRollbackOrBootstrap = errors.New("Indexer rollback or warmup")
 )
 
 //StorageManager manages the snapshots for the indexes and responsible for storing
@@ -780,11 +781,11 @@ func (s *storageMgr) handleStats(cmd Message) {
 			now := time.Now().UnixNano()
 			elapsed := float64(now-idxStats.lastMutateGatherTime.Value()) / float64(time.Second)
 			if elapsed > 0 {
-				numDocsQueued := idxStats.numDocsFlushQueued.Value()
-				mutationRate := float64(numDocsQueued-idxStats.lastNumDocsQueued.Value()) / elapsed
+				numDocsIndexed := idxStats.numDocsIndexed.Value()
+				mutationRate := float64(numDocsIndexed-idxStats.lastNumDocsIndexed.Value()) / elapsed
 				idxStats.avgMutationRate.Set(int64((mutationRate + float64(idxStats.avgMutationRate.Value())) / 2))
 				idxStats.lastMutateGatherTime.Set(now)
-				idxStats.lastNumDocsQueued.Set(numDocsQueued)
+				idxStats.lastNumDocsIndexed.Set(numDocsIndexed)
 			}
 		}
 	}

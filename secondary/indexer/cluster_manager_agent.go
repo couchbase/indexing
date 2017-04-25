@@ -15,6 +15,8 @@ import (
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager"
 	"net"
+	"sync/atomic"
+	"time"
 )
 
 //ClustMgrAgent provides the mechanism to talk to Index Coordinator
@@ -29,6 +31,9 @@ type clustMgrAgent struct {
 	config common.Config
 
 	metaNotifier manager.MetadataNotifier
+
+	stats      IndexerStatsHolder
+	statsCount uint64
 }
 
 func NewClustMgrAgent(supvCmdch MsgChannel, supvRespch MsgChannel, cfg common.Config) (
@@ -54,7 +59,7 @@ func NewClustMgrAgent(supvCmdch MsgChannel, supvRespch MsgChannel, cfg common.Co
 
 	c.mgr = mgr
 
-	metaNotifier := NewMetaNotifier(supvRespch, cfg)
+	metaNotifier := NewMetaNotifier(supvRespch, cfg, c)
 	if metaNotifier == nil {
 		logging.Errorf("ClustMgrAgent::NewClustMgrAgent Error In Init %v", err)
 		return nil, &MsgError{
@@ -136,6 +141,12 @@ func (c *clustMgrAgent) handleSupvervisorCommands(cmd Message) {
 	case CLUST_MGR_CLEANUP_INDEX:
 		c.handleCleanupIndex(cmd)
 
+	case UPDATE_INDEX_INSTANCE_MAP:
+		c.handleIndexMap(cmd)
+
+	case INDEX_STATS_DONE:
+		c.handleStats(cmd)
+
 	default:
 		logging.Errorf("ClusterMgrAgent::handleSupvervisorCommands Unknown Message %v", cmd)
 	}
@@ -189,6 +200,35 @@ func (c *clustMgrAgent) handleUpdateTopologyForIndex(cmd Message) {
 
 	c.supvCmdch <- &MsgSuccess{}
 
+}
+
+func (c *clustMgrAgent) handleIndexMap(cmd Message) {
+
+	logging.Infof("ClustMgr:handleIndexMap %v", cmd)
+
+	statsObj := cmd.(*MsgUpdateInstMap).GetStatsObject()
+	if statsObj != nil {
+		c.stats.Set(statsObj)
+	}
+
+	c.supvCmdch <- &MsgSuccess{}
+}
+
+func (c *clustMgrAgent) handleStats(cmd Message) {
+
+	logging.Infof("ClustMgr:handleStats %v", cmd)
+	c.supvCmdch <- &MsgSuccess{}
+
+	c.handleStatsInternal()
+	atomic.AddUint64(&c.statsCount, 1)
+}
+
+func (c *clustMgrAgent) handleStatsInternal() {
+
+	stats := c.stats.Get()
+	if stats != nil {
+		c.mgr.NotifyStats(stats.GetStats())
+	}
 }
 
 func (c *clustMgrAgent) handleGetGlobalTopology(cmd Message) {
@@ -367,9 +407,10 @@ func (c *clustMgrAgent) panicHandler() {
 type metaNotifier struct {
 	adminCh MsgChannel
 	config  common.Config
+	mgr     *clustMgrAgent
 }
 
-func NewMetaNotifier(adminCh MsgChannel, config common.Config) *metaNotifier {
+func NewMetaNotifier(adminCh MsgChannel, config common.Config, mgr *clustMgrAgent) *metaNotifier {
 
 	if adminCh == nil {
 		return nil
@@ -378,6 +419,7 @@ func NewMetaNotifier(adminCh MsgChannel, config common.Config) *metaNotifier {
 	return &metaNotifier{
 		adminCh: adminCh,
 		config:  config,
+		mgr:     mgr,
 	}
 
 }
@@ -538,6 +580,32 @@ func (meta *metaNotifier) OnIndexDelete(instId common.IndexInstId,
 	}
 
 	return nil
+}
+
+func (meta *metaNotifier) OnFetchStats() error {
+
+	go meta.fetchStats()
+
+	return nil
+}
+
+func (meta *metaNotifier) fetchStats() {
+
+	ticker := time.NewTicker(time.Millisecond * 500)
+	defer ticker.Stop()
+	startTime := time.Now()
+
+	for range ticker.C {
+		if meta.mgr.stats.Get() != nil && atomic.LoadUint64(&meta.mgr.statsCount) != 0 {
+			meta.mgr.handleStatsInternal()
+			logging.Infof("Fetch new stats upon request by life cycle manager")
+			return
+		}
+
+		if time.Now().Sub(startTime) > time.Minute {
+			return
+		}
+	}
 }
 
 func (meta *metaNotifier) makeDefaultPartitionContainer() common.PartitionContainer {

@@ -230,6 +230,7 @@ func (tk *timekeeper) handleStreamOpen(cmd Message) {
 	streamId := cmd.(*MsgStreamUpdate).GetStreamId()
 	bucket := cmd.(*MsgStreamUpdate).GetBucket()
 	restartTs := cmd.(*MsgStreamUpdate).GetRestartTs()
+	rollbackTime := cmd.(*MsgStreamUpdate).GetRollbackTime()
 
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
@@ -251,6 +252,7 @@ func (tk *timekeeper) handleStreamOpen(cmd Message) {
 			tk.ss.streamBucketRestartTsMap[streamId][bucket] = restartTs
 			tk.ss.setHWTFromRestartTs(streamId, bucket)
 		}
+		tk.ss.setRollbackTime(bucket, rollbackTime)
 		tk.addIndextoStream(cmd)
 		tk.startTimer(streamId, bucket)
 
@@ -2838,6 +2840,8 @@ func (tk *timekeeper) handleStats(cmd Message) {
 				idxStats.numDocsQueued.Set(int64(queued))
 				idxStats.numDocsPending.Set(int64(pending))
 				idxStats.buildProgress.Set(int64(v))
+				idxStats.lastRollbackTime.Set(tk.ss.bucketRollbackTime[inst.Defn.Bucket])
+				idxStats.progressStatTime.Set(time.Now().UnixNano())
 			}
 		}
 

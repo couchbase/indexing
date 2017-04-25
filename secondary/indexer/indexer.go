@@ -91,6 +91,8 @@ type indexer struct {
 	streamBucketRequestQueue  map[common.StreamId]map[string]chan *kvRequest
 	streamBucketRequestLock   map[common.StreamId]map[string]chan *sync.Mutex
 
+	bucketRollbackTimes map[string]int64
+
 	bucketBuildTs map[string]Timestamp
 
 	//TODO Remove this once cbq bridge support goes away
@@ -189,6 +191,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		streamBucketRequestQueue:     make(map[common.StreamId]map[string]chan *kvRequest),
 		streamBucketRequestLock:      make(map[common.StreamId]map[string]chan *sync.Mutex),
 		bucketBuildTs:                make(map[string]Timestamp),
+		bucketRollbackTimes:          make(map[string]int64),
 		bucketCreateClientChMap:      make(map[string]MsgChannel),
 	}
 
@@ -409,7 +412,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		idx.stats.indexerState.Set(int64(common.INDEXER_ACTIVE))
 	}
 
-	idx.scanCoordCmdCh <- &MsgIndexerState{mType: INDEXER_RESUME}
+	idx.scanCoordCmdCh <- &MsgIndexerState{mType: INDEXER_RESUME, rollbackTimes: idx.bucketRollbackTimes}
 	<-idx.scanCoordCmdCh
 
 	// Persist node uuid in Metadata store
@@ -439,12 +442,37 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 
 	go idx.monitorMemUsage()
 	go idx.logMemstats()
+	go idx.collectProgressStats()
 
 	//start the main indexer loop
 	idx.run()
 
 	return idx, &MsgSuccess{}
 
+}
+
+func (idx *indexer) collectProgressStats() {
+
+	respCh := make(chan bool)
+	idx.internalRecvCh <- &MsgStatsRequest{
+		mType:  INDEX_PROGRESS_STATS,
+		respch: respCh,
+	}
+	<-respCh
+
+	logging.Infof("progress stats collection done.")
+
+	idx.sendProgressStats()
+}
+
+func (idx *indexer) sendProgressStats() {
+
+	idx.internalRecvCh <- &MsgStatsRequest{
+		mType:  INDEX_STATS_DONE,
+		respch: nil,
+	}
+
+	logging.Infof("send progress stats to clients")
 }
 
 func (idx *indexer) acquireStreamRequestLock(bucket string, streamId common.StreamId) *kvRequest {
@@ -834,6 +862,10 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		idx.tkCmdCh <- msg
 		<-idx.tkCmdCh
 
+	case INDEX_STATS_DONE:
+		idx.clustMgrAgentCmdCh <- msg
+		<-idx.clustMgrAgentCmdCh
+
 	case INDEXER_BUCKET_NOT_FOUND:
 		idx.handleBucketNotFound(msg)
 
@@ -1146,6 +1178,11 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 	var partnInstMap PartitionInstMap
 	if partnInstMap, err = idx.initPartnInstance(indexInst, clientCh); err != nil {
 		return
+	}
+
+	// update rollback time for the bucket
+	if _, ok := idx.bucketRollbackTimes[indexInst.Defn.Bucket]; !ok {
+		idx.bucketRollbackTimes[indexInst.Defn.Bucket] = time.Now().UnixNano()
 	}
 
 	//update index maps with this index
@@ -1635,6 +1672,8 @@ func (idx *indexer) handleInitRecovery(msg Message) {
 			common.CrashOnError(err)
 		}
 		idx.startBucketStream(streamId, bucket, restartTs)
+
+		go idx.collectProgressStats()
 	} else {
 		idx.startBucketStream(streamId, bucket, restartTs)
 	}
@@ -1894,7 +1933,7 @@ func (idx *indexer) handleBucketNotFound(msg Message) {
 }
 
 func (idx indexer) newIndexInstMsg(m common.IndexInstMap) *MsgUpdateInstMap {
-	return &MsgUpdateInstMap{indexInstMap: m, stats: idx.stats.Clone()}
+	return &MsgUpdateInstMap{indexInstMap: m, stats: idx.stats.Clone(), rollbackTimes: idx.bucketRollbackTimes}
 }
 
 func (idx *indexer) cleanupIndexData(indexInst common.IndexInst,
@@ -2005,12 +2044,13 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 	respCh := make(MsgChannel)
 
 	cmd = &MsgStreamUpdate{mType: OPEN_STREAM,
-		streamId:  buildStream,
-		bucket:    bucket,
-		indexList: indexList,
-		buildTs:   buildTs,
-		respCh:    respCh,
-		restartTs: nil}
+		streamId:     buildStream,
+		bucket:       bucket,
+		indexList:    indexList,
+		buildTs:      buildTs,
+		respCh:       respCh,
+		restartTs:    nil,
+		rollbackTime: idx.bucketRollbackTimes[bucket]}
 
 	//send stream update to timekeeper
 	if resp := idx.sendStreamUpdateToWorker(cmd, idx.tkCmdCh,
@@ -2339,6 +2379,11 @@ func (idx *indexer) distributeIndexMapsToWorkers(msgUpdateIndexInstMap Message,
 		return err
 	}
 
+	if err := idx.sendUpdatedIndexMapToWorker(msgUpdateIndexInstMap, nil, idx.clustMgrAgentCmdCh,
+		"clusterMgrAgent"); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -2610,11 +2655,15 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 		common.CrashOnError(err)
 	}
 
+	//if index is already in MAINT_STREAM, nothing more needs to be done
 	if err := idx.updateMetaInfoForIndexList(instIdList, true, true, false, false, true, false, nil); err != nil {
 		common.CrashOnError(err)
 	}
 
-	//if index is already in MAINT_STREAM, nothing more needs to be done
+	// collect progress stats after initial is done or transition to catchup phase. This must be done
+	// after updating metaInfo.
+	idx.sendProgressStats()
+
 	if streamId == common.MAINT_STREAM {
 
 		//for cbq bridge, return response as index is ready to query
@@ -3056,13 +3105,14 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 	stopCh := make(StopChannel)
 
 	cmd := &MsgStreamUpdate{mType: OPEN_STREAM,
-		streamId:  streamId,
-		bucket:    bucket,
-		indexList: indexList,
-		restartTs: restartTs,
-		buildTs:   idx.bucketBuildTs[bucket],
-		respCh:    respCh,
-		stopCh:    stopCh}
+		streamId:     streamId,
+		bucket:       bucket,
+		indexList:    indexList,
+		restartTs:    restartTs,
+		buildTs:      idx.bucketBuildTs[bucket],
+		respCh:       respCh,
+		stopCh:       stopCh,
+		rollbackTime: idx.bucketRollbackTimes[bucket]}
 
 	//send stream update to timekeeper
 	if resp := idx.sendStreamUpdateToWorker(cmd, idx.tkCmdCh,
@@ -3165,10 +3215,20 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 func (idx *indexer) processRollback(streamId common.StreamId,
 	bucket string, rollbackTs *common.TsVbuuid) (*common.TsVbuuid, error) {
 
+	if streamId == common.MAINT_STREAM {
+		idx.bucketRollbackTimes[bucket] = time.Now().UnixNano()
+	}
+
 	//send to storage manager to rollback
 	msg := &MsgRollback{streamId: streamId,
-		bucket:     bucket,
-		rollbackTs: rollbackTs}
+		bucket:       bucket,
+		rollbackTs:   rollbackTs,
+		rollbackTime: idx.bucketRollbackTimes[bucket]}
+
+	if streamId == common.MAINT_STREAM {
+		idx.scanCoordCmdCh <- msg
+		<-idx.scanCoordCmdCh
+	}
 
 	idx.storageMgrCmdCh <- msg
 	res := <-idx.storageMgrCmdCh
@@ -3802,6 +3862,7 @@ func (idx *indexer) startStreams() bool {
 	idx.stateLock.Unlock()
 
 	for bucket, ts := range restartTs {
+		idx.bucketRollbackTimes[bucket] = time.Now().UnixNano()
 		idx.startBucketStream(common.MAINT_STREAM, bucket, ts)
 		idx.setStreamBucketState(common.MAINT_STREAM, bucket, STREAM_ACTIVE)
 	}

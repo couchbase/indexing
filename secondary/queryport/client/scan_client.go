@@ -161,7 +161,8 @@ func (c *GsiScanClient) Lookup(
 	defnID uint64, requestId string, values []common.SecondaryKey,
 	distinct bool, limit int64,
 	cons common.Consistency, vector *TsConsistency,
-	callb ResponseHandler) (error, bool) {
+	callb ResponseHandler,
+	rollbackTime int64) (error, bool) {
 
 	// serialize lookup value.
 	equals := make([][]byte, 0, len(values))
@@ -183,12 +184,13 @@ func (c *GsiScanClient) Lookup(
 	conn, pkt := connectn.conn, connectn.pkt
 
 	req := &protobuf.ScanRequest{
-		DefnID:    proto.Uint64(defnID),
-		RequestId: proto.String(requestId),
-		Span:      &protobuf.Span{Equals: equals},
-		Distinct:  proto.Bool(distinct),
-		Limit:     proto.Int64(limit),
-		Cons:      proto.Uint32(uint32(cons)),
+		DefnID:       proto.Uint64(defnID),
+		RequestId:    proto.String(requestId),
+		Span:         &protobuf.Span{Equals: equals},
+		Distinct:     proto.Bool(distinct),
+		Limit:        proto.Int64(limit),
+		Cons:         proto.Uint32(uint32(cons)),
+		RollbackTime: proto.Int64(rollbackTime),
 	}
 	if vector != nil {
 		req.Vector = protobuf.NewTsConsistency(
@@ -221,7 +223,7 @@ func (c *GsiScanClient) Lookup(
 func (c *GsiScanClient) Range(
 	defnID uint64, requestId string, low, high common.SecondaryKey, inclusion Inclusion,
 	distinct bool, limit int64, cons common.Consistency, vector *TsConsistency,
-	callb ResponseHandler) (error, bool) {
+	callb ResponseHandler, rollbackTime int64) (error, bool) {
 
 	// serialize low and high values.
 	l, err := json.Marshal(low)
@@ -250,9 +252,10 @@ func (c *GsiScanClient) Range(
 				Low: l, High: h, Inclusion: proto.Uint32(uint32(inclusion)),
 			},
 		},
-		Distinct: proto.Bool(distinct),
-		Limit:    proto.Int64(limit),
-		Cons:     proto.Uint32(uint32(cons)),
+		Distinct:     proto.Bool(distinct),
+		Limit:        proto.Int64(limit),
+		Cons:         proto.Uint32(uint32(cons)),
+		RollbackTime: proto.Int64(rollbackTime),
 	}
 	if vector != nil {
 		req.Vector = protobuf.NewTsConsistency(
@@ -284,7 +287,7 @@ func (c *GsiScanClient) Range(
 func (c *GsiScanClient) RangePrimary(
 	defnID uint64, requestId string, low, high []byte, inclusion Inclusion,
 	distinct bool, limit int64, cons common.Consistency, vector *TsConsistency,
-	callb ResponseHandler) (error, bool) {
+	callb ResponseHandler, rollbackTime int64) (error, bool) {
 
 	connectn, err := c.pool.Get()
 	if err != nil {
@@ -304,9 +307,10 @@ func (c *GsiScanClient) RangePrimary(
 				Inclusion: proto.Uint32(uint32(inclusion)),
 			},
 		},
-		Distinct: proto.Bool(distinct),
-		Limit:    proto.Int64(limit),
-		Cons:     proto.Uint32(uint32(cons)),
+		Distinct:     proto.Bool(distinct),
+		Limit:        proto.Int64(limit),
+		Cons:         proto.Uint32(uint32(cons)),
+		RollbackTime: proto.Int64(rollbackTime),
 	}
 	if vector != nil {
 		req.Vector = protobuf.NewTsConsistency(
@@ -338,7 +342,7 @@ func (c *GsiScanClient) RangePrimary(
 func (c *GsiScanClient) ScanAll(
 	defnID uint64, requestId string, limit int64,
 	cons common.Consistency, vector *TsConsistency,
-	callb ResponseHandler) (error, bool) {
+	callb ResponseHandler, rollbackTime int64) (error, bool) {
 
 	connectn, err := c.pool.Get()
 	if err != nil {
@@ -350,10 +354,11 @@ func (c *GsiScanClient) ScanAll(
 	conn, pkt := connectn.conn, connectn.pkt
 
 	req := &protobuf.ScanAllRequest{
-		DefnID:    proto.Uint64(defnID),
-		RequestId: proto.String(requestId),
-		Limit:     proto.Int64(limit),
-		Cons:      proto.Uint32(uint32(cons)),
+		DefnID:       proto.Uint64(defnID),
+		RequestId:    proto.String(requestId),
+		Limit:        proto.Int64(limit),
+		Cons:         proto.Uint32(uint32(cons)),
+		RollbackTime: proto.Int64(rollbackTime),
 	}
 	if vector != nil {
 		req.Vector = protobuf.NewTsConsistency(
@@ -384,7 +389,7 @@ func (c *GsiScanClient) MultiScan(
 	defnID uint64, requestId string, scans Scans,
 	reverse, distinct bool, projection *IndexProjection, offset, limit int64,
 	cons common.Consistency, vector *TsConsistency,
-	callb ResponseHandler) (error, bool) {
+	callb ResponseHandler, rollbackTime int64) (error, bool) {
 
 	// serialize scans
 	protoScans := make([]*protobuf.Scan, len(scans))
@@ -469,6 +474,7 @@ func (c *GsiScanClient) MultiScan(
 		Indexprojection: protoProjection,
 		Reverse:         proto.Bool(reverse),
 		Offset:          proto.Int64(offset),
+		RollbackTime:    proto.Int64(rollbackTime),
 	}
 	if vector != nil {
 		req.Vector = protobuf.NewTsConsistency(
@@ -500,7 +506,7 @@ func (c *GsiScanClient) MultiScanPrimary(
 	defnID uint64, requestId string, scans Scans,
 	reverse, distinct bool, projection *IndexProjection, offset, limit int64,
 	cons common.Consistency, vector *TsConsistency,
-	callb ResponseHandler) (error, bool) {
+	callb ResponseHandler, rollbackTime int64) (error, bool) {
 	var what string
 	// serialize scans
 	protoScans := make([]*protobuf.Scan, len(scans))
@@ -588,6 +594,7 @@ func (c *GsiScanClient) MultiScanPrimary(
 		Indexprojection: protoProjection,
 		Reverse:         proto.Bool(reverse),
 		Offset:          proto.Int64(offset),
+		RollbackTime:    proto.Int64(rollbackTime),
 	}
 	if vector != nil {
 		req.Vector = protobuf.NewTsConsistency(
@@ -618,7 +625,7 @@ func (c *GsiScanClient) MultiScanPrimary(
 // CountLookup to count number entries for given set of keys.
 func (c *GsiScanClient) CountLookup(
 	defnID uint64, requestId string, values []common.SecondaryKey,
-	cons common.Consistency, vector *TsConsistency) (int64, error) {
+	cons common.Consistency, vector *TsConsistency, rollbackTime int64) (int64, error) {
 
 	// serialize match value.
 	equals := make([][]byte, 0, len(values))
@@ -631,10 +638,11 @@ func (c *GsiScanClient) CountLookup(
 	}
 
 	req := &protobuf.CountRequest{
-		DefnID:    proto.Uint64(defnID),
-		RequestId: proto.String(requestId),
-		Span:      &protobuf.Span{Equals: equals},
-		Cons:      proto.Uint32(uint32(cons)),
+		DefnID:       proto.Uint64(defnID),
+		RequestId:    proto.String(requestId),
+		Span:         &protobuf.Span{Equals: equals},
+		Cons:         proto.Uint32(uint32(cons)),
+		RollbackTime: proto.Int64(rollbackTime),
 	}
 	if vector != nil {
 		req.Vector = protobuf.NewTsConsistency(
@@ -655,13 +663,14 @@ func (c *GsiScanClient) CountLookup(
 // CountLookup to count number entries for given set of keys for primary index
 func (c *GsiScanClient) CountLookupPrimary(
 	defnID uint64, requestId string, values [][]byte,
-	cons common.Consistency, vector *TsConsistency) (int64, error) {
+	cons common.Consistency, vector *TsConsistency, rollbackTime int64) (int64, error) {
 
 	req := &protobuf.CountRequest{
-		DefnID:    proto.Uint64(defnID),
-		RequestId: proto.String(requestId),
-		Span:      &protobuf.Span{Equals: values},
-		Cons:      proto.Uint32(uint32(cons)),
+		DefnID:       proto.Uint64(defnID),
+		RequestId:    proto.String(requestId),
+		Span:         &protobuf.Span{Equals: values},
+		Cons:         proto.Uint32(uint32(cons)),
+		RollbackTime: proto.Int64(rollbackTime),
 	}
 	if vector != nil {
 		req.Vector = protobuf.NewTsConsistency(
@@ -682,7 +691,7 @@ func (c *GsiScanClient) CountLookupPrimary(
 // CountRange to count number entries in the given range.
 func (c *GsiScanClient) CountRange(
 	defnID uint64, requestId string, low, high common.SecondaryKey, inclusion Inclusion,
-	cons common.Consistency, vector *TsConsistency) (int64, error) {
+	cons common.Consistency, vector *TsConsistency, rollbackTime int64) (int64, error) {
 
 	// serialize low and high values.
 	l, err := json.Marshal(low)
@@ -702,7 +711,8 @@ func (c *GsiScanClient) CountRange(
 				Low: l, High: h, Inclusion: proto.Uint32(uint32(inclusion)),
 			},
 		},
-		Cons: proto.Uint32(uint32(cons)),
+		Cons:         proto.Uint32(uint32(cons)),
+		RollbackTime: proto.Int64(rollbackTime),
 	}
 	if vector != nil {
 		req.Vector = protobuf.NewTsConsistency(
@@ -724,7 +734,7 @@ func (c *GsiScanClient) CountRange(
 // CountRange to count number entries in the given range for primary index
 func (c *GsiScanClient) CountRangePrimary(
 	defnID uint64, requestId string, low, high []byte, inclusion Inclusion,
-	cons common.Consistency, vector *TsConsistency) (int64, error) {
+	cons common.Consistency, vector *TsConsistency, rollbackTime int64) (int64, error) {
 
 	req := &protobuf.CountRequest{
 		DefnID:    proto.Uint64(defnID),
@@ -734,7 +744,8 @@ func (c *GsiScanClient) CountRangePrimary(
 				Low: low, High: high, Inclusion: proto.Uint32(uint32(inclusion)),
 			},
 		},
-		Cons: proto.Uint32(uint32(cons)),
+		Cons:         proto.Uint32(uint32(cons)),
+		RollbackTime: proto.Int64(rollbackTime),
 	}
 	if vector != nil {
 		req.Vector = protobuf.NewTsConsistency(
@@ -755,7 +766,7 @@ func (c *GsiScanClient) CountRangePrimary(
 
 func (c *GsiScanClient) MultiScanCount(
 	defnID uint64, requestId string, scans Scans, distinct bool,
-	cons common.Consistency, vector *TsConsistency) (int64, error) {
+	cons common.Consistency, vector *TsConsistency, rollbackTime int64) (int64, error) {
 
 	// serialize scans
 	protoScans := make([]*protobuf.Scan, len(scans))
@@ -815,9 +826,10 @@ func (c *GsiScanClient) MultiScanCount(
 		Span: &protobuf.Span{
 			Range: nil,
 		},
-		Distinct: proto.Bool(distinct),
-		Scans:    protoScans,
-		Cons:     proto.Uint32(uint32(cons)),
+		Distinct:     proto.Bool(distinct),
+		Scans:        protoScans,
+		Cons:         proto.Uint32(uint32(cons)),
+		RollbackTime: proto.Int64(rollbackTime),
 	}
 
 	if vector != nil {
@@ -839,7 +851,7 @@ func (c *GsiScanClient) MultiScanCount(
 
 func (c *GsiScanClient) MultiScanCountPrimary(
 	defnID uint64, requestId string, scans Scans, distinct bool,
-	cons common.Consistency, vector *TsConsistency) (int64, error) {
+	cons common.Consistency, vector *TsConsistency, rollbackTime int64) (int64, error) {
 
 	var what string
 	// serialize scans
@@ -903,9 +915,10 @@ func (c *GsiScanClient) MultiScanCountPrimary(
 		Span: &protobuf.Span{
 			Range: nil,
 		},
-		Distinct: proto.Bool(distinct),
-		Scans:    protoScans,
-		Cons:     proto.Uint32(uint32(cons)),
+		Distinct:     proto.Bool(distinct),
+		Scans:        protoScans,
+		Cons:         proto.Uint32(uint32(cons)),
+		RollbackTime: proto.Int64(rollbackTime),
 	}
 
 	if vector != nil {

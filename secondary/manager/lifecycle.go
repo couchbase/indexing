@@ -264,7 +264,8 @@ func (m *LifecycleMgr) dispatchRequest(request *requestHolder, factory *message.
 		err = m.handleBuildIndexes(content, common.NewRebalanceRequestContext())
 	case client.OPCODE_DROP_INDEX_REBAL:
 		err = m.handleDeleteIndex(key, common.NewRebalanceRequestContext())
-
+	case client.OPCODE_BROADCAST_STATS:
+		m.handleBroadcastStats(content)
 	}
 
 	logging.Debugf("LifecycleMgr.dispatchRequest () : send response for requestId %d, op %d, len(result) %d", reqId, op, len(result))
@@ -280,6 +281,7 @@ func (m *LifecycleMgr) dispatchRequest(request *requestHolder, factory *message.
 		msg := factory.CreateResponse(fid, reqId, err.Error(), result)
 		m.outgoings <- msg
 	}
+
 }
 
 //////////////////////////////////////////////////////////////
@@ -883,6 +885,34 @@ func (m *LifecycleMgr) handleCreateIndexScheduledBuild(key string, content []byt
 	return m.CreateIndex(defn, true, reqCtx)
 }
 
+func (m *LifecycleMgr) handleBroadcastStats(buf []byte) {
+
+	if len(buf) > 0 {
+		stats := make(common.Statistics)
+		if err := json.Unmarshal(buf, &stats); err == nil {
+
+			filtered := make(common.Statistics)
+			for key, value := range stats {
+				if strings.Contains(key, "num_docs_pending") ||
+					strings.Contains(key, "num_docs_queued") ||
+					strings.Contains(key, "last_rollback_time") ||
+					strings.Contains(key, "progress_stat_time") {
+
+					filtered[key] = value
+				}
+			}
+
+			idxStats := &client.IndexStats{Stats: filtered}
+			if err := m.repo.BroadcastIndexStats(idxStats); err != nil {
+				logging.Errorf("lifecycleMgr: fail to send index stats.  Error = %v", err)
+			}
+
+		} else {
+			logging.Errorf("lifecycleMgr: fail to marshall index stats.  Error = %v", err)
+		}
+	}
+}
+
 //////////////////////////////////////////////////////////////
 // Lifecycle Mgr - support functions
 //////////////////////////////////////////////////////////////
@@ -1043,7 +1073,14 @@ func (m *LifecycleMgr) handleServiceMap(content []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	return client.MarshallServiceMap(srvMap)
+	result, err := client.MarshallServiceMap(srvMap)
+	if err == nil {
+		if m.notifier != nil {
+			m.notifier.OnFetchStats()
+		}
+	}
+
+	return result, err
 }
 
 func (m *LifecycleMgr) getServiceMap() (*client.ServiceMap, error) {
@@ -1467,12 +1504,12 @@ func (m *updator) run() {
 	ticker := time.NewTicker(time.Second * 60)
 	defer ticker.Stop()
 
-	m.check()
+	m.checkServiceMap()
 
 	for {
 		select {
 		case <-ticker.C:
-			m.check()
+			m.checkServiceMap()
 
 		case <-m.manager.killch:
 			logging.Infof("updator: Index recovery go-routine terminates.")
@@ -1480,7 +1517,7 @@ func (m *updator) run() {
 	}
 }
 
-func (m *updator) check() {
+func (m *updator) checkServiceMap() {
 
 	serviceMap, err := m.manager.getServiceMap()
 	if err != nil {

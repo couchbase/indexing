@@ -373,8 +373,6 @@ func (c *MetadataRepo) SetGlobalTopology(topology *GlobalTopology) error {
 ///////////////////////////////////////////////////////
 
 func (c *MetadataRepo) BroadcastServiceMap(serviceMap *client.ServiceMap) error {
-	c.mutex.Lock()
-	defer c.mutex.Unlock()
 
 	data, err := client.MarshallServiceMap(serviceMap)
 	if err != nil {
@@ -382,6 +380,21 @@ func (c *MetadataRepo) BroadcastServiceMap(serviceMap *client.ServiceMap) error 
 	}
 
 	lookupName := serviceMapKey()
+	if err := c.broadcast(lookupName, data); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (c *MetadataRepo) BroadcastIndexStats(stats *client.IndexStats) error {
+
+	data, err := client.MarshallIndexStats(stats)
+	if err != nil {
+		return err
+	}
+
+	lookupName := indexStatsKey()
 	if err := c.broadcast(lookupName, data); err != nil {
 		return err
 	}
@@ -978,6 +991,14 @@ func serviceMapKey() string {
 
 func isServiceMap(key string) bool {
 	return strings.Contains(key, "ServiceMap")
+}
+
+func indexStatsKey() string {
+	return "IndexStats"
+}
+
+func isIndexStats(key string) bool {
+	return strings.Contains(key, "IndexStats")
 }
 
 ///////////////////////////////////////////////////////////

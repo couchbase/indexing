@@ -64,3 +64,24 @@ func (v BoolVal) Value() bool {
 	value := atomic.LoadInt32(v.val)
 	return value == 1
 }
+
+type TimeVal struct {
+	val *int64
+}
+
+func (v *TimeVal) Init() {
+	v.val = new(int64)
+}
+
+func (v *TimeVal) Set(nv int64) {
+	atomic.StoreInt64(v.val, nv)
+}
+
+func (v TimeVal) MarshalJSON() ([]byte, error) {
+	return []byte(v.Value()), nil
+}
+
+func (v TimeVal) Value() string {
+	value := atomic.LoadInt64(v.val)
+	return fmt.Sprint(value)
+}

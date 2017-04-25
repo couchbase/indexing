@@ -33,6 +33,7 @@ const (
 	OPCODE_CREATE_INDEX_REBAL                = OPCODE_CLEANUP_DEFER_INDEX + 1
 	OPCODE_BUILD_INDEX_REBAL                 = OPCODE_CREATE_INDEX_REBAL + 1
 	OPCODE_DROP_INDEX_REBAL                  = OPCODE_BUILD_INDEX_REBAL + 1
+	OPCODE_BROADCAST_STATS                   = OPCODE_DROP_INDEX_REBAL + 1
 )
 
 /////////////////////////////////////////////////////////////////////////
@@ -113,6 +114,10 @@ type ServiceMap struct {
 	ClusterVersion uint64 `json:"clusterVersion,omitempty"`
 }
 
+type IndexStats struct {
+	Stats c.Statistics `json:"stats,omitempty"`
+}
+
 /////////////////////////////////////////////////////////////////////////
 // marshalling/unmarshalling
 ////////////////////////////////////////////////////////////////////////
@@ -186,6 +191,30 @@ func MarshallServiceMap(srvMap *ServiceMap) ([]byte, error) {
 	}
 
 	logging.Debugf("MarshallServiceMap: %v", string(buf))
+
+	return buf, nil
+}
+
+func UnmarshallIndexStats(data []byte) (*IndexStats, error) {
+
+	logging.Debugf("UnmarshallIndexStats: %v", string(data))
+
+	stats := new(IndexStats)
+	if err := json.Unmarshal(data, stats); err != nil {
+		return nil, err
+	}
+
+	return stats, nil
+}
+
+func MarshallIndexStats(stats *IndexStats) ([]byte, error) {
+
+	buf, err := json.Marshal(&stats)
+	if err != nil {
+		return nil, err
+	}
+
+	logging.Debugf("MarshallIndexStats: %v", string(buf))
 
 	return buf, nil
 }
