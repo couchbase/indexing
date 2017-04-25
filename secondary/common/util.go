@@ -237,7 +237,7 @@ func (ah *CbAuthHandler) GetCredentials() (string, string) {
 		return err
 	}
 
-	rh := NewRetryHelper(MAX_AUTH_RETRIES, time.Second, 1, fn)
+	rh := NewRetryHelper(MAX_AUTH_RETRIES, time.Second, 2, fn)
 	err := rh.Run()
 	if err != nil {
 		panic(err)
@@ -259,7 +259,7 @@ func (ah *CbAuthHandler) AuthenticateMemcachedConn(host string, conn *memcached.
 		return err
 	}
 
-	rh := NewRetryHelper(MAX_AUTH_RETRIES, time.Second, 1, fn)
+	rh := NewRetryHelper(MAX_AUTH_RETRIES, time.Second, 2, fn)
 	err := rh.Run()
 	if err != nil {
 		panic(err)
