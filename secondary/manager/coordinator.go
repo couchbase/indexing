@@ -769,7 +769,7 @@ func (c *Coordinator) createIndex(key string, content []byte) bool {
 
 	// For now, use the local host. This logic is not called in sherlock production code.
 	// But still will be called in uint test.
-	if err := c.idxMgr.getLifecycleMgr().CreateIndex(defn, false); err != nil {
+	if err := c.idxMgr.getLifecycleMgr().CreateIndex(defn, false, nil); err != nil {
 		logging.Debugf("Coordinator.createIndexy() : createIndex fails. Reason = %s", err.Error())
 		return false
 	}
@@ -790,7 +790,7 @@ func (c *Coordinator) deleteIndex(key string) bool {
 		return false
 	}
 
-	if err := c.idxMgr.getLifecycleMgr().DeleteIndex(id, true); err != nil {
+	if err := c.idxMgr.getLifecycleMgr().DeleteIndex(id, true, nil); err != nil {
 		logging.Debugf("Coordinator.deleteIndex() : deleteIndex fails. Reason = %s", err.Error())
 		return false
 	}

@@ -73,6 +73,9 @@ func TestBuildDeferredAnotherBuilding(t *testing.T) {
 	err = secondaryindex.BuildIndex(index2, bucketName, indexManagementAddress, defaultIndexActiveTimeout)
 	FailTestIfNoError(err, "Index2 is expected to build in background.   Expected failure when trying to build index2 explicitly, but no failure returned.", t)
 
+	defnID2, _ := secondaryindex.GetDefnID(client, bucketName, index2)
+	secondaryindex.WaitTillIndexActive(defnID2, client, defaultIndexActiveTimeout)
+
 	docScanResults := datautility.ExpectedScanResponse_string(docs, "company", "M", "V", 2)
 	scanResults, err := secondaryindex.Range(index1, bucketName, indexScanAddress, []interface{}{"M"}, []interface{}{"V"}, 2, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
@@ -157,6 +160,8 @@ func TestMultipleBucketsDeferredBuild(t *testing.T) {
 
 	err = secondaryindex.BuildIndex(index2, bucket1, indexManagementAddress, defaultIndexActiveTimeout)
 	FailTestIfNoError(err, "Index2 is expected to build in background.   Expected failure when trying to build index2 explicitly, but no failure returned.", t)
+
+	secondaryindex.WaitTillIndexActive(defn2, client, defaultIndexActiveTimeout)
 
 	docScanResults := datautility.ExpectedScanResponse_string(bucket1docs, "company", "B", "H", 1)
 	scanResults, err := secondaryindex.Range(index1, bucket1, indexScanAddress, []interface{}{"B"}, []interface{}{"H"}, 1, false, defaultlimit, c.SessionConsistency, nil)

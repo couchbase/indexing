@@ -521,3 +521,25 @@ func (e *IndexerError) Error() string {
 func (e *IndexerError) ErrCode() IndexerErrCode {
 	return e.Code
 }
+
+//MetadataRequestContext - communication context between manager and indexer
+//Currently used by manager.MetadataNotifier interface
+
+type DDLRequestSource byte
+
+const (
+	DDLRequestSourceUser DDLRequestSource = iota
+	DDLRequestSourceRebalance
+)
+
+type MetadataRequestContext struct {
+	ReqSource DDLRequestSource
+}
+
+func NewRebalanceRequestContext() *MetadataRequestContext {
+	return &MetadataRequestContext{ReqSource: DDLRequestSourceRebalance}
+}
+
+func NewUserRequestContext() *MetadataRequestContext {
+	return &MetadataRequestContext{ReqSource: DDLRequestSourceUser}
+}
