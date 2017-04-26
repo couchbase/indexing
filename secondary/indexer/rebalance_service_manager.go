@@ -2387,7 +2387,7 @@ func getWithAuth(url string) (*http.Response, error) {
 		l.Errorf("ServiceMgr::getWithAuth Error setting auth %v", err)
 	}
 
-	client := http.Client{Timeout: time.Duration(10 * time.Second)}
+	client := http.Client{Timeout: time.Duration(120 * time.Second)}
 	return client.Do(req)
 }
 
@@ -2408,7 +2408,7 @@ func postWithAuth(url string, bodyType string, body io.Reader) (*http.Response, 
 		return nil, err
 	}
 
-	client := http.Client{Timeout: time.Duration(10 * time.Second)}
+	client := http.Client{Timeout: time.Duration(120 * time.Second)}
 	return client.Do(req)
 }
 
