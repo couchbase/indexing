@@ -110,7 +110,6 @@ func NewRebalanceMgr(supvCmdch MsgChannel, supvMsgch MsgChannel, config c.Config
 		mu: mu,
 		state: state{
 			rev:           0,
-			servers:       make([]service.NodeID, 0),
 			rebalanceID:   "",
 			rebalanceTask: nil,
 		},
@@ -141,8 +140,6 @@ func NewRebalanceMgr(supvCmdch MsgChannel, supvMsgch MsgChannel, config c.Config
 		Priority: service.Priority(c.INDEXER_CUR_VERSION),
 	}
 
-	mgr.servers = append(mgr.servers, mgr.nodeInfo.NodeID)
-
 	mgr.rebalanceRunning = rebalanceRunning
 	mgr.rebalanceToken = rebalanceToken
 	mgr.localhttp = mgr.getLocalHttpAddr()
@@ -160,12 +157,40 @@ func (m *ServiceMgr) initService() {
 	go m.registerWithServer()
 	go m.listenMoveIndex()
 	go m.rebalanceJanitor()
+	go m.updateNodeList()
 
 	http.HandleFunc("/registerRebalanceToken", m.handleRegisterRebalanceToken)
 	http.HandleFunc("/listRebalanceTokens", m.handleListRebalanceTokens)
 	http.HandleFunc("/cleanupRebalance", m.handleCleanupRebalance)
 	http.HandleFunc("/moveIndex", m.handleMoveIndex)
 	http.HandleFunc("/nodeuuid", m.handleNodeuuid)
+}
+
+//update node list after restart
+func (m *ServiceMgr) updateNodeList() {
+
+	topology, err := m.getGlobalTopology()
+	if err != nil {
+		l.Errorf("ServiceMgr::updateNodeList Error Fetching Topology %v", err)
+		return
+	}
+
+	nodeList := make([]service.NodeID, 0)
+	for _, meta := range topology.Metadata {
+		nodeList = append(nodeList, service.NodeID(meta.NodeUUID))
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	//update only if not yet updated by prepare
+	if m.servers == nil {
+		m.updateStateLOCKED(func(s *state) {
+			s.servers = nodeList
+		})
+		l.Errorf("ServiceMgr::updateNodeList Updated Node List %v", nodeList)
+	}
+
 }
 
 //run starts the rebalance manager loop which listens to messages
@@ -337,8 +362,14 @@ func (m *ServiceMgr) PrepareTopologyChange(change service.TopologyChange) error 
 		return err
 	}
 
+	nodeList := make([]service.NodeID, 0)
+	for _, n := range change.KeepNodes {
+		nodeList = append(nodeList, n.NodeInfo.NodeID)
+	}
+
 	m.updateStateLOCKED(func(s *state) {
 		s.rebalanceID = change.ID
+		s.servers = nodeList
 	})
 
 	return nil
@@ -1357,7 +1388,6 @@ func (m *ServiceMgr) rebalanceDoneCallback(err error, cancel <-chan struct{}) {
 func (m *ServiceMgr) onRebalanceDoneLOCKED(err error) {
 	if m.rebalancer != nil {
 		newTask := (*service.Task)(nil)
-		newServers := make([]service.NodeID, 0)
 		if err != nil {
 			ctx := m.rebalanceCtx
 			rev := ctx.incRev()
@@ -1375,11 +1405,6 @@ func (m *ServiceMgr) onRebalanceDoneLOCKED(err error) {
 					"rebalanceId": ctx.change.ID,
 				},
 			}
-		} else {
-			ctx := m.rebalanceCtx
-			for _, node := range ctx.change.KeepNodes {
-				newServers = append(newServers, node.NodeInfo.NodeID)
-			}
 		}
 
 		m.runCleanupPhaseLOCKED(RebalanceTokenPath, true)
@@ -1388,9 +1413,6 @@ func (m *ServiceMgr) onRebalanceDoneLOCKED(err error) {
 		m.updateStateLOCKED(func(s *state) {
 			s.rebalanceTask = newTask
 			s.rebalanceID = ""
-			if len(newServers) != 0 {
-				s.servers = newServers
-			}
 		})
 	} else {
 		m.runCleanupPhaseLOCKED(RebalanceTokenPath, false)
@@ -1537,7 +1559,11 @@ func (m *ServiceMgr) stateToTopology(s state) *service.Topology {
 	topology := &service.Topology{}
 
 	topology.Rev = EncodeRev(s.rev)
-	topology.Nodes = append([]service.NodeID(nil), m.servers...)
+	if m.servers != nil {
+		topology.Nodes = append([]service.NodeID(nil), m.servers...)
+	} else {
+		topology.Nodes = append([]service.NodeID(nil), m.nodeInfo.NodeID)
+	}
 	topology.IsBalanced = true
 	topology.Messages = nil
 
