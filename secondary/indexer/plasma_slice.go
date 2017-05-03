@@ -439,7 +439,7 @@ func (mdb *plasmaSlice) insertSecIndex(key []byte, docid []byte, workerId int) i
 
 	ndel := mdb.deleteSecIndex(docid, workerId)
 
-	mdb.encodeBuf[workerId] = resizeEncodeBuf(mdb.encodeBuf[workerId], len(key))
+	mdb.encodeBuf[workerId] = resizeEncodeBuf(mdb.encodeBuf[workerId], len(key), allowLargeKeys)
 	entry, err := NewSecondaryIndexEntry(key, docid, mdb.idxDefn.IsArrayIndex,
 		1, mdb.idxDefn.Desc, mdb.encodeBuf[workerId])
 	if err != nil {
@@ -579,8 +579,8 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 	for i, item := range indexEntriesToBeDeleted {
 		if item != nil { // nil item indicates it should not be deleted
 			var keyToBeDeleted []byte
-			mdb.encodeBuf[workerId] = resizeEncodeBuf(mdb.encodeBuf[workerId], len(item))
-			if keyToBeDeleted, err = GetIndexEntryBytes2(item, docid, false, false,
+			mdb.encodeBuf[workerId] = resizeEncodeBuf(mdb.encodeBuf[workerId], len(item), true)
+			if keyToBeDeleted, err = GetIndexEntryBytes3(item, docid, false, false,
 				oldKeyCount[i], mdb.idxDefn.Desc, mdb.encodeBuf[workerId]); err != nil {
 				rollbackDeletes(i - 1)
 				logging.Errorf("plasmaSlice::insertSecArrayIndex SliceId %v IndexInstId %v Error forming entry "+
@@ -600,7 +600,7 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 	for i, item := range indexEntriesToBeAdded {
 		if item != nil { // nil item indicates it should not be added
 			var keyToBeAdded []byte
-			mdb.encodeBuf[workerId] = resizeEncodeBuf(mdb.encodeBuf[workerId], len(item))
+			mdb.encodeBuf[workerId] = resizeEncodeBuf(mdb.encodeBuf[workerId], len(item), allowLargeKeys)
 			if keyToBeAdded, err = GetIndexEntryBytes2(item, docid, false, false,
 				newKeyCount[i], mdb.idxDefn.Desc, mdb.encodeBuf[workerId]); err != nil {
 				rollbackDeletes(len(indexEntriesToBeDeleted) - 1)
@@ -693,7 +693,7 @@ func (mdb *plasmaSlice) deleteSecIndex(docid []byte, workerId int) int {
 	defer mdb.back[workerId].EndTx(tokB)
 
 	backEntry, err := mdb.back[workerId].LookupKV(docid)
-	mdb.encodeBuf[workerId] = resizeEncodeBuf(mdb.encodeBuf[workerId], len(backEntry))
+	mdb.encodeBuf[workerId] = resizeEncodeBuf(mdb.encodeBuf[workerId], len(backEntry), true)
 	buf := mdb.encodeBuf[workerId]
 
 	if err == nil {
@@ -758,13 +758,9 @@ func (mdb *plasmaSlice) deleteSecArrayIndex(docid []byte, workerId int) (nmut in
 	for i, item := range indexEntriesToBeDeleted {
 		var keyToBeDeleted []byte
 		var tmpBuf []byte
-		if len(item) > cap(mdb.encodeBuf[workerId]) {
-			tmpBuf = make([]byte, 0, len(item)+MAX_DOCID_LEN+2)
-		} else {
-			tmpBuf = mdb.encodeBuf[workerId]
-		}
+		tmpBuf = resizeEncodeBuf(mdb.encodeBuf[workerId], len(item), true)
 		// TODO: Use method that skips size check for bug MB-22183
-		if keyToBeDeleted, err = GetIndexEntryBytes2(item, docid, false, false, keyCount[i],
+		if keyToBeDeleted, err = GetIndexEntryBytes3(item, docid, false, false, keyCount[i],
 			mdb.idxDefn.Desc, tmpBuf); err != nil {
 			common.CrashOnError(err)
 			logging.Errorf("plasmaSlice::deleteSecArrayIndex \n\tSliceId %v IndexInstId %v Error from GetIndexEntryBytes2 "+
@@ -1671,6 +1667,6 @@ func entry2BackEntry(entry secondaryIndexEntry) []byte {
 func backEntry2entry(docid []byte, bentry []byte, buf []byte) []byte {
 	l := len(bentry)
 	count := int(binary.LittleEndian.Uint16(bentry[l-2 : l]))
-	entry, _ := NewSecondaryIndexEntry(bentry[:l-2], docid, false, count, nil, buf[:0])
+	entry, _ := NewSecondaryIndexEntry2(bentry[:l-2], docid, false, count, nil, buf[:0], false)
 	return entry.Bytes()
 }

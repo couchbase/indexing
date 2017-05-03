@@ -116,6 +116,11 @@ func (e *primaryIndexEntry) String() string {
 type secondaryIndexEntry []byte
 
 func NewSecondaryIndexEntry(key []byte, docid []byte, isArray bool, count int, desc []bool, buf []byte) (secondaryIndexEntry, error) {
+	return NewSecondaryIndexEntry2(key, docid, isArray, count, desc, buf, true)
+}
+
+func NewSecondaryIndexEntry2(key []byte, docid []byte, isArray bool,
+	count int, desc []bool, buf []byte, validateSize bool) (secondaryIndexEntry, error) {
 	var err error
 	var offset int
 
@@ -125,10 +130,10 @@ func NewSecondaryIndexEntry(key []byte, docid []byte, isArray bool, count int, d
 
 	if key[0] == '[' { // JSON
 		if isArray {
-			if !allowLargeKeys && isArraySecKeyLarge(key) {
+			if !allowLargeKeys && validateSize && isArraySecKeyLarge(key) {
 				return nil, errors.New(fmt.Sprintf("Secondary array key is too long (> %d)", maxArrayKeyLength))
 			}
-		} else if !allowLargeKeys && isSecKeyLarge(key) {
+		} else if !allowLargeKeys && validateSize && isSecKeyLarge(key) {
 			return nil, ErrSecKeyTooLong
 		}
 		if buf, err = jsonEncoder.Encode(key, buf); err != nil {
@@ -136,10 +141,10 @@ func NewSecondaryIndexEntry(key []byte, docid []byte, isArray bool, count int, d
 		}
 	} else { // Encoded
 		if isArray {
-			if !allowLargeKeys && len(key) > maxArrayKeyBufferLength {
+			if !allowLargeKeys && validateSize && len(key) > maxArrayKeyBufferLength {
 				return nil, errors.New(fmt.Sprintf("Encoded secondary array key is too long (> %d)", maxArrayKeyBufferLength))
 			}
-		} else if !allowLargeKeys && len(key) > maxSecKeyBufferLen {
+		} else if !allowLargeKeys && validateSize && len(key) > maxSecKeyBufferLen {
 			return nil, errors.New(fmt.Sprintf("Encoded secondary key is too long (> %d)", maxSecKeyBufferLen))
 		}
 		buf = append(buf, key...)
@@ -456,6 +461,22 @@ func isDocIdLarge(k []byte) bool {
 
 func IndexEntrySize(key []byte, docid []byte) int {
 	return len(key) + len(docid) + 2
+}
+
+// Return encoded key with docid without size check
+func GetIndexEntryBytes3(key []byte, docid []byte,
+	isPrimary bool, isArray bool, count int, desc []bool, buf []byte) (bs []byte, err error) {
+
+	if isPrimary {
+		bs, err = NewPrimaryIndexEntry(docid)
+	} else {
+		bs, err = NewSecondaryIndexEntry2(key, docid, isArray, count, desc, buf, false)
+		if err == ErrSecKeyNil {
+			return nil, nil
+		}
+	}
+
+	return bs, err
 }
 
 func GetIndexEntryBytes2(key []byte, docid []byte,

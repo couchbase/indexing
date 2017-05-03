@@ -94,8 +94,8 @@ func byteItemCompare(a, b []byte) int {
 	return bytes.Compare(a, b)
 }
 
-func resizeEncodeBuf(encodeBuf []byte, keylen int) []byte {
-	if allowLargeKeys && keylen+MAX_KEY_EXTRABYTES_LEN > cap(encodeBuf) {
+func resizeEncodeBuf(encodeBuf []byte, keylen int, doResize bool) []byte {
+	if doResize && keylen+MAX_KEY_EXTRABYTES_LEN > cap(encodeBuf) {
 		// TODO: Shrink the buffer periodically or as needed
 		newSize := keylen + MAX_KEY_EXTRABYTES_LEN + ENCODE_BUF_SAFE_PAD
 		encodeBuf = make([]byte, 0, newSize)
@@ -387,7 +387,7 @@ func (mdb *memdbSlice) insertSecIndex(key []byte, docid []byte, workerId int) in
 	// a previous mainnode pointer entry
 	t0 := time.Now()
 
-	mdb.encodeBuf[workerId] = resizeEncodeBuf(mdb.encodeBuf[workerId], len(key))
+	mdb.encodeBuf[workerId] = resizeEncodeBuf(mdb.encodeBuf[workerId], len(key), allowLargeKeys)
 	entry, err := NewSecondaryIndexEntry(key, docid, mdb.idxDefn.IsArrayIndex,
 		1, mdb.idxDefn.Desc, mdb.encodeBuf[workerId])
 	if err != nil {
@@ -484,9 +484,9 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 	// Delete each entry in entryBytesToDeleted
 	for i, item := range entryBytesToDeleted {
 		if item != nil { // nil item indicates it should not be deleted
-			mdb.encodeBuf[workerId] = resizeEncodeBuf(mdb.encodeBuf[workerId], len(item))
-			entry, err := NewSecondaryIndexEntry(item, docid, false,
-				oldKeyCount[i], nil, mdb.encodeBuf[workerId][:0])
+			mdb.encodeBuf[workerId] = resizeEncodeBuf(mdb.encodeBuf[workerId], len(item), true)
+			entry, err := NewSecondaryIndexEntry2(item, docid, false,
+				oldKeyCount[i], nil, mdb.encodeBuf[workerId][:0], false)
 			if err != nil {
 				logging.Errorf("MemDBSlice::insertSecArrayIndex Slice Id %v IndexInstId %v "+
 					"Skipping docid:%s (%v)", mdb.Id, mdb.idxInstId, docid, err)
@@ -502,7 +502,7 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 	for i, key := range entryBytesToBeAdded {
 		if key != nil { // nil item indicates it should not be added
 			t0 := time.Now()
-			mdb.encodeBuf[workerId] = resizeEncodeBuf(mdb.encodeBuf[workerId], len(key))
+			mdb.encodeBuf[workerId] = resizeEncodeBuf(mdb.encodeBuf[workerId], len(key), allowLargeKeys)
 			entry, err := NewSecondaryIndexEntry(key, docid, false,
 				newKeyCount[i], mdb.idxDefn.Desc, mdb.encodeBuf[workerId][:0])
 			if err != nil {
