@@ -1245,6 +1245,16 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 	defer mdb.confLock.Unlock()
 
 	mdb.sysconf = cfg
+
+	mdb.mainstore.MaxPageLSSSegments = mdb.sysconf["plasma.mainIndex.maxLSSPageSegments"].Int()
+	mdb.mainstore.LSSCleanerThreshold = mdb.sysconf["plasma.mainIndex.LSSFragmentation"].Int()
+	mdb.mainstore.LSSCleanerMaxThreshold = mdb.sysconf["plasma.mainIndex.maxLSSFragmentation"].Int()
+
+	if !mdb.isPrimary {
+		mdb.backstore.MaxPageLSSSegments = mdb.sysconf["plasma.backIndex.maxLSSPageSegments"].Int()
+		mdb.backstore.LSSCleanerThreshold = mdb.sysconf["plasma.backIndex.LSSFragmentation"].Int()
+		mdb.backstore.LSSCleanerMaxThreshold = mdb.sysconf["plasma.backIndex.maxLSSFragmentation"].Int()
+	}
 }
 
 func (mdb *plasmaSlice) String() string {
@@ -1544,7 +1554,7 @@ func (s *plasmaSnapshot) Iterate(ctx IndexReaderContext, low, high IndexKey, inc
 	defer it.Close()
 
 	endKey := high.Bytes()
-	if endKey != nil {
+	if len(endKey) > 0 {
 		if inclusion == High || inclusion == Both {
 			endKey = common.GenNextBiggerKey(endKey)
 		}
@@ -1552,7 +1562,7 @@ func (s *plasmaSnapshot) Iterate(ctx IndexReaderContext, low, high IndexKey, inc
 		it.SetEndKey(endKey)
 	}
 
-	if low.Bytes() == nil {
+	if len(low.Bytes()) == 0 {
 		it.SeekFirst()
 	} else {
 		it.Seek(low.Bytes())

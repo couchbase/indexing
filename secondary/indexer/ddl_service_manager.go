@@ -26,6 +26,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -94,6 +95,8 @@ func NewDDLServiceMgr(supvCmdch MsgChannel, supvMsgch MsgChannel, config common.
 	}
 
 	mgr.config.Store(config)
+
+	http.HandleFunc("/listMetadataTokens", mgr.handleListMetadataTokens)
 
 	gDDLServiceMgrLck.Lock()
 	defer gDDLServiceMgrLck.Unlock()
@@ -263,6 +266,67 @@ func (m *DDLServiceMgr) handleBuildCommand() {
 			}
 		}
 	}
+}
+
+func (m *DDLServiceMgr) handleListMetadataTokens(w http.ResponseWriter, r *http.Request) {
+
+	if !m.validateAuth(w, r) {
+		logging.Errorf("DDLServiceMgr::handleListMetadataTokens Validation Failure for Request %v", r)
+		return
+	}
+
+	if r.Method == "GET" {
+
+		logging.Infof("DDLServiceMgr::handleListMetadataTokens Processing Request %v", r)
+
+		buildTokens, err := metakv.ListAllChildren(client.BuildDDLCommandTokenPath)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(err.Error() + "\n"))
+			return
+		}
+
+		deleteTokens, err1 := metakv.ListAllChildren(client.DeleteDDLCommandTokenPath)
+		if err1 != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(err.Error() + "\n"))
+			return
+		}
+
+		header := w.Header()
+		header["Content-Type"] = []string{"application/json"}
+		w.WriteHeader(http.StatusOK)
+
+		for _, entry := range buildTokens {
+
+			if strings.Contains(entry.Path, client.BuildDDLCommandTokenPath) && entry.Value != nil {
+				w.Write([]byte(entry.Path + " - "))
+				w.Write(entry.Value)
+				w.Write([]byte("\n"))
+			}
+		}
+
+		for _, entry := range deleteTokens {
+
+			if strings.Contains(entry.Path, client.DeleteDDLCommandTokenPath) && entry.Value != nil {
+				w.Write([]byte(entry.Path + " - "))
+				w.Write(entry.Value)
+				w.Write([]byte("\n"))
+			}
+		}
+	}
+}
+
+func (m *DDLServiceMgr) validateAuth(w http.ResponseWriter, r *http.Request) bool {
+	_, valid, err := common.IsAuthValid(r)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(err.Error() + "\n"))
+	} else if valid == false {
+		w.WriteHeader(401)
+		w.Write([]byte("401 Unauthorized\n"))
+	}
+	return valid
 }
 
 //////////////////////////////////////////////////////////////

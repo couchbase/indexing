@@ -81,7 +81,7 @@ type ScanRequest struct {
 
 	// New parameters for spock
 	Scans             []Scan
-	Indexprojection   *protobuf.IndexProjection
+	Indexprojection   *Projection
 	Reverse           bool
 	Distinct          bool
 	Offset            int64
@@ -96,6 +96,12 @@ type ScanRequest struct {
 	LogPrefix string
 
 	keyBufList []*[]byte
+}
+
+type Projection struct {
+	projectSecKeys bool
+	projectionKeys []bool
+	entryKeysEmpty bool
 }
 
 type Scan struct {
@@ -1184,14 +1190,10 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 		r.Incl = Inclusion(req.GetSpan().GetRange().GetInclusion())
 		r.Limit = req.GetLimit()
 		r.Reverse = req.GetReverse()
-		r.Indexprojection = req.GetIndexprojection()
-		if r.Indexprojection == nil {
+		proj := req.GetIndexprojection()
+		if proj == nil {
 			r.Distinct = req.GetDistinct()
 		}
-		if r.Indexprojection != nil {
-			r.projectPrimaryKey = *r.Indexprojection.PrimaryKey
-		}
-
 		r.Offset = req.GetOffset()
 		if isBootstrapMode {
 			err = common.ErrIndexerInBootstrap
@@ -1199,6 +1201,12 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 		}
 		setIndexParams()
 		setConsistency(cons, vector)
+		if proj != nil {
+			if r.Indexprojection, err = validateIndexProjection(proj, len(r.IndexInst.Defn.SecExprs)); err != nil {
+				return
+			}
+			r.projectPrimaryKey = *proj.PrimaryKey
+		}
 		fillRanges(
 			req.GetSpan().GetRange().GetLow(),
 			req.GetSpan().GetRange().GetHigh(),
@@ -1227,6 +1235,36 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 	}
 
 	return
+}
+
+func validateIndexProjection(projection *protobuf.IndexProjection, cklen int) (*Projection, error) {
+	if len(projection.EntryKeys) > cklen {
+		e := errors.New(fmt.Sprintf("Invalid number of Entry Keys %v in IndexProjection", len(projection.EntryKeys)))
+		return nil, e
+	}
+
+	projectionKeys := make([]bool, cklen)
+	for _, position := range projection.EntryKeys {
+		if position >= int64(cklen) || position < 0 {
+			e := errors.New(fmt.Sprintf("Invalid Entry Key %v in IndexProjection", position))
+			return nil, e
+		}
+		projectionKeys[position] = true
+	}
+
+	projectAllSecKeys := true
+	for _, sp := range projectionKeys {
+		if sp == false {
+			projectAllSecKeys = false
+		}
+	}
+
+	indexProjection := &Projection{}
+	indexProjection.projectSecKeys = !projectAllSecKeys
+	indexProjection.projectionKeys = projectionKeys
+	indexProjection.entryKeysEmpty = len(projection.EntryKeys) == 0
+
+	return indexProjection, nil
 }
 
 // Before starting the index scan, we have to find out the snapshot timestamp

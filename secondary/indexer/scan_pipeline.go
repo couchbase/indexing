@@ -12,11 +12,9 @@ package indexer
 import (
 	"bytes"
 	"errors"
-	"fmt"
 	"github.com/couchbase/indexing/secondary/collatejson"
 	c "github.com/couchbase/indexing/secondary/common"
 	p "github.com/couchbase/indexing/secondary/pipeline"
-	protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
 )
 
 var (
@@ -133,7 +131,7 @@ func (s *IndexScanSource) Routine() error {
 			return nil
 		}
 
-		if !r.isPrimary && r.Indexprojection != nil {
+		if !r.isPrimary && r.Indexprojection != nil && r.Indexprojection.projectSecKeys {
 			entry, err = projectKeys(ck, entry, (*buf)[:0], r.Indexprojection)
 			if err != nil {
 				return err
@@ -414,10 +412,10 @@ func distinctCompare(entryBytes1, entryBytes2 []byte) bool {
 	return false
 }
 
-func projectKeys(compositekeys [][]byte, key, buf []byte, projection *protobuf.IndexProjection) ([]byte, error) {
+func projectKeys(compositekeys [][]byte, key, buf []byte, projection *Projection) ([]byte, error) {
 	var err error
 
-	if len(projection.EntryKeys) == 0 {
+	if projection.entryKeysEmpty {
 		entry := secondaryIndexEntry(key)
 		buf = append(buf, key[entry.lenKey():]...)
 		return buf, nil
@@ -432,17 +430,10 @@ func projectKeys(compositekeys [][]byte, key, buf []byte, projection *protobuf.I
 	}
 
 	var keysToJoin [][]byte
-	cklen := len(compositekeys)
-	if len(projection.EntryKeys) > cklen {
-		e := errors.New(fmt.Sprintf("Invalid number of Entry Keys %v in IndexProjection", len(projection.EntryKeys)))
-		return nil, e
-	}
-	for _, position := range projection.EntryKeys {
-		if position >= int64(cklen) || position < 0 {
-			e := errors.New(fmt.Sprintf("Invalid Entry Key %v in IndexProjection", position))
-			return nil, e
+	for i, projectKey := range projection.projectionKeys {
+		if projectKey {
+			keysToJoin = append(keysToJoin, compositekeys[i])
 		}
-		keysToJoin = append(keysToJoin, compositekeys[position])
 	}
 	if buf, err = codec.JoinArray(keysToJoin, buf); err != nil {
 		return nil, err
