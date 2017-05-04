@@ -1588,9 +1588,7 @@ loop:
 			return err
 		}
 
-		t0 := time.Now()
 		it.Next()
-		s.slice.idxStats.Timings.stIteratorNext.Put(time.Since(t0))
 	}
 
 	// Include equal keys if high inclusion is requested
