@@ -1559,7 +1559,7 @@ func (m *ServiceMgr) stateToTopology(s state) *service.Topology {
 	topology := &service.Topology{}
 
 	topology.Rev = EncodeRev(s.rev)
-	if m.servers != nil {
+	if m.servers != nil && len(m.servers) != 0 {
 		topology.Nodes = append([]service.NodeID(nil), m.servers...)
 	} else {
 		topology.Nodes = append([]service.NodeID(nil), m.nodeInfo.NodeID)
