@@ -562,12 +562,18 @@ func (fdb *fdbSlice) insertSecArrayIndex(key []byte, rawKey []byte, docid []byte
 	for i, item := range indexEntriesToBeDeleted {
 		if item != nil { // nil item indicates it should not be deleted
 			var keyToBeDeleted []byte
+			var tmpBuf []byte
 			tmpBufPtr := encBufPool.Get()
 			defer encBufPool.Put(tmpBufPtr)
 
+			if len(item)+MAX_KEY_EXTRABYTES_LEN > maxSecKeyBufferLen {
+				tmpBuf = make([]byte, 0, len(item)+MAX_KEY_EXTRABYTES_LEN)
+			} else {
+				tmpBuf = (*tmpBufPtr)[:0]
+			}
 			// TODO: Ensure sufficient buffer size and use method that skips size check for bug MB-22183
-			if keyToBeDeleted, err = GetIndexEntryBytes2(item, docid, false, false,
-				oldKeyCount[i], fdb.idxDefn.Desc, (*tmpBufPtr)[:0]); err != nil {
+			if keyToBeDeleted, err = GetIndexEntryBytes3(item, docid, false, false,
+				oldKeyCount[i], fdb.idxDefn.Desc, tmpBuf); err != nil {
 
 				encBufPool.Put(tmpBufPtr)
 				// TODO: Handle skipped item here
@@ -808,13 +814,13 @@ func (fdb *fdbSlice) deleteSecArrayIndex(docid []byte, workerId int) (nmut int) 
 		tmpBufPtr := encBufPool.Get()
 		defer encBufPool.Put(tmpBufPtr)
 
-		if len(item) > maxSecKeyBufferLen {
-			tmpBuf = make([]byte, 0, len(item)+MAX_DOCID_LEN+2)
+		if len(item)+MAX_KEY_EXTRABYTES_LEN > maxSecKeyBufferLen {
+			tmpBuf = make([]byte, 0, len(item)+MAX_KEY_EXTRABYTES_LEN)
 		} else {
 			tmpBuf = (*tmpBufPtr)[:0]
 		}
 		// TODO: Use method that skips size check for bug MB-22183
-		if keyToBeDeleted, err = GetIndexEntryBytes2(item, docid, false, false, keyCount[i],
+		if keyToBeDeleted, err = GetIndexEntryBytes3(item, docid, false, false, keyCount[i],
 			fdb.idxDefn.Desc, tmpBuf); err != nil {
 			encBufPool.Put(tmpBufPtr)
 			fdb.checkFatalDbError(err)

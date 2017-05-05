@@ -439,7 +439,7 @@ func (mdb *plasmaSlice) insertSecIndex(key []byte, docid []byte, workerId int) i
 
 	ndel := mdb.deleteSecIndex(docid, workerId)
 
-	mdb.encodeBuf[workerId] = resizeEncodeBuf(mdb.encodeBuf[workerId], len(key))
+	mdb.encodeBuf[workerId] = resizeEncodeBuf(mdb.encodeBuf[workerId], len(key), allowLargeKeys)
 	entry, err := NewSecondaryIndexEntry(key, docid, mdb.idxDefn.IsArrayIndex,
 		1, mdb.idxDefn.Desc, mdb.encodeBuf[workerId])
 	if err != nil {
@@ -579,8 +579,8 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 	for i, item := range indexEntriesToBeDeleted {
 		if item != nil { // nil item indicates it should not be deleted
 			var keyToBeDeleted []byte
-			mdb.encodeBuf[workerId] = resizeEncodeBuf(mdb.encodeBuf[workerId], len(item))
-			if keyToBeDeleted, err = GetIndexEntryBytes2(item, docid, false, false,
+			mdb.encodeBuf[workerId] = resizeEncodeBuf(mdb.encodeBuf[workerId], len(item), true)
+			if keyToBeDeleted, err = GetIndexEntryBytes3(item, docid, false, false,
 				oldKeyCount[i], mdb.idxDefn.Desc, mdb.encodeBuf[workerId]); err != nil {
 				rollbackDeletes(i - 1)
 				logging.Errorf("plasmaSlice::insertSecArrayIndex SliceId %v IndexInstId %v Error forming entry "+
@@ -600,7 +600,7 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 	for i, item := range indexEntriesToBeAdded {
 		if item != nil { // nil item indicates it should not be added
 			var keyToBeAdded []byte
-			mdb.encodeBuf[workerId] = resizeEncodeBuf(mdb.encodeBuf[workerId], len(item))
+			mdb.encodeBuf[workerId] = resizeEncodeBuf(mdb.encodeBuf[workerId], len(item), allowLargeKeys)
 			if keyToBeAdded, err = GetIndexEntryBytes2(item, docid, false, false,
 				newKeyCount[i], mdb.idxDefn.Desc, mdb.encodeBuf[workerId]); err != nil {
 				rollbackDeletes(len(indexEntriesToBeDeleted) - 1)
@@ -693,7 +693,7 @@ func (mdb *plasmaSlice) deleteSecIndex(docid []byte, workerId int) int {
 	defer mdb.back[workerId].EndTx(tokB)
 
 	backEntry, err := mdb.back[workerId].LookupKV(docid)
-	mdb.encodeBuf[workerId] = resizeEncodeBuf(mdb.encodeBuf[workerId], len(backEntry))
+	mdb.encodeBuf[workerId] = resizeEncodeBuf(mdb.encodeBuf[workerId], len(backEntry), true)
 	buf := mdb.encodeBuf[workerId]
 
 	if err == nil {
@@ -758,13 +758,9 @@ func (mdb *plasmaSlice) deleteSecArrayIndex(docid []byte, workerId int) (nmut in
 	for i, item := range indexEntriesToBeDeleted {
 		var keyToBeDeleted []byte
 		var tmpBuf []byte
-		if len(item) > cap(mdb.encodeBuf[workerId]) {
-			tmpBuf = make([]byte, 0, len(item)+MAX_DOCID_LEN+2)
-		} else {
-			tmpBuf = mdb.encodeBuf[workerId]
-		}
+		tmpBuf = resizeEncodeBuf(mdb.encodeBuf[workerId], len(item), true)
 		// TODO: Use method that skips size check for bug MB-22183
-		if keyToBeDeleted, err = GetIndexEntryBytes2(item, docid, false, false, keyCount[i],
+		if keyToBeDeleted, err = GetIndexEntryBytes3(item, docid, false, false, keyCount[i],
 			mdb.idxDefn.Desc, tmpBuf); err != nil {
 			common.CrashOnError(err)
 			logging.Errorf("plasmaSlice::deleteSecArrayIndex \n\tSliceId %v IndexInstId %v Error from GetIndexEntryBytes2 "+
@@ -852,12 +848,7 @@ func (mdb *plasmaSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 	s.slice.IncrRef()
 
 	if s.committed && mdb.hasPersistence {
-		s.MainSnap.Open()
-		if !mdb.isPrimary {
-			s.BackSnap.Open()
-		}
-
-		go mdb.doPersistSnapshot(s)
+		mdb.doPersistSnapshot(s)
 	}
 
 	logging.Infof("plasmaSlice::OpenSnapshot SliceId %v IndexInstId %v Creating New "+
@@ -871,54 +862,59 @@ func (mdb *plasmaSlice) doPersistSnapshot(s *plasmaSnapshot) {
 	var wg sync.WaitGroup
 
 	if atomic.CompareAndSwapInt32(&mdb.isPersistorActive, 0, 1) {
-		defer atomic.StoreInt32(&mdb.isPersistorActive, 0)
+		s.MainSnap.Open()
+		if !mdb.isPrimary {
+			s.BackSnap.Open()
+		}
 
-		logging.Infof("PlasmaSlice Slice Id %v, IndexInstId %v Creating recovery point ...", mdb.id, mdb.idxInstId)
-		t0 := time.Now()
-
-		meta, err := json.Marshal(s.ts)
-		common.CrashOnError(err)
-		timeHdr := make([]byte, 8)
-		binary.BigEndian.PutUint64(timeHdr, uint64(time.Now().UnixNano()))
-		meta = append(timeHdr, meta...)
-
-		wg.Add(1)
 		go func() {
-			mdb.mainstore.CreateRecoveryPoint(s.MainSnap, meta)
-			wg.Done()
-		}()
+			defer atomic.StoreInt32(&mdb.isPersistorActive, 0)
 
-		if !mdb.isPrimary {
-			mdb.backstore.CreateRecoveryPoint(s.BackSnap, meta)
-		}
-		wg.Wait()
+			logging.Infof("PlasmaSlice Slice Id %v, IndexInstId %v Creating recovery point ...", mdb.id, mdb.idxInstId)
+			t0 := time.Now()
 
-		dur := time.Since(t0)
-		logging.Infof("PlasmaSlice Slice Id %v, IndexInstId %v Created recovery point (took %v)",
-			mdb.id, mdb.idxInstId, dur)
-		mdb.idxStats.diskSnapStoreDuration.Set(int64(dur / time.Millisecond))
+			meta, err := json.Marshal(s.ts)
+			common.CrashOnError(err)
+			timeHdr := make([]byte, 8)
+			binary.BigEndian.PutUint64(timeHdr, uint64(time.Now().UnixNano()))
+			meta = append(timeHdr, meta...)
 
-		// Cleanup old recovery points
-		mRPs := mdb.mainstore.GetRecoveryPoints()
-		if len(mRPs) > mdb.maxRollbacks {
-			for i := 0; i < len(mRPs)-mdb.maxRollbacks; i++ {
-				mdb.mainstore.RemoveRecoveryPoint(mRPs[i])
+			wg.Add(1)
+			go func() {
+				mdb.mainstore.CreateRecoveryPoint(s.MainSnap, meta)
+				wg.Done()
+			}()
+
+			if !mdb.isPrimary {
+				mdb.backstore.CreateRecoveryPoint(s.BackSnap, meta)
 			}
-		}
+			wg.Wait()
 
-		if !mdb.isPrimary {
-			bRPs := mdb.backstore.GetRecoveryPoints()
-			if len(bRPs) > mdb.maxRollbacks {
-				for i := 0; i < len(bRPs)-mdb.maxRollbacks; i++ {
-					mdb.backstore.RemoveRecoveryPoint(bRPs[i])
+			dur := time.Since(t0)
+			logging.Infof("PlasmaSlice Slice Id %v, IndexInstId %v Created recovery point (took %v)",
+				mdb.id, mdb.idxInstId, dur)
+			mdb.idxStats.diskSnapStoreDuration.Set(int64(dur / time.Millisecond))
+
+			// Cleanup old recovery points
+			mRPs := mdb.mainstore.GetRecoveryPoints()
+			if len(mRPs) > mdb.maxRollbacks {
+				for i := 0; i < len(mRPs)-mdb.maxRollbacks; i++ {
+					mdb.mainstore.RemoveRecoveryPoint(mRPs[i])
 				}
 			}
-		}
+
+			if !mdb.isPrimary {
+				bRPs := mdb.backstore.GetRecoveryPoints()
+				if len(bRPs) > mdb.maxRollbacks {
+					for i := 0; i < len(bRPs)-mdb.maxRollbacks; i++ {
+						mdb.backstore.RemoveRecoveryPoint(bRPs[i])
+					}
+				}
+			}
+		}()
 	} else {
 		logging.Infof("PlasmaSlice Slice Id %v, IndexInstId %v Skipping ondisk"+
 			" snapshot. A snapshot writer is in progress.", mdb.id, mdb.idxInstId)
-		s.MainSnap.Close()
-		s.BackSnap.Close()
 	}
 }
 
@@ -1359,6 +1355,11 @@ func (s *plasmaSnapshot) Close() error {
 }
 
 func (s *plasmaSnapshot) Destroy() {
+	// Wait for persistor to finish
+	for atomic.LoadInt32(&s.slice.isPersistorActive) == 1 {
+		time.Sleep(time.Second)
+	}
+
 	s.MainSnap.Close()
 	if s.BackSnap != nil {
 		s.BackSnap.Close()
@@ -1592,9 +1593,7 @@ loop:
 			return err
 		}
 
-		t0 := time.Now()
 		it.Next()
-		s.slice.idxStats.Timings.stIteratorNext.Put(time.Since(t0))
 	}
 
 	// Include equal keys if high inclusion is requested
@@ -1671,6 +1670,6 @@ func entry2BackEntry(entry secondaryIndexEntry) []byte {
 func backEntry2entry(docid []byte, bentry []byte, buf []byte) []byte {
 	l := len(bentry)
 	count := int(binary.LittleEndian.Uint16(bentry[l-2 : l]))
-	entry, _ := NewSecondaryIndexEntry(bentry[:l-2], docid, false, count, nil, buf[:0])
+	entry, _ := NewSecondaryIndexEntry2(bentry[:l-2], docid, false, count, nil, buf[:0], false)
 	return entry.Bytes()
 }
