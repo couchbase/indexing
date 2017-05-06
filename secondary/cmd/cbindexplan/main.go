@@ -18,7 +18,9 @@ import (
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/planner"
 	"os"
+	"os/exec"
 	"strings"
+	"syscall"
 )
 
 // - document that planning tool should be run on an indexer node or manual enter cpu quota
@@ -27,7 +29,7 @@ import (
 //   sizing will be smaller than actual.
 // - note that replica support is not avail
 
-func usage() {
+func advanced_usage() {
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "Usage: cbindexplan [options]")
 	flag.PrintDefaults()
@@ -75,6 +77,51 @@ func usage() {
 2) For rebalancing, if an index is pinned to a node (when index is created with with-nodes option), rebalancing algorithm will not move
    those index.  Use 'unpin' option to instruct the rebalance algorithm to rebalance pinned indexes.
     `)
+}
+
+func usage() {
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "Usage: cbindexplan [options]")
+	fmt.Fprintln(os.Stderr, "	-cluster string")
+	fmt.Fprintln(os.Stderr, "		couchbase cluster URL")
+	fmt.Fprintln(os.Stderr, "	-username string")
+	fmt.Fprintln(os.Stderr, "		username")
+	fmt.Fprintln(os.Stderr, "	-password string")
+	fmt.Fprintln(os.Stderr, "		password")
+	fmt.Fprintln(os.Stderr, "	-indexes string")
+	fmt.Fprintln(os.Stderr, "		JSON file for index sizing specification")
+	fmt.Fprintln(os.Stderr, "	-ddl string")
+	fmt.Fprintln(os.Stderr, "		file for printing the output DDL statements")
+	fmt.Fprintln(os.Stderr, "	-memQuota string")
+	fmt.Fprintln(os.Stderr, "		override cluster index memory quota setting")
+	fmt.Fprintln(os.Stderr, "	-cpuQuota int")
+	fmt.Fprintln(os.Stderr, "		override cluster index cpu quota setting")
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr,
+		`cbindexplan is a planning recommendation tool for index placement.  Given a set of indexes, the tool 
+provides guidance on how to place those indexes based on resource utilization and availability constraint.  
+As input, the tool takes a json file with a list of index sizing specifications.  An example of index sizing 
+specification can be found in https://github.com/couchbase/indexing/blob/master/secondary/cmd/cbindexplan/sample/index.json.   
+Based on index sizing, the tool will generate a set of DDL statements for creating and building those indexes.`)
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr,
+		`Examples:
+    cbindexplan -command=plan -cluster="127.0.0.1:8091" -username="<user>" -password="<pwd>" -indexes="indexes.json" -ddl="saved-ddl.txt"
+    cbindexplan -command=plan -cluster="127.0.0.1:8091" -username="<user>" -password="<pwd>" -indexes="indexes.json" -ddl="saved-ddl.txt" -memQuota="10G" -cpuQuota=16
+    `)
+	fmt.Fprintln(os.Stderr,
+		`Usage Note:
+1) cbindexplan should only be used with memory-optimized index. 
+2) The tool requires index specification for new index, but for existing index, it can derive sizing specification from index statistics.
+3) The tool uses a conservative sizing formula to anticipate peak load.  The actual index resource consumption may be less.
+4) When running cbindexplan, it may complain that the memory quota or cpu quota is not sufficient in a live cluster because
+of its conversative sizing formula.  In this case, use -memQuota and -cpuQuota to override the cluster setting for planning purpose. 
+5) When running cbindexplan, it may complain that there is not enough node to place replica.   In this case, add new node
+to the cluster or reduce the replica count for index. 
+6) Since indexes come into different sizes, the tool will attemtp to place indexes to balance resource consumption in best-try manner.
+7) The tool relies on runtime index statistics to estimate index resource consumption.   It relies on point-in-time statistics at the time
+when the tool is run.
+   `)
 }
 
 //////////////////////////////////////////////////////////////
@@ -138,6 +185,23 @@ func main() {
 	if gHelp {
 		usage()
 		return
+	}
+
+	if os.Getenv("CBAUTH_REVRPC_URL") == "" && gClusterUrl != "" {
+		// unfortunately, above is read at init, so we have to respawn
+		revrpc := fmt.Sprintf("http://%v:%v@%v", gUsername, gPassword, gClusterUrl)
+		os.Setenv("CBAUTH_REVRPC_URL", revrpc)
+		cmd := exec.Command(os.Args[0], os.Args[1:]...)
+		cmd.Stdin = os.Stdin
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		exitcode := 0
+		if err := cmd.Run(); err != nil {
+			if status, ok := err.(*exec.ExitError); ok {
+				exitcode = status.Sys().(syscall.WaitStatus).ExitStatus()
+			}
+		}
+		os.Exit(exitcode)
 	}
 
 	if gPlan != "" && gClusterUrl != "" {
