@@ -100,9 +100,8 @@ func usage() {
 	fmt.Fprintln(os.Stderr,
 		`cbindexplan is a planning recommendation tool for index placement.  Given a set of indexes, the tool 
 provides guidance on how to place those indexes based on resource utilization and availability constraint.  
-As input, the tool takes a json file with a list of index sizing specifications.  An example of index sizing 
-specification can be found in https://github.com/couchbase/indexing/blob/master/secondary/cmd/cbindexplan/sample/index.json.   
-Based on index sizing, the tool will generate a set of DDL statements for creating and building those indexes.`)
+As input, the tool takes a json file with a list of index sizing specifications.  Based on index sizing, the 
+tool will generate a set of DDL statements for creating and building those indexes.`)
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr,
 		`Examples:
@@ -122,6 +121,34 @@ to the cluster or reduce the replica count for index.
 7) The tool relies on runtime index statistics to estimate index resource consumption.   It relies on point-in-time statistics at the time
 when the tool is run.
    `)
+	fmt.Fprintln(os.Stderr,
+		`Sample Index Sizing Specification:
+[{"name"         : "index1",
+  "bucket"       : "bucket2",
+  "isPrimary"    : false,
+  "secExprs"     : ["field1"],
+  "isArrayIndex" : false,
+  "replica"      : 2,
+  "numDoc"       : 5000,
+  "DocKeySize"   : 200,
+  "SecKeySize"   : 200,
+  "ArrKeySize"   : 0,
+  "ArrSize"      : 0,
+  "MutationRate" : 0,
+  "ScanRate"     : 0},
+ {"name"         : "index2",
+  "bucket"       : "bucket2",
+  "isPrimary"    : false,
+  "secExprs"     : ["field2"],
+  "isArrayIndex" : false,
+  "replica"      : 2,
+  "numDoc"       : 5000,
+  "DocKeySize"   : 200,
+  "SecKeySize"   : 200,
+  "ArrKeySize"   : 0,
+  "ArrSize"      : 0,
+  "MutationRate" : 0,
+  "ScanRate"     : 0}]`)
 }
 
 //////////////////////////////////////////////////////////////
