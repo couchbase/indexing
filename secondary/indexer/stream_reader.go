@@ -50,7 +50,7 @@ type mutationStreamReader struct {
 	stats IndexerStatsHolder
 
 	indexerState common.IndexerState
-	stateLock    sync.Mutex
+	stateLock    sync.RWMutex
 
 	queueMapLock sync.RWMutex
 	stopch       StopChannel
@@ -418,8 +418,8 @@ func (r *mutationStreamReader) logReaderStat() {
 }
 
 func (r *mutationStreamReader) getIndexerState() common.IndexerState {
-	r.stateLock.Lock()
-	defer r.stateLock.Unlock()
+	r.stateLock.RLock()
+	defer r.stateLock.RUnlock()
 	return r.indexerState
 }
 
