@@ -1518,6 +1518,32 @@ func (s *Solution) markNewNodes() {
 	}
 }
 
+//
+// Does cluster has new node?
+//
+func (s *Solution) hasNewNodes() bool {
+
+	for _, indexer := range s.Placement {
+		if !indexer.isDelete && indexer.isNew {
+			return true
+		}
+	}
+	return false
+}
+
+//
+// Does cluster has deleted node?
+//
+func (s *Solution) hasDeletedNodes() bool {
+
+	for _, indexer := range s.Placement {
+		if indexer.isDelete {
+			return true
+		}
+	}
+	return false
+}
+
 //////////////////////////////////////////////////////////////
 // IndexerConstraint
 //////////////////////////////////////////////////////////////
@@ -2810,7 +2836,16 @@ func (p *RandomPlacement) randomMoveByLoad(s *Solution, checkConstraint bool) (b
 			if !s.constraint.CanAddNode(s) {
 				// If planner is working on a fixed cluster, then
 				// try exhaustively moving or swapping indexes away from this node.
-				success, force := p.exhaustiveMove(s, constrained, s.Placement, checkConstraint)
+
+				if s.hasNewNodes() && s.hasDeletedNodes() {
+					// Try moving to new nodes first
+					success, force := p.exhaustiveMove(s, constrained, s.Placement, checkConstraint, true)
+					if success {
+						return true, false, force
+					}
+				}
+
+				success, force := p.exhaustiveMove(s, constrained, s.Placement, checkConstraint, false)
 				if success {
 					return true, false, force
 				}
@@ -2868,7 +2903,7 @@ func (p *RandomPlacement) randomMoveByLoad(s *Solution, checkConstraint bool) (b
 		} else {
 			// Select an uncongested indexer which is different from source.
 			// The most uncongested indexer has a higher probability to be selected.
-			target = p.getRandomUncongestedNodeExcluding(s, source)
+			target = p.getRandomUncongestedNodeExcluding(s, source, index, checkConstraint)
 		}
 
 		if target == nil {
@@ -2994,7 +3029,23 @@ func (p *RandomPlacement) findCandidates(s *Solution) []*IndexerNode {
 //
 // This function get a random uncongested node.
 //
-func (p *RandomPlacement) getRandomUncongestedNodeExcluding(s *Solution, exclude *IndexerNode) *IndexerNode {
+func (p *RandomPlacement) getRandomUncongestedNodeExcluding(s *Solution, exclude *IndexerNode, index *IndexUsage, checkConstraint bool) *IndexerNode {
+
+	if s.hasDeletedNodes() && s.hasNewNodes() {
+
+		indexers := ([]*IndexerNode)(nil)
+
+		for _, indexer := range s.Placement {
+			if exclude.NodeId != indexer.NodeId && s.constraint.SatisfyNodeResourceConstraint(s, indexer) && !indexer.isDelete && indexer.isNew {
+				indexers = append(indexers, indexer)
+			}
+		}
+
+		target := p.getRandomFittedNode(s, indexers, index, checkConstraint)
+		if target != nil {
+			return target
+		}
+	}
 
 	indexers := ([]*IndexerNode)(nil)
 
@@ -3004,11 +3055,23 @@ func (p *RandomPlacement) getRandomUncongestedNodeExcluding(s *Solution, exclude
 		}
 	}
 
+	return p.getRandomFittedNode(s, indexers, index, checkConstraint)
+}
+
+//
+// This function get a random node that can fit the index.
+//
+func (p *RandomPlacement) getRandomFittedNode(s *Solution, indexers []*IndexerNode, index *IndexUsage, checkConstraint bool) *IndexerNode {
+
 	total := int64(0)
 	loads := make([]int64, len(indexers))
+
 	for i, indexer := range indexers {
-		loads[i] = int64(computeIndexerFreeQuota(s, indexer) * 100)
-		total += loads[i]
+		violation := s.constraint.CanAddIndex(s, indexer, index)
+		if !checkConstraint || violation == NoViolation {
+			loads[i] = int64(computeIndexerFreeQuota(s, indexer) * 100)
+			total += loads[i]
+		}
 	}
 
 	logging.Tracef("Planner::uncongested: %v loads %v total %v", indexers, loads, total)
@@ -3017,10 +3080,12 @@ func (p *RandomPlacement) getRandomUncongestedNodeExcluding(s *Solution, exclude
 		n := int64(p.rs.Int63n(total))
 
 		for i, load := range loads {
-			if n <= load {
-				return indexers[i]
-			} else {
-				n -= load
+			if load != 0 {
+				if n <= load {
+					return indexers[i]
+				} else {
+					n -= load
+				}
 			}
 		}
 	}
@@ -3222,7 +3287,7 @@ func (p *RandomPlacement) exhaustiveSwap(s *Solution, sources []*IndexerNode, ta
 //
 // From the list of source indexes, iterate through the list of indexer that it can move to.
 //
-func (p *RandomPlacement) exhaustiveMove(s *Solution, sources []*IndexerNode, targets []*IndexerNode, checkConstraint bool) (bool, bool) {
+func (p *RandomPlacement) exhaustiveMove(s *Solution, sources []*IndexerNode, targets []*IndexerNode, checkConstraint bool, newNodeOnly bool) (bool, bool) {
 
 	for _, source := range sources {
 
@@ -3251,7 +3316,7 @@ func (p *RandomPlacement) exhaustiveMove(s *Solution, sources []*IndexerNode, ta
 
 			for _, target := range shuffledTargets {
 
-				if source.NodeId == target.NodeId || target.isDelete {
+				if source.NodeId == target.NodeId || target.isDelete || (newNodeOnly && !target.isNew) {
 					continue
 				}
 
