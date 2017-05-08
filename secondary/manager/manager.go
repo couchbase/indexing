@@ -121,11 +121,10 @@ func NewIndexManagerInternal(config common.Config) (mgr *IndexManager, err error
 
 	mgr = new(IndexManager)
 	mgr.isClosed = false
-	totalQuota := config["settings.memory_quota"].Uint64()
 	storageMode := config["settings.storage_mode"].String()
 
 	if strings.ToLower(storageMode) == common.StorageMode(common.FORESTDB).String() {
-		mgr.quota = mgr.calcBufCacheFromMemQuota(totalQuota)
+		mgr.quota = mgr.calcBufCacheFromMemQuota(config)
 	} else {
 		mgr.quota = 1 * 1024 * 1024 //1 MB
 	}
@@ -627,18 +626,30 @@ func (m *IndexManager) stopMasterService() {
 }
 
 //Calculate forestdb  buffer cache from memory quota
-func (m *IndexManager) calcBufCacheFromMemQuota(quota uint64) uint64 {
+func (m *IndexManager) calcBufCacheFromMemQuota(config common.Config) uint64 {
 
-	//Formula for calculation(see MB-14876)
-	//Below 2GB - 256MB to buffercache
-	//2GB to 4GB - 40% to buffercache
-	//Above 4GB - 60% to buffercache
-	if quota <= 2*1024*1024*1024 {
-		return 256 * 1024 * 1024
-	} else if quota <= 4*1024*1024*1024 {
-		return uint64(0.4 * float64(quota))
-	} else {
-		return uint64(0.6 * float64(quota))
+	totalQuota := config["settings.memory_quota"].Uint64()
+
+	//calculate queue memory
+	fracQueueMem := config["mutation_manager.fdb.fracMutationQueueMem"].Float64()
+	queueMem := uint64(fracQueueMem * float64(totalQuota))
+	queueMaxMem := config["mutation_manager.maxQueueMem"].Uint64()
+	if queueMem > queueMaxMem {
+		queueMem = queueMaxMem
 	}
+
+	overhead := uint64(0.15 * float64(totalQuota))
+	//max overhead 5GB
+	if overhead > 5*1024*1024*1024 {
+		overhead = 5 * 1024 * 1024 * 1024
+	}
+
+	bufcache := totalQuota - queueMem - overhead
+	//min 256MB
+	if bufcache < 256*1024*1024 {
+		bufcache = 256 * 1024 * 1024
+	}
+
+	return bufcache
 
 }
