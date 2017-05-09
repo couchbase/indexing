@@ -1523,6 +1523,11 @@ func (m *ServiceMgr) cancelPrepareTaskLOCKED() error {
 		return service.ErrConflict
 	}
 
+	if m.monitorStopCh != nil {
+		close(m.monitorStopCh)
+		m.monitorStopCh = nil
+	}
+
 	m.updateStateLOCKED(func(s *state) {
 		s.rebalanceID = ""
 	})
