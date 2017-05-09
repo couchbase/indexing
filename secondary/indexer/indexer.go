@@ -2496,6 +2496,13 @@ func (idx *indexer) handleCheckDDLInProgress(msg Message) {
 	ddlMsg := msg.(*MsgCheckDDLInProgress)
 	respCh := ddlMsg.GetRespCh()
 
+	respCh <- idx.checkDDLInProgress()
+
+	return
+}
+
+func (idx *indexer) checkDDLInProgress() bool {
+
 	ddlInProgress := false
 	for _, index := range idx.indexInstMap {
 
@@ -2505,10 +2512,7 @@ func (idx *indexer) handleCheckDDLInProgress(msg Message) {
 			ddlInProgress = true
 		}
 	}
-
-	respCh <- ddlInProgress
-
-	return
+	return ddlInProgress
 }
 
 func (idx *indexer) handleUpdateIndexRState(msg Message) {
@@ -3982,15 +3986,30 @@ func (idx *indexer) sendMsgToClusterMgr(msg Message) error {
 
 func (idx *indexer) handleSetLocalMeta(msg Message) {
 
-	idx.clustMgrAgentCmdCh <- msg
-	respMsg := <-idx.clustMgrAgentCmdCh
-
 	key := msg.(*MsgClustMgrLocal).GetKey()
 	value := msg.(*MsgClustMgrLocal).GetValue()
 
 	respch := msg.(*MsgClustMgrLocal).GetRespCh()
-	err := respMsg.(*MsgClustMgrLocal).GetError()
+	checkDDL := msg.(*MsgClustMgrLocal).GetCheckDDL()
 
+	if key == RebalanceRunning && checkDDL {
+		if idx.checkDDLInProgress() {
+			logging.Errorf("ServiceMgr::handleSetLocalMeta Found DDL Running. Key %v", key)
+			err := errors.New("indexer rebalance failure - ddl in progress")
+			respch <- &MsgClustMgrLocal{
+				mType: CLUST_MGR_SET_LOCAL,
+				key:   key,
+				value: value,
+				err:   err,
+			}
+			return
+		}
+	}
+
+	idx.clustMgrAgentCmdCh <- msg
+	respMsg := <-idx.clustMgrAgentCmdCh
+
+	err := respMsg.(*MsgClustMgrLocal).GetError()
 	if err == nil {
 		if key == RebalanceRunning {
 			idx.rebalanceRunning = true

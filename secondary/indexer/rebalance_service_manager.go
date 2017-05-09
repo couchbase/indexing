@@ -718,7 +718,7 @@ func (m *ServiceMgr) checkExistingGlobalRToken() (*RebalanceToken, error) {
 
 func (m *ServiceMgr) initPreparePhaseRebalance() error {
 
-	err := m.registerRebalanceRunning()
+	err := m.registerRebalanceRunning(true)
 	if err != nil {
 		return err
 	}
@@ -733,7 +733,7 @@ func (m *ServiceMgr) initPreparePhaseRebalance() error {
 
 func (m *ServiceMgr) initPreparePhaseFailover() error {
 
-	err := m.registerRebalanceRunning()
+	err := m.registerRebalanceRunning(false)
 	if err != nil {
 		return err
 	}
@@ -1165,13 +1165,14 @@ func (m *ServiceMgr) genRebalanceToken() error {
 	return nil
 }
 
-func (m *ServiceMgr) registerRebalanceRunning() error {
+func (m *ServiceMgr) registerRebalanceRunning(checkDDL bool) error {
 	respch := make(MsgChannel)
 	m.supvMsgch <- &MsgClustMgrLocal{
-		mType:  CLUST_MGR_SET_LOCAL,
-		key:    RebalanceRunning,
-		value:  "",
-		respch: respch,
+		mType:    CLUST_MGR_SET_LOCAL,
+		key:      RebalanceRunning,
+		value:    "",
+		respch:   respch,
+		checkDDL: checkDDL,
 	}
 
 	respMsg := <-respch
@@ -1924,7 +1925,7 @@ func (m *ServiceMgr) processMoveIndex(path string, value []byte, rev interface{}
 			m.rebalanceRunning = true
 			m.rebalanceToken = &rebalToken
 			var err error
-			if err = m.registerRebalanceRunning(); err != nil {
+			if err = m.registerRebalanceRunning(true); err != nil {
 				m.runCleanupPhaseLOCKED(MoveIndexTokenPath, true)
 				return nil
 			}
@@ -2022,7 +2023,7 @@ func (m *ServiceMgr) initMoveIndex(req *manager.IndexRequest, nodes []string) (e
 		return nil, true
 	}
 
-	if err = m.registerRebalanceRunning(); err != nil {
+	if err = m.registerRebalanceRunning(true); err != nil {
 		m.runCleanupPhaseLOCKED(MoveIndexTokenPath, false)
 		return err, false
 	}
