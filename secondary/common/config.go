@@ -944,9 +944,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.plasma.mainIndex.maxLSSFragmentation": ConfigValue{
-		40,
-		"Desired LSS fragmentation percent",
-		40,
+		80,
+		"Desired max LSS fragmentation percent",
+		80,
 		false, // mutable
 		false, // case-insensitive
 	},
@@ -986,9 +986,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.plasma.backIndex.maxLSSFragmentation": ConfigValue{
-		40,
-		"Desired LSS fragmentation percent",
-		40,
+		80,
+		"Desired max LSS fragmentation percent",
+		80,
 		false, // mutable
 		false, // case-insensitive
 	},

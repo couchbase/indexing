@@ -323,7 +323,7 @@ func (mdb *plasmaSlice) DecrRef() {
 	mdb.refCount--
 	if mdb.refCount == 0 {
 		if mdb.isSoftClosed {
-			go tryCloseplasmaSlice(mdb)
+			tryCloseplasmaSlice(mdb)
 		}
 		if mdb.isSoftDeleted {
 			tryDeleteplasmaSlice(mdb)
@@ -997,8 +997,7 @@ func (mdb *plasmaSlice) GetCommittedCount() uint64 {
 }
 
 func (mdb *plasmaSlice) resetStores() {
-	// This is blocking call if snap refcounts != 0
-	go mdb.mainstore.Close()
+	mdb.mainstore.Close()
 	if !mdb.isPrimary {
 		mdb.backstore.Close()
 	}
@@ -1009,6 +1008,7 @@ func (mdb *plasmaSlice) resetStores() {
 }
 
 func (mdb *plasmaSlice) Rollback(o SnapshotInfo) error {
+	mdb.waitForPersistorThread()
 	mdb.waitPersist()
 	qc := atomic.LoadInt64(&mdb.qCount)
 	if qc > 0 {
@@ -1054,6 +1054,7 @@ func (mdb *plasmaSlice) restore(o SnapshotInfo) error {
 //RollbackToZero rollbacks the slice to initial state. Return error if
 //not possible
 func (mdb *plasmaSlice) RollbackToZero() error {
+	mdb.waitForPersistorThread()
 	mdb.resetStores()
 	return nil
 }
@@ -1142,7 +1143,7 @@ func (mdb *plasmaSlice) Close() {
 	if mdb.refCount > 0 {
 		mdb.isSoftClosed = true
 	} else {
-		go tryCloseplasmaSlice(mdb)
+		tryCloseplasmaSlice(mdb)
 	}
 }
 
@@ -1272,6 +1273,7 @@ func tryDeleteplasmaSlice(mdb *plasmaSlice) {
 }
 
 func tryCloseplasmaSlice(mdb *plasmaSlice) {
+	mdb.waitForPersistorThread()
 	mdb.mainstore.Close()
 
 	if !mdb.isPrimary {
@@ -1354,12 +1356,13 @@ func (s *plasmaSnapshot) Close() error {
 	return nil
 }
 
-func (s *plasmaSnapshot) Destroy() {
-	// Wait for persistor to finish
-	for atomic.LoadInt32(&s.slice.isPersistorActive) == 1 {
+func (mdb *plasmaSlice) waitForPersistorThread() {
+	for atomic.LoadInt32(&mdb.isPersistorActive) == 1 {
 		time.Sleep(time.Second)
 	}
+}
 
+func (s *plasmaSnapshot) Destroy() {
 	s.MainSnap.Close()
 	if s.BackSnap != nil {
 		s.BackSnap.Close()
