@@ -1528,6 +1528,20 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.rebalance.globalTokenWaitTimeout": ConfigValue{
+		60,
+		"wait time(in seconds) for global rebalance token to be observed by all nodes",
+		60,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.rebalance.startPhaseBeginTimeout": ConfigValue{
+		60,
+		"wait time(in seconds) for Start Phase to begin after Prepare Phase",
+		60,
+		false, // mutable
+		false, // case-insensitive
+	},
 }
 
 // NewConfig from another

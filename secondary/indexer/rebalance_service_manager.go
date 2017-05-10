@@ -1067,6 +1067,9 @@ func (m *ServiceMgr) cleanupLocalRToken() error {
 
 func (m *ServiceMgr) monitorStartPhaseInit(stopch StopChannel) error {
 
+	cfg := m.config.Load()
+	startPhaseBeginTimeout := cfg["rebalance.startPhaseBeginTimeout"].Int()
+
 	elapsed := 1
 	done := false
 loop:
@@ -1080,7 +1083,7 @@ loop:
 			func() {
 				m.mu.Lock()
 				defer m.mu.Unlock()
-				if m.rebalanceToken == nil && elapsed > StartPhaseBeginTimeout {
+				if m.rebalanceToken == nil && elapsed > startPhaseBeginTimeout {
 					l.Infof("ServiceMgr::monitorStartPhaseInit Timout Waiting for RebalanceToken. Cleanup Prepare Phase")
 					//TODO handle server side differently
 					m.runCleanupPhaseLOCKED(RebalanceTokenPath, false)
@@ -1233,9 +1236,12 @@ func (m *ServiceMgr) registerRebalanceTokenInMetakv() error {
 
 func (m *ServiceMgr) observeGlobalRebalanceToken(rebalToken RebalanceToken) bool {
 
+	cfg := m.config.Load()
+	globalTokenWaitTimeout := cfg["rebalance.globalTokenWaitTimeout"].Int()
+
 	elapsed := 1
 
-	for elapsed < RebalanceTokenWaitTimeout {
+	for elapsed < globalTokenWaitTimeout {
 
 		var rtoken RebalanceToken
 		found, err := MetakvGet(RebalanceTokenPath, &rtoken)
