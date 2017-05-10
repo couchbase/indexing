@@ -594,7 +594,7 @@ func (m *ServiceMgr) startRebalance(change service.TopologyChange) error {
 			return errors.New("Protocol Conflict Error: Existing Rebalance Token Found")
 		}
 
-		err = m.initStartPhase()
+		err = m.initStartPhase(change)
 		if err != nil {
 			l.Errorf("ServiceMgr::startRebalance Error During Start Phase Init %v", err)
 			m.runCleanupPhaseLOCKED(RebalanceTokenPath, true)
@@ -1132,7 +1132,7 @@ func (m *ServiceMgr) rebalanceJanitor() {
 
 }
 
-func (m *ServiceMgr) initStartPhase() error {
+func (m *ServiceMgr) initStartPhase(change service.TopologyChange) error {
 
 	var err error
 	if err = m.genRebalanceToken(); err != nil {
@@ -1147,7 +1147,7 @@ func (m *ServiceMgr) initStartPhase() error {
 		return err
 	}
 
-	if err = m.registerGlobalRebalanceToken(); err != nil {
+	if err = m.registerGlobalRebalanceToken(change); err != nil {
 		return err
 	}
 
@@ -1265,17 +1265,44 @@ func (m *ServiceMgr) observeGlobalRebalanceToken(rebalToken RebalanceToken) bool
 
 }
 
-func (m *ServiceMgr) registerGlobalRebalanceToken() error {
+func (m *ServiceMgr) registerGlobalRebalanceToken(change service.TopologyChange) error {
 
 	m.cinfo.Lock()
 	defer m.cinfo.Unlock()
 
-	if err := m.cinfo.Fetch(); err != nil {
-		l.Errorf("ServiceMgr::registerGlobalRebalanceToken Error Fetching Cluster Information %v", err)
+	var err error
+	var nids []c.NodeId
+
+	maxRetry := 10
+	valid := false
+	for i := 0; i <= maxRetry; i++ {
+
+		if i != 0 {
+			time.Sleep(2 * time.Second)
+		}
+
+		if err = m.cinfo.Fetch(); err != nil {
+			l.Errorf("ServiceMgr::registerGlobalRebalanceToken Error Fetching Cluster Information %v", err)
+			continue
+		}
+
+		nids = m.cinfo.GetNodesByServiceType(c.INDEX_HTTP_SERVICE)
+
+		allKnownNodes := len(change.KeepNodes) + len(change.EjectNodes)
+		if len(nids) != allKnownNodes {
+			err = errors.New("ClusterInfo Node List doesn't match Known Nodes in Rebalance Request")
+			l.Errorf("ServiceMgr::registerGlobalRebalanceToken %v Retrying %v", err, i)
+			continue
+		}
+		valid = true
+		break
+	}
+
+	if !valid {
+		l.Errorf("ServiceMgr::registerGlobalRebalanceToken cinfo %v change %v", m.cinfo, m.rebalanceCtx.change)
 		return err
 	}
 
-	nids := m.cinfo.GetNodesByServiceType(c.INDEX_HTTP_SERVICE)
 	url := "/registerRebalanceToken"
 
 	for _, nid := range nids {
