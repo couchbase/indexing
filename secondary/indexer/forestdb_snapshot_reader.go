@@ -61,6 +61,7 @@ func (s *fdbSnapshot) MultiScanCount(ctx IndexReaderContext, low, high IndexKey,
 	var scancount uint64
 	count := 1
 	checkDistinct := distinct && !s.isPrimary()
+	isIndexComposite := len(s.slice.idxDefn.SecExprs) > 1
 
 	buf := secKeyBufPool.Get()
 	defer secKeyBufPool.Put(buf)
@@ -74,14 +75,18 @@ func (s *fdbSnapshot) MultiScanCount(ctx IndexReaderContext, low, high IndexKey,
 			return common.ErrClientCancel
 		default:
 			skipRow := false
-			if scan.ScanType == FilterRangeReq {
+			var ck [][]byte
 
-				//get the key in original format
-				if s.slice.idxDefn.Desc != nil {
-					jsonEncoder.ReverseCollate(entry, s.slice.idxDefn.Desc)
+			//get the key in original format
+			if s.slice.idxDefn.Desc != nil {
+				jsonEncoder.ReverseCollate(entry, s.slice.idxDefn.Desc)
+			}
+			if scan.ScanType == FilterRangeReq {
+				if len(entry) > cap(*buf) {
+					*buf = make([]byte, 0, len(entry)+RESIZE_PAD)
 				}
 
-				skipRow, _, err = filterScanRow(entry, scan, (*buf)[:0])
+				skipRow, ck, err = filterScanRow(entry, scan, (*buf)[:0])
 				if err != nil {
 					return err
 				}
@@ -91,6 +96,9 @@ func (s *fdbSnapshot) MultiScanCount(ctx IndexReaderContext, low, high IndexKey,
 			}
 
 			if checkDistinct {
+				if isIndexComposite {
+					entry, err = projectLeadingKey(ck, entry, buf)
+				}
 				if len(previousRow) != 0 && distinctCompare(entry, previousRow) {
 					return nil // Ignore the entry as it is same as previous entry
 				}

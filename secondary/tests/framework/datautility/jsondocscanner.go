@@ -678,6 +678,117 @@ func ExpectedMultiScanResponse_Primary(docs tc.KeyValues, scans qc.Scans,
 	return results
 }
 
+func ExpectedMultiScanCount(docs tc.KeyValues, compositeFieldPaths []string, scans qc.Scans,
+	reverse, distinct bool, isScanAll bool) int {
+	log.Printf("distinct = %v", distinct)
+	results := make(tc.ScanResponse)
+	var json map[string]interface{}
+	var f string
+	var i int
+	offsetCount := int64(0)
+	offset := int64(0)
+
+	projection := &qc.IndexProjection{}
+	if distinct {
+		projection.EntryKeys = []int64{0}
+	}
+
+	resultList := make(ResultList, 0, len(docs))
+	for k, v := range docs {
+		var compositeValues []interface{}
+		for _, compositeFieldPath := range compositeFieldPaths {
+
+			fields := strings.Split(compositeFieldPath, ".")
+			// Access the nested field
+			json = v.(map[string]interface{})
+			for i = 0; i < len(fields)-1; i++ {
+				f = fields[i]
+				switch json[f].(type) {
+				case map[string]interface{}:
+					json = json[f].(map[string]interface{})
+				default:
+					break
+				}
+			}
+			compositeValues = append(compositeValues, json[fields[i]])
+		}
+		r := Result{PrimaryKey: k, SecondaryKey: compositeValues}
+		resultList = append(resultList, r)
+	}
+	sort.Sort(resultList)
+
+	var previousValue []interface{}
+	for _, res := range resultList {
+		if isScanAll {
+			var projectedSecondaryKey []interface{}
+			if projection != nil {
+				if len(projection.EntryKeys) == 0 {
+					projectedSecondaryKey = nil
+				}
+				for _, entrypos := range projection.EntryKeys {
+					projectedSecondaryKey = append(projectedSecondaryKey, res.SecondaryKey[entrypos])
+				}
+			} else {
+				projectedSecondaryKey = res.SecondaryKey
+			}
+			if distinct {
+				if compareSecondaryKeys(projectedSecondaryKey, previousValue) == 0 {
+					continue
+				}
+			}
+			if offsetCount >= offset {
+				results[res.PrimaryKey] = projectedSecondaryKey
+				previousValue = projectedSecondaryKey
+			} else {
+				offsetCount++
+			}
+			continue
+		}
+
+		skipDoc := true
+		for _, scan := range scans {
+			if scan.Seek != nil { // Equals
+				if isEqual(scan.Seek, res.SecondaryKey) {
+					skipDoc = false
+					break
+				}
+			} else { // Composite filtering
+				if applyFilters(res.SecondaryKey, scan.Filter) {
+					skipDoc = false
+					break
+				}
+			}
+		}
+
+		if !skipDoc {
+			var projectedSecondaryKey []interface{}
+			if projection != nil {
+				if len(projection.EntryKeys) == 0 {
+					projectedSecondaryKey = nil
+				} else {
+					for _, entrypos := range projection.EntryKeys {
+						projectedSecondaryKey = append(projectedSecondaryKey, res.SecondaryKey[entrypos])
+					}
+				}
+			} else {
+				projectedSecondaryKey = res.SecondaryKey
+			}
+			if distinct {
+				if compareSecondaryKeys(projectedSecondaryKey, previousValue) == 0 {
+					continue
+				}
+			}
+			if offsetCount >= offset {
+				results[res.PrimaryKey] = projectedSecondaryKey
+				previousValue = projectedSecondaryKey
+			} else {
+				offsetCount++
+			}
+		}
+	}
+	return len(results)
+}
+
 func isEqual(seek c.SecondaryKey, values []interface{}) bool {
 	for i, eqVal := range seek {
 		if eqVal != values[i] {
