@@ -769,13 +769,10 @@ func (o *MetadataProvider) DropIndex(defnID c.IndexDefnId) error {
 	}
 
 	// find watcher -- This method does not check index status (return the watcher even
-	// if index is in deleted status). So this return an error if  watcher is dropped
-	// asynchronously (some parallel go-routine unwatchMetadata).
-	watchers, err, alive := o.findAliveWatchersByDefnIdIgnoreStatus(defnID)
+	// if index is in deleted status). This return an error if  watcher (holding the index)
+	// is dropped asynchronously (concurrent unwatchMetadata).
+	watchers, err := o.findWatchersByDefnIdIgnoreStatus(defnID)
 	if err != nil {
-		if !alive {
-			return err
-		}
 		return errors.New(fmt.Sprintf("Cannot locate cluster node hosting Index %s.", meta.Definition.Name))
 	}
 
@@ -815,6 +812,7 @@ func (o *MetadataProvider) DropIndex(defnID c.IndexDefnId) error {
 func (o *MetadataProvider) BuildIndexes(defnIDs []c.IndexDefnId) error {
 
 	watcherIndexMap := make(map[c.IndexerId][]c.IndexDefnId)
+	defnList := ([]c.IndexDefnId)(nil)
 
 	for _, id := range defnIDs {
 
@@ -844,21 +842,16 @@ func (o *MetadataProvider) BuildIndexes(defnIDs []c.IndexDefnId) error {
 			}
 		}
 
-		// place token for recovery.
-		if err := PostBuildCommandToken(id); err != nil {
-			return errors.New(fmt.Sprintf("Fail to Build Index due to internal errors.  Error=%v.", err))
-		}
-
 		// find watcher -- This method does not check index status (return the watcher even
 		// if index is in deleted status). So this return an error if  watcher is dropped
 		// asynchronously (some parallel go-routine unwatchMetadata).
-		watchers, err, alive := o.findAliveWatchersByDefnIdIgnoreStatus(id)
+		watchers, err := o.findWatchersByDefnIdIgnoreStatus(id)
 		if err != nil {
-			if !alive {
-				return err
-			}
 			return errors.New(fmt.Sprintf("Cannot locate cluster node hosting Index %s.", meta.Definition.Name))
 		}
+
+		// There is at least one watcher (one indexer node)
+		defnList = append(defnList, id)
 
 		for _, watcher := range watchers {
 			indexerId := watcher.getIndexerId()
@@ -876,6 +869,13 @@ func (o *MetadataProvider) BuildIndexes(defnIDs []c.IndexDefnId) error {
 		}
 	}
 
+	// place token for recovery.
+	for _, id := range defnList {
+		if err := PostBuildCommandToken(id); err != nil {
+			return errors.New(fmt.Sprintf("Fail to Build Index due to internal errors.  Error=%v.", err))
+		}
+	}
+
 	errMap := make(map[string]bool)
 	for indexerId, idList := range watcherIndexMap {
 
@@ -883,9 +883,9 @@ func (o *MetadataProvider) BuildIndexes(defnIDs []c.IndexDefnId) error {
 		if err != nil {
 			meta := o.FindIndexIgnoreStatus(idList[0])
 			if meta != nil {
-				errMap[fmt.Sprintf("Cannot locate cluster node hosting Index %s.", meta.Definition.Name)] = true
+				errMap[fmt.Sprintf("Cannot locate cluster node hosting Index %s.  Index build will retry in background.", meta.Definition.Name)] = true
 			} else {
-				errMap["Cannot locate cluster node hosting Index."] = true
+				errMap["Cannot locate cluster node hosting Index.  Index build will retry in background."] = true
 			}
 			continue
 		}
@@ -1329,6 +1329,24 @@ func (o *MetadataProvider) findAliveWatchersByDefnIdIgnoreStatus(defnId c.IndexD
 	}
 
 	return nil, errors.New("Cannot find indexer node with index."), true
+}
+
+func (o *MetadataProvider) findWatchersByDefnIdIgnoreStatus(defnId c.IndexDefnId) ([]*watcher, error) {
+	o.mutex.Lock()
+	defer o.mutex.Unlock()
+
+	var result []*watcher
+	for _, watcher := range o.watchers {
+		if o.repo.hasDefnIgnoreStatus(watcher.getIndexerId(), defnId) {
+			result = append(result, watcher)
+		}
+	}
+
+	if len(result) != 0 {
+		return result, nil
+	}
+
+	return nil, errors.New("Cannot find indexer node with index.")
 }
 
 func (o *MetadataProvider) findWatcherByIndexerId(id c.IndexerId) (*watcher, error) {
