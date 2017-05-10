@@ -222,6 +222,8 @@ func (slice *plasmaSlice) initStores() error {
 		for i := 0; i < numReaders; i++ {
 			slice.readers <- slice.mainstore.NewReader()
 		}
+
+		slice.mainstore.SetLogPrefix(fmt.Sprintf("%s/%s/Mainstore ", slice.idxDefn.Bucket, slice.idxDefn.Name))
 	}()
 
 	if !slice.isPrimary {
@@ -239,6 +241,8 @@ func (slice *plasmaSlice) initStores() error {
 			for i := 0; i < slice.numWriters; i++ {
 				slice.back[i] = slice.backstore.NewWriter()
 			}
+
+			slice.backstore.SetLogPrefix(fmt.Sprintf("%s/%s/Backstore ", slice.idxDefn.Bucket, slice.idxDefn.Name))
 		}()
 	}
 
