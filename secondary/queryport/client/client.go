@@ -793,6 +793,11 @@ func (c *GsiClient) DescribeError(err error) string {
 	return err.Error()
 }
 
+// DescribeError return error description as human readable string.
+func (c *GsiClient) Settings() *ClientSettings {
+	return c.settings
+}
+
 // Close the client and all open connections with server.
 func (c *GsiClient) Close() {
 	if c == nil {

@@ -985,7 +985,7 @@ func makeResponsehandler(
 	var readfd *os.File
 	var backfillFin, backfillEntries int64
 
-	backfillLimit := int64(config["backfillLimit"].Int())
+	backfillLimit := int64(client.Settings().BackfillLimit())
 	primed, starttm, ticktm := false, time.Now(), time.Now()
 	lprefix := si.gsi.logPrefix
 
