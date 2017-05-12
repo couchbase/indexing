@@ -16,6 +16,7 @@ cd /var/www
 (ls -t make-*.log | head -n 3; ls -t make-*.log) | sort | uniq -u | xargs -r rm
 export TS="`date +%d.%m.%Y-%H.%M`"
 if [ "`cat ~/.cistore`" = "memdb" ]; then export STORAGE="plasma"; else export STORAGE="memdb"; fi
+if [ $((RANDOM%10)) -eq 0 ]; then export STORAGE="fdb"; fi
 echo "$STORAGE" > ~/.cistore
 echo '<html><head></head><body><pre>' > /var/www/gsi-current.html
 chmod a+rx /var/www/gsi-current.html
