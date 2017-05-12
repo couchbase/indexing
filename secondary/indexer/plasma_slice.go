@@ -171,6 +171,7 @@ func (slice *plasmaSlice) initStores() error {
 	cfg.FlushBufferSize = int(slice.sysconf["plasma.flushBufferSize"].Int())
 	cfg.LSSLogSegmentSize = int64(slice.sysconf["plasma.LSSSegmentFileSize"].Int())
 	cfg.UseMmap = slice.sysconf["plasma.useMmapReads"].Bool()
+	cfg.UseCompression = slice.sysconf["plasma.useCompression"].Bool()
 	cfg.AutoSwapper = true
 
 	var mCfg, bCfg plasma.Config

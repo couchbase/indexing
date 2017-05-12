@@ -901,6 +901,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.plasma.useCompression": ConfigValue{
+		true,
+		"Enable compression for plasma",
+		true,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.plasma.LSSSegmentFileSize": ConfigValue{
 		4294967296,
 		"LSS log segment maxsize per file",
