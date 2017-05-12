@@ -458,6 +458,27 @@ func (m *IndexManager) UpdateIndexInstance(bucket string, defnId common.IndexDef
 	return m.requestServer.MakeAsyncRequest(client.OPCODE_UPDATE_INDEX_INST, fmt.Sprintf("%v", defnId), buf)
 }
 
+func (m *IndexManager) UpdateIndexInstanceSync(bucket string, defnId common.IndexDefnId, state common.IndexState,
+	streamId common.StreamId, err string, buildTime []uint64, rState common.RebalanceState) error {
+
+	inst := &topologyChange{
+		Bucket:    bucket,
+		DefnId:    uint64(defnId),
+		State:     uint32(state),
+		StreamId:  uint32(streamId),
+		Error:     err,
+		BuildTime: buildTime,
+		RState:    uint32(rState)}
+
+	buf, e := json.Marshal(&inst)
+	if e != nil {
+		return e
+	}
+
+	logging.Debugf("IndexManager.UpdateIndexInstanceSync(): making request for Index instance update")
+	return m.requestServer.MakeRequest(client.OPCODE_UPDATE_INDEX_INST, fmt.Sprintf("%v", defnId), buf)
+}
+
 func (m *IndexManager) DeleteIndexForBucket(bucket string, streamId common.StreamId) error {
 
 	logging.Debugf("IndexManager.DeleteIndexForBucket(): making request for deleting index for bucket")

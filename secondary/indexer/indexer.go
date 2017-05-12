@@ -1368,7 +1368,7 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 		//store updated state and streamId in meta store
 		if idx.enableManager {
 			if err := idx.updateMetaInfoForIndexList(instIdList, true,
-				true, false, true, true); err != nil {
+				true, false, true, true, false, nil); err != nil {
 				common.CrashOnError(err)
 			}
 		} else {
@@ -1797,7 +1797,7 @@ func (idx *indexer) handleMergeStreamAck(msg Message) {
 				instIdList = append(instIdList, inst.InstId)
 			}
 
-			if err := idx.updateMetaInfoForIndexList(instIdList, true, true, false, false, true); err != nil {
+			if err := idx.updateMetaInfoForIndexList(instIdList, true, true, false, false, true, false, nil); err != nil {
 				common.CrashOnError(err)
 			}
 		}
@@ -2526,7 +2526,7 @@ func (idx *indexer) handleUpdateIndexRState(msg Message) {
 
 	if instId == 0 {
 		logging.Errorf("Indexer::handleUpdateIndexRState Unable to find Index For DefnId %v", defnId)
-		respCh <- false
+		respCh <- ErrInconsistentState
 		return
 	}
 
@@ -2534,11 +2534,10 @@ func (idx *indexer) handleUpdateIndexRState(msg Message) {
 	inst.RState = rstate
 	idx.indexInstMap[instId] = inst
 
-	if err := idx.updateMetaInfoForIndexList([]common.IndexInstId{instId}, false, false, false, false, true); err != nil {
+	if err := idx.updateMetaInfoForIndexList([]common.IndexInstId{instId}, false, false, false, false, true, true, respCh); err != nil {
 		common.CrashOnError(err)
 	}
 
-	respCh <- true
 }
 
 //TODO If this function gets error before its finished, the state
@@ -2608,7 +2607,7 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 		common.CrashOnError(err)
 	}
 
-	if err := idx.updateMetaInfoForIndexList(instIdList, true, true, false, false, true); err != nil {
+	if err := idx.updateMetaInfoForIndexList(instIdList, true, true, false, false, true, false, nil); err != nil {
 		common.CrashOnError(err)
 	}
 
@@ -3606,7 +3605,7 @@ func (idx *indexer) validateIndexInstMap() {
 					index.State = common.INDEX_STATE_READY
 					idx.indexInstMap[instId] = index
 
-					if err := idx.updateMetaInfoForIndexList([]common.IndexInstId{index.InstId}, true, false, false, false, true); err != nil {
+					if err := idx.updateMetaInfoForIndexList([]common.IndexInstId{index.InstId}, true, false, false, false, true, false, nil); err != nil {
 						common.CrashOnError(err)
 					}
 				}
@@ -3736,7 +3735,7 @@ func (idx *indexer) checkMissingMaintBucket() {
 
 		if idx.enableManager {
 			if err := idx.updateMetaInfoForIndexList(updatedList,
-				true, true, false, false, true); err != nil {
+				true, true, false, false, true, false, nil); err != nil {
 				common.CrashOnError(err)
 			}
 		}
@@ -3904,7 +3903,7 @@ func (idx *indexer) updateMetaInfoForBucket(bucket string,
 
 	if len(instIdList) != 0 {
 		return idx.updateMetaInfoForIndexList(instIdList, updateState,
-			updateStream, updateError, false, updateRState)
+			updateStream, updateError, false, updateRState, false, nil)
 	} else {
 		return nil
 	}
@@ -3913,7 +3912,8 @@ func (idx *indexer) updateMetaInfoForBucket(bucket string,
 
 func (idx *indexer) updateMetaInfoForIndexList(instIdList []common.IndexInstId,
 	updateState bool, updateStream bool, updateError bool,
-	updateBuildTs bool, updateRState bool) error {
+	updateBuildTs bool, updateRState bool, syncUpdate bool,
+	respCh chan error) error {
 
 	var indexList []common.IndexInst
 	for _, instId := range instIdList {
@@ -3931,7 +3931,9 @@ func (idx *indexer) updateMetaInfoForIndexList(instIdList []common.IndexInstId,
 	msg := &MsgClustMgrUpdate{
 		mType:         CLUST_MGR_UPDATE_TOPOLOGY_FOR_INDEX,
 		indexList:     indexList,
-		updatedFields: updatedFields}
+		updatedFields: updatedFields,
+		syncUpdate:    syncUpdate,
+		respCh:        respCh}
 
 	return idx.sendMsgToClusterMgr(msg)
 

@@ -1093,6 +1093,8 @@ type MsgClustMgrUpdate struct {
 	updatedFields MetaUpdateFields
 	bucket        string
 	streamId      common.StreamId
+	syncUpdate    bool
+	respCh        chan error
 }
 
 func (m *MsgClustMgrUpdate) GetMsgType() MsgType {
@@ -1113,6 +1115,14 @@ func (m *MsgClustMgrUpdate) GetBucket() string {
 
 func (m *MsgClustMgrUpdate) GetStreamId() common.StreamId {
 	return m.streamId
+}
+
+func (m *MsgClustMgrUpdate) GetIsSyncUpdate() bool {
+	return m.syncUpdate
+}
+
+func (m *MsgClustMgrUpdate) GetRespCh() chan error {
+	return m.respCh
 }
 
 //CLUST_MGR_GET_GLOBAL_TOPOLOGY
@@ -1210,7 +1220,7 @@ func (m *MsgCheckDDLInProgress) GetRespCh() chan bool {
 
 type MsgUpdateIndexRState struct {
 	defnId common.IndexDefnId
-	respch chan bool
+	respch chan error
 	rstate common.RebalanceState
 }
 
@@ -1222,7 +1232,7 @@ func (m *MsgUpdateIndexRState) GetDefnId() common.IndexDefnId {
 	return m.defnId
 }
 
-func (m *MsgUpdateIndexRState) GetRespCh() chan bool {
+func (m *MsgUpdateIndexRState) GetRespCh() chan error {
 	return m.respch
 }
 

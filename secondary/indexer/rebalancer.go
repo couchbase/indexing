@@ -463,11 +463,12 @@ func (r *Rebalancer) processTokenAsDest(ttid string, tt *c.TransferToken) bool {
 			return true
 		}
 		if tt.IndexInst.Defn.Deferred && tt.IndexInst.State == c.INDEX_STATE_READY {
-			respch := make(chan bool)
+			respch := make(chan error)
 			r.supvMsgch <- &MsgUpdateIndexRState{defnId: tt.IndexInst.Defn.DefnId,
 				rstate: c.REBAL_ACTIVE,
 				respch: respch}
-			<-respch
+			err := <-respch
+			c.CrashOnError(err)
 
 			if tt.TransferMode == c.TokenTransferModeMove {
 				tt.State = c.TransferTokenReady
@@ -713,11 +714,12 @@ loop:
 					c.IndexState(status), tot_remaining, remainingBuildTime)
 
 				if c.IndexState(status) == c.INDEX_STATE_ACTIVE && remainingBuildTime < maxRemainingBuildTime {
-					respch := make(chan bool)
+					respch := make(chan error)
 					r.supvMsgch <- &MsgUpdateIndexRState{defnId: tt.IndexInst.Defn.DefnId,
 						rstate: c.REBAL_ACTIVE,
 						respch: respch}
-					<-respch
+					err := <-respch
+					c.CrashOnError(err)
 					if tt.TransferMode == c.TokenTransferModeMove {
 						tt.State = c.TransferTokenReady
 					} else {
