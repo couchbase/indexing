@@ -908,6 +908,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.plasma.persistenceCPUPercent": ConfigValue{
+		50,
+		"Percentage of cpu used for persistence",
+		50,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.plasma.LSSSegmentFileSize": ConfigValue{
 		4294967296,
 		"LSS log segment maxsize per file",

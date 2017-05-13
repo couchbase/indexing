@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -173,6 +174,7 @@ func (slice *plasmaSlice) initStores() error {
 	cfg.UseMmap = slice.sysconf["plasma.useMmapReads"].Bool()
 	cfg.UseCompression = slice.sysconf["plasma.useCompression"].Bool()
 	cfg.AutoSwapper = true
+	cfg.NumPersistorThreads = int(float32(runtime.NumCPU())*float32(slice.sysconf["plasma.persistenceCPUPercent"].Int())/(100*2) + 0.5)
 
 	var mCfg, bCfg plasma.Config
 
