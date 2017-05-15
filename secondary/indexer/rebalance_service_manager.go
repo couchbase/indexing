@@ -38,6 +38,7 @@ import (
 	"github.com/couchbase/indexing/secondary/fdb"
 	l "github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager"
+	"github.com/couchbase/indexing/secondary/manager/client"
 	"github.com/couchbase/indexing/secondary/planner"
 )
 
@@ -163,6 +164,7 @@ func (m *ServiceMgr) initService() {
 	http.HandleFunc("/listRebalanceTokens", m.handleListRebalanceTokens)
 	http.HandleFunc("/cleanupRebalance", m.handleCleanupRebalance)
 	http.HandleFunc("/moveIndex", m.handleMoveIndex)
+	http.HandleFunc("/moveIndexInternal", m.handleMoveIndexInternal)
 	http.HandleFunc("/nodeuuid", m.handleNodeuuid)
 }
 
@@ -1990,47 +1992,125 @@ func (m *ServiceMgr) handleMoveIndex(w http.ResponseWriter, r *http.Request) {
 
 	if r.Method == "POST" {
 		bytes, _ := ioutil.ReadAll(r.Body)
-		var req manager.IndexRequest
-		if err := json.Unmarshal(bytes, &req); err != nil {
-			l.Errorf("ServiceMgr::handleMoveIndex %v", err)
-			sendIndexResponseWithError(http.StatusBadRequest, w, err.Error())
+		in := make(map[string]interface{})
+		if err := json.Unmarshal(bytes, &in); err != nil {
+			send(http.StatusBadRequest, w, err.Error())
 			return
 		}
 
-		l.Infof("ServiceMgr::handleMoveIndex %v", req)
+		var bucket, index string
+		var ok bool
+		var nodes interface{}
 
-		nodes, err := validateMoveIndexReq(&req)
-		if err != nil {
-			l.Errorf("ServiceMgr::handleMoveIndex %v", err)
-			sendIndexResponseWithError(http.StatusBadRequest, w, err.Error())
+		if bucket, ok = in["bucket"].(string); !ok {
+			send(http.StatusBadRequest, w, "Bad Request - Bucket Information Missing")
 			return
 		}
 
-		err, noop := m.initMoveIndex(&req, nodes)
-		if err != nil {
-			l.Errorf("ServiceMgr::handleMoveIndex %v %v", err, m.rebalanceToken)
-			sendIndexResponseWithError(http.StatusInternalServerError, w, err.Error())
+		if index, ok = in["index"].(string); !ok {
+			send(http.StatusBadRequest, w, "Bad Request - Index Information Missing")
 			return
-		} else if noop {
-			warnStr := "No Index Movement Required for Specified Destination List"
-			l.Warnf("ServiceMgr::handleMoveIndex %v", warnStr)
-			sendIndexResponseWithError(http.StatusBadRequest, w, warnStr)
-			return
-		} else {
-			select {
+		}
 
-			case err := <-m.moveStatusCh:
-				if err != nil {
-					sendIndexResponseWithError(http.StatusInternalServerError, w, err.Error())
-				} else {
-					sendIndexResponse(w)
-				}
+		if nodes, ok = in["nodes"]; !ok {
+			send(http.StatusBadRequest, w, "Bad Request - Nodes Information Missing")
+			return
+		}
+
+		topology, err := m.getGlobalTopology()
+		if err != nil {
+			send(http.StatusInternalServerError, w, err.Error())
+			return
+		}
+
+		var defn *manager.IndexDefnDistribution
+		for _, localMeta := range topology.Metadata {
+			bTopology := findTopologyByBucket(localMeta.IndexTopologies, bucket)
+			if bTopology != nil {
+				defn = bTopology.FindIndexDefinition(bucket, index)
 			}
+			if defn != nil {
+				break
+			}
+		}
+		if defn == nil {
+			err := errors.New(fmt.Sprintf("Fail to find index definition for bucket %v index %v.", bucket, index))
+			l.Errorf("ServiceMgr::handleMoveIndex %v", err)
+			send(http.StatusInternalServerError, w, err.Error())
 			return
 		}
+
+		var req manager.IndexRequest
+
+		idList := client.IndexIdList{DefnIds: []uint64{defn.DefnId}}
+		plan := make(map[string]interface{})
+		plan["nodes"] = nodes
+
+		req = manager.IndexRequest{IndexIds: idList, Plan: plan}
+
+		code, errStr := m.doHandleMoveIndex(&req)
+		send(code, w, errStr)
 	} else {
 		sendIndexResponseWithError(http.StatusBadRequest, w, "Unsupported method")
 		return
+	}
+}
+func (m *ServiceMgr) handleMoveIndexInternal(w http.ResponseWriter, r *http.Request) {
+
+	if !m.validateAuth(w, r) {
+		l.Errorf("ServiceMgr::handleMoveIndexInternal Validation Failure for Request %v", r)
+		return
+	}
+
+	if r.Method == "POST" {
+		bytes, _ := ioutil.ReadAll(r.Body)
+		var req manager.IndexRequest
+		if err := json.Unmarshal(bytes, &req); err != nil {
+			l.Errorf("ServiceMgr::handleMoveIndexInternal %v", err)
+			sendIndexResponseWithError(http.StatusBadRequest, w, err.Error())
+			return
+		}
+
+		code, errStr := m.doHandleMoveIndex(&req)
+		if errStr != "" {
+			sendIndexResponseWithError(code, w, errStr)
+		} else {
+			sendIndexResponse(w)
+		}
+
+	} else {
+		sendIndexResponseWithError(http.StatusBadRequest, w, "Unsupported method")
+		return
+	}
+}
+
+func (m *ServiceMgr) doHandleMoveIndex(req *manager.IndexRequest) (int, string) {
+
+	l.Infof("ServiceMgr::doHandleMoveIndex %v", req)
+
+	nodes, err := validateMoveIndexReq(req)
+	if err != nil {
+		l.Errorf("ServiceMgr::doHandleMoveIndex %v", err)
+		return http.StatusBadRequest, err.Error()
+	}
+
+	err, noop := m.initMoveIndex(req, nodes)
+	if err != nil {
+		l.Errorf("ServiceMgr::doHandleMoveIndex %v %v", err, m.rebalanceToken)
+		return http.StatusInternalServerError, err.Error()
+	} else if noop {
+		warnStr := "No Index Movement Required for Specified Destination List"
+		l.Warnf("ServiceMgr::doHandleMoveIndex %v", warnStr)
+		return http.StatusBadRequest, warnStr
+	} else {
+		select {
+		case err := <-m.moveStatusCh:
+			if err != nil {
+				return http.StatusInternalServerError, err.Error()
+			} else {
+				return http.StatusOK, ""
+			}
+		}
 	}
 }
 
