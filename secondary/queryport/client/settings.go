@@ -95,7 +95,7 @@ func (s *ClientSettings) handleSettings(config common.Config) {
 		logging.Errorf("ClientSettings: invalid setting value for num_replica=%v", numReplica)
 	}
 
-	backfillLimit := int32(config["queryport.client.backfillLimit"].Int())
+	backfillLimit := int32(config["queryport.client.settings.backfillLimit"].Int())
 	if backfillLimit >= 0 {
 		atomic.StoreInt32(&s.backfillLimit, backfillLimit)
 	} else {

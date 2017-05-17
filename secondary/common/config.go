@@ -572,7 +572,7 @@ var SystemConfig = Config{
 		true,  // immutable
 		false, // case-insensitive
 	},
-	"queryport.client.backfillLimit": ConfigValue{
+	"queryport.client.settings.backfillLimit": ConfigValue{
 		5 * 1024, // 5GB
 		"limit in mega-bytes to cap n1ql side backfilling, if ZERO backfill " +
 			"will be disabled.",

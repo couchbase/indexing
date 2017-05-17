@@ -37,14 +37,10 @@ func TestBufferedScan_BackfillDisabled(t *testing.T) {
 	kvutility.SetKeyValues(kvdocs, bucketName, "", clusterconfig.KVAddress)
 
 	// Disable backfill
-	cv := c.SystemConfig["queryport.client.backfillLimit"]
-	actual := cv.Int()
-	c.SystemConfig.SetValue("queryport.client.backfillLimit", 0)
-	defer func() {
-		c.SystemConfig.SetValue("queryport.client.backfillLimit", actual)
-	}()
+	err := secondaryindex.ChangeIndexerSettings("queryport.client.settings.backfillLimit", float64(0), clusterconfig.Username, clusterconfig.Password, kvaddress)
+	tc.HandleError(err, "Error in ChangeIndexerSettings")
 
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{"address"}, false, nil, true, defaultIndexActiveTimeout, nil)
+	err = secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{"address"}, false, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	cluster, err := c.ClusterAuthUrl(indexManagementAddress)
@@ -147,12 +143,12 @@ func TestBufferedScan_BackfillEnabled(t *testing.T) {
 
 	var indexName = "addressidx"
 
-	// Disable backfill
-	cv := c.SystemConfig["queryport.client.backfillLimit"]
-	actual := cv.Int()
-	c.SystemConfig.SetValue("queryport.client.backfillLimit", 1)
+	err := secondaryindex.ChangeIndexerSettings("queryport.client.settings.backfillLimit", float64(1), clusterconfig.Username, clusterconfig.Password, kvaddress)
+	tc.HandleError(err, "Error in ChangeIndexerSettings")
+
 	defer func() {
-		c.SystemConfig.SetValue("queryport.client.backfillLimit", actual)
+		err = secondaryindex.ChangeIndexerSettings("queryport.client.settings.backfillLimit", float64(0), clusterconfig.Username, clusterconfig.Password, kvaddress)
+		tc.HandleError(err, "Error in ChangeIndexerSettings")
 	}()
 
 	cluster, err := c.ClusterAuthUrl(indexManagementAddress)
