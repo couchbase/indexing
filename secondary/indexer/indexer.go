@@ -3629,9 +3629,19 @@ func (idx *indexer) validateIndexInstMap() {
 		//only indexes in created, initial, catchup, active state
 		//are valid for recovery
 		if !isValidRecoveryState(index.State) {
-			logging.Warnf("Indexer::validateIndexInstMap \n\t State %v Not Recoverable. "+
+			logging.Warnf("Indexer::validateIndexInstMap State %v Not Recoverable. "+
 				"Not Recovering Index %v", index.State, index)
-			idx.cleanupIndexMetadata(index)
+
+			if index.State == common.INDEX_STATE_DELETED {
+				logging.Warnf("Indexer::validateIndexInstMap Found Index in State %v. "+
+					"Cleaning up Index Data %v", index.State, index)
+				err := idx.forceCleanupIndexData(&index, SliceId(0))
+				if err == nil {
+					idx.cleanupIndexMetadata(index)
+				}
+			} else {
+				idx.cleanupIndexMetadata(index)
+			}
 			delete(idx.indexInstMap, instId)
 			continue
 		}
@@ -3690,6 +3700,26 @@ func (idx *indexer) validateIndexInstMap() {
 	}
 
 	idx.checkMissingMaintBucket()
+
+}
+
+//force cleanup of index data should only be used when storage manager has not yet
+//been initialized
+func (idx *indexer) forceCleanupIndexData(inst *common.IndexInst, sliceId SliceId) error {
+
+	storage_dir := idx.config["storage_dir"].String()
+	path := filepath.Join(storage_dir, IndexPath(inst, sliceId))
+
+	logging.Infof("Indexer::forceCleanupIndexData Cleaning Up Slice Id %v, "+
+		"IndexInstId %v, IndexDefnId %v ", sliceId, inst.InstId, inst.Defn.DefnId)
+
+	//cleanup the disk directory
+	if err := os.RemoveAll(path); err != nil {
+		logging.Errorf("Indexer::forceCleanupIndexData Error Cleaning Up Slice Id %v, "+
+			"IndexInstId %v, IndexDefnId %v. Error %v", sliceId, inst.InstId, inst.Defn.DefnId, err)
+		return err
+	}
+	return nil
 
 }
 
