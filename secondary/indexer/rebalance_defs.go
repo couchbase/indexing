@@ -30,9 +30,6 @@ const RebalanceMetakvDir = c.IndexingMetaDir + "rebalance/"
 const RebalanceTokenPath = RebalanceMetakvDir + RebalanceTokenTag
 const MoveIndexTokenPath = RebalanceMetakvDir + MoveIndexTokenTag
 
-const StartPhaseBeginTimeout = 60
-const RebalanceTokenWaitTimeout = 60
-
 type RebalSource byte
 
 const (

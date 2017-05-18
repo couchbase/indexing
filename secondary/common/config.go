@@ -572,7 +572,7 @@ var SystemConfig = Config{
 		true,  // immutable
 		false, // case-insensitive
 	},
-	"queryport.client.backfillLimit": ConfigValue{
+	"queryport.client.settings.backfillLimit": ConfigValue{
 		5 * 1024, // 5GB
 		"limit in mega-bytes to cap n1ql side backfilling, if ZERO backfill " +
 			"will be disabled.",
@@ -901,6 +901,20 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.plasma.useCompression": ConfigValue{
+		true,
+		"Enable compression for plasma",
+		true,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.persistenceCPUPercent": ConfigValue{
+		50,
+		"Percentage of cpu used for persistence",
+		50,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.plasma.LSSSegmentFileSize": ConfigValue{
 		4294967296,
 		"LSS log segment maxsize per file",
@@ -1071,9 +1085,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.mutation_manager.fdb.fracMutationQueueMem": ConfigValue{
-		0.25,
+		0.2,
 		"Fraction of memory_quota allocated to Mutation Queue",
-		0.25,
+		0.2,
 		false, // mutable
 		false, // case-insensitive
 	},
@@ -1511,6 +1525,20 @@ var SystemConfig = Config{
 		uint64(10),
 		"max remaining build time(in seconds) before index state is switched to active",
 		uint64(10),
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.rebalance.globalTokenWaitTimeout": ConfigValue{
+		60,
+		"wait time(in seconds) for global rebalance token to be observed by all nodes",
+		60,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.rebalance.startPhaseBeginTimeout": ConfigValue{
+		60,
+		"wait time(in seconds) for Start Phase to begin after Prepare Phase",
+		60,
 		false, // mutable
 		false, // case-insensitive
 	},

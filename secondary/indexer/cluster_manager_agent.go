@@ -148,6 +148,8 @@ func (c *clustMgrAgent) handleUpdateTopologyForIndex(cmd Message) {
 
 	indexList := cmd.(*MsgClustMgrUpdate).GetIndexList()
 	updatedFields := cmd.(*MsgClustMgrUpdate).GetUpdatedFields()
+	syncUpdate := cmd.(*MsgClustMgrUpdate).GetIsSyncUpdate()
+	respCh := cmd.(*MsgClustMgrUpdate).GetRespCh()
 
 	updatedState := common.INDEX_STATE_NIL
 	updatedStream := common.NIL_STREAM
@@ -171,8 +173,17 @@ func (c *clustMgrAgent) handleUpdateTopologyForIndex(cmd Message) {
 
 		updatedBuildTs := index.BuildTs
 
-		err := c.mgr.UpdateIndexInstance(index.Defn.Bucket, index.Defn.DefnId,
-			updatedState, updatedStream, updatedError, updatedBuildTs, updatedRState)
+		var err error
+		if syncUpdate {
+			go func() {
+				err = c.mgr.UpdateIndexInstanceSync(index.Defn.Bucket, index.Defn.DefnId,
+					updatedState, updatedStream, updatedError, updatedBuildTs, updatedRState)
+				respCh <- err
+			}()
+		} else {
+			err = c.mgr.UpdateIndexInstance(index.Defn.Bucket, index.Defn.DefnId,
+				updatedState, updatedStream, updatedError, updatedBuildTs, updatedRState)
+		}
 		common.CrashOnError(err)
 	}
 

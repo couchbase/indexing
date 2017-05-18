@@ -592,27 +592,15 @@ func runMultiScanCountWithIndex(indexName string, fields []string, scans qc.Scan
 	var bucketName = "default"
 	log.Printf("\n--- %v ---", scenario)
 
-	docScanResults := datautility.ExpectedMultiScanResponse(docs, fields, scans, reverse, distinct, projection, offset, limit, isScanAll)
-	scanResults, err := secondaryindex.Scans(indexName, bucketName, indexScanAddress, scans, reverse, distinct, projection, offset, limit, c.SessionConsistency, nil)
-	FailTestIfError(err, "Error in scan", t)
+	expectedCount := datautility.ExpectedMultiScanCount(docs, fields, scans, reverse, distinct, isScanAll)
 
 	multiScanCount, err := secondaryindex.MultiScanCount(indexName, bucketName, indexScanAddress, scans, distinct, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan count", t)
 
-	log.Printf("len(scanResults) = %v MultiScanCount = %v", len(scanResults), multiScanCount)
-	if len(scanResults) != int(multiScanCount) {
-		msg := fmt.Sprintf("MultiScanCount not same as results from MultiScan")
-		FailTestIfError(errors.New(msg), "Error in scan result validation", t)
-	}
-
-	if validateOnlyCount {
-		if len(scanResults) != len(docScanResults) {
-			msg := fmt.Sprintf("Length of expected results %v is not equal to length of scan results", len(docScanResults), len(scanResults))
-			FailTestIfError(errors.New(msg), "Error in scan result validation", t)
-		}
-	} else {
-		err = tv.Validate(docScanResults, scanResults)
-		FailTestIfError(err, "Error in scan result validation", t)
+	log.Printf("MultiScanCount = %v ExpctedMultiScanCount = %v", multiScanCount, expectedCount)
+	if expectedCount != int(multiScanCount) {
+		msg := fmt.Sprintf("Actual and expected MultiScanCount do not match")
+		FailTestIfError(errors.New(msg), "Error in multiscancount result validation", t)
 	}
 }
 

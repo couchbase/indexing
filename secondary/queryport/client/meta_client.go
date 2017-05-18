@@ -239,7 +239,7 @@ func (b *metadataClient) MoveIndex(defnID uint64, planJSON map[string]interface{
 
 	bodybuf := bytes.NewBuffer(body)
 
-	url := "/moveIndex"
+	url := "/moveIndexInternal"
 	resp, err := postWithAuth(httpport+url, "application/json", bodybuf, timeout)
 	if err != nil {
 		errStr := fmt.Sprintf("Error communicating with index node %v. Reason %v", httpport, err)

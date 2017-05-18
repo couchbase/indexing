@@ -132,6 +132,9 @@ func (s *IndexScanSource) Routine() error {
 		}
 
 		if !r.isPrimary && r.Indexprojection != nil && r.Indexprojection.projectSecKeys {
+			if ck == nil && len(entry) > cap(*buf) {
+				*buf = make([]byte, 0, len(entry)+1024)
+			}
 			entry, err = projectKeys(ck, entry, (*buf)[:0], r.Indexprojection)
 			if err != nil {
 				return err
@@ -435,6 +438,9 @@ func projectKeys(compositekeys [][]byte, key, buf []byte, projection *Projection
 			keysToJoin = append(keysToJoin, compositekeys[i])
 		}
 	}
+	// Note: Reusing the same buf used for Explode in JoinArray as well
+	// This is because we always project in order and hence avoiding two
+	// different buffers for Explode and Join
 	if buf, err = codec.JoinArray(keysToJoin, buf); err != nil {
 		return nil, err
 	}
@@ -442,4 +448,29 @@ func projectKeys(compositekeys [][]byte, key, buf []byte, projection *Projection
 	entry := secondaryIndexEntry(key)
 	buf = append(buf, key[entry.lenKey():]...)
 	return buf, nil
+}
+
+func projectLeadingKey(compositekeys [][]byte, key []byte, buf *[]byte) ([]byte, error) {
+	var err error
+
+	codec := collatejson.NewCodec(16)
+	if compositekeys == nil {
+		if len(key) > cap(*buf) {
+			*buf = make([]byte, 0, len(key)+RESIZE_PAD)
+		}
+		compositekeys, err = codec.ExplodeArray(key, (*buf)[:0])
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	var keysToJoin [][]byte
+	keysToJoin = append(keysToJoin, compositekeys[0])
+	if *buf, err = codec.JoinArray(keysToJoin, (*buf)[:0]); err != nil {
+		return nil, err
+	}
+
+	entry := secondaryIndexEntry(key)
+	*buf = append(*buf, key[entry.lenKey():]...)
+	return *buf, nil
 }

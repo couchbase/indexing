@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -171,7 +172,9 @@ func (slice *plasmaSlice) initStores() error {
 	cfg.FlushBufferSize = int(slice.sysconf["plasma.flushBufferSize"].Int())
 	cfg.LSSLogSegmentSize = int64(slice.sysconf["plasma.LSSSegmentFileSize"].Int())
 	cfg.UseMmap = slice.sysconf["plasma.useMmapReads"].Bool()
+	cfg.UseCompression = slice.sysconf["plasma.useCompression"].Bool()
 	cfg.AutoSwapper = true
+	cfg.NumPersistorThreads = int(float32(runtime.NumCPU())*float32(slice.sysconf["plasma.persistenceCPUPercent"].Int())/(100*2) + 0.5)
 
 	var mCfg, bCfg plasma.Config
 
@@ -222,6 +225,8 @@ func (slice *plasmaSlice) initStores() error {
 		for i := 0; i < numReaders; i++ {
 			slice.readers <- slice.mainstore.NewReader()
 		}
+
+		slice.mainstore.SetLogPrefix(fmt.Sprintf("%s/%s/Mainstore ", slice.idxDefn.Bucket, slice.idxDefn.Name))
 	}()
 
 	if !slice.isPrimary {
@@ -239,6 +244,8 @@ func (slice *plasmaSlice) initStores() error {
 			for i := 0; i < slice.numWriters; i++ {
 				slice.back[i] = slice.backstore.NewWriter()
 			}
+
+			slice.backstore.SetLogPrefix(fmt.Sprintf("%s/%s/Backstore ", slice.idxDefn.Bucket, slice.idxDefn.Name))
 		}()
 	}
 
@@ -1424,6 +1431,7 @@ func (s *plasmaSnapshot) MultiScanCount(ctx IndexReaderContext, low, high IndexK
 	var scancount uint64
 	count := 1
 	checkDistinct := distinct && !s.isPrimary()
+	isIndexComposite := len(s.slice.idxDefn.SecExprs) > 1
 
 	buf := secKeyBufPool.Get()
 	defer secKeyBufPool.Put(buf)
@@ -1439,20 +1447,23 @@ func (s *plasmaSnapshot) MultiScanCount(ctx IndexReaderContext, low, high IndexK
 			return common.ErrClientCancel
 		default:
 			skipRow := false
+			var ck [][]byte
+
+			//get the key in original format
+			// TODO: ONLY if scan.ScanType == FilterRangeReq || (checkDistinct && isIndexComposite) {
+			if s.slice.idxDefn.Desc != nil {
+				revbuf := (*revbuf)[:0]
+				//copy is required, otherwise storage may get updated
+				revbuf = append(revbuf, entry...)
+				jsonEncoder.ReverseCollate(revbuf, s.slice.idxDefn.Desc)
+				entry = revbuf
+			}
 			if scan.ScanType == FilterRangeReq {
 				if len(entry) > cap(*buf) {
 					*buf = make([]byte, 0, len(entry)+RESIZE_PAD)
 				}
-				//get the key in original format
-				if s.slice.idxDefn.Desc != nil {
-					revbuf := (*revbuf)[:0]
-					//copy is required, otherwise storage may get updated
-					revbuf = append(revbuf, entry...)
-					jsonEncoder.ReverseCollate(revbuf, s.slice.idxDefn.Desc)
-					entry = revbuf
-				}
 
-				skipRow, _, err = filterScanRow(entry, scan, (*buf)[:0])
+				skipRow, ck, err = filterScanRow(entry, scan, (*buf)[:0])
 				if err != nil {
 					return err
 				}
@@ -1462,6 +1473,11 @@ func (s *plasmaSnapshot) MultiScanCount(ctx IndexReaderContext, low, high IndexK
 			}
 
 			if checkDistinct {
+				if isIndexComposite {
+					// For Count Distinct, only leading key needs to be considered for
+					// distinct comparison as N1QL syntax supports distinct on only single key
+					entry, err = projectLeadingKey(ck, entry, buf)
+				}
 				if len(previousRow) != 0 && distinctCompare(entry, previousRow) {
 					return nil // Ignore the entry as it is same as previous entry
 				}

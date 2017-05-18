@@ -1368,7 +1368,7 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 		//store updated state and streamId in meta store
 		if idx.enableManager {
 			if err := idx.updateMetaInfoForIndexList(instIdList, true,
-				true, false, true, true); err != nil {
+				true, false, true, true, false, nil); err != nil {
 				common.CrashOnError(err)
 			}
 		} else {
@@ -1797,7 +1797,7 @@ func (idx *indexer) handleMergeStreamAck(msg Message) {
 				instIdList = append(instIdList, inst.InstId)
 			}
 
-			if err := idx.updateMetaInfoForIndexList(instIdList, true, true, false, false, true); err != nil {
+			if err := idx.updateMetaInfoForIndexList(instIdList, true, true, false, false, true, false, nil); err != nil {
 				common.CrashOnError(err)
 			}
 		}
@@ -2496,6 +2496,13 @@ func (idx *indexer) handleCheckDDLInProgress(msg Message) {
 	ddlMsg := msg.(*MsgCheckDDLInProgress)
 	respCh := ddlMsg.GetRespCh()
 
+	respCh <- idx.checkDDLInProgress()
+
+	return
+}
+
+func (idx *indexer) checkDDLInProgress() bool {
+
 	ddlInProgress := false
 	for _, index := range idx.indexInstMap {
 
@@ -2505,10 +2512,7 @@ func (idx *indexer) handleCheckDDLInProgress(msg Message) {
 			ddlInProgress = true
 		}
 	}
-
-	respCh <- ddlInProgress
-
-	return
+	return ddlInProgress
 }
 
 func (idx *indexer) handleUpdateIndexRState(msg Message) {
@@ -2522,7 +2526,7 @@ func (idx *indexer) handleUpdateIndexRState(msg Message) {
 
 	if instId == 0 {
 		logging.Errorf("Indexer::handleUpdateIndexRState Unable to find Index For DefnId %v", defnId)
-		respCh <- false
+		respCh <- ErrInconsistentState
 		return
 	}
 
@@ -2530,11 +2534,10 @@ func (idx *indexer) handleUpdateIndexRState(msg Message) {
 	inst.RState = rstate
 	idx.indexInstMap[instId] = inst
 
-	if err := idx.updateMetaInfoForIndexList([]common.IndexInstId{instId}, false, false, false, false, true); err != nil {
+	if err := idx.updateMetaInfoForIndexList([]common.IndexInstId{instId}, false, false, false, false, true, true, respCh); err != nil {
 		common.CrashOnError(err)
 	}
 
-	respCh <- true
 }
 
 //TODO If this function gets error before its finished, the state
@@ -2604,7 +2607,7 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 		common.CrashOnError(err)
 	}
 
-	if err := idx.updateMetaInfoForIndexList(instIdList, true, true, false, false, true); err != nil {
+	if err := idx.updateMetaInfoForIndexList(instIdList, true, true, false, false, true, false, nil); err != nil {
 		common.CrashOnError(err)
 	}
 
@@ -3602,7 +3605,7 @@ func (idx *indexer) validateIndexInstMap() {
 					index.State = common.INDEX_STATE_READY
 					idx.indexInstMap[instId] = index
 
-					if err := idx.updateMetaInfoForIndexList([]common.IndexInstId{index.InstId}, true, false, false, false, true); err != nil {
+					if err := idx.updateMetaInfoForIndexList([]common.IndexInstId{index.InstId}, true, false, false, false, true, false, nil); err != nil {
 						common.CrashOnError(err)
 					}
 				}
@@ -3626,9 +3629,19 @@ func (idx *indexer) validateIndexInstMap() {
 		//only indexes in created, initial, catchup, active state
 		//are valid for recovery
 		if !isValidRecoveryState(index.State) {
-			logging.Warnf("Indexer::validateIndexInstMap \n\t State %v Not Recoverable. "+
+			logging.Warnf("Indexer::validateIndexInstMap State %v Not Recoverable. "+
 				"Not Recovering Index %v", index.State, index)
-			idx.cleanupIndexMetadata(index)
+
+			if index.State == common.INDEX_STATE_DELETED {
+				logging.Warnf("Indexer::validateIndexInstMap Found Index in State %v. "+
+					"Cleaning up Index Data %v", index.State, index)
+				err := idx.forceCleanupIndexData(&index, SliceId(0))
+				if err == nil {
+					idx.cleanupIndexMetadata(index)
+				}
+			} else {
+				idx.cleanupIndexMetadata(index)
+			}
 			delete(idx.indexInstMap, instId)
 			continue
 		}
@@ -3690,6 +3703,26 @@ func (idx *indexer) validateIndexInstMap() {
 
 }
 
+//force cleanup of index data should only be used when storage manager has not yet
+//been initialized
+func (idx *indexer) forceCleanupIndexData(inst *common.IndexInst, sliceId SliceId) error {
+
+	storage_dir := idx.config["storage_dir"].String()
+	path := filepath.Join(storage_dir, IndexPath(inst, sliceId))
+
+	logging.Infof("Indexer::forceCleanupIndexData Cleaning Up Slice Id %v, "+
+		"IndexInstId %v, IndexDefnId %v ", sliceId, inst.InstId, inst.Defn.DefnId)
+
+	//cleanup the disk directory
+	if err := os.RemoveAll(path); err != nil {
+		logging.Errorf("Indexer::forceCleanupIndexData Error Cleaning Up Slice Id %v, "+
+			"IndexInstId %v, IndexDefnId %v. Error %v", sliceId, inst.InstId, inst.Defn.DefnId, err)
+		return err
+	}
+	return nil
+
+}
+
 //On recovery, deleted indexes are ignored. There can be
 //a case where the last maint stream index was dropped and
 //indexer crashes while there is an index in Init stream.
@@ -3732,7 +3765,7 @@ func (idx *indexer) checkMissingMaintBucket() {
 
 		if idx.enableManager {
 			if err := idx.updateMetaInfoForIndexList(updatedList,
-				true, true, false, false, true); err != nil {
+				true, true, false, false, true, false, nil); err != nil {
 				common.CrashOnError(err)
 			}
 		}
@@ -3900,7 +3933,7 @@ func (idx *indexer) updateMetaInfoForBucket(bucket string,
 
 	if len(instIdList) != 0 {
 		return idx.updateMetaInfoForIndexList(instIdList, updateState,
-			updateStream, updateError, false, updateRState)
+			updateStream, updateError, false, updateRState, false, nil)
 	} else {
 		return nil
 	}
@@ -3909,7 +3942,8 @@ func (idx *indexer) updateMetaInfoForBucket(bucket string,
 
 func (idx *indexer) updateMetaInfoForIndexList(instIdList []common.IndexInstId,
 	updateState bool, updateStream bool, updateError bool,
-	updateBuildTs bool, updateRState bool) error {
+	updateBuildTs bool, updateRState bool, syncUpdate bool,
+	respCh chan error) error {
 
 	var indexList []common.IndexInst
 	for _, instId := range instIdList {
@@ -3927,7 +3961,9 @@ func (idx *indexer) updateMetaInfoForIndexList(instIdList []common.IndexInstId,
 	msg := &MsgClustMgrUpdate{
 		mType:         CLUST_MGR_UPDATE_TOPOLOGY_FOR_INDEX,
 		indexList:     indexList,
-		updatedFields: updatedFields}
+		updatedFields: updatedFields,
+		syncUpdate:    syncUpdate,
+		respCh:        respCh}
 
 	return idx.sendMsgToClusterMgr(msg)
 
@@ -3982,15 +4018,30 @@ func (idx *indexer) sendMsgToClusterMgr(msg Message) error {
 
 func (idx *indexer) handleSetLocalMeta(msg Message) {
 
-	idx.clustMgrAgentCmdCh <- msg
-	respMsg := <-idx.clustMgrAgentCmdCh
-
 	key := msg.(*MsgClustMgrLocal).GetKey()
 	value := msg.(*MsgClustMgrLocal).GetValue()
 
 	respch := msg.(*MsgClustMgrLocal).GetRespCh()
-	err := respMsg.(*MsgClustMgrLocal).GetError()
+	checkDDL := msg.(*MsgClustMgrLocal).GetCheckDDL()
 
+	if key == RebalanceRunning && checkDDL {
+		if idx.checkDDLInProgress() {
+			logging.Errorf("ServiceMgr::handleSetLocalMeta Found DDL Running. Key %v", key)
+			err := errors.New("indexer rebalance failure - ddl in progress")
+			respch <- &MsgClustMgrLocal{
+				mType: CLUST_MGR_SET_LOCAL,
+				key:   key,
+				value: value,
+				err:   err,
+			}
+			return
+		}
+	}
+
+	idx.clustMgrAgentCmdCh <- msg
+	respMsg := <-idx.clustMgrAgentCmdCh
+
+	err := respMsg.(*MsgClustMgrLocal).GetError()
 	if err == nil {
 		if key == RebalanceRunning {
 			idx.rebalanceRunning = true

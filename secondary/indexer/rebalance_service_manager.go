@@ -38,6 +38,7 @@ import (
 	"github.com/couchbase/indexing/secondary/fdb"
 	l "github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager"
+	"github.com/couchbase/indexing/secondary/manager/client"
 	"github.com/couchbase/indexing/secondary/planner"
 )
 
@@ -163,6 +164,7 @@ func (m *ServiceMgr) initService() {
 	http.HandleFunc("/listRebalanceTokens", m.handleListRebalanceTokens)
 	http.HandleFunc("/cleanupRebalance", m.handleCleanupRebalance)
 	http.HandleFunc("/moveIndex", m.handleMoveIndex)
+	http.HandleFunc("/moveIndexInternal", m.handleMoveIndexInternal)
 	http.HandleFunc("/nodeuuid", m.handleNodeuuid)
 }
 
@@ -594,7 +596,7 @@ func (m *ServiceMgr) startRebalance(change service.TopologyChange) error {
 			return errors.New("Protocol Conflict Error: Existing Rebalance Token Found")
 		}
 
-		err = m.initStartPhase()
+		err = m.initStartPhase(change)
 		if err != nil {
 			l.Errorf("ServiceMgr::startRebalance Error During Start Phase Init %v", err)
 			m.runCleanupPhaseLOCKED(RebalanceTokenPath, true)
@@ -718,7 +720,7 @@ func (m *ServiceMgr) checkExistingGlobalRToken() (*RebalanceToken, error) {
 
 func (m *ServiceMgr) initPreparePhaseRebalance() error {
 
-	err := m.registerRebalanceRunning()
+	err := m.registerRebalanceRunning(true)
 	if err != nil {
 		return err
 	}
@@ -733,7 +735,7 @@ func (m *ServiceMgr) initPreparePhaseRebalance() error {
 
 func (m *ServiceMgr) initPreparePhaseFailover() error {
 
-	err := m.registerRebalanceRunning()
+	err := m.registerRebalanceRunning(false)
 	if err != nil {
 		return err
 	}
@@ -1067,6 +1069,9 @@ func (m *ServiceMgr) cleanupLocalRToken() error {
 
 func (m *ServiceMgr) monitorStartPhaseInit(stopch StopChannel) error {
 
+	cfg := m.config.Load()
+	startPhaseBeginTimeout := cfg["rebalance.startPhaseBeginTimeout"].Int()
+
 	elapsed := 1
 	done := false
 loop:
@@ -1080,7 +1085,7 @@ loop:
 			func() {
 				m.mu.Lock()
 				defer m.mu.Unlock()
-				if m.rebalanceToken == nil && elapsed > StartPhaseBeginTimeout {
+				if m.rebalanceToken == nil && elapsed > startPhaseBeginTimeout {
 					l.Infof("ServiceMgr::monitorStartPhaseInit Timout Waiting for RebalanceToken. Cleanup Prepare Phase")
 					//TODO handle server side differently
 					m.runCleanupPhaseLOCKED(RebalanceTokenPath, false)
@@ -1132,7 +1137,7 @@ func (m *ServiceMgr) rebalanceJanitor() {
 
 }
 
-func (m *ServiceMgr) initStartPhase() error {
+func (m *ServiceMgr) initStartPhase(change service.TopologyChange) error {
 
 	var err error
 	if err = m.genRebalanceToken(); err != nil {
@@ -1147,7 +1152,7 @@ func (m *ServiceMgr) initStartPhase() error {
 		return err
 	}
 
-	if err = m.registerGlobalRebalanceToken(); err != nil {
+	if err = m.registerGlobalRebalanceToken(change); err != nil {
 		return err
 	}
 
@@ -1165,13 +1170,14 @@ func (m *ServiceMgr) genRebalanceToken() error {
 	return nil
 }
 
-func (m *ServiceMgr) registerRebalanceRunning() error {
+func (m *ServiceMgr) registerRebalanceRunning(checkDDL bool) error {
 	respch := make(MsgChannel)
 	m.supvMsgch <- &MsgClustMgrLocal{
-		mType:  CLUST_MGR_SET_LOCAL,
-		key:    RebalanceRunning,
-		value:  "",
-		respch: respch,
+		mType:    CLUST_MGR_SET_LOCAL,
+		key:      RebalanceRunning,
+		value:    "",
+		respch:   respch,
+		checkDDL: checkDDL,
 	}
 
 	respMsg := <-respch
@@ -1232,9 +1238,12 @@ func (m *ServiceMgr) registerRebalanceTokenInMetakv() error {
 
 func (m *ServiceMgr) observeGlobalRebalanceToken(rebalToken RebalanceToken) bool {
 
+	cfg := m.config.Load()
+	globalTokenWaitTimeout := cfg["rebalance.globalTokenWaitTimeout"].Int()
+
 	elapsed := 1
 
-	for elapsed < RebalanceTokenWaitTimeout {
+	for elapsed < globalTokenWaitTimeout {
 
 		var rtoken RebalanceToken
 		found, err := MetakvGet(RebalanceTokenPath, &rtoken)
@@ -1264,17 +1273,44 @@ func (m *ServiceMgr) observeGlobalRebalanceToken(rebalToken RebalanceToken) bool
 
 }
 
-func (m *ServiceMgr) registerGlobalRebalanceToken() error {
+func (m *ServiceMgr) registerGlobalRebalanceToken(change service.TopologyChange) error {
 
 	m.cinfo.Lock()
 	defer m.cinfo.Unlock()
 
-	if err := m.cinfo.Fetch(); err != nil {
-		l.Errorf("ServiceMgr::registerGlobalRebalanceToken Error Fetching Cluster Information %v", err)
+	var err error
+	var nids []c.NodeId
+
+	maxRetry := 10
+	valid := false
+	for i := 0; i <= maxRetry; i++ {
+
+		if i != 0 {
+			time.Sleep(2 * time.Second)
+		}
+
+		if err = m.cinfo.Fetch(); err != nil {
+			l.Errorf("ServiceMgr::registerGlobalRebalanceToken Error Fetching Cluster Information %v", err)
+			continue
+		}
+
+		nids = m.cinfo.GetNodesByServiceType(c.INDEX_HTTP_SERVICE)
+
+		allKnownNodes := len(change.KeepNodes) + len(change.EjectNodes)
+		if len(nids) != allKnownNodes {
+			err = errors.New("ClusterInfo Node List doesn't match Known Nodes in Rebalance Request")
+			l.Errorf("ServiceMgr::registerGlobalRebalanceToken %v Retrying %v", err, i)
+			continue
+		}
+		valid = true
+		break
+	}
+
+	if !valid {
+		l.Errorf("ServiceMgr::registerGlobalRebalanceToken cinfo %v change %v", m.cinfo, m.rebalanceCtx.change)
 		return err
 	}
 
-	nids := m.cinfo.GetNodesByServiceType(c.INDEX_HTTP_SERVICE)
 	url := "/registerRebalanceToken"
 
 	for _, nid := range nids {
@@ -1520,6 +1556,11 @@ func (m *ServiceMgr) cancelActualTaskLOCKED(task *service.Task) error {
 func (m *ServiceMgr) cancelPrepareTaskLOCKED() error {
 	if m.rebalancer != nil {
 		return service.ErrConflict
+	}
+
+	if m.monitorStopCh != nil {
+		close(m.monitorStopCh)
+		m.monitorStopCh = nil
 	}
 
 	m.updateStateLOCKED(func(s *state) {
@@ -1924,7 +1965,7 @@ func (m *ServiceMgr) processMoveIndex(path string, value []byte, rev interface{}
 			m.rebalanceRunning = true
 			m.rebalanceToken = &rebalToken
 			var err error
-			if err = m.registerRebalanceRunning(); err != nil {
+			if err = m.registerRebalanceRunning(true); err != nil {
 				m.runCleanupPhaseLOCKED(MoveIndexTokenPath, true)
 				return nil
 			}
@@ -1951,47 +1992,125 @@ func (m *ServiceMgr) handleMoveIndex(w http.ResponseWriter, r *http.Request) {
 
 	if r.Method == "POST" {
 		bytes, _ := ioutil.ReadAll(r.Body)
-		var req manager.IndexRequest
-		if err := json.Unmarshal(bytes, &req); err != nil {
-			l.Errorf("ServiceMgr::handleMoveIndex %v", err)
-			sendIndexResponseWithError(http.StatusBadRequest, w, err.Error())
+		in := make(map[string]interface{})
+		if err := json.Unmarshal(bytes, &in); err != nil {
+			send(http.StatusBadRequest, w, err.Error())
 			return
 		}
 
-		l.Infof("ServiceMgr::handleMoveIndex %v", req)
+		var bucket, index string
+		var ok bool
+		var nodes interface{}
 
-		nodes, err := validateMoveIndexReq(&req)
-		if err != nil {
-			l.Errorf("ServiceMgr::handleMoveIndex %v", err)
-			sendIndexResponseWithError(http.StatusBadRequest, w, err.Error())
+		if bucket, ok = in["bucket"].(string); !ok {
+			send(http.StatusBadRequest, w, "Bad Request - Bucket Information Missing")
 			return
 		}
 
-		err, noop := m.initMoveIndex(&req, nodes)
-		if err != nil {
-			l.Errorf("ServiceMgr::handleMoveIndex %v %v", err, m.rebalanceToken)
-			sendIndexResponseWithError(http.StatusInternalServerError, w, err.Error())
+		if index, ok = in["index"].(string); !ok {
+			send(http.StatusBadRequest, w, "Bad Request - Index Information Missing")
 			return
-		} else if noop {
-			warnStr := "No Index Movement Required for Specified Destination List"
-			l.Warnf("ServiceMgr::handleMoveIndex %v", warnStr)
-			sendIndexResponseWithError(http.StatusBadRequest, w, warnStr)
-			return
-		} else {
-			select {
+		}
 
-			case err := <-m.moveStatusCh:
-				if err != nil {
-					sendIndexResponseWithError(http.StatusInternalServerError, w, err.Error())
-				} else {
-					sendIndexResponse(w)
-				}
+		if nodes, ok = in["nodes"]; !ok {
+			send(http.StatusBadRequest, w, "Bad Request - Nodes Information Missing")
+			return
+		}
+
+		topology, err := m.getGlobalTopology()
+		if err != nil {
+			send(http.StatusInternalServerError, w, err.Error())
+			return
+		}
+
+		var defn *manager.IndexDefnDistribution
+		for _, localMeta := range topology.Metadata {
+			bTopology := findTopologyByBucket(localMeta.IndexTopologies, bucket)
+			if bTopology != nil {
+				defn = bTopology.FindIndexDefinition(bucket, index)
 			}
+			if defn != nil {
+				break
+			}
+		}
+		if defn == nil {
+			err := errors.New(fmt.Sprintf("Fail to find index definition for bucket %v index %v.", bucket, index))
+			l.Errorf("ServiceMgr::handleMoveIndex %v", err)
+			send(http.StatusInternalServerError, w, err.Error())
 			return
 		}
+
+		var req manager.IndexRequest
+
+		idList := client.IndexIdList{DefnIds: []uint64{defn.DefnId}}
+		plan := make(map[string]interface{})
+		plan["nodes"] = nodes
+
+		req = manager.IndexRequest{IndexIds: idList, Plan: plan}
+
+		code, errStr := m.doHandleMoveIndex(&req)
+		send(code, w, errStr)
 	} else {
 		sendIndexResponseWithError(http.StatusBadRequest, w, "Unsupported method")
 		return
+	}
+}
+func (m *ServiceMgr) handleMoveIndexInternal(w http.ResponseWriter, r *http.Request) {
+
+	if !m.validateAuth(w, r) {
+		l.Errorf("ServiceMgr::handleMoveIndexInternal Validation Failure for Request %v", r)
+		return
+	}
+
+	if r.Method == "POST" {
+		bytes, _ := ioutil.ReadAll(r.Body)
+		var req manager.IndexRequest
+		if err := json.Unmarshal(bytes, &req); err != nil {
+			l.Errorf("ServiceMgr::handleMoveIndexInternal %v", err)
+			sendIndexResponseWithError(http.StatusBadRequest, w, err.Error())
+			return
+		}
+
+		code, errStr := m.doHandleMoveIndex(&req)
+		if errStr != "" {
+			sendIndexResponseWithError(code, w, errStr)
+		} else {
+			sendIndexResponse(w)
+		}
+
+	} else {
+		sendIndexResponseWithError(http.StatusBadRequest, w, "Unsupported method")
+		return
+	}
+}
+
+func (m *ServiceMgr) doHandleMoveIndex(req *manager.IndexRequest) (int, string) {
+
+	l.Infof("ServiceMgr::doHandleMoveIndex %v", req)
+
+	nodes, err := validateMoveIndexReq(req)
+	if err != nil {
+		l.Errorf("ServiceMgr::doHandleMoveIndex %v", err)
+		return http.StatusBadRequest, err.Error()
+	}
+
+	err, noop := m.initMoveIndex(req, nodes)
+	if err != nil {
+		l.Errorf("ServiceMgr::doHandleMoveIndex %v %v", err, m.rebalanceToken)
+		return http.StatusInternalServerError, err.Error()
+	} else if noop {
+		warnStr := "No Index Movement Required for Specified Destination List"
+		l.Warnf("ServiceMgr::doHandleMoveIndex %v", warnStr)
+		return http.StatusBadRequest, warnStr
+	} else {
+		select {
+		case err := <-m.moveStatusCh:
+			if err != nil {
+				return http.StatusInternalServerError, err.Error()
+			} else {
+				return http.StatusOK, ""
+			}
+		}
 	}
 }
 
@@ -2022,7 +2141,7 @@ func (m *ServiceMgr) initMoveIndex(req *manager.IndexRequest, nodes []string) (e
 		return nil, true
 	}
 
-	if err = m.registerRebalanceRunning(); err != nil {
+	if err = m.registerRebalanceRunning(true); err != nil {
 		m.runCleanupPhaseLOCKED(MoveIndexTokenPath, false)
 		return err, false
 	}
