@@ -109,14 +109,14 @@ func TestMixedDatatypesRange_Float(t *testing.T) {
 	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{field}, false, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
-	docScanResults := datautility.ExpectedScanResponse_float64(docs, field, 100, 1000, 3)
+	docScanResults := datautility.ExpectedScanResponse_int64(docs, field, 100, 1000, 3)
 	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{100}, []interface{}{1000}, 3, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
 	log.Printf("Lengths of expected and actual scan results are:  %d and %d", len(docScanResults), len(scanResults))
 
-	docScanResults = datautility.ExpectedScanResponse_float64(docs, field, 1, 100, 2)
+	docScanResults = datautility.ExpectedScanResponse_int64(docs, field, 1, 100, 2)
 	scanResults, err = secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{1}, []interface{}{100}, 2, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
 	err = tv.Validate(docScanResults, scanResults)
@@ -435,7 +435,7 @@ func TestMultipleBuckets(t *testing.T) {
 	time.Sleep(3 * time.Second)
 
 	// Scan index of first bucket
-	docScanResults := datautility.ExpectedScanResponse_float64(bucketDocs[0], indexFields[0], 30, 50, 1)
+	docScanResults := datautility.ExpectedScanResponse_int64(bucketDocs[0], indexFields[0], 30, 50, 1)
 	scanResults, err := secondaryindex.Range(indexNames[0], bucketNames[0], indexScanAddress, []interface{}{30}, []interface{}{50}, 1, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan 1", t)
 	err = tv.Validate(docScanResults, scanResults)
@@ -529,7 +529,7 @@ func SkipTestSaslBucket(t *testing.T) {
 	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{field}, false, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
-	docScanResults := datautility.ExpectedScanResponse_float64(kvdocs, field, 35, 40, 1)
+	docScanResults := datautility.ExpectedScanResponse_int64(kvdocs, field, 35, 40, 1)
 	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{35}, []interface{}{40}, 1, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
 	err = tv.Validate(docScanResults, scanResults)
@@ -549,14 +549,14 @@ func generateJSONSMixedDatatype(numDocs int, fieldName string) tc.KeyValues {
 		num := randomNum(1, 5)
 		if num == 1 {
 			numberCount++
-			json[fieldName] = float64(randomNum(1, 10000))
+			json[fieldName] = int64(randomNum(1, 10000))
 		} else if num == 2 {
 			stringCount++
 			json[fieldName] = randString(randomNum(1, 20))
 		} else if num == 3 {
 			objCount++
 			streetJson := make(map[string]interface{})
-			streetJson["door"] = float64(randomNum(1, 1000))
+			streetJson["door"] = int64(randomNum(1, 1000))
 			streetJson["street"] = randString(randomNum(1, 20))
 			streetJson["city"] = randString(randomNum(1, 10))
 			json[fieldName] = streetJson

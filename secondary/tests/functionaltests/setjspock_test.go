@@ -963,29 +963,29 @@ func getSingleIndex_SimpleRanges_Overlapping() qc.Scans {
 
 func get3FieldsSingleSeek() qc.Scans {
 	scans := make(qc.Scans, 1)
-	eq := c.SecondaryKey([]interface{}{"SOLAREN", "Michele Yang", float64(25)})
+	eq := c.SecondaryKey([]interface{}{"SOLAREN", "Michele Yang", int64(25)})
 	scans[0] = &qc.Scan{Seek: eq}
 	return scans
 }
 
 func get3FieldsMultipleSeeks() qc.Scans {
 	scans := make(qc.Scans, 3)
-	eq := c.SecondaryKey([]interface{}{"RODEOLOGY", "Tasha Dodson", float64(23)})
+	eq := c.SecondaryKey([]interface{}{"RODEOLOGY", "Tasha Dodson", int64(23)})
 	scans[0] = &qc.Scan{Seek: eq}
-	eq = c.SecondaryKey([]interface{}{"NETROPIC", "Lillian Mcneil", float64(24)})
+	eq = c.SecondaryKey([]interface{}{"NETROPIC", "Lillian Mcneil", int64(24)})
 	scans[1] = &qc.Scan{Seek: eq}
-	eq = c.SecondaryKey([]interface{}{"ZYTREX", "Olga Patton", float64(29)})
+	eq = c.SecondaryKey([]interface{}{"ZYTREX", "Olga Patton", int64(29)})
 	scans[2] = &qc.Scan{Seek: eq}
 	return scans
 }
 
 func get3FieldsMultipleSeeks_Identical() qc.Scans {
 	scans := make(qc.Scans, 3)
-	eq := c.SecondaryKey([]interface{}{"RODEOLOGY", "Tasha Dodson", float64(23)})
+	eq := c.SecondaryKey([]interface{}{"RODEOLOGY", "Tasha Dodson", int64(23)})
 	scans[0] = &qc.Scan{Seek: eq}
-	eq = c.SecondaryKey([]interface{}{"NETROPIC", "Lillian Mcneil", float64(24)})
+	eq = c.SecondaryKey([]interface{}{"NETROPIC", "Lillian Mcneil", int64(24)})
 	scans[1] = &qc.Scan{Seek: eq}
-	eq = c.SecondaryKey([]interface{}{"RODEOLOGY", "Tasha Dodson", float64(23)})
+	eq = c.SecondaryKey([]interface{}{"RODEOLOGY", "Tasha Dodson", int64(23)})
 	scans[2] = &qc.Scan{Seek: eq}
 	return scans
 }

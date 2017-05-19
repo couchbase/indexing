@@ -4,11 +4,14 @@ import (
 	"errors"
 	"fmt"
 	c "github.com/couchbase/indexing/secondary/common"
+	qc "github.com/couchbase/indexing/secondary/queryport/client"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 	"github.com/couchbase/indexing/secondary/tests/framework/datautility"
+	"github.com/couchbase/indexing/secondary/tests/framework/kvutility"
 	"github.com/couchbase/indexing/secondary/tests/framework/secondaryindex"
 	tv "github.com/couchbase/indexing/secondary/tests/framework/validation"
 	"log"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -22,7 +25,7 @@ func TestSimpleIndex_FloatDataType(t *testing.T) {
 	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{"age"}, false, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
-	docScanResults := datautility.ExpectedScanResponse_float64(docs, "age", 35, 40, 1)
+	docScanResults := datautility.ExpectedScanResponse_int64(docs, "age", 35, 40, 1)
 	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{35}, []interface{}{40}, 1, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
 	err = tv.Validate(docScanResults, scanResults)
@@ -104,7 +107,7 @@ func TestBasicLookup(t *testing.T) {
 	FailTestIfError(err, "Error in scan result validation", t)
 }
 
-func TestIndexOnNonExistentField(t *testing.T) {
+/*func TestIndexOnNonExistentField(t *testing.T) {
 	log.Printf("In TestIndexOnNonExistentField()")
 	var indexName = "index_height"
 	var bucketName = "default"
@@ -117,7 +120,7 @@ func TestIndexOnNonExistentField(t *testing.T) {
 	FailTestIfError(err, "Error in scan", t)
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
-}
+}*/
 
 func TestIndexPartiallyMissingField(t *testing.T) {
 	log.Printf("In TestIndexPartiallyMissingField()")
@@ -161,7 +164,7 @@ func TestInclusionNeither(t *testing.T) {
 	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{"age"}, false, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
-	docScanResults := datautility.ExpectedScanResponse_float64(docs, "age", 32, 36, 0)
+	docScanResults := datautility.ExpectedScanResponse_int64(docs, "age", 32, 36, 0)
 	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{32}, []interface{}{36}, 0, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
 	err = tv.Validate(docScanResults, scanResults)
@@ -177,7 +180,7 @@ func TestInclusionLow(t *testing.T) {
 	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{"age"}, false, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
-	docScanResults := datautility.ExpectedScanResponse_float64(docs, "age", 32, 36, 1)
+	docScanResults := datautility.ExpectedScanResponse_int64(docs, "age", 32, 36, 1)
 	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{32}, []interface{}{36}, 1, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
 	err = tv.Validate(docScanResults, scanResults)
@@ -193,7 +196,7 @@ func TestInclusionHigh(t *testing.T) {
 	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{"age"}, false, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
-	docScanResults := datautility.ExpectedScanResponse_float64(docs, "age", 32, 36, 2)
+	docScanResults := datautility.ExpectedScanResponse_int64(docs, "age", 32, 36, 2)
 	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{32}, []interface{}{36}, 2, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
 	err = tv.Validate(docScanResults, scanResults)
@@ -209,7 +212,7 @@ func TestInclusionBoth(t *testing.T) {
 	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{"age"}, false, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
-	docScanResults := datautility.ExpectedScanResponse_float64(docs, "age", 32, 36, 3)
+	docScanResults := datautility.ExpectedScanResponse_int64(docs, "age", 32, 36, 3)
 	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{32}, []interface{}{36}, 3, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
 	err = tv.Validate(docScanResults, scanResults)
@@ -239,7 +242,7 @@ func TestNestedIndex_Float(t *testing.T) {
 	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{"address.streetaddress.floor"}, false, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
-	docScanResults := datautility.ExpectedScanResponse_float64(docs, "address.streetaddress.floor", 3, 6, 3)
+	docScanResults := datautility.ExpectedScanResponse_int64(docs, "address.streetaddress.floor", 3, 6, 3)
 	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{3}, []interface{}{6}, 3, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
 	err = tv.Validate(docScanResults, scanResults)
@@ -275,7 +278,7 @@ func TestLookupJsonObject(t *testing.T) {
 
 	value := map[string]interface{}{
 		"doornumber":   "12B",
-		"floor":        5.0,
+		"floor":        int64(5.0),
 		"buildingname": "Sterling Heights",
 		"streetname":   "Hill Street"}
 	docScanResults := datautility.ExpectedLookupResponse_json(docs, "address.streetaddress", value)
@@ -296,7 +299,7 @@ func TestLookupObjDifferentOrdering(t *testing.T) {
 	FailTestIfError(err, "Error in creating the index", t)
 
 	value := map[string]interface{}{
-		"floor":        5.0,
+		"floor":        int64(5.0),
 		"streetname":   "Hill Street",
 		"buildingname": "Sterling Heights",
 		"doornumber":   "12B"}
@@ -318,23 +321,23 @@ func TestRangeJsonObject(t *testing.T) {
 	FailTestIfError(err, "Error in creating the index", t)
 
 	low := map[string]interface{}{
-		"floor":        1.0,
+		"floor":        int64(1.0),
 		"streetname":   "AAA",
 		"buildingname": "AA",
 		"doornumber":   "AAAA"}
 	high := map[string]interface{}{
-		"floor":        9.0,
+		"floor":        int64(9.0),
 		"streetname":   "zzz",
 		"buildingname": "zz",
 		"doornumber":   "zzzz"}
 
 	value1 := map[string]interface{}{
-		"floor":        5.0,
+		"floor":        int64(5.0),
 		"streetname":   "Hill Street",
 		"buildingname": "Sterling Heights",
 		"doornumber":   "12B"}
 	value2 := map[string]interface{}{
-		"floor":        2.0,
+		"floor":        int64(2.0),
 		"streetname":   "Karweg Place",
 		"buildingname": "Rosewood Gardens",
 		"doornumber":   "514"}
@@ -349,7 +352,7 @@ func TestRangeJsonObject(t *testing.T) {
 	FailTestIfError(err, "Error in scan result validation", t)
 }
 
-func TestLookupFloatDiffForms(t *testing.T) {
+/*func TestLookupFloatDiffForms(t *testing.T) {
 	log.Printf("In TestLookupFloatDiffForms()")
 	var indexName = "index_latitude"
 	var bucketName = "default"
@@ -403,8 +406,9 @@ func TestLookupFloatDiffForms(t *testing.T) {
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
 }
+*/
 
-func TestRangeFloatInclVariations(t *testing.T) {
+/*func TestRangeFloatInclVariations(t *testing.T) {
 	log.Printf("In TestRangeFloatInclVariations()")
 	var indexName = "index_latitude"
 	var bucketName = "default"
@@ -459,7 +463,7 @@ func TestRangeFloatInclVariations(t *testing.T) {
 	FailTestIfError(err, "Error in scan", t)
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
-}
+}*/
 
 func TestScanAll(t *testing.T) {
 	log.Printf("In TestScanAll()")
@@ -741,7 +745,7 @@ func TestCountRange(t *testing.T) {
 	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{"age"}, false, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
-	docScanResults := datautility.ExpectedScanResponse_float64(docs, "age", 35, 40, 1)
+	docScanResults := datautility.ExpectedScanResponse_int64(docs, "age", 35, 40, 1)
 	rangeCount, err := secondaryindex.CountRange(indexName, bucketName, indexScanAddress, []interface{}{35}, []interface{}{40}, 1, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in CountRange: ", t)
 	log.Printf("Count of expected and actual Range is:  %d and %d", len(docScanResults), rangeCount)
@@ -750,7 +754,7 @@ func TestCountRange(t *testing.T) {
 		FailTestIfError(e, "Error in CountRange: ", t)
 	}
 
-	docScanResults = datautility.ExpectedScanResponse_float64(docs, "age", -10, 50, 2)
+	docScanResults = datautility.ExpectedScanResponse_int64(docs, "age", -10, 50, 2)
 	rangeCount, err = secondaryindex.CountRange(indexName, bucketName, indexScanAddress, []interface{}{-10}, []interface{}{50}, 2, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in CountRange: ", t)
 	log.Printf("Count of expected and actual Range is: %d and %d", len(docScanResults), rangeCount)
@@ -759,7 +763,7 @@ func TestCountRange(t *testing.T) {
 		FailTestIfError(e, "Error in CountRange: ", t)
 	}
 
-	docScanResults = datautility.ExpectedScanResponse_float64(docs, "age", 45, 46, 2)
+	docScanResults = datautility.ExpectedScanResponse_int64(docs, "age", 45, 46, 2)
 	rangeCount, err = secondaryindex.CountRange(indexName, bucketName, indexScanAddress, []interface{}{45}, []interface{}{46}, 2, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in CountRange: ", t)
 	log.Printf("Count of expected and actual Range are: %d and %d", len(docScanResults), rangeCount)
@@ -768,7 +772,7 @@ func TestCountRange(t *testing.T) {
 		FailTestIfError(e, "Error in CountRange: ", t)
 	}
 
-	docScanResults = datautility.ExpectedScanResponse_float64(docs, "age", 40, 50, 3)
+	docScanResults = datautility.ExpectedScanResponse_int64(docs, "age", 40, 50, 3)
 	rangeCount, err = secondaryindex.CountRange(indexName, bucketName, indexScanAddress, []interface{}{40}, []interface{}{50}, 3, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in CountRange: ", t)
 	log.Printf("Count of expected and actual Range are: %d and %d", len(docScanResults), rangeCount)
@@ -784,7 +788,7 @@ func TestCountRange(t *testing.T) {
 
 	// low is nil.  key <= 30
 	log.Printf("Testing CountRange() for key <= val")
-	docScanResults = datautility.ExpectedScanResponse_float64(docs, "age", -1000, 30, 2) // simulate low = nil
+	docScanResults = datautility.ExpectedScanResponse_int64(docs, "age", -1000, 30, 2) // simulate low = nil
 	rangeCount, err = secondaryindex.CountRange(indexName, bucketName, indexScanAddress, []interface{}{}, []interface{}{30}, 2, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in CountRange: ", t)
 	log.Printf("Count of expected and actual CountRange for key <= 30 are: %d and %d", len(docScanResults), rangeCount)
@@ -795,7 +799,7 @@ func TestCountRange(t *testing.T) {
 
 	// high is nil . key >= 25
 	log.Printf("Testing CountRange() for key >= val")
-	docScanResults = datautility.ExpectedScanResponse_float64(docs, "age", 25, 5000, 1) // simulate high = nil
+	docScanResults = datautility.ExpectedScanResponse_int64(docs, "age", 25, 5000, 1) // simulate high = nil
 	rangeCount, err = secondaryindex.CountRange(indexName, bucketName, indexScanAddress, []interface{}{25}, []interface{}{}, 1, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in CountRange: ", t)
 	log.Printf("Count of expected and actual CountRange for key >= 25 are: %d and %d", len(docScanResults), rangeCount)
@@ -806,7 +810,7 @@ func TestCountRange(t *testing.T) {
 
 	// low is null.  key > null and key <= 30
 	log.Printf("Testing CountRange() for null < key <= val")
-	docScanResults = datautility.ExpectedScanResponse_float64(docs, "age", -1000, 30, 2) // simulate low = null
+	docScanResults = datautility.ExpectedScanResponse_int64(docs, "age", -1000, 30, 2) // simulate low = null
 	rangeCount, err = secondaryindex.CountRange(indexName, bucketName, indexScanAddress, []interface{}{nil}, []interface{}{30}, 2, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in CountRange: ", t)
 	log.Printf("Count of expected and actual CountRange for key > null && key <= 30 are: %d and %d", len(docScanResults), rangeCount)
@@ -817,7 +821,7 @@ func TestCountRange(t *testing.T) {
 
 	// high is null . key >= 25 and key < null
 	log.Printf("Testing CountRange() for val <= key < null ")
-	docScanResults = datautility.ExpectedScanResponse_float64(docs, "age", 25, -1000, 1) // simulate high = null
+	docScanResults = datautility.ExpectedScanResponse_int64(docs, "age", 25, -1000, 1) // simulate high = null
 	rangeCount, err = secondaryindex.CountRange(indexName, bucketName, indexScanAddress, []interface{}{25}, []interface{}{nil}, 1, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in CountRange: ", t)
 	log.Printf("Count of expected and actual CountRange for key >= 25 && key < null are: %d and %d", len(docScanResults), rangeCount)
@@ -826,7 +830,7 @@ func TestCountRange(t *testing.T) {
 		FailTestIfError(e, "Error in CountRange: ", t)
 	}
 
-	docScanResults = datautility.ExpectedScanResponse_float64(docs, "age", 55, 45, 3)
+	docScanResults = datautility.ExpectedScanResponse_int64(docs, "age", 55, 45, 3)
 	rangeCount, err = secondaryindex.CountRange(indexName, bucketName, indexScanAddress, []interface{}{55}, []interface{}{45}, 3, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in CountRange: ", t)
 	log.Printf("Count of expected and actual Range are: %d and %d", len(docScanResults), rangeCount)
@@ -844,7 +848,7 @@ func TestCountLookup(t *testing.T) {
 	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{"age"}, false, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
-	docScanResults := datautility.ExpectedScanResponse_float64(docs, "age", 25, 25, 3)
+	docScanResults := datautility.ExpectedScanResponse_int64(docs, "age", 25, 25, 3)
 	rangeCount, err := secondaryindex.CountLookup(indexName, bucketName, indexScanAddress, []interface{}{25}, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in CountRange: ", t)
 	log.Printf("Count of expected and actual Range are: %d and %d", len(docScanResults), rangeCount)
@@ -853,7 +857,7 @@ func TestCountLookup(t *testing.T) {
 		FailTestIfError(e, "Error in CountRange: ", t)
 	}
 
-	docScanResults = datautility.ExpectedScanResponse_float64(docs, "age", 75, 75, 3)
+	docScanResults = datautility.ExpectedScanResponse_int64(docs, "age", 75, 75, 3)
 	rangeCount, err = secondaryindex.CountLookup(indexName, bucketName, indexScanAddress, []interface{}{75}, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in CountRange: ", t)
 	log.Printf("Count of expected and actual Range are: %d and %d", len(docScanResults), rangeCount)
@@ -882,7 +886,7 @@ func TestIndexCreateWithWhere(t *testing.T) {
 	err := secondaryindex.CreateSecondaryIndex(index1, bucketName, indexManagementAddress, `age>30`, []string{"age"}, false, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
-	docScanResults := datautility.ExpectedScanResponse_float64(docs, "age", 31, 40, 1)
+	docScanResults := datautility.ExpectedScanResponse_int64(docs, "age", 31, 40, 1)
 	scanResults, err := secondaryindex.Range(index1, bucketName, indexScanAddress, []interface{}{31}, []interface{}{40}, 1, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
 	err = tv.Validate(docScanResults, scanResults)
@@ -892,7 +896,7 @@ func TestIndexCreateWithWhere(t *testing.T) {
 	err = secondaryindex.CreateSecondaryIndex(index2, bucketName, indexManagementAddress, `age > 12 AND age < 20`, []string{"age"}, false, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
-	docScanResults = datautility.ExpectedScanResponse_float64(docs, "age", 12, 20, 0)
+	docScanResults = datautility.ExpectedScanResponse_int64(docs, "age", 12, 20, 0)
 	scanResults, err = secondaryindex.Range(index2, bucketName, indexScanAddress, []interface{}{12}, []interface{}{20}, 0, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
 	err = tv.Validate(docScanResults, scanResults)
@@ -902,7 +906,7 @@ func TestIndexCreateWithWhere(t *testing.T) {
 	err = secondaryindex.CreateSecondaryIndex(index3, bucketName, indexManagementAddress, `age >= 35 AND age <= 45`, []string{"age"}, false, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
-	docScanResults = datautility.ExpectedScanResponse_float64(docs, "age", 35, 45, 3)
+	docScanResults = datautility.ExpectedScanResponse_int64(docs, "age", 35, 45, 3)
 	scanResults, err = secondaryindex.ScanAll(index3, bucketName, indexScanAddress, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
 	err = tv.Validate(docScanResults, scanResults)
@@ -956,7 +960,7 @@ func TestCompositeIndex_NumAndString(t *testing.T) {
 	addDocIfNotPresentInKV("User22a44f1c-3f15-4ada-9cf5-6c24a7690a37")
 
 	docScanResults := make(tc.ScanResponse)
-	docScanResults["User22a44f1c-3f15-4ada-9cf5-6c24a7690a37"] = []interface{}{25.0, "ZIGGLES"}
+	docScanResults["User22a44f1c-3f15-4ada-9cf5-6c24a7690a37"] = []interface{}{int64(25.0), "ZIGGLES"}
 	scanResults, err = secondaryindex.Lookup(indexName, bucketName, indexScanAddress, []interface{}{25, "ZIGGLES"}, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
 	err = tv.Validate(docScanResults, scanResults)
@@ -979,4 +983,88 @@ func TestCompositeIndex_TwoNumberFields(t *testing.T) {
 		FailTestIfError(e, "Error in TestCompositeIndex", t)
 
 	}
+}
+
+func TestNumbers_Int64_Float64(t *testing.T) {
+	log.Printf("In TestNumbers_Int64_Float64()")
+
+	var bucketName = "default"
+	var index1 = "idx_numbertest"
+	fields := []string{"category"}
+
+	err := secondaryindex.CreateSecondaryIndex(index1, bucketName, indexManagementAddress, "", fields, false, nil, true, defaultIndexActiveTimeout, nil)
+	FailTestIfError(err, "Error in creating the index", t)
+
+	key := "K1"
+	vals := []int64{
+		8223372036854775807, 9007199254740992, -9007199254740992, 9007199254740993,
+		-9007199254740993, 10000000000000000, -10000000000000000, -9223372036854775808,
+		+6193000012643}
+
+	for i, val := range vals {
+		log.Printf("\n ==== Int64 test #%v", i)
+
+		docsToUpload := make(tc.KeyValues)
+		json := make(map[string]interface{})
+		json["category"] = val
+
+		docsToUpload[key+strconv.Itoa(i)] = json
+		kvutility.SetKeyValues(docsToUpload, "default", "", clusterconfig.KVAddress)
+
+		docScanResults := make(tc.ScanResponse)
+		docScanResults[key+strconv.Itoa(i)] = []interface{}{val}
+
+		scans := make(qc.Scans, 1)
+		filter1 := make([]*qc.CompositeElementFilter, 1)
+		filter1[0] = &qc.CompositeElementFilter{Low: val, High: val, Inclusion: qc.Inclusion(uint32(3))}
+		scans[0] = &qc.Scan{Filter: filter1}
+
+		scanResults, err := secondaryindex.Scans(index1, bucketName, indexScanAddress, scans, false, false, nil, 0, defaultlimit, c.SessionConsistency, nil)
+		FailTestIfError(err, "Error in scan", t)
+
+		err = tv.Validate(docScanResults, scanResults)
+		FailTestIfError(err, "Error in scan result validation", t)
+	}
+
+	floats := []float64{-4545847942.243530694698, 987987342342341.435435, -0.00008518, +1245.084}
+	// Values that wont work: 77777772222222222.000000004
+	for i, val := range floats {
+		log.Printf("\n ==== Float64 test #%v", i)
+
+		docsToUpload := make(tc.KeyValues)
+		json := make(map[string]interface{})
+		json["category"] = val
+
+		docsToUpload[key+strconv.Itoa(i)] = json
+		kvutility.SetKeyValues(docsToUpload, "default", "", clusterconfig.KVAddress)
+
+		docScanResults := make(tc.ScanResponse)
+		docScanResults[key+strconv.Itoa(i)] = []interface{}{val}
+
+		scans := make(qc.Scans, 1)
+		filter1 := make([]*qc.CompositeElementFilter, 1)
+		filter1[0] = &qc.CompositeElementFilter{Low: val, High: val, Inclusion: qc.Inclusion(uint32(3))}
+		scans[0] = &qc.Scan{Filter: filter1}
+
+		scanResults, err := secondaryindex.Scans(index1, bucketName, indexScanAddress, scans, false, false, nil, 0, defaultlimit, c.SessionConsistency, nil)
+		FailTestIfError(err, "Error in scan", t)
+
+		err = tv.Validate(docScanResults, scanResults)
+		FailTestIfError(err, "Error in scan result validation", t)
+	}
+
+	/*
+		// TODO: Add tests for multiple scans for testing sorting of ranges
+		scans := make(qc.Scans, 2)
+		filter1 := make([]*qc.CompositeElementFilter, 1)
+		filter1[0] = &qc.CompositeElementFilter{Low: -9007199254740993, High: 9007199254740993, Inclusion: qc.Inclusion(uint32(3))}
+		scans[0] = &qc.Scan{Filter: filter1}
+
+		filter2 := make([]*qc.CompositeElementFilter, 1)
+		filter2[0] = &qc.CompositeElementFilter{Low: 9007199254740992, High: 10000000000000000, Inclusion: qc.Inclusion(uint32(3))}
+		scans[1] = &qc.Scan{Filter: filter2}
+
+		_, err = secondaryindex.Scans(index1, bucketName, indexScanAddress, scans, false, false, nil, 0, defaultlimit, c.SessionConsistency, nil)
+		FailTestIfError(err, "Error in scan", t)
+	*/
 }

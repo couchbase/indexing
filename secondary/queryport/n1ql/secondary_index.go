@@ -1221,7 +1221,7 @@ func (stats *statistics) Bins() ([]datastore.Statistics, errors.Error) {
 func values2SKey(vals value.Values) c.SecondaryKey {
 	skey := make(c.SecondaryKey, 0, len(vals))
 	for _, val := range []value.Value(vals) {
-		skey = append(skey, val.Actual())
+		skey = append(skey, val.ActualForIndex())
 	}
 	return skey
 }
@@ -1457,13 +1457,13 @@ func n1qlrangestogsi(ranges []*datastore.Range2) []*qclient.CompositeElementFilt
 		if r.Low == nil {
 			l = c.MinUnbounded
 		} else {
-			l = r.Low.Actual()
+			l = r.Low.ActualForIndex()
 		}
 
 		if r.High == nil {
 			h = c.MaxUnbounded
 		} else {
-			h = r.High.Actual()
+			h = r.High.ActualForIndex()
 		}
 
 		incl := n1ql2GsiInclusion[r.Inclusion]

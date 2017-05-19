@@ -1,9 +1,9 @@
 package functionaltests
 
 import (
-	"encoding/json"
 	"flag"
 	"github.com/couchbase/cbauth"
+	json "github.com/couchbase/go_json"
 	"github.com/couchbase/indexing/secondary/logging"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 	"github.com/couchbase/indexing/secondary/tests/framework/datautility"
