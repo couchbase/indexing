@@ -357,7 +357,7 @@ func values2SKey(vals value.Values) c.SecondaryKey {
 	}
 	skey := make(c.SecondaryKey, 0, len(vals))
 	for _, val := range []value.Value(vals) {
-		skey = append(skey, val.Actual())
+		skey = append(skey, val.ActualForIndex())
 	}
 	return skey
 }

@@ -107,7 +107,7 @@ func TestBasicLookup(t *testing.T) {
 	FailTestIfError(err, "Error in scan result validation", t)
 }
 
-/*func TestIndexOnNonExistentField(t *testing.T) {
+func TestIndexOnNonExistentField(t *testing.T) {
 	log.Printf("In TestIndexOnNonExistentField()")
 	var indexName = "index_height"
 	var bucketName = "default"
@@ -120,7 +120,7 @@ func TestBasicLookup(t *testing.T) {
 	FailTestIfError(err, "Error in scan", t)
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
-}*/
+}
 
 func TestIndexPartiallyMissingField(t *testing.T) {
 	log.Printf("In TestIndexPartiallyMissingField()")
@@ -352,7 +352,7 @@ func TestRangeJsonObject(t *testing.T) {
 	FailTestIfError(err, "Error in scan result validation", t)
 }
 
-/*func TestLookupFloatDiffForms(t *testing.T) {
+func TestLookupFloatDiffForms(t *testing.T) {
 	log.Printf("In TestLookupFloatDiffForms()")
 	var indexName = "index_latitude"
 	var bucketName = "default"
@@ -406,9 +406,8 @@ func TestRangeJsonObject(t *testing.T) {
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
 }
-*/
 
-/*func TestRangeFloatInclVariations(t *testing.T) {
+func TestRangeFloatInclVariations(t *testing.T) {
 	log.Printf("In TestRangeFloatInclVariations()")
 	var indexName = "index_latitude"
 	var bucketName = "default"
@@ -463,7 +462,7 @@ func TestRangeJsonObject(t *testing.T) {
 	FailTestIfError(err, "Error in scan", t)
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
-}*/
+}
 
 func TestScanAll(t *testing.T) {
 	log.Printf("In TestScanAll()")
