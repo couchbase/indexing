@@ -1015,8 +1015,8 @@ func (mdb *plasmaSlice) resetStores() {
 }
 
 func (mdb *plasmaSlice) Rollback(o SnapshotInfo) error {
-	mdb.waitForPersistorThread()
 	mdb.waitPersist()
+	mdb.waitForPersistorThread()
 	qc := atomic.LoadInt64(&mdb.qCount)
 	if qc > 0 {
 		common.CrashOnError(errors.New("Slice Invariant Violation - rollback with pending mutations"))
@@ -1061,6 +1061,7 @@ func (mdb *plasmaSlice) restore(o SnapshotInfo) error {
 //RollbackToZero rollbacks the slice to initial state. Return error if
 //not possible
 func (mdb *plasmaSlice) RollbackToZero() error {
+	mdb.waitPersist()
 	mdb.waitForPersistorThread()
 	mdb.resetStores()
 	return nil

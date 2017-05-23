@@ -26,6 +26,58 @@ Default value is 0
 For lookup scenarios, use Inclusion 3 with low = high values.
 */
 
+func ExpectedScanResponse_int64(docs tc.KeyValues, jsonPath string, low, high int64, inclusion int64) tc.ScanResponse {
+	results := make(tc.ScanResponse)
+	fields := strings.Split(jsonPath, ".")
+	var json map[string]interface{}
+	var f string
+	var i int
+
+	for k, v := range docs {
+		// Access the nested field
+		json = v.(map[string]interface{})
+		for i = 0; i < len(fields)-1; i++ {
+			f = fields[i]
+			switch json[f].(type) {
+			case map[string]interface{}:
+				json = json[f].(map[string]interface{})
+			default:
+				break
+			}
+		}
+
+		switch json[fields[i]].(type) {
+		case int64:
+			field := json[fields[i]].(int64)
+			switch inclusion {
+			case 0:
+				if field > low && field < high {
+					results[k] = []interface{}{field}
+				}
+			case 1:
+				if field >= low && field < high {
+					results[k] = []interface{}{field}
+				}
+			case 2:
+				if field > low && field <= high {
+					results[k] = []interface{}{field}
+				}
+			case 3:
+				if field >= low && field <= high {
+					results[k] = []interface{}{field}
+				}
+			default:
+				if field > low && field < high {
+					results[k] = []interface{}{field}
+				}
+			}
+		default:
+		}
+	}
+
+	return results
+}
+
 func ExpectedScanResponse_float64(docs tc.KeyValues, jsonPath string, low, high float64, inclusion int64) tc.ScanResponse {
 	results := make(tc.ScanResponse)
 	fields := strings.Split(jsonPath, ".")

@@ -1,7 +1,7 @@
 package protobuf
 
 import "errors"
-import "encoding/json"
+import json "github.com/couchbase/go_json"
 
 import c "github.com/couchbase/indexing/secondary/common"
 import "github.com/golang/protobuf/proto"

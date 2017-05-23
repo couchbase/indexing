@@ -170,7 +170,7 @@ func TestSameIndexNameInTwoBuckets(t *testing.T) {
 	time.Sleep(3 * time.Second)
 
 	// Scan index of first bucket
-	docScanResults := datautility.ExpectedScanResponse_float64(bucketDocs[0], indexFields[0], 30, 50, 1)
+	docScanResults := datautility.ExpectedScanResponse_int64(bucketDocs[0], indexFields[0], 30, 50, 1)
 	scanResults, err := secondaryindex.Range(indexName, bucketNames[0], indexScanAddress, []interface{}{30}, []interface{}{50}, 1, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan 1", t)
 	err = tv.Validate(docScanResults, scanResults)

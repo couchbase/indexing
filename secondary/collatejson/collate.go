@@ -16,7 +16,7 @@
 package collatejson
 
 import "bytes"
-import "encoding/json"
+import json "github.com/couchbase/go_json"
 import "errors"
 import "strings"
 import "sort"
@@ -196,6 +196,17 @@ func (codec *Codec) json2code(val interface{}, code []byte) ([]byte, error) {
 			code = append(code, Terminator)
 		}
 
+	case int64:
+		code = append(code, TypeNumber)
+		var intStr string
+		var number Integer
+		intStr, err = number.ConvertToScientificNotation(value)
+		cs = EncodeFloat([]byte(intStr), code[1:])
+		if err == nil {
+			code = code[:len(code)+len(cs)]
+			code = append(code, Terminator)
+		}
+
 	case int:
 		code = append(code, TypeNumber)
 		cs = EncodeInt([]byte(strconv.Itoa(value)), code[1:])
@@ -315,6 +326,8 @@ func (codec *Codec) code2json(code, text []byte) ([]byte, []byte, error) {
 		ts = DecodeFloat(datum[1:], text)
 		ts, err = codec.denormalizeFloat(ts)
 		ts = bytes.TrimLeft(ts, "+")
+		var number Integer
+		ts = number.TryConvertFromScientificNotation(ts)
 		text = append(text, ts...)
 
 	case TypeString:
@@ -508,23 +521,32 @@ func (codec *Codec) n1ql2code(val n1ql.Value, code []byte) ([]byte, error) {
 	case n1ql.NULL:
 		code = append(code, TypeNull, Terminator)
 	case n1ql.BOOLEAN:
-		act := val.Actual().(bool)
+		act := val.ActualForIndex().(bool)
 		if act {
 			code = append(code, TypeTrue, Terminator)
 		} else {
 			code = append(code, TypeFalse, Terminator)
 		}
 	case n1ql.NUMBER:
-		act := val.Actual().(float64)
+		act := val.ActualForIndex()
 		code = append(code, TypeNumber)
-		cs, err = codec.normalizeFloat(act, code[1:])
+		var cs []byte
+		switch act.(type) {
+		case float64:
+			cs, err = codec.normalizeFloat(act.(float64), code[1:])
+		case int64:
+			var intStr string
+			var number Integer
+			intStr, err = number.ConvertToScientificNotation(act.(int64))
+			cs = EncodeFloat([]byte(intStr), code[1:])
+		}
 		if err == nil {
 			code = code[:len(code)+len(cs)]
 			code = append(code, Terminator)
 		}
 	case n1ql.STRING:
 		code = append(code, TypeString)
-		act := val.Actual().(string)
+		act := val.ActualForIndex().(string)
 		cs = suffixEncodeString([]byte(act), code[1:])
 		code = code[:len(code)+len(cs)]
 		code = append(code, Terminator)
@@ -532,7 +554,7 @@ func (codec *Codec) n1ql2code(val n1ql.Value, code []byte) ([]byte, error) {
 		code = append(code, TypeMissing)
 		code = append(code, Terminator)
 	case n1ql.ARRAY:
-		act := val.Actual().([]interface{})
+		act := val.ActualForIndex().([]interface{})
 		code = append(code, TypeArray)
 		if codec.arrayLenPrefix {
 			arrlen := Length(len(act))
@@ -553,7 +575,7 @@ func (codec *Codec) n1ql2code(val n1ql.Value, code []byte) ([]byte, error) {
 			code = append(code, Terminator)
 		}
 	case n1ql.OBJECT:
-		act := val.Actual().(map[string]interface{})
+		act := val.ActualForIndex().(map[string]interface{})
 		code = append(code, TypeObj)
 		if codec.propertyLenPrefix {
 			proplen := Length(len(act))
@@ -563,7 +585,7 @@ func (codec *Codec) n1ql2code(val n1ql.Value, code []byte) ([]byte, error) {
 		}
 
 		if err == nil {
-			keys := codec.sortProps(val.Actual().(map[string]interface{}))
+			keys := codec.sortProps(val.ActualForIndex().(map[string]interface{}))
 			for _, key := range keys {
 				l := len(code)
 				// encode key
@@ -598,4 +620,81 @@ func (codec *Codec) EncodeN1QLValue(val n1ql.Value, buf []byte) (bs []byte, err 
 		}
 	}()
 	return codec.n1ql2code(val, buf)
+}
+
+type Integer struct{}
+
+// Formats an int64 to scientic notation. Example:
+// 75284 converts to 7.5284e+04
+// 1200000 converts to 1.200000e+06
+// -612988654 converts to -6.12988654e+08
+// This is used in encode path
+func (i *Integer) ConvertToScientificNotation(val int64) (string, error) {
+	intStr := strconv.FormatInt(val, 10)
+	if len(intStr) == 0 {
+		return "", nil
+	}
+
+	format := func(str string) string {
+		var first, rem string
+		first = str[0:1]
+		if len(str) >= 2 {
+			rem = str[1:]
+		}
+		if len(rem) == 0 { // The integer is a single digit number
+			return first + ".e+00"
+		} else {
+			return first + "." + rem + "e+" + strconv.Itoa(len(rem))
+		}
+	}
+
+	var enotation string
+	sign := ""
+	if intStr[0:1] == "-" || intStr[0:1] == "+" { // The integer has a sign
+		sign = intStr[0:1]
+		enotation = format(intStr[1:])
+	} else {
+		enotation = format(intStr)
+	}
+
+	return sign + enotation, nil
+}
+
+// If float, return e notation
+// If integer, convert from e notation to standard notation
+// This is used in decode path
+func (i *Integer) TryConvertFromScientificNotation(val []byte) (ret []byte) {
+	defer func() {
+		if r := recover(); r != nil {
+			ret = val
+		}
+	}()
+
+	number := string(val)
+	sign := ""
+	if number[0:1] == "-" || number[0:1] == "+" {
+		sign = number[0:1]
+		number = number[1:]
+	}
+
+	decimalPos := strings.Index(number, ".")
+	ePos := strings.Index(number, "e")
+	characteristic := number[0:decimalPos]
+	mantissa := number[decimalPos+1 : ePos]
+
+	exp, err := strconv.ParseInt(number[ePos+1:], 10, 64)
+	if err != nil {
+		return val // error condition, return input format
+	}
+
+	if exp > 0 && (int(exp) == len(mantissa)) {
+		// It is an integer
+		if characteristic == "0" {
+			return []byte(sign + mantissa)
+		} else {
+			return []byte(sign + characteristic + mantissa)
+		}
+	}
+
+	return val
 }

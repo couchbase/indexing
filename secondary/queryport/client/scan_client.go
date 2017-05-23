@@ -15,7 +15,7 @@ import "fmt"
 import "io"
 import "net"
 import "time"
-import "encoding/json"
+import json "github.com/couchbase/go_json"
 import "sync/atomic"
 
 import "github.com/couchbase/indexing/secondary/logging"

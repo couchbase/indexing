@@ -62,7 +62,7 @@ func TestThreeIndexCreates(t *testing.T) {
 	log.Printf("Delete docs mutations")
 	DeleteDocs(150)
 
-	docScanResults = datautility.ExpectedScanResponse_float64(docs, "address.pin", 2222, 5555, 3)
+	docScanResults = datautility.ExpectedScanResponse_int64(docs, "address.pin", 2222, 5555, 3)
 	scanResults, err = secondaryindex.Range(i3, bucketName, indexScanAddress, []interface{}{2222}, []interface{}{5555}, 3, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
 	err = tv.Validate(docScanResults, scanResults)
@@ -245,7 +245,7 @@ func TestCreate2Drop1Scan2(t *testing.T) {
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
 
-	docScanResults = datautility.ExpectedScanResponse_float64(docs, "age", 30, 50, 1)
+	docScanResults = datautility.ExpectedScanResponse_int64(docs, "age", 30, 50, 1)
 	scanResults, err = secondaryindex.Range(index2, bucketName, indexScanAddress, []interface{}{30}, []interface{}{50}, 1, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan 2", t)
 	err = tv.Validate(docScanResults, scanResults)
@@ -253,7 +253,7 @@ func TestCreate2Drop1Scan2(t *testing.T) {
 
 	err = secondaryindex.DropSecondaryIndex(index1, bucketName, indexManagementAddress)
 
-	docScanResults = datautility.ExpectedScanResponse_float64(docs, "age", 0, 60, 1)
+	docScanResults = datautility.ExpectedScanResponse_int64(docs, "age", 0, 60, 1)
 	scanResults, err = secondaryindex.Range(index2, bucketName, indexScanAddress, []interface{}{0}, []interface{}{60}, 1, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan 2", t)
 	err = tv.Validate(docScanResults, scanResults)
@@ -268,7 +268,7 @@ func TestIndexNameCaseSensitivity(t *testing.T) {
 	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{"age"}, false, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
-	docScanResults := datautility.ExpectedScanResponse_float64(docs, "age", 35, 40, 1)
+	docScanResults := datautility.ExpectedScanResponse_int64(docs, "age", 35, 40, 1)
 	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{35}, []interface{}{40}, 1, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
 	err = tv.Validate(docScanResults, scanResults)

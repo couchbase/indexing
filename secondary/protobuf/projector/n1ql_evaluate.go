@@ -89,7 +89,7 @@ func N1QLTransform(
 
 			array := make([]interface{}, 0, len(vector))
 			for _, item := range vector {
-				array = append(array, item.Actual())
+				array = append(array, item.ActualForIndex())
 			}
 			arrValue = append(arrValue, qvalue.NewValue([]qvalue.Value(vector)))
 		}

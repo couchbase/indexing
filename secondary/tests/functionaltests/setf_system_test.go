@@ -82,7 +82,7 @@ func TestBuildDeferredAnotherBuilding(t *testing.T) {
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
 
-	docScanResults = datautility.ExpectedScanResponse_float64(docs, "age", 30, 50, 1)
+	docScanResults = datautility.ExpectedScanResponse_int64(docs, "age", 30, 50, 1)
 	scanResults, err = secondaryindex.Range(index2, bucketName, indexScanAddress, []interface{}{30}, []interface{}{50}, 1, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
 	err = tv.Validate(docScanResults, scanResults)
@@ -260,7 +260,7 @@ func TestMultipleDeferredIndexes_BuildTogether(t *testing.T) {
 	err = secondaryindex.BuildIndexes([]string{index2, index3, index4}, bucketName, indexManagementAddress, defaultIndexActiveTimeout)
 	FailTestIfError(err, "Error in deferred index build", t)
 
-	docScanResults := datautility.ExpectedScanResponse_float64(docs, "age", 30, 50, 1)
+	docScanResults := datautility.ExpectedScanResponse_int64(docs, "age", 30, 50, 1)
 	scanResults, err := secondaryindex.Range(index2, bucketName, indexScanAddress, []interface{}{30}, []interface{}{50}, 1, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
 	err = tv.Validate(docScanResults, scanResults)
@@ -324,7 +324,7 @@ func TestMultipleDeferredIndexes_BuildOneByOne(t *testing.T) {
 	err = secondaryindex.BuildIndexes([]string{index4}, bucketName, indexManagementAddress, defaultIndexActiveTimeout)
 	FailTestIfError(err, "Error in deferred index build", t)
 
-	docScanResults := datautility.ExpectedScanResponse_float64(docs, "age", 30, 50, 1)
+	docScanResults := datautility.ExpectedScanResponse_int64(docs, "age", 30, 50, 1)
 	scanResults, err := secondaryindex.Range(index2, bucketName, indexScanAddress, []interface{}{30}, []interface{}{50}, 1, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
 	err = tv.Validate(docScanResults, scanResults)
@@ -408,7 +408,7 @@ func TestDropDeferredIndexWhileOthersBuilding(t *testing.T) {
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
 
-	docScanResults = datautility.ExpectedScanResponse_float64(docs, "age", 34, 35, 1)
+	docScanResults = datautility.ExpectedScanResponse_int64(docs, "age", 34, 35, 1)
 	scanResults, err = secondaryindex.Range(index2, bucketName, indexScanAddress, []interface{}{34}, []interface{}{35}, 1, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan index2", t)
 	err = tv.Validate(docScanResults, scanResults)
@@ -622,7 +622,7 @@ func TestDropOneIndexSecondDeferBuilding(t *testing.T) {
 	err = secondaryindex.BuildIndexes([]string{index3}, bucketName, indexManagementAddress, defaultIndexActiveTimeout)
 	FailTestIfError(err, "Error in deferred index build index3", t)
 
-	docScanResults := datautility.ExpectedScanResponse_float64(docs, "age", 34, 45, 1)
+	docScanResults := datautility.ExpectedScanResponse_int64(docs, "age", 34, 45, 1)
 	scanResults, err := secondaryindex.Range(index2, bucketName, indexScanAddress, []interface{}{34}, []interface{}{45}, 1, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan index2", t)
 	err = tv.Validate(docScanResults, scanResults)
@@ -740,7 +740,7 @@ func TestDropBuildingIndex1(t *testing.T) {
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
 
-	docScanResults = datautility.ExpectedScanResponse_float64(docs, "age", 30, 45, 1)
+	docScanResults = datautility.ExpectedScanResponse_int64(docs, "age", 30, 45, 1)
 	scanResults, err = secondaryindex.Range(index2, bucketName, indexScanAddress, []interface{}{30}, []interface{}{45}, 1, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan index2", t)
 	err = tv.Validate(docScanResults, scanResults)
@@ -797,7 +797,7 @@ func TestDropBuildingIndex2(t *testing.T) {
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
 
-	docScanResults = datautility.ExpectedScanResponse_float64(docs, "age", 30, 45, 1)
+	docScanResults = datautility.ExpectedScanResponse_int64(docs, "age", 30, 45, 1)
 	scanResults, err = secondaryindex.Range(index2, bucketName, indexScanAddress, []interface{}{30}, []interface{}{45}, 1, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan index2", t)
 	err = tv.Validate(docScanResults, scanResults)
@@ -848,7 +848,7 @@ func TestDropIndexWithDataLoad(t *testing.T) {
 	go LoadKVBucket(&wg, t, docsToCreate, bucketName, "")
 	wg.Wait()
 
-	docScanResults := datautility.ExpectedScanResponse_float64(docs, "age", 30, 45, 1)
+	docScanResults := datautility.ExpectedScanResponse_int64(docs, "age", 30, 45, 1)
 	scanResults, err := secondaryindex.Range(index2, bucketName, indexScanAddress, []interface{}{30}, []interface{}{45}, 1, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan index2", t)
 	err = tv.Validate(docScanResults, scanResults)
@@ -1085,7 +1085,7 @@ func TestDeleteBucketWhileInitialIndexBuild(t *testing.T) {
 	}
 
 	// Scan index of first bucket
-	docScanResults := datautility.ExpectedScanResponse_float64(bucketDocs[0], indexFields[0], 30, 50, 1)
+	docScanResults := datautility.ExpectedScanResponse_int64(bucketDocs[0], indexFields[0], 30, 50, 1)
 	scanResults, err := secondaryindex.Range(indexNames[0], bucketNames[0], indexScanAddress, []interface{}{30}, []interface{}{50}, 1, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan 1", t)
 	err = tv.Validate(docScanResults, scanResults)
@@ -1100,7 +1100,7 @@ func TestDeleteBucketWhileInitialIndexBuild(t *testing.T) {
 	kvutility.DeleteBucket(bucketNames[3], "", clusterconfig.Username, clusterconfig.Password, kvaddress)
 
 	// Scan index of first bucket
-	docScanResults = datautility.ExpectedScanResponse_float64(bucketDocs[0], indexFields[0], 30, 50, 1)
+	docScanResults = datautility.ExpectedScanResponse_int64(bucketDocs[0], indexFields[0], 30, 50, 1)
 	scanResults, err = secondaryindex.Range(indexNames[0], bucketNames[0], indexScanAddress, []interface{}{30}, []interface{}{50}, 1, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan 1", t)
 	err = tv.Validate(docScanResults, scanResults)
@@ -1154,7 +1154,7 @@ func TestWherClause_UpdateDocument(t *testing.T) {
 	err := secondaryindex.CreateSecondaryIndex(index1, bucketName, indexManagementAddress, `age>40`, []string{"age"}, false, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
-	docScanResults := datautility.ExpectedScanResponse_float64(docs, "age", 40, 1000, 2)
+	docScanResults := datautility.ExpectedScanResponse_int64(docs, "age", 40, 1000, 2)
 	scanResults, err := secondaryindex.ScanAll(index1, bucketName, indexScanAddress, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan index1", t)
 	err = tv.Validate(docScanResults, scanResults)
@@ -1168,7 +1168,7 @@ func TestWherClause_UpdateDocument(t *testing.T) {
 			break
 		}
 		json := value.(map[string]interface{})
-		oldAge := json["age"].(float64)
+		oldAge := json["age"].(int64)
 		if oldAge > 40 {
 			json["age"] = 25
 			docs[key] = json
@@ -1178,7 +1178,7 @@ func TestWherClause_UpdateDocument(t *testing.T) {
 	}
 	kvutility.SetKeyValues(keysToBeUpdated, "default", "", clusterconfig.KVAddress)
 
-	docScanResults = datautility.ExpectedScanResponse_float64(docs, "age", 40, 1000, 2)
+	docScanResults = datautility.ExpectedScanResponse_int64(docs, "age", 40, 1000, 2)
 	scanResults, err = secondaryindex.ScanAll(index1, bucketName, indexScanAddress, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan index1", t)
 	err = tv.Validate(docScanResults, scanResults)
