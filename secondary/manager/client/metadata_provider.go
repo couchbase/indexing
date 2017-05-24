@@ -381,7 +381,7 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 		}
 
 		if len(errStr) != 0 {
-			return c.IndexDefnId(0), errors.New(fmt.Sprintf("Fail to create index or replica on some or all indexer nodes.  Error=%s.", errStr)), false
+			return c.IndexDefnId(0), errors.New(fmt.Sprintf("Encounter errors during create index.  Error=%s.", errStr)), false
 		}
 	}
 
