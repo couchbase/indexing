@@ -381,7 +381,7 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 		}
 
 		if len(errStr) != 0 {
-			return c.IndexDefnId(0), errors.New(fmt.Sprintf("Fail to create index or replcia on some or all indexer nodes.  Error=%s.", errStr)), false
+			return c.IndexDefnId(0), errors.New(fmt.Sprintf("Fail to create index or replica on some or all indexer nodes.  Error=%s.", errStr)), false
 		}
 	}
 
@@ -752,7 +752,7 @@ RETRY1:
 		return nil, errors.New(fmt.Sprintf(stmt1, nodes)), true
 
 	} else if errCode == 3 {
-		stmt1 := "Fails to create index.  There are not enough indexer nodes to create index with replcia count of %v"
+		stmt1 := "Fails to create index.  There are not enough indexer nodes to create index with replica count of %v"
 		return nil, errors.New(fmt.Sprintf(stmt1, numReplica)), true
 	}
 
