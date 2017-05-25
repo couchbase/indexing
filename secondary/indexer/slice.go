@@ -44,3 +44,24 @@ type Slice interface {
 	IndexWriter
 	GetReaderContext() IndexReaderContext
 }
+
+// cursorCtx implements IndexReaderContext and is used
+// for tracking previous cursor key for multiple scans
+// for distinct rows
+type cursorCtx struct {
+	cursor *[]byte
+}
+
+func (ctx *cursorCtx) Init() {
+}
+
+func (ctx *cursorCtx) Done() {
+}
+
+func (ctx *cursorCtx) SetCursorKey(cur *[]byte) {
+	ctx.cursor = cur
+}
+
+func (ctx *cursorCtx) GetCursorKey() *[]byte {
+	return ctx.cursor
+}

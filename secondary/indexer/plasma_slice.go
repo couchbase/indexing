@@ -274,6 +274,7 @@ func (slice *plasmaSlice) initStores() error {
 type plasmaReaderCtx struct {
 	ch chan *plasma.Reader
 	r  *plasma.Reader
+	cursorCtx
 }
 
 func (ctx *plasmaReaderCtx) Init() {
@@ -1436,9 +1437,9 @@ func (s *plasmaSnapshot) MultiScanCount(ctx IndexReaderContext, low, high IndexK
 
 	buf := secKeyBufPool.Get()
 	defer secKeyBufPool.Put(buf)
-	buf2 := secKeyBufPool.Get()
-	defer secKeyBufPool.Put(buf2)
-	previousRow := (*buf2)[:0]
+
+	previousRow := ctx.GetCursorKey()
+
 	revbuf := secKeyBufPool.Get()
 	defer secKeyBufPool.Put(revbuf)
 
@@ -1479,7 +1480,7 @@ func (s *plasmaSnapshot) MultiScanCount(ctx IndexReaderContext, low, high IndexK
 					// distinct comparison as N1QL syntax supports distinct on only single key
 					entry, err = projectLeadingKey(ck, entry, buf)
 				}
-				if len(previousRow) != 0 && distinctCompare(entry, previousRow) {
+				if len(*previousRow) != 0 && distinctCompare(entry, *previousRow) {
 					return nil // Ignore the entry as it is same as previous entry
 				}
 			}
@@ -1491,7 +1492,7 @@ func (s *plasmaSnapshot) MultiScanCount(ctx IndexReaderContext, low, high IndexK
 
 			if checkDistinct {
 				scancount++
-				previousRow = append(previousRow[:0], entry...)
+				*previousRow = append((*previousRow)[:0], entry...)
 			} else {
 				scancount += uint64(count)
 			}

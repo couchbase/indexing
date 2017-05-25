@@ -1590,6 +1590,11 @@ func (s *scanCoordinator) handleMultiScanCountRequest(req *ScanRequest, w ScanRe
 	cancelCb.Run()
 	defer cancelCb.Done()
 
+	buf := secKeyBufPool.Get()
+	defer secKeyBufPool.Put(buf)
+	previousRow := (*buf)[:0]
+	req.ctx.SetCursorKey(&previousRow)
+
 	for _, scan := range req.Scans {
 		for _, s := range GetSliceSnapshots(is) {
 			var r uint64

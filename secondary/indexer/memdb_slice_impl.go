@@ -1122,7 +1122,7 @@ func (mdb *memdbSlice) UpdateConfig(cfg common.Config) {
 }
 
 func (mdb *memdbSlice) GetReaderContext() IndexReaderContext {
-	return nil
+	return &cursorCtx{}
 }
 
 func (mdb *memdbSlice) String() string {
@@ -1295,9 +1295,9 @@ func (s *memdbSnapshot) MultiScanCount(ctx IndexReaderContext, low, high IndexKe
 
 	buf := secKeyBufPool.Get()
 	defer secKeyBufPool.Put(buf)
-	buf2 := secKeyBufPool.Get()
-	defer secKeyBufPool.Put(buf2)
-	previousRow := (*buf2)[:0]
+
+	previousRow := ctx.GetCursorKey()
+
 	revbuf := secKeyBufPool.Get()
 	defer secKeyBufPool.Put(revbuf)
 
@@ -1338,7 +1338,7 @@ func (s *memdbSnapshot) MultiScanCount(ctx IndexReaderContext, low, high IndexKe
 					// distinct comparison as N1QL supports distinct on only single key
 					entry, err = projectLeadingKey(ck, entry, buf)
 				}
-				if len(previousRow) != 0 && distinctCompare(entry, previousRow) {
+				if len(*previousRow) != 0 && distinctCompare(entry, *previousRow) {
 					return nil // Ignore the entry as it is same as previous entry
 				}
 			}
@@ -1350,7 +1350,7 @@ func (s *memdbSnapshot) MultiScanCount(ctx IndexReaderContext, low, high IndexKe
 
 			if checkDistinct {
 				scancount++
-				previousRow = append(previousRow[:0], entry...)
+				*previousRow = append((*previousRow)[:0], entry...)
 			} else {
 				scancount += uint64(count)
 			}

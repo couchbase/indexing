@@ -165,6 +165,7 @@ func TestMultiScanCount(t *testing.T) {
 	runMultiScanCountWithIndex(index, fields, getOverlappingRanges(), false, true, nil, 0, defaultlimit, false, false, "OverlappingRanges", t)
 
 	runMultiScanCountWithIndex(index, fields, getNonOverlappingFilters(), false, true, nil, 0, defaultlimit, false, false, "NonOverlappingFilters", t)
+	runMultiScanCountWithIndex(index, fields, getNonOverlappingFilters2(), false, true, nil, 0, defaultlimit, false, false, "NonOverlappingFilters2", t)
 	runMultiScanCountWithIndex(index, fields, getOverlappingFilters(), false, true, nil, 0, defaultlimit, false, false, "OverlappingFilters", t)
 	runMultiScanCountWithIndex(index, fields, getBoundaryFilters(), false, true, nil, 0, defaultlimit, false, false, "BoundaryFilters", t)
 
@@ -597,7 +598,7 @@ func runMultiScanCountWithIndex(indexName string, fields []string, scans qc.Scan
 	multiScanCount, err := secondaryindex.MultiScanCount(indexName, bucketName, indexScanAddress, scans, distinct, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan count", t)
 
-	log.Printf("MultiScanCount = %v ExpctedMultiScanCount = %v", multiScanCount, expectedCount)
+	log.Printf("MultiScanCount = %v ExpectedMultiScanCount = %v", multiScanCount, expectedCount)
 	if expectedCount != int(multiScanCount) {
 		msg := fmt.Sprintf("Actual and expected MultiScanCount do not match")
 		FailTestIfError(errors.New(msg), "Error in multiscancount result validation", t)
@@ -791,6 +792,22 @@ func getNonOverlappingFilters() qc.Scans {
 	filter2 := make([]*qc.CompositeElementFilter, 2)
 	filter2[0] = &qc.CompositeElementFilter{Low: "S", High: "V", Inclusion: qc.Inclusion(uint32(2))}
 	filter2[1] = &qc.CompositeElementFilter{Low: "A", High: "C", Inclusion: qc.Inclusion(uint32(3))}
+	scans[1] = &qc.Scan{Filter: filter2}
+	return scans
+}
+
+// Noverlapping but first key is the same
+func getNonOverlappingFilters2() qc.Scans {
+	scans := make(qc.Scans, 2)
+	filter1 := make([]*qc.CompositeElementFilter, 2)
+	filter1[0] = &qc.CompositeElementFilter{Low: "DIGIAL", High: "DIGIAL", Inclusion: qc.Inclusion(uint32(3))}
+	filter1[1] = &qc.CompositeElementFilter{Low: "A", High: "D", Inclusion: qc.Inclusion(uint32(3))}
+
+	scans[0] = &qc.Scan{Filter: filter1}
+
+	filter2 := make([]*qc.CompositeElementFilter, 2)
+	filter2[0] = &qc.CompositeElementFilter{Low: "DIGIAL", High: "DIGIAL", Inclusion: qc.Inclusion(uint32(3))}
+	filter2[1] = &qc.CompositeElementFilter{Low: "M", High: "Z", Inclusion: qc.Inclusion(uint32(3))}
 	scans[1] = &qc.Scan{Filter: filter2}
 	return scans
 }
