@@ -381,7 +381,7 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 		}
 
 		if len(errStr) != 0 {
-			return c.IndexDefnId(0), errors.New(fmt.Sprintf("Fail to create index or replcia on some or all indexer nodes.  Error=%s.", errStr)), false
+			return c.IndexDefnId(0), errors.New(fmt.Sprintf("Encounter errors during create index.  Error=%s.", errStr)), false
 		}
 	}
 
@@ -752,7 +752,7 @@ RETRY1:
 		return nil, errors.New(fmt.Sprintf(stmt1, nodes)), true
 
 	} else if errCode == 3 {
-		stmt1 := "Fails to create index.  There are not enough indexer nodes to create index with replcia count of %v"
+		stmt1 := "Fails to create index.  There are not enough indexer nodes to create index with replica count of %v"
 		return nil, errors.New(fmt.Sprintf(stmt1, numReplica)), true
 	}
 
@@ -812,6 +812,7 @@ func (o *MetadataProvider) DropIndex(defnID c.IndexDefnId) error {
 func (o *MetadataProvider) BuildIndexes(defnIDs []c.IndexDefnId) error {
 
 	watcherIndexMap := make(map[c.IndexerId][]c.IndexDefnId)
+	watcherNodeMap := make(map[c.IndexerId]string)
 	defnList := ([]c.IndexDefnId)(nil)
 
 	for _, id := range defnIDs {
@@ -865,6 +866,7 @@ func (o *MetadataProvider) BuildIndexes(defnIDs []c.IndexDefnId) error {
 
 			if !found {
 				watcherIndexMap[indexerId] = append(watcherIndexMap[indexerId], id)
+				watcherNodeMap[indexerId] = watcher.getNodeAddr()
 			}
 		}
 	}
@@ -879,14 +881,10 @@ func (o *MetadataProvider) BuildIndexes(defnIDs []c.IndexDefnId) error {
 	errMap := make(map[string]bool)
 	for indexerId, idList := range watcherIndexMap {
 
-		watcher, err := o.findWatcherByIndexerId(indexerId)
+		watcher, err := o.findAliveWatcherByIndexerId(indexerId)
 		if err != nil {
-			meta := o.FindIndexIgnoreStatus(idList[0])
-			if meta != nil {
-				errMap[fmt.Sprintf("Cannot locate cluster node hosting Index %s.  Index build will retry in background.", meta.Definition.Name)] = true
-			} else {
-				errMap["Cannot locate cluster node hosting Index.  Index build will retry in background."] = true
-			}
+			errFmtStr := "Cannot reach node %v.  Index build will retry in background once network connection is re-established."
+			errMap[fmt.Sprintf(errFmtStr, watcherNodeMap[indexerId])] = true
 			continue
 		}
 
@@ -1360,6 +1358,19 @@ func (o *MetadataProvider) findWatcherByIndexerId(id c.IndexerId) (*watcher, err
 	}
 
 	return nil, errors.New(fmt.Sprintf("Cannot find watcher with IndexerId %v", id))
+}
+
+func (o *MetadataProvider) findAliveWatcherByIndexerId(id c.IndexerId) (*watcher, error) {
+	o.mutex.Lock()
+	defer o.mutex.Unlock()
+
+	for indexerId, watcher := range o.watchers {
+		if indexerId == id && watcher.isAliveNoLock() {
+			return watcher, nil
+		}
+	}
+
+	return nil, errors.New(fmt.Sprintf("Cannot find alive watcher with IndexerId %v", id))
 }
 
 func (o *MetadataProvider) findWatcherByNodeUUID(nodeUUID string) (*watcher, error) {
