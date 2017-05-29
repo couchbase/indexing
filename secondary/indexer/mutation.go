@@ -11,8 +11,9 @@ package indexer
 
 import (
 	"fmt"
-	"github.com/couchbase/indexing/secondary/common"
 	"sync"
+
+	"github.com/couchbase/indexing/secondary/common"
 )
 
 //MutationMeta represents meta information for a KV Mutation
@@ -36,6 +37,10 @@ func NewMutationMeta() *MutationMeta {
 
 func newMutationMeta() interface{} {
 	return &MutationMeta{}
+}
+
+func (m *MutationMeta) SetVBId(vbid int) {
+	m.vbucket = Vbucket(vbid)
 }
 
 func (m *MutationMeta) Clone() *MutationMeta {
