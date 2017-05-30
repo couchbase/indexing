@@ -1682,7 +1682,7 @@ func (fdb *fdbSlice) canRunCompaction(abortTime time.Time) bool {
 }
 
 func (fdb *fdbSlice) GetReaderContext() IndexReaderContext {
-	return nil
+	return &cursorCtx{}
 }
 
 func (fdb *fdbSlice) cancelCompact() {

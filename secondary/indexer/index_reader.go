@@ -78,4 +78,6 @@ type IndexReader interface {
 type IndexReaderContext interface {
 	Init()
 	Done()
+	SetCursorKey(cur *[]byte)
+	GetCursorKey() *[]byte
 }

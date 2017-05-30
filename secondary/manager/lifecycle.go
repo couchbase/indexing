@@ -561,6 +561,9 @@ func (m *LifecycleMgr) BuildIndexes(ids []common.IndexDefnId,
 			logging.Warnf("%v  Will try to build index now, but it will not be able to retry index build upon server restart.", msg)
 		}
 
+		// Reset any previous error
+		m.UpdateIndexInstance(defn.Bucket, id, common.INDEX_STATE_NIL, common.NIL_STREAM, "", nil, inst.RState)
+
 		found := false
 		for _, bucket := range buckets {
 			if bucket == defn.Bucket {
@@ -597,7 +600,10 @@ func (m *LifecycleMgr) BuildIndexes(ids []common.IndexDefnId,
 
 				inst, err := m.FindLocalIndexInst(defn.Bucket, defnId)
 				if inst != nil && err == nil {
-					m.UpdateIndexInstance(defn.Bucket, defnId, common.INDEX_STATE_NIL, common.NIL_STREAM, build_err.Error(), nil, inst.RState)
+					// only set error if the error cannot be retried
+					if !m.canRetryError(inst, build_err) {
+						m.UpdateIndexInstance(defn.Bucket, defnId, common.INDEX_STATE_NIL, common.NIL_STREAM, build_err.Error(), nil, inst.RState)
+					}
 
 				} else {
 					logging.Infof("LifecycleMgr.handleBuildIndexes() : Fail to persist error in index instance (%v, %v).",

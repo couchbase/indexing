@@ -175,6 +175,7 @@ func TestMultiScanDescCount(t *testing.T) {
 
 	runMultiScanCountWithIndex(index, fields, getSimpleRange(), false, true, nil, 0, defaultlimit, false, false, "SimpleRange", t)
 	runMultiScanCountWithIndex(index, fields, getNonOverlappingRanges(), false, true, nil, 0, defaultlimit, false, false, "NonOverlappingRanges", t)
+	runMultiScanCountWithIndex(index, fields, getNonOverlappingFilters2(), false, true, nil, 0, defaultlimit, false, false, "NonOverlappingFilters2", t)
 	runMultiScanCountWithIndex(index, fields, getOverlappingRanges(), false, true, nil, 0, defaultlimit, false, false, "OverlappingRanges", t)
 
 	runMultiScanCountWithIndex(index, fields, getNonOverlappingFilters(), false, true, nil, 0, defaultlimit, false, false, "NonOverlappingFilters", t)
