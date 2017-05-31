@@ -1006,6 +1006,11 @@ func (mdb *plasmaSlice) GetCommittedCount() uint64 {
 }
 
 func (mdb *plasmaSlice) resetStores() {
+	// Clear all readers
+	for i := 0; i < cap(mdb.readers); i++ {
+		<-mdb.readers
+	}
+
 	mdb.mainstore.Close()
 	if !mdb.isPrimary {
 		mdb.backstore.Close()
@@ -1076,11 +1081,6 @@ func (mdb *plasmaSlice) restore(o SnapshotInfo) error {
 func (mdb *plasmaSlice) RollbackToZero() error {
 	mdb.waitPersist()
 	mdb.waitForPersistorThread()
-
-	// Block all scan requests
-	for i := 0; i < cap(mdb.readers); i++ {
-		<-mdb.readers
-	}
 
 	mdb.resetStores()
 
@@ -1594,9 +1594,10 @@ func (s *plasmaSnapshot) Iterate(ctx IndexReaderContext, low, high IndexKey, inc
 
 	it, err := reader.r.NewSnapshotIterator(s.MainSnap)
 
-	// RollbackToZero: Reader from new instance, snapshot from old instance
+	// RollbackToZero: The current snapshot belongs to old plasma instance before reset
+	// Return results from nil snapshot. ie., return 0 items
 	if err == plasma.ErrInvalidSnapshot {
-		return ErrIndexRollback
+		return nil
 	}
 
 	defer it.Close()
