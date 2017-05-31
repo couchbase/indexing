@@ -69,7 +69,7 @@ type ScanRequest struct {
 	Stats       *IndexStats
 	IndexInst   common.IndexInst
 
-	ctx IndexReaderContext
+	Ctx IndexReaderContext
 
 	// user supplied
 	LowBytes, HighBytes []byte
@@ -1117,7 +1117,7 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 		defer s.mu.RUnlock()
 
 		stats := s.stats.Get()
-		indexInst, r.ctx, localErr = s.findIndexInstance(r.DefnID)
+		indexInst, r.Ctx, localErr = s.findIndexInstance(r.DefnID)
 		if localErr == nil {
 			r.isPrimary = indexInst.Defn.IsPrimary
 			r.IndexName, r.Bucket = indexInst.Defn.Name, indexInst.Defn.Bucket
@@ -1132,8 +1132,8 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 	}
 
 	defer func() {
-		if r.ctx != nil {
-			r.ctx.Init()
+		if r.Ctx != nil {
+			r.Ctx.Init()
 		}
 	}()
 
@@ -1419,8 +1419,8 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, conn net.Conn,
 
 	req, err := s.newRequest(protoReq, cancelCh)
 	defer func() {
-		if req.ctx != nil {
-			req.ctx.Done()
+		if req.Ctx != nil {
+			req.Ctx.Done()
 		}
 	}()
 
@@ -1555,11 +1555,11 @@ func (s *scanCoordinator) handleCountRequest(req *ScanRequest, w ScanResponseWri
 		var r uint64
 		snap := s.Snapshot()
 		if len(req.Keys) > 0 {
-			r, err = snap.CountLookup(req.ctx, req.Keys, stopch)
+			r, err = snap.CountLookup(req.Ctx, req.Keys, stopch)
 		} else if req.Low.Bytes() == nil && req.High.Bytes() == nil {
-			r, err = snap.CountTotal(req.ctx, stopch)
+			r, err = snap.CountTotal(req.Ctx, stopch)
 		} else {
-			r, err = snap.CountRange(req.ctx, req.Low, req.High, req.Incl, stopch)
+			r, err = snap.CountRange(req.Ctx, req.Low, req.High, req.Incl, stopch)
 		}
 
 		if err != nil {
@@ -1593,17 +1593,17 @@ func (s *scanCoordinator) handleMultiScanCountRequest(req *ScanRequest, w ScanRe
 	buf := secKeyBufPool.Get()
 	defer secKeyBufPool.Put(buf)
 	previousRow := (*buf)[:0]
-	req.ctx.SetCursorKey(&previousRow)
+	req.Ctx.SetCursorKey(&previousRow)
 
 	for _, scan := range req.Scans {
 		for _, s := range GetSliceSnapshots(is) {
 			var r uint64
 			snap := s.Snapshot()
 			if scan.ScanType == AllReq {
-				r, err = snap.MultiScanCount(req.ctx, MinIndexKey, MaxIndexKey, Both, scan, req.Distinct, stopch)
+				r, err = snap.MultiScanCount(req.Ctx, MinIndexKey, MaxIndexKey, Both, scan, req.Distinct, stopch)
 			} else if scan.ScanType == LookupReq || scan.ScanType == RangeReq ||
 				scan.ScanType == FilterRangeReq {
-				r, err = snap.MultiScanCount(req.ctx, scan.Low, scan.High, scan.Incl, scan, req.Distinct, stopch)
+				r, err = snap.MultiScanCount(req.Ctx, scan.Low, scan.High, scan.Incl, scan, req.Distinct, stopch)
 			}
 
 			if err != nil {
@@ -1642,7 +1642,7 @@ func (s *scanCoordinator) handleStatsRequest(req *ScanRequest, w ScanResponseWri
 		if req.Low.Bytes() == nil && req.Low.Bytes() == nil {
 			r, err = snap.StatCountTotal()
 		} else {
-			r, err = snap.CountRange(req.ctx, req.Low, req.High, req.Incl, stopch)
+			r, err = snap.CountRange(req.Ctx, req.Low, req.High, req.Incl, stopch)
 		}
 
 		if err != nil {

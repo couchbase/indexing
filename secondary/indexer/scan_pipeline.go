@@ -12,6 +12,7 @@ package indexer
 import (
 	"bytes"
 	"errors"
+
 	"github.com/couchbase/indexing/secondary/collatejson"
 	c "github.com/couchbase/indexing/secondary/common"
 	p "github.com/couchbase/indexing/secondary/pipeline"
@@ -184,11 +185,11 @@ loop:
 		currentScan = scan
 		for _, snap := range sliceSnapshots {
 			if scan.ScanType == AllReq {
-				err = snap.Snapshot().All(r.ctx, fn)
+				err = snap.Snapshot().All(r.Ctx, fn)
 			} else if scan.ScanType == LookupReq {
-				err = snap.Snapshot().Lookup(r.ctx, scan.Equals, fn)
+				err = snap.Snapshot().Lookup(r.Ctx, scan.Equals, fn)
 			} else if scan.ScanType == RangeReq || scan.ScanType == FilterRangeReq {
-				err = snap.Snapshot().Range(r.ctx, scan.Low, scan.High, scan.Incl, fn)
+				err = snap.Snapshot().Range(r.Ctx, scan.Low, scan.High, scan.Incl, fn)
 			}
 			switch err {
 			case nil:
