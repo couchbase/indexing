@@ -141,6 +141,9 @@ func NewPlasmaSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	slice.workerDone = make([]chan bool, slice.numWriters)
 	slice.stopCh = make([]DoneChannel, slice.numWriters)
 
+	numReaders := slice.sysconf["plasma.numReaders"].Int()
+	slice.readers = make(chan *plasma.Reader, numReaders)
+
 	slice.isPrimary = isPrimary
 	if err := slice.initStores(); err != nil {
 		return nil, err
@@ -220,9 +223,7 @@ func (slice *plasmaSlice) initStores() error {
 			slice.main[i] = slice.mainstore.NewWriter()
 		}
 
-		numReaders := slice.sysconf["plasma.numReaders"].Int()
-		slice.readers = make(chan *plasma.Reader, numReaders)
-		for i := 0; i < numReaders; i++ {
+		for i := 0; i < cap(slice.readers); i++ {
 			slice.readers <- slice.mainstore.NewReader()
 		}
 
@@ -1005,6 +1006,11 @@ func (mdb *plasmaSlice) GetCommittedCount() uint64 {
 }
 
 func (mdb *plasmaSlice) resetStores() {
+	// Clear all readers
+	for i := 0; i < cap(mdb.readers); i++ {
+		<-mdb.readers
+	}
+
 	mdb.mainstore.Close()
 	if !mdb.isPrimary {
 		mdb.backstore.Close()
@@ -1023,7 +1029,18 @@ func (mdb *plasmaSlice) Rollback(o SnapshotInfo) error {
 		common.CrashOnError(errors.New("Slice Invariant Violation - rollback with pending mutations"))
 	}
 
-	return mdb.restore(o)
+	// Block all scan requests
+	var readers []*plasma.Reader
+	for i := 0; i < cap(mdb.readers); i++ {
+		readers = append(readers, <-mdb.readers)
+	}
+
+	err := mdb.restore(o)
+	for i := 0; i < cap(mdb.readers); i++ {
+		mdb.readers <- readers[i]
+	}
+
+	return err
 }
 
 func (mdb *plasmaSlice) restore(o SnapshotInfo) error {
@@ -1064,7 +1081,9 @@ func (mdb *plasmaSlice) restore(o SnapshotInfo) error {
 func (mdb *plasmaSlice) RollbackToZero() error {
 	mdb.waitPersist()
 	mdb.waitForPersistorThread()
+
 	mdb.resetStores()
+
 	return nil
 }
 
@@ -1572,7 +1591,15 @@ func (s *plasmaSnapshot) Iterate(ctx IndexReaderContext, low, high IndexKey, inc
 	t0 := time.Now()
 
 	reader := ctx.(*plasmaReaderCtx)
-	it := reader.r.NewSnapshotIterator(s.MainSnap)
+
+	it, err := reader.r.NewSnapshotIterator(s.MainSnap)
+
+	// RollbackToZero: The current snapshot belongs to old plasma instance before reset
+	// Return results from nil snapshot. ie., return 0 items
+	if err == plasma.ErrInvalidSnapshot {
+		return nil
+	}
+
 	defer it.Close()
 
 	endKey := high.Bytes()

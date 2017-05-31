@@ -2517,9 +2517,7 @@ func (p *RandomPlacement) GetEligibleIndexes() []*IndexUsage {
 //
 func (p *RandomPlacement) AddOptionalIndexes(indexes []*IndexUsage) {
 
-	p.RemoveOptionalIndexes()
-
-	p.optionals = indexes
+	p.optionals = append(p.optionals, indexes...)
 	for _, index := range indexes {
 		p.indexes[index] = index
 	}
