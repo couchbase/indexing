@@ -466,9 +466,11 @@ func (m *ServiceMgr) prepareRebalance(change service.TopologyChange) error {
 		return err
 	}
 
-	if m.checkDDLRunning() {
-		l.Errorf("ServiceMgr::prepareRebalance Found DDL Running. Cannot Initiate Prepare Phase")
-		return errors.New("indexer rebalance failure - ddl in progress")
+	if c.GetBuildMode() == c.ENTERPRISE {
+		if m.checkDDLRunning() {
+			l.Errorf("ServiceMgr::prepareRebalance Found DDL Running. Cannot Initiate Prepare Phase")
+			return errors.New("indexer rebalance failure - ddl in progress")
+		}
 	}
 
 	if m.rebalanceToken != nil && m.rebalanceToken.Source == RebalSourceClusterOp {
@@ -614,7 +616,11 @@ func (m *ServiceMgr) startRebalance(change service.TopologyChange) error {
 
 		cfg := m.config.Load()
 		start := time.Now()
-		if cfg["rebalance.disable_index_move"].Bool() {
+
+		if c.GetBuildMode() != c.ENTERPRISE {
+			l.Infof("ServiceMgr::startRebalance skip planner for non-enterprise edition")
+
+		} else if cfg["rebalance.disable_index_move"].Bool() {
 			l.Infof("ServiceMgr::startRebalance skip planner as disable_index_move is set")
 
 		} else if cfg["rebalance.use_simple_planner"].Bool() {

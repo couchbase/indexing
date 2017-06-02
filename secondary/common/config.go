@@ -667,6 +667,13 @@ var SystemConfig = Config{
 		true, // immutable
 		true, // case-sensitive
 	},
+	"indexer.isEnterprise": ConfigValue{
+		true,
+		"enterprise edition",
+		true,
+		true,  // immutable
+		false, // case-insensitive
+	},
 
 	"indexer.streamInitPort": ConfigValue{
 		"9103",

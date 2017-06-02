@@ -313,6 +313,14 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scheduled bool,
 		}
 	*/
 
+	if common.GetBuildMode() != common.ENTERPRISE {
+		if defn.NumReplica != 0 {
+			err := errors.New("Index Replica not supported in non-Enterprise Edition")
+			logging.Errorf("LifecycleMgr.handleCreateIndex() : createIndex fails. Reason = %v", err)
+			return err
+		}
+	}
+
 	existDefn, err := m.repo.GetIndexDefnByName(defn.Bucket, defn.Name)
 	if err != nil {
 		logging.Errorf("LifecycleMgr.handleCreateIndex() : createIndex fails. Reason = %v", err)

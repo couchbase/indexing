@@ -265,6 +265,14 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		return nil, res
 	}
 
+	isEnterprise := idx.config["isEnterprise"].Bool()
+	if isEnterprise {
+		common.SetBuildMode(common.ENTERPRISE)
+	} else {
+		common.SetBuildMode(common.COMMUNITY)
+	}
+	logging.Infof("Indexer::NewIndexer Build Mode Set %v", common.GetBuildMode())
+
 	idx.setIndexerState(common.INDEXER_BOOTSTRAP)
 	idx.stats.indexerState.Set(int64(common.INDEXER_BOOTSTRAP))
 	msgUpdateIndexInstMap := idx.newIndexInstMsg(nil)
