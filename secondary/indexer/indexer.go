@@ -212,7 +212,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	idx.stats.memoryQuota.Set(memQuota)
 	plasma.SetMemoryQuota(int64(float64(memQuota) * PLASMA_MEMQUOTA_FRAC))
 	memdb.Debug(idx.config["settings.moi.debug"].Bool())
-	reclaimBlockSize := int64(idx.config["plasma.LSSReclaimBlockSize"].Uint64())
+	reclaimBlockSize := int64(idx.config["plasma.LSSReclaimBlockSize"].Int())
 	plasma.SetLogReclaimBlockSize(reclaimBlockSize)
 
 	logging.Infof("Indexer::NewIndexer Starting with Vbuckets %v", idx.config["numVbuckets"].Int())
