@@ -916,9 +916,16 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.plasma.LSSSegmentFileSize": ConfigValue{
-		4294967296,
+		4 * 1024 * 1024 * 1024,
 		"LSS log segment maxsize per file",
-		4294967296,
+		4 * 1024 * 1024 * 1024,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.LSSReclaimBlockSize": ConfigValue{
+		4 * 1024 * 1024 * 1024,
+		"Space reclaim granularity for LSS log",
+		4 * 1024 * 1024 * 1024,
 		false, // mutable
 		false, // case-insensitive
 	},
