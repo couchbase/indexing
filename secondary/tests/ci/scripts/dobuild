@@ -173,19 +173,6 @@ else
   echo "none"
 fi
 
-cd $WORKSPACE/memcached
-current="`git rev-parse HEAD`"
-test -f ~/memcached.good || (echo $current > ~/memcached.good)
-good="`cat ~/memcached.good`"
-echo -n "memcached is at <a href='https://github.com/couchbase/memcached/commit/$current'>${current:0:7}</a>, changes since last good build: "
-if [ "$current" != "$good" ]; then
-  echo
-  git log --pretty='format: <a href="https://github.com/couchbase/memcached/commit/%H">%h</a> %s' HEAD...$good
-  echo
-else
-  echo "none"
-fi
-
 cd $WORKSPACE/testrunner
 current="`git rev-parse HEAD`"
 test -f ~/testrunner.good || (echo $current > ~/testrunner.good)
