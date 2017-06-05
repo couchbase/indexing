@@ -12,6 +12,7 @@ package indexer
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"github.com/couchbase/cbauth/metakv"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
@@ -339,6 +340,8 @@ func initGlobalSettings(oldCfg, newCfg common.Config) {
 	maxSecKeyBufferLen = maxSecKeyLen * 3
 	maxIndexEntrySize = maxSecKeyBufferLen + MAX_DOCID_LEN + 2
 	encBufPool = common.NewByteBufferPool(maxIndexEntrySize + ENCODE_BUF_SAFE_PAD)
+
+	ErrSecKeyTooLong = errors.New(fmt.Sprintf("Secondary key is too long (> %d)", maxSecKeyLen))
 }
 
 func validateSettings(value []byte) error {
@@ -354,6 +357,18 @@ func validateSettings(value []byte) error {
 					"Sunday,Monday,Tuesday,Wednesday,Thursday,Friday,Saturday"
 				return errors.New(msg)
 			}
+		}
+	}
+
+	if val, ok := newConfig["indexer.settings.max_seckey_size"]; ok {
+		if val.Int() <= 0 {
+			return errors.New("Setting should be an integer greater than 0")
+		}
+	}
+
+	if val, ok := newConfig["indexer.settings.max_array_seckey_size"]; ok {
+		if val.Int() <= 0 {
+			return errors.New("Setting should be an integer greater than 0")
 		}
 	}
 
