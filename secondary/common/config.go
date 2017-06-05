@@ -932,16 +932,16 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.plasma.LSSSegmentFileSize": ConfigValue{
-		4 * 1024 * 1024 * 1024,
+		plasmaLogSegSize(),
 		"LSS log segment maxsize per file",
-		4 * 1024 * 1024 * 1024,
+		plasmaLogSegSize(),
 		false, // mutable
 		false, // case-insensitive
 	},
 	"indexer.plasma.LSSReclaimBlockSize": ConfigValue{
-		4 * 1024 * 1024 * 1024,
+		64 * 1024 * 1024,
 		"Space reclaim granularity for LSS log",
-		4 * 1024 * 1024 * 1024,
+		64 * 1024 * 1024,
 		false, // mutable
 		false, // case-insensitive
 	},
@@ -1800,4 +1800,13 @@ func (cv ConfigValue) Strings() []string {
 // Bool assumes config value is a Bool and returns the same.
 func (cv ConfigValue) Bool() bool {
 	return cv.Value.(bool)
+}
+
+func plasmaLogSegSize() int {
+	switch runtime.GOOS {
+	case "linux":
+		return 4 * 1024 * 1024 * 1024
+	default:
+		return 512 * 1024 * 1024
+	}
 }
