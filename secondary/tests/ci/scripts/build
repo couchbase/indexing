@@ -2,7 +2,6 @@
 
 export PATH=$PATH:~/bin
 export WORKSPACE="/opt/build"
-shopt -s extglob
 
 rm -rf ~/.ciscripts
 git clone -q git://github.com/couchbase/indexing ~/.ciscripts
@@ -10,7 +9,7 @@ git clone -q git://github.com/couchbase/indexing ~/.ciscripts
 while true; do
   cd ~/.ciscripts
   git pull -q
-  GLOBIGNORE='build' cp -r secondary/tests/ci/scripts/* ~/bin/
+  find secondary/tests/ci/scripts -not -name 'build' -and -not -name '.*' -type f -exec cp -v {} ~/bin/ \;
   domain
   sleep 600
 done
