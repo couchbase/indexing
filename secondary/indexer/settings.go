@@ -13,6 +13,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"github.com/couchbase/cbauth"
 	"github.com/couchbase/cbauth/metakv"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
@@ -103,19 +104,24 @@ func (s *settingsManager) writeJson(w http.ResponseWriter, json []byte) {
 	w.Write([]byte("\n"))
 }
 
-func (s *settingsManager) validateAuth(w http.ResponseWriter, r *http.Request) bool {
-	_, valid, err := common.IsAuthValid(r)
+func (s *settingsManager) validateAuth(w http.ResponseWriter, r *http.Request) (cbauth.Creds, bool) {
+	creds, valid, err := common.IsAuthValid(r)
 	if err != nil {
 		s.writeError(w, err)
 	} else if valid == false {
 		w.WriteHeader(401)
 		w.Write([]byte("401 Unauthorized\n"))
 	}
-	return valid
+	return creds, valid
 }
 
 func (s *settingsManager) handleSettingsReq(w http.ResponseWriter, r *http.Request) {
-	if !s.validateAuth(w, r) {
+	creds, ok := s.validateAuth(w, r)
+	if !ok {
+		return
+	}
+
+	if !common.IsAllowed(creds, []string{"cluster.settings!write"}, w) {
 		return
 	}
 
@@ -173,9 +179,15 @@ func (s *settingsManager) handleSettingsReq(w http.ResponseWriter, r *http.Reque
 }
 
 func (s *settingsManager) handleCompactionTrigger(w http.ResponseWriter, r *http.Request) {
-	if !s.validateAuth(w, r) {
+	creds, ok := s.validateAuth(w, r)
+	if !ok {
 		return
 	}
+
+	if !common.IsAllowed(creds, []string{"cluster.settings!write"}, w) {
+		return
+	}
+
 	_, rev, err := metakv.Get(indexCompactonMetaPath)
 	if err != nil {
 		s.writeError(w, err)
@@ -267,7 +279,12 @@ func (s *settingsManager) metaKVCallback(path string, value []byte, rev interfac
 }
 
 func (s *settingsManager) handleFreeMemoryReq(w http.ResponseWriter, r *http.Request) {
-	if !s.validateAuth(w, r) {
+	creds, ok := s.validateAuth(w, r)
+	if !ok {
+		return
+	}
+
+	if !common.IsAllowed(creds, []string{"cluster.settings!write"}, w) {
 		return
 	}
 
@@ -278,7 +295,12 @@ func (s *settingsManager) handleFreeMemoryReq(w http.ResponseWriter, r *http.Req
 }
 
 func (s *settingsManager) handleForceGCReq(w http.ResponseWriter, r *http.Request) {
-	if !s.validateAuth(w, r) {
+	creds, ok := s.validateAuth(w, r)
+	if !ok {
+		return
+	}
+
+	if !common.IsAllowed(creds, []string{"cluster.settings!write"}, w) {
 		return
 	}
 
