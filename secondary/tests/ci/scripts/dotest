@@ -220,8 +220,6 @@ cd $WORKSPACE/couchdb
 git rev-parse HEAD > ~/couchdb.good
 cd $WORKSPACE/couchstore
 git rev-parse HEAD > ~/couchstore.good
-cd $WORKSPACE/memcached
-git rev-parse HEAD > ~/memcached.good
 if [ "$STORAGE" = "plasma" ]; then
   cd $WORKSPACE/goproj/src/github.com/couchbase/nitro
   git rev-parse HEAD > ~/nitro.good
@@ -230,8 +228,8 @@ cd $WORKSPACE/forestdb
 git rev-parse HEAD > ~/forestdb.good
 cd $WORKSPACE/testrunner
 git rev-parse HEAD > ~/testrunner.good
-cd $WORKSPACE/ep-engine
-git rev-parse HEAD > ~/ep-engine.good
+cd $WORKSPACE/kv_engine
+git rev-parse HEAD > ~/kv_engine.good
 
 exit 0
 
