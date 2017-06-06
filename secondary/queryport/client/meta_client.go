@@ -745,6 +745,11 @@ func (b *metadataClient) pruneStaleReplica(replicas []uint64) ([]uint64, []int64
 
 	currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
 
+	// If there is only one instance, then just return.
+	if len(replicas) == 1 {
+		return replicas, make([]int64, 1)
+	}
+
 	// read the progress stats from each index -- exclude indexer that has not refreshed its stats
 	pendings, rollbackTimes, minPending := b.getPendingStats(replicas, currmeta, true)
 	if uint64(minPending) >= uint64(math.MaxInt64) {

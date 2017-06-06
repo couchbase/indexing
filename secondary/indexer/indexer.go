@@ -442,7 +442,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 
 	go idx.monitorMemUsage()
 	go idx.logMemstats()
-	go idx.collectProgressStats()
+	go idx.collectProgressStats(true)
 
 	//start the main indexer loop
 	idx.run()
@@ -451,12 +451,13 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 
 }
 
-func (idx *indexer) collectProgressStats() {
+func (idx *indexer) collectProgressStats(fetchDcp bool) {
 
 	respCh := make(chan bool)
 	idx.internalRecvCh <- &MsgStatsRequest{
-		mType:  INDEX_PROGRESS_STATS,
-		respch: respCh,
+		mType:    INDEX_PROGRESS_STATS,
+		respch:   respCh,
+		fetchDcp: fetchDcp,
 	}
 	<-respCh
 
@@ -1673,7 +1674,7 @@ func (idx *indexer) handleInitRecovery(msg Message) {
 		}
 		idx.startBucketStream(streamId, bucket, restartTs)
 
-		go idx.collectProgressStats()
+		go idx.collectProgressStats(false)
 	} else {
 		idx.startBucketStream(streamId, bucket, restartTs)
 	}

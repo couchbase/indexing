@@ -1045,8 +1045,9 @@ func (m *MsgIndexStorageStats) GetReplyChannel() chan []IndexStorageStats {
 }
 
 type MsgStatsRequest struct {
-	mType  MsgType
-	respch chan bool
+	mType    MsgType
+	respch   chan bool
+	fetchDcp bool
 }
 
 func (m *MsgStatsRequest) GetMsgType() MsgType {
@@ -1055,6 +1056,10 @@ func (m *MsgStatsRequest) GetMsgType() MsgType {
 
 func (m *MsgStatsRequest) GetReplyChannel() chan bool {
 	return m.respch
+}
+
+func (m *MsgStatsRequest) FetchDcp() bool {
+	return m.fetchDcp
 }
 
 type MsgIndexCompact struct {

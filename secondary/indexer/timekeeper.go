@@ -2741,6 +2741,13 @@ func (tk *timekeeper) handleStats(cmd Message) {
 	tk.lock.Unlock()
 
 	go func() {
+
+		if !req.FetchDcp() {
+			tk.updateTimestampStats()
+			replych <- true
+			return
+		}
+
 		// Populate current KV timestamps for all buckets
 		bucketTsMap := make(map[string]Timestamp)
 		for _, inst := range indexInstMap {
@@ -2847,6 +2854,26 @@ func (tk *timekeeper) handleStats(cmd Message) {
 
 		replych <- true
 	}()
+}
+
+func (tk *timekeeper) updateTimestampStats() {
+
+	tk.lock.Lock()
+	defer tk.lock.Unlock()
+
+	stats := tk.stats.Get()
+	for _, inst := range tk.indexInstMap {
+		//skip deleted indexes
+		if inst.State == common.INDEX_STATE_DELETED {
+			continue
+		}
+
+		idxStats := stats.indexes[inst.InstId]
+		if idxStats != nil {
+			idxStats.lastRollbackTime.Set(tk.ss.bucketRollbackTime[inst.Defn.Bucket])
+			idxStats.progressStatTime.Set(time.Now().UnixNano())
+		}
+	}
 }
 
 func (tk *timekeeper) isBuildCompletionTs(streamId common.StreamId,
