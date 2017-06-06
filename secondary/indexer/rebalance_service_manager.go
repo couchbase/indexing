@@ -1695,7 +1695,8 @@ func (m *ServiceMgr) doRecoverMoveIndex(gtoken *RebalanceToken) {
 
 func (m *ServiceMgr) handleListRebalanceTokens(w http.ResponseWriter, r *http.Request) {
 
-	if !m.validateAuth(w, r) {
+	_, ok := m.validateAuth(w, r)
+	if !ok {
 		l.Errorf("ServiceMgr::handleListRebalanceTokens Validation Failure for Request %v", r)
 		return
 	}
@@ -1725,7 +1726,8 @@ func (m *ServiceMgr) handleListRebalanceTokens(w http.ResponseWriter, r *http.Re
 
 func (m *ServiceMgr) handleCleanupRebalance(w http.ResponseWriter, r *http.Request) {
 
-	if !m.validateAuth(w, r) {
+	_, ok := m.validateAuth(w, r)
+	if !ok {
 		l.Errorf("ServiceMgr::handleCleanupRebalance Validation Failure for Request %v", r)
 		return
 	}
@@ -1775,7 +1777,8 @@ func (m *ServiceMgr) handleCleanupRebalance(w http.ResponseWriter, r *http.Reque
 
 func (m *ServiceMgr) handleNodeuuid(w http.ResponseWriter, r *http.Request) {
 
-	if !m.validateAuth(w, r) {
+	_, ok := m.validateAuth(w, r)
+	if !ok {
 		l.Errorf("ServiceMgr::handleNodeuuid Validation Failure for Request %v", r)
 		return
 	}
@@ -1833,7 +1836,8 @@ func (m *ServiceMgr) getCurrRebalTokens() (*RebalTokens, error) {
 
 func (m *ServiceMgr) handleRegisterRebalanceToken(w http.ResponseWriter, r *http.Request) {
 
-	if !m.validateAuth(w, r) {
+	_, ok := m.validateAuth(w, r)
+	if !ok {
 		l.Errorf("ServiceMgr::handleRegisterRebalanceToken Validation Failure for Request %v", r)
 		return
 	}
@@ -1985,7 +1989,8 @@ func (m *ServiceMgr) processMoveIndex(path string, value []byte, rev interface{}
 
 func (m *ServiceMgr) handleMoveIndex(w http.ResponseWriter, r *http.Request) {
 
-	if !m.validateAuth(w, r) {
+	creds, ok := m.validateAuth(w, r)
+	if !ok {
 		l.Errorf("ServiceMgr::handleMoveIndex Validation Failure for Request %v", r)
 		return
 	}
@@ -2014,6 +2019,11 @@ func (m *ServiceMgr) handleMoveIndex(w http.ResponseWriter, r *http.Request) {
 
 		if nodes, ok = in["nodes"]; !ok {
 			send(http.StatusBadRequest, w, "Bad Request - Nodes Information Missing")
+			return
+		}
+
+		permission := fmt.Sprintf("cluster.bucket[%s].n1ql.index!alter", bucket)
+		if !c.IsAllowed(creds, []string{permission}, w) {
 			return
 		}
 
@@ -2057,7 +2067,8 @@ func (m *ServiceMgr) handleMoveIndex(w http.ResponseWriter, r *http.Request) {
 }
 func (m *ServiceMgr) handleMoveIndexInternal(w http.ResponseWriter, r *http.Request) {
 
-	if !m.validateAuth(w, r) {
+	creds, ok := m.validateAuth(w, r)
+	if !ok {
 		l.Errorf("ServiceMgr::handleMoveIndexInternal Validation Failure for Request %v", r)
 		return
 	}
@@ -2068,6 +2079,11 @@ func (m *ServiceMgr) handleMoveIndexInternal(w http.ResponseWriter, r *http.Requ
 		if err := json.Unmarshal(bytes, &req); err != nil {
 			l.Errorf("ServiceMgr::handleMoveIndexInternal %v", err)
 			sendIndexResponseWithError(http.StatusBadRequest, w, err.Error())
+			return
+		}
+
+		permission := fmt.Sprintf("cluster.bucket[%s].n1ql.index!alter", req.Index.Bucket)
+		if !c.IsAllowed(creds, []string{permission}, w) {
 			return
 		}
 
@@ -2496,15 +2512,15 @@ func (m *ServiceMgr) writeBytes(w http.ResponseWriter, bytes []byte) {
 	w.Write(bytes)
 }
 
-func (m *ServiceMgr) validateAuth(w http.ResponseWriter, r *http.Request) bool {
-	_, valid, err := c.IsAuthValid(r)
+func (m *ServiceMgr) validateAuth(w http.ResponseWriter, r *http.Request) (cbauth.Creds, bool) {
+	creds, valid, err := c.IsAuthValid(r)
 	if err != nil {
 		m.writeError(w, err)
 	} else if valid == false {
 		w.WriteHeader(401)
 		w.Write([]byte("401 Unauthorized\n"))
 	}
-	return valid
+	return creds, valid
 }
 
 func (m *ServiceMgr) getLocalHttpAddr() string {
