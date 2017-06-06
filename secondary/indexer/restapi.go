@@ -13,6 +13,7 @@ import mclient "github.com/couchbase/indexing/secondary/manager/client"
 import log "github.com/couchbase/indexing/secondary/logging"
 import "github.com/couchbase/query/parser/n1ql"
 import "github.com/couchbase/query/expression"
+import "github.com/couchbase/cbauth"
 
 type restServer struct {
 	cluster string
@@ -55,15 +56,72 @@ func (api *restServer) writeError(w http.ResponseWriter, err error) {
 	w.Write([]byte(err.Error() + "\n"))
 }
 
-func (api *restServer) validateAuth(w http.ResponseWriter, r *http.Request) bool {
-	_, valid, err := c.IsAuthValid(r)
+func (api *restServer) validateAuth(w http.ResponseWriter, r *http.Request) (cbauth.Creds, bool) {
+	creds, valid, err := c.IsAuthValid(r)
 	if err != nil {
 		api.writeError(w, err)
 	} else if valid == false {
 		w.WriteHeader(401)
 		w.Write([]byte("401 Unauthorized\n"))
 	}
-	return valid
+	return creds, valid
+}
+
+func (api *restServer) authorize(w http.ResponseWriter, creds cbauth.Creds) bool {
+
+	indexes, _, _, err := api.client.Refresh()
+	if err != nil {
+		log.Errorf("Fail to authorize.  Reason: unable to fetch index metadata.  %v", err)
+		http.Error(w, jsonstr("Authroziation check fails", err), http.StatusBadRequest)
+		return false
+	}
+
+	seen := make(map[string]bool)
+	permissions := ([]string)(nil)
+	permissions = append(permissions, "cluster.n1ql.meta!read")
+	permissions = append(permissions, "cluster.n1ql.curl!execute")
+
+	for _, index := range indexes {
+
+		bucket := index.Definition.Bucket
+		if _, ok := seen[bucket]; !ok {
+
+			permission := fmt.Sprintf("cluster.bucket[%s].data.docs!write", bucket)
+			permissions = append(permissions, permission)
+
+			permission = fmt.Sprintf("cluster.bucket[%s].data.docs!read", bucket)
+			permissions = append(permissions, permission)
+
+			permission = fmt.Sprintf("cluster.bucket[%s].n1ql.select!execute", bucket)
+			permissions = append(permissions, permission)
+
+			permission = fmt.Sprintf("cluster.bucket[%s].n1ql.update!execute", bucket)
+			permissions = append(permissions, permission)
+
+			permission = fmt.Sprintf("cluster.bucket[%s].n1ql.insert!execute", bucket)
+			permissions = append(permissions, permission)
+
+			permission = fmt.Sprintf("cluster.bucket[%s].n1ql.delete!execute", bucket)
+			permissions = append(permissions, permission)
+
+			permission = fmt.Sprintf("cluster.bucket[%s].n1ql.index!build", bucket)
+			permissions = append(permissions, permission)
+
+			permission = fmt.Sprintf("cluster.bucket[%s].n1ql.index!create", bucket)
+			permissions = append(permissions, permission)
+
+			permission = fmt.Sprintf("cluster.bucket[%s].n1ql.index!alter", bucket)
+			permissions = append(permissions, permission)
+
+			permission = fmt.Sprintf("cluster.bucket[%s].n1ql.index!drop", bucket)
+			permissions = append(permissions, permission)
+
+			permission = fmt.Sprintf("cluster.bucket[%s].n1ql.index!list", bucket)
+			permissions = append(permissions, permission)
+		}
+	}
+
+	return c.IsAllAllowed(creds, permissions, w)
 }
 
 // GET  /api/indexes
@@ -72,7 +130,12 @@ func (api *restServer) validateAuth(w http.ResponseWriter, r *http.Request) bool
 func (api *restServer) handleIndexes(
 	w http.ResponseWriter, request *http.Request) {
 
-	if !api.validateAuth(w, request) {
+	creds, ok := api.validateAuth(w, request)
+	if !ok {
+		return
+	}
+
+	if !api.authorize(w, creds) {
 		return
 	}
 
@@ -111,7 +174,12 @@ func (api *restServer) handleIndexes(
 func (api *restServer) handleIndex(
 	w http.ResponseWriter, request *http.Request) {
 
-	if !api.validateAuth(w, request) {
+	creds, ok := api.validateAuth(w, request)
+	if !ok {
+		return
+	}
+
+	if !api.authorize(w, creds) {
 		return
 	}
 

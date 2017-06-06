@@ -918,3 +918,30 @@ func IsAllowed(creds cbauth.Creds, permissions []string, w http.ResponseWriter) 
 
 	return true
 }
+
+func IsAllAllowed(creds cbauth.Creds, permissions []string, w http.ResponseWriter) bool {
+
+	allow := true
+	err := error(nil)
+
+	for _, permission := range permissions {
+		allow, err = creds.IsAllowed(permission)
+		if !allow || err != nil {
+			break
+		}
+	}
+
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(err.Error()))
+		return false
+	}
+
+	if !allow {
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte(http.StatusText(http.StatusUnauthorized)))
+		return false
+	}
+
+	return true
+}
