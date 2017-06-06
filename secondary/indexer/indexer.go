@@ -1674,7 +1674,7 @@ func (idx *indexer) handleInitRecovery(msg Message) {
 		}
 		idx.startBucketStream(streamId, bucket, restartTs)
 
-		go idx.collectProgressStats(false)
+		go idx.collectProgressStats(true)
 	} else {
 		idx.startBucketStream(streamId, bucket, restartTs)
 	}
