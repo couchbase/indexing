@@ -621,8 +621,10 @@ func (m *ServiceMgr) startRebalance(change service.TopologyChange) error {
 			transferTokens = planner.PlanIndexMoves()
 		} else {
 			onEjectOnly := cfg["rebalance.node_eject_only"].Bool()
+			disableReplicaRepair := cfg["rebalance.disable_replica_repair"].Bool()
+
 			transferTokens, err = planner.ExecuteRebalance(cfg["clusterAddr"].String(), change,
-				string(m.nodeInfo.NodeID), onEjectOnly)
+				string(m.nodeInfo.NodeID), onEjectOnly, disableReplicaRepair)
 			if err != nil {
 				l.Errorf("ServiceMgr::startRebalance Planner Error %v", err)
 				m.runCleanupPhaseLOCKED(RebalanceTokenPath, true)

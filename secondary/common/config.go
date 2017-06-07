@@ -1565,6 +1565,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.rebalance.disable_replica_repair": ConfigValue{
+		false,
+		"disable repairing replica",
+		false,
+		false, // mutable
+		false, // case-insensitive
+	},
 }
 
 // NewConfig from another
