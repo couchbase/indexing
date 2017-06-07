@@ -33,12 +33,12 @@ type MetadataRepo struct {
 	defnCache  map[common.IndexDefnId]*common.IndexDefn
 	topoCache  map[string]*IndexTopology
 	globalTopo *GlobalTopology
-	serviceMap *client.ServiceMap
 }
 
 type RepoRef interface {
 	getMeta(name string) ([]byte, error)
 	setMeta(name string, value []byte) error
+	broadcast(name string, value []byte) error
 	deleteMeta(name string) error
 	newIterator() (*repo.RepoIterator, error)
 	registerNotifier(notifier MetadataNotifier)
@@ -372,34 +372,7 @@ func (c *MetadataRepo) SetGlobalTopology(topology *GlobalTopology) error {
 //  Public Function : Indexer Info
 ///////////////////////////////////////////////////////
 
-func (c *MetadataRepo) GetServiceMap() (*client.ServiceMap, error) {
-	c.mutex.Lock()
-	defer c.mutex.Unlock()
-
-	if c.serviceMap != nil {
-		return c.serviceMap, nil
-	}
-
-	lookupName := serviceMapKey()
-	data, err := c.getMeta(lookupName)
-	if err != nil && strings.Contains(err.Error(), "FDB_RESULT_KEY_NOT_FOUND") {
-		return nil, nil
-	} else if err != nil {
-		return nil, err
-	}
-
-	serviceMap, err := client.UnmarshallServiceMap(data)
-	if err != nil {
-		return nil, err
-	}
-
-	c.serviceMap = serviceMap
-	return serviceMap, nil
-}
-
-func (c *MetadataRepo) SetServiceMap(serviceMap *client.ServiceMap) error {
-	c.mutex.Lock()
-	defer c.mutex.Unlock()
+func (c *MetadataRepo) BroadcastServiceMap(serviceMap *client.ServiceMap) error {
 
 	data, err := client.MarshallServiceMap(serviceMap)
 	if err != nil {
@@ -407,11 +380,25 @@ func (c *MetadataRepo) SetServiceMap(serviceMap *client.ServiceMap) error {
 	}
 
 	lookupName := serviceMapKey()
-	if err := c.setMeta(lookupName, data); err != nil {
+	if err := c.broadcast(lookupName, data); err != nil {
 		return err
 	}
 
-	c.serviceMap = serviceMap
+	return nil
+}
+
+func (c *MetadataRepo) BroadcastIndexStats(stats *client.IndexStats) error {
+
+	data, err := client.MarshallIndexStats(stats)
+	if err != nil {
+		return err
+	}
+
+	lookupName := indexStatsKey()
+	if err := c.broadcast(lookupName, data); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -636,6 +623,18 @@ func (c *LocalRepoRef) setMeta(name string, value []byte) error {
 	return nil
 }
 
+func (c *LocalRepoRef) broadcast(name string, value []byte) error {
+	if err := c.server.Broadcast(name, value); err != nil {
+		return err
+	}
+
+	evtType := getEventType(name)
+	if c.eventMgr != nil && evtType != EVENT_NONE {
+		c.eventMgr.notify(evtType, value)
+	}
+	return nil
+}
+
 func (c *LocalRepoRef) deleteMeta(name string) error {
 	if err := c.server.Delete(name); err != nil {
 		return err
@@ -781,6 +780,17 @@ func (c *RemoteRepoRef) setMeta(name string, value []byte) error {
 	return nil
 }
 
+func (c *RemoteRepoRef) broadcast(name string, value []byte) error {
+
+	request := &Request{OpCode: "Broadcast", Key: name, Value: value}
+	var reply *Reply
+	if err := c.newDictionaryRequest(request, &reply); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func (c *RemoteRepoRef) deleteMeta(name string) error {
 
 	request := &Request{OpCode: "Delete", Key: name, Value: nil}
@@ -846,6 +856,10 @@ func (c *MetadataRepo) getMeta(name string) ([]byte, error) {
 
 func (c *MetadataRepo) setMeta(name string, value []byte) error {
 	return c.repo.setMeta(name, value)
+}
+
+func (c *MetadataRepo) broadcast(name string, value []byte) error {
+	return c.repo.broadcast(name, value)
 }
 
 func (c *MetadataRepo) deleteMeta(name string) error {
@@ -977,6 +991,14 @@ func serviceMapKey() string {
 
 func isServiceMap(key string) bool {
 	return strings.Contains(key, "ServiceMap")
+}
+
+func indexStatsKey() string {
+	return "IndexStats"
+}
+
+func isIndexStats(key string) bool {
+	return strings.Contains(key, "IndexStats")
 }
 
 ///////////////////////////////////////////////////////////

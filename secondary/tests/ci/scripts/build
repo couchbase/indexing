@@ -5,12 +5,13 @@ export WORKSPACE="/opt/build"
 
 rm -rf ~/.ciscripts
 git clone -q git://github.com/couchbase/indexing ~/.ciscripts
+cd ~/.ciscripts
+git checkout unstable
 
 while true; do
-  domain
-  cd ~/.ciscripts
   git pull -q
-  cp -r secondary/tests/ci/scripts/* ~/bin/
+  find secondary/tests/ci/scripts -not -name 'build' -and -not -name '.*' -type f -exec cp -v {} ~/bin/ \;
+  domain
   sleep 600
 done
 

@@ -135,7 +135,7 @@ type BridgeAccessor interface {
 	GetScanport(
 		defnID uint64,
 		retry int,
-		excludes map[uint64]bool) (queryport string, targetDefnID uint64, targetInstID uint64, ok bool)
+		excludes map[uint64]bool) (queryport string, targetDefnID uint64, targetInstID uint64, rollbackTime int64, ok bool)
 
 	// GetIndex will return the index-definition structure for defnID.
 	GetIndexDefn(defnID uint64) *common.IndexDefn
@@ -450,7 +450,7 @@ func (c *GsiClient) Lookup(
 
 	err = c.doScan(
 		defnID, requestId,
-		func(qc *GsiScanClient, index *common.IndexDefn) (error, bool) {
+		func(qc *GsiScanClient, index *common.IndexDefn, rollbackTime int64) (error, bool) {
 			var err error
 
 			vector, err = c.getConsistency(qc, cons, vector, index.Bucket)
@@ -459,7 +459,7 @@ func (c *GsiClient) Lookup(
 			}
 			return qc.Lookup(
 				uint64(index.DefnId), requestId, values, distinct, limit, cons,
-				vector, callb)
+				vector, callb, rollbackTime)
 		})
 
 	if err != nil { // callback with error
@@ -498,7 +498,7 @@ func (c *GsiClient) Range(
 
 	err = c.doScan(
 		defnID, requestId,
-		func(qc *GsiScanClient, index *common.IndexDefn) (error, bool) {
+		func(qc *GsiScanClient, index *common.IndexDefn, rollbackTime int64) (error, bool) {
 			var err error
 
 			vector, err = c.getConsistency(qc, cons, vector, index.Bucket)
@@ -521,12 +521,12 @@ func (c *GsiClient) Range(
 				}
 				return qc.RangePrimary(
 					uint64(index.DefnId), requestId, l, h, inclusion, distinct,
-					limit, cons, vector, callb)
+					limit, cons, vector, callb, rollbackTime)
 			}
 			// dealing with secondary index.
 			return qc.Range(
 				uint64(index.DefnId), requestId, low, high, inclusion, distinct,
-				limit, cons, vector, callb)
+				limit, cons, vector, callb, rollbackTime)
 		})
 
 	if err != nil { // callback with error
@@ -564,14 +564,14 @@ func (c *GsiClient) ScanAll(
 
 	err = c.doScan(
 		defnID, requestId,
-		func(qc *GsiScanClient, index *common.IndexDefn) (error, bool) {
+		func(qc *GsiScanClient, index *common.IndexDefn, rollbackTime int64) (error, bool) {
 			var err error
 
 			vector, err = c.getConsistency(qc, cons, vector, index.Bucket)
 			if err != nil {
 				return err, false
 			}
-			return qc.ScanAll(uint64(index.DefnId), requestId, limit, cons, vector, callb)
+			return qc.ScanAll(uint64(index.DefnId), requestId, limit, cons, vector, callb, rollbackTime)
 		})
 
 	if err != nil { // callback with error
@@ -609,7 +609,7 @@ func (c *GsiClient) MultiScan(
 
 	err = c.doScan(
 		defnID, requestId,
-		func(qc *GsiScanClient, index *common.IndexDefn) (error, bool) {
+		func(qc *GsiScanClient, index *common.IndexDefn, rollbackTime int64) (error, bool) {
 			var err error
 
 			vector, err = c.getConsistency(qc, cons, vector, index.Bucket)
@@ -620,12 +620,12 @@ func (c *GsiClient) MultiScan(
 			if c.bridge.IsPrimary(uint64(index.DefnId)) {
 				return qc.MultiScanPrimary(
 					uint64(index.DefnId), requestId, scans, reverse, distinct,
-					projection, offset, limit, cons, vector, callb)
+					projection, offset, limit, cons, vector, callb, rollbackTime)
 			}
 
 			return qc.MultiScan(
 				uint64(index.DefnId), requestId, scans, reverse, distinct,
-				projection, offset, limit, cons, vector, callb)
+				projection, offset, limit, cons, vector, callb, rollbackTime)
 		})
 
 	if err != nil { // callback with error
@@ -658,7 +658,7 @@ func (c *GsiClient) CountLookup(
 
 	err = c.doScan(
 		defnID, requestId,
-		func(qc *GsiScanClient, index *common.IndexDefn) (error, bool) {
+		func(qc *GsiScanClient, index *common.IndexDefn, rollbackTime int64) (error, bool) {
 			var err error
 
 			vector, err = c.getConsistency(qc, cons, vector, index.Bucket)
@@ -675,11 +675,11 @@ func (c *GsiClient) CountLookup(
 				}
 
 				count, err = qc.CountLookupPrimary(
-					uint64(index.DefnId), requestId, equals, cons, vector)
+					uint64(index.DefnId), requestId, equals, cons, vector, rollbackTime)
 				return err, false
 			}
 
-			count, err = qc.CountLookup(uint64(index.DefnId), requestId, values, cons, vector)
+			count, err = qc.CountLookup(uint64(index.DefnId), requestId, values, cons, vector, rollbackTime)
 			return err, false
 		})
 
@@ -708,7 +708,7 @@ func (c *GsiClient) CountRange(
 
 	err = c.doScan(
 		defnID, requestId,
-		func(qc *GsiScanClient, index *common.IndexDefn) (error, bool) {
+		func(qc *GsiScanClient, index *common.IndexDefn, rollbackTime int64) (error, bool) {
 			var err error
 
 			vector, err = c.getConsistency(qc, cons, vector, index.Bucket)
@@ -730,12 +730,12 @@ func (c *GsiClient) CountRange(
 					}
 				}
 				count, err = qc.CountRangePrimary(
-					uint64(index.DefnId), requestId, l, h, inclusion, cons, vector)
+					uint64(index.DefnId), requestId, l, h, inclusion, cons, vector, rollbackTime)
 				return err, false
 			}
 
 			count, err = qc.CountRange(
-				uint64(index.DefnId), requestId, low, high, inclusion, cons, vector)
+				uint64(index.DefnId), requestId, low, high, inclusion, cons, vector, rollbackTime)
 			return err, false
 		})
 
@@ -762,7 +762,7 @@ func (c *GsiClient) MultiScanCount(
 
 	err = c.doScan(
 		defnID, requestId,
-		func(qc *GsiScanClient, index *common.IndexDefn) (error, bool) {
+		func(qc *GsiScanClient, index *common.IndexDefn, rollbackTime int64) (error, bool) {
 			var err error
 
 			vector, err = c.getConsistency(qc, cons, vector, index.Bucket)
@@ -771,12 +771,12 @@ func (c *GsiClient) MultiScanCount(
 			}
 			if c.bridge.IsPrimary(uint64(index.DefnId)) {
 				count, err = qc.MultiScanCountPrimary(
-					uint64(index.DefnId), requestId, scans, distinct, cons, vector)
+					uint64(index.DefnId), requestId, scans, distinct, cons, vector, rollbackTime)
 				return err, false
 			}
 
 			count, err = qc.MultiScanCount(
-				uint64(index.DefnId), requestId, scans, distinct, cons, vector)
+				uint64(index.DefnId), requestId, scans, distinct, cons, vector, rollbackTime)
 			return err, false
 		})
 
@@ -858,7 +858,7 @@ func (c *GsiClient) updateScanClients() {
 
 func (c *GsiClient) doScan(
 	defnID uint64, requestId string,
-	callb func(*GsiScanClient, *common.IndexDefn) (error, bool)) (err error) {
+	callb func(*GsiScanClient, *common.IndexDefn, int64) (error, bool)) (err error) {
 
 	var qc *GsiScanClient
 	var ok1, ok2, partial bool
@@ -867,6 +867,7 @@ func (c *GsiClient) doScan(
 	var targetInstID uint64
 	var scan_err error
 	var excludes map[uint64]bool
+	var rollbackTime int64
 
 	wait := c.config["retryIntervalScanport"].Int()
 	retry := c.config["retryScanPort"].Int()
@@ -874,11 +875,11 @@ func (c *GsiClient) doScan(
 	for i := 0; true; {
 		qcs :=
 			*((*map[string]*GsiScanClient)(atomic.LoadPointer(&c.queryClients)))
-		if queryport, targetDefnID, targetInstID, ok1 = c.bridge.GetScanport(defnID, i, excludes); ok1 {
+		if queryport, targetDefnID, targetInstID, rollbackTime, ok1 = c.bridge.GetScanport(defnID, i, excludes); ok1 {
 			index := c.bridge.GetIndexDefn(targetDefnID)
 			if qc, ok2 = qcs[queryport]; ok2 {
 				begin := time.Now()
-				scan_err, partial = callb(qc, index)
+				scan_err, partial = callb(qc, index, rollbackTime)
 				if c.isTimeit(scan_err) {
 					c.bridge.Timeit(targetInstID, float64(time.Since(begin)))
 					return scan_err

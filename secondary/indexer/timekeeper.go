@@ -230,6 +230,7 @@ func (tk *timekeeper) handleStreamOpen(cmd Message) {
 	streamId := cmd.(*MsgStreamUpdate).GetStreamId()
 	bucket := cmd.(*MsgStreamUpdate).GetBucket()
 	restartTs := cmd.(*MsgStreamUpdate).GetRestartTs()
+	rollbackTime := cmd.(*MsgStreamUpdate).GetRollbackTime()
 
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
@@ -251,6 +252,7 @@ func (tk *timekeeper) handleStreamOpen(cmd Message) {
 			tk.ss.streamBucketRestartTsMap[streamId][bucket] = restartTs
 			tk.ss.setHWTFromRestartTs(streamId, bucket)
 		}
+		tk.ss.setRollbackTime(bucket, rollbackTime)
 		tk.addIndextoStream(cmd)
 		tk.startTimer(streamId, bucket)
 
@@ -2739,6 +2741,13 @@ func (tk *timekeeper) handleStats(cmd Message) {
 	tk.lock.Unlock()
 
 	go func() {
+
+		if !req.FetchDcp() {
+			tk.updateTimestampStats()
+			replych <- true
+			return
+		}
+
 		// Populate current KV timestamps for all buckets
 		bucketTsMap := make(map[string]Timestamp)
 		for _, inst := range indexInstMap {
@@ -2838,11 +2847,33 @@ func (tk *timekeeper) handleStats(cmd Message) {
 				idxStats.numDocsQueued.Set(int64(queued))
 				idxStats.numDocsPending.Set(int64(pending))
 				idxStats.buildProgress.Set(int64(v))
+				idxStats.lastRollbackTime.Set(tk.ss.bucketRollbackTime[inst.Defn.Bucket])
+				idxStats.progressStatTime.Set(time.Now().UnixNano())
 			}
 		}
 
 		replych <- true
 	}()
+}
+
+func (tk *timekeeper) updateTimestampStats() {
+
+	tk.lock.Lock()
+	defer tk.lock.Unlock()
+
+	stats := tk.stats.Get()
+	for _, inst := range tk.indexInstMap {
+		//skip deleted indexes
+		if inst.State == common.INDEX_STATE_DELETED {
+			continue
+		}
+
+		idxStats := stats.indexes[inst.InstId]
+		if idxStats != nil {
+			idxStats.lastRollbackTime.Set(tk.ss.bucketRollbackTime[inst.Defn.Bucket])
+			idxStats.progressStatTime.Set(time.Now().UnixNano())
+		}
+	}
 }
 
 func (tk *timekeeper) isBuildCompletionTs(streamId common.StreamId,

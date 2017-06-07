@@ -139,6 +139,7 @@ const (
 	SCAN_STATS
 	INDEX_PROGRESS_STATS
 	INDEXER_STATS
+	INDEX_STATS_DONE
 
 	STATS_RESET
 	REPAIR_ABORT
@@ -345,14 +346,15 @@ func (m *MsgUpdateBucketQueue) String() string {
 //CLOSE_STREAM
 //CLEANUP_STREAM
 type MsgStreamUpdate struct {
-	mType     MsgType
-	streamId  common.StreamId
-	indexList []common.IndexInst
-	buildTs   Timestamp
-	respCh    MsgChannel
-	stopCh    StopChannel
-	bucket    string
-	restartTs *common.TsVbuuid
+	mType        MsgType
+	streamId     common.StreamId
+	indexList    []common.IndexInst
+	buildTs      Timestamp
+	respCh       MsgChannel
+	stopCh       StopChannel
+	bucket       string
+	restartTs    *common.TsVbuuid
+	rollbackTime int64
 }
 
 func (m *MsgStreamUpdate) GetMsgType() MsgType {
@@ -385,6 +387,10 @@ func (m *MsgStreamUpdate) GetBucket() string {
 
 func (m *MsgStreamUpdate) GetRestartTs() *common.TsVbuuid {
 	return m.restartTs
+}
+
+func (m *MsgStreamUpdate) GetRollbackTime() int64 {
+	return m.rollbackTime
 }
 
 func (m *MsgStreamUpdate) String() string {
@@ -463,8 +469,9 @@ func (m *MsgMutMgrGetTimestamp) GetStreamId() common.StreamId {
 
 //UPDATE_INSTANCE_MAP
 type MsgUpdateInstMap struct {
-	indexInstMap common.IndexInstMap
-	stats        *IndexerStats
+	indexInstMap  common.IndexInstMap
+	stats         *IndexerStats
+	rollbackTimes map[string]int64
 }
 
 func (m *MsgUpdateInstMap) GetMsgType() MsgType {
@@ -477,6 +484,10 @@ func (m *MsgUpdateInstMap) GetIndexInstMap() common.IndexInstMap {
 
 func (m *MsgUpdateInstMap) GetStatsObject() *IndexerStats {
 	return m.stats
+}
+
+func (m *MsgUpdateInstMap) GetRollbackTimes() map[string]int64 {
+	return m.rollbackTimes
 }
 
 func (m *MsgUpdateInstMap) String() string {
@@ -944,9 +955,10 @@ func (m *MsgRecovery) GetBuildTs() Timestamp {
 }
 
 type MsgRollback struct {
-	streamId   common.StreamId
-	bucket     string
-	rollbackTs *common.TsVbuuid
+	streamId     common.StreamId
+	bucket       string
+	rollbackTs   *common.TsVbuuid
+	rollbackTime int64
 }
 
 func (m *MsgRollback) GetMsgType() MsgType {
@@ -963,6 +975,10 @@ func (m *MsgRollback) GetBucket() string {
 
 func (m *MsgRollback) GetRollbackTs() *common.TsVbuuid {
 	return m.rollbackTs
+}
+
+func (m *MsgRollback) GetRollbackTime() int64 {
+	return m.rollbackTime
 }
 
 type MsgRepairAbort struct {
@@ -1029,8 +1045,9 @@ func (m *MsgIndexStorageStats) GetReplyChannel() chan []IndexStorageStats {
 }
 
 type MsgStatsRequest struct {
-	mType  MsgType
-	respch chan bool
+	mType    MsgType
+	respch   chan bool
+	fetchDcp bool
 }
 
 func (m *MsgStatsRequest) GetMsgType() MsgType {
@@ -1039,6 +1056,10 @@ func (m *MsgStatsRequest) GetMsgType() MsgType {
 
 func (m *MsgStatsRequest) GetReplyChannel() chan bool {
 	return m.respch
+}
+
+func (m *MsgStatsRequest) FetchDcp() bool {
+	return m.fetchDcp
 }
 
 type MsgIndexCompact struct {
@@ -1199,11 +1220,16 @@ func (m *MsgResetStats) GetMsgType() MsgType {
 //INDEXER_UNPAUSE
 //INDEXER_BOOTSTRAP
 type MsgIndexerState struct {
-	mType MsgType
+	mType         MsgType
+	rollbackTimes map[string]int64
 }
 
 func (m *MsgIndexerState) GetMsgType() MsgType {
 	return m.mType
+}
+
+func (m *MsgIndexerState) GetRollbackTimes() map[string]int64 {
+	return m.rollbackTimes
 }
 
 type MsgCheckDDLInProgress struct {

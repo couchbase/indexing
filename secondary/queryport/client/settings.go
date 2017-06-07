@@ -13,15 +13,18 @@ import (
 	"github.com/couchbase/cbauth/metakv"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
+	"math"
 	"sync/atomic"
 	"time"
 )
 
 type ClientSettings struct {
-	numReplica    int32
-	backfillLimit int32
-	config        common.Config
-	cancelCh      chan struct{}
+	numReplica     int32
+	backfillLimit  int32
+	scanLagPercent uint64
+	scanLagItem    uint64
+	config         common.Config
+	cancelCh       chan struct{}
 }
 
 func NewClientSettings(needRefresh bool) *ClientSettings {
@@ -101,6 +104,20 @@ func (s *ClientSettings) handleSettings(config common.Config) {
 	} else {
 		logging.Errorf("ClientSettings: invalid setting value for backfillLimit=%v", backfillLimit)
 	}
+
+	scanLagPercent := config["queryport.client.scanLagPercent"].Float64()
+	if scanLagPercent >= 0 {
+		atomic.StoreUint64(&s.scanLagPercent, math.Float64bits(scanLagPercent))
+	} else {
+		logging.Errorf("ClientSettings: invalid setting value for scanLagPercent=%v", scanLagPercent)
+	}
+
+	scanLagItem := config["queryport.client.scanLagItem"].Int()
+	if scanLagItem >= 0 {
+		atomic.StoreUint64(&s.scanLagItem, uint64(scanLagItem))
+	} else {
+		logging.Errorf("ClientSettings: invalid setting value for scanLagItem=%v", scanLagItem)
+	}
 }
 
 func (s *ClientSettings) NumReplica() int32 {
@@ -109,4 +126,13 @@ func (s *ClientSettings) NumReplica() int32 {
 
 func (s *ClientSettings) BackfillLimit() int32 {
 	return atomic.LoadInt32(&s.backfillLimit)
+}
+
+func (s *ClientSettings) ScanLagPercent() float64 {
+	bits := atomic.LoadUint64(&s.scanLagPercent)
+	return math.Float64frombits(bits)
+}
+
+func (s *ClientSettings) ScanLagItem() uint64 {
+	return atomic.LoadUint64(&s.scanLagItem)
 }

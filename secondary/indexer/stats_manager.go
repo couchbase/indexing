@@ -137,7 +137,9 @@ type IndexStats struct {
 	lastScanGatherTime    stats.Int64Val
 	lastNumRowsReturned   stats.Int64Val
 	lastMutateGatherTime  stats.Int64Val
-	lastNumDocsQueued     stats.Int64Val
+	lastNumDocsIndexed    stats.Int64Val
+	lastRollbackTime      stats.TimeVal
+	progressStatTime      stats.TimeVal
 
 	Timings IndexTimingStats
 }
@@ -198,7 +200,9 @@ func (s *IndexStats) Init() {
 	s.lastScanGatherTime.Init()
 	s.lastNumRowsReturned.Init()
 	s.lastMutateGatherTime.Init()
-	s.lastNumDocsQueued.Init()
+	s.lastNumDocsIndexed.Init()
+	s.lastRollbackTime.Init()
+	s.progressStatTime.Init()
 
 	s.Timings.Init()
 }
@@ -271,7 +275,8 @@ func (s *IndexerStats) RemoveIndex(id common.IndexInstId) {
 	}
 }
 
-func (is IndexerStats) MarshalJSON() ([]byte, error) {
+func (is IndexerStats) GetStats() common.Statistics {
+
 	var prefix string
 
 	statsMap := make(map[string]interface{})
@@ -362,6 +367,8 @@ func (is IndexerStats) MarshalJSON() ([]byte, error) {
 		addStat("client_cancel_errcount", s.clientCancelError.Value())
 		addStat("avg_scan_rate", s.avgScanRate.Value())
 		addStat("avg_mutation_rate", s.avgMutationRate.Value())
+		addStat("last_rollback_time", s.lastRollbackTime.Value())
+		addStat("progress_stat_time", s.progressStatTime.Value())
 
 		addStat("timings/dcp_getseqs", s.Timings.dcpSeqs.Value())
 		addStat("timings/storage_clone_handle", s.Timings.stCloneHandle.Value())
@@ -392,7 +399,11 @@ func (is IndexerStats) MarshalJSON() ([]byte, error) {
 		}
 	}
 
-	return json.Marshal(statsMap)
+	return statsMap
+}
+
+func (is IndexerStats) MarshalJSON() ([]byte, error) {
+	return json.Marshal(is.GetStats())
 }
 
 func (s IndexerStats) Clone() *IndexerStats {
@@ -480,6 +491,8 @@ func (s *statsManager) tryUpdateStats(sync bool) {
 				s.supvMsgch <- msg
 				<-ch
 			}
+
+			s.supvMsgch <- &MsgStatsRequest{mType: INDEX_STATS_DONE, respch: nil}
 
 			s.Lock()
 			s.lastStatTime = time.Now()

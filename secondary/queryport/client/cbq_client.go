@@ -11,6 +11,7 @@ import "io/ioutil"
 import "errors"
 import "strings"
 import "sync"
+import "math"
 
 import "github.com/couchbase/indexing/secondary/logging"
 import "github.com/couchbase/indexing/secondary/common"
@@ -218,9 +219,9 @@ func (b *cbqClient) GetScanports() (queryports []string) {
 func (b *cbqClient) GetScanport(
 	defnID uint64,
 	retry int,
-	excludes map[uint64]bool) (queryport string, targetDefnID uint64, targetIndstID uint64, ok bool) {
+	excludes map[uint64]bool) (queryport string, targetDefnID uint64, targetIndstID uint64, rollbackTime int64, ok bool) {
 
-	return b.queryport, defnID, 0, true
+	return b.queryport, defnID, 0, int64(math.MaxInt64), true
 }
 
 // GetIndexDefn implements BridgeAccessor{} interface.

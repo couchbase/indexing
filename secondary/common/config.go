@@ -580,6 +580,22 @@ var SystemConfig = Config{
 		false,    // mutable
 		false,    // case-insensitive
 	},
+	"queryport.client.scanLagPercent": ConfigValue{
+		0.2,
+		"allowed threshold on mutation lag from fastest replica during scan, " +
+			"representing as a percentage of pending mutations from fastest replica,",
+		0.2,
+		false, // immutable
+		false, // case-insensitive
+	},
+	"queryport.client.scanLagItem": ConfigValue{
+		100000,
+		"allowed threshold on mutation lag from fastest replica during scan, " +
+			"representing as a number of pending mutations from fastest replica,",
+		100000,
+		false, // immutable
+		false, // case-insensitive
+	},
 	// projector's adminport client, can be used by indexer.
 	"indexer.projectorclient.retryInterval": ConfigValue{
 		16,
@@ -916,9 +932,16 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.plasma.LSSSegmentFileSize": ConfigValue{
-		4294967296,
+		plasmaLogSegSize(),
 		"LSS log segment maxsize per file",
-		4294967296,
+		plasmaLogSegSize(),
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.LSSReclaimBlockSize": ConfigValue{
+		64 * 1024 * 1024,
+		"Space reclaim granularity for LSS log",
+		64 * 1024 * 1024,
 		false, // mutable
 		false, // case-insensitive
 	},
@@ -1777,4 +1800,13 @@ func (cv ConfigValue) Strings() []string {
 // Bool assumes config value is a Bool and returns the same.
 func (cv ConfigValue) Bool() bool {
 	return cv.Value.(bool)
+}
+
+func plasmaLogSegSize() int {
+	switch runtime.GOOS {
+	case "linux":
+		return 4 * 1024 * 1024 * 1024
+	default:
+		return 512 * 1024 * 1024
+	}
 }

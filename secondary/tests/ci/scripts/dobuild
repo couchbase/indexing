@@ -11,7 +11,7 @@ error_exit() {
 }
 
 export RELEASE=5.0.0
-export BLD_NUM=2671
+export BLD_NUM=3025
 
 echo '</pre><h3>Building</h3><pre>'
 > $WORKSPACE/versions.cfg
@@ -160,27 +160,14 @@ else
   echo "none"
 fi
 
-cd $WORKSPACE/ep-engine
+cd $WORKSPACE/kv_engine
 current="`git rev-parse HEAD`"
-test -f ~/ep-engine.good || (echo $current > ~/ep-engine.good)
-good="`cat ~/ep-engine.good`"
-echo -n "ep-engine is at <a href='https://github.com/couchbase/ep-engine/commit/$current'>${current:0:7}</a>, changes since last good build: "
+test -f ~/kv_engine.good || (echo $current > ~/kv_engine.good)
+good="`cat ~/kv_engine.good`"
+echo -n "kv_engine is at <a href='https://github.com/couchbase/kv_engine/commit/$current'>${current:0:7}</a>, changes since last good build: "
 if [ "$current" != "$good" ]; then
   echo
-  git log --pretty='format: <a href="https://github.com/couchbase/ep-engine/commit/%H">%h</a> %s' HEAD...$good
-  echo
-else
-  echo "none"
-fi
-
-cd $WORKSPACE/memcached
-current="`git rev-parse HEAD`"
-test -f ~/memcached.good || (echo $current > ~/memcached.good)
-good="`cat ~/memcached.good`"
-echo -n "memcached is at <a href='https://github.com/couchbase/memcached/commit/$current'>${current:0:7}</a>, changes since last good build: "
-if [ "$current" != "$good" ]; then
-  echo
-  git log --pretty='format: <a href="https://github.com/couchbase/memcached/commit/%H">%h</a> %s' HEAD...$good
+  git log --pretty='format: <a href="https://github.com/couchbase/kv_engine/commit/%H">%h</a> %s' HEAD...$good
   echo
 else
   echo "none"

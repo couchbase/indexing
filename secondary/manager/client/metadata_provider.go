@@ -60,6 +60,7 @@ type MetadataProvider struct {
 	settings           Settings
 	indexerVersion     uint64
 	clusterVersion     uint64
+	statsNotifyCh      chan map[c.IndexInstId]c.Statistics
 }
 
 //
@@ -133,6 +134,7 @@ type InstanceDefn struct {
 	Endpts    []c.Endpoint
 	Version   uint64
 	RState    uint32
+	ReplicaId uint64
 }
 
 type event struct {
@@ -154,7 +156,7 @@ var REQUEST_CHANNEL_COUNT = 1000
 // Public function : MetadataProvider
 ///////////////////////////////////////////////////////
 
-func NewMetadataProvider(providerId string, changeCh chan bool, settings Settings) (s *MetadataProvider, err error) {
+func NewMetadataProvider(providerId string, changeCh chan bool, statsCh chan map[c.IndexInstId]c.Statistics, settings Settings) (s *MetadataProvider, err error) {
 
 	s = new(MetadataProvider)
 	s.watchers = make(map[c.IndexerId]*watcher)
@@ -162,6 +164,7 @@ func NewMetadataProvider(providerId string, changeCh chan bool, settings Setting
 	s.repo = newMetadataRepo(s)
 	s.timeout = int64(time.Second) * 120
 	s.metaNotifyCh = changeCh
+	s.statsNotifyCh = statsCh
 	s.settings = settings
 
 	s.providerId, err = s.getWatcherAddr(providerId)
@@ -992,6 +995,8 @@ func (o *MetadataProvider) AllWatchersAlive() bool {
 	o.mutex.Lock()
 	defer o.mutex.Unlock()
 
+	// This only check watchers are running and being responsive (connected).
+	// See more comment on allWatchersRunningNoLock()
 	return o.AllWatchersAliveNoLock()
 }
 
@@ -1044,6 +1049,10 @@ func (o *MetadataProvider) AllWatchersAliveNoLock() bool {
 //
 func (o *MetadataProvider) allWatchersRunningNoLock() bool {
 
+	// This only check watchers have started successfully.
+	// The watcher may not be connected (alive).
+	// numExpectedWatcher = active node (known ports, unknown ports, unhealthy)
+	// This does not include failed over node or new node (not yet rebalanced in).
 	expected := atomic.LoadInt32(&o.numExpectedWatcher)
 	actual := atomic.LoadInt32(&o.numWatcher)
 
@@ -1462,6 +1471,20 @@ func (o *MetadataProvider) needRefresh() {
 	if o.metaNotifyCh != nil {
 		select {
 		case o.metaNotifyCh <- true:
+		default:
+		}
+	}
+}
+
+//
+// This function notifies metadata provider and its caller that new version of
+// metadata is available.
+//
+func (o *MetadataProvider) refreshStats(stats map[c.IndexInstId]c.Statistics) {
+
+	if o.statsNotifyCh != nil {
+		select {
+		case o.statsNotifyCh <- stats:
 		default:
 		}
 	}
@@ -1952,6 +1975,7 @@ func (r *metadataRepo) makeInstanceDefn(defnId c.IndexDefnId, inst *IndexInstDis
 	idxInst.Error = inst.Error
 	idxInst.Version = inst.Version
 	idxInst.RState = inst.RState
+	idxInst.ReplicaId = inst.ReplicaId
 
 	for _, partition := range inst.Partitions {
 		for _, slice := range partition.SinglePartition.Slices {
@@ -2039,6 +2063,40 @@ func (r *metadataRepo) updateRebalanceInstancesInIndexMetadata(defnId c.IndexDef
 	}
 
 	logging.Debugf("update update metadata: index definition %v has %v instances under rebalance.", defnId, len(meta.InstsInRebalance))
+}
+
+func (r *metadataRepo) resolveIndexStats(indexerId c.IndexerId, stats c.Statistics) map[c.IndexInstId]c.Statistics {
+
+	r.mutex.RLock()
+	defer r.mutex.RUnlock()
+
+	if len(indexerId) == 0 {
+		return (map[c.IndexInstId]c.Statistics)(nil)
+	}
+
+	result := make(map[c.IndexInstId]c.Statistics)
+
+	// if the index is being rebalanced, this will only look at the active instance with the highest instance version.
+	for _, meta := range r.indices {
+		for _, inst := range meta.Instances {
+			name := c.FormatIndexInstDisplayName(meta.Definition.Name, int(inst.ReplicaId))
+			prefix := fmt.Sprintf("%s:%s:", meta.Definition.Bucket, name)
+
+			for statName, statVal := range stats {
+				if strings.HasPrefix(statName, prefix) {
+					if inst.IndexerId == indexerId {
+						key := strings.TrimPrefix(statName, prefix)
+						if _, ok := result[inst.InstId]; !ok {
+							result[inst.InstId] = make(c.Statistics)
+						}
+						result[inst.InstId].Set(key, statVal)
+					}
+				}
+			}
+		}
+	}
+
+	return result
 }
 
 ///////////////////////////////////////////////////////
@@ -2207,7 +2265,7 @@ func (w *watcher) updateServiceMap(adminport string) error {
 	return nil
 }
 
-func (w *watcher) updateServiceMapNoLock(serviceMap *ServiceMap) bool {
+func (w *watcher) updateServiceMapNoLock(indexerId c.IndexerId, serviceMap *ServiceMap) bool {
 
 	needRefresh := false
 
@@ -2240,6 +2298,19 @@ func (w *watcher) updateServiceMapNoLock(serviceMap *ServiceMap) bool {
 	}
 
 	return needRefresh
+}
+
+func (w *watcher) updateIndexStatsNoLock(indexerId c.IndexerId, indexStats *IndexStats) map[c.IndexInstId]c.Statistics {
+
+	stats := (map[c.IndexInstId]c.Statistics)(nil)
+	if indexStats != nil && len(indexStats.Stats) != 0 {
+		stats = w.provider.repo.resolveIndexStats(indexerId, indexStats.Stats)
+		if len(stats) == 0 {
+			stats = nil
+		}
+	}
+
+	return stats
 }
 
 func (w *watcher) waitForEvent(defnId c.IndexDefnId, status []c.IndexState) error {
@@ -2596,6 +2667,10 @@ func isServiceMapKey(key string) bool {
 	return strings.Contains(key, "ServiceMap")
 }
 
+func isIndexStats(key string) bool {
+	return strings.Contains(key, "IndexStats")
+}
+
 ///////////////////////////////////////////////////////
 // Interface : RequestMgr
 ///////////////////////////////////////////////////////
@@ -2712,9 +2787,12 @@ func (w *watcher) Commit(txid common.Txnid) error {
 	}
 
 	delete(w.pendings, txid)
-	needRefresh, err := w.processChange(txid, msg.GetOpCode(), msg.GetKey(), msg.GetContent(), indexerId)
+	needRefresh, stats, err := w.processChange(txid, msg.GetOpCode(), msg.GetKey(), msg.GetContent(), indexerId)
 	if needRefresh {
 		w.provider.needRefresh()
+	}
+	if len(stats) != 0 {
+		w.provider.refreshStats(stats)
 	}
 
 	handle, ok := w.loggedReqs[txid]
@@ -2847,14 +2925,14 @@ func (w *watcher) LogAndCommit(txid common.Txnid, op uint32, key string, content
 		}
 	}()
 
-	if _, err := w.processChange(txid, op, key, content, indexerId); err != nil {
+	if _, _, err := w.processChange(txid, op, key, content, indexerId); err != nil {
 		logging.Errorf("watcher.LogAndCommit(): receive error when processing log entry from server.  Error = %v", err)
 	}
 
 	return nil
 }
 
-func (w *watcher) processChange(txid common.Txnid, op uint32, key string, content []byte, indexerId c.IndexerId) (bool, error) {
+func (w *watcher) processChange(txid common.Txnid, op uint32, key string, content []byte, indexerId c.IndexerId) (bool, map[c.IndexInstId]c.Statistics, error) {
 
 	logging.Debugf("watcher.processChange(): key = %v txid=%v last_seen_txid=%v", key, txid, w.lastSeenTxid)
 	defer logging.Debugf("watcher.processChange(): done -> key = %v", key)
@@ -2862,7 +2940,7 @@ func (w *watcher) processChange(txid common.Txnid, op uint32, key string, conten
 	opCode := common.OpCode(op)
 
 	switch opCode {
-	case common.OPCODE_ADD, common.OPCODE_SET:
+	case common.OPCODE_ADD, common.OPCODE_SET, common.OPCODE_BROADCAST:
 		if isIndexDefnKey(key) {
 			if len(content) == 0 {
 				logging.Debugf("watcher.processChange(): content of key = %v is empty.", key)
@@ -2870,10 +2948,10 @@ func (w *watcher) processChange(txid common.Txnid, op uint32, key string, conten
 
 			_, err := extractDefnIdFromKey(key)
 			if err != nil {
-				return false, err
+				return false, nil, err
 			}
 			if err := w.provider.repo.unmarshallAndAddDefn(content); err != nil {
-				return false, err
+				return false, nil, err
 			}
 			w.notifyEventNoLock()
 
@@ -2883,14 +2961,14 @@ func (w *watcher) processChange(txid common.Txnid, op uint32, key string, conten
 
 			// Even though there is new index definition, do not refresh metadata until it sees
 			// changes to index topology
-			return false, nil
+			return false, nil, nil
 
 		} else if isIndexTopologyKey(key) {
 			if len(content) == 0 {
 				logging.Debugf("watcher.processChange(): content of key = %v is empty.", key)
 			}
 			if err := w.provider.repo.unmarshallAndUpdateTopology(content, indexerId); err != nil {
-				return false, err
+				return false, nil, err
 			}
 			w.notifyEventNoLock()
 
@@ -2899,7 +2977,7 @@ func (w *watcher) processChange(txid common.Txnid, op uint32, key string, conten
 			}
 
 			// return needRefersh to true
-			return true, nil
+			return true, nil, nil
 
 		} else if isServiceMapKey(key) {
 			if len(content) == 0 {
@@ -2908,11 +2986,24 @@ func (w *watcher) processChange(txid common.Txnid, op uint32, key string, conten
 
 			serviceMap, err := UnmarshallServiceMap(content)
 			if err != nil {
-				return false, err
+				return false, nil, err
 			}
 
-			needRefresh := w.updateServiceMapNoLock(serviceMap)
-			return needRefresh, nil
+			needRefresh := w.updateServiceMapNoLock(indexerId, serviceMap)
+			return needRefresh, nil, nil
+
+		} else if isIndexStats(key) {
+			if len(content) == 0 {
+				logging.Debugf("watcher.processChange(): content of key = %v is empty.", key)
+			}
+
+			indexStats, err := UnmarshallIndexStats(content)
+			if err != nil {
+				return false, nil, err
+			}
+
+			stats := w.updateIndexStatsNoLock(indexerId, indexStats)
+			return false, stats, nil
 		}
 	case common.OPCODE_DELETE:
 
@@ -2920,7 +3011,7 @@ func (w *watcher) processChange(txid common.Txnid, op uint32, key string, conten
 
 			_, err := extractDefnIdFromKey(key)
 			if err != nil {
-				return false, err
+				return false, nil, err
 			}
 			w.notifyEventNoLock()
 
@@ -2928,11 +3019,11 @@ func (w *watcher) processChange(txid common.Txnid, op uint32, key string, conten
 				w.lastSeenTxid = txid
 			}
 
-			return true, nil
+			return true, nil, nil
 		}
 	}
 
-	return false, nil
+	return false, nil, nil
 }
 
 func extractDefnIdFromKey(key string) (c.IndexDefnId, error) {

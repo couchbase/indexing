@@ -19,6 +19,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unsafe"
 
 	"github.com/couchbase/indexing/secondary/collatejson"
 	"github.com/couchbase/indexing/secondary/common"
@@ -86,6 +87,9 @@ type ScanRequest struct {
 	Distinct          bool
 	Offset            int64
 	projectPrimaryKey bool
+
+	// Rollback Time
+	rollbackTime int64
 
 	ScanId      uint64
 	ExpiredTime time.Time
@@ -339,6 +343,7 @@ type scanCoordinator struct {
 	supvMsgch        MsgChannel //channel to send any async message to supervisor
 	snapshotNotifych chan IndexSnapshot
 	lastSnapshot     map[common.IndexInstId]IndexSnapshot
+	rollbackTimes    unsafe.Pointer
 
 	serv      *queryport.Server
 	logPrefix string
@@ -509,6 +514,9 @@ func (s *scanCoordinator) handleSupvervisorCommands(cmd Message) {
 
 	case INDEXER_BOOTSTRAP:
 		s.handleIndexerBootstrap(cmd)
+
+	case INDEXER_ROLLBACK:
+		s.handleIndexerRollback(cmd)
 
 	default:
 		logging.Errorf("ScanCoordinator: Received Unknown Command %v", cmd)
@@ -1158,6 +1166,7 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 	case *protobuf.CountRequest:
 		r.DefnID = req.GetDefnID()
 		r.RequestId = req.GetRequestId()
+		r.rollbackTime = req.GetRollbackTime()
 		cons := common.Consistency(req.GetCons())
 		vector := req.GetVector()
 		r.ScanType = CountReq
@@ -1184,6 +1193,7 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 	case *protobuf.ScanRequest:
 		r.DefnID = req.GetDefnID()
 		r.RequestId = req.GetRequestId()
+		r.rollbackTime = req.GetRollbackTime()
 		cons := common.Consistency(req.GetCons())
 		vector := req.GetVector()
 		r.ScanType = ScanReq
@@ -1216,6 +1226,7 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 	case *protobuf.ScanAllRequest:
 		r.DefnID = req.GetDefnID()
 		r.RequestId = req.GetRequestId()
+		r.rollbackTime = req.GetRollbackTime()
 		cons := common.Consistency(req.GetCons())
 		vector := req.GetVector()
 		r.ScanType = ScanAllReq
@@ -1451,7 +1462,7 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, conn net.Conn,
 
 	req.Stats.scanReqAllocDuration.Add(time.Now().Sub(atime).Nanoseconds())
 
-	if err := s.isScanAllowed(*req.Consistency); err != nil {
+	if err := s.isScanAllowed(*req.Consistency, req); err != nil {
 		s.tryRespondWithError(w, req, err)
 		return
 	}
@@ -1688,6 +1699,11 @@ func (s *scanCoordinator) handleUpdateIndexInstMap(cmd Message) {
 	s.stats.Set(req.GetStatsObject())
 	s.indexInstMap = common.CopyIndexInstMap(indexInstMap)
 
+	if len(req.GetRollbackTimes()) != 0 {
+		logging.Infof("ScanCoordinator::initialize rollback times on new index inst map: %v", req.GetRollbackTimes())
+		s.initRollbackTimes(req.GetRollbackTimes())
+	}
+
 	s.supvCmdch <- &MsgSuccess{}
 }
 
@@ -1714,7 +1730,45 @@ func (s *scanCoordinator) handleIndexerPause(cmd Message) {
 
 }
 
+func (s *scanCoordinator) cloneRollbackTimes() map[string]int64 {
+
+	newTime := make(map[string]int64)
+	oldTime := (*map[string]int64)(atomic.LoadPointer(&s.rollbackTimes))
+	if oldTime != nil {
+		for bucket, rollbackTime := range *oldTime {
+			newTime[bucket] = rollbackTime
+		}
+	}
+
+	return newTime
+}
+
+func (s *scanCoordinator) saveRollbackTime(bucket string, rollbackTime int64) {
+
+	logging.Infof("ScanCoordinator::saveRollbackTime: bucket %v time %v", bucket, rollbackTime)
+	newTime := s.cloneRollbackTimes()
+	newTime[bucket] = rollbackTime
+	atomic.StorePointer(&s.rollbackTimes, unsafe.Pointer(&newTime))
+}
+
+func (s *scanCoordinator) initRollbackTimes(rollbackTimes map[string]int64) {
+
+	newTimes := make(map[string]int64)
+	for bucket, rollbackTime := range rollbackTimes {
+		newTimes[bucket] = rollbackTime
+	}
+	atomic.StorePointer(&s.rollbackTimes, unsafe.Pointer(&newTimes))
+}
+
 func (s *scanCoordinator) handleIndexerResume(cmd Message) {
+
+	msg := cmd.(*MsgIndexerState)
+	rollbackTimes := msg.GetRollbackTimes()
+	if len(rollbackTimes) != 0 {
+		logging.Infof("ScanCoordinator::initialize rollback times on indexer resume: %v", rollbackTimes)
+		s.initRollbackTimes(rollbackTimes)
+	}
+
 	s.setIndexerState(common.INDEXER_ACTIVE)
 
 	s.supvCmdch <- &MsgSuccess{}
@@ -1722,6 +1776,14 @@ func (s *scanCoordinator) handleIndexerResume(cmd Message) {
 
 func (s *scanCoordinator) handleIndexerBootstrap(cmd Message) {
 	s.setIndexerState(common.INDEXER_BOOTSTRAP)
+	s.supvCmdch <- &MsgSuccess{}
+}
+
+func (s *scanCoordinator) handleIndexerRollback(cmd Message) {
+
+	msg := cmd.(*MsgRollback)
+	s.saveRollbackTime(msg.bucket, msg.rollbackTime)
+
 	s.supvCmdch <- &MsgSuccess{}
 }
 
@@ -1806,7 +1868,7 @@ func readDeallocSnapshot(ch chan interface{}) {
 	}
 }
 
-func (s *scanCoordinator) isScanAllowed(c common.Consistency) error {
+func (s *scanCoordinator) isScanAllowed(c common.Consistency, scan *ScanRequest) error {
 	if s.getIndexerState() == common.INDEXER_PAUSED {
 		cfg := s.config.Load()
 		allow_scan_when_paused := cfg["allow_scan_when_paused"].Bool()
@@ -1818,6 +1880,27 @@ func (s *scanCoordinator) isScanAllowed(c common.Consistency) error {
 		} else {
 			return nil
 		}
+	}
+
+	if scan.rollbackTime == 0 {
+		return nil
+	}
+
+	rollbackTimes := (*map[string]int64)(atomic.LoadPointer(&s.rollbackTimes))
+	if rollbackTimes == nil {
+		logging.Errorf("ScanCoordinator.isScanAllowed: rollback time not initialized")
+		return ErrIndexRollbackOrBootstrap
+	}
+
+	rollbackTime, ok := (*rollbackTimes)[scan.Bucket]
+	if !ok {
+		logging.Errorf("ScanCoordinator.isScanAllowed: missing rollback time for bucket %v", scan.Bucket)
+		return ErrIndexRollbackOrBootstrap
+	}
+
+	if scan.rollbackTime != rollbackTime {
+		logging.Errorf("ScanCoordinator.isScanAllowed: rollback time mismatch. Req %v indexer %v", scan.rollbackTime, rollbackTime)
+		return ErrIndexRollbackOrBootstrap
 	}
 
 	return nil

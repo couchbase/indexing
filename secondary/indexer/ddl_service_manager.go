@@ -416,7 +416,7 @@ func (m *DDLServiceMgr) newMetadataProvider(nodes map[service.NodeID]bool) (*cli
 	}
 	providerId := ustr.Str()
 
-	provider, err := client.NewMetadataProvider(providerId, nil, m.settings)
+	provider, err := client.NewMetadataProvider(providerId, nil, nil, m.settings)
 	if err != nil {
 		if provider != nil {
 			provider.Close()

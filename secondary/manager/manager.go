@@ -93,6 +93,7 @@ type MetadataNotifier interface {
 	OnIndexCreate(*common.IndexDefn, common.IndexInstId, int, *common.MetadataRequestContext) error
 	OnIndexDelete(common.IndexInstId, string, *common.MetadataRequestContext) error
 	OnIndexBuild([]common.IndexInstId, []string, *common.MetadataRequestContext) map[common.IndexInstId]error
+	OnFetchStats() error
 }
 
 type RequestServer interface {
@@ -495,6 +496,18 @@ func (m *IndexManager) NotifyIndexerReady() error {
 
 	logging.Debugf("IndexManager.NotifyIndexerReady(): making request to notify indexer is ready ")
 	return m.requestServer.MakeAsyncRequest(client.OPCODE_INDEXER_READY, "", []byte{})
+}
+
+func (m *IndexManager) NotifyStats(stats common.Statistics) error {
+
+	logging.Debugf("IndexManager.NotifyStats(): making request for new stats")
+
+	buf, e := json.Marshal(&stats)
+	if e != nil {
+		return e
+	}
+
+	return m.requestServer.MakeAsyncRequest(client.OPCODE_BROADCAST_STATS, "", buf)
 }
 
 //
