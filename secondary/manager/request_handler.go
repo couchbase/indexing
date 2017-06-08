@@ -17,6 +17,7 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager/client"
+	"github.com/couchbase/indexing/secondary/planner"
 	"io"
 	"net/http"
 	"sort"
@@ -156,6 +157,7 @@ func registerRequestHandler(mgr *IndexManager, clusterUrl string) {
 		http.HandleFunc("/restoreIndexMetadata", handlerContext.handleRestoreIndexMetadataRequest)
 		http.HandleFunc("/getIndexStatus", handlerContext.handleIndexStatusRequest)
 		http.HandleFunc("/getIndexStatement", handlerContext.handleIndexStatementRequest)
+		http.HandleFunc("/planIndex", handlerContext.handleIndexPlanRequest)
 	})
 
 	handlerContext.mgr = mgr
@@ -808,6 +810,66 @@ func (m *requestHandlerContext) makeCreateIndexRequest(defn common.IndexDefn, ho
 	}
 
 	return true
+}
+
+//////////////////////////////////////////////////////
+// Planner
+///////////////////////////////////////////////////////
+
+func (m *requestHandlerContext) handleIndexPlanRequest(w http.ResponseWriter, r *http.Request) {
+
+	_, ok := doAuth(r, w)
+	if !ok {
+		return
+	}
+
+	stmts, err := m.getIndexPlan(r)
+
+	if err == nil {
+		send(http.StatusOK, w, stmts)
+	} else {
+		sendHttpError(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+func (m *requestHandlerContext) getIndexPlan(r *http.Request) (string, error) {
+
+	plan, err := planner.RetrievePlanFromCluster(m.clusterUrl)
+	if err != nil {
+		return "", errors.New(fmt.Sprintf("Fail to retreive index information from cluster.   Error=%v", err))
+	}
+
+	specs, err := m.convertIndexPlanRequest(r)
+	if err != nil {
+		return "", errors.New(fmt.Sprintf("Fail to read index spec from request.   Error=%v", err))
+	}
+
+	solution, err := planner.ExecutePlanWithOptions(plan, specs, true, "", "", 0, -1, -1, false)
+	if err != nil {
+		return "", errors.New(fmt.Sprintf("Fail to plan index.   Error=%v", err))
+	}
+
+	return planner.CreateIndexDDL(solution), nil
+}
+
+func (m *requestHandlerContext) convertIndexPlanRequest(r *http.Request) ([]*planner.IndexSpec, error) {
+
+	var specs []*planner.IndexSpec
+
+	buf := new(bytes.Buffer)
+	if _, err := buf.ReadFrom(r.Body); err != nil {
+		logging.Debugf("RequestHandler::convertIndexPlanRequest: unable to read request body, err %v", err)
+		return nil, err
+	}
+
+	logging.Debugf("requestHandler.convertIndexPlanRequest(): input %v", string(buf.Bytes()))
+
+	if err := json.Unmarshal(buf.Bytes(), &specs); err != nil {
+		logging.Debugf("RequestHandler::convertIndexPlanRequest: unable to unmarshall request body. Buf = %s, err %v", buf, err)
+		return nil, err
+	}
+
+	return specs, nil
 }
 
 ///////////////////////////////////////////////////////
