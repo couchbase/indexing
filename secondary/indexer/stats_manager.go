@@ -484,8 +484,9 @@ func (s *statsManager) tryUpdateStats(sync bool) {
 			for _, t := range stats_list {
 				ch := make(chan bool)
 				msg := &MsgStatsRequest{
-					mType:  t,
-					respch: ch,
+					mType:    t,
+					respch:   ch,
+					fetchDcp: true,
 				}
 
 				s.supvMsgch <- msg
