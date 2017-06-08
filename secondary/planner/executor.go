@@ -50,6 +50,7 @@ type RunConfig struct {
 	CpuCostWeight  float64
 	MemCostWeight  float64
 	EjectOnly      bool
+	DisableRepair  bool
 }
 
 type RunStats struct {
@@ -110,12 +111,14 @@ type IndexSpec struct {
 // Integration with Rebalancer
 /////////////////////////////////////////////////////////////
 
-func ExecuteRebalance(clusterUrl string, topologyChange service.TopologyChange, masterId string, ejectOnly bool) (map[string]*common.TransferToken, error) {
-	return ExecuteRebalanceInternal(clusterUrl, topologyChange, masterId, false, true, ejectOnly)
+func ExecuteRebalance(clusterUrl string, topologyChange service.TopologyChange, masterId string, ejectOnly bool,
+	disableReplicaRepair bool) (map[string]*common.TransferToken, error) {
+	return ExecuteRebalanceInternal(clusterUrl, topologyChange, masterId, false, true, ejectOnly, disableReplicaRepair)
 }
 
 func ExecuteRebalanceInternal(clusterUrl string,
-	topologyChange service.TopologyChange, masterId string, addNode bool, detail bool, ejectOnly bool) (map[string]*common.TransferToken, error) {
+	topologyChange service.TopologyChange, masterId string, addNode bool, detail bool, ejectOnly bool,
+	disableReplicaRepair bool) (map[string]*common.TransferToken, error) {
 
 	plan, err := RetrievePlanFromCluster(clusterUrl)
 	if err != nil {
@@ -145,6 +148,7 @@ func ExecuteRebalanceInternal(clusterUrl string,
 	config.Resize = false
 	config.AddNode = numNode
 	config.EjectOnly = ejectOnly
+	config.DisableRepair = disableReplicaRepair
 
 	p, _, err := execute(config, CommandRebalance, plan, nil, deleteNodes)
 	if p != nil && detail {
@@ -580,6 +584,7 @@ func DefaultRunConfig() *RunConfig {
 		CpuCostWeight:  1,
 		MemCostWeight:  1,
 		EjectOnly:      false,
+		DisableRepair:  false,
 	}
 }
 
@@ -632,7 +637,7 @@ func initialSolution(config *RunConfig,
 
 	indexers := indexerNodes(constraint, indexes, sizing, false)
 
-	r := newSolution(constraint, sizing, indexers, false, false)
+	r := newSolution(constraint, sizing, indexers, false, false, config.DisableRepair)
 
 	placement := newRandomPlacement(indexes, config.AllowSwap, false)
 	placement.InitialPlace(r, indexes)
@@ -653,7 +658,7 @@ func emptySolution(config *RunConfig,
 
 	constraint := newIndexerConstraint(memQuota, cpuQuota, resize, maxNumNode, maxCpuUse, maxMemUse)
 
-	r := newSolution(constraint, sizing, ([]*IndexerNode)(nil), false, false)
+	r := newSolution(constraint, sizing, ([]*IndexerNode)(nil), false, false, config.DisableRepair)
 
 	return r, constraint
 }
@@ -693,7 +698,7 @@ func solutionFromPlan(command CommandType, config *RunConfig, sizing SizingMetho
 
 	constraint := newIndexerConstraint(memQuota, cpuQuota, resize, maxNumNode, maxCpuUse, maxMemUse)
 
-	r := newSolution(constraint, sizing, plan.Placement, plan.IsLive, (command == CommandRebalance || command == CommandSwap))
+	r := newSolution(constraint, sizing, plan.Placement, plan.IsLive, (command == CommandRebalance || command == CommandSwap), config.DisableRepair)
 	r.calculateSize() // in case sizing formula changes
 
 	if shuffle != 0 {

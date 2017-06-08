@@ -12,11 +12,14 @@ package indexer
 import (
 	"bytes"
 	"errors"
+	"fmt"
+	"github.com/couchbase/cbauth"
 	"github.com/couchbase/cbauth/metakv"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/pipeline"
 	"github.com/couchbase/nitro/mm"
+	"github.com/couchbase/nitro/plasma"
 	"io/ioutil"
 	"net/http"
 	"os"
@@ -64,6 +67,8 @@ func NewSettingsManager(supvCmdch MsgChannel,
 	http.HandleFunc("/triggerCompaction", s.handleCompactionTrigger)
 	http.HandleFunc("/settings/runtime/freeMemory", s.handleFreeMemoryReq)
 	http.HandleFunc("/settings/runtime/forceGC", s.handleForceGCReq)
+	http.HandleFunc("/plasmaDiag", plasma.Diag.HandleHttp)
+
 	go func() {
 		fn := func(r int, err error) error {
 			if r > 0 {
@@ -102,19 +107,24 @@ func (s *settingsManager) writeJson(w http.ResponseWriter, json []byte) {
 	w.Write([]byte("\n"))
 }
 
-func (s *settingsManager) validateAuth(w http.ResponseWriter, r *http.Request) bool {
-	_, valid, err := common.IsAuthValid(r)
+func (s *settingsManager) validateAuth(w http.ResponseWriter, r *http.Request) (cbauth.Creds, bool) {
+	creds, valid, err := common.IsAuthValid(r)
 	if err != nil {
 		s.writeError(w, err)
 	} else if valid == false {
 		w.WriteHeader(401)
 		w.Write([]byte("401 Unauthorized\n"))
 	}
-	return valid
+	return creds, valid
 }
 
 func (s *settingsManager) handleSettingsReq(w http.ResponseWriter, r *http.Request) {
-	if !s.validateAuth(w, r) {
+	creds, ok := s.validateAuth(w, r)
+	if !ok {
+		return
+	}
+
+	if !common.IsAllowed(creds, []string{"cluster.settings!write"}, w) {
 		return
 	}
 
@@ -172,9 +182,15 @@ func (s *settingsManager) handleSettingsReq(w http.ResponseWriter, r *http.Reque
 }
 
 func (s *settingsManager) handleCompactionTrigger(w http.ResponseWriter, r *http.Request) {
-	if !s.validateAuth(w, r) {
+	creds, ok := s.validateAuth(w, r)
+	if !ok {
 		return
 	}
+
+	if !common.IsAllowed(creds, []string{"cluster.settings!write"}, w) {
+		return
+	}
+
 	_, rev, err := metakv.Get(indexCompactonMetaPath)
 	if err != nil {
 		s.writeError(w, err)
@@ -266,7 +282,12 @@ func (s *settingsManager) metaKVCallback(path string, value []byte, rev interfac
 }
 
 func (s *settingsManager) handleFreeMemoryReq(w http.ResponseWriter, r *http.Request) {
-	if !s.validateAuth(w, r) {
+	creds, ok := s.validateAuth(w, r)
+	if !ok {
+		return
+	}
+
+	if !common.IsAllowed(creds, []string{"cluster.settings!write"}, w) {
 		return
 	}
 
@@ -277,7 +298,12 @@ func (s *settingsManager) handleFreeMemoryReq(w http.ResponseWriter, r *http.Req
 }
 
 func (s *settingsManager) handleForceGCReq(w http.ResponseWriter, r *http.Request) {
-	if !s.validateAuth(w, r) {
+	creds, ok := s.validateAuth(w, r)
+	if !ok {
+		return
+	}
+
+	if !common.IsAllowed(creds, []string{"cluster.settings!write"}, w) {
 		return
 	}
 
@@ -339,6 +365,8 @@ func initGlobalSettings(oldCfg, newCfg common.Config) {
 	maxSecKeyBufferLen = maxSecKeyLen * 3
 	maxIndexEntrySize = maxSecKeyBufferLen + MAX_DOCID_LEN + 2
 	encBufPool = common.NewByteBufferPool(maxIndexEntrySize + ENCODE_BUF_SAFE_PAD)
+
+	ErrSecKeyTooLong = errors.New(fmt.Sprintf("Secondary key is too long (> %d)", maxSecKeyLen))
 }
 
 func validateSettings(value []byte) error {
@@ -354,6 +382,18 @@ func validateSettings(value []byte) error {
 					"Sunday,Monday,Tuesday,Wednesday,Thursday,Friday,Saturday"
 				return errors.New(msg)
 			}
+		}
+	}
+
+	if val, ok := newConfig["indexer.settings.max_seckey_size"]; ok {
+		if val.Int() <= 0 {
+			return errors.New("Setting should be an integer greater than 0")
+		}
+	}
+
+	if val, ok := newConfig["indexer.settings.max_array_seckey_size"]; ok {
+		if val.Int() <= 0 {
+			return errors.New("Setting should be an integer greater than 0")
 		}
 	}
 

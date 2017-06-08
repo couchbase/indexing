@@ -211,6 +211,7 @@ type Solution struct {
 	sizing         SizingMethod
 	isLiveData     bool
 	useLiveData    bool
+	disableRepair  bool
 	initialPlan    bool
 	numServerGroup int
 	numDeletedNode int
@@ -728,6 +729,10 @@ func (p *SAPlanner) suppressEqivIndexIfNecessary(s *Solution) {
 //
 func (p *SAPlanner) addReplicaIfNecessary(s *Solution) {
 
+	if s.disableRepair {
+		return
+	}
+
 	numLiveNode := s.findNumLiveNode()
 
 	// Check to see if it is needed to add replica
@@ -796,14 +801,15 @@ func (p *SAPlanner) addReplicaIfNecessary(s *Solution) {
 //
 // Constructor
 //
-func newSolution(constraint ConstraintMethod, sizing SizingMethod, indexers []*IndexerNode, isLive bool, useLive bool) *Solution {
+func newSolution(constraint ConstraintMethod, sizing SizingMethod, indexers []*IndexerNode, isLive bool, useLive bool, disableRepair bool) *Solution {
 
 	r := &Solution{
-		constraint:  constraint,
-		sizing:      sizing,
-		Placement:   make([]*IndexerNode, len(indexers)),
-		isLiveData:  isLive,
-		useLiveData: useLive,
+		constraint:    constraint,
+		sizing:        sizing,
+		Placement:     make([]*IndexerNode, len(indexers)),
+		isLiveData:    isLive,
+		useLiveData:   useLive,
+		disableRepair: disableRepair,
 	}
 
 	// initialize list of indexers
@@ -939,6 +945,7 @@ func (s *Solution) clone() *Solution {
 		numServerGroup: s.numServerGroup,
 		numDeletedNode: s.numDeletedNode,
 		numNewNode:     s.numNewNode,
+		disableRepair:  s.disableRepair,
 	}
 
 	for _, node := range s.Placement {

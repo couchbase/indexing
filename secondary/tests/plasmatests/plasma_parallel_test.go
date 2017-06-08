@@ -202,13 +202,13 @@ func TestAggressiveSplitAndMerge(t *testing.T) {
 		fmt.Print("storageStatistics for memDb\n", storageStatistics, "\n")
 		storageStatistics, _ = c.plasmaSlice.Statistics()
 		fmt.Print("storageStatistics for plasma\n", storageStatistics, "\n")
-		re := regexp.MustCompile(`splits            = (\d+)`)
+		re := regexp.MustCompile(`splits\s+=\s+(\d+)`)
 		match := re.FindStringSubmatch(strings.Join(storageStatistics.InternalData, ""))
 		splits, _ := strconv.Atoi(match[1])
 		if splits == 0 {
 			panic("Number of splits is 0")
 		}
-		re = regexp.MustCompile(`merges            = (\d+)`)
+		re = regexp.MustCompile(`merges\s+=\s+(\d+)`)
 		match = re.FindStringSubmatch(strings.Join(storageStatistics.InternalData, ""))
 		merges, _ := strconv.Atoi(match[1])
 		if merges == 0 {
@@ -267,24 +267,25 @@ func TestLongRunningScans(t *testing.T) {
 		}
 		wg.Wait()
 		for i := 6; i < 10; i++ {
-			wg.Add(2)
+			wg.Add(1)
 			go insertdata(c, &wg, c.mutationMetas[i-6], i*c.numItems/10, (i+1)*c.numItems/10)
+			wg.Wait()
+			wg.Add(1)
 			go deletedata(c, &wg, c.mutationMetas[i-6], (i-6)*c.numItems/10, (i-5)*c.numItems/10)
+			wg.Wait()
 		}
-		wg.Wait()
-
 		// check storageStatistics for splits and merges
 		storageStatistics, _ := c.memDbSlice.Statistics()
 		fmt.Print("storageStatistics for memDb\n", storageStatistics, "\n")
 		storageStatistics, _ = c.plasmaSlice.Statistics()
 		fmt.Print("storageStatistics for plasma\n", storageStatistics, "\n")
-		re := regexp.MustCompile(`splits            = (\d+)`)
+		re := regexp.MustCompile(`splits\s+=\s+(\d+)`)
 		match := re.FindStringSubmatch(strings.Join(storageStatistics.InternalData, ""))
 		splits, _ := strconv.Atoi(match[1])
 		if splits == 0 {
 			panic("Number of splits is 0")
 		}
-		re = regexp.MustCompile(`merges            = (\d+)`)
+		re = regexp.MustCompile(`merges\s+=\s+(\d+)`)
 		match = re.FindStringSubmatch(strings.Join(storageStatistics.InternalData, ""))
 		merges, _ := strconv.Atoi(match[1])
 		if merges == 0 {
@@ -303,9 +304,9 @@ func TestLongRunningScans(t *testing.T) {
 			go insertDelete1(c, c.mutationMetas[k], &wg)
 			// TODO: Add Range queries here
 			go scan1(c, &wg)
+			// Wait for the all the above threads to complete
+			wg.Wait()
 		}
-		// Wait for the all the above threads to complete
-		wg.Wait()
 		// Do rollback
 		rollback1(c, &wg)
 		wg.Add(1)
@@ -598,7 +599,6 @@ func createSnapshot1(c *Context) {
 // TODO: Add Range queries
 func scan1(c *Context, wg *sync.WaitGroup) {
 	defer wg.Done()
-	time.Sleep(time.Minute)
 	var index int
 
 	reader := c.memDbSlice.GetReaderContext()
@@ -609,6 +609,7 @@ func scan1(c *Context, wg *sync.WaitGroup) {
 	stopchMemDb := make(indexer.StopChannel)
 	scanReqPlasma := new(indexer.ScanRequest)
 	scanReqPlasma.Ctx = reader1
+	defer scanReqPlasma.Ctx.Done()
 	stopchPlasma := make(indexer.StopChannel)
 
 	if len(c.memDbSnaps) > 1 && len(c.plasmaSnaps) > 1 {
@@ -685,6 +686,7 @@ func scanAll(c *Context, wg *sync.WaitGroup) {
 	scanReqMemDb.Ctx = reader
 	scanReqPlasma := new(indexer.ScanRequest)
 	scanReqPlasma.Ctx = reader1
+	defer scanReqPlasma.Ctx.Done()
 
 	if len(c.memDbSnaps) > 1 && len(c.plasmaSnaps) > 1 {
 		index = rand.Intn(len(c.memDbSnaps) - 1)
@@ -738,7 +740,6 @@ func scanAll(c *Context, wg *sync.WaitGroup) {
 }
 
 func scanRange(c *Context, wg *sync.WaitGroup) {
-	// defer wg.Done()
 	var index int
 
 	reader := c.memDbSlice.GetReaderContext()
@@ -748,6 +749,7 @@ func scanRange(c *Context, wg *sync.WaitGroup) {
 	scanReqMemDb.Ctx = reader
 	scanReqPlasma := new(indexer.ScanRequest)
 	scanReqPlasma.Ctx = reader1
+	defer scanReqPlasma.Ctx.Done()
 
 	if len(c.memDbSnaps) > 1 && len(c.plasmaSnaps) > 1 {
 		index = rand.Intn(len(c.memDbSnaps) - 1)
