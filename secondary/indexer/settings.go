@@ -19,6 +19,7 @@ import (
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/pipeline"
 	"github.com/couchbase/nitro/mm"
+	"github.com/couchbase/nitro/plasma"
 	"io/ioutil"
 	"net/http"
 	"os"
@@ -66,6 +67,8 @@ func NewSettingsManager(supvCmdch MsgChannel,
 	http.HandleFunc("/triggerCompaction", s.handleCompactionTrigger)
 	http.HandleFunc("/settings/runtime/freeMemory", s.handleFreeMemoryReq)
 	http.HandleFunc("/settings/runtime/forceGC", s.handleForceGCReq)
+	http.HandleFunc("/plasmaDiag", plasma.Diag.HandleHttp)
+
 	go func() {
 		fn := func(r int, err error) error {
 			if r > 0 {
