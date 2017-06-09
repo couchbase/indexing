@@ -496,10 +496,10 @@ func rebalance(command CommandType, config *RunConfig, plan *Plan, indexes []*In
 //   [ WITH { "nodes": [ "node_name" ], "defer_build":true|false } ];
 // BUILD INDEX ON named_keyspace_ref(index_name[,index_name]*) USING GSI;
 //
-func genCreateIndexDDL(ddl string, solution *Solution) error {
+func CreateIndexDDL(solution *Solution) string {
 
-	if solution == nil || ddl == "" {
-		return nil
+	if solution == nil {
+		return ""
 	}
 
 	replicas := make(map[common.IndexDefnId][]*IndexerNode)
@@ -549,8 +549,19 @@ func genCreateIndexDDL(ddl string, solution *Solution) error {
 	}
 	stmts += "\n"
 
-	if err := ioutil.WriteFile(ddl, ([]byte)(stmts), os.ModePerm); err != nil {
-		return errors.New(fmt.Sprintf("Unable to write DDL statements into %v. err = %s", ddl, err))
+	return stmts
+}
+
+func genCreateIndexDDL(ddl string, solution *Solution) error {
+
+	if solution == nil || ddl == "" {
+		return nil
+	}
+
+	if stmts := CreateIndexDDL(solution); len(stmts) > 0 {
+		if err := ioutil.WriteFile(ddl, ([]byte)(stmts), os.ModePerm); err != nil {
+			return errors.New(fmt.Sprintf("Unable to write DDL statements into %v. err = %s", ddl, err))
+		}
 	}
 
 	return nil
