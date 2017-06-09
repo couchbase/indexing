@@ -99,7 +99,10 @@ type ScanRequest struct {
 	RequestId string
 	LogPrefix string
 
-	keyBufList []*[]byte
+	keyBufList      []*[]byte
+	indexKeyBuffer  []byte
+	sharedBuffer    *[]byte
+	sharedBufferLen int
 }
 
 type Projection struct {
@@ -282,6 +285,28 @@ func (r *ScanRequest) getTimeoutCh() <-chan time.Time {
 	}
 
 	return nil
+}
+
+func (r *ScanRequest) getKeyBuffer() []byte {
+	if r.indexKeyBuffer == nil {
+		buf := secKeyBufPool.Get()
+		r.keyBufList = append(r.keyBufList, buf)
+		r.indexKeyBuffer = *buf
+	}
+	return r.indexKeyBuffer
+}
+
+// Reuses buffer from buffer pool. When current buffer is insufficient
+// get new buffer from the pool, reset sharedBuffer & sharedBufferLen
+func (r *ScanRequest) getSharedBuffer(length int) []byte {
+	if r.sharedBuffer == nil || (cap(*r.sharedBuffer)-r.sharedBufferLen) < length {
+		buf := secKeyBufPool.Get()
+		r.keyBufList = append(r.keyBufList, buf)
+		r.sharedBuffer = buf
+		r.sharedBufferLen = 0
+		return (*r.sharedBuffer)[:0]
+	}
+	return (*r.sharedBuffer)[r.sharedBufferLen:r.sharedBufferLen]
 }
 
 func (r *ScanRequest) Done() {
@@ -565,9 +590,7 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 		if r.isPrimary {
 			return NewPrimaryKey(k)
 		} else {
-			buf := secKeyBufPool.Get()
-			r.keyBufList = append(r.keyBufList, buf)
-			return NewSecondaryKey(k, *buf)
+			return NewSecondaryKey(k, r.getKeyBuffer())
 		}
 	}
 
@@ -622,14 +645,13 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 	}
 
 	joinKeys := func(keys [][]byte) ([]byte, error) {
-		buf1 := secKeyBufPool.Get()
-		r.keyBufList = append(r.keyBufList, buf1)
-
-		joined, e := jsonEncoder.JoinArray(keys, (*buf1)[:0])
+		buf1 := r.getSharedBuffer(len(keys) * 3)
+		joined, e := jsonEncoder.JoinArray(keys, buf1)
 		if e != nil {
 			e = fmt.Errorf("Error in joining keys: %s", e)
 			return nil, e
 		}
+		r.sharedBufferLen += len(joined)
 		return joined, nil
 	}
 
@@ -694,13 +716,13 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 					}
 					lows = append(lows, f.Low.Bytes())
 				}
-				buf1 := secKeyBufPool.Get()
-				r.keyBufList = append(r.keyBufList, buf1)
 
-				if l, e = codec.JoinArray(lows, (*buf1)[:0]); e != nil {
+				buf1 := r.getSharedBuffer(len(lows) * 3)
+				if l, e = codec.JoinArray(lows, buf1); e != nil {
 					e = fmt.Errorf("Error in forming low key %s", e)
 					return e
 				}
+				r.sharedBufferLen += len(l)
 				lowKey := secondaryKey(l)
 				filter.Low = &lowKey
 			}
@@ -711,14 +733,13 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 					}
 					highs = append(highs, f.High.Bytes())
 				}
-				buf2 := secKeyBufPool.Get()
-				r.keyBufList = append(r.keyBufList, buf2)
 
-				if h, e = codec.JoinArray(highs, (*buf2)[:0]); e != nil {
+				buf2 := r.getSharedBuffer(len(highs) * 3)
+				if h, e = codec.JoinArray(highs, buf2); e != nil {
 					e = fmt.Errorf("Error in forming high key %s", e)
 					return e
 				}
-
+				r.sharedBufferLen += len(h)
 				highKey := secondaryKey(h)
 				filter.High = &highKey
 			}
@@ -811,13 +832,13 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 		}
 
 		codec := collatejson.NewCodec(16)
-		buf1 := secKeyBufPool.Get()
-		r.keyBufList = append(r.keyBufList, buf1)
+		buf1 := r.getSharedBuffer(len(equals) * 3)
 		var equalsKey, eqReverse []byte
-		if equalsKey, e = codec.JoinArray(equals, (*buf1)[:0]); e != nil {
+		if equalsKey, e = codec.JoinArray(equals, buf1); e != nil {
 			e = fmt.Errorf("Error in forming equals key %s", e)
 			return e
 		}
+		r.sharedBufferLen += len(equalsKey)
 		if !r.IndexInst.Defn.HasDescending() {
 			eqReverse = equalsKey
 		} else {
