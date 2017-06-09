@@ -52,6 +52,7 @@ type RebalanceToken struct {
 	MasterId string
 	RebalId  string
 	Source   RebalSource
+	Error    string
 }
 
 type RebalTokens struct {
