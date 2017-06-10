@@ -55,21 +55,21 @@ GoInstall (TARGET projector PACKAGE github.com/couchbase/indexing/secondary/cmd/
   GOTAGS "${TAGS}"
   LDFLAGS "${_ldflags}"
   INSTALL_PATH bin
-  GOVERSION 1.7.3)
+  GOVERSION 1.8.1)
 
 GoInstall (TARGET cbindex PACKAGE github.com/couchbase/indexing/secondary/cmd/cbindex
   GOPATH "${PROJECT_SOURCE_DIR}/../../../.." "${GODEPSDIR}"
   GOTAGS "${TAGS}"
   LDFLAGS "${_ldflags}"
   INSTALL_PATH bin
-  GOVERSION 1.7.3)
+  GOVERSION 1.8.1)
 
 GoInstall (TARGET cbindexperf PACKAGE github.com/couchbase/indexing/secondary/cmd/cbindexperf
   GOPATH "${PROJECT_SOURCE_DIR}/../../../.." "${GODEPSDIR}"
   GOTAGS "${TAGS}"
   LDFLAGS "${_ldflags}"
   INSTALL_PATH bin
-  GOVERSION 1.7.3)
+  GOVERSION 1.8.1)
 
 GoInstall (TARGET cbindexplan PACKAGE github.com/couchbase/indexing/secondary/cmd/cbindexplan
   GOPATH "${PROJECT_SOURCE_DIR}/../../../.." "${GODEPSDIR}"
@@ -79,11 +79,13 @@ GoInstall (TARGET cbindexplan PACKAGE github.com/couchbase/indexing/secondary/cm
   GOTAGS "${TAGS}"
   LDFLAGS "${_ldflags}"
   INSTALL_PATH bin OUTPUT cbindexplan
-  GOVERSION 1.7.3)
+  GOVERSION 1.8.1)
 
 GoInstall(TARGET plasma_dump PACKAGE github.com/couchbase/nitro/cmd/plasma_dump
   GOPATH "${CMAKE_SOURCE_DIR}/goproj" "${GODEPSDIR}"
+  CGO_INCLUDE_DIRS "${CGO_INCLUDE_DIRS}"
+  CGO_LIBRARY_DIRS "${CGO_LIBRARY_DIRS}"
   GOTAGS "${TAGS}"
   LDFLAGS "${_ldflags}"
   INSTALL_PATH bin OUTPUT plasma_dump
-  GOVERSION 1.7.3)
+  GOVERSION 1.8.1)
