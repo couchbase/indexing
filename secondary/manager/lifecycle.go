@@ -249,7 +249,7 @@ func (m *LifecycleMgr) dispatchRequest(request *requestHolder, factory *message.
 	case client.OPCODE_DROP_INDEX:
 		err = m.handleDeleteIndex(key, common.NewUserRequestContext())
 	case client.OPCODE_BUILD_INDEX:
-		err = m.handleBuildIndexes(content, common.NewUserRequestContext())
+		err = m.handleBuildIndexes(content, common.NewUserRequestContext(), false)
 	case client.OPCODE_SERVICE_MAP:
 		result, err = m.handleServiceMap(content)
 	case client.OPCODE_DELETE_BUCKET:
@@ -261,9 +261,11 @@ func (m *LifecycleMgr) dispatchRequest(request *requestHolder, factory *message.
 	case client.OPCODE_CREATE_INDEX_REBAL:
 		err = m.handleCreateIndexScheduledBuild(key, content, common.NewRebalanceRequestContext())
 	case client.OPCODE_BUILD_INDEX_REBAL:
-		err = m.handleBuildIndexes(content, common.NewRebalanceRequestContext())
+		err = m.handleBuildIndexes(content, common.NewRebalanceRequestContext(), false)
 	case client.OPCODE_DROP_INDEX_REBAL:
 		err = m.handleDeleteIndex(key, common.NewRebalanceRequestContext())
+	case client.OPCODE_BUILD_INDEX_RETRY:
+		err = m.handleBuildIndexes(content, common.NewUserRequestContext(), true)
 	case client.OPCODE_BROADCAST_STATS:
 		m.handleBroadcastStats(content)
 	}
@@ -444,7 +446,7 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scheduled bool,
 		if m.notifier != nil {
 			logging.Debugf("LifecycleMgr.handleCreateIndex() : start Index Build")
 
-			retryList, skipList, errList := m.BuildIndexes([]common.IndexDefnId{defn.DefnId}, reqCtx)
+			retryList, skipList, errList := m.BuildIndexes([]common.IndexDefnId{defn.DefnId}, reqCtx, false)
 
 			if len(retryList) != 0 {
 				return errors.New("Fail to build index.  Index build will retry in background.")
@@ -469,7 +471,7 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scheduled bool,
 	return nil
 }
 
-func (m *LifecycleMgr) handleBuildIndexes(content []byte, reqCtx *common.MetadataRequestContext) error {
+func (m *LifecycleMgr) handleBuildIndexes(content []byte, reqCtx *common.MetadataRequestContext, retry bool) error {
 
 	list, err := client.UnmarshallIndexIdList(content)
 	if err != nil {
@@ -482,7 +484,7 @@ func (m *LifecycleMgr) handleBuildIndexes(content []byte, reqCtx *common.Metadat
 		input[i] = common.IndexDefnId(id)
 	}
 
-	retryList, skipList, errList := m.BuildIndexes(input, reqCtx)
+	retryList, skipList, errList := m.BuildIndexes(input, reqCtx, retry)
 
 	if len(retryList) != 0 || len(skipList) != 0 || len(errList) != 0 {
 		msg := "Build index fails."
@@ -522,7 +524,7 @@ func (m *LifecycleMgr) handleBuildIndexes(content []byte, reqCtx *common.Metadat
 }
 
 func (m *LifecycleMgr) BuildIndexes(ids []common.IndexDefnId,
-	reqCtx *common.MetadataRequestContext) ([]*common.IndexDefn, []common.IndexDefnId, []error) {
+	reqCtx *common.MetadataRequestContext, retry bool) ([]*common.IndexDefn, []common.IndexDefnId, []error) {
 
 	retryList := ([]*common.IndexDefn)(nil)
 	errList := ([]error)(nil)
@@ -603,7 +605,7 @@ func (m *LifecycleMgr) BuildIndexes(ids []common.IndexDefnId,
 				inst, err := m.FindLocalIndexInst(defn.Bucket, defnId)
 				if inst != nil && err == nil {
 					// only set error if the error cannot be retried
-					if !m.canRetryError(inst, build_err) {
+					if !m.canRetryError(inst, build_err, retry) {
 						m.UpdateIndexInstance(defn.Bucket, defnId, common.INDEX_STATE_NIL, common.NIL_STREAM, build_err.Error(), nil, inst.RState)
 					}
 
@@ -612,7 +614,7 @@ func (m *LifecycleMgr) BuildIndexes(ids []common.IndexDefnId,
 						defn.Bucket, defn.Name)
 				}
 
-				if m.canRetryError(inst, build_err) {
+				if m.canRetryError(inst, build_err, retry) {
 					logging.Infof("LifecycleMgr.handleBuildIndexes() : Encounter build error.  Retry building index (%v, %v) at later time.",
 						defn.Bucket, defn.Name)
 
@@ -917,7 +919,7 @@ func (m *LifecycleMgr) handleBroadcastStats(buf []byte) {
 // Lifecycle Mgr - support functions
 //////////////////////////////////////////////////////////////
 
-func (m *LifecycleMgr) canRetryError(inst *IndexInstDistribution, err error) bool {
+func (m *LifecycleMgr) canRetryError(inst *IndexInstDistribution, err error, retry bool) bool {
 
 	if inst == nil || inst.RState != uint32(common.REBAL_ACTIVE) {
 		return false
@@ -930,7 +932,7 @@ func (m *LifecycleMgr) canRetryError(inst *IndexInstDistribution, err error) boo
 
 	if indexerErr.Code == common.IndexNotExist ||
 		indexerErr.Code == common.InvalidBucket ||
-		indexerErr.Code == common.RebalanceInProgress ||
+		(!retry && indexerErr.Code == common.RebalanceInProgress) ||
 		indexerErr.Code == common.IndexAlreadyExist ||
 		indexerErr.Code == common.IndexInvalidState {
 		return false
@@ -1310,6 +1312,11 @@ func newJanitor(mgr *LifecycleMgr) *janitor {
 
 func (s *builder) run() {
 
+	// Sleep before checking for index to build.  When a recovered node starts up, it needs to wait until
+	// the rebalancing token is saved.  This is to avoid the bulider to get ahead of the rebalancer.
+	// Otherwise, rebalancer could fail if builder has issued an index build ahead of the rebalancer.
+	time.Sleep(time.Minute * 1)
+
 	// wait for indexer bootstrap to complete before recover
 	s.recover()
 
@@ -1383,7 +1390,7 @@ func (s *builder) tryBuildIndex(bucket string) {
 				// If any of the index cannot be built, those index will be skipped by lifecycle manager, so it
 				// will send the rest of the indexes to the indexer.  An index cannot be built if it does not have
 				// an index instance or the index instance is not in READY state.
-				if err := s.manager.requestServer.MakeRequest(client.OPCODE_BUILD_INDEX, key, content); err != nil {
+				if err := s.manager.requestServer.MakeRequest(client.OPCODE_BUILD_INDEX_RETRY, key, content); err != nil {
 					logging.Errorf("builder: Fail to build index.  Error = %v.  Retry later.", err)
 				}
 			}
