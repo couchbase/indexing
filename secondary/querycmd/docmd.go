@@ -1,6 +1,6 @@
 package querycmd
 
-import json "github.com/couchbase/go_json"
+import json "github.com/couchbase/indexing/secondary/common/json"
 import "flag"
 import "fmt"
 import "io"

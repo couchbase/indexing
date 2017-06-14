@@ -16,7 +16,7 @@
 package collatejson
 
 import "bytes"
-import json "github.com/couchbase/go_json"
+import json "github.com/couchbase/indexing/secondary/common/json"
 import "errors"
 import "strings"
 import "sort"
