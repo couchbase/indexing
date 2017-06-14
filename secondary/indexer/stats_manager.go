@@ -140,6 +140,8 @@ type IndexStats struct {
 	lastNumDocsIndexed    stats.Int64Val
 	lastRollbackTime      stats.TimeVal
 	progressStatTime      stats.TimeVal
+	residentPercent       stats.Int64Val
+	cacheHitPercent       stats.Int64Val
 
 	Timings IndexTimingStats
 }
@@ -203,6 +205,8 @@ func (s *IndexStats) Init() {
 	s.lastNumDocsIndexed.Init()
 	s.lastRollbackTime.Init()
 	s.progressStatTime.Init()
+	s.residentPercent.Init()
+	s.cacheHitPercent.Init()
 
 	s.Timings.Init()
 }
@@ -369,6 +373,8 @@ func (is IndexerStats) GetStats() common.Statistics {
 		addStat("avg_mutation_rate", s.avgMutationRate.Value())
 		addStat("last_rollback_time", s.lastRollbackTime.Value())
 		addStat("progress_stat_time", s.progressStatTime.Value())
+		addStat("resident_percent", s.residentPercent.Value())
+		addStat("cache_hit_percent", s.cacheHitPercent.Value())
 
 		addStat("timings/dcp_getseqs", s.Timings.dcpSeqs.Value())
 		addStat("timings/storage_clone_handle", s.Timings.stCloneHandle.Value())

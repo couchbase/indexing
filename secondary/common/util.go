@@ -945,3 +945,11 @@ func IsAllAllowed(creds cbauth.Creds, permissions []string, w http.ResponseWrite
 
 	return true
 }
+
+func ComputePercent(a, b int64) int64 {
+	if a+b > 0 {
+		return a * 100 / (a + b)
+	}
+
+	return 0
+}

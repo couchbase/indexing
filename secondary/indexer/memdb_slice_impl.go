@@ -184,6 +184,8 @@ func NewMemDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 
 	slice := &memdbSlice{}
 	slice.idxStats = idxStats
+	slice.idxStats.residentPercent.Set(100)
+	slice.idxStats.cacheHitPercent.Set(100)
 
 	slice.get_bytes = 0
 	slice.insert_bytes = 0
