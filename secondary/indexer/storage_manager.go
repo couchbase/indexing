@@ -784,8 +784,14 @@ func (s *storageMgr) handleStats(cmd Message) {
 				numDocsIndexed := idxStats.numDocsIndexed.Value()
 				mutationRate := float64(numDocsIndexed-idxStats.lastNumDocsIndexed.Value()) / elapsed
 				idxStats.avgMutationRate.Set(int64((mutationRate + float64(idxStats.avgMutationRate.Value())) / 2))
-				idxStats.lastMutateGatherTime.Set(now)
 				idxStats.lastNumDocsIndexed.Set(numDocsIndexed)
+
+				numItemsFlushed := idxStats.numItemsFlushed.Value()
+				drainRate := float64(numItemsFlushed-idxStats.lastNumItemsFlushed.Value()) / elapsed
+				idxStats.avgDrainRate.Set(int64((drainRate + float64(idxStats.avgDrainRate.Value())) / 2))
+				idxStats.lastNumItemsFlushed.Set(numItemsFlushed)
+
+				idxStats.lastMutateGatherTime.Set(now)
 			}
 		}
 	}

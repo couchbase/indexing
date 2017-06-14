@@ -410,7 +410,7 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 			}
 
 			// These stats are currently unavailable in 4.5.
-			key = fmt.Sprintf("%v:%v:avg_mutation_rate", index.Bucket, indexName)
+			key = fmt.Sprintf("%v:%v:avg_drain_rate", index.Bucket, indexName)
 			if avgMutationRate, ok := statsMap[key]; ok {
 				index.MutationRate = uint64(avgMutationRate.(float64))
 				totalMutation += index.MutationRate
