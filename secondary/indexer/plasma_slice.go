@@ -1248,10 +1248,12 @@ func (mdb *plasmaSlice) Statistics() (StorageStatistics, error) {
 
 	var internalData []string
 
-	internalData = append(internalData, fmt.Sprintf("----MainStore----\n%s", mdb.mainstore.GetStats()))
+	internalData = append(internalData, fmt.Sprintf("{\n\"MainStore\":\n%s", mdb.mainstore.GetStats()))
 	if !mdb.isPrimary {
-		internalData = append(internalData, fmt.Sprintf("\n----BackStore----\n%s", mdb.backstore.GetStats()))
+		internalData = append(internalData, fmt.Sprintf(",\n\"BackStore\":\n%s", mdb.backstore.GetStats()))
 	}
+
+	internalData = append(internalData, "}\n")
 
 	sts.InternalData = internalData
 	if mdb.hasPersistence {

@@ -552,13 +552,20 @@ func (s *statsManager) getStorageStats() string {
 	s.supvMsgch <- statReq
 	res := <-replych
 
-	for _, sts := range res {
-		result += fmt.Sprintf("==== Index Instance %s:%s (%d) ====\n", sts.Bucket, sts.Name, sts.InstId)
+	result += "[\n"
+	for i, sts := range res {
+		if i > 0 {
+			result += ","
+		}
+		result += fmt.Sprintf("{\n\"Index\": \"%s:%s\", \"Id\": %d,\n", sts.Bucket, sts.Name, sts.InstId)
+		result += fmt.Sprintf("\"Stats\":\n")
 		for _, data := range sts.GetInternalData() {
 			result += data
 		}
-		result += "========\n"
+		result += "}\n"
 	}
+
+	result += "]"
 
 	return result
 }
