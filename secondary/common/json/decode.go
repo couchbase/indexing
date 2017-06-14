@@ -13,6 +13,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"math"
 	"reflect"
 	"runtime"
 	"strconv"
@@ -42,12 +43,13 @@ import (
 // To unmarshal JSON into an interface value,
 // Unmarshal stores one of these in the interface value:
 //
-//	bool, for JSON booleans
-//	float64, for JSON numbers
-//	string, for JSON strings
-//	[]interface{}, for JSON arrays
-//	map[string]interface{}, for JSON objects
-//	nil for JSON null
+//    bool, for JSON booleans
+//    int64, for JSON numbers that are integers
+//    float64, for JSON numbers that are not integers
+//    string, for JSON strings
+//    []interface{}, for JSON arrays
+//    map[string]interface{}, for JSON objects
+//    nil for JSON null
 //
 // To unmarshal a JSON array into a slice, Unmarshal resets the slice length
 // to zero and then appends each element to the slice.
@@ -765,6 +767,35 @@ func (d *decodeState) convertNumber(s string) (interface{}, error) {
 	if d.useNumber {
 		return Number(s), nil
 	}
+
+	// First, we try to parse the number as an int64. If that
+	// fails, we parse it as a float64.
+	//
+	// If the input string has a non-zero fractional part,
+	// ParseInt() will produce an error, and we revert to float64.
+	//
+	// If the input string is an integer, but is less than
+	// MinInt64 or greater than MaxInt64, this is an overflow. In
+	// this case, ParseInt() will not produce an error, and will
+	// silently truncate the overflow to MinInt64 or MaxInt64,
+	// respectively.
+	//
+	// To handle this silent overlfow, we check for one of two
+	// things: (1) the parsed value is neither Mint64 nor
+	// MaxInt64, which would not be the case if there was overflow
+	// and truncation; or (2) the parsed value has the same
+	// decimal string representation as the input string, which
+	// would also not be the case if there was overflow and
+	// truncation.
+	//
+	// If there is overflow, we revert to float64.
+	i, err := strconv.ParseInt(s, 10, 64)
+	if err == nil &&
+		((i > math.MinInt64 && i < math.MaxInt64) ||
+			strconv.FormatInt(i, 10) == s) {
+		return i, nil
+	}
+
 	f, err := strconv.ParseFloat(s, 64)
 	if err != nil {
 		return nil, &UnmarshalTypeError{"number " + s, reflect.TypeOf(0.0), int64(d.off)}
