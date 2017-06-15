@@ -2,7 +2,7 @@ package datautility
 
 import (
 	"fmt"
-	json "github.com/couchbase/go_json"
+	json "github.com/couchbase/indexing/secondary/common/json"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 )
 

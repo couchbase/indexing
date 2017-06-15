@@ -83,6 +83,8 @@ GoInstall (TARGET cbindexplan PACKAGE github.com/couchbase/indexing/secondary/cm
 
 GoInstall(TARGET plasma_dump PACKAGE github.com/couchbase/nitro/cmd/plasma_dump
   GOPATH "${CMAKE_SOURCE_DIR}/goproj" "${GODEPSDIR}"
+  CGO_INCLUDE_DIRS "${CGO_INCLUDE_DIRS}"
+  CGO_LIBRARY_DIRS "${CGO_LIBRARY_DIRS}"
   GOTAGS "${TAGS}"
   LDFLAGS "${_ldflags}"
   INSTALL_PATH bin OUTPUT plasma_dump

@@ -34,6 +34,7 @@ const (
 	OPCODE_BUILD_INDEX_REBAL                 = OPCODE_CREATE_INDEX_REBAL + 1
 	OPCODE_DROP_INDEX_REBAL                  = OPCODE_BUILD_INDEX_REBAL + 1
 	OPCODE_BROADCAST_STATS                   = OPCODE_DROP_INDEX_REBAL + 1
+	OPCODE_BUILD_INDEX_RETRY                 = OPCODE_BROADCAST_STATS + 1
 )
 
 /////////////////////////////////////////////////////////////////////////

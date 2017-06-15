@@ -184,6 +184,8 @@ func NewMemDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 
 	slice := &memdbSlice{}
 	slice.idxStats = idxStats
+	slice.idxStats.residentPercent.Set(100)
+	slice.idxStats.cacheHitPercent.Set(100)
 
 	slice.get_bytes = 0
 	slice.insert_bytes = 0
@@ -1101,12 +1103,16 @@ func (mdb *memdbSlice) Statistics() (StorageStatistics, error) {
 
 	var internalData []string
 
-	internalData = append(internalData, fmt.Sprintf("----MainStore----\n%s", mdb.mainstore.DumpStats()))
+	internalData = append(internalData, fmt.Sprintf("{\n\"MainStore\": %s", mdb.mainstore.DumpStats()))
+
 	if !mdb.isPrimary {
 		for i := 0; i < mdb.numWriters; i++ {
-			internalData = append(internalData, fmt.Sprintf("\n----BackStore[%d]----\n%s", i, mdb.back[i].Stats()))
+			internalData = append(internalData, ",\n")
+			internalData = append(internalData, fmt.Sprintf(`"BackStore_%d": %s`, i, mdb.back[i].Stats()))
 		}
 	}
+
+	internalData = append(internalData, "\n}")
 
 	sts.InternalData = internalData
 	sts.DataSize = mdb.mainstore.MemoryInUse()

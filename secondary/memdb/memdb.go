@@ -452,6 +452,9 @@ func (m *MemDB) Close() {
 			}
 		}
 	}
+
+	m.store.FreeNode(m.store.HeadNode(), &m.store.Stats)
+	m.store.FreeNode(m.store.TailNode(), &m.store.Stats)
 }
 
 func (m *MemDB) getCurrSn() uint32 {

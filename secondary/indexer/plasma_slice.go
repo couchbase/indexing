@@ -1248,10 +1248,25 @@ func (mdb *plasmaSlice) Statistics() (StorageStatistics, error) {
 
 	var internalData []string
 
-	internalData = append(internalData, fmt.Sprintf("----MainStore----\n%s", mdb.mainstore.GetStats()))
+	var numRecsMem, numRecsDisk, cacheHits, cacheMiss int64
+	pStats := mdb.mainstore.GetStats()
+
+	numRecsMem += pStats.NumRecordAllocs - pStats.NumRecordFrees
+	numRecsDisk += pStats.NumRecordSwapOut - pStats.NumRecordSwapIn
+	cacheHits += pStats.CacheHits
+	cacheMiss += pStats.CacheMisses
+
+	internalData = append(internalData, fmt.Sprintf("{\n\"MainStore\":\n%s", pStats))
 	if !mdb.isPrimary {
-		internalData = append(internalData, fmt.Sprintf("\n----BackStore----\n%s", mdb.backstore.GetStats()))
+		pStats := mdb.backstore.GetStats()
+		numRecsMem += pStats.NumRecordAllocs - pStats.NumRecordFrees
+		numRecsDisk += pStats.NumRecordSwapOut - pStats.NumRecordSwapIn
+		cacheHits += pStats.CacheHits
+		cacheMiss += pStats.CacheMisses
+		internalData = append(internalData, fmt.Sprintf(",\n\"BackStore\":\n%s", pStats))
 	}
+
+	internalData = append(internalData, "}\n")
 
 	sts.InternalData = internalData
 	if mdb.hasPersistence {
@@ -1262,6 +1277,9 @@ func (mdb *plasmaSlice) Statistics() (StorageStatistics, error) {
 			sts.DiskSize += bsDiskSz
 		}
 	}
+
+	mdb.idxStats.residentPercent.Set(common.ComputePercent(numRecsMem, numRecsDisk))
+	mdb.idxStats.cacheHitPercent.Set(common.ComputePercent(cacheHits, cacheMiss))
 	return sts, nil
 }
 
