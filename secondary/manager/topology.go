@@ -38,15 +38,16 @@ type IndexDefnDistribution struct {
 }
 
 type IndexInstDistribution struct {
-	InstId     uint64                  `json:"instId,omitempty"`
-	State      uint32                  `json:"state,omitempty"`
-	StreamId   uint32                  `json:"steamId,omitempty"`
-	Error      string                  `json:"error,omitempty"`
-	Partitions []IndexPartDistribution `json:"partitions,omitempty"`
-	RState     uint32                  `json:"rRtate,omitempty"`
-	Version    uint64                  `json:"version,omitempty"`
-	ReplicaId  uint64                  `json:"replicaId,omitempty"`
-	Scheduled  bool                    `json:"scheduled,omitempty"`
+	InstId      uint64                  `json:"instId,omitempty"`
+	State       uint32                  `json:"state,omitempty"`
+	StreamId    uint32                  `json:"steamId,omitempty"`
+	Error       string                  `json:"error,omitempty"`
+	Partitions  []IndexPartDistribution `json:"partitions,omitempty"`
+	RState      uint32                  `json:"rRtate,omitempty"`
+	Version     uint64                  `json:"version,omitempty"`
+	ReplicaId   uint64                  `json:"replicaId,omitempty"`
+	Scheduled   bool                    `json:"scheduled,omitempty"`
+	StorageMode string                  `json:"storageMode,omitempty"`
 }
 
 type IndexPartDistribution struct {
@@ -116,7 +117,7 @@ func (g *GlobalTopology) RemoveTopologyKey(key string) {
 // Add an index definition to Topology.
 //
 func (t *IndexTopology) AddIndexDefinition(bucket string, name string, defnId uint64, instId uint64, state uint32, indexerId string,
-	instVersion uint64, rState uint32, replicaId uint64, scheduled bool) {
+	instVersion uint64, rState uint32, replicaId uint64, scheduled bool, storageMode string) {
 
 	t.RemoveIndexDefinition(bucket, name)
 
@@ -137,6 +138,7 @@ func (t *IndexTopology) AddIndexDefinition(bucket string, name string, defnId ui
 	inst.ReplicaId = replicaId
 	inst.Scheduled = scheduled
 	inst.Partitions = append(inst.Partitions, *part)
+	inst.StorageMode = storageMode
 
 	defn := new(IndexDefnDistribution)
 	defn.Bucket = bucket

@@ -456,8 +456,7 @@ func IsValidIndexType(t string) bool {
 
 func IsEquivalentIndex(d1, d2 *IndexDefn) bool {
 
-	if d1.Using != d1.Using ||
-		d1.Bucket != d2.Bucket ||
+	if d1.Bucket != d2.Bucket ||
 		d1.IsPrimary != d2.IsPrimary ||
 		d1.ExprType != d2.ExprType ||
 		d1.PartitionScheme != d2.PartitionScheme ||

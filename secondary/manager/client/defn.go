@@ -59,15 +59,16 @@ type IndexDefnDistribution struct {
 }
 
 type IndexInstDistribution struct {
-	InstId     uint64                  `json:"instId,omitempty"`
-	State      uint32                  `json:"state,omitempty"`
-	StreamId   uint32                  `json:"streamId,omitempty"`
-	Error      string                  `json:"error,omitempty"`
-	Partitions []IndexPartDistribution `json:"partitions,omitempty"`
-	RState     uint32                  `json:"rRtate,omitempty"`
-	Version    uint64                  `json:"version,omitempty"`
-	ReplicaId  uint64                  `json:"replicaId,omitempty"`
-	Scheduled  bool                    `json:"scheduled,omitempty"`
+	InstId      uint64                  `json:"instId,omitempty"`
+	State       uint32                  `json:"state,omitempty"`
+	StreamId    uint32                  `json:"streamId,omitempty"`
+	Error       string                  `json:"error,omitempty"`
+	Partitions  []IndexPartDistribution `json:"partitions,omitempty"`
+	RState      uint32                  `json:"rRtate,omitempty"`
+	Version     uint64                  `json:"version,omitempty"`
+	ReplicaId   uint64                  `json:"replicaId,omitempty"`
+	Scheduled   bool                    `json:"scheduled,omitempty"`
+	StorageMode string                  `json:"storageMode,omitempty"`
 }
 
 type IndexPartDistribution struct {

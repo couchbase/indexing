@@ -64,6 +64,7 @@ type IndexResponse struct {
 type LocalIndexMetadata struct {
 	IndexerId        string             `json:"indexerId,omitempty"`
 	NodeUUID         string             `json:"nodeUUID,omitempty"`
+	StorageMode      string             `json:"storageMode,omitempty"`
 	IndexTopologies  []IndexTopology    `json:"topologies,omitempty"`
 	IndexDefinitions []common.IndexDefn `json:"definitions,omitempty"`
 }
@@ -210,6 +211,13 @@ func (m *requestHandlerContext) doCreateIndex(w http.ResponseWriter, r *http.Req
 			return
 		}
 		indexDefn.DefnId = defnId
+	}
+
+	if len(indexDefn.Using) != 0 && strings.ToLower(string(indexDefn.Using)) != "gsi" {
+		if common.IndexTypeToStorageMode(indexDefn.Using) != common.GetStorageMode() {
+			sendIndexResponseWithError(http.StatusInternalServerError, w, fmt.Sprintf("Storage Mode Mismatch %v", indexDefn.Using))
+			return
+		}
 	}
 
 	// call the index manager to handle the DDL
@@ -594,8 +602,9 @@ func (m *requestHandlerContext) getIndexMetadata(creds cbauth.Creds, bucket stri
 			}
 
 			newLocalMeta := LocalIndexMetadata{
-				IndexerId: localMeta.IndexerId,
-				NodeUUID:  localMeta.NodeUUID,
+				IndexerId:   localMeta.IndexerId,
+				NodeUUID:    localMeta.NodeUUID,
+				StorageMode: localMeta.StorageMode,
 			}
 
 			for _, topology := range localMeta.IndexTopologies {
@@ -689,6 +698,8 @@ func (m *requestHandlerContext) getLocalIndexMetadata(creds cbauth.Creds, bucket
 		return nil, err
 	}
 	meta.NodeUUID = string(nodeUUID)
+
+	meta.StorageMode = string(common.StorageModeToIndexType(common.GetStorageMode()))
 
 	iter, err := repo.NewIterator()
 	if err != nil {

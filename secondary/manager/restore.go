@@ -11,7 +11,6 @@
 package manager
 
 import (
-	"errors"
 	"fmt"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
@@ -95,18 +94,11 @@ func (m *RestoreContext) computeIndexLayout() (map[string][]*common.IndexDefn, e
 //
 func (m *RestoreContext) convertStorageMode() error {
 
-	storageMode := common.GetStorageMode()
-	if storageMode == common.NOT_SET {
-		return errors.New("Cluster storage mode not set")
-	}
-
 	for i, _ := range m.image.Metadata {
 		meta := &m.image.Metadata[i]
 		for j, _ := range meta.IndexDefinitions {
 			defn := &meta.IndexDefinitions[j]
-			if common.IndexTypeToStorageMode(defn.Using) != storageMode {
-				defn.Using = common.IndexType(storageMode.String())
-			}
+			defn.Using = "gsi"
 		}
 	}
 

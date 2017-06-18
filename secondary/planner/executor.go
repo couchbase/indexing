@@ -183,6 +183,7 @@ func genTransferToken(solution *Solution, masterId string, topologyChange servic
 
 				token.IndexInst.Defn.InstVersion = token.IndexInst.Version + 1
 				token.IndexInst.Defn.ReplicaId = token.IndexInst.ReplicaId
+				token.IndexInst.Defn.Using = common.IndexType(indexer.StorageMode)
 
 				ustr, _ := common.NewUUID()
 				ttid := fmt.Sprintf("TransferToken%s", ustr.Str())
@@ -206,6 +207,7 @@ func genTransferToken(solution *Solution, masterId string, topologyChange servic
 
 				token.IndexInst.Defn.InstVersion = 1
 				token.IndexInst.Defn.ReplicaId = token.IndexInst.ReplicaId
+				token.IndexInst.Defn.Using = common.IndexType(indexer.StorageMode)
 
 				ustr, _ := common.NewUUID()
 				ttid := fmt.Sprintf("TransferToken%s", ustr.Str())

@@ -31,6 +31,7 @@ import (
 type LocalIndexMetadata struct {
 	IndexerId        string                 `json:"indexerId,omitempty"`
 	NodeUUID         string                 `json:"nodeUUID,omitempty"`
+	StorageMode      string                 `json:"storageMode,omitempty"`
 	IndexTopologies  []client.IndexTopology `json:"topologies,omitempty"`
 	IndexDefinitions []common.IndexDefn     `json:"definitions,omitempty"`
 }
@@ -142,6 +143,13 @@ func getIndexLayout(clusterUrl string) ([]*IndexerNode, error) {
 		// get the node UUID
 		node.NodeUUID = localMeta.NodeUUID
 		node.IndexerId = localMeta.IndexerId
+		node.StorageMode = localMeta.StorageMode
+
+		if !common.IsValidIndexType(node.StorageMode) {
+			err := errors.New(fmt.Sprintf("Fail to get storage mode	from %v. Storage mode = %v", addr, node.StorageMode))
+			logging.Errorf("Planner::getIndexLayout: Error = %v", err)
+			return nil, err
+		}
 
 		// convert from LocalIndexMetadata to IndexUsage
 		indexes, err := ConvertToIndexUsages(localMeta, node)

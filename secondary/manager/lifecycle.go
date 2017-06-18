@@ -370,8 +370,8 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scheduled bool,
 			//if there is a storage mode, default to that
 			defn.Using = common.IndexType(common.GetStorageMode().String())
 		} else {
-			//default to forestdb
-			defn.Using = common.ForestDB
+			//default to plasma
+			defn.Using = common.PlasmaDB
 		}
 	} else {
 		if common.IsValidIndexType(string(defn.Using)) {

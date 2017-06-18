@@ -140,6 +140,7 @@ type IndexerNode struct {
 	IndexerId   string `json:"indexerId"`
 	RestUrl     string `json:"restUrl"`
 	ServerGroup string `json:"serverGroup,omitempty"`
+	StorageMode string `json:"storageMode,omitempty"`
 
 	// input/output: resource consumption (from sizing)
 	MemUsage    uint64  `json:"memUsage"`
@@ -2149,6 +2150,7 @@ func (o *IndexerNode) clone() *IndexerNode {
 		IndexerId:         o.IndexerId,
 		RestUrl:           o.RestUrl,
 		ServerGroup:       o.ServerGroup,
+		StorageMode:       o.StorageMode,
 		MemUsage:          o.MemUsage,
 		MemOverhead:       o.MemOverhead,
 		CpuUsage:          o.CpuUsage,
