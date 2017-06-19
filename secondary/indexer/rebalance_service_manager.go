@@ -1566,6 +1566,8 @@ func (m *ServiceMgr) cancelPrepareTaskLOCKED() error {
 		m.monitorStopCh = nil
 	}
 
+	m.cleanupRebalanceRunning()
+
 	m.updateStateLOCKED(func(s *state) {
 		s.rebalanceID = ""
 	})
