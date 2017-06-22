@@ -22,7 +22,9 @@ import (
 	fdb "github.com/couchbase/indexing/secondary/fdb"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager/client"
+	"math"
 	"strings"
+	"sync/atomic"
 	"time"
 	//"runtime/debug"
 )
@@ -63,9 +65,10 @@ type topologyChange struct {
 }
 
 type builder struct {
-	manager  *LifecycleMgr
-	pendings map[string][]uint64
-	notifych chan *common.IndexDefn
+	manager   *LifecycleMgr
+	pendings  map[string][]uint64
+	notifych  chan *common.IndexDefn
+	batchSize int32
 }
 
 type janitor struct {
@@ -166,7 +169,8 @@ func (m *LifecycleMgr) OnNewRequest(fid string, request protocol.RequestMsg) {
 		if !m.indexerReady {
 			if op == client.OPCODE_UPDATE_INDEX_INST ||
 				op == client.OPCODE_DELETE_BUCKET ||
-				op == client.OPCODE_CLEANUP_INDEX {
+				op == client.OPCODE_CLEANUP_INDEX ||
+				op == client.OPCODE_RESET_INDEX {
 				m.bootstraps <- req
 				return
 			}
@@ -268,6 +272,10 @@ func (m *LifecycleMgr) dispatchRequest(request *requestHolder, factory *message.
 		err = m.handleBuildIndexes(content, common.NewUserRequestContext(), true)
 	case client.OPCODE_BROADCAST_STATS:
 		m.handleBroadcastStats(content)
+	case client.OPCODE_RESET_INDEX:
+		m.handleResetIndex(content)
+	case client.OPCODE_CONFIG_UPDATE:
+		m.handleConfigUpdate(content)
 	}
 
 	logging.Debugf("LifecycleMgr.dispatchRequest () : send response for requestId %d, op %d, len(result) %d", reqId, op, len(result))
@@ -927,6 +935,88 @@ func (m *LifecycleMgr) handleBroadcastStats(buf []byte) {
 	}
 }
 
+func (m *LifecycleMgr) handleResetIndex(content []byte) error {
+
+	defn, err := common.UnmarshallIndexDefn(content)
+	if err != nil {
+		logging.Errorf("LifecycleMgr.handleResetIndex() : Unable to unmarshall index definition. Reason = %v", err)
+		return err
+	}
+
+	oldDefn, err := m.repo.GetIndexDefnById(defn.DefnId)
+	if err != nil {
+		logging.Warnf("LifecycleMgr.handleResetIndex(): Fail to find index definition (%v, %v).", defn.DefnId, defn.Bucket)
+		return err
+	}
+
+	oldStorageMode := ""
+	if oldDefn != nil {
+		oldStorageMode = string(oldDefn.Using)
+	}
+
+	//
+	// Change storage mode in index definition
+	//
+
+	if err := m.repo.UpdateIndex(defn); err != nil {
+		logging.Errorf("LifecycleMgr.handleResetIndex() : Fails to upgrade index (%v, %v). Reason = %v", defn.Bucket, defn.Name, err)
+		return err
+	}
+
+	//
+	// Restore index instance (as if index is created again)
+	//
+
+	topology, err := m.repo.GetTopologyByBucket(defn.Bucket)
+	if err != nil {
+		logging.Errorf("LifecycleMgr.handleResetIndex() : Fails to upgrade index (%v, %v). Reason = %v", defn.Bucket, defn.Name, err)
+		return err
+	}
+
+	inst, err := m.FindLocalIndexInst(defn.Bucket, defn.DefnId)
+	if err != nil {
+		logging.Errorf("LifecycleMgr.handleResetIndex() : Fails to upgrade index (%v, %v). Reason = %v", defn.Bucket, defn.Name, err)
+		return err
+	}
+
+	if inst == nil {
+		logging.Errorf("LifecycleMgr.handleResetIndex() : Fails to upgrade index (%v, %v). Index instance does not exist.", defn.Bucket, defn.Name)
+		return nil
+	}
+
+	if common.IndexState(inst.State) == common.INDEX_STATE_INITIAL ||
+		common.IndexState(inst.State) == common.INDEX_STATE_CATCHUP ||
+		common.IndexState(inst.State) == common.INDEX_STATE_ACTIVE {
+
+		topology.UpdateScheduledFlagForIndexInstByDefn(defn.DefnId, true)
+	}
+
+	topology.UpdateOldStorageModeForIndexInstByDefn(defn.DefnId, oldStorageMode)
+	topology.UpdateStorageModeForIndexInstByDefn(defn.DefnId, string(defn.Using))
+	topology.UpdateStateForIndexInstByDefn(defn.DefnId, common.INDEX_STATE_READY)
+	topology.SetErrorForIndexInstByDefn(defn.DefnId, "")
+	topology.UpdateStreamForIndexInstByDefn(defn.DefnId, common.NIL_STREAM)
+
+	if err := m.repo.SetTopologyByBucket(defn.Bucket, topology); err != nil {
+		// Topology update is in place.  If there is any error, SetTopologyByBucket will purge the cache copy.
+		logging.Errorf("LifecycleMgr.handleResetIndex() : index instance (%v, %v) update fails. Reason = %v", defn.Bucket, defn.Name, err)
+		return err
+	}
+
+	return nil
+}
+
+func (m *LifecycleMgr) handleConfigUpdate(content []byte) error {
+
+	config := new(common.Config)
+	if err := json.Unmarshal(content, config); err != nil {
+		return err
+	}
+
+	m.builder.configUpdate(config)
+	return nil
+}
+
 //////////////////////////////////////////////////////////////
 // Lifecycle Mgr - support functions
 //////////////////////////////////////////////////////////////
@@ -958,11 +1048,21 @@ func (m *LifecycleMgr) UpdateIndexInstance(bucket string, defnId common.IndexDef
 
 	topology, err := m.repo.GetTopologyByBucket(bucket)
 	if err != nil {
-		logging.Errorf("LifecycleMgr.handleTopologyChange() : index instance update fails. Reason = %v", err)
+		logging.Errorf("LifecycleMgr.UpdateIndexInstance() : index instance update fails. Reason = %v", err)
 		return err
 	}
 	if topology == nil {
-		logging.Warnf("LifecycleMgr.handleTopologyChange() : toplogy does not exist.  Skip index instance update for %v", defnId)
+		logging.Warnf("LifecycleMgr.UpdateIndexInstance() : toplogy does not exist.  Skip index instance update for %v", defnId)
+		return nil
+	}
+
+	defn, err := m.repo.GetIndexDefnById(defnId)
+	if err != nil {
+		logging.Errorf("LifecycleMgr.UpdateIndexInstance() : Fail to find index definiton %v. Reason = %v", defnId, err)
+		return err
+	}
+	if defn == nil {
+		logging.Warnf("LifecycleMgr.UpdateIndexInstance() : index does not exist. Skip index instance update for %v.", defnId)
 		return nil
 	}
 
@@ -985,6 +1085,8 @@ func (m *LifecycleMgr) UpdateIndexInstance(bucket string, defnId common.IndexDef
 	}
 
 	changed = topology.SetErrorForIndexInstByDefn(common.IndexDefnId(defnId), errStr) || changed
+
+	changed = topology.UpdateStorageModeForIndexInstByDefn(common.IndexDefnId(defnId), string(defn.Using)) || changed
 
 	if changed {
 		if err := m.repo.SetTopologyByBucket(bucket, topology); err != nil {
@@ -1345,14 +1447,60 @@ func (s *builder) run() {
 			// Otherwise, rebalancer could fail if builder has issued an index build ahead of the rebalancer.
 			time.Sleep(time.Second * 120)
 
-			for bucket, _ := range s.pendings {
-				s.tryBuildIndex(bucket)
+			buildList, quota := s.getBuildList()
+
+			for _, bucket := range buildList {
+				quota = s.tryBuildIndex(bucket, quota)
 			}
 
 		case <-s.manager.killch:
 			logging.Infof("builder: Index builder terminates.")
 		}
 	}
+}
+
+func (s *builder) getBuildList() ([]string, int32) {
+
+	// get quota
+	quota, skipList := s.getQuota()
+
+	// filter bucket that is not available
+	buildList := ([]string)(nil)
+	for bucket, _ := range s.pendings {
+		if _, ok := skipList[bucket]; !ok {
+			buildList = append(buildList, bucket)
+		}
+	}
+
+	// sort buildList by ascending order
+	for i := 0; i < len(buildList)-1; i++ {
+		for j := i + 1; j < len(buildList); j++ {
+			bucket_i := buildList[i]
+			bucket_j := buildList[j]
+
+			if len(s.pendings[bucket_i]) < len(s.pendings[bucket_j]) {
+				tmp := buildList[i]
+				buildList[i] = buildList[j]
+				buildList[j] = tmp
+			}
+		}
+	}
+
+	// sort buildList based on closest to quota
+	for i := 0; i < len(buildList)-1; i++ {
+		for j := i + 1; j < len(buildList); j++ {
+			bucket_i := buildList[i]
+			bucket_j := buildList[j]
+
+			if math.Abs(float64(len(s.pendings[bucket_i])-int(quota))) > math.Abs(float64(len(s.pendings[bucket_j])-int(quota))) {
+				tmp := buildList[i]
+				buildList[i] = buildList[j]
+				buildList[j] = tmp
+			}
+		}
+	}
+
+	return buildList, quota
 }
 
 func (s *builder) addPending(bucket string, id uint64) bool {
@@ -1367,7 +1515,9 @@ func (s *builder) addPending(bucket string, id uint64) bool {
 	return true
 }
 
-func (s *builder) tryBuildIndex(bucket string) {
+func (s *builder) tryBuildIndex(bucket string, quota int32) int32 {
+
+	newQuota := quota
 
 	defnIds := s.pendings[bucket]
 	if len(defnIds) != 0 {
@@ -1377,7 +1527,17 @@ func (s *builder) tryBuildIndex(bucket string) {
 
 			buildList := ([]uint64)(nil)
 			buildMap := make(map[uint64]bool)
+
+			pendingList := make([]uint64, len(defnIds))
+			copy(pendingList, defnIds)
+
 			for _, defnId := range defnIds {
+
+				if newQuota == 0 {
+					break
+				}
+
+				pendingList = pendingList[1:]
 
 				defn, err := s.manager.repo.GetIndexDefnById(common.IndexDefnId(defnId))
 				if defn == nil || err != nil {
@@ -1395,10 +1555,15 @@ func (s *builder) tryBuildIndex(bucket string) {
 					if _, ok := buildMap[defnId]; !ok {
 						buildList = append(buildList, defnId)
 						buildMap[defnId] = true
+						newQuota = newQuota - 1
 					}
 				} else {
 					logging.Warnf("builder: Index instance (%v, %v) is not in READY state.  Skipping.", defnId, bucket)
 				}
+			}
+
+			if len(pendingList) == 0 {
+				pendingList = nil
 			}
 
 			if len(buildList) != 0 {
@@ -1408,10 +1573,14 @@ func (s *builder) tryBuildIndex(bucket string) {
 				content, err := client.MarshallIndexIdList(idList)
 				if err != nil {
 					logging.Warnf("builder: Fail to marshall index defnIds during index build.  Error = %v. Retry later.", err)
-					return
+					return quota
 				}
 
 				logging.Infof("builder: Try build index for bucket %v. Index %v", bucket, idList)
+
+				// Clean up the map.  If there is any index that needs retry, they will be put into the notifych again.
+				// Once this function is done, the map will be populated again from the notifych.
+				s.pendings[bucket] = pendingList
 
 				// If any of the index cannot be built, those index will be skipped by lifecycle manager, so it
 				// will send the rest of the indexes to the indexer.  An index cannot be built if it does not have
@@ -1419,13 +1588,49 @@ func (s *builder) tryBuildIndex(bucket string) {
 				if err := s.manager.requestServer.MakeRequest(client.OPCODE_BUILD_INDEX_RETRY, key, content); err != nil {
 					logging.Warnf("builder: Fail to build index.  Error = %v.", err)
 				}
-			}
 
-			// Clean up the map.  If there is any index that needs retry, they will be put into the notifych again.
-			// Once this function is done, the map will be populated again from the notifych.
-			s.pendings[bucket] = nil
+				logging.Infof("builder: pending definitons to be build %v.", pendingList)
+
+			} else {
+
+				// Clean up the map.  If there is any index that needs retry, they will be put into the notifych again.
+				// Once this function is done, the map will be populated again from the notifych.
+				s.pendings[bucket] = pendingList
+			}
 		}
 	}
+
+	return newQuota
+}
+
+func (s *builder) getQuota() (int32, map[string]bool) {
+
+	quota := atomic.LoadInt32(&s.batchSize)
+	skipList := make(map[string]bool)
+
+	metaIter, err := s.manager.repo.NewIterator()
+	if err != nil {
+		logging.Warnf("builder.getQuota():  Unable to read from metadata repository. Skipping quota check")
+		return quota, skipList
+	}
+	defer metaIter.Close()
+
+	for _, defn, err := metaIter.Next(); err == nil; _, defn, err = metaIter.Next() {
+
+		inst, err := s.manager.FindLocalIndexInst(defn.Bucket, defn.DefnId)
+		if inst == nil || err != nil {
+			logging.Warnf("builder.getQuota: Unable to read index instance for definition (%v, %v).   Skipping index for quota check",
+				defn.Bucket, defn.Name)
+			continue
+		}
+
+		if inst.State == uint32(common.INDEX_STATE_INITIAL) || inst.State == uint32(common.INDEX_STATE_CATCHUP) {
+			quota = quota - 1
+			skipList[defn.Bucket] = true
+		}
+	}
+
+	return quota, skipList
 }
 
 func (s *builder) processBuildToken(bootstrap bool) {
@@ -1524,12 +1729,18 @@ func (s *builder) recover() {
 	}
 }
 
+func (s *builder) configUpdate(config *common.Config) {
+	newBatchSize := int32((*config)["settings.build.batch_size"].Int())
+	atomic.StoreInt32(&s.batchSize, newBatchSize)
+}
+
 func newBuilder(mgr *LifecycleMgr) *builder {
 
 	builder := &builder{
-		manager:  mgr,
-		pendings: make(map[string][]uint64),
-		notifych: make(chan *common.IndexDefn, 10000),
+		manager:   mgr,
+		pendings:  make(map[string][]uint64),
+		notifych:  make(chan *common.IndexDefn, 10000),
+		batchSize: int32(common.SystemConfig["indexer.settings.build.batch_size"].Int()),
 	}
 
 	return builder

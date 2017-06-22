@@ -1593,6 +1593,22 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.settings.storage_mode.disable_upgrade": ConfigValue{
+		false,
+		"Disable upgrading storage mode. This is checked on every indexer restart, " +
+			"independent if the cluster is under software upgrade or not.",
+		false,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.settings.build.batch_size": ConfigValue{
+		5,
+		"When performing background index build, specify the number of index to build in an iteration.  " +
+			"Use -1 for no limit on batch size.",
+		5,
+		false, // mutable
+		false, // case-insensitive
+	},
 }
 
 // NewConfig from another

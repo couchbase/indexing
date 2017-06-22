@@ -22,6 +22,7 @@ import (
 	"math"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -161,6 +162,7 @@ func registerRequestHandler(mgr *IndexManager, clusterUrl string) {
 		http.HandleFunc("/getIndexStatus", handlerContext.handleIndexStatusRequest)
 		http.HandleFunc("/getIndexStatement", handlerContext.handleIndexStatementRequest)
 		http.HandleFunc("/planIndex", handlerContext.handleIndexPlanRequest)
+		http.HandleFunc("/settings/storageMode", handlerContext.handleIndexStorageModeRequest)
 	})
 
 	handlerContext.mgr = mgr
@@ -438,6 +440,32 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, bucket string
 
 							if instance.RState == uint32(common.REBAL_PENDING) && state != common.INDEX_STATE_READY {
 								stateStr = "Replicating"
+							}
+
+							if state == common.INDEX_STATE_INITIAL || state == common.INDEX_STATE_CATCHUP {
+								if len(instance.OldStorageMode) != 0 {
+
+									if instance.OldStorageMode == common.ForestDB && instance.StorageMode == common.PlasmaDB {
+										stateStr = "Building (Upgrading)"
+									}
+
+									if instance.StorageMode == common.ForestDB && instance.OldStorageMode == common.PlasmaDB {
+										stateStr = "Building (Downgrading)"
+									}
+								}
+							}
+
+							if state == common.INDEX_STATE_READY {
+								if len(instance.OldStorageMode) != 0 {
+
+									if instance.OldStorageMode == common.ForestDB && instance.StorageMode == common.PlasmaDB {
+										stateStr = "Created (Upgrading)"
+									}
+
+									if instance.StorageMode == common.ForestDB && instance.OldStorageMode == common.PlasmaDB {
+										stateStr = "Created (Downgrading)"
+									}
+								}
 							}
 
 							if indexerState, ok := stats.ToMap()["indexer_state"]; ok {
@@ -890,6 +918,50 @@ func (m *requestHandlerContext) convertIndexPlanRequest(r *http.Request) ([]*pla
 	}
 
 	return specs, nil
+}
+
+//////////////////////////////////////////////////////
+// Storage Mode
+///////////////////////////////////////////////////////
+
+func (m *requestHandlerContext) handleIndexStorageModeRequest(w http.ResponseWriter, r *http.Request) {
+
+	creds, ok := doAuth(r, w)
+	if !ok {
+		return
+	}
+
+	if !isAllowed(creds, []string{"cluster.settings!write"}, w) {
+		return
+	}
+
+	// Override the storage mode for the local indexer.  Override will not take into effect until
+	// indexer has restarted manually by administrator.   During indexer bootstrap, it will upgrade/downgrade
+	// individual index to the override storage mode.
+	value := r.FormValue("downgrade")
+	if len(value) != 0 {
+		downgrade, err := strconv.ParseBool(value)
+		if err == nil {
+			if downgrade {
+				if common.GetStorageMode() == common.StorageMode(common.PLASMA) {
+					m.mgr.SetLocalValue("StorageModeOverride", common.ForestDB)
+					logging.Infof("RequestHandler::handleIndexStorageModeRequest: set override storage mode to forestdb")
+					send(http.StatusOK, w, "downgrade storage mode to forestdb after indexer restart.")
+				} else {
+					logging.Infof("RequestHandler::handleIndexStorageModeRequest: local storage mode is not plasma.  Cannot downgrade.")
+					send(http.StatusOK, w, "Indexer storage mode is not plasma.  Cannot downgrade.")
+				}
+			} else {
+				m.mgr.SetLocalValue("StorageModeOverride", "")
+				logging.Infof("RequestHandler::handleIndexStorageModeRequst: unset storage mode override")
+				send(http.StatusOK, w, "storage mode downgrade is disabled")
+			}
+		} else {
+			sendHttpError(w, err.Error(), http.StatusBadRequest)
+		}
+	} else {
+		sendHttpError(w, "missing argument `override`", http.StatusBadRequest)
+	}
 }
 
 ///////////////////////////////////////////////////////

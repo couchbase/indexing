@@ -38,16 +38,17 @@ type IndexDefnDistribution struct {
 }
 
 type IndexInstDistribution struct {
-	InstId      uint64                  `json:"instId,omitempty"`
-	State       uint32                  `json:"state,omitempty"`
-	StreamId    uint32                  `json:"steamId,omitempty"`
-	Error       string                  `json:"error,omitempty"`
-	Partitions  []IndexPartDistribution `json:"partitions,omitempty"`
-	RState      uint32                  `json:"rRtate,omitempty"`
-	Version     uint64                  `json:"version,omitempty"`
-	ReplicaId   uint64                  `json:"replicaId,omitempty"`
-	Scheduled   bool                    `json:"scheduled,omitempty"`
-	StorageMode string                  `json:"storageMode,omitempty"`
+	InstId         uint64                  `json:"instId,omitempty"`
+	State          uint32                  `json:"state,omitempty"`
+	StreamId       uint32                  `json:"steamId,omitempty"`
+	Error          string                  `json:"error,omitempty"`
+	Partitions     []IndexPartDistribution `json:"partitions,omitempty"`
+	RState         uint32                  `json:"rRtate,omitempty"`
+	Version        uint64                  `json:"version,omitempty"`
+	ReplicaId      uint64                  `json:"replicaId,omitempty"`
+	Scheduled      bool                    `json:"scheduled,omitempty"`
+	StorageMode    string                  `json:"storageMode,omitempty"`
+	OldStorageMode string                  `json:"oldStorageMode,omitempty"`
 }
 
 type IndexPartDistribution struct {
@@ -137,8 +138,8 @@ func (t *IndexTopology) AddIndexDefinition(bucket string, name string, defnId ui
 	inst.RState = rState
 	inst.ReplicaId = replicaId
 	inst.Scheduled = scheduled
-	inst.Partitions = append(inst.Partitions, *part)
 	inst.StorageMode = storageMode
+	inst.Partitions = append(inst.Partitions, *part)
 
 	defn := new(IndexDefnDistribution)
 	defn.Bucket = bucket
@@ -277,6 +278,48 @@ func (t *IndexTopology) UpdateRebalanceStateForIndexInstByDefn(defnId common.Ind
 					t.Definitions[i].Instances[j].RState = uint32(state)
 					logging.Debugf("IndexTopology.UpdateRebalanceStateForIndexInstByDefn(): Update index '%v' inst '%v' rebalance state to '%v'",
 						defnId, t.Definitions[i].Instances[j].InstId, t.Definitions[i].Instances[j].RState)
+					changed = true
+				}
+			}
+		}
+	}
+	return changed
+}
+
+//
+// Update Storage Mode on instance
+//
+func (t *IndexTopology) UpdateStorageModeForIndexInstByDefn(defnId common.IndexDefnId, storageMode string) bool {
+
+	changed := false
+	for i, _ := range t.Definitions {
+		if t.Definitions[i].DefnId == uint64(defnId) {
+			for j, _ := range t.Definitions[i].Instances {
+				if t.Definitions[i].Instances[j].StorageMode != storageMode {
+					t.Definitions[i].Instances[j].StorageMode = storageMode
+					logging.Debugf("IndexTopology.UpdateStorageModeForIndexInstByDefn(): Update index '%v' inst '%v' storage mode to '%v'",
+						defnId, t.Definitions[i].Instances[j].InstId, t.Definitions[i].Instances[j].StorageMode)
+					changed = true
+				}
+			}
+		}
+	}
+	return changed
+}
+
+//
+// Update Old Storage Mode on instance
+//
+func (t *IndexTopology) UpdateOldStorageModeForIndexInstByDefn(defnId common.IndexDefnId, storageMode string) bool {
+
+	changed := false
+	for i, _ := range t.Definitions {
+		if t.Definitions[i].DefnId == uint64(defnId) {
+			for j, _ := range t.Definitions[i].Instances {
+				if t.Definitions[i].Instances[j].OldStorageMode != storageMode {
+					t.Definitions[i].Instances[j].OldStorageMode = storageMode
+					logging.Debugf("IndexTopology.UpdateOldStorageModeForIndexInstByDefn(): Update index '%v' inst '%v' old storage mode to '%v'",
+						defnId, t.Definitions[i].Instances[j].InstId, t.Definitions[i].Instances[j].OldStorageMode)
 					changed = true
 				}
 			}

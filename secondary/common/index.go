@@ -196,17 +196,19 @@ type IndexDefn struct {
 
 //IndexInst is an instance of an Index(aka replica)
 type IndexInst struct {
-	InstId    IndexInstId
-	Defn      IndexDefn
-	State     IndexState
-	RState    RebalanceState
-	Stream    StreamId
-	Pc        PartitionContainer
-	Error     string
-	BuildTs   []uint64
-	Version   int
-	ReplicaId int
-	Scheduled bool
+	InstId         IndexInstId
+	Defn           IndexDefn
+	State          IndexState
+	RState         RebalanceState
+	Stream         StreamId
+	Pc             PartitionContainer
+	Error          string
+	BuildTs        []uint64
+	Version        int
+	ReplicaId      int
+	Scheduled      bool
+	StorageMode    string
+	OldStorageMode string
 }
 
 //IndexInstMap is a map from IndexInstanceId to IndexInstance

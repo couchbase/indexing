@@ -446,7 +446,6 @@ func (c *MetadataRepo) DropIndexById(id common.IndexDefnId) error {
 	// check if defn already exist
 	exist, _ := c.GetIndexDefnById(id)
 	if exist == nil {
-		// TODO: should not return error if not found (should return nil)
 		return NewError(ERROR_META_IDX_DEFN_NOT_EXIST, NORMAL, METADATA_REPO, nil,
 			fmt.Sprintf("Index Definition '%s' does not exist", id))
 	}
@@ -460,6 +459,37 @@ func (c *MetadataRepo) DropIndexById(id common.IndexDefnId) error {
 	defer c.mutex.Unlock()
 
 	delete(c.defnCache, id)
+
+	return nil
+}
+
+func (c *MetadataRepo) UpdateIndex(defn *common.IndexDefn) error {
+
+	// check if defn already exist
+	exist, _ := c.GetIndexDefnById(defn.DefnId)
+	if exist == nil {
+		return NewError(ERROR_META_IDX_DEFN_NOT_EXIST, NORMAL, METADATA_REPO, nil,
+			fmt.Sprintf("Index Definition '%s' does not exist", defn.DefnId))
+	}
+
+	defn = (*defn).Clone()
+
+	// marshall the defn
+	data, err := common.MarshallIndexDefn(defn)
+	if err != nil {
+		return err
+	}
+
+	// save by defn id
+	lookupName := indexDefnKeyById(defn.DefnId)
+	if err := c.setMeta(lookupName, data); err != nil {
+		return err
+	}
+
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	c.defnCache[defn.DefnId] = defn
 
 	return nil
 }

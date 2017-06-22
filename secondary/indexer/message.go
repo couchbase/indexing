@@ -84,6 +84,7 @@ const (
 	CLUST_MGR_BUILD_INDEX_DDL_RESPONSE
 	CLUST_MGR_DROP_INDEX_DDL
 	CLUST_MGR_UPDATE_TOPOLOGY_FOR_INDEX
+	CLUST_MGR_RESET_INDEX
 	CLUST_MGR_GET_GLOBAL_TOPOLOGY
 	CLUST_MGR_GET_LOCAL
 	CLUST_MGR_SET_LOCAL
@@ -1105,6 +1106,19 @@ func (m *MsgKVStreamRepair) GetBucket() string {
 
 func (m *MsgKVStreamRepair) GetRestartTs() *common.TsVbuuid {
 	return m.restartTs
+}
+
+//CLUST_MGR_RESET_INDEX
+type MsgClustMgrResetIndex struct {
+	defn common.IndexDefn
+}
+
+func (m *MsgClustMgrResetIndex) GetMsgType() MsgType {
+	return CLUST_MGR_RESET_INDEX
+}
+
+func (m *MsgClustMgrResetIndex) GetIndex() common.IndexDefn {
+	return m.defn
 }
 
 //CLUST_MGR_UPDATE_TOPOLOGY_FOR_INDEX
