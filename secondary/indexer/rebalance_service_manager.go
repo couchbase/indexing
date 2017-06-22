@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"math"
 	"net"
 	"sync"
 	"time"
@@ -1396,7 +1397,7 @@ func (m *ServiceMgr) updateRebalanceProgressLOCKED(progress float64) {
 		Type:         service.TaskTypeRebalance,
 		Status:       service.TaskStatusRunning,
 		IsCancelable: true,
-		Progress:     progress,
+		Progress:     math.Floor(progress),
 
 		Extra: map[string]interface{}{
 			"rebalanceId": changeID,

@@ -19,6 +19,7 @@ import (
 	"github.com/couchbase/indexing/secondary/manager/client"
 	"github.com/couchbase/indexing/secondary/planner"
 	"io"
+	"math"
 	"net/http"
 	"sort"
 	"strings"
@@ -109,6 +110,7 @@ type IndexStatus struct {
 	Hosts      []string           `json:"hosts,omitempty"`
 	Error      string             `json:"error,omitempty"`
 	Completion int                `json:"completion"`
+	Progress   float64            `json:"progress"`
 	Scheduled  bool               `json:"scheduled"`
 }
 
@@ -450,6 +452,12 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, bucket string
 								completion = int(progress.(float64))
 							}
 
+							progress := float64(0)
+							key = fmt.Sprintf("%v:%v:completion_progress", defn.Bucket, name)
+							if stat, ok := stats.ToMap()[key]; ok {
+								progress = math.Float64frombits(uint64(stat.(float64)))
+							}
+
 							status := IndexStatus{
 								DefnId:     defn.DefnId,
 								Name:       name,
@@ -463,6 +471,7 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, bucket string
 								Hosts:      []string{curl},
 								Definition: common.IndexStatement(defn, false),
 								Completion: completion,
+								Progress:   progress,
 								Scheduled:  instance.Scheduled,
 							}
 

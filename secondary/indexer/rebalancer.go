@@ -906,17 +906,17 @@ func (r *Rebalancer) computeProgress() (progress float64) {
 		return
 	}
 
-	var totalProgress int
+	var totalProgress float64
 	for _, tt := range r.transferTokens {
 		state := tt.State
 		if state == c.TransferTokenCommit || state == c.TransferTokenDeleted {
-			totalProgress += 100
+			totalProgress += 100.00
 		} else {
 			totalProgress += getBuildProgressFromStatus(statusResp, tt.IndexInst.Defn.DefnId)
 		}
 	}
 
-	progress = float64(totalProgress/totTokens) / 100.0
+	progress = (totalProgress / float64(totTokens)) / 100.0
 	l.Infof("Rebalancer::computeProgress %v", progress)
 
 	if progress < 0.1 {
@@ -937,15 +937,15 @@ func getIndexStatusFromMeta(defn *c.IndexDefn, localMeta *manager.LocalIndexMeta
 	return topology.GetStatusByDefn(defn.DefnId)
 }
 
-func getBuildProgressFromStatus(status *manager.IndexStatusResponse, defnId c.IndexDefnId) int {
+func getBuildProgressFromStatus(status *manager.IndexStatusResponse, defnId c.IndexDefnId) float64 {
 
 	for _, idx := range status.Status {
 		if idx.DefnId == defnId && idx.Status == "Replicating" {
-			l.Infof("Rebalancer::getBuildProgressFromStatus %v %v", idx.DefnId, idx.Completion)
-			return idx.Completion
+			l.Infof("Rebalancer::getBuildProgressFromStatus %v %v", idx.DefnId, idx.Progress)
+			return idx.Progress
 		}
 	}
-	return 0
+	return 0.0
 
 }
 
