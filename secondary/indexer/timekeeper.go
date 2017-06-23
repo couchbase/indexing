@@ -19,6 +19,7 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/dcp"
 	"github.com/couchbase/indexing/secondary/logging"
+	"math"
 	"sync"
 	"time"
 )
@@ -2795,7 +2796,7 @@ func (tk *timekeeper) handleStats(cmd Message) {
 				}
 			}
 
-			v := flushedCount
+			v := float64(flushedCount)
 			receivedTs := tk.ss.streamBucketHWTMap[inst.Stream][inst.Defn.Bucket]
 			queued := uint64(0)
 			if receivedTs != nil {
@@ -2826,9 +2827,9 @@ func (tk *timekeeper) handleStats(cmd Message) {
 
 			switch inst.State {
 			default:
-				v = 0
+				v = 0.00
 			case common.INDEX_STATE_ACTIVE:
-				v = 100
+				v = 100.00
 			case common.INDEX_STATE_INITIAL, common.INDEX_STATE_CATCHUP:
 				totalToBeflushed := uint64(0)
 				for _, seqno := range kvTs {
@@ -2836,9 +2837,9 @@ func (tk *timekeeper) handleStats(cmd Message) {
 				}
 
 				if totalToBeflushed > flushedCount {
-					v = flushedCount * 100 / totalToBeflushed
+					v = float64(flushedCount) * 100.00 / float64(totalToBeflushed)
 				} else {
-					v = 100
+					v = 100.00
 				}
 			}
 
@@ -2847,6 +2848,7 @@ func (tk *timekeeper) handleStats(cmd Message) {
 				idxStats.numDocsQueued.Set(int64(queued))
 				idxStats.numDocsPending.Set(int64(pending))
 				idxStats.buildProgress.Set(int64(v))
+				idxStats.completionProgress.Set(int64(math.Float64bits(v)))
 				idxStats.lastRollbackTime.Set(tk.ss.bucketRollbackTime[inst.Defn.Bucket])
 				idxStats.progressStatTime.Set(time.Now().UnixNano())
 			}

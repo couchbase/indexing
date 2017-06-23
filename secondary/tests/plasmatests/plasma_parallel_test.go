@@ -15,7 +15,9 @@ import (
 	"flag"
 	"fmt"
 	"hash/crc32"
+	"io/ioutil"
 	"math/rand"
+	"net/http"
 	_ "net/http/pprof"
 	"os"
 	"regexp"
@@ -122,29 +124,46 @@ func TestLongevity(t *testing.T) {
 	}
 	// Set the path for memdb and plasma slices
 	initalize1(c)
+	c.plasmaDir = "/tmp/plasmaLongevity"
+	c.memDbDir = "/tmp/memdbLongevity"
 	// Create memdb and plasma slices
 	createSlice1(c)
 	// Generate data for testing
 	genData2(c)
+	backStore, mainStore := getPlasmaDiagnostics()
 	for i := 0; i < *longevity_iterations; i++ {
+		start := time.Now()
 		fmt.Print("**** Iteration ", i, " started ****\n")
+		fmt.Print("**** Iteration ", i, " insert/delete started ****\n")
 		for j := 0; j < *threads; j++ { // start multiple threads in parallel
 			newMutationMeta1(c)
-			wg.Add(1)
+			wg.Add(2)
+			// rebalance page sizes
+			go rebalancePageSizes(&wg, backStore, mainStore, 500)
 			// Do insert and delete operations
 			go insertDelete1(c, c.mutationMetas[j], &wg)
 		}
-		// Wait for inserts and deletes to complete
+		// Wait for inserts,deletes and page size rebalance to complete
 		wg.Wait()
+		wg.Add(1)
+		// rebalance page sizes
+		go rebalancePageSizes(&wg, backStore, mainStore, 100)
+		fmt.Print("**** Iteration ", i, " insert/delete completed ****\n")
 		// Print storage statistics for logging purposes
 		storageStatistics1(c)
+		fmt.Print("**** Iteration ", i, " create snapshot started ****\n")
 		// create 5 snapshots. In Plasma we store only 2 recent snapshots.
 		// NewSnapshot() cannot be done in parallel with inserts and deletes
-		for l := 0; l < 5; l++ {
+		for l := 0; l < 2; l++ {
 			createSnapshot1(c)
 		}
+		wg.Wait()
+		fmt.Print("**** Iteration ", i, " create snapshot completed ****\n")
+		fmt.Print("**** Iteration ", i, " insert/delete/scans started ****\n")
 		for k := 0; k < *threads; k++ { // start multiple threads in parallel
-			wg.Add(2)
+			wg.Add(3)
+			// rebalance page sizes
+			go rebalancePageSizes(&wg, backStore, mainStore, 2000)
 			// Do writes and scan from snapshots
 			// TODO: Delete some snapshots
 			go insertDelete1(c, c.mutationMetas[k], &wg)
@@ -153,14 +172,11 @@ func TestLongevity(t *testing.T) {
 		}
 		// Wait for the all the above threads to complete
 		wg.Wait()
-		fmt.Print("**** Iteration ", i, " complete ****\n") // Ensure the script doesn't hang after 1st iteration here. Bug ?
+		fmt.Print("**** Iteration ", i, " insert/delete/scans completed ****\n")
+		closeSnaps(c)
+		fmt.Println("iteration", i, "took", time.Since(start))
 	}
-	for k := 0; k < *threads; k++ { // start multiple threads in parallel
-		// Do rollback
-		rollback1(c, &wg)
-	}
-	// Close all the snapshots, close all the slices and destroy the slices
-	close1(c)
+	closeSlices(c)
 	memory := plasma.MemoryInUse()
 	fmt.Print("\n MemoryInUse : ", memory, "\n")
 	if memory != 0 {
@@ -291,7 +307,6 @@ func TestLongRunningScans(t *testing.T) {
 		if merges == 0 {
 			panic("Number of merges is 0")
 		}
-
 		// create 5 snapshots. In Plasma we store only 2 recent snapshots.
 		// NewSnapshot() cannot be done in parallel with inserts and deletes
 		for l := 0; l < 5; l++ {
@@ -452,10 +467,10 @@ func createSlice1(c *Context) {
 
 	instID, err1 := common.NewIndexInstId()
 	common.CrashOnError(err1)
-	slice1, err1 := indexer.NewMemDBSlice("/tmp/memdb", 0, idxDefn1, instID, false, true, config, stats)
+	slice1, err1 := indexer.NewMemDBSlice(c.memDbDir, 0, idxDefn1, instID, false, true, config, stats)
 	common.CrashOnError(err1)
 	c.memDbSlice = slice1
-	slice, err := indexer.NewPlasmaSlice("/tmp/plasma", 0, idxDefn, instID, false, config, stats)
+	slice, err := indexer.NewPlasmaSlice(c.plasmaDir, 0, idxDefn, instID, false, config, stats)
 	common.CrashOnError(err)
 	c.plasmaSlice = slice
 }
@@ -575,10 +590,18 @@ func createSnapshot1(c *Context) {
 
 	// Open snapshot
 	snap, err5 := c.memDbSlice.OpenSnapshot(info)
+	if len(c.memDbSnaps) == 2 {
+		c.memDbSnaps[0].Close()
+		c.memDbSnaps = []indexer.Snapshot{c.memDbSnaps[1]}
+	}
 	common.CrashOnError(err5)
 	c.memDbSnaps = append(c.memDbSnaps, snap)
 
 	snap, err5 = c.plasmaSlice.OpenSnapshot(info1)
+	if len(c.plasmaSnaps) == 2 {
+		c.plasmaSnaps[0].Close()
+		c.plasmaSnaps = []indexer.Snapshot{c.plasmaSnaps[1]}
+	}
 	common.CrashOnError(err5)
 	c.plasmaSnaps = append(c.plasmaSnaps, snap)
 
@@ -866,4 +889,86 @@ func randomGenerator(c *Context) (arr []int) {
 	}
 	sort.Ints(rand_arr)
 	return rand_arr
+}
+
+func getPlasmaDiagnostics() (backStore int, mainStore int) {
+	reader := strings.NewReader(`{"Cmd":"listDBs"}`)
+	request, err := http.NewRequest("POST", "http://0:8080/plasmaDiag", reader)
+	common.CrashOnError(err)
+	request.Header.Set("Content-Type", "application/json")
+	client := http.Client{Timeout: time.Duration(10 * time.Second)}
+	resp, err1 := client.Do(request)
+	common.CrashOnError(err1)
+	responseData, err := ioutil.ReadAll(resp.Body)
+	responseString := string(responseData)
+	fmt.Println(responseString)
+	re := regexp.MustCompile(`Backstore\s+:\s+(\d+)`)
+	match := re.FindStringSubmatch(responseString)
+	backStor, _ := strconv.Atoi(match[1])
+	re = regexp.MustCompile(`Mainstore\s+:\s+(\d+)`)
+	match = re.FindStringSubmatch(responseString)
+	mainStor, _ := strconv.Atoi(match[1])
+	return backStor, mainStor
+}
+
+func random(min int, max int) int {
+	return rand.Intn(max-min) + min
+}
+
+func rebalancePageSizes(wg *sync.WaitGroup, backStore int, mainStore int, iterations int) {
+	defer wg.Done()
+	for i := 0; i < iterations; i++ {
+		var arr []int
+		for i := 0; i < 3; i++ {
+			arr = append(arr, random(20, 2000))
+		}
+		sort.Sort(sort.Reverse(sort.IntSlice(arr)))
+		arr = append(arr, random(1, 30))
+		fmt.Print("\nmaxPageItems : ", arr[0], "\n")
+		fmt.Print("minPageItems : ", arr[1], "\n")
+		fmt.Print("maxDeltas : ", arr[2], "\n")
+		fmt.Print("numSegments : ", arr[3], "\n")
+		string1 := strings.Trim(strings.Join(strings.Fields(fmt.Sprint(arr)), ","), "[]")
+		var jsonBackStore string = `{"Cmd": "rebalance"` + `,` + `"Args": [` + strconv.Itoa(backStore) + `,` + string1 + `]}`
+		var jsonMainStore string = `{"Cmd": "rebalance"` + `,` + `"Args": [` + strconv.Itoa(mainStore) + `,` + string1 + `]}`
+		readerBackStore := strings.NewReader(jsonBackStore)
+		readerMainStore := strings.NewReader(jsonMainStore)
+		request, err := http.NewRequest("POST", "http://0:8080/plasmaDiag", readerBackStore)
+		common.CrashOnError(err)
+		request.Header.Set("Content-Type", "application/json")
+		client := http.Client{Timeout: time.Duration(100 * time.Second)}
+		resp, err1 := client.Do(request)
+		common.CrashOnError(err1)
+		responseData, err := ioutil.ReadAll(resp.Body)
+		responseString := string(responseData)
+		fmt.Println(responseString)
+		request, err = http.NewRequest("POST", "http://0:8080/plasmaDiag", readerMainStore)
+		common.CrashOnError(err)
+		request.Header.Set("Content-Type", "application/json")
+		client = http.Client{Timeout: time.Duration(100 * time.Second)}
+		resp, err1 = client.Do(request)
+		common.CrashOnError(err1)
+		responseData, err = ioutil.ReadAll(resp.Body)
+		responseString = string(responseData)
+		fmt.Println(responseString)
+	}
+}
+
+// Cleanup function to close snapshots , clsose and destroy slices
+func closeSnaps(c *Context) {
+	for _, snap := range c.memDbSnaps {
+		snap.Close()
+	}
+	for _, snap := range c.plasmaSnaps {
+		snap.Close()
+	}
+	c.memDbSnaps = c.memDbSnaps[:0]
+	c.plasmaSnaps = c.plasmaSnaps[:0]
+}
+
+func closeSlices(c *Context) {
+	c.memDbSlice.Close()
+	c.memDbSlice.Destroy()
+	c.plasmaSlice.Close()
+	c.plasmaSlice.Destroy()
 }
