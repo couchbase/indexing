@@ -207,9 +207,6 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 
 	idx.stats = NewIndexerStats()
 
-	// Start indexer endpoints for CRUD  operations.
-	NewRestServer(idx.config["clusterAddr"].String())
-
 	// Read memquota setting
 	memQuota := int64(idx.config["settings.memory_quota"].Uint64())
 	idx.stats.memoryQuota.Set(memQuota)
@@ -439,6 +436,10 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		logging.Fatalf("Indexer::NewCompactionmanager Init Error %+v", res)
 		return nil, res
 	}
+
+	// Start indexer endpoints for CRUD  operations.
+	// Initialize the REST server after indexer bootstrap is completed
+	NewRestServer(idx.config["clusterAddr"].String())
 
 	go idx.monitorMemUsage()
 	go idx.logMemstats()
