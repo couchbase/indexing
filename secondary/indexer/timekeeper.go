@@ -1713,8 +1713,12 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 
 	//if flushTs is not on snap boundary, merge cannot be done
 	if !flushTs.IsSnapAligned() {
+		hwt := tk.ss.streamBucketHWTMap[streamId][bucket]
 		logging.Infof("Timekeeper::checkInitStreamReadyToMerge FlushTs Not Snapshot " +
-			"Snapshot Aligned. Continue both streams.")
+			"Aligned. Continue both streams.")
+		logging.LazyVerbose(func() string {
+			return fmt.Sprintf("Timekeeper::checkInitStreamReadyToMerge FlushTs %v\n HWT %v", flushTs, hwt)
+		})
 		return false
 	}
 
