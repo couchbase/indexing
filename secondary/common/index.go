@@ -435,8 +435,7 @@ func (s IndexSnapType) String() string {
 
 }
 
-//NOTE: This type needs to be in sync with
-//smStrMap in index/global.go
+//NOTE: This type needs to be in sync with smStrMap
 type IndexType string
 
 const (

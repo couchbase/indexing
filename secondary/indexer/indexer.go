@@ -34,8 +34,8 @@ import (
 	"github.com/couchbase/indexing/secondary/memdb"
 	"github.com/couchbase/indexing/secondary/memdb/nodetable"
 	projClient "github.com/couchbase/indexing/secondary/projector/client"
-	"github.com/couchbase/nitro/mm"
-	"github.com/couchbase/nitro/plasma"
+	"github.com/couchbase/indexing/secondary/stubs/nitro/mm"
+	"github.com/couchbase/indexing/secondary/stubs/nitro/plasma"
 )
 
 type Indexer interface {

@@ -4,27 +4,27 @@ PROJECT (indexing)
 INCLUDE (FindCouchbaseGo)
 INCLUDE (FindCouchbaseJemalloc)
 
-get_filename_component(JEMALLOC_LIB_DIR ${JEMALLOC_LIBRARIES} DIRECTORY)
+IF (BUILD_ENTERPRISE)
+  MESSAGE(STATUS "Building EE edition of GSI")
+  SET (TAGS "jemalloc")
+ELSE (BUILD_ENTERPRISE)
+  MESSAGE(STATUS "Building CE edition of GSI")
+  SET (TAGS "jemalloc community")
+ENDIF (BUILD_ENTERPRISE)
 
-SET (_ldflags)
+SET (LDFLAGS)
 IF (APPLE)
-  # On OS X 10.11 (El Capitan) upwards we can no longer use DYLD_LIBRARY_PATH to locate
-  # runtime dependancies. Instead add the location of forestdb etc to the actual
-  # binary itself.
-
-  # TODO: Spock GA
-  # Temporarily adding -s flag to allow 1.7.3 to work on OSX 10.12.4
-  # Remove -s flag (which strips debug info) when we move to 1.8.1
-  # See https://github.com/golang/go/issues/19734
-
-  SET (_ldflags "-s -extldflags '-Wl,-rpath,@executable_path/../lib'")
+  # On macOS, we must use -rpath to locate libraries
+  # TODO: Remove debug info stripping (-s) added to allow 1.7.3 to work on macOS
+  SET (LDFLAGS "-s -extldflags '-Wl,-rpath,@executable_path/../lib'")
 ENDIF ()
 
 IF (WIN32)
-  SET (_ldflags "${_ldflags} -linkmode internal")
+  SET (LDFLAGS "${LDFLAGS} -linkmode internal")
 ENDIF ()
 
 GET_FILENAME_COMPONENT (CURL_LIBRARY_DIR "${CURL_LIBRARIES}" DIRECTORY)
+GET_FILENAME_COMPONENT (JEMALLOC_LIB_DIR ${JEMALLOC_LIBRARIES} DIRECTORY)
 
 SET(CGO_INCLUDE_DIRS "${FORESTDB_INCLUDE_DIR};${sigar_SOURCE_DIR}/include;${Platform_SOURCE_DIR}/include;${CURL_INCLUDE_DIR}")
 SET(CGO_LIBRARY_DIRS "${FORESTDB_LIBRARY_DIR};${sigar_BINARY_DIR}/src;${Platform_BINARY_DIR};${CURL_LIBRARY_DIR}")
@@ -36,7 +36,6 @@ ENDIF(NOT JEMALLOC_FOUND)
 SET (ENV{CGO_CFLAGS} "$ENV{CGO_CFLAGS} -DJEMALLOC=1")
 SET (CGO_INCLUDE_DIRS "${CGO_INCLUDE_DIRS};${JEMALLOC_INCLUDE_DIR}")
 SET (CGO_LIBRARY_DIRS "${CGO_LIBRARY_DIRS};${JEMALLOC_LIB_DIR}")
-SET (TAGS "jemalloc")
 
 GoInstall (TARGET indexer PACKAGE github.com/couchbase/indexing/secondary/cmd/indexer
   GOPATH "${PROJECT_SOURCE_DIR}/../../../.." "${GODEPSDIR}"
@@ -44,7 +43,7 @@ GoInstall (TARGET indexer PACKAGE github.com/couchbase/indexing/secondary/cmd/in
   CGO_INCLUDE_DIRS "${CGO_INCLUDE_DIRS}"
   CGO_LIBRARY_DIRS "${CGO_LIBRARY_DIRS}"
   GOTAGS "${TAGS}"
-  LDFLAGS "${_ldflags}"
+  LDFLAGS "${LDFLAGS}"
   INSTALL_PATH bin OUTPUT indexer
   GOVERSION 1.7.3)
 
@@ -53,21 +52,21 @@ GoInstall (TARGET projector PACKAGE github.com/couchbase/indexing/secondary/cmd/
   CGO_INCLUDE_DIRS "${CGO_INCLUDE_DIRS}"
   CGO_LIBRARY_DIRS "${CGO_LIBRARY_DIRS}"
   GOTAGS "${TAGS}"
-  LDFLAGS "${_ldflags}"
+  LDFLAGS "${LDFLAGS}"
   INSTALL_PATH bin
   GOVERSION 1.7.3)
 
 GoInstall (TARGET cbindex PACKAGE github.com/couchbase/indexing/secondary/cmd/cbindex
   GOPATH "${PROJECT_SOURCE_DIR}/../../../.." "${GODEPSDIR}"
   GOTAGS "${TAGS}"
-  LDFLAGS "${_ldflags}"
+  LDFLAGS "${LDFLAGS}"
   INSTALL_PATH bin
   GOVERSION 1.7.3)
 
 GoInstall (TARGET cbindexperf PACKAGE github.com/couchbase/indexing/secondary/cmd/cbindexperf
   GOPATH "${PROJECT_SOURCE_DIR}/../../../.." "${GODEPSDIR}"
   GOTAGS "${TAGS}"
-  LDFLAGS "${_ldflags}"
+  LDFLAGS "${LDFLAGS}"
   INSTALL_PATH bin
   GOVERSION 1.7.3)
 
@@ -77,15 +76,18 @@ GoInstall (TARGET cbindexplan PACKAGE github.com/couchbase/indexing/secondary/cm
   CGO_INCLUDE_DIRS "${CGO_INCLUDE_DIRS}"
   CGO_LIBRARY_DIRS "${CGO_LIBRARY_DIRS}"
   GOTAGS "${TAGS}"
-  LDFLAGS "${_ldflags}"
+  LDFLAGS "${LDFLAGS}"
   INSTALL_PATH bin OUTPUT cbindexplan
   GOVERSION 1.7.3)
 
-GoInstall(TARGET plasma_dump PACKAGE github.com/couchbase/nitro/cmd/plasma_dump
-  GOPATH "${CMAKE_SOURCE_DIR}/goproj" "${GODEPSDIR}"
-  CGO_INCLUDE_DIRS "${CGO_INCLUDE_DIRS}"
-  CGO_LIBRARY_DIRS "${CGO_LIBRARY_DIRS}"
-  GOTAGS "${TAGS}"
-  LDFLAGS "${_ldflags}"
-  INSTALL_PATH bin OUTPUT plasma_dump
-  GOVERSION 1.7.3)
+IF (BUILD_ENTERPRISE)
+  GoInstall(TARGET plasma_dump PACKAGE github.com/couchbase/nitro/cmd/plasma_dump
+    GOPATH "${CMAKE_SOURCE_DIR}/goproj" "${GODEPSDIR}"
+    CGO_INCLUDE_DIRS "${CGO_INCLUDE_DIRS}"
+    CGO_LIBRARY_DIRS "${CGO_LIBRARY_DIRS}"
+    GOTAGS "${TAGS}"
+    LDFLAGS "${LDFLAGS}"
+    INSTALL_PATH bin OUTPUT plasma_dump
+    GOVERSION 1.7.3)
+ENDIF (BUILD_ENTERPRISE)
+
