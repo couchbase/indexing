@@ -1160,12 +1160,6 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 		}
 	}
 
-	defer func() {
-		if r.Ctx != nil {
-			r.Ctx.Init()
-		}
-	}()
-
 	switch req := protoReq.(type) {
 	case *protobuf.HeloRequest:
 		r.ScanType = HeloReq
@@ -1308,7 +1302,6 @@ func validateIndexProjection(projection *protobuf.IndexProjection, cklen int) (*
 // will block wait.
 // This mechanism can be used to implement RYOW.
 func (s *scanCoordinator) getRequestedIndexSnapshot(r *ScanRequest) (snap IndexSnapshot, err error) {
-
 	snapshot, err := func() (IndexSnapshot, error) {
 		s.mu.RLock()
 		defer s.mu.RUnlock()
@@ -1450,12 +1443,6 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, conn net.Conn,
 	ttime := time.Now()
 
 	req, err := s.newRequest(protoReq, cancelCh)
-	defer func() {
-		if req.Ctx != nil {
-			req.Ctx.Done()
-		}
-	}()
-
 	atime := time.Now()
 	w := NewProtoWriter(req.ScanType, conn)
 	defer func() {
@@ -1514,7 +1501,16 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, conn net.Conn,
 		}
 	}()
 
+	if req.Ctx != nil {
+		req.Ctx.Init()
+	}
+
 	s.processRequest(req, w, is, t0)
+
+	if req.Ctx != nil {
+		req.Ctx.Done()
+	}
+
 }
 
 func (s *scanCoordinator) processRequest(req *ScanRequest, w ScanResponseWriter,

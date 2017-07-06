@@ -1620,10 +1620,9 @@ func (s *plasmaSnapshot) Iterate(ctx IndexReaderContext, low, high IndexKey, inc
 
 	it, err := reader.r.NewSnapshotIterator(s.MainSnap)
 
-	// RollbackToZero: The current snapshot belongs to old plasma instance before reset
-	// Return results from nil snapshot. ie., return 0 items
+	// Snapshot became invalid due to rollback
 	if err == plasma.ErrInvalidSnapshot {
-		return nil
+		return ErrIndexRollback
 	}
 
 	defer it.Close()
