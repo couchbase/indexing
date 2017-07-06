@@ -227,6 +227,7 @@ func (slice *plasmaSlice) initStores() error {
 			slice.readers <- slice.mainstore.NewReader()
 		}
 
+		slice.mainstore.SetLogger(&logging.SystemLogger)
 		slice.mainstore.SetLogPrefix(fmt.Sprintf("%s/%s/Mainstore ", slice.idxDefn.Bucket, slice.idxDefn.Name))
 	}()
 
@@ -246,6 +247,7 @@ func (slice *plasmaSlice) initStores() error {
 				slice.back[i] = slice.backstore.NewWriter()
 			}
 
+			slice.backstore.SetLogger(&logging.SystemLogger)
 			slice.backstore.SetLogPrefix(fmt.Sprintf("%s/%s/Backstore ", slice.idxDefn.Bucket, slice.idxDefn.Name))
 		}()
 	}
