@@ -979,7 +979,8 @@ func (mdb *plasmaSlice) GetSnapshots() ([]SnapshotInfo, error) {
 	var infos []SnapshotInfo
 	for i := len(mRPs) - 1; i >= 0; i-- {
 		info := &plasmaSnapshotInfo{
-			mRP: mRPs[i],
+			mRP:   mRPs[i],
+			Count: mRPs[i].ItemsCount(),
 		}
 
 		if err := json.Unmarshal(info.mRP.Meta()[8:], &info.Ts); err != nil {
