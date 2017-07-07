@@ -1386,7 +1386,7 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 		buildState = common.INDEX_STATE_INITIAL
 
 		idx.bulkUpdateState(instIdList, buildState)
-		idx.bulkUpdateRState(instIdList)
+		idx.bulkUpdateRState(instIdList, msg.(*MsgBuildIndex).GetRequestCtx())
 
 		logging.Infof("Indexer::handleBuildIndex \n\tAdded Index: %v to Stream: %v State: %v",
 			instIdList, buildStream, buildState)
@@ -4190,11 +4190,11 @@ func (idx *indexer) bulkUpdateState(instIdList []common.IndexInstId,
 	}
 }
 
-func (idx *indexer) bulkUpdateRState(instIdList []common.IndexInstId) {
+func (idx *indexer) bulkUpdateRState(instIdList []common.IndexInstId, reqCtx *common.MetadataRequestContext) {
 
 	for _, instId := range instIdList {
 		idxInst := idx.indexInstMap[instId]
-		if idxInst.Defn.InstVersion != 0 {
+		if reqCtx.ReqSource == common.DDLRequestSourceRebalance {
 			idxInst.RState = common.REBAL_PENDING
 		} else {
 			idxInst.RState = common.REBAL_ACTIVE
