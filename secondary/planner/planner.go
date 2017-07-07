@@ -661,9 +661,10 @@ func (p *SAPlanner) dropReplicaIfNecessary(s *Solution) {
 	numLiveNode := s.findNumLiveNode()
 
 	// Check to see if it is needed to drop replica from a ejected node
-	for _, indexer := range s.Placement {
-		deleteCandidates := make(map[*IndexUsage]bool)
+	deleteCandidates := make(map[common.IndexDefnId][]*IndexUsage)
+	numReplicas := make(map[common.IndexDefnId]int)
 
+	for _, indexer := range s.Placement {
 		for _, index := range indexer.Indexes {
 			if isEligibleIndex(index, eligibles) {
 
@@ -671,24 +672,55 @@ func (p *SAPlanner) dropReplicaIfNecessary(s *Solution) {
 				// do not move this index if this node is going away.
 				numReplica := s.findNumReplica(index)
 				if (numReplica > numLiveNode) && indexer.isDelete {
-					deleteCandidates[index] = true
+					deleteCandidates[index.DefnId] = append(deleteCandidates[index.DefnId], index)
+					numReplicas[index.DefnId] = numReplica
+				}
+			}
+		}
+	}
+
+	for defnId, candidates := range deleteCandidates {
+
+		// sort the candidates in descending order
+		for i := 0; i < len(candidates)-1; i++ {
+			for j := i + 1; j < len(candidates); j++ {
+				if candidates[i].Instance != nil && candidates[j].Instance != nil &&
+					candidates[i].Instance.ReplicaId < candidates[j].Instance.ReplicaId {
+					tmp := candidates[i]
+					candidates[i] = candidates[j]
+					candidates[j] = tmp
 				}
 			}
 		}
 
-		if len(deleteCandidates) != 0 {
-			keepCandidates := ([]*IndexUsage)(nil)
+		//prune the candidate list
+		numToDelete := numReplicas[defnId] - numLiveNode
+		if len(candidates) > numToDelete {
+			deleteCandidates[defnId] = candidates[:numToDelete]
+		}
+	}
 
-			for _, index := range indexer.Indexes {
-				if !deleteCandidates[index] {
-					keepCandidates = append(keepCandidates, index)
-				} else {
-					logging.Warnf("There is more replia than available nodes.  Will not move index replica (%v,%v) from ejected node %v",
-						index.Bucket, index.Name, indexer.NodeId)
+	for _, indexer := range s.Placement {
+		keepCandidates := ([]*IndexUsage)(nil)
+
+		for _, index := range indexer.Indexes {
+			found := false
+			for _, candidate := range deleteCandidates[index.DefnId] {
+				if candidate == index {
+					found = true
+					break
 				}
 			}
-			indexer.Indexes = keepCandidates
+
+			if !found {
+				keepCandidates = append(keepCandidates, index)
+			} else {
+				logging.Warnf("There is more replia than available nodes.  Will not move index replica (%v,%v) from ejected node %v",
+					index.Bucket, index.Name, indexer.NodeId)
+			}
 		}
+
+		indexer.Indexes = keepCandidates
 	}
 }
 
