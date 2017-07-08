@@ -249,7 +249,7 @@ func (m *LifecycleMgr) dispatchRequest(request *requestHolder, factory *message.
 	case client.OPCODE_DROP_INDEX:
 		err = m.handleDeleteIndex(key, common.NewUserRequestContext())
 	case client.OPCODE_BUILD_INDEX:
-		err = m.handleBuildIndexes(content, common.NewUserRequestContext(), false)
+		err = m.handleBuildIndexes(content, common.NewUserRequestContext(), true)
 	case client.OPCODE_SERVICE_MAP:
 		result, err = m.handleServiceMap(content)
 	case client.OPCODE_DELETE_BUCKET:
@@ -612,11 +612,10 @@ func (m *LifecycleMgr) BuildIndexes(ids []common.IndexDefnId,
 
 				inst, err := m.FindLocalIndexInst(defn.Bucket, defnId)
 				if inst != nil && err == nil {
-					// only set error if the error cannot be retried
-					if !m.canRetryError(inst, build_err, retry) {
-						m.UpdateIndexInstance(defn.Bucket, defnId, common.INDEX_STATE_NIL, common.NIL_STREAM, build_err.Error(), nil, inst.RState)
+					if m.canRetryError(inst, build_err, retry) {
+						build_err = errors.New(fmt.Sprintf("%v.  Indexer will retry building index at later time.", build_err.Error()))
 					}
-
+					m.UpdateIndexInstance(defn.Bucket, defnId, common.INDEX_STATE_NIL, common.NIL_STREAM, build_err.Error(), nil, inst.RState)
 				} else {
 					logging.Infof("LifecycleMgr.handleBuildIndexes() : Fail to persist error in index instance (%v, %v).",
 						defn.Bucket, defn.Name)
@@ -715,9 +714,14 @@ func (m *LifecycleMgr) DeleteIndex(id common.IndexDefnId, notify bool,
 				// the client can call DeleteIndex again and free up indexer resource.
 				indexerErr, ok := err.(*common.IndexerError)
 				if ok && indexerErr.Code != common.IndexNotExist {
-					return err
+					logging.Errorf("LifecycleMgr.handleDeleteIndex(): Encounter error when dropping index: %v.  Drop index will retry in background",
+						indexerErr.Reason)
+					return nil
+
 				} else if !strings.Contains(err.Error(), "Unknown Index Instance") {
-					return err
+					logging.Errorf("LifecycleMgr.handleDeleteIndex(): Encounter error when dropping index: %v.  Drop index will retry in background",
+						err.Error())
+					return nil
 				}
 			}
 		}
@@ -1280,7 +1284,7 @@ func (m *janitor) cleanup() {
 			if err := m.manager.requestServer.MakeAsyncRequest(client.OPCODE_DROP_INDEX, fmt.Sprintf("%v", defn.DefnId), nil); err != nil {
 				logging.Warnf("janitor: Fail to drop index upon cleanup.  Skip index (%v, %v).  Internal Error = %v.", defn.Bucket, defn.Name, err)
 			} else {
-				logging.Infof("janitor: Clean up deleted index (%v, %v) during periodic cleanup ", defn.Bucket, defn.DefnId)
+				logging.Infof("janitor: Clean up deleted index (%v, %v) during periodic cleanup ", defn.Bucket, defn.Name)
 			}
 		}
 	}
