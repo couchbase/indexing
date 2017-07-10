@@ -15,8 +15,12 @@ cd /var/www
 (ls -t logs-*.tar* | head -n 30; ls -t logs-*.tar*) | sort | uniq -u | xargs -r rm
 (ls -t make-*.log | head -n 3; ls -t make-*.log) | sort | uniq -u | xargs -r rm
 export TS="`date +%d.%m.%Y-%H.%M`"
-if [ "`cat ~/.cistore`" = "memdb" ]; then export STORAGE="plasma"; else export STORAGE="memdb"; fi
-if [ $((RANDOM%3)) -eq 0 ]; then export STORAGE="fdb"; fi
+case "`cat ~/.cistore`" in
+	"plasma") export STORAGE="memdb";;
+	"memdb")  export STORAGE="fdb";;
+	"fdb")    export STORAGE="plasma";;
+	*)        export STORAGE="plasma";;
+esac
 echo "$STORAGE" > ~/.cistore
 echo '<html><head></head><body><pre>' > /var/www/gsi-current.html
 chmod a+rx /var/www/gsi-current.html
