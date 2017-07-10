@@ -1043,6 +1043,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.plasma.disableReadCaching": ConfigValue{
+		false,
+		"Disable read caching",
+		false,
+		false, // mutable
+		false, // case-insensitive
+	},
 
 	//end of plasma specific config
 
