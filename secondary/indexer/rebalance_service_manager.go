@@ -101,6 +101,8 @@ type state struct {
 	rebalanceTask *service.Task
 }
 
+var rebalanceHttpTimeout int
+
 func NewRebalanceMgr(supvCmdch MsgChannel, supvMsgch MsgChannel, config c.Config,
 	rebalanceRunning bool, rebalanceToken *RebalanceToken) (RebalanceMgr, Message) {
 
@@ -135,6 +137,7 @@ func NewRebalanceMgr(supvCmdch MsgChannel, supvMsgch MsgChannel, config c.Config
 
 	mgr.cinfo = cinfo
 
+	rebalanceHttpTimeout = config["rebalance.httpTimeout"].Int()
 	mgr.waiters = make(waiters)
 
 	mgr.nodeInfo = &service.NodeInfo{
@@ -2601,7 +2604,7 @@ func getWithAuth(url string) (*http.Response, error) {
 		l.Errorf("ServiceMgr::getWithAuth Error setting auth %v", err)
 	}
 
-	client := http.Client{Timeout: time.Duration(120 * time.Second)}
+	client := http.Client{Timeout: time.Duration(rebalanceHttpTimeout) * time.Second}
 	return client.Do(req)
 }
 
@@ -2622,7 +2625,7 @@ func postWithAuth(url string, bodyType string, body io.Reader) (*http.Response, 
 		return nil, err
 	}
 
-	client := http.Client{Timeout: time.Duration(120 * time.Second)}
+	client := http.Client{Timeout: time.Duration(rebalanceHttpTimeout) * time.Second}
 	return client.Do(req)
 }
 
