@@ -1308,6 +1308,8 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 			} else {
 				return
 			}
+		} else {
+			logging.Infof("Indexer::handleBuildIndex Bucket %v validation successful", bucket)
 		}
 
 		if ok := idx.checkBucketInRecovery(bucket, instIdList, clientCh, errMap); ok {
