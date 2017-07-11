@@ -1,7 +1,3 @@
-// +build enterprise
-
-package indexer
-
 // Copyright (c) 2014 Couchbase, Inc.
 // Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file
 // except in compliance with the License. You may obtain a copy of the License at
@@ -10,6 +6,8 @@ package indexer
 // License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND,
 // either express or implied. See the License for the specific language governing permissions
 // and limitations under the License.
+
+package indexer
 
 import (
 	"bytes"
@@ -93,7 +91,7 @@ type plasmaSlice struct {
 	hasPersistence bool
 }
 
-func newPlasmaSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
+func NewPlasmaSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	idxInstId common.IndexInstId, isPrimary bool,
 	sysconf common.Config, idxStats *IndexStats) (*plasmaSlice, error) {
 

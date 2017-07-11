@@ -12,9 +12,6 @@ package common
 import (
 	"strings"
 	"sync"
-
-	"github.com/couchbase/indexing/secondary/logging"
-	"github.com/couchbase/indexing/secondary/stubs/nitro/plasma"
 )
 
 type StorageMode byte
@@ -31,11 +28,11 @@ func (s StorageMode) String() string {
 	case NOT_SET:
 		return "not_set"
 	case MOI:
-		return MemoryOptimized
+		return "memory_optimized"
 	case FORESTDB:
-		return ForestDB
+		return "forestdb"
 	case PLASMA:
-		return PlasmaDB
+		return "plasma"
 	default:
 		return "invalid"
 	}
@@ -44,10 +41,10 @@ func (s StorageMode) String() string {
 //NOTE: This map needs to be in sync with IndexType in
 //common/index.go
 var smStrMap = map[string]StorageMode{
-	MemDB:           MOI,
-	MemoryOptimized: MOI,
-	ForestDB:        FORESTDB,
-	PlasmaDB:        PLASMA,
+	"memdb":            MOI,
+	"memory_optimized": MOI,
+	"forestdb":         FORESTDB,
+	"plasma":           PLASMA,
 }
 
 //Global Storage Mode
@@ -67,10 +64,7 @@ func SetStorageMode(mode StorageMode) {
 	smLock.Lock()
 	defer smLock.Unlock()
 	gStorageMode = mode
-	if gStorageMode == PLASMA && !plasma.UsePlasma() {
-		logging.Warnf("Plasma is available only in EE but this is CE. Using ForestDB")
-		gStorageMode = FORESTDB
-	}
+
 }
 
 func SetStorageModeStr(mode string) bool {
@@ -79,10 +73,6 @@ func SetStorageModeStr(mode string) bool {
 	defer smLock.Unlock()
 	if s, ok := smStrMap[strings.ToLower(mode)]; ok {
 		gStorageMode = s
-		if gStorageMode == PLASMA && !plasma.UsePlasma() {
-			logging.Warnf("Plasma is available only in EE but this is CE. Using ForestDB")
-			gStorageMode = FORESTDB
-		}
 		return true
 	} else {
 		gStorageMode = NOT_SET

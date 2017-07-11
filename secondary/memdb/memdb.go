@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/couchbase/indexing/secondary/memdb/skiplist"
+	"github.com/couchbase/nitro/mm"
 	"io"
 	"io/ioutil"
 	"math"
@@ -17,9 +19,6 @@ import (
 	"sync/atomic"
 	"time"
 	"unsafe"
-
-	"github.com/couchbase/indexing/secondary/memdb/skiplist"
-	"github.com/couchbase/indexing/secondary/stubs/nitro/mm"
 )
 
 var version = 1
@@ -1175,5 +1174,5 @@ func MemoryInUse() (sz int64) {
 
 func Debug(flag bool) {
 	skiplist.Debug = flag
-	*mm.Debug = flag
+	mm.Debug = flag
 }

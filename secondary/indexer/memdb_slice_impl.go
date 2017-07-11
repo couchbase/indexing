@@ -33,7 +33,7 @@ import (
 	"github.com/couchbase/indexing/secondary/memdb"
 	"github.com/couchbase/indexing/secondary/memdb/nodetable"
 	"github.com/couchbase/indexing/secondary/memdb/skiplist"
-	"github.com/couchbase/indexing/secondary/stubs/nitro/mm"
+	"github.com/couchbase/nitro/mm"
 )
 
 const (

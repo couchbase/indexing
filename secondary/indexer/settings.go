@@ -13,15 +13,13 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-
 	"github.com/couchbase/cbauth"
 	"github.com/couchbase/cbauth/metakv"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/pipeline"
-	"github.com/couchbase/indexing/secondary/stubs/nitro/mm"
-	"github.com/couchbase/indexing/secondary/stubs/nitro/plasma"
-
+	"github.com/couchbase/nitro/mm"
+	"github.com/couchbase/nitro/plasma"
 	"io/ioutil"
 	"net/http"
 	"os"
