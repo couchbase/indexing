@@ -1,17 +1,33 @@
 #!/bin/bash
 
+source ~/.cienv
+
 if [ "$WORKSPACE" = "" ]; then
   echo 'WORKSPACE not set'
   exit 2
+fi
+
+if [ "$RELEASE" = "" ]; then
+  echo 'RELEASE not set'
+  exit 2
+fi
+
+if [ "$MANIFEST" = "" ]; then
+  echo 'MANIFEST not set'
+  exit 2
+fi
+
+if [ "$PEGGED" = "" ]; then
+  export BLD_NUM=0
+else
+  export BLD_NUM=$PEGGED
+  echo "Using pegged server, $BLD_NUM build"
 fi
 
 error_exit() {
   echo "</pre><h3>Server build failed: $1</h3><pre>"
   exit 2
 }
-
-export RELEASE=5.0.0
-export BLD_NUM=3206
 
 echo '</pre><h3>Building</h3><pre>'
 > $WORKSPACE/versions.cfg
@@ -20,7 +36,7 @@ echo '</pre><h3>Building</h3><pre>'
 if [ ! -d ~/.reference ]; then
   mkdir ~/.reference
   cd ~/.reference
-  repo init -u https://github.com/couchbase/manifest -b master -m couchbase-server/spock.xml -g all --mirror 1>>$WORKSPACE/make.log 2>&1
+  repo init -u https://github.com/couchbase/manifest -b master -m $MANIFEST -g all --mirror 1>>$WORKSPACE/make.log 2>&1
   test $? -eq 0 || error_exit "Repo Init"
 fi
 
@@ -37,11 +53,11 @@ echo "Updating mirror"
 cd ~/.reference
 repo sync --jobs=32 1>>$WORKSPACE/make.log 2>&1
 
-echo "Basing run on $RELEASE-$BLD_NUM <a href=https://github.com/couchbase/build-team-manifests/blob/$SHA/couchbase-server/spock.xml>$SHA</a>"
+echo "Basing run on $RELEASE-$BLD_NUM <a href=https://github.com/couchbase/build-team-manifests/blob/$SHA/$MANIFEST>$SHA</a>"
 rm -rf $WORKSPACE 1>>$WORKSPACE/make.log 2>&1
 mkdir -p $WORKSPACE 1>>$WORKSPACE/make.log 2>&1
 cd $WORKSPACE
-repo init -u ~/.manifests -b thisrun -m couchbase-server/spock.xml -g all --reference=~/.reference 1>>$WORKSPACE/make.log 2>&1
+repo init -u ~/.manifests -b thisrun -m $MANIFEST -g all --reference=~/.reference 1>>$WORKSPACE/make.log 2>&1
 test $? -eq 0 || error_exit "Repo Init at $SHA"
 
 echo "Updating tree for run $TS"
