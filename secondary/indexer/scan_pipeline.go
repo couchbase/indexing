@@ -105,7 +105,13 @@ func (s *IndexScanSource) Routine() error {
 	revbuf := secKeyBufPool.Get()
 	r.keyBufList = append(r.keyBufList, revbuf)
 
+	iterCount := 0
 	fn := func(entry []byte) error {
+		if iterCount%SCAN_ROLLBACK_ERROR_BATCHSIZE == 0 && r.hasRollback != nil && r.hasRollback.Load() == true {
+			return ErrIndexRollback
+		}
+		iterCount++
+
 		skipRow := false
 		var ck [][]byte
 

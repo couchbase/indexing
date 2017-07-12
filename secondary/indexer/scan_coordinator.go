@@ -103,6 +103,8 @@ type ScanRequest struct {
 	indexKeyBuffer  []byte
 	sharedBuffer    *[]byte
 	sharedBufferLen int
+
+	hasRollback *atomic.Value
 }
 
 type Projection struct {
@@ -1160,6 +1162,8 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 				localErr = common.ErrIndexNotReady
 			}
 			r.Stats = stats.indexes[r.IndexInstId]
+			rbMap := *s.getRollbackInProgress()
+			r.hasRollback = rbMap[indexInst.Defn.Bucket]
 		}
 	}
 
@@ -1789,7 +1793,7 @@ func (s *scanCoordinator) initRollbackTimes(rollbackTimes map[string]int64) {
 
 func (s *scanCoordinator) initRollbackInProgress() {
 
-	rollbackInProgress := make(map[string]bool)
+	rollbackInProgress := make(map[string]*bool)
 	atomic.StorePointer(&s.rollbackInProgress, unsafe.Pointer(&rollbackInProgress))
 }
 
@@ -1797,19 +1801,26 @@ func (s *scanCoordinator) setRollbackInProgress(bucket string, rollback bool) {
 
 	logging.Infof("ScanCoordinator::setRollbackInProgress bucket %v rollback %v", bucket, rollback)
 	newRollbackInProgress := s.cloneRollbackInProgress()
-	newRollbackInProgress[bucket] = rollback
-	atomic.StorePointer(&s.rollbackInProgress, unsafe.Pointer(&newRollbackInProgress))
+	rbMap := *s.getRollbackInProgress()
+	if v, ok := rbMap[bucket]; ok {
+		v.Store(rollback)
+	} else {
+		var v atomic.Value
+		v.Store(rollback)
+		newRollbackInProgress[bucket] = &v
+		atomic.StorePointer(&s.rollbackInProgress, unsafe.Pointer(&newRollbackInProgress))
+	}
 }
 
-func (s *scanCoordinator) getRollbackInProgress() *map[string]bool {
+func (s *scanCoordinator) getRollbackInProgress() *map[string]*atomic.Value {
 
-	return (*map[string]bool)(atomic.LoadPointer(&s.rollbackInProgress))
+	return (*map[string]*atomic.Value)(atomic.LoadPointer(&s.rollbackInProgress))
 
 }
 
-func (s *scanCoordinator) cloneRollbackInProgress() map[string]bool {
+func (s *scanCoordinator) cloneRollbackInProgress() map[string]*atomic.Value {
 
-	newRollbackInProgress := make(map[string]bool)
+	newRollbackInProgress := make(map[string]*atomic.Value)
 	oldRollbackInProgress := s.getRollbackInProgress()
 	if oldRollbackInProgress != nil {
 		for bucket, rollbackInProgress := range *oldRollbackInProgress {
