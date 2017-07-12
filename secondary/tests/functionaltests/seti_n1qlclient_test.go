@@ -361,7 +361,7 @@ func getbackfillFiles(dir string) []string {
 	rv := make([]string, 0)
 	for _, file := range files {
 		fname := path.Join(dir, file.Name())
-		if strings.Contains(fname, "scan-backfill") {
+		if strings.Contains(fname, n1ql.BACKFILLPREFIX) {
 			rv = append(rv, fname)
 		}
 	}

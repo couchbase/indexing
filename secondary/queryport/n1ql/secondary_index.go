@@ -36,6 +36,7 @@ import "github.com/couchbase/query/value"
 import qlog "github.com/couchbase/query/logging"
 
 const DONEREQUEST = 1
+const BACKFILLPREFIX = "scan-results"
 
 // ErrorIndexEmpty is index not initialized.
 var ErrorIndexEmpty = errors.NewError(
@@ -1063,7 +1064,7 @@ func makeResponsehandler(
 		}
 		cp, ln := cap(entryChannel), len(entryChannel)
 		if backfillLimit > 0 && *tmpfile == nil && ((cp - ln) < len(skeys)) {
-			prefix := "scan-backfill" + strconv.Itoa(os.Getpid())
+			prefix := BACKFILLPREFIX + strconv.Itoa(os.Getpid())
 			*tmpfile, err = ioutil.TempFile(n1ql_backfill_temp_dir, prefix)
 			name := ""
 			if *tmpfile != nil {
@@ -1320,7 +1321,7 @@ func init() {
 	gob.Register(map[string]interface{}{})
 	gob.Register([]interface{}{})
 
-	file, err := ioutil.TempFile("" /*dir*/, "scan-backfill")
+	file, err := ioutil.TempFile("" /*dir*/, BACKFILLPREFIX)
 	if err != nil {
 		return
 	}
@@ -1340,7 +1341,7 @@ func init() {
 		fname := path.Join(n1ql_backfill_temp_dir, file.Name())
 		mtime := file.ModTime()
 		since := (time.Since(mtime).Seconds() * 1000) * 2 // twice the lng scan
-		if strings.Contains(fname, "scan-backfill") && int(since) > scantm {
+		if (strings.Contains(fname, "scan-backfill") || strings.Contains(fname, BACKFILLPREFIX)) && int(since) > scantm {
 			fmsg := "GSI client: removing old file %v last-modified @ %v"
 			l.Infof(fmsg, fname, mtime)
 			os.Remove(fname)
@@ -1429,7 +1430,7 @@ func (gsi *gsiKeyspace) backfillMonitor(period time.Duration) {
 		size := int64(0)
 		for _, file := range files {
 			fname := path.Join(n1ql_backfill_temp_dir, file.Name())
-			if strings.Contains(fname, "scan-backfill") {
+			if strings.Contains(fname, BACKFILLPREFIX) {
 				size += int64(file.Size())
 			}
 		}
