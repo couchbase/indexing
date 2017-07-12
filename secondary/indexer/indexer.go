@@ -3245,6 +3245,13 @@ func (idx *indexer) processRollback(streamId common.StreamId,
 	idx.storageMgrCmdCh <- msg
 	res := <-idx.storageMgrCmdCh
 
+	//notify storage rollback done
+	if streamId == common.MAINT_STREAM {
+		msg.rollbackTime = 0
+		idx.scanCoordCmdCh <- msg
+		<-idx.scanCoordCmdCh
+	}
+
 	if res.GetMsgType() != MSG_ERROR {
 		rollbackTs := res.(*MsgRollback).GetRollbackTs()
 		return rollbackTs, nil

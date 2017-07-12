@@ -370,6 +370,8 @@ type scanCoordinator struct {
 	lastSnapshot     map[common.IndexInstId]IndexSnapshot
 	rollbackTimes    unsafe.Pointer
 
+	rollbackInProgress unsafe.Pointer
+
 	serv      *queryport.Server
 	logPrefix string
 
@@ -412,6 +414,7 @@ func NewScanCoordinator(supvCmdch MsgChannel, supvMsgch MsgChannel,
 	}
 
 	s.config.Store(config)
+	s.initRollbackInProgress()
 
 	addr := net.JoinHostPort("", config["scanPort"].String())
 	queryportCfg := config.SectionConfig("queryport.", true)
@@ -1784,6 +1787,39 @@ func (s *scanCoordinator) initRollbackTimes(rollbackTimes map[string]int64) {
 	atomic.StorePointer(&s.rollbackTimes, unsafe.Pointer(&newTimes))
 }
 
+func (s *scanCoordinator) initRollbackInProgress() {
+
+	rollbackInProgress := make(map[string]bool)
+	atomic.StorePointer(&s.rollbackInProgress, unsafe.Pointer(&rollbackInProgress))
+}
+
+func (s *scanCoordinator) setRollbackInProgress(bucket string, rollback bool) {
+
+	logging.Infof("ScanCoordinator::setRollbackInProgress bucket %v rollback %v", bucket, rollback)
+	newRollbackInProgress := s.cloneRollbackInProgress()
+	newRollbackInProgress[bucket] = rollback
+	atomic.StorePointer(&s.rollbackInProgress, unsafe.Pointer(&newRollbackInProgress))
+}
+
+func (s *scanCoordinator) getRollbackInProgress() *map[string]bool {
+
+	return (*map[string]bool)(atomic.LoadPointer(&s.rollbackInProgress))
+
+}
+
+func (s *scanCoordinator) cloneRollbackInProgress() map[string]bool {
+
+	newRollbackInProgress := make(map[string]bool)
+	oldRollbackInProgress := s.getRollbackInProgress()
+	if oldRollbackInProgress != nil {
+		for bucket, rollbackInProgress := range *oldRollbackInProgress {
+			newRollbackInProgress[bucket] = rollbackInProgress
+		}
+	}
+
+	return newRollbackInProgress
+}
+
 func (s *scanCoordinator) handleIndexerResume(cmd Message) {
 
 	msg := cmd.(*MsgIndexerState)
@@ -1806,7 +1842,13 @@ func (s *scanCoordinator) handleIndexerBootstrap(cmd Message) {
 func (s *scanCoordinator) handleIndexerRollback(cmd Message) {
 
 	msg := cmd.(*MsgRollback)
-	s.saveRollbackTime(msg.bucket, msg.rollbackTime)
+
+	if msg.rollbackTime != 0 {
+		s.saveRollbackTime(msg.bucket, msg.rollbackTime)
+		s.setRollbackInProgress(msg.bucket, true)
+	} else {
+		s.setRollbackInProgress(msg.bucket, false)
+	}
 
 	s.supvCmdch <- &MsgSuccess{}
 }
