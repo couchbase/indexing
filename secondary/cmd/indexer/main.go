@@ -49,6 +49,7 @@ func main() {
 	httpsPort := fset.String("httpsPort", "", "Index https mgmt port")
 	certFile := fset.String("certFile", "", "Index https X509 certificate file")
 	keyFile := fset.String("keyFile", "", "Index https cert key file")
+	isEnterprise := fset.Bool("isEnterprise", true, "Enterprise Edition")
 
 	for i := 1; i < len(os.Args); i++ {
 		if err := fset.Parse(os.Args[i : i+1]); err != nil {
@@ -90,6 +91,7 @@ func main() {
 	config.SetValue("indexer.storage_dir", *storageDir)
 	config.SetValue("indexer.diagnostics_dir", *diagDir)
 	config.SetValue("indexer.nodeuuid", *nodeuuid)
+	config.SetValue("indexer.isEnterprise", *isEnterprise)
 
 	// Prior to watson (4.5 version) storage_dir parameter was converted
 	// to lower case. Post watson, the plan is to keep the parameter

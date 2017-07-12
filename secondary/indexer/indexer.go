@@ -34,8 +34,8 @@ import (
 	"github.com/couchbase/indexing/secondary/memdb"
 	"github.com/couchbase/indexing/secondary/memdb/nodetable"
 	projClient "github.com/couchbase/indexing/secondary/projector/client"
-	"github.com/couchbase/nitro/mm"
-	"github.com/couchbase/nitro/plasma"
+	"github.com/couchbase/indexing/secondary/stubs/nitro/mm"
+	"github.com/couchbase/indexing/secondary/stubs/nitro/plasma"
 )
 
 type Indexer interface {
@@ -264,6 +264,14 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		logging.Fatalf("Indexer::NewIndexer statsMgr Init Error %+v", res)
 		return nil, res
 	}
+
+	isEnterprise := idx.config["isEnterprise"].Bool()
+	if isEnterprise {
+		common.SetBuildMode(common.ENTERPRISE)
+	} else {
+		common.SetBuildMode(common.COMMUNITY)
+	}
+	logging.Infof("Indexer::NewIndexer Build Mode Set %v", common.GetBuildMode())
 
 	idx.setIndexerState(common.INDEXER_BOOTSTRAP)
 	idx.stats.indexerState.Set(int64(common.INDEXER_BOOTSTRAP))
@@ -1300,6 +1308,8 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 			} else {
 				return
 			}
+		} else {
+			logging.Infof("Indexer::handleBuildIndex Bucket %v validation successful", bucket)
 		}
 
 		if ok := idx.checkBucketInRecovery(bucket, instIdList, clientCh, errMap); ok {
@@ -1378,7 +1388,7 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 		buildState = common.INDEX_STATE_INITIAL
 
 		idx.bulkUpdateState(instIdList, buildState)
-		idx.bulkUpdateRState(instIdList)
+		idx.bulkUpdateRState(instIdList, msg.(*MsgBuildIndex).GetRequestCtx())
 
 		logging.Infof("Indexer::handleBuildIndex \n\tAdded Index: %v to Stream: %v State: %v",
 			instIdList, buildStream, buildState)
@@ -4182,11 +4192,11 @@ func (idx *indexer) bulkUpdateState(instIdList []common.IndexInstId,
 	}
 }
 
-func (idx *indexer) bulkUpdateRState(instIdList []common.IndexInstId) {
+func (idx *indexer) bulkUpdateRState(instIdList []common.IndexInstId, reqCtx *common.MetadataRequestContext) {
 
 	for _, instId := range instIdList {
 		idxInst := idx.indexInstMap[instId]
-		if idxInst.Defn.InstVersion != 0 {
+		if reqCtx.ReqSource == common.DDLRequestSourceRebalance {
 			idxInst.RState = common.REBAL_PENDING
 		} else {
 			idxInst.RState = common.REBAL_ACTIVE

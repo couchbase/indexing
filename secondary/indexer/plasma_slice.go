@@ -1,3 +1,7 @@
+// +build !community
+
+package indexer
+
 // Copyright (c) 2014 Couchbase, Inc.
 // Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file
 // except in compliance with the License. You may obtain a copy of the License at
@@ -6,8 +10,6 @@
 // License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND,
 // either express or implied. See the License for the specific language governing permissions
 // and limitations under the License.
-
-package indexer
 
 import (
 	"bytes"
@@ -91,7 +93,7 @@ type plasmaSlice struct {
 	hasPersistence bool
 }
 
-func NewPlasmaSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
+func newPlasmaSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	idxInstId common.IndexInstId, isPrimary bool,
 	sysconf common.Config, idxStats *IndexStats) (*plasmaSlice, error) {
 
@@ -178,6 +180,7 @@ func (slice *plasmaSlice) initStores() error {
 	cfg.UseCompression = slice.sysconf["plasma.useCompression"].Bool()
 	cfg.AutoSwapper = true
 	cfg.NumPersistorThreads = int(float32(runtime.NumCPU())*float32(slice.sysconf["plasma.persistenceCPUPercent"].Int())/(100*2) + 0.5)
+	cfg.DisableReadCaching = slice.sysconf["plasma.disableReadCaching"].Bool()
 
 	var mCfg, bCfg plasma.Config
 
@@ -227,6 +230,7 @@ func (slice *plasmaSlice) initStores() error {
 			slice.readers <- slice.mainstore.NewReader()
 		}
 
+		slice.mainstore.SetLogger(&logging.SystemLogger)
 		slice.mainstore.SetLogPrefix(fmt.Sprintf("%s/%s/Mainstore ", slice.idxDefn.Bucket, slice.idxDefn.Name))
 	}()
 
@@ -246,6 +250,7 @@ func (slice *plasmaSlice) initStores() error {
 				slice.back[i] = slice.backstore.NewWriter()
 			}
 
+			slice.backstore.SetLogger(&logging.SystemLogger)
 			slice.backstore.SetLogPrefix(fmt.Sprintf("%s/%s/Backstore ", slice.idxDefn.Bucket, slice.idxDefn.Name))
 		}()
 	}
@@ -979,7 +984,8 @@ func (mdb *plasmaSlice) GetSnapshots() ([]SnapshotInfo, error) {
 	var infos []SnapshotInfo
 	for i := len(mRPs) - 1; i >= 0; i-- {
 		info := &plasmaSnapshotInfo{
-			mRP: mRPs[i],
+			mRP:   mRPs[i],
+			Count: mRPs[i].ItemsCount(),
 		}
 
 		if err := json.Unmarshal(info.mRP.Meta()[8:], &info.Ts); err != nil {
@@ -1292,11 +1298,13 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 	mdb.mainstore.MaxPageLSSSegments = mdb.sysconf["plasma.mainIndex.maxLSSPageSegments"].Int()
 	mdb.mainstore.LSSCleanerThreshold = mdb.sysconf["plasma.mainIndex.LSSFragmentation"].Int()
 	mdb.mainstore.LSSCleanerMaxThreshold = mdb.sysconf["plasma.mainIndex.maxLSSFragmentation"].Int()
+	mdb.mainstore.DisableReadCaching = mdb.sysconf["plasma.disableReadCaching"].Bool()
 
 	if !mdb.isPrimary {
 		mdb.backstore.MaxPageLSSSegments = mdb.sysconf["plasma.backIndex.maxLSSPageSegments"].Int()
 		mdb.backstore.LSSCleanerThreshold = mdb.sysconf["plasma.backIndex.LSSFragmentation"].Int()
 		mdb.backstore.LSSCleanerMaxThreshold = mdb.sysconf["plasma.backIndex.maxLSSFragmentation"].Int()
+		mdb.backstore.DisableReadCaching = mdb.sysconf["plasma.disableReadCaching"].Bool()
 	}
 }
 

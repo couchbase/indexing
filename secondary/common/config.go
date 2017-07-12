@@ -667,6 +667,13 @@ var SystemConfig = Config{
 		true, // immutable
 		true, // case-sensitive
 	},
+	"indexer.isEnterprise": ConfigValue{
+		true,
+		"enterprise edition",
+		true,
+		true,  // immutable
+		false, // case-insensitive
+	},
 
 	"indexer.streamInitPort": ConfigValue{
 		"9103",
@@ -1033,6 +1040,13 @@ var SystemConfig = Config{
 		30,
 		"Desired LSS fragmentation percent",
 		30,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.disableReadCaching": ConfigValue{
+		false,
+		"Disable read caching",
+		false,
 		false, // mutable
 		false, // case-insensitive
 	},
@@ -1569,6 +1583,13 @@ var SystemConfig = Config{
 		false,
 		"disable repairing replica",
 		false,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.rebalance.httpTimeout": ConfigValue{
+		120,
+		"timeout(in seconds) for http requests during rebalance",
+		120,
 		false, // mutable
 		false, // case-insensitive
 	},

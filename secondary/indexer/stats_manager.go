@@ -22,7 +22,7 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/stats"
-	"github.com/couchbase/nitro/mm"
+	"github.com/couchbase/indexing/secondary/stubs/nitro/mm"
 )
 
 var uptime time.Time

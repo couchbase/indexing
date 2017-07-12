@@ -1481,16 +1481,19 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, conn net.Conn,
 		return
 	}
 
-	req.Stats.scanReqAllocDuration.Add(time.Now().Sub(atime).Nanoseconds())
+	if req.Stats != nil {
+		req.Stats.scanReqAllocDuration.Add(time.Now().Sub(atime).Nanoseconds())
+	}
 
 	if err := s.isScanAllowed(*req.Consistency, req); err != nil {
 		s.tryRespondWithError(w, req, err)
 		return
 	}
 
-	req.Stats.numRequests.Add(1)
-
-	req.Stats.scanReqInitDuration.Add(time.Now().Sub(ttime).Nanoseconds())
+	if req.Stats != nil {
+		req.Stats.numRequests.Add(1)
+		req.Stats.scanReqInitDuration.Add(time.Now().Sub(ttime).Nanoseconds())
+	}
 
 	t0 := time.Now()
 	is, err := s.getRequestedIndexSnapshot(req)
@@ -1506,7 +1509,9 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, conn net.Conn,
 	})
 
 	defer func() {
-		req.Stats.scanReqDuration.Add(time.Now().Sub(ttime).Nanoseconds())
+		if req.Stats != nil {
+			req.Stats.scanReqDuration.Add(time.Now().Sub(ttime).Nanoseconds())
+		}
 	}()
 
 	s.processRequest(req, w, is, t0)
@@ -1546,10 +1551,12 @@ func (s *scanCoordinator) handleScanRequest(req *ScanRequest, w ScanResponseWrit
 	err := scanPipeline.Execute()
 	scanTime := time.Now().Sub(t0)
 
-	req.Stats.numRowsReturned.Add(int64(scanPipeline.RowsReturned()))
-	req.Stats.scanBytesRead.Add(int64(scanPipeline.BytesRead()))
-	req.Stats.scanDuration.Add(scanTime.Nanoseconds())
-	req.Stats.scanWaitDuration.Add(waitTime.Nanoseconds())
+	if req.Stats != nil {
+		req.Stats.numRowsReturned.Add(int64(scanPipeline.RowsReturned()))
+		req.Stats.scanBytesRead.Add(int64(scanPipeline.BytesRead()))
+		req.Stats.scanDuration.Add(scanTime.Nanoseconds())
+		req.Stats.scanWaitDuration.Add(waitTime.Nanoseconds())
+	}
 
 	if err != nil {
 		status := fmt.Sprintf("(error = %s)", err)

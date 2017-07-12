@@ -148,6 +148,8 @@ else
 fi
 
 cd $WORKSPACE/forestdb
+git checkout 664c0dd5078be72
+echo "Reverted forestdb to 664c0dd5078be"
 current="`git rev-parse HEAD`"
 test -f ~/forestdb.good || (echo $current > ~/forestdb.good)
 good="`cat ~/forestdb.good`"

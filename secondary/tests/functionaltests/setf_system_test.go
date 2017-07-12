@@ -141,14 +141,7 @@ func TestMultipleBucketsDeferredBuild(t *testing.T) {
 		log.Printf("Build index failed as expected for %v and %v.  Error = %v", defn2, defn3, err.Error())
 	}
 
-	// Get status of first : should retry building in background
-	// Get status of second: should be building. Wait for it to get active
-	time.Sleep(10 * time.Second)
-	state, e := client.IndexState(defn2)
-	log.Printf("Index state of %v is %v and error is %v", defn2, state, e)
-	FailTestIfError(e, "Error in TestMultipleBucketsDeferredBuild.  Background build fails for second index.", t)
-
-	state, e = client.IndexState(defn3)
+	state, e := client.IndexState(defn3)
 	log.Printf("Index state of %v is %v", defn3, state)
 	FailTestIfError(e, "Error in TestMultipleBucketsDeferredBuild. Build should complete and no error expected for index of second bucket", t)
 
@@ -162,7 +155,10 @@ func TestMultipleBucketsDeferredBuild(t *testing.T) {
 	//err = secondaryindex.BuildIndex(index2, bucket1, indexManagementAddress, defaultIndexActiveTimeout)
 	//FailTestIfNoError(err, "Index2 is expected to build in background.   Expected failure when trying to build index2 explicitly, but no failure returned.", t)
 
-	secondaryindex.WaitTillIndexActive(defn2, client, defaultIndexActiveTimeout)
+	e = secondaryindex.WaitTillIndexActive(defn2, client, defaultIndexActiveTimeout)
+	if e != nil {
+		FailTestIfError(e, "Error in WaitTillIndexActive for second index first bucket", t)
+	}
 
 	docScanResults := datautility.ExpectedScanResponse_string(bucket1docs, "company", "B", "H", 1)
 	scanResults, err := secondaryindex.Range(index1, bucket1, indexScanAddress, []interface{}{"B"}, []interface{}{"H"}, 1, false, defaultlimit, c.SessionConsistency, nil)

@@ -523,11 +523,11 @@ func (m *requestHandlerContext) getIndexStatement(creds cbauth.Creds, bucket str
 	}
 
 	defnMap := make(map[common.IndexDefnId]bool)
-	statements := make([]string, len(indexes))
-	for i, index := range indexes {
+	statements := ([]string)(nil)
+	for _, index := range indexes {
 		if _, ok := defnMap[index.DefnId]; !ok {
 			defnMap[index.DefnId] = true
-			statements[i] = index.Definition
+			statements = append(statements, index.Definition)
 		}
 	}
 
