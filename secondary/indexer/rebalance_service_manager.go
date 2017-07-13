@@ -1434,7 +1434,7 @@ func (m *ServiceMgr) rebalanceDoneCallback(err error, cancel <-chan struct{}) {
 
 func (m *ServiceMgr) onRebalanceDoneLOCKED(err error) {
 
-	logging.Infof("ServiceMgr::onRebalanceDoneLOCKED Rebalance Done %v", err)
+	l.Infof("ServiceMgr::onRebalanceDoneLOCKED Rebalance Done %v", err)
 
 	if m.rebalancer != nil {
 		newTask := (*service.Task)(nil)
