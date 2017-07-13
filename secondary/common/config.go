@@ -1761,6 +1761,10 @@ func (config Config) SetValue(key string, value interface{}) error {
 		return errors.New("invalid config parameter")
 	}
 
+	if value == nil {
+		return errors.New("config value is nil")
+	}
+
 	defType := reflect.TypeOf(cv.DefaultVal)
 	valType := reflect.TypeOf(value)
 
