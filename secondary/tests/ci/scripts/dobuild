@@ -60,7 +60,7 @@ good="`cat ~/nitro.good`"
 echo -n "nitro is at <a href='https://github.com/couchbase/nitro/commit/$current'>${current:0:7}</a>, changes since last good build: "
 if [ "$current" != "$good" ]; then
   echo
-  git log --pretty='format: <a href="https://github.com/couchbase/nitro/commit/%H">%h</a> %s' HEAD...$good
+  git log --pretty='format: <a href="https://github.com/couchbase/nitro/commit/%H">%h</a> %s' $good..HEAD
   echo
 else
   echo "none"
@@ -76,7 +76,7 @@ good="`cat ~/indexing.good`"
 echo -n "indexing is at <a href='https://github.com/couchbase/indexing/commit/$current'>${current:0:7}</a>, changes since last good build: "
 if [ "$current" != "$good" ]; then
   echo
-  git log --pretty='format: <a href="https://github.com/couchbase/indexing/commit/%H">%h</a> %s' HEAD...$good
+  git log --pretty='format: <a href="https://github.com/couchbase/indexing/commit/%H">%h</a> %s' $good..HEAD
   echo
 else
   echo "none"
@@ -89,7 +89,7 @@ good="`cat ~/query.good`"
 echo -n "query is at <a href='https://github.com/couchbase/query/commit/$current'>${current:0:7}</a>, changes since last good build: "
 if [ "$current" != "$good" ]; then
   echo
-  git log --pretty='format: <a href="https://github.com/couchbase/query/commit/%H">%h</a> %s' HEAD...$good
+  git log --pretty='format: <a href="https://github.com/couchbase/query/commit/%H">%h</a> %s' $good..HEAD
   echo
 else
   echo "none"
@@ -102,7 +102,7 @@ good="`cat ~/gometa.good`"
 echo -n "gometa is at <a href='https://github.com/couchbase/gometa/commit/$current'>${current:0:7}</a>, changes since last good build: "
 if [ "$current" != "$good" ]; then
   echo
-  git log --pretty='format: <a href="https://github.com/couchbase/gometa/commit/%H">%h</a> %s' HEAD...$good
+  git log --pretty='format: <a href="https://github.com/couchbase/gometa/commit/%H">%h</a> %s' $good..HEAD
   echo
 else
   echo "none"
@@ -115,7 +115,7 @@ good="`cat ~/ns_server.good`"
 echo -n "ns_server is at <a href='https://github.com/couchbase/ns_server/commit/$current'>${current:0:7}</a>, changes since last good build: "
 if [ "$current" != "$good" ]; then
   echo
-  git log --pretty='format: <a href="https://github.com/couchbase/ns_server/commit/%H">%h</a> %s' HEAD...$good
+  git log --pretty='format: <a href="https://github.com/couchbase/ns_server/commit/%H">%h</a> %s' $good..HEAD
   echo
 else
   echo "none"
@@ -128,7 +128,7 @@ good="`cat ~/couchdb.good`"
 echo -n "couchdb is at <a href='https://github.com/couchbase/couchdb/commit/$current'>${current:0:7}</a>, changes since last good build: "
 if [ "$current" != "$good" ]; then
   echo
-  git log --pretty='format: <a href="https://github.com/couchbase/couchdb/commit/%H">%h</a> %s' HEAD...$good
+  git log --pretty='format: <a href="https://github.com/couchbase/couchdb/commit/%H">%h</a> %s' $good..HEAD
   echo
 else
   echo "none"
@@ -141,7 +141,7 @@ good="`cat ~/couchstore.good`"
 echo -n "couchstore is at <a href='https://github.com/couchbase/couchstore/commit/$current'>${current:0:7}</a>, changes since last good build: "
 if [ "$current" != "$good" ]; then
   echo
-  git log --pretty='format: <a href="https://github.com/couchbase/couchstore/commit/%H">%h</a> %s' HEAD...$good
+  git log --pretty='format: <a href="https://github.com/couchbase/couchstore/commit/%H">%h</a> %s' $good..HEAD
   echo
 else
   echo "none"
@@ -154,7 +154,7 @@ good="`cat ~/forestdb.good`"
 echo -n "forestdb is at <a href='https://github.com/couchbase/forestdb/commit/$current'>${current:0:7}</a>, changes since last good build: "
 if [ "$current" != "$good" ]; then
   echo
-  git log --pretty='format: <a href="https://github.com/couchbase/forestdb/commit/%H">%h</a> %s' HEAD...$good
+  git log --pretty='format: <a href="https://github.com/couchbase/forestdb/commit/%H">%h</a> %s' $good..HEAD
   echo
 else
   echo "none"
@@ -167,7 +167,7 @@ good="`cat ~/kv_engine.good`"
 echo -n "kv_engine is at <a href='https://github.com/couchbase/kv_engine/commit/$current'>${current:0:7}</a>, changes since last good build: "
 if [ "$current" != "$good" ]; then
   echo
-  git log --pretty='format: <a href="https://github.com/couchbase/kv_engine/commit/%H">%h</a> %s' HEAD...$good
+  git log --pretty='format: <a href="https://github.com/couchbase/kv_engine/commit/%H">%h</a> %s' $good..HEAD
   echo
 else
   echo "none"
@@ -180,7 +180,7 @@ good="`cat ~/testrunner.good`"
 echo -n "testrunner is at <a href='https://github.com/couchbase/testrunner/commit/$current'>${current:0:7}</a>, changes since last good build: "
 if [ "$current" != "$good" ]; then
   echo
-  git log --pretty='format: <a href="https://github.com/couchbase/testrunner/commit/%H">%h</a> %s' HEAD...$good
+  git log --pretty='format: <a href="https://github.com/couchbase/testrunner/commit/%H">%h</a> %s' $good..HEAD
   echo
 else
   echo "none"
