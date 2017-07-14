@@ -1,6 +1,6 @@
 package indexer
 
-import "encoding/json"
+import json "github.com/couchbase/indexing/secondary/common/json"
 import "io/ioutil"
 import "net/http"
 import "strings"
@@ -570,11 +570,11 @@ func (api *restServer) doLookup(w http.ResponseWriter, request *http.Request) {
 	}
 
 	if value, ok = params["limit"]; ok {
-		if _, ok := value.(float64); ok == false {
+		if _, ok := value.(int64); ok == false {
 			http.Error(w, `"invalid limit type"`, http.StatusBadRequest)
 			return
 		}
-		limit = int64(value.(float64))
+		limit = value.(int64)
 	}
 
 	if value, ok = params["stale"]; ok {
@@ -714,12 +714,12 @@ func (api *restServer) doRange(w http.ResponseWriter, request *http.Request) {
 	}
 
 	if value, ok = params["limit"]; ok && value != nil {
-		if _, ok = value.(float64); ok == false {
+		if _, ok = value.(int64); ok == false {
 			msg := `invalid limit type`
 			http.Error(w, jsonstr(msg), http.StatusBadRequest)
 			return
 		}
-		limit = int64(value.(float64))
+		limit = value.(int64)
 	}
 
 	if value, ok = params["inclusion"]; ok && value != nil {
@@ -879,21 +879,21 @@ func (api *restServer) doMultiScan(w http.ResponseWriter, request *http.Request)
 	}
 
 	if value, ok = params["offset"]; ok && value != nil {
-		if _, ok = value.(float64); ok == false {
+		if _, ok = value.(int64); ok == false {
 			msg := `invalid offset type`
 			http.Error(w, jsonstr(msg), http.StatusBadRequest)
 			return
 		}
-		offset = int64(value.(float64))
+		offset = value.(int64)
 	}
 
 	if value, ok = params["limit"]; ok && value != nil {
-		if _, ok = value.(float64); ok == false {
+		if _, ok = value.(int64); ok == false {
 			msg := `invalid limit type`
 			http.Error(w, jsonstr(msg), http.StatusBadRequest)
 			return
 		}
-		limit = int64(value.(float64))
+		limit = value.(int64)
 	}
 
 	if value, ok = params["timestamp"]; stale == "partial" {
@@ -1079,12 +1079,12 @@ func (api *restServer) doScanall(w http.ResponseWriter, request *http.Request) {
 	}
 
 	if value, ok := params["limit"]; ok && value != nil {
-		if _, ok = value.(float64); ok == false {
+		if _, ok = value.(int64); ok == false {
 			msg := `invalid limit type`
 			http.Error(w, jsonstr(msg), http.StatusBadRequest)
 			return
 		}
-		limit = int64(value.(float64))
+		limit = value.(int64)
 	}
 
 	if value, ok := params["stale"]; ok && value != nil {
