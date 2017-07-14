@@ -27,7 +27,7 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/common/queryutil"
 	"github.com/couchbase/indexing/secondary/logging"
-	"github.com/couchbase/nitro/plasma"
+	"github.com/couchbase/plasma"
 )
 
 func init() {

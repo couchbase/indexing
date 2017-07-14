@@ -80,14 +80,3 @@ GoInstall (TARGET cbindexplan PACKAGE github.com/couchbase/indexing/secondary/cm
   INSTALL_PATH bin OUTPUT cbindexplan
   GOVERSION 1.7.3)
 
-IF (BUILD_ENTERPRISE)
-  GoInstall(TARGET plasma_dump PACKAGE github.com/couchbase/nitro/cmd/plasma_dump
-    GOPATH "${CMAKE_SOURCE_DIR}/goproj" "${GODEPSDIR}"
-    CGO_INCLUDE_DIRS "${CGO_INCLUDE_DIRS}"
-    CGO_LIBRARY_DIRS "${CGO_LIBRARY_DIRS}"
-    GOTAGS "${TAGS}"
-    LDFLAGS "${LDFLAGS}"
-    INSTALL_PATH bin OUTPUT plasma_dump
-    GOVERSION 1.7.3)
-ENDIF (BUILD_ENTERPRISE)
-

@@ -3,7 +3,7 @@ package indexer
 import (
 	"net/http"
 
-	"github.com/couchbase/nitro/plasma"
+	"github.com/couchbase/plasma"
 )
 
 func init() {
