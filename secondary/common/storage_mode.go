@@ -14,7 +14,7 @@ import (
 	"sync"
 
 	"github.com/couchbase/indexing/secondary/logging"
-	"github.com/couchbase/indexing/secondary/stubs/nitro/plasma"
+	"github.com/couchbase/indexing/secondary/stubs"
 )
 
 type StorageMode byte
@@ -69,7 +69,7 @@ func SetStorageMode(mode StorageMode) {
 	smLock.Lock()
 	defer smLock.Unlock()
 	gStorageMode = mode
-	if gStorageMode == PLASMA && !plasma.UsePlasma() {
+	if gStorageMode == PLASMA && !stubs.UsePlasma() {
 		logging.Warnf("Plasma is available only in EE but this is CE. Using ForestDB")
 		gStorageMode = FORESTDB
 	}
@@ -81,7 +81,7 @@ func SetStorageModeStr(mode string) bool {
 	defer smLock.Unlock()
 	if s, ok := smStrMap[strings.ToLower(mode)]; ok {
 		gStorageMode = s
-		if gStorageMode == PLASMA && !plasma.UsePlasma() {
+		if gStorageMode == PLASMA && !stubs.UsePlasma() {
 			logging.Warnf("Plasma is available only in EE but this is CE. Using ForestDB")
 			gStorageMode = FORESTDB
 		}

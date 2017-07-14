@@ -8,10 +8,6 @@ import (
 
 var Diag = &ee.Diag
 
-func UsePlasma() bool {
-	return true
-}
-
 func SetMemoryQuota(sz int64) {
 	ee.SetMemoryQuota(sz)
 }

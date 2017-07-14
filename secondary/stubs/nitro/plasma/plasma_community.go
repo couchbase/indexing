@@ -11,10 +11,6 @@ type StubType int
 
 var Diag StubType
 
-func UsePlasma() bool {
-	return false
-}
-
 func SetMemoryQuota(_ int64) {
 }
 
