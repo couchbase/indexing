@@ -132,6 +132,10 @@ func newPlasmaSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 		sliceBufSize = uint64(slice.numWriters)
 	}
 
+	if sysconf["plasma.UseQuotaTuner"].Bool() {
+		go plasma.RunMemoryTuner()
+	}
+
 	slice.encodeBuf = make([][]byte, slice.numWriters)
 	slice.arrayBuf1 = make([][]byte, slice.numWriters)
 	slice.arrayBuf2 = make([][]byte, slice.numWriters)

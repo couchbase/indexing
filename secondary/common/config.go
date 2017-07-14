@@ -1050,6 +1050,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.plasma.UseQuotaTuner": ConfigValue{
+		false,
+		"Enable memquota tuner",
+		false,
+		false, // mutable
+		false, // case-insensitive
+	},
 
 	//end of plasma specific config
 
