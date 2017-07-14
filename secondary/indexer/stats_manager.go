@@ -305,7 +305,7 @@ func (is IndexerStats) GetStats() common.Statistics {
 	storageMode := fmt.Sprintf("%s", common.GetStorageMode())
 	addStat("storage_mode", storageMode)
 	addStat("num_cpu_core", num_cpu_core)
-	addStat("cpu_utilization", getCpuPercentAverage())
+	addStat("cpu_utilization", getCpuPercent())
 
 	indexerState := common.IndexerState(is.indexerState.Value())
 	if indexerState == common.INDEXER_PREPARE_UNPAUSE {

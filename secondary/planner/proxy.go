@@ -346,7 +346,7 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 		// cpu utilization for the indexer process
 		var actualCpuUtil float64
 		if cpuUtil, ok := statsMap["cpu_utilization"]; ok {
-			actualCpuUtil = cpuUtil.(float64)
+			actualCpuUtil = cpuUtil.(float64) / 100
 		}
 
 		var totalDataSize uint64
