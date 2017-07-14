@@ -860,6 +860,15 @@ func (mdb *memdbSlice) Rollback(info SnapshotInfo) error {
 }
 
 func (mdb *memdbSlice) loadSnapshot(snapInfo *memdbSnapshotInfo) error {
+	defer func() {
+		if r := recover(); r != nil {
+			logging.Errorf("MemDBSlice::loadSnapshot Slice Id %v, IndexInstId %v failed to recover from the snapshot %v (err=%v)",
+				mdb.id, mdb.idxInstId, snapInfo.dataPath, r)
+			os.RemoveAll(snapInfo.dataPath)
+			os.Exit(1)
+		}
+	}()
+
 	var wg sync.WaitGroup
 	var backIndexCallback memdb.ItemCallback
 	mdb.confLock.RLock()
