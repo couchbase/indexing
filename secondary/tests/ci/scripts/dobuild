@@ -69,6 +69,7 @@ test $WORKSPACE/cbbuild && test $WORKSPACE/voltron || error_exit "Unable to find
 
 cd $WORKSPACE/goproj/src/github.com/couchbase
 git clone ssh://github.com/couchbase/plasma
+cd plasma
 echo "Switching plasma to unstable"
 git checkout unstable 1>>$WORKSPACE/make.log 2>&1 || error_exit "git checkout unstable"
 git pull 1>>$WORKSPACE/make.log 2>&1 || error_exit "git pull"
