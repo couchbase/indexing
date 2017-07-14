@@ -21,7 +21,6 @@ if [ "$PEGGED" = "" ]; then
   export BLD_NUM=0
 else
   export BLD_NUM=$PEGGED
-  echo "Using pegged server, $BLD_NUM build"
 fi
 
 error_exit() {
@@ -40,6 +39,7 @@ if [ ! -d ~/.reference ]; then
   test $? -eq 0 || error_exit "Repo Init"
 fi
 
+test "$BLD_NUM" = "0" || echo "Using pegged server, $BLD_NUM build"
 echo "Calculating base"
 rm -rf ~/.manifests
 git clone https://github.com/couchbase/build-team-manifests ~/.manifests 1>>$WORKSPACE/make.log 2>&1
@@ -225,7 +225,7 @@ cmake -D CMAKE_INSTALL_PREFIX=/opt/couchbase \
       .. 1>>$WORKSPACE/make.log 2>&1
 test $? -eq 0 || error_exit "Main build"
 
-make install 1>>$WORKSPACE/make.log 2>&1
+make -j8 install 1>>$WORKSPACE/make.log 2>&1
 test $? -eq 0 || error_exit "Making Install"
 
 cd $WORKSPACE
