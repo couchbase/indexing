@@ -223,11 +223,17 @@ git rev-parse HEAD > ~/couchdb.good
 cd $WORKSPACE/couchstore
 git rev-parse HEAD > ~/couchstore.good
 if [ "$STORAGE" = "plasma" ]; then
+  cd $WORKSPACE/goproj/src/github.com/couchbase/plasma
+  git rev-parse HEAD > ~/plasma.good
+fi
+if [ "$STORAGE" = "memdb" ]; then
   cd $WORKSPACE/goproj/src/github.com/couchbase/nitro
   git rev-parse HEAD > ~/nitro.good
 fi
-cd $WORKSPACE/forestdb
-git rev-parse HEAD > ~/forestdb.good
+if [ "$STORAGE" = "fdb" ]; then
+  cd $WORKSPACE/forestdb
+  git rev-parse HEAD > ~/forestdb.good
+fi
 cd $WORKSPACE/testrunner
 git rev-parse HEAD > ~/testrunner.good
 cd $WORKSPACE/kv_engine
