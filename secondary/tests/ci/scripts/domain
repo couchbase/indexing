@@ -1,17 +1,35 @@
 #!/bin/bash
 
+if [ ! -f ~/.cienv ]; then
+cat > ~/.cienv <<EOF
+    export WORKSPACE=/opt/build
+    export RELEASE=5.0.0
+    export MANIFEST="couchbase-server/spock.xml"
+    export MODE="test"
+    #export PEGGED=3277
+    export STORAGE="plasma"
+EOF
+fi
+source ~/.cienv
+
 if [ "$WORKSPACE" = "" ]; then
   echo 'WORKSPACE not set'
   exit 2
 fi
 
-export MODE="`cat ~/.citype`"
 if [ "$MODE" = "" ]; then
   echo MODE must be set to 'test' or 'perf'
   exit 2
 fi
 
-export STORAGE="`cat ~/.cistore`"
+if [ "$MANIFEST" == "" ]; then
+  echo MANIFEST must be set
+fi
+
+if [ "$RELEASE" == "" ]; then
+  echo RELEASE must be set
+fi
+
 if [ "$STORAGE" = "" ]; then
   export STORAGE="plasma"
 fi
@@ -44,5 +62,5 @@ case "$STORAGE" in
 	"fdb")    export STORAGE="plasma" ;;
 	*)        export STORAGE="plasma" ;;
 esac
-echo "$STORAGE" > ~/.cistore
+perl -pi -e "s/export STORAGE=.*/export STORAGE=$STORAGE/g" ~/.cienv
 dowatch

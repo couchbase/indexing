@@ -35,6 +35,8 @@ const (
 	OPCODE_DROP_INDEX_REBAL                  = OPCODE_BUILD_INDEX_REBAL + 1
 	OPCODE_BROADCAST_STATS                   = OPCODE_DROP_INDEX_REBAL + 1
 	OPCODE_BUILD_INDEX_RETRY                 = OPCODE_BROADCAST_STATS + 1
+	OPCODE_RESET_INDEX                       = OPCODE_BUILD_INDEX_RETRY + 1
+	OPCODE_CONFIG_UPDATE                     = OPCODE_RESET_INDEX + 1
 )
 
 /////////////////////////////////////////////////////////////////////////
@@ -59,15 +61,17 @@ type IndexDefnDistribution struct {
 }
 
 type IndexInstDistribution struct {
-	InstId     uint64                  `json:"instId,omitempty"`
-	State      uint32                  `json:"state,omitempty"`
-	StreamId   uint32                  `json:"streamId,omitempty"`
-	Error      string                  `json:"error,omitempty"`
-	Partitions []IndexPartDistribution `json:"partitions,omitempty"`
-	RState     uint32                  `json:"rRtate,omitempty"`
-	Version    uint64                  `json:"version,omitempty"`
-	ReplicaId  uint64                  `json:"replicaId,omitempty"`
-	Scheduled  bool                    `json:"scheduled,omitempty"`
+	InstId         uint64                  `json:"instId,omitempty"`
+	State          uint32                  `json:"state,omitempty"`
+	StreamId       uint32                  `json:"streamId,omitempty"`
+	Error          string                  `json:"error,omitempty"`
+	Partitions     []IndexPartDistribution `json:"partitions,omitempty"`
+	RState         uint32                  `json:"rRtate,omitempty"`
+	Version        uint64                  `json:"version,omitempty"`
+	ReplicaId      uint64                  `json:"replicaId,omitempty"`
+	Scheduled      bool                    `json:"scheduled,omitempty"`
+	StorageMode    string                  `json:"storageMode,omitempty"`
+	OldStorageMode string                  `json:"oldStorageMode,omitempty"`
 }
 
 type IndexPartDistribution struct {

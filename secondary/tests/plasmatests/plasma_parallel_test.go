@@ -30,7 +30,7 @@ import (
 
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/indexer"
-	"github.com/couchbase/nitro/plasma"
+	"github.com/couchbase/plasma"
 )
 
 // structure to maintain plasma and memDb datastructures which are used by different threads

@@ -151,10 +151,10 @@ func main() {
 	}
 
 	if *storageMode != "" {
-		if common.SetStorageModeStr(*storageMode) {
-			logging.Infof("Indexer::Main Storage Mode Set %v", common.GetStorageMode())
+		if common.SetClusterStorageModeStr(*storageMode) {
+			logging.Infof("Indexer::Cluster Storage Mode Set %v", common.GetClusterStorageMode())
 		} else {
-			logging.Infof("Indexer::Main Invalid Storage Mode %v", *storageMode)
+			logging.Infof("Indexer::Cluster Invalid Storage Mode %v", *storageMode)
 		}
 	}
 

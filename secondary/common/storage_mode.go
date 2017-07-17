@@ -14,7 +14,7 @@ import (
 	"sync"
 
 	"github.com/couchbase/indexing/secondary/logging"
-	"github.com/couchbase/indexing/secondary/stubs/nitro/plasma"
+	"github.com/couchbase/indexing/secondary/stubs"
 )
 
 type StorageMode byte
@@ -24,6 +24,7 @@ const (
 	MOI
 	PLASMA
 	FORESTDB
+	MIXED
 )
 
 func (s StorageMode) String() string {
@@ -50,8 +51,9 @@ var smStrMap = map[string]StorageMode{
 	PlasmaDB:        PLASMA,
 }
 
-//Global Storage Mode
+//Storage Mode
 var gStorageMode StorageMode
+var gClusterStorageMode StorageMode
 var smLock sync.RWMutex //lock to protect gStorageMode
 
 func GetStorageMode() StorageMode {
@@ -67,7 +69,7 @@ func SetStorageMode(mode StorageMode) {
 	smLock.Lock()
 	defer smLock.Unlock()
 	gStorageMode = mode
-	if gStorageMode == PLASMA && !plasma.UsePlasma() {
+	if gStorageMode == PLASMA && !stubs.UsePlasma() {
 		logging.Warnf("Plasma is available only in EE but this is CE. Using ForestDB")
 		gStorageMode = FORESTDB
 	}
@@ -79,13 +81,43 @@ func SetStorageModeStr(mode string) bool {
 	defer smLock.Unlock()
 	if s, ok := smStrMap[strings.ToLower(mode)]; ok {
 		gStorageMode = s
-		if gStorageMode == PLASMA && !plasma.UsePlasma() {
+		if gStorageMode == PLASMA && !stubs.UsePlasma() {
 			logging.Warnf("Plasma is available only in EE but this is CE. Using ForestDB")
 			gStorageMode = FORESTDB
 		}
 		return true
 	} else {
 		gStorageMode = NOT_SET
+		return false
+	}
+
+}
+
+func GetClusterStorageMode() StorageMode {
+
+	smLock.RLock()
+	defer smLock.RUnlock()
+	return gClusterStorageMode
+
+}
+
+func SetClusterStorageMode(mode StorageMode) {
+
+	smLock.Lock()
+	defer smLock.Unlock()
+	gClusterStorageMode = mode
+
+}
+
+func SetClusterStorageModeStr(mode string) bool {
+
+	smLock.Lock()
+	defer smLock.Unlock()
+	if s, ok := smStrMap[strings.ToLower(mode)]; ok {
+		gClusterStorageMode = s
+		return true
+	} else {
+		gClusterStorageMode = NOT_SET
 		return false
 	}
 
@@ -102,5 +134,18 @@ func IndexTypeToStorageMode(t IndexType) StorageMode {
 		return PLASMA
 	default:
 		return NOT_SET
+	}
+}
+
+func StorageModeToIndexType(m StorageMode) IndexType {
+	switch m {
+	case MOI:
+		return MemoryOptimized
+	case FORESTDB:
+		return ForestDB
+	case PLASMA:
+		return PlasmaDB
+	default:
+		return ""
 	}
 }

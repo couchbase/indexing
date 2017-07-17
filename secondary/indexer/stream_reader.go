@@ -370,9 +370,10 @@ func (r *mutationStreamReader) maybeSendSync() {
 		prevSnap[bucket] = common.NewTsVbuuidCached(bucket, numVbuckets)
 	}
 
+	nWrkr := r.numWorkers
 	for bucket, _ := range hwt {
 		needSync := false
-		for i := 0; i < r.numWorkers; i++ {
+		for i := 0; i < nWrkr; i++ {
 
 			r.streamWorkers[i].lock.Lock()
 
@@ -380,15 +381,21 @@ func (r *mutationStreamReader) maybeSendSync() {
 				needSync = true
 			}
 
-			for vb := 0; vb < numVbuckets; vb++ {
-				if vb%r.numWorkers == i {
+			loopCnt := 0
+			vb := 0
+			for {
+				vb = loopCnt*nWrkr + i
+				if vb < numVbuckets {
 					hwt[bucket].Seqnos[vb] = r.streamWorkers[i].bucketFilter[bucket].Seqnos[vb]
 					hwt[bucket].Vbuuids[vb] = r.streamWorkers[i].bucketFilter[bucket].Vbuuids[vb]
 					hwt[bucket].Snapshots[vb] = r.streamWorkers[i].bucketFilter[bucket].Snapshots[vb]
 					prevSnap[bucket].Seqnos[vb] = r.streamWorkers[i].bucketPrevSnapMap[bucket].Seqnos[vb]
 					prevSnap[bucket].Vbuuids[vb] = r.streamWorkers[i].bucketPrevSnapMap[bucket].Vbuuids[vb]
 					prevSnap[bucket].Snapshots[vb] = r.streamWorkers[i].bucketPrevSnapMap[bucket].Snapshots[vb]
+				} else {
+					break
 				}
+				loopCnt++
 			}
 			r.streamWorkers[i].bucketSyncDue[bucket] = false
 			r.streamWorkers[i].lock.Unlock()

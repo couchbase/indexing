@@ -196,17 +196,19 @@ type IndexDefn struct {
 
 //IndexInst is an instance of an Index(aka replica)
 type IndexInst struct {
-	InstId    IndexInstId
-	Defn      IndexDefn
-	State     IndexState
-	RState    RebalanceState
-	Stream    StreamId
-	Pc        PartitionContainer
-	Error     string
-	BuildTs   []uint64
-	Version   int
-	ReplicaId int
-	Scheduled bool
+	InstId         IndexInstId
+	Defn           IndexDefn
+	State          IndexState
+	RState         RebalanceState
+	Stream         StreamId
+	Pc             PartitionContainer
+	Error          string
+	BuildTs        []uint64
+	Version        int
+	ReplicaId      int
+	Scheduled      bool
+	StorageMode    string
+	OldStorageMode string
 }
 
 //IndexInstMap is a map from IndexInstanceId to IndexInstance
@@ -456,8 +458,7 @@ func IsValidIndexType(t string) bool {
 
 func IsEquivalentIndex(d1, d2 *IndexDefn) bool {
 
-	if d1.Using != d1.Using ||
-		d1.Bucket != d2.Bucket ||
+	if d1.Bucket != d2.Bucket ||
 		d1.IsPrimary != d2.IsPrimary ||
 		d1.ExprType != d2.ExprType ||
 		d1.PartitionScheme != d2.PartitionScheme ||

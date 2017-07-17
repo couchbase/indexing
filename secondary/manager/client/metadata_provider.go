@@ -126,15 +126,16 @@ type IndexMetadata struct {
 }
 
 type InstanceDefn struct {
-	DefnId    c.IndexDefnId
-	InstId    c.IndexInstId
-	State     c.IndexState
-	Error     string
-	IndexerId c.IndexerId
-	Endpts    []c.Endpoint
-	Version   uint64
-	RState    uint32
-	ReplicaId uint64
+	DefnId      c.IndexDefnId
+	InstId      c.IndexInstId
+	State       c.IndexState
+	Error       string
+	IndexerId   c.IndexerId
+	Endpts      []c.Endpoint
+	Version     uint64
+	RState      uint32
+	ReplicaId   uint64
+	StorageMode string
 }
 
 type event struct {
@@ -1976,6 +1977,7 @@ func (r *metadataRepo) makeInstanceDefn(defnId c.IndexDefnId, inst *IndexInstDis
 	idxInst.Version = inst.Version
 	idxInst.RState = inst.RState
 	idxInst.ReplicaId = inst.ReplicaId
+	idxInst.StorageMode = inst.StorageMode
 
 	for _, partition := range inst.Partitions {
 		for _, slice := range partition.SinglePartition.Slices {

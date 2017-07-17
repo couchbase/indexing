@@ -357,27 +357,9 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		return nil, &MsgError{err: Error{cause: err}}
 	}
 
-	//based on bootstrap, validate the storage mode
-	if common.GetStorageMode() != common.NOT_SET {
-		if !idx.canSetStorageMode(common.GetStorageMode().String()) {
-			common.SetStorageMode(common.NOT_SET)
-			logging.Infof("Indexer::NewIndexer Storage Mode UnSet")
-		}
-	}
-
 	//if storageMode has changed in settings while bootstrap was in progress
 	//indexer needs to restart
-	confStorageMode := strings.ToLower(idx.config["settings.storage_mode"].String())
-	if confStorageMode != "" && common.GetStorageMode().String() != confStorageMode {
-		if idx.canSetStorageMode(confStorageMode) {
-			if common.SetStorageModeStr(confStorageMode) {
-				logging.Infof("Indexer::NewIndexer Storage Mode Set %v", common.GetStorageMode())
-				idx.stats.needsRestart.Set(true)
-			} else {
-				logging.Warnf("Indexer::NewIndexer Invalid Storage Mode %v. Ignored.", confStorageMode)
-			}
-		}
-	}
+	idx.updateStorageMode(idx.config)
 
 	//Register with Index Coordinator
 	if err := idx.registerWithCoordinator(); err != nil {
@@ -920,20 +902,28 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 
 }
 
-func (idx *indexer) handleConfigUpdate(msg Message) {
-
-	cfgUpdate := msg.(*MsgConfigUpdate)
-	newConfig := cfgUpdate.GetConfig()
+func (idx *indexer) updateStorageMode(newConfig common.Config) {
 
 	confStorageMode := strings.ToLower(newConfig["settings.storage_mode"].String())
+
+	if confStorageMode != "" && confStorageMode != common.GetClusterStorageMode().String() {
+		common.SetClusterStorageModeStr(confStorageMode)
+	}
+
+	s := common.IndexTypeToStorageMode(common.IndexType(confStorageMode))
+	s = idx.promoteStorageModeIfNecessary(s, newConfig)
+	confStorageMode = string(common.StorageModeToIndexType(s))
+	logging.Infof("Indexer::updateStorageMode Try setting storage mode to %v", confStorageMode)
+
 	if common.GetStorageMode() == common.NOT_SET {
 		if confStorageMode != "" {
 			if idx.canSetStorageMode(confStorageMode) {
 				if common.SetStorageModeStr(confStorageMode) {
-					logging.Infof("Indexer::ConfigUpdate Storage Mode Set %v", common.GetStorageMode())
+					logging.Infof("Indexer::updateStorageMode Storage Mode Set %v", common.GetStorageMode())
+					initStorageSettings(newConfig)
 					idx.stats.needsRestart.Set(true)
 				} else {
-					logging.Infof("Indexer::ConfigUpdate Invalid Storage Mode %v", confStorageMode)
+					logging.Infof("Indexer::updateStorageMode Invalid Storage Mode %v", confStorageMode)
 				}
 			}
 		}
@@ -941,18 +931,27 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 	} else {
 		if confStorageMode != "" && confStorageMode != common.GetStorageMode().String() {
 			if idx.checkAnyValidIndex() {
-				logging.Warnf("Indexer::ConfigUpdate Ignore New Storage Mode %v. Already Set %v. Valid Indexes Found.",
+				logging.Warnf("Indexer::updateStorageMode Ignore New Storage Mode %v. Already Set %v. Valid Indexes Found.",
 					confStorageMode, common.GetStorageMode())
 			} else {
 				if common.SetStorageModeStr(confStorageMode) {
-					logging.Infof("Indexer::ConfigUpdate Storage Mode Set %v", common.GetStorageMode())
+					logging.Infof("Indexer::updateStorageMode Storage Mode Set %v", common.GetStorageMode())
+					initStorageSettings(newConfig)
 					idx.stats.needsRestart.Set(true)
 				} else {
-					logging.Infof("Indexer::ConfigUpdate Invalid Storage Mode %v", confStorageMode)
+					logging.Infof("Indexer::updateStorageMode Invalid Storage Mode %v", confStorageMode)
 				}
 			}
 		}
 	}
+}
+
+func (idx *indexer) handleConfigUpdate(msg Message) {
+
+	cfgUpdate := msg.(*MsgConfigUpdate)
+	newConfig := cfgUpdate.GetConfig()
+
+	idx.updateStorageMode(newConfig)
 
 	if newConfig["settings.memory_quota"].Uint64() !=
 		idx.config["settings.memory_quota"].Uint64() {
@@ -963,22 +962,26 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 
 		if common.GetStorageMode() == common.FORESTDB ||
 			common.GetStorageMode() == common.NOT_SET {
+			logging.Infof("Indexer::handleConfigUpdate restart indexer due to memory_quota")
 			idx.stats.needsRestart.Set(true)
 		}
 	}
 
 	if newConfig["settings.max_array_seckey_size"].Int() !=
 		idx.config["settings.max_array_seckey_size"].Int() {
+		logging.Infof("Indexer::handleConfigUpdate restart indexer due to max_array_seckey_size")
 		idx.stats.needsRestart.Set(true)
 	}
 
 	if newConfig["settings.max_seckey_size"].Int() !=
 		idx.config["settings.max_seckey_size"].Int() {
+		logging.Infof("Indexer::handleConfigUpdate restart indexer due to max_seckey_size")
 		idx.stats.needsRestart.Set(true)
 	}
 
 	if newConfig["settings.allow_large_keys"].Bool() !=
 		idx.config["settings.allow_large_keys"].Bool() {
+		logging.Infof("Indexer::handleConfigUpdate restart indexer due to allow_large_keys")
 		idx.stats.needsRestart.Set(true)
 	}
 
@@ -1004,8 +1007,9 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 	<-idx.statsMgrCmdCh
 	idx.rebalMgrCmdCh <- msg
 	<-idx.rebalMgrCmdCh
+	idx.clustMgrAgentCmdCh <- msg
+	<-idx.clustMgrAgentCmdCh
 	idx.updateSliceWithConfig(newConfig)
-
 }
 
 func (idx *indexer) handleAdminMsgs(msg Message) {
@@ -3245,6 +3249,13 @@ func (idx *indexer) processRollback(streamId common.StreamId,
 	idx.storageMgrCmdCh <- msg
 	res := <-idx.storageMgrCmdCh
 
+	//notify storage rollback done
+	if streamId == common.MAINT_STREAM {
+		msg.rollbackTime = 0
+		idx.scanCoordCmdCh <- msg
+		<-idx.scanCoordCmdCh
+	}
+
 	if res.GetMsgType() != MSG_ERROR {
 		rollbackTs := res.(*MsgRollback).GetRollbackTs()
 		return rollbackTs, nil
@@ -3325,6 +3336,7 @@ func (idx *indexer) checkDuplicateDropRequest(indexInst common.IndexInst,
 
 func (idx *indexer) bootstrap(snapshotNotifych chan IndexSnapshot) error {
 
+	logging.Infof("Indexer::indexer version %v", common.INDEXER_CUR_VERSION)
 	idx.genIndexerId()
 
 	//set topic names based on indexer id
@@ -3547,6 +3559,13 @@ func (idx *indexer) initFromPersistedState() error {
 
 	idx.validateIndexInstMap()
 
+	idx.upgradeStorage()
+
+	// Set the storage mode specific to this indexer node
+	common.SetStorageMode(idx.getLocalStorageMode(idx.config))
+	initStorageSettings(idx.config)
+	logging.Infof("Indexer::local storage mode %v", common.GetStorageMode().String())
+
 	for _, inst := range idx.indexInstMap {
 		if inst.State != common.INDEX_STATE_DELETED {
 			idx.stats.AddIndex(inst.InstId, inst.Defn.Bucket, inst.Defn.Name, inst.ReplicaId)
@@ -3658,6 +3677,96 @@ func (idx *indexer) recoverInstMapFromFile() error {
 		return err
 	}
 	return nil
+}
+
+func (idx *indexer) upgradeStorage() {
+
+	if common.GetBuildMode() != common.ENTERPRISE {
+		return
+	}
+
+	disable := idx.config["settings.storage_mode.disable_upgrade"].Bool()
+	override := idx.getStorageModeOverride()
+	logging.Infof("indexer.upgradeStorage: check index for storage upgrade.   disable %v overrride %v", disable, override)
+
+	//
+	// First try to upgrade/downgrade storage mode of each index, based on index's current storage mode
+	//
+	for instId, index := range idx.indexInstMap {
+
+		if index.State != common.INDEX_STATE_DELETED || index.State != common.INDEX_STATE_ERROR {
+
+			indexStorageMode := common.IndexTypeToStorageMode(index.Defn.Using)
+			targetStorageMode := idx.promoteStorageModeIfNecessaryInternal(indexStorageMode, disable, override)
+
+			if indexStorageMode != targetStorageMode {
+				logging.Warnf("Indexer::upgradeStorage: Index (%v, %v) storage mode %v need upgrade/downgrade. Upgrade/Downgrade index storge mode to %v.",
+					index.Defn.Bucket, index.Defn.Name, indexStorageMode, targetStorageMode)
+
+				idx.upgradeSingleIndex(&index, targetStorageMode)
+				idx.indexInstMap[instId] = index
+			}
+		}
+	}
+
+	// Sanity Check.  Make sure that all indexes have the same storage mode.   Indexes could end up having different storage mode if
+	// 1) When this funtion is run, user changes disable_upgrade.   Indexer then restart/crash.   Some indexes could have changed their storge mode
+	//    while some still haven't.
+	// 2) When indexer restarts, this function will be run again.  But since disable_upgrade, it could leave some indexes in their original storage mode.
+	//
+	// The following logic is to detect if indexes are in mixed storage mode, it will try to force them to converge to a single storage mode.
+	//
+	if idx.getIndexStorageMode() == common.MIXED {
+
+		for instId, index := range idx.indexInstMap {
+
+			if index.State != common.INDEX_STATE_DELETED || index.State != common.INDEX_STATE_ERROR {
+
+				indexStorageMode := common.IndexTypeToStorageMode(index.Defn.Using)
+
+				if disable && indexStorageMode == common.PLASMA {
+					indexStorageMode = common.FORESTDB
+				} else if !disable && indexStorageMode == common.FORESTDB {
+					indexStorageMode = common.PLASMA
+				}
+
+				targetStorageMode := idx.promoteStorageModeIfNecessaryInternal(indexStorageMode, disable, override)
+
+				if indexStorageMode != targetStorageMode {
+					logging.Warnf("Indexer::upgradeStorage: Index (%v, %v) storage mode %v need upgrade/downgrade. Upgrade/Downgrade index storge mode to %v.",
+						index.Defn.Bucket, index.Defn.Name, indexStorageMode, targetStorageMode)
+
+					idx.upgradeSingleIndex(&index, targetStorageMode)
+					idx.indexInstMap[instId] = index
+				}
+			}
+		}
+	}
+}
+
+func (idx *indexer) upgradeSingleIndex(inst *common.IndexInst, storageMode common.StorageMode) {
+
+	logging.Infof("Indexer::upgradeSingleIndex: Upgrade index (%v, %v) to new storage (%v)",
+		inst.Defn.Bucket, inst.Defn.Name, storageMode)
+
+	// update index instance
+	inst.Defn.Using = common.StorageModeToIndexType(storageMode)
+	inst.State = common.INDEX_STATE_CREATED
+	inst.Stream = common.NIL_STREAM
+	inst.Error = ""
+
+	// remove old files
+	storage_dir := idx.config["storage_dir"].String()
+	path := filepath.Join(storage_dir, IndexPath(inst, SliceId(0)))
+	if err := os.RemoveAll(path); err != nil {
+		common.CrashOnError(err)
+	}
+
+	// update metadata
+	msg := &MsgClustMgrResetIndex{
+		defn: inst.Defn,
+	}
+	idx.sendMsgToClusterMgr(msg)
 }
 
 func (idx *indexer) validateIndexInstMap() {
@@ -4967,6 +5076,126 @@ func (idx *indexer) canSetStorageMode(sm string) bool {
 	}
 
 	return true
+}
+
+//
+// This function returns the storage mode of the local node.
+// 1) If the node has indexes, return storage mode of indexes
+// 2) If node does not have indexes, return global storage mode (from ns-server / settings)
+// 3) If indexes have mixed storage modes, then return NOT_SET
+// 4) Storage mode is promoted to plasma if it is forestdb
+//
+func (idx *indexer) getLocalStorageMode(config common.Config) common.StorageMode {
+
+	// Find out the storage mode from indexes
+	storageMode := idx.getIndexStorageMode()
+
+	// If there is no index, then use the global storage mode
+	if storageMode == common.NOT_SET {
+		storageMode = idx.promoteStorageModeIfNecessary(common.GetClusterStorageMode(), config)
+	}
+
+	// If there is mixed storage mode
+	if storageMode == common.MIXED {
+		storageMode = common.NOT_SET
+	}
+
+	if storageMode != common.GetClusterStorageMode() {
+		logging.Warnf("Indexer::getLocalStorageMode(): local storage mode %v is different from cluster storage mode %v",
+			storageMode, common.GetClusterStorageMode())
+	}
+
+	return storageMode
+}
+
+//
+// This function returns the storage mode based on indexes on local node.
+//
+func (idx *indexer) getIndexStorageMode() common.StorageMode {
+
+	storageMode := common.StorageMode(common.NOT_SET)
+	for _, inst := range idx.indexInstMap {
+
+		if inst.State != common.INDEX_STATE_DELETED || inst.State != common.INDEX_STATE_ERROR {
+
+			indexStorageMode := common.IndexTypeToStorageMode(inst.Defn.Using)
+
+			// If index has no storage mode, then this index will be skipped.   If index has no storage
+			// mode, this index will have no storage (nil slice in partnMap).
+			if indexStorageMode == common.NOT_SET {
+				logging.Warnf("Indexer::getIndexStorageMode(): Index '%v' storage mode is set to invalid value %v",
+					inst.Defn.Name, inst.Defn.Using)
+				continue
+			}
+
+			// If it is the first index, the initialize storage mode
+			if storageMode == common.NOT_SET {
+				storageMode = indexStorageMode
+				continue
+			}
+
+			// If index has different storage mode, promote storage mode if necessary.
+			if storageMode != indexStorageMode {
+				return common.MIXED
+			}
+		}
+	}
+
+	return storageMode
+}
+
+func (idx *indexer) promoteStorageModeIfNecessary(mode common.StorageMode, config common.Config) common.StorageMode {
+
+	//
+	// Check for upgrade
+	//
+	disable := config["settings.storage_mode.disable_upgrade"].Bool()
+	if disable {
+		logging.Warnf("Indexer::promoteStorageModeIfNecessary(): storage mode upgrade is disabled.")
+	}
+
+	//
+	// Check for storage mode override
+	//
+	override := idx.getStorageModeOverride()
+
+	return idx.promoteStorageModeIfNecessaryInternal(mode, disable, override)
+}
+
+func (idx *indexer) promoteStorageModeIfNecessaryInternal(mode common.StorageMode, disable bool, override common.StorageMode) common.StorageMode {
+
+	if common.GetBuildMode() != common.ENTERPRISE {
+		return mode
+	}
+
+	if !disable && mode == common.FORESTDB {
+		mode = common.PLASMA
+	}
+
+	if override != common.NOT_SET {
+		logging.Warnf("Indexer::promoteStorageModeIfNecessary(): override storage mode %v.", override)
+		mode = override
+	}
+
+	return mode
+}
+
+func (idx *indexer) getStorageModeOverride() common.StorageMode {
+
+	idx.clustMgrAgentCmdCh <- &MsgClustMgrLocal{
+		mType: CLUST_MGR_GET_LOCAL,
+		key:   "StorageModeOverride",
+	}
+
+	respMsg := <-idx.clustMgrAgentCmdCh
+	resp := respMsg.(*MsgClustMgrLocal)
+
+	if resp.GetError() == nil && common.IsValidIndexType(resp.GetValue()) {
+		logging.Infof("Indexer::getStorageModeOverride(): override storage mode %v.", resp.GetValue())
+		return common.IndexTypeToStorageMode(common.IndexType(resp.GetValue()))
+	}
+
+	return common.NOT_SET
 }
 
 func (idx *indexer) getInstIdFromDefnId(defnId common.IndexDefnId) common.IndexInstId {

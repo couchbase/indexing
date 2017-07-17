@@ -1,5 +1,7 @@
 #!/bin/bash
 
+source ~/.cienv
+
 echo '</pre><h3>Testing</h3><pre>'
 
 if [ "$WORKSPACE" = "" ]; then
@@ -8,7 +10,7 @@ if [ "$WORKSPACE" = "" ]; then
 fi
 
 if [ "$INSTALL_PATH" = "" ]; then
-  INSTALL_PATH="/opt/couchbase"
+  INSTALL_PATH="$WORKSPACE/../couchbase"
 fi
 
 
@@ -221,11 +223,17 @@ git rev-parse HEAD > ~/couchdb.good
 cd $WORKSPACE/couchstore
 git rev-parse HEAD > ~/couchstore.good
 if [ "$STORAGE" = "plasma" ]; then
+  cd $WORKSPACE/goproj/src/github.com/couchbase/plasma
+  git rev-parse HEAD > ~/plasma.good
+fi
+if [ "$STORAGE" = "memdb" ]; then
   cd $WORKSPACE/goproj/src/github.com/couchbase/nitro
   git rev-parse HEAD > ~/nitro.good
 fi
-cd $WORKSPACE/forestdb
-git rev-parse HEAD > ~/forestdb.good
+if [ "$STORAGE" = "fdb" ]; then
+  cd $WORKSPACE/forestdb
+  git rev-parse HEAD > ~/forestdb.good
+fi
 cd $WORKSPACE/testrunner
 git rev-parse HEAD > ~/testrunner.good
 cd $WORKSPACE/kv_engine

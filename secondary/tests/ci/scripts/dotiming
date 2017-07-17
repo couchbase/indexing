@@ -1,5 +1,7 @@
 #!/bin/bash
 
+source ~/.cienv
+
 if [ "$STORAGE" = "" ]; then
   echo 'STORAGE not set'
   exit 2

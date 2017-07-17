@@ -454,8 +454,7 @@ func (b *metadataClient) equivalentIndex(
 	index1, index2 *mclient.IndexMetadata) bool {
 
 	d1, d2 := index1.Definition, index2.Definition
-	if d1.Using != d1.Using ||
-		d1.Bucket != d2.Bucket ||
+	if d1.Bucket != d2.Bucket ||
 		d1.IsPrimary != d2.IsPrimary ||
 		d1.ExprType != d2.ExprType ||
 		d1.PartitionScheme != d2.PartitionScheme ||

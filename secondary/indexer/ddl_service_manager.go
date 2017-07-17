@@ -23,6 +23,8 @@ import (
 	"github.com/couchbase/indexing/secondary/manager"
 	"github.com/couchbase/indexing/secondary/manager/client"
 	//"github.com/couchbase/indexing/secondary/planner"
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -50,6 +52,7 @@ type DDLServiceMgr struct {
 	clusterAddr string
 	settings    *ddlSettings
 	nodes       map[service.NodeID]bool
+	donech      chan bool
 }
 
 //
@@ -92,6 +95,7 @@ func NewDDLServiceMgr(supvCmdch MsgChannel, supvMsgch MsgChannel, config common.
 		clusterAddr: addr,
 		nodeID:      nodeId,
 		settings:    settings,
+		donech:      nil,
 	}
 
 	mgr.config.Store(config)
@@ -148,13 +152,15 @@ func (m *DDLServiceMgr) rebalanceDone(change *service.TopologyChange, isCancel b
 	}()
 
 	// Refresh metadata provider on topology change
-	if err := m.refreshOnTopologyChange(change, isCancel); err != nil {
+	httpAddrMap, err := m.refreshOnTopologyChange(change, isCancel)
+	if err != nil {
 		logging.Warnf("DDLServiceMgr: Fail to clean delete index token upon rebalancing.  Skip Cleanup. Internal Error = %v", err)
 		return
 	}
 
 	m.handleDropCommand()
 	m.handleBuildCommand()
+	m.handleClusterStorageMode(httpAddrMap)
 }
 
 //
@@ -317,6 +323,126 @@ func (m *DDLServiceMgr) handleListMetadataTokens(w http.ResponseWriter, r *http.
 	}
 }
 
+//
+// Update clsuter storage mode if necessary
+//
+func (m *DDLServiceMgr) handleClusterStorageMode(httpAddrMap map[string]string) {
+
+	if m.donech != nil {
+		close(m.donech)
+		m.donech = nil
+	}
+
+	m.provider.RefreshIndexerVersion()
+	if m.provider.GetIndexerVersion() != common.INDEXER_CUR_VERSION {
+		return
+	}
+
+	storageMode := common.StorageMode(common.NOT_SET)
+	initialized := false
+
+	indexes, _ := m.provider.ListIndex()
+	for _, index := range indexes {
+
+		for _, inst := range index.Instances {
+
+			// Any plasma index should have storage mode in index instance.
+			// So skip any index that does not have storage mode (either not
+			// upgraded yet or no need to upgrade).
+			if len(inst.StorageMode) == 0 {
+				return
+			}
+
+			// If this is not a valid index type, then return.
+			if !common.IsValidIndexType(inst.StorageMode) {
+				logging.Errorf("DDLServiceMgr: unable to change storage mode to %v after rebalance.  Invalid storage type for index %v (%v, %v)",
+					inst.StorageMode, index.Definition.Name, index.Definition.Bucket)
+				return
+			}
+
+			indexStorageMode := common.IndexTypeToStorageMode(common.IndexType(inst.StorageMode))
+
+			if !initialized {
+				storageMode = indexStorageMode
+				initialized = true
+				continue
+			}
+
+			// storage mode has not yet converged
+			if indexStorageMode != storageMode {
+				return
+			}
+		}
+	}
+
+	// if storage mode for all indexes converge, then change storage mode setting
+	clusterStorageMode := common.GetClusterStorageMode()
+	if storageMode != common.StorageMode(common.NOT_SET) && storageMode != clusterStorageMode {
+		if !m.updateStorageMode(storageMode, httpAddrMap) {
+			m.donech = make(chan bool)
+			go m.retryUpdateStorageMode(storageMode, httpAddrMap, m.donech)
+		}
+	}
+}
+
+func (m *DDLServiceMgr) retryUpdateStorageMode(storageMode common.StorageMode, httpAddrMap map[string]string, donech chan bool) {
+
+	for true {
+		select {
+		case <-donech:
+			return
+		default:
+			time.Sleep(time.Minute)
+			if m.updateStorageMode(storageMode, httpAddrMap) {
+				return
+			}
+		}
+	}
+}
+
+func (m *DDLServiceMgr) updateStorageMode(storageMode common.StorageMode, httpAddrMap map[string]string) bool {
+
+	clusterStorageMode := common.GetClusterStorageMode()
+	if storageMode == clusterStorageMode {
+		logging.Infof("DDLServiceMgr: All indexes have converged to cluster storage mode %v after rebalance.", storageMode)
+		return true
+	}
+
+	settings := make(map[string]string)
+	settings["indexer.settings.storage_mode"] = string(common.StorageModeToIndexType(storageMode))
+
+	body, err := json.Marshal(&settings)
+	if err != nil {
+		logging.Errorf("DDLServiceMgr: unable to change storage mode to %v after rebalance.  Error:%v", storageMode, err)
+		return false
+	}
+	bodybuf := bytes.NewBuffer(body)
+
+	for _, addr := range httpAddrMap {
+
+		resp, err := postWithAuth(addr+"/settings", "application/json", bodybuf)
+		if err != nil {
+			logging.Errorf("DDLServiceMgr:handleClusterStorageMode(). Encounter error when try to change setting.  Retry with another indexer node. Error:%v", err)
+			continue
+		}
+
+		if resp != nil && resp.StatusCode != 200 {
+			logging.Errorf("DDLServiceMgr:handleClusterStorageMode(). HTTP status (%v) when try to change setting.  Retry with another indexer node.", resp.Status)
+			continue
+		}
+
+		if resp != nil && resp.Body != nil {
+			resp.Body.Close()
+		}
+
+		logging.Infof("DDLServiceMgr: cluster storage mode changed to %v after rebalance.", storageMode)
+		return true
+	}
+
+	logging.Errorf("DDLServiceMgr: unable to change storage mode to %v after rebalance.", storageMode)
+	return false
+}
+
 func (m *DDLServiceMgr) validateAuth(w http.ResponseWriter, r *http.Request) bool {
 	_, valid, err := common.IsAuthValid(r)
 	if err != nil {
@@ -333,7 +459,7 @@ func (m *DDLServiceMgr) validateAuth(w http.ResponseWriter, r *http.Request) boo
 // Metadata Provider
 //////////////////////////////////////////////////////////////
 
-func (m *DDLServiceMgr) refreshMetadataProvider() error {
+func (m *DDLServiceMgr) refreshMetadataProvider() (map[string]string, error) {
 
 	if m.provider != nil {
 		m.provider.Close()
@@ -345,33 +471,34 @@ func (m *DDLServiceMgr) refreshMetadataProvider() error {
 		nodes[key] = value
 	}
 
-	provider, err := m.newMetadataProvider(nodes)
+	provider, httpAddrMap, err := m.newMetadataProvider(nodes)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	m.provider = provider
-	return nil
+	return httpAddrMap, nil
 }
 
-func (m *DDLServiceMgr) newMetadataProvider(nodes map[service.NodeID]bool) (*client.MetadataProvider, error) {
+func (m *DDLServiceMgr) newMetadataProvider(nodes map[service.NodeID]bool) (*client.MetadataProvider, map[string]string, error) {
 
 	// initialize ClusterInfoCache
 	url, err := common.ClusterAuthUrl(m.clusterAddr)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	cinfo, err := common.NewClusterInfoCache(url, DEFAULT_POOL)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	if err := cinfo.Fetch(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	adminAddrMap := make(map[string]string)
+	httpAddrMap := make(map[string]string)
 
 	// Discover indexer service from ClusterInfoCache
 	nids := cinfo.GetNodesByServiceType(common.INDEX_HTTP_SERVICE)
@@ -392,10 +519,11 @@ func (m *DDLServiceMgr) newMetadataProvider(nodes map[service.NodeID]bool) (*cli
 
 			// Only consider valid nodes
 			if nodes != nil && nodes[service.NodeID(localMeta.NodeUUID)] {
+				httpAddrMap[localMeta.NodeUUID] = addr
 
 				adminAddr, err := cinfo.GetServiceAddress(nid, common.INDEX_ADMIN_SERVICE)
 				if err != nil {
-					return nil, err
+					return nil, nil, err
 				}
 
 				adminAddrMap[localMeta.NodeUUID] = adminAddr
@@ -405,14 +533,14 @@ func (m *DDLServiceMgr) newMetadataProvider(nodes map[service.NodeID]bool) (*cli
 	}
 
 	if len(nodes) != 0 {
-		return nil, errors.New(
+		return nil, nil, errors.New(
 			fmt.Sprintf("DDLServiceMgr: Fail to initialize metadata provider.  Unknown host=%v", nodes))
 	}
 
 	// initialize a new MetadataProvider
 	ustr, err := common.NewUUID()
 	if err != nil {
-		return nil, errors.New(fmt.Sprintf("DDLServiceMgr: Fail to initialize metadata provider.  Internal Error = %v", err))
+		return nil, nil, errors.New(fmt.Sprintf("DDLServiceMgr: Fail to initialize metadata provider.  Internal Error = %v", err))
 	}
 	providerId := ustr.Str()
 
@@ -421,7 +549,7 @@ func (m *DDLServiceMgr) newMetadataProvider(nodes map[service.NodeID]bool) (*cli
 		if provider != nil {
 			provider.Close()
 		}
-		return nil, err
+		return nil, nil, err
 	}
 
 	// Watch Metadata
@@ -442,7 +570,7 @@ func (m *DDLServiceMgr) newMetadataProvider(nodes map[service.NodeID]bool) (*cli
 		for range ticker.C {
 			retry = retry - 1
 			if provider.AllWatchersAlive() {
-				return provider, nil
+				return provider, httpAddrMap, nil
 			}
 
 			if retry == 0 {
@@ -453,12 +581,12 @@ func (m *DDLServiceMgr) newMetadataProvider(nodes map[service.NodeID]bool) (*cli
 				}
 
 				provider.Close()
-				return nil, errors.New("DDLServiceMgr: Fail to initialize metadata provider.  Unable to connect to all indexer nodes within 500ms.")
+				return nil, nil, errors.New("DDLServiceMgr: Fail to initialize metadata provider.  Unable to connect to all indexer nodes within 500ms.")
 			}
 		}
 	}
 
-	return provider, nil
+	return provider, httpAddrMap, nil
 }
 
 //////////////////////////////////////////////////////////////
@@ -468,7 +596,7 @@ func (m *DDLServiceMgr) newMetadataProvider(nodes map[service.NodeID]bool) (*cli
 //
 // Callback to notify there is a topology change
 //
-func (m *DDLServiceMgr) refreshOnTopologyChange(change *service.TopologyChange, isCancel bool) error {
+func (m *DDLServiceMgr) refreshOnTopologyChange(change *service.TopologyChange, isCancel bool) (map[string]string, error) {
 
 	logging.Infof("DDLServiceMgr.refreshOnTopologyChange()")
 
@@ -485,12 +613,13 @@ func (m *DDLServiceMgr) refreshOnTopologyChange(change *service.TopologyChange, 
 
 	// If fail to intiialize metadata provider, then just continue.  It will try
 	// to repair metadata provider upon the first DDL comes.
-	if err := m.refreshMetadataProvider(); err != nil {
+	httpAddrMap, err := m.refreshMetadataProvider()
+	if err != nil {
 		logging.Errorf("DDLServiceMgr: notifyNewTopologyChange(): Fail to initialize metadata provider.  Error=%v.", err)
-		return err
+		return nil, err
 	}
 
-	return nil
+	return httpAddrMap, nil
 }
 
 //////////////////////////////////////////////////////////////

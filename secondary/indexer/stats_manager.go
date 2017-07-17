@@ -135,10 +135,12 @@ type IndexStats struct {
 	clientCancelError     stats.Int64Val
 	avgScanRate           stats.Int64Val
 	avgMutationRate       stats.Int64Val
+	avgDrainRate          stats.Int64Val
 	lastScanGatherTime    stats.Int64Val
 	lastNumRowsReturned   stats.Int64Val
 	lastMutateGatherTime  stats.Int64Val
 	lastNumDocsIndexed    stats.Int64Val
+	lastNumItemsFlushed   stats.Int64Val
 	lastRollbackTime      stats.TimeVal
 	progressStatTime      stats.TimeVal
 	residentPercent       stats.Int64Val
@@ -201,10 +203,12 @@ func (s *IndexStats) Init() {
 	s.clientCancelError.Init()
 	s.avgScanRate.Init()
 	s.avgMutationRate.Init()
+	s.avgDrainRate.Init()
 	s.lastScanGatherTime.Init()
 	s.lastNumRowsReturned.Init()
 	s.lastMutateGatherTime.Init()
 	s.lastNumDocsIndexed.Init()
+	s.lastNumItemsFlushed.Init()
 	s.lastRollbackTime.Init()
 	s.progressStatTime.Init()
 	s.residentPercent.Init()
@@ -301,7 +305,7 @@ func (is IndexerStats) GetStats() common.Statistics {
 	storageMode := fmt.Sprintf("%s", common.GetStorageMode())
 	addStat("storage_mode", storageMode)
 	addStat("num_cpu_core", num_cpu_core)
-	addStat("cpu_utilization", getCpuPercentAverage())
+	addStat("cpu_utilization", getCpuPercent())
 
 	indexerState := common.IndexerState(is.indexerState.Value())
 	if indexerState == common.INDEXER_PREPARE_UNPAUSE {
@@ -374,6 +378,7 @@ func (is IndexerStats) GetStats() common.Statistics {
 		addStat("client_cancel_errcount", s.clientCancelError.Value())
 		addStat("avg_scan_rate", s.avgScanRate.Value())
 		addStat("avg_mutation_rate", s.avgMutationRate.Value())
+		addStat("avg_drain_rate", s.avgDrainRate.Value())
 		addStat("last_rollback_time", s.lastRollbackTime.Value())
 		addStat("progress_stat_time", s.progressStatTime.Value())
 		addStat("resident_percent", s.residentPercent.Value())

@@ -67,6 +67,9 @@ func init() {
 	err = secondaryindex.ChangeIndexerSettings("indexer.settings.log_level", indexerLogLevel, clusterconfig.Username, clusterconfig.Password, kvaddress)
 	tc.HandleError(err, "Error in ChangeIndexerSettings")
 
+	err = secondaryindex.ChangeIndexerSettings("indexer.settings.storage_mode.disable_upgrade", true, clusterconfig.Username, clusterconfig.Password, kvaddress)
+	tc.HandleError(err, "Error in change setting for indexer.settings.storage_mode.disable_upgrade")
+
 	if clusterconfig.IndexUsing != "" {
 		// Set clusterconfig.IndexUsing only if it is specified in config file. Else let it default to gsi
 		log.Printf("Using %v for creating indexes", clusterconfig.IndexUsing)

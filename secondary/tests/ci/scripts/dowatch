@@ -1,5 +1,7 @@
 #!/bin/bash
 
+source ~/.cienv
+
 if [ "$WORKSPACE" = "" ]; then
   echo 'WORKSPACE not set'
   exit 2

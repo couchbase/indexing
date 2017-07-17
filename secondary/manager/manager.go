@@ -480,6 +480,17 @@ func (m *IndexManager) UpdateIndexInstanceSync(bucket string, defnId common.Inde
 	return m.requestServer.MakeRequest(client.OPCODE_UPDATE_INDEX_INST, fmt.Sprintf("%v", defnId), buf)
 }
 
+func (m *IndexManager) ResetIndex(index common.IndexDefn) error {
+
+	content, err := common.MarshallIndexDefn(&index)
+	if err != nil {
+		return err
+	}
+
+	logging.Debugf("IndexManager.ResetIndex(): making request for Index reset")
+	return m.requestServer.MakeRequest(client.OPCODE_RESET_INDEX, fmt.Sprintf("%v", index.DefnId), content)
+}
+
 func (m *IndexManager) DeleteIndexForBucket(bucket string, streamId common.StreamId) error {
 
 	logging.Debugf("IndexManager.DeleteIndexForBucket(): making request for deleting index for bucket")
@@ -508,6 +519,18 @@ func (m *IndexManager) NotifyStats(stats common.Statistics) error {
 	}
 
 	return m.requestServer.MakeAsyncRequest(client.OPCODE_BROADCAST_STATS, "", buf)
+}
+
+func (m *IndexManager) NotifyConfigUpdate(config common.Config) error {
+
+	logging.Debugf("IndexManager.NotifyConfigUpdate(): making request for new config update")
+
+	buf, e := json.Marshal(&config)
+	if e != nil {
+		return e
+	}
+
+	return m.requestServer.MakeAsyncRequest(client.OPCODE_CONFIG_UPDATE, "", buf)
 }
 
 //

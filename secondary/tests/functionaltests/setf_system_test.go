@@ -133,13 +133,13 @@ func TestMultipleBucketsDeferredBuild(t *testing.T) {
 
 	err = secondaryindex.BuildIndexesAsync([]uint64{defn1}, indexManagementAddress, defaultIndexActiveTimeout)
 	FailTestIfError(err, "Error from BuildIndexesAsync of index1", t)
-	time.Sleep(1 * time.Second)
+	//time.Sleep(1 * time.Second)
 
 	err = secondaryindex.BuildIndexesAsync([]uint64{defn2, defn3}, indexManagementAddress, defaultIndexActiveTimeout)
-	FailTestIfNoError(err, "Error from BuildIndexesAsync", t)
-	if err != nil {
-		log.Printf("Build index failed as expected for %v and %v.  Error = %v", defn2, defn3, err.Error())
-	}
+	//FailTestIfNoError(err, "Error from BuildIndexesAsync", t)
+	//if err != nil {
+	//	log.Printf("Build index failed as expected for %v and %v.  Error = %v", defn2, defn3, err.Error())
+	//}
 
 	state, e := client.IndexState(defn3)
 	log.Printf("Index state of %v is %v", defn3, state)

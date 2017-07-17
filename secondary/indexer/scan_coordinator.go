@@ -103,6 +103,8 @@ type ScanRequest struct {
 	indexKeyBuffer  []byte
 	sharedBuffer    *[]byte
 	sharedBufferLen int
+
+	hasRollback *atomic.Value
 }
 
 type Projection struct {
@@ -370,6 +372,8 @@ type scanCoordinator struct {
 	lastSnapshot     map[common.IndexInstId]IndexSnapshot
 	rollbackTimes    unsafe.Pointer
 
+	rollbackInProgress unsafe.Pointer
+
 	serv      *queryport.Server
 	logPrefix string
 
@@ -412,6 +416,7 @@ func NewScanCoordinator(supvCmdch MsgChannel, supvMsgch MsgChannel,
 	}
 
 	s.config.Store(config)
+	s.initRollbackInProgress()
 
 	addr := net.JoinHostPort("", config["scanPort"].String())
 	queryportCfg := config.SectionConfig("queryport.", true)
@@ -1157,14 +1162,10 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 				localErr = common.ErrIndexNotReady
 			}
 			r.Stats = stats.indexes[r.IndexInstId]
+			rbMap := *s.getRollbackInProgress()
+			r.hasRollback = rbMap[indexInst.Defn.Bucket]
 		}
 	}
-
-	defer func() {
-		if r.Ctx != nil {
-			r.Ctx.Init()
-		}
-	}()
 
 	switch req := protoReq.(type) {
 	case *protobuf.HeloRequest:
@@ -1308,7 +1309,6 @@ func validateIndexProjection(projection *protobuf.IndexProjection, cklen int) (*
 // will block wait.
 // This mechanism can be used to implement RYOW.
 func (s *scanCoordinator) getRequestedIndexSnapshot(r *ScanRequest) (snap IndexSnapshot, err error) {
-
 	snapshot, err := func() (IndexSnapshot, error) {
 		s.mu.RLock()
 		defer s.mu.RUnlock()
@@ -1450,12 +1450,6 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, conn net.Conn,
 	ttime := time.Now()
 
 	req, err := s.newRequest(protoReq, cancelCh)
-	defer func() {
-		if req.Ctx != nil {
-			req.Ctx.Done()
-		}
-	}()
-
 	atime := time.Now()
 	w := NewProtoWriter(req.ScanType, conn)
 	defer func() {
@@ -1514,7 +1508,16 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, conn net.Conn,
 		}
 	}()
 
+	if req.Ctx != nil {
+		req.Ctx.Init()
+	}
+
 	s.processRequest(req, w, is, t0)
+
+	if req.Ctx != nil {
+		req.Ctx.Done()
+	}
+
 }
 
 func (s *scanCoordinator) processRequest(req *ScanRequest, w ScanResponseWriter,
@@ -1788,6 +1791,46 @@ func (s *scanCoordinator) initRollbackTimes(rollbackTimes map[string]int64) {
 	atomic.StorePointer(&s.rollbackTimes, unsafe.Pointer(&newTimes))
 }
 
+func (s *scanCoordinator) initRollbackInProgress() {
+
+	rollbackInProgress := make(map[string]*bool)
+	atomic.StorePointer(&s.rollbackInProgress, unsafe.Pointer(&rollbackInProgress))
+}
+
+func (s *scanCoordinator) setRollbackInProgress(bucket string, rollback bool) {
+
+	logging.Infof("ScanCoordinator::setRollbackInProgress bucket %v rollback %v", bucket, rollback)
+	newRollbackInProgress := s.cloneRollbackInProgress()
+	rbMap := *s.getRollbackInProgress()
+	if v, ok := rbMap[bucket]; ok {
+		v.Store(rollback)
+	} else {
+		var v atomic.Value
+		v.Store(rollback)
+		newRollbackInProgress[bucket] = &v
+		atomic.StorePointer(&s.rollbackInProgress, unsafe.Pointer(&newRollbackInProgress))
+	}
+}
+
+func (s *scanCoordinator) getRollbackInProgress() *map[string]*atomic.Value {
+
+	return (*map[string]*atomic.Value)(atomic.LoadPointer(&s.rollbackInProgress))
+
+}
+
+func (s *scanCoordinator) cloneRollbackInProgress() map[string]*atomic.Value {
+
+	newRollbackInProgress := make(map[string]*atomic.Value)
+	oldRollbackInProgress := s.getRollbackInProgress()
+	if oldRollbackInProgress != nil {
+		for bucket, rollbackInProgress := range *oldRollbackInProgress {
+			newRollbackInProgress[bucket] = rollbackInProgress
+		}
+	}
+
+	return newRollbackInProgress
+}
+
 func (s *scanCoordinator) handleIndexerResume(cmd Message) {
 
 	msg := cmd.(*MsgIndexerState)
@@ -1810,7 +1853,13 @@ func (s *scanCoordinator) handleIndexerBootstrap(cmd Message) {
 func (s *scanCoordinator) handleIndexerRollback(cmd Message) {
 
 	msg := cmd.(*MsgRollback)
-	s.saveRollbackTime(msg.bucket, msg.rollbackTime)
+
+	if msg.rollbackTime != 0 {
+		s.saveRollbackTime(msg.bucket, msg.rollbackTime)
+		s.setRollbackInProgress(msg.bucket, true)
+	} else {
+		s.setRollbackInProgress(msg.bucket, false)
+	}
 
 	s.supvCmdch <- &MsgSuccess{}
 }

@@ -123,6 +123,9 @@ func (c *clustMgrAgent) handleSupvervisorCommands(cmd Message) {
 	case CLUST_MGR_UPDATE_TOPOLOGY_FOR_INDEX:
 		c.handleUpdateTopologyForIndex(cmd)
 
+	case CLUST_MGR_RESET_INDEX:
+		c.handleResetIndex(cmd)
+
 	case CLUST_MGR_GET_GLOBAL_TOPOLOGY:
 		c.handleGetGlobalTopology(cmd)
 
@@ -146,6 +149,9 @@ func (c *clustMgrAgent) handleSupvervisorCommands(cmd Message) {
 
 	case INDEX_STATS_DONE:
 		c.handleStats(cmd)
+
+	case CONFIG_SETTINGS_UPDATE:
+		c.handleConfigUpdate(cmd)
 
 	default:
 		logging.Errorf("ClusterMgrAgent::handleSupvervisorCommands Unknown Message %v", cmd)
@@ -202,6 +208,19 @@ func (c *clustMgrAgent) handleUpdateTopologyForIndex(cmd Message) {
 
 }
 
+func (c *clustMgrAgent) handleResetIndex(cmd Message) {
+
+	logging.Infof("ClustMgr:handleResetIndex %v", cmd)
+
+	index := cmd.(*MsgClustMgrResetIndex).GetIndex()
+
+	if err := c.mgr.ResetIndex(index); err != nil {
+		common.CrashOnError(err)
+	}
+
+	c.supvCmdch <- &MsgSuccess{}
+}
+
 func (c *clustMgrAgent) handleIndexMap(cmd Message) {
 
 	logging.Infof("ClustMgr:handleIndexMap %v", cmd)
@@ -229,6 +248,16 @@ func (c *clustMgrAgent) handleStatsInternal() {
 	if stats != nil {
 		c.mgr.NotifyStats(stats.GetStats())
 	}
+}
+
+func (c *clustMgrAgent) handleConfigUpdate(cmd Message) {
+
+	logging.Infof("ClustMgr:handleConfigUpdate")
+	c.supvCmdch <- &MsgSuccess{}
+
+	cfgUpdate := cmd.(*MsgConfigUpdate)
+	config := cfgUpdate.GetConfig()
+	c.mgr.NotifyConfigUpdate(config)
 }
 
 func (c *clustMgrAgent) handleGetGlobalTopology(cmd Message) {
@@ -273,13 +302,15 @@ func (c *clustMgrAgent) handleGetGlobalTopology(cmd Message) {
 		}
 
 		idxInst := common.IndexInst{InstId: common.IndexInstId(inst.InstId),
-			Defn:      idxDefn,
-			State:     common.IndexState(inst.State),
-			Stream:    common.StreamId(inst.StreamId),
-			ReplicaId: int(inst.ReplicaId),
-			Version:   int(inst.Version),
-			RState:    common.RebalanceState(inst.RState),
-			Scheduled: inst.Scheduled,
+			Defn:           idxDefn,
+			State:          common.IndexState(inst.State),
+			Stream:         common.StreamId(inst.StreamId),
+			ReplicaId:      int(inst.ReplicaId),
+			Version:        int(inst.Version),
+			RState:         common.RebalanceState(inst.RState),
+			Scheduled:      inst.Scheduled,
+			StorageMode:    inst.StorageMode,
+			OldStorageMode: inst.OldStorageMode,
 		}
 
 		indexInstMap[idxInst.InstId] = idxInst

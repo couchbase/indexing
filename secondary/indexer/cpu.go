@@ -12,7 +12,7 @@ import (
 // Global Variable
 //////////////////////////////////////////////////////////////
 
-var cpuPercentAvg uint64
+var cpuPercent uint64
 
 //////////////////////////////////////////////////////////////
 // Concrete Type/Struct
@@ -60,13 +60,14 @@ func (c *cpuCollector) runCollectCpu() {
 	defer ticker.Stop()
 
 	for range ticker.C {
-		percent, err := c.stats.ProcessCpuPercent()
+		pid, percent, err := c.stats.ProcessCpuPercent()
 		if err != nil {
-			logging.Debugf("Fail to get CPU. Err=%v", err)
+			logging.Debugf("Fail to get cpu percentage. Err=%v", err)
 			continue
 		}
+		logging.Infof("cpuCollector: cpu percent %v for pid %v", percent, pid)
 
-		updateCpuPercentAverage(percent)
+		updateCpuPercent(percent)
 	}
 }
 
@@ -74,14 +75,13 @@ func (c *cpuCollector) runCollectCpu() {
 // Global Function
 //////////////////////////////////////////////////////////////
 
-func updateCpuPercentAverage(percent float64) {
+func updateCpuPercent(percent float64) {
 
-	newAvg := (getCpuPercentAverage() + percent) / 2
-	atomic.StoreUint64(&cpuPercentAvg, math.Float64bits(newAvg))
+	atomic.StoreUint64(&cpuPercent, math.Float64bits(percent))
 }
 
-func getCpuPercentAverage() float64 {
+func getCpuPercent() float64 {
 
-	bits := atomic.LoadUint64(&cpuPercentAvg)
+	bits := atomic.LoadUint64(&cpuPercent)
 	return math.Float64frombits(bits)
 }

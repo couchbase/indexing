@@ -558,7 +558,6 @@ func (m *ServiceMgr) startFailover(change service.TopologyChange) error {
 	m.rebalanceCtx = ctx
 	m.updateRebalanceProgressLOCKED(0)
 
-	//TODO Directly call rebalanceDone?
 	m.rebalancer = NewRebalancer(nil, nil, string(m.nodeInfo.NodeID), true,
 		m.rebalanceProgressCallback, m.rebalanceDoneCallback, m.supvMsgch, "", m.config.Load())
 
@@ -1434,6 +1433,9 @@ func (m *ServiceMgr) rebalanceDoneCallback(err error, cancel <-chan struct{}) {
 }
 
 func (m *ServiceMgr) onRebalanceDoneLOCKED(err error) {
+
+	l.Infof("ServiceMgr::onRebalanceDoneLOCKED Rebalance Done %v", err)
+
 	if m.rebalancer != nil {
 		newTask := (*service.Task)(nil)
 		if err != nil {
