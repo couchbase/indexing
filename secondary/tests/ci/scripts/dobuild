@@ -54,7 +54,7 @@ cd ~/.reference
 repo sync --jobs=32 1>>$WORKSPACE/make.log 2>&1
 
 echo "Basing run on $RELEASE-$BLD_NUM <a href=https://github.com/couchbase/build-team-manifests/blob/$SHA/$MANIFEST>$SHA</a>"
-rm -rf $WORKSPACE 1>>$WORKSPACE/make.log 2>&1
+find $WORKSPACE -mindepth 1 -not -name '*.log' -exec rm -rf {} + 1>>$WORKSPACE/make.log 2>&1
 mkdir -p $WORKSPACE 1>>$WORKSPACE/make.log 2>&1
 cd $WORKSPACE
 repo init -u ~/.manifests -b thisrun -m $MANIFEST -g all --reference=~/.reference 1>>$WORKSPACE/make.log 2>&1
