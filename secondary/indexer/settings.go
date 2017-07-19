@@ -69,7 +69,7 @@ func NewSettingsManager(supvCmdch MsgChannel,
 	http.HandleFunc("/triggerCompaction", s.handleCompactionTrigger)
 	http.HandleFunc("/settings/runtime/freeMemory", s.handleFreeMemoryReq)
 	http.HandleFunc("/settings/runtime/forceGC", s.handleForceGCReq)
-	http.HandleFunc("/plasmaDiag", plasma.Diag.HandleHttp)
+	http.HandleFunc("/plasmaDiag", s.handlePlasmaDiag)
 
 	go func() {
 		fn := func(r int, err error) error {
@@ -206,6 +206,19 @@ func (s *settingsManager) handleCompactionTrigger(w http.ResponseWriter, r *http
 	}
 
 	s.writeOk(w)
+}
+
+func (s *settingsManager) handlePlasmaDiag(w http.ResponseWriter, r *http.Request) {
+	creds, ok := s.validateAuth(w, r)
+	if !ok {
+		return
+	}
+
+	if !common.IsAllowed(creds, []string{"cluster.settings!write"}, w) {
+		return
+	}
+
+	plasma.Diag.HandleHttp(w, r)
 }
 
 func (s *settingsManager) run() {

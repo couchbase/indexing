@@ -112,6 +112,7 @@ func getIndexLayout(clusterUrl string) ([]*IndexerNode, error) {
 	nids := cinfo.GetNodesByServiceType(common.INDEX_HTTP_SERVICE)
 
 	list := make([]*IndexerNode, 0)
+	numIndexes := 0
 
 	for _, nid := range nids {
 
@@ -145,12 +146,6 @@ func getIndexLayout(clusterUrl string) ([]*IndexerNode, error) {
 		node.IndexerId = localMeta.IndexerId
 		node.StorageMode = localMeta.StorageMode
 
-		if !common.IsValidIndexType(node.StorageMode) {
-			err := errors.New(fmt.Sprintf("Fail to get storage mode	from %v. Storage mode = %v", addr, node.StorageMode))
-			logging.Errorf("Planner::getIndexLayout: Error = %v", err)
-			return nil, err
-		}
-
 		// convert from LocalIndexMetadata to IndexUsage
 		indexes, err := ConvertToIndexUsages(localMeta, node)
 		if err != nil {
@@ -159,7 +154,18 @@ func getIndexLayout(clusterUrl string) ([]*IndexerNode, error) {
 		}
 
 		node.Indexes = indexes
+		numIndexes += len(indexes)
 		list = append(list, node)
+	}
+
+	if numIndexes != 0 {
+		for _, node := range list {
+			if !common.IsValidIndexType(node.StorageMode) {
+				err := errors.New(fmt.Sprintf("Fail to get storage mode	from %v. Storage mode = %v", node.RestUrl, node.StorageMode))
+				logging.Errorf("Planner::getIndexLayout: Error = %v", err)
+				return nil, err
+			}
+		}
 	}
 
 	return list, nil

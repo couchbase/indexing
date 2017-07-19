@@ -100,6 +100,7 @@ type PlacementMethod interface {
 	AddOptionalIndexes([]*IndexUsage)
 	RemoveOptionalIndexes()
 	HasOptionalIndexes() bool
+	RemoveEligibleIndex([]*IndexUsage)
 }
 
 type ConstraintMethod interface {
@@ -378,6 +379,7 @@ func (p *SAPlanner) planSingleRun(command CommandType, solution *Solution) (*Sol
 	initialPlan := solution.initialPlan
 
 	if err := p.Validate(current); err != nil {
+		current.PrintLayout()
 		return nil, errors.New(fmt.Sprintf("Validation fails: %s", err))
 	}
 
@@ -646,10 +648,12 @@ func (p *SAPlanner) adjustInitialSolutionIfNecessary(s *Solution) *Solution {
 	p.addReplicaIfNecessary(cloned)
 	p.suppressEqivIndexIfNecessary(cloned)
 
-	if p.Validate(cloned) == nil {
+	err := p.Validate(cloned)
+	if err == nil {
 		return cloned
 	}
 
+	logging.Warnf("Validation error after adjusting solution for planner.   Restore to original plan.  Error=%v", err)
 	return s
 }
 
@@ -718,6 +722,9 @@ func (p *SAPlanner) dropReplicaIfNecessary(s *Solution) {
 			} else {
 				logging.Warnf("There is more replia than available nodes.  Will not move index replica (%v,%v) from ejected node %v",
 					index.Bucket, index.Name, indexer.NodeId)
+
+				c := []*IndexUsage{index}
+				p.placement.RemoveEligibleIndex(c)
 			}
 		}
 
@@ -2743,7 +2750,7 @@ func (p *RandomPlacement) swapDeleteNode(s *Solution) bool {
 //
 // Remove Eligible Index.  It does not remove "optional eligible" index.
 //
-func (p *RandomPlacement) removeEligibleIndex(indexes []*IndexUsage) {
+func (p *RandomPlacement) RemoveEligibleIndex(indexes []*IndexUsage) {
 
 	for _, index := range indexes {
 		delete(p.indexes, index)
