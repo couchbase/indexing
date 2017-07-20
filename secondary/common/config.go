@@ -1893,6 +1893,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.api.enableTestServer": ConfigValue{
+		false,
+		"Enable index QE REST Server",
+		false,
+		false, // mutable
+		false, // case-insensitive
+	},
 }
 
 // NewConfig from another
