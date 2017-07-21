@@ -59,13 +59,20 @@ func (c *cpuCollector) runCollectCpu() {
 	ticker := time.NewTicker(time.Second * 1)
 	defer ticker.Stop()
 
+	count := 0
+
 	for range ticker.C {
 		pid, percent, err := c.stats.ProcessCpuPercent()
 		if err != nil {
 			logging.Debugf("Fail to get cpu percentage. Err=%v", err)
 			continue
 		}
-		logging.Infof("cpuCollector: cpu percent %v for pid %v", percent, pid)
+		count++
+
+		if count > 10 {
+			logging.Infof("cpuCollector: cpu percent %v for pid %v", percent, pid)
+			count = 0
+		}
 
 		updateCpuPercent(percent)
 	}
