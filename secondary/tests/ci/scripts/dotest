@@ -162,13 +162,13 @@ if [ "$MODE" = "test" ]; then
   export phase=integration
   cd $WORKSPACE/testrunner
   if [ "$STORAGE" = "memdb" ]; then
-    export TYPE ="memory_optimized"
+    export TYPE="memory_optimized"
   fi
   if [ "$STORAGE" = "plasma" ]; then
-    export TYPE ="plasma"
+    export TYPE="plasma"
   fi
   if [ "$STORAGE" = "forestdb" ]; then
-    export TYPE ="forestdb"
+    export TYPE="forestdb"
   fi
   (timeout 1h make test-2i-integrations-tests PARAMS=gsi_type=$TYPE 2>&1) | tee -a $WORKSPACE/test.log
   collect_logs
