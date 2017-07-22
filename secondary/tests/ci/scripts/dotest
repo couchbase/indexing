@@ -167,7 +167,7 @@ if [ "$MODE" = "test" ]; then
   if [ "$STORAGE" = "plasma" ]; then
     export TYPE="plasma"
   fi
-  if [ "$STORAGE" = "forestdb" ]; then
+  if [ "$STORAGE" = "fdb" ]; then
     export TYPE="forestdb"
   fi
   (timeout 1h make test-2i-integrations-tests PARAMS=gsi_type=$TYPE 2>&1) | tee -a $WORKSPACE/test.log
