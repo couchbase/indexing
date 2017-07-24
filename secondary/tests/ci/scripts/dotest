@@ -161,7 +161,16 @@ if [ "$MODE" = "test" ]; then
   echo "</pre><h4>Integration tests</h4><pre>"
   export phase=integration
   cd $WORKSPACE/testrunner
-  (timeout 1h make test-2i-integrations-tests 2>&1) | tee -a $WORKSPACE/test.log
+  if [ "$STORAGE" = "memdb" ]; then
+    export TYPE="memory_optimized"
+  fi
+  if [ "$STORAGE" = "plasma" ]; then
+    export TYPE="plasma"
+  fi
+  if [ "$STORAGE" = "fdb" ]; then
+    export TYPE="forestdb"
+  fi
+  (timeout 1h make test-2i-integrations-tests PARAMS=gsi_type=$TYPE 2>&1) | tee -a $WORKSPACE/test.log
   collect_logs
 fi
 
