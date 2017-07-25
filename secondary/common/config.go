@@ -1057,6 +1057,48 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.plasma.memtuner.maxFreeMemory": ConfigValue{
+		1024 * 1024 * 5,
+		"Max free memory",
+		1024 * 1024 * 5,
+		false,
+		false,
+	},
+	"indexer.plasma.memtuner.minFreeRatio": ConfigValue{
+		float64(0.10),
+		"Minimum free memory ratio",
+		float64(0.10),
+		false,
+		false,
+	},
+	"indexer.plasma.memtuner.trimDownRatio": ConfigValue{
+		float64(0.10),
+		"Memtuner trimdown ratio",
+		float64(0.10),
+		false,
+		false,
+	},
+	"indexer.plasma.memtuner.incrementRatio": ConfigValue{
+		float64(0.01),
+		"Memtuner increment ratio",
+		float64(0.01),
+		false,
+		false,
+	},
+	"indexer.plasma.memtuner.minQuotaRatio": ConfigValue{
+		float64(0.5),
+		"Memtuner min quota ratio",
+		float64(0.5),
+		false,
+		false,
+	},
+	"indexer.plasma.memtuner.incrCeilPercent": ConfigValue{
+		float64(3),
+		"Memtuner increment ceiling percent",
+		float64(3),
+		false,
+		false,
+	},
 
 	//end of plasma specific config
 
