@@ -132,6 +132,7 @@ func newPlasmaSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 		sliceBufSize = uint64(slice.numWriters)
 	}
 
+	updatePlasmaConfig(sysconf)
 	if sysconf["plasma.UseQuotaTuner"].Bool() {
 		go plasma.RunMemQuotaTuner()
 	}
@@ -1295,12 +1296,22 @@ func (mdb *plasmaSlice) Statistics() (StorageStatistics, error) {
 	return sts, nil
 }
 
+func updatePlasmaConfig(cfg common.Config) {
+	plasma.MTunerMaxFreeMemory = cfg["plasma.memtuner.maxFreeMemory"].Int()
+	plasma.MTunerMinFreeMemRatio = cfg["plasma.memtuner.minFreeRatio"].Float64()
+	plasma.MTunerTrimDownRatio = cfg["plasma.memtuner.trimDownRatio"].Float64()
+	plasma.MTunerIncrementRatio = cfg["plasma.memtuner.incrementRatio"].Float64()
+	plasma.MTunerMinQuotaRatio = cfg["plasma.memtuner.minQuotaRatio"].Float64()
+	plasma.MTunerIncrCeilPercent = cfg["plasma.memtuner.incrCeilPercent"].Float64()
+}
+
 func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 	mdb.confLock.Lock()
 	defer mdb.confLock.Unlock()
 
 	mdb.sysconf = cfg
 
+	updatePlasmaConfig(cfg)
 	mdb.mainstore.MaxPageLSSSegments = mdb.sysconf["plasma.mainIndex.maxLSSPageSegments"].Int()
 	mdb.mainstore.LSSCleanerThreshold = mdb.sysconf["plasma.mainIndex.LSSFragmentation"].Int()
 	mdb.mainstore.LSSCleanerMaxThreshold = mdb.sysconf["plasma.mainIndex.maxLSSFragmentation"].Int()
