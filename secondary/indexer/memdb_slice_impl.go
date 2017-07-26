@@ -813,11 +813,11 @@ func (mdb *memdbSlice) Rollback(info SnapshotInfo) error {
 	return nil
 }
 
-func (mdb *memdbSlice) loadSnapshot(snapInfo *memdbSnapshotInfo) error {
+func (mdb *memdbSlice) loadSnapshot(snapInfo *memdbSnapshotInfo) (err error) {
 	defer func() {
-		if r := recover(); r != nil {
-			logging.Errorf("MemDBSlice::loadSnapshot Slice Id %v, IndexInstId %v failed to recover from the snapshot %v (err=%v)",
-				mdb.id, mdb.idxInstId, snapInfo.dataPath, r)
+		if r := recover(); r != nil || err != nil {
+			logging.Errorf("MemDBSlice::loadSnapshot Slice Id %v, IndexInstId %v failed to recover from the snapshot %v (err=%v,%v)",
+				mdb.id, mdb.idxInstId, snapInfo.dataPath, r, err)
 			os.RemoveAll(snapInfo.dataPath)
 			os.Exit(1)
 		}
@@ -863,7 +863,8 @@ func (mdb *memdbSlice) loadSnapshot(snapInfo *memdbSnapshotInfo) error {
 	concurrency := mdb.sysconf["settings.moi.recovery_threads"].Int()
 	mdb.confLock.RUnlock()
 
-	snap, err := mdb.mainstore.LoadFromDisk(snapInfo.dataPath, concurrency, backIndexCallback)
+	var snap *memdb.Snapshot
+	snap, err = mdb.mainstore.LoadFromDisk(snapInfo.dataPath, concurrency, backIndexCallback)
 
 	if !mdb.isPrimary {
 		for wId := 0; wId < mdb.numWriters; wId++ {
@@ -885,7 +886,7 @@ func (mdb *memdbSlice) loadSnapshot(snapInfo *memdbSnapshotInfo) error {
 
 	mdb.idxStats.diskSnapLoadDuration.Set(int64(dur / time.Millisecond))
 	mdb.idxStats.numItemsRestored.Set(mdb.mainstore.ItemsCount())
-	return err
+	return
 }
 
 //RollbackToZero rollbacks the slice to initial state. Return error if
