@@ -1063,9 +1063,9 @@ func (mdb *plasmaSlice) restore(o SnapshotInfo) error {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		if s, err := mdb.mainstore.Rollback(info.mRP); err != nil {
+		var s *plasma.Snapshot
+		if s, mErr = mdb.mainstore.Rollback(info.mRP); mErr == nil {
 			s.Close()
-			mErr = err
 		}
 	}()
 
@@ -1074,9 +1074,10 @@ func (mdb *plasmaSlice) restore(o SnapshotInfo) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			s, err := mdb.backstore.Rollback(info.bRP)
-			s.Close()
-			bErr = err
+			var s *plasma.Snapshot
+			if s, bErr = mdb.backstore.Rollback(info.bRP); bErr == nil {
+				s.Close()
+			}
 		}()
 	}
 
