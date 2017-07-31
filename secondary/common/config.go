@@ -1700,6 +1700,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.build.background.disable": ConfigValue{
+		false,
+		"Disable background index build, except during upgrade",
+		false,
+		false, // mutable
+		false, // case-insensitive
+	},
 }
 
 // NewConfig from another
