@@ -596,6 +596,13 @@ var SystemConfig = Config{
 		false, // immutable
 		false, // case-insensitive
 	},
+	"queryport.client.disable_prune_replica": ConfigValue{
+		false,
+		"disable client to filter our replica based on stats",
+		false,
+		false, // immutable
+		false, // case-insensitive
+	},
 	// projector's adminport client, can be used by indexer.
 	"indexer.projectorclient.retryInterval": ConfigValue{
 		16,

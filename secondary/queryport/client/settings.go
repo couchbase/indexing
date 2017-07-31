@@ -23,6 +23,7 @@ type ClientSettings struct {
 	backfillLimit  int32
 	scanLagPercent uint64
 	scanLagItem    uint64
+	prune_replica  int32
 	config         common.Config
 	cancelCh       chan struct{}
 }
@@ -118,6 +119,13 @@ func (s *ClientSettings) handleSettings(config common.Config) {
 	} else {
 		logging.Errorf("ClientSettings: invalid setting value for scanLagItem=%v", scanLagItem)
 	}
+
+	prune_replica := config["queryport.client.disable_prune_replica"].Bool()
+	if prune_replica {
+		atomic.StoreInt32(&s.prune_replica, int32(1))
+	} else {
+		atomic.StoreInt32(&s.prune_replica, int32(0))
+	}
 }
 
 func (s *ClientSettings) NumReplica() int32 {
@@ -135,4 +143,11 @@ func (s *ClientSettings) ScanLagPercent() float64 {
 
 func (s *ClientSettings) ScanLagItem() uint64 {
 	return atomic.LoadUint64(&s.scanLagItem)
+}
+
+func (s *ClientSettings) DisablePruneReplica() bool {
+	if atomic.LoadInt32(&s.prune_replica) == 1 {
+		return true
+	}
+	return false
 }
