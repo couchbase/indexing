@@ -1099,6 +1099,41 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
+	"indexer.plasma.purger.enabled": ConfigValue{
+		true,
+		"Enable mvcc page purger",
+		true,
+		false,
+		false,
+	},
+	"indexer.plasma.purger.interval": ConfigValue{
+		60,
+		"Purger purge_ratio check interval in seconds",
+		60,
+		false,
+		false,
+	},
+	"indexer.plasma.purger.highThreshold": ConfigValue{
+		float64(10),
+		"Purger high threshold",
+		float64(10),
+		false,
+		false,
+	},
+	"indexer.plasma.purger.lowThreshold": ConfigValue{
+		float64(7),
+		"Purger low threshold",
+		float64(7),
+		false,
+		false,
+	},
+	"indexer.plasma.purger.compactRatio": ConfigValue{
+		float64(0.5),
+		"Max ratio of pages to be scanned during a purge attempt",
+		float64(0.5),
+		false,
+		false,
+	},
 
 	//end of plasma specific config
 
