@@ -65,7 +65,7 @@ func (w *protoResponseWriter) Error(err error) error {
 		res = &protobuf.StatisticsResponse{
 			Err: protoErr,
 		}
-	case CountReq:
+	case CountReq, MultiScanCountReq:
 		res = &protobuf.CountResponse{
 			Count: proto.Int64(0), Err: protoErr,
 		}
