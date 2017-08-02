@@ -69,6 +69,7 @@ type builder struct {
 	pendings  map[string][]uint64
 	notifych  chan *common.IndexDefn
 	batchSize int32
+	disable   int32
 }
 
 type janitor struct {
@@ -1552,10 +1553,19 @@ func (s *builder) tryBuildIndex(bucket string, quota int32) int32 {
 				}
 
 				if inst.State == uint32(common.INDEX_STATE_READY) && inst.Scheduled {
-					if _, ok := buildMap[defnId]; !ok {
-						buildList = append(buildList, defnId)
-						buildMap[defnId] = true
-						newQuota = newQuota - 1
+					if !s.disableBuild() || len(inst.OldStorageMode) != 0 {
+						// build index if
+						// 1) background index build is enabled
+						// 2) index build is due to upgrade
+						if _, ok := buildMap[defnId]; !ok {
+							buildList = append(buildList, defnId)
+							buildMap[defnId] = true
+							newQuota = newQuota - 1
+						}
+					} else {
+						// put it back to the pending list if index build is disable
+						pendingList = append(pendingList, defnId)
+						logging.Warnf("builder: Background build is disabled.  Will retry building index (%v, %v) in next iteration.", defnId, bucket)
 					}
 				} else {
 					logging.Warnf("builder: Index instance (%v, %v) is not in READY state.  Skipping.", defnId, bucket)
@@ -1732,6 +1742,22 @@ func (s *builder) recover() {
 func (s *builder) configUpdate(config *common.Config) {
 	newBatchSize := int32((*config)["settings.build.batch_size"].Int())
 	atomic.StoreInt32(&s.batchSize, newBatchSize)
+
+	disable := (*config)["build.background.disable"].Bool()
+	if disable {
+		atomic.StoreInt32(&s.disable, int32(1))
+	} else {
+		atomic.StoreInt32(&s.disable, int32(0))
+	}
+}
+
+func (s *builder) disableBuild() bool {
+
+	if atomic.LoadInt32(&s.disable) == 1 {
+		return true
+	}
+
+	return false
 }
 
 func newBuilder(mgr *LifecycleMgr) *builder {
@@ -1743,6 +1769,12 @@ func newBuilder(mgr *LifecycleMgr) *builder {
 		batchSize: int32(common.SystemConfig["indexer.settings.build.batch_size"].Int()),
 	}
 
+	disable := common.SystemConfig["indexer.build.background.disable"].Bool()
+	if disable {
+		atomic.StoreInt32(&builder.disable, int32(1))
+	} else {
+		atomic.StoreInt32(&builder.disable, int32(0))
+	}
 	return builder
 }
 

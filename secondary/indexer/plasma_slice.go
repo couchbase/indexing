@@ -190,6 +190,11 @@ func (slice *plasmaSlice) initStores() error {
 	cfg.AutoSwapper = true
 	cfg.NumPersistorThreads = int(float32(runtime.NumCPU())*float32(slice.sysconf["plasma.persistenceCPUPercent"].Int())/(100*2) + 0.5)
 	cfg.DisableReadCaching = slice.sysconf["plasma.disableReadCaching"].Bool()
+	cfg.AutoMVCCPurging = slice.sysconf["plasma.purger.enabled"].Bool()
+	cfg.PurgerInterval = time.Duration(slice.sysconf["plasma.purger.interval"].Int()) * time.Second
+	cfg.PurgeThreshold = slice.sysconf["plasma.purger.highThreshold"].Float64()
+	cfg.PurgeLowThreshold = slice.sysconf["plasma.purger.lowThreshold"].Float64()
+	cfg.PurgeCompactRatio = slice.sysconf["plasma.purger.compactRatio"].Float64()
 
 	var mCfg, bCfg plasma.Config
 
@@ -1318,11 +1323,21 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 	mdb.mainstore.LSSCleanerMaxThreshold = mdb.sysconf["plasma.mainIndex.maxLSSFragmentation"].Int()
 	mdb.mainstore.DisableReadCaching = mdb.sysconf["plasma.disableReadCaching"].Bool()
 
+	mdb.mainstore.PurgerInterval = time.Duration(mdb.sysconf["plasma.purger.interval"].Int()) * time.Second
+	mdb.mainstore.PurgeThreshold = mdb.sysconf["plasma.purger.highThreshold"].Float64()
+	mdb.mainstore.PurgeLowThreshold = mdb.sysconf["plasma.purger.lowThreshold"].Float64()
+	mdb.mainstore.PurgeCompactRatio = mdb.sysconf["plasma.purger.compactRatio"].Float64()
+
 	if !mdb.isPrimary {
 		mdb.backstore.MaxPageLSSSegments = mdb.sysconf["plasma.backIndex.maxLSSPageSegments"].Int()
 		mdb.backstore.LSSCleanerThreshold = mdb.sysconf["plasma.backIndex.LSSFragmentation"].Int()
 		mdb.backstore.LSSCleanerMaxThreshold = mdb.sysconf["plasma.backIndex.maxLSSFragmentation"].Int()
 		mdb.backstore.DisableReadCaching = mdb.sysconf["plasma.disableReadCaching"].Bool()
+
+		mdb.backstore.PurgerInterval = time.Duration(mdb.sysconf["plasma.purger.interval"].Int()) * time.Second
+		mdb.backstore.PurgeThreshold = mdb.sysconf["plasma.purger.highThreshold"].Float64()
+		mdb.backstore.PurgeLowThreshold = mdb.sysconf["plasma.purger.lowThreshold"].Float64()
+		mdb.backstore.PurgeCompactRatio = mdb.sysconf["plasma.purger.compactRatio"].Float64()
 	}
 }
 
