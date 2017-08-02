@@ -1141,6 +1141,13 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
+	"indexer.plasma.enableLSSPageSMO": ConfigValue{
+		true,
+		"Enable page structure modification in lss",
+		true,
+		false,
+		false,
+	},
 
 	//end of plasma specific config
 
