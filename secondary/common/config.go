@@ -1065,16 +1065,16 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.plasma.memtuner.maxFreeMemory": ConfigValue{
-		1024 * 1024 * 5,
+		1024 * 1024 * 1024 * 8,
 		"Max free memory",
-		1024 * 1024 * 5,
+		1024 * 1024 * 1024 * 8,
 		false,
 		false,
 	},
 	"indexer.plasma.memtuner.minFreeRatio": ConfigValue{
-		float64(0.10),
+		float64(0.20),
 		"Minimum free memory ratio",
-		float64(0.10),
+		float64(0.20),
 		false,
 		false,
 	},
@@ -1093,9 +1093,9 @@ var SystemConfig = Config{
 		false,
 	},
 	"indexer.plasma.memtuner.minQuotaRatio": ConfigValue{
-		float64(0.5),
+		float64(0.20),
 		"Memtuner min quota ratio",
-		float64(0.5),
+		float64(0.20),
 		false,
 		false,
 	},
