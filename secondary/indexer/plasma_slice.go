@@ -195,6 +195,7 @@ func (slice *plasmaSlice) initStores() error {
 	cfg.PurgeThreshold = slice.sysconf["plasma.purger.highThreshold"].Float64()
 	cfg.PurgeLowThreshold = slice.sysconf["plasma.purger.lowThreshold"].Float64()
 	cfg.PurgeCompactRatio = slice.sysconf["plasma.purger.compactRatio"].Float64()
+	cfg.EnableLSSPageSMO = slice.sysconf["plasma.enableLSSPageSMO"].Bool()
 
 	var mCfg, bCfg plasma.Config
 
@@ -1327,6 +1328,7 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 	mdb.mainstore.PurgeThreshold = mdb.sysconf["plasma.purger.highThreshold"].Float64()
 	mdb.mainstore.PurgeLowThreshold = mdb.sysconf["plasma.purger.lowThreshold"].Float64()
 	mdb.mainstore.PurgeCompactRatio = mdb.sysconf["plasma.purger.compactRatio"].Float64()
+	mdb.mainstore.EnableLSSPageSMO = mdb.sysconf["plasma.enableLSSPageSMO"].Bool()
 
 	if !mdb.isPrimary {
 		mdb.backstore.MaxPageLSSSegments = mdb.sysconf["plasma.backIndex.maxLSSPageSegments"].Int()
@@ -1338,6 +1340,7 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 		mdb.backstore.PurgeThreshold = mdb.sysconf["plasma.purger.highThreshold"].Float64()
 		mdb.backstore.PurgeLowThreshold = mdb.sysconf["plasma.purger.lowThreshold"].Float64()
 		mdb.backstore.PurgeCompactRatio = mdb.sysconf["plasma.purger.compactRatio"].Float64()
+		mdb.backstore.EnableLSSPageSMO = mdb.sysconf["plasma.enableLSSPageSMO"].Bool()
 	}
 }
 
