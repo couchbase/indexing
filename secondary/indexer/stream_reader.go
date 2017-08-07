@@ -73,6 +73,8 @@ func CreateMutationStreamReader(streamId common.StreamId, bucketQueueMap BucketQ
 	streamMutch := make(chan interface{}, getMutationBufferSize(config))
 	dpconf := config.SectionConfig(
 		"dataport.", true /*trim*/)
+
+	dpconf = overrideDataportConf(dpconf)
 	stream, err := dataport.NewServer(
 		string(StreamAddrMap[streamId]),
 		common.SystemConfig["maxVbuckets"].Int(),
@@ -876,6 +878,8 @@ func getMutationBufferSize(config common.Config) uint64 {
 
 	if common.GetStorageMode() == common.FORESTDB {
 		return config["stream_reader.fdb.mutationBuffer"].Uint64()
+	} else if common.GetStorageMode() == common.PLASMA {
+		return config["stream_reader.plasma.mutationBuffer"].Uint64()
 	} else {
 		return config["stream_reader.moi.mutationBuffer"].Uint64()
 	}
@@ -886,8 +890,20 @@ func getWorkerBufferSize(config common.Config) uint64 {
 
 	if common.GetStorageMode() == common.FORESTDB {
 		return config["stream_reader.fdb.workerBuffer"].Uint64()
+	} else if common.GetStorageMode() == common.PLASMA {
+		return config["stream_reader.plasma.workerBuffer"].Uint64()
 	} else {
 		return config["stream_reader.moi.workerBuffer"].Uint64()
 	}
+}
+
+func overrideDataportConf(dpconf common.Config) common.Config {
+
+	if common.GetStorageMode() == common.PLASMA {
+		chSize := dpconf["plasma.dataChanSize"].Int()
+		dpconf.SetValue("dataChanSize", chSize)
+	}
+
+	return dpconf
 
 }
