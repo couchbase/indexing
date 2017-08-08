@@ -661,6 +661,13 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 			jsonEncoder.ReverseCollate(key, mdb.idxDefn.Desc)
 		}
 
+		if oldkey != nil {
+			t0 := time.Now()
+			mdb.back[workerId].DeleteKV(docid)
+			mdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
+			atomic.AddInt64(&mdb.delete_bytes, int64(len(docid)))
+		}
+
 		t0 := time.Now()
 		mdb.back[workerId].InsertKV(docid, key)
 		mdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
