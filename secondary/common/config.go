@@ -1107,9 +1107,9 @@ var SystemConfig = Config{
 		false,
 	},
 	"indexer.plasma.memtuner.minQuota": ConfigValue{
-		int64(1024 * 1024 * 1024),
+		1024 * 1024 * 1024,
 		"Memtuner minimum quota",
-		int64(1024 * 1024 * 1024),
+		1024 * 1024 * 1024,
 		false,
 		false,
 	},
