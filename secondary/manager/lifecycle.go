@@ -1552,7 +1552,7 @@ func (s *builder) tryBuildIndex(bucket string, quota int32) int32 {
 					continue
 				}
 
-				if inst.State == uint32(common.INDEX_STATE_READY) && inst.Scheduled {
+				if inst.State == uint32(common.INDEX_STATE_READY) {
 					if !s.disableBuild() || len(inst.OldStorageMode) != 0 {
 						// build index if
 						// 1) background index build is enabled
@@ -1685,18 +1685,10 @@ func (s *builder) processBuildToken(bootstrap bool) {
 			}
 
 			if inst.State == uint32(common.INDEX_STATE_READY) {
-				if err := s.manager.SetScheduledFlag(defn.Bucket, defn.DefnId, true); err != nil {
-					logging.Warnf("builder: Unable to set scheduled flag when trying to build index during recovery (%v, %v).  Skipping ...",
-						defn.Bucket, defn.Name)
-					continue
-				}
-
 				logging.Infof("builder: Processing build token %v", entry.Path)
 
-				if !bootstrap {
-					if s.addPending(defn.Bucket, uint64(defn.DefnId)) {
-						logging.Infof("builder: Schedule index build for (%v, %v).", defn.Bucket, defn.Name)
-					}
+				if s.addPending(defn.Bucket, uint64(defn.DefnId)) {
+					logging.Infof("builder: Schedule index build for (%v, %v).", defn.Bucket, defn.Name)
 				}
 			}
 		}
