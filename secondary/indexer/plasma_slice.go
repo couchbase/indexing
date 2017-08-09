@@ -1311,12 +1311,13 @@ func (mdb *plasmaSlice) Statistics() (StorageStatistics, error) {
 }
 
 func updatePlasmaConfig(cfg common.Config) {
-	plasma.MTunerMaxFreeMemory = cfg["plasma.memtuner.maxFreeMemory"].Int()
+	plasma.MTunerMaxFreeMemory = int64(cfg["plasma.memtuner.maxFreeMemory"].Int())
 	plasma.MTunerMinFreeMemRatio = cfg["plasma.memtuner.minFreeRatio"].Float64()
 	plasma.MTunerTrimDownRatio = cfg["plasma.memtuner.trimDownRatio"].Float64()
 	plasma.MTunerIncrementRatio = cfg["plasma.memtuner.incrementRatio"].Float64()
 	plasma.MTunerMinQuotaRatio = cfg["plasma.memtuner.minQuotaRatio"].Float64()
 	plasma.MTunerIncrCeilPercent = cfg["plasma.memtuner.incrCeilPercent"].Float64()
+	plasma.MTunerMinQuota = int64(cfg["plasma.memtuner.minQuota"].Int())
 }
 
 func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
