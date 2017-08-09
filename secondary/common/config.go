@@ -925,9 +925,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.plasma.numReaders": ConfigValue{
-		runtime.NumCPU(),
+		runtime.NumCPU() * 3,
 		"Numbers of readers for plasma",
-		runtime.NumCPU(),
+		runtime.NumCPU() * 3,
 		false, // mutable
 		false, // case-insensitive
 	},
