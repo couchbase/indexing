@@ -536,7 +536,8 @@ func (r *Rebalancer) checkValidNotifyStateSource(ttid string, tt *c.TransferToke
 func (r *Rebalancer) checkIndexReadyToBuild() bool {
 
 	for ttid, tt := range r.acceptedTokens {
-		if tt.State != c.TransferTokenInProgress && tt.State != c.TransferTokenReady {
+		if tt.State != c.TransferTokenInProgress && tt.State != c.TransferTokenReady &&
+			tt.State != c.TransferTokenCommit {
 			l.Infof("Rebalancer::checkIndexReadyToBuild Not ready to build %v %v", ttid, tt)
 			return false
 		}
@@ -553,7 +554,7 @@ func (r *Rebalancer) buildAcceptedIndexes() {
 	var errStr string
 	r.mu.Lock()
 	for _, tt := range r.acceptedTokens {
-		if tt.State != c.TransferTokenReady {
+		if tt.State != c.TransferTokenReady && tt.State != c.TransferTokenCommit {
 			idList.DefnIds = append(idList.DefnIds, uint64(tt.IndexInst.Defn.DefnId))
 		}
 	}
