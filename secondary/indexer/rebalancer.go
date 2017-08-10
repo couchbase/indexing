@@ -667,7 +667,7 @@ loop:
 			r.mu.Lock()
 			allTokensReady = true
 			for ttid, tt := range r.acceptedTokens {
-				if tt.State == c.TransferTokenReady {
+				if tt.State == c.TransferTokenReady || tt.State == c.TransferTokenCommit {
 					continue
 				}
 				allTokensReady = false
