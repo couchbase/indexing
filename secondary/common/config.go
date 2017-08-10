@@ -925,9 +925,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.plasma.numReaders": ConfigValue{
-		runtime.NumCPU(),
+		runtime.NumCPU() * 3,
 		"Numbers of readers for plasma",
-		runtime.NumCPU(),
+		runtime.NumCPU() * 3,
 		false, // mutable
 		false, // case-insensitive
 	},
@@ -1106,6 +1106,13 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
+	"indexer.plasma.memtuner.minQuota": ConfigValue{
+		1024 * 1024 * 1024,
+		"Memtuner minimum quota",
+		1024 * 1024 * 1024,
+		false,
+		false,
+	},
 	"indexer.plasma.purger.enabled": ConfigValue{
 		true,
 		"Enable mvcc page purger",
@@ -1150,26 +1157,26 @@ var SystemConfig = Config{
 	},
 
 	"indexer.stream_reader.plasma.workerBuffer": ConfigValue{
-		uint64(30000),
+		uint64(10000),
 		"Buffer Size for stream reader worker to hold mutations " +
 			"before being enqueued in mutation queue",
-		uint64(30000),
+		uint64(10000),
 		false, // mutable
 		false, // case-insensitive
 	},
 
 	"indexer.stream_reader.plasma.mutationBuffer": ConfigValue{
-		uint64(10000),
+		uint64(3000),
 		"Buffer Size to hold incoming mutations from dataport",
-		uint64(10000),
+		uint64(3000),
 		false, // mutable
 		false, // case-insensitive
 	},
 
 	"indexer.dataport.plasma.dataChanSize": ConfigValue{
-		10000,
+		3000,
 		"request channel size of indexer dataport's gen-server routine",
-		10000,
+		3000,
 		false, // mutable
 		false, // case-insensitive
 	},
