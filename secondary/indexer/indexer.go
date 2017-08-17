@@ -1981,9 +1981,13 @@ func (idx *indexer) cleanupIndexData(indexInst common.IndexInst,
 		sc := partnInst.Sc
 		//close all the slices
 		for _, slice := range sc.GetAllSlices() {
-			slice.Close()
-			//wipe the physical files
-			slice.Destroy()
+			go func() {
+				slice.Close()
+				logging.Infof("Indexer::cleanupIndexData %v Close Done", slice.IndexInstId())
+				//wipe the physical files
+				slice.Destroy()
+				logging.Infof("Indexer::cleanupIndexData %v Destroy Done", slice.IndexInstId())
+			}()
 		}
 	}
 
