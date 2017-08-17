@@ -1072,9 +1072,9 @@ var SystemConfig = Config{
 		false,
 	},
 	"indexer.plasma.memtuner.minFreeRatio": ConfigValue{
-		float64(0.20),
+		float64(0.10),
 		"Minimum free memory ratio",
-		float64(0.20),
+		float64(0.10),
 		false,
 		false,
 	},
