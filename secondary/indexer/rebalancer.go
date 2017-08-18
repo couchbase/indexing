@@ -73,6 +73,8 @@ type Rebalancer struct {
 	retErr error
 
 	config c.ConfigHolder
+
+	lastKnownProgress map[c.IndexDefnId]float64
 }
 
 func NewRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *RebalanceToken,
@@ -102,6 +104,7 @@ func NewRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *Rebal
 		localaddr:      localaddr,
 
 		waitForTokenPublish: make(chan struct{}),
+		lastKnownProgress:   make(map[c.IndexDefnId]float64),
 	}
 
 	r.config.Store(config)
@@ -783,6 +786,8 @@ func (r *Rebalancer) processTokenAsMaster(ttid string, tt *c.TransferToken) bool
 		tt.State = c.TransferTokenDeleted
 		r.setTransferTokenInMetakv(ttid, tt)
 
+		r.updateMasterTokenState(ttid, c.TransferTokenCommit)
+
 	case c.TransferTokenDeleted:
 		err := MetakvDel(RebalanceMetakvDir + ttid)
 		if err != nil {
@@ -790,9 +795,10 @@ func (r *Rebalancer) processTokenAsMaster(ttid string, tt *c.TransferToken) bool
 				"Meta Storage. %v. Err %v", tt, err)
 			c.CrashOnError(err)
 		}
-		delete(r.transferTokens, ttid)
 
-		if len(r.transferTokens) == 0 {
+		r.updateMasterTokenState(ttid, c.TransferTokenDeleted)
+
+		if r.checkAllTokensDone() {
 			if r.cb.progress != nil {
 				r.cb.progress(1.0, r.cancel)
 			}
@@ -812,6 +818,20 @@ func (r *Rebalancer) setTransferTokenError(ttid string, tt *c.TransferToken, err
 	tt.Error = err
 	r.setTransferTokenInMetakv(ttid, tt)
 
+}
+
+func (r *Rebalancer) updateMasterTokenState(ttid string, state c.TokenState) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if tt, ok := r.transferTokens[ttid]; ok {
+		tt.State = state
+		r.transferTokens[ttid] = tt
+	} else {
+		return false
+	}
+
+	return true
 }
 
 func (r *Rebalancer) setTransferTokenInMetakv(ttid string, tt *c.TransferToken) {
@@ -862,15 +882,14 @@ func (r *Rebalancer) updateProgress() {
 
 	defer r.wg.Done()
 
-	var lastProgress float64
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
+
 	for {
 		select {
 		case <-ticker.C:
 			progress := r.computeProgress()
-			if progress > lastProgress {
-				lastProgress = progress
+			if progress > 0 {
 				r.cb.progress(progress, r.cancel)
 			}
 		case <-r.cancel:
@@ -885,12 +904,6 @@ func (r *Rebalancer) updateProgress() {
 }
 
 func (r *Rebalancer) computeProgress() (progress float64) {
-
-	totTokens := len(r.transferTokens)
-
-	if totTokens == 0 {
-		return 1
-	}
 
 	url := "/getIndexStatus"
 	resp, err := getWithAuth(r.localaddr + url)
@@ -907,13 +920,18 @@ func (r *Rebalancer) computeProgress() (progress float64) {
 		return
 	}
 
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	totTokens := len(r.transferTokens)
+
 	var totalProgress float64
 	for _, tt := range r.transferTokens {
 		state := tt.State
 		if state == c.TransferTokenCommit || state == c.TransferTokenDeleted {
 			totalProgress += 100.00
 		} else {
-			totalProgress += getBuildProgressFromStatus(statusResp, tt.IndexInst.Defn.DefnId)
+			totalProgress += r.getBuildProgressFromStatus(statusResp, tt.IndexInst.Defn.DefnId)
 		}
 	}
 
@@ -928,6 +946,19 @@ func (r *Rebalancer) computeProgress() (progress float64) {
 	return
 }
 
+func (r *Rebalancer) checkAllTokensDone() bool {
+
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	for _, tt := range r.transferTokens {
+		if tt.State != c.TransferTokenDeleted {
+			return false
+		}
+	}
+	return true
+}
+
 func getIndexStatusFromMeta(defn *c.IndexDefn, localMeta *manager.LocalIndexMetadata) (c.IndexState, string) {
 
 	topology := findTopologyByBucket(localMeta.IndexTopologies, defn.Bucket)
@@ -938,12 +969,16 @@ func getIndexStatusFromMeta(defn *c.IndexDefn, localMeta *manager.LocalIndexMeta
 	return topology.GetStatusByDefn(defn.DefnId)
 }
 
-func getBuildProgressFromStatus(status *manager.IndexStatusResponse, defnId c.IndexDefnId) float64 {
+func (r *Rebalancer) getBuildProgressFromStatus(status *manager.IndexStatusResponse, defnId c.IndexDefnId) float64 {
 
 	for _, idx := range status.Status {
 		if idx.DefnId == defnId && idx.Status == "Replicating" {
 			l.Infof("Rebalancer::getBuildProgressFromStatus %v %v", idx.DefnId, idx.Progress)
+			r.lastKnownProgress[idx.DefnId] = idx.Progress
 			return idx.Progress
+		}
+		if p, ok := r.lastKnownProgress[idx.DefnId]; ok {
+			return p
 		}
 	}
 	return 0.0
