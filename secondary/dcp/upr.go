@@ -78,7 +78,9 @@ func (b *Bucket) GetFailoverLogs(
 		}
 
 		name := NewDcpFeedName(fmt.Sprintf("getfailoverlog-%s-%v", b.Name, time.Now().UnixNano()))
-		singleFeed, err := serverConn.StartDcpFeed(name, 0, nil, opaque, config)
+		flags := uint32(0x0)
+		singleFeed, err := serverConn.StartDcpFeed(
+			name, 0, flags, nil, opaque, config)
 		if err != nil {
 			return nil, err
 		}
@@ -123,11 +125,11 @@ type DcpFeed struct {
 // No data will be sent on the channel unless vbuckets streams
 // are requested.
 func (b *Bucket) StartDcpFeed(
-	name DcpFeedName, sequence uint32,
+	name DcpFeedName, sequence, flags uint32,
 	opaque uint16,
 	config map[string]interface{}) (*DcpFeed, error) {
 
-	return b.StartDcpFeedOver(name, sequence, nil, opaque, config)
+	return b.StartDcpFeedOver(name, sequence, flags, nil, opaque, config)
 }
 
 // StartDcpFeedOver creates and starts a new Dcp feed.
@@ -142,7 +144,7 @@ func (b *Bucket) StartDcpFeed(
 //      "numConnections", number of connections with DCP for local vbuckets.
 func (b *Bucket) StartDcpFeedOver(
 	name DcpFeedName,
-	sequence uint32,
+	sequence, flags uint32,
 	kvaddrs []string,
 	opaque uint16,
 	config map[string]interface{}) (*DcpFeed, error) {
@@ -164,7 +166,7 @@ func (b *Bucket) StartDcpFeedOver(
 	feed.activeVbOnly = config["activeVbOnly"].(bool)
 
 	feed.C = feed.output
-	if feed.connectToNodes(kvaddrs, opaque, config) != nil {
+	if feed.connectToNodes(kvaddrs, opaque, flags, config) != nil {
 		return nil, ErrorInvalidBucket
 	}
 	go feed.genServer(feed.reqch, opaque)
@@ -293,7 +295,7 @@ loop:
 }
 
 func (feed *DcpFeed) connectToNodes(
-	kvaddrs []string, opaque uint16, config map[string]interface{}) error {
+	kvaddrs []string, opaque uint16, flags uint32, config map[string]interface{}) error {
 
 	prefix := feed.logPrefix
 	kvcache := make(map[string]bool)
@@ -328,7 +330,7 @@ func (feed *DcpFeed) connectToNodes(
 		for i := 0; i < feed.numConnections; i++ {
 			feedname := DcpFeedName(fmt.Sprintf("%v/%d", name, i))
 			singleFeed, err := serverConn.StartDcpFeed(
-				feedname, feed.sequence, feed.output, opaque, config)
+				feedname, feed.sequence, flags, feed.output, opaque, config)
 			if err != nil {
 				for _, singleFeed := range nodeFeeds {
 					singleFeed.dcpFeed.Close()

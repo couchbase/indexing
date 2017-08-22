@@ -61,8 +61,9 @@ func OpenBucketFeed(
 	config map[string]interface{}) (feeder BucketFeeder, err error) {
 
 	bdcp := &bucketDcp{bucket: b}
+	flags := uint32(0x0)
 	bdcp.dcpFeed, err =
-		b.StartDcpFeedOver(feedname, uint32(0), kvaddrs, opaque, config)
+		b.StartDcpFeedOver(feedname, uint32(0), flags, kvaddrs, opaque, config)
 	if err != nil {
 		return nil, err
 	}

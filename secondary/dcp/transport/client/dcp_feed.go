@@ -19,6 +19,7 @@ const bufferAckThreshold = 0.2
 const opaqueOpen = 0xBEAF0001
 const opaqueFailover = 0xDEADBEEF
 const opaqueGetseqno = 0xDEADBEEF
+const openConnFlag = uint32(0x1)
 
 // error codes
 var ErrorInvalidLog = errors.New("couchbase.errorInvalidLog")
@@ -83,10 +84,12 @@ func (feed *DcpFeed) Name() string {
 // sequence: sequence number for the connection
 // bufsize: max size of the application
 func (feed *DcpFeed) DcpOpen(
-	name string, sequence, bufsize uint32, opaque uint16) error {
+	name string, sequence, flags, bufsize uint32, opaque uint16) error {
 
 	respch := make(chan []interface{}, 1)
-	cmd := []interface{}{dfCmdOpen, name, sequence, bufsize, opaque, respch}
+	cmd := []interface{}{
+		dfCmdOpen, name, sequence, flags, bufsize, opaque, respch,
+	}
 	resp, err := failsafeOp(feed.reqch, respch, cmd, feed.finch)
 	return opError(err, resp, 0)
 }
@@ -189,9 +192,11 @@ loop:
 			switch cmd {
 			case dfCmdOpen:
 				name, sequence := msg[1].(string), msg[2].(uint32)
-				bufsize, opaque := msg[3].(uint32), msg[4].(uint16)
-				respch := msg[5].(chan []interface{})
-				err := feed.doDcpOpen(name, sequence, bufsize, opaque, rcvch)
+				flags := msg[3].(uint32)
+				bufsize, opaque := msg[4].(uint32), msg[5].(uint16)
+				respch := msg[6].(chan []interface{})
+				err := feed.doDcpOpen(
+					name, sequence, flags, bufsize, opaque, rcvch)
 				respch <- []interface{}{err}
 
 			case dfCmdGetFailoverlog:
@@ -479,7 +484,7 @@ func (feed *DcpFeed) doDcpGetSeqnos(
 }
 
 func (feed *DcpFeed) doDcpOpen(
-	name string, sequence, bufsize uint32,
+	name string, sequence, flags, bufsize uint32,
 	opaque uint16,
 	rcvch chan []interface{}) error {
 
@@ -489,8 +494,9 @@ func (feed *DcpFeed) doDcpOpen(
 		Opaque: opaqueOpen,
 	}
 	rq.Extras = make([]byte, 8)
+	flags = flags | openConnFlag
 	binary.BigEndian.PutUint32(rq.Extras[:4], sequence)
-	binary.BigEndian.PutUint32(rq.Extras[4:], 1) // we are consumer
+	binary.BigEndian.PutUint32(rq.Extras[4:], flags) // we are consumer
 
 	prefix := feed.logPrefix
 	if err := feed.conn.Transmit(rq); err != nil {
