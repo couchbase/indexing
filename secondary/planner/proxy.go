@@ -469,7 +469,13 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 			}
 
 			index.ActualMemUsage = uint64(float64(actualStorageMem) * ratio)
-			index.ActualMemOverhead = uint64(float64(actualTotalMem-actualStorageMem) * ratio)
+
+			if actualTotalMem > actualStorageMem {
+				index.ActualMemOverhead = uint64(float64(actualTotalMem-actualStorageMem) * ratio)
+			} else {
+				index.ActualMemOverhead = 0
+			}
+
 			if index.ActualMemUsage != 0 {
 				index.NoUsage = false
 			}
