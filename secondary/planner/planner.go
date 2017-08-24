@@ -1652,10 +1652,12 @@ func (c *IndexerConstraint) Validate(s *Solution) error {
 			totalIndexMem, (c.MemQuota * uint64(s.findNumLiveNode()))))
 	}
 
-	if totalIndexCpu > float64(c.CpuQuota*uint64(s.findNumLiveNode())) {
-		return errors.New(fmt.Sprintf("Total cpu usage of all indexes (%v) exceed aggregated cpu quota of all indexer nodes (%v)",
-			totalIndexCpu, c.CpuQuota*uint64(s.findNumLiveNode())))
-	}
+	/*
+		if totalIndexCpu > float64(c.CpuQuota*uint64(s.findNumLiveNode())) {
+			return errors.New(fmt.Sprintf("Total cpu usage of all indexes (%v) exceed aggregated cpu quota of all indexer nodes (%v)",
+				totalIndexCpu, c.CpuQuota*uint64(s.findNumLiveNode())))
+		}
+	*/
 
 	return nil
 }
