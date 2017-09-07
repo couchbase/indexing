@@ -469,6 +469,13 @@ var SystemConfig = Config{
 		true,  // immutable
 		false, // case-insensitive
 	},
+	"indexer.queryport.keepAliveInterval": ConfigValue{
+		1,
+		"keep alive interval to set on query port connections",
+		1,
+		false, // immutable
+		false, // case-insensitive
+	},
 	// queryport client configuration
 	"queryport.client.maxPayload": ConfigValue{
 		1000 * 1024,
