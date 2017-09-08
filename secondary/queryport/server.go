@@ -42,12 +42,13 @@ type Server struct {
 	mu  sync.Mutex
 	lis net.Listener
 	// config params
-	maxPayload     int
-	readDeadline   time.Duration
-	writeDeadline  time.Duration
-	streamChanSize int
-	logPrefix      string
-	nConnections   int64
+	maxPayload        int
+	readDeadline      time.Duration
+	writeDeadline     time.Duration
+	keepAliveInterval time.Duration
+	streamChanSize    int
+	logPrefix         string
+	nConnections      int64
 }
 
 type ServerStats struct {
@@ -69,6 +70,8 @@ func NewServer(
 		logPrefix:      fmt.Sprintf("[Queryport %q]", laddr),
 		nConnections:   0,
 	}
+	keepAliveInterval := config["keepAliveInterval"].Int()
+	s.keepAliveInterval = time.Duration(keepAliveInterval) * time.Second
 	if s.lis, err = net.Listen("tcp", laddr); err != nil {
 		logging.Errorf("%v failed starting %v !!\n", s.logPrefix, err)
 		return nil, err
@@ -145,6 +148,12 @@ func (s *Server) handleConnection(conn net.Conn) {
 		conn.Close()
 		logging.Infof("%v connection %v closed\n", s.logPrefix, raddr)
 	}()
+
+	// Set keep alive interval.
+	if tcpconn, ok := conn.(*net.TCPConn); ok {
+		tcpconn.SetKeepAlive(true)
+		tcpconn.SetKeepAlivePeriod(s.keepAliveInterval)
+	}
 
 	// start a receive routine.
 	rcvch := make(chan request, s.streamChanSize)

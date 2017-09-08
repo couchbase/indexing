@@ -3,6 +3,7 @@ package client
 import "time"
 import "unsafe"
 import "io"
+import "net"
 import "sync/atomic"
 import "fmt"
 
@@ -884,11 +885,11 @@ func (c *GsiClient) doScan(
 					c.bridge.Timeit(targetInstID, float64(time.Since(begin)))
 					return scan_err
 				}
-				if scan_err != nil && scan_err != io.EOF && partial {
+				if scan_err != nil && !isgone(scan_err) && partial {
 					// partially succeeded scans, we don't reset-hash and we
 					// don't retry
 					return scan_err
-				} else if scan_err == io.EOF && evictRetry > 0 {
+				} else if isgone(scan_err) && evictRetry > 0 {
 					logging.Warnf("evict retry (%v)...\n", evictRetry)
 					evictRetry--
 					continue
@@ -1118,4 +1119,13 @@ func curePrimaryKey(key interface{}) ([]byte, string) {
 		return nil, "after"
 	}
 	return nil, "before"
+}
+
+func isgone(scan_err error) bool {
+	if scan_err == io.EOF {
+		return true
+	} else if err, ok := scan_err.(net.Error); ok && err.Timeout() {
+		return true
+	}
+	return false
 }
