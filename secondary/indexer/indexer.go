@@ -31,6 +31,7 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/fdb"
 	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/manager/client"
 	"github.com/couchbase/indexing/secondary/memdb"
 	"github.com/couchbase/indexing/secondary/memdb/nodetable"
 	projClient "github.com/couchbase/indexing/secondary/projector/client"
@@ -145,6 +146,8 @@ type indexer struct {
 
 	rebalanceRunning bool
 	rebalanceToken   *RebalanceToken
+
+	bootsrapStorageMode common.StorageMode
 }
 
 type kvRequest struct {
@@ -221,6 +224,14 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	idx.initStreamFlushMap()
 	idx.initServiceAddressMap()
 
+	isEnterprise := idx.config["isEnterprise"].Bool()
+	if isEnterprise {
+		common.SetBuildMode(common.ENTERPRISE)
+	} else {
+		common.SetBuildMode(common.COMMUNITY)
+	}
+	logging.Infof("Indexer::NewIndexer Build Mode Set %v", common.GetBuildMode())
+
 	//Start Mutation Manager
 	idx.mutMgr, res = NewMutationManager(idx.mutMgrCmdCh, idx.wrkrRecvCh, idx.config)
 	if res.GetMsgType() != MSG_SUCCESS {
@@ -251,8 +262,10 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 
 	idx.enableManager = idx.config["enableManager"].Bool()
 
+	idx.bootsrapStorageMode = idx.getBootstrapStorageMode(idx.config)
+	logging.Infof("bootstrap storage mode %v", idx.bootsrapStorageMode)
 	if idx.enableManager {
-		idx.clustMgrAgent, res = NewClustMgrAgent(idx.clustMgrAgentCmdCh, idx.adminRecvCh, idx.config)
+		idx.clustMgrAgent, res = NewClustMgrAgent(idx.clustMgrAgentCmdCh, idx.adminRecvCh, idx.config, idx.bootsrapStorageMode)
 		if res.GetMsgType() != MSG_SUCCESS {
 			logging.Fatalf("Indexer::NewIndexer ClusterMgrAgent Init Error %+v", res)
 			return nil, res
@@ -264,14 +277,6 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		logging.Fatalf("Indexer::NewIndexer statsMgr Init Error %+v", res)
 		return nil, res
 	}
-
-	isEnterprise := idx.config["isEnterprise"].Bool()
-	if isEnterprise {
-		common.SetBuildMode(common.ENTERPRISE)
-	} else {
-		common.SetBuildMode(common.COMMUNITY)
-	}
-	logging.Infof("Indexer::NewIndexer Build Mode Set %v", common.GetBuildMode())
 
 	idx.setIndexerState(common.INDEXER_BOOTSTRAP)
 	idx.stats.indexerState.Set(int64(common.INDEXER_BOOTSTRAP))
@@ -352,9 +357,15 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	}
 
 	//read persisted indexer state
-	if err := idx.bootstrap(snapshotNotifych); err != nil {
+	needsRestart, err := idx.bootstrap(snapshotNotifych)
+	if err != nil {
 		logging.Fatalf("Indexer::Unable to Bootstrap Indexer from Persisted Metadata %v", err)
 		return nil, &MsgError{err: Error{cause: err}}
+	}
+
+	if needsRestart {
+		logging.Infof("Restarting indexer after storage upgrade")
+		idx.stats.needsRestart.Set(true)
 	}
 
 	//if storageMode has changed in settings while bootstrap was in progress
@@ -904,6 +915,7 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 
 func (idx *indexer) updateStorageMode(newConfig common.Config) {
 
+	newConfig.SetValue("nodeuuid", idx.config["nodeuuid"].String())
 	confStorageMode := strings.ToLower(newConfig["settings.storage_mode"].String())
 
 	if confStorageMode != "" && confStorageMode != common.GetClusterStorageMode().String() {
@@ -3338,7 +3350,7 @@ func (idx *indexer) checkDuplicateDropRequest(indexInst common.IndexInst,
 	return false
 }
 
-func (idx *indexer) bootstrap(snapshotNotifych chan IndexSnapshot) error {
+func (idx *indexer) bootstrap(snapshotNotifych chan IndexSnapshot) (bool, error) {
 
 	logging.Infof("Indexer::indexer version %v", common.INDEXER_CUR_VERSION)
 	idx.genIndexerId()
@@ -3352,8 +3364,9 @@ func (idx *indexer) bootstrap(snapshotNotifych chan IndexSnapshot) error {
 	idx.recoverRebalanceState()
 
 	//recover indexes from local metadata
-	if err := idx.initFromPersistedState(); err != nil {
-		return err
+	needsRestart, err := idx.initFromPersistedState()
+	if err != nil {
+		return needsRestart, err
 	}
 
 	//Start Storage Manager
@@ -3363,7 +3376,7 @@ func (idx *indexer) bootstrap(snapshotNotifych chan IndexSnapshot) error {
 	if res.GetMsgType() == MSG_ERROR {
 		err := res.(*MsgError).GetError()
 		logging.Fatalf("Indexer::NewIndexer Storage Manager Init Error %v", err)
-		return err.cause
+		return needsRestart, err.cause
 	}
 
 	//send updated maps
@@ -3424,19 +3437,19 @@ func (idx *indexer) bootstrap(snapshotNotifych chan IndexSnapshot) error {
 	// ready to process DDL
 	msg := &MsgClustMgrUpdate{mType: CLUST_MGR_INDEXER_READY}
 	if err := idx.sendMsgToClusterMgr(msg); err != nil {
-		return err
+		return needsRestart, err
 	}
 
 	//if there are no indexes, return from here
 	if len(idx.indexInstMap) == 0 {
-		return nil
+		return needsRestart, nil
 	}
 
 	if ok := idx.startStreams(); !ok {
-		return errors.New("Unable To Start DCP Streams")
+		return needsRestart, errors.New("Unable To Start DCP Streams")
 	}
 
-	return nil
+	return needsRestart, nil
 }
 
 func (idx *indexer) recoverRebalanceState() {
@@ -3551,19 +3564,19 @@ func (idx *indexer) genIndexerId() {
 
 }
 
-func (idx *indexer) initFromPersistedState() error {
+func (idx *indexer) initFromPersistedState() (bool, error) {
 
 	err := idx.recoverIndexInstMap()
 	if err != nil {
 		logging.Fatalf("Indexer::initFromPersistedState Error Recovering IndexInstMap %v", err)
-		return err
+		return false, err
 	}
 
 	logging.Infof("Indexer::initFromPersistedState Recovered IndexInstMap %v", idx.indexInstMap)
 
 	idx.validateIndexInstMap()
 
-	idx.upgradeStorage()
+	needsRestart := idx.upgradeStorage()
 
 	// Set the storage mode specific to this indexer node
 	common.SetStorageMode(idx.getLocalStorageMode(idx.config))
@@ -3591,7 +3604,7 @@ func (idx *indexer) initFromPersistedState() error {
 		var partnInstMap PartitionInstMap
 		var err error
 		if partnInstMap, err = idx.initPartnInstance(inst, nil); err != nil {
-			return err
+			return needsRestart, err
 		}
 
 		idx.indexInstMap[inst.InstId] = inst
@@ -3599,7 +3612,7 @@ func (idx *indexer) initFromPersistedState() error {
 
 	}
 
-	return nil
+	return needsRestart, nil
 
 }
 
@@ -3683,14 +3696,14 @@ func (idx *indexer) recoverInstMapFromFile() error {
 	return nil
 }
 
-func (idx *indexer) upgradeStorage() {
+func (idx *indexer) upgradeStorage() bool {
 
 	if common.GetBuildMode() != common.ENTERPRISE {
-		return
+		return false
 	}
 
 	disable := idx.config["settings.storage_mode.disable_upgrade"].Bool()
-	override := idx.getStorageModeOverride()
+	override := idx.getStorageModeOverride(idx.config)
 	logging.Infof("indexer.upgradeStorage: check index for storage upgrade.   disable %v overrride %v", disable, override)
 
 	//
@@ -3746,6 +3759,22 @@ func (idx *indexer) upgradeStorage() {
 			}
 		}
 	}
+
+	// If storage mode is different from bootstrap, then have to restart indexer.
+	s := idx.getIndexStorageMode()
+
+	if s == common.MIXED {
+		logging.Errorf("Indexer is mixed storage mode after storage upgrade")
+
+	} else if s != common.NOT_SET {
+		if s != idx.bootsrapStorageMode {
+			logging.Infof("Updating bootstrap storage mode to %v", s)
+			idx.postIndexStorageModeForBootstrap(idx.config, s)
+			return true
+		}
+	}
+
+	return false
 }
 
 func (idx *indexer) upgradeSingleIndex(inst *common.IndexInst, storageMode common.StorageMode) {
@@ -5161,7 +5190,7 @@ func (idx *indexer) promoteStorageModeIfNecessary(mode common.StorageMode, confi
 	//
 	// Check for storage mode override
 	//
-	override := idx.getStorageModeOverride()
+	override := idx.getStorageModeOverride(config)
 
 	return idx.promoteStorageModeIfNecessaryInternal(mode, disable, override)
 }
@@ -5184,22 +5213,47 @@ func (idx *indexer) promoteStorageModeIfNecessaryInternal(mode common.StorageMod
 	return mode
 }
 
-func (idx *indexer) getStorageModeOverride() common.StorageMode {
+func (idx *indexer) getStorageModeOverride(config common.Config) common.StorageMode {
 
-	idx.clustMgrAgentCmdCh <- &MsgClustMgrLocal{
-		mType: CLUST_MGR_GET_LOCAL,
-		key:   "StorageModeOverride",
+	nodeUUID := config["nodeuuid"].String()
+	override, err := client.GetIndexerStorageModeOverride(nodeUUID)
+
+	if err == nil && common.IsValidIndexType(override) {
+		logging.Infof("Indexer::getStorageModeOverride(): override storage mode %v.", override)
+		return common.IndexTypeToStorageMode(common.IndexType(override))
 	}
 
-	respMsg := <-idx.clustMgrAgentCmdCh
-	resp := respMsg.(*MsgClustMgrLocal)
-
-	if resp.GetError() == nil && common.IsValidIndexType(resp.GetValue()) {
-		logging.Infof("Indexer::getStorageModeOverride(): override storage mode %v.", resp.GetValue())
-		return common.IndexTypeToStorageMode(common.IndexType(resp.GetValue()))
+	if err != nil {
+		logging.Errorf("Error when fetching storage mode override.  Error=%s", err)
 	}
 
 	return common.NOT_SET
+}
+
+func (idx *indexer) getBootstrapStorageMode(config common.Config) common.StorageMode {
+
+	nodeUUID := config["nodeuuid"].String()
+	s, err := client.GetIndexerLocalStorageMode(nodeUUID)
+	if s == common.NOT_SET || err != nil {
+		logging.Infof("Unable to fetch storage mode from metakv during bootrap.  Use storage mode setting for bootstrap")
+
+		confStorageMode := strings.ToLower(config["settings.storage_mode"].String())
+		s = common.IndexTypeToStorageMode(common.IndexType(confStorageMode))
+	}
+
+	return idx.promoteStorageModeIfNecessary(s, config)
+}
+
+func (idx *indexer) postIndexStorageModeForBootstrap(config common.Config, storageMode common.StorageMode) error {
+
+	nodeUUID := config["nodeuuid"].String()
+	err := client.PostIndexerLocalStorageMode(nodeUUID, storageMode)
+	if err != nil {
+		logging.Errorf("Error when post storage mode to metakv during bootrap.  Error=%s", err)
+		return err
+	}
+
+	return nil
 }
 
 func (idx *indexer) getInstIdFromDefnId(defnId common.IndexDefnId) common.IndexInstId {

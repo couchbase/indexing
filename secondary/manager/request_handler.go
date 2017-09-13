@@ -944,7 +944,15 @@ func (m *requestHandlerContext) handleIndexStorageModeRequest(w http.ResponseWri
 		if err == nil {
 			if downgrade {
 				if common.GetStorageMode() == common.StorageMode(common.PLASMA) {
-					m.mgr.SetLocalValue("StorageModeOverride", common.ForestDB)
+
+					nodeUUID, err := m.mgr.getMetadataRepo().GetLocalNodeUUID()
+					if err != nil {
+						logging.Infof("RequestHandler::handleIndexStorageModeRequest: unable to identify nodeUUID.  Cannot downgrade.")
+						send(http.StatusOK, w, "Unable to identify nodeUUID.  Cannot downgrade.")
+						return
+					}
+
+					client.PostIndexerStorageModeOverride(string(nodeUUID), common.ForestDB)
 					logging.Infof("RequestHandler::handleIndexStorageModeRequest: set override storage mode to forestdb")
 					send(http.StatusOK, w, "downgrade storage mode to forestdb after indexer restart.")
 				} else {
@@ -952,7 +960,14 @@ func (m *requestHandlerContext) handleIndexStorageModeRequest(w http.ResponseWri
 					send(http.StatusOK, w, "Indexer storage mode is not plasma.  Cannot downgrade.")
 				}
 			} else {
-				m.mgr.SetLocalValue("StorageModeOverride", "")
+				nodeUUID, err := m.mgr.getMetadataRepo().GetLocalNodeUUID()
+				if err != nil {
+					logging.Infof("RequestHandler::handleIndexStorageModeRequest: unable to identify nodeUUID. Cannot disable storage mode downgrade.")
+					send(http.StatusOK, w, "Unable to identify nodeUUID.  Cannot disable storage mode downgrade.")
+					return
+				}
+
+				client.PostIndexerStorageModeOverride(string(nodeUUID), "")
 				logging.Infof("RequestHandler::handleIndexStorageModeRequst: unset storage mode override")
 				send(http.StatusOK, w, "storage mode downgrade is disabled")
 			}

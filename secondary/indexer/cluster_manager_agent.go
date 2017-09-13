@@ -36,7 +36,7 @@ type clustMgrAgent struct {
 	statsCount uint64
 }
 
-func NewClustMgrAgent(supvCmdch MsgChannel, supvRespch MsgChannel, cfg common.Config) (
+func NewClustMgrAgent(supvCmdch MsgChannel, supvRespch MsgChannel, cfg common.Config, storageMode common.StorageMode) (
 	ClustMgrAgent, Message) {
 
 	//Init the clustMgrAgent struct
@@ -46,7 +46,7 @@ func NewClustMgrAgent(supvCmdch MsgChannel, supvRespch MsgChannel, cfg common.Co
 		config:     cfg,
 	}
 
-	mgr, err := manager.NewIndexManager(cfg)
+	mgr, err := manager.NewIndexManager(cfg, storageMode)
 	if err != nil {
 		logging.Errorf("ClustMgrAgent::NewClustMgrAgent Error In Init %v", err)
 		return nil, &MsgError{
