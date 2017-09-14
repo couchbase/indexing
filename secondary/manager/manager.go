@@ -20,7 +20,6 @@ import (
 	"github.com/couchbase/indexing/secondary/manager/client"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 )
@@ -108,23 +107,22 @@ type RequestServer interface {
 //
 // Create a new IndexManager
 //
-func NewIndexManager(config common.Config) (mgr *IndexManager, err error) {
+func NewIndexManager(config common.Config, storageMode common.StorageMode) (mgr *IndexManager, err error) {
 
-	return NewIndexManagerInternal(config)
+	return NewIndexManagerInternal(config, storageMode)
 }
 
 //
 // Create a new IndexManager
 //
-func NewIndexManagerInternal(config common.Config) (mgr *IndexManager, err error) {
+func NewIndexManagerInternal(config common.Config, storageMode common.StorageMode) (mgr *IndexManager, err error) {
 
 	gometaL.Current = &logging.SystemLogger
 
 	mgr = new(IndexManager)
 	mgr.isClosed = false
-	storageMode := config["settings.storage_mode"].String()
 
-	if strings.ToLower(storageMode) == common.StorageMode(common.FORESTDB).String() {
+	if storageMode == common.StorageMode(common.FORESTDB) {
 		mgr.quota = mgr.calcBufCacheFromMemQuota(config)
 	} else {
 		mgr.quota = 1 * 1024 * 1024 //1 MB
