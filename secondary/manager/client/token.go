@@ -32,6 +32,9 @@ const IndexerVersionTokenTag = "versionToken"
 const InfoMetakvDir = c.IndexingMetaDir + "info/"
 const IndexerVersionTokenPath = InfoMetakvDir + IndexerVersionTokenTag
 
+const IndexerStorageModeTokenTag = "storageModeToken/"
+const IndexerStorageModeTokenPath = InfoMetakvDir + IndexerStorageModeTokenTag
+
 //////////////////////////////////////////////////////////////
 // Concrete Type
 //////////////////////////////////////////////////////////////
@@ -50,6 +53,12 @@ type BuildCommandToken struct {
 
 type IndexerVersionToken struct {
 	Version uint64
+}
+
+type IndexerStorageModeToken struct {
+	NodeUUID         string
+	Override         string
+	LocalStorageMode string
 }
 
 //////////////////////////////////////////////////////////////
@@ -217,6 +226,162 @@ func UnmarshallIndexerVersionToken(data []byte) (*IndexerVersionToken, error) {
 }
 
 func MarshallIndexerVersionToken(r *IndexerVersionToken) ([]byte, error) {
+
+	buf, err := json.Marshal(&r)
+	if err != nil {
+		return nil, err
+	}
+
+	return buf, nil
+}
+
+//////////////////////////////////////////////////////////////
+// Storage Mode Management
+//////////////////////////////////////////////////////////////
+
+//
+// Generate a token to metakv for indexer storage mode
+//
+func PostIndexerStorageModeOverride(nodeUUID string, override string) error {
+
+	if len(nodeUUID) == 0 {
+		return errors.New("NodeUUId is not specified. Fail to set storage mode override.")
+	}
+
+	token, err := GetIndexerStorageModeToken(nodeUUID)
+	if err != nil {
+		logging.Errorf("Fail to read indexer storage mode to metakv for node %v.  Internal Error = %v", nodeUUID, err)
+		return err
+	}
+
+	if token == nil {
+		token = &IndexerStorageModeToken{
+			NodeUUID: nodeUUID,
+		}
+	}
+	token.Override = override
+
+	if err := c.MetakvSet(IndexerStorageModeTokenPath+nodeUUID, token); err != nil {
+		logging.Errorf("Fail to post indexer storage mode to metakv for node %v.  Internal Error = %v", nodeUUID, err)
+		return err
+	}
+
+	return nil
+}
+
+//
+// Generate a token to metakv for indexer storage mode
+//
+func PostIndexerLocalStorageMode(nodeUUID string, storageMode c.StorageMode) error {
+
+	if len(nodeUUID) == 0 {
+		return errors.New("NodeUUId is not specified. Fail to set local storage mode in metakv.")
+	}
+
+	token, err := GetIndexerStorageModeToken(nodeUUID)
+	if err != nil {
+		logging.Errorf("Fail to read indexer storage mode to metakv for node %v.  Internal Error = %v", nodeUUID, err)
+		return err
+	}
+
+	if token == nil {
+		token = &IndexerStorageModeToken{
+			NodeUUID: nodeUUID,
+		}
+	}
+
+	token.LocalStorageMode = string(c.StorageModeToIndexType(storageMode))
+
+	if err := c.MetakvSet(IndexerStorageModeTokenPath+nodeUUID, token); err != nil {
+		logging.Errorf("Fail to post indexer storage mode to metakv for node %v.  Internal Error = %v", nodeUUID, err)
+		return err
+	}
+
+	return nil
+}
+
+//
+// Does token exist? Return true only if token exist and there is no error.
+//
+func GetIndexerStorageModeToken(nodeUUID string) (*IndexerStorageModeToken, error) {
+
+	if len(nodeUUID) == 0 {
+		return nil, errors.New("NodeUUId is not specified. Fail to get storage mode token.")
+	}
+
+	token := &IndexerStorageModeToken{}
+	found, err := c.MetakvGet(IndexerStorageModeTokenPath+nodeUUID, token)
+	if err != nil {
+		logging.Errorf("Fail to get indexer storage token from metakv for node %v.  Internal Error = %v", nodeUUID, err)
+		return nil, err
+	}
+
+	if !found {
+		return nil, nil
+	}
+
+	return token, nil
+}
+
+//
+// Does token exist? Return true only if token exist and there is no error.
+//
+func GetIndexerStorageModeOverride(nodeUUID string) (string, error) {
+
+	if len(nodeUUID) == 0 {
+		return "", errors.New("NodeUUId is not specified. Fail to get storage mode override.")
+	}
+
+	token, err := GetIndexerStorageModeToken(nodeUUID)
+	if err != nil {
+		logging.Errorf("Fail to read indexer storage mode to metakv for node %v.  Internal Error = %v", nodeUUID, err)
+		return "", err
+	}
+
+	if token != nil {
+		return token.Override, nil
+	}
+
+	return "", nil
+}
+
+//
+// Does token exist? Return true only if token exist and there is no error.
+//
+func GetIndexerLocalStorageMode(nodeUUID string) (c.StorageMode, error) {
+
+	if len(nodeUUID) == 0 {
+		return c.NOT_SET, errors.New("NodeUUId is not specified. Fail to get storage mode override.")
+	}
+
+	token, err := GetIndexerStorageModeToken(nodeUUID)
+	if err != nil {
+		logging.Errorf("Fail to read indexer storage mode to metakv for node %v.  Internal Error = %v", nodeUUID, err)
+		return c.NOT_SET, err
+	}
+
+	if token != nil {
+		return c.IndexTypeToStorageMode(c.IndexType(token.LocalStorageMode)), nil
+	}
+
+	return c.NOT_SET, nil
+}
+
+//
+//
+// Unmarshall
+//
+func UnmarshallIndexerStorageModeToken(data []byte) (*IndexerStorageModeToken, error) {
+
+	r := new(IndexerStorageModeToken)
+	if err := json.Unmarshal(data, r); err != nil {
+		return nil, err
+	}
+
+	return r, nil
+}
+
+func MarshallIndexerStorageModeToken(r *IndexerStorageModeToken) ([]byte, error) {
 
 	buf, err := json.Marshal(&r)
 	if err != nil {
