@@ -184,27 +184,22 @@ func (s *IndexScanSource) Routine() error {
 		return nil
 	}
 
-	sliceSnapshots := GetSliceSnapshots(s.is)
+	sliceSnapshots, err1 := GetSliceSnapshots(s.is, s.p.req.PartitionIds)
+	if err1 != nil {
+		return err1
+	}
 
 loop:
 	for _, scan := range r.Scans {
 		currentScan = scan
-		for _, snap := range sliceSnapshots {
-			if scan.ScanType == AllReq {
-				err = snap.Snapshot().All(r.Ctx, fn)
-			} else if scan.ScanType == LookupReq {
-				err = snap.Snapshot().Lookup(r.Ctx, scan.Equals, fn)
-			} else if scan.ScanType == RangeReq || scan.ScanType == FilterRangeReq {
-				err = snap.Snapshot().Range(r.Ctx, scan.Low, scan.High, scan.Incl, fn)
-			}
-			switch err {
-			case nil:
-			case p.ErrSupervisorKill, ErrLimitReached:
-				break loop
-			default:
-				s.CloseWithError(err)
-				break loop
-			}
+		err = scatter(r, scan, sliceSnapshots, fn)
+		switch err {
+		case nil:
+		case p.ErrSupervisorKill, ErrLimitReached:
+			break loop
+		default:
+			s.CloseWithError(err)
+			break loop
 		}
 	}
 	return nil

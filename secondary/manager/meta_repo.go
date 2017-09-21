@@ -1038,7 +1038,7 @@ func isIndexStats(key string) bool {
 //
 // Add Index to Topology
 //
-func (m *MetadataRepo) addIndexToTopology(defn *common.IndexDefn, instId common.IndexInstId, replicaId int, scheduled bool) error {
+func (m *MetadataRepo) addIndexToTopology(defn *common.IndexDefn, instId common.IndexInstId, replicaId int, partitions []common.PartitionId, scheduled bool) error {
 
 	// get existing topology
 	topology, err := m.GetTopologyByBucket(defn.Bucket)
@@ -1063,7 +1063,7 @@ func (m *MetadataRepo) addIndexToTopology(defn *common.IndexDefn, instId common.
 
 	topology.AddIndexDefinition(defn.Bucket, defn.Name, uint64(defn.DefnId),
 		uint64(instId), uint32(common.INDEX_STATE_CREATED), string(indexerId),
-		uint64(defn.InstVersion), rState, uint64(replicaId), scheduled,
+		uint64(defn.InstVersion), rState, uint64(replicaId), partitions, scheduled,
 		string(defn.Using))
 
 	// Add a reference of the bucket-level topology to the global topology.

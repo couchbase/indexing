@@ -579,6 +579,11 @@ func (w *streamWorker) handleSingleKeyVersion(bucket string, vbucket Vbucket, vb
 			mut.key = append(mut.key, kv.GetKeys()[i]...)
 			mut.command = byte(kv.GetCommands()[i])
 
+			// For backward compatibilty, projector may not send partnkey pre-5.1.
+			if len(kv.GetPartnkeys()) != 0 && len(kv.GetPartnkeys()[i]) != 0 {
+				mut.partnkey = append(mut.partnkey, kv.GetPartnkeys()[i]...)
+			}
+
 			mutk.mut = append(mutk.mut, mut)
 
 		case common.DropData:

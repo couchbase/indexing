@@ -189,9 +189,10 @@ type IndexDefn struct {
 	NumReplica      uint32          `json:"numReplica,omitempty"`
 
 	// transient field (not part of index metadata)
-	InstVersion int         `json:"instanceVersion,omitempty"`
-	ReplicaId   int         `json:"replicaId,omitempty"`
-	InstId      IndexInstId `json:"instanceId,omitempty"`
+	InstVersion int           `json:"instanceVersion,omitempty"`
+	ReplicaId   int           `json:"replicaId,omitempty"`
+	InstId      IndexInstId   `json:"instanceId,omitempty"`
+	Partitions  []PartitionId `json:"partitions,omitempty"`
 }
 
 //IndexInst is an instance of an Index(aka replica)

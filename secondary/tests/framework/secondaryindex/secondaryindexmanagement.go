@@ -16,7 +16,7 @@ var IndexUsing = "gsi"
 
 func CreateClient(server, serviceAddr string) (*qc.GsiClient, error) {
 	config := c.SystemConfig.SectionConfig("queryport.client.", true)
-	client, err := qc.NewGsiClient(server, config)
+	client, err := qc.NewGsiClient(server, config, c.SystemConfig["indexer.numPartitions"].Int())
 	if err != nil {
 		log.Printf("Error while creating gsi client: ", err)
 		return nil, err

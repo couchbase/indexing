@@ -68,6 +68,7 @@ message ScanRequest {
 	optional bool				reverse			= 10;
 	optional int64				offset			= 11;
 	optional int64				rollbackTime    = 12;
+	repeated uint64				partitionIds     = 13;
 }
 
 // Full table scan request from indexer.
@@ -78,6 +79,7 @@ message ScanAllRequest {
     optional TsConsistency vector    = 4;
     optional string        requestId = 5;
 	optional int64		   rollbackTime    = 6;
+	repeated uint64		   partitionIds     = 7;
 }
 
 // Request by client to stop streaming the query results.
@@ -104,6 +106,7 @@ message CountRequest {
     optional bool          distinct  = 6;
     repeated Scan          scans     = 7;
 	optional int64		   rollbackTime    = 8;
+	repeated uint64		   partitionIds     = 9;
 }
 
 // total number of entries in index.

@@ -724,6 +724,13 @@ var SystemConfig = Config{
 		true,  // immutable
 		false, // case-insensitive
 	},
+	"indexer.numPartitions": ConfigValue{
+		64,
+		"Number of vbuckets",
+		64,
+		true,  // immutable
+		false, // case-insensitive
+	},
 	"indexer.enableManager": ConfigValue{
 		false,
 		"Enable index manager",

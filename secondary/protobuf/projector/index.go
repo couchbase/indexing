@@ -245,16 +245,17 @@ func (ie *IndexEvaluator) TransformRoute(
 		// FIXME: TODO: where clause is not used to for optimizing out messages
 		// not passing the where clause. For this we need a gaurantee that
 		// where clause will be defined only on immutable fields.
+
 		if where { // WHERE predicate, sent upsert only if where is true.
 			raddrs := instn.UpsertEndpoints(m, npkey, nkey, okey)
 			for _, raddr := range raddrs {
 				dkv, ok := data[raddr].(*c.DataportKeyVersions)
 				if !ok {
 					kv := c.NewKeyVersions(seqno, m.Key, 4, m.Ctime)
-					kv.AddUpsert(uuid, nkey, okey)
+					kv.AddUpsert(uuid, nkey, okey, npkey)
 					dkv = &c.DataportKeyVersions{bucket, vbno, vbuuid, kv}
 				} else {
-					dkv.Kv.AddUpsert(uuid, nkey, okey)
+					dkv.Kv.AddUpsert(uuid, nkey, okey, npkey)
 				}
 				data[raddr] = dkv
 			}
@@ -266,26 +267,27 @@ func (ie *IndexEvaluator) TransformRoute(
 				dkv, ok := data[raddr].(*c.DataportKeyVersions)
 				if !ok {
 					kv := c.NewKeyVersions(seqno, m.Key, 4, m.Ctime)
-					kv.AddUpsertDeletion(uuid, okey)
+					kv.AddUpsertDeletion(uuid, okey, npkey)
 					dkv = &c.DataportKeyVersions{bucket, vbno, vbuuid, kv}
 				} else {
-					dkv.Kv.AddUpsertDeletion(uuid, okey)
+					dkv.Kv.AddUpsertDeletion(uuid, okey, npkey)
 				}
 				data[raddr] = dkv
 			}
 		}
 
 	case mcd.DCP_DELETION, mcd.DCP_EXPIRATION:
+
 		// Delete shall be broadcasted if old-key is not available.
 		raddrs := instn.DeletionEndpoints(m, opkey, okey)
 		for _, raddr := range raddrs {
 			dkv, ok := data[raddr].(*c.DataportKeyVersions)
 			if !ok {
 				kv := c.NewKeyVersions(seqno, m.Key, 4, m.Ctime)
-				kv.AddDeletion(uuid, okey)
+				kv.AddDeletion(uuid, okey, npkey)
 				dkv = &c.DataportKeyVersions{bucket, vbno, vbuuid, kv}
 			} else {
-				dkv.Kv.AddDeletion(uuid, okey)
+				dkv.Kv.AddDeletion(uuid, okey, npkey)
 			}
 			data[raddr] = dkv
 		}
@@ -322,7 +324,7 @@ func (ie *IndexEvaluator) partitionKey(
 	exprType := defn.GetExprType()
 	switch exprType {
 	case ExprType_N1QL:
-		out, _, err := N1QLTransform(nil, doc, []interface{}{ie.whExpr}, meta, encodeBuf)
+		out, _, err := N1QLTransform(nil, doc, []interface{}{ie.pkExpr}, meta, encodeBuf)
 		return out, err
 	}
 	return nil, nil

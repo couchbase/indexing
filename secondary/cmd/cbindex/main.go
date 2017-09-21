@@ -77,8 +77,9 @@ func main() {
 		os.Exit(exitcode)
 	}
 
+	numPartitions := c.SystemConfig["indexer.numPartitions"].Int()
 	config := c.SystemConfig.SectionConfig("queryport.client.", true)
-	client, err := qclient.NewGsiClient(cmdOptions.Server, config)
+	client, err := qclient.NewGsiClient(cmdOptions.Server, config, numPartitions)
 	if err != nil {
 		logging.Fatalf("%v\n", err)
 		os.Exit(1)

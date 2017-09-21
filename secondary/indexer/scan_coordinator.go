@@ -1,4 +1,3 @@
-// Copyright (c) 2014 Couchbase, Inc.
 // Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file
 // except in compliance with the License. You may obtain a copy of the License at
 //   http://www.apache.org/licenses/LICENSE-2.0
@@ -37,6 +36,7 @@ var (
 	ErrSnapNotAvailable   = errors.New("No snapshot available for scan")
 	ErrUnsupportedRequest = errors.New("Unsupported query request")
 	ErrVbuuidMismatch     = errors.New("Mismatch in session vbuuids")
+	ErrNotMyPartition     = errors.New("Not my partition")
 )
 
 var secKeyBufPool *common.BytesBufPool
@@ -57,20 +57,21 @@ const (
 )
 
 type ScanRequest struct {
-	ScanType    ScanReqType
-	DefnID      uint64
-	IndexInstId common.IndexInstId
-	IndexName   string
-	Bucket      string
-	Ts          *common.TsVbuuid
-	Low         IndexKey
-	High        IndexKey
-	Keys        []IndexKey
-	Consistency *common.Consistency
-	Stats       *IndexStats
-	IndexInst   common.IndexInst
+	ScanType     ScanReqType
+	DefnID       uint64
+	IndexInstId  common.IndexInstId
+	IndexName    string
+	Bucket       string
+	PartitionIds []common.PartitionId
+	Ts           *common.TsVbuuid
+	Low          IndexKey
+	High         IndexKey
+	Keys         []IndexKey
+	Consistency  *common.Consistency
+	Stats        *IndexStats
+	IndexInst    common.IndexInst
 
-	Ctx IndexReaderContext
+	Ctxs []IndexReaderContext
 
 	// user supplied
 	LowBytes, HighBytes []byte
@@ -1127,6 +1128,7 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 				r.Ts.Seqnos[vbno] = vector.Seqnos[i]
 				r.Ts.Vbuuids[vbno] = vector.Vbuuids[i]
 			}
+
 		} else if cons == common.SessionConsistency {
 			cluster := cfg["clusterAddr"].String()
 			r.Ts = &common.TsVbuuid{}
@@ -1135,6 +1137,7 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 			if localErr == nil && r.Stats != nil {
 				r.Stats.Timings.dcpSeqs.Put(time.Since(t0))
 			}
+
 			r.Ts.Crc64 = 0
 			r.Ts.Bucket = r.Bucket
 		}
@@ -1151,7 +1154,7 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 		defer s.mu.RUnlock()
 
 		stats := s.stats.Get()
-		indexInst, r.Ctx, localErr = s.findIndexInstance(r.DefnID)
+		indexInst, r.Ctxs, localErr = s.findIndexInstance(r.DefnID, r.PartitionIds)
 		if localErr == nil {
 			r.isPrimary = indexInst.Defn.IsPrimary
 			r.IndexName, r.Bucket = indexInst.Defn.Name, indexInst.Defn.Bucket
@@ -1189,6 +1192,7 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 		r.DefnID = req.GetDefnID()
 		r.RequestId = req.GetRequestId()
 		r.rollbackTime = req.GetRollbackTime()
+		r.PartitionIds = makePartitionIds(req.GetPartitionIds())
 		cons := common.Consistency(req.GetCons())
 		vector := req.GetVector()
 		r.ScanType = CountReq
@@ -1216,6 +1220,7 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 		r.DefnID = req.GetDefnID()
 		r.RequestId = req.GetRequestId()
 		r.rollbackTime = req.GetRollbackTime()
+		r.PartitionIds = makePartitionIds(req.GetPartitionIds())
 		cons := common.Consistency(req.GetCons())
 		vector := req.GetVector()
 		r.ScanType = ScanReq
@@ -1251,6 +1256,7 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 		r.DefnID = req.GetDefnID()
 		r.RequestId = req.GetRequestId()
 		r.rollbackTime = req.GetRollbackTime()
+		r.PartitionIds = makePartitionIds(req.GetPartitionIds())
 		cons := common.Consistency(req.GetCons())
 		vector := req.GetVector()
 		r.ScanType = ScanAllReq
@@ -1510,14 +1516,18 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, conn net.Conn,
 		}
 	}()
 
-	if req.Ctx != nil {
-		req.Ctx.Init()
+	if len(req.Ctxs) != 0 {
+		for _, ctx := range req.Ctxs {
+			ctx.Init()
+		}
 	}
 
 	s.processRequest(req, w, is, t0)
 
-	if req.Ctx != nil {
-		req.Ctx.Done()
+	if len(req.Ctxs) != 0 {
+		for _, ctx := range req.Ctxs {
+			ctx.Done()
+		}
 	}
 
 }
@@ -1586,6 +1596,7 @@ func (s *scanCoordinator) handleCountRequest(req *ScanRequest, w ScanResponseWri
 	is IndexSnapshot, t0 time.Time) {
 	var rows uint64
 	var err error
+	var snapshots []SliceSnapshot
 
 	stopch := make(StopChannel)
 	cancelCb := NewCancelCallback(req, func(e error) {
@@ -1595,22 +1606,8 @@ func (s *scanCoordinator) handleCountRequest(req *ScanRequest, w ScanResponseWri
 	cancelCb.Run()
 	defer cancelCb.Done()
 
-	for _, s := range GetSliceSnapshots(is) {
-		var r uint64
-		snap := s.Snapshot()
-		if len(req.Keys) > 0 {
-			r, err = snap.CountLookup(req.Ctx, req.Keys, stopch)
-		} else if req.Low.Bytes() == nil && req.High.Bytes() == nil {
-			r, err = snap.CountTotal(req.Ctx, stopch)
-		} else {
-			r, err = snap.CountRange(req.Ctx, req.Low, req.High, req.Incl, stopch)
-		}
-
-		if err != nil {
-			break
-		}
-
-		rows += r
+	if snapshots, err = GetSliceSnapshots(is, req.PartitionIds); err == nil {
+		rows, err = scatterCount(req, snapshots, stopch)
 	}
 
 	if s.tryRespondWithError(w, req, err) {
@@ -1626,6 +1623,8 @@ func (s *scanCoordinator) handleMultiScanCountRequest(req *ScanRequest, w ScanRe
 	is IndexSnapshot, t0 time.Time) {
 	var rows uint64
 	var err error
+	var snapshots []SliceSnapshot
+
 	stopch := make(StopChannel)
 	cancelCb := NewCancelCallback(req, func(e error) {
 		err = e
@@ -1634,26 +1633,20 @@ func (s *scanCoordinator) handleMultiScanCountRequest(req *ScanRequest, w ScanRe
 	cancelCb.Run()
 	defer cancelCb.Done()
 
-	buf := secKeyBufPool.Get()
-	defer secKeyBufPool.Put(buf)
-	previousRow := (*buf)[:0]
-	req.Ctx.SetCursorKey(&previousRow)
-
-	for _, scan := range req.Scans {
-		for _, s := range GetSliceSnapshots(is) {
-			var r uint64
-			snap := s.Snapshot()
-			if scan.ScanType == AllReq {
-				r, err = snap.MultiScanCount(req.Ctx, MinIndexKey, MaxIndexKey, Both, scan, req.Distinct, stopch)
-			} else if scan.ScanType == LookupReq || scan.ScanType == RangeReq ||
-				scan.ScanType == FilterRangeReq {
-				r, err = snap.MultiScanCount(req.Ctx, scan.Low, scan.High, scan.Incl, scan, req.Distinct, stopch)
-			}
-
-			if err != nil {
+	if snapshots, err = GetSliceSnapshots(is, req.PartitionIds); err == nil {
+		previousRows := make([][]byte, len(snapshots))
+		for i := 0; i < len(previousRows); i++ {
+			buf := secKeyBufPool.Get()
+			req.keyBufList = append(req.keyBufList, buf)
+			previousRows[i] = (*buf)[:0]
+			req.Ctxs[i].SetCursorKey(&previousRows[i])
+		}
+		for _, scan := range req.Scans {
+			r, err1 := scatterMultiCount(req, scan, snapshots, previousRows, stopch)
+			if err1 != nil {
+				err = err1
 				break
 			}
-
 			rows += r
 		}
 	}
@@ -1671,6 +1664,7 @@ func (s *scanCoordinator) handleStatsRequest(req *ScanRequest, w ScanResponseWri
 	is IndexSnapshot) {
 	var rows uint64
 	var err error
+	var snapshots []SliceSnapshot
 
 	stopch := make(StopChannel)
 	cancelCb := NewCancelCallback(req, func(e error) {
@@ -1680,20 +1674,8 @@ func (s *scanCoordinator) handleStatsRequest(req *ScanRequest, w ScanResponseWri
 	cancelCb.Run()
 	defer cancelCb.Done()
 
-	for _, s := range GetSliceSnapshots(is) {
-		var r uint64
-		snap := s.Snapshot()
-		if req.Low.Bytes() == nil && req.Low.Bytes() == nil {
-			r, err = snap.StatCountTotal()
-		} else {
-			r, err = snap.CountRange(req.Ctx, req.Low, req.High, req.Incl, stopch)
-		}
-
-		if err != nil {
-			break
-		}
-
-		rows += r
+	if snapshots, err = GetSliceSnapshots(is, req.PartitionIds); err == nil {
+		rows, err = scatterStats(req, snapshots, stopch)
 	}
 
 	if s.tryRespondWithError(w, req, err) {
@@ -1706,14 +1688,22 @@ func (s *scanCoordinator) handleStatsRequest(req *ScanRequest, w ScanResponseWri
 }
 
 // Find and return data structures for the specified index
+// This will also return the IndexReaderContext for each partition.  IndexReaderContext must
+// be returned in the same order as partitionIds.
 func (s *scanCoordinator) findIndexInstance(
-	defnID uint64) (*common.IndexInst, IndexReaderContext, error) {
+	defnID uint64, partitionIds []common.PartitionId) (*common.IndexInst, []IndexReaderContext, error) {
 
+	ctx := make([]IndexReaderContext, len(partitionIds))
 	for _, inst := range s.indexInstMap {
 		if inst.Defn.DefnId == common.IndexDefnId(defnID) {
 			if pmap, ok := s.indexPartnMap[inst.InstId]; ok {
-				ctx := pmap[0].Sc.GetSliceById(0).GetReaderContext()
-
+				for i, partnId := range partitionIds {
+					if partition, ok := pmap[partnId]; ok {
+						ctx[i] = partition.Sc.GetSliceById(0).GetReaderContext()
+					} else {
+						return nil, nil, ErrNotMyPartition
+					}
+				}
 				return &inst, ctx, nil
 			}
 			return nil, nil, ErrNotMyIndex
@@ -2007,4 +1997,18 @@ func bucketSeqsWithRetry(retries int, logPrefix, cluster, bucket string, numVbs 
 	rh := common.NewRetryHelper(retries, time.Second, 1, fn)
 	err = rh.Run()
 	return
+}
+
+func makePartitionIds(ids []uint64) []common.PartitionId {
+
+	if len(ids) == 0 {
+		return []common.PartitionId{common.NON_PARTITION_ID}
+	}
+
+	result := make([]common.PartitionId, len(ids))
+	for i, id := range ids {
+		result[i] = common.PartitionId(id)
+	}
+
+	return result
 }

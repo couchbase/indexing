@@ -17,6 +17,7 @@ import "net"
 import "time"
 import json "github.com/couchbase/indexing/secondary/common/json"
 import "sync/atomic"
+import "bytes"
 
 import "github.com/couchbase/indexing/secondary/logging"
 import "github.com/couchbase/indexing/secondary/common"
@@ -162,7 +163,8 @@ func (c *GsiScanClient) Lookup(
 	distinct bool, limit int64,
 	cons common.Consistency, vector *TsConsistency,
 	callb ResponseHandler,
-	rollbackTime int64) (error, bool) {
+	rollbackTime int64,
+	partitions []common.PartitionId) (error, bool) {
 
 	// serialize lookup value.
 	equals := make([][]byte, 0, len(values))
@@ -183,6 +185,11 @@ func (c *GsiScanClient) Lookup(
 
 	conn, pkt := connectn.conn, connectn.pkt
 
+	partnIds := make([]uint64, len(partitions))
+	for i, partnId := range partitions {
+		partnIds[i] = uint64(partnId)
+	}
+
 	req := &protobuf.ScanRequest{
 		DefnID:       proto.Uint64(defnID),
 		RequestId:    proto.String(requestId),
@@ -191,6 +198,7 @@ func (c *GsiScanClient) Lookup(
 		Limit:        proto.Int64(limit),
 		Cons:         proto.Uint32(uint32(cons)),
 		RollbackTime: proto.Int64(rollbackTime),
+		PartitionIds: partnIds,
 	}
 	if vector != nil {
 		req.Vector = protobuf.NewTsConsistency(
@@ -223,7 +231,8 @@ func (c *GsiScanClient) Lookup(
 func (c *GsiScanClient) Range(
 	defnID uint64, requestId string, low, high common.SecondaryKey, inclusion Inclusion,
 	distinct bool, limit int64, cons common.Consistency, vector *TsConsistency,
-	callb ResponseHandler, rollbackTime int64) (error, bool) {
+	callb ResponseHandler, rollbackTime int64, partitions []common.PartitionId,
+	defn *common.IndexDefn, numPartitions int) (error, bool) {
 
 	// serialize low and high values.
 	l, err := json.Marshal(low)
@@ -235,6 +244,10 @@ func (c *GsiScanClient) Range(
 		return err, false
 	}
 
+	if !inPartition(0, defn, l, h, partitions, numPartitions) {
+		return SkipPartitionError, false
+	}
+
 	connectn, err := c.pool.Get()
 	if err != nil {
 		return err, false
@@ -243,6 +256,11 @@ func (c *GsiScanClient) Range(
 	defer func() { c.pool.Return(connectn, healthy) }()
 
 	conn, pkt := connectn.conn, connectn.pkt
+
+	partnIds := make([]uint64, len(partitions))
+	for i, partnId := range partitions {
+		partnIds[i] = uint64(partnId)
+	}
 
 	req := &protobuf.ScanRequest{
 		DefnID:    proto.Uint64(defnID),
@@ -256,6 +274,7 @@ func (c *GsiScanClient) Range(
 		Limit:        proto.Int64(limit),
 		Cons:         proto.Uint32(uint32(cons)),
 		RollbackTime: proto.Int64(rollbackTime),
+		PartitionIds: partnIds,
 	}
 	if vector != nil {
 		req.Vector = protobuf.NewTsConsistency(
@@ -287,7 +306,7 @@ func (c *GsiScanClient) Range(
 func (c *GsiScanClient) RangePrimary(
 	defnID uint64, requestId string, low, high []byte, inclusion Inclusion,
 	distinct bool, limit int64, cons common.Consistency, vector *TsConsistency,
-	callb ResponseHandler, rollbackTime int64) (error, bool) {
+	callb ResponseHandler, rollbackTime int64, partitions []common.PartitionId) (error, bool) {
 
 	connectn, err := c.pool.Get()
 	if err != nil {
@@ -297,6 +316,11 @@ func (c *GsiScanClient) RangePrimary(
 	defer func() { c.pool.Return(connectn, healthy) }()
 
 	conn, pkt := connectn.conn, connectn.pkt
+
+	partnIds := make([]uint64, len(partitions))
+	for i, partnId := range partitions {
+		partnIds[i] = uint64(partnId)
+	}
 
 	req := &protobuf.ScanRequest{
 		DefnID:    proto.Uint64(defnID),
@@ -311,6 +335,7 @@ func (c *GsiScanClient) RangePrimary(
 		Limit:        proto.Int64(limit),
 		Cons:         proto.Uint32(uint32(cons)),
 		RollbackTime: proto.Int64(rollbackTime),
+		PartitionIds: partnIds,
 	}
 	if vector != nil {
 		req.Vector = protobuf.NewTsConsistency(
@@ -342,7 +367,7 @@ func (c *GsiScanClient) RangePrimary(
 func (c *GsiScanClient) ScanAll(
 	defnID uint64, requestId string, limit int64,
 	cons common.Consistency, vector *TsConsistency,
-	callb ResponseHandler, rollbackTime int64) (error, bool) {
+	callb ResponseHandler, rollbackTime int64, partitions []common.PartitionId) (error, bool) {
 
 	connectn, err := c.pool.Get()
 	if err != nil {
@@ -353,12 +378,18 @@ func (c *GsiScanClient) ScanAll(
 
 	conn, pkt := connectn.conn, connectn.pkt
 
+	partnIds := make([]uint64, len(partitions))
+	for i, partnId := range partitions {
+		partnIds[i] = uint64(partnId)
+	}
+
 	req := &protobuf.ScanAllRequest{
 		DefnID:       proto.Uint64(defnID),
 		RequestId:    proto.String(requestId),
 		Limit:        proto.Int64(limit),
 		Cons:         proto.Uint32(uint32(cons)),
 		RollbackTime: proto.Int64(rollbackTime),
+		PartitionIds: partnIds,
 	}
 	if vector != nil {
 		req.Vector = protobuf.NewTsConsistency(
@@ -389,7 +420,8 @@ func (c *GsiScanClient) MultiScan(
 	defnID uint64, requestId string, scans Scans,
 	reverse, distinct bool, projection *IndexProjection, offset, limit int64,
 	cons common.Consistency, vector *TsConsistency,
-	callb ResponseHandler, rollbackTime int64) (error, bool) {
+	callb ResponseHandler, rollbackTime int64, partitions []common.PartitionId,
+	index *common.IndexDefn, numPartitions int) (error, bool) {
 
 	// serialize scans
 	protoScans := make([]*protobuf.Scan, len(scans))
@@ -407,6 +439,10 @@ func (c *GsiScanClient) MultiScan(
 						return err, false
 					}
 					equals[i] = s
+
+					if !inPartition(i, index, s, s, partitions, numPartitions) {
+						return SkipPartitionError, false
+					}
 				}
 			} else {
 				filters = make([]*protobuf.CompositeElementFilter, len(scan.Filter))
@@ -420,11 +456,16 @@ func (c *GsiScanClient) MultiScan(
 								return err, false
 							}
 						}
+
 						if f.High != common.MaxUnbounded { // Do not encode if unbounded
 							h, err = json.Marshal(f.High)
 							if err != nil {
 								return err, false
 							}
+						}
+
+						if !inPartition(j, index, l, h, partitions, numPartitions) {
+							return SkipPartitionError, false
 						}
 
 						fl := &protobuf.CompositeElementFilter{
@@ -461,6 +502,11 @@ func (c *GsiScanClient) MultiScan(
 
 	conn, pkt := connectn.conn, connectn.pkt
 
+	partnIds := make([]uint64, len(partitions))
+	for i, partnId := range partitions {
+		partnIds[i] = uint64(partnId)
+	}
+
 	req := &protobuf.ScanRequest{
 		DefnID: proto.Uint64(defnID),
 		Span: &protobuf.Span{
@@ -475,6 +521,7 @@ func (c *GsiScanClient) MultiScan(
 		Reverse:         proto.Bool(reverse),
 		Offset:          proto.Int64(offset),
 		RollbackTime:    proto.Int64(rollbackTime),
+		PartitionIds:    partnIds,
 	}
 	if vector != nil {
 		req.Vector = protobuf.NewTsConsistency(
@@ -506,7 +553,7 @@ func (c *GsiScanClient) MultiScanPrimary(
 	defnID uint64, requestId string, scans Scans,
 	reverse, distinct bool, projection *IndexProjection, offset, limit int64,
 	cons common.Consistency, vector *TsConsistency,
-	callb ResponseHandler, rollbackTime int64) (error, bool) {
+	callb ResponseHandler, rollbackTime int64, partitions []common.PartitionId) (error, bool) {
 	var what string
 	// serialize scans
 	protoScans := make([]*protobuf.Scan, len(scans))
@@ -581,6 +628,11 @@ func (c *GsiScanClient) MultiScanPrimary(
 
 	conn, pkt := connectn.conn, connectn.pkt
 
+	partnIds := make([]uint64, len(partitions))
+	for i, partnId := range partitions {
+		partnIds[i] = uint64(partnId)
+	}
+
 	req := &protobuf.ScanRequest{
 		DefnID: proto.Uint64(defnID),
 		Span: &protobuf.Span{
@@ -595,6 +647,7 @@ func (c *GsiScanClient) MultiScanPrimary(
 		Reverse:         proto.Bool(reverse),
 		Offset:          proto.Int64(offset),
 		RollbackTime:    proto.Int64(rollbackTime),
+		PartitionIds:    partnIds,
 	}
 	if vector != nil {
 		req.Vector = protobuf.NewTsConsistency(
@@ -625,7 +678,7 @@ func (c *GsiScanClient) MultiScanPrimary(
 // CountLookup to count number entries for given set of keys.
 func (c *GsiScanClient) CountLookup(
 	defnID uint64, requestId string, values []common.SecondaryKey,
-	cons common.Consistency, vector *TsConsistency, rollbackTime int64) (int64, error) {
+	cons common.Consistency, vector *TsConsistency, rollbackTime int64, partitions []common.PartitionId) (int64, error) {
 
 	// serialize match value.
 	equals := make([][]byte, 0, len(values))
@@ -637,12 +690,18 @@ func (c *GsiScanClient) CountLookup(
 		equals = append(equals, val)
 	}
 
+	partnIds := make([]uint64, len(partitions))
+	for i, partnId := range partitions {
+		partnIds[i] = uint64(partnId)
+	}
+
 	req := &protobuf.CountRequest{
 		DefnID:       proto.Uint64(defnID),
 		RequestId:    proto.String(requestId),
 		Span:         &protobuf.Span{Equals: equals},
 		Cons:         proto.Uint32(uint32(cons)),
 		RollbackTime: proto.Int64(rollbackTime),
+		PartitionIds: partnIds,
 	}
 	if vector != nil {
 		req.Vector = protobuf.NewTsConsistency(
@@ -663,7 +722,12 @@ func (c *GsiScanClient) CountLookup(
 // CountLookup to count number entries for given set of keys for primary index
 func (c *GsiScanClient) CountLookupPrimary(
 	defnID uint64, requestId string, values [][]byte,
-	cons common.Consistency, vector *TsConsistency, rollbackTime int64) (int64, error) {
+	cons common.Consistency, vector *TsConsistency, rollbackTime int64, partitions []common.PartitionId) (int64, error) {
+
+	partnIds := make([]uint64, len(partitions))
+	for i, partnId := range partitions {
+		partnIds[i] = uint64(partnId)
+	}
 
 	req := &protobuf.CountRequest{
 		DefnID:       proto.Uint64(defnID),
@@ -671,6 +735,7 @@ func (c *GsiScanClient) CountLookupPrimary(
 		Span:         &protobuf.Span{Equals: values},
 		Cons:         proto.Uint32(uint32(cons)),
 		RollbackTime: proto.Int64(rollbackTime),
+		PartitionIds: partnIds,
 	}
 	if vector != nil {
 		req.Vector = protobuf.NewTsConsistency(
@@ -691,7 +756,7 @@ func (c *GsiScanClient) CountLookupPrimary(
 // CountRange to count number entries in the given range.
 func (c *GsiScanClient) CountRange(
 	defnID uint64, requestId string, low, high common.SecondaryKey, inclusion Inclusion,
-	cons common.Consistency, vector *TsConsistency, rollbackTime int64) (int64, error) {
+	cons common.Consistency, vector *TsConsistency, rollbackTime int64, partitions []common.PartitionId) (int64, error) {
 
 	// serialize low and high values.
 	l, err := json.Marshal(low)
@@ -701,6 +766,11 @@ func (c *GsiScanClient) CountRange(
 	h, err := json.Marshal(high)
 	if err != nil {
 		return 0, err
+	}
+
+	partnIds := make([]uint64, len(partitions))
+	for i, partnId := range partitions {
+		partnIds[i] = uint64(partnId)
 	}
 
 	req := &protobuf.CountRequest{
@@ -713,6 +783,7 @@ func (c *GsiScanClient) CountRange(
 		},
 		Cons:         proto.Uint32(uint32(cons)),
 		RollbackTime: proto.Int64(rollbackTime),
+		PartitionIds: partnIds,
 	}
 	if vector != nil {
 		req.Vector = protobuf.NewTsConsistency(
@@ -734,7 +805,12 @@ func (c *GsiScanClient) CountRange(
 // CountRange to count number entries in the given range for primary index
 func (c *GsiScanClient) CountRangePrimary(
 	defnID uint64, requestId string, low, high []byte, inclusion Inclusion,
-	cons common.Consistency, vector *TsConsistency, rollbackTime int64) (int64, error) {
+	cons common.Consistency, vector *TsConsistency, rollbackTime int64, partitions []common.PartitionId) (int64, error) {
+
+	partnIds := make([]uint64, len(partitions))
+	for i, partnId := range partitions {
+		partnIds[i] = uint64(partnId)
+	}
 
 	req := &protobuf.CountRequest{
 		DefnID:    proto.Uint64(defnID),
@@ -746,6 +822,7 @@ func (c *GsiScanClient) CountRangePrimary(
 		},
 		Cons:         proto.Uint32(uint32(cons)),
 		RollbackTime: proto.Int64(rollbackTime),
+		PartitionIds: partnIds,
 	}
 	if vector != nil {
 		req.Vector = protobuf.NewTsConsistency(
@@ -766,7 +843,7 @@ func (c *GsiScanClient) CountRangePrimary(
 
 func (c *GsiScanClient) MultiScanCount(
 	defnID uint64, requestId string, scans Scans, distinct bool,
-	cons common.Consistency, vector *TsConsistency, rollbackTime int64) (int64, error) {
+	cons common.Consistency, vector *TsConsistency, rollbackTime int64, partitions []common.PartitionId) (int64, error) {
 
 	// serialize scans
 	protoScans := make([]*protobuf.Scan, len(scans))
@@ -820,6 +897,11 @@ func (c *GsiScanClient) MultiScanCount(
 		}
 	}
 
+	partnIds := make([]uint64, len(partitions))
+	for i, partnId := range partitions {
+		partnIds[i] = uint64(partnId)
+	}
+
 	req := &protobuf.CountRequest{
 		DefnID:    proto.Uint64(defnID),
 		RequestId: proto.String(requestId),
@@ -830,6 +912,7 @@ func (c *GsiScanClient) MultiScanCount(
 		Scans:        protoScans,
 		Cons:         proto.Uint32(uint32(cons)),
 		RollbackTime: proto.Int64(rollbackTime),
+		PartitionIds: partnIds,
 	}
 
 	if vector != nil {
@@ -851,7 +934,7 @@ func (c *GsiScanClient) MultiScanCount(
 
 func (c *GsiScanClient) MultiScanCountPrimary(
 	defnID uint64, requestId string, scans Scans, distinct bool,
-	cons common.Consistency, vector *TsConsistency, rollbackTime int64) (int64, error) {
+	cons common.Consistency, vector *TsConsistency, rollbackTime int64, partitions []common.PartitionId) (int64, error) {
 
 	var what string
 	// serialize scans
@@ -909,6 +992,11 @@ func (c *GsiScanClient) MultiScanCountPrimary(
 		}
 	}
 
+	partnIds := make([]uint64, len(partitions))
+	for i, partnId := range partitions {
+		partnIds[i] = uint64(partnId)
+	}
+
 	req := &protobuf.CountRequest{
 		DefnID:    proto.Uint64(defnID),
 		RequestId: proto.String(requestId),
@@ -919,6 +1007,7 @@ func (c *GsiScanClient) MultiScanCountPrimary(
 		Scans:        protoScans,
 		Cons:         proto.Uint32(uint32(cons)),
 		RollbackTime: proto.Int64(rollbackTime),
+		PartitionIds: partnIds,
 	}
 
 	if vector != nil {
@@ -1088,4 +1177,43 @@ func (c *GsiScanClient) trySetDeadline(conn net.Conn, deadline time.Duration) {
 		timeoutMs := deadline * time.Millisecond
 		conn.SetReadDeadline(time.Now().Add(timeoutMs))
 	}
+}
+
+func inPartition(offset int, defn *common.IndexDefn, low, high []byte, partitions []common.PartitionId, numPartitions int) bool {
+
+	if defn.PartitionScheme != common.KEY {
+		return true
+	}
+
+	if offset != partitionKeyOffset(defn) {
+		return true
+	}
+
+	if bytes.Compare(low, high) != 0 {
+		return true
+	}
+
+	if len(low) == 0 && len(high) == 0 {
+		return true
+	}
+
+	partnId := common.HashKeyPartition(low, numPartitions)
+	for _, partn := range partitions {
+		if partn == partnId {
+			return true
+		}
+	}
+
+	return false
+}
+
+func partitionKeyOffset(defn *common.IndexDefn) int {
+
+	for i, secKey := range defn.SecExprs {
+		if secKey == defn.PartitionKey {
+			return i
+		}
+	}
+
+	return -1
 }

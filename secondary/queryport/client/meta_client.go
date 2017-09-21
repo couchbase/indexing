@@ -33,11 +33,12 @@ type metadataClient struct {
 	logtick                 time.Duration
 	randomWeight            float64 // value between [0, 1.0)
 	equivalenceFactor       float64 // value between [0, 1.0)
+	numPartitions           int
 
 	topoChangeLock sync.Mutex
 	metaCh         chan bool
 	mdNotifyCh     chan bool
-	stNotifyCh     chan map[common.IndexInstId]common.Statistics
+	stNotifyCh     chan map[common.IndexInstId]map[common.PartitionId]common.Statistics
 
 	settings *ClientSettings
 }
@@ -59,15 +60,16 @@ type indexTopology struct {
 }
 
 func newMetaBridgeClient(
-	cluster string, config common.Config, metaCh chan bool, settings *ClientSettings) (c *metadataClient, err error) {
+	cluster string, config common.Config, metaCh chan bool, settings *ClientSettings, numPartitions int) (c *metadataClient, err error) {
 
 	b := &metadataClient{
-		cluster:    cluster,
-		finch:      make(chan bool),
-		metaCh:     metaCh,
-		mdNotifyCh: make(chan bool, 1),
-		stNotifyCh: make(chan map[common.IndexInstId]common.Statistics, 1),
-		settings:   settings,
+		cluster:       cluster,
+		finch:         make(chan bool),
+		metaCh:        metaCh,
+		mdNotifyCh:    make(chan bool, 1),
+		stNotifyCh:    make(chan map[common.IndexInstId]map[common.PartitionId]common.Statistics, 1),
+		settings:      settings,
+		numPartitions: numPartitions,
 	}
 	b.servicesNotifierRetryTm = config["servicesNotifierRetryTm"].Int()
 	b.logtick = time.Duration(config["logtick"].Int()) * time.Millisecond
@@ -79,7 +81,7 @@ func newMetaBridgeClient(
 		logging.Errorf("Could not generate UUID in common.NewUUID\n")
 		return nil, err
 	}
-	b.mdClient, err = mclient.NewMetadataProvider(uuid.Str(), b.mdNotifyCh, b.stNotifyCh, b.settings)
+	b.mdClient, err = mclient.NewMetadataProvider(uuid.Str(), b.mdNotifyCh, b.stNotifyCh, b.numPartitions, b.settings)
 	if err != nil {
 		return nil, err
 	}
@@ -279,10 +281,10 @@ func (b *metadataClient) GetScanports() (queryports []string) {
 
 // GetScanport implements BridgeAccessor{} interface.
 func (b *metadataClient) GetScanport(
-	defnID uint64, retry int, excludes map[uint64]bool) (qp string, targetDefnID uint64, targetInstID uint64, rolbackTime int64, ok bool) {
+	defnID uint64, retry int, excludes map[uint64]bool) (qp []string, targetDefnID uint64, targetInstID uint64, rt []int64, pid [][]common.PartitionId, ok bool) {
 
 	var inst *mclient.InstanceDefn
-	rollbackTime := int64(math.MaxInt64)
+	var rollbackTime map[common.PartitionId]int64
 
 	currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
 	if rand.Float64() < b.randomWeight {
@@ -293,25 +295,49 @@ func (b *metadataClient) GetScanport(
 			n++
 		}
 		inst, rollbackTime, ok = b.pickRandom(replicas[:n], defnID, excludes)
+
 	} else {
 		inst, rollbackTime, ok = b.pickOptimal(defnID, excludes)
 	}
 
 	if !ok {
-		return "", 0, 0, int64(math.MaxInt64), false
+		return nil, 0, 0, nil, nil, false
 	}
 
 	targetInstID = uint64(inst.InstId)
 	targetDefnID = uint64(inst.DefnId)
 
-	qp, ok = currmeta.queryports[inst.IndexerId]
-	if !ok {
-		return "", 0, 0, int64(math.MaxInt64), false
+	im := make(map[common.IndexerId][]common.PartitionId)
+	idx := make([]common.IndexerId, 0)
+
+	for partnId, indexerId := range inst.IndexerId {
+
+		if _, ok := im[indexerId]; !ok {
+			q, ok := currmeta.queryports[indexerId]
+			if !ok {
+				return nil, 0, 0, nil, nil, false
+			}
+			qp = append(qp, q)
+
+			t, ok := rollbackTime[partnId]
+			if !ok {
+				return nil, 0, 0, nil, nil, false
+			}
+			rt = append(rt, t)
+
+			idx = append(idx, indexerId)
+		}
+
+		im[indexerId] = append(im[indexerId], partnId)
+	}
+
+	for _, indexerId := range idx {
+		pid = append(pid, im[indexerId])
 	}
 
 	fmsg := "Scan port %s for index defnID %d of equivalent index defnId %d"
 	logging.Debugf(fmsg, qp, targetDefnID, defnID)
-	return qp, targetDefnID, targetInstID, rollbackTime, true
+	return qp, targetDefnID, targetInstID, rt, pid, true
 }
 
 // Timeit implement BridgeAccessor{} interface.
@@ -370,16 +396,16 @@ func (b *metadataClient) computeReplicas(
 				continue
 			}
 
-			replicas := make([]common.IndexInstId, 0)
+			replicas := make(map[common.IndexInstId]bool)
 
 			// Instance can be of any of valid instance state (READY, INITIAL, CATCHUP, ACTIVE),
 			// but RState is always ACTIVE. Add all of them to replica list regardless of the instance
 			// state. When picking instance for scanning, only ACTIVE will use picked.
 			for _, inst1 := range index1.Instances {
-				replicas = append(replicas, inst1.InstId) // add itself
+				replicas[inst1.InstId] = true // add itself
 			}
 
-			for id2, indexes2 := range topo {
+			for _, indexes2 := range topo {
 
 				for _, index2 := range indexes2 {
 					if index1.Definition.DefnId == index2.Definition.DefnId { // skip replica
@@ -388,16 +414,16 @@ func (b *metadataClient) computeReplicas(
 
 					if b.equivalentIndex(index1, index2) { // pick equivalents
 						for _, inst2 := range index2.Instances {
-
-							if inst2.IndexerId == id2 { // only add instance from this indexer
-								replicas = append(replicas, inst2.InstId)
-							}
+							replicas[inst2.InstId] = true
 						}
 					}
 				}
 			}
 
-			replicaMap[index1.Definition.DefnId] = replicas // map it
+			replicaMap[index1.Definition.DefnId] = make([]common.IndexInstId, 0, len(replicas))
+			for instId, _ := range replicas {
+				replicaMap[index1.Definition.DefnId] = append(replicaMap[index1.Definition.DefnId], instId)
+			}
 		}
 	}
 	return replicaMap
@@ -414,13 +440,13 @@ func (b *metadataClient) computeReplicasInRebalance(
 				continue
 			}
 
-			replicas := make([]*mclient.InstanceDefn, 0)
+			replicas := make(map[common.IndexInstId]*mclient.InstanceDefn)
 
 			for _, inst1 := range index1.InstsInRebalance {
-				replicas = append(replicas, inst1) // add itself
+				replicas[inst1.InstId] = inst1 // add itself
 			}
 
-			for id2, indexes2 := range topo {
+			for _, indexes2 := range topo {
 
 				for _, index2 := range indexes2 {
 
@@ -430,15 +456,16 @@ func (b *metadataClient) computeReplicasInRebalance(
 
 					if b.equivalentIndex(index1, index2) { // pick equivalents
 						for _, inst2 := range index2.InstsInRebalance {
-							if inst2.IndexerId == id2 { // only add instance from this indexer
-								replicas = append(replicas, inst2)
-							}
+							replicas[inst2.InstId] = inst2
 						}
 					}
 				}
 			}
 
-			replicaMap[index1.Definition.DefnId] = replicas // map it
+			replicaMap[index1.Definition.DefnId] = make([]*mclient.InstanceDefn, 0, len(replicas))
+			for _, inst := range replicas {
+				replicaMap[index1.Definition.DefnId] = append(replicaMap[index1.Definition.DefnId], inst)
+			}
 		}
 	}
 	return replicaMap
@@ -494,28 +521,36 @@ type loadHeuristics struct {
 }
 
 type loadStats struct {
-	pending      int64
-	rollbackTime int64
-	statsTime    int64
-	staleCount   int64
+	pending       map[common.PartitionId]int64
+	rollbackTime  map[common.PartitionId]int64
+	statsTime     map[common.PartitionId]int64
+	staleCount    map[common.PartitionId]int64
+	numPartitions int
 }
 
-func newLoadStats() *loadStats {
+func newLoadStats(numPartitions int) *loadStats {
 
-	return &loadStats{
-		pending:      math.MaxInt64, // initialize to maxInt64 -- no stats to compare
-		rollbackTime: 0,             // initialize to 0 -- always allow scan
-		statsTime:    0,
-		staleCount:   0,
+	stats := &loadStats{
+		pending:       make(map[common.PartitionId]int64), // initialize to maxInt64 -- no stats to compare
+		rollbackTime:  make(map[common.PartitionId]int64), // initialize to 0 -- always allow scan
+		statsTime:     make(map[common.PartitionId]int64),
+		staleCount:    make(map[common.PartitionId]int64),
+		numPartitions: numPartitions,
 	}
+
+	for i := 0; i < numPartitions+1; i++ {
+		stats.pending[common.PartitionId(i)] = math.MaxInt64
+	}
+
+	return stats
 }
 
-func newLoadHeuristics() *loadHeuristics {
+func newLoadHeuristics(numPartitions int) *loadHeuristics {
 
 	return &loadHeuristics{
 		avgLoad: 0,
 		hit:     0,
-		stats:   unsafe.Pointer(newLoadStats()),
+		stats:   unsafe.Pointer(newLoadStats(numPartitions)),
 	}
 }
 
@@ -559,43 +594,87 @@ func (b *loadHeuristics) getStats() *loadStats {
 	return (*loadStats)(atomic.LoadPointer(&b.stats))
 }
 
-func (b *loadStats) getPendingItem() int64 {
+func (b *loadHeuristics) copyStats() *loadStats {
 
-	return b.pending
+	stats := (*loadStats)(atomic.LoadPointer(&b.stats))
+	newStats := newLoadStats(stats.numPartitions)
+
+	for partnId, pending := range stats.pending {
+		newStats.pending[partnId] = pending
+	}
+
+	for partnId, rollbackTime := range stats.rollbackTime {
+		newStats.rollbackTime[partnId] = rollbackTime
+	}
+
+	for partnId, statsTime := range stats.statsTime {
+		newStats.statsTime[partnId] = statsTime
+	}
+
+	for partnId, staleCount := range stats.staleCount {
+		newStats.staleCount[partnId] = staleCount
+	}
+
+	return newStats
 }
 
-func (b *loadStats) updatePendingItem(value int64) {
+func (b *loadStats) getPendingItem(partitionId common.PartitionId) int64 {
 
-	b.pending = value
+	return b.pending[partitionId]
 }
 
-func (b *loadStats) getRollbackTime() int64 {
+func (b *loadStats) getTotalPendingItems() int64 {
 
-	return b.rollbackTime
+	var total int64
+	for _, pending := range b.pending {
+		total += pending
+	}
+
+	return total
 }
 
-func (b *loadStats) updateRollbackTime(value int64) {
+func (b *loadStats) updatePendingItem(partitionId common.PartitionId, value int64) {
 
-	b.rollbackTime = value
+	b.pending[partitionId] = value
 }
 
-func (b *loadStats) updateStatsTime(value int64) {
+func (b *loadStats) getRollbackTime(partitionId common.PartitionId) int64 {
 
-	if b.statsTime != value {
-		b.statsTime = value
-		b.staleCount = 0
+	return b.rollbackTime[partitionId]
+}
+
+func (b *loadStats) updateRollbackTime(partitionId common.PartitionId, value int64) {
+
+	b.rollbackTime[partitionId] = value
+}
+
+func (b *loadStats) updateStatsTime(partitionId common.PartitionId, value int64) {
+
+	if b.statsTime[partitionId] != value {
+		b.statsTime[partitionId] = value
+		b.staleCount[partitionId] = 0
 	} else {
-		b.staleCount++
+		b.staleCount[partitionId]++
 	}
 }
 
-func (b *loadStats) isStatsCurrent() bool {
+func (b *loadStats) isAllStatsCurrent() bool {
 
-	return b.staleCount < 10
+	current := true
+	for _, stale := range b.staleCount {
+		current = current && stale < 10
+	}
+
+	return current
+}
+
+func (b *loadStats) isStatsCurrent(partitionId common.PartitionId) bool {
+
+	return b.staleCount[partitionId] < 10
 }
 
 // pick a random replica from the list.
-func (b *metadataClient) pickRandom(replicas []uint64, defnID uint64, excludes map[uint64]bool) (*mclient.InstanceDefn, int64, bool) {
+func (b *metadataClient) pickRandom(replicas []uint64, defnID uint64, excludes map[uint64]bool) (*mclient.InstanceDefn, map[common.PartitionId]int64, bool) {
 
 	//
 	// filter out active inst.  Exclude inst from exclusion list (inst that has already failed scan)
@@ -616,11 +695,11 @@ func (b *metadataClient) pickRandom(replicas []uint64, defnID uint64, excludes m
 	//
 	if n == 0 {
 		if len(replicas) == 0 {
-			if inst, ok := b.pickReplicaInRebalance(defnID); ok {
-				return inst, 0, true
+			if inst, rollbackTimes, ok := b.pickReplicaInRebalance(defnID); ok {
+				return inst, rollbackTimes, true
 			}
 		}
-		return nil, math.MaxInt64, false
+		return nil, nil, false
 	}
 
 	//
@@ -642,11 +721,11 @@ func (b *metadataClient) pickRandom(replicas []uint64, defnID uint64, excludes m
 		}
 	}
 
-	return nil, math.MaxInt64, false
+	return nil, nil, false
 }
 
 // pick an optimal replica for the index `defnID` under least load.
-func (b *metadataClient) pickOptimal(defnID uint64, excludes map[uint64]bool) (*mclient.InstanceDefn, int64, bool) {
+func (b *metadataClient) pickOptimal(defnID uint64, excludes map[uint64]bool) (*mclient.InstanceDefn, map[common.PartitionId]int64, bool) {
 
 	//
 	// filter out active inst.  Exclude inst from exclusion list (inst that has already failed scan)
@@ -669,11 +748,11 @@ func (b *metadataClient) pickOptimal(defnID uint64, excludes map[uint64]bool) (*
 	//
 	if n == 0 { // none are active
 		if len(currmeta.replicas[common.IndexDefnId(defnID)]) == 0 {
-			if inst, ok := b.pickReplicaInRebalance(defnID); ok {
-				return inst, 0, true
+			if inst, rollbackTimes, ok := b.pickReplicaInRebalance(defnID); ok {
+				return inst, rollbackTimes, true
 			}
 		}
-		return nil, math.MaxInt64, false
+		return nil, nil, false
 	}
 
 	//
@@ -682,7 +761,7 @@ func (b *metadataClient) pickOptimal(defnID uint64, excludes map[uint64]bool) (*
 	prunedReplicas, _ := b.pruneStaleReplica(actvReplicas[:n])
 	n = len(prunedReplicas)
 	if n == 0 { // none are active
-		return nil, math.MaxInt64, false
+		return nil, nil, false
 	}
 
 	//
@@ -722,26 +801,37 @@ func (b *metadataClient) pickOptimal(defnID uint64, excludes map[uint64]bool) (*
 	return b.pickRandom(replicas[:m], defnID, excludes)
 }
 
-func (b *metadataClient) pickReplicaInRebalance(defnID uint64) (*mclient.InstanceDefn, bool) {
+func (b *metadataClient) pickReplicaInRebalance(defnID uint64) (*mclient.InstanceDefn, map[common.PartitionId]int64, bool) {
 
 	// Run out of active instance.   Try instance under rebalance, in case rebalance may have finished.
 	currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
 	replicasInRebal := currmeta.replicasInRebal[common.IndexDefnId(defnID)]
-	n := len(replicasInRebal)
-	if n > 0 {
-		return replicasInRebal[rand.Intn(n*10)%n], true
+	for _, inst := range replicasInRebal {
+		if inst.State == common.INDEX_STATE_ACTIVE {
+			rollbackTimes := make(map[common.PartitionId]int64)
+			for partnId, _ := range inst.IndexerId {
+				rollbackTimes[partnId] = 0
+			}
+			return inst, rollbackTimes, true
+		}
 	}
 
-	return nil, false
+	return nil, nil, false
 }
 
-func (b *metadataClient) pruneStaleReplica(replicas []uint64) ([]uint64, []int64) {
+func (b *metadataClient) pruneStaleReplica(replicas []uint64) ([]uint64, []map[common.PartitionId]int64) {
 
 	currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
 
 	// If there is only one instance or disable replica pruning, then just return.
 	if len(replicas) == 1 || b.settings.DisablePruneReplica() {
-		return replicas, make([]int64, len(replicas))
+		_, rollbackTimes, _ := b.getPendingStats(replicas, currmeta, false)
+		for _, rollbackTime := range rollbackTimes {
+			for partnId, _ := range rollbackTime {
+				rollbackTime[partnId] = 0
+			}
+		}
+		return replicas, rollbackTimes
 	}
 
 	// read the progress stats from each index -- exclude indexer that has not refreshed its stats
@@ -759,7 +849,12 @@ func (b *metadataClient) pruneStaleReplica(replicas []uint64) ([]uint64, []int64
 	// 2) index just finish building but not yet send stats over
 	// 3) There is a single instance (no replica) and not available
 	if uint64(minPending) >= uint64(math.MaxInt64) {
-		return replicas, make([]int64, len(replicas))
+		for _, rollbackTime := range rollbackTimes {
+			for partnId, _ := range rollbackTime {
+				rollbackTime[partnId] = 0
+			}
+		}
+		return replicas, rollbackTimes
 	}
 
 	percent := b.settings.ScanLagPercent()
@@ -771,7 +866,7 @@ func (b *metadataClient) pruneStaleReplica(replicas []uint64) ([]uint64, []int64
 	}
 
 	result1 := make([]uint64, len(replicas))
-	result2 := make([]int64, len(replicas))
+	result2 := make([]map[common.PartitionId]int64, len(replicas))
 	n := 0
 
 	for i, instId := range replicas {
@@ -785,29 +880,44 @@ func (b *metadataClient) pruneStaleReplica(replicas []uint64) ([]uint64, []int64
 	return result1[:n], result2[:n]
 }
 
-func (b *metadataClient) getPendingStats(replicas []uint64, currmeta *indexTopology, useCurrent bool) ([]int64, []int64, int64) {
+func (b *metadataClient) getPendingStats(replicas []uint64, currmeta *indexTopology, useCurrent bool) ([]int64, []map[common.PartitionId]int64, int64) {
 
 	pendings := make([]int64, len(replicas))
-	rollbackTimes := make([]int64, len(replicas))
+	rollbackTimes := make([]map[common.PartitionId]int64, len(replicas))
 	minPending := int64(math.MaxInt64)
 
 	for i, instId := range replicas {
+		rollbackTimes[i] = make(map[common.PartitionId]int64)
+
 		load, ok := currmeta.loads[common.IndexInstId(instId)]
 		if !ok {
 			pendings[i] = math.MaxInt64
-			rollbackTimes[i] = math.MaxInt64
+			rollbackTimes[i][common.PartitionId(0)] = math.MaxInt64
+			continue
+		}
+
+		inst, ok := currmeta.insts[common.IndexInstId(instId)]
+		if !ok {
+			pendings[i] = math.MaxInt64
+			rollbackTimes[i][common.PartitionId(0)] = math.MaxInt64
 			continue
 		}
 
 		stats := load.getStats()
-		if useCurrent && !stats.isStatsCurrent() {
-			pendings[i] = math.MaxInt64
-			rollbackTimes[i] = math.MaxInt64
-			continue
-		}
 
-		pendings[i] = stats.getPendingItem()
-		rollbackTimes[i] = stats.getRollbackTime()
+		for partnId, _ := range inst.IndexerId {
+			if useCurrent && !stats.isStatsCurrent(partnId) {
+				pendings[i] = math.MaxInt64
+				rollbackTimes[i][partnId] = math.MaxInt64
+				continue
+			}
+
+			if pendings[i] != math.MaxInt64 {
+				pendings[i] += stats.getPendingItem(partnId)
+			}
+
+			rollbackTimes[i][partnId] = stats.getRollbackTime(partnId)
+		}
 
 		if pendings[i] < minPending {
 			minPending = pendings[i]
@@ -869,21 +979,23 @@ func (b *metadataClient) printstats() {
 	s = make([]string, 0, 16)
 	for id, _ := range currmeta.insts {
 		load := currmeta.loads[id]
-		s = append(s, fmt.Sprintf(`"%v": %v`, id, load.getStats().getPendingItem()))
+		s = append(s, fmt.Sprintf(`"%v": %v`, id, load.getStats().getTotalPendingItems()))
 	}
 	logging.Infof("client pending item stats {%v}", strings.Join(s, ","))
 
-	s = make([]string, 0, 16)
-	for id, _ := range currmeta.insts {
-		load := currmeta.loads[id]
-		s = append(s, fmt.Sprintf(`"%v": %v`, id, load.getStats().getRollbackTime()))
-	}
-	logging.Infof("client rollback times {%v}", strings.Join(s, ","))
+	/*
+		s = make([]string, 0, 16)
+		for id, _ := range currmeta.insts {
+			load := currmeta.loads[id]
+			s = append(s, fmt.Sprintf(`"%v": %v`, id, load.getStats().getRollbackTime()))
+		}
+		logging.Infof("client rollback times {%v}", strings.Join(s, ","))
+	*/
 
 	s = make([]string, 0, 16)
 	for id, _ := range currmeta.insts {
 		load := currmeta.loads[id]
-		s = append(s, fmt.Sprintf(`"%v": %v`, id, load.getStats().isStatsCurrent()))
+		s = append(s, fmt.Sprintf(`"%v": %v`, id, load.getStats().isAllStatsCurrent()))
 	}
 	logging.Infof("client stats current {%v}", strings.Join(s, ","))
 }
@@ -1121,21 +1233,25 @@ func (b *metadataClient) updateTopology(
 		newmeta.defns[mindex.Definition.DefnId] = mindex
 
 		for _, instance := range mindex.Instances {
-			if _, ok := topologyMap[instance.IndexerId]; !ok {
-				topologyMap[instance.IndexerId] = make(map[common.IndexDefnId]*mclient.IndexMetadata)
-			}
-			if _, ok := topologyMap[instance.IndexerId][instance.DefnId]; !ok {
-				topologyMap[instance.IndexerId][instance.DefnId] = mindex
+			for _, indexerId := range instance.IndexerId {
+				if _, ok := topologyMap[indexerId]; !ok {
+					topologyMap[indexerId] = make(map[common.IndexDefnId]*mclient.IndexMetadata)
+				}
+				if _, ok := topologyMap[indexerId][instance.DefnId]; !ok {
+					topologyMap[indexerId][instance.DefnId] = mindex
+				}
 			}
 			newmeta.insts[instance.InstId] = instance
 		}
 
 		for _, instance := range mindex.InstsInRebalance {
-			if _, ok := topologyMap[instance.IndexerId]; !ok {
-				topologyMap[instance.IndexerId] = make(map[common.IndexDefnId]*mclient.IndexMetadata)
-			}
-			if _, ok := topologyMap[instance.IndexerId][instance.DefnId]; !ok {
-				topologyMap[instance.IndexerId][instance.DefnId] = mindex
+			for _, indexerId := range instance.IndexerId {
+				if _, ok := topologyMap[indexerId]; !ok {
+					topologyMap[indexerId] = make(map[common.IndexDefnId]*mclient.IndexMetadata)
+				}
+				if _, ok := topologyMap[indexerId][instance.DefnId]; !ok {
+					topologyMap[indexerId][instance.DefnId] = mindex
+				}
 			}
 			if _, ok := newmeta.insts[instance.InstId]; !ok {
 				newmeta.insts[instance.InstId] = instance
@@ -1182,7 +1298,7 @@ func (b *metadataClient) updateTopology(
 
 	for instId, _ := range newmeta.insts {
 		if _, ok := newmeta.loads[instId]; !ok {
-			newmeta.loads[instId] = newLoadHeuristics()
+			newmeta.loads[instId] = newLoadHeuristics(b.numPartitions)
 		}
 	}
 
@@ -1227,6 +1343,7 @@ func (b *metadataClient) safeupdate(
 			return
 		}
 
+		logging.Debugf("updateTopology %v \n", newmeta)
 		oldptr := unsafe.Pointer(currmeta)
 		newptr := unsafe.Pointer(newmeta)
 		done = atomic.CompareAndSwapPointer(&b.indexers, oldptr, newptr)
@@ -1306,50 +1423,53 @@ func (b *metadataClient) hasIndexesChanged(
 //
 // Update statistics index instance
 //
-func (b *metadataClient) updateStats(stats map[common.IndexInstId]common.Statistics) {
+func (b *metadataClient) updateStats(stats map[common.IndexInstId]map[common.PartitionId]common.Statistics) {
 
 	currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
 
-	for instId, stats := range stats {
+	for instId, statsByPartitions := range stats {
 
 		load, ok := currmeta.loads[instId]
 		if !ok {
 			continue
 		}
 
-		newStats := *load.getStats()
+		newStats := load.copyStats()
 
-		if v := stats.Get("num_docs_pending"); v != nil {
-			pending := int64(v.(float64))
-			if v := stats.Get("num_docs_queued"); v != nil {
-				queued := int64(v.(float64))
-				newStats.updatePendingItem(pending + queued)
-			}
-		}
+		for partitionId, stats := range statsByPartitions {
 
-		if v := stats.Get("last_rollback_time"); v != nil {
-			if rollback, err := strconv.ParseInt(v.(string), 10, 64); err == nil {
-
-				oldRollbackTime := load.getStats().getRollbackTime()
-				if rollback != oldRollbackTime {
-					logging.Infof("Rollback time has changed for index inst %v. New rollback time %v", instId, rollback)
+			if v := stats.Get("num_docs_pending"); v != nil {
+				pending := int64(v.(float64))
+				if v := stats.Get("num_docs_queued"); v != nil {
+					queued := int64(v.(float64))
+					newStats.updatePendingItem(partitionId, pending+queued)
 				}
+			}
 
-				newStats.updateRollbackTime(rollback)
-			} else {
-				logging.Errorf("Error in converting last_rollback_time %v, type %v", err)
+			if v := stats.Get("last_rollback_time"); v != nil {
+				if rollback, err := strconv.ParseInt(v.(string), 10, 64); err == nil {
+
+					oldRollbackTime := load.getStats().getRollbackTime(partitionId)
+					if rollback != oldRollbackTime {
+						logging.Infof("Rollback time has changed for index inst %v. New rollback time %v", instId, rollback)
+					}
+
+					newStats.updateRollbackTime(partitionId, rollback)
+				} else {
+					logging.Errorf("Error in converting last_rollback_time %v, type %v", err)
+				}
+			}
+
+			if v := stats.Get("progress_stat_time"); v != nil {
+				if progress, err := strconv.ParseInt(v.(string), 10, 64); err == nil {
+					newStats.updateStatsTime(partitionId, progress)
+				} else {
+					logging.Errorf("Error in converting progress_stat_time %v, type %v", err)
+				}
 			}
 		}
 
-		if v := stats.Get("progress_stat_time"); v != nil {
-			if progress, err := strconv.ParseInt(v.(string), 10, 64); err == nil {
-				newStats.updateStatsTime(progress)
-			} else {
-				logging.Errorf("Error in converting progress_stat_time %v, type %v", err)
-			}
-		}
-
-		load.updateStats(&newStats)
+		load.updateStats(newStats)
 	}
 }
 

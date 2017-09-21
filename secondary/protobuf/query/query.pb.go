@@ -311,6 +311,7 @@ type ScanRequest struct {
 	Reverse          *bool            `protobuf:"varint,10,opt,name=reverse" json:"reverse,omitempty"`
 	Offset           *int64           `protobuf:"varint,11,opt,name=offset" json:"offset,omitempty"`
 	RollbackTime     *int64           `protobuf:"varint,12,opt,name=rollbackTime" json:"rollbackTime,omitempty"`
+	PartitionIds     []uint64         `protobuf:"varint,13,rep,name=partitionIds" json:"partitionIds,omitempty"`
 	XXX_unrecognized []byte           `json:"-"`
 }
 
@@ -402,6 +403,13 @@ func (m *ScanRequest) GetRollbackTime() int64 {
 	return 0
 }
 
+func (m *ScanRequest) GetPartitionIds() []uint64 {
+	if m != nil {
+		return m.PartitionIds
+	}
+	return nil
+}
+
 // Full table scan request from indexer.
 type ScanAllRequest struct {
 	DefnID           *uint64        `protobuf:"varint,1,req,name=defnID" json:"defnID,omitempty"`
@@ -410,6 +418,7 @@ type ScanAllRequest struct {
 	Vector           *TsConsistency `protobuf:"bytes,4,opt,name=vector" json:"vector,omitempty"`
 	RequestId        *string        `protobuf:"bytes,5,opt,name=requestId" json:"requestId,omitempty"`
 	RollbackTime     *int64         `protobuf:"varint,6,opt,name=rollbackTime" json:"rollbackTime,omitempty"`
+	PartitionIds     []uint64       `protobuf:"varint,7,rep,name=partitionIds" json:"partitionIds,omitempty"`
 	XXX_unrecognized []byte         `json:"-"`
 }
 
@@ -457,6 +466,13 @@ func (m *ScanAllRequest) GetRollbackTime() int64 {
 		return *m.RollbackTime
 	}
 	return 0
+}
+
+func (m *ScanAllRequest) GetPartitionIds() []uint64 {
+	if m != nil {
+		return m.PartitionIds
+	}
+	return nil
 }
 
 // Request by client to stop streaming the query results.
@@ -519,6 +535,7 @@ type CountRequest struct {
 	Distinct         *bool          `protobuf:"varint,6,opt,name=distinct" json:"distinct,omitempty"`
 	Scans            []*Scan        `protobuf:"bytes,7,rep,name=scans" json:"scans,omitempty"`
 	RollbackTime     *int64         `protobuf:"varint,8,opt,name=rollbackTime" json:"rollbackTime,omitempty"`
+	PartitionIds     []uint64       `protobuf:"varint,9,rep,name=partitionIds" json:"partitionIds,omitempty"`
 	XXX_unrecognized []byte         `json:"-"`
 }
 
@@ -580,6 +597,13 @@ func (m *CountRequest) GetRollbackTime() int64 {
 		return *m.RollbackTime
 	}
 	return 0
+}
+
+func (m *CountRequest) GetPartitionIds() []uint64 {
+	if m != nil {
+		return m.PartitionIds
+	}
+	return nil
 }
 
 // total number of entries in index.

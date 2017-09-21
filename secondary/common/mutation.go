@@ -200,16 +200,18 @@ func NewKeyVersions(seqno uint64, docid []byte, maxCount, ctime int64) *KeyVersi
 	kv.Commands = make([]byte, 0, maxCount)
 	kv.Keys = make([][]byte, 0, maxCount)
 	kv.Oldkeys = make([][]byte, 0, maxCount)
+	kv.Partnkeys = make([][]byte, 0, maxCount)
 	kv.Ctime = ctime
 	return kv
 }
 
 // addKey will add key-version for a single index.
-func (kv *KeyVersions) addKey(uuid uint64, command byte, key, oldkey []byte) {
+func (kv *KeyVersions) addKey(uuid uint64, command byte, key, oldkey, pkey []byte) {
 	kv.Uuids = append(kv.Uuids, uuid)
 	kv.Commands = append(kv.Commands, command)
 	kv.Keys = append(kv.Keys, key)
 	kv.Oldkeys = append(kv.Oldkeys, oldkey)
+	kv.Partnkeys = append(kv.Partnkeys, pkey)
 }
 
 // Equal compares for equality of two KeyVersions object.
@@ -224,7 +226,8 @@ func (kv *KeyVersions) Equal(other *KeyVersions) bool {
 		if uuid != other.Uuids[i] ||
 			kv.Commands[i] != other.Commands[i] ||
 			bytes.Compare(kv.Keys[i], other.Keys[i]) != 0 ||
-			bytes.Compare(kv.Oldkeys[i], other.Oldkeys[i]) != 0 {
+			bytes.Compare(kv.Oldkeys[i], other.Oldkeys[i]) != 0 ||
+			bytes.Compare(kv.Partnkeys[i], other.Partnkeys[i]) != 0 {
 			return false
 		}
 	}
@@ -242,38 +245,38 @@ func (kv *KeyVersions) Length() int {
 }
 
 // AddUpsert add a new keyversion for same OpMutation.
-func (kv *KeyVersions) AddUpsert(uuid uint64, key, oldkey []byte) {
-	kv.addKey(uuid, Upsert, key, oldkey)
+func (kv *KeyVersions) AddUpsert(uuid uint64, key, oldkey, pkey []byte) {
+	kv.addKey(uuid, Upsert, key, oldkey, pkey)
 }
 
 // AddDeletion add a new keyversion for same OpDeletion.
-func (kv *KeyVersions) AddDeletion(uuid uint64, oldkey []byte) {
-	kv.addKey(uuid, Deletion, nil, oldkey)
+func (kv *KeyVersions) AddDeletion(uuid uint64, oldkey, pkey []byte) {
+	kv.addKey(uuid, Deletion, nil, oldkey, pkey)
 }
 
 // AddUpsertDeletion add a keyversion command to delete old entry.
-func (kv *KeyVersions) AddUpsertDeletion(uuid uint64, oldkey []byte) {
-	kv.addKey(uuid, UpsertDeletion, nil, oldkey)
+func (kv *KeyVersions) AddUpsertDeletion(uuid uint64, oldkey, pkey []byte) {
+	kv.addKey(uuid, UpsertDeletion, nil, oldkey, pkey)
 }
 
 // AddSync add Sync command for vbucket heartbeat.
 func (kv *KeyVersions) AddSync() {
-	kv.addKey(0, Sync, nil, nil)
+	kv.addKey(0, Sync, nil, nil, nil)
 }
 
 // AddDropData add DropData command for trigger downstream catchup.
 func (kv *KeyVersions) AddDropData() {
-	kv.addKey(0, DropData, nil, nil)
+	kv.addKey(0, DropData, nil, nil, nil)
 }
 
 // AddStreamBegin add StreamBegin command for a new vbucket.
 func (kv *KeyVersions) AddStreamBegin() {
-	kv.addKey(0, StreamBegin, nil, nil)
+	kv.addKey(0, StreamBegin, nil, nil, nil)
 }
 
 // AddStreamEnd add StreamEnd command for a vbucket shutdown.
 func (kv *KeyVersions) AddStreamEnd() {
-	kv.addKey(0, StreamEnd, nil, nil)
+	kv.addKey(0, StreamEnd, nil, nil, nil)
 }
 
 // AddSnapshot add Snapshot command for a vbucket shutdown.
@@ -283,7 +286,7 @@ func (kv *KeyVersions) AddSnapshot(typ uint32, start, end uint64) {
 	var key, okey [8]byte
 	binary.BigEndian.PutUint64(key[:8], start)
 	binary.BigEndian.PutUint64(okey[:8], end)
-	kv.addKey(uint64(typ), Snapshot, key[:8], okey[:8])
+	kv.addKey(uint64(typ), Snapshot, key[:8], okey[:8], nil)
 }
 
 func (kv *KeyVersions) String() string {

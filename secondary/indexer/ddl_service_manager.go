@@ -482,6 +482,8 @@ func (m *DDLServiceMgr) refreshMetadataProvider() (map[string]string, error) {
 
 func (m *DDLServiceMgr) newMetadataProvider(nodes map[service.NodeID]bool) (*client.MetadataProvider, map[string]string, error) {
 
+	numPartitions := m.config.Load()["numPartitions"].Int()
+
 	// initialize ClusterInfoCache
 	url, err := common.ClusterAuthUrl(m.clusterAddr)
 	if err != nil {
@@ -544,7 +546,7 @@ func (m *DDLServiceMgr) newMetadataProvider(nodes map[service.NodeID]bool) (*cli
 	}
 	providerId := ustr.Str()
 
-	provider, err := client.NewMetadataProvider(providerId, nil, nil, m.settings)
+	provider, err := client.NewMetadataProvider(providerId, nil, nil, numPartitions, m.settings)
 	if err != nil {
 		if provider != nil {
 			provider.Close()

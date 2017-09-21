@@ -122,8 +122,9 @@ func NewGSIIndexer(
 	if err != nil {
 		return nil, errors.NewError(err, "GSI config instantiation failed")
 	}
+	numPartitions := conf["indexer.numPartitions"].Int()
 	qconf := conf.SectionConfig("queryport.client.", true /*trim*/)
-	client, err := getSingletonClient(clusterURL, qconf)
+	client, err := getSingletonClient(clusterURL, qconf, numPartitions)
 	if err != nil {
 		l.Errorf("%v GSI instantiation failed: %v", gsi.logPrefix, err)
 		return nil, errors.NewError(err, "GSI client instantiation failed")
@@ -746,25 +747,13 @@ func (si *secondaryIndex) Scan(
 	conn *datastore.IndexConnection) {
 
 	entryChannel := conn.EntryChannel()
-	var tmpfile *os.File
 	var backfillSync int64
 
-	syncCh := make(chan bool)
+	var waitGroup sync.WaitGroup
 
 	defer close(entryChannel)
 	defer func() { // cleanup tmpfile
-		if tmpfile != nil {
-			<-syncCh
-			tmpfile.Close()
-			name := tmpfile.Name()
-			fmsg := "%v Scan(%v) removing backfill file %v ...\n"
-			l.Infof(fmsg, si.gsi.logPrefix, requestId, name)
-			if err := os.Remove(name); err != nil {
-				fmsg := "%v remove backfill file %v unexpected failure: %v\n"
-				l.Errorf(fmsg, si.gsi.logPrefix, name, err)
-			}
-			atomic.AddInt64(&si.gsi.totalbackfills, 1)
-		}
+		waitGroup.Wait()
 	}()
 	defer func() {
 		atomic.StoreInt64(&backfillSync, DONEREQUEST)
@@ -775,22 +764,23 @@ func (si *secondaryIndex) Scan(
 	client, cnf := si.gsi.gsiClient, si.gsi.config
 	if span.Seek != nil {
 		seek := values2SKey(span.Seek)
-		client.Lookup(
+		err := client.LookupInternal(
 			si.defnID, requestId, []c.SecondaryKey{seek}, distinct, limit,
 			n1ql2GsiConsistency[cons], vector2ts(vector),
-			makeResponsehandler(
-				requestId,
-				si, client, conn, &tmpfile, &backfillSync, syncCh, cnf))
-
+			makeRequestBroker(requestId, si, client, conn, cnf, &waitGroup, &backfillSync, cap(entryChannel)))
+		if err != nil {
+			conn.Error(n1qlError(client, err))
+		}
 	} else {
 		low, high := values2SKey(span.Range.Low), values2SKey(span.Range.High)
 		incl := n1ql2GsiInclusion[span.Range.Inclusion]
-		client.Range(
+		err := client.RangeInternal(
 			si.defnID, requestId, low, high, incl, distinct, limit,
 			n1ql2GsiConsistency[cons], vector2ts(vector),
-			makeResponsehandler(
-				requestId,
-				si, client, conn, &tmpfile, &backfillSync, syncCh, cnf))
+			makeRequestBroker(requestId, si, client, conn, cnf, &waitGroup, &backfillSync, cap(entryChannel)))
+		if err != nil {
+			conn.Error(n1qlError(client, err))
+		}
 	}
 	atomic.AddInt64(&si.gsi.totalscans, 1)
 	atomic.AddInt64(&si.gsi.scandur, int64(time.Since(starttm)))
@@ -802,25 +792,13 @@ func (si *secondaryIndex) ScanEntries(
 	vector timestamp.Vector, conn *datastore.IndexConnection) {
 
 	entryChannel := conn.EntryChannel()
-	var tmpfile *os.File
 	var backfillSync int64
 
-	syncCh := make(chan bool)
+	var waitGroup sync.WaitGroup
 
 	defer close(entryChannel)
 	defer func() {
-		if tmpfile != nil {
-			<-syncCh
-			tmpfile.Close()
-			name := tmpfile.Name()
-			fmsg := "%v ScanEntries(%v) removing backfill file %v ...\n"
-			l.Infof(fmsg, si.gsi.logPrefix, requestId, name)
-			if err := os.Remove(name); err != nil {
-				fmsg := "%v remove backfill file %v unexpected failure: %v\n"
-				l.Errorf(fmsg, si.gsi.logPrefix, name, err)
-			}
-			atomic.AddInt64(&si.gsi.totalbackfills, 1)
-		}
+		waitGroup.Wait()
 	}()
 	defer func() {
 		atomic.StoreInt64(&backfillSync, DONEREQUEST)
@@ -829,12 +807,13 @@ func (si *secondaryIndex) ScanEntries(
 	starttm := time.Now()
 
 	client, cnf := si.gsi.gsiClient, si.gsi.config
-	client.ScanAll(
+	err := client.ScanAllInternal(
 		si.defnID, requestId, limit,
 		n1ql2GsiConsistency[cons], vector2ts(vector),
-		makeResponsehandler(
-			requestId,
-			si, client, conn, &tmpfile, &backfillSync, syncCh, cnf))
+		makeRequestBroker(requestId, si, client, conn, cnf, &waitGroup, &backfillSync, cap(entryChannel)))
+	if err != nil {
+		conn.Error(n1qlError(client, err))
+	}
 
 	atomic.AddInt64(&si.gsi.totalscans, 1)
 	atomic.AddInt64(&si.gsi.scandur, int64(time.Since(starttm)))
@@ -856,25 +835,12 @@ func (si *secondaryIndex2) Scan2(
 	conn *datastore.IndexConnection) {
 
 	entryChannel := conn.EntryChannel()
-	var tmpfile *os.File
 	var backfillSync int64
-
-	syncCh := make(chan bool)
+	var waitGroup sync.WaitGroup
 
 	defer close(entryChannel)
 	defer func() { // cleanup tmpfile
-		if tmpfile != nil {
-			<-syncCh
-			tmpfile.Close()
-			name := tmpfile.Name()
-			fmsg := "%v Scan(%v) removing backfill file %v ...\n"
-			l.Infof(fmsg, si.gsi.logPrefix, requestId, name)
-			if err := os.Remove(name); err != nil {
-				fmsg := "%v remove backfill file %v unexpected failure: %v\n"
-				l.Errorf(fmsg, si.gsi.logPrefix, name, err)
-			}
-			atomic.AddInt64(&si.gsi.totalbackfills, 1)
-		}
+		waitGroup.Wait()
 	}()
 	defer func() {
 		atomic.StoreInt64(&backfillSync, DONEREQUEST)
@@ -886,13 +852,14 @@ func (si *secondaryIndex2) Scan2(
 
 	gsiscans := n1qlspanstogsi(spans)
 	gsiprojection := n1qlprojectiontogsi(projection)
-	client.MultiScan(
+	err := client.MultiScanInternal(
 		si.defnID, requestId, gsiscans, reverse, distinct,
 		gsiprojection, offset, limit,
 		n1ql2GsiConsistency[cons], vector2ts(vector),
-		makeResponsehandler(
-			requestId,
-			&si.secondaryIndex, client, conn, &tmpfile, &backfillSync, syncCh, cnf))
+		makeRequestBroker(requestId, &si.secondaryIndex, client, conn, cnf, &waitGroup, &backfillSync, cap(entryChannel)))
+	if err != nil {
+		conn.Error(n1qlError(client, err))
+	}
 
 	atomic.AddInt64(&si.gsi.totalscans, 1)
 	atomic.AddInt64(&si.gsi.scandur, int64(time.Since(starttm)))
@@ -1016,13 +983,42 @@ func (si *secondaryIndex2) Alter(requestId string, with value.Value) (
 // private functions for secondaryIndex
 //-------------------------------------
 
-func makeResponsehandler(
+func makeRequestBroker(
 	requestId string,
 	si *secondaryIndex,
 	client *qclient.GsiClient,
 	conn *datastore.IndexConnection,
-	tmpfile **os.File, backfillSync *int64, syncCh chan bool,
-	config c.Config) qclient.ResponseHandler {
+	config c.Config,
+	waitGroup *sync.WaitGroup,
+	backfillSync *int64,
+	size int) *qclient.RequestBroker {
+
+	broker := qclient.NewRequestBroker(int64(size))
+
+	factory := func(id qclient.ResponseHandlerId) qclient.ResponseHandler {
+		return makeResponsehandler(id, requestId, si, client, conn, broker, config, waitGroup, backfillSync)
+	}
+
+	sender := func(pkey []byte, mskey []value.Value, uskey c.SecondaryKey) bool {
+		return sendEntry(si, pkey, mskey, uskey, conn)
+	}
+
+	broker.SetResponseHandlerFactory(factory)
+	broker.SetResponseSender(sender)
+
+	return broker
+}
+
+func makeResponsehandler(
+	id qclient.ResponseHandlerId,
+	requestId string,
+	si *secondaryIndex,
+	client *qclient.GsiClient,
+	conn *datastore.IndexConnection,
+	broker *qclient.RequestBroker,
+	config c.Config,
+	waitGroup *sync.WaitGroup,
+	backfillSync *int64) qclient.ResponseHandler {
 
 	entryChannel := conn.EntryChannel()
 
@@ -1031,25 +1027,42 @@ func makeResponsehandler(
 	var readfd *os.File
 	var backfillFin, backfillEntries int64
 
+	var tmpfile *os.File
+
 	backfillLimit := int64(client.Settings().BackfillLimit())
 	primed, starttm, ticktm := false, time.Now(), time.Now()
 	lprefix := si.gsi.logPrefix
 
 	backfill := func() {
-		name := (*tmpfile).Name()
+		name := tmpfile.Name()
 		defer func() {
 			if readfd != nil {
 				readfd.Close()
 			}
-			close(syncCh)
+			waitGroup.Done()
 			atomic.AddInt64(&backfillFin, 1)
 			l.Debugf(
 				"%v %q finished backfill for %v ...\n",
 				lprefix, requestId, name)
+
+			if tmpfile != nil {
+				tmpfile.Close()
+				name := tmpfile.Name()
+				fmsg := "%v ScanEntries(%v) removing backfill file %v ...\n"
+				l.Infof(fmsg, si.gsi.logPrefix, requestId, name)
+				if err := os.Remove(name); err != nil {
+					fmsg := "%v remove backfill file %v unexpected failure: %v\n"
+					l.Errorf(fmsg, si.gsi.logPrefix, name, err)
+				}
+				atomic.AddInt64(&si.gsi.totalbackfills, 1)
+			}
+
 			recover() // need this because entryChannel() would have closed
 		}()
 		l.Debugf(
 			"%v %q started backfill for %v ...\n", lprefix, requestId, name)
+
+		waitGroup.Add(1)
 		for {
 			if pending := atomic.LoadInt64(&backfillEntries); pending > 0 {
 				atomic.AddInt64(&backfillEntries, -1)
@@ -1064,6 +1077,7 @@ func makeResponsehandler(
 				fmsg := "%q backfill exceeded limit %v, %v"
 				err := fmt.Errorf(fmsg, requestId, backfillLimit, cummsize)
 				conn.Error(n1qlError(client, err))
+				broker.Close()
 				return
 			}
 
@@ -1072,6 +1086,7 @@ func makeResponsehandler(
 				fmsg := "%v %q decoding from backfill %v: %v\n"
 				l.Errorf(fmsg, lprefix, requestId, name, err)
 				conn.Error(n1qlError(client, err))
+				broker.Close()
 				return
 			}
 			pkeys := make([][]byte, 0)
@@ -1079,6 +1094,7 @@ func makeResponsehandler(
 				fmsg := "%v %q decoding from backfill %v: %v\n"
 				l.Errorf(fmsg, lprefix, requestId, name, err)
 				conn.Error(n1qlError(client, err))
+				broker.Close()
 				return
 			}
 			l.Tracef("%v backfill read %v entries\n", lprefix, len(skeys))
@@ -1086,10 +1102,16 @@ func makeResponsehandler(
 				atomic.AddInt64(&si.gsi.primedur, int64(time.Since(starttm)))
 				primed = true
 			}
-			if len(entryChannel) > 0 && len(skeys) > 0 {
+
+			ln := int(broker.Len(id))
+			if ln < 0 {
+				ln = len(entryChannel)
+			}
+
+			if ln > 0 && len(skeys) > 0 {
 				atomic.AddInt64(&si.gsi.throttledur, int64(time.Since(ticktm)))
 			}
-			if sendEntries(si, pkeys, skeys, conn) == "stop" {
+			if !broker.SendEntries(id, pkeys, skeys) {
 				return
 			}
 			ticktm = time.Now()
@@ -1100,38 +1122,52 @@ func makeResponsehandler(
 		err := data.Error()
 		if err != nil {
 			conn.Error(n1qlError(client, err))
+			broker.Close()
 			return false
 		}
 		skeys, pkeys, err := data.GetEntries()
 		if err != nil {
 			conn.Error(n1qlError(client, err))
+			broker.Close()
 			return false
 		}
-		cp, ln := cap(entryChannel), len(entryChannel)
-		if backfillLimit > 0 && *tmpfile == nil && ((cp - ln) < len(skeys)) {
+
+		ln := int(broker.Len(id))
+		if ln < 0 {
+			ln = len(entryChannel)
+		}
+
+		cp := int(broker.Cap(id))
+		if cp < 0 {
+			cp = cap(entryChannel)
+		}
+
+		if backfillLimit > 0 && tmpfile == nil && ((cp - ln) < len(skeys)) {
 			prefix := BACKFILLPREFIX + strconv.Itoa(os.Getpid())
-			*tmpfile, err = ioutil.TempFile(n1ql_backfill_temp_dir, prefix)
+			tmpfile, err = ioutil.TempFile(n1ql_backfill_temp_dir, prefix)
 			name := ""
-			if *tmpfile != nil {
-				name = (*tmpfile).Name()
+			if tmpfile != nil {
+				name = tmpfile.Name()
 			}
 			if err != nil {
 				fmsg := "%v %q creating backfill file %v : %v\n"
 				l.Errorf(fmsg, lprefix, requestId, name, err)
-				*tmpfile = nil
+				tmpfile = nil
 				conn.Error(n1qlError(client, err))
+				broker.Close()
 				return false
 
 			} else {
 				fmsg := "%v %v new backfill file ... %v\n"
 				l.Infof(fmsg, lprefix, requestId, name)
 				// encoder
-				enc = gob.NewEncoder(*tmpfile)
+				enc = gob.NewEncoder(tmpfile)
 				readfd, err = os.OpenFile(name, os.O_RDONLY, 0666)
 				if err != nil {
 					fmsg := "%v %v reading backfill file %v: %v\n"
 					l.Errorf(fmsg, lprefix, requestId, name, err)
 					conn.Error(n1qlError(client, err))
+					broker.Close()
 					return false
 				}
 				// decoder
@@ -1140,13 +1176,14 @@ func makeResponsehandler(
 			}
 		}
 
-		if *tmpfile != nil {
+		if tmpfile != nil {
 			// whether temp-file is exhausted the limit.
 			cummsize := atomic.LoadInt64(&si.gsi.backfillSize) / (1024 * 1024)
 			if cummsize > backfillLimit {
 				fmsg := "%q backfill exceeded limit %v, %v"
 				err := fmt.Errorf(fmsg, requestId, backfillLimit, cummsize)
 				conn.Error(n1qlError(client, err))
+				broker.Close()
 				return false
 			}
 
@@ -1156,10 +1193,12 @@ func makeResponsehandler(
 			}
 			if err := enc.Encode(skeys); err != nil {
 				conn.Error(n1qlError(client, err))
+				broker.Close()
 				return false
 			}
 			if err := enc.Encode(pkeys); err != nil {
 				conn.Error(n1qlError(client, err))
+				broker.Close()
 				return false
 			}
 			atomic.AddInt64(&backfillEntries, 1)
@@ -1171,10 +1210,10 @@ func makeResponsehandler(
 				atomic.AddInt64(&si.gsi.primedur, int64(time.Since(starttm)))
 				primed = true
 			}
-			if len(entryChannel) > 0 && len(skeys) > 0 {
+			if int(ln) > 0 && len(skeys) > 0 {
 				atomic.AddInt64(&si.gsi.throttledur, int64(time.Since(ticktm)))
 			}
-			if sendEntries(si, pkeys, skeys, conn) == "stop" {
+			if !broker.SendEntries(id, pkeys, skeys) {
 				return false
 			}
 			ticktm = time.Now()
@@ -1344,13 +1383,13 @@ var muclient sync.Mutex
 var singletonClient *qclient.GsiClient
 
 func getSingletonClient(
-	clusterURL string, qconf c.Config) (*qclient.GsiClient, error) {
+	clusterURL string, qconf c.Config, numPartitions int) (*qclient.GsiClient, error) {
 
 	muclient.Lock()
 	defer muclient.Unlock()
 	if singletonClient == nil {
 		l.Debugf("creating singleton for URL %v", clusterURL)
-		client, err := qclient.NewGsiClientWithSettings(clusterURL, qconf, true)
+		client, err := qclient.NewGsiClientWithSettings(clusterURL, qconf, true, numPartitions)
 		if err != nil {
 			return nil, fmt.Errorf("in NewGsiClient(): %v", err)
 		}
@@ -1394,13 +1433,7 @@ func init() {
 	}
 }
 
-func sendEntries(
-	si *secondaryIndex, pkeys [][]byte, skeys []c.SecondaryKey,
-	conn *datastore.IndexConnection) string {
-
-	if len(skeys) == 0 {
-		return "empty"
-	}
+func sendEntry(si *secondaryIndex, pkey []byte, mskey []value.Value, uskey c.SecondaryKey, conn *datastore.IndexConnection) bool {
 
 	var start time.Time
 	blockedtm, blocked := int64(0), false
@@ -1408,26 +1441,26 @@ func sendEntries(
 	entryChannel := conn.EntryChannel()
 	stopChannel := conn.StopChannel()
 
-	for i, skey := range skeys {
-		// Primary-key is mandatory.
-		e := &datastore.IndexEntry{PrimaryKey: string(pkeys[i])}
-		e.EntryKey = skey2Values(skey)
-		cp, ln := cap(entryChannel), len(entryChannel)
-		if ln == cp {
-			start, blocked = time.Now(), true
-		}
-		select {
-		case entryChannel <- e:
-		case <-stopChannel:
-			return "stop"
-		}
-		if blocked {
-			blockedtm += int64(time.Since(start))
-			blocked = false
-		}
+	// Primary-key is mandatory.
+	e := &datastore.IndexEntry{
+		PrimaryKey: string(pkey),
+		EntryKey:   mskey}
+	cp, ln := cap(entryChannel), len(entryChannel)
+	if ln == cp {
+		start, blocked = time.Now(), true
 	}
+	select {
+	case entryChannel <- e:
+	case <-stopChannel:
+		return false
+	}
+	if blocked {
+		blockedtm += int64(time.Since(start))
+		blocked = false
+	}
+
 	atomic.AddInt64(&si.gsi.blockeddur, blockedtm)
-	return "ok"
+	return true
 }
 
 func (gsi *gsiKeyspace) logstats(logtick time.Duration) {

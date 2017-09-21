@@ -95,8 +95,8 @@ func (f *flusher) PersistUptoTS(q MutationQueue, streamId common.StreamId,
 	bucket string, indexInstMap common.IndexInstMap, indexPartnMap IndexPartnMap,
 	ts Timestamp, changeVec []bool, stopch StopChannel) MsgChannel {
 
-	logging.Verbosef("Flusher::PersistUptoTS %v %v Timestamp: %v",
-		streamId, bucket, ts)
+	logging.Verbosef("Flusher::PersistUptoTS %v %v Timestamp: %v PartnMap %v",
+		streamId, bucket, ts, indexPartnMap)
 
 	f.indexInstMap = common.CopyIndexInstMap(indexInstMap)
 	f.indexPartnMap = CopyIndexPartnMap(indexPartnMap)
@@ -421,7 +421,7 @@ func (f *flusher) processUpsert(mut *Mutation, docid []byte, meta *MutationMeta)
 
 	idxInst, _ := f.indexInstMap[mut.uuid]
 
-	partnId := idxInst.Pc.GetPartitionIdByPartitionKey(mut.partnkey)
+	partnId := idxInst.Pc.GetPartitionIdByPartitionKey(mut.partnkey, uint16(meta.vbucket))
 
 	var partnInstMap PartitionInstMap
 	var ok bool
@@ -431,7 +431,7 @@ func (f *flusher) processUpsert(mut *Mutation, docid []byte, meta *MutationMeta)
 		return
 	}
 
-	if partnInst := partnInstMap[partnId]; ok {
+	if partnInst, ok := partnInstMap[partnId]; ok {
 		slice := partnInst.Sc.GetSliceByIndexKey(common.IndexKey(mut.key))
 		if err := slice.Insert(mut.key, docid, meta); err != nil {
 			logging.Errorf("Flusher::processUpsert Error indexing Key: %s "+
@@ -444,7 +444,7 @@ func (f *flusher) processUpsert(mut *Mutation, docid []byte, meta *MutationMeta)
 			}
 		}
 	} else {
-		logging.Errorf("Flusher::processUpsert Partition Instance not found "+
+		logging.Debugf("Flusher::processUpsert Partition Instance not found "+
 			"for Id: %v Skipped Mutation Key: %v", partnId, mut.key)
 	}
 
@@ -454,7 +454,7 @@ func (f *flusher) processDelete(mut *Mutation, docid []byte, meta *MutationMeta)
 
 	idxInst, _ := f.indexInstMap[mut.uuid]
 
-	partnId := idxInst.Pc.GetPartitionIdByPartitionKey(mut.partnkey)
+	partnId := idxInst.Pc.GetPartitionIdByPartitionKey(mut.partnkey, uint16(meta.vbucket))
 
 	var partnInstMap PartitionInstMap
 	var ok bool
@@ -464,14 +464,14 @@ func (f *flusher) processDelete(mut *Mutation, docid []byte, meta *MutationMeta)
 		return
 	}
 
-	if partnInst := partnInstMap[partnId]; ok {
+	if partnInst, ok := partnInstMap[partnId]; ok {
 		slice := partnInst.Sc.GetSliceByIndexKey(common.IndexKey(mut.key))
 		if err := slice.Delete(docid, meta); err != nil {
 			logging.Errorf("Flusher::processDelete Error Deleting DocId: %v "+
 				"from Slice: %v", docid, slice.Id())
 		}
 	} else {
-		logging.Errorf("Flusher::processDelete Partition Instance not found "+
+		logging.Debugf("Flusher::processDelete Partition Instance not found "+
 			"for Id: %v. Skipped Mutation Key: %v", partnId, mut.key)
 	}
 }

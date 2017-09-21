@@ -2345,7 +2345,7 @@ func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 	//get all partitions for this index
 	partnDefnList := indexInst.Pc.GetAllPartitions()
 
-	for i, partnDefn := range partnDefnList {
+	for _, partnDefn := range partnDefnList {
 		//TODO: Ignore partitions which do not belong to this
 		//indexer node(based on the endpoints)
 		partnInst := PartitionInst{Defn: partnDefn,
@@ -2355,12 +2355,12 @@ func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 			indexInst.InstId, partnInst)
 
 		//add a single slice per partition for now
-		if slice, err := NewSlice(SliceId(0), &indexInst, idx.config, idx.stats); err == nil {
+		if slice, err := NewSlice(SliceId(0), &indexInst, &partnInst, idx.config, idx.stats); err == nil {
 			partnInst.Sc.AddSlice(0, slice)
 			logging.Infof("Indexer::initPartnInstance Initialized Slice: \n\t Index: %v Slice: %v",
 				indexInst.InstId, slice)
 
-			partnInstMap[common.PartitionId(i)] = partnInst
+			partnInstMap[partnDefn.GetPartitionId()] = partnInst
 		} else {
 			errStr := fmt.Sprintf("Error creating slice %v", err)
 			logging.Errorf("Indexer::initPartnInstance %v. Abort.", errStr)
@@ -3588,18 +3588,6 @@ func (idx *indexer) initFromPersistedState() (bool, error) {
 			idx.stats.AddIndex(inst.InstId, inst.Defn.Bucket, inst.Defn.Name, inst.ReplicaId)
 		}
 
-		newpc := common.NewKeyPartitionContainer()
-
-		//Add one partition for now
-		partnId := common.PartitionId(0)
-		addr := net.JoinHostPort("", idx.config["streamMaintPort"].String())
-		endpt := []common.Endpoint{common.Endpoint(addr)}
-		partnDefn := common.KeyPartitionDefn{Id: partnId,
-			Endpts: endpt}
-		newpc.AddPartition(partnId, partnDefn)
-
-		inst.Pc = newpc
-
 		//allocate partition/slice
 		var partnInstMap PartitionInstMap
 		var err error
@@ -3790,9 +3778,13 @@ func (idx *indexer) upgradeSingleIndex(inst *common.IndexInst, storageMode commo
 
 	// remove old files
 	storage_dir := idx.config["storage_dir"].String()
-	path := filepath.Join(storage_dir, IndexPath(inst, SliceId(0)))
-	if err := os.RemoveAll(path); err != nil {
-		common.CrashOnError(err)
+
+	partnDefnList := inst.Pc.GetAllPartitions()
+	for _, partnDefn := range partnDefnList {
+		path := filepath.Join(storage_dir, IndexPath(inst, partnDefn.GetPartitionId(), SliceId(0)))
+		if err := os.RemoveAll(path); err != nil {
+			common.CrashOnError(err)
+		}
 	}
 
 	// update metadata
@@ -3925,16 +3917,20 @@ func (idx *indexer) validateIndexInstMap() {
 func (idx *indexer) forceCleanupIndexData(inst *common.IndexInst, sliceId SliceId) error {
 
 	storage_dir := idx.config["storage_dir"].String()
-	path := filepath.Join(storage_dir, IndexPath(inst, sliceId))
 
-	logging.Infof("Indexer::forceCleanupIndexData Cleaning Up Slice Id %v, "+
-		"IndexInstId %v, IndexDefnId %v ", sliceId, inst.InstId, inst.Defn.DefnId)
+	partnDefnList := inst.Pc.GetAllPartitions()
+	for _, partnDefn := range partnDefnList {
+		path := filepath.Join(storage_dir, IndexPath(inst, partnDefn.GetPartitionId(), sliceId))
 
-	//cleanup the disk directory
-	if err := os.RemoveAll(path); err != nil {
-		logging.Errorf("Indexer::forceCleanupIndexData Error Cleaning Up Slice Id %v, "+
-			"IndexInstId %v, IndexDefnId %v. Error %v", sliceId, inst.InstId, inst.Defn.DefnId, err)
-		return err
+		logging.Infof("Indexer::forceCleanupIndexData Cleaning Up Slice Id %v, "+
+			"IndexInstId %v, IndexDefnId %v ", sliceId, inst.InstId, inst.Defn.DefnId)
+
+		//cleanup the disk directory
+		if err := os.RemoveAll(path); err != nil {
+			logging.Errorf("Indexer::forceCleanupIndexData Error Cleaning Up Slice Id %v, "+
+				"IndexInstId %v, IndexDefnId %v. Error %v", sliceId, inst.InstId, inst.Defn.DefnId, err)
+			return err
+		}
 	}
 	return nil
 
@@ -4046,37 +4042,38 @@ func (idx *indexer) makeRestartTs(streamId common.StreamId) map[string]*common.T
 
 		if idxInst.Stream == streamId {
 
-			//there is only one partition for now
-			partnInst := partnMap[0]
-			sc := partnInst.Sc
+			for _, partnInst := range partnMap {
 
-			//there is only one slice for now
-			slice := sc.GetSliceById(0)
+				sc := partnInst.Sc
 
-			infos, err := slice.GetSnapshots()
-			// TODO: Proper error handling if possible
-			if err != nil {
-				panic("Unable read snapinfo -" + err.Error())
-			}
+				//there is only one slice for now
+				slice := sc.GetSliceById(0)
 
-			s := NewSnapshotInfoContainer(infos)
-			latestSnapInfo := s.GetLatest()
+				infos, err := slice.GetSnapshots()
+				// TODO: Proper error handling if possible
+				if err != nil {
+					panic("Unable read snapinfo -" + err.Error())
+				}
 
-			//There may not be a valid snapshot info if no flush
-			//happened for this index
-			if latestSnapInfo != nil {
-				ts := latestSnapInfo.Timestamp()
-				if oldTs, ok := restartTs[idxInst.Defn.Bucket]; ok {
-					if !ts.AsRecent(oldTs) {
+				s := NewSnapshotInfoContainer(infos)
+				latestSnapInfo := s.GetLatest()
+
+				//There may not be a valid snapshot info if no flush
+				//happened for this index
+				if latestSnapInfo != nil {
+					ts := latestSnapInfo.Timestamp()
+					if oldTs, ok := restartTs[idxInst.Defn.Bucket]; ok {
+						if !ts.AsRecent(oldTs) {
+							restartTs[idxInst.Defn.Bucket] = ts
+						}
+					} else {
 						restartTs[idxInst.Defn.Bucket] = ts
 					}
 				} else {
-					restartTs[idxInst.Defn.Bucket] = ts
-				}
-			} else {
-				//set restartTs to nil for this bucket
-				if _, ok := restartTs[idxInst.Defn.Bucket]; !ok {
-					restartTs[idxInst.Defn.Bucket] = nil
+					//set restartTs to nil for this bucket
+					if _, ok := restartTs[idxInst.Defn.Bucket]; !ok {
+						restartTs[idxInst.Defn.Bucket] = nil
+					}
 				}
 			}
 		}
@@ -4522,7 +4519,7 @@ func (idx *indexer) memoryUsedStorage() int64 {
 	return mem_used
 }
 
-func NewSlice(id SliceId, indInst *common.IndexInst,
+func NewSlice(id SliceId, indInst *common.IndexInst, partnInst *PartitionInst,
 	conf common.Config, stats *IndexerStats) (slice Slice, err error) {
 	// Default storage is forestdb
 	storage_dir := conf["storage_dir"].String()
@@ -4530,7 +4527,7 @@ func NewSlice(id SliceId, indInst *common.IndexInst,
 	if _, e := os.Stat(storage_dir); e != nil {
 		common.CrashOnError(e)
 	}
-	path := filepath.Join(storage_dir, IndexPath(indInst, id))
+	path := filepath.Join(storage_dir, IndexPath(indInst, partnInst.Defn.GetPartitionId(), id))
 
 	ephemeral, err := IsEphemeral(conf["clusterAddr"].String(), indInst.Defn.Bucket)
 	if err != nil {

@@ -30,7 +30,7 @@ type clustMgrAgent struct {
 	mgr    *manager.IndexManager //handle to index manager
 	config common.Config
 
-	metaNotifier manager.MetadataNotifier
+	metaNotifier *metaNotifier
 
 	stats      IndexerStatsHolder
 	statsCount uint64
@@ -301,6 +301,14 @@ func (c *clustMgrAgent) handleGetGlobalTopology(cmd Message) {
 			idxDefn.Desc = make([]bool, len(idxDefn.SecExprs))
 		}
 
+		// create partitions
+		partitions := make([]common.PartitionId, len(inst.Partitions))
+		for i, partn := range inst.Partitions {
+			partitions[i] = common.PartitionId(partn.PartId)
+		}
+		pc := c.metaNotifier.makeDefaultPartitionContainer(partitions, idxDefn.PartitionScheme)
+
+		// create index instance
 		idxInst := common.IndexInst{InstId: common.IndexInstId(inst.InstId),
 			Defn:           idxDefn,
 			State:          common.IndexState(inst.State),
@@ -311,6 +319,7 @@ func (c *clustMgrAgent) handleGetGlobalTopology(cmd Message) {
 			Scheduled:      inst.Scheduled,
 			StorageMode:    inst.StorageMode,
 			OldStorageMode: inst.OldStorageMode,
+			Pc:             pc,
 		}
 
 		indexInstMap[idxInst.InstId] = idxInst
@@ -456,12 +465,12 @@ func NewMetaNotifier(adminCh MsgChannel, config common.Config, mgr *clustMgrAgen
 }
 
 func (meta *metaNotifier) OnIndexCreate(indexDefn *common.IndexDefn, instId common.IndexInstId,
-	replicaId int, reqCtx *common.MetadataRequestContext) error {
+	replicaId int, partitions []common.PartitionId, reqCtx *common.MetadataRequestContext) error {
 
 	logging.Infof("clustMgrAgent::OnIndexCreate Notification "+
-		"Received for Create Index %v %v", indexDefn, reqCtx)
+		"Received for Create Index %v %v partitions %v", indexDefn, reqCtx, partitions)
 
-	pc := meta.makeDefaultPartitionContainer()
+	pc := meta.makeDefaultPartitionContainer(partitions, indexDefn.PartitionScheme)
 
 	idxInst := common.IndexInst{InstId: instId,
 		Defn:      *indexDefn,
@@ -639,17 +648,20 @@ func (meta *metaNotifier) fetchStats() {
 	}
 }
 
-func (meta *metaNotifier) makeDefaultPartitionContainer() common.PartitionContainer {
+func (meta *metaNotifier) makeDefaultPartitionContainer(partitions []common.PartitionId, scheme common.PartitionScheme) common.PartitionContainer {
 
-	pc := common.NewKeyPartitionContainer()
+	numVbuckets := meta.config["numVbuckets"].Int()
+	numPartitions := meta.config["numPartitions"].Int()
+	pc := common.NewKeyPartitionContainer(numVbuckets, numPartitions, scheme)
 
 	//Add one partition for now
 	addr := net.JoinHostPort("", meta.config["streamMaintPort"].String())
 	endpt := []common.Endpoint{common.Endpoint(addr)}
 
-	partnDefn := common.KeyPartitionDefn{Id: common.PartitionId(1),
-		Endpts: endpt}
-	pc.AddPartition(common.PartitionId(1), partnDefn)
+	for _, partnId := range partitions {
+		partnDefn := common.KeyPartitionDefn{Id: partnId, Endpts: endpt}
+		pc.AddPartition(partnId, partnDefn)
+	}
 
 	return pc
 

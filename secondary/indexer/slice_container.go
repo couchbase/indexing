@@ -92,13 +92,14 @@ func (sc *HashedSliceContainer) GetSliceIdByIndexKey(key common.IndexKey) SliceI
 	//run hash function on index key and return slice id
 	hash := crc32.ChecksumIEEE([]byte(key))
 	sliceId := int(hash) % sc.NumSlices
+
 	return SliceId(sliceId)
 }
 
 //GetSliceById returns Slice for the given SliceId
 func (sc *HashedSliceContainer) GetSliceById(id SliceId) Slice {
 
-	if s, ok := sc.SliceMap[id]; ok {
+	if s, ok := sc.SliceMap[id]; ok && s != nil {
 		return s
 	} else {
 		logging.Warnf("HashedSliceContainer: Invalid Slice Id %v", id)

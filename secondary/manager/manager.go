@@ -89,7 +89,7 @@ type IndexManager struct {
 //    B) Index Instance is not in INDEX_STATE_CREATE or INDEX_STATE_DELETED.
 //
 type MetadataNotifier interface {
-	OnIndexCreate(*common.IndexDefn, common.IndexInstId, int, *common.MetadataRequestContext) error
+	OnIndexCreate(*common.IndexDefn, common.IndexInstId, int, []common.PartitionId, *common.MetadataRequestContext) error
 	OnIndexDelete(common.IndexInstId, string, *common.MetadataRequestContext) error
 	OnIndexBuild([]common.IndexInstId, []string, *common.MetadataRequestContext) map[common.IndexInstId]error
 	OnFetchStats() error
