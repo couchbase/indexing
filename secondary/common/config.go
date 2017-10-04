@@ -973,6 +973,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.plasma.useDirectIO": ConfigValue{
+		false,
+		"Use direct io mode",
+		false,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.plasma.mainIndex.maxNumPageDeltas": ConfigValue{
 		200,
 		"Maximum number of page deltas",

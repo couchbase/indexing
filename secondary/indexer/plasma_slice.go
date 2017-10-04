@@ -185,7 +185,6 @@ func (slice *plasmaSlice) initStores() error {
 	cfg.UseMemoryMgmt = slice.sysconf["plasma.useMemMgmt"].Bool()
 	cfg.FlushBufferSize = int(slice.sysconf["plasma.flushBufferSize"].Int())
 	cfg.LSSLogSegmentSize = int64(slice.sysconf["plasma.LSSSegmentFileSize"].Int())
-	cfg.UseMmap = slice.sysconf["plasma.useMmapReads"].Bool()
 	cfg.UseCompression = slice.sysconf["plasma.useCompression"].Bool()
 	cfg.AutoSwapper = true
 	cfg.NumPersistorThreads = int(float32(runtime.NumCPU())*float32(slice.sysconf["plasma.persistenceCPUPercent"].Int())/(100*2) + 0.5)
@@ -196,6 +195,16 @@ func (slice *plasmaSlice) initStores() error {
 	cfg.PurgeLowThreshold = slice.sysconf["plasma.purger.lowThreshold"].Float64()
 	cfg.PurgeCompactRatio = slice.sysconf["plasma.purger.compactRatio"].Float64()
 	cfg.EnableLSSPageSMO = slice.sysconf["plasma.enableLSSPageSMO"].Bool()
+
+	var mode plasma.IOMode
+
+	if slice.sysconf["plasma.useMmapReads"].Bool() {
+		mode = plasma.MMapIO
+	} else if slice.sysconf["plasma.useDirectIO"].Bool() {
+		mode = plasma.DirectIO
+	}
+
+	cfg.IOMode = mode
 
 	var mCfg, bCfg plasma.Config
 
