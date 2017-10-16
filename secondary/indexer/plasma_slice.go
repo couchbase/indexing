@@ -195,6 +195,7 @@ func (slice *plasmaSlice) initStores() error {
 	cfg.PurgeLowThreshold = slice.sysconf["plasma.purger.lowThreshold"].Float64()
 	cfg.PurgeCompactRatio = slice.sysconf["plasma.purger.compactRatio"].Float64()
 	cfg.EnableLSSPageSMO = slice.sysconf["plasma.enableLSSPageSMO"].Bool()
+	cfg.LSSReadAheadSize = int64(slice.sysconf["plasma.logReadAheadSize"].Int())
 
 	var mode plasma.IOMode
 

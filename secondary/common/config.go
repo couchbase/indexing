@@ -1169,6 +1169,13 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
+	"indexer.plasma.logReadAheadSize": ConfigValue{
+		1024 * 1024,
+		"Log read ahead size",
+		1024 * 1024,
+		false,
+		false,
+	},
 
 	"indexer.stream_reader.plasma.workerBuffer": ConfigValue{
 		uint64(10000),
