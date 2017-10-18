@@ -69,6 +69,7 @@ message ScanRequest {
 	optional int64				offset			= 11;
 	optional int64				rollbackTime    = 12;
 	repeated uint64				partitionIds     = 13;
+    optional GroupAggr        groupAggr       = 14;
 }
 
 // Full table scan request from indexer.
@@ -155,4 +156,29 @@ message IndexStatistics {
     required uint64 uniqueKeysCount = 2;
     required bytes  keyMin          = 3;
     required bytes  keyMax          = 4;
+}
+
+
+//Groupby/Aggregate
+
+message GroupKey {
+    optional int32 entryKeyId = 1;
+    required int32 keyPos     = 2;
+    optional bytes  expr       = 3;
+}
+
+message Aggregate {
+    required uint32 aggrFunc     = 1;
+    optional int32 entryKeyId   = 2;
+    required int32 keyPos       = 3;
+    optional bytes  expr         = 4;
+    optional bool   distinct     = 5;
+}
+
+message GroupAggr {
+    optional bytes     name                = 1;
+    repeated GroupKey  groupKeys           = 2;
+    repeated Aggregate aggrs               = 3;
+    repeated int32 dependsOnIndexKeys  = 4;
+    optional bool      dependsOnPrimaryKey = 5;
 }
