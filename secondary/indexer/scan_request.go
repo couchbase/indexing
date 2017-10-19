@@ -21,6 +21,10 @@ import (
 	"github.com/couchbase/indexing/secondary/collatejson"
 	"github.com/couchbase/indexing/secondary/common"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
+
+	l "github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/query/expression"
+	"github.com/couchbase/query/expression/parser"
 )
 
 type ScanReqType string
@@ -66,6 +70,10 @@ type ScanRequest struct {
 	Distinct          bool
 	Offset            int64
 	projectPrimaryKey bool
+
+	//groupby/aggregate
+
+	GroupAggr *GroupAggr
 
 	// Rollback Time
 	rollbackTime int64
@@ -143,6 +151,35 @@ type IndexPoint struct {
 
 // Implements sort Interface
 type IndexPoints []IndexPoint
+
+//Groupby/Aggregate pushdown
+
+type GroupKey struct {
+	EntryKeyId int32                 // Id that can be used in IndexProjection
+	KeyPos     int32                 // >=0 means use expr at index key position otherwise use Expr
+	Expr       expression.Expression // group expression
+}
+
+type Aggregate struct {
+	AggrFunc   common.AggrFunc       // Aggregate operation
+	EntryKeyId int32                 // Id that can be used in IndexProjection
+	KeyPos     int32                 // >=0 means use expr at index key position otherwise use Expr
+	Expr       expression.Expression // Aggregate expression
+	Distinct   bool                  // Aggregate only on Distinct values with in the group
+}
+
+type GroupAggr struct {
+	Name                string       // name of the index aggregate
+	Group               []*GroupKey  // group keys, nil means no group by
+	Aggrs               []*Aggregate // aggregates with in the group, nil means no aggregates
+	DependsOnIndexKeys  []int32      // GROUP and Aggregates Depends on List of index keys positions
+	DependsOnPrimaryKey bool         // GROUP and Aggregates Depends on primary key
+	IsLeadingGroup      bool         // Group by key(s) are leading subset
+}
+
+var (
+	ErrInvalidAggrFunc = errors.New("Invalid Aggregate Function")
+)
 
 /////////////////////////////////////////////////////////////////////////
 //
@@ -252,6 +289,7 @@ func NewScanRequest(protoReq interface{},
 			req.GetSpan().GetRange().GetHigh(),
 			req.GetSpan().GetEquals())
 		err = r.fillScans(req.GetScans())
+		err = r.fillGroupAggr(req.GetGroupAggr())
 
 	case *protobuf.ScanAllRequest:
 		r.DefnID = req.GetDefnID()
@@ -878,6 +916,151 @@ func validateIndexProjection(projection *protobuf.IndexProjection, cklen int) (*
 
 	return indexProjection, nil
 }
+
+func (r *ScanRequest) fillGroupAggr(protoGroupAggr *protobuf.GroupAggr) (err error) {
+
+	r.GroupAggr = &GroupAggr{}
+
+	if err = r.unmarshallGroupKeys(protoGroupAggr); err != nil {
+		return
+	}
+
+	if err = r.unmarshallAggrs(protoGroupAggr); err != nil {
+		return
+	}
+
+	for _, d := range protoGroupAggr.GetDependsOnIndexKeys() {
+		r.GroupAggr.DependsOnIndexKeys = append(r.GroupAggr.DependsOnIndexKeys, d)
+	}
+
+	r.GroupAggr.DependsOnPrimaryKey = protoGroupAggr.GetDependsOnPrimaryKey()
+
+	if err = r.validateGroupAggr(); err != nil {
+		return
+	}
+
+	return
+}
+
+func (r *ScanRequest) unmarshallGroupKeys(protoGroupAggr *protobuf.GroupAggr) error {
+
+	for _, g := range protoGroupAggr.GetGroupKeys() {
+
+		var groupKey GroupKey
+
+		groupKey.EntryKeyId = g.GetEntryKeyId()
+		groupKey.KeyPos = g.GetKeyPos()
+		expr, err := compileN1QLExpression(string(g.GetExpr()))
+		if err != nil {
+			return err
+		}
+		groupKey.Expr = expr
+
+		r.GroupAggr.Group = append(r.GroupAggr.Group, &groupKey)
+	}
+
+	return nil
+
+}
+
+func (r *ScanRequest) unmarshallAggrs(protoGroupAggr *protobuf.GroupAggr) error {
+
+	for _, a := range protoGroupAggr.GetAggrs() {
+
+		var aggr Aggregate
+
+		aggr.AggrFunc = common.AggrFunc(a.GetAggrFunc())
+		aggr.EntryKeyId = a.GetEntryKeyId()
+		aggr.KeyPos = a.GetKeyPos()
+		aggr.Distinct = a.GetDistinct()
+
+		expr, err := compileN1QLExpression(string(a.GetExpr()))
+		if err != nil {
+			return err
+		}
+		aggr.Expr = expr
+
+		r.GroupAggr.Aggrs = append(r.GroupAggr.Aggrs, &aggr)
+	}
+
+	return nil
+
+}
+
+func (r *ScanRequest) validateGroupAggr() error {
+
+	var err error
+
+	//validate aggregates
+	for _, a := range r.GroupAggr.Aggrs {
+		if a.AggrFunc >= common.AGG_INVALID {
+			l.Errorf("ScanRequest::validateGroupAggr %v %v", ErrInvalidAggrFunc, a.AggrFunc)
+			return ErrInvalidAggrFunc
+		}
+		if int(a.KeyPos) > len(r.IndexInst.Defn.SecExprs) {
+			err = fmt.Errorf("Invalid KeyPos In Aggr %v", a)
+			l.Errorf("ScanRequest::validateGroupAggr %v", err)
+			return err
+		}
+	}
+
+	//validate group by
+	for _, g := range r.GroupAggr.Group {
+		if int(g.KeyPos) > len(r.IndexInst.Defn.SecExprs) {
+			err = fmt.Errorf("Invalid KeyPos In GroupKey %v", g)
+			l.Errorf("ScanRequest::validateGroupAggr %v", err)
+			return err
+		}
+	}
+
+	//validate DependsOnIndexKeys
+	for _, k := range r.GroupAggr.DependsOnIndexKeys {
+		if int(k) > len(r.IndexInst.Defn.SecExprs) {
+			err = fmt.Errorf("Invalid KeyPos In DependsOnIndexKeys %v", k)
+			l.Errorf("ScanRequest::validateGroupAggr %v", err)
+			return err
+		}
+	}
+
+	//identify leading/non-leading
+	var prevPos int32 = -1
+	r.GroupAggr.IsLeadingGroup = true
+	for _, g := range r.GroupAggr.Group {
+		if g.KeyPos < 0 {
+			r.GroupAggr.IsLeadingGroup = false
+			break
+		} else if g.KeyPos == 0 {
+			prevPos = 0
+		} else {
+			if g.KeyPos != prevPos+1 {
+				r.GroupAggr.IsLeadingGroup = false
+			}
+		}
+	}
+
+	//project should only have group/agg fields
+
+	//top level distinct is not allowed
+
+	return nil
+}
+
+func compileN1QLExpression(expr string) (expression.Expression, error) {
+
+	cExpr, err := parser.Parse(expr)
+	if err != nil {
+		l.Errorf("ScanRequest::compileN1QLExpression() %v: %v\n", expr, err)
+		return nil, err
+	}
+	return cExpr, nil
+
+}
+
+/////////////////////////////////////////////////////////////////////////
+//
+// Helpers
+//
+/////////////////////////////////////////////////////////////////////////
 
 func getReverseCollatedIndexKey(input []byte, desc []bool) IndexKey {
 	reversed := jsonEncoder.ReverseCollate(input, desc)
