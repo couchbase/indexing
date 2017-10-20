@@ -256,6 +256,9 @@ func HandleCommand(
 		if err == nil {
 			fmt.Fprintf(w, "Moving Index for: %v %v\n", index.Definition.DefnId, cmd.With)
 			err = client.MoveIndex(uint64(index.Definition.DefnId), cmd.WithPlan)
+			if err == nil {
+				fmt.Fprintf(w, "Move Index has started. Check Indexes UI for progress and Logs UI for any error\n")
+			}
 		}
 
 	case "drop":

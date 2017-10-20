@@ -34,6 +34,7 @@ import "github.com/couchbase/query/expression/parser"
 import "github.com/couchbase/query/timestamp"
 import "github.com/couchbase/query/value"
 import qlog "github.com/couchbase/query/logging"
+import json "github.com/couchbase/indexing/secondary/common/json"
 
 const DONEREQUEST = 1
 const BACKFILLPREFIX = "scan-results"
@@ -958,6 +959,57 @@ func (si *secondaryIndex2) CountDistinct(requestId string, spans datastore.Spans
 		return 0, n1qlError(client, e)
 	}
 	return count, nil
+}
+
+//--------------------
+// datastore.AlterIndex{}
+//--------------------
+
+// AlterIndex implement datastore.AlterIndex interface.
+func (si *secondaryIndex2) Alter(requestId string, with value.Value) (
+	datastore.Index, errors.Error) {
+
+	if with == nil {
+		return datastore.Index(si), nil
+	}
+
+	var ErrorMarshalWith = "GSI AlterIndex() Error marshalling WITH clause"
+	var ErrorUmmarshalWith = "GSI AlterIndex() Error unmarshalling WITH clause"
+	var ErrorActionMissing = "GSI AlterIndex() action key missing in WITH clause"
+	var ErrorUnsupportedAction = "GSI AlterIndex() Unsupported action value"
+
+	var withMap map[string]interface{}
+	var withJSON []byte
+	var err error
+	if withJSON, err = with.MarshalJSON(); err != nil {
+		return nil, errors.NewError(err, ErrorMarshalWith)
+	}
+	if err = json.Unmarshal(withJSON, &withMap); err != nil {
+		return nil, errors.NewError(err, ErrorUmmarshalWith)
+	}
+
+	action, ok := withMap["action"]
+	if !ok {
+		return nil, errors.NewError(fmt.Errorf(ErrorActionMissing), "")
+	}
+
+	action, ok = action.(string)
+	if !ok {
+		return nil, errors.NewError(fmt.Errorf(ErrorUnsupportedAction), "")
+	}
+	switch action {
+	case "move":
+		client := si.gsi.gsiClient
+		e := client.MoveIndex(si.defnID, withMap)
+		if e != nil {
+			return nil, errors.NewError(e, "GSI AlterIndex()")
+		}
+		return datastore.Index(si), nil
+	default:
+		return nil, errors.NewError(fmt.Errorf(ErrorUnsupportedAction), "")
+	}
+
+	return datastore.Index(si), nil
 }
 
 //-------------------------------------

@@ -226,12 +226,7 @@ func (b *metadataClient) MoveIndex(defnID uint64, planJSON map[string]interface{
 		return ErrorNoHost
 	}
 
-	timeout := time.Duration(120 * time.Second)
-	if planJSON != nil {
-		if t, ok := planJSON["timeout"]; ok {
-			timeout = time.Duration(t.(float64)) * time.Second
-		}
-	}
+	timeout := time.Duration(0 * time.Second)
 
 	idList := IndexIdList{DefnIds: []uint64{defnID}}
 	ir := IndexRequest{IndexIds: idList, Plan: planJSON}
