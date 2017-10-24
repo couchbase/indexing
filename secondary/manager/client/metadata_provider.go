@@ -1428,7 +1428,7 @@ func (o *MetadataProvider) findWatcherByNodeAddr(nodeAddr string) *watcher {
 	defer o.mutex.Unlock()
 
 	for _, watcher := range o.watchers {
-		if watcher.getNodeAddr() == nodeAddr {
+		if strings.ToLower(watcher.getNodeAddr()) == strings.ToLower(nodeAddr) {
 			return watcher
 		}
 	}
