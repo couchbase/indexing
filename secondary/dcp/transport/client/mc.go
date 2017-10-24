@@ -79,6 +79,15 @@ func (c *Client) Transmit(req *transport.MCRequest) error {
 	return err
 }
 
+// TransmitResponse send a request, but does not wait for a response.
+func (c *Client) TransmitResponse(res *transport.MCResponse) error {
+	_, err := transmitResponse(c.conn, res)
+	if err != nil {
+		c.healthy = false
+	}
+	return err
+}
+
 // Receive a response
 func (c *Client) Receive() (*transport.MCResponse, error) {
 	resp, _, err := getResponse(c.conn, c.hdrBuf)

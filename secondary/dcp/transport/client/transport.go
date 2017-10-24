@@ -57,3 +57,11 @@ func transmitRequest(o io.Writer, req *transport.MCRequest) (int, error) {
 	}
 	return n, err
 }
+
+func transmitResponse(o io.Writer, res *transport.MCResponse) (int, error) {
+	if o == nil {
+		return 0, errNoConn
+	}
+	n, err := res.Transmit(o)
+	return n, err
+}

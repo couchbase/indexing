@@ -1042,7 +1042,7 @@ func TestDropBucket2Index_Bucket1IndexBuilding(t *testing.T) {
 //5. bucket delete when initial index build is in progress. there needs to be
 //   multiple buckets with valid indexes.
 func TestDeleteBucketWhileInitialIndexBuild(t *testing.T) {
-	log.Printf("In TestDeleteBucketWithDataLoad()")
+	log.Printf("In TestDeleteBucketWhileInitialIndexBuild()")
 
 	numOfBuckets := 4
 	indexNames := [...]string{"bucket1_age", "bucket1_gender", "bucket2_city", "bucket2_company", "bucket3_gender", "bucket3_address", "bucket4_balance", "bucket4_isActive"}
@@ -1056,14 +1056,18 @@ func TestDeleteBucketWhileInitialIndexBuild(t *testing.T) {
 	// Add different docs to all 3 buckets
 	// Create two indexes on each of them
 	// Query the indexes
+	log.Printf("============== DBG: Drop all indexes in all buckets")
 	e := secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
 	FailTestIfError(e, "Error in DropAllSecondaryIndexes", t)
+	log.Printf("============== DBG: Flush bucket %v", bucketNames[0])
 	kvutility.FlushBucket(bucketNames[0], "", clusterconfig.Username, clusterconfig.Password, kvaddress)
 	kvutility.EditBucket(bucketNames[0], "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256")
 	tc.ClearMap(docs)
 
 	for i := 1; i < numOfBuckets; i++ {
+		log.Printf("============== DBG: Delete bucket %v", bucketNames[i])
 		kvutility.DeleteBucket(bucketNames[i], "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+		log.Printf("============== DBG: Create bucket %v", bucketNames[i])
 		kvutility.CreateBucket(bucketNames[i], "sasl", "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256", proxyPorts[i])
 	}
 	time.Sleep(30 * time.Second)
@@ -1072,51 +1076,70 @@ func TestDeleteBucketWhileInitialIndexBuild(t *testing.T) {
 	j := 0
 	for i := 0; i < numOfBuckets-1; i++ {
 		bucketDocs[i] = generateDocs(1000, "users.prod")
+		log.Printf("============== DBG: Creating docs in bucket %v", bucketNames[i])
 		kvutility.SetKeyValues(bucketDocs[i], bucketNames[i], "", clusterconfig.KVAddress)
+		log.Printf("============== DBG: Creating index %v in bucket %v", indexNames[j], bucketNames[i])
 		err := secondaryindex.CreateSecondaryIndex(indexNames[j], bucketNames[i], indexManagementAddress, "", []string{indexFields[j]}, false, nil, true, defaultIndexActiveTimeout, nil)
 		FailTestIfError(err, "Error in creating the index", t)
 		j++
+		log.Printf("============== DBG: Creating index %v in bucket %v", indexNames[j], bucketNames[i])
 		err = secondaryindex.CreateSecondaryIndex(indexNames[j], bucketNames[i], indexManagementAddress, "", []string{indexFields[j]}, false, nil, true, defaultIndexActiveTimeout, nil)
 		FailTestIfError(err, "Error in creating the index", t)
 		j++
 	}
 
 	// Scan index of first bucket
+	log.Printf("============== DBG: First bucket scan:: Scanning index %v in bucket %v", indexNames[0], bucketNames[0])
 	docScanResults := datautility.ExpectedScanResponse_int64(bucketDocs[0], indexFields[0], 30, 50, 1)
 	scanResults, err := secondaryindex.Range(indexNames[0], bucketNames[0], indexScanAddress, []interface{}{30}, []interface{}{50}, 1, false, defaultlimit, c.SessionConsistency, nil)
+	log.Printf("============== DBG: First bucket scan:: Expected results = %v Actual results = %v", len(docScanResults), len(scanResults))
 	FailTestIfError(err, "Error in scan 1", t)
 	err = tv.Validate(docScanResults, scanResults)
-	FailTestIfError(err, "Error in scan result validation", t)
+	FailTestIfError(err, "Error in scan 1 result validation", t)
 
 	bucketDocs[3] = generateDocs(50000, "users.prod")
+	log.Printf("============== DBG: Creating 50K docs in bucket %v", bucketNames[3])
 	kvutility.SetKeyValues(bucketDocs[3], bucketNames[3], "", clusterconfig.KVAddress)
-	FailTestIfError(err, "Error in creating the index", t)
+	log.Printf("============== DBG: Creating index %v asynchronously in bucket %v", indexNames[6], bucketNames[3])
 	err = secondaryindex.CreateSecondaryIndexAsync(indexNames[6], bucketNames[3], indexManagementAddress, "", []string{indexFields[j]}, false, nil, true, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 	time.Sleep(2 * time.Second)
+	log.Printf("============== DBG: Deleting bucket %v", bucketNames[3])
 	kvutility.DeleteBucket(bucketNames[3], "", clusterconfig.Username, clusterconfig.Password, kvaddress)
 
 	// Scan index of first bucket
+	log.Printf("============== DBG: First bucket scan:: Scanning index %v in bucket %v", indexNames[0], bucketNames[0])
 	docScanResults = datautility.ExpectedScanResponse_int64(bucketDocs[0], indexFields[0], 30, 50, 1)
 	scanResults, err = secondaryindex.Range(indexNames[0], bucketNames[0], indexScanAddress, []interface{}{30}, []interface{}{50}, 1, false, defaultlimit, c.SessionConsistency, nil)
+	log.Printf("============== DBG: First bucket scan:: Expected results = %v Actual results = %v", len(docScanResults), len(scanResults))
 	FailTestIfError(err, "Error in scan 1", t)
 	err = tv.Validate(docScanResults, scanResults)
-	FailTestIfError(err, "Error in scan result validation", t)
+	FailTestIfError(err, "Error in scan 1 result validation", t)
 
 	// Scan index of second bucket
+	log.Printf("============== DBG: Second bucket scan:: Scanning index %v in bucket %v", indexNames[2], bucketNames[1])
 	docScanResults = datautility.ExpectedScanResponse_string(bucketDocs[1], indexFields[2], "F", "Q", 2)
 	scanResults, err = secondaryindex.Range(indexNames[2], bucketNames[1], indexScanAddress, []interface{}{"F"}, []interface{}{"Q"}, 2, false, defaultlimit, c.SessionConsistency, nil)
+	log.Printf("============== DBG: Second bucket scan:: Expected results = %v Actual results = %v", len(docScanResults), len(scanResults))
 	FailTestIfError(err, "Error in scan 2", t)
 	err = tv.Validate(docScanResults, scanResults)
-	FailTestIfError(err, "Error in scan result validation", t)
+	if err != nil {
+		log.Printf("============== DBG: Scan of second bucket %v with index %v failed. Expected & actual results are below:", bucketNames[1], indexNames[2])
+		tc.PrintScanResults(docScanResults, "docScanResults")
+		tc.PrintScanResults(scanResults, "scanResults")
+	}
+	FailTestIfError(err, "Error in scan 2 result validation", t)
 
 	// Scan index of third bucket
+	log.Printf("============== DBG: Third bucket scan:: Scanning index %v in bucket %v", indexNames[4], bucketNames[2])
 	docScanResults = datautility.ExpectedScanResponse_string(bucketDocs[2], indexFields[4], "male", "male", 3)
 	scanResults, err = secondaryindex.Range(indexNames[4], bucketNames[2], indexScanAddress, []interface{}{"male"}, []interface{}{"male"}, 3, false, defaultlimit, c.SessionConsistency, nil)
+	log.Printf("============== DBG: Third bucket scan:: Expected results = %v Actual results = %v", len(docScanResults), len(scanResults))
 	FailTestIfError(err, "Error in scan 3", t)
 	err = tv.Validate(docScanResults, scanResults)
-	FailTestIfError(err, "Error in scan result validation", t)
+	FailTestIfError(err, "Error in scan 3 result validation", t)
 
+	log.Printf("============== DBG: Deleting buckets %v %v %v", bucketNames[1], bucketNames[2], bucketNames[3])
 	kvutility.DeleteBucket(bucketNames[1], "", clusterconfig.Username, clusterconfig.Password, kvaddress)
 	kvutility.DeleteBucket(bucketNames[2], "", clusterconfig.Username, clusterconfig.Password, kvaddress)
 	kvutility.DeleteBucket(bucketNames[3], "", clusterconfig.Username, clusterconfig.Password, kvaddress)

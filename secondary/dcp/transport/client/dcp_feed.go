@@ -19,6 +19,7 @@ const bufferAckThreshold = 0.2
 const opaqueOpen = 0xBEAF0001
 const opaqueFailover = 0xDEADBEEF
 const opaqueGetseqno = 0xDEADBEEF
+const openConnFlag = uint32(0x1)
 
 // error codes
 var ErrorInvalidLog = errors.New("couchbase.errorInvalidLog")
@@ -83,10 +84,12 @@ func (feed *DcpFeed) Name() string {
 // sequence: sequence number for the connection
 // bufsize: max size of the application
 func (feed *DcpFeed) DcpOpen(
-	name string, sequence, bufsize uint32, opaque uint16) error {
+	name string, sequence, flags, bufsize uint32, opaque uint16) error {
 
 	respch := make(chan []interface{}, 1)
-	cmd := []interface{}{dfCmdOpen, name, sequence, bufsize, opaque, respch}
+	cmd := []interface{}{
+		dfCmdOpen, name, sequence, flags, bufsize, opaque, respch,
+	}
 	resp, err := failsafeOp(feed.reqch, respch, cmd, feed.finch)
 	return opError(err, resp, 0)
 }
@@ -189,9 +192,11 @@ loop:
 			switch cmd {
 			case dfCmdOpen:
 				name, sequence := msg[1].(string), msg[2].(uint32)
-				bufsize, opaque := msg[3].(uint32), msg[4].(uint16)
-				respch := msg[5].(chan []interface{})
-				err := feed.doDcpOpen(name, sequence, bufsize, opaque, rcvch)
+				flags := msg[3].(uint32)
+				bufsize, opaque := msg[4].(uint32), msg[5].(uint16)
+				respch := msg[6].(chan []interface{})
+				err := feed.doDcpOpen(
+					name, sequence, flags, bufsize, opaque, rcvch)
 				respch <- []interface{}{err}
 
 			case dfCmdGetFailoverlog:
@@ -276,6 +281,19 @@ func (feed *DcpFeed) handlePacket(
 
 	sendAck := false
 	prefix := feed.logPrefix
+	if pkt.Opcode == transport.DCP_NOOP {
+		noop := &transport.MCResponse{
+			Opcode: transport.DCP_NOOP, Opaque: pkt.Opaque,
+		}
+		if err := feed.conn.TransmitResponse(noop); err != nil {
+			logging.Errorf("%v NOOP.Transmit(): %v", prefix, err)
+		} else {
+			fmsg := "%v responded to NOOP ok ...\n"
+			logging.Tracef(fmsg, prefix)
+		}
+		return "ok" // for NOOP, bytes are not counted for for buffer-ack
+	}
+
 	stream := feed.vbstreams[vb]
 	if stream == nil {
 		fmsg := "%v spurious %v for %d: %#v\n"
@@ -342,12 +360,6 @@ func (feed *DcpFeed) handlePacket(
 		if res.Status != transport.SUCCESS {
 			fmsg := "%v ##%x opcode %v received status %v\n"
 			logging.Errorf(fmsg, prefix, stream.AppOpaque, pkt.Opcode, res.Status)
-		}
-
-	case transport.DCP_NOOP:
-		noop := &transport.MCRequest{Opcode: transport.DCP_NOOP}
-		if err := feed.conn.Transmit(noop); err != nil { // send a NOOP back
-			logging.Errorf("%v NOOP.Transmit(): %v", prefix, err)
 		}
 
 	case transport.DCP_ADDSTREAM:
@@ -472,7 +484,7 @@ func (feed *DcpFeed) doDcpGetSeqnos(
 }
 
 func (feed *DcpFeed) doDcpOpen(
-	name string, sequence, bufsize uint32,
+	name string, sequence, flags, bufsize uint32,
 	opaque uint16,
 	rcvch chan []interface{}) error {
 
@@ -482,8 +494,9 @@ func (feed *DcpFeed) doDcpOpen(
 		Opaque: opaqueOpen,
 	}
 	rq.Extras = make([]byte, 8)
+	flags = flags | openConnFlag
 	binary.BigEndian.PutUint32(rq.Extras[:4], sequence)
-	binary.BigEndian.PutUint32(rq.Extras[4:], 1) // we are consumer
+	binary.BigEndian.PutUint32(rq.Extras[4:], flags) // we are consumer
 
 	prefix := feed.logPrefix
 	if err := feed.conn.Transmit(rq); err != nil {
@@ -526,13 +539,13 @@ func (feed *DcpFeed) doDcpOpen(
 			Body:   []byte(strconv.Itoa(int(bufsize))),
 		}
 		if err := feed.conn.Transmit(rq); err != nil {
-			fmsg := "%v ##%x doDcpOpen.DCP_CONTROL.Transmit(): %v"
+			fmsg := "%v ##%x doDcpOpen.DCP_CONTROL.Transmit(connection_buffer_size): %v"
 			logging.Errorf(fmsg, prefix, opaque, err)
 			return err
 		}
 		msg, ok := <-rcvch
 		if !ok {
-			fmsg := "%v ##%x doDcpOpen.DCP_CONTROL.rcvch closed"
+			fmsg := "%v ##%x doDcpOpen.DCP_CONTROL.rcvch (connection_buffer_size) closed"
 			logging.Errorf(fmsg, prefix, opaque)
 			return ErrorConnection
 		}
@@ -547,15 +560,82 @@ func (feed *DcpFeed) doDcpOpen(
 			Body:   pkt.Body,
 		}
 		if req.Opcode != transport.DCP_CONTROL {
-			fmsg := "%v ##%x DCP_CONTROL != #%v"
+			fmsg := "%v ##%x DCP_CONTROL (connection_buffer_size) != #%v"
 			logging.Errorf(fmsg, prefix, opaque, req.Opcode)
 			return ErrorConnection
 		} else if req.Status != transport.SUCCESS {
-			fmsg := "%v ##%x doDcpOpen response status %v"
+			fmsg := "%v ##%x doDcpOpen (connection_buffer_size) response status %v"
 			logging.Errorf(fmsg, prefix, opaque, req.Status)
 			return ErrorConnection
 		}
 		feed.maxAckBytes = uint32(bufferAckThreshold * float32(bufsize))
+	}
+
+	// send a DCP control message to enable_noop
+	if true /*enable_noop*/ {
+		rq := &transport.MCRequest{
+			Opcode: transport.DCP_CONTROL,
+			Key:    []byte("enable_noop"),
+			Body:   []byte("true"),
+		}
+		if err := feed.conn.Transmit(rq); err != nil {
+			fmsg := "%v ##%x doDcpOpen.DCP_CONTROL.Transmit(enable_noop): %v"
+			logging.Errorf(fmsg, prefix, opaque, err)
+			return err
+		}
+		logging.Infof("%v ##%x sending enable_noop", prefix, opaque)
+		msg, ok := <-rcvch
+		if !ok {
+			fmsg := "%v ##%x doDcpOpen.DCP_CONTROL.rcvch (enable_noop) closed"
+			logging.Errorf(fmsg, prefix, opaque)
+			return ErrorConnection
+		}
+		pkt := msg[0].(*transport.MCRequest)
+		opcode, status := pkt.Opcode, transport.Status(pkt.VBucket)
+		if opcode != transport.DCP_CONTROL {
+			fmsg := "%v ##%x DCP_CONTROL (enable_noop) != #%v"
+			logging.Errorf(fmsg, prefix, opaque, opcode)
+			return ErrorConnection
+		} else if status != transport.SUCCESS {
+			fmsg := "%v ##%x doDcpOpen (enable_noop) response status %v"
+			logging.Errorf(fmsg, prefix, opaque, status)
+			return ErrorConnection
+		}
+		logging.Infof("%v ##%x received enable_noop response", prefix, opaque)
+	}
+
+	// send a DCP control message to set_noop_interval
+	if true /*set_noop_interval*/ {
+		rq := &transport.MCRequest{
+			Opcode: transport.DCP_CONTROL,
+			Key:    []byte("set_noop_interval"),
+			Body:   []byte("120"),
+		}
+		if err := feed.conn.Transmit(rq); err != nil {
+			fmsg := "%v ##%x doDcpOpen.Transmit(set_noop_interval): %v"
+			logging.Errorf(fmsg, prefix, opaque, err)
+			return err
+		}
+		logging.Infof("%v ##%x sending set_noop_interval", prefix, opaque)
+		msg, ok := <-rcvch
+		if !ok {
+			fmsg := "%v ##%x doDcpOpen.rcvch (set_noop_interval) closed"
+			logging.Errorf(fmsg, prefix, opaque)
+			return ErrorConnection
+		}
+		pkt := msg[0].(*transport.MCRequest)
+		opcode, status := pkt.Opcode, transport.Status(pkt.VBucket)
+		if opcode != transport.DCP_CONTROL {
+			fmsg := "%v ##%x DCP_CONTROL (set_noop_interval) != #%v"
+			logging.Errorf(fmsg, prefix, opaque, opcode)
+			return ErrorConnection
+		} else if status != transport.SUCCESS {
+			fmsg := "%v ##%x doDcpOpen (set_noop_interval) response status %v"
+			logging.Errorf(fmsg, prefix, opaque, status)
+			return ErrorConnection
+		}
+		fmsg := "%v ##%x received response for set_noop_interval"
+		logging.Infof(fmsg, prefix, opaque)
 	}
 	return nil
 }

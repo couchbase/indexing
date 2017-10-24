@@ -973,6 +973,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.plasma.useDirectIO": ConfigValue{
+		false,
+		"Use direct io mode",
+		false,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.plasma.mainIndex.maxNumPageDeltas": ConfigValue{
 		200,
 		"Maximum number of page deltas",
@@ -1159,6 +1166,13 @@ var SystemConfig = Config{
 		true,
 		"Enable page structure modification in lss",
 		true,
+		false,
+		false,
+	},
+	"indexer.plasma.logReadAheadSize": ConfigValue{
+		1024 * 1024,
+		"Log read ahead size",
+		1024 * 1024,
 		false,
 		false,
 	},
