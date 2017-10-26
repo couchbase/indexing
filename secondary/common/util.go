@@ -591,7 +591,7 @@ func IndexStatement(def IndexDefn) string {
 
 	withExpr := ""
 	if def.Immutable {
-		withExpr += "\"immutable\"=true"
+		withExpr += "\"immutable\":true"
 	}
 
 	if def.Deferred {
@@ -599,7 +599,7 @@ func IndexStatement(def IndexDefn) string {
 			withExpr += ","
 		}
 
-		withExpr += " \"defer_build\"=true"
+		withExpr += " \"defer_build\":true"
 	}
 
 	if len(withExpr) != 0 {
