@@ -97,9 +97,15 @@ type ScanRequest struct {
 }
 
 type Projection struct {
-	projectSecKeys bool
-	projectionKeys []bool
-	entryKeysEmpty bool
+	projectSecKeys   bool
+	projectionKeys   []bool
+	entryKeysEmpty   bool
+	projectGroupKeys []projGroup
+}
+
+type projGroup struct {
+	pos    int
+	grpKey bool
 }
 
 type Scan struct {
@@ -161,7 +167,7 @@ type GroupKey struct {
 }
 
 type Aggregate struct {
-	AggrFunc   common.AggrFunc       // Aggregate operation
+	AggrFunc   common.AggrFuncType   // Aggregate operation
 	EntryKeyId int32                 // Id that can be used in IndexProjection
 	KeyPos     int32                 // >=0 means use expr at index key position otherwise use Expr
 	Expr       expression.Expression // Aggregate expression
@@ -278,11 +284,19 @@ func NewScanRequest(protoReq interface{},
 		err = r.setConsistency(cons, vector)
 		if proj != nil {
 			var localerr error
-			if r.Indexprojection, localerr = validateIndexProjection(proj, len(r.IndexInst.Defn.SecExprs)); localerr != nil {
-				err = localerr
-				return
+			if req.GetGroupAggr() == nil {
+				if r.Indexprojection, localerr = validateIndexProjection(proj, len(r.IndexInst.Defn.SecExprs)); localerr != nil {
+					err = localerr
+					return
+				}
+				r.projectPrimaryKey = *proj.PrimaryKey
+			} else {
+				if r.Indexprojection, localerr = validateIndexProjectionGroupAggr(proj, req.GetGroupAggr()); localerr != nil {
+					err = localerr
+					return
+				}
+				r.projectPrimaryKey = false
 			}
-			r.projectPrimaryKey = *proj.PrimaryKey
 		}
 		err = r.fillRanges(
 			req.GetSpan().GetRange().GetLow(),
@@ -917,7 +931,57 @@ func validateIndexProjection(projection *protobuf.IndexProjection, cklen int) (*
 	return indexProjection, nil
 }
 
+func validateIndexProjectionGroupAggr(projection *protobuf.IndexProjection, protoGroupAggr *protobuf.GroupAggr) (*Projection, error) {
+
+	nproj := len(projection.GetEntryKeys())
+
+	if nproj <= 0 {
+		return nil, errors.New("Grouping without projection is not supported")
+	}
+
+	projGrp := make([]projGroup, nproj)
+	var found bool
+	for i, entryId := range projection.GetEntryKeys() {
+
+		found = false
+		for j, g := range protoGroupAggr.GetGroupKeys() {
+			if entryId == int64(g.GetEntryKeyId()) {
+				projGrp[i] = projGroup{pos: j, grpKey: true}
+				found = true
+				break
+			}
+		}
+
+		if found {
+			continue
+		}
+
+		for j, a := range protoGroupAggr.GetAggrs() {
+			if entryId == int64(a.GetEntryKeyId()) {
+				projGrp[i] = projGroup{pos: j, grpKey: false}
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			return nil, errors.New(fmt.Sprintf("Projection EntryId %v not found in any Group/Aggregate %v", entryId, protoGroupAggr))
+		}
+
+	}
+
+	indexProjection := &Projection{}
+	indexProjection.projectGroupKeys = projGrp
+	indexProjection.projectSecKeys = true
+
+	return indexProjection, nil
+}
+
 func (r *ScanRequest) fillGroupAggr(protoGroupAggr *protobuf.GroupAggr) (err error) {
+
+	if protoGroupAggr == nil {
+		return nil
+	}
 
 	r.GroupAggr = &GroupAggr{}
 
@@ -950,11 +1014,14 @@ func (r *ScanRequest) unmarshallGroupKeys(protoGroupAggr *protobuf.GroupAggr) er
 
 		groupKey.EntryKeyId = g.GetEntryKeyId()
 		groupKey.KeyPos = g.GetKeyPos()
-		expr, err := compileN1QLExpression(string(g.GetExpr()))
-		if err != nil {
-			return err
+
+		if groupKey.KeyPos < 0 {
+			expr, err := compileN1QLExpression(string(g.GetExpr()))
+			if err != nil {
+				return err
+			}
+			groupKey.Expr = expr
 		}
-		groupKey.Expr = expr
 
 		r.GroupAggr.Group = append(r.GroupAggr.Group, &groupKey)
 	}
@@ -969,16 +1036,18 @@ func (r *ScanRequest) unmarshallAggrs(protoGroupAggr *protobuf.GroupAggr) error 
 
 		var aggr Aggregate
 
-		aggr.AggrFunc = common.AggrFunc(a.GetAggrFunc())
+		aggr.AggrFunc = common.AggrFuncType(a.GetAggrFunc())
 		aggr.EntryKeyId = a.GetEntryKeyId()
 		aggr.KeyPos = a.GetKeyPos()
 		aggr.Distinct = a.GetDistinct()
 
-		expr, err := compileN1QLExpression(string(a.GetExpr()))
-		if err != nil {
-			return err
+		if aggr.KeyPos < 0 {
+			expr, err := compileN1QLExpression(string(a.GetExpr()))
+			if err != nil {
+				return err
+			}
+			aggr.Expr = expr
 		}
-		aggr.Expr = expr
 
 		r.GroupAggr.Aggrs = append(r.GroupAggr.Aggrs, &aggr)
 	}
