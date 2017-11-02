@@ -26,6 +26,9 @@ var ErrorEncoderUnknown = errors.New("transport.encoderUnknown")
 // ErrorDecoderUnknown for unknown decoder.
 var ErrorDecoderUnknown = errors.New("transport.decoderUnknown")
 
+//ErrorChecksumMismatch for mismatch in checksum
+var ErrorChecksumMismatch = errors.New("transport.checksumUnknown")
+
 // packet field offset and size in bytes
 const (
 	pktLenOffset   int = 0
