@@ -17,6 +17,12 @@ func Send(conn transporter, buf []byte, flags TransportFlag, payload []byte) (er
 
 	a, b := pktLenOffset, pktLenOffset+pktLenSize
 	binary.BigEndian.PutUint32(buf[a:b], uint32(len(payload)))
+
+	if payload != nil {
+		chksm := computeChecksum(buf[a:b])
+		flags = flags.SetChecksum(chksm)
+	}
+
 	a, b = pktFlagOffset, pktFlagOffset+pktFlagSize
 	binary.BigEndian.PutUint16(buf[a:b], uint16(flags))
 	if n, err = conn.Write(buf[:pktDataOffset]); err == nil {
@@ -54,8 +60,22 @@ func Receive(conn transporter, buf []byte) (flags TransportFlag, payload []byte,
 	a, b := pktLenOffset, pktLenOffset+pktLenSize
 	pktlen := binary.BigEndian.Uint32(bufHeader[a:b])
 
+	bufLen := bufHeader[a:b]
+
 	a, b = pktFlagOffset, pktFlagOffset+pktFlagSize
 	flags = TransportFlag(binary.BigEndian.Uint16(bufHeader[a:b]))
+
+	pktChksm := flags.GetChecksum()
+
+	if uint8(pktChksm) != 0 {
+		chksm := computeChecksum(bufLen)
+		if chksm != pktChksm {
+			logging.Errorf("checksum mismatch: expected %v got %v", pktChksm, chksm)
+			logging.Errorf("packet header %#v, flags %#v", bufLen, bufHeader[a:b])
+			err = ErrorChecksumMismatch
+			return
+		}
+	}
 
 	bufPkt := safeBufSlice(buf, int(pktlen))
 	if err = fullRead(conn, bufPkt); err != nil {
@@ -76,4 +96,19 @@ func safeBufSlice(b []byte, l int) []byte {
 	}
 
 	return make([]byte, l)
+}
+
+//checksum is 7bits
+func computeChecksum(pktLen []byte) byte {
+
+	var checksum byte
+
+	//use last 2 bytes from pktLen to
+	//compute checksum
+	checksum |= pktLen[3] & 0x0F
+	checksum <<= 4
+	checksum |= pktLen[2] & 0x0F
+	checksum &= 0x7F
+
+	return checksum
 }
