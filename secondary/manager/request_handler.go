@@ -56,6 +56,7 @@ type IndexResponse struct {
 	Version uint64 `json:"version,omitempty"`
 	Code    string `json:"code,omitempty"`
 	Error   string `json:"error,omitempty"`
+	Message string `json:"message,omitempty"`
 }
 
 //

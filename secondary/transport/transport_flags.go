@@ -4,8 +4,8 @@
 //           +---------------+---------------+
 //       bits|0 1 2 3 4 5 6 7|0 1 2 3 4 5 6 7|
 //           +-------+-------+---------------+  COMP. - Compression
-//          0| COMP. |  ENC. | undefined     |  ENC.  - Encoding
-//           +-------+-------+---------------+
+//          0| COMP. |  ENC. |  checksum   |X|  ENC.  - Encoding
+//           +-------+-------+---------------+  X     - Reserved for future
 
 package transport
 
@@ -58,4 +58,14 @@ func (flags TransportFlag) GetEncoding() byte {
 // SetProtobuf will set packet encoding to protobuf
 func (flags TransportFlag) SetProtobuf() TransportFlag {
 	return (flags & TransportFlag(0xFF0F)) | TransportFlag(EncodingProtobuf)
+}
+
+// GetChecksum will get the checksum from flags
+func (flags TransportFlag) GetChecksum() byte {
+	return byte((flags & TransportFlag(0x7F00)) >> 8)
+}
+
+// SetChecksum will set the checksum in flags
+func (flags TransportFlag) SetChecksum(c byte) TransportFlag {
+	return (flags & TransportFlag(0x80FF)) | (TransportFlag(c) << 8)
 }

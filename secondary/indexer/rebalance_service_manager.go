@@ -101,6 +101,7 @@ type state struct {
 }
 
 var rebalanceHttpTimeout int
+var MoveIndexStarted = "Move Index has started. Check Indexes UI for progress and Logs UI for any error"
 
 func NewRebalanceMgr(supvCmdch MsgChannel, supvMsgch MsgChannel, config c.Config,
 	rebalanceRunning bool, rebalanceToken *RebalanceToken) (RebalanceMgr, Message) {
@@ -2103,7 +2104,11 @@ func (m *ServiceMgr) handleMoveIndex(w http.ResponseWriter, r *http.Request) {
 		req = manager.IndexRequest{IndexIds: idList, Plan: plan}
 
 		code, errStr := m.doHandleMoveIndex(&req)
-		send(code, w, errStr)
+		if errStr != "" {
+			sendIndexResponseWithError(code, w, errStr)
+		} else {
+			sendIndexResponseMsg(w, MoveIndexStarted)
+		}
 	} else {
 		sendIndexResponseWithError(http.StatusBadRequest, w, "Unsupported method")
 		return
@@ -2135,7 +2140,7 @@ func (m *ServiceMgr) handleMoveIndexInternal(w http.ResponseWriter, r *http.Requ
 		if errStr != "" {
 			sendIndexResponseWithError(code, w, errStr)
 		} else {
-			sendIndexResponse(w)
+			sendIndexResponseMsg(w, MoveIndexStarted)
 		}
 
 	} else {
@@ -2163,13 +2168,21 @@ func (m *ServiceMgr) doHandleMoveIndex(req *manager.IndexRequest) (int, string) 
 		l.Warnf("ServiceMgr::doHandleMoveIndex %v", warnStr)
 		return http.StatusBadRequest, warnStr
 	} else {
-		select {
-		case err := <-m.moveStatusCh:
-			if err != nil {
-				return http.StatusInternalServerError, err.Error()
-			} else {
-				return http.StatusOK, ""
-			}
+		go m.monitorMoveIndex()
+		return http.StatusOK, ""
+	}
+}
+
+func (m *ServiceMgr) monitorMoveIndex() {
+	select {
+	case err := <-m.moveStatusCh:
+		if err != nil {
+			cfg := m.config.Load()
+			clusterAddr := cfg["clusterAddr"].String()
+			l.Errorf("ServiceMgr::doHandleMoveIndex MoveIndex failed: %v", err.Error())
+			c.Console(clusterAddr, fmt.Sprintf("MoveIndex failed: %v", err.Error()))
+		} else {
+			l.Infof("ServiceMgr: Move Index succeeded")
 		}
 	}
 }
@@ -2637,6 +2650,11 @@ func sendIndexResponseWithError(status int, w http.ResponseWriter, msg string) {
 
 func sendIndexResponse(w http.ResponseWriter) {
 	result := &manager.IndexResponse{Code: manager.RESP_SUCCESS}
+	send(http.StatusOK, w, result)
+}
+
+func sendIndexResponseMsg(w http.ResponseWriter, msg string) {
+	result := &manager.IndexResponse{Code: manager.RESP_SUCCESS, Message: msg}
 	send(http.StatusOK, w, result)
 }
 

@@ -194,7 +194,9 @@ func PeriodicProfile(level LogLevel, port string, endpoints ...string) {
 		for {
 			select {
 			case <-tick.C:
-				SystemLogger.printf(level, "%v", Profile(port, endpoints...))
+				if SystemLogger.IsEnabled(level) {
+					SystemLogger.printf(level, "%v", Profile(port, endpoints...))
+				}
 			}
 		}
 	}()
