@@ -159,6 +159,7 @@ func (feed *DcpFeed) genServer(
 		if r := recover(); r != nil {
 			logging.Errorf("%v ##%x crashed: %v\n", feed.logPrefix, opaque, r)
 			logging.Errorf("%s", logging.StackTrace())
+			feed.sendStreamEnd(feed.outch)
 		}
 		close(feed.finch)
 		feed.conn.Close()
@@ -241,6 +242,7 @@ loop:
 			pkt, bytes := resp[0].(*transport.MCRequest), resp[1].(int)
 			switch feed.handlePacket(pkt, bytes) {
 			case "exit":
+				feed.sendStreamEnd(feed.outch)
 				break loop
 			}
 		}
@@ -275,12 +277,14 @@ func (feed *DcpFeed) handlePacket(
 	sendAck := false
 	prefix := feed.logPrefix
 	stream := feed.vbstreams[vb]
-	defer func() { feed.dcplatency.Add(computeLatency(stream)) }()
 	if stream == nil {
 		fmsg := "%v spurious %v for %d: %#v\n"
 		logging.Fatalf(fmsg, prefix, pkt.Opcode, vb, pkt)
 		return "ok" // yeah it not _my_ mistake...
 	}
+
+	defer func() { feed.dcplatency.Add(computeLatency(stream)) }()
+
 	stream.LastSeen = time.Now().UnixNano()
 	switch pkt.Opcode {
 	case transport.DCP_STREAMREQ:
@@ -615,15 +619,18 @@ func (feed *DcpFeed) doDcpCloseStream(vbno, opaqueMSB uint16) error {
 
 // generate stream end responses for all active vb streams
 func (feed *DcpFeed) sendStreamEnd(outch chan<- *DcpEvent) {
-	for vb, stream := range feed.vbstreams {
-		dcpEvent := &DcpEvent{
-			VBucket: vb,
-			VBuuid:  stream.Vbuuid,
-			Opcode:  transport.DCP_STREAMEND,
-			Opaque:  stream.AppOpaque,
-			Ctime:   time.Now().UnixNano(),
+	if feed.vbstreams != nil {
+		for vb, stream := range feed.vbstreams {
+			dcpEvent := &DcpEvent{
+				VBucket: vb,
+				VBuuid:  stream.Vbuuid,
+				Opcode:  transport.DCP_STREAMEND,
+				Opaque:  stream.AppOpaque,
+				Ctime:   time.Now().UnixNano(),
+			}
+			outch <- dcpEvent
 		}
-		outch <- dcpEvent
+		feed.vbstreams = nil
 	}
 }
 
@@ -722,6 +729,7 @@ type DcpStream struct {
 type DcpEvent struct {
 	Opcode     transport.CommandCode // Type of event
 	Status     transport.Status      // Response status
+	Datatype   uint8                 // Datatype per binary protocol
 	VBucket    uint16                // VBucket this event applies to
 	Opaque     uint16                // 16 MSB of opaque
 	VBuuid     uint64                // This field is set by downstream
@@ -749,10 +757,12 @@ type DcpEvent struct {
 
 func newDcpEvent(rq *transport.MCRequest, stream *DcpStream) *DcpEvent {
 	event := &DcpEvent{
-		Opcode:  rq.Opcode,
-		VBucket: stream.Vbucket,
-		VBuuid:  stream.Vbuuid,
-		Ctime:   time.Now().UnixNano(),
+		Cas:      rq.Cas,
+		Datatype: rq.Datatype,
+		Opcode:   rq.Opcode,
+		VBucket:  stream.Vbucket,
+		VBuuid:   stream.Vbuuid,
+		Ctime:    time.Now().UnixNano(),
 	}
 	event.Key = make([]byte, len(rq.Key))
 	copy(event.Key, rq.Key)

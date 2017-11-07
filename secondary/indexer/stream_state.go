@@ -52,6 +52,8 @@ type StreamState struct {
 	streamBucketTimerStopCh     map[common.StreamId]BucketTimerStopCh
 	streamBucketLastPersistTime map[common.StreamId]BucketLastPersistTime
 	streamBucketSkippedInMemTs  map[common.StreamId]BucketSkippedInMemTs
+
+	bucketRollbackTime map[string]int64
 }
 
 type BucketHWTMap map[string]*common.TsVbuuid
@@ -114,6 +116,7 @@ func InitStreamState(config common.Config) *StreamState {
 		streamBucketLastPersistTime:           make(map[common.StreamId]BucketLastPersistTime),
 		streamBucketSkippedInMemTs:            make(map[common.StreamId]BucketSkippedInMemTs),
 		streamBucketLastSnapMarker:            make(map[common.StreamId]BucketLastSnapMarker),
+		bucketRollbackTime:                    make(map[string]int64),
 	}
 
 	return ss
@@ -328,6 +331,12 @@ func (ss *StreamState) updateVbStatus(streamId common.StreamId, bucket string,
 		vbs[vb] = Seqno(status)
 	}
 
+}
+
+func (ss *StreamState) setRollbackTime(bucket string, rollbackTime int64) {
+	if rollbackTime != 0 {
+		ss.bucketRollbackTime[bucket] = rollbackTime
+	}
 }
 
 func (ss *StreamState) clearRestartVbRetry(streamId common.StreamId, bucket string, vb Vbucket) {
@@ -955,10 +964,10 @@ func updateTsSeqNumToSnapshot(ts *common.TsVbuuid) {
 }
 func (ss *StreamState) getPersistInterval() uint64 {
 
-	if common.GetStorageMode() == common.MOI {
-		return ss.config["settings.persisted_snapshot.moi.interval"].Uint64()
-	} else {
+	if common.GetStorageMode() == common.FORESTDB {
 		return ss.config["settings.persisted_snapshot.interval"].Uint64()
+	} else {
+		return ss.config["settings.persisted_snapshot.moi.interval"].Uint64()
 	}
 
 }

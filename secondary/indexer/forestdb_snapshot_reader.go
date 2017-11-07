@@ -30,11 +30,11 @@ func (s *fdbSnapshot) StatCountTotal() (uint64, error) {
 	return c, nil
 }
 
-func (s *fdbSnapshot) CountTotal(stopch StopChannel) (uint64, error) {
-	return s.CountRange(MinIndexKey, MaxIndexKey, Both, stopch)
+func (s *fdbSnapshot) CountTotal(ctx IndexReaderContext, stopch StopChannel) (uint64, error) {
+	return s.CountRange(ctx, MinIndexKey, MaxIndexKey, Both, stopch)
 }
 
-func (s *fdbSnapshot) CountRange(low, high IndexKey, inclusion Inclusion,
+func (s *fdbSnapshot) CountRange(ctx IndexReaderContext, low, high IndexKey, inclusion Inclusion,
 	stopch StopChannel) (uint64, error) {
 
 	var count uint64
@@ -49,11 +49,80 @@ func (s *fdbSnapshot) CountRange(low, high IndexKey, inclusion Inclusion,
 		return nil
 	}
 
-	err := s.Range(low, high, inclusion, callb)
+	err := s.Range(ctx, low, high, inclusion, callb)
 	return count, err
 }
 
-func (s *fdbSnapshot) CountLookup(keys []IndexKey, stopch StopChannel) (uint64, error) {
+func (s *fdbSnapshot) MultiScanCount(ctx IndexReaderContext, low, high IndexKey, inclusion Inclusion,
+	scan Scan, distinct bool,
+	stopch StopChannel) (uint64, error) {
+
+	var err error
+	var scancount uint64
+	count := 1
+	checkDistinct := distinct && !s.isPrimary()
+	isIndexComposite := len(s.slice.idxDefn.SecExprs) > 1
+
+	buf := secKeyBufPool.Get()
+	defer secKeyBufPool.Put(buf)
+
+	previousRow := ctx.GetCursorKey()
+
+	callb := func(entry []byte) error {
+		select {
+		case <-stopch:
+			return common.ErrClientCancel
+		default:
+			skipRow := false
+			var ck [][]byte
+
+			//get the key in original format
+			if s.slice.idxDefn.Desc != nil {
+				jsonEncoder.ReverseCollate(entry, s.slice.idxDefn.Desc)
+			}
+			if scan.ScanType == FilterRangeReq {
+				if len(entry) > cap(*buf) {
+					*buf = make([]byte, 0, len(entry)+RESIZE_PAD)
+				}
+
+				skipRow, ck, err = filterScanRow(entry, scan, (*buf)[:0])
+				if err != nil {
+					return err
+				}
+			}
+			if skipRow {
+				return nil
+			}
+
+			if checkDistinct {
+				if isIndexComposite {
+					entry, err = projectLeadingKey(ck, entry, buf)
+				}
+				if len(*previousRow) != 0 && distinctCompare(entry, *previousRow) {
+					return nil // Ignore the entry as it is same as previous entry
+				}
+			}
+
+			if !s.isPrimary() {
+				e := secondaryIndexEntry(entry)
+				count = e.Count()
+			}
+
+			if checkDistinct {
+				scancount++
+				*previousRow = append((*previousRow)[:0], entry...)
+			} else {
+				scancount += uint64(count)
+			}
+		}
+		return nil
+	}
+
+	e := s.Range(ctx, low, high, inclusion, callb)
+	return scancount, e
+}
+
+func (s *fdbSnapshot) CountLookup(ctx IndexReaderContext, keys []IndexKey, stopch StopChannel) (uint64, error) {
 	var err error
 	var count uint64
 
@@ -69,7 +138,7 @@ func (s *fdbSnapshot) CountLookup(keys []IndexKey, stopch StopChannel) (uint64, 
 	}
 
 	for _, k := range keys {
-		if err = s.Lookup(k, callb); err != nil {
+		if err = s.Lookup(ctx, k, callb); err != nil {
 			break
 		}
 	}
@@ -77,7 +146,7 @@ func (s *fdbSnapshot) CountLookup(keys []IndexKey, stopch StopChannel) (uint64, 
 	return count, err
 }
 
-func (s *fdbSnapshot) Exists(key IndexKey, stopch StopChannel) (bool, error) {
+func (s *fdbSnapshot) Exists(ctx IndexReaderContext, key IndexKey, stopch StopChannel) (bool, error) {
 	var count uint64
 	callb := func([]byte) error {
 		select {
@@ -90,15 +159,15 @@ func (s *fdbSnapshot) Exists(key IndexKey, stopch StopChannel) (bool, error) {
 		return nil
 	}
 
-	err := s.Lookup(key, callb)
+	err := s.Lookup(ctx, key, callb)
 	return count != 0, err
 }
 
-func (s *fdbSnapshot) Lookup(key IndexKey, callb EntryCallback) error {
-	return s.Iterate(key, key, Both, compareExact, callb)
+func (s *fdbSnapshot) Lookup(ctx IndexReaderContext, key IndexKey, callb EntryCallback) error {
+	return s.Iterate(ctx, key, key, Both, compareExact, callb)
 }
 
-func (s *fdbSnapshot) Range(low, high IndexKey, inclusion Inclusion,
+func (s *fdbSnapshot) Range(ctx IndexReaderContext, low, high IndexKey, inclusion Inclusion,
 	callb EntryCallback) error {
 
 	var cmpFn CmpEntry
@@ -108,14 +177,14 @@ func (s *fdbSnapshot) Range(low, high IndexKey, inclusion Inclusion,
 		cmpFn = comparePrefix
 	}
 
-	return s.Iterate(low, high, inclusion, cmpFn, callb)
+	return s.Iterate(ctx, low, high, inclusion, cmpFn, callb)
 }
 
-func (s *fdbSnapshot) All(callb EntryCallback) error {
-	return s.Range(MinIndexKey, MaxIndexKey, Both, callb)
+func (s *fdbSnapshot) All(ctx IndexReaderContext, callb EntryCallback) error {
+	return s.Range(ctx, MinIndexKey, MaxIndexKey, Both, callb)
 }
 
-func (s *fdbSnapshot) Iterate(low, high IndexKey, inclusion Inclusion,
+func (s *fdbSnapshot) Iterate(ctx IndexReaderContext, low, high IndexKey, inclusion Inclusion,
 	cmpFn CmpEntry, callback EntryCallback) error {
 
 	ttime := time.Now()

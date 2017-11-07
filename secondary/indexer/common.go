@@ -170,4 +170,5 @@ type MetaUpdateFields struct {
 	stream  bool
 	err     bool
 	buildTs bool
+	rstate  bool
 }

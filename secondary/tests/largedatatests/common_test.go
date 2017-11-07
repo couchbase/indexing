@@ -23,6 +23,7 @@ var kvaddress, indexManagementAddress, indexScanAddress string
 var clusterconfig tc.ClusterConfiguration
 var proddir, bagdir string
 var defaultIndexActiveTimeout int64 = 900 // 15 mins to wait for index to become active
+var useClient string
 
 func init() {
 	log.Printf("In init()")
@@ -31,6 +32,7 @@ func init() {
 	var configpath string
 	seed = 1
 	flag.StringVar(&configpath, "cbconfig", "../config/clusterrun_conf.json", "Path of the configuration file with data about Couchbase Cluster")
+	flag.StringVar(&useClient, "useclient", "gsi", "Client to be used for tests. Values can be gsi or n1ql")
 	flag.Parse()
 	clusterconfig = tc.GetClusterConfFromFile(configpath)
 	kvaddress = clusterconfig.KVAddress

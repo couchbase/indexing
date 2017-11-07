@@ -1,15 +1,15 @@
 package indexer
 
 import (
-	"github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/platform"
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/couchbase/indexing/secondary/common"
 )
 
-var memUsed platform.AlignedInt64
-var maxMemory platform.AlignedInt64
+var memUsed int64
+var maxMemory int64
 
 func TestBasicsA(t *testing.T) {
 

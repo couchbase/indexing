@@ -3,13 +3,14 @@ package indexer
 import (
 	"flag"
 	"fmt"
-	"github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/logging"
 	"math/rand"
 	"runtime"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 )
 
 var N *int
@@ -124,7 +125,7 @@ func TestMemDBInsertionPerf(t *testing.T) {
 		DefnId:       common.IndexDefnId(0),
 		IsArrayIndex: false}
 	slice, err := NewMemDBSlice("/tmp/mdbslice",
-		SliceId(0), idxDefn, common.IndexInstId(0), *isPrimary,
+		SliceId(0), idxDefn, common.IndexInstId(0), *isPrimary, true,
 		cfg, stats)
 	common.CrashOnError(err)
 

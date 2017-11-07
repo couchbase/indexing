@@ -30,7 +30,7 @@ const (
 
 // Counter is a class of algorithms that return total node count efficiently
 type Counter interface {
-	CountTotal(stopch StopChannel) (uint64, error)
+	CountTotal(ctx IndexReaderContext, stopch StopChannel) (uint64, error)
 	// Approximate count
 	StatCountTotal() (uint64, error)
 }
@@ -38,7 +38,7 @@ type Counter interface {
 // Exister is a class of algorithms that allow testing if a key exists in the
 // index
 type Exister interface {
-	Exists(key IndexKey, stopch StopChannel) (bool, error)
+	Exists(ctx IndexReaderContext, Indexkey IndexKey, stopch StopChannel) (bool, error)
 }
 
 // Looker is a class of algorithms that allow looking up a key in an index.
@@ -47,26 +47,37 @@ type Exister interface {
 //
 type Looker interface {
 	Exister
-	Lookup(IndexKey, EntryCallback) error
-	All(EntryCallback) error
+	Lookup(IndexReaderContext, IndexKey, EntryCallback) error
+	All(IndexReaderContext, EntryCallback) error
 }
 
 // Ranger is a class of algorithms that can extract a range of keys from the
 // index.
 type Ranger interface {
 	Looker
-	Range(IndexKey, IndexKey, Inclusion, EntryCallback) error
+	Range(IndexReaderContext, IndexKey, IndexKey, Inclusion, EntryCallback) error
 }
 
 // RangeCounter is a class of algorithms that can count a range efficiently
 type RangeCounter interface {
-	CountRange(low, high IndexKey, inclusion Inclusion, stopch StopChannel) (
+	CountRange(ctx IndexReaderContext, low, high IndexKey, inclusion Inclusion, stopch StopChannel) (
 		uint64, error)
-	CountLookup(keys []IndexKey, stopch StopChannel) (uint64, error)
+	CountLookup(ctx IndexReaderContext, keys []IndexKey, stopch StopChannel) (uint64, error)
+	MultiScanCount(ctx IndexReaderContext, low, high IndexKey, inclusion Inclusion,
+		scan Scan, distinct bool, stopch StopChannel) (
+		uint64, error)
 }
 
 type IndexReader interface {
 	Counter
 	Ranger
 	RangeCounter
+}
+
+// Abstract context implemented by storage subsystem
+type IndexReaderContext interface {
+	Init()
+	Done()
+	SetCursorKey(cur *[]byte)
+	GetCursorKey() *[]byte
 }

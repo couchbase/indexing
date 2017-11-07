@@ -12,28 +12,32 @@ package indexer
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/logging"
-	"github.com/couchbase/indexing/secondary/memdb/mm"
-	"github.com/couchbase/indexing/secondary/platform"
-	"github.com/couchbase/indexing/secondary/stats"
 	"net/http"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unsafe"
+
+	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/stats"
+	"github.com/couchbase/indexing/secondary/stubs/nitro/mm"
 )
 
 var uptime time.Time
+var num_cpu_core int
 
 func init() {
 	uptime = time.Now()
+	num_cpu_core = runtime.NumCPU()
 }
 
 type BucketStats struct {
 	bucket     string
 	indexCount int
 
+	numRollbacks       stats.Int64Val
 	mutationQueueSize  stats.Int64Val
 	numMutationsQueued stats.Int64Val
 
@@ -42,6 +46,7 @@ type BucketStats struct {
 }
 
 func (s *BucketStats) Init() {
+	s.numRollbacks.Init()
 	s.mutationQueueSize.Init()
 	s.numMutationsQueued.Init()
 	s.tsQueueSize.Init()
@@ -86,6 +91,7 @@ func (it *IndexTimingStats) Init() {
 
 type IndexStats struct {
 	name, bucket string
+	replicaId    int
 
 	scanDuration          stats.Int64Val
 	scanReqDuration       stats.Int64Val
@@ -102,6 +108,7 @@ type IndexStats struct {
 	numRowsReturned       stats.Int64Val
 	diskSize              stats.Int64Val
 	buildProgress         stats.Int64Val
+	completionProgress    stats.Int64Val
 	numDocsQueued         stats.Int64Val
 	deleteBytes           stats.Int64Val
 	dataSize              stats.Int64Val
@@ -126,6 +133,18 @@ type IndexStats struct {
 	diskSnapLoadDuration  stats.Int64Val
 	notReadyError         stats.Int64Val
 	clientCancelError     stats.Int64Val
+	avgScanRate           stats.Int64Val
+	avgMutationRate       stats.Int64Val
+	avgDrainRate          stats.Int64Val
+	lastScanGatherTime    stats.Int64Val
+	lastNumRowsReturned   stats.Int64Val
+	lastMutateGatherTime  stats.Int64Val
+	lastNumDocsIndexed    stats.Int64Val
+	lastNumItemsFlushed   stats.Int64Val
+	lastRollbackTime      stats.TimeVal
+	progressStatTime      stats.TimeVal
+	residentPercent       stats.Int64Val
+	cacheHitPercent       stats.Int64Val
 
 	Timings IndexTimingStats
 }
@@ -135,11 +154,11 @@ type IndexerStatsHolder struct {
 }
 
 func (h IndexerStatsHolder) Get() *IndexerStats {
-	return (*IndexerStats)(platform.LoadPointer(&h.ptr))
+	return (*IndexerStats)(atomic.LoadPointer(&h.ptr))
 }
 
 func (h *IndexerStatsHolder) Set(s *IndexerStats) {
-	platform.StorePointer(&h.ptr, unsafe.Pointer(s))
+	atomic.StorePointer(&h.ptr, unsafe.Pointer(s))
 }
 
 func (s *IndexStats) Init() {
@@ -157,6 +176,7 @@ func (s *IndexStats) Init() {
 	s.numRowsReturned.Init()
 	s.diskSize.Init()
 	s.buildProgress.Init()
+	s.completionProgress.Init()
 	s.numDocsQueued.Init()
 	s.deleteBytes.Init()
 	s.dataSize.Init()
@@ -181,6 +201,18 @@ func (s *IndexStats) Init() {
 	s.diskSnapLoadDuration.Init()
 	s.notReadyError.Init()
 	s.clientCancelError.Init()
+	s.avgScanRate.Init()
+	s.avgMutationRate.Init()
+	s.avgDrainRate.Init()
+	s.lastScanGatherTime.Init()
+	s.lastNumRowsReturned.Init()
+	s.lastMutateGatherTime.Init()
+	s.lastNumDocsIndexed.Init()
+	s.lastNumItemsFlushed.Init()
+	s.lastRollbackTime.Init()
+	s.progressStatTime.Init()
+	s.residentPercent.Init()
+	s.cacheHitPercent.Init()
 
 	s.Timings.Init()
 }
@@ -220,12 +252,13 @@ func (s *IndexerStats) Reset() {
 	*s = IndexerStats{}
 	s.Init()
 	for k, v := range old.indexes {
-		s.AddIndex(k, v.bucket, v.name)
+		s.AddIndex(k, v.bucket, v.name, v.replicaId)
 	}
 }
 
-func (s *IndexerStats) AddIndex(id common.IndexInstId, bucket string, name string) {
-	idxStats := &IndexStats{name: name, bucket: bucket}
+func (s *IndexerStats) AddIndex(id common.IndexInstId, bucket string, name string, replicaId int) {
+
+	idxStats := &IndexStats{name: name, bucket: bucket, replicaId: replicaId}
 	idxStats.Init()
 	s.indexes[id] = idxStats
 
@@ -252,7 +285,8 @@ func (s *IndexerStats) RemoveIndex(id common.IndexInstId) {
 	}
 }
 
-func (is IndexerStats) MarshalJSON() ([]byte, error) {
+func (is IndexerStats) GetStats() common.Statistics {
+
 	var prefix string
 
 	statsMap := make(map[string]interface{})
@@ -270,6 +304,8 @@ func (is IndexerStats) MarshalJSON() ([]byte, error) {
 	addStat("needs_restart", is.needsRestart.Value())
 	storageMode := fmt.Sprintf("%s", common.GetStorageMode())
 	addStat("storage_mode", storageMode)
+	addStat("num_cpu_core", num_cpu_core)
+	addStat("cpu_utilization", getCpuPercent())
 
 	indexerState := common.IndexerState(is.indexerState.Value())
 	if indexerState == common.INDEXER_PREPARE_UNPAUSE {
@@ -296,7 +332,9 @@ func (is IndexerStats) MarshalJSON() ([]byte, error) {
 			scanReqAllocLat = scanReqAllocDur / reqs
 		}
 
-		prefix = fmt.Sprintf("%s:%s:", s.bucket, s.name)
+		name := common.FormatIndexInstDisplayName(s.name, s.replicaId)
+		prefix = fmt.Sprintf("%s:%s:", s.bucket, name)
+
 		addStat("total_scan_duration", s.scanDuration.Value())
 		addStat("total_scan_request_duration", s.scanReqDuration.Value())
 		addStat("insert_bytes", s.insertBytes.Value())
@@ -309,6 +347,7 @@ func (is IndexerStats) MarshalJSON() ([]byte, error) {
 		addStat("num_rows_returned", s.numRowsReturned.Value())
 		addStat("disk_size", s.diskSize.Value())
 		addStat("build_progress", s.buildProgress.Value())
+		addStat("completion_progress", s.completionProgress.Value())
 		addStat("num_docs_queued", s.numDocsQueued.Value())
 		addStat("delete_bytes", s.deleteBytes.Value())
 		addStat("data_size", s.dataSize.Value())
@@ -337,6 +376,13 @@ func (is IndexerStats) MarshalJSON() ([]byte, error) {
 		addStat("disk_load_duration", s.diskSnapLoadDuration.Value())
 		addStat("not_ready_errcount", s.notReadyError.Value())
 		addStat("client_cancel_errcount", s.clientCancelError.Value())
+		addStat("avg_scan_rate", s.avgScanRate.Value())
+		addStat("avg_mutation_rate", s.avgMutationRate.Value())
+		addStat("avg_drain_rate", s.avgDrainRate.Value())
+		addStat("last_rollback_time", s.lastRollbackTime.Value())
+		addStat("progress_stat_time", s.progressStatTime.Value())
+		addStat("resident_percent", s.residentPercent.Value())
+		addStat("cache_hit_percent", s.cacheHitPercent.Value())
 
 		addStat("timings/dcp_getseqs", s.Timings.dcpSeqs.Value())
 		addStat("timings/storage_clone_handle", s.Timings.stCloneHandle.Value())
@@ -357,6 +403,7 @@ func (is IndexerStats) MarshalJSON() ([]byte, error) {
 
 	for _, s := range is.buckets {
 		prefix = fmt.Sprintf("%s:", s.bucket)
+		addStat("num_rollbacks", s.numRollbacks.Value())
 		addStat("mutation_queue_size", s.mutationQueueSize.Value())
 		addStat("num_mutations_queued", s.numMutationsQueued.Value())
 		addStat("ts_queue_size", s.tsQueueSize.Value())
@@ -366,7 +413,11 @@ func (is IndexerStats) MarshalJSON() ([]byte, error) {
 		}
 	}
 
-	return json.Marshal(statsMap)
+	return statsMap
+}
+
+func (is IndexerStats) MarshalJSON() ([]byte, error) {
+	return json.Marshal(is.GetStats())
 }
 
 func (s IndexerStats) Clone() *IndexerStats {
@@ -398,18 +449,16 @@ type statsManager struct {
 	supvMsgch             MsgChannel
 	lastStatTime          time.Time
 	cacheUpdateInProgress bool
-
-	statsLogDumpInterval platform.AlignedUint64
+	statsLogDumpInterval  uint64
 }
 
 func NewStatsManager(supvCmdch MsgChannel,
 	supvMsgch MsgChannel, config common.Config) (*statsManager, Message) {
 	s := &statsManager{
-		supvCmdch:    supvCmdch,
-		supvMsgch:    supvMsgch,
-		lastStatTime: time.Unix(0, 0),
-		statsLogDumpInterval: platform.NewAlignedUint64(
-			config["settings.statsLogDumpInterval"].Uint64()),
+		supvCmdch:            supvCmdch,
+		supvMsgch:            supvMsgch,
+		lastStatTime:         time.Unix(0, 0),
+		statsLogDumpInterval: config["settings.statsLogDumpInterval"].Uint64(),
 	}
 
 	s.config.Store(config)
@@ -421,6 +470,7 @@ func NewStatsManager(supvCmdch MsgChannel,
 	http.HandleFunc("/stats/reset", s.handleStatsResetReq)
 	go s.run()
 	go s.runStatsDumpLogger()
+	StartCpuCollector()
 	return s, &MsgSuccess{}
 }
 
@@ -443,17 +493,21 @@ func (s *statsManager) tryUpdateStats(sync bool) {
 		s.Unlock()
 
 		go func() {
+
 			stats_list := []MsgType{STORAGE_STATS, SCAN_STATS, INDEX_PROGRESS_STATS, INDEXER_STATS}
 			for _, t := range stats_list {
 				ch := make(chan bool)
 				msg := &MsgStatsRequest{
-					mType:  t,
-					respch: ch,
+					mType:    t,
+					respch:   ch,
+					fetchDcp: true,
 				}
 
 				s.supvMsgch <- msg
 				<-ch
 			}
+
+			s.supvMsgch <- &MsgStatsRequest{mType: INDEX_STATS_DONE, respch: nil}
 
 			s.Lock()
 			s.lastStatTime = time.Now()
@@ -512,13 +566,20 @@ func (s *statsManager) getStorageStats() string {
 	s.supvMsgch <- statReq
 	res := <-replych
 
-	for _, sts := range res {
-		result += fmt.Sprintf("==== Index Instance %d ====\n", sts.InstId)
+	result += "[\n"
+	for i, sts := range res {
+		if i > 0 {
+			result += ","
+		}
+		result += fmt.Sprintf("{\n\"Index\": \"%s:%s\", \"Id\": %d,\n", sts.Bucket, sts.Name, sts.InstId)
+		result += fmt.Sprintf("\"Stats\":\n")
 		for _, data := range sts.GetInternalData() {
 			result += data
 		}
-		result += "========\n"
+		result += "}\n"
 	}
+
+	result += "]"
 
 	return result
 }
@@ -548,8 +609,7 @@ func (s *statsManager) handleStorageMMStatsReq(w http.ResponseWriter, r *http.Re
 }
 
 func (s *statsManager) handleStatsResetReq(w http.ResponseWriter, r *http.Request) {
-	conf := s.config.Load()
-	valid, _ := common.IsAuthValid(r, conf["clusterAddr"].String())
+	_, valid, _ := common.IsAuthValid(r)
 	if !valid {
 		w.WriteHeader(401)
 		w.Write([]byte("401 Unauthorized"))
@@ -598,7 +658,7 @@ func (s *statsManager) handleIndexInstanceUpdate(cmd Message) {
 func (s *statsManager) handleConfigUpdate(cmd Message) {
 	cfg := cmd.(*MsgConfigUpdate)
 	s.config.Store(cfg.GetConfig())
-	platform.StoreUint64(&s.statsLogDumpInterval, cfg.GetConfig()["settings.statsLogDumpInterval"].Uint64())
+	atomic.StoreUint64(&s.statsLogDumpInterval, cfg.GetConfig()["settings.statsLogDumpInterval"].Uint64())
 	s.supvCmdch <- &MsgSuccess{}
 }
 
@@ -616,7 +676,7 @@ func (s *statsManager) runStatsDumpLogger() {
 			logging.Infof("PeriodicStats = %s%s", string(bytes), storageStats)
 		}
 
-		time.Sleep(time.Second * time.Duration(platform.LoadUint64(&s.statsLogDumpInterval)))
+		time.Sleep(time.Second * time.Duration(atomic.LoadUint64(&s.statsLogDumpInterval)))
 	}
 }
 

@@ -10,20 +10,24 @@
 package indexer
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
-	"github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/logging"
-	p "github.com/couchbase/indexing/secondary/pipeline"
-	"github.com/couchbase/indexing/secondary/platform"
-	protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
-	"github.com/couchbase/indexing/secondary/queryport"
-	"github.com/golang/protobuf/proto"
 	"net"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+	"unsafe"
+
+	"github.com/couchbase/indexing/secondary/collatejson"
+	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
+	p "github.com/couchbase/indexing/secondary/pipeline"
+	protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
+	"github.com/couchbase/indexing/secondary/queryport"
+	"github.com/golang/protobuf/proto"
 )
 
 // Errors
@@ -38,17 +42,18 @@ var (
 var secKeyBufPool *common.BytesBufPool
 
 func init() {
-	secKeyBufPool = common.NewByteBufferPool(MAX_SEC_KEY_BUFFER_LEN + ENCODE_BUF_SAFE_PAD)
+	secKeyBufPool = common.NewByteBufferPool(maxSecKeyBufferLen + ENCODE_BUF_SAFE_PAD)
 }
 
 type ScanReqType string
 
 const (
-	StatsReq   ScanReqType = "stats"
-	CountReq               = "count"
-	ScanReq                = "scan"
-	ScanAllReq             = "scanAll"
-	HeloReq                = "helo"
+	StatsReq          ScanReqType = "stats"
+	CountReq                      = "count"
+	ScanReq                       = "scan"
+	ScanAllReq                    = "scanAll"
+	HeloReq                       = "helo"
+	MultiScanCountReq             = "multiscancount"
 )
 
 type ScanRequest struct {
@@ -63,6 +68,9 @@ type ScanRequest struct {
 	Keys        []IndexKey
 	Consistency *common.Consistency
 	Stats       *IndexStats
+	IndexInst   common.IndexInst
+
+	Ctx IndexReaderContext
 
 	// user supplied
 	LowBytes, HighBytes []byte
@@ -72,6 +80,17 @@ type ScanRequest struct {
 	Limit     int64
 	isPrimary bool
 
+	// New parameters for spock
+	Scans             []Scan
+	Indexprojection   *Projection
+	Reverse           bool
+	Distinct          bool
+	Offset            int64
+	projectPrimaryKey bool
+
+	// Rollback Time
+	rollbackTime int64
+
 	ScanId      uint64
 	ExpiredTime time.Time
 	Timeout     *time.Timer
@@ -80,7 +99,140 @@ type ScanRequest struct {
 	RequestId string
 	LogPrefix string
 
-	keyBufList []*[]byte
+	keyBufList      []*[]byte
+	indexKeyBuffer  []byte
+	sharedBuffer    *[]byte
+	sharedBufferLen int
+
+	hasRollback *atomic.Value
+}
+
+type Projection struct {
+	projectSecKeys bool
+	projectionKeys []bool
+	entryKeysEmpty bool
+}
+
+type Scan struct {
+	Low      IndexKey  // Overall Low for a Span. Computed from composite filters (Ranges)
+	High     IndexKey  // Overall High for a Span. Computed from composite filters (Ranges)
+	Incl     Inclusion // Overall Inclusion for a Span
+	ScanType ScanFilterType
+	Filters  []Filter // A collection qualifying filters
+	Equals   IndexKey // TODO: Remove Equals
+}
+
+type Filter struct {
+	// If composite index has n keys,
+	// it will have <= n CompositeElementFilters
+	CompositeFilters []CompositeElementFilter
+	Low              IndexKey
+	High             IndexKey
+	Inclusion        Inclusion
+	ScanType         ScanFilterType
+}
+
+type ScanFilterType string
+
+// RangeReq is a span which is Range on the entire index
+// without composite index filtering
+// FilterRangeReq is a span request which needs composite
+// index filtering
+const (
+	AllReq         ScanFilterType = "scanAll"
+	LookupReq                     = "lookup"
+	RangeReq                      = "range"       // Range with no filtering
+	FilterRangeReq                = "filterRange" // Range with filtering
+)
+
+// Range for a single field in composite index
+type CompositeElementFilter struct {
+	Low       IndexKey
+	High      IndexKey
+	Inclusion Inclusion
+}
+
+// A point in index and the corresponding filter
+// the point belongs to either as high or low
+type IndexPoint struct {
+	Value    IndexKey
+	FilterId int
+	Type     string
+}
+
+// Implements sort Interface
+type IndexPoints []IndexPoint
+
+func (ip IndexPoints) Len() int {
+	return len(ip)
+}
+
+func (ip IndexPoints) Swap(i, j int) {
+	ip[i], ip[j] = ip[j], ip[i]
+}
+
+func (ip IndexPoints) Less(i, j int) bool {
+	return IndexPointLessThan(ip[i], ip[j])
+}
+
+// Return true if x < y
+func IndexPointLessThan(x, y IndexPoint) bool {
+	a := x.Value
+	b := y.Value
+	if a == MinIndexKey {
+		return true
+	} else if a == MaxIndexKey {
+		return false
+	} else if b == MinIndexKey {
+		return false
+	} else if b == MaxIndexKey {
+		return true
+	}
+
+	if a.ComparePrefixIndexKey(b) < 0 {
+		return true
+	} else if a.ComparePrefixIndexKey(b) == 0 {
+		if len(a.Bytes()) == len(b.Bytes()) {
+			if x.Type == "low" && y.Type == "high" {
+				return true
+			}
+			return false
+		}
+		inclusiveKey := minlen(x, y)
+		switch inclusiveKey.Type {
+		case "low":
+			if inclusiveKey == x {
+				return true
+			}
+		case "high":
+			if inclusiveKey == y {
+				return true
+			}
+		}
+		return false
+	}
+	return false
+}
+
+func minlen(x, y IndexPoint) IndexPoint {
+	if len(x.Value.Bytes()) < len(y.Value.Bytes()) {
+		return x
+	}
+	return y
+}
+
+// Return true if a < b
+func IndexKeyLessThan(a, b IndexKey) bool {
+	if a == MinIndexKey {
+		return true
+	} else if a == MaxIndexKey {
+		return false
+	} else if b == MinIndexKey {
+		return false
+	} else if b == MaxIndexKey {
+		return true
+	}
+	return (bytes.Compare(a.Bytes(), b.Bytes()) < 0)
 }
 
 func (r ScanRequest) String() string {
@@ -135,6 +287,28 @@ func (r *ScanRequest) getTimeoutCh() <-chan time.Time {
 	}
 
 	return nil
+}
+
+func (r *ScanRequest) getKeyBuffer() []byte {
+	if r.indexKeyBuffer == nil {
+		buf := secKeyBufPool.Get()
+		r.keyBufList = append(r.keyBufList, buf)
+		r.indexKeyBuffer = *buf
+	}
+	return r.indexKeyBuffer
+}
+
+// Reuses buffer from buffer pool. When current buffer is insufficient
+// get new buffer from the pool, reset sharedBuffer & sharedBufferLen
+func (r *ScanRequest) getSharedBuffer(length int) []byte {
+	if r.sharedBuffer == nil || (cap(*r.sharedBuffer)-r.sharedBufferLen) < length {
+		buf := secKeyBufPool.Get()
+		r.keyBufList = append(r.keyBufList, buf)
+		r.sharedBuffer = buf
+		r.sharedBufferLen = 0
+		return (*r.sharedBuffer)[:0]
+	}
+	return (*r.sharedBuffer)[r.sharedBufferLen:r.sharedBufferLen]
 }
 
 func (r *ScanRequest) Done() {
@@ -196,6 +370,9 @@ type scanCoordinator struct {
 	supvMsgch        MsgChannel //channel to send any async message to supervisor
 	snapshotNotifych chan IndexSnapshot
 	lastSnapshot     map[common.IndexInstId]IndexSnapshot
+	rollbackTimes    unsafe.Pointer
+
+	rollbackInProgress unsafe.Pointer
 
 	serv      *queryport.Server
 	logPrefix string
@@ -204,7 +381,7 @@ type scanCoordinator struct {
 	indexInstMap  common.IndexInstMap
 	indexPartnMap IndexPartnMap
 
-	reqCounter platform.AlignedUint64
+	reqCounter uint64
 	config     common.ConfigHolder
 
 	stats IndexerStatsHolder
@@ -235,10 +412,11 @@ func NewScanCoordinator(supvCmdch MsgChannel, supvMsgch MsgChannel,
 		lastSnapshot:     make(map[common.IndexInstId]IndexSnapshot),
 		snapshotNotifych: snapshotNotifych,
 		logPrefix:        "ScanCoordinator",
-		reqCounter:       platform.NewAlignedUint64(0),
+		reqCounter:       0,
 	}
 
 	s.config.Store(config)
+	s.initRollbackInProgress()
 
 	addr := net.JoinHostPort("", config["scanPort"].String())
 	queryportCfg := config.SectionConfig("queryport.", true)
@@ -307,6 +485,17 @@ func (s *scanCoordinator) handleStats(cmd Message) {
 				logging.Errorf("%v: Unable compute index count for %v/%v (%v)", s.logPrefix,
 					idxStats.bucket, idxStats.name, err)
 			}
+
+			// compute scan rate
+			now := time.Now().UnixNano()
+			elapsed := float64(now-idxStats.lastScanGatherTime.Value()) / float64(time.Second)
+			if elapsed > 0 {
+				numRowsReturned := idxStats.numRowsReturned.Value()
+				scanRate := float64(numRowsReturned-idxStats.lastNumRowsReturned.Value()) / elapsed
+				idxStats.avgScanRate.Set(int64((scanRate + float64(idxStats.avgScanRate.Value())) / 2))
+				idxStats.lastScanGatherTime.Set(now)
+				idxStats.lastNumRowsReturned.Set(numRowsReturned)
+			}
 		}
 		replych <- true
 	}()
@@ -356,6 +545,9 @@ func (s *scanCoordinator) handleSupvervisorCommands(cmd Message) {
 	case INDEXER_BOOTSTRAP:
 		s.handleIndexerBootstrap(cmd)
 
+	case INDEXER_ROLLBACK:
+		s.handleIndexerRollback(cmd)
+
 	default:
 		logging.Errorf("ScanCoordinator: Received Unknown Command %v", cmd)
 		s.supvCmdch <- &MsgError{
@@ -371,7 +563,7 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 
 	var indexInst *common.IndexInst
 	r = new(ScanRequest)
-	r.ScanId = platform.AddUint64(&s.reqCounter, 1)
+	r.ScanId = atomic.AddUint64(&s.reqCounter, 1)
 	r.LogPrefix = fmt.Sprintf("SCAN##%d", r.ScanId)
 
 	cfg := s.config.Load()
@@ -386,6 +578,7 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 	r.CancelCh = cancelCh
 
 	isBootstrapMode := s.isBootstrapMode()
+	r.projectPrimaryKey = true
 
 	isNil := func(k []byte) bool {
 		if k == nil || (!r.isPrimary && string(k) == "[]") {
@@ -402,9 +595,7 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 		if r.isPrimary {
 			return NewPrimaryKey(k)
 		} else {
-			buf := secKeyBufPool.Get()
-			r.keyBufList = append(r.keyBufList, buf)
-			return NewSecondaryKey(k, *buf)
+			return NewSecondaryKey(k, r.getKeyBuffer())
 		}
 	}
 
@@ -458,6 +649,466 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 		}
 	}
 
+	joinKeys := func(keys [][]byte) ([]byte, error) {
+		buf1 := r.getSharedBuffer(len(keys) * 3)
+		joined, e := jsonEncoder.JoinArray(keys, buf1)
+		if e != nil {
+			e = fmt.Errorf("Error in joining keys: %s", e)
+			return nil, e
+		}
+		r.sharedBufferLen += len(joined)
+		return joined, nil
+	}
+
+	getReverseCollatedIndexKey := func(input []byte, desc []bool) IndexKey {
+		reversed := jsonEncoder.ReverseCollate(input, desc)
+		key := secondaryKey(reversed)
+		return &key
+	}
+
+	flipInclusion := func(incl Inclusion, desc []bool) Inclusion {
+		if desc != nil && desc[0] {
+			if incl == Low {
+				return High
+			} else if incl == High {
+				return Low
+			}
+		}
+		return incl
+	}
+
+	getScanAll := func() Scan {
+		s := Scan{
+			ScanType: AllReq,
+		}
+		return s
+	}
+
+	areFiltersNil := func(protoScan *protobuf.Scan) bool {
+		areFiltersNil := true
+		for _, filter := range protoScan.Filters {
+			if !isNil(filter.Low) || !isNil(filter.High) {
+				areFiltersNil = false
+				break
+			}
+		}
+		return areFiltersNil
+	}
+
+	// Compute the overall low, high for a Filter
+	// based on composite filter ranges
+	fillFilterLowHigh := func(compFilters []CompositeElementFilter, filter *Filter) error {
+		if !r.IndexInst.Defn.HasDescending() {
+			var lows, highs [][]byte
+			var e error
+			joinLowKey, joinHighKey := true, true
+
+			if compFilters[0].Low == MinIndexKey {
+				filter.Low = MinIndexKey
+				joinLowKey = false
+			}
+			if compFilters[0].High == MaxIndexKey {
+				filter.High = MaxIndexKey
+				joinHighKey = false
+			}
+
+			var l, h []byte
+			codec := collatejson.NewCodec(16)
+			if joinLowKey {
+				for _, f := range compFilters {
+					if f.Low == MinIndexKey {
+						break
+					}
+					lows = append(lows, f.Low.Bytes())
+				}
+
+				buf1 := r.getSharedBuffer(len(lows) * 3)
+				if l, e = codec.JoinArray(lows, buf1); e != nil {
+					e = fmt.Errorf("Error in forming low key %s", e)
+					return e
+				}
+				r.sharedBufferLen += len(l)
+				lowKey := secondaryKey(l)
+				filter.Low = &lowKey
+			}
+			if joinHighKey {
+				for _, f := range compFilters {
+					if f.High == MaxIndexKey {
+						break
+					}
+					highs = append(highs, f.High.Bytes())
+				}
+
+				buf2 := r.getSharedBuffer(len(highs) * 3)
+				if h, e = codec.JoinArray(highs, buf2); e != nil {
+					e = fmt.Errorf("Error in forming high key %s", e)
+					return e
+				}
+				r.sharedBufferLen += len(h)
+				highKey := secondaryKey(h)
+				filter.High = &highKey
+			}
+			return nil
+		}
+
+		//********** Reverse Collation fix **********//
+
+		// Step 1: Form lows and highs keys
+		var lows, highs []IndexKey
+		for _, f := range compFilters {
+			lows = append(lows, f.Low)
+			highs = append(highs, f.High)
+		}
+
+		// Step 2: Exchange lows and highs depending on []desc
+		var lows2, highs2 []IndexKey
+		for i, _ := range compFilters {
+			if r.IndexInst.Defn.Desc[i] {
+				lows2 = append(lows2, highs[i])
+				highs2 = append(highs2, lows[i])
+			} else {
+				lows2 = append(lows2, lows[i])
+				highs2 = append(highs2, highs[i])
+			}
+		}
+
+		// Step 3: Prune lows2 and highs2 if Min/Max present
+		for i, l := range lows2 {
+			if l == MinIndexKey || l == MaxIndexKey {
+				lows2 = lows2[:i]
+				break
+			}
+		}
+		for i, h := range highs2 {
+			if h == MinIndexKey || h == MaxIndexKey {
+				highs2 = highs2[:i]
+				break
+			}
+		}
+
+		// Step 4: Join lows2 and highs2
+		var joinedLow, joinedHigh []byte
+		var e error
+		var lowKey, highKey IndexKey
+		if len(lows2) > 0 {
+			var lows2bytes [][]byte
+			for _, l := range lows2 {
+				lows2bytes = append(lows2bytes, l.Bytes())
+			}
+			if joinedLow, e = joinKeys(lows2bytes); e != nil {
+				return e
+			}
+			lowKey = getReverseCollatedIndexKey(joinedLow, r.IndexInst.Defn.Desc[:len(lows2)])
+		} else {
+			lowKey = MinIndexKey
+		}
+
+		if len(highs2) > 0 {
+			var highs2bytes [][]byte
+			for _, l := range highs2 {
+				highs2bytes = append(highs2bytes, l.Bytes())
+			}
+			if joinedHigh, e = joinKeys(highs2bytes); e != nil {
+				return e
+			}
+			highKey = getReverseCollatedIndexKey(joinedHigh, r.IndexInst.Defn.Desc[:len(highs2)])
+		} else {
+			highKey = MaxIndexKey
+		}
+		filter.Low = lowKey
+		filter.High = highKey
+		//********** End of Reverse Collation fix **********//
+
+		// TODO: Calculate the right inclusion
+		// Right now using Both inclusion
+		return nil
+	}
+
+	fillFilterEquals := func(protoScan *protobuf.Scan, filter *Filter) error {
+		var e error
+		var equals [][]byte
+		for _, k := range protoScan.Equals {
+			var key IndexKey
+			if key, e = newKey(k); e != nil {
+				e = fmt.Errorf("Invalid equal key %s (%s)", string(k), e)
+				return e
+			}
+			equals = append(equals, key.Bytes())
+		}
+
+		codec := collatejson.NewCodec(16)
+		buf1 := r.getSharedBuffer(len(equals) * 3)
+		var equalsKey, eqReverse []byte
+		if equalsKey, e = codec.JoinArray(equals, buf1); e != nil {
+			e = fmt.Errorf("Error in forming equals key %s", e)
+			return e
+		}
+		r.sharedBufferLen += len(equalsKey)
+		if !r.IndexInst.Defn.HasDescending() {
+			eqReverse = equalsKey
+		} else {
+			eqReverse = jsonEncoder.ReverseCollate(equalsKey, r.IndexInst.Defn.Desc[:len(equals)])
+		}
+		eqKey := secondaryKey(eqReverse)
+
+		var compFilters []CompositeElementFilter
+		for _, k := range equals {
+			ek := secondaryKey(k)
+			fl := CompositeElementFilter{
+				Low:       &ek,
+				High:      &ek,
+				Inclusion: Both,
+			}
+			compFilters = append(compFilters, fl)
+		}
+
+		filter.Low = &eqKey
+		filter.High = &eqKey
+		filter.Inclusion = Both
+		filter.CompositeFilters = compFilters
+		filter.ScanType = LookupReq
+		return nil
+	}
+
+	// Create scans from sorted Index Points
+	// Iterate over sorted points and keep track of applicable filters
+	// between overlapped regions
+	composeScans := func(points []IndexPoint, filters []Filter) []Scan {
+		var scans []Scan
+		filtersMap := make(map[int]bool)
+		var filtersList []int
+		var low IndexKey
+		for _, p := range points {
+			if len(filtersMap) == 0 {
+				low = p.Value
+			}
+			filterid := p.FilterId
+			if _, present := filtersMap[filterid]; present {
+				delete(filtersMap, filterid)
+				if len(filtersMap) == 0 { // Empty filtersMap indicates end of overlapping region
+					if len(scans) > 0 &&
+						scans[len(scans)-1].High.ComparePrefixIndexKey(low) == 0 {
+						// If high of previous scan == low of next scan, then
+						// merge the filters instead of creating a new scan
+						for _, fl := range filtersList {
+							scans[len(scans)-1].Filters = append(scans[len(scans)-1].Filters, filters[fl])
+						}
+						scans[len(scans)-1].High = p.Value
+						filtersList = nil
+					} else {
+						scan := Scan{
+							Low:      low,
+							High:     p.Value,
+							Incl:     Both,
+							ScanType: FilterRangeReq,
+						}
+						for _, fl := range filtersList {
+							scan.Filters = append(scan.Filters, filters[fl])
+						}
+
+						if r.isPrimary {
+							scan.ScanType = RangeReq
+						}
+
+						scans = append(scans, scan)
+						filtersList = nil
+					}
+				}
+			} else {
+				filtersMap[filterid] = true
+				filtersList = append(filtersList, filterid)
+			}
+		}
+		for i, _ := range scans {
+			if len(scans[i].Filters) == 1 && scans[i].Filters[0].ScanType == LookupReq {
+				scans[i].Equals = scans[i].Low
+				scans[i].ScanType = LookupReq
+			}
+			if scans[i].ScanType == FilterRangeReq && len(scans[i].Filters) == 1 &&
+				len(scans[i].Filters[0].CompositeFilters) == 1 {
+				// Flip inclusion if first element is descending
+				scans[i].Incl = flipInclusion(scans[i].Filters[0].CompositeFilters[0].Inclusion, r.IndexInst.Defn.Desc)
+				scans[i].ScanType = RangeReq
+			}
+			// TODO: Optimzation if single CEF in all filters (for both primary and secondary)
+		}
+
+		return scans
+	}
+
+	fillScans := func(protoScans []*protobuf.Scan) {
+		var l, h IndexKey
+		var localErr error
+		defer func() {
+			if err == nil {
+				err = localErr
+			}
+		}()
+
+		// For Upgrade
+		if len(protoScans) == 0 {
+			r.Scans = make([]Scan, 1)
+			if len(r.Keys) > 0 {
+				r.Scans[0].Equals = r.Keys[0] //TODO fix for multiple Keys needed?
+				r.Scans[0].ScanType = LookupReq
+			} else {
+				r.Scans[0].Low = r.Low
+				r.Scans[0].High = r.High
+				r.Scans[0].Incl = r.Incl
+				r.Scans[0].ScanType = RangeReq
+			}
+			return
+		}
+
+		// Array of Filters
+		var filters []Filter
+		var points []IndexPoint
+
+		if r.isPrimary {
+			for _, protoScan := range protoScans {
+				if len(protoScan.Equals) != 0 {
+					var filter Filter
+					var key IndexKey
+					if key, localErr = newKey(protoScan.Equals[0]); localErr != nil {
+						localErr = fmt.Errorf("Invalid equal key %s (%s)", string(protoScan.Equals[0]), localErr)
+						return
+					}
+					filter.Low = key
+					filter.High = key
+					filters = append(filters, filter)
+
+					p1 := IndexPoint{Value: filter.Low, FilterId: len(filters) - 1, Type: "low"}
+					p2 := IndexPoint{Value: filter.High, FilterId: len(filters) - 1, Type: "high"}
+					points = append(points, p1, p2)
+					continue
+				}
+
+				// If there are no filters in scan, it is ScanAll
+				if len(protoScan.Filters) == 0 {
+					r.Scans = make([]Scan, 1)
+					r.Scans[0] = getScanAll()
+					return
+				}
+
+				// if all scan filters are (nil, nil), it is ScanAll
+				if areFiltersNil(protoScan) {
+					r.Scans = make([]Scan, 1)
+					r.Scans[0] = getScanAll()
+					return
+				}
+
+				fl := protoScan.Filters[0]
+				if l, localErr = newLowKey(fl.Low); localErr != nil {
+					localErr = fmt.Errorf("Invalid low key %s (%s)", string(fl.Low), localErr)
+					return
+				}
+
+				if h, localErr = newHighKey(fl.High); localErr != nil {
+					localErr = fmt.Errorf("Invalid high key %s (%s)", string(fl.High), localErr)
+					return
+				}
+
+				if IndexKeyLessThan(h, l) {
+					continue
+				}
+
+				filter := Filter{
+					CompositeFilters: nil,
+					Inclusion:        Inclusion(fl.GetInclusion()),
+					Low:              l,
+					High:             h,
+				}
+				filters = append(filters, filter)
+				p1 := IndexPoint{Value: filter.Low, FilterId: len(filters) - 1, Type: "low"}
+				p2 := IndexPoint{Value: filter.High, FilterId: len(filters) - 1, Type: "high"}
+				points = append(points, p1, p2)
+			}
+		} else {
+			for _, protoScan := range protoScans {
+				skipScan := false
+				if len(protoScan.Equals) != 0 {
+					//Encode the equals keys
+					var filter Filter
+					if localErr = fillFilterEquals(protoScan, &filter); localErr != nil {
+						return
+					}
+					filters = append(filters, filter)
+
+					p1 := IndexPoint{Value: filter.Low, FilterId: len(filters) - 1, Type: "low"}
+					p2 := IndexPoint{Value: filter.High, FilterId: len(filters) - 1, Type: "high"}
+					points = append(points, p1, p2)
+					continue
+				}
+
+				// If there are no filters in scan, it is ScanAll
+				if len(protoScan.Filters) == 0 {
+					r.Scans = make([]Scan, 1)
+					r.Scans[0] = getScanAll()
+					return
+				}
+
+				// if all scan filters are (nil, nil), it is ScanAll
+				if areFiltersNil(protoScan) {
+					r.Scans = make([]Scan, 1)
+					r.Scans[0] = getScanAll()
+					return
+				}
+
+				var compFilters []CompositeElementFilter
+				// Encode Filters
+				for _, fl := range protoScan.Filters {
+					if l, localErr = newLowKey(fl.Low); localErr != nil {
+						localErr = fmt.Errorf("Invalid low key %s (%s)", string(fl.Low), localErr)
+						return
+					}
+
+					if h, localErr = newHighKey(fl.High); localErr != nil {
+						localErr = fmt.Errorf("Invalid high key %s (%s)", string(fl.High), localErr)
+						return
+					}
+
+					if IndexKeyLessThan(h, l) {
+						skipScan = true
+						break
+					}
+
+					compfil := CompositeElementFilter{
+						Low:       l,
+						High:      h,
+						Inclusion: Inclusion(fl.GetInclusion()),
+					}
+					compFilters = append(compFilters, compfil)
+				}
+
+				if skipScan {
+					continue
+				}
+
+				filter := Filter{
+					CompositeFilters: compFilters,
+					Inclusion:        Both,
+				}
+
+				if localErr = fillFilterLowHigh(compFilters, &filter); localErr != nil {
+					return
+				}
+
+				filters = append(filters, filter)
+
+				p1 := IndexPoint{Value: filter.Low, FilterId: len(filters) - 1, Type: "low"}
+				p2 := IndexPoint{Value: filter.High, FilterId: len(filters) - 1, Type: "high"}
+				points = append(points, p1, p2)
+
+				// TODO: Does single Composite Element Filter
+				// mean no filtering? Revisit single CEF
+			}
+		}
+
+		// Sort Index Points
+		sort.Sort(IndexPoints(points))
+		r.Scans = composeScans(points, filters)
+	}
+
 	setConsistency := func(
 		cons common.Consistency, vector *protobuf.TsConsistency) {
 
@@ -480,7 +1131,7 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 			cluster := cfg["clusterAddr"].String()
 			r.Ts = &common.TsVbuuid{}
 			t0 := time.Now()
-			r.Ts.Seqnos, localErr = bucketSeqsWithRetry(getseqsRetries, r.LogPrefix, cluster, r.Bucket)
+			r.Ts.Seqnos, localErr = bucketSeqsWithRetry(getseqsRetries, r.LogPrefix, cluster, r.Bucket, cfg["numVbuckets"].Int())
 			if localErr == nil && r.Stats != nil {
 				r.Stats.Timings.dcpSeqs.Put(time.Since(t0))
 			}
@@ -500,16 +1151,19 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 		defer s.mu.RUnlock()
 
 		stats := s.stats.Get()
-		indexInst, localErr = s.findIndexInstance(r.DefnID)
+		indexInst, r.Ctx, localErr = s.findIndexInstance(r.DefnID)
 		if localErr == nil {
 			r.isPrimary = indexInst.Defn.IsPrimary
 			r.IndexName, r.Bucket = indexInst.Defn.Name, indexInst.Defn.Bucket
 			r.IndexInstId = indexInst.InstId
+			r.IndexInst = *indexInst
 
 			if indexInst.State != common.INDEX_STATE_ACTIVE {
 				localErr = common.ErrIndexNotReady
 			}
 			r.Stats = stats.indexes[r.IndexInstId]
+			rbMap := *s.getRollbackInProgress()
+			r.hasRollback = rbMap[indexInst.Defn.Bucket]
 		}
 	}
 
@@ -534,6 +1188,7 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 	case *protobuf.CountRequest:
 		r.DefnID = req.GetDefnID()
 		r.RequestId = req.GetRequestId()
+		r.rollbackTime = req.GetRollbackTime()
 		cons := common.Consistency(req.GetCons())
 		vector := req.GetVector()
 		r.ScanType = CountReq
@@ -550,34 +1205,58 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 			req.GetSpan().GetRange().GetLow(),
 			req.GetSpan().GetRange().GetHigh(),
 			req.GetSpan().GetEquals())
+		sc := req.GetScans()
+		if len(sc) != 0 {
+			fillScans(sc)
+			r.ScanType = MultiScanCountReq
+			r.Distinct = req.GetDistinct()
+		}
 
 	case *protobuf.ScanRequest:
 		r.DefnID = req.GetDefnID()
 		r.RequestId = req.GetRequestId()
+		r.rollbackTime = req.GetRollbackTime()
 		cons := common.Consistency(req.GetCons())
 		vector := req.GetVector()
 		r.ScanType = ScanReq
 		r.Incl = Inclusion(req.GetSpan().GetRange().GetInclusion())
 		r.Limit = req.GetLimit()
-
+		r.Reverse = req.GetReverse()
+		proj := req.GetIndexprojection()
+		if proj == nil {
+			r.Distinct = req.GetDistinct()
+		}
+		r.Offset = req.GetOffset()
 		if isBootstrapMode {
 			err = common.ErrIndexerInBootstrap
 			return
 		}
-
 		setIndexParams()
 		setConsistency(cons, vector)
+		if proj != nil {
+			var localerr error
+			if r.Indexprojection, localerr = validateIndexProjection(proj, len(r.IndexInst.Defn.SecExprs)); localerr != nil {
+				err = localerr
+				return
+			}
+			r.projectPrimaryKey = *proj.PrimaryKey
+		}
 		fillRanges(
 			req.GetSpan().GetRange().GetLow(),
 			req.GetSpan().GetRange().GetHigh(),
 			req.GetSpan().GetEquals())
+		fillScans(req.GetScans())
+
 	case *protobuf.ScanAllRequest:
 		r.DefnID = req.GetDefnID()
 		r.RequestId = req.GetRequestId()
+		r.rollbackTime = req.GetRollbackTime()
 		cons := common.Consistency(req.GetCons())
 		vector := req.GetVector()
 		r.ScanType = ScanAllReq
 		r.Limit = req.GetLimit()
+		r.Scans = make([]Scan, 1)
+		r.Scans[0].ScanType = AllReq
 
 		if isBootstrapMode {
 			err = common.ErrIndexerInBootstrap
@@ -593,6 +1272,36 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 	return
 }
 
+func validateIndexProjection(projection *protobuf.IndexProjection, cklen int) (*Projection, error) {
+	if len(projection.EntryKeys) > cklen {
+		e := errors.New(fmt.Sprintf("Invalid number of Entry Keys %v in IndexProjection", len(projection.EntryKeys)))
+		return nil, e
+	}
+
+	projectionKeys := make([]bool, cklen)
+	for _, position := range projection.EntryKeys {
+		if position >= int64(cklen) || position < 0 {
+			e := errors.New(fmt.Sprintf("Invalid Entry Key %v in IndexProjection", position))
+			return nil, e
+		}
+		projectionKeys[position] = true
+	}
+
+	projectAllSecKeys := true
+	for _, sp := range projectionKeys {
+		if sp == false {
+			projectAllSecKeys = false
+		}
+	}
+
+	indexProjection := &Projection{}
+	indexProjection.projectSecKeys = !projectAllSecKeys
+	indexProjection.projectionKeys = projectionKeys
+	indexProjection.entryKeysEmpty = len(projection.EntryKeys) == 0
+
+	return indexProjection, nil
+}
+
 // Before starting the index scan, we have to find out the snapshot timestamp
 // that can fullfil this query by considering atleast-timestamp provided in
 // the query request. A timestamp request message is sent to the storage
@@ -602,7 +1311,6 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 // will block wait.
 // This mechanism can be used to implement RYOW.
 func (s *scanCoordinator) getRequestedIndexSnapshot(r *ScanRequest) (snap IndexSnapshot, err error) {
-
 	snapshot, err := func() (IndexSnapshot, error) {
 		s.mu.RLock()
 		defer s.mu.RUnlock()
@@ -744,7 +1452,6 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, conn net.Conn,
 	ttime := time.Now()
 
 	req, err := s.newRequest(protoReq, cancelCh)
-
 	atime := time.Now()
 	w := NewProtoWriter(req.ScanType, conn)
 	defer func() {
@@ -770,16 +1477,19 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, conn net.Conn,
 		return
 	}
 
-	req.Stats.scanReqAllocDuration.Add(time.Now().Sub(atime).Nanoseconds())
+	if req.Stats != nil {
+		req.Stats.scanReqAllocDuration.Add(time.Now().Sub(atime).Nanoseconds())
+	}
 
-	if err := s.isScanAllowed(*req.Consistency); err != nil {
+	if err := s.isScanAllowed(*req.Consistency, req); err != nil {
 		s.tryRespondWithError(w, req, err)
 		return
 	}
 
-	req.Stats.numRequests.Add(1)
-
-	req.Stats.scanReqInitDuration.Add(time.Now().Sub(ttime).Nanoseconds())
+	if req.Stats != nil {
+		req.Stats.numRequests.Add(1)
+		req.Stats.scanReqInitDuration.Add(time.Now().Sub(ttime).Nanoseconds())
+	}
 
 	t0 := time.Now()
 	is, err := s.getRequestedIndexSnapshot(req)
@@ -795,10 +1505,21 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, conn net.Conn,
 	})
 
 	defer func() {
-		req.Stats.scanReqDuration.Add(time.Now().Sub(ttime).Nanoseconds())
+		if req.Stats != nil {
+			req.Stats.scanReqDuration.Add(time.Now().Sub(ttime).Nanoseconds())
+		}
 	}()
 
+	if req.Ctx != nil {
+		req.Ctx.Init()
+	}
+
 	s.processRequest(req, w, is, t0)
+
+	if req.Ctx != nil {
+		req.Ctx.Done()
+	}
+
 }
 
 func (s *scanCoordinator) processRequest(req *ScanRequest, w ScanResponseWriter,
@@ -809,6 +1530,8 @@ func (s *scanCoordinator) processRequest(req *ScanRequest, w ScanResponseWriter,
 		s.handleScanRequest(req, w, is, t0)
 	case CountReq:
 		s.handleCountRequest(req, w, is, t0)
+	case MultiScanCountReq:
+		s.handleMultiScanCountRequest(req, w, is, t0)
 	case StatsReq:
 		s.handleStatsRequest(req, w, is)
 	}
@@ -833,16 +1556,18 @@ func (s *scanCoordinator) handleScanRequest(req *ScanRequest, w ScanResponseWrit
 	err := scanPipeline.Execute()
 	scanTime := time.Now().Sub(t0)
 
-	req.Stats.numRowsReturned.Add(int64(scanPipeline.RowsRead()))
-	req.Stats.scanBytesRead.Add(int64(scanPipeline.BytesRead()))
-	req.Stats.scanDuration.Add(scanTime.Nanoseconds())
-	req.Stats.scanWaitDuration.Add(waitTime.Nanoseconds())
+	if req.Stats != nil {
+		req.Stats.numRowsReturned.Add(int64(scanPipeline.RowsReturned()))
+		req.Stats.scanBytesRead.Add(int64(scanPipeline.BytesRead()))
+		req.Stats.scanDuration.Add(scanTime.Nanoseconds())
+		req.Stats.scanWaitDuration.Add(waitTime.Nanoseconds())
+	}
 
 	if err != nil {
 		status := fmt.Sprintf("(error = %s)", err)
 		logging.LazyVerbose(func() string {
 			return fmt.Sprintf("%s RESPONSE rows:%d, waitTime:%v, totalTime:%v, status:%s, requestId:%s",
-				req.LogPrefix, scanPipeline.RowsRead(), waitTime, scanTime, status, req.RequestId)
+				req.LogPrefix, scanPipeline.RowsReturned(), waitTime, scanTime, status, req.RequestId)
 		})
 
 		if err == common.ErrClientCancel {
@@ -852,7 +1577,7 @@ func (s *scanCoordinator) handleScanRequest(req *ScanRequest, w ScanResponseWrit
 		status := "ok"
 		logging.LazyVerbose(func() string {
 			return fmt.Sprintf("%s RESPONSE rows:%d, waitTime:%v, totalTime:%v, status:%s",
-				req.LogPrefix, scanPipeline.RowsRead(), waitTime, scanTime, status)
+				req.LogPrefix, scanPipeline.RowsReturned(), waitTime, scanTime, status)
 		})
 	}
 }
@@ -874,11 +1599,11 @@ func (s *scanCoordinator) handleCountRequest(req *ScanRequest, w ScanResponseWri
 		var r uint64
 		snap := s.Snapshot()
 		if len(req.Keys) > 0 {
-			r, err = snap.CountLookup(req.Keys, stopch)
+			r, err = snap.CountLookup(req.Ctx, req.Keys, stopch)
 		} else if req.Low.Bytes() == nil && req.High.Bytes() == nil {
-			r, err = snap.CountTotal(stopch)
+			r, err = snap.CountTotal(req.Ctx, stopch)
 		} else {
-			r, err = snap.CountRange(req.Low, req.High, req.Incl, stopch)
+			r, err = snap.CountRange(req.Ctx, req.Low, req.High, req.Incl, stopch)
 		}
 
 		if err != nil {
@@ -886,6 +1611,51 @@ func (s *scanCoordinator) handleCountRequest(req *ScanRequest, w ScanResponseWri
 		}
 
 		rows += r
+	}
+
+	if s.tryRespondWithError(w, req, err) {
+		return
+	}
+
+	logging.Verbosef("%s RESPONSE count:%d status:ok", req.LogPrefix, rows)
+	err = w.Count(rows)
+	s.handleError(req.LogPrefix, err)
+}
+
+func (s *scanCoordinator) handleMultiScanCountRequest(req *ScanRequest, w ScanResponseWriter,
+	is IndexSnapshot, t0 time.Time) {
+	var rows uint64
+	var err error
+	stopch := make(StopChannel)
+	cancelCb := NewCancelCallback(req, func(e error) {
+		err = e
+		close(stopch)
+	})
+	cancelCb.Run()
+	defer cancelCb.Done()
+
+	buf := secKeyBufPool.Get()
+	defer secKeyBufPool.Put(buf)
+	previousRow := (*buf)[:0]
+	req.Ctx.SetCursorKey(&previousRow)
+
+	for _, scan := range req.Scans {
+		for _, s := range GetSliceSnapshots(is) {
+			var r uint64
+			snap := s.Snapshot()
+			if scan.ScanType == AllReq {
+				r, err = snap.MultiScanCount(req.Ctx, MinIndexKey, MaxIndexKey, Both, scan, req.Distinct, stopch)
+			} else if scan.ScanType == LookupReq || scan.ScanType == RangeReq ||
+				scan.ScanType == FilterRangeReq {
+				r, err = snap.MultiScanCount(req.Ctx, scan.Low, scan.High, scan.Incl, scan, req.Distinct, stopch)
+			}
+
+			if err != nil {
+				break
+			}
+
+			rows += r
+		}
 	}
 
 	if s.tryRespondWithError(w, req, err) {
@@ -916,7 +1686,7 @@ func (s *scanCoordinator) handleStatsRequest(req *ScanRequest, w ScanResponseWri
 		if req.Low.Bytes() == nil && req.Low.Bytes() == nil {
 			r, err = snap.StatCountTotal()
 		} else {
-			r, err = snap.CountRange(req.Low, req.High, req.Incl, stopch)
+			r, err = snap.CountRange(req.Ctx, req.Low, req.High, req.Incl, stopch)
 		}
 
 		if err != nil {
@@ -937,17 +1707,19 @@ func (s *scanCoordinator) handleStatsRequest(req *ScanRequest, w ScanResponseWri
 
 // Find and return data structures for the specified index
 func (s *scanCoordinator) findIndexInstance(
-	defnID uint64) (*common.IndexInst, error) {
+	defnID uint64) (*common.IndexInst, IndexReaderContext, error) {
 
 	for _, inst := range s.indexInstMap {
 		if inst.Defn.DefnId == common.IndexDefnId(defnID) {
-			if _, ok := s.indexPartnMap[inst.InstId]; ok {
-				return &inst, nil
+			if pmap, ok := s.indexPartnMap[inst.InstId]; ok {
+				ctx := pmap[0].Sc.GetSliceById(0).GetReaderContext()
+
+				return &inst, ctx, nil
 			}
-			return nil, ErrNotMyIndex
+			return nil, nil, ErrNotMyIndex
 		}
 	}
-	return nil, common.ErrIndexNotFound
+	return nil, nil, common.ErrIndexNotFound
 }
 
 func (s *scanCoordinator) handleUpdateIndexInstMap(cmd Message) {
@@ -959,6 +1731,11 @@ func (s *scanCoordinator) handleUpdateIndexInstMap(cmd Message) {
 	indexInstMap := req.GetIndexInstMap()
 	s.stats.Set(req.GetStatsObject())
 	s.indexInstMap = common.CopyIndexInstMap(indexInstMap)
+
+	if len(req.GetRollbackTimes()) != 0 {
+		logging.Infof("ScanCoordinator::initialize rollback times on new index inst map: %v", req.GetRollbackTimes())
+		s.initRollbackTimes(req.GetRollbackTimes())
+	}
 
 	s.supvCmdch <- &MsgSuccess{}
 }
@@ -986,7 +1763,85 @@ func (s *scanCoordinator) handleIndexerPause(cmd Message) {
 
 }
 
+func (s *scanCoordinator) cloneRollbackTimes() map[string]int64 {
+
+	newTime := make(map[string]int64)
+	oldTime := (*map[string]int64)(atomic.LoadPointer(&s.rollbackTimes))
+	if oldTime != nil {
+		for bucket, rollbackTime := range *oldTime {
+			newTime[bucket] = rollbackTime
+		}
+	}
+
+	return newTime
+}
+
+func (s *scanCoordinator) saveRollbackTime(bucket string, rollbackTime int64) {
+
+	logging.Infof("ScanCoordinator::saveRollbackTime: bucket %v time %v", bucket, rollbackTime)
+	newTime := s.cloneRollbackTimes()
+	newTime[bucket] = rollbackTime
+	atomic.StorePointer(&s.rollbackTimes, unsafe.Pointer(&newTime))
+}
+
+func (s *scanCoordinator) initRollbackTimes(rollbackTimes map[string]int64) {
+
+	newTimes := make(map[string]int64)
+	for bucket, rollbackTime := range rollbackTimes {
+		newTimes[bucket] = rollbackTime
+	}
+	atomic.StorePointer(&s.rollbackTimes, unsafe.Pointer(&newTimes))
+}
+
+func (s *scanCoordinator) initRollbackInProgress() {
+
+	rollbackInProgress := make(map[string]*bool)
+	atomic.StorePointer(&s.rollbackInProgress, unsafe.Pointer(&rollbackInProgress))
+}
+
+func (s *scanCoordinator) setRollbackInProgress(bucket string, rollback bool) {
+
+	logging.Infof("ScanCoordinator::setRollbackInProgress bucket %v rollback %v", bucket, rollback)
+	newRollbackInProgress := s.cloneRollbackInProgress()
+	rbMap := *s.getRollbackInProgress()
+	if v, ok := rbMap[bucket]; ok {
+		v.Store(rollback)
+	} else {
+		var v atomic.Value
+		v.Store(rollback)
+		newRollbackInProgress[bucket] = &v
+		atomic.StorePointer(&s.rollbackInProgress, unsafe.Pointer(&newRollbackInProgress))
+	}
+}
+
+func (s *scanCoordinator) getRollbackInProgress() *map[string]*atomic.Value {
+
+	return (*map[string]*atomic.Value)(atomic.LoadPointer(&s.rollbackInProgress))
+
+}
+
+func (s *scanCoordinator) cloneRollbackInProgress() map[string]*atomic.Value {
+
+	newRollbackInProgress := make(map[string]*atomic.Value)
+	oldRollbackInProgress := s.getRollbackInProgress()
+	if oldRollbackInProgress != nil {
+		for bucket, rollbackInProgress := range *oldRollbackInProgress {
+			newRollbackInProgress[bucket] = rollbackInProgress
+		}
+	}
+
+	return newRollbackInProgress
+}
+
 func (s *scanCoordinator) handleIndexerResume(cmd Message) {
+
+	msg := cmd.(*MsgIndexerState)
+	rollbackTimes := msg.GetRollbackTimes()
+	if len(rollbackTimes) != 0 {
+		logging.Infof("ScanCoordinator::initialize rollback times on indexer resume: %v", rollbackTimes)
+		s.initRollbackTimes(rollbackTimes)
+	}
+
 	s.setIndexerState(common.INDEXER_ACTIVE)
 
 	s.supvCmdch <- &MsgSuccess{}
@@ -994,6 +1849,20 @@ func (s *scanCoordinator) handleIndexerResume(cmd Message) {
 
 func (s *scanCoordinator) handleIndexerBootstrap(cmd Message) {
 	s.setIndexerState(common.INDEXER_BOOTSTRAP)
+	s.supvCmdch <- &MsgSuccess{}
+}
+
+func (s *scanCoordinator) handleIndexerRollback(cmd Message) {
+
+	msg := cmd.(*MsgRollback)
+
+	if msg.rollbackTime != 0 {
+		s.saveRollbackTime(msg.bucket, msg.rollbackTime)
+		s.setRollbackInProgress(msg.bucket, true)
+	} else {
+		s.setRollbackInProgress(msg.bucket, false)
+	}
+
 	s.supvCmdch <- &MsgSuccess{}
 }
 
@@ -1078,7 +1947,7 @@ func readDeallocSnapshot(ch chan interface{}) {
 	}
 }
 
-func (s *scanCoordinator) isScanAllowed(c common.Consistency) error {
+func (s *scanCoordinator) isScanAllowed(c common.Consistency, scan *ScanRequest) error {
 	if s.getIndexerState() == common.INDEXER_PAUSED {
 		cfg := s.config.Load()
 		allow_scan_when_paused := cfg["allow_scan_when_paused"].Bool()
@@ -1092,6 +1961,27 @@ func (s *scanCoordinator) isScanAllowed(c common.Consistency) error {
 		}
 	}
 
+	if scan.rollbackTime == 0 {
+		return nil
+	}
+
+	rollbackTimes := (*map[string]int64)(atomic.LoadPointer(&s.rollbackTimes))
+	if rollbackTimes == nil {
+		logging.Errorf("ScanCoordinator.isScanAllowed: rollback time not initialized")
+		return ErrIndexRollbackOrBootstrap
+	}
+
+	rollbackTime, ok := (*rollbackTimes)[scan.Bucket]
+	if !ok {
+		logging.Errorf("ScanCoordinator.isScanAllowed: missing rollback time for bucket %v", scan.Bucket)
+		return ErrIndexRollbackOrBootstrap
+	}
+
+	if scan.rollbackTime != rollbackTime {
+		logging.Errorf("ScanCoordinator.isScanAllowed: rollback time mismatch. Req %v indexer %v", scan.rollbackTime, rollbackTime)
+		return ErrIndexRollbackOrBootstrap
+	}
+
 	return nil
 }
 
@@ -1099,13 +1989,18 @@ func (s *scanCoordinator) isBootstrapMode() bool {
 	return s.getIndexerState() == common.INDEXER_BOOTSTRAP
 }
 
-func bucketSeqsWithRetry(retries int, logPrefix, cluster, bucket string) (seqnos []uint64, err error) {
+func bucketSeqsWithRetry(retries int, logPrefix, cluster, bucket string, numVbs int) (seqnos []uint64, err error) {
 	fn := func(r int, err error) error {
 		if r > 0 {
 			logging.Errorf("%s BucketSeqnos(%s): failed with error (%v)...Retrying (%d)",
 				logPrefix, bucket, err, r)
 		}
 		seqnos, err = common.BucketSeqnos(cluster, "default", bucket)
+
+		if err == nil && len(seqnos) < numVbs {
+			return fmt.Errorf("Mismatch of number of vbuckets in DCP seqnos (%v).  Expected (%v).", len(seqnos), numVbs)
+		}
+
 		return err
 	}
 

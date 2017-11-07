@@ -1,1 +1,2 @@
-memcapable.WarmUpMemcachedTest.do_warmup_100k
+xdcr.uniXDCR.unidirectional.load_with_ops
+xdcr.uniXDCR.unidirectional.load_with_failover

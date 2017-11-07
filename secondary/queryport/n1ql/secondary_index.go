@@ -36,6 +36,7 @@ import "github.com/couchbase/query/value"
 import qlog "github.com/couchbase/query/logging"
 
 const DONEREQUEST = 1
+const BACKFILLPREFIX = "scan-results"
 
 // ErrorIndexEmpty is index not initialized.
 var ErrorIndexEmpty = errors.NewError(
@@ -88,9 +89,11 @@ type gsiKeyspace struct {
 	keyspace       string // aka bucket
 	gsiClient      *qclient.GsiClient
 	config         c.Config
-	indexes        map[uint64]*secondaryIndex // defnID -> index
-	primaryIndexes map[uint64]*secondaryIndex
+	indexes        map[uint64]datastore.Index // defnID -> index
+	primaryIndexes map[uint64]datastore.PrimaryIndex
 	logPrefix      string
+	version        uint64
+	indexerVersion uint64
 }
 
 // NewGSIIndexer manage new set of indexes under namespace->keyspace,
@@ -107,8 +110,8 @@ func NewGSIIndexer(
 		clusterURL:     clusterURL,
 		namespace:      namespace,
 		keyspace:       keyspace,
-		indexes:        make(map[uint64]*secondaryIndex), // defnID -> index
-		primaryIndexes: make(map[uint64]*secondaryIndex),
+		indexes:        make(map[uint64]datastore.Index), // defnID -> index
+		primaryIndexes: make(map[uint64]datastore.PrimaryIndex),
 	}
 	tm := time.Now().UnixNano()
 	gsi.logPrefix = fmt.Sprintf("GSIC[%s/%s-%v]", namespace, keyspace, tm)
@@ -351,6 +354,57 @@ func (gsi *gsiKeyspace) CreateIndex(
 	return gsi.IndexById(defnID2String(defnID))
 }
 
+// CreateIndex2 implements datastore.Indexer2{} interface. Create a secondary
+// index on this keyspace
+func (gsi *gsiKeyspace) CreateIndex2(
+	requestId, name string, seekKey expression.Expressions, rangeKey datastore.IndexKeys,
+	where expression.Expression, with value.Value) (
+	datastore.Index, errors.Error) {
+
+	var partnStr string
+	if seekKey != nil && len(seekKey) > 0 {
+		partnStr = expression.NewStringer().Visit(seekKey[0])
+	}
+
+	var whereStr string
+	if where != nil {
+		whereStr = expression.NewStringer().Visit(where)
+	}
+
+	secStrs := make([]string, len(rangeKey))
+	desc := make([]bool, len(rangeKey))
+
+	for i, key := range rangeKey {
+		s := expression.NewStringer().Visit(key.Expr)
+		secStrs[i] = s
+		desc[i] = key.Desc
+	}
+
+	var withJSON []byte
+	var err error
+	if with != nil {
+		if withJSON, err = with.MarshalJSON(); err != nil {
+			return nil, errors.NewError(err, "GSI error marshalling WITH clause")
+		}
+	}
+	defnID, err := gsi.gsiClient.CreateIndex2(
+		name,
+		gsi.keyspace, /*bucket-name*/
+		"GSI",        /*using*/
+		"N1QL",       /*exprType*/
+		partnStr, whereStr, secStrs, desc,
+		false, /*isPrimary*/
+		withJSON)
+	if err != nil {
+		return nil, errors.NewError(err, "GSI CreateIndex()")
+	}
+	// refresh to get back the newly created index.
+	if err := gsi.Refresh(); err != nil {
+		return nil, err
+	}
+	return gsi.IndexById(defnID2String(defnID))
+}
+
 // BuildIndexes implements datastore.Indexer{} interface.
 func (gsi *gsiKeyspace) BuildIndexes(requestId string, names ...string) errors.Error {
 	defnIDs := make([]uint64, len(names))
@@ -371,24 +425,33 @@ func (gsi *gsiKeyspace) BuildIndexes(requestId string, names ...string) errors.E
 // Refresh list of indexes and scanner clients.
 func (gsi *gsiKeyspace) Refresh() errors.Error {
 	l.Tracef("%v gsiKeyspace.Refresh()", gsi.logPrefix)
-	indexes, err := gsi.gsiClient.Refresh()
+	indexes, version, indexerVersion, err := gsi.gsiClient.Refresh()
 	if err != nil {
 		return errors.NewError(err, "GSI Refresh()")
 	}
-	si_s := make([]*secondaryIndex, 0, len(indexes))
-	for _, index := range indexes {
-		if index.Definition.Bucket != gsi.keyspace {
-			continue
+
+	cachedVersion := atomic.LoadUint64(&gsi.version)
+	cachedIndexerVersion := atomic.LoadUint64(&gsi.indexerVersion)
+
+	// has metadata version changed?
+	if cachedVersion < version || cachedIndexerVersion < indexerVersion {
+
+		si_s := make([]*secondaryIndex, 0, len(indexes))
+		for _, index := range indexes {
+			if index.Definition.Bucket != gsi.keyspace {
+				continue
+			}
+			si, err := newSecondaryIndexFromMetaData(gsi, indexerVersion, index)
+			if err != nil {
+				return err
+			}
+			si_s = append(si_s, si)
 		}
-		si, err := newSecondaryIndexFromMetaData(gsi, index)
-		if err != nil {
+		if err := gsi.setIndexes(si_s, version, indexerVersion); err != nil {
 			return err
 		}
-		si_s = append(si_s, si)
 	}
-	if err := gsi.setIndexes(si_s); err != nil {
-		return err
-	}
+
 	return nil
 }
 
@@ -428,16 +491,20 @@ func (gsi *gsiKeyspace) SyncRefresh() errors.Error {
 // private functions for datastore.Indexer{}
 //------------------------------------------
 
-func (gsi *gsiKeyspace) setIndexes(si []*secondaryIndex) errors.Error {
+func (gsi *gsiKeyspace) setIndexes(si []*secondaryIndex,
+	version, indexerVersion uint64) errors.Error {
+
 	gsi.rw.Lock()
 	defer gsi.rw.Unlock()
-	gsi.indexes = make(map[uint64]*secondaryIndex)        // defnID -> index
-	gsi.primaryIndexes = make(map[uint64]*secondaryIndex) // defnID -> index
+	atomic.StoreUint64(&gsi.version, version)
+	atomic.StoreUint64(&gsi.indexerVersion, indexerVersion)
+	gsi.indexes = make(map[uint64]datastore.Index)               // defnID -> index
+	gsi.primaryIndexes = make(map[uint64]datastore.PrimaryIndex) // defnID -> index
 	for _, si := range si {
 		if si.isPrimary {
-			gsi.primaryIndexes[si.defnID] = si
+			gsi.primaryIndexes[si.defnID] = gsi.getPrimaryIndexFromVersion(si, indexerVersion)
 		} else {
-			gsi.indexes[si.defnID] = si
+			gsi.indexes[si.defnID] = gsi.getIndexFromVersion(si, indexerVersion)
 		}
 	}
 	return nil
@@ -453,6 +520,26 @@ func (gsi *gsiKeyspace) delIndex(id string) {
 	delete(gsi.primaryIndexes, defnID)
 }
 
+func (gsi *gsiKeyspace) getIndexFromVersion(index *secondaryIndex,
+	indexerVersion uint64) datastore.Index {
+	if indexerVersion == c.INDEXER_50_VERSION {
+		si2 := datastore.Index(&secondaryIndex2{secondaryIndex: *index})
+		return si2
+	} else {
+		return datastore.Index(index)
+	}
+}
+
+func (gsi *gsiKeyspace) getPrimaryIndexFromVersion(index *secondaryIndex,
+	indexerVersion uint64) datastore.PrimaryIndex {
+	if indexerVersion == c.INDEXER_50_VERSION {
+		si2 := datastore.PrimaryIndex(&secondaryIndex2{secondaryIndex: *index})
+		return si2
+	} else {
+		return datastore.PrimaryIndex(index)
+	}
+}
+
 //------------------
 // datastore.Index{}
 //------------------
@@ -466,9 +553,10 @@ type secondaryIndex struct {
 	defnID    uint64
 	isPrimary bool
 	using     c.IndexType
-	partnExpr string
-	secExprs  []string
-	whereExpr string
+	partnExpr expression.Expressions
+	secExprs  expression.Expressions
+	desc      []bool
+	whereExpr expression.Expression
 	state     datastore.IndexState
 	err       string
 	deferred  bool
@@ -477,12 +565,13 @@ type secondaryIndex struct {
 // for metadata-provider.
 func newSecondaryIndexFromMetaData(
 	gsi *gsiKeyspace,
+	version uint64,
 	imd *mclient.IndexMetadata) (si *secondaryIndex, err errors.Error) {
 
-	if len(imd.Instances) < 1 {
+	if len(imd.Instances) < 1 && len(imd.InstsInRebalance) < 1 {
 		return nil, errors.NewError(nil, "no instance are created by GSI")
 	}
-	instn, indexDefn := imd.Instances[0], imd.Definition
+	indexDefn := imd.Definition
 	defnID := uint64(indexDefn.DefnId)
 	si = &secondaryIndex{
 		gsi:       gsi,
@@ -491,18 +580,37 @@ func newSecondaryIndexFromMetaData(
 		defnID:    defnID,
 		isPrimary: indexDefn.IsPrimary,
 		using:     indexDefn.Using,
-		partnExpr: indexDefn.PartitionKey,
-		secExprs:  indexDefn.SecExprs,
-		whereExpr: indexDefn.WhereExpr,
-		state:     gsi2N1QLState[instn.State],
-		err:       instn.Error,
+		desc:      indexDefn.Desc,
+		state:     gsi2N1QLState[imd.State],
+		err:       imd.Error,
 		deferred:  indexDefn.Deferred,
 	}
+
+	if indexDefn.SecExprs != nil {
+		exprs := make(expression.Expressions, 0, len(indexDefn.SecExprs))
+		for _, secExpr := range indexDefn.SecExprs {
+			expr, _ := parser.Parse(secExpr)
+			exprs = append(exprs, expr)
+		}
+		si.secExprs = exprs
+	}
+
+	if indexDefn.PartitionKey != "" {
+		expr, _ := parser.Parse(indexDefn.PartitionKey)
+		si.partnExpr = expression.Expressions{expr}
+	}
+
+	if indexDefn.WhereExpr != "" {
+		expr, _ := parser.Parse(indexDefn.WhereExpr)
+		si.whereExpr = expr
+	}
+
 	if indexDefn.Deferred &&
-		(instn.State == c.INDEX_STATE_CREATED ||
-			instn.State == c.INDEX_STATE_READY) {
+		(imd.State == c.INDEX_STATE_CREATED ||
+			imd.State == c.INDEX_STATE_READY) {
 		si.state = datastore.DEFERRED
 	}
+
 	return si, nil
 }
 
@@ -528,9 +636,8 @@ func (si *secondaryIndex) Type() datastore.IndexType {
 
 // SeekKey implement Index{} interface.
 func (si *secondaryIndex) SeekKey() expression.Expressions {
-	if si != nil && si.partnExpr != "" {
-		expr, _ := parser.Parse(si.partnExpr)
-		return expression.Expressions{expr}
+	if si != nil && si.partnExpr != nil {
+		return si.partnExpr
 	}
 	return nil
 }
@@ -538,21 +645,15 @@ func (si *secondaryIndex) SeekKey() expression.Expressions {
 // RangeKey implement Index{} interface.
 func (si *secondaryIndex) RangeKey() expression.Expressions {
 	if si != nil && si.secExprs != nil {
-		exprs := make(expression.Expressions, 0, len(si.secExprs))
-		for _, exprS := range si.secExprs {
-			expr, _ := parser.Parse(exprS)
-			exprs = append(exprs, expr)
-		}
-		return exprs
+		return si.secExprs
 	}
 	return nil
 }
 
 // Condition implement Index{} interface.
 func (si *secondaryIndex) Condition() expression.Expression {
-	if si != nil && si.whereExpr != "" {
-		expr, _ := parser.Parse(si.whereExpr)
-		return expr
+	if si != nil && si.whereExpr != nil {
+		return si.whereExpr
 	}
 	return nil
 }
@@ -564,14 +665,7 @@ func (si *secondaryIndex) IsPrimary() bool {
 
 // State implement Index{} interface.
 func (si *secondaryIndex) State() (datastore.IndexState, string, errors.Error) {
-	if si.err != "" {
-		// if err is not empty, return OFFLINE with error reason
-		// and the state in which the error occured.
-		msg := fmt.Sprintf("error: %s. Index %s(%s). Index state: %s",
-			si.err, si.Name(), si.RangeKey().String(), si.state.String())
-		return datastore.OFFLINE, msg, errors.NewCbIndexStateError(msg)
-	}
-	return si.state, "", nil
+	return si.state, si.err, nil
 }
 
 // Statistics implement Index{} interface.
@@ -745,6 +839,127 @@ func (si *secondaryIndex) ScanEntries(
 	atomic.AddInt64(&si.gsi.scandur, int64(time.Since(starttm)))
 }
 
+//--------------------
+// datastore.Index2{}
+//--------------------
+
+type secondaryIndex2 struct {
+	secondaryIndex
+}
+
+// Scan2 implement Index2 interface.
+func (si *secondaryIndex2) Scan2(
+	requestId string, spans datastore.Spans2, reverse, distinct, ordered bool,
+	projection *datastore.IndexProjection, offset, limit int64,
+	cons datastore.ScanConsistency, vector timestamp.Vector,
+	conn *datastore.IndexConnection) {
+
+	entryChannel := conn.EntryChannel()
+	var tmpfile *os.File
+	var backfillSync int64
+
+	syncCh := make(chan bool)
+
+	defer close(entryChannel)
+	defer func() { // cleanup tmpfile
+		if tmpfile != nil {
+			<-syncCh
+			tmpfile.Close()
+			name := tmpfile.Name()
+			fmsg := "%v Scan(%v) removing backfill file %v ...\n"
+			l.Infof(fmsg, si.gsi.logPrefix, requestId, name)
+			if err := os.Remove(name); err != nil {
+				fmsg := "%v remove backfill file %v unexpected failure: %v\n"
+				l.Errorf(fmsg, si.gsi.logPrefix, name, err)
+			}
+			atomic.AddInt64(&si.gsi.totalbackfills, 1)
+		}
+	}()
+	defer func() {
+		atomic.StoreInt64(&backfillSync, DONEREQUEST)
+	}()
+
+	starttm := time.Now()
+
+	client, cnf := si.gsi.gsiClient, si.gsi.config
+
+	gsiscans := n1qlspanstogsi(spans)
+	gsiprojection := n1qlprojectiontogsi(projection)
+	client.MultiScan(
+		si.defnID, requestId, gsiscans, reverse, distinct,
+		gsiprojection, offset, limit,
+		n1ql2GsiConsistency[cons], vector2ts(vector),
+		makeResponsehandler(
+			requestId,
+			&si.secondaryIndex, client, conn, &tmpfile, &backfillSync, syncCh, cnf))
+
+	atomic.AddInt64(&si.gsi.totalscans, 1)
+	atomic.AddInt64(&si.gsi.scandur, int64(time.Since(starttm)))
+}
+
+// RangeKey2 implements Index2{} interface.
+func (si *secondaryIndex2) RangeKey2() datastore.IndexKeys {
+	if si != nil && si.secExprs != nil {
+		idxkeys := make(datastore.IndexKeys, 0, len(si.secExprs))
+		for i, exprS := range si.secExprs {
+			idxkey := &datastore.IndexKey{
+				Expr: exprS,
+				Desc: si.desc != nil && si.desc[i],
+			}
+			idxkeys = append(idxkeys, idxkey)
+		}
+		return idxkeys
+	}
+	return nil
+}
+
+//--------------------
+// datastore.CountIndex2{}
+//--------------------
+
+// Count2 implements CountIndex2{} interface.
+func (si *secondaryIndex2) Count2(requestId string, spans datastore.Spans2,
+	cons datastore.ScanConsistency, vector timestamp.Vector) (int64, errors.Error) {
+
+	if si == nil {
+		return 0, ErrorIndexEmpty
+	}
+	client := si.gsi.gsiClient
+
+	gsiscans := n1qlspanstogsi(spans)
+
+	count, e := client.MultiScanCount(si.defnID, requestId, gsiscans, false,
+		n1ql2GsiConsistency[cons], vector2ts(vector))
+	if e != nil {
+		return 0, n1qlError(client, e)
+	}
+	return count, nil
+}
+
+// CanCountDistinct implements CountIndex2{} interface.
+func (si *secondaryIndex2) CanCountDistinct() bool {
+	return true
+}
+
+// CountDistinct implements CountIndex2{} interface.
+func (si *secondaryIndex2) CountDistinct(requestId string, spans datastore.Spans2,
+	cons datastore.ScanConsistency, vector timestamp.Vector) (int64, errors.Error) {
+
+	if si == nil {
+		return 0, ErrorIndexEmpty
+	}
+	client := si.gsi.gsiClient
+
+	gsiscans := n1qlspanstogsi(spans)
+
+	count, e := client.MultiScanCount(si.defnID, requestId, gsiscans, true,
+		n1ql2GsiConsistency[cons], vector2ts(vector))
+	if e != nil {
+		return 0, n1qlError(client, e)
+	}
+	return count, nil
+}
+
 //-------------------------------------
 // private functions for secondaryIndex
 //-------------------------------------
@@ -764,7 +979,7 @@ func makeResponsehandler(
 	var readfd *os.File
 	var backfillFin, backfillEntries int64
 
-	backfillLimit := int64(config["backfillLimit"].Int())
+	backfillLimit := int64(client.Settings().BackfillLimit())
 	primed, starttm, ticktm := false, time.Now(), time.Now()
 	lprefix := si.gsi.logPrefix
 
@@ -842,17 +1057,22 @@ func makeResponsehandler(
 		}
 		cp, ln := cap(entryChannel), len(entryChannel)
 		if backfillLimit > 0 && *tmpfile == nil && ((cp - ln) < len(skeys)) {
-			prefix := "scan-backfill" + strconv.Itoa(os.Getpid())
+			prefix := BACKFILLPREFIX + strconv.Itoa(os.Getpid())
 			*tmpfile, err = ioutil.TempFile(n1ql_backfill_temp_dir, prefix)
-			name := (*tmpfile).Name()
-			l.Infof("%v %v new backfill file ... %v\n", lprefix, requestId, name)
+			name := ""
+			if *tmpfile != nil {
+				name = (*tmpfile).Name()
+			}
 			if err != nil {
 				fmsg := "%v %q creating backfill file %v : %v\n"
 				l.Errorf(fmsg, lprefix, requestId, name, err)
 				*tmpfile = nil
 				conn.Error(n1qlError(client, err))
 				return false
+
 			} else {
+				fmsg := "%v %v new backfill file ... %v\n"
+				l.Infof(fmsg, lprefix, requestId, name)
 				// encoder
 				enc = gob.NewEncoder(*tmpfile)
 				readfd, err = os.OpenFile(name, os.O_RDONLY, 0666)
@@ -995,7 +1215,7 @@ func (stats *statistics) Bins() ([]datastore.Statistics, errors.Error) {
 func values2SKey(vals value.Values) c.SecondaryKey {
 	skey := make(c.SecondaryKey, 0, len(vals))
 	for _, val := range []value.Value(vals) {
-		skey = append(skey, val.Actual())
+		skey = append(skey, val.ActualForIndex())
 	}
 	return skey
 }
@@ -1078,7 +1298,7 @@ func getSingletonClient(
 	defer muclient.Unlock()
 	if singletonClient == nil {
 		l.Debugf("creating singleton for URL %v", clusterURL)
-		client, err := qclient.NewGsiClient(clusterURL, qconf)
+		client, err := qclient.NewGsiClientWithSettings(clusterURL, qconf, true)
 		if err != nil {
 			return nil, fmt.Errorf("in NewGsiClient(): %v", err)
 		}
@@ -1094,7 +1314,7 @@ func init() {
 	gob.Register(map[string]interface{}{})
 	gob.Register([]interface{}{})
 
-	file, err := ioutil.TempFile("" /*dir*/, "scan-backfill")
+	file, err := ioutil.TempFile("" /*dir*/, BACKFILLPREFIX)
 	if err != nil {
 		return
 	}
@@ -1114,7 +1334,7 @@ func init() {
 		fname := path.Join(n1ql_backfill_temp_dir, file.Name())
 		mtime := file.ModTime()
 		since := (time.Since(mtime).Seconds() * 1000) * 2 // twice the lng scan
-		if strings.Contains(fname, "scan-backfill") && int(since) > scantm {
+		if (strings.Contains(fname, "scan-backfill") || strings.Contains(fname, BACKFILLPREFIX)) && int(since) > scantm {
 			fmsg := "GSI client: removing old file %v last-modified @ %v"
 			l.Infof(fmsg, fname, mtime)
 			os.Remove(fname)
@@ -1203,10 +1423,62 @@ func (gsi *gsiKeyspace) backfillMonitor(period time.Duration) {
 		size := int64(0)
 		for _, file := range files {
 			fname := path.Join(n1ql_backfill_temp_dir, file.Name())
-			if strings.Contains(fname, "scan-backfill") {
+			if strings.Contains(fname, BACKFILLPREFIX) {
 				size += int64(file.Size())
 			}
 		}
 		atomic.StoreInt64(&gsi.backfillSize, size)
 	}
+}
+
+func n1qlspanstogsi(spans datastore.Spans2) qclient.Scans {
+	sc := make(qclient.Scans, len(spans))
+	for i, s := range spans {
+		sc[i] = &qclient.Scan{}
+		if len(s.Seek) > 0 {
+			sc[i].Seek = values2SKey(s.Seek)
+		} else {
+			sc[i].Filter = n1qlrangestogsi(s.Ranges)
+		}
+	}
+	return sc
+}
+
+func n1qlrangestogsi(ranges []*datastore.Range2) []*qclient.CompositeElementFilter {
+	fl := make([]*qclient.CompositeElementFilter, 0, len(ranges))
+	for _, r := range ranges {
+		var l, h interface{}
+		if r.Low == nil {
+			l = c.MinUnbounded
+		} else {
+			l = r.Low.ActualForIndex()
+		}
+
+		if r.High == nil {
+			h = c.MaxUnbounded
+		} else {
+			h = r.High.ActualForIndex()
+		}
+
+		incl := n1ql2GsiInclusion[r.Inclusion]
+		filter := &qclient.CompositeElementFilter{Low: l, High: h, Inclusion: incl}
+		fl = append(fl, filter)
+	}
+	return fl
+}
+
+func n1qlprojectiontogsi(projection *datastore.IndexProjection) *qclient.IndexProjection {
+	if projection == nil {
+		return nil
+	}
+
+	entrykeys := make([]int64, 0, len(projection.EntryKeys))
+	for _, key := range projection.EntryKeys {
+		entrykeys = append(entrykeys, int64(key))
+	}
+	proj := &qclient.IndexProjection{
+		EntryKeys:  entrykeys,
+		PrimaryKey: projection.PrimaryKey,
+	}
+	return proj
 }

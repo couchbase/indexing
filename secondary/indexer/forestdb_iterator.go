@@ -11,17 +11,18 @@ package indexer
 
 import (
 	"errors"
+	"sync"
+	"sync/atomic"
+	"time"
+
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/fdb"
-	"github.com/couchbase/indexing/secondary/platform"
-	"sync"
-	"time"
 )
 
 var docBufPool *common.BytesBufPool
 
 func init() {
-	docBufPool = common.NewByteBufferPool(MAX_SEC_KEY_BUFFER_LEN + MAX_DOCID_LEN + 2)
+	docBufPool = common.NewByteBufferPool(maxIndexEntrySize)
 }
 
 var fdbSnapIterPool *sync.Pool
@@ -167,7 +168,7 @@ func (f *ForestDBIterator) Key() []byte {
 	if f.valid && f.curr != nil {
 		key := f.curr.KeyNoCopy()
 		if f.slice != nil {
-			platform.AddInt64(&f.slice.get_bytes, int64(len(key)))
+			atomic.AddInt64(&f.slice.get_bytes, int64(len(key)))
 		}
 		return key
 	}
@@ -178,7 +179,7 @@ func (f *ForestDBIterator) Value() []byte {
 	if f.valid && f.curr != nil {
 		body := f.curr.BodyNoCopy()
 		if f.slice != nil {
-			platform.AddInt64(&f.slice.get_bytes, int64(len(body)))
+			atomic.AddInt64(&f.slice.get_bytes, int64(len(body)))
 		}
 		return body
 	}

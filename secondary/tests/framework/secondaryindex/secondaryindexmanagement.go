@@ -26,7 +26,7 @@ func CreateClient(server, serviceAddr string) (*qc.GsiClient, error) {
 }
 
 func GetDefnID(client *qc.GsiClient, bucket, indexName string) (defnID uint64, ok bool) {
-	indexes, err := client.Refresh()
+	indexes, _, _, err := client.Refresh()
 	tc.HandleError(err, "Error while listing the indexes")
 	for _, index := range indexes {
 		defn := index.Definition
@@ -71,6 +71,55 @@ func CreateSecondaryIndex(
 
 	start := time.Now()
 	defnID, err := client.CreateIndex(indexName, bucketName, IndexUsing, exprType, partnExp, whereExpr, secExprs, isPrimary, with)
+	if err == nil {
+		log.Printf("Created the secondary index %v. Waiting for it become active", indexName)
+		e := WaitTillIndexActive(defnID, client, indexActiveTimeoutSeconds)
+		if e != nil {
+			return e
+		} else {
+			elapsed := time.Since(start)
+			tc.LogPerfStat("CreateAndBuildIndex", elapsed)
+			return nil
+		}
+	}
+
+	return err
+}
+
+// Creates an index and waits for it to become active
+func CreateSecondaryIndex2(
+	indexName, bucketName, server, whereExpr string, indexFields []string, desc []bool, isPrimary bool, with []byte,
+	skipIfExists bool, indexActiveTimeoutSeconds int64, client *qc.GsiClient) error {
+
+	if client == nil {
+		c, e := CreateClient(server, "2itest")
+		if e != nil {
+			return e
+		}
+		client = c
+		defer client.Close()
+	}
+
+	indexExists := IndexExistsWithClient(indexName, bucketName, server, client)
+	if skipIfExists == true && indexExists == true {
+		return nil
+	}
+	var secExprs []string
+	if isPrimary == false {
+		for _, indexField := range indexFields {
+			expr, err := n1ql.ParseExpression(indexField)
+			if err != nil {
+				log.Printf("Creating index %v. Error while parsing the expression (%v) : %v", indexName, indexField, err)
+			}
+
+			secExprs = append(secExprs, expression.NewStringer().Visit(expr))
+		}
+	}
+	exprType := "N1QL"
+	partnExp := ""
+
+	start := time.Now()
+	defnID, err := client.CreateIndex2(indexName, bucketName, IndexUsing, exprType, partnExp, whereExpr, secExprs, desc, isPrimary, with)
 	if err == nil {
 		log.Printf("Created the secondary index %v. Waiting for it become active", indexName)
 		e := WaitTillIndexActive(defnID, client, indexActiveTimeoutSeconds)
@@ -200,17 +249,13 @@ func WaitTillIndexActive(defnID uint64, client *qc.GsiClient, indexActiveTimeout
 			err := errors.New(fmt.Sprintf("Index did not become active after %d seconds", indexActiveTimeoutSeconds))
 			return err
 		}
-		state, e := client.IndexState(defnID)
-		log.Printf("Index state is %v", state)
-		if e != nil {
-			log.Printf("Error while fetching index state for defnID %v", defnID)
-			return e
-		}
+		state, _ := client.IndexState(defnID)
 
 		if state == c.INDEX_STATE_ACTIVE {
 			log.Printf("Index is now active")
 			return nil
 		} else {
+			log.Printf("Waiting for index to go active ...")
 			time.Sleep(1 * time.Second)
 		}
 	}
@@ -222,7 +267,7 @@ func WaitTillAllIndexNodesActive(server string, indexerActiveTimeoutSeconds int6
 	if e != nil {
 		return e
 	}
-	
+
 	start := time.Now()
 	for {
 		elapsed := time.Since(start)
@@ -235,14 +280,14 @@ func WaitTillAllIndexNodesActive(server string, indexerActiveTimeoutSeconds int6
 			log.Printf("Error while fetching Nodes() %v", e)
 			return e
 		}
-		
+
 		allIndexersActive := true
 		for _, indexer := range indexers {
 			if indexer.Status != "online" {
 				allIndexersActive = false
 			}
 		}
-		
+
 		if allIndexersActive == true {
 			log.Printf("All indexers are active")
 			return nil
@@ -275,7 +320,7 @@ func IndexExists(indexName, bucketName, server string) (bool, error) {
 	}
 	defer client.Close()
 
-	indexes, err := client.Refresh()
+	indexes, _, _, err := client.Refresh()
 	tc.HandleError(err, "Error while listing the secondary indexes")
 	for _, index := range indexes {
 		defn := index.Definition
@@ -288,7 +333,7 @@ func IndexExists(indexName, bucketName, server string) (bool, error) {
 }
 
 func IndexExistsWithClient(indexName, bucketName, server string, client *qc.GsiClient) bool {
-	indexes, err := client.Refresh()
+	indexes, _, _, err := client.Refresh()
 	tc.HandleError(err, "Error while listing the secondary indexes")
 	for _, index := range indexes {
 		defn := index.Definition
@@ -308,7 +353,7 @@ func DropSecondaryIndex(indexName, bucketName, server string) error {
 	}
 	defer client.Close()
 
-	indexes, err := client.Refresh()
+	indexes, _, _, err := client.Refresh()
 	tc.HandleError(err, "Error while listing the secondary indexes")
 	for _, index := range indexes {
 		defn := index.Definition
@@ -329,7 +374,7 @@ func DropSecondaryIndex(indexName, bucketName, server string) error {
 
 func DropSecondaryIndexWithClient(indexName, bucketName, server string, client *qc.GsiClient) error {
 	log.Printf("Dropping the secondary index %v", indexName)
-	indexes, err := client.Refresh()
+	indexes, _, _, err := client.Refresh()
 	tc.HandleError(err, "Error while listing the secondary indexes")
 	for _, index := range indexes {
 		defn := index.Definition
@@ -356,7 +401,7 @@ func DropAllSecondaryIndexes(server string) error {
 	}
 	defer client.Close()
 
-	indexes, err := client.Refresh()
+	indexes, _, _, err := client.Refresh()
 	tc.HandleError(err, "Error while listing the secondary indexes")
 	for _, index := range indexes {
 		defn := index.Definition
@@ -386,4 +431,28 @@ func DropSecondaryIndexByID(indexDefnID uint64, server string) error {
 	}
 	log.Printf("Index dropped")
 	return nil
+}
+
+func BuildAllSecondaryIndexes(server string, indexActiveTimeoutSeconds int64) error {
+	log.Printf("In BuildAllSecondaryIndexes()")
+	client, e := CreateClient(server, "2itest")
+	if e != nil {
+		return e
+	}
+	defer client.Close()
+
+	indexes, _, _, err := client.Refresh()
+	tc.HandleError(err, "Error while listing the secondary indexes")
+	for i, index := range indexes {
+		defn := index.Definition
+		log.Printf("Building index %v %v", i, defn.Name)
+		state, _ := client.IndexState(uint64(defn.DefnId))
+		if state == c.INDEX_STATE_ACTIVE {
+			continue
+		}
+		err = BuildIndex(defn.Name, defn.Bucket, server, indexActiveTimeoutSeconds)
+		log.Printf("Built index %v %v", i, defn.Name)
+	}
+
+	return err
 }

@@ -17,12 +17,19 @@ import "reflect"
 import "unsafe"
 import "regexp"
 import "time"
+import "math/big"
 
 import "github.com/couchbase/cbauth"
+import "github.com/couchbase/cbauth/cbauthimpl"
 import "github.com/couchbase/indexing/secondary/dcp"
 import "github.com/couchbase/indexing/secondary/dcp/transport/client"
+import "github.com/couchbase/indexing/secondary/logging"
 
 const IndexNamePattern = "^[A-Za-z0-9#_-]+$"
+
+const (
+	MAX_AUTH_RETRIES = 10
+)
 
 var ErrInvalidIndexName = fmt.Errorf("Invalid index name")
 
@@ -218,7 +225,20 @@ type CbAuthHandler struct {
 }
 
 func (ah *CbAuthHandler) GetCredentials() (string, string) {
-	u, p, err := cbauth.GetHTTPServiceAuth(ah.Hostport)
+
+	var u, p string
+
+	fn := func(r int, err error) error {
+		if r > 0 {
+			logging.Warnf("CbAuthHandler::GetCredentials error=%v Retrying (%d)", err, r)
+		}
+
+		u, p, err = cbauth.GetHTTPServiceAuth(ah.Hostport)
+		return err
+	}
+
+	rh := NewRetryHelper(MAX_AUTH_RETRIES, time.Second, 2, fn)
+	err := rh.Run()
 	if err != nil {
 		panic(err)
 	}
@@ -227,10 +247,24 @@ func (ah *CbAuthHandler) GetCredentials() (string, string) {
 }
 
 func (ah *CbAuthHandler) AuthenticateMemcachedConn(host string, conn *memcached.Client) error {
-	u, p, err := cbauth.GetMemcachedServiceAuth(host)
+
+	var u, p string
+
+	fn := func(r int, err error) error {
+		if r > 0 {
+			logging.Warnf("CbAuthHandler::AuthenticateMemcachedConn error=%v Retrying (%d)", err, r)
+		}
+
+		u, p, err = cbauth.GetMemcachedServiceAuth(host)
+		return err
+	}
+
+	rh := NewRetryHelper(MAX_AUTH_RETRIES, time.Second, 2, fn)
+	err := rh.Run()
 	if err != nil {
 		panic(err)
 	}
+
 	_, err = conn.Auth(u, p)
 	_, err = conn.SelectBucket(ah.Bucket)
 	return err
@@ -540,22 +574,17 @@ func BucketTs(bucket *couchbase.Bucket, maxvb int) (seqnos, vbuuids []uint64, er
 	return seqnos, vbuuids, err
 }
 
-func IsAuthValid(r *http.Request, server string) (bool, error) {
-	auth := r.Header.Get("Authorization")
-	url := fmt.Sprintf("http://%s/pools", server)
-	if auth == "" {
-		return false, nil
+func IsAuthValid(r *http.Request) (cbauth.Creds, bool, error) {
+
+	creds, err := cbauth.AuthWebCreds(r)
+	if err != nil {
+		if strings.Contains(err.Error(), cbauthimpl.ErrNoAuth.Error()) {
+			return nil, false, nil
+		}
+		return nil, false, err
 	}
 
-	req, err := http.NewRequest("GET", url, nil)
-	client := http.Client{}
-	req.Header.Set("Authorization", auth)
-	resp, err := client.Do(req)
-	if err != nil {
-		return false, err
-	}
-	defer resp.Body.Close()
-	return resp.StatusCode == http.StatusOK, nil
+	return creds, true, nil
 }
 
 func SetNumCPUs(percent int) int {
@@ -567,7 +596,7 @@ func SetNumCPUs(percent int) int {
 	return ncpu
 }
 
-func IndexStatement(def IndexDefn) string {
+func IndexStatement(def IndexDefn, printNodes bool) string {
 	var stmt string
 	primCreate := "CREATE PRIMARY INDEX `%s` ON `%s`"
 	secCreate := "CREATE INDEX `%s` ON `%s`(%s)"
@@ -577,11 +606,14 @@ func IndexStatement(def IndexDefn) string {
 		stmt = fmt.Sprintf(primCreate, def.Name, def.Bucket)
 	} else {
 		exprs := ""
-		for _, exp := range def.SecExprs {
+		for i, exp := range def.SecExprs {
 			if exprs != "" {
 				exprs += ","
 			}
 			exprs += exp
+			if def.Desc != nil && def.Desc[i] {
+				exprs += " DESC"
+			}
 		}
 		stmt = fmt.Sprintf(secCreate, def.Name, def.Bucket, exprs)
 		if def.WhereExpr != "" {
@@ -591,7 +623,7 @@ func IndexStatement(def IndexDefn) string {
 
 	withExpr := ""
 	if def.Immutable {
-		withExpr += "\"immutable\"=true"
+		withExpr += "\"immutable\":true"
 	}
 
 	if def.Deferred {
@@ -599,7 +631,31 @@ func IndexStatement(def IndexDefn) string {
 			withExpr += ","
 		}
 
-		withExpr += " \"defer_build\"=true"
+		withExpr += " \"defer_build\":true"
+	}
+
+	if printNodes && len(def.Nodes) != 0 {
+		if len(withExpr) != 0 {
+			withExpr += ","
+		}
+		withExpr += " \"nodes\":[ "
+
+		for i, node := range def.Nodes {
+			withExpr += "\"" + node + "\""
+			if i < len(def.Nodes)-1 {
+				withExpr += ","
+			}
+		}
+
+		withExpr += " ]"
+	}
+
+	if def.NumReplica != 0 {
+		if len(withExpr) != 0 {
+			withExpr += ","
+		}
+
+		withExpr += fmt.Sprintf(" \"num_replica\":%v", def.NumReplica)
 	}
 
 	if len(withExpr) != 0 {
@@ -826,4 +882,74 @@ func DiskUsage(dir string) (int64, error) {
 	}
 
 	return sz, nil
+}
+
+func GenNextBiggerKey(b []byte) []byte {
+	var x big.Int
+	// Remove last 1 byte terminator encoding
+	x.SetBytes(b[:len(b)-1])
+	x.Add(&x, big.NewInt(1))
+	return x.Bytes()
+}
+
+func IsAllowed(creds cbauth.Creds, permissions []string, w http.ResponseWriter) bool {
+
+	allow := false
+	err := error(nil)
+
+	for _, permission := range permissions {
+		allow, err = creds.IsAllowed(permission)
+		if allow && err == nil {
+			break
+		}
+	}
+
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(err.Error()))
+		return false
+	}
+
+	if !allow {
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte(http.StatusText(http.StatusUnauthorized)))
+		return false
+	}
+
+	return true
+}
+
+func IsAllAllowed(creds cbauth.Creds, permissions []string, w http.ResponseWriter) bool {
+
+	allow := true
+	err := error(nil)
+
+	for _, permission := range permissions {
+		allow, err = creds.IsAllowed(permission)
+		if !allow || err != nil {
+			break
+		}
+	}
+
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(err.Error()))
+		return false
+	}
+
+	if !allow {
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte(http.StatusText(http.StatusUnauthorized)))
+		return false
+	}
+
+	return true
+}
+
+func ComputePercent(a, b int64) int64 {
+	if a+b > 0 {
+		return a * 100 / (a + b)
+	}
+
+	return 0
 }

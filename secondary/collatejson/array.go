@@ -6,7 +6,6 @@ var ErrNotAnArray = errors.New("not an array")
 var ErrLenPrefixUnsupported = errors.New("arrayLenPrefix is unsupported")
 
 func (codec *Codec) ExplodeArray(code []byte, tmp []byte) ([][]byte, error) {
-	var ts []byte
 	var err error
 
 	array := make([][]byte, 0)
@@ -22,12 +21,10 @@ func (codec *Codec) ExplodeArray(code []byte, tmp []byte) ([][]byte, error) {
 	code = code[1:]
 	elemBuf := code
 	for code[0] != Terminator {
-		ln := len(tmp)
-		ts, code, err = codec.code2json(code, tmp[ln:])
+		_, code, err = codec.code2json(code, tmp)
 		if err != nil {
 			break
 		}
-		tmp = tmp[:ln+len(ts)]
 
 		if size := len(elemBuf) - len(code); size > 0 {
 			array = append(array, elemBuf[:size])

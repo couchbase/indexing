@@ -435,6 +435,77 @@ or in case of error,
     {"error": ""} // error string.
 ```
 
+### MultiScan scan
+
+MultiScan takes a collection scans with composite filters
+and returns the results in sorted order.
+
+
+```text
+METHOD: GET
+URL   : /api/index/{id}?multiscan=true
+HEADER:
+    "Accept: application/json"
+```
+
+Body:
+
+```javascript
+    { "scans": [{"Seek":null,"Filter":[{"Low":"D","High":"F","Inclusion":3}]}]  // list of scans with composite filters
+      "projection": {"EntryKeys":[1],"PrimaryKey":false}  // specifies keys to return
+      "distinct": false,            // return only unique keys if true
+      "reverse": false,             // reverse the scan if true
+      "offset": 0,                  // skip offset number of results
+      "limit": 100,                 // number of entries to return
+      "stale": "partial",            // "ok", "false", "partial"
+      "timestamp": {                      // in case of "partial",
+        "30": ["213423442342342", "350"], //  {vbno:[vbuuid, seqno]} as
+        ...                               // consistency constraint
+      }
+    }
+```
+
+* if ``Seek`` is null, then composite filters are applied.
+* if ``Seek`` is not null, then lookup is performed
+* if ``Filter`` is null, then full table scan is performed
+
+*optional fields:*
+
+* ``distinct`` (default is false)
+* ``reverse`` (default is false)
+* ``offset`` (default is 0)
+* ``limit`` (default is 100)
+* ``stale`` (default is "ok")
+* ``timestamp`` (default is nil)
+
+**Response:**
+
+```text
+STATUS:
+    200 OK
+    400 Bad Request
+    404 Not Found
+    500 Internal Server Error
+HEADER:
+    "Content-Type: application/json"
+```
+
+return the list of entries in chunked encoding mode - each of these chunks
+contain one or more entities, until the last chunk.
+
+```javascript
+    [ {"key": "key1", "docid": "docid1"},
+      {"key": "key1", "docid": "docid1"},
+      ...
+    ]
+```
+
+or in case of error,
+
+```javascript
+    {"error": ""} // error string.
+```
+
 ### Full table scan
 
 Scan all entries in an index.

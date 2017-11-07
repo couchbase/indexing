@@ -10,10 +10,10 @@
 package manager
 
 import (
-	"github.com/golang/protobuf/proto"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
+	"github.com/golang/protobuf/proto"
 )
 
 /////////////////////////////////////////////////////////////////////////
@@ -38,11 +38,17 @@ type IndexDefnDistribution struct {
 }
 
 type IndexInstDistribution struct {
-	InstId     uint64                  `json:"instId,omitempty"`
-	State      uint32                  `json:"state,omitempty"`
-	StreamId   uint32                  `json:"steamId,omitempty"`
-	Error      string                  `json:"error,omitempty"`
-	Partitions []IndexPartDistribution `json:"partitions,omitempty"`
+	InstId         uint64                  `json:"instId,omitempty"`
+	State          uint32                  `json:"state,omitempty"`
+	StreamId       uint32                  `json:"steamId,omitempty"`
+	Error          string                  `json:"error,omitempty"`
+	Partitions     []IndexPartDistribution `json:"partitions,omitempty"`
+	RState         uint32                  `json:"rRtate,omitempty"`
+	Version        uint64                  `json:"version,omitempty"`
+	ReplicaId      uint64                  `json:"replicaId,omitempty"`
+	Scheduled      bool                    `json:"scheduled,omitempty"`
+	StorageMode    string                  `json:"storageMode,omitempty"`
+	OldStorageMode string                  `json:"oldStorageMode,omitempty"`
 }
 
 type IndexPartDistribution struct {
@@ -111,7 +117,8 @@ func (g *GlobalTopology) RemoveTopologyKey(key string) {
 //
 // Add an index definition to Topology.
 //
-func (t *IndexTopology) AddIndexDefinition(bucket string, name string, defnId uint64, instId uint64, state uint32, indexerId string) {
+func (t *IndexTopology) AddIndexDefinition(bucket string, name string, defnId uint64, instId uint64, state uint32, indexerId string,
+	instVersion uint64, rState uint32, replicaId uint64, scheduled bool, storageMode string) {
 
 	t.RemoveIndexDefinition(bucket, name)
 
@@ -127,6 +134,11 @@ func (t *IndexTopology) AddIndexDefinition(bucket string, name string, defnId ui
 	inst := new(IndexInstDistribution)
 	inst.InstId = instId
 	inst.State = state
+	inst.Version = instVersion
+	inst.RState = rState
+	inst.ReplicaId = replicaId
+	inst.Scheduled = scheduled
+	inst.StorageMode = storageMode
 	inst.Partitions = append(inst.Partitions, *part)
 
 	defn := new(IndexDefnDistribution)
@@ -233,6 +245,90 @@ func (t *IndexTopology) UpdateStateForIndexInstByDefn(defnId common.IndexDefnId,
 }
 
 //
+// Set scheduled flag
+//
+func (t *IndexTopology) UpdateScheduledFlagForIndexInstByDefn(defnId common.IndexDefnId, scheduled bool) bool {
+
+	changed := false
+	for i, _ := range t.Definitions {
+		if t.Definitions[i].DefnId == uint64(defnId) {
+			for j, _ := range t.Definitions[i].Instances {
+				if t.Definitions[i].Instances[j].Scheduled != scheduled {
+					t.Definitions[i].Instances[j].Scheduled = scheduled
+					logging.Debugf("IndexTopology.UnsetScheduledFlagForIndexInstByDefn(): Unset scheduled flag for index '%v' inst '%v'",
+						defnId, t.Definitions[i].Instances[j].InstId)
+					changed = true
+				}
+			}
+		}
+	}
+	return changed
+}
+
+//
+// Update Index Rebalance Status on instance
+//
+func (t *IndexTopology) UpdateRebalanceStateForIndexInstByDefn(defnId common.IndexDefnId, state common.RebalanceState) bool {
+
+	changed := false
+	for i, _ := range t.Definitions {
+		if t.Definitions[i].DefnId == uint64(defnId) {
+			for j, _ := range t.Definitions[i].Instances {
+				if t.Definitions[i].Instances[j].RState != uint32(state) {
+					t.Definitions[i].Instances[j].RState = uint32(state)
+					logging.Debugf("IndexTopology.UpdateRebalanceStateForIndexInstByDefn(): Update index '%v' inst '%v' rebalance state to '%v'",
+						defnId, t.Definitions[i].Instances[j].InstId, t.Definitions[i].Instances[j].RState)
+					changed = true
+				}
+			}
+		}
+	}
+	return changed
+}
+
+//
+// Update Storage Mode on instance
+//
+func (t *IndexTopology) UpdateStorageModeForIndexInstByDefn(defnId common.IndexDefnId, storageMode string) bool {
+
+	changed := false
+	for i, _ := range t.Definitions {
+		if t.Definitions[i].DefnId == uint64(defnId) {
+			for j, _ := range t.Definitions[i].Instances {
+				if t.Definitions[i].Instances[j].StorageMode != storageMode {
+					t.Definitions[i].Instances[j].StorageMode = storageMode
+					logging.Debugf("IndexTopology.UpdateStorageModeForIndexInstByDefn(): Update index '%v' inst '%v' storage mode to '%v'",
+						defnId, t.Definitions[i].Instances[j].InstId, t.Definitions[i].Instances[j].StorageMode)
+					changed = true
+				}
+			}
+		}
+	}
+	return changed
+}
+
+//
+// Update Old Storage Mode on instance
+//
+func (t *IndexTopology) UpdateOldStorageModeForIndexInstByDefn(defnId common.IndexDefnId, storageMode string) bool {
+
+	changed := false
+	for i, _ := range t.Definitions {
+		if t.Definitions[i].DefnId == uint64(defnId) {
+			for j, _ := range t.Definitions[i].Instances {
+				if t.Definitions[i].Instances[j].OldStorageMode != storageMode {
+					t.Definitions[i].Instances[j].OldStorageMode = storageMode
+					logging.Debugf("IndexTopology.UpdateOldStorageModeForIndexInstByDefn(): Update index '%v' inst '%v' old storage mode to '%v'",
+						defnId, t.Definitions[i].Instances[j].InstId, t.Definitions[i].Instances[j].OldStorageMode)
+					changed = true
+				}
+			}
+		}
+	}
+	return changed
+}
+
+//
 // Update StreamId on instance
 //
 func (t *IndexTopology) UpdateStreamForIndexInstByDefn(defnId common.IndexDefnId, stream common.StreamId) bool {
@@ -305,13 +401,36 @@ func (t *IndexTopology) GetStatusByDefn(defnId common.IndexDefnId) (common.Index
 	return common.INDEX_STATE_NIL, ""
 }
 
+func (t *IndexTopology) GetRStatusByDefn(defnId common.IndexDefnId) common.RebalanceState {
+
+	for i, _ := range t.Definitions {
+		if t.Definitions[i].DefnId == uint64(defnId) {
+			return common.RebalanceState(t.Definitions[i].Instances[0].RState)
+		}
+	}
+	return common.REBAL_ACTIVE
+}
+
+//
+// Update Index Status on instance
+//
+func (t *IndexTopology) GetIndexInstancesByDefn(defnId common.IndexDefnId) []IndexInstDistribution {
+
+	for i, _ := range t.Definitions {
+		if t.Definitions[i].DefnId == uint64(defnId) {
+			return t.Definitions[i].Instances
+		}
+	}
+	return nil
+}
+
 //
 // Get all index instance Id's for a specific defnition
 //
 func GetIndexInstancesIdByDefn(mgr *IndexManager, bucket string, defnId common.IndexDefnId) ([]uint64, error) {
 	// Get the topology from the dictionary
 	topology, err := mgr.GetTopologyByBucket(bucket)
-	if err != nil {
+	if err != nil || topology == nil {
 		// TODO: Determine if it is a real error, or just topology does not exist in dictionary
 		// If there is an error, return an empty array.  This assume that the topology does not exist.
 		logging.Debugf("GetIndexInstancesByDefn(): Cannot find topology for bucket %s.  Skip.", bucket)
@@ -342,7 +461,7 @@ func GetAllDeletedIndexInstancesId(mgr *IndexManager, buckets []string) ([]uint6
 	// Get the topology from the dictionary
 	for _, bucket := range buckets {
 		topology, err := mgr.GetTopologyByBucket(bucket)
-		if err != nil {
+		if err != nil || topology == nil {
 			// TODO: Determine if it is a real error, or just topology does not exist in dictionary
 			// If there is an error, return an empty array.  This assume that the topology does not exist.
 			logging.Debugf("GetAllDeletedIndexInstances(): Cannot find topology for bucket %s.  Skip.", bucket)
@@ -373,7 +492,7 @@ func GetTopologyAsInstanceProtoMsg(mgr *IndexManager,
 
 	// Get the topology from the dictionary
 	topology, err := mgr.GetTopologyByBucket(bucket)
-	if err != nil {
+	if err != nil || topology == nil {
 		// TODO: Determine if it is a real error, or just topology does not exist in dictionary
 		// If there is an error, return an empty array.  This assume that the topology does not exist.
 		logging.Debugf("GetTopologyAsInstanceProtoMsg(): Cannot find topology for bucket %s.  Skip.", bucket)
@@ -393,7 +512,7 @@ func GetIndexInstanceAsProtoMsg(mgr *IndexManager,
 	port string) ([]*protobuf.Instance, error) {
 
 	topology, err := mgr.GetTopologyByBucket(bucket)
-	if err != nil {
+	if err != nil || topology == nil {
 		// TODO: Determine if it is a real error, or just topology does not exist in dictionary
 		// If there is an error, return an empty array.  This assume that the topology does not exist.
 		return nil, nil
@@ -408,8 +527,12 @@ func GetIndexInstanceAsProtoMsg(mgr *IndexManager,
 			// look up the index definition from dictionary
 			defn, err := mgr.GetIndexDefnById(common.IndexDefnId(defnRef.DefnId))
 			if err != nil {
-				logging.Debugf("GetIndexInstanceAsProtoMsg(): Cannot find definition id = %v.", defnId)
+				logging.Debugf("GetIndexInstanceAsProtoMsg(): Error = %v.", defnId)
 				return nil, err
+			}
+			if defn == nil {
+				logging.Debugf("GetIndexInstanceAsProtoMsg(): cannot find definition id = %v. Skipping", defnId)
+				continue
 			}
 
 			// Convert definition to protobuf msg
@@ -437,8 +560,12 @@ func GetChangeRecordAsProtoMsg(mgr *IndexManager, changes []*changeRecord, port 
 		// look up the index definition from dictionary
 		defn, err := mgr.GetIndexDefnById(common.IndexDefnId(change.definition.DefnId))
 		if err != nil {
-			logging.Debugf("GetChangeRecordAsProtoMsg(): Cannot find definition id = %v.", change.definition.DefnId)
+			logging.Debugf("GetChangeRecordAsProtoMsg(): Error = %v.", change.definition.DefnId)
 			return nil, err
+		}
+		if defn == nil {
+			logging.Debugf("GetIndexInstanceAsProtoMsg(): cannot find definition id = %v. Skipping", change.definition.DefnId)
+			continue
 		}
 
 		// Convert definition to protobuf msg
@@ -464,7 +591,11 @@ func convertTopologyToIndexInstProtoMsg(mgr *IndexManager,
 		// look up the index definition from dictionary
 		defn, err := mgr.GetIndexDefnById(common.IndexDefnId(defnRef.DefnId))
 		if err != nil {
-			logging.Debugf("convertTopologyToIndexInstProtoMsg(): Cannot find definition id = %v. Skip", defnRef.DefnId)
+			logging.Debugf("convertTopologyToIndexInstProtoMsg(): Error = %v. Skip", defnRef.DefnId)
+			continue
+		}
+		if defn == nil {
+			logging.Debugf("GetIndexInstanceAsProtoMsg(): cannot find definition id = %v. Skipping", defnRef.DefnId)
 			continue
 		}
 

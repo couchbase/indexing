@@ -20,7 +20,6 @@ import (
 	"github.com/couchbase/indexing/secondary/manager/client"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 )
@@ -39,17 +38,7 @@ type IndexManager struct {
 	requestServer RequestServer
 	basepath      string
 	quota         uint64
-	addrProvider  common.ServiceAddressProvider
-
-	// stream management
-	streamMgr *StreamManager
-	admin     StreamAdmin
-
-	// timestamp management
-	timer                    *Timer
-	timestampCh              map[common.StreamId]chan *common.TsVbuuid
-	timekeeperStopCh         chan bool
-	timestampPersistInterval uint64
+	clusterURL    string
 
 	// bucket monitor
 	monitorKillch chan bool
@@ -100,9 +89,10 @@ type IndexManager struct {
 //    B) Index Instance is not in INDEX_STATE_CREATE or INDEX_STATE_DELETED.
 //
 type MetadataNotifier interface {
-	OnIndexCreate(*common.IndexDefn) error
-	OnIndexDelete(common.IndexDefnId, string) error
-	OnIndexBuild([]common.IndexDefnId, []string) map[common.IndexInstId]error
+	OnIndexCreate(*common.IndexDefn, common.IndexInstId, int, *common.MetadataRequestContext) error
+	OnIndexDelete(common.IndexInstId, string, *common.MetadataRequestContext) error
+	OnIndexBuild([]common.IndexInstId, []string, *common.MetadataRequestContext) map[common.IndexInstId]error
+	OnFetchStats() error
 }
 
 type RequestServer interface {
@@ -117,41 +107,26 @@ type RequestServer interface {
 //
 // Create a new IndexManager
 //
-func NewIndexManager(addrProvider common.ServiceAddressProvider, config common.Config) (mgr *IndexManager, err error) {
+func NewIndexManager(config common.Config, storageMode common.StorageMode) (mgr *IndexManager, err error) {
 
-	return NewIndexManagerInternal(addrProvider, NewProjectorAdmin(nil, nil, nil), config)
+	return NewIndexManagerInternal(config, storageMode)
 }
 
 //
 // Create a new IndexManager
 //
-func NewIndexManagerInternal(
-	addrProvider common.ServiceAddressProvider,
-	admin StreamAdmin,
-	config common.Config) (mgr *IndexManager, err error) {
+func NewIndexManagerInternal(config common.Config, storageMode common.StorageMode) (mgr *IndexManager, err error) {
 
 	gometaL.Current = &logging.SystemLogger
 
 	mgr = new(IndexManager)
 	mgr.isClosed = false
-	mgr.addrProvider = addrProvider
-	totalQuota := config["settings.memory_quota"].Uint64()
-	storageMode := config["settings.storage_mode"].String()
 
-	if strings.ToLower(storageMode) == common.StorageMode(common.FORESTDB).String() {
-		mgr.quota = mgr.calcBufCacheFromMemQuota(totalQuota)
+	if storageMode == common.StorageMode(common.FORESTDB) {
+		mgr.quota = mgr.calcBufCacheFromMemQuota(config)
 	} else {
 		mgr.quota = 1 * 1024 * 1024 //1 MB
 	}
-
-	// stream mgmt  - stream services will start if the indexer node becomes master
-	mgr.streamMgr = nil
-	mgr.admin = admin
-
-	// timestamp mgmt   - timestamp servcie will start if indexer node becomes master
-	mgr.timestampCh = make(map[common.StreamId]chan *common.TsVbuuid)
-	mgr.timer = nil
-	mgr.timekeeperStopCh = nil
 
 	// Initialize the event manager.  This is non-blocking.  The event manager can be
 	// called indirectly by watcher/meta-repo when new metadata changes are sent
@@ -163,8 +138,13 @@ func NewIndexManagerInternal(
 	}
 
 	// Initialize LifecycleMgr.
-	clusterURL := config["clusterAddr"].String()
-	mgr.lifecycleMgr = NewLifecycleMgr(addrProvider, nil, clusterURL)
+	mgr.clusterURL = config["clusterAddr"].String()
+	lifecycleMgr, err := NewLifecycleMgr(nil, mgr.clusterURL)
+	if err != nil {
+		mgr.Close()
+		return nil, err
+	}
+	mgr.lifecycleMgr = lifecycleMgr
 
 	// Initialize MetadataRepo.  This a blocking call until the
 	// the metadataRepo (including watcher) is operational (e.g.
@@ -174,7 +154,13 @@ func NewIndexManagerInternal(
 	os.Mkdir(mgr.basepath, 0755)
 	repoName := filepath.Join(mgr.basepath, gometaC.REPOSITORY_NAME)
 
-	adminPort, err := addrProvider.GetLocalServicePort(common.INDEX_ADMIN_SERVICE)
+	cinfo, err := common.FetchNewClusterInfoCache(mgr.clusterURL, common.DEFAULT_POOL)
+	if err != nil {
+		mgr.Close()
+		return nil, err
+	}
+
+	adminPort, err := cinfo.GetLocalServicePort(common.INDEX_ADMIN_SERVICE)
 	if err != nil {
 		mgr.Close()
 		return nil, err
@@ -187,11 +173,10 @@ func NewIndexManagerInternal(
 	}
 
 	// start lifecycle manager
-	mgr.lifecycleMgr.Run(mgr.repo)
+	mgr.lifecycleMgr.Run(mgr.repo, mgr.requestServer)
 
 	// register request handler
-	clusterAddr := config["clusterAddr"].String()
-	registerRequestHandler(mgr, clusterAddr)
+	registerRequestHandler(mgr, mgr.clusterURL)
 
 	// coordinator
 	mgr.coordinator = nil
@@ -250,8 +235,6 @@ func (m *IndexManager) Close() {
 		return
 	}
 
-	m.stopMasterServiceNoLock()
-
 	if m.coordinator != nil {
 		m.coordinator.Terminate()
 	}
@@ -273,8 +256,9 @@ func (m *IndexManager) Close() {
 	m.isClosed = true
 }
 
-func (m *IndexManager) getServiceAddrProvider() common.ServiceAddressProvider {
-	return m.addrProvider
+func (m *IndexManager) FetchNewClusterInfoCache() (*common.ClusterInfoCache, error) {
+
+	return common.FetchNewClusterInfoCache(m.clusterURL, common.DEFAULT_POOL)
 }
 
 ///////////////////////////////////////////////////////
@@ -386,7 +370,7 @@ func (m *IndexManager) StopListenTopologyUpdate(id string) {
 // If this node is partitioned from its leader, it can still recieve
 // updates from the dictionary if this node still connects to it.
 //
-func (m *IndexManager) HandleCreateIndexDDL(defn *common.IndexDefn) error {
+func (m *IndexManager) HandleCreateIndexDDL(defn *common.IndexDefn, isRebalReq bool) error {
 
 	key := fmt.Sprintf("%d", defn.DefnId)
 	content, err := common.MarshallIndexDefn(defn)
@@ -401,7 +385,12 @@ func (m *IndexManager) HandleCreateIndexDDL(defn *common.IndexDefn) error {
 				fmt.Sprintf("Fail to complete processing create index statement for index '%s'", defn.Name))
 		}
 	} else {
-		return m.requestServer.MakeRequest(client.OPCODE_CREATE_INDEX, key, content)
+		if isRebalReq {
+			return m.requestServer.MakeRequest(client.OPCODE_CREATE_INDEX_REBAL, key, content)
+
+		} else {
+			return m.requestServer.MakeRequest(client.OPCODE_CREATE_INDEX, key, content)
+		}
 	}
 
 	return nil
@@ -419,14 +408,34 @@ func (m *IndexManager) HandleDeleteIndexDDL(defnId common.IndexDefnId) error {
 				fmt.Sprintf("Fail to complete processing delete index statement for index id = '%d'", defnId))
 		}
 	} else {
-		return m.requestServer.MakeRequest(client.OPCODE_DROP_INDEX, key, []byte(""))
+		return m.requestServer.MakeRequest(client.OPCODE_DROP_INDEX_REBAL, key, []byte(""))
 	}
 
 	return nil
 }
 
+func (m *IndexManager) HandleBuildIndexDDL(indexIds client.IndexIdList) error {
+
+	key := fmt.Sprintf("%d", indexIds.DefnIds[0])
+	content, _ := client.MarshallIndexIdList(&indexIds)
+	//TODO handle err
+
+	/*
+		if USE_MASTER_REPO {
+
+			if !m.coordinator.NewRequest(uint32(OPCODE_DEL_IDX_DEFN), indexDefnIdStr(defnId), nil) {
+				// TODO: double check if it exists in the dictionary
+				return NewError(ERROR_MGR_DDL_DROP_IDX, NORMAL, INDEX_MANAGER, nil,
+					fmt.Sprintf("Fail to complete processing build index statement for index id = '%d'", defnId))
+			}
+		} else {
+	*/
+	return m.requestServer.MakeRequest(client.OPCODE_BUILD_INDEX_REBAL, key, content)
+
+	return nil
+}
 func (m *IndexManager) UpdateIndexInstance(bucket string, defnId common.IndexDefnId, state common.IndexState,
-	streamId common.StreamId, err string, buildTime []uint64) error {
+	streamId common.StreamId, err string, buildTime []uint64, rState common.RebalanceState) error {
 
 	inst := &topologyChange{
 		Bucket:    bucket,
@@ -434,7 +443,8 @@ func (m *IndexManager) UpdateIndexInstance(bucket string, defnId common.IndexDef
 		State:     uint32(state),
 		StreamId:  uint32(streamId),
 		Error:     err,
-		BuildTime: buildTime}
+		BuildTime: buildTime,
+		RState:    uint32(rState)}
 
 	buf, e := json.Marshal(&inst)
 	if e != nil {
@@ -445,6 +455,38 @@ func (m *IndexManager) UpdateIndexInstance(bucket string, defnId common.IndexDef
 	// callback from MetadataNotifier.  By making async, it avoids deadlock.
 	logging.Debugf("IndexManager.UpdateIndexInstance(): making request for Index instance update")
 	return m.requestServer.MakeAsyncRequest(client.OPCODE_UPDATE_INDEX_INST, fmt.Sprintf("%v", defnId), buf)
+}
+
+func (m *IndexManager) UpdateIndexInstanceSync(bucket string, defnId common.IndexDefnId, state common.IndexState,
+	streamId common.StreamId, err string, buildTime []uint64, rState common.RebalanceState) error {
+
+	inst := &topologyChange{
+		Bucket:    bucket,
+		DefnId:    uint64(defnId),
+		State:     uint32(state),
+		StreamId:  uint32(streamId),
+		Error:     err,
+		BuildTime: buildTime,
+		RState:    uint32(rState)}
+
+	buf, e := json.Marshal(&inst)
+	if e != nil {
+		return e
+	}
+
+	logging.Debugf("IndexManager.UpdateIndexInstanceSync(): making request for Index instance update")
+	return m.requestServer.MakeRequest(client.OPCODE_UPDATE_INDEX_INST, fmt.Sprintf("%v", defnId), buf)
+}
+
+func (m *IndexManager) ResetIndex(index common.IndexDefn) error {
+
+	content, err := common.MarshallIndexDefn(&index)
+	if err != nil {
+		return err
+	}
+
+	logging.Debugf("IndexManager.ResetIndex(): making request for Index reset")
+	return m.requestServer.MakeRequest(client.OPCODE_RESET_INDEX, fmt.Sprintf("%v", index.DefnId), content)
 }
 
 func (m *IndexManager) DeleteIndexForBucket(bucket string, streamId common.StreamId) error {
@@ -463,6 +505,30 @@ func (m *IndexManager) NotifyIndexerReady() error {
 
 	logging.Debugf("IndexManager.NotifyIndexerReady(): making request to notify indexer is ready ")
 	return m.requestServer.MakeAsyncRequest(client.OPCODE_INDEXER_READY, "", []byte{})
+}
+
+func (m *IndexManager) NotifyStats(stats common.Statistics) error {
+
+	logging.Debugf("IndexManager.NotifyStats(): making request for new stats")
+
+	buf, e := json.Marshal(&stats)
+	if e != nil {
+		return e
+	}
+
+	return m.requestServer.MakeAsyncRequest(client.OPCODE_BROADCAST_STATS, "", buf)
+}
+
+func (m *IndexManager) NotifyConfigUpdate(config common.Config) error {
+
+	logging.Debugf("IndexManager.NotifyConfigUpdate(): making request for new config update")
+
+	buf, e := json.Marshal(&config)
+	if e != nil {
+		return e
+	}
+
+	return m.requestServer.MakeAsyncRequest(client.OPCODE_CONFIG_UPDATE, "", buf)
 }
 
 //
@@ -525,6 +591,9 @@ func (m *IndexManager) getBucketForCleanup() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	if globalTop == nil {
+		return result, nil
+	}
 
 	// iterate through each bucket
 	for _, key := range globalTop.TopologyKeys {
@@ -539,7 +608,7 @@ func (m *IndexManager) getBucketForCleanup() ([]string, error) {
 		}
 
 		topology, err := m.repo.GetTopologyByBucket(bucket)
-		if err == nil {
+		if err == nil && topology != nil {
 
 			definitions := make([]IndexDefnDistribution, len(topology.Definitions))
 			copy(definitions, topology.Definitions)
@@ -559,7 +628,7 @@ func (m *IndexManager) getBucketForCleanup() ([]string, error) {
 
 				// Check if this is a defer index from a non-existent bucket. If so, this could be a candidate
 				// for cleanup.
-				if defn, err := m.repo.GetIndexDefnById(common.IndexDefnId(defnRef.DefnId)); err == nil {
+				if defn, err := m.repo.GetIndexDefnById(common.IndexDefnId(defnRef.DefnId)); err == nil && defn != nil {
 					if defn.BucketUUID != currentUUID && defn.Deferred &&
 						defnRef.Instances[0].State != uint32(common.INDEX_STATE_DELETED) &&
 						common.StreamId(defnRef.Instances[0].StreamId) == common.NIL_STREAM {
@@ -575,97 +644,6 @@ func (m *IndexManager) getBucketForCleanup() ([]string, error) {
 	}
 
 	return result, nil
-}
-
-///////////////////////////////////////////////////////
-// public function - Timestamp Operation
-///////////////////////////////////////////////////////
-
-func (m *IndexManager) GetStabilityTimestampChannel(streamId common.StreamId) chan *common.TsVbuuid {
-
-	ch, ok := m.timestampCh[streamId]
-	if !ok {
-		ch = make(chan *common.TsVbuuid, TIMESTAMP_NOTIFY_CH_SIZE)
-		m.timestampCh[streamId] = ch
-	}
-
-	return ch
-}
-
-func (m *IndexManager) runTimestampKeeper() {
-
-	defer logging.Debugf("IndexManager.runTimestampKeeper() : terminate")
-
-	inboundch := m.timer.getOutputChannel()
-
-	persistTimestamp := true // save the first timestamp always
-	lastPersistTime := uint64(time.Now().UnixNano())
-
-	timestamps, err := m.repo.GetStabilityTimestamps()
-	if err != nil {
-		// TODO : Determine timestamp not exist versus forestdb error
-		logging.Errorf("IndexManager.runTimestampKeeper() : cannot get stability timestamp from repository. Create a new one.")
-		timestamps = createTimestampListSerializable()
-	}
-
-	for {
-		select {
-		case <-m.timekeeperStopCh:
-			return
-
-		case timestamp, ok := <-inboundch:
-
-			if !ok {
-				return
-			}
-
-			gometaC.SafeRun("IndexManager.runTimestampKeeper()",
-				func() {
-					timestamps.addTimestamp(timestamp)
-					persistTimestamp = persistTimestamp ||
-						uint64(time.Now().UnixNano())-lastPersistTime > m.timestampPersistInterval
-					if persistTimestamp {
-						if err := m.repo.SetStabilityTimestamps(timestamps); err != nil {
-							logging.Errorf("IndexManager.runTimestampKeeper() : cannot set stability timestamp into repository.")
-						} else {
-							logging.Debugf("IndexManager.runTimestampKeeper() : saved stability timestamp to repository")
-							persistTimestamp = false
-							lastPersistTime = uint64(time.Now().UnixNano())
-						}
-					}
-
-					data, err := marshallTimestampSerializable(timestamp)
-					if err != nil {
-						logging.Debugf(
-							"IndexManager.runTimestampKeeper(): error when marshalling timestamp. Ignore timestamp.  Error=%s",
-							err.Error())
-					} else {
-						m.coordinator.NewRequest(uint32(OPCODE_NOTIFY_TIMESTAMP), "Stability Timestamp", data)
-					}
-				})
-		}
-	}
-}
-
-func (m *IndexManager) notifyNewTimestamp(wrapper *timestampSerializable) {
-
-	logging.Debugf("IndexManager.notifyNewTimestamp(): receive new timestamp, notifying to listener")
-	streamId := common.StreamId(wrapper.StreamId)
-	timestamp, err := unmarshallTimestamp(wrapper.Timestamp)
-	if err != nil {
-		logging.Debugf("IndexManager.notifyNewTimestamp(): error when unmarshalling timestamp. Ignore timestamp.  Error=%s", err.Error())
-	} else {
-		ch, ok := m.timestampCh[streamId]
-		if ok {
-			if len(ch) < TIMESTAMP_NOTIFY_CH_SIZE {
-				ch <- timestamp
-			}
-		}
-	}
-}
-
-func (m *IndexManager) getTimer() *Timer {
-	return m.timer
 }
 
 ///////////////////////////////////////////////////////
@@ -696,133 +674,37 @@ func (m *IndexManager) notify(evtType EventType, obj interface{}) {
 }
 
 func (m *IndexManager) startMasterService() error {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
-
-	admin := m.admin
-	if admin != nil {
-		// Initialize the timer.   The timer will be activated by the
-		// stream manager when the stream manager opens the stream
-		// during initialization.  The stream manager, in turn, is
-		// started when the coordinator becomes the master.   There
-		// is gorounine in index manager that will listen to the
-		// timer and broadcast the stability timestamp to all the
-		// listening node.   This goroutine will be started when
-		// the indexer node becomes the coordinator master.
-		m.timestampPersistInterval = TIMESTAMP_PERSIST_INTERVAL
-		m.timer = newTimer(m.repo)
-		m.timekeeperStopCh = make(chan bool)
-		go m.runTimestampKeeper()
-
-		monitor := NewStreamMonitor(m, m.timer)
-
-		// Initialize the stream manager.
-		admin.Initialize(monitor)
-
-		handler := NewMgrMutHandler(m, admin, monitor)
-		var err error
-		m.streamMgr, err = NewStreamManager(m, handler, admin, monitor)
-		if err != nil {
-			return err
-		}
-		m.streamMgr.StartHandlingTopologyChange()
-	}
 	return nil
 }
 
 func (m *IndexManager) stopMasterService() {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
-
-	m.stopMasterServiceNoLock()
-}
-
-func (m *IndexManager) stopMasterServiceNoLock() {
-
-	if m.streamMgr != nil {
-		m.streamMgr.Close()
-		m.streamMgr = nil
-	}
-
-	if m.timer != nil {
-		m.timer.stopAll()
-		m.timer = nil
-
-		// use timekeeperStopCh to close the timekeeper gorountime right away
-		if m.timekeeperStopCh != nil {
-			close(m.timekeeperStopCh)
-			m.timekeeperStopCh = nil
-		}
-	}
 }
 
 //Calculate forestdb  buffer cache from memory quota
-func (m *IndexManager) calcBufCacheFromMemQuota(quota uint64) uint64 {
+func (m *IndexManager) calcBufCacheFromMemQuota(config common.Config) uint64 {
 
-	//Formula for calculation(see MB-14876)
-	//Below 2GB - 256MB to buffercache
-	//2GB to 4GB - 40% to buffercache
-	//Above 4GB - 60% to buffercache
-	if quota <= 2*1024*1024*1024 {
-		return 256 * 1024 * 1024
-	} else if quota <= 4*1024*1024*1024 {
-		return uint64(0.4 * float64(quota))
-	} else {
-		return uint64(0.6 * float64(quota))
+	totalQuota := config["settings.memory_quota"].Uint64()
+
+	//calculate queue memory
+	fracQueueMem := config["mutation_manager.fdb.fracMutationQueueMem"].Float64()
+	queueMem := uint64(fracQueueMem * float64(totalQuota))
+	queueMaxMem := config["mutation_manager.maxQueueMem"].Uint64()
+	if queueMem > queueMaxMem {
+		queueMem = queueMaxMem
 	}
 
-}
-
-///////////////////////////////////////////////////////
-// public function - for testing only
-///////////////////////////////////////////////////////
-
-func (m *IndexManager) GetStabilityTimestampForVb(streamId common.StreamId, bucket string, vb uint16) (uint64, bool) {
-
-	logging.Debugf("IndexManager.GetStabilityTimestampForVb() : get stability timestamp from repo")
-	savedTimestamps, err := m.repo.GetStabilityTimestamps()
-	if err == nil {
-		seqno, _, ok, err := savedTimestamps.findTimestamp(streamId, bucket, vb)
-		if ok && err == nil {
-			return seqno, true
-		}
-	} else {
-		logging.Errorf("IndexManager.GetStabilityTimestampForVb() : cannot get stability timestamp from repository.")
+	overhead := uint64(0.15 * float64(totalQuota))
+	//max overhead 5GB
+	if overhead > 5*1024*1024*1024 {
+		overhead = 5 * 1024 * 1024 * 1024
 	}
 
-	return 0, false
-}
-
-func (m *IndexManager) SetTimestampPersistenceInterval(elapsed uint64) {
-	m.timestampPersistInterval = elapsed
-}
-
-func (m *IndexManager) CleanupTopology() {
-
-	globalTop, err := m.GetGlobalTopology()
-	if err != nil {
-		logging.Errorf("IndexManager.CleanupTopology() : error %v.", err)
-		return
+	bufcache := totalQuota - queueMem - overhead
+	//min 256MB
+	if bufcache < 256*1024*1024 {
+		bufcache = 256 * 1024 * 1024
 	}
 
-	for _, key := range globalTop.TopologyKeys {
-		if err := m.repo.deleteMeta(key); err != nil {
-			logging.Errorf("IndexManager.CleanupTopology() : error %v.", err)
-		}
-	}
+	return bufcache
 
-	key := globalTopologyKey()
-	if err := m.repo.deleteMeta(key); err != nil {
-		logging.Errorf("IndexManager.CleanupTopology() : error %v.", err)
-	}
-}
-
-func (m *IndexManager) CleanupStabilityTimestamp() {
-
-	m.stopMasterServiceNoLock()
-
-	key := stabilityTimestampKey()
-	if err := m.repo.deleteMeta(key); err != nil {
-		logging.Errorf("IndexManager.CleanupStabilityTimestamp() : error %v.", err)
-	}
 }

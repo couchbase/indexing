@@ -1277,6 +1277,7 @@ func (feed *Feed) openFeeder(
 		"dataChanSize":   feed.config["dcp.dataChanSize"].Int(),
 		"numConnections": feed.config["dcp.numConnections"].Int(),
 		"latencyTick":    feed.config["dcp.latencyTick"].Int(),
+		"activeVbOnly":   feed.config["dcp.activeVbOnly"].Bool(),
 	}
 	kvaddr, err := feed.getLocalKVAddrs(pooln, bucketn, opaque)
 	if err != nil {
@@ -1812,6 +1813,7 @@ func FeedConfigParams() []string {
 		"dcp.genChanSize",
 		"dcp.numConnections",
 		"dcp.latencyTick",
+		"dcp.activeVbOnly",
 		// dataport
 		"dataport.remoteBlock",
 		"dataport.keyChanSize",

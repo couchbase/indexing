@@ -11,6 +11,7 @@ import "io/ioutil"
 import "errors"
 import "strings"
 import "sync"
+import "math"
 
 import "github.com/couchbase/indexing/secondary/logging"
 import "github.com/couchbase/indexing/secondary/common"
@@ -88,7 +89,7 @@ func (b *cbqClient) Sync() error {
 }
 
 // Refresh implement BridgeAccessor{} interface.
-func (b *cbqClient) Refresh() ([]*mclient.IndexMetadata, error) {
+func (b *cbqClient) Refresh() ([]*mclient.IndexMetadata, uint64, uint64, error) {
 	var resp *http.Response
 	var mresp indexMetaResponse
 
@@ -112,12 +113,12 @@ func (b *cbqClient) Refresh() ([]*mclient.IndexMetadata, error) {
 				b.rw.Lock()
 				defer b.rw.Unlock()
 				b.indexes = indexes
-				return indexes, nil
+				return indexes, 0, common.INDEXER_CUR_VERSION, nil
 			}
-			return nil, err
+			return nil, 0, common.INDEXER_CUR_VERSION, err
 		}
 	}
-	return nil, err
+	return nil, 0, common.INDEXER_CUR_VERSION, err
 }
 
 // Nodes implement BridgeAccessor{} interface.
@@ -133,7 +134,7 @@ func (b *cbqClient) Nodes() ([]*IndexerService, error) {
 // CreateIndex implement BridgeAccessor{} interface.
 func (b *cbqClient) CreateIndex(
 	name, bucket, using, exprType, partnExpr, whereExpr string,
-	secExprs []string, isPrimary bool,
+	secExprs []string, desc []bool, isPrimary bool,
 	with []byte) (defnID uint64, err error) {
 
 	var resp *http.Response
@@ -176,6 +177,11 @@ func (b *cbqClient) BuildIndexes(defnID []uint64) error {
 	panic("cbqClient does not implement build-indexes")
 }
 
+// MoveIndex implement BridgeAccessor{} interface.
+func (b *cbqClient) MoveIndex(defnID uint64, plan map[string]interface{}) error {
+	panic("cbqClient does not implement move index")
+}
+
 // DropIndex implement BridgeAccessor{} interface.
 func (b *cbqClient) DropIndex(defnID uint64) error {
 	var resp *http.Response
@@ -213,9 +219,9 @@ func (b *cbqClient) GetScanports() (queryports []string) {
 func (b *cbqClient) GetScanport(
 	defnID uint64,
 	retry int,
-	excludes map[uint64]bool) (queryport string, targetDefnID uint64, ok bool) {
+	excludes map[uint64]bool) (queryport string, targetDefnID uint64, targetIndstID uint64, rollbackTime int64, ok bool) {
 
-	return b.queryport, defnID, true
+	return b.queryport, defnID, 0, int64(math.MaxInt64), true
 }
 
 // GetIndexDefn implements BridgeAccessor{} interface.

@@ -3,11 +3,6 @@ package perftests
 import (
 	"encoding/json"
 	"fmt"
-	c "github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/platform"
-	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
-	kv "github.com/couchbase/indexing/secondary/tests/framework/kvutility"
-	"github.com/couchbase/indexing/secondary/tests/framework/secondaryindex"
 	"io/ioutil"
 	"log"
 	"os"
@@ -18,6 +13,11 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	c "github.com/couchbase/indexing/secondary/common"
+	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
+	kv "github.com/couchbase/indexing/secondary/tests/framework/kvutility"
+	"github.com/couchbase/indexing/secondary/tests/framework/secondaryindex"
 )
 
 type ScanResult struct {
@@ -25,7 +25,7 @@ type ScanResult struct {
 	Rows         uint64
 	Duration     int64
 	LatencyHisto string
-	ErrorCount   platform.AlignedUint64
+	ErrorCount   uint64
 
 	// periodic stats
 	iter          uint32

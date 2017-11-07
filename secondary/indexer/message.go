@@ -84,9 +84,11 @@ const (
 	CLUST_MGR_BUILD_INDEX_DDL_RESPONSE
 	CLUST_MGR_DROP_INDEX_DDL
 	CLUST_MGR_UPDATE_TOPOLOGY_FOR_INDEX
+	CLUST_MGR_RESET_INDEX
 	CLUST_MGR_GET_GLOBAL_TOPOLOGY
 	CLUST_MGR_GET_LOCAL
 	CLUST_MGR_SET_LOCAL
+	CLUST_MGR_DEL_LOCAL
 	CLUST_MGR_DEL_BUCKET
 	CLUST_MGR_INDEXER_READY
 	CLUST_MGR_CLEANUP_INDEX
@@ -110,6 +112,11 @@ const (
 	INDEXER_PREPARE_UNPAUSE
 	INDEXER_UNPAUSE
 	INDEXER_BOOTSTRAP
+	INDEXER_SET_LOCAL_META
+	INDEXER_GET_LOCAL_META
+	INDEXER_DEL_LOCAL_META
+	INDEXER_CHECK_DDL_IN_PROGRESS
+	INDEXER_UPDATE_RSTATE
 
 	//SCAN COORDINATOR
 	SCAN_COORD_SHUTDOWN
@@ -133,6 +140,7 @@ const (
 	SCAN_STATS
 	INDEX_PROGRESS_STATS
 	INDEXER_STATS
+	INDEX_STATS_DONE
 
 	STATS_RESET
 	REPAIR_ABORT
@@ -339,14 +347,15 @@ func (m *MsgUpdateBucketQueue) String() string {
 //CLOSE_STREAM
 //CLEANUP_STREAM
 type MsgStreamUpdate struct {
-	mType     MsgType
-	streamId  common.StreamId
-	indexList []common.IndexInst
-	buildTs   Timestamp
-	respCh    MsgChannel
-	stopCh    StopChannel
-	bucket    string
-	restartTs *common.TsVbuuid
+	mType        MsgType
+	streamId     common.StreamId
+	indexList    []common.IndexInst
+	buildTs      Timestamp
+	respCh       MsgChannel
+	stopCh       StopChannel
+	bucket       string
+	restartTs    *common.TsVbuuid
+	rollbackTime int64
 }
 
 func (m *MsgStreamUpdate) GetMsgType() MsgType {
@@ -379,6 +388,10 @@ func (m *MsgStreamUpdate) GetBucket() string {
 
 func (m *MsgStreamUpdate) GetRestartTs() *common.TsVbuuid {
 	return m.restartTs
+}
+
+func (m *MsgStreamUpdate) GetRollbackTime() int64 {
+	return m.rollbackTime
 }
 
 func (m *MsgStreamUpdate) String() string {
@@ -457,8 +470,9 @@ func (m *MsgMutMgrGetTimestamp) GetStreamId() common.StreamId {
 
 //UPDATE_INSTANCE_MAP
 type MsgUpdateInstMap struct {
-	indexInstMap common.IndexInstMap
-	stats        *IndexerStats
+	indexInstMap  common.IndexInstMap
+	stats         *IndexerStats
+	rollbackTimes map[string]int64
 }
 
 func (m *MsgUpdateInstMap) GetMsgType() MsgType {
@@ -471,6 +485,10 @@ func (m *MsgUpdateInstMap) GetIndexInstMap() common.IndexInstMap {
 
 func (m *MsgUpdateInstMap) GetStatsObject() *IndexerStats {
 	return m.stats
+}
+
+func (m *MsgUpdateInstMap) GetRollbackTimes() map[string]int64 {
+	return m.rollbackTimes
 }
 
 func (m *MsgUpdateInstMap) String() string {
@@ -666,6 +684,7 @@ type MsgCreateIndex struct {
 	mType     MsgType
 	indexInst common.IndexInst
 	respCh    MsgChannel
+	reqCtx    *common.MetadataRequestContext
 }
 
 func (m *MsgCreateIndex) GetMsgType() MsgType {
@@ -678,6 +697,10 @@ func (m *MsgCreateIndex) GetIndexInst() common.IndexInst {
 
 func (m *MsgCreateIndex) GetResponseChannel() MsgChannel {
 	return m.respCh
+}
+
+func (m *MsgCreateIndex) GetRequestCtx() *common.MetadataRequestContext {
+	return m.reqCtx
 }
 
 func (m *MsgCreateIndex) GetString() string {
@@ -693,6 +716,7 @@ type MsgBuildIndex struct {
 	indexInstList []common.IndexInstId
 	bucketList    []string
 	respCh        MsgChannel
+	reqCtx        *common.MetadataRequestContext
 }
 
 func (m *MsgBuildIndex) GetMsgType() MsgType {
@@ -709,6 +733,10 @@ func (m *MsgBuildIndex) GetBucketList() []string {
 
 func (m *MsgBuildIndex) GetRespCh() MsgChannel {
 	return m.respCh
+}
+
+func (m *MsgBuildIndex) GetRequestCtx() *common.MetadataRequestContext {
+	return m.reqCtx
 }
 
 func (m *MsgBuildIndex) GetString() string {
@@ -747,6 +775,7 @@ type MsgDropIndex struct {
 	indexInstId common.IndexInstId
 	bucket      string
 	respCh      MsgChannel
+	reqCtx      *common.MetadataRequestContext
 }
 
 func (m *MsgDropIndex) GetMsgType() MsgType {
@@ -763,6 +792,10 @@ func (m *MsgDropIndex) GetBucket() string {
 
 func (m *MsgDropIndex) GetResponseChannel() MsgChannel {
 	return m.respCh
+}
+
+func (m *MsgDropIndex) GetRequestCtx() *common.MetadataRequestContext {
+	return m.reqCtx
 }
 
 func (m *MsgDropIndex) GetString() string {
@@ -923,9 +956,10 @@ func (m *MsgRecovery) GetBuildTs() Timestamp {
 }
 
 type MsgRollback struct {
-	streamId   common.StreamId
-	bucket     string
-	rollbackTs *common.TsVbuuid
+	streamId     common.StreamId
+	bucket       string
+	rollbackTs   *common.TsVbuuid
+	rollbackTime int64
 }
 
 func (m *MsgRollback) GetMsgType() MsgType {
@@ -942,6 +976,10 @@ func (m *MsgRollback) GetBucket() string {
 
 func (m *MsgRollback) GetRollbackTs() *common.TsVbuuid {
 	return m.rollbackTs
+}
+
+func (m *MsgRollback) GetRollbackTime() int64 {
+	return m.rollbackTime
 }
 
 type MsgRepairAbort struct {
@@ -1008,8 +1046,9 @@ func (m *MsgIndexStorageStats) GetReplyChannel() chan []IndexStorageStats {
 }
 
 type MsgStatsRequest struct {
-	mType  MsgType
-	respch chan bool
+	mType    MsgType
+	respch   chan bool
+	fetchDcp bool
 }
 
 func (m *MsgStatsRequest) GetMsgType() MsgType {
@@ -1018,6 +1057,10 @@ func (m *MsgStatsRequest) GetMsgType() MsgType {
 
 func (m *MsgStatsRequest) GetReplyChannel() chan bool {
 	return m.respch
+}
+
+func (m *MsgStatsRequest) FetchDcp() bool {
+	return m.fetchDcp
 }
 
 type MsgIndexCompact struct {
@@ -1065,6 +1108,19 @@ func (m *MsgKVStreamRepair) GetRestartTs() *common.TsVbuuid {
 	return m.restartTs
 }
 
+//CLUST_MGR_RESET_INDEX
+type MsgClustMgrResetIndex struct {
+	defn common.IndexDefn
+}
+
+func (m *MsgClustMgrResetIndex) GetMsgType() MsgType {
+	return CLUST_MGR_RESET_INDEX
+}
+
+func (m *MsgClustMgrResetIndex) GetIndex() common.IndexDefn {
+	return m.defn
+}
+
 //CLUST_MGR_UPDATE_TOPOLOGY_FOR_INDEX
 type MsgClustMgrUpdate struct {
 	mType         MsgType
@@ -1072,6 +1128,8 @@ type MsgClustMgrUpdate struct {
 	updatedFields MetaUpdateFields
 	bucket        string
 	streamId      common.StreamId
+	syncUpdate    bool
+	respCh        chan error
 }
 
 func (m *MsgClustMgrUpdate) GetMsgType() MsgType {
@@ -1094,6 +1152,14 @@ func (m *MsgClustMgrUpdate) GetStreamId() common.StreamId {
 	return m.streamId
 }
 
+func (m *MsgClustMgrUpdate) GetIsSyncUpdate() bool {
+	return m.syncUpdate
+}
+
+func (m *MsgClustMgrUpdate) GetRespCh() chan error {
+	return m.respCh
+}
+
 //CLUST_MGR_GET_GLOBAL_TOPOLOGY
 type MsgClustMgrTopology struct {
 	indexInstMap common.IndexInstMap
@@ -1109,11 +1175,14 @@ func (m *MsgClustMgrTopology) GetInstMap() common.IndexInstMap {
 
 //CLUST_MGR_GET_LOCAL
 //CLUST_MGR_SET_LOCAL
+//CLUST_MGR_DEL_LOCAL
 type MsgClustMgrLocal struct {
-	mType MsgType
-	key   string
-	value string
-	err   error
+	mType    MsgType
+	key      string
+	value    string
+	err      error
+	respch   MsgChannel
+	checkDDL bool
 }
 
 func (m *MsgClustMgrLocal) GetMsgType() MsgType {
@@ -1130,6 +1199,14 @@ func (m *MsgClustMgrLocal) GetValue() string {
 
 func (m *MsgClustMgrLocal) GetError() error {
 	return m.err
+}
+
+func (m *MsgClustMgrLocal) GetRespCh() MsgChannel {
+	return m.respch
+}
+
+func (m *MsgClustMgrLocal) GetCheckDDL() bool {
+	return m.checkDDL
 }
 
 type MsgConfigUpdate struct {
@@ -1157,11 +1234,50 @@ func (m *MsgResetStats) GetMsgType() MsgType {
 //INDEXER_UNPAUSE
 //INDEXER_BOOTSTRAP
 type MsgIndexerState struct {
-	mType MsgType
+	mType         MsgType
+	rollbackTimes map[string]int64
 }
 
 func (m *MsgIndexerState) GetMsgType() MsgType {
 	return m.mType
+}
+
+func (m *MsgIndexerState) GetRollbackTimes() map[string]int64 {
+	return m.rollbackTimes
+}
+
+type MsgCheckDDLInProgress struct {
+	respCh chan bool
+}
+
+func (m *MsgCheckDDLInProgress) GetMsgType() MsgType {
+	return INDEXER_CHECK_DDL_IN_PROGRESS
+}
+
+func (m *MsgCheckDDLInProgress) GetRespCh() chan bool {
+	return m.respCh
+}
+
+type MsgUpdateIndexRState struct {
+	defnId common.IndexDefnId
+	respch chan error
+	rstate common.RebalanceState
+}
+
+func (m *MsgUpdateIndexRState) GetMsgType() MsgType {
+	return INDEXER_UPDATE_RSTATE
+}
+
+func (m *MsgUpdateIndexRState) GetDefnId() common.IndexDefnId {
+	return m.defnId
+}
+
+func (m *MsgUpdateIndexRState) GetRespCh() chan error {
+	return m.respch
+}
+
+func (m *MsgUpdateIndexRState) GetRState() common.RebalanceState {
+	return m.rstate
 }
 
 //Helper function to return string for message type
@@ -1277,6 +1393,16 @@ func (m MsgType) String() string {
 		return "INDEXER_UNPAUSE"
 	case INDEXER_BOOTSTRAP:
 		return "INDEXER_BOOTSTRAP"
+	case INDEXER_SET_LOCAL_META:
+		return "INDEXER_SET_LOCAL_META"
+	case INDEXER_GET_LOCAL_META:
+		return "INDEXER_GET_LOCAL_META"
+	case INDEXER_DEL_LOCAL_META:
+		return "INDEXER_DEL_LOCAL_META"
+	case INDEXER_CHECK_DDL_IN_PROGRESS:
+		return "INDEXER_CHECK_DDL_IN_PROGRESS"
+	case INDEXER_UPDATE_RSTATE:
+		return "INDEXER_UPDATE_RSTATE"
 
 	case SCAN_COORD_SHUTDOWN:
 		return "SCAN_COORD_SHUTDOWN"
@@ -1320,6 +1446,8 @@ func (m MsgType) String() string {
 		return "CLUST_MGR_GET_LOCAL"
 	case CLUST_MGR_SET_LOCAL:
 		return "CLUST_MGR_SET_LOCAL"
+	case CLUST_MGR_DEL_LOCAL:
+		return "CLUST_MGR_DEL_LOCAL"
 	case CLUST_MGR_DEL_BUCKET:
 		return "CLUST_MGR_DEL_BUCKET"
 	case CLUST_MGR_INDEXER_READY:

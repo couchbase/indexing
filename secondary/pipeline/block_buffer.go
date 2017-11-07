@@ -3,8 +3,8 @@ package pipeline
 import (
 	"encoding/binary"
 	"errors"
-	"github.com/couchbase/indexing/secondary/platform"
 	"sync"
+	"sync/atomic"
 	"unsafe"
 )
 
@@ -26,7 +26,7 @@ func SetupBlockPool(sz int) {
 		},
 	}
 
-	platform.StorePointer(&blockPool, unsafe.Pointer(p))
+	atomic.StorePointer(&blockPool, unsafe.Pointer(p))
 }
 
 func init() {
@@ -34,7 +34,7 @@ func init() {
 }
 
 func getBlockPool() *sync.Pool {
-	return (*sync.Pool)(platform.LoadPointer(&blockPool))
+	return (*sync.Pool)(atomic.LoadPointer(&blockPool))
 }
 
 func GetBlock() *[]byte {
@@ -55,7 +55,7 @@ type BlockBufferWriter struct {
 
 func (b *BlockBufferWriter) Init(buf *[]byte) {
 	b.buf = buf
-	b.len = 2
+	b.len = 4
 	b.cap = cap(*buf)
 }
 
@@ -65,26 +65,26 @@ func (b *BlockBufferWriter) Put(itms ...[]byte) error {
 		l += len(itm)
 	}
 
-	if 2+l+2*len(itms) > b.cap-b.len {
+	itmLen := 4 + l + 4*len(itms)
+	if itmLen > b.cap-b.len {
 		return ErrNoBlockSpace
 	}
 
 	for _, itm := range itms {
-		binary.LittleEndian.PutUint16((*b.buf)[b.len:b.len+2], uint16(len(itm)))
-		b.len += 2
+		binary.LittleEndian.PutUint32((*b.buf)[b.len:b.len+4], uint32(len(itm)))
+		b.len += 4
 		copy((*b.buf)[b.len:], itm)
 		b.len += len(itm)
 	}
-
 	return nil
 }
 
 func (b *BlockBufferWriter) IsEmpty() bool {
-	return b.len == 2
+	return b.len == 4
 }
 
 func (b *BlockBufferWriter) Close() {
-	binary.LittleEndian.PutUint16((*b.buf)[0:2], uint16(b.len))
+	binary.LittleEndian.PutUint32((*b.buf)[0:4], uint32(b.len))
 }
 
 type BlockBufferReader struct {
@@ -95,8 +95,8 @@ type BlockBufferReader struct {
 
 func (b *BlockBufferReader) Init(buf *[]byte) {
 	b.buf = buf
-	b.len = int(binary.LittleEndian.Uint16((*buf)[0:2]))
-	b.offset = 2
+	b.len = int(binary.LittleEndian.Uint32((*buf)[0:4]))
+	b.offset = 4
 }
 
 func (b *BlockBufferReader) Len() int {
@@ -108,8 +108,8 @@ func (b *BlockBufferReader) Get() ([]byte, error) {
 		return nil, ErrNoMoreItem
 	}
 
-	dlen := int(binary.LittleEndian.Uint16((*b.buf)[b.offset : b.offset+2]))
-	b.offset += 2
+	dlen := int(binary.LittleEndian.Uint32((*b.buf)[b.offset : b.offset+4]))
+	b.offset += 4
 	b.offset += dlen
 
 	return (*b.buf)[b.offset-dlen : b.offset], nil

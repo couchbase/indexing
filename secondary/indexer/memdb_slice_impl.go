@@ -15,14 +15,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/common/queryutil"
-	"github.com/couchbase/indexing/secondary/logging"
-	"github.com/couchbase/indexing/secondary/memdb"
-	"github.com/couchbase/indexing/secondary/memdb/mm"
-	"github.com/couchbase/indexing/secondary/memdb/nodetable"
-	"github.com/couchbase/indexing/secondary/memdb/skiplist"
-	"github.com/couchbase/indexing/secondary/platform"
 	"hash/crc32"
 	"io/ioutil"
 	"math"
@@ -31,8 +23,17 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unsafe"
+
+	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/common/queryutil"
+	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/memdb"
+	"github.com/couchbase/indexing/secondary/memdb/nodetable"
+	"github.com/couchbase/indexing/secondary/memdb/skiplist"
+	"github.com/couchbase/indexing/secondary/stubs/nitro/mm"
 )
 
 const (
@@ -93,13 +94,30 @@ func byteItemCompare(a, b []byte) int {
 	return bytes.Compare(a, b)
 }
 
-var totalMemDBItems = platform.NewAlignedInt64(0)
+func resizeEncodeBuf(encodeBuf []byte, keylen int, doResize bool) []byte {
+	if doResize && keylen+MAX_KEY_EXTRABYTES_LEN > cap(encodeBuf) {
+		// TODO: Shrink the buffer periodically or as needed
+		newSize := keylen + MAX_KEY_EXTRABYTES_LEN + ENCODE_BUF_SAFE_PAD
+		encodeBuf = make([]byte, 0, newSize)
+	}
+	return encodeBuf
+}
+
+func resizeArrayBuf(arrayBuf []byte, keylen int) []byte {
+	if allowLargeKeys && keylen > cap(arrayBuf) {
+		newSize := keylen + MAX_KEY_EXTRABYTES_LEN + ENCODE_BUF_SAFE_PAD
+		arrayBuf = make([]byte, 0, newSize)
+	}
+	return arrayBuf
+}
+
+var totalMemDBItems int64 = 0
 
 type memdbSlice struct {
-	get_bytes, insert_bytes, delete_bytes platform.AlignedInt64
-	flushedCount                          platform.AlignedUint64
-	committedCount                        platform.AlignedUint64
-	qCount                                platform.AlignedInt64
+	get_bytes, insert_bytes, delete_bytes int64
+	flushedCount                          uint64
+	committedCount                        uint64
+	qCount                                int64
 
 	path string
 	id   SliceId
@@ -134,8 +152,9 @@ type memdbSlice struct {
 
 	fatalDbErr error
 
-	numWriters   int
-	maxRollbacks int
+	numWriters     int
+	maxRollbacks   int
+	hasPersistence bool
 
 	totalFlushTime  time.Duration
 	totalCommitTime time.Duration
@@ -155,7 +174,7 @@ type memdbSlice struct {
 }
 
 func NewMemDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
-	idxInstId common.IndexInstId, isPrimary bool,
+	idxInstId common.IndexInstId, isPrimary bool, hasPersistance bool,
 	sysconf common.Config, idxStats *IndexStats) (*memdbSlice, error) {
 
 	info, err := os.Stat(path)
@@ -165,12 +184,14 @@ func NewMemDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 
 	slice := &memdbSlice{}
 	slice.idxStats = idxStats
+	slice.idxStats.residentPercent.Set(100)
+	slice.idxStats.cacheHitPercent.Set(100)
 
-	slice.get_bytes = platform.NewAlignedInt64(0)
-	slice.insert_bytes = platform.NewAlignedInt64(0)
-	slice.delete_bytes = platform.NewAlignedInt64(0)
-	slice.flushedCount = platform.NewAlignedUint64(0)
-	slice.committedCount = platform.NewAlignedUint64(0)
+	slice.get_bytes = 0
+	slice.insert_bytes = 0
+	slice.delete_bytes = 0
+	slice.flushedCount = 0
+	slice.committedCount = 0
 	slice.sysconf = sysconf
 	slice.path = path
 	slice.idxInstId = idxInstId
@@ -178,7 +199,7 @@ func NewMemDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	slice.idxDefn = idxDefn
 	slice.id = sliceId
 	slice.numWriters = sysconf["numSliceWriters"].Int()
-	slice.maxRollbacks = sysconf["settings.recovery.max_rollbacks"].Int()
+	slice.maxRollbacks = sysconf["settings.moi.recovery.max_rollbacks"].Int()
 
 	sliceBufSize := sysconf["settings.sliceBufSize"].Uint64()
 	if sliceBufSize < uint64(slice.numWriters) {
@@ -198,6 +219,7 @@ func NewMemDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	slice.stopCh = make([]DoneChannel, slice.numWriters)
 
 	slice.isPrimary = isPrimary
+	slice.hasPersistence = hasPersistance
 	slice.initStores()
 
 	// Array related initialization
@@ -207,7 +229,7 @@ func NewMemDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	}
 
 	logging.Infof("MemDBSlice:NewMemDBSlice Created New Slice Id %v IndexInstId %v "+
-		"WriterThreads %v", sliceId, idxInstId, slice.numWriters)
+		"WriterThreads %v Persistence %v", sliceId, idxInstId, slice.numWriters, slice.hasPersistence)
 
 	for i := 0; i < slice.numWriters; i++ {
 		slice.stopCh[i] = make(DoneChannel)
@@ -272,7 +294,7 @@ func (mdb *memdbSlice) Insert(key []byte, docid []byte, meta *MutationMeta) erro
 		key:   key,
 		docid: docid,
 	}
-	platform.AddInt64(&mdb.qCount, 1)
+	atomic.AddInt64(&mdb.qCount, 1)
 	mdb.cmdCh[int(meta.vbucket)%mdb.numWriters] <- mut
 	mdb.idxStats.numDocsFlushQueued.Add(1)
 	return mdb.fatalDbErr
@@ -280,7 +302,7 @@ func (mdb *memdbSlice) Insert(key []byte, docid []byte, meta *MutationMeta) erro
 
 func (mdb *memdbSlice) Delete(docid []byte, meta *MutationMeta) error {
 	mdb.idxStats.numDocsFlushQueued.Add(1)
-	platform.AddInt64(&mdb.qCount, 1)
+	atomic.AddInt64(&mdb.qCount, 1)
 	mdb.cmdCh[int(meta.vbucket)%mdb.numWriters] <- indexMutation{op: opDelete, docid: docid}
 	return mdb.fatalDbErr
 }
@@ -315,7 +337,7 @@ loop:
 
 			mdb.idxStats.numItemsFlushed.Add(int64(nmut))
 			mdb.idxStats.numDocsIndexed.Add(1)
-			platform.AddInt64(&mdb.qCount, -1)
+			atomic.AddInt64(&mdb.qCount, -1)
 
 		case <-mdb.stopCh[workerId]:
 			mdb.stopCh[workerId] <- true
@@ -355,7 +377,7 @@ func (mdb *memdbSlice) insertPrimaryIndex(key []byte, docid []byte, workerId int
 	t0 := time.Now()
 	mdb.main[workerId].Put(entry)
 	mdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
-	platform.AddInt64(&mdb.insert_bytes, int64(len(entry)))
+	atomic.AddInt64(&mdb.insert_bytes, int64(len(entry)))
 	mdb.isDirty = true
 	return 1
 }
@@ -366,8 +388,10 @@ func (mdb *memdbSlice) insertSecIndex(key []byte, docid []byte, workerId int) in
 	// 3. Delete old entry from main index if back index had
 	// a previous mainnode pointer entry
 	t0 := time.Now()
+
+	mdb.encodeBuf[workerId] = resizeEncodeBuf(mdb.encodeBuf[workerId], len(key), allowLargeKeys)
 	entry, err := NewSecondaryIndexEntry(key, docid, mdb.idxDefn.IsArrayIndex,
-		1, mdb.encodeBuf[workerId])
+		1, mdb.idxDefn.Desc, mdb.encodeBuf[workerId])
 	if err != nil {
 		logging.Errorf("MemDBSlice::insertSecIndex Slice Id %v IndexInstId %v "+
 			"Skipping docid:%s (%v)", mdb.Id, mdb.idxInstId, docid, err)
@@ -376,7 +400,7 @@ func (mdb *memdbSlice) insertSecIndex(key []byte, docid []byte, workerId int) in
 
 	newNode := mdb.main[workerId].Put2(entry)
 	mdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
-	platform.AddInt64(&mdb.insert_bytes, int64(len(docid)+len(entry)))
+	atomic.AddInt64(&mdb.insert_bytes, int64(len(docid)+len(entry)))
 
 	// Insert succeeded. Failure means same entry already exist.
 	if newNode != nil {
@@ -384,7 +408,7 @@ func (mdb *memdbSlice) insertSecIndex(key []byte, docid []byte, workerId int) in
 			t0 := time.Now()
 			mdb.main[workerId].DeleteNode((*skiplist.Node)(oldNode))
 			mdb.idxStats.Timings.stKVDelete.Put(time.Since(t0))
-			platform.AddInt64(&mdb.delete_bytes, int64(len(docid)))
+			atomic.AddInt64(&mdb.delete_bytes, int64(len(docid)))
 		}
 	}
 
@@ -393,7 +417,10 @@ func (mdb *memdbSlice) insertSecIndex(key []byte, docid []byte, workerId int) in
 }
 
 func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId int) int {
-	if len(keys) > maxArrayIndexEntrySize {
+
+	mdb.arrayBuf[workerId] = resizeArrayBuf(mdb.arrayBuf[workerId], len(keys))
+
+	if !allowLargeKeys && len(keys) > maxArrayIndexEntrySize {
 		logging.Errorf("MemDBSlice::insertSecArrayIndex Error indexing docid: %s in Slice: %v. Error: Encoded array key (size %v) too long (> %v). Skipped.",
 			docid, mdb.id, len(keys), maxArrayIndexEntrySize)
 		logging.Verbosef("MemDBSlice::insertSecArrayIndex Skipped docid: %s Key: %s", docid, string(keys))
@@ -401,8 +428,9 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 	}
 
 	var nmut int
-	newEntriesBytes, newKeyCount, err := ArrayIndexItems(keys, mdb.arrayExprPosition,
-		mdb.arrayBuf[workerId], mdb.isArrayDistinct, true)
+	newEntriesBytes, newKeyCount, newbufLen, err := ArrayIndexItems(keys, mdb.arrayExprPosition,
+		mdb.arrayBuf[workerId], mdb.isArrayDistinct, !allowLargeKeys)
+	mdb.arrayBuf[workerId] = resizeArrayBuf(mdb.arrayBuf[workerId], newbufLen)
 	if err != nil {
 		logging.Errorf("MemDBSlice::insert Error indexing docid: %s in Slice: %v. Error in creating "+
 			"compostite new secondary keys %v. Skipped.", docid, mdb.id, err)
@@ -426,6 +454,14 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 		oldEntriesBytes[i] = oldEntriesBytes[i][:e.lenKey()]
 	}
 
+	//get keys in original form
+	if mdb.idxDefn.Desc != nil {
+		for _, item := range oldEntriesBytes {
+			jsonEncoder.ReverseCollate(item, mdb.idxDefn.Desc)
+		}
+
+	}
+
 	entryBytesToBeAdded, entryBytesToDeleted := CompareArrayEntriesWithCount(newEntriesBytes, oldEntriesBytes, newKeyCount, oldKeyCount)
 	nmut = 0
 
@@ -439,11 +475,20 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 		return 0
 	}
 
+	//convert to storage format
+	if mdb.idxDefn.Desc != nil {
+		for _, item := range list.Keys() {
+			jsonEncoder.ReverseCollate(item, mdb.idxDefn.Desc)
+		}
+
+	}
+
 	// Delete each entry in entryBytesToDeleted
 	for i, item := range entryBytesToDeleted {
 		if item != nil { // nil item indicates it should not be deleted
-			entry, err := NewSecondaryIndexEntry(item, docid, false,
-				oldKeyCount[i], mdb.encodeBuf[workerId][:0])
+			mdb.encodeBuf[workerId] = resizeEncodeBuf(mdb.encodeBuf[workerId], len(item), true)
+			entry, err := NewSecondaryIndexEntry2(item, docid, false,
+				oldKeyCount[i], nil, mdb.encodeBuf[workerId][:0], false)
 			if err != nil {
 				logging.Errorf("MemDBSlice::insertSecArrayIndex Slice Id %v IndexInstId %v "+
 					"Skipping docid:%s (%v)", mdb.Id, mdb.idxInstId, docid, err)
@@ -459,8 +504,9 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 	for i, key := range entryBytesToBeAdded {
 		if key != nil { // nil item indicates it should not be added
 			t0 := time.Now()
+			mdb.encodeBuf[workerId] = resizeEncodeBuf(mdb.encodeBuf[workerId], len(key), allowLargeKeys)
 			entry, err := NewSecondaryIndexEntry(key, docid, false,
-				newKeyCount[i], mdb.encodeBuf[workerId][:0])
+				newKeyCount[i], mdb.idxDefn.Desc, mdb.encodeBuf[workerId][:0])
 			if err != nil {
 				logging.Errorf("MemDBSlice::insertSecArrayIndex Slice Id %v IndexInstId %v "+
 					"Skipping docid:%s (%v)", mdb.Id, mdb.idxInstId, docid, err)
@@ -471,7 +517,7 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 			if newNode != nil { // Ignore if duplicate key
 				list.Add(newNode)
 				mdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
-				platform.AddInt64(&mdb.insert_bytes, int64(len(entry)))
+				atomic.AddInt64(&mdb.insert_bytes, int64(len(entry)))
 			}
 		}
 	}
@@ -512,7 +558,7 @@ func (mdb *memdbSlice) deletePrimaryIndex(docid []byte, workerId int) (nmut int)
 	itm := entry.Bytes()
 	mdb.main[workerId].Delete(itm)
 	mdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
-	platform.AddInt64(&mdb.delete_bytes, int64(len(entry.Bytes())))
+	atomic.AddInt64(&mdb.delete_bytes, int64(len(entry.Bytes())))
 	mdb.isDirty = true
 	return 1
 
@@ -526,7 +572,7 @@ func (mdb *memdbSlice) deleteSecIndex(docid []byte, workerId int) int {
 	success, node := mdb.back[workerId].Remove(lookupentry)
 	if success {
 		mdb.idxStats.Timings.stKVDelete.Put(time.Since(t0))
-		platform.AddInt64(&mdb.delete_bytes, int64(len(docid)))
+		atomic.AddInt64(&mdb.delete_bytes, int64(len(docid)))
 		t0 = time.Now()
 		mdb.main[workerId].DeleteNode((*skiplist.Node)(node))
 		mdb.idxStats.Timings.stKVDelete.Put(time.Since(t0))
@@ -548,7 +594,7 @@ func (mdb *memdbSlice) deleteSecArrayIndex(docid []byte, workerId int) (nmut int
 	t0 := time.Now()
 	mdb.back[workerId].Remove(lookupentry)
 	mdb.idxStats.Timings.stKVDelete.Put(time.Since(t0))
-	platform.AddInt64(&mdb.delete_bytes, int64(len(lookupentry)))
+	atomic.AddInt64(&mdb.delete_bytes, int64(len(lookupentry)))
 
 	// Delete each entry in oldEntriesBytes
 	for _, item := range oldEntriesBytes {
@@ -604,6 +650,7 @@ type memdbSnapshot struct {
 // Snapshot info is obtained from NewSnapshot() or GetSnapshots() API
 // Returns error if snapshot handle cannot be created.
 func (mdb *memdbSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
+	var err error
 	snapInfo := info.(*memdbSnapshotInfo)
 
 	s := &memdbSnapshot{slice: mdb,
@@ -616,26 +663,26 @@ func (mdb *memdbSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 
 	s.Open()
 	s.slice.IncrRef()
-	if s.committed {
+	if s.committed && mdb.hasPersistence {
 		s.info.MainSnap.Open()
 		go mdb.doPersistSnapshot(s)
 	}
 
 	if s.info.MainSnap == nil {
-		mdb.loadSnapshot(s.info)
+		err = mdb.loadSnapshot(s.info)
 	}
 
 	logging.Infof("MemDBSlice::OpenSnapshot SliceId %v IndexInstId %v Creating New "+
 		"Snapshot %v", mdb.id, mdb.idxInstId, snapInfo)
 
-	return s, nil
+	return s, err
 }
 
 func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot) {
 	var concurrency int = 1
 
-	if platform.CompareAndSwapInt32(&mdb.isPersistorActive, 0, 1) {
-		defer platform.StoreInt32(&mdb.isPersistorActive, 0)
+	if atomic.CompareAndSwapInt32(&mdb.isPersistorActive, 0, 1) {
+		defer atomic.StoreInt32(&mdb.isPersistorActive, 0)
 
 		t0 := time.Now()
 		dir := newSnapshotPath(mdb.path)
@@ -644,7 +691,7 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot) {
 		os.RemoveAll(tmpdir)
 		mdb.confLock.RLock()
 		maxThreads := mdb.sysconf["settings.moi.persistence_threads"].Int()
-		total := platform.LoadInt64(&totalMemDBItems)
+		total := atomic.LoadInt64(&totalMemDBItems)
 		indexCount := mdb.GetCommittedCount()
 		// Compute number of workers to be used for taking backup
 		if total > 0 {
@@ -753,14 +800,14 @@ func (mdb *memdbSlice) GetSnapshots() ([]SnapshotInfo, error) {
 }
 
 func (mdb *memdbSlice) setCommittedCount() {
-	prev := platform.LoadUint64(&mdb.committedCount)
+	prev := atomic.LoadUint64(&mdb.committedCount)
 	curr := mdb.mainstore.ItemsCount()
-	platform.AddInt64(&totalMemDBItems, int64(curr)-int64(prev))
-	platform.StoreUint64(&mdb.committedCount, uint64(curr))
+	atomic.AddInt64(&totalMemDBItems, int64(curr)-int64(prev))
+	atomic.StoreUint64(&mdb.committedCount, uint64(curr))
 }
 
 func (mdb *memdbSlice) GetCommittedCount() uint64 {
-	return platform.LoadUint64(&mdb.committedCount)
+	return atomic.LoadUint64(&mdb.committedCount)
 }
 
 func (mdb *memdbSlice) resetStores() {
@@ -784,7 +831,7 @@ func (mdb *memdbSlice) Rollback(info SnapshotInfo) error {
 	//are no flush workers before calling rollback.
 	mdb.waitPersist()
 
-	qc := platform.LoadInt64(&mdb.qCount)
+	qc := atomic.LoadInt64(&mdb.qCount)
 	if qc > 0 {
 		common.CrashOnError(errors.New("Slice Invariant Violation - rollback with pending mutations"))
 	}
@@ -812,7 +859,16 @@ func (mdb *memdbSlice) Rollback(info SnapshotInfo) error {
 	return nil
 }
 
-func (mdb *memdbSlice) loadSnapshot(snapInfo *memdbSnapshotInfo) error {
+func (mdb *memdbSlice) loadSnapshot(snapInfo *memdbSnapshotInfo) (err error) {
+	defer func() {
+		if r := recover(); r != nil || err != nil {
+			logging.Errorf("MemDBSlice::loadSnapshot Slice Id %v, IndexInstId %v failed to recover from the snapshot %v (err=%v,%v)",
+				mdb.id, mdb.idxInstId, snapInfo.dataPath, r, err)
+			os.RemoveAll(snapInfo.dataPath)
+			os.Exit(1)
+		}
+	}()
+
 	var wg sync.WaitGroup
 	var backIndexCallback memdb.ItemCallback
 	mdb.confLock.RLock()
@@ -853,7 +909,8 @@ func (mdb *memdbSlice) loadSnapshot(snapInfo *memdbSnapshotInfo) error {
 	concurrency := mdb.sysconf["settings.moi.recovery_threads"].Int()
 	mdb.confLock.RUnlock()
 
-	snap, err := mdb.mainstore.LoadFromDisk(snapInfo.dataPath, concurrency, backIndexCallback)
+	var snap *memdb.Snapshot
+	snap, err = mdb.mainstore.LoadFromDisk(snapInfo.dataPath, concurrency, backIndexCallback)
 
 	if !mdb.isPrimary {
 		for wId := 0; wId < mdb.numWriters; wId++ {
@@ -875,7 +932,7 @@ func (mdb *memdbSlice) loadSnapshot(snapInfo *memdbSnapshotInfo) error {
 
 	mdb.idxStats.diskSnapLoadDuration.Set(int64(dur / time.Millisecond))
 	mdb.idxStats.numItemsRestored.Set(mdb.mainstore.ItemsCount())
-	return err
+	return
 }
 
 //RollbackToZero rollbacks the slice to initial state. Return error if
@@ -918,7 +975,7 @@ func (mdb *memdbSlice) NewSnapshot(ts *common.TsVbuuid, commit bool) (SnapshotIn
 
 	mdb.waitPersist()
 
-	qc := platform.LoadInt64(&mdb.qCount)
+	qc := atomic.LoadInt64(&mdb.qCount)
 	if qc > 0 {
 		common.CrashOnError(errors.New("Slice Invariant Violation - commit with pending mutations"))
 	}
@@ -964,8 +1021,8 @@ func (mdb *memdbSlice) Close() {
 	mdb.lock.Lock()
 	defer mdb.lock.Unlock()
 
-	prev := platform.LoadUint64(&mdb.committedCount)
-	platform.AddInt64(&totalMemDBItems, -int64(prev))
+	prev := atomic.LoadUint64(&mdb.committedCount)
+	atomic.AddInt64(&totalMemDBItems, -int64(prev))
 
 	logging.Infof("MemDBSlice::Close Closing Slice Id %v, IndexInstId %v, "+
 		"IndexDefnId %v", mdb.idxInstId, mdb.idxDefnId, mdb.id)
@@ -1056,12 +1113,16 @@ func (mdb *memdbSlice) Statistics() (StorageStatistics, error) {
 
 	var internalData []string
 
-	internalData = append(internalData, fmt.Sprintf("----MainStore----\n%s", mdb.mainstore.DumpStats()))
+	internalData = append(internalData, fmt.Sprintf("{\n\"MainStore\": %s", mdb.mainstore.DumpStats()))
+
 	if !mdb.isPrimary {
 		for i := 0; i < mdb.numWriters; i++ {
-			internalData = append(internalData, fmt.Sprintf("\n----BackStore[%d]----\n%s", i, mdb.back[i].Stats()))
+			internalData = append(internalData, ",\n")
+			internalData = append(internalData, fmt.Sprintf(`"BackStore_%d": %s`, i, mdb.back[i].Stats()))
 		}
 	}
+
+	internalData = append(internalData, "\n}")
 
 	sts.InternalData = internalData
 	sts.DataSize = mdb.mainstore.MemoryInUse()
@@ -1074,6 +1135,10 @@ func (mdb *memdbSlice) UpdateConfig(cfg common.Config) {
 	defer mdb.confLock.Unlock()
 
 	mdb.sysconf = cfg
+}
+
+func (mdb *memdbSlice) GetReaderContext() IndexReaderContext {
+	return &cursorCtx{}
 }
 
 func (mdb *memdbSlice) String() string {
@@ -1105,12 +1170,12 @@ func tryClosememdbSlice(mdb *memdbSlice) {
 }
 
 func (mdb *memdbSlice) getCmdsCount() int {
-	qc := platform.LoadInt64(&mdb.qCount)
+	qc := atomic.LoadInt64(&mdb.qCount)
 	return int(qc)
 }
 
 func (mdb *memdbSlice) logWriterStat() {
-	count := platform.AddUint64(&mdb.flushedCount, 1)
+	count := atomic.AddUint64(&mdb.flushedCount, 1)
 	if (count%10000 == 0) || count == 1 {
 		logging.Infof("logWriterStat:: %v "+
 			"FlushedCount %v QueuedCount %v", mdb.idxInstId,
@@ -1139,14 +1204,14 @@ func (s *memdbSnapshot) Create() error {
 }
 
 func (s *memdbSnapshot) Open() error {
-	platform.AddInt32(&s.refCount, int32(1))
+	atomic.AddInt32(&s.refCount, int32(1))
 
 	return nil
 }
 
 func (s *memdbSnapshot) IsOpen() bool {
 
-	count := platform.LoadInt32(&s.refCount)
+	count := atomic.LoadInt32(&s.refCount)
 	return count > 0
 }
 
@@ -1169,7 +1234,7 @@ func (s *memdbSnapshot) Timestamp() *common.TsVbuuid {
 //Close the snapshot
 func (s *memdbSnapshot) Close() error {
 
-	count := platform.AddInt32(&s.refCount, int32(-1))
+	count := atomic.AddInt32(&s.refCount, int32(-1))
 
 	if count < 0 {
 		logging.Errorf("MemDBSnapshot::Close Close operation requested " +
@@ -1211,11 +1276,11 @@ func (s *memdbSnapshot) StatCountTotal() (uint64, error) {
 	return c, nil
 }
 
-func (s *memdbSnapshot) CountTotal(stopch StopChannel) (uint64, error) {
-	return s.CountRange(MinIndexKey, MaxIndexKey, Both, stopch)
+func (s *memdbSnapshot) CountTotal(ctx IndexReaderContext, stopch StopChannel) (uint64, error) {
+	return uint64(s.info.MainSnap.Count()), nil
 }
 
-func (s *memdbSnapshot) CountRange(low, high IndexKey, inclusion Inclusion,
+func (s *memdbSnapshot) CountRange(ctx IndexReaderContext, low, high IndexKey, inclusion Inclusion,
 	stopch StopChannel) (uint64, error) {
 
 	var count uint64
@@ -1230,11 +1295,90 @@ func (s *memdbSnapshot) CountRange(low, high IndexKey, inclusion Inclusion,
 		return nil
 	}
 
-	err := s.Range(low, high, inclusion, callb)
+	err := s.Range(ctx, low, high, inclusion, callb)
 	return count, err
 }
 
-func (s *memdbSnapshot) CountLookup(keys []IndexKey, stopch StopChannel) (uint64, error) {
+func (s *memdbSnapshot) MultiScanCount(ctx IndexReaderContext, low, high IndexKey, inclusion Inclusion,
+	scan Scan, distinct bool,
+	stopch StopChannel) (uint64, error) {
+
+	var err error
+	var scancount uint64
+	count := 1
+	checkDistinct := distinct && !s.isPrimary()
+	isIndexComposite := len(s.slice.idxDefn.SecExprs) > 1
+
+	buf := secKeyBufPool.Get()
+	defer secKeyBufPool.Put(buf)
+
+	previousRow := ctx.GetCursorKey()
+
+	revbuf := secKeyBufPool.Get()
+	defer secKeyBufPool.Put(revbuf)
+
+	callb := func(entry []byte) error {
+		select {
+		case <-stopch:
+			return common.ErrClientCancel
+		default:
+
+			skipRow := false
+			var ck [][]byte
+
+			//get the key in original format
+			if s.slice.idxDefn.Desc != nil {
+				revbuf := (*revbuf)[:0]
+				//copy is required, otherwise storage may get updated
+				revbuf = append(revbuf, entry...)
+				jsonEncoder.ReverseCollate(revbuf, s.slice.idxDefn.Desc)
+				entry = revbuf
+			}
+			if scan.ScanType == FilterRangeReq {
+				if len(entry) > cap(*buf) {
+					*buf = make([]byte, 0, len(entry)+RESIZE_PAD)
+				}
+
+				skipRow, ck, err = filterScanRow(entry, scan, (*buf)[:0])
+				if err != nil {
+					return err
+				}
+			}
+			if skipRow {
+				return nil
+			}
+
+			if checkDistinct {
+				if isIndexComposite {
+					// For Count Distinct, only leading key needs to be considered for
+					// distinct comparison as N1QL supports distinct on only single key
+					entry, err = projectLeadingKey(ck, entry, buf)
+				}
+				if len(*previousRow) != 0 && distinctCompare(entry, *previousRow) {
+					return nil // Ignore the entry as it is same as previous entry
+				}
+			}
+
+			if !s.isPrimary() {
+				e := secondaryIndexEntry(entry)
+				count = e.Count()
+			}
+
+			if checkDistinct {
+				scancount++
+				*previousRow = append((*previousRow)[:0], entry...)
+			} else {
+				scancount += uint64(count)
+			}
+		}
+		return nil
+	}
+
+	e := s.Range(ctx, low, high, inclusion, callb)
+	return scancount, e
+}
+
+func (s *memdbSnapshot) CountLookup(ctx IndexReaderContext, keys []IndexKey, stopch StopChannel) (uint64, error) {
 	var err error
 	var count uint64
 
@@ -1250,7 +1394,7 @@ func (s *memdbSnapshot) CountLookup(keys []IndexKey, stopch StopChannel) (uint64
 	}
 
 	for _, k := range keys {
-		if err = s.Lookup(k, callb); err != nil {
+		if err = s.Lookup(ctx, k, callb); err != nil {
 			break
 		}
 	}
@@ -1258,7 +1402,7 @@ func (s *memdbSnapshot) CountLookup(keys []IndexKey, stopch StopChannel) (uint64
 	return count, err
 }
 
-func (s *memdbSnapshot) Exists(key IndexKey, stopch StopChannel) (bool, error) {
+func (s *memdbSnapshot) Exists(ctx IndexReaderContext, key IndexKey, stopch StopChannel) (bool, error) {
 	var count uint64
 	callb := func([]byte) error {
 		select {
@@ -1271,15 +1415,15 @@ func (s *memdbSnapshot) Exists(key IndexKey, stopch StopChannel) (bool, error) {
 		return nil
 	}
 
-	err := s.Lookup(key, callb)
+	err := s.Lookup(ctx, key, callb)
 	return count != 0, err
 }
 
-func (s *memdbSnapshot) Lookup(key IndexKey, callb EntryCallback) error {
-	return s.Iterate(key, key, Both, compareExact, callb)
+func (s *memdbSnapshot) Lookup(ctx IndexReaderContext, key IndexKey, callb EntryCallback) error {
+	return s.Iterate(ctx, key, key, Both, compareExact, callb)
 }
 
-func (s *memdbSnapshot) Range(low, high IndexKey, inclusion Inclusion,
+func (s *memdbSnapshot) Range(ctx IndexReaderContext, low, high IndexKey, inclusion Inclusion,
 	callb EntryCallback) error {
 
 	var cmpFn CmpEntry
@@ -1289,14 +1433,14 @@ func (s *memdbSnapshot) Range(low, high IndexKey, inclusion Inclusion,
 		cmpFn = comparePrefix
 	}
 
-	return s.Iterate(low, high, inclusion, cmpFn, callb)
+	return s.Iterate(ctx, low, high, inclusion, cmpFn, callb)
 }
 
-func (s *memdbSnapshot) All(callb EntryCallback) error {
-	return s.Range(MinIndexKey, MaxIndexKey, Both, callb)
+func (s *memdbSnapshot) All(ctx IndexReaderContext, callb EntryCallback) error {
+	return s.Range(ctx, MinIndexKey, MaxIndexKey, Both, callb)
 }
 
-func (s *memdbSnapshot) Iterate(low, high IndexKey, inclusion Inclusion,
+func (s *memdbSnapshot) Iterate(ctx IndexReaderContext, low, high IndexKey, inclusion Inclusion,
 	cmpFn CmpEntry, callback EntryCallback) error {
 	var entry IndexEntry
 	var err error
@@ -1334,9 +1478,7 @@ loop:
 			return err
 		}
 
-		t0 := time.Now()
 		it.Next()
-		s.slice.idxStats.Timings.stIteratorNext.Put(time.Since(t0))
 	}
 
 	// Include equal keys if high inclusion is requested

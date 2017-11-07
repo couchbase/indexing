@@ -1,10 +1,9 @@
 package functionaltests
 
 import (
-	"encoding/json"
 	"flag"
 	"github.com/couchbase/cbauth"
-	// c "github.com/couchbase/indexing/secondary/common"
+	json "github.com/couchbase/indexing/secondary/common/json"
 	"github.com/couchbase/indexing/secondary/logging"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 	"github.com/couchbase/indexing/secondary/tests/framework/datautility"
@@ -25,11 +24,13 @@ import (
 )
 
 var docs, mut_docs tc.KeyValues
-var defaultlimit int64 = 10000000
+var defaultlimit int64 = 100000000000
 var kvaddress, indexManagementAddress, indexScanAddress string
 var clusterconfig tc.ClusterConfiguration
 var dataFilePath, mutationFilePath string
 var defaultIndexActiveTimeout int64 = 600 // 10 mins to wait for index to become active
+var skipsetup bool
+var indexerLogLevel string
 
 func init() {
 	log.Printf("In init()")
@@ -37,6 +38,9 @@ func init() {
 
 	var configpath string
 	flag.StringVar(&configpath, "cbconfig", "../config/clusterrun_conf.json", "Path of the configuration file with data about Couchbase Cluster")
+	flag.StringVar(&secondaryindex.UseClient, "useclient", "gsi", "Client to be used for tests. Values can be gsi or n1ql")
+	flag.BoolVar(&skipsetup, "skipsetup", false, "Skip setup steps like flush and drop all indexes")
+	flag.StringVar(&indexerLogLevel, "loglevel", "info", "indexer.settings.log_level. info / debug")
 	flag.Parse()
 	clusterconfig = tc.GetClusterConfFromFile(configpath)
 	kvaddress = clusterconfig.KVAddress
@@ -50,11 +54,21 @@ func init() {
 		log.Fatalf("Failed to initialize cbauth: %s", err)
 	}
 
-	err := secondaryindex.ChangeIndexerSettings("indexer.settings.persisted_snapshot_init_build.moi.interval", float64(60000), clusterconfig.Username, clusterconfig.Password, kvaddress)
+	//Disable backfill
+	err := secondaryindex.ChangeIndexerSettings("queryport.client.settings.backfillLimit", float64(0), clusterconfig.Username, clusterconfig.Password, kvaddress)
+	tc.HandleError(err, "Error in ChangeIndexerSettings")
+
+	err = secondaryindex.ChangeIndexerSettings("indexer.settings.persisted_snapshot_init_build.moi.interval", float64(60000), clusterconfig.Username, clusterconfig.Password, kvaddress)
 	tc.HandleError(err, "Error in ChangeIndexerSettings")
 
 	err = secondaryindex.ChangeIndexerSettings("indexer.settings.persisted_snapshot.moi.interval", float64(60000), clusterconfig.Username, clusterconfig.Password, kvaddress)
 	tc.HandleError(err, "Error in ChangeIndexerSettings")
+
+	err = secondaryindex.ChangeIndexerSettings("indexer.settings.log_level", indexerLogLevel, clusterconfig.Username, clusterconfig.Password, kvaddress)
+	tc.HandleError(err, "Error in ChangeIndexerSettings")
+
+	err = secondaryindex.ChangeIndexerSettings("indexer.settings.storage_mode.disable_upgrade", true, clusterconfig.Username, clusterconfig.Password, kvaddress)
+	tc.HandleError(err, "Error in change setting for indexer.settings.storage_mode.disable_upgrade")
 
 	if clusterconfig.IndexUsing != "" {
 		// Set clusterconfig.IndexUsing only if it is specified in config file. Else let it default to gsi
@@ -68,8 +82,6 @@ func init() {
 	time.Sleep(5 * time.Second)
 
 	secondaryindex.CheckCollation = true
-	e := secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
-	tc.HandleError(e, "Error in DropAllSecondaryIndexes")
 
 	time.Sleep(5 * time.Second)
 	// Working with Users10k and Users_mut dataset.
@@ -80,21 +92,27 @@ func init() {
 	tc.DownloadDataFile(tc.IndexTypesMutationJSONDataS3, mutationFilePath, true)
 	docs = datautility.LoadJSONFromCompressedFile(dataFilePath, "docid")
 	mut_docs = datautility.LoadJSONFromCompressedFile(mutationFilePath, "docid")
-	log.Printf("Emptying the default bucket")
-	kvutility.EnableBucketFlush("default", "", clusterconfig.Username, clusterconfig.Password, kvaddress)
-	kvutility.FlushBucket("default", "", clusterconfig.Username, clusterconfig.Password, kvaddress)
-	time.Sleep(5 * time.Second)
 
-	log.Printf("Create Index On the empty default Bucket()")
-	var indexName = "index_eyeColor"
-	var bucketName = "default"
+	if !skipsetup {
+		e := secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+		tc.HandleError(e, "Error in DropAllSecondaryIndexes")
 
-	err = secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{"eyeColor"}, false, nil, true, defaultIndexActiveTimeout, nil)
-	tc.HandleError(err, "Error in creating the index")
+		log.Printf("Emptying the default bucket")
+		kvutility.EnableBucketFlush("default", "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+		kvutility.FlushBucket("default", "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+		time.Sleep(5 * time.Second)
 
-	// Populate the bucket now
-	log.Printf("Populating the default bucket")
-	kvutility.SetKeyValues(docs, "default", "", clusterconfig.KVAddress)
+		log.Printf("Create Index On the empty default Bucket()")
+		var indexName = "index_eyeColor"
+		var bucketName = "default"
+
+		err = secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{"eyeColor"}, false, nil, true, defaultIndexActiveTimeout, nil)
+		tc.HandleError(err, "Error in creating the index")
+
+		// Populate the bucket now
+		log.Printf("Populating the default bucket")
+		kvutility.SetKeyValues(docs, "default", "", clusterconfig.KVAddress)
+	}
 }
 
 func FailTestIfError(err error, msg string, t *testing.T) {

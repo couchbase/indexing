@@ -167,6 +167,10 @@ func doBufferedScan(cluster string, client *qclient.GsiClient) (err error) {
 
 type qcmdContext struct{}
 
+func (ctxt *qcmdContext) GetScanCap() int64 {
+	return 512 // Default index scan request size
+}
+
 func (ctxt *qcmdContext) Error(err errors.Error) {
 	fmt.Printf("Scan error: %v\n", err)
 }

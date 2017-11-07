@@ -12,10 +12,11 @@ package indexer
 import (
 	"errors"
 	"fmt"
-	"github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/logging"
 	"net"
 	"time"
+
+	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 )
 
 const (
@@ -106,7 +107,7 @@ func GetCurrentKVTs(cluster, pooln, bucketn string, numVbs int) (Timestamp, erro
 	}
 
 	elapsed := time.Since(start)
-	logging.Tracef("Indexer::getCurrentKVTs Time Taken %v \n\t TS Returned %v", elapsed, ts)
+	logging.Infof("Indexer::getCurrentKVTs Time Taken %v", elapsed)
 	return ts, err
 }
 
@@ -144,4 +145,65 @@ func ValidateBucket(cluster, bucket string, uuids []string) bool {
 		return false
 	}
 
+}
+
+func IsEphemeral(cluster, bucket string) (bool, error) {
+	var cinfo *common.ClusterInfoCache
+	url, err := common.ClusterAuthUrl(cluster)
+	if err == nil {
+		cinfo, err = common.NewClusterInfoCache(url, DEFAULT_POOL)
+	}
+	if err != nil {
+		logging.Fatalf("Indexer::Fail to init ClusterInfoCache : %v", err)
+		common.CrashOnError(err)
+	}
+
+	cinfo.Lock()
+	defer cinfo.Unlock()
+
+	if err := cinfo.Fetch(); err != nil {
+		logging.Errorf("Indexer::Fail to init ClusterInfoCache : %v", err)
+		common.CrashOnError(err)
+	}
+
+	return cinfo.IsEphemeral(bucket)
+}
+
+//flip bits in-place for a given byte slice
+func FlipBits(code []byte) {
+
+	for i, b := range code {
+		code[i] = ^b
+	}
+	return
+}
+
+func GetBucketUUID(cluster, bucket string) string {
+
+	var cinfo *common.ClusterInfoCache
+	url, err := common.ClusterAuthUrl(cluster)
+	if err == nil {
+		cinfo, err = common.NewClusterInfoCache(url, DEFAULT_POOL)
+	}
+	if err != nil {
+		logging.Fatalf("Indexer::Fail to init ClusterInfoCache : %v", err)
+		common.CrashOnError(err)
+	}
+
+	cinfo.Lock()
+	defer cinfo.Unlock()
+
+	if err := cinfo.Fetch(); err != nil {
+		logging.Errorf("Indexer::Fail to init ClusterInfoCache : %v", err)
+		common.CrashOnError(err)
+	}
+
+	if nids, err := cinfo.GetNodesByBucket(bucket); err == nil && len(nids) != 0 {
+		// verify UUID
+		return cinfo.GetBucketUUID(bucket)
+	} else {
+		logging.Fatalf("Indexer::Error Fetching Bucket Info: %v Nids: %v", err, nids)
+	}
+
+	return ""
 }

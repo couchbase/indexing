@@ -1,8 +1,8 @@
 package datautility
 
 import (
-	"encoding/json"
 	"fmt"
+	json "github.com/couchbase/indexing/secondary/common/json"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 )
 
@@ -21,13 +21,13 @@ func LoadJSONFromCompressedFile(path, docidfield string) tc.KeyValues {
 	if len(docidfield) > 0 {
 		for _, v := range m {
 			k = fmt.Sprintf("%v", v.(map[string]interface{})[docidfield])
-			keyValues[k] =  v
+			keyValues[k] = v
 			i++
 		}
 	} else {
 		for _, v := range m {
 			k = fmt.Sprintf("%v", i)
-			keyValues[k] =  v
+			keyValues[k] = v
 			i++
 		}
 	}

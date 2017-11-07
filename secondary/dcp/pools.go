@@ -6,9 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/couchbase/indexing/secondary/dcp/transport/client"
-	"github.com/couchbase/indexing/secondary/logging"
-	"github.com/couchbase/indexing/secondary/platform"
 	"io"
 	"io/ioutil"
 	"math/rand"
@@ -18,7 +15,11 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"unsafe"
+
+	"github.com/couchbase/indexing/secondary/dcp/transport/client"
+	"github.com/couchbase/indexing/secondary/logging"
 )
 
 // HTTPClient to use for REST and view operations.
@@ -72,6 +73,7 @@ type Node struct {
 	Uptime               int                `json:"uptime,string"`
 	Version              string             `json:"version"`
 	ThisNode             bool               `json:"thisNode,omitempty"`
+	Services             []string           `json:"services,omitempty"`
 }
 
 // A Pool of nodes and buckets.
@@ -79,7 +81,8 @@ type Pool struct {
 	BucketMap map[string]Bucket
 	Nodes     []Node
 
-	BucketURL map[string]string `json:"buckets"`
+	BucketURL       map[string]string `json:"buckets"`
+	ServerGroupsUri string            `json:"serverGroupsUri"`
 
 	client Client
 }
@@ -137,9 +140,18 @@ type NodeServices struct {
 	ThisNode bool           `json:"thisNode"`
 }
 
+type ServerGroups struct {
+	Groups []ServerGroup `json:"groups"`
+}
+
+type ServerGroup struct {
+	Name  string `json:"name"`
+	Nodes []Node `json:"nodes"`
+}
+
 // VBServerMap returns the current VBucketServerMap.
 func (b *Bucket) VBServerMap() *VBucketServerMap {
-	return (*VBucketServerMap)(platform.LoadPointer(&(b.vBucketServerMap)))
+	return (*VBucketServerMap)(atomic.LoadPointer(&(b.vBucketServerMap)))
 }
 
 func (b *Bucket) GetVBmap(addrs []string) (map[string][]uint16, error) {
@@ -169,17 +181,17 @@ func (b *Bucket) GetVBmap(addrs []string) (map[string][]uint16, error) {
 
 // Nodes returns teh current list of nodes servicing this bucket.
 func (b Bucket) Nodes() []Node {
-	return *(*[]Node)(platform.LoadPointer(&b.nodeList))
+	return *(*[]Node)(atomic.LoadPointer(&b.nodeList))
 }
 
 func (b Bucket) getConnPools() []*connectionPool {
-	return *(*[]*connectionPool)(platform.LoadPointer(&b.connPools))
+	return *(*[]*connectionPool)(atomic.LoadPointer(&b.connPools))
 }
 
 func (b *Bucket) replaceConnPools(with []*connectionPool) {
 	for {
-		old := platform.LoadPointer(&b.connPools)
-		if platform.CompareAndSwapPointer(&b.connPools, old, unsafe.Pointer(&with)) {
+		old := atomic.LoadPointer(&b.connPools)
+		if atomic.CompareAndSwapPointer(&b.connPools, old, unsafe.Pointer(&with)) {
 			if old != nil {
 				for _, pool := range *(*[]*connectionPool)(old) {
 					if pool != nil {
@@ -510,8 +522,8 @@ func (b *Bucket) init(nb *Bucket) {
 			b.authHandler(), PoolSize, PoolOverflow)
 	}
 	b.replaceConnPools(newcps)
-	platform.StorePointer(&b.vBucketServerMap, unsafe.Pointer(&nb.VBSMJson))
-	platform.StorePointer(&b.nodeList, unsafe.Pointer(&nb.NodesJSON))
+	atomic.StorePointer(&b.vBucketServerMap, unsafe.Pointer(&nb.VBSMJson))
+	atomic.StorePointer(&b.nodeList, unsafe.Pointer(&nb.NodesJSON))
 }
 
 func (p *Pool) refresh() (err error) {
@@ -540,6 +552,13 @@ loop:
 		p.BucketMap[b.Name] = b
 	}
 	return nil
+}
+
+func (p *Pool) GetServerGroups() (groups ServerGroups, err error) {
+
+	err = p.client.parseURLResponse(p.ServerGroupsUri, &groups)
+	return
+
 }
 
 // GetPool gets a pool from within the couchbase cluster (usually

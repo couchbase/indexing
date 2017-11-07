@@ -1,5 +1,7 @@
 #!/bin/bash
 
+source ~/.cienv
+
 echo '</pre><h3>Testing</h3><pre>'
 
 if [ "$WORKSPACE" = "" ]; then
@@ -8,11 +10,18 @@ if [ "$WORKSPACE" = "" ]; then
 fi
 
 if [ "$INSTALL_PATH" = "" ]; then
-  INSTALL_PATH="/opt/couchbase"
+  INSTALL_PATH="$WORKSPACE/../couchbase"
+fi
+
+
+if [ "$MODE" = "" ]; then
+  echo 'MODE not set'
+  exit 2
 fi
 
 if [ "$STORAGE" = "" ]; then
-  STORAGE="memdb"
+  echo 'STORAGE not set'
+  exit 2
 fi
 
 if [ "$TS" = "" ]; then
@@ -32,18 +41,12 @@ stop_cluster() {
   killall -9 beam.smp epmd memcached projector indexer gometa python memcached.json 1>/dev/null 2>&1
   cd $WORKSPACE/ns_server
   make dataclean 1>/dev/null 2>&1
+  sudo rm -f /tmp/core*
   sleep 10
 }
 
-collects_logs() {
+collect_logs() {
   if [ "$phase" = "" ]; then phase=unknown; fi
-  shopt -s nullglob
-  for ndir in $WORKSPACE/ns_server/data/n_*; do 
-    ext="`basename $ndir`"
-    /opt/couchbase/bin/cbcollect_info --initargs $ndir/initargs $WORKSPACE/collects-$ext.zip 1>/tmp/collect-$ext.log 2>&1
-    tar -C $WORKSPACE --transform "s/^/collects-$phase-/" -uf $WORKSPACE/collects.tar $WORKSPACE/collects-$ext.zip 1>/dev/null 2>&1
-    rm $WORKSPACE/collects-$ext.zip
-  done
   tar -C $WORKSPACE --transform "s/^/logs-$phase-/" -uf $WORKSPACE/logs.tar ns_server/logs 1>/dev/null 2>&1
   tar -C $WORKSPACE --transform "s/^/logs-$phase-/" -uf $WORKSPACE/logs.tar testrunner/logs 1>/dev/null 2>&1
   tar -C $WORKSPACE --transform "s/^/logs-$phase-/" -uf $WORKSPACE/logs.tar test.log 1>/dev/null 2>&1
@@ -53,7 +56,7 @@ collects_logs() {
 error_exit() {
   echo "</pre><h4>Testing Failed: $1</h4><pre>"
   echo "$2"
-  collects_logs
+  collect_logs
   stop_cluster
   exit 2
 }
@@ -61,26 +64,28 @@ error_exit() {
 # Setup workspace
 echo "Using storage type: $STORAGE"
 
-export phase=sanity
 stop_cluster
-rm -f $WORKSPACE/logs.tar.* $WORKSPACE/test.log $WORKSPACE/run.log /tmp/core-* $WORKSPACE/collects*.zip $WORKSPACE/collects*.tar
+rm -f $WORKSPACE/logs.tar.* $WORKSPACE/test.log $WORKSPACE/run.log /tmp/core-*
 find ~/testdata/* -mtime +1 -exec rm {} \; 1>/dev/null 2>&1
 warmed="never"
 > $WORKSPACE/test.log
 
-# Test the base
-echo "</pre><h4>Simple Test</h4><pre>"
-cd $WORKSPACE/testrunner
-(timeout 1h make simple-test 2>&1) | tee -a $WORKSPACE/test.log | egrep 'pass|fail|summary|ok$'
+if [ "$MODE" = "test" ]; then
+  # Test the base
+  echo "</pre><h4>Simple Test</h4><pre>"
+  export phase=sanity
+  cd $WORKSPACE/testrunner
+  (timeout 1h make simple-test 2>&1 | ts) | tee -a $WORKSPACE/test.log | egrep 'pass|fail|summary|ok$'
+fi
 
 # Core dumps
 export GOTRACEBACK=crash
-ulimit -c unlimited
+ulimit -c 2097152
 sudo bash -c "echo /tmp/core-%e.$TS.%p > /proc/sys/kernel/core_pattern"
 perl -pi -e 's/num_files, 10/num_files, 50/' /opt/couchbase/etc/couchbase/static_config
 
 # Start server
-echo "</pre><h4>Functional tests</h4><pre>"
+echo "</pre><h4>Starting server</h4><pre>"
 
 for a in {1..3}; do
   echo "Starting server: attempt $a"
@@ -114,64 +119,104 @@ test "$ok_connect" || error_exit "Server connect failed even after 3 tries"
 warmed="`date`"
 sleep 30
 
-echo "Starting functional tests"
-export phase=functional
+cd $WORKSPACE/goproj/src/github.com/couchbase/indexing
+gover="`grep -A20 'TARGET cbindex PACKAGE' CMakeLists.txt  | grep GOVERSION | head -1 | sed 's/^.*\([0-9]\.[0-9].[0-9]\).*$/\1/'`"
+
 mkdir -p "$WORKSPACE/go" 
-export GOROOT=/usr/local/go
+export GOROOT=$HOME/.cbdepscache/exploded/x86_64/go-$gover/go
 export GOPATH=$WORKSPACE/go:$WORKSPACE/godeps:$WORKSPACE/goproj
-export C_INCLUDE_PATH=$WORKSPACE/platform/include/:/opt/couchbase/include/:$WORKSPACE/forestdb/include
+export PATH=$PATH:$GOROOT/bin
+export C_INCLUDE_PATH=$WORKSPACE/platform/include/:/opt/couchbase/include/:$WORKSPACE/forestdb/include:$WORKSPACE/build/tlm/deps/curl.exploded/include:$WORKSPACE/sigar/include
 export CGO_LDFLAGS="-L $INSTALL_PATH/lib"
 export LD_LIBRARY_PATH=$INSTALL_PATH/lib
 
 cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/tests
 go get -t ./... 1>/dev/null 2>&1
 
-# Unit tests
-echo "</pre><h4>Unit tests</h4><pre>"
-cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/memdb/skiplist
-GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
+if [ "$MODE" = "test" ]; then
+  # Unit tests
+  echo "</pre><h4>Unit tests</h4><pre>"
+  export phase=functional
 
-cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/memdb
-GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
+  cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/memdb/skiplist
+  GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
 
-cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/indexer
-GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
+  cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/memdb
+  GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
 
-# Go tests
-export CBAUTH_REVRPC_URL="http://Administrator:asdasd@127.0.0.1:9000/query"
-echo "</pre><h4>Functional tests</h4><pre>"
-cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/tests/functionaltests
-go test -timeout 4h -v -cbconfig ../config/buildtest_$STORAGE.json 2>&1 | tee -a $WORKSPACE/test.log
-cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/tests/largedatatests
-go test -timeout 8h -v -cbconfig ../config/buildtest_$STORAGE.json 2>&1 | tee -a $WORKSPACE/test.log
-collects_logs
-stop_cluster
+  cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/indexer
+  GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
 
-# Integration tests
-echo "</pre><h4>Integration tests</h4><pre>"
-export phase=integration
-cd $WORKSPACE/testrunner
-(timeout 1h make test-2i-integrations-tests 2>&1) | tee -a $WORKSPACE/test.log
-collects_logs
-stop_cluster
+  # Go tests
+  export CBAUTH_REVRPC_URL="http://Administrator:asdasd@127.0.0.1:9000/query"
+  echo "</pre><h4>Functional tests</h4><pre>"
+  cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/tests/functionaltests
+  go test -timeout 4h -v -cbconfig ../config/buildtest_$STORAGE.json -useclient n1ql 2>&1 | tee -a $WORKSPACE/test.log
+  cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/tests/largedatatests
+  go test -timeout 8h -v -cbconfig ../config/buildtest_$STORAGE.json -useclient n1ql 2>&1 | tee -a $WORKSPACE/test.log
+  collect_logs
+  stop_cluster
+
+  # Integration tests
+  echo "</pre><h4>Integration tests</h4><pre>"
+  export phase=integration
+  cd $WORKSPACE/testrunner
+  if [ "$STORAGE" = "memdb" ]; then
+    export TYPE="memory_optimized"
+  fi
+  if [ "$STORAGE" = "plasma" ]; then
+    export TYPE="plasma"
+  fi
+  if [ "$STORAGE" = "fdb" ]; then
+    export TYPE="forestdb"
+  fi
+  (timeout 1h make test-2i-integrations-tests PARAMS=gsi_type=$TYPE 2>&1) | tee -a $WORKSPACE/test.log
+  collect_logs
+fi
+
+if [ "$MODE" = "perf" ]; then
+  echo "</pre><h4>Performance tests</h4><pre>"
+  export phase=performance
+
+  # Go tests
+  export CBAUTH_REVRPC_URL="http://Administrator:asdasd@127.0.0.1:9000/query2"
+  cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/tools/n1qlperf
+  go build
+  cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/cmd/cbindexperf
+  go build
+  cp $HOME/bin/config/* /opt/build/goproj/src/github.com/couchbase/indexing/secondary/tests/perftests/
+  echo "</pre><h4>Performance tests</h4><pre>"
+  cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/tests/perftests
+  go test -timeout 4h -v -cbconfig ../config/buildtest_memdb.json -perftool cbindexperf -numdocs 2000000 2>&1 | tee -a $WORKSPACE/test.log
+  collect_logs
+  stop_cluster
+fi
 
 # Verify results
 > /tmp/fail.log
-cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/tests/ci/
-grep 'make:\s\*\*\*\s\[test-2i-integrations-tests\]\s' $WORKSPACE/test.log >> /tmp/fail.log
-grep '\sfail\s*$' $WORKSPACE/test.log >> /tmp/fail.log
-grep 'FAIL\s*github.com/couchbase' $WORKSPACE/test.log >> /tmp/fail.log
-grep -- '--- FAIL:' $WORKSPACE/test.log >> /tmp/fail.log
-grep '^\s*2i' $WORKSPACE/test.log | grep 'fail\s*$' >> /tmp/fail.log
-skiplist="`cat skip.txt`"
-for tst in $skiplist; do
-  echo "$tst" | grep -qs '^\s*#' && continue
-  echo "$tst" | grep -qs '^\s*$' && continue
-  grep -v "$tst" /tmp/fail.log > /tmp/fail-out.log
-  mv /tmp/fail-out.log /tmp/fail.log
-done
-faillog="`cat /tmp/fail.log`"
-if [ "$faillog" != "" ]; then error_exit "Required test failed" "$faillog"; fi
+if [ "$MODE" = "test" ]; then
+  cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/tests/ci/
+  grep 'make:\s\*\*\*\s\[test-2i-integrations-tests\]\s' $WORKSPACE/test.log >> /tmp/fail.log
+  grep '\sfail\s*$' $WORKSPACE/test.log >> /tmp/fail.log
+  grep 'FAIL\s*github.com/couchbase' $WORKSPACE/test.log >> /tmp/fail.log
+  grep -- '--- FAIL:' $WORKSPACE/test.log >> /tmp/fail.log
+  grep '^\s*2i' $WORKSPACE/test.log | grep 'fail\s*$' >> /tmp/fail.log
+  skiplist="`cat skip.txt`"
+  for tst in $skiplist; do
+    echo "$tst" | grep -qs '^\s*#' && continue
+    echo "$tst" | grep -qs '^\s*$' && continue
+    grep -v "$tst" /tmp/fail.log > /tmp/fail-out.log
+    mv /tmp/fail-out.log /tmp/fail.log
+  done
+  faillog="`cat /tmp/fail.log`"
+  if [ "$faillog" != "" ]; then error_exit "Required test failed" "$faillog"; fi
+  echo "</pre><h4>Testing Succeeded</h4><pre>"
+  if [ "$skiplist" != "" ]; then
+    echo "But we ignored these tests:"
+    echo "$skiplist"
+  fi
+  echo
+fi
 
 # Note versions
 cd $WORKSPACE/goproj/src/github.com/couchbase/indexing
@@ -180,24 +225,28 @@ cd $WORKSPACE/goproj/src/github.com/couchbase/query
 git rev-parse HEAD > ~/query.good
 cd $WORKSPACE/goproj/src/github.com/couchbase/gometa
 git rev-parse HEAD > ~/gometa.good
+cd $WORKSPACE/ns_server
+git rev-parse HEAD > ~/ns_server.good
 cd $WORKSPACE/couchdb
 git rev-parse HEAD > ~/couchdb.good
 cd $WORKSPACE/couchstore
 git rev-parse HEAD > ~/couchstore.good
+if [ "$STORAGE" = "plasma" ]; then
+  cd $WORKSPACE/goproj/src/github.com/couchbase/plasma
+  git rev-parse HEAD > ~/plasma.good
+fi
+if [ "$STORAGE" = "memdb" ]; then
+  cd $WORKSPACE/goproj/src/github.com/couchbase/nitro
+  git rev-parse HEAD > ~/nitro.good
+fi
 if [ "$STORAGE" = "fdb" ]; then
   cd $WORKSPACE/forestdb
   git rev-parse HEAD > ~/forestdb.good
 fi
 cd $WORKSPACE/testrunner
 git rev-parse HEAD > ~/testrunner.good
-cd $WORKSPACE/ep-engine
-git rev-parse HEAD > ~/ep-engine.good
+cd $WORKSPACE/kv_engine
+git rev-parse HEAD > ~/kv_engine.good
 
-echo "</pre><h4>Testing Succeeded</h4><pre>"
-if [ "$skiplist" != "" ]; then
-  echo "But we ignored these tests:"
-  echo "$skiplist"
-fi
-echo
 exit 0
 

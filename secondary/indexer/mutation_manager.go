@@ -11,10 +11,11 @@ package indexer
 
 import (
 	"errors"
+	"sync"
+	"sync/atomic"
+
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
-	"github.com/couchbase/indexing/secondary/platform"
-	"sync"
 )
 
 //MutationManager handles messages from Indexer to manage Mutation Streams
@@ -29,8 +30,8 @@ type BucketQueueMap map[string]IndexerMutationQueue
 type BucketStopChMap map[string]StopChannel
 
 type mutationMgr struct {
-	memUsed   platform.AlignedInt64 //memory used by queue
-	maxMemory platform.AlignedInt64 //max memory to be used
+	memUsed   int64 //memory used by queue
+	maxMemory int64 //max memory to be used
 
 	streamBucketQueueMap map[common.StreamId]BucketQueueMap
 	streamIndexQueueMap  map[common.StreamId]IndexQueueMap
@@ -93,8 +94,8 @@ func NewMutationManager(supvCmdch MsgChannel, supvRespch MsgChannel,
 		supvRespch:             supvRespch,
 		numVbuckets:            uint16(config["numVbuckets"].Int()),
 		config:                 config,
-		memUsed:                platform.NewAlignedInt64(0),
-		maxMemory:              platform.NewAlignedInt64(0),
+		memUsed:                0,
+		maxMemory:              0,
 	}
 
 	//start Mutation Manager loop which listens to commands from its supervisor
@@ -868,7 +869,7 @@ func (m *mutationMgr) persistMutationQueue(q IndexerMutationQueue,
 			delete(m.streamFlusherStopChMap[streamId], bucket)
 		}()
 
-		stats.memoryUsedQueue.Set(platform.LoadInt64(&m.memUsed))
+		stats.memoryUsedQueue.Set(atomic.LoadInt64(&m.memUsed))
 
 		//send the response to supervisor
 		if msg.GetMsgType() == MSG_SUCCESS {
@@ -1071,7 +1072,12 @@ func (m *mutationMgr) setMaxMemoryFromQuota() {
 	fracQueueMem := getMutationQueueMemFrac(m.config)
 
 	maxMem := int64(fracQueueMem * float64(memQuota))
-	platform.StoreInt64(&m.maxMemory, maxMem)
+	maxMemHard := int64(m.config["mutation_manager.maxQueueMem"].Uint64())
+	if maxMem > maxMemHard {
+		maxMem = maxMemHard
+	}
+
+	atomic.StoreInt64(&m.maxMemory, maxMem)
 	logging.Infof("MutationMgr::MaxQueueMemoryQuota %v", maxMem)
 
 }
@@ -1114,20 +1120,20 @@ func (m *mutationMgr) handleIndexerResume(cmd Message) {
 
 func getMutationQueueMemFrac(config common.Config) float64 {
 
-	if common.GetStorageMode() == common.MOI {
-		return config["mutation_manager.moi.fracMutationQueueMem"].Float64()
-	} else {
+	if common.GetStorageMode() == common.FORESTDB {
 		return config["mutation_manager.fdb.fracMutationQueueMem"].Float64()
+	} else {
+		return config["mutation_manager.moi.fracMutationQueueMem"].Float64()
 	}
 
 }
 
 func getNumStreamWorkers(config common.Config) int {
 
-	if common.GetStorageMode() == common.MOI {
-		return config["stream_reader.moi.numWorkers"].Int()
-	} else {
+	if common.GetStorageMode() == common.FORESTDB {
 		return config["stream_reader.fdb.numWorkers"].Int()
+	} else {
+		return config["stream_reader.moi.numWorkers"].Int()
 	}
 
 }

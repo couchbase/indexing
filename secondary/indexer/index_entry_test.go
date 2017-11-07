@@ -7,7 +7,7 @@ import (
 
 func newSKEntry(key, docid []byte) (secondaryIndexEntry, error) {
 	buf := make([]byte, 0, 4096*3)
-	return NewSecondaryIndexEntry(key, docid, false, 1, buf)
+	return NewSecondaryIndexEntry(key, docid, false, 1, nil, buf)
 }
 
 func TestPrimaryIndexEntry(t *testing.T) {
@@ -169,5 +169,20 @@ func TestSecondaryIndexEntryMatch(t *testing.T) {
 
 	if k3.ComparePrefixFields(&e4) == 0 {
 		t.Errorf("Expected mismatch")
+	}
+}
+
+func TestLongDocIdEntry(t *testing.T) {
+	key := []byte(`["field1","field2"]`)
+	docid := make([]byte, 258, 300)
+	buf := make([]byte, 0, 4096)
+
+	e, err := NewSecondaryIndexEntry(key, docid, false, 2, nil, buf)
+	if err != nil {
+		t.Errorf("Got error %v", err)
+		return
+	}
+	if e.lenDocId() != 258 {
+		t.Errorf("Expected lenght to be 258 but instead got ", e.lenDocId())
 	}
 }

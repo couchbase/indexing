@@ -21,15 +21,22 @@ import (
 ////////////////////////////////////////////////////////////////////////
 
 const (
-	OPCODE_CREATE_INDEX      common.OpCode = common.OPCODE_CUSTOM + 1
-	OPCODE_DROP_INDEX                      = OPCODE_CREATE_INDEX + 1
-	OPCODE_BUILD_INDEX                     = OPCODE_DROP_INDEX + 1
-	OPCODE_UPDATE_INDEX_INST               = OPCODE_BUILD_INDEX + 1
-	OPCODE_SERVICE_MAP                     = OPCODE_UPDATE_INDEX_INST + 1
-	OPCODE_DELETE_BUCKET                   = OPCODE_SERVICE_MAP + 1
-	OPCODE_INDEXER_READY                   = OPCODE_DELETE_BUCKET + 1
-	OPCODE_CLEANUP_INDEX                   = OPCODE_INDEXER_READY + 1
-	OPCODE_CLEANUP_DEFER_INDEX             = OPCODE_CLEANUP_INDEX + 1
+	OPCODE_CREATE_INDEX        common.OpCode = common.OPCODE_CUSTOM + 1
+	OPCODE_DROP_INDEX                        = OPCODE_CREATE_INDEX + 1
+	OPCODE_BUILD_INDEX                       = OPCODE_DROP_INDEX + 1
+	OPCODE_UPDATE_INDEX_INST                 = OPCODE_BUILD_INDEX + 1
+	OPCODE_SERVICE_MAP                       = OPCODE_UPDATE_INDEX_INST + 1
+	OPCODE_DELETE_BUCKET                     = OPCODE_SERVICE_MAP + 1
+	OPCODE_INDEXER_READY                     = OPCODE_DELETE_BUCKET + 1
+	OPCODE_CLEANUP_INDEX                     = OPCODE_INDEXER_READY + 1
+	OPCODE_CLEANUP_DEFER_INDEX               = OPCODE_CLEANUP_INDEX + 1
+	OPCODE_CREATE_INDEX_REBAL                = OPCODE_CLEANUP_DEFER_INDEX + 1
+	OPCODE_BUILD_INDEX_REBAL                 = OPCODE_CREATE_INDEX_REBAL + 1
+	OPCODE_DROP_INDEX_REBAL                  = OPCODE_BUILD_INDEX_REBAL + 1
+	OPCODE_BROADCAST_STATS                   = OPCODE_DROP_INDEX_REBAL + 1
+	OPCODE_BUILD_INDEX_RETRY                 = OPCODE_BROADCAST_STATS + 1
+	OPCODE_RESET_INDEX                       = OPCODE_BUILD_INDEX_RETRY + 1
+	OPCODE_CONFIG_UPDATE                     = OPCODE_RESET_INDEX + 1
 )
 
 /////////////////////////////////////////////////////////////////////////
@@ -54,12 +61,17 @@ type IndexDefnDistribution struct {
 }
 
 type IndexInstDistribution struct {
-	InstId     uint64                  `json:"instId,omitempty"`
-	State      uint32                  `json:"state,omitempty"`
-	StreamId   uint32                  `json:"streamId,omitempty"`
-	Error      string                  `json:"error,omitempty"`
-	BuildTime  []uint64                `json:"buildTime,omitempty"`
-	Partitions []IndexPartDistribution `json:"partitions,omitempty"`
+	InstId         uint64                  `json:"instId,omitempty"`
+	State          uint32                  `json:"state,omitempty"`
+	StreamId       uint32                  `json:"streamId,omitempty"`
+	Error          string                  `json:"error,omitempty"`
+	Partitions     []IndexPartDistribution `json:"partitions,omitempty"`
+	RState         uint32                  `json:"rRtate,omitempty"`
+	Version        uint64                  `json:"version,omitempty"`
+	ReplicaId      uint64                  `json:"replicaId,omitempty"`
+	Scheduled      bool                    `json:"scheduled,omitempty"`
+	StorageMode    string                  `json:"storageMode,omitempty"`
+	OldStorageMode string                  `json:"oldStorageMode,omitempty"`
 }
 
 type IndexPartDistribution struct {
@@ -96,15 +108,23 @@ type IndexIdList struct {
 ////////////////////////////////////////////////////////////////////////
 
 type ServiceMap struct {
-	IndexerId string `json:"indexerId,omitempty"`
-	ScanAddr  string `json:"scanAddr,omitempty"`
-	HttpAddr  string `json:"httpAddr,omitempty"`
-	AdminAddr string `json:"adminAddr,omitempty"`
-	NodeAddr  string `json:"nodeAddr,omitempty"`
+	IndexerId      string `json:"indexerId,omitempty"`
+	ScanAddr       string `json:"scanAddr,omitempty"`
+	HttpAddr       string `json:"httpAddr,omitempty"`
+	AdminAddr      string `json:"adminAddr,omitempty"`
+	NodeAddr       string `json:"nodeAddr,omitempty"`
+	ServerGroup    string `json:"serverGroup,omitempty"`
+	NodeUUID       string `json:"nodeUUID,omitempty"`
+	IndexerVersion uint64 `json:"indexerVersion,omitempty"`
+	ClusterVersion uint64 `json:"clusterVersion,omitempty"`
+}
+
+type IndexStats struct {
+	Stats c.Statistics `json:"stats,omitempty"`
 }
 
 /////////////////////////////////////////////////////////////////////////
-// private method : unmarshalling
+// marshalling/unmarshalling
 ////////////////////////////////////////////////////////////////////////
 
 func unmarshallIndexTopology(data []byte) (*IndexTopology, error) {
@@ -178,4 +198,82 @@ func MarshallServiceMap(srvMap *ServiceMap) ([]byte, error) {
 	logging.Debugf("MarshallServiceMap: %v", string(buf))
 
 	return buf, nil
+}
+
+func UnmarshallIndexStats(data []byte) (*IndexStats, error) {
+
+	logging.Debugf("UnmarshallIndexStats: %v", string(data))
+
+	stats := new(IndexStats)
+	if err := json.Unmarshal(data, stats); err != nil {
+		return nil, err
+	}
+
+	return stats, nil
+}
+
+func MarshallIndexStats(stats *IndexStats) ([]byte, error) {
+
+	buf, err := json.Marshal(&stats)
+	if err != nil {
+		return nil, err
+	}
+
+	logging.Debugf("MarshallIndexStats: %v", string(buf))
+
+	return buf, nil
+}
+
+/////////////////////////////////////////////////////////////////////////
+// Topology
+////////////////////////////////////////////////////////////////////////
+
+func (t *IndexTopology) findIndexerId() string {
+
+	for _, defn := range t.Definitions {
+		for _, inst := range defn.Instances {
+			indexerId := inst.findIndexerId()
+			if len(indexerId) != 0 {
+				return indexerId
+			}
+		}
+	}
+
+	return ""
+}
+
+func (inst IndexInstDistribution) findIndexerId() string {
+
+	for _, part := range inst.Partitions {
+		for _, slice := range part.SinglePartition.Slices {
+			if len(slice.IndexerId) != 0 {
+				return slice.IndexerId
+			}
+		}
+	}
+
+	return ""
+}
+
+func (t *IndexTopology) GetIndexInstByDefn(defnId c.IndexDefnId) *IndexInstDistribution {
+
+	for i, _ := range t.Definitions {
+		if t.Definitions[i].DefnId == uint64(defnId) {
+			for _, inst := range t.Definitions[i].Instances {
+				return &inst
+			}
+		}
+	}
+
+	return nil
+}
+
+func (t *IndexTopology) GetStatusByDefn(defnId c.IndexDefnId) (c.IndexState, string) {
+
+	for i, _ := range t.Definitions {
+		if t.Definitions[i].DefnId == uint64(defnId) {
+			return c.IndexState(t.Definitions[i].Instances[0].State), t.Definitions[i].Instances[0].Error
+		}
+	}
+	return c.INDEX_STATE_NIL, ""
 }

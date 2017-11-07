@@ -12,14 +12,15 @@ package indexer
 import (
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
+
+	"sync"
 
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/dataport"
 	"github.com/couchbase/indexing/secondary/logging"
-	"github.com/couchbase/indexing/secondary/platform"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/data"
-	"sync"
 )
 
 //MutationStreamReader reads a Dataport and stores the incoming mutations
@@ -29,7 +30,7 @@ type MutationStreamReader interface {
 }
 
 type mutationStreamReader struct {
-	mutationCount     platform.AlignedUint64
+	mutationCount     uint64
 	syncBatchInterval uint64 //batch interval for sync message
 
 	stream   *dataport.Server //handle to the Dataport server
@@ -49,7 +50,7 @@ type mutationStreamReader struct {
 	stats IndexerStatsHolder
 
 	indexerState common.IndexerState
-	stateLock    sync.Mutex
+	stateLock    sync.RWMutex
 
 	queueMapLock sync.RWMutex
 	stopch       StopChannel
@@ -72,6 +73,8 @@ func CreateMutationStreamReader(streamId common.StreamId, bucketQueueMap BucketQ
 	streamMutch := make(chan interface{}, getMutationBufferSize(config))
 	dpconf := config.SectionConfig(
 		"dataport.", true /*trim*/)
+
+	dpconf = overrideDataportConf(dpconf)
 	stream, err := dataport.NewServer(
 		string(StreamAddrMap[streamId]),
 		common.SystemConfig["maxVbuckets"].Int(),
@@ -369,9 +372,10 @@ func (r *mutationStreamReader) maybeSendSync() {
 		prevSnap[bucket] = common.NewTsVbuuidCached(bucket, numVbuckets)
 	}
 
+	nWrkr := r.numWorkers
 	for bucket, _ := range hwt {
 		needSync := false
-		for i := 0; i < r.numWorkers; i++ {
+		for i := 0; i < nWrkr; i++ {
 
 			r.streamWorkers[i].lock.Lock()
 
@@ -379,15 +383,21 @@ func (r *mutationStreamReader) maybeSendSync() {
 				needSync = true
 			}
 
-			for vb := 0; vb < numVbuckets; vb++ {
-				if vb%r.numWorkers == i {
+			loopCnt := 0
+			vb := 0
+			for {
+				vb = loopCnt*nWrkr + i
+				if vb < numVbuckets {
 					hwt[bucket].Seqnos[vb] = r.streamWorkers[i].bucketFilter[bucket].Seqnos[vb]
 					hwt[bucket].Vbuuids[vb] = r.streamWorkers[i].bucketFilter[bucket].Vbuuids[vb]
 					hwt[bucket].Snapshots[vb] = r.streamWorkers[i].bucketFilter[bucket].Snapshots[vb]
 					prevSnap[bucket].Seqnos[vb] = r.streamWorkers[i].bucketPrevSnapMap[bucket].Seqnos[vb]
 					prevSnap[bucket].Vbuuids[vb] = r.streamWorkers[i].bucketPrevSnapMap[bucket].Vbuuids[vb]
 					prevSnap[bucket].Snapshots[vb] = r.streamWorkers[i].bucketPrevSnapMap[bucket].Snapshots[vb]
+				} else {
+					break
 				}
+				loopCnt++
 			}
 			r.streamWorkers[i].bucketSyncDue[bucket] = false
 			r.streamWorkers[i].lock.Unlock()
@@ -407,8 +417,8 @@ func (r *mutationStreamReader) maybeSendSync() {
 
 func (r *mutationStreamReader) logReaderStat() {
 
-	platform.AddUint64(&r.mutationCount, 1)
-	c := platform.LoadUint64(&r.mutationCount)
+	atomic.AddUint64(&r.mutationCount, 1)
+	c := atomic.LoadUint64(&r.mutationCount)
 	if (c%10000 == 0) || c == 1 {
 		logging.Infof("logReaderStat:: %v "+
 			"MutationCount %v", r.streamId, c)
@@ -417,8 +427,8 @@ func (r *mutationStreamReader) logReaderStat() {
 }
 
 func (r *mutationStreamReader) getIndexerState() common.IndexerState {
-	r.stateLock.Lock()
-	defer r.stateLock.Unlock()
+	r.stateLock.RLock()
+	defer r.stateLock.RUnlock()
 	return r.indexerState
 }
 
@@ -856,30 +866,44 @@ func copyVbList(vbList []uint16) []Vbucket {
 
 func getSyncBatchInterval(config common.Config) uint64 {
 
-	if common.GetStorageMode() == common.MOI {
-		return config["stream_reader.moi.syncBatchInterval"].Uint64()
-	} else {
+	if common.GetStorageMode() == common.FORESTDB {
 		return config["stream_reader.fdb.syncBatchInterval"].Uint64()
+	} else {
+		return config["stream_reader.moi.syncBatchInterval"].Uint64()
 	}
 
 }
 
 func getMutationBufferSize(config common.Config) uint64 {
 
-	if common.GetStorageMode() == common.MOI {
-		return config["stream_reader.moi.mutationBuffer"].Uint64()
-	} else {
+	if common.GetStorageMode() == common.FORESTDB {
 		return config["stream_reader.fdb.mutationBuffer"].Uint64()
+	} else if common.GetStorageMode() == common.PLASMA {
+		return config["stream_reader.plasma.mutationBuffer"].Uint64()
+	} else {
+		return config["stream_reader.moi.mutationBuffer"].Uint64()
 	}
 
 }
 
 func getWorkerBufferSize(config common.Config) uint64 {
 
-	if common.GetStorageMode() == common.MOI {
-		return config["stream_reader.moi.workerBuffer"].Uint64()
-	} else {
+	if common.GetStorageMode() == common.FORESTDB {
 		return config["stream_reader.fdb.workerBuffer"].Uint64()
+	} else if common.GetStorageMode() == common.PLASMA {
+		return config["stream_reader.plasma.workerBuffer"].Uint64()
+	} else {
+		return config["stream_reader.moi.workerBuffer"].Uint64()
 	}
+}
+
+func overrideDataportConf(dpconf common.Config) common.Config {
+
+	if common.GetStorageMode() == common.PLASMA {
+		chSize := dpconf["plasma.dataChanSize"].Int()
+		dpconf.SetValue("dataChanSize", chSize)
+	}
+
+	return dpconf
 
 }

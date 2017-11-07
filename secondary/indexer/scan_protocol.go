@@ -11,6 +11,7 @@ package indexer
 
 import (
 	"encoding/binary"
+	"github.com/couchbase/indexing/secondary/common"
 	p "github.com/couchbase/indexing/secondary/pipeline"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
 	"github.com/golang/protobuf/proto"
@@ -64,7 +65,7 @@ func (w *protoResponseWriter) Error(err error) error {
 		res = &protobuf.StatisticsResponse{
 			Err: protoErr,
 		}
-	case CountReq:
+	case CountReq, MultiScanCountReq:
 		res = &protobuf.CountResponse{
 			Count: proto.Int64(0), Err: protoErr,
 		}
@@ -92,7 +93,7 @@ func (w *protoResponseWriter) Stats(rows, unique uint64, min, max []byte) error 
 
 func (w *protoResponseWriter) Helo() error {
 	res := &protobuf.HeloResponse{
-		Version: proto.Uint32(INDEXER_VERSION),
+		Version: proto.Uint32(common.INDEXER_CUR_VERSION),
 	}
 
 	return protobuf.EncodeAndWrite(w.conn, *w.encBuf, res)
@@ -118,7 +119,7 @@ func (w *protoResponseWriter) RawBytes(b []byte) error {
 
 func (w *protoResponseWriter) Row(pk, sk []byte) error {
 
-	if w.rowSize+len(pk)+len(sk) > len(*w.rowBuf) {
+	if w.rowSize != 0 && w.rowSize+len(pk)+len(sk) > len(*w.rowBuf) {
 		res := &protobuf.ResponseStream{IndexEntries: w.rowEntries}
 		err := protobuf.EncodeAndWrite(w.conn, *w.encBuf, res)
 		if err != nil {
@@ -127,6 +128,11 @@ func (w *protoResponseWriter) Row(pk, sk []byte) error {
 
 		w.rowSize = 0
 		w.rowEntries = nil
+	}
+
+	if w.rowSize == 0 && len(pk)+len(sk) > cap(*w.rowBuf) {
+		newSize := (len(pk) + len(sk))
+		(*w.rowBuf) = make([]byte, newSize, newSize)
 	}
 
 	pkCopy := (*w.rowBuf)[w.rowSize : w.rowSize+len(pk)]
@@ -141,6 +147,7 @@ func (w *protoResponseWriter) Row(pk, sk []byte) error {
 		PrimaryKey: pkCopy,
 	}
 
+	// TODO: remove below line
 	w.rowSize += len(sk) + len(pk)
 	w.rowEntries = append(w.rowEntries, row)
 	return nil

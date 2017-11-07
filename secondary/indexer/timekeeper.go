@@ -19,6 +19,7 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/dcp"
 	"github.com/couchbase/indexing/secondary/logging"
+	"math"
 	"sync"
 	"time"
 )
@@ -230,6 +231,7 @@ func (tk *timekeeper) handleStreamOpen(cmd Message) {
 	streamId := cmd.(*MsgStreamUpdate).GetStreamId()
 	bucket := cmd.(*MsgStreamUpdate).GetBucket()
 	restartTs := cmd.(*MsgStreamUpdate).GetRestartTs()
+	rollbackTime := cmd.(*MsgStreamUpdate).GetRollbackTime()
 
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
@@ -251,6 +253,7 @@ func (tk *timekeeper) handleStreamOpen(cmd Message) {
 			tk.ss.streamBucketRestartTsMap[streamId][bucket] = restartTs
 			tk.ss.setHWTFromRestartTs(streamId, bucket)
 		}
+		tk.ss.setRollbackTime(bucket, rollbackTime)
 		tk.addIndextoStream(cmd)
 		tk.startTimer(streamId, bucket)
 
@@ -1710,8 +1713,12 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 
 	//if flushTs is not on snap boundary, merge cannot be done
 	if !flushTs.IsSnapAligned() {
+		hwt := tk.ss.streamBucketHWTMap[streamId][bucket]
 		logging.Infof("Timekeeper::checkInitStreamReadyToMerge FlushTs Not Snapshot " +
-			"Snapshot Aligned. Continue both streams.")
+			"Aligned. Continue both streams.")
+		logging.LazyVerbose(func() string {
+			return fmt.Sprintf("Timekeeper::checkInitStreamReadyToMerge FlushTs %v\n HWT %v", flushTs, hwt)
+		})
 		return false
 	}
 
@@ -2739,6 +2746,13 @@ func (tk *timekeeper) handleStats(cmd Message) {
 	tk.lock.Unlock()
 
 	go func() {
+
+		if !req.FetchDcp() {
+			tk.updateTimestampStats()
+			replych <- true
+			return
+		}
+
 		// Populate current KV timestamps for all buckets
 		bucketTsMap := make(map[string]Timestamp)
 		for _, inst := range indexInstMap {
@@ -2786,7 +2800,7 @@ func (tk *timekeeper) handleStats(cmd Message) {
 				}
 			}
 
-			v := flushedCount
+			v := float64(flushedCount)
 			receivedTs := tk.ss.streamBucketHWTMap[inst.Stream][inst.Defn.Bucket]
 			queued := uint64(0)
 			if receivedTs != nil {
@@ -2817,9 +2831,9 @@ func (tk *timekeeper) handleStats(cmd Message) {
 
 			switch inst.State {
 			default:
-				v = 0
+				v = 0.00
 			case common.INDEX_STATE_ACTIVE:
-				v = 100
+				v = 100.00
 			case common.INDEX_STATE_INITIAL, common.INDEX_STATE_CATCHUP:
 				totalToBeflushed := uint64(0)
 				for _, seqno := range kvTs {
@@ -2827,9 +2841,9 @@ func (tk *timekeeper) handleStats(cmd Message) {
 				}
 
 				if totalToBeflushed > flushedCount {
-					v = flushedCount * 100 / totalToBeflushed
+					v = float64(flushedCount) * 100.00 / float64(totalToBeflushed)
 				} else {
-					v = 100
+					v = 100.00
 				}
 			}
 
@@ -2838,11 +2852,34 @@ func (tk *timekeeper) handleStats(cmd Message) {
 				idxStats.numDocsQueued.Set(int64(queued))
 				idxStats.numDocsPending.Set(int64(pending))
 				idxStats.buildProgress.Set(int64(v))
+				idxStats.completionProgress.Set(int64(math.Float64bits(v)))
+				idxStats.lastRollbackTime.Set(tk.ss.bucketRollbackTime[inst.Defn.Bucket])
+				idxStats.progressStatTime.Set(time.Now().UnixNano())
 			}
 		}
 
 		replych <- true
 	}()
+}
+
+func (tk *timekeeper) updateTimestampStats() {
+
+	tk.lock.Lock()
+	defer tk.lock.Unlock()
+
+	stats := tk.stats.Get()
+	for _, inst := range tk.indexInstMap {
+		//skip deleted indexes
+		if inst.State == common.INDEX_STATE_DELETED {
+			continue
+		}
+
+		idxStats := stats.indexes[inst.InstId]
+		if idxStats != nil {
+			idxStats.lastRollbackTime.Set(tk.ss.bucketRollbackTime[inst.Defn.Bucket])
+			idxStats.progressStatTime.Set(time.Now().UnixNano())
+		}
+	}
 }
 
 func (tk *timekeeper) isBuildCompletionTs(streamId common.StreamId,
@@ -3105,28 +3142,28 @@ func (tk *timekeeper) checkIndexerState(state common.IndexerState) bool {
 
 func (tk *timekeeper) getPersistInterval() uint64 {
 
-	if common.GetStorageMode() == common.MOI {
-		return tk.config["settings.persisted_snapshot.moi.interval"].Uint64()
-	} else {
+	if common.GetStorageMode() == common.FORESTDB {
 		return tk.config["settings.persisted_snapshot.fdb.interval"].Uint64()
+	} else {
+		return tk.config["settings.persisted_snapshot.moi.interval"].Uint64()
 	}
 
 }
 func (tk *timekeeper) getPersistIntervalInitBuild() uint64 {
 
-	if common.GetStorageMode() == common.MOI {
-		return tk.config["settings.persisted_snapshot_init_build.moi.interval"].Uint64()
-	} else {
+	if common.GetStorageMode() == common.FORESTDB {
 		return tk.config["settings.persisted_snapshot_init_build.fdb.interval"].Uint64()
+	} else {
+		return tk.config["settings.persisted_snapshot_init_build.moi.interval"].Uint64()
 	}
 
 }
 func (tk *timekeeper) getInMemSnapInterval() uint64 {
 
-	if common.GetStorageMode() == common.MOI {
-		return tk.config["settings.inmemory_snapshot.moi.interval"].Uint64()
-	} else {
+	if common.GetStorageMode() == common.FORESTDB {
 		return tk.config["settings.inmemory_snapshot.fdb.interval"].Uint64()
+	} else {
+		return tk.config["settings.inmemory_snapshot.moi.interval"].Uint64()
 	}
 
 }

@@ -11,6 +11,8 @@ package indexer
 
 import (
 	"fmt"
+
+	"github.com/couchbase/indexing/secondary/common"
 )
 
 type errCode int16
@@ -67,6 +69,7 @@ const (
 	ERROR_INDEXER_UNKNOWN_BUCKET
 	ERROR_INDEXER_IN_RECOVERY
 	ERROR_INDEXER_NOT_ACTIVE
+	ERROR_INDEXER_REBALANCE_IN_PROGRESS
 
 	//STORAGE_MGR
 	ERROR_STORAGE_MGR_ROLLBACK_FAIL
@@ -80,6 +83,7 @@ const (
 	ERROR_INDEX_MANAGER_CHANNEL_CLOSE
 
 	ERROR_SCAN_COORD_QUERYPORT_FAIL
+	ERROR_BUCKET_EPHEMERAL
 )
 
 type errSeverity int16
@@ -116,4 +120,30 @@ type Error struct {
 
 func (e Error) String() string {
 	return fmt.Sprintf("%v", e.cause)
+}
+
+func (e Error) convertError() common.IndexerErrCode {
+
+	switch e.code {
+	case ERROR_INDEX_ALREADY_EXISTS:
+		return common.IndexAlreadyExist
+	case ERROR_INDEXER_INTERNAL_ERROR:
+		return common.TransientError
+	case ERROR_INDEX_BUILD_IN_PROGRESS:
+		return common.IndexBuildInProgress
+	case ERROR_INDEX_DROP_IN_PROGRESS:
+		return common.DropIndexInProgress
+	case ERROR_INDEXER_UNKNOWN_INDEX:
+		return common.IndexNotExist
+	case ERROR_INDEXER_UNKNOWN_BUCKET:
+		return common.InvalidBucket
+	case ERROR_INDEXER_IN_RECOVERY:
+		return common.IndexerInRecovery
+	case ERROR_INDEXER_NOT_ACTIVE:
+		return common.IndexerNotActive
+	case ERROR_INDEXER_REBALANCE_IN_PROGRESS:
+		return common.RebalanceInProgress
+	}
+
+	return common.TransientError
 }

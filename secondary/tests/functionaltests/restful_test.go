@@ -75,6 +75,7 @@ func TestRestfulAPI(t *testing.T) {
 	log.Printf("CREATED indexes: %v\n", ids)
 	log.Println()
 
+	ids = ids[:len(ids)-1]
 	err = restful_lookup(ids)
 	FailTestIfError(err, "Error in restful_lookup", t)
 
@@ -224,6 +225,21 @@ func restful_badcreates() error {
 	if err := post(dst); err != nil {
 		return err
 	}
+
+	log.Println("TEST: incomplete field ``desc``")
+	dst = restful_clonebody(reqcreate)
+	dst["secExprs"] = []string{"address.city", "address.state"}
+	dst["desc"] = []bool{true}
+	if err := post(dst); err != nil {
+		return err
+	}
+
+	log.Println("TEST: invalid field ``desc``")
+	dst["desc"] = []int{1}
+	if err := post(dst); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -288,6 +304,17 @@ func restful_create_andbuild() ([]string, error) {
 	dst = restful_clonebody(reqcreate)
 	dst["with"] = `{"defer_build": true}`
 	dst["name"] = "idx4"
+	id, err = post(dst)
+	if err != nil {
+		return nil, err
+	}
+	ids = append(ids, id)
+
+	log.Println("CREATE INDEX: idx5")
+	dst = restful_clonebody(reqcreate)
+	dst["name"] = "idx5"
+	dst["secExprs"] = []string{"miscol"}
+	dst["desc"] = []bool{true}
 	id, err = post(dst)
 	if err != nil {
 		return nil, err
@@ -367,15 +394,16 @@ func restful_lookup(ids []string) error {
 			var result interface{}
 			if err := dec.Decode(&result); err != nil && err != io.EOF {
 				return nil, err
-			}
-			if _, ok := result.(string); ok {
-				err := fmt.Errorf("ERROR chunk: %v\n", result)
-				return nil, err
-			} else if result != nil {
-				log.Printf("GOT CHUNK: %v\n", len(result.([]interface{})))
-				entries = append(entries, result.([]interface{})...)
-			} else {
+			} else if result == nil {
 				break
+			}
+			switch resval := result.(type) {
+			case []interface{}:
+				// log.Printf("GOT CHUNK: %v\n", len(resval))
+				entries = append(entries, resval...)
+			default:
+				err := fmt.Errorf("ERROR CHUNK: %v\n", result)
+				return nil, err
 			}
 		}
 		return entries, nil
@@ -406,7 +434,7 @@ func restful_lookup(ids []string) error {
 	log.Println("LOOKUP with stale as false")
 	reqbody = restful_clonebody(reqlookup)
 	reqbody["equal"] = `["Pyongyang"]`
-	reqbody["distinct"] = true
+	reqbody["distinct"] = false
 	reqbody["stale"] = "false"
 	entries, err = getl(ids[0], reqbody)
 	if err != nil {
@@ -423,7 +451,7 @@ func restful_lookup(ids []string) error {
 	log.Println("LOOKUP with Rome")
 	reqbody = restful_clonebody(reqlookup)
 	reqbody["equal"] = `["Rome"]`
-	reqbody["distinct"] = true
+	reqbody["distinct"] = false
 	reqbody["stale"] = "false"
 	entries, err = getl(ids[0], reqbody)
 	if err != nil {
@@ -466,7 +494,7 @@ func restful_rangescan(ids []string) error {
 				err := fmt.Errorf("ERROR chunk: %v\n", result)
 				return nil, err
 			} else if result != nil {
-				log.Printf("GOT CHUNK: %v\n", len(result.([]interface{})))
+				// log.Printf("GOT CHUNK: %v\n", len(result.([]interface{})))
 				entries = append(entries, result.([]interface{})...)
 			} else {
 				break
@@ -593,7 +621,7 @@ func restful_fulltablescan(ids []string) error {
 				err := fmt.Errorf("ERROR chunk: %v\n", result)
 				return nil, err
 			} else if result != nil {
-				log.Printf("GOT CHUNK: %v\n", len(result.([]interface{})))
+				// log.Printf("GOT CHUNK: %v\n", len(result.([]interface{})))
 				entries = append(entries, result.([]interface{})...)
 			} else {
 				break
@@ -835,6 +863,75 @@ func waitforindex(id string) (error, bool) {
 	}
 }
 
+func getscans(id string, body map[string]interface{}) ([]interface{}, error) {
+	url, err := makeurl(fmt.Sprintf("/api/index/%v?multiscan=true", id))
+	if err != nil {
+		return nil, err
+	}
+	data, _ := json.Marshal(body)
+	req, err := http.NewRequest("GET", url, bytes.NewBuffer(data))
+	if err != nil {
+		return nil, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	log.Printf("getscans status : %v\n", resp.Status)
+
+	dec := json.NewDecoder(resp.Body)
+	entries := make([]interface{}, 0)
+	for {
+		var result interface{}
+		if err := dec.Decode(&result); err != nil && err != io.EOF {
+			return nil, err
+		} else if result == nil {
+			break
+		}
+		switch resval := result.(type) {
+		case []interface{}:
+			// log.Printf("GOT CHUNK: %v\n", len(resval))
+			entries = append(entries, resval...)
+		default:
+			err := fmt.Errorf("ERROR CHUNK: %v\n", result)
+			return nil, err
+		}
+	}
+	return entries, nil
+}
+
+func getscanscount(id string, body map[string]interface{}) (int, error) {
+	url, err := makeurl(fmt.Sprintf("/api/index/%v?multiscancount=true", id))
+	if err != nil {
+		return 0, err
+	}
+	data, _ := json.Marshal(body)
+	req, err := http.NewRequest("GET", url, bytes.NewBuffer(data))
+	if err != nil {
+		return 0, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	log.Printf("Status : %v\n", resp.Status)
+
+	var result interface{}
+
+	respbody, _ := ioutil.ReadAll(resp.Body)
+	if len(respbody) == 0 {
+		return 0, nil
+	}
+	err = json.Unmarshal(respbody, &result)
+	if err != nil {
+		return 0, err
+	}
+	if count, ok := result.(float64); ok {
+		return int(count), nil
+	}
+	return 0, nil
+}
+
 var reqcreate = map[string]interface{}{
 	"name":      "myindex",
 	"bucket":    "default",
@@ -873,4 +970,24 @@ var reqcount = map[string]interface{}{
 	"inclusion": "both",
 	"limit":     1000000,
 	"stale":     "ok",
+}
+
+var reqscans = map[string]interface{}{
+	"scans":      `[{"Seek":null,"Filter":[{"Low":"D","High":"F","Inclusion":3},{"Low":"A","High":"C","Inclusion":3}]},{"Seek":null,"Filter":[{"Low":"S","High":"V","Inclusion":3},{"Low":"A","High":"C","Inclusion":3}]}]`,
+	"projection": `{"EntryKeys":[0],"PrimaryKey":false}`,
+	"distinct":   false,
+	"limit":      1000000,
+	"reverse":    false,
+	"offset":     int64(0),
+	"stale":      "ok",
+}
+
+var reqscanscount = map[string]interface{}{
+	"scans":      `[{"Seek":null,"Filter":[{"Low":"D","High":"F","Inclusion":3},{"Low":"A","High":"C","Inclusion":3}]},{"Seek":null,"Filter":[{"Low":"S","High":"V","Inclusion":3},{"Low":"A","High":"C","Inclusion":3}]}]`,
+	"projection": `{"EntryKeys":[0],"PrimaryKey":false}`,
+	"distinct":   false,
+	"limit":      1000000,
+	"reverse":    false,
+	"offset":     int64(0),
+	"stale":      "ok",
 }

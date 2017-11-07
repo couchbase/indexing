@@ -1,0 +1,66 @@
+{
+"name" 		: "Mixed Workload",
+"comment"	: "go test -iteration=1 -memQuotaFactor=2 -cpuQuotaFactor=2 -placement=mixedWorkload.json",
+"workload" 	: [
+	{
+		"name" 		: "bucket1",
+		"replica" 	: 3, 
+		"workload" 	: [
+		{
+			"name" 				: "small",
+			"minNumDoc" 		: 500000,
+			"maxNumDoc" 		: 20000000,   
+			"minDocKeySize" 	: 20, 
+			"maxDocKeySize" 	: 200,
+			"minSecKeySize" 	: 20,
+			"maxSecKeySize" 	: 200,
+			"minArrKeySize" 	: 0,
+			"maxArrKeySize" 	: 0,
+			"minArrSize"    	: 0,
+			"maxArrSize"    	: 0,
+			"minMutationRate"  	: 10000,
+			"maxMutationRate"  	: 30000,
+			"minScanRate"      	: 1000,
+			"maxScanRate"      	: 10000
+		},
+		{
+			"name" 				: "medium",
+			"minNumDoc" 		: 30000000,
+			"maxNumDoc" 		: 300000000,   
+			"minDocKeySize" 	: 20, 
+			"maxDocKeySize" 	: 200,
+			"minSecKeySize" 	: 20,
+			"maxSecKeySize" 	: 200,
+			"minArrKeySize" 	: 0,
+			"maxArrKeySize" 	: 0,
+			"minArrSize"    	: 0,
+			"maxArrSize"    	: 0,
+			"minMutationRate"  	: 30000,
+			"maxMutationRate"  	: 100000,
+			"minScanRate"      	: 1000,
+			"maxScanRate"      	: 10000
+		},
+		{
+			"name" 				: "large",
+			"minNumDoc" 		: 500000000,
+			"maxNumDoc" 		: 1000000000,   
+			"minDocKeySize" 	: 20,
+			"maxDocKeySize" 	: 20,
+			"minSecKeySize" 	: 20,
+			"maxSecKeySize" 	: 20,
+			"minArrKeySize" 	: 0,
+			"maxArrKeySize" 	: 0,
+			"minArrSize"    	: 0,
+			"maxArrSize"    	: 0,
+			"minMutationRate"  	: 200000,
+			"maxMutationRate"  	: 500000,
+			"minScanRate"      	: 1000,
+			"maxScanRate"      	: 10000
+		}],
+		"distribution" 	: [50,40,10]
+	}],
+"distribution"   	: [100],
+"minNumIndex"   : 30,
+"maxNumIndex"   : 30 
+}
+

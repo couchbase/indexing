@@ -10,6 +10,14 @@ import "time"
 import "unsafe"
 import "sync/atomic"
 import "encoding/json"
+import "net/http"
+import "bytes"
+import "io/ioutil"
+import "io"
+import "math"
+import "strconv"
+
+import "github.com/couchbase/cbauth"
 
 import "github.com/couchbase/indexing/secondary/logging"
 import common "github.com/couchbase/indexing/secondary/common"
@@ -28,6 +36,10 @@ type metadataClient struct {
 
 	topoChangeLock sync.Mutex
 	metaCh         chan bool
+	mdNotifyCh     chan bool
+	stNotifyCh     chan map[common.IndexInstId]common.Statistics
+
+	settings *ClientSettings
 }
 
 // sherlock topology management, multi-node & single-partition.
@@ -35,18 +47,27 @@ type indexTopology struct {
 	version    uint64
 	adminports map[string]common.IndexerId // book-keeping for cluster changes
 	topology   map[common.IndexerId][]*mclient.IndexMetadata
-	replicas   map[common.IndexDefnId][]common.IndexDefnId
+	queryports map[common.IndexerId]string
+	replicas   map[common.IndexDefnId][]common.IndexInstId
 	rw         sync.RWMutex
-	loads      map[common.IndexDefnId]loadHeuristics
+	loads      map[common.IndexInstId]*loadHeuristics
+	// insts could include pending RState inst if there is no corresponding active instance
+	insts           map[common.IndexInstId]*mclient.InstanceDefn
+	defns           map[common.IndexDefnId]*mclient.IndexMetadata
+	replicasInRebal map[common.IndexDefnId][]*mclient.InstanceDefn
+	allIndexes      []*mclient.IndexMetadata
 }
 
 func newMetaBridgeClient(
-	cluster string, config common.Config, metaCh chan bool) (c *metadataClient, err error) {
+	cluster string, config common.Config, metaCh chan bool, settings *ClientSettings) (c *metadataClient, err error) {
 
 	b := &metadataClient{
-		cluster: cluster,
-		finch:   make(chan bool),
-		metaCh:  metaCh,
+		cluster:    cluster,
+		finch:      make(chan bool),
+		metaCh:     metaCh,
+		mdNotifyCh: make(chan bool, 1),
+		stNotifyCh: make(chan map[common.IndexInstId]common.Statistics, 1),
+		settings:   settings,
 	}
 	b.servicesNotifierRetryTm = config["servicesNotifierRetryTm"].Int()
 	b.logtick = time.Duration(config["logtick"].Int()) * time.Millisecond
@@ -58,7 +79,7 @@ func newMetaBridgeClient(
 		logging.Errorf("Could not generate UUID in common.NewUUID\n")
 		return nil, err
 	}
-	b.mdClient, err = mclient.NewMetadataProvider(uuid.Str())
+	b.mdClient, err = mclient.NewMetadataProvider(uuid.Str(), b.mdNotifyCh, b.stNotifyCh, b.settings)
 	if err != nil {
 		return nil, err
 	}
@@ -84,13 +105,16 @@ func (b *metadataClient) Sync() error {
 }
 
 // Refresh implement BridgeAccessor{} interface.
-func (b *metadataClient) Refresh() ([]*mclient.IndexMetadata, error) {
-	mindexes, version := b.mdClient.ListIndex()
-	if b.hasIndexesChanged(mindexes, version) {
-		currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
-		b.safeupdate(currmeta.adminports, false)
+func (b *metadataClient) Refresh() ([]*mclient.IndexMetadata, uint64, uint64, error) {
+
+	currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
+
+	if currmeta.version < b.mdClient.GetMetadataVersion() {
+		b.safeupdate(nil, false)
+		currmeta = (*indexTopology)(atomic.LoadPointer(&b.indexers))
 	}
-	return mindexes, nil
+
+	return currmeta.allIndexes, currmeta.version, b.mdClient.GetIndexerVersion(), nil
 }
 
 // Nodes implement BridgeAccessor{} interface.
@@ -100,7 +124,7 @@ func (b *metadataClient) Nodes() ([]*IndexerService, error) {
 	nodes := make(map[string]*IndexerService)
 	for indexerID := range currmeta.topology {
 		if indexerID != common.INDEXER_ID_NIL {
-			a, q, err := b.mdClient.FindServiceForIndexer(indexerID)
+			a, q, _, err := b.mdClient.FindServiceForIndexer(indexerID)
 			if err == nil {
 				nodes[a] = &IndexerService{
 					Adminport: a, Queryport: q, Status: "initial",
@@ -124,20 +148,17 @@ func (b *metadataClient) Nodes() ([]*IndexerService, error) {
 // GetIndexDefn implements BridgeAccessor{} interface.
 func (b *metadataClient) GetIndexDefn(defnID uint64) *common.IndexDefn {
 	currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
-	for _, indexes := range currmeta.topology {
-		for _, index := range indexes {
-			if defnID == uint64(index.Definition.DefnId) {
-				return index.Definition
-			}
-		}
+	if index, ok := currmeta.defns[common.IndexDefnId(defnID)]; ok {
+		return index.Definition
 	}
+
 	return nil
 }
 
 // CreateIndex implements BridgeAccessor{} interface.
 func (b *metadataClient) CreateIndex(
 	indexName, bucket, using, exprType, partnExpr, whereExpr string,
-	secExprs []string, isPrimary bool,
+	secExprs []string, desc []bool, isPrimary bool,
 	planJSON []byte) (uint64, error) {
 
 	plan := make(map[string]interface{})
@@ -152,7 +173,7 @@ func (b *metadataClient) CreateIndex(
 RETRY:
 	defnID, err, needRefresh := b.mdClient.CreateIndexWithPlan(
 		indexName, bucket, using, exprType, partnExpr, whereExpr,
-		secExprs, isPrimary, plan)
+		secExprs, desc, isPrimary, plan)
 
 	if needRefresh && refreshCnt == 0 {
 		fmsg := "GsiClient: Indexer Node List is out-of-date.  Require refresh."
@@ -169,10 +190,14 @@ RETRY:
 
 // BuildIndexes implements BridgeAccessor{} interface.
 func (b *metadataClient) BuildIndexes(defnIDs []uint64) error {
-	_, ok := b.getNodes(defnIDs)
-	if !ok {
-		return ErrorIndexNotFound
+	currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
+
+	for _, defnId := range defnIDs {
+		if _, ok := currmeta.defns[common.IndexDefnId(defnId)]; !ok {
+			return ErrorIndexNotFound
+		}
 	}
+
 	ids := make([]common.IndexDefnId, len(defnIDs))
 	for i, id := range defnIDs {
 		ids[i] = common.IndexDefnId(id)
@@ -180,12 +205,68 @@ func (b *metadataClient) BuildIndexes(defnIDs []uint64) error {
 	return b.mdClient.BuildIndexes(ids)
 }
 
+// MoveIndex implements BridgeAccessor{} interface.
+func (b *metadataClient) MoveIndex(defnID uint64, planJSON map[string]interface{}) error {
+
+	currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
+
+	if _, ok := currmeta.defns[common.IndexDefnId(defnID)]; !ok {
+		return ErrorIndexNotFound
+	}
+
+	var httpport string
+	for indexerId, _ := range currmeta.topology {
+		var err error
+		if _, _, httpport, err = b.mdClient.FindServiceForIndexer(indexerId); err == nil {
+			break
+		}
+	}
+
+	if httpport == "" {
+		return ErrorNoHost
+	}
+
+	timeout := time.Duration(120 * time.Second)
+	if planJSON != nil {
+		if t, ok := planJSON["timeout"]; ok {
+			timeout = time.Duration(t.(float64)) * time.Second
+		}
+	}
+
+	idList := IndexIdList{DefnIds: []uint64{defnID}}
+	ir := IndexRequest{IndexIds: idList, Plan: planJSON}
+	body, err := json.Marshal(&ir)
+	if err != nil {
+		return err
+	}
+
+	bodybuf := bytes.NewBuffer(body)
+
+	url := "/moveIndexInternal"
+	resp, err := postWithAuth(httpport+url, "application/json", bodybuf, timeout)
+	if err != nil {
+		errStr := fmt.Sprintf("Error communicating with index node %v. Reason %v", httpport, err)
+		return errors.New(errStr)
+	}
+	defer resp.Body.Close()
+
+	response := new(IndexResponse)
+	bytes, _ := ioutil.ReadAll(resp.Body)
+	if err := json.Unmarshal(bytes, &response); err != nil {
+		return err
+	}
+	if response.Code == RESP_ERROR {
+		return errors.New(response.Error)
+	}
+
+	return nil
+}
+
 // DropIndex implements BridgeAccessor{} interface.
 func (b *metadataClient) DropIndex(defnID uint64) error {
 	err := b.mdClient.DropIndex(common.IndexDefnId(defnID))
 	if err == nil { // cleanup index local cache.
-		currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
-		b.safeupdate(currmeta.adminports, true /*force*/)
+		b.safeupdate(nil, false /*force*/)
 	}
 	return err
 }
@@ -194,13 +275,8 @@ func (b *metadataClient) DropIndex(defnID uint64) error {
 func (b *metadataClient) GetScanports() (queryports []string) {
 	currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
 	queryports = make([]string, 0)
-	for indexerID := range currmeta.topology {
-		if indexerID != common.INDEXER_ID_NIL {
-			_, queryport, err := b.mdClient.FindServiceForIndexer(indexerID)
-			if err == nil {
-				queryports = append(queryports, queryport)
-			}
-		}
+	for _, queryport := range currmeta.queryports {
+		queryports = append(queryports, queryport)
 	}
 	logging.Debugf("Scan ports %v for all indexes", queryports)
 	return queryports
@@ -208,7 +284,10 @@ func (b *metadataClient) GetScanports() (queryports []string) {
 
 // GetScanport implements BridgeAccessor{} interface.
 func (b *metadataClient) GetScanport(
-	defnID uint64, retry int, excludes map[uint64]bool) (qp string, targetDefnID uint64, ok bool) {
+	defnID uint64, retry int, excludes map[uint64]bool) (qp string, targetDefnID uint64, targetInstID uint64, rolbackTime int64, ok bool) {
+
+	var inst *mclient.InstanceDefn
+	rollbackTime := int64(math.MaxInt64)
 
 	currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
 	if rand.Float64() < b.randomWeight {
@@ -218,51 +297,50 @@ func (b *metadataClient) GetScanport(
 			replicas[n] = uint64(replicaID)
 			n++
 		}
-		targetDefnID, ok = b.pickRandom(replicas[:n], defnID, excludes)
+		inst, rollbackTime, ok = b.pickRandom(replicas[:n], defnID, excludes)
 	} else {
-		targetDefnID, ok = b.pickOptimal(defnID, excludes)
+		inst, rollbackTime, ok = b.pickOptimal(defnID, excludes)
 	}
 
 	if !ok {
-		return "", 0, false
+		return "", 0, 0, int64(math.MaxInt64), false
 	}
 
-	_, qp, err := b.mdClient.FindServiceForIndex(common.IndexDefnId(targetDefnID))
-	if err != nil {
-		return "", 0, false
+	targetInstID = uint64(inst.InstId)
+	targetDefnID = uint64(inst.DefnId)
+
+	qp, ok = currmeta.queryports[inst.IndexerId]
+	if !ok {
+		return "", 0, 0, int64(math.MaxInt64), false
 	}
+
 	fmsg := "Scan port %s for index defnID %d of equivalent index defnId %d"
 	logging.Debugf(fmsg, qp, targetDefnID, defnID)
-	return qp, targetDefnID, true
+	return qp, targetDefnID, targetInstID, rollbackTime, true
 }
 
 // Timeit implement BridgeAccessor{} interface.
-func (b *metadataClient) Timeit(defnID uint64, value float64) {
+func (b *metadataClient) Timeit(instID uint64, value float64) {
+
 	currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
 
-	currmeta.rw.Lock()
-	defer currmeta.rw.Unlock()
-
-	id := common.IndexDefnId(defnID)
-	if load, ok := currmeta.loads[id]; !ok {
-		currmeta.loads[id] = loadHeuristics{avgLoad: value}
-	} else {
-		// compute incremental average.
-		load.avgLoad = (load.avgLoad + float64(value)) / 2.0
-		currmeta.loads[id] = load
+	// currmeta.loads is immutable once constructed
+	load, ok := currmeta.loads[common.IndexInstId(instID)]
+	if !ok {
+		// it should not happen. But if it does, just return.
+		return
 	}
+
+	load.updateLoad(value)
+	load.incHit()
 }
 
 // IsPrimary implement BridgeAccessor{} interface.
 func (b *metadataClient) IsPrimary(defnID uint64) bool {
 	b.Refresh()
 	currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
-	for _, indexes := range currmeta.topology {
-		for _, index := range indexes {
-			if index.Definition.DefnId == common.IndexDefnId(defnID) {
-				return index.Definition.IsPrimary
-			}
-		}
+	if index, ok := currmeta.defns[common.IndexDefnId(defnID)]; ok {
+		return index.Definition.IsPrimary
 	}
 	return false
 }
@@ -287,23 +365,84 @@ func (b *metadataClient) Close() {
 
 // compute a map of replicas for each index in 2i.
 func (b *metadataClient) computeReplicas(
-	topo map[common.IndexerId][]*mclient.IndexMetadata) map[common.IndexDefnId][]common.IndexDefnId {
+	topo map[common.IndexerId][]*mclient.IndexMetadata) map[common.IndexDefnId][]common.IndexInstId {
 
-	replicaMap := make(map[common.IndexDefnId][]common.IndexDefnId)
-	for id1, indexes1 := range topo {
+	replicaMap := make(map[common.IndexDefnId][]common.IndexInstId)
+	for _, indexes1 := range topo {
 		for _, index1 := range indexes1 {
-			replicas := make([]common.IndexDefnId, 0)
-			replicas = append(replicas, index1.Definition.DefnId) // add itself
+
+			if _, ok := replicaMap[index1.Definition.DefnId]; ok {
+				continue
+			}
+
+			replicas := make([]common.IndexInstId, 0)
+
+			// Instance can be of any of valid instance state (READY, INITIAL, CATCHUP, ACTIVE),
+			// but RState is always ACTIVE. Add all of them to replica list regardless of the instance
+			// state. When picking instance for scanning, only ACTIVE will use picked.
+			for _, inst1 := range index1.Instances {
+				replicas = append(replicas, inst1.InstId) // add itself
+			}
+
 			for id2, indexes2 := range topo {
-				if id1 == id2 { // skip colocated indexes
-					continue
-				}
+
 				for _, index2 := range indexes2 {
+					if index1.Definition.DefnId == index2.Definition.DefnId { // skip replica
+						continue
+					}
+
 					if b.equivalentIndex(index1, index2) { // pick equivalents
-						replicas = append(replicas, index2.Definition.DefnId)
+						for _, inst2 := range index2.Instances {
+
+							if inst2.IndexerId == id2 { // only add instance from this indexer
+								replicas = append(replicas, inst2.InstId)
+							}
+						}
 					}
 				}
 			}
+
+			replicaMap[index1.Definition.DefnId] = replicas // map it
+		}
+	}
+	return replicaMap
+}
+
+func (b *metadataClient) computeReplicasInRebalance(
+	topo map[common.IndexerId][]*mclient.IndexMetadata) map[common.IndexDefnId][]*mclient.InstanceDefn {
+
+	replicaMap := make(map[common.IndexDefnId][]*mclient.InstanceDefn)
+	for _, indexes1 := range topo {
+		for _, index1 := range indexes1 {
+
+			if _, ok := replicaMap[index1.Definition.DefnId]; ok {
+				continue
+			}
+
+			replicas := make([]*mclient.InstanceDefn, 0)
+
+			for _, inst1 := range index1.InstsInRebalance {
+				replicas = append(replicas, inst1) // add itself
+			}
+
+			for id2, indexes2 := range topo {
+
+				for _, index2 := range indexes2 {
+
+					if index1.Definition.DefnId == index2.Definition.DefnId { // skip replica
+						continue
+					}
+
+					if b.equivalentIndex(index1, index2) { // pick equivalents
+						for _, inst2 := range index2.InstsInRebalance {
+							if inst2.IndexerId == id2 { // only add instance from this indexer
+								replicas = append(replicas, inst2)
+							}
+						}
+					}
+				}
+			}
+
 			replicaMap[index1.Definition.DefnId] = replicas // map it
 		}
 	}
@@ -315,8 +454,7 @@ func (b *metadataClient) equivalentIndex(
 	index1, index2 *mclient.IndexMetadata) bool {
 
 	d1, d2 := index1.Definition, index2.Definition
-	if d1.Using != d1.Using ||
-		d1.Bucket != d2.Bucket ||
+	if d1.Bucket != d2.Bucket ||
 		d1.IsPrimary != d2.IsPrimary ||
 		d1.ExprType != d2.ExprType ||
 		d1.PartitionScheme != d2.PartitionScheme ||
@@ -326,13 +464,26 @@ func (b *metadataClient) equivalentIndex(
 		return false
 	}
 
-	for _, s1 := range d1.SecExprs {
-		for _, s2 := range d2.SecExprs {
-			if s1 != s2 {
-				return false
-			}
+	if len(d1.SecExprs) != len(d2.SecExprs) {
+		return false
+	}
+
+	for i, s1 := range d1.SecExprs {
+		if s1 != d2.SecExprs[i] {
+			return false
 		}
 	}
+
+	if len(d1.Desc) != len(d2.Desc) {
+		return false
+	}
+
+	for i, b1 := range d1.Desc {
+		if b1 != d2.Desc[i] {
+			return false
+		}
+	}
+
 	return true
 }
 
@@ -342,77 +493,333 @@ func (b *metadataClient) equivalentIndex(
 
 // manage load statistics.
 type loadHeuristics struct {
-	avgLoad float64
+	avgLoad uint64
+	hit     uint64
+	stats   unsafe.Pointer
+}
+
+type loadStats struct {
+	pending      int64
+	rollbackTime int64
+	statsTime    int64
+	staleCount   int64
+}
+
+func newLoadStats() *loadStats {
+
+	return &loadStats{
+		pending:      math.MaxInt64, // initialize to maxInt64 -- no stats to compare
+		rollbackTime: 0,             // initialize to 0 -- always allow scan
+		statsTime:    0,
+		staleCount:   0,
+	}
+}
+
+func newLoadHeuristics() *loadHeuristics {
+
+	return &loadHeuristics{
+		avgLoad: 0,
+		hit:     0,
+		stats:   unsafe.Pointer(newLoadStats()),
+	}
+}
+
+func (b *loadHeuristics) updateLoad(value float64) {
+
+	avgLoadInt := atomic.LoadUint64(&b.avgLoad)
+	avgLoad := math.Float64frombits(avgLoadInt)
+
+	// compute incremental average.
+	avgLoad = (avgLoad + float64(value)) / 2.0
+
+	avgLoadInt = math.Float64bits(avgLoad)
+	atomic.StoreUint64(&b.avgLoad, avgLoadInt)
+}
+
+func (b *loadHeuristics) getLoad() float64 {
+
+	avgLoadInt := atomic.LoadUint64(&b.avgLoad)
+	avgLoad := math.Float64frombits(avgLoadInt)
+
+	return avgLoad
+}
+
+func (b *loadHeuristics) incHit() {
+
+	atomic.AddUint64(&b.hit, 1)
+}
+
+func (b *loadHeuristics) getHit() uint64 {
+
+	return atomic.LoadUint64(&b.hit)
+}
+
+func (b *loadHeuristics) updateStats(stats *loadStats) {
+
+	atomic.StorePointer(&b.stats, unsafe.Pointer(stats))
+}
+
+func (b *loadHeuristics) getStats() *loadStats {
+
+	return (*loadStats)(atomic.LoadPointer(&b.stats))
+}
+
+func (b *loadStats) getPendingItem() int64 {
+
+	return b.pending
+}
+
+func (b *loadStats) updatePendingItem(value int64) {
+
+	b.pending = value
+}
+
+func (b *loadStats) getRollbackTime() int64 {
+
+	return b.rollbackTime
+}
+
+func (b *loadStats) updateRollbackTime(value int64) {
+
+	b.rollbackTime = value
+}
+
+func (b *loadStats) updateStatsTime(value int64) {
+
+	if b.statsTime != value {
+		b.statsTime = value
+		b.staleCount = 0
+	} else {
+		b.staleCount++
+	}
+}
+
+func (b *loadStats) isStatsCurrent() bool {
+
+	return b.staleCount < 10
 }
 
 // pick a random replica from the list.
-func (b *metadataClient) pickRandom(replicas []uint64, defnID uint64, excludes map[uint64]bool) (uint64, bool) {
+func (b *metadataClient) pickRandom(replicas []uint64, defnID uint64, excludes map[uint64]bool) (*mclient.InstanceDefn, int64, bool) {
+
+	//
+	// filter out active inst.  Exclude inst from exclusion list (inst that has already failed scan)
+	//
 	var actvReplicas [128]uint64
 	n := 0
 	for _, replicaID := range replicas {
-		state, _ := b.indexState(uint64(replicaID))
+		state, _ := b.indexInstState(uint64(replicaID))
 		if state == common.INDEX_STATE_ACTIVE && (excludes == nil || !excludes[uint64(replicaID)]) {
 			actvReplicas[n] = uint64(replicaID)
 			n++
 		}
 	}
 
+	//
+	// If there is no inst, see if there is a inst in rebalance.
+	// If so, return the inst with rollbackTime 0 (do not check rollbackTime during scan)
+	//
+	if n == 0 {
+		if len(replicas) == 0 {
+			if inst, ok := b.pickReplicaInRebalance(defnID); ok {
+				return inst, 0, true
+			}
+		}
+		return nil, math.MaxInt64, false
+	}
+
+	//
+	// Filter out inst based on stats.
+	//
+	prunedReplica, rollbackTimes := b.pruneStaleReplica(actvReplicas[:n])
+	n = len(prunedReplica)
+
+	//
+	// Randomly select an inst after filtering
+	//
 	if n > 0 {
-		return actvReplicas[rand.Intn(n*10)%n], true
+		n = rand.Intn(n*10) % n
+		chosen := prunedReplica[n]
+
+		currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
+		if inst, ok := currmeta.insts[common.IndexInstId(chosen)]; ok {
+			return inst, rollbackTimes[n], true
+		}
 	}
 
-	if excludes == nil || !excludes[uint64(defnID)] {
-		return defnID, true
-	}
-
-	return uint64(0), false
+	return nil, math.MaxInt64, false
 }
 
 // pick an optimal replica for the index `defnID` under least load.
-func (b *metadataClient) pickOptimal(defnID uint64, excludes map[uint64]bool) (uint64, bool) {
-	// gather active-replicas
+func (b *metadataClient) pickOptimal(defnID uint64, excludes map[uint64]bool) (*mclient.InstanceDefn, int64, bool) {
+
+	//
+	// filter out active inst.  Exclude inst from exclusion list (inst that has already failed scan)
+	//
 	var actvReplicas [128]uint64
-	var loadList [128]float64
 	n := 0
 	currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
+
 	for _, replicaID := range currmeta.replicas[common.IndexDefnId(defnID)] {
-		state, _ := b.indexState(uint64(replicaID))
+		state, _ := b.indexInstState(uint64(replicaID))
 		if state == common.INDEX_STATE_ACTIVE && (excludes == nil || !excludes[uint64(replicaID)]) {
 			actvReplicas[n] = uint64(replicaID)
-			currmeta.rw.RLock()
-			load, ok := currmeta.loads[replicaID]
-			currmeta.rw.RUnlock()
-			if !ok {
-				loadList[n] = 0.0
-			} else {
-				loadList[n] = load.avgLoad
-			}
 			n++
 		}
 	}
+
+	//
+	// If there is no inst, see if there is a inst in rebalance.
+	// If so, return the inst with rollbackTime 0 (do not check rollbackTime during scan)
+	//
 	if n == 0 { // none are active
-		if excludes == nil || !excludes[uint64(defnID)] {
-			return defnID, true
+		if len(currmeta.replicas[common.IndexDefnId(defnID)]) == 0 {
+			if inst, ok := b.pickReplicaInRebalance(defnID); ok {
+				return inst, 0, true
+			}
 		}
-		return uint64(0), false
+		return nil, math.MaxInt64, false
 	}
+
+	//
+	// Filter inst based on stats.
+	//
+	prunedReplicas, _ := b.pruneStaleReplica(actvReplicas[:n])
+	n = len(prunedReplicas)
+	if n == 0 { // none are active
+		return nil, math.MaxInt64, false
+	}
+
+	//
+	// Comppute the min/least load for the inst after filtering
+	//
+	loadList := make([]float64, n)
+	for i, replicaID := range prunedReplicas {
+		load, ok := currmeta.loads[common.IndexInstId(replicaID)]
+		if !ok {
+			loadList[i] = 0.0
+		} else {
+			loadList[i] = load.getLoad()
+		}
+	}
+
 	// compute replica with least load.
-	sort.Float64s(loadList[:n])
+	sort.Float64s(loadList)
 	leastLoad := loadList[0]
 
+	//
+	// Filter inst based on load
+	//
 	var replicas [128]uint64
 	// gather list of replicas with equivalent load
 	m := 0
-	for _, replicaID := range actvReplicas[:n] {
-		currmeta.rw.RLock()
-		load, ok := currmeta.loads[common.IndexDefnId(replicaID)]
-		currmeta.rw.RUnlock()
-		if !ok || (load.avgLoad*b.equivalenceFactor <= leastLoad) {
+	for _, replicaID := range prunedReplicas {
+		load, ok := currmeta.loads[common.IndexInstId(replicaID)]
+		if !ok || (load.getLoad()*b.equivalenceFactor <= leastLoad) {
 			replicas[m] = replicaID
 			m++
 		}
 	}
+
+	//
+	// Pick an inst with equivalent load
+	//
 	return b.pickRandom(replicas[:m], defnID, excludes)
+}
+
+func (b *metadataClient) pickReplicaInRebalance(defnID uint64) (*mclient.InstanceDefn, bool) {
+
+	// Run out of active instance.   Try instance under rebalance, in case rebalance may have finished.
+	currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
+	replicasInRebal := currmeta.replicasInRebal[common.IndexDefnId(defnID)]
+	n := len(replicasInRebal)
+	if n > 0 {
+		return replicasInRebal[rand.Intn(n*10)%n], true
+	}
+
+	return nil, false
+}
+
+func (b *metadataClient) pruneStaleReplica(replicas []uint64) ([]uint64, []int64) {
+
+	currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
+
+	// If there is only one instance or disable replica pruning, then just return.
+	if len(replicas) == 1 || b.settings.DisablePruneReplica() {
+		return replicas, make([]int64, len(replicas))
+	}
+
+	// read the progress stats from each index -- exclude indexer that has not refreshed its stats
+	pendings, rollbackTimes, minPending := b.getPendingStats(replicas, currmeta, true)
+	if uint64(minPending) >= uint64(math.MaxInt64) {
+		// if there is no current progress stats available, then read stats even if it could be stale
+		// This can happen if KV is partitioned away from all indexer nodes, since that indexer cannot
+		// refresh progress stats
+		pendings, rollbackTimes, minPending = b.getPendingStats(replicas, currmeta, false)
+	}
+
+	// If there is no progress stats available, then do not filter.
+	// Stats not available when
+	// 1) All indexers have not yet been able to send stats to cbq after cluster restart
+	// 2) index just finish building but not yet send stats over
+	// 3) There is a single instance (no replica) and not available
+	if uint64(minPending) >= uint64(math.MaxInt64) {
+		return replicas, make([]int64, len(replicas))
+	}
+
+	percent := b.settings.ScanLagPercent()
+	quota := int64(float64(minPending) * (percent + 1.0))
+
+	item := b.settings.ScanLagItem()
+	if quota < int64(item) {
+		quota = int64(item)
+	}
+
+	result1 := make([]uint64, len(replicas))
+	result2 := make([]int64, len(replicas))
+	n := 0
+
+	for i, instId := range replicas {
+		if pendings[i] != int64(math.MaxInt64) && pendings[i] <= quota {
+			result1[n] = instId
+			result2[n] = rollbackTimes[i]
+			n++
+		}
+	}
+
+	return result1[:n], result2[:n]
+}
+
+func (b *metadataClient) getPendingStats(replicas []uint64, currmeta *indexTopology, useCurrent bool) ([]int64, []int64, int64) {
+
+	pendings := make([]int64, len(replicas))
+	rollbackTimes := make([]int64, len(replicas))
+	minPending := int64(math.MaxInt64)
+
+	for i, instId := range replicas {
+		load, ok := currmeta.loads[common.IndexInstId(instId)]
+		if !ok {
+			pendings[i] = math.MaxInt64
+			rollbackTimes[i] = math.MaxInt64
+			continue
+		}
+
+		stats := load.getStats()
+		if useCurrent && !stats.isStatsCurrent() {
+			pendings[i] = math.MaxInt64
+			rollbackTimes[i] = math.MaxInt64
+			continue
+		}
+
+		pendings[i] = stats.getPendingItem()
+		rollbackTimes[i] = stats.getRollbackTime()
+
+		if pendings[i] < minPending {
+			minPending = pendings[i]
+		}
+	}
+
+	return pendings, rollbackTimes, minPending
 }
 
 //----------------
@@ -428,20 +835,9 @@ func (b *metadataClient) logstats() {
 loop:
 	for {
 		<-tick.C
-		s := make([]string, 0, 16)
-		currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
-		func() {
-			logging.Infof("connected with %v indexers\n", len(currmeta.topology))
-			for id, replicas := range currmeta.replicas {
-				logging.Infof("index %v has %v replicas\n", id, len(replicas))
-			}
-			currmeta.rw.RLock()
-			defer currmeta.rw.RUnlock()
-			for id, load := range currmeta.loads {
-				s = append(s, fmt.Sprintf(`"%v": %v`, id, load.avgLoad))
-			}
-			logging.Infof("client load stats {%v}", strings.Join(s, ","))
-		}()
+
+		b.printstats()
+
 		select {
 		case _, ok := <-b.finch:
 			if !ok {
@@ -452,51 +848,78 @@ loop:
 	}
 }
 
+func (b *metadataClient) printstats() {
+
+	s := make([]string, 0, 16)
+	currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
+
+	logging.Infof("connected with %v indexers\n", len(currmeta.topology))
+	for id, replicas := range currmeta.replicas {
+		logging.Infof("index %v has replicas %v: \n", id, replicas)
+	}
+	// currmeta.loads is immutable
+	for id, _ := range currmeta.insts {
+		load := currmeta.loads[id]
+		s = append(s, fmt.Sprintf(`"%v": %v`, id, load.getLoad()))
+	}
+	logging.Infof("client load stats {%v}", strings.Join(s, ","))
+
+	s = make([]string, 0, 16)
+	for id, _ := range currmeta.insts {
+		load := currmeta.loads[id]
+		s = append(s, fmt.Sprintf(`"%v": %v`, id, load.getHit()))
+	}
+	logging.Infof("client hit stats {%v}", strings.Join(s, ","))
+
+	s = make([]string, 0, 16)
+	for id, _ := range currmeta.insts {
+		load := currmeta.loads[id]
+		s = append(s, fmt.Sprintf(`"%v": %v`, id, load.getStats().getPendingItem()))
+	}
+	logging.Infof("client pending item stats {%v}", strings.Join(s, ","))
+
+	s = make([]string, 0, 16)
+	for id, _ := range currmeta.insts {
+		load := currmeta.loads[id]
+		s = append(s, fmt.Sprintf(`"%v": %v`, id, load.getStats().getRollbackTime()))
+	}
+	logging.Infof("client rollback times {%v}", strings.Join(s, ","))
+
+	s = make([]string, 0, 16)
+	for id, _ := range currmeta.insts {
+		load := currmeta.loads[id]
+		s = append(s, fmt.Sprintf(`"%v": %v`, id, load.getStats().isStatsCurrent()))
+	}
+	logging.Infof("client stats current {%v}", strings.Join(s, ","))
+}
+
 // unprotected access to shared structures.
 func (b *metadataClient) indexState(defnID uint64) (common.IndexState, error) {
 	currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
-	for _, indexes := range currmeta.topology {
-		for _, index := range indexes {
-			if index.Definition.DefnId == common.IndexDefnId(defnID) {
-				if index.Instances != nil && len(index.Instances) > 0 {
-					state := index.Instances[0].State
-					if len(index.Instances) == 0 {
-						err := fmt.Errorf("no instance for %q", defnID)
-						return state, err
-					} else if index.Instances[0].Error != "" {
-						return state, errors.New(index.Instances[0].Error)
-					} else {
-						return state, nil
-					}
-				}
-				return common.INDEX_STATE_ERROR, ErrorInstanceNotFound
-			}
+	if index, ok := currmeta.defns[common.IndexDefnId(defnID)]; ok {
+		if index.Error != "" {
+			return common.INDEX_STATE_ERROR, errors.New(index.Error)
 		}
+
+		return index.State, nil
 	}
+
 	return common.INDEX_STATE_ERROR, ErrorIndexNotFound
 }
 
-// getNodes return the set of nodes hosting the specified set
-// of indexes
-func (b *metadataClient) getNodes(defnIDs []uint64) ([]string, bool) {
-	adminports := make([]string, 0)
-	for _, defnID := range defnIDs {
-		adminport, ok := b.getNode(defnID)
-		if !ok {
-			return nil, false
-		}
-		adminports = append(adminports, adminport)
-	}
-	return adminports, true
-}
+// unprotected access to shared structures.
+func (b *metadataClient) indexInstState(instID uint64) (common.IndexState, error) {
+	currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
 
-// getNode hosting index with `defnID`.
-func (b *metadataClient) getNode(defnID uint64) (adminport string, ok bool) {
-	aport, _, err := b.mdClient.FindServiceForIndex(common.IndexDefnId(defnID))
-	if err != nil {
-		return "", false
+	if inst, ok := currmeta.insts[common.IndexInstId(instID)]; ok {
+		if inst.Error != "" {
+			return common.INDEX_STATE_ERROR, errors.New(inst.Error)
+		}
+
+		return inst.State, nil
 	}
-	return aport, true
+
+	return common.INDEX_STATE_ERROR, ErrorInstanceNotFound
 }
 
 // update 2i cluster information,
@@ -534,10 +957,11 @@ func (b *metadataClient) updateIndexerList(discardExisting bool) error {
 	defer b.topoChangeLock.Unlock()
 
 	// populate indexers' adminport and queryport
-	adminports, err := getIndexerAdminports(cinfo)
+	adminports, activeNode, failedNode, unhealthyNode, newNode, err := getIndexerAdminports(cinfo)
 	if err != nil {
 		return err
 	}
+	b.mdClient.SetClusterStatus(activeNode, failedNode, unhealthyNode, newNode)
 
 	fmsg := "Refreshing indexer list due to cluster changes or auto-refresh."
 	logging.Infof(fmsg)
@@ -554,7 +978,7 @@ func (b *metadataClient) updateIndexerList(discardExisting bool) error {
 
 	if discardExisting {
 		for _, indexerID := range curradmns {
-			b.mdClient.UnwatchMetadata(indexerID)
+			b.mdClient.UnwatchMetadata(indexerID, activeNode)
 		}
 		curradmns = make(map[string]common.IndexerId)
 	}
@@ -586,7 +1010,7 @@ func (b *metadataClient) updateIndexerList(discardExisting bool) error {
 
 			// WatchMetadata will "unwatch" an old metadata watcher which
 			// shares the same indexer Id (but the adminport may be different).
-			indexerID = b.mdClient.WatchMetadata(adminport, fn)
+			indexerID = b.mdClient.WatchMetadata(adminport, fn, activeNode)
 			m[adminport] = indexerID
 		} else {
 			err = b.mdClient.UpdateServiceAddrForIndexer(indexerID, adminport)
@@ -608,7 +1032,7 @@ func (b *metadataClient) updateIndexerList(discardExisting bool) error {
 			}
 		}
 		if !found {
-			b.mdClient.UnwatchMetadata(indexerID)
+			b.mdClient.UnwatchMetadata(indexerID, activeNode)
 		}
 	}
 	b.safeupdate(m, true /*force*/)
@@ -660,6 +1084,9 @@ func (b *metadataClient) updateTopology(
 
 	currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
 
+	// Refresh indexer version
+	b.mdClient.RefreshIndexerVersion()
+
 	mindexes, version := b.mdClient.ListIndex()
 	// detect change in indexer cluster or indexes.
 	if force == false && currmeta != nil &&
@@ -667,47 +1094,103 @@ func (b *metadataClient) updateTopology(
 			!b.hasIndexesChanged(mindexes, version)) {
 		return currmeta
 	}
+
 	// create a new topology.
 	newmeta := &indexTopology{
-		version:    version,
-		adminports: make(map[string]common.IndexerId),
-		topology:   make(map[common.IndexerId][]*mclient.IndexMetadata),
-		replicas:   make(map[common.IndexDefnId][]common.IndexDefnId),
+		version:         version,
+		allIndexes:      mindexes,
+		adminports:      make(map[string]common.IndexerId),
+		topology:        make(map[common.IndexerId][]*mclient.IndexMetadata),
+		replicas:        make(map[common.IndexDefnId][]common.IndexInstId),
+		queryports:      make(map[common.IndexerId]string),
+		insts:           make(map[common.IndexInstId]*mclient.InstanceDefn),
+		defns:           make(map[common.IndexDefnId]*mclient.IndexMetadata),
+		replicasInRebal: make(map[common.IndexDefnId][]*mclient.InstanceDefn),
 	}
-	// adminport
+
+	// adminport/queryport
 	for adminport, indexerID := range adminports {
 		newmeta.adminports[adminport] = indexerID
 		newmeta.topology[indexerID] = make([]*mclient.IndexMetadata, 0, 16)
-	}
-	// topology
-	for _, mindex := range mindexes {
-		index := *mindex
-		for _, instance := range index.Instances {
-			indexes, ok := newmeta.topology[instance.IndexerId]
-			if !ok {
-				fmsg := "indexer node %v not available"
-				logging.Fatalf(fmsg, instance.IndexerId)
-				continue
-			}
-			newmeta.topology[instance.IndexerId] = append(indexes, &index)
+
+		_, qp, _, err := b.mdClient.FindServiceForIndexer(indexerID)
+		if err == nil {
+			// This excludes watcher that is not currently connected
+			newmeta.queryports[indexerID] = qp
 		}
 	}
-	// replicas
-	newmeta.replicas = b.computeReplicas(newmeta.topology)
-	// loads
-	newmeta.loads = make(map[common.IndexDefnId]loadHeuristics)
-	func() {
-		if currmeta != nil {
-			currmeta.rw.RLock()
-			defer currmeta.rw.RUnlock()
 
-			for indexId, load := range currmeta.loads {
-				if _, ok := newmeta.replicas[indexId]; ok {
-					newmeta.loads[indexId] = load
+	// insts/defns
+	topologyMap := make(map[common.IndexerId]map[common.IndexDefnId]*mclient.IndexMetadata)
+	for _, mindex := range mindexes {
+		newmeta.defns[mindex.Definition.DefnId] = mindex
+
+		for _, instance := range mindex.Instances {
+			if _, ok := topologyMap[instance.IndexerId]; !ok {
+				topologyMap[instance.IndexerId] = make(map[common.IndexDefnId]*mclient.IndexMetadata)
+			}
+			if _, ok := topologyMap[instance.IndexerId][instance.DefnId]; !ok {
+				topologyMap[instance.IndexerId][instance.DefnId] = mindex
+			}
+			newmeta.insts[instance.InstId] = instance
+		}
+
+		for _, instance := range mindex.InstsInRebalance {
+			if _, ok := topologyMap[instance.IndexerId]; !ok {
+				topologyMap[instance.IndexerId] = make(map[common.IndexDefnId]*mclient.IndexMetadata)
+			}
+			if _, ok := topologyMap[instance.IndexerId][instance.DefnId]; !ok {
+				topologyMap[instance.IndexerId][instance.DefnId] = mindex
+			}
+			if _, ok := newmeta.insts[instance.InstId]; !ok {
+				newmeta.insts[instance.InstId] = instance
+			}
+		}
+	}
+
+	// topology
+	for indexerId, indexes := range topologyMap {
+		for _, index := range indexes {
+			indexes2, ok := newmeta.topology[indexerId]
+			if !ok {
+				fmsg := "indexer node %v not available"
+				logging.Fatalf(fmsg, indexerId)
+				continue
+			}
+			newmeta.topology[indexerId] = append(indexes2, index)
+		}
+	}
+
+	// replicas/replicaInRebal
+	newmeta.replicas = b.computeReplicas(newmeta.topology)
+	newmeta.replicasInRebal = b.computeReplicasInRebalance(newmeta.topology)
+
+	// loads - after creation, newmeta.loads is immutable, even though the
+	// content (loadHeuristics) is mutable
+	newmeta.loads = make(map[common.IndexInstId]*loadHeuristics)
+
+	if currmeta != nil {
+		// currmeta.loads is immutable
+		for instId, curInst := range currmeta.insts {
+			if newInst, ok := newmeta.insts[instId]; ok {
+				if load, ok := currmeta.loads[instId]; ok {
+
+					if curInst.Version == newInst.Version {
+						newmeta.loads[instId] = load
+					} else {
+						logging.Infof("new index instance version for %v.  Resetting instance stats.", instId)
+					}
 				}
 			}
 		}
-	}()
+	}
+
+	for instId, _ := range newmeta.insts {
+		if _, ok := newmeta.loads[instId]; !ok {
+			newmeta.loads[instId] = newLoadHeuristics()
+		}
+	}
+
 	return newmeta
 }
 
@@ -719,36 +1202,51 @@ func (b *metadataClient) safeupdate(
 	done := false
 	for done == false {
 		currmeta = (*indexTopology)(atomic.LoadPointer(&b.indexers))
+
+		// no need to update if cached metadata is already up to date
+		if !force && currmeta != nil && b.mdClient.GetMetadataVersion() <= currmeta.version {
+			return
+		}
+
+		// if adminport is nil, then safeupdate is not triggered by
+		// topology change.  Get the adminports from currmeta.
+		if currmeta != nil && adminports == nil {
+			adminports = currmeta.adminports
+		}
+
 		newmeta = b.updateTopology(adminports, force)
 		if currmeta == nil {
+			// This should happen only during bootstrap
 			atomic.StorePointer(&b.indexers, unsafe.Pointer(newmeta))
-			logging.Infof("initialized currmeta %v\n", newmeta.version)
+			logging.Infof("initialized currmeta %v force %v \n", newmeta.version, force)
 			return
 		} else if force {
 			if newmeta.version < currmeta.version {
-				fmsg := "skip newmeta %v <= %v\n"
-				logging.Infof(fmsg, newmeta.version, currmeta.version)
-				return
+				// This should not happen.  But if it does force to increment metadata version.
+				b.mdClient.IncrementMetadataVersion()
+				continue
 			}
 		} else if newmeta.version <= currmeta.version {
-			fmsg := "skip newmeta %v <= %v\n"
-			logging.Infof(fmsg, newmeta.version, currmeta.version)
+			fmsg := "skip newmeta %v <= %v force %v \n"
+			logging.Infof(fmsg, newmeta.version, currmeta.version, force)
 			return
 		}
+
 		oldptr := unsafe.Pointer(currmeta)
 		newptr := unsafe.Pointer(newmeta)
 		done = atomic.CompareAndSwapPointer(&b.indexers, oldptr, newptr)
 
 		// metaCh should never close
-		if b.metaCh != nil {
+		if done && b.metaCh != nil {
 			select {
+			// update scan clients
 			case b.metaCh <- true:
 			default:
 			}
 		}
 	}
-	fmsg := "switched currmeta from %v -> %v\n"
-	logging.Infof(fmsg, currmeta.version, newmeta.version)
+	fmsg := "switched currmeta from %v -> %v force %v \n"
+	logging.Infof(fmsg, currmeta.version, newmeta.version, force)
 }
 
 func (b *metadataClient) hasIndexersChanged(
@@ -789,9 +1287,9 @@ func (b *metadataClient) hasIndexesChanged(
 		}
 	}
 
-	for _, iindexes := range currmeta.topology {
+	for _, iindexes := range currmeta.topology { //iindexes -> []*IndexMetadata
 	loop:
-		for _, index := range iindexes {
+		for _, index := range iindexes { // index -> *IndexMetadata
 			for _, mindex := range mindexes {
 				if mindex.Definition.DefnId == index.Definition.DefnId {
 					for _, ix := range index.Instances {
@@ -810,26 +1308,84 @@ func (b *metadataClient) hasIndexesChanged(
 	return false
 }
 
+//
+// Update statistics index instance
+//
+func (b *metadataClient) updateStats(stats map[common.IndexInstId]common.Statistics) {
+
+	currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
+
+	for instId, stats := range stats {
+
+		load, ok := currmeta.loads[instId]
+		if !ok {
+			continue
+		}
+
+		newStats := *load.getStats()
+
+		if v := stats.Get("num_docs_pending"); v != nil {
+			pending := int64(v.(float64))
+			if v := stats.Get("num_docs_queued"); v != nil {
+				queued := int64(v.(float64))
+				newStats.updatePendingItem(pending + queued)
+			}
+		}
+
+		if v := stats.Get("last_rollback_time"); v != nil {
+			if rollback, err := strconv.ParseInt(v.(string), 10, 64); err == nil {
+
+				oldRollbackTime := load.getStats().getRollbackTime()
+				if rollback != oldRollbackTime {
+					logging.Infof("Rollback time has changed for index inst %v. New rollback time %v", instId, rollback)
+				}
+
+				newStats.updateRollbackTime(rollback)
+			} else {
+				logging.Errorf("Error in converting last_rollback_time %v, type %v", err)
+			}
+		}
+
+		if v := stats.Get("progress_stat_time"); v != nil {
+			if progress, err := strconv.ParseInt(v.(string), 10, 64); err == nil {
+				newStats.updateStatsTime(progress)
+			} else {
+				logging.Errorf("Error in converting progress_stat_time %v, type %v", err)
+			}
+		}
+
+		load.updateStats(&newStats)
+	}
+}
+
 // return adminports for all known indexers.
-func getIndexerAdminports(cinfo *common.ClusterInfoCache) ([]string, error) {
+func getIndexerAdminports(cinfo *common.ClusterInfoCache) ([]string, int, int, int, int, error) {
 	iAdminports := make([]string, 0)
+	unhealthyNodes := 0
 	for _, node := range cinfo.GetNodesByServiceType("indexAdmin") {
 		status, err := cinfo.GetNodeStatus(node)
 		if err != nil {
-			return nil, err
+			return nil, 0, 0, 0, 0, err
 		}
 		logging.Verbosef("node %v status: %q", node, status)
 		if status == "healthy" || status == "active" || status == "warmup" {
 			adminport, err := cinfo.GetServiceAddress(node, "indexAdmin")
 			if err != nil {
-				return nil, err
+				return nil, 0, 0, 0, 0, err
 			}
 			iAdminports = append(iAdminports, adminport)
 		} else {
+			unhealthyNodes++
 			logging.Warnf("node %v status: %q", node, status)
 		}
 	}
-	return iAdminports, nil
+
+	return iAdminports, // active, healthy indexer node with known ports
+		len(cinfo.GetActiveIndexerNodes()), // all active indexer node (known ports + unknown ports + unhealthy node)
+		len(cinfo.GetFailedIndexerNodes()), // failover indexer node
+		unhealthyNodes, // active, unhealthy indexer node with known ports
+		len(cinfo.GetNewIndexerNodes()), // new indexer node
+		nil
 }
 
 // FIXME/TODO: based on discussion with John-
@@ -873,6 +1429,10 @@ func (b *metadataClient) watchClusterChanges() {
 	}
 	defer scn.Close()
 
+	hasUnhealthyNode := false
+	ticker := time.NewTicker(time.Duration(5) * time.Minute)
+	defer ticker.Stop()
+
 	// For observing node services config
 	ch := scn.GetNotifyCh()
 	for {
@@ -886,8 +1446,72 @@ func (b *metadataClient) watchClusterChanges() {
 				selfRestart()
 				return
 			}
+		case _, ok := <-b.mdNotifyCh:
+			if ok {
+				if err := b.updateIndexerList(false); err != nil {
+					logging.Errorf("updateIndexerList(): %v\n", err)
+					selfRestart()
+					return
+				}
+			}
+		case stats, ok := <-b.stNotifyCh:
+			if ok {
+				b.updateStats(stats)
+			}
+		case <-ticker.C:
+			// refresh indexer version
+			b.mdClient.RefreshIndexerVersion()
+
+			cinfo, err := common.FetchNewClusterInfoCache(b.cluster, common.DEFAULT_POOL)
+			if err != nil {
+				logging.Errorf("updateIndexerList(): %v\n", err)
+				selfRestart()
+				return
+			}
+
+			_, _, _, unhealthyNode, _, err := getIndexerAdminports(cinfo)
+			if err != nil {
+				logging.Errorf("updateIndexerList(): %v\n", err)
+				selfRestart()
+				return
+			}
+
+			if unhealthyNode != 0 {
+				hasUnhealthyNode = true
+				b.mdClient.SetClusterStatus(-1, -1, unhealthyNode, -1)
+
+			} else if hasUnhealthyNode {
+				// refresh indexer version when there is no more unhealthy node
+				hasUnhealthyNode = false
+				if err := b.updateIndexerList(false); err != nil {
+					logging.Errorf("updateIndexerList(): %v\n", err)
+					selfRestart()
+					return
+				}
+			}
 		case <-b.finch:
 			return
 		}
 	}
+}
+
+func postWithAuth(url string, bodyType string, body io.Reader, timeout time.Duration) (*http.Response, error) {
+
+	if !strings.HasPrefix(url, "http://") {
+		url = "http://" + url
+	}
+
+	req, err := http.NewRequest("POST", url, body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", bodyType)
+	err = cbauth.SetRequestAuthVia(req, nil)
+	if err != nil {
+		logging.Errorf("Error setting auth %v", err)
+		return nil, err
+	}
+
+	client := http.Client{Timeout: timeout}
+	return client.Do(req)
 }

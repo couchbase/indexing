@@ -37,14 +37,10 @@ func TestBufferedScan_BackfillDisabled(t *testing.T) {
 	kvutility.SetKeyValues(kvdocs, bucketName, "", clusterconfig.KVAddress)
 
 	// Disable backfill
-	cv := c.SystemConfig["queryport.client.backfillLimit"]
-	actual := cv.Int()
-	c.SystemConfig.SetValue("queryport.client.backfillLimit", 0)
-	defer func() {
-		c.SystemConfig.SetValue("queryport.client.backfillLimit", actual)
-	}()
+	err := secondaryindex.ChangeIndexerSettings("queryport.client.settings.backfillLimit", float64(0), clusterconfig.Username, clusterconfig.Password, kvaddress)
+	tc.HandleError(err, "Error in ChangeIndexerSettings")
 
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{"address"}, false, nil, true, defaultIndexActiveTimeout, nil)
+	err = secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{"address"}, false, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	cluster, err := c.ClusterAuthUrl(indexManagementAddress)
@@ -72,6 +68,8 @@ func TestBufferedScan_BackfillDisabled(t *testing.T) {
 	if err != nil {
 		FailTestIfError(err, "TestBufferedScan_BackfillDisabled failed in getting IndexByName", t)
 	}
+	index, err = secondaryindex.WaitForIndexOnline(n1qlclient, indexName, index)
+	FailTestIfError(err, "TestBufferedScan_BackfillDisabled failed in waiting for index on line", t)
 
 	// query setup
 	//low := value.Values{value.NewValue("A")}
@@ -145,12 +143,12 @@ func TestBufferedScan_BackfillEnabled(t *testing.T) {
 
 	var indexName = "addressidx"
 
-	// Disable backfill
-	cv := c.SystemConfig["queryport.client.backfillLimit"]
-	actual := cv.Int()
-	c.SystemConfig.SetValue("queryport.client.backfillLimit", 1)
+	err := secondaryindex.ChangeIndexerSettings("queryport.client.settings.backfillLimit", float64(1), clusterconfig.Username, clusterconfig.Password, kvaddress)
+	tc.HandleError(err, "Error in ChangeIndexerSettings")
+
 	defer func() {
-		c.SystemConfig.SetValue("queryport.client.backfillLimit", actual)
+		err = secondaryindex.ChangeIndexerSettings("queryport.client.settings.backfillLimit", float64(0), clusterconfig.Username, clusterconfig.Password, kvaddress)
+		tc.HandleError(err, "Error in ChangeIndexerSettings")
 	}()
 
 	cluster, err := c.ClusterAuthUrl(indexManagementAddress)
@@ -178,6 +176,8 @@ func TestBufferedScan_BackfillEnabled(t *testing.T) {
 	if err != nil {
 		FailTestIfError(err, "TestBufferedScan_BackfillEnabled failed in getting IndexByName", t)
 	}
+	index, err = secondaryindex.WaitForIndexOnline(n1qlclient, indexName, index)
+	FailTestIfError(err, "TestBufferedScan_BackfillEnabled failed in waiting for index on line", t)
 
 	// query setup
 	//low := value.Values{value.NewValue("A")}
@@ -325,6 +325,10 @@ type qcmdContext struct {
 	err error
 }
 
+func (ctxt *qcmdContext) GetScanCap() int64 {
+	return 512 // Default index scan request size
+}
+
 func (ctxt *qcmdContext) Error(err qerrors.Error) {
 	ctxt.err = err
 	fmt.Printf("Scan error: %v\n", err)
@@ -357,7 +361,7 @@ func getbackfillFiles(dir string) []string {
 	rv := make([]string, 0)
 	for _, file := range files {
 		fname := path.Join(dir, file.Name())
-		if strings.Contains(fname, "scan-backfill") {
+		if strings.Contains(fname, n1ql.BACKFILLPREFIX) {
 			rv = append(rv, fname)
 		}
 	}

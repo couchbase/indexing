@@ -26,6 +26,13 @@ const INDEXER_ID_NIL = IndexerId("")
 // simple-key shall be shaped as [ val ]
 type SecondaryKey []interface{}
 
+type Unbounded int
+
+const (
+	MinUnbounded Unbounded = -1
+	MaxUnbounded           = 1
+)
+
 // IndexStatistics captures statistics for a range or a single key.
 type IndexStatistics interface {
 	Count() (int64, error)
@@ -70,9 +77,9 @@ const (
 	INDEX_STATE_ACTIVE
 	//Drop Index Processed
 	INDEX_STATE_DELETED
-	//Error State
+	//Error State: not a persistent state -- but used in function return value
 	INDEX_STATE_ERROR
-	// Nil State (used for no-op / invalid)
+	// Nil State (used for no-op / invalid) -- not a persistent state
 	INDEX_STATE_NIL
 )
 
@@ -120,7 +127,7 @@ func (s IndexerState) String() string {
 	case INDEXER_PREPARE_UNPAUSE:
 		return "PrepareUnpause"
 	case INDEXER_BOOTSTRAP:
-		return "Bootstrap"
+		return "Warmup"
 	default:
 		return "Invalid"
 	}
@@ -174,21 +181,34 @@ type IndexDefn struct {
 	PartitionScheme PartitionScheme `json:"partitionScheme,omitempty"`
 	PartitionKey    string          `json:"partitionKey,omitempty"`
 	WhereExpr       string          `json:"where,omitempty"`
+	Desc            []bool          `json:"desc,omitempty"`
 	Deferred        bool            `json:"deferred,omitempty"`
 	Immutable       bool            `json:"immutable,omitempty"`
 	Nodes           []string        `json:"nodes,omitempty"`
 	IsArrayIndex    bool            `json:"isArrayIndex,omitempty"`
+	NumReplica      uint32          `json:"numReplica,omitempty"`
+
+	// transient field (not part of index metadata)
+	InstVersion int         `json:"instanceVersion,omitempty"`
+	ReplicaId   int         `json:"replicaId,omitempty"`
+	InstId      IndexInstId `json:"instanceId,omitempty"`
 }
 
 //IndexInst is an instance of an Index(aka replica)
 type IndexInst struct {
-	InstId  IndexInstId
-	Defn    IndexDefn
-	State   IndexState
-	Stream  StreamId
-	Pc      PartitionContainer
-	Error   string
-	BuildTs []uint64
+	InstId         IndexInstId
+	Defn           IndexDefn
+	State          IndexState
+	RState         RebalanceState
+	Stream         StreamId
+	Pc             PartitionContainer
+	Error          string
+	BuildTs        []uint64
+	Version        int
+	ReplicaId      int
+	Scheduled      bool
+	StorageMode    string
+	OldStorageMode string
 }
 
 //IndexInstMap is a map from IndexInstanceId to IndexInstance
@@ -201,23 +221,81 @@ func (idx IndexDefn) String() string {
 	str += fmt.Sprintf("Using: %v ", idx.Using)
 	str += fmt.Sprintf("Bucket: %v ", idx.Bucket)
 	str += fmt.Sprintf("IsPrimary: %v ", idx.IsPrimary)
+	str += fmt.Sprintf("NumReplica: %v ", idx.NumReplica)
+	str += fmt.Sprintf("InstVersion: %v ", idx.InstVersion)
 	str += fmt.Sprintf("\n\t\tSecExprs: %v ", idx.SecExprs)
+	str += fmt.Sprintf("\n\t\tDesc: %v", idx.Desc)
 	str += fmt.Sprintf("\n\t\tPartitionScheme: %v ", idx.PartitionScheme)
 	str += fmt.Sprintf("PartitionKey: %v ", idx.PartitionKey)
 	str += fmt.Sprintf("WhereExpr: %v ", idx.WhereExpr)
 	return str
 
 }
+
+// This function makes a copy of index definition, excluding any transient
+// field.  It is a shallow copy (e.g. does not clone field 'Nodes').
+func (idx IndexDefn) Clone() *IndexDefn {
+	return &IndexDefn{
+		DefnId:          idx.DefnId,
+		Name:            idx.Name,
+		Using:           idx.Using,
+		Bucket:          idx.Bucket,
+		BucketUUID:      idx.BucketUUID,
+		IsPrimary:       idx.IsPrimary,
+		SecExprs:        idx.SecExprs,
+		Desc:            idx.Desc,
+		ExprType:        idx.ExprType,
+		PartitionScheme: idx.PartitionScheme,
+		PartitionKey:    idx.PartitionKey,
+		WhereExpr:       idx.WhereExpr,
+		Deferred:        idx.Deferred,
+		Immutable:       idx.Immutable,
+		Nodes:           idx.Nodes,
+		IsArrayIndex:    idx.IsArrayIndex,
+		NumReplica:      idx.NumReplica,
+	}
+}
+
+func (idx *IndexDefn) HasDescending() bool {
+
+	if idx.Desc != nil {
+		for _, d := range idx.Desc {
+			if d {
+				return true
+			}
+		}
+	}
+	return false
+
+}
+
 func (idx IndexInst) String() string {
 
 	str := "\n"
 	str += fmt.Sprintf("\tInstId: %v\n", idx.InstId)
 	str += fmt.Sprintf("\tDefn: %v\n", idx.Defn)
 	str += fmt.Sprintf("\tState: %v\n", idx.State)
+	str += fmt.Sprintf("\tRState: %v\n", idx.RState)
 	str += fmt.Sprintf("\tStream: %v\n", idx.Stream)
+	str += fmt.Sprintf("\tVersion: %v\n", idx.Version)
+	str += fmt.Sprintf("\tReplicaId: %v\n", idx.ReplicaId)
 	str += fmt.Sprintf("\tPartitionContainer: %v", idx.Pc)
 	return str
 
+}
+
+func (idx IndexInst) DisplayName() string {
+
+	return FormatIndexInstDisplayName(idx.Defn.Name, idx.ReplicaId)
+}
+
+func FormatIndexInstDisplayName(name string, replicaId int) string {
+
+	if replicaId != 0 {
+		return fmt.Sprintf("%v (replica %v)", name, replicaId)
+	}
+
+	return name
 }
 
 //StreamId represents the possible mutation streams
@@ -247,6 +325,25 @@ func (s StreamId) String() string {
 	}
 }
 
+type RebalanceState int
+
+const (
+	REBAL_ACTIVE RebalanceState = iota
+	REBAL_PENDING
+)
+
+func (s RebalanceState) String() string {
+
+	switch s {
+	case REBAL_ACTIVE:
+		return "RebalActive"
+	case REBAL_PENDING:
+		return "RebalPending"
+	default:
+		return "Invalid"
+	}
+}
+
 func (idx IndexInstMap) String() string {
 
 	str := "\n"
@@ -256,6 +353,9 @@ func (idx IndexInstMap) String() string {
 		str += fmt.Sprintf("Bucket: %v ", index.Defn.Bucket)
 		str += fmt.Sprintf("State: %v ", index.State)
 		str += fmt.Sprintf("Stream: %v ", index.Stream)
+		str += fmt.Sprintf("RState: %v ", index.RState)
+		str += fmt.Sprintf("Version: %v ", index.Version)
+		str += fmt.Sprintf("ReplicaId: %v ", index.ReplicaId)
 		str += "\n"
 	}
 	return str
@@ -300,6 +400,15 @@ func NewIndexDefnId() (IndexDefnId, error) {
 	return IndexDefnId(uuid.Uint64()), nil
 }
 
+func NewIndexInstId() (IndexInstId, error) {
+	uuid, err := NewUUID()
+	if err != nil {
+		return IndexInstId(0), err
+	}
+
+	return IndexInstId(uuid.Uint64()), nil
+}
+
 //IndexSnapType represents the snapshot type
 //created in indexer storage
 type IndexSnapType uint16
@@ -328,21 +437,109 @@ func (s IndexSnapType) String() string {
 
 }
 
-//NOTE: This type needs to be in sync with
-//smStrMap in index/global.go
+//NOTE: This type needs to be in sync with smStrMap
 type IndexType string
 
 const (
 	ForestDB        = "forestdb"
 	MemDB           = "memdb"
 	MemoryOptimized = "memory_optimized"
+	PlasmaDB        = "plasma"
 )
 
 func IsValidIndexType(t string) bool {
 	switch strings.ToLower(t) {
-	case ForestDB, MemDB, MemoryOptimized:
+	case ForestDB, MemDB, MemoryOptimized, PlasmaDB:
 		return true
 	}
 
 	return false
+}
+
+func IsEquivalentIndex(d1, d2 *IndexDefn) bool {
+
+	if d1.Bucket != d2.Bucket ||
+		d1.IsPrimary != d2.IsPrimary ||
+		d1.ExprType != d2.ExprType ||
+		d1.PartitionScheme != d2.PartitionScheme ||
+		d1.PartitionKey != d2.PartitionKey ||
+		d1.WhereExpr != d2.WhereExpr {
+
+		return false
+	}
+
+	if len(d1.SecExprs) != len(d2.SecExprs) {
+		return false
+	}
+
+	for i, s1 := range d1.SecExprs {
+		if s1 != d2.SecExprs[i] {
+			return false
+		}
+	}
+
+	if len(d1.Desc) != len(d2.Desc) {
+		return false
+	}
+
+	for i, b1 := range d1.Desc {
+		if b1 != d2.Desc[i] {
+			return false
+		}
+	}
+
+	return true
+}
+
+//
+// IndexerError - Runtime Error between indexer and other modules
+//
+type IndexerErrCode int
+
+const (
+	TransientError IndexerErrCode = iota
+	IndexNotExist
+	InvalidBucket
+	IndexerInRecovery
+	IndexBuildInProgress
+	IndexerNotActive
+	RebalanceInProgress
+	IndexAlreadyExist
+	DropIndexInProgress
+	IndexInvalidState
+)
+
+type IndexerError struct {
+	Reason string
+	Code   IndexerErrCode
+}
+
+func (e *IndexerError) Error() string {
+	return e.Reason
+}
+
+func (e *IndexerError) ErrCode() IndexerErrCode {
+	return e.Code
+}
+
+//MetadataRequestContext - communication context between manager and indexer
+//Currently used by manager.MetadataNotifier interface
+
+type DDLRequestSource byte
+
+const (
+	DDLRequestSourceUser DDLRequestSource = iota
+	DDLRequestSourceRebalance
+)
+
+type MetadataRequestContext struct {
+	ReqSource DDLRequestSource
+}
+
+func NewRebalanceRequestContext() *MetadataRequestContext {
+	return &MetadataRequestContext{ReqSource: DDLRequestSourceRebalance}
+}
+
+func NewUserRequestContext() *MetadataRequestContext {
+	return &MetadataRequestContext{ReqSource: DDLRequestSourceUser}
 }

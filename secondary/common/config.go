@@ -18,7 +18,7 @@ import "fmt"
 import "reflect"
 import "errors"
 import "github.com/couchbase/indexing/secondary/logging"
-import "github.com/couchbase/indexing/secondary/platform"
+import "sync/atomic"
 import "unsafe"
 import "runtime"
 
@@ -43,11 +43,11 @@ type ConfigHolder struct {
 }
 
 func (h *ConfigHolder) Store(conf Config) {
-	platform.StorePointer(&h.ptr, unsafe.Pointer(&conf))
+	atomic.StorePointer(&h.ptr, unsafe.Pointer(&conf))
 }
 
 func (h *ConfigHolder) Load() Config {
-	confptr := platform.LoadPointer(&h.ptr)
+	confptr := atomic.LoadPointer(&h.ptr)
 	return *(*Config)(confptr)
 }
 
@@ -262,6 +262,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"projector.dcp.activeVbOnly": ConfigValue{
+		true,
+		"request dcp to process active vbuckets only",
+		true,
+		false, // mutable
+		false, // case-insensitive
+	},
 	// projector adminport parameters
 	"projector.adminport.name": ConfigValue{
 		"projector.adminport",
@@ -469,6 +476,13 @@ var SystemConfig = Config{
 		true,  // immutable
 		false, // case-insensitive
 	},
+	"indexer.queryport.keepAliveInterval": ConfigValue{
+		1,
+		"keep alive interval to set on query port connections",
+		1,
+		false, // immutable
+		false, // case-insensitive
+	},
 	// queryport client configuration
 	"queryport.client.maxPayload": ConfigValue{
 		1000 * 1024,
@@ -565,13 +579,36 @@ var SystemConfig = Config{
 		true,  // immutable
 		false, // case-insensitive
 	},
-	"queryport.client.backfillLimit": ConfigValue{
+	"queryport.client.settings.backfillLimit": ConfigValue{
 		5 * 1024, // 5GB
 		"limit in mega-bytes to cap n1ql side backfilling, if ZERO backfill " +
 			"will be disabled.",
 		5 * 1024, // 5GB
 		false,    // mutable
 		false,    // case-insensitive
+	},
+	"queryport.client.scanLagPercent": ConfigValue{
+		0.2,
+		"allowed threshold on mutation lag from fastest replica during scan, " +
+			"representing as a percentage of pending mutations from fastest replica,",
+		0.2,
+		false, // immutable
+		false, // case-insensitive
+	},
+	"queryport.client.scanLagItem": ConfigValue{
+		100000,
+		"allowed threshold on mutation lag from fastest replica during scan, " +
+			"representing as a number of pending mutations from fastest replica,",
+		100000,
+		false, // immutable
+		false, // case-insensitive
+	},
+	"queryport.client.disable_prune_replica": ConfigValue{
+		false,
+		"disable client to filter our replica based on stats",
+		false,
+		false, // immutable
+		false, // case-insensitive
 	},
 	// projector's adminport client, can be used by indexer.
 	"indexer.projectorclient.retryInterval": ConfigValue{
@@ -623,6 +660,35 @@ var SystemConfig = Config{
 		true,  // immutable
 		false, // case-insensitive
 	},
+	"indexer.httpsPort": ConfigValue{
+		"",
+		"ssl port for external stats and settings",
+		"",
+		true,  // immutable
+		false, // case-insensitive
+	},
+	"indexer.certFile": ConfigValue{
+		"",
+		"ssl certificate",
+		"",
+		true, // immutable
+		true, // case-sensitive
+	},
+	"indexer.keyFile": ConfigValue{
+		"",
+		"ssl certificate key",
+		"",
+		true, // immutable
+		true, // case-sensitive
+	},
+	"indexer.isEnterprise": ConfigValue{
+		true,
+		"enterprise edition",
+		true,
+		true,  // immutable
+		false, // case-insensitive
+	},
+
 	"indexer.streamInitPort": ConfigValue{
 		"9103",
 		"port for inital build stream",
@@ -844,8 +910,285 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.plasma.disablePersistence": ConfigValue{
+		false,
+		"Disable persistence",
+		false,
+		false,
+		false,
+	},
+	"indexer.plasma.flushBufferSize": ConfigValue{
+		1024 * 1024,
+		"Flush buffer size",
+		1024 * 1024,
+		false,
+		false,
+	},
+	"indexer.plasma.useMemMgmt": ConfigValue{
+		true,
+		"Use jemalloc based manual memory management",
+		true,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.numReaders": ConfigValue{
+		runtime.NumCPU() * 3,
+		"Numbers of readers for plasma",
+		runtime.NumCPU() * 3,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.useCompression": ConfigValue{
+		true,
+		"Enable compression for plasma",
+		true,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.persistenceCPUPercent": ConfigValue{
+		50,
+		"Percentage of cpu used for persistence",
+		50,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.LSSSegmentFileSize": ConfigValue{
+		plasmaLogSegSize(),
+		"LSS log segment maxsize per file",
+		plasmaLogSegSize(),
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.LSSReclaimBlockSize": ConfigValue{
+		64 * 1024 * 1024,
+		"Space reclaim granularity for LSS log",
+		64 * 1024 * 1024,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.useMmapReads": ConfigValue{
+		false,
+		"Use mmap for reads",
+		false,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.mainIndex.maxNumPageDeltas": ConfigValue{
+		200,
+		"Maximum number of page deltas",
+		200,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.mainIndex.pageSplitThreshold": ConfigValue{
+		400,
+		"Threshold for triggering page split",
+		400,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.mainIndex.pageMergeThreshold": ConfigValue{
+		25,
+		"Threshold for triggering page merge",
+		25,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.mainIndex.maxLSSPageSegments": ConfigValue{
+		4,
+		"Maximum number of page segments on LSS for a page",
+		4,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.mainIndex.maxLSSFragmentation": ConfigValue{
+		80,
+		"Desired max LSS fragmentation percent",
+		80,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.mainIndex.LSSFragmentation": ConfigValue{
+		30,
+		"Desired LSS fragmentation percent",
+		30,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.backIndex.maxNumPageDeltas": ConfigValue{
+		30,
+		"Maximum number of page deltas",
+		30,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.backIndex.pageSplitThreshold": ConfigValue{
+		300,
+		"Threshold for triggering page split",
+		300,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.backIndex.pageMergeThreshold": ConfigValue{
+		5,
+		"Threshold for triggering page merge",
+		5,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.backIndex.maxLSSPageSegments": ConfigValue{
+		4,
+		"Maximum number of page segments on LSS for a page",
+		4,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.backIndex.maxLSSFragmentation": ConfigValue{
+		80,
+		"Desired max LSS fragmentation percent",
+		80,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.backIndex.LSSFragmentation": ConfigValue{
+		30,
+		"Desired LSS fragmentation percent",
+		30,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.disableReadCaching": ConfigValue{
+		false,
+		"Disable read caching",
+		false,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.UseQuotaTuner": ConfigValue{
+		true,
+		"Enable memquota tuner",
+		true,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.memtuner.maxFreeMemory": ConfigValue{
+		1024 * 1024 * 1024 * 8,
+		"Max free memory",
+		1024 * 1024 * 1024 * 8,
+		false,
+		false,
+	},
+	"indexer.plasma.memtuner.minFreeRatio": ConfigValue{
+		float64(0.10),
+		"Minimum free memory ratio",
+		float64(0.10),
+		false,
+		false,
+	},
+	"indexer.plasma.memtuner.trimDownRatio": ConfigValue{
+		float64(0.10),
+		"Memtuner trimdown ratio",
+		float64(0.10),
+		false,
+		false,
+	},
+	"indexer.plasma.memtuner.incrementRatio": ConfigValue{
+		float64(0.01),
+		"Memtuner increment ratio",
+		float64(0.01),
+		false,
+		false,
+	},
+	"indexer.plasma.memtuner.minQuotaRatio": ConfigValue{
+		float64(0.20),
+		"Memtuner min quota ratio",
+		float64(0.20),
+		false,
+		false,
+	},
+	"indexer.plasma.memtuner.incrCeilPercent": ConfigValue{
+		float64(3),
+		"Memtuner increment ceiling percent",
+		float64(3),
+		false,
+		false,
+	},
+	"indexer.plasma.memtuner.minQuota": ConfigValue{
+		1024 * 1024 * 1024,
+		"Memtuner minimum quota",
+		1024 * 1024 * 1024,
+		false,
+		false,
+	},
+	"indexer.plasma.purger.enabled": ConfigValue{
+		true,
+		"Enable mvcc page purger",
+		true,
+		false,
+		false,
+	},
+	"indexer.plasma.purger.interval": ConfigValue{
+		60,
+		"Purger purge_ratio check interval in seconds",
+		60,
+		false,
+		false,
+	},
+	"indexer.plasma.purger.highThreshold": ConfigValue{
+		float64(10),
+		"Purger high threshold",
+		float64(10),
+		false,
+		false,
+	},
+	"indexer.plasma.purger.lowThreshold": ConfigValue{
+		float64(7),
+		"Purger low threshold",
+		float64(7),
+		false,
+		false,
+	},
+	"indexer.plasma.purger.compactRatio": ConfigValue{
+		float64(0.5),
+		"Max ratio of pages to be scanned during a purge attempt",
+		float64(0.5),
+		false,
+		false,
+	},
+	"indexer.plasma.enableLSSPageSMO": ConfigValue{
+		true,
+		"Enable page structure modification in lss",
+		true,
+		false,
+		false,
+	},
 
-	//end of moi specific config
+	"indexer.stream_reader.plasma.workerBuffer": ConfigValue{
+		uint64(10000),
+		"Buffer Size for stream reader worker to hold mutations " +
+			"before being enqueued in mutation queue",
+		uint64(10000),
+		false, // mutable
+		false, // case-insensitive
+	},
+
+	"indexer.stream_reader.plasma.mutationBuffer": ConfigValue{
+		uint64(3000),
+		"Buffer Size to hold incoming mutations from dataport",
+		uint64(3000),
+		false, // mutable
+		false, // case-insensitive
+	},
+
+	"indexer.dataport.plasma.dataChanSize": ConfigValue{
+		3000,
+		"request channel size of indexer dataport's gen-server routine",
+		3000,
+		false, // mutable
+		false, // case-insensitive
+	},
+
+	//end of plasma specific config
 
 	"indexer.mutation_queue.dequeuePollInterval": ConfigValue{
 		uint64(1),
@@ -916,9 +1259,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.mutation_manager.fdb.fracMutationQueueMem": ConfigValue{
-		0.25,
+		0.2,
 		"Fraction of memory_quota allocated to Mutation Queue",
-		0.25,
+		0.2,
 		false, // mutable
 		false, // case-insensitive
 	},
@@ -928,6 +1271,13 @@ var SystemConfig = Config{
 		0.1,
 		false, // mutable
 		false, // case-insensitive
+	},
+	"indexer.mutation_manager.maxQueueMem": ConfigValue{
+		uint64(1 * 1024 * 1024 * 1024),
+		"Max memory used by the mutation queue",
+		uint64(1 * 1024 * 1024 * 1024),
+		false,
+		false,
 	},
 	"indexer.settings.gc_percent": ConfigValue{
 		100,
@@ -1029,7 +1379,20 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
-
+	"indexer.settings.moi.recovery.max_rollbacks": ConfigValue{
+		2,
+		"Maximum number of committed rollback points",
+		2,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.settings.plasma.recovery.max_rollbacks": ConfigValue{
+		2,
+		"Maximum number of committed rollback points",
+		2,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.settings.recovery.max_rollbacks": ConfigValue{
 		5, // keep in sync with index_settings_manager.erl
 		"Maximum number of committed rollback points",
@@ -1074,7 +1437,20 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
-
+	"indexer.settings.max_seckey_size": ConfigValue{
+		4608,
+		"Maximum size of secondary index key",
+		4608,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.settings.allow_large_keys": ConfigValue{
+		true,
+		"Allow indexing of large index items",
+		true,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.settings.send_buffer_size": ConfigValue{
 		1024,
 		"Buffer size for batching rows during scan result streaming",
@@ -1267,6 +1643,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.settings.num_replica": ConfigValue{
+		0,
+		"Number of additional replica for each index.",
+		0,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"projector.settings.log_level": ConfigValue{
 		"info",
 		"Projector logging level",
@@ -1287,6 +1670,88 @@ var SystemConfig = Config{
 		false,
 		false, // mutable
 		false, // case-interface
+	},
+	"indexer.rebalance.use_simple_planner": ConfigValue{
+		false,
+		"use simple round-robin planner for index placement." +
+			"otherwise a sophisticated planner is used.",
+		false,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.rebalance.node_eject_only": ConfigValue{
+		true,
+		"indexes are moved for only the nodes being ejected." +
+			"If false, indexes will be moved to new nodes being added " +
+			"to achieve a balanced distribution.",
+		true,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.rebalance.disable_index_move": ConfigValue{
+		false,
+		"disable index movement on node add/remove",
+		false,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.rebalance.maxRemainingBuildTime": ConfigValue{
+		uint64(10),
+		"max remaining build time(in seconds) before index state is switched to active",
+		uint64(10),
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.rebalance.globalTokenWaitTimeout": ConfigValue{
+		60,
+		"wait time(in seconds) for global rebalance token to be observed by all nodes",
+		60,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.rebalance.startPhaseBeginTimeout": ConfigValue{
+		60,
+		"wait time(in seconds) for Start Phase to begin after Prepare Phase",
+		60,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.rebalance.disable_replica_repair": ConfigValue{
+		false,
+		"disable repairing replica",
+		false,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.rebalance.httpTimeout": ConfigValue{
+		120,
+		"timeout(in seconds) for http requests during rebalance",
+		120,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.settings.storage_mode.disable_upgrade": ConfigValue{
+		false,
+		"Disable upgrading storage mode. This is checked on every indexer restart, " +
+			"independent if the cluster is under software upgrade or not.",
+		false,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.settings.build.batch_size": ConfigValue{
+		5,
+		"When performing background index build, specify the number of index to build in an iteration.  " +
+			"Use -1 for no limit on batch size.",
+		5,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.build.background.disable": ConfigValue{
+		false,
+		"Disable background index build, except during upgrade",
+		false,
+		false, // mutable
+		false, // case-insensitive
 	},
 }
 
@@ -1440,6 +1905,10 @@ func (config Config) SetValue(key string, value interface{}) error {
 		return errors.New("invalid config parameter")
 	}
 
+	if value == nil {
+		return errors.New("config value is nil")
+	}
+
 	defType := reflect.TypeOf(cv.DefaultVal)
 	valType := reflect.TypeOf(value)
 
@@ -1523,4 +1992,13 @@ func (cv ConfigValue) Strings() []string {
 // Bool assumes config value is a Bool and returns the same.
 func (cv ConfigValue) Bool() bool {
 	return cv.Value.(bool)
+}
+
+func plasmaLogSegSize() int {
+	switch runtime.GOOS {
+	case "linux":
+		return 4 * 1024 * 1024 * 1024
+	default:
+		return 512 * 1024 * 1024
+	}
 }

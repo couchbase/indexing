@@ -1,5 +1,7 @@
 #!/bin/bash
 
+source ~/.cienv
+
 if [ "$WORKSPACE" = "" ]; then
   echo 'WORKSPACE not set'
   exit 2
@@ -9,7 +11,7 @@ if [ "$STORAGE" = "memdb" ]; then
   exit 0
 fi
 
-for i in {1..240}; do
+for i in {1..60}; do
   cd $WORKSPACE
   sleep 60
 

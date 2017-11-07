@@ -1,15 +1,20 @@
 package queryport
 
-import "fmt"
-import "net"
-import "sync"
-import "time"
-import "io"
-import "github.com/couchbase/indexing/secondary/platform"
-import "github.com/couchbase/indexing/secondary/logging"
-import c "github.com/couchbase/indexing/secondary/common"
-import protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
-import "github.com/couchbase/indexing/secondary/transport"
+import (
+	"fmt"
+	"io"
+	"net"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/couchbase/indexing/secondary/logging"
+
+	c "github.com/couchbase/indexing/secondary/common"
+
+	protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
+	"github.com/couchbase/indexing/secondary/transport"
+)
 
 // RequestHandler shall interpret the request message
 // from client and post response message(s) on `respch`
@@ -37,12 +42,13 @@ type Server struct {
 	mu  sync.Mutex
 	lis net.Listener
 	// config params
-	maxPayload     int
-	readDeadline   time.Duration
-	writeDeadline  time.Duration
-	streamChanSize int
-	logPrefix      string
-	nConnections   platform.AlignedInt64
+	maxPayload        int
+	readDeadline      time.Duration
+	writeDeadline     time.Duration
+	keepAliveInterval time.Duration
+	streamChanSize    int
+	logPrefix         string
+	nConnections      int64
 }
 
 type ServerStats struct {
@@ -62,8 +68,10 @@ func NewServer(
 		writeDeadline:  time.Duration(config["writeDeadline"].Int()),
 		streamChanSize: config["streamChanSize"].Int(),
 		logPrefix:      fmt.Sprintf("[Queryport %q]", laddr),
-		nConnections:   platform.NewAlignedInt64(0),
+		nConnections:   0,
 	}
+	keepAliveInterval := config["keepAliveInterval"].Int()
+	s.keepAliveInterval = time.Duration(keepAliveInterval) * time.Second
 	if s.lis, err = net.Listen("tcp", laddr); err != nil {
 		logging.Errorf("%v failed starting %v !!\n", s.logPrefix, err)
 		return nil, err
@@ -76,7 +84,7 @@ func NewServer(
 
 func (s *Server) Statistics() ServerStats {
 	return ServerStats{
-		Connections: platform.LoadInt64(&s.nConnections),
+		Connections: atomic.LoadInt64(&s.nConnections),
 	}
 }
 
@@ -121,6 +129,7 @@ func (s *Server) listener() {
 			if e, ok := err.(*net.OpError); ok && e.Op != "accept" {
 				panic(err)
 			}
+			logging.Errorf("%v Accept(): %v\n", s.logPrefix, err)
 			break
 		}
 	}
@@ -129,9 +138,9 @@ func (s *Server) listener() {
 // handle connection request. connection might be kept open in client's
 // connection pool.
 func (s *Server) handleConnection(conn net.Conn) {
-	platform.AddInt64(&s.nConnections, 1)
+	atomic.AddInt64(&s.nConnections, 1)
 	defer func() {
-		platform.AddInt64(&s.nConnections, -1)
+		atomic.AddInt64(&s.nConnections, -1)
 	}()
 
 	raddr := conn.RemoteAddr()
@@ -139,6 +148,12 @@ func (s *Server) handleConnection(conn net.Conn) {
 		conn.Close()
 		logging.Infof("%v connection %v closed\n", s.logPrefix, raddr)
 	}()
+
+	// Set keep alive interval.
+	if tcpconn, ok := conn.(*net.TCPConn); ok {
+		tcpconn.SetKeepAlive(true)
+		tcpconn.SetKeepAlivePeriod(s.keepAliveInterval)
+	}
 
 	// start a receive routine.
 	rcvch := make(chan request, s.streamChanSize)

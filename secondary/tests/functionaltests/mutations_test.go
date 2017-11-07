@@ -102,13 +102,13 @@ func TestRestartIndexer(t *testing.T) {
 	log.Printf("In TestRestartIndexer()")
 
 	tc.KillIndexer()
-	time.Sleep(60 * time.Second)
+	time.Sleep(30 * time.Second)
 
 	var indexName = "index_age"
 	var bucketName = "default"
 
-	docScanResults := datautility.ExpectedScanResponse_float64(docs, "age", 0, 90, 1)
-	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{0}, []interface{}{90}, 1, true, defaultlimit, c.SessionConsistency, nil)
+	docScanResults := datautility.ExpectedScanResponse_int64(docs, "age", 0, 90, 1)
+	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{0}, []interface{}{90}, 1, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
 	log.Printf("Len of expected and actual scan results are :  %d and %d", len(docScanResults), len(scanResults))
 	err = tv.Validate(docScanResults, scanResults)
@@ -123,8 +123,8 @@ func TestCreateDocsMutation(t *testing.T) {
 	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{"age"}, false, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
-	docScanResults := datautility.ExpectedScanResponse_float64(docs, "age", 0, 90, 1)
-	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{0}, []interface{}{90}, 1, true, defaultlimit, c.SessionConsistency, nil)
+	docScanResults := datautility.ExpectedScanResponse_int64(docs, "age", 0, 90, 1)
+	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{0}, []interface{}{90}, 1, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
 	log.Printf("Len of expected and actual scan results are :  %d and %d", len(docScanResults), len(scanResults))
 	err = tv.Validate(docScanResults, scanResults)
@@ -133,9 +133,9 @@ func TestCreateDocsMutation(t *testing.T) {
 	//Create docs mutations: Add new docs to KV
 	CreateDocs(100)
 
-	docScanResults = datautility.ExpectedScanResponse_float64(docs, "age", 0, 90, 1)
+	docScanResults = datautility.ExpectedScanResponse_int64(docs, "age", 0, 90, 1)
 	start := time.Now()
-	scanResults, err = secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{0}, []interface{}{90}, 1, true, defaultlimit, c.SessionConsistency, nil)
+	scanResults, err = secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{0}, []interface{}{90}, 1, false, defaultlimit, c.SessionConsistency, nil)
 	elapsed := time.Since(start)
 	log.Printf("Index Scan after mutations took %s\n", elapsed)
 	FailTestIfError(err, "Error in scan", t)
@@ -148,13 +148,13 @@ func TestRestartProjector(t *testing.T) {
 	log.Printf("In TestRestartProjector()")
 
 	tc.KillProjector()
-	time.Sleep(60 * time.Second)
+	time.Sleep(30 * time.Second)
 
 	var indexName = "index_age"
 	var bucketName = "default"
 
-	docScanResults := datautility.ExpectedScanResponse_float64(docs, "age", 0, 90, 1)
-	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{0}, []interface{}{90}, 1, true, defaultlimit, c.SessionConsistency, nil)
+	docScanResults := datautility.ExpectedScanResponse_int64(docs, "age", 0, 90, 1)
+	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{0}, []interface{}{90}, 1, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
 	log.Printf("Len of expected and actual scan results are :  %d and %d", len(docScanResults), len(scanResults))
 	err = tv.Validate(docScanResults, scanResults)
@@ -170,8 +170,8 @@ func TestDeleteDocsMutation(t *testing.T) {
 	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{"age"}, false, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
-	docScanResults := datautility.ExpectedScanResponse_float64(docs, "age", 0, 90, 1)
-	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{0}, []interface{}{90}, 1, true, defaultlimit, c.SessionConsistency, nil)
+	docScanResults := datautility.ExpectedScanResponse_int64(docs, "age", 0, 90, 1)
+	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{0}, []interface{}{90}, 1, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
 	log.Printf("Len of expected and actual scan results are :  %d and %d", len(docScanResults), len(scanResults))
 	err = tv.Validate(docScanResults, scanResults)
@@ -180,9 +180,9 @@ func TestDeleteDocsMutation(t *testing.T) {
 	//Delete docs mutations:  Delete docs from KV
 	DeleteDocs(200)
 
-	docScanResults = datautility.ExpectedScanResponse_float64(docs, "age", 0, 90, 1)
+	docScanResults = datautility.ExpectedScanResponse_int64(docs, "age", 0, 90, 1)
 	start := time.Now()
-	scanResults, err = secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{0}, []interface{}{90}, 1, true, defaultlimit, c.SessionConsistency, nil)
+	scanResults, err = secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{0}, []interface{}{90}, 1, false, defaultlimit, c.SessionConsistency, nil)
 	elapsed := time.Since(start)
 	log.Printf("Index Scan after mutations took %s\n", elapsed)
 	FailTestIfError(err, "Error in scan", t)
@@ -200,8 +200,8 @@ func TestUpdateDocsMutation(t *testing.T) {
 	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{"age"}, false, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
-	docScanResults := datautility.ExpectedScanResponse_float64(docs, "age", 20, 40, 2)
-	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{20}, []interface{}{40}, 2, true, defaultlimit, c.SessionConsistency, nil)
+	docScanResults := datautility.ExpectedScanResponse_int64(docs, "age", 20, 40, 2)
+	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{20}, []interface{}{40}, 2, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
 	log.Printf("Len of expected and actual scan results are :  %d and %d", len(docScanResults), len(scanResults))
 	err = tv.Validate(docScanResults, scanResults)
@@ -210,9 +210,9 @@ func TestUpdateDocsMutation(t *testing.T) {
 	//Update docs mutations:  Update docs in KV
 	UpdateDocs(100)
 
-	docScanResults = datautility.ExpectedScanResponse_float64(docs, "age", 20, 40, 2)
+	docScanResults = datautility.ExpectedScanResponse_int64(docs, "age", 20, 40, 2)
 	start := time.Now()
-	scanResults, err = secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{20}, []interface{}{40}, 2, true, defaultlimit, c.SessionConsistency, nil)
+	scanResults, err = secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{20}, []interface{}{40}, 2, false, defaultlimit, c.SessionConsistency, nil)
 	elapsed := time.Since(start)
 	log.Printf("Index Scan after mutations took %s\n", elapsed)
 	FailTestIfError(err, "Error in scan", t)

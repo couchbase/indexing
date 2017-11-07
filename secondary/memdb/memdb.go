@@ -6,8 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/couchbase/indexing/secondary/memdb/mm"
-	"github.com/couchbase/indexing/secondary/memdb/skiplist"
 	"io"
 	"io/ioutil"
 	"math"
@@ -19,7 +17,12 @@ import (
 	"sync/atomic"
 	"time"
 	"unsafe"
+
+	"github.com/couchbase/indexing/secondary/memdb/skiplist"
+	"github.com/couchbase/indexing/secondary/stubs/nitro/mm"
 )
+
+var version = 1
 
 var (
 	ErrMaxSnapshotsLimitReached = fmt.Errorf("Maximum snapshots limit reached")
@@ -450,6 +453,9 @@ func (m *MemDB) Close() {
 			}
 		}
 	}
+
+	m.store.FreeNode(m.store.HeadNode(), &m.store.Stats)
+	m.store.FreeNode(m.store.TailNode(), &m.store.Stats)
 }
 
 func (m *MemDB) getCurrSn() uint32 {
@@ -847,6 +853,7 @@ func (m *MemDB) StoreToDisk(dir string, snap *Snapshot, concurr int, itmCallback
 		defer m.shutdownWg1.Done()
 	}
 
+	manifestdir := dir
 	datadir := filepath.Join(dir, "data")
 	os.MkdirAll(datadir, 0755)
 	shards := runtime.NumCPU()
@@ -915,7 +922,7 @@ func (m *MemDB) StoreToDisk(dir string, snap *Snapshot, concurr int, itmCallback
 		defer func() {
 			if err = m.changeDeltaWrState(dwStateTerminate, nil, nil); err == nil {
 				bs, _ := json.Marshal(deltaFiles)
-				ioutil.WriteFile(filepath.Join(deltadir, "files.json"), bs, 0660)
+				err = ioutil.WriteFile(filepath.Join(deltadir, "files.json"), bs, 0660)
 			}
 		}()
 	}
@@ -937,9 +944,12 @@ func (m *MemDB) StoreToDisk(dir string, snap *Snapshot, concurr int, itmCallback
 		return nil
 	}
 
-	if err = m.Visitor(snap, visitorCallback, shards, concurr); err == nil {
-		bs, _ := json.Marshal(files)
-		ioutil.WriteFile(filepath.Join(datadir, "files.json"), bs, 0660)
+	manifest, _ := json.Marshal(map[string]interface{}{"version": version})
+	if err = ioutil.WriteFile(filepath.Join(manifestdir, "nitro.json"), manifest, 0660); err == nil {
+		if err = m.Visitor(snap, visitorCallback, shards, concurr); err == nil {
+			bs, _ := json.Marshal(files)
+			err = ioutil.WriteFile(filepath.Join(datadir, "files.json"), bs, 0660)
+		}
 	}
 
 	return err
@@ -949,6 +959,19 @@ func (m *MemDB) LoadFromDisk(dir string, concurr int, callb ItemCallback) (*Snap
 	var wg sync.WaitGroup
 	datadir := filepath.Join(dir, "data")
 	var files []string
+	manifestdir := dir
+	var version int
+
+	// Read file version
+	if bs, err := ioutil.ReadFile(filepath.Join(manifestdir, "nitro.json")); err == nil {
+		mMap := make(map[string]int)
+		if err = json.Unmarshal(bs, &mMap); err != nil {
+			return nil, err
+		}
+		version = mMap["version"]
+	} else if !os.IsNotExist(err) {
+		return nil, err
+	}
 
 	if bs, err := ioutil.ReadFile(filepath.Join(datadir, "files.json")); err != nil {
 		return nil, err
@@ -981,7 +1004,7 @@ func (m *MemDB) LoadFromDisk(dir string, concurr int, callb ItemCallback) (*Snap
 	for i, file := range files {
 		segments[i] = b.NewSegment()
 		segments[i].SetNodeCallback(nodeCallb)
-		r := m.newFileReader(m.fileType)
+		r := m.newFileReader(m.fileType, version)
 		datafile := filepath.Join(datadir, file)
 		if err := r.Open(datafile); err != nil {
 			return nil, err
@@ -1053,7 +1076,7 @@ func (m *MemDB) LoadFromDisk(dir string, concurr int, callb ItemCallback) (*Snap
 		}()
 
 		for i, file := range files {
-			r := m.newFileReader(m.fileType)
+			r := m.newFileReader(m.fileType, version)
 			deltafile := filepath.Join(deltadir, file)
 			if err := r.Open(deltafile); err != nil {
 				return nil, err
@@ -1152,5 +1175,5 @@ func MemoryInUse() (sz int64) {
 
 func Debug(flag bool) {
 	skiplist.Debug = flag
-	mm.Debug = flag
+	*mm.Debug = flag
 }

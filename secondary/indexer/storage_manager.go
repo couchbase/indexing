@@ -21,7 +21,8 @@ import (
 )
 
 var (
-	ErrIndexRollback = errors.New("Indexer rollback")
+	ErrIndexRollback            = errors.New("Indexer rollback")
+	ErrIndexRollbackOrBootstrap = errors.New("Indexer rollback or warmup")
 )
 
 //StorageManager manages the snapshots for the indexes and responsible for storing
@@ -567,9 +568,15 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 
 	sm.updateIndexSnapMap(sm.indexPartnMap, streamId, bucket)
 
+	stats := sm.stats.Get()
+	if bStats, ok := stats.buckets[bucket]; ok {
+		bStats.numRollbacks.Add(1)
+	}
+
 	sm.supvCmdch <- &MsgRollback{streamId: streamId,
 		bucket:     bucket,
 		rollbackTs: respTs}
+
 }
 
 func (s *storageMgr) addNilSnapshot(idxInstId common.IndexInstId, bucket string) {
@@ -769,6 +776,23 @@ func (s *storageMgr) handleStats(cmd Message) {
 			idxStats.getBytes.Set(st.Stats.GetBytes)
 			idxStats.insertBytes.Set(st.Stats.InsertBytes)
 			idxStats.deleteBytes.Set(st.Stats.DeleteBytes)
+
+			// compute mutation rate
+			now := time.Now().UnixNano()
+			elapsed := float64(now-idxStats.lastMutateGatherTime.Value()) / float64(time.Second)
+			if elapsed > 0 {
+				numDocsIndexed := idxStats.numDocsIndexed.Value()
+				mutationRate := float64(numDocsIndexed-idxStats.lastNumDocsIndexed.Value()) / elapsed
+				idxStats.avgMutationRate.Set(int64((mutationRate + float64(idxStats.avgMutationRate.Value())) / 2))
+				idxStats.lastNumDocsIndexed.Set(numDocsIndexed)
+
+				numItemsFlushed := idxStats.numItemsFlushed.Value()
+				drainRate := float64(numItemsFlushed-idxStats.lastNumItemsFlushed.Value()) / elapsed
+				idxStats.avgDrainRate.Set(int64((drainRate + float64(idxStats.avgDrainRate.Value())) / 2))
+				idxStats.lastNumItemsFlushed.Set(numItemsFlushed)
+
+				idxStats.lastMutateGatherTime.Set(now)
+			}
 		}
 	}
 

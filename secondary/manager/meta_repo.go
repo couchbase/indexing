@@ -19,6 +19,7 @@ import (
 	gometa "github.com/couchbase/gometa/server"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/manager/client"
 	"net/rpc"
 	"strconv"
 	"strings"
@@ -37,6 +38,7 @@ type MetadataRepo struct {
 type RepoRef interface {
 	getMeta(name string) ([]byte, error)
 	setMeta(name string, value []byte) error
+	broadcast(name string, value []byte) error
 	deleteMeta(name string) error
 	newIterator() (*repo.RepoIterator, error)
 	registerNotifier(notifier MetadataNotifier)
@@ -135,7 +137,7 @@ func NewLocalMetadataRepo(msgAddr string,
 		globalTopo: nil}
 
 	if err := repo.loadDefn(); err != nil {
-		return nil, nil,  err
+		return nil, nil, err
 	}
 
 	if err := repo.loadTopology(); err != nil {
@@ -148,6 +150,11 @@ func NewLocalMetadataRepo(msgAddr string,
 func (c *MetadataRepo) GetLocalIndexerId() (common.IndexerId, error) {
 	val, err := c.GetLocalValue("IndexerId")
 	return common.IndexerId(val), err
+}
+
+func (c *MetadataRepo) GetLocalNodeUUID() (string, error) {
+	val, err := c.GetLocalValue("IndexerNodeUUID")
+	return string(val), err
 }
 
 func (c *MetadataRepo) RegisterNotifier(notifier MetadataNotifier) {
@@ -237,7 +244,9 @@ func (c *MetadataRepo) GetIndexDefnById(id common.IndexDefnId) (*common.IndexDef
 
 	lookupName := indexDefnKeyById(id)
 	data, err := c.getMeta(lookupName)
-	if err != nil {
+	if err != nil && strings.Contains(err.Error(), "FDB_RESULT_KEY_NOT_FOUND") {
+		return nil, nil
+	} else if err != nil {
 		return nil, err
 	}
 
@@ -265,32 +274,6 @@ func (c *MetadataRepo) GetIndexDefnByName(bucket string, name string) (*common.I
 }
 
 ///////////////////////////////////////////////////////
-//  Public Function : Stability Timestamp
-///////////////////////////////////////////////////////
-
-func (c *MetadataRepo) GetStabilityTimestamps() (*timestampListSerializable, error) {
-
-	lookupName := stabilityTimestampKey()
-	data, err := c.getMeta(lookupName)
-	if err != nil {
-		return nil, err
-	}
-
-	return unmarshallTimestampListSerializable(data)
-}
-
-func (c *MetadataRepo) SetStabilityTimestamps(timestamps *timestampListSerializable) error {
-
-	data, err := marshallTimestampListSerializable(timestamps)
-	if err != nil {
-		return err
-	}
-
-	lookupName := stabilityTimestampKey()
-	return c.setMeta(lookupName, data)
-}
-
-///////////////////////////////////////////////////////
 //  Public Function : Index Topology
 ///////////////////////////////////////////////////////
 
@@ -305,7 +288,9 @@ func (c *MetadataRepo) GetTopologyByBucket(bucket string) (*IndexTopology, error
 
 	lookupName := indexTopologyKey(bucket)
 	data, err := c.getMeta(lookupName)
-	if err != nil {
+	if err != nil && strings.Contains(err.Error(), "FDB_RESULT_KEY_NOT_FOUND") {
+		return nil, nil
+	} else if err != nil {
 		return nil, err
 	}
 
@@ -331,6 +316,8 @@ func (c *MetadataRepo) SetTopologyByBucket(bucket string, topology *IndexTopolog
 
 	lookupName := indexTopologyKey(bucket)
 	if err := c.setMeta(lookupName, data); err != nil {
+		// clear the cache if there is any error
+		delete(c.topoCache, bucket)
 		return err
 	}
 
@@ -348,7 +335,9 @@ func (c *MetadataRepo) GetGlobalTopology() (*GlobalTopology, error) {
 
 	lookupName := globalTopologyKey()
 	data, err := c.getMeta(lookupName)
-	if err != nil {
+	if err != nil && strings.Contains(err.Error(), "FDB_RESULT_KEY_NOT_FOUND") {
+		return nil, nil
+	} else if err != nil {
 		return nil, err
 	}
 
@@ -380,6 +369,40 @@ func (c *MetadataRepo) SetGlobalTopology(topology *GlobalTopology) error {
 }
 
 ///////////////////////////////////////////////////////
+//  Public Function : Indexer Info
+///////////////////////////////////////////////////////
+
+func (c *MetadataRepo) BroadcastServiceMap(serviceMap *client.ServiceMap) error {
+
+	data, err := client.MarshallServiceMap(serviceMap)
+	if err != nil {
+		return err
+	}
+
+	lookupName := serviceMapKey()
+	if err := c.broadcast(lookupName, data); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (c *MetadataRepo) BroadcastIndexStats(stats *client.IndexStats) error {
+
+	data, err := client.MarshallIndexStats(stats)
+	if err != nil {
+		return err
+	}
+
+	lookupName := indexStatsKey()
+	if err := c.broadcast(lookupName, data); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+///////////////////////////////////////////////////////
 //  Public Function : Index DDL
 ///////////////////////////////////////////////////////
 
@@ -395,6 +418,8 @@ func (c *MetadataRepo) CreateIndex(defn *common.IndexDefn) error {
 		return NewError(ERROR_META_IDX_DEFN_EXIST, NORMAL, METADATA_REPO, nil,
 			fmt.Sprintf("Index Definition '%s' already exists", defn.Name))
 	}
+
+	defn = (*defn).Clone()
 
 	// marshall the defn
 	data, err := common.MarshallIndexDefn(defn)
@@ -421,7 +446,6 @@ func (c *MetadataRepo) DropIndexById(id common.IndexDefnId) error {
 	// check if defn already exist
 	exist, _ := c.GetIndexDefnById(id)
 	if exist == nil {
-		// TODO: should not return error if not found (should return nil)
 		return NewError(ERROR_META_IDX_DEFN_NOT_EXIST, NORMAL, METADATA_REPO, nil,
 			fmt.Sprintf("Index Definition '%s' does not exist", id))
 	}
@@ -435,6 +459,37 @@ func (c *MetadataRepo) DropIndexById(id common.IndexDefnId) error {
 	defer c.mutex.Unlock()
 
 	delete(c.defnCache, id)
+
+	return nil
+}
+
+func (c *MetadataRepo) UpdateIndex(defn *common.IndexDefn) error {
+
+	// check if defn already exist
+	exist, _ := c.GetIndexDefnById(defn.DefnId)
+	if exist == nil {
+		return NewError(ERROR_META_IDX_DEFN_NOT_EXIST, NORMAL, METADATA_REPO, nil,
+			fmt.Sprintf("Index Definition '%s' does not exist", defn.DefnId))
+	}
+
+	defn = (*defn).Clone()
+
+	// marshall the defn
+	data, err := common.MarshallIndexDefn(defn)
+	if err != nil {
+		return err
+	}
+
+	// save by defn id
+	lookupName := indexDefnKeyById(defn.DefnId)
+	if err := c.setMeta(lookupName, data); err != nil {
+		return err
+	}
+
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	c.defnCache[defn.DefnId] = defn
 
 	return nil
 }
@@ -598,6 +653,18 @@ func (c *LocalRepoRef) setMeta(name string, value []byte) error {
 	return nil
 }
 
+func (c *LocalRepoRef) broadcast(name string, value []byte) error {
+	if err := c.server.Broadcast(name, value); err != nil {
+		return err
+	}
+
+	evtType := getEventType(name)
+	if c.eventMgr != nil && evtType != EVENT_NONE {
+		c.eventMgr.notify(evtType, value)
+	}
+	return nil
+}
+
 func (c *LocalRepoRef) deleteMeta(name string) error {
 	if err := c.server.Delete(name); err != nil {
 		return err
@@ -743,6 +810,17 @@ func (c *RemoteRepoRef) setMeta(name string, value []byte) error {
 	return nil
 }
 
+func (c *RemoteRepoRef) broadcast(name string, value []byte) error {
+
+	request := &Request{OpCode: "Broadcast", Key: name, Value: value}
+	var reply *Reply
+	if err := c.newDictionaryRequest(request, &reply); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func (c *RemoteRepoRef) deleteMeta(name string) error {
 
 	request := &Request{OpCode: "Delete", Key: name, Value: nil}
@@ -810,6 +888,10 @@ func (c *MetadataRepo) setMeta(name string, value []byte) error {
 	return c.repo.setMeta(name, value)
 }
 
+func (c *MetadataRepo) broadcast(name string, value []byte) error {
+	return c.repo.broadcast(name, value)
+}
+
 func (c *MetadataRepo) deleteMeta(name string) error {
 	return c.repo.deleteMeta(name)
 }
@@ -822,8 +904,6 @@ func findTypeFromKey(key string) MetadataKind {
 		return KIND_TOPOLOGY
 	} else if isGlobalTopologyKey(key) {
 		return KIND_GLOBAL_TOPOLOGY
-	} else if isStabilityTimestampKey(key) {
-		return KIND_STABILITY_TIMESTAMP
 	}
 	return KIND_UNKNOWN
 }
@@ -932,15 +1012,23 @@ func unmarshallGlobalTopology(data []byte) (*GlobalTopology, error) {
 }
 
 ///////////////////////////////////////////////////////
-// package local function : Stability Timestamp
+// package local function : IndexerInfo
 ///////////////////////////////////////////////////////
 
-func stabilityTimestampKey() string {
-	return fmt.Sprintf("StabilityTimestamp")
+func serviceMapKey() string {
+	return "ServiceMap"
 }
 
-func isStabilityTimestampKey(key string) bool {
-	return strings.Contains(key, "StabilityTimestamp")
+func isServiceMap(key string) bool {
+	return strings.Contains(key, "ServiceMap")
+}
+
+func indexStatsKey() string {
+	return "IndexStats"
+}
+
+func isIndexStats(key string) bool {
+	return strings.Contains(key, "IndexStats")
 }
 
 ///////////////////////////////////////////////////////////
@@ -950,12 +1038,14 @@ func isStabilityTimestampKey(key string) bool {
 //
 // Add Index to Topology
 //
-func (m *MetadataRepo) addIndexToTopology(defn *common.IndexDefn, id common.IndexInstId) error {
+func (m *MetadataRepo) addIndexToTopology(defn *common.IndexDefn, instId common.IndexInstId, replicaId int, scheduled bool) error {
 
 	// get existing topology
 	topology, err := m.GetTopologyByBucket(defn.Bucket)
 	if err != nil {
-		// TODO: Need to check what type of error before creating a new topologyi
+		return err
+	}
+	if topology == nil {
 		topology = new(IndexTopology)
 		topology.Bucket = defn.Bucket
 		topology.Version = 0
@@ -966,8 +1056,15 @@ func (m *MetadataRepo) addIndexToTopology(defn *common.IndexDefn, id common.Inde
 		return err
 	}
 
+	rState := uint32(common.REBAL_ACTIVE)
+	if defn.InstVersion != 0 {
+		rState = uint32(common.REBAL_PENDING)
+	}
+
 	topology.AddIndexDefinition(defn.Bucket, defn.Name, uint64(defn.DefnId),
-		uint64(id), uint32(common.INDEX_STATE_CREATED), string(indexerId))
+		uint64(instId), uint32(common.INDEX_STATE_CREATED), string(indexerId),
+		uint64(defn.InstVersion), rState, uint64(replicaId), scheduled,
+		string(defn.Using))
 
 	// Add a reference of the bucket-level topology to the global topology.
 	// If it fails later to create bucket-level topology, it will have
@@ -994,6 +1091,9 @@ func (m *MetadataRepo) deleteIndexFromTopology(bucket string, id common.IndexDef
 	if err != nil {
 		return err
 	}
+	if topology == nil {
+		return nil
+	}
 
 	topology.RemoveIndexDefinitionById(id)
 
@@ -1012,6 +1112,9 @@ func (m *MetadataRepo) addToGlobalTopologyIfNecessary(bucket string) error {
 
 	globalTop, err := m.GetGlobalTopology()
 	if err != nil {
+		return err
+	}
+	if globalTop == nil {
 		globalTop = new(GlobalTopology)
 	}
 

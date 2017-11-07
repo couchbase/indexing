@@ -1,6 +1,6 @@
 package indexer
 
-import "encoding/json"
+import json "github.com/couchbase/indexing/secondary/common/json"
 import "io/ioutil"
 import "net/http"
 import "strings"
@@ -13,12 +13,15 @@ import mclient "github.com/couchbase/indexing/secondary/manager/client"
 import log "github.com/couchbase/indexing/secondary/logging"
 import "github.com/couchbase/query/parser/n1ql"
 import "github.com/couchbase/query/expression"
+import "github.com/couchbase/cbauth"
 
 type restServer struct {
 	cluster string
 	client  *qclient.GsiClient
 	config  c.Config
 }
+
+const UnboundedLiteral = "~[]{}UnboundedTruenilNA~"
 
 func NewRestServer(cluster string) (*restServer, Message) {
 	log.Infof("%v starting RESTful services", cluster)
@@ -53,15 +56,72 @@ func (api *restServer) writeError(w http.ResponseWriter, err error) {
 	w.Write([]byte(err.Error() + "\n"))
 }
 
-func (api *restServer) validateAuth(w http.ResponseWriter, r *http.Request) bool {
-	valid, err := c.IsAuthValid(r, api.config["indexer.clusterAddr"].String())
+func (api *restServer) validateAuth(w http.ResponseWriter, r *http.Request) (cbauth.Creds, bool) {
+	creds, valid, err := c.IsAuthValid(r)
 	if err != nil {
 		api.writeError(w, err)
 	} else if valid == false {
 		w.WriteHeader(401)
 		w.Write([]byte("401 Unauthorized\n"))
 	}
-	return valid
+	return creds, valid
+}
+
+func (api *restServer) authorize(w http.ResponseWriter, creds cbauth.Creds) bool {
+
+	indexes, _, _, err := api.client.Refresh()
+	if err != nil {
+		log.Errorf("Fail to authorize.  Reason: unable to fetch index metadata.  %v", err)
+		http.Error(w, jsonstr("Authroziation check fails", err), http.StatusBadRequest)
+		return false
+	}
+
+	seen := make(map[string]bool)
+	permissions := ([]string)(nil)
+	permissions = append(permissions, "cluster.n1ql.meta!read")
+	permissions = append(permissions, "cluster.n1ql.curl!execute")
+
+	for _, index := range indexes {
+
+		bucket := index.Definition.Bucket
+		if _, ok := seen[bucket]; !ok {
+
+			permission := fmt.Sprintf("cluster.bucket[%s].data.docs!write", bucket)
+			permissions = append(permissions, permission)
+
+			permission = fmt.Sprintf("cluster.bucket[%s].data.docs!read", bucket)
+			permissions = append(permissions, permission)
+
+			permission = fmt.Sprintf("cluster.bucket[%s].n1ql.select!execute", bucket)
+			permissions = append(permissions, permission)
+
+			permission = fmt.Sprintf("cluster.bucket[%s].n1ql.update!execute", bucket)
+			permissions = append(permissions, permission)
+
+			permission = fmt.Sprintf("cluster.bucket[%s].n1ql.insert!execute", bucket)
+			permissions = append(permissions, permission)
+
+			permission = fmt.Sprintf("cluster.bucket[%s].n1ql.delete!execute", bucket)
+			permissions = append(permissions, permission)
+
+			permission = fmt.Sprintf("cluster.bucket[%s].n1ql.index!build", bucket)
+			permissions = append(permissions, permission)
+
+			permission = fmt.Sprintf("cluster.bucket[%s].n1ql.index!create", bucket)
+			permissions = append(permissions, permission)
+
+			permission = fmt.Sprintf("cluster.bucket[%s].n1ql.index!alter", bucket)
+			permissions = append(permissions, permission)
+
+			permission = fmt.Sprintf("cluster.bucket[%s].n1ql.index!drop", bucket)
+			permissions = append(permissions, permission)
+
+			permission = fmt.Sprintf("cluster.bucket[%s].n1ql.index!list", bucket)
+			permissions = append(permissions, permission)
+		}
+	}
+
+	return c.IsAllAllowed(creds, permissions, w)
 }
 
 // GET  /api/indexes
@@ -70,7 +130,12 @@ func (api *restServer) validateAuth(w http.ResponseWriter, r *http.Request) bool
 func (api *restServer) handleIndexes(
 	w http.ResponseWriter, request *http.Request) {
 
-	if !api.validateAuth(w, request) {
+	creds, ok := api.validateAuth(w, request)
+	if !ok {
+		return
+	}
+
+	if !api.authorize(w, creds) {
 		return
 	}
 
@@ -109,7 +174,12 @@ func (api *restServer) handleIndexes(
 func (api *restServer) handleIndex(
 	w http.ResponseWriter, request *http.Request) {
 
-	if !api.validateAuth(w, request) {
+	creds, ok := api.validateAuth(w, request)
+	if !ok {
+		return
+	}
+
+	if !api.authorize(w, creds) {
 		return
 	}
 
@@ -135,6 +205,20 @@ func (api *restServer) handleIndex(
 		} else if _, ok := q["range"]; ok {
 			if request.Method == "GET" || request.Method == "POST" {
 				api.doRange(w, request)
+			} else {
+				msg := `invalid method, expected GET`
+				http.Error(w, jsonstr(msg), http.StatusMethodNotAllowed)
+			}
+		} else if _, ok := q["multiscan"]; ok {
+			if request.Method == "GET" || request.Method == "POST" {
+				api.doMultiScan(w, request)
+			} else {
+				msg := `invalid method, expected GET`
+				http.Error(w, jsonstr(msg), http.StatusMethodNotAllowed)
+			}
+		} else if _, ok := q["multiscancount"]; ok {
+			if request.Method == "GET" || request.Method == "POST" {
+				api.doMultiScanCount(w, request)
 			} else {
 				msg := `invalid method, expected GET`
 				http.Error(w, jsonstr(msg), http.StatusMethodNotAllowed)
@@ -182,6 +266,7 @@ func (api *restServer) doCreate(w http.ResponseWriter, request *http.Request) {
 	var indexname, bucket string
 	var secExprs []string
 	var with []byte
+	var desc []bool
 
 	using, exprtype, with, isPrimary := "gsi", "N1QL", nil, false
 
@@ -228,6 +313,26 @@ func (api *restServer) doCreate(w http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	value, ok = params["desc"]
+	if ok {
+		descVal, ok := value.([]interface{})
+		if ok {
+			if len(exprs) != len(descVal) {
+				msg := `incomplete desc information %v`
+				http.Error(w, jsonstr(msg, descVal), http.StatusBadRequest)
+				return
+			} else {
+				for _, d := range descVal {
+					desc = append(desc, d.(bool))
+				}
+			}
+		} else {
+			msg := `invalid format for desc %v`
+			http.Error(w, jsonstr(msg, value), http.StatusBadRequest)
+			return
+		}
+	}
+
 	if value, ok := params["using"]; ok && value != nil {
 		using = value.(string)
 	}
@@ -255,9 +360,9 @@ func (api *restServer) doCreate(w http.ResponseWriter, request *http.Request) {
 		whereExpr = value.(string)
 	}
 
-	defnId, err := api.client.CreateIndex(
+	defnId, err := api.client.CreateIndex2(
 		indexname, bucket, using, exprtype, partnExpr, whereExpr, secExprs,
-		isPrimary, with)
+		desc, isPrimary, with)
 	if err != nil {
 		http.Error(w, jsonstr("%v", err), http.StatusInternalServerError)
 		return
@@ -327,7 +432,7 @@ func (api *restServer) doBuildOne(w http.ResponseWriter, request *http.Request) 
 
 //GET    /api/index/{id}
 func (api *restServer) doGetAll(w http.ResponseWriter, request *http.Request) {
-	indexes, err := api.client.Refresh()
+	indexes, _, _, err := api.client.Refresh()
 	if err != nil {
 		msg := `cannot refresh metadata: %v`
 		http.Error(w, jsonstr(msg, err), http.StatusBadRequest)
@@ -344,7 +449,6 @@ func (api *restServer) doGetAll(w http.ResponseWriter, request *http.Request) {
 			instance := map[string]interface{}{
 				"instId":    fmt.Sprintf("%v", inst.InstId),
 				"state":     fmt.Sprintf("%v", inst.State),
-				"buildTime": inst.BuildTime,
 				"indexerId": fmt.Sprintf("%v", inst.IndexerId),
 				"endpoints": inst.Endpts,
 			}
@@ -407,7 +511,6 @@ func (api *restServer) doGet(w http.ResponseWriter, request *http.Request) {
 		instance := map[string]interface{}{
 			"instId":    fmt.Sprintf("%v", inst.InstId),
 			"state":     fmt.Sprintf("%v", inst.State),
-			"buildTime": inst.BuildTime,
 			"indexerId": fmt.Sprintf("%v", inst.IndexerId),
 			"endpoints": inst.Endpts,
 		}
@@ -451,22 +554,35 @@ func (api *restServer) doLookup(w http.ResponseWriter, request *http.Request) {
 
 	value, ok := params["equal"]
 	if !ok {
-		msg := `"missing field equal"`
-		http.Error(w, msg, http.StatusBadRequest)
+		http.Error(w, `"missing field equal"`, http.StatusBadRequest)
+		return
+	} else if _, ok = value.(string); ok == false {
+		http.Error(w, `"invalid equal type"`, http.StatusBadRequest)
 		return
 	}
 	matchequal := []byte(value.(string))
 
 	if value, ok = params["distinct"]; ok {
-		distinct = value.(bool)
+		if distinct, ok = value.(bool); ok == false {
+			http.Error(w, `"invalid distinct type"`, http.StatusBadRequest)
+			return
+		}
 	}
 
 	if value, ok = params["limit"]; ok {
-		limit = int64(value.(float64))
+		if _, ok := value.(int64); ok == false {
+			http.Error(w, `"invalid limit type"`, http.StatusBadRequest)
+			return
+		}
+		limit = value.(int64)
 	}
 
 	if value, ok = params["stale"]; ok {
-		stale = value.(string)
+		if stale, ok = value.(string); ok == false {
+			msg := `stale expected as string`
+			http.Error(w, jsonstr(msg), http.StatusBadRequest)
+			return
+		}
 	}
 
 	if value, ok = params["timestamp"]; stale == "partial" {
@@ -491,13 +607,18 @@ func (api *restServer) doLookup(w http.ResponseWriter, request *http.Request) {
 	}
 	equals := []c.SecondaryKey{c.SecondaryKey(equal)}
 
-	cons := stale2consistency(stale)
+	cons, ok := stale2consistency(stale)
+	if ok == false {
+		http.Error(w, jsonstr(`invalid stale option`), http.StatusBadRequest)
+		return
+	}
 
 	var skeys []c.SecondaryKey
 	var pkeys [][]byte
 
 	w.WriteHeader(http.StatusOK)
 
+	empty := true
 	err = nil
 	e := api.client.Lookup(
 		uint64(index.Definition.DefnId), "", equals, distinct, limit, cons, ts,
@@ -509,6 +630,7 @@ func (api *restServer) doLookup(w http.ResponseWriter, request *http.Request) {
 			}
 			//nil means no more data
 			if skeys != nil {
+				empty = false
 				data, err := api.makeEntries(skeys, pkeys)
 				if err != nil {
 					w.Write([]byte(api.makeError(err)))
@@ -523,6 +645,8 @@ func (api *restServer) doLookup(w http.ResponseWriter, request *http.Request) {
 	}
 	if err != nil {
 		w.Write([]byte(api.makeError(err)))
+	} else if empty {
+		w.Write([]byte("[]"))
 	}
 }
 
@@ -553,6 +677,10 @@ func (api *restServer) doRange(w http.ResponseWriter, request *http.Request) {
 		msg := "missing field ``startkey``"
 		http.Error(w, jsonstr(msg), http.StatusBadRequest)
 		return
+	} else if _, ok = value.(string); ok == false {
+		msg := "invalid `startkey` type"
+		http.Error(w, jsonstr(msg), http.StatusBadRequest)
+		return
 	}
 	startkey := []byte(value.(string))
 
@@ -561,22 +689,45 @@ func (api *restServer) doRange(w http.ResponseWriter, request *http.Request) {
 		msg := "missing field ``endkey``"
 		http.Error(w, jsonstr(msg), http.StatusBadRequest)
 		return
+	} else if _, ok = value.(string); ok == false {
+		msg := "invalid `endkey` type"
+		http.Error(w, jsonstr(msg), http.StatusBadRequest)
+		return
 	}
 	endkey := []byte(value.(string))
 
 	if value, ok = params["stale"]; ok && value != nil {
-		stale = value.(string)
+		if stale, ok = value.(string); ok == false {
+			msg := `stale expected as string`
+			http.Error(w, jsonstr(msg), http.StatusBadRequest)
+			return
+		}
 	}
 
 	if value, ok = params["distinct"]; ok && value != nil {
+		if _, ok = value.(bool); ok == false {
+			msg := `invalid distinct type`
+			http.Error(w, jsonstr(msg), http.StatusBadRequest)
+			return
+		}
 		distinct = value.(bool)
 	}
 
 	if value, ok = params["limit"]; ok && value != nil {
-		limit = int64(value.(float64))
+		if _, ok = value.(int64); ok == false {
+			msg := `invalid limit type`
+			http.Error(w, jsonstr(msg), http.StatusBadRequest)
+			return
+		}
+		limit = value.(int64)
 	}
 
 	if value, ok = params["inclusion"]; ok && value != nil {
+		if _, ok = value.(string); ok == false {
+			msg := `invalid inclusion type`
+			http.Error(w, jsonstr(msg), http.StatusBadRequest)
+			return
+		}
 		inclusion = value.(string)
 	}
 
@@ -607,13 +758,18 @@ func (api *restServer) doRange(w http.ResponseWriter, request *http.Request) {
 		return
 	}
 	low, high := c.SecondaryKey(begin), c.SecondaryKey(end)
-	cons := stale2consistency(stale)
+	cons, ok := stale2consistency(stale)
+	if ok == false {
+		http.Error(w, jsonstr(`invalid stale option`), http.StatusBadRequest)
+		return
+	}
 
 	var skeys []c.SecondaryKey
 	var pkeys [][]byte
 
 	w.WriteHeader(http.StatusOK)
 
+	empty := true
 	err = nil
 	e := api.client.Range(
 		uint64(index.Definition.DefnId), "", low, high,
@@ -627,6 +783,7 @@ func (api *restServer) doRange(w http.ResponseWriter, request *http.Request) {
 			}
 			//nil means no more data
 			if skeys != nil {
+				empty = false
 				data, err := api.makeEntries(skeys, pkeys)
 				if err != nil {
 					w.Write([]byte(api.makeError(err)))
@@ -641,7 +798,262 @@ func (api *restServer) doRange(w http.ResponseWriter, request *http.Request) {
 	}
 	if err != nil {
 		w.Write([]byte(api.makeError(err)))
+	} else if empty {
+		w.Write([]byte("[]"))
 	}
+}
+
+//GET    /api/index/{id}?multiscan=true
+func (api *restServer) doMultiScan(w http.ResponseWriter, request *http.Request) {
+	index, errmsg := api.getIndex(request.URL.Path)
+	if errmsg != "" && strings.Contains(errmsg, "not found") {
+		http.Error(w, errmsg, http.StatusNotFound)
+		return
+	} else if errmsg != "" {
+		http.Error(w, errmsg, http.StatusBadRequest)
+		return
+	}
+
+	var params map[string]interface{}
+	var ts *qclient.TsConsistency
+	distinct, limit, offset, stale, reverse := false, int64(100), int64(0), "ok", false
+	var projection *qclient.IndexProjection
+
+	bytes, err := ioutil.ReadAll(request.Body)
+	if err := json.Unmarshal(bytes, &params); err != nil {
+		msg := "invalid request body, unmarshal failed %v"
+		http.Error(w, jsonstr(msg, err), http.StatusBadRequest)
+		return
+	}
+
+	value, ok := params["scans"]
+	if !ok {
+		msg := "missing field ``scans``"
+		http.Error(w, jsonstr(msg), http.StatusBadRequest)
+		return
+	} else if _, ok = value.(string); ok == false {
+		msg := "invalid scans type"
+		http.Error(w, jsonstr(msg), http.StatusBadRequest)
+		return
+	}
+	scansParam := []byte(value.(string))
+
+	if value, ok = params["projection"]; ok && value != nil {
+		if _, ok = value.(string); ok == false {
+			msg := "invalid projection type"
+			http.Error(w, jsonstr(msg), http.StatusBadRequest)
+			return
+		}
+		projection, err = getProjection([]byte(value.(string)))
+		if err != nil {
+			msg := "invalid projection: %v"
+			http.Error(w, jsonstr(msg, err), http.StatusBadRequest)
+			return
+		}
+	}
+
+	if value, ok = params["reverse"]; ok && value != nil {
+		if _, ok = value.(bool); ok == false {
+			msg := "invalid reverse type"
+			http.Error(w, jsonstr(msg), http.StatusBadRequest)
+			return
+		}
+		reverse = value.(bool)
+	}
+
+	if value, ok = params["stale"]; ok && value != nil {
+		if stale, ok = value.(string); ok == false {
+			msg := `stale expected as string`
+			http.Error(w, jsonstr(msg), http.StatusBadRequest)
+			return
+		}
+	}
+
+	if value, ok = params["distinct"]; ok && value != nil {
+		if _, ok = value.(bool); ok == false {
+			msg := `invalid distinct type`
+			http.Error(w, jsonstr(msg), http.StatusBadRequest)
+			return
+		}
+		distinct = value.(bool)
+	}
+
+	if value, ok = params["offset"]; ok && value != nil {
+		if _, ok = value.(int64); ok == false {
+			msg := `invalid offset type`
+			http.Error(w, jsonstr(msg), http.StatusBadRequest)
+			return
+		}
+		offset = value.(int64)
+	}
+
+	if value, ok = params["limit"]; ok && value != nil {
+		if _, ok = value.(int64); ok == false {
+			msg := `invalid limit type`
+			http.Error(w, jsonstr(msg), http.StatusBadRequest)
+			return
+		}
+		limit = value.(int64)
+	}
+
+	if value, ok = params["timestamp"]; stale == "partial" {
+		if !ok {
+			msg := `missing field timestamp for stale="partial"`
+			http.Error(w, jsonstr(msg), http.StatusBadRequest)
+			return
+		}
+		ts, err = vector2tsconsistency(value.(map[string][]string))
+		if err != nil {
+			msg := "invalid timestamp, ParseUint failed %v"
+			http.Error(w, jsonstr(msg, err), http.StatusBadRequest)
+			return
+		}
+	}
+
+	scans, err := getScans(scansParam)
+	if err != nil {
+		msg := "invalid scans: %v"
+		http.Error(w, jsonstr(msg, err), http.StatusBadRequest)
+		return
+	}
+
+	cons, ok := stale2consistency(stale)
+	if ok == false {
+		http.Error(w, jsonstr(`invalid stale option`), http.StatusBadRequest)
+		return
+	}
+
+	var skeys []c.SecondaryKey
+	var pkeys [][]byte
+
+	w.WriteHeader(http.StatusOK)
+
+	empty := true
+	err = nil
+	e := api.client.MultiScan(
+		uint64(index.Definition.DefnId), "", scans, reverse,
+		distinct, projection, offset, limit,
+		cons, ts,
+		func(res qclient.ResponseReader) bool {
+			if err = res.Error(); err != nil {
+				return false
+			} else if skeys, pkeys, err = res.GetEntries(); err != nil {
+				return false
+			}
+			//nil means no more data
+			if skeys != nil {
+				empty = false
+				data, err := api.makeEntries(skeys, pkeys)
+				if err != nil {
+					w.Write([]byte(api.makeError(err)))
+				}
+				w.Write([]byte(data))
+				w.(http.Flusher).Flush()
+			}
+			return true
+		})
+	if err == nil {
+		err = e
+	}
+	if err != nil {
+		w.Write([]byte(api.makeError(err)))
+	} else if empty {
+		w.Write([]byte("[]"))
+	}
+}
+
+//GET    /api/index/{id}?multiscancount=true
+func (api *restServer) doMultiScanCount(w http.ResponseWriter, request *http.Request) {
+	index, errmsg := api.getIndex(request.URL.Path)
+	if errmsg != "" && strings.Contains(errmsg, "not found") {
+		http.Error(w, errmsg, http.StatusNotFound)
+		return
+	} else if errmsg != "" {
+		http.Error(w, errmsg, http.StatusBadRequest)
+		return
+	}
+
+	var params map[string]interface{}
+	var ts *qclient.TsConsistency
+	distinct, stale := false, "ok"
+
+	bytes, err := ioutil.ReadAll(request.Body)
+	if err := json.Unmarshal(bytes, &params); err != nil {
+		msg := "invalid request body, unmarshal failed %v"
+		http.Error(w, jsonstr(msg, err), http.StatusBadRequest)
+		return
+	}
+
+	value, ok := params["scans"]
+	if !ok {
+		msg := "missing field ``scans``"
+		http.Error(w, jsonstr(msg), http.StatusBadRequest)
+		return
+	} else if _, ok = value.(string); ok == false {
+		msg := "invalid scans type"
+		http.Error(w, jsonstr(msg), http.StatusBadRequest)
+		return
+	}
+	scansParam := []byte(value.(string))
+
+	if value, ok = params["stale"]; ok && value != nil {
+		if stale, ok = value.(string); ok == false {
+			msg := `stale expected as string`
+			http.Error(w, jsonstr(msg), http.StatusBadRequest)
+			return
+		}
+	}
+
+	if value, ok = params["distinct"]; ok && value != nil {
+		if _, ok = value.(bool); ok == false {
+			msg := `invalid distinct type`
+			http.Error(w, jsonstr(msg), http.StatusBadRequest)
+			return
+		}
+		distinct = value.(bool)
+	}
+
+	if value, ok = params["timestamp"]; stale == "partial" {
+		if !ok {
+			msg := `missing field timestamp for stale="partial"`
+			http.Error(w, jsonstr(msg), http.StatusBadRequest)
+			return
+		}
+		ts, err = vector2tsconsistency(value.(map[string][]string))
+		if err != nil {
+			msg := "invalid timestamp, ParseUint failed %v"
+			http.Error(w, jsonstr(msg, err), http.StatusBadRequest)
+			return
+		}
+	}
+
+	scans, err := getScans(scansParam)
+	if err != nil {
+		msg := "invalid scans: %v"
+		http.Error(w, jsonstr(msg, err), http.StatusBadRequest)
+		return
+	}
+
+	cons, ok := stale2consistency(stale)
+	if ok == false {
+		http.Error(w, jsonstr(`invalid stale option`), http.StatusBadRequest)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+
+	count, err := api.client.MultiScanCount(
+		uint64(index.Definition.DefnId), "", scans,
+		distinct, cons, ts)
+	if err != nil {
+		w.Write([]byte(api.makeError(err)))
+		return
+	}
+
+	data := []byte(strconv.Itoa(int(count)))
+	w.Header().Set("Content-Length", fmt.Sprintf("%v", len(data)))
+	w.WriteHeader(http.StatusOK)
+	w.Write(data)
 }
 
 //GET    /api/index/{id}?scanall=true
@@ -667,11 +1079,20 @@ func (api *restServer) doScanall(w http.ResponseWriter, request *http.Request) {
 	}
 
 	if value, ok := params["limit"]; ok && value != nil {
-		limit = int64(value.(float64))
+		if _, ok = value.(int64); ok == false {
+			msg := `invalid limit type`
+			http.Error(w, jsonstr(msg), http.StatusBadRequest)
+			return
+		}
+		limit = value.(int64)
 	}
 
 	if value, ok := params["stale"]; ok && value != nil {
-		stale = value.(string)
+		if stale, ok = value.(string); ok == false {
+			msg := `stale expected as string`
+			http.Error(w, jsonstr(msg), http.StatusBadRequest)
+			return
+		}
 	}
 
 	if value, ok := params["timestamp"]; stale == "partial" {
@@ -688,13 +1109,18 @@ func (api *restServer) doScanall(w http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	cons := stale2consistency(stale)
+	cons, ok := stale2consistency(stale)
+	if ok == false {
+		http.Error(w, jsonstr(`invalid stale option`), http.StatusBadRequest)
+		return
+	}
 
 	var skeys []c.SecondaryKey
 	var pkeys [][]byte
 
 	w.WriteHeader(http.StatusOK)
 
+	empty := true
 	err = nil
 	e := api.client.ScanAll(
 		uint64(index.Definition.DefnId), "", limit, cons, ts,
@@ -706,6 +1132,7 @@ func (api *restServer) doScanall(w http.ResponseWriter, request *http.Request) {
 			}
 			//nil means no more data
 			if skeys != nil {
+				empty = false
 				data, err := api.makeEntries(skeys, pkeys)
 				if err != nil {
 					w.Write([]byte(api.makeError(err)))
@@ -720,6 +1147,8 @@ func (api *restServer) doScanall(w http.ResponseWriter, request *http.Request) {
 	}
 	if err != nil {
 		w.Write([]byte(api.makeError(err)))
+	} else if empty {
+		w.Write([]byte("[]"))
 	}
 }
 
@@ -766,7 +1195,11 @@ func (api *restServer) doCount(w http.ResponseWriter, request *http.Request) {
 	}
 
 	if value, ok := params["stale"]; ok {
-		stale = value.(string)
+		if stale, ok = value.(string); ok == false {
+			msg := `stale expected as string`
+			http.Error(w, jsonstr(msg), http.StatusBadRequest)
+			return
+		}
 	}
 
 	if value, ok := params["timestamp"]; stale == "partial" {
@@ -796,7 +1229,11 @@ func (api *restServer) doCount(w http.ResponseWriter, request *http.Request) {
 		return
 	}
 	low, high := c.SecondaryKey(begin), c.SecondaryKey(end)
-	cons := stale2consistency(stale)
+	cons, ok := stale2consistency(stale)
+	if ok == false {
+		http.Error(w, jsonstr(`invalid stale option`), http.StatusBadRequest)
+		return
+	}
 
 	w.WriteHeader(http.StatusOK)
 
@@ -821,7 +1258,7 @@ func (api *restServer) getIndex(path string) (*mclient.IndexMetadata, string) {
 		return nil, jsonstr(`invalid index id, ParseUint failed %v`, err)
 	}
 
-	indexes, err := api.client.Refresh()
+	indexes, _, _, err := api.client.Refresh()
 	if err != nil {
 		return nil, jsonstr(`cannot refresh metadata: %v`, err)
 	}
@@ -900,14 +1337,41 @@ func equal2Key(arg []byte) ([]interface{}, error) {
 	return key, nil
 }
 
+func getScans(arg []byte) (qclient.Scans, error) {
+	var scans qclient.Scans
+	if err := json.Unmarshal(arg, &scans); err != nil {
+		return nil, err
+	}
+	for _, sc := range scans {
+		for _, filter := range sc.Filter {
+			if filter.Low == UnboundedLiteral {
+				filter.Low = c.MinUnbounded
+			}
+			if filter.High == UnboundedLiteral {
+				filter.High = c.MaxUnbounded
+			}
+		}
+	}
+	return scans, nil
+}
+
+func getProjection(arg []byte) (*qclient.IndexProjection, error) {
+	var proj qclient.IndexProjection
+	if err := json.Unmarshal(arg, &proj); err != nil {
+		return &proj, err
+	}
+	return &proj, nil
+}
+
 var mstale2consistency = map[string]c.Consistency{
 	"ok":      c.AnyConsistency,
 	"false":   c.SessionConsistency,
 	"partial": c.QueryConsistency,
 }
 
-func stale2consistency(stale string) c.Consistency {
-	return mstale2consistency[stale]
+func stale2consistency(stale string) (c.Consistency, bool) {
+	cons, ok := mstale2consistency[stale]
+	return cons, ok
 }
 
 func incl2incl(inclusion string) qclient.Inclusion {

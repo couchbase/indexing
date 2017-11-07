@@ -9,7 +9,7 @@ import "math/rand"
 import "sync"
 import "runtime"
 import "encoding/binary"
-import "github.com/couchbase/indexing/secondary/memdb/mm"
+import "github.com/couchbase/indexing/secondary/stubs/nitro/mm"
 
 var testConf Config
 

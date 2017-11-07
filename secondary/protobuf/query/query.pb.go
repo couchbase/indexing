@@ -25,6 +25,9 @@ It has these top-level messages:
 	CountResponse
 	Span
 	Range
+	CompositeElementFilter
+	Scan
+	IndexProjection
 	IndexEntry
 	IndexStatistics
 */
@@ -296,14 +299,19 @@ func (m *StatisticsResponse) GetErr() *Error {
 
 // Scan request to indexer.
 type ScanRequest struct {
-	DefnID           *uint64        `protobuf:"varint,1,req,name=defnID" json:"defnID,omitempty"`
-	Span             *Span          `protobuf:"bytes,2,req,name=span" json:"span,omitempty"`
-	Distinct         *bool          `protobuf:"varint,3,req,name=distinct" json:"distinct,omitempty"`
-	Limit            *int64         `protobuf:"varint,4,req,name=limit" json:"limit,omitempty"`
-	Cons             *uint32        `protobuf:"varint,5,req,name=cons" json:"cons,omitempty"`
-	Vector           *TsConsistency `protobuf:"bytes,6,opt,name=vector" json:"vector,omitempty"`
-	RequestId        *string        `protobuf:"bytes,7,opt,name=requestId" json:"requestId,omitempty"`
-	XXX_unrecognized []byte         `json:"-"`
+	DefnID           *uint64          `protobuf:"varint,1,req,name=defnID" json:"defnID,omitempty"`
+	Span             *Span            `protobuf:"bytes,2,req,name=span" json:"span,omitempty"`
+	Distinct         *bool            `protobuf:"varint,3,req,name=distinct" json:"distinct,omitempty"`
+	Limit            *int64           `protobuf:"varint,4,req,name=limit" json:"limit,omitempty"`
+	Cons             *uint32          `protobuf:"varint,5,req,name=cons" json:"cons,omitempty"`
+	Vector           *TsConsistency   `protobuf:"bytes,6,opt,name=vector" json:"vector,omitempty"`
+	RequestId        *string          `protobuf:"bytes,7,opt,name=requestId" json:"requestId,omitempty"`
+	Scans            []*Scan          `protobuf:"bytes,8,rep,name=scans" json:"scans,omitempty"`
+	Indexprojection  *IndexProjection `protobuf:"bytes,9,opt,name=indexprojection" json:"indexprojection,omitempty"`
+	Reverse          *bool            `protobuf:"varint,10,opt,name=reverse" json:"reverse,omitempty"`
+	Offset           *int64           `protobuf:"varint,11,opt,name=offset" json:"offset,omitempty"`
+	RollbackTime     *int64           `protobuf:"varint,12,opt,name=rollbackTime" json:"rollbackTime,omitempty"`
+	XXX_unrecognized []byte           `json:"-"`
 }
 
 func (m *ScanRequest) Reset()         { *m = ScanRequest{} }
@@ -359,6 +367,41 @@ func (m *ScanRequest) GetRequestId() string {
 	return ""
 }
 
+func (m *ScanRequest) GetScans() []*Scan {
+	if m != nil {
+		return m.Scans
+	}
+	return nil
+}
+
+func (m *ScanRequest) GetIndexprojection() *IndexProjection {
+	if m != nil {
+		return m.Indexprojection
+	}
+	return nil
+}
+
+func (m *ScanRequest) GetReverse() bool {
+	if m != nil && m.Reverse != nil {
+		return *m.Reverse
+	}
+	return false
+}
+
+func (m *ScanRequest) GetOffset() int64 {
+	if m != nil && m.Offset != nil {
+		return *m.Offset
+	}
+	return 0
+}
+
+func (m *ScanRequest) GetRollbackTime() int64 {
+	if m != nil && m.RollbackTime != nil {
+		return *m.RollbackTime
+	}
+	return 0
+}
+
 // Full table scan request from indexer.
 type ScanAllRequest struct {
 	DefnID           *uint64        `protobuf:"varint,1,req,name=defnID" json:"defnID,omitempty"`
@@ -366,6 +409,7 @@ type ScanAllRequest struct {
 	Cons             *uint32        `protobuf:"varint,3,req,name=cons" json:"cons,omitempty"`
 	Vector           *TsConsistency `protobuf:"bytes,4,opt,name=vector" json:"vector,omitempty"`
 	RequestId        *string        `protobuf:"bytes,5,opt,name=requestId" json:"requestId,omitempty"`
+	RollbackTime     *int64         `protobuf:"varint,6,opt,name=rollbackTime" json:"rollbackTime,omitempty"`
 	XXX_unrecognized []byte         `json:"-"`
 }
 
@@ -406,6 +450,13 @@ func (m *ScanAllRequest) GetRequestId() string {
 		return *m.RequestId
 	}
 	return ""
+}
+
+func (m *ScanAllRequest) GetRollbackTime() int64 {
+	if m != nil && m.RollbackTime != nil {
+		return *m.RollbackTime
+	}
+	return 0
 }
 
 // Request by client to stop streaming the query results.
@@ -465,6 +516,9 @@ type CountRequest struct {
 	Cons             *uint32        `protobuf:"varint,3,req,name=cons" json:"cons,omitempty"`
 	Vector           *TsConsistency `protobuf:"bytes,4,opt,name=vector" json:"vector,omitempty"`
 	RequestId        *string        `protobuf:"bytes,5,opt,name=requestId" json:"requestId,omitempty"`
+	Distinct         *bool          `protobuf:"varint,6,opt,name=distinct" json:"distinct,omitempty"`
+	Scans            []*Scan        `protobuf:"bytes,7,rep,name=scans" json:"scans,omitempty"`
+	RollbackTime     *int64         `protobuf:"varint,8,opt,name=rollbackTime" json:"rollbackTime,omitempty"`
 	XXX_unrecognized []byte         `json:"-"`
 }
 
@@ -505,6 +559,27 @@ func (m *CountRequest) GetRequestId() string {
 		return *m.RequestId
 	}
 	return ""
+}
+
+func (m *CountRequest) GetDistinct() bool {
+	if m != nil && m.Distinct != nil {
+		return *m.Distinct
+	}
+	return false
+}
+
+func (m *CountRequest) GetScans() []*Scan {
+	if m != nil {
+		return m.Scans
+	}
+	return nil
+}
+
+func (m *CountRequest) GetRollbackTime() int64 {
+	if m != nil && m.RollbackTime != nil {
+		return *m.RollbackTime
+	}
+	return 0
 }
 
 // total number of entries in index.
@@ -586,6 +661,86 @@ func (m *Range) GetInclusion() uint32 {
 		return *m.Inclusion
 	}
 	return 0
+}
+
+type CompositeElementFilter struct {
+	Low              []byte  `protobuf:"bytes,1,opt,name=low" json:"low,omitempty"`
+	High             []byte  `protobuf:"bytes,2,opt,name=high" json:"high,omitempty"`
+	Inclusion        *uint32 `protobuf:"varint,3,req,name=inclusion" json:"inclusion,omitempty"`
+	XXX_unrecognized []byte  `json:"-"`
+}
+
+func (m *CompositeElementFilter) Reset()         { *m = CompositeElementFilter{} }
+func (m *CompositeElementFilter) String() string { return proto.CompactTextString(m) }
+func (*CompositeElementFilter) ProtoMessage()    {}
+
+func (m *CompositeElementFilter) GetLow() []byte {
+	if m != nil {
+		return m.Low
+	}
+	return nil
+}
+
+func (m *CompositeElementFilter) GetHigh() []byte {
+	if m != nil {
+		return m.High
+	}
+	return nil
+}
+
+func (m *CompositeElementFilter) GetInclusion() uint32 {
+	if m != nil && m.Inclusion != nil {
+		return *m.Inclusion
+	}
+	return 0
+}
+
+type Scan struct {
+	Filters          []*CompositeElementFilter `protobuf:"bytes,1,rep,name=filters" json:"filters,omitempty"`
+	Equals           [][]byte                  `protobuf:"bytes,2,rep,name=equals" json:"equals,omitempty"`
+	XXX_unrecognized []byte                    `json:"-"`
+}
+
+func (m *Scan) Reset()         { *m = Scan{} }
+func (m *Scan) String() string { return proto.CompactTextString(m) }
+func (*Scan) ProtoMessage()    {}
+
+func (m *Scan) GetFilters() []*CompositeElementFilter {
+	if m != nil {
+		return m.Filters
+	}
+	return nil
+}
+
+func (m *Scan) GetEquals() [][]byte {
+	if m != nil {
+		return m.Equals
+	}
+	return nil
+}
+
+type IndexProjection struct {
+	EntryKeys        []int64 `protobuf:"varint,1,rep" json:"EntryKeys,omitempty"`
+	PrimaryKey       *bool   `protobuf:"varint,2,opt" json:"PrimaryKey,omitempty"`
+	XXX_unrecognized []byte  `json:"-"`
+}
+
+func (m *IndexProjection) Reset()         { *m = IndexProjection{} }
+func (m *IndexProjection) String() string { return proto.CompactTextString(m) }
+func (*IndexProjection) ProtoMessage()    {}
+
+func (m *IndexProjection) GetEntryKeys() []int64 {
+	if m != nil {
+		return m.EntryKeys
+	}
+	return nil
+}
+
+func (m *IndexProjection) GetPrimaryKey() bool {
+	if m != nil && m.PrimaryKey != nil {
+		return *m.PrimaryKey
+	}
+	return false
 }
 
 type IndexEntry struct {

@@ -72,39 +72,31 @@ func splitSecondaryArrayKey(key []byte, arrayPos int, tmpBuf []byte) ([][][]byte
 }
 
 func ArrayIndexItems(bs []byte, arrPos int, buf []byte,
-	isDistinct, checkSize bool) ([][]byte, []int, error) {
+	isDistinct, checkSize bool) ([][]byte, []int, int, error) {
 	var items [][]byte
 	var err error
 
 	itemArrays, err := splitSecondaryArrayKey(bs, arrPos, buf)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, len(buf), err
 	}
 
 	codec := collatejson.NewCodec(16)
 	for _, arr := range itemArrays {
 		from := len(buf)
 		if buf, err = codec.JoinArray(arr, buf); err != nil {
-			return nil, nil, err
+			return nil, nil, len(buf), err
 		}
 		l := len(buf)
-		if checkSize && (l-from) > MAX_SEC_KEY_BUFFER_LEN {
-			logging.Errorf("Encoded array item key too long. Length of key = %v, Limit = %v", l-from, MAX_SEC_KEY_BUFFER_LEN)
-			return nil, nil, ErrArrayItemKeyTooLong
+		if checkSize && (l-from) > maxSecKeyBufferLen {
+			logging.Errorf("Encoded array item key too long. Length of key = %v, Limit = %v", l-from, maxSecKeyBufferLen)
+			return nil, nil, len(buf), ErrArrayItemKeyTooLong
 		}
 		if checkSize && l > maxArrayIndexEntrySize {
 			logging.Errorf("Encoded array key too long. Length of key = %v, Limit = %v", l, maxArrayIndexEntrySize)
-			return nil, nil, ErrArrayKeyTooLong
+			return nil, nil, len(buf), ErrArrayKeyTooLong
 		}
 		items = append(items, buf[from:l])
-	}
-
-	if isDistinct {
-		keyCount := make([]int, len(items))
-		for i, _ := range items {
-			keyCount[i] = 1
-		}
-		return items, keyCount, nil
 	}
 
 	arrayKey := items
@@ -128,7 +120,13 @@ func ArrayIndexItems(bs []byte, arrPos int, buf []byte,
 		keyCount = append(keyCount, count)
 		i = j
 	}
-	return arrayItemsWithCount, keyCount, nil
+
+	if isDistinct {
+		for i, _ := range arrayItemsWithCount {
+			keyCount[i] = 1
+		}
+	}
+	return arrayItemsWithCount, keyCount, len(buf), nil
 }
 
 // Compare two arrays of byte arrays

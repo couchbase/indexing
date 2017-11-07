@@ -382,9 +382,13 @@ func (worker *VbucketWorker) handleEvent(m *mc.DcpEvent) *Vbucket {
 		// for each engine distribute transformations to endpoints.
 		fmsg := "%v ##%x TransformRoute: %v\n"
 		for _, engine := range worker.engines {
-			err := engine.TransformRoute(v.vbuuid, m, dataForEndpoints, worker.encodeBuf)
+			newBuf, err := engine.TransformRoute(v.vbuuid, m, dataForEndpoints, worker.encodeBuf)
 			if err != nil {
 				logging.Errorf(fmsg, logPrefix, m.Opaque, err)
+			}
+			// TODO: Shrink the buffer periodically or as needed
+			if cap(newBuf) > cap(worker.encodeBuf) {
+				worker.encodeBuf = newBuf[:0]
 			}
 		}
 		// send data to corresponding endpoint.

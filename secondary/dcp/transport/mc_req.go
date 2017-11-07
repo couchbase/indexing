@@ -18,6 +18,8 @@ type MCRequest struct {
 	Opcode CommandCode
 	// The CAS (if applicable, or 0)
 	Cas uint64
+	// Datatype as per binary protocol
+	Datatype uint8
 	// An opaque value to be returned with this request
 	Opaque uint32
 	// The vbucket to which this command belongs
@@ -141,6 +143,7 @@ func (req *MCRequest) Receive(r io.Reader, hdrBytes []byte) (int, error) {
 	klen := int(binary.BigEndian.Uint16(hdrBytes[2:]))
 	elen := int(hdrBytes[4])
 
+	req.Datatype = uint8(hdrBytes[5])
 	req.Opcode = CommandCode(hdrBytes[1])
 	// Vbucket at 6:7
 	req.VBucket = binary.BigEndian.Uint16(hdrBytes[6:])

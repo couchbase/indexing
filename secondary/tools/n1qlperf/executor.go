@@ -2,19 +2,20 @@ package main
 
 import (
 	"fmt"
-	c "github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/platform"
-	nclient "github.com/couchbase/indexing/secondary/queryport/n1ql"
-	"github.com/couchbase/query/datastore"
-	"github.com/couchbase/query/errors"
-	"github.com/couchbase/query/value"
 	"io"
 	"log"
 	"math"
 	"os"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
+
+	c "github.com/couchbase/indexing/secondary/common"
+	nclient "github.com/couchbase/indexing/secondary/queryport/n1ql"
+	"github.com/couchbase/query/datastore"
+	"github.com/couchbase/query/errors"
+	"github.com/couchbase/query/value"
 )
 
 var (
@@ -26,7 +27,7 @@ var (
 
 	clientBootTime = 5 // Seconds
 
-	requestCounter = platform.NewAlignedUint64(0)
+	requestCounter = 0
 )
 
 type Job struct {
@@ -54,7 +55,7 @@ func RunJob(nclient datastore.Indexer, job *Job, aggrQ chan *JobResult) {
 	errFn := func(e string) {
 		fmt.Printf("REQ:%d scan error occured: %s\n", spec.Id, e)
 		if result != nil {
-			platform.AddUint64(&result.ErrorCount, 1)
+			atomic.AddUint64(&result.ErrorCount, 1)
 		}
 	}
 
@@ -72,7 +73,7 @@ func RunJob(nclient datastore.Indexer, job *Job, aggrQ chan *JobResult) {
 
 	startTime := time.Now()
 	go func() {
-		uuid := fmt.Sprintf("%d", platform.AddUint64(&requestCounter, 1))
+		uuid := fmt.Sprintf("%d", atomic.AddUint64(&requestCounter, 1))
 		switch spec.Type {
 		case "All":
 			requestID := os.Args[0] + uuid
@@ -245,7 +246,7 @@ func RunCommands(cluster string, cfg *Config, statsW io.Writer) (*Result, error)
 		}
 
 		res := new(ScanResult)
-		res.ErrorCount = platform.NewAlignedUint64(0)
+		res.ErrorCount = 0
 		res.LatencyHisto.Init(cfg.LatencyBuckets, hFn)
 		res.Id = spec.Id
 		result.ScanResults = append(result.ScanResults, res)
@@ -270,14 +271,14 @@ loop:
 	for {
 		allFinished = true
 		for i, spec := range cfg.ScanSpecs {
-			if iter := platform.LoadUint32(&spec.iteration); iter < spec.Repeat+1 {
+			if iter := atomic.LoadUint32(&spec.iteration); iter < spec.Repeat+1 {
 				j := &Job{
 					spec:   spec,
 					result: result.ScanResults[i],
 				}
 
 				jobQm[spec.Bucket] <- j
-				platform.AddUint32(&spec.iteration, 1)
+				atomic.AddUint32(&spec.iteration, 1)
 				allFinished = false
 			}
 		}
@@ -333,6 +334,10 @@ func (ctxt *perfContext) Warning(wrn errors.Error) {
 
 func (ctxt *perfContext) Fatal(fatal errors.Error) {
 	fmt.Printf("scan fatal: %v\n", fatal)
+}
+
+func (ctxt *perfContext) GetScanCap() int64 {
+	return 512 // Default index scan request size
 }
 
 func skey2qkey(skey c.SecondaryKey) value.Values {
