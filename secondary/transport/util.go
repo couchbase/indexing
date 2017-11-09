@@ -4,7 +4,7 @@ import "io"
 import "encoding/binary"
 import "github.com/couchbase/indexing/secondary/logging"
 
-func Send(conn transporter, buf []byte, flags TransportFlag, payload []byte) (err error) {
+func Send(conn transporter, buf []byte, flags TransportFlag, payload []byte, addChksm bool) (err error) {
 	var n int
 
 	// transport framing
@@ -18,7 +18,7 @@ func Send(conn transporter, buf []byte, flags TransportFlag, payload []byte) (er
 	a, b := pktLenOffset, pktLenOffset+pktLenSize
 	binary.BigEndian.PutUint32(buf[a:b], uint32(len(payload)))
 
-	if payload != nil {
+	if payload != nil && addChksm {
 		chksm := computeChecksum(buf[a:b])
 		flags = flags.SetChecksum(chksm)
 	}
@@ -43,7 +43,7 @@ func Send(conn transporter, buf []byte, flags TransportFlag, payload []byte) (er
 func SendResponseEnd(conn transporter) error {
 	buf := make([]byte, pktLenSize+pktFlagSize)
 	// Special 0 byte payload and flag to indicate end of response
-	return Send(conn, buf, 0, nil)
+	return Send(conn, buf, 0, nil, false)
 }
 
 func Receive(conn transporter, buf []byte) (flags TransportFlag, payload []byte, err error) {
