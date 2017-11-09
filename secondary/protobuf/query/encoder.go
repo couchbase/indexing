@@ -18,6 +18,6 @@ func EncodeAndWrite(conn net.Conn, buf []byte, r interface{}) (err error) {
 		return
 	}
 	flags := transport.TransportFlag(0).SetProtobuf()
-	err = transport.Send(conn, buf, flags, data)
+	err = transport.Send(conn, buf, flags, data, false)
 	return
 }
