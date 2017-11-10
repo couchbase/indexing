@@ -106,7 +106,7 @@ func (pkt *TransportPacket) Send(conn transporter, payload interface{}) (err err
 		return
 	}
 
-	err = Send(conn, pkt.buf, pkt.flags, data)
+	err = Send(conn, pkt.buf, pkt.flags, data, true)
 	return
 }
 
