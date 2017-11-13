@@ -1402,13 +1402,14 @@ func (fdb *fdbSlice) Statistics() (StorageStatistics, error) {
 
 	// Compute approximate fragmentation percentage
 	// Since we keep multiple index snapshots after compaction, it is not
-	// trivial to compute fragmentation as ration of data size to disk size.
+	// trivial to compute fragmentation as ratio of data size to disk size.
 	// Hence we compute approximate fragmentation by adding overhead data size
 	// caused by extra snapshots.
 	extraSnapDataSize := atomic.LoadInt64(&fdb.extraSnapDataSize)
 
 	fdb.statFdLock.Lock()
 	sts.DataSize = int64(fdb.statFd.EstimateSpaceUsed()) + extraSnapDataSize
+	sts.MemUsed = 0 // as of now this stat is unsupported for FDB, until we figure out a way to calculate it accurately
 	sts.NeedUpgrade = fdb.fileVersion < forestdb.FdbV2FileVersion
 	fdb.statFdLock.Unlock()
 

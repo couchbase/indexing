@@ -1112,6 +1112,7 @@ func (mdb *memdbSlice) Statistics() (StorageStatistics, error) {
 	var sts StorageStatistics
 
 	var internalData []string
+        var ntMemUsed int64
 
 	internalData = append(internalData, fmt.Sprintf("{\n\"MainStore\": %s", mdb.mainstore.DumpStats()))
 
@@ -1119,6 +1120,7 @@ func (mdb *memdbSlice) Statistics() (StorageStatistics, error) {
 		for i := 0; i < mdb.numWriters; i++ {
 			internalData = append(internalData, ",\n")
 			internalData = append(internalData, fmt.Sprintf(`"BackStore_%d": %s`, i, mdb.back[i].Stats()))
+                        ntMemUsed += mdb.back[i].MemoryInUse()
 		}
 	}
 
@@ -1126,6 +1128,7 @@ func (mdb *memdbSlice) Statistics() (StorageStatistics, error) {
 
 	sts.InternalData = internalData
 	sts.DataSize = mdb.mainstore.MemoryInUse()
+	sts.MemUsed  = mdb.mainstore.MemoryInUse() + ntMemUsed
 	sts.DiskSize = mdb.diskSize()
 	return sts, nil
 }

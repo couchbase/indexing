@@ -16,6 +16,7 @@ import (
 
 type StorageStatistics struct {
 	DataSize          int64
+	MemUsed           int64
 	DiskSize          int64
 	ExtraSnapDataSize int64
 
