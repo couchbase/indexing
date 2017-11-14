@@ -1576,9 +1576,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.settings.statsLogDumpInterval": ConfigValue{
-		uint64(60),
+		uint64(60 * 15),
 		"Periodic stats dump logging interval in seconds",
-		uint64(60),
+		uint64(60 * 15),
 		false, // mutable
 		false, // case-insensitive
 	},

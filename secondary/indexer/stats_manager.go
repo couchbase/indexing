@@ -671,9 +671,9 @@ func (s *statsManager) runStatsDumpLogger() {
 		if stats != nil {
 			bytes, _ := stats.MarshalJSON()
 			var storageStats string
-			if logging.IsEnabled(logging.Debug) {
+			if common.GetStorageMode() != common.FORESTDB {
 				storageStats = fmt.Sprintf("\n==== StorageStats ====\n%s", s.getStorageStats())
-			} else if common.GetStorageMode() == common.FORESTDB && logging.IsEnabled(logging.Timing) {
+			} else if logging.IsEnabled(logging.Timing) {
 				storageStats = fmt.Sprintf("\n==== StorageStats ====\n%s", s.getStorageStats())
 			}
 			logging.Infof("PeriodicStats = %s%s", string(bytes), storageStats)
