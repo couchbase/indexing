@@ -659,7 +659,11 @@ func GetBucket(endpoint, poolname, bucketname string) (*Bucket, error) {
 
 // Make hostnames comparable for terse-buckets info and old buckets info
 func normalizeHost(ch, h string) string {
-	return strings.Replace(h, "$HOST", ch, 1)
+	host, port, _ := net.SplitHostPort(h)
+	if host == "$HOST" {
+		host = ch
+	}
+	return net.JoinHostPort(host, port)
 }
 
 func (b *Bucket) GetDcpConn(name DcpFeedName, host string) (*memcached.Client, error) {
