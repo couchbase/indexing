@@ -769,6 +769,7 @@ func (s *storageMgr) handleStats(cmd Message) {
 		// This nil check is a workaround to avoid indexer crashes for now.
 		if idxStats != nil {
 			idxStats.diskSize.Set(st.Stats.DiskSize)
+			idxStats.memUsed.Set(st.Stats.MemUsed)
 			idxStats.dataSize.Set(st.Stats.DataSize)
 			if common.GetStorageMode() != common.MOI {
 				idxStats.fragPercent.Set(int64(st.GetFragmentation()))
@@ -813,7 +814,7 @@ func (s *storageMgr) getIndexStorageStats() []IndexStorageStats {
 		}
 
 		var internalData []string
-		var dataSz, diskSz, extraSnapDataSize int64
+		var dataSz, memUsed, diskSz, extraSnapDataSize int64
 		var getBytes, insertBytes, deleteBytes int64
 		var nslices int64
 		var needUpgrade = false
@@ -828,6 +829,7 @@ func (s *storageMgr) getIndexStorageStats() []IndexStorageStats {
 				}
 
 				dataSz += sts.DataSize
+				memUsed += sts.MemUsed
 				diskSz += sts.DiskSize
 				getBytes += sts.GetBytes
 				insertBytes += sts.InsertBytes
@@ -846,6 +848,7 @@ func (s *storageMgr) getIndexStorageStats() []IndexStorageStats {
 				Bucket: inst.Defn.Bucket,
 				Stats: StorageStatistics{
 					DataSize:          dataSz,
+					MemUsed:           memUsed,
 					DiskSize:          diskSz,
 					GetBytes:          getBytes,
 					InsertBytes:       insertBytes,

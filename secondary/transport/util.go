@@ -65,6 +65,12 @@ func Receive(conn transporter, buf []byte) (flags TransportFlag, payload []byte,
 	a, b = pktFlagOffset, pktFlagOffset+pktFlagSize
 	flags = TransportFlag(binary.BigEndian.Uint16(bufHeader[a:b]))
 
+	if int(pktlen) != 0 && !flags.IsValidEncoding() {
+		logging.Errorf("transport - unknown encoding scheme %#v flags %#v", flags.GetEncoding(), flags)
+		err = ErrorDecoderUnknown
+		return
+	}
+
 	pktChksm := flags.GetChecksum()
 
 	if uint8(pktChksm) != 0 {

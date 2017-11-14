@@ -107,6 +107,7 @@ type IndexStats struct {
 	numCompletedRequests  stats.Int64Val
 	numRowsReturned       stats.Int64Val
 	diskSize              stats.Int64Val
+	memUsed               stats.Int64Val
 	buildProgress         stats.Int64Val
 	completionProgress    stats.Int64Val
 	numDocsQueued         stats.Int64Val
@@ -175,6 +176,7 @@ func (s *IndexStats) Init() {
 	s.numCompletedRequests.Init()
 	s.numRowsReturned.Init()
 	s.diskSize.Init()
+	s.memUsed.Init()
 	s.buildProgress.Init()
 	s.completionProgress.Init()
 	s.numDocsQueued.Init()
@@ -346,6 +348,7 @@ func (is IndexerStats) GetStats() common.Statistics {
 		addStat("num_completed_requests", s.numCompletedRequests.Value())
 		addStat("num_rows_returned", s.numRowsReturned.Value())
 		addStat("disk_size", s.diskSize.Value())
+		addStat("memory_used", s.memUsed.Value())
 		addStat("build_progress", s.buildProgress.Value())
 		addStat("completion_progress", s.completionProgress.Value())
 		addStat("num_docs_queued", s.numDocsQueued.Value())

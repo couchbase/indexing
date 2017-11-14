@@ -69,3 +69,12 @@ func (flags TransportFlag) GetChecksum() byte {
 func (flags TransportFlag) SetChecksum(c byte) TransportFlag {
 	return (flags & TransportFlag(0x80FF)) | (TransportFlag(c) << 8)
 }
+
+func (flags TransportFlag) IsValidEncoding() bool {
+
+	enc := flags.GetEncoding()
+	if enc == EncodingProtobuf {
+		return true
+	}
+	return false
+}
