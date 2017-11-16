@@ -37,6 +37,11 @@ type RequestBroker struct {
 	notifych chan bool
 	closed   int32
 	killch   chan bool
+
+	sendCount    int64
+	receiveCount int64
+
+	requestId string
 }
 
 type doneStatus struct {
@@ -47,9 +52,9 @@ type doneStatus struct {
 //
 // New Request Broker
 //
-func NewRequestBroker(size int64) *RequestBroker {
+func NewRequestBroker(requestId string, size int64) *RequestBroker {
 
-	return &RequestBroker{size: size, sorted: true}
+	return &RequestBroker{requestId: requestId, size: size, sorted: true}
 }
 
 //
@@ -95,6 +100,16 @@ func (b *RequestBroker) Close() {
 	for _, queue := range b.queues {
 		queue.Close()
 	}
+}
+
+func (b *RequestBroker) IncrementReceiveCount(count int) {
+
+	atomic.AddInt64(&b.receiveCount, int64(count))
+}
+
+func (b *RequestBroker) IncrementSendCount() {
+
+	atomic.AddInt64(&b.sendCount, 1)
 }
 
 //
@@ -402,6 +417,14 @@ func (c *RequestBroker) Cap(id ResponseHandlerId) int64 {
 	return -1
 }
 
+func (c *RequestBroker) ReceiveCount() int64 {
+	return atomic.LoadInt64(&c.receiveCount)
+}
+
+func (c *RequestBroker) SendCount() int64 {
+	return atomic.LoadInt64(&c.sendCount)
+}
+
 //--------------------------
 // default request broker
 //--------------------------
@@ -421,7 +444,7 @@ func (d *bypassResponseReader) Error() error {
 
 func makeDefaultRequestBroker(cb ResponseHandler) *RequestBroker {
 
-	broker := NewRequestBroker(4096)
+	broker := NewRequestBroker("", 4096)
 
 	factory := func(id ResponseHandlerId) ResponseHandler {
 		return makeDefaultResponseHandler(id, broker)
@@ -434,6 +457,7 @@ func makeDefaultRequestBroker(cb ResponseHandler) *RequestBroker {
 			reader.skey = uskey
 			return cb(&reader)
 		}
+		broker.IncrementSendCount()
 		return true
 	}
 
@@ -457,6 +481,13 @@ func makeDefaultResponseHandler(id ResponseHandlerId, broker *RequestBroker) Res
 			logging.Errorf("defaultResponseHandler: %v", err)
 			broker.Close()
 			return false
+		}
+		if len(pkeys) != 0 || len(skeys) != 0 {
+			if len(pkeys) != 0 {
+				broker.IncrementReceiveCount(len(pkeys))
+			} else {
+				broker.IncrementReceiveCount(len(skeys))
+			}
 		}
 		return broker.SendEntries(id, pkeys, skeys)
 	}

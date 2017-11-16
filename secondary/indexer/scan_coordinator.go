@@ -1575,20 +1575,32 @@ func (s *scanCoordinator) handleScanRequest(req *ScanRequest, w ScanResponseWrit
 
 	if err != nil {
 		status := fmt.Sprintf("(error = %s)", err)
-		logging.LazyVerbose(func() string {
-			return fmt.Sprintf("%s RESPONSE rows:%d, waitTime:%v, totalTime:%v, status:%s, requestId:%s",
-				req.LogPrefix, scanPipeline.RowsReturned(), waitTime, scanTime, status, req.RequestId)
-		})
+
+		// FIXME - DEBUG
+		logging.Infof("%s RESPONSE rows:%d, waitTime:%v, totalTime:%v, status:%s, requestId:%s",
+			req.LogPrefix, scanPipeline.RowsReturned(), waitTime, scanTime, status, req.RequestId)
+		/*
+			logging.LazyVerbose(func() string {
+				return fmt.Sprintf("%s RESPONSE rows:%d, waitTime:%v, totalTime:%v, status:%s, requestId:%s",
+					req.LogPrefix, scanPipeline.RowsReturned(), waitTime, scanTime, status, req.RequestId)
+			})
+		*/
 
 		if err == common.ErrClientCancel {
 			req.Stats.clientCancelError.Add(1)
 		}
 	} else {
 		status := "ok"
-		logging.LazyVerbose(func() string {
-			return fmt.Sprintf("%s RESPONSE rows:%d, waitTime:%v, totalTime:%v, status:%s",
-				req.LogPrefix, scanPipeline.RowsReturned(), waitTime, scanTime, status)
-		})
+
+		//FIXME - DEBUG
+		logging.Infof("%s RESPONSE rows:%d, waitTime:%v, totalTime:%v, status:%s requestId:%s",
+			req.LogPrefix, scanPipeline.RowsReturned(), waitTime, scanTime, status, req.RequestId)
+		/*
+			logging.LazyVerbose(func() string {
+				return fmt.Sprintf("%s RESPONSE rows:%d, waitTime:%v, totalTime:%v, status:%s requestId:%s",
+					req.LogPrefix, scanPipeline.RowsReturned(), waitTime, scanTime, status, req.RequestId)
+			})
+		*/
 	}
 }
 
@@ -1614,7 +1626,8 @@ func (s *scanCoordinator) handleCountRequest(req *ScanRequest, w ScanResponseWri
 		return
 	}
 
-	logging.Verbosef("%s RESPONSE count:%d status:ok", req.LogPrefix, rows)
+	// FIXME - DEBUG
+	logging.Infof("%s RESPONSE count:%d status:ok", req.LogPrefix, rows)
 	err = w.Count(rows)
 	s.handleError(req.LogPrefix, err)
 }
@@ -1655,7 +1668,8 @@ func (s *scanCoordinator) handleMultiScanCountRequest(req *ScanRequest, w ScanRe
 		return
 	}
 
-	logging.Verbosef("%s RESPONSE count:%d status:ok", req.LogPrefix, rows)
+	// FIXME - DEBUG
+	logging.Infof("%s RESPONSE count:%d status:ok requestId:%v", req.LogPrefix, rows, req.RequestId)
 	err = w.Count(rows)
 	s.handleError(req.LogPrefix, err)
 }

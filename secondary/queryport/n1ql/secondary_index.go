@@ -852,17 +852,22 @@ func (si *secondaryIndex2) Scan2(
 
 	gsiscans := n1qlspanstogsi(spans)
 	gsiprojection := n1qlprojectiontogsi(projection)
+	broker := makeRequestBroker(requestId, &si.secondaryIndex, client, conn, cnf, &waitGroup, &backfillSync, cap(entryChannel))
 	err := client.MultiScanInternal(
 		si.defnID, requestId, gsiscans, reverse, distinct,
 		gsiprojection, offset, limit,
 		n1ql2GsiConsistency[cons], vector2ts(vector),
-		makeRequestBroker(requestId, &si.secondaryIndex, client, conn, cnf, &waitGroup, &backfillSync, cap(entryChannel)))
+		broker)
 	if err != nil {
 		conn.Error(n1qlError(client, err))
 	}
 
 	atomic.AddInt64(&si.gsi.totalscans, 1)
 	atomic.AddInt64(&si.gsi.scandur, int64(time.Since(starttm)))
+
+	//FIXME - DEBUG
+	l.Errorf("scan2: scan request %v done.  Receive Count %v Sent Count %v",
+		requestId, broker.ReceiveCount(), broker.SendCount())
 }
 
 // RangeKey2 implements Index2{} interface.
@@ -993,14 +998,14 @@ func makeRequestBroker(
 	backfillSync *int64,
 	size int) *qclient.RequestBroker {
 
-	broker := qclient.NewRequestBroker(int64(size))
+	broker := qclient.NewRequestBroker(requestId, int64(size))
 
 	factory := func(id qclient.ResponseHandlerId) qclient.ResponseHandler {
 		return makeResponsehandler(id, requestId, si, client, conn, broker, config, waitGroup, backfillSync)
 	}
 
 	sender := func(pkey []byte, mskey []value.Value, uskey c.SecondaryKey) bool {
-		return sendEntry(si, pkey, mskey, uskey, conn)
+		return sendEntry(broker, si, pkey, mskey, uskey, conn)
 	}
 
 	broker.SetResponseHandlerFactory(factory)
@@ -1130,6 +1135,14 @@ func makeResponsehandler(
 			conn.Error(n1qlError(client, err))
 			broker.Close()
 			return false
+		}
+
+		if len(pkeys) != 0 || len(skeys) != 0 {
+			if len(pkeys) != 0 {
+				broker.IncrementReceiveCount(len(pkeys))
+			} else {
+				broker.IncrementReceiveCount(len(skeys))
+			}
 		}
 
 		ln := int(broker.Len(id))
@@ -1433,7 +1446,7 @@ func init() {
 	}
 }
 
-func sendEntry(si *secondaryIndex, pkey []byte, mskey []value.Value, uskey c.SecondaryKey, conn *datastore.IndexConnection) bool {
+func sendEntry(broker *qclient.RequestBroker, si *secondaryIndex, pkey []byte, mskey []value.Value, uskey c.SecondaryKey, conn *datastore.IndexConnection) bool {
 
 	var start time.Time
 	blockedtm, blocked := int64(0), false
@@ -1460,6 +1473,7 @@ func sendEntry(si *secondaryIndex, pkey []byte, mskey []value.Value, uskey c.Sec
 	}
 
 	atomic.AddInt64(&si.gsi.blockeddur, blockedtm)
+	broker.IncrementSendCount()
 	return true
 }
 

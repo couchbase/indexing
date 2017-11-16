@@ -36,6 +36,8 @@ type Queue struct {
 	enqch    chan bool
 	deqch    chan bool
 	donech   chan bool
+
+	totalCount int64
 }
 
 //
@@ -89,6 +91,8 @@ func (b *Queue) notifyDeq() {
 // this function will be blocked.
 //
 func (b *Queue) Enqueue(key *Row) {
+
+	atomic.AddInt64(&b.totalCount, 1)
 
 	for {
 		count := atomic.LoadInt64(&b.count)
@@ -172,6 +176,11 @@ func (b *Queue) Len() int64 {
 func (b *Queue) Cap() int64 {
 
 	return b.size
+}
+
+func (b *Queue) TotalCount() int64 {
+
+	return b.totalCount
 }
 
 // Unblock all Enqueue and Dequeue calls

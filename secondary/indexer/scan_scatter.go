@@ -11,6 +11,7 @@ package indexer
 import (
 	"bytes"
 	"errors"
+	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/pipeline"
 	"runtime"
 	"sync"
@@ -85,13 +86,22 @@ func scanMultiple(request *ScanRequest, scan Scan, snapshots []SliceSnapshot, cb
 		<-donech
 	}
 
+	count := int64(0)
+	for _, queue := range queues {
+		count += queue.TotalCount()
+	}
+	//FIXME - DEBUG
+	logging.Infof("scan_scatter.go:scanMultiple: scan done.  Count %v", count)
+
 	return
 }
 
 func scanOne(request *ScanRequest, scan Scan, snapshots []SliceSnapshot, cb EntryCallback) (err error) {
 
 	errch := make(chan error, 1)
-	scanSingleSlice(request, scan, request.Ctxs[0], snapshots[0], nil, nil, errch, cb)
+	count := scanSingleSlice(request, scan, request.Ctxs[0], snapshots[0], nil, nil, errch, cb)
+	//FIXME - DEBUG
+	logging.Infof("scan_scatter.go:scanOne: scan done.  Count %v", count)
 
 	errcnt := len(errch)
 	for i := 0; i < errcnt; i++ {
@@ -105,7 +115,7 @@ func scanOne(request *ScanRequest, scan Scan, snapshots []SliceSnapshot, cb Entr
 }
 
 func scanSingleSlice(request *ScanRequest, scan Scan, ctx IndexReaderContext, snap SliceSnapshot, queue *Queue,
-	wg *sync.WaitGroup, errch chan error, cb EntryCallback) {
+	wg *sync.WaitGroup, errch chan error, cb EntryCallback) (count int) {
 
 	defer func() {
 		if wg != nil {
@@ -118,6 +128,8 @@ func scanSingleSlice(request *ScanRequest, scan Scan, ctx IndexReaderContext, sn
 		if len(errch) != 0 {
 			return ErrFinishCallback
 		}
+
+		count++
 
 		if queue != nil {
 
@@ -158,6 +170,8 @@ func scanSingleSlice(request *ScanRequest, scan Scan, ctx IndexReaderContext, sn
 		r.last = true
 		queue.Enqueue(&r)
 	}
+
+	return
 }
 
 //--------------------------
