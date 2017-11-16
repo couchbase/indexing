@@ -478,7 +478,7 @@ func values2SKey(vals value.Values) c.SecondaryKey {
 	return skey
 }
 
-func gsiaggrtypeton1ql(gsiaggr c.AggrFunc) datastore.AggregateType {
+func gsiaggrtypeton1ql(gsiaggr c.AggrFuncType) datastore.AggregateType {
 	switch gsiaggr {
 	case c.AGG_MIN:
 		return datastore.AGG_MIN

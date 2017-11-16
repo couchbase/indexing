@@ -468,44 +468,62 @@ func Scan3(indexName, bucketName, server string, scans qc.Scans, reverse, distin
 		defnID, "", scans, reverse, distinct, projection, offset, limit, groupAggr,
 		consistency, vector,
 		func(response qc.ResponseReader) bool {
-			if err := response.Error(); err != nil {
-				scanErr = err
-				log.Printf("ScanError = %v ", scanErr)
-				return false
-			} else if skeys, pkeys, err := response.GetEntries(); err != nil {
-				scanErr = err
-				log.Printf("ScanError = %v ", scanErr)
-				return false
-			} else {
-				for i, skey := range skeys {
-					primaryKey := string(pkeys[i])
-					//log.Printf("Scanresult count = %v: %v  : %v ", count, skey, primaryKey)
-					count++
-					if _, keyPresent := scanResults[primaryKey]; keyPresent {
-						// Duplicate primary key found
-						dupError := errors.New("Duplicate primary key found")
-						tc.HandleError(dupError, "Duplicate primary key found in the scan results: "+primaryKey)
-					} else {
-						// Test collation only if CheckCollation is true
-						if CheckCollation == true && len(skey) > 0 {
-							secVal := skey2Values(skey)[0]
-							if previousSecKey == nil {
-								previousSecKey = secVal
-							} else {
-								if secVal.Collate(previousSecKey) < 0 {
-									errMsg := "Collation check failed. Previous Sec key > Current Sec key"
-									scanErr = errors.New(errMsg)
-									return false
+			if groupAggr == nil {
+				if err := response.Error(); err != nil {
+					scanErr = err
+					log.Printf("ScanError = %v ", scanErr)
+					return false
+				} else if skeys, pkeys, err := response.GetEntries(); err != nil {
+					scanErr = err
+					log.Printf("ScanError = %v ", scanErr)
+					return false
+				} else {
+					for i, skey := range skeys {
+						primaryKey := string(pkeys[i])
+						//log.Printf("Scanresult count = %v: %v  : %v ", count, skey, primaryKey)
+						count++
+						if _, keyPresent := scanResults[primaryKey]; keyPresent {
+							// Duplicate primary key found
+							dupError := errors.New("Duplicate primary key found")
+							tc.HandleError(dupError, "Duplicate primary key found in the scan results: "+primaryKey)
+						} else {
+							// Test collation only if CheckCollation is true
+							if CheckCollation == true && len(skey) > 0 {
+								secVal := skey2Values(skey)[0]
+								if previousSecKey == nil {
+									previousSecKey = secVal
+								} else {
+									if secVal.Collate(previousSecKey) < 0 {
+										errMsg := "Collation check failed. Previous Sec key > Current Sec key"
+										scanErr = errors.New(errMsg)
+										return false
+									}
 								}
 							}
-						}
 
-						scanResults[primaryKey] = skey
+							scanResults[primaryKey] = skey
+						}
+					}
+					return true
+				}
+				return false
+			} else {
+
+				if err := response.Error(); err != nil {
+					scanErr = err
+					log.Printf("ScanError = %v ", scanErr)
+					return false
+				} else if skeys, pkeys, err := response.GetEntries(); err != nil {
+					scanErr = err
+					log.Printf("ScanError = %v ", scanErr)
+					return false
+				} else {
+					for i, skey := range skeys {
+						log.Printf("Scanresult Row  %v: %v  : %v ", i, skey, pkeys[i])
 					}
 				}
-				return true
 			}
-			return false
+			return true
 		})
 	elapsed := time.Since(start)
 

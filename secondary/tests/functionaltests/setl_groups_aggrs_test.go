@@ -3,7 +3,7 @@ package functionaltests
 import (
 	c "github.com/couchbase/indexing/secondary/common"
 	qc "github.com/couchbase/indexing/secondary/queryport/client"
-	//tc "github.com/couchbase/indexing/secondary/tests/framework/common"
+	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 	"github.com/couchbase/indexing/secondary/tests/framework/datautility"
 	"github.com/couchbase/indexing/secondary/tests/framework/kvutility"
 	"github.com/couchbase/indexing/secondary/tests/framework/secondaryindex"
@@ -35,10 +35,11 @@ func TestMultiScanGroupsAggrs1(t *testing.T) {
 	err := secondaryindex.CreateSecondaryIndex(index1, bucketName, indexManagementAddress, "", []string{"company"}, false, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
-	_, err = secondaryindex.Scan3(index1, bucketName, indexScanAddress, getScanAllNoFilter(), false, false, nil, 0, defaultlimit, basicGroupAggr(),
-		c.SessionConsistency, nil)
-	FailTestIfError(err, "Error in scan", t)
-	//tc.PrintScanResults(scanResults, "scanResults")
+	ga, proj := basicGroupAggr()
+
+	scanResults, err1 := secondaryindex.Scan3(index1, bucketName, indexScanAddress, getScanAllNoFilter(), false, false, proj, 0, defaultlimit, ga, c.SessionConsistency, nil)
+	FailTestIfError(err1, "Error in scan", t)
+	tc.PrintScanResults(scanResults, "scanResults")
 }
 
 func TestMultiScanGroupsAggrs2(t *testing.T) {
@@ -47,18 +48,18 @@ func TestMultiScanGroupsAggrs2(t *testing.T) {
 	var index1 = "index_company"
 	var bucketName = "default"
 
-	_, err := secondaryindex.Scan3(index1, bucketName, indexScanAddress, getScanAllNoFilter(), false, false, nil, 0, defaultlimit, basicGroupAggr(),
-		c.SessionConsistency, nil)
+	ga, proj := basicGroupAggr()
+
+	scanResults, err := secondaryindex.Scan3(index1, bucketName, indexScanAddress, getScanAllNoFilter(), false, false, proj, 0, defaultlimit, ga, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
-	//tc.PrintScanResults(scanResults, "scanResults")
+	tc.PrintScanResults(scanResults, "scanResults")
 }
 
-func basicGroupAggr() *qc.GroupAggr {
+func basicGroupAggr() (*qc.GroupAggr, *qc.IndexProjection) {
 	groups := make([]*qc.GroupKey, 1)
 	g := &qc.GroupKey{
-		EntryKeyId: 0,
+		EntryKeyId: 1,
 		KeyPos:     0,
-		Expr:       "company",
 	}
 	groups[0] = g
 
@@ -66,10 +67,8 @@ func basicGroupAggr() *qc.GroupAggr {
 	aggregates := make([]*qc.Aggregate, 1)
 	a := &qc.Aggregate{
 		AggrFunc:   c.AGG_COUNT,
-		EntryKeyId: int32(0),
-		KeyPos:     int32(0),
-		Expr:       "company",
-		Distinct:   false,
+		EntryKeyId: 2,
+		KeyPos:     0,
 	}
 	aggregates[0] = a
 
@@ -83,5 +82,14 @@ func basicGroupAggr() *qc.GroupAggr {
 		DependsOnIndexKeys:  dependsOnIndexKeys,
 		DependsOnPrimaryKey: false,
 	}
-	return ga
+
+	entry := make([]int64, 2)
+	entry[0] = 1
+	entry[1] = 2
+
+	proj := &qc.IndexProjection{
+		EntryKeys: entry,
+	}
+
+	return ga, proj
 }
