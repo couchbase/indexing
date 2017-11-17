@@ -837,8 +837,16 @@ func (si *secondaryIndex2) Scan2(
 	entryChannel := conn.EntryChannel()
 	var backfillSync int64
 	var waitGroup sync.WaitGroup
+	var broker *qclient.RequestBroker
 
 	defer close(entryChannel)
+	defer func() {
+		if broker != nil {
+			//FIXME - DEBUG
+			l.Errorf("scan2: scan request %v closing entryChannel.  Receive Count %v Sent Count %v",
+				requestId, broker.ReceiveCount(), broker.SendCount())
+		}
+	}()
 	defer func() { // cleanup tmpfile
 		waitGroup.Wait()
 	}()
@@ -852,7 +860,7 @@ func (si *secondaryIndex2) Scan2(
 
 	gsiscans := n1qlspanstogsi(spans)
 	gsiprojection := n1qlprojectiontogsi(projection)
-	broker := makeRequestBroker(requestId, &si.secondaryIndex, client, conn, cnf, &waitGroup, &backfillSync, cap(entryChannel))
+	broker = makeRequestBroker(requestId, &si.secondaryIndex, client, conn, cnf, &waitGroup, &backfillSync, cap(entryChannel))
 	err := client.MultiScanInternal(
 		si.defnID, requestId, gsiscans, reverse, distinct,
 		gsiprojection, offset, limit,
@@ -866,8 +874,8 @@ func (si *secondaryIndex2) Scan2(
 	atomic.AddInt64(&si.gsi.scandur, int64(time.Since(starttm)))
 
 	//FIXME - DEBUG
-	l.Errorf("scan2: scan request %v done.  Receive Count %v Sent Count %v",
-		requestId, broker.ReceiveCount(), broker.SendCount())
+	l.Errorf("scan2: scan request %v done.  Receive Count %v Sent Count %v NumIndexers %v err %v",
+		requestId, broker.ReceiveCount(), broker.SendCount(), broker.NumIndexers(), err)
 }
 
 // RangeKey2 implements Index2{} interface.
@@ -1067,7 +1075,6 @@ func makeResponsehandler(
 		l.Debugf(
 			"%v %q started backfill for %v ...\n", lprefix, requestId, name)
 
-		waitGroup.Add(1)
 		for {
 			if pending := atomic.LoadInt64(&backfillEntries); pending > 0 {
 				atomic.AddInt64(&backfillEntries, -1)
@@ -1185,6 +1192,7 @@ func makeResponsehandler(
 				}
 				// decoder
 				dec = gob.NewDecoder(readfd)
+				waitGroup.Add(1)
 				go backfill()
 			}
 		}

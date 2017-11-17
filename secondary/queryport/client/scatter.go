@@ -40,6 +40,7 @@ type RequestBroker struct {
 
 	sendCount    int64
 	receiveCount int64
+	numIndexers  int64
 
 	requestId string
 }
@@ -94,6 +95,8 @@ func (b *RequestBroker) SetResponseSender(sender ResponseSender) {
 //
 func (b *RequestBroker) Close() {
 
+	logging.Errorf("request brokder: close on error")
+
 	atomic.StoreInt32(&b.closed, 1)
 	close(b.killch)
 
@@ -112,6 +115,16 @@ func (b *RequestBroker) IncrementSendCount() {
 	atomic.AddInt64(&b.sendCount, 1)
 }
 
+func (b *RequestBroker) SetNumIndexers(num int) {
+
+	atomic.StoreInt64(&b.numIndexers, int64(num))
+}
+
+func (b *RequestBroker) NumIndexers() int64 {
+
+	return atomic.LoadInt64(&b.numIndexers)
+}
+
 //
 // Is the request broker closed
 //
@@ -125,6 +138,8 @@ func (b *RequestBroker) isClose() bool {
 //
 func (c *RequestBroker) scatter(client []*GsiScanClient, index *common.IndexDefn, rollback []int64,
 	partition [][]common.PartitionId) (count int64, err error, partial bool) {
+
+	c.SetNumIndexers(len(partition))
 
 	if c.scan != nil {
 		err, partial = c.scatterScan(client, index, rollback, partition)

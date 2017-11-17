@@ -1593,8 +1593,8 @@ func (s *scanCoordinator) handleScanRequest(req *ScanRequest, w ScanResponseWrit
 		status := "ok"
 
 		//FIXME - DEBUG
-		logging.Infof("%s RESPONSE rows:%d, waitTime:%v, totalTime:%v, status:%s requestId:%s",
-			req.LogPrefix, scanPipeline.RowsReturned(), waitTime, scanTime, status, req.RequestId)
+		logging.Infof("%s RESPONSE rows:%d, waitTime:%v, totalTime:%v, status:%s requestId:%s consistency:%v",
+			req.LogPrefix, scanPipeline.RowsReturned(), waitTime, scanTime, status, req.RequestId, req.Consistency.String())
 		/*
 			logging.LazyVerbose(func() string {
 				return fmt.Sprintf("%s RESPONSE rows:%d, waitTime:%v, totalTime:%v, status:%s requestId:%s",
