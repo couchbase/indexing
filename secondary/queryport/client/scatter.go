@@ -95,8 +95,6 @@ func (b *RequestBroker) SetResponseSender(sender ResponseSender) {
 //
 func (b *RequestBroker) Close() {
 
-	logging.Errorf("request brokder: close on error")
-
 	atomic.StoreInt32(&b.closed, 1)
 	close(b.killch)
 

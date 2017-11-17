@@ -842,8 +842,7 @@ func (si *secondaryIndex2) Scan2(
 	defer close(entryChannel)
 	defer func() {
 		if broker != nil {
-			//FIXME - DEBUG
-			l.Errorf("scan2: scan request %v closing entryChannel.  Receive Count %v Sent Count %v",
+			l.Verbosef("scan2: scan request %v closing entryChannel.  Receive Count %v Sent Count %v",
 				requestId, broker.ReceiveCount(), broker.SendCount())
 		}
 	}()
@@ -873,8 +872,7 @@ func (si *secondaryIndex2) Scan2(
 	atomic.AddInt64(&si.gsi.totalscans, 1)
 	atomic.AddInt64(&si.gsi.scandur, int64(time.Since(starttm)))
 
-	//FIXME - DEBUG
-	l.Errorf("scan2: scan request %v done.  Receive Count %v Sent Count %v NumIndexers %v err %v",
+	l.Verbosef("scan2: scan request %v done.  Receive Count %v Sent Count %v NumIndexers %v err %v",
 		requestId, broker.ReceiveCount(), broker.SendCount(), broker.NumIndexers(), err)
 }
 

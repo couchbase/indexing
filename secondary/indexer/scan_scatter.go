@@ -90,8 +90,7 @@ func scanMultiple(request *ScanRequest, scan Scan, snapshots []SliceSnapshot, cb
 	for _, queue := range queues {
 		count += queue.TotalCount()
 	}
-	//FIXME - DEBUG
-	logging.Infof("scan_scatter.go:scanMultiple: scan done.  Count %v", count)
+	logging.Verbosef("scan_scatter.scanMultiple: scan done.  Count %v", count)
 
 	return
 }
@@ -100,8 +99,8 @@ func scanOne(request *ScanRequest, scan Scan, snapshots []SliceSnapshot, cb Entr
 
 	errch := make(chan error, 1)
 	count := scanSingleSlice(request, scan, request.Ctxs[0], snapshots[0], nil, nil, errch, cb)
-	//FIXME - DEBUG
-	logging.Infof("scan_scatter.go:scanOne: scan done.  Count %v", count)
+
+	logging.Verbosef("scan_scatter:scanOnce: scan done.  Count %v", count)
 
 	errcnt := len(errch)
 	for i := 0; i < errcnt; i++ {
