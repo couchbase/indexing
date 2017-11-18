@@ -232,7 +232,7 @@ func (c *GsiScanClient) Range(
 	defnID uint64, requestId string, low, high common.SecondaryKey, inclusion Inclusion,
 	distinct bool, limit int64, cons common.Consistency, vector *TsConsistency,
 	callb ResponseHandler, rollbackTime int64, partitions []common.PartitionId,
-	defn *common.IndexDefn, numPartitions int) (error, bool) {
+	defn *common.IndexDefn, numPartitions uint32) (error, bool) {
 
 	// serialize low and high values.
 	l, err := json.Marshal(low)
@@ -421,7 +421,7 @@ func (c *GsiScanClient) MultiScan(
 	reverse, distinct bool, projection *IndexProjection, offset, limit int64,
 	cons common.Consistency, vector *TsConsistency,
 	callb ResponseHandler, rollbackTime int64, partitions []common.PartitionId,
-	index *common.IndexDefn, numPartitions int) (error, bool) {
+	index *common.IndexDefn, numPartitions uint32) (error, bool) {
 
 	// serialize scans
 	protoScans := make([]*protobuf.Scan, len(scans))
@@ -1179,7 +1179,7 @@ func (c *GsiScanClient) trySetDeadline(conn net.Conn, deadline time.Duration) {
 	}
 }
 
-func inPartition(offset int, defn *common.IndexDefn, low, high []byte, partitions []common.PartitionId, numPartitions int) bool {
+func inPartition(offset int, defn *common.IndexDefn, low, high []byte, partitions []common.PartitionId, numPartitions uint32) bool {
 
 	if defn.PartitionScheme != common.KEY {
 		return true
@@ -1197,7 +1197,7 @@ func inPartition(offset int, defn *common.IndexDefn, low, high []byte, partition
 		return true
 	}
 
-	partnId := common.HashKeyPartition(low, numPartitions)
+	partnId := common.HashKeyPartition(low, int(numPartitions))
 	for _, partn := range partitions {
 		if partn == partnId {
 			return true

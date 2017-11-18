@@ -20,6 +20,7 @@ import (
 
 type ClientSettings struct {
 	numReplica     int32
+	numPartition   int32
 	backfillLimit  int32
 	scanLagPercent uint64
 	scanLagItem    uint64
@@ -99,6 +100,13 @@ func (s *ClientSettings) handleSettings(config common.Config) {
 		logging.Errorf("ClientSettings: invalid setting value for num_replica=%v", numReplica)
 	}
 
+	numPartition := int32(config["indexer.numPartitions"].Int())
+	if numPartition > 0 {
+		atomic.StoreInt32(&s.numPartition, numPartition)
+	} else {
+		logging.Errorf("ClientSettings: invalid setting value for numPartitions=%v", numPartition)
+	}
+
 	backfillLimit := int32(config["queryport.client.settings.backfillLimit"].Int())
 	if backfillLimit >= 0 {
 		atomic.StoreInt32(&s.backfillLimit, backfillLimit)
@@ -130,6 +138,10 @@ func (s *ClientSettings) handleSettings(config common.Config) {
 
 func (s *ClientSettings) NumReplica() int32 {
 	return atomic.LoadInt32(&s.numReplica)
+}
+
+func (s *ClientSettings) NumPartition() int32 {
+	return atomic.LoadInt32(&s.numPartition)
 }
 
 func (s *ClientSettings) BackfillLimit() int32 {

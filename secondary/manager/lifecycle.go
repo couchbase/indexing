@@ -420,6 +420,13 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scheduled bool,
 	}
 	defn.Partitions = nil
 
+	numPartitions := defn.NumPartitions
+	defn.NumPartitions = 0
+
+	if defn.PartitionScheme == common.SINGLE {
+		numPartitions = 1
+	}
+
 	// Create index definiton.   It will fail if there is another index defintion of the same
 	// index defnition id.
 	if err := m.repo.CreateIndex(defn); err != nil {
@@ -434,7 +441,7 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scheduled bool,
 	// It is possible to create index of the same name later, as long as the new index has a different
 	// definition id, since an index is consider valid only if it has both index definiton and index instance.
 	// So the dangling index definition is considered invalid.
-	if err := m.repo.addIndexToTopology(defn, instId, replicaId, partitions, !defn.Deferred && scheduled); err != nil {
+	if err := m.repo.addIndexToTopology(defn, instId, replicaId, partitions, numPartitions, !defn.Deferred && scheduled); err != nil {
 		logging.Errorf("LifecycleMgr.handleCreateIndex() : createIndex fails. Reason = %v", err)
 		m.repo.DropIndexById(defn.DefnId)
 		return err
@@ -448,7 +455,7 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scheduled bool,
 	//    during indexer bootstrap or implicit dropIndex.
 	// 2) Index definition is deleted.  This effectively "delete index".
 	if m.notifier != nil {
-		if err := m.notifier.OnIndexCreate(defn, instId, replicaId, partitions, reqCtx); err != nil {
+		if err := m.notifier.OnIndexCreate(defn, instId, replicaId, partitions, numPartitions, reqCtx); err != nil {
 			logging.Errorf("LifecycleMgr.handleCreateIndex() : createIndex fails. Reason = %v", err)
 
 			m.DeleteIndex(defn.DefnId, false, nil)

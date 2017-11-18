@@ -32,9 +32,8 @@ func NewRestServer(cluster string) (*restServer, Message) {
 		return nil, nil
 	}
 	qconf := config.SectionConfig("queryport.client.", true /*trim*/)
-	numPartitions := config["indexer.numPartitions"].Int()
 
-	client, _ := qclient.NewGsiClient(cluster, qconf, numPartitions)
+	client, _ := qclient.NewGsiClient(cluster, qconf)
 	restapi := &restServer{cluster: cluster, client: client, config: qconf}
 
 	if err != nil {

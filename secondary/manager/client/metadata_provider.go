@@ -37,6 +37,7 @@ import (
 
 type Settings interface {
 	NumReplica() int32
+	NumPartition() int32
 }
 
 ///////////////////////////////////////////////////////
@@ -61,7 +62,6 @@ type MetadataProvider struct {
 	indexerVersion     uint64
 	clusterVersion     uint64
 	statsNotifyCh      chan map[c.IndexInstId]map[c.PartitionId]c.Statistics
-	numPartitions      int
 }
 
 //
@@ -93,15 +93,14 @@ type MetadataProvider struct {
 //     partition will be rebalanced separately.
 //
 type metadataRepo struct {
-	provider      *MetadataProvider
-	definitions   map[c.IndexDefnId]*c.IndexDefn
-	instances     map[c.IndexDefnId]map[c.IndexInstId]map[c.PartitionId]map[uint64]*IndexInstDistribution
-	indices       map[c.IndexDefnId]*IndexMetadata
-	topology      map[c.IndexerId]map[c.IndexDefnId]bool
-	version       uint64
-	mutex         sync.RWMutex
-	numPartitions int
-	notifiers     map[c.IndexDefnId]*event
+	provider    *MetadataProvider
+	definitions map[c.IndexDefnId]*c.IndexDefn
+	instances   map[c.IndexDefnId]map[c.IndexInstId]map[c.PartitionId]map[uint64]*IndexInstDistribution
+	indices     map[c.IndexDefnId]*IndexMetadata
+	topology    map[c.IndexerId]map[c.IndexDefnId]bool
+	version     uint64
+	mutex       sync.RWMutex
+	notifiers   map[c.IndexDefnId]*event
 }
 
 type watcher struct {
@@ -145,7 +144,7 @@ type InstanceDefn struct {
 	RState        uint32
 	ReplicaId     uint64
 	StorageMode   string
-	numPartitions int
+	NumPartitions uint32
 }
 
 type event struct {
@@ -169,17 +168,16 @@ var REQUEST_CHANNEL_COUNT = 1000
 ///////////////////////////////////////////////////////
 
 func NewMetadataProvider(providerId string, changeCh chan bool, statsCh chan map[c.IndexInstId]map[c.PartitionId]c.Statistics,
-	numPartitions int, settings Settings) (s *MetadataProvider, err error) {
+	settings Settings) (s *MetadataProvider, err error) {
 
 	s = new(MetadataProvider)
 	s.watchers = make(map[c.IndexerId]*watcher)
 	s.pendings = make(map[c.IndexerId]chan bool)
-	s.repo = newMetadataRepo(s, numPartitions)
+	s.repo = newMetadataRepo(s)
 	s.timeout = int64(time.Second) * 120
 	s.metaNotifyCh = changeCh
 	s.statsNotifyCh = statsCh
 	s.settings = settings
-	s.numPartitions = numPartitions
 
 	s.providerId, err = s.getWatcherAddr(providerId)
 	if err != nil {
@@ -388,48 +386,58 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 			return c.IndexDefnId(0), err, false
 		}
 
-		partnId := int(1)
-		endPartnId := partnId + o.numPartitions
-		if idxDefn.PartitionScheme == c.PartitionScheme(c.SINGLE) {
-			partnId = int(c.NON_PARTITION_ID)
-			endPartnId = partnId + 1
-		}
-
-		partitionPerWatcher := int(o.numPartitions) / len(watchers)
-		if int(o.numPartitions)%len(watchers) != 0 {
-			partitionPerWatcher += 1
-		}
-
-		for _, watcher := range watchers {
-
-			var partitions []c.PartitionId
-			count := 0
-			for partnId < endPartnId && count < partitionPerWatcher {
-				partitions = append(partitions, c.PartitionId(partnId))
-				count++
-				partnId++
-			}
-
+		fn := func(watcher *watcher, partitions []c.PartitionId) {
 			idxDefn.Partitions = partitions
 
 			content, err := c.MarshallIndexDefn(idxDefn)
 			if err != nil {
 				errMap[fmt.Sprintf("Fail to send create index request.  Error=%v", err)] = true
-				continue
+
+			} else {
+
+				if _, err := watcher.makeRequest(OPCODE_CREATE_INDEX, key, content); err != nil {
+					errMap[err.Error()] = true
+				}
+
+				if _, ok := topologyMap[replicaId]; !ok {
+					topologyMap[replicaId] = make(map[c.PartitionId]c.IndexerId)
+				}
+
+				for _, partnId := range partitions {
+					topologyMap[replicaId][partnId] = watcher.getIndexerId()
+				}
+			}
+		}
+
+		if idxDefn.PartitionScheme != c.PartitionScheme(c.SINGLE) {
+
+			partitionPerWatcher := int(idxDefn.NumPartitions) / len(watchers)
+			if int(idxDefn.NumPartitions)%len(watchers) != 0 {
+				partitionPerWatcher += 1
 			}
 
-			if _, err := watcher.makeRequest(OPCODE_CREATE_INDEX, key, content); err != nil {
-				errMap[err.Error()] = true
-			}
+			partnId := int(1)
+			endPartnId := partnId + int(idxDefn.NumPartitions)
 
-			if _, ok := topologyMap[replicaId]; !ok {
-				topologyMap[replicaId] = make(map[c.PartitionId]c.IndexerId)
-			}
+			for _, watcher := range watchers {
 
-			for _, partnId := range partitions {
-				topologyMap[replicaId][partnId] = watcher.getIndexerId()
-			}
+				var partitions []c.PartitionId
+				count := 0
+				for partnId < endPartnId && count < partitionPerWatcher {
+					partitions = append(partitions, c.PartitionId(partnId))
+					count++
+					partnId++
+				}
 
+				fn(watcher, partitions)
+			}
+		} else {
+
+			if replicaId < len(watchers) {
+				watcher := watchers[replicaId]
+				partitions := []c.PartitionId{c.NON_PARTITION_ID}
+				fn(watcher, partitions)
+			}
 		}
 	}
 
@@ -480,6 +488,7 @@ func (o *MetadataProvider) PrepareIndexDefn(
 	var numReplica int = 0
 	var partitionScheme c.PartitionScheme = c.SINGLE
 	var partitionKey string
+	var numPartition int = 0
 
 	version := o.GetIndexerVersion()
 	clusterVersion := o.GetClusterVersion()
@@ -520,6 +529,11 @@ func (o *MetadataProvider) PrepareIndexDefn(
 		}
 
 		partitionKey, err, retry = o.getPartitionKeyParam(plan, secExprs)
+		if err != nil {
+			return nil, err, retry
+		}
+
+		numPartition, err, retry = o.getNumPartitionParam(partitionScheme, plan, version)
 		if err != nil {
 			return nil, err, retry
 		}
@@ -627,6 +641,7 @@ func (o *MetadataProvider) PrepareIndexDefn(
 		Immutable:       immutable,
 		IsArrayIndex:    isArrayIndex,
 		NumReplica:      uint32(numReplica),
+		NumPartitions:   uint32(numPartition),
 	}
 
 	return idxDefn, nil, false
@@ -767,6 +782,39 @@ func (o *MetadataProvider) getPartitionKeyParam(plan map[string]interface{}, sec
 	}
 
 	return "", nil, false
+}
+
+func (o *MetadataProvider) getNumPartitionParam(scheme c.PartitionScheme, plan map[string]interface{}, version uint64) (int, error, bool) {
+
+	if scheme == c.SINGLE {
+		return 1, nil, false
+	}
+
+	numPartition := int(o.settings.NumPartition())
+
+	numPartition2, ok := plan["num_partition"].(float64)
+	if !ok {
+		numPartition_str, ok := plan["num_partition"].(string)
+		if ok {
+			var err error
+			numPartition3, err := strconv.ParseInt(numPartition_str, 10, 64)
+			if err != nil {
+				return 0, errors.New("Fails to create index.  Parameter num_partition must be a integer value."), false
+			}
+			numPartition = int(numPartition3)
+
+		} else if _, ok := plan["num_partition"]; ok {
+			return 0, errors.New("Fails to create index.  Parameter num_partition must be a integer value."), false
+		}
+	} else {
+		numPartition = int(numPartition2)
+	}
+
+	if numPartition <= 0 {
+		return 0, errors.New("Fails to create index.  Parameter num_partition must be a positive value."), false
+	}
+
+	return numPartition, nil, false
 }
 
 func (o *MetadataProvider) getReplicaParam(plan map[string]interface{}, version uint64) (int, error, bool) {
@@ -1688,7 +1736,7 @@ func isWellFormed(inst *InstanceDefn) bool {
 				return false
 			}
 		}
-	} else if len(inst.IndexerId) != inst.numPartitions {
+	} else if len(inst.IndexerId) != int(inst.NumPartitions) {
 		return false
 	}
 
@@ -1699,17 +1747,16 @@ func isWellFormed(inst *InstanceDefn) bool {
 // private function : metadataRepo
 ///////////////////////////////////////////////////////
 
-func newMetadataRepo(provider *MetadataProvider, numPartitions int) *metadataRepo {
+func newMetadataRepo(provider *MetadataProvider) *metadataRepo {
 
 	return &metadataRepo{
-		definitions:   make(map[c.IndexDefnId]*c.IndexDefn),
-		instances:     make(map[c.IndexDefnId]map[c.IndexInstId]map[c.PartitionId]map[uint64]*IndexInstDistribution),
-		indices:       make(map[c.IndexDefnId]*IndexMetadata),
-		topology:      make(map[c.IndexerId]map[c.IndexDefnId]bool),
-		version:       uint64(0),
-		provider:      provider,
-		numPartitions: numPartitions,
-		notifiers:     make(map[c.IndexDefnId]*event),
+		definitions: make(map[c.IndexDefnId]*c.IndexDefn),
+		instances:   make(map[c.IndexDefnId]map[c.IndexInstId]map[c.PartitionId]map[uint64]*IndexInstDistribution),
+		indices:     make(map[c.IndexDefnId]*IndexMetadata),
+		topology:    make(map[c.IndexerId]map[c.IndexDefnId]bool),
+		version:     uint64(0),
+		provider:    provider,
+		notifiers:   make(map[c.IndexDefnId]*event),
 	}
 }
 
@@ -2266,7 +2313,11 @@ func (r *metadataRepo) makeInstanceDefn(defnId c.IndexDefnId, inst *IndexInstDis
 	idxInst.ReplicaId = inst.ReplicaId
 	idxInst.StorageMode = inst.StorageMode
 	idxInst.IndexerId = make(map[c.PartitionId]c.IndexerId)
-	idxInst.numPartitions = r.numPartitions
+	idxInst.NumPartitions = inst.NumPartitions
+
+	if idxInst.NumPartitions == 0 {
+		idxInst.NumPartitions = uint32(len(inst.Partitions))
+	}
 
 	for _, partition := range inst.Partitions {
 		for _, slice := range partition.SinglePartition.Slices {
@@ -2289,7 +2340,7 @@ func (r *metadataRepo) copyInstanceDefn(source *InstanceDefn) *InstanceDefn {
 	idxInst.ReplicaId = source.ReplicaId
 	idxInst.StorageMode = source.StorageMode
 	idxInst.IndexerId = make(map[c.PartitionId]c.IndexerId)
-	idxInst.numPartitions = source.numPartitions
+	idxInst.NumPartitions = source.NumPartitions
 
 	for partnId, indexerId := range source.IndexerId {
 		idxInst.IndexerId[partnId] = indexerId

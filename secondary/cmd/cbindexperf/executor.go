@@ -162,16 +162,12 @@ func RunCommands(cluster string, cfg *Config, statsW io.Writer) (*Result, error)
 		cfg.ClientBootTime = clientBootTime
 	}
 
-	numPartitions := cfg.NumPartitions
-	if numPartitions == 0 {
-		numPartitions = c.SystemConfig["indexer.numPartitions"].Int()
-	}
 	config := c.SystemConfig.SectionConfig("queryport.client.", true)
 	config.SetValue("settings.poolSize", int(cfg.Concurrency))
 	config.SetValue("readDeadline", 0)
 	config.SetValue("writeDeadline", 0)
 
-	client, err := qclient.NewGsiClient(cluster, config, numPartitions)
+	client, err := qclient.NewGsiClient(cluster, config)
 	if err != nil {
 		return nil, err
 	}
@@ -179,7 +175,7 @@ func RunCommands(cluster string, cfg *Config, statsW io.Writer) (*Result, error)
 
 	clients = make([]*qclient.GsiClient, cfg.Clients)
 	for i := 0; i < cfg.Clients; i++ {
-		c, err := qclient.NewGsiClient(cluster, config, numPartitions)
+		c, err := qclient.NewGsiClient(cluster, config)
 		if err != nil {
 			return nil, err
 		}

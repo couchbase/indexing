@@ -33,7 +33,6 @@ type Config struct {
 	Concurrency    int
 	Clients        int
 	ClientBootTime int
-	NumPartitions  int
 }
 
 type ScanResult struct {

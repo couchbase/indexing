@@ -135,15 +135,15 @@ func (b *RequestBroker) isClose() bool {
 // Scatter requests over multiple connections
 //
 func (c *RequestBroker) scatter(client []*GsiScanClient, index *common.IndexDefn, rollback []int64,
-	partition [][]common.PartitionId) (count int64, err error, partial bool) {
+	partition [][]common.PartitionId, numPartition uint32) (count int64, err error, partial bool) {
 
 	c.SetNumIndexers(len(partition))
 
 	if c.scan != nil {
-		err, partial = c.scatterScan(client, index, rollback, partition)
+		err, partial = c.scatterScan(client, index, rollback, partition, numPartition)
 		return 0, err, partial
 	} else if c.count != nil {
-		return c.scatterCount(client, index, rollback, partition)
+		return c.scatterCount(client, index, rollback, partition, numPartition)
 	}
 
 	return 0, fmt.Errorf("Intenral error: Fail to process request for index %v:%v.  Unknown request handler.", index.Bucket, index.Name), false
@@ -152,7 +152,8 @@ func (c *RequestBroker) scatter(client []*GsiScanClient, index *common.IndexDefn
 //
 // Scatter scan requests over multiple connections
 //
-func (c *RequestBroker) scatterScan(client []*GsiScanClient, index *common.IndexDefn, rollback []int64, partition [][]common.PartitionId) (err error, partial bool) {
+func (c *RequestBroker) scatterScan(client []*GsiScanClient, index *common.IndexDefn, rollback []int64, partition [][]common.PartitionId,
+	numPartition uint32) (err error, partial bool) {
 
 	c.notifych = make(chan bool, 1)
 	c.killch = make(chan bool, 1)
@@ -175,7 +176,7 @@ func (c *RequestBroker) scatterScan(client []*GsiScanClient, index *common.Index
 	donech_scatter := make([]chan *doneStatus, len(client))
 	for i, _ := range client {
 		donech_scatter[i] = make(chan *doneStatus, 1)
-		go c.scanSingleNode(ResponseHandlerId(i), client[i], index, rollback[i], partition[i], donech_scatter[i])
+		go c.scanSingleNode(ResponseHandlerId(i), client[i], index, rollback[i], partition[i], numPartition, donech_scatter[i])
 	}
 
 	for i, _ := range client {
@@ -197,12 +198,12 @@ func (c *RequestBroker) scatterScan(client []*GsiScanClient, index *common.Index
 // Scatter count requests over multiple connections
 //
 func (c *RequestBroker) scatterCount(client []*GsiScanClient, index *common.IndexDefn, rollback []int64,
-	partition [][]common.PartitionId) (count int64, err error, partial bool) {
+	partition [][]common.PartitionId, numPartition uint32) (count int64, err error, partial bool) {
 
 	donech := make([]chan *doneStatus, len(client))
 	for i, _ := range client {
 		donech[i] = make(chan *doneStatus, 1)
-		go c.countSingleNode(ResponseHandlerId(i), client[i], index, rollback[i], partition[i], donech[i], &count)
+		go c.countSingleNode(ResponseHandlerId(i), client[i], index, rollback[i], partition[i], numPartition, donech[i], &count)
 	}
 
 	for i, _ := range client {
@@ -345,9 +346,9 @@ func (c *RequestBroker) compareKey(key1, key2 []value.Value) int {
 // This function makes a scan request through a single connection.
 //
 func (c *RequestBroker) scanSingleNode(id ResponseHandlerId, client *GsiScanClient, index *common.IndexDefn, rollback int64,
-	partition []common.PartitionId, donech chan *doneStatus) {
+	partition []common.PartitionId, numPartition uint32, donech chan *doneStatus) {
 
-	err, partial := c.scan(client, index, rollback, partition, c.factory(id))
+	err, partial := c.scan(client, index, rollback, partition, numPartition, c.factory(id))
 	if err == SkipPartitionError {
 		if len(c.queues) > 0 {
 			var r Row
@@ -364,9 +365,9 @@ func (c *RequestBroker) scanSingleNode(id ResponseHandlerId, client *GsiScanClie
 // This function makes a count request through a single connection.
 //
 func (c *RequestBroker) countSingleNode(id ResponseHandlerId, client *GsiScanClient, index *common.IndexDefn, rollback int64,
-	partition []common.PartitionId, donech chan *doneStatus, count *int64) {
+	partition []common.PartitionId, numPartition uint32, donech chan *doneStatus, count *int64) {
 
-	cnt, err, partial := c.count(client, index, rollback, partition)
+	cnt, err, partial := c.count(client, index, rollback, partition, numPartition)
 	atomic.AddInt64(count, cnt)
 	donech <- &doneStatus{err: err, partial: partial}
 }

@@ -59,7 +59,8 @@ type DDLServiceMgr struct {
 // DDL related settings
 //
 type ddlSettings struct {
-	numReplica int32
+	numReplica   int32
+	numPartition int32
 }
 
 //////////////////////////////////////////////////////////////
@@ -482,8 +483,6 @@ func (m *DDLServiceMgr) refreshMetadataProvider() (map[string]string, error) {
 
 func (m *DDLServiceMgr) newMetadataProvider(nodes map[service.NodeID]bool) (*client.MetadataProvider, map[string]string, error) {
 
-	numPartitions := m.config.Load()["numPartitions"].Int()
-
 	// initialize ClusterInfoCache
 	url, err := common.ClusterAuthUrl(m.clusterAddr)
 	if err != nil {
@@ -546,7 +545,7 @@ func (m *DDLServiceMgr) newMetadataProvider(nodes map[service.NodeID]bool) (*cli
 	}
 	providerId := ustr.Str()
 
-	provider, err := client.NewMetadataProvider(providerId, nil, nil, numPartitions, m.settings)
+	provider, err := client.NewMetadataProvider(providerId, nil, nil, m.settings)
 	if err != nil {
 		if provider != nil {
 			provider.Close()
@@ -632,6 +631,10 @@ func (s *ddlSettings) NumReplica() int32 {
 	return atomic.LoadInt32(&s.numReplica)
 }
 
+func (s *ddlSettings) NumPartition() int32 {
+	return atomic.LoadInt32(&s.numPartition)
+}
+
 func (s *ddlSettings) handleSettings(config common.Config) {
 
 	numReplica := int32(config["settings.num_replica"].Int())
@@ -639,5 +642,12 @@ func (s *ddlSettings) handleSettings(config common.Config) {
 		atomic.StoreInt32(&s.numReplica, numReplica)
 	} else {
 		logging.Errorf("DDLServiceMgr: invalid setting value for num_replica=%v", numReplica)
+	}
+
+	numPartition := int32(config["numPartitions"].Int())
+	if numPartition > 0 {
+		atomic.StoreInt32(&s.numPartition, numPartition)
+	} else {
+		logging.Errorf("DDLServiceMgr: invalid setting value for numPartitions=%v", numPartition)
 	}
 }

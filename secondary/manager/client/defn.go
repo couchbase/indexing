@@ -66,6 +66,7 @@ type IndexInstDistribution struct {
 	StreamId       uint32                  `json:"streamId,omitempty"`
 	Error          string                  `json:"error,omitempty"`
 	Partitions     []IndexPartDistribution `json:"partitions,omitempty"`
+	NumPartitions  uint32                  `json:"numPartitions,omitempty"`
 	RState         uint32                  `json:"rRtate,omitempty"`
 	Version        uint64                  `json:"version,omitempty"`
 	ReplicaId      uint64                  `json:"replicaId,omitempty"`

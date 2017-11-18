@@ -55,10 +55,10 @@ type ResponseSender func(pkey []byte, mskey []value.Value, uskey common.Secondar
 type ResponseHandlerFactory func(id ResponseHandlerId) ResponseHandler
 
 // ScanRequestHandler initiates a request to a single server connection
-type ScanRequestHandler func(*GsiScanClient, *common.IndexDefn, int64, []common.PartitionId, ResponseHandler) (error, bool)
+type ScanRequestHandler func(*GsiScanClient, *common.IndexDefn, int64, []common.PartitionId, uint32, ResponseHandler) (error, bool)
 
 // CountRequestHandler initiates a request to a single server connection
-type CountRequestHandler func(*GsiScanClient, *common.IndexDefn, int64, []common.PartitionId) (int64, error, bool)
+type CountRequestHandler func(*GsiScanClient, *common.IndexDefn, int64, []common.PartitionId, uint32) (int64, error, bool)
 
 // Remoteaddr string in the shape of "<host:port>"
 type Remoteaddr string
@@ -162,7 +162,7 @@ type BridgeAccessor interface {
 		defnID uint64,
 		retry int,
 		excludes map[uint64]bool) (queryport []string, targetDefnID uint64, targetInstID uint64,
-		rollbackTime []int64, partition [][]common.PartitionId, ok bool)
+		rollbackTime []int64, partition [][]common.PartitionId, numPartitions uint32, ok bool)
 
 	// GetIndex will return the index-definition structure for defnID.
 	GetIndexDefn(defnID uint64) *common.IndexDefn
@@ -299,30 +299,29 @@ type IndexerService struct {
 // use `adminport` for meta-data operation and `queryport`
 // for index-scan related operations.
 type GsiClient struct {
-	bridge        BridgeAccessor // manages adminport
-	cluster       string
-	maxvb         int
-	config        common.Config
-	queryClients  unsafe.Pointer // map[string(queryport)]*GsiScanClient
-	bucketHash    unsafe.Pointer // map[string]uint64 // bucket -> crc64
-	metaCh        chan bool      // listen to metadata changes
-	settings      *ClientSettings
-	killch        chan bool
-	numPartitions int
+	bridge       BridgeAccessor // manages adminport
+	cluster      string
+	maxvb        int
+	config       common.Config
+	queryClients unsafe.Pointer // map[string(queryport)]*GsiScanClient
+	bucketHash   unsafe.Pointer // map[string]uint64 // bucket -> crc64
+	metaCh       chan bool      // listen to metadata changes
+	settings     *ClientSettings
+	killch       chan bool
 }
 
 // NewGsiClient returns client to access GSI cluster.
 func NewGsiClient(
-	cluster string, config common.Config, numPartitions int) (c *GsiClient, err error) {
+	cluster string, config common.Config) (c *GsiClient, err error) {
 
-	return NewGsiClientWithSettings(cluster, config, false, numPartitions)
+	return NewGsiClientWithSettings(cluster, config, false)
 }
 
 func NewGsiClientWithSettings(
-	cluster string, config common.Config, needRefresh bool, numPartitions int) (c *GsiClient, err error) {
+	cluster string, config common.Config, needRefresh bool) (c *GsiClient, err error) {
 
 	if useMetadataProvider {
-		c, err = makeWithMetaProvider(cluster, config, needRefresh, numPartitions)
+		c, err = makeWithMetaProvider(cluster, config, needRefresh)
 	} else {
 		c, err = makeWithCbq(cluster, config)
 	}
@@ -530,7 +529,8 @@ func (c *GsiClient) LookupInternal(
 
 	begin := time.Now()
 
-	handler := func(qc *GsiScanClient, index *common.IndexDefn, rollbackTime int64, partitions []common.PartitionId, callb ResponseHandler) (error, bool) {
+	handler := func(qc *GsiScanClient, index *common.IndexDefn, rollbackTime int64, partitions []common.PartitionId,
+		numPartitions uint32, callb ResponseHandler) (error, bool) {
 		var err error
 
 		vector, err = c.getConsistency(qc, cons, vector, index.Bucket)
@@ -584,7 +584,8 @@ func (c *GsiClient) RangeInternal(
 
 	begin := time.Now()
 
-	handler := func(qc *GsiScanClient, index *common.IndexDefn, rollbackTime int64, partitions []common.PartitionId, handler ResponseHandler) (error, bool) {
+	handler := func(qc *GsiScanClient, index *common.IndexDefn, rollbackTime int64, partitions []common.PartitionId, numPartitions uint32,
+		handler ResponseHandler) (error, bool) {
 		var err error
 
 		vector, err = c.getConsistency(qc, cons, vector, index.Bucket)
@@ -613,7 +614,7 @@ func (c *GsiClient) RangeInternal(
 		return qc.Range(
 			uint64(index.DefnId), requestId, low, high, inclusion, distinct,
 			limit, cons, vector, handler, rollbackTime, partitions,
-			index, c.numPartitions)
+			index, numPartitions)
 	}
 
 	broker.SetScanRequestHandler(handler)
@@ -656,7 +657,8 @@ func (c *GsiClient) ScanAllInternal(
 
 	begin := time.Now()
 
-	handler := func(qc *GsiScanClient, index *common.IndexDefn, rollbackTime int64, partitions []common.PartitionId, handler ResponseHandler) (error, bool) {
+	handler := func(qc *GsiScanClient, index *common.IndexDefn, rollbackTime int64, partitions []common.PartitionId,
+		numPartitions uint32, handler ResponseHandler) (error, bool) {
 		var err error
 
 		vector, err = c.getConsistency(qc, cons, vector, index.Bucket)
@@ -706,7 +708,8 @@ func (c *GsiClient) MultiScanInternal(
 
 	begin := time.Now()
 
-	handler := func(qc *GsiScanClient, index *common.IndexDefn, rollbackTime int64, partitions []common.PartitionId, handler ResponseHandler) (error, bool) {
+	handler := func(qc *GsiScanClient, index *common.IndexDefn, rollbackTime int64, partitions []common.PartitionId,
+		numPartitions uint32, handler ResponseHandler) (error, bool) {
 		var err error
 
 		vector, err = c.getConsistency(qc, cons, vector, index.Bucket)
@@ -723,7 +726,7 @@ func (c *GsiClient) MultiScanInternal(
 		return qc.MultiScan(
 			uint64(index.DefnId), requestId, scans, reverse, distinct,
 			projection, offset, limit, cons, vector, handler, rollbackTime, partitions,
-			index, c.numPartitions)
+			index, numPartitions)
 	}
 
 	broker.SetScanRequestHandler(handler)
@@ -764,7 +767,7 @@ func (c *GsiClient) CountLookupInternal(
 
 	begin := time.Now()
 
-	handler := func(qc *GsiScanClient, index *common.IndexDefn, rollbackTime int64, partitions []common.PartitionId) (int64, error, bool) {
+	handler := func(qc *GsiScanClient, index *common.IndexDefn, rollbackTime int64, partitions []common.PartitionId, numPartitions uint32) (int64, error, bool) {
 		var err error
 		var count int64
 
@@ -831,7 +834,7 @@ func (c *GsiClient) CountRangeInternal(
 
 	begin := time.Now()
 
-	handler := func(qc *GsiScanClient, index *common.IndexDefn, rollbackTime int64, partitions []common.PartitionId) (int64, error, bool) {
+	handler := func(qc *GsiScanClient, index *common.IndexDefn, rollbackTime int64, partitions []common.PartitionId, numPartitions uint32) (int64, error, bool) {
 		var err error
 		var count int64
 
@@ -901,7 +904,7 @@ func (c *GsiClient) MultiScanCountInternal(
 
 	begin := time.Now()
 
-	handler := func(qc *GsiScanClient, index *common.IndexDefn, rollbackTime int64, partitions []common.PartitionId) (int64, error, bool) {
+	handler := func(qc *GsiScanClient, index *common.IndexDefn, rollbackTime int64, partitions []common.PartitionId, numPartitions uint32) (int64, error, bool) {
 		var err error
 
 		vector, err = c.getConsistency(qc, cons, vector, index.Bucket)
@@ -1013,6 +1016,7 @@ func (c *GsiClient) doScan(defnID uint64, requestId string, broker *RequestBroke
 	var excludes map[uint64]bool
 	var rollbackTimes []int64
 	var partitions [][]common.PartitionId
+	var numPartitions uint32
 
 	wait := c.config["retryIntervalScanport"].Int()
 	retry := c.config["retryScanPort"].Int()
@@ -1021,7 +1025,7 @@ func (c *GsiClient) doScan(defnID uint64, requestId string, broker *RequestBroke
 		count = 0
 		qcs :=
 			*((*map[string]*GsiScanClient)(atomic.LoadPointer(&c.queryClients)))
-		if queryports, targetDefnID, targetInstID, rollbackTimes, partitions, ok1 = c.bridge.GetScanport(defnID, i, excludes); ok1 {
+		if queryports, targetDefnID, targetInstID, rollbackTimes, partitions, numPartitions, ok1 = c.bridge.GetScanport(defnID, i, excludes); ok1 {
 			index := c.bridge.GetIndexDefn(targetDefnID)
 
 			qc = make([]*GsiScanClient, len(queryports))
@@ -1036,7 +1040,7 @@ func (c *GsiClient) doScan(defnID uint64, requestId string, broker *RequestBroke
 			if ok2 {
 
 				begin := time.Now()
-				count, scan_err, partial = broker.scatter(qc, index, rollbackTimes, partitions)
+				count, scan_err, partial = broker.scatter(qc, index, rollbackTimes, partitions, numPartitions)
 				if c.isTimeit(scan_err) {
 					c.bridge.Timeit(targetInstID, float64(time.Since(begin)))
 					return count, scan_err
@@ -1188,19 +1192,18 @@ func makeWithCbq(cluster string, config common.Config) (*GsiClient, error) {
 }
 
 func makeWithMetaProvider(
-	cluster string, config common.Config, needRefresh bool, numPartitions int) (c *GsiClient, err error) {
+	cluster string, config common.Config, needRefresh bool) (c *GsiClient, err error) {
 
 	c = &GsiClient{
-		cluster:       cluster,
-		config:        config,
-		queryClients:  unsafe.Pointer(new(map[string]*GsiScanClient)),
-		metaCh:        make(chan bool, 1),
-		settings:      NewClientSettings(needRefresh),
-		killch:        make(chan bool, 1),
-		numPartitions: numPartitions,
+		cluster:      cluster,
+		config:       config,
+		queryClients: unsafe.Pointer(new(map[string]*GsiScanClient)),
+		metaCh:       make(chan bool, 1),
+		settings:     NewClientSettings(needRefresh),
+		killch:       make(chan bool, 1),
 	}
 	atomic.StorePointer(&c.bucketHash, (unsafe.Pointer)(new(map[string]uint64)))
-	c.bridge, err = newMetaBridgeClient(cluster, config, c.metaCh, c.settings, numPartitions)
+	c.bridge, err = newMetaBridgeClient(cluster, config, c.metaCh, c.settings)
 	if err != nil {
 		return nil, err
 	}

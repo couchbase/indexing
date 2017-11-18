@@ -43,6 +43,7 @@ type IndexInstDistribution struct {
 	StreamId       uint32                  `json:"steamId,omitempty"`
 	Error          string                  `json:"error,omitempty"`
 	Partitions     []IndexPartDistribution `json:"partitions,omitempty"`
+	NumPartitions  uint32                  `json:"numPartitions,omitempty"`
 	RState         uint32                  `json:"rRtate,omitempty"`
 	Version        uint64                  `json:"version,omitempty"`
 	ReplicaId      uint64                  `json:"replicaId,omitempty"`
@@ -118,7 +119,7 @@ func (g *GlobalTopology) RemoveTopologyKey(key string) {
 // Add an index definition to Topology.
 //
 func (t *IndexTopology) AddIndexDefinition(bucket string, name string, defnId uint64, instId uint64, state uint32, indexerId string,
-	instVersion uint64, rState uint32, replicaId uint64, partitions []common.PartitionId, scheduled bool, storageMode string) {
+	instVersion uint64, rState uint32, replicaId uint64, partitions []common.PartitionId, numPartitions uint32, scheduled bool, storageMode string) {
 
 	t.RemoveIndexDefinition(bucket, name)
 
@@ -130,6 +131,7 @@ func (t *IndexTopology) AddIndexDefinition(bucket string, name string, defnId ui
 	inst.ReplicaId = replicaId
 	inst.Scheduled = scheduled
 	inst.StorageMode = storageMode
+	inst.NumPartitions = numPartitions
 
 	for _, partnId := range partitions {
 		slice := new(IndexSliceLocator)

@@ -122,9 +122,8 @@ func NewGSIIndexer(
 	if err != nil {
 		return nil, errors.NewError(err, "GSI config instantiation failed")
 	}
-	numPartitions := conf["indexer.numPartitions"].Int()
 	qconf := conf.SectionConfig("queryport.client.", true /*trim*/)
-	client, err := getSingletonClient(clusterURL, qconf, numPartitions)
+	client, err := getSingletonClient(clusterURL, qconf)
 	if err != nil {
 		l.Errorf("%v GSI instantiation failed: %v", gsi.logPrefix, err)
 		return nil, errors.NewError(err, "GSI client instantiation failed")
@@ -1402,13 +1401,13 @@ var muclient sync.Mutex
 var singletonClient *qclient.GsiClient
 
 func getSingletonClient(
-	clusterURL string, qconf c.Config, numPartitions int) (*qclient.GsiClient, error) {
+	clusterURL string, qconf c.Config) (*qclient.GsiClient, error) {
 
 	muclient.Lock()
 	defer muclient.Unlock()
 	if singletonClient == nil {
 		l.Debugf("creating singleton for URL %v", clusterURL)
-		client, err := qclient.NewGsiClientWithSettings(clusterURL, qconf, true, numPartitions)
+		client, err := qclient.NewGsiClientWithSettings(clusterURL, qconf, true)
 		if err != nil {
 			return nil, fmt.Errorf("in NewGsiClient(): %v", err)
 		}

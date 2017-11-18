@@ -306,7 +306,12 @@ func (c *clustMgrAgent) handleGetGlobalTopology(cmd Message) {
 		for i, partn := range inst.Partitions {
 			partitions[i] = common.PartitionId(partn.PartId)
 		}
-		pc := c.metaNotifier.makeDefaultPartitionContainer(partitions, idxDefn.PartitionScheme)
+
+		numPartitions := inst.NumPartitions
+		if numPartitions == 0 {
+			numPartitions = uint32(len(inst.Partitions))
+		}
+		pc := c.metaNotifier.makeDefaultPartitionContainer(partitions, numPartitions, idxDefn.PartitionScheme)
 
 		// create index instance
 		idxInst := common.IndexInst{InstId: common.IndexInstId(inst.InstId),
@@ -465,12 +470,12 @@ func NewMetaNotifier(adminCh MsgChannel, config common.Config, mgr *clustMgrAgen
 }
 
 func (meta *metaNotifier) OnIndexCreate(indexDefn *common.IndexDefn, instId common.IndexInstId,
-	replicaId int, partitions []common.PartitionId, reqCtx *common.MetadataRequestContext) error {
+	replicaId int, partitions []common.PartitionId, numPartitions uint32, reqCtx *common.MetadataRequestContext) error {
 
 	logging.Infof("clustMgrAgent::OnIndexCreate Notification "+
 		"Received for Create Index %v %v partitions %v", indexDefn, reqCtx, partitions)
 
-	pc := meta.makeDefaultPartitionContainer(partitions, indexDefn.PartitionScheme)
+	pc := meta.makeDefaultPartitionContainer(partitions, numPartitions, indexDefn.PartitionScheme)
 
 	idxInst := common.IndexInst{InstId: instId,
 		Defn:      *indexDefn,
@@ -648,11 +653,11 @@ func (meta *metaNotifier) fetchStats() {
 	}
 }
 
-func (meta *metaNotifier) makeDefaultPartitionContainer(partitions []common.PartitionId, scheme common.PartitionScheme) common.PartitionContainer {
+func (meta *metaNotifier) makeDefaultPartitionContainer(partitions []common.PartitionId, numPartitions uint32,
+	scheme common.PartitionScheme) common.PartitionContainer {
 
 	numVbuckets := meta.config["numVbuckets"].Int()
-	numPartitions := meta.config["numPartitions"].Int()
-	pc := common.NewKeyPartitionContainer(numVbuckets, numPartitions, scheme)
+	pc := common.NewKeyPartitionContainer(numVbuckets, int(numPartitions), scheme)
 
 	//Add one partition for now
 	addr := net.JoinHostPort("", meta.config["streamMaintPort"].String())

@@ -33,7 +33,6 @@ type metadataClient struct {
 	logtick                 time.Duration
 	randomWeight            float64 // value between [0, 1.0)
 	equivalenceFactor       float64 // value between [0, 1.0)
-	numPartitions           int
 
 	topoChangeLock sync.Mutex
 	metaCh         chan bool
@@ -60,16 +59,15 @@ type indexTopology struct {
 }
 
 func newMetaBridgeClient(
-	cluster string, config common.Config, metaCh chan bool, settings *ClientSettings, numPartitions int) (c *metadataClient, err error) {
+	cluster string, config common.Config, metaCh chan bool, settings *ClientSettings) (c *metadataClient, err error) {
 
 	b := &metadataClient{
-		cluster:       cluster,
-		finch:         make(chan bool),
-		metaCh:        metaCh,
-		mdNotifyCh:    make(chan bool, 1),
-		stNotifyCh:    make(chan map[common.IndexInstId]map[common.PartitionId]common.Statistics, 1),
-		settings:      settings,
-		numPartitions: numPartitions,
+		cluster:    cluster,
+		finch:      make(chan bool),
+		metaCh:     metaCh,
+		mdNotifyCh: make(chan bool, 1),
+		stNotifyCh: make(chan map[common.IndexInstId]map[common.PartitionId]common.Statistics, 1),
+		settings:   settings,
 	}
 	b.servicesNotifierRetryTm = config["servicesNotifierRetryTm"].Int()
 	b.logtick = time.Duration(config["logtick"].Int()) * time.Millisecond
@@ -81,7 +79,7 @@ func newMetaBridgeClient(
 		logging.Errorf("Could not generate UUID in common.NewUUID\n")
 		return nil, err
 	}
-	b.mdClient, err = mclient.NewMetadataProvider(uuid.Str(), b.mdNotifyCh, b.stNotifyCh, b.numPartitions, b.settings)
+	b.mdClient, err = mclient.NewMetadataProvider(uuid.Str(), b.mdNotifyCh, b.stNotifyCh, b.settings)
 	if err != nil {
 		return nil, err
 	}
@@ -281,7 +279,8 @@ func (b *metadataClient) GetScanports() (queryports []string) {
 
 // GetScanport implements BridgeAccessor{} interface.
 func (b *metadataClient) GetScanport(
-	defnID uint64, retry int, excludes map[uint64]bool) (qp []string, targetDefnID uint64, targetInstID uint64, rt []int64, pid [][]common.PartitionId, ok bool) {
+	defnID uint64, retry int, excludes map[uint64]bool) (qp []string, targetDefnID uint64, targetInstID uint64, rt []int64, pid [][]common.PartitionId,
+	numPartitions uint32, ok bool) {
 
 	var inst *mclient.InstanceDefn
 	var rollbackTime map[common.PartitionId]int64
@@ -301,11 +300,12 @@ func (b *metadataClient) GetScanport(
 	}
 
 	if !ok {
-		return nil, 0, 0, nil, nil, false
+		return nil, 0, 0, nil, nil, 0, false
 	}
 
 	targetInstID = uint64(inst.InstId)
 	targetDefnID = uint64(inst.DefnId)
+	numPartitions = uint32(inst.NumPartitions)
 
 	im := make(map[common.IndexerId][]common.PartitionId)
 	idx := make([]common.IndexerId, 0)
@@ -315,13 +315,13 @@ func (b *metadataClient) GetScanport(
 		if _, ok := im[indexerId]; !ok {
 			q, ok := currmeta.queryports[indexerId]
 			if !ok {
-				return nil, 0, 0, nil, nil, false
+				return nil, 0, 0, nil, nil, 0, false
 			}
 			qp = append(qp, q)
 
 			t, ok := rollbackTime[partnId]
 			if !ok {
-				return nil, 0, 0, nil, nil, false
+				return nil, 0, 0, nil, nil, 0, false
 			}
 			rt = append(rt, t)
 
@@ -337,7 +337,7 @@ func (b *metadataClient) GetScanport(
 
 	fmsg := "Scan port %s for index defnID %d of equivalent index defnId %d"
 	logging.Debugf(fmsg, qp, targetDefnID, defnID)
-	return qp, targetDefnID, targetInstID, rt, pid, true
+	return qp, targetDefnID, targetInstID, rt, pid, numPartitions, true
 }
 
 // Timeit implement BridgeAccessor{} interface.
@@ -1296,9 +1296,9 @@ func (b *metadataClient) updateTopology(
 		}
 	}
 
-	for instId, _ := range newmeta.insts {
+	for instId, inst := range newmeta.insts {
 		if _, ok := newmeta.loads[instId]; !ok {
-			newmeta.loads[instId] = newLoadHeuristics(b.numPartitions)
+			newmeta.loads[instId] = newLoadHeuristics(int(inst.NumPartitions))
 		}
 	}
 
