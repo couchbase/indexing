@@ -1066,7 +1066,7 @@ func (r *ScanRequest) validateGroupAggr() error {
 			l.Errorf("ScanRequest::validateGroupAggr %v %v", ErrInvalidAggrFunc, a.AggrFunc)
 			return ErrInvalidAggrFunc
 		}
-		if int(a.KeyPos) > len(r.IndexInst.Defn.SecExprs) {
+		if int(a.KeyPos) >= len(r.IndexInst.Defn.SecExprs) {
 			err = fmt.Errorf("Invalid KeyPos In Aggr %v", a)
 			l.Errorf("ScanRequest::validateGroupAggr %v", err)
 			return err
@@ -1075,7 +1075,7 @@ func (r *ScanRequest) validateGroupAggr() error {
 
 	//validate group by
 	for _, g := range r.GroupAggr.Group {
-		if int(g.KeyPos) > len(r.IndexInst.Defn.SecExprs) {
+		if int(g.KeyPos) >= len(r.IndexInst.Defn.SecExprs) {
 			err = fmt.Errorf("Invalid KeyPos In GroupKey %v", g)
 			l.Errorf("ScanRequest::validateGroupAggr %v", err)
 			return err
@@ -1084,7 +1084,7 @@ func (r *ScanRequest) validateGroupAggr() error {
 
 	//validate DependsOnIndexKeys
 	for _, k := range r.GroupAggr.DependsOnIndexKeys {
-		if int(k) > len(r.IndexInst.Defn.SecExprs) {
+		if int(k) >= len(r.IndexInst.Defn.SecExprs) {
 			err = fmt.Errorf("Invalid KeyPos In DependsOnIndexKeys %v", k)
 			l.Errorf("ScanRequest::validateGroupAggr %v", err)
 			return err
@@ -1103,8 +1103,10 @@ func (r *ScanRequest) validateGroupAggr() error {
 		} else {
 			if g.KeyPos != prevPos+1 {
 				r.GroupAggr.IsLeadingGroup = false
+				break
 			}
 		}
+		prevPos = g.KeyPos
 	}
 
 	//project should only have group/agg fields
