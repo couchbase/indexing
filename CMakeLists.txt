@@ -47,6 +47,8 @@ GoInstall (TARGET indexer PACKAGE github.com/couchbase/indexing/secondary/cmd/in
   INSTALL_PATH bin OUTPUT indexer
   GOVERSION 1.7.3)
 
+ADD_DEPENDENCIES(indexer sigar forestdb platform)
+
 GoInstall (TARGET projector PACKAGE github.com/couchbase/indexing/secondary/cmd/projector
   GOPATH "${PROJECT_SOURCE_DIR}/../../../.." "${GODEPSDIR}"
   CGO_INCLUDE_DIRS "${CGO_INCLUDE_DIRS}"
