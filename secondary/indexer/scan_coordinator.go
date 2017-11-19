@@ -1556,7 +1556,7 @@ func (s *scanCoordinator) handleScanRequest(req *ScanRequest, w ScanResponseWrit
 	is IndexSnapshot, t0 time.Time) {
 	waitTime := time.Now().Sub(t0)
 
-	scanPipeline := NewScanPipeline(req, w, is)
+	scanPipeline := NewScanPipeline(req, w, is, s.config.Load())
 	cancelCb := NewCancelCallback(req, func(e error) {
 		scanPipeline.Cancel(e)
 	})

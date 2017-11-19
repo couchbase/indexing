@@ -25,6 +25,8 @@ type ClientSettings struct {
 	scanLagPercent uint64
 	scanLagItem    uint64
 	prune_replica  int32
+	queueSize      uint64
+	notifyCount    uint64
 	config         common.Config
 	cancelCh       chan struct{}
 }
@@ -134,6 +136,21 @@ func (s *ClientSettings) handleSettings(config common.Config) {
 	} else {
 		atomic.StoreInt32(&s.prune_replica, int32(0))
 	}
+
+	queueSize := config["queryport.client.scan.queue_size"].Int()
+	if queueSize >= 0 {
+		atomic.StoreUint64(&s.queueSize, uint64(queueSize))
+	} else {
+		logging.Errorf("ClientSettings: invalid setting value for queueSize=%v", queueSize)
+	}
+
+	notifyCount := config["queryport.client.scan.notify_count"].Int()
+	if notifyCount >= 0 {
+		atomic.StoreUint64(&s.notifyCount, uint64(notifyCount))
+	} else {
+		logging.Errorf("ClientSettings: invalid setting value for notifyCount=%v", notifyCount)
+	}
+
 }
 
 func (s *ClientSettings) NumReplica() int32 {
@@ -162,4 +179,12 @@ func (s *ClientSettings) DisablePruneReplica() bool {
 		return true
 	}
 	return false
+}
+
+func (s *ClientSettings) ScanQueueSize() uint64 {
+	return atomic.LoadUint64(&s.queueSize)
+}
+
+func (s *ClientSettings) ScanNotifyCount() uint64 {
+	return atomic.LoadUint64(&s.notifyCount)
 }

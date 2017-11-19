@@ -610,6 +610,20 @@ var SystemConfig = Config{
 		false, // immutable
 		false, // case-insensitive
 	},
+	"queryport.client.scan.queue_size": ConfigValue{
+		0,
+		"When performing scan scattering in client, specify the queue size for the scatterer.",
+		0,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"queryport.client.scan.notify_count": ConfigValue{
+		30,
+		"When performing scan scattering in client, specify the minimum item count in queue before notifying gatherer on new item arrival.",
+		30,
+		false, // mutable
+		false, // case-insensitive
+	},
 	// projector's adminport client, can be used by indexer.
 	"indexer.projectorclient.retryInterval": ConfigValue{
 		16,
@@ -725,9 +739,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.numPartitions": ConfigValue{
-		64,
+		16,
 		"Number of vbuckets",
-		64,
+		16,
 		true,  // immutable
 		false, // case-insensitive
 	},
@@ -1771,6 +1785,20 @@ var SystemConfig = Config{
 		false,
 		"Disable background index build, except during upgrade",
 		false,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.scan.queue_size": ConfigValue{
+		100,
+		"When performing scan scattering in indexer, specify the queue size for the scatterer.",
+		100,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.scan.notify_count": ConfigValue{
+		30,
+		"When performing scan scattering in indexer, specify the minimum item count in queue before notifying gatherer on new item arrival.",
+		30,
 		false, // mutable
 		false, // case-insensitive
 	},

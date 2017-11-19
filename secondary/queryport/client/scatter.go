@@ -135,12 +135,12 @@ func (b *RequestBroker) isClose() bool {
 // Scatter requests over multiple connections
 //
 func (c *RequestBroker) scatter(client []*GsiScanClient, index *common.IndexDefn, rollback []int64,
-	partition [][]common.PartitionId, numPartition uint32) (count int64, err error, partial bool) {
+	partition [][]common.PartitionId, numPartition uint32, settings *ClientSettings) (count int64, err error, partial bool) {
 
 	c.SetNumIndexers(len(partition))
 
 	if c.scan != nil {
-		err, partial = c.scatterScan(client, index, rollback, partition, numPartition)
+		err, partial = c.scatterScan(client, index, rollback, partition, numPartition, settings)
 		return 0, err, partial
 	} else if c.count != nil {
 		return c.scatterCount(client, index, rollback, partition, numPartition)
@@ -153,7 +153,7 @@ func (c *RequestBroker) scatter(client []*GsiScanClient, index *common.IndexDefn
 // Scatter scan requests over multiple connections
 //
 func (c *RequestBroker) scatterScan(client []*GsiScanClient, index *common.IndexDefn, rollback []int64, partition [][]common.PartitionId,
-	numPartition uint32) (err error, partial bool) {
+	numPartition uint32, settings *ClientSettings) (err error, partial bool) {
 
 	c.notifych = make(chan bool, 1)
 	c.killch = make(chan bool, 1)
@@ -161,7 +161,7 @@ func (c *RequestBroker) scatterScan(client []*GsiScanClient, index *common.Index
 
 	if len(partition) > 1 {
 		c.queues = make([]*Queue, len(client))
-		size, limit := queueSize(int(c.size), 30, len(client), c.sorted)
+		size, limit := queueSize(int(c.size), len(client), c.sorted, settings)
 		for i := 0; i < len(client); i++ {
 			c.queues[i] = NewQueue(int64(size), int64(limit), c.notifych)
 		}
@@ -509,14 +509,21 @@ func makeDefaultResponseHandler(id ResponseHandlerId, broker *RequestBroker) Res
 	return handler
 }
 
-func queueSize(size int, limit int, partition int, sorted bool) (int, int) {
+func queueSize(size int, partition int, sorted bool, settings *ClientSettings) (int, int) {
+
+	queueSize := int(settings.ScanQueueSize())
+	limit := int(settings.ScanNotifyCount())
+
+	if queueSize == 0 {
+		queueSize = size
+	}
 
 	numCpu := runtime.NumCPU()
 
 	if numCpu >= partition || !sorted {
-		return size, limit
+		return queueSize, limit
 	}
 
 	ratio := partition / numCpu
-	return ratio * size, limit
+	return ratio * queueSize, limit
 }

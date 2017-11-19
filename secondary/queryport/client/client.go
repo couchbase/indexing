@@ -1040,7 +1040,7 @@ func (c *GsiClient) doScan(defnID uint64, requestId string, broker *RequestBroke
 			if ok2 {
 
 				begin := time.Now()
-				count, scan_err, partial = broker.scatter(qc, index, rollbackTimes, partitions, numPartitions)
+				count, scan_err, partial = broker.scatter(qc, index, rollbackTimes, partitions, numPartitions, c.settings)
 				if c.isTimeit(scan_err) {
 					c.bridge.Timeit(targetInstID, float64(time.Since(begin)))
 					return count, scan_err

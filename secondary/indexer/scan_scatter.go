@@ -11,6 +11,7 @@ package indexer
 import (
 	"bytes"
 	"errors"
+	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/pipeline"
 	"runtime"
@@ -24,7 +25,7 @@ var ErrFinishCallback error = errors.New("Callback done due to error")
 // scatter range scan
 //--------------------------
 
-func scatter(request *ScanRequest, scan Scan, snapshots []SliceSnapshot, cb EntryCallback) (err error) {
+func scatter(request *ScanRequest, scan Scan, snapshots []SliceSnapshot, cb EntryCallback, config common.Config) (err error) {
 
 	if len(snapshots) == 0 {
 		return
@@ -34,10 +35,10 @@ func scatter(request *ScanRequest, scan Scan, snapshots []SliceSnapshot, cb Entr
 		return scanOne(request, scan, snapshots, cb)
 	}
 
-	return scanMultiple(request, scan, snapshots, cb)
+	return scanMultiple(request, scan, snapshots, cb, config)
 }
 
-func scanMultiple(request *ScanRequest, scan Scan, snapshots []SliceSnapshot, cb EntryCallback) (err error) {
+func scanMultiple(request *ScanRequest, scan Scan, snapshots []SliceSnapshot, cb EntryCallback, config common.Config) (err error) {
 
 	var wg sync.WaitGroup
 
@@ -49,7 +50,7 @@ func scanMultiple(request *ScanRequest, scan Scan, snapshots []SliceSnapshot, cb
 	sorted := true
 
 	queues := make([]*Queue, len(snapshots))
-	size, limit := queueSize(100, 30, len(snapshots), sorted)
+	size, limit := queueSize(len(snapshots), sorted, config)
 	for i := 0; i < len(snapshots); i++ {
 		queues[i] = NewQueue(int64(size), int64(limit), notifych)
 	}
@@ -469,7 +470,10 @@ func compareSecKey(k1 *Row, k2 *Row) int {
 	return bytes.Compare(k1.key[:k1.len], k2.key[:k2.len])
 }
 
-func queueSize(size int, limit int, partition int, sorted bool) (int, int) {
+func queueSize(partition int, sorted bool, cfg common.Config) (int, int) {
+
+	size := cfg["scan.queue_size"].Int()
+	limit := cfg["scan.notify_count"].Int()
 
 	numCpu := runtime.NumCPU()
 

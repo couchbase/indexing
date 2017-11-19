@@ -26,6 +26,7 @@ type ScanPipeline struct {
 	src    p.Source
 	object p.Pipeline
 	req    *ScanRequest
+	config c.Config
 
 	rowsReturned uint64
 	bytesRead    uint64
@@ -47,9 +48,10 @@ func (p ScanPipeline) BytesRead() uint64 {
 	return p.bytesRead
 }
 
-func NewScanPipeline(req *ScanRequest, w ScanResponseWriter, is IndexSnapshot) *ScanPipeline {
+func NewScanPipeline(req *ScanRequest, w ScanResponseWriter, is IndexSnapshot, cfg c.Config) *ScanPipeline {
 	scanPipeline := new(ScanPipeline)
 	scanPipeline.req = req
+	scanPipeline.config = cfg
 
 	src := &IndexScanSource{is: is, p: scanPipeline}
 	src.InitWriter()
@@ -192,7 +194,7 @@ func (s *IndexScanSource) Routine() error {
 loop:
 	for _, scan := range r.Scans {
 		currentScan = scan
-		err = scatter(r, scan, sliceSnapshots, fn)
+		err = scatter(r, scan, sliceSnapshots, fn, s.p.config)
 		switch err {
 		case nil:
 		case p.ErrSupervisorKill, ErrLimitReached:
