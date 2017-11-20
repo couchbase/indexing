@@ -227,7 +227,11 @@ func (s *IndexScanSource) Routine() error {
 
 	//TODO add to config
 	if r.GroupAggr != nil {
-		s.p.aggrRes.SetMaxSize(100)
+		if r.GroupAggr.IsLeadingGroup {
+			s.p.aggrRes.SetMaxRows(1)
+		} else {
+			s.p.aggrRes.SetMaxRows(10)
+		}
 	}
 
 loop:
@@ -250,18 +254,20 @@ loop:
 			r.SetFlush(true)
 		}
 
-		entry, err := projectGroupAggr((*buf)[:0], r.Indexprojection, s.p.aggrRes)
-		if entry == nil {
-			l.Errorf("projectGroupAggr Unexpected nil last entry")
-		}
+		for {
+			entry, err := projectGroupAggr((*buf)[:0], r.Indexprojection, s.p.aggrRes)
+			if entry == nil {
+				return nil
+			}
 
-		if err != nil {
-			return err
-		}
+			if err != nil {
+				return err
+			}
 
-		wrErr := s.WriteItem(entry)
-		if wrErr != nil {
-			return wrErr
+			wrErr := s.WriteItem(entry)
+			if wrErr != nil {
+				return wrErr
+			}
 		}
 
 	}
@@ -567,10 +573,9 @@ type aggrRow struct {
 }
 
 type aggrResult struct {
-	rows     []*aggrRow
-	partial  bool
-	maxSize  int
-	currSize int
+	rows    []*aggrRow
+	partial bool
+	maxRows int
 }
 
 func (g groupKey) String() string {
@@ -665,21 +670,28 @@ func (ar *aggrResult) AddNewGroup(groups []*groupKey, aggrs []*aggrVal) error {
 
 	var err error
 
-	//assume 1 row in result for now.
-	//for non-leading keys, this will change to holding multiple
-	//keys in memory based on buffer len
-	if len(ar.rows) != 0 && ar.rows[0].CheckEqualGroup(groups) {
-		err = ar.rows[0].AddAggregate(aggrs)
-		l.Infof("ScanPipeline::AddNewGroup Add to Same Group %v", ar.rows[0])
-		if err != nil {
-			return err
+	nomatch := true
+	for _, row := range ar.rows {
+		if row.CheckEqualGroup(groups) {
+			nomatch = false
+			l.Infof("ScanPipeline::AddNewGroup Add to Same Group %v", row)
+			err = row.AddAggregate(aggrs)
+			if err != nil {
+				return err
+			}
+			break
 		}
-	} else {
+	}
+
+	if nomatch {
 		newRow := &aggrRow{groups: groups,
 			aggrs: make([]*aggrVal, len(aggrs))}
 		newRow.AddAggregate(aggrs)
+
 		l.Infof("ScanPipeline::AddNewGroup Add New Group %v", newRow)
-		if len(ar.rows) != 0 {
+
+		//flush the first row
+		if len(ar.rows) >= ar.maxRows {
 			ar.rows[0].SetFlush(true)
 		}
 		ar.rows = append(ar.rows, newRow)
@@ -689,8 +701,8 @@ func (ar *aggrResult) AddNewGroup(groups []*groupKey, aggrs []*aggrVal) error {
 
 }
 
-func (a *aggrResult) SetMaxSize(size int) {
-	a.maxSize = size
+func (a *aggrResult) SetMaxRows(n int) {
+	a.maxRows = n
 }
 
 func (ar *aggrRow) CheckEqualGroup(groups []*groupKey) bool {
