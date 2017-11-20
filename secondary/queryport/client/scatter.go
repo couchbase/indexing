@@ -13,36 +13,52 @@ import (
 	"fmt"
 	"github.com/couchbase/indexing/secondary/collatejson"
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/common/json"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/query/value"
-	"runtime"
+	"math"
+	"reflect"
+	//"runtime"
 	"sync/atomic"
+	"unsafe"
 )
-
-var SkipPartitionError = errors.New("Skip Partition")
 
 //--------------------------
 // request broker
 //--------------------------
 
 type RequestBroker struct {
+	// callback
 	scan    ScanRequestHandler
 	count   CountRequestHandler
 	factory ResponseHandlerFactory
 	sender  ResponseSender
 
-	size     int64
-	sorted   bool
+	// initialization
+	requestId string
+	size      int64
+	sorted    bool
+
+	// scatter/gather
 	queues   []*Queue
 	notifych chan bool
 	closed   int32
 	killch   chan bool
+	bGather  bool
+	err      unsafe.Pointer
+	partial  int32
 
+	// scan
+	limit          int64
+	offset         int64
+	pushdownLimit  int64
+	pushdownOffset int64
+	scans          Scans
+
+	// stats
 	sendCount    int64
 	receiveCount int64
 	numIndexers  int64
-
-	requestId string
 }
 
 type doneStatus struct {
@@ -50,12 +66,22 @@ type doneStatus struct {
 	partial bool
 }
 
+const (
+	NoPick = -1
+	Done   = -2
+)
+
 //
 // New Request Broker
 //
 func NewRequestBroker(requestId string, size int64) *RequestBroker {
 
-	return &RequestBroker{requestId: requestId, size: size, sorted: true}
+	return &RequestBroker{
+		requestId:     requestId,
+		size:          size,
+		sorted:        true,
+		limit:         math.MaxInt64,
+		pushdownLimit: math.MaxInt64}
 }
 
 //
@@ -91,16 +117,94 @@ func (b *RequestBroker) SetResponseSender(sender ResponseSender) {
 }
 
 //
+// Set Limit
+//
+func (b *RequestBroker) SetLimit(limit int64) {
+
+	b.limit = limit
+	b.pushdownLimit = limit
+}
+
+//
+// Set offset
+//
+func (b *RequestBroker) SetOffset(offset int64) {
+
+	b.offset = offset
+	b.pushdownOffset = offset
+}
+
+//
+// Get Limit
+//
+func (b *RequestBroker) GetLimit() int64 {
+
+	return b.pushdownLimit
+}
+
+//
+// Get offset
+//
+func (b *RequestBroker) GetOffset() int64 {
+
+	return b.pushdownOffset
+}
+
+//
+// Set Scans
+//
+func (b *RequestBroker) SetScans(scans Scans) {
+
+	b.scans = scans
+}
+
+//
+// Close the broker on error
+//
+func (b *RequestBroker) Error(err error) {
+
+	if b.GetError() == nil {
+		atomic.StorePointer(&b.err, unsafe.Pointer(&err))
+	}
+	b.close()
+}
+
+func (b *RequestBroker) Partial(partial bool) {
+	partial = b.IsPartial() || partial
+	if partial {
+		atomic.StoreInt32(&b.partial, 1)
+	} else {
+		atomic.StoreInt32(&b.partial, 0)
+	}
+}
+
+//
+// Close the broker when scan is done
+//
+func (b *RequestBroker) done() {
+	b.close()
+}
+
+//
 // Close the request broker
 //
-func (b *RequestBroker) Close() {
+func (b *RequestBroker) close() {
 
-	atomic.StoreInt32(&b.closed, 1)
-	close(b.killch)
+	if atomic.SwapInt32(&b.closed, 1) == 0 {
+		close(b.killch)
 
-	for _, queue := range b.queues {
-		queue.Close()
+		for _, queue := range b.queues {
+			queue.Close()
+		}
 	}
+}
+
+//
+// Is the request broker closed
+//
+func (b *RequestBroker) isClose() bool {
+
+	return atomic.LoadInt32(&b.closed) == 1
 }
 
 func (b *RequestBroker) IncrementReceiveCount(count int) {
@@ -123,13 +227,75 @@ func (b *RequestBroker) NumIndexers() int64 {
 	return atomic.LoadInt64(&b.numIndexers)
 }
 
-//
-// Is the request broker closed
-//
-func (b *RequestBroker) isClose() bool {
+func (c *RequestBroker) Len(id ResponseHandlerId) int64 {
 
-	return atomic.LoadInt32(&b.closed) == 1
+	if c.useGather() {
+		return c.queues[int(id)].Len()
+	}
+	return -1
 }
+
+func (c *RequestBroker) Cap(id ResponseHandlerId) int64 {
+
+	if c.useGather() {
+		return c.queues[int(id)].Cap()
+	}
+	return -1
+}
+
+func (c *RequestBroker) ReceiveCount() int64 {
+	return atomic.LoadInt64(&c.receiveCount)
+}
+
+func (c *RequestBroker) SendCount() int64 {
+	return atomic.LoadInt64(&c.sendCount)
+}
+
+func (c *RequestBroker) GetError() error {
+	if ptr := atomic.LoadPointer(&c.err); ptr != nil {
+		e := (*error)(ptr)
+		return *e
+	}
+	return nil
+}
+
+func (c *RequestBroker) IsPartial() bool {
+	if atomic.LoadInt32(&c.partial) == 1 {
+		return true
+	}
+	return false
+}
+
+func (c *RequestBroker) useGather() bool {
+
+	//return len(c.queues) > 0
+	return c.bGather
+}
+
+func (b *RequestBroker) reset() {
+
+	// scatter/gather
+	b.queues = nil
+	b.notifych = nil
+	b.closed = 0
+	b.killch = nil
+	b.bGather = false
+	b.err = nil
+	b.partial = 0 // false
+
+	// stats
+	b.sendCount = 0
+	b.receiveCount = 0
+	b.numIndexers = 0
+
+	// scans
+	b.pushdownLimit = b.limit
+	b.pushdownOffset = b.offset
+}
+
+//--------------------------
+// scatter/gather
+//--------------------------
 
 //
 // Scatter requests over multiple connections
@@ -137,10 +303,28 @@ func (b *RequestBroker) isClose() bool {
 func (c *RequestBroker) scatter(client []*GsiScanClient, index *common.IndexDefn, rollback []int64,
 	partition [][]common.PartitionId, numPartition uint32, settings *ClientSettings) (count int64, err error, partial bool) {
 
+	defer func() {
+		logging.Debugf("scatter: requestId %v items recieved %v items processed %v", c.requestId, c.ReceiveCount(), c.SendCount())
+	}()
+
+	c.reset()
 	c.SetNumIndexers(len(partition))
 
+	partition = c.filterPartitions(index, partition, numPartition)
+	client, rollback, partition = filterClients(client, rollback, partition)
+	c.changePushdownParams(partition, numPartition, index)
+
+	if len(partition) == len(client) {
+		for i, partitions := range partition {
+			logging.Debugf("scatter: requestId %v queryport %v partition %v", c.requestId, client[i].queryport, partitions)
+		}
+	}
+
+	logging.Debugf("scatter: requestId %v query limit %v query offset %v pushdown limit %v pushdown offset %v",
+		c.requestId, c.limit, c.offset, c.pushdownLimit, c.pushdownOffset)
+
 	if c.scan != nil {
-		err, partial = c.scatterScan(client, index, rollback, partition, numPartition, settings)
+		err, partial = c.scatterScan2(client, index, rollback, partition, numPartition, settings)
 		return 0, err, partial
 	} else if c.count != nil {
 		return c.scatterCount(client, index, rollback, partition, numPartition)
@@ -160,10 +344,14 @@ func (c *RequestBroker) scatterScan(client []*GsiScanClient, index *common.Index
 	donech_gather := make(chan bool, 1)
 
 	if len(partition) > 1 {
+		c.bGather = true
+	}
+
+	if c.useGather() {
 		c.queues = make([]*Queue, len(client))
-		size, limit := queueSize(int(c.size), len(client), c.sorted, settings)
+		size := queueSize(int(c.size), len(client), c.sorted, settings)
 		for i := 0; i < len(client); i++ {
-			c.queues[i] = NewQueue(int64(size), int64(limit), c.notifych)
+			c.queues[i] = NewQueue(int64(size), c.notifych)
 		}
 
 		if c.sorted {
@@ -181,15 +369,68 @@ func (c *RequestBroker) scatterScan(client []*GsiScanClient, index *common.Index
 
 	for i, _ := range client {
 		status := <-donech_scatter[i]
-		partial = partial && status.partial
+		partial = partial || status.partial
 		if status.err != nil {
 			err = errors.New(fmt.Sprintf("%v %v", err, status.err))
 		}
 	}
 
-	if len(partition) > 1 && err == nil {
+	if c.useGather() && err == nil {
 		<-donech_gather
 	}
+
+	return
+}
+
+func (c *RequestBroker) scatterScan2(client []*GsiScanClient, index *common.IndexDefn, rollback []int64, partition [][]common.PartitionId,
+	numPartition uint32, settings *ClientSettings) (err error, partial bool) {
+
+	c.notifych = make(chan bool, 1)
+	c.killch = make(chan bool, 1)
+	donech_gather := make(chan bool, 1)
+
+	if len(partition) > 1 {
+		c.bGather = true
+	}
+
+	if c.useGather() {
+		c.queues = make([]*Queue, len(client))
+		size := queueSize(int(c.size), len(client), c.sorted, settings)
+		for i := 0; i < len(client); i++ {
+			c.queues[i] = NewQueue(int64(size), c.notifych)
+		}
+	}
+
+	donech_scatter := make([]chan *doneStatus, len(client))
+	for i, _ := range client {
+		donech_scatter[i] = make(chan *doneStatus, 1)
+		go c.scanSingleNode(ResponseHandlerId(i), client[i], index, rollback[i], partition[i], numPartition, donech_scatter[i])
+	}
+
+	if c.useGather() {
+		// Gather is done either
+		// 1) scan is finished (done() method is called)
+		// 2) there is an error (Error() method is called)
+		// The gather routine could exit before all scatter routines have exited
+		if c.sorted {
+			c.gather(donech_gather)
+		} else {
+			c.forward(donech_gather)
+		}
+
+		err = c.GetError()
+	}
+
+	// Wait for all scatter routine is done
+	// If we are using gatherer, then do not wait unless there is an error.
+	if !c.useGather() || err != nil {
+		for i, _ := range client {
+			<-donech_scatter[i]
+		}
+	}
+
+	err = c.GetError()
+	partial = c.IsPartial()
 
 	return
 }
@@ -208,13 +449,87 @@ func (c *RequestBroker) scatterCount(client []*GsiScanClient, index *common.Inde
 
 	for i, _ := range client {
 		status := <-donech[i]
-		partial = partial && status.partial
+		partial = partial || status.partial
 		if status.err != nil {
 			err = errors.New(fmt.Sprintf("%v %v", err, status.err))
 		}
 	}
 
 	return
+}
+
+func (c *RequestBroker) sort(rows []Row, sorted []int) bool {
+
+	size := len(c.queues)
+
+	for i := 0; i < size; i++ {
+		sorted[i] = i
+	}
+
+	for i := 0; i < size-1; i++ {
+		if !c.queues[sorted[i]].Peek(&rows[sorted[i]]) {
+			return false
+		}
+
+		for j := i + 1; j < size; j++ {
+			if !c.queues[sorted[j]].Peek(&rows[sorted[j]]) {
+				return false
+			}
+
+			if rows[sorted[i]].last && !rows[sorted[j]].last ||
+				(!rows[sorted[i]].last && !rows[sorted[j]].last &&
+					c.compareKey(rows[sorted[i]].value, rows[sorted[j]].value) > 0) {
+				tmp := sorted[i]
+				sorted[i] = sorted[j]
+				sorted[j] = tmp
+			}
+		}
+	}
+
+	return true
+}
+
+//
+// Gather results from multiple connections
+// rows - buffer of rows from each scatter gorountine
+// sorted - sorted order of the rows
+//
+func (c *RequestBroker) pick(rows []Row, sorted []int) int {
+
+	size := len(c.queues)
+
+	if !c.queues[sorted[0]].Peek(&rows[sorted[0]]) {
+		return NoPick
+	}
+
+	pos := 0
+	for i := 1; i < size; i++ {
+		if !c.queues[sorted[i]].Peek(&rows[sorted[i]]) {
+			return NoPick
+		}
+
+		// last value always sorted last
+		if rows[sorted[pos]].last && !rows[sorted[i]].last ||
+			(!rows[sorted[pos]].last && !rows[sorted[i]].last &&
+				c.compareKey(rows[sorted[pos]].value, rows[sorted[i]].value) > 0) {
+
+			tmp := sorted[pos]
+			sorted[pos] = sorted[i]
+			sorted[i] = tmp
+			pos = i
+
+		} else {
+			break
+		}
+	}
+
+	for i := 0; i < size; i++ {
+		if !rows[sorted[i]].last {
+			return sorted[0]
+		}
+	}
+
+	return Done
 }
 
 //
@@ -224,48 +539,71 @@ func (c *RequestBroker) gather(donech chan bool) {
 
 	size := len(c.queues)
 	rows := make([]Row, size)
+	sorted := make([]int, size)
 
 	defer close(donech)
 
+	// initial sort
+	isSorted := false
+	for !isSorted {
+		if c.isClose() {
+			return
+		}
+
+		isSorted = c.sort(rows, sorted)
+
+		if !isSorted {
+			select {
+			case <-c.notifych:
+				continue
+			case <-c.killch:
+				return
+			}
+		}
+	}
+
+	var curOffset int64 = 0
+	var curLimit int64 = 0
+
 	for {
-		var candidate *Row
 		var id int
-		var count int
 
 		if c.isClose() {
 			return
 		}
 
-		for i := 0; i < size; i++ {
-			if c.queues[i].Peek(&rows[i]) {
-				count++
-
-				if rows[i].last {
-					continue
-				}
-
-				if candidate == nil || c.compareKey(candidate.value, rows[i].value) > 0 {
-					candidate = &rows[i]
-					id = i
-				}
-			}
+		id = c.pick(rows, sorted)
+		if id == Done {
+			return
 		}
 
-		if count == size {
-			if candidate != nil {
-				if c.queues[id].Dequeue(&rows[id]) {
-					if !c.sender(rows[id].pkey, rows[id].value, rows[id].skey) {
-						return
-					}
-				}
-			} else {
-				break
-			}
-		} else {
+		if id == NoPick {
 			select {
 			case <-c.notifych:
 				continue
 			case <-c.killch:
+				return
+			}
+		}
+
+		if c.queues[id].Dequeue(&rows[id]) {
+
+			// skip offset
+			if curOffset < c.offset {
+				curOffset++
+				continue
+			}
+
+			curLimit++
+			c.Partial(true)
+			if !c.sender(rows[id].pkey, rows[id].value, rows[id].skey) {
+				c.done()
+				return
+			}
+
+			// reaching limit
+			if curLimit >= c.limit {
+				c.done()
 				return
 			}
 		}
@@ -281,6 +619,9 @@ func (c *RequestBroker) forward(donech chan bool) {
 	rows := make([]Row, size)
 
 	defer close(donech)
+
+	var curOffset int64 = 0
+	var curLimit int64 = 0
 
 	for {
 		if c.isClose() {
@@ -300,7 +641,23 @@ func (c *RequestBroker) forward(donech chan bool) {
 				found = true
 
 				if c.queues[i].Dequeue(&rows[i]) {
+
+					// skip offset
+					if curOffset < c.offset {
+						curOffset++
+						continue
+					}
+
+					curLimit++
+					c.Partial(true)
 					if !c.sender(rows[i].pkey, rows[i].value, rows[i].skey) {
+						c.done()
+						return
+					}
+
+					// reaching limit
+					if curLimit >= c.limit {
+						c.done()
 						return
 					}
 				}
@@ -323,9 +680,8 @@ func (c *RequestBroker) forward(donech chan bool) {
 }
 
 // This function compares two set of secondart key values.
-// Returns –int, 0 or +int depending on if the receiver this
-// sorts less than, equal to, or greater than the input
-// argument Value to the method.
+// Returns –int, 0 or +int depending on if key1
+// sorts less than, equal to, or greater than key2.
 func (c *RequestBroker) compareKey(key1, key2 []value.Value) int {
 
 	ln := len(key1)
@@ -348,14 +704,22 @@ func (c *RequestBroker) compareKey(key1, key2 []value.Value) int {
 func (c *RequestBroker) scanSingleNode(id ResponseHandlerId, client *GsiScanClient, index *common.IndexDefn, rollback int64,
 	partition []common.PartitionId, numPartition uint32, donech chan *doneStatus) {
 
-	err, partial := c.scan(client, index, rollback, partition, numPartition, c.factory(id))
-	if err == SkipPartitionError {
-		if len(c.queues) > 0 {
+	if len(partition) == 0 {
+		if c.useGather() {
 			var r Row
 			r.last = true
 			c.queues[int(id)].Enqueue(&r)
 		}
-		err = nil
+		donech <- &doneStatus{err: nil, partial: false}
+		return
+	}
+
+	err, partial := c.scan(client, index, rollback, partition, c.factory(id))
+	if err != nil {
+		// If there is any error, then stop the broker.
+		// This will force other go-routine to terminate.
+		c.Partial(partial)
+		c.Error(err)
 	}
 
 	donech <- &doneStatus{err: err, partial: partial}
@@ -367,8 +731,23 @@ func (c *RequestBroker) scanSingleNode(id ResponseHandlerId, client *GsiScanClie
 func (c *RequestBroker) countSingleNode(id ResponseHandlerId, client *GsiScanClient, index *common.IndexDefn, rollback int64,
 	partition []common.PartitionId, numPartition uint32, donech chan *doneStatus, count *int64) {
 
-	cnt, err, partial := c.count(client, index, rollback, partition, numPartition)
-	atomic.AddInt64(count, cnt)
+	if len(partition) == 0 {
+		donech <- &doneStatus{err: nil, partial: false}
+		return
+	}
+
+	cnt, err, partial := c.count(client, index, rollback, partition)
+	if err != nil {
+		// If there is any error, then stop the broker.
+		// This will force other go-routine to terminate.
+		c.Partial(partial)
+		c.Error(err)
+	}
+
+	if err == nil && !partial {
+		atomic.AddInt64(count, cnt)
+	}
+
 	donech <- &doneStatus{err: err, partial: partial}
 }
 
@@ -379,8 +758,9 @@ func (c *RequestBroker) countSingleNode(id ResponseHandlerId, client *GsiScanCli
 //
 func (c *RequestBroker) SendEntries(id ResponseHandlerId, pkeys [][]byte, skeys []common.SecondaryKey) bool {
 
+	// StreamEndResponse has nil pkeys and nil skeys
 	if len(pkeys) == 0 && len(skeys) == 0 {
-		if len(c.queues) > 0 {
+		if c.useGather() {
 			var r Row
 			r.last = true
 			c.queues[int(id)].Enqueue(&r)
@@ -388,55 +768,45 @@ func (c *RequestBroker) SendEntries(id ResponseHandlerId, pkeys [][]byte, skeys 
 		return false
 	}
 
+	if c.isClose() {
+		return false
+	}
+
 	for i, skey := range skeys {
 
-		vals := make([]value.Value, len(skey))
-		for j := 0; j < len(skey); j++ {
-			if s, ok := skey[j].(string); ok && collatejson.MissingLiteral.Equal(s) {
-				vals[j] = value.NewMissingValue()
-			} else {
-				vals[j] = value.NewValue(skey[j])
+		if c.useGather() {
+			var vals []value.Value
+			if c.sorted {
+				vals = make([]value.Value, len(skey))
+				for j := 0; j < len(skey); j++ {
+					if s, ok := skey[j].(string); ok && collatejson.MissingLiteral.Equal(s) {
+						vals[j] = value.NewMissingValue()
+					} else {
+						vals[j] = value.NewValue(skey[j])
+					}
+				}
 			}
-		}
 
-		if len(c.queues) > 0 {
 			var r Row
 			r.pkey = pkeys[i]
 			r.value = vals
 			r.skey = skey
 			c.queues[int(id)].Enqueue(&r)
 		} else {
-			if !c.sender(pkeys[i], vals, skey) || c.isClose() {
+
+			c.Partial(true)
+			if !c.sender(pkeys[i], nil, skey) {
+				c.done()
 				return false
 			}
 		}
 	}
 
+	if c.useGather() {
+		c.queues[int(id)].NotifyEnq()
+	}
+
 	return !c.isClose()
-}
-
-func (c *RequestBroker) Len(id ResponseHandlerId) int64 {
-
-	if len(c.queues) > 0 {
-		return c.queues[int(id)].Len()
-	}
-	return -1
-}
-
-func (c *RequestBroker) Cap(id ResponseHandlerId) int64 {
-
-	if len(c.queues) > 0 {
-		return c.queues[int(id)].Cap()
-	}
-	return -1
-}
-
-func (c *RequestBroker) ReceiveCount() int64 {
-	return atomic.LoadInt64(&c.receiveCount)
-}
-
-func (c *RequestBroker) SendCount() int64 {
-	return atomic.LoadInt64(&c.sendCount)
 }
 
 //--------------------------
@@ -458,20 +828,20 @@ func (d *bypassResponseReader) Error() error {
 
 func makeDefaultRequestBroker(cb ResponseHandler) *RequestBroker {
 
-	broker := NewRequestBroker("", 4096)
+	broker := NewRequestBroker("", 256)
 
 	factory := func(id ResponseHandlerId) ResponseHandler {
 		return makeDefaultResponseHandler(id, broker)
 	}
 
 	sender := func(pkey []byte, mskey []value.Value, uskey common.SecondaryKey) bool {
+		broker.IncrementSendCount()
 		if cb != nil {
 			var reader bypassResponseReader
 			reader.pkey = pkey
 			reader.skey = uskey
 			return cb(&reader)
 		}
-		broker.IncrementSendCount()
 		return true
 	}
 
@@ -487,13 +857,13 @@ func makeDefaultResponseHandler(id ResponseHandlerId, broker *RequestBroker) Res
 		err := resp.Error()
 		if err != nil {
 			logging.Errorf("defaultResponseHandler: %v", err)
-			broker.Close()
+			broker.Error(err)
 			return false
 		}
 		skeys, pkeys, err := resp.GetEntries()
 		if err != nil {
 			logging.Errorf("defaultResponseHandler: %v", err)
-			broker.Close()
+			broker.Error(err)
 			return false
 		}
 		if len(pkeys) != 0 || len(skeys) != 0 {
@@ -509,21 +879,325 @@ func makeDefaultResponseHandler(id ResponseHandlerId, broker *RequestBroker) Res
 	return handler
 }
 
-func queueSize(size int, partition int, sorted bool, settings *ClientSettings) (int, int) {
+//--------------------------
+// Partition Elimination
+//--------------------------
+
+//
+// Filter partitions based on index partiton key
+//
+func (c *RequestBroker) filterPartitions(index *common.IndexDefn, partitions [][]common.PartitionId, numPartition uint32) [][]common.PartitionId {
+
+	if numPartition == 1 || (len(partitions) == 1 && len(partitions[0]) == 1) {
+		return partitions
+	}
+
+	partitionKeyPos := partitionKeyPos(index)
+	if len(partitionKeyPos) == 0 {
+		return partitions
+	}
+
+	partitionKeyValues := partitionKeyValues(c.requestId, partitionKeyPos, c.scans)
+	if len(partitionKeyValues) == 0 {
+		return partitions
+	}
+
+	filter := partitionKeyHash(partitionKeyValues, c.scans, numPartition)
+	if len(filter) == 0 {
+		return partitions
+	}
+
+	return filterPartitionIds(partitions, filter)
+}
+
+//
+// Find out the position of parition key in the index key list
+//
+func partitionKeyPos(defn *common.IndexDefn) []int {
+
+	if defn.PartitionScheme == common.SINGLE {
+		return nil
+	}
+
+	var pos []int
+	for i, secKey := range defn.SecExprs {
+		if secKey == defn.PartitionKey {
+			pos = append(pos, i)
+		}
+	}
+
+	return pos
+}
+
+//
+// Extract the partition key value from each scan (AND-predicate from where clause)
+// Scans is a OR-list of AND-predicate
+// Each scan (AND-predicate) should have all the partition keys
+// If any scan does not have all the partition keys, then the request needs to be scatter-gather
+//
+func partitionKeyValues(requestId string, partnKeyPos []int, scans Scans) [][]interface{} {
+
+	partnKeyValues := make([][]interface{}, len(scans))
+
+	for scanPos, scan := range scans {
+		if scan != nil {
+			if len(scan.Filter) > 0 {
+
+				for i, filter := range scan.Filter {
+					logging.Debugf("scatter: requestId %v filter[%v] low %v high %v", requestId, i, filter.Low, filter.High)
+				}
+
+				for _, pos := range partnKeyPos {
+
+					if pos >= len(scan.Filter) {
+						partnKeyValues[scanPos] = nil
+						break
+					}
+
+					if reflect.DeepEqual(scan.Filter[pos].Low, scan.Filter[pos].High) {
+						partnKeyValues[scanPos] = append(partnKeyValues[scanPos], scan.Filter[pos].Low)
+
+					} else {
+						partnKeyValues[scanPos] = nil
+						break
+					}
+				}
+
+			} else if len(scan.Seek) > 0 {
+
+				for i, seek := range scan.Seek {
+					logging.Debugf("scatter: requestId %v seek[%v] value %v", requestId, i, seek)
+				}
+
+				for _, pos := range partnKeyPos {
+
+					if pos >= len(scan.Seek) {
+						partnKeyValues[scanPos] = nil
+						break
+					}
+
+					partnKeyValues[scanPos] = append(partnKeyValues[scanPos], scan.Seek[pos])
+				}
+			}
+		}
+	}
+
+	return partnKeyValues
+}
+
+//
+// Generate a list of partitonId from the partition key values of each scan
+//
+func partitionKeyHash(partnKeyValues [][]interface{}, scans Scans, numPartition uint32) map[common.PartitionId]bool {
+
+	if len(partnKeyValues) != len(scans) {
+		return nil
+	}
+
+	for i, scan := range scans {
+		if scan != nil && len(partnKeyValues[i]) == 0 {
+			return nil
+		}
+	}
+
+	result := make(map[common.PartitionId]bool)
+	for _, values := range partnKeyValues {
+
+		if len(values) != 0 {
+			var v []byte
+
+			for _, value := range values {
+				l, err := json.Marshal(value)
+				if err != nil {
+					return nil
+				}
+
+				v = append(v, l...)
+			}
+
+			partnId := common.HashKeyPartition(v, int(numPartition))
+			result[partnId] = true
+		}
+	}
+
+	return result
+}
+
+//
+// Given the indexer-partitionId map, filter out the partitionId that are not used in the scans
+//
+func filterPartitionIds(allPartitions [][]common.PartitionId, filter map[common.PartitionId]bool) [][]common.PartitionId {
+
+	result := make([][]common.PartitionId, len(allPartitions))
+	for i, partitions := range allPartitions {
+		for _, partition := range partitions {
+			if filter[partition] {
+				result[i] = append(result[i], partition)
+			}
+		}
+	}
+
+	return result
+}
+
+//
+// Filter out any Scan client that are not used in scans
+//
+func filterClients(clients []*GsiScanClient, timestamps []int64, allPartitions [][]common.PartitionId) ([]*GsiScanClient, []int64, [][]common.PartitionId) {
+
+	var newClient []*GsiScanClient
+	var newTS []int64
+	var newPartition [][]common.PartitionId
+
+	for i, partitions := range allPartitions {
+		if len(partitions) != 0 {
+			newClient = append(newClient, clients[i])
+			newTS = append(newTS, timestamps[i])
+			newPartition = append(newPartition, partitions)
+		}
+	}
+
+	return newClient, newTS, newPartition
+}
+
+//--------------------------
+// API2 Push Down
+//--------------------------
+
+func (c *RequestBroker) changePushdownParams(partitions [][]common.PartitionId, numPartition uint32, index *common.IndexDefn) {
+	c.changeLimit(partitions, numPartition, index)
+	c.changeOffset(partitions, numPartition, index)
+}
+
+func (c *RequestBroker) changeLimit(partitions [][]common.PartitionId, numPartition uint32, index *common.IndexDefn) {
+
+	c.pushdownLimit = c.limit
+
+	// non-partition index
+	if index.PartitionScheme == common.SINGLE {
+		return
+	}
+
+	// there is no limit
+	if c.limit == math.MaxInt64 {
+		return
+	}
+
+	// there is only a single indexer involved in the scan
+	if numPartition == 1 || len(partitions) == 1 {
+		return
+	}
+
+	// We have multiple partitions and there is a limit clause.  We need to change the limit only if
+	// there is also offset. If there is no offset, then limit does not have to change.
+	if c.offset == 0 {
+		return
+	}
+
+	/*
+		// We do not have to change the limit there is exactly one partition for each scan (AND-predicate).
+		partitionKeyPos := partitionKeyPos(index)
+		if len(partitionKeyPos) != 0 {
+			pushDownLimitAsIs := true
+			partitionKeyValues := partitionKeyValues(c.requestId, partitionKeyPos, c.scans)
+			if len(c.scans) == len(partitionKeyValues) {
+				for i, scan := range c.scans {
+					if scan != nil && len(partitionKeyValues[i]) == 0 {
+						pushDownLimitAsIs = false
+						break
+					}
+				}
+
+				// At this point, each scan is going to be mapped to one partition.
+				// 1) the qualifying rows for each scan will only be coming a single indexer
+				// 2) for each scan, the qualifying rows will be sorted
+				// In this case, it is possible to push down the limit to each indexer,
+				// without worrying about missing qualitying rows.
+				if pushDownLimitAsIs {
+					return
+				}
+			}
+		}
+	*/
+
+	// if there are multiple partitions AND there is offset, limit is offset + limit.
+	// offset will be set back to 0 in changeOffset()
+	c.pushdownLimit = c.offset + c.limit
+
+}
+
+func (c *RequestBroker) changeOffset(partitions [][]common.PartitionId, numPartition uint32, index *common.IndexDefn) {
+
+	c.pushdownOffset = c.offset
+
+	// non-partition index
+	if index.PartitionScheme == common.SINGLE {
+		return
+	}
+
+	// there is no offset
+	if c.offset == 0 {
+		return
+	}
+
+	// there is only a single indexer involved in the scan
+	if numPartition == 1 || len(partitions) == 1 {
+		return
+	}
+
+	/*
+		// We do not have to change the offset there is exactly one partition for each scan (AND-predicate).
+		partitionKeyPos := partitionKeyPos(index)
+		if len(partitionKeyPos) != 0 {
+			pushDownOffsetAsIs := true
+			partitionKeyValues := partitionKeyValues(c.requestId, partitionKeyPos, c.scans)
+			if len(c.scans) == len(partitionKeyValues) {
+				for i, scan := range c.scans {
+					if scan != nil && len(partitionKeyValues[i]) == 0 {
+						pushDownOffsetAsIs = false
+						break
+					}
+				}
+
+				// At this point, each scan is going to be mapped to one partition.
+				// 1) the qualifying rows for each scan will only be coming a single indexer
+				// 2) for each scan, the qualifying rows will be sorted
+				// In this case, it is possible to push down the offset to each indexer,
+				// without worrying about missing qualitying rows.
+				if pushDownOffsetAsIs {
+					return
+				}
+			}
+		}
+	*/
+
+	// if there is multiple partition, change offset to 0
+	c.pushdownOffset = 0
+}
+
+//--------------------------
+// utilities
+//--------------------------
+
+func queueSize(size int, partition int, sorted bool, settings *ClientSettings) int {
 
 	queueSize := int(settings.ScanQueueSize())
-	limit := int(settings.ScanNotifyCount())
 
 	if queueSize == 0 {
 		queueSize = size
 	}
 
-	numCpu := runtime.NumCPU()
+	return queueSize
 
-	if numCpu >= partition || !sorted {
-		return queueSize, limit
-	}
+	//FIXME
+	/*
+		numCpu := runtime.NumCPU()
 
-	ratio := partition / numCpu
-	return ratio * queueSize, limit
+		if numCpu >= partition || !sorted {
+			return queueSize
+		}
+
+		ratio := partition / numCpu
+		return ratio * queueSize
+	*/
 }

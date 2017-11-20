@@ -841,7 +841,7 @@ func (si *secondaryIndex2) Scan2(
 	defer close(entryChannel)
 	defer func() {
 		if broker != nil {
-			l.Verbosef("scan2: scan request %v closing entryChannel.  Receive Count %v Sent Count %v",
+			l.Debugf("scan2: scan request %v closing entryChannel.  Receive Count %v Sent Count %v",
 				requestId, broker.ReceiveCount(), broker.SendCount())
 		}
 	}()
@@ -871,7 +871,7 @@ func (si *secondaryIndex2) Scan2(
 	atomic.AddInt64(&si.gsi.totalscans, 1)
 	atomic.AddInt64(&si.gsi.scandur, int64(time.Since(starttm)))
 
-	l.Verbosef("scan2: scan request %v done.  Receive Count %v Sent Count %v NumIndexers %v err %v",
+	l.Debugf("scan2: scan request %v done.  Receive Count %v Sent Count %v NumIndexers %v err %v",
 		requestId, broker.ReceiveCount(), broker.SendCount(), broker.NumIndexers(), err)
 }
 
@@ -1035,7 +1035,7 @@ func (si *secondaryIndex3) Scan3(
 	defer close(entryChannel)
 	defer func() {
 		if broker != nil {
-			l.Verbosef("scan3: scan request %v closing entryChannel.  Receive Count %v Sent Count %v",
+			l.Debugf("scan3: scan request %v closing entryChannel.  Receive Count %v Sent Count %v",
 				requestId, broker.ReceiveCount(), broker.SendCount())
 		}
 	}()
@@ -1066,7 +1066,7 @@ func (si *secondaryIndex3) Scan3(
 	atomic.AddInt64(&si.gsi.totalscans, 1)
 	atomic.AddInt64(&si.gsi.scandur, int64(time.Since(starttm)))
 
-	l.Verbosef("scan3: scan request %v done.  Receive Count %v Sent Count %v NumIndexers %v err %v",
+	l.Debugf("scan3: scan request %v done.  Receive Count %v Sent Count %v NumIndexers %v err %v",
 		requestId, broker.ReceiveCount(), broker.SendCount(), broker.NumIndexers(), err)
 }
 
@@ -1094,8 +1094,8 @@ func makeRequestBroker(
 		return makeResponsehandler(id, requestId, si, client, conn, broker, config, waitGroup, backfillSync)
 	}
 
-	sender := func(pkey []byte, mskey []value.Value, uskey c.SecondaryKey) bool {
-		return sendEntry(broker, si, pkey, mskey, uskey, conn)
+	sender := func(pkey []byte, value []value.Value, skey c.SecondaryKey) bool {
+		return sendEntry(broker, si, pkey, value, skey, conn)
 	}
 
 	broker.SetResponseHandlerFactory(factory)
@@ -1128,6 +1128,25 @@ func makeResponsehandler(
 	primed, starttm, ticktm := false, time.Now(), time.Now()
 	lprefix := si.gsi.logPrefix
 
+	//
+	// This function returns false if wants to
+	// stop execution.   This could be due to
+	// 1) internal error.  In this case, this
+	//    function will post the error directly to cbq-engine.
+	//    The error will not be posted to GsiScanClient,
+	//    so GsiClient would not return error or retry.
+	//    For internal error, this function should call
+	//    broker.Error() so that scatter/gather could stop.
+	//
+	// 2) cbq-engine asks to stop.  In this case,
+	//    SendEntries() will return false.  SendEntries()
+	//    is responsible for stopping scatter/gather.
+	//
+	// 3) scan is done (e.g. limit has reached).
+	//    In this case, SendEntries() will return false.
+	//    Gathering routine is responsible for stopping
+	//    scatter/gather.
+	//
 	backfill := func() {
 		name := tmpfile.Name()
 		defer func() {
@@ -1171,7 +1190,7 @@ func makeResponsehandler(
 				fmsg := "%q backfill exceeded limit %v, %v"
 				err := fmt.Errorf(fmsg, requestId, backfillLimit, cummsize)
 				conn.Error(n1qlError(client, err))
-				broker.Close()
+				broker.Error(err)
 				return
 			}
 
@@ -1180,7 +1199,7 @@ func makeResponsehandler(
 				fmsg := "%v %q decoding from backfill %v: %v\n"
 				l.Errorf(fmsg, lprefix, requestId, name, err)
 				conn.Error(n1qlError(client, err))
-				broker.Close()
+				broker.Error(err)
 				return
 			}
 			pkeys := make([][]byte, 0)
@@ -1188,7 +1207,7 @@ func makeResponsehandler(
 				fmsg := "%v %q decoding from backfill %v: %v\n"
 				l.Errorf(fmsg, lprefix, requestId, name, err)
 				conn.Error(n1qlError(client, err))
-				broker.Close()
+				broker.Error(err)
 				return
 			}
 			l.Tracef("%v backfill read %v entries\n", lprefix, len(skeys))
@@ -1212,17 +1231,36 @@ func makeResponsehandler(
 		}
 	}
 
+	//
+	// This function returns false if wants to
+	// stop execution.   This could be due to
+	// 1) internal error.  In this case, this
+	//    function will post the error directly to cbq-engine.
+	//    The error will not be posted to GsiScanClient,
+	//    so GsiClient would not return error or retry.
+	//    For internal error, this function should call
+	//    broker.Error() so that scatter/gather could stop.
+	//
+	// 2) cbq-engine asks to stop.  In this case,
+	//    SendEntries() will return false.  SendEntries()
+	//    is responsible for stopping scatter/gather.
+	//
+	// 3) scan is done (e.g. limit has reached).
+	//    In this case, SendEntries() will return false.
+	//    Gathering routine is responsible for stopping
+	//    scatter/gather.
+	//
 	return func(data qclient.ResponseReader) bool {
 		err := data.Error()
 		if err != nil {
 			conn.Error(n1qlError(client, err))
-			broker.Close()
+			broker.Error(err)
 			return false
 		}
 		skeys, pkeys, err := data.GetEntries()
 		if err != nil {
 			conn.Error(n1qlError(client, err))
-			broker.Close()
+			broker.Error(err)
 			return false
 		}
 
@@ -1256,7 +1294,7 @@ func makeResponsehandler(
 				l.Errorf(fmsg, lprefix, requestId, name, err)
 				tmpfile = nil
 				conn.Error(n1qlError(client, err))
-				broker.Close()
+				broker.Error(err)
 				return false
 
 			} else {
@@ -1269,7 +1307,7 @@ func makeResponsehandler(
 					fmsg := "%v %v reading backfill file %v: %v\n"
 					l.Errorf(fmsg, lprefix, requestId, name, err)
 					conn.Error(n1qlError(client, err))
-					broker.Close()
+					broker.Error(err)
 					return false
 				}
 				// decoder
@@ -1286,7 +1324,7 @@ func makeResponsehandler(
 				fmsg := "%q backfill exceeded limit %v, %v"
 				err := fmt.Errorf(fmsg, requestId, backfillLimit, cummsize)
 				conn.Error(n1qlError(client, err))
-				broker.Close()
+				broker.Error(err)
 				return false
 			}
 
@@ -1296,12 +1334,12 @@ func makeResponsehandler(
 			}
 			if err := enc.Encode(skeys); err != nil {
 				conn.Error(n1qlError(client, err))
-				broker.Close()
+				broker.Error(err)
 				return false
 			}
 			if err := enc.Encode(pkeys); err != nil {
 				conn.Error(n1qlError(client, err))
-				broker.Close()
+				broker.Error(err)
 				return false
 			}
 			atomic.AddInt64(&backfillEntries, 1)
@@ -1507,7 +1545,7 @@ func init() {
 	gob.Register([]interface{}{})
 }
 
-func sendEntry(broker *qclient.RequestBroker, si *secondaryIndex, pkey []byte, mskey []value.Value, uskey c.SecondaryKey, conn *datastore.IndexConnection) bool {
+func sendEntry(broker *qclient.RequestBroker, si *secondaryIndex, pkey []byte, value []value.Value, skey c.SecondaryKey, conn *datastore.IndexConnection) bool {
 
 	var start time.Time
 	blockedtm, blocked := int64(0), false
@@ -1515,10 +1553,14 @@ func sendEntry(broker *qclient.RequestBroker, si *secondaryIndex, pkey []byte, m
 	entryChannel := conn.EntryChannel()
 	stopChannel := conn.StopChannel()
 
+	if value == nil {
+		value = skey2Values(skey)
+	}
+
 	// Primary-key is mandatory.
 	e := &datastore.IndexEntry{
 		PrimaryKey: string(pkey),
-		EntryKey:   mskey}
+		EntryKey:   value}
 	cp, ln := cap(entryChannel), len(entryChannel)
 	if ln == cp {
 		start, blocked = time.Now(), true

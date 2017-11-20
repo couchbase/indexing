@@ -37,7 +37,8 @@ type Queue struct {
 	deqch    chan bool
 	donech   chan bool
 
-	totalCount int64
+	enqCount int64
+	deqCount int64
 }
 
 //
@@ -92,8 +93,6 @@ func (b *Queue) notifyDeq() {
 //
 func (b *Queue) Enqueue(key *Row) {
 
-	atomic.AddInt64(&b.totalCount, 1)
-
 	for {
 		count := atomic.LoadInt64(&b.count)
 
@@ -108,6 +107,8 @@ func (b *Queue) Enqueue(key *Row) {
 			if atomic.AddInt64(&b.count, 1) == b.limit || key.last {
 				b.notifyEnq()
 			}
+
+			atomic.AddInt64(&b.enqCount, 1)
 			return
 		}
 
@@ -139,6 +140,8 @@ func (b *Queue) Dequeue(row *Row) bool {
 			if atomic.AddInt64(&b.count, -1) == (b.size - 1) {
 				b.notifyDeq()
 			}
+
+			atomic.AddInt64(&b.deqCount, 1)
 			return true
 		}
 
@@ -178,9 +181,14 @@ func (b *Queue) Cap() int64 {
 	return b.size
 }
 
-func (b *Queue) TotalCount() int64 {
+func (b *Queue) EnqueueCount() int64 {
 
-	return b.totalCount
+	return b.enqCount
+}
+
+func (b *Queue) DequeueCount() int64 {
+
+	return b.deqCount
 }
 
 // Unblock all Enqueue and Dequeue calls

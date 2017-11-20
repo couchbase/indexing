@@ -17,7 +17,6 @@ import "net"
 import "time"
 import json "github.com/couchbase/indexing/secondary/common/json"
 import "sync/atomic"
-import "bytes"
 
 import "github.com/couchbase/indexing/secondary/logging"
 import "github.com/couchbase/indexing/secondary/common"
@@ -181,9 +180,16 @@ func (c *GsiScanClient) Lookup(
 		return err, false
 	}
 	healthy := true
-	defer func() { c.pool.Return(connectn, healthy) }()
-
+	closeStream := false
 	conn, pkt := connectn.conn, connectn.pkt
+	defer func() {
+		go func() {
+			if closeStream {
+				_, healthy = c.closeStream(conn, pkt, requestId)
+			}
+			c.pool.Return(connectn, healthy)
+		}()
+	}()
 
 	partnIds := make([]uint64, len(partitions))
 	for i, partnId := range partitions {
@@ -216,7 +222,7 @@ func (c *GsiScanClient) Lookup(
 	cont, partial := true, false
 	for cont {
 		// <--- protobuf.ResponseStream
-		cont, healthy, err = c.streamResponse(conn, pkt, callb, requestId)
+		cont, healthy, err, closeStream = c.streamResponse(conn, pkt, callb, requestId)
 		if err != nil { // if err, cont should have been set to false
 			fmsg := "%v Lookup(%s) response failed `%v`\n"
 			logging.Errorf(fmsg, c.logPrefix, requestId, err)
@@ -231,8 +237,7 @@ func (c *GsiScanClient) Lookup(
 func (c *GsiScanClient) Range(
 	defnID uint64, requestId string, low, high common.SecondaryKey, inclusion Inclusion,
 	distinct bool, limit int64, cons common.Consistency, vector *TsConsistency,
-	callb ResponseHandler, rollbackTime int64, partitions []common.PartitionId,
-	defn *common.IndexDefn, numPartitions uint32) (error, bool) {
+	callb ResponseHandler, rollbackTime int64, partitions []common.PartitionId) (error, bool) {
 
 	// serialize low and high values.
 	l, err := json.Marshal(low)
@@ -244,18 +249,21 @@ func (c *GsiScanClient) Range(
 		return err, false
 	}
 
-	if !inPartition(0, defn, l, h, partitions, numPartitions) {
-		return SkipPartitionError, false
-	}
-
 	connectn, err := c.pool.Get()
 	if err != nil {
 		return err, false
 	}
 	healthy := true
-	defer func() { c.pool.Return(connectn, healthy) }()
-
+	closeStream := false
 	conn, pkt := connectn.conn, connectn.pkt
+	defer func() {
+		go func() {
+			if closeStream {
+				_, healthy = c.closeStream(conn, pkt, requestId)
+			}
+			c.pool.Return(connectn, healthy)
+		}()
+	}()
 
 	partnIds := make([]uint64, len(partitions))
 	for i, partnId := range partitions {
@@ -291,7 +299,7 @@ func (c *GsiScanClient) Range(
 	cont, partial := true, false
 	for cont {
 		// <--- protobuf.ResponseStream
-		cont, healthy, err = c.streamResponse(conn, pkt, callb, requestId)
+		cont, healthy, err, closeStream = c.streamResponse(conn, pkt, callb, requestId)
 		if err != nil { // if err, cont should have been set to false
 			fmsg := "%v Range(%v) response failed `%v`\n"
 			logging.Errorf(fmsg, c.logPrefix, requestId, err)
@@ -313,9 +321,16 @@ func (c *GsiScanClient) RangePrimary(
 		return err, false
 	}
 	healthy := true
-	defer func() { c.pool.Return(connectn, healthy) }()
-
+	closeStream := false
 	conn, pkt := connectn.conn, connectn.pkt
+	defer func() {
+		go func() {
+			if closeStream {
+				_, healthy = c.closeStream(conn, pkt, requestId)
+			}
+			c.pool.Return(connectn, healthy)
+		}()
+	}()
 
 	partnIds := make([]uint64, len(partitions))
 	for i, partnId := range partitions {
@@ -352,7 +367,7 @@ func (c *GsiScanClient) RangePrimary(
 	cont, partial := true, false
 	for cont {
 		// <--- protobuf.ResponseStream
-		cont, healthy, err = c.streamResponse(conn, pkt, callb, requestId)
+		cont, healthy, err, closeStream = c.streamResponse(conn, pkt, callb, requestId)
 		if err != nil { // if err, cont should have been set to false
 			fmsg := "%v RangePrimary(%v) response failed `%v`\n"
 			logging.Errorf(fmsg, c.logPrefix, requestId, err)
@@ -374,9 +389,16 @@ func (c *GsiScanClient) ScanAll(
 		return err, false
 	}
 	healthy := true
-	defer func() { c.pool.Return(connectn, healthy) }()
-
+	closeStream := false
 	conn, pkt := connectn.conn, connectn.pkt
+	defer func() {
+		go func() {
+			if closeStream {
+				_, healthy = c.closeStream(conn, pkt, requestId)
+			}
+			c.pool.Return(connectn, healthy)
+		}()
+	}()
 
 	partnIds := make([]uint64, len(partitions))
 	for i, partnId := range partitions {
@@ -405,7 +427,7 @@ func (c *GsiScanClient) ScanAll(
 	cont, partial := true, false
 	for cont {
 		// <--- protobuf.ResponseStream
-		cont, healthy, err = c.streamResponse(conn, pkt, callb, requestId)
+		cont, healthy, err, closeStream = c.streamResponse(conn, pkt, callb, requestId)
 		if err != nil { // if err, cont should have been set to false
 			fmsg := "%v ScanAll(%v) response failed `%v`\n"
 			logging.Errorf(fmsg, c.logPrefix, requestId, err)
@@ -420,8 +442,7 @@ func (c *GsiScanClient) MultiScan(
 	defnID uint64, requestId string, scans Scans,
 	reverse, distinct bool, projection *IndexProjection, offset, limit int64,
 	cons common.Consistency, vector *TsConsistency,
-	callb ResponseHandler, rollbackTime int64, partitions []common.PartitionId,
-	index *common.IndexDefn, numPartitions uint32) (error, bool) {
+	callb ResponseHandler, rollbackTime int64, partitions []common.PartitionId) (error, bool) {
 
 	// serialize scans
 	protoScans := make([]*protobuf.Scan, len(scans))
@@ -439,10 +460,6 @@ func (c *GsiScanClient) MultiScan(
 						return err, false
 					}
 					equals[i] = s
-
-					if !inPartition(i, index, s, s, partitions, numPartitions) {
-						return SkipPartitionError, false
-					}
 				}
 			} else {
 				filters = make([]*protobuf.CompositeElementFilter, len(scan.Filter))
@@ -462,10 +479,6 @@ func (c *GsiScanClient) MultiScan(
 							if err != nil {
 								return err, false
 							}
-						}
-
-						if !inPartition(j, index, l, h, partitions, numPartitions) {
-							return SkipPartitionError, false
 						}
 
 						fl := &protobuf.CompositeElementFilter{
@@ -498,9 +511,16 @@ func (c *GsiScanClient) MultiScan(
 		return err, false
 	}
 	healthy := true
-	defer func() { c.pool.Return(connectn, healthy) }()
-
+	closeStream := false
 	conn, pkt := connectn.conn, connectn.pkt
+	defer func() {
+		go func() {
+			if closeStream {
+				_, healthy = c.closeStream(conn, pkt, requestId)
+			}
+			c.pool.Return(connectn, healthy)
+		}()
+	}()
 
 	partnIds := make([]uint64, len(partitions))
 	for i, partnId := range partitions {
@@ -538,7 +558,7 @@ func (c *GsiScanClient) MultiScan(
 	cont, partial := true, false
 	for cont {
 		// <--- protobuf.ResponseStream
-		cont, healthy, err = c.streamResponse(conn, pkt, callb, requestId)
+		cont, healthy, err, closeStream = c.streamResponse(conn, pkt, callb, requestId)
 		if err != nil { // if err, cont should have been set to false
 			fmsg := "%v Scans(%v) response failed `%v`\n"
 			logging.Errorf(fmsg, c.logPrefix, requestId, err)
@@ -624,9 +644,16 @@ func (c *GsiScanClient) MultiScanPrimary(
 		return err, false
 	}
 	healthy := true
-	defer func() { c.pool.Return(connectn, healthy) }()
-
+	closeStream := false
 	conn, pkt := connectn.conn, connectn.pkt
+	defer func() {
+		go func() {
+			if closeStream {
+				_, healthy = c.closeStream(conn, pkt, requestId)
+			}
+			c.pool.Return(connectn, healthy)
+		}()
+	}()
 
 	partnIds := make([]uint64, len(partitions))
 	for i, partnId := range partitions {
@@ -664,7 +691,7 @@ func (c *GsiScanClient) MultiScanPrimary(
 	cont, partial := true, false
 	for cont {
 		// <--- protobuf.ResponseStream
-		cont, healthy, err = c.streamResponse(conn, pkt, callb, requestId)
+		cont, healthy, err, closeStream = c.streamResponse(conn, pkt, callb, requestId)
 		if err != nil { // if err, cont should have been set to false
 			fmsg := "%v Scans(%v) response failed `%v`\n"
 			logging.Errorf(fmsg, c.logPrefix, requestId, err)
@@ -1032,8 +1059,7 @@ func (c *GsiScanClient) Scan3(
 	reverse, distinct bool, projection *IndexProjection, offset, limit int64,
 	groupAggr *GroupAggr,
 	cons common.Consistency, vector *TsConsistency,
-	callb ResponseHandler, rollbackTime int64, partitions []common.PartitionId,
-	index *common.IndexDefn, numPartitions uint32) (error, bool) {
+	callb ResponseHandler, rollbackTime int64, partitions []common.PartitionId) (error, bool) {
 
 	// serialize scans
 	protoScans := make([]*protobuf.Scan, len(scans))
@@ -1051,10 +1077,6 @@ func (c *GsiScanClient) Scan3(
 						return err, false
 					}
 					equals[i] = s
-
-					if !inPartition(i, index, s, s, partitions, numPartitions) {
-						return SkipPartitionError, false
-					}
 				}
 			} else {
 				filters = make([]*protobuf.CompositeElementFilter, len(scan.Filter))
@@ -1073,10 +1095,6 @@ func (c *GsiScanClient) Scan3(
 							if err != nil {
 								return err, false
 							}
-						}
-
-						if !inPartition(j, index, l, h, partitions, numPartitions) {
-							return SkipPartitionError, false
 						}
 
 						fl := &protobuf.CompositeElementFilter{
@@ -1147,9 +1165,16 @@ func (c *GsiScanClient) Scan3(
 		return err, false
 	}
 	healthy := true
-	defer func() { c.pool.Return(connectn, healthy) }()
-
+	closeStream := false
 	conn, pkt := connectn.conn, connectn.pkt
+	defer func() {
+		go func() {
+			if closeStream {
+				_, healthy = c.closeStream(conn, pkt, requestId)
+			}
+			c.pool.Return(connectn, healthy)
+		}()
+	}()
 
 	partnIds := make([]uint64, len(partitions))
 	for i, partnId := range partitions {
@@ -1188,7 +1213,7 @@ func (c *GsiScanClient) Scan3(
 	cont, partial := true, false
 	for cont {
 		// <--- protobuf.ResponseStream
-		cont, healthy, err = c.streamResponse(conn, pkt, callb, requestId)
+		cont, healthy, err, closeStream = c.streamResponse(conn, pkt, callb, requestId)
 		if err != nil { // if err, cont should have been set to false
 			fmsg := "%v Scans(%v) response failed `%v`\n"
 			logging.Errorf(fmsg, c.logPrefix, requestId, err)
@@ -1258,11 +1283,12 @@ func (c *GsiScanClient) sendRequest(
 func (c *GsiScanClient) streamResponse(
 	conn net.Conn,
 	pkt *transport.TransportPacket,
-	callb ResponseHandler, requestId string) (cont bool, healthy bool, err error) {
+	callb ResponseHandler, requestId string) (cont bool, healthy bool, err error, closeStream bool) {
 
 	var resp interface{}
 	var finish bool
 
+	closeStream = false
 	laddr := conn.LocalAddr()
 	c.trySetDeadline(conn, c.readDeadline)
 	if resp, err = pkt.Receive(conn); err != nil {
@@ -1294,12 +1320,8 @@ func (c *GsiScanClient) streamResponse(
 		healthy = true
 	}
 
-	var closeErr error
 	if cont == false && healthy == true && finish == false {
-		closeErr, healthy = c.closeStream(conn, pkt, requestId)
-		if err == nil {
-			err = closeErr
-		}
+		closeStream = true
 	}
 	return
 }
@@ -1349,43 +1371,4 @@ func (c *GsiScanClient) trySetDeadline(conn net.Conn, deadline time.Duration) {
 		timeoutMs := deadline * time.Millisecond
 		conn.SetReadDeadline(time.Now().Add(timeoutMs))
 	}
-}
-
-func inPartition(offset int, defn *common.IndexDefn, low, high []byte, partitions []common.PartitionId, numPartitions uint32) bool {
-
-	if defn.PartitionScheme != common.KEY {
-		return true
-	}
-
-	if offset != partitionKeyOffset(defn) {
-		return true
-	}
-
-	if bytes.Compare(low, high) != 0 {
-		return true
-	}
-
-	if len(low) == 0 && len(high) == 0 {
-		return true
-	}
-
-	partnId := common.HashKeyPartition(low, int(numPartitions))
-	for _, partn := range partitions {
-		if partn == partnId {
-			return true
-		}
-	}
-
-	return false
-}
-
-func partitionKeyOffset(defn *common.IndexDefn) int {
-
-	for i, secKey := range defn.SecExprs {
-		if secKey == defn.PartitionKey {
-			return i
-		}
-	}
-
-	return -1
 }
