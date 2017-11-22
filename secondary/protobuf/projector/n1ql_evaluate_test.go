@@ -5,6 +5,8 @@ import (
 	"compress/bzip2"
 	"encoding/json"
 	"github.com/couchbase/indexing/secondary/collatejson"
+	qexpr "github.com/couchbase/query/expression"
+	qvalue "github.com/couchbase/query/value"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -101,6 +103,24 @@ func TestN1QLTransform2000(t *testing.T) {
 	}
 }
 
+func TestInvalidDocs(t *testing.T) {
+	cExprs, err := CompileN1QLExpression([]string{`city`, `age`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	expr := cExprs[0].(qexpr.Expression)
+	context := qexpr.NewIndexContext()
+
+	jsons := [][]byte{
+		[]byte("nn"), []byte("10.ABCD"), []byte("[,,"), []byte("{:,"),
+	}
+	for _, json := range jsons {
+		docval := qvalue.NewAnnotatedValue(qvalue.NewParsedValue(json, true))
+		scalar, vector, err := expr.EvaluateForIndex(docval, context)
+		t.Logf("scalar:%v vector:%v error:%v", scalar, vector, err)
+	}
+}
+
 func BenchmarkCompileN1QLExpression(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		CompileN1QLExpression([]string{`age`})
@@ -120,6 +140,18 @@ func BenchmarkN1QLTransform2000(b *testing.B) {
 	meta := make(map[string]interface{})
 	for i := 0; i < b.N; i++ {
 		N1QLTransform([]byte("docid"), doc2000, cExprs, meta, buf)
+	}
+}
+
+func BenchmarkAnnotatedValue(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		qvalue.NewAnnotatedValue(doc2000)
+	}
+}
+
+func BenchmarkParsedValue(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		qvalue.NewAnnotatedValue(qvalue.NewParsedValue(doc2000, true))
 	}
 }
 
