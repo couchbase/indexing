@@ -84,6 +84,29 @@ type IndexProjection struct {
 	PrimaryKey bool
 }
 
+//Groupby/Aggregate
+type GroupKey struct {
+	EntryKeyId int32  // Id that can be used in IndexProjection
+	KeyPos     int32  // >=0 means use expr at index key position otherwise use Expr
+	Expr       string // group expression
+}
+
+type Aggregate struct {
+	AggrFunc   common.AggrFuncType // Aggregate operation
+	EntryKeyId int32               // Id that can be used in IndexProjection
+	KeyPos     int32               // >=0 means use expr at index key position otherwise use Expr
+	Expr       string              // Aggregate expression
+	Distinct   bool                // Aggregate only on Distinct values with in the group
+}
+
+type GroupAggr struct {
+	Name                string       // name of the index aggregate
+	Group               []*GroupKey  // group keys, nil means no group by
+	Aggrs               []*Aggregate // aggregates with in the group, nil means no aggregates
+	DependsOnIndexKeys  []int32      // GROUP and Aggregates Depends on List of index keys positions
+	DependsOnPrimaryKey bool         // GROUP and Aggregates Depends on primary key
+}
+
 const (
 	// Neither does not include low-key and high-key
 	Neither Inclusion = iota
@@ -283,6 +306,22 @@ type GsiAccessor interface {
 		scans Scans, distinct bool,
 		cons common.Consistency, vector *TsConsistency,
 		broker *RequestBroker) (int64, error)
+
+	// Scan API3 with grouping and aggregates support
+	Scan3(
+		defnID uint64, requestId string, scans Scans,
+		reverse, distinct bool, projection *IndexProjection, offset, limit int64,
+		groupAggr *GroupAggr,
+		cons common.Consistency, vector *TsConsistency,
+		callb ResponseHandler) error
+
+	// Scan API3 with grouping and aggregates support
+	Scan3Internal(
+		defnID uint64, requestId string, scans Scans,
+		reverse, distinct bool, projection *IndexProjection, offset, limit int64,
+		groupAggr *GroupAggr,
+		cons common.Consistency, vector *TsConsistency,
+		broker *RequestBroker) error
 }
 
 var useMetadataProvider = true
@@ -932,6 +971,70 @@ func (c *GsiClient) MultiScanCountInternal(
 	fmsg := "MultiScanCount {%v,%v} - elapsed(%v) err(%v)"
 	logging.Verbosef(fmsg, defnID, requestId, time.Since(begin), err)
 	return count, err
+}
+
+func (c *GsiClient) Scan3(
+	defnID uint64, requestId string, scans Scans, reverse,
+	distinct bool, projection *IndexProjection, offset, limit int64,
+	groupAggr *GroupAggr,
+	cons common.Consistency, vector *TsConsistency,
+	callb ResponseHandler) (err error) {
+
+	broker := makeDefaultRequestBroker(callb)
+	return c.Scan3Internal(defnID, requestId, scans, reverse, distinct,
+		projection, offset, limit, groupAggr, cons, vector, broker)
+}
+
+func (c *GsiClient) Scan3Internal(
+	defnID uint64, requestId string, scans Scans, reverse,
+	distinct bool, projection *IndexProjection, offset, limit int64,
+	groupAggr *GroupAggr,
+	cons common.Consistency, vector *TsConsistency,
+	broker *RequestBroker) (err error) {
+
+	if c.bridge == nil {
+		return ErrorClientUninitialized
+	}
+
+	// check whether the index is present and available.
+	if _, err = c.bridge.IndexState(defnID); err != nil {
+		return err
+	}
+
+	begin := time.Now()
+
+	handler := func(qc *GsiScanClient, index *common.IndexDefn, rollbackTime int64, partitions []common.PartitionId,
+		numPartitions uint32, handler ResponseHandler) (error, bool) {
+		var err error
+
+		vector, err = c.getConsistency(qc, cons, vector, index.Bucket)
+		if err != nil {
+			return err, false
+		}
+
+		if c.bridge.IsPrimary(uint64(index.DefnId)) {
+			return qc.MultiScanPrimary(
+				uint64(index.DefnId), requestId, scans, reverse, distinct,
+				projection, offset, limit, cons, vector, handler, rollbackTime, partitions)
+		}
+
+		return qc.Scan3(
+			uint64(index.DefnId), requestId, scans, reverse, distinct,
+			projection, offset, limit, groupAggr, cons, vector, handler, rollbackTime, partitions,
+			index, numPartitions)
+	}
+
+	broker.SetScanRequestHandler(handler)
+
+	_, err = c.doScan(defnID, requestId, broker)
+	if err != nil { // callback with error
+		broker.Close()
+		return err
+	}
+
+	fmsg := "Scan3 {%v,%v} - elapsed(%v) err(%v)"
+	logging.Verbosef(fmsg, defnID, requestId, time.Since(begin), err)
+	return
 }
 
 // DescribeError return error description as human readable string.

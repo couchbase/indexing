@@ -989,6 +989,87 @@ func (si *secondaryIndex2) Alter(requestId string, with value.Value) (
 	return datastore.Index(si), nil
 }
 
+//--------------------
+// datastore.AlterIndex{} End
+//--------------------
+
+//-------------------------------------
+// datastore API3 implementation
+//-------------------------------------
+
+type secondaryIndex3 struct {
+	secondaryIndex2
+}
+
+// CreateAggregate implement Index3 interface.
+func (si *secondaryIndex3) CreateAggregate(requestId string, groupAggs *datastore.IndexGroupAggregates,
+	with value.Value) errors.Error {
+	return errors.NewError(fmt.Errorf("Create Aggregate not supported"), "")
+}
+
+func (si *secondaryIndex3) DropAggregate(requestId, name string) errors.Error {
+	return errors.NewError(fmt.Errorf("Drops Aggregate not supported"), "")
+}
+
+func (si *secondaryIndex3) Aggregates() ([]datastore.IndexGroupAggregates, errors.Error) {
+	return nil, errors.NewError(fmt.Errorf("Precomputed Aggregates not supported"), "")
+}
+
+// Scan3 implement Index3 interface.
+func (si *secondaryIndex3) Scan3(
+	requestId string, spans datastore.Spans2, reverse, distinctAfterProjection, ordered bool,
+	projection *datastore.IndexProjection, offset, limit int64,
+	groupAggs *datastore.IndexGroupAggregates,
+	cons datastore.ScanConsistency, vector timestamp.Vector,
+	conn *datastore.IndexConnection) {
+
+	entryChannel := conn.EntryChannel()
+	var backfillSync int64
+	var waitGroup sync.WaitGroup
+	var broker *qclient.RequestBroker
+
+	defer close(entryChannel)
+	defer func() {
+		if broker != nil {
+			l.Verbosef("scan3: scan request %v closing entryChannel.  Receive Count %v Sent Count %v",
+				requestId, broker.ReceiveCount(), broker.SendCount())
+		}
+	}()
+	defer func() { // cleanup tmpfile
+		waitGroup.Wait()
+	}()
+	defer func() {
+		atomic.StoreInt64(&backfillSync, DONEREQUEST)
+	}()
+
+	starttm := time.Now()
+
+	client, cnf := si.gsi.gsiClient, si.gsi.config
+
+	gsiscans := n1qlspanstogsi(spans)
+	gsiprojection := n1qlprojectiontogsi(projection)
+	gsigroupaggr := n1qlgroupaggrtogsi(groupAggs)
+	broker = makeRequestBroker(requestId, &si.secondaryIndex, client, conn, cnf, &waitGroup, &backfillSync, cap(entryChannel))
+	err := client.Scan3Internal(
+		si.defnID, requestId, gsiscans, reverse, distinctAfterProjection,
+		gsiprojection, offset, limit, gsigroupaggr,
+		n1ql2GsiConsistency[cons], vector2ts(vector),
+		broker)
+	if err != nil {
+		conn.Error(n1qlError(client, err))
+	}
+
+	atomic.AddInt64(&si.gsi.totalscans, 1)
+	atomic.AddInt64(&si.gsi.scandur, int64(time.Since(starttm)))
+
+	l.Verbosef("scan3: scan request %v done.  Receive Count %v Sent Count %v NumIndexers %v err %v",
+		requestId, broker.ReceiveCount(), broker.SendCount(), broker.NumIndexers(), err)
+}
+
+//-------------------------------------
+// datastore API3 implementation end
+//-------------------------------------
+
 //-------------------------------------
 // private functions for secondaryIndex
 //-------------------------------------
@@ -1585,4 +1666,75 @@ func n1qlprojectiontogsi(projection *datastore.IndexProjection) *qclient.IndexPr
 		PrimaryKey: projection.PrimaryKey,
 	}
 	return proj
+}
+
+func n1qlgroupaggrtogsi(groupAggs *datastore.IndexGroupAggregates) *qclient.GroupAggr {
+	if groupAggs == nil {
+		return nil
+	}
+
+	//Group
+	var groups []*qclient.GroupKey
+	if groupAggs.Group != nil {
+		groups = make([]*qclient.GroupKey, len(groupAggs.Group))
+		for i, grp := range groupAggs.Group {
+			g := &qclient.GroupKey{
+				EntryKeyId: int32(grp.EntryKeyId),
+				KeyPos:     int32(grp.KeyPos),
+				Expr:       expression.NewStringer().Visit(grp.Expr),
+			}
+			groups[i] = g
+		}
+	}
+
+	//Aggrs
+	var aggregates []*qclient.Aggregate
+	if groupAggs.Aggregates != nil {
+		aggregates = make([]*qclient.Aggregate, len(groupAggs.Aggregates))
+		for i, aggr := range groupAggs.Aggregates {
+			a := &qclient.Aggregate{
+				AggrFunc:   n1qlaggrtypetogsi(aggr.Operation),
+				EntryKeyId: int32(aggr.EntryKeyId),
+				KeyPos:     int32(aggr.KeyPos),
+				Expr:       expression.NewStringer().Visit(aggr.Expr),
+				Distinct:   aggr.Distinct,
+			}
+			aggregates[i] = a
+		}
+	}
+
+	var dependsOnIndexKeys []int32
+	if groupAggs.DependsOnIndexKeys != nil {
+		dependsOnIndexKeys = make([]int32, len(groupAggs.DependsOnIndexKeys))
+		for i, ikey := range groupAggs.DependsOnIndexKeys {
+			dependsOnIndexKeys[i] = int32(ikey)
+		}
+	}
+
+	ga := &qclient.GroupAggr{
+		Name:                groupAggs.Name,
+		Group:               groups,
+		Aggrs:               aggregates,
+		DependsOnIndexKeys:  dependsOnIndexKeys,
+		DependsOnPrimaryKey: groupAggs.DependsOnPrimaryKey,
+	}
+
+	return ga
+}
+
+func n1qlaggrtypetogsi(aggrType datastore.AggregateType) c.AggrFuncType {
+	switch aggrType {
+	case datastore.AGG_MIN:
+		return c.AGG_MIN
+	case datastore.AGG_MAX:
+		return c.AGG_MAX
+	case datastore.AGG_SUM:
+		return c.AGG_SUM
+	case datastore.AGG_COUNT:
+		return c.AGG_COUNT
+	case datastore.AGG_COUNTN:
+		return c.AGG_COUNTN
+	default:
+		return c.AGG_INVALID
+	}
 }
