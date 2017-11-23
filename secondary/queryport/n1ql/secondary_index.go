@@ -1712,11 +1712,10 @@ func n1qlgroupaggrtogsi(groupAggs *datastore.IndexGroupAggregates) *qclient.Grou
 	}
 
 	ga := &qclient.GroupAggr{
-		Name:                groupAggs.Name,
-		Group:               groups,
-		Aggrs:               aggregates,
-		DependsOnIndexKeys:  dependsOnIndexKeys,
-		DependsOnPrimaryKey: groupAggs.DependsOnPrimaryKey,
+		Name:               groupAggs.Name,
+		Group:              groups,
+		Aggrs:              aggregates,
+		DependsOnIndexKeys: dependsOnIndexKeys,
 	}
 
 	return ga
