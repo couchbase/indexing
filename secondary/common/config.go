@@ -702,7 +702,13 @@ var SystemConfig = Config{
 		true,  // immutable
 		false, // case-insensitive
 	},
-
+	"indexer.isIPv6": ConfigValue{
+		false,
+		"is cluster in IPv6 mode",
+		false,
+		true,  // immutable
+		false, // case-insensitive
+	},
 	"indexer.streamInitPort": ConfigValue{
 		"9103",
 		"port for inital build stream",

@@ -54,6 +54,7 @@ type Pools struct {
 	IsAdmin               bool              `json:"isAdminCreds"`
 	UUID                  string            `json:"uuid"`
 	Pools                 []RestPool        `json:"pools"`
+	IsIPv6                bool              `json:"isIPv6,omitempty"`
 }
 
 // A Node is a computer in a cluster running the couchbase software.
