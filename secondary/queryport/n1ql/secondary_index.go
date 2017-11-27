@@ -1124,7 +1124,7 @@ func makeResponsehandler(
 
 	var tmpfile *os.File
 
-	backfillLimit := int64(client.Settings().BackfillLimit())
+	backfillLimit := si.gsi.getTmpSpaceLimit()
 	primed, starttm, ticktm := false, time.Now(), time.Now()
 	lprefix := si.gsi.logPrefix
 
@@ -1246,7 +1246,7 @@ func makeResponsehandler(
 
 		if backfillLimit > 0 && tmpfile == nil && ((cp - ln) < len(skeys)) {
 			prefix := BACKFILLPREFIX + strconv.Itoa(os.Getpid())
-			tmpfile, err = ioutil.TempFile(n1ql_backfill_temp_dir, prefix)
+			tmpfile, err = ioutil.TempFile(si.gsi.getTmpSpaceDir(), prefix)
 			name := ""
 			if tmpfile != nil {
 				name = tmpfile.Name()
@@ -1501,39 +1501,10 @@ func getSingletonClient(
 	return singletonClient, nil
 }
 
-var n1ql_backfill_temp_dir string
-
 func init() {
 	// register gob objects for complex composite keys.
 	gob.Register(map[string]interface{}{})
 	gob.Register([]interface{}{})
-
-	file, err := ioutil.TempFile("" /*dir*/, BACKFILLPREFIX)
-	if err != nil {
-		return
-	}
-
-	n1ql_backfill_temp_dir = path.Dir(file.Name())
-	os.Remove(file.Name()) // remove this file.
-
-	files, err := ioutil.ReadDir(n1ql_backfill_temp_dir)
-	if err != nil {
-		return
-	}
-
-	conf, _ := c.GetSettingsConfig(c.SystemConfig)
-	scantm := conf["indexer.settings.scan_timeout"].Int() // in ms.
-
-	for _, file := range files {
-		fname := path.Join(n1ql_backfill_temp_dir, file.Name())
-		mtime := file.ModTime()
-		since := (time.Since(mtime).Seconds() * 1000) * 2 // twice the lng scan
-		if (strings.Contains(fname, "scan-backfill") || strings.Contains(fname, BACKFILLPREFIX)) && int(since) > scantm {
-			fmsg := "GSI client: removing old file %v last-modified @ %v"
-			l.Infof(fmsg, fname, mtime)
-			os.Remove(fname)
-		}
-	}
 }
 
 func sendEntry(broker *qclient.RequestBroker, si *secondaryIndex, pkey []byte, mskey []value.Value, uskey c.SecondaryKey, conn *datastore.IndexConnection) bool {
@@ -1604,6 +1575,7 @@ func (gsi *gsiKeyspace) backfillMonitor(period time.Duration) {
 
 	for {
 		<-tick.C
+		n1ql_backfill_temp_dir := gsi.getTmpSpaceDir()
 		files, err := ioutil.ReadDir(n1ql_backfill_temp_dir)
 		if err != nil {
 			return
@@ -1746,3 +1718,200 @@ func n1qlaggrtypetogsi(aggrType datastore.AggregateType) c.AggrFuncType {
 		return c.AGG_INVALID
 	}
 }
+
+//-------------------------------------
+// IndexConfig Implementation
+//-------------------------------------
+
+const gConfigKeyTmpSpaceDir = "query_tmpspace_dir"
+const gConfigKeyTmpSpaceLimit = "query_tmpspace_limit"
+
+var gIndexConfig indexConfig
+
+type indexConfig struct {
+	config atomic.Value
+}
+
+func GetIndexConfig() (datastore.IndexConfig, errors.Error) {
+	return &gIndexConfig, nil
+}
+
+func (c *indexConfig) SetConfig(conf map[string]interface{}) errors.Error {
+	err := c.validateConfig(conf)
+	if err != nil {
+		return err
+	}
+
+	c.processConfig(conf)
+
+	//make local copy so caller caller doesn't accidently modify
+	localconf := make(map[string]interface{})
+	for k, v := range conf {
+		localconf[k] = v
+	}
+
+	l.Infof("GSIC - Setting config %v", conf)
+	c.config.Store(localconf)
+	return nil
+}
+
+//SetParam should not be called concurrently with SetConfig
+func (c *indexConfig) SetParam(name string, val interface{}) errors.Error {
+
+	conf := c.config.Load().(map[string]interface{})
+
+	if conf != nil {
+		tempconf := make(map[string]interface{})
+		tempconf[name] = val
+		err := c.validateConfig(tempconf)
+		if err != nil {
+			return err
+		}
+		c.processConfig(tempconf)
+		l.Infof("GSIC - Setting param %v %v", name, val)
+		conf[name] = val
+	} else {
+		conf = make(map[string]interface{})
+		conf[name] = val
+		return c.SetConfig(conf)
+	}
+	return nil
+}
+
+func (c *indexConfig) validateConfig(conf map[string]interface{}) errors.Error {
+
+	if conf == nil {
+		return nil
+	}
+
+	if v, ok := conf[gConfigKeyTmpSpaceDir]; ok {
+		if _, ok1 := v.(string); !ok1 {
+			err := fmt.Errorf("GSI Invalid Config Key %v Value %v", gConfigKeyTmpSpaceDir, v)
+			l.Errorf(err.Error())
+			return errors.NewError(err, err.Error())
+		}
+	}
+
+	if v, ok := conf[gConfigKeyTmpSpaceLimit]; ok {
+		if _, ok1 := v.(int64); !ok1 {
+			err := fmt.Errorf("GSI Invalid Config Key %v Value %v", gConfigKeyTmpSpaceLimit, v)
+			l.Errorf(err.Error())
+			return errors.NewError(err, err.Error())
+		}
+	}
+
+	return nil
+}
+
+func (c *indexConfig) processConfig(conf map[string]interface{}) {
+
+	var olddir interface{}
+	var newdir interface{}
+
+	if conf != nil {
+		newdir, _ = conf[gConfigKeyTmpSpaceDir]
+	}
+
+	prevconf := gIndexConfig.getConfig()
+
+	if prevconf != nil {
+		olddir, _ = prevconf[gConfigKeyTmpSpaceDir]
+	}
+
+	if olddir == nil {
+		olddir = getDefaultTmpDir()
+	}
+
+	//cleanup any stale files
+	if olddir != newdir {
+		cleanupTmpFiles(olddir.(string))
+		if newdir != nil {
+			cleanupTmpFiles(newdir.(string))
+		}
+	}
+
+	return
+
+}
+
+//best effort cleanup as tmpdir may change during restart
+func cleanupTmpFiles(olddir string) {
+
+	files, err := ioutil.ReadDir(olddir)
+	if err != nil {
+		return
+	}
+
+	conf, _ := c.GetSettingsConfig(c.SystemConfig)
+	scantm := conf["indexer.settings.scan_timeout"].Int() // in ms.
+
+	for _, file := range files {
+		fname := path.Join(olddir, file.Name())
+		mtime := file.ModTime()
+		since := (time.Since(mtime).Seconds() * 1000) * 2 // twice the lng scan
+		if (strings.Contains(fname, "scan-backfill") || strings.Contains(fname, BACKFILLPREFIX)) && int(since) > scantm {
+			fmsg := "GSI client: removing old file %v last-modified @ %v"
+			l.Infof(fmsg, fname, mtime)
+			os.Remove(fname)
+		}
+	}
+
+}
+
+func (c *indexConfig) getConfig() map[string]interface{} {
+
+	conf := c.config.Load()
+	if conf != nil {
+		return conf.(map[string]interface{})
+	} else {
+		return nil
+	}
+
+}
+
+func (gsi *gsiKeyspace) getTmpSpaceDir() string {
+
+	conf := gIndexConfig.getConfig()
+
+	if conf == nil {
+		return getDefaultTmpDir()
+	}
+
+	if v, ok := conf[gConfigKeyTmpSpaceDir]; ok {
+		return v.(string)
+	} else {
+		return getDefaultTmpDir()
+	}
+
+}
+
+func (gsi *gsiKeyspace) getTmpSpaceLimit() int64 {
+
+	conf := gIndexConfig.getConfig()
+
+	if conf == nil {
+		return int64(gsi.gsiClient.Settings().BackfillLimit())
+	}
+
+	if v, ok := conf[gConfigKeyTmpSpaceLimit]; ok {
+		return v.(int64)
+	} else {
+		return int64(gsi.gsiClient.Settings().BackfillLimit())
+	}
+
+}
+func getDefaultTmpDir() string {
+	file, err := ioutil.TempFile("" /*dir*/, BACKFILLPREFIX)
+	if err != nil {
+		return ""
+	}
+
+	default_temp_dir := path.Dir(file.Name())
+	os.Remove(file.Name()) // remove this file.
+
+	return default_temp_dir
+}
+
+//-------------------------------------
+// IndexConfig Implementation End
+//-------------------------------------
