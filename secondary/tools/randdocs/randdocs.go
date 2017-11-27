@@ -2,6 +2,7 @@ package randdocs
 
 import "crypto/rand"
 import rnd "math/rand"
+import "crypto/md5"
 import "fmt"
 import "sync"
 import "runtime"
@@ -18,6 +19,9 @@ type Config struct {
 	Iterations    int
 	Threads       int
 	DocNumOffset  int
+
+	// Use 16 byte random docid
+	UseRandDocID bool
 }
 
 func randString(n int) string {
@@ -46,8 +50,12 @@ func Run(cfg Config) error {
 			go func(offset int) {
 				defer wg.Done()
 				for i := 0; i < cfg.NumDocs/cfg.Threads; i++ {
-
 					docid := fmt.Sprintf("doc-%0*d", cfg.DocIdLen, i+offset+cfg.DocNumOffset)
+					if cfg.UseRandDocID {
+						key := md5.Sum([]byte(docid))
+						docid = string(key[:])
+					}
+
 					value := make(map[string]interface{})
 					value["field"] = randString(cfg.FieldSize)
 					if cfg.JunkFieldSize != 0 {
