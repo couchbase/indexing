@@ -266,6 +266,70 @@ func N1QLMultiScanCount(indexName, bucketName, server string, scans qc.Scans, di
 	return count, err
 }
 
+func N1QLScan3(indexName, bucketName, server string, scans qc.Scans, reverse, distinct bool,
+	projection *qc.IndexProjection, offset, limit int64, groupAggr *qc.GroupAggr,
+	consistency c.Consistency, vector *qc.TsConsistency) (tc.ScanResponse, error) {
+
+	//TODO fix the interface change
+	/*
+		client, err := nclient.NewGSIIndexer(server, "default", bucketName)
+		if err != nil {
+			return nil, err
+		}
+		conn, err := datastore.NewSizedIndexConnection(100000, &testContext{})
+		if err != nil {
+			log.Fatalf("error creating SizedIndexConnection: %v\n", err)
+		}
+		requestid := getrequestid()
+		index, err := client.IndexByName(indexName)
+
+		var err1 error
+		index, err1 = WaitForIndexOnline(client, indexName, index)
+		if err1 != nil {
+			return nil, err1
+		}
+
+		index3, useScan3 := index.(datastore.Index3)
+		if err != nil {
+			return nil, err
+		}
+
+		var start time.Time
+		go func() {
+			spans2 := make(datastore.Spans2, len(scans))
+			for i, scan := range scans {
+				spans2[i] = &datastore.Span2{}
+				if len(scan.Seek) != 0 {
+					spans2[i].Seek = skey2qkey(scan.Seek)
+				}
+				spans2[i].Ranges = filtertoranges2(scan.Filter)
+			}
+
+			proj := projectionton1ql(projection)
+			groupAggregates := groupAggrton1ql(groupAggr)
+
+			cons := getConsistency(consistency)
+			ordered := true
+
+			if useScan3 {
+				start = time.Now()
+				// TODO: pass the vector instead of nil.
+				// Currently go tests do not pass timestamp vector
+				index3.Scan3(requestid, spans2, reverse, distinct, ordered, proj,
+					offset, limit, groupAggregates, cons, nil, conn)
+			} else {
+				log.Fatalf("Indexer does not support Index3 API. Cannot call Scan3 method.")
+			}
+		}()
+
+		results := getresultsfromchannel(conn.EntryChannel(), index.IsPrimary())
+		elapsed := time.Since(start)
+		tc.LogPerfStat("MultiScan", elapsed)
+		return results, nil
+	*/
+	return nil, nil
+}
+
 func filtertoranges2(filters []*qc.CompositeElementFilter) datastore.Ranges2 {
 	if filters == nil || len(filters) == 0 {
 		return nil
@@ -279,6 +343,61 @@ func filtertoranges2(filters []*qc.CompositeElementFilter) datastore.Ranges2 {
 	}
 
 	return ranges2
+}
+
+func groupAggrton1ql(groupAggs *qc.GroupAggr) *datastore.IndexGroupAggregates {
+	if groupAggs == nil {
+		return nil
+	}
+
+	//Group
+	var groups datastore.IndexGroupKeys
+	if groupAggs.Group != nil {
+		groups = make(datastore.IndexGroupKeys, len(groupAggs.Group))
+		for i, grp := range groupAggs.Group {
+			expr, _ := parser.Parse(grp.Expr)
+			g := &datastore.IndexGroupKey{
+				EntryKeyId: int(grp.EntryKeyId),
+				KeyPos:     int(grp.KeyPos),
+				Expr:       expr,
+			}
+			groups[i] = g
+		}
+	}
+
+	//Aggrs
+	var aggregates datastore.IndexAggregates
+	if groupAggs.Aggrs != nil {
+		aggregates = make(datastore.IndexAggregates, len(groupAggs.Aggrs))
+		for i, aggr := range groupAggs.Aggrs {
+			expr, _ := parser.Parse(aggr.Expr)
+			a := &datastore.IndexAggregate{
+				Operation:  gsiaggrtypeton1ql(aggr.AggrFunc),
+				EntryKeyId: int(aggr.EntryKeyId),
+				KeyPos:     int(aggr.KeyPos),
+				Expr:       expr,
+				Distinct:   aggr.Distinct,
+			}
+			aggregates[i] = a
+		}
+	}
+
+	var dependsOnIndexKeys []int
+	if groupAggs.DependsOnIndexKeys != nil {
+		dependsOnIndexKeys = make([]int, len(groupAggs.DependsOnIndexKeys))
+		for i, ikey := range groupAggs.DependsOnIndexKeys {
+			dependsOnIndexKeys[i] = int(ikey)
+		}
+	}
+
+	ga := &datastore.IndexGroupAggregates{
+		Name:               groupAggs.Name,
+		Group:              groups,
+		Aggregates:         aggregates,
+		DependsOnIndexKeys: dependsOnIndexKeys,
+	}
+
+	return ga
 }
 
 func projectionton1ql(projection *qc.IndexProjection) *datastore.IndexProjection {
@@ -360,6 +479,22 @@ func values2SKey(vals value.Values) c.SecondaryKey {
 		skey = append(skey, val.ActualForIndex())
 	}
 	return skey
+}
+
+func gsiaggrtypeton1ql(gsiaggr c.AggrFuncType) datastore.AggregateType {
+	switch gsiaggr {
+	case c.AGG_MIN:
+		return datastore.AGG_MIN
+	case c.AGG_MAX:
+		return datastore.AGG_MAX
+	case c.AGG_SUM:
+		return datastore.AGG_SUM
+	case c.AGG_COUNT:
+		return datastore.AGG_COUNT
+	case c.AGG_COUNTN:
+		return datastore.AGG_COUNTN
+	}
+	return datastore.AGG_COUNT
 }
 
 type testContext struct{}

@@ -30,6 +30,9 @@ It has these top-level messages:
 	IndexProjection
 	IndexEntry
 	IndexStatistics
+	GroupKey
+	Aggregate
+	GroupAggr
 */
 package protobuf
 
@@ -311,6 +314,8 @@ type ScanRequest struct {
 	Reverse          *bool            `protobuf:"varint,10,opt,name=reverse" json:"reverse,omitempty"`
 	Offset           *int64           `protobuf:"varint,11,opt,name=offset" json:"offset,omitempty"`
 	RollbackTime     *int64           `protobuf:"varint,12,opt,name=rollbackTime" json:"rollbackTime,omitempty"`
+	PartitionIds     []uint64         `protobuf:"varint,13,rep,name=partitionIds" json:"partitionIds,omitempty"`
+	GroupAggr        *GroupAggr       `protobuf:"bytes,14,opt,name=groupAggr" json:"groupAggr,omitempty"`
 	XXX_unrecognized []byte           `json:"-"`
 }
 
@@ -402,6 +407,20 @@ func (m *ScanRequest) GetRollbackTime() int64 {
 	return 0
 }
 
+func (m *ScanRequest) GetPartitionIds() []uint64 {
+	if m != nil {
+		return m.PartitionIds
+	}
+	return nil
+}
+
+func (m *ScanRequest) GetGroupAggr() *GroupAggr {
+	if m != nil {
+		return m.GroupAggr
+	}
+	return nil
+}
+
 // Full table scan request from indexer.
 type ScanAllRequest struct {
 	DefnID           *uint64        `protobuf:"varint,1,req,name=defnID" json:"defnID,omitempty"`
@@ -410,6 +429,7 @@ type ScanAllRequest struct {
 	Vector           *TsConsistency `protobuf:"bytes,4,opt,name=vector" json:"vector,omitempty"`
 	RequestId        *string        `protobuf:"bytes,5,opt,name=requestId" json:"requestId,omitempty"`
 	RollbackTime     *int64         `protobuf:"varint,6,opt,name=rollbackTime" json:"rollbackTime,omitempty"`
+	PartitionIds     []uint64       `protobuf:"varint,7,rep,name=partitionIds" json:"partitionIds,omitempty"`
 	XXX_unrecognized []byte         `json:"-"`
 }
 
@@ -457,6 +477,13 @@ func (m *ScanAllRequest) GetRollbackTime() int64 {
 		return *m.RollbackTime
 	}
 	return 0
+}
+
+func (m *ScanAllRequest) GetPartitionIds() []uint64 {
+	if m != nil {
+		return m.PartitionIds
+	}
+	return nil
 }
 
 // Request by client to stop streaming the query results.
@@ -519,6 +546,7 @@ type CountRequest struct {
 	Distinct         *bool          `protobuf:"varint,6,opt,name=distinct" json:"distinct,omitempty"`
 	Scans            []*Scan        `protobuf:"bytes,7,rep,name=scans" json:"scans,omitempty"`
 	RollbackTime     *int64         `protobuf:"varint,8,opt,name=rollbackTime" json:"rollbackTime,omitempty"`
+	PartitionIds     []uint64       `protobuf:"varint,9,rep,name=partitionIds" json:"partitionIds,omitempty"`
 	XXX_unrecognized []byte         `json:"-"`
 }
 
@@ -580,6 +608,13 @@ func (m *CountRequest) GetRollbackTime() int64 {
 		return *m.RollbackTime
 	}
 	return 0
+}
+
+func (m *CountRequest) GetPartitionIds() []uint64 {
+	if m != nil {
+		return m.PartitionIds
+	}
+	return nil
 }
 
 // total number of entries in index.
@@ -806,6 +841,134 @@ func (m *IndexStatistics) GetKeyMax() []byte {
 		return m.KeyMax
 	}
 	return nil
+}
+
+type GroupKey struct {
+	EntryKeyId       *int32 `protobuf:"varint,1,opt,name=entryKeyId" json:"entryKeyId,omitempty"`
+	KeyPos           *int32 `protobuf:"varint,2,req,name=keyPos" json:"keyPos,omitempty"`
+	Expr             []byte `protobuf:"bytes,3,opt,name=expr" json:"expr,omitempty"`
+	XXX_unrecognized []byte `json:"-"`
+}
+
+func (m *GroupKey) Reset()         { *m = GroupKey{} }
+func (m *GroupKey) String() string { return proto.CompactTextString(m) }
+func (*GroupKey) ProtoMessage()    {}
+
+func (m *GroupKey) GetEntryKeyId() int32 {
+	if m != nil && m.EntryKeyId != nil {
+		return *m.EntryKeyId
+	}
+	return 0
+}
+
+func (m *GroupKey) GetKeyPos() int32 {
+	if m != nil && m.KeyPos != nil {
+		return *m.KeyPos
+	}
+	return 0
+}
+
+func (m *GroupKey) GetExpr() []byte {
+	if m != nil {
+		return m.Expr
+	}
+	return nil
+}
+
+type Aggregate struct {
+	AggrFunc         *uint32 `protobuf:"varint,1,req,name=aggrFunc" json:"aggrFunc,omitempty"`
+	EntryKeyId       *int32  `protobuf:"varint,2,opt,name=entryKeyId" json:"entryKeyId,omitempty"`
+	KeyPos           *int32  `protobuf:"varint,3,req,name=keyPos" json:"keyPos,omitempty"`
+	Expr             []byte  `protobuf:"bytes,4,opt,name=expr" json:"expr,omitempty"`
+	Distinct         *bool   `protobuf:"varint,5,opt,name=distinct" json:"distinct,omitempty"`
+	XXX_unrecognized []byte  `json:"-"`
+}
+
+func (m *Aggregate) Reset()         { *m = Aggregate{} }
+func (m *Aggregate) String() string { return proto.CompactTextString(m) }
+func (*Aggregate) ProtoMessage()    {}
+
+func (m *Aggregate) GetAggrFunc() uint32 {
+	if m != nil && m.AggrFunc != nil {
+		return *m.AggrFunc
+	}
+	return 0
+}
+
+func (m *Aggregate) GetEntryKeyId() int32 {
+	if m != nil && m.EntryKeyId != nil {
+		return *m.EntryKeyId
+	}
+	return 0
+}
+
+func (m *Aggregate) GetKeyPos() int32 {
+	if m != nil && m.KeyPos != nil {
+		return *m.KeyPos
+	}
+	return 0
+}
+
+func (m *Aggregate) GetExpr() []byte {
+	if m != nil {
+		return m.Expr
+	}
+	return nil
+}
+
+func (m *Aggregate) GetDistinct() bool {
+	if m != nil && m.Distinct != nil {
+		return *m.Distinct
+	}
+	return false
+}
+
+type GroupAggr struct {
+	Name                []byte       `protobuf:"bytes,1,opt,name=name" json:"name,omitempty"`
+	GroupKeys           []*GroupKey  `protobuf:"bytes,2,rep,name=groupKeys" json:"groupKeys,omitempty"`
+	Aggrs               []*Aggregate `protobuf:"bytes,3,rep,name=aggrs" json:"aggrs,omitempty"`
+	DependsOnIndexKeys  []int32      `protobuf:"varint,4,rep,name=dependsOnIndexKeys" json:"dependsOnIndexKeys,omitempty"`
+	DependsOnPrimaryKey *bool        `protobuf:"varint,5,opt,name=dependsOnPrimaryKey" json:"dependsOnPrimaryKey,omitempty"`
+	XXX_unrecognized    []byte       `json:"-"`
+}
+
+func (m *GroupAggr) Reset()         { *m = GroupAggr{} }
+func (m *GroupAggr) String() string { return proto.CompactTextString(m) }
+func (*GroupAggr) ProtoMessage()    {}
+
+func (m *GroupAggr) GetName() []byte {
+	if m != nil {
+		return m.Name
+	}
+	return nil
+}
+
+func (m *GroupAggr) GetGroupKeys() []*GroupKey {
+	if m != nil {
+		return m.GroupKeys
+	}
+	return nil
+}
+
+func (m *GroupAggr) GetAggrs() []*Aggregate {
+	if m != nil {
+		return m.Aggrs
+	}
+	return nil
+}
+
+func (m *GroupAggr) GetDependsOnIndexKeys() []int32 {
+	if m != nil {
+		return m.DependsOnIndexKeys
+	}
+	return nil
+}
+
+func (m *GroupAggr) GetDependsOnPrimaryKey() bool {
+	if m != nil && m.DependsOnPrimaryKey != nil {
+		return *m.DependsOnPrimaryKey
+	}
+	return false
 }
 
 func init() {

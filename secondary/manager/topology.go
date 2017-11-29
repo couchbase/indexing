@@ -43,6 +43,7 @@ type IndexInstDistribution struct {
 	StreamId       uint32                  `json:"steamId,omitempty"`
 	Error          string                  `json:"error,omitempty"`
 	Partitions     []IndexPartDistribution `json:"partitions,omitempty"`
+	NumPartitions  uint32                  `json:"numPartitions,omitempty"`
 	RState         uint32                  `json:"rRtate,omitempty"`
 	Version        uint64                  `json:"version,omitempty"`
 	ReplicaId      uint64                  `json:"replicaId,omitempty"`
@@ -118,18 +119,9 @@ func (g *GlobalTopology) RemoveTopologyKey(key string) {
 // Add an index definition to Topology.
 //
 func (t *IndexTopology) AddIndexDefinition(bucket string, name string, defnId uint64, instId uint64, state uint32, indexerId string,
-	instVersion uint64, rState uint32, replicaId uint64, scheduled bool, storageMode string) {
+	instVersion uint64, rState uint32, replicaId uint64, partitions []common.PartitionId, numPartitions uint32, scheduled bool, storageMode string) {
 
 	t.RemoveIndexDefinition(bucket, name)
-
-	slice := new(IndexSliceLocator)
-	slice.SliceId = 0
-	slice.IndexerId = indexerId
-	slice.State = state
-
-	part := new(IndexPartDistribution)
-	part.PartId = 0
-	part.SinglePartition.Slices = append(part.SinglePartition.Slices, *slice)
 
 	inst := new(IndexInstDistribution)
 	inst.InstId = instId
@@ -139,7 +131,19 @@ func (t *IndexTopology) AddIndexDefinition(bucket string, name string, defnId ui
 	inst.ReplicaId = replicaId
 	inst.Scheduled = scheduled
 	inst.StorageMode = storageMode
-	inst.Partitions = append(inst.Partitions, *part)
+	inst.NumPartitions = numPartitions
+
+	for _, partnId := range partitions {
+		slice := new(IndexSliceLocator)
+		slice.SliceId = 0
+		slice.IndexerId = indexerId
+		slice.State = state
+
+		part := new(IndexPartDistribution)
+		part.PartId = uint64(partnId)
+		part.SinglePartition.Slices = append(part.SinglePartition.Slices, *slice)
+		inst.Partitions = append(inst.Partitions, *part)
+	}
 
 	defn := new(IndexDefnDistribution)
 	defn.Bucket = bucket

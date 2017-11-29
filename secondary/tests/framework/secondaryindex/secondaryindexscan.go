@@ -438,6 +438,107 @@ func MultiScanCount(indexName, bucketName, server string, scans qc.Scans, distin
 	}
 }
 
+func Scan3(indexName, bucketName, server string, scans qc.Scans, reverse, distinct bool,
+	projection *qc.IndexProjection, offset, limit int64, groupAggr *qc.GroupAggr,
+	consistency c.Consistency, vector *qc.TsConsistency) (tc.ScanResponse, error) {
+
+	if UseClient == "n1ql" {
+		log.Printf("Using n1ql client")
+		return N1QLScan3(indexName, bucketName, server, scans, reverse, distinct,
+			projection, offset, limit, groupAggr, consistency, vector)
+	}
+
+	var scanErr error
+	scanErr = nil
+	var previousSecKey value.Value
+
+	// ToDo: Create a client pool
+	client, e := CreateClient(server, "2itest")
+	if e != nil {
+		return nil, e
+	}
+	defer client.Close()
+
+	defnID, _ := GetDefnID(client, bucketName, indexName)
+	scanResults := make(tc.ScanResponse)
+
+	count := 0
+	start := time.Now()
+	connErr := client.Scan3(
+		defnID, "", scans, reverse, distinct, projection, offset, limit, groupAggr,
+		consistency, vector,
+		func(response qc.ResponseReader) bool {
+			if groupAggr == nil {
+				if err := response.Error(); err != nil {
+					scanErr = err
+					log.Printf("ScanError = %v ", scanErr)
+					return false
+				} else if skeys, pkeys, err := response.GetEntries(); err != nil {
+					scanErr = err
+					log.Printf("ScanError = %v ", scanErr)
+					return false
+				} else {
+					for i, skey := range skeys {
+						primaryKey := string(pkeys[i])
+						//log.Printf("Scanresult count = %v: %v  : %v ", count, skey, primaryKey)
+						count++
+						if _, keyPresent := scanResults[primaryKey]; keyPresent {
+							// Duplicate primary key found
+							dupError := errors.New("Duplicate primary key found")
+							tc.HandleError(dupError, "Duplicate primary key found in the scan results: "+primaryKey)
+						} else {
+							// Test collation only if CheckCollation is true
+							if CheckCollation == true && len(skey) > 0 {
+								secVal := skey2Values(skey)[0]
+								if previousSecKey == nil {
+									previousSecKey = secVal
+								} else {
+									if secVal.Collate(previousSecKey) < 0 {
+										errMsg := "Collation check failed. Previous Sec key > Current Sec key"
+										scanErr = errors.New(errMsg)
+										return false
+									}
+								}
+							}
+
+							scanResults[primaryKey] = skey
+						}
+					}
+					return true
+				}
+				return false
+			} else {
+
+				if err := response.Error(); err != nil {
+					scanErr = err
+					log.Printf("ScanError = %v ", scanErr)
+					return false
+				} else if skeys, pkeys, err := response.GetEntries(); err != nil {
+					scanErr = err
+					log.Printf("ScanError = %v ", scanErr)
+					return false
+				} else {
+					for i, skey := range skeys {
+						log.Printf("Scanresult Row  %v: %v  : %v ", i, skey, pkeys[i])
+					}
+				}
+			}
+			return true
+		})
+	elapsed := time.Since(start)
+
+	if connErr != nil {
+		log.Printf("Connection error in Scan occured: %v", connErr)
+		return scanResults, connErr
+	} else if scanErr != nil {
+		return scanResults, scanErr
+	}
+
+	tc.LogPerfStat("MultiScan", elapsed)
+	log.Printf("Total Scanresults = %v", count)
+	return scanResults, nil
+}
+
 func skey2Values(skey c.SecondaryKey) []value.Value {
 	vals := make([]value.Value, len(skey))
 	for i := 0; i < len(skey); i++ {

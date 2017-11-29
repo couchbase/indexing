@@ -33,14 +33,21 @@ func (kp KeyPartitionDefn) Endpoints() []Endpoint {
 //for key based partitioning
 type KeyPartitionContainer struct {
 	PartitionMap  map[PartitionId]KeyPartitionDefn
+	NumVbuckets   int
 	NumPartitions int
+	PartitionSize int
+	scheme        PartitionScheme
 }
 
 //NewKeyPartitionContainer initializes a new KeyPartitionContainer and returns
-func NewKeyPartitionContainer() PartitionContainer {
+func NewKeyPartitionContainer(numVbuckets int, numPartitions int, scheme PartitionScheme) PartitionContainer {
 
 	kpc := &KeyPartitionContainer{PartitionMap: make(map[PartitionId]KeyPartitionDefn),
-		NumPartitions: 0}
+		NumVbuckets:   numVbuckets,
+		NumPartitions: numPartitions,
+		PartitionSize: numVbuckets / numPartitions,
+		scheme:        scheme,
+	}
 	return kpc
 
 }
@@ -48,7 +55,6 @@ func NewKeyPartitionContainer() PartitionContainer {
 //AddPartition adds a partition to the container
 func (pc *KeyPartitionContainer) AddPartition(id PartitionId, p PartitionDefn) {
 	pc.PartitionMap[id] = p.(KeyPartitionDefn)
-	pc.NumPartitions++
 }
 
 //UpdatePartition updates an existing partition to the container
@@ -59,26 +65,31 @@ func (pc *KeyPartitionContainer) UpdatePartition(id PartitionId, p PartitionDefn
 //RemovePartition removes a partition from the container
 func (pc *KeyPartitionContainer) RemovePartition(id PartitionId) {
 	delete(pc.PartitionMap, id)
-	pc.NumPartitions--
 }
 
 //GetEndpointsByPartitionKey is a convenience method which calls other interface methods
 //to first determine the partitionId from PartitionKey and then the endpoints from
 //partitionId
-func (pc *KeyPartitionContainer) GetEndpointsByPartitionKey(key PartitionKey) []Endpoint {
+func (pc *KeyPartitionContainer) GetEndpointsByPartitionKey(key PartitionKey, vbucket uint16) []Endpoint {
 
-	id := pc.GetPartitionIdByPartitionKey(key)
+	id := pc.GetPartitionIdByPartitionKey(key, vbucket)
 	return pc.GetEndpointsByPartitionId(id)
 
 }
 
 //GetPartitionIdByPartitionKey returns the partitionId for the partition to which the
 //partitionKey belongs.
-func (pc *KeyPartitionContainer) GetPartitionIdByPartitionKey(key PartitionKey) PartitionId {
-	//run hash function on partition key and return partition id
-	hash := crc32.ChecksumIEEE([]byte(key))
-	partnId := int(hash) % pc.NumPartitions
-	return PartitionId(partnId)
+func (pc *KeyPartitionContainer) GetPartitionIdByPartitionKey(key PartitionKey, vbucket uint16) PartitionId {
+
+	if pc.scheme == HASH {
+		return PartitionId((vbucket / uint16(pc.PartitionSize)) + 1)
+	}
+
+	if pc.scheme == KEY {
+		return HashKeyPartition(key, pc.NumPartitions)
+	}
+
+	return PartitionId(NON_PARTITION_ID)
 }
 
 //GetEndpointsByPartitionId returns the list of Endpoints hosting the give partitionId
@@ -117,4 +128,12 @@ func (pc *KeyPartitionContainer) GetPartitionById(id PartitionId) PartitionDefn 
 //GetNumPartitions returns the number of partitions in this container
 func (pc *KeyPartitionContainer) GetNumPartitions() int {
 	return pc.NumPartitions
+}
+
+func HashKeyPartition(key []byte, numPartitions int) PartitionId {
+
+	//run hash function on partition key and return partition id
+	hash := crc32.ChecksumIEEE([]byte(key))
+	partnId := (int(hash) % numPartitions) + 1
+	return PartitionId(partnId)
 }

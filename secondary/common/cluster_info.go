@@ -187,7 +187,7 @@ func (c *ClusterInfoCache) Fetch() error {
 			return err
 		}
 
-		if !c.validateCache() {
+		if !c.validateCache(c.client.Info.IsIPv6) {
 			if vretry < CLUSTER_INFO_VALIDATION_RETRIES {
 				vretry++
 				logging.Infof("%vValidation Failed for cluster info.. Retrying(%d)",
@@ -540,7 +540,7 @@ func (c *ClusterInfoCache) GetLocalHostname() (string, error) {
 
 }
 
-func (c *ClusterInfoCache) validateCache() bool {
+func (c *ClusterInfoCache) validateCache(isIPv6 bool) bool {
 
 	if len(c.nodes) != len(c.nodesvs) {
 		return false
@@ -562,7 +562,7 @@ func (c *ClusterInfoCache) validateCache() bool {
 		p := svc.Services["mgmt"]
 
 		if h == "" {
-			h = "127.0.0.1"
+			h = GetLocalIpAddr(isIPv6)
 		}
 
 		hp := net.JoinHostPort(h, fmt.Sprint(p))
@@ -583,4 +583,19 @@ func (c *ClusterInfoCache) getStaticServicePort(srvc string) (string, error) {
 		return "", ErrInvalidService
 	}
 
+}
+
+// IPv6 Support
+func GetLocalIpAddr(isIPv6 bool) string {
+	if isIPv6 {
+		return "::1"
+	}
+	return "127.0.0.1"
+}
+
+func GetLocalIpUrl(isIPv6 bool) string {
+	if isIPv6 {
+		return "[::1]"
+	}
+	return "127.0.0.1"
 }

@@ -483,17 +483,17 @@ func EquivalentIP(
 		}
 		// check whether both are local-ip.
 		if IsIPLocal(host) && IsIPLocal(host1) {
-			return host + ":" + port,
-				host1 + ":" + port, nil // raddr => raddr1
+			return net.JoinHostPort(host, port),
+				net.JoinHostPort(host1, port), nil // raddr => raddr1
 		}
 		// check whether they are coming from the same remote.
 		if netIP.Equal(netIP1) {
-			return host + ":" + port,
-				host1 + ":" + port1, nil // raddr == raddr1
+			return net.JoinHostPort(host, port),
+				net.JoinHostPort(host1, port1), nil // raddr == raddr1
 		}
 	}
-	return host + ":" + port,
-		host + ":" + port, nil
+	return net.JoinHostPort(host, port),
+		net.JoinHostPort(host, port), nil
 }
 
 //---------------------

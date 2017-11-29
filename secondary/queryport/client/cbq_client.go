@@ -219,9 +219,10 @@ func (b *cbqClient) GetScanports() (queryports []string) {
 func (b *cbqClient) GetScanport(
 	defnID uint64,
 	retry int,
-	excludes map[uint64]bool) (queryport string, targetDefnID uint64, targetIndstID uint64, rollbackTime int64, ok bool) {
+	excludes map[uint64]bool) (queryport []string, targetDefnID uint64, targetIndstID uint64, rollbackTime []int64,
+	partition [][]common.PartitionId, numPartition uint32, ok bool) {
 
-	return b.queryport, defnID, 0, int64(math.MaxInt64), true
+	return []string{b.queryport}, defnID, 0, []int64{math.MaxInt64}, nil, 0, true
 }
 
 // GetIndexDefn implements BridgeAccessor{} interface.
@@ -294,7 +295,6 @@ func newIndexMetaData(info *indexInfo, queryport string) *mclient.IndexMetadata 
 		&mclient.InstanceDefn{
 			InstId: common.IndexInstId(info.DefnID), // TODO: defnID as InstID
 			State:  common.INDEX_STATE_READY,
-			Endpts: []common.Endpoint{common.Endpoint(queryport)},
 		},
 	}
 	imeta := &mclient.IndexMetadata{

@@ -746,25 +746,13 @@ func (si *secondaryIndex) Scan(
 	conn *datastore.IndexConnection) {
 
 	entryChannel := conn.EntryChannel()
-	var tmpfile *os.File
 	var backfillSync int64
 
-	syncCh := make(chan bool)
+	var waitGroup sync.WaitGroup
 
 	defer close(entryChannel)
 	defer func() { // cleanup tmpfile
-		if tmpfile != nil {
-			<-syncCh
-			tmpfile.Close()
-			name := tmpfile.Name()
-			fmsg := "%v Scan(%v) removing backfill file %v ...\n"
-			l.Infof(fmsg, si.gsi.logPrefix, requestId, name)
-			if err := os.Remove(name); err != nil {
-				fmsg := "%v remove backfill file %v unexpected failure: %v\n"
-				l.Errorf(fmsg, si.gsi.logPrefix, name, err)
-			}
-			atomic.AddInt64(&si.gsi.totalbackfills, 1)
-		}
+		waitGroup.Wait()
 	}()
 	defer func() {
 		atomic.StoreInt64(&backfillSync, DONEREQUEST)
@@ -775,22 +763,23 @@ func (si *secondaryIndex) Scan(
 	client, cnf := si.gsi.gsiClient, si.gsi.config
 	if span.Seek != nil {
 		seek := values2SKey(span.Seek)
-		client.Lookup(
+		err := client.LookupInternal(
 			si.defnID, requestId, []c.SecondaryKey{seek}, distinct, limit,
 			n1ql2GsiConsistency[cons], vector2ts(vector),
-			makeResponsehandler(
-				requestId,
-				si, client, conn, &tmpfile, &backfillSync, syncCh, cnf))
-
+			makeRequestBroker(requestId, si, client, conn, cnf, &waitGroup, &backfillSync, cap(entryChannel)))
+		if err != nil {
+			conn.Error(n1qlError(client, err))
+		}
 	} else {
 		low, high := values2SKey(span.Range.Low), values2SKey(span.Range.High)
 		incl := n1ql2GsiInclusion[span.Range.Inclusion]
-		client.Range(
+		err := client.RangeInternal(
 			si.defnID, requestId, low, high, incl, distinct, limit,
 			n1ql2GsiConsistency[cons], vector2ts(vector),
-			makeResponsehandler(
-				requestId,
-				si, client, conn, &tmpfile, &backfillSync, syncCh, cnf))
+			makeRequestBroker(requestId, si, client, conn, cnf, &waitGroup, &backfillSync, cap(entryChannel)))
+		if err != nil {
+			conn.Error(n1qlError(client, err))
+		}
 	}
 	atomic.AddInt64(&si.gsi.totalscans, 1)
 	atomic.AddInt64(&si.gsi.scandur, int64(time.Since(starttm)))
@@ -802,25 +791,13 @@ func (si *secondaryIndex) ScanEntries(
 	vector timestamp.Vector, conn *datastore.IndexConnection) {
 
 	entryChannel := conn.EntryChannel()
-	var tmpfile *os.File
 	var backfillSync int64
 
-	syncCh := make(chan bool)
+	var waitGroup sync.WaitGroup
 
 	defer close(entryChannel)
 	defer func() {
-		if tmpfile != nil {
-			<-syncCh
-			tmpfile.Close()
-			name := tmpfile.Name()
-			fmsg := "%v ScanEntries(%v) removing backfill file %v ...\n"
-			l.Infof(fmsg, si.gsi.logPrefix, requestId, name)
-			if err := os.Remove(name); err != nil {
-				fmsg := "%v remove backfill file %v unexpected failure: %v\n"
-				l.Errorf(fmsg, si.gsi.logPrefix, name, err)
-			}
-			atomic.AddInt64(&si.gsi.totalbackfills, 1)
-		}
+		waitGroup.Wait()
 	}()
 	defer func() {
 		atomic.StoreInt64(&backfillSync, DONEREQUEST)
@@ -829,12 +806,13 @@ func (si *secondaryIndex) ScanEntries(
 	starttm := time.Now()
 
 	client, cnf := si.gsi.gsiClient, si.gsi.config
-	client.ScanAll(
+	err := client.ScanAllInternal(
 		si.defnID, requestId, limit,
 		n1ql2GsiConsistency[cons], vector2ts(vector),
-		makeResponsehandler(
-			requestId,
-			si, client, conn, &tmpfile, &backfillSync, syncCh, cnf))
+		makeRequestBroker(requestId, si, client, conn, cnf, &waitGroup, &backfillSync, cap(entryChannel)))
+	if err != nil {
+		conn.Error(n1qlError(client, err))
+	}
 
 	atomic.AddInt64(&si.gsi.totalscans, 1)
 	atomic.AddInt64(&si.gsi.scandur, int64(time.Since(starttm)))
@@ -856,25 +834,19 @@ func (si *secondaryIndex2) Scan2(
 	conn *datastore.IndexConnection) {
 
 	entryChannel := conn.EntryChannel()
-	var tmpfile *os.File
 	var backfillSync int64
-
-	syncCh := make(chan bool)
+	var waitGroup sync.WaitGroup
+	var broker *qclient.RequestBroker
 
 	defer close(entryChannel)
-	defer func() { // cleanup tmpfile
-		if tmpfile != nil {
-			<-syncCh
-			tmpfile.Close()
-			name := tmpfile.Name()
-			fmsg := "%v Scan(%v) removing backfill file %v ...\n"
-			l.Infof(fmsg, si.gsi.logPrefix, requestId, name)
-			if err := os.Remove(name); err != nil {
-				fmsg := "%v remove backfill file %v unexpected failure: %v\n"
-				l.Errorf(fmsg, si.gsi.logPrefix, name, err)
-			}
-			atomic.AddInt64(&si.gsi.totalbackfills, 1)
+	defer func() {
+		if broker != nil {
+			l.Verbosef("scan2: scan request %v closing entryChannel.  Receive Count %v Sent Count %v",
+				requestId, broker.ReceiveCount(), broker.SendCount())
 		}
+	}()
+	defer func() { // cleanup tmpfile
+		waitGroup.Wait()
 	}()
 	defer func() {
 		atomic.StoreInt64(&backfillSync, DONEREQUEST)
@@ -886,16 +858,21 @@ func (si *secondaryIndex2) Scan2(
 
 	gsiscans := n1qlspanstogsi(spans)
 	gsiprojection := n1qlprojectiontogsi(projection)
-	client.MultiScan(
+	broker = makeRequestBroker(requestId, &si.secondaryIndex, client, conn, cnf, &waitGroup, &backfillSync, cap(entryChannel))
+	err := client.MultiScanInternal(
 		si.defnID, requestId, gsiscans, reverse, distinct,
 		gsiprojection, offset, limit,
 		n1ql2GsiConsistency[cons], vector2ts(vector),
-		makeResponsehandler(
-			requestId,
-			&si.secondaryIndex, client, conn, &tmpfile, &backfillSync, syncCh, cnf))
+		broker)
+	if err != nil {
+		conn.Error(n1qlError(client, err))
+	}
 
 	atomic.AddInt64(&si.gsi.totalscans, 1)
 	atomic.AddInt64(&si.gsi.scandur, int64(time.Since(starttm)))
+
+	l.Verbosef("scan2: scan request %v done.  Receive Count %v Sent Count %v NumIndexers %v err %v",
+		requestId, broker.ReceiveCount(), broker.SendCount(), broker.NumIndexers(), err)
 }
 
 // RangeKey2 implements Index2{} interface.
@@ -1012,17 +989,127 @@ func (si *secondaryIndex2) Alter(requestId string, with value.Value) (
 	return datastore.Index(si), nil
 }
 
+//--------------------
+// datastore.AlterIndex{} End
+//--------------------
+
+//-------------------------------------
+// datastore API3 implementation
+//-------------------------------------
+
+type secondaryIndex3 struct {
+	secondaryIndex2
+}
+
+// CreateAggregate implement Index3 interface.
+func (si *secondaryIndex3) CreateAggregate(requestId string, groupAggs *datastore.IndexGroupAggregates,
+	with value.Value) errors.Error {
+	return errors.NewError(fmt.Errorf("Create Aggregate not supported"), "")
+}
+
+func (si *secondaryIndex3) DropAggregate(requestId, name string) errors.Error {
+	return errors.NewError(fmt.Errorf("Drops Aggregate not supported"), "")
+}
+
+func (si *secondaryIndex3) Aggregates() ([]datastore.IndexGroupAggregates, errors.Error) {
+	return nil, errors.NewError(fmt.Errorf("Precomputed Aggregates not supported"), "")
+}
+
+// Scan3 implement Index3 interface.
+func (si *secondaryIndex3) Scan3(
+	requestId string, spans datastore.Spans2, reverse, distinctAfterProjection, ordered bool,
+	projection *datastore.IndexProjection, offset, limit int64,
+	groupAggs *datastore.IndexGroupAggregates,
+	cons datastore.ScanConsistency, vector timestamp.Vector,
+	conn *datastore.IndexConnection) {
+
+	entryChannel := conn.EntryChannel()
+	var backfillSync int64
+	var waitGroup sync.WaitGroup
+	var broker *qclient.RequestBroker
+
+	defer close(entryChannel)
+	defer func() {
+		if broker != nil {
+			l.Verbosef("scan3: scan request %v closing entryChannel.  Receive Count %v Sent Count %v",
+				requestId, broker.ReceiveCount(), broker.SendCount())
+		}
+	}()
+	defer func() { // cleanup tmpfile
+		waitGroup.Wait()
+	}()
+	defer func() {
+		atomic.StoreInt64(&backfillSync, DONEREQUEST)
+	}()
+
+	starttm := time.Now()
+
+	client, cnf := si.gsi.gsiClient, si.gsi.config
+
+	gsiscans := n1qlspanstogsi(spans)
+	gsiprojection := n1qlprojectiontogsi(projection)
+	gsigroupaggr := n1qlgroupaggrtogsi(groupAggs)
+	broker = makeRequestBroker(requestId, &si.secondaryIndex, client, conn, cnf, &waitGroup, &backfillSync, cap(entryChannel))
+	err := client.Scan3Internal(
+		si.defnID, requestId, gsiscans, reverse, distinctAfterProjection,
+		gsiprojection, offset, limit, gsigroupaggr,
+		n1ql2GsiConsistency[cons], vector2ts(vector),
+		broker)
+	if err != nil {
+		conn.Error(n1qlError(client, err))
+	}
+
+	atomic.AddInt64(&si.gsi.totalscans, 1)
+	atomic.AddInt64(&si.gsi.scandur, int64(time.Since(starttm)))
+
+	l.Verbosef("scan3: scan request %v done.  Receive Count %v Sent Count %v NumIndexers %v err %v",
+		requestId, broker.ReceiveCount(), broker.SendCount(), broker.NumIndexers(), err)
+}
+
+//-------------------------------------
+// datastore API3 implementation end
+//-------------------------------------
+
 //-------------------------------------
 // private functions for secondaryIndex
 //-------------------------------------
 
-func makeResponsehandler(
+func makeRequestBroker(
 	requestId string,
 	si *secondaryIndex,
 	client *qclient.GsiClient,
 	conn *datastore.IndexConnection,
-	tmpfile **os.File, backfillSync *int64, syncCh chan bool,
-	config c.Config) qclient.ResponseHandler {
+	config c.Config,
+	waitGroup *sync.WaitGroup,
+	backfillSync *int64,
+	size int) *qclient.RequestBroker {
+
+	broker := qclient.NewRequestBroker(requestId, int64(size))
+
+	factory := func(id qclient.ResponseHandlerId) qclient.ResponseHandler {
+		return makeResponsehandler(id, requestId, si, client, conn, broker, config, waitGroup, backfillSync)
+	}
+
+	sender := func(pkey []byte, mskey []value.Value, uskey c.SecondaryKey) bool {
+		return sendEntry(broker, si, pkey, mskey, uskey, conn)
+	}
+
+	broker.SetResponseHandlerFactory(factory)
+	broker.SetResponseSender(sender)
+
+	return broker
+}
+
+func makeResponsehandler(
+	id qclient.ResponseHandlerId,
+	requestId string,
+	si *secondaryIndex,
+	client *qclient.GsiClient,
+	conn *datastore.IndexConnection,
+	broker *qclient.RequestBroker,
+	config c.Config,
+	waitGroup *sync.WaitGroup,
+	backfillSync *int64) qclient.ResponseHandler {
 
 	entryChannel := conn.EntryChannel()
 
@@ -1031,25 +1118,41 @@ func makeResponsehandler(
 	var readfd *os.File
 	var backfillFin, backfillEntries int64
 
+	var tmpfile *os.File
+
 	backfillLimit := int64(client.Settings().BackfillLimit())
 	primed, starttm, ticktm := false, time.Now(), time.Now()
 	lprefix := si.gsi.logPrefix
 
 	backfill := func() {
-		name := (*tmpfile).Name()
+		name := tmpfile.Name()
 		defer func() {
 			if readfd != nil {
 				readfd.Close()
 			}
-			close(syncCh)
+			waitGroup.Done()
 			atomic.AddInt64(&backfillFin, 1)
 			l.Debugf(
 				"%v %q finished backfill for %v ...\n",
 				lprefix, requestId, name)
+
+			if tmpfile != nil {
+				tmpfile.Close()
+				name := tmpfile.Name()
+				fmsg := "%v ScanEntries(%v) removing backfill file %v ...\n"
+				l.Infof(fmsg, si.gsi.logPrefix, requestId, name)
+				if err := os.Remove(name); err != nil {
+					fmsg := "%v remove backfill file %v unexpected failure: %v\n"
+					l.Errorf(fmsg, si.gsi.logPrefix, name, err)
+				}
+				atomic.AddInt64(&si.gsi.totalbackfills, 1)
+			}
+
 			recover() // need this because entryChannel() would have closed
 		}()
 		l.Debugf(
 			"%v %q started backfill for %v ...\n", lprefix, requestId, name)
+
 		for {
 			if pending := atomic.LoadInt64(&backfillEntries); pending > 0 {
 				atomic.AddInt64(&backfillEntries, -1)
@@ -1064,6 +1167,7 @@ func makeResponsehandler(
 				fmsg := "%q backfill exceeded limit %v, %v"
 				err := fmt.Errorf(fmsg, requestId, backfillLimit, cummsize)
 				conn.Error(n1qlError(client, err))
+				broker.Close()
 				return
 			}
 
@@ -1072,6 +1176,7 @@ func makeResponsehandler(
 				fmsg := "%v %q decoding from backfill %v: %v\n"
 				l.Errorf(fmsg, lprefix, requestId, name, err)
 				conn.Error(n1qlError(client, err))
+				broker.Close()
 				return
 			}
 			pkeys := make([][]byte, 0)
@@ -1079,6 +1184,7 @@ func makeResponsehandler(
 				fmsg := "%v %q decoding from backfill %v: %v\n"
 				l.Errorf(fmsg, lprefix, requestId, name, err)
 				conn.Error(n1qlError(client, err))
+				broker.Close()
 				return
 			}
 			l.Tracef("%v backfill read %v entries\n", lprefix, len(skeys))
@@ -1086,10 +1192,16 @@ func makeResponsehandler(
 				atomic.AddInt64(&si.gsi.primedur, int64(time.Since(starttm)))
 				primed = true
 			}
-			if len(entryChannel) > 0 && len(skeys) > 0 {
+
+			ln := int(broker.Len(id))
+			if ln < 0 {
+				ln = len(entryChannel)
+			}
+
+			if ln > 0 && len(skeys) > 0 {
 				atomic.AddInt64(&si.gsi.throttledur, int64(time.Since(ticktm)))
 			}
-			if sendEntries(si, pkeys, skeys, conn) == "stop" {
+			if !broker.SendEntries(id, pkeys, skeys) {
 				return
 			}
 			ticktm = time.Now()
@@ -1100,53 +1212,77 @@ func makeResponsehandler(
 		err := data.Error()
 		if err != nil {
 			conn.Error(n1qlError(client, err))
+			broker.Close()
 			return false
 		}
 		skeys, pkeys, err := data.GetEntries()
 		if err != nil {
 			conn.Error(n1qlError(client, err))
+			broker.Close()
 			return false
 		}
-		cp, ln := cap(entryChannel), len(entryChannel)
-		if backfillLimit > 0 && *tmpfile == nil && ((cp - ln) < len(skeys)) {
+
+		if len(pkeys) != 0 || len(skeys) != 0 {
+			if len(pkeys) != 0 {
+				broker.IncrementReceiveCount(len(pkeys))
+			} else {
+				broker.IncrementReceiveCount(len(skeys))
+			}
+		}
+
+		ln := int(broker.Len(id))
+		if ln < 0 {
+			ln = len(entryChannel)
+		}
+
+		cp := int(broker.Cap(id))
+		if cp < 0 {
+			cp = cap(entryChannel)
+		}
+
+		if backfillLimit > 0 && tmpfile == nil && ((cp - ln) < len(skeys)) {
 			prefix := BACKFILLPREFIX + strconv.Itoa(os.Getpid())
-			*tmpfile, err = ioutil.TempFile(n1ql_backfill_temp_dir, prefix)
+			tmpfile, err = ioutil.TempFile(n1ql_backfill_temp_dir, prefix)
 			name := ""
-			if *tmpfile != nil {
-				name = (*tmpfile).Name()
+			if tmpfile != nil {
+				name = tmpfile.Name()
 			}
 			if err != nil {
 				fmsg := "%v %q creating backfill file %v : %v\n"
 				l.Errorf(fmsg, lprefix, requestId, name, err)
-				*tmpfile = nil
+				tmpfile = nil
 				conn.Error(n1qlError(client, err))
+				broker.Close()
 				return false
 
 			} else {
 				fmsg := "%v %v new backfill file ... %v\n"
 				l.Infof(fmsg, lprefix, requestId, name)
 				// encoder
-				enc = gob.NewEncoder(*tmpfile)
+				enc = gob.NewEncoder(tmpfile)
 				readfd, err = os.OpenFile(name, os.O_RDONLY, 0666)
 				if err != nil {
 					fmsg := "%v %v reading backfill file %v: %v\n"
 					l.Errorf(fmsg, lprefix, requestId, name, err)
 					conn.Error(n1qlError(client, err))
+					broker.Close()
 					return false
 				}
 				// decoder
 				dec = gob.NewDecoder(readfd)
+				waitGroup.Add(1)
 				go backfill()
 			}
 		}
 
-		if *tmpfile != nil {
+		if tmpfile != nil {
 			// whether temp-file is exhausted the limit.
 			cummsize := atomic.LoadInt64(&si.gsi.backfillSize) / (1024 * 1024)
 			if cummsize > backfillLimit {
 				fmsg := "%q backfill exceeded limit %v, %v"
 				err := fmt.Errorf(fmsg, requestId, backfillLimit, cummsize)
 				conn.Error(n1qlError(client, err))
+				broker.Close()
 				return false
 			}
 
@@ -1156,10 +1292,12 @@ func makeResponsehandler(
 			}
 			if err := enc.Encode(skeys); err != nil {
 				conn.Error(n1qlError(client, err))
+				broker.Close()
 				return false
 			}
 			if err := enc.Encode(pkeys); err != nil {
 				conn.Error(n1qlError(client, err))
+				broker.Close()
 				return false
 			}
 			atomic.AddInt64(&backfillEntries, 1)
@@ -1171,10 +1309,10 @@ func makeResponsehandler(
 				atomic.AddInt64(&si.gsi.primedur, int64(time.Since(starttm)))
 				primed = true
 			}
-			if len(entryChannel) > 0 && len(skeys) > 0 {
+			if int(ln) > 0 && len(skeys) > 0 {
 				atomic.AddInt64(&si.gsi.throttledur, int64(time.Since(ticktm)))
 			}
-			if sendEntries(si, pkeys, skeys, conn) == "stop" {
+			if !broker.SendEntries(id, pkeys, skeys) {
 				return false
 			}
 			ticktm = time.Now()
@@ -1394,13 +1532,7 @@ func init() {
 	}
 }
 
-func sendEntries(
-	si *secondaryIndex, pkeys [][]byte, skeys []c.SecondaryKey,
-	conn *datastore.IndexConnection) string {
-
-	if len(skeys) == 0 {
-		return "empty"
-	}
+func sendEntry(broker *qclient.RequestBroker, si *secondaryIndex, pkey []byte, mskey []value.Value, uskey c.SecondaryKey, conn *datastore.IndexConnection) bool {
 
 	var start time.Time
 	blockedtm, blocked := int64(0), false
@@ -1408,26 +1540,27 @@ func sendEntries(
 	entryChannel := conn.EntryChannel()
 	stopChannel := conn.StopChannel()
 
-	for i, skey := range skeys {
-		// Primary-key is mandatory.
-		e := &datastore.IndexEntry{PrimaryKey: string(pkeys[i])}
-		e.EntryKey = skey2Values(skey)
-		cp, ln := cap(entryChannel), len(entryChannel)
-		if ln == cp {
-			start, blocked = time.Now(), true
-		}
-		select {
-		case entryChannel <- e:
-		case <-stopChannel:
-			return "stop"
-		}
-		if blocked {
-			blockedtm += int64(time.Since(start))
-			blocked = false
-		}
+	// Primary-key is mandatory.
+	e := &datastore.IndexEntry{
+		PrimaryKey: string(pkey),
+		EntryKey:   mskey}
+	cp, ln := cap(entryChannel), len(entryChannel)
+	if ln == cp {
+		start, blocked = time.Now(), true
 	}
+	select {
+	case entryChannel <- e:
+	case <-stopChannel:
+		return false
+	}
+	if blocked {
+		blockedtm += int64(time.Since(start))
+		blocked = false
+	}
+
 	atomic.AddInt64(&si.gsi.blockeddur, blockedtm)
-	return "ok"
+	broker.IncrementSendCount()
+	return true
 }
 
 func (gsi *gsiKeyspace) logstats(logtick time.Duration) {
@@ -1533,4 +1666,74 @@ func n1qlprojectiontogsi(projection *datastore.IndexProjection) *qclient.IndexPr
 		PrimaryKey: projection.PrimaryKey,
 	}
 	return proj
+}
+
+func n1qlgroupaggrtogsi(groupAggs *datastore.IndexGroupAggregates) *qclient.GroupAggr {
+	if groupAggs == nil {
+		return nil
+	}
+
+	//Group
+	var groups []*qclient.GroupKey
+	if groupAggs.Group != nil {
+		groups = make([]*qclient.GroupKey, len(groupAggs.Group))
+		for i, grp := range groupAggs.Group {
+			g := &qclient.GroupKey{
+				EntryKeyId: int32(grp.EntryKeyId),
+				KeyPos:     int32(grp.KeyPos),
+				Expr:       expression.NewStringer().Visit(grp.Expr),
+			}
+			groups[i] = g
+		}
+	}
+
+	//Aggrs
+	var aggregates []*qclient.Aggregate
+	if groupAggs.Aggregates != nil {
+		aggregates = make([]*qclient.Aggregate, len(groupAggs.Aggregates))
+		for i, aggr := range groupAggs.Aggregates {
+			a := &qclient.Aggregate{
+				AggrFunc:   n1qlaggrtypetogsi(aggr.Operation),
+				EntryKeyId: int32(aggr.EntryKeyId),
+				KeyPos:     int32(aggr.KeyPos),
+				Expr:       expression.NewStringer().Visit(aggr.Expr),
+				Distinct:   aggr.Distinct,
+			}
+			aggregates[i] = a
+		}
+	}
+
+	var dependsOnIndexKeys []int32
+	if groupAggs.DependsOnIndexKeys != nil {
+		dependsOnIndexKeys = make([]int32, len(groupAggs.DependsOnIndexKeys))
+		for i, ikey := range groupAggs.DependsOnIndexKeys {
+			dependsOnIndexKeys[i] = int32(ikey)
+		}
+	}
+
+	ga := &qclient.GroupAggr{
+		Name:               groupAggs.Name,
+		Group:              groups,
+		Aggrs:              aggregates,
+		DependsOnIndexKeys: dependsOnIndexKeys,
+	}
+
+	return ga
+}
+
+func n1qlaggrtypetogsi(aggrType datastore.AggregateType) c.AggrFuncType {
+	switch aggrType {
+	case datastore.AGG_MIN:
+		return c.AGG_MIN
+	case datastore.AGG_MAX:
+		return c.AGG_MAX
+	case datastore.AGG_SUM:
+		return c.AGG_SUM
+	case datastore.AGG_COUNT:
+		return c.AGG_COUNT
+	case datastore.AGG_COUNTN:
+		return c.AGG_COUNTN
+	default:
+		return c.AGG_INVALID
+	}
 }

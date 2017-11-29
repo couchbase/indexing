@@ -69,8 +69,8 @@ func GetLocalIP() (net.IP, error) {
 	return nil, errors.New("cannot find local IP address")
 }
 
-func IndexPath(inst *common.IndexInst, sliceId SliceId) string {
-	return fmt.Sprintf("%s_%s_%d_%d.index", inst.Defn.Bucket, inst.Defn.Name, inst.InstId, sliceId)
+func IndexPath(inst *common.IndexInst, partnId common.PartitionId, sliceId SliceId) string {
+	return fmt.Sprintf("%s_%s_%d_%d.index", inst.Defn.Bucket, inst.Defn.Name, inst.InstId, partnId)
 }
 
 func GetCurrentKVTs(cluster, pooln, bucketn string, numVbs int) (Timestamp, error) {

@@ -271,8 +271,12 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, bucket strin
 				var isSnapCreated bool = true
 
 				partnSnaps := make(map[common.PartitionId]PartitionSnapshot)
+				hasNewSnapshot := false
+
 				//for all partitions managed by this indexer
-				for partnId, partnInst := range partnMap {
+				for _, partnInst := range partnMap {
+					partnId := partnInst.Defn.GetPartitionId()
+
 					var lastPartnSnap PartitionSnapshot
 
 					if lastIndexSnap != nil {
@@ -334,11 +338,7 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, bucket strin
 							}
 							snapCreateDur := time.Since(snapCreateStart)
 
-							idxStats := stats.indexes[idxInstId]
-							idxStats.numSnapshots.Add(1)
-							if needsCommit {
-								idxStats.numCommits.Add(1)
-							}
+							hasNewSnapshot = true
 
 							snapOpenStart := time.Now()
 							if newSnapshot, err = slice.OpenSnapshot(info); err != nil {
@@ -379,6 +379,14 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, bucket strin
 						slices: sliceSnaps,
 					}
 					partnSnaps[partnId] = ps
+				}
+
+				if hasNewSnapshot {
+					idxStats := stats.indexes[idxInstId]
+					idxStats.numSnapshots.Add(1)
+					if needsCommit {
+						idxStats.numCommits.Add(1)
+					}
 				}
 
 				is := &indexSnapshot{
@@ -488,7 +496,8 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 			idxInst.State != common.INDEX_STATE_DELETED {
 
 			//for all partitions managed by this indexer
-			for partnId, partnInst := range partnMap {
+			for _, partnInst := range partnMap {
+				partnId := partnInst.Defn.GetPartitionId()
 				sc := partnInst.Sc
 
 				//rollback all slices
@@ -918,7 +927,6 @@ func (s *storageMgr) updateIndexSnapMap(indexPartnMap IndexPartnMap,
 	s.muSnap.Lock()
 	defer s.muSnap.Unlock()
 
-	var tsVbuuid *common.TsVbuuid
 	for idxInstId, partnMap := range indexPartnMap {
 
 		//if bucket and stream have been provided
@@ -934,51 +942,66 @@ func (s *storageMgr) updateIndexSnapMap(indexPartnMap IndexPartnMap,
 			}
 		}
 
-		//there is only one partition for now
-		partnInst := partnMap[0]
-		sc := partnInst.Sc
-
-		//there is only one slice for now
-		slice := sc.GetSliceById(0)
-		infos, err := slice.GetSnapshots()
-		// TODO: Proper error handling if possible
-		if err != nil {
-			panic("Unable to read snapinfo -" + err.Error())
-		}
-
 		DestroyIndexSnapshot(s.indexSnapMap[idxInstId])
 		delete(s.indexSnapMap, idxInstId)
 		s.notifySnapshotDeletion(idxInstId)
 
-		snapInfoContainer := NewSnapshotInfoContainer(infos)
-		latestSnapshotInfo := snapInfoContainer.GetLatest()
+		var tsVbuuid *common.TsVbuuid
+		partnSnapMap := make(map[common.PartitionId]PartitionSnapshot)
 
-		if latestSnapshotInfo != nil {
-			logging.Infof("StorageMgr::updateIndexSnapMap IndexInst:%v Attempting to open snapshot (%v)",
-				idxInstId, latestSnapshotInfo)
-			latestSnapshot, err := slice.OpenSnapshot(latestSnapshotInfo)
+		for _, partnInst := range partnMap {
+
+			pid := partnInst.Defn.GetPartitionId()
+			sc := partnInst.Sc
+
+			//there is only one slice for now
+			slice := sc.GetSliceById(0)
+			infos, err := slice.GetSnapshots()
+			// TODO: Proper error handling if possible
 			if err != nil {
-				panic("Unable to open snapshot -" + err.Error())
-			}
-			ss := &sliceSnapshot{
-				id:   SliceId(0),
-				snap: latestSnapshot,
+				panic("Unable to read snapinfo -" + err.Error())
 			}
 
-			tsVbuuid = latestSnapshotInfo.Timestamp()
+			snapInfoContainer := NewSnapshotInfoContainer(infos)
+			latestSnapshotInfo := snapInfoContainer.GetLatest()
 
-			sid := SliceId(0)
-			pid := common.PartitionId(0)
+			if latestSnapshotInfo != nil {
+				logging.Infof("StorageMgr::updateIndexSnapMap IndexInst:%v Attempting to open snapshot (%v)",
+					idxInstId, latestSnapshotInfo)
+				latestSnapshot, err := slice.OpenSnapshot(latestSnapshotInfo)
+				if err != nil {
+					panic("Unable to open snapshot -" + err.Error())
+				}
+				ss := &sliceSnapshot{
+					id:   SliceId(0),
+					snap: latestSnapshot,
+				}
 
-			ps := &partitionSnapshot{
-				id:     pid,
-				slices: map[SliceId]SliceSnapshot{sid: ss},
+				tsVbuuid = latestSnapshotInfo.Timestamp()
+
+				sid := SliceId(0)
+
+				ps := &partitionSnapshot{
+					id:     pid,
+					slices: map[SliceId]SliceSnapshot{sid: ss},
+				}
+
+				partnSnapMap[pid] = ps
+
+			} else {
+				// If it fails to open a snapshot for one of the slice/partition,
+				// do not compute the snapshot for the index instance.  This function
+				// will return a nil snapshot.
+				partnSnapMap = nil
+				break
 			}
+		}
 
+		if len(partnSnapMap) != 0 {
 			is := &indexSnapshot{
 				instId: idxInstId,
 				ts:     tsVbuuid,
-				partns: map[common.PartitionId]PartitionSnapshot{pid: ps},
+				partns: partnSnapMap,
 			}
 			s.indexSnapMap[idxInstId] = is
 			s.notifySnapshotCreation(is)

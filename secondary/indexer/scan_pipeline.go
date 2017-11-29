@@ -11,10 +11,13 @@ package indexer
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
+	"fmt"
 
 	"github.com/couchbase/indexing/secondary/collatejson"
 	c "github.com/couchbase/indexing/secondary/common"
+	l "github.com/couchbase/indexing/secondary/logging"
 	p "github.com/couchbase/indexing/secondary/pipeline"
 )
 
@@ -26,6 +29,9 @@ type ScanPipeline struct {
 	src    p.Source
 	object p.Pipeline
 	req    *ScanRequest
+	config c.Config
+
+	aggrRes *aggrResult
 
 	rowsReturned uint64
 	bytesRead    uint64
@@ -47,9 +53,10 @@ func (p ScanPipeline) BytesRead() uint64 {
 	return p.bytesRead
 }
 
-func NewScanPipeline(req *ScanRequest, w ScanResponseWriter, is IndexSnapshot) *ScanPipeline {
+func NewScanPipeline(req *ScanRequest, w ScanResponseWriter, is IndexSnapshot, cfg c.Config) *ScanPipeline {
 	scanPipeline := new(ScanPipeline)
 	scanPipeline.req = req
+	scanPipeline.config = cfg
 
 	src := &IndexScanSource{is: is, p: scanPipeline}
 	src.InitWriter()
@@ -65,6 +72,10 @@ func NewScanPipeline(req *ScanRequest, w ScanResponseWriter, is IndexSnapshot) *
 	scanPipeline.object.AddSource("source", src)
 	scanPipeline.object.AddFilter("decoder", dec)
 	scanPipeline.object.AddSink("writer", wr)
+
+	if req.GroupAggr != nil {
+		scanPipeline.aggrRes = &aggrResult{}
+	}
 
 	return scanPipeline
 
@@ -134,15 +145,35 @@ func (s *IndexScanSource) Routine() error {
 				return err
 			}
 		}
+
 		if skipRow {
 			return nil
+		}
+
+		if r.GroupAggr != nil {
+			if ck == nil && len(entry) > cap(*buf) {
+				*buf = make([]byte, 0, len(entry)+1024)
+			}
+			err = computeGroupAggr(ck, entry, (*buf)[:0], s.p.aggrRes, r.GroupAggr)
+			if err != nil {
+				return err
+			}
+			l.Infof("ScanPipeline::computeGroupAggr %v", s.p.aggrRes)
 		}
 
 		if !r.isPrimary && r.Indexprojection != nil && r.Indexprojection.projectSecKeys {
 			if ck == nil && len(entry) > cap(*buf) {
 				*buf = make([]byte, 0, len(entry)+1024)
 			}
-			entry, err = projectKeys(ck, entry, (*buf)[:0], r.Indexprojection)
+
+			if r.GroupAggr != nil {
+				entry, err = projectGroupAggr((*buf)[:0], r.Indexprojection, s.p.aggrRes)
+				if entry == nil {
+					return nil
+				}
+			} else {
+				entry, err = projectKeys(ck, entry, (*buf)[:0], r.Indexprojection)
+			}
 			if err != nil {
 				return err
 			}
@@ -157,6 +188,11 @@ func (s *IndexScanSource) Routine() error {
 		if !r.isPrimary {
 			e := secondaryIndexEntry(entry)
 			count = e.Count()
+		}
+
+		if r.GroupAggr != nil {
+			//TODO fix this for array index support
+			count = 1
 		}
 
 		for i := 0; i < count; i++ {
@@ -184,29 +220,58 @@ func (s *IndexScanSource) Routine() error {
 		return nil
 	}
 
-	sliceSnapshots := GetSliceSnapshots(s.is)
+	sliceSnapshots, err1 := GetSliceSnapshots(s.is, s.p.req.PartitionIds)
+	if err1 != nil {
+		return err1
+	}
+
+	//TODO add to config
+	if r.GroupAggr != nil {
+		if r.GroupAggr.IsLeadingGroup {
+			s.p.aggrRes.SetMaxRows(1)
+		} else {
+			s.p.aggrRes.SetMaxRows(10)
+		}
+	}
 
 loop:
 	for _, scan := range r.Scans {
 		currentScan = scan
-		for _, snap := range sliceSnapshots {
-			if scan.ScanType == AllReq {
-				err = snap.Snapshot().All(r.Ctx, fn)
-			} else if scan.ScanType == LookupReq {
-				err = snap.Snapshot().Lookup(r.Ctx, scan.Equals, fn)
-			} else if scan.ScanType == RangeReq || scan.ScanType == FilterRangeReq {
-				err = snap.Snapshot().Range(r.Ctx, scan.Low, scan.High, scan.Incl, fn)
-			}
-			switch err {
-			case nil:
-			case p.ErrSupervisorKill, ErrLimitReached:
-				break loop
-			default:
-				s.CloseWithError(err)
-				break loop
-			}
+		err = scatter(r, scan, sliceSnapshots, fn, s.p.config)
+		switch err {
+		case nil:
+		case p.ErrSupervisorKill, ErrLimitReached:
+			break loop
+		default:
+			s.CloseWithError(err)
+			break loop
 		}
 	}
+
+	if r.GroupAggr != nil {
+
+		for _, r := range s.p.aggrRes.rows {
+			r.SetFlush(true)
+		}
+
+		for {
+			entry, err := projectGroupAggr((*buf)[:0], r.Indexprojection, s.p.aggrRes)
+			if entry == nil {
+				return nil
+			}
+
+			if err != nil {
+				return err
+			}
+
+			wrErr := s.WriteItem(entry)
+			if wrErr != nil {
+				return wrErr
+			}
+		}
+
+	}
+
 	return nil
 }
 
@@ -237,6 +302,9 @@ loop:
 		t := (*tmpBuf)[:0]
 		if d.p.req.isPrimary {
 			sk, docid = piSplitEntry(row, t)
+		} else if d.p.req.GroupAggr != nil {
+			codec := collatejson.NewCodec(16)
+			sk, _ = codec.Decode(row, t)
 		} else {
 			sk, docid, _ = siSplitEntry(row, t)
 		}
@@ -480,4 +548,278 @@ func projectLeadingKey(compositekeys [][]byte, key []byte, buf *[]byte) ([]byte,
 	entry := secondaryIndexEntry(key)
 	*buf = append(*buf, key[entry.lenKey():]...)
 	return *buf, nil
+}
+
+/////////////////////////////////////////////////////////////////////////
+//
+// group by/aggregate implementation
+//
+/////////////////////////////////////////////////////////////////////////
+
+type groupKey struct {
+	key       []byte
+	projectId int32
+}
+
+type aggrVal struct {
+	fn        c.AggrFunc
+	projectId int32
+}
+
+type aggrRow struct {
+	groups []*groupKey
+	aggrs  []*aggrVal
+	flush  bool
+}
+
+type aggrResult struct {
+	rows    []*aggrRow
+	partial bool
+	maxRows int
+}
+
+func (g groupKey) String() string {
+	return fmt.Sprintf("%v", g.key)
+}
+
+func (a aggrVal) String() string {
+	return fmt.Sprintf("%v", a.fn)
+}
+
+func (a aggrRow) String() string {
+	return fmt.Sprintf("group %v aggrs %v flush %v", a.groups, a.aggrs, a.flush)
+}
+
+func (a aggrResult) String() string {
+	var res string
+	for i, r := range a.rows {
+		res += fmt.Sprintf("Row %v %v\n", i, r)
+	}
+	return res
+}
+
+func computeGroupAggr(compositekeys [][]byte, key, buf []byte, aggrRes *aggrResult, groupAggr *GroupAggr) error {
+
+	var err error
+	codec := collatejson.NewCodec(16)
+	if compositekeys == nil {
+		compositekeys, err = codec.ExplodeArray(key, buf)
+		if err != nil {
+			return err
+		}
+	}
+
+	groups := make([]*groupKey, len(groupAggr.Group))
+	aggrs := make([]*aggrVal, len(groupAggr.Aggrs))
+
+	for i, gk := range groupAggr.Group {
+		g, err := computeGroupKey(gk, compositekeys)
+		if err != nil {
+			return err
+		}
+		groups[i] = g
+	}
+
+	for i, ak := range groupAggr.Aggrs {
+		a, err := computeAggrVal(ak, compositekeys, buf)
+		if err != nil {
+			return err
+		}
+		aggrs[i] = a
+	}
+
+	aggrRes.AddNewGroup(groups, aggrs)
+	return nil
+
+}
+
+func computeGroupKey(gk *GroupKey, compositekeys [][]byte) (*groupKey, error) {
+	var g *groupKey
+	if gk.KeyPos >= 0 {
+		newKey := make([]byte, len(compositekeys[gk.KeyPos]))
+		copy(newKey, compositekeys[gk.KeyPos])
+		g = &groupKey{key: newKey,
+			projectId: gk.EntryKeyId,
+		}
+	} else {
+		//process expr
+	}
+	return g, nil
+}
+
+func computeAggrVal(ak *Aggregate, compositekeys [][]byte, buf []byte) (*aggrVal, error) {
+
+	var a *aggrVal
+	if ak.KeyPos >= 0 {
+		actualVal, err := decodeValue(compositekeys[ak.KeyPos], buf)
+		if err != nil {
+			return nil, err
+		}
+
+		a = &aggrVal{fn: c.NewAggrFunc(ak.AggrFunc, actualVal),
+			projectId: ak.EntryKeyId,
+		}
+	} else {
+		//process expr
+	}
+	return a, nil
+
+}
+
+func (ar *aggrResult) AddNewGroup(groups []*groupKey, aggrs []*aggrVal) error {
+
+	var err error
+
+	nomatch := true
+	for _, row := range ar.rows {
+		if row.CheckEqualGroup(groups) {
+			nomatch = false
+			l.Infof("ScanPipeline::AddNewGroup Add to Same Group %v", row)
+			err = row.AddAggregate(aggrs)
+			if err != nil {
+				return err
+			}
+			break
+		}
+	}
+
+	if nomatch {
+		newRow := &aggrRow{groups: groups,
+			aggrs: make([]*aggrVal, len(aggrs))}
+		newRow.AddAggregate(aggrs)
+
+		l.Infof("ScanPipeline::AddNewGroup Add New Group %v", newRow)
+
+		//flush the first row
+		if len(ar.rows) >= ar.maxRows {
+			ar.rows[0].SetFlush(true)
+		}
+		ar.rows = append(ar.rows, newRow)
+	}
+
+	return nil
+
+}
+
+func (a *aggrResult) SetMaxRows(n int) {
+	a.maxRows = n
+}
+
+func (ar *aggrRow) CheckEqualGroup(groups []*groupKey) bool {
+
+	if len(ar.groups) != len(groups) {
+		return false
+	}
+
+	for i, gk := range ar.groups {
+		if !gk.Equals(groups[i]) {
+			return false
+		}
+	}
+
+	return true
+}
+
+func (ar *aggrRow) AddAggregate(aggrs []*aggrVal) error {
+
+	for i, agg := range aggrs {
+		if ar.aggrs[i] == nil {
+			ar.aggrs[i] = agg
+		} else {
+			ar.aggrs[i].fn.AddDelta(agg.fn.Value())
+		}
+	}
+	return nil
+}
+
+func (ar *aggrRow) SetFlush(f bool) {
+	ar.flush = f
+	return
+}
+
+func (ar *aggrRow) Flush() bool {
+	return ar.flush
+}
+
+func (gk *groupKey) Equals(ok *groupKey) bool {
+
+	return bytes.Equal(gk.key, ok.key)
+}
+
+func projectGroupAggr(buf []byte, projection *Projection, aggrRes *aggrResult) ([]byte, error) {
+	var err error
+
+	var row *aggrRow
+
+	for i, r := range aggrRes.rows {
+		if r.Flush() {
+			row = r
+			//TODO - mark the flushed row and discard in one go
+			aggrRes.rows = append(aggrRes.rows[:i], aggrRes.rows[i+1:]...)
+			break
+		}
+	}
+
+	if row == nil {
+		return nil, nil
+	}
+
+	var keysToJoin [][]byte
+	for _, projGroup := range projection.projectGroupKeys {
+		if projGroup.grpKey {
+			keysToJoin = append(keysToJoin, row.groups[projGroup.pos].key)
+		} else {
+			val, err := encodeValue(row.aggrs[projGroup.pos].fn.Value())
+			if err != nil {
+				l.Infof("ScanPipeline::projectGroupAggr encodeValue error %v", err)
+				return nil, err
+			}
+			keysToJoin = append(keysToJoin, val)
+		}
+	}
+
+	codec := collatejson.NewCodec(16)
+	if buf, err = codec.JoinArray(keysToJoin, buf); err != nil {
+		l.Infof("ScanPipeline::projectGroupAggr join array error %v", err)
+		return nil, err
+	}
+
+	return buf, nil
+}
+
+//TODO: Scan pipeline decodes the values twice. Optimize to single decode.
+func decodeValue(raw []byte, buf []byte) (interface{}, error) {
+
+	var actualVal interface{}
+
+	//decode the aggr val
+	codec := collatejson.NewCodec(16)
+	dval, err := codec.Decode(raw, buf)
+	if err != nil {
+		return nil, err
+	}
+
+	//json unmarshal to go type
+	err = json.Unmarshal(dval, &actualVal)
+	if err != nil {
+		return nil, err
+	}
+	return actualVal, nil
+}
+
+func encodeValue(raw interface{}) ([]byte, error) {
+
+	jsonraw, err := json.Marshal(raw)
+	if err != nil {
+		return nil, err
+	}
+
+	encbuf := make([]byte, 3*len(jsonraw)+collatejson.MinBufferSize)
+	codec := collatejson.NewCodec(16)
+	encval, err := codec.Encode(jsonraw, encbuf)
+	if err != nil {
+		return nil, err
+	}
+
+	return encval, nil
 }

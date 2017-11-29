@@ -36,7 +36,7 @@ func N1QLTransform(
 	arrValue := make([]interface{}, 0, len(cExprs))
 	context := qexpr.NewIndexContext()
 	skip := true
-	docval := qvalue.NewAnnotatedValue(doc)
+	docval := qvalue.NewAnnotatedValue(qvalue.NewParsedValue(doc, true))
 	docval.SetAttachment("meta", meta)
 	for _, cExpr := range cExprs {
 		expr := cExpr.(qexpr.Expression)

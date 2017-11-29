@@ -1156,7 +1156,7 @@ func convertIndexDefnToProtobuf(indexDefn c.IndexDefn) *protobuf.IndexDefn {
 	exprType := protobuf.ExprType(
 		protobuf.ExprType_value[strings.ToUpper(string(indexDefn.ExprType))]).Enum()
 	partnScheme := protobuf.PartitionScheme(
-		protobuf.PartitionScheme_value[string(indexDefn.PartitionScheme)]).Enum()
+		protobuf.PartitionScheme_value[string(c.SINGLE)]).Enum()
 
 	defn := &protobuf.IndexDefn{
 		DefnID:          proto.Uint64(uint64(indexDefn.DefnId)),
@@ -1212,7 +1212,7 @@ func addPartnInfoToProtoInst(cfg c.Config, cinfo *c.ClusterInfoCache,
 		streamInitAddr := net.JoinHostPort(host, cfg["streamInitPort"].String())
 		streamCatchupAddr := net.JoinHostPort(host, cfg["streamCatchupPort"].String())
 
-		var endpoints []string
+		endpointsMap := make(map[c.Endpoint]bool)
 		for _, p := range partnDefn {
 			for _, e := range p.Endpoints() {
 				//Set the right endpoint based on streamId
@@ -1224,9 +1224,15 @@ func addPartnInfoToProtoInst(cfg c.Config, cinfo *c.ClusterInfoCache,
 				case c.INIT_STREAM:
 					e = c.Endpoint(streamInitAddr)
 				}
-				endpoints = append(endpoints, string(e))
+				endpointsMap[e] = true
 			}
 		}
+
+		endpoints := make([]string, 0, len(endpointsMap))
+		for e, _ := range endpointsMap {
+			endpoints = append(endpoints, string(e))
+		}
+
 		protoInst.SinglePartn = &protobuf.SinglePartition{
 			Endpoints: endpoints,
 		}

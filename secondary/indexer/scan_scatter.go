@@ -1,0 +1,486 @@
+// Copyright (c) 2014 Couchbase, Inc.
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file
+// except in compliance with the License. You may obtain a copy of the License at
+//   http://www.apache.org/licenses/LICENSE-2.0
+// Unless required by applicable law or agreed to in writing, software distributed under the
+// License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND,
+// either express or implied. See the License for the specific language governing permissions
+// and limitations under the License.
+package indexer
+
+import (
+	"bytes"
+	"errors"
+	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/pipeline"
+	"runtime"
+	"sync"
+	"sync/atomic"
+)
+
+var ErrFinishCallback error = errors.New("Callback done due to error")
+
+//--------------------------
+// scatter range scan
+//--------------------------
+
+func scatter(request *ScanRequest, scan Scan, snapshots []SliceSnapshot, cb EntryCallback, config common.Config) (err error) {
+
+	if len(snapshots) == 0 {
+		return
+	}
+
+	if len(snapshots) == 1 {
+		return scanOne(request, scan, snapshots, cb)
+	}
+
+	return scanMultiple(request, scan, snapshots, cb, config)
+}
+
+func scanMultiple(request *ScanRequest, scan Scan, snapshots []SliceSnapshot, cb EntryCallback, config common.Config) (err error) {
+
+	var wg sync.WaitGroup
+
+	notifych := make(chan bool, 1)
+	killch := make(chan bool, 1)
+	donech := make(chan bool, 1)
+	errch := make(chan error, len(snapshots)+1)
+
+	sorted := true
+
+	queues := make([]*Queue, len(snapshots))
+	size, limit := queueSize(len(snapshots), sorted, config)
+	for i := 0; i < len(snapshots); i++ {
+		queues[i] = NewQueue(int64(size), int64(limit), notifych)
+	}
+
+	// run gather
+	if sorted {
+		go gather(request, queues, donech, notifych, killch, errch, cb)
+	} else {
+		go forward(request, queues, donech, notifych, killch, errch, cb)
+	}
+
+	// run scatter
+	for i, snap := range snapshots {
+		wg.Add(1)
+		go scanSingleSlice(request, scan, request.Ctxs[i], snap, queues[i], &wg, errch, nil)
+	}
+
+	// wait for scatter to be done
+	wg.Wait()
+
+	errcnt := len(errch)
+	for i := 0; i < errcnt; i++ {
+		err = <-errch
+		if err == pipeline.ErrSupervisorKill || err == ErrLimitReached {
+			break
+		}
+	}
+
+	if err != nil {
+		// stop gather go-routine
+		close(killch)
+	} else {
+		// wait for gather to be done
+		<-donech
+	}
+
+	count := int64(0)
+	for _, queue := range queues {
+		count += queue.TotalCount()
+	}
+	logging.Verbosef("scan_scatter.scanMultiple: scan done.  Count %v", count)
+
+	return
+}
+
+func scanOne(request *ScanRequest, scan Scan, snapshots []SliceSnapshot, cb EntryCallback) (err error) {
+
+	errch := make(chan error, 1)
+	count := scanSingleSlice(request, scan, request.Ctxs[0], snapshots[0], nil, nil, errch, cb)
+
+	logging.Verbosef("scan_scatter:scanOnce: scan done.  Count %v", count)
+
+	errcnt := len(errch)
+	for i := 0; i < errcnt; i++ {
+		err = <-errch
+		if err == pipeline.ErrSupervisorKill || err == ErrLimitReached {
+			break
+		}
+	}
+
+	return
+}
+
+func scanSingleSlice(request *ScanRequest, scan Scan, ctx IndexReaderContext, snap SliceSnapshot, queue *Queue,
+	wg *sync.WaitGroup, errch chan error, cb EntryCallback) (count int) {
+
+	defer func() {
+		if wg != nil {
+			wg.Done()
+		}
+	}()
+
+	handler := func(entry []byte) error {
+		// Do not call enqueue when there is error.
+		if len(errch) != 0 {
+			return ErrFinishCallback
+		}
+
+		count++
+
+		if queue != nil {
+
+			entry1 := secondaryIndexEntry(entry)
+			entryKeyLen := entry1.lenKey()
+
+			var r Row
+			r.key = entry
+			r.len = entryKeyLen
+
+			queue.Enqueue(&r)
+			return nil
+		} else {
+			return cb(entry)
+		}
+	}
+
+	var err error
+	if scan.ScanType == AllReq {
+		err = snap.Snapshot().All(ctx, handler)
+	} else if scan.ScanType == LookupReq {
+		err = snap.Snapshot().Lookup(ctx, scan.Equals, handler)
+	} else if scan.ScanType == RangeReq || scan.ScanType == FilterRangeReq {
+		err = snap.Snapshot().Range(ctx, scan.Low, scan.High, scan.Incl, handler)
+	}
+
+	if err != nil {
+		if err != ErrFinishCallback {
+			errch <- err
+		}
+		if queue != nil {
+			queue.Close()
+		}
+	} else if queue != nil {
+		// If there is no error, tells gather routine that I am done.
+		// Do not call enqueue when there is error.
+		var r Row
+		r.last = true
+		queue.Enqueue(&r)
+	}
+
+	return
+}
+
+//--------------------------
+// scatter count
+//--------------------------
+
+func scatterCount(request *ScanRequest, snapshots []SliceSnapshot, stop StopChannel) (count uint64, err error) {
+
+	if len(snapshots) == 0 {
+		return
+	}
+
+	var wg sync.WaitGroup
+
+	errch := make(chan error, len(snapshots))
+
+	// run scatter
+	for i, snap := range snapshots {
+		wg.Add(1)
+		go countSingleSlice(request, request.Ctxs[i], snap, &wg, errch, stop, &count)
+	}
+
+	// wait for scatter to be done
+	wg.Wait()
+
+	if len(errch) > 0 {
+		err = <-errch
+	}
+
+	return
+}
+
+func countSingleSlice(request *ScanRequest, ctx IndexReaderContext, snap SliceSnapshot, wg *sync.WaitGroup, errch chan error, stopch StopChannel, count *uint64) {
+
+	defer func() {
+		wg.Done()
+	}()
+
+	var err error
+	var cnt uint64
+
+	if len(request.Keys) > 0 {
+		cnt, err = snap.Snapshot().CountLookup(ctx, request.Keys, stopch)
+	} else if request.Low.Bytes() == nil && request.High.Bytes() == nil {
+		cnt, err = snap.Snapshot().CountTotal(ctx, stopch)
+	} else {
+		cnt, err = snap.Snapshot().CountRange(ctx, request.Low, request.High, request.Incl, stopch)
+	}
+
+	if err != nil {
+		errch <- err
+	} else {
+		atomic.AddUint64(count, cnt)
+	}
+}
+
+//--------------------------
+// scatter multi-count
+//--------------------------
+
+func scatterMultiCount(request *ScanRequest, scan Scan, snapshots []SliceSnapshot, previousRows [][]byte, stop StopChannel) (count uint64, err error) {
+
+	if len(snapshots) == 0 {
+		return
+	}
+
+	var wg sync.WaitGroup
+
+	errch := make(chan error, len(snapshots))
+
+	// run scatter
+	for i, snap := range snapshots {
+		wg.Add(1)
+		go multiCountSingleSlice(request, scan, request.Ctxs[i], snap, previousRows[i], &wg, errch, stop, &count)
+	}
+
+	// wait for scatter to be done
+	wg.Wait()
+
+	if len(errch) > 0 {
+		err = <-errch
+	}
+
+	return
+}
+
+func multiCountSingleSlice(request *ScanRequest, scan Scan, ctx IndexReaderContext, snap SliceSnapshot, previousRow []byte, wg *sync.WaitGroup,
+	errch chan error, stopch StopChannel, count *uint64) {
+
+	defer func() {
+		wg.Done()
+	}()
+
+	var err error
+	var cnt uint64
+
+	if scan.ScanType == AllReq {
+		cnt, err = snap.Snapshot().MultiScanCount(ctx, MinIndexKey, MaxIndexKey, Both, scan, request.Distinct, stopch)
+	} else if scan.ScanType == LookupReq || scan.ScanType == RangeReq || scan.ScanType == FilterRangeReq {
+		cnt, err = snap.Snapshot().MultiScanCount(ctx, scan.Low, scan.High, scan.Incl, scan, request.Distinct, stopch)
+	}
+
+	if err != nil {
+		errch <- err
+	} else {
+		atomic.AddUint64(count, cnt)
+	}
+}
+
+//--------------------------
+// scatter stats
+//--------------------------
+
+func scatterStats(request *ScanRequest, snapshots []SliceSnapshot, stop StopChannel) (count uint64, err error) {
+
+	if len(snapshots) == 0 {
+		return
+	}
+
+	var wg sync.WaitGroup
+
+	errch := make(chan error, len(snapshots))
+
+	// run scatter
+	for i, snap := range snapshots {
+		wg.Add(1)
+		go statsSingleSlice(request, request.Ctxs[i], snap, &wg, errch, stop, &count)
+	}
+
+	// wait for scatter to be done
+	wg.Wait()
+
+	if len(errch) > 0 {
+		err = <-errch
+	}
+
+	return
+}
+
+func statsSingleSlice(request *ScanRequest, ctx IndexReaderContext, snap SliceSnapshot, wg *sync.WaitGroup,
+	errch chan error, stopch StopChannel, count *uint64) {
+
+	defer func() {
+		wg.Done()
+	}()
+
+	var err error
+	var cnt uint64
+
+	if request.Low.Bytes() == nil && request.Low.Bytes() == nil {
+		cnt, err = snap.Snapshot().StatCountTotal()
+	} else {
+		cnt, err = snap.Snapshot().CountRange(ctx, request.Low, request.High, request.Incl, stopch)
+	}
+
+	if err != nil {
+		errch <- err
+	} else {
+		atomic.AddUint64(count, cnt)
+	}
+}
+
+//--------------------------
+// gather range scan
+//--------------------------
+
+func gather(request *ScanRequest, queues []*Queue, donech chan bool, notifych chan bool, killch chan bool,
+	errch chan error, cb EntryCallback) {
+
+	defer close(donech)
+
+	ensembleSize := len(queues)
+	rows := make([]Row, ensembleSize)
+
+	for {
+		var candidate *Row
+		var id int
+		var count int
+
+		if len(errch) != 0 {
+			return
+		}
+
+		for i := 0; i < ensembleSize; i++ {
+			if queues[i].Peek(&rows[i]) {
+				count++
+
+				if rows[i].last {
+					continue
+				}
+
+				if candidate == nil || compareKey(request, candidate, &rows[i]) > 0 {
+					candidate = &rows[i]
+					id = i
+				}
+			}
+		}
+
+		if count == ensembleSize {
+			if candidate != nil {
+				if queues[id].Dequeue(&rows[id]) {
+					if err := cb(rows[id].key); err != nil {
+						errch <- err
+
+						// unblock all producers
+						for _, queue := range queues {
+							queue.Close()
+						}
+						return
+					}
+				}
+			} else {
+				return
+			}
+		} else {
+			select {
+			case <-notifych:
+				continue
+			case <-killch:
+				return
+			}
+		}
+	}
+}
+
+func forward(request *ScanRequest, queues []*Queue, donech chan bool, notifych chan bool, killch chan bool,
+	errch chan error, cb EntryCallback) {
+
+	defer close(donech)
+
+	ensembleSize := len(queues)
+	rows := make([]Row, ensembleSize)
+
+	for {
+		if len(errch) != 0 {
+			return
+		}
+
+		count := 0
+		found := false
+		for i := 0; i < ensembleSize; i++ {
+			if queues[i].Peek(&rows[i]) {
+
+				if rows[i].last {
+					count++
+					continue
+				}
+
+				found = true
+
+				if queues[i].Dequeue(&rows[i]) {
+					if err := cb(rows[i].key); err != nil {
+						errch <- err
+
+						// unblock all producers
+						for _, queue := range queues {
+							queue.Close()
+						}
+						return
+					}
+				}
+			}
+		}
+
+		if count == ensembleSize {
+			return
+		}
+
+		if !found {
+			select {
+			case <-notifych:
+				continue
+			case <-killch:
+				return
+			}
+		}
+	}
+}
+
+func compareKey(request *ScanRequest, k1 *Row, k2 *Row) int {
+
+	if request.isPrimary {
+		return comparePrimaryKey(k1, k2)
+	}
+
+	return compareSecKey(k1, k2)
+}
+
+func comparePrimaryKey(k1 *Row, k2 *Row) int {
+
+	return bytes.Compare(k1.key, k2.key)
+}
+
+func compareSecKey(k1 *Row, k2 *Row) int {
+
+	return bytes.Compare(k1.key[:k1.len], k2.key[:k2.len])
+}
+
+func queueSize(partition int, sorted bool, cfg common.Config) (int, int) {
+
+	size := cfg["scan.queue_size"].Int()
+	limit := cfg["scan.notify_count"].Int()
+
+	numCpu := runtime.NumCPU()
+
+	if numCpu >= partition || !sorted {
+		return size, limit
+	}
+
+	ratio := partition / numCpu
+	return ratio * size, limit
+}

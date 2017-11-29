@@ -47,11 +47,13 @@ func protobufEncode(payload interface{}) (data []byte, err error) {
 				pkv.Commands = make([]uint32, 0, l)
 				pkv.Keys = make([][]byte, 0, l)
 				pkv.Oldkeys = make([][]byte, 0, l)
+				pkv.Partnkeys = make([][]byte, 0, l)
 				for i, uuid := range kv.Uuids { // for each key-version
 					pkv.Uuids = append(pkv.Uuids, uuid)
 					pkv.Commands = append(pkv.Commands, uint32(kv.Commands[i]))
 					pkv.Keys = append(pkv.Keys, kv.Keys[i])
 					pkv.Oldkeys = append(pkv.Oldkeys, kv.Oldkeys[i])
+					pkv.Partnkeys = append(pkv.Partnkeys, kv.Partnkeys[i])
 				}
 				pvb.Kvs = append(pvb.Kvs, pkv)
 			}
@@ -108,21 +110,28 @@ func protobuf2KeyVersions(keys []*protobuf.KeyVersions) []*c.KeyVersions {
 	size := 4 // To avoid reallocs
 	for _, key := range keys {
 		kv := &c.KeyVersions{
-			Seqno:    key.GetSeqno(),
-			Docid:    key.GetDocid(),
-			Uuids:    make([]uint64, 0, size),
-			Commands: make([]byte, 0, size),
-			Keys:     make([][]byte, 0, size),
-			Oldkeys:  make([][]byte, 0, size),
+			Seqno:     key.GetSeqno(),
+			Docid:     key.GetDocid(),
+			Uuids:     make([]uint64, 0, size),
+			Commands:  make([]byte, 0, size),
+			Keys:      make([][]byte, 0, size),
+			Oldkeys:   make([][]byte, 0, size),
+			Partnkeys: make([][]byte, 0, size),
 		}
 		commands := key.GetCommands()
 		newkeys := key.GetKeys()
 		oldkeys := key.GetOldkeys()
+		partnkeys := key.GetPartnkeys()
 		for i, uuid := range key.GetUuids() {
 			kv.Uuids = append(kv.Uuids, uuid)
 			kv.Commands = append(kv.Commands, byte(commands[i]))
 			kv.Keys = append(kv.Keys, newkeys[i])
 			kv.Oldkeys = append(kv.Oldkeys, oldkeys[i])
+
+			// For backward compatibility, projector may not send partnkeys pre-5.1.
+			if len(partnkeys) != 0 {
+				kv.Partnkeys = append(kv.Partnkeys, partnkeys[i])
+			}
 		}
 		kvs = append(kvs, kv)
 	}

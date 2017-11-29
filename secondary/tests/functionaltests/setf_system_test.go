@@ -1069,6 +1069,9 @@ func TestDeleteBucketWhileInitialIndexBuild(t *testing.T) {
 		kvutility.DeleteBucket(bucketNames[i], "", clusterconfig.Username, clusterconfig.Password, kvaddress)
 		log.Printf("============== DBG: Create bucket %v", bucketNames[i])
 		kvutility.CreateBucket(bucketNames[i], "sasl", "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256", proxyPorts[i])
+		kvutility.EnableBucketFlush(bucketNames[i], "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+		time.Sleep(1 * time.Second)
+		kvutility.FlushBucket(bucketNames[i], "", clusterconfig.Username, clusterconfig.Password, kvaddress)
 	}
 	time.Sleep(30 * time.Second)
 

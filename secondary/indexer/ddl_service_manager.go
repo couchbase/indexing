@@ -59,7 +59,8 @@ type DDLServiceMgr struct {
 // DDL related settings
 //
 type ddlSettings struct {
-	numReplica int32
+	numReplica   int32
+	numPartition int32
 }
 
 //////////////////////////////////////////////////////////////
@@ -630,6 +631,10 @@ func (s *ddlSettings) NumReplica() int32 {
 	return atomic.LoadInt32(&s.numReplica)
 }
 
+func (s *ddlSettings) NumPartition() int32 {
+	return atomic.LoadInt32(&s.numPartition)
+}
+
 func (s *ddlSettings) handleSettings(config common.Config) {
 
 	numReplica := int32(config["settings.num_replica"].Int())
@@ -637,5 +642,12 @@ func (s *ddlSettings) handleSettings(config common.Config) {
 		atomic.StoreInt32(&s.numReplica, numReplica)
 	} else {
 		logging.Errorf("DDLServiceMgr: invalid setting value for num_replica=%v", numReplica)
+	}
+
+	numPartition := int32(config["numPartitions"].Int())
+	if numPartition > 0 {
+		atomic.StoreInt32(&s.numPartition, numPartition)
+	} else {
+		logging.Errorf("DDLServiceMgr: invalid setting value for numPartitions=%v", numPartition)
 	}
 }

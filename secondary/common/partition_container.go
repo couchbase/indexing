@@ -24,8 +24,8 @@ type PartitionContainer interface {
 	UpdatePartition(PartitionId, PartitionDefn)
 	RemovePartition(PartitionId)
 
-	GetEndpointsByPartitionKey(PartitionKey) []Endpoint
-	GetPartitionIdByPartitionKey(PartitionKey) PartitionId
+	GetEndpointsByPartitionKey(PartitionKey, uint16) []Endpoint
+	GetPartitionIdByPartitionKey(PartitionKey, uint16) PartitionId
 	GetEndpointsByPartitionId(PartitionId) []Endpoint
 
 	GetAllPartitions() []PartitionDefn
