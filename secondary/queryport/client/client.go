@@ -100,11 +100,11 @@ type Aggregate struct {
 }
 
 type GroupAggr struct {
-	Name                string       // name of the index aggregate
-	Group               []*GroupKey  // group keys, nil means no group by
-	Aggrs               []*Aggregate // aggregates with in the group, nil means no aggregates
-	DependsOnIndexKeys  []int32      // GROUP and Aggregates Depends on List of index keys positions
-	DependsOnPrimaryKey bool         // GROUP and Aggregates Depends on primary key
+	Name               string       // name of the index aggregate
+	Group              []*GroupKey  // group keys, nil means no group by
+	Aggrs              []*Aggregate // aggregates with in the group, nil means no aggregates
+	DependsOnIndexKeys []int32      // GROUP and Aggregates Depends on List of index keys positions
+	IndexKeyNames      []string     // Index key names used in expressions
 }
 
 const (

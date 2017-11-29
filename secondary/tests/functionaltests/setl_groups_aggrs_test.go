@@ -13,8 +13,13 @@ import (
 	"time"
 )
 
+var tmpclient string
+
 func TestGroupAggrSetup(t *testing.T) {
 	log.Printf("In TestGroupAggrSetup()")
+
+	tmpclient = secondaryindex.UseClient
+	secondaryindex.UseClient = "gsi"
 
 	var index = "index_agg"
 	var bucket = "default"
@@ -33,7 +38,6 @@ func TestGroupAggrSetup(t *testing.T) {
 
 	err := secondaryindex.CreateSecondaryIndex(index, bucket, indexManagementAddress, "", []string{"Year", "Month", "Sale"}, false, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
-
 }
 
 type Aggdoc struct {
@@ -99,11 +103,10 @@ func basicGroupAggr() (*qc.GroupAggr, *qc.IndexProjection) {
 	dependsOnIndexKeys[0] = int32(0)
 
 	ga := &qc.GroupAggr{
-		Name:                "testGrpAggr2",
-		Group:               groups,
-		Aggrs:               aggregates,
-		DependsOnIndexKeys:  dependsOnIndexKeys,
-		DependsOnPrimaryKey: false,
+		Name:               "testGrpAggr2",
+		Group:              groups,
+		Aggrs:              aggregates,
+		DependsOnIndexKeys: dependsOnIndexKeys,
 	}
 
 	entry := make([]int64, 4)
@@ -177,4 +180,101 @@ func TestGroupAggrMinMax(t *testing.T) {
 	scanResults, err := secondaryindex.Scan3(index1, bucketName, indexScanAddress, getScanAllNoFilter(), false, false, proj, 0, defaultlimit, ga, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
 	tc.PrintScanResults(scanResults, "scanResults")
+}
+
+func TestGroupAggrLeading_N1QLExprs(t *testing.T) {
+	log.Printf("In TestGroupAggrLeading_N1QLExprs()")
+
+	var index1 = "index_agg"
+	var bucketName = "default"
+
+	ga, proj := basicGroupAggrN1QLExprs1()
+
+	scanResults, err := secondaryindex.Scan3(index1, bucketName, indexScanAddress, getScanAllNoFilter(), false, false, proj, 0, defaultlimit, ga, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in scan", t)
+	tc.PrintScanResults(scanResults, "scanResults")
+
+	ga, proj = basicGroupAggrN1QLExprs2()
+
+	scanResults, err = secondaryindex.Scan3(index1, bucketName, indexScanAddress, getScanAllNoFilter(), false, false, proj, 0, defaultlimit, ga, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in scan", t)
+	tc.PrintScanResults(scanResults, "scanResults")
+	secondaryindex.UseClient = tmpclient
+}
+
+func basicGroupAggrN1QLExprs1() (*qc.GroupAggr, *qc.IndexProjection) {
+
+	g1 := &qc.GroupKey{EntryKeyId: 3, KeyPos: -1, Expr: "\"Year \" || cover ((`default`.`Year`))"}
+	g2 := &qc.GroupKey{EntryKeyId: 4, KeyPos: -1, Expr: "cover ((`default`.`Month`))"}
+
+	groups := []*qc.GroupKey{g1, g2}
+
+	a1 := &qc.Aggregate{AggrFunc: c.AGG_SUM, EntryKeyId: 5, KeyPos: -1,
+		Expr: "cover ((`default`.`Sale`)) * 2"}
+
+	a2 := &qc.Aggregate{AggrFunc: c.AGG_COUNT, EntryKeyId: 6, KeyPos: 2, Expr: ""}
+	aggregates := []*qc.Aggregate{a1, a2}
+
+	ga := &qc.GroupAggr{
+		Name:               "testGrpAggr1",
+		Group:              groups,
+		Aggrs:              aggregates,
+		DependsOnIndexKeys: []int32{0, 1, 2, 3},
+		IndexKeyNames: []string{
+			"(`default`.`Year`)",
+			"(`default`.`Month`)",
+			"(`default`.`Sale`)",
+			"(meta(`default`).`id`)"},
+	}
+
+	proj := &qc.IndexProjection{
+		EntryKeys: []int64{3, 4, 5, 6},
+	}
+
+	return ga, proj
+}
+
+func basicGroupAggrN1QLExprs2() (*qc.GroupAggr, *qc.IndexProjection) {
+
+	g1 := &qc.GroupKey{EntryKeyId: 3, KeyPos: -1, Expr: "SUBSTR(cover ((meta(`default`).`id`)), 0, 4)"}
+	groups := []*qc.GroupKey{g1}
+
+	a1 := &qc.Aggregate{AggrFunc: c.AGG_SUM, EntryKeyId: 4, KeyPos: -1,
+		Expr: "cover ((`default`.`Sale`))"}
+
+	a2 := &qc.Aggregate{AggrFunc: c.AGG_COUNT, EntryKeyId: 5, KeyPos: 2, Expr: ""}
+	aggregates := []*qc.Aggregate{a1, a2}
+
+	ga := &qc.GroupAggr{
+		Name:               "testGrpAggr2",
+		Group:              groups,
+		Aggrs:              aggregates,
+		DependsOnIndexKeys: []int32{0, 1, 2, 3},
+		IndexKeyNames: []string{
+			"(`default`.`Year`)",
+			"(`default`.`Month`)",
+			"(`default`.`Sale`)",
+			"(meta(`default`).`id`)"},
+	}
+
+	proj := &qc.IndexProjection{
+		EntryKeys: []int64{3, 4, 5},
+	}
+
+	return ga, proj
+}
+
+func getNonOverlappingFilters3() qc.Scans {
+	scans := make(qc.Scans, 2)
+
+	filter1 := make([]*qc.CompositeElementFilter, 2)
+	filter1[0] = &qc.CompositeElementFilter{Low: "2016", High: "2016", Inclusion: qc.Inclusion(uint32(3))}
+	filter1[1] = &qc.CompositeElementFilter{Low: int64(1), High: int64(1), Inclusion: qc.Inclusion(uint32(3))}
+	scans[0] = &qc.Scan{Filter: filter1}
+
+	filter2 := make([]*qc.CompositeElementFilter, 2)
+	filter2[0] = &qc.CompositeElementFilter{Low: "2017", High: "2017", Inclusion: qc.Inclusion(uint32(3))}
+	filter2[1] = &qc.CompositeElementFilter{Low: int64(2), High: int64(3), Inclusion: qc.Inclusion(uint32(3))}
+	scans[1] = &qc.Scan{Filter: filter2}
+	return scans
 }

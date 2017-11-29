@@ -270,64 +270,66 @@ func N1QLScan3(indexName, bucketName, server string, scans qc.Scans, reverse, di
 	projection *qc.IndexProjection, offset, limit int64, groupAggr *qc.GroupAggr,
 	consistency c.Consistency, vector *qc.TsConsistency) (tc.ScanResponse, error) {
 
-	//TODO fix the interface change
-	/*
-		client, err := nclient.NewGSIIndexer(server, "default", bucketName)
-		if err != nil {
-			return nil, err
-		}
-		conn, err := datastore.NewSizedIndexConnection(100000, &testContext{})
-		if err != nil {
-			log.Fatalf("error creating SizedIndexConnection: %v\n", err)
-		}
-		requestid := getrequestid()
-		index, err := client.IndexByName(indexName)
+	client, err := nclient.NewGSIIndexer(server, "default", bucketName)
+	if err != nil {
+		return nil, err
+	}
+	conn, err := datastore.NewSizedIndexConnection(100000, &testContext{})
+	if err != nil {
+		log.Fatalf("error creating SizedIndexConnection: %v\n", err)
+	}
+	requestid := getrequestid()
+	index, err := client.IndexByName(indexName)
 
-		var err1 error
-		index, err1 = WaitForIndexOnline(client, indexName, index)
-		if err1 != nil {
-			return nil, err1
-		}
+	var err1 error
+	index, err1 = WaitForIndexOnline(client, indexName, index)
+	if err1 != nil {
+		return nil, err1
+	}
 
-		index3, useScan3 := index.(datastore.Index3)
-		if err != nil {
-			return nil, err
-		}
+	index3, useScan3 := index.(datastore.Index3)
+	if err != nil {
+		return nil, err
+	}
 
-		var start time.Time
-		go func() {
-			spans2 := make(datastore.Spans2, len(scans))
-			for i, scan := range scans {
-				spans2[i] = &datastore.Span2{}
-				if len(scan.Seek) != 0 {
-					spans2[i].Seek = skey2qkey(scan.Seek)
-				}
-				spans2[i].Ranges = filtertoranges2(scan.Filter)
+	var start time.Time
+	go func() {
+		spans2 := make(datastore.Spans2, len(scans))
+		for i, scan := range scans {
+			spans2[i] = &datastore.Span2{}
+			if len(scan.Seek) != 0 {
+				spans2[i].Seek = skey2qkey(scan.Seek)
 			}
+			spans2[i].Ranges = filtertoranges2(scan.Filter)
+		}
 
-			proj := projectionton1ql(projection)
-			groupAggregates := groupAggrton1ql(groupAggr)
+		proj := projectionton1ql(projection)
+		groupAggregates := groupAggrton1ql(groupAggr)
 
-			cons := getConsistency(consistency)
-			ordered := true
+		cons := getConsistency(consistency)
 
-			if useScan3 {
-				start = time.Now()
-				// TODO: pass the vector instead of nil.
-				// Currently go tests do not pass timestamp vector
-				index3.Scan3(requestid, spans2, reverse, distinct, ordered, proj,
-					offset, limit, groupAggregates, cons, nil, conn)
-			} else {
-				log.Fatalf("Indexer does not support Index3 API. Cannot call Scan3 method.")
-			}
-		}()
+		if useScan3 {
+			start = time.Now()
+			// TODO: pass the vector instead of nil.
+			// Currently go tests do not pass timestamp vector
+			index3.Scan3(requestid, spans2, reverse, distinct, proj,
+				offset, limit, groupAggregates, nil, cons, nil, conn)
+			// TODO: Passing nil for IndexKeyOrders
+		} else {
+			log.Fatalf("Indexer does not support Index3 API. Cannot call Scan3 method.")
+		}
+	}()
 
-		results := getresultsfromchannel(conn.EntryChannel(), index.IsPrimary())
-		elapsed := time.Since(start)
-		tc.LogPerfStat("MultiScan", elapsed)
-		return results, nil
-	*/
-	return nil, nil
+	var results tc.ScanResponse
+	if groupAggr != nil {
+		resultsforaggrgates(conn.EntryChannel())
+	} else {
+		results = getresultsfromchannel(conn.EntryChannel(), index.IsPrimary())
+	}
+
+	elapsed := time.Since(start)
+	tc.LogPerfStat("MultiScan", elapsed)
+	return results, nil
 }
 
 func filtertoranges2(filters []*qc.CompositeElementFilter) datastore.Ranges2 {
@@ -395,6 +397,7 @@ func groupAggrton1ql(groupAggs *qc.GroupAggr) *datastore.IndexGroupAggregates {
 		Group:              groups,
 		Aggregates:         aggregates,
 		DependsOnIndexKeys: dependsOnIndexKeys,
+		IndexKeyNames:      groupAggs.IndexKeyNames,
 	}
 
 	return ga
@@ -449,6 +452,18 @@ func getresultsfromchannel(ch datastore.EntryChannel, isprimary bool) tc.ScanRes
 		}
 	}
 	return scanResults
+}
+
+func resultsforaggrgates(ch datastore.EntryChannel) {
+	ok := true
+	for ok {
+		entry, ok := <-ch
+		if ok {
+			log.Printf("Scanresult Row  %v : %v ", entry.EntryKey, entry.PrimaryKey)
+		} else {
+			break
+		}
+	}
 }
 
 func interfaceton1qlvalue(key interface{}) value.Value {

@@ -19,6 +19,8 @@ import (
 	c "github.com/couchbase/indexing/secondary/common"
 	l "github.com/couchbase/indexing/secondary/logging"
 	p "github.com/couchbase/indexing/secondary/pipeline"
+	"github.com/couchbase/query/expression"
+	"github.com/couchbase/query/value"
 )
 
 var (
@@ -113,6 +115,7 @@ func (s *IndexScanSource) Routine() error {
 	buf2 := secKeyBufPool.Get()
 	r.keyBufList = append(r.keyBufList, buf2)
 	previousRow := (*buf2)[:0]
+	docidbuf := make([]byte, 1024)
 	revbuf := secKeyBufPool.Get()
 	r.keyBufList = append(r.keyBufList, revbuf)
 
@@ -151,10 +154,23 @@ func (s *IndexScanSource) Routine() error {
 		}
 
 		if r.GroupAggr != nil {
+			r.GroupAggr.cv = value.NewScopeValue(make(map[string]interface{}), nil)
+			r.GroupAggr.av = value.NewAnnotatedValue(r.GroupAggr.cv)
+			r.GroupAggr.exprContext = expression.NewIndexContext()
+
 			if ck == nil && len(entry) > cap(*buf) {
 				*buf = make([]byte, 0, len(entry)+1024)
 			}
-			err = computeGroupAggr(ck, entry, (*buf)[:0], s.p.aggrRes, r.GroupAggr)
+
+			var docid []byte
+			if r.GroupAggr.DependsOnPrimaryKey {
+				docid, err = secondaryIndexEntry(entry).ReadDocId((docidbuf)[:0]) //docid for N1QLExpr evaluation for Group/Aggr
+				if err != nil {
+					return err
+				}
+			}
+
+			err = computeGroupAggr(ck, docid, entry, (*buf)[:0], s.p.aggrRes, r.GroupAggr)
 			if err != nil {
 				return err
 			}
@@ -598,7 +614,8 @@ func (a aggrResult) String() string {
 	return res
 }
 
-func computeGroupAggr(compositekeys [][]byte, key, buf []byte, aggrRes *aggrResult, groupAggr *GroupAggr) error {
+func computeGroupAggr(compositekeys [][]byte, docid []byte, key,
+	buf []byte, aggrRes *aggrResult, groupAggr *GroupAggr) error {
 
 	var err error
 	codec := collatejson.NewCodec(16)
@@ -613,7 +630,7 @@ func computeGroupAggr(compositekeys [][]byte, key, buf []byte, aggrRes *aggrResu
 	aggrs := make([]*aggrVal, len(groupAggr.Aggrs))
 
 	for i, gk := range groupAggr.Group {
-		g, err := computeGroupKey(gk, compositekeys)
+		g, err := computeGroupKey(groupAggr, gk, compositekeys, docid)
 		if err != nil {
 			return err
 		}
@@ -621,7 +638,7 @@ func computeGroupAggr(compositekeys [][]byte, key, buf []byte, aggrRes *aggrResu
 	}
 
 	for i, ak := range groupAggr.Aggrs {
-		a, err := computeAggrVal(ak, compositekeys, buf)
+		a, err := computeAggrVal(groupAggr, ak, compositekeys, docid, buf)
 		if err != nil {
 			return err
 		}
@@ -633,7 +650,7 @@ func computeGroupAggr(compositekeys [][]byte, key, buf []byte, aggrRes *aggrResu
 
 }
 
-func computeGroupKey(gk *GroupKey, compositekeys [][]byte) (*groupKey, error) {
+func computeGroupKey(groupAggr *GroupAggr, gk *GroupKey, compositekeys [][]byte, docid []byte) (*groupKey, error) {
 	var g *groupKey
 	if gk.KeyPos >= 0 {
 		newKey := make([]byte, len(compositekeys[gk.KeyPos]))
@@ -642,12 +659,27 @@ func computeGroupKey(gk *GroupKey, compositekeys [][]byte) (*groupKey, error) {
 			projectId: gk.EntryKeyId,
 		}
 	} else {
-		//process expr
+		scalar, err := evaluateN1QLExpresssion(groupAggr, gk.Expr, compositekeys, docid)
+		if err != nil {
+			return nil, err
+		}
+
+		// TODO: MB-27049 - Encoding not needed here
+		codec := collatejson.NewCodec(16)
+		encodeBuf := make([]byte, 1024) // TODO MB-27049 fix buffer size and avoid garbage
+		encoded, err := codec.EncodeN1QLValue(scalar, encodeBuf[:0])
+		if err != nil {
+			return nil, err
+		}
+		g = &groupKey{key: encoded,
+			projectId: gk.EntryKeyId,
+		}
 	}
 	return g, nil
 }
 
-func computeAggrVal(ak *Aggregate, compositekeys [][]byte, buf []byte) (*aggrVal, error) {
+func computeAggrVal(groupAggr *GroupAggr, ak *Aggregate,
+	compositekeys [][]byte, docid []byte, buf []byte) (*aggrVal, error) {
 
 	var a *aggrVal
 	if ak.KeyPos >= 0 {
@@ -661,9 +693,38 @@ func computeAggrVal(ak *Aggregate, compositekeys [][]byte, buf []byte) (*aggrVal
 		}
 	} else {
 		//process expr
+		scalar, err := evaluateN1QLExpresssion(groupAggr, ak.Expr, compositekeys, docid)
+		if err != nil {
+			return nil, err
+		}
+		a = &aggrVal{fn: c.NewAggrFunc(ak.AggrFunc, scalar.ActualForIndex()),
+			projectId: ak.EntryKeyId,
+		}
 	}
 	return a, nil
 
+}
+
+func evaluateN1QLExpresssion(groupAggr *GroupAggr, expr expression.Expression,
+	compositekeys [][]byte, docid []byte) (value.Value, error) {
+
+	for i, ik := range groupAggr.DependsOnIndexKeys {
+		if int(ik) == len(compositekeys) {
+			groupAggr.av.SetCover(groupAggr.IndexKeyNames[i], value.NewValue(string(docid)))
+		} else {
+			buf := make([]byte, len(compositekeys[ik])*3) // TODO: MB-27049 avoid garbage
+			actualVal, err := decodeValue(compositekeys[ik], buf)
+			if err != nil {
+				return nil, err
+			}
+			groupAggr.av.SetCover(groupAggr.IndexKeyNames[i], value.NewValue(actualVal))
+		}
+	}
+	scalar, _, err := expr.EvaluateForIndex(groupAggr.av, groupAggr.exprContext) // TODO: Ignore vector for now
+	if err != nil {
+		return nil, err
+	}
+	return scalar, nil
 }
 
 func (ar *aggrResult) AddNewGroup(groups []*groupKey, aggrs []*aggrVal) error {

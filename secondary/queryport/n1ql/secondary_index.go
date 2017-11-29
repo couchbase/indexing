@@ -1015,11 +1015,15 @@ func (si *secondaryIndex3) Aggregates() ([]datastore.IndexGroupAggregates, error
 	return nil, errors.NewError(fmt.Errorf("Precomputed Aggregates not supported"), "")
 }
 
+func (si *secondaryIndex3) PartitionKeys() (*datastore.IndexPartition, errors.Error) {
+	return nil, errors.NewError(fmt.Errorf("PartitionKeys not implemented"), "")
+}
+
 // Scan3 implement Index3 interface.
 func (si *secondaryIndex3) Scan3(
-	requestId string, spans datastore.Spans2, reverse, distinctAfterProjection, ordered bool,
+	requestId string, spans datastore.Spans2, reverse, distinctAfterProjection bool,
 	projection *datastore.IndexProjection, offset, limit int64,
-	groupAggs *datastore.IndexGroupAggregates,
+	groupAggs *datastore.IndexGroupAggregates, indexOrders datastore.IndexKeyOrders,
 	cons datastore.ScanConsistency, vector timestamp.Vector,
 	conn *datastore.IndexConnection) {
 
@@ -1681,7 +1685,9 @@ func n1qlgroupaggrtogsi(groupAggs *datastore.IndexGroupAggregates) *qclient.Grou
 			g := &qclient.GroupKey{
 				EntryKeyId: int32(grp.EntryKeyId),
 				KeyPos:     int32(grp.KeyPos),
-				Expr:       expression.NewStringer().Visit(grp.Expr),
+			}
+			if grp.Expr != nil {
+				g.Expr = expression.NewStringer().Visit(grp.Expr)
 			}
 			groups[i] = g
 		}
@@ -1696,8 +1702,10 @@ func n1qlgroupaggrtogsi(groupAggs *datastore.IndexGroupAggregates) *qclient.Grou
 				AggrFunc:   n1qlaggrtypetogsi(aggr.Operation),
 				EntryKeyId: int32(aggr.EntryKeyId),
 				KeyPos:     int32(aggr.KeyPos),
-				Expr:       expression.NewStringer().Visit(aggr.Expr),
 				Distinct:   aggr.Distinct,
+			}
+			if aggr.Expr != nil {
+				a.Expr = expression.NewStringer().Visit(aggr.Expr)
 			}
 			aggregates[i] = a
 		}
@@ -1716,6 +1724,7 @@ func n1qlgroupaggrtogsi(groupAggs *datastore.IndexGroupAggregates) *qclient.Grou
 		Group:              groups,
 		Aggrs:              aggregates,
 		DependsOnIndexKeys: dependsOnIndexKeys,
+		IndexKeyNames:      groupAggs.IndexKeyNames,
 	}
 
 	return ga
