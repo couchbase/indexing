@@ -146,10 +146,10 @@ if [ "$MODE" = "test" ]; then
       GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
 
   elif [ "$STORAGE" = "plasma" ]; then
-      cd $WORSPACE/goproj/src/github.com/couchbase/nitro/skiplist
+      cd $WORKSPACE/goproj/src/github.com/couchbase/nitro/skiplist
       GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
 
-      cd $WORSPACE/goproj/src/github.com/couchbase/plasma
+      cd $WORKSPACE/goproj/src/github.com/couchbase/plasma
       GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
   fi
 
