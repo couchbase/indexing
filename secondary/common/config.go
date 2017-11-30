@@ -1205,7 +1205,7 @@ var SystemConfig = Config{
 	},
 
 	"indexer.plasma.checkpointInterval": ConfigValue{
-		600,
+		0, // Disable fast recovery
 		"Fast recovery checkpoint interval in seconds",
 		600,
 		false,
