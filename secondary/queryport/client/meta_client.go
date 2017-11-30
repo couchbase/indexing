@@ -157,8 +157,9 @@ func (b *metadataClient) GetIndexDefn(defnID uint64) *common.IndexDefn {
 
 // CreateIndex implements BridgeAccessor{} interface.
 func (b *metadataClient) CreateIndex(
-	indexName, bucket, using, exprType, partnExpr, whereExpr string,
+	indexName, bucket, using, exprType, whereExpr string,
 	secExprs []string, desc []bool, isPrimary bool,
+	scheme common.PartitionScheme, partitionKeys []string,
 	planJSON []byte) (uint64, error) {
 
 	plan := make(map[string]interface{})
@@ -172,8 +173,8 @@ func (b *metadataClient) CreateIndex(
 	refreshCnt := 0
 RETRY:
 	defnID, err, needRefresh := b.mdClient.CreateIndexWithPlan(
-		indexName, bucket, using, exprType, partnExpr, whereExpr,
-		secExprs, desc, isPrimary, plan)
+		indexName, bucket, using, exprType, whereExpr,
+		secExprs, desc, isPrimary, scheme, partitionKeys, plan)
 
 	if needRefresh && refreshCnt == 0 {
 		fmsg := "GsiClient: Indexer Node List is out-of-date.  Require refresh."
@@ -480,7 +481,6 @@ func (b *metadataClient) equivalentIndex(
 		d1.IsPrimary != d2.IsPrimary ||
 		d1.ExprType != d2.ExprType ||
 		d1.PartitionScheme != d2.PartitionScheme ||
-		d1.PartitionKey != d2.PartitionKey ||
 		d1.WhereExpr != d2.WhereExpr {
 
 		return false
@@ -492,6 +492,16 @@ func (b *metadataClient) equivalentIndex(
 
 	for i, s1 := range d1.SecExprs {
 		if s1 != d2.SecExprs[i] {
+			return false
+		}
+	}
+
+	if len(d1.PartitionKeys) != len(d2.PartitionKeys) {
+		return false
+	}
+
+	for i, s1 := range d1.PartitionKeys {
+		if s1 != d2.PartitionKeys[i] {
 			return false
 		}
 	}

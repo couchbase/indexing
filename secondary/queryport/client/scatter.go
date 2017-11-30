@@ -9,16 +9,19 @@
 package client
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"github.com/couchbase/indexing/secondary/collatejson"
 	"github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/common/json"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/query/value"
 	"math"
 	"reflect"
 	//"runtime"
+	"github.com/couchbase/query/expression"
+	"github.com/couchbase/query/expression/parser"
+	qvalue "github.com/couchbase/query/value"
 	"sync/atomic"
 	"unsafe"
 )
@@ -49,6 +52,7 @@ type RequestBroker struct {
 	partial  int32
 
 	// scan
+	defn           *common.IndexDefn
 	limit          int64
 	offset         int64
 	pushdownLimit  int64
@@ -69,6 +73,10 @@ type doneStatus struct {
 const (
 	NoPick = -1
 	Done   = -2
+)
+
+const (
+	MetaIdPos = -1
 )
 
 //
@@ -289,6 +297,7 @@ func (b *RequestBroker) reset() {
 	b.numIndexers = 0
 
 	// scans
+	b.defn = nil
 	b.pushdownLimit = b.limit
 	b.pushdownOffset = b.offset
 }
@@ -309,6 +318,7 @@ func (c *RequestBroker) scatter(client []*GsiScanClient, index *common.IndexDefn
 
 	c.reset()
 	c.SetNumIndexers(len(partition))
+	c.defn = index
 
 	partition = c.filterPartitions(index, partition, numPartition)
 	client, rollback, partition = filterClients(client, rollback, partition)
@@ -476,12 +486,25 @@ func (c *RequestBroker) sort(rows []Row, sorted []int) bool {
 				return false
 			}
 
-			if rows[sorted[i]].last && !rows[sorted[j]].last ||
-				(!rows[sorted[i]].last && !rows[sorted[j]].last &&
-					c.compareKey(rows[sorted[i]].value, rows[sorted[j]].value) > 0) {
-				tmp := sorted[i]
-				sorted[i] = sorted[j]
-				sorted[j] = tmp
+			if !c.defn.IsPrimary {
+
+				if rows[sorted[i]].last && !rows[sorted[j]].last ||
+					(!rows[sorted[i]].last && !rows[sorted[j]].last &&
+						c.compareKey(rows[sorted[i]].value, rows[sorted[j]].value) > 0) {
+					tmp := sorted[i]
+					sorted[i] = sorted[j]
+					sorted[j] = tmp
+				}
+
+			} else {
+
+				if rows[sorted[i]].last && !rows[sorted[j]].last ||
+					(!rows[sorted[i]].last && !rows[sorted[j]].last &&
+						c.comparePrimaryKey(rows[sorted[i]].pkey, rows[sorted[j]].pkey) > 0) {
+					tmp := sorted[i]
+					sorted[i] = sorted[j]
+					sorted[j] = tmp
+				}
 			}
 		}
 	}
@@ -508,18 +531,37 @@ func (c *RequestBroker) pick(rows []Row, sorted []int) int {
 			return NoPick
 		}
 
-		// last value always sorted last
-		if rows[sorted[pos]].last && !rows[sorted[i]].last ||
-			(!rows[sorted[pos]].last && !rows[sorted[i]].last &&
-				c.compareKey(rows[sorted[pos]].value, rows[sorted[i]].value) > 0) {
+		if !c.defn.IsPrimary {
 
-			tmp := sorted[pos]
-			sorted[pos] = sorted[i]
-			sorted[i] = tmp
-			pos = i
+			// last value always sorted last
+			if rows[sorted[pos]].last && !rows[sorted[i]].last ||
+				(!rows[sorted[pos]].last && !rows[sorted[i]].last &&
+					c.compareKey(rows[sorted[pos]].value, rows[sorted[i]].value) > 0) {
+
+				tmp := sorted[pos]
+				sorted[pos] = sorted[i]
+				sorted[i] = tmp
+				pos = i
+
+			} else {
+				break
+			}
 
 		} else {
-			break
+
+			// last value always sorted last
+			if rows[sorted[pos]].last && !rows[sorted[i]].last ||
+				(!rows[sorted[pos]].last && !rows[sorted[i]].last &&
+					c.comparePrimaryKey(rows[sorted[pos]].pkey, rows[sorted[i]].pkey) > 0) {
+
+				tmp := sorted[pos]
+				sorted[pos] = sorted[i]
+				sorted[i] = tmp
+				pos = i
+
+			} else {
+				break
+			}
 		}
 	}
 
@@ -696,6 +738,14 @@ func (c *RequestBroker) compareKey(key1, key2 []value.Value) int {
 	}
 
 	return len(key1) - len(key2)
+}
+
+// This function compares the primary key.
+// Returns –int, 0 or +int depending on if key1
+// sorts less than, equal to, or greater than key2.
+func (c *RequestBroker) comparePrimaryKey(k1 []byte, k2 []byte) int {
+
+	return bytes.Compare(k1, k2)
 }
 
 //
@@ -920,10 +970,49 @@ func partitionKeyPos(defn *common.IndexDefn) []int {
 	}
 
 	var pos []int
-	for i, secKey := range defn.SecExprs {
-		if secKey == defn.PartitionKey {
-			pos = append(pos, i)
+	secExprs := make(expression.Expressions, 0, len(defn.SecExprs))
+	for _, key := range defn.SecExprs {
+		expr, err := parser.Parse(key)
+		if err != nil {
+			logging.Errorf("Fail to parse secondary key", key)
+			return nil
 		}
+		secExprs = append(secExprs, expr)
+	}
+
+	partnExprs := make(expression.Expressions, 0, len(defn.PartitionKeys))
+	for _, key := range defn.PartitionKeys {
+		expr, err := parser.Parse(key)
+		if err != nil {
+			logging.Errorf("Fail to parse partition key", key)
+			return nil
+		}
+		partnExprs = append(partnExprs, expr)
+	}
+
+	if !defn.IsPrimary {
+		for _, partnExpr := range partnExprs {
+			for i, secExpr := range secExprs {
+
+				if partnExpr.EquivalentTo(secExpr) {
+					pos = append(pos, i)
+					break
+				}
+			}
+		}
+	} else {
+		id := expression.NewField(expression.NewMeta(), expression.NewFieldName("id", false))
+		idself := expression.NewField(expression.NewMeta(expression.NewIdentifier("self")), expression.NewFieldName("id", false))
+
+		// for primary index, it can be partitioned on an expression based on metaId.  For scan, n1ql only push down if
+		// span is metaId (not expr on metaId).   So if partition key is not metaId, then there is no partition elimination.
+		if len(partnExprs) == 1 && (partnExprs[0].EquivalentTo(id) || partnExprs[0].EquivalentTo(idself)) {
+			pos = append(pos, MetaIdPos)
+		}
+	}
+
+	if len(pos) != len(defn.PartitionKeys) {
+		return nil
 	}
 
 	return pos
@@ -949,13 +1038,18 @@ func partitionKeyValues(requestId string, partnKeyPos []int, scans Scans) [][]in
 
 				for _, pos := range partnKeyPos {
 
-					if pos >= len(scan.Filter) {
+					if pos != MetaIdPos && pos >= len(scan.Filter) {
 						partnKeyValues[scanPos] = nil
 						break
 					}
 
-					if reflect.DeepEqual(scan.Filter[pos].Low, scan.Filter[pos].High) {
-						partnKeyValues[scanPos] = append(partnKeyValues[scanPos], scan.Filter[pos].Low)
+					if pos != MetaIdPos && reflect.DeepEqual(scan.Filter[pos].Low, scan.Filter[pos].High) {
+						partnKeyValues[scanPos] = append(partnKeyValues[scanPos], qvalue.NewValue(scan.Filter[pos].Low))
+
+					} else if pos == MetaIdPos && len(scan.Filter) == 1 {
+						// n1ql only push down span on primary key for metaId()
+						// it will not push down on expr on metaId()
+						partnKeyValues[scanPos] = append(partnKeyValues[scanPos], qvalue.NewValue(scan.Filter[0].Low))
 
 					} else {
 						partnKeyValues[scanPos] = nil
@@ -971,12 +1065,23 @@ func partitionKeyValues(requestId string, partnKeyPos []int, scans Scans) [][]in
 
 				for _, pos := range partnKeyPos {
 
-					if pos >= len(scan.Seek) {
+					if pos != MetaIdPos && pos >= len(scan.Seek) {
 						partnKeyValues[scanPos] = nil
 						break
 					}
 
-					partnKeyValues[scanPos] = append(partnKeyValues[scanPos], scan.Seek[pos])
+					if pos != MetaIdPos {
+						partnKeyValues[scanPos] = append(partnKeyValues[scanPos], qvalue.NewValue(scan.Seek[pos]))
+
+					} else if pos == MetaIdPos && len(scan.Filter) == 1 {
+						// n1ql only push down span on primary key for metaId()
+						// it will not push down on expr on metaId()
+						partnKeyValues[scanPos] = append(partnKeyValues[scanPos], qvalue.NewValue(scan.Seek[0]))
+
+					} else {
+						partnKeyValues[scanPos] = nil
+						break
+					}
 				}
 			}
 		}
@@ -1003,21 +1108,13 @@ func partitionKeyHash(partnKeyValues [][]interface{}, scans Scans, numPartition 
 	result := make(map[common.PartitionId]bool)
 	for _, values := range partnKeyValues {
 
-		if len(values) != 0 {
-			var v []byte
-
-			for _, value := range values {
-				l, err := json.Marshal(value)
-				if err != nil {
-					return nil
-				}
-
-				v = append(v, l...)
-			}
-
-			partnId := common.HashKeyPartition(v, int(numPartition))
-			result[partnId] = true
+		v, e := qvalue.NewValue(values).MarshalJSON()
+		if e != nil {
+			return nil
 		}
+
+		partnId := common.HashKeyPartition(v, int(numPartition))
+		result[partnId] = true
 	}
 
 	return result

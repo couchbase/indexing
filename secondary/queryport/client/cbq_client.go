@@ -133,8 +133,9 @@ func (b *cbqClient) Nodes() ([]*IndexerService, error) {
 
 // CreateIndex implement BridgeAccessor{} interface.
 func (b *cbqClient) CreateIndex(
-	name, bucket, using, exprType, partnExpr, whereExpr string,
+	name, bucket, using, exprType, whereExpr string,
 	secExprs []string, desc []bool, isPrimary bool,
+	scheme common.PartitionScheme, partitionKeys []string,
 	with []byte) (defnID uint64, err error) {
 
 	var resp *http.Response
@@ -146,7 +147,6 @@ func (b *cbqClient) CreateIndex(
 		Bucket:    bucket,
 		Using:     using,
 		ExprType:  exprType,
-		PartnExpr: partnExpr,
 		WhereExpr: whereExpr,
 		SecExprs:  secExprs,
 		IsPrimary: isPrimary,
@@ -282,14 +282,14 @@ type indexInfo struct {
 
 func newIndexMetaData(info *indexInfo, queryport string) *mclient.IndexMetadata {
 	defn := &common.IndexDefn{
-		DefnId:       common.IndexDefnId(info.DefnID),
-		Name:         info.Name,
-		Using:        common.IndexType(info.Using),
-		Bucket:       info.Bucket,
-		IsPrimary:    info.IsPrimary,
-		ExprType:     common.ExprType(info.ExprType),
-		SecExprs:     info.SecExprs,
-		PartitionKey: info.PartnExpr,
+		DefnId:    common.IndexDefnId(info.DefnID),
+		Name:      info.Name,
+		Using:     common.IndexType(info.Using),
+		Bucket:    info.Bucket,
+		IsPrimary: info.IsPrimary,
+		ExprType:  common.ExprType(info.ExprType),
+		SecExprs:  info.SecExprs,
+		//PartitionKey: info.PartnExpr,
 	}
 	instances := []*mclient.InstanceDefn{
 		&mclient.InstanceDefn{

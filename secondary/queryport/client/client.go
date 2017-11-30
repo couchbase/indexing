@@ -156,8 +156,9 @@ type BridgeAccessor interface {
 	// with
 	//      JSON marshalled description about index deployment (and more...).
 	CreateIndex(
-		name, bucket, using, exprType, partnExpr, whereExpr string,
+		name, bucket, using, exprType, whereExpr string,
 		secExprs []string, desc []bool, isPrimary bool,
+		scheme common.PartitionScheme, partitionKeys []string,
 		with []byte) (defnID uint64, err error)
 
 	// BuildIndexes to build a deferred set of indexes. This call implies
@@ -457,14 +458,15 @@ func (c *GsiClient) CreateIndex(
 	secExprs []string, isPrimary bool,
 	with []byte) (defnID uint64, err error) {
 
-	return c.CreateIndex2(name, bucket, using, exprType,
-		partnExpr, whereExpr, secExprs, nil, isPrimary, with)
+	return c.CreateIndex3(name, bucket, using, exprType,
+		whereExpr, secExprs, nil, isPrimary, common.SINGLE, nil, with)
 }
 
 // CreateIndex implements BridgeAccessor{} interface.
-func (c *GsiClient) CreateIndex2(
-	name, bucket, using, exprType, partnExpr, whereExpr string,
+func (c *GsiClient) CreateIndex3(
+	name, bucket, using, exprType, whereExpr string,
 	secExprs []string, desc []bool, isPrimary bool,
+	scheme common.PartitionScheme, partitionKeys []string,
 	with []byte) (defnID uint64, err error) {
 
 	err = common.IsValidIndexName(name)
@@ -477,14 +479,14 @@ func (c *GsiClient) CreateIndex2(
 	}
 	begin := time.Now()
 	defnID, err = c.bridge.CreateIndex(
-		name, bucket, using, exprType, partnExpr, whereExpr,
-		secExprs, desc, isPrimary, with)
-	fmsg := "CreateIndex %v %v/%v using:%v exprType:%v partnExpr:%v " +
-		"whereExpr:%v secExprs:%v desc:%v isPrimary:%v with:%v - " +
-		"elapsed(%v) err(%v)"
+		name, bucket, using, exprType, whereExpr,
+		secExprs, desc, isPrimary, scheme, partitionKeys, with)
+	fmsg := "CreateIndex %v %v/%v using:%v exprType:%v " +
+		"whereExpr:%v secExprs:%v desc:%v isPrimary:%v scheme:%v " +
+		" partitionKeys:%v with:%v - elapsed(%v) err(%v)"
 	logging.Infof(
-		fmsg, defnID, bucket, name, using, exprType, partnExpr, whereExpr,
-		secExprs, desc, isPrimary, string(with), time.Since(begin), err)
+		fmsg, defnID, bucket, name, using, exprType, whereExpr,
+		secExprs, desc, isPrimary, scheme, partitionKeys, string(with), time.Since(begin), err)
 	return defnID, err
 }
 

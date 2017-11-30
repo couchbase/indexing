@@ -70,20 +70,16 @@ func (pc *KeyPartitionContainer) RemovePartition(id PartitionId) {
 //GetEndpointsByPartitionKey is a convenience method which calls other interface methods
 //to first determine the partitionId from PartitionKey and then the endpoints from
 //partitionId
-func (pc *KeyPartitionContainer) GetEndpointsByPartitionKey(key PartitionKey, vbucket uint16) []Endpoint {
+func (pc *KeyPartitionContainer) GetEndpointsByPartitionKey(key PartitionKey) []Endpoint {
 
-	id := pc.GetPartitionIdByPartitionKey(key, vbucket)
+	id := pc.GetPartitionIdByPartitionKey(key)
 	return pc.GetEndpointsByPartitionId(id)
 
 }
 
 //GetPartitionIdByPartitionKey returns the partitionId for the partition to which the
 //partitionKey belongs.
-func (pc *KeyPartitionContainer) GetPartitionIdByPartitionKey(key PartitionKey, vbucket uint16) PartitionId {
-
-	if pc.scheme == HASH {
-		return PartitionId((vbucket / uint16(pc.PartitionSize)) + 1)
-	}
+func (pc *KeyPartitionContainer) GetPartitionIdByPartitionKey(key PartitionKey) PartitionId {
 
 	if pc.scheme == KEY {
 		return HashKeyPartition(key, pc.NumPartitions)

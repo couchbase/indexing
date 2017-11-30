@@ -116,10 +116,10 @@ func CreateSecondaryIndex2(
 		}
 	}
 	exprType := "N1QL"
-	partnExp := ""
 
 	start := time.Now()
-	defnID, err := client.CreateIndex2(indexName, bucketName, IndexUsing, exprType, partnExp, whereExpr, secExprs, desc, isPrimary, with)
+	defnID, err := client.CreateIndex3(indexName, bucketName, IndexUsing, exprType, whereExpr, secExprs, desc, isPrimary,
+		c.SINGLE, nil, with)
 	if err == nil {
 		log.Printf("Created the secondary index %v. Waiting for it become active", indexName)
 		e := WaitTillIndexActive(defnID, client, indexActiveTimeoutSeconds)

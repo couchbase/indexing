@@ -276,6 +276,15 @@ func (gsi *gsiKeyspace) PrimaryIndexes() ([]datastore.PrimaryIndex, errors.Error
 func (gsi *gsiKeyspace) CreatePrimaryIndex(
 	requestId, name string, with value.Value) (datastore.PrimaryIndex, errors.Error) {
 
+	return gsi.CreatePrimaryIndex3(requestId, name, nil, with)
+}
+
+// CreateIndex3 implements datastore.Indexer3{} interface. Create a secondary
+// index on this keyspace
+func (gsi *gsiKeyspace) CreatePrimaryIndex3(
+	requestId, name string, indexPartition *datastore.IndexPartition,
+	with value.Value) (datastore.PrimaryIndex, errors.Error) {
+
 	var withJSON []byte
 	var err error
 	if with != nil {
@@ -283,15 +292,28 @@ func (gsi *gsiKeyspace) CreatePrimaryIndex(
 			return nil, errors.NewError(err, "GSI error marshalling WITH clause")
 		}
 	}
-	defnID, err := gsi.gsiClient.CreateIndex(
+
+	// partition
+	partitionScheme := c.PartitionScheme(c.SINGLE)
+	var partitionKeys []string
+	if indexPartition != nil {
+		partitionScheme = partitionKey(indexPartition.Strategy)
+		for _, expr := range indexPartition.Exprs {
+			partitionKeys = append(partitionKeys, expression.NewStringer().Visit(expr))
+		}
+	}
+
+	defnID, err := gsi.gsiClient.CreateIndex3(
 		name,
 		gsi.keyspace, /*bucket-name*/
 		"GSI",        /*using*/
 		"N1QL",       /*exprType*/
-		"",           /*partnStr*/
 		"",           /*whereStr*/
 		nil,          /*secStrs*/
+		nil,          /* desc */
 		true,         /*isPrimary*/
+		partitionScheme,
+		partitionKeys,
 		withJSON)
 	if err != nil {
 		return nil, errors.NewError(err, "GSI CreatePrimaryIndex()")
@@ -362,16 +384,22 @@ func (gsi *gsiKeyspace) CreateIndex2(
 	where expression.Expression, with value.Value) (
 	datastore.Index, errors.Error) {
 
-	var partnStr string
-	if seekKey != nil && len(seekKey) > 0 {
-		partnStr = expression.NewStringer().Visit(seekKey[0])
-	}
+	return gsi.CreateIndex3(requestId, name, rangeKey, nil, where, with)
+}
 
+// CreateIndex3 implements datastore.Indexer3{} interface. Create a secondary
+// index on this keyspace
+func (gsi *gsiKeyspace) CreateIndex3(
+	requestId, name string, rangeKey datastore.IndexKeys, indexPartition *datastore.IndexPartition,
+	where expression.Expression, with value.Value) (datastore.Index, errors.Error) {
+
+	// where
 	var whereStr string
 	if where != nil {
 		whereStr = expression.NewStringer().Visit(where)
 	}
 
+	// index keys
 	secStrs := make([]string, len(rangeKey))
 	desc := make([]bool, len(rangeKey))
 
@@ -381,6 +409,7 @@ func (gsi *gsiKeyspace) CreateIndex2(
 		desc[i] = key.Desc
 	}
 
+	// with
 	var withJSON []byte
 	var err error
 	if with != nil {
@@ -388,13 +417,28 @@ func (gsi *gsiKeyspace) CreateIndex2(
 			return nil, errors.NewError(err, "GSI error marshalling WITH clause")
 		}
 	}
-	defnID, err := gsi.gsiClient.CreateIndex2(
+
+	// partition
+	partitionScheme := c.PartitionScheme(c.SINGLE)
+	var partitionKeys []string
+	if indexPartition != nil {
+		partitionScheme = partitionKey(indexPartition.Strategy)
+		for _, expr := range indexPartition.Exprs {
+			partitionKeys = append(partitionKeys, expression.NewStringer().Visit(expr))
+		}
+	}
+
+	defnID, err := gsi.gsiClient.CreateIndex3(
 		name,
 		gsi.keyspace, /*bucket-name*/
 		"GSI",        /*using*/
 		"N1QL",       /*exprType*/
-		partnStr, whereStr, secStrs, desc,
+		whereStr,
+		secStrs,
+		desc,
 		false, /*isPrimary*/
+		partitionScheme,
+		partitionKeys,
 		withJSON)
 	if err != nil {
 		return nil, errors.NewError(err, "GSI CreateIndex()")
@@ -404,6 +448,14 @@ func (gsi *gsiKeyspace) CreateIndex2(
 		return nil, err
 	}
 	return gsi.IndexById(defnID2String(defnID))
+}
+
+func partitionKey(partitionType datastore.PartitionType) c.PartitionScheme {
+	if partitionType == datastore.HASH_PARTITION {
+		return c.PartitionScheme(c.KEY)
+	}
+
+	return c.PartitionScheme(c.SINGLE)
 }
 
 // BuildIndexes implements datastore.Indexer{} interface.
@@ -596,9 +648,13 @@ func newSecondaryIndexFromMetaData(
 		si.secExprs = exprs
 	}
 
-	if indexDefn.PartitionKey != "" {
-		expr, _ := parser.Parse(indexDefn.PartitionKey)
-		si.partnExpr = expression.Expressions{expr}
+	if len(indexDefn.PartitionKeys) != 0 {
+		exprs := make(expression.Expressions, 0, len(indexDefn.PartitionKeys))
+		for _, partnExpr := range indexDefn.PartitionKeys {
+			expr, _ := parser.Parse(partnExpr)
+			exprs = append(exprs, expr)
+		}
+		si.partnExpr = exprs
 	}
 
 	if indexDefn.WhereExpr != "" {
