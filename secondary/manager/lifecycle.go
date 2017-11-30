@@ -739,14 +739,14 @@ func (m *LifecycleMgr) DeleteIndex(id common.IndexDefnId, notify bool,
 				// the client can call DeleteIndex again and free up indexer resource.
 				indexerErr, ok := err.(*common.IndexerError)
 				if ok && indexerErr.Code != common.IndexNotExist {
-					logging.Errorf("LifecycleMgr.handleDeleteIndex(): Encounter error when dropping index: %v.  Drop index will retry in background",
-						indexerErr.Reason)
-					return nil
+					errStr := fmt.Sprintf("Encounter error when dropping index: %v. Drop index will retry in background.", indexerErr.Reason)
+					logging.Errorf("LifecycleMgr.handleDeleteIndex(): %v", errStr)
+					return errors.New(errStr)
 
 				} else if !strings.Contains(err.Error(), "Unknown Index Instance") {
-					logging.Errorf("LifecycleMgr.handleDeleteIndex(): Encounter error when dropping index: %v.  Drop index will retry in background",
-						err.Error())
-					return nil
+					errStr := fmt.Sprintf("Encounter error when dropping index: %v. Drop index will retry in background.", err.Error())
+					logging.Errorf("LifecycleMgr.handleDeleteIndex(): %v", errStr)
+					return errors.New(errStr)
 				}
 			}
 		}
