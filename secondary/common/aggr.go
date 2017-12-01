@@ -158,8 +158,9 @@ func (a AggrFuncCount) String() string {
 }
 
 type AggrFuncMin struct {
-	typ AggrFuncType
-	val float64
+	typ      AggrFuncType
+	val      float64
+	validVal bool
 }
 
 func (a AggrFuncMin) Type() AggrFuncType {
@@ -175,6 +176,12 @@ func (a *AggrFuncMin) AddDelta(delta interface{}) {
 	switch v := delta.(type) {
 
 	case float64:
+		if !a.validVal {
+			a.val = v
+			a.validVal = true
+			return
+		}
+
 		if v < a.val {
 			a.val = v
 		}
@@ -201,8 +208,9 @@ func (a AggrFuncMin) String() string {
 }
 
 type AggrFuncMax struct {
-	typ AggrFuncType
-	val float64
+	typ      AggrFuncType
+	val      float64
+	validVal bool
 }
 
 func (a AggrFuncMax) Type() AggrFuncType {
@@ -218,6 +226,12 @@ func (a *AggrFuncMax) AddDelta(delta interface{}) {
 	switch v := delta.(type) {
 
 	case float64:
+		if !a.validVal {
+			a.val = v
+			a.validVal = true
+			return
+		}
+
 		if v > a.val {
 			a.val = v
 		}
