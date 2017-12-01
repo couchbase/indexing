@@ -219,6 +219,7 @@ func (slice *plasmaSlice) initStores() error {
 	mCfg.MaxPageLSSSegments = slice.sysconf["plasma.mainIndex.maxLSSPageSegments"].Int()
 	mCfg.LSSCleanerThreshold = slice.sysconf["plasma.mainIndex.LSSFragmentation"].Int()
 	mCfg.LSSCleanerMaxThreshold = slice.sysconf["plasma.mainIndex.maxLSSFragmentation"].Int()
+	cfg.LogPrefix = fmt.Sprintf("%s/%s/Mainstore ", slice.idxDefn.Bucket, slice.idxDefn.Name)
 
 	bCfg.MaxDeltaChainLen = slice.sysconf["plasma.backIndex.maxNumPageDeltas"].Int()
 	bCfg.MaxPageItems = slice.sysconf["plasma.backIndex.pageSplitThreshold"].Int()
@@ -226,6 +227,7 @@ func (slice *plasmaSlice) initStores() error {
 	bCfg.MaxPageLSSSegments = slice.sysconf["plasma.backIndex.maxLSSPageSegments"].Int()
 	bCfg.LSSCleanerThreshold = slice.sysconf["plasma.backIndex.LSSFragmentation"].Int()
 	bCfg.LSSCleanerMaxThreshold = slice.sysconf["plasma.backIndex.maxLSSFragmentation"].Int()
+	bCfg.LogPrefix = fmt.Sprintf("%s/%s/Backstore ", slice.idxDefn.Bucket, slice.idxDefn.Name)
 
 	if slice.hasPersistence {
 		mCfg.File = filepath.Join(slice.path, "mainIndex")
@@ -256,7 +258,6 @@ func (slice *plasmaSlice) initStores() error {
 			slice.readers <- slice.mainstore.NewReader()
 		}
 
-		slice.mainstore.SetLogPrefix(fmt.Sprintf("%s/%s/Mainstore ", slice.idxDefn.Bucket, slice.idxDefn.Name))
 	}()
 
 	if !slice.isPrimary {
@@ -274,8 +275,6 @@ func (slice *plasmaSlice) initStores() error {
 			for i := 0; i < slice.numWriters; i++ {
 				slice.back[i] = slice.backstore.NewWriter()
 			}
-
-			slice.backstore.SetLogPrefix(fmt.Sprintf("%s/%s/Backstore ", slice.idxDefn.Bucket, slice.idxDefn.Name))
 		}()
 	}
 
