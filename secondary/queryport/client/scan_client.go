@@ -205,6 +205,7 @@ func (c *GsiScanClient) Lookup(
 		Cons:         proto.Uint32(uint32(cons)),
 		RollbackTime: proto.Int64(rollbackTime),
 		PartitionIds: partnIds,
+		Sorted:       proto.Bool(true),
 	}
 	if vector != nil {
 		req.Vector = protobuf.NewTsConsistency(
@@ -283,6 +284,7 @@ func (c *GsiScanClient) Range(
 		Cons:         proto.Uint32(uint32(cons)),
 		RollbackTime: proto.Int64(rollbackTime),
 		PartitionIds: partnIds,
+		Sorted:       proto.Bool(true),
 	}
 	if vector != nil {
 		req.Vector = protobuf.NewTsConsistency(
@@ -351,6 +353,7 @@ func (c *GsiScanClient) RangePrimary(
 		Cons:         proto.Uint32(uint32(cons)),
 		RollbackTime: proto.Int64(rollbackTime),
 		PartitionIds: partnIds,
+		Sorted:       proto.Bool(true),
 	}
 	if vector != nil {
 		req.Vector = protobuf.NewTsConsistency(
@@ -542,6 +545,7 @@ func (c *GsiScanClient) MultiScan(
 		Offset:          proto.Int64(offset),
 		RollbackTime:    proto.Int64(rollbackTime),
 		PartitionIds:    partnIds,
+		Sorted:          proto.Bool(true),
 	}
 	if vector != nil {
 		req.Vector = protobuf.NewTsConsistency(
@@ -675,6 +679,7 @@ func (c *GsiScanClient) MultiScanPrimary(
 		Offset:          proto.Int64(offset),
 		RollbackTime:    proto.Int64(rollbackTime),
 		PartitionIds:    partnIds,
+		Sorted:          proto.Bool(true),
 	}
 	if vector != nil {
 		req.Vector = protobuf.NewTsConsistency(
@@ -1057,7 +1062,7 @@ func (c *GsiScanClient) MultiScanCountPrimary(
 func (c *GsiScanClient) Scan3(
 	defnID uint64, requestId string, scans Scans,
 	reverse, distinct bool, projection *IndexProjection, offset, limit int64,
-	groupAggr *GroupAggr,
+	groupAggr *GroupAggr, sorted bool,
 	cons common.Consistency, vector *TsConsistency,
 	callb ResponseHandler, rollbackTime int64, partitions []common.PartitionId) (error, bool) {
 
@@ -1197,6 +1202,7 @@ func (c *GsiScanClient) Scan3(
 		RollbackTime:    proto.Int64(rollbackTime),
 		PartitionIds:    partnIds,
 		GroupAggr:       protoGroupAggr,
+		Sorted:          proto.Bool(sorted),
 	}
 	if vector != nil {
 		req.Vector = protobuf.NewTsConsistency(

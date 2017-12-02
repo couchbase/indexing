@@ -1109,10 +1109,11 @@ func (si *secondaryIndex3) Scan3(
 	gsiscans := n1qlspanstogsi(spans)
 	gsiprojection := n1qlprojectiontogsi(projection)
 	gsigroupaggr := n1qlgroupaggrtogsi(groupAggs)
+	indexorder := n1qlindexordertogsi(indexOrders)
 	broker = makeRequestBroker(requestId, &si.secondaryIndex, client, conn, cnf, &waitGroup, &backfillSync, cap(entryChannel))
 	err := client.Scan3Internal(
 		si.defnID, requestId, gsiscans, reverse, distinctAfterProjection,
-		gsiprojection, offset, limit, gsigroupaggr,
+		gsiprojection, offset, limit, gsigroupaggr, indexorder,
 		n1ql2GsiConsistency[cons], vector2ts(vector),
 		broker)
 	if err != nil {
@@ -1798,6 +1799,25 @@ func n1qlgroupaggrtogsi(groupAggs *datastore.IndexGroupAggregates) *qclient.Grou
 	}
 
 	return ga
+}
+
+func n1qlindexordertogsi(indexOrders datastore.IndexKeyOrders) *qclient.IndexKeyOrder {
+
+	if len(indexOrders) == 0 {
+		return nil
+	}
+
+	order := &qclient.IndexKeyOrder{
+		KeyPos: make([]int, len(indexOrders)),
+		Desc:   make([]bool, len(indexOrders)),
+	}
+
+	for i, o := range indexOrders {
+		order.KeyPos[i] = o.KeyPos
+		order.Desc[i] = o.Desc
+	}
+
+	return order
 }
 
 func n1qlaggrtypetogsi(aggrType datastore.AggregateType) c.AggrFuncType {

@@ -70,6 +70,7 @@ message ScanRequest {
 	optional int64				rollbackTime    = 12;
 	repeated uint64				partitionIds     = 13;
     optional GroupAggr        groupAggr       = 14;
+    optional bool             sorted          = 15;
 }
 
 // Full table scan request from indexer.

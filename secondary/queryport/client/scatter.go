@@ -22,6 +22,7 @@ import (
 	"github.com/couchbase/query/expression"
 	"github.com/couchbase/query/expression/parser"
 	qvalue "github.com/couchbase/query/value"
+	"sort"
 	"sync/atomic"
 	"unsafe"
 )
@@ -40,7 +41,6 @@ type RequestBroker struct {
 	// initialization
 	requestId string
 	size      int64
-	sorted    bool
 
 	// scatter/gather
 	queues   []*Queue
@@ -55,9 +55,16 @@ type RequestBroker struct {
 	defn           *common.IndexDefn
 	limit          int64
 	offset         int64
+	sorted         bool
 	pushdownLimit  int64
 	pushdownOffset int64
+	pushdownSorted bool
 	scans          Scans
+	grpAggr        *GroupAggr
+	projections    *IndexProjection
+	indexOrder     *IndexKeyOrder
+	projDesc       []bool
+	distinct       bool
 
 	// stats
 	sendCount    int64
@@ -85,11 +92,13 @@ const (
 func NewRequestBroker(requestId string, size int64) *RequestBroker {
 
 	return &RequestBroker{
-		requestId:     requestId,
-		size:          size,
-		sorted:        true,
-		limit:         math.MaxInt64,
-		pushdownLimit: math.MaxInt64}
+		requestId:      requestId,
+		size:           size,
+		sorted:         true,
+		pushdownSorted: true,
+		limit:          math.MaxInt64,
+		pushdownLimit:  math.MaxInt64,
+	}
 }
 
 //
@@ -143,6 +152,23 @@ func (b *RequestBroker) SetOffset(offset int64) {
 }
 
 //
+// Set Distinct
+//
+func (b *RequestBroker) SetDistinct(distinct bool) {
+
+	b.distinct = distinct
+}
+
+//
+// Set sorted
+//
+func (b *RequestBroker) SetSorted(sorted bool) {
+
+	b.sorted = sorted
+	b.pushdownSorted = sorted
+}
+
+//
 // Get Limit
 //
 func (b *RequestBroker) GetLimit() int64 {
@@ -159,11 +185,43 @@ func (b *RequestBroker) GetOffset() int64 {
 }
 
 //
+// Get Sort
+//
+func (b *RequestBroker) GetSorted() bool {
+
+	return b.pushdownSorted
+}
+
+//
 // Set Scans
 //
 func (b *RequestBroker) SetScans(scans Scans) {
 
 	b.scans = scans
+}
+
+//
+// Set GroupAggr
+//
+func (b *RequestBroker) SetGroupAggr(grpAggr *GroupAggr) {
+
+	b.grpAggr = grpAggr
+}
+
+//
+// Set Projection
+//
+func (b *RequestBroker) SetProjection(projection *IndexProjection) {
+
+	b.projections = projection
+}
+
+//
+// Set Index Order
+//
+func (b *RequestBroker) SetIndexOrder(indexOrder *IndexKeyOrder) {
+
+	b.indexOrder = indexOrder
 }
 
 //
@@ -300,6 +358,8 @@ func (b *RequestBroker) reset() {
 	b.defn = nil
 	b.pushdownLimit = b.limit
 	b.pushdownOffset = b.offset
+	b.pushdownSorted = b.sorted
+	b.projDesc = nil
 }
 
 //--------------------------
@@ -322,6 +382,9 @@ func (c *RequestBroker) scatter(client []*GsiScanClient, index *common.IndexDefn
 
 	partition = c.filterPartitions(index, partition, numPartition)
 	client, rollback, partition = filterClients(client, rollback, partition)
+	c.analyzeGroupBy(partition, numPartition, index)
+	c.analyzeOrderBy(partition, numPartition, index)
+	c.analyzeProjection(partition, numPartition, index)
 	c.changePushdownParams(partition, numPartition, index)
 
 	if len(partition) == len(client) {
@@ -330,8 +393,12 @@ func (c *RequestBroker) scatter(client []*GsiScanClient, index *common.IndexDefn
 		}
 	}
 
-	logging.Debugf("scatter: requestId %v query limit %v query offset %v pushdown limit %v pushdown offset %v",
-		c.requestId, c.limit, c.offset, c.pushdownLimit, c.pushdownOffset)
+	logging.Debugf("scatter: requestId %v limit %v offset %v sorted %v pushdown limit %v pushdown offset %v pushdown sorted %v",
+		c.requestId, c.limit, c.offset, c.sorted, c.pushdownLimit, c.pushdownOffset, c.pushdownSorted)
+
+	if c.projections != nil {
+		logging.Debugf("scatter: requestId %v projection %v Desc %v", c.requestId, c.projections.EntryKeys, c.projDesc)
+	}
 
 	if c.scan != nil {
 		err, partial = c.scatterScan2(client, index, rollback, partition, numPartition, settings)
@@ -575,7 +642,25 @@ func (c *RequestBroker) pick(rows []Row, sorted []int) int {
 }
 
 //
-// Gather results from multiple connections
+// Gather results from multiple connections with sorting.
+// The gather routine must follow CBQ processing order:
+// 1) filter (where)
+// 2) group-by
+// 3) aggregate
+// 4) projection
+// 5) order-by
+// 6) offset
+// 7) limit
+// The last 3 steps are performed by the gathering.
+//
+// This routine is called only if cbq requires sorting:
+// 1) It is not an aggregate query
+// 2) Order-by is provided
+//
+// If sorting is required, then the sort key will be in the projection
+// list, since cbq will put all keys referenced in query into the
+// projection list for non-aggregate query.    For aggregate query,
+// only aggregate and group keys will be in projection.
 //
 func (c *RequestBroker) gather(donech chan bool) {
 
@@ -653,7 +738,7 @@ func (c *RequestBroker) gather(donech chan bool) {
 }
 
 //
-// Gather results from multiple connections
+// Gather results from multiple connections without sorting
 //
 func (c *RequestBroker) forward(donech chan bool) {
 
@@ -724,6 +809,12 @@ func (c *RequestBroker) forward(donech chan bool) {
 // This function compares two set of secondart key values.
 // Returns –int, 0 or +int depending on if key1
 // sorts less than, equal to, or greater than key2.
+//
+// Each sec key is a array of Value, ordered based on
+// how they are defined in the index.  In addition, if
+// the key is in order-by, cbq will put it in the
+// projection list (even if the user does not ask for it).
+//
 func (c *RequestBroker) compareKey(key1, key2 []value.Value) int {
 
 	ln := len(key1)
@@ -732,8 +823,21 @@ func (c *RequestBroker) compareKey(key1, key2 []value.Value) int {
 	}
 
 	for i := 0; i < ln; i++ {
+
 		if r := key1[i].Collate(key2[i]); r != 0 {
-			return r
+
+			// default: ascending
+			if i >= len(c.projDesc) {
+				return r
+			}
+
+			// asecending
+			if !c.projDesc[i] {
+				return r
+			}
+
+			// descending
+			return 0 - r
 		}
 	}
 
@@ -1164,6 +1268,7 @@ func filterClients(clients []*GsiScanClient, timestamps []int64, allPartitions [
 func (c *RequestBroker) changePushdownParams(partitions [][]common.PartitionId, numPartition uint32, index *common.IndexDefn) {
 	c.changeLimit(partitions, numPartition, index)
 	c.changeOffset(partitions, numPartition, index)
+	c.changeSorted(partitions, numPartition, index)
 }
 
 func (c *RequestBroker) changeLimit(partitions [][]common.PartitionId, numPartition uint32, index *common.IndexDefn) {
@@ -1270,6 +1375,127 @@ func (c *RequestBroker) changeOffset(partitions [][]common.PartitionId, numParti
 
 	// if there is multiple partition, change offset to 0
 	c.pushdownOffset = 0
+}
+
+func (c *RequestBroker) changeSorted(partitions [][]common.PartitionId, numPartition uint32, index *common.IndexDefn) {
+
+	c.pushdownSorted = c.sorted
+
+	if c.distinct {
+		c.pushdownSorted = true
+	}
+
+	// If it is an aggregate query, need to sort in the indexer, even though we will skip
+	// sorting in the client.
+	if c.grpAggr != nil && (len(c.grpAggr.Group) != 0 || len(c.grpAggr.Aggrs) != 0) {
+		c.pushdownSorted = true
+	}
+}
+
+//--------------------------
+// API3 push down
+//--------------------------
+
+//
+// For aggregate query, n1ql will expect pre-aggregate results for partitioned index.  Therefore,
+// turn off sorting, which will enable the scatter to just pass-through the result to cbq.
+//
+func (c *RequestBroker) analyzeGroupBy(partitions [][]common.PartitionId, numPartition uint32, index *common.IndexDefn) {
+
+	// non-partition index
+	if index.PartitionScheme == common.SINGLE {
+		return
+	}
+
+	// there is only a single indexer involved in the scan
+	if numPartition == 1 || len(partitions) == 1 {
+		return
+	}
+
+	if c.grpAggr != nil && (len(c.grpAggr.Group) != 0 || len(c.grpAggr.Aggrs) != 0) {
+		c.sorted = false
+	}
+}
+
+//
+// If sorted, then analyze the index order to see if we need to add index to projection list.
+//
+func (c *RequestBroker) analyzeOrderBy(partitions [][]common.PartitionId, numPartition uint32, index *common.IndexDefn) {
+
+	// non-partition index
+	if index.PartitionScheme == common.SINGLE {
+		return
+	}
+
+	// there is only a single indexer involved in the scan
+	if numPartition == 1 || len(partitions) == 1 {
+		return
+	}
+
+	// no need to sort
+	if !c.sorted {
+		return
+	}
+
+	// skip aggregate query (order-by is after aggregate)
+	if c.grpAggr != nil && (len(c.grpAggr.Group) != 0 || len(c.grpAggr.Aggrs) != 0) {
+		return
+	}
+
+	if c.indexOrder != nil {
+
+		projection := make(map[int64]bool)
+		if c.projections != nil && len(c.projections.EntryKeys) != 0 {
+			for _, position := range c.projections.EntryKeys {
+				projection[position] = true
+			}
+		}
+
+		// If the order-by key is not in the projection, then add it.
+		for _, order := range c.indexOrder.KeyPos {
+			if !projection[int64(order)] {
+				c.projections.EntryKeys = append(c.projections.EntryKeys, int64(order))
+				projection[int64(order)] = true
+			}
+		}
+	}
+}
+
+//
+// If sorted, then analyze the projection to find out the sort order (asc/desc).
+//
+func (c *RequestBroker) analyzeProjection(partitions [][]common.PartitionId, numPartition uint32, index *common.IndexDefn) {
+
+	// non-partition index
+	if index.PartitionScheme == common.SINGLE {
+		return
+	}
+
+	// there is only a single indexer involved in the scan
+	if numPartition == 1 || len(partitions) == 1 {
+		return
+	}
+
+	// no need to sort
+	if !c.sorted {
+		return
+	}
+
+	if c.projections != nil && len(c.projections.EntryKeys) != 0 {
+
+		pos := make([]int, len(c.projections.EntryKeys))
+		for i, position := range c.projections.EntryKeys {
+			pos[i] = int(position)
+		}
+		sort.Ints(pos)
+
+		c.projDesc = make([]bool, len(c.projections.EntryKeys))
+		for i, position := range pos {
+			if position >= 0 && position < len(index.Desc) {
+				c.projDesc[i] = index.Desc[position]
+			}
+		}
+	}
 }
 
 //--------------------------

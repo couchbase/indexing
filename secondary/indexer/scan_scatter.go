@@ -52,7 +52,7 @@ func scanMultiple(request *ScanRequest, scan Scan, snapshots []SliceSnapshot, cb
 	donech := make(chan bool, 1)
 	errch := make(chan error, len(snapshots)+100)
 
-	sorted := true
+	sorted := request.Sorted
 
 	queues := make([]*Queue, len(snapshots))
 	size, limit := queueSize(len(snapshots), sorted, config)

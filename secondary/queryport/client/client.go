@@ -107,6 +107,11 @@ type GroupAggr struct {
 	IndexKeyNames      []string     // Index key names used in expressions
 }
 
+type IndexKeyOrder struct {
+	KeyPos []int
+	Desc   []bool
+}
+
 const (
 	// Neither does not include low-key and high-key
 	Neither Inclusion = iota
@@ -772,6 +777,8 @@ func (c *GsiClient) MultiScanInternal(
 	broker.SetLimit(limit)
 	broker.SetOffset(offset)
 	broker.SetScans(scans)
+	broker.SetProjection(projection)
+	broker.SetDistinct(distinct)
 
 	_, err = c.doScan(defnID, requestId, broker)
 	if err != nil { // callback with error
@@ -969,19 +976,19 @@ func (c *GsiClient) MultiScanCountInternal(
 func (c *GsiClient) Scan3(
 	defnID uint64, requestId string, scans Scans, reverse,
 	distinct bool, projection *IndexProjection, offset, limit int64,
-	groupAggr *GroupAggr,
+	groupAggr *GroupAggr, indexOrder *IndexKeyOrder,
 	cons common.Consistency, vector *TsConsistency,
 	callb ResponseHandler) (err error) {
 
 	broker := makeDefaultRequestBroker(callb)
 	return c.Scan3Internal(defnID, requestId, scans, reverse, distinct,
-		projection, offset, limit, groupAggr, cons, vector, broker)
+		projection, offset, limit, groupAggr, indexOrder, cons, vector, broker)
 }
 
 func (c *GsiClient) Scan3Internal(
 	defnID uint64, requestId string, scans Scans, reverse,
 	distinct bool, projection *IndexProjection, offset, limit int64,
-	groupAggr *GroupAggr,
+	groupAggr *GroupAggr, indexOrder *IndexKeyOrder,
 	cons common.Consistency, vector *TsConsistency,
 	broker *RequestBroker) (err error) {
 
@@ -1013,13 +1020,18 @@ func (c *GsiClient) Scan3Internal(
 
 		return qc.Scan3(
 			uint64(index.DefnId), requestId, scans, reverse, distinct,
-			projection, broker.GetOffset(), broker.GetLimit(), groupAggr, cons, vector, handler, rollbackTime, partitions)
+			projection, broker.GetOffset(), broker.GetLimit(), groupAggr, broker.GetSorted(), cons, vector, handler, rollbackTime, partitions)
 	}
 
 	broker.SetScanRequestHandler(handler)
 	broker.SetLimit(limit)
 	broker.SetOffset(offset)
 	broker.SetScans(scans)
+	broker.SetGroupAggr(groupAggr)
+	broker.SetProjection(projection)
+	broker.SetSorted(indexOrder != nil)
+	broker.SetDistinct(distinct)
+	broker.SetIndexOrder(indexOrder)
 
 	_, err = c.doScan(defnID, requestId, broker)
 	if err != nil { // callback with error

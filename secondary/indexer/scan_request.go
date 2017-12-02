@@ -76,6 +76,9 @@ type ScanRequest struct {
 
 	GroupAggr *GroupAggr
 
+	// New parameters for partitioned index
+	Sorted bool
+
 	// Rollback Time
 	rollbackTime int64
 
@@ -229,6 +232,7 @@ func NewScanRequest(protoReq interface{},
 		r.RequestId = req.GetRequestId()
 		r.ScanType = StatsReq
 		r.Incl = Inclusion(req.GetSpan().GetRange().GetInclusion())
+		r.Sorted = true
 		if isBootstrapMode {
 			err = common.ErrIndexerInBootstrap
 			return
@@ -254,6 +258,7 @@ func NewScanRequest(protoReq interface{},
 		vector := req.GetVector()
 		r.ScanType = CountReq
 		r.Incl = Inclusion(req.GetSpan().GetRange().GetInclusion())
+		r.Sorted = true
 
 		if isBootstrapMode {
 			err = common.ErrIndexerInBootstrap
@@ -296,6 +301,7 @@ func NewScanRequest(protoReq interface{},
 		r.ScanType = ScanReq
 		r.Incl = Inclusion(req.GetSpan().GetRange().GetInclusion())
 		r.Limit = req.GetLimit()
+		r.Sorted = req.GetSorted()
 		r.Reverse = req.GetReverse()
 		proj := req.GetIndexprojection()
 		if proj == nil {
@@ -354,6 +360,7 @@ func NewScanRequest(protoReq interface{},
 		r.Limit = req.GetLimit()
 		r.Scans = make([]Scan, 1)
 		r.Scans[0].ScanType = AllReq
+		r.Sorted = true
 
 		if isBootstrapMode {
 			err = common.ErrIndexerInBootstrap

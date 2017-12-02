@@ -791,26 +791,28 @@ func (o *MetadataProvider) validatePartitionKeys(partitionScheme c.PartitionSche
 		partnExprs = append(partnExprs, expr)
 	}
 
-	id := expression.NewField(expression.NewMeta(), expression.NewFieldName("id", false))
-	idself := expression.NewField(expression.NewMeta(expression.NewIdentifier("self")), expression.NewFieldName("id", false))
-	for i, partnExpr := range partnExprs {
-		found := false
+	/*
+		id := expression.NewField(expression.NewMeta(), expression.NewFieldName("id", false))
+		idself := expression.NewField(expression.NewMeta(expression.NewIdentifier("self")), expression.NewFieldName("id", false))
+		for i, partnExpr := range partnExprs {
+			found := false
 
-		if !isPrimary {
-			for _, secExpr := range secExprs {
-				if partnExpr.EquivalentTo(secExpr) {
-					found = true
-					break
+			if !isPrimary {
+				for _, secExpr := range secExprs {
+					if partnExpr.EquivalentTo(secExpr) || partnExpr.Depends(id) || partnExpr.Depends(idself) {
+						found = true
+						break
+					}
 				}
+			} else if partnExpr.DependsOn(id) || partnExpr.DependsOn(idself) {
+				found = true
 			}
-		} else if partnExpr.DependsOn(id) || partnExpr.DependsOn(idself) {
-			found = true
-		}
 
-		if !found {
-			return errors.New(fmt.Sprintf("Fails to create index. Partition key '%v' is not an index key.", partitionKeys[i]))
+			if !found {
+				return errors.New(fmt.Sprintf("Fails to create index. Partition key '%v' is not an index key.", partitionKeys[i]))
+			}
 		}
-	}
+	*/
 
 	for i, partnExpr := range partnExprs {
 
