@@ -246,7 +246,7 @@ func (s *IndexScanSource) Routine() error {
 		if r.GroupAggr.IsLeadingGroup {
 			s.p.aggrRes.SetMaxRows(1)
 		} else {
-			s.p.aggrRes.SetMaxRows(10)
+			s.p.aggrRes.SetMaxRows(2)
 		}
 	}
 
@@ -264,7 +264,7 @@ loop:
 		}
 	}
 
-	if r.GroupAggr != nil {
+	if r.GroupAggr != nil && err == nil {
 
 		for _, r := range s.p.aggrRes.rows {
 			r.SetFlush(true)
@@ -280,10 +280,19 @@ loop:
 				return err
 			}
 
-			wrErr := s.WriteItem(entry)
-			if wrErr != nil {
-				return wrErr
+			if currOffset >= r.Offset {
+				s.p.rowsReturned++
+				wrErr := s.WriteItem(entry)
+				if wrErr != nil {
+					return wrErr
+				}
+				if s.p.rowsReturned == uint64(r.Limit) {
+					return ErrLimitReached
+				}
+			} else {
+				currOffset++
 			}
+
 		}
 
 	}
