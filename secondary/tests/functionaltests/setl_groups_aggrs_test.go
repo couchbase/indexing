@@ -278,3 +278,61 @@ func getNonOverlappingFilters3() qc.Scans {
 	scans[1] = &qc.Scan{Filter: filter2}
 	return scans
 }
+
+func TestGroupAggrLimit(t *testing.T) {
+
+	var index1 = "index_agg"
+	var bucketName = "default"
+
+	log.Printf("In TestGroupAggrLimit()")
+	//leading
+	{
+		ga, proj := basicGroupAggr()
+
+		scanResults, err := secondaryindex.Scan3(index1, bucketName, indexScanAddress, getScanAllNoFilter(), false, false, proj, 0, 3, ga, c.SessionConsistency, nil)
+		FailTestIfError(err, "Error in scan", t)
+		tc.PrintScanResults(scanResults, "scanResults")
+	}
+
+	//non-leading
+	{
+		ga, proj := basicGroupAggr()
+
+		ga.Group = ga.Group[1:]
+		proj.EntryKeys = proj.EntryKeys[1:]
+
+		scanResults, err := secondaryindex.Scan3(index1, bucketName, indexScanAddress, getScanAllNoFilter(), false, false, proj, 0, 2, ga, c.SessionConsistency, nil)
+		FailTestIfError(err, "Error in scan", t)
+		tc.PrintScanResults(scanResults, "scanResults")
+	}
+
+}
+
+func TestGroupAggrOffset(t *testing.T) {
+	log.Printf("In TestGroupAggrOffset()")
+
+	var index1 = "index_agg"
+	var bucketName = "default"
+
+	//leading
+	{
+		ga, proj := basicGroupAggr()
+
+		scanResults, err := secondaryindex.Scan3(index1, bucketName, indexScanAddress, getScanAllNoFilter(), false, false, proj, 1, 3, ga, c.SessionConsistency, nil)
+		FailTestIfError(err, "Error in scan", t)
+		tc.PrintScanResults(scanResults, "scanResults")
+	}
+
+	//non-leading
+	{
+		ga, proj := basicGroupAggr()
+
+		ga.Group = ga.Group[1:]
+		proj.EntryKeys = proj.EntryKeys[1:]
+
+		scanResults, err := secondaryindex.Scan3(index1, bucketName, indexScanAddress, getScanAllNoFilter(), false, false, proj, 1, 2, ga, c.SessionConsistency, nil)
+		FailTestIfError(err, "Error in scan", t)
+		tc.PrintScanResults(scanResults, "scanResults")
+	}
+
+}
