@@ -153,9 +153,6 @@ if [ "$current" != "$good" ]; then
 else
   echo "none"
 fi
-echo "Applying debian9 patch for cluster_run refs/changes/77/83877/1"
-git apply $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/tests/ci/scripts/debian9.patch
-
 
 cd $WORKSPACE/couchdb
 current="`git rev-parse HEAD`"
