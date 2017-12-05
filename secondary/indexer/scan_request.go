@@ -226,11 +226,17 @@ func NewScanRequest(protoReq interface{},
 			err = common.ErrIndexerInBootstrap
 			return
 		}
-		err = r.setIndexParams()
+		if err = r.setIndexParams() ; err != nil {
+                        return
+                }
+
 		err = r.fillRanges(
 			req.GetSpan().GetRange().GetLow(),
 			req.GetSpan().GetRange().GetHigh(),
 			req.GetSpan().GetEquals())
+                if err != nil {
+                        return
+                }
 
 	case *protobuf.CountRequest:
 		r.DefnID = req.GetDefnID()
@@ -247,18 +253,31 @@ func NewScanRequest(protoReq interface{},
 			return
 		}
 
-		err = r.setIndexParams()
-		err = r.setConsistency(cons, vector)
+		if err = r.setIndexParams(); err != nil {
+                        return
+                }
+
+		if err = r.setConsistency(cons, vector); err != nil {
+                        return
+                }
+
 		err = r.fillRanges(
 			req.GetSpan().GetRange().GetLow(),
 			req.GetSpan().GetRange().GetHigh(),
 			req.GetSpan().GetEquals())
+                if err != nil {
+                        return
+                }
+
 		sc := req.GetScans()
 		if len(sc) != 0 {
 			err = r.fillScans(sc)
 			r.ScanType = MultiScanCountReq
 			r.Distinct = req.GetDistinct()
 		}
+                if err != nil {
+                        return
+                }
 
 	case *protobuf.ScanRequest:
 		r.DefnID = req.GetDefnID()
@@ -280,8 +299,13 @@ func NewScanRequest(protoReq interface{},
 			err = common.ErrIndexerInBootstrap
 			return
 		}
-		err = r.setIndexParams()
-		err = r.setConsistency(cons, vector)
+		if err = r.setIndexParams(); err != nil {
+                        return
+                }
+
+		if err = r.setConsistency(cons, vector); err != nil {
+                        return
+                }
 		if proj != nil {
 			var localerr error
 			if req.GetGroupAggr() == nil {
@@ -302,8 +326,15 @@ func NewScanRequest(protoReq interface{},
 			req.GetSpan().GetRange().GetLow(),
 			req.GetSpan().GetRange().GetHigh(),
 			req.GetSpan().GetEquals())
-		err = r.fillScans(req.GetScans())
-		err = r.fillGroupAggr(req.GetGroupAggr())
+                if err != nil {
+                        return
+                }
+		if err = r.fillScans(req.GetScans()); err != nil {
+                        return
+                }
+		if err = r.fillGroupAggr(req.GetGroupAggr()); err != nil {
+                        return
+                }
 
 	case *protobuf.ScanAllRequest:
 		r.DefnID = req.GetDefnID()
@@ -322,8 +353,13 @@ func NewScanRequest(protoReq interface{},
 			return
 		}
 
-		err = r.setIndexParams()
-		err = r.setConsistency(cons, vector)
+		if err = r.setIndexParams(); err != nil {
+                        return
+                }
+
+		if err = r.setConsistency(cons, vector); err != nil {
+                        return
+                }
 	default:
 		err = ErrUnsupportedRequest
 	}
