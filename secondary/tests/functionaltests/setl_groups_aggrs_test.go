@@ -182,6 +182,24 @@ func TestGroupAggrMinMax(t *testing.T) {
 	tc.PrintScanResults(scanResults, "scanResults")
 }
 
+func TestGroupAggrMinMax2(t *testing.T) {
+	log.Printf("In TestGroupAggrMinMax()")
+
+	var index1 = "index_agg"
+	var bucketName = "default"
+
+	ga, proj := basicGroupAggr()
+	ga.Group = nil
+	proj.EntryKeys = proj.EntryKeys[2:]
+
+	ga.Aggrs[0].AggrFunc = c.AGG_MIN
+	ga.Aggrs[1].AggrFunc = c.AGG_MAX
+
+	scanResults, err := secondaryindex.Scan3(index1, bucketName, indexScanAddress, getScanAllNoFilter(), false, false, proj, 0, defaultlimit, ga, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in scan", t)
+	tc.PrintScanResults(scanResults, "scanResults")
+}
+
 func TestGroupAggrLeading_N1QLExprs(t *testing.T) {
 	log.Printf("In TestGroupAggrLeading_N1QLExprs()")
 

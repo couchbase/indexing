@@ -246,7 +246,7 @@ func (s *IndexScanSource) Routine() error {
 		if r.GroupAggr.IsLeadingGroup {
 			s.p.aggrRes.SetMaxRows(1)
 		} else {
-			s.p.aggrRes.SetMaxRows(2)
+			s.p.aggrRes.SetMaxRows(5)
 		}
 	}
 
@@ -692,14 +692,20 @@ func computeAggrVal(groupAggr *GroupAggr, ak *Aggregate,
 
 	var a *aggrVal
 	if ak.KeyPos >= 0 {
-		actualVal, err := decodeValue(compositekeys[ak.KeyPos], buf)
-		if err != nil {
-			return nil, err
+		if ak.AggrFunc == c.AGG_SUM {
+			actualVal, err := decodeValue(compositekeys[ak.KeyPos], buf)
+			if err != nil {
+				return nil, err
+			}
+			a = &aggrVal{fn: c.NewAggrFunc(ak.AggrFunc, actualVal),
+				projectId: ak.EntryKeyId,
+			}
+		} else {
+			a = &aggrVal{fn: c.NewAggrFunc(ak.AggrFunc, compositekeys[ak.KeyPos]),
+				projectId: ak.EntryKeyId,
+			}
 		}
 
-		a = &aggrVal{fn: c.NewAggrFunc(ak.AggrFunc, actualVal),
-			projectId: ak.EntryKeyId,
-		}
 	} else {
 		//process expr
 		scalar, err := evaluateN1QLExpresssion(groupAggr, ak.Expr, compositekeys, docid)
@@ -839,12 +845,17 @@ func projectGroupAggr(buf []byte, projection *Projection, aggrRes *aggrResult) (
 		if projGroup.grpKey {
 			keysToJoin = append(keysToJoin, row.groups[projGroup.pos].key)
 		} else {
-			val, err := encodeValue(row.aggrs[projGroup.pos].fn.Value())
-			if err != nil {
-				l.Infof("ScanPipeline::projectGroupAggr encodeValue error %v", err)
-				return nil, err
+			if row.aggrs[projGroup.pos].fn.Type() == c.AGG_SUM ||
+				row.aggrs[projGroup.pos].fn.Type() == c.AGG_COUNT {
+				val, err := encodeValue(row.aggrs[projGroup.pos].fn.Value())
+				if err != nil {
+					l.Infof("ScanPipeline::projectGroupAggr encodeValue error %v", err)
+					return nil, err
+				}
+				keysToJoin = append(keysToJoin, val)
+			} else {
+				keysToJoin = append(keysToJoin, row.aggrs[projGroup.pos].fn.Value().([]byte))
 			}
-			keysToJoin = append(keysToJoin, val)
 		}
 	}
 
