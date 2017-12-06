@@ -382,7 +382,6 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, bucket strin
 				}
 
 				if hasNewSnapshot {
-					idxStats := stats.indexes[idxInstId]
 					idxStats.numSnapshots.Add(1)
 					if needsCommit {
 						idxStats.numCommits.Add(1)
@@ -416,6 +415,7 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, bucket strin
 }
 
 func (s *storageMgr) updateSnapIntervalStat(idxStats *IndexStats) {
+
 	// Compute avgTsInterval
 	last := idxStats.lastTsTime.Value()
 	curr := int64(time.Now().UnixNano())
@@ -428,14 +428,17 @@ func (s *storageMgr) updateSnapIntervalStat(idxStats *IndexStats) {
 	}
 	idxStats.lastTsTime.Set(curr)
 
-	// Compute avgTsItemsCount
-	last = idxStats.lastNumFlushQueued.Value()
-	curr = idxStats.numDocsFlushQueued.Value()
-	avg = idxStats.avgTsItemsCount.Value()
+	idxStats.updateAllPartitionStats(
+		func(idxStats *IndexStats) {
+			// Compute avgTsItemsCount
+			last = idxStats.lastNumFlushQueued.Value()
+			curr = idxStats.numDocsFlushQueued.Value()
+			avg = idxStats.avgTsItemsCount.Value()
 
-	avg = common.ComputeAvg(avg, last, curr)
-	idxStats.avgTsItemsCount.Set(avg)
-	idxStats.lastNumFlushQueued.Set(curr)
+			avg = common.ComputeAvg(avg, last, curr)
+			idxStats.avgTsItemsCount.Set(avg)
+			idxStats.lastNumFlushQueued.Set(curr)
+		})
 }
 
 // Update index-snapshot map whenever a snapshot is created for an index
@@ -773,7 +776,7 @@ func (s *storageMgr) handleStats(cmd Message) {
 			continue
 		}
 
-		idxStats := stats.indexes[st.InstId]
+		idxStats := stats.GetPartitionStats(st.InstId, st.PartnId)
 		// TODO(sarath): Investigate the reason for inconsistent stats map
 		// This nil check is a workaround to avoid indexer crashes for now.
 		if idxStats != nil {
@@ -822,19 +825,19 @@ func (s *storageMgr) getIndexStorageStats() []IndexStorageStats {
 			continue
 		}
 
-		var internalData []string
-		var dataSz, memUsed, diskSz, extraSnapDataSize int64
-		var getBytes, insertBytes, deleteBytes int64
-		var nslices int64
-		var needUpgrade = false
-	loop:
 		for _, partnInst := range partnMap {
+			var internalData []string
+			var dataSz, memUsed, diskSz, extraSnapDataSize int64
+			var getBytes, insertBytes, deleteBytes int64
+			var nslices int64
+			var needUpgrade = false
+
 			slices := partnInst.Sc.GetAllSlices()
 			nslices += int64(len(slices))
 			for _, slice := range slices {
 				sts, err = slice.Statistics()
 				if err != nil {
-					break loop
+					break
 				}
 
 				dataSz += sts.DataSize
@@ -848,27 +851,28 @@ func (s *storageMgr) getIndexStorageStats() []IndexStorageStats {
 
 				needUpgrade = needUpgrade || sts.NeedUpgrade
 			}
-		}
 
-		if err == nil {
-			stat := IndexStorageStats{
-				InstId: idxInstId,
-				Name:   inst.Defn.Name,
-				Bucket: inst.Defn.Bucket,
-				Stats: StorageStatistics{
-					DataSize:          dataSz,
-					MemUsed:           memUsed,
-					DiskSize:          diskSz,
-					GetBytes:          getBytes,
-					InsertBytes:       insertBytes,
-					DeleteBytes:       deleteBytes,
-					ExtraSnapDataSize: extraSnapDataSize,
-					NeedUpgrade:       needUpgrade,
-					InternalData:      internalData,
-				},
+			if err == nil {
+				stat := IndexStorageStats{
+					InstId:  idxInstId,
+					PartnId: partnInst.Defn.GetPartitionId(),
+					Name:    inst.Defn.Name,
+					Bucket:  inst.Defn.Bucket,
+					Stats: StorageStatistics{
+						DataSize:          dataSz,
+						MemUsed:           memUsed,
+						DiskSize:          diskSz,
+						GetBytes:          getBytes,
+						InsertBytes:       insertBytes,
+						DeleteBytes:       deleteBytes,
+						ExtraSnapDataSize: extraSnapDataSize,
+						NeedUpgrade:       needUpgrade,
+						InternalData:      internalData,
+					},
+				}
+
+				stats = append(stats, stat)
 			}
-
-			stats = append(stats, stat)
 		}
 	}
 

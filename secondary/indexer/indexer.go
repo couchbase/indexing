@@ -1200,7 +1200,11 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 		}
 	}
 
-	idx.stats.AddIndex(indexInst.InstId, indexInst.Defn.Bucket, indexInst.Defn.Name, indexInst.ReplicaId)
+	partitions := indexInst.Pc.GetAllPartitions()
+	for _, partnDefn := range partitions {
+		idx.stats.AddPartition(indexInst.InstId, indexInst.Defn.Bucket, indexInst.Defn.Name, indexInst.ReplicaId, partnDefn.GetPartitionId())
+	}
+
 	//allocate partition/slice
 	var partnInstMap PartitionInstMap
 	if partnInstMap, err = idx.initPartnInstance(indexInst, clientCh); err != nil {
@@ -1525,6 +1529,7 @@ func (idx *indexer) handleDropIndex(msg Message) {
 	}
 
 	idx.stats.RemoveIndex(indexInst.InstId)
+
 	//if the index state is Created/Ready/Deleted, only data cleanup is
 	//required. No stream updates are required.
 	if indexInst.State == common.INDEX_STATE_CREATED ||
@@ -3585,8 +3590,11 @@ func (idx *indexer) initFromPersistedState() (bool, error) {
 	logging.Infof("Indexer::local storage mode %v", common.GetStorageMode().String())
 
 	for _, inst := range idx.indexInstMap {
+
 		if inst.State != common.INDEX_STATE_DELETED {
-			idx.stats.AddIndex(inst.InstId, inst.Defn.Bucket, inst.Defn.Name, inst.ReplicaId)
+			for _, partnDefn := range inst.Pc.GetAllPartitions() {
+				idx.stats.AddPartition(inst.InstId, inst.Defn.Bucket, inst.Defn.Name, inst.ReplicaId, partnDefn.GetPartitionId())
+			}
 		}
 
 		//allocate partition/slice
@@ -4538,11 +4546,14 @@ func NewSlice(id SliceId, indInst *common.IndexInst, partnInst *PartitionInst,
 	}
 	switch indInst.Defn.Using {
 	case common.MemDB, common.MemoryOptimized:
-		slice, err = NewMemDBSlice(path, id, indInst.Defn, indInst.InstId, indInst.Defn.IsPrimary, !ephemeral, conf, stats.indexes[indInst.InstId])
+		slice, err = NewMemDBSlice(path, id, indInst.Defn, indInst.InstId, indInst.Defn.IsPrimary, !ephemeral, conf,
+			stats.GetPartitionStats(indInst.InstId, partnInst.Defn.GetPartitionId()))
 	case common.ForestDB:
-		slice, err = NewForestDBSlice(path, id, indInst.Defn, indInst.InstId, indInst.Defn.IsPrimary, conf, stats.indexes[indInst.InstId])
+		slice, err = NewForestDBSlice(path, id, indInst.Defn, indInst.InstId, indInst.Defn.IsPrimary, conf,
+			stats.GetPartitionStats(indInst.InstId, partnInst.Defn.GetPartitionId()))
 	case common.PlasmaDB:
-		slice, err = NewPlasmaSlice(path, id, indInst.Defn, indInst.InstId, indInst.Defn.IsPrimary, conf, stats.indexes[indInst.InstId])
+		slice, err = NewPlasmaSlice(path, id, indInst.Defn, indInst.InstId, indInst.Defn.IsPrimary, conf,
+			stats.GetPartitionStats(indInst.InstId, partnInst.Defn.GetPartitionId()))
 	}
 
 	return
@@ -4625,6 +4636,7 @@ func (idx *indexer) deleteIndexInstOnDeletedBucket(bucket string, streamId commo
 				index.Stream == common.NIL_STREAM)) {
 
 			instIdList = append(instIdList, index.InstId)
+
 			idx.stats.RemoveIndex(index.InstId)
 		}
 	}

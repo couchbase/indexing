@@ -660,10 +660,8 @@ func (s *scanCoordinator) handleStats(cmd Message) {
 	// Compute counts asynchronously and reply to stats request
 	go func() {
 		for id, idxStats := range stats.indexes {
-			c, err := s.getItemsCount(id)
-			if err == nil {
-				idxStats.itemsCount.Set(int64(c))
-			} else {
+			err := s.updateItemsCount(id, idxStats)
+			if err != nil {
 				logging.Errorf("%v: Unable compute index count for %v/%v (%v)", s.logPrefix,
 					idxStats.bucket, idxStats.name, err)
 			}
@@ -841,8 +839,7 @@ func (s *scanCoordinator) cloneRollbackInProgress() map[string]*atomic.Value {
 	return newRollbackInProgress
 }
 
-func (s *scanCoordinator) getItemsCount(instId common.IndexInstId) (uint64, error) {
-	var count uint64
+func (s *scanCoordinator) updateItemsCount(instId common.IndexInstId, idxStats *IndexStats) error {
 
 	snapResch := make(chan interface{}, 1)
 	snapReqMsg := &MsgIndexSnapRequest{
@@ -856,7 +853,7 @@ func (s *scanCoordinator) getItemsCount(instId common.IndexInstId) (uint64, erro
 
 	// Index snapshot is not available yet (non-active index or empty index)
 	if msg == nil {
-		return 0, nil
+		return nil
 	}
 
 	var is IndexSnapshot
@@ -865,25 +862,27 @@ func (s *scanCoordinator) getItemsCount(instId common.IndexInstId) (uint64, erro
 	case IndexSnapshot:
 		is = msg.(IndexSnapshot)
 		if is == nil {
-			return 0, nil
+			return nil
 		}
 		defer DestroyIndexSnapshot(is)
 	case error:
-		return 0, msg.(error)
+		return msg.(error)
 	}
 
-	for _, ps := range is.Partitions() {
+	for pid, ps := range is.Partitions() {
 		for _, ss := range ps.Slices() {
 			snap := ss.Snapshot()
 			c, err := snap.StatCountTotal()
 			if err != nil {
-				return 0, err
+				return err
 			}
-			count += c
+			idxStats.updatePartitionStats(pid, func(ps *IndexStats) {
+				ps.itemsCount.Set(int64(c))
+			})
 		}
 	}
 
-	return count, nil
+	return nil
 }
 
 /////////////////////////////////////////////////////////////////////////

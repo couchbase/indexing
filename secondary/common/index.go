@@ -295,6 +295,15 @@ func (idx IndexInst) DisplayName() string {
 
 func FormatIndexInstDisplayName(name string, replicaId int) string {
 
+	return FormatIndexPartnDisplayName(name, replicaId, 0)
+}
+
+func FormatIndexPartnDisplayName(name string, replicaId int, partitionId int) string {
+
+	if partitionId != 0 {
+		name = fmt.Sprintf("%v %v", name, partitionId)
+	}
+
 	if replicaId != 0 {
 		return fmt.Sprintf("%v (replica %v)", name, replicaId)
 	}
