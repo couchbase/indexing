@@ -138,11 +138,20 @@ if [ "$MODE" = "test" ]; then
   echo "</pre><h4>Unit tests</h4><pre>"
   export phase=functional
 
-  cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/memdb/skiplist
-  GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
+  if [ "$STORAGE" = "memdb" ]; then
+      cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/memdb/skiplist
+      GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
 
-  cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/memdb
-  GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
+      cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/memdb
+      GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
+
+  elif [ "$STORAGE" = "plasma" ]; then
+      cd $WORKSPACE/goproj/src/github.com/couchbase/nitro/skiplist
+      GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
+
+      cd $WORKSPACE/goproj/src/github.com/couchbase/plasma
+      GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
+  fi
 
   cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/indexer
   GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log

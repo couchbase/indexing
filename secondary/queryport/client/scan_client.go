@@ -1129,13 +1129,16 @@ func (c *GsiScanClient) Scan3(
 			}
 			protoAggregates[i] = ag
 		}
-
+		protoIndexKeyNames := make([][]byte, len(groupAggr.IndexKeyNames))
+		for i, keyName := range groupAggr.IndexKeyNames {
+			protoIndexKeyNames[i] = []byte(keyName)
+		}
 		protoGroupAggr = &protobuf.GroupAggr{
-			Name:                []byte(groupAggr.Name),
-			GroupKeys:           protoGroupKeys,
-			Aggrs:               protoAggregates,
-			DependsOnIndexKeys:  groupAggr.DependsOnIndexKeys,
-			DependsOnPrimaryKey: proto.Bool(groupAggr.DependsOnPrimaryKey),
+			Name:               []byte(groupAggr.Name),
+			GroupKeys:          protoGroupKeys,
+			Aggrs:              protoAggregates,
+			DependsOnIndexKeys: groupAggr.DependsOnIndexKeys,
+			IndexKeyNames:      protoIndexKeyNames,
 		}
 	}
 

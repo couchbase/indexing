@@ -1204,6 +1204,14 @@ var SystemConfig = Config{
 		false,
 	},
 
+	"indexer.plasma.checkpointInterval": ConfigValue{
+		600,
+		"Fast recovery checkpoint interval in seconds",
+		600,
+		false,
+		false,
+	},
+
 	"indexer.stream_reader.plasma.workerBuffer": ConfigValue{
 		uint64(10000),
 		"Buffer Size for stream reader worker to hold mutations " +

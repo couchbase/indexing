@@ -383,7 +383,7 @@ func (c *ClusterInfoCache) GetServiceAddress(nid NodeId, srvc string) (addr stri
 	if port, ok = node.Services[srvc]; !ok {
 		logging.Errorf("%vInvalid Service %v for node %v. Nodes %v \n NodeServices %v",
 			c.logPrefix, srvc, node, c.nodes, c.nodesvs)
-		err = ErrInvalidService
+		err = errors.New(ErrInvalidService.Error() + fmt.Sprintf(": %v", srvc))
 		return
 	}
 
@@ -412,7 +412,7 @@ func (c *ClusterInfoCache) GetVBuckets(nid NodeId, bucket string) (vbs []uint32,
 
 	idx, ok := c.findVBServerIndex(b, nid)
 	if !ok {
-		err = ErrNodeNotBucketMember
+		err = errors.New(ErrNodeNotBucketMember.Error() + fmt.Sprintf(": %v", c.nodes[nid].Hostname))
 		return
 	}
 
@@ -580,7 +580,7 @@ func (c *ClusterInfoCache) getStaticServicePort(srvc string) (string, error) {
 	if p, ok := c.servicePortMap[srvc]; ok {
 		return p, nil
 	} else {
-		return "", ErrInvalidService
+		return "", errors.New(ErrInvalidService.Error() + fmt.Sprintf(": %v", srvc))
 	}
 
 }

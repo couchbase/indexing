@@ -924,12 +924,12 @@ func (m *Aggregate) GetDistinct() bool {
 }
 
 type GroupAggr struct {
-	Name                []byte       `protobuf:"bytes,1,opt,name=name" json:"name,omitempty"`
-	GroupKeys           []*GroupKey  `protobuf:"bytes,2,rep,name=groupKeys" json:"groupKeys,omitempty"`
-	Aggrs               []*Aggregate `protobuf:"bytes,3,rep,name=aggrs" json:"aggrs,omitempty"`
-	DependsOnIndexKeys  []int32      `protobuf:"varint,4,rep,name=dependsOnIndexKeys" json:"dependsOnIndexKeys,omitempty"`
-	DependsOnPrimaryKey *bool        `protobuf:"varint,5,opt,name=dependsOnPrimaryKey" json:"dependsOnPrimaryKey,omitempty"`
-	XXX_unrecognized    []byte       `json:"-"`
+	Name               []byte       `protobuf:"bytes,1,opt,name=name" json:"name,omitempty"`
+	GroupKeys          []*GroupKey  `protobuf:"bytes,2,rep,name=groupKeys" json:"groupKeys,omitempty"`
+	Aggrs              []*Aggregate `protobuf:"bytes,3,rep,name=aggrs" json:"aggrs,omitempty"`
+	DependsOnIndexKeys []int32      `protobuf:"varint,4,rep,name=dependsOnIndexKeys" json:"dependsOnIndexKeys,omitempty"`
+	IndexKeyNames      [][]byte     `protobuf:"bytes,5,rep,name=indexKeyNames" json:"indexKeyNames,omitempty"`
+	XXX_unrecognized   []byte       `json:"-"`
 }
 
 func (m *GroupAggr) Reset()         { *m = GroupAggr{} }
@@ -964,11 +964,11 @@ func (m *GroupAggr) GetDependsOnIndexKeys() []int32 {
 	return nil
 }
 
-func (m *GroupAggr) GetDependsOnPrimaryKey() bool {
-	if m != nil && m.DependsOnPrimaryKey != nil {
-		return *m.DependsOnPrimaryKey
+func (m *GroupAggr) GetIndexKeyNames() [][]byte {
+	if m != nil {
+		return m.IndexKeyNames
 	}
-	return false
+	return nil
 }
 
 func init() {

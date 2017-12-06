@@ -196,6 +196,7 @@ func (slice *plasmaSlice) initStores() error {
 	cfg.PurgeCompactRatio = slice.sysconf["plasma.purger.compactRatio"].Float64()
 	cfg.EnableLSSPageSMO = slice.sysconf["plasma.enableLSSPageSMO"].Bool()
 	cfg.LSSReadAheadSize = int64(slice.sysconf["plasma.logReadAheadSize"].Int())
+	cfg.CheckpointInterval = time.Second * time.Duration(slice.sysconf["plasma.checkpointInterval"].Int())
 
 	var mode plasma.IOMode
 
@@ -218,6 +219,7 @@ func (slice *plasmaSlice) initStores() error {
 	mCfg.MaxPageLSSSegments = slice.sysconf["plasma.mainIndex.maxLSSPageSegments"].Int()
 	mCfg.LSSCleanerThreshold = slice.sysconf["plasma.mainIndex.LSSFragmentation"].Int()
 	mCfg.LSSCleanerMaxThreshold = slice.sysconf["plasma.mainIndex.maxLSSFragmentation"].Int()
+	cfg.LogPrefix = fmt.Sprintf("%s/%s/Mainstore ", slice.idxDefn.Bucket, slice.idxDefn.Name)
 
 	bCfg.MaxDeltaChainLen = slice.sysconf["plasma.backIndex.maxNumPageDeltas"].Int()
 	bCfg.MaxPageItems = slice.sysconf["plasma.backIndex.pageSplitThreshold"].Int()
@@ -225,6 +227,7 @@ func (slice *plasmaSlice) initStores() error {
 	bCfg.MaxPageLSSSegments = slice.sysconf["plasma.backIndex.maxLSSPageSegments"].Int()
 	bCfg.LSSCleanerThreshold = slice.sysconf["plasma.backIndex.LSSFragmentation"].Int()
 	bCfg.LSSCleanerMaxThreshold = slice.sysconf["plasma.backIndex.maxLSSFragmentation"].Int()
+	bCfg.LogPrefix = fmt.Sprintf("%s/%s/Backstore ", slice.idxDefn.Bucket, slice.idxDefn.Name)
 
 	if slice.hasPersistence {
 		mCfg.File = filepath.Join(slice.path, "mainIndex")
@@ -255,7 +258,6 @@ func (slice *plasmaSlice) initStores() error {
 			slice.readers <- slice.mainstore.NewReader()
 		}
 
-		slice.mainstore.SetLogPrefix(fmt.Sprintf("%s/%s/Mainstore ", slice.idxDefn.Bucket, slice.idxDefn.Name))
 	}()
 
 	if !slice.isPrimary {
@@ -273,8 +275,6 @@ func (slice *plasmaSlice) initStores() error {
 			for i := 0; i < slice.numWriters; i++ {
 				slice.back[i] = slice.backstore.NewWriter()
 			}
-
-			slice.backstore.SetLogPrefix(fmt.Sprintf("%s/%s/Backstore ", slice.idxDefn.Bucket, slice.idxDefn.Name))
 		}()
 	}
 
@@ -1292,7 +1292,7 @@ func (mdb *plasmaSlice) Statistics() (StorageStatistics, error) {
 	numRecsDisk += pStats.NumRecordSwapOut - pStats.NumRecordSwapIn
 	cacheHits += pStats.CacheHits
 	cacheMiss += pStats.CacheMisses
-        sts.MemUsed = pStats.MemSz + pStats.MemSzIndex
+	sts.MemUsed = pStats.MemSz + pStats.MemSzIndex
 
 	internalData = append(internalData, fmt.Sprintf("{\n\"MainStore\":\n%s", pStats))
 	if !mdb.isPrimary {
@@ -1301,7 +1301,7 @@ func (mdb *plasmaSlice) Statistics() (StorageStatistics, error) {
 		numRecsDisk += pStats.NumRecordSwapOut - pStats.NumRecordSwapIn
 		cacheHits += pStats.CacheHits
 		cacheMiss += pStats.CacheMisses
-                sts.MemUsed += pStats.MemSz + pStats.MemSzIndex
+		sts.MemUsed += pStats.MemSz + pStats.MemSzIndex
 		internalData = append(internalData, fmt.Sprintf(",\n\"BackStore\":\n%s", pStats))
 	}
 
@@ -1339,6 +1339,7 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 	mdb.sysconf = cfg
 
 	updatePlasmaConfig(cfg)
+	mdb.mainstore.CheckpointInterval = time.Second * time.Duration(cfg["plasma.checkpointInterval"].Int())
 	mdb.mainstore.MaxPageLSSSegments = mdb.sysconf["plasma.mainIndex.maxLSSPageSegments"].Int()
 	mdb.mainstore.LSSCleanerThreshold = mdb.sysconf["plasma.mainIndex.LSSFragmentation"].Int()
 	mdb.mainstore.LSSCleanerMaxThreshold = mdb.sysconf["plasma.mainIndex.maxLSSFragmentation"].Int()
@@ -1351,6 +1352,7 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 	mdb.mainstore.EnableLSSPageSMO = mdb.sysconf["plasma.enableLSSPageSMO"].Bool()
 
 	if !mdb.isPrimary {
+		mdb.backstore.CheckpointInterval = mdb.mainstore.CheckpointInterval
 		mdb.backstore.MaxPageLSSSegments = mdb.sysconf["plasma.backIndex.maxLSSPageSegments"].Int()
 		mdb.backstore.LSSCleanerThreshold = mdb.sysconf["plasma.backIndex.LSSFragmentation"].Int()
 		mdb.backstore.LSSCleanerMaxThreshold = mdb.sysconf["plasma.backIndex.maxLSSFragmentation"].Int()

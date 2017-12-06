@@ -92,6 +92,9 @@ func (a *AggrFuncSum) AddDelta(delta interface{}) {
 	case float64:
 		a.val += v
 
+	case int64:
+		a.val += float64(v) // TODO: Do not convert. Support SUM for both int64 and float64
+
 	case nil:
 		//no-op
 

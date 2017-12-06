@@ -179,6 +179,6 @@ message GroupAggr {
     optional bytes     name                = 1;
     repeated GroupKey  groupKeys           = 2;
     repeated Aggregate aggrs               = 3;
-    repeated int32 dependsOnIndexKeys  = 4;
-    optional bool      dependsOnPrimaryKey = 5;
+    repeated int32     dependsOnIndexKeys  = 4;
+    repeated bytes     indexKeyNames = 5;
 }

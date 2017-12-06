@@ -25,6 +25,7 @@ import (
 	l "github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/query/expression"
 	"github.com/couchbase/query/expression/parser"
+	"github.com/couchbase/query/value"
 )
 
 type ScanReqType string
@@ -179,8 +180,14 @@ type GroupAggr struct {
 	Group               []*GroupKey  // group keys, nil means no group by
 	Aggrs               []*Aggregate // aggregates with in the group, nil means no aggregates
 	DependsOnIndexKeys  []int32      // GROUP and Aggregates Depends on List of index keys positions
-	DependsOnPrimaryKey bool         // GROUP and Aggregates Depends on primary key
-	IsLeadingGroup      bool         // Group by key(s) are leading subset
+	IndexKeyNames       []string     // Index key names used in expressions
+	DependsOnPrimaryKey bool
+	IsLeadingGroup      bool // Group by key(s) are leading subset
+
+	//For caching values
+	cv          *value.ScopeValue
+	av          value.AnnotatedValue
+	exprContext expression.Context
 }
 
 var (
@@ -226,11 +233,17 @@ func NewScanRequest(protoReq interface{},
 			err = common.ErrIndexerInBootstrap
 			return
 		}
-		err = r.setIndexParams()
+		if err = r.setIndexParams() ; err != nil {
+                        return
+                }
+
 		err = r.fillRanges(
 			req.GetSpan().GetRange().GetLow(),
 			req.GetSpan().GetRange().GetHigh(),
 			req.GetSpan().GetEquals())
+                if err != nil {
+                        return
+                }
 
 	case *protobuf.CountRequest:
 		r.DefnID = req.GetDefnID()
@@ -247,18 +260,31 @@ func NewScanRequest(protoReq interface{},
 			return
 		}
 
-		err = r.setIndexParams()
-		err = r.setConsistency(cons, vector)
+		if err = r.setIndexParams(); err != nil {
+                        return
+                }
+
+		if err = r.setConsistency(cons, vector); err != nil {
+                        return
+                }
+
 		err = r.fillRanges(
 			req.GetSpan().GetRange().GetLow(),
 			req.GetSpan().GetRange().GetHigh(),
 			req.GetSpan().GetEquals())
+                if err != nil {
+                        return
+                }
+
 		sc := req.GetScans()
 		if len(sc) != 0 {
 			err = r.fillScans(sc)
 			r.ScanType = MultiScanCountReq
 			r.Distinct = req.GetDistinct()
 		}
+                if err != nil {
+                        return
+                }
 
 	case *protobuf.ScanRequest:
 		r.DefnID = req.GetDefnID()
@@ -280,8 +306,13 @@ func NewScanRequest(protoReq interface{},
 			err = common.ErrIndexerInBootstrap
 			return
 		}
-		err = r.setIndexParams()
-		err = r.setConsistency(cons, vector)
+		if err = r.setIndexParams(); err != nil {
+                        return
+                }
+
+		if err = r.setConsistency(cons, vector); err != nil {
+                        return
+                }
 		if proj != nil {
 			var localerr error
 			if req.GetGroupAggr() == nil {
@@ -302,8 +333,15 @@ func NewScanRequest(protoReq interface{},
 			req.GetSpan().GetRange().GetLow(),
 			req.GetSpan().GetRange().GetHigh(),
 			req.GetSpan().GetEquals())
-		err = r.fillScans(req.GetScans())
-		err = r.fillGroupAggr(req.GetGroupAggr())
+                if err != nil {
+                        return
+                }
+		if err = r.fillScans(req.GetScans()); err != nil {
+                        return
+                }
+		if err = r.fillGroupAggr(req.GetGroupAggr()); err != nil {
+                        return
+                }
 
 	case *protobuf.ScanAllRequest:
 		r.DefnID = req.GetDefnID()
@@ -322,8 +360,13 @@ func NewScanRequest(protoReq interface{},
 			return
 		}
 
-		err = r.setIndexParams()
-		err = r.setConsistency(cons, vector)
+		if err = r.setIndexParams(); err != nil {
+                        return
+                }
+
+		if err = r.setConsistency(cons, vector); err != nil {
+                        return
+                }
 	default:
 		err = ErrUnsupportedRequest
 	}
@@ -995,9 +1038,14 @@ func (r *ScanRequest) fillGroupAggr(protoGroupAggr *protobuf.GroupAggr) (err err
 
 	for _, d := range protoGroupAggr.GetDependsOnIndexKeys() {
 		r.GroupAggr.DependsOnIndexKeys = append(r.GroupAggr.DependsOnIndexKeys, d)
+		if int(d) == len(r.IndexInst.Defn.SecExprs) {
+			r.GroupAggr.DependsOnPrimaryKey = true
+		}
 	}
 
-	r.GroupAggr.DependsOnPrimaryKey = protoGroupAggr.GetDependsOnPrimaryKey()
+	for _, d := range protoGroupAggr.GetIndexKeyNames() {
+		r.GroupAggr.IndexKeyNames = append(r.GroupAggr.IndexKeyNames, string(d))
+	}
 
 	if err = r.validateGroupAggr(); err != nil {
 		return
@@ -1016,6 +1064,9 @@ func (r *ScanRequest) unmarshallGroupKeys(protoGroupAggr *protobuf.GroupAggr) er
 		groupKey.KeyPos = g.GetKeyPos()
 
 		if groupKey.KeyPos < 0 {
+			if string(g.GetExpr()) == "" {
+				return errors.New("Group expression is empty")
+			}
 			expr, err := compileN1QLExpression(string(g.GetExpr()))
 			if err != nil {
 				return err
@@ -1042,6 +1093,9 @@ func (r *ScanRequest) unmarshallAggrs(protoGroupAggr *protobuf.GroupAggr) error 
 		aggr.Distinct = a.GetDistinct()
 
 		if aggr.KeyPos < 0 {
+			if string(a.GetExpr()) == "" {
+				return errors.New("Aggregate expression is empty")
+			}
 			expr, err := compileN1QLExpression(string(a.GetExpr()))
 			if err != nil {
 				return err
@@ -1084,7 +1138,7 @@ func (r *ScanRequest) validateGroupAggr() error {
 
 	//validate DependsOnIndexKeys
 	for _, k := range r.GroupAggr.DependsOnIndexKeys {
-		if int(k) >= len(r.IndexInst.Defn.SecExprs) {
+		if int(k) > len(r.IndexInst.Defn.SecExprs) {
 			err = fmt.Errorf("Invalid KeyPos In DependsOnIndexKeys %v", k)
 			l.Errorf("ScanRequest::validateGroupAggr %v", err)
 			return err
