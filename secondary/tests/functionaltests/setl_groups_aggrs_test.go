@@ -43,7 +43,7 @@ func TestGroupAggrSetup(t *testing.T) {
 type Aggdoc struct {
 	Year  string
 	Month int64
-	Sale  int64
+	Sale  interface{}
 }
 
 func makeGroupAggDocs() tc.KeyValues {
@@ -62,6 +62,7 @@ func makeGroupAggDocs() tc.KeyValues {
 	docs["doc10"] = Aggdoc{Year: "2017", Month: 2, Sale: 40}
 	docs["doc11"] = Aggdoc{Year: "2017", Month: 3, Sale: 50}
 	docs["doc12"] = Aggdoc{Year: "2017", Month: 3, Sale: 60}
+	docs["doc13"] = Aggdoc{Year: "2017", Month: 3, Sale: "salestr"}
 
 	return docs
 
@@ -353,4 +354,25 @@ func TestGroupAggrOffset(t *testing.T) {
 		tc.PrintScanResults(scanResults, "scanResults")
 	}
 
+}
+
+func TestGroupAggrCountN(t *testing.T) {
+	log.Printf("In TestGroupAggrCountN()")
+
+	var index1 = "index_agg"
+	var bucketName = "default"
+
+	ga, proj := basicGroupAggr()
+
+	a2 := &qc.Aggregate{
+		AggrFunc:   c.AGG_COUNTN,
+		EntryKeyId: 6,
+		KeyPos:     2,
+	}
+
+	ga.Aggrs[1] = a2
+
+	scanResults, err := secondaryindex.Scan3(index1, bucketName, indexScanAddress, getScanAllNoFilter(), false, false, proj, 0, defaultlimit, ga, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in scan", t)
+	tc.PrintScanResults(scanResults, "scanResults")
 }

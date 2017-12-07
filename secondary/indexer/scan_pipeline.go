@@ -846,7 +846,8 @@ func projectGroupAggr(buf []byte, projection *Projection, aggrRes *aggrResult) (
 			keysToJoin = append(keysToJoin, row.groups[projGroup.pos].key)
 		} else {
 			if row.aggrs[projGroup.pos].fn.Type() == c.AGG_SUM ||
-				row.aggrs[projGroup.pos].fn.Type() == c.AGG_COUNT {
+				row.aggrs[projGroup.pos].fn.Type() == c.AGG_COUNT ||
+				row.aggrs[projGroup.pos].fn.Type() == c.AGG_COUNTN {
 				val, err := encodeValue(row.aggrs[projGroup.pos].fn.Value())
 				if err != nil {
 					l.Infof("ScanPipeline::projectGroupAggr encodeValue error %v", err)
