@@ -712,7 +712,7 @@ func computeAggrVal(groupAggr *GroupAggr, ak *Aggregate,
 		if err != nil {
 			return nil, err
 		}
-		a = &aggrVal{fn: c.NewAggrFunc(ak.AggrFunc, scalar.ActualForIndex()),
+		a = &aggrVal{fn: c.NewAggrFunc(ak.AggrFunc, scalar),
 			projectId: ak.EntryKeyId,
 		}
 	}
@@ -855,7 +855,20 @@ func projectGroupAggr(buf []byte, projection *Projection, aggrRes *aggrResult) (
 				}
 				keysToJoin = append(keysToJoin, val)
 			} else {
-				keysToJoin = append(keysToJoin, row.aggrs[projGroup.pos].fn.Value().([]byte))
+				val := row.aggrs[projGroup.pos].fn.Value()
+				switch v := val.(type) {
+
+				case []byte:
+					keysToJoin = append(keysToJoin, v)
+
+				case value.Value:
+					eval, err := encodeValue(v.ActualForIndex())
+					if err != nil {
+						l.Infof("ScanPipeline::projectGroupAggr encodeValue error %v", err)
+						return nil, err
+					}
+					keysToJoin = append(keysToJoin, eval)
+				}
 			}
 		}
 	}

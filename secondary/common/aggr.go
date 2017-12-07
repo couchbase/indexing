@@ -13,6 +13,7 @@ import (
 	"bytes"
 	"fmt"
 	"github.com/couchbase/indexing/secondary/collatejson"
+	"github.com/couchbase/query/value"
 )
 
 type AggrFuncType uint32
@@ -92,7 +93,15 @@ func (a AggrFuncSum) Value() interface{} {
 //null/missing/non-numeric are ignored.
 func (a *AggrFuncSum) AddDelta(delta interface{}) {
 
-	switch v := delta.(type) {
+	var actual interface{}
+
+	if val, ok := delta.(value.Value); ok {
+		actual = val.ActualForIndex()
+	} else {
+		actual = delta
+	}
+
+	switch v := actual.(type) {
 
 	case float64:
 		a.val += v
@@ -134,10 +143,15 @@ func (a *AggrFuncCount) AddDelta(delta interface{}) {
 		return
 	}
 
-	switch delta.(type) {
+	switch v := delta.(type) {
 
-	case []byte, float64:
+	case []byte, value.Value:
 		a.val += 1
+
+	case float64:
+		if v != 0 {
+			a.val += 1
+		}
 
 	default:
 		//ignored
@@ -172,7 +186,7 @@ func (a *AggrFuncCountN) AddDelta(delta interface{}) {
 
 	switch v := delta.(type) {
 
-	case []byte:
+	case []byte, value.Value:
 		if isNumeric(delta) {
 			a.val += 1
 		}
@@ -226,6 +240,19 @@ func (a *AggrFuncMin) AddDelta(delta interface{}) {
 			}
 		}
 
+	case value.Value:
+
+		if !a.validVal {
+			a.val = v
+			a.validVal = true
+			return
+		} else {
+			val := a.val.(value.Value)
+			if val.Collate(v) > 0 {
+				a.val = v
+			}
+		}
+
 	default:
 		//ignored
 	}
@@ -270,6 +297,19 @@ func (a *AggrFuncMax) AddDelta(delta interface{}) {
 			}
 		}
 
+	case value.Value:
+
+		if !a.validVal {
+			a.val = v
+			a.validVal = true
+			return
+		} else {
+			val := a.val.(value.Value)
+			if val.Collate(v) < 0 {
+				a.val = v
+			}
+		}
+
 	default:
 		//ignored
 	}
@@ -290,6 +330,12 @@ func isNullOrMissing(val interface{}) bool {
 			return true
 		}
 
+	case value.Value:
+
+		if v.Type() == value.MISSING || v.Type() == value.NULL {
+			return true
+		}
+
 	}
 	return false
 }
@@ -303,6 +349,13 @@ func isNumeric(val interface{}) bool {
 		if v[0] == collatejson.TypeNumber {
 			return true
 		}
+
+	case value.Value:
+
+		if v.Type() == value.NUMBER {
+			return true
+		}
+
 	}
 	return false
 }
