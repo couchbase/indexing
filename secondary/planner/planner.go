@@ -164,11 +164,12 @@ type IndexerNode struct {
 
 type IndexUsage struct {
 	// input: index identification
-	DefnId common.IndexDefnId `json:"defnId"`
-	InstId common.IndexInstId `json:"instId"`
-	Name   string             `json:"name"`
-	Bucket string             `json:"bucket"`
-	Hosts  []string           `json:"host"`
+	DefnId  common.IndexDefnId `json:"defnId"`
+	InstId  common.IndexInstId `json:"instId"`
+	PartnId common.PartitionId `json:"partnId"`
+	Name    string             `json:"name"`
+	Bucket  string             `json:"bucket"`
+	Hosts   []string           `json:"host"`
 
 	// input: index sizing
 	IsPrimary        bool   `json:"isPrimary,omitempty"`
@@ -681,8 +682,8 @@ func (p *SAPlanner) dropReplicaIfNecessary(s *Solution) {
 	numLiveNode := s.findNumLiveNode()
 
 	// Check to see if it is needed to drop replica from a ejected node
-	deleteCandidates := make(map[common.IndexDefnId][]*IndexUsage)
-	numReplicas := make(map[common.IndexDefnId]int)
+	deleteCandidates := make(map[string][]*IndexUsage)
+	numReplicas := make(map[string]int)
 
 	for _, indexer := range s.Placement {
 		for _, index := range indexer.Indexes {
@@ -692,14 +693,14 @@ func (p *SAPlanner) dropReplicaIfNecessary(s *Solution) {
 				// do not move this index if this node is going away.
 				numReplica := s.findNumReplica(index)
 				if (numReplica > numLiveNode) && indexer.isDelete {
-					deleteCandidates[index.DefnId] = append(deleteCandidates[index.DefnId], index)
-					numReplicas[index.DefnId] = numReplica
+					deleteCandidates[index.GetPartitionName()] = append(deleteCandidates[index.GetPartitionName()], index)
+					numReplicas[index.GetPartitionName()] = numReplica
 				}
 			}
 		}
 	}
 
-	for defnId, candidates := range deleteCandidates {
+	for key, candidates := range deleteCandidates {
 
 		// sort the candidates in descending order
 		for i := 0; i < len(candidates)-1; i++ {
@@ -714,9 +715,9 @@ func (p *SAPlanner) dropReplicaIfNecessary(s *Solution) {
 		}
 
 		//prune the candidate list
-		numToDelete := numReplicas[defnId] - numLiveNode
+		numToDelete := numReplicas[key] - numLiveNode
 		if len(candidates) > numToDelete {
-			deleteCandidates[defnId] = candidates[:numToDelete]
+			deleteCandidates[key] = candidates[:numToDelete]
 		}
 	}
 
@@ -725,7 +726,7 @@ func (p *SAPlanner) dropReplicaIfNecessary(s *Solution) {
 
 		for _, index := range indexer.Indexes {
 			found := false
-			for _, candidate := range deleteCandidates[index.DefnId] {
+			for _, candidate := range deleteCandidates[index.GetPartitionName()] {
 				if candidate == index {
 					found = true
 					break
@@ -1125,8 +1126,8 @@ func (s *Solution) PrintLayout() {
 
 		for _, index := range indexer.Indexes {
 			logging.Infof("\t\t------------------------------------------------------------------------------------------------------------------")
-			logging.Infof("\t\tIndex name:%v, bucket:%v, defnId:%v, instId:%v, new/moved:%v defer:%v ignoreEquivCheck:%v",
-				index.GetDisplayName(), index.Bucket, index.DefnId, index.InstId,
+			logging.Infof("\t\tIndex name:%v, bucket:%v, defnId:%v, instId:%v, Partition: %v, new/moved:%v defer:%v ignoreEquivCheck:%v",
+				index.GetDisplayName(), index.Bucket, index.DefnId, index.InstId, index.PartnId,
 				index.initialNode == nil || index.initialNode.NodeId != indexer.NodeId, index.NoUsage, index.suppressEquivIdxCheck)
 			logging.Infof("\t\tIndex total memory:%v (%s), data:%v (%s), overhead:%v (%s), cpu:%.4f",
 				index.GetMemTotal(s.UseLiveData()), formatMemoryStr(uint64(index.GetMemTotal(s.UseLiveData()))),
@@ -1312,7 +1313,7 @@ func (s *Solution) findNumEquivalentIndex(u *IndexUsage) int {
 		for _, index := range indexer.Indexes {
 
 			// check replica
-			if index.DefnId == u.DefnId {
+			if index.IsReplica(u) {
 				count++
 
 			} else {
@@ -1340,7 +1341,7 @@ func (s *Solution) findNumReplica(u *IndexUsage) int {
 		for _, index := range indexer.Indexes {
 
 			// check replica
-			if index.DefnId == u.DefnId {
+			if index.IsReplica(u) {
 				count++
 			}
 		}
@@ -1359,7 +1360,7 @@ func (s *Solution) findMissingReplica(u *IndexUsage) []int {
 		for _, index := range indexer.Indexes {
 
 			// check replica (including self)
-			if index.DefnId == u.DefnId {
+			if index.IsReplica(u) {
 				if index.Instance == nil {
 					logging.Warnf("Cannot determinte replicaId for index (%v,%v)", index.Name, index.Bucket)
 					return ([]int)(nil)
@@ -1495,7 +1496,7 @@ func (s *Solution) hasReplicaInServerGroup(u *IndexUsage, group string) bool {
 			continue
 		}
 		for _, index := range indexer.Indexes {
-			if index != u && index.DefnId == u.DefnId { // replica
+			if index != u && index.IsReplica(u) { // replica
 				if group == indexer.ServerGroup {
 					return true
 				}
@@ -1523,7 +1524,7 @@ func (s *Solution) hasServerGroupWithNoReplica(u *IndexUsage) bool {
 		}
 
 		for _, index := range indexer.Indexes {
-			if index != u && index.DefnId == u.DefnId { // replica
+			if index != u && index.IsReplica(u) { // replica
 				counts[indexer.ServerGroup] = counts[indexer.ServerGroup] + 1
 			}
 		}
@@ -1544,7 +1545,7 @@ func (s *Solution) hasServerGroupWithNoReplica(u *IndexUsage) bool {
 func (s *Solution) hasReplia(indexer *IndexerNode, target *IndexUsage) bool {
 
 	for _, index := range indexer.Indexes {
-		if index != target && index.DefnId == target.DefnId {
+		if index != target && index.IsReplica(target) {
 			return true
 		}
 	}
@@ -1555,11 +1556,11 @@ func (s *Solution) hasReplia(indexer *IndexerNode, target *IndexUsage) bool {
 //
 // Find the indexer node that contains the replica
 //
-func (s *Solution) FindIndexerWithReplica(name string, bucket string, replicaId int) *IndexerNode {
+func (s *Solution) FindIndexerWithReplica(name string, bucket string, partnId common.PartitionId, replicaId int) *IndexerNode {
 
 	for _, indexer := range s.Placement {
 		for _, index := range indexer.Indexes {
-			if index.Name == name && index.Bucket == bucket && index.Instance != nil && index.Instance.ReplicaId == replicaId {
+			if index.Name == name && index.Bucket == bucket && index.PartnId == partnId && index.Instance != nil && index.Instance.ReplicaId == replicaId {
 				return indexer
 			}
 		}
@@ -1822,7 +1823,7 @@ func (c *IndexerConstraint) CanAddIndex(s *Solution, n *IndexerNode, u *IndexUsa
 
 	for _, index := range n.Indexes {
 		// check replica
-		if index.DefnId == u.DefnId {
+		if index.IsReplica(u) {
 			return ReplicaViolation
 		}
 
@@ -1879,7 +1880,7 @@ func (c *IndexerConstraint) CanSwapIndex(sol *Solution, n *IndexerNode, s *Index
 
 	for _, index := range n.Indexes {
 		// check replica
-		if index.DefnId == s.DefnId {
+		if index.IsReplica(s) {
 			return ReplicaViolation
 		}
 
@@ -1996,7 +1997,7 @@ func (c *IndexerConstraint) SatisfyIndexHAConstraintAt(s *Solution, n *IndexerNo
 		}
 
 		// check replica
-		if index.DefnId == source.DefnId {
+		if index.IsReplica(source) {
 			return false
 		}
 
@@ -2337,18 +2338,19 @@ func (o *IndexUsage) clone() *IndexUsage {
 // This function returns a string representing the index
 //
 func (o *IndexUsage) String() string {
-	return fmt.Sprintf("%v:%v", o.DefnId, o.InstId)
+	return fmt.Sprintf("%v:%v:%v", o.DefnId, o.InstId, o.PartnId)
 }
 
 //
 // This function creates a new index usage
 //
-func newIndexUsage(defnId common.IndexDefnId, instId common.IndexInstId, name string, bucket string) *IndexUsage {
+func newIndexUsage(defnId common.IndexDefnId, instId common.IndexInstId, partnId common.PartitionId, name string, bucket string) *IndexUsage {
 
 	return &IndexUsage{DefnId: defnId,
-		InstId: instId,
-		Name:   name,
-		Bucket: bucket,
+		InstId:  instId,
+		PartnId: partnId,
+		Name:    name,
+		Bucket:  bucket,
 	}
 }
 
@@ -2406,7 +2408,44 @@ func (o *IndexUsage) GetDisplayName() string {
 		return o.Name
 	}
 
-	return o.Instance.DisplayName()
+	return common.FormatIndexPartnDisplayName(o.Instance.Defn.Name, o.Instance.ReplicaId, int(o.PartnId))
+}
+
+func (o *IndexUsage) GetStatsName() string {
+
+	return o.GetDisplayName()
+}
+
+func (o *IndexUsage) GetInstStatsName() string {
+
+	if o.Instance == nil {
+		return o.Name
+	}
+
+	return common.FormatIndexInstDisplayName(o.Instance.Defn.Name, o.Instance.ReplicaId)
+}
+
+func (o *IndexUsage) GetPartitionName() string {
+
+	if o.Instance == nil {
+		return o.Name
+	}
+
+	return common.FormatIndexPartnDisplayName(o.Instance.Defn.Name, 0, int(o.PartnId))
+}
+
+func (o *IndexUsage) GetReplicaName() string {
+
+	if o.Instance == nil {
+		return o.Name
+	}
+
+	return common.FormatIndexPartnDisplayName(o.Instance.Defn.Name, o.Instance.ReplicaId, 0)
+}
+
+func (o *IndexUsage) IsReplica(other *IndexUsage) bool {
+
+	return o.DefnId == other.DefnId && o.PartnId == other.PartnId
 }
 
 //////////////////////////////////////////////////////////////

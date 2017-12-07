@@ -182,14 +182,16 @@ func ConvertToIndexUsages(localMeta *LocalIndexMetadata, node *IndexerNode) ([]*
 	for i := 0; i < len(localMeta.IndexDefinitions); i++ {
 
 		defn := &localMeta.IndexDefinitions[i]
-		index, err := ConvertToIndexUsage(defn, localMeta)
+		indexes, err := ConvertToIndexUsage(defn, localMeta)
 		if err != nil {
 			return nil, err
 		}
 
-		if index != nil {
-			index.initialNode = node
-			list = append(list, index)
+		if len(indexes) != 0 {
+			for _, index := range indexes {
+				index.initialNode = node
+				list = append(list, index)
+			}
 		}
 	}
 
@@ -199,7 +201,7 @@ func ConvertToIndexUsages(localMeta *LocalIndexMetadata, node *IndexerNode) ([]*
 //
 // This function convert a single index defintion to IndexUsage.
 //
-func ConvertToIndexUsage(defn *common.IndexDefn, localMeta *LocalIndexMetadata) (*IndexUsage, error) {
+func ConvertToIndexUsage(defn *common.IndexDefn, localMeta *LocalIndexMetadata) ([]*IndexUsage, error) {
 
 	// find the topology metadata
 	topology := findTopologyByBucket(localMeta.IndexTopologies, defn.Bucket)
@@ -224,42 +226,55 @@ func ConvertToIndexUsage(defn *common.IndexDefn, localMeta *LocalIndexMetadata) 
 		state != common.INDEX_STATE_ERROR &&
 		state != common.INDEX_STATE_NIL {
 
-		// create an index usage object
-		index := newIndexUsage(defn.DefnId, common.IndexInstId(inst.InstId), defn.Name, defn.Bucket)
+		result := make([]*IndexUsage, len(inst.Partitions))
 
-		// index is pinned to a node
-		if len(defn.Nodes) != 0 {
-			index.Hosts = defn.Nodes
+		for i, partn := range inst.Partitions {
+
+			// create an index usage object
+			index := newIndexUsage(defn.DefnId, common.IndexInstId(inst.InstId), common.PartitionId(partn.PartId), defn.Name, defn.Bucket)
+
+			// index is pinned to a node
+			if len(defn.Nodes) != 0 {
+				index.Hosts = defn.Nodes
+			}
+
+			// update sizing
+			index.IsPrimary = defn.IsPrimary
+			index.IsMOI = (defn.Using == common.IndexType(common.MemoryOptimized) || defn.Using == common.IndexType(common.MemDB))
+			index.NoUsage = defn.Deferred && state == common.INDEX_STATE_READY
+
+			// update partition
+			defn.NumPartitions = inst.NumPartitions
+			if defn.NumPartitions == 0 {
+				defn.NumPartitions = uint32(len(inst.Partitions))
+			}
+
+			// Is the index being deleted by user?   Thsi will read the delete token from metakv.  If untable read from metakv,
+			// pendingDelete is false (cannot assert index is to-be-delete).
+			pendingDelete, err := client.DeleteCommandTokenExist(defn.DefnId)
+			if err != nil {
+				return nil, err
+			}
+			index.pendingDelete = pendingDelete
+
+			// update internal info
+			index.Instance = &common.IndexInst{
+				InstId:    common.IndexInstId(inst.InstId),
+				Defn:      *defn,
+				State:     common.IndexState(inst.State),
+				Stream:    common.StreamId(inst.StreamId),
+				Error:     inst.Error,
+				ReplicaId: int(inst.ReplicaId),
+				Version:   int(inst.Version),
+				RState:    common.RebalanceState(inst.RState),
+			}
+
+			logging.Debugf("Create Index usage %v %v %v %v", index.Name, index.Bucket, index.Instance.InstId, index.Instance.ReplicaId)
+
+			result[i] = index
 		}
 
-		// update sizing
-		index.IsPrimary = defn.IsPrimary
-		index.IsMOI = (defn.Using == common.IndexType(common.MemoryOptimized) || defn.Using == common.IndexType(common.MemDB))
-		index.NoUsage = defn.Deferred && state == common.INDEX_STATE_READY
-
-		// Is the index being deleted by user?   Thsi will read the delete token from metakv.  If untable read from metakv,
-		// pendingDelete is false (cannot assert index is to-be-delete).
-		pendingDelete, err := client.DeleteCommandTokenExist(defn.DefnId)
-		if err != nil {
-			return nil, err
-		}
-		index.pendingDelete = pendingDelete
-
-		// update internal info
-		index.Instance = &common.IndexInst{
-			InstId:    common.IndexInstId(inst.InstId),
-			Defn:      *defn,
-			State:     common.IndexState(inst.State),
-			Stream:    common.StreamId(inst.StreamId),
-			Error:     inst.Error,
-			ReplicaId: int(inst.ReplicaId),
-			Version:   int(inst.Version),
-			RState:    common.RebalanceState(inst.RState),
-		}
-
-		logging.Debugf("Create Index usage %v %v %v %v", index.Name, index.Bucket, index.Instance.InstId, index.Instance.ReplicaId)
-
-		return index, nil
+		return result, nil
 	}
 
 	return nil, nil
@@ -367,7 +382,8 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 
 			var key string
 
-			indexName := index.GetDisplayName()
+			indexName := index.GetStatsName()
+			indexName1 := index.GetInstStatsName()
 
 			// items_count captures number of key per index
 			key = fmt.Sprintf("%v:%v:items_count", index.Bucket, indexName)
@@ -442,7 +458,11 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 
 			// These stats are currently unavailable in 4.5.
 			key = fmt.Sprintf("%v:%v:avg_scan_rate", index.Bucket, indexName)
+			key1 := fmt.Sprintf("%v:%v:avg_scan_rate", index.Bucket, indexName1)
 			if avgScanRate, ok := statsMap[key]; ok {
+				index.ScanRate = uint64(avgScanRate.(float64))
+				totalScan += index.ScanRate
+			} else if avgScanRate, ok := statsMap[key1]; ok {
 				index.ScanRate = uint64(avgScanRate.(float64))
 				totalScan += index.ScanRate
 			} else {
@@ -662,7 +682,7 @@ func getLocalMetadata(addr string) (*LocalIndexMetadata, error) {
 //
 func getLocalStats(addr string) (*common.Statistics, error) {
 
-	resp, err := getWithCbauth(addr + "/stats?async=false")
+	resp, err := getWithCbauth(addr + "/stats?async=false&partition=true")
 	if err != nil {
 		return nil, err
 	}

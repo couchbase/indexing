@@ -115,24 +115,28 @@ func (m *RestoreContext) convertImage() error {
 
 			// If the index is in CREATED state, this will return nil.  So if there is any create index in flight,
 			// it could be excluded by restore.
-			index, err := planner.ConvertToIndexUsage(&defn, (*planner.LocalIndexMetadata)(unsafe.Pointer(&meta)))
+			indexes, err := planner.ConvertToIndexUsage(&defn, (*planner.LocalIndexMetadata)(unsafe.Pointer(&meta)))
 			if err != nil {
 				return err
 			}
 
-			if index == nil {
+			if len(indexes) == 0 {
 				logging.Infof("RestoreContext:  Index could be in the process of being created or dropped.  Skip restoring index (%v, %v).",
 					defn.Bucket, defn.Name)
 				continue
 			}
 
-			if index.Instance != nil {
-				logging.Infof("RestoreContext:  Processing index in backup image (%v, %v, %v).", index.Bucket, index.Name, index.Instance.ReplicaId)
-			} else {
-				logging.Infof("RestoreContext:  Processing index in backup image (%v, %v).", index.Bucket, index.Name)
-			}
+			for _, index := range indexes {
 
-			m.idxFromImage[common.IndexerId(meta.IndexerId)] = append(m.idxFromImage[common.IndexerId(meta.IndexerId)], index)
+				if index.Instance != nil {
+					logging.Infof("RestoreContext:  Processing index in backup image (%v, %v, %v, %v).",
+						index.Bucket, index.Name, index.PartnId, index.Instance.ReplicaId)
+				} else {
+					logging.Infof("RestoreContext:  Processing index in backup image (%v, %v).", index.Bucket, index.Name)
+				}
+
+				m.idxFromImage[common.IndexerId(meta.IndexerId)] = append(m.idxFromImage[common.IndexerId(meta.IndexerId)], index)
+			}
 		}
 	}
 
@@ -152,23 +156,23 @@ func (m *RestoreContext) cleanseBackupMetadata() {
 		for _, index := range indexes {
 
 			if index.Instance == nil {
-				logging.Infof("RestoreContext:  Skip restoring orphan index with no instance metadata (%v, %v).", index.Bucket, index.Name)
+				logging.Infof("RestoreContext:  Skip restoring orphan index with no instance metadata (%v, %v, %v).", index.Bucket, index.Name, index.PartnId)
 				continue
 			}
 
 			// ignore any index with RState being pending.
 			// **For pre-spock backup, RState of an instance is ACTIVE (0).
 			if index.Instance != nil && index.Instance.RState == common.REBAL_PENDING {
-				logging.Infof("RestoreContext:  Skip restoring RState PENDING index (%v, %v).", index.Bucket, index.Name)
+				logging.Infof("RestoreContext:  Skip restoring RState PENDING index (%v, %v, %v).", index.Bucket, index.Name, index.PartnId)
 				continue
 			}
 
 			// find another instance with a higher instance version.
 			// **For pre-spock backup, inst version is always 0. In fact, there should not be another instance (max == inst).
-			max := findMaxVersionInst(m.idxFromImage, index.DefnId, index.InstId)
+			max := findMaxVersionInst(m.idxFromImage, index.DefnId, index.PartnId, index.InstId)
 			if max != index {
-				logging.Infof("RestoreContext:  Skip restoring index with lower version number (%v, %v, %v).",
-					index.Bucket, index.Name, index.Instance.Version)
+				logging.Infof("RestoreContext:  Skip restoring index (%v, %v, %v) with lower version number %v.",
+					index.Bucket, index.Name, index.PartnId, index.Instance.Version)
 				continue
 			}
 
@@ -206,19 +210,20 @@ func (m *RestoreContext) findIndexToRestore() {
 
 					// if it has the same definiton, check if the same replica exist
 					// ** For pre-spock backup, ReplicaId is 0
-					anyReplica := findMatchingReplica(m.current, index.Bucket, index.Name, index.Instance.ReplicaId)
+					// ** For pre-vulcan backup, PartnId is 0
+					anyReplica := findMatchingReplica(m.current, index.Bucket, index.Name, index.PartnId, index.Instance.ReplicaId)
 
 					// If same replica exist, then skip.
 					if anyReplica != nil {
 						logging.Infof("RestoreContext:  Find index in the target cluster with the same bucket, name, replicaId and definition. "+
-							"Skip restoring index (%v, %v, %v).", index.Bucket, index.Name, index.Instance.ReplicaId)
+							"Skip restoring index (%v, %v, %v, %v).", index.Bucket, index.Name, index.PartnId, index.Instance.ReplicaId)
 						continue
 					}
 
 					// If same replica does not exist, restore only if the replicaId is smaller than the no. of replica.
 					if (anyInst.Instance.Defn.NumReplica + 1) <= uint32(index.Instance.ReplicaId) {
 						logging.Infof("RestoreContext:  Find index in the target cluster with the same bucket, name and definition, but fewer replica. "+
-							"Skip restoring index (%v, %v, %v).", index.Bucket, index.Name, index.Instance.ReplicaId)
+							"Skip restoring index (%v, %v, %v, %v).", index.Bucket, index.Name, index.PartnId, index.Instance.ReplicaId)
 						continue
 					}
 
@@ -389,11 +394,25 @@ func (m *RestoreContext) buildIndexHostMapping(solution *planner.Solution) map[s
 	for _, indexes := range m.idxToRestore {
 		for _, index := range indexes {
 			if index.Instance != nil {
-				if indexer := solution.FindIndexerWithReplica(index.Name, index.Bucket, index.Instance.ReplicaId); indexer != nil {
-					logging.Infof("RestoreContext:  Restoring index (%v, %v, %v) at indexer %v",
-						index.Bucket, index.Name, index.Instance.ReplicaId, indexer.NodeId)
-					index.Instance.Defn.ReplicaId = index.Instance.ReplicaId
-					result[indexer.RestUrl] = append(result[indexer.RestUrl], &index.Instance.Defn)
+				if indexer := solution.FindIndexerWithReplica(index.Name, index.Bucket, index.PartnId, index.Instance.ReplicaId); indexer != nil {
+					logging.Infof("RestoreContext:  Restoring index (%v, %v, %v, %v) at indexer %v",
+						index.Bucket, index.Name, index.PartnId, index.Instance.ReplicaId, indexer.NodeId)
+
+					defns := result[indexer.RestUrl]
+					found := false
+					for _, defn := range defns {
+						if defn.DefnId == index.Instance.Defn.DefnId && defn.ReplicaId == index.Instance.ReplicaId {
+							found = true
+							defn.Partitions = append(defn.Partitions, index.PartnId)
+							break
+						}
+					}
+
+					if !found {
+						index.Instance.Defn.ReplicaId = index.Instance.ReplicaId
+						index.Instance.Defn.Partitions = []common.PartitionId{index.PartnId}
+						result[indexer.RestUrl] = append(result[indexer.RestUrl], &index.Instance.Defn)
+					}
 				}
 			}
 		}
@@ -409,7 +428,8 @@ func (m *RestoreContext) buildIndexHostMapping(solution *planner.Solution) map[s
 //
 // Find a higest version index instance with the same definition id and instance id
 //
-func findMaxVersionInst(metadata map[common.IndexerId][]*planner.IndexUsage, defnId common.IndexDefnId, instId common.IndexInstId) *planner.IndexUsage {
+func findMaxVersionInst(metadata map[common.IndexerId][]*planner.IndexUsage, defnId common.IndexDefnId, partnId common.PartitionId,
+	instId common.IndexInstId) *planner.IndexUsage {
 
 	max := (*planner.IndexUsage)(nil)
 
@@ -421,7 +441,7 @@ func findMaxVersionInst(metadata map[common.IndexerId][]*planner.IndexUsage, def
 				continue
 			}
 
-			if index.DefnId == defnId && index.InstId == instId {
+			if index.DefnId == defnId && index.PartnId == partnId && index.InstId == instId {
 				if max == nil || index.Instance.Version > max.Instance.Version {
 					max = index
 				}
@@ -433,7 +453,7 @@ func findMaxVersionInst(metadata map[common.IndexerId][]*planner.IndexUsage, def
 }
 
 //
-// Find any instance in the metadata, regardless of its version or RState
+// Find any instance in the metadata, regardless of its partitionId, version or RState
 //
 func findMatchingInst(current *planner.Plan, bucket string, name string) *planner.IndexUsage {
 
@@ -453,12 +473,12 @@ func findMatchingInst(current *planner.Plan, bucket string, name string) *planne
 //
 // Find any replica in the metadata, regardless of its version or RState
 //
-func findMatchingReplica(current *planner.Plan, bucket string, name string, replicaId int) *planner.IndexUsage {
+func findMatchingReplica(current *planner.Plan, bucket string, name string, partnId common.PartitionId, replicaId int) *planner.IndexUsage {
 
 	for _, indexers := range current.Placement {
 		for _, index := range indexers.Indexes {
 			if index.Instance != nil {
-				if index.Bucket == bucket && index.Name == name && index.Instance.ReplicaId == replicaId {
+				if index.Bucket == bucket && index.Name == name && index.PartnId == partnId && index.Instance.ReplicaId == replicaId {
 					return index
 				}
 			}
@@ -547,6 +567,7 @@ func isSubset(superset []*planner.IndexUsage, subset []*planner.IndexUsage) bool
 		for _, super := range superset {
 			if super.Bucket == sub.Bucket &&
 				super.Name == sub.Name &&
+				super.PartnId == sub.PartnId &&
 				super.Instance != nil && sub.Instance != nil && super.Instance.ReplicaId == sub.Instance.ReplicaId {
 				found = true
 				break

@@ -169,59 +169,103 @@ func ExecuteRebalanceInternal(clusterUrl string,
 func genTransferToken(solution *Solution, masterId string, topologyChange service.TopologyChange) map[string]*common.TransferToken {
 
 	tokens := make(map[string]*common.TransferToken)
+	versions := make(map[string]int)
 
 	for _, indexer := range solution.Placement {
 		for _, index := range indexer.Indexes {
 			if index.initialNode != nil && index.initialNode.NodeId != indexer.NodeId {
-				token := &common.TransferToken{
-					MasterId:  masterId,
-					SourceId:  index.initialNode.NodeUUID,
-					DestId:    indexer.NodeUUID,
-					RebalId:   topologyChange.ID,
-					State:     common.TransferTokenCreated,
-					InstId:    index.InstId,
-					IndexInst: *index.Instance,
+
+				// one token for every index replica between a specific source and destination
+				tokenKey := fmt.Sprintf("%v %v %v %v", index.DefnId, index.Instance.ReplicaId, index.initialNode.NodeUUID, indexer.NodeUUID)
+
+				token, ok := tokens[tokenKey]
+				if !ok {
+					token = &common.TransferToken{
+						MasterId:  masterId,
+						SourceId:  index.initialNode.NodeUUID,
+						DestId:    indexer.NodeUUID,
+						RebalId:   topologyChange.ID,
+						State:     common.TransferTokenCreated,
+						InstId:    index.InstId,
+						IndexInst: *index.Instance,
+					}
+
+					// Note: NumPartitions is set in Defn inside proxy
+					token.IndexInst.Defn.InstVersion = token.IndexInst.Version + 1
+					token.IndexInst.Defn.ReplicaId = token.IndexInst.ReplicaId
+					token.IndexInst.Defn.Using = common.IndexType(indexer.StorageMode)
+					token.IndexInst.Defn.Partitions = []common.PartitionId{index.PartnId}
+
+					tokens[tokenKey] = token
+
+				} else {
+					// Token exist for the same index replica between the same source and target.   Add partition to token.
+					token.IndexInst.Defn.Partitions = append(token.IndexInst.Defn.Partitions, index.PartnId)
 				}
-
-				token.IndexInst.Defn.InstVersion = token.IndexInst.Version + 1
-				token.IndexInst.Defn.ReplicaId = token.IndexInst.ReplicaId
-				token.IndexInst.Defn.Using = common.IndexType(indexer.StorageMode)
-
-				ustr, _ := common.NewUUID()
-				ttid := fmt.Sprintf("TransferToken%s", ustr.Str())
-
-				tokens[ttid] = token
 
 				logging.Infof("Generating Transfer Token for rebalance (%v)", token)
 
 			} else if index.initialNode == nil {
 				// There is no source node (index is added during rebalance).
-				token := &common.TransferToken{
-					MasterId:     masterId,
-					SourceId:     "",
-					DestId:       indexer.NodeUUID,
-					RebalId:      topologyChange.ID,
-					State:        common.TransferTokenCreated,
-					InstId:       index.InstId,
-					IndexInst:    *index.Instance,
-					TransferMode: common.TokenTransferModeCopy,
+
+				// one token for every index replica between a specific source and destination
+				tokenKey := fmt.Sprintf("%v %v %v %v", index.DefnId, index.Instance.ReplicaId, "N/A", indexer.NodeUUID)
+
+				token, ok := tokens[tokenKey]
+				if !ok {
+					token = &common.TransferToken{
+						MasterId:     masterId,
+						SourceId:     "",
+						DestId:       indexer.NodeUUID,
+						RebalId:      topologyChange.ID,
+						State:        common.TransferTokenCreated,
+						InstId:       index.InstId,
+						IndexInst:    *index.Instance,
+						TransferMode: common.TokenTransferModeCopy,
+					}
+
+					// Note: NumPartitions is set in Defn inside proxy
+					token.IndexInst.Defn.InstVersion = 1
+					token.IndexInst.Defn.ReplicaId = token.IndexInst.ReplicaId
+					token.IndexInst.Defn.Using = common.IndexType(indexer.StorageMode)
+					token.IndexInst.Defn.Partitions = []common.PartitionId{index.PartnId}
+
+					tokens[tokenKey] = token
+
+				} else {
+					// Token exist for the same index replica between the same source and target.   Add partition to token.
+					token.IndexInst.Defn.Partitions = append(token.IndexInst.Defn.Partitions, index.PartnId)
 				}
 
-				token.IndexInst.Defn.InstVersion = 1
-				token.IndexInst.Defn.ReplicaId = token.IndexInst.ReplicaId
-				token.IndexInst.Defn.Using = common.IndexType(indexer.StorageMode)
-
-				ustr, _ := common.NewUUID()
-				ttid := fmt.Sprintf("TransferToken%s", ustr.Str())
-
-				tokens[ttid] = token
-
 				logging.Infof("Generating Transfer Token for rebuilding lost replica (%v)", token)
+			}
+
+			// find the maximum instance version
+			versionKey := fmt.Sprintf("%v %v", index.DefnId, index.Instance.ReplicaId)
+			if version, ok := versions[versionKey]; ok {
+				if version < index.Instance.Version {
+					versions[versionKey] = index.Instance.Version
+				}
+			} else {
+				versions[versionKey] = index.Instance.Version
 			}
 		}
 	}
 
-	return tokens
+	result := make(map[string]*common.TransferToken)
+	for _, token := range tokens {
+		ustr, _ := common.NewUUID()
+		ttid := fmt.Sprintf("TransferToken%s", ustr.Str())
+
+		versionKey := fmt.Sprintf("%v %v", token.IndexInst.Defn.DefnId, token.IndexInst.Defn.ReplicaId)
+		if version, ok := versions[versionKey]; ok {
+			token.IndexInst.Defn.InstVersion = version + 1
+		}
+
+		result[ttid] = token
+	}
+
+	return result
 }
 
 //////////////////////////////////////////////////////////////
