@@ -174,7 +174,7 @@ func (s *IndexScanSource) Routine() error {
 			if err != nil {
 				return err
 			}
-			l.Infof("ScanPipeline::computeGroupAggr %v", s.p.aggrRes)
+			l.Debugf("ScanPipeline::computeGroupAggr %v", s.p.aggrRes)
 		}
 
 		if !r.isPrimary && r.Indexprojection != nil && r.Indexprojection.projectSecKeys {
@@ -750,7 +750,7 @@ func (ar *aggrResult) AddNewGroup(groups []*groupKey, aggrs []*aggrVal) error {
 	for _, row := range ar.rows {
 		if row.CheckEqualGroup(groups) {
 			nomatch = false
-			l.Infof("ScanPipeline::AddNewGroup Add to Same Group %v", row)
+			l.Debugf("ScanPipeline::AddNewGroup Add to Same Group %v", row)
 			err = row.AddAggregate(aggrs)
 			if err != nil {
 				return err
@@ -764,7 +764,7 @@ func (ar *aggrResult) AddNewGroup(groups []*groupKey, aggrs []*aggrVal) error {
 			aggrs: make([]*aggrVal, len(aggrs))}
 		newRow.AddAggregate(aggrs)
 
-		l.Infof("ScanPipeline::AddNewGroup Add New Group %v", newRow)
+		l.Debugf("ScanPipeline::AddNewGroup Add New Group %v", newRow)
 
 		//flush the first row
 		if len(ar.rows) >= ar.maxRows {
@@ -850,7 +850,7 @@ func projectGroupAggr(buf []byte, projection *Projection, aggrRes *aggrResult) (
 				row.aggrs[projGroup.pos].fn.Type() == c.AGG_COUNTN {
 				val, err := encodeValue(row.aggrs[projGroup.pos].fn.Value())
 				if err != nil {
-					l.Infof("ScanPipeline::projectGroupAggr encodeValue error %v", err)
+					l.Errorf("ScanPipeline::projectGroupAggr encodeValue error %v", err)
 					return nil, err
 				}
 				keysToJoin = append(keysToJoin, val)
@@ -864,7 +864,7 @@ func projectGroupAggr(buf []byte, projection *Projection, aggrRes *aggrResult) (
 				case value.Value:
 					eval, err := encodeValue(v.ActualForIndex())
 					if err != nil {
-						l.Infof("ScanPipeline::projectGroupAggr encodeValue error %v", err)
+						l.Errorf("ScanPipeline::projectGroupAggr encodeValue error %v", err)
 						return nil, err
 					}
 					keysToJoin = append(keysToJoin, eval)
@@ -875,7 +875,7 @@ func projectGroupAggr(buf []byte, projection *Projection, aggrRes *aggrResult) (
 
 	codec := collatejson.NewCodec(16)
 	if buf, err = codec.JoinArray(keysToJoin, buf); err != nil {
-		l.Infof("ScanPipeline::projectGroupAggr join array error %v", err)
+		l.Errorf("ScanPipeline::projectGroupAggr join array error %v", err)
 		return nil, err
 	}
 
