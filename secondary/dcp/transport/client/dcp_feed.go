@@ -881,6 +881,10 @@ func newDcpEvent(rq *transport.MCRequest, stream *DcpStream) *DcpEvent {
 	return event
 }
 
+func (event *DcpEvent) IsJSON() bool {
+	return (event.Datatype & 1) == 1
+}
+
 func (event *DcpEvent) String() string {
 	name := transport.CommandNames[event.Opcode]
 	if name == "" {
