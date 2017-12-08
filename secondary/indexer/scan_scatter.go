@@ -21,6 +21,11 @@ import (
 
 var ErrFinishCallback error = errors.New("Callback done due to error")
 
+const (
+	NoPick = -1
+	Done   = -2
+)
+
 //--------------------------
 // scatter range scan
 //--------------------------
@@ -45,9 +50,9 @@ func scanMultiple(request *ScanRequest, scan Scan, snapshots []SliceSnapshot, cb
 	notifych := make(chan bool, 1)
 	killch := make(chan bool, 1)
 	donech := make(chan bool, 1)
-	errch := make(chan error, len(snapshots)+1)
+	errch := make(chan error, len(snapshots)+100)
 
-	sorted := true
+	sorted := request.Sorted
 
 	queues := make([]*Queue, len(snapshots))
 	size, limit := queueSize(len(snapshots), sorted, config)
@@ -82,16 +87,19 @@ func scanMultiple(request *ScanRequest, scan Scan, snapshots []SliceSnapshot, cb
 	if err != nil {
 		// stop gather go-routine
 		close(killch)
+		errch <- err
 	} else {
 		// wait for gather to be done
 		<-donech
 	}
 
-	count := int64(0)
+	enqCount := int64(0)
+	deqCount := int64(0)
 	for _, queue := range queues {
-		count += queue.TotalCount()
+		enqCount += queue.EnqueueCount()
+		deqCount += queue.DequeueCount()
 	}
-	logging.Verbosef("scan_scatter.scanMultiple: scan done.  Count %v", count)
+	logging.Debugf("scan_scatter.scanMultiple: scan done.  enqueue count %v dequeue count %v", enqCount, deqCount)
 
 	return
 }
@@ -101,7 +109,7 @@ func scanOne(request *ScanRequest, scan Scan, snapshots []SliceSnapshot, cb Entr
 	errch := make(chan error, 1)
 	count := scanSingleSlice(request, scan, request.Ctxs[0], snapshots[0], nil, nil, errch, cb)
 
-	logging.Verbosef("scan_scatter:scanOnce: scan done.  Count %v", count)
+	logging.Debugf("scan_scatter:scanOnce: scan done.  Count %v", count)
 
 	errcnt := len(errch)
 	for i := 0; i < errcnt; i++ {
@@ -338,6 +346,80 @@ func statsSingleSlice(request *ScanRequest, ctx IndexReaderContext, snap SliceSn
 // gather range scan
 //--------------------------
 
+func scan_sort(request *ScanRequest, queues []*Queue, rows []Row, sorted []int) bool {
+
+	size := len(queues)
+
+	for i := 0; i < size; i++ {
+		sorted[i] = i
+	}
+
+	for i := 0; i < size-1; i++ {
+		if !queues[sorted[i]].Peek(&rows[sorted[i]]) {
+			return false
+		}
+
+		for j := i + 1; j < size; j++ {
+			if !queues[sorted[j]].Peek(&rows[sorted[j]]) {
+				return false
+			}
+
+			if rows[sorted[i]].last && !rows[sorted[j]].last ||
+				(!rows[sorted[i]].last && !rows[sorted[j]].last &&
+					compareKey(request, &rows[sorted[i]], &rows[sorted[j]]) > 0) {
+				tmp := sorted[i]
+				sorted[i] = sorted[j]
+				sorted[j] = tmp
+			}
+		}
+	}
+
+	return true
+}
+
+//
+// Gather results from multiple connections
+// rows - buffer of rows from each scatter gorountine
+// sorted - sorted order of the rows
+//
+func scan_pick(request *ScanRequest, queues []*Queue, rows []Row, sorted []int) int {
+
+	size := len(queues)
+
+	if !queues[sorted[0]].Peek(&rows[sorted[0]]) {
+		return NoPick
+	}
+
+	pos := 0
+	for i := 1; i < size; i++ {
+		if !queues[sorted[i]].Peek(&rows[sorted[i]]) {
+			return NoPick
+		}
+
+		// last value always sorted last
+		if rows[sorted[pos]].last && !rows[sorted[i]].last ||
+			(!rows[sorted[pos]].last && !rows[sorted[i]].last &&
+				compareKey(request, &rows[sorted[pos]], &rows[sorted[i]]) > 0) {
+
+			tmp := sorted[pos]
+			sorted[pos] = sorted[i]
+			sorted[i] = tmp
+			pos = i
+
+		} else {
+			break
+		}
+	}
+
+	for i := 0; i < size; i++ {
+		if !rows[sorted[i]].last {
+			return sorted[0]
+		}
+	}
+
+	return Done
+}
+
 func gather(request *ScanRequest, queues []*Queue, donech chan bool, notifych chan bool, killch chan bool,
 	errch chan error, cb EntryCallback) {
 
@@ -345,52 +427,56 @@ func gather(request *ScanRequest, queues []*Queue, donech chan bool, notifych ch
 
 	ensembleSize := len(queues)
 	rows := make([]Row, ensembleSize)
+	sorted := make([]int, ensembleSize)
+
+	// initial sort
+	isSorted := false
+	for !isSorted {
+		if len(errch) != 0 {
+			return
+		}
+
+		isSorted = scan_sort(request, queues, rows, sorted)
+
+		if !isSorted {
+			select {
+			case <-notifych:
+				continue
+			case <-killch:
+				return
+			}
+		}
+	}
 
 	for {
-		var candidate *Row
 		var id int
-		var count int
 
 		if len(errch) != 0 {
 			return
 		}
 
-		for i := 0; i < ensembleSize; i++ {
-			if queues[i].Peek(&rows[i]) {
-				count++
-
-				if rows[i].last {
-					continue
-				}
-
-				if candidate == nil || compareKey(request, candidate, &rows[i]) > 0 {
-					candidate = &rows[i]
-					id = i
-				}
-			}
+		id = scan_pick(request, queues, rows, sorted)
+		if id == Done {
+			break
 		}
 
-		if count == ensembleSize {
-			if candidate != nil {
-				if queues[id].Dequeue(&rows[id]) {
-					if err := cb(rows[id].key); err != nil {
-						errch <- err
-
-						// unblock all producers
-						for _, queue := range queues {
-							queue.Close()
-						}
-						return
-					}
-				}
-			} else {
-				return
-			}
-		} else {
+		if id == NoPick {
 			select {
 			case <-notifych:
 				continue
 			case <-killch:
+				return
+			}
+		}
+
+		if queues[id].Dequeue(&rows[id]) {
+			if err := cb(rows[id].key); err != nil {
+				errch <- err
+
+				// unblock all producers
+				for _, queue := range queues {
+					queue.Close()
+				}
 				return
 			}
 		}

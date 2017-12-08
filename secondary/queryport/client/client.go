@@ -55,10 +55,10 @@ type ResponseSender func(pkey []byte, mskey []value.Value, uskey common.Secondar
 type ResponseHandlerFactory func(id ResponseHandlerId) ResponseHandler
 
 // ScanRequestHandler initiates a request to a single server connection
-type ScanRequestHandler func(*GsiScanClient, *common.IndexDefn, int64, []common.PartitionId, uint32, ResponseHandler) (error, bool)
+type ScanRequestHandler func(*GsiScanClient, *common.IndexDefn, int64, []common.PartitionId, ResponseHandler) (error, bool)
 
 // CountRequestHandler initiates a request to a single server connection
-type CountRequestHandler func(*GsiScanClient, *common.IndexDefn, int64, []common.PartitionId, uint32) (int64, error, bool)
+type CountRequestHandler func(*GsiScanClient, *common.IndexDefn, int64, []common.PartitionId) (int64, error, bool)
 
 // Remoteaddr string in the shape of "<host:port>"
 type Remoteaddr string
@@ -105,6 +105,11 @@ type GroupAggr struct {
 	Aggrs              []*Aggregate // aggregates with in the group, nil means no aggregates
 	DependsOnIndexKeys []int32      // GROUP and Aggregates Depends on List of index keys positions
 	IndexKeyNames      []string     // Index key names used in expressions
+}
+
+type IndexKeyOrder struct {
+	KeyPos []int
+	Desc   []bool
 }
 
 const (
@@ -156,8 +161,9 @@ type BridgeAccessor interface {
 	// with
 	//      JSON marshalled description about index deployment (and more...).
 	CreateIndex(
-		name, bucket, using, exprType, partnExpr, whereExpr string,
+		name, bucket, using, exprType, whereExpr string,
 		secExprs []string, desc []bool, isPrimary bool,
+		scheme common.PartitionScheme, partitionKeys []string,
 		with []byte) (defnID uint64, err error)
 
 	// BuildIndexes to build a deferred set of indexes. This call implies
@@ -457,14 +463,15 @@ func (c *GsiClient) CreateIndex(
 	secExprs []string, isPrimary bool,
 	with []byte) (defnID uint64, err error) {
 
-	return c.CreateIndex2(name, bucket, using, exprType,
-		partnExpr, whereExpr, secExprs, nil, isPrimary, with)
+	return c.CreateIndex3(name, bucket, using, exprType,
+		whereExpr, secExprs, nil, isPrimary, common.SINGLE, nil, with)
 }
 
 // CreateIndex implements BridgeAccessor{} interface.
-func (c *GsiClient) CreateIndex2(
-	name, bucket, using, exprType, partnExpr, whereExpr string,
+func (c *GsiClient) CreateIndex3(
+	name, bucket, using, exprType, whereExpr string,
 	secExprs []string, desc []bool, isPrimary bool,
+	scheme common.PartitionScheme, partitionKeys []string,
 	with []byte) (defnID uint64, err error) {
 
 	err = common.IsValidIndexName(name)
@@ -477,14 +484,14 @@ func (c *GsiClient) CreateIndex2(
 	}
 	begin := time.Now()
 	defnID, err = c.bridge.CreateIndex(
-		name, bucket, using, exprType, partnExpr, whereExpr,
-		secExprs, desc, isPrimary, with)
-	fmsg := "CreateIndex %v %v/%v using:%v exprType:%v partnExpr:%v " +
-		"whereExpr:%v secExprs:%v desc:%v isPrimary:%v with:%v - " +
-		"elapsed(%v) err(%v)"
+		name, bucket, using, exprType, whereExpr,
+		secExprs, desc, isPrimary, scheme, partitionKeys, with)
+	fmsg := "CreateIndex %v %v/%v using:%v exprType:%v " +
+		"whereExpr:%v secExprs:%v desc:%v isPrimary:%v scheme:%v " +
+		" partitionKeys:%v with:%v - elapsed(%v) err(%v)"
 	logging.Infof(
-		fmsg, defnID, bucket, name, using, exprType, partnExpr, whereExpr,
-		secExprs, desc, isPrimary, string(with), time.Since(begin), err)
+		fmsg, defnID, bucket, name, using, exprType, whereExpr,
+		secExprs, desc, isPrimary, scheme, partitionKeys, string(with), time.Since(begin), err)
 	return defnID, err
 }
 
@@ -569,7 +576,7 @@ func (c *GsiClient) LookupInternal(
 	begin := time.Now()
 
 	handler := func(qc *GsiScanClient, index *common.IndexDefn, rollbackTime int64, partitions []common.PartitionId,
-		numPartitions uint32, callb ResponseHandler) (error, bool) {
+		callb ResponseHandler) (error, bool) {
 		var err error
 
 		vector, err = c.getConsistency(qc, cons, vector, index.Bucket)
@@ -577,15 +584,15 @@ func (c *GsiClient) LookupInternal(
 			return err, false
 		}
 		return qc.Lookup(
-			uint64(index.DefnId), requestId, values, distinct, limit, cons,
+			uint64(index.DefnId), requestId, values, distinct, broker.GetLimit(), cons,
 			vector, callb, rollbackTime, partitions)
 	}
 
 	broker.SetScanRequestHandler(handler)
+	broker.SetLimit(limit)
 
 	_, err = c.doScan(defnID, requestId, broker)
 	if err != nil { // callback with error
-		broker.Close()
 		return err
 	}
 
@@ -623,7 +630,7 @@ func (c *GsiClient) RangeInternal(
 
 	begin := time.Now()
 
-	handler := func(qc *GsiScanClient, index *common.IndexDefn, rollbackTime int64, partitions []common.PartitionId, numPartitions uint32,
+	handler := func(qc *GsiScanClient, index *common.IndexDefn, rollbackTime int64, partitions []common.PartitionId,
 		handler ResponseHandler) (error, bool) {
 		var err error
 
@@ -647,20 +654,19 @@ func (c *GsiClient) RangeInternal(
 			}
 			return qc.RangePrimary(
 				uint64(index.DefnId), requestId, l, h, inclusion, distinct,
-				limit, cons, vector, handler, rollbackTime, partitions)
+				broker.GetLimit(), cons, vector, handler, rollbackTime, partitions)
 		}
 		// dealing with secondary index.
 		return qc.Range(
 			uint64(index.DefnId), requestId, low, high, inclusion, distinct,
-			limit, cons, vector, handler, rollbackTime, partitions,
-			index, numPartitions)
+			broker.GetLimit(), cons, vector, handler, rollbackTime, partitions)
 	}
 
 	broker.SetScanRequestHandler(handler)
+	broker.SetLimit(limit)
 
 	_, err = c.doScan(defnID, requestId, broker)
 	if err != nil { // callback with error
-		broker.Close()
 		return err
 	}
 
@@ -697,21 +703,21 @@ func (c *GsiClient) ScanAllInternal(
 	begin := time.Now()
 
 	handler := func(qc *GsiScanClient, index *common.IndexDefn, rollbackTime int64, partitions []common.PartitionId,
-		numPartitions uint32, handler ResponseHandler) (error, bool) {
+		handler ResponseHandler) (error, bool) {
 		var err error
 
 		vector, err = c.getConsistency(qc, cons, vector, index.Bucket)
 		if err != nil {
 			return err, false
 		}
-		return qc.ScanAll(uint64(index.DefnId), requestId, limit, cons, vector, handler, rollbackTime, partitions)
+		return qc.ScanAll(uint64(index.DefnId), requestId, broker.GetLimit(), cons, vector, handler, rollbackTime, partitions)
 	}
 
 	broker.SetScanRequestHandler(handler)
+	broker.SetLimit(limit)
 
 	_, err = c.doScan(defnID, requestId, broker)
 	if err != nil { // callback with error
-		broker.Close()
 		return err
 	}
 
@@ -748,7 +754,7 @@ func (c *GsiClient) MultiScanInternal(
 	begin := time.Now()
 
 	handler := func(qc *GsiScanClient, index *common.IndexDefn, rollbackTime int64, partitions []common.PartitionId,
-		numPartitions uint32, handler ResponseHandler) (error, bool) {
+		handler ResponseHandler) (error, bool) {
 		var err error
 
 		vector, err = c.getConsistency(qc, cons, vector, index.Bucket)
@@ -759,20 +765,23 @@ func (c *GsiClient) MultiScanInternal(
 		if c.bridge.IsPrimary(uint64(index.DefnId)) {
 			return qc.MultiScanPrimary(
 				uint64(index.DefnId), requestId, scans, reverse, distinct,
-				projection, offset, limit, cons, vector, handler, rollbackTime, partitions)
+				projection, broker.GetOffset(), broker.GetLimit(), cons, vector, handler, rollbackTime, partitions)
 		}
 
 		return qc.MultiScan(
 			uint64(index.DefnId), requestId, scans, reverse, distinct,
-			projection, offset, limit, cons, vector, handler, rollbackTime, partitions,
-			index, numPartitions)
+			projection, broker.GetOffset(), broker.GetLimit(), cons, vector, handler, rollbackTime, partitions)
 	}
 
 	broker.SetScanRequestHandler(handler)
+	broker.SetLimit(limit)
+	broker.SetOffset(offset)
+	broker.SetScans(scans)
+	broker.SetProjection(projection)
+	broker.SetDistinct(distinct)
 
 	_, err = c.doScan(defnID, requestId, broker)
 	if err != nil { // callback with error
-		broker.Close()
 		return err
 	}
 
@@ -806,7 +815,7 @@ func (c *GsiClient) CountLookupInternal(
 
 	begin := time.Now()
 
-	handler := func(qc *GsiScanClient, index *common.IndexDefn, rollbackTime int64, partitions []common.PartitionId, numPartitions uint32) (int64, error, bool) {
+	handler := func(qc *GsiScanClient, index *common.IndexDefn, rollbackTime int64, partitions []common.PartitionId) (int64, error, bool) {
 		var err error
 		var count int64
 
@@ -835,9 +844,6 @@ func (c *GsiClient) CountLookupInternal(
 	broker.SetCountRequestHandler(handler)
 
 	count, err = c.doScan(defnID, requestId, broker)
-	if err != nil {
-		broker.Close()
-	}
 
 	fmsg := "CountLookup {%v,%v} - elapsed(%v) err(%v)"
 	logging.Verbosef(fmsg, defnID, requestId, time.Since(begin), err)
@@ -873,7 +879,7 @@ func (c *GsiClient) CountRangeInternal(
 
 	begin := time.Now()
 
-	handler := func(qc *GsiScanClient, index *common.IndexDefn, rollbackTime int64, partitions []common.PartitionId, numPartitions uint32) (int64, error, bool) {
+	handler := func(qc *GsiScanClient, index *common.IndexDefn, rollbackTime int64, partitions []common.PartitionId) (int64, error, bool) {
 		var err error
 		var count int64
 
@@ -908,9 +914,6 @@ func (c *GsiClient) CountRangeInternal(
 	broker.SetCountRequestHandler(handler)
 
 	count, err = c.doScan(defnID, requestId, broker)
-	if err != nil {
-		broker.Close()
-	}
 
 	fmsg := "CountRange {%v,%v} - elapsed(%v) err(%v)"
 	logging.Verbosef(fmsg, defnID, requestId, time.Since(begin), err)
@@ -943,7 +946,7 @@ func (c *GsiClient) MultiScanCountInternal(
 
 	begin := time.Now()
 
-	handler := func(qc *GsiScanClient, index *common.IndexDefn, rollbackTime int64, partitions []common.PartitionId, numPartitions uint32) (int64, error, bool) {
+	handler := func(qc *GsiScanClient, index *common.IndexDefn, rollbackTime int64, partitions []common.PartitionId) (int64, error, bool) {
 		var err error
 
 		vector, err = c.getConsistency(qc, cons, vector, index.Bucket)
@@ -964,9 +967,6 @@ func (c *GsiClient) MultiScanCountInternal(
 	broker.SetCountRequestHandler(handler)
 
 	count, err = c.doScan(defnID, requestId, broker)
-	if err != nil {
-		broker.Close()
-	}
 
 	fmsg := "MultiScanCount {%v,%v} - elapsed(%v) err(%v)"
 	logging.Verbosef(fmsg, defnID, requestId, time.Since(begin), err)
@@ -976,19 +976,19 @@ func (c *GsiClient) MultiScanCountInternal(
 func (c *GsiClient) Scan3(
 	defnID uint64, requestId string, scans Scans, reverse,
 	distinct bool, projection *IndexProjection, offset, limit int64,
-	groupAggr *GroupAggr,
+	groupAggr *GroupAggr, indexOrder *IndexKeyOrder,
 	cons common.Consistency, vector *TsConsistency,
 	callb ResponseHandler) (err error) {
 
 	broker := makeDefaultRequestBroker(callb)
 	return c.Scan3Internal(defnID, requestId, scans, reverse, distinct,
-		projection, offset, limit, groupAggr, cons, vector, broker)
+		projection, offset, limit, groupAggr, indexOrder, cons, vector, broker)
 }
 
 func (c *GsiClient) Scan3Internal(
 	defnID uint64, requestId string, scans Scans, reverse,
 	distinct bool, projection *IndexProjection, offset, limit int64,
-	groupAggr *GroupAggr,
+	groupAggr *GroupAggr, indexOrder *IndexKeyOrder,
 	cons common.Consistency, vector *TsConsistency,
 	broker *RequestBroker) (err error) {
 
@@ -1004,7 +1004,7 @@ func (c *GsiClient) Scan3Internal(
 	begin := time.Now()
 
 	handler := func(qc *GsiScanClient, index *common.IndexDefn, rollbackTime int64, partitions []common.PartitionId,
-		numPartitions uint32, handler ResponseHandler) (error, bool) {
+		handler ResponseHandler) (error, bool) {
 		var err error
 
 		vector, err = c.getConsistency(qc, cons, vector, index.Bucket)
@@ -1015,20 +1015,26 @@ func (c *GsiClient) Scan3Internal(
 		if c.bridge.IsPrimary(uint64(index.DefnId)) {
 			return qc.MultiScanPrimary(
 				uint64(index.DefnId), requestId, scans, reverse, distinct,
-				projection, offset, limit, cons, vector, handler, rollbackTime, partitions)
+				projection, broker.GetOffset(), broker.GetLimit(), cons, vector, handler, rollbackTime, partitions)
 		}
 
 		return qc.Scan3(
 			uint64(index.DefnId), requestId, scans, reverse, distinct,
-			projection, offset, limit, groupAggr, cons, vector, handler, rollbackTime, partitions,
-			index, numPartitions)
+			projection, broker.GetOffset(), broker.GetLimit(), groupAggr, broker.GetSorted(), cons, vector, handler, rollbackTime, partitions)
 	}
 
 	broker.SetScanRequestHandler(handler)
+	broker.SetLimit(limit)
+	broker.SetOffset(offset)
+	broker.SetScans(scans)
+	broker.SetGroupAggr(groupAggr)
+	broker.SetProjection(projection)
+	broker.SetSorted(indexOrder != nil)
+	broker.SetDistinct(distinct)
+	broker.SetIndexOrder(indexOrder)
 
 	_, err = c.doScan(defnID, requestId, broker)
 	if err != nil { // callback with error
-		broker.Close()
 		return err
 	}
 

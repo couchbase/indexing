@@ -19,6 +19,8 @@ import (
 	c "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/common/queryutil"
 	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/query/expression"
+	"github.com/couchbase/query/expression/parser"
 	"math"
 	"net"
 	"strconv"
@@ -343,8 +345,10 @@ func (o *MetadataProvider) CheckIndexerStatusNoLock() []IndexerStatus {
 }
 
 func (o *MetadataProvider) CreateIndexWithPlan(
-	name, bucket, using, exprType, partnExpr, whereExpr string,
-	secExprs []string, desc []bool, isPrimary bool, plan map[string]interface{}) (c.IndexDefnId, error, bool) {
+	name, bucket, using, exprType, whereExpr string,
+	secExprs []string, desc []bool, isPrimary bool,
+	scheme c.PartitionScheme, partitionKeys []string,
+	plan map[string]interface{}) (c.IndexDefnId, error, bool) {
 
 	// FindIndexByName will only return valid index
 	if o.FindIndexByName(name, bucket) != nil {
@@ -352,7 +356,8 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 	}
 
 	// Create index definition
-	idxDefn, err, retry := o.PrepareIndexDefn(name, bucket, using, exprType, partnExpr, whereExpr, secExprs, desc, isPrimary, plan)
+	idxDefn, err, retry := o.PrepareIndexDefn(name, bucket, using, exprType, whereExpr, secExprs, desc,
+		isPrimary, scheme, partitionKeys, plan)
 	if err != nil {
 		return c.IndexDefnId(0), err, retry
 	}
@@ -474,8 +479,10 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 }
 
 func (o *MetadataProvider) PrepareIndexDefn(
-	name, bucket, using, exprType, partnExpr, whereExpr string,
-	secExprs []string, desc []bool, isPrimary bool, plan map[string]interface{}) (*c.IndexDefn, error, bool) {
+	name, bucket, using, exprType, whereExpr string,
+	secExprs []string, desc []bool, isPrimary bool,
+	partitionScheme c.PartitionScheme, partitionKeys []string,
+	plan map[string]interface{}) (*c.IndexDefn, error, bool) {
 
 	//
 	// Parse WITH CLAUSE
@@ -486,8 +493,6 @@ func (o *MetadataProvider) PrepareIndexDefn(
 	var wait bool = true
 	var nodes []string = nil
 	var numReplica int = 0
-	var partitionScheme c.PartitionScheme = c.SINGLE
-	var partitionKey string
 	var numPartition int = 0
 
 	version := o.GetIndexerVersion()
@@ -523,14 +528,20 @@ func (o *MetadataProvider) PrepareIndexDefn(
 			return nil, err, retry
 		}
 
-		partitionScheme, err, retry = o.getPartitionParam(plan)
-		if err != nil {
-			return nil, err, retry
+		if len(partitionKeys) == 0 {
+			partitionKeys, err, retry = o.getPartitionKeyParam(plan, secExprs)
+			if err != nil {
+				return nil, err, retry
+			}
+
+			if len(partitionKeys) != 0 {
+				partitionScheme = c.KEY
+			}
 		}
 
-		partitionKey, err, retry = o.getPartitionKeyParam(plan, secExprs)
+		err = o.validatePartitionKeys(partitionScheme, partitionKeys, secExprs, isPrimary)
 		if err != nil {
-			return nil, err, retry
+			return nil, err, false
 		}
 
 		numPartition, err, retry = o.getNumPartitionParam(partitionScheme, plan, version)
@@ -634,7 +645,7 @@ func (o *MetadataProvider) PrepareIndexDefn(
 		Desc:            desc,
 		ExprType:        c.ExprType(exprType),
 		PartitionScheme: partitionScheme,
-		PartitionKey:    partitionKey,
+		PartitionKeys:   partitionKeys,
 		WhereExpr:       whereExpr,
 		Deferred:        deferred,
 		Nodes:           nodes,
@@ -743,45 +754,94 @@ func (o *MetadataProvider) getDeferredParam(plan map[string]interface{}) (bool, 
 	return deferred, nil, false
 }
 
-func (o *MetadataProvider) getPartitionParam(plan map[string]interface{}) (c.PartitionScheme, error, bool) {
+func (o *MetadataProvider) validatePartitionKeys(partitionScheme c.PartitionScheme, partitionKeys []string, secKeys []string, isPrimary bool) error {
 
-	partition_str, ok := plan["partition"].(string)
-	if ok {
-		partition_str = strings.TrimSpace(strings.ToUpper(partition_str))
-		if partition_str == string(c.HASH) || partition_str == string(c.KEY) || partition_str == string(c.SINGLE) {
-			return c.PartitionScheme(partition_str), nil, false
-		} else {
-			return "", errors.New("Fails to create index.  Parameter partition must be SINGLE, KEY, HASH."), false
+	if partitionScheme != c.SINGLE && partitionScheme != c.KEY {
+		return errors.New(fmt.Sprintf("Fails to create index.  Partition Scheme %v is not allowed.", partitionScheme))
+	}
+
+	if partitionScheme == c.SINGLE && len(partitionKeys) != 0 {
+		return errors.New(fmt.Sprintf("Fails to create index.  Cannot suppport partition keys for non-partitioned index."))
+	}
+
+	if partitionScheme == c.SINGLE {
+		return nil
+	}
+
+	if partitionScheme == c.KEY && len(partitionKeys) == 0 {
+		return errors.New(fmt.Sprintf("Fails to create index.  Must specify partition keys for partitioned index."))
+	}
+
+	secExprs := make(expression.Expressions, 0, len(secKeys))
+	for _, key := range secKeys {
+		expr, err := parser.Parse(key)
+		if err != nil {
+			return errors.New(fmt.Sprintf("Fails to create index.  Invalid index key %v.", key))
+		}
+		secExprs = append(secExprs, expr)
+	}
+
+	partnExprs := make(expression.Expressions, 0, len(partitionKeys))
+	for _, key := range partitionKeys {
+
+		expr, err := parser.Parse(key)
+		if err != nil {
+			return errors.New(fmt.Sprintf("Fails to create index.  Invalid partition key %v.", key))
+		}
+		partnExprs = append(partnExprs, expr)
+	}
+
+	/*
+		id := expression.NewField(expression.NewMeta(), expression.NewFieldName("id", false))
+		idself := expression.NewField(expression.NewMeta(expression.NewIdentifier("self")), expression.NewFieldName("id", false))
+		for i, partnExpr := range partnExprs {
+			found := false
+
+			if !isPrimary {
+				for _, secExpr := range secExprs {
+					if partnExpr.EquivalentTo(secExpr) || partnExpr.Depends(id) || partnExpr.Depends(idself) {
+						found = true
+						break
+					}
+				}
+			} else if partnExpr.DependsOn(id) || partnExpr.DependsOn(idself) {
+				found = true
+			}
+
+			if !found {
+				return errors.New(fmt.Sprintf("Fails to create index. Partition key '%v' is not an index key.", partitionKeys[i]))
+			}
+		}
+	*/
+
+	for i, partnExpr := range partnExprs {
+
+		for j := i + 1; j < len(partnExprs); j++ {
+			if partnExpr.EquivalentTo(partnExprs[j]) {
+				return errors.New(fmt.Sprintf("Fails to create index. Do not allow duplicate partition key '%v'.", partitionKeys[i]))
+			}
+		}
+
+		if isArray, _ := partnExpr.IsArrayIndexKey(); isArray {
+			return errors.New(fmt.Sprintf("Fails to create index. Partition key '%v' cannot be an array expression.", partitionKeys[i]))
 		}
 	}
 
-	return c.SINGLE, nil, false
+	return nil
 }
 
-func (o *MetadataProvider) getPartitionKeyParam(plan map[string]interface{}, secKeys []string) (string, error, bool) {
+func (o *MetadataProvider) getPartitionKeyParam(plan map[string]interface{}, secKeys []string) ([]string, error, bool) {
 
 	partitionKey, ok := plan["partition_key"].(string)
 	if ok {
-		partitionKey = strings.TrimSpace(partitionKey)
-		if len(partitionKey) == 0 {
-			return "", errors.New(fmt.Sprintf("Fails to create index.  Parameter partition_key must be match one of the index key. %v", secKeys)), false
+		var keys []string
+		for _, key := range strings.Split(partitionKey, ",") {
+			keys = append(keys, key)
 		}
-		if partitionKey[0] != '`' {
-			partitionKey = fmt.Sprintf("`%v", partitionKey)
-		}
-		if partitionKey[len(partitionKey)-1] != '`' {
-			partitionKey = fmt.Sprintf("%v`", partitionKey)
-		}
-
-		for _, secKey := range secKeys {
-			if secKey == partitionKey {
-				return partitionKey, nil, false
-			}
-		}
-		return "", errors.New(fmt.Sprintf("Fails to create index.  Parameter partition_key must be match one of the index key. %v", secKeys)), false
+		return keys, nil, false
 	}
 
-	return "", nil, false
+	return nil, nil, false
 }
 
 func (o *MetadataProvider) getNumPartitionParam(scheme c.PartitionScheme, plan map[string]interface{}, version uint64) (int, error, bool) {

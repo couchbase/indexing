@@ -28,7 +28,6 @@ type Row struct {
 type Queue struct {
 	size    int64
 	count   int64
-	limit   int64
 	isClose int32
 
 	buf  []Row
@@ -44,11 +43,10 @@ type Queue struct {
 //
 // Constructor
 //
-func NewQueue(size int64, limit int64, notifych chan bool) *Queue {
+func NewQueue(size int64, notifych chan bool) *Queue {
 
 	rbuf := &Queue{}
 	rbuf.size = size
-	rbuf.limit = limit
 	rbuf.buf = make([]Row, size)
 	rbuf.notifych = notifych
 	rbuf.enqch = make(chan bool, 1)
@@ -61,7 +59,7 @@ func NewQueue(size int64, limit int64, notifych chan bool) *Queue {
 //
 // This funciton notifies a new row added to buffer.
 //
-func (b *Queue) notifyEnq() {
+func (b *Queue) NotifyEnq() {
 
 	select {
 	case b.enqch <- true:
@@ -79,7 +77,7 @@ func (b *Queue) notifyEnq() {
 //
 // This funciton notifies a new row removed from buffer
 //
-func (b *Queue) notifyDeq() {
+func (b *Queue) NotifyDeq() {
 
 	select {
 	case b.deqch <- true:
@@ -104,12 +102,14 @@ func (b *Queue) Enqueue(key *Row) {
 
 			b.buf[b.free] = *key
 			b.free = next
-			if atomic.AddInt64(&b.count, 1) == b.limit || key.last {
-				b.notifyEnq()
+			atomic.AddInt64(&b.count, 1)
+			if key.last {
+				b.NotifyEnq()
 			}
 			return
 		}
 
+		b.NotifyEnq()
 		select {
 		case <-b.deqch:
 		case <-b.donech:
@@ -136,7 +136,7 @@ func (b *Queue) Dequeue(row *Row) bool {
 			*row = b.buf[b.head]
 			b.head = next
 			if atomic.AddInt64(&b.count, -1) == (b.size - 1) {
-				b.notifyDeq()
+				b.NotifyDeq()
 			}
 			return true
 		}

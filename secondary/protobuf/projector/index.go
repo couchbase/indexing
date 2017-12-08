@@ -93,7 +93,7 @@ func (instance *IndexInst) GetPartitionObject() Partition {
 // definition of an index instance.
 type IndexEvaluator struct {
 	skExprs  []interface{} // compiled expression
-	pkExpr   interface{}   // compiled expression
+	pkExprs  []interface{} // compiled expression
 	whExpr   interface{}   // compiled expression
 	instance *IndexInst
 	version  FeedVersion
@@ -119,17 +119,17 @@ func NewIndexEvaluator(instance *IndexInst,
 			return nil, err
 		}
 		// expression to evaluate partition key
-		expr := defn.GetPartnExpression()
-		if len(expr) > 0 {
-			cExprs, err := CompileN1QLExpression([]string{expr})
+		exprs = defn.GetPartnExpressions()
+		if len(exprs) > 0 {
+			cExprs, err := CompileN1QLExpression(exprs)
 			if err != nil {
 				return nil, err
 			} else if len(cExprs) > 0 {
-				ie.pkExpr = cExprs[0]
+				ie.pkExprs = cExprs
 			}
 		}
 		// expression to evaluate where clause
-		expr = defn.GetWhereExpression()
+		expr := defn.GetWhereExpression()
 		if len(expr) > 0 {
 			cExprs, err := CompileN1QLExpression([]string{expr})
 			if err != nil {
@@ -217,7 +217,7 @@ func (ie *IndexEvaluator) TransformRoute(
 	}
 
 	if where && len(m.Value) > 0 { // project new secondary key
-		if npkey, err = ie.partitionKey(m.Value, meta, encodeBuf); err != nil {
+		if npkey, err = ie.partitionKey(m.Key, m.Value, meta, encodeBuf); err != nil {
 			return nil, err
 		}
 		if nkey, newBuf, err = ie.evaluate(m.Key, m.Value, meta, encodeBuf); err != nil {
@@ -225,7 +225,7 @@ func (ie *IndexEvaluator) TransformRoute(
 		}
 	}
 	if len(m.OldValue) > 0 { // project old secondary key
-		if opkey, err = ie.partitionKey(m.OldValue, meta, encodeBuf); err != nil {
+		if opkey, err = ie.partitionKey(m.Key, m.OldValue, meta, encodeBuf); err != nil {
 			return nil, err
 		}
 		if okey, newBuf, err = ie.evaluate(m.Key, m.OldValue, meta, encodeBuf); err != nil {
@@ -312,19 +312,17 @@ func (ie *IndexEvaluator) evaluate(
 }
 
 func (ie *IndexEvaluator) partitionKey(
-	doc []byte, meta map[string]interface{}, encodeBuf []byte) ([]byte, error) {
+	docid, doc []byte, meta map[string]interface{}, encodeBuf []byte) ([]byte, error) {
 
 	defn := ie.instance.GetDefinition()
-	if defn.GetIsPrimary() { // TODO: strategy for primary index ???
-		return nil, nil
-	} else if ie.pkExpr == nil { // no partition key
+	if ie.pkExprs == nil { // no partition key
 		return nil, nil
 	}
 
 	exprType := defn.GetExprType()
 	switch exprType {
 	case ExprType_N1QL:
-		out, _, err := N1QLTransform(nil, doc, []interface{}{ie.pkExpr}, meta, encodeBuf)
+		out, _, err := N1QLTransform(docid, doc, ie.pkExprs, meta, nil)
 		return out, err
 	}
 	return nil, nil

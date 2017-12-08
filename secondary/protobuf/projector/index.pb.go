@@ -2,6 +2,16 @@
 // source: index.proto
 // DO NOT EDIT!
 
+/*
+Package protobuf is a generated protocol buffer package.
+
+It is generated from these files:
+	index.proto
+
+It has these top-level messages:
+	IndexInst
+	IndexDefn
+*/
 package protobuf
 
 import proto "github.com/golang/protobuf/proto"
@@ -229,17 +239,18 @@ func (m *IndexInst) GetSinglePartn() *SinglePartition {
 
 // Index DDL from create index statement.
 type IndexDefn struct {
-	DefnID           *uint64          `protobuf:"varint,1,req,name=defnID" json:"defnID,omitempty"`
-	Bucket           *string          `protobuf:"bytes,2,req,name=bucket" json:"bucket,omitempty"`
-	IsPrimary        *bool            `protobuf:"varint,3,req,name=isPrimary" json:"isPrimary,omitempty"`
-	Name             *string          `protobuf:"bytes,4,req,name=name" json:"name,omitempty"`
-	Using            *StorageType     `protobuf:"varint,5,req,name=using,enum=protobuf.StorageType" json:"using,omitempty"`
-	ExprType         *ExprType        `protobuf:"varint,6,req,name=exprType,enum=protobuf.ExprType" json:"exprType,omitempty"`
-	SecExpressions   []string         `protobuf:"bytes,7,rep,name=secExpressions" json:"secExpressions,omitempty"`
-	PartitionScheme  *PartitionScheme `protobuf:"varint,8,opt,name=partitionScheme,enum=protobuf.PartitionScheme" json:"partitionScheme,omitempty"`
-	PartnExpression  *string          `protobuf:"bytes,9,opt,name=partnExpression" json:"partnExpression,omitempty"`
-	WhereExpression  *string          `protobuf:"bytes,10,opt,name=whereExpression" json:"whereExpression,omitempty"`
-	XXX_unrecognized []byte           `json:"-"`
+	DefnID          *uint64          `protobuf:"varint,1,req,name=defnID" json:"defnID,omitempty"`
+	Bucket          *string          `protobuf:"bytes,2,req,name=bucket" json:"bucket,omitempty"`
+	IsPrimary       *bool            `protobuf:"varint,3,req,name=isPrimary" json:"isPrimary,omitempty"`
+	Name            *string          `protobuf:"bytes,4,req,name=name" json:"name,omitempty"`
+	Using           *StorageType     `protobuf:"varint,5,req,name=using,enum=protobuf.StorageType" json:"using,omitempty"`
+	ExprType        *ExprType        `protobuf:"varint,6,req,name=exprType,enum=protobuf.ExprType" json:"exprType,omitempty"`
+	SecExpressions  []string         `protobuf:"bytes,7,rep,name=secExpressions" json:"secExpressions,omitempty"`
+	PartitionScheme *PartitionScheme `protobuf:"varint,8,opt,name=partitionScheme,enum=protobuf.PartitionScheme" json:"partitionScheme,omitempty"`
+	// optional string          partnExpression = 9; // use expressions to evaluate doc
+	WhereExpression  *string  `protobuf:"bytes,10,opt,name=whereExpression" json:"whereExpression,omitempty"`
+	PartnExpressions []string `protobuf:"bytes,11,rep,name=partnExpressions" json:"partnExpressions,omitempty"`
+	XXX_unrecognized []byte   `json:"-"`
 }
 
 func (m *IndexDefn) Reset()         { *m = IndexDefn{} }
@@ -302,18 +313,18 @@ func (m *IndexDefn) GetPartitionScheme() PartitionScheme {
 	return PartitionScheme_TEST
 }
 
-func (m *IndexDefn) GetPartnExpression() string {
-	if m != nil && m.PartnExpression != nil {
-		return *m.PartnExpression
-	}
-	return ""
-}
-
 func (m *IndexDefn) GetWhereExpression() string {
 	if m != nil && m.WhereExpression != nil {
 		return *m.WhereExpression
 	}
 	return ""
+}
+
+func (m *IndexDefn) GetPartnExpressions() []string {
+	if m != nil {
+		return m.PartnExpressions
+	}
+	return nil
 }
 
 func init() {

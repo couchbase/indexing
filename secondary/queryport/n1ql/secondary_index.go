@@ -276,6 +276,15 @@ func (gsi *gsiKeyspace) PrimaryIndexes() ([]datastore.PrimaryIndex, errors.Error
 func (gsi *gsiKeyspace) CreatePrimaryIndex(
 	requestId, name string, with value.Value) (datastore.PrimaryIndex, errors.Error) {
 
+	return gsi.CreatePrimaryIndex3(requestId, name, nil, with)
+}
+
+// CreateIndex3 implements datastore.Indexer3{} interface. Create a secondary
+// index on this keyspace
+func (gsi *gsiKeyspace) CreatePrimaryIndex3(
+	requestId, name string, indexPartition *datastore.IndexPartition,
+	with value.Value) (datastore.PrimaryIndex, errors.Error) {
+
 	var withJSON []byte
 	var err error
 	if with != nil {
@@ -283,15 +292,28 @@ func (gsi *gsiKeyspace) CreatePrimaryIndex(
 			return nil, errors.NewError(err, "GSI error marshalling WITH clause")
 		}
 	}
-	defnID, err := gsi.gsiClient.CreateIndex(
+
+	// partition
+	partitionScheme := c.PartitionScheme(c.SINGLE)
+	var partitionKeys []string
+	if indexPartition != nil {
+		partitionScheme = partitionKey(indexPartition.Strategy)
+		for _, expr := range indexPartition.Exprs {
+			partitionKeys = append(partitionKeys, expression.NewStringer().Visit(expr))
+		}
+	}
+
+	defnID, err := gsi.gsiClient.CreateIndex3(
 		name,
 		gsi.keyspace, /*bucket-name*/
 		"GSI",        /*using*/
 		"N1QL",       /*exprType*/
-		"",           /*partnStr*/
 		"",           /*whereStr*/
 		nil,          /*secStrs*/
+		nil,          /* desc */
 		true,         /*isPrimary*/
+		partitionScheme,
+		partitionKeys,
 		withJSON)
 	if err != nil {
 		return nil, errors.NewError(err, "GSI CreatePrimaryIndex()")
@@ -362,16 +384,22 @@ func (gsi *gsiKeyspace) CreateIndex2(
 	where expression.Expression, with value.Value) (
 	datastore.Index, errors.Error) {
 
-	var partnStr string
-	if seekKey != nil && len(seekKey) > 0 {
-		partnStr = expression.NewStringer().Visit(seekKey[0])
-	}
+	return gsi.CreateIndex3(requestId, name, rangeKey, nil, where, with)
+}
 
+// CreateIndex3 implements datastore.Indexer3{} interface. Create a secondary
+// index on this keyspace
+func (gsi *gsiKeyspace) CreateIndex3(
+	requestId, name string, rangeKey datastore.IndexKeys, indexPartition *datastore.IndexPartition,
+	where expression.Expression, with value.Value) (datastore.Index, errors.Error) {
+
+	// where
 	var whereStr string
 	if where != nil {
 		whereStr = expression.NewStringer().Visit(where)
 	}
 
+	// index keys
 	secStrs := make([]string, len(rangeKey))
 	desc := make([]bool, len(rangeKey))
 
@@ -381,6 +409,7 @@ func (gsi *gsiKeyspace) CreateIndex2(
 		desc[i] = key.Desc
 	}
 
+	// with
 	var withJSON []byte
 	var err error
 	if with != nil {
@@ -388,13 +417,28 @@ func (gsi *gsiKeyspace) CreateIndex2(
 			return nil, errors.NewError(err, "GSI error marshalling WITH clause")
 		}
 	}
-	defnID, err := gsi.gsiClient.CreateIndex2(
+
+	// partition
+	partitionScheme := c.PartitionScheme(c.SINGLE)
+	var partitionKeys []string
+	if indexPartition != nil {
+		partitionScheme = partitionKey(indexPartition.Strategy)
+		for _, expr := range indexPartition.Exprs {
+			partitionKeys = append(partitionKeys, expression.NewStringer().Visit(expr))
+		}
+	}
+
+	defnID, err := gsi.gsiClient.CreateIndex3(
 		name,
 		gsi.keyspace, /*bucket-name*/
 		"GSI",        /*using*/
 		"N1QL",       /*exprType*/
-		partnStr, whereStr, secStrs, desc,
+		whereStr,
+		secStrs,
+		desc,
 		false, /*isPrimary*/
+		partitionScheme,
+		partitionKeys,
 		withJSON)
 	if err != nil {
 		return nil, errors.NewError(err, "GSI CreateIndex()")
@@ -404,6 +448,14 @@ func (gsi *gsiKeyspace) CreateIndex2(
 		return nil, err
 	}
 	return gsi.IndexById(defnID2String(defnID))
+}
+
+func partitionKey(partitionType datastore.PartitionType) c.PartitionScheme {
+	if partitionType == datastore.HASH_PARTITION {
+		return c.PartitionScheme(c.KEY)
+	}
+
+	return c.PartitionScheme(c.SINGLE)
 }
 
 // BuildIndexes implements datastore.Indexer{} interface.
@@ -596,9 +648,13 @@ func newSecondaryIndexFromMetaData(
 		si.secExprs = exprs
 	}
 
-	if indexDefn.PartitionKey != "" {
-		expr, _ := parser.Parse(indexDefn.PartitionKey)
-		si.partnExpr = expression.Expressions{expr}
+	if len(indexDefn.PartitionKeys) != 0 {
+		exprs := make(expression.Expressions, 0, len(indexDefn.PartitionKeys))
+		for _, partnExpr := range indexDefn.PartitionKeys {
+			expr, _ := parser.Parse(partnExpr)
+			exprs = append(exprs, expr)
+		}
+		si.partnExpr = exprs
 	}
 
 	if indexDefn.WhereExpr != "" {
@@ -841,7 +897,7 @@ func (si *secondaryIndex2) Scan2(
 	defer close(entryChannel)
 	defer func() {
 		if broker != nil {
-			l.Verbosef("scan2: scan request %v closing entryChannel.  Receive Count %v Sent Count %v",
+			l.Debugf("scan2: scan request %v closing entryChannel.  Receive Count %v Sent Count %v",
 				requestId, broker.ReceiveCount(), broker.SendCount())
 		}
 	}()
@@ -871,7 +927,7 @@ func (si *secondaryIndex2) Scan2(
 	atomic.AddInt64(&si.gsi.totalscans, 1)
 	atomic.AddInt64(&si.gsi.scandur, int64(time.Since(starttm)))
 
-	l.Verbosef("scan2: scan request %v done.  Receive Count %v Sent Count %v NumIndexers %v err %v",
+	l.Debugf("scan2: scan request %v done.  Receive Count %v Sent Count %v NumIndexers %v err %v",
 		requestId, broker.ReceiveCount(), broker.SendCount(), broker.NumIndexers(), err)
 }
 
@@ -1035,7 +1091,7 @@ func (si *secondaryIndex3) Scan3(
 	defer close(entryChannel)
 	defer func() {
 		if broker != nil {
-			l.Verbosef("scan3: scan request %v closing entryChannel.  Receive Count %v Sent Count %v",
+			l.Debugf("scan3: scan request %v closing entryChannel.  Receive Count %v Sent Count %v",
 				requestId, broker.ReceiveCount(), broker.SendCount())
 		}
 	}()
@@ -1053,10 +1109,11 @@ func (si *secondaryIndex3) Scan3(
 	gsiscans := n1qlspanstogsi(spans)
 	gsiprojection := n1qlprojectiontogsi(projection)
 	gsigroupaggr := n1qlgroupaggrtogsi(groupAggs)
+	indexorder := n1qlindexordertogsi(indexOrders)
 	broker = makeRequestBroker(requestId, &si.secondaryIndex, client, conn, cnf, &waitGroup, &backfillSync, cap(entryChannel))
 	err := client.Scan3Internal(
 		si.defnID, requestId, gsiscans, reverse, distinctAfterProjection,
-		gsiprojection, offset, limit, gsigroupaggr,
+		gsiprojection, offset, limit, gsigroupaggr, indexorder,
 		n1ql2GsiConsistency[cons], vector2ts(vector),
 		broker)
 	if err != nil {
@@ -1066,7 +1123,7 @@ func (si *secondaryIndex3) Scan3(
 	atomic.AddInt64(&si.gsi.totalscans, 1)
 	atomic.AddInt64(&si.gsi.scandur, int64(time.Since(starttm)))
 
-	l.Verbosef("scan3: scan request %v done.  Receive Count %v Sent Count %v NumIndexers %v err %v",
+	l.Debugf("scan3: scan request %v done.  Receive Count %v Sent Count %v NumIndexers %v err %v",
 		requestId, broker.ReceiveCount(), broker.SendCount(), broker.NumIndexers(), err)
 }
 
@@ -1094,8 +1151,8 @@ func makeRequestBroker(
 		return makeResponsehandler(id, requestId, si, client, conn, broker, config, waitGroup, backfillSync)
 	}
 
-	sender := func(pkey []byte, mskey []value.Value, uskey c.SecondaryKey) bool {
-		return sendEntry(broker, si, pkey, mskey, uskey, conn)
+	sender := func(pkey []byte, value []value.Value, skey c.SecondaryKey) bool {
+		return sendEntry(broker, si, pkey, value, skey, conn)
 	}
 
 	broker.SetResponseHandlerFactory(factory)
@@ -1124,10 +1181,29 @@ func makeResponsehandler(
 
 	var tmpfile *os.File
 
-	backfillLimit := int64(client.Settings().BackfillLimit())
+	backfillLimit := si.gsi.getTmpSpaceLimit()
 	primed, starttm, ticktm := false, time.Now(), time.Now()
 	lprefix := si.gsi.logPrefix
 
+	//
+	// This function returns false if wants to
+	// stop execution.   This could be due to
+	// 1) internal error.  In this case, this
+	//    function will post the error directly to cbq-engine.
+	//    The error will not be posted to GsiScanClient,
+	//    so GsiClient would not return error or retry.
+	//    For internal error, this function should call
+	//    broker.Error() so that scatter/gather could stop.
+	//
+	// 2) cbq-engine asks to stop.  In this case,
+	//    SendEntries() will return false.  SendEntries()
+	//    is responsible for stopping scatter/gather.
+	//
+	// 3) scan is done (e.g. limit has reached).
+	//    In this case, SendEntries() will return false.
+	//    Gathering routine is responsible for stopping
+	//    scatter/gather.
+	//
 	backfill := func() {
 		name := tmpfile.Name()
 		defer func() {
@@ -1171,7 +1247,7 @@ func makeResponsehandler(
 				fmsg := "%q backfill exceeded limit %v, %v"
 				err := fmt.Errorf(fmsg, requestId, backfillLimit, cummsize)
 				conn.Error(n1qlError(client, err))
-				broker.Close()
+				broker.Error(err)
 				return
 			}
 
@@ -1180,7 +1256,7 @@ func makeResponsehandler(
 				fmsg := "%v %q decoding from backfill %v: %v\n"
 				l.Errorf(fmsg, lprefix, requestId, name, err)
 				conn.Error(n1qlError(client, err))
-				broker.Close()
+				broker.Error(err)
 				return
 			}
 			pkeys := make([][]byte, 0)
@@ -1188,7 +1264,7 @@ func makeResponsehandler(
 				fmsg := "%v %q decoding from backfill %v: %v\n"
 				l.Errorf(fmsg, lprefix, requestId, name, err)
 				conn.Error(n1qlError(client, err))
-				broker.Close()
+				broker.Error(err)
 				return
 			}
 			l.Tracef("%v backfill read %v entries\n", lprefix, len(skeys))
@@ -1212,17 +1288,36 @@ func makeResponsehandler(
 		}
 	}
 
+	//
+	// This function returns false if wants to
+	// stop execution.   This could be due to
+	// 1) internal error.  In this case, this
+	//    function will post the error directly to cbq-engine.
+	//    The error will not be posted to GsiScanClient,
+	//    so GsiClient would not return error or retry.
+	//    For internal error, this function should call
+	//    broker.Error() so that scatter/gather could stop.
+	//
+	// 2) cbq-engine asks to stop.  In this case,
+	//    SendEntries() will return false.  SendEntries()
+	//    is responsible for stopping scatter/gather.
+	//
+	// 3) scan is done (e.g. limit has reached).
+	//    In this case, SendEntries() will return false.
+	//    Gathering routine is responsible for stopping
+	//    scatter/gather.
+	//
 	return func(data qclient.ResponseReader) bool {
 		err := data.Error()
 		if err != nil {
 			conn.Error(n1qlError(client, err))
-			broker.Close()
+			broker.Error(err)
 			return false
 		}
 		skeys, pkeys, err := data.GetEntries()
 		if err != nil {
 			conn.Error(n1qlError(client, err))
-			broker.Close()
+			broker.Error(err)
 			return false
 		}
 
@@ -1246,7 +1341,7 @@ func makeResponsehandler(
 
 		if backfillLimit > 0 && tmpfile == nil && ((cp - ln) < len(skeys)) {
 			prefix := BACKFILLPREFIX + strconv.Itoa(os.Getpid())
-			tmpfile, err = ioutil.TempFile(n1ql_backfill_temp_dir, prefix)
+			tmpfile, err = ioutil.TempFile(si.gsi.getTmpSpaceDir(), prefix)
 			name := ""
 			if tmpfile != nil {
 				name = tmpfile.Name()
@@ -1256,7 +1351,7 @@ func makeResponsehandler(
 				l.Errorf(fmsg, lprefix, requestId, name, err)
 				tmpfile = nil
 				conn.Error(n1qlError(client, err))
-				broker.Close()
+				broker.Error(err)
 				return false
 
 			} else {
@@ -1269,7 +1364,7 @@ func makeResponsehandler(
 					fmsg := "%v %v reading backfill file %v: %v\n"
 					l.Errorf(fmsg, lprefix, requestId, name, err)
 					conn.Error(n1qlError(client, err))
-					broker.Close()
+					broker.Error(err)
 					return false
 				}
 				// decoder
@@ -1286,7 +1381,7 @@ func makeResponsehandler(
 				fmsg := "%q backfill exceeded limit %v, %v"
 				err := fmt.Errorf(fmsg, requestId, backfillLimit, cummsize)
 				conn.Error(n1qlError(client, err))
-				broker.Close()
+				broker.Error(err)
 				return false
 			}
 
@@ -1296,12 +1391,12 @@ func makeResponsehandler(
 			}
 			if err := enc.Encode(skeys); err != nil {
 				conn.Error(n1qlError(client, err))
-				broker.Close()
+				broker.Error(err)
 				return false
 			}
 			if err := enc.Encode(pkeys); err != nil {
 				conn.Error(n1qlError(client, err))
-				broker.Close()
+				broker.Error(err)
 				return false
 			}
 			atomic.AddInt64(&backfillEntries, 1)
@@ -1501,42 +1596,13 @@ func getSingletonClient(
 	return singletonClient, nil
 }
 
-var n1ql_backfill_temp_dir string
-
 func init() {
 	// register gob objects for complex composite keys.
 	gob.Register(map[string]interface{}{})
 	gob.Register([]interface{}{})
-
-	file, err := ioutil.TempFile("" /*dir*/, BACKFILLPREFIX)
-	if err != nil {
-		return
-	}
-
-	n1ql_backfill_temp_dir = path.Dir(file.Name())
-	os.Remove(file.Name()) // remove this file.
-
-	files, err := ioutil.ReadDir(n1ql_backfill_temp_dir)
-	if err != nil {
-		return
-	}
-
-	conf, _ := c.GetSettingsConfig(c.SystemConfig)
-	scantm := conf["indexer.settings.scan_timeout"].Int() // in ms.
-
-	for _, file := range files {
-		fname := path.Join(n1ql_backfill_temp_dir, file.Name())
-		mtime := file.ModTime()
-		since := (time.Since(mtime).Seconds() * 1000) * 2 // twice the lng scan
-		if (strings.Contains(fname, "scan-backfill") || strings.Contains(fname, BACKFILLPREFIX)) && int(since) > scantm {
-			fmsg := "GSI client: removing old file %v last-modified @ %v"
-			l.Infof(fmsg, fname, mtime)
-			os.Remove(fname)
-		}
-	}
 }
 
-func sendEntry(broker *qclient.RequestBroker, si *secondaryIndex, pkey []byte, mskey []value.Value, uskey c.SecondaryKey, conn *datastore.IndexConnection) bool {
+func sendEntry(broker *qclient.RequestBroker, si *secondaryIndex, pkey []byte, value []value.Value, skey c.SecondaryKey, conn *datastore.IndexConnection) bool {
 
 	var start time.Time
 	blockedtm, blocked := int64(0), false
@@ -1544,10 +1610,14 @@ func sendEntry(broker *qclient.RequestBroker, si *secondaryIndex, pkey []byte, m
 	entryChannel := conn.EntryChannel()
 	stopChannel := conn.StopChannel()
 
+	if value == nil {
+		value = skey2Values(skey)
+	}
+
 	// Primary-key is mandatory.
 	e := &datastore.IndexEntry{
 		PrimaryKey: string(pkey),
-		EntryKey:   mskey}
+		EntryKey:   value}
 	cp, ln := cap(entryChannel), len(entryChannel)
 	if ln == cp {
 		start, blocked = time.Now(), true
@@ -1604,6 +1674,7 @@ func (gsi *gsiKeyspace) backfillMonitor(period time.Duration) {
 
 	for {
 		<-tick.C
+		n1ql_backfill_temp_dir := gsi.getTmpSpaceDir()
 		files, err := ioutil.ReadDir(n1ql_backfill_temp_dir)
 		if err != nil {
 			return
@@ -1730,6 +1801,25 @@ func n1qlgroupaggrtogsi(groupAggs *datastore.IndexGroupAggregates) *qclient.Grou
 	return ga
 }
 
+func n1qlindexordertogsi(indexOrders datastore.IndexKeyOrders) *qclient.IndexKeyOrder {
+
+	if len(indexOrders) == 0 {
+		return nil
+	}
+
+	order := &qclient.IndexKeyOrder{
+		KeyPos: make([]int, len(indexOrders)),
+		Desc:   make([]bool, len(indexOrders)),
+	}
+
+	for i, o := range indexOrders {
+		order.KeyPos[i] = o.KeyPos
+		order.Desc[i] = o.Desc
+	}
+
+	return order
+}
+
 func n1qlaggrtypetogsi(aggrType datastore.AggregateType) c.AggrFuncType {
 	switch aggrType {
 	case datastore.AGG_MIN:
@@ -1746,3 +1836,200 @@ func n1qlaggrtypetogsi(aggrType datastore.AggregateType) c.AggrFuncType {
 		return c.AGG_INVALID
 	}
 }
+
+//-------------------------------------
+// IndexConfig Implementation
+//-------------------------------------
+
+const gConfigKeyTmpSpaceDir = "query_tmpspace_dir"
+const gConfigKeyTmpSpaceLimit = "query_tmpspace_limit"
+
+var gIndexConfig indexConfig
+
+type indexConfig struct {
+	config atomic.Value
+}
+
+func GetIndexConfig() (datastore.IndexConfig, errors.Error) {
+	return &gIndexConfig, nil
+}
+
+func (c *indexConfig) SetConfig(conf map[string]interface{}) errors.Error {
+	err := c.validateConfig(conf)
+	if err != nil {
+		return err
+	}
+
+	c.processConfig(conf)
+
+	//make local copy so caller caller doesn't accidently modify
+	localconf := make(map[string]interface{})
+	for k, v := range conf {
+		localconf[k] = v
+	}
+
+	l.Infof("GSIC - Setting config %v", conf)
+	c.config.Store(localconf)
+	return nil
+}
+
+//SetParam should not be called concurrently with SetConfig
+func (c *indexConfig) SetParam(name string, val interface{}) errors.Error {
+
+	conf := c.config.Load().(map[string]interface{})
+
+	if conf != nil {
+		tempconf := make(map[string]interface{})
+		tempconf[name] = val
+		err := c.validateConfig(tempconf)
+		if err != nil {
+			return err
+		}
+		c.processConfig(tempconf)
+		l.Infof("GSIC - Setting param %v %v", name, val)
+		conf[name] = val
+	} else {
+		conf = make(map[string]interface{})
+		conf[name] = val
+		return c.SetConfig(conf)
+	}
+	return nil
+}
+
+func (c *indexConfig) validateConfig(conf map[string]interface{}) errors.Error {
+
+	if conf == nil {
+		return nil
+	}
+
+	if v, ok := conf[gConfigKeyTmpSpaceDir]; ok {
+		if _, ok1 := v.(string); !ok1 {
+			err := fmt.Errorf("GSI Invalid Config Key %v Value %v", gConfigKeyTmpSpaceDir, v)
+			l.Errorf(err.Error())
+			return errors.NewError(err, err.Error())
+		}
+	}
+
+	if v, ok := conf[gConfigKeyTmpSpaceLimit]; ok {
+		if _, ok1 := v.(int64); !ok1 {
+			err := fmt.Errorf("GSI Invalid Config Key %v Value %v", gConfigKeyTmpSpaceLimit, v)
+			l.Errorf(err.Error())
+			return errors.NewError(err, err.Error())
+		}
+	}
+
+	return nil
+}
+
+func (c *indexConfig) processConfig(conf map[string]interface{}) {
+
+	var olddir interface{}
+	var newdir interface{}
+
+	if conf != nil {
+		newdir, _ = conf[gConfigKeyTmpSpaceDir]
+	}
+
+	prevconf := gIndexConfig.getConfig()
+
+	if prevconf != nil {
+		olddir, _ = prevconf[gConfigKeyTmpSpaceDir]
+	}
+
+	if olddir == nil {
+		olddir = getDefaultTmpDir()
+	}
+
+	//cleanup any stale files
+	if olddir != newdir {
+		cleanupTmpFiles(olddir.(string))
+		if newdir != nil {
+			cleanupTmpFiles(newdir.(string))
+		}
+	}
+
+	return
+
+}
+
+//best effort cleanup as tmpdir may change during restart
+func cleanupTmpFiles(olddir string) {
+
+	files, err := ioutil.ReadDir(olddir)
+	if err != nil {
+		return
+	}
+
+	conf, _ := c.GetSettingsConfig(c.SystemConfig)
+	scantm := conf["indexer.settings.scan_timeout"].Int() // in ms.
+
+	for _, file := range files {
+		fname := path.Join(olddir, file.Name())
+		mtime := file.ModTime()
+		since := (time.Since(mtime).Seconds() * 1000) * 2 // twice the lng scan
+		if (strings.Contains(fname, "scan-backfill") || strings.Contains(fname, BACKFILLPREFIX)) && int(since) > scantm {
+			fmsg := "GSI client: removing old file %v last-modified @ %v"
+			l.Infof(fmsg, fname, mtime)
+			os.Remove(fname)
+		}
+	}
+
+}
+
+func (c *indexConfig) getConfig() map[string]interface{} {
+
+	conf := c.config.Load()
+	if conf != nil {
+		return conf.(map[string]interface{})
+	} else {
+		return nil
+	}
+
+}
+
+func (gsi *gsiKeyspace) getTmpSpaceDir() string {
+
+	conf := gIndexConfig.getConfig()
+
+	if conf == nil {
+		return getDefaultTmpDir()
+	}
+
+	if v, ok := conf[gConfigKeyTmpSpaceDir]; ok {
+		return v.(string)
+	} else {
+		return getDefaultTmpDir()
+	}
+
+}
+
+func (gsi *gsiKeyspace) getTmpSpaceLimit() int64 {
+
+	conf := gIndexConfig.getConfig()
+
+	if conf == nil {
+		return int64(gsi.gsiClient.Settings().BackfillLimit())
+	}
+
+	if v, ok := conf[gConfigKeyTmpSpaceLimit]; ok {
+		return v.(int64)
+	} else {
+		return int64(gsi.gsiClient.Settings().BackfillLimit())
+	}
+
+}
+func getDefaultTmpDir() string {
+	file, err := ioutil.TempFile("" /*dir*/, BACKFILLPREFIX)
+	if err != nil {
+		return ""
+	}
+
+	default_temp_dir := path.Dir(file.Name())
+	os.Remove(file.Name()) // remove this file.
+
+	return default_temp_dir
+}
+
+//-------------------------------------
+// IndexConfig Implementation End
+//-------------------------------------

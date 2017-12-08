@@ -1159,16 +1159,16 @@ func convertIndexDefnToProtobuf(indexDefn c.IndexDefn) *protobuf.IndexDefn {
 		protobuf.PartitionScheme_value[string(c.SINGLE)]).Enum()
 
 	defn := &protobuf.IndexDefn{
-		DefnID:          proto.Uint64(uint64(indexDefn.DefnId)),
-		Bucket:          proto.String(indexDefn.Bucket),
-		IsPrimary:       proto.Bool(indexDefn.IsPrimary),
-		Name:            proto.String(indexDefn.Name),
-		Using:           using,
-		ExprType:        exprType,
-		SecExpressions:  indexDefn.SecExprs,
-		PartitionScheme: partnScheme,
-		PartnExpression: proto.String(indexDefn.PartitionKey),
-		WhereExpression: proto.String(indexDefn.WhereExpr),
+		DefnID:           proto.Uint64(uint64(indexDefn.DefnId)),
+		Bucket:           proto.String(indexDefn.Bucket),
+		IsPrimary:        proto.Bool(indexDefn.IsPrimary),
+		Name:             proto.String(indexDefn.Name),
+		Using:            using,
+		ExprType:         exprType,
+		SecExpressions:   indexDefn.SecExprs,
+		PartitionScheme:  partnScheme,
+		PartnExpressions: indexDefn.PartitionKeys,
+		WhereExpression:  proto.String(indexDefn.WhereExpr),
 	}
 
 	return defn

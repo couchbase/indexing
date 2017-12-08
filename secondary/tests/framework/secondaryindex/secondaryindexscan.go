@@ -465,7 +465,7 @@ func Scan3(indexName, bucketName, server string, scans qc.Scans, reverse, distin
 	count := 0
 	start := time.Now()
 	connErr := client.Scan3(
-		defnID, "", scans, reverse, distinct, projection, offset, limit, groupAggr,
+		defnID, "", scans, reverse, distinct, projection, offset, limit, groupAggr, nil,
 		consistency, vector,
 		func(response qc.ResponseReader) bool {
 			if groupAggr == nil {

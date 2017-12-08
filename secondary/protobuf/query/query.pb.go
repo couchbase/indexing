@@ -316,6 +316,7 @@ type ScanRequest struct {
 	RollbackTime     *int64           `protobuf:"varint,12,opt,name=rollbackTime" json:"rollbackTime,omitempty"`
 	PartitionIds     []uint64         `protobuf:"varint,13,rep,name=partitionIds" json:"partitionIds,omitempty"`
 	GroupAggr        *GroupAggr       `protobuf:"bytes,14,opt,name=groupAggr" json:"groupAggr,omitempty"`
+	Sorted           *bool            `protobuf:"varint,15,opt,name=sorted" json:"sorted,omitempty"`
 	XXX_unrecognized []byte           `json:"-"`
 }
 
@@ -419,6 +420,13 @@ func (m *ScanRequest) GetGroupAggr() *GroupAggr {
 		return m.GroupAggr
 	}
 	return nil
+}
+
+func (m *ScanRequest) GetSorted() bool {
+	if m != nil && m.Sorted != nil {
+		return *m.Sorted
+	}
+	return false
 }
 
 // Full table scan request from indexer.

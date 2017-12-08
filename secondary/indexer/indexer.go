@@ -3736,6 +3736,7 @@ func (idx *indexer) upgradeStorage() bool {
 				}
 
 				targetStorageMode := idx.promoteStorageModeIfNecessaryInternal(indexStorageMode, disable, override)
+				indexStorageMode = common.IndexTypeToStorageMode(index.Defn.Using)
 
 				if indexStorageMode != targetStorageMode {
 					logging.Warnf("Indexer::upgradeStorage: Index (%v, %v) storage mode %v need upgrade/downgrade. Upgrade/Downgrade index storge mode to %v.",

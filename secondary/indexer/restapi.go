@@ -351,18 +351,35 @@ func (api *restServer) doCreate(w http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	var partnExpr, whereExpr string
-
-	if value, ok := params["partnExpr"]; ok && value != nil {
-		partnExpr = value.(string)
-	}
+	var whereExpr string
 	if value, ok := params["whereExpr"]; ok && value != nil {
 		whereExpr = value.(string)
 	}
 
-	defnId, err := api.client.CreateIndex2(
-		indexname, bucket, using, exprtype, partnExpr, whereExpr, secExprs,
-		desc, isPrimary, with)
+	partnScheme := c.PartitionScheme(c.SINGLE)
+	var partnExprs []string
+	if value, ok := params["partnExprs"]; ok && value != nil {
+		exprs, ok := value.([]interface{})
+		if !ok || exprs == nil || len(exprs) == 0 {
+			msg := `empty field partnExprs`
+			http.Error(w, jsonstr(msg), http.StatusBadRequest)
+			return
+		} else {
+			for _, item := range exprs {
+				expr, err := n1ql.ParseExpression(item.(string))
+				if err != nil {
+					msg := "invalid partition key expression (%v) %v\n"
+					http.Error(w, jsonstr(msg, item, err), http.StatusBadRequest)
+					return
+				}
+				partnExprs = append(partnExprs, expression.NewStringer().Visit(expr))
+			}
+		}
+	}
+
+	defnId, err := api.client.CreateIndex3(
+		indexname, bucket, using, exprtype, whereExpr, secExprs,
+		desc, isPrimary, partnScheme, partnExprs, with)
 	if err != nil {
 		http.Error(w, jsonstr("%v", err), http.StatusInternalServerError)
 		return

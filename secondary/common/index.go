@@ -179,14 +179,16 @@ type IndexDefn struct {
 	SecExprs        []string        `json:"secExprs,omitempty"`
 	ExprType        ExprType        `json:"exprType,omitempty"`
 	PartitionScheme PartitionScheme `json:"partitionScheme,omitempty"`
-	PartitionKey    string          `json:"partitionKey,omitempty"`
-	WhereExpr       string          `json:"where,omitempty"`
-	Desc            []bool          `json:"desc,omitempty"`
-	Deferred        bool            `json:"deferred,omitempty"`
-	Immutable       bool            `json:"immutable,omitempty"`
-	Nodes           []string        `json:"nodes,omitempty"`
-	IsArrayIndex    bool            `json:"isArrayIndex,omitempty"`
-	NumReplica      uint32          `json:"numReplica,omitempty"`
+	//PartitionKey is obsolete
+	PartitionKey  string   `json:"partitionKey,omitempty"`
+	WhereExpr     string   `json:"where,omitempty"`
+	Desc          []bool   `json:"desc,omitempty"`
+	Deferred      bool     `json:"deferred,omitempty"`
+	Immutable     bool     `json:"immutable,omitempty"`
+	Nodes         []string `json:"nodes,omitempty"`
+	IsArrayIndex  bool     `json:"isArrayIndex,omitempty"`
+	NumReplica    uint32   `json:"numReplica,omitempty"`
+	PartitionKeys []string `json:"partitionKeys,omitempty"`
 
 	// transient field (not part of index metadata)
 	InstVersion   int           `json:"instanceVersion,omitempty"`
@@ -228,7 +230,7 @@ func (idx IndexDefn) String() string {
 	str += fmt.Sprintf("\n\t\tSecExprs: %v ", idx.SecExprs)
 	str += fmt.Sprintf("\n\t\tDesc: %v", idx.Desc)
 	str += fmt.Sprintf("\n\t\tPartitionScheme: %v ", idx.PartitionScheme)
-	str += fmt.Sprintf("PartitionKey: %v ", idx.PartitionKey)
+	str += fmt.Sprintf("PartitionKeys: %v ", idx.PartitionKeys)
 	str += fmt.Sprintf("WhereExpr: %v ", idx.WhereExpr)
 	return str
 
@@ -248,7 +250,7 @@ func (idx IndexDefn) Clone() *IndexDefn {
 		Desc:            idx.Desc,
 		ExprType:        idx.ExprType,
 		PartitionScheme: idx.PartitionScheme,
-		PartitionKey:    idx.PartitionKey,
+		PartitionKeys:   idx.PartitionKeys,
 		WhereExpr:       idx.WhereExpr,
 		Deferred:        idx.Deferred,
 		Immutable:       idx.Immutable,
@@ -464,7 +466,6 @@ func IsEquivalentIndex(d1, d2 *IndexDefn) bool {
 		d1.IsPrimary != d2.IsPrimary ||
 		d1.ExprType != d2.ExprType ||
 		d1.PartitionScheme != d2.PartitionScheme ||
-		d1.PartitionKey != d2.PartitionKey ||
 		d1.WhereExpr != d2.WhereExpr {
 
 		return false
@@ -476,6 +477,16 @@ func IsEquivalentIndex(d1, d2 *IndexDefn) bool {
 
 	for i, s1 := range d1.SecExprs {
 		if s1 != d2.SecExprs[i] {
+			return false
+		}
+	}
+
+	if len(d1.PartitionKeys) != len(d2.PartitionKeys) {
+		return false
+	}
+
+	for i, s1 := range d1.PartitionKeys {
+		if s1 != d2.PartitionKeys[i] {
 			return false
 		}
 	}

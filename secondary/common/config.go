@@ -617,13 +617,6 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
-	"queryport.client.scan.notify_count": ConfigValue{
-		30,
-		"When performing scan scattering in client, specify the minimum item count in queue before notifying gatherer on new item arrival.",
-		30,
-		false, // mutable
-		false, // case-insensitive
-	},
 	// projector's adminport client, can be used by indexer.
 	"indexer.projectorclient.retryInterval": ConfigValue{
 		16,
