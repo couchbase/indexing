@@ -905,6 +905,20 @@ func (m *ServiceMgr) cleanupTransferTokens(tts map[string]*c.TransferToken) erro
 		return nil
 	}
 
+	// cancel any merge
+	indexStateMap := make(map[c.IndexInstId]c.RebalanceState)
+	respch := make(chan error)
+	for _, tt := range tts {
+		indexStateMap[tt.InstId] = c.REBAL_NIL
+		indexStateMap[tt.RealInstId] = c.REBAL_NIL
+	}
+	m.supvMsgch <- &MsgCancelMergePartition{
+		indexStateMap: indexStateMap,
+		respCh:        respch,
+	}
+	<-respch
+
+	// cleanup transfer token
 	for ttid, tt := range tts {
 
 		l.Infof("ServiceMgr::cleanupTransferTokens Cleaning Up %v %v", ttid, tt)
@@ -916,7 +930,7 @@ func (m *ServiceMgr) cleanupTransferTokens(tts map[string]*c.TransferToken) erro
 			m.cleanupTransferTokensForSource(ttid, tt)
 		}
 		if tt.DestId == string(m.nodeInfo.NodeID) {
-			m.cleanupTransferTokensForDest(ttid, tt)
+			m.cleanupTransferTokensForDest(ttid, tt, indexStateMap)
 		}
 
 	}
@@ -950,7 +964,10 @@ func (m *ServiceMgr) cleanupTransferTokensForSource(ttid string, tt *c.TransferT
 	case c.TransferTokenReady:
 		var err error
 		l.Infof("ServiceMgr::cleanupTransferTokensForSource Cleanup Token %v %v", ttid, tt)
-		err = m.cleanupIndex(tt.IndexInst.Defn)
+		defn := tt.IndexInst.Defn
+		defn.InstId = tt.InstId
+		defn.RealInstId = tt.RealInstId
+		err = m.cleanupIndex(defn)
 		if err == nil {
 			err = MetakvDel(RebalanceMetakvDir + ttid)
 			if err != nil {
@@ -965,15 +982,15 @@ func (m *ServiceMgr) cleanupTransferTokensForSource(ttid string, tt *c.TransferT
 
 }
 
-func (m *ServiceMgr) cleanupTransferTokensForDest(ttid string, tt *c.TransferToken) error {
+func (m *ServiceMgr) cleanupTransferTokensForDest(ttid string, tt *c.TransferToken, indexStateMap map[c.IndexInstId]c.RebalanceState) error {
 
-	switch tt.State {
-
-	case c.TransferTokenCreated, c.TransferTokenAccepted, c.TransferTokenRefused,
-		c.TransferTokenInitate, c.TransferTokenInProgress:
+	cleanup := func() error {
 		var err error
 		l.Infof("ServiceMgr::cleanupTransferTokensForDest Cleanup Token %v %v", ttid, tt)
-		err = m.cleanupIndex(tt.IndexInst.Defn)
+		defn := tt.IndexInst.Defn
+		defn.InstId = tt.InstId
+		defn.RealInstId = tt.RealInstId
+		err = m.cleanupIndex(defn)
 		if err == nil {
 			err = MetakvDel(RebalanceMetakvDir + ttid)
 			if err != nil {
@@ -983,7 +1000,40 @@ func (m *ServiceMgr) cleanupTransferTokensForDest(ttid string, tt *c.TransferTok
 			}
 		}
 
+		return nil
 	}
+
+	switch tt.State {
+
+	case c.TransferTokenCreated, c.TransferTokenAccepted, c.TransferTokenRefused,
+		c.TransferTokenInitate, c.TransferTokenInProgress:
+		return cleanup()
+
+	case c.TransferTokenMerge:
+		// the proxy instance could have been deleted after it has gone to MERGED state
+		rebalState, ok := indexStateMap[tt.InstId]
+		if !ok {
+			rebalState, ok = indexStateMap[tt.RealInstId]
+		}
+
+		if !ok {
+			if err := MetakvDel(RebalanceMetakvDir + ttid); err != nil {
+				l.Errorf("ServiceMgr::cleanupTransferTokensForDest Unable to delete TransferToken In "+
+					"Meta Storage. %v. Err %v", tt, err)
+				return err
+			}
+
+			// proxy instance: REBAL_PENDING -> REBAL_MERGED
+			// real instance: REBAL_PENDING -> REBAL_ACTIVE
+		} else if rebalState == c.REBAL_MERGED || rebalState == c.REBAL_ACTIVE {
+			tt.State = c.TransferTokenReady
+			setTransferTokenInMetakv(ttid, tt)
+
+		} else {
+			return cleanup()
+		}
+	}
+
 	return nil
 }
 
@@ -2332,8 +2382,14 @@ func (m *ServiceMgr) generateTransferTokenForMoveIndex(req *manager.IndexRequest
 					return nil, err
 				}
 
+				cfg := m.config.Load()
+				numVbuckets := cfg["numVbuckets"].Int()
+
 				var instList []*c.IndexInst
 				for _, inst := range insts {
+
+					pc := c.NewKeyPartitionContainer(numVbuckets, int(inst.NumPartitions), index.PartitionScheme)
+
 					localInst := &c.IndexInst{
 						InstId:    c.IndexInstId(inst.InstId),
 						Defn:      index,
@@ -2342,6 +2398,7 @@ func (m *ServiceMgr) generateTransferTokenForMoveIndex(req *manager.IndexRequest
 						Error:     inst.Error,
 						Version:   int(inst.Version),
 						ReplicaId: int(inst.ReplicaId),
+						Pc:        pc,
 					}
 					instList = append(instList, localInst)
 				}
@@ -2370,7 +2427,10 @@ func (m *ServiceMgr) generateTransferTokenForMoveIndex(req *manager.IndexRequest
 
 	for i, _ := range reqNodeUUID {
 		for _, inst := range currInst[i] {
-			ttid, tt := m.genTransferToken(inst, currNodeUUID[i], reqNodeUUID[i])
+			ttid, tt, err := m.genTransferToken(inst, currNodeUUID[i], reqNodeUUID[i])
+			if err != nil {
+				return nil, err
+			}
 
 			if tt.SourceId == tt.DestId {
 				l.Infof("ServiceMgr::generateTransferTokenForMoveIndex Skip No-op TransferToken %v", tt)
@@ -2432,7 +2492,7 @@ func (m *ServiceMgr) getNodeIdFromDest(dest string) (string, error) {
 	return "", errors.New(errStr)
 }
 
-func (m *ServiceMgr) genTransferToken(indexInst *c.IndexInst, sourceId string, destId string) (string, *c.TransferToken) {
+func (m *ServiceMgr) genTransferToken(indexInst *c.IndexInst, sourceId string, destId string) (string, *c.TransferToken, error) {
 
 	ustr, _ := c.NewUUID()
 
@@ -2449,8 +2509,22 @@ func (m *ServiceMgr) genTransferToken(indexInst *c.IndexInst, sourceId string, d
 
 	tt.IndexInst.Defn.InstVersion = tt.IndexInst.Version + 1
 	tt.IndexInst.Defn.ReplicaId = tt.IndexInst.ReplicaId
+	tt.IndexInst.Defn.NumPartitions = uint32(tt.IndexInst.Pc.GetNumPartitions())
+	tt.IndexInst.Defn.Partitions = tt.IndexInst.Pc.GetAllPartitionIds()
+	tt.IndexInst.Pc = nil
 
-	return ttid, tt
+	// reset defn id and instance id as if it is a new index.
+	if c.IsPartitioned(tt.IndexInst.Defn.PartitionScheme) {
+		instId, err := c.NewIndexInstId()
+		if err != nil {
+			return "", nil, fmt.Errorf("Fail to generate transfer token.  Reason: %v", err)
+		}
+
+		tt.RealInstId = tt.InstId
+		tt.InstId = instId
+	}
+
+	return ttid, tt, nil
 
 }
 

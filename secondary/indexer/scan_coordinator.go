@@ -931,19 +931,35 @@ func NewCancelCallback(req *ScanRequest, callb func(error)) *CancelCb {
 func (s *scanCoordinator) findIndexInstance(
 	defnID uint64, partitionIds []common.PartitionId) (*common.IndexInst, []IndexReaderContext, error) {
 
+	hasIndex := false
+	isPartition := false
 	ctx := make([]IndexReaderContext, len(partitionIds))
 	for _, inst := range s.indexInstMap {
 		if inst.Defn.DefnId == common.IndexDefnId(defnID) {
+			hasIndex = true
+			isPartition = common.IsPartitioned(inst.Defn.PartitionScheme)
 			if pmap, ok := s.indexPartnMap[inst.InstId]; ok {
+				found := true
 				for i, partnId := range partitionIds {
 					if partition, ok := pmap[partnId]; ok {
 						ctx[i] = partition.Sc.GetSliceById(0).GetReaderContext()
 					} else {
-						return nil, nil, ErrNotMyPartition
+						found = false
+						break
 					}
 				}
-				return &inst, ctx, nil
+
+				if found {
+					return &inst, ctx, nil
+				}
 			}
+		}
+	}
+
+	if hasIndex {
+		if isPartition {
+			return nil, nil, ErrNotMyPartition
+		} else {
 			return nil, nil, ErrNotMyIndex
 		}
 	}

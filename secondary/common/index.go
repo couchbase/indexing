@@ -196,6 +196,7 @@ type IndexDefn struct {
 	InstId        IndexInstId   `json:"instanceId,omitempty"`
 	Partitions    []PartitionId `json:"partitions,omitempty"`
 	NumPartitions uint32        `json:"numPartitions,omitempty"`
+	RealInstId    IndexInstId   `json:"realInstId,omitempty"`
 }
 
 //IndexInst is an instance of an Index(aka replica)
@@ -213,6 +214,7 @@ type IndexInst struct {
 	Scheduled      bool
 	StorageMode    string
 	OldStorageMode string
+	RealInstId     IndexInstId
 }
 
 //IndexInstMap is a map from IndexInstanceId to IndexInstance
@@ -271,6 +273,10 @@ func (idx *IndexDefn) HasDescending() bool {
 	}
 	return false
 
+}
+
+func (idx IndexInst) IsProxy() bool {
+	return idx.RealInstId != 0
 }
 
 func (idx IndexInst) String() string {
@@ -343,6 +349,9 @@ type RebalanceState int
 const (
 	REBAL_ACTIVE RebalanceState = iota
 	REBAL_PENDING
+	REBAL_NIL
+	REBAL_MERGED
+	REBAL_PENDING_DELETE
 )
 
 func (s RebalanceState) String() string {
@@ -352,6 +361,10 @@ func (s RebalanceState) String() string {
 		return "RebalActive"
 	case REBAL_PENDING:
 		return "RebalPending"
+	case REBAL_MERGED:
+		return "Merged"
+	case REBAL_PENDING_DELETE:
+		return "PendingDelete"
 	default:
 		return "Invalid"
 	}

@@ -21,22 +21,24 @@ import (
 ////////////////////////////////////////////////////////////////////////
 
 const (
-	OPCODE_CREATE_INDEX        common.OpCode = common.OPCODE_CUSTOM + 1
-	OPCODE_DROP_INDEX                        = OPCODE_CREATE_INDEX + 1
-	OPCODE_BUILD_INDEX                       = OPCODE_DROP_INDEX + 1
-	OPCODE_UPDATE_INDEX_INST                 = OPCODE_BUILD_INDEX + 1
-	OPCODE_SERVICE_MAP                       = OPCODE_UPDATE_INDEX_INST + 1
-	OPCODE_DELETE_BUCKET                     = OPCODE_SERVICE_MAP + 1
-	OPCODE_INDEXER_READY                     = OPCODE_DELETE_BUCKET + 1
-	OPCODE_CLEANUP_INDEX                     = OPCODE_INDEXER_READY + 1
-	OPCODE_CLEANUP_DEFER_INDEX               = OPCODE_CLEANUP_INDEX + 1
-	OPCODE_CREATE_INDEX_REBAL                = OPCODE_CLEANUP_DEFER_INDEX + 1
-	OPCODE_BUILD_INDEX_REBAL                 = OPCODE_CREATE_INDEX_REBAL + 1
-	OPCODE_DROP_INDEX_REBAL                  = OPCODE_BUILD_INDEX_REBAL + 1
-	OPCODE_BROADCAST_STATS                   = OPCODE_DROP_INDEX_REBAL + 1
-	OPCODE_BUILD_INDEX_RETRY                 = OPCODE_BROADCAST_STATS + 1
-	OPCODE_RESET_INDEX                       = OPCODE_BUILD_INDEX_RETRY + 1
-	OPCODE_CONFIG_UPDATE                     = OPCODE_RESET_INDEX + 1
+	OPCODE_CREATE_INDEX           common.OpCode = common.OPCODE_CUSTOM + 1
+	OPCODE_DROP_INDEX                           = OPCODE_CREATE_INDEX + 1
+	OPCODE_BUILD_INDEX                          = OPCODE_DROP_INDEX + 1
+	OPCODE_UPDATE_INDEX_INST                    = OPCODE_BUILD_INDEX + 1
+	OPCODE_SERVICE_MAP                          = OPCODE_UPDATE_INDEX_INST + 1
+	OPCODE_DELETE_BUCKET                        = OPCODE_SERVICE_MAP + 1
+	OPCODE_INDEXER_READY                        = OPCODE_DELETE_BUCKET + 1
+	OPCODE_CLEANUP_INDEX                        = OPCODE_INDEXER_READY + 1
+	OPCODE_CLEANUP_DEFER_INDEX                  = OPCODE_CLEANUP_INDEX + 1
+	OPCODE_CREATE_INDEX_REBAL                   = OPCODE_CLEANUP_DEFER_INDEX + 1
+	OPCODE_BUILD_INDEX_REBAL                    = OPCODE_CREATE_INDEX_REBAL + 1
+	OPCODE_DROP_INDEX_REBAL                     = OPCODE_BUILD_INDEX_REBAL + 1
+	OPCODE_BROADCAST_STATS                      = OPCODE_DROP_INDEX_REBAL + 1
+	OPCODE_BUILD_INDEX_RETRY                    = OPCODE_BROADCAST_STATS + 1
+	OPCODE_RESET_INDEX                          = OPCODE_BUILD_INDEX_RETRY + 1
+	OPCODE_CONFIG_UPDATE                        = OPCODE_RESET_INDEX + 1
+	OPCODE_DROP_OR_PRUNE_INSTANCE               = OPCODE_CONFIG_UPDATE + 1
+	OPCODE_MERGE_PARTITION                      = OPCODE_DROP_OR_PRUNE_INSTANCE + 1
 )
 
 /////////////////////////////////////////////////////////////////////////
@@ -73,6 +75,7 @@ type IndexInstDistribution struct {
 	Scheduled      bool                    `json:"scheduled,omitempty"`
 	StorageMode    string                  `json:"storageMode,omitempty"`
 	OldStorageMode string                  `json:"oldStorageMode,omitempty"`
+	RealInstId     uint64                  `json:"realInstId,omitempty"`
 }
 
 type IndexPartDistribution struct {

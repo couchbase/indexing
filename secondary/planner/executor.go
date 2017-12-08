@@ -163,10 +163,10 @@ func ExecuteRebalanceInternal(clusterUrl string,
 		return nil, err
 	}
 
-	return genTransferToken(p.Result, masterId, topologyChange), nil
+	return genTransferToken(p.Result, masterId, topologyChange)
 }
 
-func genTransferToken(solution *Solution, masterId string, topologyChange service.TopologyChange) map[string]*common.TransferToken {
+func genTransferToken(solution *Solution, masterId string, topologyChange service.TopologyChange) (map[string]*common.TransferToken, error) {
 
 	tokens := make(map[string]*common.TransferToken)
 	versions := make(map[string]int)
@@ -190,11 +190,23 @@ func genTransferToken(solution *Solution, masterId string, topologyChange servic
 						IndexInst: *index.Instance,
 					}
 
-					// Note: NumPartitions is set in Defn inside proxy
 					token.IndexInst.Defn.InstVersion = token.IndexInst.Version + 1
 					token.IndexInst.Defn.ReplicaId = token.IndexInst.ReplicaId
 					token.IndexInst.Defn.Using = common.IndexType(indexer.StorageMode)
 					token.IndexInst.Defn.Partitions = []common.PartitionId{index.PartnId}
+					token.IndexInst.Defn.NumPartitions = uint32(token.IndexInst.Pc.GetNumPartitions())
+					token.IndexInst.Pc = nil
+
+					// reset defn id and instance id as if it is a new index.
+					if common.IsPartitioned(token.IndexInst.Defn.PartitionScheme) {
+						instId, err := common.NewIndexInstId()
+						if err != nil {
+							return nil, fmt.Errorf("Fail to generate transfer token.  Reason: %v", err)
+						}
+
+						token.RealInstId = token.InstId
+						token.InstId = instId
+					}
 
 					tokens[tokenKey] = token
 
@@ -224,11 +236,23 @@ func genTransferToken(solution *Solution, masterId string, topologyChange servic
 						TransferMode: common.TokenTransferModeCopy,
 					}
 
-					// Note: NumPartitions is set in Defn inside proxy
 					token.IndexInst.Defn.InstVersion = 1
 					token.IndexInst.Defn.ReplicaId = token.IndexInst.ReplicaId
 					token.IndexInst.Defn.Using = common.IndexType(indexer.StorageMode)
 					token.IndexInst.Defn.Partitions = []common.PartitionId{index.PartnId}
+					token.IndexInst.Defn.NumPartitions = uint32(token.IndexInst.Pc.GetNumPartitions())
+					token.IndexInst.Pc = nil
+
+					// reset defn id and instance id as if it is a new index.
+					if common.IsPartitioned(token.IndexInst.Defn.PartitionScheme) {
+						instId, err := common.NewIndexInstId()
+						if err != nil {
+							return nil, fmt.Errorf("Fail to generate transfer token.  Reason: %v", err)
+						}
+
+						token.RealInstId = token.InstId
+						token.InstId = instId
+					}
 
 					tokens[tokenKey] = token
 
@@ -265,7 +289,7 @@ func genTransferToken(solution *Solution, masterId string, topologyChange servic
 		result[ttid] = token
 	}
 
-	return result
+	return result, nil
 }
 
 //////////////////////////////////////////////////////////////

@@ -436,6 +436,10 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 
 				fn(watcher, partitions)
 			}
+
+			// shuffle the watcher
+			watchers = append(watchers[1:], watchers[:1]...)
+
 		} else {
 
 			if replicaId < len(watchers) {
@@ -584,7 +588,7 @@ func (o *MetadataProvider) PrepareIndexDefn(
 			false
 	}
 
-	if numReplica != 0 && len(watchers) != numReplica+1 {
+	if numReplica != 0 && len(watchers) < numReplica+1 {
 		return nil,
 			errors.New(fmt.Sprintf("Fails to create index.  Cannot find enough indexer node for replica.  numReplica=%v.", numReplica)),
 			false
@@ -1501,7 +1505,7 @@ func (o *MetadataProvider) startWatcher(addr string) (*watcher, chan bool) {
 // This function returns the index regardless of its state or well-formed (all partitions).
 // This function will not return the index if it does not have any valid instance or partition.
 // In other words, this function will return the index if it has at least one non-DELETED
-// instance.
+// instance with Active RState.
 //
 func (o *MetadataProvider) FindIndexIgnoreStatus(id c.IndexDefnId) *IndexMetadata {
 
@@ -1927,7 +1931,7 @@ func (r *metadataRepo) findLatestActiveIndexInstNoLock(defnId c.IndexDefnId) []*
 			var chosen *IndexInstDistribution
 			for _, inst := range instsByVersion {
 
-				// Do not filter out CREATED index, even though it is not a "transient"
+				// Do not filter out CREATED index, even though it is a "transient"
 				// index state.  A created index can be promoted to a READY index by
 				// indexer upon bootstrap.  An index in CREATED state will be filtered out
 				// in ListIndex() for scanning.
@@ -2020,6 +2024,10 @@ func (r *metadataRepo) hasIndexerContainingPartition(indexerId c.IndexerId, inst
 //
 func (r *metadataRepo) mergeSingleIndexPartition(to *IndexInstDistribution, from *IndexInstDistribution, partId c.PartitionId) *IndexInstDistribution {
 
+	if from.RState == uint32(c.REBAL_MERGED) {
+		return to
+	}
+
 	if to == nil {
 		temp := *from
 		to = &temp
@@ -2036,7 +2044,6 @@ func (r *metadataRepo) mergeSingleIndexPartition(to *IndexInstDistribution, from
 			to.Error += " " + from.Error
 		}
 
-		// FIX ME - RState and Version needs to come from partition (rebalancing)
 		if from.RState == uint32(c.REBAL_PENDING) {
 			to.RState = uint32(c.REBAL_PENDING)
 		}
@@ -2271,7 +2278,9 @@ func (r *metadataRepo) updateTopology(topology *IndexTopology, indexerId c.Index
 					r.instances[defnId][c.IndexInstId(instRef.InstId)][c.PartitionId(partnRef.PartId)] = make(map[uint64]*IndexInstDistribution)
 				}
 
-				r.instances[defnId][c.IndexInstId(instRef.InstId)][c.PartitionId(partnRef.PartId)][instRef.Version] = &instRef
+				// r.Instances has all the index instances and partitions regardless of its state and version
+				temp := instRef
+				r.instances[defnId][c.IndexInstId(instRef.InstId)][c.PartitionId(partnRef.PartId)][instRef.Version] = &temp
 			}
 		}
 
@@ -2344,6 +2353,10 @@ func (r *metadataRepo) updateInstancesInIndexMetadata(defnId c.IndexDefnId, meta
 	// will remain to be INDEX_STATE_CREATED, which will be filtered out in ListIndex.
 	meta.State = c.INDEX_STATE_CREATED
 
+	// Find all instacnes and partitions with a valid index state and Active RState.
+	// This will exclude all DELETED instances.  Therefore, meta.Instances will be
+	// not be empty if there is at least one instance/partition that is not DELETED
+	// with active Rstate.
 	chosens := r.findLatestActiveIndexInstNoLock(defnId)
 	for _, inst := range chosens {
 		idxInst := r.makeInstanceDefn(defnId, inst)

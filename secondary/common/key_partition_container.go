@@ -42,6 +42,10 @@ type KeyPartitionContainer struct {
 //NewKeyPartitionContainer initializes a new KeyPartitionContainer and returns
 func NewKeyPartitionContainer(numVbuckets int, numPartitions int, scheme PartitionScheme) PartitionContainer {
 
+	if !IsPartitioned(scheme) {
+		numPartitions = 1
+	}
+
 	kpc := &KeyPartitionContainer{PartitionMap: make(map[PartitionId]KeyPartitionDefn),
 		NumVbuckets:   numVbuckets,
 		NumPartitions: numPartitions,
@@ -108,6 +112,16 @@ func (pc *KeyPartitionContainer) GetAllPartitions() []PartitionDefn {
 		partDefnList = append(partDefnList, p)
 	}
 	return partDefnList
+}
+
+func (pc *KeyPartitionContainer) GetAllPartitionIds() []PartitionId {
+
+	partnIds := make([]PartitionId, 0, len(pc.PartitionMap))
+	for _, partition := range pc.PartitionMap {
+		partnIds = append(partnIds, partition.GetPartitionId())
+	}
+
+	return partnIds
 }
 
 //GetPartitionById returns the partition for the given partitionId

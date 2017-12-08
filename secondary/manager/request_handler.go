@@ -259,12 +259,25 @@ func (m *requestHandlerContext) dropIndexRequest(w http.ResponseWriter, r *http.
 	// call the index manager to handle the DDL
 	indexDefn := request.Index
 
-	if err := m.mgr.HandleDeleteIndexDDL(indexDefn.DefnId); err == nil {
-		// No error, return success
-		sendIndexResponse(w)
+	if indexDefn.RealInstId == 0 {
+		if err := m.mgr.HandleDeleteIndexDDL(indexDefn.DefnId); err == nil {
+			// No error, return success
+			sendIndexResponse(w)
+		} else {
+			// report failure
+			sendIndexResponseWithError(http.StatusInternalServerError, w, fmt.Sprintf("%v", err))
+		}
+	} else if indexDefn.InstId != 0 {
+		if err := m.mgr.DropOrPruneInstance(indexDefn, true); err == nil {
+			// No error, return success
+			sendIndexResponse(w)
+		} else {
+			// report failure
+			sendIndexResponseWithError(http.StatusInternalServerError, w, fmt.Sprintf("%v", err))
+		}
 	} else {
 		// report failure
-		sendIndexResponseWithError(http.StatusInternalServerError, w, fmt.Sprintf("%v", err))
+		sendIndexResponseWithError(http.StatusInternalServerError, w, fmt.Sprintf("Missing index inst id for defn %v", indexDefn.DefnId))
 	}
 }
 

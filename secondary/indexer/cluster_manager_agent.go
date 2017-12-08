@@ -153,6 +153,12 @@ func (c *clustMgrAgent) handleSupvervisorCommands(cmd Message) {
 	case CONFIG_SETTINGS_UPDATE:
 		c.handleConfigUpdate(cmd)
 
+	case CLUST_MGR_DROP_INSTANCE:
+		c.handleDropInstance(cmd)
+
+	case CLUST_MGR_MERGE_PARTITION:
+		c.handleMergePartition(cmd)
+
 	default:
 		logging.Errorf("ClusterMgrAgent::handleSupvervisorCommands Unknown Message %v", cmd)
 	}
@@ -168,13 +174,14 @@ func (c *clustMgrAgent) handleUpdateTopologyForIndex(cmd Message) {
 	syncUpdate := cmd.(*MsgClustMgrUpdate).GetIsSyncUpdate()
 	respCh := cmd.(*MsgClustMgrUpdate).GetRespCh()
 
-	updatedState := common.INDEX_STATE_NIL
-	updatedStream := common.NIL_STREAM
-	updatedError := ""
-	//TODO is this ok?
-	updatedRState := common.REBAL_ACTIVE
-
 	for _, index := range indexList {
+		updatedState := common.INDEX_STATE_NIL
+		updatedStream := common.NIL_STREAM
+		updatedError := ""
+		updatedRState := common.REBAL_NIL
+		updatedPartitions := []uint64(nil)
+		updatedVersion := -1
+
 		if updatedFields.state {
 			updatedState = index.State
 		}
@@ -187,6 +194,14 @@ func (c *clustMgrAgent) handleUpdateTopologyForIndex(cmd Message) {
 		if updatedFields.rstate {
 			updatedRState = index.RState
 		}
+		if updatedFields.partitions {
+			for _, partition := range index.Pc.GetAllPartitions() {
+				updatedPartitions = append(updatedPartitions, uint64(partition.GetPartitionId()))
+			}
+		}
+		if updatedFields.version {
+			updatedVersion = index.Version
+		}
 
 		updatedBuildTs := index.BuildTs
 
@@ -194,18 +209,49 @@ func (c *clustMgrAgent) handleUpdateTopologyForIndex(cmd Message) {
 		if syncUpdate {
 			go func() {
 				err = c.mgr.UpdateIndexInstanceSync(index.Defn.Bucket, index.Defn.DefnId, index.InstId,
-					updatedState, updatedStream, updatedError, updatedBuildTs, updatedRState)
+					updatedState, updatedStream, updatedError, updatedBuildTs, updatedRState, updatedPartitions, updatedVersion)
 				respCh <- err
 			}()
 		} else {
 			err = c.mgr.UpdateIndexInstance(index.Defn.Bucket, index.Defn.DefnId, index.InstId,
-				updatedState, updatedStream, updatedError, updatedBuildTs, updatedRState)
+				updatedState, updatedStream, updatedError, updatedBuildTs, updatedRState, updatedPartitions, updatedVersion)
 		}
 		common.CrashOnError(err)
 	}
 
 	c.supvCmdch <- &MsgSuccess{}
 
+}
+
+func (c *clustMgrAgent) handleDropInstance(cmd Message) {
+
+	logging.Infof("ClustMgr:handleDropInstance%v", cmd)
+
+	defn := cmd.(*MsgClustMgrDropInstance).GetDefn()
+
+	if err := c.mgr.DropOrPruneInstance(defn, false); err != nil {
+		common.CrashOnError(err)
+	}
+
+	c.supvCmdch <- &MsgSuccess{}
+}
+
+func (c *clustMgrAgent) handleMergePartition(cmd Message) {
+
+	logging.Infof("ClustMgr:handleMergePartition%v", cmd)
+
+	defnId := cmd.(*MsgClustMgrMergePartition).GetDefnId()
+	srcInstId := cmd.(*MsgClustMgrMergePartition).GetSrcInstId()
+	srcRState := cmd.(*MsgClustMgrMergePartition).GetSrcRState()
+	tgtInstId := cmd.(*MsgClustMgrMergePartition).GetTgtInstId()
+	tgtPartitions := cmd.(*MsgClustMgrMergePartition).GetTgtPartitions()
+	tgtVersion := cmd.(*MsgClustMgrMergePartition).GetTgtVersion()
+
+	if err := c.mgr.MergePartition(defnId, srcInstId, srcRState, tgtInstId, tgtPartitions, tgtVersion); err != nil {
+		common.CrashOnError(err)
+	}
+
+	c.supvCmdch <- &MsgSuccess{}
 }
 
 func (c *clustMgrAgent) handleResetIndex(cmd Message) {
@@ -308,12 +354,7 @@ func (c *clustMgrAgent) handleGetGlobalTopology(cmd Message) {
 			for i, partn := range inst.Partitions {
 				partitions[i] = common.PartitionId(partn.PartId)
 			}
-
-			numPartitions := inst.NumPartitions
-			if numPartitions == 0 {
-				numPartitions = uint32(len(inst.Partitions))
-			}
-			pc := c.metaNotifier.makeDefaultPartitionContainer(partitions, numPartitions, idxDefn.PartitionScheme)
+			pc := c.metaNotifier.makeDefaultPartitionContainer(partitions, inst.NumPartitions, idxDefn.PartitionScheme)
 
 			// create index instance
 			idxInst := common.IndexInst{
@@ -328,6 +369,7 @@ func (c *clustMgrAgent) handleGetGlobalTopology(cmd Message) {
 				StorageMode:    inst.StorageMode,
 				OldStorageMode: inst.OldStorageMode,
 				Pc:             pc,
+				RealInstId:     common.IndexInstId(inst.RealInstId),
 			}
 
 			indexInstMap[idxInst.InstId] = idxInst
@@ -407,7 +449,7 @@ func (c *clustMgrAgent) handleCleanupIndex(cmd Message) {
 
 	index := cmd.(*MsgClustMgrUpdate).GetIndexList()[0]
 
-	err := c.mgr.CleanupIndex(index.Defn.DefnId)
+	err := c.mgr.CleanupIndex(index)
 	common.CrashOnError(err)
 
 	c.supvCmdch <- &MsgSuccess{}
@@ -473,7 +515,8 @@ func NewMetaNotifier(adminCh MsgChannel, config common.Config, mgr *clustMgrAgen
 }
 
 func (meta *metaNotifier) OnIndexCreate(indexDefn *common.IndexDefn, instId common.IndexInstId,
-	replicaId int, partitions []common.PartitionId, numPartitions uint32, reqCtx *common.MetadataRequestContext) error {
+	replicaId int, partitions []common.PartitionId, numPartitions uint32, realInstId common.IndexInstId,
+	reqCtx *common.MetadataRequestContext) error {
 
 	logging.Infof("clustMgrAgent::OnIndexCreate Notification "+
 		"Received for Create Index %v %v partitions %v", indexDefn, reqCtx, partitions)
@@ -481,10 +524,12 @@ func (meta *metaNotifier) OnIndexCreate(indexDefn *common.IndexDefn, instId comm
 	pc := meta.makeDefaultPartitionContainer(partitions, numPartitions, indexDefn.PartitionScheme)
 
 	idxInst := common.IndexInst{InstId: instId,
-		Defn:      *indexDefn,
-		State:     common.INDEX_STATE_CREATED,
-		Pc:        pc,
-		ReplicaId: replicaId,
+		Defn:       *indexDefn,
+		State:      common.INDEX_STATE_CREATED,
+		Pc:         pc,
+		ReplicaId:  replicaId,
+		RealInstId: realInstId,
+		Version:    indexDefn.InstVersion,
 	}
 
 	if idxInst.Defn.InstVersion != 0 {
@@ -625,6 +670,51 @@ func (meta *metaNotifier) OnIndexDelete(instId common.IndexInstId,
 			"for Drop IndexId %v", instId)
 		common.CrashOnError(errors.New("Unknown Response"))
 
+	}
+
+	return nil
+}
+
+func (meta *metaNotifier) OnPartitionPrune(instId common.IndexInstId, partitions []common.PartitionId, reqCtx *common.MetadataRequestContext) error {
+
+	logging.Infof("clustMgrAgent::OnPartitionPrune Notification "+
+		"Received for Prune Partition IndexId %v %v %v", instId, partitions, reqCtx)
+
+	respCh := make(MsgChannel)
+
+	//Treat DefnId as InstId for now
+	meta.adminCh <- &MsgClustMgrPrunePartition{
+		instId:     instId,
+		partitions: partitions,
+		respCh:     respCh}
+
+	//wait for response
+	if res, ok := <-respCh; ok {
+
+		switch res.GetMsgType() {
+
+		case MSG_SUCCESS:
+			logging.Infof("clustMgrAgent::OnPrunePartition Success "+
+				"for IndexId %v", instId)
+			return nil
+
+		case MSG_ERROR:
+			logging.Errorf("clustMgrAgent::OnPrunePartition Error "+
+				"for IndexId %v. Error %v", instId, res)
+			err := res.(*MsgError).GetError()
+			return &common.IndexerError{Reason: err.String(), Code: err.convertError()}
+
+		default:
+			logging.Fatalf("clustMgrAgent::OnPrunePartition Unknown Response "+
+				"Received for IndexId %v. Response %v", instId, res)
+			common.CrashOnError(errors.New("Unknown Response"))
+
+		}
+
+	} else {
+		logging.Fatalf("clustMgrAgent::OnPrunePartition Unexpected Channel Close "+
+			"for IndexId %v", instId)
+		common.CrashOnError(errors.New("Unknown Response"))
 	}
 
 	return nil

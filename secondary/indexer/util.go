@@ -70,7 +70,11 @@ func GetLocalIP() (net.IP, error) {
 }
 
 func IndexPath(inst *common.IndexInst, partnId common.PartitionId, sliceId SliceId) string {
-	return fmt.Sprintf("%s_%s_%d_%d.index", inst.Defn.Bucket, inst.Defn.Name, inst.InstId, partnId)
+	instId := inst.InstId
+	if inst.IsProxy() {
+		instId = inst.RealInstId
+	}
+	return fmt.Sprintf("%s_%s_%d_%d.index", inst.Defn.Bucket, inst.Defn.Name, instId, partnId)
 }
 
 func GetCurrentKVTs(cluster, pooln, bucketn string, numVbs int) (Timestamp, error) {

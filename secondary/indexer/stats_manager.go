@@ -376,6 +376,20 @@ func (s *IndexerStats) GetPartitionStats(id common.IndexInstId, partnId common.P
 	return nil
 }
 
+func (s *IndexerStats) SetPartitionStats(id common.IndexInstId, partnId common.PartitionId, stats *IndexStats) {
+
+	if is, ok := s.indexes[id]; ok {
+		is.partitions[partnId] = stats
+	}
+}
+
+func (s *IndexerStats) RemovePartitionStats(id common.IndexInstId, partnId common.PartitionId) {
+
+	if is, ok := s.indexes[id]; ok {
+		delete(is.partitions, partnId)
+	}
+}
+
 func (s *IndexerStats) RemoveIndex(id common.IndexInstId) {
 	idx, ok := s.indexes[id]
 	if !ok {

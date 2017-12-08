@@ -48,6 +48,7 @@ type IndexInstDistribution struct {
 	Scheduled      bool                    `json:"scheduled,omitempty"`
 	StorageMode    string                  `json:"storageMode,omitempty"`
 	OldStorageMode string                  `json:"oldStorageMode,omitempty"`
+	RealInstId     uint64                  `json:"realInstId,omitempty"`
 }
 
 type IndexPartDistribution struct {
@@ -117,9 +118,10 @@ func (g *GlobalTopology) RemoveTopologyKey(key string) {
 // Add an index definition to Topology.
 //
 func (t *IndexTopology) AddIndexDefinition(bucket string, name string, defnId uint64, instId uint64, state uint32, indexerId string,
-	instVersion uint64, rState uint32, replicaId uint64, partitions []common.PartitionId, numPartitions uint32, scheduled bool, storageMode string) {
+	instVersion uint64, rState uint32, replicaId uint64, partitions []common.PartitionId, numPartitions uint32, scheduled bool, storageMode string,
+	realInstId uint64) {
 
-	t.RemoveIndexDefinition(bucket, name)
+	t.RemoveIndexDefinitionById(common.IndexDefnId(defnId))
 
 	inst := new(IndexInstDistribution)
 	inst.InstId = instId
@@ -130,6 +132,7 @@ func (t *IndexTopology) AddIndexDefinition(bucket string, name string, defnId ui
 	inst.Scheduled = scheduled
 	inst.StorageMode = storageMode
 	inst.NumPartitions = numPartitions
+	inst.RealInstId = realInstId
 
 	for _, partnId := range partitions {
 		slice := new(IndexSliceLocator)
@@ -152,19 +155,37 @@ func (t *IndexTopology) AddIndexDefinition(bucket string, name string, defnId ui
 	t.Definitions = append(t.Definitions, *defn)
 }
 
-//
-// Remove an index definition to Topology.
-//
-func (t *IndexTopology) RemoveIndexDefinition(bucket string, name string) {
+func (t *IndexTopology) AddIndexInstance(bucket string, name string, defnId uint64, instId uint64, state uint32, indexerId string,
+	instVersion uint64, rState uint32, replicaId uint64, partitions []common.PartitionId, numPartitions uint32, scheduled bool, storageMode string,
+	realInstId uint64) {
+
+	inst := IndexInstDistribution{}
+	inst.InstId = instId
+	inst.State = state
+	inst.Version = instVersion
+	inst.RState = rState
+	inst.ReplicaId = replicaId
+	inst.Scheduled = scheduled
+	inst.StorageMode = storageMode
+	inst.NumPartitions = numPartitions
+	inst.RealInstId = realInstId
+
+	for _, partnId := range partitions {
+		slice := IndexSliceLocator{}
+		slice.SliceId = 0
+		slice.IndexerId = indexerId
+		slice.State = state
+
+		part := IndexPartDistribution{}
+		part.PartId = uint64(partnId)
+		part.SinglePartition.Slices = append(part.SinglePartition.Slices, slice)
+		inst.Partitions = append(inst.Partitions, part)
+	}
 
 	for i, defnRef := range t.Definitions {
-		if defnRef.Bucket == bucket && defnRef.Name == name {
-			if i == len(t.Definitions)-1 {
-				t.Definitions = t.Definitions[:i]
-			} else {
-				t.Definitions = append(t.Definitions[0:i], t.Definitions[i+1:]...)
-			}
-			return
+		if defnRef.DefnId == defnId {
+			t.Definitions[i].Instances = append(t.Definitions[i].Instances, inst)
+			break
 		}
 	}
 }
@@ -360,6 +381,133 @@ func (t *IndexTopology) UpdateStreamForIndexInst(defnId common.IndexDefnId, inst
 }
 
 //
+// Update Version on instance
+//
+func (t *IndexTopology) UpdateVersionForIndexInst(defnId common.IndexDefnId, instId common.IndexInstId, version uint64) bool {
+
+	for i, _ := range t.Definitions {
+		if t.Definitions[i].DefnId == uint64(defnId) {
+			for j, _ := range t.Definitions[i].Instances {
+				if t.Definitions[i].Instances[j].InstId == uint64(instId) {
+					if t.Definitions[i].Instances[j].Version != version {
+						t.Definitions[i].Instances[j].Version = version
+						logging.Debugf("IndexTopology.UpdateVersionForIndexInst(): Update index '%v' inst '%v' version to '%v'",
+							defnId, t.Definitions[i].Instances[j].InstId, t.Definitions[i].Instances[j].Version)
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
+}
+
+func (t *IndexTopology) AddPartitionsForIndexInst(defnId common.IndexDefnId, instId common.IndexInstId, indexerId string, partitions []uint64) bool {
+
+	for i, _ := range t.Definitions {
+		if t.Definitions[i].DefnId == uint64(defnId) {
+			for j, _ := range t.Definitions[i].Instances {
+				if t.Definitions[i].Instances[j].InstId == uint64(instId) {
+
+					newPartitions := make([]IndexPartDistribution, 0, len(partitions))
+					for _, partnId := range partitions {
+						found := false
+						for _, partition := range t.Definitions[i].Instances[j].Partitions {
+							if partnId == partition.PartId {
+								found = true
+							}
+						}
+
+						if !found {
+
+							slice := IndexSliceLocator{}
+							slice.SliceId = 0
+							slice.IndexerId = indexerId
+							slice.State = t.Definitions[i].Instances[j].State
+
+							part := IndexPartDistribution{}
+							part.PartId = partnId
+							part.SinglePartition.Slices = append(part.SinglePartition.Slices, slice)
+
+							newPartitions = append(newPartitions, part)
+						}
+					}
+
+					if len(newPartitions) != 0 {
+						t.Definitions[i].Instances[j].Partitions = append(t.Definitions[i].Instances[j].Partitions, newPartitions...)
+						return true
+					}
+				}
+			}
+		}
+	}
+
+	return false
+}
+
+func (t *IndexTopology) SplitPartitionsForIndexInst(defnId common.IndexDefnId, instId common.IndexInstId, proxyInstId common.IndexInstId,
+	partitions []common.PartitionId) bool {
+
+	for i, _ := range t.Definitions {
+		if t.Definitions[i].DefnId == uint64(defnId) {
+			for j, _ := range t.Definitions[i].Instances {
+				if t.Definitions[i].Instances[j].InstId == uint64(instId) {
+
+					var proxyInst IndexInstDistribution
+					proxyInst = t.Definitions[i].Instances[j]
+					proxyInst.InstId = uint64(proxyInstId)
+					proxyInst.RealInstId = uint64(instId)
+					proxyInst.State = uint32(common.INDEX_STATE_DELETED)
+					proxyInst.RState = uint32(common.REBAL_PENDING_DELETE)
+					proxyInst.Partitions = nil
+
+					for _, partnId := range partitions {
+						for k, partition := range t.Definitions[i].Instances[j].Partitions {
+							if uint64(partnId) == partition.PartId {
+
+								// remove partition from the existing instance
+								if k == len(t.Definitions[i].Instances[j].Partitions)-1 {
+									t.Definitions[i].Instances[j].Partitions = t.Definitions[i].Instances[j].Partitions[:k]
+								} else {
+									t.Definitions[i].Instances[j].Partitions =
+										append(t.Definitions[i].Instances[j].Partitions[0:k], t.Definitions[i].Instances[j].Partitions[k+1:]...)
+								}
+
+								// add partition to the proxy instance
+								proxyInst.Partitions = append(proxyInst.Partitions, partition)
+							}
+						}
+					}
+
+					change := len(proxyInst.Partitions) != 0
+					if change {
+						t.Definitions[i].Instances = append(t.Definitions[i].Instances, proxyInst)
+					}
+					return change
+				}
+			}
+		}
+	}
+
+	return false
+}
+
+func (t *IndexTopology) DeleteAllPartitionsForIndexInst(defnId common.IndexDefnId, instId common.IndexInstId) bool {
+
+	for i, _ := range t.Definitions {
+		if t.Definitions[i].DefnId == uint64(defnId) {
+			for j, _ := range t.Definitions[i].Instances {
+				if t.Definitions[i].Instances[j].InstId == uint64(instId) {
+					t.Definitions[i].Instances[j].Partitions = nil
+				}
+			}
+		}
+	}
+
+	return true
+}
+
+//
 // Set Error on instance
 //
 func (t *IndexTopology) SetErrorForIndexInst(defnId common.IndexDefnId, instId common.IndexInstId, errorStr string) bool {
@@ -430,6 +578,43 @@ func (t *IndexTopology) GetRStatusByInst(defnId common.IndexDefnId, instId commo
 		}
 	}
 	return common.REBAL_ACTIVE
+}
+
+func (t IndexInstDistribution) IsProxy() bool {
+	return t.RealInstId != 0
+}
+
+func (t *IndexTopology) IsProxyIndexInst(defnId common.IndexDefnId, instId common.IndexInstId) bool {
+
+	for i, _ := range t.Definitions {
+		if t.Definitions[i].DefnId == uint64(defnId) {
+			for j, _ := range t.Definitions[i].Instances {
+				if t.Definitions[i].Instances[j].InstId == uint64(instId) {
+					return t.Definitions[i].Instances[j].IsProxy()
+				}
+			}
+		}
+	}
+	return false
+}
+
+func (t *IndexTopology) RemoveIndexInstanceById(defnId common.IndexDefnId, instId common.IndexInstId) {
+
+	for i, _ := range t.Definitions {
+		if t.Definitions[i].DefnId == uint64(defnId) {
+			for j, _ := range t.Definitions[i].Instances {
+				if t.Definitions[i].Instances[j].InstId == uint64(instId) {
+
+					if j == len(t.Definitions[i].Instances)-1 {
+						t.Definitions[i].Instances = t.Definitions[i].Instances[:j]
+					} else {
+						t.Definitions[i].Instances = append(t.Definitions[i].Instances[0:j], t.Definitions[i].Instances[j+1:]...)
+					}
+					return
+				}
+			}
+		}
+	}
 }
 
 //

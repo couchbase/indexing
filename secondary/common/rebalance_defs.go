@@ -27,6 +27,7 @@ const (
 	TransferTokenRefused
 	TransferTokenInitate
 	TransferTokenInProgress
+	TransferTokenMerge
 	TransferTokenReady
 	TransferTokenCommit
 	TransferTokenDeleted
@@ -54,6 +55,8 @@ func (ts TokenState) String() string {
 		return "TransferTokenDeleted"
 	case TransferTokenError:
 		return "TransferTokenError"
+	case TransferTokenMerge:
+		return "TransferTokenMerge"
 	}
 
 	return "unknown"
@@ -103,6 +106,7 @@ type TransferToken struct {
 	RebalId      string
 	State        TokenState
 	InstId       IndexInstId
+	RealInstId   IndexInstId
 	IndexInst    IndexInst
 	Error        string
 	BuildSource  TokenBuildSource
@@ -140,6 +144,8 @@ func (tt TransferToken) String() string {
 		str += fmt.Sprintf("Error: %v ", tt.Error)
 	}
 	str += fmt.Sprintf("InstId: %v ", tt.InstId)
+	str += fmt.Sprintf("RealInstId: %v ", tt.RealInstId)
+	str += fmt.Sprintf("Partitions: %v", tt.IndexInst.Defn.Partitions)
 	str += fmt.Sprintf("Inst: %v \n", tt.IndexInst)
 	return str
 

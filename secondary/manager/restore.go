@@ -110,12 +110,18 @@ func (m *RestoreContext) convertStorageMode() error {
 //
 func (m *RestoreContext) convertImage() error {
 
+	config, err := common.GetSettingsConfig(common.SystemConfig)
+	if err != nil {
+		logging.Errorf("RestoreContext: Error from retrieving indexer settings. Error = %v", err)
+		return err
+	}
+
 	for _, meta := range m.image.Metadata {
 		for _, defn := range meta.IndexDefinitions {
 
 			// If the index is in CREATED state, this will return nil.  So if there is any create index in flight,
 			// it could be excluded by restore.
-			indexes, err := planner.ConvertToIndexUsage(&defn, (*planner.LocalIndexMetadata)(unsafe.Pointer(&meta)))
+			indexes, err := planner.ConvertToIndexUsage(config, &defn, (*planner.LocalIndexMetadata)(unsafe.Pointer(&meta)))
 			if err != nil {
 				return err
 			}
@@ -162,7 +168,7 @@ func (m *RestoreContext) cleanseBackupMetadata() {
 
 			// ignore any index with RState being pending.
 			// **For pre-spock backup, RState of an instance is ACTIVE (0).
-			if index.Instance != nil && index.Instance.RState == common.REBAL_PENDING {
+			if index.Instance != nil && index.Instance.RState != common.REBAL_ACTIVE {
 				logging.Infof("RestoreContext:  Skip restoring RState PENDING index (%v, %v, %v).", index.Bucket, index.Name, index.PartnId)
 				continue
 			}
@@ -196,7 +202,7 @@ func (m *RestoreContext) findIndexToRestore() {
 
 			// ignore any index with RState being pending
 			// **For pre-spock backup, RState of an instance is ACTIVE (0).
-			if index.Instance == nil || index.Instance.RState == common.REBAL_PENDING {
+			if index.Instance == nil || index.Instance.RState != common.REBAL_ACTIVE {
 				logging.Infof("RestoreContext:  Skip restoring RState PENDING index (%v, %v).", index.Bucket, index.Name)
 				continue
 			}
@@ -437,7 +443,7 @@ func findMaxVersionInst(metadata map[common.IndexerId][]*planner.IndexUsage, def
 		for _, index := range indexes {
 
 			// ignore any index with RState being pending
-			if index.Instance == nil || index.Instance.RState == common.REBAL_PENDING {
+			if index.Instance == nil || index.Instance.RState != common.REBAL_ACTIVE {
 				continue
 			}
 
