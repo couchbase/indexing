@@ -421,7 +421,7 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, bucket string
 					instances := topology.GetIndexInstancesByDefn(defn.DefnId)
 					for _, instance := range instances {
 
-						state, errStr := topology.GetStatusByDefn(defn.DefnId)
+						state, errStr := topology.GetStatusByInst(defn.DefnId, common.IndexInstId(instance.InstId))
 
 						if state != common.INDEX_STATE_CREATED &&
 							state != common.INDEX_STATE_DELETED &&

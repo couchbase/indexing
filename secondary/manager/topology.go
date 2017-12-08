@@ -212,12 +212,14 @@ func (t *IndexTopology) FindIndexDefinitionById(id common.IndexDefnId) *IndexDef
 //
 // Update Index Status on instance
 //
-func (t *IndexTopology) GetIndexInstByDefn(defnId common.IndexDefnId) *IndexInstDistribution {
+func (t *IndexTopology) GetIndexInstByDefn(defnId common.IndexDefnId, instId common.IndexInstId) *IndexInstDistribution {
 
 	for i, _ := range t.Definitions {
 		if t.Definitions[i].DefnId == uint64(defnId) {
-			for _, inst := range t.Definitions[i].Instances {
-				return &inst
+			for j, _ := range t.Definitions[i].Instances {
+				if t.Definitions[i].Instances[j].InstId == uint64(instId) {
+					return &t.Definitions[i].Instances[j]
+				}
 			}
 		}
 	}
@@ -228,162 +230,171 @@ func (t *IndexTopology) GetIndexInstByDefn(defnId common.IndexDefnId) *IndexInst
 //
 // Update Index Status on instance
 //
-func (t *IndexTopology) UpdateStateForIndexInstByDefn(defnId common.IndexDefnId, state common.IndexState) bool {
+func (t *IndexTopology) UpdateStateForIndexInst(defnId common.IndexDefnId, instId common.IndexInstId, state common.IndexState) bool {
 
-	changed := false
 	for i, _ := range t.Definitions {
 		if t.Definitions[i].DefnId == uint64(defnId) {
 			for j, _ := range t.Definitions[i].Instances {
-				if t.Definitions[i].Instances[j].State != uint32(state) {
-					t.Definitions[i].Instances[j].State = uint32(state)
-					logging.Debugf("IndexTopology.UpdateStateForIndexInstByDefn(): Update index '%v' inst '%v' state to '%v'",
-						defnId, t.Definitions[i].Instances[j].InstId, t.Definitions[i].Instances[j].State)
-					changed = true
+				if t.Definitions[i].Instances[j].InstId == uint64(instId) {
+					if t.Definitions[i].Instances[j].State != uint32(state) {
+						t.Definitions[i].Instances[j].State = uint32(state)
+						logging.Debugf("IndexTopology.UpdateStateForIndexInst(): Update index '%v' inst '%v' state to '%v'",
+							defnId, t.Definitions[i].Instances[j].InstId, t.Definitions[i].Instances[j].State)
+						return true
+					}
 				}
 			}
 		}
 	}
-	return changed
+	return false
 }
 
 //
 // Set scheduled flag
 //
-func (t *IndexTopology) UpdateScheduledFlagForIndexInstByDefn(defnId common.IndexDefnId, scheduled bool) bool {
+func (t *IndexTopology) UpdateScheduledFlagForIndexInst(defnId common.IndexDefnId, instId common.IndexInstId, scheduled bool) bool {
 
-	changed := false
 	for i, _ := range t.Definitions {
 		if t.Definitions[i].DefnId == uint64(defnId) {
 			for j, _ := range t.Definitions[i].Instances {
-				if t.Definitions[i].Instances[j].Scheduled != scheduled {
-					t.Definitions[i].Instances[j].Scheduled = scheduled
-					logging.Debugf("IndexTopology.UnsetScheduledFlagForIndexInstByDefn(): Unset scheduled flag for index '%v' inst '%v'",
-						defnId, t.Definitions[i].Instances[j].InstId)
-					changed = true
+				if t.Definitions[i].Instances[j].InstId == uint64(instId) {
+					if t.Definitions[i].Instances[j].Scheduled != scheduled {
+						t.Definitions[i].Instances[j].Scheduled = scheduled
+						logging.Debugf("IndexTopology.UnsetScheduledFlagForIndexInst(): Unset scheduled flag for index '%v' inst '%v'",
+							defnId, t.Definitions[i].Instances[j].InstId)
+						return true
+					}
 				}
 			}
 		}
 	}
-	return changed
+	return false
 }
 
 //
 // Update Index Rebalance Status on instance
 //
-func (t *IndexTopology) UpdateRebalanceStateForIndexInstByDefn(defnId common.IndexDefnId, state common.RebalanceState) bool {
+func (t *IndexTopology) UpdateRebalanceStateForIndexInst(defnId common.IndexDefnId, instId common.IndexInstId, state common.RebalanceState) bool {
 
-	changed := false
 	for i, _ := range t.Definitions {
 		if t.Definitions[i].DefnId == uint64(defnId) {
 			for j, _ := range t.Definitions[i].Instances {
-				if t.Definitions[i].Instances[j].RState != uint32(state) {
-					t.Definitions[i].Instances[j].RState = uint32(state)
-					logging.Debugf("IndexTopology.UpdateRebalanceStateForIndexInstByDefn(): Update index '%v' inst '%v' rebalance state to '%v'",
-						defnId, t.Definitions[i].Instances[j].InstId, t.Definitions[i].Instances[j].RState)
-					changed = true
+				if t.Definitions[i].Instances[j].InstId == uint64(instId) {
+					if t.Definitions[i].Instances[j].RState != uint32(state) {
+						t.Definitions[i].Instances[j].RState = uint32(state)
+						logging.Debugf("IndexTopology.UpdateRebalanceStateForIndexInst(): Update index '%v' inst '%v' rebalance state to '%v'",
+							defnId, t.Definitions[i].Instances[j].InstId, t.Definitions[i].Instances[j].RState)
+						return true
+					}
 				}
 			}
 		}
 	}
-	return changed
+	return false
 }
 
 //
 // Update Storage Mode on instance
 //
-func (t *IndexTopology) UpdateStorageModeForIndexInstByDefn(defnId common.IndexDefnId, storageMode string) bool {
+func (t *IndexTopology) UpdateStorageModeForIndexInst(defnId common.IndexDefnId, instId common.IndexInstId, storageMode string) bool {
 
-	changed := false
 	for i, _ := range t.Definitions {
 		if t.Definitions[i].DefnId == uint64(defnId) {
 			for j, _ := range t.Definitions[i].Instances {
-				if t.Definitions[i].Instances[j].StorageMode != storageMode {
-					t.Definitions[i].Instances[j].StorageMode = storageMode
-					logging.Debugf("IndexTopology.UpdateStorageModeForIndexInstByDefn(): Update index '%v' inst '%v' storage mode to '%v'",
-						defnId, t.Definitions[i].Instances[j].InstId, t.Definitions[i].Instances[j].StorageMode)
-					changed = true
+				if t.Definitions[i].Instances[j].InstId == uint64(instId) {
+					if t.Definitions[i].Instances[j].StorageMode != storageMode {
+						t.Definitions[i].Instances[j].StorageMode = storageMode
+						logging.Debugf("IndexTopology.UpdateStorageModeForIndexInst(): Update index '%v' inst '%v' storage mode to '%v'",
+							defnId, t.Definitions[i].Instances[j].InstId, t.Definitions[i].Instances[j].StorageMode)
+						return true
+					}
 				}
 			}
 		}
 	}
-	return changed
+	return false
 }
 
 //
 // Update Old Storage Mode on instance
 //
-func (t *IndexTopology) UpdateOldStorageModeForIndexInstByDefn(defnId common.IndexDefnId, storageMode string) bool {
+func (t *IndexTopology) UpdateOldStorageModeForIndexInst(defnId common.IndexDefnId, instId common.IndexInstId, storageMode string) bool {
 
-	changed := false
 	for i, _ := range t.Definitions {
 		if t.Definitions[i].DefnId == uint64(defnId) {
 			for j, _ := range t.Definitions[i].Instances {
-				if t.Definitions[i].Instances[j].OldStorageMode != storageMode {
-					t.Definitions[i].Instances[j].OldStorageMode = storageMode
-					logging.Debugf("IndexTopology.UpdateOldStorageModeForIndexInstByDefn(): Update index '%v' inst '%v' old storage mode to '%v'",
-						defnId, t.Definitions[i].Instances[j].InstId, t.Definitions[i].Instances[j].OldStorageMode)
-					changed = true
+				if t.Definitions[i].Instances[j].InstId == uint64(instId) {
+					if t.Definitions[i].Instances[j].OldStorageMode != storageMode {
+						t.Definitions[i].Instances[j].OldStorageMode = storageMode
+						logging.Debugf("IndexTopology.UpdateOldStorageModeForIndexInst(): Update index '%v' inst '%v' old storage mode to '%v'",
+							defnId, t.Definitions[i].Instances[j].InstId, t.Definitions[i].Instances[j].OldStorageMode)
+						return true
+					}
 				}
 			}
 		}
 	}
-	return changed
+	return false
 }
 
 //
 // Update StreamId on instance
 //
-func (t *IndexTopology) UpdateStreamForIndexInstByDefn(defnId common.IndexDefnId, stream common.StreamId) bool {
+func (t *IndexTopology) UpdateStreamForIndexInst(defnId common.IndexDefnId, instId common.IndexInstId, stream common.StreamId) bool {
 
-	changed := false
 	for i, _ := range t.Definitions {
 		if t.Definitions[i].DefnId == uint64(defnId) {
 			for j, _ := range t.Definitions[i].Instances {
-				if t.Definitions[i].Instances[j].StreamId != uint32(stream) {
-					t.Definitions[i].Instances[j].StreamId = uint32(stream)
-					logging.Debugf("IndexTopology.UpdateStreamForIndexInstByDefn(): Update index '%v' inst '%v stream to '%v'",
-						defnId, t.Definitions[i].Instances[j].InstId, t.Definitions[i].Instances[j].StreamId)
-					changed = true
+				if t.Definitions[i].Instances[j].InstId == uint64(instId) {
+					if t.Definitions[i].Instances[j].StreamId != uint32(stream) {
+						t.Definitions[i].Instances[j].StreamId = uint32(stream)
+						logging.Debugf("IndexTopology.UpdateStreamForIndexInst(): Update index '%v' inst '%v stream to '%v'",
+							defnId, t.Definitions[i].Instances[j].InstId, t.Definitions[i].Instances[j].StreamId)
+						return true
+					}
 				}
 			}
 		}
 	}
-	return changed
+	return false
 }
 
 //
 // Set Error on instance
 //
-func (t *IndexTopology) SetErrorForIndexInstByDefn(defnId common.IndexDefnId, errorStr string) bool {
+func (t *IndexTopology) SetErrorForIndexInst(defnId common.IndexDefnId, instId common.IndexInstId, errorStr string) bool {
 
-	changed := false
 	for i, _ := range t.Definitions {
 		if t.Definitions[i].DefnId == uint64(defnId) {
 			for j, _ := range t.Definitions[i].Instances {
-				if t.Definitions[i].Instances[j].Error != errorStr {
-					t.Definitions[i].Instances[j].Error = errorStr
-					logging.Debugf("IndexTopology.SetErrorForIndexInstByDefn(): Set error for index '%v' inst '%v.  Error = '%v'",
-						defnId, t.Definitions[i].Instances[j].InstId, t.Definitions[i].Instances[j].Error)
-					changed = true
+				if t.Definitions[i].Instances[j].InstId == uint64(instId) {
+					if t.Definitions[i].Instances[j].Error != errorStr {
+						t.Definitions[i].Instances[j].Error = errorStr
+						logging.Debugf("IndexTopology.SetErrorForIndexInst(): Set error for index '%v' inst '%v.  Error = '%v'",
+							defnId, t.Definitions[i].Instances[j].InstId, t.Definitions[i].Instances[j].Error)
+						return true
+					}
 				}
 			}
 		}
 	}
-	return changed
+	return false
 }
 
 //
 // Update Index Status on instance
 //
-func (t *IndexTopology) ChangeStateForIndexInstByDefn(defnId common.IndexDefnId, fromState, toState common.IndexState) {
+func (t *IndexTopology) ChangeStateForIndexInst(defnId common.IndexDefnId, instId common.IndexInstId, fromState, toState common.IndexState) {
 
 	for i, _ := range t.Definitions {
 		if t.Definitions[i].DefnId == uint64(defnId) {
 			for j, _ := range t.Definitions[i].Instances {
-				if t.Definitions[i].Instances[j].State == uint32(fromState) {
-					t.Definitions[i].Instances[j].State = uint32(toState)
-					logging.Debugf("IndexTopology.UpdateStateForIndexInstByDefn(): Update index '%v' inst '%v' state to '%v'",
-						defnId, t.Definitions[i].Instances[j].InstId, t.Definitions[i].Instances[j].State)
+				if t.Definitions[i].Instances[j].InstId == uint64(instId) {
+					if t.Definitions[i].Instances[j].State == uint32(fromState) {
+						t.Definitions[i].Instances[j].State = uint32(toState)
+						logging.Debugf("IndexTopology.UpdateStateForIndexInst(): Update index '%v' inst '%v' state to '%v'",
+							defnId, t.Definitions[i].Instances[j].InstId, t.Definitions[i].Instances[j].State)
+					}
 				}
 			}
 		}
@@ -393,21 +404,29 @@ func (t *IndexTopology) ChangeStateForIndexInstByDefn(defnId common.IndexDefnId,
 //
 // Update Index Status on instance
 //
-func (t *IndexTopology) GetStatusByDefn(defnId common.IndexDefnId) (common.IndexState, string) {
+func (t *IndexTopology) GetStatusByInst(defnId common.IndexDefnId, instId common.IndexInstId) (common.IndexState, string) {
 
 	for i, _ := range t.Definitions {
 		if t.Definitions[i].DefnId == uint64(defnId) {
-			return common.IndexState(t.Definitions[i].Instances[0].State), t.Definitions[i].Instances[0].Error
+			for j, _ := range t.Definitions[i].Instances {
+				if t.Definitions[i].Instances[j].InstId == uint64(instId) {
+					return common.IndexState(t.Definitions[i].Instances[j].State), t.Definitions[i].Instances[j].Error
+				}
+			}
 		}
 	}
 	return common.INDEX_STATE_NIL, ""
 }
 
-func (t *IndexTopology) GetRStatusByDefn(defnId common.IndexDefnId) common.RebalanceState {
+func (t *IndexTopology) GetRStatusByInst(defnId common.IndexDefnId, instId common.IndexInstId) common.RebalanceState {
 
 	for i, _ := range t.Definitions {
 		if t.Definitions[i].DefnId == uint64(defnId) {
-			return common.RebalanceState(t.Definitions[i].Instances[0].RState)
+			for j, _ := range t.Definitions[i].Instances {
+				if t.Definitions[i].Instances[j].InstId == uint64(instId) {
+					return common.RebalanceState(t.Definitions[i].Instances[j].RState)
+				}
+			}
 		}
 	}
 	return common.REBAL_ACTIVE

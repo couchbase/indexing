@@ -1110,15 +1110,15 @@ func (m *MsgKVStreamRepair) GetRestartTs() *common.TsVbuuid {
 
 //CLUST_MGR_RESET_INDEX
 type MsgClustMgrResetIndex struct {
-	defn common.IndexDefn
+	inst common.IndexInst
 }
 
 func (m *MsgClustMgrResetIndex) GetMsgType() MsgType {
 	return CLUST_MGR_RESET_INDEX
 }
 
-func (m *MsgClustMgrResetIndex) GetIndex() common.IndexDefn {
-	return m.defn
+func (m *MsgClustMgrResetIndex) GetIndex() common.IndexInst {
+	return m.inst
 }
 
 //CLUST_MGR_UPDATE_TOPOLOGY_FOR_INDEX

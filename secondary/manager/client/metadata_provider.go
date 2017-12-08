@@ -1499,6 +1499,9 @@ func (o *MetadataProvider) startWatcher(addr string) (*watcher, chan bool) {
 
 //
 // This function returns the index regardless of its state or well-formed (all partitions).
+// This function will not return the index if it does not have any valid instance or partition.
+// In other words, this function will return the index if it has at least one non-DELETED
+// instance.
 //
 func (o *MetadataProvider) FindIndexIgnoreStatus(id c.IndexDefnId) *IndexMetadata {
 

@@ -193,12 +193,12 @@ func (c *clustMgrAgent) handleUpdateTopologyForIndex(cmd Message) {
 		var err error
 		if syncUpdate {
 			go func() {
-				err = c.mgr.UpdateIndexInstanceSync(index.Defn.Bucket, index.Defn.DefnId,
+				err = c.mgr.UpdateIndexInstanceSync(index.Defn.Bucket, index.Defn.DefnId, index.InstId,
 					updatedState, updatedStream, updatedError, updatedBuildTs, updatedRState)
 				respCh <- err
 			}()
 		} else {
-			err = c.mgr.UpdateIndexInstance(index.Defn.Bucket, index.Defn.DefnId,
+			err = c.mgr.UpdateIndexInstance(index.Defn.Bucket, index.Defn.DefnId, index.InstId,
 				updatedState, updatedStream, updatedError, updatedBuildTs, updatedRState)
 		}
 		common.CrashOnError(err)
@@ -288,9 +288,9 @@ func (c *clustMgrAgent) handleGetGlobalTopology(cmd Message) {
 			continue
 		}
 
-		inst := t.GetIndexInstByDefn(idxDefn.DefnId)
+		insts := t.GetIndexInstancesByDefn(idxDefn.DefnId)
 
-		if inst == nil {
+		if len(insts) == 0 {
 			logging.Warnf("ClustMgr:handleGetGlobalTopology Index Instance Not "+
 				"Found For Index Definition %v. Ignored.", idxDefn)
 			continue
@@ -301,34 +301,37 @@ func (c *clustMgrAgent) handleGetGlobalTopology(cmd Message) {
 			idxDefn.Desc = make([]bool, len(idxDefn.SecExprs))
 		}
 
-		// create partitions
-		partitions := make([]common.PartitionId, len(inst.Partitions))
-		for i, partn := range inst.Partitions {
-			partitions[i] = common.PartitionId(partn.PartId)
+		for _, inst := range insts {
+
+			// create partitions
+			partitions := make([]common.PartitionId, len(inst.Partitions))
+			for i, partn := range inst.Partitions {
+				partitions[i] = common.PartitionId(partn.PartId)
+			}
+
+			numPartitions := inst.NumPartitions
+			if numPartitions == 0 {
+				numPartitions = uint32(len(inst.Partitions))
+			}
+			pc := c.metaNotifier.makeDefaultPartitionContainer(partitions, numPartitions, idxDefn.PartitionScheme)
+
+			// create index instance
+			idxInst := common.IndexInst{
+				InstId:         common.IndexInstId(inst.InstId),
+				Defn:           idxDefn,
+				State:          common.IndexState(inst.State),
+				Stream:         common.StreamId(inst.StreamId),
+				ReplicaId:      int(inst.ReplicaId),
+				Version:        int(inst.Version),
+				RState:         common.RebalanceState(inst.RState),
+				Scheduled:      inst.Scheduled,
+				StorageMode:    inst.StorageMode,
+				OldStorageMode: inst.OldStorageMode,
+				Pc:             pc,
+			}
+
+			indexInstMap[idxInst.InstId] = idxInst
 		}
-
-		numPartitions := inst.NumPartitions
-		if numPartitions == 0 {
-			numPartitions = uint32(len(inst.Partitions))
-		}
-		pc := c.metaNotifier.makeDefaultPartitionContainer(partitions, numPartitions, idxDefn.PartitionScheme)
-
-		// create index instance
-		idxInst := common.IndexInst{InstId: common.IndexInstId(inst.InstId),
-			Defn:           idxDefn,
-			State:          common.IndexState(inst.State),
-			Stream:         common.StreamId(inst.StreamId),
-			ReplicaId:      int(inst.ReplicaId),
-			Version:        int(inst.Version),
-			RState:         common.RebalanceState(inst.RState),
-			Scheduled:      inst.Scheduled,
-			StorageMode:    inst.StorageMode,
-			OldStorageMode: inst.OldStorageMode,
-			Pc:             pc,
-		}
-
-		indexInstMap[idxInst.InstId] = idxInst
-
 	}
 
 	c.supvCmdch <- &MsgClustMgrTopology{indexInstMap: indexInstMap}

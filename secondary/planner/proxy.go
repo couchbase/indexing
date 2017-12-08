@@ -211,73 +211,74 @@ func ConvertToIndexUsage(defn *common.IndexDefn, localMeta *LocalIndexMetadata) 
 	}
 
 	// find the index instance from topology metadata
-	inst := topology.GetIndexInstByDefn(defn.DefnId)
-	if inst == nil {
+	insts := topology.GetIndexInstancesByDefn(defn.DefnId)
+	if len(insts) == 0 {
 		logging.Errorf("Planner::getIndexLayout: Fail to find index instance for definition %v.", defn.DefnId)
 		return nil, nil
 	}
 
-	// Check the index state.  Only handle index that is active or being built.
-	// For index that is in the process of being deleted, planner expects the resource
-	// will eventually be freed, so it won't included in planning.
-	state, _ := topology.GetStatusByDefn(defn.DefnId)
-	if state != common.INDEX_STATE_CREATED &&
-		state != common.INDEX_STATE_DELETED &&
-		state != common.INDEX_STATE_ERROR &&
-		state != common.INDEX_STATE_NIL {
+	var result []*IndexUsage
 
-		result := make([]*IndexUsage, len(inst.Partitions))
+	for _, inst := range insts {
 
-		for i, partn := range inst.Partitions {
+		// Check the index state.  Only handle index that is active or being built.
+		// For index that is in the process of being deleted, planner expects the resource
+		// will eventually be freed, so it won't included in planning.
+		state, _ := topology.GetStatusByInst(defn.DefnId, common.IndexInstId(inst.InstId))
+		if state != common.INDEX_STATE_CREATED &&
+			state != common.INDEX_STATE_DELETED &&
+			state != common.INDEX_STATE_ERROR &&
+			state != common.INDEX_STATE_NIL {
 
-			// create an index usage object
-			index := newIndexUsage(defn.DefnId, common.IndexInstId(inst.InstId), common.PartitionId(partn.PartId), defn.Name, defn.Bucket)
+			for _, partn := range inst.Partitions {
 
-			// index is pinned to a node
-			if len(defn.Nodes) != 0 {
-				index.Hosts = defn.Nodes
+				// create an index usage object
+				index := newIndexUsage(defn.DefnId, common.IndexInstId(inst.InstId), common.PartitionId(partn.PartId), defn.Name, defn.Bucket)
+
+				// index is pinned to a node
+				if len(defn.Nodes) != 0 {
+					index.Hosts = defn.Nodes
+				}
+
+				// update sizing
+				index.IsPrimary = defn.IsPrimary
+				index.IsMOI = (defn.Using == common.IndexType(common.MemoryOptimized) || defn.Using == common.IndexType(common.MemDB))
+				index.NoUsage = defn.Deferred && state == common.INDEX_STATE_READY
+
+				// update partition
+				defn.NumPartitions = inst.NumPartitions
+				if defn.NumPartitions == 0 {
+					defn.NumPartitions = uint32(len(inst.Partitions))
+				}
+
+				// Is the index being deleted by user?   Thsi will read the delete token from metakv.  If untable read from metakv,
+				// pendingDelete is false (cannot assert index is to-be-delete).
+				pendingDelete, err := client.DeleteCommandTokenExist(defn.DefnId)
+				if err != nil {
+					return nil, err
+				}
+				index.pendingDelete = pendingDelete
+
+				// update internal info
+				index.Instance = &common.IndexInst{
+					InstId:    common.IndexInstId(inst.InstId),
+					Defn:      *defn,
+					State:     common.IndexState(inst.State),
+					Stream:    common.StreamId(inst.StreamId),
+					Error:     inst.Error,
+					ReplicaId: int(inst.ReplicaId),
+					Version:   int(inst.Version),
+					RState:    common.RebalanceState(inst.RState),
+				}
+
+				logging.Debugf("Create Index usage %v %v %v %v", index.Name, index.Bucket, index.Instance.InstId, index.Instance.ReplicaId)
+
+				result = append(result, index)
 			}
-
-			// update sizing
-			index.IsPrimary = defn.IsPrimary
-			index.IsMOI = (defn.Using == common.IndexType(common.MemoryOptimized) || defn.Using == common.IndexType(common.MemDB))
-			index.NoUsage = defn.Deferred && state == common.INDEX_STATE_READY
-
-			// update partition
-			defn.NumPartitions = inst.NumPartitions
-			if defn.NumPartitions == 0 {
-				defn.NumPartitions = uint32(len(inst.Partitions))
-			}
-
-			// Is the index being deleted by user?   Thsi will read the delete token from metakv.  If untable read from metakv,
-			// pendingDelete is false (cannot assert index is to-be-delete).
-			pendingDelete, err := client.DeleteCommandTokenExist(defn.DefnId)
-			if err != nil {
-				return nil, err
-			}
-			index.pendingDelete = pendingDelete
-
-			// update internal info
-			index.Instance = &common.IndexInst{
-				InstId:    common.IndexInstId(inst.InstId),
-				Defn:      *defn,
-				State:     common.IndexState(inst.State),
-				Stream:    common.StreamId(inst.StreamId),
-				Error:     inst.Error,
-				ReplicaId: int(inst.ReplicaId),
-				Version:   int(inst.Version),
-				RState:    common.RebalanceState(inst.RState),
-			}
-
-			logging.Debugf("Create Index usage %v %v %v %v", index.Name, index.Bucket, index.Instance.InstId, index.Instance.ReplicaId)
-
-			result[i] = index
 		}
-
-		return result, nil
 	}
 
-	return nil, nil
+	return result, nil
 }
 
 //

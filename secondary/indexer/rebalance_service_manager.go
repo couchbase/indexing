@@ -2300,7 +2300,7 @@ func (m *ServiceMgr) generateTransferTokenForMoveIndex(req *manager.IndexRequest
 	l.Infof("ServiceMgr::handleMoveIndex nodes %v uuid %v", reqNodes, reqNodeUUID)
 
 	var currNodeUUID []string
-	var currInst []*c.IndexInst
+	var currInst [][]*c.IndexInst
 	var numCurrInst int
 	for _, localMeta := range topology.Metadata {
 
@@ -2325,24 +2325,29 @@ func (m *ServiceMgr) generateTransferTokenForMoveIndex(req *manager.IndexRequest
 					return nil, err
 				}
 
-				inst := topology.GetIndexInstByDefn(index.DefnId)
-				if inst == nil {
+				insts := topology.GetIndexInstancesByDefn(index.DefnId)
+				if len(insts) == 0 {
 					err := errors.New(fmt.Sprintf("Fail to find index instance for definition %v for node %v.", index.DefnId, localMeta.NodeUUID))
 					l.Errorf("ServiceMgr::generateTransferTokenForMoveIndex %v", err)
 					return nil, err
 				}
 
-				localInst := &c.IndexInst{
-					InstId:    c.IndexInstId(inst.InstId),
-					Defn:      index,
-					State:     c.IndexState(inst.State),
-					Stream:    c.StreamId(inst.StreamId),
-					Error:     inst.Error,
-					Version:   int(inst.Version),
-					ReplicaId: int(inst.ReplicaId),
+				var instList []*c.IndexInst
+				for _, inst := range insts {
+					localInst := &c.IndexInst{
+						InstId:    c.IndexInstId(inst.InstId),
+						Defn:      index,
+						State:     c.IndexState(inst.State),
+						Stream:    c.StreamId(inst.StreamId),
+						Error:     inst.Error,
+						Version:   int(inst.Version),
+						ReplicaId: int(inst.ReplicaId),
+					}
+					instList = append(instList, localInst)
 				}
+
+				currInst = append(currInst, instList)
 				currNodeUUID = append(currNodeUUID, localMeta.IndexerId)
-				currInst = append(currInst, localInst)
 			}
 		}
 	}
@@ -2364,15 +2369,17 @@ func (m *ServiceMgr) generateTransferTokenForMoveIndex(req *manager.IndexRequest
 	transferTokens := make(map[string]*c.TransferToken)
 
 	for i, _ := range reqNodeUUID {
-		ttid, tt := m.genTransferToken(currInst[i], currNodeUUID[i], reqNodeUUID[i])
+		for _, inst := range currInst[i] {
+			ttid, tt := m.genTransferToken(inst, currNodeUUID[i], reqNodeUUID[i])
 
-		if tt.SourceId == tt.DestId {
-			l.Infof("ServiceMgr::generateTransferTokenForMoveIndex Skip No-op TransferToken %v", tt)
-			continue
+			if tt.SourceId == tt.DestId {
+				l.Infof("ServiceMgr::generateTransferTokenForMoveIndex Skip No-op TransferToken %v", tt)
+				continue
+			}
+
+			l.Infof("ServiceMgr::generateTransferTokenForMoveIndex Generated TransferToken %v %v", ttid, tt)
+			transferTokens[ttid] = tt
 		}
-
-		l.Infof("ServiceMgr::generateTransferTokenForMoveIndex Generated TransferToken %v %v", ttid, tt)
-		transferTokens[ttid] = tt
 
 	}
 

@@ -3799,7 +3799,7 @@ func (idx *indexer) upgradeSingleIndex(inst *common.IndexInst, storageMode commo
 
 	// update metadata
 	msg := &MsgClustMgrResetIndex{
-		defn: inst.Defn,
+		inst: *inst,
 	}
 	idx.sendMsgToClusterMgr(msg)
 }

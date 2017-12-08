@@ -675,7 +675,7 @@ loop:
 				}
 				allTokensReady = false
 
-				status, err := getIndexStatusFromMeta(&tt.IndexInst.Defn, localMeta)
+				status, err := getIndexStatusFromMeta(&tt.IndexInst, localMeta)
 				if err != "" {
 					l.Errorf("Rebalancer::waitForIndexBuild Error Fetching Index Status %v %v", r.localaddr+url, err)
 					break
@@ -959,14 +959,14 @@ func (r *Rebalancer) checkAllTokensDone() bool {
 	return true
 }
 
-func getIndexStatusFromMeta(defn *c.IndexDefn, localMeta *manager.LocalIndexMetadata) (c.IndexState, string) {
+func getIndexStatusFromMeta(inst *c.IndexInst, localMeta *manager.LocalIndexMetadata) (c.IndexState, string) {
 
-	topology := findTopologyByBucket(localMeta.IndexTopologies, defn.Bucket)
+	topology := findTopologyByBucket(localMeta.IndexTopologies, inst.Defn.Bucket)
 	if topology == nil {
-		return c.INDEX_STATE_NIL, fmt.Sprintf("Topology Information Missing for %v Bucket", defn.Bucket)
+		return c.INDEX_STATE_NIL, fmt.Sprintf("Topology Information Missing for %v Bucket", inst.Defn.Bucket)
 	}
 
-	return topology.GetStatusByDefn(defn.DefnId)
+	return topology.GetStatusByInst(inst.Defn.DefnId, inst.InstId)
 }
 
 func (r *Rebalancer) getBuildProgressFromStatus(status *manager.IndexStatusResponse, defnId c.IndexDefnId) float64 {

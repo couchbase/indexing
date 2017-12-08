@@ -256,24 +256,25 @@ func (inst IndexInstDistribution) findIndexerId() string {
 	return ""
 }
 
-func (t *IndexTopology) GetIndexInstByDefn(defnId c.IndexDefnId) *IndexInstDistribution {
+func (t *IndexTopology) GetIndexInstancesByDefn(defnId c.IndexDefnId) []IndexInstDistribution {
 
 	for i, _ := range t.Definitions {
 		if t.Definitions[i].DefnId == uint64(defnId) {
-			for _, inst := range t.Definitions[i].Instances {
-				return &inst
-			}
+			return t.Definitions[i].Instances
 		}
 	}
-
 	return nil
 }
 
-func (t *IndexTopology) GetStatusByDefn(defnId c.IndexDefnId) (c.IndexState, string) {
+func (t *IndexTopology) GetStatusByInst(defnId c.IndexDefnId, instId c.IndexInstId) (c.IndexState, string) {
 
 	for i, _ := range t.Definitions {
 		if t.Definitions[i].DefnId == uint64(defnId) {
-			return c.IndexState(t.Definitions[i].Instances[0].State), t.Definitions[i].Instances[0].Error
+			for j, _ := range t.Definitions[i].Instances {
+				if t.Definitions[i].Instances[j].InstId == uint64(instId) {
+					return c.IndexState(t.Definitions[i].Instances[j].State), t.Definitions[i].Instances[j].Error
+				}
+			}
 		}
 	}
 	return c.INDEX_STATE_NIL, ""

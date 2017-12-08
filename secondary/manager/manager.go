@@ -436,12 +436,13 @@ func (m *IndexManager) HandleBuildIndexDDL(indexIds client.IndexIdList) error {
 
 	return nil
 }
-func (m *IndexManager) UpdateIndexInstance(bucket string, defnId common.IndexDefnId, state common.IndexState,
-	streamId common.StreamId, err string, buildTime []uint64, rState common.RebalanceState) error {
+func (m *IndexManager) UpdateIndexInstance(bucket string, defnId common.IndexDefnId, instId common.IndexInstId,
+	state common.IndexState, streamId common.StreamId, err string, buildTime []uint64, rState common.RebalanceState) error {
 
 	inst := &topologyChange{
 		Bucket:    bucket,
 		DefnId:    uint64(defnId),
+		InstId:    uint64(instId),
 		State:     uint32(state),
 		StreamId:  uint32(streamId),
 		Error:     err,
@@ -459,12 +460,13 @@ func (m *IndexManager) UpdateIndexInstance(bucket string, defnId common.IndexDef
 	return m.requestServer.MakeAsyncRequest(client.OPCODE_UPDATE_INDEX_INST, fmt.Sprintf("%v", defnId), buf)
 }
 
-func (m *IndexManager) UpdateIndexInstanceSync(bucket string, defnId common.IndexDefnId, state common.IndexState,
-	streamId common.StreamId, err string, buildTime []uint64, rState common.RebalanceState) error {
+func (m *IndexManager) UpdateIndexInstanceSync(bucket string, defnId common.IndexDefnId, instId common.IndexInstId,
+	state common.IndexState, streamId common.StreamId, err string, buildTime []uint64, rState common.RebalanceState) error {
 
 	inst := &topologyChange{
 		Bucket:    bucket,
 		DefnId:    uint64(defnId),
+		InstId:    uint64(instId),
 		State:     uint32(state),
 		StreamId:  uint32(streamId),
 		Error:     err,
@@ -480,15 +482,15 @@ func (m *IndexManager) UpdateIndexInstanceSync(bucket string, defnId common.Inde
 	return m.requestServer.MakeRequest(client.OPCODE_UPDATE_INDEX_INST, fmt.Sprintf("%v", defnId), buf)
 }
 
-func (m *IndexManager) ResetIndex(index common.IndexDefn) error {
+func (m *IndexManager) ResetIndex(index common.IndexInst) error {
 
-	content, err := common.MarshallIndexDefn(&index)
+	content, err := common.MarshallIndexInst(&index)
 	if err != nil {
 		return err
 	}
 
 	logging.Debugf("IndexManager.ResetIndex(): making request for Index reset")
-	return m.requestServer.MakeRequest(client.OPCODE_RESET_INDEX, fmt.Sprintf("%v", index.DefnId), content)
+	return m.requestServer.MakeRequest(client.OPCODE_RESET_INDEX, fmt.Sprintf("%v", index.InstId), content)
 }
 
 func (m *IndexManager) DeleteIndexForBucket(bucket string, streamId common.StreamId) error {

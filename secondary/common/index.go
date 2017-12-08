@@ -404,6 +404,26 @@ func UnmarshallIndexDefn(data []byte) (*IndexDefn, error) {
 	return defn, nil
 }
 
+func MarshallIndexInst(inst *IndexInst) ([]byte, error) {
+
+	buf, err := json.Marshal(&inst)
+	if err != nil {
+		return nil, err
+	}
+
+	return buf, nil
+}
+
+func UnmarshallIndexInst(data []byte) (*IndexInst, error) {
+
+	inst := new(IndexInst)
+	if err := json.Unmarshal(data, inst); err != nil {
+		return nil, err
+	}
+
+	return inst, nil
+}
+
 func NewIndexDefnId() (IndexDefnId, error) {
 	uuid, err := NewUUID()
 	if err != nil {
@@ -420,6 +440,10 @@ func NewIndexInstId() (IndexInstId, error) {
 	}
 
 	return IndexInstId(uuid.Uint64()), nil
+}
+
+func IsPartitioned(scheme PartitionScheme) bool {
+	return len(scheme) != 0 && scheme != SINGLE
 }
 
 //IndexSnapType represents the snapshot type
