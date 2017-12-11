@@ -25,6 +25,8 @@ import (
 
 var (
 	ErrLimitReached = errors.New("Row limit reached")
+	encodedNull     = []byte{2, 0}
+	encodedZero     = []byte{5, 48, 0}
 )
 
 type ScanPipeline struct {
@@ -272,7 +274,27 @@ loop:
 
 		for {
 			entry, err := projectGroupAggr((*buf)[:0], r.Indexprojection, s.p.aggrRes)
+
 			if entry == nil {
+
+				if s.p.rowsReturned == 0 {
+
+					//handle special group rules
+					entry, err = projectEmptyResult((*buf)[:0], r.Indexprojection, r.GroupAggr)
+					if err != nil {
+						return err
+					}
+
+					if entry == nil {
+						return nil
+					}
+
+					s.p.rowsReturned++
+					wrErr := s.WriteItem(entry)
+					if wrErr != nil {
+						return wrErr
+					}
+				}
 				return nil
 			}
 
@@ -820,6 +842,46 @@ func (ar *aggrRow) Flush() bool {
 func (gk *groupKey) Equals(ok *groupKey) bool {
 
 	return bytes.Equal(gk.key, ok.key)
+}
+
+func projectEmptyResult(buf []byte, projection *Projection, groupAggr *GroupAggr) ([]byte, error) {
+
+	var err error
+	//If no group by and no documents qualify, COUNT aggregate
+	//should return 0 and all other aggregates should return NULL
+	if len(groupAggr.Group) == 0 {
+
+		aggrs := make([][]byte, len(groupAggr.Aggrs))
+
+		for i, ak := range groupAggr.Aggrs {
+			if ak.AggrFunc == c.AGG_COUNT || ak.AggrFunc == c.AGG_COUNTN {
+				aggrs[i] = encodedZero
+			} else {
+				aggrs[i] = encodedNull
+			}
+		}
+
+		var keysToJoin [][]byte
+		for _, projGroup := range projection.projectGroupKeys {
+			keysToJoin = append(keysToJoin, aggrs[projGroup.pos])
+		}
+
+		codec := collatejson.NewCodec(16)
+		if buf, err = codec.JoinArray(keysToJoin, buf); err != nil {
+			l.Errorf("ScanPipeline::projectGroupAggr join array error %v", err)
+			return nil, err
+		}
+
+		return buf, nil
+
+	} else {
+		//If group is not nil and if none of the documents qualify,
+		//the aggregate should not return anything
+		return nil, nil
+	}
+
+	return nil, nil
+
 }
 
 func projectGroupAggr(buf []byte, projection *Projection, aggrRes *aggrResult) ([]byte, error) {
