@@ -749,7 +749,7 @@ func evaluateN1QLExpresssion(groupAggr *GroupAggr, expr expression.Expression,
 		if int(ik) == len(compositekeys) {
 			groupAggr.av.SetCover(groupAggr.IndexKeyNames[i], value.NewValue(string(docid)))
 		} else {
-			buf := make([]byte, len(compositekeys[ik])*3) // TODO: MB-27049 avoid garbage
+			buf := make([]byte, len(compositekeys[ik])*3+collatejson.MinBufferSize) // TODO: MB-27049 avoid garbage
 			actualVal, err := decodeValue(compositekeys[ik], buf)
 			if err != nil {
 				return nil, err
