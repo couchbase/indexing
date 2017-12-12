@@ -42,8 +42,18 @@ func TestGroupAggrSetup(t *testing.T) {
 
 type Aggdoc struct {
 	Year  string
-	Month int64
+	Month interface{}
 	Sale  interface{}
+}
+
+type Aggdoc1 struct {
+	Year string
+	Sale interface{}
+}
+
+type Aggdoc2 struct {
+	Year  string
+	Month interface{}
 }
 
 func makeGroupAggDocs() tc.KeyValues {
@@ -62,7 +72,33 @@ func makeGroupAggDocs() tc.KeyValues {
 	docs["doc10"] = Aggdoc{Year: "2017", Month: 2, Sale: 40}
 	docs["doc11"] = Aggdoc{Year: "2017", Month: 3, Sale: 50}
 	docs["doc12"] = Aggdoc{Year: "2017", Month: 3, Sale: 60}
-	docs["doc13"] = Aggdoc{Year: "2017", Month: 3, Sale: "salestr"}
+
+	docs["doc13"] = Aggdoc{Year: "2017", Month: 4, Sale: "salestr"}
+	docs["doc14"] = Aggdoc{Year: "2017", Month: 4, Sale: nil}
+	docs["doc15"] = Aggdoc{Year: "2017", Month: 4, Sale: 10}
+	docs["doc32"] = Aggdoc{Year: "2017", Month: 4, Sale: true}
+	docs["doc33"] = Aggdoc{Year: "2017", Month: 4, Sale: false}
+	docs["doc34"] = Aggdoc{Year: "2017", Month: 4, Sale: []int{1, 2, 3}}
+	docs["doc35"] = Aggdoc{Year: "2017", Month: 4, Sale: Aggdoc1{Year: "2019", Sale: 10}}
+	docs["doc36"] = Aggdoc2{Year: "2017", Month: 4}
+	docs["doc37"] = Aggdoc{Year: "2017", Month: 4, Sale: 5.5}
+
+	docs["doc16"] = Aggdoc{Year: "2019", Month: nil, Sale: 10}
+	docs["doc17"] = Aggdoc{Year: "2019", Month: 0, Sale: 10}
+	docs["doc18"] = Aggdoc1{Year: "2019", Sale: 10}
+	docs["doc19"] = Aggdoc{Year: "2019", Month: "strmonth", Sale: 10}
+	docs["doc20"] = Aggdoc{Year: "2019", Month: true, Sale: 10}
+	docs["doc21"] = Aggdoc{Year: "2019", Month: false, Sale: 10}
+	docs["doc22"] = Aggdoc{Year: "2019", Month: []int{1, 2, 3}, Sale: 10}
+	docs["doc23"] = Aggdoc{Year: "2019", Month: Aggdoc1{Year: "2019", Sale: 10}, Sale: 10}
+	docs["doc24"] = Aggdoc{Year: "2019", Month: nil, Sale: 5}
+	docs["doc25"] = Aggdoc{Year: "2019", Month: 0, Sale: 5}
+	docs["doc26"] = Aggdoc1{Year: "2019", Sale: 5}
+	docs["doc27"] = Aggdoc{Year: "2019", Month: "strmonth", Sale: 5}
+	docs["doc28"] = Aggdoc{Year: "2019", Month: true, Sale: 5}
+	docs["doc29"] = Aggdoc{Year: "2019", Month: false, Sale: 5}
+	docs["doc30"] = Aggdoc{Year: "2019", Month: []int{1, 2, 3}, Sale: 5}
+	docs["doc31"] = Aggdoc{Year: "2019", Month: Aggdoc1{Year: "2019", Sale: 10}, Sale: 5}
 
 	return docs
 
@@ -132,6 +168,10 @@ func TestGroupAggrLeading(t *testing.T) {
 	ga, proj := basicGroupAggr()
 
 	scanResults, err := secondaryindex.Scan3(index1, bucketName, indexScanAddress, getScanAllNoFilter(), false, false, proj, 0, defaultlimit, ga, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in scan", t)
+	tc.PrintScanResults(scanResults, "scanResults")
+
+	scanResults, err = secondaryindex.Scan3(index1, bucketName, indexScanAddress, getNonOverlappingFilters3(), false, false, proj, 0, defaultlimit, ga, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
 	tc.PrintScanResults(scanResults, "scanResults")
 }
@@ -375,4 +415,66 @@ func TestGroupAggrCountN(t *testing.T) {
 	scanResults, err := secondaryindex.Scan3(index1, bucketName, indexScanAddress, getScanAllNoFilter(), false, false, proj, 0, defaultlimit, ga, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
 	tc.PrintScanResults(scanResults, "scanResults")
+}
+
+func TestGroupAggrNoGroupNoMatch(t *testing.T) {
+	log.Printf("In TestGroupAggrNoGroupNoMatch()")
+
+	var index1 = "index_agg"
+	var bucketName = "default"
+
+	ga, proj := basicGroupAggr()
+	ga.Group = nil
+	proj.EntryKeys = proj.EntryKeys[2:]
+
+	scanResults, err := secondaryindex.Scan3(index1, bucketName, indexScanAddress, getNoMatchFilter(), false, false, proj, 0, defaultlimit, ga, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in scan", t)
+	tc.PrintScanResults(scanResults, "scanResults")
+}
+
+func TestGroupAggrGroupNoMatch(t *testing.T) {
+	log.Printf("In TestGroupAggrGroupNoMatch()")
+
+	var index1 = "index_agg"
+	var bucketName = "default"
+
+	ga, proj := basicGroupAggr()
+
+	scanResults, err := secondaryindex.Scan3(index1, bucketName, indexScanAddress, getNoMatchFilter(), false, false, proj, 0, defaultlimit, ga, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in scan", t)
+	tc.PrintScanResults(scanResults, "scanResults")
+}
+
+func getNoMatchFilter() qc.Scans {
+	scans := make(qc.Scans, 1)
+
+	filter1 := make([]*qc.CompositeElementFilter, 2)
+	filter1[0] = &qc.CompositeElementFilter{Low: "2018", High: "2018", Inclusion: qc.Inclusion(uint32(3))}
+	filter1[1] = &qc.CompositeElementFilter{Low: int64(1), High: int64(1), Inclusion: qc.Inclusion(uint32(3))}
+	scans[0] = &qc.Scan{Filter: filter1}
+
+	return scans
+}
+
+func TestGroupAggrMultDataTypes(t *testing.T) {
+	log.Printf("In TestGroupAggrMultDataTypes()")
+
+	var index1 = "index_agg"
+	var bucketName = "default"
+
+	ga, proj := basicGroupAggr()
+
+	scanResults, err := secondaryindex.Scan3(index1, bucketName, indexScanAddress, getPartialMatchFilter(), false, false, proj, 0, defaultlimit, ga, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in scan", t)
+	tc.PrintScanResults(scanResults, "scanResults")
+}
+
+func getPartialMatchFilter() qc.Scans {
+	scans := make(qc.Scans, 1)
+
+	filter1 := make([]*qc.CompositeElementFilter, 1)
+	filter1[0] = &qc.CompositeElementFilter{Low: "2019", High: "2019", Inclusion: qc.Inclusion(uint32(3))}
+	scans[0] = &qc.Scan{Filter: filter1}
+
+	return scans
 }
