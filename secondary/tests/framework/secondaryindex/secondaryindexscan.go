@@ -440,7 +440,7 @@ func MultiScanCount(indexName, bucketName, server string, scans qc.Scans, distin
 
 func Scan3(indexName, bucketName, server string, scans qc.Scans, reverse, distinct bool,
 	projection *qc.IndexProjection, offset, limit int64, groupAggr *qc.GroupAggr,
-	consistency c.Consistency, vector *qc.TsConsistency) (tc.ScanResponse, error) {
+	consistency c.Consistency, vector *qc.TsConsistency) (tc.ScanResponse, tc.GroupAggrScanResponse, error) {
 
 	if UseClient == "n1ql" {
 		log.Printf("Using n1ql client")
@@ -455,12 +455,14 @@ func Scan3(indexName, bucketName, server string, scans qc.Scans, reverse, distin
 	// ToDo: Create a client pool
 	client, e := CreateClient(server, "2itest")
 	if e != nil {
-		return nil, e
+		return nil, nil, e
 	}
 	defer client.Close()
 
 	defnID, _ := GetDefnID(client, bucketName, indexName)
+
 	scanResults := make(tc.ScanResponse)
+	var groupAggrScanResults tc.GroupAggrScanResponse
 
 	count := 0
 	start := time.Now()
@@ -508,18 +510,18 @@ func Scan3(indexName, bucketName, server string, scans qc.Scans, reverse, distin
 				}
 				return false
 			} else {
-
 				if err := response.Error(); err != nil {
 					scanErr = err
 					log.Printf("ScanError = %v ", scanErr)
 					return false
-				} else if skeys, pkeys, err := response.GetEntries(); err != nil {
+				} else if skeys, _, err := response.GetEntries(); err != nil {
 					scanErr = err
 					log.Printf("ScanError = %v ", scanErr)
 					return false
 				} else {
-					for i, skey := range skeys {
-						log.Printf("Scanresult Row  %v: %v  : %v ", i, skey, pkeys[i])
+					for _, skey := range skeys {
+						count++
+						groupAggrScanResults = append(groupAggrScanResults, skey)
 					}
 				}
 			}
@@ -529,14 +531,14 @@ func Scan3(indexName, bucketName, server string, scans qc.Scans, reverse, distin
 
 	if connErr != nil {
 		log.Printf("Connection error in Scan occured: %v", connErr)
-		return scanResults, connErr
+		return scanResults, groupAggrScanResults, connErr
 	} else if scanErr != nil {
-		return scanResults, scanErr
+		return scanResults, groupAggrScanResults, scanErr
 	}
 
 	tc.LogPerfStat("MultiScan", elapsed)
 	log.Printf("Total Scanresults = %v", count)
-	return scanResults, nil
+	return scanResults, groupAggrScanResults, nil
 }
 
 func skey2Values(skey c.SecondaryKey) []value.Value {

@@ -268,11 +268,11 @@ func N1QLMultiScanCount(indexName, bucketName, server string, scans qc.Scans, di
 
 func N1QLScan3(indexName, bucketName, server string, scans qc.Scans, reverse, distinct bool,
 	projection *qc.IndexProjection, offset, limit int64, groupAggr *qc.GroupAggr,
-	consistency c.Consistency, vector *qc.TsConsistency) (tc.ScanResponse, error) {
+	consistency c.Consistency, vector *qc.TsConsistency) (tc.ScanResponse, tc.GroupAggrScanResponse, error) {
 
 	client, err := nclient.NewGSIIndexer(server, "default", bucketName)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	conn, err := datastore.NewSizedIndexConnection(100000, &testContext{})
 	if err != nil {
@@ -284,12 +284,12 @@ func N1QLScan3(indexName, bucketName, server string, scans qc.Scans, reverse, di
 	var err1 error
 	index, err1 = WaitForIndexOnline(client, indexName, index)
 	if err1 != nil {
-		return nil, err1
+		return nil, nil, err1
 	}
 
 	index3, useScan3 := index.(datastore.Index3)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	var start time.Time
@@ -321,15 +321,16 @@ func N1QLScan3(indexName, bucketName, server string, scans qc.Scans, reverse, di
 	}()
 
 	var results tc.ScanResponse
+	var garesults tc.GroupAggrScanResponse
 	if groupAggr != nil {
-		resultsforaggrgates(conn.EntryChannel())
+		garesults = resultsforaggrgates(conn.EntryChannel())
 	} else {
 		results = getresultsfromchannel(conn.EntryChannel(), index.IsPrimary())
 	}
 
 	elapsed := time.Since(start)
 	tc.LogPerfStat("MultiScan", elapsed)
-	return results, nil
+	return results, garesults, nil
 }
 
 func filtertoranges2(filters []*qc.CompositeElementFilter) datastore.Ranges2 {
@@ -454,16 +455,19 @@ func getresultsfromchannel(ch datastore.EntryChannel, isprimary bool) tc.ScanRes
 	return scanResults
 }
 
-func resultsforaggrgates(ch datastore.EntryChannel) {
+func resultsforaggrgates(ch datastore.EntryChannel) tc.GroupAggrScanResponse {
+	scanResults := make(tc.GroupAggrScanResponse, 0)
 	ok := true
 	for ok {
 		entry, ok := <-ch
 		if ok {
 			log.Printf("Scanresult Row  %v : %v ", entry.EntryKey, entry.PrimaryKey)
+			scanResults = append(scanResults, values2SKey(entry.EntryKey))
 		} else {
 			break
 		}
 	}
+	return scanResults
 }
 
 func interfaceton1qlvalue(key interface{}) value.Value {

@@ -5,7 +5,9 @@ package common
 // Value = Secondary key which can be a simple value or a JSON itself
 type ScanResponse map[string][]interface{}
 
-type ArrayIndexScanResponse map[string] [][]interface{}
+type ArrayIndexScanResponse map[string][][]interface{}
+
+type GroupAggrScanResponse [][]interface{}
 
 // Map of key and JSON as value
 // Key = string (doc key)
