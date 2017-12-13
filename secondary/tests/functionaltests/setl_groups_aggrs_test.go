@@ -258,7 +258,6 @@ func TestGroupAggrLeading_N1QLExprs(t *testing.T) {
 	scanResults, err = secondaryindex.Scan3(index1, bucketName, indexScanAddress, getScanAllNoFilter(), false, false, proj, 0, defaultlimit, ga, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
 	tc.PrintScanResults(scanResults, "scanResults")
-	secondaryindex.UseClient = tmpclient
 }
 
 func basicGroupAggrN1QLExprs1() (*qc.GroupAggr, *qc.IndexProjection) {
@@ -467,6 +466,8 @@ func TestGroupAggrMultDataTypes(t *testing.T) {
 	scanResults, err := secondaryindex.Scan3(index1, bucketName, indexScanAddress, getPartialMatchFilter(), false, false, proj, 0, defaultlimit, ga, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
 	tc.PrintScanResults(scanResults, "scanResults")
+
+	secondaryindex.UseClient = tmpclient
 }
 
 func getPartialMatchFilter() qc.Scans {
