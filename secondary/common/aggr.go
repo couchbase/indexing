@@ -10,8 +10,10 @@
 package common
 
 import (
+	"bytes"
 	"fmt"
 	"github.com/couchbase/indexing/secondary/collatejson"
+	"github.com/couchbase/query/value"
 )
 
 type AggrFuncType uint32
@@ -59,6 +61,8 @@ func NewAggrFunc(typ AggrFuncType, val interface{}) AggrFunc {
 		agg = &AggrFuncSum{typ: AGG_SUM}
 	case AGG_COUNT:
 		agg = &AggrFuncCount{typ: AGG_COUNT}
+	case AGG_COUNTN:
+		agg = &AggrFuncCountN{typ: AGG_COUNTN}
 	case AGG_MIN:
 		agg = &AggrFuncMin{typ: AGG_MIN}
 	case AGG_MAX:
@@ -85,9 +89,19 @@ func (a AggrFuncSum) Value() interface{} {
 	return a.val
 }
 
+//Only numeric values are considered.
+//null/missing/non-numeric are ignored.
 func (a *AggrFuncSum) AddDelta(delta interface{}) {
 
-	switch v := delta.(type) {
+	var actual interface{}
+
+	if val, ok := delta.(value.Value); ok {
+		actual = val.ActualForIndex()
+	} else {
+		actual = delta
+	}
+
+	switch v := actual.(type) {
 
 	case float64:
 		a.val += v
@@ -95,20 +109,11 @@ func (a *AggrFuncSum) AddDelta(delta interface{}) {
 	case int64:
 		a.val += float64(v) // TODO: Do not convert. Support SUM for both int64 and float64
 
-	case nil:
-		//no-op
-
-	case string:
-
-		var m collatejson.Missing
-		if m.Equal(v) {
-			//no-op
-		} else {
-			//ignore
-		}
+	case nil, bool, []interface{}, map[string]interface{}, string:
+		//ignored
 
 	default:
-		//ignore
+		//ignored
 	}
 }
 
@@ -129,27 +134,27 @@ func (a AggrFuncCount) Value() interface{} {
 	return a.val
 }
 
+//null/missing are ignored.
+//add 1 for all other types
 func (a *AggrFuncCount) AddDelta(delta interface{}) {
+
+	//ignore if null or missing
+	if isNullOrMissing(delta) {
+		return
+	}
 
 	switch v := delta.(type) {
 
-	case float64:
+	case []byte, value.Value:
 		a.val += 1
 
-	case nil:
-		//no-op
-
-	case string:
-
-		var m collatejson.Missing
-		if m.Equal(v) {
-			//no-op
-		} else {
+	case float64:
+		if v != 0 {
 			a.val += 1
 		}
 
 	default:
-		//ignore
+		//ignored
 	}
 }
 
@@ -157,9 +162,53 @@ func (a AggrFuncCount) String() string {
 	return fmt.Sprintf("Type %v Value %v", a.typ, a.val)
 }
 
-type AggrFuncMin struct {
+type AggrFuncCountN struct {
 	typ AggrFuncType
 	val float64
+}
+
+func (a AggrFuncCountN) Type() AggrFuncType {
+	return AGG_COUNTN
+}
+
+func (a AggrFuncCountN) Value() interface{} {
+	return a.val
+}
+
+//null/missing are ignored.
+//add 1 for all other numeric types(non-numeric are ignored)
+func (a *AggrFuncCountN) AddDelta(delta interface{}) {
+
+	//ignore if null or missing
+	if isNullOrMissing(delta) {
+		return
+	}
+
+	switch v := delta.(type) {
+
+	case []byte, value.Value:
+		if isNumeric(delta) {
+			a.val += 1
+		}
+
+	case float64:
+		if v != 0 {
+			a.val += 1
+		}
+
+	default:
+		//ignored
+	}
+}
+
+func (a AggrFuncCountN) String() string {
+	return fmt.Sprintf("Type %v Value %v", a.typ, a.val)
+}
+
+type AggrFuncMin struct {
+	typ      AggrFuncType
+	val      interface{}
+	validVal bool
 }
 
 func (a AggrFuncMin) Type() AggrFuncType {
@@ -172,27 +221,42 @@ func (a AggrFuncMin) Value() interface{} {
 
 func (a *AggrFuncMin) AddDelta(delta interface{}) {
 
+	//ignore if null or missing
+	if isNullOrMissing(delta) {
+		return
+	}
+
 	switch v := delta.(type) {
 
-	case float64:
-		if v < a.val {
-			a.val = v
+	case []byte:
+
+		if !a.validVal {
+			//TODO optimize the allocation
+			a.val = append([]byte(nil), v...)
+			a.validVal = true
+			return
+		} else {
+			if bytes.Compare(a.val.([]byte), v) > 0 {
+				//TODO optimize the allocation
+				a.val = append(a.val.([]byte)[:0], v...)
+			}
 		}
 
-	case nil:
-		//no-op
+	case value.Value:
 
-	case string:
-
-		var m collatejson.Missing
-		if m.Equal(v) {
-			//no-op
+		if !a.validVal {
+			a.val = v
+			a.validVal = true
+			return
 		} else {
-			//ignore
+			val := a.val.(value.Value)
+			if val.Collate(v) > 0 {
+				a.val = v
+			}
 		}
 
 	default:
-		//ignore
+		//ignored
 	}
 }
 
@@ -201,8 +265,9 @@ func (a AggrFuncMin) String() string {
 }
 
 type AggrFuncMax struct {
-	typ AggrFuncType
-	val float64
+	typ      AggrFuncType
+	val      interface{}
+	validVal bool
 }
 
 func (a AggrFuncMax) Type() AggrFuncType {
@@ -215,30 +280,86 @@ func (a AggrFuncMax) Value() interface{} {
 
 func (a *AggrFuncMax) AddDelta(delta interface{}) {
 
+	//ignore if null or missing
+	if isNullOrMissing(delta) {
+		return
+	}
+
 	switch v := delta.(type) {
 
-	case float64:
-		if v > a.val {
-			a.val = v
+	case []byte:
+
+		if !a.validVal {
+			//TODO optimize the allocation
+			a.val = append([]byte(nil), v...)
+			a.validVal = true
+			return
+		} else {
+			//TODO optimize the allocation
+			if bytes.Compare(a.val.([]byte), v) < 0 {
+				a.val = append(a.val.([]byte)[:0], v...)
+			}
 		}
 
-	case nil:
-		//no-op
+	case value.Value:
 
-	case string:
-
-		var m collatejson.Missing
-		if m.Equal(v) {
-			//no-op
+		if !a.validVal {
+			a.val = v
+			a.validVal = true
+			return
 		} else {
-			//ignore
+			val := a.val.(value.Value)
+			if val.Collate(v) < 0 {
+				a.val = v
+			}
 		}
 
 	default:
-		//ignore
+		//ignored
 	}
 }
 
 func (a AggrFuncMax) String() string {
 	return fmt.Sprintf("Type %v Value %v", a.typ, a.val)
+}
+
+func isNullOrMissing(val interface{}) bool {
+
+	switch v := val.(type) {
+
+	case []byte:
+
+		//ignore if null or missing
+		if v[0] == collatejson.TypeMissing || v[0] == collatejson.TypeNull {
+			return true
+		}
+
+	case value.Value:
+
+		if v.Type() == value.MISSING || v.Type() == value.NULL {
+			return true
+		}
+
+	}
+	return false
+}
+
+func isNumeric(val interface{}) bool {
+
+	switch v := val.(type) {
+
+	case []byte:
+
+		if v[0] == collatejson.TypeNumber {
+			return true
+		}
+
+	case value.Value:
+
+		if v.Type() == value.NUMBER {
+			return true
+		}
+
+	}
+	return false
 }

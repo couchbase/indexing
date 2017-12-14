@@ -55,6 +55,10 @@ func (instance *IndexInst) UpsertEndpoints(
 func (instance *IndexInst) UpsertDeletionEndpoints(
 	m *mc.DcpEvent, partKey, key, oldKey []byte) []string {
 
+	if m.IsJSON() == false {
+		return nil
+	}
+
 	p := instance.GetPartitionObject()
 	if p == nil {
 		return nil
@@ -211,24 +215,24 @@ func (ie *IndexEvaluator) TransformRoute(
 	instn := ie.instance
 
 	meta := dcpEvent2Meta(m)
-	where, err := ie.wherePredicate(m.Value, meta, encodeBuf)
+	where, err := ie.wherePredicate(m, m.Value, meta, encodeBuf)
 	if err != nil {
 		return nil, err
 	}
 
 	if where && len(m.Value) > 0 { // project new secondary key
-		if npkey, err = ie.partitionKey(m.Key, m.Value, meta, encodeBuf); err != nil {
+		if npkey, err = ie.partitionKey(m, m.Key, m.Value, meta, encodeBuf); err != nil {
 			return nil, err
 		}
-		if nkey, newBuf, err = ie.evaluate(m.Key, m.Value, meta, encodeBuf); err != nil {
+		if nkey, newBuf, err = ie.evaluate(m, m.Key, m.Value, meta, encodeBuf); err != nil {
 			return nil, err
 		}
 	}
 	if len(m.OldValue) > 0 { // project old secondary key
-		if opkey, err = ie.partitionKey(m.Key, m.OldValue, meta, encodeBuf); err != nil {
+		if opkey, err = ie.partitionKey(m, m.Key, m.OldValue, meta, encodeBuf); err != nil {
 			return nil, err
 		}
-		if okey, newBuf, err = ie.evaluate(m.Key, m.OldValue, meta, encodeBuf); err != nil {
+		if okey, newBuf, err = ie.evaluate(m, m.Key, m.OldValue, meta, encodeBuf); err != nil {
 			return nil, err
 		}
 	}
@@ -296,7 +300,12 @@ func (ie *IndexEvaluator) TransformRoute(
 }
 
 func (ie *IndexEvaluator) evaluate(
-	docid, doc []byte, meta map[string]interface{}, encodeBuf []byte) ([]byte, []byte, error) {
+	m *mc.DcpEvent, docid, doc []byte,
+	meta map[string]interface{}, encodeBuf []byte) ([]byte, []byte, error) {
+
+	if m.IsJSON() == false {
+		return nil, nil, nil
+	}
 
 	defn := ie.instance.GetDefinition()
 	if defn.GetIsPrimary() { // primary index supported !!
@@ -312,7 +321,12 @@ func (ie *IndexEvaluator) evaluate(
 }
 
 func (ie *IndexEvaluator) partitionKey(
-	docid, doc []byte, meta map[string]interface{}, encodeBuf []byte) ([]byte, error) {
+	m *mc.DcpEvent, docid, doc []byte,
+	meta map[string]interface{}, encodeBuf []byte) ([]byte, error) {
+
+	if m.IsJSON() == false {
+		return nil, nil
+	}
 
 	defn := ie.instance.GetDefinition()
 	if ie.pkExprs == nil { // no partition key
@@ -329,7 +343,12 @@ func (ie *IndexEvaluator) partitionKey(
 }
 
 func (ie *IndexEvaluator) wherePredicate(
-	doc []byte, meta map[string]interface{}, encodeBuf []byte) (bool, error) {
+	m *mc.DcpEvent, doc []byte,
+	meta map[string]interface{}, encodeBuf []byte) (bool, error) {
+
+	if m.IsJSON() == false {
+		return false, nil
+	}
 
 	// if where predicate is not supplied - always evaluate to `true`
 	if ie.whExpr == nil {

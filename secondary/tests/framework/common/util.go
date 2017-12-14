@@ -29,6 +29,13 @@ func PrintArrayScanResults(results ArrayIndexScanResponse, resultType string) {
 	}
 }
 
+func PrintGroupAggrResults(results GroupAggrScanResponse, resultType string) {
+	log.Printf("Count of %v is %d\n", resultType, len(results))
+	for _, value := range results {
+		log.Printf("Value: %v", value)
+	}
+}
+
 func PrintDocs(docs KeyValues) {
 	log.Printf("Count of %v is %d\n", "docs", len(docs))
 	for key, value := range docs {
