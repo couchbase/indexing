@@ -121,6 +121,18 @@ func (s *IndexScanSource) Routine() error {
 	revbuf := secKeyBufPool.Get()
 	r.keyBufList = append(r.keyBufList, revbuf)
 
+	if r.GroupAggr != nil {
+		r.GroupAggr.groups = make([]*groupKey, len(r.GroupAggr.Group))
+		for i, _ := range r.GroupAggr.Group {
+			r.GroupAggr.groups[i] = new(groupKey)
+		}
+
+		r.GroupAggr.aggrs = make([]*aggrVal, len(r.GroupAggr.Aggrs))
+		for i, _ := range r.GroupAggr.Aggrs {
+			r.GroupAggr.aggrs[i] = new(aggrVal)
+		}
+	}
+
 	iterCount := 0
 	fn := func(entry []byte) error {
 		if iterCount%SCAN_ROLLBACK_ERROR_BATCHSIZE == 0 && r.hasRollback != nil && r.hasRollback.Load() == true {
@@ -607,6 +619,8 @@ type groupKey struct {
 
 type aggrVal struct {
 	fn        c.AggrFunc
+	raw       interface{}
+	typ       c.AggrFuncType
 	projectId int32
 }
 
@@ -654,38 +668,32 @@ func computeGroupAggr(compositekeys [][]byte, docid []byte, key,
 		}
 	}
 
-	groups := make([]*groupKey, len(groupAggr.Group))
-	aggrs := make([]*aggrVal, len(groupAggr.Aggrs))
-
 	for i, gk := range groupAggr.Group {
-		g, err := computeGroupKey(groupAggr, gk, compositekeys, docid)
+		err := computeGroupKey(groupAggr, gk, compositekeys, docid, i)
 		if err != nil {
 			return err
 		}
-		groups[i] = g
 	}
 
 	for i, ak := range groupAggr.Aggrs {
-		a, err := computeAggrVal(groupAggr, ak, compositekeys, docid, buf)
+		err := computeAggrVal(groupAggr, ak, compositekeys, docid, buf, i)
 		if err != nil {
 			return err
 		}
-		aggrs[i] = a
 	}
 
-	aggrRes.AddNewGroup(groups, aggrs)
+	aggrRes.AddNewGroup(groupAggr.groups, groupAggr.aggrs)
 	return nil
 
 }
 
-func computeGroupKey(groupAggr *GroupAggr, gk *GroupKey, compositekeys [][]byte, docid []byte) (*groupKey, error) {
-	var g *groupKey
+func computeGroupKey(groupAggr *GroupAggr, gk *GroupKey, compositekeys [][]byte, docid []byte, pos int) error {
+
+	g := groupAggr.groups[pos]
 	if gk.KeyPos >= 0 {
-		newKey := make([]byte, len(compositekeys[gk.KeyPos]))
-		copy(newKey, compositekeys[gk.KeyPos])
-		g = &groupKey{key: newKey,
-			projectId: gk.EntryKeyId,
-		}
+		g.key = compositekeys[gk.KeyPos]
+		g.projectId = gk.EntryKeyId
+
 	} else {
 		var scalar value.Value
 		if gk.ExprValue != nil {
@@ -703,32 +711,31 @@ func computeGroupKey(groupAggr *GroupAggr, gk *GroupKey, compositekeys [][]byte,
 		encodeBuf := make([]byte, 1024) // TODO MB-27049 fix buffer size and avoid garbage
 		encoded, err := codec.EncodeN1QLValue(scalar, encodeBuf[:0])
 		if err != nil {
-			return nil, err
+			return err
 		}
-		g = &groupKey{key: encoded,
-			projectId: gk.EntryKeyId,
-		}
+		g.key = encoded
+		g.projectId = gk.EntryKeyId
 	}
-	return g, nil
+	return nil
 }
 
 func computeAggrVal(groupAggr *GroupAggr, ak *Aggregate,
-	compositekeys [][]byte, docid []byte, buf []byte) (*aggrVal, error) {
+	compositekeys [][]byte, docid []byte, buf []byte, pos int) error {
 
-	var a *aggrVal
+	a := groupAggr.aggrs[pos]
 	if ak.KeyPos >= 0 {
 		if ak.AggrFunc == c.AGG_SUM {
 			actualVal, err := decodeValue(compositekeys[ak.KeyPos], buf)
 			if err != nil {
-				return nil, err
+				return err
 			}
-			a = &aggrVal{fn: c.NewAggrFunc(ak.AggrFunc, actualVal),
-				projectId: ak.EntryKeyId,
-			}
+			a.raw = actualVal
+			a.typ = ak.AggrFunc
+			a.projectId = ak.EntryKeyId
 		} else {
-			a = &aggrVal{fn: c.NewAggrFunc(ak.AggrFunc, compositekeys[ak.KeyPos]),
-				projectId: ak.EntryKeyId,
-			}
+			a.raw = compositekeys[ak.KeyPos]
+			a.typ = ak.AggrFunc
+			a.projectId = ak.EntryKeyId
 		}
 
 	} else {
@@ -743,11 +750,11 @@ func computeAggrVal(groupAggr *GroupAggr, ak *Aggregate,
 				return nil, err
 			}
 		}
-		a = &aggrVal{fn: c.NewAggrFunc(ak.AggrFunc, scalar),
-			projectId: ak.EntryKeyId,
-		}
+		a.raw = scalar
+		a.typ = ak.AggrFunc
+		a.projectId = ak.EntryKeyId
 	}
-	return a, nil
+	return nil
 
 }
 
@@ -791,8 +798,17 @@ func (ar *aggrResult) AddNewGroup(groups []*groupKey, aggrs []*aggrVal) error {
 	}
 
 	if nomatch {
-		newRow := &aggrRow{groups: groups,
+		newRow := &aggrRow{groups: make([]*groupKey, len(groups)),
 			aggrs: make([]*aggrVal, len(aggrs))}
+
+		for i, g := range groups {
+			newKey := make([]byte, len(g.key))
+			copy(newKey, g.key)
+			newRow.groups[i] = &groupKey{key: newKey,
+				projectId: g.projectId,
+			}
+		}
+
 		newRow.AddAggregate(aggrs)
 
 		l.Debugf("ScanPipeline::AddNewGroup Add New Group %v", newRow)
@@ -831,9 +847,10 @@ func (ar *aggrRow) AddAggregate(aggrs []*aggrVal) error {
 
 	for i, agg := range aggrs {
 		if ar.aggrs[i] == nil {
-			ar.aggrs[i] = agg
+			ar.aggrs[i] = &aggrVal{fn: c.NewAggrFunc(agg.typ, agg.raw),
+				projectId: agg.projectId}
 		} else {
-			ar.aggrs[i].fn.AddDelta(agg.fn.Value())
+			ar.aggrs[i].fn.AddDelta(agg.raw)
 		}
 	}
 	return nil

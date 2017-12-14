@@ -193,6 +193,8 @@ type GroupAggr struct {
 	cv          *value.ScopeValue
 	av          value.AnnotatedValue
 	exprContext expression.Context
+	aggrs       []*aggrVal
+	groups      []*groupKey
 }
 
 var (
