@@ -123,7 +123,7 @@ func (a AggrFuncSum) String() string {
 
 type AggrFuncCount struct {
 	typ AggrFuncType
-	val float64
+	val int64
 }
 
 func (a AggrFuncCount) Type() AggrFuncType {
@@ -164,7 +164,7 @@ func (a AggrFuncCount) String() string {
 
 type AggrFuncCountN struct {
 	typ AggrFuncType
-	val float64
+	val int64
 }
 
 func (a AggrFuncCountN) Type() AggrFuncType {
