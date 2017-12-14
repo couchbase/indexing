@@ -622,6 +622,7 @@ type aggrVal struct {
 	raw       interface{}
 	typ       c.AggrFuncType
 	projectId int32
+	distinct  bool
 }
 
 type aggrRow struct {
@@ -730,12 +731,8 @@ func computeAggrVal(groupAggr *GroupAggr, ak *Aggregate,
 				return err
 			}
 			a.raw = actualVal
-			a.typ = ak.AggrFunc
-			a.projectId = ak.EntryKeyId
 		} else {
 			a.raw = compositekeys[ak.KeyPos]
-			a.typ = ak.AggrFunc
-			a.projectId = ak.EntryKeyId
 		}
 
 	} else {
@@ -751,9 +748,11 @@ func computeAggrVal(groupAggr *GroupAggr, ak *Aggregate,
 			}
 		}
 		a.raw = scalar
-		a.typ = ak.AggrFunc
-		a.projectId = ak.EntryKeyId
 	}
+
+	a.typ = ak.AggrFunc
+	a.projectId = ak.EntryKeyId
+	a.distinct = ak.Distinct
 	return nil
 
 }
@@ -847,7 +846,7 @@ func (ar *aggrRow) AddAggregate(aggrs []*aggrVal) error {
 
 	for i, agg := range aggrs {
 		if ar.aggrs[i] == nil {
-			ar.aggrs[i] = &aggrVal{fn: c.NewAggrFunc(agg.typ, agg.raw),
+			ar.aggrs[i] = &aggrVal{fn: c.NewAggrFunc(agg.typ, agg.raw, agg.distinct),
 				projectId: agg.projectId}
 		} else {
 			ar.aggrs[i].fn.AddDelta(agg.raw)
