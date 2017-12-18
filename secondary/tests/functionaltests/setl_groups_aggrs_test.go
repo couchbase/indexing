@@ -106,6 +106,13 @@ func makeGroupAggDocs() tc.KeyValues {
 	docs["doc30"] = Aggdoc{Year: "2019", Month: []int{1, 2, 3}, Sale: 5}
 	docs["doc31"] = Aggdoc{Year: "2019", Month: Aggdoc3{Year: "2019"}, Sale: 5}
 
+	docs["doc38"] = Aggdoc{Year: "2020", Month: 4, Sale: 0}
+	docs["doc39"] = Aggdoc{Year: "2020", Month: 4, Sale: 0}
+	docs["doc40"] = Aggdoc{Year: "2020", Month: 4, Sale: -20}
+	docs["doc41"] = Aggdoc{Year: "2020", Month: 4, Sale: 0}
+	docs["doc42"] = Aggdoc{Year: "2020", Month: 4, Sale: -20}
+	docs["doc43"] = Aggdoc{Year: "2020", Month: 4, Sale: "str"}
+
 	return docs
 
 }
@@ -232,7 +239,7 @@ func TestGroupAggrNoGroup(t *testing.T) {
 	proj.EntryKeys = proj.EntryKeys[2:]
 
 	expectedResults := make(tc.GroupAggrScanResponse, 1)
-	expectedResults[0] = []interface{}{555.5, int64(35)}
+	expectedResults[0] = []interface{}{625.5, int64(41)}
 
 	_, scanResults, err := secondaryindex.Scan3(index1, bucketName, indexScanAddress, getScanAllNoFilter(), false, false, proj, 0, defaultlimit, ga, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
@@ -603,6 +610,147 @@ func getPartialMatchFilter2() qc.Scans {
 
 	filter1 := make([]*qc.CompositeElementFilter, 1)
 	filter1[0] = &qc.CompositeElementFilter{Low: "2017", High: "2017", Inclusion: qc.Inclusion(uint32(3))}
+	scans[0] = &qc.Scan{Filter: filter1}
+
+	return scans
+}
+
+func TestGroupAggrDistinct(t *testing.T) {
+	log.Printf("In TestGroupAggrDistinct()")
+
+	var index1 = "index_agg"
+	var bucketName = "default"
+
+	//sum/count
+	{
+		ga, proj := basicGroupAggr()
+
+		ga.Aggrs[0].Distinct = true
+		ga.Aggrs[1].Distinct = true
+
+		expectedResults := make(tc.GroupAggrScanResponse, 1)
+		expectedResults[0] = []interface{}{"2020", int64(4), int64(-20), int64(3)}
+
+		_, scanResults, err := secondaryindex.Scan3(index1, bucketName, indexScanAddress, getDistinctFilter(), false, false, proj, 0, defaultlimit, ga, c.SessionConsistency, nil)
+		FailTestIfError(err, "Error in scan", t)
+		err = tv.ValidateGroupAggrResult(expectedResults, scanResults)
+		FailTestIfError(err, "Error in scan result validation", t)
+	}
+
+	//min/max/countn
+	{
+		ga, proj := basicGroupAggr()
+
+		ga.Aggrs[0].Distinct = true
+		ga.Aggrs[1].Distinct = true
+
+		ga.Aggrs[0].AggrFunc = c.AGG_MIN
+		ga.Aggrs[1].AggrFunc = c.AGG_MAX
+
+		a2 := &qc.Aggregate{
+			AggrFunc:   c.AGG_COUNTN,
+			EntryKeyId: 7,
+			KeyPos:     2,
+			Distinct:   true,
+		}
+
+		ga.Aggrs = append(ga.Aggrs, a2)
+
+		proj.EntryKeys = append(proj.EntryKeys, int64(7))
+
+		expectedResults := make(tc.GroupAggrScanResponse, 1)
+		expectedResults[0] = []interface{}{"2020", int64(4), int64(-20), "str", int64(2)}
+
+		_, scanResults, err := secondaryindex.Scan3(index1, bucketName, indexScanAddress, getDistinctFilter(), false, false, proj, 0, defaultlimit, ga, c.SessionConsistency, nil)
+		FailTestIfError(err, "Error in scan", t)
+		err = tv.ValidateGroupAggrResult(expectedResults, scanResults)
+		FailTestIfError(err, "Error in scan result validation", t)
+	}
+}
+
+func TestGroupAggrDistinct2(t *testing.T) {
+	log.Printf("In TestGroupAggrDistinct2()")
+
+	var index1 = "index_agg"
+	var bucketName = "default"
+
+	//distinct aggregate on first key without group by
+	{
+		ga, proj := basicGroupAggr()
+
+		ga.Aggrs[0].Distinct = true
+		ga.Aggrs[0].KeyPos = 0
+		ga.Aggrs[0].AggrFunc = c.AGG_COUNTN
+
+		ga.Aggrs[1].Distinct = true
+		ga.Aggrs[1].KeyPos = 0
+
+		ga.Group = nil
+		proj.EntryKeys = proj.EntryKeys[2:]
+
+		expectedResults := make(tc.GroupAggrScanResponse, 1)
+		expectedResults[0] = []interface{}{int64(0), int64(4)}
+
+		_, scanResults, err := secondaryindex.Scan3(index1, bucketName, indexScanAddress, getScanAllNoFilter(), false, false, proj, 0, defaultlimit, ga, c.SessionConsistency, nil)
+		FailTestIfError(err, "Error in scan", t)
+		err = tv.ValidateGroupAggrResult(expectedResults, scanResults)
+		FailTestIfError(err, "Error in scan result validation", t)
+	}
+
+	//distinct aggregate leading group by keys
+	{
+		ga, proj := basicGroupAggr()
+
+		ga.Aggrs[0].Distinct = true
+		ga.Aggrs[0].KeyPos = 0
+		ga.Aggrs[0].AggrFunc = c.AGG_COUNT
+
+		ga.Aggrs[1].Distinct = true
+		ga.Aggrs[1].KeyPos = 1
+		ga.Aggrs[1].AggrFunc = c.AGG_COUNTN
+
+		expectedResults := make(tc.GroupAggrScanResponse, 4)
+		expectedResults[0] = []interface{}{"2017", int64(1), int64(1), int64(1)}
+		expectedResults[1] = []interface{}{"2017", int64(2), int64(1), int64(1)}
+		expectedResults[2] = []interface{}{"2017", int64(3), int64(1), int64(1)}
+		expectedResults[3] = []interface{}{"2017", int64(4), int64(1), int64(1)}
+
+		_, scanResults, err := secondaryindex.Scan3(index1, bucketName, indexScanAddress, getPartialMatchFilter2(), false, false, proj, 0, defaultlimit, ga, c.SessionConsistency, nil)
+		FailTestIfError(err, "Error in scan", t)
+		err = tv.ValidateGroupAggrResult(expectedResults, scanResults)
+		FailTestIfError(err, "Error in scan result validation", t)
+	}
+
+	//mix distinct and non distinct
+	{
+		ga, proj := basicGroupAggr()
+
+		ga.Aggrs[0].KeyPos = 0
+		ga.Aggrs[0].AggrFunc = c.AGG_COUNT
+
+		ga.Aggrs[1].Distinct = true
+		ga.Aggrs[1].KeyPos = 1
+		ga.Aggrs[1].AggrFunc = c.AGG_COUNTN
+
+		expectedResults := make(tc.GroupAggrScanResponse, 4)
+		expectedResults[0] = []interface{}{"2017", int64(1), int64(2), int64(1)}
+		expectedResults[1] = []interface{}{"2017", int64(2), int64(2), int64(1)}
+		expectedResults[2] = []interface{}{"2017", int64(3), int64(2), int64(1)}
+		expectedResults[3] = []interface{}{"2017", int64(4), int64(9), int64(1)}
+
+		_, scanResults, err := secondaryindex.Scan3(index1, bucketName, indexScanAddress, getPartialMatchFilter2(), false, false, proj, 0, defaultlimit, ga, c.SessionConsistency, nil)
+		FailTestIfError(err, "Error in scan", t)
+		err = tv.ValidateGroupAggrResult(expectedResults, scanResults)
+		FailTestIfError(err, "Error in scan result validation", t)
+	}
+
+}
+
+func getDistinctFilter() qc.Scans {
+	scans := make(qc.Scans, 1)
+
+	filter1 := make([]*qc.CompositeElementFilter, 1)
+	filter1[0] = &qc.CompositeElementFilter{Low: "2020", High: "2020", Inclusion: qc.Inclusion(uint32(3))}
 	scans[0] = &qc.Scan{Filter: filter1}
 
 	return scans
