@@ -251,7 +251,9 @@ func (m *IndexManager) Close() {
 		m.repo.Close()
 	}
 
-	close(m.monitorKillch)
+        if m.monitorKillch != nil {
+	        close(m.monitorKillch)
+        }
 
 	m.isClosed = true
 }
