@@ -1079,6 +1079,11 @@ func (r *ScanRequest) unmarshallGroupKeys(protoGroupAggr *protobuf.GroupAggr) er
 				return err
 			}
 			groupKey.Expr = expr
+			if r.GroupAggr.cv == nil {
+				r.GroupAggr.cv = value.NewScopeValue(make(map[string]interface{}), nil)
+				r.GroupAggr.av = value.NewAnnotatedValue(r.GroupAggr.cv)
+				r.GroupAggr.exprContext = expression.NewIndexContext()
+			}
 		}
 
 		r.GroupAggr.Group = append(r.GroupAggr.Group, &groupKey)

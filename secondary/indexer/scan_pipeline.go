@@ -156,9 +156,6 @@ func (s *IndexScanSource) Routine() error {
 		}
 
 		if r.GroupAggr != nil {
-			r.GroupAggr.cv = value.NewScopeValue(make(map[string]interface{}), nil)
-			r.GroupAggr.av = value.NewAnnotatedValue(r.GroupAggr.cv)
-			r.GroupAggr.exprContext = expression.NewIndexContext()
 
 			if ck == nil && len(entry) > cap(*buf) {
 				*buf = make([]byte, 0, len(entry)+1024)
