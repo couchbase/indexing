@@ -307,7 +307,7 @@ func TestGroupAggrLeading_N1QLExprs(t *testing.T) {
 
 func basicGroupAggrN1QLExprs1() (*qc.GroupAggr, *qc.IndexProjection) {
 
-	g1 := &qc.GroupKey{EntryKeyId: 3, KeyPos: -1, Expr: "\"Year \" || cover ((`default`.`Year`))"}
+	g1 := &qc.GroupKey{EntryKeyId: 3, KeyPos: -1, Expr: "\"Year\" || cover ((`default`.`Year`))"}
 	g2 := &qc.GroupKey{EntryKeyId: 4, KeyPos: -1, Expr: "cover ((`default`.`Month`))"}
 
 	groups := []*qc.GroupKey{g1, g2}
@@ -346,7 +346,9 @@ func basicGroupAggrN1QLExprs2() (*qc.GroupAggr, *qc.IndexProjection) {
 		Expr: "cover ((`default`.`Sale`))"}
 
 	a2 := &qc.Aggregate{AggrFunc: c.AGG_COUNT, EntryKeyId: 5, KeyPos: 2, Expr: ""}
-	aggregates := []*qc.Aggregate{a1, a2}
+
+	a3 := &qc.Aggregate{AggrFunc: c.AGG_SUM, EntryKeyId: 6, KeyPos: -1, Expr: "10 + 5"} // Const Expr
+	aggregates := []*qc.Aggregate{a1, a2, a3}
 
 	ga := &qc.GroupAggr{
 		Name:               "testGrpAggr2",
@@ -361,7 +363,7 @@ func basicGroupAggrN1QLExprs2() (*qc.GroupAggr, *qc.IndexProjection) {
 	}
 
 	proj := &qc.IndexProjection{
-		EntryKeys: []int64{3, 4, 5},
+		EntryKeys: []int64{3, 4, 5, 6},
 	}
 
 	return ga, proj

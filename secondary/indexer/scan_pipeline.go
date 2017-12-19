@@ -687,9 +687,15 @@ func computeGroupKey(groupAggr *GroupAggr, gk *GroupKey, compositekeys [][]byte,
 			projectId: gk.EntryKeyId,
 		}
 	} else {
-		scalar, err := evaluateN1QLExpresssion(groupAggr, gk.Expr, compositekeys, docid)
-		if err != nil {
-			return nil, err
+		var scalar value.Value
+		if gk.ExprValue != nil {
+			scalar = gk.ExprValue // It is a constant expression
+		} else {
+			var err error
+			scalar, err = evaluateN1QLExpresssion(groupAggr, gk.Expr, compositekeys, docid)
+			if err != nil {
+				return nil, err
+			}
 		}
 
 		// TODO: MB-27049 - Encoding not needed here
@@ -727,9 +733,15 @@ func computeAggrVal(groupAggr *GroupAggr, ak *Aggregate,
 
 	} else {
 		//process expr
-		scalar, err := evaluateN1QLExpresssion(groupAggr, ak.Expr, compositekeys, docid)
-		if err != nil {
-			return nil, err
+		var scalar value.Value
+		if ak.ExprValue != nil {
+			scalar = ak.ExprValue // It is a constant expression
+		} else {
+			var err error
+			scalar, err = evaluateN1QLExpresssion(groupAggr, ak.Expr, compositekeys, docid)
+			if err != nil {
+				return nil, err
+			}
 		}
 		a = &aggrVal{fn: c.NewAggrFunc(ak.AggrFunc, scalar),
 			projectId: ak.EntryKeyId,
