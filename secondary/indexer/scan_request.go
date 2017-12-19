@@ -1113,6 +1113,11 @@ func (r *ScanRequest) unmarshallAggrs(protoGroupAggr *protobuf.GroupAggr) error 
 				return err
 			}
 			aggr.Expr = expr
+			if r.GroupAggr.cv == nil {
+				r.GroupAggr.cv = value.NewScopeValue(make(map[string]interface{}), nil)
+				r.GroupAggr.av = value.NewAnnotatedValue(r.GroupAggr.cv)
+				r.GroupAggr.exprContext = expression.NewIndexContext()
+			}
 		}
 
 		r.GroupAggr.Aggrs = append(r.GroupAggr.Aggrs, &aggr)
