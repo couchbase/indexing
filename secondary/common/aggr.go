@@ -336,13 +336,11 @@ func (a *AggrFuncMin) AddDelta(delta interface{}) {
 	case []byte:
 
 		if !a.validVal {
-			//TODO optimize the allocation
 			a.val = append([]byte(nil), v...)
 			a.validVal = true
 			return
 		} else {
 			if bytes.Compare(a.val.([]byte), v) > 0 {
-				//TODO optimize the allocation
 				a.val = append(a.val.([]byte)[:0], v...)
 			}
 		}
@@ -400,12 +398,10 @@ func (a *AggrFuncMax) AddDelta(delta interface{}) {
 	case []byte:
 
 		if !a.validVal {
-			//TODO optimize the allocation
 			a.val = append([]byte(nil), v...)
 			a.validVal = true
 			return
 		} else {
-			//TODO optimize the allocation
 			if bytes.Compare(a.val.([]byte), v) < 0 {
 				a.val = append(a.val.([]byte)[:0], v...)
 			}
