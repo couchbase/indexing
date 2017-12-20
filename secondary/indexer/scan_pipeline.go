@@ -252,12 +252,11 @@ func (s *IndexScanSource) Routine() error {
 		return err1
 	}
 
-	//TODO add to config
 	if r.GroupAggr != nil {
 		if r.GroupAggr.IsLeadingGroup {
 			s.p.aggrRes.SetMaxRows(1)
 		} else {
-			s.p.aggrRes.SetMaxRows(5)
+			s.p.aggrRes.SetMaxRows(s.p.config["scan.partial_group_buffer_size"].Int())
 		}
 	}
 
