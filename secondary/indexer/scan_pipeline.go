@@ -703,7 +703,7 @@ func computeGroupKey(groupAggr *GroupAggr, gk *GroupKey, compositekeys [][]byte,
 			var err error
 			scalar, err = evaluateN1QLExpresssion(groupAggr, gk.Expr, compositekeys, docid)
 			if err != nil {
-				return nil, err
+				return err
 			}
 		}
 
@@ -744,7 +744,7 @@ func computeAggrVal(groupAggr *GroupAggr, ak *Aggregate,
 			var err error
 			scalar, err = evaluateN1QLExpresssion(groupAggr, ak.Expr, compositekeys, docid)
 			if err != nil {
-				return nil, err
+				return err
 			}
 		}
 		a.raw = scalar
