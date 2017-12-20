@@ -112,6 +112,8 @@ func makeGroupAggDocs() tc.KeyValues {
 	docs["doc41"] = Aggdoc{Year: "2020", Month: 4, Sale: 0}
 	docs["doc42"] = Aggdoc{Year: "2020", Month: 4, Sale: -20}
 	docs["doc43"] = Aggdoc{Year: "2020", Month: 4, Sale: "str"}
+	docs["doc44"] = Aggdoc{Year: "2020", Month: 5}
+	docs["doc45"] = Aggdoc2{Year: "2020", Month: 5}
 
 	return docs
 
@@ -628,8 +630,9 @@ func TestGroupAggrDistinct(t *testing.T) {
 		ga.Aggrs[0].Distinct = true
 		ga.Aggrs[1].Distinct = true
 
-		expectedResults := make(tc.GroupAggrScanResponse, 1)
+		expectedResults := make(tc.GroupAggrScanResponse, 2)
 		expectedResults[0] = []interface{}{"2020", int64(4), int64(-20), int64(3)}
+		expectedResults[1] = []interface{}{"2020", int64(5), nil, int64(0)}
 
 		_, scanResults, err := secondaryindex.Scan3(index1, bucketName, indexScanAddress, getDistinctFilter(), false, false, proj, 0, defaultlimit, ga, c.SessionConsistency, nil)
 		FailTestIfError(err, "Error in scan", t)
@@ -658,8 +661,9 @@ func TestGroupAggrDistinct(t *testing.T) {
 
 		proj.EntryKeys = append(proj.EntryKeys, int64(7))
 
-		expectedResults := make(tc.GroupAggrScanResponse, 1)
+		expectedResults := make(tc.GroupAggrScanResponse, 2)
 		expectedResults[0] = []interface{}{"2020", int64(4), int64(-20), "str", int64(2)}
+		expectedResults[1] = []interface{}{"2020", int64(5), nil, nil, int64(0)}
 
 		_, scanResults, err := secondaryindex.Scan3(index1, bucketName, indexScanAddress, getDistinctFilter(), false, false, proj, 0, defaultlimit, ga, c.SessionConsistency, nil)
 		FailTestIfError(err, "Error in scan", t)
@@ -754,4 +758,52 @@ func getDistinctFilter() qc.Scans {
 	scans[0] = &qc.Scan{Filter: filter1}
 
 	return scans
+}
+
+func TestGroupAggrNull(t *testing.T) {
+	log.Printf("In TestGroupAggrNull()")
+
+	var index1 = "index_agg"
+	var bucketName = "default"
+
+	//sum/count
+	{
+		ga, proj := basicGroupAggr()
+
+		expectedResults := make(tc.GroupAggrScanResponse, 2)
+		expectedResults[0] = []interface{}{"2020", int64(4), int64(-40), int64(6)}
+		expectedResults[1] = []interface{}{"2020", int64(5), nil, int64(0)}
+
+		_, scanResults, err := secondaryindex.Scan3(index1, bucketName, indexScanAddress, getDistinctFilter(), false, false, proj, 0, defaultlimit, ga, c.SessionConsistency, nil)
+		FailTestIfError(err, "Error in scan", t)
+		err = tv.ValidateGroupAggrResult(expectedResults, scanResults)
+		FailTestIfError(err, "Error in scan result validation", t)
+	}
+
+	//min/max/countn
+	{
+		ga, proj := basicGroupAggr()
+
+		ga.Aggrs[0].AggrFunc = c.AGG_MIN
+		ga.Aggrs[1].AggrFunc = c.AGG_MAX
+
+		a2 := &qc.Aggregate{
+			AggrFunc:   c.AGG_COUNTN,
+			EntryKeyId: 7,
+			KeyPos:     2,
+		}
+
+		ga.Aggrs = append(ga.Aggrs, a2)
+
+		proj.EntryKeys = append(proj.EntryKeys, int64(7))
+
+		expectedResults := make(tc.GroupAggrScanResponse, 2)
+		expectedResults[0] = []interface{}{"2020", int64(4), int64(-20), "str", int64(5)}
+		expectedResults[1] = []interface{}{"2020", int64(5), nil, nil, int64(0)}
+
+		_, scanResults, err := secondaryindex.Scan3(index1, bucketName, indexScanAddress, getDistinctFilter(), false, false, proj, 0, defaultlimit, ga, c.SessionConsistency, nil)
+		FailTestIfError(err, "Error in scan", t)
+		err = tv.ValidateGroupAggrResult(expectedResults, scanResults)
+		FailTestIfError(err, "Error in scan result validation", t)
+	}
 }
