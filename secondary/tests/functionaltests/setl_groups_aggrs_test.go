@@ -241,7 +241,7 @@ func TestGroupAggrNoGroup(t *testing.T) {
 	proj.EntryKeys = proj.EntryKeys[2:]
 
 	expectedResults := make(tc.GroupAggrScanResponse, 1)
-	expectedResults[0] = []interface{}{625.5, int64(41)}
+	expectedResults[0] = []interface{}{515.5, int64(41)}
 
 	_, scanResults, err := secondaryindex.Scan3(index1, bucketName, indexScanAddress, getScanAllNoFilter(), false, false, proj, 0, defaultlimit, ga, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
