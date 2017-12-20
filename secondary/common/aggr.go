@@ -52,6 +52,10 @@ type AggrFunc interface {
 	Distinct() bool
 }
 
+var (
+	encodedNull = []byte{2, 0}
+)
+
 func NewAggrFunc(typ AggrFuncType, val interface{}, distinct bool) AggrFunc {
 
 	var agg AggrFunc
@@ -80,6 +84,7 @@ func NewAggrFunc(typ AggrFuncType, val interface{}, distinct bool) AggrFunc {
 type AggrFuncSum struct {
 	typ      AggrFuncType
 	val      float64
+	validVal bool
 	distinct bool
 	lastVal  float64
 }
@@ -89,6 +94,9 @@ func (a AggrFuncSum) Type() AggrFuncType {
 }
 
 func (a AggrFuncSum) Value() interface{} {
+	if !a.validVal {
+		return nil
+	}
 	return a.val
 }
 
@@ -111,6 +119,7 @@ func (a *AggrFuncSum) AddDelta(delta interface{}) {
 	switch v := actual.(type) {
 
 	case float64:
+		a.validVal = true
 		if a.distinct {
 			if !a.checkDistinct(v) {
 				return
@@ -119,6 +128,7 @@ func (a *AggrFuncSum) AddDelta(delta interface{}) {
 		a.val += v
 
 	case int64:
+		a.validVal = true
 		if a.distinct {
 			if !a.checkDistinct(float64(v)) {
 				return
@@ -317,6 +327,9 @@ func (a AggrFuncMin) Type() AggrFuncType {
 }
 
 func (a AggrFuncMin) Value() interface{} {
+	if !a.validVal {
+		return encodedNull
+	}
 	return a.val
 }
 
@@ -379,6 +392,9 @@ func (a AggrFuncMax) Type() AggrFuncType {
 }
 
 func (a AggrFuncMax) Value() interface{} {
+	if !a.validVal {
+		return encodedNull
+	}
 	return a.val
 }
 
