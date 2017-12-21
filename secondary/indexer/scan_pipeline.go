@@ -759,16 +759,16 @@ func computeAggrVal(groupAggr *GroupAggr, ak *Aggregate,
 func evaluateN1QLExpresssion(groupAggr *GroupAggr, expr expression.Expression,
 	compositekeys [][]byte, docid []byte) (value.Value, error) {
 
-	for i, ik := range groupAggr.DependsOnIndexKeys {
+	for _, ik := range groupAggr.DependsOnIndexKeys {
 		if int(ik) == len(compositekeys) {
-			groupAggr.av.SetCover(groupAggr.IndexKeyNames[i], value.NewValue(string(docid)))
+			groupAggr.av.SetCover(groupAggr.IndexKeyNames[ik], value.NewValue(string(docid)))
 		} else {
 			buf := make([]byte, len(compositekeys[ik])*3+collatejson.MinBufferSize) // TODO: MB-27049 avoid garbage
 			actualVal, err := decodeValue(compositekeys[ik], buf)
 			if err != nil {
 				return nil, err
 			}
-			groupAggr.av.SetCover(groupAggr.IndexKeyNames[i], value.NewValue(actualVal))
+			groupAggr.av.SetCover(groupAggr.IndexKeyNames[ik], value.NewValue(actualVal))
 		}
 	}
 	scalar, _, err := expr.EvaluateForIndex(groupAggr.av, groupAggr.exprContext) // TODO: Ignore vector for now
