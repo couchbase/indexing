@@ -584,7 +584,6 @@ func TestGroupAggrMultDataTypes(t *testing.T) {
 	err = tv.ValidateGroupAggrResult(expectedResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
 
-	secondaryindex.UseClient = tmpclient
 }
 
 func getPartialMatchFilter() qc.Scans {
@@ -806,4 +805,5 @@ func TestGroupAggrNull(t *testing.T) {
 		err = tv.ValidateGroupAggrResult(expectedResults, scanResults)
 		FailTestIfError(err, "Error in scan result validation", t)
 	}
+	secondaryindex.UseClient = tmpclient
 }
