@@ -508,6 +508,11 @@ func (gsi *gsiKeyspace) Refresh() errors.Error {
 	return nil
 }
 
+func (gsi *gsiKeyspace) MetadataVersion() uint64 {
+
+	return atomic.LoadUint64(&gsi.version)
+}
+
 func (gsi *gsiKeyspace) SetLogLevel(level qlog.Level) {
 	switch level {
 	case qlog.NONE:

@@ -168,6 +168,7 @@ type GroupKey struct {
 	EntryKeyId int32                 // Id that can be used in IndexProjection
 	KeyPos     int32                 // >=0 means use expr at index key position otherwise use Expr
 	Expr       expression.Expression // group expression
+	ExprValue  value.Value           // Is non-nil if expression is constant
 }
 
 type Aggregate struct {
@@ -175,6 +176,7 @@ type Aggregate struct {
 	EntryKeyId int32                 // Id that can be used in IndexProjection
 	KeyPos     int32                 // >=0 means use expr at index key position otherwise use Expr
 	Expr       expression.Expression // Aggregate expression
+	ExprValue  value.Value           // Is non-nil if expression is constant
 	Distinct   bool                  // Aggregate only on Distinct values with in the group
 }
 
@@ -191,6 +193,8 @@ type GroupAggr struct {
 	cv          *value.ScopeValue
 	av          value.AnnotatedValue
 	exprContext expression.Context
+	aggrs       []*aggrVal
+	groups      []*groupKey
 }
 
 var (
@@ -1079,6 +1083,12 @@ func (r *ScanRequest) unmarshallGroupKeys(protoGroupAggr *protobuf.GroupAggr) er
 				return err
 			}
 			groupKey.Expr = expr
+			groupKey.ExprValue = expr.Value() // value will be nil if it is not constant expr
+			if r.GroupAggr.cv == nil {
+				r.GroupAggr.cv = value.NewScopeValue(make(map[string]interface{}), nil)
+				r.GroupAggr.av = value.NewAnnotatedValue(r.GroupAggr.cv)
+				r.GroupAggr.exprContext = expression.NewIndexContext()
+			}
 		}
 
 		r.GroupAggr.Group = append(r.GroupAggr.Group, &groupKey)
@@ -1108,6 +1118,12 @@ func (r *ScanRequest) unmarshallAggrs(protoGroupAggr *protobuf.GroupAggr) error 
 				return err
 			}
 			aggr.Expr = expr
+			aggr.ExprValue = expr.Value() // value will be nil if it is not constant expr
+			if r.GroupAggr.cv == nil {
+				r.GroupAggr.cv = value.NewScopeValue(make(map[string]interface{}), nil)
+				r.GroupAggr.av = value.NewAnnotatedValue(r.GroupAggr.cv)
+				r.GroupAggr.exprContext = expression.NewIndexContext()
+			}
 		}
 
 		r.GroupAggr.Aggrs = append(r.GroupAggr.Aggrs, &aggr)
