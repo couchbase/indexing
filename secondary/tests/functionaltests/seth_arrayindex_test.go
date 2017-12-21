@@ -194,7 +194,6 @@ func TestArrayIndexCornerCases(t *testing.T) {
 	secondaryindex.UseClient = "gsi"
 
 	bucketName, field_name, field_tags := "default", "arr_name", "arr_tags"
-	missing := "~[]{}falsenilNA~"
 	indexName1, indexName2, indexName3 := "arr_single", "arr_leading", "arr_nonleading"
 	indexExpressions := [][]string{}
 	indexExpressions = append(indexExpressions, []string{"ALL arr_tags"}, []string{"ALL arr_tags", "arr_name"}, []string{"arr_name", "ALL arr_tags"})
@@ -206,13 +205,13 @@ func TestArrayIndexCornerCases(t *testing.T) {
 	createSpecialArrayDoc(EMPTY, key, field_name, field_tags, bucketName)
 	scanAllAndValidate(indexName1, bucketName, key, nil, t)
 	scanAllAndValidate(indexName2, bucketName, key, nil, t)
-	scanAllAndValidate(indexName3, bucketName, key, []interface{}{docs[key].(map[string]interface{})[field_name], missing}, t)
+	scanAllAndValidate(indexName3, bucketName, key, []interface{}{docs[key].(map[string]interface{})[field_name], tc.MissingLiteral}, t)
 
 	log.Printf("\n\n--------ScanAll for MISSING array--------")
 	createSpecialArrayDoc(MISSING, key, field_name, field_tags, bucketName)
 	scanAllAndValidate(indexName1, bucketName, key, nil, t)
 	scanAllAndValidate(indexName2, bucketName, key, nil, t)
-	scanAllAndValidate(indexName3, bucketName, key, []interface{}{docs[key].(map[string]interface{})[field_name], missing}, t)
+	scanAllAndValidate(indexName3, bucketName, key, []interface{}{docs[key].(map[string]interface{})[field_name], tc.MissingLiteral}, t)
 
 	log.Printf("\n\n--------ScanAll for NULL array--------")
 	createSpecialArrayDoc(NULL, key, field_name, field_tags, bucketName)
