@@ -167,6 +167,11 @@ func (s *IndexScanSource) Routine() error {
 			return nil
 		}
 
+		if !r.isPrimary {
+			e := secondaryIndexEntry(entry)
+			count = e.Count()
+		}
+
 		if r.GroupAggr != nil {
 
 			if ck == nil && len(entry) > cap(*buf) {
@@ -181,11 +186,12 @@ func (s *IndexScanSource) Routine() error {
 				}
 			}
 
-			err = computeGroupAggr(ck, docid, entry, (*buf)[:0], s.p.aggrRes, r.GroupAggr)
+			err = computeGroupAggr(ck, count, docid, entry, (*buf)[:0], s.p.aggrRes, r.GroupAggr)
 			if err != nil {
 				return err
 			}
 			l.Debugf("ScanPipeline::computeGroupAggr %v", s.p.aggrRes)
+			count = 1 //reset count; count is used for aggregates computation
 		}
 
 		if !r.isPrimary && r.Indexprojection != nil && r.Indexprojection.projectSecKeys {
@@ -210,16 +216,6 @@ func (s *IndexScanSource) Routine() error {
 			if len(previousRow) != 0 && distinctCompare(entry, previousRow) {
 				return nil // Ignore the entry as it is same as previous entry
 			}
-		}
-
-		if !r.isPrimary {
-			e := secondaryIndexEntry(entry)
-			count = e.Count()
-		}
-
-		if r.GroupAggr != nil {
-			//TODO fix this for array index support
-			count = 1
 		}
 
 		for i := 0; i < count; i++ {
@@ -622,6 +618,7 @@ type aggrVal struct {
 	typ       c.AggrFuncType
 	projectId int32
 	distinct  bool
+	count     int
 }
 
 type aggrRow struct {
@@ -656,7 +653,7 @@ func (a aggrResult) String() string {
 	return res
 }
 
-func computeGroupAggr(compositekeys [][]byte, docid []byte, key,
+func computeGroupAggr(compositekeys [][]byte, count int, docid, key,
 	buf []byte, aggrRes *aggrResult, groupAggr *GroupAggr) error {
 
 	var err error
@@ -676,7 +673,7 @@ func computeGroupAggr(compositekeys [][]byte, docid []byte, key,
 	}
 
 	for i, ak := range groupAggr.Aggrs {
-		err := computeAggrVal(groupAggr, ak, compositekeys, docid, buf, i)
+		err := computeAggrVal(groupAggr, ak, compositekeys, docid, count, buf, i)
 		if err != nil {
 			return err
 		}
@@ -720,7 +717,7 @@ func computeGroupKey(groupAggr *GroupAggr, gk *GroupKey, compositekeys [][]byte,
 }
 
 func computeAggrVal(groupAggr *GroupAggr, ak *Aggregate,
-	compositekeys [][]byte, docid []byte, buf []byte, pos int) error {
+	compositekeys [][]byte, docid []byte, count int, buf []byte, pos int) error {
 
 	a := groupAggr.aggrs[pos]
 	if ak.KeyPos >= 0 {
@@ -752,6 +749,7 @@ func computeAggrVal(groupAggr *GroupAggr, ak *Aggregate,
 	a.typ = ak.AggrFunc
 	a.projectId = ak.EntryKeyId
 	a.distinct = ak.Distinct
+	a.count = count
 	return nil
 
 }
@@ -849,6 +847,12 @@ func (ar *aggrRow) AddAggregate(aggrs []*aggrVal) error {
 				projectId: agg.projectId}
 		} else {
 			ar.aggrs[i].fn.AddDelta(agg.raw)
+		}
+		if agg.count > 1 && (agg.typ == c.AGG_SUM || agg.typ == c.AGG_COUNT ||
+			agg.typ == c.AGG_COUNTN) {
+			for j := 1; j <= agg.count-1; j++ {
+				ar.aggrs[i].fn.AddDelta(agg.raw)
+			}
 		}
 	}
 	return nil
