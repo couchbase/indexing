@@ -218,11 +218,10 @@ func (b *cbqClient) GetScanports() (queryports []string) {
 // GetScanport implement BridgeAccessor{} interface.
 func (b *cbqClient) GetScanport(
 	defnID uint64,
-	retry int,
-	excludes map[uint64]bool) (queryport []string, targetDefnID uint64, targetIndstID uint64, rollbackTime []int64,
+	excludes map[common.PartitionId]map[uint64]bool) (queryport []string, targetDefnID uint64, targetIndstID []uint64, rollbackTime []int64,
 	partition [][]common.PartitionId, numPartition uint32, ok bool) {
 
-	return []string{b.queryport}, defnID, 0, []int64{math.MaxInt64}, nil, 0, true
+	return []string{b.queryport}, defnID, nil, []int64{math.MaxInt64}, nil, 0, true
 }
 
 // GetIndexDefn implements BridgeAccessor{} interface.
@@ -231,7 +230,7 @@ func (b *cbqClient) GetIndexDefn(defnID uint64) *common.IndexDefn {
 }
 
 // Timeit implement BridgeAccessor{} interface.
-func (b *cbqClient) Timeit(defnID uint64, value float64) {
+func (b *cbqClient) Timeit(defnID uint64, partitionId common.PartitionId, value float64) {
 	// TODO: do nothing ?
 }
 
@@ -243,6 +242,11 @@ func (b *cbqClient) IndexState(defnID uint64) (common.IndexState, error) {
 // IsPrimary implement BridgeAccessor{} interface.
 func (b *cbqClient) IsPrimary(defnID uint64) bool {
 	return false
+}
+
+// NumReplica implement BridgeAccessor{} interface.
+func (b *cbqClient) NumReplica(defnID uint64) int {
+	return 0
 }
 
 // Close implement BridgeAccessor

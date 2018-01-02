@@ -9,6 +9,7 @@
 package indexer
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -934,7 +935,11 @@ func (s *scanCoordinator) findIndexInstance(
 	hasIndex := false
 	isPartition := false
 	ctx := make([]IndexReaderContext, len(partitionIds))
+	missing := make(map[common.IndexInstId][]common.PartitionId)
 	for _, inst := range s.indexInstMap {
+		if inst.State != common.INDEX_STATE_ACTIVE || (inst.RState != common.REBAL_ACTIVE && inst.RState != common.REBAL_PENDING) {
+			continue
+		}
 		if inst.Defn.DefnId == common.IndexDefnId(defnID) {
 			hasIndex = true
 			isPartition = common.IsPartitioned(inst.Defn.PartitionScheme)
@@ -945,7 +950,7 @@ func (s *scanCoordinator) findIndexInstance(
 						ctx[i] = partition.Sc.GetSliceById(0).GetReaderContext()
 					} else {
 						found = false
-						break
+						missing[inst.InstId] = append(missing[inst.InstId], partnId)
 					}
 				}
 
@@ -958,6 +963,9 @@ func (s *scanCoordinator) findIndexInstance(
 
 	if hasIndex {
 		if isPartition {
+			if content, err := json.Marshal(&missing); err == nil {
+				return nil, nil, fmt.Errorf("%v:%v", ErrNotMyPartition, string(content))
+			}
 			return nil, nil, ErrNotMyPartition
 		} else {
 			return nil, nil, ErrNotMyIndex

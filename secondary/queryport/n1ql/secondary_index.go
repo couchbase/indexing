@@ -1027,7 +1027,22 @@ func (si *secondaryIndex3) Aggregates() ([]datastore.IndexGroupAggregates, error
 }
 
 func (si *secondaryIndex3) PartitionKeys() (*datastore.IndexPartition, errors.Error) {
-	return nil, errors.NewError(fmt.Errorf("PartitionKeys not implemented"), "")
+
+	if len(si.partnExpr) == 0 {
+		return nil, nil
+	}
+
+	keys := make([]expression.Expression, len(si.partnExpr))
+	for i, key := range si.partnExpr {
+		keys[i] = key
+	}
+
+	keyPartition := &datastore.IndexPartition{
+		Strategy: datastore.HASH_PARTITION,
+		Exprs:    expression.Expressions(keys),
+	}
+
+	return keyPartition, nil
 }
 
 // Scan3 implement Index3 interface.
@@ -1159,8 +1174,8 @@ func makeRequestBroker(
 
 	broker := qclient.NewRequestBroker(requestId, int64(size))
 
-	factory := func(id qclient.ResponseHandlerId) qclient.ResponseHandler {
-		return makeResponsehandler(id, requestId, si, client, conn, broker, config, waitGroup, backfillSync)
+	factory := func(id qclient.ResponseHandlerId, instId uint64, partitions []c.PartitionId) qclient.ResponseHandler {
+		return makeResponsehandler(id, requestId, si, client, conn, broker, config, waitGroup, backfillSync, instId, partitions)
 	}
 
 	sender := func(pkey []byte, value []value.Value, skey c.SecondaryKey) bool {
@@ -1182,7 +1197,9 @@ func makeResponsehandler(
 	broker *qclient.RequestBroker,
 	config c.Config,
 	waitGroup *sync.WaitGroup,
-	backfillSync *int64) qclient.ResponseHandler {
+	backfillSync *int64,
+	instId uint64,
+	partitions []c.PartitionId) qclient.ResponseHandler {
 
 	entryChannel := conn.EntryChannel()
 
@@ -1259,7 +1276,7 @@ func makeResponsehandler(
 				fmsg := "%q backfill exceeded limit %v, %v"
 				err := fmt.Errorf(fmsg, requestId, backfillLimit, cummsize)
 				conn.Error(n1qlError(client, err))
-				broker.Error(err)
+				broker.Error(err, instId, partitions)
 				return
 			}
 
@@ -1268,7 +1285,7 @@ func makeResponsehandler(
 				fmsg := "%v %q decoding from backfill %v: %v\n"
 				l.Errorf(fmsg, lprefix, requestId, name, err)
 				conn.Error(n1qlError(client, err))
-				broker.Error(err)
+				broker.Error(err, instId, partitions)
 				return
 			}
 			pkeys := make([][]byte, 0)
@@ -1276,7 +1293,7 @@ func makeResponsehandler(
 				fmsg := "%v %q decoding from backfill %v: %v\n"
 				l.Errorf(fmsg, lprefix, requestId, name, err)
 				conn.Error(n1qlError(client, err))
-				broker.Error(err)
+				broker.Error(err, instId, partitions)
 				return
 			}
 			l.Tracef("%v backfill read %v entries\n", lprefix, len(skeys))
@@ -1323,13 +1340,13 @@ func makeResponsehandler(
 		err := data.Error()
 		if err != nil {
 			conn.Error(n1qlError(client, err))
-			broker.Error(err)
+			broker.Error(err, instId, partitions)
 			return false
 		}
 		skeys, pkeys, err := data.GetEntries()
 		if err != nil {
 			conn.Error(n1qlError(client, err))
-			broker.Error(err)
+			broker.Error(err, instId, partitions)
 			return false
 		}
 
@@ -1363,7 +1380,7 @@ func makeResponsehandler(
 				l.Errorf(fmsg, lprefix, requestId, name, err)
 				tmpfile = nil
 				conn.Error(n1qlError(client, err))
-				broker.Error(err)
+				broker.Error(err, instId, partitions)
 				return false
 
 			} else {
@@ -1376,7 +1393,7 @@ func makeResponsehandler(
 					fmsg := "%v %v reading backfill file %v: %v\n"
 					l.Errorf(fmsg, lprefix, requestId, name, err)
 					conn.Error(n1qlError(client, err))
-					broker.Error(err)
+					broker.Error(err, instId, partitions)
 					return false
 				}
 				// decoder
@@ -1393,7 +1410,7 @@ func makeResponsehandler(
 				fmsg := "%q backfill exceeded limit %v, %v"
 				err := fmt.Errorf(fmsg, requestId, backfillLimit, cummsize)
 				conn.Error(n1qlError(client, err))
-				broker.Error(err)
+				broker.Error(err, instId, partitions)
 				return false
 			}
 
@@ -1403,12 +1420,12 @@ func makeResponsehandler(
 			}
 			if err := enc.Encode(skeys); err != nil {
 				conn.Error(n1qlError(client, err))
-				broker.Error(err)
+				broker.Error(err, instId, partitions)
 				return false
 			}
 			if err := enc.Encode(pkeys); err != nil {
 				conn.Error(n1qlError(client, err))
-				broker.Error(err)
+				broker.Error(err, instId, partitions)
 				return false
 			}
 			atomic.AddInt64(&backfillEntries, 1)

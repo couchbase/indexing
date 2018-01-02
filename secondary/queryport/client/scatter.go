@@ -18,13 +18,24 @@ import (
 	"github.com/couchbase/query/value"
 	"math"
 	"reflect"
+	"strings"
 	//"runtime"
+	"encoding/json"
 	"github.com/couchbase/query/expression"
 	"github.com/couchbase/query/expression/parser"
 	qvalue "github.com/couchbase/query/value"
 	"sort"
+	"sync"
 	"sync/atomic"
-	"unsafe"
+	"time"
+)
+
+//--------------------------
+// constant
+//--------------------------
+
+var (
+	NotMyPartition = "Not my partition"
 )
 
 //--------------------------
@@ -37,6 +48,7 @@ type RequestBroker struct {
 	count   CountRequestHandler
 	factory ResponseHandlerFactory
 	sender  ResponseSender
+	timer   ResponseTimer
 
 	// initialization
 	requestId string
@@ -48,8 +60,9 @@ type RequestBroker struct {
 	closed   int32
 	killch   chan bool
 	bGather  bool
-	err      unsafe.Pointer
+	errMap   map[common.PartitionId]map[uint64]error
 	partial  int32
+	mutex    sync.Mutex
 
 	// scan
 	defn           *common.IndexDefn
@@ -98,6 +111,7 @@ func NewRequestBroker(requestId string, size int64) *RequestBroker {
 		pushdownSorted: true,
 		limit:          math.MaxInt64,
 		pushdownLimit:  math.MaxInt64,
+		errMap:         make(map[common.PartitionId]map[uint64]error),
 	}
 }
 
@@ -131,6 +145,14 @@ func (b *RequestBroker) SetCountRequestHandler(handler CountRequestHandler) {
 func (b *RequestBroker) SetResponseSender(sender ResponseSender) {
 
 	b.sender = sender
+}
+
+//
+// Set ResponseTimer
+//
+func (b *RequestBroker) SetResponseTimer(timer ResponseTimer) {
+
+	b.timer = timer
 }
 
 //
@@ -227,11 +249,35 @@ func (b *RequestBroker) SetIndexOrder(indexOrder *IndexKeyOrder) {
 //
 // Close the broker on error
 //
-func (b *RequestBroker) Error(err error) {
+func (b *RequestBroker) Error(err error, instId uint64, partitions []common.PartitionId) {
 
-	if b.GetError() == nil {
-		atomic.StorePointer(&b.err, unsafe.Pointer(&err))
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
+
+	skip := partitions
+	if strings.HasPrefix(err.Error(), NotMyPartition) {
+		if offset := strings.Index(err.Error(), ":"); offset != -1 {
+			content := err.Error()[offset+1:]
+			missing := make(map[common.IndexInstId][]common.PartitionId)
+			if err1 := json.Unmarshal([]byte(content), &missing); err1 == nil {
+				if _, ok := missing[common.IndexInstId(instId)]; ok {
+					skip = missing[common.IndexInstId(instId)]
+					logging.Warnf("scan err : NotMyPartition instId %v partition %v", instId, skip)
+				}
+			} else {
+				logging.Errorf("fail to unmarshall NotMyPartition error.  Err:%v", err)
+			}
+		}
 	}
+
+	for _, partition := range skip {
+		if _, ok := b.errMap[partition]; !ok {
+			b.errMap[partition] = make(map[uint64]error)
+		}
+		logging.Debugf("request broker: scan error instId %v partition %v error %v", instId, partition, err)
+		b.errMap[partition][instId] = err
+	}
+
 	b.close()
 }
 
@@ -317,12 +363,23 @@ func (c *RequestBroker) SendCount() int64 {
 	return atomic.LoadInt64(&c.sendCount)
 }
 
-func (c *RequestBroker) GetError() error {
-	if ptr := atomic.LoadPointer(&c.err); ptr != nil {
-		e := (*error)(ptr)
-		return *e
+func (c *RequestBroker) GetError() map[common.PartitionId]map[uint64]error {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	if len(c.errMap) == 0 {
+		return nil
 	}
-	return nil
+
+	result := make(map[common.PartitionId]map[uint64]error)
+	for partnId, instErrMap := range c.errMap {
+		result[partnId] = make(map[uint64]error)
+		for instId, err := range instErrMap {
+			result[partnId][instId] = err
+		}
+	}
+
+	return result
 }
 
 func (c *RequestBroker) IsPartial() bool {
@@ -346,7 +403,7 @@ func (b *RequestBroker) reset() {
 	b.closed = 0
 	b.killch = nil
 	b.bGather = false
-	b.err = nil
+	b.errMap = make(map[common.PartitionId]map[uint64]error)
 	b.partial = 0 // false
 
 	// stats
@@ -369,8 +426,8 @@ func (b *RequestBroker) reset() {
 //
 // Scatter requests over multiple connections
 //
-func (c *RequestBroker) scatter(client []*GsiScanClient, index *common.IndexDefn, rollback []int64,
-	partition [][]common.PartitionId, numPartition uint32, settings *ClientSettings) (count int64, err error, partial bool) {
+func (c *RequestBroker) scatter(client []*GsiScanClient, index *common.IndexDefn, targetInstId []uint64, rollback []int64,
+	partition [][]common.PartitionId, numPartition uint32, settings *ClientSettings) (count int64, err map[common.PartitionId]map[uint64]error, partial bool) {
 
 	defer func() {
 		logging.Debugf("scatter: requestId %v items recieved %v items processed %v", c.requestId, c.ReceiveCount(), c.SendCount())
@@ -401,19 +458,37 @@ func (c *RequestBroker) scatter(client []*GsiScanClient, index *common.IndexDefn
 	}
 
 	if c.scan != nil {
-		err, partial = c.scatterScan2(client, index, rollback, partition, numPartition, settings)
+		err, partial = c.scatterScan2(client, index, targetInstId, rollback, partition, numPartition, settings)
 		return 0, err, partial
 	} else if c.count != nil {
-		return c.scatterCount(client, index, rollback, partition, numPartition)
+		return c.scatterCount(client, index, targetInstId, rollback, partition, numPartition)
 	}
 
-	return 0, fmt.Errorf("Intenral error: Fail to process request for index %v:%v.  Unknown request handler.", index.Bucket, index.Name), false
+	e := fmt.Errorf("Intenral error: Fail to process request for index %v:%v.  Unknown request handler.", index.Bucket, index.Name)
+	return 0, c.makeErrorMap(targetInstId, partition, e), false
+}
+
+func (c *RequestBroker) makeErrorMap(targetInstIds []uint64, partitions [][]common.PartitionId, err error) map[common.PartitionId]map[uint64]error {
+
+	errMap := make(map[common.PartitionId]map[uint64]error)
+
+	for i, partnList := range partitions {
+		for _, partition := range partnList {
+
+			if _, ok := errMap[partition]; !ok {
+				errMap[partition] = make(map[uint64]error)
+			}
+			errMap[partition][targetInstIds[i]] = err
+		}
+	}
+
+	return errMap
 }
 
 //
 // Scatter scan requests over multiple connections
 //
-func (c *RequestBroker) scatterScan(client []*GsiScanClient, index *common.IndexDefn, rollback []int64, partition [][]common.PartitionId,
+func (c *RequestBroker) scatterScan(client []*GsiScanClient, index *common.IndexDefn, targetInstId []uint64, rollback []int64, partition [][]common.PartitionId,
 	numPartition uint32, settings *ClientSettings) (err error, partial bool) {
 
 	c.notifych = make(chan bool, 1)
@@ -441,7 +516,7 @@ func (c *RequestBroker) scatterScan(client []*GsiScanClient, index *common.Index
 	donech_scatter := make([]chan *doneStatus, len(client))
 	for i, _ := range client {
 		donech_scatter[i] = make(chan *doneStatus, 1)
-		go c.scanSingleNode(ResponseHandlerId(i), client[i], index, rollback[i], partition[i], numPartition, donech_scatter[i])
+		go c.scanSingleNode(ResponseHandlerId(i), client[i], index, targetInstId[i], rollback[i], partition[i], numPartition, donech_scatter[i])
 	}
 
 	for i, _ := range client {
@@ -459,8 +534,8 @@ func (c *RequestBroker) scatterScan(client []*GsiScanClient, index *common.Index
 	return
 }
 
-func (c *RequestBroker) scatterScan2(client []*GsiScanClient, index *common.IndexDefn, rollback []int64, partition [][]common.PartitionId,
-	numPartition uint32, settings *ClientSettings) (err error, partial bool) {
+func (c *RequestBroker) scatterScan2(client []*GsiScanClient, index *common.IndexDefn, targetInstId []uint64, rollback []int64,
+	partition [][]common.PartitionId, numPartition uint32, settings *ClientSettings) (errMap map[common.PartitionId]map[uint64]error, partial bool) {
 
 	c.notifych = make(chan bool, 1)
 	c.killch = make(chan bool, 1)
@@ -481,7 +556,7 @@ func (c *RequestBroker) scatterScan2(client []*GsiScanClient, index *common.Inde
 	donech_scatter := make([]chan *doneStatus, len(client))
 	for i, _ := range client {
 		donech_scatter[i] = make(chan *doneStatus, 1)
-		go c.scanSingleNode(ResponseHandlerId(i), client[i], index, rollback[i], partition[i], numPartition, donech_scatter[i])
+		go c.scanSingleNode(ResponseHandlerId(i), client[i], index, targetInstId[i], rollback[i], partition[i], numPartition, donech_scatter[i])
 	}
 
 	if c.useGather() {
@@ -495,18 +570,18 @@ func (c *RequestBroker) scatterScan2(client []*GsiScanClient, index *common.Inde
 			c.forward(donech_gather)
 		}
 
-		err = c.GetError()
+		errMap = c.GetError()
 	}
 
 	// Wait for all scatter routine is done
 	// If we are using gatherer, then do not wait unless there is an error.
-	if !c.useGather() || err != nil {
+	if !c.useGather() || len(errMap) != 0 {
 		for i, _ := range client {
 			<-donech_scatter[i]
 		}
 	}
 
-	err = c.GetError()
+	errMap = c.GetError()
 	partial = c.IsPartial()
 
 	return
@@ -515,23 +590,21 @@ func (c *RequestBroker) scatterScan2(client []*GsiScanClient, index *common.Inde
 //
 // Scatter count requests over multiple connections
 //
-func (c *RequestBroker) scatterCount(client []*GsiScanClient, index *common.IndexDefn, rollback []int64,
-	partition [][]common.PartitionId, numPartition uint32) (count int64, err error, partial bool) {
+func (c *RequestBroker) scatterCount(client []*GsiScanClient, index *common.IndexDefn, targetInstId []uint64, rollback []int64,
+	partition [][]common.PartitionId, numPartition uint32) (count int64, err map[common.PartitionId]map[uint64]error, partial bool) {
 
 	donech := make([]chan *doneStatus, len(client))
 	for i, _ := range client {
 		donech[i] = make(chan *doneStatus, 1)
-		go c.countSingleNode(ResponseHandlerId(i), client[i], index, rollback[i], partition[i], numPartition, donech[i], &count)
+		go c.countSingleNode(ResponseHandlerId(i), client[i], index, targetInstId[i], rollback[i], partition[i], numPartition, donech[i], &count)
 	}
 
 	for i, _ := range client {
 		status := <-donech[i]
 		partial = partial || status.partial
-		if status.err != nil {
-			err = errors.New(fmt.Sprintf("%v %v", err, status.err))
-		}
 	}
 
+	err = c.GetError()
 	return
 }
 
@@ -744,8 +817,30 @@ func (c *RequestBroker) forward(donech chan bool) {
 
 	size := len(c.queues)
 	rows := make([]Row, size)
+	sorted := make([]int, size)
 
 	defer close(donech)
+
+	// initial sort (only the first row from each indexer)
+	// This is just to make sure that we have recieve at
+	// least one row before streaming response back.
+	isSorted := false
+	for !isSorted {
+		if c.isClose() {
+			return
+		}
+
+		isSorted = c.sort(rows, sorted)
+
+		if !isSorted {
+			select {
+			case <-c.notifych:
+				continue
+			case <-c.killch:
+				return
+			}
+		}
+	}
 
 	var curOffset int64 = 0
 	var curLimit int64 = 0
@@ -855,8 +950,8 @@ func (c *RequestBroker) comparePrimaryKey(k1 []byte, k2 []byte) int {
 //
 // This function makes a scan request through a single connection.
 //
-func (c *RequestBroker) scanSingleNode(id ResponseHandlerId, client *GsiScanClient, index *common.IndexDefn, rollback int64,
-	partition []common.PartitionId, numPartition uint32, donech chan *doneStatus) {
+func (c *RequestBroker) scanSingleNode(id ResponseHandlerId, client *GsiScanClient, index *common.IndexDefn, instId uint64,
+	rollback int64, partition []common.PartitionId, numPartition uint32, donech chan *doneStatus) {
 
 	if len(partition) == 0 {
 		if c.useGather() {
@@ -868,12 +963,23 @@ func (c *RequestBroker) scanSingleNode(id ResponseHandlerId, client *GsiScanClie
 		return
 	}
 
-	err, partial := c.scan(client, index, rollback, partition, c.factory(id))
+	begin := time.Now()
+	err, partial := c.scan(client, index, rollback, partition, c.factory(id, instId, partition))
 	if err != nil {
 		// If there is any error, then stop the broker.
 		// This will force other go-routine to terminate.
+
 		c.Partial(partial)
-		c.Error(err)
+		c.Error(err, instId, partition)
+
+	} else {
+		// update timer if there is no error
+		elapsed := float64(time.Since(begin))
+		if c.timer != nil {
+			for _, partitionId := range partition {
+				c.timer(instId, partitionId, elapsed)
+			}
+		}
 	}
 
 	donech <- &doneStatus{err: err, partial: partial}
@@ -882,7 +988,7 @@ func (c *RequestBroker) scanSingleNode(id ResponseHandlerId, client *GsiScanClie
 //
 // This function makes a count request through a single connection.
 //
-func (c *RequestBroker) countSingleNode(id ResponseHandlerId, client *GsiScanClient, index *common.IndexDefn, rollback int64,
+func (c *RequestBroker) countSingleNode(id ResponseHandlerId, client *GsiScanClient, index *common.IndexDefn, instId uint64, rollback int64,
 	partition []common.PartitionId, numPartition uint32, donech chan *doneStatus, count *int64) {
 
 	if len(partition) == 0 {
@@ -895,7 +1001,7 @@ func (c *RequestBroker) countSingleNode(id ResponseHandlerId, client *GsiScanCli
 		// If there is any error, then stop the broker.
 		// This will force other go-routine to terminate.
 		c.Partial(partial)
-		c.Error(err)
+		c.Error(err, instId, partition)
 	}
 
 	if err == nil && !partial {
@@ -984,8 +1090,8 @@ func makeDefaultRequestBroker(cb ResponseHandler) *RequestBroker {
 
 	broker := NewRequestBroker("", 256)
 
-	factory := func(id ResponseHandlerId) ResponseHandler {
-		return makeDefaultResponseHandler(id, broker)
+	factory := func(id ResponseHandlerId, instId uint64, partitions []common.PartitionId) ResponseHandler {
+		return makeDefaultResponseHandler(id, broker, instId, partitions)
 	}
 
 	sender := func(pkey []byte, mskey []value.Value, uskey common.SecondaryKey) bool {
@@ -1005,19 +1111,19 @@ func makeDefaultRequestBroker(cb ResponseHandler) *RequestBroker {
 	return broker
 }
 
-func makeDefaultResponseHandler(id ResponseHandlerId, broker *RequestBroker) ResponseHandler {
+func makeDefaultResponseHandler(id ResponseHandlerId, broker *RequestBroker, instId uint64, partitions []common.PartitionId) ResponseHandler {
 
 	handler := func(resp ResponseReader) bool {
 		err := resp.Error()
 		if err != nil {
 			logging.Errorf("defaultResponseHandler: %v", err)
-			broker.Error(err)
+			broker.Error(err, instId, partitions)
 			return false
 		}
 		skeys, pkeys, err := resp.GetEntries()
 		if err != nil {
 			logging.Errorf("defaultResponseHandler: %v", err)
-			broker.Error(err)
+			broker.Error(err, instId, partitions)
 			return false
 		}
 		if len(pkeys) != 0 || len(skeys) != 0 {
