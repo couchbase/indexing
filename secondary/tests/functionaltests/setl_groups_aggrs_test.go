@@ -906,7 +906,6 @@ func TestGroupAggr1(t *testing.T) {
 	}
 	executeGroupAggrTest(ga, proj, n1qlEquivalent, index, t)
 
-	secondaryindex.UseClient = tmpclient
 }
 
 func TestGroupAggrArrayIndex(t *testing.T) {
@@ -1166,6 +1165,8 @@ func TestGroupAggrArrayIndex(t *testing.T) {
 		EntryKeys: []int64{7},
 	}
 	executeGroupAggrTest(ga, proj, n1qlEquivalent, i2, t)
+
+	secondaryindex.UseClient = tmpclient
 }
 
 func executeGroupAggrTest(ga *qc.GroupAggr, proj *qc.IndexProjection,
