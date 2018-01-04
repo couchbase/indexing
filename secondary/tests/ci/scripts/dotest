@@ -157,7 +157,7 @@ done
 test "$ok_run" || error_exit "Server startup failed even after 3 tries"
 test "$ok_connect" || error_exit "Server connect failed even after 3 tries"
 warmed="`date`"
-sleep 30
+sleep 120
 
 
 
