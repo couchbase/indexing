@@ -51,6 +51,8 @@ func init() {
 	indexManagementAddress = clusterconfig.KVAddress
 	indexScanAddress = clusterconfig.KVAddress
 
+	tc.LogPerformanceStat = true
+
 	if perftool == n1qperf {
 		usen1qlperf = true
 	} else {

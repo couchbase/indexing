@@ -15,6 +15,8 @@ import (
 	"time"
 )
 
+var LogPerformanceStat = false
+
 // ToDo: Point out the exact difference between two responses
 func PrintScanResults(results ScanResponse, resultType string) {
 	log.Printf("Count of %v is %d\n", resultType, len(results))
@@ -172,7 +174,9 @@ func KillProjector() {
 }
 
 func LogPerfStat(apiName string, elapsed time.Duration) {
-	log.Printf("PERFSTAT %v %.4f seconds\n", apiName, elapsed.Seconds())
+	if LogPerformanceStat {
+		log.Printf("PERFSTAT %v %.4f seconds\n", apiName, elapsed.Seconds())
+	}
 }
 
 func ExecuteN1QLStatement(clusterAddr, username, password, bucketName,
