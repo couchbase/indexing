@@ -15,7 +15,7 @@ import "github.com/couchbase/query/parser/n1ql"
 import "github.com/couchbase/query/expression"
 import "github.com/couchbase/cbauth"
 
-type restServer struct {
+type testServer struct {
 	cluster string
 	client  *qclient.GsiClient
 	config  c.Config
@@ -23,8 +23,8 @@ type restServer struct {
 
 const UnboundedLiteral = "~[]{}UnboundedTruenilNA~"
 
-func NewRestServer(cluster string) (*restServer, Message) {
-	log.Infof("%v starting RESTful services", cluster)
+func NewTestServer(cluster string) (*testServer, Message) {
+	log.Infof("%v starting internal RESTful services", cluster)
 
 	// get the singleton-client
 	config, err := c.GetSettingsConfig(c.SystemConfig)
@@ -34,29 +34,29 @@ func NewRestServer(cluster string) (*restServer, Message) {
 	qconf := config.SectionConfig("queryport.client.", true /*trim*/)
 
 	client, _ := qclient.NewGsiClient(cluster, qconf)
-	restapi := &restServer{cluster: cluster, client: client, config: qconf}
+	testapi := &testServer{cluster: cluster, client: client, config: qconf}
 
 	if err != nil {
-		return restapi, &MsgError{
+		return testapi, &MsgError{
 			err: Error{
 				category: INDEXER,
 				cause:    err,
 				severity: FATAL,
 			}}
 	}
-	restapi.config = config
+	testapi.config = config
 
-	http.HandleFunc("/api/indexes", restapi.handleIndexes)
-	http.HandleFunc("/api/index/", restapi.handleIndex)
-	return restapi, nil
+	http.HandleFunc("/internal/indexes", testapi.handleIndexes)
+	http.HandleFunc("/internal/index/", testapi.handleIndex)
+	return testapi, nil
 }
 
-func (api *restServer) writeError(w http.ResponseWriter, err error) {
+func (api *testServer) writeError(w http.ResponseWriter, err error) {
 	w.WriteHeader(http.StatusBadRequest)
 	w.Write([]byte(err.Error() + "\n"))
 }
 
-func (api *restServer) validateAuth(w http.ResponseWriter, r *http.Request) (cbauth.Creds, bool) {
+func (api *testServer) validateAuth(w http.ResponseWriter, r *http.Request) (cbauth.Creds, bool) {
 	creds, valid, err := c.IsAuthValid(r)
 	if err != nil {
 		api.writeError(w, err)
@@ -67,7 +67,7 @@ func (api *restServer) validateAuth(w http.ResponseWriter, r *http.Request) (cba
 	return creds, valid
 }
 
-func (api *restServer) authorize(w http.ResponseWriter, creds cbauth.Creds) bool {
+func (api *testServer) authorize(w http.ResponseWriter, creds cbauth.Creds) bool {
 
 	indexes, _, _, err := api.client.Refresh()
 	if err != nil {
@@ -124,10 +124,10 @@ func (api *restServer) authorize(w http.ResponseWriter, creds cbauth.Creds) bool
 	return c.IsAllAllowed(creds, permissions, w)
 }
 
-// GET  /api/indexes
-// POST /api/indexes?create=true
-// PUT  /api/indexes?build=true
-func (api *restServer) handleIndexes(
+// GET  /internal/indexes
+// POST /internal/indexes?create=true
+// PUT  /internal/indexes?build=true
+func (api *testServer) handleIndexes(
 	w http.ResponseWriter, request *http.Request) {
 
 	creds, ok := api.validateAuth(w, request)
@@ -164,14 +164,14 @@ func (api *restServer) handleIndexes(
 	}
 }
 
-//PUT    /api/index/{id}?build=true
-//DELETE /api/index/{id}
-//GET    /api/index/{id}
-//GET    /api/index/{id}?lookup=true
-//GET    /api/index/{id}?range=true
-//GET    /api/index/{id}?scanall=true
-//GET    /api/index/{id}?count=true
-func (api *restServer) handleIndex(
+//PUT    /internal/index/{id}?build=true
+//DELETE /internal/index/{id}
+//GET    /internal/index/{id}
+//GET    /internal/index/{id}?lookup=true
+//GET    /internal/index/{id}?range=true
+//GET    /internal/index/{id}?scanall=true
+//GET    /internal/index/{id}?count=true
+func (api *testServer) handleIndex(
 	w http.ResponseWriter, request *http.Request) {
 
 	creds, ok := api.validateAuth(w, request)
@@ -251,8 +251,8 @@ func (api *restServer) handleIndex(
 	}
 }
 
-// POST /api/indexes?create=true
-func (api *restServer) doCreate(w http.ResponseWriter, request *http.Request) {
+// POST /internal/indexes?create=true
+func (api *testServer) doCreate(w http.ResponseWriter, request *http.Request) {
 
 	var params map[string]interface{}
 
@@ -391,8 +391,8 @@ func (api *restServer) doCreate(w http.ResponseWriter, request *http.Request) {
 	fmt.Fprintf(w, data)
 }
 
-// PUT  /api/indexes?build=true
-func (api *restServer) doBuildMany(
+// PUT  /internal/indexes?build=true
+func (api *testServer) doBuildMany(
 	w http.ResponseWriter, request *http.Request) {
 
 	var params []interface{}
@@ -426,8 +426,8 @@ func (api *restServer) doBuildMany(
 	w.WriteHeader(http.StatusAccepted)
 }
 
-//PUT    /api/index/{id}?build=true
-func (api *restServer) doBuildOne(w http.ResponseWriter, request *http.Request) {
+//PUT    /internal/index/{id}?build=true
+func (api *testServer) doBuildOne(w http.ResponseWriter, request *http.Request) {
 	defnId, err := urlPath2IndexId(request.URL.Path)
 	if err != nil {
 		msg := `invalid index id, ParseUint failed %v`
@@ -447,8 +447,8 @@ func (api *restServer) doBuildOne(w http.ResponseWriter, request *http.Request) 
 	w.WriteHeader(http.StatusAccepted)
 }
 
-//GET    /api/index/{id}
-func (api *restServer) doGetAll(w http.ResponseWriter, request *http.Request) {
+//GET    /internal/index/{id}
+func (api *testServer) doGetAll(w http.ResponseWriter, request *http.Request) {
 	indexes, _, _, err := api.client.Refresh()
 	if err != nil {
 		msg := `cannot refresh metadata: %v`
@@ -487,8 +487,8 @@ func (api *restServer) doGetAll(w http.ResponseWriter, request *http.Request) {
 	w.Write(data)
 }
 
-//DELETE /api/index/{id}
-func (api *restServer) doDrop(w http.ResponseWriter, request *http.Request) {
+//DELETE /internal/index/{id}
+func (api *testServer) doDrop(w http.ResponseWriter, request *http.Request) {
 	defnId, err := urlPath2IndexId(request.URL.Path)
 	if err != nil {
 		msg := `invalid index id, ParseUint failed %v`
@@ -508,8 +508,8 @@ func (api *restServer) doDrop(w http.ResponseWriter, request *http.Request) {
 	w.WriteHeader(http.StatusAccepted)
 }
 
-//GET    /api/index/{id}
-func (api *restServer) doGet(w http.ResponseWriter, request *http.Request) {
+//GET    /internal/index/{id}
+func (api *testServer) doGet(w http.ResponseWriter, request *http.Request) {
 	index, errmsg := api.getIndex(request.URL.Path)
 	if errmsg != "" && strings.Contains(errmsg, "not found") {
 		http.Error(w, errmsg, http.StatusNotFound)
@@ -545,8 +545,8 @@ func (api *restServer) doGet(w http.ResponseWriter, request *http.Request) {
 	w.Write(data)
 }
 
-//GET    /api/index/{id}?lookup=true
-func (api *restServer) doLookup(w http.ResponseWriter, request *http.Request) {
+//GET    /internal/index/{id}?lookup=true
+func (api *testServer) doLookup(w http.ResponseWriter, request *http.Request) {
 	index, errmsg := api.getIndex(request.URL.Path)
 	if errmsg != "" && strings.Contains(errmsg, "not found") {
 		http.Error(w, errmsg, http.StatusNotFound)
@@ -665,8 +665,8 @@ func (api *restServer) doLookup(w http.ResponseWriter, request *http.Request) {
 	}
 }
 
-//GET    /api/index/{id}?range=true
-func (api *restServer) doRange(w http.ResponseWriter, request *http.Request) {
+//GET    /internal/index/{id}?range=true
+func (api *testServer) doRange(w http.ResponseWriter, request *http.Request) {
 	index, errmsg := api.getIndex(request.URL.Path)
 	if errmsg != "" && strings.Contains(errmsg, "not found") {
 		http.Error(w, errmsg, http.StatusNotFound)
@@ -818,8 +818,8 @@ func (api *restServer) doRange(w http.ResponseWriter, request *http.Request) {
 	}
 }
 
-//GET    /api/index/{id}?multiscan=true
-func (api *restServer) doMultiScan(w http.ResponseWriter, request *http.Request) {
+//GET    /internal/index/{id}?multiscan=true
+func (api *testServer) doMultiScan(w http.ResponseWriter, request *http.Request) {
 	index, errmsg := api.getIndex(request.URL.Path)
 	if errmsg != "" && strings.Contains(errmsg, "not found") {
 		http.Error(w, errmsg, http.StatusNotFound)
@@ -977,8 +977,8 @@ func (api *restServer) doMultiScan(w http.ResponseWriter, request *http.Request)
 	}
 }
 
-//GET    /api/index/{id}?multiscancount=true
-func (api *restServer) doMultiScanCount(w http.ResponseWriter, request *http.Request) {
+//GET    /internal/index/{id}?multiscancount=true
+func (api *testServer) doMultiScanCount(w http.ResponseWriter, request *http.Request) {
 	index, errmsg := api.getIndex(request.URL.Path)
 	if errmsg != "" && strings.Contains(errmsg, "not found") {
 		http.Error(w, errmsg, http.StatusNotFound)
@@ -1071,8 +1071,8 @@ func (api *restServer) doMultiScanCount(w http.ResponseWriter, request *http.Req
 	w.Write(data)
 }
 
-//GET    /api/index/{id}?scanall=true
-func (api *restServer) doScanall(w http.ResponseWriter, request *http.Request) {
+//GET    /internal/index/{id}?scanall=true
+func (api *testServer) doScanall(w http.ResponseWriter, request *http.Request) {
 	index, errmsg := api.getIndex(request.URL.Path)
 	if errmsg != "" && strings.Contains(errmsg, "not found") {
 		http.Error(w, errmsg, http.StatusNotFound)
@@ -1167,8 +1167,8 @@ func (api *restServer) doScanall(w http.ResponseWriter, request *http.Request) {
 	}
 }
 
-//GET    /api/index/{id}?count=true
-func (api *restServer) doCount(w http.ResponseWriter, request *http.Request) {
+//GET    /internal/index/{id}?count=true
+func (api *testServer) doCount(w http.ResponseWriter, request *http.Request) {
 	index, errmsg := api.getIndex(request.URL.Path)
 	if errmsg != "" && strings.Contains(errmsg, "not found") {
 		http.Error(w, errmsg, http.StatusNotFound)
@@ -1266,7 +1266,7 @@ func (api *restServer) doCount(w http.ResponseWriter, request *http.Request) {
 	w.Write(data)
 }
 
-func (api *restServer) getIndex(path string) (*mclient.IndexMetadata, string) {
+func (api *testServer) getIndex(path string) (*mclient.IndexMetadata, string) {
 	var index *mclient.IndexMetadata
 	defnId, err := urlPath2IndexId(path)
 	if err != nil {
@@ -1292,11 +1292,11 @@ func (api *restServer) getIndex(path string) (*mclient.IndexMetadata, string) {
 	return nil, `"index not found"`
 }
 
-func (api *restServer) makeError(err error) string {
+func (api *testServer) makeError(err error) string {
 	return fmt.Sprintf(`{"error":"%v"}`, err)
 }
 
-func (api *restServer) makeEntries(
+func (api *testServer) makeEntries(
 	skeys []c.SecondaryKey, pkeys [][]byte) (string, error) {
 
 	entries := []string{}

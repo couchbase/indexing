@@ -102,7 +102,7 @@ func main() {
 }
 
 func getall() map[string]interface{} {
-	url := "http://localhost:9108/api/indexes"
+	url := "http://localhost:9108/internal/indexes"
 
 	fmt.Println("GET all indexes")
 	resp, err := http.Get(url)
@@ -123,7 +123,7 @@ func getall() map[string]interface{} {
 }
 
 func drop(ids []string) {
-	furl := "http://localhost:9108/api/index/%v"
+	furl := "http://localhost:9108/internal/index/%v"
 
 	for _, id := range ids {
 		fmt.Printf("DROP index: %v\n", id)
@@ -145,7 +145,7 @@ func drop(ids []string) {
 }
 
 func badcreates() {
-	url := "http://localhost:9108/api/indexes?create=true"
+	url := "http://localhost:9108/internal/indexes?create=true"
 
 	post := func(dst map[string]interface{}) {
 		var str string
@@ -207,7 +207,7 @@ func create_andbuild() []string {
 	ids := make([]string, 0)
 
 	post := func(dst map[string]interface{}) string {
-		url := "http://localhost:9108/api/indexes?create=true"
+		url := "http://localhost:9108/internal/indexes?create=true"
 		data, _ := json.Marshal(dst)
 		resp, err := http.Post(url, "application/json", bytes.NewBuffer(data))
 		if err != nil {
@@ -249,7 +249,7 @@ func create_andbuild() []string {
 
 	// execute defer build.
 	fmt.Println("BUILD single deferred index")
-	url := fmt.Sprintf("http://localhost:9108/api/index/%v?build=true", ids[1])
+	url := fmt.Sprintf("http://localhost:9108/internal/index/%v?build=true", ids[1])
 	req, err := http.NewRequest("PUT", url, nil)
 	if err != nil {
 		log.Fatal(err)
@@ -263,7 +263,7 @@ func create_andbuild() []string {
 	time.Sleep(4 * time.Second)
 
 	fmt.Println("BUILD many deferred index")
-	url = "http://localhost:9108/api/indexes?build=true"
+	url = "http://localhost:9108/internal/indexes?build=true"
 	data, _ := json.Marshal([]string{ids[2], ids[3]})
 	req, err = http.NewRequest("PUT", url, bytes.NewBuffer(data))
 	if err != nil {
@@ -280,7 +280,7 @@ func create_andbuild() []string {
 
 func lookup(ids []string) {
 	getl := func(id string, reqbody map[string]interface{}) []interface{} {
-		url := fmt.Sprintf("http://localhost:9108/api/index/%v?lookup=true", id)
+		url := fmt.Sprintf("http://localhost:9108/internal/index/%v?lookup=true", id)
 		data, _ := json.Marshal(reqbody)
 		req, err := http.NewRequest("GET", url, bytes.NewBuffer(data))
 		if err != nil {
@@ -345,7 +345,7 @@ func lookup(ids []string) {
 
 func rangescan(ids []string) {
 	getl := func(id string, reqbody map[string]interface{}) []interface{} {
-		url := fmt.Sprintf("http://localhost:9108/api/index/%v?range=true", id)
+		url := fmt.Sprintf("http://localhost:9108/internal/index/%v?range=true", id)
 		data, _ := json.Marshal(reqbody)
 		req, err := http.NewRequest("GET", url, bytes.NewBuffer(data))
 		if err != nil {
@@ -423,7 +423,7 @@ func rangescan(ids []string) {
 
 func fulltablescan(ids []string) {
 	getl := func(id string, reqbody map[string]interface{}) []interface{} {
-		url := fmt.Sprintf("http://localhost:9108/api/index/%v?scanall=true", id)
+		url := fmt.Sprintf("http://localhost:9108/internal/index/%v?scanall=true", id)
 		data, _ := json.Marshal(reqbody)
 		fmt.Println(string(data))
 		req, err := http.NewRequest("GET", url, bytes.NewBuffer(data))
@@ -474,7 +474,7 @@ func fulltablescan(ids []string) {
 
 func countscan(ids []string) {
 	getl := func(id string, reqbody map[string]interface{}) int {
-		url := fmt.Sprintf("http://localhost:9108/api/index/%v?count=true", id)
+		url := fmt.Sprintf("http://localhost:9108/internal/index/%v?count=true", id)
 		data, _ := json.Marshal(reqbody)
 		req, err := http.NewRequest("GET", url, bytes.NewBuffer(data))
 		if err != nil {
