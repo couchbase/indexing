@@ -22,7 +22,7 @@ func init() {
 	isPrimary = flag.Bool("primary", false, "Is primary index")
 	lockThreads = flag.Bool("lockThreads", false, "Lock worker goroutines to a thread")
 	flag.Parse()
-	logging.SetLogLevel(logging.Info)
+	logging.SetLogLevel(logging.Error)
 }
 
 const keySize = 25

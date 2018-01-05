@@ -111,6 +111,11 @@ func ChangeIndexerSettings(configKey string, configValue interface{}, serverUser
 
 	host, sport, _ := net.SplitHostPort(adminurl)
 	iport, _ := strconv.Atoi(sport)
+
+	if host == "" || iport == 0 {
+		log.Printf("Host %v Port %v Nodes %+v", host, iport, nodes)
+	}
+
 	client := http.Client{}
 	// hack, fix this
 	ihttp := iport + 2

@@ -5,8 +5,6 @@ import "encoding/binary"
 import "github.com/couchbase/indexing/secondary/logging"
 
 func Send(conn transporter, buf []byte, flags TransportFlag, payload []byte, addChksm bool) (err error) {
-	var n int
-
 	// transport framing
 	l := pktLenSize + pktFlagSize
 	if maxLen := len(buf); l > maxLen {
@@ -25,19 +23,29 @@ func Send(conn transporter, buf []byte, flags TransportFlag, payload []byte, add
 
 	a, b = pktFlagOffset, pktFlagOffset+pktFlagSize
 	binary.BigEndian.PutUint16(buf[a:b], uint16(flags))
-	if n, err = conn.Write(buf[:pktDataOffset]); err == nil {
-		if n, err = conn.Write(payload); err == nil && n != len(payload) {
-			logging.Errorf("transport wrote only %v bytes for payload\n", n)
-			err = ErrorPacketWrite
-		}
-		laddr, raddr := conn.LocalAddr(), conn.RemoteAddr()
-		logging.Tracef("wrote %v bytes on connection %v->%v", len(payload), laddr, raddr)
-
-	} else if n != pktDataOffset {
-		logging.Errorf("transport wrote only %v bytes for header\n", n)
-		err = ErrorPacketWrite
+	if err = connWrite(conn, buf[:pktDataOffset]); err != nil {
+		return err
 	}
-	return
+	if err = connWrite(conn, payload); err != nil {
+		return err
+	}
+	laddr, raddr := conn.LocalAddr(), conn.RemoteAddr()
+	logging.Tracef("wrote %v bytes on connection %v->%v", len(payload), laddr, raddr)
+	return nil
+}
+
+func connWrite(conn transporter, buf []byte) error {
+	laddr, raddr := conn.LocalAddr(), conn.RemoteAddr()
+	if n, err := conn.Write(buf); err != nil {
+		logging.Errorf("transport error between %v->%v: %v\n", laddr, raddr, err)
+		return err
+
+	} else if n != len(buf) {
+		err = ErrorPacketWrite
+		logging.Errorf("transport error between %v->%v: %v\n", laddr, raddr, err)
+		return err
+	}
+	return nil
 }
 
 func SendResponseEnd(conn transporter) error {

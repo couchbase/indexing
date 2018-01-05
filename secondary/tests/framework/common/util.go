@@ -3,6 +3,7 @@ package common
 import (
 	"compress/gzip"
 	"encoding/json"
+	"github.com/couchbase/gocb"
 	"io"
 	"io/ioutil"
 	"log"
@@ -13,6 +14,8 @@ import (
 	"strings"
 	"time"
 )
+
+var LogPerformanceStat = false
 
 // ToDo: Point out the exact difference between two responses
 func PrintScanResults(results ScanResponse, resultType string) {
@@ -171,5 +174,41 @@ func KillProjector() {
 }
 
 func LogPerfStat(apiName string, elapsed time.Duration) {
-	log.Printf("PERFSTAT %v %.4f seconds\n", apiName, elapsed.Seconds())
+	if LogPerformanceStat {
+		log.Printf("PERFSTAT %v %.4f seconds\n", apiName, elapsed.Seconds())
+	}
+}
+
+func ExecuteN1QLStatement(clusterAddr, username, password, bucketName,
+	statement string) ([]interface{}, error) {
+
+	clusterAddr = "http://" + clusterAddr
+	cluster, err := gocb.Connect(clusterAddr)
+	if err != nil {
+		return nil, err
+	}
+	err = cluster.Authenticate(gocb.PasswordAuthenticator{
+		Username: username,
+		Password: password,
+	})
+	if err != nil {
+		return nil, err
+	}
+	bucket, err := cluster.OpenBucket(bucketName, "")
+	if err != nil {
+		return nil, err
+	}
+
+	query := gocb.NewN1qlQuery(statement)
+	rows, err := bucket.ExecuteN1qlQuery(query, []interface{}{})
+	if err != nil {
+		return nil, err
+	}
+
+	var row interface{}
+	results := make([]interface{}, 0)
+	for rows.Next(&row) {
+		results = append(results, row)
+	}
+	return results, nil
 }

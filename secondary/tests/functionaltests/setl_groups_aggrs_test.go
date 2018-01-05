@@ -15,8 +15,6 @@ import (
 
 var tmpclient string
 
-const MissingLiteral = "~[]{}falsenilNA~"
-
 func TestGroupAggrSetup(t *testing.T) {
 	log.Printf("In TestGroupAggrSetup()")
 
@@ -40,6 +38,10 @@ func TestGroupAggrSetup(t *testing.T) {
 
 	err := secondaryindex.CreateSecondaryIndex(index, bucket, indexManagementAddress, "", []string{"Year", "Month", "Sale"}, false, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
+
+	n1qlstatement := "create primary index on default"
+	_, err = tc.ExecuteN1QLStatement(kvaddress, clusterconfig.Username, clusterconfig.Password, bucket, n1qlstatement)
+	FailTestIfError(err, "Error in creating primary index", t)
 }
 
 type Aggdoc struct {
@@ -301,24 +303,33 @@ func TestGroupAggrLeading_N1QLExprs(t *testing.T) {
 	var index1 = "index_agg"
 	var bucketName = "default"
 
-	ga, proj := basicGroupAggrN1QLExprs1()
-
+	ga, proj, n1qlEquivalent := basicGroupAggrN1QLExprs1()
 	_, scanResults, err := secondaryindex.Scan3(index1, bucketName, indexScanAddress, getScanAllNoFilter(), false, false, proj, 0, defaultlimit, ga, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
-	tc.PrintGroupAggrResults(scanResults, "scanResults")
+	err = tv.ValidateGroupAggrWithN1QL(kvaddress, clusterconfig.Username,
+		clusterconfig.Password, bucketName, n1qlEquivalent, ga, proj, scanResults)
+	if err == nil {
+		log.Printf("basicGroupAggrN1QLExprs1: Scan validation passed")
+	}
+	FailTestIfError(err, "Error in scan result validation", t)
 
-	ga, proj = basicGroupAggrN1QLExprs2()
-
+	ga, proj, n1qlEquivalent = basicGroupAggrN1QLExprs2()
 	_, scanResults, err = secondaryindex.Scan3(index1, bucketName, indexScanAddress, getScanAllNoFilter(), false, false, proj, 0, defaultlimit, ga, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
-	tc.PrintGroupAggrResults(scanResults, "scanResults")
+	err = tv.ValidateGroupAggrWithN1QL(kvaddress, clusterconfig.Username,
+		clusterconfig.Password, bucketName, n1qlEquivalent, ga, proj, scanResults)
+	if err == nil {
+		log.Printf("basicGroupAggrN1QLExprs2: Scan validation passed")
+	}
+	FailTestIfError(err, "Error in scan result validation", t)
 }
 
-func basicGroupAggrN1QLExprs1() (*qc.GroupAggr, *qc.IndexProjection) {
+func basicGroupAggrN1QLExprs1() (*qc.GroupAggr, *qc.IndexProjection, string) {
 
+	n1qlEquivalent := "SELECT 'Year' || Year as a, Month as b, SUM(Sale * 2) as c, " +
+		"COUNT(Sale) as d from default USE INDEX(`#primary`) GROUP BY 'Year' || Year, Month"
 	g1 := &qc.GroupKey{EntryKeyId: 3, KeyPos: -1, Expr: "\"Year\" || cover ((`default`.`Year`))"}
 	g2 := &qc.GroupKey{EntryKeyId: 4, KeyPos: -1, Expr: "cover ((`default`.`Month`))"}
-
 	groups := []*qc.GroupKey{g1, g2}
 
 	a1 := &qc.Aggregate{AggrFunc: c.AGG_SUM, EntryKeyId: 5, KeyPos: -1,
@@ -343,11 +354,13 @@ func basicGroupAggrN1QLExprs1() (*qc.GroupAggr, *qc.IndexProjection) {
 		EntryKeys: []int64{3, 4, 5, 6},
 	}
 
-	return ga, proj
+	return ga, proj, n1qlEquivalent
 }
 
-func basicGroupAggrN1QLExprs2() (*qc.GroupAggr, *qc.IndexProjection) {
+func basicGroupAggrN1QLExprs2() (*qc.GroupAggr, *qc.IndexProjection, string) {
 
+	n1qlEquivalent := "SELECT SUBSTR(meta().id, 0, 4) as a, SUM(Sale) as b, COUNT(Sale) as c, " +
+		"SUM(10+5) as d from default USE INDEX(`#primary`) GROUP BY SUBSTR(meta().id, 0, 4)"
 	g1 := &qc.GroupKey{EntryKeyId: 3, KeyPos: -1, Expr: "SUBSTR(cover ((meta(`default`).`id`)), 0, 4)"}
 	groups := []*qc.GroupKey{g1}
 
@@ -375,7 +388,7 @@ func basicGroupAggrN1QLExprs2() (*qc.GroupAggr, *qc.IndexProjection) {
 		EntryKeys: []int64{3, 4, 5, 6},
 	}
 
-	return ga, proj
+	return ga, proj, n1qlEquivalent
 }
 
 func getNonOverlappingFilters3() qc.Scans {
@@ -569,7 +582,7 @@ func TestGroupAggrMultDataTypes(t *testing.T) {
 	ga, proj := basicGroupAggr()
 
 	expectedResults := make(tc.GroupAggrScanResponse, 8)
-	expectedResults[0] = []interface{}{"2019", MissingLiteral, int64(15), int64(2)}
+	expectedResults[0] = []interface{}{"2019", tc.MissingLiteral, int64(15), int64(2)}
 	expectedResults[1] = []interface{}{"2019", nil, int64(15), int64(2)}
 	expectedResults[2] = []interface{}{"2019", false, int64(15), int64(2)}
 	expectedResults[3] = []interface{}{"2019", true, int64(15), int64(2)}
@@ -805,5 +818,363 @@ func TestGroupAggrNull(t *testing.T) {
 		err = tv.ValidateGroupAggrResult(expectedResults, scanResults)
 		FailTestIfError(err, "Error in scan result validation", t)
 	}
+}
+
+///////////////////////////////////////////////////////////////////////
+// New Tests with N1QL query based validation and with vaster dataset
+///////////////////////////////////////////////////////////////////////
+func TestGroupAggr1(t *testing.T) {
+	log.Printf("In TestGroupAggr1()")
+
+	var bucket = "default"
+	var index = "idx_aggrs"
+	var arr_field = "friends"
+	err := secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+	FailTestIfError(err, "Error in DropAllSecondaryIndexes", t)
+	kvutility.FlushBucket(bucket, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+
+	kvdocs := generateDocs(1000, "users_simplearray.prod")
+
+	// Modify array docs for better distibution of duplicate array elements
+	fn := func(arr []string, item string, num int) []string {
+		for i := 0; i < num; i++ {
+			arr = append(arr, item)
+		}
+		return arr
+	}
+	for _, v := range kvdocs {
+		document := v.(map[string]interface{})
+		array := document[arr_field].([]interface{})
+		newArray := []string{}
+		for _, item := range array {
+			val := item.(string)
+			newArray = fn(newArray, val, randomNum(1, 5))
+		}
+		document[arr_field] = newArray
+	}
+	kvutility.SetKeyValues(kvdocs, bucket, "", clusterconfig.KVAddress)
+
+	indexExpr := []string{"company", "age", "eyeColor", "`address`.`number`", "age", "`first-name`"}
+
+	stmt := "create primary index on default"
+	_, err = tc.ExecuteN1QLStatement(kvaddress, clusterconfig.Username, clusterconfig.Password, bucket, stmt)
+	FailTestIfError(err, "Error in creating primary index", t)
+
+	err = secondaryindex.CreateSecondaryIndex(index, bucket, indexManagementAddress, "", indexExpr, false, nil, true, defaultIndexActiveTimeout, nil)
+	FailTestIfError(err, "Error in creating the index", t)
+
+	//Scenario 1
+	n1qlEquivalent := "SELECT  company as a, MIN(age) as b FROM default USE INDEX(`#primary`) " +
+		" GROUP BY company"
+	g1 := &qc.GroupKey{EntryKeyId: 6, KeyPos: 0}
+	groups := []*qc.GroupKey{g1}
+
+	a1 := &qc.Aggregate{AggrFunc: c.AGG_MIN, EntryKeyId: 7, KeyPos: 1}
+	aggregates := []*qc.Aggregate{a1}
+
+	ga := &qc.GroupAggr{
+		Name:  "S1",
+		Group: groups,
+		Aggrs: aggregates,
+	}
+	proj := &qc.IndexProjection{
+		EntryKeys: []int64{6, 7},
+	}
+	executeGroupAggrTest(ga, proj, n1qlEquivalent, index, t)
+
+	//Scenario 2
+
+	n1qlEquivalent = "SELECT  MIN(age) as a, MAX(`address`.`number`) as b, " +
+		"COUNT(eyeColor) as c, age as d, eyeColor as e " +
+		"FROM default USE INDEX(`#primary`) GROUP BY age, eyeColor"
+	g1 = &qc.GroupKey{EntryKeyId: 9, KeyPos: 1}
+	g2 := &qc.GroupKey{EntryKeyId: 10, KeyPos: 2}
+	groups = []*qc.GroupKey{g1, g2}
+
+	a1 = &qc.Aggregate{AggrFunc: c.AGG_MIN, EntryKeyId: 6, KeyPos: 1}
+	a2 := &qc.Aggregate{AggrFunc: c.AGG_MAX, EntryKeyId: 7, KeyPos: 3}
+	a3 := &qc.Aggregate{AggrFunc: c.AGG_COUNT, EntryKeyId: 8, KeyPos: 2}
+	aggregates = []*qc.Aggregate{a1, a2, a3}
+
+	ga = &qc.GroupAggr{
+		Name:  "S1",
+		Group: groups,
+		Aggrs: aggregates,
+	}
+	proj = &qc.IndexProjection{
+		EntryKeys: []int64{6, 7, 8, 9, 10},
+	}
+	executeGroupAggrTest(ga, proj, n1qlEquivalent, index, t)
+
+}
+
+func TestGroupAggrArrayIndex(t *testing.T) {
+	log.Printf("In TestGroupAggrArrayIndex()")
+
+	var i1 = "ga_arr1"
+	var i2 = "ga_arr2"
+	var bucket = "default"
+	var err error
+	var n1qlEquivalent string
+
+	err = secondaryindex.CreateSecondaryIndex(i1, bucket, indexManagementAddress, "",
+		[]string{"company", "ALL friends", "age"}, false, nil, true, defaultIndexActiveTimeout, nil)
+	FailTestIfError(err, "Error in creating the index", t)
+
+	err = secondaryindex.CreateSecondaryIndex(i2, bucket, indexManagementAddress, "",
+		[]string{"ALL friends", "company", "age"}, false, nil, true, defaultIndexActiveTimeout, nil)
+
+	// S1: Array aggregate on non-array field, group by non-array field
+	log.Printf("Scenario 1")
+	n1qlEquivalent = "SELECT  company as a, MIN(age) as b FROM default USE INDEX(`#primary`) " +
+		" GROUP BY company"
+	g1 := &qc.GroupKey{EntryKeyId: 6, KeyPos: 0}
+	groups := []*qc.GroupKey{g1}
+
+	a1 := &qc.Aggregate{AggrFunc: c.AGG_MIN, EntryKeyId: 7, KeyPos: 2}
+	aggregates := []*qc.Aggregate{a1}
+
+	ga := &qc.GroupAggr{
+		Name:  "S1",
+		Group: groups,
+		Aggrs: aggregates,
+	}
+	proj := &qc.IndexProjection{
+		EntryKeys: []int64{6, 7},
+	}
+	executeGroupAggrTest(ga, proj, n1qlEquivalent, i1, t)
+
+	// S2: Array aggregate on non-array field, group by array field
+	log.Printf("Scenario 2")
+	n1qlEquivalent = "SELECT x as a, MIN(d.company) as b, MAX(d.age) as c from default d " +
+		" USE INDEX(`#primary`) UNNEST d.friends AS x GROUP BY x"
+	g1 = &qc.GroupKey{EntryKeyId: 6, KeyPos: 1}
+	groups = []*qc.GroupKey{g1}
+
+	a1 = &qc.Aggregate{AggrFunc: c.AGG_MIN, EntryKeyId: 7, KeyPos: 0}
+	a2 := &qc.Aggregate{AggrFunc: c.AGG_MAX, EntryKeyId: 8, KeyPos: 2}
+	aggregates = []*qc.Aggregate{a1, a2}
+
+	ga = &qc.GroupAggr{
+		Name:  "S2",
+		Group: groups,
+		Aggrs: aggregates,
+	}
+	proj = &qc.IndexProjection{
+		EntryKeys: []int64{6, 7, 8},
+	}
+	executeGroupAggrTest(ga, proj, n1qlEquivalent, i1, t)
+
+	// S3: Array aggregate on non-array field, no group by
+	log.Printf("Scenario 3")
+	n1qlEquivalent = "SELECT MIN(d.company) as a, MAX(d.age) as b from default d " +
+		" USE INDEX(`#primary`)"
+
+	a1 = &qc.Aggregate{AggrFunc: c.AGG_MIN, EntryKeyId: 7, KeyPos: 0}
+	a2 = &qc.Aggregate{AggrFunc: c.AGG_MAX, EntryKeyId: 8, KeyPos: 2}
+	aggregates = []*qc.Aggregate{a1, a2}
+
+	ga = &qc.GroupAggr{
+		Name:  "S3",
+		Group: nil,
+		Aggrs: aggregates,
+	}
+
+	proj = &qc.IndexProjection{
+		EntryKeys: []int64{7, 8},
+	}
+	executeGroupAggrTest(ga, proj, n1qlEquivalent, i1, t)
+
+	// S4: Array aggregate on array field, group by non-array field
+	log.Printf("Scenario 4")
+	n1qlEquivalent = "SELECT d.age as a, d.company as b, MIN(x) as c from default d " +
+		"USE INDEX(`#primary`)  UNNEST d.friends AS x  GROUP BY d.age, d.company"
+	g1 = &qc.GroupKey{EntryKeyId: 6, KeyPos: 2}
+	g2 := &qc.GroupKey{EntryKeyId: 7, KeyPos: 0}
+	groups = []*qc.GroupKey{g1, g2}
+
+	a1 = &qc.Aggregate{AggrFunc: c.AGG_MIN, EntryKeyId: 8, KeyPos: 1}
+	aggregates = []*qc.Aggregate{a1}
+
+	ga = &qc.GroupAggr{
+		Name:  "S4",
+		Group: groups,
+		Aggrs: aggregates,
+	}
+	proj = &qc.IndexProjection{
+		EntryKeys: []int64{6, 7, 8},
+	}
+	executeGroupAggrTest(ga, proj, n1qlEquivalent, i1, t)
+
+	// S5: Array aggregate on array field, group by array field
+	log.Printf("Scenario 5")
+	n1qlEquivalent = "SELECT x as a, COUNT(x) as b from default d " +
+		"USE INDEX(`#primary`)  UNNEST d.friends AS x  GROUP BY x"
+	g1 = &qc.GroupKey{EntryKeyId: 6, KeyPos: 1}
+	groups = []*qc.GroupKey{g1}
+
+	a1 = &qc.Aggregate{AggrFunc: c.AGG_COUNT, EntryKeyId: 7, KeyPos: 1}
+	aggregates = []*qc.Aggregate{a1}
+
+	ga = &qc.GroupAggr{
+		Name:  "S5",
+		Group: groups,
+		Aggrs: aggregates,
+	}
+	proj = &qc.IndexProjection{
+		EntryKeys: []int64{6, 7},
+	}
+	executeGroupAggrTest(ga, proj, n1qlEquivalent, i1, t)
+
+	// S6: Array aggregate on array field, no group by
+	log.Printf("Scenario 6")
+	n1qlEquivalent = "SELECT COUNT(x) as a, MIN(x) as b, MAX(x) as c, COUNTN(x) as d, " +
+		" SUM(x) as e from default d USE INDEX(`#primary`)  UNNEST d.friends AS x"
+
+	a1 = &qc.Aggregate{AggrFunc: c.AGG_COUNT, EntryKeyId: 4, KeyPos: 1}
+	a2 = &qc.Aggregate{AggrFunc: c.AGG_MIN, EntryKeyId: 5, KeyPos: 1}
+	a3 := &qc.Aggregate{AggrFunc: c.AGG_MAX, EntryKeyId: 6, KeyPos: 1}
+	a4 := &qc.Aggregate{AggrFunc: c.AGG_COUNTN, EntryKeyId: 7, KeyPos: 1}
+	a5 := &qc.Aggregate{AggrFunc: c.AGG_SUM, EntryKeyId: 8, KeyPos: 1}
+
+	aggregates = []*qc.Aggregate{a1, a2, a3, a4, a5}
+
+	ga = &qc.GroupAggr{
+		Name:  "S6",
+		Group: nil,
+		Aggrs: aggregates,
+	}
+	proj = &qc.IndexProjection{
+		EntryKeys: []int64{4, 5, 6, 7, 8},
+	}
+	executeGroupAggrTest(ga, proj, n1qlEquivalent, i1, t)
+
+	// S7: Distinct aggregate on non-array field, group by non-array field
+	log.Printf("Scenario 7")
+	n1qlEquivalent = "SELECT SUM(DISTINCT d.age) as a, d.company as b, x as c " +
+		"from default d USE INDEX(`#primary`)  UNNEST d.friends AS x GROUP BY d.company, x"
+	g1 = &qc.GroupKey{EntryKeyId: 7, KeyPos: 0}
+	g2 = &qc.GroupKey{EntryKeyId: 8, KeyPos: 1}
+	groups = []*qc.GroupKey{g1, g2}
+
+	a1 = &qc.Aggregate{AggrFunc: c.AGG_SUM, EntryKeyId: 6, KeyPos: 2, Distinct: true}
+	aggregates = []*qc.Aggregate{a1}
+
+	ga = &qc.GroupAggr{
+		Name:  "S7",
+		Group: groups,
+		Aggrs: aggregates,
+	}
+	proj = &qc.IndexProjection{
+		EntryKeys: []int64{6, 7, 8},
+	}
+	executeGroupAggrTest(ga, proj, n1qlEquivalent, i1, t)
+
+	// S8: Distinct aggregate on non-array field, group by array field
+	log.Printf("Scenario 8")
+	n1qlEquivalent = "SELECT x as a, COUNT(DISTINCT d.company) as b from default d " +
+		" USE INDEX(`#primary`)  UNNEST d.friends AS x GROUP BY x"
+	g1 = &qc.GroupKey{EntryKeyId: 6, KeyPos: 0}
+	groups = []*qc.GroupKey{g1}
+
+	a1 = &qc.Aggregate{AggrFunc: c.AGG_COUNT, EntryKeyId: 8, KeyPos: 1, Distinct: true}
+	aggregates = []*qc.Aggregate{a1}
+
+	ga = &qc.GroupAggr{
+		Name:  "S8",
+		Group: groups,
+		Aggrs: aggregates,
+	}
+	proj = &qc.IndexProjection{
+		EntryKeys: []int64{6, 8},
+	}
+	executeGroupAggrTest(ga, proj, n1qlEquivalent, i2, t)
+
+	// S9: Distinct aggregate on non-array field, no group by
+	log.Printf("Scenario 9")
+	n1qlEquivalent = "SELECT COUNT(DISTINCT company) as a from default " +
+		" USE INDEX(`#primary`)"
+
+	a1 = &qc.Aggregate{AggrFunc: c.AGG_COUNT, EntryKeyId: 7, KeyPos: 0, Distinct: true}
+	aggregates = []*qc.Aggregate{a1}
+
+	ga = &qc.GroupAggr{
+		Name:  "S9",
+		Group: nil,
+		Aggrs: aggregates,
+	}
+	proj = &qc.IndexProjection{
+		EntryKeys: []int64{7},
+	}
+	executeGroupAggrTest(ga, proj, n1qlEquivalent, i1, t)
+
+	// S10: Distinct aggregate on array field, group by non-array field
+	log.Printf("Scenario 10")
+	n1qlEquivalent = "SELECT d.company as a, COUNT(DISTINCT x) as b from default d " +
+		"USE INDEX(`#primary`)  UNNEST d.friends AS x GROUP BY d.company"
+	g1 = &qc.GroupKey{EntryKeyId: 6, KeyPos: 0}
+	groups = []*qc.GroupKey{g1}
+
+	a1 = &qc.Aggregate{AggrFunc: c.AGG_COUNT, EntryKeyId: 7, KeyPos: 1, Distinct: true}
+	aggregates = []*qc.Aggregate{a1}
+
+	ga = &qc.GroupAggr{
+		Name:  "S10",
+		Group: groups,
+		Aggrs: aggregates,
+	}
+	proj = &qc.IndexProjection{
+		EntryKeys: []int64{6, 7},
+	}
+	executeGroupAggrTest(ga, proj, n1qlEquivalent, i1, t)
+
+	// S11: Distinct aggregate on array field, group by array field
+	log.Printf("Scenario 11")
+	n1qlEquivalent = "SELECT x as a, COUNT(DISTINCT x) as b from default d " +
+		"USE INDEX(`#primary`)  UNNEST d.friends AS x GROUP BY x"
+	g1 = &qc.GroupKey{EntryKeyId: 6, KeyPos: 0}
+	groups = []*qc.GroupKey{g1}
+
+	a1 = &qc.Aggregate{AggrFunc: c.AGG_COUNT, EntryKeyId: 7, KeyPos: 0, Distinct: true}
+	aggregates = []*qc.Aggregate{a1}
+
+	ga = &qc.GroupAggr{
+		Name:  "S11",
+		Group: groups,
+		Aggrs: aggregates,
+	}
+	proj = &qc.IndexProjection{
+		EntryKeys: []int64{6, 7},
+	}
+	executeGroupAggrTest(ga, proj, n1qlEquivalent, i2, t)
+
+	// S12: Distinct aggregate on array field, no group
+	log.Printf("Scenario 12")
+	n1qlEquivalent = "SELECT COUNT(DISTINCT x) as a from default d " +
+		"USE INDEX(`#primary`)  UNNEST d.friends AS x"
+
+	a1 = &qc.Aggregate{AggrFunc: c.AGG_COUNT, EntryKeyId: 7, KeyPos: 0, Distinct: true}
+	aggregates = []*qc.Aggregate{a1}
+
+	ga = &qc.GroupAggr{
+		Name:  "S12",
+		Group: nil,
+		Aggrs: aggregates,
+	}
+	proj = &qc.IndexProjection{
+		EntryKeys: []int64{7},
+	}
+	executeGroupAggrTest(ga, proj, n1qlEquivalent, i2, t)
+
 	secondaryindex.UseClient = tmpclient
+}
+
+func executeGroupAggrTest(ga *qc.GroupAggr, proj *qc.IndexProjection,
+	n1qlEquivalent, index string, t *testing.T) {
+	var bucket = "default"
+	_, scanResults, err := secondaryindex.Scan3(index, bucket, indexScanAddress, getScanAllNoFilter(), false, false, proj, 0, defaultlimit, ga, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in scan", t)
+	err = tv.ValidateGroupAggrWithN1QL(kvaddress, clusterconfig.Username,
+		clusterconfig.Password, bucket, n1qlEquivalent, ga, proj, scanResults)
+	FailTestIfError(err, "Error in scan result validation", t)
 }

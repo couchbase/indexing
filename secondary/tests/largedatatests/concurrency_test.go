@@ -118,12 +118,8 @@ func RangeScanForDuration_ltr(header string, wg *sync.WaitGroup, seconds float64
 		}
 		low := random_letter()
 		high := random_letter()
-
-		rangeStart := time.Now()
 		_, err := secondaryindex.RangeWithClient(indexName, bucketName, server, []interface{}{low}, []interface{}{high}, 3, false, defaultlimit, c.AnyConsistency, nil, client)
-		rangeElapsed := time.Since(rangeStart)
 		FailTestIfError(err, "RangeScanForDuration Thread:: Error in scan", t)
-		log.Printf("Range Scan of %d user documents took %s\n", len(kvdocs), rangeElapsed)
 		i++
 	}
 }

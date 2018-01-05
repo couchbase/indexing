@@ -55,10 +55,6 @@ func (instance *IndexInst) UpsertEndpoints(
 func (instance *IndexInst) UpsertDeletionEndpoints(
 	m *mc.DcpEvent, partKey, key, oldKey []byte) []string {
 
-	if m.IsJSON() == false {
-		return nil
-	}
-
 	p := instance.GetPartitionObject()
 	if p == nil {
 		return nil
@@ -303,13 +299,13 @@ func (ie *IndexEvaluator) evaluate(
 	m *mc.DcpEvent, docid, doc []byte,
 	meta map[string]interface{}, encodeBuf []byte) ([]byte, []byte, error) {
 
-	if m.IsJSON() == false {
-		return nil, nil, nil
-	}
-
 	defn := ie.instance.GetDefinition()
 	if defn.GetIsPrimary() { // primary index supported !!
 		return []byte(`["` + string(docid) + `"]`), nil, nil
+	}
+
+	if m.IsJSON() == false {
+		return nil, nil, nil
 	}
 
 	exprType := defn.GetExprType()
@@ -324,12 +320,11 @@ func (ie *IndexEvaluator) partitionKey(
 	m *mc.DcpEvent, docid, doc []byte,
 	meta map[string]interface{}, encodeBuf []byte) ([]byte, error) {
 
-	if m.IsJSON() == false {
-		return nil, nil
-	}
-
 	defn := ie.instance.GetDefinition()
 	if ie.pkExprs == nil { // no partition key
+		return nil, nil
+	}
+	if m.IsJSON() == false {
 		return nil, nil
 	}
 
@@ -346,14 +341,15 @@ func (ie *IndexEvaluator) wherePredicate(
 	m *mc.DcpEvent, doc []byte,
 	meta map[string]interface{}, encodeBuf []byte) (bool, error) {
 
-	if m.IsJSON() == false {
-		return false, nil
-	}
-
 	// if where predicate is not supplied - always evaluate to `true`
 	if ie.whExpr == nil {
 		return true, nil
 	}
+
+	if m.IsJSON() == false {
+		return false, nil
+	}
+
 	defn := ie.instance.GetDefinition()
 	exprType := defn.GetExprType()
 	switch exprType {

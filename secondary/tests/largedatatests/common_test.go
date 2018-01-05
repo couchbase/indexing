@@ -28,7 +28,7 @@ var useClient string
 func init() {
 	log.Printf("In init()")
 
-	logging.SetLogLevel(logging.Warn)
+	logging.SetLogLevel(logging.Error)
 	var configpath string
 	seed = 1
 	flag.StringVar(&configpath, "cbconfig", "../config/clusterrun_conf.json", "Path of the configuration file with data about Couchbase Cluster")
