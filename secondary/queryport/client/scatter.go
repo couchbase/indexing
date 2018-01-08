@@ -1385,8 +1385,7 @@ func (c *RequestBroker) changeSorted(partitions [][]common.PartitionId, numParti
 		c.pushdownSorted = true
 	}
 
-	// If it is an aggregate query, need to sort in the indexer, even though we will skip
-	// sorting in the client.
+	// If it is an aggregate query, need to sort in the indexer
 	if c.grpAggr != nil && (len(c.grpAggr.Group) != 0 || len(c.grpAggr.Aggrs) != 0) {
 		c.pushdownSorted = true
 	}
@@ -1397,8 +1396,7 @@ func (c *RequestBroker) changeSorted(partitions [][]common.PartitionId, numParti
 //--------------------------
 
 //
-// For aggregate query, n1ql will expect pre-aggregate results for partitioned index.  Therefore,
-// turn off sorting, which will enable the scatter to just pass-through the result to cbq.
+// For aggregate query, n1ql will expect full aggregate results for partitioned index if group-by keys matches the partition keys.
 //
 func (c *RequestBroker) analyzeGroupBy(partitions [][]common.PartitionId, numPartition uint32, index *common.IndexDefn) {
 
@@ -1412,8 +1410,34 @@ func (c *RequestBroker) analyzeGroupBy(partitions [][]common.PartitionId, numPar
 		return
 	}
 
-	if c.grpAggr != nil && (len(c.grpAggr.Group) != 0 || len(c.grpAggr.Aggrs) != 0) {
-		c.sorted = false
+	// aggreate query
+	if c.grpAggr != nil && len(c.grpAggr.Group) != 0 {
+
+		// check if partition keys are leading index keys
+		positions := partitionKeyPos(index)
+		for i, pos := range positions {
+			if i != pos {
+				// if partition keys do not follow index key order
+				c.sorted = false
+				return
+			}
+		}
+
+		// check if group keys are leading index keys
+		for i, group := range c.grpAggr.Group {
+			if int32(i) != group.KeyPos {
+				// if group keys do not follow index key order
+				c.sorted = false
+				return
+			}
+		}
+
+		// both paritition keys and group keys are in index order.
+		// check if group key and partition key are the same length
+		if len(index.PartitionKeys) != len(c.grpAggr.Group) {
+			c.sorted = false
+			return
+		}
 	}
 }
 
