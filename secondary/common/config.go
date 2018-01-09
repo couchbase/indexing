@@ -1182,6 +1182,13 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
+	"indexer.plasma.enablePageChecksum": ConfigValue{
+		true, // Value set
+		"Checksum every page to enable corruption detection",
+		true,  // Default value
+		false, // Mutable but effective upon restart
+		false, // Case-insensitive
+	},
 	"indexer.plasma.enableLSSPageSMO": ConfigValue{
 		true,
 		"Enable page structure modification in lss",

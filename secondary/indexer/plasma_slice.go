@@ -194,6 +194,7 @@ func (slice *plasmaSlice) initStores() error {
 	cfg.PurgeThreshold = slice.sysconf["plasma.purger.highThreshold"].Float64()
 	cfg.PurgeLowThreshold = slice.sysconf["plasma.purger.lowThreshold"].Float64()
 	cfg.PurgeCompactRatio = slice.sysconf["plasma.purger.compactRatio"].Float64()
+	cfg.EnablePageChecksum = slice.sysconf["plasma.enablePageChecksum"].Bool()
 	cfg.EnableLSSPageSMO = slice.sysconf["plasma.enableLSSPageSMO"].Bool()
 	cfg.LSSReadAheadSize = int64(slice.sysconf["plasma.logReadAheadSize"].Int())
 	cfg.CheckpointInterval = time.Second * time.Duration(slice.sysconf["plasma.checkpointInterval"].Int())

@@ -102,7 +102,7 @@ func makeurl(path string) (string, error) {
 }
 
 func restful_getall() (map[string]interface{}, error) {
-	url, err := makeurl("/api/indexes")
+	url, err := makeurl("/internal/indexes")
 	if err != nil {
 		return nil, err
 	}
@@ -131,7 +131,7 @@ func restful_getall() (map[string]interface{}, error) {
 func restful_drop(ids []string) error {
 	for _, id := range ids {
 		log.Printf("DROP index: %v\n", id)
-		url, err := makeurl(fmt.Sprintf("/api/index/%v", id))
+		url, err := makeurl(fmt.Sprintf("/internal/index/%v", id))
 		if err != nil {
 			return err
 		}
@@ -153,7 +153,7 @@ func restful_drop(ids []string) error {
 }
 
 func restful_badcreates() error {
-	url, err := makeurl("/api/indexes?create=true")
+	url, err := makeurl("/internal/indexes?create=true")
 	if err != nil {
 		return err
 	}
@@ -247,7 +247,7 @@ func restful_create_andbuild() ([]string, error) {
 	ids := make([]string, 0)
 
 	post := func(dst map[string]interface{}) (string, error) {
-		url, err := makeurl("/api/indexes?create=true")
+		url, err := makeurl("/internal/indexes?create=true")
 		if err != nil {
 			return "", err
 		}
@@ -323,7 +323,7 @@ func restful_create_andbuild() ([]string, error) {
 
 	// execute defer build.
 	log.Println("BUILD single deferred index")
-	url, err := makeurl(fmt.Sprintf("/api/index/%v?build=true", ids[1]))
+	url, err := makeurl(fmt.Sprintf("/internal/index/%v?build=true", ids[1]))
 	if err != nil {
 		return nil, err
 	}
@@ -345,7 +345,7 @@ func restful_create_andbuild() ([]string, error) {
 	}
 
 	log.Println("BUILD many deferred index")
-	url, err = makeurl("/api/indexes?build=true")
+	url, err = makeurl("/internal/indexes?build=true")
 	if err != nil {
 		return nil, err
 	}
@@ -373,7 +373,7 @@ func restful_create_andbuild() ([]string, error) {
 
 func restful_lookup(ids []string) error {
 	getl := func(id string, body map[string]interface{}) ([]interface{}, error) {
-		url, err := makeurl(fmt.Sprintf("/api/index/%v?lookup=true", id))
+		url, err := makeurl(fmt.Sprintf("/internal/index/%v?lookup=true", id))
 		if err != nil {
 			return nil, err
 		}
@@ -468,7 +468,7 @@ func restful_lookup(ids []string) error {
 
 func restful_rangescan(ids []string) error {
 	getl := func(id string, body map[string]interface{}) ([]interface{}, error) {
-		url, err := makeurl(fmt.Sprintf("/api/index/%v?range=true", id))
+		url, err := makeurl(fmt.Sprintf("/internal/index/%v?range=true", id))
 		if err != nil {
 			return nil, err
 		}
@@ -594,7 +594,7 @@ func restful_rangescan(ids []string) error {
 
 func restful_fulltablescan(ids []string) error {
 	getl := func(id string, body map[string]interface{}) ([]interface{}, error) {
-		url, err := makeurl(fmt.Sprintf("/api/index/%v?scanall=true", id))
+		url, err := makeurl(fmt.Sprintf("/internal/index/%v?scanall=true", id))
 		if err != nil {
 			return nil, err
 		}
@@ -665,7 +665,7 @@ func restful_fulltablescan(ids []string) error {
 
 func restful_countscan(ids []string) error {
 	getl := func(id string, reqbody map[string]interface{}) (int, error) {
-		url, err := makeurl(fmt.Sprintf("/api/index/%v?count=true", id))
+		url, err := makeurl(fmt.Sprintf("/internal/index/%v?count=true", id))
 		if err != nil {
 			return 0, err
 		}
@@ -864,7 +864,7 @@ func waitforindex(id string) (error, bool) {
 }
 
 func getscans(id string, body map[string]interface{}) ([]interface{}, error) {
-	url, err := makeurl(fmt.Sprintf("/api/index/%v?multiscan=true", id))
+	url, err := makeurl(fmt.Sprintf("/internal/index/%v?multiscan=true", id))
 	if err != nil {
 		return nil, err
 	}
@@ -901,7 +901,7 @@ func getscans(id string, body map[string]interface{}) ([]interface{}, error) {
 }
 
 func getscanscount(id string, body map[string]interface{}) (int, error) {
-	url, err := makeurl(fmt.Sprintf("/api/index/%v?multiscancount=true", id))
+	url, err := makeurl(fmt.Sprintf("/internal/index/%v?multiscancount=true", id))
 	if err != nil {
 		return 0, err
 	}

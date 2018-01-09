@@ -80,7 +80,7 @@ this API will create the index and return back immediately.
 
 ```text
 METHOD: POST
-URL   : /api/indexes?create=true
+URL   : /internal/indexes?create=true
 HEADER:
     "Content-Type: application/json"
     "Accept: application/json"
@@ -138,7 +138,7 @@ indexes at the same time is more efficient than building them one at a time.
 
 ```text
 METHOD: PUT
-URL   : /api/indexes?build=true
+URL   : /internal/indexes?build=true
 HEADER:
     "Content-Type: application/json"
 ```
@@ -167,7 +167,7 @@ cluster.
 
 ```text
 METHOD: GET
-URL   : /api/indexes
+URL   : /internal/indexes
 ```
 
 **Response:**
@@ -200,7 +200,7 @@ been created already.
 
 ```text
 METHOD: PUT
-URL   : /api/index/{id}?build=true
+URL   : /internal/index/{id}?build=true
 ```
 
 **Response:**
@@ -220,7 +220,7 @@ HEADER:
 
 ```text
 METHOD: DELETE
-URL   : /api/index/{id}
+URL   : /internal/index/{id}
 ```
 
 **Response:**
@@ -240,7 +240,7 @@ HEADER:
 
 ```text
 METHOD: GET
-URL   : /api/index/{id}
+URL   : /internal/index/{id}
 HEADER:
     "Accept: application/json"
 ```
@@ -313,7 +313,7 @@ Lookup index using a specific index key or prefix of an index key.
 
 ```text
 METHOD: GET
-URL   : /api/index/{id}?lookup=true
+URL   : /internal/index/{id}?lookup=true
 HEADER:
     "Accept: application/json"
 ```
@@ -375,7 +375,7 @@ Range scan a single index from specified low key to high key.
 
 ```text
 METHOD: GET
-URL   : /api/index/{id}?range=true
+URL   : /internal/index/{id}?range=true
 HEADER:
     "Accept: application/json"
 ```
@@ -443,7 +443,7 @@ and returns the results in sorted order.
 
 ```text
 METHOD: GET
-URL   : /api/index/{id}?multiscan=true
+URL   : /internal/index/{id}?multiscan=true
 HEADER:
     "Accept: application/json"
 ```
@@ -514,7 +514,7 @@ Scan all entries in an index.
 
 ```text
 METHOD: GET
-URL   : /api/index/{id}?scanall=true
+URL   : /internal/index/{id}?scanall=true
 HEADER:
     "Accept: application/json"
 ```
@@ -572,7 +572,7 @@ Count number of items in an index, within a range of lowkey and highkey.
 
 ```text
 METHOD: GET
-URL   : /api/index/{id}?count=true
+URL   : /internal/index/{id}?count=true
 HEADER:
     "Accept: application/json"
 ```
