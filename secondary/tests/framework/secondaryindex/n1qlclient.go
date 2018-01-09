@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"github.com/couchbase/indexing/secondary/collatejson"
 	c "github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 	qc "github.com/couchbase/indexing/secondary/queryport/client"
 	nclient "github.com/couchbase/indexing/secondary/queryport/n1ql"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
@@ -24,6 +25,7 @@ func N1QLCreateSecondaryIndex(
 
 	log.Printf("N1QLCreateSecondaryIndex :: server = %v", server)
 	nc, err := nclient.NewGSIIndexer(server, "default", bucketName)
+	logging.SetLogLevel(logging.Error)
 	requestId := "12345"
 	exprs := make(expression.Expressions, 0, len(indexFields))
 	for _, exprS := range indexFields {
@@ -46,6 +48,7 @@ func N1QLRange(indexName, bucketName, server string, low, high []interface{}, in
 	if err != nil {
 		return nil, err
 	}
+	logging.SetLogLevel(logging.Error)
 	conn, err := datastore.NewSizedIndexConnection(100000, &testContext{})
 	if err != nil {
 		log.Fatalf("error creating SizedIndexConnection: %v\n", err)
@@ -86,6 +89,7 @@ func N1QLLookup(indexName, bucketName, server string, values []interface{},
 	if err != nil {
 		return nil, err
 	}
+	logging.SetLogLevel(logging.Error)
 	conn, err := datastore.NewSizedIndexConnection(100000, &testContext{})
 	if err != nil {
 		log.Fatalf("error creating SizedIndexConnection: %v\n", err)
@@ -126,6 +130,7 @@ func N1QLScanAll(indexName, bucketName, server string, limit int64,
 	if err != nil {
 		return nil, err
 	}
+	logging.SetLogLevel(logging.Error)
 	conn, err := datastore.NewSizedIndexConnection(100000, &testContext{})
 	if err != nil {
 		log.Fatalf("error creating SizedIndexConnection: %v\n", err)
@@ -166,6 +171,7 @@ func N1QLScans(indexName, bucketName, server string, scans qc.Scans, reverse, di
 	if err != nil {
 		return nil, err
 	}
+	logging.SetLogLevel(logging.Error)
 	conn, err := datastore.NewSizedIndexConnection(100000, &testContext{})
 	if err != nil {
 		log.Fatalf("error creating SizedIndexConnection: %v\n", err)
@@ -222,6 +228,7 @@ func N1QLMultiScanCount(indexName, bucketName, server string, scans qc.Scans, di
 	if err != nil {
 		return 0, err
 	}
+	logging.SetLogLevel(logging.Error)
 
 	requestid := getrequestid()
 	index, err := client.IndexByName(indexName)
@@ -274,6 +281,8 @@ func N1QLScan3(indexName, bucketName, server string, scans qc.Scans, reverse, di
 	if err != nil {
 		return nil, nil, err
 	}
+	logging.SetLogLevel(logging.Error)
+
 	conn, err := datastore.NewSizedIndexConnection(100000, &testContext{})
 	if err != nil {
 		log.Fatalf("error creating SizedIndexConnection: %v\n", err)
