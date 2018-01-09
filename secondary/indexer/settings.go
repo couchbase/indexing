@@ -66,6 +66,7 @@ func NewSettingsManager(supvCmdch MsgChannel,
 
 	initGlobalSettings(nil, config)
 	http.HandleFunc("/settings", s.handleSettingsReq)
+	http.HandleFunc("/internal/settings", s.handleInternalSettingsReq)
 	http.HandleFunc("/triggerCompaction", s.handleCompactionTrigger)
 	http.HandleFunc("/settings/runtime/freeMemory", s.handleFreeMemoryReq)
 	http.HandleFunc("/settings/runtime/forceGC", s.handleForceGCReq)
@@ -120,7 +121,15 @@ func (s *settingsManager) validateAuth(w http.ResponseWriter, r *http.Request) (
 	return creds, valid
 }
 
+func (s *settingsManager) handleInternalSettingsReq(w http.ResponseWriter, r *http.Request) {
+	s.handleSettings(w, r, true)
+}
+
 func (s *settingsManager) handleSettingsReq(w http.ResponseWriter, r *http.Request) {
+	s.handleSettings(w, r, false)
+}
+
+func (s *settingsManager) handleSettings(w http.ResponseWriter, r *http.Request, internal bool) {
 	creds, ok := s.validateAuth(w, r)
 	if !ok {
 		return
@@ -133,18 +142,20 @@ func (s *settingsManager) handleSettingsReq(w http.ResponseWriter, r *http.Reque
 	if r.Method == "POST" {
 		bytes, _ := ioutil.ReadAll(r.Body)
 
-		err := validateSettings(bytes)
-		if err != nil {
-			s.writeError(w, err)
-			return
-		}
-
 		config := s.config.FilterConfig(".settings.")
 		current, rev, err := metakv.Get(common.IndexingSettingsMetaPath)
 		if err == nil {
 			if len(current) > 0 {
 				config.Update(current)
 			}
+
+			err = validateSettings(bytes, config, internal)
+			if err != nil {
+				logging.Errorf("Fail to change setting.  Error: %v", err)
+				s.writeError(w, err)
+				return
+			}
+
 			err = config.Update(bytes)
 		}
 
@@ -387,7 +398,7 @@ func initStorageSettings(newCfg common.Config) {
 	ErrSecKeyTooLong = errors.New(fmt.Sprintf("Secondary key is too long (> %d)", maxSecKeyLen))
 }
 
-func validateSettings(value []byte) error {
+func validateSettings(value []byte, current common.Config, internal bool) error {
 	newConfig, err := common.NewConfig(value)
 	if err != nil {
 		return err
@@ -412,6 +423,33 @@ func validateSettings(value []byte) error {
 	if val, ok := newConfig["indexer.settings.max_array_seckey_size"]; ok {
 		if val.Int() <= 0 {
 			return errors.New("Setting should be an integer greater than 0")
+		}
+	}
+
+	if !internal {
+		if val, ok := newConfig["indexer.settings.storage_mode"]; ok {
+			if len(val.String()) != 0 {
+
+				if currentVal, ok := current["indexer.settings.storage_mode"]; ok {
+					if len(currentVal.String()) != 0 {
+						return fmt.Errorf("Storage mode is already set to %v", currentVal)
+					}
+				}
+
+				storageMode := strings.ToLower(val.String())
+				if common.GetBuildMode() == common.ENTERPRISE {
+					if storageMode == common.ForestDB {
+						return errors.New("ForestDB storage mode is not supported for enterprise version")
+					}
+				} else {
+					if storageMode == common.PlasmaDB {
+						return errors.New("Plasma storage mode is not supported for community version")
+					}
+					if storageMode == common.MemoryOptimized || storageMode == common.MemDB {
+						return errors.New("Memory optimized storage mode is not supported for community version")
+					}
+				}
+			}
 		}
 	}
 
