@@ -122,6 +122,7 @@ func (tt TransferToken) Clone() TransferToken {
 	ttc.RebalId = tt.RebalId
 	ttc.State = tt.State
 	ttc.InstId = tt.InstId
+	ttc.RealInstId = tt.RealInstId
 	ttc.IndexInst = tt.IndexInst
 	ttc.Error = tt.Error
 	ttc.BuildSource = tt.BuildSource

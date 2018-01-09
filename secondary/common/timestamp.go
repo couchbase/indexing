@@ -248,6 +248,11 @@ func (ts *TsVbuuid) CopyFrom(src *TsVbuuid) {
 
 // Equal returns whether `ts` and `other` compare equal.
 func (ts *TsVbuuid) Equal(other *TsVbuuid) bool {
+	return ts.Equal2(other, true)
+}
+
+// Equal returns whether `ts` and `other` compare equal.
+func (ts *TsVbuuid) Equal2(other *TsVbuuid, compareSnapshot bool) bool {
 	if ts != nil && other == nil ||
 		ts == nil && other != nil {
 		return false
@@ -273,13 +278,15 @@ func (ts *TsVbuuid) Equal(other *TsVbuuid) bool {
 		}
 	}
 
-	for i, sn := range ts.Snapshots {
-		if other.Snapshots[i][0] != sn[0] {
-			return false
-		}
+	if compareSnapshot {
+		for i, sn := range ts.Snapshots {
+			if other.Snapshots[i][0] != sn[0] {
+				return false
+			}
 
-		if other.Snapshots[i][1] != sn[1] {
-			return false
+			if other.Snapshots[i][1] != sn[1] {
+				return false
+			}
 		}
 	}
 

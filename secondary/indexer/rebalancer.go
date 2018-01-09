@@ -146,20 +146,10 @@ func (r *Rebalancer) doFinish() {
 	atomic.StoreInt32(&r.isDone, 1)
 	close(r.done)
 	r.cancelMetakv()
-	r.cancelPendingMerge()
 
 	r.wg.Wait()
 	r.cb.done(r.retErr, r.cancel)
 
-}
-
-func (r *Rebalancer) cancelPendingMerge() {
-	respch := make(chan error)
-	r.supvMsgch <- &MsgCancelMergePartition{
-		indexStateMap: nil,
-		respCh:        respch,
-	}
-	<-respch
 }
 
 func (r *Rebalancer) isFinish() bool {

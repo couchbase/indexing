@@ -910,7 +910,11 @@ func (s *storageMgr) handleIndexMergeSnapshot(cmd Message) {
 	} else {
 
 		//make sure that the timestamp is the same between source and target snapshot
-		if !target.Timestamp().Equal(source.Timestamp()) {
+		//This comparison will only cover the seqno and vbuuids.
+		//Note that even if the index instance has 0 mutation or no new mutation, storage
+		//manager will always create a new indexSnapshot with the current timestamp at end of
+		//flush. So the source and target snapshot should not have different timestamp.
+		if !target.Timestamp().Equal2(source.Timestamp(), false) {
 			s.muSnap.Unlock()
 			s.supvCmdch <- &MsgError{
 				err: Error{code: ERROR_STORAGE_MGR_MERGE_SNAPSHOT_FAIL,
@@ -921,48 +925,54 @@ func (s *storageMgr) handleIndexMergeSnapshot(cmd Message) {
 			return
 		}
 
-		// make sure that the source snapshot has all the required partitions
-		count := 0
-		for _, partnId := range partitions {
-			for _, sp := range source.Partitions() {
-				if partnId == sp.PartitionId() {
-					count++
-					break
+		// source will not have partition snapshot if there is no mutation in bucket.  Skip validation check.
+		// If bucket has at least 1 mutation, then source will have partition snapshot.
+		if len(source.Partitions()) != 0 {
+			// make sure that the source snapshot has all the required partitions
+			count := 0
+			for _, partnId := range partitions {
+				for _, sp := range source.Partitions() {
+					if partnId == sp.PartitionId() {
+						count++
+						break
+					}
 				}
 			}
-		}
-		if count != len(partitions) && count != len(source.Partitions()) {
-			s.muSnap.Unlock()
-			s.supvCmdch <- &MsgError{
-				err: Error{code: ERROR_STORAGE_MGR_MERGE_SNAPSHOT_FAIL,
-					severity: FATAL,
-					category: STORAGE_MGR,
-					cause: fmt.Errorf("Source snapshot %v does not have all the required partitions %v",
-						srcInstId, partitions)}}
-			return
-		}
-
-		// make sure there is no overlapping partition between source and target snapshot
-		for _, sp := range source.Partitions() {
-
-			found := false
-			for _, tp := range target.Partitions() {
-				if tp.PartitionId() == sp.PartitionId() {
-					found = true
-					break
-				}
-			}
-
-			if found {
+			if count != len(partitions) || count != len(source.Partitions()) {
 				s.muSnap.Unlock()
 				s.supvCmdch <- &MsgError{
 					err: Error{code: ERROR_STORAGE_MGR_MERGE_SNAPSHOT_FAIL,
 						severity: FATAL,
 						category: STORAGE_MGR,
-						cause: fmt.Errorf("Duplicate partition %v found between source %v and target %v",
-							sp.PartitionId(), srcInstId, tgtInstId)}}
+						cause: fmt.Errorf("Source snapshot %v does not have all the required partitions %v",
+							srcInstId, partitions)}}
 				return
 			}
+
+			// make sure there is no overlapping partition between source and target snapshot
+			for _, sp := range source.Partitions() {
+
+				found := false
+				for _, tp := range target.Partitions() {
+					if tp.PartitionId() == sp.PartitionId() {
+						found = true
+						break
+					}
+				}
+
+				if found {
+					s.muSnap.Unlock()
+					s.supvCmdch <- &MsgError{
+						err: Error{code: ERROR_STORAGE_MGR_MERGE_SNAPSHOT_FAIL,
+							severity: FATAL,
+							category: STORAGE_MGR,
+							cause: fmt.Errorf("Duplicate partition %v found between source %v and target %v",
+								sp.PartitionId(), srcInstId, tgtInstId)}}
+					return
+				}
+			}
+		} else {
+			logging.Infof("skip validation in merge partitions %v between inst %v and %v", partitions, srcInstId, tgtInstId)
 		}
 
 		// Deep clone a new snapshot by copying internal maps + increment target snapshot refcount.
@@ -1077,6 +1087,11 @@ func (s *storageMgr) deepCloneIndexSnapshot(is IndexSnapshot, partnIds []common.
 
 			clone.partns[partnId] = ps
 		}
+	}
+
+	// if there is no partition, set partns to nil
+	if len(clone.partns) == 0 {
+		clone.partns = nil
 	}
 
 	return clone
