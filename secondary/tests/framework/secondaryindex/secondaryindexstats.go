@@ -114,7 +114,8 @@ func ChangeIndexerSettings(configKey string, configValue interface{}, serverUser
 	client := http.Client{}
 	// hack, fix this
 	ihttp := iport + 2
-	url := "http://" + host + ":" + strconv.Itoa(ihttp) + "/settings"
+	url := "http://" + host + ":" + strconv.Itoa(ihttp) + "/internal/settings"
+
 	oreq, err := http.NewRequest("GET", url, nil)
 	oreq.SetBasicAuth(serverUserName, serverPassword)
 	oresp, err := client.Do(oreq)
