@@ -580,9 +580,11 @@ func (gsi *gsiKeyspace) delIndex(id string) {
 
 func (gsi *gsiKeyspace) getIndexFromVersion(index *secondaryIndex,
 	indexerVersion uint64) datastore.Index {
-	if indexerVersion == c.INDEXER_50_VERSION {
-		si2 := datastore.Index(&secondaryIndex2{secondaryIndex: *index})
-		return si2
+	if indexerVersion >= c.INDEXER_50_VERSION {
+		// TODO: Returning API3 objects until upgrade to 5.5 is supported
+		si2 := &secondaryIndex2{secondaryIndex: *index}
+		si3 := datastore.Index(&secondaryIndex3{secondaryIndex2: *si2})
+		return si3
 	} else {
 		return datastore.Index(index)
 	}
@@ -590,9 +592,12 @@ func (gsi *gsiKeyspace) getIndexFromVersion(index *secondaryIndex,
 
 func (gsi *gsiKeyspace) getPrimaryIndexFromVersion(index *secondaryIndex,
 	indexerVersion uint64) datastore.PrimaryIndex {
-	if indexerVersion == c.INDEXER_50_VERSION {
-		si2 := datastore.PrimaryIndex(&secondaryIndex2{secondaryIndex: *index})
-		return si2
+	if indexerVersion >= c.INDEXER_50_VERSION {
+		// TODO: Returning API3 objects until upgrade to 5.5 is supported
+		si2 := &secondaryIndex2{secondaryIndex: *index}
+		si3 := datastore.PrimaryIndex(&secondaryIndex3{secondaryIndex2: *si2})
+		return si3
+
 	} else {
 		return datastore.PrimaryIndex(index)
 	}
@@ -1130,6 +1135,16 @@ func (si *secondaryIndex3) Scan3(
 
 	l.Debugf("scan3: scan request %v done.  Receive Count %v Sent Count %v NumIndexers %v err %v",
 		requestId, broker.ReceiveCount(), broker.SendCount(), broker.NumIndexers(), err)
+}
+
+func (si *secondaryIndex3) ScanEntries3(
+	requestId string, projection *datastore.IndexProjection, offset, limit int64,
+	groupAggs *datastore.IndexGroupAggregates, indexOrder datastore.IndexKeyOrders,
+	cons datastore.ScanConsistency, vector timestamp.Vector,
+	conn *datastore.IndexConnection) {
+
+	// TODO: Implement actual ScanEntries3
+	si.ScanEntries(requestId, limit, cons, vector, conn)
 }
 
 //-------------------------------------
