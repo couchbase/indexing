@@ -1817,9 +1817,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.scan.partial_group_buffer_size": ConfigValue{
-		5,
+		50,
 		"buffer size to hold partial group results. once the buffer is full, the results will be flushed",
-		5,
+		50,
 		false, // mutable
 		false, // case-insensitive
 	},
