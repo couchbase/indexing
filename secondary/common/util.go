@@ -601,6 +601,7 @@ func IndexStatement(def IndexDefn, printNodes bool) string {
 	primCreate := "CREATE PRIMARY INDEX `%s` ON `%s`"
 	secCreate := "CREATE INDEX `%s` ON `%s`(%s)"
 	where := " WHERE %s"
+	partition := " PARTITION BY hash(%s)"
 
 	if def.IsPrimary {
 		stmt = fmt.Sprintf(primCreate, def.Name, def.Bucket)
@@ -616,6 +617,18 @@ func IndexStatement(def IndexDefn, printNodes bool) string {
 			}
 		}
 		stmt = fmt.Sprintf(secCreate, def.Name, def.Bucket, exprs)
+
+		if len(def.PartitionKeys) != 0 {
+			exprs := ""
+			for _, exp := range def.PartitionKeys {
+				if exprs != "" {
+					exprs += ","
+				}
+				exprs += exp
+			}
+			stmt += fmt.Sprintf(partition, exprs)
+		}
+
 		if def.WhereExpr != "" {
 			stmt += fmt.Sprintf(where, def.WhereExpr)
 		}

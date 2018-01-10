@@ -987,7 +987,7 @@ func (r *Rebalancer) updateProgress() {
 
 func (r *Rebalancer) computeProgress() (progress float64) {
 
-	url := "/getIndexStatus"
+	url := "/getIndexStatus?getAll=true"
 	resp, err := getWithAuth(r.localaddr + url)
 	if err != nil {
 		l.Errorf("Rebalancer::computeProgress Error getting local metadata %v %v", r.localaddr+url, err)

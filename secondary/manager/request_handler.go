@@ -101,20 +101,22 @@ type IndexStatusResponse struct {
 }
 
 type IndexStatus struct {
-	DefnId     common.IndexDefnId `json:"defnId,omitempty"`
-	Name       string             `json:"name,omitempty"`
-	Bucket     string             `json:"bucket,omitempty"`
-	IsPrimary  bool               `json:"isPrimary,omitempty"`
-	SecExprs   []string           `json:"secExprs,omitempty"`
-	WhereExpr  string             `json:"where,omitempty"`
-	IndexType  string             `json:"indexType,omitempty"`
-	Status     string             `json:"status,omitempty"`
-	Definition string             `json:"definition"`
-	Hosts      []string           `json:"hosts,omitempty"`
-	Error      string             `json:"error,omitempty"`
-	Completion int                `json:"completion"`
-	Progress   float64            `json:"progress"`
-	Scheduled  bool               `json:"scheduled"`
+	DefnId      common.IndexDefnId `json:"defnId,omitempty"`
+	InstId      common.IndexInstId `json:"instId,omitempty"`
+	Name        string             `json:"name,omitempty"`
+	Bucket      string             `json:"bucket,omitempty"`
+	IsPrimary   bool               `json:"isPrimary,omitempty"`
+	SecExprs    []string           `json:"secExprs,omitempty"`
+	WhereExpr   string             `json:"where,omitempty"`
+	IndexType   string             `json:"indexType,omitempty"`
+	Status      string             `json:"status,omitempty"`
+	Definition  string             `json:"definition"`
+	Hosts       []string           `json:"hosts,omitempty"`
+	Error       string             `json:"error,omitempty"`
+	Completion  int                `json:"completion"`
+	Progress    float64            `json:"progress"`
+	Scheduled   bool               `json:"scheduled"`
+	Partitioned bool               `json:"partitioned"`
 }
 
 type indexStatusSorter []IndexStatus
@@ -342,7 +344,13 @@ func (m *requestHandlerContext) handleIndexStatusRequest(w http.ResponseWriter, 
 
 	bucket := m.getBucket(r)
 
-	list, failedNodes, err := m.getIndexStatus(creds, bucket)
+	getAll := false
+	val := r.FormValue("getAll")
+	if len(val) != 0 && val == "true" {
+		getAll = true
+	}
+
+	list, failedNodes, err := m.getIndexStatus(creds, bucket, getAll)
 	if err == nil && len(failedNodes) == 0 {
 		sort.Sort(indexStatusSorter(list))
 		resp := &IndexStatusResponse{Code: RESP_SUCCESS, Status: list}
@@ -361,7 +369,7 @@ func (m *requestHandlerContext) getBucket(r *http.Request) string {
 	return r.FormValue("bucket")
 }
 
-func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, bucket string) ([]IndexStatus, []string, error) {
+func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, bucket string, getAll bool) ([]IndexStatus, []string, error) {
 
 	cinfo, err := m.mgr.FetchNewClusterInfoCache()
 	if err != nil {
@@ -509,20 +517,22 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, bucket string
 							}
 
 							status := IndexStatus{
-								DefnId:     defn.DefnId,
-								Name:       name,
-								Bucket:     defn.Bucket,
-								IsPrimary:  defn.IsPrimary,
-								SecExprs:   defn.SecExprs,
-								WhereExpr:  defn.WhereExpr,
-								IndexType:  string(defn.Using),
-								Status:     stateStr,
-								Error:      errStr,
-								Hosts:      []string{curl},
-								Definition: common.IndexStatement(defn, false),
-								Completion: completion,
-								Progress:   progress,
-								Scheduled:  instance.Scheduled,
+								DefnId:      defn.DefnId,
+								InstId:      common.IndexInstId(instance.InstId),
+								Name:        name,
+								Bucket:      defn.Bucket,
+								IsPrimary:   defn.IsPrimary,
+								SecExprs:    defn.SecExprs,
+								WhereExpr:   defn.WhereExpr,
+								IndexType:   string(defn.Using),
+								Status:      stateStr,
+								Error:       errStr,
+								Hosts:       []string{curl},
+								Definition:  common.IndexStatement(defn, false),
+								Completion:  completion,
+								Progress:    progress,
+								Scheduled:   instance.Scheduled,
+								Partitioned: common.IsPartitioned(defn.PartitionScheme),
 							}
 
 							list = append(list, status)
@@ -537,7 +547,70 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, bucket string
 		}
 	}
 
+	if !getAll {
+		list = m.consolideIndexStatus(list)
+	}
+
 	return list, failedNodes, nil
+}
+
+func (m *requestHandlerContext) consolideIndexStatus(statuses []IndexStatus) []IndexStatus {
+
+	statusMap := make(map[common.IndexInstId]IndexStatus)
+
+	for _, status := range statuses {
+		if s2, ok := statusMap[status.InstId]; !ok {
+			statusMap[status.InstId] = status
+		} else {
+			s2.Status = m.consolideStateStr(s2.Status, status.Status)
+			s2.Hosts = append(s2.Hosts, status.Hosts...)
+			s2.Completion = (s2.Completion + status.Completion) / 2
+			s2.Progress = (s2.Progress + status.Progress) / 2.0
+			if len(status.Error) != 0 {
+				s2.Error = fmt.Sprintf("%v %v", s2.Error, status.Error)
+			}
+			statusMap[status.InstId] = s2
+		}
+	}
+
+	result := make([]IndexStatus, 0, len(statuses))
+	for _, status := range statusMap {
+		result = append(result, status)
+	}
+
+	return result
+}
+
+func (m *requestHandlerContext) consolideStateStr(str1 string, str2 string) string {
+
+	if str1 == "Paused" || str2 == "Paused" {
+		return "Paused"
+	}
+
+	if str1 == "Warmup" || str2 == "Warmup" {
+		return "Warmup"
+	}
+
+	if strings.HasPrefix(str1, "Created") || strings.HasPrefix(str2, "Created") {
+		if str1 == str2 {
+			return str1
+		}
+		return "Created"
+	}
+
+	if strings.HasPrefix(str1, "Building") || strings.HasPrefix(str2, "Building") {
+		if str1 == str2 {
+			return str1
+		}
+		return "Building"
+	}
+
+	if str1 == "Replicating" || str2 == "Replicating" {
+		return "Replicating"
+	}
+
+	// must be ready
+	return str1
 }
 
 //////////////////////////////////////////////////////
@@ -564,7 +637,7 @@ func (m *requestHandlerContext) handleIndexStatementRequest(w http.ResponseWrite
 
 func (m *requestHandlerContext) getIndexStatement(creds cbauth.Creds, bucket string) ([]string, error) {
 
-	indexes, failedNodes, err := m.getIndexStatus(creds, bucket)
+	indexes, failedNodes, err := m.getIndexStatus(creds, bucket, false)
 	if err != nil {
 		return nil, err
 	}
