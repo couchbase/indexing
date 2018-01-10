@@ -248,6 +248,9 @@ type SAPlanner struct {
 	constraint ConstraintMethod
 	sizing     SizingMethod
 
+	// config
+	timeout int
+
 	// result
 	Result          *Solution `json:"result,omitempty"`
 	Score           float64   `json:"score,omitempty"`
@@ -447,6 +450,14 @@ func (p *SAPlanner) planSingleRun(command CommandType, solution *Solution) (*Sol
 			// adjust temperature based on score for faster convergence
 			temperature = temperature * old_cost
 		}
+
+		if p.timeout > 0 {
+			elapsed := time.Now().Sub(startTime).Seconds()
+			if elapsed >= float64(p.timeout) {
+				logging.Infof("Planner::stop planner due to timeout.  Elapsed %vs", elapsed)
+				break
+			}
+		}
 	}
 
 	p.ElapseTime = uint64(time.Now().Sub(startTime).Nanoseconds())
@@ -466,6 +477,10 @@ func (p *SAPlanner) planSingleRun(command CommandType, solution *Solution) (*Sol
 
 	p.cost.Cost(p.Result)
 	return current, nil
+}
+
+func (p *SAPlanner) SetTimeout(timeout int) {
+	p.timeout = timeout
 }
 
 //
