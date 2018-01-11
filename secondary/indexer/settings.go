@@ -432,6 +432,9 @@ func validateSettings(value []byte, current common.Config, internal bool) error 
 
 				if currentVal, ok := current["indexer.settings.storage_mode"]; ok {
 					if len(currentVal.String()) != 0 {
+						if currentVal.String() == val.String() {
+							return nil
+						}
 						return fmt.Errorf("Storage mode is already set to %v", currentVal)
 					}
 				}
