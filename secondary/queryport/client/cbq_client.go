@@ -229,6 +229,16 @@ func (b *cbqClient) GetIndexDefn(defnID uint64) *common.IndexDefn {
 	panic("cbqClient does not implement GetIndexDefn")
 }
 
+// GetIndexInst implements BridgeAccessor{} interface.
+func (b *cbqClient) GetIndexInst(instId uint64) *mclient.InstanceDefn {
+	panic("cbqClient does not implement GetIndexInst")
+}
+
+// GetIndexReplica implements BridgeAccessor{} interface.
+func (b *cbqClient) GetIndexReplica(defnId uint64) []*mclient.InstanceDefn {
+	panic("cbqClient does not implement GetIndexReplica")
+}
+
 // Timeit implement BridgeAccessor{} interface.
 func (b *cbqClient) Timeit(defnID uint64, partitionId common.PartitionId, value float64) {
 	// TODO: do nothing ?

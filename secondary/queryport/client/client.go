@@ -195,8 +195,14 @@ type BridgeAccessor interface {
 		excludes map[common.PartitionId]map[uint64]bool) (queryport []string, targetDefnID uint64, targetInstID []uint64,
 		rollbackTime []int64, partition [][]common.PartitionId, numPartitions uint32, ok bool)
 
-	// GetIndex will return the index-definition structure for defnID.
+	// GetIndexDefn will return the index-definition structure for defnID.
 	GetIndexDefn(defnID uint64) *common.IndexDefn
+
+	// GetIndexInst will return the index-instance structure for instId.
+	GetIndexInst(instId uint64) *mclient.InstanceDefn
+
+	// GetIndexReplica will return the index-instance structure for defnId.
+	GetIndexReplica(defnId uint64) []*mclient.InstanceDefn
 
 	// IndexState returns the current state of index `defnID` and error.
 	IndexState(defnID uint64) (common.IndexState, error)
@@ -1149,11 +1155,29 @@ func (c *GsiClient) updateExcludes(defnID uint64, excludes map[common.PartitionI
 
 	for partnId, instErrMap := range errMap {
 		for instId, err := range instErrMap {
-			if numReplica > 1 || !isgone(err) {
+			if !isgone(err) {
 				if _, ok := excludes[partnId]; !ok {
 					excludes[partnId] = make(map[uint64]bool)
 				}
 				excludes[partnId][instId] = true
+			} else if numReplica > 1 {
+				// if it is EOF error and there is replica, then
+				// exclude all partitions on all replicas
+				// residing on the failed node.
+				if inst := c.bridge.GetIndexInst(instId); inst != nil {
+					failIndexerId := inst.IndexerId[partnId]
+
+					for _, replica := range c.bridge.GetIndexReplica(defnID) {
+						for p, indexerId := range replica.IndexerId {
+							if indexerId == failIndexerId {
+								if _, ok := excludes[p]; !ok {
+									excludes[p] = make(map[uint64]bool)
+								}
+								excludes[p][uint64(replica.InstId)] = true
+							}
+						}
+					}
+				}
 			}
 		}
 	}

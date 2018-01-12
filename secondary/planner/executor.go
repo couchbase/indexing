@@ -220,8 +220,6 @@ func genTransferToken(solution *Solution, masterId string, topologyChange servic
 					}
 				}
 
-				logging.Infof("Generating Transfer Token for rebalance (%v)", token)
-
 			} else if index.initialNode == nil {
 				// There is no source node (index is added during rebalance).
 
@@ -271,8 +269,6 @@ func genTransferToken(solution *Solution, masterId string, topologyChange servic
 						token.IndexInst.Defn.InstVersion = index.Instance.Version + 1
 					}
 				}
-
-				logging.Infof("Generating Transfer Token for rebuilding lost replica (%v)", token)
 			}
 		}
 	}
@@ -282,6 +278,12 @@ func genTransferToken(solution *Solution, masterId string, topologyChange servic
 		ustr, _ := common.NewUUID()
 		ttid := fmt.Sprintf("TransferToken%s", ustr.Str())
 		result[ttid] = token
+
+		if len(token.SourceId) != 0 {
+			logging.Infof("Generating Transfer Token for rebalance (%v)", token)
+		} else {
+			logging.Infof("Generating Transfer Token for rebuilding lost replica (%v)", token)
+		}
 	}
 
 	return result, nil
@@ -536,8 +538,25 @@ func rebalance(command CommandType, config *RunConfig, plan *Plan, indexes []*In
 	cost = newUsageBasedCostMethod(constraint, config.DataCostWeight, config.CpuCostWeight, config.MemCostWeight)
 	planner := newSAPlanner(cost, constraint, placement, sizing)
 	planner.SetTimeout(config.Timeout)
+	logging.Infof("************ Index Layout Before Rebalance *************")
+	solution.PrintLayout()
+	logging.Infof("****************************************")
 	if _, err := planner.Plan(command, solution); err != nil {
 		return planner, s, err
+	}
+
+	// plan again for partitioned index
+	indexes = findAllPartitionedIndex(planner.Result)
+	if len(indexes) != 0 {
+		logging.Infof("Rebalancing partitioned index (num %v)", len(indexes))
+		solution = planner.Result
+		solution.removeEmptyDeletedNode()
+		placement = newRandomPlacement(indexes, config.AllowSwap, false)
+		planner = newSAPlanner(cost, constraint, placement, sizing)
+		planner.SetTimeout(config.Timeout)
+		if _, err := planner.Plan(CommandRebalance, solution); err != nil {
+			return planner, s, err
+		}
 	}
 
 	// save result
@@ -832,6 +851,24 @@ func filterPinnedIndexes(config *RunConfig, indexes []*IndexUsage) []*IndexUsage
 
 		if len(index.Hosts) == 0 {
 			result = append(result, index)
+		}
+	}
+
+	return result
+}
+
+//
+// Find all partitioned index in teh solution
+//
+func findAllPartitionedIndex(solution *Solution) []*IndexUsage {
+
+	result := ([]*IndexUsage)(nil)
+
+	for _, indexer := range solution.Placement {
+		for _, index := range indexer.Indexes {
+			if index.Instance != nil && common.IsPartitioned(index.Instance.Defn.PartitionScheme) {
+				result = append(result, index)
+			}
 		}
 	}
 

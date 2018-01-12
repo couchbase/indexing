@@ -1409,24 +1409,29 @@ func (m *LifecycleMgr) verifyOverlapPartition(defn *common.IndexDefn, reqCtx *co
 							return err
 						}
 
-						// Guard against duplicate partition in ALL instances, except DELETED instance.
-						for _, partn := range inst.Partitions {
-							if common.PartitionId(partn.PartId) == partnId &&
-								common.IndexState(inst.State) != common.INDEX_STATE_DELETED {
+						// check for duplicate partition in real instance or proxy instance
+						if common.IndexInstId(inst.InstId) == defn.RealInstId ||
+							common.IndexInstId(inst.RealInstId) == defn.RealInstId {
 
-								// 1) Consider all REBAL_ACTIVE and REBAL_MERGED instances
-								// 2) For REBAL_PENDING instances, only consider those that have the same or higher rebalance version.
-								//    During rebalancing, new instance can be created.  But rebalancing could start before cleanup
-								//    (on previous rebalance attempt) is finished.  Therefore, it is possible that there will be
-								//    some REBAL_PENDING instances from previous rebalancing. But those REBAL_PENDING instances
-								//    would have lower version numbers.   We can skip those REBAL_PENDING instances since they will
-								//    eventually been cleaned up. Note that instance version is increasing for every rebalance.
-								if common.RebalanceState(inst.RState) == common.REBAL_MERGED ||
-									common.RebalanceState(inst.RState) == common.REBAL_ACTIVE ||
-									int(partn.Version) >= defn.Versions[i] {
-									err := errors.New("Found overlapping partition when rebalancing.")
-									logging.Errorf("LifecycleMgr.CreateIndexInstance() : createIndex fails. Reason: %v", err)
-									return err
+							// Guard against duplicate partition in ALL instances, except DELETED instance.
+							for _, partn := range inst.Partitions {
+								if common.PartitionId(partn.PartId) == partnId &&
+									common.IndexState(inst.State) != common.INDEX_STATE_DELETED {
+
+									// 1) Consider all REBAL_ACTIVE and REBAL_MERGED instances
+									// 2) For REBAL_PENDING instances, only consider those that have the same or higher rebalance version.
+									//    During rebalancing, new instance can be created.  But rebalancing could start before cleanup
+									//    (on previous rebalance attempt) is finished.  Therefore, it is possible that there will be
+									//    some REBAL_PENDING instances from previous rebalancing. But those REBAL_PENDING instances
+									//    would have lower version numbers.   We can skip those REBAL_PENDING instances since they will
+									//    eventually been cleaned up. Note that instance version is increasing for every rebalance.
+									if common.RebalanceState(inst.RState) == common.REBAL_MERGED ||
+										common.RebalanceState(inst.RState) == common.REBAL_ACTIVE ||
+										int(partn.Version) >= defn.Versions[i] {
+										err := fmt.Errorf("Found overlapping partition when rebalancing.  Instance %v partition %v.", inst.InstId, partnId)
+										logging.Errorf("LifecycleMgr.CreateIndexInstance() : createIndex fails. Reason: %v", err)
+										return err
+									}
 								}
 							}
 						}

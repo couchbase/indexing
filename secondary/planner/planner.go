@@ -809,7 +809,13 @@ func (p *SAPlanner) addReplicaIfNecessary(s *Solution) {
 			numReplica := s.findNumReplica(index)
 			if index.Instance != nil && int(index.Instance.Defn.NumReplica+1) > numReplica &&
 				numReplica < numLiveNode && !index.pendingDelete {
-				addCandidates[index] = indexer
+
+				target := s.FindIndexerWithNoReplica(index)
+				if target == nil {
+					target = indexer
+				}
+
+				addCandidates[index] = target
 			}
 		}
 
@@ -842,7 +848,8 @@ func (p *SAPlanner) addReplicaIfNecessary(s *Solution) {
 							cloned.Instance.InstId = instId
 
 							// add the new replica to the solution
-							indexer.Indexes = append(indexer.Indexes, cloned)
+							s.addIndex(indexer, cloned)
+
 							clonedCandidates = append(clonedCandidates, cloned)
 							numReplica++
 
@@ -1586,6 +1593,32 @@ func (s *Solution) FindIndexerWithReplica(name string, bucket string, partnId co
 			if index.Name == name && index.Bucket == bucket && index.PartnId == partnId && index.Instance != nil && index.Instance.ReplicaId == replicaId {
 				return indexer
 			}
+		}
+	}
+
+	return nil
+}
+
+//
+// Find the indexer node that does not contain the replica
+//
+func (s *Solution) FindIndexerWithNoReplica(source *IndexUsage) *IndexerNode {
+
+	for _, indexer := range s.Placement {
+		if indexer.IsDeleted() {
+			continue
+		}
+
+		found := false
+		for _, index := range indexer.Indexes {
+			if source.IsReplica(index) {
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			return indexer
 		}
 	}
 
@@ -3304,6 +3337,11 @@ func (p *RandomPlacement) randomSwap(s *Solution, sources []*IndexerNode, target
 		}
 
 		if sourceIndex.NoUsage != targetIndex.NoUsage {
+			continue
+		}
+
+		// do not swap replica
+		if sourceIndex.IsReplica(targetIndex) {
 			continue
 		}
 

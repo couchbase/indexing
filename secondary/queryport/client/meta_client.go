@@ -156,6 +156,29 @@ func (b *metadataClient) GetIndexDefn(defnID uint64) *common.IndexDefn {
 	return nil
 }
 
+// GetIndexInst implements BridgeAccessor{} interface.
+func (b *metadataClient) GetIndexInst(instId uint64) *mclient.InstanceDefn {
+	currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
+	if inst, ok := currmeta.insts[common.IndexInstId(instId)]; ok {
+		return inst
+	}
+
+	return nil
+}
+
+// GetIndexReplica implements BridgeAccessor{} interface.
+func (b *metadataClient) GetIndexReplica(defnId uint64) []*mclient.InstanceDefn {
+	var result []*mclient.InstanceDefn
+	currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
+	for _, instId := range currmeta.replicas[common.IndexDefnId(defnId)] {
+		if inst, ok := currmeta.insts[instId]; ok {
+			result = append(result, inst)
+		}
+	}
+
+	return result
+}
+
 // CreateIndex implements BridgeAccessor{} interface.
 func (b *metadataClient) CreateIndex(
 	indexName, bucket, using, exprType, whereExpr string,
