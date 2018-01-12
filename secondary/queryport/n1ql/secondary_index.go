@@ -1004,61 +1004,6 @@ func (si *secondaryIndex2) CountDistinct(requestId string, spans datastore.Spans
 	return count, nil
 }
 
-//--------------------
-// datastore.AlterIndex{}
-//--------------------
-
-// AlterIndex implement datastore.AlterIndex interface.
-func (si *secondaryIndex2) Alter(requestId string, with value.Value) (
-	datastore.Index, errors.Error) {
-
-	if with == nil {
-		return datastore.Index(si), nil
-	}
-
-	var ErrorMarshalWith = "GSI AlterIndex() Error marshalling WITH clause"
-	var ErrorUmmarshalWith = "GSI AlterIndex() Error unmarshalling WITH clause"
-	var ErrorActionMissing = "GSI AlterIndex() action key missing in WITH clause"
-	var ErrorUnsupportedAction = "GSI AlterIndex() Unsupported action value"
-
-	var withMap map[string]interface{}
-	var withJSON []byte
-	var err error
-	if withJSON, err = with.MarshalJSON(); err != nil {
-		return nil, errors.NewError(err, ErrorMarshalWith)
-	}
-	if err = json.Unmarshal(withJSON, &withMap); err != nil {
-		return nil, errors.NewError(err, ErrorUmmarshalWith)
-	}
-
-	action, ok := withMap["action"]
-	if !ok {
-		return nil, errors.NewError(fmt.Errorf(ErrorActionMissing), "")
-	}
-
-	action, ok = action.(string)
-	if !ok {
-		return nil, errors.NewError(fmt.Errorf(ErrorUnsupportedAction), "")
-	}
-	switch action {
-	case "move":
-		client := si.gsi.gsiClient
-		e := client.MoveIndex(si.defnID, withMap)
-		if e != nil {
-			return nil, errors.NewError(e, "GSI AlterIndex()")
-		}
-		return datastore.Index(si), nil
-	default:
-		return nil, errors.NewError(fmt.Errorf(ErrorUnsupportedAction), "")
-	}
-
-	return datastore.Index(si), nil
-}
-
-//--------------------
-// datastore.AlterIndex{} End
-//--------------------
-
 //-------------------------------------
 // datastore API3 implementation
 //-------------------------------------
@@ -1135,6 +1080,53 @@ func (si *secondaryIndex3) Scan3(
 
 	l.Debugf("scan3: scan request %v done.  Receive Count %v Sent Count %v NumIndexers %v err %v",
 		requestId, broker.ReceiveCount(), broker.SendCount(), broker.NumIndexers(), err)
+}
+
+// Alter implements datastore.Index3 interface.
+func (si *secondaryIndex3) Alter(requestId string, with value.Value) (
+	datastore.Index, errors.Error) {
+
+	if with == nil {
+		return datastore.Index(si), nil
+	}
+
+	var ErrorMarshalWith = "GSI AlterIndex() Error marshalling WITH clause"
+	var ErrorUmmarshalWith = "GSI AlterIndex() Error unmarshalling WITH clause"
+	var ErrorActionMissing = "GSI AlterIndex() action key missing in WITH clause"
+	var ErrorUnsupportedAction = "GSI AlterIndex() Unsupported action value"
+
+	var withMap map[string]interface{}
+	var withJSON []byte
+	var err error
+	if withJSON, err = with.MarshalJSON(); err != nil {
+		return nil, errors.NewError(err, ErrorMarshalWith)
+	}
+	if err = json.Unmarshal(withJSON, &withMap); err != nil {
+		return nil, errors.NewError(err, ErrorUmmarshalWith)
+	}
+
+	action, ok := withMap["action"]
+	if !ok {
+		return nil, errors.NewError(fmt.Errorf(ErrorActionMissing), "")
+	}
+
+	action, ok = action.(string)
+	if !ok {
+		return nil, errors.NewError(fmt.Errorf(ErrorUnsupportedAction), "")
+	}
+	switch action {
+	case "move":
+		client := si.gsi.gsiClient
+		e := client.MoveIndex(si.defnID, withMap)
+		if e != nil {
+			return nil, errors.NewError(e, "GSI AlterIndex()")
+		}
+		return datastore.Index(si), nil
+	default:
+		return nil, errors.NewError(fmt.Errorf(ErrorUnsupportedAction), "")
+	}
+
+	return datastore.Index(si), nil
 }
 
 func (si *secondaryIndex3) ScanEntries3(

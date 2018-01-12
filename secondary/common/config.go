@@ -1823,6 +1823,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.planner.timeout": ConfigValue{
+		25,
+		"timeout (sec) on planner",
+		25,
+		false, // mutable
+		false, // case-insensitive
+	},
 }
 
 // NewConfig from another

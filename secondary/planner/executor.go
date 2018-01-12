@@ -51,6 +51,7 @@ type RunConfig struct {
 	MemCostWeight  float64
 	EjectOnly      bool
 	DisableRepair  bool
+	Timeout        int
 }
 
 type RunStats struct {
@@ -112,13 +113,13 @@ type IndexSpec struct {
 /////////////////////////////////////////////////////////////
 
 func ExecuteRebalance(clusterUrl string, topologyChange service.TopologyChange, masterId string, ejectOnly bool,
-	disableReplicaRepair bool) (map[string]*common.TransferToken, error) {
-	return ExecuteRebalanceInternal(clusterUrl, topologyChange, masterId, false, true, ejectOnly, disableReplicaRepair)
+	disableReplicaRepair bool, timeout int) (map[string]*common.TransferToken, error) {
+	return ExecuteRebalanceInternal(clusterUrl, topologyChange, masterId, false, true, ejectOnly, disableReplicaRepair, timeout)
 }
 
 func ExecuteRebalanceInternal(clusterUrl string,
 	topologyChange service.TopologyChange, masterId string, addNode bool, detail bool, ejectOnly bool,
-	disableReplicaRepair bool) (map[string]*common.TransferToken, error) {
+	disableReplicaRepair bool, timeout int) (map[string]*common.TransferToken, error) {
 
 	plan, err := RetrievePlanFromCluster(clusterUrl)
 	if err != nil {
@@ -149,6 +150,7 @@ func ExecuteRebalanceInternal(clusterUrl string,
 	config.AddNode = numNode
 	config.EjectOnly = ejectOnly
 	config.DisableRepair = disableReplicaRepair
+	config.Timeout = timeout
 
 	p, _, err := execute(config, CommandRebalance, plan, nil, deleteNodes)
 	if p != nil && detail {
@@ -470,6 +472,7 @@ func rebalance(command CommandType, config *RunConfig, plan *Plan, indexes []*In
 	// run planner
 	cost = newUsageBasedCostMethod(constraint, config.DataCostWeight, config.CpuCostWeight, config.MemCostWeight)
 	planner := newSAPlanner(cost, constraint, placement, sizing)
+	planner.SetTimeout(config.Timeout)
 	if _, err := planner.Plan(command, solution); err != nil {
 		return planner, s, err
 	}
