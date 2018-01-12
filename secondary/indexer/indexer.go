@@ -1563,8 +1563,10 @@ func (idx *indexer) mergePartition(sourceId common.IndexInstId, targetId common.
 			// 3) index instance partition stats
 			partitions := source.Pc.GetAllPartitions()
 			partnIds := make([]common.PartitionId, 0, len(partitions))
+			versions := make([]int, 0, len(partitions))
 			for _, partnDef := range partitions {
 				partnId := partnDef.GetPartitionId()
+				version := partnDef.GetVersion()
 
 				// Do not merge if the target index inst has this partition
 				if target.Pc.GetPartitionById(partnId) == nil {
@@ -1580,6 +1582,7 @@ func (idx *indexer) mergePartition(sourceId common.IndexInstId, targetId common.
 					}
 
 					partnIds = append(partnIds, partnId)
+					versions = append(versions, version)
 
 				} else {
 					err := fmt.Errorf("Duplicate partition %v found when merging from source instance %v to target instance %v.",
@@ -1615,12 +1618,13 @@ func (idx *indexer) mergePartition(sourceId common.IndexInstId, targetId common.
 			idx.indexInstMap[targetId] = target
 
 			msg := &MsgClustMgrMergePartition{
-				defnId:        source.Defn.DefnId,
-				srcInstId:     source.InstId,
-				srcRState:     common.REBAL_MERGED,
-				tgtInstId:     target.InstId,
-				tgtPartitions: partnIds,
-				tgtVersion:    uint64(target.Version),
+				defnId:         source.Defn.DefnId,
+				srcInstId:      source.InstId,
+				srcRState:      common.REBAL_MERGED,
+				tgtInstId:      target.InstId,
+				tgtPartitions:  partnIds,
+				tgtVersions:    versions,
+				tgtInstVersion: uint64(target.Version),
 			}
 			if err := idx.sendMsgToClusterMgr(msg); err != nil {
 				common.CrashOnError(err)

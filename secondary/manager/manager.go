@@ -89,7 +89,7 @@ type IndexManager struct {
 //    B) Index Instance is not in INDEX_STATE_CREATE or INDEX_STATE_DELETED.
 //
 type MetadataNotifier interface {
-	OnIndexCreate(*common.IndexDefn, common.IndexInstId, int, []common.PartitionId, uint32, common.IndexInstId, *common.MetadataRequestContext) error
+	OnIndexCreate(*common.IndexDefn, common.IndexInstId, int, []common.PartitionId, []int, uint32, common.IndexInstId, *common.MetadataRequestContext) error
 	OnIndexDelete(common.IndexInstId, string, *common.MetadataRequestContext) error
 	OnIndexBuild([]common.IndexInstId, []string, *common.MetadataRequestContext) map[common.IndexInstId]error
 	OnPartitionPrune(common.IndexInstId, []common.PartitionId, *common.MetadataRequestContext) error
@@ -252,9 +252,9 @@ func (m *IndexManager) Close() {
 		m.repo.Close()
 	}
 
-        if m.monitorKillch != nil {
-	        close(m.monitorKillch)
-        }
+	if m.monitorKillch != nil {
+		close(m.monitorKillch)
+	}
 
 	m.isClosed = true
 }
@@ -439,19 +439,20 @@ func (m *IndexManager) HandleBuildIndexDDL(indexIds client.IndexIdList) error {
 }
 func (m *IndexManager) UpdateIndexInstance(bucket string, defnId common.IndexDefnId, instId common.IndexInstId,
 	state common.IndexState, streamId common.StreamId, err string, buildTime []uint64, rState common.RebalanceState,
-	partitions []uint64, version int) error {
+	partitions []uint64, versions []int, instVersion int) error {
 
 	inst := &topologyChange{
-		Bucket:     bucket,
-		DefnId:     uint64(defnId),
-		InstId:     uint64(instId),
-		State:      uint32(state),
-		StreamId:   uint32(streamId),
-		Error:      err,
-		BuildTime:  buildTime,
-		RState:     uint32(rState),
-		Partitions: partitions,
-		Version:    version}
+		Bucket:      bucket,
+		DefnId:      uint64(defnId),
+		InstId:      uint64(instId),
+		State:       uint32(state),
+		StreamId:    uint32(streamId),
+		Error:       err,
+		BuildTime:   buildTime,
+		RState:      uint32(rState),
+		Partitions:  partitions,
+		Versions:    versions,
+		InstVersion: instVersion}
 
 	buf, e := json.Marshal(&inst)
 	if e != nil {
@@ -466,19 +467,20 @@ func (m *IndexManager) UpdateIndexInstance(bucket string, defnId common.IndexDef
 
 func (m *IndexManager) UpdateIndexInstanceSync(bucket string, defnId common.IndexDefnId, instId common.IndexInstId,
 	state common.IndexState, streamId common.StreamId, err string, buildTime []uint64, rState common.RebalanceState,
-	partitions []uint64, version int) error {
+	partitions []uint64, versions []int, instVersion int) error {
 
 	inst := &topologyChange{
-		Bucket:     bucket,
-		DefnId:     uint64(defnId),
-		InstId:     uint64(instId),
-		State:      uint32(state),
-		StreamId:   uint32(streamId),
-		Error:      err,
-		BuildTime:  buildTime,
-		RState:     uint32(rState),
-		Partitions: partitions,
-		Version:    version}
+		Bucket:      bucket,
+		DefnId:      uint64(defnId),
+		InstId:      uint64(instId),
+		State:       uint32(state),
+		StreamId:    uint32(streamId),
+		Error:       err,
+		BuildTime:   buildTime,
+		RState:      uint32(rState),
+		Partitions:  partitions,
+		Versions:    versions,
+		InstVersion: instVersion}
 
 	buf, e := json.Marshal(&inst)
 	if e != nil {
@@ -506,7 +508,7 @@ func (m *IndexManager) DropOrPruneInstance(defn common.IndexDefn, cleanup bool) 
 }
 
 func (m *IndexManager) MergePartition(defnId common.IndexDefnId, srcInstId common.IndexInstId, srcRState common.RebalanceState,
-	tgtInstId common.IndexInstId, tgtPartitions []common.PartitionId, tgtVersion uint64) error {
+	tgtInstId common.IndexInstId, tgtInstVersion uint64, tgtPartitions []common.PartitionId, tgtVersions []int) error {
 
 	partitions := make([]uint64, len(tgtPartitions))
 	for i, partnId := range tgtPartitions {
@@ -514,12 +516,13 @@ func (m *IndexManager) MergePartition(defnId common.IndexDefnId, srcInstId commo
 	}
 
 	inst := &mergePartition{
-		DefnId:        uint64(defnId),
-		SrcInstId:     uint64(srcInstId),
-		SrcRState:     uint64(srcRState),
-		TgtInstId:     uint64(tgtInstId),
-		TgtPartitions: partitions,
-		TgtVersion:    tgtVersion,
+		DefnId:         uint64(defnId),
+		SrcInstId:      uint64(srcInstId),
+		SrcRState:      uint64(srcRState),
+		TgtInstId:      uint64(tgtInstId),
+		TgtPartitions:  partitions,
+		TgtVersions:    tgtVersions,
+		TgtInstVersion: tgtInstVersion,
 	}
 
 	buf, e := json.Marshal(&inst)

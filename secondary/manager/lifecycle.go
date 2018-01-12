@@ -55,16 +55,17 @@ type requestHolder struct {
 }
 
 type topologyChange struct {
-	Bucket     string   `json:"bucket,omitempty"`
-	DefnId     uint64   `json:"defnId,omitempty"`
-	InstId     uint64   `json:"instId,omitempty"`
-	State      uint32   `json:"state,omitempty"`
-	StreamId   uint32   `json:"steamId,omitempty"`
-	Error      string   `json:"error,omitempty"`
-	BuildTime  []uint64 `json:"buildTime,omitempty"`
-	RState     uint32   `json:"rState,omitempty"`
-	Partitions []uint64 `json:"partitions,omitempty"`
-	Version    int      `json:"version,omitempty"`
+	Bucket      string   `json:"bucket,omitempty"`
+	DefnId      uint64   `json:"defnId,omitempty"`
+	InstId      uint64   `json:"instId,omitempty"`
+	State       uint32   `json:"state,omitempty"`
+	StreamId    uint32   `json:"steamId,omitempty"`
+	Error       string   `json:"error,omitempty"`
+	BuildTime   []uint64 `json:"buildTime,omitempty"`
+	RState      uint32   `json:"rState,omitempty"`
+	Partitions  []uint64 `json:"partitions,omitempty"`
+	Versions    []int    `json:"versions,omitempty"`
+	InstVersion int      `json:"instVersion,omitempty"`
 }
 
 type dropInstance struct {
@@ -73,12 +74,13 @@ type dropInstance struct {
 }
 
 type mergePartition struct {
-	DefnId        uint64   `json:"defnId,omitempty"`
-	SrcInstId     uint64   `json:"srcInstId,omitempty"`
-	SrcRState     uint64   `json:"srcRState,omitempty"`
-	TgtInstId     uint64   `json:"tgtInstId,omitempty"`
-	TgtPartitions []uint64 `json:"tgtPartitions,omitempty"`
-	TgtVersion    uint64   `json:"tgtVersion,omitempty"`
+	DefnId         uint64   `json:"defnId,omitempty"`
+	SrcInstId      uint64   `json:"srcInstId,omitempty"`
+	SrcRState      uint64   `json:"srcRState,omitempty"`
+	TgtInstId      uint64   `json:"tgtInstId,omitempty"`
+	TgtPartitions  []uint64 `json:"tgtPartitions,omitempty"`
+	TgtVersions    []int    `json:"tgtVersions,omitempty"`
+	TgtInstVersion uint64   `json:"tgtInstVersion,omitempty"`
 }
 
 type builder struct {
@@ -404,7 +406,7 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scheduled bool,
 
 	replicaId := m.setReplica(defn)
 
-	partitions, numPartitions := m.setPartition(defn)
+	partitions, versions, numPartitions := m.setPartition(defn)
 
 	/////////////////////////////////////////////////////
 	// Create Index Metadata
@@ -424,7 +426,7 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scheduled bool,
 	// It is possible to create index of the same name later, as long as the new index has a different
 	// definition id, since an index is consider valid only if it has both index definiton and index instance.
 	// So the dangling index definition is considered invalid.
-	if err := m.repo.addIndexToTopology(defn, instId, replicaId, partitions, numPartitions, 0, !defn.Deferred && scheduled); err != nil {
+	if err := m.repo.addIndexToTopology(defn, instId, replicaId, partitions, versions, numPartitions, 0, !defn.Deferred && scheduled); err != nil {
 		logging.Errorf("LifecycleMgr.handleCreateIndex() : createIndex fails. Reason = %v", err)
 		m.repo.DropIndexById(defn.DefnId)
 		return err
@@ -442,7 +444,7 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scheduled bool,
 	//    during indexer bootstrap or implicit dropIndex.
 	// 2) Index definition is deleted.  This effectively "delete index".
 	if m.notifier != nil {
-		if err := m.notifier.OnIndexCreate(defn, instId, replicaId, partitions, numPartitions, 0, reqCtx); err != nil {
+		if err := m.notifier.OnIndexCreate(defn, instId, replicaId, partitions, versions, numPartitions, 0, reqCtx); err != nil {
 			logging.Errorf("LifecycleMgr.handleCreateIndex() : createIndex fails. Reason = %v", err)
 			m.DeleteIndex(defn.DefnId, false, nil)
 			return err
@@ -580,24 +582,28 @@ func (m *LifecycleMgr) setReplica(defn *common.IndexDefn) int {
 	return replicaId
 }
 
-func (m *LifecycleMgr) setPartition(defn *common.IndexDefn) ([]common.PartitionId, uint32) {
+func (m *LifecycleMgr) setPartition(defn *common.IndexDefn) ([]common.PartitionId, []int, uint32) {
 
 	// partitions
 	var partitions []common.PartitionId
+	var versions []int
 	var numPartitions uint32
 
 	if !common.IsPartitioned(defn.PartitionScheme) {
 		partitions = []common.PartitionId{common.PartitionId(0)}
+		versions = []int{defn.InstVersion}
 		numPartitions = 1
 	} else {
 		partitions = defn.Partitions
+		versions = defn.Versions
 		numPartitions = defn.NumPartitions
 	}
 
 	defn.NumPartitions = 0
 	defn.Partitions = nil
+	defn.Versions = nil
 
-	return partitions, numPartitions
+	return partitions, versions, numPartitions
 }
 
 func (m *LifecycleMgr) verifyDuplicateDefn(defn *common.IndexDefn, reqCtx *common.MetadataRequestContext) (*common.IndexDefn, error) {
@@ -750,7 +756,7 @@ func (m *LifecycleMgr) BuildIndexes(ids []common.IndexDefnId,
 			}
 
 			// Reset any previous error
-			m.UpdateIndexInstance(defn.Bucket, id, common.IndexInstId(inst.InstId), common.INDEX_STATE_NIL, common.NIL_STREAM, "", nil, inst.RState, nil, -1)
+			m.UpdateIndexInstance(defn.Bucket, id, common.IndexInstId(inst.InstId), common.INDEX_STATE_NIL, common.NIL_STREAM, "", nil, inst.RState, nil, nil, -1)
 
 			instIdList = append(instIdList, common.IndexInstId(inst.InstId))
 			inst2DefnMap[common.IndexInstId(inst.InstId)] = defn.DefnId
@@ -793,7 +799,7 @@ func (m *LifecycleMgr) BuildIndexes(ids []common.IndexDefnId,
 						build_err = errors.New(fmt.Sprintf("Index %v will retry building in the background for reason: %v.", defn.Name, build_err.Error()))
 					}
 					m.UpdateIndexInstance(defn.Bucket, defnId, common.IndexInstId(inst.InstId), common.INDEX_STATE_NIL,
-						common.NIL_STREAM, build_err.Error(), nil, inst.RState, nil, -1)
+						common.NIL_STREAM, build_err.Error(), nil, inst.RState, nil, nil, -1)
 				} else {
 					logging.Infof("LifecycleMgr.handleBuildIndexes() : Fail to persist error in index instance (%v, %v, %v).",
 						defn.Bucket, defn.Name, inst.ReplicaId)
@@ -923,7 +929,7 @@ func (m *LifecycleMgr) DeleteIndex(id common.IndexDefnId, notify bool,
 		}
 
 		if dropErr != nil {
-			return dropErr 
+			return dropErr
 		}
 	}
 
@@ -988,7 +994,7 @@ func (m *LifecycleMgr) handleTopologyChange(content []byte) error {
 	// update the index instance
 	if err := m.UpdateIndexInstance(change.Bucket, common.IndexDefnId(change.DefnId), common.IndexInstId(change.InstId),
 		common.IndexState(change.State), common.StreamId(change.StreamId), change.Error, change.BuildTime, change.RState, change.Partitions,
-		change.Version); err != nil {
+		change.Versions, change.InstVersion); err != nil {
 		return err
 	}
 
@@ -1265,7 +1271,7 @@ func (m *LifecycleMgr) CreateIndexInstance(defn *common.IndexDefn, scheduled boo
 
 	replicaId := m.setReplica(defn)
 
-	partitions, numPartitions := m.setPartition(defn)
+	partitions, versions, numPartitions := m.setPartition(defn)
 
 	if realInstId != 0 {
 		realInst, err := m.FindLocalIndexInst(defn.Bucket, defn.DefnId, realInstId)
@@ -1290,7 +1296,7 @@ func (m *LifecycleMgr) CreateIndexInstance(defn *common.IndexDefn, scheduled boo
 	// It is possible to create index of the same name later, as long as the new index has a different
 	// definition id, since an index is consider valid only if it has both index definiton and index instance.
 	// So the dangling index definition is considered invalid.
-	if err := m.repo.addInstanceToTopology(defn, instId, replicaId, partitions, numPartitions, realInstId, !defn.Deferred && scheduled); err != nil {
+	if err := m.repo.addInstanceToTopology(defn, instId, replicaId, partitions, versions, numPartitions, realInstId, !defn.Deferred && scheduled); err != nil {
 		logging.Errorf("LifecycleMgr.CreateIndexInstance() : CreateIndexInstance fails. Reason = %v", err)
 		return err
 	}
@@ -1307,7 +1313,7 @@ func (m *LifecycleMgr) CreateIndexInstance(defn *common.IndexDefn, scheduled boo
 	//    during indexer bootstrap or implicit dropIndex.
 	// 2) Index definition is deleted.  This effectively "delete index".
 	if m.notifier != nil {
-		if err := m.notifier.OnIndexCreate(defn, instId, replicaId, partitions, numPartitions, realInstId, reqCtx); err != nil {
+		if err := m.notifier.OnIndexCreate(defn, instId, replicaId, partitions, versions, numPartitions, realInstId, reqCtx); err != nil {
 			logging.Errorf("LifecycleMgr.CreateIndexInstance() : CreateIndexInstance fails. Reason = %v", err)
 			m.DeleteIndexInstance(defn.DefnId, instId, false, reqCtx)
 			return err
@@ -1390,12 +1396,10 @@ func (m *LifecycleMgr) verifyOverlapPartition(defn *common.IndexDefn, reqCtx *co
 			}
 
 			if topology != nil {
-				version := defn.InstVersion
-
 				insts := topology.GetIndexInstancesByDefn(existDefn.DefnId)
 
 				// Go through each partition that we want to create for this index instance
-				for _, partnId := range defn.Partitions {
+				for i, partnId := range defn.Partitions {
 					for _, inst := range insts {
 
 						// Guard against duplicate index instance id
@@ -1419,7 +1423,7 @@ func (m *LifecycleMgr) verifyOverlapPartition(defn *common.IndexDefn, reqCtx *co
 								//    eventually been cleaned up. Note that instance version is increasing for every rebalance.
 								if common.RebalanceState(inst.RState) == common.REBAL_MERGED ||
 									common.RebalanceState(inst.RState) == common.REBAL_ACTIVE ||
-									inst.Version >= uint64(version) {
+									int(partn.Version) >= defn.Versions[i] {
 									err := errors.New("Found overlapping partition when rebalancing.")
 									logging.Errorf("LifecycleMgr.CreateIndexInstance() : createIndex fails. Reason: %v", err)
 									return err
@@ -1477,6 +1481,7 @@ func (m *LifecycleMgr) DeleteOrPruneIndexInstance(defn common.IndexDefn, cleanup
 	}
 
 	if len(defn.Partitions) == 0 {
+		// If this is coming from drop index
 		return m.DeleteIndexInstance(id, instId, cleanup, reqCtx)
 	}
 
@@ -1568,11 +1573,12 @@ func (m *LifecycleMgr) handleMergePartition(content []byte, reqCtx *common.Metad
 	}
 
 	return m.MergePartition(common.IndexDefnId(change.DefnId), common.IndexInstId(change.SrcInstId),
-		common.RebalanceState(change.SrcRState), common.IndexInstId(change.TgtInstId), change.TgtPartitions, change.TgtVersion, reqCtx)
+		common.RebalanceState(change.SrcRState), common.IndexInstId(change.TgtInstId), change.TgtPartitions, change.TgtVersions,
+		change.TgtInstVersion, reqCtx)
 }
 
 func (m *LifecycleMgr) MergePartition(id common.IndexDefnId, srcInstId common.IndexInstId, srcRState common.RebalanceState,
-	tgtInstId common.IndexInstId, tgtPartitions []uint64, tgtVersion uint64, reqCtx *common.MetadataRequestContext) error {
+	tgtInstId common.IndexInstId, tgtPartitions []uint64, tgtVersions []int, tgtInstVersion uint64, reqCtx *common.MetadataRequestContext) error {
 
 	logging.Infof("LifecycleMgr.MergePartition() : index defnId %v source %v target %v", id, srcInstId, tgtInstId)
 
@@ -1592,7 +1598,8 @@ func (m *LifecycleMgr) MergePartition(id common.IndexDefnId, srcInstId common.In
 		return err
 	}
 
-	m.repo.mergePartitionFromTopology(string(indexerId), defn.Bucket, id, srcInstId, srcRState, tgtInstId, tgtPartitions, tgtVersion)
+	m.repo.mergePartitionFromTopology(string(indexerId), defn.Bucket, id, srcInstId, srcRState, tgtInstId, tgtInstVersion,
+		tgtPartitions, tgtVersions)
 
 	return nil
 }
@@ -1638,7 +1645,13 @@ func (m *LifecycleMgr) PruneIndexInstance(id common.IndexDefnId, instId common.I
 		}
 	}
 
-	if len(newPartitions) == len(inst.Partitions) || len(inst.Partitions) == 0 {
+	// find if there is any proxy depends on this instance
+	numProxy, err := m.findNumProxy(defn.Bucket, id, instId)
+	if err != nil {
+		return err
+	}
+
+	if numProxy == 0 && (len(newPartitions) == len(inst.Partitions) || len(inst.Partitions) == 0) {
 		return m.DeleteIndexInstance(id, instId, cleanup, reqCtx)
 	}
 
@@ -1676,6 +1689,23 @@ func (m *LifecycleMgr) PruneIndexInstance(id common.IndexDefnId, instId common.I
 // Lifecycle Mgr - support functions
 //////////////////////////////////////////////////////////////
 
+func (m *LifecycleMgr) findNumProxy(bucket string, defnId common.IndexDefnId, instId common.IndexInstId) (int, error) {
+
+	insts, err := m.FindAllLocalIndexInst(bucket, defnId)
+	if err != nil {
+		return -1, err
+	}
+
+	var count int
+	for _, inst := range insts {
+		if inst.RealInstId == uint64(instId) {
+			count++
+		}
+	}
+
+	return count, nil
+}
+
 func (m *LifecycleMgr) canRetryError(inst *IndexInstDistribution, err error, retry bool) bool {
 
 	if inst == nil || inst.RState != uint32(common.REBAL_ACTIVE) {
@@ -1700,7 +1730,7 @@ func (m *LifecycleMgr) canRetryError(inst *IndexInstDistribution, err error, ret
 
 func (m *LifecycleMgr) UpdateIndexInstance(bucket string, defnId common.IndexDefnId, instId common.IndexInstId,
 	state common.IndexState, streamId common.StreamId, errStr string, buildTime []uint64, rState uint32,
-	partitions []uint64, version int) error {
+	partitions []uint64, versions []int, version int) error {
 
 	topology, err := m.repo.GetTopologyByBucket(bucket)
 	if err != nil {
@@ -1755,7 +1785,7 @@ func (m *LifecycleMgr) UpdateIndexInstance(bucket string, defnId common.IndexDef
 	changed = topology.UpdateStorageModeForIndexInst(defnId, instId, string(defn.Using)) || changed
 
 	if len(partitions) != 0 {
-		changed = topology.AddPartitionsForIndexInst(defnId, instId, string(indexerId), partitions) || changed
+		changed = topology.AddPartitionsForIndexInst(defnId, instId, string(indexerId), partitions, versions) || changed
 	}
 
 	if version != -1 {

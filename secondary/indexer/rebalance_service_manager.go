@@ -2389,6 +2389,10 @@ func (m *ServiceMgr) generateTransferTokenForMoveIndex(req *manager.IndexRequest
 				for _, inst := range insts {
 
 					pc := c.NewKeyPartitionContainer(numVbuckets, int(inst.NumPartitions), index.PartitionScheme)
+					for _, partition := range inst.Partitions {
+						partnDefn := c.KeyPartitionDefn{Id: c.PartitionId(partition.PartId), Version: int(partition.Version)}
+						pc.AddPartition(c.PartitionId(partition.PartId), partnDefn)
+					}
 
 					localInst := &c.IndexInst{
 						InstId:    c.IndexInstId(inst.InstId),
@@ -2507,10 +2511,12 @@ func (m *ServiceMgr) genTransferToken(indexInst *c.IndexInst, sourceId string, d
 		IndexInst: *indexInst,
 	}
 
+	partitions, versions := tt.IndexInst.Pc.GetAllPartitionIds()
 	tt.IndexInst.Defn.InstVersion = tt.IndexInst.Version + 1
 	tt.IndexInst.Defn.ReplicaId = tt.IndexInst.ReplicaId
 	tt.IndexInst.Defn.NumPartitions = uint32(tt.IndexInst.Pc.GetNumPartitions())
-	tt.IndexInst.Defn.Partitions = tt.IndexInst.Pc.GetAllPartitionIds()
+	tt.IndexInst.Defn.Partitions = partitions
+	tt.IndexInst.Defn.Versions = versions
 	tt.IndexInst.Pc = nil
 
 	// reset defn id and instance id as if it is a new index.

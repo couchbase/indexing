@@ -265,6 +265,12 @@ func ConvertToIndexUsage(config common.Config, defn *common.IndexDefn, localMeta
 				}
 				index.pendingDelete = pendingDelete
 
+				// get the version from inst or partition
+				version := partn.Version
+				if version == 0 && version != inst.Version {
+					version = inst.Version
+				}
+
 				// update internal info
 				index.Instance = &common.IndexInst{
 					InstId:    common.IndexInstId(inst.InstId),
@@ -273,7 +279,7 @@ func ConvertToIndexUsage(config common.Config, defn *common.IndexDefn, localMeta
 					Stream:    common.StreamId(inst.StreamId),
 					Error:     inst.Error,
 					ReplicaId: int(inst.ReplicaId),
-					Version:   int(inst.Version),
+					Version:   int(version),
 					RState:    common.RebalanceState(inst.RState),
 					Pc:        pc,
 				}

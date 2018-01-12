@@ -677,20 +677,24 @@ func (b *loadHeuristics) copyStats() *loadStats {
 	return newStats
 }
 
-func (b *loadHeuristics) cloneRefresh(inst *mclient.InstanceDefn) *loadHeuristics {
+func (b *loadHeuristics) cloneRefresh(curInst *mclient.InstanceDefn, newInst *mclient.InstanceDefn) *loadHeuristics {
 
 	clone := newLoadHeuristics(b.numPartitions)
-	for partnId, _ := range inst.IndexerId {
-		clone.avgLoad[uint64(partnId)] = atomic.LoadUint64(&b.avgLoad[int(partnId)])
-		clone.hit[uint64(partnId)] = atomic.LoadUint64(&b.hit[int(partnId)])
+	for partnId, _ := range newInst.IndexerId {
+		if newInst.Versions[partnId] == curInst.Versions[partnId] {
+			clone.avgLoad[uint64(partnId)] = atomic.LoadUint64(&b.avgLoad[int(partnId)])
+			clone.hit[uint64(partnId)] = atomic.LoadUint64(&b.hit[int(partnId)])
+		}
 	}
 
 	cloneStats := clone.getStats()
 	stats := b.getStats()
-	for partnId, _ := range inst.IndexerId {
-		cloneStats.updatePendingItem(partnId, stats.getPendingItem(partnId))
-		cloneStats.updateRollbackTime(partnId, stats.getRollbackTime(partnId))
-		cloneStats.updateStatsTime(partnId, stats.statsTime[partnId])
+	for partnId, _ := range newInst.IndexerId {
+		if newInst.Versions[partnId] == curInst.Versions[partnId] {
+			cloneStats.updatePendingItem(partnId, stats.getPendingItem(partnId))
+			cloneStats.updateRollbackTime(partnId, stats.getRollbackTime(partnId))
+			cloneStats.updateStatsTime(partnId, stats.statsTime[partnId])
+		}
 	}
 
 	return clone
@@ -1448,22 +1452,12 @@ func (b *metadataClient) updateTopology(
 		for instId, curInst := range currmeta.insts {
 			if newInst, ok := newmeta.insts[instId]; ok {
 				if load, ok := currmeta.loads[instId]; ok {
-
-					if curInst.Version == newInst.Version {
-						// carry over the stats.  It will only copy the stats based on the
-						// partitions in newInst.   So if the partition is pruned, the
-						// stats will be dropped.  The partition can be pruned when
-						// 1) The partition may be dropped when node is rebalanced out
-						// 2) The partition may not be available because the indexer is removed due to unwatchMetadata
-						newmeta.loads[instId] = load.cloneRefresh(newInst)
-					} else {
-						// After rebalancing, reset the stats.  Note that this will reset the stats for all partitions,
-						// including partitions that have not physically moved.  For any of this partition, the scan
-						// traffic will be temporarily moved to any other available replica, until the rebalanced
-						// partition has received new stats.   If none of the replica is available, then scan traffic
-						// can be direct to the rebalanced partition.
-						logging.Infof("new index instance version for %v.  Resetting instance stats.", instId)
-					}
+					// carry over the stats.  It will only copy the stats based on the
+					// partitions in newInst.   So if the partition is pruned, the
+					// stats will be dropped.  The partition can be pruned when
+					// 1) The partition may be dropped when node is rebalanced out
+					// 2) The partition may not be available because the indexer is removed due to unwatchMetadata
+					newmeta.loads[instId] = load.cloneRefresh(curInst, newInst)
 				}
 			}
 		}

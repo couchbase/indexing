@@ -195,6 +195,7 @@ type IndexDefn struct {
 	ReplicaId     int           `json:"replicaId,omitempty"`
 	InstId        IndexInstId   `json:"instanceId,omitempty"`
 	Partitions    []PartitionId `json:"partitions,omitempty"`
+	Versions      []int         `json:"versions,omitempty"`
 	NumPartitions uint32        `json:"numPartitions,omitempty"`
 	RealInstId    IndexInstId   `json:"realInstId,omitempty"`
 }

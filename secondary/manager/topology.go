@@ -53,6 +53,7 @@ type IndexInstDistribution struct {
 
 type IndexPartDistribution struct {
 	PartId          uint64                      `json:"partId,omitempty"`
+	Version         uint64                      `json:"version,omitempty"`
 	SinglePartition IndexSinglePartDistribution `json:"singlePartition,omitempty"`
 	KeyPartition    IndexKeyPartDistribution    `json:"keyPartition,omitempty"`
 }
@@ -118,8 +119,8 @@ func (g *GlobalTopology) RemoveTopologyKey(key string) {
 // Add an index definition to Topology.
 //
 func (t *IndexTopology) AddIndexDefinition(bucket string, name string, defnId uint64, instId uint64, state uint32, indexerId string,
-	instVersion uint64, rState uint32, replicaId uint64, partitions []common.PartitionId, numPartitions uint32, scheduled bool, storageMode string,
-	realInstId uint64) {
+	instVersion uint64, rState uint32, replicaId uint64, partitions []common.PartitionId, versions []int, numPartitions uint32,
+	scheduled bool, storageMode string, realInstId uint64) {
 
 	t.RemoveIndexDefinitionById(common.IndexDefnId(defnId))
 
@@ -134,7 +135,7 @@ func (t *IndexTopology) AddIndexDefinition(bucket string, name string, defnId ui
 	inst.NumPartitions = numPartitions
 	inst.RealInstId = realInstId
 
-	for _, partnId := range partitions {
+	for i, partnId := range partitions {
 		slice := new(IndexSliceLocator)
 		slice.SliceId = 0
 		slice.IndexerId = indexerId
@@ -142,6 +143,7 @@ func (t *IndexTopology) AddIndexDefinition(bucket string, name string, defnId ui
 
 		part := new(IndexPartDistribution)
 		part.PartId = uint64(partnId)
+		part.Version = uint64(versions[i])
 		part.SinglePartition.Slices = append(part.SinglePartition.Slices, *slice)
 		inst.Partitions = append(inst.Partitions, *part)
 	}
@@ -156,8 +158,8 @@ func (t *IndexTopology) AddIndexDefinition(bucket string, name string, defnId ui
 }
 
 func (t *IndexTopology) AddIndexInstance(bucket string, name string, defnId uint64, instId uint64, state uint32, indexerId string,
-	instVersion uint64, rState uint32, replicaId uint64, partitions []common.PartitionId, numPartitions uint32, scheduled bool, storageMode string,
-	realInstId uint64) {
+	instVersion uint64, rState uint32, replicaId uint64, partitions []common.PartitionId, versions []int, numPartitions uint32,
+	scheduled bool, storageMode string, realInstId uint64) {
 
 	inst := IndexInstDistribution{}
 	inst.InstId = instId
@@ -170,7 +172,7 @@ func (t *IndexTopology) AddIndexInstance(bucket string, name string, defnId uint
 	inst.NumPartitions = numPartitions
 	inst.RealInstId = realInstId
 
-	for _, partnId := range partitions {
+	for i, partnId := range partitions {
 		slice := IndexSliceLocator{}
 		slice.SliceId = 0
 		slice.IndexerId = indexerId
@@ -178,6 +180,7 @@ func (t *IndexTopology) AddIndexInstance(bucket string, name string, defnId uint
 
 		part := IndexPartDistribution{}
 		part.PartId = uint64(partnId)
+		part.Version = uint64(versions[i])
 		part.SinglePartition.Slices = append(part.SinglePartition.Slices, slice)
 		inst.Partitions = append(inst.Partitions, part)
 	}
@@ -402,7 +405,8 @@ func (t *IndexTopology) UpdateVersionForIndexInst(defnId common.IndexDefnId, ins
 	return false
 }
 
-func (t *IndexTopology) AddPartitionsForIndexInst(defnId common.IndexDefnId, instId common.IndexInstId, indexerId string, partitions []uint64) bool {
+func (t *IndexTopology) AddPartitionsForIndexInst(defnId common.IndexDefnId, instId common.IndexInstId, indexerId string,
+	partitions []uint64, versions []int) bool {
 
 	for i, _ := range t.Definitions {
 		if t.Definitions[i].DefnId == uint64(defnId) {
@@ -410,7 +414,7 @@ func (t *IndexTopology) AddPartitionsForIndexInst(defnId common.IndexDefnId, ins
 				if t.Definitions[i].Instances[j].InstId == uint64(instId) {
 
 					newPartitions := make([]IndexPartDistribution, 0, len(partitions))
-					for _, partnId := range partitions {
+					for k, partnId := range partitions {
 						found := false
 						for _, partition := range t.Definitions[i].Instances[j].Partitions {
 							if partnId == partition.PartId {
@@ -427,6 +431,7 @@ func (t *IndexTopology) AddPartitionsForIndexInst(defnId common.IndexDefnId, ins
 
 							part := IndexPartDistribution{}
 							part.PartId = partnId
+							part.Version = uint64(versions[k])
 							part.SinglePartition.Slices = append(part.SinglePartition.Slices, slice)
 
 							newPartitions = append(newPartitions, part)
@@ -477,6 +482,10 @@ func (t *IndexTopology) SplitPartitionsForIndexInst(defnId common.IndexDefnId, i
 								proxyInst.Partitions = append(proxyInst.Partitions, partition)
 							}
 						}
+					}
+
+					if len(t.Definitions[i].Instances[j].Partitions) == 0 {
+						t.Definitions[i].Instances[j].Partitions = nil
 					}
 
 					change := len(proxyInst.Partitions) != 0

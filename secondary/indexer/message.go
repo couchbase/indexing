@@ -804,12 +804,13 @@ func (m *MsgClustMgrDropInstance) GetString() string {
 
 // CLUST_MGR_MERGE_PARTITION
 type MsgClustMgrMergePartition struct {
-	defnId        common.IndexDefnId
-	srcInstId     common.IndexInstId
-	srcRState     common.RebalanceState
-	tgtInstId     common.IndexInstId
-	tgtPartitions []common.PartitionId
-	tgtVersion    uint64
+	defnId         common.IndexDefnId
+	srcInstId      common.IndexInstId
+	srcRState      common.RebalanceState
+	tgtInstId      common.IndexInstId
+	tgtPartitions  []common.PartitionId
+	tgtVersions    []int
+	tgtInstVersion uint64
 }
 
 func (m *MsgClustMgrMergePartition) GetMsgType() MsgType {
@@ -836,8 +837,12 @@ func (m *MsgClustMgrMergePartition) GetTgtPartitions() []common.PartitionId {
 	return m.tgtPartitions
 }
 
-func (m *MsgClustMgrMergePartition) GetTgtVersion() uint64 {
-	return m.tgtVersion
+func (m *MsgClustMgrMergePartition) GetTgtVersions() []int {
+	return m.tgtVersions
+}
+
+func (m *MsgClustMgrMergePartition) GetTgtInstVersion() uint64 {
+	return m.tgtInstVersion
 }
 
 func (m *MsgClustMgrMergePartition) GetString() string {
@@ -849,7 +854,8 @@ func (m *MsgClustMgrMergePartition) GetString() string {
 	str += fmt.Sprintf("\n\tIndex src rebal state: %v", m.srcRState)
 	str += fmt.Sprintf("\n\tIndex tgt inst Id: %v", m.tgtInstId)
 	str += fmt.Sprintf("\n\tIndex tgt partitions: %v", m.tgtPartitions)
-	str += fmt.Sprintf("\n\tIndex tgt version: %v", m.tgtVersion)
+	str += fmt.Sprintf("\n\tIndex tgt versions: %v", m.tgtVersions)
+	str += fmt.Sprintf("\n\tIndex tgt version: %v", m.tgtInstVersion)
 	return str
 }
 

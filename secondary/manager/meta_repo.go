@@ -1039,7 +1039,7 @@ func isIndexStats(key string) bool {
 // Add Index to Topology
 //
 func (m *MetadataRepo) addIndexToTopology(defn *common.IndexDefn, instId common.IndexInstId, replicaId int,
-	partitions []common.PartitionId, numPartitions uint32, realInstId common.IndexInstId, scheduled bool) error {
+	partitions []common.PartitionId, versions []int, numPartitions uint32, realInstId common.IndexInstId, scheduled bool) error {
 
 	// get existing topology
 	topology, err := m.GetTopologyByBucket(defn.Bucket)
@@ -1064,8 +1064,8 @@ func (m *MetadataRepo) addIndexToTopology(defn *common.IndexDefn, instId common.
 
 	topology.AddIndexDefinition(defn.Bucket, defn.Name, uint64(defn.DefnId),
 		uint64(instId), uint32(common.INDEX_STATE_CREATED), string(indexerId),
-		uint64(defn.InstVersion), rState, uint64(replicaId), partitions, numPartitions,
-		scheduled, string(defn.Using), uint64(realInstId))
+		uint64(defn.InstVersion), rState, uint64(replicaId), partitions, versions,
+		numPartitions, scheduled, string(defn.Using), uint64(realInstId))
 
 	// Add a reference of the bucket-level topology to the global topology.
 	// If it fails later to create bucket-level topology, it will have
@@ -1086,7 +1086,7 @@ func (m *MetadataRepo) addIndexToTopology(defn *common.IndexDefn, instId common.
 // Add Index to Topology
 //
 func (m *MetadataRepo) addInstanceToTopology(defn *common.IndexDefn, instId common.IndexInstId, replicaId int,
-	partitions []common.PartitionId, numPartitions uint32, realInstId common.IndexInstId, scheduled bool) error {
+	partitions []common.PartitionId, versions []int, numPartitions uint32, realInstId common.IndexInstId, scheduled bool) error {
 
 	// get existing topology
 	topology, err := m.GetTopologyByBucket(defn.Bucket)
@@ -1112,13 +1112,13 @@ func (m *MetadataRepo) addInstanceToTopology(defn *common.IndexDefn, instId comm
 	if topology.FindIndexDefinitionById(defn.DefnId) == nil {
 		topology.AddIndexDefinition(defn.Bucket, defn.Name, uint64(defn.DefnId),
 			uint64(instId), uint32(common.INDEX_STATE_CREATED), string(indexerId),
-			uint64(defn.InstVersion), rState, uint64(replicaId), partitions, numPartitions,
-			scheduled, string(defn.Using), uint64(realInstId))
+			uint64(defn.InstVersion), rState, uint64(replicaId), partitions, versions,
+			numPartitions, scheduled, string(defn.Using), uint64(realInstId))
 	} else {
 		topology.AddIndexInstance(defn.Bucket, defn.Name, uint64(defn.DefnId),
 			uint64(instId), uint32(common.INDEX_STATE_CREATED), string(indexerId),
-			uint64(defn.InstVersion), rState, uint64(replicaId), partitions, numPartitions,
-			scheduled, string(defn.Using), uint64(realInstId))
+			uint64(defn.InstVersion), rState, uint64(replicaId), partitions, versions,
+			numPartitions, scheduled, string(defn.Using), uint64(realInstId))
 	}
 
 	// Add a reference of the bucket-level topology to the global topology.
@@ -1186,7 +1186,7 @@ func (m *MetadataRepo) deleteInstanceFromTopology(bucket string, id common.Index
 // Merge partitions from Topology
 //
 func (m *MetadataRepo) mergePartitionFromTopology(indexerId string, bucket string, id common.IndexDefnId, srcInstId common.IndexInstId,
-	srcRState common.RebalanceState, tgtInstId common.IndexInstId, tgtPartitions []uint64, tgtVersion uint64) error {
+	srcRState common.RebalanceState, tgtInstId common.IndexInstId, tgtInstVersion uint64, tgtPartitions []uint64, tgtVersions []int) error {
 
 	// get existing topology
 	topology, err := m.GetTopologyByBucket(bucket)
@@ -1201,8 +1201,8 @@ func (m *MetadataRepo) mergePartitionFromTopology(indexerId string, bucket strin
 	topology.UpdateRebalanceStateForIndexInst(id, srcInstId, srcRState)
 	topology.DeleteAllPartitionsForIndexInst(id, srcInstId)
 
-	topology.AddPartitionsForIndexInst(id, tgtInstId, indexerId, tgtPartitions)
-	topology.UpdateVersionForIndexInst(id, tgtInstId, tgtVersion)
+	topology.AddPartitionsForIndexInst(id, tgtInstId, indexerId, tgtPartitions, tgtVersions)
+	topology.UpdateVersionForIndexInst(id, tgtInstId, tgtInstVersion)
 
 	if err = m.SetTopologyByBucket(topology.Bucket, topology); err != nil {
 		return err
@@ -1235,9 +1235,6 @@ func (m *MetadataRepo) splitPartitionFromTopology(bucket string, id common.Index
 	return nil
 }
 
-//
-// Add a reference of the bucket-level index topology to global topology.
-// If not exist, create a new one.
 //
 // Add a reference of the bucket-level index topology to global topology.
 // If not exist, create a new one.

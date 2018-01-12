@@ -180,7 +180,8 @@ func (c *clustMgrAgent) handleUpdateTopologyForIndex(cmd Message) {
 		updatedError := ""
 		updatedRState := common.REBAL_NIL
 		updatedPartitions := []uint64(nil)
-		updatedVersion := -1
+		updatedVersions := []int(nil)
+		updatedInstVersion := -1
 
 		if updatedFields.state {
 			updatedState = index.State
@@ -197,10 +198,11 @@ func (c *clustMgrAgent) handleUpdateTopologyForIndex(cmd Message) {
 		if updatedFields.partitions {
 			for _, partition := range index.Pc.GetAllPartitions() {
 				updatedPartitions = append(updatedPartitions, uint64(partition.GetPartitionId()))
+				updatedVersions = append(updatedVersions, int(partition.GetVersion()))
 			}
 		}
 		if updatedFields.version {
-			updatedVersion = index.Version
+			updatedInstVersion = index.Version
 		}
 
 		updatedBuildTs := index.BuildTs
@@ -209,12 +211,14 @@ func (c *clustMgrAgent) handleUpdateTopologyForIndex(cmd Message) {
 		if syncUpdate {
 			go func() {
 				err = c.mgr.UpdateIndexInstanceSync(index.Defn.Bucket, index.Defn.DefnId, index.InstId,
-					updatedState, updatedStream, updatedError, updatedBuildTs, updatedRState, updatedPartitions, updatedVersion)
+					updatedState, updatedStream, updatedError, updatedBuildTs, updatedRState, updatedPartitions,
+					updatedVersions, updatedInstVersion)
 				respCh <- err
 			}()
 		} else {
 			err = c.mgr.UpdateIndexInstance(index.Defn.Bucket, index.Defn.DefnId, index.InstId,
-				updatedState, updatedStream, updatedError, updatedBuildTs, updatedRState, updatedPartitions, updatedVersion)
+				updatedState, updatedStream, updatedError, updatedBuildTs, updatedRState, updatedPartitions,
+				updatedVersions, updatedInstVersion)
 		}
 		common.CrashOnError(err)
 	}
@@ -245,9 +249,10 @@ func (c *clustMgrAgent) handleMergePartition(cmd Message) {
 	srcRState := cmd.(*MsgClustMgrMergePartition).GetSrcRState()
 	tgtInstId := cmd.(*MsgClustMgrMergePartition).GetTgtInstId()
 	tgtPartitions := cmd.(*MsgClustMgrMergePartition).GetTgtPartitions()
-	tgtVersion := cmd.(*MsgClustMgrMergePartition).GetTgtVersion()
+	tgtVersions := cmd.(*MsgClustMgrMergePartition).GetTgtVersions()
+	tgtInstVersion := cmd.(*MsgClustMgrMergePartition).GetTgtInstVersion()
 
-	if err := c.mgr.MergePartition(defnId, srcInstId, srcRState, tgtInstId, tgtPartitions, tgtVersion); err != nil {
+	if err := c.mgr.MergePartition(defnId, srcInstId, srcRState, tgtInstId, tgtInstVersion, tgtPartitions, tgtVersions); err != nil {
 		common.CrashOnError(err)
 	}
 
@@ -351,10 +356,12 @@ func (c *clustMgrAgent) handleGetGlobalTopology(cmd Message) {
 
 			// create partitions
 			partitions := make([]common.PartitionId, len(inst.Partitions))
+			versions := make([]int, len(inst.Partitions))
 			for i, partn := range inst.Partitions {
 				partitions[i] = common.PartitionId(partn.PartId)
+				versions[i] = int(partn.Version)
 			}
-			pc := c.metaNotifier.makeDefaultPartitionContainer(partitions, inst.NumPartitions, idxDefn.PartitionScheme)
+			pc := c.metaNotifier.makeDefaultPartitionContainer(partitions, versions, inst.NumPartitions, idxDefn.PartitionScheme)
 
 			// create index instance
 			idxInst := common.IndexInst{
@@ -515,13 +522,13 @@ func NewMetaNotifier(adminCh MsgChannel, config common.Config, mgr *clustMgrAgen
 }
 
 func (meta *metaNotifier) OnIndexCreate(indexDefn *common.IndexDefn, instId common.IndexInstId,
-	replicaId int, partitions []common.PartitionId, numPartitions uint32, realInstId common.IndexInstId,
+	replicaId int, partitions []common.PartitionId, versions []int, numPartitions uint32, realInstId common.IndexInstId,
 	reqCtx *common.MetadataRequestContext) error {
 
 	logging.Infof("clustMgrAgent::OnIndexCreate Notification "+
 		"Received for Create Index %v %v partitions %v", indexDefn, reqCtx, partitions)
 
-	pc := meta.makeDefaultPartitionContainer(partitions, numPartitions, indexDefn.PartitionScheme)
+	pc := meta.makeDefaultPartitionContainer(partitions, versions, numPartitions, indexDefn.PartitionScheme)
 
 	idxInst := common.IndexInst{InstId: instId,
 		Defn:       *indexDefn,
@@ -746,7 +753,7 @@ func (meta *metaNotifier) fetchStats() {
 	}
 }
 
-func (meta *metaNotifier) makeDefaultPartitionContainer(partitions []common.PartitionId, numPartitions uint32,
+func (meta *metaNotifier) makeDefaultPartitionContainer(partitions []common.PartitionId, versions []int, numPartitions uint32,
 	scheme common.PartitionScheme) common.PartitionContainer {
 
 	numVbuckets := meta.config["numVbuckets"].Int()
@@ -756,8 +763,8 @@ func (meta *metaNotifier) makeDefaultPartitionContainer(partitions []common.Part
 	addr := net.JoinHostPort("", meta.config["streamMaintPort"].String())
 	endpt := []common.Endpoint{common.Endpoint(addr)}
 
-	for _, partnId := range partitions {
-		partnDefn := common.KeyPartitionDefn{Id: partnId, Endpts: endpt}
+	for i, partnId := range partitions {
+		partnDefn := common.KeyPartitionDefn{Id: partnId, Version: versions[i], Endpts: endpt}
 		pc.AddPartition(partnId, partnDefn)
 	}
 
