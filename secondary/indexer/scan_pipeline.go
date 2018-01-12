@@ -129,7 +129,7 @@ func (s *IndexScanSource) Routine() error {
 			if len(entry) > cap(*buf) {
 				*buf = make([]byte, 0, len(entry)+1024)
 			}
-			skipRow, ck, err = filterScanRow(entry, currentScan, (*buf)[:0])
+			skipRow, ck, err = filterScanRow(entry, currentScan, (*buf)[:0], r.isPrimary)
 			if err != nil {
 				return err
 			}
@@ -325,11 +325,17 @@ func siSplitEntry(entry []byte, tmp []byte) ([]byte, []byte, int) {
 }
 
 // Return true if the row needs to be skipped based on the filter
-func filterScanRow(key []byte, scan Scan, buf []byte) (bool, [][]byte, error) {
-	codec := collatejson.NewCodec(16)
-	compositekeys, err := codec.ExplodeArray(key, buf)
-	if err != nil {
-		return false, nil, err
+func filterScanRow(key []byte, scan Scan, buf []byte, isPrimary bool) (bool, [][]byte, error) {
+	var compositekeys [][]byte
+	var err error
+	if isPrimary {
+		compositekeys = append(compositekeys, key)
+	} else {
+		codec := collatejson.NewCodec(16)
+		compositekeys, err = codec.ExplodeArray(key, buf)
+		if err != nil {
+			return false, nil, err
+		}
 	}
 
 	var filtermatch bool

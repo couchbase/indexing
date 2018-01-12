@@ -667,7 +667,7 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 	}
 
 	flipInclusion := func(incl Inclusion, desc []bool) Inclusion {
-		if desc != nil && desc[0] {
+		if len(desc) != 0 && desc[0] {
 			if incl == Low {
 				return High
 			} else if incl == High {
@@ -878,6 +878,7 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 		filtersMap := make(map[int]bool)
 		var filtersList []int
 		var low IndexKey
+
 		for _, p := range points {
 			if len(filtersMap) == 0 {
 				low = p.Value
@@ -902,12 +903,9 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 							Incl:     Both,
 							ScanType: FilterRangeReq,
 						}
+
 						for _, fl := range filtersList {
 							scan.Filters = append(scan.Filters, filters[fl])
-						}
-
-						if r.isPrimary {
-							scan.ScanType = RangeReq
 						}
 
 						scans = append(scans, scan)
@@ -1012,8 +1010,14 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 					continue
 				}
 
+				compfil := CompositeElementFilter{
+					Low:       l,
+					High:      h,
+					Inclusion: Inclusion(fl.GetInclusion()),
+				}
+
 				filter := Filter{
-					CompositeFilters: nil,
+					CompositeFilters: []CompositeElementFilter{compfil},
 					Inclusion:        Inclusion(fl.GetInclusion()),
 					Low:              l,
 					High:             h,

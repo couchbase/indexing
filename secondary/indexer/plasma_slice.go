@@ -1554,7 +1554,7 @@ func (s *plasmaSnapshot) MultiScanCount(ctx IndexReaderContext, low, high IndexK
 					*buf = make([]byte, 0, len(entry)+RESIZE_PAD)
 				}
 
-				skipRow, ck, err = filterScanRow(entry, scan, (*buf)[:0])
+				skipRow, ck, err = filterScanRow(entry, scan, (*buf)[:0], s.isPrimary())
 				if err != nil {
 					return err
 				}
