@@ -50,6 +50,8 @@ func RetrievePlanFromCluster(clusterUrl string) (*Plan, error) {
 		return nil, err
 	}
 
+	cleanseIndexLayout(indexers)
+
 	// If there is no indexer, plan.Placement will be nil.
 	plan := &Plan{Placement: indexers,
 		MemQuota: 0,
@@ -105,6 +107,12 @@ func getIndexLayout(clusterUrl string) ([]*IndexerNode, error) {
 		return nil, err
 	}
 
+	config, err := common.GetSettingsConfig(common.SystemConfig)
+	if err != nil {
+		logging.Errorf("Planner::getIndexLayout: Error from retrieving indexer settings. Error = %v", err)
+		return nil, err
+	}
+
 	// find all nodes that has a index http service
 	// If there is any indexer node that is not in active state (e.g. failover), then planner will skip those indexers.
 	// Note that if the planner is invoked by the rebalancer, the rebalancer will receive callback ns_server if there is
@@ -147,7 +155,7 @@ func getIndexLayout(clusterUrl string) ([]*IndexerNode, error) {
 		node.StorageMode = localMeta.StorageMode
 
 		// convert from LocalIndexMetadata to IndexUsage
-		indexes, err := ConvertToIndexUsages(localMeta, node)
+		indexes, err := ConvertToIndexUsages(config, localMeta, node)
 		if err != nil {
 			logging.Errorf("Planner::getIndexLayout: Error for converting index metadata to index usage for node %v. Error = %v", node.NodeId, err)
 			return nil, err
@@ -174,7 +182,7 @@ func getIndexLayout(clusterUrl string) ([]*IndexerNode, error) {
 //
 // This function convert index defintions from a single metadatda repository to a list of IndexUsage.
 //
-func ConvertToIndexUsages(localMeta *LocalIndexMetadata, node *IndexerNode) ([]*IndexUsage, error) {
+func ConvertToIndexUsages(config common.Config, localMeta *LocalIndexMetadata, node *IndexerNode) ([]*IndexUsage, error) {
 
 	list := ([]*IndexUsage)(nil)
 
@@ -182,14 +190,16 @@ func ConvertToIndexUsages(localMeta *LocalIndexMetadata, node *IndexerNode) ([]*
 	for i := 0; i < len(localMeta.IndexDefinitions); i++ {
 
 		defn := &localMeta.IndexDefinitions[i]
-		index, err := ConvertToIndexUsage(defn, localMeta)
+		indexes, err := ConvertToIndexUsage(config, defn, localMeta)
 		if err != nil {
 			return nil, err
 		}
 
-		if index != nil {
-			index.initialNode = node
-			list = append(list, index)
+		if len(indexes) != 0 {
+			for _, index := range indexes {
+				index.initialNode = node
+				list = append(list, index)
+			}
 		}
 	}
 
@@ -199,7 +209,7 @@ func ConvertToIndexUsages(localMeta *LocalIndexMetadata, node *IndexerNode) ([]*
 //
 // This function convert a single index defintion to IndexUsage.
 //
-func ConvertToIndexUsage(defn *common.IndexDefn, localMeta *LocalIndexMetadata) (*IndexUsage, error) {
+func ConvertToIndexUsage(config common.Config, defn *common.IndexDefn, localMeta *LocalIndexMetadata) ([]*IndexUsage, error) {
 
 	// find the topology metadata
 	topology := findTopologyByBucket(localMeta.IndexTopologies, defn.Bucket)
@@ -209,60 +219,79 @@ func ConvertToIndexUsage(defn *common.IndexDefn, localMeta *LocalIndexMetadata) 
 	}
 
 	// find the index instance from topology metadata
-	inst := topology.GetIndexInstByDefn(defn.DefnId)
-	if inst == nil {
+	insts := topology.GetIndexInstancesByDefn(defn.DefnId)
+	if len(insts) == 0 {
 		logging.Errorf("Planner::getIndexLayout: Fail to find index instance for definition %v.", defn.DefnId)
 		return nil, nil
 	}
 
-	// Check the index state.  Only handle index that is active or being built.
-	// For index that is in the process of being deleted, planner expects the resource
-	// will eventually be freed, so it won't included in planning.
-	state, _ := topology.GetStatusByDefn(defn.DefnId)
-	if state != common.INDEX_STATE_CREATED &&
-		state != common.INDEX_STATE_DELETED &&
-		state != common.INDEX_STATE_ERROR &&
-		state != common.INDEX_STATE_NIL {
+	var result []*IndexUsage
 
-		// create an index usage object
-		index := newIndexUsage(defn.DefnId, common.IndexInstId(inst.InstId), defn.Name, defn.Bucket)
+	for _, inst := range insts {
 
-		// index is pinned to a node
-		if len(defn.Nodes) != 0 {
-			index.Hosts = defn.Nodes
+		// Check the index state.  Only handle index that is active or being built.
+		// For index that is in the process of being deleted, planner expects the resource
+		// will eventually be freed, so it won't included in planning.
+		state, _ := topology.GetStatusByInst(defn.DefnId, common.IndexInstId(inst.InstId))
+		if state != common.INDEX_STATE_CREATED &&
+			state != common.INDEX_STATE_DELETED &&
+			state != common.INDEX_STATE_ERROR &&
+			state != common.INDEX_STATE_NIL {
+
+			for _, partn := range inst.Partitions {
+
+				// create an index usage object
+				index := newIndexUsage(defn.DefnId, common.IndexInstId(inst.InstId), common.PartitionId(partn.PartId), defn.Name, defn.Bucket)
+
+				// index is pinned to a node
+				if len(defn.Nodes) != 0 {
+					index.Hosts = defn.Nodes
+				}
+
+				// update sizing
+				index.IsPrimary = defn.IsPrimary
+				index.IsMOI = (defn.Using == common.IndexType(common.MemoryOptimized) || defn.Using == common.IndexType(common.MemDB))
+				index.NoUsage = defn.Deferred && state == common.INDEX_STATE_READY
+
+				// update partition
+				numVbuckets := config["indexer.numVbuckets"].Int()
+				pc := common.NewKeyPartitionContainer(numVbuckets, int(inst.NumPartitions), defn.PartitionScheme)
+
+				// Is the index being deleted by user?   Thsi will read the delete token from metakv.  If untable read from metakv,
+				// pendingDelete is false (cannot assert index is to-be-delete).
+				pendingDelete, err := client.DeleteCommandTokenExist(defn.DefnId)
+				if err != nil {
+					return nil, err
+				}
+				index.pendingDelete = pendingDelete
+
+				// get the version from inst or partition
+				version := partn.Version
+				if version == 0 && version != inst.Version {
+					version = inst.Version
+				}
+
+				// update internal info
+				index.Instance = &common.IndexInst{
+					InstId:    common.IndexInstId(inst.InstId),
+					Defn:      *defn,
+					State:     common.IndexState(inst.State),
+					Stream:    common.StreamId(inst.StreamId),
+					Error:     inst.Error,
+					ReplicaId: int(inst.ReplicaId),
+					Version:   int(version),
+					RState:    common.RebalanceState(inst.RState),
+					Pc:        pc,
+				}
+
+				logging.Debugf("Create Index usage %v %v %v %v", index.Name, index.Bucket, index.Instance.InstId, index.Instance.ReplicaId)
+
+				result = append(result, index)
+			}
 		}
-
-		// update sizing
-		index.IsPrimary = defn.IsPrimary
-		index.IsMOI = (defn.Using == common.IndexType(common.MemoryOptimized) || defn.Using == common.IndexType(common.MemDB))
-		index.NoUsage = defn.Deferred && state == common.INDEX_STATE_READY
-
-		// Is the index being deleted by user?   Thsi will read the delete token from metakv.  If untable read from metakv,
-		// pendingDelete is false (cannot assert index is to-be-delete).
-		pendingDelete, err := client.DeleteCommandTokenExist(defn.DefnId)
-		if err != nil {
-			return nil, err
-		}
-		index.pendingDelete = pendingDelete
-
-		// update internal info
-		index.Instance = &common.IndexInst{
-			InstId:    common.IndexInstId(inst.InstId),
-			Defn:      *defn,
-			State:     common.IndexState(inst.State),
-			Stream:    common.StreamId(inst.StreamId),
-			Error:     inst.Error,
-			ReplicaId: int(inst.ReplicaId),
-			Version:   int(inst.Version),
-			RState:    common.RebalanceState(inst.RState),
-		}
-
-		logging.Debugf("Create Index usage %v %v %v %v", index.Name, index.Bucket, index.Instance.InstId, index.Instance.ReplicaId)
-
-		return index, nil
 	}
 
-	return nil, nil
+	return result, nil
 }
 
 //
@@ -367,7 +396,8 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 
 			var key string
 
-			indexName := index.GetDisplayName()
+			indexName := index.GetStatsName()
+			indexName1 := index.GetInstStatsName()
 
 			// items_count captures number of key per index
 			key = fmt.Sprintf("%v:%v:items_count", index.Bucket, indexName)
@@ -442,7 +472,11 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 
 			// These stats are currently unavailable in 4.5.
 			key = fmt.Sprintf("%v:%v:avg_scan_rate", index.Bucket, indexName)
+			key1 := fmt.Sprintf("%v:%v:avg_scan_rate", index.Bucket, indexName1)
 			if avgScanRate, ok := statsMap[key]; ok {
+				index.ScanRate = uint64(avgScanRate.(float64))
+				totalScan += index.ScanRate
+			} else if avgScanRate, ok := statsMap[key1]; ok {
 				index.ScanRate = uint64(avgScanRate.(float64))
 				totalScan += index.ScanRate
 			} else {
@@ -662,7 +696,7 @@ func getLocalMetadata(addr string) (*LocalIndexMetadata, error) {
 //
 func getLocalStats(addr string) (*common.Statistics, error) {
 
-	resp, err := getWithCbauth(addr + "/stats?async=false")
+	resp, err := getWithCbauth(addr + "/stats?async=false&partition=true")
 	if err != nil {
 		return nil, err
 	}
@@ -761,4 +795,73 @@ func findIndexerByNodeId(indexers []*IndexerNode, nodeId string) *IndexerNode {
 	}
 
 	return nil
+}
+
+//
+// The planner is called every rebalance, but it is guaranteed that rebalance cleanup is completed before another
+// rebalance start.  Therefore, planner needs to clean up the index based on rebalancer clean up logic.
+// 1) REBAL_PENDING index will not become ACTIVE during clean up.
+// 2) REBAL_MERGED index can be ignored (it can be replaced with another REBAL_ACTIVE partition).
+// 3) Higher version partition/indexUsage wins
+//
+func cleanseIndexLayout(indexers []*IndexerNode) {
+
+	for _, indexer := range indexers {
+		newIndexes := make([]*IndexUsage, 0, len(indexer.Indexes))
+
+		for _, index := range indexer.Indexes {
+
+			if index.Instance == nil {
+				continue
+			}
+
+			// ignore any index with RState being pending.
+			// **For pre-spock backup, RState of an instance is ACTIVE (0).
+			if index.Instance.RState != common.REBAL_ACTIVE {
+				logging.Debugf("Planner: Skip index (%v, %v, %v, %v) that is not RState ACTIVE",
+					index.Bucket, index.Name, index.InstId, index.PartnId)
+				continue
+			}
+
+			// find another instance with a higher instance version.
+			// **For pre-spock backup, inst version is always 0. In fact, there should not be another instance (max == inst).
+			max := findMaxVersionInst(indexers, index.DefnId, index.PartnId, index.InstId)
+			if max != index {
+				logging.Verbosef("Planner:  Skip index (%v, %v, %v, %v) with lower version number %v.",
+					index.Bucket, index.Name, index.InstId, index.PartnId, index.Instance.Version)
+				continue
+			}
+
+			newIndexes = append(newIndexes, index)
+		}
+
+		indexer.Indexes = newIndexes
+	}
+}
+
+func findMaxVersionInst(indexers []*IndexerNode, defnId common.IndexDefnId, partnId common.PartitionId, instId common.IndexInstId) *IndexUsage {
+
+	var max *IndexUsage
+
+	for _, indexer := range indexers {
+		for _, index := range indexer.Indexes {
+
+			if index.Instance == nil {
+				continue
+			}
+
+			// ignore any index with RState being pending
+			if index.Instance.RState != common.REBAL_ACTIVE {
+				continue
+			}
+
+			if index.DefnId == defnId && index.PartnId == partnId && index.InstId == instId {
+				if max == nil || index.Instance.Version > max.Instance.Version {
+					max = index
+				}
+			}
+		}
+	}
+
+	return max
 }

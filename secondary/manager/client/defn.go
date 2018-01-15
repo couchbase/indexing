@@ -21,22 +21,24 @@ import (
 ////////////////////////////////////////////////////////////////////////
 
 const (
-	OPCODE_CREATE_INDEX        common.OpCode = common.OPCODE_CUSTOM + 1
-	OPCODE_DROP_INDEX                        = OPCODE_CREATE_INDEX + 1
-	OPCODE_BUILD_INDEX                       = OPCODE_DROP_INDEX + 1
-	OPCODE_UPDATE_INDEX_INST                 = OPCODE_BUILD_INDEX + 1
-	OPCODE_SERVICE_MAP                       = OPCODE_UPDATE_INDEX_INST + 1
-	OPCODE_DELETE_BUCKET                     = OPCODE_SERVICE_MAP + 1
-	OPCODE_INDEXER_READY                     = OPCODE_DELETE_BUCKET + 1
-	OPCODE_CLEANUP_INDEX                     = OPCODE_INDEXER_READY + 1
-	OPCODE_CLEANUP_DEFER_INDEX               = OPCODE_CLEANUP_INDEX + 1
-	OPCODE_CREATE_INDEX_REBAL                = OPCODE_CLEANUP_DEFER_INDEX + 1
-	OPCODE_BUILD_INDEX_REBAL                 = OPCODE_CREATE_INDEX_REBAL + 1
-	OPCODE_DROP_INDEX_REBAL                  = OPCODE_BUILD_INDEX_REBAL + 1
-	OPCODE_BROADCAST_STATS                   = OPCODE_DROP_INDEX_REBAL + 1
-	OPCODE_BUILD_INDEX_RETRY                 = OPCODE_BROADCAST_STATS + 1
-	OPCODE_RESET_INDEX                       = OPCODE_BUILD_INDEX_RETRY + 1
-	OPCODE_CONFIG_UPDATE                     = OPCODE_RESET_INDEX + 1
+	OPCODE_CREATE_INDEX           common.OpCode = common.OPCODE_CUSTOM + 1
+	OPCODE_DROP_INDEX                           = OPCODE_CREATE_INDEX + 1
+	OPCODE_BUILD_INDEX                          = OPCODE_DROP_INDEX + 1
+	OPCODE_UPDATE_INDEX_INST                    = OPCODE_BUILD_INDEX + 1
+	OPCODE_SERVICE_MAP                          = OPCODE_UPDATE_INDEX_INST + 1
+	OPCODE_DELETE_BUCKET                        = OPCODE_SERVICE_MAP + 1
+	OPCODE_INDEXER_READY                        = OPCODE_DELETE_BUCKET + 1
+	OPCODE_CLEANUP_INDEX                        = OPCODE_INDEXER_READY + 1
+	OPCODE_CLEANUP_DEFER_INDEX                  = OPCODE_CLEANUP_INDEX + 1
+	OPCODE_CREATE_INDEX_REBAL                   = OPCODE_CLEANUP_DEFER_INDEX + 1
+	OPCODE_BUILD_INDEX_REBAL                    = OPCODE_CREATE_INDEX_REBAL + 1
+	OPCODE_DROP_INDEX_REBAL                     = OPCODE_BUILD_INDEX_REBAL + 1
+	OPCODE_BROADCAST_STATS                      = OPCODE_DROP_INDEX_REBAL + 1
+	OPCODE_BUILD_INDEX_RETRY                    = OPCODE_BROADCAST_STATS + 1
+	OPCODE_RESET_INDEX                          = OPCODE_BUILD_INDEX_RETRY + 1
+	OPCODE_CONFIG_UPDATE                        = OPCODE_RESET_INDEX + 1
+	OPCODE_DROP_OR_PRUNE_INSTANCE               = OPCODE_CONFIG_UPDATE + 1
+	OPCODE_MERGE_PARTITION                      = OPCODE_DROP_OR_PRUNE_INSTANCE + 1
 )
 
 /////////////////////////////////////////////////////////////////////////
@@ -73,10 +75,12 @@ type IndexInstDistribution struct {
 	Scheduled      bool                    `json:"scheduled,omitempty"`
 	StorageMode    string                  `json:"storageMode,omitempty"`
 	OldStorageMode string                  `json:"oldStorageMode,omitempty"`
+	RealInstId     uint64                  `json:"realInstId,omitempty"`
 }
 
 type IndexPartDistribution struct {
 	PartId          uint64                      `json:"partId,omitempty"`
+	Version         uint64                      `json:"version,omitempty"`
 	SinglePartition IndexSinglePartDistribution `json:"singlePartition,omitempty"`
 	KeyPartition    IndexKeyPartDistribution    `json:"keyPartition,omitempty"`
 }
@@ -256,24 +260,25 @@ func (inst IndexInstDistribution) findIndexerId() string {
 	return ""
 }
 
-func (t *IndexTopology) GetIndexInstByDefn(defnId c.IndexDefnId) *IndexInstDistribution {
+func (t *IndexTopology) GetIndexInstancesByDefn(defnId c.IndexDefnId) []IndexInstDistribution {
 
 	for i, _ := range t.Definitions {
 		if t.Definitions[i].DefnId == uint64(defnId) {
-			for _, inst := range t.Definitions[i].Instances {
-				return &inst
-			}
+			return t.Definitions[i].Instances
 		}
 	}
-
 	return nil
 }
 
-func (t *IndexTopology) GetStatusByDefn(defnId c.IndexDefnId) (c.IndexState, string) {
+func (t *IndexTopology) GetStatusByInst(defnId c.IndexDefnId, instId c.IndexInstId) (c.IndexState, string) {
 
 	for i, _ := range t.Definitions {
 		if t.Definitions[i].DefnId == uint64(defnId) {
-			return c.IndexState(t.Definitions[i].Instances[0].State), t.Definitions[i].Instances[0].Error
+			for j, _ := range t.Definitions[i].Instances {
+				if t.Definitions[i].Instances[j].InstId == uint64(instId) {
+					return c.IndexState(t.Definitions[i].Instances[j].State), t.Definitions[i].Instances[j].Error
+				}
+			}
 		}
 	}
 	return c.INDEX_STATE_NIL, ""

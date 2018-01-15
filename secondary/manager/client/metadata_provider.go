@@ -142,7 +142,7 @@ type InstanceDefn struct {
 	State         c.IndexState
 	Error         string
 	IndexerId     map[c.PartitionId]c.IndexerId
-	Version       uint64
+	Versions      map[c.PartitionId]uint64
 	RState        uint32
 	ReplicaId     uint64
 	StorageMode   string
@@ -351,7 +351,7 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 	plan map[string]interface{}) (c.IndexDefnId, error, bool) {
 
 	// FindIndexByName will only return valid index
-	if o.FindIndexByName(name, bucket) != nil {
+	if o.findIndexByName(name, bucket) != nil {
 		return c.IndexDefnId(0), errors.New(fmt.Sprintf("Index %s already exists.", name)), false
 	}
 
@@ -391,8 +391,9 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 			return c.IndexDefnId(0), err, false
 		}
 
-		fn := func(watcher *watcher, partitions []c.PartitionId) {
+		fn := func(watcher *watcher, partitions []c.PartitionId, versions []int) {
 			idxDefn.Partitions = partitions
+			idxDefn.Versions = versions
 
 			content, err := c.MarshallIndexDefn(idxDefn)
 			if err != nil {
@@ -427,21 +428,28 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 			for _, watcher := range watchers {
 
 				var partitions []c.PartitionId
+				var versions []int
 				count := 0
 				for partnId < endPartnId && count < partitionPerWatcher {
 					partitions = append(partitions, c.PartitionId(partnId))
+					versions = append(versions, 0)
 					count++
 					partnId++
 				}
 
-				fn(watcher, partitions)
+				fn(watcher, partitions, versions)
 			}
+
+			// shuffle the watcher
+			watchers = append(watchers[1:], watchers[:1]...)
+
 		} else {
 
 			if replicaId < len(watchers) {
 				watcher := watchers[replicaId]
 				partitions := []c.PartitionId{c.NON_PARTITION_ID}
-				fn(watcher, partitions)
+				versions := []int{0}
+				fn(watcher, partitions, versions)
 			}
 		}
 	}
@@ -454,6 +462,13 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 
 		if len(errStr) != 0 {
 			return c.IndexDefnId(0), errors.New(fmt.Sprintf("Encounter errors during create index.  Error=%s.", errStr)), false
+		}
+	}
+
+	// place token for index build
+	if idxDefn.PartitionScheme != c.PartitionScheme(c.SINGLE) {
+		if err := PostBuildCommandToken(defnID); err != nil {
+			return c.IndexDefnId(0), errors.New(fmt.Sprintf("Fail to Build Index due to internal errors.  Error=%v.", err)), false
 		}
 	}
 
@@ -490,7 +505,6 @@ func (o *MetadataProvider) PrepareIndexDefn(
 
 	var immutable bool = false
 	var deferred bool = false
-	var wait bool = true
 	var nodes []string = nil
 	var numReplica int = 0
 	var numPartition int = 0
@@ -513,7 +527,6 @@ func (o *MetadataProvider) PrepareIndexDefn(
 		if err != nil {
 			return nil, err, retry
 		}
-		wait = !deferred
 
 		if indexType, ok := plan["index_type"].(string); ok {
 			if c.IsValidIndexType(indexType) {
@@ -536,6 +549,7 @@ func (o *MetadataProvider) PrepareIndexDefn(
 
 			if len(partitionKeys) != 0 {
 				partitionScheme = c.KEY
+				deferred = true
 			}
 		}
 
@@ -567,7 +581,7 @@ func (o *MetadataProvider) PrepareIndexDefn(
 		}
 	}
 
-	logging.Debugf("MetadataProvider:CreateIndex(): deferred_build %v sync %v nodes %v", deferred, wait, nodes)
+	logging.Debugf("MetadataProvider:CreateIndex(): deferred_build %v nodes %v", deferred, nodes)
 
 	//
 	// Get the list of Watchers
@@ -584,7 +598,7 @@ func (o *MetadataProvider) PrepareIndexDefn(
 			false
 	}
 
-	if numReplica != 0 && len(watchers) != numReplica+1 {
+	if numReplica != 0 && len(watchers) < numReplica+1 {
 		return nil,
 			errors.New(fmt.Sprintf("Fails to create index.  Cannot find enough indexer node for replica.  numReplica=%v.", numReplica)),
 			false
@@ -985,7 +999,7 @@ func (o *MetadataProvider) DropIndex(defnID c.IndexDefnId) error {
 
 	// find index -- this method will not return the index if the index is in DELETED
 	// status (but defn exists).
-	meta := o.FindIndex(defnID)
+	meta := o.findIndex(defnID)
 	if meta == nil {
 		return errors.New("Index does not exist.")
 	}
@@ -1040,8 +1054,8 @@ func (o *MetadataProvider) BuildIndexes(defnIDs []c.IndexDefnId) error {
 	for _, id := range defnIDs {
 
 		// find index -- this method will not return the index if the index is in DELETED
-		// status (but defn exists).  This will only return an instance that is valid and well-formed.
-		meta := o.FindIndex(id)
+		// status (but defn exists).  This will only return an instance that is valid.
+		meta := o.findIndex(id)
 		if meta == nil {
 			return errors.New("Cannot build index. Index Definition not found")
 		}
@@ -1149,7 +1163,10 @@ func (o *MetadataProvider) ListIndex() ([]*IndexMetadata, uint64) {
 	return result, version
 }
 
-func (o *MetadataProvider) FindIndex(id c.IndexDefnId) *IndexMetadata {
+//
+// Find an index with at least one valid instance.  Note that the instance may not be well-formed.
+//
+func (o *MetadataProvider) findIndex(id c.IndexDefnId) *IndexMetadata {
 
 	indices, _ := o.repo.listDefnWithValidInst()
 	if meta, ok := indices[id]; ok {
@@ -1181,7 +1198,7 @@ func (o *MetadataProvider) UpdateServiceAddrForIndexer(id c.IndexerId, adminport
 	return watcher.updateServiceMap(adminport)
 }
 
-func (o *MetadataProvider) FindIndexByName(name string, bucket string) *IndexMetadata {
+func (o *MetadataProvider) findIndexByName(name string, bucket string) *IndexMetadata {
 
 	indices, _ := o.repo.listDefnWithValidInst()
 	for _, meta := range indices {
@@ -1405,7 +1422,10 @@ func (o *MetadataProvider) RefreshIndexerVersion() uint64 {
 ///////////////////////////////////////////////////////
 
 // A watcher is active only when it is ready to accept request.  This
-// means synchronization phase is done with the indexer.
+// means synchronization phase is done with the indexer.  This does not
+// mean the watcher is connected to the indexer at the moment when this
+// call is made.  This is not a network liveness check on the indexer.
+// But this can check if UnwatchMetadata has been called on this indexer.
 func (o *MetadataProvider) isActiveWatcherNoLock(indexerId c.IndexerId) bool {
 
 	for _, watcher := range o.watchers {
@@ -1499,6 +1519,9 @@ func (o *MetadataProvider) startWatcher(addr string) (*watcher, chan bool) {
 
 //
 // This function returns the index regardless of its state or well-formed (all partitions).
+// This function will not return the index if it does not have any valid instance or partition.
+// In other words, this function will return the index if it has at least one non-DELETED
+// instance with Active RState.
 //
 func (o *MetadataProvider) FindIndexIgnoreStatus(id c.IndexDefnId) *IndexMetadata {
 
@@ -1671,7 +1694,8 @@ func (o *MetadataProvider) findWatcherByNodeAddr(nodeAddr string) *watcher {
 }
 
 //
-// This function returns true if all partitons are connected to active watcher.
+// This function returns true if all partitons belong active watcher (watcher has
+// not been unwatched).
 //
 func (o *MetadataProvider) allPartitionsFromActiveIndexerNoLock(inst *InstanceDefn) bool {
 
@@ -1685,8 +1709,8 @@ func (o *MetadataProvider) allPartitionsFromActiveIndexerNoLock(inst *InstanceDe
 }
 
 //
-// This function returns true as long as there is a
-// valid index instance on a connected indexer/watcher.
+// This function returns true as long as there is a valid index instance
+// belong to an active indexer/watcher (watcher has not been unwatched).
 //
 func (o *MetadataProvider) isValidIndexFromActiveIndexer(meta *IndexMetadata) bool {
 	o.mutex.RLock()
@@ -1775,10 +1799,6 @@ func isValidIndex(meta *IndexMetadata) bool {
 // This function returns true if it is a valid index instance.
 //
 func isValidIndexInst(inst *InstanceDefn) bool {
-
-	if !isWellFormed(inst) {
-		return false
-	}
 
 	// RState for InstanceDefn is always ACTIVE -- so no need to check
 	return inst.State != c.INDEX_STATE_NIL && inst.State != c.INDEX_STATE_CREATED &&
@@ -1922,9 +1942,10 @@ func (r *metadataRepo) findLatestActiveIndexInstNoLock(defnId c.IndexDefnId) []*
 		for partId, instsByVersion := range instsByPartitionId {
 
 			var chosen *IndexInstDistribution
-			for _, inst := range instsByVersion {
+			var chosenVersion uint64
+			for version, inst := range instsByVersion {
 
-				// Do not filter out CREATED index, even though it is not a "transient"
+				// Do not filter out CREATED index, even though it is a "transient"
 				// index state.  A created index can be promoted to a READY index by
 				// indexer upon bootstrap.  An index in CREATED state will be filtered out
 				// in ListIndex() for scanning.
@@ -1937,8 +1958,9 @@ func (r *metadataRepo) findLatestActiveIndexInstNoLock(defnId c.IndexDefnId) []*
 					c.IndexState(inst.State) != c.INDEX_STATE_ERROR &&
 					inst.RState == uint32(c.REBAL_ACTIVE) { // valid
 
-					if chosen == nil || inst.Version > chosen.Version { // latest
+					if chosen == nil || version > chosenVersion { // latest
 						chosen = inst
+						chosenVersion = version
 					}
 				}
 			}
@@ -1962,7 +1984,7 @@ func (r *metadataRepo) findLatestActiveIndexInstNoLock(defnId c.IndexDefnId) []*
 // Each index partition has the highest version with the specific RState. Each partition can be residing on
 // different indexer node.   This function will not check if all the indexes have all the partitions.
 //
-func (r *metadataRepo) findIndexInstNoLock(defnId c.IndexDefnId, instId c.IndexInstId, version uint64, rstate uint32) *IndexInstDistribution {
+func (r *metadataRepo) findIndexInstNoLock(defnId c.IndexDefnId, instId c.IndexInstId, activeInst *InstanceDefn, rstate uint32) *IndexInstDistribution {
 
 	var result *IndexInstDistribution
 
@@ -1973,7 +1995,8 @@ func (r *metadataRepo) findIndexInstNoLock(defnId c.IndexDefnId, instId c.IndexI
 		for partId, instsByVersion := range instsByPartitionId {
 
 			var chosen *IndexInstDistribution
-			for _, inst := range instsByVersion {
+			var chosenVersion uint64
+			for partnVersion, inst := range instsByVersion {
 
 				if c.IndexState(inst.State) != c.INDEX_STATE_NIL &&
 					c.IndexState(inst.State) != c.INDEX_STATE_CREATED &&
@@ -1981,8 +2004,14 @@ func (r *metadataRepo) findIndexInstNoLock(defnId c.IndexDefnId, instId c.IndexI
 					c.IndexState(inst.State) != c.INDEX_STATE_ERROR &&
 					inst.RState == rstate {
 
-					if chosen == nil || (inst.Version > version && inst.Version > chosen.Version) {
+					var activeVersion uint64
+					if activeInst != nil && activeInst.Versions[c.PartitionId(partId)] != 0 {
+						activeVersion = activeInst.Versions[c.PartitionId(partId)]
+					}
+
+					if chosen == nil || (partnVersion > activeVersion && partnVersion > chosenVersion) {
 						chosen = inst
+						chosenVersion = partnVersion
 					}
 				}
 			}
@@ -2015,7 +2044,13 @@ func (r *metadataRepo) hasIndexerContainingPartition(indexerId c.IndexerId, inst
 //
 // This function merges multiple index instance per partition.
 //
-func (r *metadataRepo) mergeSingleIndexPartition(to *IndexInstDistribution, from *IndexInstDistribution, partId c.PartitionId) *IndexInstDistribution {
+func (r *metadataRepo) mergeSingleIndexPartition(to *IndexInstDistribution, from *IndexInstDistribution,
+	partId c.PartitionId) *IndexInstDistribution {
+
+	// This is just for safety check.  REBAL_MERGED index should have DELETED index state.
+	if from.RState == uint32(c.REBAL_MERGED) {
+		return to
+	}
 
 	if to == nil {
 		temp := *from
@@ -2029,19 +2064,16 @@ func (r *metadataRepo) mergeSingleIndexPartition(to *IndexInstDistribution, from
 		if from.State < to.State {
 			to.State = from.State
 		}
-		if len(from.Error) > 0 {
+		if from.Error != to.Error {
 			to.Error += " " + from.Error
 		}
 
-		// FIX ME - RState and Version needs to come from partition (rebalancing)
 		if from.RState == uint32(c.REBAL_PENDING) {
 			to.RState = uint32(c.REBAL_PENDING)
 		}
-		if from.Version > to.Version {
-			to.Version = from.Version
-		}
 	}
 
+	// merge partition
 	for _, partition := range from.Partitions {
 		if partition.PartId == uint64(partId) {
 			to.Partitions = append(to.Partitions, partition)
@@ -2264,11 +2296,17 @@ func (r *metadataRepo) updateTopology(topology *IndexTopology, indexerId c.Index
 			}
 
 			for _, partnRef := range instRef.Partitions {
+				if partnRef.Version == 0 && instRef.Version != partnRef.Version {
+					partnRef.Version = instRef.Version
+				}
+
 				if _, ok := r.instances[defnId][c.IndexInstId(instRef.InstId)][c.PartitionId(partnRef.PartId)]; !ok {
 					r.instances[defnId][c.IndexInstId(instRef.InstId)][c.PartitionId(partnRef.PartId)] = make(map[uint64]*IndexInstDistribution)
 				}
 
-				r.instances[defnId][c.IndexInstId(instRef.InstId)][c.PartitionId(partnRef.PartId)][instRef.Version] = &instRef
+				// r.Instances has all the index instances and partitions regardless of its state and version
+				temp := instRef
+				r.instances[defnId][c.IndexInstId(instRef.InstId)][c.PartitionId(partnRef.PartId)][partnRef.Version] = &temp
 			}
 		}
 
@@ -2341,6 +2379,10 @@ func (r *metadataRepo) updateInstancesInIndexMetadata(defnId c.IndexDefnId, meta
 	// will remain to be INDEX_STATE_CREATED, which will be filtered out in ListIndex.
 	meta.State = c.INDEX_STATE_CREATED
 
+	// Find all instacnes and partitions with a valid index state and Active RState.
+	// This will exclude all DELETED instances.  Therefore, meta.Instances will be
+	// not be empty if there is at least one instance/partition that is not DELETED
+	// with active Rstate.
 	chosens := r.findLatestActiveIndexInstNoLock(defnId)
 	for _, inst := range chosens {
 		idxInst := r.makeInstanceDefn(defnId, inst)
@@ -2349,7 +2391,7 @@ func (r *metadataRepo) updateInstancesInIndexMetadata(defnId c.IndexDefnId, meta
 			meta.State = idxInst.State
 		}
 
-		if idxInst.Error != "" {
+		if idxInst.Error != meta.Error {
 			meta.Error += idxInst.Error + "\n"
 		}
 
@@ -2368,11 +2410,11 @@ func (r *metadataRepo) makeInstanceDefn(defnId c.IndexDefnId, inst *IndexInstDis
 	idxInst.InstId = c.IndexInstId(inst.InstId)
 	idxInst.State = c.IndexState(inst.State)
 	idxInst.Error = inst.Error
-	idxInst.Version = inst.Version
 	idxInst.RState = inst.RState
 	idxInst.ReplicaId = inst.ReplicaId
 	idxInst.StorageMode = inst.StorageMode
 	idxInst.IndexerId = make(map[c.PartitionId]c.IndexerId)
+	idxInst.Versions = make(map[c.PartitionId]uint64)
 	idxInst.NumPartitions = inst.NumPartitions
 
 	if idxInst.NumPartitions == 0 {
@@ -2383,6 +2425,7 @@ func (r *metadataRepo) makeInstanceDefn(defnId c.IndexDefnId, inst *IndexInstDis
 		for _, slice := range partition.SinglePartition.Slices {
 			idxInst.IndexerId[c.PartitionId(partition.PartId)] = c.IndexerId(slice.IndexerId)
 		}
+		idxInst.Versions[c.PartitionId(partition.PartId)] = partition.Version
 	}
 
 	return idxInst
@@ -2395,7 +2438,6 @@ func (r *metadataRepo) copyInstanceDefn(source *InstanceDefn) *InstanceDefn {
 	idxInst.InstId = source.InstId
 	idxInst.State = source.State
 	idxInst.Error = source.Error
-	idxInst.Version = source.Version
 	idxInst.RState = source.RState
 	idxInst.ReplicaId = source.ReplicaId
 	idxInst.StorageMode = source.StorageMode
@@ -2404,6 +2446,10 @@ func (r *metadataRepo) copyInstanceDefn(source *InstanceDefn) *InstanceDefn {
 
 	for partnId, indexerId := range source.IndexerId {
 		idxInst.IndexerId[partnId] = indexerId
+	}
+
+	for partnId, version := range source.Versions {
+		idxInst.Versions[partnId] = version
 	}
 
 	return idxInst
@@ -2436,10 +2482,10 @@ func (r *metadataRepo) updateRebalanceInstancesInIndexMetadata(defnId c.IndexDef
 		// Find an instance-in-rebalance that is more recent than the active instance.  If there is no active instance,
 		// find the latest instance-in-rebalance (instance-in-rebalance must have a version > 0).
 		if activeInst != nil {
-			moreRecentInst = r.findIndexInstNoLock(defnId, instId, activeInst.Version, uint32(c.REBAL_PENDING))
+			moreRecentInst = r.findIndexInstNoLock(defnId, instId, activeInst, uint32(c.REBAL_PENDING))
 		} else {
 			// index in rebalacnce must have version > 0
-			moreRecentInst = r.findIndexInstNoLock(defnId, instId, 0, uint32(c.REBAL_PENDING))
+			moreRecentInst = r.findIndexInstNoLock(defnId, instId, nil, uint32(c.REBAL_PENDING))
 		}
 
 		// Add this instance to "future topology" if it does not have another instance with

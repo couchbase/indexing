@@ -195,7 +195,9 @@ type IndexDefn struct {
 	ReplicaId     int           `json:"replicaId,omitempty"`
 	InstId        IndexInstId   `json:"instanceId,omitempty"`
 	Partitions    []PartitionId `json:"partitions,omitempty"`
+	Versions      []int         `json:"versions,omitempty"`
 	NumPartitions uint32        `json:"numPartitions,omitempty"`
+	RealInstId    IndexInstId   `json:"realInstId,omitempty"`
 }
 
 //IndexInst is an instance of an Index(aka replica)
@@ -213,6 +215,7 @@ type IndexInst struct {
 	Scheduled      bool
 	StorageMode    string
 	OldStorageMode string
+	RealInstId     IndexInstId
 }
 
 //IndexInstMap is a map from IndexInstanceId to IndexInstance
@@ -273,6 +276,10 @@ func (idx *IndexDefn) HasDescending() bool {
 
 }
 
+func (idx IndexInst) IsProxy() bool {
+	return idx.RealInstId != 0
+}
+
 func (idx IndexInst) String() string {
 
 	str := "\n"
@@ -294,6 +301,15 @@ func (idx IndexInst) DisplayName() string {
 }
 
 func FormatIndexInstDisplayName(name string, replicaId int) string {
+
+	return FormatIndexPartnDisplayName(name, replicaId, 0)
+}
+
+func FormatIndexPartnDisplayName(name string, replicaId int, partitionId int) string {
+
+	if partitionId != 0 {
+		name = fmt.Sprintf("%v %v", name, partitionId)
+	}
 
 	if replicaId != 0 {
 		return fmt.Sprintf("%v (replica %v)", name, replicaId)
@@ -334,6 +350,9 @@ type RebalanceState int
 const (
 	REBAL_ACTIVE RebalanceState = iota
 	REBAL_PENDING
+	REBAL_NIL
+	REBAL_MERGED
+	REBAL_PENDING_DELETE
 )
 
 func (s RebalanceState) String() string {
@@ -343,6 +362,10 @@ func (s RebalanceState) String() string {
 		return "RebalActive"
 	case REBAL_PENDING:
 		return "RebalPending"
+	case REBAL_MERGED:
+		return "Merged"
+	case REBAL_PENDING_DELETE:
+		return "PendingDelete"
 	default:
 		return "Invalid"
 	}
@@ -395,6 +418,26 @@ func UnmarshallIndexDefn(data []byte) (*IndexDefn, error) {
 	return defn, nil
 }
 
+func MarshallIndexInst(inst *IndexInst) ([]byte, error) {
+
+	buf, err := json.Marshal(&inst)
+	if err != nil {
+		return nil, err
+	}
+
+	return buf, nil
+}
+
+func UnmarshallIndexInst(data []byte) (*IndexInst, error) {
+
+	inst := new(IndexInst)
+	if err := json.Unmarshal(data, inst); err != nil {
+		return nil, err
+	}
+
+	return inst, nil
+}
+
 func NewIndexDefnId() (IndexDefnId, error) {
 	uuid, err := NewUUID()
 	if err != nil {
@@ -411,6 +454,10 @@ func NewIndexInstId() (IndexInstId, error) {
 	}
 
 	return IndexInstId(uuid.Uint64()), nil
+}
+
+func IsPartitioned(scheme PartitionScheme) bool {
+	return len(scheme) != 0 && scheme != SINGLE
 }
 
 //IndexSnapType represents the snapshot type

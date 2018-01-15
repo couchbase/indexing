@@ -9,6 +9,7 @@
 package indexer
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -660,10 +661,8 @@ func (s *scanCoordinator) handleStats(cmd Message) {
 	// Compute counts asynchronously and reply to stats request
 	go func() {
 		for id, idxStats := range stats.indexes {
-			c, err := s.getItemsCount(id)
-			if err == nil {
-				idxStats.itemsCount.Set(int64(c))
-			} else {
+			err := s.updateItemsCount(id, idxStats)
+			if err != nil {
 				logging.Errorf("%v: Unable compute index count for %v/%v (%v)", s.logPrefix,
 					idxStats.bucket, idxStats.name, err)
 			}
@@ -841,8 +840,7 @@ func (s *scanCoordinator) cloneRollbackInProgress() map[string]*atomic.Value {
 	return newRollbackInProgress
 }
 
-func (s *scanCoordinator) getItemsCount(instId common.IndexInstId) (uint64, error) {
-	var count uint64
+func (s *scanCoordinator) updateItemsCount(instId common.IndexInstId, idxStats *IndexStats) error {
 
 	snapResch := make(chan interface{}, 1)
 	snapReqMsg := &MsgIndexSnapRequest{
@@ -856,7 +854,7 @@ func (s *scanCoordinator) getItemsCount(instId common.IndexInstId) (uint64, erro
 
 	// Index snapshot is not available yet (non-active index or empty index)
 	if msg == nil {
-		return 0, nil
+		return nil
 	}
 
 	var is IndexSnapshot
@@ -865,25 +863,27 @@ func (s *scanCoordinator) getItemsCount(instId common.IndexInstId) (uint64, erro
 	case IndexSnapshot:
 		is = msg.(IndexSnapshot)
 		if is == nil {
-			return 0, nil
+			return nil
 		}
 		defer DestroyIndexSnapshot(is)
 	case error:
-		return 0, msg.(error)
+		return msg.(error)
 	}
 
-	for _, ps := range is.Partitions() {
+	for pid, ps := range is.Partitions() {
 		for _, ss := range ps.Slices() {
 			snap := ss.Snapshot()
 			c, err := snap.StatCountTotal()
 			if err != nil {
-				return 0, err
+				return err
 			}
-			count += c
+			idxStats.updatePartitionStats(pid, func(ps *IndexStats) {
+				ps.itemsCount.Set(int64(c))
+			})
 		}
 	}
 
-	return count, nil
+	return nil
 }
 
 /////////////////////////////////////////////////////////////////////////
@@ -932,19 +932,42 @@ func NewCancelCallback(req *ScanRequest, callb func(error)) *CancelCb {
 func (s *scanCoordinator) findIndexInstance(
 	defnID uint64, partitionIds []common.PartitionId) (*common.IndexInst, []IndexReaderContext, error) {
 
+	hasIndex := false
+	isPartition := false
 	ctx := make([]IndexReaderContext, len(partitionIds))
+	missing := make(map[common.IndexInstId][]common.PartitionId)
 	for _, inst := range s.indexInstMap {
+		if inst.State != common.INDEX_STATE_ACTIVE || (inst.RState != common.REBAL_ACTIVE && inst.RState != common.REBAL_PENDING) {
+			continue
+		}
 		if inst.Defn.DefnId == common.IndexDefnId(defnID) {
+			hasIndex = true
+			isPartition = common.IsPartitioned(inst.Defn.PartitionScheme)
 			if pmap, ok := s.indexPartnMap[inst.InstId]; ok {
+				found := true
 				for i, partnId := range partitionIds {
 					if partition, ok := pmap[partnId]; ok {
 						ctx[i] = partition.Sc.GetSliceById(0).GetReaderContext()
 					} else {
-						return nil, nil, ErrNotMyPartition
+						found = false
+						missing[inst.InstId] = append(missing[inst.InstId], partnId)
 					}
 				}
-				return &inst, ctx, nil
+
+				if found {
+					return &inst, ctx, nil
+				}
 			}
+		}
+	}
+
+	if hasIndex {
+		if isPartition {
+			if content, err := json.Marshal(&missing); err == nil {
+				return nil, nil, fmt.Errorf("%v:%v", ErrNotMyPartition, string(content))
+			}
+			return nil, nil, ErrNotMyPartition
+		} else {
 			return nil, nil, ErrNotMyIndex
 		}
 	}

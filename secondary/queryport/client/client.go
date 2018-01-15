@@ -52,13 +52,16 @@ type ResponseReader interface {
 type ResponseSender func(pkey []byte, mskey []value.Value, uskey common.SecondaryKey) bool
 
 // ResponseHandlerFactory returns an instance of ResponseHandler
-type ResponseHandlerFactory func(id ResponseHandlerId) ResponseHandler
+type ResponseHandlerFactory func(id ResponseHandlerId, instId uint64, partitions []common.PartitionId) ResponseHandler
 
 // ScanRequestHandler initiates a request to a single server connection
 type ScanRequestHandler func(*GsiScanClient, *common.IndexDefn, int64, []common.PartitionId, ResponseHandler) (error, bool)
 
 // CountRequestHandler initiates a request to a single server connection
 type CountRequestHandler func(*GsiScanClient, *common.IndexDefn, int64, []common.PartitionId) (int64, error, bool)
+
+// ResponseTimer updates timing of responses
+type ResponseTimer func(instID uint64, partitionId common.PartitionId, value float64)
 
 // Remoteaddr string in the shape of "<host:port>"
 type Remoteaddr string
@@ -189,12 +192,17 @@ type BridgeAccessor interface {
 	// equivalent index.
 	GetScanport(
 		defnID uint64,
-		retry int,
-		excludes map[uint64]bool) (queryport []string, targetDefnID uint64, targetInstID uint64,
+		excludes map[common.PartitionId]map[uint64]bool) (queryport []string, targetDefnID uint64, targetInstID []uint64,
 		rollbackTime []int64, partition [][]common.PartitionId, numPartitions uint32, ok bool)
 
-	// GetIndex will return the index-definition structure for defnID.
+	// GetIndexDefn will return the index-definition structure for defnID.
 	GetIndexDefn(defnID uint64) *common.IndexDefn
+
+	// GetIndexInst will return the index-instance structure for instId.
+	GetIndexInst(instId uint64) *mclient.InstanceDefn
+
+	// GetIndexReplica will return the index-instance structure for defnId.
+	GetIndexReplica(defnId uint64) []*mclient.InstanceDefn
 
 	// IndexState returns the current state of index `defnID` and error.
 	IndexState(defnID uint64) (common.IndexState, error)
@@ -202,8 +210,11 @@ type BridgeAccessor interface {
 	// IsPrimary returns whether index is on primary key.
 	IsPrimary(defnID uint64) bool
 
+	//Return the number of replica and equivalent indexes
+	NumReplica(defnID uint64) int
+
 	// Timeit will add `value` to incrementalAvg for index-load.
-	Timeit(instID uint64, value float64)
+	Timeit(instID uint64, partitionId common.PartitionId, value float64)
 
 	// Close this accessor.
 	Close()
@@ -1114,75 +1125,121 @@ func (c *GsiClient) updateScanClients() {
 	}
 }
 
-func (c *GsiClient) doScan(defnID uint64, requestId string, broker *RequestBroker) (count int64, err error) {
+func (c *GsiClient) getScanClients(queryports []string) ([]*GsiScanClient, bool) {
 
-	var qc []*GsiScanClient
-	var ok1, ok2, partial bool
-	var queryports []string
-	var targetDefnID uint64
-	var targetInstID uint64
-	var scan_err error
-	var excludes map[uint64]bool
-	var rollbackTimes []int64
-	var partitions [][]common.PartitionId
-	var numPartitions uint32
+	qcs := *((*map[string]*GsiScanClient)(atomic.LoadPointer(&c.queryClients)))
+
+	qc := make([]*GsiScanClient, len(queryports))
+	var ok bool
+
+	for i, queryport := range queryports {
+		if _, ok = qcs[queryport]; ok {
+			qc[i] = qcs[queryport]
+		} else {
+			break
+		}
+	}
+
+	return qc, ok
+}
+
+func (c *GsiClient) updateExcludes(defnID uint64, excludes map[common.PartitionId]map[uint64]bool,
+	errMap map[common.PartitionId]map[uint64]error) map[common.PartitionId]map[uint64]bool {
+
+	if excludes == nil {
+		excludes = make(map[common.PartitionId]map[uint64]bool)
+	}
+
+	// num of replica or equivalent index (including self)
+	numReplica := c.bridge.NumReplica(defnID)
+
+	for partnId, instErrMap := range errMap {
+		for instId, err := range instErrMap {
+			if !isgone(err) {
+				if _, ok := excludes[partnId]; !ok {
+					excludes[partnId] = make(map[uint64]bool)
+				}
+				excludes[partnId][instId] = true
+			} else if numReplica > 1 {
+				// if it is EOF error and there is replica, then
+				// exclude all partitions on all replicas
+				// residing on the failed node.
+				if inst := c.bridge.GetIndexInst(instId); inst != nil {
+					failIndexerId := inst.IndexerId[partnId]
+
+					for _, replica := range c.bridge.GetIndexReplica(defnID) {
+						for p, indexerId := range replica.IndexerId {
+							if indexerId == failIndexerId {
+								if _, ok := excludes[p]; !ok {
+									excludes[p] = make(map[uint64]bool)
+								}
+								excludes[p][uint64(replica.InstId)] = true
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return excludes
+}
+
+func (c *GsiClient) doScan(defnID uint64, requestId string, broker *RequestBroker) (int64, error) {
+
+	var excludes map[common.PartitionId]map[uint64]bool
+	var err error
+
+	broker.SetResponseTimer(c.bridge.Timeit)
 
 	wait := c.config["retryIntervalScanport"].Int()
 	retry := c.config["retryScanPort"].Int()
 	evictRetry := c.config["settings.poolSize"].Int()
 	for i := 0; true; {
-		count = 0
-		qcs :=
-			*((*map[string]*GsiScanClient)(atomic.LoadPointer(&c.queryClients)))
-		if queryports, targetDefnID, targetInstID, rollbackTimes, partitions, numPartitions, ok1 = c.bridge.GetScanport(defnID, i, excludes); ok1 {
+		foundScanport := false
+
+		if queryports, targetDefnID, targetInstIds, rollbackTimes, partitions, numPartitions, ok := c.bridge.GetScanport(defnID, excludes); ok {
+
 			index := c.bridge.GetIndexDefn(targetDefnID)
-
-			qc = make([]*GsiScanClient, len(queryports))
-			for i, queryport := range queryports {
-				if _, ok2 = qcs[queryport]; ok2 {
-					qc[i] = qcs[queryport]
-				} else {
-					break
+			// make query clients from queryports
+			if qc, ok := c.getScanClients(queryports); ok {
+				foundScanport = true
+				count, scan_errs, partial := broker.scatter(qc, index, targetInstIds, rollbackTimes, partitions, numPartitions, c.settings)
+				if c.isTimeit(scan_errs) {
+					return count, getScanError(scan_errs)
 				}
-			}
 
-			if ok2 {
+				excludes = c.updateExcludes(defnID, excludes, scan_errs)
+				if len(scan_errs) != 0 && !isAnyGone(scan_errs) && partial {
+					// partially succeeded scans, we don't reset-hash and we don't retry
+					return 0, getScanError(scan_errs)
 
-				begin := time.Now()
-				count, scan_err, partial = broker.scatter(qc, index, rollbackTimes, partitions, numPartitions, c.settings)
-				if c.isTimeit(scan_err) {
-					c.bridge.Timeit(targetInstID, float64(time.Since(begin)))
-					return count, scan_err
-				}
-				if scan_err != nil && !isgone(scan_err) && partial {
-					// partially succeeded scans, we don't reset-hash and we
-					// don't retry
-					return 0, scan_err
-				} else if isgone(scan_err) && evictRetry > 0 {
+				} else if isAnyGone(scan_errs) && evictRetry > 0 {
 					logging.Warnf("evict retry (%v)...\n", evictRetry)
 					evictRetry--
 					continue
+
 				} else { // TODO: make this error message precise
-					// reset the hash so that we do a full STATS for next
-					// query.
+					// reset the hash so that we do a full STATS for next query.
 					c.setBucketHash(index.Bucket, 0)
 				}
+				err = fmt.Errorf("%v from %v", getScanError(scan_errs), queryports)
+
+				if len(queryports) == len(partitions) && len(queryports) == len(targetInstIds) {
+					for i, _ := range queryports {
+						logging.Warnf("scan failed: requestId %v queryport %v inst %v partition %v", requestId, queryports[i], targetInstIds[i], partitions[i])
+					}
+				}
 			}
-			err = fmt.Errorf("%v from %v", scan_err, queryports)
 		}
 
 		// If there is an error coming from indexer that cannot serve the scan request
 		// (including io error), then exclude this defnID and retry with another replica.
 		// If we exhaust all the replica, then GetScanport() will return ok1=false.
-		if ok1 && ok2 && evictRetry > 0 {
-			if excludes == nil {
-				excludes = make(map[uint64]bool)
-			}
-			excludes[targetInstID] = true
-
+		if foundScanport && evictRetry > 0 {
 			logging.Warnf(
-				"Scan failed with error for index %v:%v.  Trying scan again with replica, reqId:%v : %v ...\n",
-				targetDefnID, targetInstID, requestId, scan_err)
+				"Scan failed with error for index %v.  Trying scan again with replica, reqId:%v : %v ...\n",
+				defnID, requestId, err)
 			continue
 		}
 
@@ -1191,12 +1248,15 @@ func (c *GsiClient) doScan(defnID uint64, requestId string, broker *RequestBroke
 		if i = i + 1; i < retry {
 			excludes = nil
 			logging.Warnf(
-				"Trying scan again for index %v:%v (%v %v), reqId:%v : %v ...\n",
-				targetDefnID, targetInstID, ok1, ok2, requestId, scan_err)
+				"Fail to find indexers to satisfy query request.  Trying scan again for index %v, reqId:%v : %v ...\n",
+				defnID, requestId, err)
 			c.updateScanClients()
 			time.Sleep(time.Duration(wait) * time.Millisecond)
 			continue
 		}
+
+		logging.Warnf("Fail to find indexers to satisfy query request.  Terminate scan for index %v,  reqId:%v : %v\n",
+			defnID, requestId, err)
 		break
 	}
 	if err != nil {
@@ -1205,13 +1265,20 @@ func (c *GsiClient) doScan(defnID uint64, requestId string, broker *RequestBroke
 	return 0, ErrorNoHost
 }
 
-func (c *GsiClient) isTimeit(err error) bool {
-	if err == nil {
-		return true
-	} else if err.Error() == common.ErrClientCancel.Error() {
+func (c *GsiClient) isTimeit(errMap map[common.PartitionId]map[uint64]error) bool {
+	if len(errMap) == 0 {
 		return true
 	}
-	return false
+
+	for _, instErrMap := range errMap {
+		for _, err := range instErrMap {
+			if err.Error() != common.ErrClientCancel.Error() {
+				return false
+			}
+		}
+	}
+
+	return true
 }
 
 func (c *GsiClient) getConsistency(
@@ -1390,11 +1457,54 @@ func curePrimaryKey(key interface{}) ([]byte, string) {
 	return nil, "before"
 }
 
+func isAnyGone(scan_err map[common.PartitionId]map[uint64]error) bool {
+
+	if len(scan_err) == 0 {
+		return false
+	}
+
+	for _, instErrs := range scan_err {
+		for _, err := range instErrs {
+			if isgone(err) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
 func isgone(scan_err error) bool {
+	// if indexer crash in the middle of scan, it can return EOF
+	// if a scan is sent to a already crashed indexer, it will return connection refused
 	if scan_err == io.EOF {
 		return true
 	} else if err, ok := scan_err.(net.Error); ok && err.Timeout() {
 		return true
 	}
 	return false
+}
+
+func getScanError(errMap map[common.PartitionId]map[uint64]error) error {
+
+	if len(errMap) == 0 {
+		return nil
+	}
+
+	errs := make(map[string]bool)
+
+	for _, instErrMap := range errMap {
+		for _, scan_err := range instErrMap {
+			if !errs[scan_err.Error()] {
+				errs[scan_err.Error()] = true
+			}
+		}
+	}
+
+	var allErrs string
+	for errStr, _ := range errs {
+		allErrs = fmt.Sprintf("%v %v", allErrs, errStr)
+	}
+
+	return fmt.Errorf("%v", allErrs)
 }

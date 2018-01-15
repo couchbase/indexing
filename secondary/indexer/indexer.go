@@ -144,8 +144,10 @@ type indexer struct {
 	enableManager bool
 	cpuProfFd     *os.File
 
-	rebalanceRunning bool
-	rebalanceToken   *RebalanceToken
+	rebalanceRunning   bool
+	rebalanceToken     *RebalanceToken
+	mergePartitionList []mergeSpec
+	prunePartitionList []pruneSpec
 
 	bootsrapStorageMode common.StorageMode
 }
@@ -155,6 +157,18 @@ type kvRequest struct {
 	bucket   string
 	streamId common.StreamId
 	grantCh  chan bool
+}
+
+type mergeSpec struct {
+	srcInstId  common.IndexInstId
+	tgtInstId  common.IndexInstId
+	rebalState common.RebalanceState
+	respch     chan error
+}
+
+type pruneSpec struct {
+	instId     common.IndexInstId
+	partitions []common.PartitionId
 }
 
 func NewIndexer(config common.Config) (Indexer, Message) {
@@ -792,6 +806,10 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		bucket := msg.(*MsgMutMgrFlushDone).GetBucket()
 		streamId := msg.(*MsgMutMgrFlushDone).GetStreamId()
 
+		// consolidate partitions now
+		idx.mergePartitions()
+		idx.prunePartitions()
+
 		idx.streamBucketFlushInProgress[streamId][bucket] = false
 
 		//if there is any observer for flush done, notify
@@ -906,6 +924,12 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 
 	case INDEXER_UPDATE_RSTATE:
 		idx.handleUpdateIndexRState(msg)
+
+	case INDEXER_MERGE_PARTITION:
+		idx.handleMergePartition(msg)
+
+	case INDEXER_CANCEL_MERGE_PARTITION:
+		idx.handleCancelMergePartition(msg)
 
 	default:
 		logging.Fatalf("Indexer::handleWorkerMsgs Unknown Message %+v", msg)
@@ -1041,6 +1065,9 @@ func (idx *indexer) handleAdminMsgs(msg Message) {
 		CBQ_DROP_INDEX_DDL:
 
 		idx.handleDropIndex(msg)
+
+	case CLUST_MGR_PRUNE_PARTITION:
+		idx.handlePrunePartition(msg)
 
 	case MSG_ERROR:
 
@@ -1200,7 +1227,11 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 		}
 	}
 
-	idx.stats.AddIndex(indexInst.InstId, indexInst.Defn.Bucket, indexInst.Defn.Name, indexInst.ReplicaId)
+	partitions := indexInst.Pc.GetAllPartitions()
+	for _, partnDefn := range partitions {
+		idx.stats.AddPartition(indexInst.InstId, indexInst.Defn.Bucket, indexInst.Defn.Name, indexInst.ReplicaId, partnDefn.GetPartitionId())
+	}
+
 	//allocate partition/slice
 	var partnInstMap PartitionInstMap
 	if partnInstMap, err = idx.initPartnInstance(indexInst, clientCh); err != nil {
@@ -1238,6 +1269,595 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 			respCh: clientCh})
 	}
 
+}
+
+func (idx *indexer) handleCancelMergePartition(msg Message) {
+
+	indexStateMap := msg.(*MsgCancelMergePartition).GetIndexStateMap()
+	respch := msg.(*MsgCancelMergePartition).GetResponseChannel()
+
+	for instId, _ := range indexStateMap {
+		if inst, ok := idx.indexInstMap[instId]; ok {
+			indexStateMap[instId] = inst.RState
+		}
+	}
+
+	idx.mergePartitionList = nil
+
+	logging.Infof("indexer::CancelMergePartition. IndexStateMap %v", indexStateMap)
+
+	if respch != nil {
+		close(respch)
+	}
+}
+
+func (idx *indexer) handleMergePartition(msg Message) {
+
+	srcInstId := msg.(*MsgMergePartition).GetSourceInstId()
+	tgtInstId := msg.(*MsgMergePartition).GetTargetInstId()
+	rebalState := msg.(*MsgMergePartition).GetRebalanceState()
+	respch := msg.(*MsgMergePartition).GetResponseChannel()
+
+	if err := idx.preValidateMergePartition(srcInstId, tgtInstId); err != nil {
+		if respch != nil {
+			respch <- err
+		}
+		return
+	}
+
+	idx.updateRStateOrMergePartition(srcInstId, tgtInstId, rebalState, respch)
+}
+
+func (idx *indexer) updateRStateOrMergePartition(srcInstId common.IndexInstId, tgtInstId common.IndexInstId,
+	rebalState common.RebalanceState, respch chan error) {
+
+	if inst, ok := idx.indexInstMap[srcInstId]; ok {
+
+		spec := mergeSpec{
+			srcInstId:  srcInstId,
+			tgtInstId:  tgtInstId,
+			rebalState: rebalState,
+			respch:     respch,
+		}
+
+		idx.mergePartitionList = append(idx.mergePartitionList, spec)
+
+		if ok, _ := idx.streamBucketFlushInProgress[inst.Stream][inst.Defn.Bucket]; !ok {
+			idx.mergePartitions()
+		}
+
+	} else {
+		// This is not a proxy index instance.  No need to merge.  Just update RState.
+		var err error
+		if inst, ok := idx.indexInstMap[tgtInstId]; ok {
+			inst.RState = rebalState
+			idx.indexInstMap[tgtInstId] = inst
+
+			instIds := []common.IndexInstId{tgtInstId}
+			err = idx.updateMetaInfoForIndexList(instIds, false, false, false, false, true, true, false, false, nil)
+
+			logging.Infof("MergePartition: Index instance %v rstate moved to ACTIVE", tgtInstId)
+		}
+
+		if ok, _ := idx.streamBucketFlushInProgress[inst.Stream][inst.Defn.Bucket]; !ok {
+			idx.mergePartitions()
+		}
+
+		if respch != nil {
+			respch <- err
+		}
+	}
+}
+
+func (idx *indexer) preValidateMergePartition(srcInstId common.IndexInstId, tgtInstId common.IndexInstId) error {
+
+	inst, ok := idx.indexInstMap[srcInstId]
+	if !ok {
+		if tgtInstId != 0 {
+			if _, ok := idx.indexInstMap[tgtInstId]; !ok {
+				err := fmt.Errorf("MergePartition: Both proxy index Instance %v and real index instance %v are not found",
+					srcInstId, tgtInstId)
+				logging.Errorf(err.Error())
+				return err
+			}
+
+			return nil
+		}
+
+		err := fmt.Errorf("MergePartition: Index Instance %v not found", srcInstId)
+		logging.Errorf(err.Error())
+		return err
+	}
+
+	// Verify if it is a proxy.
+	if inst.IsProxy() {
+		if tgtInstId != inst.RealInstId {
+			err := fmt.Errorf("MergePartition: Real index Instance in transer token %v does not match proxy real index instance (%v != %v)",
+				srcInstId, tgtInstId, inst.RealInstId)
+			logging.Errorf(err.Error())
+			return err
+		}
+
+		// Find the real index
+		if _, ok := idx.indexInstMap[tgtInstId]; !ok {
+			err := fmt.Errorf("MergePartition: Real index Instance not found %v", tgtInstId)
+			logging.Errorf(err.Error())
+			return err
+		}
+	}
+
+	return nil
+}
+
+//
+// This function merge the partitions from a source index instance to a target index instance.
+// Prior to this point, the source index instance has been treated as an independent index instance.
+//
+// This function should be called when indexer is in quiescent point, e.g. when flush is done.
+//
+// This function is idempotent.  For example, after the source index instance is merged to the
+// target, the indexer crash before the source index instance is cleaned up.   This function can
+// be re-run.
+//
+// This function has one of the possible outcomes:
+// 1) The source index is successfully merged to the target.
+//    - source instance is still REBAL_MERGED state and it could be deleted
+//    - target instance has the new partition.  It may be in ACTIVE or PENDING state.
+// 2) The merge is skipped (e.g. source index or target is deleted)
+// 3) The merge is delayed (e.g. target index is not ready to merge)
+// 4) An error is returned through respch.   This means that the merge
+//    may be in progress, but it has not yet committed yet.   The
+//    indexer can be in an inconsistent state and needs restart.
+// 3) If there is any transient error during commit or after commit,
+//    the indexer can panic.
+//
+func (idx *indexer) mergePartitions() {
+
+	// Do not merge when indexer is not active
+	if is := idx.getIndexerState(); is != common.INDEXER_ACTIVE {
+		return
+	}
+
+	// nothing to merge
+	if len(idx.mergePartitionList) == 0 {
+		return
+	}
+
+	var remaining []mergeSpec
+	if len(idx.mergePartitionList) != 0 {
+		remaining = make([]mergeSpec, 0, len(idx.mergePartitionList))
+	}
+
+	for _, spec := range idx.mergePartitionList {
+
+		sourceId := spec.srcInstId
+		targetId := spec.tgtInstId
+		respch := spec.respch
+
+		if !idx.mergePartition(sourceId, targetId, respch) {
+			remaining = append(remaining, spec)
+		}
+	}
+
+	idx.mergePartitionList = remaining
+}
+
+func (idx *indexer) mergePartition(sourceId common.IndexInstId, targetId common.IndexInstId, respch chan error) bool {
+
+	if source, ok := idx.indexInstMap[sourceId]; ok {
+
+		logging.Infof("MergePartition: Merge instance %v to instance %v", source.InstId, targetId)
+
+		// The index has been explicitly dropped before merge can happen.
+		if source.State == common.INDEX_STATE_DELETED {
+			logging.Warnf("MergePartition: Source Index Instance %v is in DELETED state.  Nothinge to merge.", source.InstId)
+			if respch != nil {
+				respch <- error(nil)
+			}
+			return true
+		}
+
+		// The source index cannot be in REBAL_ACTIVE state.
+		if source.RState == common.REBAL_ACTIVE {
+			err := fmt.Errorf("Source Index Instance %v is in REBAL_ACTIVE state.", source.InstId)
+			logging.Errorf("Merge Partition: %v", err)
+			if respch != nil {
+				respch <- err
+			}
+			return true
+		}
+
+		// The source index cannot be in REBAL_MERGED state.
+		if source.RState == common.REBAL_MERGED || source.RState == common.REBAL_PENDING_DELETE {
+			err := fmt.Errorf("Source Index Instance %v is in REBAL_MERGED or REBAL_PENDING_DELETE state.", source.InstId)
+			logging.Errorf("Merge Partition: %v", err)
+			if respch != nil {
+				respch <- err
+			}
+			return true
+		}
+
+		if source.State != common.INDEX_STATE_CREATED && source.State != common.INDEX_STATE_ACTIVE {
+			logging.Warnf("MergePartition: Source Index Instance %v is not in CREATED or ACTIVE state (%v).  Do not merge now.",
+				source.InstId, source.State)
+			return false
+		}
+
+		// Do not merge if recovery is going on.
+		if source.Stream != common.NIL_STREAM && idx.getStreamBucketState(source.Stream, source.Defn.Bucket) != STREAM_ACTIVE {
+			logging.Warnf("MergePartition: Source Index Instance %v with bucket stream in recovery.  Do not merge now.", source.InstId)
+			return false
+		}
+
+		// The target instance can either be
+		// 1) An index instance created due to rebalance
+		// 2) An index instance that is already residing on this node prior to rebalance
+		if target, ok := idx.indexInstMap[targetId]; ok {
+
+			if source.InstId == target.InstId {
+				logging.Warnf("MergePartition: Source Index Instance %v and target index instance is the same.  Nothinge to merge.", source.InstId)
+				if respch != nil {
+					respch <- error(nil)
+				}
+				return true
+			}
+
+			if source.Defn.DefnId != target.Defn.DefnId {
+				err := fmt.Errorf("Source Index Instance %v and target index instance %v have different definition (%v != %v)",
+					source.InstId, target.InstId, source.Defn.DefnId, target.Defn.DefnId)
+				logging.Errorf("Merge Partition: %v", err)
+				if respch != nil {
+					respch <- err
+				}
+				return true
+			}
+
+			// The index has been explicitly dropped before merge can happen.
+			if target.State == common.INDEX_STATE_DELETED {
+				logging.Warnf("MergePartition: Target Index Instance %v is in DELETED state.  Remove target index instance %v.",
+					target.InstId, source.InstId)
+				idx.cleanupIndexMetadata(source)
+				idx.cleanupIndex(source, nil)
+				if respch != nil {
+					respch <- error(nil)
+				}
+				return true
+			}
+
+			// The target has to be in REBAL_ACTIVE.   This is to ensure that onece it is merged, the target will not be removed
+			// by rebalancer clean up.  Once merged, the transfer token is moved to Ready or committed state.   The original index
+			// will be deleted.
+			if target.RState != common.REBAL_ACTIVE {
+				logging.Warnf("Merge Partition: Target Index Instance %v is not in REBAL_ACTIVE. Do not merge now.", target.InstId)
+				return false
+			}
+
+			// The target may become ACTIVE before the source
+			if target.State != common.INDEX_STATE_CREATED && target.State != common.INDEX_STATE_ACTIVE {
+				logging.Warnf("MergePartition: Target Index Instance %v is not in CREATED or ACTIVE state (%v).  Do not merge now.",
+					target.InstId, target.State)
+				return false
+			}
+
+			// This is to check against merging a deferred index (before build) into an active index, or vice versa.
+			if source.State != target.State {
+				err := fmt.Errorf("Source Index Instance %v and target index instance %v does not have the same state (%v != %v)",
+					source.InstId, target.InstId, source.State, target.State)
+				logging.Errorf("Merge Partition: %v", err)
+				if respch != nil {
+					respch <- err
+				}
+				return true
+			}
+
+			// The source and target must be on the same stream.
+			if source.Stream != target.Stream {
+				logging.Warnf("MergePartition: Source Index Instance stream %v and target index instance stream %v are not on the same.  Do not merge now.",
+					target.Stream, source.Stream)
+				return false
+			}
+
+			// Merge Partitions in runtime data structures:
+			// 1) index instance partition container
+			// 2) indexer partition map
+			// 3) index instance partition stats
+			partitions := source.Pc.GetAllPartitions()
+			partnIds := make([]common.PartitionId, 0, len(partitions))
+			versions := make([]int, 0, len(partitions))
+			for _, partnDef := range partitions {
+				partnId := partnDef.GetPartitionId()
+				version := partnDef.GetVersion()
+
+				// Do not merge if the target index inst has this partition
+				if target.Pc.GetPartitionById(partnId) == nil {
+					// Add partiton to instance definition
+					target.Pc.AddPartition(partnId, partnDef)
+
+					// Add partiition to partition map
+					idx.indexPartnMap[target.InstId][partnId] = idx.indexPartnMap[source.InstId][partnId]
+
+					// Add to stats
+					if stats := idx.stats.GetPartitionStats(source.InstId, partnId); stats != nil {
+						idx.stats.SetPartitionStats(target.InstId, partnId, stats)
+					}
+
+					partnIds = append(partnIds, partnId)
+					versions = append(versions, version)
+
+				} else {
+					err := fmt.Errorf("Duplicate partition %v found when merging from source instance %v to target instance %v.",
+						partnId, source.InstId, target.InstId)
+					logging.Errorf("Merge Partition: %v", err)
+					if respch != nil {
+						respch <- err
+					}
+					return true
+				}
+			}
+
+			// Merge partitions in storage manager snapshot.  This must be done before metadata is updated.
+			// This is to make sure that once the metadata is published to client, scan will not fail since
+			// client may see the new partition list from metadata.   Once this operation is successful,
+			idx.storageMgrCmdCh <- &MsgIndexMergeSnapshot{
+				srcInstId:  source.InstId,
+				tgtInstId:  target.InstId,
+				partitions: partnIds,
+			}
+			if resp := <-idx.storageMgrCmdCh; resp.GetMsgType() != MSG_SUCCESS {
+				respErr := resp.(*MsgError).GetError()
+				if respch != nil {
+					respch <- respErr.cause
+				}
+				return true
+			}
+
+			// At this point, we are going to commit the metadata change.   Once committed, the indexer should not
+			// send any error to the respch.   The indexer may crash to let recovery code to kick in.
+			// Note that updating the metadata is atomic, for both the source instance and target instance.
+			target.Version = source.Version
+			idx.indexInstMap[targetId] = target
+
+			msg := &MsgClustMgrMergePartition{
+				defnId:         source.Defn.DefnId,
+				srcInstId:      source.InstId,
+				srcRState:      common.REBAL_MERGED,
+				tgtInstId:      target.InstId,
+				tgtPartitions:  partnIds,
+				tgtVersions:    versions,
+				tgtInstVersion: uint64(target.Version),
+			}
+			if err := idx.sendMsgToClusterMgr(msg); err != nil {
+				common.CrashOnError(err)
+			}
+
+			logging.Infof("MergePartition: instance %v merged to instance %v", source.InstId, targetId)
+			idx.cleanupIndexAfterMerge(source)
+
+		} else {
+			// preValidateMergePartition must already been called prior to this.
+			// This means the source inst or the target inst must have existed before.
+			// If we do not find the real inst now, it could mean that the target inst might
+			// have been dropped explicitly.  In this case, skip the merge.
+			logging.Warnf("MergePartition.  Target instance %v not found. Remove source %v.", source.RealInstId, source.InstId)
+			idx.cleanupIndexMetadata(source)
+			idx.cleanupIndex(source, nil)
+		}
+
+	} else {
+		// preValidateMergePartition must already been called prior to this.
+		// This means the source inst or the target inst must have existed before.
+		// If we do not find the source inst now, it could mean that the source might
+		// have been dropped explicitly.  In this case, skip the merge.
+		logging.Warnf("MergePartition.  Source instance %v not found. Skip", sourceId)
+	}
+
+	if respch != nil {
+		respch <- error(nil)
+	}
+	return true
+}
+
+//
+// Clean up index instance without removing the data.
+// Note that the source instance is already marked as DELETED in metadata
+// (through MsgClustMgrMergePartition).
+//
+func (idx *indexer) cleanupIndexAfterMerge(inst common.IndexInst) {
+
+	// clean up metadata since we are going to remove the index inst
+	// from runtime data structure, so rebalancer will no longer see
+	// this index.   If we don't clean up, then it will get clean up
+	// during next bootstrap.
+	defn := inst.Defn
+	defn.InstId = inst.InstId
+	msg := &MsgClustMgrDropInstance{defn: defn}
+	if err := idx.sendMsgToClusterMgr(msg); err != nil {
+		common.CrashOnError(err)
+	}
+
+	inst.State = common.INDEX_STATE_DELETED
+	idx.indexInstMap[inst.InstId] = inst
+
+	// Remove the inst
+	delete(idx.indexInstMap, inst.InstId)
+	delete(idx.indexPartnMap, inst.InstId)
+
+	// remove stats
+	idx.stats.RemoveIndex(inst.InstId)
+
+	// Update index maps with this index
+	msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
+	msgUpdateIndexPartnMap := &MsgUpdatePartnMap{indexPartnMap: idx.indexPartnMap}
+	if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, msgUpdateIndexPartnMap); err != nil {
+		common.CrashOnError(err)
+	}
+
+	// remove stream
+	if inst.State != common.INDEX_STATE_CREATED &&
+		inst.State != common.INDEX_STATE_READY &&
+		inst.State != common.INDEX_STATE_DELETED &&
+		inst.Stream != common.NIL_STREAM {
+
+		if !(inst.Stream == common.MAINT_STREAM &&
+			!idx.checkBucketExistsInStream(inst.Defn.Bucket, common.MAINT_STREAM, false) &&
+			idx.checkBucketExistsInStream(inst.Defn.Bucket, common.INIT_STREAM, false)) {
+
+			idx.sendStreamUpdateForDropIndex(inst, nil)
+		}
+	}
+}
+
+//
+// Prune Partition.
+//
+func (idx *indexer) handlePrunePartition(msg Message) {
+
+	instId := msg.(*MsgClustMgrPrunePartition).GetInstId()
+	partitions := msg.(*MsgClustMgrPrunePartition).GetPartitions()
+	respch := msg.(*MsgClustMgrPrunePartition).GetRespCh()
+
+	if inst, ok := idx.indexInstMap[instId]; ok {
+
+		spec := pruneSpec{
+			instId:     instId,
+			partitions: partitions,
+		}
+
+		idx.prunePartitionList = append(idx.prunePartitionList, spec)
+
+		if ok, _ := idx.streamBucketFlushInProgress[inst.Stream][inst.Defn.Bucket]; !ok {
+			idx.prunePartitions()
+		}
+	} else {
+		logging.Warnf("PrunePartition.  Index instance %v not found. Skip", instId)
+	}
+
+	respch <- &MsgSuccess{}
+}
+
+func (idx *indexer) prunePartitions() {
+
+	// Do not merge when indexer is not active
+	if is := idx.getIndexerState(); is != common.INDEXER_ACTIVE {
+		return
+	}
+
+	// nothing to prune
+	if len(idx.prunePartitionList) == 0 {
+		return
+	}
+
+	var remaining []pruneSpec
+	if len(idx.prunePartitionList) != 0 {
+		remaining = make([]pruneSpec, 0, len(idx.prunePartitionList))
+	}
+
+	for _, spec := range idx.prunePartitionList {
+
+		instId := spec.instId
+		partitions := spec.partitions
+
+		if !idx.prunePartition(instId, partitions) {
+			remaining = append(remaining, spec)
+		}
+	}
+
+	idx.prunePartitionList = remaining
+}
+
+//
+// Remove partitions from runtime data structure.  This function is idempotent.
+// This function will not remove the slices from the partition.  Those pruned partitions
+// are put into a proxy partition with DELETED state, and they will be periodically clean up
+// asynchronously.
+//
+func (idx *indexer) prunePartition(instId common.IndexInstId, partitions []common.PartitionId) bool {
+
+	if inst, ok := idx.indexInstMap[instId]; ok {
+
+		logging.Infof("PrunePartition: Prune instance %v partitions %v", instId, partitions)
+
+		// The index has been explicitly dropped before merge can happen.
+		if inst.State == common.INDEX_STATE_DELETED {
+			logging.Warnf("PrunePartition:  Index Instance %v is in DELETED state.  Nothinge to prune.", instId)
+			return true
+		}
+
+		// Do not prune if recovery is going on.
+		if inst.Stream != common.NIL_STREAM && idx.getStreamBucketState(inst.Stream, inst.Defn.Bucket) != STREAM_ACTIVE {
+			logging.Warnf("PrunePartition: Index Instance %v with bucket stream in recovery.  Do not prune now.", inst.InstId)
+			return false
+		}
+
+		if inst.RState == common.REBAL_MERGED || inst.RState == common.REBAL_PENDING_DELETE {
+			logging.Warnf("PrunePartition:  Index Instance %v is in REBAL_MERGED or REBAL_DELETED or REBAL_PENDING_DELETE state.  Nothinge to prune.", instId)
+			return true
+		}
+
+		// Prune Partitions from runtime structure
+		// 1) index instance partition container
+		// 2) indexer partition map
+		// 3) index instance partition stats
+		pruned := make([]PartitionInst, 0, len(partitions))
+		for _, partnId := range partitions {
+
+			partition := inst.Pc.GetPartitionById(partnId)
+			if partition != nil {
+				// Remove partiton from instance definition
+				inst.Pc.RemovePartition(partnId)
+
+				// Remove partiition from partition map
+				pruned = append(pruned, idx.indexPartnMap[inst.InstId][partnId])
+				delete(idx.indexPartnMap[inst.InstId], partnId)
+
+				// Remove stats
+				idx.stats.RemovePartitionStats(inst.InstId, partnId)
+
+			} else {
+				logging.Warnf("PrunePartition.  Index instance %v does not have partition %v. Skip", inst.InstId, partnId)
+			}
+		}
+
+		idx.indexInstMap[instId] = inst
+
+		// Prune partitions in storage manager snapshot.  This must be done before metadata is updated.
+		// This is to make sure that once the metadata is published to client, scan will not fail since
+		// client may see the new partition list from metadata.
+		idx.storageMgrCmdCh <- &MsgIndexPruneSnapshot{
+			instId:     inst.InstId,
+			partitions: partitions,
+		}
+		if resp := <-idx.storageMgrCmdCh; resp.GetMsgType() != MSG_SUCCESS {
+			respErr := resp.(*MsgError).GetError()
+			logging.Errorf("PrunePartition.  Fail to prune index snapshot for index %v. Cause: %v", inst.InstId, respErr.cause)
+			common.CrashOnError(respErr.cause)
+		}
+
+		// Update index maps with this index
+		msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
+		msgUpdateIndexPartnMap := &MsgUpdatePartnMap{indexPartnMap: idx.indexPartnMap}
+		if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, msgUpdateIndexPartnMap); err != nil {
+			common.CrashOnError(err)
+		}
+
+		// Soft delete the slice
+		for _, partnInst := range pruned {
+			//close all the slices
+			for _, slice := range partnInst.Sc.GetAllSlices() {
+				go func(partnInst PartitionInst, slice Slice) {
+					slice.Close()
+					//wipe the physical files
+					slice.Destroy()
+					logging.Infof("Prune Partiiton: destroy slice inst %v partn %v path %v",
+						slice.IndexInstId(), partnInst.Defn.GetPartitionId(), slice.Path())
+				}(partnInst, slice)
+			}
+		}
+	} else {
+		logging.Warnf("PrunePartition.  Index instance %v not found. Skip", instId)
+	}
+
+	return true
 }
 
 func (idx *indexer) handleBuildIndex(msg Message) {
@@ -1437,7 +2057,7 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 		//store updated state and streamId in meta store
 		if idx.enableManager {
 			if err := idx.updateMetaInfoForIndexList(instIdList, true,
-				true, false, true, true, false, nil); err != nil {
+				true, false, true, true, false, false, false, nil); err != nil {
 				common.CrashOnError(err)
 			}
 		} else {
@@ -1525,6 +2145,7 @@ func (idx *indexer) handleDropIndex(msg Message) {
 	}
 
 	idx.stats.RemoveIndex(indexInst.InstId)
+
 	//if the index state is Created/Ready/Deleted, only data cleanup is
 	//required. No stream updates are required.
 	if indexInst.State == common.INDEX_STATE_CREATED ||
@@ -1868,7 +2489,7 @@ func (idx *indexer) handleMergeStreamAck(msg Message) {
 				instIdList = append(instIdList, inst.InstId)
 			}
 
-			if err := idx.updateMetaInfoForIndexList(instIdList, true, true, false, false, true, false, nil); err != nil {
+			if err := idx.updateMetaInfoForIndexList(instIdList, true, true, false, false, true, false, false, false, nil); err != nil {
 				common.CrashOnError(err)
 			}
 		}
@@ -1990,17 +2611,19 @@ func (idx *indexer) cleanupIndexData(indexInst common.IndexInst,
 	}
 
 	//for all partitions managed by this indexer
-	for _, partnInst := range idxPartnInfo {
-		sc := partnInst.Sc
-		//close all the slices
-		for _, slice := range sc.GetAllSlices() {
-			go func() {
-				slice.Close()
-				logging.Infof("Indexer::cleanupIndexData %v Close Done", slice.IndexInstId())
-				//wipe the physical files
-				slice.Destroy()
-				logging.Infof("Indexer::cleanupIndexData %v Destroy Done", slice.IndexInstId())
-			}()
+	if indexInst.RState != common.REBAL_MERGED {
+		for _, partnInst := range idxPartnInfo {
+			sc := partnInst.Sc
+			//close all the slices
+			for _, slice := range sc.GetAllSlices() {
+				go func() {
+					slice.Close()
+					logging.Infof("Indexer::cleanupIndexData %v Close Done", slice.IndexInstId())
+					//wipe the physical files
+					slice.Destroy()
+					logging.Infof("Indexer::cleanupIndexData %v Destroy Done", slice.IndexInstId())
+				}()
+			}
 		}
 	}
 
@@ -2514,25 +3137,27 @@ func (idx *indexer) checkDuplicateIndex(indexInst common.IndexInst,
 
 	//if the index name already exists for the same bucket,
 	//return error
-	for _, index := range idx.indexInstMap {
+	if !common.IsPartitioned(indexInst.Defn.PartitionScheme) {
+		for _, index := range idx.indexInstMap {
 
-		if index.Defn.Name == indexInst.Defn.Name &&
-			index.Defn.Bucket == indexInst.Defn.Bucket &&
-			index.State != common.INDEX_STATE_DELETED {
+			if index.Defn.Name == indexInst.Defn.Name &&
+				index.Defn.Bucket == indexInst.Defn.Bucket &&
+				index.State != common.INDEX_STATE_DELETED {
 
-			logging.Errorf("Indexer::checkDuplicateIndex Duplicate Index Name. "+
-				"Name: %v, Duplicate Index: %v", indexInst.Defn.Name, index)
+				logging.Errorf("Indexer::checkDuplicateIndex Duplicate Index Name. "+
+					"Name: %v, Duplicate Index: %v", indexInst.Defn.Name, index)
 
-			if respCh != nil {
-				respCh <- &MsgError{
-					err: Error{code: ERROR_INDEX_ALREADY_EXISTS,
-						severity: FATAL,
-						cause:    errors.New("Duplicate Index Name"),
-						category: INDEXER}}
+				if respCh != nil {
+					respCh <- &MsgError{
+						err: Error{code: ERROR_INDEX_ALREADY_EXISTS,
+							severity: FATAL,
+							cause:    errors.New("Duplicate Index Name"),
+							category: INDEXER}}
+				}
+				return false
 			}
-			return false
-		}
 
+		}
 	}
 	return true
 }
@@ -2600,25 +3225,25 @@ func (idx *indexer) handleUpdateIndexRState(msg Message) {
 
 	updateMsg := msg.(*MsgUpdateIndexRState)
 	respCh := updateMsg.GetRespCh()
-	defnId := updateMsg.GetDefnId()
+	instId := updateMsg.GetInstId()
 	rstate := updateMsg.GetRState()
 
-	instId := idx.getInstIdFromDefnId(defnId)
-
-	if instId == 0 {
-		logging.Errorf("Indexer::handleUpdateIndexRState Unable to find Index For DefnId %v", defnId)
+	inst, ok := idx.indexInstMap[instId]
+	if !ok {
+		logging.Errorf("Indexer::handleUpdateIndexRState Unable to find Index %v", instId)
 		respCh <- ErrInconsistentState
 		return
 	}
 
-	inst := idx.indexInstMap[instId]
 	inst.RState = rstate
 	idx.indexInstMap[instId] = inst
 
-	if err := idx.updateMetaInfoForIndexList([]common.IndexInstId{instId}, false, false, false, false, true, true, respCh); err != nil {
+	instIds := []common.IndexInstId{instId}
+	if err := idx.updateMetaInfoForIndexList(instIds, false, false, false, false, true, true, false, false, respCh); err != nil {
 		common.CrashOnError(err)
 	}
 
+	logging.Infof("handleUpdateIndexRState: Index instance %v rstate moved to ACTIVE", instId)
 }
 
 //TODO If this function gets error before its finished, the state
@@ -2662,7 +3287,6 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 				index.State = common.INDEX_STATE_CATCHUP
 			} else {
 				index.State = common.INDEX_STATE_ACTIVE
-				index.RState = common.REBAL_ACTIVE
 			}
 			indexList = append(indexList, index)
 			instIdList = append(instIdList, index.InstId)
@@ -2689,7 +3313,7 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 	}
 
 	//if index is already in MAINT_STREAM, nothing more needs to be done
-	if err := idx.updateMetaInfoForIndexList(instIdList, true, true, false, false, true, false, nil); err != nil {
+	if err := idx.updateMetaInfoForIndexList(instIdList, true, true, false, false, true, false, false, false, nil); err != nil {
 		common.CrashOnError(err)
 	}
 
@@ -2846,7 +3470,6 @@ func (idx *indexer) handleMergeInitStream(msg Message) {
 			index.State == common.INDEX_STATE_CATCHUP {
 
 			index.State = common.INDEX_STATE_ACTIVE
-			index.RState = common.REBAL_ACTIVE
 			index.Stream = common.MAINT_STREAM
 			indexList = append(indexList, index)
 			bucketUUIDList = append(bucketUUIDList, index.Defn.BucketUUID)
@@ -3585,8 +4208,11 @@ func (idx *indexer) initFromPersistedState() (bool, error) {
 	logging.Infof("Indexer::local storage mode %v", common.GetStorageMode().String())
 
 	for _, inst := range idx.indexInstMap {
+
 		if inst.State != common.INDEX_STATE_DELETED {
-			idx.stats.AddIndex(inst.InstId, inst.Defn.Bucket, inst.Defn.Name, inst.ReplicaId)
+			for _, partnDefn := range inst.Pc.GetAllPartitions() {
+				idx.stats.AddPartition(inst.InstId, inst.Defn.Bucket, inst.Defn.Name, inst.ReplicaId, partnDefn.GetPartitionId())
+			}
 		}
 
 		//allocate partition/slice
@@ -3598,7 +4224,6 @@ func (idx *indexer) initFromPersistedState() (bool, error) {
 
 		idx.indexInstMap[inst.InstId] = inst
 		idx.indexPartnMap[inst.InstId] = partnInstMap
-
 	}
 
 	return needsRestart, nil
@@ -3791,7 +4416,7 @@ func (idx *indexer) upgradeSingleIndex(inst *common.IndexInst, storageMode commo
 
 	// update metadata
 	msg := &MsgClustMgrResetIndex{
-		defn: inst.Defn,
+		inst: *inst,
 	}
 	idx.sendMsgToClusterMgr(msg)
 }
@@ -3816,7 +4441,8 @@ func (idx *indexer) validateIndexInstMap() {
 					index.State = common.INDEX_STATE_READY
 					idx.indexInstMap[instId] = index
 
-					if err := idx.updateMetaInfoForIndexList([]common.IndexInstId{index.InstId}, true, false, false, false, true, false, nil); err != nil {
+					instIds := []common.IndexInstId{index.InstId}
+					if err := idx.updateMetaInfoForIndexList(instIds, true, false, false, false, true, false, false, false, nil); err != nil {
 						common.CrashOnError(err)
 					}
 				}
@@ -3918,20 +4544,22 @@ func (idx *indexer) validateIndexInstMap() {
 //been initialized
 func (idx *indexer) forceCleanupIndexData(inst *common.IndexInst, sliceId SliceId) error {
 
-	storage_dir := idx.config["storage_dir"].String()
+	if inst.RState != common.REBAL_MERGED {
+		storage_dir := idx.config["storage_dir"].String()
 
-	partnDefnList := inst.Pc.GetAllPartitions()
-	for _, partnDefn := range partnDefnList {
-		path := filepath.Join(storage_dir, IndexPath(inst, partnDefn.GetPartitionId(), sliceId))
+		partnDefnList := inst.Pc.GetAllPartitions()
+		for _, partnDefn := range partnDefnList {
+			path := filepath.Join(storage_dir, IndexPath(inst, partnDefn.GetPartitionId(), sliceId))
 
-		logging.Infof("Indexer::forceCleanupIndexData Cleaning Up Slice Id %v, "+
-			"IndexInstId %v, IndexDefnId %v ", sliceId, inst.InstId, inst.Defn.DefnId)
+			logging.Infof("Indexer::forceCleanupIndexData Cleaning Up partition %v, "+
+				"IndexInstId %v, IndexDefnId %v ", partnDefn.GetPartitionId(), inst.InstId, inst.Defn.DefnId)
 
-		//cleanup the disk directory
-		if err := os.RemoveAll(path); err != nil {
-			logging.Errorf("Indexer::forceCleanupIndexData Error Cleaning Up Slice Id %v, "+
-				"IndexInstId %v, IndexDefnId %v. Error %v", sliceId, inst.InstId, inst.Defn.DefnId, err)
-			return err
+			//cleanup the disk directory
+			if err := os.RemoveAll(path); err != nil {
+				logging.Errorf("Indexer::forceCleanupIndexData Error Cleaning Up partition %v, "+
+					"IndexInstId %v, IndexDefnId %v. Error %v", partnDefn.GetPartitionId(), inst.InstId, inst.Defn.DefnId, err)
+				return err
+			}
 		}
 	}
 	return nil
@@ -3980,7 +4608,7 @@ func (idx *indexer) checkMissingMaintBucket() {
 
 		if idx.enableManager {
 			if err := idx.updateMetaInfoForIndexList(updatedList,
-				true, true, false, false, true, false, nil); err != nil {
+				true, true, false, false, true, false, false, false, nil); err != nil {
 				common.CrashOnError(err)
 			}
 		}
@@ -4139,7 +4767,7 @@ func (idx *indexer) checkStreamRequestPending(streamId common.StreamId, bucket s
 
 func (idx *indexer) updateMetaInfoForBucket(bucket string,
 	updateState bool, updateStream bool, updateError bool,
-	updateRState bool) error {
+	updateRState bool, updatePartition bool, updateVersion bool) error {
 
 	var instIdList []common.IndexInstId
 	for _, inst := range idx.indexInstMap {
@@ -4150,7 +4778,7 @@ func (idx *indexer) updateMetaInfoForBucket(bucket string,
 
 	if len(instIdList) != 0 {
 		return idx.updateMetaInfoForIndexList(instIdList, updateState,
-			updateStream, updateError, false, updateRState, false, nil)
+			updateStream, updateError, false, updateRState, false, updatePartition, updateVersion, nil)
 	} else {
 		return nil
 	}
@@ -4160,7 +4788,7 @@ func (idx *indexer) updateMetaInfoForBucket(bucket string,
 func (idx *indexer) updateMetaInfoForIndexList(instIdList []common.IndexInstId,
 	updateState bool, updateStream bool, updateError bool,
 	updateBuildTs bool, updateRState bool, syncUpdate bool,
-	respCh chan error) error {
+	updatePartitions bool, updateVersion bool, respCh chan error) error {
 
 	var indexList []common.IndexInst
 	for _, instId := range instIdList {
@@ -4168,11 +4796,13 @@ func (idx *indexer) updateMetaInfoForIndexList(instIdList []common.IndexInstId,
 	}
 
 	updatedFields := MetaUpdateFields{
-		state:   updateState,
-		stream:  updateStream,
-		err:     updateError,
-		buildTs: updateBuildTs,
-		rstate:  updateRState,
+		state:      updateState,
+		stream:     updateStream,
+		err:        updateError,
+		buildTs:    updateBuildTs,
+		rstate:     updateRState,
+		partitions: updatePartitions,
+		version:    updateVersion,
 	}
 
 	msg := &MsgClustMgrUpdate{
@@ -4194,7 +4824,9 @@ func (idx *indexer) updateMetaInfoForDeleteBucket(bucket string, streamId common
 
 func (idx *indexer) cleanupIndexMetadata(indexInst common.IndexInst) error {
 
-	msg := &MsgClustMgrUpdate{mType: CLUST_MGR_CLEANUP_INDEX, indexList: []common.IndexInst{indexInst}}
+	temp := indexInst
+	temp.Pc = nil
+	msg := &MsgClustMgrUpdate{mType: CLUST_MGR_CLEANUP_INDEX, indexList: []common.IndexInst{temp}}
 	return idx.sendMsgToClusterMgr(msg)
 }
 
@@ -4341,6 +4973,7 @@ func (idx *indexer) bulkUpdateRState(instIdList []common.IndexInstId, reqCtx *co
 			idxInst.RState = common.REBAL_PENDING
 		} else {
 			idxInst.RState = common.REBAL_ACTIVE
+			logging.Infof("bulkUpdateRState: Index instance %v rstate moved to ACTIVE", idxInst.RState)
 		}
 		idx.indexInstMap[instId] = idxInst
 	}
@@ -4538,11 +5171,14 @@ func NewSlice(id SliceId, indInst *common.IndexInst, partnInst *PartitionInst,
 	}
 	switch indInst.Defn.Using {
 	case common.MemDB, common.MemoryOptimized:
-		slice, err = NewMemDBSlice(path, id, indInst.Defn, indInst.InstId, indInst.Defn.IsPrimary, !ephemeral, conf, stats.indexes[indInst.InstId])
+		slice, err = NewMemDBSlice(path, id, indInst.Defn, indInst.InstId, indInst.Defn.IsPrimary, !ephemeral, conf,
+			stats.GetPartitionStats(indInst.InstId, partnInst.Defn.GetPartitionId()))
 	case common.ForestDB:
-		slice, err = NewForestDBSlice(path, id, indInst.Defn, indInst.InstId, indInst.Defn.IsPrimary, conf, stats.indexes[indInst.InstId])
+		slice, err = NewForestDBSlice(path, id, indInst.Defn, indInst.InstId, indInst.Defn.IsPrimary, conf,
+			stats.GetPartitionStats(indInst.InstId, partnInst.Defn.GetPartitionId()))
 	case common.PlasmaDB:
-		slice, err = NewPlasmaSlice(path, id, indInst.Defn, indInst.InstId, indInst.Defn.IsPrimary, conf, stats.indexes[indInst.InstId])
+		slice, err = NewPlasmaSlice(path, id, indInst.Defn, indInst.InstId, indInst.Defn.IsPrimary, conf,
+			stats.GetPartitionStats(indInst.InstId, partnInst.Defn.GetPartitionId()))
 	}
 
 	return
@@ -4625,6 +5261,7 @@ func (idx *indexer) deleteIndexInstOnDeletedBucket(bucket string, streamId commo
 				index.Stream == common.NIL_STREAM)) {
 
 			instIdList = append(instIdList, index.InstId)
+
 			idx.stats.RemoveIndex(index.InstId)
 		}
 	}

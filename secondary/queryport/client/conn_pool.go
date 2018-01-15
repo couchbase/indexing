@@ -50,7 +50,7 @@ func newConnectionPool(
 		logPrefix:    fmt.Sprintf("[Queryport-connpool:%v]", host),
 	}
 	cp.mkConn = cp.defaultMkConn
-	logging.Infof("%v started ...\n", cp.logPrefix)
+	logging.Infof("%v started poolsize %v overflow %v ...\n", cp.logPrefix, poolSize, poolOverflow)
 	return cp
 }
 
@@ -186,7 +186,7 @@ func (cp *connectionPool) Return(connectn *connection, healthy bool) {
 		case cp.connections <- connectn:
 			logging.Debugf("%v connection %q reclaimed to pool\n", cp.logPrefix, laddr)
 		default:
-			logging.Debugf("%v closing overflow connection %q\n", cp.logPrefix, laddr)
+			logging.Debugf("%v closing overflow connection %q poolSize=%v\n", cp.logPrefix, laddr, len(cp.connections))
 			<-cp.createsem
 			connectn.conn.Close()
 		}

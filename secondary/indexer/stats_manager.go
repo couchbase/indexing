@@ -93,6 +93,8 @@ type IndexStats struct {
 	name, bucket string
 	replicaId    int
 
+	partitions map[common.PartitionId]*IndexStats
+
 	scanDuration          stats.Int64Val
 	scanReqDuration       stats.Int64Val
 	scanReqInitDuration   stats.Int64Val
@@ -217,6 +219,86 @@ func (s *IndexStats) Init() {
 	s.cacheHitPercent.Init()
 
 	s.Timings.Init()
+
+	s.partitions = make(map[common.PartitionId]*IndexStats)
+}
+
+func (s *IndexStats) addPartition(id common.PartitionId) {
+
+	if _, ok := s.partitions[id]; !ok {
+		partnStats := &IndexStats{}
+		partnStats.Init()
+		s.partitions[id] = partnStats
+	}
+}
+
+func (s *IndexStats) updateAllPartitionStats(f func(*IndexStats)) {
+
+	for _, ps := range s.partitions {
+		f(ps)
+	}
+}
+
+func (s *IndexStats) updatePartitionStats(pid common.PartitionId, f func(*IndexStats)) {
+
+	if ps, ok := s.partitions[pid]; ok {
+		f(ps)
+	}
+}
+
+func (s *IndexStats) partnInt64Stats(f func(*IndexStats) int64) int64 {
+
+	var v int64
+	for _, ps := range s.partitions {
+		v += f(ps)
+	}
+
+	if v != 0 {
+		return v
+	}
+
+	return f(s)
+}
+
+func (s *IndexStats) partnAvgInt64Stats(f func(*IndexStats) int64) int64 {
+
+	return s.int64Stats(f)
+}
+
+func (s *IndexStats) int64Stats(f func(*IndexStats) int64) int64 {
+
+	var v, count int64
+	for _, ps := range s.partitions {
+		if psv := f(ps); psv != 0 {
+			v += psv
+			count++
+		}
+	}
+
+	if v != 0 {
+		return (v / count)
+	}
+
+	return f(s)
+}
+
+func (s *IndexStats) partnTimingStats(f func(*IndexStats) *stats.TimingStat) string {
+
+	var v stats.TimingStat
+	v.Init()
+	for _, ps := range s.partitions {
+		if x := f(ps); x != nil {
+			v.Count.Add(x.Count.Value())
+			v.Sum.Add(x.Sum.Value())
+			v.SumOfSq.Add(x.SumOfSq.Value())
+		}
+	}
+
+	if v.Count.Value() != 0 {
+		return v.Value()
+	}
+
+	return f(s).Value()
 }
 
 type IndexerStats struct {
@@ -260,10 +342,6 @@ func (s *IndexerStats) Reset() {
 
 func (s *IndexerStats) AddIndex(id common.IndexInstId, bucket string, name string, replicaId int) {
 
-	idxStats := &IndexStats{name: name, bucket: bucket, replicaId: replicaId}
-	idxStats.Init()
-	s.indexes[id] = idxStats
-
 	b, ok := s.buckets[bucket]
 	if !ok {
 		b = &BucketStats{bucket: bucket}
@@ -271,7 +349,45 @@ func (s *IndexerStats) AddIndex(id common.IndexInstId, bucket string, name strin
 		s.buckets[bucket] = b
 	}
 
-	b.indexCount++
+	if _, ok := s.indexes[id]; !ok {
+		idxStats := &IndexStats{name: name, bucket: bucket, replicaId: replicaId}
+		idxStats.Init()
+		s.indexes[id] = idxStats
+
+		b.indexCount++
+	}
+}
+
+func (s *IndexerStats) AddPartition(id common.IndexInstId, bucket string, name string, replicaId int, partitionId common.PartitionId) {
+
+	if _, ok := s.indexes[id]; !ok {
+		s.AddIndex(id, bucket, name, replicaId)
+	}
+
+	s.indexes[id].addPartition(partitionId)
+}
+
+func (s *IndexerStats) GetPartitionStats(id common.IndexInstId, partnId common.PartitionId) *IndexStats {
+
+	if is, ok := s.indexes[id]; ok {
+		return is.partitions[partnId]
+	}
+
+	return nil
+}
+
+func (s *IndexerStats) SetPartitionStats(id common.IndexInstId, partnId common.PartitionId, stats *IndexStats) {
+
+	if is, ok := s.indexes[id]; ok {
+		is.partitions[partnId] = stats
+	}
+}
+
+func (s *IndexerStats) RemovePartitionStats(id common.IndexInstId, partnId common.PartitionId) {
+
+	if is, ok := s.indexes[id]; ok {
+		delete(is.partitions, partnId)
+	}
 }
 
 func (s *IndexerStats) RemoveIndex(id common.IndexInstId) {
@@ -287,13 +403,19 @@ func (s *IndexerStats) RemoveIndex(id common.IndexInstId) {
 	}
 }
 
-func (is IndexerStats) GetStats() common.Statistics {
+func (is IndexerStats) GetStats(getPartition bool, skipEmpty bool) common.Statistics {
 
 	var prefix string
 
 	statsMap := make(map[string]interface{})
 	addStat := func(k string, v interface{}) {
-		statsMap[fmt.Sprintf("%s%s", prefix, k)] = v
+		if !skipEmpty {
+			statsMap[fmt.Sprintf("%s%s", prefix, k)] = v
+		} else if n, ok := v.(int64); ok && n != 0 {
+			statsMap[fmt.Sprintf("%s%s", prefix, k)] = v
+		} else if s, ok := v.(string); ok && len(s) != 0 && s != "0 0 0" && s != "0" {
+			statsMap[fmt.Sprintf("%s%s", prefix, k)] = v
+		}
 	}
 
 	addStat("uptime", fmt.Sprintf("%s", time.Since(uptime)))
@@ -317,16 +439,17 @@ func (is IndexerStats) GetStats() common.Statistics {
 
 	addStat("timings/stats_response", is.statsResponse.Value())
 
-	for _, s := range is.indexes {
+	addIndexStats := func(s *IndexStats) {
+
 		var scanLat, waitLat, scanReqLat, scanReqInitLat, scanReqAllocLat int64
 		reqs := s.numRequests.Value()
 
 		if reqs > 0 {
-			scanDur := s.scanDuration.Value()
-			waitDur := s.scanWaitDuration.Value()
-			scanReqDur := s.scanReqDuration.Value()
-			scanReqInitDur := s.scanReqInitDuration.Value()
-			scanReqAllocDur := s.scanReqAllocDuration.Value()
+			scanDur := s.int64Stats(func(ss *IndexStats) int64 { return ss.scanDuration.Value() })
+			waitDur := s.int64Stats(func(ss *IndexStats) int64 { return ss.scanWaitDuration.Value() })
+			scanReqDur := s.int64Stats(func(ss *IndexStats) int64 { return ss.scanReqDuration.Value() })
+			scanReqInitDur := s.int64Stats(func(ss *IndexStats) int64 { return ss.scanReqInitDuration.Value() })
+			scanReqAllocDur := s.int64Stats(func(ss *IndexStats) int64 { return ss.scanReqAllocDuration.Value() })
 			scanLat = scanDur / reqs
 			waitLat = waitDur / reqs
 			scanReqLat = scanReqDur / reqs
@@ -334,74 +457,277 @@ func (is IndexerStats) GetStats() common.Statistics {
 			scanReqAllocLat = scanReqAllocDur / reqs
 		}
 
-		name := common.FormatIndexInstDisplayName(s.name, s.replicaId)
-		prefix = fmt.Sprintf("%s:%s:", s.bucket, name)
-
-		addStat("total_scan_duration", s.scanDuration.Value())
-		addStat("total_scan_request_duration", s.scanReqDuration.Value())
-		addStat("insert_bytes", s.insertBytes.Value())
-		addStat("num_docs_pending", s.numDocsPending.Value())
-		addStat("scan_wait_duration", s.scanWaitDuration.Value())
-		addStat("num_docs_indexed", s.numDocsIndexed.Value())
-		addStat("num_docs_processed", s.numDocsProcessed.Value())
-		addStat("num_requests", s.numRequests.Value())
-		addStat("num_completed_requests", s.numCompletedRequests.Value())
-		addStat("num_rows_returned", s.numRowsReturned.Value())
-		addStat("disk_size", s.diskSize.Value())
-		addStat("memory_used", s.memUsed.Value())
-		addStat("build_progress", s.buildProgress.Value())
-		addStat("completion_progress", s.completionProgress.Value())
-		addStat("num_docs_queued", s.numDocsQueued.Value())
-		addStat("delete_bytes", s.deleteBytes.Value())
-		addStat("data_size", s.dataSize.Value())
-		addStat("frag_percent", s.fragPercent.Value())
-		addStat("scan_bytes_read", s.scanBytesRead.Value())
-		addStat("get_bytes", s.getBytes.Value())
-		addStat("items_count", s.itemsCount.Value())
-		addStat("avg_ts_interval", s.avgTsInterval.Value())
-		addStat("avg_ts_items_count", s.avgTsItemsCount.Value())
-		addStat("num_commits", s.numCommits.Value())
-		addStat("num_snapshots", s.numSnapshots.Value())
-		addStat("num_compactions", s.numCompactions.Value())
-		addStat("flush_queue_size", postiveNum(s.numDocsFlushQueued.Value()-s.numDocsIndexed.Value()))
-		addStat("num_items_flushed", s.numItemsFlushed.Value())
+		addStat("total_scan_duration",
+			s.int64Stats(func(ss *IndexStats) int64 {
+				return ss.scanDuration.Value()
+			}))
+		addStat("total_scan_request_duration",
+			s.int64Stats(func(ss *IndexStats) int64 {
+				return ss.scanReqDuration.Value()
+			}))
+		// partition stats
+		addStat("insert_bytes",
+			s.partnInt64Stats(func(ss *IndexStats) int64 {
+				return ss.insertBytes.Value()
+			}))
+		addStat("num_docs_pending",
+			s.int64Stats(func(ss *IndexStats) int64 {
+				return ss.numDocsPending.Value()
+			}))
+		addStat("scan_wait_duration",
+			s.int64Stats(func(ss *IndexStats) int64 {
+				return ss.scanWaitDuration.Value()
+			}))
+		// partition stats
+		addStat("num_docs_indexed",
+			s.partnInt64Stats(func(ss *IndexStats) int64 {
+				return ss.numDocsIndexed.Value()
+			}))
+		addStat("num_docs_processed",
+			s.int64Stats(func(ss *IndexStats) int64 {
+				return ss.numDocsProcessed.Value()
+			}))
+		addStat("num_requests",
+			s.int64Stats(func(ss *IndexStats) int64 {
+				return ss.numRequests.Value()
+			}))
+		addStat("num_completed_requests",
+			s.int64Stats(func(ss *IndexStats) int64 {
+				return ss.numCompletedRequests.Value()
+			}))
+		addStat("num_rows_returned",
+			s.int64Stats(func(ss *IndexStats) int64 {
+				return ss.numRowsReturned.Value()
+			}))
+		// partition stats
+		addStat("disk_size",
+			s.partnInt64Stats(func(ss *IndexStats) int64 {
+				return ss.diskSize.Value()
+			}))
+		// partition stats
+		addStat("memory_used",
+			s.partnInt64Stats(func(ss *IndexStats) int64 {
+				return ss.memUsed.Value()
+			}))
+		addStat("build_progress",
+			s.int64Stats(func(ss *IndexStats) int64 {
+				return ss.buildProgress.Value()
+			}))
+		addStat("completion_progress",
+			s.int64Stats(func(ss *IndexStats) int64 {
+				return ss.completionProgress.Value()
+			}))
+		addStat("num_docs_queued",
+			s.int64Stats(func(ss *IndexStats) int64 {
+				return ss.numDocsQueued.Value()
+			}))
+		// partition stats
+		addStat("delete_bytes",
+			s.partnInt64Stats(func(ss *IndexStats) int64 {
+				return ss.deleteBytes.Value()
+			}))
+		// partition stats
+		addStat("data_size",
+			s.partnInt64Stats(func(ss *IndexStats) int64 {
+				return ss.dataSize.Value()
+			}))
+		// partition stats
+		addStat("frag_percent",
+			s.partnAvgInt64Stats(func(ss *IndexStats) int64 {
+				return ss.fragPercent.Value()
+			}))
+		addStat("scan_bytes_read",
+			s.int64Stats(func(ss *IndexStats) int64 {
+				return ss.scanBytesRead.Value()
+			}))
+		// partition stats
+		addStat("get_bytes",
+			s.partnInt64Stats(func(ss *IndexStats) int64 {
+				return ss.getBytes.Value()
+			}))
+		// partition stats
+		addStat("items_count",
+			s.partnInt64Stats(func(ss *IndexStats) int64 {
+				return ss.itemsCount.Value()
+			}))
+		addStat("avg_ts_interval",
+			s.int64Stats(func(ss *IndexStats) int64 {
+				return ss.avgTsInterval.Value()
+			}))
+		addStat("avg_ts_items_count",
+			s.int64Stats(func(ss *IndexStats) int64 {
+				return ss.avgTsItemsCount.Value()
+			}))
+		addStat("num_commits",
+			s.int64Stats(func(ss *IndexStats) int64 {
+				return ss.numCommits.Value()
+			}))
+		addStat("num_snapshots",
+			s.int64Stats(func(ss *IndexStats) int64 {
+				return ss.numSnapshots.Value()
+			}))
+		addStat("num_compactions",
+			s.int64Stats(func(ss *IndexStats) int64 {
+				return ss.numCompactions.Value()
+			}))
+		// partition stats
+		addStat("flush_queue_size",
+			s.partnInt64Stats(func(ss *IndexStats) int64 {
+				return postiveNum(ss.numDocsFlushQueued.Value() - ss.numDocsIndexed.Value())
+			}))
+		// partition stats
+		addStat("num_items_flushed",
+			s.partnInt64Stats(func(ss *IndexStats) int64 {
+				return ss.numItemsFlushed.Value()
+			}))
 		addStat("avg_scan_latency", scanLat)
 		addStat("avg_scan_wait_latency", waitLat)
 		addStat("avg_scan_request_latency", scanReqLat)
 		addStat("avg_scan_request_init_latency", scanReqInitLat)
 		addStat("avg_scan_request_alloc_latency", scanReqAllocLat)
-		addStat("num_flush_queued", s.numDocsFlushQueued.Value())
-		addStat("since_last_snapshot", s.sinceLastSnapshot.Value())
-		addStat("num_snapshot_waiters", s.numSnapshotWaiters.Value())
-		addStat("num_last_snapshot_reply", s.numLastSnapshotReply.Value())
-		addStat("num_items_restored", s.numItemsRestored.Value())
-		addStat("disk_store_duration", s.diskSnapStoreDuration.Value())
-		addStat("disk_load_duration", s.diskSnapLoadDuration.Value())
-		addStat("not_ready_errcount", s.notReadyError.Value())
-		addStat("client_cancel_errcount", s.clientCancelError.Value())
-		addStat("avg_scan_rate", s.avgScanRate.Value())
-		addStat("avg_mutation_rate", s.avgMutationRate.Value())
-		addStat("avg_drain_rate", s.avgDrainRate.Value())
+		// partition stats
+		addStat("num_flush_queued",
+			s.partnInt64Stats(func(ss *IndexStats) int64 {
+				return ss.numDocsFlushQueued.Value()
+			}))
+		addStat("since_last_snapshot",
+			s.int64Stats(func(ss *IndexStats) int64 {
+				return ss.sinceLastSnapshot.Value()
+			}))
+		addStat("num_snapshot_waiters",
+			s.int64Stats(func(ss *IndexStats) int64 {
+				return ss.numSnapshotWaiters.Value()
+			}))
+		addStat("num_last_snapshot_reply",
+			s.int64Stats(func(ss *IndexStats) int64 {
+				return ss.numLastSnapshotReply.Value()
+			}))
+		// partition stats
+		addStat("num_items_restored",
+			s.partnInt64Stats(func(ss *IndexStats) int64 {
+				return ss.numItemsRestored.Value()
+			}))
+		// partition stats
+		addStat("disk_store_duration",
+			s.partnAvgInt64Stats(func(ss *IndexStats) int64 {
+				return ss.diskSnapStoreDuration.Value()
+			}))
+		// partition stats
+		addStat("disk_load_duration",
+			s.partnAvgInt64Stats(func(ss *IndexStats) int64 {
+				return ss.diskSnapLoadDuration.Value()
+			}))
+		addStat("not_ready_errcount",
+			s.int64Stats(func(ss *IndexStats) int64 {
+				return ss.notReadyError.Value()
+			}))
+		addStat("client_cancel_errcount",
+			s.int64Stats(func(ss *IndexStats) int64 {
+				return ss.clientCancelError.Value()
+			}))
+		addStat("avg_scan_rate",
+			s.int64Stats(func(ss *IndexStats) int64 {
+				return ss.avgScanRate.Value()
+			}))
+		// partition stats
+		addStat("avg_mutation_rate",
+			s.partnAvgInt64Stats(func(ss *IndexStats) int64 {
+				return ss.avgMutationRate.Value()
+			}))
+		// partition stats
+		addStat("avg_drain_rate",
+			s.partnAvgInt64Stats(func(ss *IndexStats) int64 {
+				return ss.avgDrainRate.Value()
+			}))
 		addStat("last_rollback_time", s.lastRollbackTime.Value())
 		addStat("progress_stat_time", s.progressStatTime.Value())
-		addStat("resident_percent", s.residentPercent.Value())
-		addStat("cache_hit_percent", s.cacheHitPercent.Value())
+		// partition stats
+		addStat("resident_percent",
+			s.partnAvgInt64Stats(func(ss *IndexStats) int64 {
+				return ss.residentPercent.Value()
+			}))
+		// partition stats
+		addStat("cache_hit_percent",
+			s.partnAvgInt64Stats(func(ss *IndexStats) int64 {
+				return ss.cacheHitPercent.Value()
+			}))
 
-		addStat("timings/dcp_getseqs", s.Timings.dcpSeqs.Value())
-		addStat("timings/storage_clone_handle", s.Timings.stCloneHandle.Value())
-		addStat("timings/storage_commit", s.Timings.stCommit.Value())
-		addStat("timings/storage_new_iterator", s.Timings.stNewIterator.Value())
-		addStat("timings/storage_snapshot_create", s.Timings.stSnapshotCreate.Value())
-		addStat("timings/storage_snapshot_close", s.Timings.stSnapshotClose.Value())
-		addStat("timings/storage_persist_snapshot_create", s.Timings.stPersistSnapshotCreate.Value())
-		addStat("timings/storage_get", s.Timings.stKVGet.Value())
-		addStat("timings/storage_set", s.Timings.stKVSet.Value())
-		addStat("timings/storage_iterator_next", s.Timings.stIteratorNext.Value())
-		addStat("timings/scan_pipeline_iterate", s.Timings.stScanPipelineIterate.Value())
-		addStat("timings/storage_del", s.Timings.stKVDelete.Value())
-		addStat("timings/storage_info", s.Timings.stKVInfo.Value())
-		addStat("timings/storage_meta_get", s.Timings.stKVMetaGet.Value())
-		addStat("timings/storage_meta_set", s.Timings.stKVMetaSet.Value())
+		addStat("timings/dcp_getseqs",
+			s.partnTimingStats(func(ss *IndexStats) *stats.TimingStat {
+				return &ss.Timings.dcpSeqs
+			}))
+		addStat("timings/storage_clone_handle",
+			s.partnTimingStats(func(ss *IndexStats) *stats.TimingStat {
+				return &ss.Timings.stCloneHandle
+			}))
+		addStat("timings/storage_commit",
+			s.partnTimingStats(func(ss *IndexStats) *stats.TimingStat {
+				return &ss.Timings.stCommit
+			}))
+		addStat("timings/storage_new_iterator",
+			s.partnTimingStats(func(ss *IndexStats) *stats.TimingStat {
+				return &ss.Timings.stNewIterator
+			}))
+		addStat("timings/storage_snapshot_create",
+			s.partnTimingStats(func(ss *IndexStats) *stats.TimingStat {
+				return &ss.Timings.stSnapshotCreate
+			}))
+		addStat("timings/storage_snapshot_close",
+			s.partnTimingStats(func(ss *IndexStats) *stats.TimingStat {
+				return &ss.Timings.stSnapshotClose
+			}))
+		addStat("timings/storage_persist_snapshot_create",
+			s.partnTimingStats(func(ss *IndexStats) *stats.TimingStat {
+				return &ss.Timings.stPersistSnapshotCreate
+			}))
+		addStat("timings/storage_get",
+			s.partnTimingStats(func(ss *IndexStats) *stats.TimingStat {
+				return &ss.Timings.stKVGet
+			}))
+		addStat("timings/storage_set",
+			s.partnTimingStats(func(ss *IndexStats) *stats.TimingStat {
+				return &ss.Timings.stKVSet
+			}))
+		addStat("timings/storage_iterator_next",
+			s.partnTimingStats(func(ss *IndexStats) *stats.TimingStat {
+				return &ss.Timings.stIteratorNext
+			}))
+		addStat("timings/scan_pipeline_iterate",
+			s.partnTimingStats(func(ss *IndexStats) *stats.TimingStat {
+				return &ss.Timings.stScanPipelineIterate
+			}))
+		addStat("timings/storage_del",
+			s.partnTimingStats(func(ss *IndexStats) *stats.TimingStat {
+				return &ss.Timings.stKVDelete
+			}))
+		addStat("timings/storage_info",
+			s.partnTimingStats(func(ss *IndexStats) *stats.TimingStat {
+				return &ss.Timings.stKVInfo
+			}))
+		addStat("timings/storage_meta_get",
+			s.partnTimingStats(func(ss *IndexStats) *stats.TimingStat {
+				return &ss.Timings.stKVMetaGet
+			}))
+		addStat("timings/storage_meta_set",
+			s.partnTimingStats(func(ss *IndexStats) *stats.TimingStat {
+				return &ss.Timings.stKVMetaSet
+			}))
+	}
+
+	for _, s := range is.indexes {
+
+		name := common.FormatIndexInstDisplayName(s.name, s.replicaId)
+		prefix = fmt.Sprintf("%s:%s:", s.bucket, name)
+		addIndexStats(s)
+
+		if getPartition {
+
+			for partnId, ps := range s.partitions {
+				name := common.FormatIndexPartnDisplayName(s.name, s.replicaId, int(partnId))
+				prefix = fmt.Sprintf("%s:%s:", s.bucket, name)
+				addIndexStats(ps)
+			}
+		}
 	}
 
 	for _, s := range is.buckets {
@@ -419,8 +745,13 @@ func (is IndexerStats) GetStats() common.Statistics {
 	return statsMap
 }
 
-func (is IndexerStats) MarshalJSON() ([]byte, error) {
-	return json.Marshal(is.GetStats())
+func (is IndexerStats) MarshalJSON(partition bool, pretty bool, skipEmpty bool) ([]byte, error) {
+	stats := is.GetStats(partition, skipEmpty)
+	if !pretty {
+		return json.Marshal(stats)
+	} else {
+		return json.MarshalIndent(stats, "", "   ")
+	}
 }
 
 func (s IndexerStats) Clone() *IndexerStats {
@@ -529,9 +860,21 @@ func (s *statsManager) tryUpdateStats(sync bool) {
 
 func (s *statsManager) handleStatsReq(w http.ResponseWriter, r *http.Request) {
 	sync := false
+	partition := false
+	pretty := false
+	skipEmpty := false
 	if r.Method == "POST" || r.Method == "GET" {
 		if r.URL.Query().Get("async") == "false" {
 			sync = true
+		}
+		if r.URL.Query().Get("partition") == "true" {
+			partition = true
+		}
+		if r.URL.Query().Get("pretty") == "true" {
+			pretty = true
+		}
+		if r.URL.Query().Get("skipEmpty") == "true" {
+			skipEmpty = true
 		}
 		stats := s.stats.Get()
 
@@ -539,7 +882,7 @@ func (s *statsManager) handleStatsReq(w http.ResponseWriter, r *http.Request) {
 		if common.IndexerState(stats.indexerState.Value()) != common.INDEXER_BOOTSTRAP {
 			s.tryUpdateStats(sync)
 		}
-		bytes, _ := stats.MarshalJSON()
+		bytes, _ := stats.MarshalJSON(partition, pretty, skipEmpty)
 		w.WriteHeader(200)
 		w.Write(bytes)
 		stats.statsResponse.Put(time.Since(t0))
@@ -669,7 +1012,7 @@ func (s *statsManager) runStatsDumpLogger() {
 	for {
 		stats := s.stats.Get()
 		if stats != nil {
-			bytes, _ := stats.MarshalJSON()
+			bytes, _ := stats.MarshalJSON(false, false, false)
 			var storageStats string
 			if common.GetStorageMode() != common.FORESTDB {
 				storageStats = fmt.Sprintf("\n==== StorageStats ====\n%s", s.getStorageStats())

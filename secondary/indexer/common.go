@@ -106,10 +106,11 @@ func (m MutationSnapshot) CanProcess() bool {
 
 // Represents storage stats for an index instance
 type IndexStorageStats struct {
-	InstId common.IndexInstId
-	Name   string
-	Bucket string
-	Stats  StorageStatistics
+	InstId  common.IndexInstId
+	PartnId common.PartitionId
+	Name    string
+	Bucket  string
+	Stats   StorageStatistics
 }
 
 func (s IndexStorageStats) String() string {
@@ -166,9 +167,11 @@ func (v VbStatus) String() string {
 }
 
 type MetaUpdateFields struct {
-	state   bool
-	stream  bool
-	err     bool
-	buildTs bool
-	rstate  bool
+	state      bool
+	stream     bool
+	err        bool
+	buildTs    bool
+	rstate     bool
+	partitions bool
+	version    bool
 }

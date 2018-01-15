@@ -164,11 +164,12 @@ type IndexerNode struct {
 
 type IndexUsage struct {
 	// input: index identification
-	DefnId common.IndexDefnId `json:"defnId"`
-	InstId common.IndexInstId `json:"instId"`
-	Name   string             `json:"name"`
-	Bucket string             `json:"bucket"`
-	Hosts  []string           `json:"host"`
+	DefnId  common.IndexDefnId `json:"defnId"`
+	InstId  common.IndexInstId `json:"instId"`
+	PartnId common.PartitionId `json:"partnId"`
+	Name    string             `json:"name"`
+	Bucket  string             `json:"bucket"`
+	Hosts   []string           `json:"host"`
 
 	// input: index sizing
 	IsPrimary        bool   `json:"isPrimary,omitempty"`
@@ -681,8 +682,8 @@ func (p *SAPlanner) dropReplicaIfNecessary(s *Solution) {
 	numLiveNode := s.findNumLiveNode()
 
 	// Check to see if it is needed to drop replica from a ejected node
-	deleteCandidates := make(map[common.IndexDefnId][]*IndexUsage)
-	numReplicas := make(map[common.IndexDefnId]int)
+	deleteCandidates := make(map[string][]*IndexUsage)
+	numReplicas := make(map[string]int)
 
 	for _, indexer := range s.Placement {
 		for _, index := range indexer.Indexes {
@@ -692,14 +693,14 @@ func (p *SAPlanner) dropReplicaIfNecessary(s *Solution) {
 				// do not move this index if this node is going away.
 				numReplica := s.findNumReplica(index)
 				if (numReplica > numLiveNode) && indexer.isDelete {
-					deleteCandidates[index.DefnId] = append(deleteCandidates[index.DefnId], index)
-					numReplicas[index.DefnId] = numReplica
+					deleteCandidates[index.GetPartitionName()] = append(deleteCandidates[index.GetPartitionName()], index)
+					numReplicas[index.GetPartitionName()] = numReplica
 				}
 			}
 		}
 	}
 
-	for defnId, candidates := range deleteCandidates {
+	for key, candidates := range deleteCandidates {
 
 		// sort the candidates in descending order
 		for i := 0; i < len(candidates)-1; i++ {
@@ -714,9 +715,9 @@ func (p *SAPlanner) dropReplicaIfNecessary(s *Solution) {
 		}
 
 		//prune the candidate list
-		numToDelete := numReplicas[defnId] - numLiveNode
+		numToDelete := numReplicas[key] - numLiveNode
 		if len(candidates) > numToDelete {
-			deleteCandidates[defnId] = candidates[:numToDelete]
+			deleteCandidates[key] = candidates[:numToDelete]
 		}
 	}
 
@@ -725,7 +726,7 @@ func (p *SAPlanner) dropReplicaIfNecessary(s *Solution) {
 
 		for _, index := range indexer.Indexes {
 			found := false
-			for _, candidate := range deleteCandidates[index.DefnId] {
+			for _, candidate := range deleteCandidates[index.GetPartitionName()] {
 				if candidate == index {
 					found = true
 					break
@@ -767,10 +768,16 @@ func (p *SAPlanner) suppressEqivIndexIfNecessary(s *Solution) {
 				// though replica is considered as "equivalent" as well,
 				// this does not affect replica (replica will not place over
 				// one another).
-				if s.findNumEquivalentIndex(index) > numLiveNode {
+				count := s.findNumEquivalentIndex(index)
+				if count > numLiveNode {
 					logging.Warnf("There are more equivalent index than available nodes.  Allow equivalent index of (%v, %v) to be replaced on same node.",
 						index.Bucket, index.Name)
 					index.suppressEquivIdxCheck = true
+
+					if index.Instance != nil {
+						logging.Warnf("Definition %v Instance %v ReplicaId %v partitionId %v count %v numLiveNode %v.",
+							index.DefnId, index.InstId, index.Instance.ReplicaId, index.PartnId, count, numLiveNode)
+					}
 				} else {
 					index.suppressEquivIdxCheck = false
 				}
@@ -802,7 +809,13 @@ func (p *SAPlanner) addReplicaIfNecessary(s *Solution) {
 			numReplica := s.findNumReplica(index)
 			if index.Instance != nil && int(index.Instance.Defn.NumReplica+1) > numReplica &&
 				numReplica < numLiveNode && !index.pendingDelete {
-				addCandidates[index] = indexer
+
+				target := s.FindIndexerWithNoReplica(index)
+				if target == nil {
+					target = indexer
+				}
+
+				addCandidates[index] = target
 			}
 		}
 
@@ -813,7 +826,7 @@ func (p *SAPlanner) addReplicaIfNecessary(s *Solution) {
 				numReplica := s.findNumReplica(index)
 				missing := s.findMissingReplica(index)
 
-				for _, replicaId := range missing {
+				for replicaId, instId := range missing {
 					if numReplica < numLiveNode {
 
 						if index.Instance != nil {
@@ -824,15 +837,19 @@ func (p *SAPlanner) addReplicaIfNecessary(s *Solution) {
 							cloned.initialNode = nil
 
 							// generate a new instance id for the new replica
-							instId, err := common.NewIndexInstId()
-							if err != nil {
-								continue
+							if instId == 0 {
+								var err error
+								instId, err = common.NewIndexInstId()
+								if err != nil {
+									continue
+								}
 							}
 							cloned.InstId = instId
 							cloned.Instance.InstId = instId
 
 							// add the new replica to the solution
-							indexer.Indexes = append(indexer.Indexes, cloned)
+							s.addIndex(indexer, cloned)
+
 							clonedCandidates = append(clonedCandidates, cloned)
 							numReplica++
 
@@ -1125,8 +1142,8 @@ func (s *Solution) PrintLayout() {
 
 		for _, index := range indexer.Indexes {
 			logging.Infof("\t\t------------------------------------------------------------------------------------------------------------------")
-			logging.Infof("\t\tIndex name:%v, bucket:%v, defnId:%v, instId:%v, new/moved:%v defer:%v ignoreEquivCheck:%v",
-				index.GetDisplayName(), index.Bucket, index.DefnId, index.InstId,
+			logging.Infof("\t\tIndex name:%v, bucket:%v, defnId:%v, instId:%v, Partition: %v, new/moved:%v defer:%v ignoreEquivCheck:%v",
+				index.GetDisplayName(), index.Bucket, index.DefnId, index.InstId, index.PartnId,
 				index.initialNode == nil || index.initialNode.NodeId != indexer.NodeId, index.NoUsage, index.suppressEquivIdxCheck)
 			logging.Infof("\t\tIndex total memory:%v (%s), data:%v (%s), overhead:%v (%s), cpu:%.4f",
 				index.GetMemTotal(s.UseLiveData()), formatMemoryStr(uint64(index.GetMemTotal(s.UseLiveData()))),
@@ -1312,17 +1329,8 @@ func (s *Solution) findNumEquivalentIndex(u *IndexUsage) int {
 		for _, index := range indexer.Indexes {
 
 			// check replica
-			if index.DefnId == u.DefnId {
+			if index.IsReplica(u) || index.IsEquivalentIndex(u) {
 				count++
-
-			} else {
-				// check equivalent index
-				if index.Instance != nil &&
-					u.Instance != nil &&
-					common.IsEquivalentIndex(&index.Instance.Defn, &u.Instance.Defn) {
-
-					count++
-				}
 			}
 		}
 	}
@@ -1340,7 +1348,7 @@ func (s *Solution) findNumReplica(u *IndexUsage) int {
 		for _, index := range indexer.Indexes {
 
 			// check replica
-			if index.DefnId == u.DefnId {
+			if index.IsReplica(u) {
 				count++
 			}
 		}
@@ -1352,30 +1360,53 @@ func (s *Solution) findNumReplica(u *IndexUsage) int {
 //
 // Find the missing replica.  Return a list of replicaId
 //
-func (s *Solution) findMissingReplica(u *IndexUsage) []int {
+func (s *Solution) findMissingReplica(u *IndexUsage) map[int]common.IndexInstId {
 
-	found := make(map[int]bool)
+	found := make(map[int]common.IndexInstId)
+	instances := make(map[common.IndexInstId]bool)
 	for _, indexer := range s.Placement {
 		for _, index := range indexer.Indexes {
 
 			// check replica (including self)
-			if index.DefnId == u.DefnId {
+			if index.IsReplica(u) {
 				if index.Instance == nil {
 					logging.Warnf("Cannot determinte replicaId for index (%v,%v)", index.Name, index.Bucket)
-					return ([]int)(nil)
+					return (map[int]common.IndexInstId)(nil)
 				}
-				found[index.Instance.ReplicaId] = true
+				found[index.Instance.ReplicaId] = index.InstId
+			}
+
+			if index.IsSameIndex(u) {
+				instances[index.InstId] = true
 			}
 		}
 	}
 
 	// replicaId starts with 0
 	// numReplica excludes itself
-	missing := ([]int)(nil)
+	missing := make(map[int]common.IndexInstId)
 	if u.Instance != nil {
 		for i := 0; i < int(u.Instance.Defn.NumReplica+1); i++ {
-			if !found[i] {
-				missing = append(missing, i)
+			if _, ok := found[i]; !ok {
+				missing[i] = 0
+
+				// Replica is missing.  Found out which instance with the missing replica.
+				for instId, _ := range instances {
+
+					match := false
+					for _, instId2 := range found {
+						if instId2 == instId {
+							match = true
+							break
+						}
+					}
+
+					// There is an index inst with no matching replica
+					if !match {
+						missing[i] = instId
+						break
+					}
+				}
 			}
 		}
 	}
@@ -1495,7 +1526,7 @@ func (s *Solution) hasReplicaInServerGroup(u *IndexUsage, group string) bool {
 			continue
 		}
 		for _, index := range indexer.Indexes {
-			if index != u && index.DefnId == u.DefnId { // replica
+			if index != u && index.IsReplica(u) { // replica
 				if group == indexer.ServerGroup {
 					return true
 				}
@@ -1523,7 +1554,7 @@ func (s *Solution) hasServerGroupWithNoReplica(u *IndexUsage) bool {
 		}
 
 		for _, index := range indexer.Indexes {
-			if index != u && index.DefnId == u.DefnId { // replica
+			if index != u && index.IsReplica(u) { // replica
 				counts[indexer.ServerGroup] = counts[indexer.ServerGroup] + 1
 			}
 		}
@@ -1544,7 +1575,7 @@ func (s *Solution) hasServerGroupWithNoReplica(u *IndexUsage) bool {
 func (s *Solution) hasReplia(indexer *IndexerNode, target *IndexUsage) bool {
 
 	for _, index := range indexer.Indexes {
-		if index != target && index.DefnId == target.DefnId {
+		if index != target && index.IsReplica(target) {
 			return true
 		}
 	}
@@ -1555,13 +1586,39 @@ func (s *Solution) hasReplia(indexer *IndexerNode, target *IndexUsage) bool {
 //
 // Find the indexer node that contains the replica
 //
-func (s *Solution) FindIndexerWithReplica(name string, bucket string, replicaId int) *IndexerNode {
+func (s *Solution) FindIndexerWithReplica(name string, bucket string, partnId common.PartitionId, replicaId int) *IndexerNode {
 
 	for _, indexer := range s.Placement {
 		for _, index := range indexer.Indexes {
-			if index.Name == name && index.Bucket == bucket && index.Instance != nil && index.Instance.ReplicaId == replicaId {
+			if index.Name == name && index.Bucket == bucket && index.PartnId == partnId && index.Instance != nil && index.Instance.ReplicaId == replicaId {
 				return indexer
 			}
+		}
+	}
+
+	return nil
+}
+
+//
+// Find the indexer node that does not contain the replica
+//
+func (s *Solution) FindIndexerWithNoReplica(source *IndexUsage) *IndexerNode {
+
+	for _, indexer := range s.Placement {
+		if indexer.IsDeleted() {
+			continue
+		}
+
+		found := false
+		for _, index := range indexer.Indexes {
+			if source.IsReplica(index) {
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			return indexer
 		}
 	}
 
@@ -1822,17 +1879,13 @@ func (c *IndexerConstraint) CanAddIndex(s *Solution, n *IndexerNode, u *IndexUsa
 
 	for _, index := range n.Indexes {
 		// check replica
-		if index.DefnId == u.DefnId {
+		if index.IsReplica(u) {
 			return ReplicaViolation
 		}
 
 		// check equivalent index
-		if !index.suppressEquivIdxCheck && !u.suppressEquivIdxCheck {
-			if index.Instance != nil &&
-				u.Instance != nil &&
-				common.IsEquivalentIndex(&index.Instance.Defn, &u.Instance.Defn) {
-				return EquivIndexViolation
-			}
+		if index.IsEquivalentIndex(u) {
+			return EquivIndexViolation
 		}
 	}
 
@@ -1879,17 +1932,13 @@ func (c *IndexerConstraint) CanSwapIndex(sol *Solution, n *IndexerNode, s *Index
 
 	for _, index := range n.Indexes {
 		// check replica
-		if index.DefnId == s.DefnId {
+		if index.IsReplica(s) {
 			return ReplicaViolation
 		}
 
 		// check equivalent index
-		if !index.suppressEquivIdxCheck && !s.suppressEquivIdxCheck {
-			if index.Instance != nil &&
-				s.Instance != nil &&
-				common.IsEquivalentIndex(&index.Instance.Defn, &s.Instance.Defn) {
-				return EquivIndexViolation
-			}
+		if index.IsEquivalentIndex(s) {
+			return EquivIndexViolation
 		}
 	}
 
@@ -1996,16 +2045,13 @@ func (c *IndexerConstraint) SatisfyIndexHAConstraintAt(s *Solution, n *IndexerNo
 		}
 
 		// check replica
-		if index.DefnId == source.DefnId {
+		if index.IsReplica(source) {
 			return false
 		}
 
 		// check equivalent index
-		if !index.suppressEquivIdxCheck && !source.suppressEquivIdxCheck {
-			if index.Instance != nil && source.Instance != nil &&
-				common.IsEquivalentIndex(&index.Instance.Defn, &source.Instance.Defn) {
-				return false
-			}
+		if index.IsEquivalentIndex(source) {
+			return false
 		}
 	}
 
@@ -2337,18 +2383,19 @@ func (o *IndexUsage) clone() *IndexUsage {
 // This function returns a string representing the index
 //
 func (o *IndexUsage) String() string {
-	return fmt.Sprintf("%v:%v", o.DefnId, o.InstId)
+	return fmt.Sprintf("%v:%v:%v", o.DefnId, o.InstId, o.PartnId)
 }
 
 //
 // This function creates a new index usage
 //
-func newIndexUsage(defnId common.IndexDefnId, instId common.IndexInstId, name string, bucket string) *IndexUsage {
+func newIndexUsage(defnId common.IndexDefnId, instId common.IndexInstId, partnId common.PartitionId, name string, bucket string) *IndexUsage {
 
 	return &IndexUsage{DefnId: defnId,
-		InstId: instId,
-		Name:   name,
-		Bucket: bucket,
+		InstId:  instId,
+		PartnId: partnId,
+		Name:    name,
+		Bucket:  bucket,
 	}
 }
 
@@ -2406,7 +2453,65 @@ func (o *IndexUsage) GetDisplayName() string {
 		return o.Name
 	}
 
-	return o.Instance.DisplayName()
+	return common.FormatIndexPartnDisplayName(o.Instance.Defn.Name, o.Instance.ReplicaId, int(o.PartnId))
+}
+
+func (o *IndexUsage) GetStatsName() string {
+
+	return o.GetDisplayName()
+}
+
+func (o *IndexUsage) GetInstStatsName() string {
+
+	if o.Instance == nil {
+		return o.Name
+	}
+
+	return common.FormatIndexInstDisplayName(o.Instance.Defn.Name, o.Instance.ReplicaId)
+}
+
+func (o *IndexUsage) GetPartitionName() string {
+
+	if o.Instance == nil {
+		return o.Name
+	}
+
+	return common.FormatIndexPartnDisplayName(o.Instance.Defn.Name, 0, int(o.PartnId))
+}
+
+func (o *IndexUsage) GetReplicaName() string {
+
+	if o.Instance == nil {
+		return o.Name
+	}
+
+	return common.FormatIndexPartnDisplayName(o.Instance.Defn.Name, o.Instance.ReplicaId, 0)
+}
+
+func (o *IndexUsage) IsReplica(other *IndexUsage) bool {
+
+	return o.DefnId == other.DefnId && o.PartnId == other.PartnId
+}
+
+func (o *IndexUsage) IsSameIndex(other *IndexUsage) bool {
+
+	return o.DefnId == other.DefnId
+}
+
+// Replica is not considered as equivalent index
+func (o *IndexUsage) IsEquivalentIndex(other *IndexUsage) bool {
+
+	if o.IsSameIndex(other) {
+		return false
+	}
+
+	if !o.suppressEquivIdxCheck && !other.suppressEquivIdxCheck {
+		if o.Instance != nil && other.Instance != nil {
+			return common.IsEquivalentIndex(&o.Instance.Defn, &other.Instance.Defn)
+		}
+	}
+
+	return false
 }
 
 //////////////////////////////////////////////////////////////
@@ -3232,6 +3337,11 @@ func (p *RandomPlacement) randomSwap(s *Solution, sources []*IndexerNode, target
 		}
 
 		if sourceIndex.NoUsage != targetIndex.NoUsage {
+			continue
+		}
+
+		// do not swap replica
+		if sourceIndex.IsReplica(targetIndex) {
 			continue
 		}
 

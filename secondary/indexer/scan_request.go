@@ -1276,8 +1276,8 @@ func (r ScanRequest) String() string {
 		span = span + ")"
 	}
 
-	str := fmt.Sprintf("defnId:%v, index:%v/%v, type:%v, span:%s",
-		r.DefnID, r.Bucket, r.IndexName, r.ScanType, span)
+	str := fmt.Sprintf("defnId:%v, instId:%v, index:%v/%v, type:%v, span:%s",
+		r.DefnID, r.IndexInstId, r.Bucket, r.IndexName, r.ScanType, span)
 
 	if r.Limit > 0 {
 		str += fmt.Sprintf(", limit:%d", r.Limit)

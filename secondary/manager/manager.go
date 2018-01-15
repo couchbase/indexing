@@ -89,9 +89,10 @@ type IndexManager struct {
 //    B) Index Instance is not in INDEX_STATE_CREATE or INDEX_STATE_DELETED.
 //
 type MetadataNotifier interface {
-	OnIndexCreate(*common.IndexDefn, common.IndexInstId, int, []common.PartitionId, uint32, *common.MetadataRequestContext) error
+	OnIndexCreate(*common.IndexDefn, common.IndexInstId, int, []common.PartitionId, []int, uint32, common.IndexInstId, *common.MetadataRequestContext) error
 	OnIndexDelete(common.IndexInstId, string, *common.MetadataRequestContext) error
 	OnIndexBuild([]common.IndexInstId, []string, *common.MetadataRequestContext) map[common.IndexInstId]error
+	OnPartitionPrune(common.IndexInstId, []common.PartitionId, *common.MetadataRequestContext) error
 	OnFetchStats() error
 }
 
@@ -251,9 +252,9 @@ func (m *IndexManager) Close() {
 		m.repo.Close()
 	}
 
-        if m.monitorKillch != nil {
-	        close(m.monitorKillch)
-        }
+	if m.monitorKillch != nil {
+		close(m.monitorKillch)
+	}
 
 	m.isClosed = true
 }
@@ -436,17 +437,22 @@ func (m *IndexManager) HandleBuildIndexDDL(indexIds client.IndexIdList) error {
 
 	return nil
 }
-func (m *IndexManager) UpdateIndexInstance(bucket string, defnId common.IndexDefnId, state common.IndexState,
-	streamId common.StreamId, err string, buildTime []uint64, rState common.RebalanceState) error {
+func (m *IndexManager) UpdateIndexInstance(bucket string, defnId common.IndexDefnId, instId common.IndexInstId,
+	state common.IndexState, streamId common.StreamId, err string, buildTime []uint64, rState common.RebalanceState,
+	partitions []uint64, versions []int, instVersion int) error {
 
 	inst := &topologyChange{
-		Bucket:    bucket,
-		DefnId:    uint64(defnId),
-		State:     uint32(state),
-		StreamId:  uint32(streamId),
-		Error:     err,
-		BuildTime: buildTime,
-		RState:    uint32(rState)}
+		Bucket:      bucket,
+		DefnId:      uint64(defnId),
+		InstId:      uint64(instId),
+		State:       uint32(state),
+		StreamId:    uint32(streamId),
+		Error:       err,
+		BuildTime:   buildTime,
+		RState:      uint32(rState),
+		Partitions:  partitions,
+		Versions:    versions,
+		InstVersion: instVersion}
 
 	buf, e := json.Marshal(&inst)
 	if e != nil {
@@ -459,17 +465,22 @@ func (m *IndexManager) UpdateIndexInstance(bucket string, defnId common.IndexDef
 	return m.requestServer.MakeAsyncRequest(client.OPCODE_UPDATE_INDEX_INST, fmt.Sprintf("%v", defnId), buf)
 }
 
-func (m *IndexManager) UpdateIndexInstanceSync(bucket string, defnId common.IndexDefnId, state common.IndexState,
-	streamId common.StreamId, err string, buildTime []uint64, rState common.RebalanceState) error {
+func (m *IndexManager) UpdateIndexInstanceSync(bucket string, defnId common.IndexDefnId, instId common.IndexInstId,
+	state common.IndexState, streamId common.StreamId, err string, buildTime []uint64, rState common.RebalanceState,
+	partitions []uint64, versions []int, instVersion int) error {
 
 	inst := &topologyChange{
-		Bucket:    bucket,
-		DefnId:    uint64(defnId),
-		State:     uint32(state),
-		StreamId:  uint32(streamId),
-		Error:     err,
-		BuildTime: buildTime,
-		RState:    uint32(rState)}
+		Bucket:      bucket,
+		DefnId:      uint64(defnId),
+		InstId:      uint64(instId),
+		State:       uint32(state),
+		StreamId:    uint32(streamId),
+		Error:       err,
+		BuildTime:   buildTime,
+		RState:      uint32(rState),
+		Partitions:  partitions,
+		Versions:    versions,
+		InstVersion: instVersion}
 
 	buf, e := json.Marshal(&inst)
 	if e != nil {
@@ -480,15 +491,58 @@ func (m *IndexManager) UpdateIndexInstanceSync(bucket string, defnId common.Inde
 	return m.requestServer.MakeRequest(client.OPCODE_UPDATE_INDEX_INST, fmt.Sprintf("%v", defnId), buf)
 }
 
-func (m *IndexManager) ResetIndex(index common.IndexDefn) error {
+func (m *IndexManager) DropOrPruneInstance(defn common.IndexDefn, cleanup bool) error {
 
-	content, err := common.MarshallIndexDefn(&index)
+	inst := &dropInstance{
+		Defn:    defn,
+		Cleanup: cleanup,
+	}
+
+	buf, e := json.Marshal(&inst)
+	if e != nil {
+		return e
+	}
+
+	logging.Debugf("IndexManager.DropInstance(): making request for drop instance")
+	return m.requestServer.MakeRequest(client.OPCODE_DROP_OR_PRUNE_INSTANCE, fmt.Sprintf("%v", defn.DefnId), buf)
+}
+
+func (m *IndexManager) MergePartition(defnId common.IndexDefnId, srcInstId common.IndexInstId, srcRState common.RebalanceState,
+	tgtInstId common.IndexInstId, tgtInstVersion uint64, tgtPartitions []common.PartitionId, tgtVersions []int) error {
+
+	partitions := make([]uint64, len(tgtPartitions))
+	for i, partnId := range tgtPartitions {
+		partitions[i] = uint64(partnId)
+	}
+
+	inst := &mergePartition{
+		DefnId:         uint64(defnId),
+		SrcInstId:      uint64(srcInstId),
+		SrcRState:      uint64(srcRState),
+		TgtInstId:      uint64(tgtInstId),
+		TgtPartitions:  partitions,
+		TgtVersions:    tgtVersions,
+		TgtInstVersion: tgtInstVersion,
+	}
+
+	buf, e := json.Marshal(&inst)
+	if e != nil {
+		return e
+	}
+
+	logging.Debugf("IndexManager.MergePartition(): making request for merge partition")
+	return m.requestServer.MakeRequest(client.OPCODE_MERGE_PARTITION, fmt.Sprintf("%v", defnId), buf)
+}
+
+func (m *IndexManager) ResetIndex(index common.IndexInst) error {
+
+	content, err := common.MarshallIndexInst(&index)
 	if err != nil {
 		return err
 	}
 
 	logging.Debugf("IndexManager.ResetIndex(): making request for Index reset")
-	return m.requestServer.MakeRequest(client.OPCODE_RESET_INDEX, fmt.Sprintf("%v", index.DefnId), content)
+	return m.requestServer.MakeRequest(client.OPCODE_RESET_INDEX, fmt.Sprintf("%v", index.InstId), content)
 }
 
 func (m *IndexManager) DeleteIndexForBucket(bucket string, streamId common.StreamId) error {
@@ -497,10 +551,15 @@ func (m *IndexManager) DeleteIndexForBucket(bucket string, streamId common.Strea
 	return m.requestServer.MakeAsyncRequest(client.OPCODE_DELETE_BUCKET, bucket, []byte{byte(streamId)})
 }
 
-func (m *IndexManager) CleanupIndex(defnId common.IndexDefnId) error {
+func (m *IndexManager) CleanupIndex(index common.IndexInst) error {
+
+	content, err := common.MarshallIndexInst(&index)
+	if err != nil {
+		return err
+	}
 
 	logging.Debugf("IndexManager.CleanupIndex(): making request for cleaning up index")
-	return m.requestServer.MakeAsyncRequest(client.OPCODE_CLEANUP_INDEX, fmt.Sprintf("%v", defnId), nil)
+	return m.requestServer.MakeAsyncRequest(client.OPCODE_CLEANUP_INDEX, fmt.Sprintf("%v", index.InstId), content)
 }
 
 func (m *IndexManager) NotifyIndexerReady() error {
@@ -620,22 +679,33 @@ func (m *IndexManager) getBucketForCleanup() ([]string, error) {
 
 			for _, defnRef := range definitions {
 
-				// Check for index with active stream.  If there is any index with active stream, all
-				// index in the bucket will be deleted when the stream is closed due to bucket delete.
-				if defnRef.Instances[0].State != uint32(common.INDEX_STATE_DELETED) &&
-					common.StreamId(defnRef.Instances[0].StreamId) != common.NIL_STREAM {
-					hasValidActiveIndex = true
-					break
+				if defn, err := m.repo.GetIndexDefnById(common.IndexDefnId(defnRef.DefnId)); err == nil && defn != nil {
+
+					instances := make([]IndexInstDistribution, len(defnRef.Instances))
+					copy(instances, defnRef.Instances)
+
+					for _, instRef := range instances {
+
+						// Check for index with active stream.  If there is any index with active stream, all
+						// index in the bucket will be deleted when the stream is closed due to bucket delete.
+						if instRef.State != uint32(common.INDEX_STATE_DELETED) &&
+							common.StreamId(instRef.StreamId) != common.NIL_STREAM {
+							hasValidActiveIndex = true
+							break
+						}
+
+						// Check if this is a defer index from a non-existent bucket. If so, this could be a candidate
+						// for cleanup.
+						if defn.BucketUUID != currentUUID && defn.Deferred &&
+							instRef.State != uint32(common.INDEX_STATE_DELETED) &&
+							common.StreamId(instRef.StreamId) == common.NIL_STREAM {
+							hasInvalidDeferIndex = true
+						}
+					}
 				}
 
-				// Check if this is a defer index from a non-existent bucket. If so, this could be a candidate
-				// for cleanup.
-				if defn, err := m.repo.GetIndexDefnById(common.IndexDefnId(defnRef.DefnId)); err == nil && defn != nil {
-					if defn.BucketUUID != currentUUID && defn.Deferred &&
-						defnRef.Instances[0].State != uint32(common.INDEX_STATE_DELETED) &&
-						common.StreamId(defnRef.Instances[0].StreamId) == common.NIL_STREAM {
-						hasInvalidDeferIndex = true
-					}
+				if hasValidActiveIndex {
+					break
 				}
 			}
 

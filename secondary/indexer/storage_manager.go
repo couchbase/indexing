@@ -13,6 +13,7 @@ import (
 	"bytes"
 	"encoding/gob"
 	"errors"
+	"fmt"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/fdb"
 	"github.com/couchbase/indexing/secondary/logging"
@@ -187,6 +188,12 @@ func (s *storageMgr) handleSupvervisorCommands(cmd Message) {
 
 	case STORAGE_STATS:
 		s.handleStats(cmd)
+
+	case STORAGE_INDEX_MERGE_SNAPSHOT:
+		s.handleIndexMergeSnapshot(cmd)
+
+	case STORAGE_INDEX_PRUNE_SNAPSHOT:
+		s.handleIndexPruneSnapshot(cmd)
 	}
 }
 
@@ -382,7 +389,6 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, bucket strin
 				}
 
 				if hasNewSnapshot {
-					idxStats := stats.indexes[idxInstId]
 					idxStats.numSnapshots.Add(1)
 					if needsCommit {
 						idxStats.numCommits.Add(1)
@@ -401,6 +407,7 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, bucket strin
 					DestroyIndexSnapshot(is)
 				}
 				s.updateSnapIntervalStat(idxStats)
+
 			}
 		}(idxInstId, partnMap)
 	}
@@ -416,6 +423,7 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, bucket strin
 }
 
 func (s *storageMgr) updateSnapIntervalStat(idxStats *IndexStats) {
+
 	// Compute avgTsInterval
 	last := idxStats.lastTsTime.Value()
 	curr := int64(time.Now().UnixNano())
@@ -428,14 +436,17 @@ func (s *storageMgr) updateSnapIntervalStat(idxStats *IndexStats) {
 	}
 	idxStats.lastTsTime.Set(curr)
 
-	// Compute avgTsItemsCount
-	last = idxStats.lastNumFlushQueued.Value()
-	curr = idxStats.numDocsFlushQueued.Value()
-	avg = idxStats.avgTsItemsCount.Value()
+	idxStats.updateAllPartitionStats(
+		func(idxStats *IndexStats) {
+			// Compute avgTsItemsCount
+			last = idxStats.lastNumFlushQueued.Value()
+			curr = idxStats.numDocsFlushQueued.Value()
+			avg = idxStats.avgTsItemsCount.Value()
 
-	avg = common.ComputeAvg(avg, last, curr)
-	idxStats.avgTsItemsCount.Set(avg)
-	idxStats.lastNumFlushQueued.Set(curr)
+			avg = common.ComputeAvg(avg, last, curr)
+			idxStats.avgTsItemsCount.Set(avg)
+			idxStats.lastNumFlushQueued.Set(curr)
+		})
 }
 
 // Update index-snapshot map whenever a snapshot is created for an index
@@ -773,7 +784,7 @@ func (s *storageMgr) handleStats(cmd Message) {
 			continue
 		}
 
-		idxStats := stats.indexes[st.InstId]
+		idxStats := stats.GetPartitionStats(st.InstId, st.PartnId)
 		// TODO(sarath): Investigate the reason for inconsistent stats map
 		// This nil check is a workaround to avoid indexer crashes for now.
 		if idxStats != nil {
@@ -822,19 +833,19 @@ func (s *storageMgr) getIndexStorageStats() []IndexStorageStats {
 			continue
 		}
 
-		var internalData []string
-		var dataSz, memUsed, diskSz, extraSnapDataSize int64
-		var getBytes, insertBytes, deleteBytes int64
-		var nslices int64
-		var needUpgrade = false
-	loop:
 		for _, partnInst := range partnMap {
+			var internalData []string
+			var dataSz, memUsed, diskSz, extraSnapDataSize int64
+			var getBytes, insertBytes, deleteBytes int64
+			var nslices int64
+			var needUpgrade = false
+
 			slices := partnInst.Sc.GetAllSlices()
 			nslices += int64(len(slices))
 			for _, slice := range slices {
 				sts, err = slice.Statistics()
 				if err != nil {
-					break loop
+					break
 				}
 
 				dataSz += sts.DataSize
@@ -848,31 +859,242 @@ func (s *storageMgr) getIndexStorageStats() []IndexStorageStats {
 
 				needUpgrade = needUpgrade || sts.NeedUpgrade
 			}
-		}
 
-		if err == nil {
-			stat := IndexStorageStats{
-				InstId: idxInstId,
-				Name:   inst.Defn.Name,
-				Bucket: inst.Defn.Bucket,
-				Stats: StorageStatistics{
-					DataSize:          dataSz,
-					MemUsed:           memUsed,
-					DiskSize:          diskSz,
-					GetBytes:          getBytes,
-					InsertBytes:       insertBytes,
-					DeleteBytes:       deleteBytes,
-					ExtraSnapDataSize: extraSnapDataSize,
-					NeedUpgrade:       needUpgrade,
-					InternalData:      internalData,
-				},
+			if err == nil {
+				stat := IndexStorageStats{
+					InstId:  idxInstId,
+					PartnId: partnInst.Defn.GetPartitionId(),
+					Name:    inst.Defn.Name,
+					Bucket:  inst.Defn.Bucket,
+					Stats: StorageStatistics{
+						DataSize:          dataSz,
+						MemUsed:           memUsed,
+						DiskSize:          diskSz,
+						GetBytes:          getBytes,
+						InsertBytes:       insertBytes,
+						DeleteBytes:       deleteBytes,
+						ExtraSnapDataSize: extraSnapDataSize,
+						NeedUpgrade:       needUpgrade,
+						InternalData:      internalData,
+					},
+				}
+
+				stats = append(stats, stat)
 			}
-
-			stats = append(stats, stat)
 		}
 	}
 
 	return stats
+}
+
+func (s *storageMgr) handleIndexMergeSnapshot(cmd Message) {
+	req := cmd.(*MsgIndexMergeSnapshot)
+	srcInstId := req.GetSourceInstId()
+	tgtInstId := req.GetTargetInstId()
+	partitions := req.GetPartitions()
+
+	s.muSnap.Lock()
+
+	source, ok := s.indexSnapMap[srcInstId]
+	if !ok {
+		s.muSnap.Unlock()
+		s.supvCmdch <- &MsgSuccess{}
+		return
+	}
+
+	target, ok := s.indexSnapMap[tgtInstId]
+	if !ok {
+		// increment source snapshot refcount
+		target = s.deepCloneIndexSnapshot(source, nil)
+
+	} else {
+
+		//make sure that the timestamp is the same between source and target snapshot
+		//This comparison will only cover the seqno and vbuuids.
+		//Note that even if the index instance has 0 mutation or no new mutation, storage
+		//manager will always create a new indexSnapshot with the current timestamp at end of
+		//flush. So the source and target snapshot should not have different timestamp.
+		if !target.Timestamp().Equal2(source.Timestamp(), false) {
+			s.muSnap.Unlock()
+			s.supvCmdch <- &MsgError{
+				err: Error{code: ERROR_STORAGE_MGR_MERGE_SNAPSHOT_FAIL,
+					severity: FATAL,
+					category: STORAGE_MGR,
+					cause: fmt.Errorf("Timestamp mismatch between snapshot\n target %v\n source %v\n",
+						target.Timestamp(), source.Timestamp())}}
+			return
+		}
+
+		// source will not have partition snapshot if there is no mutation in bucket.  Skip validation check.
+		// If bucket has at least 1 mutation, then source will have partition snapshot.
+		if len(source.Partitions()) != 0 {
+			// make sure that the source snapshot has all the required partitions
+			count := 0
+			for _, partnId := range partitions {
+				for _, sp := range source.Partitions() {
+					if partnId == sp.PartitionId() {
+						count++
+						break
+					}
+				}
+			}
+			if count != len(partitions) || count != len(source.Partitions()) {
+				s.muSnap.Unlock()
+				s.supvCmdch <- &MsgError{
+					err: Error{code: ERROR_STORAGE_MGR_MERGE_SNAPSHOT_FAIL,
+						severity: FATAL,
+						category: STORAGE_MGR,
+						cause: fmt.Errorf("Source snapshot %v does not have all the required partitions %v",
+							srcInstId, partitions)}}
+				return
+			}
+
+			// make sure there is no overlapping partition between source and target snapshot
+			for _, sp := range source.Partitions() {
+
+				found := false
+				for _, tp := range target.Partitions() {
+					if tp.PartitionId() == sp.PartitionId() {
+						found = true
+						break
+					}
+				}
+
+				if found {
+					s.muSnap.Unlock()
+					s.supvCmdch <- &MsgError{
+						err: Error{code: ERROR_STORAGE_MGR_MERGE_SNAPSHOT_FAIL,
+							severity: FATAL,
+							category: STORAGE_MGR,
+							cause: fmt.Errorf("Duplicate partition %v found between source %v and target %v",
+								sp.PartitionId(), srcInstId, tgtInstId)}}
+					return
+				}
+			}
+		} else {
+			logging.Infof("skip validation in merge partitions %v between inst %v and %v", partitions, srcInstId, tgtInstId)
+		}
+
+		// Deep clone a new snapshot by copying internal maps + increment target snapshot refcount.
+		// The target snapshot could be being used (e.g. under scan).  Increment the snapshot refcount
+		// ensure that the snapshot will not get reclaimed.
+		target = s.deepCloneIndexSnapshot(target, nil)
+		if len(partitions) != 0 {
+			// Increment source snaphsot refcount (only for copied partitions).  Those snapshots will
+			// be copied over to the target snapshot.  Note that the source snapshot can have different
+			// refcount than the target snapshot, since the source snapshot may not be used for scanning.
+			// But it should be safe to copy from source to target, even if ref count is different.
+			source = s.deepCloneIndexSnapshot(source, partitions)
+
+			// move the partition in source snapshot to target snapshot
+			for _, snap := range source.Partitions() {
+				target.Partitions()[snap.PartitionId()] = snap
+			}
+		}
+	}
+
+	// decrement source snapshot refcount
+	DestroyIndexSnapshot(s.indexSnapMap[srcInstId])
+
+	stats := s.stats.Get()
+	idxStats := stats.indexes[tgtInstId]
+
+	s.muSnap.Unlock()
+	// update the target with new snapshot.  This will also decrement target old snapshot refcount.
+	s.updateSnapMapAndNotify(target, idxStats)
+
+	s.supvCmdch <- &MsgSuccess{}
+}
+
+func (s *storageMgr) handleIndexPruneSnapshot(cmd Message) {
+	req := cmd.(*MsgIndexPruneSnapshot)
+	instId := req.GetInstId()
+	partitions := req.GetPartitions()
+
+	s.muSnap.Lock()
+
+	snapshot, ok := s.indexSnapMap[instId]
+	if !ok {
+		s.muSnap.Unlock()
+		s.supvCmdch <- &MsgSuccess{}
+		return
+	}
+
+	// find the partitions that we want to keep
+	kept := make([]common.PartitionId, 0, len(snapshot.Partitions()))
+	for _, sp := range snapshot.Partitions() {
+
+		found := false
+		for _, partnId := range partitions {
+			if partnId == sp.PartitionId() {
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			kept = append(kept, sp.PartitionId())
+		}
+	}
+
+	// Increment the snapshot refcount for the partition/slice that we want to keep.
+	newSnapshot := s.deepCloneIndexSnapshot(snapshot, kept)
+
+	stats := s.stats.Get()
+	idxStats := stats.indexes[instId]
+
+	s.muSnap.Unlock()
+	s.updateSnapMapAndNotify(newSnapshot, idxStats)
+
+	s.supvCmdch <- &MsgSuccess{}
+}
+
+func (s *storageMgr) deepCloneIndexSnapshot(is IndexSnapshot, partnIds []common.PartitionId) IndexSnapshot {
+
+	snap := is.(*indexSnapshot)
+
+	clone := &indexSnapshot{
+		instId: snap.instId,
+		ts:     snap.ts.Copy(),
+		partns: make(map[common.PartitionId]PartitionSnapshot),
+	}
+
+	for partnId, partnSnap := range snap.Partitions() {
+
+		toClone := len(partnIds) == 0
+		for _, partnId2 := range partnIds {
+			if partnId == partnId2 {
+				toClone = true
+				break
+			}
+		}
+
+		if toClone {
+			ps := &partitionSnapshot{
+				id:     partnId,
+				slices: make(map[SliceId]SliceSnapshot),
+			}
+
+			for sliceId, sliceSnap := range partnSnap.Slices() {
+
+				// increment ref count of each slice snapshot
+				sliceSnap.Snapshot().Open()
+				ps.slices[sliceId] = &sliceSnapshot{
+					id:   sliceSnap.SliceId(),
+					snap: sliceSnap.Snapshot(),
+				}
+			}
+
+			clone.partns[partnId] = ps
+		}
+	}
+
+	// if there is no partition, set partns to nil
+	if len(clone.partns) == 0 {
+		clone.partns = nil
+	}
+
+	return clone
 }
 
 func (s *storageMgr) handleIndexCompaction(cmd Message) {

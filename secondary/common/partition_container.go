@@ -29,6 +29,7 @@ type PartitionContainer interface {
 	GetEndpointsByPartitionId(PartitionId) []Endpoint
 
 	GetAllPartitions() []PartitionDefn
+	GetAllPartitionIds() ([]PartitionId, []int)
 	GetPartitionById(PartitionId) PartitionDefn
 	GetNumPartitions() int
 }
@@ -37,5 +38,6 @@ type PartitionContainer interface {
 //a partition
 type PartitionDefn interface {
 	GetPartitionId() PartitionId
+	GetVersion() int
 	Endpoints() []Endpoint
 }

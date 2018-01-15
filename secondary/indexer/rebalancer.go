@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/couchbase/cbauth/metakv"
@@ -52,6 +53,7 @@ type Rebalancer struct {
 
 	cancel chan struct{}
 	done   chan struct{}
+	isDone int32
 
 	metakvCancel chan struct{}
 
@@ -141,12 +143,17 @@ func (r *Rebalancer) doFinish() {
 
 	l.Infof("Rebalancer::doFinish Cleanup %v", r.retErr)
 
+	atomic.StoreInt32(&r.isDone, 1)
 	close(r.done)
 	r.cancelMetakv()
 
 	r.wg.Wait()
 	r.cb.done(r.retErr, r.cancel)
 
+}
+
+func (r *Rebalancer) isFinish() bool {
+	return atomic.LoadInt32(&r.isDone) == 1
 }
 
 func (r *Rebalancer) cancelMetakv() {
@@ -192,7 +199,7 @@ func (r *Rebalancer) publishTransferTokens() {
 	l.Infof("Rebalancer::publishTransferTokens Registered Transfer Token In Metakv %v", r.transferTokens)
 
 	for ttid, tt := range r.transferTokens {
-		r.setTransferTokenInMetakv(ttid, tt)
+		setTransferTokenInMetakv(ttid, tt)
 	}
 
 }
@@ -348,7 +355,10 @@ loop:
 				break
 			}
 
-			req := manager.IndexRequest{Index: tt.IndexInst.Defn}
+			defn := tt.IndexInst.Defn
+			defn.InstId = tt.InstId
+			defn.RealInstId = tt.RealInstId
+			req := manager.IndexRequest{Index: defn}
 			body, err := json.Marshal(&req)
 			if err != nil {
 				l.Errorf("Rebalancer::dropIndexWhenIdle Error marshal drop index %v", err)
@@ -380,7 +390,7 @@ loop:
 			}
 
 			tt.State = c.TransferTokenCommit
-			r.setTransferTokenInMetakv(ttid, tt)
+			setTransferTokenInMetakv(ttid, tt)
 
 			r.mu.Lock()
 			r.sourceTokens[ttid] = tt
@@ -417,6 +427,7 @@ func (r *Rebalancer) processTokenAsDest(ttid string, tt *c.TransferToken) bool {
 		indexDefn.Nodes = nil
 		indexDefn.Deferred = true
 		indexDefn.InstId = tt.InstId
+		indexDefn.RealInstId = tt.RealInstId
 
 		ir := manager.IndexRequest{Index: indexDefn}
 		body, err := json.Marshal(&ir)
@@ -449,7 +460,7 @@ func (r *Rebalancer) processTokenAsDest(ttid string, tt *c.TransferToken) bool {
 		}
 
 		tt.State = c.TransferTokenAccepted
-		r.setTransferTokenInMetakv(ttid, tt)
+		setTransferTokenInMetakv(ttid, tt)
 
 		r.mu.Lock()
 		r.acceptedTokens[ttid] = tt
@@ -466,25 +477,15 @@ func (r *Rebalancer) processTokenAsDest(ttid string, tt *c.TransferToken) bool {
 			return true
 		}
 		if tt.IndexInst.Defn.Deferred && tt.IndexInst.State == c.INDEX_STATE_READY {
-			respch := make(chan error)
-			r.supvMsgch <- &MsgUpdateIndexRState{defnId: tt.IndexInst.Defn.DefnId,
-				rstate: c.REBAL_ACTIVE,
-				respch: respch}
-			err := <-respch
-			c.CrashOnError(err)
 
-			if tt.TransferMode == c.TokenTransferModeMove {
-				tt.State = c.TransferTokenReady
-				att.State = c.TransferTokenReady
-			} else {
-				tt.State = c.TransferTokenCommit
-				att.State = c.TransferTokenCommit
-			}
+			r.tokenMergeOrReady(ttid, tt)
+			att.State = tt.State
+
 		} else {
 			att.State = c.TransferTokenInProgress
 			tt.State = c.TransferTokenInProgress
+			setTransferTokenInMetakv(ttid, tt)
 		}
-		r.setTransferTokenInMetakv(ttid, tt)
 
 		if r.checkIndexReadyToBuild() == true {
 			if !r.addToWaitGroup() {
@@ -494,6 +495,9 @@ func (r *Rebalancer) processTokenAsDest(ttid string, tt *c.TransferToken) bool {
 		}
 
 	case c.TransferTokenInProgress:
+		//Nothing to do
+
+	case c.TransferTokenMerge:
 		//Nothing to do
 
 	default:
@@ -539,7 +543,9 @@ func (r *Rebalancer) checkValidNotifyStateSource(ttid string, tt *c.TransferToke
 func (r *Rebalancer) checkIndexReadyToBuild() bool {
 
 	for ttid, tt := range r.acceptedTokens {
-		if tt.State != c.TransferTokenInProgress && tt.State != c.TransferTokenReady &&
+		if tt.State != c.TransferTokenMerge &&
+			tt.State != c.TransferTokenInProgress &&
+			tt.State != c.TransferTokenReady &&
 			tt.State != c.TransferTokenCommit {
 			l.Infof("Rebalancer::checkIndexReadyToBuild Not ready to build %v %v", ttid, tt)
 			return false
@@ -557,7 +563,8 @@ func (r *Rebalancer) buildAcceptedIndexes() {
 	var errStr string
 	r.mu.Lock()
 	for _, tt := range r.acceptedTokens {
-		if tt.State != c.TransferTokenReady && tt.State != c.TransferTokenCommit {
+		if tt.State != c.TransferTokenReady &&
+			tt.State != c.TransferTokenCommit {
 			idList.DefnIds = append(idList.DefnIds, uint64(tt.IndexInst.Defn.DefnId))
 		}
 	}
@@ -675,7 +682,11 @@ loop:
 				}
 				allTokensReady = false
 
-				status, err := getIndexStatusFromMeta(&tt.IndexInst.Defn, localMeta)
+				if tt.State == c.TransferTokenMerge {
+					continue
+				}
+
+				status, err := getIndexStatusFromMeta(tt, localMeta)
 				if err != "" {
 					l.Errorf("Rebalancer::waitForIndexBuild Error Fetching Index Status %v %v", r.localaddr+url, err)
 					break
@@ -718,18 +729,8 @@ loop:
 					c.IndexState(status), tot_remaining, remainingBuildTime)
 
 				if c.IndexState(status) == c.INDEX_STATE_ACTIVE && remainingBuildTime < maxRemainingBuildTime {
-					respch := make(chan error)
-					r.supvMsgch <- &MsgUpdateIndexRState{defnId: tt.IndexInst.Defn.DefnId,
-						rstate: c.REBAL_ACTIVE,
-						respch: respch}
-					err := <-respch
-					c.CrashOnError(err)
-					if tt.TransferMode == c.TokenTransferModeMove {
-						tt.State = c.TransferTokenReady
-					} else {
-						tt.State = c.TransferTokenCommit
-					}
-					r.setTransferTokenInMetakv(ttid, tt)
+
+					r.tokenMergeOrReady(ttid, tt)
 				}
 			}
 			r.mu.Unlock()
@@ -745,6 +746,87 @@ loop:
 
 	r.acceptedTokens = make(map[string]*c.TransferToken)
 
+}
+
+func (r *Rebalancer) tokenMergeOrReady(ttid string, tt *c.TransferToken) {
+
+	// There is no proxy
+	if tt.RealInstId == 0 {
+
+		respch := make(chan error)
+		r.supvMsgch <- &MsgUpdateIndexRState{
+			instId: tt.InstId,
+			rstate: c.REBAL_ACTIVE,
+			respch: respch}
+		err := <-respch
+		c.CrashOnError(err)
+
+		if tt.TransferMode == c.TokenTransferModeMove {
+			tt.State = c.TransferTokenReady
+		} else {
+			tt.State = c.TransferTokenCommit
+		}
+		setTransferTokenInMetakv(ttid, tt)
+
+	} else {
+		// There is a proxy. The proxy partitions need to be move
+		// to the real index instance before Token can move to Ready state.
+		tt.State = c.TransferTokenMerge
+		setTransferTokenInMetakv(ttid, tt)
+
+		go func(ttid string, tt c.TransferToken) {
+
+			respch := make(chan error)
+			r.supvMsgch <- &MsgMergePartition{
+				srcInstId:  tt.InstId,
+				tgtInstId:  tt.RealInstId,
+				rebalState: c.REBAL_ACTIVE,
+				respCh:     respch}
+
+			var err error
+			select {
+			case err = <-respch:
+			case <-r.cancel:
+				l.Infof("Rebalancer::tokenMergeOrReady: rebalancer cancel Received")
+				return
+			case <-r.done:
+				l.Infof("Rebalancer::tokenMergeOrReady: rebalancer done Received")
+				return
+			}
+
+			if err != nil {
+				// If there is an error, move back to InProgress state.
+				// An error condition indicates that merge has not been
+				// committed yet, so we are safe to revert.
+				tt.State = c.TransferTokenInProgress
+				setTransferTokenInMetakv(ttid, &tt)
+
+				// The indexer could be in an inconsistent state.
+				// So we will need to restart the indexer.
+				time.Sleep(100 * time.Millisecond)
+				c.CrashOnError(err)
+			}
+
+			// There is no error from merging index instance. Update token in metakv.
+			if tt.TransferMode == c.TokenTransferModeMove {
+				tt.State = c.TransferTokenReady
+			} else {
+				tt.State = c.TransferTokenCommit
+			}
+			setTransferTokenInMetakv(ttid, &tt)
+
+			// if rebalancer is still active, then update its runtime state.
+			if !r.isFinish() {
+				r.mu.Lock()
+				defer r.mu.Unlock()
+
+				if newTT := r.acceptedTokens[ttid]; newTT != nil {
+					newTT.State = tt.State
+				}
+			}
+
+		}(ttid, *tt)
+	}
 }
 
 func (r *Rebalancer) processTokenAsMaster(ttid string, tt *c.TransferToken) bool {
@@ -773,7 +855,7 @@ func (r *Rebalancer) processTokenAsMaster(ttid string, tt *c.TransferToken) bool
 
 	case c.TransferTokenAccepted:
 		tt.State = c.TransferTokenInitate
-		r.setTransferTokenInMetakv(ttid, tt)
+		setTransferTokenInMetakv(ttid, tt)
 
 		if r.cb.progress != nil {
 			go r.progressInitOnce.Do(r.updateProgress)
@@ -784,7 +866,7 @@ func (r *Rebalancer) processTokenAsMaster(ttid string, tt *c.TransferToken) bool
 
 	case c.TransferTokenCommit:
 		tt.State = c.TransferTokenDeleted
-		r.setTransferTokenInMetakv(ttid, tt)
+		setTransferTokenInMetakv(ttid, tt)
 
 		r.updateMasterTokenState(ttid, c.TransferTokenCommit)
 
@@ -816,7 +898,7 @@ func (r *Rebalancer) processTokenAsMaster(ttid string, tt *c.TransferToken) bool
 
 func (r *Rebalancer) setTransferTokenError(ttid string, tt *c.TransferToken, err string) {
 	tt.Error = err
-	r.setTransferTokenInMetakv(ttid, tt)
+	setTransferTokenInMetakv(ttid, tt)
 
 }
 
@@ -834,7 +916,7 @@ func (r *Rebalancer) updateMasterTokenState(ttid string, state c.TokenState) boo
 	return true
 }
 
-func (r *Rebalancer) setTransferTokenInMetakv(ttid string, tt *c.TransferToken) {
+func setTransferTokenInMetakv(ttid string, tt *c.TransferToken) {
 
 	fn := func(r int, err error) error {
 		if r > 0 {
@@ -905,7 +987,7 @@ func (r *Rebalancer) updateProgress() {
 
 func (r *Rebalancer) computeProgress() (progress float64) {
 
-	url := "/getIndexStatus"
+	url := "/getIndexStatus?getAll=true"
 	resp, err := getWithAuth(r.localaddr + url)
 	if err != nil {
 		l.Errorf("Rebalancer::computeProgress Error getting local metadata %v %v", r.localaddr+url, err)
@@ -959,14 +1041,21 @@ func (r *Rebalancer) checkAllTokensDone() bool {
 	return true
 }
 
-func getIndexStatusFromMeta(defn *c.IndexDefn, localMeta *manager.LocalIndexMetadata) (c.IndexState, string) {
+func getIndexStatusFromMeta(tt *c.TransferToken, localMeta *manager.LocalIndexMetadata) (c.IndexState, string) {
 
-	topology := findTopologyByBucket(localMeta.IndexTopologies, defn.Bucket)
+	inst := tt.IndexInst
+
+	topology := findTopologyByBucket(localMeta.IndexTopologies, inst.Defn.Bucket)
 	if topology == nil {
-		return c.INDEX_STATE_NIL, fmt.Sprintf("Topology Information Missing for %v Bucket", defn.Bucket)
+		return c.INDEX_STATE_NIL, fmt.Sprintf("Topology Information Missing for %v Bucket", inst.Defn.Bucket)
 	}
 
-	return topology.GetStatusByDefn(defn.DefnId)
+	state, msg := topology.GetStatusByInst(inst.Defn.DefnId, tt.InstId)
+	if state == c.INDEX_STATE_NIL && tt.RealInstId != 0 {
+		return topology.GetStatusByInst(inst.Defn.DefnId, tt.RealInstId)
+	}
+
+	return state, msg
 }
 
 func (r *Rebalancer) getBuildProgressFromStatus(status *manager.IndexStatusResponse, defnId c.IndexDefnId) float64 {

@@ -1,4 +1,5 @@
 // Copyright (c) 2014 Couchbase, Inc.
+
 // Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file
 // except in compliance with the License. You may obtain a copy of the License at
 //  http://www.apache.org/licenses/LICENSE-2.0
@@ -65,6 +66,8 @@ const (
 	STORAGE_INDEX_STORAGE_STATS
 	STORAGE_INDEX_COMPACT
 	STORAGE_SNAP_DONE
+	STORAGE_INDEX_MERGE_SNAPSHOT
+	STORAGE_INDEX_PRUNE_SNAPSHOT
 
 	//KVSender
 	KV_SENDER_SHUTDOWN
@@ -92,6 +95,9 @@ const (
 	CLUST_MGR_DEL_BUCKET
 	CLUST_MGR_INDEXER_READY
 	CLUST_MGR_CLEANUP_INDEX
+	CLUST_MGR_DROP_INSTANCE
+	CLUST_MGR_MERGE_PARTITION
+	CLUST_MGR_PRUNE_PARTITION
 
 	//CBQ_BRIDGE_SHUTDOWN
 	CBQ_BRIDGE_SHUTDOWN
@@ -117,6 +123,8 @@ const (
 	INDEXER_DEL_LOCAL_META
 	INDEXER_CHECK_DDL_IN_PROGRESS
 	INDEXER_UPDATE_RSTATE
+	INDEXER_MERGE_PARTITION
+	INDEXER_CANCEL_MERGE_PARTITION
 
 	//SCAN COORDINATOR
 	SCAN_COORD_SHUTDOWN
@@ -711,6 +719,179 @@ func (m *MsgCreateIndex) GetString() string {
 	return str
 }
 
+// INDEXER_MERGE_PARTITION
+type MsgMergePartition struct {
+	srcInstId  common.IndexInstId
+	tgtInstId  common.IndexInstId
+	rebalState common.RebalanceState
+	respCh     chan error
+}
+
+func (m *MsgMergePartition) GetMsgType() MsgType {
+	return INDEXER_MERGE_PARTITION
+}
+
+func (m *MsgMergePartition) GetSourceInstId() common.IndexInstId {
+	return m.srcInstId
+}
+
+func (m *MsgMergePartition) GetTargetInstId() common.IndexInstId {
+	return m.tgtInstId
+}
+
+func (m *MsgMergePartition) GetRebalanceState() common.RebalanceState {
+	return m.rebalState
+}
+
+func (m *MsgMergePartition) GetResponseChannel() chan error {
+	return m.respCh
+}
+
+func (m *MsgMergePartition) GetString() string {
+
+	str := "\n\tMessage: MsgMergePartition"
+	str += fmt.Sprintf("\n\tType: %v", INDEXER_MERGE_PARTITION)
+	str += fmt.Sprintf("\n\tSurrogate inst Id: %v", m.srcInstId)
+	str += fmt.Sprintf("\n\tReal inst Id: %v", m.tgtInstId)
+	return str
+}
+
+type MsgCancelMergePartition struct {
+	indexStateMap map[common.IndexInstId]common.RebalanceState
+	respCh        chan error
+}
+
+func (m *MsgCancelMergePartition) GetMsgType() MsgType {
+	return INDEXER_CANCEL_MERGE_PARTITION
+}
+
+func (m *MsgCancelMergePartition) GetIndexStateMap() map[common.IndexInstId]common.RebalanceState {
+	return m.indexStateMap
+}
+
+func (m *MsgCancelMergePartition) GetResponseChannel() chan error {
+	return m.respCh
+}
+
+func (m *MsgCancelMergePartition) GetString() string {
+
+	str := "\n\tMessage: MsgCancelMergePartition"
+	str += fmt.Sprintf("\n\tType: %v", INDEXER_CANCEL_MERGE_PARTITION)
+	return str
+}
+
+// CLUST_MGR_DROP_INSTANCE
+type MsgClustMgrDropInstance struct {
+	defn common.IndexDefn
+}
+
+func (m *MsgClustMgrDropInstance) GetMsgType() MsgType {
+	return CLUST_MGR_DROP_INSTANCE
+}
+
+func (m *MsgClustMgrDropInstance) GetDefn() common.IndexDefn {
+	return m.defn
+}
+
+func (m *MsgClustMgrDropInstance) GetString() string {
+
+	str := "\n\tMessage: MsgDropInstance"
+	str += fmt.Sprintf("\n\tType: %v", CLUST_MGR_DROP_INSTANCE)
+	str += fmt.Sprintf("\n\tIndex defn Id: %v", m.defn.DefnId)
+	str += fmt.Sprintf("\n\tIndex inst Id: %v", m.defn.InstId)
+	return str
+}
+
+// CLUST_MGR_MERGE_PARTITION
+type MsgClustMgrMergePartition struct {
+	defnId         common.IndexDefnId
+	srcInstId      common.IndexInstId
+	srcRState      common.RebalanceState
+	tgtInstId      common.IndexInstId
+	tgtPartitions  []common.PartitionId
+	tgtVersions    []int
+	tgtInstVersion uint64
+}
+
+func (m *MsgClustMgrMergePartition) GetMsgType() MsgType {
+	return CLUST_MGR_MERGE_PARTITION
+}
+
+func (m *MsgClustMgrMergePartition) GetDefnId() common.IndexDefnId {
+	return m.defnId
+}
+
+func (m *MsgClustMgrMergePartition) GetSrcInstId() common.IndexInstId {
+	return m.srcInstId
+}
+
+func (m *MsgClustMgrMergePartition) GetSrcRState() common.RebalanceState {
+	return m.srcRState
+}
+
+func (m *MsgClustMgrMergePartition) GetTgtInstId() common.IndexInstId {
+	return m.tgtInstId
+}
+
+func (m *MsgClustMgrMergePartition) GetTgtPartitions() []common.PartitionId {
+	return m.tgtPartitions
+}
+
+func (m *MsgClustMgrMergePartition) GetTgtVersions() []int {
+	return m.tgtVersions
+}
+
+func (m *MsgClustMgrMergePartition) GetTgtInstVersion() uint64 {
+	return m.tgtInstVersion
+}
+
+func (m *MsgClustMgrMergePartition) GetString() string {
+
+	str := "\n\tMessage: MsgMergePartition"
+	str += fmt.Sprintf("\n\tType: %v", CLUST_MGR_MERGE_PARTITION)
+	str += fmt.Sprintf("\n\tIndex defn Id: %v", m.defnId)
+	str += fmt.Sprintf("\n\tIndex src inst Id: %v", m.srcInstId)
+	str += fmt.Sprintf("\n\tIndex src rebal state: %v", m.srcRState)
+	str += fmt.Sprintf("\n\tIndex tgt inst Id: %v", m.tgtInstId)
+	str += fmt.Sprintf("\n\tIndex tgt partitions: %v", m.tgtPartitions)
+	str += fmt.Sprintf("\n\tIndex tgt versions: %v", m.tgtVersions)
+	str += fmt.Sprintf("\n\tIndex tgt version: %v", m.tgtInstVersion)
+	return str
+}
+
+// CLUST_MGR_PRUNE_PARTITION
+type MsgClustMgrPrunePartition struct {
+	instId     common.IndexInstId
+	partitions []common.PartitionId
+	respCh     MsgChannel
+}
+
+func (m *MsgClustMgrPrunePartition) GetMsgType() MsgType {
+	return CLUST_MGR_PRUNE_PARTITION
+}
+
+func (m *MsgClustMgrPrunePartition) GetInstId() common.IndexInstId {
+	return m.instId
+}
+
+func (m *MsgClustMgrPrunePartition) GetPartitions() []common.PartitionId {
+	return m.partitions
+}
+
+func (m *MsgClustMgrPrunePartition) GetRespCh() MsgChannel {
+	return m.respCh
+}
+
+func (m *MsgClustMgrPrunePartition) GetString() string {
+
+	str := "\n\tMessage: MsgClustMgrPrunePartition"
+	str += fmt.Sprintf("\n\tType: %v", CLUST_MGR_PRUNE_PARTITION)
+	str += fmt.Sprintf("\n\tinst Id: %v", m.instId)
+	str += fmt.Sprintf("\n\tpartitions: %v", m.partitions)
+	return str
+}
+
+// INDEXER_CANCEL_MERGE_PARTITION
 //CLUST_MGR_BUILD_INDEX_DDL
 type MsgBuildIndex struct {
 	indexInstList []common.IndexInstId
@@ -1033,6 +1214,45 @@ func (m *MsgIndexSnapRequest) GetIndexId() common.IndexInstId {
 	return m.idxInstId
 }
 
+type MsgIndexMergeSnapshot struct {
+	srcInstId  common.IndexInstId
+	tgtInstId  common.IndexInstId
+	partitions []common.PartitionId
+}
+
+func (m *MsgIndexMergeSnapshot) GetMsgType() MsgType {
+	return STORAGE_INDEX_MERGE_SNAPSHOT
+}
+
+func (m *MsgIndexMergeSnapshot) GetSourceInstId() common.IndexInstId {
+	return m.srcInstId
+}
+
+func (m *MsgIndexMergeSnapshot) GetTargetInstId() common.IndexInstId {
+	return m.tgtInstId
+}
+
+func (m *MsgIndexMergeSnapshot) GetPartitions() []common.PartitionId {
+	return m.partitions
+}
+
+type MsgIndexPruneSnapshot struct {
+	instId     common.IndexInstId
+	partitions []common.PartitionId
+}
+
+func (m *MsgIndexPruneSnapshot) GetMsgType() MsgType {
+	return STORAGE_INDEX_PRUNE_SNAPSHOT
+}
+
+func (m *MsgIndexPruneSnapshot) GetInstId() common.IndexInstId {
+	return m.instId
+}
+
+func (m *MsgIndexPruneSnapshot) GetPartitions() []common.PartitionId {
+	return m.partitions
+}
+
 type MsgIndexStorageStats struct {
 	respch chan []IndexStorageStats
 }
@@ -1110,15 +1330,15 @@ func (m *MsgKVStreamRepair) GetRestartTs() *common.TsVbuuid {
 
 //CLUST_MGR_RESET_INDEX
 type MsgClustMgrResetIndex struct {
-	defn common.IndexDefn
+	inst common.IndexInst
 }
 
 func (m *MsgClustMgrResetIndex) GetMsgType() MsgType {
 	return CLUST_MGR_RESET_INDEX
 }
 
-func (m *MsgClustMgrResetIndex) GetIndex() common.IndexDefn {
-	return m.defn
+func (m *MsgClustMgrResetIndex) GetIndex() common.IndexInst {
+	return m.inst
 }
 
 //CLUST_MGR_UPDATE_TOPOLOGY_FOR_INDEX
@@ -1259,7 +1479,7 @@ func (m *MsgCheckDDLInProgress) GetRespCh() chan bool {
 }
 
 type MsgUpdateIndexRState struct {
-	defnId common.IndexDefnId
+	instId common.IndexInstId
 	respch chan error
 	rstate common.RebalanceState
 }
@@ -1268,8 +1488,8 @@ func (m *MsgUpdateIndexRState) GetMsgType() MsgType {
 	return INDEXER_UPDATE_RSTATE
 }
 
-func (m *MsgUpdateIndexRState) GetDefnId() common.IndexDefnId {
-	return m.defnId
+func (m *MsgUpdateIndexRState) GetInstId() common.IndexInstId {
+	return m.instId
 }
 
 func (m *MsgUpdateIndexRState) GetRespCh() chan error {
@@ -1403,6 +1623,10 @@ func (m MsgType) String() string {
 		return "INDEXER_CHECK_DDL_IN_PROGRESS"
 	case INDEXER_UPDATE_RSTATE:
 		return "INDEXER_UPDATE_RSTATE"
+	case INDEXER_MERGE_PARTITION:
+		return "INDEXER_MERGE_PARTITION"
+	case INDEXER_CANCEL_MERGE_PARTITION:
+		return "INDEXER_CANCEL_MERGE_PARTITION"
 
 	case SCAN_COORD_SHUTDOWN:
 		return "SCAN_COORD_SHUTDOWN"
@@ -1454,6 +1678,12 @@ func (m MsgType) String() string {
 		return "CLUST_MGR_INDEXER_READY"
 	case CLUST_MGR_CLEANUP_INDEX:
 		return "CLUST_MGR_CLEANUP_INDEX"
+	case CLUST_MGR_DROP_INSTANCE:
+		return "CLUST_MGR_DROP_INSTANCE"
+	case CLUST_MGR_MERGE_PARTITION:
+		return "CLUST_MGR_MERGE_PARTITION"
+	case CLUST_MGR_PRUNE_PARTITION:
+		return "CLUST_MGR_PRUNE_PARTITION"
 
 	case CBQ_CREATE_INDEX_DDL:
 		return "CBQ_CREATE_INDEX_DDL"
@@ -1468,6 +1698,10 @@ func (m MsgType) String() string {
 		return "STORAGE_INDEX_COMPACT"
 	case STORAGE_SNAP_DONE:
 		return "STORAGE_SNAP_DONE"
+	case STORAGE_INDEX_MERGE_SNAPSHOT:
+		return "STORAGE_INDEX_MERGE_SNAPSHOT"
+	case STORAGE_INDEX_PRUNE_SNAPSHOT:
+		return "STORAGE_INDEX_PRUNE_SNAPSHOT"
 
 	case CONFIG_SETTINGS_UPDATE:
 		return "CONFIG_SETTINGS_UPDATE"
