@@ -331,13 +331,15 @@ func (worker *VbucketWorker) handleEvent(m *mc.DcpEvent) *Vbucket {
 	v, vbok := worker.vbuckets[vbno]
 	logPrefix := worker.logPrefix
 
-	logging.Tracef(traceMutFormat, logPrefix, m.Opaque, m.Seqno, m.Opcode, m.Key)
+	arg1 := logging.TagUD(m.Key)
+	logging.Tracef(traceMutFormat, logPrefix, m.Opaque, m.Seqno, m.Opcode, arg1)
 
 	switch m.Opcode {
 	case mcd.DCP_STREAMREQ: // broadcast StreamBegin
 		if vbok {
 			fmsg := "%v ##%x duplicate OpStreamRequest: %v\n"
-			logging.Errorf(fmsg, logPrefix, m.Opaque, m)
+			arg1 := logging.TagUD(m)
+			logging.Errorf(fmsg, logPrefix, m.Opaque, arg1)
 			return v
 		}
 		// opens up the path

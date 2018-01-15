@@ -13,7 +13,8 @@ func CompileN1QLExpression(expressions []string) ([]interface{}, error) {
 	for _, expr := range expressions {
 		cExpr, err := qparser.Parse(expr)
 		if err != nil {
-			logging.Errorf("CompileN1QLExpression() %v: %v\n", expr, err)
+			arg1 := logging.TagUD(expr)
+			logging.Errorf("CompileN1QLExpression() %v: %v\n", arg1, err)
 			return nil, err
 		}
 		cExprs = append(cExprs, cExpr)
@@ -44,7 +45,9 @@ func N1QLTransform(
 		if err != nil {
 			exprstr := qexpr.NewStringer().Visit(expr)
 			fmsg := "EvaluateForIndex(%q) for docid %v, err: %v skip document"
-			logging.Errorf(fmsg, exprstr, string(docid), err)
+			arg1 := logging.TagUD(exprstr)
+			arg2 := logging.TagUD(string(docid))
+			logging.Errorf(fmsg, arg1, arg2, err)
 			return nil, nil, nil
 		}
 		isArray, _ := expr.IsArrayIndexKey()
@@ -52,7 +55,9 @@ func N1QLTransform(
 			if scalar == nil { //nil is ERROR condition
 				exprstr := qexpr.NewStringer().Visit(expr)
 				fmsg := "EvaluateForIndex(%q) scalar=nil, skip document %v"
-				logging.Errorf(fmsg, exprstr, string(docid))
+				arg1 := logging.TagUD(exprstr)
+				arg2 := logging.TagUD(string(docid))
+				logging.Errorf(fmsg, arg1, arg2)
 				return nil, nil, nil
 			}
 			key := scalar
@@ -69,7 +74,9 @@ func N1QLTransform(
 			if vector == nil { //nil is ERROR condition
 				exprstr := qexpr.NewStringer().Visit(expr)
 				fmsg := "EvaluateForIndex(%q) vector=nil, skip document %v"
-				logging.Errorf(fmsg, exprstr, string(docid))
+				arg1 := logging.TagUD(exprstr)
+				arg2 := logging.TagUD(string(docid))
+				logging.Errorf(fmsg, arg1, arg2)
 				return nil, nil, nil
 			}
 
@@ -111,7 +118,8 @@ func N1QLTransform(
 			out, newBuf, err := CollateJSONEncode(qvalue.NewValue(arrValue), encodeBuf)
 			if err != nil {
 				fmsg := "CollateJSONEncode: index field for docid: %s (err: %v) skip document"
-				logging.Errorf(fmsg, docid, err)
+				arg1 := logging.TagUD(docid)
+				logging.Errorf(fmsg, arg1, err)
 				return nil, newBuf, nil
 			}
 			return out, newBuf, err // return as collated JSON array

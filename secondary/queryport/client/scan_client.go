@@ -1249,7 +1249,8 @@ func (c *GsiScanClient) doRequestResponse(
 	// ---> protobuf.*Request
 	if err := c.sendRequest(conn, pkt, req); err != nil {
 		fmsg := "%v %T(%v) request transport failed `%v`\n"
-		logging.Errorf(fmsg, c.logPrefix, req, requestId, err)
+		arg1 := logging.TagUD(req)
+		logging.Errorf(fmsg, c.logPrefix, arg1, requestId, err)
 		healthy = false
 		return nil, err
 	}
@@ -1260,7 +1261,8 @@ func (c *GsiScanClient) doRequestResponse(
 	resp, err := pkt.Receive(conn)
 	if err != nil {
 		fmsg := "%v req(%v) connection %v response %T transport failed `%v`\n"
-		logging.Errorf(fmsg, c.logPrefix, requestId, laddr, req, err)
+		arg1 := logging.TagUD(req)
+		logging.Errorf(fmsg, c.logPrefix, requestId, laddr, arg1, err)
 		healthy = false
 		return nil, err
 	}
@@ -1269,7 +1271,8 @@ func (c *GsiScanClient) doRequestResponse(
 	// <--- protobuf.StreamEndResponse (skipped) TODO: knock this off.
 	if endResp, err := pkt.Receive(conn); err != nil {
 		fmsg := "%v req(%v) connection %v response %T transport failed `%v`\n"
-		logging.Errorf(fmsg, c.logPrefix, requestId, laddr, req, err)
+		arg1 := logging.TagUD(req)
+		logging.Errorf(fmsg, c.logPrefix, requestId, laddr, arg1, err)
 		healthy = false
 		return nil, err
 	} else if endResp != nil {

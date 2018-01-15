@@ -209,7 +209,8 @@ func (gsi *gsiKeyspace) IndexById(id string) (datastore.Index, errors.Error) {
 			return nil, err
 		}
 	}
-	l.Debugf("%v IndexById %v = %v", gsi.logPrefix, id, index)
+	arg1 := l.TagUD(index)
+	l.Debugf("%v IndexById %v = %v", gsi.logPrefix, id, arg1)
 	return index, nil
 }
 
@@ -250,7 +251,8 @@ func (gsi *gsiKeyspace) Indexes() ([]datastore.Index, errors.Error) {
 		indexes = append(indexes, index)
 	}
 
-	l.Debugf("%v gsiKeySpace.Indexes(): %v", gsi.logPrefix, indexes)
+	arg1 := l.TagUD(indexes)
+	l.Debugf("%v gsiKeySpace.Indexes(): %v", gsi.logPrefix, arg1)
 	return indexes, nil
 }
 
@@ -267,7 +269,8 @@ func (gsi *gsiKeyspace) PrimaryIndexes() ([]datastore.PrimaryIndex, errors.Error
 	for _, index := range gsi.primaryIndexes {
 		indexes = append(indexes, index)
 	}
-	l.Debugf("%v gsiKeySpace.PrimaryIndexes(): %v", gsi.logPrefix, indexes)
+	arg1 := l.TagUD(indexes)
+	l.Debugf("%v gsiKeySpace.PrimaryIndexes(): %v", gsi.logPrefix, arg1)
 	return indexes, nil
 }
 

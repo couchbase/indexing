@@ -238,8 +238,10 @@ func (ie *IndexEvaluator) TransformRoute(
 
 	bucket := ie.Bucket()
 
+	arg1 := logging.TagUD(string(npkey))
+	arg2 := logging.TagUD(string(nkey))
 	logging.Tracef("inst: %v where: %v (pkey: %v) key: %v\n",
-		uuid, where, string(npkey), string(nkey))
+		uuid, where, arg1, arg2)
 	switch m.Opcode {
 	case mcd.DCP_MUTATION:
 		// FIXME: TODO: where clause is not used to for optimizing out messages
