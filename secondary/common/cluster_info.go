@@ -48,14 +48,15 @@ type ClusterInfoCache struct {
 	useStaticPorts bool
 	servicePortMap map[string]string
 
-	client      couchbase.Client
-	pool        couchbase.Pool
-	nodes       []couchbase.Node
-	nodesvs     []couchbase.NodeServices
-	node2group  map[NodeId]string // node->group
-	failedNodes []couchbase.Node
-	addNodes    []couchbase.Node
-	version     uint64
+	client       couchbase.Client
+	pool         couchbase.Pool
+	nodes        []couchbase.Node
+	nodesvs      []couchbase.NodeServices
+	node2group   map[NodeId]string // node->group
+	failedNodes  []couchbase.Node
+	addNodes     []couchbase.Node
+	version      uint32
+	minorVersion uint32
 }
 
 type NodeId int
@@ -136,7 +137,8 @@ func (c *ClusterInfoCache) Fetch() error {
 		var nodes []couchbase.Node
 		var failedNodes []couchbase.Node
 		var addNodes []couchbase.Node
-		version := uint64(math.MaxUint64)
+		version := uint32(math.MaxUint32)
+		minorVersion := uint32(math.MaxUint32)
 		for _, n := range c.pool.Nodes {
 			if n.ClusterMembership == "active" {
 				nodes = append(nodes, n)
@@ -151,9 +153,11 @@ func (c *ClusterInfoCache) Fetch() error {
 			}
 
 			// Find the minimum cluster compatibility
-			v := uint64(n.ClusterCompatibility / (1024 * 64))
-			if v < version {
+			v := uint32(n.ClusterCompatibility / 65536)
+			minorv := uint32(n.ClusterCompatibility) - (v * 65536)
+			if v < version || (v == version && minorv < minorVersion) {
 				version = v
+				minorVersion = minorv
 			}
 		}
 		c.nodes = nodes
@@ -161,7 +165,8 @@ func (c *ClusterInfoCache) Fetch() error {
 		c.addNodes = addNodes
 
 		c.version = version
-		if c.version == math.MaxUint64 {
+		c.minorVersion = minorVersion
+		if c.version == math.MaxUint32 {
 			c.version = 0
 		}
 
@@ -238,8 +243,15 @@ func (c *ClusterInfoCache) GetClusterVersion() uint64 {
 	if c.version < 5 {
 		return INDEXER_45_VERSION
 	}
-
-	return INDEXER_50_VERSION
+	if c.version == 5 {
+		if c.minorVersion < 5 {
+			return INDEXER_50_VERSION
+		}
+		if c.minorVersion >= 5 {
+			return INDEXER_55_VERSION
+		}
+	}
+	return INDEXER_55_VERSION
 }
 
 func (c *ClusterInfoCache) GetServerGroup(nid NodeId) string {
