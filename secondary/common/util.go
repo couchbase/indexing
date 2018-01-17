@@ -647,6 +647,14 @@ func IndexStatement(def IndexDefn, printNodes bool) string {
 		withExpr += " \"defer_build\":true"
 	}
 
+	if def.RetainDeletedXATTR {
+		if len(withExpr) != 0 {
+			withExpr += ","
+		}
+
+		withExpr += " \"retain_deleted_xattr\":true"
+	}
+
 	if printNodes && len(def.Nodes) != 0 {
 		if len(withExpr) != 0 {
 			withExpr += ","

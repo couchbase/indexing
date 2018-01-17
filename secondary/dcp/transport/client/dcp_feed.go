@@ -929,6 +929,10 @@ func (event *DcpEvent) IsJSON() bool {
 	return (event.Datatype & dcpJSON) != 0
 }
 
+func (event *DcpEvent) TreatAsJSON() {
+	event.Datatype |= dcpJSON
+}
+
 func (event *DcpEvent) HasXATTR() bool {
 	return (event.Datatype & dcpXATTR) != 0
 }

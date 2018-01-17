@@ -210,13 +210,22 @@ func (ie *IndexEvaluator) TransformRoute(
 	var newBuf []byte
 	instn := ie.instance
 
+	defn := instn.Definition
+	retainDelete := m.HasXATTR() && defn.GetRetainDeletedXATTR()
+	retainDelete = retainDelete && (m.Opcode == mcd.DCP_DELETION || m.Opcode == mcd.DCP_EXPIRATION)
+	opcode := m.Opcode
+	if retainDelete {
+		m.TreatAsJSON()
+		opcode = mcd.DCP_MUTATION
+	}
+
 	meta := dcpEvent2Meta(m)
 	where, err := ie.wherePredicate(m, m.Value, meta, encodeBuf)
 	if err != nil {
 		return nil, err
 	}
 
-	if where && len(m.Value) > 0 { // project new secondary key
+	if where && (len(m.Value) > 0 || retainDelete) { // project new secondary key
 		if npkey, err = ie.partitionKey(m, m.Key, m.Value, meta, encodeBuf); err != nil {
 			return nil, err
 		}
@@ -242,7 +251,7 @@ func (ie *IndexEvaluator) TransformRoute(
 	arg2 := logging.TagUD(string(nkey))
 	logging.Tracef("inst: %v where: %v (pkey: %v) key: %v\n",
 		uuid, where, arg1, arg2)
-	switch m.Opcode {
+	switch opcode {
 	case mcd.DCP_MUTATION:
 		// FIXME: TODO: where clause is not used to for optimizing out messages
 		// not passing the where clause. For this we need a gaurantee that

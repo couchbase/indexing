@@ -180,15 +180,16 @@ type IndexDefn struct {
 	ExprType        ExprType        `json:"exprType,omitempty"`
 	PartitionScheme PartitionScheme `json:"partitionScheme,omitempty"`
 	//PartitionKey is obsolete
-	PartitionKey  string   `json:"partitionKey,omitempty"`
-	WhereExpr     string   `json:"where,omitempty"`
-	Desc          []bool   `json:"desc,omitempty"`
-	Deferred      bool     `json:"deferred,omitempty"`
-	Immutable     bool     `json:"immutable,omitempty"`
-	Nodes         []string `json:"nodes,omitempty"`
-	IsArrayIndex  bool     `json:"isArrayIndex,omitempty"`
-	NumReplica    uint32   `json:"numReplica,omitempty"`
-	PartitionKeys []string `json:"partitionKeys,omitempty"`
+	PartitionKey       string   `json:"partitionKey,omitempty"`
+	WhereExpr          string   `json:"where,omitempty"`
+	Desc               []bool   `json:"desc,omitempty"`
+	Deferred           bool     `json:"deferred,omitempty"`
+	Immutable          bool     `json:"immutable,omitempty"`
+	Nodes              []string `json:"nodes,omitempty"`
+	IsArrayIndex       bool     `json:"isArrayIndex,omitempty"`
+	NumReplica         uint32   `json:"numReplica,omitempty"`
+	PartitionKeys      []string `json:"partitionKeys,omitempty"`
+	RetainDeletedXATTR bool     `json:"retainDeletedXATTR,omitempty"`
 
 	// transient field (not part of index metadata)
 	InstVersion   int           `json:"instanceVersion,omitempty"`
@@ -235,6 +236,7 @@ func (idx IndexDefn) String() string {
 	str += fmt.Sprintf("\n\t\tPartitionScheme: %v ", idx.PartitionScheme)
 	str += fmt.Sprintf("PartitionKeys: %v ", idx.PartitionKeys)
 	str += fmt.Sprintf("WhereExpr: %v ", idx.WhereExpr)
+	str += fmt.Sprintf("RetainDeletedXATTR: %v ", idx.RetainDeletedXATTR)
 	return str
 
 }
@@ -260,6 +262,7 @@ func (idx IndexDefn) Clone() *IndexDefn {
 		Nodes:           idx.Nodes,
 		IsArrayIndex:    idx.IsArrayIndex,
 		NumReplica:      idx.NumReplica,
+		RetainDeletedXATTR: idx.RetainDeletedXATTR,
 	}
 }
 
@@ -513,7 +516,8 @@ func IsEquivalentIndex(d1, d2 *IndexDefn) bool {
 		d1.IsPrimary != d2.IsPrimary ||
 		d1.ExprType != d2.ExprType ||
 		d1.PartitionScheme != d2.PartitionScheme ||
-		d1.WhereExpr != d2.WhereExpr {
+		d1.WhereExpr != d2.WhereExpr ||
+		d1.RetainDeletedXATTR != d2.RetainDeletedXATTR	{
 
 		return false
 	}

@@ -96,6 +96,7 @@ type IndexSpec struct {
 	Deferred     bool     `json:"deferred,omitempty"`
 	Immutable    bool     `json:"immutable,omitempty"`
 	IsArrayIndex bool     `json:"isArrayIndex,omitempty"`
+	RetainDeletedXATTR bool     `json:"retainDeletedXATTR,omitempty"`
 
 	// usage
 	Replica      uint64 `json:"replica,omitempty"`
@@ -1012,6 +1013,7 @@ func indexUsageFromSpec(sizing SizingMethod, spec *IndexSpec) ([]*IndexUsage, er
 		index.Instance.Defn.WhereExpr = spec.WhereExpr
 		index.Instance.Defn.Immutable = spec.Immutable
 		index.Instance.Defn.IsArrayIndex = spec.IsArrayIndex
+		index.Instance.Defn.RetainDeletedXATTR = spec.RetainDeletedXATTR
 
 		index.NumOfDocs = spec.NumDoc
 		index.AvgDocKeySize = spec.DocKeySize
