@@ -19,6 +19,8 @@ import (
 	c "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/common/queryutil"
 	"github.com/couchbase/indexing/secondary/logging"
+	mc "github.com/couchbase/indexing/secondary/manager/common"
+	"github.com/couchbase/indexing/secondary/planner"
 	"github.com/couchbase/query/expression"
 	"github.com/couchbase/query/expression/parser"
 	"math"
@@ -47,6 +49,7 @@ type Settings interface {
 ///////////////////////////////////////////////////////
 
 type MetadataProvider struct {
+	clusterUrl         string
 	providerId         string
 	watchers           map[c.IndexerId]*watcher
 	pendings           map[c.IndexerId]chan bool
@@ -97,7 +100,7 @@ type MetadataProvider struct {
 type metadataRepo struct {
 	provider    *MetadataProvider
 	definitions map[c.IndexDefnId]*c.IndexDefn
-	instances   map[c.IndexDefnId]map[c.IndexInstId]map[c.PartitionId]map[uint64]*IndexInstDistribution
+	instances   map[c.IndexDefnId]map[c.IndexInstId]map[c.PartitionId]map[uint64]*mc.IndexInstDistribution
 	indices     map[c.IndexDefnId]*IndexMetadata
 	topology    map[c.IndexerId]map[c.IndexDefnId]bool
 	version     uint64
@@ -169,10 +172,11 @@ var REQUEST_CHANNEL_COUNT = 1000
 // Public function : MetadataProvider
 ///////////////////////////////////////////////////////
 
-func NewMetadataProvider(providerId string, changeCh chan bool, statsCh chan map[c.IndexInstId]map[c.PartitionId]c.Statistics,
+func NewMetadataProvider(cluster string, providerId string, changeCh chan bool, statsCh chan map[c.IndexInstId]map[c.PartitionId]c.Statistics,
 	settings Settings) (s *MetadataProvider, err error) {
 
 	s = new(MetadataProvider)
+	s.clusterUrl = cluster
 	s.watchers = make(map[c.IndexerId]*watcher)
 	s.pendings = make(map[c.IndexerId]chan bool)
 	s.repo = newMetadataRepo(s)
@@ -363,27 +367,29 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 	}
 
 	//
+	// Invoke Planner
+	//
+	layout, err := o.plan(idxDefn, plan)
+	if err != nil {
+		return c.IndexDefnId(0), err, false
+	}
+
+	//
 	// Make Index Creation Request
 	//
 
-	watchers := ([]*watcher)(nil)
-	for _, indexerId := range idxDefn.Nodes {
-		watcher, err := o.findWatcherByIndexerId(c.IndexerId(indexerId))
-		if err != nil {
-			return c.IndexDefnId(0), errors.New("Fail to create index.  Internal Error: Cannot locate indexer nodes"), false
-		}
-		watchers = append(watchers, watcher)
-	}
-
 	defnID := idxDefn.DefnId
 	wait := !idxDefn.Deferred
+
+	if c.IsPartitioned(idxDefn.PartitionScheme) && idxDefn.NumReplica > 0 {
+		idxDefn.Deferred = true
+	}
 
 	key := fmt.Sprintf("%d", defnID)
 	errMap := make(map[string]bool)
 	topologyMap := make(map[int]map[c.PartitionId]c.IndexerId)
 
-	for replicaId := 0; replicaId < int(idxDefn.NumReplica+1); replicaId++ {
-		idxDefn.ReplicaId = replicaId
+	for replicaId, partitionMap := range layout {
 
 		// create index id
 		idxDefn.InstId, err = c.NewIndexInstId()
@@ -415,42 +421,14 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 			}
 		}
 
-		if idxDefn.PartitionScheme != c.PartitionScheme(c.SINGLE) {
-
-			partitionPerWatcher := int(idxDefn.NumPartitions) / len(watchers)
-			if int(idxDefn.NumPartitions)%len(watchers) != 0 {
-				partitionPerWatcher += 1
+		for indexerId, partitions := range partitionMap {
+			watcher, err := o.findWatcherByIndexerId(indexerId)
+			if err != nil {
+				return c.IndexDefnId(0), errors.New("Fail to create index.  Internal Error: Cannot locate indexer nodes"), false
 			}
 
-			partnId := int(1)
-			endPartnId := partnId + int(idxDefn.NumPartitions)
-
-			for _, watcher := range watchers {
-
-				var partitions []c.PartitionId
-				var versions []int
-				count := 0
-				for partnId < endPartnId && count < partitionPerWatcher {
-					partitions = append(partitions, c.PartitionId(partnId))
-					versions = append(versions, 0)
-					count++
-					partnId++
-				}
-
-				fn(watcher, partitions, versions)
-			}
-
-			// shuffle the watcher
-			watchers = append(watchers[1:], watchers[:1]...)
-
-		} else {
-
-			if replicaId < len(watchers) {
-				watcher := watchers[replicaId]
-				partitions := []c.PartitionId{c.NON_PARTITION_ID}
-				versions := []int{0}
-				fn(watcher, partitions, versions)
-			}
+			versions := make([]int, len(partitions))
+			fn(watcher, partitions, versions)
 		}
 	}
 
@@ -465,10 +443,49 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 		}
 	}
 
-	// place token for index build
-	if idxDefn.PartitionScheme != c.PartitionScheme(c.SINGLE) {
-		if err := PostBuildCommandToken(defnID); err != nil {
-			return c.IndexDefnId(0), errors.New(fmt.Sprintf("Fail to Build Index due to internal errors.  Error=%v.", err)), false
+	// build partitioned index with replica
+	if c.IsPartitioned(idxDefn.PartitionScheme) && idxDefn.NumReplica > 0 && wait {
+
+		// place token for index build
+		if err := mc.PostBuildCommandToken(defnID); err != nil {
+			logging.Errorf("Index is created, but fail to Build Index due to internal errors.  Error=%v", err)
+			return c.IndexDefnId(0),
+				errors.New("Index is created, bu fail to Build Index due to internal errors.  Please use build index statement."),
+				false
+		}
+
+		list := BuildIndexIdList([]c.IndexDefnId{defnID})
+		content, err := MarshallIndexIdList(list)
+		if err != nil {
+			logging.Errorf("Encounter unexpected error during build index.  Index build will retry in background. Error=%v", err)
+			return c.IndexDefnId(0), errors.New("Encounter unexpected error.  Index build will retry in background."), false
+		}
+
+		hasError := false
+		sent := make(map[c.IndexerId]bool)
+		for _, partitionMap := range layout {
+			for indexerId, _ := range partitionMap {
+				if _, ok := sent[indexerId]; !ok {
+					sent[indexerId] = true
+
+					watcher, err := o.findAliveWatcherByIndexerId(indexerId)
+					if err != nil {
+						logging.Errorf("Cannot reach indexer node.  Index build will retry in background once network connection is re-established.")
+						hasError = true
+						continue
+					}
+
+					_, err = watcher.makeRequest(OPCODE_BUILD_INDEX, "Index Build", content)
+					if err != nil {
+						logging.Errorf("Encounter unexpected error during build index.  Index build will retry in background. Error=%v", err)
+						hasError = true
+					}
+				}
+			}
+		}
+
+		if hasError {
+			return c.IndexDefnId(0), errors.New("Encounter unexpected error.  Index build will retry in background."), false
 		}
 	}
 
@@ -509,6 +526,11 @@ func (o *MetadataProvider) PrepareIndexDefn(
 	var numReplica int = 0
 	var numPartition int = 0
 	var retainDeletedXATTR = false
+	var numDoc uint64 = 0
+	var secKeySize uint64 = 0
+	var docKeySize uint64 = 0
+	var arrSize uint64 = 0
+	var residentRatio float64 = 0
 
 	version := o.GetIndexerVersion()
 	clusterVersion := o.GetClusterVersion()
@@ -581,7 +603,6 @@ func (o *MetadataProvider) PrepareIndexDefn(
 
 			if len(partitionKeys) != 0 {
 				partitionScheme = c.KEY
-				deferred = true
 			}
 		}
 
@@ -608,52 +629,41 @@ func (o *MetadataProvider) PrepareIndexDefn(
 			}
 		}
 
-		if numReplica == 0 && len(nodes) != 0 {
+		if !c.IsPartitioned(partitionScheme) && numReplica == 0 && len(nodes) != 0 {
 			numReplica = len(nodes) - 1
+		}
+
+		numDoc, err, retry = o.getNumDocParam(plan)
+		if err != nil {
+			return nil, err, retry
+		}
+
+		docKeySize, err, retry = o.getDocKeySizeParam(plan)
+		if err != nil {
+			return nil, err, retry
+		}
+
+		secKeySize, err, retry = o.getSecKeySizeParam(plan)
+		if err != nil {
+			return nil, err, retry
+		}
+
+		arrSize, err, retry = o.getArrSizeParam(plan)
+		if err != nil {
+			return nil, err, retry
+		}
+
+		residentRatio, err, retry = o.getResidentRatioParam(plan)
+		if err != nil {
+			return nil, err, retry
 		}
 	}
 
 	logging.Debugf("MetadataProvider:CreateIndex(): deferred_build %v nodes %v", deferred, nodes)
 
 	//
-	// Get the list of Watchers
-	//
-
-	watchers, err, retry := o.findWatchersWithRetry(nodes, numReplica, partitionScheme != c.SINGLE)
-	if err != nil {
-		return nil, err, retry
-	}
-
-	if len(nodes) != 0 && len(watchers) != len(nodes) {
-		return nil,
-			errors.New(fmt.Sprintf("Fails to create index.  Some indexer node is not available for create index.  Indexers=%v.", nodes)),
-			false
-	}
-
-	if numReplica != 0 && len(watchers) < numReplica+1 {
-		return nil,
-			errors.New(fmt.Sprintf("Fails to create index.  Cannot find enough indexer node for replica.  numReplica=%v.", numReplica)),
-			false
-	}
-
-	// set the node list using indexerId
-	nodes = make([]string, len(watchers))
-	for i, watcher := range watchers {
-		nodes[i] = string(watcher.getIndexerId())
-	}
-
-	//
-	// Create Index Definition
-	//
-
-	defnID, err := c.NewIndexDefnId()
-	if err != nil {
-		return nil,
-			errors.New(fmt.Sprintf("Fails to create index. Internal Error: Fail to create uuid for index definition.")),
-			false
-	}
-
 	// Array index related information
+	//
 	isArrayIndex := false
 	arrayExprCount := 0
 	for _, exp := range secExprs {
@@ -671,6 +681,10 @@ func (o *MetadataProvider) PrepareIndexDefn(
 		return nil, errors.New("Fails to create index.  Multiple expressions with ALL are found. Only one array expression is supported per index."), false
 	}
 
+	//
+	// Ascending/Descending key
+	//
+
 	if o.isDecending(desc) && (version < c.INDEXER_50_VERSION || clusterVersion < c.INDEXER_50_VERSION) {
 		return nil,
 			errors.New("Fail to create index with descending order. This option is enabled after cluster is fully upgraded and there is no failed node."),
@@ -679,6 +693,17 @@ func (o *MetadataProvider) PrepareIndexDefn(
 
 	if desc != nil && len(secExprs) != len(desc) {
 		return nil, errors.New("Fail to create index.  Collation order is required for all expressions in the index."), false
+	}
+
+	//
+	// Create Index Definition
+	//
+
+	defnID, err := c.NewIndexDefnId()
+	if err != nil {
+		return nil,
+			errors.New(fmt.Sprintf("Fails to create index. Internal Error: Fail to create uuid for index definition.")),
+			false
 	}
 
 	idxDefn := &c.IndexDefn{
@@ -700,9 +725,63 @@ func (o *MetadataProvider) PrepareIndexDefn(
 		NumReplica:      uint32(numReplica),
 		NumPartitions:   uint32(numPartition),
 		RetainDeletedXATTR: retainDeletedXATTR,
+		NumDoc:          numDoc,
+		SecKeySize:      secKeySize,
+		DocKeySize:      docKeySize,
+		ArrSize:         arrSize,
+		ResidentRatio:   residentRatio,
 	}
 
 	return idxDefn, nil, false
+}
+
+func (o *MetadataProvider) plan(defn *c.IndexDefn, plan map[string]interface{}) (map[int]map[c.IndexerId][]c.PartitionId, error) {
+
+	var spec planner.IndexSpec
+	spec.Name = defn.Name
+	spec.Bucket = defn.Bucket
+	spec.IsPrimary = defn.IsPrimary
+	spec.SecExprs = defn.SecExprs
+	spec.WhereExpr = defn.WhereExpr
+	spec.Deferred = defn.Deferred
+	spec.Immutable = defn.Immutable
+	spec.IsArrayIndex = defn.IsArrayIndex
+	spec.Desc = defn.Desc
+	spec.NumPartition = uint64(defn.NumPartitions)
+	spec.PartitionScheme = string(defn.PartitionScheme)
+	spec.PartitionKeys = defn.PartitionKeys
+	spec.Replica = uint64(defn.NumReplica) + 1
+
+	spec.NumDoc = defn.NumDoc
+	spec.DocKeySize = defn.DocKeySize
+	spec.SecKeySize = defn.SecKeySize
+	spec.ArrKeySize = defn.SecKeySize
+	spec.ArrSize = defn.ArrSize
+	spec.ResidentRatio = defn.ResidentRatio
+	spec.MutationRate = 0
+	spec.ScanRate = 0
+
+	nodes := defn.Nodes
+
+	solution, err := planner.ExecutePlan(o.clusterUrl, []*planner.IndexSpec{&spec}, nodes)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make(map[int]map[c.IndexerId][]c.PartitionId)
+	for _, indexer := range solution.Placement {
+		for _, index := range indexer.Indexes {
+			if index.Name == spec.Name && index.Bucket == spec.Bucket {
+				if _, ok := result[index.Instance.ReplicaId]; !ok {
+					result[index.Instance.ReplicaId] = make(map[c.IndexerId][]c.PartitionId)
+				}
+				result[index.Instance.ReplicaId][c.IndexerId(indexer.IndexerId)] =
+					append(result[index.Instance.ReplicaId][c.IndexerId(indexer.IndexerId)], index.PartnId)
+			}
+		}
+	}
+
+	return result, nil
 }
 
 func (o *MetadataProvider) isDecending(desc []bool) bool {
@@ -985,6 +1064,151 @@ func (o *MetadataProvider) getReplicaParam(plan map[string]interface{}, version 
 	return numReplica, nil, false
 }
 
+func (o *MetadataProvider) getDocKeySizeParam(plan map[string]interface{}) (uint64, error, bool) {
+
+	docKeySize := uint64(0)
+
+	docKeySize2, ok := plan["docKeySize"].(float64)
+	if !ok {
+		docKeySize_str, ok := plan["docKeySize"].(string)
+		if ok {
+			var err error
+			docKeySize3, err := strconv.ParseInt(docKeySize_str, 10, 64)
+			if err != nil {
+				return 0, errors.New("Fails to create index.  Parameter docKeySize must be a integer value."), false
+			}
+			docKeySize = uint64(docKeySize3)
+
+		} else if _, ok := plan["docKeySize"]; ok {
+			return 0, errors.New("Fails to create index.  Parameter docKeySize must be a integer value."), false
+		}
+	} else {
+		docKeySize = uint64(docKeySize2)
+	}
+
+	if docKeySize < 0 {
+		return 0, errors.New("Fails to create index.  Parameter docKeySize must be a positive value."), false
+	}
+
+	return docKeySize, nil, false
+}
+
+func (o *MetadataProvider) getSecKeySizeParam(plan map[string]interface{}) (uint64, error, bool) {
+
+	secKeySize := uint64(0)
+
+	secKeySize2, ok := plan["secKeySize"].(float64)
+	if !ok {
+		secKeySize_str, ok := plan["secKeySize"].(string)
+		if ok {
+			var err error
+			secKeySize3, err := strconv.ParseInt(secKeySize_str, 10, 64)
+			if err != nil {
+				return 0, errors.New("Fails to create index.  Parameter secKeySize must be a integer value."), false
+			}
+			secKeySize = uint64(secKeySize3)
+
+		} else if _, ok := plan["secKeySize"]; ok {
+			return 0, errors.New("Fails to create index.  Parameter secKeySize must be a integer value."), false
+		}
+	} else {
+		secKeySize = uint64(secKeySize2)
+	}
+
+	if secKeySize < 0 {
+		return 0, errors.New("Fails to create index.  Parameter secKeySize must be a positive value."), false
+	}
+
+	return secKeySize, nil, false
+}
+
+func (o *MetadataProvider) getArrSizeParam(plan map[string]interface{}) (uint64, error, bool) {
+
+	arrSize := uint64(0)
+
+	arrSize2, ok := plan["arrSize"].(float64)
+	if !ok {
+		arrSize_str, ok := plan["arrSize"].(string)
+		if ok {
+			var err error
+			arrSize3, err := strconv.ParseInt(arrSize_str, 10, 64)
+			if err != nil {
+				return 0, errors.New("Fails to create index.  Parameter arrSize must be a integer value."), false
+			}
+			arrSize = uint64(arrSize3)
+
+		} else if _, ok := plan["arrSize"]; ok {
+			return 0, errors.New("Fails to create index.  Parameter arrSize must be a integer value."), false
+		}
+	} else {
+		arrSize = uint64(arrSize2)
+	}
+
+	if arrSize < 0 {
+		return 0, errors.New("Fails to create index.  Parameter arrSize mrust be a positive value."), false
+	}
+
+	return arrSize, nil, false
+}
+
+func (o *MetadataProvider) getNumDocParam(plan map[string]interface{}) (uint64, error, bool) {
+
+	numDoc := uint64(0)
+
+	numDoc2, ok := plan["numDoc"].(float64)
+	if !ok {
+		numDoc_str, ok := plan["numDoc"].(string)
+		if ok {
+			var err error
+			numDoc3, err := strconv.ParseInt(numDoc_str, 10, 64)
+			if err != nil {
+				return 0, errors.New("Fails to create index.  Parameter numDoc must be a integer value."), false
+			}
+			numDoc = uint64(numDoc3)
+
+		} else if _, ok := plan["numDoc"]; ok {
+			return 0, errors.New("Fails to create index.  Parameter numDoc must be a integer value."), false
+		}
+	} else {
+		numDoc = uint64(numDoc2)
+	}
+
+	if numDoc < 0 {
+		return 0, errors.New("Fails to create index.  Parameter numDoc mrust be a positive value."), false
+	}
+
+	return numDoc, nil, false
+}
+
+func (o *MetadataProvider) getResidentRatioParam(plan map[string]interface{}) (float64, error, bool) {
+
+	residentRatio := float64(100)
+
+	residentRatio2, ok := plan["residentRatio"].(float64)
+	if !ok {
+		residentRatio_str, ok := plan["residentRatio"].(string)
+		if ok {
+			var err error
+			residentRatio3, err := strconv.ParseFloat(residentRatio_str, 64)
+			if err != nil {
+				return 0, errors.New("Fails to create index.  Parameter residentRatio must be a float value."), false
+			}
+			residentRatio = residentRatio3
+
+		} else if _, ok := plan["residentRatio"]; ok {
+			return 0, errors.New("Fails to create index.  Parameter residentRatio must be a float value."), false
+		}
+	} else {
+		residentRatio = residentRatio2
+	}
+
+	if residentRatio < 0 {
+		return 0, errors.New("Fails to create index.  Parameter residentRatio mrust be a positive value."), false
+	}
+
+	return residentRatio, nil, false
+}
+
 func (o *MetadataProvider) findWatchersWithRetry(nodes []string, numReplica int, partitioned bool) ([]*watcher, error, bool) {
 
 	var watchers []*watcher
@@ -1071,7 +1295,7 @@ func (o *MetadataProvider) DropIndex(defnID c.IndexDefnId) error {
 	}
 
 	// place token for recovery.
-	if err := PostDeleteCommandToken(defnID); err != nil {
+	if err := mc.PostDeleteCommandToken(defnID); err != nil {
 		return errors.New(fmt.Sprintf("Fail to Drop Index due to internal errors.  Error=%v.", err))
 	}
 
@@ -1167,7 +1391,7 @@ func (o *MetadataProvider) BuildIndexes(defnIDs []c.IndexDefnId) error {
 
 	// place token for recovery.
 	for _, id := range defnList {
-		if err := PostBuildCommandToken(id); err != nil {
+		if err := mc.PostBuildCommandToken(id); err != nil {
 			return errors.New(fmt.Sprintf("Fail to Build Index due to internal errors.  Error=%v.", err))
 		}
 	}
@@ -1388,7 +1612,7 @@ func (o *MetadataProvider) GetClusterVersion() uint64 {
 func (o *MetadataProvider) RefreshIndexerVersion() uint64 {
 
 	// Find the version from metakv.  If token not found or error, fromMetakv is 0.
-	fromMetakv, metakvErr := GetIndexerVersionToken()
+	fromMetakv, metakvErr := mc.GetIndexerVersionToken()
 
 	// Any failed node?
 	numFailedNode := atomic.LoadInt32(&o.numFailedNode)
@@ -1453,7 +1677,7 @@ func (o *MetadataProvider) RefreshIndexerVersion() uint64 {
 
 	// update metakv
 	if latestVersion > fromMetakv {
-		if err := PostIndexerVersionToken(latestVersion); err != nil {
+		if err := mc.PostIndexerVersionToken(latestVersion); err != nil {
 			logging.Errorf("MetadataProvider: fail to post indexer version. Error = %s", err)
 		} else {
 			logging.Infof("MetadataProvider: Posting indexer version to metakv. Version=%v", latestVersion)
@@ -1889,7 +2113,7 @@ func newMetadataRepo(provider *MetadataProvider) *metadataRepo {
 
 	return &metadataRepo{
 		definitions: make(map[c.IndexDefnId]*c.IndexDefn),
-		instances:   make(map[c.IndexDefnId]map[c.IndexInstId]map[c.PartitionId]map[uint64]*IndexInstDistribution),
+		instances:   make(map[c.IndexDefnId]map[c.IndexInstId]map[c.PartitionId]map[uint64]*mc.IndexInstDistribution),
 		indices:     make(map[c.IndexDefnId]*IndexMetadata),
 		topology:    make(map[c.IndexerId]map[c.IndexDefnId]bool),
 		version:     uint64(0),
@@ -1989,17 +2213,17 @@ func (r *metadataRepo) addDefn(defn *c.IndexDefn) {
 // Each index partition has the highest version with active RState, and each one can be residing on
 // different indexer node.  This function will not check if the index instance has all the partitions.
 //
-func (r *metadataRepo) findLatestActiveIndexInstNoLock(defnId c.IndexDefnId) []*IndexInstDistribution {
+func (r *metadataRepo) findLatestActiveIndexInstNoLock(defnId c.IndexDefnId) []*mc.IndexInstDistribution {
 
-	var result []*IndexInstDistribution
+	var result []*mc.IndexInstDistribution
 
 	instsByInstId := r.instances[defnId]
 	for _, instsByPartitionId := range instsByInstId {
-		var latest *IndexInstDistribution
+		var latest *mc.IndexInstDistribution
 
 		for partId, instsByVersion := range instsByPartitionId {
 
-			var chosen *IndexInstDistribution
+			var chosen *mc.IndexInstDistribution
 			var chosenVersion uint64
 			for version, inst := range instsByVersion {
 
@@ -2042,9 +2266,9 @@ func (r *metadataRepo) findLatestActiveIndexInstNoLock(defnId c.IndexDefnId) []*
 // Each index partition has the highest version with the specific RState. Each partition can be residing on
 // different indexer node.   This function will not check if all the indexes have all the partitions.
 //
-func (r *metadataRepo) findIndexInstNoLock(defnId c.IndexDefnId, instId c.IndexInstId, activeInst *InstanceDefn, rstate uint32) *IndexInstDistribution {
+func (r *metadataRepo) findIndexInstNoLock(defnId c.IndexDefnId, instId c.IndexInstId, activeInst *InstanceDefn, rstate uint32) *mc.IndexInstDistribution {
 
-	var result *IndexInstDistribution
+	var result *mc.IndexInstDistribution
 
 	if instsByInstId := r.instances[defnId]; len(instsByInstId) > 0 {
 
@@ -2052,7 +2276,7 @@ func (r *metadataRepo) findIndexInstNoLock(defnId c.IndexDefnId, instId c.IndexI
 
 		for partId, instsByVersion := range instsByPartitionId {
 
-			var chosen *IndexInstDistribution
+			var chosen *mc.IndexInstDistribution
 			var chosenVersion uint64
 			for partnVersion, inst := range instsByVersion {
 
@@ -2102,8 +2326,8 @@ func (r *metadataRepo) hasIndexerContainingPartition(indexerId c.IndexerId, inst
 //
 // This function merges multiple index instance per partition.
 //
-func (r *metadataRepo) mergeSingleIndexPartition(to *IndexInstDistribution, from *IndexInstDistribution,
-	partId c.PartitionId) *IndexInstDistribution {
+func (r *metadataRepo) mergeSingleIndexPartition(to *mc.IndexInstDistribution, from *mc.IndexInstDistribution,
+	partId c.PartitionId) *mc.IndexInstDistribution {
 
 	// This is just for safety check.  REBAL_MERGED index should have DELETED index state.
 	if from.RState == uint32(c.REBAL_MERGED) {
@@ -2225,20 +2449,20 @@ func (r *metadataRepo) getValidDefnCount(indexerId c.IndexerId) int {
 
 func (r *metadataRepo) removeInstForIndexerNoLock(indexerId c.IndexerId, bucket string) {
 
-	newInstsByDefnId := make(map[c.IndexDefnId]map[c.IndexInstId]map[c.PartitionId]map[uint64]*IndexInstDistribution)
+	newInstsByDefnId := make(map[c.IndexDefnId]map[c.IndexInstId]map[c.PartitionId]map[uint64]*mc.IndexInstDistribution)
 	for defnId, instsByDefnId := range r.instances {
 		defn := r.definitions[defnId]
 
-		newInstsByInstId := make(map[c.IndexInstId]map[c.PartitionId]map[uint64]*IndexInstDistribution)
+		newInstsByInstId := make(map[c.IndexInstId]map[c.PartitionId]map[uint64]*mc.IndexInstDistribution)
 		for instId, instsByInstId := range instsByDefnId {
 
-			newInstsByPartitionId := make(map[c.PartitionId]map[uint64]*IndexInstDistribution)
+			newInstsByPartitionId := make(map[c.PartitionId]map[uint64]*mc.IndexInstDistribution)
 			for partnId, instsByPartitionId := range instsByInstId {
 
-				newInstsByVersion := make(map[uint64]*IndexInstDistribution)
+				newInstsByVersion := make(map[uint64]*mc.IndexInstDistribution)
 				for version, instByVersion := range instsByPartitionId {
 
-					instIndexerId := instByVersion.findIndexerId()
+					instIndexerId := instByVersion.FindIndexerId()
 
 					if instIndexerId == string(indexerId) && (len(bucket) == 0 || (defn != nil && defn.Bucket == bucket)) {
 						logging.Debugf("remove index for indexerId : defnId %v instId %v indexerId %v", defnId, instId, instIndexerId)
@@ -2308,13 +2532,13 @@ func (r *metadataRepo) cleanupIndicesForIndexer(indexerId c.IndexerId) {
 	}
 }
 
-func (r *metadataRepo) updateTopology(topology *IndexTopology, indexerId c.IndexerId) {
+func (r *metadataRepo) updateTopology(topology *mc.IndexTopology, indexerId c.IndexerId) {
 
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
 
 	if len(indexerId) == 0 {
-		indexerId = c.IndexerId(topology.findIndexerId())
+		indexerId = c.IndexerId(topology.FindIndexerId())
 	}
 
 	// IndexerId is known when
@@ -2346,11 +2570,11 @@ func (r *metadataRepo) updateTopology(topology *IndexTopology, indexerId c.Index
 
 		for _, instRef := range defnRef.Instances {
 			if _, ok := r.instances[defnId]; !ok {
-				r.instances[defnId] = make(map[c.IndexInstId]map[c.PartitionId]map[uint64]*IndexInstDistribution)
+				r.instances[defnId] = make(map[c.IndexInstId]map[c.PartitionId]map[uint64]*mc.IndexInstDistribution)
 			}
 
 			if _, ok := r.instances[defnId][c.IndexInstId(instRef.InstId)]; !ok {
-				r.instances[defnId][c.IndexInstId(instRef.InstId)] = make(map[c.PartitionId]map[uint64]*IndexInstDistribution)
+				r.instances[defnId][c.IndexInstId(instRef.InstId)] = make(map[c.PartitionId]map[uint64]*mc.IndexInstDistribution)
 			}
 
 			for _, partnRef := range instRef.Partitions {
@@ -2359,7 +2583,7 @@ func (r *metadataRepo) updateTopology(topology *IndexTopology, indexerId c.Index
 				}
 
 				if _, ok := r.instances[defnId][c.IndexInstId(instRef.InstId)][c.PartitionId(partnRef.PartId)]; !ok {
-					r.instances[defnId][c.IndexInstId(instRef.InstId)][c.PartitionId(partnRef.PartId)] = make(map[uint64]*IndexInstDistribution)
+					r.instances[defnId][c.IndexInstId(instRef.InstId)][c.PartitionId(partnRef.PartId)] = make(map[uint64]*mc.IndexInstDistribution)
 				}
 
 				// r.Instances has all the index instances and partitions regardless of its state and version
@@ -2461,7 +2685,7 @@ func (r *metadataRepo) updateInstancesInIndexMetadata(defnId c.IndexDefnId, meta
 	logging.Debugf("update index metadata: index definition %v has %v active instances.", defnId, len(meta.Instances))
 }
 
-func (r *metadataRepo) makeInstanceDefn(defnId c.IndexDefnId, inst *IndexInstDistribution) *InstanceDefn {
+func (r *metadataRepo) makeInstanceDefn(defnId c.IndexDefnId, inst *mc.IndexInstDistribution) *InstanceDefn {
 
 	idxInst := new(InstanceDefn)
 	idxInst.DefnId = defnId
@@ -2527,7 +2751,7 @@ func (r *metadataRepo) updateRebalanceInstancesInIndexMetadata(defnId c.IndexDef
 	instsByInstId := r.instances[defnId]
 	for instId, _ := range instsByInstId {
 
-		var moreRecentInst *IndexInstDistribution
+		var moreRecentInst *mc.IndexInstDistribution
 		var activeInst *InstanceDefn
 
 		for _, current := range meta.Instances {

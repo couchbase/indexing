@@ -14,6 +14,7 @@ import (
 	"github.com/couchbase/gometa/common"
 	c "github.com/couchbase/indexing/secondary/common"
 	logging "github.com/couchbase/indexing/secondary/logging"
+	mc "github.com/couchbase/indexing/secondary/manager/common"
 )
 
 /////////////////////////////////////////////////////////////////////////
@@ -40,65 +41,6 @@ const (
 	OPCODE_DROP_OR_PRUNE_INSTANCE               = OPCODE_CONFIG_UPDATE + 1
 	OPCODE_MERGE_PARTITION                      = OPCODE_DROP_OR_PRUNE_INSTANCE + 1
 )
-
-/////////////////////////////////////////////////////////////////////////
-// Topology Definition
-////////////////////////////////////////////////////////////////////////
-
-type GlobalTopology struct {
-	TopologyKeys []string `json:"topologyKeys,omitempty"`
-}
-
-type IndexTopology struct {
-	Version     uint64                  `json:"version,omitempty"`
-	Bucket      string                  `json:"bucket,omitempty"`
-	Definitions []IndexDefnDistribution `json:"definitions,omitempty"`
-}
-
-type IndexDefnDistribution struct {
-	Bucket    string                  `json:"bucket,omitempty"`
-	Name      string                  `json:"name,omitempty"`
-	DefnId    uint64                  `json:"defnId,omitempty"`
-	Instances []IndexInstDistribution `json:"instances,omitempty"`
-}
-
-type IndexInstDistribution struct {
-	InstId         uint64                  `json:"instId,omitempty"`
-	State          uint32                  `json:"state,omitempty"`
-	StreamId       uint32                  `json:"streamId,omitempty"`
-	Error          string                  `json:"error,omitempty"`
-	Partitions     []IndexPartDistribution `json:"partitions,omitempty"`
-	NumPartitions  uint32                  `json:"numPartitions,omitempty"`
-	RState         uint32                  `json:"rRtate,omitempty"`
-	Version        uint64                  `json:"version,omitempty"`
-	ReplicaId      uint64                  `json:"replicaId,omitempty"`
-	Scheduled      bool                    `json:"scheduled,omitempty"`
-	StorageMode    string                  `json:"storageMode,omitempty"`
-	OldStorageMode string                  `json:"oldStorageMode,omitempty"`
-	RealInstId     uint64                  `json:"realInstId,omitempty"`
-}
-
-type IndexPartDistribution struct {
-	PartId          uint64                      `json:"partId,omitempty"`
-	Version         uint64                      `json:"version,omitempty"`
-	SinglePartition IndexSinglePartDistribution `json:"singlePartition,omitempty"`
-	KeyPartition    IndexKeyPartDistribution    `json:"keyPartition,omitempty"`
-}
-
-type IndexSinglePartDistribution struct {
-	Slices []IndexSliceLocator `json:"slices,omitempty"`
-}
-
-type IndexKeyPartDistribution struct {
-	Keys             []string                      `json:"keys,omitempty"`
-	SinglePartitions []IndexSinglePartDistribution `json:"singlePartitions,omitempty"`
-}
-
-type IndexSliceLocator struct {
-	SliceId   uint64 `json:"sliceId,omitempty"`
-	State     uint32 `json:"state,omitempty"`
-	IndexerId string `json:"indexerId,omitempty"`
-}
 
 /////////////////////////////////////////////////////////////////////////
 // Index List
@@ -132,9 +74,9 @@ type IndexStats struct {
 // marshalling/unmarshalling
 ////////////////////////////////////////////////////////////////////////
 
-func unmarshallIndexTopology(data []byte) (*IndexTopology, error) {
+func unmarshallIndexTopology(data []byte) (*mc.IndexTopology, error) {
 
-	topology := new(IndexTopology)
+	topology := new(mc.IndexTopology)
 	if err := json.Unmarshal(data, topology); err != nil {
 		return nil, err
 	}
@@ -142,7 +84,7 @@ func unmarshallIndexTopology(data []byte) (*IndexTopology, error) {
 	return topology, nil
 }
 
-func marshallIndexTopology(topology *IndexTopology) ([]byte, error) {
+func marshallIndexTopology(topology *mc.IndexTopology) ([]byte, error) {
 
 	buf, err := json.Marshal(&topology)
 	if err != nil {
@@ -227,59 +169,4 @@ func MarshallIndexStats(stats *IndexStats) ([]byte, error) {
 	logging.Debugf("MarshallIndexStats: %v", string(buf))
 
 	return buf, nil
-}
-
-/////////////////////////////////////////////////////////////////////////
-// Topology
-////////////////////////////////////////////////////////////////////////
-
-func (t *IndexTopology) findIndexerId() string {
-
-	for _, defn := range t.Definitions {
-		for _, inst := range defn.Instances {
-			indexerId := inst.findIndexerId()
-			if len(indexerId) != 0 {
-				return indexerId
-			}
-		}
-	}
-
-	return ""
-}
-
-func (inst IndexInstDistribution) findIndexerId() string {
-
-	for _, part := range inst.Partitions {
-		for _, slice := range part.SinglePartition.Slices {
-			if len(slice.IndexerId) != 0 {
-				return slice.IndexerId
-			}
-		}
-	}
-
-	return ""
-}
-
-func (t *IndexTopology) GetIndexInstancesByDefn(defnId c.IndexDefnId) []IndexInstDistribution {
-
-	for i, _ := range t.Definitions {
-		if t.Definitions[i].DefnId == uint64(defnId) {
-			return t.Definitions[i].Instances
-		}
-	}
-	return nil
-}
-
-func (t *IndexTopology) GetStatusByInst(defnId c.IndexDefnId, instId c.IndexInstId) (c.IndexState, string) {
-
-	for i, _ := range t.Definitions {
-		if t.Definitions[i].DefnId == uint64(defnId) {
-			for j, _ := range t.Definitions[i].Instances {
-				if t.Definitions[i].Instances[j].InstId == uint64(instId) {
-					return c.IndexState(t.Definitions[i].Instances[j].State), t.Definitions[i].Instances[j].Error
-				}
-			}
-		}
-	}
-	return c.INDEX_STATE_NIL, ""
 }

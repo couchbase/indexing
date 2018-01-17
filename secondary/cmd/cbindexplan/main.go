@@ -284,7 +284,7 @@ func main() {
 			return
 		}
 
-		_, err = planner.ExecutePlanWithOptions(plan, indexSpecs, gDetail, gGenStmt, gOutput, gAddNode, gCpuQuota, memQuota, gAllowUnpin)
+		_, err = planner.ExecutePlanWithOptions(plan, indexSpecs, gDetail, gGenStmt, gOutput, gAddNode, gCpuQuota, memQuota, gAllowUnpin, false)
 		if err != nil {
 			logging.Fatalf("Planner error: %v.", err)
 			return

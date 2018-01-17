@@ -31,7 +31,7 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/fdb"
 	"github.com/couchbase/indexing/secondary/logging"
-	"github.com/couchbase/indexing/secondary/manager/client"
+	mc "github.com/couchbase/indexing/secondary/manager/common"
 	"github.com/couchbase/indexing/secondary/memdb"
 	"github.com/couchbase/indexing/secondary/memdb/nodetable"
 	projClient "github.com/couchbase/indexing/secondary/projector/client"
@@ -5853,7 +5853,7 @@ func (idx *indexer) promoteStorageModeIfNecessaryInternal(mode common.StorageMod
 func (idx *indexer) getStorageModeOverride(config common.Config) common.StorageMode {
 
 	nodeUUID := config["nodeuuid"].String()
-	override, err := client.GetIndexerStorageModeOverride(nodeUUID)
+	override, err := mc.GetIndexerStorageModeOverride(nodeUUID)
 
 	if err == nil && common.IsValidIndexType(override) {
 		logging.Infof("Indexer::getStorageModeOverride(): override storage mode %v.", override)
@@ -5870,7 +5870,7 @@ func (idx *indexer) getStorageModeOverride(config common.Config) common.StorageM
 func (idx *indexer) getBootstrapStorageMode(config common.Config) common.StorageMode {
 
 	nodeUUID := config["nodeuuid"].String()
-	s, err := client.GetIndexerLocalStorageMode(nodeUUID)
+	s, err := mc.GetIndexerLocalStorageMode(nodeUUID)
 	if s == common.NOT_SET || err != nil {
 		logging.Infof("Unable to fetch storage mode from metakv during bootrap.  Use storage mode setting for bootstrap")
 
@@ -5884,7 +5884,7 @@ func (idx *indexer) getBootstrapStorageMode(config common.Config) common.Storage
 func (idx *indexer) postIndexStorageModeForBootstrap(config common.Config, storageMode common.StorageMode) error {
 
 	nodeUUID := config["nodeuuid"].String()
-	err := client.PostIndexerLocalStorageMode(nodeUUID, storageMode)
+	err := mc.PostIndexerLocalStorageMode(nodeUUID, storageMode)
 	if err != nil {
 		logging.Errorf("Error when post storage mode to metakv during bootrap.  Error=%s", err)
 		return err

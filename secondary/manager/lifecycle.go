@@ -22,6 +22,7 @@ import (
 	fdb "github.com/couchbase/indexing/secondary/fdb"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager/client"
+	mc "github.com/couchbase/indexing/secondary/manager/common"
 	"math"
 	"strings"
 	"sync/atomic"
@@ -2060,7 +2061,7 @@ func (m *janitor) cleanup() {
 	//
 	logging.Infof("janitor: running cleanup.")
 
-	entries, err := metakv.ListAllChildren(client.DeleteDDLCommandTokenPath)
+	entries, err := metakv.ListAllChildren(mc.DeleteDDLCommandTokenPath)
 	if err != nil {
 		logging.Warnf("janitor: Fail to drop index upon cleanup.  Internal Error = %v", err)
 		return
@@ -2068,11 +2069,11 @@ func (m *janitor) cleanup() {
 
 	for _, entry := range entries {
 
-		if strings.Contains(entry.Path, client.DeleteDDLCommandTokenPath) && entry.Value != nil {
+		if strings.Contains(entry.Path, mc.DeleteDDLCommandTokenPath) && entry.Value != nil {
 
 			logging.Infof("janitor: Processing delete token %v", entry.Path)
 
-			command, err := client.UnmarshallDeleteCommandToken(entry.Value)
+			command, err := mc.UnmarshallDeleteCommandToken(entry.Value)
 			if err != nil {
 				logging.Warnf("janitor: Fail to drop index upon cleanup.  Skp command %v.  Internal Error = %v.", entry.Path, err)
 				continue
@@ -2406,7 +2407,7 @@ func (s *builder) getQuota() (int32, map[string]bool) {
 
 func (s *builder) processBuildToken(bootstrap bool) {
 
-	entries, err := metakv.ListAllChildren(client.BuildDDLCommandTokenPath)
+	entries, err := metakv.ListAllChildren(mc.BuildDDLCommandTokenPath)
 	if err != nil {
 		logging.Warnf("builder: Fail to get command token from metakv.  Internal Error = %v", err)
 		entries = nil
@@ -2414,9 +2415,9 @@ func (s *builder) processBuildToken(bootstrap bool) {
 
 	for _, entry := range entries {
 
-		if strings.Contains(entry.Path, client.BuildDDLCommandTokenPath) && entry.Value != nil {
+		if strings.Contains(entry.Path, mc.BuildDDLCommandTokenPath) && entry.Value != nil {
 
-			command, err := client.UnmarshallBuildCommandToken(entry.Value)
+			command, err := mc.UnmarshallBuildCommandToken(entry.Value)
 			if err != nil {
 				logging.Warnf("builder: Fail to unmarshall command token.  Skp command %v.  Internal Error = %v.", entry.Path, err)
 				continue

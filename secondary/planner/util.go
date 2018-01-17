@@ -186,7 +186,7 @@ func getWeightedRandomNode(rs *rand.Rand, indexers []*IndexerNode, loads []int64
 // This function sorts the indexer node by usage in ascending order.
 // For indexer usage, it will consider both cpu and memory.
 // For indexer nodes that have the same usage, it will sort by
-// the number of indexes with unkown usage info (index.NoUsage=true).
+// the number of indexes with unkown usage info (index.NoUsageInfo=true).
 // Two indexers could have the same usage if the indexers are emtpy
 // or holding deferred index (no usage stats).
 //
@@ -209,7 +209,7 @@ func sortNodeByUsage(s *Solution, indexers []*IndexerNode) []*IndexerNode {
 			} else if newNodeUsage == minNodeUsage {
 				// Tiebreaker: Only consider count of index with no usage info since these
 				// indexes do not contribute to usage stats.
-				if numIndexWithNoUsage(result[j]) < numIndexWithNoUsage(result[min]) {
+				if numIndexWithNoUsageInfo(result[j]) < numIndexWithNoUsageInfo(result[min]) {
 					min = j
 				}
 			}
@@ -226,10 +226,10 @@ func sortNodeByUsage(s *Solution, indexers []*IndexerNode) []*IndexerNode {
 }
 
 //
-// This function sorts the indexer node by number of NoUsage indexes
+// This function sorts the indexer node by number of NoUsageInfo indexes
 // in ascending order.
 //
-func sortNodeByNoUsageIndexCount(indexers []*IndexerNode) []*IndexerNode {
+func sortNodeByNoUsageInfoIndexCount(indexers []*IndexerNode) []*IndexerNode {
 
 	numOfIndexers := len(indexers)
 	result := make([]*IndexerNode, numOfIndexers)
@@ -239,7 +239,7 @@ func sortNodeByNoUsageIndexCount(indexers []*IndexerNode) []*IndexerNode {
 		min := i
 		for j := i + 1; j < numOfIndexers; j++ {
 
-			if numIndexWithNoUsage(result[j]) < numIndexWithNoUsage(result[min]) {
+			if numIndexWithNoUsageInfo(result[j]) < numIndexWithNoUsageInfo(result[min]) {
 				min = j
 			}
 		}
@@ -544,11 +544,11 @@ func reverseNode(indexers []*IndexerNode) []*IndexerNode {
 //
 // Find the number of indexes that has no stats or sizing information.
 //
-func numIndexWithNoUsage(indexer *IndexerNode) int {
+func numIndexWithNoUsageInfo(indexer *IndexerNode) int {
 
 	count := 0
 	for _, index := range indexer.Indexes {
-		if index.NoUsage {
+		if index.NoUsageInfo {
 			count++
 		}
 	}

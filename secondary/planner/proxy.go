@@ -16,7 +16,7 @@ import (
 	"github.com/couchbase/cbauth"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
-	"github.com/couchbase/indexing/secondary/manager/client"
+	mc "github.com/couchbase/indexing/secondary/manager/common"
 	"net"
 	"net/http"
 	"runtime"
@@ -29,11 +29,12 @@ import (
 //////////////////////////////////////////////////////////////
 
 type LocalIndexMetadata struct {
-	IndexerId        string                 `json:"indexerId,omitempty"`
-	NodeUUID         string                 `json:"nodeUUID,omitempty"`
-	StorageMode      string                 `json:"storageMode,omitempty"`
-	IndexTopologies  []client.IndexTopology `json:"topologies,omitempty"`
-	IndexDefinitions []common.IndexDefn     `json:"definitions,omitempty"`
+	IndexerId        string             `json:"indexerId,omitempty"`
+	NodeUUID         string             `json:"nodeUUID,omitempty"`
+	StorageMode      string             `json:"storageMode,omitempty"`
+	LocalSettings    map[string]string  `json:"localSettings,omitempty"`
+	IndexTopologies  []mc.IndexTopology `json:"topologies,omitempty"`
+	IndexDefinitions []common.IndexDefn `json:"definitions,omitempty"`
 }
 
 ///////////////////////////////////////////////////////
@@ -153,6 +154,7 @@ func getIndexLayout(clusterUrl string) ([]*IndexerNode, error) {
 		node.NodeUUID = localMeta.NodeUUID
 		node.IndexerId = localMeta.IndexerId
 		node.StorageMode = localMeta.StorageMode
+		node.exclude = localMeta.LocalSettings["excludeNode"]
 
 		// convert from LocalIndexMetadata to IndexUsage
 		indexes, err := ConvertToIndexUsages(config, localMeta, node)
@@ -251,7 +253,7 @@ func ConvertToIndexUsage(config common.Config, defn *common.IndexDefn, localMeta
 				// update sizing
 				index.IsPrimary = defn.IsPrimary
 				index.IsMOI = (defn.Using == common.IndexType(common.MemoryOptimized) || defn.Using == common.IndexType(common.MemDB))
-				index.NoUsage = defn.Deferred && state == common.INDEX_STATE_READY
+				index.NoUsageInfo = defn.Deferred && state == common.INDEX_STATE_READY
 
 				// update partition
 				numVbuckets := config["indexer.numVbuckets"].Int()
@@ -259,7 +261,7 @@ func ConvertToIndexUsage(config common.Config, defn *common.IndexDefn, localMeta
 
 				// Is the index being deleted by user?   Thsi will read the delete token from metakv.  If untable read from metakv,
 				// pendingDelete is false (cannot assert index is to-be-delete).
-				pendingDelete, err := client.DeleteCommandTokenExist(defn.DefnId)
+				pendingDelete, err := mc.DeleteCommandTokenExist(defn.DefnId)
 				if err != nil {
 					return nil, err
 				}
@@ -284,7 +286,8 @@ func ConvertToIndexUsage(config common.Config, defn *common.IndexDefn, localMeta
 					Pc:        pc,
 				}
 
-				logging.Debugf("Create Index usage %v %v %v %v", index.Name, index.Bucket, index.Instance.InstId, index.Instance.ReplicaId)
+				logging.Debugf("Create Index usage %v %v %v %v %v",
+					index.Name, index.Bucket, index.Instance.InstId, index.PartnId, index.Instance.ReplicaId)
 
 				result = append(result, index)
 			}
@@ -427,6 +430,12 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 				if index.NumOfDocs != 0 && index.ActualMemUsage != 0 {
 					index.ActualKeySize = index.ActualMemUsage / index.NumOfDocs
 				}
+				if index.Instance.Defn.SecKeySize != 0 {
+					index.AvgSecKeySize = index.Instance.Defn.SecKeySize
+				}
+				if index.Instance.Defn.DocKeySize != 0 {
+					index.AvgDocKeySize = index.Instance.Defn.DocKeySize
+				}
 			}
 
 			// These stats are currently unavailable in 4.5.
@@ -439,18 +448,29 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 				if index.NumOfDocs != 0 && index.ActualMemUsage != 0 {
 					index.ActualKeySize = index.ActualMemUsage / index.NumOfDocs
 				}
+				if index.Instance.Defn.DocKeySize != 0 {
+					index.AvgDocKeySize = index.Instance.Defn.DocKeySize
+				}
 			}
 
 			// These stats are currently unavailable in 4.5.
 			key = fmt.Sprintf("%v:%v:avg_arr_size", index.Bucket, indexName)
 			if avgArrSize, ok := statsMap[key]; ok {
 				index.AvgArrSize = uint64(avgArrSize.(float64))
+			} else if !index.IsPrimary {
+				if index.Instance.Defn.IsArrayIndex && index.Instance.Defn.ArrSize != 0 {
+					index.AvgArrSize = index.Instance.Defn.ArrSize
+				}
 			}
 
 			// These stats are currently unavailable in 4.5.
 			key = fmt.Sprintf("%v:%v:avg_arr_key_size", index.Bucket, indexName)
 			if avgArrKeySize, ok := statsMap[key]; ok {
 				index.AvgArrKeySize = uint64(avgArrKeySize.(float64))
+			} else if !index.IsPrimary {
+				if index.Instance.Defn.IsArrayIndex && index.Instance.Defn.SecKeySize != 0 {
+					index.AvgArrKeySize = index.Instance.Defn.SecKeySize
+				}
 			}
 
 			// These stats are currently unavailable in 4.5.
@@ -490,6 +510,13 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 					}
 				}
 			}
+
+			// resident ratio
+			if index.Instance.Defn.ResidentRatio != 0 {
+				index.ResidentRatio = index.Instance.Defn.ResidentRatio
+			} else {
+				index.ResidentRatio = 100
+			}
 		}
 
 		// compute the estimated memory usage for each index.  This also computes
@@ -511,7 +538,7 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 			}
 
 			if index.ActualMemUsage != 0 {
-				index.NoUsage = false
+				index.NoUsageInfo = false
 			}
 
 			indexer.ActualMemUsage += index.ActualMemUsage
@@ -548,7 +575,7 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 
 			if usage > 0 {
 				index.ActualCpuUsage = usage
-				index.NoUsage = false
+				index.NoUsageInfo = false
 			}
 
 			indexer.ActualCpuUsage += index.ActualCpuUsage
@@ -612,7 +639,7 @@ func getIndexSettings(clusterUrl string, plan *Plan) error {
 //
 // This function extract the topology metadata for a bucket.
 //
-func findTopologyByBucket(topologies []client.IndexTopology, bucket string) *client.IndexTopology {
+func findTopologyByBucket(topologies []mc.IndexTopology, bucket string) *mc.IndexTopology {
 
 	for _, topology := range topologies {
 		if topology.Bucket == bucket {
@@ -626,7 +653,7 @@ func findTopologyByBucket(topologies []client.IndexTopology, bucket string) *cli
 //
 // This function finds the index instance id from bucket topology.
 //
-func findIndexInstId(topology *client.IndexTopology, defnId common.IndexDefnId) (common.IndexInstId, error) {
+func findIndexInstId(topology *mc.IndexTopology, defnId common.IndexDefnId) (common.IndexInstId, error) {
 
 	for _, defnRef := range topology.Definitions {
 		if defnRef.DefnId == uint64(defnId) {
@@ -818,8 +845,8 @@ func cleanseIndexLayout(indexers []*IndexerNode) {
 			// ignore any index with RState being pending.
 			// **For pre-spock backup, RState of an instance is ACTIVE (0).
 			if index.Instance.RState != common.REBAL_ACTIVE {
-				logging.Debugf("Planner: Skip index (%v, %v, %v, %v) that is not RState ACTIVE",
-					index.Bucket, index.Name, index.InstId, index.PartnId)
+				logging.Infof("Planner: Skip index (%v, %v, %v, %v) that is not RState ACTIVE (%v)",
+					index.Bucket, index.Name, index.InstId, index.PartnId, index.Instance.RState)
 				continue
 			}
 
@@ -827,7 +854,7 @@ func cleanseIndexLayout(indexers []*IndexerNode) {
 			// **For pre-spock backup, inst version is always 0. In fact, there should not be another instance (max == inst).
 			max := findMaxVersionInst(indexers, index.DefnId, index.PartnId, index.InstId)
 			if max != index {
-				logging.Verbosef("Planner:  Skip index (%v, %v, %v, %v) with lower version number %v.",
+				logging.Infof("Planner:  Skip index (%v, %v, %v, %v) with lower version number %v.",
 					index.Bucket, index.Name, index.InstId, index.PartnId, index.Instance.Version)
 				continue
 			}

@@ -52,6 +52,7 @@ type RunConfig struct {
 	EjectOnly      bool
 	DisableRepair  bool
 	Timeout        int
+	UseLive        bool
 }
 
 type RunStats struct {
@@ -88,25 +89,30 @@ type Plan struct {
 
 type IndexSpec struct {
 	// definition
-	Name         string   `json:"name,omitempty"`
-	Bucket       string   `json:"bucket,omitempty"`
-	IsPrimary    bool     `json:"isPrimary,omitempty"`
-	SecExprs     []string `json:"secExprs,omitempty"`
-	WhereExpr    string   `json:"where,omitempty"`
-	Deferred     bool     `json:"deferred,omitempty"`
-	Immutable    bool     `json:"immutable,omitempty"`
-	IsArrayIndex bool     `json:"isArrayIndex,omitempty"`
+	Name            string   `json:"name,omitempty"`
+	Bucket          string   `json:"bucket,omitempty"`
+	IsPrimary       bool     `json:"isPrimary,omitempty"`
+	SecExprs        []string `json:"secExprs,omitempty"`
+	WhereExpr       string   `json:"where,omitempty"`
+	Deferred        bool     `json:"deferred,omitempty"`
+	Immutable       bool     `json:"immutable,omitempty"`
+	IsArrayIndex    bool     `json:"isArrayIndex,omitempty"`
 	RetainDeletedXATTR bool     `json:"retainDeletedXATTR,omitempty"`
+	NumPartition    uint64   `json:"numPartition,omitempty"`
+	PartitionScheme string   `json:"partitionScheme,omitempty"`
+	PartitionKeys   []string `json:"partitionKeys,omitempty"`
+	Replica         uint64   `json:"replica,omitempty"`
+	Desc            []bool   `json:"desc,omitempty"`
 
 	// usage
-	Replica      uint64 `json:"replica,omitempty"`
-	NumDoc       uint64 `json:"numDoc,omitempty"`
-	DocKeySize   uint64 `json:"docKeySize,omitempty"`
-	SecKeySize   uint64 `json:"secKeySize,omitempty"`
-	ArrKeySize   uint64 `json:"arrKeySize,omitempty"`
-	ArrSize      uint64 `json:"arrSize,omitempty"`
-	MutationRate uint64 `json:"mutationRate,omitempty"`
-	ScanRate     uint64 `json:"scanRate,omitempty"`
+	NumDoc        uint64  `json:"numDoc,omitempty"`
+	DocKeySize    uint64  `json:"docKeySize,omitempty"`
+	SecKeySize    uint64  `json:"secKeySize,omitempty"`
+	ArrKeySize    uint64  `json:"arrKeySize,omitempty"`
+	ArrSize       uint64  `json:"arrSize,omitempty"`
+	ResidentRatio float64 `json:"residentRatio,omitempty"`
+	MutationRate  uint64  `json:"mutationRate,omitempty"`
+	ScanRate      uint64  `json:"scanRate,omitempty"`
 }
 
 //////////////////////////////////////////////////////////////
@@ -291,11 +297,34 @@ func genTransferToken(solution *Solution, masterId string, topologyChange servic
 }
 
 //////////////////////////////////////////////////////////////
+// Integration with Metadata Provider
+/////////////////////////////////////////////////////////////
+
+func ExecutePlan(clusterUrl string, indexSpecs []*IndexSpec, nodes []string) (*Solution, error) {
+
+	plan, err := RetrievePlanFromCluster(clusterUrl)
+	if err != nil {
+		return nil, errors.New(fmt.Sprintf("Unable to read index layout from cluster %v. err = %s", clusterUrl, err))
+	}
+
+	for _, indexer := range plan.Placement {
+		for _, node := range nodes {
+			if indexer.NodeId == node {
+				indexer.UnsetExclude()
+				break
+			}
+		}
+	}
+
+	return ExecutePlanWithOptions(plan, indexSpecs, true, "", "", -1, -1, -1, false, true)
+}
+
+//////////////////////////////////////////////////////////////
 // Execution
 /////////////////////////////////////////////////////////////
 
 func ExecutePlanWithOptions(plan *Plan, indexSpecs []*IndexSpec, detail bool, genStmt string,
-	output string, addNode int, cpuQuota int, memQuota int64, allowUnpin bool) (*Solution, error) {
+	output string, addNode int, cpuQuota int, memQuota int64, allowUnpin bool, useLive bool) (*Solution, error) {
 
 	resize := false
 	if plan == nil {
@@ -311,11 +340,12 @@ func ExecutePlanWithOptions(plan *Plan, indexSpecs []*IndexSpec, detail bool, ge
 	config.MemQuota = memQuota
 	config.CpuQuota = cpuQuota
 	config.AllowUnpin = allowUnpin
+	config.UseLive = useLive
 
 	p, _, err := execute(config, CommandPlan, plan, indexSpecs, ([]string)(nil))
 	if p != nil && detail {
 		logging.Infof("************ Indexer Layout *************")
-		p.PrintLayout()
+		p.Print()
 		logging.Infof("****************************************")
 	}
 
@@ -456,7 +486,10 @@ func plan(config *RunConfig, plan *Plan, indexes []*IndexUsage) (*SAPlanner, *Ru
 		indexes = filterPinnedIndexes(config, indexes)
 		placement = newRandomPlacement(indexes, config.AllowSwap, false)
 	}
-	placement.Add(solution, indexes)
+	adjustIndexSizingInfo(solution.UseLiveData(), indexes)
+	if err := placement.Add(solution, indexes); err != nil {
+		return nil, nil, err
+	}
 
 	// run planner
 	cost = newUsageBasedCostMethod(constraint, config.DataCostWeight, config.CpuCostWeight, config.MemCostWeight)
@@ -511,7 +544,10 @@ func rebalance(command CommandType, config *RunConfig, plan *Plan, indexes []*In
 	} else {
 		// create an initial solution
 		initialIndexes = indexes
-		solution, constraint = initialSolution(config, sizing, initialIndexes)
+		solution, constraint, err = initialSolution(config, sizing, initialIndexes)
+		if err != nil {
+			return nil, nil, err
+		}
 		setInitialLayoutStats(s, config, constraint, solution, initialIndexes, 0, 0, false)
 	}
 
@@ -539,9 +575,11 @@ func rebalance(command CommandType, config *RunConfig, plan *Plan, indexes []*In
 	cost = newUsageBasedCostMethod(constraint, config.DataCostWeight, config.CpuCostWeight, config.MemCostWeight)
 	planner := newSAPlanner(cost, constraint, placement, sizing)
 	planner.SetTimeout(config.Timeout)
-	logging.Infof("************ Index Layout Before Rebalance *************")
-	solution.PrintLayout()
-	logging.Infof("****************************************")
+	if config.Detail {
+		logging.Infof("************ Index Layout Before Rebalance *************")
+		solution.PrintLayout()
+		logging.Infof("****************************************")
+	}
 	if _, err := planner.Plan(command, solution); err != nil {
 		return planner, s, err
 	}
@@ -552,12 +590,11 @@ func rebalance(command CommandType, config *RunConfig, plan *Plan, indexes []*In
 		logging.Infof("Rebalancing partitioned index (num %v)", len(indexes))
 		solution = planner.Result
 		solution.removeEmptyDeletedNode()
+		solution.enableExclude = true
 		placement = newRandomPlacement(indexes, config.AllowSwap, false)
 		planner = newSAPlanner(cost, constraint, placement, sizing)
 		planner.SetTimeout(config.Timeout)
-		if _, err := planner.Plan(CommandRebalance, solution); err != nil {
-			return planner, s, err
-		}
+		planner.Plan(CommandRebalance, solution)
 	}
 
 	// save result
@@ -723,7 +760,7 @@ func indexerNode(rs *rand.Rand, prefix string, sizing SizingMethod) *IndexerNode
 
 func initialSolution(config *RunConfig,
 	sizing SizingMethod,
-	indexes []*IndexUsage) (*Solution, ConstraintMethod) {
+	indexes []*IndexUsage) (*Solution, ConstraintMethod, error) {
 
 	resize := config.Resize
 	maxNumNode := config.MaxNumNode
@@ -739,9 +776,11 @@ func initialSolution(config *RunConfig,
 	r := newSolution(constraint, sizing, indexers, false, false, config.DisableRepair)
 
 	placement := newRandomPlacement(indexes, config.AllowSwap, false)
-	placement.InitialPlace(r, indexes)
+	if err := placement.InitialPlace(r, indexes); err != nil {
+		return nil, nil, err
+	}
 
-	return r, constraint
+	return r, constraint, nil
 }
 
 func emptySolution(config *RunConfig,
@@ -772,6 +811,7 @@ func solutionFromPlan(command CommandType, config *RunConfig, sizing SizingMetho
 	shuffle := config.Shuffle
 	maxCpuUse := config.MaxCpuUse
 	maxMemUse := config.MaxMemUse
+	useLive := config.UseLive || command == CommandRebalance || command == CommandSwap
 
 	movedData := uint64(0)
 	movedIndex := uint64(0)
@@ -785,7 +825,7 @@ func solutionFromPlan(command CommandType, config *RunConfig, sizing SizingMetho
 		}
 	}
 
-	memQuota, cpuQuota := computeQuota(config, sizing, indexes, plan.IsLive && (command == CommandRebalance || command == CommandSwap))
+	memQuota, cpuQuota := computeQuota(config, sizing, indexes, plan.IsLive && useLive)
 
 	if config.MemQuota == -1 && plan.MemQuota != 0 {
 		memQuota = uint64(float64(plan.MemQuota) * memQuotaFactor)
@@ -797,7 +837,7 @@ func solutionFromPlan(command CommandType, config *RunConfig, sizing SizingMetho
 
 	constraint := newIndexerConstraint(memQuota, cpuQuota, resize, maxNumNode, maxCpuUse, maxMemUse)
 
-	r := newSolution(constraint, sizing, plan.Placement, plan.IsLive, (command == CommandRebalance || command == CommandSwap), config.DisableRepair)
+	r := newSolution(constraint, sizing, plan.Placement, plan.IsLive, useLive, config.DisableRepair)
 	r.calculateSize() // in case sizing formula changes
 
 	if shuffle != 0 {
@@ -874,6 +914,22 @@ func findAllPartitionedIndex(solution *Solution) []*IndexUsage {
 	}
 
 	return result
+}
+
+func adjustIndexSizingInfo(useLive bool, indexes []*IndexUsage) {
+
+	for _, index := range indexes {
+		if index.MemUsage == 0 && index.ActualMemUsage == 0 {
+			index.NoUsageInfo = true
+		} else {
+			index.NoUsageInfo = false
+		}
+
+		if useLive && index.ActualMemUsage == 0 && index.MemUsage != 0 {
+			// do not copy mem overhead since this is usually over-estimated
+			index.ActualMemUsage = index.MemUsage
+		}
+	}
 }
 
 //////////////////////////////////////////////////////////////
@@ -987,45 +1043,77 @@ func indexUsagesFromSpec(sizing SizingMethod, specs []*IndexSpec) ([]*IndexUsage
 
 func indexUsageFromSpec(sizing SizingMethod, spec *IndexSpec) ([]*IndexUsage, error) {
 
-	result := make([]*IndexUsage, spec.Replica)
+	var result []*IndexUsage
 
 	uuid, err := common.NewUUID()
 	if err != nil {
 		return nil, errors.New("unable to generate UUID")
 	}
 
+	config, err := common.GetSettingsConfig(common.SystemConfig)
+	if err != nil {
+		logging.Errorf("Error from retrieving indexer settings. Error = %v", err)
+		return nil, err
+	}
+	numVbuckets := config["indexer.numVbuckets"].Int()
+
+	var startPartnId int
+	if spec.NumPartition > 1 {
+		startPartnId = 1
+	}
+
+	defnId := common.IndexDefnId(uuid.Uint64())
 	for i := 0; i < int(spec.Replica); i++ {
-		index := &IndexUsage{}
-		index.DefnId = common.IndexDefnId(uuid.Uint64())
-		index.InstId = common.IndexInstId(i)
-		index.Name = spec.Name
-		index.Bucket = spec.Bucket
-		index.IsMOI = true
-		index.IsPrimary = spec.IsPrimary
+		instId := common.IndexInstId(uuid.Uint64())
+		for j := 0; j < int(spec.NumPartition); j++ {
+			index := &IndexUsage{}
+			index.DefnId = defnId
+			index.InstId = instId
+			index.PartnId = common.PartitionId(startPartnId + j)
+			index.Name = spec.Name
+			index.Bucket = spec.Bucket
+			index.IsMOI = true
+			index.IsPrimary = spec.IsPrimary
 
-		index.Instance = &common.IndexInst{}
-		index.Instance.InstId = index.InstId
-		index.Instance.ReplicaId = i
-		index.Instance.Defn.Name = index.Name
-		index.Instance.Defn.Bucket = spec.Bucket
-		index.Instance.Defn.IsPrimary = spec.IsPrimary
-		index.Instance.Defn.SecExprs = spec.SecExprs
-		index.Instance.Defn.WhereExpr = spec.WhereExpr
-		index.Instance.Defn.Immutable = spec.Immutable
-		index.Instance.Defn.IsArrayIndex = spec.IsArrayIndex
-		index.Instance.Defn.RetainDeletedXATTR = spec.RetainDeletedXATTR
+			index.Instance = &common.IndexInst{}
+			index.Instance.InstId = index.InstId
+			index.Instance.ReplicaId = i
+			index.Instance.Pc = common.NewKeyPartitionContainer(numVbuckets, int(spec.NumPartition),
+				common.PartitionScheme(spec.PartitionScheme))
 
-		index.NumOfDocs = spec.NumDoc
-		index.AvgDocKeySize = spec.DocKeySize
-		index.AvgSecKeySize = spec.SecKeySize
-		index.AvgArrKeySize = spec.ArrKeySize
-		index.AvgArrSize = spec.ArrSize
-		index.MutationRate = spec.MutationRate
-		index.ScanRate = spec.ScanRate
+			index.Instance.Defn.DefnId = defnId
+			index.Instance.Defn.Name = index.Name
+			index.Instance.Defn.Bucket = spec.Bucket
+			index.Instance.Defn.IsPrimary = spec.IsPrimary
+			index.Instance.Defn.SecExprs = spec.SecExprs
+			index.Instance.Defn.WhereExpr = spec.WhereExpr
+			index.Instance.Defn.Immutable = spec.Immutable
+			index.Instance.Defn.IsArrayIndex = spec.IsArrayIndex
+			index.Instance.Defn.RetainDeletedXATTR = spec.RetainDeletedXATTR
+			index.Instance.Defn.Deferred = spec.Deferred
+			index.Instance.Defn.Desc = spec.Desc
+			index.Instance.Defn.NumReplica = uint32(spec.Replica) - 1
+			index.Instance.Defn.PartitionScheme = common.PartitionScheme(spec.PartitionScheme)
+			index.Instance.Defn.PartitionKeys = spec.PartitionKeys
+			index.Instance.Defn.NumDoc = spec.NumDoc / uint64(spec.NumPartition)
+			index.Instance.Defn.DocKeySize = spec.DocKeySize
+			index.Instance.Defn.SecKeySize = spec.SecKeySize
+			index.Instance.Defn.ArrSize = spec.ArrSize
+			index.Instance.Defn.ResidentRatio = spec.ResidentRatio
 
-		sizing.ComputeIndexSize(index)
+			index.NumOfDocs = spec.NumDoc / uint64(spec.NumPartition)
+			index.AvgDocKeySize = spec.DocKeySize
+			index.AvgSecKeySize = spec.SecKeySize
+			index.AvgArrKeySize = spec.ArrKeySize
+			index.AvgArrSize = spec.ArrSize
+			index.ResidentRatio = spec.ResidentRatio
+			index.MutationRate = spec.MutationRate
+			index.ScanRate = spec.ScanRate
 
-		result[i] = index
+			sizing.ComputeIndexSize(index)
+
+			result = append(result, index)
+		}
 	}
 
 	return result, nil

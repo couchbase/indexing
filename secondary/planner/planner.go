@@ -74,6 +74,7 @@ const (
 	EquivIndexViolation                = "EquivIndexViolation"
 	ServerGroupViolation               = "ServerGroupViolation"
 	DeleteNodeViolation                = "DeleteNodeViolation"
+	ExcludeNodeViolation               = "ExcludeNodeViolation"
 )
 
 //////////////////////////////////////////////////////////////
@@ -93,12 +94,12 @@ type CostMethod interface {
 
 type PlacementMethod interface {
 	Move(s *Solution) (bool, bool, bool)
-	Add(s *Solution, indexes []*IndexUsage)
-	InitialPlace(s *Solution, indexes []*IndexUsage)
+	Add(s *Solution, indexes []*IndexUsage) error
+	InitialPlace(s *Solution, indexes []*IndexUsage) error
 	Validate(s *Solution) error
 	GetEligibleIndexes() []*IndexUsage
 	AddOptionalIndexes([]*IndexUsage)
-	RemoveOptionalIndexes()
+	RemoveOptionalIndexes() []*IndexUsage
 	HasOptionalIndexes() bool
 	RemoveEligibleIndex([]*IndexUsage)
 }
@@ -157,9 +158,10 @@ type IndexerNode struct {
 	// input: index residing on the node
 	Indexes []*IndexUsage `json:"indexes"`
 
-	// input: node to be removed
+	// input: node status
 	isDelete bool
 	isNew    bool
+	exclude  string
 }
 
 type IndexUsage struct {
@@ -172,18 +174,18 @@ type IndexUsage struct {
 	Hosts   []string           `json:"host"`
 
 	// input: index sizing
-	IsPrimary        bool   `json:"isPrimary,omitempty"`
-	IsMOI            bool   `json:"isMOI,omitempty"`
-	AvgSecKeySize    uint64 `json:"avgSecKeySize"`
-	AvgDocKeySize    uint64 `json:"avgDocKeySize"`
-	AvgArrSize       uint64 `json:"avgArrSize"`
-	AvgArrKeySize    uint64 `json:"avgArrKeySize"`
-	NumOfDocs        uint64 `json:"numOfDocs"`
-	MemResidentRatio uint64 `json:"memResidentRatio,omitempty"`
-	MutationRate     uint64 `json:"mutationRate"`
-	ScanRate         uint64 `json:"scanRate"`
+	IsPrimary     bool    `json:"isPrimary,omitempty"`
+	IsMOI         bool    `json:"isMOI,omitempty"`
+	AvgSecKeySize uint64  `json:"avgSecKeySize"`
+	AvgDocKeySize uint64  `json:"avgDocKeySize"`
+	AvgArrSize    uint64  `json:"avgArrSize"`
+	AvgArrKeySize uint64  `json:"avgArrKeySize"`
+	NumOfDocs     uint64  `json:"numOfDocs"`
+	ResidentRatio float64 `json:"residentRatio,omitempty"`
+	MutationRate  uint64  `json:"mutationRate"`
+	ScanRate      uint64  `json:"scanRate"`
 
-	// input: resource consumption (from sizing)
+	// input: resource consumption (from sizing equation)
 	MemUsage    uint64  `json:"memUsage"`
 	CpuUsage    float64 `json:"cpuUsage"`
 	DiskUsage   uint64  `json:"diskUsage,omitempty"`
@@ -194,7 +196,10 @@ type IndexUsage struct {
 	ActualMemOverhead uint64  `json:"actualMemOverhead"`
 	ActualKeySize     uint64  `json:"actualKeySize"`
 	ActualCpuUsage    float64 `json:"actualCpuUsage"`
-	NoUsage           bool    `json:"NoUsage"`
+
+	// input: resource consumption (estimated sizing)
+	NoUsageInfo       bool   `json:"NoUsageInfo"`
+	EstimatedMemUsage uint64 `json:"estimatedMemUsage"`
 
 	// input: index definition (optional)
 	Instance *common.IndexInst `json:"instance,omitempty"`
@@ -219,6 +224,13 @@ type Solution struct {
 	numServerGroup int
 	numDeletedNode int
 	numNewNode     int
+
+	// for size estimation
+	estimatedIndexSize uint64
+	estimate           bool
+
+	// for rebalance
+	enableExclude bool
 
 	// placement of indexes	in nodes
 	Placement []*IndexerNode `json:"placement,omitempty"`
@@ -348,6 +360,7 @@ func (p *SAPlanner) Plan(command CommandType, solution *Solution) (*Solution, er
 	var err error
 
 	solution = p.adjustInitialSolutionIfNecessary(solution)
+	solution.runSizeEstimation(command, p.placement)
 
 	for i := 0; i < RunPerPlan; i++ {
 		p.Try++
@@ -363,7 +376,14 @@ func (p *SAPlanner) Plan(command CommandType, solution *Solution) (*Solution, er
 		// If planner has retries 3 times, then remove any optional indexes.
 		if i > 3 && p.placement.HasOptionalIndexes() {
 			logging.Infof("Cannot rebuild lost replica due to resource constraint in cluster.  Will not rebuild lost replica.")
-			p.placement.RemoveOptionalIndexes()
+			optionals := p.placement.RemoveOptionalIndexes()
+			solution.removeIndexes(optionals)
+			solution.runSizeEstimation(command, p.placement)
+		}
+
+		// If cannot find a solution after 3 tries and there are deleted nodes, then disable exclude flag.
+		if i == 3 && solution.numDeletedNode != 0 {
+			solution.enableExclude = false
 		}
 
 		logging.Infof("Planner::Fail to create plan satisyfig constraint. Re-planning. Num of Try=%v.  Elapsed Time=%v",
@@ -408,7 +428,7 @@ func (p *SAPlanner) planSingleRun(command CommandType, solution *Solution) (*Sol
 		lastMove := move
 		lastPositiveMove := positiveMove
 		for i := 0; i < IterationPerTemp; i++ {
-			new_solution, force, final := p.findNeighbor(current)
+			new_solution, force, final := p.findNeighbor(command, current)
 			if new_solution != nil {
 				new_cost := p.cost.Cost(new_solution)
 				prob := p.getAcceptProbability(old_cost, new_cost, temperature)
@@ -570,7 +590,7 @@ func (p *SAPlanner) PrintCost() {
 // This function finds a neigbhor placement layout using
 // given placement method.
 //
-func (p *SAPlanner) findNeighbor(s *Solution) (*Solution, bool, bool) {
+func (p *SAPlanner) findNeighbor(command CommandType, s *Solution) (*Solution, bool, bool) {
 
 	eligibles := p.placement.GetEligibleIndexes()
 	neighbor := s.clone()
@@ -588,12 +608,18 @@ func (p *SAPlanner) findNeighbor(s *Solution) (*Solution, bool, bool) {
 		}
 
 		// Add new node to change cluster in order to ensure constraint can be satisfied
-		if !p.constraint.SatisfyClusterConstraint(neighbor, eligibles) && p.constraint.CanAddNode(s) {
-			nodeId := strconv.FormatUint(uint64(rand.Uint32()), 10)
-			neighbor.addNewNode(nodeId)
-			logging.Tracef("Planner::add node: %v", nodeId)
-			force = true
-
+		if !p.constraint.SatisfyClusterConstraint(neighbor, eligibles) {
+			if neighbor.canRunEstimation() {
+				neighbor.runSizeEstimation(command, p.placement)
+			} else if p.constraint.CanAddNode(s) {
+				nodeId := strconv.FormatUint(uint64(rand.Uint32()), 10)
+				neighbor.addNewNode(nodeId)
+				logging.Tracef("Planner::add node: %v", nodeId)
+				force = true
+			} else {
+				done = final
+				break
+			}
 		} else {
 			done = final
 			break
@@ -601,6 +627,7 @@ func (p *SAPlanner) findNeighbor(s *Solution) (*Solution, bool, bool) {
 	}
 
 	logging.Tracef("Planner::findNeighbor retry: %v", retry)
+	s.copyEstimationFrom(neighbor)
 	return nil, false, done
 }
 
@@ -648,6 +675,12 @@ func (p *SAPlanner) adjustInitialSolutionIfNecessary(s *Solution) *Solution {
 	s.numDeletedNode = s.findNumDeleteNodes()
 	s.numNewNode = s.findNumEmptyNodes()
 	s.markNewNodes()
+
+	// if there is deleted node and all nodes are excluded to take in new indexes,
+	// then do not enable node exclusion
+	if s.numDeletedNode != 0 && s.findNumExcludeInNodes() == len(s.Placement) {
+		s.enableExclude = false
+	}
 
 	// If not using live data, then no need to relax constraint.
 	if !s.UseLiveData() {
@@ -795,7 +828,8 @@ func (p *SAPlanner) addReplicaIfNecessary(s *Solution) {
 		return
 	}
 
-	numLiveNode := s.findNumLiveNode()
+	// numLiveNode = newNode + existing node - excluded node
+	numLiveNode := s.findNumAvailLiveNode()
 
 	// Check to see if it is needed to add replica
 	for _, indexer := range s.Placement {
@@ -811,11 +845,13 @@ func (p *SAPlanner) addReplicaIfNecessary(s *Solution) {
 				numReplica < numLiveNode && !index.pendingDelete {
 
 				target := s.FindIndexerWithNoReplica(index)
-				if target == nil {
+				if target == nil && !indexer.ExcludeAny(s) {
 					target = indexer
 				}
 
-				addCandidates[index] = target
+				if target != nil {
+					addCandidates[index] = target
+				}
 			}
 		}
 
@@ -882,6 +918,8 @@ func newSolution(constraint ConstraintMethod, sizing SizingMethod, indexers []*I
 		isLiveData:    isLive,
 		useLiveData:   useLive,
 		disableRepair: disableRepair,
+		estimate:      true,
+		enableExclude: true,
 	}
 
 	// initialize list of indexers
@@ -930,6 +968,7 @@ func (s *Solution) addNewNode(nodeId string) {
 
 	node := newIndexerNode(nodeId, s.sizing)
 	s.Placement = append(s.Placement, node)
+	s.estimationOn()
 }
 
 //
@@ -1003,21 +1042,39 @@ func (s *Solution) removeIndex(n *IndexerNode, i int) {
 }
 
 //
+// Remove indexes in topology
+//
+func (s *Solution) removeIndexes(indexes []*IndexUsage) {
+	for _, target := range indexes {
+		for _, indexer := range s.Placement {
+			for i, index := range indexer.Indexes {
+				if index == target {
+					s.removeIndex(indexer, i)
+				}
+			}
+		}
+	}
+}
+
+//
 // This function makes a copy of existing solution.
 //
 func (s *Solution) clone() *Solution {
 
 	r := &Solution{
-		constraint:     s.constraint,
-		sizing:         s.sizing,
-		Placement:      ([]*IndexerNode)(nil),
-		isLiveData:     s.isLiveData,
-		useLiveData:    s.useLiveData,
-		initialPlan:    s.initialPlan,
-		numServerGroup: s.numServerGroup,
-		numDeletedNode: s.numDeletedNode,
-		numNewNode:     s.numNewNode,
-		disableRepair:  s.disableRepair,
+		constraint:         s.constraint,
+		sizing:             s.sizing,
+		Placement:          ([]*IndexerNode)(nil),
+		isLiveData:         s.isLiveData,
+		useLiveData:        s.useLiveData,
+		initialPlan:        s.initialPlan,
+		numServerGroup:     s.numServerGroup,
+		numDeletedNode:     s.numDeletedNode,
+		numNewNode:         s.numNewNode,
+		disableRepair:      s.disableRepair,
+		estimatedIndexSize: s.estimatedIndexSize,
+		estimate:           s.estimate,
+		enableExclude:      s.enableExclude,
 	}
 
 	for _, node := range s.Placement {
@@ -1133,18 +1190,18 @@ func (s *Solution) PrintLayout() {
 	for _, indexer := range s.Placement {
 
 		logging.Infof("")
-		logging.Infof("Indexer serverGroup:%v, nodeId:%v, useLiveData:%v", indexer.ServerGroup, indexer.NodeId, s.UseLiveData())
-		logging.Infof("Indexer total memory:%v (%s), data:%v (%s), overhead:%v (%s), cpu:%.4f, number of indexes:%v isDeleted:%v isNew:%v",
+		logging.Infof("Indexer serverGroup:%v, nodeId:%v, nodeUUID:%v, useLiveData:%v", indexer.ServerGroup, indexer.NodeId, indexer.NodeUUID, s.UseLiveData())
+		logging.Infof("Indexer total memory:%v (%s), data:%v (%s), overhead:%v (%s), cpu:%.4f, number of indexes:%v isDeleted:%v isNew:%v exclude:%v",
 			indexer.GetMemTotal(s.UseLiveData()), formatMemoryStr(uint64(indexer.GetMemTotal(s.UseLiveData()))),
 			indexer.GetMemUsage(s.UseLiveData()), formatMemoryStr(uint64(indexer.GetMemUsage(s.UseLiveData()))),
 			indexer.GetMemOverhead(s.UseLiveData()), formatMemoryStr(uint64(indexer.GetMemOverhead(s.UseLiveData()))),
-			indexer.GetCpuUsage(s.UseLiveData()), len(indexer.Indexes), indexer.IsDeleted(), indexer.isNew)
+			indexer.GetCpuUsage(s.UseLiveData()), len(indexer.Indexes), indexer.IsDeleted(), indexer.isNew, indexer.exclude)
 
 		for _, index := range indexer.Indexes {
 			logging.Infof("\t\t------------------------------------------------------------------------------------------------------------------")
-			logging.Infof("\t\tIndex name:%v, bucket:%v, defnId:%v, instId:%v, Partition: %v, new/moved:%v defer:%v ignoreEquivCheck:%v",
+			logging.Infof("\t\tIndex name:%v, bucket:%v, defnId:%v, instId:%v, Partition: %v, new/moved:%v estimated:%v ignoreEquivCheck:%v",
 				index.GetDisplayName(), index.Bucket, index.DefnId, index.InstId, index.PartnId,
-				index.initialNode == nil || index.initialNode.NodeId != indexer.NodeId, index.NoUsage, index.suppressEquivIdxCheck)
+				index.initialNode == nil || index.initialNode.NodeId != indexer.NodeId, index.NoUsageInfo, index.suppressEquivIdxCheck)
 			logging.Infof("\t\tIndex total memory:%v (%s), data:%v (%s), overhead:%v (%s), cpu:%.4f",
 				index.GetMemTotal(s.UseLiveData()), formatMemoryStr(uint64(index.GetMemTotal(s.UseLiveData()))),
 				index.GetMemUsage(s.UseLiveData()), formatMemoryStr(uint64(index.GetMemUsage(s.UseLiveData()))),
@@ -1484,6 +1541,21 @@ func (s *Solution) findNumDeleteNodes() int {
 }
 
 //
+// Find num of excludeIn node.
+//
+func (s *Solution) findNumExcludeInNodes() int {
+
+	count := 0
+	for _, indexer := range s.Placement {
+		if indexer.ExcludeIn(s) {
+			count++
+		}
+	}
+
+	return count
+}
+
+//
 // Find num of emptpy node
 //
 func (s *Solution) findNumEmptyNodes() int {
@@ -1504,6 +1576,21 @@ func (s *Solution) findNumEmptyNodes() int {
 func (s *Solution) findNumLiveNode() int {
 
 	return len(s.Placement) - s.findNumDeleteNodes()
+}
+
+//
+// find number of availabe live node (excluding ejected node and excluded node)
+//
+func (s *Solution) findNumAvailLiveNode() int {
+
+	count := 0
+	for _, indexer := range s.Placement {
+		if !indexer.ExcludeIn(s) && !indexer.IsDeleted() {
+			count++
+		}
+	}
+
+	return count
 }
 
 //
@@ -1590,7 +1677,11 @@ func (s *Solution) FindIndexerWithReplica(name string, bucket string, partnId co
 
 	for _, indexer := range s.Placement {
 		for _, index := range indexer.Indexes {
-			if index.Name == name && index.Bucket == bucket && index.PartnId == partnId && index.Instance != nil && index.Instance.ReplicaId == replicaId {
+			if index.Name == name &&
+				index.Bucket == bucket &&
+				index.PartnId == partnId &&
+				index.Instance != nil &&
+				index.Instance.ReplicaId == replicaId {
 				return indexer
 			}
 		}
@@ -1601,11 +1692,12 @@ func (s *Solution) FindIndexerWithReplica(name string, bucket string, partnId co
 
 //
 // Find the indexer node that does not contain the replica
+// This ignores any indexer that is deleted or cannot rebalance
 //
 func (s *Solution) FindIndexerWithNoReplica(source *IndexUsage) *IndexerNode {
 
 	for _, indexer := range s.Placement {
-		if indexer.IsDeleted() {
+		if indexer.IsDeleted() || indexer.ExcludeAny(s) {
 			continue
 		}
 
@@ -1661,6 +1753,236 @@ func (s *Solution) hasDeletedNodes() bool {
 		}
 	}
 	return false
+}
+
+//
+// NoUsageInfo index is index without any sizing information.
+// For placement, planner still want to layout noUsage index such that
+// 1) indexer with more free memory will take up more partitions.
+// 2) partitions should be spread out as much as possible
+// 3) non-partiton index have different weight than individual partition of a partitioned index
+//
+// It is impossible to achieve accurate number for (1) and (3) without sizing info (even with sizing,
+// it is only an approximation).    But if we make 2 assumptions, we can provide estimated sizing of partitions:
+// 1) the new index will take up the remaining free memory of all indexers
+// 2) the partiton of new index are equal size
+//
+// To estimate NoUsageInfo index size based on free memory available.
+// 1) calculates total free memory from indexers which has less than 80% memory usage
+// 2) Based on total free memory, estimates index size based on number of noUsage index.
+// 3) Estimate the partiton size
+//    - non-partitioned index has 1 partition, so it will take up full index size
+//    - individual partition of a partitioned index will take up (index-size / numPartition)
+// 4) Given the estimated size, if cannot find a placement solution, reduce index size by 10% and repeat (4)
+//
+// Behavior:
+// 1) Using ConstraintMethod, indexes/Partitions will more likely to move to indexers with more free memory
+// 2) Using CostMethod, partitions will likely to spread out to minimize memory variation
+//
+// Caveats:
+// 1) When placing the new index onto a cluster with existing NoUsageInfo (deferred) index, the existing
+//    index will also need to be sized.   The existing index is assumed to have the similar size as
+//    the new index.   Therefore, the estimated index size represents the "average index size" for
+//    all unsized indexes.
+//
+func (s *Solution) runSizeEstimation(command CommandType, placement PlacementMethod) {
+
+	estimate := func(estimatedIndexSize uint64) {
+		for _, indexer := range s.Placement {
+
+			// excludeIn - indexes cannot moved into this node.  So effectively, this indexer is taken out of cluster.
+			if indexer.ExcludeIn(s) {
+				continue
+			}
+
+			for _, index := range indexer.Indexes {
+				if index.NoUsageInfo {
+					if index.Instance != nil && common.IsPartitioned(index.Instance.Defn.PartitionScheme) {
+						index.EstimatedMemUsage = estimatedIndexSize / uint64(index.Instance.Pc.GetNumPartitions())
+					} else {
+						index.EstimatedMemUsage = estimatedIndexSize
+					}
+					indexer.AddMemUsageOverhead(s, index.EstimatedMemUsage, 0)
+				}
+			}
+		}
+	}
+
+	// nothing to do if size estimation is turned off
+	if !s.estimate {
+		return
+	}
+
+	// only estimate size for planning
+	if command != CommandPlan {
+		s.estimationOff()
+		return
+	}
+
+	// only enable estimation if eligible indexes have no sizing info
+	eligibles := placement.GetEligibleIndexes()
+	for _, eligible := range eligibles {
+		if !eligible.NoUsageInfo {
+			s.estimationOff()
+			return
+		}
+	}
+
+	// cleanup
+	s.cleanupEstimation()
+
+	// if there is a previous calculation, use it
+	if s.estimatedIndexSize != 0 {
+		// if previous sizing is available, then use it by sizing it down.
+		s.estimatedIndexSize = uint64(float64(s.estimatedIndexSize) * 0.9)
+		if s.estimatedIndexSize > 0 {
+			estimate(s.estimatedIndexSize)
+		} else {
+			s.estimationOff()
+		}
+		return
+	}
+
+	//
+	// Calculate the initial estimated index size
+	//
+
+	//
+	// count the number of indexes for estimation
+	//
+	insts := make(map[common.IndexInstId]*common.IndexInst)
+	for _, indexer := range s.Placement {
+
+		// eligible index cannot be placed in an indexer that has been excluded (in or out)
+		// excludeIn - indexes cannot moved into this node.  So effectively, this indexer is taken out of cluster.
+		if indexer.ExcludeIn(s) {
+			continue
+		}
+
+		// count NoUsageInfo index.  This covers new index as well as existing index.
+		for _, index := range indexer.Indexes {
+			if index.NoUsageInfo {
+				insts[index.InstId] = index.Instance
+			}
+		}
+	}
+
+	//
+	// calculate total free memory
+	//
+	threshold := float64(0.2)
+
+retry1:
+	var indexers []*IndexerNode
+	totalMemFree := uint64(0)
+	maxMemFree := uint64(0)
+
+	for _, indexer := range s.Placement {
+		// excludeIn - indexes cannot moved into this node.  So effectively, this indexer is taken out of cluster.
+		if indexer.ExcludeIn(s) {
+			continue
+		}
+
+		// Do not use Cpu for estimation for now since cpu measurement is fluctuating
+		freeMem := float64(s.constraint.GetMemQuota()) - float64(indexer.GetMemTotal(s.UseLiveData()))
+		freeMemRatio := freeMem / float64(s.constraint.GetMemQuota())
+		if freeMemRatio > threshold {
+			adjFreeMem := uint64(freeMem * 0.8)
+			totalMemFree += adjFreeMem
+			if adjFreeMem > maxMemFree {
+				maxMemFree = adjFreeMem
+			}
+			indexers = append(indexers, indexer)
+		}
+	}
+
+	// If there is no indexer, then retry with lower free Ratio
+	if len(indexers) == 0 && threshold > 0 {
+		threshold -= 0.05
+		goto retry1
+	}
+
+	// not enough indexers with free memory. Do not estimate sizing.
+	if len(indexers) == 0 {
+		s.estimationOff()
+		return
+	}
+
+	//
+	// Estimate index size
+	//
+	if len(insts) > 0 {
+
+		// Compute initial slot size based on total free memory.
+		// The slot size is the "average" index size.
+		s.estimatedIndexSize = totalMemFree / uint64(len(insts))
+
+	retry2:
+		for s.estimatedIndexSize > 0 {
+			// estimate noUsage index size
+			s.cleanupEstimation()
+			estimate(s.estimatedIndexSize)
+
+			// adjust slot size
+			for _, index := range eligibles {
+				// cannot be higher than max free mem size
+				if index.EstimatedMemUsage > maxMemFree {
+					s.estimatedIndexSize = uint64(float64(s.estimatedIndexSize) * 0.9)
+					goto retry2
+				}
+			}
+
+			return
+		}
+
+		s.estimationOff()
+		logging.Infof("Planner.runSizeEstimation: cannot estimate deferred index size.  Will not set estimatedMemUsage in deferred index")
+	}
+}
+
+//
+// Turn off estimation
+//
+func (s *Solution) estimationOff() {
+	s.cleanupEstimation()
+	s.estimatedIndexSize = 0
+	s.estimate = false
+}
+
+//
+// Turn on estimation
+//
+func (s *Solution) estimationOn() {
+	s.estimate = true
+}
+
+//
+// Clean up all calculation based on estimation
+//
+func (s *Solution) cleanupEstimation() {
+	for _, indexer := range s.Placement {
+		for _, index := range indexer.Indexes {
+			if index.NoUsageInfo {
+				indexer.SubtractMemUsageOverhead(s, index.EstimatedMemUsage, 0)
+				index.EstimatedMemUsage = 0
+			}
+		}
+	}
+}
+
+//
+// Copy the estimation
+//
+func (s *Solution) copyEstimationFrom(source *Solution) {
+	s.estimatedIndexSize = source.estimatedIndexSize
+	s.estimate = source.estimate
+}
+
+//
+// Can run estimation?
+//
+func (s *Solution) canRunEstimation() bool {
+	return s.estimate
 }
 
 //////////////////////////////////////////////////////////////
@@ -1751,7 +2073,7 @@ func (c *IndexerConstraint) GetViolations(s *Solution, eligibles []*IndexUsage) 
 			for _, index := range eligibles {
 				if hasIndex(indexer, index) {
 
-					if !c.acceptViolation(s, index) {
+					if !c.acceptViolation(s, index, indexer) {
 						continue
 					}
 
@@ -1803,7 +2125,7 @@ func (c *IndexerConstraint) GetViolations(s *Solution, eligibles []*IndexUsage) 
 //
 // Is this a violation?
 //
-func (c *IndexerConstraint) acceptViolation(s *Solution, index *IndexUsage) bool {
+func (c *IndexerConstraint) acceptViolation(s *Solution, index *IndexUsage, indexer *IndexerNode) bool {
 
 	if s.getConstraintMethod().CanAddNode(s) {
 		return true
@@ -1812,6 +2134,11 @@ func (c *IndexerConstraint) acceptViolation(s *Solution, index *IndexUsage) bool
 	numReplica := s.findNumReplica(index)
 
 	if s.UseLiveData() && numReplica > s.findNumLiveNode() {
+		return false
+	}
+
+	// if cannot load balance, don't report error.
+	if index.initialNode.NodeId == indexer.NodeId && !indexer.IsDeleted() {
 		return false
 	}
 
@@ -1873,6 +2200,10 @@ func (c *IndexerConstraint) SatisfyServerGroupConstraint(s *Solution, u *IndexUs
 //
 func (c *IndexerConstraint) CanAddIndex(s *Solution, n *IndexerNode, u *IndexUsage) ViolationCode {
 
+	if n.ExcludeIn(s) {
+		return ExcludeNodeViolation
+	}
+
 	if n.isDelete {
 		return DeleteNodeViolation
 	}
@@ -1925,6 +2256,10 @@ func (c *IndexerConstraint) CanAddIndex(s *Solution, n *IndexerNode, u *IndexUsa
 // while satsifying availability and resource constraint.
 //
 func (c *IndexerConstraint) CanSwapIndex(sol *Solution, n *IndexerNode, s *IndexUsage, t *IndexUsage) ViolationCode {
+
+	if n.ExcludeIn(sol) {
+		return ExcludeNodeViolation
+	}
 
 	if n.isDelete {
 		return DeleteNodeViolation
@@ -2228,6 +2563,7 @@ func (o *IndexerNode) clone() *IndexerNode {
 		Indexes:           make([]*IndexUsage, len(o.Indexes)),
 		isDelete:          o.isDelete,
 		isNew:             o.isNew,
+		exclude:           o.exclude,
 		ActualMemUsage:    o.ActualMemUsage,
 		ActualMemOverhead: o.ActualMemOverhead,
 		ActualCpuUsage:    o.ActualCpuUsage,
@@ -2358,6 +2694,49 @@ func (o *IndexerNode) SubtractMemUsageOverhead(s *Solution, usage uint64, overhe
 	}
 }
 
+//
+// This function returns whether to exclude this node for taking in new index
+//
+func (o *IndexerNode) ExcludeIn(s *Solution) bool {
+	return s.enableExclude && (o.IsDeleted() || o.exclude == "in" || o.exclude == "inout")
+}
+
+//
+// This function returns whether to exclude this node for rebalance out index
+//
+func (o *IndexerNode) ExcludeOut(s *Solution) bool {
+	return s.enableExclude && (!o.IsDeleted() && (o.exclude == "out" || o.exclude == "inout"))
+}
+
+//
+// This function returns whether to exclude this node for rebalance in or out any index
+//
+func (o *IndexerNode) ExcludeAny(s *Solution) bool {
+	return o.ExcludeIn(s) || o.ExcludeOut(s)
+}
+
+//
+// This function returns whether to exclude this node for rebalance any index
+//
+func (o *IndexerNode) ExcludeAll(s *Solution) bool {
+	return o.ExcludeIn(s) && o.ExcludeOut(s)
+}
+
+//
+// This function changes the exclude setting of a node
+//
+func (o *IndexerNode) SetExclude(exclude string) {
+	o.exclude = exclude
+}
+
+//
+// This function changes the exclude setting of a node
+//
+func (o *IndexerNode) UnsetExclude() {
+	o.exclude = ""
+}
+
+//////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////
 // IndexUsage
 //////////////////////////////////////////////////////////////
@@ -2416,6 +2795,10 @@ func (o *IndexUsage) GetCpuUsage(useLive bool) float64 {
 //
 func (o *IndexUsage) GetMemUsage(useLive bool) uint64 {
 
+	if o.NoUsageInfo {
+		return o.EstimatedMemUsage
+	}
+
 	if useLive {
 		return o.ActualMemUsage
 	}
@@ -2440,11 +2823,28 @@ func (o *IndexUsage) GetMemOverhead(useLive bool) uint64 {
 //
 func (o *IndexUsage) GetMemTotal(useLive bool) uint64 {
 
+	if o.NoUsageInfo {
+		return o.EstimatedMemUsage
+	}
+
 	if useLive {
 		return o.ActualMemUsage + o.ActualMemOverhead
 	}
 
 	return o.MemUsage + o.MemOverhead
+}
+
+func (o *IndexUsage) HasSizing(useLive bool) bool {
+
+	if o.NoUsageInfo {
+		return o.EstimatedMemUsage != 0
+	}
+
+	if useLive {
+		return o.ActualMemUsage != 0
+	}
+
+	return o.MemUsage != 0
 }
 
 func (o *IndexUsage) GetDisplayName() string {
@@ -2696,13 +3096,16 @@ func (p *RandomPlacement) AddOptionalIndexes(indexes []*IndexUsage) {
 //
 // Remove optional index for placement
 //
-func (p *RandomPlacement) RemoveOptionalIndexes() {
+func (p *RandomPlacement) RemoveOptionalIndexes() []*IndexUsage {
 
 	for _, index := range p.optionals {
 		delete(p.indexes, index)
 	}
 
+	result := p.optionals
 	p.optionals = nil
+
+	return result
 }
 
 //
@@ -2904,13 +3307,15 @@ func (p *RandomPlacement) findLeastUsedAndPopulatedTargetNode(s *Solution, sourc
 
 		indexers := ([]*IndexerNode)(nil)
 		for _, indexer := range s.Placement {
-			if indexer.NodeId != exclude.NodeId && computeIndexerFreeQuota(s, indexer) >= threshold {
+			if !indexer.ExcludeIn(s) &&
+				indexer.NodeId != exclude.NodeId &&
+				computeIndexerFreeQuota(s, indexer) >= threshold {
 				indexers = append(indexers, indexer)
 			}
 		}
 
 		if len(indexers) > 0 {
-			indexers = sortNodeByNoUsageIndexCount(indexers)
+			indexers = sortNodeByNoUsageInfoIndexCount(indexers)
 
 			for _, indexer := range indexers {
 				if s.constraint.CanAddIndex(s, indexer, source) == NoViolation {
@@ -2939,6 +3344,11 @@ func (p *RandomPlacement) findSwapCandidateNode(s *Solution, node *IndexerNode) 
 
 		// skip if node is the same
 		if indexer.NodeId == node.NodeId {
+			continue
+		}
+
+		// exclude indexer
+		if indexer.ExcludeIn(s) {
 			continue
 		}
 
@@ -3066,7 +3476,7 @@ func (p *RandomPlacement) randomMoveByLoad(s *Solution, checkConstraint bool) (b
 		}
 
 		target := (*IndexerNode)(nil)
-		if index.NoUsage {
+		if !index.HasSizing(s.UseLiveData()) {
 			target = p.findLeastUsedAndPopulatedTargetNode(s, index, source)
 		} else {
 			// Select an uncongested indexer which is different from source.
@@ -3204,7 +3614,11 @@ func (p *RandomPlacement) getRandomUncongestedNodeExcluding(s *Solution, exclude
 		indexers := ([]*IndexerNode)(nil)
 
 		for _, indexer := range s.Placement {
-			if exclude.NodeId != indexer.NodeId && s.constraint.SatisfyNodeResourceConstraint(s, indexer) && !indexer.isDelete && indexer.isNew {
+			if !indexer.ExcludeIn(s) &&
+				exclude.NodeId != indexer.NodeId &&
+				s.constraint.SatisfyNodeResourceConstraint(s, indexer) &&
+				!indexer.isDelete &&
+				indexer.isNew {
 				indexers = append(indexers, indexer)
 			}
 		}
@@ -3218,7 +3632,10 @@ func (p *RandomPlacement) getRandomUncongestedNodeExcluding(s *Solution, exclude
 	indexers := ([]*IndexerNode)(nil)
 
 	for _, indexer := range s.Placement {
-		if exclude.NodeId != indexer.NodeId && s.constraint.SatisfyNodeResourceConstraint(s, indexer) && !indexer.isDelete {
+		if !indexer.ExcludeIn(s) &&
+			exclude.NodeId != indexer.NodeId &&
+			s.constraint.SatisfyNodeResourceConstraint(s, indexer) &&
+			!indexer.isDelete {
 			indexers = append(indexers, indexer)
 		}
 	}
@@ -3285,24 +3702,50 @@ func (p *RandomPlacement) getRandomEligibleIndex(rs *rand.Rand, indexes []*Index
 //
 // This function randomly place indexes among indexer nodes
 //
-func (p *RandomPlacement) Add(s *Solution, indexes []*IndexUsage) {
+func (p *RandomPlacement) Add(s *Solution, indexes []*IndexUsage) error {
+
+	candidates := make([]*IndexerNode, 0, len(s.Placement))
+	for _, indexer := range s.Placement {
+		if !indexer.ExcludeAny(s) {
+			candidates = append(candidates, indexer)
+		}
+	}
+
+	if len(candidates) == 0 {
+		errors.New("Cannot find any indexer that can add new indexes")
+	}
 
 	for _, idx := range indexes {
-		indexer := getRandomNode(p.rs, s.Placement)
+		indexer := getRandomNode(p.rs, candidates)
 		s.addIndex(indexer, idx)
 	}
+
+	return nil
 }
 
 //
 // This function randomly place indexes among indexer nodes for initial placement
 //
-func (p *RandomPlacement) InitialPlace(s *Solution, indexes []*IndexUsage) {
+func (p *RandomPlacement) InitialPlace(s *Solution, indexes []*IndexUsage) error {
+
+	candidates := make([]*IndexerNode, 0, len(s.Placement))
+	for _, indexer := range s.Placement {
+		if !indexer.ExcludeAny(s) {
+			candidates = append(candidates, indexer)
+		}
+	}
+
+	if len(candidates) == 0 {
+		return errors.New("Cannot find any indexer that can add new indexes")
+	}
 
 	for _, idx := range indexes {
-		indexer := getRandomNode(p.rs, s.Placement)
+		indexer := getRandomNode(p.rs, candidates)
 		s.addIndex(indexer, idx)
 		idx.initialNode = indexer
 	}
+
+	return nil
 }
 
 //
@@ -3329,6 +3772,10 @@ func (p *RandomPlacement) randomSwap(s *Solution, sources []*IndexerNode, target
 			continue
 		}
 
+		if target.ExcludeIn(s) {
+			continue
+		}
+
 		sourceIndex := p.getRandomEligibleIndex(p.rs, source.Indexes)
 		targetIndex := p.getRandomEligibleIndex(p.rs, target.Indexes)
 
@@ -3336,7 +3783,7 @@ func (p *RandomPlacement) randomSwap(s *Solution, sources []*IndexerNode, target
 			continue
 		}
 
-		if sourceIndex.NoUsage != targetIndex.NoUsage {
+		if sourceIndex.NoUsageInfo != targetIndex.NoUsageInfo {
 			continue
 		}
 
@@ -3346,7 +3793,7 @@ func (p *RandomPlacement) randomSwap(s *Solution, sources []*IndexerNode, target
 		}
 
 		// If index has no usage info, then swap only if violate HA constraint.
-		if sourceIndex.NoUsage && s.constraint.SatisfyIndexHAConstraint(s, source, sourceIndex, p.GetEligibleIndexes()) {
+		if sourceIndex.NoUsageInfo && s.constraint.SatisfyIndexHAConstraint(s, source, sourceIndex, p.GetEligibleIndexes()) {
 			continue
 		}
 
@@ -3401,7 +3848,7 @@ func (p *RandomPlacement) exhaustiveSwap(s *Solution, sources []*IndexerNode, ta
 			}
 
 			// If index has no usage info, then swap only if violate HA constraint.
-			if sourceIndex.NoUsage && s.constraint.SatisfyIndexHAConstraint(s, source, sourceIndex, p.GetEligibleIndexes()) {
+			if sourceIndex.NoUsageInfo && s.constraint.SatisfyIndexHAConstraint(s, source, sourceIndex, p.GetEligibleIndexes()) {
 				continue
 			}
 
@@ -3410,7 +3857,7 @@ func (p *RandomPlacement) exhaustiveSwap(s *Solution, sources []*IndexerNode, ta
 
 			for _, target := range shuffledTargets {
 
-				if source.NodeId == target.NodeId || target.isDelete {
+				if source.NodeId == target.NodeId || target.isDelete || target.ExcludeIn(s) {
 					continue
 				}
 
@@ -3423,7 +3870,7 @@ func (p *RandomPlacement) exhaustiveSwap(s *Solution, sources []*IndexerNode, ta
 						continue
 					}
 
-					if sourceIndex.NoUsage != targetIndex.NoUsage {
+					if sourceIndex.NoUsageInfo != targetIndex.NoUsageInfo {
 						continue
 					}
 
@@ -3474,7 +3921,7 @@ func (p *RandomPlacement) exhaustiveMove(s *Solution, sources []*IndexerNode, ta
 			}
 
 			// If index has no usage info, then swap only if violate HA constraint.
-			if sourceIndex.NoUsage {
+			if !sourceIndex.HasSizing(s.UseLiveData()) {
 				if target := p.findLeastUsedAndPopulatedTargetNode(s, sourceIndex, source); target != nil {
 					logging.Tracef("Planner::exhaustive move: source %v index %v target %v checkConstraint %v",
 						source.NodeId, sourceIndex, target.NodeId, checkConstraint)
@@ -3489,7 +3936,7 @@ func (p *RandomPlacement) exhaustiveMove(s *Solution, sources []*IndexerNode, ta
 
 			for _, target := range shuffledTargets {
 
-				if source.NodeId == target.NodeId || target.isDelete || (newNodeOnly && !target.isNew) {
+				if source.NodeId == target.NodeId || target.isDelete || (newNodeOnly && !target.isNew) || target.ExcludeIn(s) {
 					continue
 				}
 

@@ -22,6 +22,7 @@ import (
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager"
 	"github.com/couchbase/indexing/secondary/manager/client"
+	mc "github.com/couchbase/indexing/secondary/manager/common"
 	//"github.com/couchbase/indexing/secondary/planner"
 	"bytes"
 	"encoding/json"
@@ -169,7 +170,7 @@ func (m *DDLServiceMgr) rebalanceDone(change *service.TopologyChange, isCancel b
 //
 func (m *DDLServiceMgr) handleDropCommand() {
 
-	entries, err := metakv.ListAllChildren(client.DeleteDDLCommandTokenPath)
+	entries, err := metakv.ListAllChildren(mc.DeleteDDLCommandTokenPath)
 	if err != nil {
 		logging.Warnf("DDLServiceMgr: Fail to cleanup delete index token upon rebalancing.  Skip cleanup.  Internal Error = %v", err)
 		return
@@ -181,11 +182,11 @@ func (m *DDLServiceMgr) handleDropCommand() {
 
 	for _, entry := range entries {
 
-		if strings.Contains(entry.Path, client.DeleteDDLCommandTokenPath) && entry.Value != nil {
+		if strings.Contains(entry.Path, mc.DeleteDDLCommandTokenPath) && entry.Value != nil {
 
 			logging.Infof("DDLServiceMgr: processing delete index token %v", entry.Path)
 
-			command, err := client.UnmarshallDeleteCommandToken(entry.Value)
+			command, err := mc.UnmarshallDeleteCommandToken(entry.Value)
 			if err != nil {
 				logging.Warnf("DDLServiceMgr: Fail to clean delete index token upon rebalancing.  Skp command %v.  Internal Error = %v.", entry.Path, err)
 				continue
@@ -219,7 +220,7 @@ func (m *DDLServiceMgr) handleDropCommand() {
 //
 func (m *DDLServiceMgr) handleBuildCommand() {
 
-	entries, err := metakv.ListAllChildren(client.BuildDDLCommandTokenPath)
+	entries, err := metakv.ListAllChildren(mc.BuildDDLCommandTokenPath)
 	if err != nil {
 		logging.Warnf("DDLServiceMgr: Fail to cleanup build index token upon rebalancing.  Skip cleanup.  Internal Error = %v", err)
 		return
@@ -227,11 +228,11 @@ func (m *DDLServiceMgr) handleBuildCommand() {
 
 	for _, entry := range entries {
 
-		if strings.Contains(entry.Path, client.BuildDDLCommandTokenPath) && entry.Value != nil {
+		if strings.Contains(entry.Path, mc.BuildDDLCommandTokenPath) && entry.Value != nil {
 
 			logging.Infof("DDLServiceMgr: processing build index token %v", entry.Path)
 
-			command, err := client.UnmarshallBuildCommandToken(entry.Value)
+			command, err := mc.UnmarshallBuildCommandToken(entry.Value)
 			if err != nil {
 				logging.Warnf("DDLServiceMgr: Fail to clean build index token upon rebalancing.  Skp command %v.  Internal Error = %v.", entry.Path, err)
 				continue
@@ -286,14 +287,14 @@ func (m *DDLServiceMgr) handleListMetadataTokens(w http.ResponseWriter, r *http.
 
 		logging.Infof("DDLServiceMgr::handleListMetadataTokens Processing Request %v", r)
 
-		buildTokens, err := metakv.ListAllChildren(client.BuildDDLCommandTokenPath)
+		buildTokens, err := metakv.ListAllChildren(mc.BuildDDLCommandTokenPath)
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			w.Write([]byte(err.Error() + "\n"))
 			return
 		}
 
-		deleteTokens, err1 := metakv.ListAllChildren(client.DeleteDDLCommandTokenPath)
+		deleteTokens, err1 := metakv.ListAllChildren(mc.DeleteDDLCommandTokenPath)
 		if err1 != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			w.Write([]byte(err.Error() + "\n"))
@@ -306,7 +307,7 @@ func (m *DDLServiceMgr) handleListMetadataTokens(w http.ResponseWriter, r *http.
 
 		for _, entry := range buildTokens {
 
-			if strings.Contains(entry.Path, client.BuildDDLCommandTokenPath) && entry.Value != nil {
+			if strings.Contains(entry.Path, mc.BuildDDLCommandTokenPath) && entry.Value != nil {
 				w.Write([]byte(entry.Path + " - "))
 				w.Write(entry.Value)
 				w.Write([]byte("\n"))
@@ -315,7 +316,7 @@ func (m *DDLServiceMgr) handleListMetadataTokens(w http.ResponseWriter, r *http.
 
 		for _, entry := range deleteTokens {
 
-			if strings.Contains(entry.Path, client.DeleteDDLCommandTokenPath) && entry.Value != nil {
+			if strings.Contains(entry.Path, mc.DeleteDDLCommandTokenPath) && entry.Value != nil {
 				w.Write([]byte(entry.Path + " - "))
 				w.Write(entry.Value)
 				w.Write([]byte("\n"))
@@ -545,7 +546,7 @@ func (m *DDLServiceMgr) newMetadataProvider(nodes map[service.NodeID]bool) (*cli
 	}
 	providerId := ustr.Str()
 
-	provider, err := client.NewMetadataProvider(providerId, nil, nil, m.settings)
+	provider, err := client.NewMetadataProvider(m.clusterAddr, providerId, nil, nil, m.settings)
 	if err != nil {
 		if provider != nil {
 			provider.Close()

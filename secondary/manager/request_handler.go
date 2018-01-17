@@ -17,6 +17,7 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager/client"
+	mc "github.com/couchbase/indexing/secondary/manager/common"
 	"github.com/couchbase/indexing/secondary/planner"
 	"io"
 	"math"
@@ -67,6 +68,7 @@ type LocalIndexMetadata struct {
 	IndexerId        string             `json:"indexerId,omitempty"`
 	NodeUUID         string             `json:"nodeUUID,omitempty"`
 	StorageMode      string             `json:"storageMode,omitempty"`
+	LocalSettings    map[string]string  `json:"localSettings,omitempty"`
 	IndexTopologies  []IndexTopology    `json:"topologies,omitempty"`
 	IndexDefinitions []common.IndexDefn `json:"definitions,omitempty"`
 }
@@ -166,6 +168,7 @@ func registerRequestHandler(mgr *IndexManager, clusterUrl string) {
 		http.HandleFunc("/getIndexStatement", handlerContext.handleIndexStatementRequest)
 		http.HandleFunc("/planIndex", handlerContext.handleIndexPlanRequest)
 		http.HandleFunc("/settings/storageMode", handlerContext.handleIndexStorageModeRequest)
+		http.HandleFunc("/settings/planner", handlerContext.handlePlannerRequest)
 	})
 
 	handlerContext.mgr = mgr
@@ -820,6 +823,11 @@ func (m *requestHandlerContext) getLocalIndexMetadata(creds cbauth.Creds, bucket
 	meta.NodeUUID = string(nodeUUID)
 
 	meta.StorageMode = string(common.StorageModeToIndexType(common.GetStorageMode()))
+	meta.LocalSettings = make(map[string]string)
+
+	if exclude, err := m.mgr.GetLocalValue("excludeNode"); err == nil {
+		meta.LocalSettings["excludeNode"] = exclude
+	}
 
 	iter, err := repo.NewIterator()
 	if err != nil {
@@ -984,7 +992,7 @@ func (m *requestHandlerContext) getIndexPlan(r *http.Request) (string, error) {
 		return "", errors.New(fmt.Sprintf("Fail to read index spec from request.   Error=%v", err))
 	}
 
-	solution, err := planner.ExecutePlanWithOptions(plan, specs, true, "", "", 0, -1, -1, false)
+	solution, err := planner.ExecutePlanWithOptions(plan, specs, true, "", "", 0, -1, -1, false, true)
 	if err != nil {
 		return "", errors.New(fmt.Sprintf("Fail to plan index.   Error=%v", err))
 	}
@@ -1044,7 +1052,7 @@ func (m *requestHandlerContext) handleIndexStorageModeRequest(w http.ResponseWri
 						return
 					}
 
-					client.PostIndexerStorageModeOverride(string(nodeUUID), common.ForestDB)
+					mc.PostIndexerStorageModeOverride(string(nodeUUID), common.ForestDB)
 					logging.Infof("RequestHandler::handleIndexStorageModeRequest: set override storage mode to forestdb")
 					send(http.StatusOK, w, "downgrade storage mode to forestdb after indexer restart.")
 				} else {
@@ -1059,7 +1067,7 @@ func (m *requestHandlerContext) handleIndexStorageModeRequest(w http.ResponseWri
 					return
 				}
 
-				client.PostIndexerStorageModeOverride(string(nodeUUID), "")
+				mc.PostIndexerStorageModeOverride(string(nodeUUID), "")
 				logging.Infof("RequestHandler::handleIndexStorageModeRequst: unset storage mode override")
 				send(http.StatusOK, w, "storage mode downgrade is disabled")
 			}
@@ -1068,6 +1076,33 @@ func (m *requestHandlerContext) handleIndexStorageModeRequest(w http.ResponseWri
 		}
 	} else {
 		sendHttpError(w, "missing argument `override`", http.StatusBadRequest)
+	}
+}
+
+//////////////////////////////////////////////////////
+// Planner
+///////////////////////////////////////////////////////
+
+func (m *requestHandlerContext) handlePlannerRequest(w http.ResponseWriter, r *http.Request) {
+
+	creds, ok := doAuth(r, w)
+	if !ok {
+		return
+	}
+
+	if !isAllowed(creds, []string{"cluster.settings!write"}, w) {
+		return
+	}
+
+	// Override the storage mode for the local indexer.  Override will not take into effect until
+	// indexer has restarted manually by administrator.   During indexer bootstrap, it will upgrade/downgrade
+	// individual index to the override storage mode.
+	value := r.FormValue("excludeNode")
+	if value == "in" || value == "out" || value == "inout" || len(value) == 0 {
+		m.mgr.SetLocalValue("excludeNode", value)
+		send(http.StatusOK, w, "OK")
+	} else {
+		sendHttpError(w, "value must be in, out or inout", http.StatusBadRequest)
 	}
 }
 

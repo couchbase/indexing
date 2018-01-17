@@ -171,6 +171,7 @@ func (cons Consistency) String() string {
 //IndexDefn represents the index definition as specified
 //during CREATE INDEX
 type IndexDefn struct {
+	// Index Definition
 	DefnId          IndexDefnId     `json:"defnId,omitempty"`
 	Name            string          `json:"name,omitempty"`
 	Using           IndexType       `json:"using,omitempty"`
@@ -191,6 +192,13 @@ type IndexDefn struct {
 	NumReplica         uint32   `json:"numReplica,omitempty"`
 	PartitionKeys      []string `json:"partitionKeys,omitempty"`
 	RetainDeletedXATTR bool     `json:"retainDeletedXATTR,omitempty"`
+
+	// Sizing info
+	NumDoc        uint64  `json:"numDoc,omitempty"`
+	SecKeySize    uint64  `json:"secKeySize,omitempty"`
+	DocKeySize    uint64  `json:"docKeySize,omitempty"`
+	ArrSize       uint64  `json:"arrSize,omitempty"`
+	ResidentRatio float64 `json:"residentRatio,omitempty"`
 
 	// transient field (not part of index metadata)
 	InstVersion   int           `json:"instanceVersion,omitempty"`
@@ -264,6 +272,10 @@ func (idx IndexDefn) Clone() *IndexDefn {
 		IsArrayIndex:       idx.IsArrayIndex,
 		NumReplica:         idx.NumReplica,
 		RetainDeletedXATTR: idx.RetainDeletedXATTR,
+		NumDoc:          idx.NumDoc,
+		SecKeySize:      idx.SecKeySize,
+		DocKeySize:      idx.DocKeySize,
+		ArrSize:         idx.ArrSize,
 	}
 }
 

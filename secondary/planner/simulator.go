@@ -465,7 +465,7 @@ func (t *simulator) indexUsage(s SizingMethod, bucket string, spec *CollectionSp
 		index.AvgArrKeySize = 0
 		index.AvgArrSize = 0
 		index.NumOfDocs = t.numOfDocs(spec)
-		index.MemResidentRatio = 100
+		index.ResidentRatio = 100
 		index.MutationRate = t.mutationRate(spec)
 		index.ScanRate = t.scanRate(spec)
 
