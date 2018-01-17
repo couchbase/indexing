@@ -4,14 +4,17 @@
 package memcached
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"github.com/couchbase/indexing/secondary/dcp/transport"
-	"github.com/couchbase/indexing/secondary/logging"
 	"io"
 	"strconv"
 	"time"
+
+	"github.com/couchbase/indexing/secondary/common/json"
+	"github.com/couchbase/indexing/secondary/dcp/transport"
+	"github.com/couchbase/indexing/secondary/logging"
 )
 
 const dcpMutationExtraLen = 16
@@ -20,6 +23,9 @@ const opaqueOpen = 0xBEAF0001
 const opaqueFailover = 0xDEADBEEF
 const opaqueGetseqno = 0xDEADBEEF
 const openConnFlag = uint32(0x1)
+const includeXATTR = uint32(0x4)
+const dcpJSON = uint8(0x1)
+const dcpXATTR = uint8(0x4)
 
 // error codes
 var ErrorInvalidLog = errors.New("couchbase.errorInvalidLog")
@@ -495,7 +501,7 @@ func (feed *DcpFeed) doDcpOpen(
 		Opaque: opaqueOpen,
 	}
 	rq.Extras = make([]byte, 8)
-	flags = flags | openConnFlag
+	flags = flags | openConnFlag | includeXATTR
 	binary.BigEndian.PutUint32(rq.Extras[:4], sequence)
 	binary.BigEndian.PutUint32(rq.Extras[4:], flags) // we are consumer
 
@@ -835,10 +841,21 @@ type DcpEvent struct {
 	Error       error        // Error value in case of a failure
 	// stats
 	Ctime int64
+	// extended attributes
+	XATTR map[string]interface{}
 }
 
-func newDcpEvent(rq *transport.MCRequest, stream *DcpStream) *DcpEvent {
-	event := &DcpEvent{
+func newDcpEvent(rq *transport.MCRequest, stream *DcpStream) (event *DcpEvent) {
+	defer func() {
+		if r := recover(); r != nil {
+			// Error parsing XATTR, Request body might be malformed
+			arg1 := logging.TagUD(string(rq.Key))
+			logging.Errorf("Panic Error parsing XATTR for %s: %v", arg1, r)
+			event.Value = make([]byte, 0)
+			event.Datatype &= ^(dcpXATTR | dcpJSON)
+		}
+	}()
+	event = &DcpEvent{
 		Cas:      rq.Cas,
 		Datatype: rq.Datatype,
 		Opcode:   rq.Opcode,
@@ -848,8 +865,6 @@ func newDcpEvent(rq *transport.MCRequest, stream *DcpStream) *DcpEvent {
 	}
 	event.Key = make([]byte, len(rq.Key))
 	copy(event.Key, rq.Key)
-	event.Value = make([]byte, len(rq.Body))
-	copy(event.Value, rq.Body)
 
 	// 16 LSBits are used by client library to encode vbucket number.
 	// 16 MSBits are left for application to multiplex on opaque value.
@@ -880,11 +895,42 @@ func newDcpEvent(rq *transport.MCRequest, stream *DcpStream) *DcpEvent {
 		event.SnapshotType = binary.BigEndian.Uint32(rq.Extras[16:20])
 	}
 
+	if (event.Opcode == transport.DCP_MUTATION ||
+		event.Opcode == transport.DCP_DELETION) && event.HasXATTR() {
+		xattrLen := int(binary.BigEndian.Uint32(rq.Body))
+		xattrData := rq.Body[4 : 4+xattrLen]
+		event.XATTR = make(map[string]interface{})
+		for len(xattrData) > 0 {
+			pairLen := binary.BigEndian.Uint32(xattrData[0:])
+			xattrData = xattrData[4:]
+			binaryPair := xattrData[:pairLen-1]
+			xattrData = xattrData[pairLen:]
+			kvPair := bytes.Split(binaryPair, []byte{0x00})
+			key := string(kvPair[0])
+			var val map[string]interface{}
+			if err := json.Unmarshal(kvPair[1], &val); err != nil {
+				arg1 := logging.TagUD(string(rq.Key))
+				logging.Errorf("Error parsing XATTR for %s: %v", arg1, err)
+			} else {
+				event.XATTR[key] = val
+			}
+		}
+		event.Value = make([]byte, len(rq.Body)-(4+xattrLen))
+		copy(event.Value, rq.Body[4+xattrLen:])
+	} else {
+		event.Value = make([]byte, len(rq.Body))
+		copy(event.Value, rq.Body)
+	}
+
 	return event
 }
 
 func (event *DcpEvent) IsJSON() bool {
-	return (event.Datatype & 1) == 1
+	return (event.Datatype & dcpJSON) != 0
+}
+
+func (event *DcpEvent) HasXATTR() bool {
+	return (event.Datatype & dcpXATTR) != 0
 }
 
 func (event *DcpEvent) String() string {

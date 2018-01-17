@@ -381,5 +381,6 @@ func dcpEvent2Meta(m *mc.DcpEvent) map[string]interface{} {
 		"locktime":   m.LockTime,
 		"nru":        m.Nru,
 		"cas":        m.Cas,
+		"xattrs":     m.XATTR,
 	}
 }
