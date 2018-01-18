@@ -410,18 +410,21 @@ func (kvdata *KVData) scatterMutation(
 	case mcd.DCP_STREAMREQ:
 		if m.Status == mcd.ROLLBACK {
 			fmsg := "%v ##%x StreamRequest ROLLBACK: %v\n"
-			logging.Infof(fmsg, kvdata.logPrefix, m.Opaque, m)
+			arg1 := logging.TagUD(m)
+			logging.Infof(fmsg, kvdata.logPrefix, m.Opaque, arg1)
 
 		} else if m.Status != mcd.SUCCESS {
 			fmsg := "%v ##%x StreamRequest %s: %v\n"
-			logging.Errorf(fmsg, kvdata.logPrefix, m.Opaque, m.Status, m)
+			arg1 := logging.TagUD(m)
+			logging.Errorf(fmsg, kvdata.logPrefix, m.Opaque, m.Status, arg1)
 
 		} else if m.VBuuid, _, err = m.FailoverLog.Latest(); err != nil {
 			panic(err)
 
 		} else {
 			fmsg := "%v ##%x StreamRequest: %v\n"
-			logging.Tracef(fmsg, kvdata.logPrefix, m.Opaque, m)
+			arg1 := logging.TagUD(m)
+			logging.Tracef(fmsg, kvdata.logPrefix, m.Opaque, arg1)
 			m.Seqno, _ = ts.SeqnoFor(vbno)
 			if err := worker.Event(m); err != nil {
 				panic(err)
@@ -434,11 +437,13 @@ func (kvdata *KVData) scatterMutation(
 	case mcd.DCP_STREAMEND:
 		if m.Status != mcd.SUCCESS {
 			fmsg := "%v ##%x StreamEnd %s: %v\n"
-			logging.Errorf(fmsg, kvdata.logPrefix, m.Opaque, m)
+			arg1 := logging.TagUD(m)
+			logging.Errorf(fmsg, kvdata.logPrefix, m.Opaque, arg1)
 
 		} else {
 			fmsg := "%v ##%x StreamEnd: %v\n"
-			logging.Tracef(fmsg, kvdata.logPrefix, m.Opaque, m)
+			arg1 := logging.TagUD(m)
+			logging.Tracef(fmsg, kvdata.logPrefix, m.Opaque, arg1)
 			if err := worker.Event(m); err != nil {
 				panic(err)
 			}

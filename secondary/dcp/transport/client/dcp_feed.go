@@ -297,7 +297,8 @@ func (feed *DcpFeed) handlePacket(
 	stream := feed.vbstreams[vb]
 	if stream == nil {
 		fmsg := "%v spurious %v for %d: %#v\n"
-		logging.Fatalf(fmsg, prefix, pkt.Opcode, vb, pkt)
+		arg1 := logging.TagUD(pkt)
+		logging.Fatalf(fmsg, prefix, pkt.Opcode, vb, arg1)
 		return "ok" // yeah it not _my_ mistake...
 	}
 
@@ -722,7 +723,8 @@ func (feed *DcpFeed) handleStreamRequest(
 	case res.Status == transport.ROLLBACK && len(res.Body) != 8:
 		event.Status, event.Seqno = res.Status, 0
 		fmsg := "%v ##%x STREAMREQ(%v) invalid rollback: %v\n"
-		logging.Errorf(fmsg, prefix, stream.AppOpaque, vb, res.Body)
+		arg1 := logging.TagUD(res.Body)
+		logging.Errorf(fmsg, prefix, stream.AppOpaque, vb, arg1)
 		delete(feed.vbstreams, vb)
 
 	case res.Status == transport.ROLLBACK:
@@ -1023,7 +1025,8 @@ loop:
 			logging.Errorf("%v doReceive(): %v\n", feed.logPrefix, err)
 			break loop
 		}
-		logging.Tracef("%v packet received %#v", feed.logPrefix, pkt)
+		arg1 := logging.TagUD(pkt)
+		logging.Tracef("%v packet received %#v", feed.logPrefix, arg1)
 		if len(rcvch) == cap(rcvch) {
 			start, blocked = time.Now(), true
 		}

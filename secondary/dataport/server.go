@@ -168,7 +168,7 @@ func NewServer(
 	}
 	s.logPrefix = fmt.Sprintf("DATP[->dataport %q]", laddr)
 	if s.lis, err = net.Listen("tcp", laddr); err != nil {
-		logging.Errorf("%v failed starting ! %v\n", s.logPrefix, err)
+		logging.Errorf("%v failed starting! %v\n", s.logPrefix, err)
 		return nil, err
 	}
 	go listener(s.logPrefix, s.lis, s.reqch) // spawn daemon

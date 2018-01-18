@@ -269,7 +269,8 @@ func (c *Client) GetBulk(vb uint16, keys []string) (map[string]*transport.MCResp
 				going = false
 			case transport.GETQ:
 			default:
-				logging.Fatalf("Unexpected opcode in GETQ response: %+v", res)
+				arg1 := logging.TagUD(res)
+				logging.Fatalf("Unexpected opcode in GETQ response: %+v", arg1)
 			}
 			rv[keys[res.Opaque]] = res
 		}

@@ -64,7 +64,8 @@ var ClientOpCallback func(opname, k string, start time.Time, err error)
 // your command will only be executed only once.
 func (b *Bucket) Do(k string, f func(mc *memcached.Client, vb uint16) error) (err error) {
 	if SlowServerCallWarningThreshold > 0 {
-		defer slowLog(time.Now(), "call to Do(%q)", k)
+		arg1 := logging.TagUD(k)
+		defer slowLog(time.Now(), "call to Do(%q)", arg1)
 	}
 
 	vb := b.VBHash(k)
