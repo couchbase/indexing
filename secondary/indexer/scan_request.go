@@ -22,7 +22,7 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
 
-	l "github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/query/expression"
 	"github.com/couchbase/query/expression/parser"
 	"github.com/couchbase/query/value"
@@ -794,12 +794,12 @@ func (r *ScanRequest) fillScans(protoScans []*protobuf.Scan) (localErr error) {
 
 			fl := protoScan.Filters[0]
 			if l, localErr = r.newLowKey(fl.Low); localErr != nil {
-				localErr = fmt.Errorf("Invalid low key %s (%s)", string(fl.Low), localErr)
+				localErr = fmt.Errorf("Invalid low key %s (%s)", logging.TagStrUD(fl.Low), localErr)
 				return
 			}
 
 			if h, localErr = r.newHighKey(fl.High); localErr != nil {
-				localErr = fmt.Errorf("Invalid high key %s (%s)", string(fl.High), localErr)
+				localErr = fmt.Errorf("Invalid high key %s (%s)", logging.TagStrUD(fl.High), localErr)
 				return
 			}
 
@@ -853,12 +853,12 @@ func (r *ScanRequest) fillScans(protoScans []*protobuf.Scan) (localErr error) {
 			// Encode Filters
 			for _, fl := range protoScan.Filters {
 				if l, localErr = r.newLowKey(fl.Low); localErr != nil {
-					localErr = fmt.Errorf("Invalid low key %s (%s)", string(fl.Low), localErr)
+					localErr = fmt.Errorf("Invalid low key %s (%s)", logging.TagStrUD(fl.Low), localErr)
 					return
 				}
 
 				if h, localErr = r.newHighKey(fl.High); localErr != nil {
-					localErr = fmt.Errorf("Invalid high key %s (%s)", string(fl.High), localErr)
+					localErr = fmt.Errorf("Invalid high key %s (%s)", logging.TagStrUD(fl.High), localErr)
 					return
 				}
 
@@ -1140,12 +1140,12 @@ func (r *ScanRequest) validateGroupAggr() error {
 	//validate aggregates
 	for _, a := range r.GroupAggr.Aggrs {
 		if a.AggrFunc >= common.AGG_INVALID {
-			l.Errorf("ScanRequest::validateGroupAggr %v %v", ErrInvalidAggrFunc, a.AggrFunc)
+			logging.Errorf("ScanRequest::validateGroupAggr %v %v", ErrInvalidAggrFunc, a.AggrFunc)
 			return ErrInvalidAggrFunc
 		}
 		if int(a.KeyPos) >= len(r.IndexInst.Defn.SecExprs) {
 			err = fmt.Errorf("Invalid KeyPos In Aggr %v", a)
-			l.Errorf("ScanRequest::validateGroupAggr %v", err)
+			logging.Errorf("ScanRequest::validateGroupAggr %v", err)
 			return err
 		}
 	}
@@ -1154,7 +1154,7 @@ func (r *ScanRequest) validateGroupAggr() error {
 	for _, g := range r.GroupAggr.Group {
 		if int(g.KeyPos) >= len(r.IndexInst.Defn.SecExprs) {
 			err = fmt.Errorf("Invalid KeyPos In GroupKey %v", g)
-			l.Errorf("ScanRequest::validateGroupAggr %v", err)
+			logging.Errorf("ScanRequest::validateGroupAggr %v", err)
 			return err
 		}
 	}
@@ -1163,7 +1163,7 @@ func (r *ScanRequest) validateGroupAggr() error {
 	for _, k := range r.GroupAggr.DependsOnIndexKeys {
 		if int(k) > len(r.IndexInst.Defn.SecExprs) {
 			err = fmt.Errorf("Invalid KeyPos In DependsOnIndexKeys %v", k)
-			l.Errorf("ScanRequest::validateGroupAggr %v", err)
+			logging.Errorf("ScanRequest::validateGroupAggr %v", err)
 			return err
 		}
 	}
@@ -1197,7 +1197,7 @@ func compileN1QLExpression(expr string) (expression.Expression, error) {
 
 	cExpr, err := parser.Parse(expr)
 	if err != nil {
-		l.Errorf("ScanRequest::compileN1QLExpression() %v: %v\n", expr, err)
+		logging.Errorf("ScanRequest::compileN1QLExpression() %v: %v\n", logging.TagUD(expr), err)
 		return nil, err
 	}
 	return cExpr, nil

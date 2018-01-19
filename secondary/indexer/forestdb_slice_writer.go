@@ -330,7 +330,7 @@ loop:
 
 			default:
 				logging.Errorf("ForestDBSlice::handleCommandsWorker \n\tSliceId %v IndexInstId %v Received "+
-					"Unknown Command %v", fdb.id, fdb.idxInstId, c)
+					"Unknown Command %v", fdb.id, fdb.idxInstId, logging.TagUD(c))
 			}
 
 			fdb.idxStats.numItemsFlushed.Add(int64(nmut))
@@ -369,7 +369,7 @@ func (fdb *fdbSlice) insert(key []byte, rawKey []byte, docid []byte, workerId in
 func (fdb *fdbSlice) insertPrimaryIndex(key []byte, docid []byte, workerId int) (nmut int) {
 	var err error
 
-	logging.Tracef("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Set Key - %s", fdb.id, fdb.idxInstId, docid)
+	logging.Tracef("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Set Key - %s", fdb.id, fdb.idxInstId, logging.TagStrUD(docid))
 
 	//check if the docid exists in the main index
 	t0 := time.Now()
@@ -377,7 +377,7 @@ func (fdb *fdbSlice) insertPrimaryIndex(key []byte, docid []byte, workerId int) 
 		fdb.idxStats.Timings.stKVGet.Put(time.Now().Sub(t0))
 		//skip
 		logging.Tracef("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Key %v Already Exists. "+
-			"Primary Index Update Skipped.", fdb.id, fdb.idxInstId, string(docid))
+			"Primary Index Update Skipped.", fdb.id, fdb.idxInstId, logging.TagStrUD(docid))
 	} else if err != nil && err != forestdb.FDB_RESULT_KEY_NOT_FOUND {
 		fdb.checkFatalDbError(err)
 		logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error locating "+
@@ -388,7 +388,7 @@ func (fdb *fdbSlice) insertPrimaryIndex(key []byte, docid []byte, workerId int) 
 		if err = fdb.main[workerId].SetKV(key, nil); err != nil {
 			fdb.checkFatalDbError(err)
 			logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error in Main Index Set. "+
-				"Skipped Key %s. Error %v", fdb.id, fdb.idxInstId, string(docid), err)
+				"Skipped Key %s. Error %v", fdb.id, fdb.idxInstId, logging.TagStrUD(docid), err)
 		}
 		fdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
 		atomic.AddInt64(&fdb.insert_bytes, int64(len(key)))
@@ -416,7 +416,7 @@ func (fdb *fdbSlice) insertSecIndex(key []byte, docid []byte, workerId int) (nmu
 		//in mutation, skip it.
 		if bytes.Equal(oldkey, key) {
 			logging.Tracef("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Received Unchanged Key for "+
-				"Doc Id %v. Key %v. Skipped.", fdb.id, fdb.idxInstId, string(docid), key)
+				"Doc Id %v. Key %v. Skipped.", fdb.id, fdb.idxInstId, logging.TagStrUD(docid), logging.TagStrUD(key))
 			return
 		}
 
@@ -460,7 +460,7 @@ func (fdb *fdbSlice) insertSecIndex(key []byte, docid []byte, workerId int) (nmu
 	if err = fdb.back[workerId].SetKV(docid, key); err != nil {
 		fdb.checkFatalDbError(err)
 		logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error in Back Index Set. "+
-			"Skipped Key %s. Value %v. Error %v", fdb.id, fdb.idxInstId, string(docid), key, err)
+			"Skipped Key %s. Value %v. Error %v", fdb.id, fdb.idxInstId, logging.TagStrUD(docid), logging.TagStrUD(key), err)
 		return
 	}
 	fdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
@@ -499,7 +499,7 @@ func (fdb *fdbSlice) insertSecArrayIndex(key []byte, rawKey []byte, docid []byte
 	if oldkey != nil {
 		if bytes.Equal(oldkey, key) {
 			logging.Tracef("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Received Unchanged Key for "+
-				"Doc Id %s. Key %v. Skipped.", fdb.id, fdb.idxInstId, docid, key)
+				"Doc Id %s. Key %v. Skipped.", fdb.id, fdb.idxInstId, logging.TagStrUD(docid), logging.TagStrUD(key))
 			return
 		}
 
@@ -522,7 +522,7 @@ func (fdb *fdbSlice) insertSecArrayIndex(key []byte, rawKey []byte, docid []byte
 		if oldEntriesBytes, oldKeyCount, _, err = ArrayIndexItems(oldkey, fdb.arrayExprPosition,
 			tmpBuf, fdb.isArrayDistinct, false); err != nil {
 			logging.Errorf("ForestDBSlice::insert SliceId %v IndexInstId %v Error in retrieving "+
-				"compostite old secondary keys. Skipping docid:%s Error: %v", fdb.id, fdb.idxInstId, docid, err)
+				"compostite old secondary keys. Skipping docid:%s Error: %v", fdb.id, fdb.idxInstId, logging.TagStrUD(docid), err)
 			return fdb.deleteSecArrayIndex(docid, workerId)
 		}
 	}
@@ -539,7 +539,7 @@ func (fdb *fdbSlice) insertSecArrayIndex(key []byte, rawKey []byte, docid []byte
 			(*tmpBufPtr)[:0], fdb.isArrayDistinct, true)
 		if err != nil {
 			logging.Errorf("ForestDBSlice::insert SliceId %v IndexInstId %v Error in creating "+
-				"compostite new secondary keys. Skipping docid:%s Error: %v", fdb.id, fdb.idxInstId, docid, err)
+				"compostite new secondary keys. Skipping docid:%s Error: %v", fdb.id, fdb.idxInstId, logging.TagStrUD(docid), err)
 			return fdb.deleteSecArrayIndex(docid, workerId)
 		}
 	}
@@ -578,7 +578,7 @@ func (fdb *fdbSlice) insertSecArrayIndex(key []byte, rawKey []byte, docid []byte
 				encBufPool.Put(tmpBufPtr)
 				// TODO: Handle skipped item here
 				logging.Errorf("ForestDBSlice::insert SliceId %v IndexInstId %v Error forming entry "+
-					"to be deleted from main index. Skipping docid:%s Error: %v", fdb.id, fdb.idxInstId, docid, err)
+					"to be deleted from main index. Skipping docid:%s Error: %v", fdb.id, fdb.idxInstId, logging.TagStrUD(docid), err)
 				return fdb.deleteSecArrayIndex(docid, workerId)
 			}
 			keysToBeDeleted = append(keysToBeDeleted, keyToBeDeleted)
@@ -598,7 +598,7 @@ func (fdb *fdbSlice) insertSecArrayIndex(key []byte, rawKey []byte, docid []byte
 				encBufPool.Put(tmpBufPtr)
 				// TODO: Handle skipped item here
 				logging.Errorf("ForestDBSlice::insert SliceId %v IndexInstId %v Error forming entry "+
-					"to be added to main index. Skipping docid:%s Error: %v", fdb.id, fdb.idxInstId, docid, err)
+					"to be added to main index. Skipping docid:%s Error: %v", fdb.id, fdb.idxInstId, logging.TagStrUD(docid), err)
 				return fdb.deleteSecArrayIndex(docid, workerId)
 			}
 			keysToBeAdded = append(keysToBeAdded, keyToBeAdded)
@@ -624,7 +624,7 @@ func (fdb *fdbSlice) insertSecArrayIndex(key []byte, rawKey []byte, docid []byte
 		if err = fdb.main[workerId].SetKV(keyToBeAdded, nil); err != nil {
 			fdb.checkFatalDbError(err)
 			logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error in Main Index Set. "+
-				"Skipped Key %v. Error %v", fdb.id, fdb.idxInstId, key, err)
+				"Skipped Key %v. Error %v", fdb.id, fdb.idxInstId, logging.TagStrUD(key), err)
 			return
 		}
 		fdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
@@ -655,7 +655,7 @@ func (fdb *fdbSlice) insertSecArrayIndex(key []byte, rawKey []byte, docid []byte
 		if err = fdb.back[workerId].SetKV(docid, key); err != nil {
 			fdb.checkFatalDbError(err)
 			logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error in Back Index Set. "+
-				"Skipped Key %s. Value %v. Error %v", fdb.id, fdb.idxInstId, string(docid), key, err)
+				"Skipped Key %s. Value %v. Error %v", fdb.id, fdb.idxInstId, logging.TagStrUD(docid), logging.TagStrUD(key), err)
 			return
 		}
 		fdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
@@ -702,7 +702,7 @@ func (fdb *fdbSlice) deletePrimaryIndex(docid []byte, workerId int) (nmut int) {
 		fdb.checkFatalDbError(err)
 		logging.Errorf("ForestDBSlice::delete \n\tSliceId %v IndexInstId %v. Error deleting "+
 			"entry from main index for Doc %s. Error %v", fdb.id, fdb.idxInstId,
-			docid, err)
+			logging.TagStrUD(docid), err)
 		return
 	}
 	fdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
@@ -723,7 +723,7 @@ func (fdb *fdbSlice) deleteSecIndex(docid []byte, workerId int) (nmut int) {
 	if olditm, err = fdb.getBackIndexEntry(docid, workerId); err != nil {
 		fdb.checkFatalDbError(err)
 		logging.Errorf("ForestDBSlice::delete \n\tSliceId %v IndexInstId %v. Error locating "+
-			"backindex entry for Doc %s. Error %v", fdb.id, fdb.idxInstId, docid, err)
+			"backindex entry for Doc %s. Error %v", fdb.id, fdb.idxInstId, logging.TagStrUD(docid), err)
 		return
 	}
 
@@ -731,7 +731,7 @@ func (fdb *fdbSlice) deleteSecIndex(docid []byte, workerId int) (nmut int) {
 	//which happened before index was created.
 	if olditm == nil {
 		logging.Tracef("ForestDBSlice::delete \n\tSliceId %v IndexInstId %v Received NIL Key for "+
-			"Doc Id %v. Skipped.", fdb.id, fdb.idxInstId, docid)
+			"Doc Id %v. Skipped.", fdb.id, fdb.idxInstId, logging.TagStrUD(docid))
 		return
 	}
 
@@ -741,7 +741,7 @@ func (fdb *fdbSlice) deleteSecIndex(docid []byte, workerId int) (nmut int) {
 		fdb.checkFatalDbError(err)
 		logging.Errorf("ForestDBSlice::delete \n\tSliceId %v IndexInstId %v. Error deleting "+
 			"entry from main index for Doc %s. Key %v. Error %v", fdb.id, fdb.idxInstId,
-			docid, olditm, err)
+			logging.TagStrUD(docid), logging.TagStrUD(olditm), err)
 		return
 	}
 	fdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
@@ -752,7 +752,7 @@ func (fdb *fdbSlice) deleteSecIndex(docid []byte, workerId int) (nmut int) {
 	if err = fdb.back[workerId].DeleteKV(docid); err != nil {
 		fdb.checkFatalDbError(err)
 		logging.Errorf("ForestDBSlice::delete \n\tSliceId %v IndexInstId %v. Error deleting "+
-			"entry from back index for Doc %s. Error %v", fdb.id, fdb.idxInstId, docid, err)
+			"entry from back index for Doc %s. Error %v", fdb.id, fdb.idxInstId, logging.TagStrUD(docid), err)
 		return
 	}
 	fdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
@@ -768,13 +768,13 @@ func (fdb *fdbSlice) deleteSecArrayIndex(docid []byte, workerId int) (nmut int) 
 	if olditm, err = fdb.getBackIndexEntry(docid, workerId); err != nil {
 		fdb.checkFatalDbError(err)
 		logging.Errorf("ForestDBSlice::delete \n\tSliceId %v IndexInstId %v. Error locating "+
-			"backindex entry for Doc %s. Error %v", fdb.id, fdb.idxInstId, docid, err)
+			"backindex entry for Doc %s. Error %v", fdb.id, fdb.idxInstId, logging.TagStrUD(docid), err)
 		return
 	}
 
 	if olditm == nil {
 		logging.Tracef("ForestDBSlice::delete \n\tSliceId %v IndexInstId %v Received NIL Key for "+
-			"Doc Id %v. Skipped.", fdb.id, fdb.idxInstId, docid)
+			"Doc Id %v. Skipped.", fdb.id, fdb.idxInstId, logging.TagStrUD(docid))
 		return
 	}
 
@@ -844,7 +844,7 @@ func (fdb *fdbSlice) deleteSecArrayIndex(docid []byte, workerId int) (nmut int) 
 	if err = fdb.back[workerId].DeleteKV(docid); err != nil {
 		fdb.checkFatalDbError(err)
 		logging.Errorf("ForestDBSlice::delete \n\tSliceId %v IndexInstId %v. Error deleting "+
-			"entry from back index for Doc %s. Error %v", fdb.id, fdb.idxInstId, docid, err)
+			"entry from back index for Doc %s. Error %v", fdb.id, fdb.idxInstId, logging.TagStrUD(docid), err)
 		return
 	}
 	fdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))

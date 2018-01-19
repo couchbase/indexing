@@ -413,7 +413,7 @@ loop:
 
 			default:
 				logging.Errorf("plasmaSlice::handleCommandsWorker \n\tSliceId %v IndexInstId %v Received "+
-					"Unknown Command %v", mdb.id, mdb.idxInstId, icmd)
+					"Unknown Command %v", mdb.id, mdb.idxInstId, logging.TagUD(icmd))
 			}
 
 			mdb.idxStats.numItemsFlushed.Add(int64(nmut))
@@ -451,7 +451,8 @@ func (mdb *plasmaSlice) insert(key []byte, docid []byte, workerId int) int {
 }
 
 func (mdb *plasmaSlice) insertPrimaryIndex(key []byte, docid []byte, workerId int) int {
-	logging.Tracef("plasmaSlice::insert \n\tSliceId %v IndexInstId %v Set Key - %s", mdb.id, mdb.idxInstId, docid)
+	logging.Tracef("plasmaSlice::insert \n\tSliceId %v IndexInstId %v Set Key - %s", mdb.id,
+		mdb.idxInstId, logging.TagStrUD(docid))
 
 	entry, err := NewPrimaryIndexEntry(docid)
 	common.CrashOnError(err)
@@ -482,7 +483,7 @@ func (mdb *plasmaSlice) insertSecIndex(key []byte, docid []byte, workerId int) i
 		1, mdb.idxDefn.Desc, mdb.encodeBuf[workerId])
 	if err != nil {
 		logging.Errorf("plasmaSlice::insertSecIndex Slice Id %v IndexInstId %v "+
-			"Skipping docid:%s (%v)", mdb.Id, mdb.idxInstId, docid, err)
+			"Skipping docid:%s (%v)", mdb.Id, mdb.idxInstId, logging.TagStrUD(docid), err)
 		return ndel
 	}
 
@@ -512,7 +513,7 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 
 	if !allowLargeKeys && len(key) > maxArrayIndexEntrySize {
 		logging.Errorf("plasmaSlice::insertSecArrayIndex Error indexing docid: %s in Slice: %v. Error: Encoded array key (size %v) too long (> %v). Skipped.",
-			docid, mdb.id, len(key), maxArrayIndexEntrySize)
+			logging.TagStrUD(docid), mdb.id, len(key), maxArrayIndexEntrySize)
 		mdb.deleteSecArrayIndex(docid, workerId)
 		return 0
 	}
@@ -533,7 +534,7 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 	if oldkey != nil {
 		if bytes.Equal(oldkey, key) {
 			logging.Tracef("plasmaSlice::insertSecArrayIndex \n\tSliceId %v IndexInstId %v Received Unchanged Key for "+
-				"Doc Id %s. Key %v. Skipped.", mdb.id, mdb.idxInstId, docid, key)
+				"Doc Id %s. Key %v. Skipped.", mdb.id, mdb.idxInstId, logging.TagStrUD(docid), logging.TagStrUD(key))
 			return
 		}
 
@@ -555,7 +556,8 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 
 		if err != nil {
 			logging.Errorf("plasmaSlice::insertSecArrayIndex SliceId %v IndexInstId %v Error in retrieving "+
-				"compostite old secondary keys. Skipping docid:%s Error: %v", mdb.id, mdb.idxInstId, docid, err)
+				"compostite old secondary keys. Skipping docid:%s Error: %v",
+				mdb.id, mdb.idxInstId, logging.TagStrUD(docid), err)
 			mdb.deleteSecArrayIndex(docid, workerId)
 			return 0
 		}
@@ -568,7 +570,8 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 		mdb.arrayBuf2[workerId] = resizeArrayBuf(mdb.arrayBuf2[workerId], newbufLen)
 		if err != nil {
 			logging.Errorf("plasmaSlice::insertSecArrayIndex SliceId %v IndexInstId %v Error in creating "+
-				"compostite new secondary keys. Skipping docid:%s Error: %v", mdb.id, mdb.idxInstId, docid, err)
+				"compostite new secondary keys. Skipping docid:%s Error: %v",
+				mdb.id, mdb.idxInstId, logging.TagStrUD(docid), err)
 			mdb.deleteSecArrayIndex(docid, workerId)
 			return 0
 		}
@@ -622,7 +625,8 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 				oldKeyCount[i], mdb.idxDefn.Desc, mdb.encodeBuf[workerId]); err != nil {
 				rollbackDeletes(i - 1)
 				logging.Errorf("plasmaSlice::insertSecArrayIndex SliceId %v IndexInstId %v Error forming entry "+
-					"to be added to main index. Skipping docid:%s Error: %v", mdb.id, mdb.idxInstId, docid, err)
+					"to be added to main index. Skipping docid:%s Error: %v",
+					mdb.id, mdb.idxInstId, logging.TagStrUD(docid), err)
 				mdb.deleteSecArrayIndex(docid, workerId)
 				return 0
 			}
@@ -644,7 +648,8 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 				rollbackDeletes(len(indexEntriesToBeDeleted) - 1)
 				rollbackAdds(i - 1)
 				logging.Errorf("plasmaSlice::insertSecArrayIndex SliceId %v IndexInstId %v Error forming entry "+
-					"to be added to main index. Skipping docid:%s Error: %v", mdb.id, mdb.idxInstId, docid, err)
+					"to be added to main index. Skipping docid:%s Error: %v",
+					mdb.id, mdb.idxInstId, logging.TagStrUD(docid), err)
 				mdb.deleteSecArrayIndex(docid, workerId)
 				return 0
 			}
@@ -769,7 +774,7 @@ func (mdb *plasmaSlice) deleteSecArrayIndex(docid []byte, workerId int) (nmut in
 
 	if olditm == nil {
 		logging.Tracef("plasmaSlice::deleteSecArrayIndex \n\tSliceId %v IndexInstId %v Received NIL Key for "+
-			"Doc Id %v. Skipped.", mdb.id, mdb.idxInstId, docid)
+			"Doc Id %v. Skipped.", mdb.id, mdb.idxInstId, logging.TagStrUD(docid))
 		return
 	}
 

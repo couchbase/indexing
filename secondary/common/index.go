@@ -12,6 +12,7 @@ package common
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/couchbase/indexing/secondary/logging"
 	"strings"
 )
 
@@ -231,11 +232,11 @@ func (idx IndexDefn) String() string {
 	str += fmt.Sprintf("IsPrimary: %v ", idx.IsPrimary)
 	str += fmt.Sprintf("NumReplica: %v ", idx.NumReplica)
 	str += fmt.Sprintf("InstVersion: %v ", idx.InstVersion)
-	str += fmt.Sprintf("\n\t\tSecExprs: %v ", idx.SecExprs)
+	str += fmt.Sprintf("\n\t\tSecExprs: %v ", logging.TagUD(idx.SecExprs))
 	str += fmt.Sprintf("\n\t\tDesc: %v", idx.Desc)
 	str += fmt.Sprintf("\n\t\tPartitionScheme: %v ", idx.PartitionScheme)
 	str += fmt.Sprintf("PartitionKeys: %v ", idx.PartitionKeys)
-	str += fmt.Sprintf("WhereExpr: %v ", idx.WhereExpr)
+	str += fmt.Sprintf("WhereExpr: %v ", logging.TagUD(idx.WhereExpr))
 	str += fmt.Sprintf("RetainDeletedXATTR: %v ", idx.RetainDeletedXATTR)
 	return str
 
@@ -245,23 +246,23 @@ func (idx IndexDefn) String() string {
 // field.  It is a shallow copy (e.g. does not clone field 'Nodes').
 func (idx IndexDefn) Clone() *IndexDefn {
 	return &IndexDefn{
-		DefnId:          idx.DefnId,
-		Name:            idx.Name,
-		Using:           idx.Using,
-		Bucket:          idx.Bucket,
-		BucketUUID:      idx.BucketUUID,
-		IsPrimary:       idx.IsPrimary,
-		SecExprs:        idx.SecExprs,
-		Desc:            idx.Desc,
-		ExprType:        idx.ExprType,
-		PartitionScheme: idx.PartitionScheme,
-		PartitionKeys:   idx.PartitionKeys,
-		WhereExpr:       idx.WhereExpr,
-		Deferred:        idx.Deferred,
-		Immutable:       idx.Immutable,
-		Nodes:           idx.Nodes,
-		IsArrayIndex:    idx.IsArrayIndex,
-		NumReplica:      idx.NumReplica,
+		DefnId:             idx.DefnId,
+		Name:               idx.Name,
+		Using:              idx.Using,
+		Bucket:             idx.Bucket,
+		BucketUUID:         idx.BucketUUID,
+		IsPrimary:          idx.IsPrimary,
+		SecExprs:           idx.SecExprs,
+		Desc:               idx.Desc,
+		ExprType:           idx.ExprType,
+		PartitionScheme:    idx.PartitionScheme,
+		PartitionKeys:      idx.PartitionKeys,
+		WhereExpr:          idx.WhereExpr,
+		Deferred:           idx.Deferred,
+		Immutable:          idx.Immutable,
+		Nodes:              idx.Nodes,
+		IsArrayIndex:       idx.IsArrayIndex,
+		NumReplica:         idx.NumReplica,
 		RetainDeletedXATTR: idx.RetainDeletedXATTR,
 	}
 }
@@ -517,7 +518,7 @@ func IsEquivalentIndex(d1, d2 *IndexDefn) bool {
 		d1.ExprType != d2.ExprType ||
 		d1.PartitionScheme != d2.PartitionScheme ||
 		d1.WhereExpr != d2.WhereExpr ||
-		d1.RetainDeletedXATTR != d2.RetainDeletedXATTR	{
+		d1.RetainDeletedXATTR != d2.RetainDeletedXATTR {
 
 		return false
 	}

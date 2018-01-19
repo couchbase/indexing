@@ -160,7 +160,7 @@ func (c *ClusterInfoCache) Fetch() error {
 				// node being added (but not yet rebalanced in)
 				addNodes = append(addNodes, n)
 			} else {
-				logging.Warnf("ClsuterInfoCache: unrecognized node membership %v", n.ClusterMembership)
+				logging.Warnf("ClusterInfoCache: unrecognized node membership %v", n.ClusterMembership)
 			}
 
 			// Find the minimum cluster compatibility

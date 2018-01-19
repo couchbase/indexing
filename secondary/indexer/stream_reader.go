@@ -527,7 +527,7 @@ func (w *streamWorker) handleSingleKeyVersion(bucket string, vbucket Vbucket, vb
 	w.evalFilter = true
 
 	logging.LazyTrace(func() string {
-		return fmt.Sprintf("MutationStreamReader::handleSingleKeyVersion received KeyVersions %v", kv)
+		return fmt.Sprintf("MutationStreamReader::handleSingleKeyVersion received KeyVersions %v", logging.TagUD(kv))
 	})
 
 	state := w.reader.getIndexerState()
@@ -635,7 +635,7 @@ func (w *streamWorker) handleSingleKeyVersion(bucket string, vbucket Vbucket, vb
 func (w *streamWorker) handleSingleMutation(mut *MutationKeys, stopch StopChannel) {
 
 	logging.LazyTrace(func() string {
-		return fmt.Sprintf("MutationStreamReader::handleSingleMutation received mutation %v", mut)
+		return fmt.Sprintf("MutationStreamReader::handleSingleMutation received mutation %v", logging.TagUD(mut))
 	})
 
 	w.reader.queueMapLock.RLock()
@@ -653,7 +653,7 @@ func (w *streamWorker) handleSingleMutation(mut *MutationKeys, stopch StopChanne
 
 	} else {
 		logging.Warnf("MutationStreamReader::handleSingleMutation got mutation for "+
-			"unknown bucket. Skipped  %v", mut)
+			"unknown bucket. Skipped  %v", logging.TagUD(mut))
 	}
 
 }

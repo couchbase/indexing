@@ -332,7 +332,7 @@ loop:
 
 			default:
 				logging.Errorf("MemDBSlice::handleCommandsWorker \n\tSliceId %v IndexInstId %v Received "+
-					"Unknown Command %v", mdb.id, mdb.idxInstId, icmd)
+					"Unknown Command %v", mdb.id, mdb.idxInstId, logging.TagUD(icmd))
 			}
 
 			mdb.idxStats.numItemsFlushed.Add(int64(nmut))
@@ -370,7 +370,7 @@ func (mdb *memdbSlice) insert(key []byte, docid []byte, workerId int) int {
 }
 
 func (mdb *memdbSlice) insertPrimaryIndex(key []byte, docid []byte, workerId int) int {
-	logging.Tracef("MemDBSlice::insert \n\tSliceId %v IndexInstId %v Set Key - %s", mdb.id, mdb.idxInstId, docid)
+	logging.Tracef("MemDBSlice::insert \n\tSliceId %v IndexInstId %v Set Key - %s", mdb.id, mdb.idxInstId, logging.TagStrUD(docid))
 
 	entry, err := NewPrimaryIndexEntry(docid)
 	common.CrashOnError(err)
@@ -394,7 +394,7 @@ func (mdb *memdbSlice) insertSecIndex(key []byte, docid []byte, workerId int) in
 		1, mdb.idxDefn.Desc, mdb.encodeBuf[workerId])
 	if err != nil {
 		logging.Errorf("MemDBSlice::insertSecIndex Slice Id %v IndexInstId %v "+
-			"Skipping docid:%s (%v)", mdb.Id, mdb.idxInstId, docid, err)
+			"Skipping docid:%s (%v)", mdb.Id, mdb.idxInstId, logging.TagStrUD(docid), err)
 		return mdb.deleteSecIndex(docid, workerId)
 	}
 
@@ -422,8 +422,8 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 
 	if !allowLargeKeys && len(keys) > maxArrayIndexEntrySize {
 		logging.Errorf("MemDBSlice::insertSecArrayIndex Error indexing docid: %s in Slice: %v. Error: Encoded array key (size %v) too long (> %v). Skipped.",
-			docid, mdb.id, len(keys), maxArrayIndexEntrySize)
-		logging.Verbosef("MemDBSlice::insertSecArrayIndex Skipped docid: %s Key: %s", docid, string(keys))
+			logging.TagStrUD(docid), mdb.id, len(keys), maxArrayIndexEntrySize)
+		logging.Verbosef("MemDBSlice::insertSecArrayIndex Skipped docid: %s Key: %s", logging.TagStrUD(docid), logging.TagStrUD(keys))
 		return mdb.deleteSecArrayIndex(docid, workerId)
 	}
 
@@ -433,7 +433,7 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 	mdb.arrayBuf[workerId] = resizeArrayBuf(mdb.arrayBuf[workerId], newbufLen)
 	if err != nil {
 		logging.Errorf("MemDBSlice::insert Error indexing docid: %s in Slice: %v. Error in creating "+
-			"compostite new secondary keys %v. Skipped.", docid, mdb.id, err)
+			"compostite new secondary keys %v. Skipped.", logging.TagStrUD(docid), mdb.id, err)
 		return mdb.deleteSecArrayIndex(docid, workerId)
 	}
 
@@ -491,7 +491,7 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 				oldKeyCount[i], nil, mdb.encodeBuf[workerId][:0], false)
 			if err != nil {
 				logging.Errorf("MemDBSlice::insertSecArrayIndex Slice Id %v IndexInstId %v "+
-					"Skipping docid:%s (%v)", mdb.Id, mdb.idxInstId, docid, err)
+					"Skipping docid:%s (%v)", mdb.Id, mdb.idxInstId, logging.TagStrUD(docid), err)
 				return emptyList()
 			}
 			node := list.Remove(entry)
@@ -509,7 +509,7 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 				newKeyCount[i], mdb.idxDefn.Desc, mdb.encodeBuf[workerId][:0])
 			if err != nil {
 				logging.Errorf("MemDBSlice::insertSecArrayIndex Slice Id %v IndexInstId %v "+
-					"Skipping docid:%s (%v)", mdb.Id, mdb.idxInstId, docid, err)
+					"Skipping docid:%s (%v)", mdb.Id, mdb.idxInstId, logging.TagStrUD(docid), err)
 				return emptyList()
 			}
 			newNode := mdb.main[workerId].Put2(entry)
@@ -1112,7 +1112,7 @@ func (mdb *memdbSlice) Statistics() (StorageStatistics, error) {
 	var sts StorageStatistics
 
 	var internalData []string
-        var ntMemUsed int64
+	var ntMemUsed int64
 
 	internalData = append(internalData, fmt.Sprintf("{\n\"MainStore\": %s", mdb.mainstore.DumpStats()))
 
@@ -1120,7 +1120,7 @@ func (mdb *memdbSlice) Statistics() (StorageStatistics, error) {
 		for i := 0; i < mdb.numWriters; i++ {
 			internalData = append(internalData, ",\n")
 			internalData = append(internalData, fmt.Sprintf(`"BackStore_%d": %s`, i, mdb.back[i].Stats()))
-                        ntMemUsed += mdb.back[i].MemoryInUse()
+			ntMemUsed += mdb.back[i].MemoryInUse()
 		}
 	}
 
@@ -1128,7 +1128,7 @@ func (mdb *memdbSlice) Statistics() (StorageStatistics, error) {
 
 	sts.InternalData = internalData
 	sts.DataSize = mdb.mainstore.MemoryInUse()
-	sts.MemUsed  = mdb.mainstore.MemoryInUse() + ntMemUsed
+	sts.MemUsed = mdb.mainstore.MemoryInUse() + ntMemUsed
 	sts.DiskSize = mdb.diskSize()
 	return sts, nil
 }

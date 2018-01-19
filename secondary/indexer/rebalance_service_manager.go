@@ -1764,7 +1764,7 @@ func (m *ServiceMgr) handleListRebalanceTokens(w http.ResponseWriter, r *http.Re
 
 	_, ok := m.validateAuth(w, r)
 	if !ok {
-		l.Errorf("ServiceMgr::handleListRebalanceTokens Validation Failure for Request %v", r)
+		l.Errorf("ServiceMgr::handleListRebalanceTokens Validation Failure for Request %v", l.TagUD(r))
 		return
 	}
 
@@ -1795,13 +1795,13 @@ func (m *ServiceMgr) handleCleanupRebalance(w http.ResponseWriter, r *http.Reque
 
 	_, ok := m.validateAuth(w, r)
 	if !ok {
-		l.Errorf("ServiceMgr::handleCleanupRebalance Validation Failure for Request %v", r)
+		l.Errorf("ServiceMgr::handleCleanupRebalance Validation Failure for Request %v", l.TagUD(r))
 		return
 	}
 
 	if r.Method == "GET" || r.Method == "POST" {
 
-		l.Infof("ServiceMgr::handleCleanupRebalance Processing Request %v", r)
+		l.Infof("ServiceMgr::handleCleanupRebalance Processing Request %v", l.TagUD(r))
 		m.mu.Lock()
 		defer m.mu.Unlock()
 
@@ -1846,12 +1846,12 @@ func (m *ServiceMgr) handleNodeuuid(w http.ResponseWriter, r *http.Request) {
 
 	_, ok := m.validateAuth(w, r)
 	if !ok {
-		l.Errorf("ServiceMgr::handleNodeuuid Validation Failure for Request %v", r)
+		l.Errorf("ServiceMgr::handleNodeuuid Validation Failure for Request %v", l.TagUD(r))
 		return
 	}
 
 	if r.Method == "GET" || r.Method == "POST" {
-		l.Infof("ServiceMgr::handleNodeuuid Processing Request %v", r)
+		l.Infof("ServiceMgr::handleNodeuuid Processing Request %v", l.TagUD(r))
 		m.writeBytes(w, []byte(m.nodeInfo.NodeID))
 		return
 	} else {
@@ -1974,7 +1974,8 @@ func (m *ServiceMgr) getGlobalTopology() (*manager.ClusterIndexMetadata, error) 
 	bytes, _ := ioutil.ReadAll(resp.Body)
 	defer resp.Body.Close()
 	if err := json.Unmarshal(bytes, &topology); err != nil {
-		l.Errorf("ServiceMgr::getGlobalTopology Error unmarshal global topology %v %v %s", addr+url, err, string(bytes))
+		l.Errorf("ServiceMgr::getGlobalTopology Error unmarshal global topology %v %v %s",
+			addr+url, err, l.TagUD(string(bytes)))
 		return nil, err
 	}
 
@@ -2202,7 +2203,7 @@ func (m *ServiceMgr) handleMoveIndexInternal(w http.ResponseWriter, r *http.Requ
 
 func (m *ServiceMgr) doHandleMoveIndex(req *manager.IndexRequest) (int, string) {
 
-	l.Infof("ServiceMgr::doHandleMoveIndex %v", req)
+	l.Infof("ServiceMgr::doHandleMoveIndex %v", l.TagUD(req))
 
 	nodes, err := validateMoveIndexReq(req)
 	if err != nil {
