@@ -51,7 +51,8 @@ var ErrIndexerInBootstrap = errors.New("Indexer In Warmup State. Please retry th
 
 const INDEXER_45_VERSION = 1
 const INDEXER_50_VERSION = 2
-const INDEXER_CUR_VERSION = INDEXER_50_VERSION
+const INDEXER_55_VERSION = 3
+const INDEXER_CUR_VERSION = INDEXER_55_VERSION
 
 const DEFAULT_POOL = "default"
 

@@ -583,25 +583,32 @@ func (gsi *gsiKeyspace) delIndex(id string) {
 
 func (gsi *gsiKeyspace) getIndexFromVersion(index *secondaryIndex,
 	indexerVersion uint64) datastore.Index {
-	if indexerVersion >= c.INDEXER_50_VERSION {
-		// TODO: Returning API3 objects until upgrade to 5.5 is supported
+
+	switch indexerVersion {
+	case c.INDEXER_55_VERSION:
 		si2 := &secondaryIndex2{secondaryIndex: *index}
 		si3 := datastore.Index(&secondaryIndex3{secondaryIndex2: *si2})
 		return si3
-	} else {
+	case c.INDEXER_50_VERSION:
+		si2 := datastore.Index(&secondaryIndex2{secondaryIndex: *index})
+		return si2
+	default:
 		return datastore.Index(index)
 	}
 }
 
 func (gsi *gsiKeyspace) getPrimaryIndexFromVersion(index *secondaryIndex,
 	indexerVersion uint64) datastore.PrimaryIndex {
-	if indexerVersion >= c.INDEXER_50_VERSION {
-		// TODO: Returning API3 objects until upgrade to 5.5 is supported
+
+	switch indexerVersion {
+	case c.INDEXER_55_VERSION:
 		si2 := &secondaryIndex2{secondaryIndex: *index}
 		si3 := datastore.PrimaryIndex(&secondaryIndex3{secondaryIndex2: *si2})
 		return si3
-
-	} else {
+	case c.INDEXER_50_VERSION:
+		si2 := datastore.PrimaryIndex(&secondaryIndex2{secondaryIndex: *index})
+		return si2
+	default:
 		return datastore.PrimaryIndex(index)
 	}
 }
