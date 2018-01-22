@@ -180,7 +180,9 @@ func (s *IndexScanSource) Routine() error {
 			}
 
 			var docid []byte
-			if r.GroupAggr.DependsOnPrimaryKey {
+			if r.isPrimary {
+				docid = entry
+			} else if r.GroupAggr.DependsOnPrimaryKey {
 				docid, err = secondaryIndexEntry(entry).ReadDocId((docidbuf)[:0]) //docid for N1QLExpr evaluation for Group/Aggr
 				if err != nil {
 					return err
@@ -194,17 +196,17 @@ func (s *IndexScanSource) Routine() error {
 			count = 1 //reset count; count is used for aggregates computation
 		}
 
-		if !r.isPrimary && r.Indexprojection != nil && r.Indexprojection.projectSecKeys {
-			if ck == nil && len(entry) > cap(*buf) {
-				*buf = make([]byte, 0, len(entry)+1024)
-			}
-
+		if r.Indexprojection != nil && r.Indexprojection.projectSecKeys {
 			if r.GroupAggr != nil {
-				entry, err = projectGroupAggr((*buf)[:0], r.Indexprojection, s.p.aggrRes)
+				entry, err = projectGroupAggr((*buf)[:0], r.Indexprojection, s.p.aggrRes, r.isPrimary)
 				if entry == nil {
 					return err
 				}
-			} else {
+			} else if !r.isPrimary {
+				if ck == nil && len(entry) > cap(*buf) {
+					*buf = make([]byte, 0, len(entry)+1024)
+				}
+
 				entry, err = projectKeys(ck, entry, (*buf)[:0], r.Indexprojection)
 			}
 			if err != nil {
@@ -277,10 +279,11 @@ loop:
 		}
 
 		for {
-			entry, err := projectGroupAggr((*buf)[:0], r.Indexprojection, s.p.aggrRes)
+			entry, err := projectGroupAggr((*buf)[:0], r.Indexprojection, s.p.aggrRes, r.isPrimary)
 			if err != nil {
 				return err
 			}
+
 			if entry == nil {
 
 				if s.p.rowsReturned == 0 {
@@ -353,11 +356,11 @@ loop:
 		}
 
 		t := (*tmpBuf)[:0]
-		if d.p.req.isPrimary {
-			sk, docid = piSplitEntry(row, t)
-		} else if d.p.req.GroupAggr != nil {
+		if d.p.req.GroupAggr != nil {
 			codec := collatejson.NewCodec(16)
 			sk, _ = codec.Decode(row, t)
+		} else if d.p.req.isPrimary {
+			sk, docid = piSplitEntry(row, t)
 		} else {
 			sk, docid, _ = siSplitEntry(row, t)
 		}
@@ -659,8 +662,12 @@ func computeGroupAggr(compositekeys [][]byte, count int, docid, key,
 	buf []byte, aggrRes *aggrResult, groupAggr *GroupAggr) error {
 
 	var err error
-	codec := collatejson.NewCodec(16)
-	if compositekeys == nil {
+
+	if groupAggr.IsPrimary {
+		compositekeys = make([][]byte, 1)
+		compositekeys[0] = key
+	} else if compositekeys == nil {
+		codec := collatejson.NewCodec(16)
 		compositekeys, err = codec.ExplodeArray(key, buf)
 		if err != nil {
 			return err
@@ -716,7 +723,7 @@ func computeAggrVal(groupAggr *GroupAggr, ak *Aggregate,
 
 	a := groupAggr.aggrs[pos]
 	if ak.KeyPos >= 0 {
-		if ak.AggrFunc == c.AGG_SUM {
+		if ak.AggrFunc == c.AGG_SUM && !groupAggr.IsPrimary {
 			actualVal, err := decodeValue(compositekeys[ak.KeyPos], buf)
 			if err != nil {
 				return err
@@ -752,18 +759,25 @@ func computeAggrVal(groupAggr *GroupAggr, ak *Aggregate,
 func evaluateN1QLExpresssion(groupAggr *GroupAggr, expr expression.Expression,
 	compositekeys [][]byte, docid []byte) (value.Value, error) {
 
-	for _, ik := range groupAggr.DependsOnIndexKeys {
-		if int(ik) == len(compositekeys) {
+	if groupAggr.IsPrimary {
+		for _, ik := range groupAggr.DependsOnIndexKeys {
 			groupAggr.av.SetCover(groupAggr.IndexKeyNames[ik], value.NewValue(string(docid)))
-		} else {
-			buf := make([]byte, len(compositekeys[ik])*3+collatejson.MinBufferSize) // TODO: MB-27049 avoid garbage
-			actualVal, err := decodeValue(compositekeys[ik], buf)
-			if err != nil {
-				return nil, err
+		}
+	} else {
+		for _, ik := range groupAggr.DependsOnIndexKeys {
+			if int(ik) == len(compositekeys) {
+				groupAggr.av.SetCover(groupAggr.IndexKeyNames[ik], value.NewValue(string(docid)))
+			} else {
+				buf := make([]byte, len(compositekeys[ik])*3+collatejson.MinBufferSize) // TODO: MB-27049 avoid garbage
+				actualVal, err := decodeValue(compositekeys[ik], buf)
+				if err != nil {
+					return nil, err
+				}
+				groupAggr.av.SetCover(groupAggr.IndexKeyNames[ik], value.NewValue(actualVal))
 			}
-			groupAggr.av.SetCover(groupAggr.IndexKeyNames[ik], value.NewValue(actualVal))
 		}
 	}
+
 	scalar, _, err := expr.EvaluateForIndex(groupAggr.av, groupAggr.exprContext) // TODO: Ignore vector for now
 	if err != nil {
 		return nil, err
@@ -892,7 +906,7 @@ func projectEmptyResult(buf []byte, projection *Projection, groupAggr *GroupAggr
 
 		codec := collatejson.NewCodec(16)
 		if buf, err = codec.JoinArray(keysToJoin, buf); err != nil {
-			l.Errorf("ScanPipeline::projectGroupAggr join array error %v", err)
+			l.Errorf("ScanPipeline::projectEmptyResult join array error %v", err)
 			return nil, err
 		}
 
@@ -908,9 +922,10 @@ func projectEmptyResult(buf []byte, projection *Projection, groupAggr *GroupAggr
 
 }
 
-func projectGroupAggr(buf []byte, projection *Projection, aggrRes *aggrResult) ([]byte, error) {
-	var err error
+func projectGroupAggr(buf []byte, projection *Projection,
+	aggrRes *aggrResult, isPrimary bool) ([]byte, error) {
 
+	var err error
 	var row *aggrRow
 
 	for i, r := range aggrRes.rows {
@@ -929,19 +944,29 @@ func projectGroupAggr(buf []byte, projection *Projection, aggrRes *aggrResult) (
 	var keysToJoin [][]byte
 	for _, projGroup := range projection.projectGroupKeys {
 		if projGroup.grpKey {
-			var newKey []byte
-			switch val := row.groups[projGroup.pos].key.(type) {
-			case []byte:
-				newKey = val
-			case value.Value:
-				codec := collatejson.NewCodec(16)
-				encodeBuf := make([]byte, 1024) // TODO: use val.MarshalJSON() to determine size
-				newKey, err = codec.EncodeN1QLValue(val, encodeBuf[:0])
+			if isPrimary {
+				//TODO: will be optimized as part of overall pipeline optimization
+				val, err := encodeValue(string(row.groups[projGroup.pos].key.([]byte)))
 				if err != nil {
+					l.Errorf("ScanPipeline::projectGroupAggr encodeValue error %v", err)
 					return nil, err
 				}
+				keysToJoin = append(keysToJoin, val)
+			} else {
+				var newKey []byte
+				switch val := row.groups[projGroup.pos].key.(type) {
+				case []byte:
+					newKey = val
+				case value.Value:
+					codec := collatejson.NewCodec(16)
+					encodeBuf := make([]byte, 1024) // TODO: use val.MarshalJSON() to determine size
+					newKey, err = codec.EncodeN1QLValue(val, encodeBuf[:0])
+					if err != nil {
+						return nil, err
+					}
+				}
+				keysToJoin = append(keysToJoin, newKey)
 			}
-			keysToJoin = append(keysToJoin, newKey)
 		} else {
 			if row.aggrs[projGroup.pos].fn.Type() == c.AGG_SUM ||
 				row.aggrs[projGroup.pos].fn.Type() == c.AGG_COUNT ||
@@ -957,7 +982,16 @@ func projectGroupAggr(buf []byte, projection *Projection, aggrRes *aggrResult) (
 				switch v := val.(type) {
 
 				case []byte:
-					keysToJoin = append(keysToJoin, v)
+					if isPrimary {
+						val, err := encodeValue(string(v))
+						if err != nil {
+							l.Errorf("ScanPipeline::projectGroupAggr encodeValue error %v", err)
+							return nil, err
+						}
+						keysToJoin = append(keysToJoin, val)
+					} else {
+						keysToJoin = append(keysToJoin, v)
+					}
 
 				case value.Value:
 					eval, err := encodeValue(v.ActualForIndex())

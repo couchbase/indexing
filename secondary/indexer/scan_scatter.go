@@ -109,7 +109,7 @@ func scanOne(request *ScanRequest, scan Scan, snapshots []SliceSnapshot, cb Entr
 	errch := make(chan error, 1)
 	count := scanSingleSlice(request, scan, request.Ctxs[0], snapshots[0], nil, nil, errch, cb)
 
-	logging.Debugf("scan_scatter:scanOnce: scan done.  Count %v", count)
+	logging.Debugf("scan_scatter:scanOnce: scan done. Count %v", count)
 
 	errcnt := len(errch)
 	for i := 0; i < errcnt; i++ {

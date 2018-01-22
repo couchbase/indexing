@@ -188,6 +188,7 @@ type GroupAggr struct {
 	IndexKeyNames       []string     // Index key names used in expressions
 	DependsOnPrimaryKey bool
 	IsLeadingGroup      bool // Group by key(s) are leading subset
+	IsPrimary           bool
 
 	//For caching values
 	cv          *value.ScopeValue
@@ -323,6 +324,7 @@ func NewScanRequest(protoReq interface{},
 		if err = r.setConsistency(cons, vector); err != nil {
 			return
 		}
+
 		if proj != nil {
 			var localerr error
 			if req.GetGroupAggr() == nil {
@@ -1047,9 +1049,13 @@ func (r *ScanRequest) fillGroupAggr(protoGroupAggr *protobuf.GroupAggr) (err err
 		return
 	}
 
+	if r.isPrimary {
+		r.GroupAggr.IsPrimary = true
+	}
+
 	for _, d := range protoGroupAggr.GetDependsOnIndexKeys() {
 		r.GroupAggr.DependsOnIndexKeys = append(r.GroupAggr.DependsOnIndexKeys, d)
-		if int(d) == len(r.IndexInst.Defn.SecExprs) {
+		if !r.isPrimary && int(d) == len(r.IndexInst.Defn.SecExprs) {
 			r.GroupAggr.DependsOnPrimaryKey = true
 		}
 	}
@@ -1135,6 +1141,28 @@ func (r *ScanRequest) unmarshallAggrs(protoGroupAggr *protobuf.GroupAggr) error 
 
 func (r *ScanRequest) validateGroupAggr() error {
 
+	//identify leading/non-leading
+	var prevPos int32 = -1
+	r.GroupAggr.IsLeadingGroup = true
+	for _, g := range r.GroupAggr.Group {
+		if g.KeyPos < 0 {
+			r.GroupAggr.IsLeadingGroup = false
+			break
+		} else if g.KeyPos == 0 {
+			prevPos = 0
+		} else {
+			if g.KeyPos != prevPos+1 {
+				r.GroupAggr.IsLeadingGroup = false
+				break
+			}
+		}
+		prevPos = g.KeyPos
+	}
+
+	if r.isPrimary {
+		return nil
+	}
+
 	var err error
 
 	//validate aggregates
@@ -1167,28 +1195,6 @@ func (r *ScanRequest) validateGroupAggr() error {
 			return err
 		}
 	}
-
-	//identify leading/non-leading
-	var prevPos int32 = -1
-	r.GroupAggr.IsLeadingGroup = true
-	for _, g := range r.GroupAggr.Group {
-		if g.KeyPos < 0 {
-			r.GroupAggr.IsLeadingGroup = false
-			break
-		} else if g.KeyPos == 0 {
-			prevPos = 0
-		} else {
-			if g.KeyPos != prevPos+1 {
-				r.GroupAggr.IsLeadingGroup = false
-				break
-			}
-		}
-		prevPos = g.KeyPos
-	}
-
-	//project should only have group/agg fields
-
-	//top level distinct is not allowed
 
 	return nil
 }
