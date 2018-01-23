@@ -7,6 +7,7 @@ package protobuf;
 
 import "partn_tp.proto";
 import "partn_single.proto";
+import "partn_key.proto";
 
 // IndexDefn will be in one of the following state
 enum IndexState {
@@ -60,8 +61,8 @@ message IndexInst {
     required IndexDefn        definition  = 3; // contains DDL
     optional TestPartition    tp          = 4;
     optional SinglePartition  singlePartn = 5;
-    //optional KeyPartition   keyPartn    = 6;
-    //optional HashPartition  hashPartn   = 7;
+    optional KeyPartition     keyPartn    = 6;
+    //optional HashPartition    hashPartn   = 7;
     //optional RangePartition rangePartn  = 8;
 }
 

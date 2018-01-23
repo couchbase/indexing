@@ -590,11 +590,6 @@ func (o *MetadataProvider) PrepareIndexDefn(
 			}
 		}
 
-		immutable, err, retry = o.getImmutableParam(plan)
-		if err != nil {
-			return nil, err, retry
-		}
-
 		if len(partitionKeys) == 0 {
 			partitionKeys, err, retry = o.getPartitionKeyParam(plan, secExprs)
 			if err != nil {
@@ -612,6 +607,11 @@ func (o *MetadataProvider) PrepareIndexDefn(
 		}
 
 		numPartition, err, retry = o.getNumPartitionParam(partitionScheme, plan, version)
+		if err != nil {
+			return nil, err, retry
+		}
+
+		immutable, err, retry = o.getImmutableParam(partitionScheme, plan)
 		if err != nil {
 			return nil, err, retry
 		}
@@ -707,29 +707,29 @@ func (o *MetadataProvider) PrepareIndexDefn(
 	}
 
 	idxDefn := &c.IndexDefn{
-		DefnId:          defnID,
-		Name:            name,
-		Using:           c.IndexType(using),
-		Bucket:          bucket,
-		IsPrimary:       isPrimary,
-		SecExprs:        secExprs,
-		Desc:            desc,
-		ExprType:        c.ExprType(exprType),
-		PartitionScheme: partitionScheme,
-		PartitionKeys:   partitionKeys,
-		WhereExpr:       whereExpr,
-		Deferred:        deferred,
-		Nodes:           nodes,
-		Immutable:       immutable,
-		IsArrayIndex:    isArrayIndex,
-		NumReplica:      uint32(numReplica),
-		NumPartitions:   uint32(numPartition),
+		DefnId:             defnID,
+		Name:               name,
+		Using:              c.IndexType(using),
+		Bucket:             bucket,
+		IsPrimary:          isPrimary,
+		SecExprs:           secExprs,
+		Desc:               desc,
+		ExprType:           c.ExprType(exprType),
+		PartitionScheme:    partitionScheme,
+		PartitionKeys:      partitionKeys,
+		WhereExpr:          whereExpr,
+		Deferred:           deferred,
+		Nodes:              nodes,
+		Immutable:          immutable,
+		IsArrayIndex:       isArrayIndex,
+		NumReplica:         uint32(numReplica),
+		NumPartitions:      uint32(numPartition),
 		RetainDeletedXATTR: retainDeletedXATTR,
-		NumDoc:          numDoc,
-		SecKeySize:      secKeySize,
-		DocKeySize:      docKeySize,
-		ArrSize:         arrSize,
-		ResidentRatio:   residentRatio,
+		NumDoc:             numDoc,
+		SecKeySize:         secKeySize,
+		DocKeySize:         docKeySize,
+		ArrSize:            arrSize,
+		ResidentRatio:      residentRatio,
 	}
 
 	return idxDefn, nil, false
@@ -830,8 +830,10 @@ func (o *MetadataProvider) getNodesParam(plan map[string]interface{}) ([]string,
 	return nodes, nil, true
 }
 
-func (o *MetadataProvider) getImmutableParam(plan map[string]interface{}) (bool, error, bool) {
+func (o *MetadataProvider) getImmutableParam(partitionScheme c.PartitionScheme, plan map[string]interface{}) (bool, error, bool) {
 
+	// for partitioned index, by default, it is immutable, regardless it is a full index or partial index
+	//immutable := c.IsPartitioned(partitionScheme)
 	immutable := false
 
 	immutable2, ok := plan["immutable"].(bool)

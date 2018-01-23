@@ -1133,6 +1133,16 @@ func convertIndexListToProto(cfg c.Config, cinfo *c.ClusterInfoCache, indexList 
 		protoList = append(protoList, protoInst)
 	}
 
+	for _, index := range indexList {
+		if c.IsPartitioned(index.Defn.PartitionScheme) && index.RealInstId != 0 {
+			for _, protoInst := range protoList {
+				if protoInst.IndexInstance.GetInstId() == uint64(index.RealInstId) {
+					addPartnInfoToProtoInst(cfg, cinfo, index, streamId, protoInst.IndexInstance)
+				}
+			}
+		}
+	}
+
 	return protoList
 
 }
@@ -1157,18 +1167,22 @@ func convertIndexDefnToProtobuf(indexDefn c.IndexDefn) *protobuf.IndexDefn {
 		protobuf.ExprType_value[strings.ToUpper(string(indexDefn.ExprType))]).Enum()
 	partnScheme := protobuf.PartitionScheme(
 		protobuf.PartitionScheme_value[string(c.SINGLE)]).Enum()
+	if c.IsPartitioned(indexDefn.PartitionScheme) {
+		partnScheme = protobuf.PartitionScheme(
+			protobuf.PartitionScheme_value[string(c.KEY)]).Enum()
+	}
 
 	defn := &protobuf.IndexDefn{
-		DefnID:           proto.Uint64(uint64(indexDefn.DefnId)),
-		Bucket:           proto.String(indexDefn.Bucket),
-		IsPrimary:        proto.Bool(indexDefn.IsPrimary),
-		Name:             proto.String(indexDefn.Name),
-		Using:            using,
-		ExprType:         exprType,
-		SecExpressions:   indexDefn.SecExprs,
-		PartitionScheme:  partnScheme,
-		PartnExpressions: indexDefn.PartitionKeys,
-		WhereExpression:  proto.String(indexDefn.WhereExpr),
+		DefnID:             proto.Uint64(uint64(indexDefn.DefnId)),
+		Bucket:             proto.String(indexDefn.Bucket),
+		IsPrimary:          proto.Bool(indexDefn.IsPrimary),
+		Name:               proto.String(indexDefn.Name),
+		Using:              using,
+		ExprType:           exprType,
+		SecExpressions:     indexDefn.SecExprs,
+		PartitionScheme:    partnScheme,
+		PartnExpressions:   indexDefn.PartitionKeys,
+		WhereExpression:    proto.String(indexDefn.WhereExpr),
 		RetainDeletedXATTR: proto.Bool(indexDefn.RetainDeletedXATTR),
 	}
 
@@ -1234,8 +1248,21 @@ func addPartnInfoToProtoInst(cfg c.Config, cinfo *c.ClusterInfoCache,
 			endpoints = append(endpoints, string(e))
 		}
 
-		protoInst.SinglePartn = &protobuf.SinglePartition{
-			Endpoints: endpoints,
+		if !c.IsPartitioned(indexInst.Defn.PartitionScheme) {
+			protoInst.SinglePartn = &protobuf.SinglePartition{
+				Endpoints: endpoints,
+			}
+		} else {
+			partIds := make([]uint64, len(partnDefn))
+			for i, p := range partnDefn {
+				partIds[i] = uint64(p.GetPartitionId())
+			}
+
+			if protoInst.KeyPartn == nil {
+				protoInst.KeyPartn = protobuf.NewKeyPartition(uint64(indexInst.Pc.GetNumPartitions()), endpoints, partIds)
+			} else {
+				protoInst.KeyPartn.AddPartitions(partIds)
+			}
 		}
 	}
 }

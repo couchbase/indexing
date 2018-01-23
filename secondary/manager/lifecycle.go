@@ -397,6 +397,10 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scheduled bool,
 		return err
 	}
 
+	if err := m.setImmutable(defn); err != nil {
+		return err
+	}
+
 	instId, realInstId, err := m.setInstId(defn)
 	if err != nil {
 		return err
@@ -540,6 +544,20 @@ func (m *LifecycleMgr) setStorageMode(defn *common.IndexDefn) error {
 			err := fmt.Sprintf("Create Index fails. Reason = Unsupported Using Clause %v", string(defn.Using))
 			logging.Errorf("LifecycleMgr.handleCreateIndex: " + err)
 			return errors.New(err)
+		}
+	}
+
+	return nil
+}
+
+func (m *LifecycleMgr) setImmutable(defn *common.IndexDefn) error {
+
+	// If it is a partitioned index, immutable is set to true by default.
+	// If immutable is true, then set it to false for MOI, so flusher can process
+	// upsertDeletion mutation.
+	if common.IsPartitioned(defn.PartitionScheme) && defn.Immutable {
+		if defn.Using == common.MemoryOptimized {
+			//defn.Immutable = false
 		}
 	}
 
@@ -1262,6 +1280,10 @@ func (m *LifecycleMgr) CreateIndexInstance(defn *common.IndexDefn, scheduled boo
 	}
 
 	if err := m.setStorageMode(defn); err != nil {
+		return err
+	}
+
+	if err := m.setImmutable(defn); err != nil {
 		return err
 	}
 

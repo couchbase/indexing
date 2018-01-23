@@ -2640,7 +2640,92 @@ func (idx *indexer) cleanupIndex(indexInst common.IndexInst,
 		return
 	}
 
+	// if it is a proxy
+	if indexInst.RealInstId != 0 && indexInst.RealInstId != indexInst.InstId {
+		// build for proxy is done.   The projector could be sending mutations to the real index inst on proxy partitions.
+		if indexInst.State == common.INDEX_STATE_CATCHUP || indexInst.State == common.INDEX_STATE_ACTIVE {
+			if realInst, ok := idx.indexInstMap[indexInst.RealInstId]; ok {
+				if realInst.Stream == indexInst.Stream {
+					if realInst.State == common.INDEX_STATE_CATCHUP || realInst.State == common.INDEX_STATE_ACTIVE {
+						idx.sendStreamUpdateForIndex(realInst)
+					}
+				}
+			}
+		}
+	}
+
 	clientCh <- &MsgSuccess{}
+}
+
+func (idx *indexer) sendStreamUpdateForIndex(indexInst common.IndexInst) {
+
+	respCh := make(MsgChannel)
+	stopCh := make(StopChannel)
+
+	streamId := indexInst.Stream
+	bucket := indexInst.Defn.Bucket
+	bucketUUID := indexInst.Defn.BucketUUID
+
+	cmd := &MsgStreamUpdate{
+		mType:     ADD_INDEX_LIST_TO_STREAM,
+		streamId:  streamId,
+		bucket:    bucket,
+		indexList: []common.IndexInst{indexInst},
+		respCh:    respCh,
+		stopCh:    stopCh}
+
+	clustAddr := idx.config["clusterAddr"].String()
+	retryCount := 0
+
+	reqLock := idx.acquireStreamRequestLock(bucket, streamId)
+	go func(reqLock *kvRequest) {
+		defer idx.releaseStreamRequestLock(reqLock)
+		idx.waitStreamRequestLock(reqLock)
+	retryloop:
+		for {
+			if !ValidateBucket(clustAddr, bucket, []string{bucketUUID}) {
+				logging.Errorf("Indexer::sendStreamUpdateForIndex \n\tBucket Not Found "+
+					"For Stream %v Bucket %v", streamId, bucket)
+				break retryloop
+			}
+			idx.sendMsgToKVSender(cmd)
+
+			if resp, ok := <-respCh; ok {
+
+				switch resp.GetMsgType() {
+
+				case MSG_SUCCESS:
+					logging.Infof("Indexer::sendStreamUpdateForIndex Success Stream %v Bucket %v ",
+						streamId, bucket)
+					break retryloop
+
+				default:
+					//log and retry for all other responses
+					respErr := resp.(*MsgError).GetError()
+
+					//If projector returns TopicMissing/GenServerClosed, AddInstance
+					//cannot succeed. This needs to be aborted so that stream lock is
+					//released and MTR can proceed to repair the Topic.
+					if respErr.cause.Error() == common.ErrorClosed.Error() ||
+						respErr.cause.Error() == projClient.ErrorTopicMissing.Error() {
+						logging.Warnf("Indexer::sendStreamUpdateForIndex Stream %v Bucket %v "+
+							"Error from Projector %v. Aborting.", streamId, bucket, respErr.cause)
+						break retryloop
+					} else if retryCount < 10 {
+						logging.Errorf("Indexer::sendStreamUpdateForIndex Stream %v Bucket %v "+
+							"Error from Projector %v. Retrying.", streamId, bucket, respErr.cause)
+						retryCount++
+						time.Sleep(KV_RETRY_INTERVAL * time.Millisecond)
+					} else {
+						logging.Errorf("Indexer::sendStreamUpdateForIndex Stream %v Bucket %v "+
+							"Error from Projector %v. Reach max retry count.  Stop retrying.",
+							streamId, bucket, respErr.cause)
+						break retryloop
+					}
+				}
+			}
+		}
+	}(reqLock)
 }
 
 func (idx *indexer) shutdownWorkers() {
@@ -3334,6 +3419,21 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 			}
 		}
 		return
+	}
+
+	// If index is a proxy, add the real index instance to the list.  This will
+	// also update the partition list of the real index instance in projector.
+	// Note that the real inst should be active or being built at the same time as the proxy.
+	for _, index := range indexList {
+		if common.IsPartitioned(index.Defn.PartitionScheme) && index.RealInstId != 0 && index.InstId != index.RealInstId {
+			if realInst, ok := idx.indexInstMap[index.RealInstId]; ok {
+				indexList = append(indexList, realInst)
+			} else {
+				err := fmt.Errorf("Fail to find real index instance %v", index.RealInstId)
+				logging.Errorf("Indexer::handleInitialBuildDone. %v", err)
+				common.CrashOnError(err)
+			}
+		}
 	}
 
 	//Add index to MAINT_STREAM in Catchup State,
