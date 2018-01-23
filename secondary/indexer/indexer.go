@@ -456,6 +456,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	// Initialize the REST servers after indexer bootstrap is completed
 	cluster := idx.config["clusterAddr"].String()
 	NewTestServer(cluster)
+	NewRestServer(cluster, idx.statsMgr)
 
 	go idx.monitorMemUsage()
 	go idx.logMemstats()
