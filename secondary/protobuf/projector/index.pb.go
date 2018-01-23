@@ -2,16 +2,6 @@
 // source: index.proto
 // DO NOT EDIT!
 
-/*
-Package protobuf is a generated protocol buffer package.
-
-It is generated from these files:
-	index.proto
-
-It has these top-level messages:
-	IndexInst
-	IndexDefn
-*/
 package protobuf
 
 import proto "github.com/golang/protobuf/proto"
@@ -248,9 +238,10 @@ type IndexDefn struct {
 	SecExpressions  []string         `protobuf:"bytes,7,rep,name=secExpressions" json:"secExpressions,omitempty"`
 	PartitionScheme *PartitionScheme `protobuf:"varint,8,opt,name=partitionScheme,enum=protobuf.PartitionScheme" json:"partitionScheme,omitempty"`
 	// optional string          partnExpression = 9; // use expressions to evaluate doc
-	WhereExpression  *string  `protobuf:"bytes,10,opt,name=whereExpression" json:"whereExpression,omitempty"`
-	PartnExpressions []string `protobuf:"bytes,11,rep,name=partnExpressions" json:"partnExpressions,omitempty"`
-	XXX_unrecognized []byte   `json:"-"`
+	WhereExpression    *string  `protobuf:"bytes,10,opt,name=whereExpression" json:"whereExpression,omitempty"`
+	PartnExpressions   []string `protobuf:"bytes,11,rep,name=partnExpressions" json:"partnExpressions,omitempty"`
+	RetainDeletedXATTR *bool    `protobuf:"varint,12,opt,name=retainDeletedXATTR" json:"retainDeletedXATTR,omitempty"`
+	XXX_unrecognized   []byte   `json:"-"`
 }
 
 func (m *IndexDefn) Reset()         { *m = IndexDefn{} }
@@ -325,6 +316,13 @@ func (m *IndexDefn) GetPartnExpressions() []string {
 		return m.PartnExpressions
 	}
 	return nil
+}
+
+func (m *IndexDefn) GetRetainDeletedXATTR() bool {
+	if m != nil && m.RetainDeletedXATTR != nil {
+		return *m.RetainDeletedXATTR
+	}
+	return false
 }
 
 func init() {

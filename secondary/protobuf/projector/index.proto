@@ -78,4 +78,5 @@ message IndexDefn {
     //optional string          partnExpression = 9; // use expressions to evaluate doc
     optional string          whereExpression = 10; // where predicate
     repeated string          partnExpressions  = 11; // use expressions to evaluate doc
+    optional bool            retainDeletedXATTR = 12; // index XATTRs of deleted docs
 }

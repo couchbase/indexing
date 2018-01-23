@@ -35,6 +35,7 @@ type IndexManager struct {
 	coordinator   *Coordinator
 	eventMgr      *eventManager
 	lifecycleMgr  *LifecycleMgr
+	cinfoClient   *common.ClusterInfoClient
 	requestServer RequestServer
 	basepath      string
 	quota         uint64
@@ -155,11 +156,16 @@ func NewIndexManagerInternal(config common.Config, storageMode common.StorageMod
 	os.Mkdir(mgr.basepath, 0755)
 	repoName := filepath.Join(mgr.basepath, gometaC.REPOSITORY_NAME)
 
-	cinfo, err := common.FetchNewClusterInfoCache(mgr.clusterURL, common.DEFAULT_POOL)
+	cic, err := common.NewClusterInfoClient(mgr.clusterURL, common.DEFAULT_POOL, config)
 	if err != nil {
 		mgr.Close()
 		return nil, err
 	}
+	mgr.cinfoClient = cic
+
+	cinfo := cic.GetClusterInfoCache()
+	cinfo.RLock()
+	defer cinfo.RUnlock()
 
 	adminPort, err := cinfo.GetLocalServicePort(common.INDEX_ADMIN_SERVICE)
 	if err != nil {
@@ -250,6 +256,10 @@ func (m *IndexManager) Close() {
 
 	if m.repo != nil {
 		m.repo.Close()
+	}
+
+	if m.cinfoClient != nil {
+		m.cinfoClient.Close()
 	}
 
 	if m.monitorKillch != nil {

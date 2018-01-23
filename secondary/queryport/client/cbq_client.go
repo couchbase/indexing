@@ -141,6 +141,12 @@ func (b *cbqClient) CreateIndex(
 	var resp *http.Response
 	var mresp indexMetaResponse
 
+	var withJSON = make(map[string]interface{})
+	if err := json.Unmarshal(with, &withJSON); err != nil {
+		panic(err)
+	}
+	retainDeletedXATTR := withJSON["retain_deleted_xattr"].(bool)
+
 	// Construct request body.
 	info := indexInfo{
 		Name:      name,
@@ -150,6 +156,7 @@ func (b *cbqClient) CreateIndex(
 		WhereExpr: whereExpr,
 		SecExprs:  secExprs,
 		IsPrimary: isPrimary,
+		RetainDeletedXATTR: retainDeletedXATTR,
 	}
 	req := indexRequest{Type: "create", Index: info}
 	body, err := json.Marshal(req)
@@ -292,6 +299,7 @@ type indexInfo struct {
 	SecExprs  []string `json:"secExprs,omitempty"`
 	WhereExpr string   `json:"whereExpr,omitempty"`
 	IsPrimary bool     `json:"isPrimary,omitempty"`
+	RetainDeletedXATTR bool `json:"retainDeletedXATTR,omitempty"`
 }
 
 func newIndexMetaData(info *indexInfo, queryport string) *mclient.IndexMetadata {
@@ -303,6 +311,7 @@ func newIndexMetaData(info *indexInfo, queryport string) *mclient.IndexMetadata 
 		IsPrimary: info.IsPrimary,
 		ExprType:  common.ExprType(info.ExprType),
 		SecExprs:  info.SecExprs,
+		RetainDeletedXATTR: info.RetainDeletedXATTR,
 		//PartitionKey: info.PartnExpr,
 	}
 	instances := []*mclient.InstanceDefn{

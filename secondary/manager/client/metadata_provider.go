@@ -508,6 +508,7 @@ func (o *MetadataProvider) PrepareIndexDefn(
 	var nodes []string = nil
 	var numReplica int = 0
 	var numPartition int = 0
+	var retainDeletedXATTR = false
 
 	version := o.GetIndexerVersion()
 	clusterVersion := o.GetClusterVersion()
@@ -524,6 +525,11 @@ func (o *MetadataProvider) PrepareIndexDefn(
 		}
 
 		deferred, err, retry = o.getDeferredParam(plan)
+		if err != nil {
+			return nil, err, retry
+		}
+
+		retainDeletedXATTR, err, retry = o.getXATTRParam(plan)
 		if err != nil {
 			return nil, err, retry
 		}
@@ -667,6 +673,7 @@ func (o *MetadataProvider) PrepareIndexDefn(
 		IsArrayIndex:    isArrayIndex,
 		NumReplica:      uint32(numReplica),
 		NumPartitions:   uint32(numPartition),
+		RetainDeletedXATTR: retainDeletedXATTR,
 	}
 
 	return idxDefn, nil, false
@@ -741,6 +748,31 @@ func (o *MetadataProvider) getImmutableParam(plan map[string]interface{}) (bool,
 	}
 
 	return immutable, nil, false
+}
+
+func (o *MetadataProvider) getXATTRParam(plan map[string]interface{}) (bool, error, bool) {
+
+	xattr := false
+
+	xattr2, ok := plan["retain_deleted_xattr"].(bool)
+	if !ok {
+		xattr_str, ok := plan["retain_deleted_xattr"].(string)
+		if ok {
+			var err error
+			xattr2, err = strconv.ParseBool(xattr_str)
+			if err != nil {
+				return false, errors.New("Fails to create index.  Parameter retain_deleted_xattr must be a boolean value of (true or false)."), false
+			}
+			xattr = xattr2
+
+		} else if _, ok := plan["retain_deleted_xattr"]; ok {
+			return false, errors.New("Fails to create index.  Parameter retain_deleted_xattr must be a boolean value of (true or false)."), false
+		}
+	} else {
+		xattr = xattr2
+	}
+
+	return xattr, nil, false
 }
 
 func (o *MetadataProvider) getDeferredParam(plan map[string]interface{}) (bool, error, bool) {

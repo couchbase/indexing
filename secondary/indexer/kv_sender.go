@@ -1169,6 +1169,7 @@ func convertIndexDefnToProtobuf(indexDefn c.IndexDefn) *protobuf.IndexDefn {
 		PartitionScheme:  partnScheme,
 		PartnExpressions: indexDefn.PartitionKeys,
 		WhereExpression:  proto.String(indexDefn.WhereExpr),
+		RetainDeletedXATTR: proto.Bool(indexDefn.RetainDeletedXATTR),
 	}
 
 	return defn
