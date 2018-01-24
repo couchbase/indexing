@@ -677,7 +677,7 @@ func (k *kvSender) sendMutationTopicRequest(ap *projClient.Client, topic string,
 	instances []*protobuf.Instance) (*protobuf.TopicResponse, error) {
 
 	logging.Infof("KVSender::sendMutationTopicRequest Projector %v Topic %v %v \n\tInstances %v",
-		ap, topic, reqTimestamps.GetBucket(), instances)
+		ap, topic, reqTimestamps.GetBucket(), formatInstances(instances))
 
 	logging.LazyVerbosef("KVSender::sendMutationTopicRequest RequestTS %v", reqTimestamps.Repr)
 
@@ -760,12 +760,12 @@ func sendAddInstancesRequest(ap *projClient.Client,
 	instances []*protobuf.Instance) (*protobuf.TimestampResponse, error) {
 
 	logging.Infof("KVSender::sendAddInstancesRequest Projector %v Topic %v \nInstances %v",
-		ap, topic, instances)
+		ap, topic, formatInstances(instances))
 
 	if res, err := ap.AddInstances(topic, instances); err != nil {
 		logging.Errorf("KVSender::sendAddInstancesRequest Unexpected Error During "+
 			"Add Instances Request Projector %v Topic %v IndexInst %v. Err %v", ap,
-			topic, instances, err)
+			topic, formatInstances(instances), err)
 
 		return res, err
 	} else {
@@ -1307,4 +1307,25 @@ func debugPrintTs(tsList []*protobuf.TsVbuuid, bucket string) string {
 	}
 
 	return ""
+}
+
+func formatInstances(instances []*protobuf.Instance) string {
+	instanceStr := "["
+	for _, instance := range instances {
+		inst := instance.GetIndexInstance()
+		defn := inst.GetDefinition()
+		instanceStr += "indexInstance:<"
+		instanceStr += fmt.Sprintf("instId:%v ", inst.GetInstId())
+		instanceStr += fmt.Sprintf("state:%v ", inst.GetState())
+		instanceStr += fmt.Sprintf(" definition:<defnID:%v bucket:%v isPrimary:%v name:%v using:%v "+
+			"exprType:%v secExpressions:%v partitionScheme:%v whereExpression:%v > ",
+			defn.GetDefnID(), defn.GetBucket(), defn.GetIsPrimary(),
+			defn.GetName(), defn.GetUsing(), defn.GetExprType(),
+			logging.TagUD(defn.GetSecExpressions()), defn.GetPartitionScheme(),
+			logging.TagUD(defn.GetWhereExpression()))
+		instanceStr += fmt.Sprintf("singlePartn:%v", inst.GetSinglePartn())
+		instanceStr += "> "
+	}
+	instanceStr += "]"
+	return instanceStr
 }

@@ -342,7 +342,7 @@ func (f *flusher) flushSingleMutation(mut *MutationKeys, streamId common.StreamI
 func (f *flusher) flush(mutk *MutationKeys, streamId common.StreamId) {
 
 	logging.LazyTrace(func() string {
-		return fmt.Sprintf("Flusher::flush Flushing Stream %v Mutations %v", streamId, mutk)
+		return fmt.Sprintf("Flusher::flush Flushing Stream %v Mutations %v", streamId, logging.TagUD(mutk))
 	})
 
 	var processedUpserts []common.IndexInstId
@@ -353,7 +353,7 @@ func (f *flusher) flush(mutk *MutationKeys, streamId common.StreamId) {
 		if idxInst, ok = f.indexInstMap[mut.uuid]; !ok {
 			logging.LazyTrace(func() string {
 				return fmt.Sprintf("Flusher::flush Unknown Index Instance Id %v. "+
-					"Skipped Mutation Key %v", mut.uuid, mut.key)
+					"Skipped Mutation Key %v", mut.uuid, logging.TagUD(mut.key))
 			})
 			continue
 		}
@@ -363,7 +363,7 @@ func (f *flusher) flush(mutk *MutationKeys, streamId common.StreamId) {
 			logging.LazyTrace(func() string {
 				return fmt.Sprintf("Flusher::flush Found Mutation For IndexId: %v Stream: %v In "+
 					"Stream: %v. Skipped Mutation Key %v", idxInst.InstId, idxInst.Stream,
-					streamId, mut.key)
+					streamId, logging.TagUD(mut.key))
 			})
 			continue
 		}
@@ -373,7 +373,7 @@ func (f *flusher) flush(mutk *MutationKeys, streamId common.StreamId) {
 		if idxInst.State == common.INDEX_STATE_DELETED {
 			logging.LazyTrace(func() string {
 				return fmt.Sprintf("Flusher::flush Found Mutation For IndexId: %v In "+
-					"DELETED State. Skipped Mutation Key %v", idxInst.InstId, mut.key)
+					"DELETED State. Skipped Mutation Key %v", idxInst.InstId, logging.TagUD(mut.key))
 			})
 			continue
 		}
@@ -412,7 +412,7 @@ func (f *flusher) flush(mutk *MutationKeys, streamId common.StreamId) {
 
 		default:
 			logging.Errorf("Flusher::flush Unknown mutation type received. Skipped %v",
-				mut.key)
+				logging.TagUD(mut.key))
 		}
 	}
 }
@@ -427,7 +427,7 @@ func (f *flusher) processUpsert(mut *Mutation, docid []byte, meta *MutationMeta)
 	var ok bool
 	if partnInstMap, ok = f.indexPartnMap[mut.uuid]; !ok {
 		logging.Errorf("Flusher::processUpsert Missing Partition Instance Map"+
-			"for IndexInstId: %v. Skipped Mutation Key: %v", mut.uuid, mut.key)
+			"for IndexInstId: %v. Skipped Mutation Key: %v", mut.uuid, logging.TagUD(mut.key))
 		return
 	}
 
@@ -436,16 +436,16 @@ func (f *flusher) processUpsert(mut *Mutation, docid []byte, meta *MutationMeta)
 		if err := slice.Insert(mut.key, docid, meta); err != nil {
 			logging.Errorf("Flusher::processUpsert Error indexing Key: %s "+
 				"docid: %s in Slice: %v. Error: %v. Skipped.",
-				mut.key, docid, slice.Id(), err)
+				logging.TagUD(mut.key), logging.TagStrUD(docid), slice.Id(), err)
 
 			if err2 := slice.Delete(docid, meta); err2 != nil {
 				logging.Errorf("Flusher::processUpsert Error removing entry due to error %v Key: %s "+
-					"docid: %s in Slice: %v. Error: %v", err, mut.key, docid, slice.Id(), err2)
+					"docid: %s in Slice: %v. Error: %v", err, logging.TagUD(mut.key), logging.TagStrUD(docid), slice.Id(), err2)
 			}
 		}
 	} else {
 		logging.Debugf("Flusher::processUpsert Partition Instance not found "+
-			"for Id: %v Skipped Mutation Key: %v", partnId, mut.key)
+			"for Id: %v Skipped Mutation Key: %v", partnId, logging.TagUD(mut.key))
 	}
 
 }
@@ -456,7 +456,7 @@ func (f *flusher) processDelete(mut *Mutation, docid []byte, meta *MutationMeta)
 	var ok bool
 	if partnInstMap, ok = f.indexPartnMap[mut.uuid]; !ok {
 		logging.Errorf("Flusher:processDelete Missing Partition Instance Map"+
-			"for IndexInstId: %v. Skipped Mutation Key: %v", mut.uuid, mut.key)
+			"for IndexInstId: %v. Skipped Mutation Key: %v", mut.uuid, logging.TagUD(mut.key))
 		return
 	}
 
@@ -464,7 +464,7 @@ func (f *flusher) processDelete(mut *Mutation, docid []byte, meta *MutationMeta)
 		slice := partnInst.Sc.GetSliceByIndexKey(common.IndexKey(mut.key))
 		if err := slice.Delete(docid, meta); err != nil {
 			logging.Errorf("Flusher::processDelete Error Deleting DocId: %v "+
-				"from Slice: %v", docid, slice.Id())
+				"from Slice: %v", logging.TagStrUD(docid), slice.Id())
 		}
 	}
 }

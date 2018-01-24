@@ -68,7 +68,7 @@ func main() {
 	// setup cbauth
 	if *auth != "" {
 		up := strings.Split(*auth, ":")
-		logging.Tracef("Initializing cbauth with user %v for cluster %v\n", up[0], *cluster)
+		logging.Tracef("Initializing cbauth with user %v for cluster %v\n", logging.TagUD(up[0]), *cluster)
 		if _, err := cbauth.InternalRetryDefaultInit(*cluster, up[0], up[1]); err != nil {
 			logging.Fatalf("Failed to initialize cbauth: %s", err)
 		}

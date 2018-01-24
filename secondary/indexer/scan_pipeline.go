@@ -190,7 +190,7 @@ func (s *IndexScanSource) Routine() error {
 			if err != nil {
 				return err
 			}
-			l.Debugf("ScanPipeline::computeGroupAggr %v", s.p.aggrRes)
+			l.Debugf("ScanPipeline::computeGroupAggr %v", l.TagUD(s.p.aggrRes))
 			count = 1 //reset count; count is used for aggregates computation
 		}
 
@@ -784,7 +784,7 @@ func (ar *aggrResult) AddNewGroup(groups []*groupKey, aggrs []*aggrVal) error {
 	for _, row := range ar.rows {
 		if row.CheckEqualGroup(groups) {
 			nomatch = false
-			l.Debugf("ScanPipeline::AddNewGroup Add to Same Group %v", row)
+			l.Debugf("ScanPipeline::AddNewGroup Add to Same Group %v", l.TagUD(row))
 			err = row.AddAggregate(aggrs)
 			if err != nil {
 				return err
@@ -807,7 +807,7 @@ func (ar *aggrResult) AddNewGroup(groups []*groupKey, aggrs []*aggrVal) error {
 
 		newRow.AddAggregate(aggrs)
 
-		l.Debugf("ScanPipeline::AddNewGroup Add New Group %v", newRow)
+		l.Debugf("ScanPipeline::AddNewGroup Add New Group %v", l.TagUD(newRow))
 
 		//flush the first row
 		if len(ar.rows) >= ar.maxRows {

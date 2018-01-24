@@ -90,6 +90,10 @@ func TestRestfulAPI(t *testing.T) {
 	err = restful_countscan(ids)
 	FailTestIfError(err, "Error in restful_countscan", t)
 	log.Println()
+
+	err = restful_stats(indexes)
+	FailTestIfError(err, "Error in restful_stats", t)
+	log.Println()
 }
 
 func makeurl(path string) (string, error) {
@@ -99,6 +103,15 @@ func makeurl(path string) (string, error) {
 	}
 	return fmt.Sprintf("http://%s:%s@%v%v",
 		clusterconfig.Username, clusterconfig.Password, indexers[0], path), nil
+}
+
+func noauthurl(path string) (string, error) {
+	indexers, _ := sifw.GetIndexerNodesHttpAddresses(indexManagementAddress)
+	if len(indexers) == 0 {
+		return "", fmt.Errorf("no indexer node")
+	}
+	return fmt.Sprintf("http://%s:%s@%v%v",
+		"nouser", "nopwd", indexers[0], path), nil
 }
 
 func restful_getall() (map[string]interface{}, error) {
@@ -462,6 +475,122 @@ func restful_lookup(ids []string) error {
 		docs, "address.city", "Rome", "Rome", 3)
 	if err := validateEntries(docScanResults, entries); err != nil {
 		return err
+	}
+	return nil
+}
+
+func restful_stats(indexes map[string]interface{}) error {
+	var auth, noAuth []string
+	// Indexer level stats
+	auth_indexer_1, err := makeurl(fmt.Sprintf("/api/stats"))
+	if err != nil {
+		return err
+	}
+	auth = append(auth, auth_indexer_1)
+	auth_indexer_2, err := makeurl(fmt.Sprintf("/api/stats/"))
+	if err != nil {
+		return err
+	}
+	auth = append(auth, auth_indexer_2)
+	noAuth_indexer, err := noauthurl(fmt.Sprintf("/api/stats"))
+	if err != nil {
+		return err
+	}
+	noAuth = append(noAuth, noAuth_indexer)
+	done := make(map[string]bool)
+	// Bucket and Index level stats
+	for _, index := range indexes {
+		definitions := index.(map[string]interface{})["definitions"]
+		info := definitions.(map[string]interface{})
+		bucket := info["bucket"]
+		name := info["name"]
+		auth_bucket_1, err := makeurl(fmt.Sprintf("/api/stats/%s", bucket))
+		if err != nil {
+			return err
+		}
+		if _, ok := done[auth_bucket_1]; !ok {
+			auth = append(auth, auth_bucket_1)
+			done[auth_bucket_1] = true
+		}
+		auth_bucket_2, err := makeurl(fmt.Sprintf("/api/stats/%s/", bucket))
+		if err != nil {
+			return err
+		}
+		if _, ok := done[auth_bucket_2]; !ok {
+			auth = append(auth, auth_bucket_2)
+			done[auth_bucket_2] = true
+		}
+		auth_index_1, err := makeurl(fmt.Sprintf("/api/stats/%s/%s", bucket, name))
+		if err != nil {
+			return err
+		}
+		if _, ok := done[auth_index_1]; !ok {
+			auth = append(auth, auth_index_1)
+			done[auth_index_1] = true
+		}
+		auth_index_2, err := makeurl(fmt.Sprintf("/api/stats/%s/%s/", bucket, name))
+		if err != nil {
+			return err
+		}
+		if _, ok := done[auth_index_2]; !ok {
+			auth = append(auth, auth_index_2)
+			done[auth_index_2] = true
+		}
+		noAuth_bucket, err := noauthurl(fmt.Sprintf("/api/stats/%s", bucket))
+		if err != nil {
+			return err
+		}
+		if _, ok := done[noAuth_bucket]; !ok {
+			noAuth = append(noAuth, noAuth_bucket)
+			done[noAuth_bucket] = true
+		}
+		noAuth_index, err := noauthurl(fmt.Sprintf("/api/stats/%s/%s", bucket, name))
+		if err != nil {
+			return err
+		}
+		if _, ok := done[noAuth_index]; !ok {
+			noAuth = append(noAuth, noAuth_index)
+			done[noAuth_index] = true
+		}
+	}
+	log.Println("Testing URLs with valid authentication")
+	for _, URL := range auth {
+		if err := validate_status(URL, 200); err != nil {
+			return err
+		}
+	}
+	log.Println("Testing URLs with invalid authentication")
+	for _, URL := range noAuth {
+		if err := validate_status(URL, 401); err != nil {
+			return err
+		}
+	}
+	log.Println("Testing an invalid URL")
+	invalid, err := makeurl("/api/stats/nobucket/noindex")
+	if err != nil {
+		return err
+	}
+	if err := validate_status(invalid, 404); err != nil {
+		return err
+	}
+	log.Println("Testing an invalid method")
+	resp, err := http.PostForm(auth[0], nil)
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode != 400 {
+		return fmt.Errorf("ERROR: POST %s Returned %d Expected %d\n", auth[0], resp.StatusCode, 400)
+	}
+	return nil
+}
+
+func validate_status(URL string, expected int) error {
+	resp, err := http.Get(URL)
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode != expected {
+		return fmt.Errorf("ERROR: %s Returned %d Expected %d\n", URL, resp.StatusCode, expected)
 	}
 	return nil
 }

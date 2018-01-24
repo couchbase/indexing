@@ -31,3 +31,19 @@ func GetArrayExpressionPosition(exprs []string) (bool, bool, int, error) {
 	}
 	return isArrayIndex, isArrayDistinct, arrayExprPos, nil
 }
+
+func IsXATTRIndex(secExprs []string) (bool, error) {
+	var isXATTRIndex bool
+	xattrs := qexpr.NewField(qexpr.NewMeta(), qexpr.NewFieldName("xattrs", false))
+	for _, expr := range secExprs {
+		expr, err := qparser.Parse(expr)
+		if err != nil {
+			return false, err
+		}
+		if expr.DependsOn(xattrs) {
+			isXATTRIndex = true
+			break
+		}
+	}
+	return isXATTRIndex, nil
+}

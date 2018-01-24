@@ -26,6 +26,9 @@ const (
 	Trace
 )
 
+const udtag_begin = "<ud>"
+const udtag_end = "</ud>"
+
 // Logger interface
 type Logger interface {
 	// Warnings, logged by default.
@@ -368,9 +371,12 @@ func LazyTracef(fmt string, fns ...func() string) {
 	}
 }
 
-// log redaction related
+// Tag user data in default format
 func TagUD(arg interface{}) interface{} {
-	var udtag_begin = "<ud>"
-	var udtag_end = "</ud>"
 	return fmt.Sprintf("%s(%v)%s", udtag_begin, arg, udtag_end)
+}
+
+// Tag user data in string format
+func TagStrUD(arg interface{}) interface{} {
+	return fmt.Sprintf("%s(%s)%s", udtag_begin, arg, udtag_end)
 }

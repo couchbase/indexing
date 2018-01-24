@@ -529,9 +529,26 @@ func (o *MetadataProvider) PrepareIndexDefn(
 			return nil, err, retry
 		}
 
+		isXATTRIndex, err := queryutil.IsXATTRIndex(secExprs)
+		if err != nil {
+			return nil, err, retry
+		}
+
+		if isXATTRIndex && clusterVersion < c.INDEXER_55_VERSION {
+			return nil,
+				errors.New("Fails to create index.  Extended Attributes are enabled only after cluster is fully upgraded and there is no failed node."),
+				false
+		}
+
 		retainDeletedXATTR, err, retry = o.getXATTRParam(plan)
 		if err != nil {
 			return nil, err, retry
+		}
+
+		if retainDeletedXATTR && !isXATTRIndex {
+			return nil,
+				errors.New("Fails to create index.  retain_deleted_xattr can be used only if extended attributes are indexed."),
+				false
 		}
 
 		if indexType, ok := plan["index_type"].(string); ok {
