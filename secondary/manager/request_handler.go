@@ -324,7 +324,7 @@ func (m *requestHandlerContext) convertIndexRequest(r *http.Request) *IndexReque
 	}
 
 	if err := json.Unmarshal(buf.Bytes(), req); err != nil {
-		logging.Debugf("RequestHandler::convertIndexRequest: unable to unmarshall request body. Buf = %s, err %v", buf, err)
+		logging.Debugf("RequestHandler::convertIndexRequest: unable to unmarshall request body. Buf = %s, err %v", logging.TagStrUD(buf), err)
 		return nil
 	}
 
@@ -1092,7 +1092,7 @@ func send(status int, w http.ResponseWriter, res interface{}) {
 
 	if buf, err := json.Marshal(res); err == nil {
 		w.WriteHeader(status)
-		logging.Tracef("RequestHandler::sendResponse: sending response back to caller. %v", string(buf))
+		logging.Tracef("RequestHandler::sendResponse: sending response back to caller. %v", logging.TagStrUD(buf))
 		w.Write(buf)
 	} else {
 		// note : buf is nil if err != nil

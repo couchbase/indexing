@@ -1184,7 +1184,7 @@ func partitionKeyPos(defn *common.IndexDefn) []int {
 	for _, key := range defn.SecExprs {
 		expr, err := parser.Parse(key)
 		if err != nil {
-			logging.Errorf("Fail to parse secondary key", key)
+			logging.Errorf("Fail to parse secondary key", logging.TagUD(key))
 			return nil
 		}
 		secExprs = append(secExprs, expr)
@@ -1194,7 +1194,7 @@ func partitionKeyPos(defn *common.IndexDefn) []int {
 	for _, key := range defn.PartitionKeys {
 		expr, err := parser.Parse(key)
 		if err != nil {
-			logging.Errorf("Fail to parse partition key", key)
+			logging.Errorf("Fail to parse partition key", logging.TagUD(key))
 			return nil
 		}
 		partnExprs = append(partnExprs, expr)
