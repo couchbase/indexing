@@ -215,6 +215,7 @@ func (ie *IndexEvaluator) TransformRoute(
 	retainDelete = retainDelete && (m.Opcode == mcd.DCP_DELETION || m.Opcode == mcd.DCP_EXPIRATION)
 	opcode := m.Opcode
 	if retainDelete {
+		// TODO: Replace with isMetaIndex()
 		m.TreatAsJSON()
 		opcode = mcd.DCP_MUTATION
 	}
