@@ -1136,6 +1136,7 @@ func (mdb *memdbSlice) UpdateConfig(cfg common.Config) {
 	defer mdb.confLock.Unlock()
 
 	mdb.sysconf = cfg
+	mdb.maxRollbacks = cfg["settings.moi.recovery.max_rollbacks"].Int()
 }
 
 func (mdb *memdbSlice) GetReaderContext() IndexReaderContext {

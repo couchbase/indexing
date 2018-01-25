@@ -1364,6 +1364,7 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 		mdb.backstore.PurgeCompactRatio = mdb.sysconf["plasma.purger.compactRatio"].Float64()
 		mdb.backstore.EnableLSSPageSMO = mdb.sysconf["plasma.enableLSSPageSMO"].Bool()
 	}
+	mdb.maxRollbacks = cfg["settings.plasma.recovery.max_rollbacks"].Int()
 }
 
 func (mdb *plasmaSlice) String() string {
