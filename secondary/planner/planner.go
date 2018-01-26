@@ -149,11 +149,13 @@ type IndexerNode struct {
 	CpuUsage    float64 `json:"cpuUsage"`
 	DiskUsage   uint64  `json:"diskUsage,omitempty"`
 	MemOverhead uint64  `json:"memOverhead"`
+	DataSize    uint64  `json:"dataSize"`
 
 	// input/output: resource consumption (from live cluster)
 	ActualMemUsage    uint64  `json:"actualMemUsage"`
 	ActualMemOverhead uint64  `json:"actualMemOverhead"`
 	ActualCpuUsage    float64 `json:"actualCpuUsage"`
+	ActualDataSize    uint64  `json:"actualDataSize"`
 
 	// input: index residing on the node
 	Indexes []*IndexUsage `json:"indexes"`
@@ -175,7 +177,7 @@ type IndexUsage struct {
 
 	// input: index sizing
 	IsPrimary     bool    `json:"isPrimary,omitempty"`
-	IsMOI         bool    `json:"isMOI,omitempty"`
+	StorageMode   string  `json:"storageMode,omitempty"`
 	AvgSecKeySize uint64  `json:"avgSecKeySize"`
 	AvgDocKeySize uint64  `json:"avgDocKeySize"`
 	AvgArrSize    uint64  `json:"avgArrSize"`
@@ -190,16 +192,21 @@ type IndexUsage struct {
 	CpuUsage    float64 `json:"cpuUsage"`
 	DiskUsage   uint64  `json:"diskUsage,omitempty"`
 	MemOverhead uint64  `json:"memOverhead,omitempty"`
+	DataSize    uint64  `json:"dataSize,omitempty"`
 
 	// input: resource consumption (from live cluster)
-	ActualMemUsage    uint64  `json:"actualMemUsage"`
-	ActualMemOverhead uint64  `json:"actualMemOverhead"`
-	ActualKeySize     uint64  `json:"actualKeySize"`
-	ActualCpuUsage    float64 `json:"actualCpuUsage"`
+	ActualMemUsage        uint64  `json:"actualMemUsage"`
+	ActualMemOverhead     uint64  `json:"actualMemOverhead"`
+	ActualKeySize         uint64  `json:"actualKeySize"`
+	ActualCpuUsage        float64 `json:"actualCpuUsage"`
+	ActualBuildPercent    uint64  `json:"actualBuildPercent"`
+	ActualResidentPercent uint64  `json:"actualResidentPercent"`
+	ActualDataSize        uint64  `json:"actualDataSize"`
 
 	// input: resource consumption (estimated sizing)
 	NoUsageInfo       bool   `json:"NoUsageInfo"`
 	EstimatedMemUsage uint64 `json:"estimatedMemUsage"`
+	EstimatedDataSize uint64 `json:"estimatedDataSize"`
 
 	// input: index definition (optional)
 	Instance *common.IndexInst `json:"instance,omitempty"`
@@ -215,6 +222,7 @@ type IndexUsage struct {
 }
 
 type Solution struct {
+	command        CommandType
 	constraint     ConstraintMethod
 	sizing         SizingMethod
 	isLiveData     bool
@@ -228,6 +236,7 @@ type Solution struct {
 	// for size estimation
 	estimatedIndexSize uint64
 	estimate           bool
+	numEstimateRun     int
 
 	// for rebalance
 	enableExclude bool
@@ -286,6 +295,8 @@ type UsageBasedCostMethod struct {
 	MemStdDev      float64 `json:"memStdDev,omitempty"`
 	CpuMean        float64 `json:"cpuMean,omitempty"`
 	CpuStdDev      float64 `json:"cpuStdDev,omitempty"`
+	DataSizeMean   float64 `json:"dataSizeMean,omitempty"`
+	DataSizeStdDev float64 `json:"dataSizeStdDev,omitempty"`
 	TotalData      uint64  `json:"totalData,omitempty"`
 	DataMoved      uint64  `json:"dataMoved,omitempty"`
 	TotalIndex     uint64  `json:"totalIndex,omitempty"`
@@ -317,7 +328,15 @@ type RandomPlacement struct {
 // Interface Implementation - SizingMethod
 //////////////////////////////////////////////////////////////
 
+type GeneralSizingMethod struct {
+	MOI    *MOISizingMethod
+	Plasma *PlasmaSizingMethod
+}
+
 type MOISizingMethod struct {
+}
+
+type PlasmaSizingMethod struct {
 }
 
 //////////////////////////////////////////////////////////////
@@ -359,8 +378,9 @@ func (p *SAPlanner) Plan(command CommandType, solution *Solution) (*Solution, er
 	var result *Solution
 	var err error
 
+	solution.command = command
 	solution = p.adjustInitialSolutionIfNecessary(solution)
-	solution.runSizeEstimation(command, p.placement)
+	solution.runSizeEstimation(p.placement)
 
 	for i := 0; i < RunPerPlan; i++ {
 		p.Try++
@@ -378,7 +398,7 @@ func (p *SAPlanner) Plan(command CommandType, solution *Solution) (*Solution, er
 			logging.Infof("Cannot rebuild lost replica due to resource constraint in cluster.  Will not rebuild lost replica.")
 			optionals := p.placement.RemoveOptionalIndexes()
 			solution.removeIndexes(optionals)
-			solution.runSizeEstimation(command, p.placement)
+			solution.runSizeEstimation(p.placement)
 		}
 
 		// If cannot find a solution after 3 tries and there are deleted nodes, then disable exclude flag.
@@ -428,7 +448,7 @@ func (p *SAPlanner) planSingleRun(command CommandType, solution *Solution) (*Sol
 		lastMove := move
 		lastPositiveMove := positiveMove
 		for i := 0; i < IterationPerTemp; i++ {
-			new_solution, force, final := p.findNeighbor(command, current)
+			new_solution, force, final := p.findNeighbor(current)
 			if new_solution != nil {
 				new_cost := p.cost.Cost(new_solution)
 				prob := p.getAcceptProbability(old_cost, new_cost, temperature)
@@ -590,7 +610,7 @@ func (p *SAPlanner) PrintCost() {
 // This function finds a neigbhor placement layout using
 // given placement method.
 //
-func (p *SAPlanner) findNeighbor(command CommandType, s *Solution) (*Solution, bool, bool) {
+func (p *SAPlanner) findNeighbor(s *Solution) (*Solution, bool, bool) {
 
 	eligibles := p.placement.GetEligibleIndexes()
 	neighbor := s.clone()
@@ -599,18 +619,18 @@ func (p *SAPlanner) findNeighbor(command CommandType, s *Solution) (*Solution, b
 	retry := 0
 
 	for retry = 0; retry < ResizePerIteration; retry++ {
-		success, final, _force := p.placement.Move(neighbor)
+		success, final, mustAccept := p.placement.Move(neighbor)
 		if success {
 			currentOK := s.constraint.SatisfyClusterConstraint(s, eligibles)
 			neighborOK := neighbor.constraint.SatisfyClusterConstraint(neighbor, eligibles)
 			logging.Tracef("Planner::findNeighbor retry: %v", retry)
-			return neighbor, (_force || force || (!currentOK && neighborOK)), final
+			return neighbor, (mustAccept || force || (!currentOK && neighborOK)), final
 		}
 
 		// Add new node to change cluster in order to ensure constraint can be satisfied
 		if !p.constraint.SatisfyClusterConstraint(neighbor, eligibles) {
 			if neighbor.canRunEstimation() {
-				neighbor.runSizeEstimation(command, p.placement)
+				neighbor.runSizeEstimation(p.placement)
 			} else if p.constraint.CanAddNode(s) {
 				nodeId := strconv.FormatUint(uint64(rand.Uint32()), 10)
 				neighbor.addNewNode(nodeId)
@@ -693,17 +713,22 @@ func (p *SAPlanner) adjustInitialSolutionIfNecessary(s *Solution) *Solution {
 
 	cloned := s.clone()
 
-	p.dropReplicaIfNecessary(cloned)
-	p.addReplicaIfNecessary(cloned)
+	if s.command != CommandPlan {
+		p.dropReplicaIfNecessary(cloned)
+		p.addReplicaIfNecessary(cloned)
+	}
 	p.suppressEqivIndexIfNecessary(cloned)
 
-	err := p.Validate(cloned)
-	if err == nil {
-		return cloned
+	if s.command != CommandPlan {
+		// Validate only for rebalancing
+		err := p.Validate(cloned)
+		if err != nil {
+			logging.Warnf("Validation error after adjusting solution for planner.   Restore to original plan.  Error=%v", err)
+			return s
+		}
 	}
 
-	logging.Warnf("Validation error after adjusting solution for planner.   Restore to original plan.  Error=%v", err)
-	return s
+	return cloned
 }
 
 //
@@ -1023,6 +1048,7 @@ func (s *Solution) addIndex(n *IndexerNode, idx *IndexUsage) {
 	n.Indexes = append(n.Indexes, idx)
 	n.AddMemUsageOverhead(s, idx.GetMemUsage(s.UseLiveData()), idx.GetMemOverhead(s.UseLiveData()))
 	n.AddCpuUsage(s, idx.GetCpuUsage(s.UseLiveData()))
+	n.AddDataSize(s, idx.GetDataSize(s.UseLiveData()))
 }
 
 //
@@ -1039,6 +1065,7 @@ func (s *Solution) removeIndex(n *IndexerNode, i int) {
 
 	n.SubtractMemUsageOverhead(s, idx.GetMemUsage(s.UseLiveData()), idx.GetMemOverhead(s.UseLiveData()))
 	n.SubtractCpuUsage(s, idx.GetCpuUsage(s.UseLiveData()))
+	n.SubtractDataSize(s, idx.GetDataSize(s.UseLiveData()))
 }
 
 //
@@ -1062,6 +1089,7 @@ func (s *Solution) removeIndexes(indexes []*IndexUsage) {
 func (s *Solution) clone() *Solution {
 
 	r := &Solution{
+		command:            s.command,
 		constraint:         s.constraint,
 		sizing:             s.sizing,
 		Placement:          ([]*IndexerNode)(nil),
@@ -1074,6 +1102,7 @@ func (s *Solution) clone() *Solution {
 		disableRepair:      s.disableRepair,
 		estimatedIndexSize: s.estimatedIndexSize,
 		estimate:           s.estimate,
+		numEstimateRun:     s.numEstimateRun,
 		enableExclude:      s.enableExclude,
 	}
 
@@ -1180,6 +1209,7 @@ func (s *Solution) PrintStats() {
 	logging.Infof("Max Indexer Overhead: %v (%s)", uint64(maxIndexerOverhead), formatMemoryStr(uint64(maxIndexerOverhead)))
 	logging.Infof("Avg Index Cpu: %.4f", avgIndexCpu)
 	logging.Infof("Max Index Cpu: %.4f", maxIndexCpu)
+	logging.Infof("Num Estimation Run: %v", s.numEstimateRun)
 }
 
 //
@@ -1191,10 +1221,11 @@ func (s *Solution) PrintLayout() {
 
 		logging.Infof("")
 		logging.Infof("Indexer serverGroup:%v, nodeId:%v, nodeUUID:%v, useLiveData:%v", indexer.ServerGroup, indexer.NodeId, indexer.NodeUUID, s.UseLiveData())
-		logging.Infof("Indexer total memory:%v (%s), data:%v (%s), overhead:%v (%s), cpu:%.4f, number of indexes:%v isDeleted:%v isNew:%v exclude:%v",
+		logging.Infof("Indexer total memory:%v (%s), data:%v (%s), overhead:%v (%s), index:%v (%s) cpu:%.4f, numIndexes:%v isDeleted:%v isNew:%v exclude:%v",
 			indexer.GetMemTotal(s.UseLiveData()), formatMemoryStr(uint64(indexer.GetMemTotal(s.UseLiveData()))),
 			indexer.GetMemUsage(s.UseLiveData()), formatMemoryStr(uint64(indexer.GetMemUsage(s.UseLiveData()))),
 			indexer.GetMemOverhead(s.UseLiveData()), formatMemoryStr(uint64(indexer.GetMemOverhead(s.UseLiveData()))),
+			indexer.GetDataSize(s.UseLiveData()), formatMemoryStr(uint64(indexer.GetDataSize(s.UseLiveData()))),
 			indexer.GetCpuUsage(s.UseLiveData()), len(indexer.Indexes), indexer.IsDeleted(), indexer.isNew, indexer.exclude)
 
 		for _, index := range indexer.Indexes {
@@ -1202,11 +1233,14 @@ func (s *Solution) PrintLayout() {
 			logging.Infof("\t\tIndex name:%v, bucket:%v, defnId:%v, instId:%v, Partition: %v, new/moved:%v estimated:%v ignoreEquivCheck:%v",
 				index.GetDisplayName(), index.Bucket, index.DefnId, index.InstId, index.PartnId,
 				index.initialNode == nil || index.initialNode.NodeId != indexer.NodeId, index.NoUsageInfo, index.suppressEquivIdxCheck)
-			logging.Infof("\t\tIndex total memory:%v (%s), data:%v (%s), overhead:%v (%s), cpu:%.4f",
+			logging.Infof("\t\tIndex total memory:%v (%s), data:%v (%s), overhead:%v (%s), index:%v (%s) cpu:%.4f resident:%v%% build:%v%%",
 				index.GetMemTotal(s.UseLiveData()), formatMemoryStr(uint64(index.GetMemTotal(s.UseLiveData()))),
 				index.GetMemUsage(s.UseLiveData()), formatMemoryStr(uint64(index.GetMemUsage(s.UseLiveData()))),
 				index.GetMemOverhead(s.UseLiveData()), formatMemoryStr(uint64(index.GetMemOverhead(s.UseLiveData()))),
-				index.GetCpuUsage(s.UseLiveData()))
+				index.GetDataSize(s.UseLiveData()), formatMemoryStr(uint64(index.GetDataSize(s.UseLiveData()))),
+				index.GetCpuUsage(s.UseLiveData()),
+				uint64(index.GetResidentRatio(s.UseLiveData())),
+				index.GetBuildPercent(s.UseLiveData()))
 		}
 	}
 }
@@ -1291,6 +1325,32 @@ func (s *Solution) ComputeEmptyIndexDistribution() (float64, float64) {
 }
 
 //
+// Compute statistics on data size
+//
+func (s *Solution) ComputeDataSize() (float64, float64) {
+
+	// Compute mean data size
+	var meanDataSize float64
+	for _, indexerUsage := range s.Placement {
+		meanDataSize += float64(indexerUsage.GetDataSize(s.UseLiveData()))
+	}
+	meanDataSize = meanDataSize / float64(len(s.Placement))
+
+	// compute data size variance
+	var varianceDataSize float64
+	for _, indexerUsage := range s.Placement {
+		v := float64(indexerUsage.GetDataSize(s.UseLiveData())) - meanDataSize
+		varianceDataSize += v * v
+	}
+	varianceDataSize = varianceDataSize / float64(len(s.Placement))
+
+	// compute data size std dev
+	stdDevDataSize := math.Sqrt(varianceDataSize)
+
+	return meanDataSize, stdDevDataSize
+}
+
+//
 // Find the number of indexes that has no stats or sizing information.
 // This does not take into consideration for index fixed overhead.
 //
@@ -1327,14 +1387,14 @@ func (s *Solution) computeIndexMovement(useNewNode bool) (uint64, uint64, uint64
 
 			// ignore cost of moving an index out of an to-be-deleted node
 			if index.initialNode != nil && !index.initialNode.isDelete {
-				totalSize += index.GetMemUsage(s.UseLiveData())
+				totalSize += index.GetDataSize(s.UseLiveData())
 				totalIndex++
 			}
 
 			// ignore cost of moving an index out of an to-be-deleted node
 			if index.initialNode != nil && !index.initialNode.isDelete &&
 				index.initialNode.NodeId != indexer.NodeId {
-				dataMoved += index.GetMemUsage(s.UseLiveData())
+				dataMoved += index.GetDataSize(s.UseLiveData())
 				indexMoved++
 			}
 		}
@@ -1516,7 +1576,7 @@ func (s *Solution) isMOICluster() bool {
 
 	for _, indexer := range s.Placement {
 		for _, index := range indexer.Indexes {
-			if index.IsMOI {
+			if index.IsMOI() {
 				return true
 			}
 		}
@@ -1594,13 +1654,38 @@ func (s *Solution) findNumAvailLiveNode() int {
 }
 
 //
-// ignore resource constraint if
-// 1) use live data (command == rebalance and live cluster)
-// 2) is not a MOI cluster
+// check to see if we should ignore resource (memory/cpu) constraint
 //
 func (s *Solution) ignoreResourceConstraint() bool {
 
-	return s.UseLiveData() && !s.isMOICluster()
+	// always honor resource constriant when doing simulation
+	if !s.UseLiveData() {
+		return false
+	}
+
+	// ignore resource constraint for plasma or fdb during rebalance
+	// for plasma and forestdb, memory and cpu represents transient working set and this can change over time.
+	// for MOI, memory consumption is not transient so constraint needs to be honored.
+	if s.command == CommandRebalance || s.command == CommandSwap {
+		return !s.isMOICluster()
+	}
+
+	// ignore constraint for plasma and fdb during planning since memory and cpu are transient working set.
+	// in addition, sizing equation is only approximation.   The cost function will ensure that the resources
+	// are evenly spread out, so it is ok to go over resource constraint during planning.
+	//
+	// for MOI, memory is not transient, so it needs to be honored.
+	//
+	// if size estimation is turned on, then honor the constraint since it needs to find the best fit under the
+	// assumption that new indexes are going to fit under constraint.
+	if s.command == CommandPlan {
+		if s.canRunEstimation() {
+			return false
+		}
+		return !s.isMOICluster()
+	}
+
+	return false
 }
 
 //
@@ -1785,7 +1870,7 @@ func (s *Solution) hasDeletedNodes() bool {
 //    the new index.   Therefore, the estimated index size represents the "average index size" for
 //    all unsized indexes.
 //
-func (s *Solution) runSizeEstimation(command CommandType, placement PlacementMethod) {
+func (s *Solution) runSizeEstimation(placement PlacementMethod) {
 
 	estimate := func(estimatedIndexSize uint64) {
 		for _, indexer := range s.Placement {
@@ -1799,10 +1884,13 @@ func (s *Solution) runSizeEstimation(command CommandType, placement PlacementMet
 				if index.NoUsageInfo {
 					if index.Instance != nil && common.IsPartitioned(index.Instance.Defn.PartitionScheme) {
 						index.EstimatedMemUsage = estimatedIndexSize / uint64(index.Instance.Pc.GetNumPartitions())
+						index.EstimatedDataSize = index.EstimatedMemUsage
 					} else {
 						index.EstimatedMemUsage = estimatedIndexSize
+						index.EstimatedDataSize = index.EstimatedMemUsage
 					}
 					indexer.AddMemUsageOverhead(s, index.EstimatedMemUsage, 0)
+					indexer.AddDataSize(s, index.EstimatedDataSize)
 				}
 			}
 		}
@@ -1814,7 +1902,7 @@ func (s *Solution) runSizeEstimation(command CommandType, placement PlacementMet
 	}
 
 	// only estimate size for planning
-	if command != CommandPlan {
+	if s.command != CommandPlan {
 		s.estimationOff()
 		return
 	}
@@ -1827,6 +1915,8 @@ func (s *Solution) runSizeEstimation(command CommandType, placement PlacementMet
 			return
 		}
 	}
+
+	s.numEstimateRun++
 
 	// cleanup
 	s.cleanupEstimation()
@@ -1964,7 +2054,9 @@ func (s *Solution) cleanupEstimation() {
 		for _, index := range indexer.Indexes {
 			if index.NoUsageInfo {
 				indexer.SubtractMemUsageOverhead(s, index.EstimatedMemUsage, 0)
+				indexer.SubtractDataSize(s, index.EstimatedDataSize)
 				index.EstimatedMemUsage = 0
+				index.EstimatedDataSize = 0
 			}
 		}
 	}
@@ -2028,6 +2120,10 @@ func (c *IndexerConstraint) Validate(s *Solution) error {
 	}
 
 	if s.ignoreResourceConstraint() {
+		return nil
+	}
+
+	if s.canRunEstimation() {
 		return nil
 	}
 
@@ -2138,7 +2234,7 @@ func (c *IndexerConstraint) acceptViolation(s *Solution, index *IndexUsage, inde
 	}
 
 	// if cannot load balance, don't report error.
-	if index.initialNode.NodeId == indexer.NodeId && !indexer.IsDeleted() {
+	if index.initialNode != nil && index.initialNode.NodeId == indexer.NodeId && !indexer.IsDeleted() {
 		return false
 	}
 
@@ -2244,9 +2340,11 @@ func (c *IndexerConstraint) CanAddIndex(s *Solution, n *IndexerNode, u *IndexUsa
 		return MemoryViolation
 	}
 
-	if u.GetCpuUsage(s.UseLiveData())+n.GetCpuUsage(s.UseLiveData()) > cpuQuota {
-		return CpuViolation
-	}
+	/*
+		if u.GetCpuUsage(s.UseLiveData())+n.GetCpuUsage(s.UseLiveData()) > cpuQuota {
+			return CpuViolation
+		}
+	*/
 
 	return NoViolation
 }
@@ -2301,9 +2399,11 @@ func (c *IndexerConstraint) CanSwapIndex(sol *Solution, n *IndexerNode, s *Index
 		return MemoryViolation
 	}
 
-	if s.GetCpuUsage(sol.UseLiveData())+n.GetCpuUsage(sol.UseLiveData())-t.GetCpuUsage(sol.UseLiveData()) > cpuQuota {
-		return CpuViolation
-	}
+	/*
+		if s.GetCpuUsage(sol.UseLiveData())+n.GetCpuUsage(sol.UseLiveData())-t.GetCpuUsage(sol.UseLiveData()) > cpuQuota {
+			return CpuViolation
+		}
+	*/
 
 	return NoViolation
 }
@@ -2332,9 +2432,11 @@ func (c *IndexerConstraint) SatisfyNodeResourceConstraint(s *Solution, n *Indexe
 		return false
 	}
 
-	if n.GetCpuUsage(s.UseLiveData()) > cpuQuota {
-		return false
-	}
+	/*
+		if n.GetCpuUsage(s.UseLiveData()) > cpuQuota {
+			return false
+		}
+	*/
 
 	return true
 }
@@ -2422,9 +2524,11 @@ func (c *IndexerConstraint) SatisfyClusterResourceConstraint(s *Solution) bool {
 		if indexer.GetMemTotal(s.UseLiveData()) > memQuota {
 			return false
 		}
-		if indexer.GetCpuUsage(s.UseLiveData()) > cpuQuota {
-			return false
-		}
+		/*
+			if indexer.GetCpuUsage(s.UseLiveData()) > cpuQuota {
+				return false
+			}
+		*/
 	}
 
 	return true
@@ -2558,6 +2662,7 @@ func (o *IndexerNode) clone() *IndexerNode {
 		StorageMode:       o.StorageMode,
 		MemUsage:          o.MemUsage,
 		MemOverhead:       o.MemOverhead,
+		DataSize:          o.DataSize,
 		CpuUsage:          o.CpuUsage,
 		DiskUsage:         o.DiskUsage,
 		Indexes:           make([]*IndexUsage, len(o.Indexes)),
@@ -2567,6 +2672,7 @@ func (o *IndexerNode) clone() *IndexerNode {
 		ActualMemUsage:    o.ActualMemUsage,
 		ActualMemOverhead: o.ActualMemOverhead,
 		ActualCpuUsage:    o.ActualCpuUsage,
+		ActualDataSize:    o.ActualDataSize,
 	}
 
 	for i, _ := range o.Indexes {
@@ -2681,7 +2787,7 @@ func (o *IndexerNode) AddMemUsageOverhead(s *Solution, usage uint64, overhead ui
 }
 
 //
-// Add memory
+// Subtract memory
 //
 func (o *IndexerNode) SubtractMemUsageOverhead(s *Solution, usage uint64, overhead uint64) {
 
@@ -2691,6 +2797,42 @@ func (o *IndexerNode) SubtractMemUsageOverhead(s *Solution, usage uint64, overhe
 	} else {
 		o.MemUsage -= usage
 		o.MemOverhead -= overhead
+	}
+}
+
+//
+// Get data size
+//
+func (o *IndexerNode) GetDataSize(useLive bool) uint64 {
+
+	if useLive {
+		return o.ActualDataSize
+	}
+
+	return o.DataSize
+}
+
+//
+// Add data size
+//
+func (o *IndexerNode) AddDataSize(s *Solution, datasize uint64) {
+
+	if s.UseLiveData() {
+		o.ActualDataSize += datasize
+	} else {
+		o.DataSize += datasize
+	}
+}
+
+//
+// Subtract data size
+//
+func (o *IndexerNode) SubtractDataSize(s *Solution, datasize uint64) {
+
+	if s.UseLiveData() {
+		o.ActualDataSize -= datasize
+	} else {
+		o.DataSize -= datasize
 	}
 }
 
@@ -2834,6 +2976,53 @@ func (o *IndexUsage) GetMemTotal(useLive bool) uint64 {
 	return o.MemUsage + o.MemOverhead
 }
 
+//
+// Get data size
+//
+func (o *IndexUsage) GetDataSize(useLive bool) uint64 {
+
+	if o.NoUsageInfo {
+		return o.EstimatedDataSize
+	}
+
+	if useLive {
+		return o.ActualDataSize
+	}
+
+	return o.DataSize
+}
+
+//
+// Get resident ratio
+//
+func (o *IndexUsage) GetResidentRatio(useLive bool) float64 {
+
+	var ratio float64
+	if useLive {
+		ratio = float64(o.ActualResidentPercent)
+	} else {
+		ratio = o.ResidentRatio
+	}
+
+	if ratio == 0 {
+		ratio = 100
+	}
+
+	return ratio
+}
+
+//
+// Get build percent
+//
+func (o *IndexUsage) GetBuildPercent(useLive bool) uint64 {
+
+	if useLive {
+		return o.ActualBuildPercent
+	}
+
+	return 100
+}
+
 func (o *IndexUsage) HasSizing(useLive bool) bool {
 
 	if o.NoUsageInfo {
@@ -2853,7 +3042,7 @@ func (o *IndexUsage) GetDisplayName() string {
 		return o.Name
 	}
 
-	return common.FormatIndexPartnDisplayName(o.Instance.Defn.Name, o.Instance.ReplicaId, int(o.PartnId))
+	return common.FormatIndexPartnDisplayName(o.Instance.Defn.Name, o.Instance.ReplicaId, int(o.PartnId), true)
 }
 
 func (o *IndexUsage) GetStatsName() string {
@@ -2876,7 +3065,7 @@ func (o *IndexUsage) GetPartitionName() string {
 		return o.Name
 	}
 
-	return common.FormatIndexPartnDisplayName(o.Instance.Defn.Name, 0, int(o.PartnId))
+	return common.FormatIndexPartnDisplayName(o.Instance.Defn.Name, 0, int(o.PartnId), true)
 }
 
 func (o *IndexUsage) GetReplicaName() string {
@@ -2885,7 +3074,7 @@ func (o *IndexUsage) GetReplicaName() string {
 		return o.Name
 	}
 
-	return common.FormatIndexPartnDisplayName(o.Instance.Defn.Name, o.Instance.ReplicaId, 0)
+	return common.FormatIndexPartnDisplayName(o.Instance.Defn.Name, o.Instance.ReplicaId, 0, false)
 }
 
 func (o *IndexUsage) IsReplica(other *IndexUsage) bool {
@@ -2912,6 +3101,16 @@ func (o *IndexUsage) IsEquivalentIndex(other *IndexUsage) bool {
 	}
 
 	return false
+}
+
+func (o *IndexUsage) IsMOI() bool {
+
+	return o.StorageMode == common.MemoryOptimized || o.StorageMode == common.MemDB
+}
+
+func (o *IndexUsage) IsPlasma() bool {
+
+	return o.StorageMode == common.PlasmaDB
 }
 
 //////////////////////////////////////////////////////////////
@@ -2945,12 +3144,14 @@ func (c *UsageBasedCostMethod) Cost(s *Solution) float64 {
 	c.TotalData, c.DataMoved, c.TotalIndex, c.IndexMoved = s.computeIndexMovement(false)
 	c.MemFree, c.CpuFree = s.computeFreeRatio()
 	c.IdxMean, c.IdxStdDev = s.ComputeEmptyIndexDistribution()
+	c.DataSizeMean, c.DataSizeStdDev = s.ComputeDataSize()
 
 	memCost := float64(0)
 	cpuCost := float64(0)
-	dataCost := float64(0)
+	movementCost := float64(0)
 	indexCost := float64(0)
 	emptyIdxCost := float64(0)
+	dataSizeCost := float64(0)
 	count := 0
 
 	if c.memCostWeight > 0 && c.MemMean != 0 {
@@ -2960,6 +3161,11 @@ func (c *UsageBasedCostMethod) Cost(s *Solution) float64 {
 
 	if c.cpuCostWeight > 0 && c.CpuMean != 0 {
 		cpuCost = c.CpuStdDev / c.CpuMean * c.cpuCostWeight
+	}
+	count++
+
+	if c.DataSizeMean != 0 {
+		dataSizeCost = c.DataSizeStdDev / c.DataSizeMean
 	}
 	count++
 
@@ -2978,7 +3184,8 @@ func (c *UsageBasedCostMethod) Cost(s *Solution) float64 {
 	// moving data during rebalance.  Usage cost is affected by:
 	// 1) relative ratio of memory deviation and memory mean
 	// 2) relative ratio of cpu deviation and cpu mean
-	usageCost := (cpuCost + memCost) / float64(2)
+	// 3) relative ratio of data size deviation and data size mean
+	usageCost := (cpuCost + memCost + dataSizeCost) / float64(3)
 
 	if c.dataCostWeight > 0 && c.TotalData != 0 {
 		// The cost of moving data is inversely adjust by the usage cost.
@@ -2986,7 +3193,7 @@ func (c *UsageBasedCostMethod) Cost(s *Solution) float64 {
 		// usage cost), the cost of data movement has less hinderance
 		// for balancing resource consumption.
 		weight := c.dataCostWeight * (1 - usageCost)
-		dataCost = float64(c.DataMoved) / float64(c.TotalData) * weight
+		movementCost = float64(c.DataMoved) / float64(c.TotalData) * weight
 		count++
 	}
 
@@ -2996,10 +3203,10 @@ func (c *UsageBasedCostMethod) Cost(s *Solution) float64 {
 		count++
 	}
 
-	logging.Tracef("Planner::cost: mem cost %v cpu cost %v data moved %v index moved %v emptyIdx cost %v count %v",
-		memCost, cpuCost, dataCost, indexCost, emptyIdxCost, count)
+	logging.Tracef("Planner::cost: mem cost %v cpu cost %v data moved %v index moved %v emptyIdx cost %v dataSize cost %v count %v",
+		memCost, cpuCost, movementCost, indexCost, emptyIdxCost, dataSizeCost, count)
 
-	return (memCost + cpuCost + emptyIdxCost + dataCost + indexCost) / float64(count)
+	return (memCost + cpuCost + emptyIdxCost + movementCost + indexCost + dataSizeCost) / float64(count)
 }
 
 //
@@ -3009,6 +3216,7 @@ func (s *UsageBasedCostMethod) Print() {
 
 	var memUtil float64
 	var cpuUtil float64
+	var dataSizeUtil float64
 	var dataMoved float64
 	var indexMoved float64
 
@@ -3018,6 +3226,10 @@ func (s *UsageBasedCostMethod) Print() {
 
 	if s.CpuMean != 0 {
 		cpuUtil = float64(s.CpuStdDev) / float64(s.CpuMean) * 100
+	}
+
+	if s.DataSizeMean != 0 {
+		dataSizeUtil = float64(s.DataSizeStdDev) / float64(s.DataSizeMean) * 100
 	}
 
 	if s.TotalData != 0 {
@@ -3034,6 +3246,8 @@ func (s *UsageBasedCostMethod) Print() {
 	logging.Infof("Indexer CPU Mean %.4f", s.CpuMean)
 	logging.Infof("Indexer CPU Deviation %.2f (%.2f%%)", s.CpuStdDev, cpuUtil)
 	logging.Infof("Indexer CPU Utilization %.4f", float64(s.CpuMean)/float64(s.constraint.GetCpuQuota()))
+	logging.Infof("Indexer Data Size Mean %v (%s)", uint64(s.DataSizeMean), formatMemoryStr(uint64(s.DataSizeMean)))
+	logging.Infof("Indexer Data Size Deviation %v (%s) (%.2f%%)", uint64(s.DataSizeStdDev), formatMemoryStr(uint64(s.DataSizeStdDev)), dataSizeUtil)
 	logging.Infof("Total Index Data (in original layout) %v", formatMemoryStr(s.TotalData))
 	logging.Infof("Index Data Moved (after planning) %v (%.2f%%)", formatMemoryStr(s.DataMoved), dataMoved)
 	logging.Infof("No. Index (in original layout) %v", formatMemoryStr(s.TotalIndex))
@@ -3148,11 +3362,12 @@ func (p *RandomPlacement) Validate(s *Solution) error {
 	}
 
 	memQuota := s.getConstraintMethod().GetMemQuota()
-	cpuQuota := float64(s.getConstraintMethod().GetCpuQuota())
+	//cpuQuota := float64(s.getConstraintMethod().GetCpuQuota())
 
 	for _, index := range p.indexes {
 
-		if index.GetMemTotal(s.UseLiveData()) > memQuota || index.GetCpuUsage(s.UseLiveData()) > cpuQuota {
+		//if index.GetMemTotal(s.UseLiveData()) > memQuota || index.GetCpuUsage(s.UseLiveData()) > cpuQuota {
+		if index.GetMemTotal(s.UseLiveData()) > memQuota {
 			return errors.New(fmt.Sprintf("Index exceeding quota. Index=%v Bucket=%v Memory=%v Cpu=%.4f MemoryQuota=%v CpuQuota=%v",
 				index.GetDisplayName(), index.Bucket, index.GetMemTotal(s.UseLiveData()), index.GetCpuUsage(s.UseLiveData()), s.getConstraintMethod().GetMemQuota(),
 				s.getConstraintMethod().GetCpuQuota()))
@@ -3171,7 +3386,8 @@ func (p *RandomPlacement) Validate(s *Solution) error {
 					}
 				}
 
-				if freeMem >= index.GetMemTotal(s.UseLiveData()) && freeCpu >= index.GetCpuUsage(s.UseLiveData()) {
+				//if freeMem >= index.GetMemTotal(s.UseLiveData()) && freeCpu >= index.GetCpuUsage(s.UseLiveData()) {
+				if freeMem >= index.GetMemTotal(s.UseLiveData()) {
 					found = true
 					break
 				}
@@ -3712,7 +3928,7 @@ func (p *RandomPlacement) Add(s *Solution, indexes []*IndexUsage) error {
 	}
 
 	if len(candidates) == 0 {
-		errors.New("Cannot find any indexer that can add new indexes")
+		return errors.New("Cannot find any indexer that can add new indexes")
 	}
 
 	for _, idx := range indexes {
@@ -4003,20 +4219,23 @@ func (p *RandomPlacement) isEligibleIndex(index *IndexUsage) bool {
 }
 
 //////////////////////////////////////////////////////////////
-// MOISizingMethod
+// GeneralSizingMethod
 //////////////////////////////////////////////////////////////
 
 //
 // Constructor
 //
-func newMOISizingMethod() *MOISizingMethod {
-	return &MOISizingMethod{}
+func newGeneralSizingMethod() *GeneralSizingMethod {
+	return &GeneralSizingMethod{
+		MOI:    newMOISizingMethod(),
+		Plasma: newPlasmaSizingMethod(),
+	}
 }
 
 //
 // Validate
 //
-func (s *MOISizingMethod) Validate(solution *Solution) error {
+func (s *GeneralSizingMethod) Validate(solution *Solution) error {
 
 	// If using cpu/mem usage from live cluster, no need to validate.
 	if solution.UseLiveData() {
@@ -4025,13 +4244,118 @@ func (s *MOISizingMethod) Validate(solution *Solution) error {
 
 	for _, indexer := range solution.Placement {
 		for _, index := range indexer.Indexes {
-			if !index.IsMOI {
-				return errors.New(fmt.Sprintf("Planner does not support non-MOI index. Index=%v Bucket=%v", index.GetDisplayName(), index.Bucket))
+			if !index.IsPlasma() && !index.IsMOI() {
+				return errors.New(fmt.Sprintf("Planner does not support index outside of MOI and Plasma. Index=%v Bucket=%v",
+					index.GetDisplayName(), index.Bucket))
 			}
 		}
 	}
 
 	return nil
+}
+
+//
+// This function computes the index size
+//
+func (s *GeneralSizingMethod) ComputeIndexSize(idx *IndexUsage) {
+
+	if idx.IsMOI() {
+		s.MOI.ComputeIndexSize(idx)
+	} else if idx.IsPlasma() {
+		s.Plasma.ComputeIndexSize(idx)
+	}
+}
+
+//
+// This function computes the indexer memory and cpu usage
+//
+func (s *GeneralSizingMethod) ComputeIndexerSize(o *IndexerNode) {
+
+	o.MemUsage = 0
+	o.CpuUsage = 0
+	o.DataSize = 0
+
+	for _, idx := range o.Indexes {
+		o.MemUsage += idx.MemUsage
+		o.CpuUsage += idx.CpuUsage
+		o.DataSize += idx.DataSize
+	}
+
+	s.ComputeIndexerOverhead(o)
+}
+
+//
+// This function computes the indexer memory overhead
+//
+func (s *GeneralSizingMethod) ComputeIndexerOverhead(o *IndexerNode) {
+
+	// channel overhead : 100MB
+	overhead := uint64(100 * 1024 * 1024)
+
+	for _, idx := range o.Indexes {
+		overhead += s.ComputeIndexOverhead(idx)
+	}
+
+	o.MemOverhead = uint64(overhead)
+}
+
+//
+// This function estimates the index memory overhead
+//
+func (s *GeneralSizingMethod) ComputeIndexOverhead(idx *IndexUsage) uint64 {
+
+	if idx.IsMOI() {
+		return s.MOI.ComputeIndexOverhead(idx)
+	} else if idx.IsPlasma() {
+		return s.Plasma.ComputeIndexOverhead(idx)
+	}
+
+	return 0
+}
+
+//
+// This function estimates the min memory quota given a set of indexes
+//
+func (s *GeneralSizingMethod) ComputeMinQuota(indexes []*IndexUsage, useLive bool) (uint64, uint64) {
+
+	maxCpuUsage := float64(0)
+	maxMemUsage := uint64(0)
+
+	for _, index := range indexes {
+		if index.GetMemTotal(useLive) > maxMemUsage {
+			maxMemUsage = index.GetMemTotal(useLive)
+		}
+
+		if index.GetCpuUsage(useLive) > maxCpuUsage {
+			maxCpuUsage = index.GetCpuUsage(useLive)
+		}
+	}
+
+	// channel overhead : 100MB
+	overhead := float64(100 * 1024 * 1024)
+
+	// 20% buffer for mem quota
+	// TODO
+	//memQuota := uint64((float64(maxMemUsage) + overhead) * 1.2)
+	memQuota := maxMemUsage + uint64(overhead)
+
+	// 20% buffer for cpu quota
+	// TODO
+	//cpuQuota := uint64(float64(maxCpuUsage) * 1.2)
+	cpuQuota := uint64(math.Floor(maxCpuUsage)) + 1
+
+	return memQuota, cpuQuota
+}
+
+//////////////////////////////////////////////////////////////
+// MOISizingMethod
+//////////////////////////////////////////////////////////////
+
+//
+// Constructor
+//
+func newMOISizingMethod() *MOISizingMethod {
+	return &MOISizingMethod{}
 }
 
 //
@@ -4048,60 +4372,30 @@ func (s *MOISizingMethod) ComputeIndexSize(idx *IndexUsage) {
 	if !idx.IsPrimary {
 		if idx.AvgSecKeySize != 0 {
 			// secondary index mem size : (120 + SizePerItem[KeyLen + DocIdLen]) * NumberOfItems
-			idx.MemUsage = (120 + idx.AvgSecKeySize + idx.AvgDocKeySize) * idx.NumOfDocs
+			idx.DataSize = (120 + idx.AvgSecKeySize + idx.AvgDocKeySize) * idx.NumOfDocs
 		} else if idx.AvgArrKeySize != 0 {
 			// secondary array index mem size : (46 + (74 + DocIdLen + ArrElemSize) * NumArrElems) * NumberOfItems
-			idx.MemUsage = (46 + (74+idx.AvgArrKeySize+idx.AvgDocKeySize)*idx.AvgArrSize) * idx.NumOfDocs
+			idx.DataSize = (46 + (74+idx.AvgArrKeySize+idx.AvgDocKeySize)*idx.AvgArrSize) * idx.NumOfDocs
 		} else if idx.ActualKeySize != 0 {
 			// secondary index mem size : (46 + ActualKeySize) * NumberOfItems
-			idx.MemUsage = (46 + idx.ActualKeySize) * idx.NumOfDocs
+			idx.DataSize = (46 + idx.ActualKeySize) * idx.NumOfDocs
 		}
 	} else {
 		if idx.AvgDocKeySize != 0 {
 			// primary index mem size : (74 + DocIdLen) * NumberOfItems
-			idx.MemUsage = (74 + idx.AvgDocKeySize) * idx.NumOfDocs
+			idx.DataSize = (74 + idx.AvgDocKeySize) * idx.NumOfDocs
 		} else if idx.ActualKeySize != 0 {
 			// primary index mem size : ActualKeySize * NumberOfItems
-			idx.MemUsage = idx.ActualKeySize * idx.NumOfDocs
+			idx.DataSize = idx.ActualKeySize * idx.NumOfDocs
 		}
 	}
+	idx.MemUsage = idx.DataSize
 
 	// compute cpu usage
 	idx.CpuUsage = float64(idx.MutationRate)/float64(MOIMutationRatePerCore) + float64(idx.ScanRate)/float64(MOIScanRatePerCore)
 	//idx.CpuUsage = math.Floor(idx.CpuUsage) + 1
 
 	idx.MemOverhead = s.ComputeIndexOverhead(idx)
-}
-
-//
-// This function computes the indexer memory and cpu usage
-//
-func (s *MOISizingMethod) ComputeIndexerSize(o *IndexerNode) {
-
-	o.MemUsage = 0
-	o.CpuUsage = 0
-
-	for _, idx := range o.Indexes {
-		o.MemUsage += idx.MemUsage
-		o.CpuUsage += idx.CpuUsage
-	}
-
-	s.ComputeIndexerOverhead(o)
-}
-
-//
-// This function computes the indexer memory overhead
-//
-func (s *MOISizingMethod) ComputeIndexerOverhead(o *IndexerNode) {
-
-	// channel overhead : 100MB
-	overhead := uint64(100 * 1024 * 1024)
-
-	for _, idx := range o.Indexes {
-		overhead += s.ComputeIndexOverhead(idx)
-	}
-
-	o.MemOverhead = uint64(overhead)
 }
 
 //
@@ -4143,10 +4437,113 @@ func (s *MOISizingMethod) ComputeIndexOverhead(idx *IndexUsage) uint64 {
 	return uint64(overhead)
 }
 
+//////////////////////////////////////////////////////////////
+// PlasmaSizingMethod
+//////////////////////////////////////////////////////////////
+
+//
+// Constructor
+//
+func newPlasmaSizingMethod() *PlasmaSizingMethod {
+	return &PlasmaSizingMethod{}
+}
+
+//
+// This function computes the index size
+//
+func (s *PlasmaSizingMethod) ComputeIndexSize(idx *IndexUsage) {
+
+	if idx.AvgSecKeySize == 0 && idx.AvgArrKeySize == 0 && idx.AvgDocKeySize == 0 && idx.ActualKeySize == 0 {
+		idx.MemOverhead = s.ComputeIndexOverhead(idx)
+		return
+	}
+
+	// compute memory usage
+	if !idx.IsPrimary {
+		if idx.AvgSecKeySize != 0 {
+			// secondary index mem size : (114 + SizePerItem[KeyLen + DocIdLen]) * NumberOfItems * 2 (for back index)
+			idx.DataSize = (114 + idx.AvgSecKeySize + idx.AvgDocKeySize) * idx.NumOfDocs * 2
+		} else if idx.AvgArrKeySize != 0 {
+			// secondary array index mem size : (46 + (74 + DocIdLen + ArrElemSize) * NumArrElems) * NumberOfItems * 2 (for back index)
+			idx.DataSize = (46 + (74+idx.AvgArrKeySize+idx.AvgDocKeySize)*idx.AvgArrSize) * idx.NumOfDocs * 2
+		} else if idx.ActualKeySize != 0 {
+			// secondary index mem size : (46 + ActualKeySize) * NumberOfItems
+			idx.DataSize = (46 + idx.ActualKeySize) * idx.NumOfDocs
+		}
+	} else {
+		if idx.AvgDocKeySize != 0 {
+			// primary index mem size : (74 + DocIdLen) * NumberOfItems
+			idx.DataSize = (74 + idx.AvgDocKeySize) * idx.NumOfDocs
+		} else if idx.ActualKeySize != 0 {
+			// primary index mem size : ActualKeySize * NumberOfItems
+			// actual key size = mem used / num docs (include both main and back index)
+			idx.DataSize = idx.ActualKeySize * idx.NumOfDocs
+		}
+	}
+
+	if idx.ResidentRatio == 0 {
+		idx.ResidentRatio = 100
+	}
+	idx.MemUsage = idx.DataSize * uint64(idx.ResidentRatio) / 100
+
+	// compute cpu usage
+	idx.CpuUsage = float64(idx.MutationRate)/float64(MOIMutationRatePerCore) + float64(idx.ScanRate)/float64(MOIScanRatePerCore)
+
+	idx.MemOverhead = s.ComputeIndexOverhead(idx)
+}
+
+//
+// This function estimates the index memory overhead
+//
+func (s *PlasmaSizingMethod) ComputeIndexOverhead(idx *IndexUsage) uint64 {
+
+	// protobuf overhead : 150MB per index
+	overhead := float64(150 * 1024 * 1024)
+
+	snapshotOverhead := float64(0)
+
+	mvcc := func() uint64 {
+		count := uint64(idx.MutationRate * 60 * 20)
+		if idx.NumOfDocs*3 < count {
+			return idx.NumOfDocs * 3
+		}
+		return count
+	}
+
+	// incoming mutation buffer overhead: 30K * SizePerItem * NumberOfIndexes * MutationRate/500
+	if idx.AvgSecKeySize != 0 {
+		overhead += float64(30*1000*(idx.AvgSecKeySize+idx.AvgDocKeySize)) * float64(idx.MutationRate) / float64(500)
+		snapshotOverhead += float64(mvcc()*(idx.AvgSecKeySize+idx.AvgDocKeySize+114)) * 2 // for back index
+	} else if idx.AvgArrKeySize != 0 {
+		overhead += float64(30*1000*(idx.AvgArrKeySize*idx.AvgArrSize+idx.AvgDocKeySize)) * float64(idx.MutationRate) / float64(500)
+		snapshotOverhead += float64(mvcc()*(46+(idx.AvgArrKeySize+idx.AvgDocKeySize+74)*idx.AvgArrSize)) * 2 // for back index
+	} else if idx.AvgDocKeySize != 0 {
+		overhead += float64(30*1000*idx.AvgDocKeySize) * float64(idx.MutationRate) / float64(500)
+		snapshotOverhead += float64(mvcc() * (idx.AvgDocKeySize + 74))
+	} else if idx.ActualKeySize != 0 {
+		overhead += float64(30*1000*(idx.ActualKeySize)) * float64(idx.MutationRate) / float64(500)
+		// actual key size = mem used / num docs (include both main and back index)
+		snapshotOverhead += float64(mvcc() * idx.ActualKeySize)
+	}
+
+	// snapshot overhead
+	overhead += snapshotOverhead
+
+	// mutation queue size : 10% of indexer memory usage
+	mutationQueueOverhead := (float64(idx.MemUsage) + snapshotOverhead) * 0.1
+	overhead += mutationQueueOverhead
+
+	// golang overhead: 5% of total memory
+	golangOverhead := (float64(idx.MemUsage) + snapshotOverhead + mutationQueueOverhead) * 0.05
+	overhead += golangOverhead
+
+	return uint64(overhead)
+}
+
 //
 // This function estimates the min memory quota given a set of indexes
 //
-func (s *MOISizingMethod) ComputeMinQuota(indexes []*IndexUsage, useLive bool) (uint64, uint64) {
+func (s *PlasmaSizingMethod) ComputeMinQuota(indexes []*IndexUsage, useLive bool) (uint64, uint64) {
 
 	maxCpuUsage := float64(0)
 	maxMemUsage := uint64(0)

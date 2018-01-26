@@ -19,12 +19,12 @@ import (
 	"time"
 	"unsafe"
 
+	"errors"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/stats"
 	"github.com/couchbase/indexing/secondary/stubs/nitro/mm"
 	"strings"
-	"errors"
 )
 
 var uptime time.Time
@@ -720,12 +720,13 @@ func (is IndexerStats) GetStats(getPartition bool, skipEmpty bool) common.Statis
 
 		name := common.FormatIndexInstDisplayName(s.name, s.replicaId)
 		prefix = fmt.Sprintf("%s:%s:", s.bucket, name)
+
 		addIndexStats(s)
 
 		if getPartition {
 
 			for partnId, ps := range s.partitions {
-				name := common.FormatIndexPartnDisplayName(s.name, s.replicaId, int(partnId))
+				name := common.FormatIndexPartnDisplayName(s.name, s.replicaId, int(partnId), true)
 				prefix = fmt.Sprintf("%s:%s:", s.bucket, name)
 				addIndexStats(ps)
 			}
@@ -880,6 +881,7 @@ func (s *IndexStats) constructIndexStats(skipEmpty bool, version string) common.
 
 func (is IndexerStats) MarshalJSON(partition bool, pretty bool, skipEmpty bool) ([]byte, error) {
 	stats := is.GetStats(partition, skipEmpty)
+
 	if !pretty {
 		return json.Marshal(stats)
 	} else {

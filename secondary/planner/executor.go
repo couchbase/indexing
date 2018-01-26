@@ -89,20 +89,21 @@ type Plan struct {
 
 type IndexSpec struct {
 	// definition
-	Name            string   `json:"name,omitempty"`
-	Bucket          string   `json:"bucket,omitempty"`
-	IsPrimary       bool     `json:"isPrimary,omitempty"`
-	SecExprs        []string `json:"secExprs,omitempty"`
-	WhereExpr       string   `json:"where,omitempty"`
-	Deferred        bool     `json:"deferred,omitempty"`
-	Immutable       bool     `json:"immutable,omitempty"`
-	IsArrayIndex    bool     `json:"isArrayIndex,omitempty"`
+	Name               string   `json:"name,omitempty"`
+	Bucket             string   `json:"bucket,omitempty"`
+	IsPrimary          bool     `json:"isPrimary,omitempty"`
+	SecExprs           []string `json:"secExprs,omitempty"`
+	WhereExpr          string   `json:"where,omitempty"`
+	Deferred           bool     `json:"deferred,omitempty"`
+	Immutable          bool     `json:"immutable,omitempty"`
+	IsArrayIndex       bool     `json:"isArrayIndex,omitempty"`
 	RetainDeletedXATTR bool     `json:"retainDeletedXATTR,omitempty"`
-	NumPartition    uint64   `json:"numPartition,omitempty"`
-	PartitionScheme string   `json:"partitionScheme,omitempty"`
-	PartitionKeys   []string `json:"partitionKeys,omitempty"`
-	Replica         uint64   `json:"replica,omitempty"`
-	Desc            []bool   `json:"desc,omitempty"`
+	NumPartition       uint64   `json:"numPartition,omitempty"`
+	PartitionScheme    string   `json:"partitionScheme,omitempty"`
+	PartitionKeys      []string `json:"partitionKeys,omitempty"`
+	Replica            uint64   `json:"replica,omitempty"`
+	Desc               []bool   `json:"desc,omitempty"`
+	Using              string   `json:"using,omitempty"`
 
 	// usage
 	NumDoc        uint64  `json:"numDoc,omitempty"`
@@ -307,11 +308,20 @@ func ExecutePlan(clusterUrl string, indexSpecs []*IndexSpec, nodes []string) (*S
 		return nil, errors.New(fmt.Sprintf("Unable to read index layout from cluster %v. err = %s", clusterUrl, err))
 	}
 
-	for _, indexer := range plan.Placement {
-		for _, node := range nodes {
-			if indexer.NodeId == node {
+	if len(nodes) != 0 {
+		for _, indexer := range plan.Placement {
+			found := false
+			for _, node := range nodes {
+				if indexer.NodeId == node {
+					found = true
+					break
+				}
+			}
+
+			if found {
 				indexer.UnsetExclude()
-				break
+			} else {
+				indexer.SetExclude("in")
 			}
 		}
 	}
@@ -417,7 +427,7 @@ func execute(config *RunConfig, command CommandType, p *Plan, indexSpecs []*Inde
 	var indexes []*IndexUsage
 	var err error
 
-	sizing := newMOISizingMethod()
+	sizing := newGeneralSizingMethod()
 
 	if command == CommandPlan {
 		if indexSpecs != nil {
@@ -455,7 +465,7 @@ func plan(config *RunConfig, plan *Plan, indexes []*IndexUsage) (*SAPlanner, *Ru
 	var solution *Solution
 	var initialIndexes []*IndexUsage
 
-	sizing = newMOISizingMethod()
+	sizing = newGeneralSizingMethod()
 
 	// update runtime stats
 	s := &RunStats{}
@@ -532,7 +542,7 @@ func rebalance(command CommandType, config *RunConfig, plan *Plan, indexes []*In
 
 	s := &RunStats{}
 
-	sizing = newMOISizingMethod()
+	sizing = newGeneralSizingMethod()
 
 	// create an initial solution
 	if plan != nil {
@@ -1062,6 +1072,10 @@ func indexUsageFromSpec(sizing SizingMethod, spec *IndexSpec) ([]*IndexUsage, er
 		startPartnId = 1
 	}
 
+	if len(spec.Using) == 0 {
+		spec.Using = common.MemoryOptimized
+	}
+
 	defnId := common.IndexDefnId(uuid.Uint64())
 	for i := 0; i < int(spec.Replica); i++ {
 		instId := common.IndexInstId(uuid.Uint64())
@@ -1072,7 +1086,7 @@ func indexUsageFromSpec(sizing SizingMethod, spec *IndexSpec) ([]*IndexUsage, er
 			index.PartnId = common.PartitionId(startPartnId + j)
 			index.Name = spec.Name
 			index.Bucket = spec.Bucket
-			index.IsMOI = true
+			index.StorageMode = spec.Using
 			index.IsPrimary = spec.IsPrimary
 
 			index.Instance = &common.IndexInst{}
@@ -1100,6 +1114,9 @@ func indexUsageFromSpec(sizing SizingMethod, spec *IndexSpec) ([]*IndexUsage, er
 			index.Instance.Defn.SecKeySize = spec.SecKeySize
 			index.Instance.Defn.ArrSize = spec.ArrSize
 			index.Instance.Defn.ResidentRatio = spec.ResidentRatio
+			if index.Instance.Defn.ResidentRatio == 0 {
+				index.Instance.Defn.ResidentRatio = 100
+			}
 
 			index.NumOfDocs = spec.NumDoc / uint64(spec.NumPartition)
 			index.AvgDocKeySize = spec.DocKeySize

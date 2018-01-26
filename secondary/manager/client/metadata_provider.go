@@ -42,6 +42,7 @@ import (
 type Settings interface {
 	NumReplica() int32
 	NumPartition() int32
+	StorageMode() string
 }
 
 ///////////////////////////////////////////////////////
@@ -397,7 +398,8 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 			return c.IndexDefnId(0), err, false
 		}
 
-		fn := func(watcher *watcher, partitions []c.PartitionId, versions []int) {
+		fn := func(watcher *watcher, replicaId int, partitions []c.PartitionId, versions []int) {
+			idxDefn.ReplicaId = replicaId
 			idxDefn.Partitions = partitions
 			idxDefn.Versions = versions
 
@@ -428,7 +430,7 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 			}
 
 			versions := make([]int, len(partitions))
-			fn(watcher, partitions, versions)
+			fn(watcher, replicaId, partitions, versions)
 		}
 	}
 
@@ -763,6 +765,15 @@ func (o *MetadataProvider) plan(defn *c.IndexDefn, plan map[string]interface{}) 
 
 	nodes := defn.Nodes
 
+	// Get the storage mode from setting.  This is ONLY used for sizing purpose.  The actual
+	// storage mode of the index will be determined when indexer receives create index request.
+	// 1) if cluster storage mode is plasma, use plasma sizing.
+	// 2) if cluster storage mode is moi, use moi sizing.
+	// 3) if cluster storage mode is forestdb, then ignore sizing input.
+	//    - During upgrade from forestdb to plasma, sizing will be ignored.
+	// 4) if cluster storage mode is not available, then ignore sizing input.
+	spec.Using = o.settings.StorageMode()
+
 	solution, err := planner.ExecutePlan(o.clusterUrl, []*planner.IndexSpec{&spec}, nodes)
 	if err != nil {
 		return nil, err
@@ -833,8 +844,7 @@ func (o *MetadataProvider) getNodesParam(plan map[string]interface{}) ([]string,
 func (o *MetadataProvider) getImmutableParam(partitionScheme c.PartitionScheme, plan map[string]interface{}) (bool, error, bool) {
 
 	// for partitioned index, by default, it is immutable, regardless it is a full index or partial index
-	//immutable := c.IsPartitioned(partitionScheme)
-	immutable := false
+	immutable := c.IsPartitioned(partitionScheme)
 
 	immutable2, ok := plan["immutable"].(bool)
 	if !ok {

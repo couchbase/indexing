@@ -272,10 +272,10 @@ func (idx IndexDefn) Clone() *IndexDefn {
 		IsArrayIndex:       idx.IsArrayIndex,
 		NumReplica:         idx.NumReplica,
 		RetainDeletedXATTR: idx.RetainDeletedXATTR,
-		NumDoc:          idx.NumDoc,
-		SecKeySize:      idx.SecKeySize,
-		DocKeySize:      idx.DocKeySize,
-		ArrSize:         idx.ArrSize,
+		NumDoc:             idx.NumDoc,
+		SecKeySize:         idx.SecKeySize,
+		DocKeySize:         idx.DocKeySize,
+		ArrSize:            idx.ArrSize,
 	}
 }
 
@@ -318,12 +318,12 @@ func (idx IndexInst) DisplayName() string {
 
 func FormatIndexInstDisplayName(name string, replicaId int) string {
 
-	return FormatIndexPartnDisplayName(name, replicaId, 0)
+	return FormatIndexPartnDisplayName(name, replicaId, 0, false)
 }
 
-func FormatIndexPartnDisplayName(name string, replicaId int, partitionId int) string {
+func FormatIndexPartnDisplayName(name string, replicaId int, partitionId int, isPartition bool) string {
 
-	if partitionId != 0 {
+	if isPartition {
 		name = fmt.Sprintf("%v %v", name, partitionId)
 	}
 

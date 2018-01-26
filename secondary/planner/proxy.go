@@ -84,7 +84,7 @@ func RetrievePlanFromCluster(clusterUrl string) (*Plan, error) {
 //
 func recalculateIndexerSize(plan *Plan) {
 
-	sizing := newMOISizingMethod()
+	sizing := newGeneralSizingMethod()
 
 	for _, indexer := range plan.Placement {
 		for _, index := range indexer.Indexes {
@@ -252,8 +252,8 @@ func ConvertToIndexUsage(config common.Config, defn *common.IndexDefn, localMeta
 
 				// update sizing
 				index.IsPrimary = defn.IsPrimary
-				index.IsMOI = (defn.Using == common.IndexType(common.MemoryOptimized) || defn.Using == common.IndexType(common.MemDB))
-				index.NoUsageInfo = defn.Deferred && state == common.INDEX_STATE_READY
+				index.StorageMode = common.IndexTypeToStorageMode(defn.Using).String()
+				index.NoUsageInfo = defn.Deferred && (state == common.INDEX_STATE_READY || state == common.INDEX_STATE_CREATED)
 
 				// update partition
 				numVbuckets := config["indexer.numVbuckets"].Int()
@@ -387,7 +387,7 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 			actualCpuUtil = cpuUtil.(float64) / 100
 		}
 
-		var totalDataSize uint64
+		var totalIndexMemUsed uint64
 		var totalMutation uint64
 		var totalScan uint64
 		for _, index := range indexer.Indexes {
@@ -398,6 +398,7 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 			*/
 
 			var key string
+			var key1 string
 
 			indexName := index.GetStatsName()
 			indexName1 := index.GetInstStatsName()
@@ -408,13 +409,27 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 				index.NumOfDocs = uint64(itemsCount.(float64))
 			}
 
+			// build completion
+			key = fmt.Sprintf("%v:%v:build_progress", index.Bucket, indexName1)
+			if buildProgress, ok := statsMap[key]; ok {
+				index.ActualBuildPercent = uint64(buildProgress.(float64))
+			}
+
+			// resident ratio
+			key = fmt.Sprintf("%v:%v:resident_percent", index.Bucket, indexName)
+			if residentPercent, ok := statsMap[key]; ok {
+				index.ActualResidentPercent = uint64(residentPercent.(float64))
+			}
+
 			// data_size is the total key size of index, excluding back index overhead.
 			// Therefore data_size is typically smaller than index sizing equation which
 			// includes overhead for back-index.
 			key = fmt.Sprintf("%v:%v:data_size", index.Bucket, indexName)
 			if dataSize, ok := statsMap[key]; ok {
-				index.ActualMemUsage = uint64(dataSize.(float64))
-				totalDataSize += index.ActualMemUsage
+				index.ActualDataSize = uint64(dataSize.(float64))
+				// calibrate memory usage based on resident percent
+				index.ActualMemUsage = index.ActualDataSize * index.ActualResidentPercent / 100
+				totalIndexMemUsed += index.ActualMemUsage
 			}
 
 			// avg_sec_key_size is currently unavailable in 4.5.   To estimate,
@@ -492,7 +507,7 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 
 			// These stats are currently unavailable in 4.5.
 			key = fmt.Sprintf("%v:%v:avg_scan_rate", index.Bucket, indexName)
-			key1 := fmt.Sprintf("%v:%v:avg_scan_rate", index.Bucket, indexName1)
+			key1 = fmt.Sprintf("%v:%v:avg_scan_rate", index.Bucket, indexName1)
 			if avgScanRate, ok := statsMap[key]; ok {
 				index.ScanRate = uint64(avgScanRate.(float64))
 				totalScan += index.ScanRate
@@ -519,14 +534,28 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 			}
 		}
 
-		// compute the estimated memory usage for each index.  This also computes
-		// the aggregated indexer mem usage.  Mem usage can be 0 if
+		// Compute the estimated memory usage for each index.  This also computes the aggregated indexer mem usage.
+		//
+		// The memory usage is computed as follows (per node):
+		// 1) Compute the memory resident data size for each index (based on data_size and resident_percent stats)
+		// 2) Compute the total memory resident data size for all indexes
+		// 3) Compute the utilization ratio of each index based on (resident data size / total resident data size)
+		// 4) Compute memory usage of each index based on indexer memory used (utilization ratio * memory_used_storage)
+		// 5) Compute memory overhead of each index based on indexer memory used (utilization ratio * (memory_used - memory_used_storage))
+		// 6) Calibrate index memory usage and overhead based on build percent
+		//
+		// Mem usage can be 0 if
 		// 1) there is no index stats
 		// 2) index has no data (datasize = 0) (e.g. deferred index)
+		//
+		// Note:
+		// 1) Resident data size is sensitive to scan and mutation traffic.   It is a reflection of the working set
+		//    of the index at the time when the planner is run.
+		//
 		for _, index := range indexer.Indexes {
 			ratio := float64(0)
-			if totalDataSize != 0 {
-				ratio = float64(index.ActualMemUsage) / float64(totalDataSize)
+			if totalIndexMemUsed != 0 {
+				ratio = float64(index.ActualMemUsage) / float64(totalIndexMemUsed)
 			}
 
 			index.ActualMemUsage = uint64(float64(actualStorageMem) * ratio)
@@ -537,18 +566,43 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 				index.ActualMemOverhead = 0
 			}
 
+			// If index is not fully build, estimate memory consumption after it is fully build
+			// at the same resident ratio.
+			if index.ActualBuildPercent != 0 {
+				index.ActualMemUsage = index.ActualMemUsage * 100 / index.ActualBuildPercent
+				index.ActualMemOverhead = index.ActualMemOverhead * 100 / index.ActualBuildPercent
+				index.ActualDataSize = index.ActualDataSize * 100 / index.ActualBuildPercent
+			}
+
 			if index.ActualMemUsage != 0 {
 				index.NoUsageInfo = false
 			}
 
+			indexer.ActualDataSize += index.ActualDataSize
 			indexer.ActualMemUsage += index.ActualMemUsage
 			indexer.ActualMemOverhead += index.ActualMemOverhead
 		}
 
-		// compute the estimated cpu usage for each index.  This also computes the
-		// aggregated indexer cpu usage.  CPU usge can be 0 if
+		// Compute the estimated cpu usage for each index.  This also computes the aggregated indexer cpu usage.
+		//
+		// The cpu usage is computed as follows (per node):
+		// 1) Compute the mutation rate for each index (based on avg_mutation_rate stats)
+		// 2) Compute the scan rate for each index (based on avg_scan_rate stats)
+		// 3) Compute the total mutation rate for all indexes
+		// 4) Compute the total scan rate for all indexes
+		// 5) Compute the mutation ratio of each index based on (index mutation rate / total mutation rate)
+		// 6) Compute the scan ratio of each index based on (index scan rate / total scan rate)
+		// 7) Compute an aggregated ratio of each index (mutation rate / 5 + scan rate / 2)
+		// 8) Compute cpu utilization for each index (cpu utilization * aggregated ratio)
+		//
+		// CPU usge can be 0 if
 		// 1) there is no index stats
 		// 2) index has no scan or mutation (e.g. deferred index)
+		//
+		// Note:
+		// 1) Mutation rate and scan rate are computed using running average.   Even though it
+		//    is not based on instantaneous information, running average can quickly converge.
+		//
 		for _, index := range indexer.Indexes {
 
 			mutationRatio := float64(0)
@@ -676,7 +730,7 @@ func createIndexerNode(cinfo *common.ClusterInfoCache, nid common.NodeId) (*Inde
 		return nil, err
 	}
 
-	sizing := newMOISizingMethod()
+	sizing := newGeneralSizingMethod()
 	return newIndexerNode(host, sizing), nil
 }
 

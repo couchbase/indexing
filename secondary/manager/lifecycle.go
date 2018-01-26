@@ -547,6 +547,14 @@ func (m *LifecycleMgr) setStorageMode(defn *common.IndexDefn) error {
 		}
 	}
 
+	if common.IsPartitioned(defn.PartitionScheme) {
+		if defn.Using != common.PlasmaDB && defn.Using != common.MemDB && defn.Using != common.MemoryOptimized {
+			err := fmt.Sprintf("Create Index fails. Reason = Cannot create partitioned index using %v", string(defn.Using))
+			logging.Errorf("LifecycleMgr.handleCreateIndex: " + err)
+			return errors.New(err)
+		}
+	}
+
 	return nil
 }
 
