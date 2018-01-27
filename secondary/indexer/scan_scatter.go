@@ -141,12 +141,12 @@ func scanSingleSlice(request *ScanRequest, scan Scan, ctx IndexReaderContext, sn
 
 		if queue != nil {
 
-			entry1 := secondaryIndexEntry(entry)
-			entryKeyLen := entry1.lenKey()
-
 			var r Row
+			if !request.isPrimary {
+				entry1 := secondaryIndexEntry(entry)
+				r.len = entry1.lenKey()
+			}
 			r.key = entry
-			r.len = entryKeyLen
 
 			queue.Enqueue(&r)
 			return nil
