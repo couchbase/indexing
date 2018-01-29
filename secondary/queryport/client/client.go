@@ -501,8 +501,8 @@ func (c *GsiClient) CreateIndex3(
 		"whereExpr:%v secExprs:%v desc:%v isPrimary:%v scheme:%v " +
 		" partitionKeys:%v with:%v - elapsed(%v) err(%v)"
 	logging.Infof(
-		fmsg, defnID, bucket, name, using, exprType, whereExpr,
-		secExprs, desc, isPrimary, scheme, partitionKeys, string(with), time.Since(begin), err)
+		fmsg, defnID, bucket, name, using, exprType, logging.TagUD(whereExpr),
+		logging.TagUD(secExprs), desc, isPrimary, scheme, logging.TagUD(partitionKeys), string(with), time.Since(begin), err)
 	return defnID, err
 }
 

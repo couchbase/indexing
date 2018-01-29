@@ -3,6 +3,7 @@ PROJECT (indexing)
 
 INCLUDE (FindCouchbaseGo)
 INCLUDE (FindCouchbaseJemalloc)
+INCLUDE (FindCouchbaseCurl)
 
 IF (BUILD_ENTERPRISE)
   MESSAGE(STATUS "Building EE edition of GSI")
