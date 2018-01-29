@@ -21,15 +21,19 @@ import (
 // Const
 ////////////////////////////////////////////////////////////////////////
 
-const DeleteDDLCommandTokenTag = "commandToken/delete/"
 const DDLMetakvDir = c.IndexingMetaDir + "ddl/"
+const InfoMetakvDir = c.IndexingMetaDir + "info/"
+
+const CreateDDLCommandTokenTag = "commandToken/create/"
+const CreateDDLCommandTokenPath = DDLMetakvDir + CreateDDLCommandTokenTag
+
+const DeleteDDLCommandTokenTag = "commandToken/delete/"
 const DeleteDDLCommandTokenPath = DDLMetakvDir + DeleteDDLCommandTokenTag
 
 const BuildDDLCommandTokenTag = "commandToken/build/"
 const BuildDDLCommandTokenPath = DDLMetakvDir + BuildDDLCommandTokenTag
 
 const IndexerVersionTokenTag = "versionToken"
-const InfoMetakvDir = c.IndexingMetaDir + "info/"
 const IndexerVersionTokenPath = InfoMetakvDir + IndexerVersionTokenTag
 
 const IndexerStorageModeTokenTag = "storageModeToken/"
@@ -37,7 +41,24 @@ const IndexerStorageModeTokenPath = InfoMetakvDir + IndexerStorageModeTokenTag
 
 //////////////////////////////////////////////////////////////
 // Concrete Type
+//
+// These are immutable tokens that are pushed to metakv
+// during DDL.  Since these tokens are immutable, we do
+// not have to worry about indexers seeing different token
+// values.  An indexer either does not see the value, or
+// seeing the same value as other indexers.
+//
 //////////////////////////////////////////////////////////////
+
+type CreateCommandTokenList struct {
+	Tokens []CreateCommandToken
+}
+
+type CreateCommandToken struct {
+	DefnId      c.IndexDefnId
+	BucketUUID  string
+	Definitions map[c.IndexerId][]c.IndexDefn
+}
 
 type DeleteCommandToken struct {
 	Name   string
@@ -59,6 +80,94 @@ type IndexerStorageModeToken struct {
 	NodeUUID         string
 	Override         string
 	LocalStorageMode string
+}
+
+//////////////////////////////////////////////////////////////
+// Create Token Management
+//////////////////////////////////////////////////////////////
+
+//
+// Generate a token to metakv for recovery purpose
+//
+func PostCreateCommandToken(defnId c.IndexDefnId, bucketUUID string, defns map[c.IndexerId][]c.IndexDefn) error {
+
+	commandToken := &CreateCommandToken{
+		DefnId:      defnId,
+		BucketUUID:  bucketUUID,
+		Definitions: defns,
+	}
+
+	id := fmt.Sprintf("%v", defnId)
+	if err := c.MetakvSet(CreateDDLCommandTokenPath+id, commandToken); err != nil {
+		return errors.New(fmt.Sprintf("Fail to create index.  Internal Error = %v", err))
+	}
+
+	return nil
+}
+
+//
+// Does token exist? Return true only if token exist and there is no error.
+//
+func CreateCommandTokenExist(defnId c.IndexDefnId) (bool, error) {
+
+	commandToken := &CreateCommandToken{}
+	id := fmt.Sprintf("%v", defnId)
+	return c.MetakvGet(CreateDDLCommandTokenPath+id, commandToken)
+}
+
+//
+// Does token exist? Return true only if token exist and there is no error.
+//
+func DeleteCreateCommandToken(defnId c.IndexDefnId) error {
+
+	id := fmt.Sprintf("%v", defnId)
+	return c.MetakvDel(CreateDDLCommandTokenPath + id)
+}
+
+//
+// Unmarshall
+//
+func UnmarshallCreateCommandToken(data []byte) (*CreateCommandToken, error) {
+
+	r := new(CreateCommandToken)
+	if err := json.Unmarshal(data, r); err != nil {
+		return nil, err
+	}
+
+	return r, nil
+}
+
+func MarshallCreateCommandToken(r *CreateCommandToken) ([]byte, error) {
+
+	buf, err := json.Marshal(&r)
+	if err != nil {
+		return nil, err
+	}
+
+	return buf, nil
+}
+
+//
+// Unmarshall
+//
+func UnmarshallCreateCommandTokenList(data []byte) (*CreateCommandTokenList, error) {
+
+	r := new(CreateCommandTokenList)
+	if err := json.Unmarshal(data, r); err != nil {
+		return nil, err
+	}
+
+	return r, nil
+}
+
+func MarshallCreateCommandTokenList(r *CreateCommandTokenList) ([]byte, error) {
+
+	buf, err := json.Marshal(&r)
+	if err != nil {
+		return nil, err
+	}
+
+	return buf, nil
 }
 
 //////////////////////////////////////////////////////////////

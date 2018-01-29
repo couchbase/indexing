@@ -447,6 +447,7 @@ func (m *IndexManager) HandleBuildIndexDDL(indexIds client.IndexIdList) error {
 
 	return nil
 }
+
 func (m *IndexManager) UpdateIndexInstance(bucket string, defnId common.IndexDefnId, instId common.IndexInstId,
 	state common.IndexState, streamId common.StreamId, err string, buildTime []uint64, rState common.RebalanceState,
 	partitions []uint64, versions []int, instVersion int) error {
@@ -576,6 +577,12 @@ func (m *IndexManager) NotifyIndexerReady() error {
 
 	logging.Debugf("IndexManager.NotifyIndexerReady(): making request to notify indexer is ready ")
 	return m.requestServer.MakeAsyncRequest(client.OPCODE_INDEXER_READY, "", []byte{})
+}
+
+func (m *IndexManager) RebalanceRunning() error {
+
+	logging.Debugf("IndexManager.RebalanceRunning(): making request for rebalance running")
+	return m.requestServer.MakeRequest(client.OPCODE_REBALANCE_RUNNING, "", []byte{})
 }
 
 func (m *IndexManager) NotifyStats(stats common.Statistics) error {

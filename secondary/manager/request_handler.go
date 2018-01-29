@@ -982,7 +982,7 @@ func (m *requestHandlerContext) handleIndexPlanRequest(w http.ResponseWriter, r 
 
 func (m *requestHandlerContext) getIndexPlan(r *http.Request) (string, error) {
 
-	plan, err := planner.RetrievePlanFromCluster(m.clusterUrl)
+	plan, err := planner.RetrievePlanFromCluster(m.clusterUrl, nil)
 	if err != nil {
 		return "", errors.New(fmt.Sprintf("Fail to retreive index information from cluster.   Error=%v", err))
 	}

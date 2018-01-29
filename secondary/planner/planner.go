@@ -212,10 +212,12 @@ type IndexUsage struct {
 	Instance *common.IndexInst `json:"instance,omitempty"`
 
 	// input: node where index initially placed (optional)
+	// for new indexes to be placed on an existing topology (e.g. live cluster), this must not be set.
 	initialNode *IndexerNode
 
-	// input: has the user tryign to delete the index?
-	pendingDelete bool
+	// input: flag to indicate if the index in delete or create token
+	pendingDelete bool // true if there is a delete token associated with this index
+	pendingCreate bool // true if there is a create token associated with this index
 
 	// mutable: hint for placement / constraint
 	suppressEquivIdxCheck bool
@@ -713,6 +715,7 @@ func (p *SAPlanner) adjustInitialSolutionIfNecessary(s *Solution) *Solution {
 
 	cloned := s.clone()
 
+	// Make sure we only repair when it is rebalancing
 	if s.command != CommandPlan {
 		p.dropReplicaIfNecessary(cloned)
 		p.addReplicaIfNecessary(cloned)
@@ -1230,9 +1233,9 @@ func (s *Solution) PrintLayout() {
 
 		for _, index := range indexer.Indexes {
 			logging.Infof("\t\t------------------------------------------------------------------------------------------------------------------")
-			logging.Infof("\t\tIndex name:%v, bucket:%v, defnId:%v, instId:%v, Partition: %v, new/moved:%v estimated:%v ignoreEquivCheck:%v",
+			logging.Infof("\t\tIndex name:%v, bucket:%v, defnId:%v, instId:%v, Partition: %v, new/moved:%v estimated:%v ignoreEquivCheck:%v pendingCreate:%v",
 				index.GetDisplayName(), index.Bucket, index.DefnId, index.InstId, index.PartnId,
-				index.initialNode == nil || index.initialNode.NodeId != indexer.NodeId, index.NoUsageInfo, index.suppressEquivIdxCheck)
+				index.initialNode == nil || index.initialNode.NodeId != indexer.NodeId, index.NoUsageInfo, index.suppressEquivIdxCheck, index.pendingCreate)
 			logging.Infof("\t\tIndex total memory:%v (%s), data:%v (%s), overhead:%v (%s), index:%v (%s) cpu:%.4f resident:%v%% build:%v%%",
 				index.GetMemTotal(s.UseLiveData()), formatMemoryStr(uint64(index.GetMemTotal(s.UseLiveData()))),
 				index.GetMemUsage(s.UseLiveData()), formatMemoryStr(uint64(index.GetMemUsage(s.UseLiveData()))),
@@ -1667,7 +1670,10 @@ func (s *Solution) ignoreResourceConstraint() bool {
 	// for plasma and forestdb, memory and cpu represents transient working set and this can change over time.
 	// for MOI, memory consumption is not transient so constraint needs to be honored.
 	if s.command == CommandRebalance || s.command == CommandSwap {
-		return !s.isMOICluster()
+		// planner tends to even out memory, cpu and data usage across nodes based on cost function.
+		// so ignore resource constraint assuming the resources will even out
+		//return !s.isMOICluster()
+		return true
 	}
 
 	// ignore constraint for plasma and fdb during planning since memory and cpu are transient working set.
@@ -1682,10 +1688,13 @@ func (s *Solution) ignoreResourceConstraint() bool {
 		if s.canRunEstimation() {
 			return false
 		}
-		return !s.isMOICluster()
+		// planner tends to even out memory, cpu and data usage across nodes based on cost function.
+		// so ignore resource constraint assuming the resources will even out
+		//return !s.isMOICluster()
+		return true
 	}
 
-	return false
+	return true
 }
 
 //
@@ -1976,7 +1985,8 @@ retry1:
 		// Do not use Cpu for estimation for now since cpu measurement is fluctuating
 		freeMem := float64(s.constraint.GetMemQuota()) - float64(indexer.GetMemTotal(s.UseLiveData()))
 		freeMemRatio := freeMem / float64(s.constraint.GetMemQuota())
-		if freeMemRatio > threshold {
+		if freeMem > 0 && freeMemRatio > threshold {
+			// freeMem is a positive number
 			adjFreeMem := uint64(freeMem * 0.8)
 			totalMemFree += adjFreeMem
 			if adjFreeMem > maxMemFree {
@@ -1987,7 +1997,7 @@ retry1:
 	}
 
 	// If there is no indexer, then retry with lower free Ratio
-	if len(indexers) == 0 && threshold > 0 {
+	if len(indexers) == 0 && threshold > 0.05 {
 		threshold -= 0.05
 		goto retry1
 	}
@@ -3934,6 +3944,7 @@ func (p *RandomPlacement) Add(s *Solution, indexes []*IndexUsage) error {
 	for _, idx := range indexes {
 		indexer := getRandomNode(p.rs, candidates)
 		s.addIndex(indexer, idx)
+		idx.initialNode = nil
 	}
 
 	return nil
@@ -4237,20 +4248,6 @@ func newGeneralSizingMethod() *GeneralSizingMethod {
 //
 func (s *GeneralSizingMethod) Validate(solution *Solution) error {
 
-	// If using cpu/mem usage from live cluster, no need to validate.
-	if solution.UseLiveData() {
-		return nil
-	}
-
-	for _, indexer := range solution.Placement {
-		for _, index := range indexer.Indexes {
-			if !index.IsPlasma() && !index.IsMOI() {
-				return errors.New(fmt.Sprintf("Planner does not support index outside of MOI and Plasma. Index=%v Bucket=%v",
-					index.GetDisplayName(), index.Bucket))
-			}
-		}
-	}
-
 	return nil
 }
 
@@ -4259,10 +4256,12 @@ func (s *GeneralSizingMethod) Validate(solution *Solution) error {
 //
 func (s *GeneralSizingMethod) ComputeIndexSize(idx *IndexUsage) {
 
-	if idx.IsMOI() {
-		s.MOI.ComputeIndexSize(idx)
-	} else if idx.IsPlasma() {
+	if idx.IsPlasma() {
 		s.Plasma.ComputeIndexSize(idx)
+	} else {
+		// for both MOI and forestdb
+		// we don't have sizing for forestdb but we have simulation tests that run with forestdb
+		s.MOI.ComputeIndexSize(idx)
 	}
 }
 

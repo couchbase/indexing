@@ -367,17 +367,432 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 		return c.IndexDefnId(0), err, retry
 	}
 
-	//
-	// Invoke Planner
-	//
-	layout, err := o.plan(idxDefn, plan)
+	clusterVersion := o.GetClusterVersion()
+	if clusterVersion < c.INDEXER_55_VERSION {
+		if err := o.createIndex(idxDefn, plan); err != nil {
+			return c.IndexDefnId(0), err, false
+		}
+	} else {
+		if err := o.recoverableCreateIndex(idxDefn, plan); err != nil {
+			return c.IndexDefnId(0), err, false
+		}
+	}
+
+	return idxDefn.DefnId, nil, false
+}
+
+//
+// This function makes a call to create index using new protocol (vulcan).
+//
+func (o *MetadataProvider) makePrepareIndexRequest(idxDefn *c.IndexDefn) (map[c.IndexerId]int, error) {
+
+	// do a preliminary check
+	watchers, err, _ := o.findWatchersWithRetry(idxDefn.Nodes, int(idxDefn.NumReplica), c.IsPartitioned(idxDefn.PartitionScheme))
 	if err != nil {
-		return c.IndexDefnId(0), err, false
+		return nil, err
+	}
+
+	if len(idxDefn.Nodes) == 0 {
+		// Get the full list of healthy watcher.  Unhealthy watcher could be unwatched.
+		watchers = o.getAllWatchers()
+	}
+
+	request := &PrepareCreateRequest{
+		Op:          PREPARE,
+		DefnId:      idxDefn.DefnId,
+		RequesterId: o.providerId,
+		Timeout:     int64(time.Duration(3) * time.Minute),
+	}
+
+	requestMsg, err := MarshallPrepareCreateRequest(request)
+	if err != nil {
+		return nil, err
+	}
+
+	var wg *sync.WaitGroup = new(sync.WaitGroup)
+	var accept uint32
+
+	watcherMap := make(map[c.IndexerId]int)
+
+	// Send prepare command to healthy watchers.   During network partitioning, if there are 2 concurrent create requests
+	// from 2 different cbq nodes:
+	// 1) If both cbq nodes see overlapping indexers, then one of them will succeed.
+	// 2) If the cbq nodes see a non-overlapping subset of indexers, then both will succeed.   But for each cbq node, the
+	//    planner will only use its subset of nodes for planning.
+	//
+	key := fmt.Sprintf("%d", idxDefn.DefnId)
+	for _, w := range watchers {
+
+		wg.Add(1)
+		watcherMap[w.getIndexerId()] = 1
+
+		go func(w *watcher) {
+
+			logging.Infof("send prepare create request to watcher %v", w.getAdminAddr())
+
+			defer wg.Done()
+
+			// if there is a network partitioning between the metadata provider and indexer, makeRequest would not return until timeout.
+			content, err := w.makeRequest(OPCODE_PREPARE_CREATE_INDEX, key, requestMsg)
+			if err != nil {
+				logging.Errorf("Fail to prepare index creation on %v. Error: %v", w.getAdminAddr(), err)
+				return
+			}
+
+			response, err := UnmarshallPrepareCreateResponse(content)
+			if err != nil {
+				logging.Errorf("Fail to prepare index creation on %v. Error: %v", w.getAdminAddr(), err)
+				return
+			}
+
+			if response != nil && response.Accept {
+				logging.Infof("Indexer %v does not accept prepare create request. Index (%v, %v)", w.getAdminAddr(), idxDefn.Bucket, idxDefn.Name)
+				atomic.AddUint32(&accept, 1)
+				return
+			}
+		}(w)
+	}
+
+	wg.Wait()
+
+	if accept < uint32(len(watcherMap)) {
+		errStr := "Create index cannot proceed due to rebalance in progress, " +
+			"another concurrent create index request, network partition, or node failover."
+		return watcherMap, errors.New(errStr)
+	}
+
+	return watcherMap, nil
+}
+
+//
+// This function clean up prepare index request
+//
+func (o *MetadataProvider) cancelPrepareIndexRequest(idxDefn *c.IndexDefn, watcherMap map[c.IndexerId]int) {
+
+	request := &PrepareCreateRequest{
+		Op:          CANCEL_PREPARE,
+		DefnId:      idxDefn.DefnId,
+		RequesterId: o.providerId,
+	}
+
+	content, err := MarshallPrepareCreateRequest(request)
+	if err != nil {
+		logging.Errorf("Fail to cancel prepare index creation on indexerId. Error: %v", err)
+		return
+	}
+
+	key := fmt.Sprintf("%d", idxDefn.DefnId)
+	for indexerId, _ := range watcherMap {
+
+		go func(indexerId c.IndexerId) {
+
+			watcher, err := o.findWatcherByIndexerId(indexerId)
+			if err != nil {
+				logging.Errorf("Fail to cancel prepare index creation.  Cannot find watcher for indexerId %v. Error: %v", indexerId, err)
+				return
+			}
+
+			logging.Infof("send cancel create request to watcher %v", watcher.getAdminAddr())
+
+			_, err = watcher.makeRequest(OPCODE_PREPARE_CREATE_INDEX, key, content)
+			if err != nil {
+				logging.Errorf("Fail to cancel prepare index creation on %v. Error: %v", watcher.getAdminAddr(), err)
+				return
+			}
+		}(indexerId)
+	}
+}
+
+//
+// This function makes a call to create index using new protocol (vulcan).
+//
+func (o *MetadataProvider) makeCommitIndexRequest(idxDefn *c.IndexDefn, layout map[int]map[c.IndexerId][]c.PartitionId,
+	watcherMap map[c.IndexerId]int) error {
+
+	definitions := make(map[c.IndexerId][]c.IndexDefn)
+	for replicaId, indexerPartitionMap := range layout {
+		instId, err := c.NewIndexInstId()
+		if err != nil {
+			return fmt.Errorf("Internal Error = %v.", err)
+		}
+
+		for indexerId, partitions := range indexerPartitionMap {
+			temp := *idxDefn
+
+			temp.InstId = instId
+			temp.ReplicaId = replicaId
+			temp.Partitions = partitions
+			temp.Versions = make([]int, len(partitions))
+
+			definitions[indexerId] = append(definitions[indexerId], temp)
+		}
+	}
+
+	request := &CommitCreateRequest{
+		DefnId:      idxDefn.DefnId,
+		RequesterId: o.providerId,
+		Definitions: definitions,
+	}
+
+	requestMsg, err := MarshallCommitCreateRequest(request)
+	if err != nil {
+		return fmt.Errorf("Unable to send commit request.  Reason: %v", err)
+	}
+
+	var mutex sync.Mutex
+	var cond *sync.Cond = sync.NewCond(&mutex)
+	var accept bool
+	var count int32
+
+	errorMap := make(map[string]bool)
+
+	key := fmt.Sprintf("%d", idxDefn.DefnId)
+	for indexerId, _ := range watcherMap {
+
+		w, err := o.findWatcherByIndexerId(indexerId)
+		if err != nil {
+			logging.Errorf("Fail to cancel prepare index creation.  Cannot find watcher for indexerId %v", indexerId)
+			continue
+		}
+
+		atomic.AddInt32(&count, 1)
+
+		go func(w *watcher) {
+			defer func() {
+				atomic.AddInt32(&count, -1)
+
+				cond.L.Lock()
+				defer cond.L.Unlock()
+				cond.Signal()
+			}()
+
+			logging.Infof("send commit create request to watcher %v", w.getAdminAddr())
+
+			// if there is a network partitioning between the metadata provider and indexer,
+			// makeRequest would not return until timeout.
+			content, err := w.makeRequest(OPCODE_COMMIT_CREATE_INDEX, key, requestMsg)
+			if err != nil {
+				logging.Errorf("Encounter error during create index.  Error: %v", err)
+				mutex.Lock()
+				errorMap[err.Error()] = true
+				mutex.Unlock()
+			}
+
+			response, err := UnmarshallCommitCreateResponse(content)
+			if err != nil {
+				logging.Errorf("Encounter error during create index.  Error: %v", err)
+			}
+
+			mutex.Lock()
+			if response != nil {
+				accept = response.Accept || accept
+			}
+			mutex.Unlock()
+		}(w)
+	}
+
+	// wait for result
+	var success bool
+	for {
+		cond.L.Lock()
+		cond.Wait()
+		success = accept
+		cond.L.Unlock()
+
+		if success {
+			break
+		}
+
+		if atomic.LoadInt32(&count) == 0 {
+			break
+		}
+	}
+
+	var createErr error
+	if len(errorMap) != 0 {
+		var errStr string
+		for errStr2, _ := range errorMap {
+			errStr += errStr2 + "\n"
+		}
+		createErr = errors.New(errStr)
+	}
+
+	//result is ready
+	if success {
+		if createErr != nil {
+			return fmt.Errorf("Encounter transient error.  Index creation will retry in background.  Error: %v", createErr)
+		}
+		return nil
+	}
+
+	// There is no indexer has replied to this request.   Check to see if the token has created.
+	time.Sleep(time.Duration(10) * time.Second)
+	exist, err := mc.CreateCommandTokenExist(idxDefn.DefnId)
+	if exist {
+		if createErr != nil {
+			return fmt.Errorf("Encounter transient.  Index creation will retry in background.  Error: %v", createErr)
+		}
+		return nil
+	}
+
+	if createErr == nil {
+		errStr := "Fail to create index due to rebalancing, another concurrent request, network partition, or node failed. " +
+			"The operation may have succeed.  If not, please retry the operation at later time."
+		createErr = errors.New(errStr)
+	}
+
+	return createErr
+}
+
+//
+// This function create index using new protocol (vulcan).
+//
+func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn, plan map[string]interface{}) error {
+
+	//
+	// Prepare Phase.  This is to seek full quorum from all the indexers.
+	//
+	// This operation will fail if
+	// 1) Any indexer is unreachable
+	// 2) Any indexer is serving another create index request
+	//
+	// Once the full quorum is achieved, the indexer will not accept any other create index request until:
+	// 1) This create index request has completed
+	// 2) This create index request has been explicity canceled
+	// 3) Indexer has timed out
+	//
+	watcherMap, err := o.makePrepareIndexRequest(idxDefn)
+	if err != nil {
+		o.cancelPrepareIndexRequest(idxDefn, watcherMap)
+		logging.Errorf("Fail to create index: %v", err)
+		return err
 	}
 
 	//
-	// Make Index Creation Request
+	// Plan Phase.
+	// The planner will exclude inactive_failed and inactive_new nodes.   It can fail if it cannot connect to any
+	// active node (unhealthy), regardless of the index node list.
 	//
+	layout, err := o.plan(idxDefn, plan, watcherMap)
+	if err != nil {
+		o.cancelPrepareIndexRequest(idxDefn, watcherMap)
+		logging.Errorf("Fail to create index due to planner error. Error: %v", err)
+		return errors.New("Fail to create index becasue it is unable to place the index that satisfies availability constraint.  See logs for more details.")
+	}
+
+	//
+	// Commit Phase.  Metadata Provider will send a commit request to at least one indexer.  If at least one indexer
+	// responds with success, then it means there won't be another concurrent create index request.    Even though
+	// the metadata provider may not have full quorum, this create index request can roll forward.
+	//
+	// The first indexer that responds with success will create a token so that it can roll forward even if this
+	// metadata provider has died.  Other indexer will observe the token and proceed with the request.
+	//
+	err = o.makeCommitIndexRequest(idxDefn, layout, watcherMap)
+	if err != nil {
+		logging.Errorf("Fail to create index: %v", err)
+		return err
+	}
+
+	//
+	// Wait for response
+	//
+	topologyMap := make(map[int]map[c.PartitionId]c.IndexerId)
+	for replicaId, indexerPartitionMap := range layout {
+		if _, ok := topologyMap[replicaId]; !ok {
+			topologyMap[replicaId] = make(map[c.PartitionId]c.IndexerId)
+		}
+
+		for indexerId, partitions := range indexerPartitionMap {
+			for _, partition := range partitions {
+				topologyMap[replicaId][partition] = indexerId
+			}
+		}
+	}
+
+	if !idxDefn.Deferred {
+		var errStr string
+		err := o.repo.waitForEvent(idxDefn.DefnId, []c.IndexState{c.INDEX_STATE_ACTIVE, c.INDEX_STATE_DELETED}, topologyMap)
+		if err != nil {
+			errStr += err.Error() + "\n"
+		}
+
+		if len(errStr) != 0 {
+			return errors.New(errStr)
+		}
+	}
+
+	return nil
+}
+
+//
+// This function create index using old protocol (spock).
+//
+func (o *MetadataProvider) createIndex(idxDefn *c.IndexDefn, plan map[string]interface{}) error {
+
+	watchers, err, _ := o.findWatchersWithRetry(idxDefn.Nodes, int(idxDefn.NumReplica), c.IsPartitioned(idxDefn.PartitionScheme))
+	if err != nil {
+		return err
+	}
+
+	if len(idxDefn.Nodes) != 0 && len(watchers) != len(idxDefn.Nodes) {
+		return errors.New(fmt.Sprintf("Fails to create index.  Some indexer node is not available for create index.  Indexers=%v.", idxDefn.Nodes))
+	}
+
+	if len(watchers) < int(idxDefn.NumReplica)+1 {
+		return errors.New(fmt.Sprintf("Fails to create index.  Cannot find enough indexer node for replica.  numReplica=%v.", idxDefn.NumReplica))
+	}
+
+	layout := make(map[int]map[c.IndexerId][]c.PartitionId)
+	addLayout := func(replicaId int, indexerId c.IndexerId, partitions []c.PartitionId) {
+		if _, ok := layout[replicaId]; !ok {
+			layout[replicaId] = make(map[c.IndexerId][]c.PartitionId)
+		}
+		layout[replicaId][indexerId] = partitions
+	}
+
+	for replicaId := 0; replicaId < int(idxDefn.NumReplica+1); replicaId++ {
+
+		if c.IsPartitioned(idxDefn.PartitionScheme) {
+
+			partitionPerWatcher := int(idxDefn.NumPartitions) / len(watchers)
+			if int(idxDefn.NumPartitions)%len(watchers) != 0 {
+				partitionPerWatcher += 1
+			}
+
+			partnId := int(1)
+			endPartnId := partnId + int(idxDefn.NumPartitions)
+
+			for _, watcher := range watchers {
+
+				var partitions []c.PartitionId
+				count := 0
+				for partnId < endPartnId && count < partitionPerWatcher {
+					partitions = append(partitions, c.PartitionId(partnId))
+					count++
+					partnId++
+				}
+
+				if len(partitions) != 0 {
+					addLayout(replicaId, watcher.getIndexerId(), partitions)
+				}
+			}
+
+			// shuffle the watcher
+			watchers = append(watchers[1:], watchers[:1]...)
+
+		} else {
+			addLayout(replicaId, watchers[replicaId].getIndexerId(), []c.PartitionId{c.NON_PARTITION_ID})
+		}
+	}
+
+	return o.makeCreateIndexRequest(idxDefn, layout)
+}
+
+//
+// This function makes a call to create index using old protocol (spock).
+//
+func (o *MetadataProvider) makeCreateIndexRequest(idxDefn *c.IndexDefn, layout map[int]map[c.IndexerId][]c.PartitionId) error {
 
 	defnID := idxDefn.DefnId
 	wait := !idxDefn.Deferred
@@ -386,51 +801,35 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 		idxDefn.Deferred = true
 	}
 
-	key := fmt.Sprintf("%d", defnID)
 	errMap := make(map[string]bool)
 	topologyMap := make(map[int]map[c.PartitionId]c.IndexerId)
 
 	for replicaId, partitionMap := range layout {
 
 		// create index id
+		var err error
 		idxDefn.InstId, err = c.NewIndexInstId()
 		if err != nil {
-			return c.IndexDefnId(0), err, false
+			return err
 		}
-
-		fn := func(watcher *watcher, replicaId int, partitions []c.PartitionId, versions []int) {
-			idxDefn.ReplicaId = replicaId
-			idxDefn.Partitions = partitions
-			idxDefn.Versions = versions
-
-			content, err := c.MarshallIndexDefn(idxDefn)
-			if err != nil {
-				errMap[fmt.Sprintf("Fail to send create index request.  Error=%v", err)] = true
-
-			} else {
-
-				if _, err := watcher.makeRequest(OPCODE_CREATE_INDEX, key, content); err != nil {
-					errMap[err.Error()] = true
-				}
-
-				if _, ok := topologyMap[replicaId]; !ok {
-					topologyMap[replicaId] = make(map[c.PartitionId]c.IndexerId)
-				}
-
-				for _, partnId := range partitions {
-					topologyMap[replicaId][partnId] = watcher.getIndexerId()
-				}
-			}
-		}
+		idxDefn.ReplicaId = replicaId
 
 		for indexerId, partitions := range partitionMap {
-			watcher, err := o.findWatcherByIndexerId(indexerId)
-			if err != nil {
-				return c.IndexDefnId(0), errors.New("Fail to create index.  Internal Error: Cannot locate indexer nodes"), false
+
+			idxDefn.Partitions = partitions
+			idxDefn.Versions = make([]int, len(partitions))
+
+			if err := o.SendCreateIndexRequest(indexerId, idxDefn); err != nil {
+				errMap[err.Error()] = true
 			}
 
-			versions := make([]int, len(partitions))
-			fn(watcher, replicaId, partitions, versions)
+			if _, ok := topologyMap[replicaId]; !ok {
+				topologyMap[replicaId] = make(map[c.PartitionId]c.IndexerId)
+			}
+
+			for _, partnId := range partitions {
+				topologyMap[replicaId][partnId] = indexerId
+			}
 		}
 	}
 
@@ -441,7 +840,7 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 		}
 
 		if len(errStr) != 0 {
-			return c.IndexDefnId(0), errors.New(fmt.Sprintf("Encounter errors during create index.  Error=%s.", errStr)), false
+			return errors.New(fmt.Sprintf("Encounter errors during create index.  Error=%s.", errStr))
 		}
 	}
 
@@ -451,16 +850,14 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 		// place token for index build
 		if err := mc.PostBuildCommandToken(defnID); err != nil {
 			logging.Errorf("Index is created, but fail to Build Index due to internal errors.  Error=%v", err)
-			return c.IndexDefnId(0),
-				errors.New("Index is created, bu fail to Build Index due to internal errors.  Please use build index statement."),
-				false
+			return errors.New("Index is created, bu fail to Build Index due to internal errors.  Please use build index statement.")
 		}
 
 		list := BuildIndexIdList([]c.IndexDefnId{defnID})
 		content, err := MarshallIndexIdList(list)
 		if err != nil {
 			logging.Errorf("Encounter unexpected error during build index.  Index build will retry in background. Error=%v", err)
-			return c.IndexDefnId(0), errors.New("Encounter unexpected error.  Index build will retry in background."), false
+			return errors.New("Encounter unexpected error.  Index build will retry in background.")
 		}
 
 		hasError := false
@@ -487,7 +884,7 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 		}
 
 		if hasError {
-			return c.IndexDefnId(0), errors.New("Encounter unexpected error.  Index build will retry in background."), false
+			return errors.New("Encounter unexpected error.  Index build will retry in background.")
 		}
 	}
 
@@ -503,15 +900,39 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 		}
 
 		if len(errStr) != 0 {
-			return c.IndexDefnId(0), errors.New(errStr), false
+			return errors.New(errStr)
 		}
-
-		return defnID, nil, false
 	}
 
-	return defnID, nil, false
+	return nil
 }
 
+//
+// This function send a create index request
+//
+func (o *MetadataProvider) SendCreateIndexRequest(indexerId c.IndexerId, idxDefn *c.IndexDefn) error {
+
+	watcher, err := o.findWatcherByIndexerId(indexerId)
+	if err != nil {
+		return errors.New("Fail to create index.  Internal Error: Cannot locate indexer nodes")
+	}
+
+	content, err := c.MarshallIndexDefn(idxDefn)
+	if err != nil {
+		return fmt.Errorf("Fail to send create index request.  Error=%v", err)
+	}
+
+	key := fmt.Sprintf("%d", idxDefn.DefnId)
+	if _, err := watcher.makeRequest(OPCODE_CREATE_INDEX, key, content); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+//
+// Create Index Defnition from DDL
+//
 func (o *MetadataProvider) PrepareIndexDefn(
 	name, bucket, using, exprType, whereExpr string,
 	secExprs []string, desc []bool, isPrimary bool,
@@ -593,6 +1014,7 @@ func (o *MetadataProvider) PrepareIndexDefn(
 		}
 
 		if len(partitionKeys) == 0 {
+
 			partitionKeys, err, retry = o.getPartitionKeyParam(plan, secExprs)
 			if err != nil {
 				return nil, err, retry
@@ -600,6 +1022,12 @@ func (o *MetadataProvider) PrepareIndexDefn(
 
 			if len(partitionKeys) != 0 {
 				partitionScheme = c.KEY
+			}
+
+			if clusterVersion < c.INDEXER_55_VERSION {
+				return nil,
+					errors.New("Fails to create index.  Partitioned index is enabled only after cluster is fully upgraded and there is no failed node."),
+					false
 			}
 		}
 
@@ -737,9 +1165,11 @@ func (o *MetadataProvider) PrepareIndexDefn(
 	return idxDefn, nil, false
 }
 
-func (o *MetadataProvider) plan(defn *c.IndexDefn, plan map[string]interface{}) (map[int]map[c.IndexerId][]c.PartitionId, error) {
+func (o *MetadataProvider) plan(defn *c.IndexDefn, plan map[string]interface{},
+	watcherMap map[c.IndexerId]int) (map[int]map[c.IndexerId][]c.PartitionId, error) {
 
 	var spec planner.IndexSpec
+	spec.DefnId = defn.DefnId
 	spec.Name = defn.Name
 	spec.Bucket = defn.Bucket
 	spec.IsPrimary = defn.IsPrimary
@@ -765,6 +1195,18 @@ func (o *MetadataProvider) plan(defn *c.IndexDefn, plan map[string]interface{}) 
 
 	nodes := defn.Nodes
 
+	if len(defn.Nodes) == 0 {
+		// If user does not specify a node list, then get the node list where we have acquired locks.
+		nodes := make([]string, 0, len(watcherMap))
+		for indexerId, _ := range watcherMap {
+			watcher, err := o.findWatcherByIndexerId(indexerId)
+			if err != nil {
+				return nil, errors.New("Fail to invokve planner.  Some of the indexers may be down or network partitioned from query process.")
+			}
+			nodes = append(nodes, strings.ToLower(watcher.getNodeAddr()))
+		}
+	}
+
 	// Get the storage mode from setting.  This is ONLY used for sizing purpose.  The actual
 	// storage mode of the index will be determined when indexer receives create index request.
 	// 1) if cluster storage mode is plasma, use plasma sizing.
@@ -774,7 +1216,7 @@ func (o *MetadataProvider) plan(defn *c.IndexDefn, plan map[string]interface{}) 
 	// 4) if cluster storage mode is not available, then ignore sizing input.
 	spec.Using = o.settings.StorageMode()
 
-	solution, err := planner.ExecutePlan(o.clusterUrl, []*planner.IndexSpec{&spec}, nodes)
+	solution, err := planner.ExecutePlan(o.clusterUrl, []*planner.IndexSpec{&spec}, nodes, len(defn.Nodes) != 0)
 	if err != nil {
 		return nil, err
 	}
@@ -782,7 +1224,7 @@ func (o *MetadataProvider) plan(defn *c.IndexDefn, plan map[string]interface{}) 
 	result := make(map[int]map[c.IndexerId][]c.PartitionId)
 	for _, indexer := range solution.Placement {
 		for _, index := range indexer.Indexes {
-			if index.Name == spec.Name && index.Bucket == spec.Bucket {
+			if index.DefnId == defn.DefnId {
 				if _, ok := result[index.Instance.ReplicaId]; !ok {
 					result[index.Instance.ReplicaId] = make(map[c.IndexerId][]c.PartitionId)
 				}
@@ -1230,25 +1672,37 @@ RETRY1:
 	errCode := 0
 	if len(nodes) == 0 {
 		if partitioned {
-			return o.getAllWatchers(), nil, false
-		}
+			// partitioned
+			watchers := o.getAllWatchers()
+			if len(watchers) >= numReplica+1 {
+				return watchers, nil, false
+			}
 
-		watcher, numWatcher := o.findNextAvailWatcher(watchers, true)
-		if watcher == nil {
-			watcher, numWatcher = o.findNextAvailWatcher(watchers, false)
-		}
-		if watcher == nil {
-			watchers = nil
-			if numWatcher == 0 {
-				errCode = 1
+			if len(watchers) == 0 {
+				errCode = 0
 			} else {
 				errCode = 3
 			}
-		} else {
-			watchers = append(watchers, watcher)
 
-			if len(watchers) < numReplica+1 {
-				goto RETRY1
+		} else {
+			// non-partitioned
+			watcher, numWatcher := o.findNextAvailWatcher(watchers, true)
+			if watcher == nil {
+				watcher, numWatcher = o.findNextAvailWatcher(watchers, false)
+			}
+			if watcher == nil {
+				watchers = nil
+				if numWatcher == 0 {
+					errCode = 1
+				} else {
+					errCode = 3
+				}
+			} else {
+				watchers = append(watchers, watcher)
+
+				if len(watchers) < numReplica+1 {
+					goto RETRY1
+				}
 			}
 		}
 	} else {
@@ -1291,6 +1745,13 @@ RETRY1:
 
 func (o *MetadataProvider) DropIndex(defnID c.IndexDefnId) error {
 
+	// place token for recovery.  Even if the index does not exist, the delete token will
+	// be cleaned up during rebalance.  By placing the delete token, it will make sure that the
+	// outstanding create token will be deleted.
+	if err := mc.PostDeleteCommandToken(defnID); err != nil {
+		return errors.New(fmt.Sprintf("Fail to Drop Index due to internal errors.  Error=%v.", err))
+	}
+
 	// find index -- this method will not return the index if the index is in DELETED
 	// status (but defn exists).
 	meta := o.findIndex(defnID)
@@ -1304,11 +1765,6 @@ func (o *MetadataProvider) DropIndex(defnID c.IndexDefnId) error {
 	watchers, err := o.findWatchersByDefnIdIgnoreStatus(defnID)
 	if err != nil {
 		return errors.New(fmt.Sprintf("Cannot locate cluster node hosting Index %s.", meta.Definition.Name))
-	}
-
-	// place token for recovery.
-	if err := mc.PostDeleteCommandToken(defnID); err != nil {
-		return errors.New(fmt.Sprintf("Fail to Drop Index due to internal errors.  Error=%v.", err))
 	}
 
 	// Make a request to drop the index, the index may be dropped in parallel before this MetadataProvider
@@ -1408,26 +1864,10 @@ func (o *MetadataProvider) BuildIndexes(defnIDs []c.IndexDefnId) error {
 		}
 	}
 
+	// send request
 	errMap := make(map[string]bool)
 	for indexerId, idList := range watcherIndexMap {
-
-		watcher, err := o.findAliveWatcherByIndexerId(indexerId)
-		if err != nil {
-			errFmtStr := "Cannot reach node %v.  Index build will retry in background once network connection is re-established."
-			errMap[fmt.Sprintf(errFmtStr, watcherNodeMap[indexerId])] = true
-			continue
-		}
-
-		list := BuildIndexIdList(idList)
-
-		content, err := MarshallIndexIdList(list)
-		if err != nil {
-			errMap[err.Error()] = true
-			continue
-		}
-
-		_, err = watcher.makeRequest(OPCODE_BUILD_INDEX, "Index Build", content)
-		if err != nil {
+		if err := o.SendBuildIndexRequest(indexerId, idList, watcherNodeMap[indexerId]); err != nil {
 			errMap[err.Error()] = true
 		}
 	}
@@ -1438,6 +1878,28 @@ func (o *MetadataProvider) BuildIndexes(defnIDs []c.IndexDefnId) error {
 			errStr += msg + "\n"
 		}
 		return errors.New(errStr)
+	}
+
+	return nil
+}
+
+func (o *MetadataProvider) SendBuildIndexRequest(indexerId c.IndexerId, idList []c.IndexDefnId, addr string) error {
+
+	watcher, err := o.findAliveWatcherByIndexerId(indexerId)
+	if err != nil {
+		return fmt.Errorf("Cannot reach node %v.  Index build will retry in background once network connection is re-established.", addr)
+	}
+
+	list := BuildIndexIdList(idList)
+
+	content, err := MarshallIndexIdList(list)
+	if err != nil {
+		return err
+	}
+
+	_, err = watcher.makeRequest(OPCODE_BUILD_INDEX, "Index Build", content)
+	if err != nil {
+		return err
 	}
 
 	return nil

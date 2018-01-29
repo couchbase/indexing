@@ -406,7 +406,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	//Start DDL Service Manager
 	//Initialize DDL Service Manager before rebalance manager so DDL service manager is ready
 	//when Rebalancing manager receives ns_server rebalancing callback.
-	idx.ddlSrvMgr, res = NewDDLServiceMgr(idx.ddlSrvMgrCmdCh, idx.wrkrRecvCh, idx.config)
+	idx.ddlSrvMgr, res = NewDDLServiceMgr(common.IndexerId(idx.id), idx.ddlSrvMgrCmdCh, idx.wrkrRecvCh, idx.config)
 	if res.GetMsgType() != MSG_SUCCESS {
 		logging.Fatalf("Indexer::NewIndexer DDL Service Manager Init Error %+v", res)
 		return nil, res
@@ -1045,6 +1045,8 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 	<-idx.statsMgrCmdCh
 	idx.rebalMgrCmdCh <- msg
 	<-idx.rebalMgrCmdCh
+	idx.ddlSrvMgrCmdCh <- msg
+	<-idx.ddlSrvMgrCmdCh
 	idx.clustMgrAgentCmdCh <- msg
 	<-idx.clustMgrAgentCmdCh
 	idx.updateSliceWithConfig(newConfig)
@@ -1091,6 +1093,11 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 	clientCh := msg.(*MsgCreateIndex).GetResponseChannel()
 
 	logging.Infof("Indexer::handleCreateIndex %v", indexInst)
+
+	// NOTE
+	// If this function adds new validation or changes error message, need
+	// to update lifecycle mgr and ddl service mgr.
+	//
 
 	is := idx.getIndexerState()
 	if is != common.INDEXER_ACTIVE {
@@ -1867,6 +1874,11 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 	clientCh := msg.(*MsgBuildIndex).GetRespCh()
 
 	logging.Infof("Indexer::handleBuildIndex %v", instIdList)
+
+	// NOTE
+	// If this function adds new validation or changes error message, need
+	// to update lifecycle mgr and ddl service mgr.
+	//
 
 	if len(instIdList) == 0 {
 		logging.Warnf("Indexer::handleBuildIndex Nothing To Build")
@@ -2759,6 +2771,10 @@ func (idx *indexer) shutdownWorkers() {
 	//shutdown kv sender
 	idx.kvSenderCmdCh <- &MsgGeneral{mType: KV_SENDER_SHUTDOWN}
 	<-idx.kvSenderCmdCh
+
+	// shutdown ddl manager
+	idx.ddlSrvMgrCmdCh <- &MsgGeneral{mType: ADMIN_MGR_SHUTDOWN}
+	<-idx.ddlSrvMgrCmdCh
 }
 
 func (idx *indexer) Shutdown() Message {
@@ -4995,6 +5011,10 @@ func (idx *indexer) handleSetLocalMeta(msg Message) {
 	if err == nil {
 		if key == RebalanceRunning {
 			idx.rebalanceRunning = true
+
+			msg := &MsgClustMgrUpdate{mType: CLUST_MGR_REBALANCE_RUNNING}
+			idx.sendMsgToClusterMgr(msg)
+
 		} else if key == RebalanceTokenTag {
 			var rebalToken RebalanceToken
 			if err := json.Unmarshal([]byte(value), &rebalToken); err == nil {

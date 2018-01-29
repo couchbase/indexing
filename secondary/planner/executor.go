@@ -89,21 +89,22 @@ type Plan struct {
 
 type IndexSpec struct {
 	// definition
-	Name               string   `json:"name,omitempty"`
-	Bucket             string   `json:"bucket,omitempty"`
-	IsPrimary          bool     `json:"isPrimary,omitempty"`
-	SecExprs           []string `json:"secExprs,omitempty"`
-	WhereExpr          string   `json:"where,omitempty"`
-	Deferred           bool     `json:"deferred,omitempty"`
-	Immutable          bool     `json:"immutable,omitempty"`
-	IsArrayIndex       bool     `json:"isArrayIndex,omitempty"`
-	RetainDeletedXATTR bool     `json:"retainDeletedXATTR,omitempty"`
-	NumPartition       uint64   `json:"numPartition,omitempty"`
-	PartitionScheme    string   `json:"partitionScheme,omitempty"`
-	PartitionKeys      []string `json:"partitionKeys,omitempty"`
-	Replica            uint64   `json:"replica,omitempty"`
-	Desc               []bool   `json:"desc,omitempty"`
-	Using              string   `json:"using,omitempty"`
+	Name               string             `json:"name,omitempty"`
+	Bucket             string             `json:"bucket,omitempty"`
+	DefnId             common.IndexDefnId `json:"defnId,omitempty"`
+	IsPrimary          bool               `json:"isPrimary,omitempty"`
+	SecExprs           []string           `json:"secExprs,omitempty"`
+	WhereExpr          string             `json:"where,omitempty"`
+	Deferred           bool               `json:"deferred,omitempty"`
+	Immutable          bool               `json:"immutable,omitempty"`
+	IsArrayIndex       bool               `json:"isArrayIndex,omitempty"`
+	RetainDeletedXATTR bool               `json:"retainDeletedXATTR,omitempty"`
+	NumPartition       uint64             `json:"numPartition,omitempty"`
+	PartitionScheme    string             `json:"partitionScheme,omitempty"`
+	PartitionKeys      []string           `json:"partitionKeys,omitempty"`
+	Replica            uint64             `json:"replica,omitempty"`
+	Desc               []bool             `json:"desc,omitempty"`
+	Using              string             `json:"using,omitempty"`
 
 	// usage
 	NumDoc        uint64  `json:"numDoc,omitempty"`
@@ -129,7 +130,7 @@ func ExecuteRebalanceInternal(clusterUrl string,
 	topologyChange service.TopologyChange, masterId string, addNode bool, detail bool, ejectOnly bool,
 	disableReplicaRepair bool, timeout int) (map[string]*common.TransferToken, error) {
 
-	plan, err := RetrievePlanFromCluster(clusterUrl)
+	plan, err := RetrievePlanFromCluster(clusterUrl, nil)
 	if err != nil {
 		return nil, errors.New(fmt.Sprintf("Unable to read index layout from cluster %v. err = %s", clusterUrl, err))
 	}
@@ -180,7 +181,7 @@ func genTransferToken(solution *Solution, masterId string, topologyChange servic
 
 	for _, indexer := range solution.Placement {
 		for _, index := range indexer.Indexes {
-			if index.initialNode != nil && index.initialNode.NodeId != indexer.NodeId {
+			if index.initialNode != nil && index.initialNode.NodeId != indexer.NodeId && !index.pendingCreate {
 
 				// one token for every index replica between a specific source and destination
 				tokenKey := fmt.Sprintf("%v %v %v %v", index.DefnId, index.Instance.ReplicaId, index.initialNode.NodeUUID, indexer.NodeUUID)
@@ -188,13 +189,14 @@ func genTransferToken(solution *Solution, masterId string, topologyChange servic
 				token, ok := tokens[tokenKey]
 				if !ok {
 					token = &common.TransferToken{
-						MasterId:  masterId,
-						SourceId:  index.initialNode.NodeUUID,
-						DestId:    indexer.NodeUUID,
-						RebalId:   topologyChange.ID,
-						State:     common.TransferTokenCreated,
-						InstId:    index.InstId,
-						IndexInst: *index.Instance,
+						MasterId:     masterId,
+						SourceId:     index.initialNode.NodeUUID,
+						DestId:       indexer.NodeUUID,
+						RebalId:      topologyChange.ID,
+						State:        common.TransferTokenCreated,
+						InstId:       index.InstId,
+						IndexInst:    *index.Instance,
+						TransferMode: common.TokenTransferModeMove,
 					}
 
 					token.IndexInst.Defn.InstVersion = token.IndexInst.Version + 1
@@ -228,7 +230,7 @@ func genTransferToken(solution *Solution, masterId string, topologyChange servic
 					}
 				}
 
-			} else if index.initialNode == nil {
+			} else if index.initialNode == nil || index.pendingCreate {
 				// There is no source node (index is added during rebalance).
 
 				// one token for every index replica between a specific source and destination
@@ -301,14 +303,14 @@ func genTransferToken(solution *Solution, masterId string, topologyChange servic
 // Integration with Metadata Provider
 /////////////////////////////////////////////////////////////
 
-func ExecutePlan(clusterUrl string, indexSpecs []*IndexSpec, nodes []string) (*Solution, error) {
+func ExecutePlan(clusterUrl string, indexSpecs []*IndexSpec, nodes []string, override bool) (*Solution, error) {
 
-	plan, err := RetrievePlanFromCluster(clusterUrl)
+	plan, err := RetrievePlanFromCluster(clusterUrl, nodes)
 	if err != nil {
 		return nil, errors.New(fmt.Sprintf("Unable to read index layout from cluster %v. err = %s", clusterUrl, err))
 	}
 
-	if len(nodes) != 0 {
+	if override && len(nodes) != 0 {
 		for _, indexer := range plan.Placement {
 			found := false
 			for _, node := range nodes {
@@ -326,7 +328,8 @@ func ExecutePlan(clusterUrl string, indexSpecs []*IndexSpec, nodes []string) (*S
 		}
 	}
 
-	return ExecutePlanWithOptions(plan, indexSpecs, true, "", "", -1, -1, -1, false, true)
+	detail := logging.IsEnabled(logging.Info)
+	return ExecutePlanWithOptions(plan, indexSpecs, detail, "", "", -1, -1, -1, false, true)
 }
 
 //////////////////////////////////////////////////////////////
@@ -1076,7 +1079,11 @@ func indexUsageFromSpec(sizing SizingMethod, spec *IndexSpec) ([]*IndexUsage, er
 		spec.Using = common.MemoryOptimized
 	}
 
-	defnId := common.IndexDefnId(uuid.Uint64())
+	defnId := spec.DefnId
+	if spec.DefnId == 0 {
+		defnId = common.IndexDefnId(uuid.Uint64())
+	}
+
 	for i := 0; i < int(spec.Replica); i++ {
 		instId := common.IndexInstId(uuid.Uint64())
 		for j := 0; j < int(spec.NumPartition); j++ {

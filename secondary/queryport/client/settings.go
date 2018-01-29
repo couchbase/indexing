@@ -32,13 +32,16 @@ type ClientSettings struct {
 
 	storageMode string
 	mutex       sync.RWMutex
+
+	needRefresh bool
 }
 
 func NewClientSettings(needRefresh bool) *ClientSettings {
 
 	s := &ClientSettings{
-		config:   nil,
-		cancelCh: make(chan struct{}, 1),
+		config:      nil,
+		cancelCh:    make(chan struct{}, 1),
+		needRefresh: needRefresh,
 	}
 
 	if needRefresh {
@@ -154,6 +157,12 @@ func (s *ClientSettings) handleSettings(config common.Config) {
 			defer s.mutex.Unlock()
 			s.storageMode = storageMode
 		}()
+	}
+
+	if s.needRefresh {
+		logLevel := config["queryport.client.log_level"].String()
+		level := logging.Level(logLevel)
+		logging.SetLogLevel(level)
 	}
 }
 

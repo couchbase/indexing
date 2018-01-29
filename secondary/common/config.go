@@ -617,6 +617,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"queryport.client.log_level": ConfigValue{
+		"info", // keep in sync with index_settings_manager.erl
+		"GsiClient logging level",
+		"info",
+		false, // mutable
+		false, // case-insensitive
+	},
 	// projector's adminport client, can be used by indexer.
 	"indexer.projectorclient.retryInterval": ConfigValue{
 		16,

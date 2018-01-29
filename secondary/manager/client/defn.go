@@ -40,6 +40,9 @@ const (
 	OPCODE_CONFIG_UPDATE                        = OPCODE_RESET_INDEX + 1
 	OPCODE_DROP_OR_PRUNE_INSTANCE               = OPCODE_CONFIG_UPDATE + 1
 	OPCODE_MERGE_PARTITION                      = OPCODE_DROP_OR_PRUNE_INSTANCE + 1
+	OPCODE_PREPARE_CREATE_INDEX                 = OPCODE_MERGE_PARTITION + 1
+	OPCODE_COMMIT_CREATE_INDEX                  = OPCODE_PREPARE_CREATE_INDEX + 1
+	OPCODE_REBALANCE_RUNNING                    = OPCODE_COMMIT_CREATE_INDEX + 1
 )
 
 /////////////////////////////////////////////////////////////////////////
@@ -66,8 +69,47 @@ type ServiceMap struct {
 	ClusterVersion uint64 `json:"clusterVersion,omitempty"`
 }
 
+/////////////////////////////////////////////////////////////////////////
+// Index Stats
+////////////////////////////////////////////////////////////////////////
+
 type IndexStats struct {
 	Stats c.Statistics `json:"stats,omitempty"`
+}
+
+/////////////////////////////////////////////////////////////////////////
+// Create Index
+////////////////////////////////////////////////////////////////////////
+
+type PrepareCreateRequestOp int
+
+const (
+	PREPARE PrepareCreateRequestOp = iota
+	CANCEL_PREPARE
+)
+
+type PrepareCreateRequest struct {
+	Op PrepareCreateRequestOp `json:"op,omitempty"`
+
+	DefnId      c.IndexDefnId `json:"defnId,omitempty"`
+	RequesterId string        `json:"requestId,omitempty"`
+	Timeout     int64         `json:"timeout,omitempty"`
+	StartTime   int64         `json:"startTime,omitempty"`
+}
+
+type PrepareCreateResponse struct {
+	// Prepare
+	Accept bool `json:"accept,omitempty"`
+}
+
+type CommitCreateRequest struct {
+	DefnId      c.IndexDefnId                 `json:"defnId,omitempty"`
+	RequesterId string                        `json:"requesterId,omitempty"`
+	Definitions map[c.IndexerId][]c.IndexDefn `json:"definitions,omitempty"`
+}
+
+type CommitCreateResponse struct {
+	Accept bool `json:"accept,omitempty"`
 }
 
 /////////////////////////////////////////////////////////////////////////
@@ -167,6 +209,102 @@ func MarshallIndexStats(stats *IndexStats) ([]byte, error) {
 	}
 
 	logging.Debugf("MarshallIndexStats: %v", string(buf))
+
+	return buf, nil
+}
+
+func UnmarshallPrepareCreateRequest(data []byte) (*PrepareCreateRequest, error) {
+
+	logging.Debugf("UnmarshallPrepareCreateRequest: %v", string(data))
+
+	prepareCreateRequest := new(PrepareCreateRequest)
+	if err := json.Unmarshal(data, prepareCreateRequest); err != nil {
+		return nil, err
+	}
+
+	return prepareCreateRequest, nil
+}
+
+func MarshallPrepareCreateRequest(prepareCreateRequest *PrepareCreateRequest) ([]byte, error) {
+
+	buf, err := json.Marshal(&prepareCreateRequest)
+	if err != nil {
+		return nil, err
+	}
+
+	logging.Debugf("MarshallPrepareCreateRequest: %v", string(buf))
+
+	return buf, nil
+}
+
+func UnmarshallPrepareCreateResponse(data []byte) (*PrepareCreateResponse, error) {
+
+	logging.Debugf("UnmarshallPrepareCreateResponse: %v", string(data))
+
+	prepareCreateResponse := new(PrepareCreateResponse)
+	if err := json.Unmarshal(data, prepareCreateResponse); err != nil {
+		return nil, err
+	}
+
+	return prepareCreateResponse, nil
+}
+
+func MarshallPrepareCreateResponse(prepareCreateResponse *PrepareCreateResponse) ([]byte, error) {
+
+	buf, err := json.Marshal(&prepareCreateResponse)
+	if err != nil {
+		return nil, err
+	}
+
+	logging.Debugf("MarshallPrepareCreateResponse: %v", string(buf))
+
+	return buf, nil
+}
+
+func UnmarshallCommitCreateRequest(data []byte) (*CommitCreateRequest, error) {
+
+	logging.Debugf("UnmarshallCommitCreateRequest: %v", string(data))
+
+	commitCreateRequest := new(CommitCreateRequest)
+	if err := json.Unmarshal(data, commitCreateRequest); err != nil {
+		return nil, err
+	}
+
+	return commitCreateRequest, nil
+}
+
+func MarshallCommitCreateRequest(commitCreateRequest *CommitCreateRequest) ([]byte, error) {
+
+	buf, err := json.Marshal(&commitCreateRequest)
+	if err != nil {
+		return nil, err
+	}
+
+	logging.Debugf("MarshallCommitCreateRequest: %v", string(buf))
+
+	return buf, nil
+}
+
+func UnmarshallCommitCreateResponse(data []byte) (*CommitCreateResponse, error) {
+
+	logging.Debugf("UnmarshallCommitCreateResponse: %v", string(data))
+
+	commitCreateResponse := new(CommitCreateResponse)
+	if err := json.Unmarshal(data, commitCreateResponse); err != nil {
+		return nil, err
+	}
+
+	return commitCreateResponse, nil
+}
+
+func MarshallCommitCreateResponse(commitCreateResponse *CommitCreateResponse) ([]byte, error) {
+
+	buf, err := json.Marshal(&commitCreateResponse)
+	if err != nil {
+		return nil, err
+	}
+
+	logging.Debugf("MarshallCommitCreateResponse: %v", string(buf))
 
 	return buf, nil
 }

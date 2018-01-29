@@ -584,6 +584,7 @@ const (
 	IndexAlreadyExist
 	DropIndexInProgress
 	IndexInvalidState
+	BucketEphemeral
 )
 
 type IndexerError struct {
