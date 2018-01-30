@@ -370,7 +370,6 @@ func (mdb *memdbSlice) insert(key []byte, docid []byte, workerId int) int {
 }
 
 func (mdb *memdbSlice) insertPrimaryIndex(key []byte, docid []byte, workerId int) int {
-	logging.Tracef("MemDBSlice::insert \n\tSliceId %v IndexInstId %v Set Key - %s", mdb.id, mdb.idxInstId, logging.TagStrUD(docid))
 
 	entry, err := NewPrimaryIndexEntry(docid)
 	common.CrashOnError(err)
@@ -423,7 +422,6 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 	if !allowLargeKeys && len(keys) > maxArrayIndexEntrySize {
 		logging.Errorf("MemDBSlice::insertSecArrayIndex Error indexing docid: %s in Slice: %v. Error: Encoded array key (size %v) too long (> %v). Skipped.",
 			logging.TagStrUD(docid), mdb.id, len(keys), maxArrayIndexEntrySize)
-		logging.Verbosef("MemDBSlice::insertSecArrayIndex Skipped docid: %s Key: %s", logging.TagStrUD(docid), logging.TagStrUD(keys))
 		return mdb.deleteSecArrayIndex(docid, workerId)
 	}
 

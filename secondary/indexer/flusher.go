@@ -444,8 +444,10 @@ func (f *flusher) processUpsert(mut *Mutation, docid []byte, meta *MutationMeta)
 			}
 		}
 	} else {
-		logging.Debugf("Flusher::processUpsert Partition Instance not found "+
-			"for Id: %v Skipped Mutation Key: %v", partnId, logging.TagUD(mut.key))
+		logging.LazyDebug(func() string {
+			return fmt.Sprintf("Flusher::processUpsert Partition Instance not found "+
+				"for Id: %v Skipped Mutation Key: %v", partnId, logging.TagUD(mut.key))
+		})
 	}
 
 }

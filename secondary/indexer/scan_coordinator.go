@@ -217,7 +217,9 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, conn net.Conn,
 		return
 	}
 
-	logging.Verbosef("%s REQUEST %s", req.LogPrefix, logging.TagStrUD(req))
+	logging.LazyVerbose(func() string {
+		return fmt.Sprintf("%s REQUEST %s", req.LogPrefix, logging.TagStrUD(req))
+	})
 
 	if req.Consistency != nil {
 		logging.LazyVerbose(func() string {

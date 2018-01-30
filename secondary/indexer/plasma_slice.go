@@ -451,8 +451,6 @@ func (mdb *plasmaSlice) insert(key []byte, docid []byte, workerId int) int {
 }
 
 func (mdb *plasmaSlice) insertPrimaryIndex(key []byte, docid []byte, workerId int) int {
-	logging.Tracef("plasmaSlice::insert \n\tSliceId %v IndexInstId %v Set Key - %s", mdb.id,
-		mdb.idxInstId, logging.TagStrUD(docid))
 
 	entry, err := NewPrimaryIndexEntry(docid)
 	common.CrashOnError(err)
@@ -533,8 +531,6 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 	var newbufLen int
 	if oldkey != nil {
 		if bytes.Equal(oldkey, key) {
-			logging.Tracef("plasmaSlice::insertSecArrayIndex \n\tSliceId %v IndexInstId %v Received Unchanged Key for "+
-				"Doc Id %s. Key %v. Skipped.", mdb.id, mdb.idxInstId, logging.TagStrUD(docid), logging.TagStrUD(key))
 			return
 		}
 
@@ -773,8 +769,6 @@ func (mdb *plasmaSlice) deleteSecArrayIndex(docid []byte, workerId int) (nmut in
 	}
 
 	if olditm == nil {
-		logging.Tracef("plasmaSlice::deleteSecArrayIndex \n\tSliceId %v IndexInstId %v Received NIL Key for "+
-			"Doc Id %v. Skipped.", mdb.id, mdb.idxInstId, logging.TagStrUD(docid))
 		return
 	}
 
