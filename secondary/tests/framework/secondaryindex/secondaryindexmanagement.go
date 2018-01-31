@@ -405,14 +405,14 @@ func DropAllSecondaryIndexes(server string) error {
 	tc.HandleError(err, "Error while listing the secondary indexes")
 	for _, index := range indexes {
 		defn := index.Definition
-		// start := time.Now()
-		e := client.DropIndex(uint64(defn.DefnId))
-		// elapsed := time.Since(start)
-		if e != nil {
-			return e
+		exists := IndexExistsWithClient(defn.Name, defn.Bucket, server, client)
+		if exists {
+			e := client.DropIndex(uint64(defn.DefnId))
+			if e != nil {
+				return e
+			}
+			log.Printf("Dropped index %v", defn.Name)
 		}
-		log.Printf("Dropped index %v", defn.Name)
-		// tc.LogPerfStat("DropIndex", elapsed)  // Commenting out this log as it is used only in setup
 	}
 	return nil
 }

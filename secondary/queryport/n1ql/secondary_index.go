@@ -696,6 +696,11 @@ func (si *secondaryIndex) KeyspaceId() string {
 	return si.bucketn
 }
 
+// Indexer implement Index{} interface.
+func (si *secondaryIndex) Indexer() datastore.Indexer {
+	return si.gsi
+}
+
 // Id implement Index{} interface.
 func (si *secondaryIndex) Id() string {
 	return defnID2String(si.defnID)
