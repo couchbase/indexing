@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 
 	"github.com/couchbase/indexing/secondary/collatejson"
 	c "github.com/couchbase/indexing/secondary/common"
@@ -201,7 +202,7 @@ func (s *IndexScanSource) Routine() error {
 			if r.GroupAggr != nil {
 				entry, err = projectGroupAggr((*buf)[:0], r.Indexprojection, s.p.aggrRes)
 				if entry == nil {
-					return nil
+					return err
 				}
 			} else {
 				entry, err = projectKeys(ck, entry, (*buf)[:0], r.Indexprojection)
@@ -277,7 +278,9 @@ loop:
 
 		for {
 			entry, err := projectGroupAggr((*buf)[:0], r.Indexprojection, s.p.aggrRes)
-
+			if err != nil {
+				return err
+			}
 			if entry == nil {
 
 				if s.p.rowsReturned == 0 {
@@ -607,7 +610,7 @@ func projectLeadingKey(compositekeys [][]byte, key []byte, buf *[]byte) ([]byte,
 /////////////////////////////////////////////////////////////////////////
 
 type groupKey struct {
-	key       []byte
+	key       interface{}
 	projectId int32
 }
 
@@ -702,14 +705,7 @@ func computeGroupKey(groupAggr *GroupAggr, gk *GroupKey, compositekeys [][]byte,
 			}
 		}
 
-		// TODO: MB-27049 - Encoding not needed here
-		codec := collatejson.NewCodec(16)
-		encodeBuf := make([]byte, 1024) // TODO MB-27049 fix buffer size and avoid garbage
-		encoded, err := codec.EncodeN1QLValue(scalar, encodeBuf[:0])
-		if err != nil {
-			return err
-		}
-		g.key = encoded
+		g.key = scalar
 		g.projectId = gk.EntryKeyId
 	}
 	return nil
@@ -796,11 +792,16 @@ func (ar *aggrResult) AddNewGroup(groups []*groupKey, aggrs []*aggrVal) error {
 			aggrs: make([]*aggrVal, len(aggrs))}
 
 		for i, g := range groups {
-			newKey := make([]byte, len(g.key))
-			copy(newKey, g.key)
-			newRow.groups[i] = &groupKey{key: newKey,
-				projectId: g.projectId,
+			var newValue interface{}
+			switch k := g.key.(type) {
+			case []byte:
+				newKey := make([]byte, len(k))
+				copy(newKey, k)
+				newValue = newKey
+			case value.Value:
+				newValue = g.key
 			}
+			newRow.groups[i] = &groupKey{key: newValue, projectId: g.projectId}
 		}
 
 		newRow.AddAggregate(aggrs)
@@ -864,8 +865,7 @@ func (ar *aggrRow) Flush() bool {
 }
 
 func (gk *groupKey) Equals(ok *groupKey) bool {
-
-	return bytes.Equal(gk.key, ok.key)
+	return reflect.DeepEqual(gk.key, ok.key)
 }
 
 func projectEmptyResult(buf []byte, projection *Projection, groupAggr *GroupAggr) ([]byte, error) {
@@ -929,7 +929,19 @@ func projectGroupAggr(buf []byte, projection *Projection, aggrRes *aggrResult) (
 	var keysToJoin [][]byte
 	for _, projGroup := range projection.projectGroupKeys {
 		if projGroup.grpKey {
-			keysToJoin = append(keysToJoin, row.groups[projGroup.pos].key)
+			var newKey []byte
+			switch val := row.groups[projGroup.pos].key.(type) {
+			case []byte:
+				newKey = val
+			case value.Value:
+				codec := collatejson.NewCodec(16)
+				encodeBuf := make([]byte, 1024) // TODO: use val.MarshalJSON() to determine size
+				newKey, err = codec.EncodeN1QLValue(val, encodeBuf[:0])
+				if err != nil {
+					return nil, err
+				}
+			}
+			keysToJoin = append(keysToJoin, newKey)
 		} else {
 			if row.aggrs[projGroup.pos].fn.Type() == c.AGG_SUM ||
 				row.aggrs[projGroup.pos].fn.Type() == c.AGG_COUNT ||
