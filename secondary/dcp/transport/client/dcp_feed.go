@@ -1075,8 +1075,11 @@ loop:
 			logging.Errorf("%v doReceive(): %v\n", feed.logPrefix, err)
 			break loop
 		}
-		arg1 := logging.TagUD(pkt)
-		logging.Tracef("%v packet received %#v", feed.logPrefix, arg1)
+
+		logging.LazyTrace(func() string {
+			return fmt.Sprintf("%v packet received %#v", feed.logPrefix, logging.TagUD(pkt))
+		})
+
 		if len(rcvch) == cap(rcvch) {
 			start, blocked = time.Now(), true
 		}
