@@ -198,6 +198,22 @@ type GroupAggr struct {
 	groups      []*groupKey
 }
 
+func (ga GroupAggr) String() string {
+	str := "Groups: "
+	for _, g := range ga.Group {
+		str += fmt.Sprintf(" %+v ", g)
+	}
+
+	str += "Aggregates: "
+	for _, a := range ga.Aggrs {
+		str += fmt.Sprintf(" %+v ", a)
+	}
+
+	str += fmt.Sprintf(" DependsOnIndexKeys %v", ga.DependsOnIndexKeys)
+	str += fmt.Sprintf(" IndexKeyNames %v", ga.IndexKeyNames)
+	return str
+}
+
 var (
 	ErrInvalidAggrFunc = errors.New("Invalid Aggregate Function")
 )
@@ -1295,6 +1311,10 @@ func (r ScanRequest) String() string {
 
 	if r.RequestId != "" {
 		str += fmt.Sprintf(", requestId:%v", r.RequestId)
+	}
+
+	if r.GroupAggr != nil {
+		str += fmt.Sprintf(", groupaggr: %v", r.GroupAggr)
 	}
 
 	return str
