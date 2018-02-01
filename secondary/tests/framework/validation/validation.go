@@ -84,7 +84,7 @@ func ValidateGroupAggrWithN1QL(clusterAddr, bucketName, username, password, n1ql
 	groupAggr *qc.GroupAggr, indexProjection *qc.IndexProjection,
 	actualResp tc.GroupAggrScanResponse) error {
 
-	results, err := tc.ExecuteN1QLStatement(clusterAddr, bucketName, username, password, n1qlstatement)
+	results, err := tc.ExecuteN1QLStatement(clusterAddr, bucketName, username, password, n1qlstatement, true)
 	if err != nil {
 		return err
 	}
