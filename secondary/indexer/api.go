@@ -129,8 +129,10 @@ func (api *restServer) statsHandler(req request) {
 			if len(segs) == 3 { // Indexer node level stats
 				t.level = "indexer"
 			} else if len(segs) == 4 { // Bucket level stats
-				t.level = "bucket"
-				t.resource = segs[3]
+				errStr := fmt.Sprintf("Bucket-Level statistics are unavailable" +
+					"\nPlease retry at Indexer Node or Index granularity \n%s", req.r.URL.Path)
+				http.Error(req.w, errStr, 404)
+				return
 			} else if len(segs) == 5 { // Index level stats
 				t.level = "index"
 				t.resource = segs[4]
@@ -156,7 +158,7 @@ func (api *restServer) statsHandler(req request) {
 			http.Error(req.w, req.r.URL.Path, 404)
 		}
 	} else {
-		http.Error(req.w, "Unsupported method", 400)
+		http.Error(req.w, "Unsupported method", 405)
 	}
 }
 
