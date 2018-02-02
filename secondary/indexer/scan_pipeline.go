@@ -113,13 +113,15 @@ func (s *IndexScanSource) Routine() error {
 	count := 1
 	checkDistinct := r.Distinct && !r.isPrimary
 
-	buf := secKeyBufPool.Get()
+	buf := secKeyBufPool.Get() //Composite element filtering
 	r.keyBufList = append(r.keyBufList, buf)
-	buf2 := secKeyBufPool.Get()
+	buf2 := secKeyBufPool.Get() //Tracking for distinct
 	r.keyBufList = append(r.keyBufList, buf2)
 	previousRow := (*buf2)[:0]
+	buf3 := secKeyBufPool.Get() //Decoding in ExplodeArray2
+	r.keyBufList = append(r.keyBufList, buf3)
 	docidbuf := make([]byte, 1024)
-	revbuf := secKeyBufPool.Get()
+	revbuf := secKeyBufPool.Get() //Reverse collation buffer
 	r.keyBufList = append(r.keyBufList, revbuf)
 
 	if r.GroupAggr != nil {
@@ -142,7 +144,7 @@ func (s *IndexScanSource) Routine() error {
 		iterCount++
 
 		skipRow := false
-		var ck [][]byte
+		var ck, dk [][]byte
 
 		//get the key in original format
 		if s.p.req.IndexInst.Defn.Desc != nil {
@@ -157,8 +159,11 @@ func (s *IndexScanSource) Routine() error {
 		if currentScan.ScanType == FilterRangeReq {
 			if len(entry) > cap(*buf) {
 				*buf = make([]byte, 0, len(entry)+1024)
+				*buf3 = make([]byte, len(entry)+1024)
 			}
-			skipRow, ck, err = filterScanRow(entry, currentScan, (*buf)[:0])
+			getDecoded := (r.GroupAggr != nil && r.GroupAggr.NeedDecode)
+			skipRow, ck, dk, err = filterScanRow(entry, currentScan,
+				(*buf)[:0], *buf3, getDecoded)
 			if err != nil {
 				return err
 			}
@@ -189,7 +194,7 @@ func (s *IndexScanSource) Routine() error {
 				}
 			}
 
-			err = computeGroupAggr(ck, count, docid, entry, (*buf)[:0], s.p.aggrRes, r.GroupAggr)
+			err = computeGroupAggr(ck, dk, count, docid, entry, (*buf)[:0], *buf3, s.p.aggrRes, r.GroupAggr)
 			if err != nil {
 				return err
 			}
@@ -449,11 +454,19 @@ func siSplitEntry(entry []byte, tmp []byte) ([]byte, []byte, int) {
 }
 
 // Return true if the row needs to be skipped based on the filter
-func filterScanRow(key []byte, scan Scan, buf []byte) (bool, [][]byte, error) {
+func filterScanRow(key []byte, scan Scan, buf, decbuf []byte, getDecoded bool) (bool,
+	[][]byte, [][]byte, error) {
+
 	codec := collatejson.NewCodec(16)
-	compositekeys, err := codec.ExplodeArray(key, buf)
+	var compositekeys, decodedkeys [][]byte
+	var err error
+	if getDecoded {
+		compositekeys, decodedkeys, err = codec.ExplodeArray2(key, buf, decbuf)
+	} else {
+		compositekeys, err = codec.ExplodeArray(key, buf)
+	}
 	if err != nil {
-		return false, nil, err
+		return false, nil, nil, err
 	}
 
 	var filtermatch bool
@@ -461,15 +474,15 @@ func filterScanRow(key []byte, scan Scan, buf []byte) (bool, [][]byte, error) {
 		if len(filtercollection.CompositeFilters) > len(compositekeys) {
 			// There cannot be more ranges than number of composite keys
 			err = errors.New("There are more ranges than number of composite elements in the index")
-			return false, nil, err
+			return false, nil, nil, err
 		}
 		filtermatch = applyFilter(compositekeys, filtercollection.CompositeFilters)
 		if filtermatch {
-			return false, compositekeys, nil
+			return false, compositekeys, decodedkeys, nil
 		}
 	}
 
-	return true, compositekeys, nil
+	return true, compositekeys, decodedkeys, nil
 }
 
 // Return true if filter matches the composite keys
@@ -658,31 +671,39 @@ func (a aggrResult) String() string {
 	return res
 }
 
-func computeGroupAggr(compositekeys [][]byte, count int, docid, key,
-	buf []byte, aggrRes *aggrResult, groupAggr *GroupAggr) error {
+func computeGroupAggr(compositekeys, decodedkeys [][]byte, count int, docid, key,
+	buf, decbuf []byte, aggrRes *aggrResult, groupAggr *GroupAggr) error {
 
 	var err error
+	var decodedvalues []interface{}
 
 	if groupAggr.IsPrimary {
 		compositekeys = make([][]byte, 1)
 		compositekeys[0] = key
 	} else if compositekeys == nil {
 		codec := collatejson.NewCodec(16)
-		compositekeys, err = codec.ExplodeArray(key, buf)
+		if groupAggr.NeedDecode {
+			compositekeys, decodedkeys, err = codec.ExplodeArray2(key, buf, decbuf)
+		} else {
+			compositekeys, err = codec.ExplodeArray(key, buf)
+		}
 		if err != nil {
 			return err
 		}
 	}
+	if groupAggr.NeedDecode {
+		decodedvalues = make([]interface{}, len(compositekeys))
+	}
 
 	for i, gk := range groupAggr.Group {
-		err := computeGroupKey(groupAggr, gk, compositekeys, docid, i)
+		err := computeGroupKey(groupAggr, gk, compositekeys, decodedkeys, decodedvalues, docid, i)
 		if err != nil {
 			return err
 		}
 	}
 
 	for i, ak := range groupAggr.Aggrs {
-		err := computeAggrVal(groupAggr, ak, compositekeys, docid, count, buf, i)
+		err := computeAggrVal(groupAggr, ak, compositekeys, decodedkeys, decodedvalues, docid, count, buf, i)
 		if err != nil {
 			return err
 		}
@@ -693,7 +714,8 @@ func computeGroupAggr(compositekeys [][]byte, count int, docid, key,
 
 }
 
-func computeGroupKey(groupAggr *GroupAggr, gk *GroupKey, compositekeys [][]byte, docid []byte, pos int) error {
+func computeGroupKey(groupAggr *GroupAggr, gk *GroupKey, compositekeys,
+	decodedkeys [][]byte, decodedvalues []interface{}, docid []byte, pos int) error {
 
 	g := groupAggr.groups[pos]
 	if gk.KeyPos >= 0 {
@@ -706,7 +728,7 @@ func computeGroupKey(groupAggr *GroupAggr, gk *GroupKey, compositekeys [][]byte,
 			scalar = gk.ExprValue // It is a constant expression
 		} else {
 			var err error
-			scalar, err = evaluateN1QLExpresssion(groupAggr, gk.Expr, compositekeys, docid)
+			scalar, err = evaluateN1QLExpresssion(groupAggr, gk.Expr, decodedkeys, decodedvalues, docid)
 			if err != nil {
 				return err
 			}
@@ -719,16 +741,20 @@ func computeGroupKey(groupAggr *GroupAggr, gk *GroupKey, compositekeys [][]byte,
 }
 
 func computeAggrVal(groupAggr *GroupAggr, ak *Aggregate,
-	compositekeys [][]byte, docid []byte, count int, buf []byte, pos int) error {
+	compositekeys, decodedkeys [][]byte, decodedvalues []interface{}, docid []byte,
+	count int, buf []byte, pos int) error {
 
 	a := groupAggr.aggrs[pos]
 	if ak.KeyPos >= 0 {
 		if ak.AggrFunc == c.AGG_SUM && !groupAggr.IsPrimary {
-			actualVal, err := decodeValue(compositekeys[ak.KeyPos], buf)
-			if err != nil {
-				return err
+			if decodedvalues[ak.KeyPos] == nil {
+				actualVal, err := unmarshalValue(decodedkeys[ak.KeyPos])
+				if err != nil {
+					return err
+				}
+				decodedvalues[ak.KeyPos] = actualVal
 			}
-			a.raw = actualVal
+			a.raw = decodedvalues[ak.KeyPos]
 		} else {
 			a.raw = compositekeys[ak.KeyPos]
 		}
@@ -740,7 +766,7 @@ func computeAggrVal(groupAggr *GroupAggr, ak *Aggregate,
 			scalar = ak.ExprValue // It is a constant expression
 		} else {
 			var err error
-			scalar, err = evaluateN1QLExpresssion(groupAggr, ak.Expr, compositekeys, docid)
+			scalar, err = evaluateN1QLExpresssion(groupAggr, ak.Expr, decodedkeys, decodedvalues, docid)
 			if err != nil {
 				return err
 			}
@@ -757,7 +783,7 @@ func computeAggrVal(groupAggr *GroupAggr, ak *Aggregate,
 }
 
 func evaluateN1QLExpresssion(groupAggr *GroupAggr, expr expression.Expression,
-	compositekeys [][]byte, docid []byte) (value.Value, error) {
+	decodedkeys [][]byte, decodedvalues []interface{}, docid []byte) (value.Value, error) {
 
 	if groupAggr.IsPrimary {
 		for _, ik := range groupAggr.DependsOnIndexKeys {
@@ -765,15 +791,17 @@ func evaluateN1QLExpresssion(groupAggr *GroupAggr, expr expression.Expression,
 		}
 	} else {
 		for _, ik := range groupAggr.DependsOnIndexKeys {
-			if int(ik) == len(compositekeys) {
+			if int(ik) == len(decodedkeys) {
 				groupAggr.av.SetCover(groupAggr.IndexKeyNames[ik], value.NewValue(string(docid)))
 			} else {
-				buf := make([]byte, len(compositekeys[ik])*3+collatejson.MinBufferSize) // TODO: MB-27049 avoid garbage
-				actualVal, err := decodeValue(compositekeys[ik], buf)
-				if err != nil {
-					return nil, err
+				if decodedvalues[ik] == nil {
+					actualVal, err := unmarshalValue(decodedkeys[ik])
+					if err != nil {
+						return nil, err
+					}
+					decodedvalues[ik] = actualVal
 				}
-				groupAggr.av.SetCover(groupAggr.IndexKeyNames[ik], value.NewValue(actualVal))
+				groupAggr.av.SetCover(groupAggr.IndexKeyNames[ik], value.NewValue(decodedvalues[ik]))
 			}
 		}
 	}
@@ -1014,20 +1042,12 @@ func projectGroupAggr(buf []byte, projection *Projection,
 	return buf, nil
 }
 
-//TODO: Scan pipeline decodes the values twice. Optimize to single decode.
-func decodeValue(raw []byte, buf []byte) (interface{}, error) {
+func unmarshalValue(dec []byte) (interface{}, error) {
 
 	var actualVal interface{}
 
-	//decode the aggr val
-	codec := collatejson.NewCodec(16)
-	dval, err := codec.Decode(raw, buf)
-	if err != nil {
-		return nil, err
-	}
-
 	//json unmarshal to go type
-	err = json.Unmarshal(dval, &actualVal)
+	err := json.Unmarshal(dec, &actualVal)
 	if err != nil {
 		return nil, err
 	}

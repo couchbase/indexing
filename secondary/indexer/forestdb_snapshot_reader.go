@@ -85,7 +85,7 @@ func (s *fdbSnapshot) MultiScanCount(ctx IndexReaderContext, low, high IndexKey,
 					*buf = make([]byte, 0, len(entry)+RESIZE_PAD)
 				}
 
-				skipRow, ck, err = filterScanRow(entry, scan, (*buf)[:0])
+				skipRow, ck, _, err = filterScanRow(entry, scan, (*buf)[:0], nil, false)
 				if err != nil {
 					return err
 				}

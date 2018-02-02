@@ -189,6 +189,7 @@ type GroupAggr struct {
 	DependsOnPrimaryKey bool
 	IsLeadingGroup      bool // Group by key(s) are leading subset
 	IsPrimary           bool
+	NeedDecode          bool // Need decode values for SUM or N1QLExpr evaluation
 
 	//For caching values
 	cv          *value.ScopeValue
@@ -1106,6 +1107,9 @@ func (r *ScanRequest) unmarshallGroupKeys(protoGroupAggr *protobuf.GroupAggr) er
 			}
 			groupKey.Expr = expr
 			groupKey.ExprValue = expr.Value() // value will be nil if it is not constant expr
+			if groupKey.ExprValue == nil {
+				r.GroupAggr.NeedDecode = true
+			}
 			if r.GroupAggr.cv == nil {
 				r.GroupAggr.cv = value.NewScopeValue(make(map[string]interface{}), nil)
 				r.GroupAggr.av = value.NewAnnotatedValue(r.GroupAggr.cv)
@@ -1141,11 +1145,16 @@ func (r *ScanRequest) unmarshallAggrs(protoGroupAggr *protobuf.GroupAggr) error 
 			}
 			aggr.Expr = expr
 			aggr.ExprValue = expr.Value() // value will be nil if it is not constant expr
+			if aggr.ExprValue == nil {
+				r.GroupAggr.NeedDecode = true
+			}
 			if r.GroupAggr.cv == nil {
 				r.GroupAggr.cv = value.NewScopeValue(make(map[string]interface{}), nil)
 				r.GroupAggr.av = value.NewAnnotatedValue(r.GroupAggr.cv)
 				r.GroupAggr.exprContext = expression.NewIndexContext()
 			}
+		} else if aggr.AggrFunc == common.AGG_SUM {
+			r.GroupAggr.NeedDecode = true
 		}
 
 		r.GroupAggr.Aggrs = append(r.GroupAggr.Aggrs, &aggr)
