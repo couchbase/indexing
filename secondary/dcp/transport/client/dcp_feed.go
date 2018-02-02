@@ -849,7 +849,7 @@ func newDcpEvent(rq *transport.MCRequest, stream *DcpStream) (event *DcpEvent) {
 	defer func() {
 		if r := recover(); r != nil {
 			// Error parsing XATTR, Request body might be malformed
-			arg1 := logging.TagUD(string(rq.Key))
+			arg1 := logging.TagStrUD(rq.Key)
 			logging.Errorf("Panic Error parsing XATTR for %s: %v", arg1, r)
 			event.Value = make([]byte, 0)
 			event.Datatype &= ^(dcpXATTR | dcpJSON)

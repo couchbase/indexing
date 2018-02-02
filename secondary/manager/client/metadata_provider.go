@@ -529,15 +529,22 @@ func (o *MetadataProvider) PrepareIndexDefn(
 			return nil, err, retry
 		}
 
-		isXATTRIndex, err := queryutil.IsXATTRIndex(secExprs)
+		isXATTRIndex, XATTRNames, err := queryutil.GetXATTRNames(secExprs)
 		if err != nil {
 			return nil, err, retry
 		}
 
-		if isXATTRIndex && clusterVersion < c.INDEXER_55_VERSION {
-			return nil,
-				errors.New("Fails to create index.  Extended Attributes are enabled only after cluster is fully upgraded and there is no failed node."),
-				false
+		if isXATTRIndex {
+			if XATTRNames[0] == "$document" {
+				return nil,
+					errors.New("Fails to create index.  Cannot index on Virtual Extended Attributes."),
+					false
+			}
+			if clusterVersion < c.INDEXER_55_VERSION {
+				return nil,
+					errors.New("Fails to create index.  Extended Attributes are enabled only after cluster is fully upgraded and there is no failed node."),
+					false
+			}
 		}
 
 		retainDeletedXATTR, err, retry = o.getXATTRParam(plan)
@@ -555,7 +562,9 @@ func (o *MetadataProvider) PrepareIndexDefn(
 			if c.IsValidIndexType(indexType) {
 				using = indexType
 			} else {
-				return nil, errors.New("Fails to create index.  Invalid index_type parameter value specified."), false
+				return nil,
+					errors.New("Fails to create index.  Invalid index_type parameter value specified."),
+					false
 			}
 		}
 

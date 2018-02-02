@@ -2,6 +2,7 @@ package queryutil
 
 import qexpr "github.com/couchbase/query/expression"
 import qparser "github.com/couchbase/query/expression/parser"
+import "errors"
 
 func IsArrayExpression(exp string) (bool, bool, error) {
 	cExpr, err := qparser.Parse(exp)
@@ -32,18 +33,19 @@ func GetArrayExpressionPosition(exprs []string) (bool, bool, int, error) {
 	return isArrayIndex, isArrayDistinct, arrayExprPos, nil
 }
 
-func IsXATTRIndex(secExprs []string) (bool, error) {
-	var isXATTRIndex bool
+func GetXATTRNames(exprs []string) (present bool, names []string, err error) {
+	parsedExprs := make([]qexpr.Expression, 0)
 	xattrs := qexpr.NewField(qexpr.NewMeta(), qexpr.NewFieldName("xattrs", false))
-	for _, expr := range secExprs {
-		expr, err := qparser.Parse(expr)
+	for _, expr := range exprs {
+		pExpr, err := qparser.Parse(expr)
 		if err != nil {
-			return false, err
+			return false, nil, err
 		}
-		if expr.DependsOn(xattrs) {
-			isXATTRIndex = true
-			break
+		if pExpr.EquivalentTo(xattrs) {
+			return false, nil, errors.New("Fails to create index.  Can index only on a specific Extended Attribute.")
 		}
+		parsedExprs = append(parsedExprs, pExpr)
 	}
-	return isXATTRIndex, nil
+	present, names = qexpr.XattrsNames(parsedExprs, "")
+	return present, names, nil
 }
