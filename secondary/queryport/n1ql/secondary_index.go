@@ -1159,14 +1159,20 @@ func (si *secondaryIndex3) Alter(requestId string, with value.Value) (
 	return datastore.Index(si), nil
 }
 
+// ScanEntries3 implements datastore.PrimaryIndex3 interface.
 func (si *secondaryIndex3) ScanEntries3(
 	requestId string, projection *datastore.IndexProjection, offset, limit int64,
-	groupAggs *datastore.IndexGroupAggregates, indexOrder datastore.IndexKeyOrders,
+	groupAggs *datastore.IndexGroupAggregates, indexOrders datastore.IndexKeyOrders,
 	cons datastore.ScanConsistency, vector timestamp.Vector,
 	conn *datastore.IndexConnection) {
 
-	// TODO: Implement actual ScanEntries3
-	si.ScanEntries(requestId, limit, cons, vector, conn)
+	if groupAggs != nil {
+		conn.Error(errors.NewError(nil, fmt.Sprintf("IndexGroupAggregates not supported in ScanEntries3")))
+	}
+
+	spans := datastore.Spans2{&datastore.Span2{}} // Span for full table scan
+	si.Scan3(requestId, spans, false, false, nil, offset, limit, nil, indexOrders,
+		cons, vector, conn)
 }
 
 //-------------------------------------

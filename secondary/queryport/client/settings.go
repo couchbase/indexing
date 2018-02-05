@@ -14,6 +14,7 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	"math"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -28,13 +29,19 @@ type ClientSettings struct {
 	queueSize      uint64
 	config         common.Config
 	cancelCh       chan struct{}
+
+	storageMode string
+	mutex       sync.RWMutex
+
+	needRefresh bool
 }
 
 func NewClientSettings(needRefresh bool) *ClientSettings {
 
 	s := &ClientSettings{
-		config:   nil,
-		cancelCh: make(chan struct{}, 1),
+		config:      nil,
+		cancelCh:    make(chan struct{}, 1),
+		needRefresh: needRefresh,
 	}
 
 	if needRefresh {
@@ -143,6 +150,20 @@ func (s *ClientSettings) handleSettings(config common.Config) {
 		logging.Errorf("ClientSettings: invalid setting value for queueSize=%v", queueSize)
 	}
 
+	storageMode := config["indexer.settings.storage_mode"].String()
+	if len(storageMode) != 0 {
+		func() {
+			s.mutex.Lock()
+			defer s.mutex.Unlock()
+			s.storageMode = storageMode
+		}()
+	}
+
+	if s.needRefresh {
+		logLevel := config["queryport.client.log_level"].String()
+		level := logging.Level(logLevel)
+		logging.SetLogLevel(level)
+	}
 }
 
 func (s *ClientSettings) NumReplica() int32 {
@@ -151,6 +172,14 @@ func (s *ClientSettings) NumReplica() int32 {
 
 func (s *ClientSettings) NumPartition() int32 {
 	return atomic.LoadInt32(&s.numPartition)
+}
+
+func (s *ClientSettings) StorageMode() string {
+
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
+
+	return s.storageMode
 }
 
 func (s *ClientSettings) BackfillLimit() int32 {

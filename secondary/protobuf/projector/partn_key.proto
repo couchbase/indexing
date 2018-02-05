@@ -1,0 +1,7 @@
+package protobuf;
+
+message KeyPartition {
+    required uint64 numPartition   = 1;
+    repeated uint64 partitions     = 2;
+    repeated string endpoints      = 3;
+}

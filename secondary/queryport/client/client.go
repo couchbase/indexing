@@ -1024,9 +1024,9 @@ func (c *GsiClient) Scan3Internal(
 		}
 
 		if c.bridge.IsPrimary(uint64(index.DefnId)) {
-			return qc.MultiScanPrimary(
+			return qc.Scan3Primary(
 				uint64(index.DefnId), requestId, scans, reverse, distinct,
-				projection, broker.GetOffset(), broker.GetLimit(), cons, vector, handler, rollbackTime, partitions)
+				projection, broker.GetOffset(), broker.GetLimit(), groupAggr, broker.GetSorted(), cons, vector, handler, rollbackTime, partitions)
 		}
 
 		return qc.Scan3(

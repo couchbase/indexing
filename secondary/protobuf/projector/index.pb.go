@@ -4,7 +4,7 @@
 
 package protobuf
 
-import proto "github.com/golang/protobuf/proto"
+import "github.com/golang/protobuf/proto"
 import math "math"
 
 // Reference imports to suppress errors if they are not otherwise used.
@@ -185,6 +185,7 @@ type IndexInst struct {
 	Definition       *IndexDefn       `protobuf:"bytes,3,req,name=definition" json:"definition,omitempty"`
 	Tp               *TestPartition   `protobuf:"bytes,4,opt,name=tp" json:"tp,omitempty"`
 	SinglePartn      *SinglePartition `protobuf:"bytes,5,opt,name=singlePartn" json:"singlePartn,omitempty"`
+	KeyPartn         *KeyPartition    `protobuf:"bytes,6,opt,name=keyPartn" json:"keyPartn,omitempty"`
 	XXX_unrecognized []byte           `json:"-"`
 }
 
@@ -223,6 +224,13 @@ func (m *IndexInst) GetTp() *TestPartition {
 func (m *IndexInst) GetSinglePartn() *SinglePartition {
 	if m != nil {
 		return m.SinglePartn
+	}
+	return nil
+}
+
+func (m *IndexInst) GetKeyPartn() *KeyPartition {
+	if m != nil {
+		return m.KeyPartn
 	}
 	return nil
 }

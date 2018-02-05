@@ -22,6 +22,7 @@ import (
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager"
 	"github.com/couchbase/indexing/secondary/manager/client"
+	mc "github.com/couchbase/indexing/secondary/manager/common"
 	//"github.com/couchbase/indexing/secondary/planner"
 	"bytes"
 	"encoding/json"
@@ -43,6 +44,7 @@ import (
 // DDLServiceMgr Definition
 //
 type DDLServiceMgr struct {
+	indexerId   common.IndexerId
 	config      common.ConfigHolder
 	provider    *client.MetadataProvider
 	supvCmdch   MsgChannel //supervisor sends commands on this channel
@@ -53,6 +55,9 @@ type DDLServiceMgr struct {
 	settings    *ddlSettings
 	nodes       map[service.NodeID]bool
 	donech      chan bool
+	killch      chan bool
+	allowDDL    bool
+	mutex       sync.Mutex
 }
 
 //
@@ -61,6 +66,9 @@ type DDLServiceMgr struct {
 type ddlSettings struct {
 	numReplica   int32
 	numPartition int32
+
+	storageMode string
+	mutex       sync.RWMutex
 }
 
 //////////////////////////////////////////////////////////////
@@ -77,7 +85,7 @@ var gDDLServiceMgrLck sync.Mutex
 //
 // Constructor
 //
-func NewDDLServiceMgr(supvCmdch MsgChannel, supvMsgch MsgChannel, config common.Config) (*DDLServiceMgr, Message) {
+func NewDDLServiceMgr(indexerId common.IndexerId, supvCmdch MsgChannel, supvMsgch MsgChannel, config common.Config) (*DDLServiceMgr, Message) {
 
 	addr := config["clusterAddr"].String()
 	port := config["httpPort"].String()
@@ -90,6 +98,7 @@ func NewDDLServiceMgr(supvCmdch MsgChannel, supvMsgch MsgChannel, config common.
 	settings := &ddlSettings{numReplica: numReplica}
 
 	mgr := &DDLServiceMgr{
+		indexerId:   indexerId,
 		supvCmdch:   supvCmdch,
 		supvMsgch:   supvMsgch,
 		localAddr:   localaddr,
@@ -97,11 +106,16 @@ func NewDDLServiceMgr(supvCmdch MsgChannel, supvMsgch MsgChannel, config common.
 		nodeID:      nodeId,
 		settings:    settings,
 		donech:      nil,
+		killch:      make(chan bool),
+		allowDDL:    true,
 	}
 
 	mgr.config.Store(config)
 
 	http.HandleFunc("/listMetadataTokens", mgr.handleListMetadataTokens)
+	http.HandleFunc("/listCreateTokens", mgr.handleListCreateTokens)
+
+	go mgr.run()
 
 	gDDLServiceMgrLck.Lock()
 	defer gDDLServiceMgrLck.Unlock()
@@ -124,8 +138,68 @@ func getDDLServiceMgr() *DDLServiceMgr {
 }
 
 //////////////////////////////////////////////////////////////
-// Recovery
+// Admin Service Processing
 //////////////////////////////////////////////////////////////
+
+func (m *DDLServiceMgr) run() {
+
+	go m.processCreateCommand()
+
+loop:
+	for {
+		select {
+
+		case cmd, ok := <-m.supvCmdch:
+			if ok {
+				if cmd.GetMsgType() == ADMIN_MGR_SHUTDOWN {
+					logging.Infof("DDL Rebalance Manager: Shutting Down")
+					close(m.killch)
+					m.supvCmdch <- &MsgSuccess{}
+					break loop
+				}
+				m.handleSupervisorCommands(cmd)
+			} else {
+				//supervisor channel closed. exit
+				break loop
+			}
+		}
+	}
+}
+
+func (m *DDLServiceMgr) handleSupervisorCommands(cmd Message) {
+	switch cmd.GetMsgType() {
+
+	case CONFIG_SETTINGS_UPDATE:
+		cfgUpdate := cmd.(*MsgConfigUpdate)
+		m.config.Store(cfgUpdate.GetConfig())
+		m.settings.handleSettings(cfgUpdate.GetConfig())
+		m.supvCmdch <- &MsgSuccess{}
+
+	default:
+		logging.Fatalf("DDLServiceMgr::handleSupervisorCommands Unknown Message %+v", cmd)
+		common.CrashOnError(errors.New("Unknown Msg On Supv Channel"))
+	}
+}
+
+//////////////////////////////////////////////////////////////
+// Rebalance
+//////////////////////////////////////////////////////////////
+
+func stopDDLProcessing() {
+
+	mgr := getDDLServiceMgr()
+	if mgr != nil {
+		mgr.stopProcessDDL()
+	}
+}
+
+func resumeDDLProcessing() {
+
+	mgr := getDDLServiceMgr()
+	if mgr != nil {
+		mgr.startProcessDDL()
+	}
+}
 
 func notifyRebalanceDone(change *service.TopologyChange, isCancel bool) {
 
@@ -146,6 +220,7 @@ func (m *DDLServiceMgr) rebalanceDone(change *service.TopologyChange, isCancel b
 	defer gDDLServiceMgrLck.Unlock()
 
 	defer func() {
+		m.startProcessDDL()
 		if m.provider != nil {
 			m.provider.Close()
 			m.provider = nil
@@ -159,17 +234,40 @@ func (m *DDLServiceMgr) rebalanceDone(change *service.TopologyChange, isCancel b
 		return
 	}
 
-	m.handleDropCommand()
-	m.handleBuildCommand()
+	m.cleanupCreateCommand()
+	m.cleanupDropCommand()
+	m.cleanupBuildCommand()
 	m.handleClusterStorageMode(httpAddrMap)
 }
+
+func (m *DDLServiceMgr) stopProcessDDL() {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	m.allowDDL = false
+}
+
+func (m *DDLServiceMgr) canProcessDDL() bool {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	return m.allowDDL
+}
+
+func (m *DDLServiceMgr) startProcessDDL() {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	m.allowDDL = true
+}
+
+//////////////////////////////////////////////////////////////
+// Drop Token
+//////////////////////////////////////////////////////////////
 
 //
 // Recover drop index command
 //
-func (m *DDLServiceMgr) handleDropCommand() {
+func (m *DDLServiceMgr) cleanupDropCommand() {
 
-	entries, err := metakv.ListAllChildren(client.DeleteDDLCommandTokenPath)
+	entries, err := metakv.ListAllChildren(mc.DeleteDDLCommandTokenPath)
 	if err != nil {
 		logging.Warnf("DDLServiceMgr: Fail to cleanup delete index token upon rebalancing.  Skip cleanup.  Internal Error = %v", err)
 		return
@@ -181,13 +279,27 @@ func (m *DDLServiceMgr) handleDropCommand() {
 
 	for _, entry := range entries {
 
-		if strings.Contains(entry.Path, client.DeleteDDLCommandTokenPath) && entry.Value != nil {
+		if strings.Contains(entry.Path, mc.DeleteDDLCommandTokenPath) && entry.Value != nil {
 
 			logging.Infof("DDLServiceMgr: processing delete index token %v", entry.Path)
 
-			command, err := client.UnmarshallDeleteCommandToken(entry.Value)
+			command, err := mc.UnmarshallDeleteCommandToken(entry.Value)
 			if err != nil {
 				logging.Warnf("DDLServiceMgr: Fail to clean delete index token upon rebalancing.  Skp command %v.  Internal Error = %v.", entry.Path, err)
+				continue
+			}
+
+			// If there is a create token, then do not process the drop token.  Let the create token being dropped first to avoid
+			// any unexpected raise condition.  This is more for safety than necessity.
+			exist, err := mc.CreateCommandTokenExist(command.DefnId)
+			if err != nil {
+				logging.Warnf("DDLServiceMgr: Fail to check create token.  Skip command %v.  Error = %v.", entry.Path, err)
+				continue
+			}
+
+			// If a create token exist, then skip processing the drop token.
+			if exist {
+				logging.Warnf("DDLServiceMgr: Create token exist for %v.  Skip processing drop token %v.", command.DefnId, entry.Path)
 				continue
 			}
 
@@ -214,12 +326,16 @@ func (m *DDLServiceMgr) handleDropCommand() {
 	}
 }
 
+//////////////////////////////////////////////////////////////
+// Build Token
+//////////////////////////////////////////////////////////////
+
 //
 // Recover build index command
 //
-func (m *DDLServiceMgr) handleBuildCommand() {
+func (m *DDLServiceMgr) cleanupBuildCommand() {
 
-	entries, err := metakv.ListAllChildren(client.BuildDDLCommandTokenPath)
+	entries, err := metakv.ListAllChildren(mc.BuildDDLCommandTokenPath)
 	if err != nil {
 		logging.Warnf("DDLServiceMgr: Fail to cleanup build index token upon rebalancing.  Skip cleanup.  Internal Error = %v", err)
 		return
@@ -227,11 +343,11 @@ func (m *DDLServiceMgr) handleBuildCommand() {
 
 	for _, entry := range entries {
 
-		if strings.Contains(entry.Path, client.BuildDDLCommandTokenPath) && entry.Value != nil {
+		if strings.Contains(entry.Path, mc.BuildDDLCommandTokenPath) && entry.Value != nil {
 
 			logging.Infof("DDLServiceMgr: processing build index token %v", entry.Path)
 
-			command, err := client.UnmarshallBuildCommandToken(entry.Value)
+			command, err := mc.UnmarshallBuildCommandToken(entry.Value)
 			if err != nil {
 				logging.Warnf("DDLServiceMgr: Fail to clean build index token upon rebalancing.  Skp command %v.  Internal Error = %v.", entry.Path, err)
 				continue
@@ -275,54 +391,289 @@ func (m *DDLServiceMgr) handleBuildCommand() {
 	}
 }
 
-func (m *DDLServiceMgr) handleListMetadataTokens(w http.ResponseWriter, r *http.Request) {
+//////////////////////////////////////////////////////////////
+// Create Token
+//////////////////////////////////////////////////////////////
 
-	if !m.validateAuth(w, r) {
-		logging.Errorf("DDLServiceMgr::handleListMetadataTokens Validation Failure for Request %v", r)
+func (m *DDLServiceMgr) cleanupCreateCommand() {
+
+	// get all create token from metakv
+	entries, err := metakv.ListAllChildren(mc.CreateDDLCommandTokenPath)
+	if err != nil {
+		logging.Warnf("DDLServiceMgr: Fail to fetch token from metakv.  Internal Error = %v", err)
 		return
 	}
 
-	if r.Method == "GET" {
+	for _, entry := range entries {
 
-		logging.Infof("DDLServiceMgr::handleListMetadataTokens Processing Request %v", r)
+		if strings.Contains(entry.Path, mc.CreateDDLCommandTokenPath) && entry.Value != nil {
 
-		buildTokens, err := metakv.ListAllChildren(client.BuildDDLCommandTokenPath)
-		if err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			w.Write([]byte(err.Error() + "\n"))
-			return
-		}
-
-		deleteTokens, err1 := metakv.ListAllChildren(client.DeleteDDLCommandTokenPath)
-		if err1 != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			w.Write([]byte(err.Error() + "\n"))
-			return
-		}
-
-		header := w.Header()
-		header["Content-Type"] = []string{"application/json"}
-		w.WriteHeader(http.StatusOK)
-
-		for _, entry := range buildTokens {
-
-			if strings.Contains(entry.Path, client.BuildDDLCommandTokenPath) && entry.Value != nil {
-				w.Write([]byte(entry.Path + " - "))
-				w.Write(entry.Value)
-				w.Write([]byte("\n"))
+			token, err := mc.UnmarshallCreateCommandToken(entry.Value)
+			if err != nil {
+				logging.Warnf("DDLServiceMgr: Fail to process create index token.  Skip %v.  Internal Error = %v.", entry.Path, err)
+				continue
 			}
-		}
 
-		for _, entry := range deleteTokens {
+			// If there is a drop token, then do not process the create token.
+			exist, err := mc.DeleteCommandTokenExist(token.DefnId)
+			if err != nil {
+				logging.Warnf("DDLServiceMgr: Fail to check delete token.  Skip processing %v.  Error = %v.", entry.Path, err)
 
-			if strings.Contains(entry.Path, client.DeleteDDLCommandTokenPath) && entry.Value != nil {
-				w.Write([]byte(entry.Path + " - "))
-				w.Write(entry.Value)
-				w.Write([]byte("\n"))
+			} else if exist {
+				// If a drop token exist, then delete the create token.
+				if err := MetakvDel(entry.Path); err != nil {
+					logging.Warnf("DDLServiceMgr: Fail to remove create index token %v. Error = %v", entry.Path, err)
+				} else {
+					logging.Infof("DDLServiceMgr: Remove create index token %v.", entry.Path)
+				}
+				continue
 			}
 		}
 	}
 }
+
+func (m *DDLServiceMgr) handleCreateCommand() {
+
+	// get all create token from metakv
+	entries, err := metakv.ListAllChildren(mc.CreateDDLCommandTokenPath)
+	if err != nil {
+		logging.Warnf("DDLServiceMgr: Fail to fetch token from metakv.  Internal Error = %v", err)
+		return
+	}
+
+	// nothing to do
+	if len(entries) == 0 {
+		return
+	}
+
+	if !m.canProcessDDL() {
+		logging.Debugf("DDLServiceMgr: cannot process create token during rebalancing")
+		return
+	}
+
+	// Start metadata provider.   Metadata provider will not start unless it can be connected to
+	// all the indexer nodes.   The metadata provider will skip any inactive_failed and inactive_new node.
+	// It is important that the DDLServiceMgr does not act on behalf on the failed node (e.g. repair
+	// any pending create partition on the failed node), since the failed node may delta-recovery.
+	//
+	// This method may delete create token, but it can only happen when all partitions are accounted for.
+	//
+	// If there is a network partitioning before or during fetching metadata, metadata provider may not be
+	// able to start.  But once the metadata provider is able to fetch metadata for all the nodes, the
+	// metadata will be cached locally even if there is network partitioning afterwards.
+	//
+	provider, _, err := m.newMetadataProvider(nil)
+	if err != nil {
+		logging.Debugf("DDLServiceMgr: Fail to start metadata provider.  Internal Error = %v", err)
+		return
+	}
+	defer provider.Close()
+
+	findPartition := func(instId common.IndexInstId, partitionId common.PartitionId, instances []*client.InstanceDefn) (bool,
+		common.IndexState, common.IndexerId) {
+
+		for _, inst := range instances {
+			if inst.InstId == instId {
+				for partition2, indexerId := range inst.IndexerId {
+					if partitionId == partition2 {
+						return true, inst.State, indexerId
+					}
+				}
+			}
+		}
+		return false, common.INDEX_STATE_NIL, common.INDEXER_ID_NIL
+	}
+
+	buildMap := make(map[common.IndexDefnId]bool)
+	var deleteList []string
+
+	for _, entry := range entries {
+
+		if strings.Contains(entry.Path, mc.CreateDDLCommandTokenPath) && entry.Value != nil {
+
+			logging.Infof("DDLServiceMgr: processing create index token %v", entry.Path)
+
+			token, err := mc.UnmarshallCreateCommandToken(entry.Value)
+			if err != nil {
+				logging.Warnf("DDLServiceMgr: Fail to process create index token.  Skip %v.  Internal Error = %v.", entry.Path, err)
+				continue
+			}
+
+			// If there is a drop token, then do not process the create token.
+			exist, err := mc.DeleteCommandTokenExist(token.DefnId)
+			if err != nil {
+				logging.Warnf("DDLServiceMgr: Fail to check delete token.  Skip processing %v.  Error = %v.", entry.Path, err)
+
+			} else if exist {
+				// Avoid deleting create token during rebalance.  This is just for extra safety.  Even if the planner
+				// may use the create token during planning, it just mean that it is trying to create those partitions on
+				// behalf of the DDL service manager.   As long as the drop token exists, then those partitions will be
+				// dropped eventually.   If the planner do not see this create token, then no harm is done.
+				if !m.canProcessDDL() {
+					logging.Infof("DDLServiceMgr: cannot delete create token during rebalancing")
+					return
+				}
+
+				// If a drop token exist, then delete the create token.
+				if err := MetakvDel(entry.Path); err != nil {
+					logging.Warnf("DDLServiceMgr: Fail to remove create index token %v. Error = %v", entry.Path, err)
+				} else {
+					logging.Infof("DDLServiceMgr: Remove create index token %v.", entry.Path)
+				}
+				continue
+			}
+
+			// Go through each IndexDefn in the token.  Each IndexDefn contains a unique tuple of <defn, inst, partitions>.
+			// So the same defnId and instId can appear in each IndexDefn in the token.   But the token will only
+			// have 1 defnId -- two different index cannot share the same token.
+			canDelete := true
+
+			for indexerId, definitions := range token.Definitions {
+				for _, defn := range definitions {
+					var newPartitionList []common.PartitionId
+
+					// for every partition for this instance, check to see if the partition exist in the cluster.
+					for _, partition := range defn.Partitions {
+
+						found := false
+						status := common.INDEX_STATE_NIL
+						indexerId2 := common.INDEXER_ID_NIL
+
+						// find if partition exist in cluster
+						if index := provider.FindIndexIgnoreStatus(defn.DefnId); index != nil {
+							found, status, indexerId2 = findPartition(defn.InstId, partition, index.Instances)
+							if !found {
+								// is the partition under rebalance?
+								found, status, indexerId2 = findPartition(defn.InstId, partition, index.InstsInRebalance)
+							}
+						}
+
+						// cannot delete if not found or has not been built
+						if !found || (!defn.Deferred && status < common.INDEX_STATE_INITIAL) {
+							canDelete = false
+						}
+
+						// If the partition is not found in the cluster, then create it locally.
+						if !found && indexerId == m.indexerId {
+							newPartitionList = append(newPartitionList, partition)
+						}
+
+						// If the partition is not deferred, then we may need to build it.
+						// 1) If the partition is not found
+						// 2) The partition has not been build and it matches the local indexer id
+						if !defn.Deferred && found && status < common.INDEX_STATE_INITIAL && indexerId2 == m.indexerId {
+							buildMap[defn.DefnId] = true
+						}
+					}
+
+					// Cannot find the partitions in the cluster.   Create the index locally.  If there is an
+					// error, create index will retry in the next iteration.
+					if len(newPartitionList) != 0 {
+
+						// Avoid DDL during rebalance.   This is just for extra safety since indexer will reject
+						// DDL when rebalancing going on.
+						if !m.canProcessDDL() {
+							logging.Infof("DDLServiceMgr: cannot process create token during rebalancing")
+							return
+						}
+
+						// If bucket UUID has chnanged, create index would fail
+						defn.BucketUUID = token.BucketUUID
+						defn.Partitions = newPartitionList
+						defn.Deferred = true
+
+						// Before a create token is posted, at least one indexer has tried to create the index to validate
+						// all invariant conditions (e.g. enterprise version).   These invariant conditions are applicable
+						// to all indexers.   By the time when DDL Service manager tries to create the index, it should
+						// not have to worry about the invariant conditions have changed.  Therefore, we should expect
+						// all errros from create index is recoverable, except for the following cases:
+						// 1) bucket is deleted.   BucketUUID will ensure that the index cannot be created.   LifecyleMgr
+						//    will remove the create token when cleaning up metadata for the bucket.
+						// 2) metadata is corrupted.   We cannot detect this, but we will know since the indexer would be
+						//    in a bad state.
+						if err := provider.SendCreateIndexRequest(m.indexerId, &defn); err != nil {
+							logging.Warnf("DDLServiceMgr: Fail to process create index (%v, %v, %v, %v).  Error = %v.",
+								defn.Bucket, defn.Name, defn.DefnId, defn.InstId, err)
+						} else {
+							logging.Warnf("DDLServiceMgr: Index successfully created (%v, %v, %v, %v).",
+								defn.Bucket, defn.Name, defn.DefnId, defn.InstId)
+						}
+					}
+				}
+			}
+
+			if canDelete {
+				// If all the instances and partitions are accounted for, then delete the create token.
+				deleteList = append(deleteList, entry.Path)
+			}
+		}
+	}
+
+	// Try build the index that has just been created
+	if len(buildMap) != 0 {
+		// Avoid DDL during rebalance.   This is just for extra safety since indexer will reject
+		// DDL when rebalancing going on.
+		if !m.canProcessDDL() {
+			logging.Infof("DDLServiceMgr: cannot process create token during rebalancing")
+			return
+		}
+
+		buildList := make([]common.IndexDefnId, 0, len(buildMap))
+		for id, _ := range buildMap {
+			buildList = append(buildList, id)
+		}
+
+		logging.Infof("DDLServiceMgr: Build Index.  Index Defn List: %v", buildList)
+
+		if err := provider.SendBuildIndexRequest(m.indexerId, buildList, m.localAddr); err != nil {
+			// All errors received from build index are expected to be recoverable.
+			logging.Warnf("DDLServiceMgr: Fail to build index after creation. Error = %v.", err)
+			return
+		}
+	}
+
+	// At this point, we have a list of token which has all the instances and partitions being created and built.
+	// Delete those create token.
+	if len(deleteList) != 0 {
+		// Avoid deleting create token during rebalance.  This is just for extra safety.  Even if the planner
+		// may use the create token during planning, it just mean that it is trying to create those partitions on
+		// behalf of the DDL service manager.   As long as the drop token exists, then those partitions will be
+		// dropped eventually.   If the planner do not see this create token, then no harm is done.
+		if !m.canProcessDDL() {
+			logging.Infof("DDLServiceMgr: cannot delete create token during rebalancing")
+			return
+		}
+
+		for _, path := range deleteList {
+			if err := MetakvDel(path); err != nil {
+				logging.Warnf("DDLServiceMgr: Fail to remove create index token %v. Error = %v", path, err)
+			} else {
+				logging.Infof("DDLServiceMgr: Remove create index token %v.", path)
+			}
+		}
+	}
+}
+
+func (m *DDLServiceMgr) processCreateCommand() {
+
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			m.handleCreateCommand()
+
+		case <-m.killch:
+			logging.Infof("author: Index author go-routine terminates.")
+			return
+		}
+	}
+}
+
+//////////////////////////////////////////////////////////////
+// Storage Mode
+//////////////////////////////////////////////////////////////
 
 //
 // Update clsuter storage mode if necessary
@@ -444,6 +795,121 @@ func (m *DDLServiceMgr) updateStorageMode(storageMode common.StorageMode, httpAd
 	return false
 }
 
+//////////////////////////////////////////////////////////////
+// REST
+//////////////////////////////////////////////////////////////
+
+func (m *DDLServiceMgr) handleListMetadataTokens(w http.ResponseWriter, r *http.Request) {
+
+	if !m.validateAuth(w, r) {
+		logging.Errorf("DDLServiceMgr::handleListMetadataTokens Validation Failure for Request %v", r)
+		return
+	}
+
+	if r.Method == "GET" {
+
+		logging.Infof("DDLServiceMgr::handleListMetadataTokens Processing Request %v", r)
+
+		buildTokens, err := metakv.ListAllChildren(mc.BuildDDLCommandTokenPath)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(err.Error() + "\n"))
+			return
+		}
+
+		deleteTokens, err1 := metakv.ListAllChildren(mc.DeleteDDLCommandTokenPath)
+		if err1 != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(err1.Error() + "\n"))
+			return
+		}
+
+		createTokens, err2 := metakv.ListAllChildren(mc.CreateDDLCommandTokenPath)
+		if err1 != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(err2.Error() + "\n"))
+			return
+		}
+
+		header := w.Header()
+		header["Content-Type"] = []string{"application/json"}
+		w.WriteHeader(http.StatusOK)
+
+		for _, entry := range buildTokens {
+
+			if strings.Contains(entry.Path, mc.BuildDDLCommandTokenPath) && entry.Value != nil {
+				w.Write([]byte(entry.Path + " - "))
+				w.Write(entry.Value)
+				w.Write([]byte("\n"))
+			}
+		}
+
+		for _, entry := range deleteTokens {
+
+			if strings.Contains(entry.Path, mc.DeleteDDLCommandTokenPath) && entry.Value != nil {
+				w.Write([]byte(entry.Path + " - "))
+				w.Write(entry.Value)
+				w.Write([]byte("\n"))
+			}
+		}
+
+		for _, entry := range createTokens {
+
+			if strings.Contains(entry.Path, mc.CreateDDLCommandTokenPath) && entry.Value != nil {
+				w.Write([]byte(entry.Path + " - "))
+				w.Write(entry.Value)
+				w.Write([]byte("\n"))
+			}
+		}
+	}
+}
+
+func (m *DDLServiceMgr) handleListCreateTokens(w http.ResponseWriter, r *http.Request) {
+
+	if !m.validateAuth(w, r) {
+		logging.Errorf("DDLServiceMgr::handleListCreateTokens Validation Failure for Request %v", r)
+		return
+	}
+
+	if r.Method == "GET" {
+
+		logging.Infof("DDLServiceMgr::handleListCreateTokens Processing Request %v", r)
+
+		createTokens, err := metakv.ListAllChildren(mc.CreateDDLCommandTokenPath)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(err.Error() + "\n"))
+			return
+		}
+
+		list := &mc.CreateCommandTokenList{}
+
+		for _, entry := range createTokens {
+			if strings.Contains(entry.Path, mc.CreateDDLCommandTokenPath) && entry.Value != nil {
+
+				token, err := mc.UnmarshallCreateCommandToken(entry.Value)
+				if err != nil {
+					w.WriteHeader(http.StatusInternalServerError)
+					w.Write([]byte(err.Error() + "\n"))
+					return
+				}
+
+				list.Tokens = append(list.Tokens, *token)
+			}
+		}
+
+		buf, err := mc.MarshallCreateCommandTokenList(list)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(err.Error() + "\n"))
+			return
+		}
+
+		w.Write(buf)
+		w.WriteHeader(http.StatusOK)
+	}
+}
+
 func (m *DDLServiceMgr) validateAuth(w http.ResponseWriter, r *http.Request) bool {
 	_, valid, err := common.IsAuthValid(r)
 	if err != nil {
@@ -472,6 +938,9 @@ func (m *DDLServiceMgr) refreshMetadataProvider() (map[string]string, error) {
 		nodes[key] = value
 	}
 
+	// nodes can be empty but it cannot be nil.
+	// If emtpy, then no node will be considered.
+	// If nil, all nodes will be considered.
 	provider, httpAddrMap, err := m.newMetadataProvider(nodes)
 	if err != nil {
 		return nil, err
@@ -501,41 +970,62 @@ func (m *DDLServiceMgr) newMetadataProvider(nodes map[service.NodeID]bool) (*cli
 	adminAddrMap := make(map[string]string)
 	httpAddrMap := make(map[string]string)
 
-	// Discover indexer service from ClusterInfoCache
-	nids := cinfo.GetNodesByServiceType(common.INDEX_HTTP_SERVICE)
-	for _, nid := range nids {
+	// If a node list is given, then honor the node list by verifying that it can reach
+	// to every node in the list.
+	if nodes != nil {
+		// Discover indexer service from ClusterInfoCache
+		nids := cinfo.GetNodesByServiceType(common.INDEX_HTTP_SERVICE)
+		for _, nid := range nids {
 
-		addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE)
-		if err == nil {
+			addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE)
+			if err == nil {
 
-			resp, err := getWithAuth(addr + "/getLocalIndexMetadata")
-			if err != nil {
-				continue
-			}
-
-			localMeta := new(manager.LocalIndexMetadata)
-			if err := convertResponse(resp, localMeta); err != nil {
-				continue
-			}
-
-			// Only consider valid nodes
-			if nodes != nil && nodes[service.NodeID(localMeta.NodeUUID)] {
-				httpAddrMap[localMeta.NodeUUID] = addr
-
-				adminAddr, err := cinfo.GetServiceAddress(nid, common.INDEX_ADMIN_SERVICE)
+				resp, err := getWithAuth(addr + "/getLocalIndexMetadata")
 				if err != nil {
-					return nil, nil, err
+					continue
 				}
 
-				adminAddrMap[localMeta.NodeUUID] = adminAddr
-				delete(nodes, service.NodeID(localMeta.NodeUUID))
+				localMeta := new(manager.LocalIndexMetadata)
+				if err := convertResponse(resp, localMeta); err != nil {
+					continue
+				}
+
+				// Only consider valid nodes.  If nodes is nil, then all nodes are considered.
+				if nodes[service.NodeID(localMeta.NodeUUID)] {
+					httpAddrMap[localMeta.NodeUUID] = addr
+
+					adminAddr, err := cinfo.GetServiceAddress(nid, common.INDEX_ADMIN_SERVICE)
+					if err != nil {
+						return nil, nil, err
+					}
+
+					adminAddrMap[localMeta.NodeUUID] = adminAddr
+					delete(nodes, service.NodeID(localMeta.NodeUUID))
+				}
 			}
 		}
-	}
 
-	if len(nodes) != 0 {
-		return nil, nil, errors.New(
-			fmt.Sprintf("DDLServiceMgr: Fail to initialize metadata provider.  Unknown host=%v", nodes))
+		if len(nodes) != 0 {
+			return nil, nil, errors.New(
+				fmt.Sprintf("DDLServiceMgr: Fail to initialize metadata provider.  Unknown host=%v", nodes))
+		}
+	} else {
+		// Find all nodes that has a index http service
+		// 1) This method will exclude inactive_failed node in the cluster.  But if a node failed after the topology is fetched, then
+		//    metadata provider could eventually fail (if cannot connect to indexer service).  Note that ns-server will shutdown indexer
+		//    service due to failed over.
+		// 2) This method will exclude inactive_new node in the cluster.
+		// 3) This may include unhealthy node since unhealthiness is not a cluster membership state (need verification).  If it
+		//    metadata provider cannot reach the unhealthy node, the metadata provider may not start (expected behavior).
+		nids := cinfo.GetNodesByServiceType(common.INDEX_HTTP_SERVICE)
+
+		for _, nid := range nids {
+			adminAddr, err := cinfo.GetServiceAddress(nid, common.INDEX_ADMIN_SERVICE)
+			if err != nil {
+				return nil, nil, err
+			}
+			adminAddrMap[adminAddr] = adminAddr
+		}
 	}
 
 	// initialize a new MetadataProvider
@@ -545,7 +1035,7 @@ func (m *DDLServiceMgr) newMetadataProvider(nodes map[service.NodeID]bool) (*cli
 	}
 	providerId := ustr.Str()
 
-	provider, err := client.NewMetadataProvider(providerId, nil, nil, m.settings)
+	provider, err := client.NewMetadataProvider(m.clusterAddr, providerId, nil, nil, m.settings)
 	if err != nil {
 		if provider != nil {
 			provider.Close()
@@ -635,6 +1125,14 @@ func (s *ddlSettings) NumPartition() int32 {
 	return atomic.LoadInt32(&s.numPartition)
 }
 
+func (s *ddlSettings) StorageMode() string {
+
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
+
+	return s.storageMode
+}
+
 func (s *ddlSettings) handleSettings(config common.Config) {
 
 	numReplica := int32(config["settings.num_replica"].Int())
@@ -650,4 +1148,14 @@ func (s *ddlSettings) handleSettings(config common.Config) {
 	} else {
 		logging.Errorf("DDLServiceMgr: invalid setting value for numPartitions=%v", numPartition)
 	}
+
+	storageMode := config["settings.storage_mode"].String()
+	if len(storageMode) != 0 {
+		func() {
+			s.mutex.Lock()
+			defer s.mutex.Unlock()
+			s.storageMode = storageMode
+		}()
+	}
+
 }

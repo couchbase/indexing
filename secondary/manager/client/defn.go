@@ -14,6 +14,7 @@ import (
 	"github.com/couchbase/gometa/common"
 	c "github.com/couchbase/indexing/secondary/common"
 	logging "github.com/couchbase/indexing/secondary/logging"
+	mc "github.com/couchbase/indexing/secondary/manager/common"
 )
 
 /////////////////////////////////////////////////////////////////////////
@@ -39,66 +40,10 @@ const (
 	OPCODE_CONFIG_UPDATE                        = OPCODE_RESET_INDEX + 1
 	OPCODE_DROP_OR_PRUNE_INSTANCE               = OPCODE_CONFIG_UPDATE + 1
 	OPCODE_MERGE_PARTITION                      = OPCODE_DROP_OR_PRUNE_INSTANCE + 1
+	OPCODE_PREPARE_CREATE_INDEX                 = OPCODE_MERGE_PARTITION + 1
+	OPCODE_COMMIT_CREATE_INDEX                  = OPCODE_PREPARE_CREATE_INDEX + 1
+	OPCODE_REBALANCE_RUNNING                    = OPCODE_COMMIT_CREATE_INDEX + 1
 )
-
-/////////////////////////////////////////////////////////////////////////
-// Topology Definition
-////////////////////////////////////////////////////////////////////////
-
-type GlobalTopology struct {
-	TopologyKeys []string `json:"topologyKeys,omitempty"`
-}
-
-type IndexTopology struct {
-	Version     uint64                  `json:"version,omitempty"`
-	Bucket      string                  `json:"bucket,omitempty"`
-	Definitions []IndexDefnDistribution `json:"definitions,omitempty"`
-}
-
-type IndexDefnDistribution struct {
-	Bucket    string                  `json:"bucket,omitempty"`
-	Name      string                  `json:"name,omitempty"`
-	DefnId    uint64                  `json:"defnId,omitempty"`
-	Instances []IndexInstDistribution `json:"instances,omitempty"`
-}
-
-type IndexInstDistribution struct {
-	InstId         uint64                  `json:"instId,omitempty"`
-	State          uint32                  `json:"state,omitempty"`
-	StreamId       uint32                  `json:"streamId,omitempty"`
-	Error          string                  `json:"error,omitempty"`
-	Partitions     []IndexPartDistribution `json:"partitions,omitempty"`
-	NumPartitions  uint32                  `json:"numPartitions,omitempty"`
-	RState         uint32                  `json:"rRtate,omitempty"`
-	Version        uint64                  `json:"version,omitempty"`
-	ReplicaId      uint64                  `json:"replicaId,omitempty"`
-	Scheduled      bool                    `json:"scheduled,omitempty"`
-	StorageMode    string                  `json:"storageMode,omitempty"`
-	OldStorageMode string                  `json:"oldStorageMode,omitempty"`
-	RealInstId     uint64                  `json:"realInstId,omitempty"`
-}
-
-type IndexPartDistribution struct {
-	PartId          uint64                      `json:"partId,omitempty"`
-	Version         uint64                      `json:"version,omitempty"`
-	SinglePartition IndexSinglePartDistribution `json:"singlePartition,omitempty"`
-	KeyPartition    IndexKeyPartDistribution    `json:"keyPartition,omitempty"`
-}
-
-type IndexSinglePartDistribution struct {
-	Slices []IndexSliceLocator `json:"slices,omitempty"`
-}
-
-type IndexKeyPartDistribution struct {
-	Keys             []string                      `json:"keys,omitempty"`
-	SinglePartitions []IndexSinglePartDistribution `json:"singlePartitions,omitempty"`
-}
-
-type IndexSliceLocator struct {
-	SliceId   uint64 `json:"sliceId,omitempty"`
-	State     uint32 `json:"state,omitempty"`
-	IndexerId string `json:"indexerId,omitempty"`
-}
 
 /////////////////////////////////////////////////////////////////////////
 // Index List
@@ -124,17 +69,56 @@ type ServiceMap struct {
 	ClusterVersion uint64 `json:"clusterVersion,omitempty"`
 }
 
+/////////////////////////////////////////////////////////////////////////
+// Index Stats
+////////////////////////////////////////////////////////////////////////
+
 type IndexStats struct {
 	Stats c.Statistics `json:"stats,omitempty"`
+}
+
+/////////////////////////////////////////////////////////////////////////
+// Create Index
+////////////////////////////////////////////////////////////////////////
+
+type PrepareCreateRequestOp int
+
+const (
+	PREPARE PrepareCreateRequestOp = iota
+	CANCEL_PREPARE
+)
+
+type PrepareCreateRequest struct {
+	Op PrepareCreateRequestOp `json:"op,omitempty"`
+
+	DefnId      c.IndexDefnId `json:"defnId,omitempty"`
+	RequesterId string        `json:"requestId,omitempty"`
+	Timeout     int64         `json:"timeout,omitempty"`
+	StartTime   int64         `json:"startTime,omitempty"`
+}
+
+type PrepareCreateResponse struct {
+	// Prepare
+	Accept bool `json:"accept,omitempty"`
+}
+
+type CommitCreateRequest struct {
+	DefnId      c.IndexDefnId                 `json:"defnId,omitempty"`
+	RequesterId string                        `json:"requesterId,omitempty"`
+	Definitions map[c.IndexerId][]c.IndexDefn `json:"definitions,omitempty"`
+}
+
+type CommitCreateResponse struct {
+	Accept bool `json:"accept,omitempty"`
 }
 
 /////////////////////////////////////////////////////////////////////////
 // marshalling/unmarshalling
 ////////////////////////////////////////////////////////////////////////
 
-func unmarshallIndexTopology(data []byte) (*IndexTopology, error) {
+func unmarshallIndexTopology(data []byte) (*mc.IndexTopology, error) {
 
-	topology := new(IndexTopology)
+	topology := new(mc.IndexTopology)
 	if err := json.Unmarshal(data, topology); err != nil {
 		return nil, err
 	}
@@ -142,7 +126,7 @@ func unmarshallIndexTopology(data []byte) (*IndexTopology, error) {
 	return topology, nil
 }
 
-func marshallIndexTopology(topology *IndexTopology) ([]byte, error) {
+func marshallIndexTopology(topology *mc.IndexTopology) ([]byte, error) {
 
 	buf, err := json.Marshal(&topology)
 	if err != nil {
@@ -229,57 +213,98 @@ func MarshallIndexStats(stats *IndexStats) ([]byte, error) {
 	return buf, nil
 }
 
-/////////////////////////////////////////////////////////////////////////
-// Topology
-////////////////////////////////////////////////////////////////////////
+func UnmarshallPrepareCreateRequest(data []byte) (*PrepareCreateRequest, error) {
 
-func (t *IndexTopology) findIndexerId() string {
+	logging.Debugf("UnmarshallPrepareCreateRequest: %v", string(data))
 
-	for _, defn := range t.Definitions {
-		for _, inst := range defn.Instances {
-			indexerId := inst.findIndexerId()
-			if len(indexerId) != 0 {
-				return indexerId
-			}
-		}
+	prepareCreateRequest := new(PrepareCreateRequest)
+	if err := json.Unmarshal(data, prepareCreateRequest); err != nil {
+		return nil, err
 	}
 
-	return ""
+	return prepareCreateRequest, nil
 }
 
-func (inst IndexInstDistribution) findIndexerId() string {
+func MarshallPrepareCreateRequest(prepareCreateRequest *PrepareCreateRequest) ([]byte, error) {
 
-	for _, part := range inst.Partitions {
-		for _, slice := range part.SinglePartition.Slices {
-			if len(slice.IndexerId) != 0 {
-				return slice.IndexerId
-			}
-		}
+	buf, err := json.Marshal(&prepareCreateRequest)
+	if err != nil {
+		return nil, err
 	}
 
-	return ""
+	logging.Debugf("MarshallPrepareCreateRequest: %v", string(buf))
+
+	return buf, nil
 }
 
-func (t *IndexTopology) GetIndexInstancesByDefn(defnId c.IndexDefnId) []IndexInstDistribution {
+func UnmarshallPrepareCreateResponse(data []byte) (*PrepareCreateResponse, error) {
 
-	for i, _ := range t.Definitions {
-		if t.Definitions[i].DefnId == uint64(defnId) {
-			return t.Definitions[i].Instances
-		}
+	logging.Debugf("UnmarshallPrepareCreateResponse: %v", string(data))
+
+	prepareCreateResponse := new(PrepareCreateResponse)
+	if err := json.Unmarshal(data, prepareCreateResponse); err != nil {
+		return nil, err
 	}
-	return nil
+
+	return prepareCreateResponse, nil
 }
 
-func (t *IndexTopology) GetStatusByInst(defnId c.IndexDefnId, instId c.IndexInstId) (c.IndexState, string) {
+func MarshallPrepareCreateResponse(prepareCreateResponse *PrepareCreateResponse) ([]byte, error) {
 
-	for i, _ := range t.Definitions {
-		if t.Definitions[i].DefnId == uint64(defnId) {
-			for j, _ := range t.Definitions[i].Instances {
-				if t.Definitions[i].Instances[j].InstId == uint64(instId) {
-					return c.IndexState(t.Definitions[i].Instances[j].State), t.Definitions[i].Instances[j].Error
-				}
-			}
-		}
+	buf, err := json.Marshal(&prepareCreateResponse)
+	if err != nil {
+		return nil, err
 	}
-	return c.INDEX_STATE_NIL, ""
+
+	logging.Debugf("MarshallPrepareCreateResponse: %v", string(buf))
+
+	return buf, nil
+}
+
+func UnmarshallCommitCreateRequest(data []byte) (*CommitCreateRequest, error) {
+
+	logging.Debugf("UnmarshallCommitCreateRequest: %v", string(data))
+
+	commitCreateRequest := new(CommitCreateRequest)
+	if err := json.Unmarshal(data, commitCreateRequest); err != nil {
+		return nil, err
+	}
+
+	return commitCreateRequest, nil
+}
+
+func MarshallCommitCreateRequest(commitCreateRequest *CommitCreateRequest) ([]byte, error) {
+
+	buf, err := json.Marshal(&commitCreateRequest)
+	if err != nil {
+		return nil, err
+	}
+
+	logging.Debugf("MarshallCommitCreateRequest: %v", string(buf))
+
+	return buf, nil
+}
+
+func UnmarshallCommitCreateResponse(data []byte) (*CommitCreateResponse, error) {
+
+	logging.Debugf("UnmarshallCommitCreateResponse: %v", string(data))
+
+	commitCreateResponse := new(CommitCreateResponse)
+	if err := json.Unmarshal(data, commitCreateResponse); err != nil {
+		return nil, err
+	}
+
+	return commitCreateResponse, nil
+}
+
+func MarshallCommitCreateResponse(commitCreateResponse *CommitCreateResponse) ([]byte, error) {
+
+	buf, err := json.Marshal(&commitCreateResponse)
+	if err != nil {
+		return nil, err
+	}
+
+	logging.Debugf("MarshallCommitCreateResponse: %v", string(buf))
+
+	return buf, nil
 }

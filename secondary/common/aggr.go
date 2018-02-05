@@ -222,7 +222,7 @@ func (a *AggrFuncCount) checkDistinct(newval interface{}) bool {
 		}
 
 	case value.Value:
-		if v.EquivalentTo(a.lastEntry.(value.Value)) {
+		if a.lastEntry != nil && v.EquivalentTo(a.lastEntry.(value.Value)) {
 			return false
 		}
 		a.lastEntry = newval
@@ -301,7 +301,7 @@ func (a *AggrFuncCountN) checkDistinct(newval interface{}) bool {
 		}
 
 	case value.Value:
-		if v.EquivalentTo(a.lastEntry.(value.Value)) {
+		if a.lastEntry != nil && v.EquivalentTo(a.lastEntry.(value.Value)) {
 			return false
 		}
 		a.lastEntry = newval

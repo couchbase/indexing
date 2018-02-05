@@ -331,8 +331,9 @@ func (worker *VbucketWorker) handleEvent(m *mc.DcpEvent) *Vbucket {
 	v, vbok := worker.vbuckets[vbno]
 	logPrefix := worker.logPrefix
 
-	arg1 := logging.TagUD(m.Key)
-	logging.Tracef(traceMutFormat, logPrefix, m.Opaque, m.Seqno, m.Opcode, arg1)
+	logging.LazyTrace(func() string {
+		return fmt.Sprintf(traceMutFormat, logPrefix, m.Opaque, m.Seqno, m.Opcode, logging.TagUD(m.Key))
+	})
 
 	switch m.Opcode {
 	case mcd.DCP_STREAMREQ: // broadcast StreamBegin

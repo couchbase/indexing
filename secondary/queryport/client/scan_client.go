@@ -1230,6 +1230,181 @@ func (c *GsiScanClient) Scan3(
 	return err, partial
 }
 
+func (c *GsiScanClient) Scan3Primary(
+	defnID uint64, requestId string, scans Scans,
+	reverse, distinct bool, projection *IndexProjection, offset, limit int64,
+	groupAggr *GroupAggr, sorted bool,
+	cons common.Consistency, vector *TsConsistency,
+	callb ResponseHandler, rollbackTime int64, partitions []common.PartitionId) (error, bool) {
+
+	var what string
+	// serialize scans
+	protoScans := make([]*protobuf.Scan, len(scans))
+	for i, scan := range scans {
+		if scan != nil {
+			var equals [][]byte
+			var filters []*protobuf.CompositeElementFilter
+
+			// If Seek is there, then ignore Range
+			if len(scan.Seek) > 0 {
+				equals = make([][]byte, 1)
+				var k []byte
+				key := scan.Seek[0]
+				if key != nil {
+					if k, what = curePrimaryKey(key); what == "after" {
+						return nil, true
+					}
+				}
+				equals[0] = k
+
+			} else {
+				filters = make([]*protobuf.CompositeElementFilter, len(scan.Filter))
+				if scan.Filter != nil {
+					for j, f := range scan.Filter {
+						var l, h []byte
+						if f.Low != common.MinUnbounded { // Ignore if unbounded
+							if f.Low != nil {
+								if l, what = curePrimaryKey(f.Low); what == "after" {
+									return nil, true
+								}
+							}
+						}
+						if f.High != common.MaxUnbounded { // Ignore if unbounded
+							if f.High != nil {
+								if h, what = curePrimaryKey(f.High); what == "before" {
+									return nil, true
+								}
+							}
+						}
+
+						fl := &protobuf.CompositeElementFilter{
+							Low: l, High: h, Inclusion: proto.Uint32(uint32(f.Inclusion)),
+						}
+
+						filters[j] = fl
+					}
+				}
+			}
+			s := &protobuf.Scan{
+				Filters: filters,
+				Equals:  equals,
+			}
+			protoScans[i] = s
+		}
+	}
+
+	//IndexProjection
+	var protoProjection *protobuf.IndexProjection
+	if projection != nil {
+		protoProjection = &protobuf.IndexProjection{
+			EntryKeys:  projection.EntryKeys,
+			PrimaryKey: proto.Bool(projection.PrimaryKey),
+		}
+	}
+
+	// Groups and Aggregates
+	var protoGroupAggr *protobuf.GroupAggr
+	if groupAggr != nil {
+		// GroupKeys
+		protoGroupKeys := make([]*protobuf.GroupKey, len(groupAggr.Group))
+		for i, grp := range groupAggr.Group {
+			gk := &protobuf.GroupKey{
+				EntryKeyId: proto.Int32(grp.EntryKeyId),
+				KeyPos:     proto.Int32(grp.KeyPos),
+				Expr:       []byte(grp.Expr),
+			}
+			protoGroupKeys[i] = gk
+		}
+		// Aggregates
+		protoAggregates := make([]*protobuf.Aggregate, len(groupAggr.Aggrs))
+		for i, aggr := range groupAggr.Aggrs {
+			ag := &protobuf.Aggregate{
+				AggrFunc:   proto.Uint32(uint32(aggr.AggrFunc)),
+				EntryKeyId: proto.Int32(aggr.EntryKeyId),
+				KeyPos:     proto.Int32(aggr.KeyPos),
+				Expr:       []byte(aggr.Expr),
+				Distinct:   proto.Bool(aggr.Distinct),
+			}
+			protoAggregates[i] = ag
+		}
+		protoIndexKeyNames := make([][]byte, len(groupAggr.IndexKeyNames))
+		for i, keyName := range groupAggr.IndexKeyNames {
+			protoIndexKeyNames[i] = []byte(keyName)
+		}
+		protoGroupAggr = &protobuf.GroupAggr{
+			Name:               []byte(groupAggr.Name),
+			GroupKeys:          protoGroupKeys,
+			Aggrs:              protoAggregates,
+			DependsOnIndexKeys: groupAggr.DependsOnIndexKeys,
+			IndexKeyNames:      protoIndexKeyNames,
+		}
+	}
+
+	connectn, err := c.pool.Get()
+	if err != nil {
+		return err, false
+	}
+	healthy := true
+	closeStream := false
+	conn, pkt := connectn.conn, connectn.pkt
+	defer func() {
+		go func() {
+			if closeStream {
+				_, healthy = c.closeStream(conn, pkt, requestId)
+			}
+			c.pool.Return(connectn, healthy)
+		}()
+	}()
+
+	partnIds := make([]uint64, len(partitions))
+	for i, partnId := range partitions {
+		partnIds[i] = uint64(partnId)
+	}
+
+	req := &protobuf.ScanRequest{
+		DefnID: proto.Uint64(defnID),
+		Span: &protobuf.Span{
+			Range: nil,
+		},
+		RequestId:       proto.String(requestId),
+		Distinct:        proto.Bool(distinct),
+		Limit:           proto.Int64(limit),
+		Cons:            proto.Uint32(uint32(cons)),
+		Scans:           protoScans,
+		Indexprojection: protoProjection,
+		Reverse:         proto.Bool(reverse),
+		Offset:          proto.Int64(offset),
+		RollbackTime:    proto.Int64(rollbackTime),
+		PartitionIds:    partnIds,
+		GroupAggr:       protoGroupAggr,
+		Sorted:          proto.Bool(sorted),
+	}
+	if vector != nil {
+		req.Vector = protobuf.NewTsConsistency(
+			vector.Vbnos, vector.Seqnos, vector.Vbuuids, vector.Crc64)
+	}
+	// ---> protobuf.ScanRequest
+	if err := c.sendRequest(conn, pkt, req); err != nil {
+		fmsg := "%v Range(%v) request transport failed `%v`\n"
+		logging.Errorf(fmsg, c.logPrefix, requestId, err)
+		healthy = false
+		return err, false
+	}
+
+	cont, partial := true, false
+	for cont {
+		// <--- protobuf.ResponseStream
+		cont, healthy, err, closeStream = c.streamResponse(conn, pkt, callb, requestId)
+		if err != nil { // if err, cont should have been set to false
+			fmsg := "%v Scans(%v) response failed `%v`\n"
+			logging.Errorf(fmsg, c.logPrefix, requestId, err)
+		} else { // partial succeeded
+			partial = true
+		}
+	}
+	return err, partial
+}
+
 func (c *GsiScanClient) Close() error {
 	return c.pool.Close()
 }

@@ -31,7 +31,7 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/fdb"
 	"github.com/couchbase/indexing/secondary/logging"
-	"github.com/couchbase/indexing/secondary/manager/client"
+	mc "github.com/couchbase/indexing/secondary/manager/common"
 	"github.com/couchbase/indexing/secondary/memdb"
 	"github.com/couchbase/indexing/secondary/memdb/nodetable"
 	projClient "github.com/couchbase/indexing/secondary/projector/client"
@@ -406,7 +406,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	//Start DDL Service Manager
 	//Initialize DDL Service Manager before rebalance manager so DDL service manager is ready
 	//when Rebalancing manager receives ns_server rebalancing callback.
-	idx.ddlSrvMgr, res = NewDDLServiceMgr(idx.ddlSrvMgrCmdCh, idx.wrkrRecvCh, idx.config)
+	idx.ddlSrvMgr, res = NewDDLServiceMgr(common.IndexerId(idx.id), idx.ddlSrvMgrCmdCh, idx.wrkrRecvCh, idx.config)
 	if res.GetMsgType() != MSG_SUCCESS {
 		logging.Fatalf("Indexer::NewIndexer DDL Service Manager Init Error %+v", res)
 		return nil, res
@@ -1045,6 +1045,8 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 	<-idx.statsMgrCmdCh
 	idx.rebalMgrCmdCh <- msg
 	<-idx.rebalMgrCmdCh
+	idx.ddlSrvMgrCmdCh <- msg
+	<-idx.ddlSrvMgrCmdCh
 	idx.clustMgrAgentCmdCh <- msg
 	<-idx.clustMgrAgentCmdCh
 	idx.updateSliceWithConfig(newConfig)
@@ -1091,6 +1093,11 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 	clientCh := msg.(*MsgCreateIndex).GetResponseChannel()
 
 	logging.Infof("Indexer::handleCreateIndex %v", indexInst)
+
+	// NOTE
+	// If this function adds new validation or changes error message, need
+	// to update lifecycle mgr and ddl service mgr.
+	//
 
 	is := idx.getIndexerState()
 	if is != common.INDEXER_ACTIVE {
@@ -1868,6 +1875,11 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 
 	logging.Infof("Indexer::handleBuildIndex %v", instIdList)
 
+	// NOTE
+	// If this function adds new validation or changes error message, need
+	// to update lifecycle mgr and ddl service mgr.
+	//
+
 	if len(instIdList) == 0 {
 		logging.Warnf("Indexer::handleBuildIndex Nothing To Build")
 		if clientCh != nil {
@@ -2640,7 +2652,92 @@ func (idx *indexer) cleanupIndex(indexInst common.IndexInst,
 		return
 	}
 
+	// if it is a proxy
+	if indexInst.RealInstId != 0 && indexInst.RealInstId != indexInst.InstId {
+		// build for proxy is done.   The projector could be sending mutations to the real index inst on proxy partitions.
+		if indexInst.State == common.INDEX_STATE_CATCHUP || indexInst.State == common.INDEX_STATE_ACTIVE {
+			if realInst, ok := idx.indexInstMap[indexInst.RealInstId]; ok {
+				if realInst.Stream == indexInst.Stream {
+					if realInst.State == common.INDEX_STATE_CATCHUP || realInst.State == common.INDEX_STATE_ACTIVE {
+						idx.sendStreamUpdateForIndex(realInst)
+					}
+				}
+			}
+		}
+	}
+
 	clientCh <- &MsgSuccess{}
+}
+
+func (idx *indexer) sendStreamUpdateForIndex(indexInst common.IndexInst) {
+
+	respCh := make(MsgChannel)
+	stopCh := make(StopChannel)
+
+	streamId := indexInst.Stream
+	bucket := indexInst.Defn.Bucket
+	bucketUUID := indexInst.Defn.BucketUUID
+
+	cmd := &MsgStreamUpdate{
+		mType:     ADD_INDEX_LIST_TO_STREAM,
+		streamId:  streamId,
+		bucket:    bucket,
+		indexList: []common.IndexInst{indexInst},
+		respCh:    respCh,
+		stopCh:    stopCh}
+
+	clustAddr := idx.config["clusterAddr"].String()
+	retryCount := 0
+
+	reqLock := idx.acquireStreamRequestLock(bucket, streamId)
+	go func(reqLock *kvRequest) {
+		defer idx.releaseStreamRequestLock(reqLock)
+		idx.waitStreamRequestLock(reqLock)
+	retryloop:
+		for {
+			if !ValidateBucket(clustAddr, bucket, []string{bucketUUID}) {
+				logging.Errorf("Indexer::sendStreamUpdateForIndex \n\tBucket Not Found "+
+					"For Stream %v Bucket %v", streamId, bucket)
+				break retryloop
+			}
+			idx.sendMsgToKVSender(cmd)
+
+			if resp, ok := <-respCh; ok {
+
+				switch resp.GetMsgType() {
+
+				case MSG_SUCCESS:
+					logging.Infof("Indexer::sendStreamUpdateForIndex Success Stream %v Bucket %v ",
+						streamId, bucket)
+					break retryloop
+
+				default:
+					//log and retry for all other responses
+					respErr := resp.(*MsgError).GetError()
+
+					//If projector returns TopicMissing/GenServerClosed, AddInstance
+					//cannot succeed. This needs to be aborted so that stream lock is
+					//released and MTR can proceed to repair the Topic.
+					if respErr.cause.Error() == common.ErrorClosed.Error() ||
+						respErr.cause.Error() == projClient.ErrorTopicMissing.Error() {
+						logging.Warnf("Indexer::sendStreamUpdateForIndex Stream %v Bucket %v "+
+							"Error from Projector %v. Aborting.", streamId, bucket, respErr.cause)
+						break retryloop
+					} else if retryCount < 10 {
+						logging.Errorf("Indexer::sendStreamUpdateForIndex Stream %v Bucket %v "+
+							"Error from Projector %v. Retrying.", streamId, bucket, respErr.cause)
+						retryCount++
+						time.Sleep(KV_RETRY_INTERVAL * time.Millisecond)
+					} else {
+						logging.Errorf("Indexer::sendStreamUpdateForIndex Stream %v Bucket %v "+
+							"Error from Projector %v. Reach max retry count.  Stop retrying.",
+							streamId, bucket, respErr.cause)
+						break retryloop
+					}
+				}
+			}
+		}
+	}(reqLock)
 }
 
 func (idx *indexer) shutdownWorkers() {
@@ -2674,6 +2771,10 @@ func (idx *indexer) shutdownWorkers() {
 	//shutdown kv sender
 	idx.kvSenderCmdCh <- &MsgGeneral{mType: KV_SENDER_SHUTDOWN}
 	<-idx.kvSenderCmdCh
+
+	// shutdown ddl manager
+	idx.ddlSrvMgrCmdCh <- &MsgGeneral{mType: ADMIN_MGR_SHUTDOWN}
+	<-idx.ddlSrvMgrCmdCh
 }
 
 func (idx *indexer) Shutdown() Message {
@@ -3334,6 +3435,21 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 			}
 		}
 		return
+	}
+
+	// If index is a proxy, add the real index instance to the list.  This will
+	// also update the partition list of the real index instance in projector.
+	// Note that the real inst should be active or being built at the same time as the proxy.
+	for _, index := range indexList {
+		if common.IsPartitioned(index.Defn.PartitionScheme) && index.RealInstId != 0 && index.InstId != index.RealInstId {
+			if realInst, ok := idx.indexInstMap[index.RealInstId]; ok {
+				indexList = append(indexList, realInst)
+			} else {
+				err := fmt.Errorf("Fail to find real index instance %v", index.RealInstId)
+				logging.Errorf("Indexer::handleInitialBuildDone. %v", err)
+				common.CrashOnError(err)
+			}
+		}
 	}
 
 	//Add index to MAINT_STREAM in Catchup State,
@@ -4895,6 +5011,10 @@ func (idx *indexer) handleSetLocalMeta(msg Message) {
 	if err == nil {
 		if key == RebalanceRunning {
 			idx.rebalanceRunning = true
+
+			msg := &MsgClustMgrUpdate{mType: CLUST_MGR_REBALANCE_RUNNING}
+			idx.sendMsgToClusterMgr(msg)
+
 		} else if key == RebalanceTokenTag {
 			var rebalToken RebalanceToken
 			if err := json.Unmarshal([]byte(value), &rebalToken); err == nil {
@@ -5853,7 +5973,7 @@ func (idx *indexer) promoteStorageModeIfNecessaryInternal(mode common.StorageMod
 func (idx *indexer) getStorageModeOverride(config common.Config) common.StorageMode {
 
 	nodeUUID := config["nodeuuid"].String()
-	override, err := client.GetIndexerStorageModeOverride(nodeUUID)
+	override, err := mc.GetIndexerStorageModeOverride(nodeUUID)
 
 	if err == nil && common.IsValidIndexType(override) {
 		logging.Infof("Indexer::getStorageModeOverride(): override storage mode %v.", override)
@@ -5870,7 +5990,7 @@ func (idx *indexer) getStorageModeOverride(config common.Config) common.StorageM
 func (idx *indexer) getBootstrapStorageMode(config common.Config) common.StorageMode {
 
 	nodeUUID := config["nodeuuid"].String()
-	s, err := client.GetIndexerLocalStorageMode(nodeUUID)
+	s, err := mc.GetIndexerLocalStorageMode(nodeUUID)
 	if s == common.NOT_SET || err != nil {
 		logging.Infof("Unable to fetch storage mode from metakv during bootrap.  Use storage mode setting for bootstrap")
 
@@ -5884,7 +6004,7 @@ func (idx *indexer) getBootstrapStorageMode(config common.Config) common.Storage
 func (idx *indexer) postIndexStorageModeForBootstrap(config common.Config, storageMode common.StorageMode) error {
 
 	nodeUUID := config["nodeuuid"].String()
-	err := client.PostIndexerLocalStorageMode(nodeUUID, storageMode)
+	err := mc.PostIndexerLocalStorageMode(nodeUUID, storageMode)
 	if err != nil {
 		logging.Errorf("Error when post storage mode to metakv during bootrap.  Error=%s", err)
 		return err

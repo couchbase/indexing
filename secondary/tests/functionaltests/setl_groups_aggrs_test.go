@@ -40,7 +40,7 @@ func TestGroupAggrSetup(t *testing.T) {
 	FailTestIfError(err, "Error in creating the index", t)
 
 	n1qlstatement := "create primary index on default"
-	_, err = tc.ExecuteN1QLStatement(kvaddress, clusterconfig.Username, clusterconfig.Password, bucket, n1qlstatement)
+	_, err = tc.ExecuteN1QLStatement(kvaddress, clusterconfig.Username, clusterconfig.Password, bucket, n1qlstatement, false)
 	FailTestIfError(err, "Error in creating primary index", t)
 }
 
@@ -857,7 +857,7 @@ func TestGroupAggr1(t *testing.T) {
 	indexExpr := []string{"company", "age", "eyeColor", "`address`.`number`", "age", "`first-name`"}
 
 	stmt := "create primary index on default"
-	_, err = tc.ExecuteN1QLStatement(kvaddress, clusterconfig.Username, clusterconfig.Password, bucket, stmt)
+	_, err = tc.ExecuteN1QLStatement(kvaddress, clusterconfig.Username, clusterconfig.Password, bucket, stmt, false)
 	FailTestIfError(err, "Error in creating primary index", t)
 
 	err = secondaryindex.CreateSecondaryIndex(index, bucket, indexManagementAddress, "", indexExpr, false, nil, true, defaultIndexActiveTimeout, nil)
@@ -1166,6 +1166,186 @@ func TestGroupAggrArrayIndex(t *testing.T) {
 	}
 	executeGroupAggrTest(ga, proj, n1qlEquivalent, i2, t)
 
+}
+
+func TestGroupAggrPrimary(t *testing.T) {
+	log.Printf("In TestGroupAggrPrimary()")
+
+	var index = "#primary"
+
+	//select sum(meta().id) from default
+	n1qlEquivalent := "select sum(meta().id) as a from default"
+	a1 := &qc.Aggregate{AggrFunc: c.AGG_SUM, EntryKeyId: 1, KeyPos: 0}
+	aggregates := []*qc.Aggregate{a1}
+
+	dependsOnIndexKeys := []int32{0}
+
+	ga := &qc.GroupAggr{
+		Name:               "Primary",
+		Group:              nil,
+		Aggrs:              aggregates,
+		DependsOnIndexKeys: dependsOnIndexKeys,
+	}
+	proj := &qc.IndexProjection{
+		EntryKeys: []int64{1},
+	}
+
+	executeGroupAggrTest(ga, proj, n1qlEquivalent, index, t)
+
+	//select min(meta().id) from default
+	n1qlEquivalent = "select min(meta().id) as a from default"
+	ga.Aggrs[0].AggrFunc = c.AGG_MIN
+	executeGroupAggrTest(ga, proj, n1qlEquivalent, index, t)
+
+	//select count(meta().id) from default
+	n1qlEquivalent = "select count(meta().id) as a from default"
+	ga.Aggrs[0].AggrFunc = c.AGG_COUNT
+	executeGroupAggrTest(ga, proj, n1qlEquivalent, index, t)
+
+	{
+		//select meta().id, count(meta().id) from default group by meta().id
+		n1qlEquivalent = "select meta().id as a, count(meta().id) as b from default group by meta().id"
+		g1 := &qc.GroupKey{EntryKeyId: 0, KeyPos: 0}
+		groups := []*qc.GroupKey{g1}
+
+		a1 := &qc.Aggregate{AggrFunc: c.AGG_COUNT, EntryKeyId: 1, KeyPos: 0}
+		aggregates := []*qc.Aggregate{a1}
+
+		ga := &qc.GroupAggr{
+			Name:               "primary",
+			Group:              groups,
+			Aggrs:              aggregates,
+			DependsOnIndexKeys: []int32{0},
+			IndexKeyNames: []string{
+				"(meta(`default`).`id`)"},
+		}
+
+		proj := &qc.IndexProjection{
+			EntryKeys: []int64{0, 1},
+		}
+		executeGroupAggrTest(ga, proj, n1qlEquivalent, index, t)
+	}
+
+	{
+		//select meta().id, count(meta().id) from default group by meta().id, substr(meta().id, 0, 4)
+		n1qlEquivalent = "select meta().id a, count(meta().id) as b from default group by meta().id, substr(meta().id, 0, 4)"
+		g1 := &qc.GroupKey{EntryKeyId: 0, KeyPos: 0}
+		g2 := &qc.GroupKey{EntryKeyId: 1, KeyPos: -1, Expr: "SUBSTR(cover ((meta(`default`).`id`)), 0, 4)"}
+		groups := []*qc.GroupKey{g1, g2}
+
+		a1 := &qc.Aggregate{AggrFunc: c.AGG_COUNT, EntryKeyId: 2, KeyPos: 0}
+		aggregates := []*qc.Aggregate{a1}
+
+		ga := &qc.GroupAggr{
+			Name:               "primary",
+			Group:              groups,
+			Aggrs:              aggregates,
+			DependsOnIndexKeys: []int32{0},
+			IndexKeyNames: []string{
+				"(meta(`default`).`id`)"},
+		}
+
+		proj := &qc.IndexProjection{
+			EntryKeys: []int64{0, 2},
+		}
+		executeGroupAggrTest(ga, proj, n1qlEquivalent, index, t)
+	}
+
+	{
+
+		//select meta().id, count(meta().id) from default group by 1)
+		n1qlEquivalent = "select count(meta().id) as a from default group by 1"
+		g1 := &qc.GroupKey{EntryKeyId: 0, KeyPos: -1, Expr: "1"}
+		groups := []*qc.GroupKey{g1}
+
+		a1 := &qc.Aggregate{AggrFunc: c.AGG_COUNT, EntryKeyId: 1, KeyPos: 0}
+		aggregates := []*qc.Aggregate{a1}
+
+		ga := &qc.GroupAggr{
+			Name:               "primary",
+			Group:              groups,
+			Aggrs:              aggregates,
+			DependsOnIndexKeys: []int32{0},
+			IndexKeyNames: []string{
+				"(meta(`default`).`id`)"},
+		}
+
+		proj := &qc.IndexProjection{
+			EntryKeys: []int64{1},
+		}
+		executeGroupAggrTest(ga, proj, n1qlEquivalent, index, t)
+
+	}
+
+	{
+		//select sum(substr(meta().id,0, 4)), count(1) from default
+		n1qlEquivalent := "SELECT SUM(SUBSTR(meta().id, 0, 4)) as a, COUNT(1) as b from default"
+
+		a1 := &qc.Aggregate{AggrFunc: c.AGG_SUM, EntryKeyId: 0, KeyPos: -1,
+			Expr: "SUBSTR(cover ((meta(`default`).`id`)), 0, 4)"}
+
+		a2 := &qc.Aggregate{AggrFunc: c.AGG_COUNT, EntryKeyId: 1, KeyPos: -1, Expr: "1"}
+
+		aggregates := []*qc.Aggregate{a1, a2}
+
+		ga := &qc.GroupAggr{
+			Name:               "primary",
+			Group:              nil,
+			Aggrs:              aggregates,
+			DependsOnIndexKeys: []int32{0},
+			IndexKeyNames: []string{
+				"(meta(`default`).`id`)"},
+		}
+
+		proj := &qc.IndexProjection{
+			EntryKeys: []int64{0, 1},
+		}
+		executeGroupAggrTest(ga, proj, n1qlEquivalent, index, t)
+	}
+
+	{
+		//select sum(1) from default
+		n1qlEquivalent := "SELECT SUM(1) as a from default"
+
+		a1 := &qc.Aggregate{AggrFunc: c.AGG_SUM, EntryKeyId: 0, KeyPos: -1, Expr: "1"}
+		aggregates := []*qc.Aggregate{a1}
+
+		ga := &qc.GroupAggr{
+			Name:               "primary",
+			Group:              nil,
+			Aggrs:              aggregates,
+			DependsOnIndexKeys: []int32{0},
+			IndexKeyNames: []string{
+				"(meta(`default`).`id`)"},
+		}
+
+		proj := &qc.IndexProjection{
+			EntryKeys: []int64{0},
+		}
+		executeGroupAggrTest(ga, proj, n1qlEquivalent, index, t)
+	}
+
+	{
+		//select count(distinct 1) from default
+		n1qlEquivalent := "SELECT COUNT(DISTINCT 1) as a from default"
+
+		a1 := &qc.Aggregate{AggrFunc: c.AGG_COUNT, EntryKeyId: 0, KeyPos: -1, Expr: "1", Distinct: true}
+		aggregates := []*qc.Aggregate{a1}
+
+		ga := &qc.GroupAggr{
+			Name:               "primary",
+			Group:              nil,
+			Aggrs:              aggregates,
+			DependsOnIndexKeys: []int32{0},
+			IndexKeyNames: []string{
+				"(meta(`default`).`id`)"},
+		}
+
+		proj := &qc.IndexProjection{
+			EntryKeys: []int64{0},
+		}
+		executeGroupAggrTest(ga, proj, n1qlEquivalent, index, t)
+	}
 	secondaryindex.UseClient = tmpclient
 }
 

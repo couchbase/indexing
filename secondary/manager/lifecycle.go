@@ -22,6 +22,7 @@ import (
 	fdb "github.com/couchbase/indexing/secondary/fdb"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager/client"
+	mc "github.com/couchbase/indexing/secondary/manager/common"
 	"math"
 	"strings"
 	"sync/atomic"
@@ -39,6 +40,7 @@ type LifecycleMgr struct {
 	notifier      MetadataNotifier
 	clusterURL    string
 	incomings     chan *requestHolder
+	expedites     chan *requestHolder
 	bootstraps    chan *requestHolder
 	outgoings     chan c.Packet
 	killch        chan bool
@@ -47,6 +49,7 @@ type LifecycleMgr struct {
 	janitor       *janitor
 	updator       *updator
 	requestServer RequestServer
+	prepareLock   *client.PrepareCreateRequest
 }
 
 type requestHolder struct {
@@ -119,6 +122,7 @@ func NewLifecycleMgr(notifier MetadataNotifier, clusterURL string) (*LifecycleMg
 		notifier:     notifier,
 		clusterURL:   clusterURL,
 		incomings:    make(chan *requestHolder, 1000),
+		expedites:    make(chan *requestHolder, 1000),
 		outgoings:    make(chan c.Packet, 1000),
 		killch:       make(chan bool),
 		bootstraps:   make(chan *requestHolder, 1000),
@@ -196,9 +200,19 @@ func (m *LifecycleMgr) OnNewRequest(fid string, request protocol.RequestMsg) {
 			}
 		}
 
-		// for create/drop/build index, always go to the client queue -- which will wait for
-		// indexer to be ready.
-		m.incomings <- req
+		if op == client.OPCODE_UPDATE_INDEX_INST ||
+			op == client.OPCODE_DROP_OR_PRUNE_INSTANCE ||
+			op == client.OPCODE_MERGE_PARTITION ||
+			op == client.OPCODE_PREPARE_CREATE_INDEX ||
+			op == client.OPCODE_COMMIT_CREATE_INDEX ||
+			op == client.OPCODE_REBALANCE_RUNNING {
+			m.expedites <- req
+
+		} else {
+			// for create/drop/build index, always go to the client queue -- which will wait for
+			// indexer to be ready.
+			m.incomings <- req
+		}
 	}
 }
 
@@ -232,13 +246,44 @@ END_BOOTSTRAP:
 
 	logging.Debugf("LifecycleMgr.processRequest(): indexer is ready to process new client request.")
 
+	dispatchExpediates := func() bool {
+		for {
+			select {
+			case request, ok := <-m.expedites:
+				if ok {
+					// TOOD: deal with error
+					m.dispatchRequest(request, factory)
+				} else {
+					// server shutdown.
+					logging.Debugf("LifecycleMgr.handleRequest(): channel for receiving client request is closed. Terminate.")
+					return false
+				}
+			default:
+				return true
+			}
+		}
+	}
+
 	// Indexer is ready and all bootstrap requests are processed.  Proceed to handle regular messages.
 	for {
 		select {
-		case request, ok := <-m.incomings:
+		case request, ok := <-m.expedites:
 			if ok {
 				// TOOD: deal with error
 				m.dispatchRequest(request, factory)
+			} else {
+				// server shutdown.
+				logging.Debugf("LifecycleMgr.handleRequest(): channel for receiving client request is closed. Terminate.")
+				return
+			}
+		case request, ok := <-m.incomings:
+			if ok {
+				if dispatchExpediates() {
+					// TOOD: deal with error
+					m.dispatchRequest(request, factory)
+				} else {
+					return
+				}
 			} else {
 				// server shutdown.
 				logging.Debugf("LifecycleMgr.handleRequest(): channel for receiving client request is closed. Terminate.")
@@ -300,6 +345,12 @@ func (m *LifecycleMgr) dispatchRequest(request *requestHolder, factory *message.
 		m.handleDeleteOrPruneIndexInstance(content, common.NewRebalanceRequestContext())
 	case client.OPCODE_MERGE_PARTITION:
 		m.handleMergePartition(content, common.NewRebalanceRequestContext())
+	case client.OPCODE_PREPARE_CREATE_INDEX:
+		result, err = m.handlePrepareCreateIndex(content)
+	case client.OPCODE_COMMIT_CREATE_INDEX:
+		result, err = m.handleCommitCreateIndex(content)
+	case client.OPCODE_REBALANCE_RUNNING:
+		err = m.handleRebalanceRunning(content)
 	}
 
 	logging.Debugf("LifecycleMgr.dispatchRequest () : send response for requestId %d, op %d, len(result) %d", reqId, op, len(result))
@@ -321,6 +372,205 @@ func (m *LifecycleMgr) dispatchRequest(request *requestHolder, factory *message.
 //////////////////////////////////////////////////////////////
 // Lifecycle Mgr - handler functions
 //////////////////////////////////////////////////////////////
+
+//-----------------------------------------------------------
+// Atomic Create Index
+//-----------------------------------------------------------
+
+//
+// Prepare create index
+//
+func (m *LifecycleMgr) handlePrepareCreateIndex(content []byte) ([]byte, error) {
+
+	prepareCreateIndex, err := client.UnmarshallPrepareCreateRequest(content)
+	if err != nil {
+		logging.Errorf("LifecycleMgr.handlePrepareCreateIndex() : prepareCreateIndex fails. Unable to unmarshall request. Reason = %v", err)
+		return nil, err
+	}
+
+	if prepareCreateIndex.Op == client.PREPARE {
+		if m.prepareLock != nil {
+			if m.prepareLock.RequesterId != prepareCreateIndex.RequesterId ||
+				m.prepareLock.DefnId != prepareCreateIndex.DefnId {
+
+				if m.prepareLock.Timeout > (time.Now().UnixNano() - m.prepareLock.StartTime) {
+					logging.Infof("LifecycleMgr.handlePrepareCreateIndex() : Reject %v because another index %v holding lock",
+						prepareCreateIndex.DefnId, m.prepareLock.DefnId)
+					response := &client.PrepareCreateResponse{Accept: false}
+					return client.MarshallPrepareCreateResponse(response)
+				}
+				logging.Infof("LifecycleMgr.handlePrepareCreateIndex() : Prepare timeout for %v", m.prepareLock.DefnId)
+			}
+		}
+
+		value, _ := m.repo.GetLocalValue("RebalanceRunning")
+		if len(value) != 0 {
+			logging.Infof("LifecycleMgr.handlePrepareCreateIndex() : Reject %v because rebalance in progress", prepareCreateIndex.DefnId)
+			response := &client.PrepareCreateResponse{Accept: false}
+			return client.MarshallPrepareCreateResponse(response)
+		}
+
+		m.prepareLock = prepareCreateIndex
+		m.prepareLock.StartTime = time.Now().UnixNano()
+
+		logging.Infof("LifecycleMgr.handlePrepareCreateIndex() : Accept %v", m.prepareLock.DefnId)
+		response := &client.PrepareCreateResponse{Accept: true}
+		return client.MarshallPrepareCreateResponse(response)
+
+	} else if prepareCreateIndex.Op == client.CANCEL_PREPARE {
+		if m.prepareLock != nil {
+			if m.prepareLock.RequesterId == prepareCreateIndex.RequesterId &&
+				m.prepareLock.DefnId == prepareCreateIndex.DefnId {
+				logging.Infof("LifecycleMgr.handlePrepareCreateIndex() : release lock for %v", m.prepareLock.DefnId)
+				m.prepareLock = nil
+			}
+		}
+		return nil, nil
+	}
+
+	return nil, fmt.Errorf("Unknown operation %v for prepare create index", prepareCreateIndex.Op)
+}
+
+//
+// Commit create index
+//
+func (m *LifecycleMgr) handleCommitCreateIndex(content []byte) ([]byte, error) {
+
+	commitCreateIndex, err := client.UnmarshallCommitCreateRequest(content)
+	if err != nil {
+		logging.Errorf("LifecycleMgr.handleCommitCreateIndex() : commitCreateIndex fails. Unable to unmarshall request. Reason = %v", err)
+		return nil, err
+	}
+
+	if m.prepareLock == nil {
+		logging.Infof("LifecycleMgr.handleCommitCreateIndex() : Reject %v because there is no lock", commitCreateIndex.DefnId)
+		response := &client.CommitCreateResponse{Accept: false}
+		return client.MarshallCommitCreateResponse(response)
+	}
+
+	if m.prepareLock.RequesterId != commitCreateIndex.RequesterId ||
+		m.prepareLock.DefnId != commitCreateIndex.DefnId {
+
+		logging.Infof("LifecycleMgr.handleCommitCreateIndex() : Reject %v because defnId and requesterId do not match", commitCreateIndex.DefnId)
+		response := &client.CommitCreateResponse{Accept: false}
+		return client.MarshallCommitCreateResponse(response)
+	}
+
+	value, _ := m.repo.GetLocalValue("RebalanceRunning")
+	if len(value) != 0 {
+		logging.Infof("LifecycleMgr.handleCommitCreateIndex() : Reject %v because rebalance in progress", commitCreateIndex.DefnId)
+		response := &client.PrepareCreateResponse{Accept: false}
+		return client.MarshallPrepareCreateResponse(response)
+	}
+
+	defnId := commitCreateIndex.DefnId
+	definitions := commitCreateIndex.Definitions
+	m.prepareLock = nil
+
+	commit, bucketUUID, err := m.processCommitToken(defnId, definitions)
+	if commit {
+		if err1 := mc.PostCreateCommandToken(defnId, bucketUUID, definitions); err1 != nil {
+			logging.Infof("LifecycleMgr.handleCommitCreateIndex() : Reject %v because fail to post token", commitCreateIndex.DefnId)
+
+			if err == nil {
+				err = err1
+			}
+
+			m.DeleteIndex(defnId, true, common.NewUserRequestContext())
+
+			response := &client.CommitCreateResponse{Accept: false}
+			msg, _ := client.MarshallCommitCreateResponse(response)
+			return msg, err
+		}
+
+		logging.Infof("LifecycleMgr.handleCommitCreateIndex() : Create token posted for %v", defnId)
+		response := &client.CommitCreateResponse{Accept: true}
+		msg, err1 := client.MarshallCommitCreateResponse(response)
+		if err1 != nil {
+			m.DeleteIndex(defnId, true, common.NewUserRequestContext())
+			if err == nil {
+				err = err1
+			}
+		}
+
+		return msg, err
+	}
+
+	logging.Infof("LifecycleMgr.handleCommitCreateIndex() : Create token posted for %v", defnId)
+	response := &client.CommitCreateResponse{Accept: false}
+	msg, _ := client.MarshallCommitCreateResponse(response)
+	return msg, err
+}
+
+//
+// Notify rebalance running
+//
+func (m *LifecycleMgr) handleRebalanceRunning(content []byte) error {
+
+	if m.prepareLock != nil {
+		logging.Infof("LifecycleMgr.handleRebalanceRunning() : releasing token %v", m.prepareLock.DefnId)
+	}
+
+	m.prepareLock = nil
+	return nil
+}
+
+//
+// Process commit token
+//
+func (m *LifecycleMgr) processCommitToken(defnId common.IndexDefnId, layout map[common.IndexerId][]common.IndexDefn) (bool, string, error) {
+
+	indexerId, err := m.repo.GetLocalIndexerId()
+	if err != nil {
+		return false, "", fmt.Errorf("Create Index fails.  Internal Error: %v", err)
+	}
+
+	if definitions, ok := layout[indexerId]; ok && len(definitions) > 0 {
+
+		defn := definitions[0]
+		defn.Deferred = true
+		reqCtx := common.NewUserRequestContext()
+
+		// Create the index instance.   This is to ensure that definiton passes invariant validation (e.g bucket exists).
+		// If create index fails due to transient error (indexer in recovery), a token will be placed to retry the operation
+		// later.  The definiton is always deleted upon error.
+		if err := m.CreateIndexOrInstance(&defn, true, reqCtx); err != nil {
+			// If there is error, the defintion will not be created.
+			// But if it is recoverable error, then we still want to create the commit token.
+			logging.Errorf("LifecycleMgr.processCommitToken() : build index fails.  Reason = %v", err)
+			return m.canRetryCreateError(err), "", err
+		}
+
+		if !definitions[0].Deferred && len(definitions) == 1 {
+			// If there is only one definition, then try to do the build as well.
+			retryList, skipList, errList := m.BuildIndexes([]common.IndexDefnId{defnId}, reqCtx, false)
+
+			if len(retryList) != 0 {
+				// It is a recoverable error.  Create commit token and return error.
+				logging.Errorf("LifecycleMgr.processCommitToken() : build index fails.  Reason = %v", retryList[0])
+				return true, "", retryList[0]
+			}
+
+			if len(errList) != 0 {
+				// It is not a recoverable error.  Do not create commit token and return error.
+				logging.Errorf("LifecycleMgr.processCommitToken() : build index fails.  Reason = %v", errList[0])
+				m.DeleteIndex(defnId, true, reqCtx)
+				return false, "", errList[0]
+			}
+
+			if len(skipList) != 0 {
+				// It is very unlikely to skip an index.  Let create the commit token and retry.
+				logging.Errorf("LifecycleMgr.processCommitToken() : index is skipped during build.  Create create-token and retry.")
+			}
+		}
+
+		// create commit token
+		return true, defn.BucketUUID, nil
+	}
+
+	// these definitions are not for my indexer, do not create commit token.
+	return false, "", nil
+}
 
 //-----------------------------------------------------------
 // Create Index
@@ -393,6 +643,10 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scheduled bool,
 	}
 
 	if err := m.setStorageMode(defn); err != nil {
+		return err
+	}
+
+	if err := m.setImmutable(defn); err != nil {
 		return err
 	}
 
@@ -516,8 +770,12 @@ func (m *LifecycleMgr) setBucketUUID(defn *common.IndexDefn) error {
 		return fmt.Errorf("Bucket does not exist or temporarily unavailable for creating new index."+
 			" Please retry the operation at a later time (err=%v).", err)
 	}
-	defn.BucketUUID = bucketUUID
 
+	if len(defn.BucketUUID) != 0 && defn.BucketUUID != bucketUUID {
+		return fmt.Errorf("Bucket UUID has changed.  Bucket may have been dropped and recreatd.")
+	}
+
+	defn.BucketUUID = bucketUUID
 	return nil
 }
 
@@ -539,6 +797,28 @@ func (m *LifecycleMgr) setStorageMode(defn *common.IndexDefn) error {
 			err := fmt.Sprintf("Create Index fails. Reason = Unsupported Using Clause %v", string(defn.Using))
 			logging.Errorf("LifecycleMgr.handleCreateIndex: " + err)
 			return errors.New(err)
+		}
+	}
+
+	if common.IsPartitioned(defn.PartitionScheme) {
+		if defn.Using != common.PlasmaDB && defn.Using != common.MemDB && defn.Using != common.MemoryOptimized {
+			err := fmt.Sprintf("Create Index fails. Reason = Cannot create partitioned index using %v", string(defn.Using))
+			logging.Errorf("LifecycleMgr.handleCreateIndex: " + err)
+			return errors.New(err)
+		}
+	}
+
+	return nil
+}
+
+func (m *LifecycleMgr) setImmutable(defn *common.IndexDefn) error {
+
+	// If it is a partitioned index, immutable is set to true by default.
+	// If immutable is true, then set it to false for MOI, so flusher can process
+	// upsertDeletion mutation.
+	if common.IsPartitioned(defn.PartitionScheme) && defn.Immutable {
+		if defn.Using == common.MemoryOptimized {
+			//defn.Immutable = false
 		}
 	}
 
@@ -795,7 +1075,7 @@ func (m *LifecycleMgr) BuildIndexes(ids []common.IndexDefnId,
 
 				inst, err := m.FindLocalIndexInst(defn.Bucket, defnId, instId)
 				if inst != nil && err == nil {
-					if m.canRetryError(inst, build_err, retry) {
+					if m.canRetryBuildError(inst, build_err, retry) {
 						build_err = errors.New(fmt.Sprintf("Index %v will retry building in the background for reason: %v.", defn.Name, build_err.Error()))
 					}
 					m.UpdateIndexInstance(defn.Bucket, defnId, common.IndexInstId(inst.InstId), common.INDEX_STATE_NIL,
@@ -805,7 +1085,7 @@ func (m *LifecycleMgr) BuildIndexes(ids []common.IndexDefnId,
 						defn.Bucket, defn.Name, inst.ReplicaId)
 				}
 
-				if m.canRetryError(inst, build_err, retry) {
+				if m.canRetryBuildError(inst, build_err, retry) {
 					logging.Infof("LifecycleMgr.handleBuildIndexes() : Encounter build error.  Retry building index (%v, %v, %v) at later time.",
 						defn.Bucket, defn.Name, inst.ReplicaId)
 
@@ -1014,6 +1294,10 @@ func (m *LifecycleMgr) handleTopologyChange(content []byte) error {
 // Delete Bucket
 //-----------------------------------------------------------
 
+//
+// Indexer will crash if this function returns an error.
+// On bootstap, it will retry deleting the bucket again.
+//
 func (m *LifecycleMgr) handleDeleteBucket(bucket string, content []byte) error {
 
 	result := error(nil)
@@ -1024,6 +1308,9 @@ func (m *LifecycleMgr) handleDeleteBucket(bucket string, content []byte) error {
 
 	streamId := common.StreamId(content[0])
 
+	//
+	// Remove index from repository
+	//
 	topology, err := m.repo.GetTopologyByBucket(bucket)
 	if err == nil && topology != nil {
 
@@ -1034,30 +1321,79 @@ func (m *LifecycleMgr) handleDeleteBucket(bucket string, content []byte) error {
 
 			if defn, err := m.repo.GetIndexDefnById(common.IndexDefnId(defnRef.DefnId)); err == nil && defn != nil {
 
-				for _, instRef := range defnRef.Instances {
+				// Remove the index definition if:
+				// 1) StreamId is NIL_STREAM (any stream)
+				// 2) index has at least one inst matching the given stream
+				// 3) index has at least one inst with NIL_STREAM
 
-					// Remove the index definition if:
-					// 1) StreamId is NIL_STREAM (any stream)
-					// 2) index has at least one inst matching the given stream
-					// 3) index has at least one inst with NIL_STREAM
-					if streamId == common.NIL_STREAM || (common.StreamId(instRef.StreamId) == streamId ||
-						common.StreamId(instRef.StreamId) == common.NIL_STREAM) {
+				if streamId == common.NIL_STREAM {
+					if err := m.DeleteIndex(common.IndexDefnId(defn.DefnId), false, nil); err != nil {
+						result = err
+					}
+					mc.DeleteCreateCommandToken(common.IndexDefnId(defn.DefnId))
 
-						logging.Debugf("LifecycleMgr.handleDeleteBucket() : index instance : id %v, streamId %v.",
-							instRef.InstId, instRef.StreamId)
+				} else {
+					for _, instRef := range defnRef.Instances {
 
-						if err := m.DeleteIndex(common.IndexDefnId(defn.DefnId), false, nil); err != nil {
-							result = err
+						if common.StreamId(instRef.StreamId) == streamId || common.StreamId(instRef.StreamId) == common.NIL_STREAM {
+
+							logging.Debugf("LifecycleMgr.handleDeleteBucket() : index instance : id %v, streamId %v.",
+								instRef.InstId, instRef.StreamId)
+
+							if err := m.DeleteIndex(common.IndexDefnId(defn.DefnId), false, nil); err != nil {
+								result = err
+							}
+							mc.DeleteCreateCommandToken(common.IndexDefnId(defn.DefnId))
+
+							break
 						}
-						break
 					}
 				}
 			} else {
-				logging.Debugf("LifecycleMgr.handleDeleteBucket() : Cannot find index instance %v.  Skip.", defnRef.DefnId)
+				logging.Debugf("LifecycleMgr.handleDeleteBucket() : Cannot find index %v.  Skip.", defnRef.DefnId)
 			}
 		}
 	} else if err != fdb.FDB_RESULT_KEY_NOT_FOUND {
 		result = err
+	}
+
+	//
+	// Drop create token
+	//
+	result = m.deleteCreateTokenForBucket(bucket)
+
+	return result
+}
+
+func (m *LifecycleMgr) deleteCreateTokenForBucket(bucket string) error {
+
+	var result error
+
+	entries, err := metakv.ListAllChildren(mc.CreateDDLCommandTokenPath)
+	if err != nil {
+		logging.Warnf("LifecycleMgr.handleDeleteBucket: Fail to fetch token from metakv.  Internal Error = %v", err)
+		return err
+	}
+
+	for _, entry := range entries {
+		if strings.Contains(entry.Path, mc.CreateDDLCommandTokenPath) && entry.Value != nil {
+
+			token, err := mc.UnmarshallCreateCommandToken(entry.Value)
+			if err != nil {
+				logging.Warnf("LifecycleMgr: Fail to process create index token %v.  Internal Error = %v.", entry.Path, err)
+				result = err
+				continue
+			}
+
+			for _, definitions := range token.Definitions {
+				if len(definitions) > 0 && definitions[0].Bucket == bucket {
+					if err := mc.DeleteCreateCommandToken(definitions[0].DefnId); err != nil {
+						logging.Warnf("LifecycleMgr: Fail to delete create index token %v.  Internal Error = %v.", entry.Path, err)
+						result = err
+					}
+				}
+			}
+		}
 	}
 
 	return result
@@ -1097,20 +1433,31 @@ func (m *LifecycleMgr) handleCleanupDeferIndexFromBucket(bucket string) error {
 		}
 
 		if !hasValidActiveIndex {
+			deleteToken := false
+
 			for _, defnRef := range topology.Definitions {
 				if defn, err := m.repo.GetIndexDefnById(common.IndexDefnId(defnRef.DefnId)); err == nil && defn != nil {
 					if defn.BucketUUID != currentUUID && defn.Deferred {
 						for _, instRef := range defnRef.Instances {
 							if instRef.State != uint32(common.INDEX_STATE_DELETED) &&
 								common.StreamId(instRef.StreamId) == common.NIL_STREAM {
+								deleteToken = true
 								if err := m.DeleteIndex(common.IndexDefnId(defn.DefnId), true, common.NewUserRequestContext()); err != nil {
-									return err
+									logging.Errorf("LifecycleMgr.handleCleanupDeferIndexFromBucket: Encounter error %v", err)
+									continue
 								}
+								mc.DeleteCreateCommandToken(common.IndexDefnId(defn.DefnId))
 								break
 							}
 						}
 					}
 				}
+			}
+
+			// VerifyBucket ensures that all index have the same bucket UUID.  So if one index has bucket UUID mismatch, then all
+			// can be deleted.
+			if deleteToken {
+				m.deleteCreateTokenForBucket(bucket)
 			}
 		}
 	}
@@ -1261,6 +1608,10 @@ func (m *LifecycleMgr) CreateIndexInstance(defn *common.IndexDefn, scheduled boo
 	}
 
 	if err := m.setStorageMode(defn); err != nil {
+		return err
+	}
+
+	if err := m.setImmutable(defn); err != nil {
 		return err
 	}
 
@@ -1711,7 +2062,7 @@ func (m *LifecycleMgr) findNumProxy(bucket string, defnId common.IndexDefnId, in
 	return count, nil
 }
 
-func (m *LifecycleMgr) canRetryError(inst *IndexInstDistribution, err error, retry bool) bool {
+func (m *LifecycleMgr) canRetryBuildError(inst *IndexInstDistribution, err error, retry bool) bool {
 
 	if inst == nil || inst.RState != uint32(common.REBAL_ACTIVE) {
 		return false
@@ -1724,7 +2075,26 @@ func (m *LifecycleMgr) canRetryError(inst *IndexInstDistribution, err error, ret
 
 	if indexerErr.Code == common.IndexNotExist ||
 		indexerErr.Code == common.InvalidBucket ||
+		indexerErr.Code == common.BucketEphemeral ||
 		(!retry && indexerErr.Code == common.RebalanceInProgress) ||
+		indexerErr.Code == common.IndexAlreadyExist ||
+		indexerErr.Code == common.IndexInvalidState {
+		return false
+	}
+
+	return true
+}
+
+func (m *LifecycleMgr) canRetryCreateError(err error) bool {
+
+	indexerErr, ok := err.(*common.IndexerError)
+	if !ok {
+		return false
+	}
+
+	if indexerErr.Code == common.IndexNotExist ||
+		indexerErr.Code == common.InvalidBucket ||
+		indexerErr.Code == common.BucketEphemeral ||
 		indexerErr.Code == common.IndexAlreadyExist ||
 		indexerErr.Code == common.IndexInvalidState {
 		return false
@@ -2006,6 +2376,8 @@ RETRY:
 //
 func (m *LifecycleMgr) verifyBucket(bucket string) (string, error) {
 
+	// If this function returns an error, then it cannot fetch bucket UUID.
+	// Otherwise, if it returns BUCKET_UUID_NIL, it means none of the node recognize this bucket.
 	currentUUID, err := m.getBucketUUID(bucket)
 	if err != nil {
 		return common.BUCKET_UUID_NIL, err
@@ -2046,7 +2418,10 @@ func (m *LifecycleMgr) verifyBucket(bucket string) (string, error) {
 }
 
 //////////////////////////////////////////////////////////////
-// Lifecycle Mgr - recovery
+// Lifecycle Mgr - janitor
+// Jantior cleanup deleted index in the background.  This
+// operation is idempotent -- unless the metadata store is
+// corrupted.
 //////////////////////////////////////////////////////////////
 
 //
@@ -2060,7 +2435,7 @@ func (m *janitor) cleanup() {
 	//
 	logging.Infof("janitor: running cleanup.")
 
-	entries, err := metakv.ListAllChildren(client.DeleteDDLCommandTokenPath)
+	entries, err := metakv.ListAllChildren(mc.DeleteDDLCommandTokenPath)
 	if err != nil {
 		logging.Warnf("janitor: Fail to drop index upon cleanup.  Internal Error = %v", err)
 		return
@@ -2068,11 +2443,11 @@ func (m *janitor) cleanup() {
 
 	for _, entry := range entries {
 
-		if strings.Contains(entry.Path, client.DeleteDDLCommandTokenPath) && entry.Value != nil {
+		if strings.Contains(entry.Path, mc.DeleteDDLCommandTokenPath) && entry.Value != nil {
 
 			logging.Infof("janitor: Processing delete token %v", entry.Path)
 
-			command, err := client.UnmarshallDeleteCommandToken(entry.Value)
+			command, err := mc.UnmarshallDeleteCommandToken(entry.Value)
 			if err != nil {
 				logging.Warnf("janitor: Fail to drop index upon cleanup.  Skp command %v.  Internal Error = %v.", entry.Path, err)
 				continue
@@ -2175,6 +2550,9 @@ func newJanitor(mgr *LifecycleMgr) *janitor {
 
 //////////////////////////////////////////////////////////////
 // Lifecycle Mgr - builder
+// Buidler builds index in the background.  This
+// operation is idempotent -- unless the metadata store is
+// corrupted.
 //////////////////////////////////////////////////////////////
 
 func (s *builder) run() {
@@ -2406,7 +2784,7 @@ func (s *builder) getQuota() (int32, map[string]bool) {
 
 func (s *builder) processBuildToken(bootstrap bool) {
 
-	entries, err := metakv.ListAllChildren(client.BuildDDLCommandTokenPath)
+	entries, err := metakv.ListAllChildren(mc.BuildDDLCommandTokenPath)
 	if err != nil {
 		logging.Warnf("builder: Fail to get command token from metakv.  Internal Error = %v", err)
 		entries = nil
@@ -2414,9 +2792,9 @@ func (s *builder) processBuildToken(bootstrap bool) {
 
 	for _, entry := range entries {
 
-		if strings.Contains(entry.Path, client.BuildDDLCommandTokenPath) && entry.Value != nil {
+		if strings.Contains(entry.Path, mc.BuildDDLCommandTokenPath) && entry.Value != nil {
 
-			command, err := client.UnmarshallBuildCommandToken(entry.Value)
+			command, err := mc.UnmarshallBuildCommandToken(entry.Value)
 			if err != nil {
 				logging.Warnf("builder: Fail to unmarshall command token.  Skp command %v.  Internal Error = %v.", entry.Path, err)
 				continue

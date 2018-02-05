@@ -80,7 +80,7 @@ func newMetaBridgeClient(
 		logging.Errorf("Could not generate UUID in common.NewUUID\n")
 		return nil, err
 	}
-	b.mdClient, err = mclient.NewMetadataProvider(uuid.Str(), b.mdNotifyCh, b.stNotifyCh, b.settings)
+	b.mdClient, err = mclient.NewMetadataProvider(cluster, uuid.Str(), b.mdNotifyCh, b.stNotifyCh, b.settings)
 	if err != nil {
 		return nil, err
 	}

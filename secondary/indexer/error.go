@@ -144,6 +144,8 @@ func (e Error) convertError() common.IndexerErrCode {
 		return common.IndexerNotActive
 	case ERROR_INDEXER_REBALANCE_IN_PROGRESS:
 		return common.RebalanceInProgress
+	case ERROR_BUCKET_EPHEMERAL:
+		return common.BucketEphemeral
 	}
 
 	return common.TransientError

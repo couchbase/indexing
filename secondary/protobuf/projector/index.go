@@ -80,7 +80,7 @@ func (instance *IndexInst) GetPartitionObject() Partition {
 	case PartitionScheme_SINGLE:
 		return instance.GetSinglePartn()
 	case PartitionScheme_KEY:
-		// return instance.GetKeyPartn()
+		return instance.GetKeyPartn()
 	case PartitionScheme_HASH:
 		// return instance.GetHashPartn()
 	case PartitionScheme_RANGE:
@@ -248,33 +248,50 @@ func (ie *IndexEvaluator) TransformRoute(
 
 	bucket := ie.Bucket()
 
-	arg1 := logging.TagUD(string(npkey))
-	arg2 := logging.TagUD(string(nkey))
-	logging.Tracef("inst: %v where: %v (pkey: %v) key: %v\n",
-		uuid, where, arg1, arg2)
+	logging.LazyTrace(func() string {
+		return fmt.Sprintf("inst: %v where: %v (pkey: %v) key: %v\n", uuid, where,
+			logging.TagUD(string(npkey)), logging.TagUD(string(nkey)))
+	})
+
 	switch opcode {
 	case mcd.DCP_MUTATION:
 		// FIXME: TODO: where clause is not used to for optimizing out messages
 		// not passing the where clause. For this we need a gaurantee that
 		// where clause will be defined only on immutable fields.
-
 		if where { // WHERE predicate, sent upsert only if where is true.
 			raddrs := instn.UpsertEndpoints(m, npkey, nkey, okey)
-			for _, raddr := range raddrs {
-				dkv, ok := data[raddr].(*c.DataportKeyVersions)
-				if !ok {
-					kv := c.NewKeyVersions(seqno, m.Key, 4, m.Ctime)
-					kv.AddUpsert(uuid, nkey, okey, npkey)
-					dkv = &c.DataportKeyVersions{bucket, vbno, vbuuid, kv}
-				} else {
-					dkv.Kv.AddUpsert(uuid, nkey, okey, npkey)
+			if len(raddrs) != 0 {
+				for _, raddr := range raddrs {
+					dkv, ok := data[raddr].(*c.DataportKeyVersions)
+					if !ok {
+						kv := c.NewKeyVersions(seqno, m.Key, 4, m.Ctime)
+						kv.AddUpsert(uuid, nkey, okey, npkey)
+						dkv = &c.DataportKeyVersions{bucket, vbno, vbuuid, kv}
+					} else {
+						dkv.Kv.AddUpsert(uuid, nkey, okey, npkey)
+					}
+					data[raddr] = dkv
 				}
-				data[raddr] = dkv
+			} else {
+				// send upsertDeletion if cannot find an endpoint that can accept this mutation
+				// for the given feed
+				raddrs := instn.UpsertDeletionEndpoints(m, npkey, nkey, okey)
+				for _, raddr := range raddrs {
+					dkv, ok := data[raddr].(*c.DataportKeyVersions)
+					if !ok {
+						kv := c.NewKeyVersions(seqno, m.Key, 4, m.Ctime)
+						kv.AddUpsertDeletion(uuid, okey, npkey)
+						dkv = &c.DataportKeyVersions{bucket, vbno, vbuuid, kv}
+					} else {
+						dkv.Kv.AddUpsertDeletion(uuid, okey, npkey)
+					}
+					data[raddr] = dkv
+				}
 			}
 		} else { // if WHERE is false, broadcast upsertdelete.
 			// NOTE: downstream can use upsertdelete and immutable flag
 			// to optimize out back-index lookup.
-			raddrs := instn.UpsertDeletionEndpoints(m, opkey, nkey, okey)
+			raddrs := instn.UpsertDeletionEndpoints(m, npkey, nkey, okey)
 			for _, raddr := range raddrs {
 				dkv, ok := data[raddr].(*c.DataportKeyVersions)
 				if !ok {

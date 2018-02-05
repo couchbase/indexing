@@ -188,6 +188,8 @@ type GroupAggr struct {
 	IndexKeyNames       []string     // Index key names used in expressions
 	DependsOnPrimaryKey bool
 	IsLeadingGroup      bool // Group by key(s) are leading subset
+	IsPrimary           bool
+	NeedDecode          bool // Need decode values for SUM or N1QLExpr evaluation
 
 	//For caching values
 	cv          *value.ScopeValue
@@ -195,6 +197,22 @@ type GroupAggr struct {
 	exprContext expression.Context
 	aggrs       []*aggrVal
 	groups      []*groupKey
+}
+
+func (ga GroupAggr) String() string {
+	str := "Groups: "
+	for _, g := range ga.Group {
+		str += fmt.Sprintf(" %+v ", g)
+	}
+
+	str += "Aggregates: "
+	for _, a := range ga.Aggrs {
+		str += fmt.Sprintf(" %+v ", a)
+	}
+
+	str += fmt.Sprintf(" DependsOnIndexKeys %v", ga.DependsOnIndexKeys)
+	str += fmt.Sprintf(" IndexKeyNames %v", ga.IndexKeyNames)
+	return str
 }
 
 var (
@@ -323,6 +341,7 @@ func NewScanRequest(protoReq interface{},
 		if err = r.setConsistency(cons, vector); err != nil {
 			return
 		}
+
 		if proj != nil {
 			var localerr error
 			if req.GetGroupAggr() == nil {
@@ -1047,9 +1066,13 @@ func (r *ScanRequest) fillGroupAggr(protoGroupAggr *protobuf.GroupAggr) (err err
 		return
 	}
 
+	if r.isPrimary {
+		r.GroupAggr.IsPrimary = true
+	}
+
 	for _, d := range protoGroupAggr.GetDependsOnIndexKeys() {
 		r.GroupAggr.DependsOnIndexKeys = append(r.GroupAggr.DependsOnIndexKeys, d)
-		if int(d) == len(r.IndexInst.Defn.SecExprs) {
+		if !r.isPrimary && int(d) == len(r.IndexInst.Defn.SecExprs) {
 			r.GroupAggr.DependsOnPrimaryKey = true
 		}
 	}
@@ -1084,6 +1107,9 @@ func (r *ScanRequest) unmarshallGroupKeys(protoGroupAggr *protobuf.GroupAggr) er
 			}
 			groupKey.Expr = expr
 			groupKey.ExprValue = expr.Value() // value will be nil if it is not constant expr
+			if groupKey.ExprValue == nil {
+				r.GroupAggr.NeedDecode = true
+			}
 			if r.GroupAggr.cv == nil {
 				r.GroupAggr.cv = value.NewScopeValue(make(map[string]interface{}), nil)
 				r.GroupAggr.av = value.NewAnnotatedValue(r.GroupAggr.cv)
@@ -1119,11 +1145,16 @@ func (r *ScanRequest) unmarshallAggrs(protoGroupAggr *protobuf.GroupAggr) error 
 			}
 			aggr.Expr = expr
 			aggr.ExprValue = expr.Value() // value will be nil if it is not constant expr
+			if aggr.ExprValue == nil {
+				r.GroupAggr.NeedDecode = true
+			}
 			if r.GroupAggr.cv == nil {
 				r.GroupAggr.cv = value.NewScopeValue(make(map[string]interface{}), nil)
 				r.GroupAggr.av = value.NewAnnotatedValue(r.GroupAggr.cv)
 				r.GroupAggr.exprContext = expression.NewIndexContext()
 			}
+		} else if aggr.AggrFunc == common.AGG_SUM {
+			r.GroupAggr.NeedDecode = true
 		}
 
 		r.GroupAggr.Aggrs = append(r.GroupAggr.Aggrs, &aggr)
@@ -1134,6 +1165,28 @@ func (r *ScanRequest) unmarshallAggrs(protoGroupAggr *protobuf.GroupAggr) error 
 }
 
 func (r *ScanRequest) validateGroupAggr() error {
+
+	//identify leading/non-leading
+	var prevPos int32 = -1
+	r.GroupAggr.IsLeadingGroup = true
+	for _, g := range r.GroupAggr.Group {
+		if g.KeyPos < 0 {
+			r.GroupAggr.IsLeadingGroup = false
+			break
+		} else if g.KeyPos == 0 {
+			prevPos = 0
+		} else {
+			if g.KeyPos != prevPos+1 {
+				r.GroupAggr.IsLeadingGroup = false
+				break
+			}
+		}
+		prevPos = g.KeyPos
+	}
+
+	if r.isPrimary {
+		return nil
+	}
 
 	var err error
 
@@ -1167,28 +1220,6 @@ func (r *ScanRequest) validateGroupAggr() error {
 			return err
 		}
 	}
-
-	//identify leading/non-leading
-	var prevPos int32 = -1
-	r.GroupAggr.IsLeadingGroup = true
-	for _, g := range r.GroupAggr.Group {
-		if g.KeyPos < 0 {
-			r.GroupAggr.IsLeadingGroup = false
-			break
-		} else if g.KeyPos == 0 {
-			prevPos = 0
-		} else {
-			if g.KeyPos != prevPos+1 {
-				r.GroupAggr.IsLeadingGroup = false
-				break
-			}
-		}
-		prevPos = g.KeyPos
-	}
-
-	//project should only have group/agg fields
-
-	//top level distinct is not allowed
 
 	return nil
 }
@@ -1289,6 +1320,10 @@ func (r ScanRequest) String() string {
 
 	if r.RequestId != "" {
 		str += fmt.Sprintf(", requestId:%v", r.RequestId)
+	}
+
+	if r.GroupAggr != nil {
+		str += fmt.Sprintf(", groupaggr: %v", r.GroupAggr)
 	}
 
 	return str

@@ -332,7 +332,7 @@ func (t *simulator) RunSingleTest(config *RunConfig, command CommandType, spec *
 	var indexes []*IndexUsage
 	var err error
 
-	sizing := newMOISizingMethod()
+	sizing := newGeneralSizingMethod()
 
 	if command == CommandPlan {
 		if spec != nil {
@@ -349,6 +349,10 @@ func (t *simulator) RunSingleTest(config *RunConfig, command CommandType, spec *
 
 		} else {
 			return nil, nil, errors.New("missing argument:  workload or indexes must be present")
+		}
+
+		if p != nil {
+			t.setStorageType(p)
 		}
 
 		return plan(config, p, indexes)
@@ -368,6 +372,11 @@ func (t *simulator) RunSingleTest(config *RunConfig, command CommandType, spec *
 		if err != nil {
 			return nil, nil, err
 		}
+
+		if p != nil {
+			t.setStorageType(p)
+		}
+
 		return rebalance(command, config, p, indexes, deletedNodes)
 
 	} else {
@@ -456,7 +465,7 @@ func (t *simulator) indexUsage(s SizingMethod, bucket string, spec *CollectionSp
 		// TODO
 		//index.IsPrimary = t.isPrimary(spec)
 		index.IsPrimary = false
-		index.IsMOI = true
+		index.StorageMode = common.MemoryOptimized
 		index.AvgSecKeySize = t.avgSecKeySize(spec)
 		index.AvgDocKeySize = t.avgDocKeySize(spec)
 		//TODO
@@ -465,7 +474,7 @@ func (t *simulator) indexUsage(s SizingMethod, bucket string, spec *CollectionSp
 		index.AvgArrKeySize = 0
 		index.AvgArrSize = 0
 		index.NumOfDocs = t.numOfDocs(spec)
-		index.MemResidentRatio = 100
+		index.ResidentRatio = 100
 		index.MutationRate = t.mutationRate(spec)
 		index.ScanRate = t.scanRate(spec)
 
@@ -549,6 +558,17 @@ func (t *simulator) collection(spec *BucketSpec) (*CollectionSpec, error) {
 	}
 
 	return nil, errors.New("collection workload does not sum up to 100")
+}
+
+func (t *simulator) setStorageType(plan *Plan) {
+
+	for _, indexer := range plan.Placement {
+		for _, index := range indexer.Indexes {
+			if len(index.StorageMode) == 0 {
+				index.StorageMode = common.MemoryOptimized
+			}
+		}
+	}
 }
 
 //////////////////////////////////////////////////////////////

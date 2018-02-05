@@ -564,7 +564,8 @@ func (r *Rebalancer) buildAcceptedIndexes() {
 	r.mu.Lock()
 	for _, tt := range r.acceptedTokens {
 		if tt.State != c.TransferTokenReady &&
-			tt.State != c.TransferTokenCommit {
+			tt.State != c.TransferTokenCommit &&
+			tt.State != c.TransferTokenMerge {
 			idList.DefnIds = append(idList.DefnIds, uint64(tt.IndexInst.Defn.DefnId))
 		}
 	}

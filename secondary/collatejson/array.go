@@ -35,6 +35,44 @@ func (codec *Codec) ExplodeArray(code []byte, tmp []byte) ([][]byte, error) {
 	return array, err
 }
 
+// Explodes an encoded array, returns encoded parts as well as
+// decoded parts
+func (codec *Codec) ExplodeArray2(code []byte, tmp, decbuf []byte) ([][]byte, [][]byte, error) {
+	var err error
+	array := make([][]byte, 0)
+	var text []byte
+	decoded := make([][]byte, 0)
+
+	if codec.arrayLenPrefix {
+		return nil, nil, ErrLenPrefixUnsupported
+	}
+
+	if code[0] != TypeArray {
+		return nil, nil, ErrNotAnArray
+	}
+
+	code = code[1:]
+	elemBuf := code
+
+	for code[0] != Terminator {
+		text, code, err = codec.code2json(code, tmp)
+		if err != nil {
+			break
+		}
+
+		copy(decbuf, text)
+		decoded = append(decoded, decbuf[:len(text)])
+		decbuf = decbuf[len(text):]
+
+		if size := len(elemBuf) - len(code); size > 0 {
+			array = append(array, elemBuf[:size])
+			elemBuf = code
+		}
+	}
+
+	return array, decoded, err
+}
+
 func (codec *Codec) JoinArray(vals [][]byte, code []byte) ([]byte, error) {
 	if codec.arrayLenPrefix {
 		return nil, ErrLenPrefixUnsupported

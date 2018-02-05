@@ -378,12 +378,15 @@ func (f *flusher) flush(mutk *MutationKeys, streamId common.StreamId) {
 			continue
 		}
 
+		immutable := idxInst.Defn.Immutable
+
 		switch mut.command {
 
 		case common.Upsert:
 			processedUpserts = append(processedUpserts, mut.uuid)
 
 			f.processUpsert(mut, mutk.docid, mutk.meta)
+			f.processDeletionAfterUpsert(mut, mutk.docid, mutk.meta, immutable)
 
 		case common.Deletion:
 			f.processDelete(mut, mutk.docid, mutk.meta)
@@ -391,7 +394,7 @@ func (f *flusher) flush(mutk *MutationKeys, streamId common.StreamId) {
 		case common.UpsertDeletion:
 
 			//skip UpsertDeletion if index has immutable partition
-			if idxInst.Defn.Immutable {
+			if immutable {
 				continue
 			}
 
@@ -467,6 +470,35 @@ func (f *flusher) processDelete(mut *Mutation, docid []byte, meta *MutationMeta)
 		if err := slice.Delete(docid, meta); err != nil {
 			logging.Errorf("Flusher::processDelete Error Deleting DocId: %v "+
 				"from Slice: %v", logging.TagStrUD(docid), slice.Id())
+		}
+	}
+}
+
+func (f *flusher) processDeletionAfterUpsert(mut *Mutation, docid []byte, meta *MutationMeta, immutable bool) {
+
+	if immutable {
+		return
+	}
+
+	idxInst, _ := f.indexInstMap[mut.uuid]
+	partnId := idxInst.Pc.GetPartitionIdByPartitionKey(mut.partnkey)
+
+	var partnInstMap PartitionInstMap
+	var ok bool
+	if partnInstMap, ok = f.indexPartnMap[mut.uuid]; !ok {
+		logging.Errorf("Flusher:processDelete Missing Partition Instance Map"+
+			"for IndexInstId: %v. Skipped Mutation Key: %v", mut.uuid, mut.key)
+		return
+	}
+
+	for id, partnInst := range partnInstMap {
+		// perform upsert deletion on "other" partitions
+		if id != partnId {
+			slice := partnInst.Sc.GetSliceByIndexKey(common.IndexKey(mut.key))
+			if err := slice.Delete(docid, meta); err != nil {
+				logging.Errorf("Flusher::processDelete Error Deleting DocId: %v "+
+					"from Slice: %v", docid, slice.Id())
+			}
 		}
 	}
 }

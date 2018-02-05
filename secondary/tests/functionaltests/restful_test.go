@@ -480,7 +480,7 @@ func restful_lookup(ids []string) error {
 }
 
 func restful_stats(indexes map[string]interface{}) error {
-	var auth, noAuth []string
+	var auth, noAuth, invalids []string
 	// Indexer level stats
 	auth_indexer_1, err := makeurl(fmt.Sprintf("/api/stats"))
 	if err != nil {
@@ -509,7 +509,7 @@ func restful_stats(indexes map[string]interface{}) error {
 			return err
 		}
 		if _, ok := done[auth_bucket_1]; !ok {
-			auth = append(auth, auth_bucket_1)
+			invalids = append(invalids, auth_bucket_1)
 			done[auth_bucket_1] = true
 		}
 		auth_bucket_2, err := makeurl(fmt.Sprintf("/api/stats/%s/", bucket))
@@ -517,7 +517,7 @@ func restful_stats(indexes map[string]interface{}) error {
 			return err
 		}
 		if _, ok := done[auth_bucket_2]; !ok {
-			auth = append(auth, auth_bucket_2)
+			invalids = append(invalids, auth_bucket_2)
 			done[auth_bucket_2] = true
 		}
 		auth_index_1, err := makeurl(fmt.Sprintf("/api/stats/%s/%s", bucket, name))
@@ -553,19 +553,19 @@ func restful_stats(indexes map[string]interface{}) error {
 			done[noAuth_index] = true
 		}
 	}
-	log.Println("Testing URLs with valid authentication")
+	log.Println("STATS: Testing URLs with valid authentication")
 	for _, URL := range auth {
 		if err := validate_status(URL, 200); err != nil {
 			return err
 		}
 	}
-	log.Println("Testing URLs with invalid authentication")
+	log.Println("STATS: Testing URLs with invalid authentication")
 	for _, URL := range noAuth {
 		if err := validate_status(URL, 401); err != nil {
 			return err
 		}
 	}
-	log.Println("Testing an invalid URL")
+	log.Println("STATS: Testing invalid URLs")
 	invalid, err := makeurl("/api/stats/nobucket/noindex")
 	if err != nil {
 		return err
@@ -573,13 +573,18 @@ func restful_stats(indexes map[string]interface{}) error {
 	if err := validate_status(invalid, 404); err != nil {
 		return err
 	}
-	log.Println("Testing an invalid method")
+	for _, URL := range invalids {
+		if err := validate_status(URL, 404); err != nil {
+			return err
+		}
+	}
+	log.Println("STATS: Testing unsupported methods")
 	resp, err := http.PostForm(auth[0], nil)
 	if err != nil {
 		return err
 	}
-	if resp.StatusCode != 400 {
-		return fmt.Errorf("ERROR: POST %s Returned %d Expected %d\n", auth[0], resp.StatusCode, 400)
+	if resp.StatusCode != 405 {
+		return fmt.Errorf("ERROR: POST %s Returned %d Expected %d\n", auth[0], resp.StatusCode, 405)
 	}
 	return nil
 }

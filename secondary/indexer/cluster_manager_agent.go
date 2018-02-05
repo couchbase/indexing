@@ -120,6 +120,9 @@ func (c *clustMgrAgent) handleSupvervisorCommands(cmd Message) {
 	case CLUST_MGR_INDEXER_READY:
 		c.handleIndexerReady(cmd)
 
+	case CLUST_MGR_REBALANCE_RUNNING:
+		c.handleRebalanceRunning(cmd)
+
 	case CLUST_MGR_UPDATE_TOPOLOGY_FOR_INDEX:
 		c.handleUpdateTopologyForIndex(cmd)
 
@@ -472,6 +475,14 @@ func (c *clustMgrAgent) handleIndexerReady(cmd Message) {
 	c.supvCmdch <- &MsgSuccess{}
 }
 
+func (c *clustMgrAgent) handleRebalanceRunning(cmd Message) {
+
+	logging.Infof("ClustMgr:handleRebalanceRunning %v", cmd)
+
+	c.mgr.RebalanceRunning()
+	c.supvCmdch <- &MsgSuccess{}
+}
+
 //panicHandler handles the panic from index manager
 func (c *clustMgrAgent) panicHandler() {
 
@@ -564,7 +575,7 @@ func (meta *metaNotifier) OnIndexCreate(indexDefn *common.IndexDefn, instId comm
 			logging.Errorf("clustMgrAgent::OnIndexCreate Error "+
 				"for Create Index %v. Error %v.", indexDefn, res)
 			err := res.(*MsgError).GetError()
-			return err.cause
+			return &common.IndexerError{Reason: err.String(), Code: err.convertError()}
 
 		default:
 			logging.Fatalf("clustMgrAgent::OnIndexCreate Unknown Response "+

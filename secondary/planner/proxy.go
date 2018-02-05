@@ -16,7 +16,7 @@ import (
 	"github.com/couchbase/cbauth"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
-	"github.com/couchbase/indexing/secondary/manager/client"
+	mc "github.com/couchbase/indexing/secondary/manager/common"
 	"net"
 	"net/http"
 	"runtime"
@@ -29,11 +29,12 @@ import (
 //////////////////////////////////////////////////////////////
 
 type LocalIndexMetadata struct {
-	IndexerId        string                 `json:"indexerId,omitempty"`
-	NodeUUID         string                 `json:"nodeUUID,omitempty"`
-	StorageMode      string                 `json:"storageMode,omitempty"`
-	IndexTopologies  []client.IndexTopology `json:"topologies,omitempty"`
-	IndexDefinitions []common.IndexDefn     `json:"definitions,omitempty"`
+	IndexerId        string             `json:"indexerId,omitempty"`
+	NodeUUID         string             `json:"nodeUUID,omitempty"`
+	StorageMode      string             `json:"storageMode,omitempty"`
+	LocalSettings    map[string]string  `json:"localSettings,omitempty"`
+	IndexTopologies  []mc.IndexTopology `json:"topologies,omitempty"`
+	IndexDefinitions []common.IndexDefn `json:"definitions,omitempty"`
 }
 
 ///////////////////////////////////////////////////////
@@ -42,11 +43,25 @@ type LocalIndexMetadata struct {
 
 //
 // This function retrieves the index layout plan from a live cluster.
+// This function uses REST API to retrieve index metadata, instead of
+// using metadata provider.  This method should not use metadata provider
+// since this method can be called from metadata provider, so it is to
+// avoid code cyclic dependency.
 //
-func RetrievePlanFromCluster(clusterUrl string) (*Plan, error) {
+func RetrievePlanFromCluster(clusterUrl string, hosts []string) (*Plan, error) {
 
-	indexers, err := getIndexLayout(clusterUrl)
+	config, err := common.GetSettingsConfig(common.SystemConfig)
 	if err != nil {
+		logging.Errorf("Planner::getIndexLayout: Error from retrieving indexer settings. Error = %v", err)
+		return nil, err
+	}
+
+	indexers, err := getIndexLayout(clusterUrl, config, hosts)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := processCreateToken(clusterUrl, indexers, config); err != nil {
 		return nil, err
 	}
 
@@ -83,7 +98,7 @@ func RetrievePlanFromCluster(clusterUrl string) (*Plan, error) {
 //
 func recalculateIndexerSize(plan *Plan) {
 
-	sizing := newMOISizingMethod()
+	sizing := newGeneralSizingMethod()
 
 	for _, indexer := range plan.Placement {
 		for _, index := range indexer.Indexes {
@@ -99,25 +114,31 @@ func recalculateIndexerSize(plan *Plan) {
 //
 // This function retrieves the index layout.
 //
-func getIndexLayout(clusterUrl string) ([]*IndexerNode, error) {
+func getIndexLayout(clusterUrl string, config common.Config, hosts []string) ([]*IndexerNode, error) {
 
+	// Fetch a new topology from the cluster.
 	cinfo, err := clusterInfoCache(clusterUrl)
 	if err != nil {
 		logging.Errorf("Planner::getIndexLayout: Error from connecting to cluster at %v. Error = %v", clusterUrl, err)
 		return nil, err
 	}
 
-	config, err := common.GetSettingsConfig(common.SystemConfig)
-	if err != nil {
-		logging.Errorf("Planner::getIndexLayout: Error from retrieving indexer settings. Error = %v", err)
-		return nil, err
-	}
-
-	// find all nodes that has a index http service
-	// If there is any indexer node that is not in active state (e.g. failover), then planner will skip those indexers.
-	// Note that if the planner is invoked by the rebalancer, the rebalancer will receive callback ns_server if there is
-	// an indexer node fails over while planning is happening.
+	// Find all nodes that has a index http service
+	// 1) This method will exclude inactive_failed node in the cluster.  But if a node failed after the topology is fetched, then
+	//    the following code could fail (if cannot connect to indexer service).  Note that ns-server will shutdown indexer
+	//    service due to failed over.
+	// 2) For rebalancing, the planner will also skip failed nodes, even if this method succeed.
+	// 3) Note that if the planner is invoked by the rebalancer, the rebalancer will receive callback ns_server if there is
+	//    an indexer node fails over while planning is happening.
+	// 4) This method will exclude inactive_new node in the cluster.
+	// 5) This may include unhealthy node since unhealthiness is not a cluster membership state (need verification).  This
+	//    function can fail if it cannot reach the unhealthy node.
+	//
 	nids := cinfo.GetNodesByServiceType(common.INDEX_HTTP_SERVICE)
+
+	if len(nids) == 0 {
+		return nil, errors.New("No indexing service available.")
+	}
 
 	list := make([]*IndexerNode, 0)
 	numIndexes := 0
@@ -129,6 +150,22 @@ func getIndexLayout(clusterUrl string) ([]*IndexerNode, error) {
 		if err != nil {
 			logging.Errorf("Planner::getIndexLayout: Error from initializing indexer node. Error = %v", err)
 			return nil, err
+		}
+
+		// If a host list is given, then only consider those hosts.  For planning, this is to
+		// ensure that planner only consider those nodes that have acquired locks.
+		if len(hosts) != 0 {
+			found := false
+			for _, host := range hosts {
+				if host == node.NodeId {
+					found = true
+				}
+			}
+
+			if !found {
+				logging.Infof("Planner:Skip node %v since it is not in the given host list %v", node.NodeId, hosts)
+				continue
+			}
 		}
 
 		// assign server group
@@ -153,6 +190,7 @@ func getIndexLayout(clusterUrl string) ([]*IndexerNode, error) {
 		node.NodeUUID = localMeta.NodeUUID
 		node.IndexerId = localMeta.IndexerId
 		node.StorageMode = localMeta.StorageMode
+		node.exclude = localMeta.LocalSettings["excludeNode"]
 
 		// convert from LocalIndexMetadata to IndexUsage
 		indexes, err := ConvertToIndexUsages(config, localMeta, node)
@@ -250,8 +288,8 @@ func ConvertToIndexUsage(config common.Config, defn *common.IndexDefn, localMeta
 
 				// update sizing
 				index.IsPrimary = defn.IsPrimary
-				index.IsMOI = (defn.Using == common.IndexType(common.MemoryOptimized) || defn.Using == common.IndexType(common.MemDB))
-				index.NoUsage = defn.Deferred && state == common.INDEX_STATE_READY
+				index.StorageMode = common.IndexTypeToStorageMode(defn.Using).String()
+				index.NoUsageInfo = defn.Deferred && (state == common.INDEX_STATE_READY || state == common.INDEX_STATE_CREATED)
 
 				// update partition
 				numVbuckets := config["indexer.numVbuckets"].Int()
@@ -259,7 +297,7 @@ func ConvertToIndexUsage(config common.Config, defn *common.IndexDefn, localMeta
 
 				// Is the index being deleted by user?   Thsi will read the delete token from metakv.  If untable read from metakv,
 				// pendingDelete is false (cannot assert index is to-be-delete).
-				pendingDelete, err := client.DeleteCommandTokenExist(defn.DefnId)
+				pendingDelete, err := mc.DeleteCommandTokenExist(defn.DefnId)
 				if err != nil {
 					return nil, err
 				}
@@ -284,7 +322,8 @@ func ConvertToIndexUsage(config common.Config, defn *common.IndexDefn, localMeta
 					Pc:        pc,
 				}
 
-				logging.Debugf("Create Index usage %v %v %v %v", index.Name, index.Bucket, index.Instance.InstId, index.Instance.ReplicaId)
+				logging.Debugf("Create Index usage %v %v %v %v %v",
+					index.Name, index.Bucket, index.Instance.InstId, index.PartnId, index.Instance.ReplicaId)
 
 				result = append(result, index)
 			}
@@ -308,6 +347,10 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 	// find all nodes that has a index http service
 	nids := cinfo.GetNodesByServiceType(common.INDEX_HTTP_SERVICE)
 
+	if len(nids) == 0 {
+		return errors.New("No indexing service available.")
+	}
+
 	for _, nid := range nids {
 
 		// Find the indexer host name
@@ -315,6 +358,13 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 		if err != nil {
 			logging.Errorf("Planner::getIndexStats: Error from initializing indexer node. Error = %v", err)
 			return err
+		}
+
+		// look up the corresponding indexer object based on the nodeId
+		indexer := findIndexerByNodeId(plan.Placement, nodeId)
+		if indexer == nil {
+			logging.Verbosef("Planner::getIndexStats: Skip indexer %v since it is not in the included list")
+			continue
 		}
 
 		// obtain the admin port for the indexer node
@@ -330,9 +380,6 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 			logging.Errorf("Planner::getIndexStats: Error from reading index stats for node %v. Error = %v", nodeId, err)
 			return err
 		}
-
-		// look up the corresponding indexer object based on the nodeId
-		indexer := findIndexerByNodeId(plan.Placement, nodeId)
 		statsMap := stats.ToMap()
 
 		/*
@@ -384,7 +431,7 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 			actualCpuUtil = cpuUtil.(float64) / 100
 		}
 
-		var totalDataSize uint64
+		var totalIndexMemUsed uint64
 		var totalMutation uint64
 		var totalScan uint64
 		for _, index := range indexer.Indexes {
@@ -395,6 +442,7 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 			*/
 
 			var key string
+			var key1 string
 
 			indexName := index.GetStatsName()
 			indexName1 := index.GetInstStatsName()
@@ -405,13 +453,27 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 				index.NumOfDocs = uint64(itemsCount.(float64))
 			}
 
+			// build completion
+			key = fmt.Sprintf("%v:%v:build_progress", index.Bucket, indexName1)
+			if buildProgress, ok := statsMap[key]; ok {
+				index.ActualBuildPercent = uint64(buildProgress.(float64))
+			}
+
+			// resident ratio
+			key = fmt.Sprintf("%v:%v:resident_percent", index.Bucket, indexName)
+			if residentPercent, ok := statsMap[key]; ok {
+				index.ActualResidentPercent = uint64(residentPercent.(float64))
+			}
+
 			// data_size is the total key size of index, excluding back index overhead.
 			// Therefore data_size is typically smaller than index sizing equation which
 			// includes overhead for back-index.
 			key = fmt.Sprintf("%v:%v:data_size", index.Bucket, indexName)
 			if dataSize, ok := statsMap[key]; ok {
-				index.ActualMemUsage = uint64(dataSize.(float64))
-				totalDataSize += index.ActualMemUsage
+				index.ActualDataSize = uint64(dataSize.(float64))
+				// calibrate memory usage based on resident percent
+				index.ActualMemUsage = index.ActualDataSize * index.ActualResidentPercent / 100
+				totalIndexMemUsed += index.ActualMemUsage
 			}
 
 			// avg_sec_key_size is currently unavailable in 4.5.   To estimate,
@@ -427,6 +489,12 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 				if index.NumOfDocs != 0 && index.ActualMemUsage != 0 {
 					index.ActualKeySize = index.ActualMemUsage / index.NumOfDocs
 				}
+				if index.Instance.Defn.SecKeySize != 0 {
+					index.AvgSecKeySize = index.Instance.Defn.SecKeySize
+				}
+				if index.Instance.Defn.DocKeySize != 0 {
+					index.AvgDocKeySize = index.Instance.Defn.DocKeySize
+				}
 			}
 
 			// These stats are currently unavailable in 4.5.
@@ -439,18 +507,29 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 				if index.NumOfDocs != 0 && index.ActualMemUsage != 0 {
 					index.ActualKeySize = index.ActualMemUsage / index.NumOfDocs
 				}
+				if index.Instance.Defn.DocKeySize != 0 {
+					index.AvgDocKeySize = index.Instance.Defn.DocKeySize
+				}
 			}
 
 			// These stats are currently unavailable in 4.5.
 			key = fmt.Sprintf("%v:%v:avg_arr_size", index.Bucket, indexName)
 			if avgArrSize, ok := statsMap[key]; ok {
 				index.AvgArrSize = uint64(avgArrSize.(float64))
+			} else if !index.IsPrimary {
+				if index.Instance.Defn.IsArrayIndex && index.Instance.Defn.ArrSize != 0 {
+					index.AvgArrSize = index.Instance.Defn.ArrSize
+				}
 			}
 
 			// These stats are currently unavailable in 4.5.
 			key = fmt.Sprintf("%v:%v:avg_arr_key_size", index.Bucket, indexName)
 			if avgArrKeySize, ok := statsMap[key]; ok {
 				index.AvgArrKeySize = uint64(avgArrKeySize.(float64))
+			} else if !index.IsPrimary {
+				if index.Instance.Defn.IsArrayIndex && index.Instance.Defn.SecKeySize != 0 {
+					index.AvgArrKeySize = index.Instance.Defn.SecKeySize
+				}
 			}
 
 			// These stats are currently unavailable in 4.5.
@@ -472,7 +551,7 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 
 			// These stats are currently unavailable in 4.5.
 			key = fmt.Sprintf("%v:%v:avg_scan_rate", index.Bucket, indexName)
-			key1 := fmt.Sprintf("%v:%v:avg_scan_rate", index.Bucket, indexName1)
+			key1 = fmt.Sprintf("%v:%v:avg_scan_rate", index.Bucket, indexName1)
 			if avgScanRate, ok := statsMap[key]; ok {
 				index.ScanRate = uint64(avgScanRate.(float64))
 				totalScan += index.ScanRate
@@ -490,16 +569,37 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 					}
 				}
 			}
+
+			// resident ratio
+			if index.Instance.Defn.ResidentRatio != 0 {
+				index.ResidentRatio = index.Instance.Defn.ResidentRatio
+			} else {
+				index.ResidentRatio = 100
+			}
 		}
 
-		// compute the estimated memory usage for each index.  This also computes
-		// the aggregated indexer mem usage.  Mem usage can be 0 if
+		// Compute the estimated memory usage for each index.  This also computes the aggregated indexer mem usage.
+		//
+		// The memory usage is computed as follows (per node):
+		// 1) Compute the memory resident data size for each index (based on data_size and resident_percent stats)
+		// 2) Compute the total memory resident data size for all indexes
+		// 3) Compute the utilization ratio of each index based on (resident data size / total resident data size)
+		// 4) Compute memory usage of each index based on indexer memory used (utilization ratio * memory_used_storage)
+		// 5) Compute memory overhead of each index based on indexer memory used (utilization ratio * (memory_used - memory_used_storage))
+		// 6) Calibrate index memory usage and overhead based on build percent
+		//
+		// Mem usage can be 0 if
 		// 1) there is no index stats
 		// 2) index has no data (datasize = 0) (e.g. deferred index)
+		//
+		// Note:
+		// 1) Resident data size is sensitive to scan and mutation traffic.   It is a reflection of the working set
+		//    of the index at the time when the planner is run.
+		//
 		for _, index := range indexer.Indexes {
 			ratio := float64(0)
-			if totalDataSize != 0 {
-				ratio = float64(index.ActualMemUsage) / float64(totalDataSize)
+			if totalIndexMemUsed != 0 {
+				ratio = float64(index.ActualMemUsage) / float64(totalIndexMemUsed)
 			}
 
 			index.ActualMemUsage = uint64(float64(actualStorageMem) * ratio)
@@ -510,18 +610,44 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 				index.ActualMemOverhead = 0
 			}
 
-			if index.ActualMemUsage != 0 {
-				index.NoUsage = false
+			// If index is not fully build, estimate memory consumption after it is fully build
+			// at the same resident ratio.
+			if index.ActualBuildPercent != 0 {
+				index.ActualMemUsage = index.ActualMemUsage * 100 / index.ActualBuildPercent
+				index.ActualMemOverhead = index.ActualMemOverhead * 100 / index.ActualBuildPercent
+				index.ActualDataSize = index.ActualDataSize * 100 / index.ActualBuildPercent
 			}
 
+			if index.ActualMemUsage != 0 {
+				index.NoUsageInfo = false
+			}
+
+			indexer.ActualDataSize += index.ActualDataSize
 			indexer.ActualMemUsage += index.ActualMemUsage
 			indexer.ActualMemOverhead += index.ActualMemOverhead
 		}
 
-		// compute the estimated cpu usage for each index.  This also computes the
-		// aggregated indexer cpu usage.  CPU usge can be 0 if
+		// Compute the estimated cpu usage for each index.  This also computes the aggregated indexer cpu usage.
+		//
+		// The cpu usage is computed as follows (per node):
+		// 1) Compute the mutation rate for each index (based on avg_mutation_rate stats)
+		// 2) Compute the scan rate for each index (based on avg_scan_rate stats)
+		// 3) Compute the total mutation rate for all indexes
+		// 4) Compute the total scan rate for all indexes
+		// 5) Compute the mutation ratio of each index based on (index mutation rate / total mutation rate)
+		// 6) Compute the scan ratio of each index based on (index scan rate / total scan rate)
+		// 7) Compute an aggregated ratio of each index (mutation rate / 5 + scan rate / 2)
+		// 8) Compute cpu utilization for each index (cpu utilization * aggregated ratio)
+		//
+		// CPU usge can be 0 if
 		// 1) there is no index stats
 		// 2) index has no scan or mutation (e.g. deferred index)
+		//
+		// Note:
+		// 1) Mutation rate and scan rate are computed using running average.   Even though it
+		//    is not based on instantaneous information, running average can quickly converge.
+		// 2) Mutation rate is index storage drain rate (numItemsFlushed).  It reflects num keys flushed in array index.
+		//
 		for _, index := range indexer.Indexes {
 
 			mutationRatio := float64(0)
@@ -537,7 +663,7 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 			ratio := mutationRatio
 			if scanRatio != 0 {
 				if mutationRatio != 0 {
-					// mutation uses 5 times less cpu than scan
+					// mutation uses 5 times less cpu than scan (using MOI equation)
 					ratio = ((mutationRatio / 5) + scanRatio) / 2
 				} else {
 					ratio = scanRatio
@@ -548,7 +674,7 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 
 			if usage > 0 {
 				index.ActualCpuUsage = usage
-				index.NoUsage = false
+				index.NoUsageInfo = false
 			}
 
 			indexer.ActualCpuUsage += index.ActualCpuUsage
@@ -573,37 +699,48 @@ func getIndexSettings(clusterUrl string, plan *Plan) error {
 	nids := cinfo.GetNodesByServiceType(common.INDEX_HTTP_SERVICE)
 
 	if len(nids) == 0 {
-		logging.Infof("Planner::getIndexSettings: No indexing service.")
+		return errors.New("No indexing service available.")
+	}
+
+	for _, nid := range nids {
+
+		// Find the indexer host name
+		nodeId, err := getIndexerHost(cinfo, nid)
+		if err != nil {
+			logging.Errorf("Planner::getIndexSettings: Error from initializing indexer node. Error = %v", err)
+			return err
+		}
+
+		// look up the corresponding indexer object based on the nodeId
+		indexer := findIndexerByNodeId(plan.Placement, nodeId)
+		if indexer == nil {
+			logging.Verbosef("Planner::getIndexSettings: Skip indexer %v since it is not in the included list")
+			continue
+		}
+
+		// obtain the admin port for the indexer node
+		addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE)
+		if err != nil {
+			logging.Errorf("Planner::getIndexSettings: Error from getting service address for node %v. Error = %v", nodeId, err)
+			return err
+		}
+
+		// Read the index settings from the indexer node.
+		settings, err := getLocalSettings(addr)
+		if err != nil {
+			logging.Errorf("Planner::getIndexSettings: Error from reading index settings for node %v. Error = %v", nodeId, err)
+			return err
+		}
+
+		// Find the cpu quota from setting.  If it is set to 0, then find out avail core on the node.
+		quota, ok := settings["indexer.settings.max_cpu_percent"]
+		if !ok || uint64(quota.(float64)) == 0 {
+			plan.CpuQuota = uint64(runtime.NumCPU())
+		} else {
+			plan.CpuQuota = uint64(quota.(float64) / 100)
+		}
+
 		return nil
-	}
-
-	// Find the indexer host name
-	nodeId, err := getIndexerHost(cinfo, nids[0])
-	if err != nil {
-		logging.Errorf("Planner::getIndexSettings: Error from initializing indexer node. Error = %v", err)
-		return err
-	}
-
-	// obtain the admin port for the indexer node
-	addr, err := cinfo.GetServiceAddress(nids[0], common.INDEX_HTTP_SERVICE)
-	if err != nil {
-		logging.Errorf("Planner::getIndexSettings: Error from getting service address for node %v. Error = %v", nodeId, err)
-		return err
-	}
-
-	// Read the index settings from the indexer node.
-	settings, err := getLocalSettings(addr)
-	if err != nil {
-		logging.Errorf("Planner::getIndexSettings: Error from reading index settings for node %v. Error = %v", nodeId, err)
-		return err
-	}
-
-	// Find the cpu quota from setting.  If it is set to 0, then find out avail core on the node.
-	quota, ok := settings["indexer.settings.max_cpu_percent"]
-	if !ok || uint64(quota.(float64)) == 0 {
-		plan.CpuQuota = uint64(runtime.NumCPU())
-	} else {
-		plan.CpuQuota = uint64(quota.(float64) / 100)
 	}
 
 	return nil
@@ -612,7 +749,7 @@ func getIndexSettings(clusterUrl string, plan *Plan) error {
 //
 // This function extract the topology metadata for a bucket.
 //
-func findTopologyByBucket(topologies []client.IndexTopology, bucket string) *client.IndexTopology {
+func findTopologyByBucket(topologies []mc.IndexTopology, bucket string) *mc.IndexTopology {
 
 	for _, topology := range topologies {
 		if topology.Bucket == bucket {
@@ -626,7 +763,7 @@ func findTopologyByBucket(topologies []client.IndexTopology, bucket string) *cli
 //
 // This function finds the index instance id from bucket topology.
 //
-func findIndexInstId(topology *client.IndexTopology, defnId common.IndexDefnId) (common.IndexInstId, error) {
+func findIndexInstId(topology *mc.IndexTopology, defnId common.IndexDefnId) (common.IndexInstId, error) {
 
 	for _, defnRef := range topology.Definitions {
 		if defnRef.DefnId == uint64(defnId) {
@@ -649,7 +786,7 @@ func createIndexerNode(cinfo *common.ClusterInfoCache, nid common.NodeId) (*Inde
 		return nil, err
 	}
 
-	sizing := newMOISizingMethod()
+	sizing := newGeneralSizingMethod()
 	return newIndexerNode(host, sizing), nil
 }
 
@@ -707,6 +844,24 @@ func getLocalStats(addr string) (*common.Statistics, error) {
 	}
 
 	return stats, nil
+}
+
+//
+// This function gets the indexer stats for a specific indexer host.
+//
+func getLocalCreateTokens(addr string) (*mc.CreateCommandTokenList, error) {
+
+	resp, err := getWithCbauth(addr + "/listCreateTokens")
+	if err != nil {
+		return nil, err
+	}
+
+	tokens := new(mc.CreateCommandTokenList)
+	if err := convertResponse(resp, tokens); err != nil {
+		return nil, err
+	}
+
+	return tokens, nil
 }
 
 //
@@ -798,7 +953,7 @@ func findIndexerByNodeId(indexers []*IndexerNode, nodeId string) *IndexerNode {
 }
 
 //
-// The planner is called every rebalance, but it is guaranteed that rebalance cleanup is completed before another
+// The planner is called every rebalance, but it is not guaranteed that rebalance cleanup is completed before another
 // rebalance start.  Therefore, planner needs to clean up the index based on rebalancer clean up logic.
 // 1) REBAL_PENDING index will not become ACTIVE during clean up.
 // 2) REBAL_MERGED index can be ignored (it can be replaced with another REBAL_ACTIVE partition).
@@ -818,8 +973,8 @@ func cleanseIndexLayout(indexers []*IndexerNode) {
 			// ignore any index with RState being pending.
 			// **For pre-spock backup, RState of an instance is ACTIVE (0).
 			if index.Instance.RState != common.REBAL_ACTIVE {
-				logging.Debugf("Planner: Skip index (%v, %v, %v, %v) that is not RState ACTIVE",
-					index.Bucket, index.Name, index.InstId, index.PartnId)
+				logging.Infof("Planner: Skip index (%v, %v, %v, %v) that is not RState ACTIVE (%v)",
+					index.Bucket, index.Name, index.InstId, index.PartnId, index.Instance.RState)
 				continue
 			}
 
@@ -827,7 +982,7 @@ func cleanseIndexLayout(indexers []*IndexerNode) {
 			// **For pre-spock backup, inst version is always 0. In fact, there should not be another instance (max == inst).
 			max := findMaxVersionInst(indexers, index.DefnId, index.PartnId, index.InstId)
 			if max != index {
-				logging.Verbosef("Planner:  Skip index (%v, %v, %v, %v) with lower version number %v.",
+				logging.Infof("Planner:  Skip index (%v, %v, %v, %v) with lower version number %v.",
 					index.Bucket, index.Name, index.InstId, index.PartnId, index.Instance.Version)
 				continue
 			}
@@ -864,4 +1019,142 @@ func findMaxVersionInst(indexers []*IndexerNode, defnId common.IndexDefnId, part
 	}
 
 	return max
+}
+
+//
+// There may be create token that has yet to process.  Update the indexer layout based on token information.
+//
+func processCreateToken(clusterUrl string, indexers []*IndexerNode, config common.Config) error {
+
+	cinfo, err := clusterInfoCache(clusterUrl)
+	if err != nil {
+		logging.Errorf("Planner::processCreateToken: Error from connecting to cluster at %v. Error = %v", clusterUrl, err)
+		return err
+	}
+
+	// find all nodes that has a index http service
+	nids := cinfo.GetNodesByServiceType(common.INDEX_HTTP_SERVICE)
+
+	for _, nid := range nids {
+
+		// Find the indexer host name
+		nodeId, err := getIndexerHost(cinfo, nid)
+		if err != nil {
+			logging.Errorf("Planner::processCreateToken: Error from initializing indexer node. Error = %v", err)
+			return err
+		}
+
+		// look up the corresponding indexer object based on the nodeId
+		indexer := findIndexerByNodeId(indexers, nodeId)
+		if indexer == nil {
+			logging.Verbosef("Planner::processCreateToken: Skip indexer %v since it is not in the included list")
+			continue
+		}
+
+		// obtain the admin port for the indexer node
+		addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE)
+		if err != nil {
+			logging.Errorf("Planner::processCreateToken: Error from getting service address for node %v. Error = %v", nodeId, err)
+			return err
+		}
+
+		// Read the create token from the indexer node using REST.  This is to ensure that it can read the token from the node
+		// that place the token.   If that node is partitioned away, then it will rely on other nodes that have got the token.
+		// If there is no node that can provide the token,
+		// 1) the planner will not consider those pending-create index for planning
+		// 2) the planner will not move those pending-create index from the out-node.
+		tokens, err := getLocalCreateTokens(addr)
+		if err != nil {
+			logging.Errorf("Planner::processCreateToken: Error from reading create tokens for node %v. Error = %v", nodeId, err)
+			return err
+		}
+
+		// nothing to do
+		if len(tokens.Tokens) == 0 {
+			logging.Infof("Planner::processCreateToken: There is no create token to process for node %v", nodeId)
+			continue
+		}
+
+		findPartition := func(instId common.IndexInstId, partitionId common.PartitionId) bool {
+			for _, indexer := range indexers {
+				for _, index := range indexer.Indexes {
+					if index.InstId == instId && index.PartnId == partitionId {
+						return true
+					}
+				}
+			}
+			return false
+		}
+
+		makeIndexUsage := func(defn *common.IndexDefn, partition common.PartitionId) *IndexUsage {
+			index := &IndexUsage{
+				DefnId:        defn.DefnId,
+				InstId:        defn.InstId,
+				PartnId:       partition,
+				Name:          defn.Name,
+				Bucket:        defn.Bucket,
+				IsPrimary:     defn.IsPrimary,
+				StorageMode:   common.IndexTypeToStorageMode(defn.Using).String(),
+				NumOfDocs:     defn.NumDoc,
+				AvgSecKeySize: defn.SecKeySize,
+				AvgDocKeySize: defn.DocKeySize,
+				AvgArrSize:    defn.ArrSize,
+				AvgArrKeySize: defn.SecKeySize,
+				ResidentRatio: defn.ResidentRatio,
+				NoUsageInfo:   defn.SecKeySize == 0 && defn.DocKeySize == 0,
+			}
+
+			numVbuckets := config["indexer.numVbuckets"].Int()
+			pc := common.NewKeyPartitionContainer(numVbuckets, int(defn.NumPartitions), defn.PartitionScheme)
+
+			index.Instance = &common.IndexInst{
+				InstId:    defn.InstId,
+				Defn:      *defn,
+				State:     common.INDEX_STATE_READY,
+				Stream:    common.NIL_STREAM,
+				Error:     "",
+				ReplicaId: defn.ReplicaId,
+				Version:   0,
+				RState:    common.REBAL_ACTIVE,
+				Pc:        pc,
+			}
+
+			return index
+		}
+
+		// For planning, caller can specify a node list.  This will only add the pending-create index
+		// if it is in the node list.  Indexers outside of node list will not be considered for planning purpose.
+		// For rebalancing, it will not repair pending-create index on a failed node.  But it will move pending-create
+		// index for out-nodes.
+		addIndex := func(indexerId common.IndexerId, index *IndexUsage) bool {
+			for _, indexer := range indexers {
+				if common.IndexerId(indexer.IndexerId) == indexerId {
+					indexer.Indexes = append(indexer.Indexes, index)
+					index.initialNode = indexer
+					index.pendingCreate = true
+					return true
+				}
+			}
+			return false
+		}
+
+		for _, token := range tokens.Tokens {
+
+			logging.Infof("Planner: Processing create token for index %v from node %v", token.DefnId, nodeId)
+
+			for indexerId, definitions := range token.Definitions {
+				for _, defn := range definitions {
+					for _, partition := range defn.Partitions {
+						if !findPartition(defn.InstId, partition) {
+							if addIndex(indexerId, makeIndexUsage(&defn, partition)) {
+								logging.Infof("Planner: Add index (%v, %v, %v) from create token.", defn.DefnId, defn.InstId, partition)
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return nil
 }
