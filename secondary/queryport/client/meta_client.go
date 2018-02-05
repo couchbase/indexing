@@ -116,7 +116,7 @@ func (b *metadataClient) Refresh() ([]*mclient.IndexMetadata, uint64, uint64, er
 		currmeta = (*indexTopology)(atomic.LoadPointer(&b.indexers))
 	}
 
-	return currmeta.allIndexes, currmeta.version, b.mdClient.GetIndexerVersion(), nil
+	return currmeta.allIndexes, currmeta.version, b.mdClient.GetClusterVersion(), nil
 }
 
 // Nodes implement BridgeAccessor{} interface.

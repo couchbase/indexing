@@ -94,7 +94,7 @@ type gsiKeyspace struct {
 	primaryIndexes map[uint64]datastore.PrimaryIndex
 	logPrefix      string
 	version        uint64
-	indexerVersion uint64
+	clusterVersion uint64
 }
 
 // NewGSIIndexer manage new set of indexes under namespace->keyspace,
@@ -481,29 +481,29 @@ func (gsi *gsiKeyspace) BuildIndexes(requestId string, names ...string) errors.E
 // Refresh list of indexes and scanner clients.
 func (gsi *gsiKeyspace) Refresh() errors.Error {
 	l.Tracef("%v gsiKeyspace.Refresh()", gsi.logPrefix)
-	indexes, version, indexerVersion, err := gsi.gsiClient.Refresh()
+	indexes, version, clusterVersion, err := gsi.gsiClient.Refresh()
 	if err != nil {
 		return errors.NewError(err, "GSI Refresh()")
 	}
 
 	cachedVersion := atomic.LoadUint64(&gsi.version)
-	cachedIndexerVersion := atomic.LoadUint64(&gsi.indexerVersion)
+	cachedClusterVersion := atomic.LoadUint64(&gsi.clusterVersion)
 
 	// has metadata version changed?
-	if cachedVersion < version || cachedIndexerVersion < indexerVersion {
+	if cachedVersion < version || cachedClusterVersion < clusterVersion {
 
 		si_s := make([]*secondaryIndex, 0, len(indexes))
 		for _, index := range indexes {
 			if index.Definition.Bucket != gsi.keyspace {
 				continue
 			}
-			si, err := newSecondaryIndexFromMetaData(gsi, indexerVersion, index)
+			si, err := newSecondaryIndexFromMetaData(gsi, clusterVersion, index)
 			if err != nil {
 				return err
 			}
 			si_s = append(si_s, si)
 		}
-		if err := gsi.setIndexes(si_s, version, indexerVersion); err != nil {
+		if err := gsi.setIndexes(si_s, version, clusterVersion); err != nil {
 			return err
 		}
 	}
@@ -553,19 +553,19 @@ func (gsi *gsiKeyspace) SyncRefresh() errors.Error {
 //------------------------------------------
 
 func (gsi *gsiKeyspace) setIndexes(si []*secondaryIndex,
-	version, indexerVersion uint64) errors.Error {
+	version, clusterVersion uint64) errors.Error {
 
 	gsi.rw.Lock()
 	defer gsi.rw.Unlock()
 	atomic.StoreUint64(&gsi.version, version)
-	atomic.StoreUint64(&gsi.indexerVersion, indexerVersion)
+	atomic.StoreUint64(&gsi.clusterVersion, clusterVersion)
 	gsi.indexes = make(map[uint64]datastore.Index)               // defnID -> index
 	gsi.primaryIndexes = make(map[uint64]datastore.PrimaryIndex) // defnID -> index
 	for _, si := range si {
 		if si.isPrimary {
-			gsi.primaryIndexes[si.defnID] = gsi.getPrimaryIndexFromVersion(si, indexerVersion)
+			gsi.primaryIndexes[si.defnID] = gsi.getPrimaryIndexFromVersion(si, clusterVersion)
 		} else {
-			gsi.indexes[si.defnID] = gsi.getIndexFromVersion(si, indexerVersion)
+			gsi.indexes[si.defnID] = gsi.getIndexFromVersion(si, clusterVersion)
 		}
 	}
 	return nil
@@ -582,9 +582,9 @@ func (gsi *gsiKeyspace) delIndex(id string) {
 }
 
 func (gsi *gsiKeyspace) getIndexFromVersion(index *secondaryIndex,
-	indexerVersion uint64) datastore.Index {
+	clusterVersion uint64) datastore.Index {
 
-	switch indexerVersion {
+	switch clusterVersion {
 	case c.INDEXER_55_VERSION:
 		si2 := &secondaryIndex2{secondaryIndex: *index}
 		si3 := datastore.Index(&secondaryIndex3{secondaryIndex2: *si2})
@@ -598,9 +598,9 @@ func (gsi *gsiKeyspace) getIndexFromVersion(index *secondaryIndex,
 }
 
 func (gsi *gsiKeyspace) getPrimaryIndexFromVersion(index *secondaryIndex,
-	indexerVersion uint64) datastore.PrimaryIndex {
+	clusterVersion uint64) datastore.PrimaryIndex {
 
-	switch indexerVersion {
+	switch clusterVersion {
 	case c.INDEXER_55_VERSION:
 		si2 := &secondaryIndex2{secondaryIndex: *index}
 		si3 := datastore.PrimaryIndex(&secondaryIndex3{secondaryIndex2: *si2})
