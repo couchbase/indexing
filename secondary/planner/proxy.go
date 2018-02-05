@@ -344,6 +344,8 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 		return err
 	}
 
+	clusterVersion := cinfo.GetClusterVersion()
+
 	// find all nodes that has a index http service
 	nids := cinfo.GetNodesByServiceType(common.INDEX_HTTP_SERVICE)
 
@@ -444,8 +446,16 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 			var key string
 			var key1 string
 
-			indexName := index.GetStatsName()
-			indexName1 := index.GetInstStatsName()
+			var indexName string
+			var indexName1 string
+
+			if clusterVersion >= common.INDEXER_55_VERSION {
+				indexName = index.GetStatsName()
+				indexName1 = index.GetInstStatsName()
+			} else {
+				indexName = index.GetInstStatsName()
+				indexName1 = index.GetInstStatsName()
+			}
 
 			// items_count captures number of key per index
 			key = fmt.Sprintf("%v:%v:items_count", index.Bucket, indexName)
@@ -1030,6 +1040,12 @@ func processCreateToken(clusterUrl string, indexers []*IndexerNode, config commo
 	if err != nil {
 		logging.Errorf("Planner::processCreateToken: Error from connecting to cluster at %v. Error = %v", clusterUrl, err)
 		return err
+	}
+
+	clusterVersion := cinfo.GetClusterVersion()
+	if clusterVersion < common.INDEXER_55_VERSION {
+		logging.Infof("Planner::Cluster in upgrade.  Skip fetching create token.")
+		return nil
 	}
 
 	// find all nodes that has a index http service
