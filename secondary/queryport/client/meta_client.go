@@ -44,14 +44,15 @@ type metadataClient struct {
 
 // sherlock topology management, multi-node & single-partition.
 type indexTopology struct {
-	version    uint64
-	adminports map[string]common.IndexerId // book-keeping for cluster changes
-	topology   map[common.IndexerId][]*mclient.IndexMetadata
-	queryports map[common.IndexerId]string
-	replicas   map[common.IndexDefnId][]common.IndexInstId
-	partitions map[common.IndexDefnId]map[common.PartitionId][]common.IndexInstId
-	rw         sync.RWMutex
-	loads      map[common.IndexInstId]*loadHeuristics
+	version     uint64
+	adminports  map[string]common.IndexerId // book-keeping for cluster changes
+	topology    map[common.IndexerId][]*mclient.IndexMetadata
+	queryports  map[common.IndexerId]string
+	replicas    map[common.IndexDefnId][]common.IndexInstId
+	equivalents map[common.IndexDefnId][]common.IndexDefnId
+	partitions  map[common.IndexDefnId]map[common.PartitionId][]common.IndexInstId
+	rw          sync.RWMutex
+	loads       map[common.IndexInstId]*loadHeuristics
 	// insts could include pending RState inst if there is no corresponding active instance
 	insts      map[common.IndexInstId]*mclient.InstanceDefn
 	rebalInsts map[common.IndexInstId]*mclient.InstanceDefn
@@ -310,6 +311,9 @@ func (b *metadataClient) GetScanport(defnID uint64, excludes map[common.Partitio
 	var rollbackTimes map[common.PartitionId]int64
 
 	currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
+
+	defnID = b.pickEquivalent(defnID)
+
 	var replicas [128]uint64
 	n := 0
 	for _, replicaID := range currmeta.replicas[common.IndexDefnId(defnID)] {
@@ -431,69 +435,66 @@ func (b *metadataClient) computeReplicas(topo map[common.IndexerId][]*mclient.In
 	replicaMap := make(map[common.IndexDefnId][]common.IndexInstId)
 	partitionMap := make(map[common.IndexDefnId]map[common.PartitionId][]common.IndexInstId)
 
-	for _, indexes1 := range topo { // go through the indexes for each indexer
-		for _, index1 := range indexes1 {
+	for _, indexes := range topo { // go through the indexes for each indexer
+		for _, index := range indexes {
 
-			if _, ok := replicaMap[index1.Definition.DefnId]; ok {
+			if _, ok := replicaMap[index.Definition.DefnId]; ok {
 				continue
 			}
 
-			replicas := make(map[common.IndexInstId]bool)
-			partitions := make(map[common.PartitionId]map[common.IndexInstId]bool)
-
-			// Instance can be of any of valid instance state (READY, INITIAL, CATCHUP, ACTIVE),
-			// but RState is always ACTIVE. Add all of them to replica list regardless of the instance
-			// state. When picking instance for scanning, only ACTIVE will use picked.
-			for _, inst1 := range index1.Instances {
-				replicas[inst1.InstId] = true // add itself
-
-				for partnId, _ := range inst1.IndexerId {
-					if _, ok := partitions[partnId]; !ok {
-						partitions[partnId] = make(map[common.IndexInstId]bool)
-					}
-					partitions[partnId][inst1.InstId] = true // add itself
-				}
+			replicaMap[index.Definition.DefnId] = make([]common.IndexInstId, 0, len(index.Instances))
+			for _, inst := range index.Instances {
+				replicaMap[index.Definition.DefnId] = append(replicaMap[index.Definition.DefnId], inst.InstId)
 			}
 
-			for _, indexes2 := range topo { // go through the indexes for each indexer
-
-				for _, index2 := range indexes2 {
-					if index1.Definition.DefnId == index2.Definition.DefnId { // skip replica
-						continue
+			partitionMap[index.Definition.DefnId] = make(map[common.PartitionId][]common.IndexInstId)
+			for _, inst := range index.Instances {
+				for partnId, _ := range inst.IndexerId {
+					if _, ok := partitionMap[index.Definition.DefnId][partnId]; !ok {
+						partitionMap[index.Definition.DefnId][partnId] = make([]common.IndexInstId, 0, len(index.Instances))
 					}
-
-					if b.equivalentIndex(index1, index2) { // pick equivalents
-						for _, inst2 := range index2.Instances {
-							replicas[inst2.InstId] = true // add equiv index
-
-							for partnId, _ := range inst2.IndexerId {
-								if _, ok := partitions[partnId]; !ok {
-									partitions[partnId] = make(map[common.IndexInstId]bool)
-								}
-								partitions[partnId][inst2.InstId] = true // add equiv index
-							}
-						}
-					}
-				}
-			}
-
-			replicaMap[index1.Definition.DefnId] = make([]common.IndexInstId, 0, len(replicas))
-			for instId, _ := range replicas {
-				replicaMap[index1.Definition.DefnId] = append(replicaMap[index1.Definition.DefnId], instId)
-			}
-
-			partitionMap[index1.Definition.DefnId] = make(map[common.PartitionId][]common.IndexInstId)
-			for partnId, insts := range partitions {
-				if _, ok := partitionMap[index1.Definition.DefnId][partnId]; !ok {
-					partitionMap[index1.Definition.DefnId][partnId] = make([]common.IndexInstId, 0, len(partitions[partnId]))
-				}
-				for instId, _ := range insts {
-					partitionMap[index1.Definition.DefnId][partnId] = append(partitionMap[index1.Definition.DefnId][partnId], instId)
+					partitionMap[index.Definition.DefnId][partnId] = append(partitionMap[index.Definition.DefnId][partnId], inst.InstId)
 				}
 			}
 		}
 	}
 	return replicaMap, partitionMap
+}
+
+// compute a map of eqivalent indexes for each index in 2i.
+func (b *metadataClient) computeEquivalents(topo map[common.IndexerId][]*mclient.IndexMetadata) map[common.IndexDefnId][]common.IndexDefnId {
+
+	equivalentMap := make(map[common.IndexDefnId][]common.IndexDefnId)
+
+	for _, indexes1 := range topo { // go through the indexes for each indexer
+		for _, index1 := range indexes1 {
+
+			if _, ok := equivalentMap[index1.Definition.DefnId]; ok { // skip replica
+				continue
+			}
+
+			// add myself
+			seen := make(map[common.IndexDefnId]bool)
+			seen[index1.Definition.DefnId] = true
+			equivalentMap[index1.Definition.DefnId] = []common.IndexDefnId{index1.Definition.DefnId}
+
+			for _, indexes2 := range topo { // go through the indexes for each indexer
+
+				for _, index2 := range indexes2 {
+					if seen[index2.Definition.DefnId] {
+						continue
+					}
+					seen[index2.Definition.DefnId] = true
+
+					if b.equivalentIndex(index1, index2) { // pick equivalents
+						equivalentMap[index1.Definition.DefnId] = append(equivalentMap[index1.Definition.DefnId], index2.Definition.DefnId)
+					}
+				}
+			}
+		}
+	}
+
+	return equivalentMap
 }
 
 // compare whether two index are equivalent.
@@ -505,7 +506,7 @@ func (b *metadataClient) equivalentIndex(
 		d1.ExprType != d2.ExprType ||
 		d1.PartitionScheme != d2.PartitionScheme ||
 		d1.WhereExpr != d2.WhereExpr ||
-		d1.RetainDeletedXATTR != d2.RetainDeletedXATTR	{
+		d1.RetainDeletedXATTR != d2.RetainDeletedXATTR {
 
 		return false
 	}
@@ -782,6 +783,13 @@ func (b *loadStats) isStatsCurrent(partitionId common.PartitionId) bool {
 // local functions to pick index for scanning
 //-----------------------------------------------
 
+func (b *metadataClient) pickEquivalent(defnID uint64) uint64 {
+
+	currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
+	n := rand.Intn(len(currmeta.equivalents[common.IndexDefnId(defnID)]))
+	return uint64(currmeta.equivalents[common.IndexDefnId(defnID)][n])
+}
+
 // Given the list of replicas for a given index definition, this function randomly picks the partitons from the available replicas
 // for scanning.   This function will filter out any replica partition falls behind from other replicas.  It returns:
 // 1) a map of partition Id and index instance
@@ -893,7 +901,8 @@ func (b *metadataClient) pickRandom(replicas []uint64, defnID uint64,
 	}
 
 	if len(chosenInst) != int(numPartn) {
-		logging.Errorf("PickRandom: Fail to find indexer for all index partitions")
+		logging.Errorf("PickRandom: Fail to find indexer for all index partitions. Num partition %v.  Partition with instances %v ",
+			numPartn, len(chosenInst))
 		for n, instId := range replicas {
 			for partnId := startPartnId; partnId < endPartnId; partnId++ {
 				ts, ok := rollbackTimesList[n][common.PartitionId(partnId)]
@@ -1020,6 +1029,8 @@ func (b *metadataClient) pruneStaleReplica(replicas []uint64, excludes map[commo
 		}
 
 		// prune partition that exceed quota
+		// If the instance's partition is excluded, then it will be be in the pendings map.  So it will be skipped, and
+		// this method will not return a rollbackTime for this instance partition
 		for partnId, pending := range pendings[i] {
 
 			// If there is no progress stats available for any replica/partition, then do not filter.
@@ -1062,6 +1073,7 @@ func (b *metadataClient) pruneStaleReplica(replicas []uint64, excludes map[commo
 //
 // This method also return the minPending for each partition across all replicas.
 // If no replica has valid stat for that partition, minPending is MaxInt64.
+// If all replica are excluded for that partition, minPending is also MaxInt64.
 //
 func (b *metadataClient) getPendingStats(replicas []uint64, currmeta *indexTopology, excludes map[common.PartitionId]map[uint64]bool,
 	useCurrent bool) ([]map[common.PartitionId]int64, []map[common.PartitionId]int64,
@@ -1090,6 +1102,10 @@ func (b *metadataClient) getPendingStats(replicas []uint64, currmeta *indexTopol
 		for partnId, _ := range inst.IndexerId {
 
 			if !init[partnId] {
+				// minPending can be MaxInt64 if
+				// 1) instance partition is exlcuded
+				// 2) there is no stats for the instance partition
+				// 3) there is no current stats for the instance partition
 				minPending[partnId] = math.MaxInt64
 				init[partnId] = true
 			}
@@ -1150,6 +1166,9 @@ func (b *metadataClient) printstats() {
 	logging.Infof("connected with %v indexers\n", len(currmeta.topology))
 	for id, replicas := range currmeta.replicas {
 		logging.Infof("index %v has replicas %v: \n", id, replicas)
+	}
+	for id, equivalents := range currmeta.equivalents {
+		logging.Infof("index %v has equivalents %v: \n", id, equivalents)
 	}
 	// currmeta.loads is immutable
 	for id, _ := range currmeta.insts {
@@ -1397,15 +1416,16 @@ func (b *metadataClient) updateTopology(
 
 	// create a new topology.
 	newmeta := &indexTopology{
-		version:    version,
-		allIndexes: mindexes,
-		adminports: make(map[string]common.IndexerId),
-		topology:   make(map[common.IndexerId][]*mclient.IndexMetadata),
-		replicas:   make(map[common.IndexDefnId][]common.IndexInstId),
-		queryports: make(map[common.IndexerId]string),
-		insts:      make(map[common.IndexInstId]*mclient.InstanceDefn),
-		rebalInsts: make(map[common.IndexInstId]*mclient.InstanceDefn),
-		defns:      make(map[common.IndexDefnId]*mclient.IndexMetadata),
+		version:     version,
+		allIndexes:  mindexes,
+		adminports:  make(map[string]common.IndexerId),
+		topology:    make(map[common.IndexerId][]*mclient.IndexMetadata),
+		replicas:    make(map[common.IndexDefnId][]common.IndexInstId),
+		equivalents: make(map[common.IndexDefnId][]common.IndexDefnId),
+		queryports:  make(map[common.IndexerId]string),
+		insts:       make(map[common.IndexInstId]*mclient.InstanceDefn),
+		rebalInsts:  make(map[common.IndexInstId]*mclient.InstanceDefn),
+		defns:       make(map[common.IndexDefnId]*mclient.IndexMetadata),
 	}
 
 	// adminport/queryport
@@ -1465,6 +1485,9 @@ func (b *metadataClient) updateTopology(
 
 	// replicas/replicaInRebal
 	newmeta.replicas, newmeta.partitions = b.computeReplicas(newmeta.topology)
+
+	// equivalent index
+	newmeta.equivalents = b.computeEquivalents(newmeta.topology)
 
 	// loads - after creation, newmeta.loads is immutable, even though the
 	// content (loadHeuristics) is mutable
