@@ -401,7 +401,7 @@ func (b *RequestBroker) reset() {
 	b.queues = nil
 	b.notifych = nil
 	b.closed = 0
-	b.killch = nil
+	b.killch = make(chan bool, 1)
 	b.bGather = false
 	b.errMap = make(map[common.PartitionId]map[uint64]error)
 	b.partial = 0 // false
@@ -492,7 +492,6 @@ func (c *RequestBroker) scatterScan(client []*GsiScanClient, index *common.Index
 	numPartition uint32, settings *ClientSettings) (err error, partial bool) {
 
 	c.notifych = make(chan bool, 1)
-	c.killch = make(chan bool, 1)
 	donech_gather := make(chan bool, 1)
 
 	if len(partition) > 1 {
@@ -538,7 +537,6 @@ func (c *RequestBroker) scatterScan2(client []*GsiScanClient, index *common.Inde
 	partition [][]common.PartitionId, numPartition uint32, settings *ClientSettings) (errMap map[common.PartitionId]map[uint64]error, partial bool) {
 
 	c.notifych = make(chan bool, 1)
-	c.killch = make(chan bool, 1)
 	donech_gather := make(chan bool, 1)
 
 	if len(partition) > 1 {

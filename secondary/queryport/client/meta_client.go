@@ -906,7 +906,7 @@ func (b *metadataClient) pickRandom(replicas []uint64, defnID uint64,
 		for n, instId := range replicas {
 			for partnId := startPartnId; partnId < endPartnId; partnId++ {
 				ts, ok := rollbackTimesList[n][common.PartitionId(partnId)]
-				logging.Errorf("PickRandom: inst %v partition %v timestamp %v ok %v",
+				logging.Debugf("PickRandom: inst %v partition %v timestamp %v ok %v",
 					instId, partnId, ts, ok)
 			}
 		}
