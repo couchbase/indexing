@@ -110,7 +110,6 @@ func (p *Projector) GetConfig() c.Config {
 func (p *Projector) ResetConfig(config c.Config) {
 	p.rw.Lock()
 	defer p.rw.Unlock()
-	defer logging.Infof("%v\n", c.LogRuntime())
 
 	// reset configuration.
 	if cv, ok := config["projector.settings.log_level"]; ok {
@@ -167,6 +166,8 @@ func (p *Projector) ResetConfig(config c.Config) {
 			logging.Errorf("Missing mem-profile o/p filename\n")
 		}
 	}
+
+	logging.Infof("%v\n", c.LogRuntime())
 }
 
 // GetFeedConfig from current configuration settings.
