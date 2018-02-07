@@ -24,6 +24,7 @@ import (
 	"github.com/couchbase/query/expression"
 	"github.com/couchbase/query/expression/parser"
 	qvalue "github.com/couchbase/query/value"
+	"os"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -63,6 +64,9 @@ type RequestBroker struct {
 	errMap   map[common.PartitionId]map[uint64]error
 	partial  int32
 	mutex    sync.Mutex
+
+	//backfill
+	backfills []*os.File
 
 	// scan
 	defn           *common.IndexDefn
@@ -395,6 +399,22 @@ func (c *RequestBroker) useGather() bool {
 	return c.bGather
 }
 
+func (c *RequestBroker) AddBackfill(backfill *os.File) {
+
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	c.backfills = append(c.backfills, backfill)
+}
+
+func (c *RequestBroker) GetBackfills() []*os.File {
+
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	return c.backfills
+}
+
 func (b *RequestBroker) reset() {
 
 	// scatter/gather
@@ -405,6 +425,9 @@ func (b *RequestBroker) reset() {
 	b.bGather = false
 	b.errMap = make(map[common.PartitionId]map[uint64]error)
 	b.partial = 0 // false
+
+	// backfill
+	b.backfills = nil
 
 	// stats
 	b.sendCount = 0

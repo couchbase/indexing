@@ -820,6 +820,22 @@ func (si *secondaryIndex) Drop(requestId string) errors.Error {
 	return nil
 }
 
+func (si *secondaryIndex) cleanupBackfillFile(requestId string, broker *qclient.RequestBroker) {
+	if broker != nil {
+		for _, tmpfile := range broker.GetBackfills() {
+			tmpfile.Close()
+			name := tmpfile.Name()
+			fmsg := "%v request(%v) removing backfill file %v ...\n"
+			l.Infof(fmsg, si.gsi.logPrefix, requestId, name)
+			if err := os.Remove(name); err != nil {
+				fmsg := "%v remove backfill file %v unexpected failure: %v\n"
+				l.Errorf(fmsg, si.gsi.logPrefix, name, err)
+			}
+			atomic.AddInt64(&si.gsi.totalbackfills, 1)
+		}
+	}
+}
+
 // Scan implement Index{} interface.
 func (si *secondaryIndex) Scan(
 	requestId string, span *datastore.Span, distinct bool, limit int64,
@@ -830,10 +846,12 @@ func (si *secondaryIndex) Scan(
 	var backfillSync int64
 
 	var waitGroup sync.WaitGroup
+	var broker *qclient.RequestBroker
 
 	defer close(entryChannel)
 	defer func() { // cleanup tmpfile
 		waitGroup.Wait()
+		si.cleanupBackfillFile(requestId, broker)
 	}()
 	defer func() {
 		atomic.StoreInt64(&backfillSync, DONEREQUEST)
@@ -844,20 +862,20 @@ func (si *secondaryIndex) Scan(
 	client, cnf := si.gsi.gsiClient, si.gsi.config
 	if span.Seek != nil {
 		seek := values2SKey(span.Seek)
+		broker = makeRequestBroker(requestId, si, client, conn, cnf, &waitGroup, &backfillSync, cap(entryChannel))
 		err := client.LookupInternal(
 			si.defnID, requestId, []c.SecondaryKey{seek}, distinct, limit,
-			n1ql2GsiConsistency[cons], vector2ts(vector),
-			makeRequestBroker(requestId, si, client, conn, cnf, &waitGroup, &backfillSync, cap(entryChannel)))
+			n1ql2GsiConsistency[cons], vector2ts(vector), broker)
 		if err != nil {
 			conn.Error(n1qlError(client, err))
 		}
 	} else {
 		low, high := values2SKey(span.Range.Low), values2SKey(span.Range.High)
 		incl := n1ql2GsiInclusion[span.Range.Inclusion]
+		broker = makeRequestBroker(requestId, si, client, conn, cnf, &waitGroup, &backfillSync, cap(entryChannel))
 		err := client.RangeInternal(
 			si.defnID, requestId, low, high, incl, distinct, limit,
-			n1ql2GsiConsistency[cons], vector2ts(vector),
-			makeRequestBroker(requestId, si, client, conn, cnf, &waitGroup, &backfillSync, cap(entryChannel)))
+			n1ql2GsiConsistency[cons], vector2ts(vector), broker)
 		if err != nil {
 			conn.Error(n1qlError(client, err))
 		}
@@ -875,10 +893,12 @@ func (si *secondaryIndex) ScanEntries(
 	var backfillSync int64
 
 	var waitGroup sync.WaitGroup
+	var broker *qclient.RequestBroker
 
 	defer close(entryChannel)
 	defer func() {
 		waitGroup.Wait()
+		si.cleanupBackfillFile(requestId, broker)
 	}()
 	defer func() {
 		atomic.StoreInt64(&backfillSync, DONEREQUEST)
@@ -887,10 +907,10 @@ func (si *secondaryIndex) ScanEntries(
 	starttm := time.Now()
 
 	client, cnf := si.gsi.gsiClient, si.gsi.config
+	broker = makeRequestBroker(requestId, si, client, conn, cnf, &waitGroup, &backfillSync, cap(entryChannel))
 	err := client.ScanAllInternal(
 		si.defnID, requestId, limit,
-		n1ql2GsiConsistency[cons], vector2ts(vector),
-		makeRequestBroker(requestId, si, client, conn, cnf, &waitGroup, &backfillSync, cap(entryChannel)))
+		n1ql2GsiConsistency[cons], vector2ts(vector), broker)
 	if err != nil {
 		conn.Error(n1qlError(client, err))
 	}
@@ -928,6 +948,7 @@ func (si *secondaryIndex2) Scan2(
 	}()
 	defer func() { // cleanup tmpfile
 		waitGroup.Wait()
+		si.cleanupBackfillFile(requestId, broker)
 	}()
 	defer func() {
 		atomic.StoreInt64(&backfillSync, DONEREQUEST)
@@ -1082,6 +1103,7 @@ func (si *secondaryIndex3) Scan3(
 	}()
 	defer func() { // cleanup tmpfile
 		waitGroup.Wait()
+		si.cleanupBackfillFile(requestId, broker)
 	}()
 	defer func() {
 		atomic.StoreInt64(&backfillSync, DONEREQUEST)
@@ -1266,18 +1288,6 @@ func makeResponsehandler(
 				"%v %q finished backfill for %v ...\n",
 				lprefix, requestId, name)
 
-			if tmpfile != nil {
-				tmpfile.Close()
-				name := tmpfile.Name()
-				fmsg := "%v ScanEntries(%v) removing backfill file %v ...\n"
-				l.Infof(fmsg, si.gsi.logPrefix, requestId, name)
-				if err := os.Remove(name); err != nil {
-					fmsg := "%v remove backfill file %v unexpected failure: %v\n"
-					l.Errorf(fmsg, si.gsi.logPrefix, name, err)
-				}
-				atomic.AddInt64(&si.gsi.totalbackfills, 1)
-			}
-
 			recover() // need this because entryChannel() would have closed
 		}()
 		l.Debugf(
@@ -1407,6 +1417,7 @@ func makeResponsehandler(
 			} else {
 				fmsg := "%v %v new backfill file ... %v\n"
 				l.Infof(fmsg, lprefix, requestId, name)
+				broker.AddBackfill(tmpfile)
 				// encoder
 				enc = gob.NewEncoder(tmpfile)
 				readfd, err = os.OpenFile(name, os.O_RDONLY, 0666)
