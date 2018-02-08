@@ -682,13 +682,15 @@ func computeGroupAggr(compositekeys, decodedkeys [][]byte, count int, docid, key
 		compositekeys[0] = key
 	} else if compositekeys == nil {
 		codec := collatejson.NewCodec(16)
-		if groupAggr.NeedDecode {
-			compositekeys, decodedkeys, err = codec.ExplodeArray2(key, buf, decbuf)
-		} else {
-			compositekeys, err = codec.ExplodeArray(key, buf)
-		}
-		if err != nil {
-			return err
+		if groupAggr.NeedExplode {
+			if groupAggr.NeedDecode {
+				compositekeys, decodedkeys, err = codec.ExplodeArray2(key, buf, decbuf)
+			} else {
+				compositekeys, err = codec.ExplodeArray(key, buf)
+			}
+			if err != nil {
+				return err
+			}
 		}
 	}
 	if groupAggr.NeedDecode {

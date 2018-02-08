@@ -103,22 +103,23 @@ type IndexStatusResponse struct {
 }
 
 type IndexStatus struct {
-	DefnId      common.IndexDefnId `json:"defnId,omitempty"`
-	InstId      common.IndexInstId `json:"instId,omitempty"`
-	Name        string             `json:"name,omitempty"`
-	Bucket      string             `json:"bucket,omitempty"`
-	IsPrimary   bool               `json:"isPrimary,omitempty"`
-	SecExprs    []string           `json:"secExprs,omitempty"`
-	WhereExpr   string             `json:"where,omitempty"`
-	IndexType   string             `json:"indexType,omitempty"`
-	Status      string             `json:"status,omitempty"`
-	Definition  string             `json:"definition"`
-	Hosts       []string           `json:"hosts,omitempty"`
-	Error       string             `json:"error,omitempty"`
-	Completion  int                `json:"completion"`
-	Progress    float64            `json:"progress"`
-	Scheduled   bool               `json:"scheduled"`
-	Partitioned bool               `json:"partitioned"`
+	DefnId       common.IndexDefnId `json:"defnId,omitempty"`
+	InstId       common.IndexInstId `json:"instId,omitempty"`
+	Name         string             `json:"name,omitempty"`
+	Bucket       string             `json:"bucket,omitempty"`
+	IsPrimary    bool               `json:"isPrimary,omitempty"`
+	SecExprs     []string           `json:"secExprs,omitempty"`
+	WhereExpr    string             `json:"where,omitempty"`
+	IndexType    string             `json:"indexType,omitempty"`
+	Status       string             `json:"status,omitempty"`
+	Definition   string             `json:"definition"`
+	Hosts        []string           `json:"hosts,omitempty"`
+	Error        string             `json:"error,omitempty"`
+	Completion   int                `json:"completion"`
+	Progress     float64            `json:"progress"`
+	Scheduled    bool               `json:"scheduled"`
+	Partitioned  bool               `json:"partitioned"`
+	NumPartition int                `json:"numPartition"`
 }
 
 type indexStatusSorter []IndexStatus
@@ -525,22 +526,23 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, bucket string
 							}
 
 							status := IndexStatus{
-								DefnId:      defn.DefnId,
-								InstId:      common.IndexInstId(instance.InstId),
-								Name:        name,
-								Bucket:      defn.Bucket,
-								IsPrimary:   defn.IsPrimary,
-								SecExprs:    defn.SecExprs,
-								WhereExpr:   defn.WhereExpr,
-								IndexType:   string(defn.Using),
-								Status:      stateStr,
-								Error:       errStr,
-								Hosts:       []string{curl},
-								Definition:  common.IndexStatement(defn, false),
-								Completion:  completion,
-								Progress:    progress,
-								Scheduled:   instance.Scheduled,
-								Partitioned: common.IsPartitioned(defn.PartitionScheme),
+								DefnId:       defn.DefnId,
+								InstId:       common.IndexInstId(instance.InstId),
+								Name:         name,
+								Bucket:       defn.Bucket,
+								IsPrimary:    defn.IsPrimary,
+								SecExprs:     defn.SecExprs,
+								WhereExpr:    defn.WhereExpr,
+								IndexType:    string(defn.Using),
+								Status:       stateStr,
+								Error:        errStr,
+								Hosts:        []string{curl},
+								Definition:   common.IndexStatement(defn, false),
+								Completion:   completion,
+								Progress:     progress,
+								Scheduled:    instance.Scheduled,
+								Partitioned:  common.IsPartitioned(defn.PartitionScheme),
+								NumPartition: len(instance.Partitions),
 							}
 
 							list = append(list, status)
@@ -574,6 +576,7 @@ func (m *requestHandlerContext) consolideIndexStatus(statuses []IndexStatus) []I
 			s2.Hosts = append(s2.Hosts, status.Hosts...)
 			s2.Completion = (s2.Completion + status.Completion) / 2
 			s2.Progress = (s2.Progress + status.Progress) / 2.0
+			s2.NumPartition += status.NumPartition
 			if len(status.Error) != 0 {
 				s2.Error = fmt.Sprintf("%v %v", s2.Error, status.Error)
 			}

@@ -24,6 +24,7 @@ import (
 	"github.com/couchbase/query/expression"
 	"github.com/couchbase/query/expression/parser"
 	qvalue "github.com/couchbase/query/value"
+	"os"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -63,6 +64,9 @@ type RequestBroker struct {
 	errMap   map[common.PartitionId]map[uint64]error
 	partial  int32
 	mutex    sync.Mutex
+
+	//backfill
+	backfills []*os.File
 
 	// scan
 	defn           *common.IndexDefn
@@ -395,16 +399,35 @@ func (c *RequestBroker) useGather() bool {
 	return c.bGather
 }
 
+func (c *RequestBroker) AddBackfill(backfill *os.File) {
+
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	c.backfills = append(c.backfills, backfill)
+}
+
+func (c *RequestBroker) GetBackfills() []*os.File {
+
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	return c.backfills
+}
+
 func (b *RequestBroker) reset() {
 
 	// scatter/gather
 	b.queues = nil
 	b.notifych = nil
 	b.closed = 0
-	b.killch = nil
+	b.killch = make(chan bool, 1)
 	b.bGather = false
 	b.errMap = make(map[common.PartitionId]map[uint64]error)
 	b.partial = 0 // false
+
+	// backfill
+	b.backfills = nil
 
 	// stats
 	b.sendCount = 0
@@ -492,7 +515,6 @@ func (c *RequestBroker) scatterScan(client []*GsiScanClient, index *common.Index
 	numPartition uint32, settings *ClientSettings) (err error, partial bool) {
 
 	c.notifych = make(chan bool, 1)
-	c.killch = make(chan bool, 1)
 	donech_gather := make(chan bool, 1)
 
 	if len(partition) > 1 {
@@ -538,7 +560,6 @@ func (c *RequestBroker) scatterScan2(client []*GsiScanClient, index *common.Inde
 	partition [][]common.PartitionId, numPartition uint32, settings *ClientSettings) (errMap map[common.PartitionId]map[uint64]error, partial bool) {
 
 	c.notifych = make(chan bool, 1)
-	c.killch = make(chan bool, 1)
 	donech_gather := make(chan bool, 1)
 
 	if len(partition) > 1 {

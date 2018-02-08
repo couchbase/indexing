@@ -186,7 +186,7 @@ func NewMetadataProvider(cluster string, providerId string, changeCh chan bool, 
 	s.statsNotifyCh = statsCh
 	s.settings = settings
 
-	s.providerId, err = s.getWatcherAddr(providerId)
+	s.providerId = providerId
 	if err != nil {
 		return nil, err
 	}
@@ -2407,33 +2407,6 @@ func (o *MetadataProvider) findWatcherByNodeUUID(nodeUUID string) (*watcher, err
 	}
 
 	return nil, errors.New(fmt.Sprintf("Cannot find watcher with nodeUUID %v", nodeUUID))
-}
-
-func (o *MetadataProvider) getWatcherAddr(MetadataProviderId string) (string, error) {
-
-	addrs, err := net.InterfaceAddrs()
-	if err != nil {
-		return "", err
-	}
-
-	if len(addrs) == 0 {
-		return "", errors.New("MetadataProvider.getWatcherAddr() : No network address is available")
-	}
-
-	for _, addr := range addrs {
-		switch s := addr.(type) {
-		case *net.IPAddr:
-			if s.IP.IsGlobalUnicast() {
-				return fmt.Sprintf("%s:indexer:MetadataProvider:%s", addr.String(), MetadataProviderId), nil
-			}
-		case *net.IPNet:
-			if s.IP.IsGlobalUnicast() {
-				return fmt.Sprintf("%s:indexer:MetadataProvider:%s", addr.String(), MetadataProviderId), nil
-			}
-		}
-	}
-
-	return "", errors.New("Fail to find an IP address")
 }
 
 func (o *MetadataProvider) findWatcherByNodeAddr(nodeAddr string) *watcher {

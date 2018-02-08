@@ -528,13 +528,12 @@ func (m *LifecycleMgr) processCommitToken(defnId common.IndexDefnId, layout map[
 	if definitions, ok := layout[indexerId]; ok && len(definitions) > 0 {
 
 		defn := definitions[0]
-		defn.Deferred = true
 		reqCtx := common.NewUserRequestContext()
 
 		// Create the index instance.   This is to ensure that definiton passes invariant validation (e.g bucket exists).
 		// If create index fails due to transient error (indexer in recovery), a token will be placed to retry the operation
 		// later.  The definiton is always deleted upon error.
-		if err := m.CreateIndexOrInstance(&defn, true, reqCtx); err != nil {
+		if err := m.CreateIndexOrInstance(&defn, false, reqCtx); err != nil {
 			// If there is error, the defintion will not be created.
 			// But if it is recoverable error, then we still want to create the commit token.
 			logging.Errorf("LifecycleMgr.processCommitToken() : build index fails.  Reason = %v", err)
@@ -575,17 +574,6 @@ func (m *LifecycleMgr) processCommitToken(defnId common.IndexDefnId, layout map[
 //-----------------------------------------------------------
 // Create Index
 //-----------------------------------------------------------
-
-func (m *LifecycleMgr) handleCreateIndex(key string, content []byte) error {
-
-	defn, err := common.UnmarshallIndexDefn(content)
-	if err != nil {
-		logging.Errorf("LifecycleMgr.handleCreateIndex() : createIndex fails. Unable to unmarshall index definition. Reason = %v", err)
-		return err
-	}
-
-	return m.CreateIndexOrInstance(defn, false, nil)
-}
 
 func (m *LifecycleMgr) handleCreateIndexScheduledBuild(key string, content []byte,
 	reqCtx *common.MetadataRequestContext) error {
@@ -669,7 +657,7 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scheduled bool,
 	// Create index definiton.   It will fail if there is another index defintion of the same
 	// index defnition id.
 	if err := m.repo.CreateIndex(defn); err != nil {
-		logging.Errorf("LifecycleMgr.handleCreateIndex() : createIndex fails. Reason = %v", err)
+		logging.Errorf("LifecycleMgr.CreateIndex() : createIndex fails. Reason = %v", err)
 		return err
 	}
 
@@ -681,7 +669,7 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scheduled bool,
 	// definition id, since an index is consider valid only if it has both index definiton and index instance.
 	// So the dangling index definition is considered invalid.
 	if err := m.repo.addIndexToTopology(defn, instId, replicaId, partitions, versions, numPartitions, 0, !defn.Deferred && scheduled); err != nil {
-		logging.Errorf("LifecycleMgr.handleCreateIndex() : createIndex fails. Reason = %v", err)
+		logging.Errorf("LifecycleMgr.CreateIndex() : createIndex fails. Reason = %v", err)
 		m.repo.DropIndexById(defn.DefnId)
 		return err
 	}
@@ -699,7 +687,7 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scheduled bool,
 	// 2) Index definition is deleted.  This effectively "delete index".
 	if m.notifier != nil {
 		if err := m.notifier.OnIndexCreate(defn, instId, replicaId, partitions, versions, numPartitions, 0, reqCtx); err != nil {
-			logging.Errorf("LifecycleMgr.handleCreateIndex() : createIndex fails. Reason = %v", err)
+			logging.Errorf("LifecycleMgr.CreateIndex() : createIndex fails. Reason = %v", err)
 			m.DeleteIndex(defn.DefnId, false, nil)
 			return err
 		}
@@ -714,7 +702,7 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scheduled bool,
 	// the index definition from repository. If drop index is not successful during cleanup,
 	// the index will be repaired upon bootstrap or cleanup by janitor.
 	if err := m.updateIndexState(defn.Bucket, defn.DefnId, instId, common.INDEX_STATE_READY); err != nil {
-		logging.Errorf("LifecycleMgr.handleCreateIndex() : createIndex fails. Reason = %v", err)
+		logging.Errorf("LifecycleMgr.CreateIndex() : createIndex fails. Reason = %v", err)
 		m.DeleteIndex(defn.DefnId, true, reqCtx)
 		return err
 	}
@@ -724,9 +712,9 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scheduled bool,
 	/////////////////////////////////////////////////////
 
 	// Run index build
-	if !defn.Deferred {
+	if !defn.Deferred && scheduled {
 		if m.notifier != nil {
-			logging.Debugf("LifecycleMgr.handleCreateIndex() : start Index Build")
+			logging.Debugf("LifecycleMgr.CreateIndex() : start Index Build")
 
 			retryList, skipList, errList := m.BuildIndexes([]common.IndexDefnId{defn.DefnId}, reqCtx, false)
 
@@ -735,20 +723,20 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scheduled bool,
 			}
 
 			if len(errList) != 0 {
-				logging.Errorf("LifecycleMgr.hanaleCreateIndex() : build index fails.  Reason = %v", errList[0])
+				logging.Errorf("LifecycleMgr.CreateIndex() : build index fails.  Reason = %v", errList[0])
 				m.DeleteIndex(defn.DefnId, true, reqCtx)
 				return errList[0]
 			}
 
 			if len(skipList) != 0 {
-				logging.Errorf("LifecycleMgr.hanaleCreateIndex() : build index fails due to internal errors.")
+				logging.Errorf("LifecycleMgr.CreateIndex() : build index fails due to internal errors.")
 				m.DeleteIndex(defn.DefnId, true, reqCtx)
 				return errors.New("Fail to create index due to internal build error.  Please retry the operation.")
 			}
 		}
 	}
 
-	logging.Debugf("LifecycleMgr.handleCreateIndex() : createIndex completes")
+	logging.Debugf("LifecycleMgr.CreateIndex() : createIndex completes")
 
 	return nil
 }
@@ -795,7 +783,7 @@ func (m *LifecycleMgr) setStorageMode(defn *common.IndexDefn) error {
 			defn.Using = common.IndexType(strings.ToLower(string(defn.Using)))
 		} else {
 			err := fmt.Sprintf("Create Index fails. Reason = Unsupported Using Clause %v", string(defn.Using))
-			logging.Errorf("LifecycleMgr.handleCreateIndex: " + err)
+			logging.Errorf("LifecycleMgr.setStorageType: " + err)
 			return errors.New(err)
 		}
 	}
@@ -803,7 +791,7 @@ func (m *LifecycleMgr) setStorageMode(defn *common.IndexDefn) error {
 	if common.IsPartitioned(defn.PartitionScheme) {
 		if defn.Using != common.PlasmaDB && defn.Using != common.MemDB && defn.Using != common.MemoryOptimized {
 			err := fmt.Sprintf("Create Index fails. Reason = Cannot create partitioned index using %v", string(defn.Using))
-			logging.Errorf("LifecycleMgr.handleCreateIndex: " + err)
+			logging.Errorf("LifecycleMgr.setStorageType: " + err)
 			return errors.New(err)
 		}
 	}
@@ -890,7 +878,7 @@ func (m *LifecycleMgr) verifyDuplicateDefn(defn *common.IndexDefn, reqCtx *commo
 
 	existDefn, err := m.repo.GetIndexDefnByName(defn.Bucket, defn.Name)
 	if err != nil {
-		logging.Errorf("LifecycleMgr.handleCreateIndex() : createIndex fails. Reason = %v", err)
+		logging.Errorf("LifecycleMgr.verifyDuplicateDefn() : createIndex fails. Reason = %v", err)
 		return nil, err
 	}
 
@@ -898,7 +886,7 @@ func (m *LifecycleMgr) verifyDuplicateDefn(defn *common.IndexDefn, reqCtx *commo
 
 		topology, err := m.repo.GetTopologyByBucket(existDefn.Bucket)
 		if err != nil {
-			logging.Errorf("LifecycleMgr.handleCreateIndex() : fails to find index instance. Reason = %v", err)
+			logging.Errorf("LifecycleMgr.verifyDuplicateDefn() : fails to find index instance. Reason = %v", err)
 			return nil, err
 		}
 
@@ -1690,7 +1678,7 @@ func (m *LifecycleMgr) CreateIndexInstance(defn *common.IndexDefn, scheduled boo
 	/////////////////////////////////////////////////////
 
 	// Run index build
-	if !defn.Deferred {
+	if !defn.Deferred && scheduled {
 		if m.notifier != nil {
 			logging.Debugf("LifecycleMgr.CreateIndexInstance() : start Index Build")
 

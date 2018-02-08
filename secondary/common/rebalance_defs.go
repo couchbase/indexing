@@ -27,11 +27,11 @@ const (
 	TransferTokenRefused
 	TransferTokenInitate
 	TransferTokenInProgress
-	TransferTokenMerge
 	TransferTokenReady
 	TransferTokenCommit
 	TransferTokenDeleted
 	TransferTokenError
+	TransferTokenMerge
 )
 
 func (ts TokenState) String() string {

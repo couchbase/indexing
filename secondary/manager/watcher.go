@@ -10,14 +10,12 @@
 package manager
 
 import (
-	"fmt"
 	"github.com/couchbase/gometa/action"
 	"github.com/couchbase/gometa/common"
 	"github.com/couchbase/gometa/message"
 	"github.com/couchbase/gometa/protocol"
 	repo "github.com/couchbase/gometa/repository"
 	"github.com/couchbase/indexing/secondary/logging"
-	"net"
 	"sync"
 )
 
@@ -75,7 +73,7 @@ func startWatcher(mgr *IndexManager,
 	s.observes = make(map[string]*observeHandle)
 	s.notifications = make(map[common.Txnid]*notificationHandle)
 
-	s.watcherAddr, err = getWatcherAddr(watcherId)
+	s.watcherAddr = watcherId
 	if err != nil {
 		return nil, err
 	}
@@ -259,39 +257,6 @@ func newNotificationHandle(key string, evtType EventType, content []byte) *notif
 	handle.content = content
 
 	return handle
-}
-
-/////////////////////////////////////////////////////////////////////////////
-// Private Function
-/////////////////////////////////////////////////////////////////////////////
-
-func getWatcherAddr(watcherId string) (string, error) {
-
-	addrs, err := net.InterfaceAddrs()
-	if err != nil {
-		return "", err
-	}
-
-	if len(addrs) == 0 {
-		return "", NewError(ERROR_WATCH_NO_ADDR_AVAIL, NORMAL, WATCHER, nil,
-			fmt.Sprintf("watcher.getWatcherAddr() : No network address is available"))
-	}
-
-	for _, addr := range addrs {
-		switch s := addr.(type) {
-		case *net.IPAddr:
-			if s.IP.IsGlobalUnicast() {
-				return fmt.Sprintf("%s:indexer:watcher:%s", addr.String(), watcherId), nil
-			}
-		case *net.IPNet:
-			if s.IP.IsGlobalUnicast() {
-				return fmt.Sprintf("%s:indexer:watcher:%s", addr.String(), watcherId), nil
-			}
-		}
-	}
-
-	return "", NewError(ERROR_WATCH_NO_ADDR_AVAIL, NORMAL, WATCHER, nil,
-		fmt.Sprintf("watcher.getWatcherAddr() : Fail to find an IP address"))
 }
 
 /////////////////////////////////////////////////////////////////////////////
