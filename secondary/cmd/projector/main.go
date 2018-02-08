@@ -25,17 +25,20 @@ var options struct {
 	auth        string
 	loglevel    string
 	diagDir     string
+	isIPv6      bool
 }
 
 func argParse() string {
 	fset := flag.NewFlagSet("projector", flag.ContinueOnError)
 	fset.StringVar(&options.adminport, "adminport", "", "adminport address")
 	fset.IntVar(&options.numVbuckets, "vbuckets", 1024, "maximum number of vbuckets configured.")
+	// kvaddrs is passed in from ns-server.  For ipv6, it is expected that ns-server will pass in a proper address.
 	fset.StringVar(&options.kvaddrs, "kvaddrs", "127.0.0.1:12000", "comma separated list of kvaddrs")
 	fset.StringVar(&options.logFile, "logFile", "", "output logs to file default is stdout")
 	fset.StringVar(&options.loglevel, "logLevel", "Info", "Log Level - Silent, Fatal, Error, Info, Debug, Trace")
 	fset.StringVar(&options.auth, "auth", "", "Auth user and password")
 	fset.StringVar(&options.diagDir, "diagDir", "./", "Directory for writing projector diagnostic information")
+	fset.BoolVar(&options.isIPv6, "ipv6", false, "IPV6 cluster")
 
 	logging.Infof("Parsing the args")
 
@@ -101,6 +104,8 @@ func main() {
 
 	logging.Infof("%v\n", c.LogOs())
 	logging.Infof("%v\n", c.LogRuntime())
+
+	c.SetIpv6(options.isIPv6)
 
 	go c.ExitOnStdinClose()
 	projector.NewProjector(options.numVbuckets, config)

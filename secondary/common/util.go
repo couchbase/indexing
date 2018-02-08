@@ -33,6 +33,8 @@ const (
 
 var ErrInvalidIndexName = fmt.Errorf("Invalid index name")
 
+var _isIpv6 bool
+
 // ExcludeStrings will exclude strings in `excludes` from `strs`. preserves the
 // order of `strs` in the result.
 func ExcludeStrings(strs []string, excludes []string) []string {
@@ -462,7 +464,7 @@ func EquivalentIP(
 	}
 
 	if host == "localhost" {
-		host = "127.0.0.1"
+		host = GetLocalIpAddr(IsIpv6())
 	}
 
 	netIP := net.ParseIP(host)
@@ -474,7 +476,7 @@ func EquivalentIP(
 		}
 
 		if host1 == "localhost" {
-			host1 = "127.0.0.1"
+			host1 = GetLocalIpAddr(IsIpv6())
 		}
 		netIP1 := net.ParseIP(host1)
 		// check whether ports are same.
@@ -973,4 +975,12 @@ func ComputePercent(a, b int64) int64 {
 	}
 
 	return 0
+}
+
+func SetIpv6(isIpv6 bool) {
+	_isIpv6 = isIpv6
+}
+
+func IsIpv6() bool {
+	return _isIpv6
 }
