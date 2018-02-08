@@ -289,7 +289,6 @@ func (c *clustMgrAgent) handleIndexMap(cmd Message) {
 
 func (c *clustMgrAgent) handleStats(cmd Message) {
 
-	logging.Infof("ClustMgr:handleStats %v", cmd)
 	c.supvCmdch <- &MsgSuccess{}
 
 	c.handleStatsInternal()

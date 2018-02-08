@@ -70,7 +70,7 @@ func (c *cpuCollector) runCollectCpu() {
 		count++
 
 		if count > 10 {
-			logging.Infof("cpuCollector: cpu percent %v for pid %v", percent, pid)
+			logging.Debugf("cpuCollector: cpu percent %v for pid %v", percent, pid)
 			count = 0
 		}
 
