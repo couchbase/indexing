@@ -2084,6 +2084,7 @@ func (m *LifecycleMgr) canRetryCreateError(err error) bool {
 		indexerErr.Code == common.InvalidBucket ||
 		indexerErr.Code == common.BucketEphemeral ||
 		indexerErr.Code == common.IndexAlreadyExist ||
+		indexerErr.Code == common.TransientError ||
 		indexerErr.Code == common.IndexInvalidState {
 		return false
 	}
