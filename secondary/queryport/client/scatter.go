@@ -462,7 +462,6 @@ func (c *RequestBroker) scatter(client []*GsiScanClient, index *common.IndexDefn
 
 	partition = c.filterPartitions(index, partition, numPartition)
 	client, rollback, partition = filterClients(client, rollback, partition)
-	c.analyzeGroupBy(partition, numPartition, index)
 	c.analyzeOrderBy(partition, numPartition, index)
 	c.analyzeProjection(partition, numPartition, index)
 	c.changePushdownParams(partition, numPartition, index)
@@ -1193,6 +1192,8 @@ func (c *RequestBroker) filterPartitions(index *common.IndexDefn, partitions [][
 
 //
 // Find out the position of parition key in the index key list
+// If there is any partition key cannot be found in the index key list,
+// this function returns nil
 //
 func partitionKeyPos(defn *common.IndexDefn) []int {
 
@@ -1398,6 +1399,13 @@ func (c *RequestBroker) changePushdownParams(partitions [][]common.PartitionId, 
 	c.changeSorted(partitions, numPartition, index)
 }
 
+//
+// For aggregate query, cbq-engine will push down limit only if full aggregate results are needed.  Like range query, the limit
+// parameter will be rewritten before pushing down to indexer.   The limit will be applied in gathered when results are returning
+// from all indexers.
+//
+// For pre-aggregate result, cbq-engine will not push down limit, since limit can only apply after aggregation.
+//
 func (c *RequestBroker) changeLimit(partitions [][]common.PartitionId, numPartition uint32, index *common.IndexDefn) {
 
 	c.pushdownLimit = c.limit
@@ -1455,6 +1463,13 @@ func (c *RequestBroker) changeLimit(partitions [][]common.PartitionId, numPartit
 
 }
 
+//
+// For aggregate query, cbq-engine will push down offset only if full aggregate results are needed.  Like range query, the offset
+// parameter will be rewritten before pushing down to indexer.   The offset will be applied in gathered when results are returning
+// from all indexers.
+//
+// For pre-aggregate result, cbq-engine will not push down offset, since limit can only apply after aggregation.
+//
 func (c *RequestBroker) changeOffset(partitions [][]common.PartitionId, numPartition uint32, index *common.IndexDefn) {
 
 	c.pushdownOffset = c.offset
@@ -1502,8 +1517,12 @@ func (c *RequestBroker) changeOffset(partitions [][]common.PartitionId, numParti
 
 	// if there is multiple partition, change offset to 0
 	c.pushdownOffset = 0
+
 }
 
+//
+// Determine if the results from each indexer needs to be sorted based on index key order.
+//
 func (c *RequestBroker) changeSorted(partitions [][]common.PartitionId, numPartition uint32, index *common.IndexDefn) {
 
 	c.pushdownSorted = c.sorted
@@ -1512,10 +1531,12 @@ func (c *RequestBroker) changeSorted(partitions [][]common.PartitionId, numParti
 		c.pushdownSorted = true
 	}
 
-	// If it is an aggregate query, need to sort in the indexer
+	// If it is an aggregate query, need to sort using index order
+	// The indexer depends on results are sorted across partitions co-located on the same node
 	if c.grpAggr != nil && (len(c.grpAggr.Group) != 0 || len(c.grpAggr.Aggrs) != 0) {
 		c.pushdownSorted = true
 	}
+
 }
 
 //--------------------------
@@ -1523,7 +1544,18 @@ func (c *RequestBroker) changeSorted(partitions [][]common.PartitionId, numParti
 //--------------------------
 
 //
-// For aggregate query, n1ql will expect full aggregate results for partitioned index if group-by keys matches the partition keys.
+// For aggregate query, n1ql will expect full aggregate results for partitioned index if
+// 1) group-by keys matches the partition keys (order is not important)
+// 2) group keys are leading index keys
+// 3) partition keys are leading index keys
+//
+// We cannot sort if it is pre-aggregate result, so set sorted to false.  Otherwise, the result
+// is sorted if there is an order-by clause.
+//
+// Note that cbq-engine will not push down order-by unless order by matches leading index keys.
+// If it is a partitioned index, order-by will not push down unless it is full aggregate result.
+//
+// THIS FUNCTION IS NOT CALLED BECAUSE CBQ IS ALREADY HANDLING IT
 //
 func (c *RequestBroker) analyzeGroupBy(partitions [][]common.PartitionId, numPartition uint32, index *common.IndexDefn) {
 
@@ -1542,6 +1574,10 @@ func (c *RequestBroker) analyzeGroupBy(partitions [][]common.PartitionId, numPar
 
 		// check if partition keys are leading index keys
 		positions := partitionKeyPos(index)
+		if len(positions) != len(index.PartitionKeys) {
+			c.sorted = false
+			return
+		}
 		for i, pos := range positions {
 			if i != pos {
 				// if partition keys do not follow index key order
@@ -1560,7 +1596,7 @@ func (c *RequestBroker) analyzeGroupBy(partitions [][]common.PartitionId, numPar
 		}
 
 		// both paritition keys and group keys are in index order.
-		// check if group key and partition key are the same length
+		// check if group key and partition key are the same length (order is not important)
 		if len(index.PartitionKeys) != len(c.grpAggr.Group) {
 			c.sorted = false
 			return
@@ -1570,6 +1606,8 @@ func (c *RequestBroker) analyzeGroupBy(partitions [][]common.PartitionId, numPar
 
 //
 // If sorted, then analyze the index order to see if we need to add index to projection list.
+// If it is a non-covering index, cbq-engine will not add order-by keys to the projection list. So Gsi client
+// will have to add the keys for sorting the scattered results.
 //
 func (c *RequestBroker) analyzeOrderBy(partitions [][]common.PartitionId, numPartition uint32, index *common.IndexDefn) {
 
@@ -1588,21 +1626,19 @@ func (c *RequestBroker) analyzeOrderBy(partitions [][]common.PartitionId, numPar
 		return
 	}
 
-	// skip aggregate query (order-by is after aggregate)
-	if c.grpAggr != nil && (len(c.grpAggr.Group) != 0 || len(c.grpAggr.Aggrs) != 0) {
-		return
-	}
-
 	if c.indexOrder != nil {
 
 		projection := make(map[int64]bool)
 		if c.projections != nil && len(c.projections.EntryKeys) != 0 {
+			// Entry key can be an index key, group key expression, or aggregate expression.
 			for _, position := range c.projections.EntryKeys {
 				projection[position] = true
 			}
 		}
 
 		// If the order-by key is not in the projection, then add it.
+		// Cbq-engine pushes order-by only if the order-by keys match the leading index keys.
+		// So order-by key must be an index key.
 		for _, order := range c.indexOrder.KeyPos {
 			if !projection[int64(order)] {
 				c.projections.EntryKeys = append(c.projections.EntryKeys, int64(order))
@@ -1614,6 +1650,13 @@ func (c *RequestBroker) analyzeOrderBy(partitions [][]common.PartitionId, numPar
 
 //
 // If sorted, then analyze the projection to find out the sort order (asc/desc).
+//
+// Cbq-engine pushes order-by only if the order-by keys match the leading index keys.  If there is an expression in the order-by clause,
+// cbq will not push down order-by even if the expression is based on the index key.
+//
+// For aggregate query, the order-by keys need to match the group-key as well.  So if the group-key is based on an expression on an index key,
+// this means the order-by key also needs to have the same expression.  In this case, cbq will not push down order-by (violates rule above).
+// Cbq also will not allow if there is more order-by keys than group-keys.
 //
 func (c *RequestBroker) analyzeProjection(partitions [][]common.PartitionId, numPartition uint32, index *common.IndexDefn) {
 
@@ -1632,6 +1675,10 @@ func (c *RequestBroker) analyzeProjection(partitions [][]common.PartitionId, num
 		return
 	}
 
+	// 1) If there is order-by, the projection list should not be empty
+	//    since cbq will add order-by keys to projection list.
+	// 2) order-by is pushed down only if order-by keys match leading index keys
+	//
 	if c.projections != nil && len(c.projections.EntryKeys) != 0 {
 
 		pos := make([]int, len(c.projections.EntryKeys))
@@ -1642,7 +1689,12 @@ func (c *RequestBroker) analyzeProjection(partitions [][]common.PartitionId, num
 
 		c.projDesc = make([]bool, len(c.projections.EntryKeys))
 		for i, position := range pos {
+			// EntryKey could be index key, group key expression, aggregate expression.
+			// For expression,  entryKey would be an integer greater than len(index.SecKeys)
 			if position >= 0 && position < len(index.Desc) {
+				// The result coming from indexer are in index order.  If
+				// an index key is not in the projection list, it will be
+				// skipped in the returned result.
 				c.projDesc[i] = index.Desc[position]
 			}
 		}
