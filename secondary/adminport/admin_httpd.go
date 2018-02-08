@@ -185,7 +185,7 @@ func (s *httpServer) Start() (err error) {
 	}
 
 	if s.lis, err = net.Listen("tcp", s.srv.Addr); err != nil {
-		logging.Errorf("%v listen failed %v\n", s.logPrefix, err)
+		logging.Fatalf("%v Unable to start server, LISTEN FAILED %v\n", s.logPrefix, err)
 		return err
 	}
 

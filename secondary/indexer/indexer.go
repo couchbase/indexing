@@ -4859,8 +4859,9 @@ func (idx *indexer) closeAllStreams() {
 				default:
 					//log and retry for all other responses
 					respErr := resp.(*MsgError).GetError()
-					logging.Errorf("Indexer::closeAllStreams Stream %v "+
-						"Error from Projector %v. Retrying.", common.StreamId(i), respErr.cause)
+					logging.Fatalf("Indexer::closeAllStreams Stream %v "+
+						"Projector health check needed, indexer can not proceed, Error received %v. Retrying.",
+						common.StreamId(i), respErr.cause)
 					time.Sleep(KV_RETRY_INTERVAL * time.Millisecond)
 				}
 			}
