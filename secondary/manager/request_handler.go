@@ -543,7 +543,7 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, bucket string
 								Status:       stateStr,
 								Error:        errStr,
 								Hosts:        []string{curl},
-								Definition:   common.IndexStatement(defn, false),
+								Definition:   common.IndexStatement(defn, true),
 								Completion:   completion,
 								Progress:     progress,
 								Scheduled:    instance.Scheduled,
