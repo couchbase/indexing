@@ -230,7 +230,7 @@ func (m *DDLServiceMgr) rebalanceDone(change *service.TopologyChange, isCancel b
 	// Refresh metadata provider on topology change
 	httpAddrMap, err := m.refreshOnTopologyChange(change, isCancel)
 	if err != nil {
-		logging.Warnf("DDLServiceMgr: Fail to clean delete index token upon rebalancing.  Skip Cleanup. Internal Error = %v", err)
+		logging.Warnf("DDLServiceMgr: Failed to clean delete index token upon rebalancing.  Skip Cleanup. Internal Error = %v", err)
 		return
 	}
 
@@ -269,7 +269,7 @@ func (m *DDLServiceMgr) cleanupDropCommand() {
 
 	entries, err := metakv.ListAllChildren(mc.DeleteDDLCommandTokenPath)
 	if err != nil {
-		logging.Warnf("DDLServiceMgr: Fail to cleanup delete index token upon rebalancing.  Skip cleanup.  Internal Error = %v", err)
+		logging.Warnf("DDLServiceMgr: Failed to cleanup delete index token upon rebalancing.  Skip cleanup.  Internal Error = %v", err)
 		return
 	}
 
@@ -285,7 +285,7 @@ func (m *DDLServiceMgr) cleanupDropCommand() {
 
 			command, err := mc.UnmarshallDeleteCommandToken(entry.Value)
 			if err != nil {
-				logging.Warnf("DDLServiceMgr: Fail to clean delete index token upon rebalancing.  Skp command %v.  Internal Error = %v.", entry.Path, err)
+				logging.Warnf("DDLServiceMgr: Failed to clean delete index token upon rebalancing.  Skp command %v.  Internal Error = %v.", entry.Path, err)
 				continue
 			}
 
@@ -293,7 +293,7 @@ func (m *DDLServiceMgr) cleanupDropCommand() {
 			// any unexpected raise condition.  This is more for safety than necessity.
 			exist, err := mc.CreateCommandTokenExist(command.DefnId)
 			if err != nil {
-				logging.Warnf("DDLServiceMgr: Fail to check create token.  Skip command %v.  Error = %v.", entry.Path, err)
+				logging.Warnf("DDLServiceMgr: Failed to check create token.  Skip command %v.  Error = %v.", entry.Path, err)
 				continue
 			}
 
@@ -315,7 +315,7 @@ func (m *DDLServiceMgr) cleanupDropCommand() {
 			if m.provider.FindIndexIgnoreStatus(command.DefnId) == nil {
 				// There is no index in the cluster,  remove token
 				if err := MetakvDel(entry.Path); err != nil {
-					logging.Warnf("DDLServiceMgr: Fail to remove delete index token %v. Error = %v", entry.Path, err)
+					logging.Warnf("DDLServiceMgr: Failed to remove delete index token %v. Error = %v", entry.Path, err)
 				} else {
 					logging.Infof("DDLServiceMgr: Remove delete index token %v.", entry.Path)
 				}
@@ -337,7 +337,7 @@ func (m *DDLServiceMgr) cleanupBuildCommand() {
 
 	entries, err := metakv.ListAllChildren(mc.BuildDDLCommandTokenPath)
 	if err != nil {
-		logging.Warnf("DDLServiceMgr: Fail to cleanup build index token upon rebalancing.  Skip cleanup.  Internal Error = %v", err)
+		logging.Warnf("DDLServiceMgr: Failed to cleanup build index token upon rebalancing.  Skip cleanup.  Internal Error = %v", err)
 		return
 	}
 
@@ -349,7 +349,7 @@ func (m *DDLServiceMgr) cleanupBuildCommand() {
 
 			command, err := mc.UnmarshallBuildCommandToken(entry.Value)
 			if err != nil {
-				logging.Warnf("DDLServiceMgr: Fail to clean build index token upon rebalancing.  Skp command %v.  Internal Error = %v.", entry.Path, err)
+				logging.Warnf("DDLServiceMgr: Failed to clean build index token upon rebalancing.  Skp command %v.  Internal Error = %v.", entry.Path, err)
 				continue
 			}
 
@@ -382,7 +382,7 @@ func (m *DDLServiceMgr) cleanupBuildCommand() {
 			// Remove token
 			if cleanup {
 				if err := MetakvDel(entry.Path); err != nil {
-					logging.Warnf("DDLServiceMgr: Fail to remove build index token %v. Error = %v", entry.Path, err)
+					logging.Warnf("DDLServiceMgr: Failed to remove build index token %v. Error = %v", entry.Path, err)
 				} else {
 					logging.Infof("DDLServiceMgr: Remove build index token %v.", entry.Path)
 				}
@@ -400,7 +400,7 @@ func (m *DDLServiceMgr) cleanupCreateCommand() {
 	// get all create token from metakv
 	entries, err := metakv.ListAllChildren(mc.CreateDDLCommandTokenPath)
 	if err != nil {
-		logging.Warnf("DDLServiceMgr: Fail to fetch token from metakv.  Internal Error = %v", err)
+		logging.Warnf("DDLServiceMgr: Failed to fetch token from metakv.  Internal Error = %v", err)
 		return
 	}
 
@@ -410,19 +410,19 @@ func (m *DDLServiceMgr) cleanupCreateCommand() {
 
 			token, err := mc.UnmarshallCreateCommandToken(entry.Value)
 			if err != nil {
-				logging.Warnf("DDLServiceMgr: Fail to process create index token.  Skip %v.  Internal Error = %v.", entry.Path, err)
+				logging.Warnf("DDLServiceMgr: Failed to process create index token.  Skip %v.  Internal Error = %v.", entry.Path, err)
 				continue
 			}
 
 			// If there is a drop token, then do not process the create token.
 			exist, err := mc.DeleteCommandTokenExist(token.DefnId)
 			if err != nil {
-				logging.Warnf("DDLServiceMgr: Fail to check delete token.  Skip processing %v.  Error = %v.", entry.Path, err)
+				logging.Warnf("DDLServiceMgr: Failed to check delete token.  Skip processing %v.  Error = %v.", entry.Path, err)
 
 			} else if exist {
 				// If a drop token exist, then delete the create token.
 				if err := MetakvDel(entry.Path); err != nil {
-					logging.Warnf("DDLServiceMgr: Fail to remove create index token %v. Error = %v", entry.Path, err)
+					logging.Warnf("DDLServiceMgr: Failed to remove create index token %v. Error = %v", entry.Path, err)
 				} else {
 					logging.Infof("DDLServiceMgr: Remove create index token %v.", entry.Path)
 				}
@@ -437,7 +437,7 @@ func (m *DDLServiceMgr) handleCreateCommand() {
 	// get all create token from metakv
 	entries, err := metakv.ListAllChildren(mc.CreateDDLCommandTokenPath)
 	if err != nil {
-		logging.Warnf("DDLServiceMgr: Fail to fetch token from metakv.  Internal Error = %v", err)
+		logging.Warnf("DDLServiceMgr: Failed to fetch token from metakv.  Internal Error = %v", err)
 		return
 	}
 
@@ -464,7 +464,7 @@ func (m *DDLServiceMgr) handleCreateCommand() {
 	//
 	provider, _, err := m.newMetadataProvider(nil)
 	if err != nil {
-		logging.Debugf("DDLServiceMgr: Fail to start metadata provider.  Internal Error = %v", err)
+		logging.Debugf("DDLServiceMgr: Failed to start metadata provider.  Internal Error = %v", err)
 		return
 	}
 	defer provider.Close()
@@ -495,14 +495,14 @@ func (m *DDLServiceMgr) handleCreateCommand() {
 
 			token, err := mc.UnmarshallCreateCommandToken(entry.Value)
 			if err != nil {
-				logging.Warnf("DDLServiceMgr: Fail to process create index token.  Skip %v.  Internal Error = %v.", entry.Path, err)
+				logging.Warnf("DDLServiceMgr: Failed to process create index token.  Skip %v.  Internal Error = %v.", entry.Path, err)
 				continue
 			}
 
 			// If there is a drop token, then do not process the create token.
 			exist, err := mc.DeleteCommandTokenExist(token.DefnId)
 			if err != nil {
-				logging.Warnf("DDLServiceMgr: Fail to check delete token.  Skip processing %v.  Error = %v.", entry.Path, err)
+				logging.Warnf("DDLServiceMgr: Failed to check delete token.  Skip processing %v.  Error = %v.", entry.Path, err)
 
 			} else if exist {
 				// Avoid deleting create token during rebalance.  This is just for extra safety.  Even if the planner
@@ -516,7 +516,7 @@ func (m *DDLServiceMgr) handleCreateCommand() {
 
 				// If a drop token exist, then delete the create token.
 				if err := MetakvDel(entry.Path); err != nil {
-					logging.Warnf("DDLServiceMgr: Fail to remove create index token %v. Error = %v", entry.Path, err)
+					logging.Warnf("DDLServiceMgr: Failed to remove create index token %v. Error = %v", entry.Path, err)
 				} else {
 					logging.Infof("DDLServiceMgr: Remove create index token %v.", entry.Path)
 				}
@@ -595,7 +595,7 @@ func (m *DDLServiceMgr) handleCreateCommand() {
 						// 2) metadata is corrupted.   We cannot detect this, but we will know since the indexer would be
 						//    in a bad state.
 						if err := provider.SendCreateIndexRequest(m.indexerId, &defn); err != nil {
-							logging.Warnf("DDLServiceMgr: Fail to process create index (%v, %v, %v, %v).  Error = %v.",
+							logging.Warnf("DDLServiceMgr: Failed to process create index (%v, %v, %v, %v).  Error = %v.",
 								defn.Bucket, defn.Name, defn.DefnId, defn.InstId, err)
 						} else {
 							logging.Warnf("DDLServiceMgr: Index successfully created (%v, %v, %v, %v).",
@@ -630,7 +630,7 @@ func (m *DDLServiceMgr) handleCreateCommand() {
 
 		if err := provider.SendBuildIndexRequest(m.indexerId, buildList, m.localAddr); err != nil {
 			// All errors received from build index are expected to be recoverable.
-			logging.Warnf("DDLServiceMgr: Fail to build index after creation. Error = %v.", err)
+			logging.Warnf("DDLServiceMgr: Failed to build index after creation. Error = %v.", err)
 			return
 		}
 	}
@@ -649,7 +649,7 @@ func (m *DDLServiceMgr) handleCreateCommand() {
 
 		for _, path := range deleteList {
 			if err := MetakvDel(path); err != nil {
-				logging.Warnf("DDLServiceMgr: Fail to remove create index token %v. Error = %v", path, err)
+				logging.Warnf("DDLServiceMgr: Failed to remove create index token %v. Error = %v", path, err)
 			} else {
 				logging.Infof("DDLServiceMgr: Remove create index token %v.", path)
 			}
@@ -777,7 +777,7 @@ func (m *DDLServiceMgr) updateStorageMode(storageMode common.StorageMode, httpAd
 
 		resp, err := postWithAuth(addr+"/settings", "application/json", bodybuf)
 		if err != nil {
-			logging.Errorf("DDLServiceMgr:handleClusterStorageMode(). Encounter error when try to change setting.  Retry with another indexer node. Error:%v", err)
+			logging.Errorf("DDLServiceMgr:handleClusterStorageMode(). Encountered error when try to change setting.  Retry with another indexer node. Error:%v", err)
 			continue
 		}
 
@@ -1010,7 +1010,7 @@ func (m *DDLServiceMgr) newMetadataProvider(nodes map[service.NodeID]bool) (*cli
 
 		if len(nodes) != 0 {
 			return nil, nil, errors.New(
-				fmt.Sprintf("DDLServiceMgr: Fail to initialize metadata provider.  Unknown host=%v", nodes))
+				fmt.Sprintf("DDLServiceMgr: Failed to initialize metadata provider.  Unknown host=%v", nodes))
 		}
 	} else {
 		// Find all nodes that has a index http service
@@ -1034,7 +1034,7 @@ func (m *DDLServiceMgr) newMetadataProvider(nodes map[service.NodeID]bool) (*cli
 	// initialize a new MetadataProvider
 	ustr, err := common.NewUUID()
 	if err != nil {
-		return nil, nil, errors.New(fmt.Sprintf("DDLServiceMgr: Fail to initialize metadata provider.  Internal Error = %v", err))
+		return nil, nil, errors.New(fmt.Sprintf("DDLServiceMgr: Failed to initialize metadata provider.  Internal Error = %v", err))
 	}
 	providerId := ustr.Str()
 
@@ -1075,7 +1075,7 @@ func (m *DDLServiceMgr) newMetadataProvider(nodes map[service.NodeID]bool) (*cli
 				}
 
 				provider.Close()
-				return nil, nil, errors.New("DDLServiceMgr: Fail to initialize metadata provider.  Unable to connect to all indexer nodes within 500ms.")
+				return nil, nil, errors.New("DDLServiceMgr: Failed to initialize metadata provider.  Unable to connect to all indexer nodes within 500ms.")
 			}
 		}
 	}
@@ -1109,7 +1109,7 @@ func (m *DDLServiceMgr) refreshOnTopologyChange(change *service.TopologyChange, 
 	// to repair metadata provider upon the first DDL comes.
 	httpAddrMap, err := m.refreshMetadataProvider()
 	if err != nil {
-		logging.Errorf("DDLServiceMgr: notifyNewTopologyChange(): Fail to initialize metadata provider.  Error=%v.", err)
+		logging.Errorf("DDLServiceMgr: notifyNewTopologyChange(): Failed to initialize metadata provider.  Error=%v.", err)
 		return nil, err
 	}
 
