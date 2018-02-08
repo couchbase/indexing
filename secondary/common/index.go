@@ -201,6 +201,7 @@ type IndexDefn struct {
 	ResidentRatio float64 `json:"residentRatio,omitempty"`
 
 	// transient field (not part of index metadata)
+	// These fields are used for create index during DDL, rebalance, or restore
 	InstVersion   int           `json:"instanceVersion,omitempty"`
 	ReplicaId     int           `json:"replicaId,omitempty"`
 	InstId        IndexInstId   `json:"instanceId,omitempty"`

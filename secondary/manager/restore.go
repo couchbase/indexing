@@ -284,7 +284,7 @@ func (m *RestoreContext) buildIndexerMapping() {
 }
 
 //
-// Build a map between index name and defnition id
+// Update index definition id according to the indexes in current cluster.
 //
 func (m *RestoreContext) updateIndexDefnId() error {
 
@@ -312,6 +312,11 @@ func (m *RestoreContext) updateIndexDefnId() error {
 				defnIdMap[key] = defnId
 			}
 
+			// Planner depends on 3 fields
+			// 1) Index Defnition Id
+			// 2) ReplicaId
+			// 3) PartitionId
+			// Regenerate IndexDefnId for all replica/partitions with the same <bucket,name>
 			index.DefnId = defnIdMap[key]
 			if index.Instance != nil {
 				index.Instance.Defn.DefnId = defnIdMap[key]
@@ -410,14 +415,28 @@ func (m *RestoreContext) buildIndexHostMapping(solution *planner.Solution) map[s
 						if defn.DefnId == index.Instance.Defn.DefnId && defn.ReplicaId == index.Instance.ReplicaId {
 							found = true
 							defn.Partitions = append(defn.Partitions, index.PartnId)
+							defn.Versions = append(defn.Versions, 0)
 							break
 						}
 					}
 
 					if !found {
-						index.Instance.Defn.ReplicaId = index.Instance.ReplicaId
-						index.Instance.Defn.Partitions = []common.PartitionId{index.PartnId}
-						result[indexer.RestUrl] = append(result[indexer.RestUrl], &index.Instance.Defn)
+						if index.Instance != nil {
+							// Reset bucketUUID since it would have changed
+							index.Instance.Defn.BucketUUID = ""
+
+							// update transient fields
+							index.Instance.Defn.ReplicaId = index.Instance.ReplicaId
+							index.Instance.Defn.Partitions = []common.PartitionId{index.PartnId}
+							index.Instance.Defn.Versions = []int{0}
+							index.Instance.Defn.InstVersion = 0
+							index.Instance.Defn.NumPartitions = uint32(index.Instance.Pc.GetNumPartitions())
+
+							result[indexer.RestUrl] = append(result[indexer.RestUrl], &index.Instance.Defn)
+						} else {
+							logging.Errorf("RestoreContext:  Cannot sestoring index (%v, %v, %v, %v) at indexer %v because index instance is missing.",
+								index.Bucket, index.Name, index.PartnId, index.Instance.ReplicaId, indexer.NodeId)
+						}
 					}
 				}
 			}

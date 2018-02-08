@@ -531,6 +531,7 @@ func (m *DDLServiceMgr) handleCreateCommand() {
 			for indexerId, definitions := range token.Definitions {
 				for _, defn := range definitions {
 					var newPartitionList []common.PartitionId
+					var newVersionList []int
 
 					// for every partition for this instance, check to see if the partition exist in the cluster.
 					for _, partition := range defn.Partitions {
@@ -556,6 +557,7 @@ func (m *DDLServiceMgr) handleCreateCommand() {
 						// If the partition is not found in the cluster, then create it locally.
 						if !found && indexerId == m.indexerId {
 							newPartitionList = append(newPartitionList, partition)
+							newVersionList = append(newVersionList, 0)
 						}
 
 						// If the partition is not deferred, then we may need to build it.
@@ -580,6 +582,7 @@ func (m *DDLServiceMgr) handleCreateCommand() {
 						// If bucket UUID has chnanged, create index would fail
 						defn.BucketUUID = token.BucketUUID
 						defn.Partitions = newPartitionList
+						defn.Versions = newVersionList
 						defn.Deferred = true
 
 						// Before a create token is posted, at least one indexer has tried to create the index to validate
