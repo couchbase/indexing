@@ -169,6 +169,9 @@ type watcherCallback func(string, c.IndexerId, c.IndexerId)
 
 var REQUEST_CHANNEL_COUNT = 1000
 
+var VALID_PARAM_NAMES = []string{"nodes", "defer_build", "retain_deleted_xattr", "immutable",
+	"num_partition", "num_replica", "docKeySize", "secKeySize", "arrSize", "numDoc", "residentRatio"}
+
 ///////////////////////////////////////////////////////
 // Public function : MetadataProvider
 ///////////////////////////////////////////////////////
@@ -940,6 +943,14 @@ func (o *MetadataProvider) PrepareIndexDefn(
 	plan map[string]interface{}) (*c.IndexDefn, error, bool) {
 
 	//
+	// Validation
+	//
+
+	if err := o.validateParamNames(plan); err != nil {
+		return nil, err, false
+	}
+
+	//
 	// Parse WITH CLAUSE
 	//
 
@@ -1245,6 +1256,33 @@ func (o *MetadataProvider) isDecending(desc []bool) bool {
 	}
 
 	return hasDecending
+}
+
+func (o *MetadataProvider) validateParamNames(plan map[string]interface{}) error {
+
+	for param, _ := range plan {
+		found := false
+		for _, valid := range VALID_PARAM_NAMES {
+			if param == valid {
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			errStr := fmt.Sprintf("Invalid parameters in with-clause: '%v'. Valid parameters are ", param)
+			for i, valid := range VALID_PARAM_NAMES {
+				if i == 0 {
+					errStr = fmt.Sprintf("%v '%v'", errStr, valid)
+				} else {
+					errStr = fmt.Sprintf("%v, '%v'", errStr, valid)
+				}
+			}
+			return errors.New(errStr)
+		}
+	}
+
+	return nil
 }
 
 func (o *MetadataProvider) getNodesParam(plan map[string]interface{}) ([]string, error, bool) {
