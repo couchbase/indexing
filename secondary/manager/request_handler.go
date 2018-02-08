@@ -120,6 +120,7 @@ type IndexStatus struct {
 	Scheduled    bool               `json:"scheduled"`
 	Partitioned  bool               `json:"partitioned"`
 	NumPartition int                `json:"numPartition"`
+	PartitionMap map[string][]int   `json:"partitionMap"`
 }
 
 type indexStatusSorter []IndexStatus
@@ -525,6 +526,11 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, bucket string
 								progress = math.Float64frombits(uint64(stat.(float64)))
 							}
 
+							partitionMap := make(map[string][]int)
+							for _, partnDef := range instance.Partitions {
+								partitionMap[curl] = append(partitionMap[curl], int(partnDef.PartId))
+							}
+
 							status := IndexStatus{
 								DefnId:       defn.DefnId,
 								InstId:       common.IndexInstId(instance.InstId),
@@ -543,6 +549,7 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, bucket string
 								Scheduled:    instance.Scheduled,
 								Partitioned:  common.IsPartitioned(defn.PartitionScheme),
 								NumPartition: len(instance.Partitions),
+								PartitionMap: partitionMap,
 							}
 
 							list = append(list, status)
@@ -580,6 +587,11 @@ func (m *requestHandlerContext) consolideIndexStatus(statuses []IndexStatus) []I
 			if len(status.Error) != 0 {
 				s2.Error = fmt.Sprintf("%v %v", s2.Error, status.Error)
 			}
+
+			for host, partitions := range status.PartitionMap {
+				s2.PartitionMap[host] = partitions
+			}
+
 			statusMap[status.InstId] = s2
 		}
 	}
