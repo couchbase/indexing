@@ -218,7 +218,7 @@ func (s *fdbSnapshot) Iterate(ctx IndexReaderContext, low, high IndexKey, inclus
 
 loop:
 	for ; it.Valid(); it.Next() {
-		entry = s.newIndexEntry(it.Key())
+		s.newIndexEntry(it.Key(), &entry)
 
 		// Iterator has reached past the high key, no need to scan further
 		if cmpFn(high, entry) <= 0 {
@@ -253,17 +253,15 @@ func closeIterator(it *ForestDBIterator) {
 	}
 }
 
-func (s *fdbSnapshot) newIndexEntry(b []byte) IndexEntry {
-	var entry IndexEntry
+func (s *fdbSnapshot) newIndexEntry(b []byte, entry *IndexEntry) {
 	var err error
 
 	if s.slice.isPrimary {
-		entry, err = BytesToPrimaryIndexEntry(b)
+		*entry, err = BytesToPrimaryIndexEntry(b)
 	} else {
-		entry, err = BytesToSecondaryIndexEntry(b)
+		*entry, err = BytesToSecondaryIndexEntry(b)
 	}
 	common.CrashOnError(err)
-	return entry
 }
 
 func (s *fdbSnapshot) iterEqualKeys(k IndexKey, it *ForestDBIterator,
@@ -272,7 +270,7 @@ func (s *fdbSnapshot) iterEqualKeys(k IndexKey, it *ForestDBIterator,
 
 	var entry IndexEntry
 	for ; it.Valid(); it.Next() {
-		entry = s.newIndexEntry(it.Key())
+		s.newIndexEntry(it.Key(), &entry)
 		if cmpFn(k, entry) == 0 {
 			if callback != nil {
 				err = callback(it.Key())

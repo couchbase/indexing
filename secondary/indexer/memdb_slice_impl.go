@@ -1468,7 +1468,7 @@ func (s *memdbSnapshot) Iterate(ctx IndexReaderContext, low, high IndexKey, incl
 loop:
 	for it.Valid() {
 		itm := it.Get()
-		entry = s.newIndexEntry(itm)
+		s.newIndexEntry(itm, &entry)
 
 		// Iterator has reached past the high key, no need to scan further
 		if cmpFn(high, entry) <= 0 {
@@ -1498,17 +1498,15 @@ func (s *memdbSnapshot) isPrimary() bool {
 	return s.slice.isPrimary
 }
 
-func (s *memdbSnapshot) newIndexEntry(b []byte) IndexEntry {
-	var entry IndexEntry
+func (s *memdbSnapshot) newIndexEntry(b []byte, entry *IndexEntry) {
 	var err error
 
 	if s.slice.isPrimary {
-		entry, err = BytesToPrimaryIndexEntry(b)
+		*entry, err = BytesToPrimaryIndexEntry(b)
 	} else {
-		entry, err = BytesToSecondaryIndexEntry(b)
+		*entry, err = BytesToSecondaryIndexEntry(b)
 	}
 	common.CrashOnError(err)
-	return entry
 }
 
 func (s *memdbSnapshot) iterEqualKeys(k IndexKey, it *memdb.Iterator,
@@ -1518,7 +1516,7 @@ func (s *memdbSnapshot) iterEqualKeys(k IndexKey, it *memdb.Iterator,
 	var entry IndexEntry
 	for ; it.Valid(); it.Next() {
 		itm := it.Get()
-		entry = s.newIndexEntry(itm)
+		s.newIndexEntry(itm, &entry)
 		if cmpFn(k, entry) == 0 {
 			if callback != nil {
 				err = callback(itm)
