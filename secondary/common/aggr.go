@@ -187,24 +187,13 @@ func (a *AggrFuncCount) AddDelta(delta interface{}) {
 		return
 	}
 
-	switch v := delta.(type) {
-
-	case []byte, value.Value:
-		if a.distinct {
-			if !a.checkDistinct(delta) {
-				return
-			}
+	if a.distinct {
+		if !a.checkDistinct(delta) {
+			return
 		}
-		a.val += 1
-
-	case float64:
-		if v != 0 {
-			a.val += 1
-		}
-
-	default:
-		//ignored
 	}
+	a.val += 1
+
 }
 
 func (a *AggrFuncCount) checkDistinct(newval interface{}) bool {
@@ -264,26 +253,15 @@ func (a *AggrFuncCountN) AddDelta(delta interface{}) {
 		return
 	}
 
-	switch v := delta.(type) {
-
-	case []byte, value.Value:
-		if isNumeric(delta) {
-			if a.distinct {
-				if !a.checkDistinct(delta) {
-					return
-				}
+	if isNumeric(delta) {
+		if a.distinct {
+			if !a.checkDistinct(delta) {
+				return
 			}
-			a.val += 1
 		}
-
-	case float64:
-		if v != 0 {
-			a.val += 1
-		}
-
-	default:
-		//ignored
+		a.val += 1
 	}
+
 }
 
 func (a *AggrFuncCountN) checkDistinct(newval interface{}) bool {
