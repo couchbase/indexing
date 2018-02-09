@@ -382,16 +382,25 @@ func (p *SAPlanner) Plan(command CommandType, solution *Solution) (*Solution, er
 
 	solution.command = command
 	solution = p.adjustInitialSolutionIfNecessary(solution)
-	solution.runSizeEstimation(p.placement)
 
 	for i := 0; i < RunPerPlan; i++ {
 		p.Try++
 		startTime := time.Now()
-		result, err = p.planSingleRun(command, solution)
+		solution.runSizeEstimation(p.placement)
 
-		// if err == nil, type assertion will return !ok
-		if _, ok := err.(*Violations); !ok {
-			return result, err
+		if err := p.Validate(solution); err != nil {
+			if i == RunPerPlan-1 {
+				solution.PrintLayout()
+				return nil, errors.New(fmt.Sprintf("Validation fails: %s", err))
+			}
+		} else {
+			result, err = p.planSingleRun(command, solution)
+
+			// if err == nil, type assertion will return !ok
+			if _, ok := err.(*Violations); !ok {
+				return result, err
+			}
+			solution.estimatedIndexSize = result.estimatedIndexSize
 		}
 
 		// If planner get to this point, it means we see violation errors.
@@ -400,7 +409,6 @@ func (p *SAPlanner) Plan(command CommandType, solution *Solution) (*Solution, er
 			logging.Infof("Cannot rebuild lost replica due to resource constraint in cluster.  Will not rebuild lost replica.")
 			optionals := p.placement.RemoveOptionalIndexes()
 			solution.removeIndexes(optionals)
-			solution.runSizeEstimation(p.placement)
 		}
 
 		// If cannot find a solution after 3 tries and there are deleted nodes, then disable exclude flag.
@@ -423,11 +431,6 @@ func (p *SAPlanner) planSingleRun(command CommandType, solution *Solution) (*Sol
 
 	current := solution.clone()
 	initialPlan := solution.initialPlan
-
-	if err := p.Validate(current); err != nil {
-		current.PrintLayout()
-		return nil, errors.New(fmt.Sprintf("Validation fails: %s", err))
-	}
 
 	logging.Tracef("Planner: memQuota %v (%v) cpuQuota %v",
 		p.constraint.GetMemQuota(), formatMemoryStr(p.constraint.GetMemQuota()), p.constraint.GetCpuQuota())
