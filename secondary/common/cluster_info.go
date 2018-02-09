@@ -29,7 +29,7 @@ const (
 	INDEX_HTTP_SERVICE  = "indexHttp"
 )
 
-const CLUSTER_INFO_INIT_RETRIES = 5
+const CLUSTER_INFO_DEFAULT_RETRIES = 300
 const CLUSTER_INFO_VALIDATION_RETRIES = 10
 
 const BUCKET_UUID_NIL = ""
@@ -76,7 +76,7 @@ func NewClusterInfoCache(clusterUrl string, pool string) (*ClusterInfoCache, err
 	c := &ClusterInfoCache{
 		url:        clusterUrl,
 		poolName:   pool,
-		retries:    CLUSTER_INFO_INIT_RETRIES,
+		retries:    CLUSTER_INFO_DEFAULT_RETRIES,
 		node2group: make(map[NodeId]string),
 	}
 
@@ -219,7 +219,7 @@ func (c *ClusterInfoCache) Fetch() error {
 		return nil
 	}
 
-	rh := NewRetryHelper(c.retries, time.Second, 1, fn)
+	rh := NewRetryHelper(c.retries, time.Second*2, 1, fn)
 	return rh.Run()
 }
 

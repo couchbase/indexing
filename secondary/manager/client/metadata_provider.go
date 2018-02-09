@@ -169,6 +169,9 @@ type watcherCallback func(string, c.IndexerId, c.IndexerId)
 
 var REQUEST_CHANNEL_COUNT = 1000
 
+var VALID_PARAM_NAMES = []string{"nodes", "defer_build", "retain_deleted_xattr", "immutable",
+	"num_partition", "num_replica", "docKeySize", "secKeySize", "arrSize", "numDoc", "residentRatio"}
+
 ///////////////////////////////////////////////////////
 // Public function : MetadataProvider
 ///////////////////////////////////////////////////////
@@ -572,7 +575,7 @@ func (o *MetadataProvider) makeCommitIndexRequest(idxDefn *c.IndexDefn, layout m
 			// makeRequest would not return until timeout.
 			content, err := w.makeRequest(OPCODE_COMMIT_CREATE_INDEX, key, requestMsg)
 			if err != nil {
-				logging.Errorf("Encounter error during create index.  Error: %v", err)
+				logging.Errorf("Encountered error during create index.  Error: %v", err)
 				mutex.Lock()
 				errorMap[err.Error()] = true
 				mutex.Unlock()
@@ -580,7 +583,7 @@ func (o *MetadataProvider) makeCommitIndexRequest(idxDefn *c.IndexDefn, layout m
 
 			response, err := UnmarshallCommitCreateResponse(content)
 			if err != nil {
-				logging.Errorf("Encounter error during create index.  Error: %v", err)
+				logging.Errorf("Encountered error during create index.  Error: %v", err)
 			}
 
 			mutex.Lock()
@@ -620,7 +623,7 @@ func (o *MetadataProvider) makeCommitIndexRequest(idxDefn *c.IndexDefn, layout m
 	//result is ready
 	if success {
 		if createErr != nil {
-			return fmt.Errorf("Encounter transient error.  Index creation will retry in background.  Error: %v", createErr)
+			return fmt.Errorf("Encountered transient error.  Index creation will be retried in background.  Error: %v", createErr)
 		}
 		return nil
 	}
@@ -630,7 +633,7 @@ func (o *MetadataProvider) makeCommitIndexRequest(idxDefn *c.IndexDefn, layout m
 	exist, err := mc.CreateCommandTokenExist(idxDefn.DefnId)
 	if exist {
 		if createErr != nil {
-			return fmt.Errorf("Encounter transient.  Index creation will retry in background.  Error: %v", createErr)
+			return fmt.Errorf("Encountered transient error.  Index creation will be retried in background.  Error: %v", createErr)
 		}
 		return nil
 	}
@@ -840,7 +843,7 @@ func (o *MetadataProvider) makeCreateIndexRequest(idxDefn *c.IndexDefn, layout m
 		}
 
 		if len(errStr) != 0 {
-			return errors.New(fmt.Sprintf("Encounter errors during create index.  Error=%s.", errStr))
+			return errors.New(fmt.Sprintf("Encountered errors during create index.  Error=%s.", errStr))
 		}
 	}
 
@@ -856,8 +859,8 @@ func (o *MetadataProvider) makeCreateIndexRequest(idxDefn *c.IndexDefn, layout m
 		list := BuildIndexIdList([]c.IndexDefnId{defnID})
 		content, err := MarshallIndexIdList(list)
 		if err != nil {
-			logging.Errorf("Encounter unexpected error during build index.  Index build will retry in background. Error=%v", err)
-			return errors.New("Encounter unexpected error.  Index build will retry in background.")
+			logging.Errorf("Encountered unexpected error during build index.  Index build will be retried in background. Error=%v", err)
+			return errors.New("Encountered unexpected error.  Index build will be retried in background.")
 		}
 
 		hasError := false
@@ -869,14 +872,14 @@ func (o *MetadataProvider) makeCreateIndexRequest(idxDefn *c.IndexDefn, layout m
 
 					watcher, err := o.findAliveWatcherByIndexerId(indexerId)
 					if err != nil {
-						logging.Errorf("Cannot reach indexer node.  Index build will retry in background once network connection is re-established.")
+						logging.Errorf("Cannot reach indexer node.  Index build will be retried in background once network connection is re-established.")
 						hasError = true
 						continue
 					}
 
 					_, err = watcher.makeRequest(OPCODE_BUILD_INDEX, "Index Build", content)
 					if err != nil {
-						logging.Errorf("Encounter unexpected error during build index.  Index build will retry in background. Error=%v", err)
+						logging.Errorf("Encountered unexpected error during build index.  Index build will be retried in background. Error=%v", err)
 						hasError = true
 					}
 				}
@@ -884,7 +887,7 @@ func (o *MetadataProvider) makeCreateIndexRequest(idxDefn *c.IndexDefn, layout m
 		}
 
 		if hasError {
-			return errors.New("Encounter unexpected error.  Index build will retry in background.")
+			return errors.New("Encountered unexpected error.  Index build will be retried in background.")
 		}
 	}
 
@@ -938,6 +941,14 @@ func (o *MetadataProvider) PrepareIndexDefn(
 	secExprs []string, desc []bool, isPrimary bool,
 	partitionScheme c.PartitionScheme, partitionKeys []string,
 	plan map[string]interface{}) (*c.IndexDefn, error, bool) {
+
+	//
+	// Validation
+	//
+
+	if err := o.validateParamNames(plan); err != nil {
+		return nil, err, false
+	}
 
 	//
 	// Parse WITH CLAUSE
@@ -1245,6 +1256,33 @@ func (o *MetadataProvider) isDecending(desc []bool) bool {
 	}
 
 	return hasDecending
+}
+
+func (o *MetadataProvider) validateParamNames(plan map[string]interface{}) error {
+
+	for param, _ := range plan {
+		found := false
+		for _, valid := range VALID_PARAM_NAMES {
+			if param == valid {
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			errStr := fmt.Sprintf("Invalid parameters in with-clause: '%v'. Valid parameters are ", param)
+			for i, valid := range VALID_PARAM_NAMES {
+				if i == 0 {
+					errStr = fmt.Sprintf("%v '%v'", errStr, valid)
+				} else {
+					errStr = fmt.Sprintf("%v, '%v'", errStr, valid)
+				}
+			}
+			return errors.New(errStr)
+		}
+	}
+
+	return nil
 }
 
 func (o *MetadataProvider) getNodesParam(plan map[string]interface{}) ([]string, error, bool) {
@@ -1887,7 +1925,7 @@ func (o *MetadataProvider) SendBuildIndexRequest(indexerId c.IndexerId, idList [
 
 	watcher, err := o.findAliveWatcherByIndexerId(indexerId)
 	if err != nil {
-		return fmt.Errorf("Cannot reach node %v.  Index build will retry in background once network connection is re-established.", addr)
+		return fmt.Errorf("Cannot reach node %v.  Index build will be retried in background once network connection is re-established.", addr)
 	}
 
 	list := BuildIndexIdList(idList)

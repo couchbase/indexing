@@ -719,7 +719,7 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scheduled bool,
 			retryList, skipList, errList := m.BuildIndexes([]common.IndexDefnId{defn.DefnId}, reqCtx, false)
 
 			if len(retryList) != 0 {
-				return errors.New("Fail to build index.  Index build will retry in background.")
+				return errors.New("Failed to build index.  Index build will be retried in background.")
 			}
 
 			if len(errList) != 0 {
@@ -731,7 +731,7 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scheduled bool,
 			if len(skipList) != 0 {
 				logging.Errorf("LifecycleMgr.CreateIndex() : build index fails due to internal errors.")
 				m.DeleteIndex(defn.DefnId, true, reqCtx)
-				return errors.New("Fail to create index due to internal build error.  Please retry the operation.")
+				return errors.New("Failed to create index due to internal build error.  Please retry the operation.")
 			}
 		}
 	}
@@ -1004,7 +1004,7 @@ func (m *LifecycleMgr) BuildIndexes(ids []common.IndexDefnId,
 
 		insts, err := m.FindAllLocalIndexInst(defn.Bucket, id)
 		if len(insts) == 0 || err != nil {
-			logging.Errorf("LifecycleMgr.handleBuildIndexes: Fail to find index instance (%v, %v).  Skip this index.", defn.Name, defn.Bucket)
+			logging.Errorf("LifecycleMgr.handleBuildIndexes: Failed to find index instance (%v, %v).  Skip this index.", defn.Name, defn.Bucket)
 			skipList = append(skipList, id)
 			continue
 		}
@@ -1069,12 +1069,12 @@ func (m *LifecycleMgr) BuildIndexes(ids []common.IndexDefnId,
 					m.UpdateIndexInstance(defn.Bucket, defnId, common.IndexInstId(inst.InstId), common.INDEX_STATE_NIL,
 						common.NIL_STREAM, build_err.Error(), nil, inst.RState, nil, nil, -1)
 				} else {
-					logging.Infof("LifecycleMgr.handleBuildIndexes() : Fail to persist error in index instance (%v, %v, %v).",
+					logging.Infof("LifecycleMgr.handleBuildIndexes() : Failed to persist, error in index instance (%v, %v, %v).",
 						defn.Bucket, defn.Name, inst.ReplicaId)
 				}
 
 				if m.canRetryBuildError(inst, build_err, retry) {
-					logging.Infof("LifecycleMgr.handleBuildIndexes() : Encounter build error.  Retry building index (%v, %v, %v) at later time.",
+					logging.Infof("LifecycleMgr.handleBuildIndexes() : Encountered build error.  Retry building index (%v, %v, %v) at later time.",
 						defn.Bucket, defn.Name, inst.ReplicaId)
 
 					if inst != nil && !inst.Scheduled {
@@ -1144,7 +1144,7 @@ func (m *LifecycleMgr) DeleteIndex(id common.IndexDefnId, notify bool,
 	if err != nil {
 		// Cannot read bucket topology.  Likely a transient error.  But without index inst, we cannot
 		// proceed without letting indexer to clean up.
-		logging.Warnf("LifecycleMgr.handleDeleteIndex() : Encounter error during delete index. Error = %v", err)
+		logging.Warnf("LifecycleMgr.handleDeleteIndex() : Encountered error during delete index. Error = %v", err)
 		return err
 	}
 
@@ -1166,7 +1166,7 @@ func (m *LifecycleMgr) DeleteIndex(id common.IndexDefnId, notify bool,
 		if err != nil {
 			// Cannot read bucket topology.  Likely a transient error.  But without index inst, we cannot
 			// proceed without letting indexer to clean up.
-			logging.Warnf("LifecycleMgr.handleDeleteIndex() : Encounter error during delete index. Error = %v", err)
+			logging.Warnf("LifecycleMgr.handleDeleteIndex() : Encountered error during delete index. Error = %v", err)
 			return err
 		}
 
@@ -1184,12 +1184,12 @@ func (m *LifecycleMgr) DeleteIndex(id common.IndexDefnId, notify bool,
 				// the client can call DeleteIndex again and free up indexer resource.
 				indexerErr, ok := err.(*common.IndexerError)
 				if ok && indexerErr.Code != common.IndexNotExist {
-					errStr := fmt.Sprintf("Encounter error when dropping index: %v. Drop index will retry in background.", indexerErr.Reason)
+					errStr := fmt.Sprintf("Encountered error when dropping index: %v. Drop index will be retried in background.", indexerErr.Reason)
 					logging.Errorf("LifecycleMgr.handleDeleteIndex(): %v", errStr)
 					dropErr = errors.New(errStr)
 
 				} else if !strings.Contains(err.Error(), "Unknown Index Instance") {
-					errStr := fmt.Sprintf("Encounter error when dropping index: %v. Drop index will retry in background.", err.Error())
+					errStr := fmt.Sprintf("Encountered error when dropping index: %v. Drop index will be retried in background.", err.Error())
 					logging.Errorf("LifecycleMgr.handleDeleteIndex(): %v", errStr)
 					dropErr = errors.New(errStr)
 				}
@@ -1359,7 +1359,7 @@ func (m *LifecycleMgr) deleteCreateTokenForBucket(bucket string) error {
 
 	entries, err := metakv.ListAllChildren(mc.CreateDDLCommandTokenPath)
 	if err != nil {
-		logging.Warnf("LifecycleMgr.handleDeleteBucket: Fail to fetch token from metakv.  Internal Error = %v", err)
+		logging.Warnf("LifecycleMgr.handleDeleteBucket: Failed to fetch token from metakv.  Internal Error = %v", err)
 		return err
 	}
 
@@ -1368,7 +1368,7 @@ func (m *LifecycleMgr) deleteCreateTokenForBucket(bucket string) error {
 
 			token, err := mc.UnmarshallCreateCommandToken(entry.Value)
 			if err != nil {
-				logging.Warnf("LifecycleMgr: Fail to process create index token %v.  Internal Error = %v.", entry.Path, err)
+				logging.Warnf("LifecycleMgr: Failed to process create index token %v.  Internal Error = %v.", entry.Path, err)
 				result = err
 				continue
 			}
@@ -1376,7 +1376,7 @@ func (m *LifecycleMgr) deleteCreateTokenForBucket(bucket string) error {
 			for _, definitions := range token.Definitions {
 				if len(definitions) > 0 && definitions[0].Bucket == bucket {
 					if err := mc.DeleteCreateCommandToken(definitions[0].DefnId); err != nil {
-						logging.Warnf("LifecycleMgr: Fail to delete create index token %v.  Internal Error = %v.", entry.Path, err)
+						logging.Warnf("LifecycleMgr: Failed to delete create index token %v.  Internal Error = %v.", entry.Path, err)
 						result = err
 					}
 				}
@@ -1431,7 +1431,7 @@ func (m *LifecycleMgr) handleCleanupDeferIndexFromBucket(bucket string) error {
 								common.StreamId(instRef.StreamId) == common.NIL_STREAM {
 								deleteToken = true
 								if err := m.DeleteIndex(common.IndexDefnId(defn.DefnId), true, common.NewUserRequestContext()); err != nil {
-									logging.Errorf("LifecycleMgr.handleCleanupDeferIndexFromBucket: Encounter error %v", err)
+									logging.Errorf("LifecycleMgr.handleCleanupDeferIndexFromBucket: Encountered error %v", err)
 									continue
 								}
 								mc.DeleteCreateCommandToken(common.IndexDefnId(defn.DefnId))
@@ -1500,7 +1500,7 @@ func (m *LifecycleMgr) handleResetIndex(content []byte) error {
 	defn := &inst.Defn
 	oldDefn, err := m.repo.GetIndexDefnById(defn.DefnId)
 	if err != nil {
-		logging.Warnf("LifecycleMgr.handleResetIndex(): Fail to find index definition (%v, %v).", defn.DefnId, defn.Bucket)
+		logging.Warnf("LifecycleMgr.handleResetIndex(): Failed to find index definition (%v, %v).", defn.DefnId, defn.Bucket)
 		return err
 	}
 
@@ -1685,7 +1685,7 @@ func (m *LifecycleMgr) CreateIndexInstance(defn *common.IndexDefn, scheduled boo
 			retryList, skipList, errList := m.BuildIndexes([]common.IndexDefnId{defn.DefnId}, reqCtx, false)
 
 			if len(retryList) != 0 {
-				return errors.New("Fail to build index.  Index build will retry in background.")
+				return errors.New("Failed to build index.  Index build will be retried in background.")
 			}
 
 			if len(errList) != 0 {
@@ -1697,7 +1697,7 @@ func (m *LifecycleMgr) CreateIndexInstance(defn *common.IndexDefn, scheduled boo
 			if len(skipList) != 0 {
 				logging.Errorf("LifecycleMgr.CreateIndexInstance() : build index fails due to internal errors.")
 				m.DeleteIndexInstance(defn.DefnId, instId, false, reqCtx)
-				return errors.New("Fail to create index due to internal build error.  Please retry the operation.")
+				return errors.New("Failed to create index due to internal build error.  Please retry the operation.")
 			}
 		}
 	}
@@ -1807,14 +1807,14 @@ func (m *LifecycleMgr) DeleteOrPruneIndexInstance(defn common.IndexDefn, cleanup
 
 	inst, err := m.FindLocalIndexInst(defn.Bucket, id, instId)
 	if err != nil {
-		logging.Errorf("LifecycleMgr.DeleteOrPruneIndexInstance() : Encounter error during delete index. Error = %v", err)
+		logging.Errorf("LifecycleMgr.DeleteOrPruneIndexInstance() : Encountered error during delete index. Error = %v", err)
 		return err
 	}
 
 	if inst == nil {
 		inst, err := m.FindLocalIndexInst(defn.Bucket, id, defn.RealInstId)
 		if err != nil {
-			logging.Errorf("LifecycleMgr.DeleteOrPruneIndexInstance() : Encounter error during delete index. Error = %v", err)
+			logging.Errorf("LifecycleMgr.DeleteOrPruneIndexInstance() : Encountered error during delete index. Error = %v", err)
 			return err
 		}
 
@@ -1851,7 +1851,7 @@ func (m *LifecycleMgr) DeleteIndexInstance(id common.IndexDefnId, instId common.
 	if err != nil {
 		// Cannot read bucket topology.  Likely a transient error.  But without index inst, we cannot
 		// proceed without letting indexer to clean up.
-		logging.Warnf("LifecycleMgr.DeleteIndexInstance() : Encounter error during delete index. Error = %v", err)
+		logging.Warnf("LifecycleMgr.DeleteIndexInstance() : Encountered error during delete index. Error = %v", err)
 		return err
 	}
 
@@ -1888,12 +1888,12 @@ func (m *LifecycleMgr) DeleteIndexInstance(id common.IndexDefnId, instId common.
 		if err := m.notifier.OnIndexDelete(instId, defn.Bucket, reqCtx); err != nil {
 			indexerErr, ok := err.(*common.IndexerError)
 			if ok && indexerErr.Code != common.IndexNotExist {
-				logging.Errorf("LifecycleMgr.DeleteIndexInstance(): Encounter error when dropping index: %v.",
+				logging.Errorf("LifecycleMgr.DeleteIndexInstance(): Encountered error when dropping index: %v.",
 					indexerErr.Reason)
 				return err
 
 			} else if !strings.Contains(err.Error(), "Unknown Index Instance") {
-				logging.Errorf("LifecycleMgr.handleDeleteIndex(): Encounter error when dropping index: %v.  Drop index will retry in background",
+				logging.Errorf("LifecycleMgr.handleDeleteIndex(): Encountered error when dropping index: %v.  Drop index will be retried in background",
 					err.Error())
 				return err
 			}
@@ -1938,7 +1938,7 @@ func (m *LifecycleMgr) MergePartition(id common.IndexDefnId, srcInstId common.In
 
 	indexerId, err := m.repo.GetLocalIndexerId()
 	if err != nil {
-		logging.Errorf("LifecycleMgr.MergePartition() : Fail to find indexerId. Reason = %v", err)
+		logging.Errorf("LifecycleMgr.MergePartition() : Failed to find indexerId. Reason = %v", err)
 		return err
 	}
 
@@ -1971,7 +1971,7 @@ func (m *LifecycleMgr) PruneIndexInstance(id common.IndexDefnId, instId common.I
 	if err != nil {
 		// Cannot read bucket topology.  Likely a transient error.  But without index inst, we cannot
 		// proceed without letting indexer to clean up.
-		logging.Errorf("LifecycleMgr.PruneIndexInstance() : Encounter error during prune index. Error = %v", err)
+		logging.Errorf("LifecycleMgr.PruneIndexInstance() : Encountered error during prune index. Error = %v", err)
 		return err
 	}
 	if inst == nil {
@@ -2001,12 +2001,12 @@ func (m *LifecycleMgr) PruneIndexInstance(id common.IndexDefnId, instId common.I
 
 	proxyInstId, err := common.NewIndexInstId()
 	if err != nil {
-		logging.Errorf("LifecycleMgr.PrunePartition() : Fail to generate index inst id. Reason = %v", err)
+		logging.Errorf("LifecycleMgr.PrunePartition() : Failed to generate index inst id. Reason = %v", err)
 		return err
 	}
 
 	if err := m.repo.splitPartitionFromTopology(defn.Bucket, id, instId, proxyInstId, newPartitions); err != nil {
-		logging.Errorf("LifecycleMgr.PrunePartition() : Fail to find split index.  Reason = %v", err)
+		logging.Errorf("LifecycleMgr.PrunePartition() : Failed to find split index.  Reason = %v", err)
 		return err
 	}
 
@@ -2014,12 +2014,12 @@ func (m *LifecycleMgr) PruneIndexInstance(id common.IndexDefnId, instId common.I
 		if err := m.notifier.OnPartitionPrune(instId, newPartitions, reqCtx); err != nil {
 			indexerErr, ok := err.(*common.IndexerError)
 			if ok && indexerErr.Code != common.IndexNotExist {
-				logging.Errorf("LifecycleMgr.PruneIndexInstance(): Encounter error when dropping index: %v.",
+				logging.Errorf("LifecycleMgr.PruneIndexInstance(): Encountered error when dropping index: %v.",
 					indexerErr.Reason)
 				return err
 
 			} else if !strings.Contains(err.Error(), "Unknown Index Instance") {
-				logging.Errorf("LifecycleMgr.PruneIndexInstance(): Encounter error when dropping index: %v.  Drop index will retry in background",
+				logging.Errorf("LifecycleMgr.PruneIndexInstance(): Encountered error when dropping index: %v.  Drop index will be retried in background",
 					err.Error())
 				return err
 			}
@@ -2107,7 +2107,7 @@ func (m *LifecycleMgr) UpdateIndexInstance(bucket string, defnId common.IndexDef
 
 	defn, err := m.repo.GetIndexDefnById(defnId)
 	if err != nil {
-		logging.Errorf("LifecycleMgr.UpdateIndexInstance() : Fail to find index definiton %v. Reason = %v", defnId, err)
+		logging.Errorf("LifecycleMgr.UpdateIndexInstance() : Failed to find index definiton %v. Reason = %v", defnId, err)
 		return err
 	}
 	if defn == nil {
@@ -2117,7 +2117,7 @@ func (m *LifecycleMgr) UpdateIndexInstance(bucket string, defnId common.IndexDef
 
 	indexerId, err := m.repo.GetLocalIndexerId()
 	if err != nil {
-		logging.Errorf("LifecycleMgr.UpdateIndexInstance() : Fail to find indexerId for defn %v. Reason = %v", defnId, err)
+		logging.Errorf("LifecycleMgr.UpdateIndexInstance() : Failed to find indexerId for defn %v. Reason = %v", defnId, err)
 		return err
 	}
 
@@ -2425,7 +2425,7 @@ func (m *janitor) cleanup() {
 
 	entries, err := metakv.ListAllChildren(mc.DeleteDDLCommandTokenPath)
 	if err != nil {
-		logging.Warnf("janitor: Fail to drop index upon cleanup.  Internal Error = %v", err)
+		logging.Warnf("janitor: Failed to drop index upon cleanup.  Internal Error = %v", err)
 		return
 	}
 
@@ -2437,13 +2437,13 @@ func (m *janitor) cleanup() {
 
 			command, err := mc.UnmarshallDeleteCommandToken(entry.Value)
 			if err != nil {
-				logging.Warnf("janitor: Fail to drop index upon cleanup.  Skp command %v.  Internal Error = %v.", entry.Path, err)
+				logging.Warnf("janitor: Failed to drop index upon cleanup.  Skp command %v.  Internal Error = %v.", entry.Path, err)
 				continue
 			}
 
 			defn, err := m.manager.repo.GetIndexDefnById(command.DefnId)
 			if err != nil {
-				logging.Warnf("janitor: Fail to drop index upon cleanup.  Skp command %v.  Internal Error = %v.", entry.Path, err)
+				logging.Warnf("janitor: Failed to drop index upon cleanup.  Skp command %v.  Internal Error = %v.", entry.Path, err)
 				continue
 			}
 
@@ -2454,7 +2454,7 @@ func (m *janitor) cleanup() {
 
 			// Queue up the cleanup request.  The request wont' happen until bootstrap is ready.
 			if err := m.manager.requestServer.MakeAsyncRequest(client.OPCODE_DROP_INDEX, fmt.Sprintf("%v", command.DefnId), nil); err != nil {
-				logging.Warnf("janitor: Fail to drop index upon cleanup.  Skp command %v.  Internal Error = %v.", entry.Path, err)
+				logging.Warnf("janitor: Failed to drop index upon cleanup.  Skp command %v.  Internal Error = %v.", entry.Path, err)
 			} else {
 				logging.Infof("janitor: Clean up deleted index %v during periodic cleanup ", command.DefnId)
 			}
@@ -2467,7 +2467,7 @@ func (m *janitor) cleanup() {
 
 	metaIter, err := m.manager.repo.NewIterator()
 	if err != nil {
-		logging.Warnf("janitor: Fail to  upon instantiate metadata iterator during cleanup.  Internal Error = %v", err)
+		logging.Warnf("janitor: Failed to  upon instantiate metadata iterator during cleanup.  Internal Error = %v", err)
 		return
 	}
 	defer metaIter.Close()
@@ -2476,7 +2476,7 @@ func (m *janitor) cleanup() {
 
 		insts, err := m.manager.FindAllLocalIndexInst(defn.Bucket, defn.DefnId)
 		if err != nil {
-			logging.Warnf("janitor: Fail to find index instance (%v, %v) during cleanup. Internal error = %v.  Skipping.", defn.Bucket, defn.Name, err)
+			logging.Warnf("janitor: Failed to find index instance (%v, %v) during cleanup. Internal error = %v.  Skipping.", defn.Bucket, defn.Name, err)
 			continue
 		}
 
@@ -2494,13 +2494,13 @@ func (m *janitor) cleanup() {
 				if buf, err := json.Marshal(&msg); err == nil {
 
 					if err := m.manager.requestServer.MakeAsyncRequest(client.OPCODE_DROP_OR_PRUNE_INSTANCE, fmt.Sprintf("%v", idxDefn.DefnId), buf); err != nil {
-						logging.Warnf("janitor: Fail to drop instance upon cleanup.  Skip instance (%v, %v, %v).  Internal Error = %v.",
+						logging.Warnf("janitor: Failed to drop instance upon cleanup.  Skip instance (%v, %v, %v).  Internal Error = %v.",
 							defn.Bucket, defn.Name, inst.InstId, err)
 					} else {
 						logging.Infof("janitor: Clean up deleted instance (%v, %v, %v) during periodic cleanup ", defn.Bucket, defn.Name, inst.InstId)
 					}
 				} else {
-					logging.Warnf("janitor: Fail to drop instance upon cleanup.  Skip instance (%v, %v, %v).  Internal Error = %v.",
+					logging.Warnf("janitor: Failed to drop instance upon cleanup.  Skip instance (%v, %v, %v).  Internal Error = %v.",
 						defn.Bucket, defn.Name, inst.InstId, err)
 				}
 			}
@@ -2660,13 +2660,13 @@ func (s *builder) tryBuildIndex(bucket string, quota int32) int32 {
 
 				defn, err := s.manager.repo.GetIndexDefnById(common.IndexDefnId(defnId))
 				if defn == nil || err != nil {
-					logging.Warnf("builder: Fail to find index definition (%v, %v).  Skipping.", defnId, bucket)
+					logging.Warnf("builder: Failed to find index definition (%v, %v).  Skipping.", defnId, bucket)
 					continue
 				}
 
 				insts, err := s.manager.FindAllLocalIndexInst(bucket, common.IndexDefnId(defnId))
 				if len(insts) == 0 || err != nil {
-					logging.Warnf("builder: Fail to find index instance (%v, %v).  Skipping.", defnId, bucket)
+					logging.Warnf("builder: Failed to find index instance (%v, %v).  Skipping.", defnId, bucket)
 					continue
 				}
 
@@ -2707,7 +2707,7 @@ func (s *builder) tryBuildIndex(bucket string, quota int32) int32 {
 				key := fmt.Sprintf("%d", idList.DefnIds[0])
 				content, err := client.MarshallIndexIdList(idList)
 				if err != nil {
-					logging.Warnf("builder: Fail to marshall index defnIds during index build.  Error = %v. Retry later.", err)
+					logging.Warnf("builder: Failed to marshall index defnIds during index build.  Error = %v. Retry later.", err)
 					return quota
 				}
 
@@ -2721,7 +2721,7 @@ func (s *builder) tryBuildIndex(bucket string, quota int32) int32 {
 				// will send the rest of the indexes to the indexer.  An index cannot be built if it does not have
 				// an index instance or the index instance is not in READY state.
 				if err := s.manager.requestServer.MakeRequest(client.OPCODE_BUILD_INDEX_RETRY, key, content); err != nil {
-					logging.Warnf("builder: Fail to build index.  Error = %v.", err)
+					logging.Warnf("builder: Failed to build index.  Error = %v.", err)
 				}
 
 				logging.Infof("builder: pending definitons to be build %v.", pendingList)
@@ -2774,7 +2774,7 @@ func (s *builder) processBuildToken(bootstrap bool) {
 
 	entries, err := metakv.ListAllChildren(mc.BuildDDLCommandTokenPath)
 	if err != nil {
-		logging.Warnf("builder: Fail to get command token from metakv.  Internal Error = %v", err)
+		logging.Warnf("builder: Failed to get command token from metakv.  Internal Error = %v", err)
 		entries = nil
 	}
 
@@ -2784,7 +2784,7 @@ func (s *builder) processBuildToken(bootstrap bool) {
 
 			command, err := mc.UnmarshallBuildCommandToken(entry.Value)
 			if err != nil {
-				logging.Warnf("builder: Fail to unmarshall command token.  Skp command %v.  Internal Error = %v.", entry.Path, err)
+				logging.Warnf("builder: Failed to unmarshall command token.  Skp command %v.  Internal Error = %v.", entry.Path, err)
 				continue
 			}
 
