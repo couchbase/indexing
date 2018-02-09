@@ -400,7 +400,13 @@ func (p *SAPlanner) Plan(command CommandType, solution *Solution) (*Solution, er
 			if _, ok := err.(*Violations); !ok {
 				return result, err
 			}
-			solution.estimatedIndexSize = result.estimatedIndexSize
+
+			// copy estimation information
+			if result != nil {
+				solution.estimatedIndexSize = result.estimatedIndexSize
+				solution.numEstimateRun = result.numEstimateRun
+				solution.estimate = result.estimate
+			}
 		}
 
 		// If planner get to this point, it means we see violation errors.
@@ -3371,6 +3377,10 @@ func (p *RandomPlacement) Validate(s *Solution) error {
 	}
 
 	if s.ignoreResourceConstraint() {
+		return nil
+	}
+
+	if s.canRunEstimation() {
 		return nil
 	}
 
