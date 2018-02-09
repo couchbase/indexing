@@ -346,6 +346,7 @@ func (c *ClusterInfoCache) GetNodesByBucket(bucket string) (nids []NodeId, err e
 //
 func (c *ClusterInfoCache) GetBucketUUID(bucket string) (uuid string) {
 
+	// This function retuns an error if bucket not found
 	b, err := c.pool.GetBucket(bucket)
 	if err != nil {
 		return BUCKET_UUID_NIL

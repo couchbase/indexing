@@ -1396,7 +1396,7 @@ func (m *LifecycleMgr) deleteCreateTokenForBucket(bucket string) error {
 //
 func (m *LifecycleMgr) handleCleanupDeferIndexFromBucket(bucket string) error {
 
-	// Get bucket UUID.  bucket uuid could be BUCKET_UUID_NIL for non-existent bucket.
+	// Get bucket UUID.  if err==nil, bucket uuid is BUCKET_UUID_NIL for non-existent bucket.
 	currentUUID, err := m.getBucketUUID(bucket)
 	if err != nil {
 		// If err != nil, then cannot connect to fetch bucket info.  Do not attempt to delete index.
@@ -1425,7 +1425,7 @@ func (m *LifecycleMgr) handleCleanupDeferIndexFromBucket(bucket string) error {
 
 			for _, defnRef := range topology.Definitions {
 				if defn, err := m.repo.GetIndexDefnById(common.IndexDefnId(defnRef.DefnId)); err == nil && defn != nil {
-					if defn.BucketUUID != currentUUID && defn.Deferred {
+					if defn.BucketUUID != currentUUID {
 						for _, instRef := range defnRef.Instances {
 							if instRef.State != uint32(common.INDEX_STATE_DELETED) &&
 								common.StreamId(instRef.StreamId) == common.NIL_STREAM {

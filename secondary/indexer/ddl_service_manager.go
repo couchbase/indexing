@@ -518,7 +518,7 @@ func (m *DDLServiceMgr) handleCreateCommand() {
 				if err := MetakvDel(entry.Path); err != nil {
 					logging.Warnf("DDLServiceMgr: Failed to remove create index token %v. Error = %v", entry.Path, err)
 				} else {
-					logging.Infof("DDLServiceMgr: Remove create index token %v.", entry.Path)
+					logging.Infof("DDLServiceMgr: Remove create index token %v due to delete token.", entry.Path)
 				}
 				continue
 			}
