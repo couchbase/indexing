@@ -468,11 +468,11 @@ func (c *RequestBroker) scatter(client []*GsiScanClient, index *common.IndexDefn
 
 	if len(partition) == len(client) {
 		for i, partitions := range partition {
-			logging.Debugf("scatter: requestId %v queryport %v partition %v", c.requestId, client[i].queryport, partitions)
+			logging.Verbosef("scatter: requestId %v queryport %v partition %v", c.requestId, client[i].queryport, partitions)
 		}
 	}
 
-	logging.Debugf("scatter: requestId %v limit %v offset %v sorted %v pushdown limit %v pushdown offset %v pushdown sorted %v",
+	logging.Verbosef("scatter: requestId %v limit %v offset %v sorted %v pushdown limit %v pushdown offset %v pushdown sorted %v",
 		c.requestId, c.limit, c.offset, c.sorted, c.pushdownLimit, c.pushdownOffset, c.pushdownSorted)
 
 	if c.projections != nil {
@@ -1253,7 +1253,9 @@ func partitionKeyPos(defn *common.IndexDefn) []int {
 //
 // Extract the partition key value from each scan (AND-predicate from where clause)
 // Scans is a OR-list of AND-predicate
-// Each scan (AND-predicate) should have all the partition keys
+// Each scan (AND-predicate) has a list of filters, with each filter being a operator on a index key
+// The filters in the scan is sorted based on index order
+// For partition elimination to happen, the filters must contain all the partiton keys
 // If any scan does not have all the partition keys, then the request needs to be scatter-gather
 //
 func partitionKeyValues(requestId string, partnKeyPos []int, scans Scans) [][]interface{} {
