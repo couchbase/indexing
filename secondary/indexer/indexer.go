@@ -330,7 +330,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		var reload bool = false
 		var tlslsnr *net.Listener = nil
 
-		cbauth.RegisterCertRefreshCallback(func() error {
+		cbauth.RegisterTLSRefreshCallback(func() error {
 			if tlslsnr != nil {
 				reload = true
 				(*tlslsnr).Close()
