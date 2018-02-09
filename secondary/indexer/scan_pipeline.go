@@ -136,6 +136,8 @@ func (s *IndexScanSource) Routine() error {
 		}
 	}
 
+	hasDesc := s.p.req.IndexInst.Defn.HasDescending()
+
 	iterCount := 0
 	fn := func(entry []byte) error {
 		if iterCount%SCAN_ROLLBACK_ERROR_BATCHSIZE == 0 && r.hasRollback != nil && r.hasRollback.Load() == true {
@@ -147,7 +149,7 @@ func (s *IndexScanSource) Routine() error {
 		var ck, dk [][]byte
 
 		//get the key in original format
-		if s.p.req.IndexInst.Defn.Desc != nil {
+		if hasDesc {
 			revbuf := (*revbuf)[:0]
 			//copy is required, otherwise storage may get updated if storage
 			//returns pointer to original item(e.g. memdb)
