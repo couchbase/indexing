@@ -76,7 +76,7 @@ type Rebalancer struct {
 
 	config c.ConfigHolder
 
-	lastKnownProgress map[c.IndexDefnId]float64
+	lastKnownProgress map[c.IndexInstId]float64
 }
 
 func NewRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *RebalanceToken,
@@ -106,7 +106,7 @@ func NewRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *Rebal
 		localaddr:      localaddr,
 
 		waitForTokenPublish: make(chan struct{}),
-		lastKnownProgress:   make(map[c.IndexDefnId]float64),
+		lastKnownProgress:   make(map[c.IndexInstId]float64),
 	}
 
 	r.config.Store(config)
@@ -1014,7 +1014,7 @@ func (r *Rebalancer) computeProgress() (progress float64) {
 		if state == c.TransferTokenCommit || state == c.TransferTokenDeleted {
 			totalProgress += 100.00
 		} else {
-			totalProgress += r.getBuildProgressFromStatus(statusResp, tt.IndexInst.Defn.DefnId)
+			totalProgress += r.getBuildProgressFromStatus(statusResp, tt.InstId, tt.RealInstId)
 		}
 	}
 
@@ -1059,17 +1059,29 @@ func getIndexStatusFromMeta(tt *c.TransferToken, localMeta *manager.LocalIndexMe
 	return state, msg
 }
 
-func (r *Rebalancer) getBuildProgressFromStatus(status *manager.IndexStatusResponse, defnId c.IndexDefnId) float64 {
+func (r *Rebalancer) getBuildProgressFromStatus(status *manager.IndexStatusResponse, instId c.IndexInstId, realInstId c.IndexInstId) float64 {
 
+	realInstProgress := 0.0
 	for _, idx := range status.Status {
-		if idx.DefnId == defnId && idx.Status == "Replicating" {
-			l.Infof("Rebalancer::getBuildProgressFromStatus %v %v", idx.DefnId, idx.Progress)
-			r.lastKnownProgress[idx.DefnId] = idx.Progress
+		if idx.InstId == instId && idx.Status == "Replicating" {
+			l.Infof("Rebalancer::getBuildProgressFromStatus %v %v", idx.InstId, idx.Progress)
+			r.lastKnownProgress[idx.InstId] = idx.Progress
 			return idx.Progress
+		} else if realInstId != 0 && idx.InstId == realInstId && idx.Status == "Replicating" {
+			if realInstProgress == 0.0 {
+				realInstProgress = idx.Progress
+			} else {
+				realInstProgress = (realInstProgress + idx.Progress) / 2.0
+			}
 		}
-		if p, ok := r.lastKnownProgress[idx.DefnId]; ok {
-			return p
-		}
+	}
+	if realInstId != 0 && realInstProgress != 0.0 {
+		l.Infof("Rebalancer::getBuildProgressFromStatus %v %v", realInstId, realInstProgress)
+		r.lastKnownProgress[instId] = realInstProgress
+		return realInstProgress
+	}
+	if p, ok := r.lastKnownProgress[instId]; ok {
+		return p
 	}
 	return 0.0
 
