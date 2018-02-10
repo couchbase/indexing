@@ -254,10 +254,11 @@ func (c *clustMgrAgent) handleMergePartition(cmd Message) {
 	tgtPartitions := cmd.(*MsgClustMgrMergePartition).GetTgtPartitions()
 	tgtVersions := cmd.(*MsgClustMgrMergePartition).GetTgtVersions()
 	tgtInstVersion := cmd.(*MsgClustMgrMergePartition).GetTgtInstVersion()
+	respch := cmd.(*MsgClustMgrMergePartition).GetRespch()
 
-	if err := c.mgr.MergePartition(defnId, srcInstId, srcRState, tgtInstId, tgtInstVersion, tgtPartitions, tgtVersions); err != nil {
-		common.CrashOnError(err)
-	}
+	go func() {
+		respch <- c.mgr.MergePartition(defnId, srcInstId, srcRState, tgtInstId, tgtInstVersion, tgtPartitions, tgtVersions)
+	}()
 
 	c.supvCmdch <- &MsgSuccess{}
 }

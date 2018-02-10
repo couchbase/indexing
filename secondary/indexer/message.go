@@ -812,6 +812,7 @@ type MsgClustMgrMergePartition struct {
 	tgtPartitions  []common.PartitionId
 	tgtVersions    []int
 	tgtInstVersion uint64
+	respch         chan error
 }
 
 func (m *MsgClustMgrMergePartition) GetMsgType() MsgType {
@@ -844,6 +845,10 @@ func (m *MsgClustMgrMergePartition) GetTgtVersions() []int {
 
 func (m *MsgClustMgrMergePartition) GetTgtInstVersion() uint64 {
 	return m.tgtInstVersion
+}
+
+func (m *MsgClustMgrMergePartition) GetRespch() chan error {
+	return m.respch
 }
 
 func (m *MsgClustMgrMergePartition) GetString() string {

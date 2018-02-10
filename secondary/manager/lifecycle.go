@@ -1522,7 +1522,7 @@ func (m *LifecycleMgr) handleResetIndex(content []byte) error {
 	// Restore index instance (as if index is created again)
 	//
 
-	topology, err := m.repo.GetTopologyByBucket(defn.Bucket)
+	topology, err := m.repo.CloneTopologyByBucket(defn.Bucket)
 	if err != nil {
 		logging.Errorf("LifecycleMgr.handleResetIndex() : Fails to upgrade index (%v, %v). Reason = %v", defn.Bucket, defn.Name, err)
 		return err
@@ -2096,7 +2096,7 @@ func (m *LifecycleMgr) UpdateIndexInstance(bucket string, defnId common.IndexDef
 	state common.IndexState, streamId common.StreamId, errStr string, buildTime []uint64, rState uint32,
 	partitions []uint64, versions []int, version int) error {
 
-	topology, err := m.repo.GetTopologyByBucket(bucket)
+	topology, err := m.repo.CloneTopologyByBucket(bucket)
 	if err != nil {
 		logging.Errorf("LifecycleMgr.UpdateIndexInstance() : index instance update fails. Reason = %v", err)
 		return err
@@ -2169,7 +2169,7 @@ func (m *LifecycleMgr) UpdateIndexInstance(bucket string, defnId common.IndexDef
 
 func (m *LifecycleMgr) SetScheduledFlag(bucket string, defnId common.IndexDefnId, instId common.IndexInstId, scheduled bool) error {
 
-	topology, err := m.repo.GetTopologyByBucket(bucket)
+	topology, err := m.repo.CloneTopologyByBucket(bucket)
 	if err != nil {
 		logging.Errorf("LifecycleMgr.SetScheduledFlag() : index instance update fails. Reason = %v", err)
 		return err
@@ -2226,7 +2226,7 @@ func (m *LifecycleMgr) FindLocalIndexInst(bucket string, defnId common.IndexDefn
 
 func (m *LifecycleMgr) updateIndexState(bucket string, defnId common.IndexDefnId, instId common.IndexInstId, state common.IndexState) error {
 
-	topology, err := m.repo.GetTopologyByBucket(bucket)
+	topology, err := m.repo.CloneTopologyByBucket(bucket)
 	if err != nil {
 		logging.Errorf("LifecycleMgr.updateIndexState() : fails to find index instance. Reason = %v", err)
 		return err

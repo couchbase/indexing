@@ -582,7 +582,7 @@ func (m *IndexManager) NotifyIndexerReady() error {
 func (m *IndexManager) RebalanceRunning() error {
 
 	logging.Debugf("IndexManager.RebalanceRunning(): making request for rebalance running")
-	return m.requestServer.MakeRequest(client.OPCODE_REBALANCE_RUNNING, "", []byte{})
+	return m.requestServer.MakeAsyncRequest(client.OPCODE_REBALANCE_RUNNING, "", []byte{})
 }
 
 func (m *IndexManager) NotifyStats(stats common.Statistics) error {
