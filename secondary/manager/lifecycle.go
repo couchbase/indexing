@@ -473,7 +473,7 @@ func (m *LifecycleMgr) handleCommitCreateIndex(content []byte) ([]byte, error) {
 			logging.Infof("LifecycleMgr.handleCommitCreateIndex() : Reject %v because fail to post token", commitCreateIndex.DefnId)
 
 			if err == nil {
-				err = err1
+				err = fmt.Errorf("Create Index fails.  Cause: %v", err1)
 			}
 
 			m.DeleteIndex(defnId, true, common.NewUserRequestContext())
@@ -1357,28 +1357,36 @@ func (m *LifecycleMgr) deleteCreateTokenForBucket(bucket string) error {
 
 	var result error
 
-	entries, err := metakv.ListAllChildren(mc.CreateDDLCommandTokenPath)
+	entries, err := mc.ListCreateCommandToken()
 	if err != nil {
 		logging.Warnf("LifecycleMgr.handleDeleteBucket: Failed to fetch token from metakv.  Internal Error = %v", err)
 		return err
 	}
 
 	for _, entry := range entries {
-		if strings.Contains(entry.Path, mc.CreateDDLCommandTokenPath) && entry.Value != nil {
 
-			token, err := mc.UnmarshallCreateCommandToken(entry.Value)
-			if err != nil {
-				logging.Warnf("LifecycleMgr: Failed to process create index token %v.  Internal Error = %v.", entry.Path, err)
-				result = err
-				continue
-			}
+		defnId, err := mc.GetDefnIdFromCreateCommandTokenPath(entry)
+		if err != nil {
+			logging.Warnf("LifecycleMgr: Failed to process create index token %v.  Internal Error = %v.", entry, err)
+			result = err
+			continue
+		}
 
+		token, err := mc.FetchCreateCommandToken(defnId)
+		if err != nil {
+			logging.Warnf("LifecycleMgr: Failed to process create index token %v.  Internal Error = %v.", entry, err)
+			result = err
+			continue
+		}
+
+		if token != nil {
 			for _, definitions := range token.Definitions {
 				if len(definitions) > 0 && definitions[0].Bucket == bucket {
 					if err := mc.DeleteCreateCommandToken(definitions[0].DefnId); err != nil {
-						logging.Warnf("LifecycleMgr: Failed to delete create index token %v.  Internal Error = %v.", entry.Path, err)
+						logging.Warnf("LifecycleMgr: Failed to delete create index token %v.  Internal Error = %v.", entry, err)
 						result = err
 					}
+					break
 				}
 			}
 		}

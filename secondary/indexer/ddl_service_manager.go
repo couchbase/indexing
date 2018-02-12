@@ -404,30 +404,49 @@ func (m *DDLServiceMgr) cleanupCreateCommand() {
 		return
 	}
 
+	deleted := make(map[common.IndexDefnId]bool)
+
 	for _, entry := range entries {
 
-		if strings.Contains(entry.Path, mc.CreateDDLCommandTokenPath) && entry.Value != nil {
+		delete := false
 
-			token, err := mc.UnmarshallCreateCommandToken(entry.Value)
-			if err != nil {
-				logging.Warnf("DDLServiceMgr: Failed to process create index token.  Skip %v.  Internal Error = %v.", entry.Path, err)
-				continue
-			}
+		defnId, err := mc.GetDefnIdFromCreateCommandTokenPath(entry.Path)
+		if err != nil {
+			logging.Warnf("DDLServiceMgr: Failed to process create index token.  Skip %v.  Internal Error = %v.", entry.Path, err)
+			continue
+		}
 
+		token, err := mc.FetchCreateCommandToken(defnId)
+		if err != nil {
+			logging.Warnf("DDLServiceMgr: Failed to process create index token.  Skip %v.  Internal Error = %v.", entry.Path, err)
+			continue
+		}
+
+		if token != nil {
 			// If there is a drop token, then do not process the create token.
 			exist, err := mc.DeleteCommandTokenExist(token.DefnId)
 			if err != nil {
 				logging.Warnf("DDLServiceMgr: Failed to check delete token.  Skip processing %v.  Error = %v.", entry.Path, err)
 
 			} else if exist {
-				// If a drop token exist, then delete the create token.
-				if err := MetakvDel(entry.Path); err != nil {
-					logging.Warnf("DDLServiceMgr: Failed to remove create index token %v. Error = %v", entry.Path, err)
-				} else {
-					logging.Infof("DDLServiceMgr: Remove create index token %v.", entry.Path)
-				}
-				continue
+				delete = true
 			}
+
+		} else {
+			// There is an entry in metakv, but cannot fetch the token.  Since there is no DDL during rebalance, it is not possible
+			// to be a partial token created during DDL.  So this is not a well-formed token that could be left over due to fail
+			// create index or fail delete token.
+			delete = true
+		}
+
+		if delete && !deleted[defnId] {
+			// If a drop token exist, then delete the create token.
+			if err := mc.DeleteCreateCommandToken(defnId); err != nil {
+				logging.Warnf("DDLServiceMgr: Failed to remove create index token %v. Error = %v", entry.Path, err)
+			} else {
+				logging.Infof("DDLServiceMgr: Remove create index token %v.", entry.Path)
+			}
+			deleted[defnId] = true
 		}
 	}
 }
@@ -435,7 +454,7 @@ func (m *DDLServiceMgr) cleanupCreateCommand() {
 func (m *DDLServiceMgr) handleCreateCommand() {
 
 	// get all create token from metakv
-	entries, err := metakv.ListAllChildren(mc.CreateDDLCommandTokenPath)
+	entries, err := mc.ListCreateCommandToken()
 	if err != nil {
 		logging.Warnf("DDLServiceMgr: Failed to fetch token from metakv.  Internal Error = %v", err)
 		return
@@ -485,24 +504,30 @@ func (m *DDLServiceMgr) handleCreateCommand() {
 	}
 
 	buildMap := make(map[common.IndexDefnId]bool)
-	var deleteList []string
+	var deleteList []common.IndexDefnId
 
 	for _, entry := range entries {
 
-		if strings.Contains(entry.Path, mc.CreateDDLCommandTokenPath) && entry.Value != nil {
+		logging.Infof("DDLServiceMgr: processing create index token %v", entry)
 
-			logging.Infof("DDLServiceMgr: processing create index token %v", entry.Path)
+		defnId, err := mc.GetDefnIdFromCreateCommandTokenPath(entry)
+		if err != nil {
+			logging.Warnf("DDLServiceMgr: Failed to process create index token.  Skip %v.  Internal Error = %v.", entry, err)
+			continue
+		}
 
-			token, err := mc.UnmarshallCreateCommandToken(entry.Value)
-			if err != nil {
-				logging.Warnf("DDLServiceMgr: Failed to process create index token.  Skip %v.  Internal Error = %v.", entry.Path, err)
-				continue
-			}
+		token, err := mc.FetchCreateCommandToken(defnId)
+		if err != nil {
+			logging.Warnf("DDLServiceMgr: Failed to process create index token.  Skip %v.  Internal Error = %v.", entry, err)
+			continue
+		}
+
+		if token != nil {
 
 			// If there is a drop token, then do not process the create token.
 			exist, err := mc.DeleteCommandTokenExist(token.DefnId)
 			if err != nil {
-				logging.Warnf("DDLServiceMgr: Failed to check delete token.  Skip processing %v.  Error = %v.", entry.Path, err)
+				logging.Warnf("DDLServiceMgr: Failed to check delete token.  Skip processing %v.  Error = %v.", entry, err)
 
 			} else if exist {
 				// Avoid deleting create token during rebalance.  This is just for extra safety.  Even if the planner
@@ -515,10 +540,10 @@ func (m *DDLServiceMgr) handleCreateCommand() {
 				}
 
 				// If a drop token exist, then delete the create token.
-				if err := MetakvDel(entry.Path); err != nil {
-					logging.Warnf("DDLServiceMgr: Failed to remove create index token %v. Error = %v", entry.Path, err)
+				if err := mc.DeleteCreateCommandToken(token.DefnId); err != nil {
+					logging.Warnf("DDLServiceMgr: Failed to remove create index token %v. Error = %v", entry, err)
 				} else {
-					logging.Infof("DDLServiceMgr: Remove create index token %v due to delete token.", entry.Path)
+					logging.Infof("DDLServiceMgr: Remove create index token %v due to delete token.", entry)
 				}
 				continue
 			}
@@ -607,7 +632,7 @@ func (m *DDLServiceMgr) handleCreateCommand() {
 
 			if canDelete {
 				// If all the instances and partitions are accounted for, then delete the create token.
-				deleteList = append(deleteList, entry.Path)
+				deleteList = append(deleteList, defnId)
 			}
 		}
 	}
@@ -647,11 +672,11 @@ func (m *DDLServiceMgr) handleCreateCommand() {
 			return
 		}
 
-		for _, path := range deleteList {
-			if err := MetakvDel(path); err != nil {
-				logging.Warnf("DDLServiceMgr: Failed to remove create index token %v. Error = %v", path, err)
+		for _, defnId := range deleteList {
+			if err := mc.DeleteCreateCommandToken(defnId); err != nil {
+				logging.Warnf("DDLServiceMgr: Failed to remove create index token %v. Error = %v", defnId, err)
 			} else {
-				logging.Infof("DDLServiceMgr: Remove create index token %v.", path)
+				logging.Infof("DDLServiceMgr: Remove create index token %v.", defnId)
 			}
 		}
 	}
@@ -827,8 +852,8 @@ func (m *DDLServiceMgr) handleListMetadataTokens(w http.ResponseWriter, r *http.
 			return
 		}
 
-		createTokens, err2 := metakv.ListAllChildren(mc.CreateDDLCommandTokenPath)
-		if err1 != nil {
+		createTokens, err2 := mc.ListCreateCommandToken()
+		if err2 != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			w.Write([]byte(err2.Error() + "\n"))
 			return
@@ -836,7 +861,6 @@ func (m *DDLServiceMgr) handleListMetadataTokens(w http.ResponseWriter, r *http.
 
 		header := w.Header()
 		header["Content-Type"] = []string{"application/json"}
-		w.WriteHeader(http.StatusOK)
 
 		for _, entry := range buildTokens {
 
@@ -858,12 +882,33 @@ func (m *DDLServiceMgr) handleListMetadataTokens(w http.ResponseWriter, r *http.
 
 		for _, entry := range createTokens {
 
-			if strings.Contains(entry.Path, mc.CreateDDLCommandTokenPath) && entry.Value != nil {
-				w.Write([]byte(entry.Path + " - "))
-				w.Write(entry.Value)
-				w.Write([]byte("\n"))
+			defnId, err := mc.GetDefnIdFromCreateCommandTokenPath(entry)
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				w.Write([]byte(err.Error() + "\n"))
+				return
 			}
+
+			token, err := mc.FetchCreateCommandToken(defnId)
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				w.Write([]byte(err.Error() + "\n"))
+				return
+			}
+
+			buf, err := json.Marshal(token)
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				w.Write([]byte(err.Error() + "\n"))
+				return
+			}
+
+			w.Write([]byte(entry + " - "))
+			w.Write(buf)
+			w.Write([]byte("\n"))
 		}
+
+		w.WriteHeader(http.StatusOK)
 	}
 }
 
@@ -878,7 +923,7 @@ func (m *DDLServiceMgr) handleListCreateTokens(w http.ResponseWriter, r *http.Re
 
 		logging.Infof("DDLServiceMgr::handleListCreateTokens Processing Request %v", r)
 
-		createTokens, err := metakv.ListAllChildren(mc.CreateDDLCommandTokenPath)
+		createTokens, err := mc.ListCreateCommandToken()
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			w.Write([]byte(err.Error() + "\n"))
@@ -888,15 +933,22 @@ func (m *DDLServiceMgr) handleListCreateTokens(w http.ResponseWriter, r *http.Re
 		list := &mc.CreateCommandTokenList{}
 
 		for _, entry := range createTokens {
-			if strings.Contains(entry.Path, mc.CreateDDLCommandTokenPath) && entry.Value != nil {
 
-				token, err := mc.UnmarshallCreateCommandToken(entry.Value)
-				if err != nil {
-					w.WriteHeader(http.StatusInternalServerError)
-					w.Write([]byte(err.Error() + "\n"))
-					return
-				}
+			defnId, err := mc.GetDefnIdFromCreateCommandTokenPath(entry)
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				w.Write([]byte(err.Error() + "\n"))
+				continue
+			}
 
+			token, err := mc.FetchCreateCommandToken(defnId)
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				w.Write([]byte(err.Error() + "\n"))
+				return
+			}
+
+			if token != nil {
 				list.Tokens = append(list.Tokens, *token)
 			}
 		}
