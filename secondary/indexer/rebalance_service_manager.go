@@ -350,9 +350,6 @@ func (m *ServiceMgr) PrepareTopologyChange(change service.TopologyChange) error 
 
 	l.Infof("ServiceMgr::PrepareTopologyChange %v", change)
 
-	// for ddl service manager
-	stopDDLProcessing()
-
 	if m.state.rebalanceID != "" {
 		l.Errorf("ServiceMgr::PrepareTopologyChange err %v %v", service.ErrConflict, m.state.rebalanceID)
 		return service.ErrConflict
@@ -1103,6 +1100,9 @@ func (m *ServiceMgr) cleanupRebalanceRunning() error {
 
 	m.rebalanceRunning = false
 
+	// notify DDLServiceManager
+	resumeDDLProcessing()
+
 	return nil
 
 }
@@ -1254,6 +1254,9 @@ func (m *ServiceMgr) registerRebalanceRunning(checkDDL bool) error {
 			"Meta Storage. Err %v", errMsg)
 		return errMsg
 	}
+
+	// for ddl service manager
+	stopDDLProcessing()
 
 	return nil
 }
@@ -1480,8 +1483,6 @@ func (m *ServiceMgr) rebalanceDoneCallback(err error, cancel <-chan struct{}) {
 			defer func() {
 				go notifyRebalanceDone(change, err != nil)
 			}()
-		} else {
-			resumeDDLProcessing()
 		}
 
 		m.onRebalanceDoneLOCKED(err)

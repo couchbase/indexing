@@ -409,6 +409,7 @@ func (m *DDLServiceMgr) cleanupCreateCommand() {
 	}
 
 	deleted := make(map[common.IndexDefnId]bool)
+	malformed := make(map[common.IndexDefnId]bool)
 
 	for _, entry := range entries {
 
@@ -417,6 +418,10 @@ func (m *DDLServiceMgr) cleanupCreateCommand() {
 		defnId, err := mc.GetDefnIdFromCreateCommandTokenPath(entry.Path)
 		if err != nil {
 			logging.Warnf("DDLServiceMgr: Failed to process create index token.  Skip %v.  Internal Error = %v.", entry.Path, err)
+			continue
+		}
+
+		if deleted[defnId] {
 			continue
 		}
 
@@ -437,10 +442,9 @@ func (m *DDLServiceMgr) cleanupCreateCommand() {
 			}
 
 		} else {
-			// There is an entry in metakv, but cannot fetch the token.  Since there is no DDL during rebalance, it is not possible
-			// to be a partial token created during DDL.  So this is not a well-formed token that could be left over due to fail
-			// create index or fail delete token.
-			delete = true
+			// There is an entry in metakv, but cannot fetch the token.  The token can be malformed or there is a create DDL
+			// in progress.
+			malformed[defnId] = true
 		}
 
 		if delete && !deleted[defnId] {
@@ -451,6 +455,42 @@ func (m *DDLServiceMgr) cleanupCreateCommand() {
 				logging.Infof("DDLServiceMgr: Remove create index token %v.", entry.Path)
 			}
 			deleted[defnId] = true
+		}
+	}
+
+	if len(malformed) != 0 {
+		// wait for a second to ride out any race condition
+		time.Sleep(time.Second)
+
+		// make sure if all watchers are still alive
+		if m.provider.AllWatchersAlive() {
+
+			// Go through the list of tokens that have failed before.
+			for defnId, _ := range malformed {
+
+				// If already deleted, then ingore it.
+				if deleted[defnId] {
+					continue
+				}
+
+				// Try to fetch it again.  See if this time being successful.
+				token, err := mc.FetchCreateCommandToken(defnId)
+				if err != nil {
+					continue
+				}
+
+				// Still cannot fetch the token.   Then it means the token could be deleted or
+				// still being malformed.  Delete the token.
+				if token == nil {
+					// If a drop token exist, then delete the create token.
+					if err := mc.DeleteCreateCommandToken(defnId); err != nil {
+						logging.Warnf("DDLServiceMgr: Failed to remove create index token %v. Error = %v", defnId, err)
+					} else {
+						logging.Infof("DDLServiceMgr: Remove create index token %v.", defnId)
+					}
+					deleted[defnId] = true
+				}
+			}
 		}
 	}
 }
