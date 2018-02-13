@@ -469,6 +469,8 @@ func (m *LifecycleMgr) handleCommitCreateIndex(content []byte) ([]byte, error) {
 
 	commit, bucketUUID, err := m.processCommitToken(defnId, definitions)
 	if commit {
+		// If fails to post the command token, the return failure.  If none of the indexer can post the command token,
+		// the command token will be malformed and it will get cleaned up by DDLServiceMgr upon rebalancing.
 		if err1 := mc.PostCreateCommandToken(defnId, bucketUUID, definitions); err1 != nil {
 			logging.Infof("LifecycleMgr.handleCommitCreateIndex() : Reject %v because fail to post token", commitCreateIndex.DefnId)
 

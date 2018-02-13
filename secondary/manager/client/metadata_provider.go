@@ -460,7 +460,7 @@ func (o *MetadataProvider) makePrepareIndexRequest(idxDefn *c.IndexDefn) (map[c.
 
 	if accept < uint32(len(watcherMap)) {
 		errStr := "Create index cannot proceed due to rebalance in progress, " +
-			"another concurrent create index request, network partition, or node failover."
+			"another concurrent create index request, network partition, node failover, or indexer failure."
 		return watcherMap, errors.New(errStr)
 	}
 
@@ -673,8 +673,8 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn, plan map
 
 	//
 	// Plan Phase.
-	// The planner will exclude inactive_failed and inactive_new nodes.   It can fail if it cannot connect to any
-	// active node (unhealthy), regardless of the index node list.
+	// The planner will use nodes that metadta provider sees for planning.  All inactive_failed, inactive_new and unhealthy
+	// nodes will be excluded from planning.    If the user provides a specific node list, those nodes will be used.
 	//
 	layout, err := o.plan(idxDefn, plan, watcherMap)
 	if err != nil {

@@ -201,6 +201,10 @@ func resumeDDLProcessing() {
 	}
 }
 
+//
+// This is run as a go-routine.  Rebalancing could have finished while
+// this gorountine is still running.
+//
 func notifyRebalanceDone(change *service.TopologyChange, isCancel bool) {
 
 	mgr := getDDLServiceMgr()
