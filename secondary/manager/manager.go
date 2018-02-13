@@ -582,7 +582,7 @@ func (m *IndexManager) NotifyIndexerReady() error {
 func (m *IndexManager) RebalanceRunning() error {
 
 	logging.Debugf("IndexManager.RebalanceRunning(): making request for rebalance running")
-	return m.requestServer.MakeRequest(client.OPCODE_REBALANCE_RUNNING, "", []byte{})
+	return m.requestServer.MakeAsyncRequest(client.OPCODE_REBALANCE_RUNNING, "", []byte{})
 }
 
 func (m *IndexManager) NotifyStats(stats common.Statistics) error {
@@ -678,7 +678,7 @@ func (m *IndexManager) getBucketForCleanup() ([]string, error) {
 
 		bucket := getBucketFromTopologyKey(key)
 
-		// Get bucket UUID.  bucket uuid could be BUCKET_UUID_NIL for non-existent bucket.
+		// Get bucket UUID.  If err=nil, bucket uuid is BUCKET_UUID_NIL for non-existent bucket.
 		currentUUID, err := m.lifecycleMgr.getBucketUUID(bucket)
 		if err != nil {
 			// If err != nil, then cannot connect to fetch bucket info.  Retry it at later time.
@@ -711,9 +711,9 @@ func (m *IndexManager) getBucketForCleanup() ([]string, error) {
 							break
 						}
 
-						// Check if this is a defer index from a non-existent bucket. If so, this could be a candidate
-						// for cleanup.
-						if defn.BucketUUID != currentUUID && defn.Deferred &&
+						// If there is any index in CREATED or PENDING state from a non-existent bucket.
+						// If so, this could be a candidate for cleanup.
+						if defn.BucketUUID != currentUUID &&
 							instRef.State != uint32(common.INDEX_STATE_DELETED) &&
 							common.StreamId(instRef.StreamId) == common.NIL_STREAM {
 							hasInvalidDeferIndex = true

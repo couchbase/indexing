@@ -303,6 +303,26 @@ func (c *MetadataRepo) GetTopologyByBucket(bucket string) (*IndexTopology, error
 	return topology, nil
 }
 
+func (c *MetadataRepo) CloneTopologyByBucket(bucket string) (*IndexTopology, error) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	lookupName := indexTopologyKey(bucket)
+	data, err := c.getMeta(lookupName)
+	if err != nil && strings.Contains(err.Error(), "FDB_RESULT_KEY_NOT_FOUND") {
+		return nil, nil
+	} else if err != nil {
+		return nil, err
+	}
+
+	topology, err := unmarshallIndexTopology(data)
+	if err != nil {
+		return nil, err
+	}
+
+	return topology, nil
+}
+
 func (c *MetadataRepo) SetTopologyByBucket(bucket string, topology *IndexTopology) error {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
@@ -1042,7 +1062,7 @@ func (m *MetadataRepo) addIndexToTopology(defn *common.IndexDefn, instId common.
 	partitions []common.PartitionId, versions []int, numPartitions uint32, realInstId common.IndexInstId, scheduled bool) error {
 
 	// get existing topology
-	topology, err := m.GetTopologyByBucket(defn.Bucket)
+	topology, err := m.CloneTopologyByBucket(defn.Bucket)
 	if err != nil {
 		return err
 	}
@@ -1089,7 +1109,7 @@ func (m *MetadataRepo) addInstanceToTopology(defn *common.IndexDefn, instId comm
 	partitions []common.PartitionId, versions []int, numPartitions uint32, realInstId common.IndexInstId, scheduled bool) error {
 
 	// get existing topology
-	topology, err := m.GetTopologyByBucket(defn.Bucket)
+	topology, err := m.CloneTopologyByBucket(defn.Bucket)
 	if err != nil {
 		return err
 	}
@@ -1142,7 +1162,7 @@ func (m *MetadataRepo) addInstanceToTopology(defn *common.IndexDefn, instId comm
 func (m *MetadataRepo) deleteIndexFromTopology(bucket string, id common.IndexDefnId) error {
 
 	// get existing topology
-	topology, err := m.GetTopologyByBucket(bucket)
+	topology, err := m.CloneTopologyByBucket(bucket)
 	if err != nil {
 		return err
 	}
@@ -1165,7 +1185,7 @@ func (m *MetadataRepo) deleteIndexFromTopology(bucket string, id common.IndexDef
 func (m *MetadataRepo) deleteInstanceFromTopology(bucket string, id common.IndexDefnId, instId common.IndexInstId) error {
 
 	// get existing topology
-	topology, err := m.GetTopologyByBucket(bucket)
+	topology, err := m.CloneTopologyByBucket(bucket)
 	if err != nil {
 		return err
 	}
@@ -1189,7 +1209,7 @@ func (m *MetadataRepo) mergePartitionFromTopology(indexerId string, bucket strin
 	srcRState common.RebalanceState, tgtInstId common.IndexInstId, tgtInstVersion uint64, tgtPartitions []uint64, tgtVersions []int) error {
 
 	// get existing topology
-	topology, err := m.GetTopologyByBucket(bucket)
+	topology, err := m.CloneTopologyByBucket(bucket)
 	if err != nil {
 		return err
 	}
@@ -1197,9 +1217,7 @@ func (m *MetadataRepo) mergePartitionFromTopology(indexerId string, bucket strin
 		return nil
 	}
 
-	topology.UpdateStateForIndexInst(id, srcInstId, common.INDEX_STATE_DELETED)
-	topology.UpdateRebalanceStateForIndexInst(id, srcInstId, srcRState)
-	topology.DeleteAllPartitionsForIndexInst(id, srcInstId)
+	topology.RemoveIndexInstanceById(id, srcInstId)
 
 	topology.AddPartitionsForIndexInst(id, tgtInstId, indexerId, tgtPartitions, tgtVersions)
 	topology.UpdateVersionForIndexInst(id, tgtInstId, tgtInstVersion)
@@ -1218,7 +1236,7 @@ func (m *MetadataRepo) splitPartitionFromTopology(bucket string, id common.Index
 	partitions []common.PartitionId) error {
 
 	// get existing topology
-	topology, err := m.GetTopologyByBucket(bucket)
+	topology, err := m.CloneTopologyByBucket(bucket)
 	if err != nil {
 		return err
 	}

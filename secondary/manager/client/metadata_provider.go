@@ -449,7 +449,7 @@ func (o *MetadataProvider) makePrepareIndexRequest(idxDefn *c.IndexDefn) (map[c.
 			}
 
 			if response != nil && response.Accept {
-				logging.Infof("Indexer %v does not accept prepare create request. Index (%v, %v)", w.getAdminAddr(), idxDefn.Bucket, idxDefn.Name)
+				logging.Infof("Indexer %v accept prepare create request. Index (%v, %v)", w.getAdminAddr(), idxDefn.Bucket, idxDefn.Name)
 				atomic.AddUint32(&accept, 1)
 				return
 			}

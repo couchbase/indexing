@@ -35,7 +35,6 @@ const COORD_INIT_STREAM_PORT = ":9335"
 
 // Stream Manager
 const COUCHBASE_INTERNAL_BUCKET_URL = "http://localhost:11209/"
-const LOCALHOST = "127.0.0.1"
 const KV_DCP_PORT = "11210"
 const KV_DCP_PORT_CLUSTER_RUN = "12000"
 const PROJECTOR_PORT = "9999"

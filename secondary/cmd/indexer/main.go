@@ -160,6 +160,8 @@ func main() {
 		}
 	}
 
+	common.SetIpv6(*isIPv6)
+
 	_, msg := indexer.NewIndexer(config)
 
 	if msg.GetMsgType() != indexer.MSG_SUCCESS {

@@ -813,7 +813,12 @@ func getIndexerHost(cinfo *common.ClusterInfoCache, nid common.NodeId) (string, 
 	host, port, err := net.SplitHostPort(addr)
 	if err == nil {
 		if host == "localhost" {
-			addr = net.JoinHostPort("127.0.0.1", port)
+			// If this is called within a process triggered by ns-server, we
+			// should get an IP address instead of localhost from clusterInfoCache.
+			// If we get localhost, try to resolve the IP.   If this function is
+			// called from indexer, we will know if it is IPv4 or IPv6.  But if
+			// this is called outside the indexer, we will assume it is ipv4.
+			addr = net.JoinHostPort(common.GetLocalIpAddr(common.IsIpv6()), port)
 		}
 	}
 

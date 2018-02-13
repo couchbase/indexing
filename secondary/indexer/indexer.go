@@ -1336,23 +1336,18 @@ func (idx *indexer) updateRStateOrMergePartition(srcInstId common.IndexInstId, t
 
 	} else {
 		// This is not a proxy index instance.  No need to merge.  Just update RState.
-		var err error
 		if inst, ok := idx.indexInstMap[tgtInstId]; ok {
 			inst.RState = rebalState
 			idx.indexInstMap[tgtInstId] = inst
 
 			instIds := []common.IndexInstId{tgtInstId}
-			err = idx.updateMetaInfoForIndexList(instIds, false, false, false, false, true, true, false, false, nil)
+			idx.updateMetaInfoForIndexList(instIds, false, false, false, false, true, true, false, false, respch)
 
-			logging.Infof("MergePartition: Index instance %v rstate moved to ACTIVE", tgtInstId)
+			logging.Infof("MergePartition: sent async request to update index instance %v rstate moved to ACTIVE", tgtInstId)
 		}
 
 		if ok, _ := idx.streamBucketFlushInProgress[inst.Stream][inst.Defn.Bucket]; !ok {
 			idx.mergePartitions()
-		}
-
-		if respch != nil {
-			respch <- err
 		}
 	}
 }
@@ -1619,12 +1614,15 @@ func (idx *indexer) mergePartition(sourceId common.IndexInstId, targetId common.
 				return true
 			}
 
-			// At this point, we are going to commit the metadata change.   Once committed, the indexer should not
-			// send any error to the respch.   The indexer may crash to let recovery code to kick in.
-			// Note that updating the metadata is atomic, for both the source instance and target instance.
+			// At this point, we are going to commit the metadata change.   Once past this point, the indexer
+			// can no longer send any error to the respch.   The indexer may crash to let recovery code to kick in.
 			target.Version = source.Version
 			idx.indexInstMap[targetId] = target
 
+			// Metadata update is atomic, for both the source instance and target instance.
+			// 1) The source instance will be deleted in metadata.
+			// 2) The target instance will be updated with new partitions and versions
+			clustMgrRespch := make(chan error)
 			msg := &MsgClustMgrMergePartition{
 				defnId:         source.Defn.DefnId,
 				srcInstId:      source.InstId,
@@ -1633,12 +1631,34 @@ func (idx *indexer) mergePartition(sourceId common.IndexInstId, targetId common.
 				tgtPartitions:  partnIds,
 				tgtVersions:    versions,
 				tgtInstVersion: uint64(target.Version),
+				respch:         clustMgrRespch,
 			}
 			if err := idx.sendMsgToClusterMgr(msg); err != nil {
 				common.CrashOnError(err)
 			}
 
-			logging.Infof("MergePartition: instance %v merged to instance %v", source.InstId, targetId)
+			go func() {
+
+				// The metadata commit is done asynchronously to avoid deadlock.  If metadata update fails,
+				// indexer will restart so it can restore toa a consistent state.
+				err := <-clustMgrRespch
+				if err != nil {
+					common.CrashOnError(err)
+				}
+
+				logging.Infof("MergePartition: instance %v merged to instance %v", source.InstId, targetId)
+
+				// Once metadata is committed, reply to the rebalancer.  This is the point where both data
+				// and metadata has been moved.
+				if respch != nil {
+					respch <- error(nil)
+				}
+			}()
+
+			// Cleanup the source instance. This is done in parallel clean up will proceed in parallel to metadata commit.
+			// Cleanup comprise of removing the source instance from indexer runtime data structure, as well as removing
+			// the instance from stream.  These are transient states that can be recovered upon bootstrap if metadata commit
+			// fails.
 			idx.cleanupIndexAfterMerge(source)
 
 		} else {
@@ -1649,6 +1669,10 @@ func (idx *indexer) mergePartition(sourceId common.IndexInstId, targetId common.
 			logging.Warnf("MergePartition.  Target instance %v not found. Remove source %v.", source.RealInstId, source.InstId)
 			idx.cleanupIndexMetadata(source)
 			idx.cleanupIndex(source, nil)
+
+			if respch != nil {
+				respch <- error(nil)
+			}
 		}
 
 	} else {
@@ -1657,11 +1681,12 @@ func (idx *indexer) mergePartition(sourceId common.IndexInstId, targetId common.
 		// If we do not find the source inst now, it could mean that the source might
 		// have been dropped explicitly.  In this case, skip the merge.
 		logging.Warnf("MergePartition.  Source instance %v not found. Skip", sourceId)
+
+		if respch != nil {
+			respch <- error(nil)
+		}
 	}
 
-	if respch != nil {
-		respch <- error(nil)
-	}
 	return true
 }
 
@@ -1671,17 +1696,6 @@ func (idx *indexer) mergePartition(sourceId common.IndexInstId, targetId common.
 // (through MsgClustMgrMergePartition).
 //
 func (idx *indexer) cleanupIndexAfterMerge(inst common.IndexInst) {
-
-	// clean up metadata since we are going to remove the index inst
-	// from runtime data structure, so rebalancer will no longer see
-	// this index.   If we don't clean up, then it will get clean up
-	// during next bootstrap.
-	defn := inst.Defn
-	defn.InstId = inst.InstId
-	msg := &MsgClustMgrDropInstance{defn: defn}
-	if err := idx.sendMsgToClusterMgr(msg); err != nil {
-		common.CrashOnError(err)
-	}
 
 	inst.State = common.INDEX_STATE_DELETED
 	idx.indexInstMap[inst.InstId] = inst
@@ -1747,6 +1761,9 @@ func (idx *indexer) prunePartitions() {
 
 	// Do not merge when indexer is not active
 	if is := idx.getIndexerState(); is != common.INDEXER_ACTIVE {
+		if len(idx.prunePartitionList) != 0 {
+			logging.Warnf("PrunePartition.  Indexer inactive.  Cannot prune instance.")
+		}
 		return
 	}
 
@@ -4859,8 +4876,9 @@ func (idx *indexer) closeAllStreams() {
 				default:
 					//log and retry for all other responses
 					respErr := resp.(*MsgError).GetError()
-					logging.Errorf("Indexer::closeAllStreams Stream %v "+
-						"Error from Projector %v. Retrying.", common.StreamId(i), respErr.cause)
+					logging.Fatalf("Indexer::closeAllStreams Stream %v "+
+						"Projector health check needed, indexer can not proceed, Error received %v. Retrying.",
+						common.StreamId(i), respErr.cause)
 					time.Sleep(KV_RETRY_INTERVAL * time.Millisecond)
 				}
 			}

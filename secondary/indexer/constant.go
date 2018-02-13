@@ -20,9 +20,8 @@ const WORKER_MSG_QUEUE_LEN = 1000000
 const WORKER_RECV_QUEUE_LEN = 10000
 
 // Default cluster address
+// This can ONLY be used for indexer main as default value for command line argument.
 const DEFAULT_CLUSTER_ENDPOINT = "127.0.0.1:9000"
-
-const LOCALHOST = "127.0.0.1"
 
 //Maintenance Topic Name
 const MAINT_TOPIC = "MAINT_STREAM_TOPIC"

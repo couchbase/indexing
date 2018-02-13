@@ -473,7 +473,7 @@ func (m *LifecycleMgr) handleCommitCreateIndex(content []byte) ([]byte, error) {
 			logging.Infof("LifecycleMgr.handleCommitCreateIndex() : Reject %v because fail to post token", commitCreateIndex.DefnId)
 
 			if err == nil {
-				err = err1
+				err = fmt.Errorf("Create Index fails.  Cause: %v", err1)
 			}
 
 			m.DeleteIndex(defnId, true, common.NewUserRequestContext())
@@ -1357,28 +1357,36 @@ func (m *LifecycleMgr) deleteCreateTokenForBucket(bucket string) error {
 
 	var result error
 
-	entries, err := metakv.ListAllChildren(mc.CreateDDLCommandTokenPath)
+	entries, err := mc.ListCreateCommandToken()
 	if err != nil {
 		logging.Warnf("LifecycleMgr.handleDeleteBucket: Failed to fetch token from metakv.  Internal Error = %v", err)
 		return err
 	}
 
 	for _, entry := range entries {
-		if strings.Contains(entry.Path, mc.CreateDDLCommandTokenPath) && entry.Value != nil {
 
-			token, err := mc.UnmarshallCreateCommandToken(entry.Value)
-			if err != nil {
-				logging.Warnf("LifecycleMgr: Failed to process create index token %v.  Internal Error = %v.", entry.Path, err)
-				result = err
-				continue
-			}
+		defnId, err := mc.GetDefnIdFromCreateCommandTokenPath(entry)
+		if err != nil {
+			logging.Warnf("LifecycleMgr: Failed to process create index token %v.  Internal Error = %v.", entry, err)
+			result = err
+			continue
+		}
 
+		token, err := mc.FetchCreateCommandToken(defnId)
+		if err != nil {
+			logging.Warnf("LifecycleMgr: Failed to process create index token %v.  Internal Error = %v.", entry, err)
+			result = err
+			continue
+		}
+
+		if token != nil {
 			for _, definitions := range token.Definitions {
 				if len(definitions) > 0 && definitions[0].Bucket == bucket {
 					if err := mc.DeleteCreateCommandToken(definitions[0].DefnId); err != nil {
-						logging.Warnf("LifecycleMgr: Failed to delete create index token %v.  Internal Error = %v.", entry.Path, err)
+						logging.Warnf("LifecycleMgr: Failed to delete create index token %v.  Internal Error = %v.", entry, err)
 						result = err
 					}
+					break
 				}
 			}
 		}
@@ -1396,7 +1404,7 @@ func (m *LifecycleMgr) deleteCreateTokenForBucket(bucket string) error {
 //
 func (m *LifecycleMgr) handleCleanupDeferIndexFromBucket(bucket string) error {
 
-	// Get bucket UUID.  bucket uuid could be BUCKET_UUID_NIL for non-existent bucket.
+	// Get bucket UUID.  if err==nil, bucket uuid is BUCKET_UUID_NIL for non-existent bucket.
 	currentUUID, err := m.getBucketUUID(bucket)
 	if err != nil {
 		// If err != nil, then cannot connect to fetch bucket info.  Do not attempt to delete index.
@@ -1425,7 +1433,7 @@ func (m *LifecycleMgr) handleCleanupDeferIndexFromBucket(bucket string) error {
 
 			for _, defnRef := range topology.Definitions {
 				if defn, err := m.repo.GetIndexDefnById(common.IndexDefnId(defnRef.DefnId)); err == nil && defn != nil {
-					if defn.BucketUUID != currentUUID && defn.Deferred {
+					if defn.BucketUUID != currentUUID {
 						for _, instRef := range defnRef.Instances {
 							if instRef.State != uint32(common.INDEX_STATE_DELETED) &&
 								common.StreamId(instRef.StreamId) == common.NIL_STREAM {
@@ -1522,7 +1530,7 @@ func (m *LifecycleMgr) handleResetIndex(content []byte) error {
 	// Restore index instance (as if index is created again)
 	//
 
-	topology, err := m.repo.GetTopologyByBucket(defn.Bucket)
+	topology, err := m.repo.CloneTopologyByBucket(defn.Bucket)
 	if err != nil {
 		logging.Errorf("LifecycleMgr.handleResetIndex() : Fails to upgrade index (%v, %v). Reason = %v", defn.Bucket, defn.Name, err)
 		return err
@@ -2096,7 +2104,7 @@ func (m *LifecycleMgr) UpdateIndexInstance(bucket string, defnId common.IndexDef
 	state common.IndexState, streamId common.StreamId, errStr string, buildTime []uint64, rState uint32,
 	partitions []uint64, versions []int, version int) error {
 
-	topology, err := m.repo.GetTopologyByBucket(bucket)
+	topology, err := m.repo.CloneTopologyByBucket(bucket)
 	if err != nil {
 		logging.Errorf("LifecycleMgr.UpdateIndexInstance() : index instance update fails. Reason = %v", err)
 		return err
@@ -2169,7 +2177,7 @@ func (m *LifecycleMgr) UpdateIndexInstance(bucket string, defnId common.IndexDef
 
 func (m *LifecycleMgr) SetScheduledFlag(bucket string, defnId common.IndexDefnId, instId common.IndexInstId, scheduled bool) error {
 
-	topology, err := m.repo.GetTopologyByBucket(bucket)
+	topology, err := m.repo.CloneTopologyByBucket(bucket)
 	if err != nil {
 		logging.Errorf("LifecycleMgr.SetScheduledFlag() : index instance update fails. Reason = %v", err)
 		return err
@@ -2226,7 +2234,7 @@ func (m *LifecycleMgr) FindLocalIndexInst(bucket string, defnId common.IndexDefn
 
 func (m *LifecycleMgr) updateIndexState(bucket string, defnId common.IndexDefnId, instId common.IndexInstId, state common.IndexState) error {
 
-	topology, err := m.repo.GetTopologyByBucket(bucket)
+	topology, err := m.repo.CloneTopologyByBucket(bucket)
 	if err != nil {
 		logging.Errorf("LifecycleMgr.updateIndexState() : fails to find index instance. Reason = %v", err)
 		return err

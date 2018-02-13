@@ -334,7 +334,7 @@ func (k *kvSender) openMutationStream(streamId c.StreamId, indexInstList []c.Ind
 			bucket:     bucket,
 			rollbackTs: nativeTs}
 	} else if err != nil {
-		logging.Errorf("KVSender::openMutationStream %v %v Error Received %v",
+		logging.Errorf("KVSender::openMutationStream %v %v Error from Projector %v",
 			streamId, bucket, err)
 		respCh <- &MsgError{
 			err: Error{code: ERROR_KVSENDER_STREAM_REQUEST_ERROR,
@@ -482,7 +482,7 @@ func (k *kvSender) addIndexForExistingBucket(streamId c.StreamId, bucket string,
 	rh := c.NewRetryHelper(MAX_KV_REQUEST_RETRY, time.Second, BACKOFF_FACTOR, fn)
 	err = rh.Run()
 	if err != nil {
-		logging.Errorf("KVSender::addIndexForExistingBucket %v %v Error Received %v",
+		logging.Errorf("KVSender::addIndexForExistingBucket %v %v Error from Projector %v",
 			streamId, bucket, err)
 		respCh <- &MsgError{
 			err: Error{code: ERROR_KVSENDER_STREAM_REQUEST_ERROR,
@@ -549,7 +549,7 @@ func (k *kvSender) deleteIndexesFromStream(streamId c.StreamId, indexInstList []
 	rh := c.NewRetryHelper(MAX_KV_REQUEST_RETRY, time.Second, BACKOFF_FACTOR, fn)
 	err = rh.Run()
 	if err != nil {
-		logging.Errorf("KVSender::deleteIndexesFromStream %v %v Error Received %v",
+		logging.Errorf("KVSender::deleteIndexesFromStream %v %v Error from Projector %v",
 			streamId, indexInstList[0].Defn.Bucket, err)
 		respCh <- &MsgError{
 			err: Error{code: ERROR_KVSENDER_STREAM_REQUEST_ERROR,
@@ -604,7 +604,7 @@ func (k *kvSender) deleteBucketsFromStream(streamId c.StreamId, buckets []string
 	rh := c.NewRetryHelper(MAX_KV_REQUEST_RETRY, time.Second, BACKOFF_FACTOR, fn)
 	err = rh.Run()
 	if err != nil {
-		logging.Errorf("KVSender::deleteBucketsFromStream %v %v Error Received %v",
+		logging.Errorf("KVSender::deleteBucketsFromStream %v %v Error from Projector %v",
 			streamId, buckets[0], err)
 		respCh <- &MsgError{
 			err: Error{code: ERROR_KVSENDER_STREAM_REQUEST_ERROR,
@@ -659,7 +659,8 @@ func (k *kvSender) closeMutationStream(streamId c.StreamId, bucket string,
 	rh := c.NewRetryHelper(MAX_KV_REQUEST_RETRY, time.Second, BACKOFF_FACTOR, fn)
 	err = rh.Run()
 	if err != nil {
-		logging.Errorf("KVSender::closeMutationStream %v %v Error Received %v", streamId, bucket, err)
+		logging.Errorf("KVSender::closeMutationStream, %v %v Error from Projector %v",
+			streamId, bucket, err)
 		respCh <- &MsgError{
 			err: Error{code: ERROR_KVSENDER_STREAM_REQUEST_ERROR,
 				severity: FATAL,

@@ -15,6 +15,8 @@ import (
 	"fmt"
 	c "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
+	"strconv"
+	"strings"
 )
 
 /////////////////////////////////////////////////////////////////////////
@@ -98,11 +100,7 @@ func PostCreateCommandToken(defnId c.IndexDefnId, bucketUUID string, defns map[c
 	}
 
 	id := fmt.Sprintf("%v", defnId)
-	if err := c.MetakvSet(CreateDDLCommandTokenPath+id, commandToken); err != nil {
-		return errors.New(fmt.Sprintf("Fail to create index.  Internal Error = %v", err))
-	}
-
-	return nil
+	return c.MetakvBigValueSet(CreateDDLCommandTokenPath+id, commandToken)
 }
 
 //
@@ -110,9 +108,12 @@ func PostCreateCommandToken(defnId c.IndexDefnId, bucketUUID string, defns map[c
 //
 func CreateCommandTokenExist(defnId c.IndexDefnId) (bool, error) {
 
-	commandToken := &CreateCommandToken{}
-	id := fmt.Sprintf("%v", defnId)
-	return c.MetakvGet(CreateDDLCommandTokenPath+id, commandToken)
+	token, err := FetchCreateCommandToken(defnId)
+	if err != nil {
+		return false, err
+	}
+
+	return token != nil, nil
 }
 
 //
@@ -121,30 +122,59 @@ func CreateCommandTokenExist(defnId c.IndexDefnId) (bool, error) {
 func DeleteCreateCommandToken(defnId c.IndexDefnId) error {
 
 	id := fmt.Sprintf("%v", defnId)
-	return c.MetakvDel(CreateDDLCommandTokenPath + id)
+	return c.MetakvBigValueDel(CreateDDLCommandTokenPath + id)
 }
 
 //
-// Unmarshall
+// Fetch create command token
+// This function take metakv path
 //
-func UnmarshallCreateCommandToken(data []byte) (*CreateCommandToken, error) {
+func FetchCreateCommandToken(defnId c.IndexDefnId) (*CreateCommandToken, error) {
 
-	r := new(CreateCommandToken)
-	if err := json.Unmarshal(data, r); err != nil {
-		return nil, err
-	}
+	token := &CreateCommandToken{}
 
-	return r, nil
-}
-
-func MarshallCreateCommandToken(r *CreateCommandToken) ([]byte, error) {
-
-	buf, err := json.Marshal(&r)
+	id := fmt.Sprintf("%v", defnId)
+	exists, err := c.MetakvBigValueGet(CreateDDLCommandTokenPath+id, token)
 	if err != nil {
 		return nil, err
 	}
 
-	return buf, nil
+	if !exists {
+		return nil, nil
+	}
+
+	return token, nil
+}
+
+func ListCreateCommandToken() ([]string, error) {
+
+	paths, err := c.MetakvBigValueList(CreateDDLCommandTokenPath)
+	if err != nil {
+		return nil, err
+	}
+
+	return paths, nil
+}
+
+func GetDefnIdFromCreateCommandTokenPath(path string) (c.IndexDefnId, error) {
+
+	if len(path) <= len(CreateDDLCommandTokenPath) {
+		return c.IndexDefnId(0), fmt.Errorf("Invalid path %v", path)
+	}
+
+	path = path[len(CreateDDLCommandTokenPath):]
+
+	loc := strings.LastIndex(path, "/")
+	if loc != -1 {
+		path = path[:loc]
+	}
+
+	id, err := strconv.ParseUint(path, 10, 64)
+	if err != nil {
+		return c.IndexDefnId(0), err
+	}
+
+	return c.IndexDefnId(id), nil
 }
 
 //
