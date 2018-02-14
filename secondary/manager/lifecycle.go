@@ -351,6 +351,8 @@ func (m *LifecycleMgr) dispatchRequest(request *requestHolder, factory *message.
 		result, err = m.handleCommitCreateIndex(content)
 	case client.OPCODE_REBALANCE_RUNNING:
 		err = m.handleRebalanceRunning(content)
+	case client.OPCODE_CREATE_INDEX_DEFER_BUILD:
+		err = m.handleCreateIndex(key, content, common.NewUserRequestContext())
 	}
 
 	logging.Debugf("LifecycleMgr.dispatchRequest () : send response for requestId %d, op %d, len(result) %d", reqId, op, len(result))
@@ -469,6 +471,8 @@ func (m *LifecycleMgr) handleCommitCreateIndex(content []byte) ([]byte, error) {
 
 	commit, bucketUUID, err := m.processCommitToken(defnId, definitions)
 	if commit {
+		// If fails to post the command token, the return failure.  If none of the indexer can post the command token,
+		// the command token will be malformed and it will get cleaned up by DDLServiceMgr upon rebalancing.
 		if err1 := mc.PostCreateCommandToken(defnId, bucketUUID, definitions); err1 != nil {
 			logging.Infof("LifecycleMgr.handleCommitCreateIndex() : Reject %v because fail to post token", commitCreateIndex.DefnId)
 
@@ -574,6 +578,17 @@ func (m *LifecycleMgr) processCommitToken(defnId common.IndexDefnId, layout map[
 //-----------------------------------------------------------
 // Create Index
 //-----------------------------------------------------------
+
+func (m *LifecycleMgr) handleCreateIndex(key string, content []byte, reqCtx *common.MetadataRequestContext) error {
+
+	defn, err := common.UnmarshallIndexDefn(content)
+	if err != nil {
+		logging.Errorf("LifecycleMgr.handleCreateIndex() : createIndex fails. Unable to unmarshall index definition. Reason = %v", err)
+		return err
+	}
+
+	return m.CreateIndexOrInstance(defn, false, reqCtx)
+}
 
 func (m *LifecycleMgr) handleCreateIndexScheduledBuild(key string, content []byte,
 	reqCtx *common.MetadataRequestContext) error {

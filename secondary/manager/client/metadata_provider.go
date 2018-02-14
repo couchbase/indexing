@@ -24,6 +24,7 @@ import (
 	"github.com/couchbase/query/expression"
 	"github.com/couchbase/query/expression/parser"
 	"math"
+	"math/rand"
 	"net"
 	"strconv"
 	"strings"
@@ -460,7 +461,7 @@ func (o *MetadataProvider) makePrepareIndexRequest(idxDefn *c.IndexDefn) (map[c.
 
 	if accept < uint32(len(watcherMap)) {
 		errStr := "Create index cannot proceed due to rebalance in progress, " +
-			"another concurrent create index request, network partition, or node failover."
+			"another concurrent create index request, network partition, node failover, or indexer failure."
 		return watcherMap, errors.New(errStr)
 	}
 
@@ -673,14 +674,19 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn, plan map
 
 	//
 	// Plan Phase.
-	// The planner will exclude inactive_failed and inactive_new nodes.   It can fail if it cannot connect to any
-	// active node (unhealthy), regardless of the index node list.
+	// The planner will use nodes that metadta provider sees for planning.  All inactive_failed, inactive_new and unhealthy
+	// nodes will be excluded from planning.    If the user provides a specific node list, those nodes will be used.
 	//
 	layout, err := o.plan(idxDefn, plan, watcherMap)
 	if err != nil {
-		o.cancelPrepareIndexRequest(idxDefn, watcherMap)
-		logging.Errorf("Fail to create index due to planner error. Error: %v", err)
-		return errors.New("Fail to create index becasue it is unable to place the index that satisfies availability constraint.  See logs for more details.")
+		logging.Errorf("Encounter planner error.  Use round robin strategy for planning. Error: %v", err)
+
+		indexerIds := make([]c.IndexerId, 0, len(watcherMap))
+		for indexerId, _ := range watcherMap {
+			indexerIds = append(indexerIds, indexerId)
+		}
+
+		layout = o.createLayoutWithRoundRobin(idxDefn, indexerIds)
 	}
 
 	//
@@ -729,10 +735,81 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn, plan map
 }
 
 //
+// This function builds the index layout using round robin.
+//
+func (o *MetadataProvider) createLayoutWithRoundRobin(idxDefn *c.IndexDefn, indexerIds []c.IndexerId) map[int]map[c.IndexerId][]c.PartitionId {
+
+	layout := make(map[int]map[c.IndexerId][]c.PartitionId)
+	addLayout := func(replicaId int, indexerId c.IndexerId, partitions []c.PartitionId) {
+		if _, ok := layout[replicaId]; !ok {
+			layout[replicaId] = make(map[c.IndexerId][]c.PartitionId)
+		}
+		layout[replicaId][indexerId] = partitions
+	}
+
+	shuffle := func(indexerIds []c.IndexerId) []c.IndexerId {
+		num := len(indexerIds)
+		result := make([]c.IndexerId, num)
+
+		for _, indexerId := range indexerIds {
+			found := false
+			for !found {
+				n := rand.Intn(num)
+				if result[n] == c.INDEXER_ID_NIL {
+					result[n] = indexerId
+					found = true
+				}
+			}
+		}
+		return result
+	}
+	indexerIds = shuffle(indexerIds)
+
+	for replicaId := 0; replicaId < int(idxDefn.NumReplica+1); replicaId++ {
+
+		if c.IsPartitioned(idxDefn.PartitionScheme) {
+
+			partitionPerWatcher := int(idxDefn.NumPartitions) / len(indexerIds)
+			if int(idxDefn.NumPartitions)%len(indexerIds) != 0 {
+				partitionPerWatcher += 1
+			}
+
+			partnId := int(1)
+			endPartnId := partnId + int(idxDefn.NumPartitions)
+
+			for _, indexerId := range indexerIds {
+
+				var partitions []c.PartitionId
+				count := 0
+				for partnId < endPartnId && count < partitionPerWatcher {
+					partitions = append(partitions, c.PartitionId(partnId))
+					count++
+					partnId++
+				}
+
+				if len(partitions) != 0 {
+					addLayout(replicaId, indexerId, partitions)
+				}
+			}
+
+			// shuffle the watcher
+			indexerIds = append(indexerIds[1:], indexerIds[:1]...)
+
+		} else {
+			addLayout(replicaId, indexerIds[replicaId], []c.PartitionId{c.NON_PARTITION_ID})
+		}
+	}
+
+	return layout
+}
+
+//
 // This function create index using old protocol (spock).
 //
 func (o *MetadataProvider) createIndex(idxDefn *c.IndexDefn, plan map[string]interface{}) error {
 
+	// For non-partitioned index, this will return nodes with fewest indexes.  The number of nodes match the number of replica.
+	// For partitioned index, it return all healthy nodes.
 	watchers, err, _ := o.findWatchersWithRetry(idxDefn.Nodes, int(idxDefn.NumReplica), c.IsPartitioned(idxDefn.PartitionScheme))
 	if err != nil {
 		return err
@@ -746,48 +823,12 @@ func (o *MetadataProvider) createIndex(idxDefn *c.IndexDefn, plan map[string]int
 		return errors.New(fmt.Sprintf("Fails to create index.  Cannot find enough indexer node for replica.  numReplica=%v.", idxDefn.NumReplica))
 	}
 
-	layout := make(map[int]map[c.IndexerId][]c.PartitionId)
-	addLayout := func(replicaId int, indexerId c.IndexerId, partitions []c.PartitionId) {
-		if _, ok := layout[replicaId]; !ok {
-			layout[replicaId] = make(map[c.IndexerId][]c.PartitionId)
-		}
-		layout[replicaId][indexerId] = partitions
+	indexerIds := make([]c.IndexerId, len(watchers))
+	for _, watcher := range watchers {
+		indexerIds = append(indexerIds, watcher.getIndexerId())
 	}
 
-	for replicaId := 0; replicaId < int(idxDefn.NumReplica+1); replicaId++ {
-
-		if c.IsPartitioned(idxDefn.PartitionScheme) {
-
-			partitionPerWatcher := int(idxDefn.NumPartitions) / len(watchers)
-			if int(idxDefn.NumPartitions)%len(watchers) != 0 {
-				partitionPerWatcher += 1
-			}
-
-			partnId := int(1)
-			endPartnId := partnId + int(idxDefn.NumPartitions)
-
-			for _, watcher := range watchers {
-
-				var partitions []c.PartitionId
-				count := 0
-				for partnId < endPartnId && count < partitionPerWatcher {
-					partitions = append(partitions, c.PartitionId(partnId))
-					count++
-					partnId++
-				}
-
-				if len(partitions) != 0 {
-					addLayout(replicaId, watcher.getIndexerId(), partitions)
-				}
-			}
-
-			// shuffle the watcher
-			watchers = append(watchers[1:], watchers[:1]...)
-
-		} else {
-			addLayout(replicaId, watchers[replicaId].getIndexerId(), []c.PartitionId{c.NON_PARTITION_ID})
-		}
-	}
+	layout := o.createLayoutWithRoundRobin(idxDefn, indexerIds)
 
 	return o.makeCreateIndexRequest(idxDefn, layout)
 }
@@ -799,9 +840,10 @@ func (o *MetadataProvider) makeCreateIndexRequest(idxDefn *c.IndexDefn, layout m
 
 	defnID := idxDefn.DefnId
 	wait := !idxDefn.Deferred
+	scheduled := true
 
 	if c.IsPartitioned(idxDefn.PartitionScheme) && idxDefn.NumReplica > 0 {
-		idxDefn.Deferred = true
+		scheduled = false
 	}
 
 	errMap := make(map[string]bool)
@@ -822,7 +864,7 @@ func (o *MetadataProvider) makeCreateIndexRequest(idxDefn *c.IndexDefn, layout m
 			idxDefn.Partitions = partitions
 			idxDefn.Versions = make([]int, len(partitions))
 
-			if err := o.SendCreateIndexRequest(indexerId, idxDefn); err != nil {
+			if err := o.SendCreateIndexRequest(indexerId, idxDefn, scheduled); err != nil {
 				errMap[err.Error()] = true
 			}
 
@@ -913,7 +955,7 @@ func (o *MetadataProvider) makeCreateIndexRequest(idxDefn *c.IndexDefn, layout m
 //
 // This function send a create index request
 //
-func (o *MetadataProvider) SendCreateIndexRequest(indexerId c.IndexerId, idxDefn *c.IndexDefn) error {
+func (o *MetadataProvider) SendCreateIndexRequest(indexerId c.IndexerId, idxDefn *c.IndexDefn, scheduled bool) error {
 
 	watcher, err := o.findWatcherByIndexerId(indexerId)
 	if err != nil {
@@ -926,8 +968,14 @@ func (o *MetadataProvider) SendCreateIndexRequest(indexerId c.IndexerId, idxDefn
 	}
 
 	key := fmt.Sprintf("%d", idxDefn.DefnId)
-	if _, err := watcher.makeRequest(OPCODE_CREATE_INDEX, key, content); err != nil {
-		return err
+	if scheduled {
+		if _, err := watcher.makeRequest(OPCODE_CREATE_INDEX, key, content); err != nil {
+			return err
+		}
+	} else {
+		if _, err := watcher.makeRequest(OPCODE_CREATE_INDEX_DEFER_BUILD, key, content); err != nil {
+			return err
+		}
 	}
 
 	return nil
