@@ -1,4 +1,5 @@
 // Copyright (c) 2014 Couchbase, Inc.
+
 // Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file
 // except in compliance with the License. You may obtain a copy of the License at
 //   http://www.apache.org/licenses/LICENSE-2.0
@@ -126,6 +127,8 @@ func (s *IndexScanSource) Routine() error {
 	var cktmp, dktmp [][]byte
 	cktmp = make([][]byte, len(s.p.req.IndexInst.Defn.SecExprs))
 
+	var cachedEntry entryCache
+
 	if r.GroupAggr != nil {
 		r.GroupAggr.groups = make([]*groupKey, len(r.GroupAggr.Group))
 		for i, _ := range r.GroupAggr.Group {
@@ -172,7 +175,7 @@ func (s *IndexScanSource) Routine() error {
 			}
 			getDecoded := (r.GroupAggr != nil && r.GroupAggr.NeedDecode)
 			skipRow, ck, dk, err = filterScanRow2(entry, currentScan,
-				(*buf)[:0], *buf3, getDecoded, cktmp, dktmp)
+				(*buf)[:0], *buf3, getDecoded, cktmp, dktmp, r, &cachedEntry)
 			if err != nil {
 				return err
 			}
@@ -203,7 +206,7 @@ func (s *IndexScanSource) Routine() error {
 				}
 			}
 
-			err = computeGroupAggr(ck, dk, count, docid, entry, (*buf)[:0], *buf3, s.p.aggrRes, r.GroupAggr, cktmp, dktmp)
+			err = computeGroupAggr(ck, dk, count, docid, entry, (*buf)[:0], *buf3, s.p.aggrRes, r.GroupAggr, cktmp, dktmp, &cachedEntry, r)
 			if err != nil {
 				return err
 			}
@@ -489,14 +492,32 @@ func filterScanRow(key []byte, scan Scan, buf []byte) (bool, [][]byte, error) {
 
 // Return true if the row needs to be skipped based on the filter
 func filterScanRow2(key []byte, scan Scan, buf, decbuf []byte, getDecoded bool,
-	cktmp, dktmp [][]byte) (bool, [][]byte, [][]byte, error) {
+	cktmp, dktmp [][]byte, r *ScanRequest, cachedEntry *entryCache) (bool, [][]byte, [][]byte, error) {
 
 	var compositekeys, decodedkeys [][]byte
 	var err error
 
-	compositekeys, decodedkeys, err = jsonEncoder.ExplodeArray2(key, buf, decbuf, cktmp, dktmp)
-	if err != nil {
-		return false, nil, nil, err
+	if !r.isPrimary && cachedEntry.Exists() {
+		if cachedEntry.EqualsEntry(key) {
+			compositekeys, decodedkeys = cachedEntry.Get()
+			cachedEntry.SetValid(true)
+		} else {
+			cachedEntry.SetValid(false)
+		}
+	}
+
+	if compositekeys == nil {
+		compositekeys, decodedkeys, err = jsonEncoder.ExplodeArray2(key, buf, decbuf, cktmp, dktmp)
+		if err != nil {
+			return false, nil, nil, err
+		}
+	}
+
+	if !cachedEntry.Exists() {
+		cachedEntry.Init(r, getDecoded, len(compositekeys))
+	}
+	if !cachedEntry.Valid() {
+		cachedEntry.Update(key, compositekeys, decodedkeys)
 	}
 
 	var filtermatch bool
@@ -712,41 +733,53 @@ func (a aggrResult) String() string {
 }
 
 func computeGroupAggr(compositekeys, decodedkeys [][]byte, count int, docid, key,
-	buf, decbuf []byte, aggrRes *aggrResult, groupAggr *GroupAggr, cktmp, dktmp [][]byte) error {
+	buf, decbuf []byte, aggrRes *aggrResult, groupAggr *GroupAggr, cktmp, dktmp [][]byte, cachedEntry *entryCache, r *ScanRequest) error {
 
 	var err error
-	var decodedvalues []interface{}
 
 	if groupAggr.IsPrimary {
 		compositekeys = make([][]byte, 1)
 		compositekeys[0] = key
 	} else if compositekeys == nil {
 		if groupAggr.NeedExplode {
-			compositekeys, decodedkeys, err = jsonEncoder.ExplodeArray2(key, buf, decbuf, cktmp, dktmp)
+			if cachedEntry.Exists() {
+				if cachedEntry.EqualsEntry(key) {
+					compositekeys, decodedkeys = cachedEntry.Get()
+					cachedEntry.SetValid(true)
+				} else {
+					cachedEntry.SetValid(false)
+				}
+			} else {
+				cachedEntry.Init(r, groupAggr.NeedDecode, len(compositekeys))
+			}
+
+			if !cachedEntry.Valid() {
+				compositekeys, decodedkeys, err = jsonEncoder.ExplodeArray2(key, buf, decbuf, cktmp, dktmp)
+				if err != nil {
+					return err
+				}
+				cachedEntry.Update(key, compositekeys, decodedkeys)
+			}
+		}
+	}
+
+	if !cachedEntry.Valid() || groupAggr.DependsOnPrimaryKey {
+		for i, gk := range groupAggr.Group {
+			err := computeGroupKey(groupAggr, gk, compositekeys, decodedkeys, cachedEntry.decodedvalues, docid, i)
+			if err != nil {
+				return err
+			}
+		}
+
+		for i, ak := range groupAggr.Aggrs {
+			err := computeAggrVal(groupAggr, ak, compositekeys, decodedkeys, cachedEntry.decodedvalues, docid, count, buf, i)
 			if err != nil {
 				return err
 			}
 		}
 	}
-	if groupAggr.NeedDecode {
-		decodedvalues = make([]interface{}, len(compositekeys))
-	}
 
-	for i, gk := range groupAggr.Group {
-		err := computeGroupKey(groupAggr, gk, compositekeys, decodedkeys, decodedvalues, docid, i)
-		if err != nil {
-			return err
-		}
-	}
-
-	for i, ak := range groupAggr.Aggrs {
-		err := computeAggrVal(groupAggr, ak, compositekeys, decodedkeys, decodedvalues, docid, count, buf, i)
-		if err != nil {
-			return err
-		}
-	}
-
-	aggrRes.AddNewGroup(groupAggr.groups, groupAggr.aggrs)
+	aggrRes.AddNewGroup(groupAggr.groups, groupAggr.aggrs, cachedEntry.Valid())
 	return nil
 
 }
@@ -852,9 +885,17 @@ func evaluateN1QLExpresssion(groupAggr *GroupAggr, expr expression.Expression,
 	return scalar, nil
 }
 
-func (ar *aggrResult) AddNewGroup(groups []*groupKey, aggrs []*aggrVal) error {
+func (ar *aggrResult) AddNewGroup(groups []*groupKey, aggrs []*aggrVal, cacheValid bool) error {
 
 	var err error
+
+	if cacheValid && len(ar.rows) == 1 {
+		err = ar.rows[0].AddAggregate(aggrs)
+		if err != nil {
+			return err
+		}
+		return nil
+	}
 
 	nomatch := true
 	for _, row := range ar.rows {
@@ -1127,4 +1168,113 @@ func encodeValue(raw interface{}) ([]byte, error) {
 	}
 
 	return encval, nil
+}
+
+/////////////////////////////////////////////////////////////////////////
+//
+// entry cache implementation
+//
+/////////////////////////////////////////////////////////////////////////
+
+type entryCache struct {
+	entry         []byte
+	compkeys      [][]byte
+	decodedkeys   [][]byte
+	decodedvalues []interface{}
+
+	compkeybuf []byte
+	deckeybuf  []byte
+	valid      bool
+
+	hit  int64
+	miss int64
+}
+
+func (e *entryCache) Init(r *ScanRequest, needDecode bool, numcompkeys int) {
+
+	entrybuf := secKeyBufPool.Get()
+	r.keyBufList = append(r.keyBufList, entrybuf)
+
+	compkeybuf := secKeyBufPool.Get()
+	r.keyBufList = append(r.keyBufList, compkeybuf)
+
+	e.entry = (*entrybuf)[:0]
+	e.compkeybuf = *compkeybuf
+
+	if needDecode {
+		deckeybuf := secKeyBufPool.Get()
+		r.keyBufList = append(r.keyBufList, deckeybuf)
+		e.deckeybuf = *deckeybuf
+	}
+
+}
+
+func (e *entryCache) EqualsEntry(other []byte) bool {
+	return distinctCompare(e.entry, other)
+}
+
+func (e *entryCache) Get() ([][]byte, [][]byte) {
+
+	return e.compkeys, e.decodedkeys
+
+}
+
+func (e *entryCache) Update(entry []byte, compositekeys [][]byte, decodedkeys [][]byte) {
+
+	e.entry = append(e.entry[:0], entry...)
+
+	if len(entry) > cap(e.compkeybuf) {
+		e.compkeybuf = make([]byte, 0, len(entry)+1024)
+		if decodedkeys != nil {
+			e.deckeybuf = make([]byte, 0, len(entry)+1024)
+		}
+	}
+
+	if e.compkeys == nil {
+		e.compkeys = make([][]byte, len(compositekeys))
+	}
+
+	tmpbuf := e.compkeybuf
+	for i, k := range compositekeys {
+		copy(tmpbuf, k)
+		e.compkeys[i] = tmpbuf[:len(k)]
+		tmpbuf = tmpbuf[len(k):]
+	}
+
+	if decodedkeys != nil {
+		if e.decodedkeys == nil {
+			e.decodedkeys = make([][]byte, len(decodedkeys))
+		}
+		tmpbuf := e.deckeybuf
+		for i, k := range decodedkeys {
+			copy(tmpbuf, k)
+			e.decodedkeys[i] = tmpbuf[:len(k)]
+			tmpbuf = tmpbuf[len(k):]
+		}
+	}
+
+	e.decodedvalues = make([]interface{}, len(compositekeys))
+
+}
+
+func (e *entryCache) SetValid(valid bool) {
+	if valid {
+		e.hit++
+	} else {
+		e.miss++
+	}
+	e.valid = valid
+}
+
+func (e *entryCache) Exists() bool {
+	return e.compkeybuf != nil
+}
+
+func (e *entryCache) Valid() bool {
+	return e.valid
+}
+
+func (e *entryCache) Stats() string {
+	return fmt.Sprintf("Hit %v Miss %v", e.hit, e.miss)
+
 }
