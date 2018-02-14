@@ -304,7 +304,8 @@ func (b *metadataClient) GetScanports() (queryports []string) {
 }
 
 // GetScanport implements BridgeAccessor{} interface.
-func (b *metadataClient) GetScanport(defnID uint64, excludes map[common.PartitionId]map[uint64]bool) (qp []string,
+func (b *metadataClient) GetScanport(defnID uint64, excludes map[common.IndexDefnId]map[common.PartitionId]map[uint64]bool,
+	skips map[common.IndexDefnId]bool) (qp []string,
 	targetDefnID uint64, in []uint64, rt []int64, pid [][]common.PartitionId, numPartitions uint32, ok bool) {
 
 	var insts map[common.PartitionId]*mclient.InstanceDefn
@@ -312,7 +313,10 @@ func (b *metadataClient) GetScanport(defnID uint64, excludes map[common.Partitio
 
 	currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
 
-	defnID = b.pickEquivalent(defnID)
+	defnID = b.pickEquivalent(defnID, skips)
+	if defnID == 0 {
+		return nil, 0, nil, nil, nil, 0, false
+	}
 
 	var replicas [128]uint64
 	n := 0
@@ -321,8 +325,9 @@ func (b *metadataClient) GetScanport(defnID uint64, excludes map[common.Partitio
 		n++
 	}
 
-	insts, rollbackTimes, ok = b.pickRandom(replicas[:n], defnID, excludes)
+	insts, rollbackTimes, ok = b.pickRandom(replicas[:n], defnID, excludes[common.IndexDefnId(defnID)])
 	if !ok {
+		skips[common.IndexDefnId(defnID)] = true
 		return nil, 0, nil, nil, nil, 0, false
 	}
 
@@ -783,11 +788,21 @@ func (b *loadStats) isStatsCurrent(partitionId common.PartitionId) bool {
 // local functions to pick index for scanning
 //-----------------------------------------------
 
-func (b *metadataClient) pickEquivalent(defnID uint64) uint64 {
+func (b *metadataClient) pickEquivalent(defnID uint64, skips map[common.IndexDefnId]bool) uint64 {
 
 	currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
-	n := rand.Intn(len(currmeta.equivalents[common.IndexDefnId(defnID)]))
-	return uint64(currmeta.equivalents[common.IndexDefnId(defnID)][n])
+
+	if len(skips) == len(currmeta.equivalents[common.IndexDefnId(defnID)]) {
+		return uint64(0)
+	}
+
+	for {
+		n := rand.Intn(len(currmeta.equivalents[common.IndexDefnId(defnID)]))
+		candidate := currmeta.equivalents[common.IndexDefnId(defnID)][n]
+		if !skips[candidate] {
+			return uint64(candidate)
+		}
+	}
 }
 
 // Given the list of replicas for a given index definition, this function randomly picks the partitons from the available replicas

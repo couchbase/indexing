@@ -192,7 +192,8 @@ type BridgeAccessor interface {
 	// equivalent index.
 	GetScanport(
 		defnID uint64,
-		excludes map[common.PartitionId]map[uint64]bool) (queryport []string, targetDefnID uint64, targetInstID []uint64,
+		excludes map[common.IndexDefnId]map[common.PartitionId]map[uint64]bool,
+		skips map[common.IndexDefnId]bool) (queryport []string, targetDefnID uint64, targetInstID []uint64,
 		rollbackTime []int64, partition [][]common.PartitionId, numPartitions uint32, ok bool)
 
 	// GetIndexDefn will return the index-definition structure for defnID.
@@ -1143,11 +1144,17 @@ func (c *GsiClient) getScanClients(queryports []string) ([]*GsiScanClient, bool)
 	return qc, ok
 }
 
-func (c *GsiClient) updateExcludes(defnID uint64, excludes map[common.PartitionId]map[uint64]bool,
-	errMap map[common.PartitionId]map[uint64]error) map[common.PartitionId]map[uint64]bool {
+func (c *GsiClient) updateExcludes(defnID uint64, excludes map[common.IndexDefnId]map[common.PartitionId]map[uint64]bool,
+	errMap map[common.PartitionId]map[uint64]error) map[common.IndexDefnId]map[common.PartitionId]map[uint64]bool {
+
+	defnId := common.IndexDefnId(defnID)
 
 	if excludes == nil {
-		excludes = make(map[common.PartitionId]map[uint64]bool)
+		excludes = make(map[common.IndexDefnId]map[common.PartitionId]map[uint64]bool)
+	}
+
+	if _, ok := excludes[defnId]; !ok {
+		excludes[defnId] = make(map[common.PartitionId]map[uint64]bool)
 	}
 
 	// num of replica or equivalent index (including self)
@@ -1156,10 +1163,10 @@ func (c *GsiClient) updateExcludes(defnID uint64, excludes map[common.PartitionI
 	for partnId, instErrMap := range errMap {
 		for instId, err := range instErrMap {
 			if !isgone(err) {
-				if _, ok := excludes[partnId]; !ok {
-					excludes[partnId] = make(map[uint64]bool)
+				if _, ok := excludes[defnId][partnId]; !ok {
+					excludes[defnId][partnId] = make(map[uint64]bool)
 				}
-				excludes[partnId][instId] = true
+				excludes[defnId][partnId][instId] = true
 			} else if numReplica > 1 {
 				// if it is EOF error and there is replica, then
 				// exclude all partitions on all replicas
@@ -1170,10 +1177,10 @@ func (c *GsiClient) updateExcludes(defnID uint64, excludes map[common.PartitionI
 					for _, replica := range c.bridge.GetIndexReplica(defnID) {
 						for p, indexerId := range replica.IndexerId {
 							if indexerId == failIndexerId {
-								if _, ok := excludes[p]; !ok {
-									excludes[p] = make(map[uint64]bool)
+								if _, ok := excludes[defnId][p]; !ok {
+									excludes[defnId][p] = make(map[uint64]bool)
 								}
-								excludes[p][uint64(replica.InstId)] = true
+								excludes[defnId][p][uint64(replica.InstId)] = true
 							}
 						}
 					}
@@ -1187,10 +1194,11 @@ func (c *GsiClient) updateExcludes(defnID uint64, excludes map[common.PartitionI
 
 func (c *GsiClient) doScan(defnID uint64, requestId string, broker *RequestBroker) (int64, error) {
 
-	var excludes map[common.PartitionId]map[uint64]bool
+	var excludes map[common.IndexDefnId]map[common.PartitionId]map[uint64]bool
 	var err error
 
 	broker.SetResponseTimer(c.bridge.Timeit)
+	skips := make(map[common.IndexDefnId]bool)
 
 	wait := c.config["retryIntervalScanport"].Int()
 	retry := c.config["retryScanPort"].Int()
@@ -1198,7 +1206,7 @@ func (c *GsiClient) doScan(defnID uint64, requestId string, broker *RequestBroke
 	for i := 0; true; {
 		foundScanport := false
 
-		if queryports, targetDefnID, targetInstIds, rollbackTimes, partitions, numPartitions, ok := c.bridge.GetScanport(defnID, excludes); ok {
+		if queryports, targetDefnID, targetInstIds, rollbackTimes, partitions, numPartitions, ok := c.bridge.GetScanport(defnID, excludes, skips); ok {
 
 			index := c.bridge.GetIndexDefn(targetDefnID)
 			// make query clients from queryports
