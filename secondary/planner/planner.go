@@ -728,6 +728,7 @@ func (p *SAPlanner) adjustInitialSolutionIfNecessary(s *Solution) *Solution {
 	if s.command != CommandPlan {
 		p.dropReplicaIfNecessary(cloned)
 		p.addReplicaIfNecessary(cloned)
+		p.addPartitionIfNecessary(cloned)
 	}
 	p.suppressEqivIndexIfNecessary(cloned)
 
@@ -935,6 +936,70 @@ func (p *SAPlanner) addReplicaIfNecessary(s *Solution) {
 			if len(clonedCandidates) != 0 {
 				p.placement.AddOptionalIndexes(clonedCandidates)
 			}
+		}
+	}
+}
+
+//
+// Add missing partition if there is enough nodes in the cluster.
+//
+func (p *SAPlanner) addPartitionIfNecessary(s *Solution) {
+
+	if s.disableRepair {
+		return
+	}
+
+	candidates := make(map[common.IndexInstId]*IndexUsage)
+	done := make(map[common.IndexInstId]bool)
+	for _, indexer := range s.Placement {
+		for _, index := range indexer.Indexes {
+			if _, ok := done[index.InstId]; !ok {
+				if s.findNumPartition(index) < int(index.Instance.Pc.GetNumPartitions()) {
+					candidates[index.InstId] = index
+				}
+				done[index.InstId] = true
+			}
+		}
+	}
+
+	if len(candidates) != 0 {
+		var available []*IndexerNode
+		var allCloned []*IndexUsage
+
+		for _, indexer := range s.Placement {
+			if !indexer.ExcludeAny(s) {
+				available = append(available, indexer)
+			}
+		}
+
+		if len(available) == 0 {
+			logging.Warnf("Planner: Cannot repair lost partitions because all indexer nodes are excluded for rebalancing")
+			return
+		}
+
+		for _, candidate := range candidates {
+			missing := s.findMissingPartition(candidate)
+			for _, partitionId := range missing {
+
+				// clone the original and update the partitionId
+				// Does not need to modify Instance.Pc
+				cloned := candidate.clone()
+				cloned.PartnId = partitionId
+				cloned.initialNode = nil
+
+				n := rand.Intn(len(available))
+				indexer := available[n]
+
+				// add the new partition to the solution
+				s.addIndex(indexer, cloned)
+				allCloned = append(allCloned, cloned)
+
+				logging.Infof("Rebuilding lost partition for (%v,%v,%v,%v)", cloned.Bucket, cloned.Name, cloned.Instance.ReplicaId, cloned.PartnId)
+			}
+		}
+
+		if len(allCloned) != 0 {
+			p.placement.AddOptionalIndexes(allCloned)
 		}
 	}
 }
@@ -1537,6 +1602,59 @@ func (s *Solution) findMissingReplica(u *IndexUsage) map[int]common.IndexInstId 
 					}
 				}
 			}
+		}
+	}
+
+	return missing
+}
+
+//
+// Find the number of partition (including itself).
+//
+func (s *Solution) findNumPartition(u *IndexUsage) int {
+
+	count := 0
+	for _, indexer := range s.Placement {
+		for _, index := range indexer.Indexes {
+			if index.IsSameInst(u) {
+				count++
+			}
+		}
+	}
+
+	return count
+}
+
+//
+// Find the missing partition
+//
+func (s *Solution) findMissingPartition(u *IndexUsage) []common.PartitionId {
+
+	if u.Instance == nil {
+		return []common.PartitionId(nil)
+	}
+
+	found := make(map[common.PartitionId]bool)
+	for _, indexer := range s.Placement {
+		for _, index := range indexer.Indexes {
+
+			// check instance (including self)
+			if index.IsSameInst(u) {
+				found[index.PartnId] = true
+			}
+		}
+	}
+
+	startPartnId := 0
+	if common.IsPartitioned(u.Instance.Defn.PartitionScheme) {
+		startPartnId = 1
+	}
+	endPartnId := startPartnId + int(u.Instance.Pc.GetNumPartitions())
+
+	var missing []common.PartitionId
+	for i := startPartnId; i < endPartnId; i++ {
+		if _, ok := found[common.PartitionId(i)]; !ok {
+			missing = append(missing, common.PartitionId(i))
 		}
 	}
 
@@ -3106,7 +3224,11 @@ func (o *IndexUsage) IsSameIndex(other *IndexUsage) bool {
 	return o.DefnId == other.DefnId
 }
 
-// Replica is not considered as equivalent index
+func (o *IndexUsage) IsSameInst(other *IndexUsage) bool {
+
+	return o.DefnId == other.DefnId && o.InstId == other.InstId
+}
+
 func (o *IndexUsage) IsEquivalentIndex(other *IndexUsage) bool {
 
 	if o.IsSameIndex(other) {
