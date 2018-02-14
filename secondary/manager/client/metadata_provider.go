@@ -719,16 +719,16 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn, plan map
 		}
 	}
 
+	var states []c.IndexState
 	if !idxDefn.Deferred {
-		var errStr string
-		err := o.repo.waitForEvent(idxDefn.DefnId, []c.IndexState{c.INDEX_STATE_ACTIVE, c.INDEX_STATE_DELETED}, topologyMap)
-		if err != nil {
-			errStr += err.Error() + "\n"
-		}
+		states = []c.IndexState{c.INDEX_STATE_ACTIVE, c.INDEX_STATE_DELETED}
+	} else {
+		states = []c.IndexState{c.INDEX_STATE_READY, c.INDEX_STATE_ACTIVE, c.INDEX_STATE_DELETED}
+	}
 
-		if len(errStr) != 0 {
-			return errors.New(errStr)
-		}
+	err = o.repo.waitForEvent(idxDefn.DefnId, states, topologyMap)
+	if err != nil {
+		return fmt.Errorf("%v\n", err)
 	}
 
 	return nil
