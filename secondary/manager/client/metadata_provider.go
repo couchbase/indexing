@@ -840,9 +840,10 @@ func (o *MetadataProvider) makeCreateIndexRequest(idxDefn *c.IndexDefn, layout m
 
 	defnID := idxDefn.DefnId
 	wait := !idxDefn.Deferred
+	scheduled := true
 
 	if c.IsPartitioned(idxDefn.PartitionScheme) && idxDefn.NumReplica > 0 {
-		idxDefn.Deferred = true
+		scheduled = false
 	}
 
 	errMap := make(map[string]bool)
@@ -863,7 +864,7 @@ func (o *MetadataProvider) makeCreateIndexRequest(idxDefn *c.IndexDefn, layout m
 			idxDefn.Partitions = partitions
 			idxDefn.Versions = make([]int, len(partitions))
 
-			if err := o.SendCreateIndexRequest(indexerId, idxDefn); err != nil {
+			if err := o.SendCreateIndexRequest(indexerId, idxDefn, scheduled); err != nil {
 				errMap[err.Error()] = true
 			}
 
@@ -954,7 +955,7 @@ func (o *MetadataProvider) makeCreateIndexRequest(idxDefn *c.IndexDefn, layout m
 //
 // This function send a create index request
 //
-func (o *MetadataProvider) SendCreateIndexRequest(indexerId c.IndexerId, idxDefn *c.IndexDefn) error {
+func (o *MetadataProvider) SendCreateIndexRequest(indexerId c.IndexerId, idxDefn *c.IndexDefn, scheduled bool) error {
 
 	watcher, err := o.findWatcherByIndexerId(indexerId)
 	if err != nil {
@@ -967,8 +968,14 @@ func (o *MetadataProvider) SendCreateIndexRequest(indexerId c.IndexerId, idxDefn
 	}
 
 	key := fmt.Sprintf("%d", idxDefn.DefnId)
-	if _, err := watcher.makeRequest(OPCODE_CREATE_INDEX, key, content); err != nil {
-		return err
+	if scheduled {
+		if _, err := watcher.makeRequest(OPCODE_CREATE_INDEX, key, content); err != nil {
+			return err
+		}
+	} else {
+		if _, err := watcher.makeRequest(OPCODE_CREATE_INDEX_DEFER_BUILD, key, content); err != nil {
+			return err
+		}
 	}
 
 	return nil

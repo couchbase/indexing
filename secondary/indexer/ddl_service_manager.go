@@ -652,7 +652,6 @@ func (m *DDLServiceMgr) handleCreateCommand() {
 						defn.BucketUUID = token.BucketUUID
 						defn.Partitions = newPartitionList
 						defn.Versions = newVersionList
-						defn.Deferred = true
 
 						// Before a create token is posted, at least one indexer has tried to create the index to validate
 						// all invariant conditions (e.g. enterprise version).   These invariant conditions are applicable
@@ -663,7 +662,7 @@ func (m *DDLServiceMgr) handleCreateCommand() {
 						//    will remove the create token when cleaning up metadata for the bucket.
 						// 2) metadata is corrupted.   We cannot detect this, but we will know since the indexer would be
 						//    in a bad state.
-						if err := provider.SendCreateIndexRequest(m.indexerId, &defn); err != nil {
+						if err := provider.SendCreateIndexRequest(m.indexerId, &defn, false); err != nil {
 							logging.Warnf("DDLServiceMgr: Failed to process create index (%v, %v, %v, %v).  Error = %v.",
 								defn.Bucket, defn.Name, defn.DefnId, defn.InstId, err)
 						} else {
