@@ -163,7 +163,7 @@ func (s *IndexScanSource) Routine() error {
 				*buf3 = make([]byte, len(entry)+1024)
 			}
 			getDecoded := (r.GroupAggr != nil && r.GroupAggr.NeedDecode)
-			skipRow, ck, dk, err = filterScanRow(entry, currentScan,
+			skipRow, ck, dk, err = filterScanRow2(entry, currentScan,
 				(*buf)[:0], *buf3, getDecoded)
 			if err != nil {
 				return err
@@ -455,7 +455,34 @@ func siSplitEntry(entry []byte, tmp []byte) ([]byte, []byte, int) {
 }
 
 // Return true if the row needs to be skipped based on the filter
-func filterScanRow(key []byte, scan Scan, buf, decbuf []byte, getDecoded bool) (bool,
+func filterScanRow(key []byte, scan Scan, buf []byte) (bool, [][]byte, error) {
+	var compositekeys [][]byte
+	var err error
+
+	codec := collatejson.NewCodec(16)
+	compositekeys, err = codec.ExplodeArray(key, buf)
+	if err != nil {
+		return false, nil, err
+	}
+
+	var filtermatch bool
+	for _, filtercollection := range scan.Filters {
+		if len(filtercollection.CompositeFilters) > len(compositekeys) {
+			// There cannot be more ranges than number of composite keys
+			err = errors.New("There are more ranges than number of composite elements in the index")
+			return false, nil, err
+		}
+		filtermatch = applyFilter(compositekeys, filtercollection.CompositeFilters)
+		if filtermatch {
+			return false, compositekeys, nil
+		}
+	}
+
+	return true, compositekeys, nil
+}
+
+// Return true if the row needs to be skipped based on the filter
+func filterScanRow2(key []byte, scan Scan, buf, decbuf []byte, getDecoded bool) (bool,
 	[][]byte, [][]byte, error) {
 
 	codec := collatejson.NewCodec(16)
