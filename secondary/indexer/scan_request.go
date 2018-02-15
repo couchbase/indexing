@@ -213,6 +213,9 @@ func (ga GroupAggr) String() string {
 
 	str += fmt.Sprintf(" DependsOnIndexKeys %v", ga.DependsOnIndexKeys)
 	str += fmt.Sprintf(" IndexKeyNames %v", ga.IndexKeyNames)
+	str += fmt.Sprintf(" NeedDecode %v", ga.NeedDecode)
+	str += fmt.Sprintf(" NeedExplode %v", ga.NeedExplode)
+	str += fmt.Sprintf(" IsLeadingGroup %v", ga.IsLeadingGroup)
 	return str
 }
 
