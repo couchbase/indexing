@@ -953,11 +953,13 @@ func (p *SAPlanner) addPartitionIfNecessary(s *Solution) {
 	done := make(map[common.IndexInstId]bool)
 	for _, indexer := range s.Placement {
 		for _, index := range indexer.Indexes {
-			if _, ok := done[index.InstId]; !ok {
-				if s.findNumPartition(index) < int(index.Instance.Pc.GetNumPartitions()) {
-					candidates[index.InstId] = index
+			if index.Instance != nil && index.Instance.Pc != nil {
+				if _, ok := done[index.InstId]; !ok {
+					if s.findNumPartition(index) < int(index.Instance.Pc.GetNumPartitions()) {
+						candidates[index.InstId] = index
+					}
+					done[index.InstId] = true
 				}
-				done[index.InstId] = true
 			}
 		}
 	}
@@ -1630,7 +1632,7 @@ func (s *Solution) findNumPartition(u *IndexUsage) int {
 //
 func (s *Solution) findMissingPartition(u *IndexUsage) []common.PartitionId {
 
-	if u.Instance == nil {
+	if u.Instance == nil || u.Instance.Pc == nil {
 		return []common.PartitionId(nil)
 	}
 
@@ -2018,7 +2020,7 @@ func (s *Solution) runSizeEstimation(placement PlacementMethod) {
 
 			for _, index := range indexer.Indexes {
 				if index.NoUsageInfo {
-					if index.Instance != nil && common.IsPartitioned(index.Instance.Defn.PartitionScheme) {
+					if index.Instance != nil && index.Instance.Pc != nil && common.IsPartitioned(index.Instance.Defn.PartitionScheme) {
 						index.EstimatedMemUsage = estimatedIndexSize / uint64(index.Instance.Pc.GetNumPartitions())
 						index.EstimatedDataSize = index.EstimatedMemUsage
 					} else {
