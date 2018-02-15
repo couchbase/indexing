@@ -1242,6 +1242,8 @@ func (o *MetadataProvider) plan(defn *c.IndexDefn, plan map[string]interface{},
 	spec.PartitionScheme = string(defn.PartitionScheme)
 	spec.PartitionKeys = defn.PartitionKeys
 	spec.Replica = uint64(defn.NumReplica) + 1
+	spec.RetainDeletedXATTR = defn.RetainDeletedXATTR
+	spec.ExprType = string(defn.ExprType)
 
 	spec.NumDoc = defn.NumDoc
 	spec.DocKeySize = defn.DocKeySize
