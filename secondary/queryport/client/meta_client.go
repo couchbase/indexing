@@ -327,7 +327,10 @@ func (b *metadataClient) GetScanport(defnID uint64, excludes map[common.IndexDef
 
 	insts, rollbackTimes, ok = b.pickRandom(replicas[:n], defnID, excludes[common.IndexDefnId(defnID)])
 	if !ok {
-		skips[common.IndexDefnId(defnID)] = true
+		if len(currmeta.equivalents[common.IndexDefnId(defnID)]) > 1 || len(currmeta.replicas[common.IndexDefnId(defnID)]) > 1 {
+			// skip this index definition for retry only if there is equivalent index or replica
+			skips[common.IndexDefnId(defnID)] = true
+		}
 		return nil, 0, nil, nil, nil, 0, false
 	}
 
