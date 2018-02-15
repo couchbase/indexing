@@ -1255,6 +1255,7 @@ func (c *GsiClient) doScan(defnID uint64, requestId string, broker *RequestBroke
 		// the clients.
 		if i = i + 1; i < retry {
 			excludes = nil
+			skips = make(map[common.IndexDefnId]bool)
 			logging.Warnf(
 				"Fail to find indexers to satisfy query request.  Trying scan again for index %v, reqId:%v : %v ...\n",
 				defnID, requestId, err)
