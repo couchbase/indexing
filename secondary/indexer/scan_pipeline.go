@@ -371,8 +371,7 @@ loop:
 
 		t := (*tmpBuf)[:0]
 		if d.p.req.GroupAggr != nil {
-			codec := collatejson.NewCodec(16)
-			sk, _ = codec.Decode(row, t)
+			sk, _ = jsonEncoder.Decode(row, t)
 		} else if d.p.req.isPrimary {
 			sk, docid = piSplitEntry(row, t)
 		} else {
@@ -467,8 +466,7 @@ func filterScanRow(key []byte, scan Scan, buf []byte) (bool, [][]byte, error) {
 	var compositekeys [][]byte
 	var err error
 
-	codec := collatejson.NewCodec(16)
-	compositekeys, err = codec.ExplodeArray(key, buf)
+	compositekeys, err = jsonEncoder.ExplodeArray(key, buf)
 	if err != nil {
 		return false, nil, err
 	}
@@ -493,11 +491,10 @@ func filterScanRow(key []byte, scan Scan, buf []byte) (bool, [][]byte, error) {
 func filterScanRow2(key []byte, scan Scan, buf, decbuf []byte, getDecoded bool,
 	cktmp, dktmp [][]byte) (bool, [][]byte, [][]byte, error) {
 
-	codec := collatejson.NewCodec(16)
 	var compositekeys, decodedkeys [][]byte
 	var err error
 
-	compositekeys, decodedkeys, err = codec.ExplodeArray2(key, buf, decbuf, cktmp, dktmp)
+	compositekeys, decodedkeys, err = jsonEncoder.ExplodeArray2(key, buf, decbuf, cktmp, dktmp)
 	if err != nil {
 		return false, nil, nil, err
 	}
@@ -601,9 +598,8 @@ func projectKeys(compositekeys [][]byte, key, buf []byte, projection *Projection
 		return buf, nil
 	}
 
-	codec := collatejson.NewCodec(16)
 	if compositekeys == nil {
-		compositekeys, _, err = codec.ExplodeArray2(key, buf, nil, cktmp, nil)
+		compositekeys, _, err = jsonEncoder.ExplodeArray2(key, buf, nil, cktmp, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -618,7 +614,7 @@ func projectKeys(compositekeys [][]byte, key, buf []byte, projection *Projection
 	// Note: Reusing the same buf used for Explode in JoinArray as well
 	// This is because we always project in order and hence avoiding two
 	// different buffers for Explode and Join
-	if buf, err = codec.JoinArray(keysToJoin, buf); err != nil {
+	if buf, err = jsonEncoder.JoinArray(keysToJoin, buf); err != nil {
 		return nil, err
 	}
 
@@ -630,12 +626,11 @@ func projectKeys(compositekeys [][]byte, key, buf []byte, projection *Projection
 func projectLeadingKey(compositekeys [][]byte, key []byte, buf *[]byte) ([]byte, error) {
 	var err error
 
-	codec := collatejson.NewCodec(16)
 	if compositekeys == nil {
 		if len(key) > cap(*buf) {
 			*buf = make([]byte, 0, len(key)+RESIZE_PAD)
 		}
-		compositekeys, err = codec.ExplodeArray(key, (*buf)[:0])
+		compositekeys, err = jsonEncoder.ExplodeArray(key, (*buf)[:0])
 		if err != nil {
 			return nil, err
 		}
@@ -643,7 +638,7 @@ func projectLeadingKey(compositekeys [][]byte, key []byte, buf *[]byte) ([]byte,
 
 	var keysToJoin [][]byte
 	keysToJoin = append(keysToJoin, compositekeys[0])
-	if *buf, err = codec.JoinArray(keysToJoin, (*buf)[:0]); err != nil {
+	if *buf, err = jsonEncoder.JoinArray(keysToJoin, (*buf)[:0]); err != nil {
 		return nil, err
 	}
 
@@ -721,9 +716,8 @@ func computeGroupAggr(compositekeys, decodedkeys [][]byte, count int, docid, key
 		compositekeys = make([][]byte, 1)
 		compositekeys[0] = key
 	} else if compositekeys == nil {
-		codec := collatejson.NewCodec(16)
 		if groupAggr.NeedExplode {
-			compositekeys, decodedkeys, err = codec.ExplodeArray2(key, buf, decbuf, cktmp, dktmp)
+			compositekeys, decodedkeys, err = jsonEncoder.ExplodeArray2(key, buf, decbuf, cktmp, dktmp)
 			if err != nil {
 				return err
 			}
@@ -972,8 +966,7 @@ func projectEmptyResult(buf []byte, projection *Projection, groupAggr *GroupAggr
 			keysToJoin = append(keysToJoin, aggrs[projGroup.pos])
 		}
 
-		codec := collatejson.NewCodec(16)
-		if buf, err = codec.JoinArray(keysToJoin, buf); err != nil {
+		if buf, err = jsonEncoder.JoinArray(keysToJoin, buf); err != nil {
 			l.Errorf("ScanPipeline::projectEmptyResult join array error %v", err)
 			return nil, err
 		}
@@ -1015,9 +1008,8 @@ func projectGroupAggr(buf []byte, projection *Projection,
 			gk := row.groups[projGroup.pos]
 			if gk.n1qlValue {
 				var newKey []byte
-				codec := collatejson.NewCodec(16)
 				encodeBuf := make([]byte, 1024) // TODO: use val.MarshalJSON() to determine size
-				newKey, err = codec.EncodeN1QLValue(gk.obj, encodeBuf[:0])
+				newKey, err = jsonEncoder.EncodeN1QLValue(gk.obj, encodeBuf[:0])
 				if err != nil {
 					return nil, err
 				}
@@ -1073,8 +1065,7 @@ func projectGroupAggr(buf []byte, projection *Projection,
 		}
 	}
 
-	codec := collatejson.NewCodec(16)
-	if buf, err = codec.JoinArray(keysToJoin, buf); err != nil {
+	if buf, err = jsonEncoder.JoinArray(keysToJoin, buf); err != nil {
 		l.Errorf("ScanPipeline::projectGroupAggr join array error %v", err)
 		return nil, err
 	}
@@ -1102,8 +1093,7 @@ func encodeValue(raw interface{}) ([]byte, error) {
 	}
 
 	encbuf := make([]byte, 3*len(jsonraw)+collatejson.MinBufferSize)
-	codec := collatejson.NewCodec(16)
-	encval, err := codec.Encode(jsonraw, encbuf)
+	encval, err := jsonEncoder.Encode(jsonraw, encbuf)
 	if err != nil {
 		return nil, err
 	}
