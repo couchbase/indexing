@@ -37,11 +37,9 @@ func (codec *Codec) ExplodeArray(code []byte, tmp []byte) ([][]byte, error) {
 
 // Explodes an encoded array, returns encoded parts as well as
 // decoded parts
-func (codec *Codec) ExplodeArray2(code []byte, tmp, decbuf []byte) ([][]byte, [][]byte, error) {
+func (codec *Codec) ExplodeArray2(code []byte, tmp, decbuf []byte, cktmp, dktmp [][]byte) ([][]byte, [][]byte, error) {
 	var err error
-	array := make([][]byte, 0)
 	var text []byte
-	decoded := make([][]byte, 0)
 
 	if codec.arrayLenPrefix {
 		return nil, nil, ErrLenPrefixUnsupported
@@ -54,23 +52,27 @@ func (codec *Codec) ExplodeArray2(code []byte, tmp, decbuf []byte) ([][]byte, []
 	code = code[1:]
 	elemBuf := code
 
+	pos := 0
 	for code[0] != Terminator {
 		text, code, err = codec.code2json(code, tmp)
 		if err != nil {
 			break
 		}
 
-		copy(decbuf, text)
-		decoded = append(decoded, decbuf[:len(text)])
-		decbuf = decbuf[len(text):]
+		if dktmp != nil {
+			copy(decbuf, text)
+			dktmp[pos] = decbuf[:len(text)]
+			decbuf = decbuf[len(text):]
+		}
 
 		if size := len(elemBuf) - len(code); size > 0 {
-			array = append(array, elemBuf[:size])
+			cktmp[pos] = elemBuf[:size]
 			elemBuf = code
 		}
+		pos++
 	}
 
-	return array, decoded, err
+	return cktmp, dktmp, err
 }
 
 func (codec *Codec) JoinArray(vals [][]byte, code []byte) ([]byte, error) {

@@ -123,6 +123,9 @@ func (s *IndexScanSource) Routine() error {
 	revbuf := secKeyBufPool.Get() //Reverse collation buffer
 	r.keyBufList = append(r.keyBufList, revbuf)
 
+	var cktmp, dktmp [][]byte
+	cktmp = make([][]byte, len(s.p.req.IndexInst.Defn.SecExprs))
+
 	if r.GroupAggr != nil {
 		r.GroupAggr.groups = make([]*groupKey, len(r.GroupAggr.Group))
 		for i, _ := range r.GroupAggr.Group {
@@ -133,6 +136,11 @@ func (s *IndexScanSource) Routine() error {
 		for i, _ := range r.GroupAggr.Aggrs {
 			r.GroupAggr.aggrs[i] = new(aggrVal)
 		}
+
+		if r.GroupAggr.NeedDecode {
+			dktmp = make([][]byte, len(s.p.req.IndexInst.Defn.SecExprs))
+		}
+
 	}
 
 	hasDesc := s.p.req.IndexInst.Defn.HasDescending()
@@ -164,7 +172,7 @@ func (s *IndexScanSource) Routine() error {
 			}
 			getDecoded := (r.GroupAggr != nil && r.GroupAggr.NeedDecode)
 			skipRow, ck, dk, err = filterScanRow2(entry, currentScan,
-				(*buf)[:0], *buf3, getDecoded)
+				(*buf)[:0], *buf3, getDecoded, cktmp, dktmp)
 			if err != nil {
 				return err
 			}
@@ -195,7 +203,7 @@ func (s *IndexScanSource) Routine() error {
 				}
 			}
 
-			err = computeGroupAggr(ck, dk, count, docid, entry, (*buf)[:0], *buf3, s.p.aggrRes, r.GroupAggr)
+			err = computeGroupAggr(ck, dk, count, docid, entry, (*buf)[:0], *buf3, s.p.aggrRes, r.GroupAggr, cktmp, dktmp)
 			if err != nil {
 				return err
 			}
@@ -213,7 +221,7 @@ func (s *IndexScanSource) Routine() error {
 					*buf = make([]byte, 0, len(entry)+1024)
 				}
 
-				entry, err = projectKeys(ck, entry, (*buf)[:0], r.Indexprojection)
+				entry, err = projectKeys(ck, entry, (*buf)[:0], r.Indexprojection, cktmp)
 			}
 			if err != nil {
 				return err
@@ -482,17 +490,14 @@ func filterScanRow(key []byte, scan Scan, buf []byte) (bool, [][]byte, error) {
 }
 
 // Return true if the row needs to be skipped based on the filter
-func filterScanRow2(key []byte, scan Scan, buf, decbuf []byte, getDecoded bool) (bool,
-	[][]byte, [][]byte, error) {
+func filterScanRow2(key []byte, scan Scan, buf, decbuf []byte, getDecoded bool,
+	cktmp, dktmp [][]byte) (bool, [][]byte, [][]byte, error) {
 
 	codec := collatejson.NewCodec(16)
 	var compositekeys, decodedkeys [][]byte
 	var err error
-	if getDecoded {
-		compositekeys, decodedkeys, err = codec.ExplodeArray2(key, buf, decbuf)
-	} else {
-		compositekeys, err = codec.ExplodeArray(key, buf)
-	}
+
+	compositekeys, decodedkeys, err = codec.ExplodeArray2(key, buf, decbuf, cktmp, dktmp)
 	if err != nil {
 		return false, nil, nil, err
 	}
@@ -587,7 +592,7 @@ func distinctCompare(entryBytes1, entryBytes2 []byte) bool {
 	return false
 }
 
-func projectKeys(compositekeys [][]byte, key, buf []byte, projection *Projection) ([]byte, error) {
+func projectKeys(compositekeys [][]byte, key, buf []byte, projection *Projection, cktmp [][]byte) ([]byte, error) {
 	var err error
 
 	if projection.entryKeysEmpty {
@@ -598,7 +603,7 @@ func projectKeys(compositekeys [][]byte, key, buf []byte, projection *Projection
 
 	codec := collatejson.NewCodec(16)
 	if compositekeys == nil {
-		compositekeys, err = codec.ExplodeArray(key, buf)
+		compositekeys, _, err = codec.ExplodeArray2(key, buf, nil, cktmp, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -707,7 +712,7 @@ func (a aggrResult) String() string {
 }
 
 func computeGroupAggr(compositekeys, decodedkeys [][]byte, count int, docid, key,
-	buf, decbuf []byte, aggrRes *aggrResult, groupAggr *GroupAggr) error {
+	buf, decbuf []byte, aggrRes *aggrResult, groupAggr *GroupAggr, cktmp, dktmp [][]byte) error {
 
 	var err error
 	var decodedvalues []interface{}
@@ -718,11 +723,7 @@ func computeGroupAggr(compositekeys, decodedkeys [][]byte, count int, docid, key
 	} else if compositekeys == nil {
 		codec := collatejson.NewCodec(16)
 		if groupAggr.NeedExplode {
-			if groupAggr.NeedDecode {
-				compositekeys, decodedkeys, err = codec.ExplodeArray2(key, buf, decbuf)
-			} else {
-				compositekeys, err = codec.ExplodeArray(key, buf)
-			}
+			compositekeys, decodedkeys, err = codec.ExplodeArray2(key, buf, decbuf, cktmp, dktmp)
 			if err != nil {
 				return err
 			}
