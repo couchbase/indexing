@@ -719,16 +719,16 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn, plan map
 		}
 	}
 
+	var states []c.IndexState
 	if !idxDefn.Deferred {
-		var errStr string
-		err := o.repo.waitForEvent(idxDefn.DefnId, []c.IndexState{c.INDEX_STATE_ACTIVE, c.INDEX_STATE_DELETED}, topologyMap)
-		if err != nil {
-			errStr += err.Error() + "\n"
-		}
+		states = []c.IndexState{c.INDEX_STATE_ACTIVE, c.INDEX_STATE_DELETED}
+	} else {
+		states = []c.IndexState{c.INDEX_STATE_READY, c.INDEX_STATE_ACTIVE, c.INDEX_STATE_DELETED}
+	}
 
-		if len(errStr) != 0 {
-			return errors.New(errStr)
-		}
+	err = o.repo.waitForEvent(idxDefn.DefnId, states, topologyMap)
+	if err != nil {
+		return fmt.Errorf("%v\n", err)
 	}
 
 	return nil
@@ -1242,6 +1242,8 @@ func (o *MetadataProvider) plan(defn *c.IndexDefn, plan map[string]interface{},
 	spec.PartitionScheme = string(defn.PartitionScheme)
 	spec.PartitionKeys = defn.PartitionKeys
 	spec.Replica = uint64(defn.NumReplica) + 1
+	spec.RetainDeletedXATTR = defn.RetainDeletedXATTR
+	spec.ExprType = string(defn.ExprType)
 
 	spec.NumDoc = defn.NumDoc
 	spec.DocKeySize = defn.DocKeySize

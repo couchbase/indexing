@@ -149,13 +149,13 @@ func (b *cbqClient) CreateIndex(
 
 	// Construct request body.
 	info := indexInfo{
-		Name:      name,
-		Bucket:    bucket,
-		Using:     using,
-		ExprType:  exprType,
-		WhereExpr: whereExpr,
-		SecExprs:  secExprs,
-		IsPrimary: isPrimary,
+		Name:               name,
+		Bucket:             bucket,
+		Using:              using,
+		ExprType:           exprType,
+		WhereExpr:          whereExpr,
+		SecExprs:           secExprs,
+		IsPrimary:          isPrimary,
 		RetainDeletedXATTR: retainDeletedXATTR,
 	}
 	req := indexRequest{Type: "create", Index: info}
@@ -225,7 +225,9 @@ func (b *cbqClient) GetScanports() (queryports []string) {
 // GetScanport implement BridgeAccessor{} interface.
 func (b *cbqClient) GetScanport(
 	defnID uint64,
-	excludes map[common.PartitionId]map[uint64]bool) (queryport []string, targetDefnID uint64, targetIndstID []uint64, rollbackTime []int64,
+	excludes map[common.IndexDefnId]map[common.PartitionId]map[uint64]bool,
+	skips map[common.IndexDefnId]bool) (queryport []string,
+	targetDefnID uint64, targetIndstID []uint64, rollbackTime []int64,
 	partition [][]common.PartitionId, numPartition uint32, ok bool) {
 
 	return []string{b.queryport}, defnID, nil, []int64{math.MaxInt64}, nil, 0, true
@@ -290,27 +292,27 @@ func (b *cbqClient) metaResponse(
 
 // indexInfo describes an index.
 type indexInfo struct {
-	Name      string   `json:"name,omitempty"`
-	Bucket    string   `json:"bucket,omitempty"`
-	DefnID    uint64   `json:"defnID, omitempty"`
-	Using     string   `json:"using,omitempty"`
-	ExprType  string   `json:"exprType,omitempty"`
-	PartnExpr string   `json:"partnExpr,omitempty"`
-	SecExprs  []string `json:"secExprs,omitempty"`
-	WhereExpr string   `json:"whereExpr,omitempty"`
-	IsPrimary bool     `json:"isPrimary,omitempty"`
-	RetainDeletedXATTR bool `json:"retainDeletedXATTR,omitempty"`
+	Name               string   `json:"name,omitempty"`
+	Bucket             string   `json:"bucket,omitempty"`
+	DefnID             uint64   `json:"defnID, omitempty"`
+	Using              string   `json:"using,omitempty"`
+	ExprType           string   `json:"exprType,omitempty"`
+	PartnExpr          string   `json:"partnExpr,omitempty"`
+	SecExprs           []string `json:"secExprs,omitempty"`
+	WhereExpr          string   `json:"whereExpr,omitempty"`
+	IsPrimary          bool     `json:"isPrimary,omitempty"`
+	RetainDeletedXATTR bool     `json:"retainDeletedXATTR,omitempty"`
 }
 
 func newIndexMetaData(info *indexInfo, queryport string) *mclient.IndexMetadata {
 	defn := &common.IndexDefn{
-		DefnId:    common.IndexDefnId(info.DefnID),
-		Name:      info.Name,
-		Using:     common.IndexType(info.Using),
-		Bucket:    info.Bucket,
-		IsPrimary: info.IsPrimary,
-		ExprType:  common.ExprType(info.ExprType),
-		SecExprs:  info.SecExprs,
+		DefnId:             common.IndexDefnId(info.DefnID),
+		Name:               info.Name,
+		Using:              common.IndexType(info.Using),
+		Bucket:             info.Bucket,
+		IsPrimary:          info.IsPrimary,
+		ExprType:           common.ExprType(info.ExprType),
+		SecExprs:           info.SecExprs,
 		RetainDeletedXATTR: info.RetainDeletedXATTR,
 		//PartitionKey: info.PartnExpr,
 	}

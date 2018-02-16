@@ -105,6 +105,7 @@ type IndexSpec struct {
 	Replica            uint64             `json:"replica,omitempty"`
 	Desc               []bool             `json:"desc,omitempty"`
 	Using              string             `json:"using,omitempty"`
+	ExprType           string             `json:"exprType,omitempty"`
 
 	// usage
 	NumDoc        uint64  `json:"numDoc,omitempty"`
@@ -1121,6 +1122,7 @@ func indexUsageFromSpec(sizing SizingMethod, spec *IndexSpec) ([]*IndexUsage, er
 			index.Instance.Defn.SecKeySize = spec.SecKeySize
 			index.Instance.Defn.ArrSize = spec.ArrSize
 			index.Instance.Defn.ResidentRatio = spec.ResidentRatio
+			index.Instance.Defn.ExprType = common.ExprType(spec.ExprType)
 			if index.Instance.Defn.ResidentRatio == 0 {
 				index.Instance.Defn.ResidentRatio = 100
 			}
