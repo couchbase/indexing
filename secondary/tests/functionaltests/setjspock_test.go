@@ -5,12 +5,13 @@ import (
 	"fmt"
 	c "github.com/couchbase/indexing/secondary/common"
 	qc "github.com/couchbase/indexing/secondary/queryport/client"
-	//tc "github.com/couchbase/indexing/secondary/tests/framework/common"
+	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 	"github.com/couchbase/indexing/secondary/tests/framework/datautility"
 	"github.com/couchbase/indexing/secondary/tests/framework/kvutility"
 	"github.com/couchbase/indexing/secondary/tests/framework/secondaryindex"
 	tv "github.com/couchbase/indexing/secondary/tests/framework/validation"
 	"log"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -542,6 +543,101 @@ func TestMultiScanRestAPI(t *testing.T) {
 	count, err := getscanscount(ids[0], reqbody)
 	FailTestIfError(err, "Error in getscanscout()", t)
 	log.Printf("Result from multiscancount API = %v\n", count)
+}
+
+func TestMultiScanPrimaryIndexVariations(t *testing.T) {
+	log.Printf("In TestMultiScanPrimaryIndexVariations()")
+
+	var primaryindex = "index_pi"
+	var bucketName = "default"
+	primaryIndexDocs := make(tc.KeyValues)
+	for i := 1; i <= 100; i++ {
+		key := "doc" + strconv.Itoa(i)
+		value := make(map[string]interface{})
+		value["temp1"] = randomNum(0, 100)
+		value["temp2"] = randString(10)
+		primaryIndexDocs[key] = value
+	}
+	kvutility.SetKeyValues(primaryIndexDocs, bucketName, "", clusterconfig.KVAddress)
+	UpdateKVDocs(primaryIndexDocs, docs)
+	// Create a primary index
+	err := secondaryindex.CreateSecondaryIndex(primaryindex, bucketName, indexManagementAddress, "", nil, true, nil, true, defaultIndexActiveTimeout, nil)
+	FailTestIfError(err, "Error in creating the index", t)
+
+	getPrimaryFilter := func(low, high interface{}, incl int) []*qc.CompositeElementFilter {
+		filter := make([]*qc.CompositeElementFilter, 1)
+		filter[0] = &qc.CompositeElementFilter{Low: low, High: high, Inclusion: qc.Inclusion(uint32(incl))}
+		return filter
+	}
+	// Scenario1: No Overlap
+	scans := make(qc.Scans, 4)
+	scans[0] = &qc.Scan{Filter: getPrimaryFilter("doc20", "doc30", 0)}
+	scans[1] = &qc.Scan{Filter: getPrimaryFilter("doc40", "doc50", 1)}
+	scans[2] = &qc.Scan{Filter: getPrimaryFilter("doc60", "doc70", 2)}
+	scans[3] = &qc.Scan{Filter: getPrimaryFilter("doc80", "doc90", 3)}
+	runMultiScanForPrimaryIndex(primaryindex, scans, false, false, nil, 0, defaultlimit, true, false, "No Overlap", t)
+
+	// Scenario2: Proper Overlap
+	scans = make(qc.Scans, 4)
+	scans[0] = &qc.Scan{Filter: getPrimaryFilter("doc20", "doc40", 0)}
+	scans[1] = &qc.Scan{Filter: getPrimaryFilter("doc30", "doc50", 3)}
+	scans[2] = &qc.Scan{Filter: getPrimaryFilter("doc60", "doc80", 1)}
+	scans[3] = &qc.Scan{Filter: getPrimaryFilter("doc70", "doc90", 1)}
+	runMultiScanForPrimaryIndex(primaryindex, scans, false, false, nil, 0, defaultlimit, true, false, "Proper Overlap", t)
+
+	// Scenario3: Low Boundary Overlap
+	scans = make(qc.Scans, 2)
+	scans[0] = &qc.Scan{Filter: getPrimaryFilter("doc11", "doc21", 0)}
+	scans[1] = &qc.Scan{Filter: getPrimaryFilter("doc11", "doc25", 2)}
+	runMultiScanForPrimaryIndex(primaryindex, scans, false, false, nil, 0, defaultlimit, true, false, "Low Boundary Overlap", t)
+
+	// Scenario4: Complex Overlaps
+	scans = make(qc.Scans, 6)
+	scans[0] = &qc.Scan{Filter: getPrimaryFilter("doc50", "doc70", 0)}
+	scans[1] = &qc.Scan{Filter: getPrimaryFilter("doc32", "doc40", 2)}
+	scans[2] = &qc.Scan{Filter: getPrimaryFilter("doc59", "doc70", 1)}
+	scans[3] = &qc.Scan{Filter: getPrimaryFilter("doc20", "doc40", 0)}
+	scans[4] = &qc.Scan{Filter: getPrimaryFilter("doc66", "doc70", 1)}
+	scans[5] = &qc.Scan{Filter: getPrimaryFilter("doc20", "doc28", 1)}
+	runMultiScanForPrimaryIndex(primaryindex, scans, false, false, nil, 0, defaultlimit, true, false, "Complex Overlaps", t)
+
+	// Scenario5: Multiple Boundary Equal Overlaps
+	scans = make(qc.Scans, 6)
+	scans[0] = &qc.Scan{Filter: getPrimaryFilter("doc20", "doc30", 0)}
+	scans[1] = &qc.Scan{Filter: getPrimaryFilter("doc20", "doc30", 0)}
+	scans[2] = &qc.Scan{Filter: getPrimaryFilter("doc20", "doc30", 0)}
+	scans[3] = &qc.Scan{Filter: getPrimaryFilter("doc30", "doc40", 0)}
+	scans[4] = &qc.Scan{Filter: getPrimaryFilter("doc30", "doc40", 0)}
+	scans[5] = &qc.Scan{Filter: getPrimaryFilter("doc30", "doc40", 0)}
+	runMultiScanForPrimaryIndex(primaryindex, scans, false, false, nil, 0, defaultlimit, true, false, "Multiple Equal Overlaps", t)
+
+	// Scenario6: Boundary and Subset Overlaps
+	scans = make(qc.Scans, 5)
+	scans[0] = &qc.Scan{Filter: getPrimaryFilter("doc66", "doc72", 1)}
+	scans[1] = &qc.Scan{Filter: getPrimaryFilter("doc30", "doc40", 0)}
+	scans[2] = &qc.Scan{Filter: getPrimaryFilter("doc20", "doc30", 0)}
+	scans[3] = &qc.Scan{Filter: getPrimaryFilter("doc60", "doc80", 0)}
+	scans[4] = &qc.Scan{Filter: getPrimaryFilter("doc60", "doc80", 2)}
+	runMultiScanForPrimaryIndex(primaryindex, scans, false, false, nil, 0, defaultlimit, true, false, "Boundary and Subset Overlaps", t)
+
+	// Scenario7: Point Overlaps
+	scans = make(qc.Scans, 2)
+	scans[0] = &qc.Scan{Filter: getPrimaryFilter("doc25", "doc25", 0)}
+	scans[1] = &qc.Scan{Filter: getPrimaryFilter("doc25", "doc25", 1)}
+	runMultiScanForPrimaryIndex(primaryindex, scans, false, false, nil, 0, defaultlimit, true, false, "Point Overlaps", t)
+
+	// Scenario8: Boundary and Point Overlaps
+	scans = make(qc.Scans, 2)
+	scans[0] = &qc.Scan{Filter: getPrimaryFilter("doc25", "doc30", 0)}
+	scans[1] = &qc.Scan{Filter: getPrimaryFilter("doc30", "doc30", 3)}
+	runMultiScanForPrimaryIndex(primaryindex, scans, false, false, nil, 0, defaultlimit, true, false, "Boundary and Point Overlaps", t)
+
+	kvutility.DeleteKeys(primaryIndexDocs, bucketName, "", clusterconfig.KVAddress)
+	for key, _ := range primaryIndexDocs {
+		delete(docs, key) // Update docs object with deleted keys
+	}
+	err = secondaryindex.DropSecondaryIndex(primaryindex, bucketName, clusterconfig.KVAddress)
+	FailTestIfError(err, "Error in index drop", t)
 }
 
 func runMultiScan(scans qc.Scans, reverse, distinct bool,
