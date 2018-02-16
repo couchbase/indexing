@@ -662,12 +662,17 @@ type groupKey struct {
 }
 
 type aggrVal struct {
-	fn        c.AggrFunc
-	raw       interface{}
+	fn      c.AggrFunc
+	raw     []byte
+	obj     value.Value
+	decoded interface{}
+
 	typ       c.AggrFuncType
 	projectId int32
 	distinct  bool
 	count     int
+
+	n1qlValue bool
 }
 
 type aggrRow struct {
@@ -787,7 +792,7 @@ func computeAggrVal(groupAggr *GroupAggr, ak *Aggregate,
 				}
 				decodedvalues[ak.KeyPos] = actualVal
 			}
-			a.raw = decodedvalues[ak.KeyPos]
+			a.decoded = decodedvalues[ak.KeyPos]
 		} else {
 			a.raw = compositekeys[ak.KeyPos]
 		}
@@ -804,7 +809,8 @@ func computeAggrVal(groupAggr *GroupAggr, ak *Aggregate,
 				return err
 			}
 		}
-		a.raw = scalar
+		a.obj = scalar
+		a.n1qlValue = true
 	}
 
 	a.typ = ak.AggrFunc
@@ -912,15 +918,37 @@ func (ar *aggrRow) AddAggregate(aggrs []*aggrVal) error {
 
 	for i, agg := range aggrs {
 		if ar.aggrs[i] == nil {
-			ar.aggrs[i] = &aggrVal{fn: c.NewAggrFunc(agg.typ, agg.raw, agg.distinct),
-				projectId: agg.projectId}
+			if agg.n1qlValue {
+				ar.aggrs[i] = &aggrVal{fn: c.NewAggrFunc(agg.typ, agg.obj, agg.distinct, true),
+					projectId: agg.projectId}
+			} else {
+				if agg.typ == c.AGG_SUM {
+					ar.aggrs[i] = &aggrVal{fn: c.NewAggrFunc(agg.typ, agg.decoded, agg.distinct, false),
+						projectId: agg.projectId}
+				} else {
+					ar.aggrs[i] = &aggrVal{fn: c.NewAggrFunc(agg.typ, agg.raw, agg.distinct, false),
+						projectId: agg.projectId}
+				}
+			}
 		} else {
-			ar.aggrs[i].fn.AddDelta(agg.raw)
+			if agg.n1qlValue {
+				ar.aggrs[i].fn.AddDeltaObj(agg.obj)
+			} else {
+				if agg.typ == c.AGG_SUM {
+					ar.aggrs[i].fn.AddDelta(agg.decoded)
+				} else {
+					ar.aggrs[i].fn.AddDeltaRaw(agg.raw)
+				}
+			}
 		}
 		if agg.count > 1 && (agg.typ == c.AGG_SUM || agg.typ == c.AGG_COUNT ||
 			agg.typ == c.AGG_COUNTN) {
 			for j := 1; j <= agg.count-1; j++ {
-				ar.aggrs[i].fn.AddDelta(agg.raw)
+				if agg.n1qlValue {
+					ar.aggrs[i].fn.AddDeltaObj(agg.obj)
+				} else {
+					ar.aggrs[i].fn.AddDeltaRaw(agg.raw)
+				}
 			}
 		}
 	}

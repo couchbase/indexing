@@ -48,6 +48,8 @@ func (a AggrFuncType) String() string {
 type AggrFunc interface {
 	Type() AggrFuncType
 	AddDelta(delta interface{})
+	AddDeltaObj(delta value.Value)
+	AddDeltaRaw(delta []byte)
 	Value() interface{}
 	Distinct() bool
 }
@@ -56,27 +58,35 @@ var (
 	encodedNull = []byte{2, 0}
 )
 
-func NewAggrFunc(typ AggrFuncType, val interface{}, distinct bool) AggrFunc {
+func NewAggrFunc(typ AggrFuncType, val interface{}, distinct bool, n1qlValue bool) AggrFunc {
 
 	var agg AggrFunc
 
 	switch typ {
 
 	case AGG_SUM:
-		agg = &AggrFuncSum{typ: AGG_SUM, distinct: distinct}
+		agg = &AggrFuncSum{typ: AGG_SUM, distinct: distinct, n1qlValue: n1qlValue}
 	case AGG_COUNT:
-		agg = &AggrFuncCount{typ: AGG_COUNT, distinct: distinct}
+		agg = &AggrFuncCount{typ: AGG_COUNT, distinct: distinct, n1qlValue: n1qlValue}
 	case AGG_COUNTN:
-		agg = &AggrFuncCountN{typ: AGG_COUNTN, distinct: distinct}
+		agg = &AggrFuncCountN{typ: AGG_COUNTN, distinct: distinct, n1qlValue: n1qlValue}
 	case AGG_MIN:
-		agg = &AggrFuncMin{typ: AGG_MIN, distinct: distinct}
+		agg = &AggrFuncMin{typ: AGG_MIN, distinct: distinct, n1qlValue: n1qlValue}
 	case AGG_MAX:
-		agg = &AggrFuncMax{typ: AGG_MAX, distinct: distinct}
+		agg = &AggrFuncMax{typ: AGG_MAX, distinct: distinct, n1qlValue: n1qlValue}
 	default:
 		return nil
 	}
 
-	agg.AddDelta(val)
+	if n1qlValue {
+		agg.AddDeltaObj(val.(value.Value))
+	} else {
+		if typ == AGG_SUM {
+			agg.AddDelta(val)
+		} else {
+			agg.AddDeltaRaw(val.([]byte))
+		}
+	}
 
 	return agg
 }
@@ -87,6 +97,8 @@ type AggrFuncSum struct {
 	validVal bool
 	distinct bool
 	lastVal  float64
+
+	n1qlValue bool
 }
 
 func (a AggrFuncSum) Type() AggrFuncType {
@@ -106,17 +118,18 @@ func (a AggrFuncSum) Distinct() bool {
 
 //Only numeric values are considered.
 //null/missing/non-numeric are ignored.
+func (a *AggrFuncSum) AddDeltaObj(delta value.Value) {
+
+	actual := delta.ActualForIndex()
+	a.AddDelta(actual)
+
+}
+
+//Only numeric values are considered.
+//null/missing/non-numeric are ignored.
 func (a *AggrFuncSum) AddDelta(delta interface{}) {
 
-	var actual interface{}
-
-	if val, ok := delta.(value.Value); ok {
-		actual = val.ActualForIndex()
-	} else {
-		actual = delta
-	}
-
-	switch v := actual.(type) {
+	switch v := delta.(type) {
 
 	case float64:
 		a.validVal = true
@@ -144,6 +157,10 @@ func (a *AggrFuncSum) AddDelta(delta interface{}) {
 	}
 }
 
+func (a *AggrFuncSum) AddDeltaRaw(delta []byte) {
+	//not implemented
+}
+
 func (a *AggrFuncSum) checkDistinct(newVal float64) bool {
 
 	if a.lastVal == newVal {
@@ -160,10 +177,13 @@ func (a AggrFuncSum) String() string {
 }
 
 type AggrFuncCount struct {
-	typ       AggrFuncType
-	val       int64
-	distinct  bool
-	lastEntry interface{}
+	typ      AggrFuncType
+	val      int64
+	distinct bool
+	lastRaw  []byte
+	lastObj  value.Value
+
+	n1qlValue bool
 }
 
 func (a AggrFuncCount) Type() AggrFuncType {
@@ -178,9 +198,13 @@ func (a AggrFuncCount) Distinct() bool {
 	return a.distinct
 }
 
+func (a *AggrFuncCount) AddDelta(delta interface{}) {
+	//not implemented
+}
+
 //null/missing are ignored.
 //add 1 for all other types
-func (a *AggrFuncCount) AddDelta(delta interface{}) {
+func (a *AggrFuncCount) AddDeltaObj(delta value.Value) {
 
 	//ignore if null or missing
 	if isNullOrMissing(delta) {
@@ -196,25 +220,44 @@ func (a *AggrFuncCount) AddDelta(delta interface{}) {
 
 }
 
-func (a *AggrFuncCount) checkDistinct(newval interface{}) bool {
+//null/missing are ignored.
+//add 1 for all other types
+func (a *AggrFuncCount) AddDeltaRaw(delta []byte) {
 
-	switch v := newval.(type) {
+	//ignore if null or missing
+	if isNullOrMissingRaw(delta) {
+		return
+	}
 
-	case []byte:
-		if a.lastEntry == nil {
-			a.lastEntry = append([]byte(nil), v...)
-		} else {
-			if bytes.Compare(v, a.lastEntry.([]byte)) == 0 {
-				return false
-			}
-			a.lastEntry = append(a.lastEntry.([]byte)[:0], v...)
+	if a.distinct {
+		if !a.checkDistinctRaw(delta) {
+			return
 		}
+	}
+	a.val += 1
 
-	case value.Value:
-		if a.lastEntry != nil && v.EquivalentTo(a.lastEntry.(value.Value)) {
+}
+
+func (a *AggrFuncCount) checkDistinct(newObj value.Value) bool {
+
+	if a.lastObj != nil && newObj.EquivalentTo(a.lastObj) {
+		return false
+	}
+	a.lastObj = newObj
+
+	return true
+
+}
+
+func (a *AggrFuncCount) checkDistinctRaw(newRaw []byte) bool {
+
+	if a.lastRaw == nil {
+		a.lastRaw = append([]byte(nil), newRaw...)
+	} else {
+		if bytes.Compare(newRaw, a.lastRaw) == 0 {
 			return false
 		}
-		a.lastEntry = newval
+		a.lastRaw = append(a.lastRaw[:0], newRaw...)
 	}
 
 	return true
@@ -222,14 +265,21 @@ func (a *AggrFuncCount) checkDistinct(newval interface{}) bool {
 }
 
 func (a AggrFuncCount) String() string {
-	return fmt.Sprintf("Type %v Value %v Distinct %v LastVal %v", a.typ, a.val, a.distinct, a.lastEntry)
+	if a.n1qlValue {
+		return fmt.Sprintf("Type %v Value %v Distinct %v LastVal %v", a.typ, a.val, a.distinct, a.lastRaw)
+	} else {
+		return fmt.Sprintf("Type %v Value %v Distinct %v LastVal %v", a.typ, a.val, a.distinct, a.lastObj)
+	}
 }
 
 type AggrFuncCountN struct {
-	typ       AggrFuncType
-	val       int64
-	distinct  bool
-	lastEntry interface{}
+	typ      AggrFuncType
+	val      int64
+	distinct bool
+	lastRaw  []byte
+	lastObj  value.Value
+
+	n1qlValue bool
 }
 
 func (a AggrFuncCountN) Type() AggrFuncType {
@@ -244,9 +294,13 @@ func (a AggrFuncCountN) Distinct() bool {
 	return a.distinct
 }
 
+func (a *AggrFuncCountN) AddDelta(delta interface{}) {
+	//not implemented
+}
+
 //null/missing are ignored.
 //add 1 for all other numeric types(non-numeric are ignored)
-func (a *AggrFuncCountN) AddDelta(delta interface{}) {
+func (a *AggrFuncCountN) AddDeltaObj(delta value.Value) {
 
 	//ignore if null or missing
 	if isNullOrMissing(delta) {
@@ -264,25 +318,46 @@ func (a *AggrFuncCountN) AddDelta(delta interface{}) {
 
 }
 
-func (a *AggrFuncCountN) checkDistinct(newval interface{}) bool {
+//null/missing are ignored.
+//add 1 for all other numeric types(non-numeric are ignored)
+func (a *AggrFuncCountN) AddDeltaRaw(delta []byte) {
 
-	switch v := newval.(type) {
+	//ignore if null or missing
+	if isNullOrMissingRaw(delta) {
+		return
+	}
 
-	case []byte:
-		if a.lastEntry == nil {
-			a.lastEntry = append([]byte(nil), v...)
-		} else {
-			if bytes.Compare(v, a.lastEntry.([]byte)) == 0 {
-				return false
+	if isNumericRaw(delta) {
+		if a.distinct {
+			if !a.checkDistinctRaw(delta) {
+				return
 			}
-			a.lastEntry = append(a.lastEntry.([]byte)[:0], v...)
 		}
+		a.val += 1
+	}
 
-	case value.Value:
-		if a.lastEntry != nil && v.EquivalentTo(a.lastEntry.(value.Value)) {
+}
+
+func (a *AggrFuncCountN) checkDistinct(newObj value.Value) bool {
+
+	if a.lastObj != nil && newObj.EquivalentTo(a.lastObj) {
+		return false
+	}
+	a.lastObj = newObj
+
+	return true
+
+}
+
+func (a *AggrFuncCountN) checkDistinctRaw(newRaw []byte) bool {
+
+	if a.lastRaw == nil {
+		a.lastRaw = append([]byte(nil), newRaw...)
+	} else {
+		if bytes.Compare(newRaw, a.lastRaw) == 0 {
 			return false
 		}
-		a.lastEntry = newval
+		a.lastRaw = append(a.lastRaw[:0], newRaw...)
 	}
 
 	return true
@@ -290,14 +365,21 @@ func (a *AggrFuncCountN) checkDistinct(newval interface{}) bool {
 }
 
 func (a AggrFuncCountN) String() string {
-	return fmt.Sprintf("Type %v Value %v Distinct %v LastVal %v", a.typ, a.val, a.distinct, a.lastEntry)
+	if a.n1qlValue {
+		return fmt.Sprintf("Type %v Value %v Distinct %v LastVal %v", a.typ, a.val, a.distinct, a.lastRaw)
+	} else {
+		return fmt.Sprintf("Type %v Value %v Distinct %v LastVal %v", a.typ, a.val, a.distinct, a.lastObj)
+	}
 }
 
 type AggrFuncMin struct {
-	typ      AggrFuncType
-	val      interface{}
-	validVal bool
-	distinct bool //ignored
+	typ AggrFuncType
+	raw []byte
+	obj value.Value
+
+	validVal  bool
+	distinct  bool //ignored
+	n1qlValue bool
 }
 
 func (a AggrFuncMin) Type() AggrFuncType {
@@ -308,7 +390,12 @@ func (a AggrFuncMin) Value() interface{} {
 	if !a.validVal {
 		return encodedNull
 	}
-	return a.val
+
+	if a.n1qlValue {
+		return a.obj
+	} else {
+		return a.raw
+	}
 }
 
 func (a AggrFuncMin) Distinct() bool {
@@ -316,53 +403,63 @@ func (a AggrFuncMin) Distinct() bool {
 }
 
 func (a *AggrFuncMin) AddDelta(delta interface{}) {
+	//not implemented
+}
+
+func (a *AggrFuncMin) AddDeltaObj(delta value.Value) {
 
 	//ignore if null or missing
 	if isNullOrMissing(delta) {
 		return
 	}
 
-	switch v := delta.(type) {
-
-	case []byte:
-
-		if !a.validVal {
-			a.val = append([]byte(nil), v...)
-			a.validVal = true
-			return
-		} else {
-			if bytes.Compare(a.val.([]byte), v) > 0 {
-				a.val = append(a.val.([]byte)[:0], v...)
-			}
+	if !a.validVal {
+		a.obj = delta
+		a.validVal = true
+		return
+	} else {
+		if a.obj.Collate(delta) > 0 {
+			a.obj = delta
 		}
-
-	case value.Value:
-
-		if !a.validVal {
-			a.val = v
-			a.validVal = true
-			return
-		} else {
-			val := a.val.(value.Value)
-			if val.Collate(v) > 0 {
-				a.val = v
-			}
-		}
-
-	default:
-		//ignored
 	}
+
+}
+
+func (a *AggrFuncMin) AddDeltaRaw(delta []byte) {
+
+	//ignore if null or missing
+	if isNullOrMissingRaw(delta) {
+		return
+	}
+
+	if !a.validVal {
+		a.raw = append([]byte(nil), delta...)
+		a.validVal = true
+		return
+	} else {
+		if bytes.Compare(a.raw, delta) > 0 {
+			a.raw = append(a.raw[:0], delta...)
+		}
+	}
+
 }
 
 func (a AggrFuncMin) String() string {
-	return fmt.Sprintf("Type %v Value %v", a.typ, a.val)
+	if a.n1qlValue {
+		return fmt.Sprintf("Type %v Value %v", a.typ, a.obj)
+	} else {
+		return fmt.Sprintf("Type %v Value %v", a.typ, a.raw)
+	}
 }
 
 type AggrFuncMax struct {
-	typ      AggrFuncType
-	val      interface{}
-	validVal bool
-	distinct bool //ignored
+	typ AggrFuncType
+	raw []byte
+	obj value.Value
+
+	validVal  bool
+	distinct  bool //ignored
+	n1qlValue bool
 }
 
 func (a AggrFuncMax) Type() AggrFuncType {
@@ -373,7 +470,11 @@ func (a AggrFuncMax) Value() interface{} {
 	if !a.validVal {
 		return encodedNull
 	}
-	return a.val
+	if a.n1qlValue {
+		return a.obj
+	} else {
+		return a.raw
+	}
 }
 
 func (a AggrFuncMax) Distinct() bool {
@@ -381,85 +482,88 @@ func (a AggrFuncMax) Distinct() bool {
 }
 
 func (a *AggrFuncMax) AddDelta(delta interface{}) {
+	//not implemented
+}
+
+func (a *AggrFuncMax) AddDeltaObj(delta value.Value) {
 
 	//ignore if null or missing
 	if isNullOrMissing(delta) {
 		return
 	}
 
-	switch v := delta.(type) {
-
-	case []byte:
-
-		if !a.validVal {
-			a.val = append([]byte(nil), v...)
-			a.validVal = true
-			return
-		} else {
-			if bytes.Compare(a.val.([]byte), v) < 0 {
-				a.val = append(a.val.([]byte)[:0], v...)
-			}
+	if !a.validVal {
+		a.obj = delta
+		a.validVal = true
+		return
+	} else {
+		if a.obj.Collate(delta) < 0 {
+			a.obj = delta
 		}
-
-	case value.Value:
-
-		if !a.validVal {
-			a.val = v
-			a.validVal = true
-			return
-		} else {
-			val := a.val.(value.Value)
-			if val.Collate(v) < 0 {
-				a.val = v
-			}
-		}
-
-	default:
-		//ignored
 	}
+
+}
+
+func (a *AggrFuncMax) AddDeltaRaw(delta []byte) {
+
+	//ignore if null or missing
+	if isNullOrMissingRaw(delta) {
+		return
+	}
+
+	if !a.validVal {
+		a.raw = append([]byte(nil), delta...)
+		a.validVal = true
+		return
+	} else {
+		if bytes.Compare(a.raw, delta) < 0 {
+			a.raw = append(a.raw[:0], delta...)
+		}
+	}
+
 }
 
 func (a AggrFuncMax) String() string {
-	return fmt.Sprintf("Type %v Value %v", a.typ, a.val)
+	if a.n1qlValue {
+		return fmt.Sprintf("Type %v Value %v", a.typ, a.obj)
+	} else {
+		return fmt.Sprintf("Type %v Value %v", a.typ, a.raw)
+	}
 }
 
-func isNullOrMissing(val interface{}) bool {
+func isNullOrMissing(val value.Value) bool {
 
-	switch v := val.(type) {
-
-	case []byte:
-
-		//ignore if null or missing
-		if v[0] == collatejson.TypeMissing || v[0] == collatejson.TypeNull {
-			return true
-		}
-
-	case value.Value:
-
-		if v.Type() == value.MISSING || v.Type() == value.NULL {
-			return true
-		}
-
+	if val.Type() == value.MISSING || val.Type() == value.NULL {
+		return true
 	}
+
 	return false
 }
 
-func isNumeric(val interface{}) bool {
+func isNullOrMissingRaw(val []byte) bool {
 
-	switch v := val.(type) {
-
-	case []byte:
-
-		if v[0] == collatejson.TypeNumber {
-			return true
-		}
-
-	case value.Value:
-
-		if v.Type() == value.NUMBER {
-			return true
-		}
-
+	//ignore if null or missing
+	if val[0] == collatejson.TypeMissing || val[0] == collatejson.TypeNull {
+		return true
 	}
+
+	return false
+}
+
+func isNumeric(val value.Value) bool {
+
+	if val.Type() == value.NUMBER {
+		return true
+	}
+
+	return false
+}
+
+func isNumericRaw(val []byte) bool {
+
+	if val[0] == collatejson.TypeNumber {
+		return true
+	}
+
 	return false
 }
