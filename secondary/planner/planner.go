@@ -164,6 +164,9 @@ type IndexerNode struct {
 	isDelete bool
 	isNew    bool
 	exclude  string
+
+	// intput/output: planning
+	meetConstraint bool
 }
 
 type IndexUsage struct {
@@ -227,6 +230,8 @@ type Solution struct {
 	command        CommandType
 	constraint     ConstraintMethod
 	sizing         SizingMethod
+	cost           CostMethod
+	place          PlacementMethod
 	isLiveData     bool
 	useLiveData    bool
 	disableRepair  bool
@@ -402,9 +407,7 @@ func (p *SAPlanner) Plan(command CommandType, solution *Solution) (*Solution, er
 
 			// copy estimation information
 			if result != nil {
-				solution.estimatedIndexSize = result.estimatedIndexSize
-				solution.numEstimateRun = result.numEstimateRun
-				solution.estimate = result.estimate
+				solution.copyEstimationFrom(result)
 			}
 		}
 
@@ -632,7 +635,6 @@ func (p *SAPlanner) PrintCost() {
 //
 func (p *SAPlanner) findNeighbor(s *Solution) (*Solution, bool, bool) {
 
-	eligibles := p.placement.GetEligibleIndexes()
 	neighbor := s.clone()
 	force := false
 	done := false
@@ -641,14 +643,14 @@ func (p *SAPlanner) findNeighbor(s *Solution) (*Solution, bool, bool) {
 	for retry = 0; retry < ResizePerIteration; retry++ {
 		success, final, mustAccept := p.placement.Move(neighbor)
 		if success {
-			currentOK := s.constraint.SatisfyClusterConstraint(s, eligibles)
-			neighborOK := neighbor.constraint.SatisfyClusterConstraint(neighbor, eligibles)
+			currentOK := s.SatisfyClusterConstraint()
+			neighborOK := neighbor.SatisfyClusterConstraint()
 			logging.Tracef("Planner::findNeighbor retry: %v", retry)
 			return neighbor, (mustAccept || force || (!currentOK && neighborOK)), final
 		}
 
 		// Add new node to change cluster in order to ensure constraint can be satisfied
-		if !p.constraint.SatisfyClusterConstraint(neighbor, eligibles) {
+		if !neighbor.SatisfyClusterConstraint() {
 			if neighbor.canRunEstimation() {
 				neighbor.runSizeEstimation(p.placement)
 			} else if p.constraint.CanAddNode(s) {
@@ -711,6 +713,11 @@ func (p *SAPlanner) getAcceptProbability(old_cost float64, new_cost float64, tem
 //
 func (p *SAPlanner) adjustInitialSolutionIfNecessary(s *Solution) *Solution {
 
+	s.constraint = p.constraint
+	s.sizing = p.sizing
+	s.cost = p.cost
+	s.place = p.placement
+
 	// update the number of new nodes and deleted node
 	s.numDeletedNode = s.findNumDeleteNodes()
 	s.numNewNode = s.findNumEmptyNodes()
@@ -721,6 +728,9 @@ func (p *SAPlanner) adjustInitialSolutionIfNecessary(s *Solution) *Solution {
 	if s.numDeletedNode != 0 && s.findNumExcludeInNodes() == len(s.Placement) {
 		s.enableExclude = false
 	}
+
+	// evalute if node meet constraint
+	s.evaluateNodeConstraint()
 
 	// If not using live data, then no need to relax constraint.
 	if !s.UseLiveData() {
@@ -1137,6 +1147,7 @@ func (s *Solution) addIndex(n *IndexerNode, idx *IndexUsage) {
 	n.AddMemUsageOverhead(s, idx.GetMemUsage(s.UseLiveData()), idx.GetMemOverhead(s.UseLiveData()))
 	n.AddCpuUsage(s, idx.GetCpuUsage(s.UseLiveData()))
 	n.AddDataSize(s, idx.GetDataSize(s.UseLiveData()))
+	n.EvaluateNodeConstraint(s)
 }
 
 //
@@ -1154,6 +1165,7 @@ func (s *Solution) removeIndex(n *IndexerNode, i int) {
 	n.SubtractMemUsageOverhead(s, idx.GetMemUsage(s.UseLiveData()), idx.GetMemOverhead(s.UseLiveData()))
 	n.SubtractCpuUsage(s, idx.GetCpuUsage(s.UseLiveData()))
 	n.SubtractDataSize(s, idx.GetDataSize(s.UseLiveData()))
+	n.EvaluateNodeConstraint(s)
 }
 
 //
@@ -1180,6 +1192,8 @@ func (s *Solution) clone() *Solution {
 		command:            s.command,
 		constraint:         s.constraint,
 		sizing:             s.sizing,
+		cost:               s.cost,
+		place:              s.place,
 		Placement:          ([]*IndexerNode)(nil),
 		isLiveData:         s.isLiveData,
 		useLiveData:        s.useLiveData,
@@ -1798,6 +1812,16 @@ func (s *Solution) findNumAvailLiveNode() int {
 }
 
 //
+// Eavluate if each indexer meets constraint
+//
+func (s *Solution) evaluateNodeConstraint() {
+
+	for _, indexer := range s.Placement {
+		indexer.EvaluateNodeConstraint(s)
+	}
+}
+
+//
 // check to see if we should ignore resource (memory/cpu) constraint
 //
 func (s *Solution) ignoreResourceConstraint() bool {
@@ -1833,6 +1857,20 @@ func (s *Solution) ignoreResourceConstraint() bool {
 		// so ignore resource constraint assuming the resources will even out
 		//return !s.isMOICluster()
 		return true
+	}
+
+	return true
+}
+
+//
+// check to see if every node in the cluster meet constraint
+//
+func (s *Solution) SatisfyClusterConstraint() bool {
+
+	for _, indexer := range s.Placement {
+		if !indexer.meetConstraint {
+			return false
+		}
 	}
 
 	return true
@@ -2219,6 +2257,7 @@ func (s *Solution) cleanupEstimation() {
 func (s *Solution) copyEstimationFrom(source *Solution) {
 	s.estimatedIndexSize = source.estimatedIndexSize
 	s.estimate = source.estimate
+	s.numEstimateRun = source.numEstimateRun
 }
 
 //
@@ -2824,6 +2863,7 @@ func (o *IndexerNode) clone() *IndexerNode {
 		ActualMemOverhead: o.ActualMemOverhead,
 		ActualCpuUsage:    o.ActualCpuUsage,
 		ActualDataSize:    o.ActualDataSize,
+		meetConstraint:    o.meetConstraint,
 	}
 
 	for i, _ := range o.Indexes {
@@ -3029,7 +3069,25 @@ func (o *IndexerNode) UnsetExclude() {
 	o.exclude = ""
 }
 
-//////////////////////////////////////////////////////////////
+//
+// Does indexer satisfy constraint?
+//
+func (o *IndexerNode) SatisfyNodeConstraint() bool {
+
+	return o.meetConstraint
+}
+
+//
+// Evaluate if indexer satisfy constraint
+//
+func (o *IndexerNode) EvaluateNodeConstraint(s *Solution) {
+
+	if s.place != nil && s.constraint != nil {
+		eligibles := s.place.GetEligibleIndexes()
+		o.meetConstraint = s.constraint.SatisfyNodeConstraint(s, o, eligibles)
+	}
+}
+
 //////////////////////////////////////////////////////////////
 // IndexUsage
 //////////////////////////////////////////////////////////////
@@ -3886,8 +3944,7 @@ func (p *RandomPlacement) randomMoveByLoad(s *Solution, checkConstraint bool) (b
 			// if cannot find a uncongested indexer, then check if there is only
 			// one candidate and it satisfy resource constraint.  If so, there is
 			// no more move (final state).
-			eligibles := p.GetEligibleIndexes()
-			if len(candidates) == 1 && s.constraint.SatisfyNodeConstraint(s, source, eligibles) {
+			if len(candidates) == 1 && source.SatisfyNodeConstraint() {
 				logging.Tracef("Planner::final move: source %v index %v", source.NodeId, index)
 				return true, true, true
 			}
@@ -4382,9 +4439,8 @@ func (p *RandomPlacement) findConstrainedNodes(s *Solution, constraint Constrain
 	}
 
 	// look for indexer node that do not satisfy constraint
-	eligibles := p.GetEligibleIndexes()
 	for _, indexer := range indexers {
-		if !constraint.SatisfyNodeConstraint(s, indexer, eligibles) {
+		if !indexer.SatisfyNodeConstraint() {
 			result = append(result, indexer)
 		}
 	}
