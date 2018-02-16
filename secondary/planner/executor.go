@@ -601,7 +601,12 @@ func rebalance(command CommandType, config *RunConfig, plan *Plan, indexes []*In
 	// plan again for partitioned index
 	indexes = findAllPartitionedIndex(planner.Result)
 	if len(indexes) != 0 {
-		logging.Infof("Rebalancing partitioned index (num %v)", len(indexes))
+
+		logging.Infof("******Phase 1 Finished: Run Summary ****")
+		planner.PrintRunSummary()
+		logging.Infof("****************************************")
+		logging.Infof("Phase 2 : Rebalancing partitioned index (num %v)", len(indexes))
+
 		solution = planner.Result
 		timeLeft := config.Timeout - int(planner.ElapseTime/uint64(time.Second))
 		solution.removeEmptyDeletedNode()
@@ -609,7 +614,9 @@ func rebalance(command CommandType, config *RunConfig, plan *Plan, indexes []*In
 		placement = newRandomPlacement(indexes, config.AllowSwap, false)
 		planner = newSAPlanner(cost, constraint, placement, sizing)
 		planner.SetTimeout(timeLeft)
-		planner.Plan(CommandRebalance, solution)
+		if _, err := planner.Plan(CommandRebalance, solution); err != nil {
+			logging.Warnf("Planner: %v", err)
+		}
 	}
 
 	// save result

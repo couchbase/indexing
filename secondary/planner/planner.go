@@ -388,12 +388,8 @@ func (p *SAPlanner) Plan(command CommandType, solution *Solution) (*Solution, er
 		startTime := time.Now()
 		solution.runSizeEstimation(p.placement)
 
-		if err := p.Validate(solution); err != nil {
-			if i == RunPerPlan-1 {
-				solution.PrintLayout()
-				return nil, errors.New(fmt.Sprintf("Validation fails: %s", err))
-			}
-		} else {
+		err = p.Validate(solution)
+		if err == nil {
 			result, err = p.planSingleRun(command, solution)
 
 			// if err == nil, type assertion will return !ok
@@ -562,13 +558,21 @@ func (p *SAPlanner) Validate(s *Solution) error {
 //
 // This function prints the result of evaluation
 //
-func (p *SAPlanner) Print() {
+func (p *SAPlanner) PrintRunSummary() {
 
 	logging.Infof("Score: %v", p.Score)
 	logging.Infof("ElapsedTime: %v", formatTimeStr(p.ElapseTime))
 	logging.Infof("ConvergenceTime: %v", formatTimeStr(p.ConvergenceTime))
 	logging.Infof("Iteration: %v", p.Iteration)
 	logging.Infof("Move: %v", p.Move)
+}
+
+//
+// This function prints the result of evaluation
+//
+func (p *SAPlanner) Print() {
+
+	p.PrintRunSummary()
 	logging.Infof("----------------------------------------")
 
 	if p.Result != nil {
@@ -1300,7 +1304,7 @@ func (s *Solution) PrintLayout() {
 
 		logging.Infof("")
 		logging.Infof("Indexer serverGroup:%v, nodeId:%v, nodeUUID:%v, useLiveData:%v", indexer.ServerGroup, indexer.NodeId, indexer.NodeUUID, s.UseLiveData())
-		logging.Infof("Indexer total memory:%v (%s), data:%v (%s), overhead:%v (%s), index:%v (%s) cpu:%.4f, numIndexes:%v isDeleted:%v isNew:%v exclude:%v",
+		logging.Infof("Indexer total memory:%v (%s), mem:%v (%s), overhead:%v (%s), data:%v (%s) cpu:%.4f, numIndexes:%v isDeleted:%v isNew:%v exclude:%v",
 			indexer.GetMemTotal(s.UseLiveData()), formatMemoryStr(uint64(indexer.GetMemTotal(s.UseLiveData()))),
 			indexer.GetMemUsage(s.UseLiveData()), formatMemoryStr(uint64(indexer.GetMemUsage(s.UseLiveData()))),
 			indexer.GetMemOverhead(s.UseLiveData()), formatMemoryStr(uint64(indexer.GetMemOverhead(s.UseLiveData()))),
@@ -1309,17 +1313,19 @@ func (s *Solution) PrintLayout() {
 
 		for _, index := range indexer.Indexes {
 			logging.Infof("\t\t------------------------------------------------------------------------------------------------------------------")
-			logging.Infof("\t\tIndex name:%v, bucket:%v, defnId:%v, instId:%v, Partition: %v, new/moved:%v estimated:%v ignoreEquivCheck:%v pendingCreate:%v",
+			logging.Infof("\t\tIndex name:%v, bucket:%v, defnId:%v, instId:%v, Partition: %v, new/moved:%v equivCheck:%v pendingCreate:%v",
 				index.GetDisplayName(), index.Bucket, index.DefnId, index.InstId, index.PartnId,
-				index.initialNode == nil || index.initialNode.NodeId != indexer.NodeId, index.NoUsageInfo, index.suppressEquivIdxCheck, index.pendingCreate)
-			logging.Infof("\t\tIndex total memory:%v (%s), data:%v (%s), overhead:%v (%s), index:%v (%s) cpu:%.4f resident:%v%% build:%v%%",
+				index.initialNode == nil || index.initialNode.NodeId != indexer.NodeId, !index.suppressEquivIdxCheck,
+				index.pendingCreate)
+			logging.Infof("\t\tIndex total memory:%v (%s), mem:%v (%s), overhead:%v (%s), data:%v (%s) cpu:%.4f resident:%v%% build:%v%% estimated:%v",
 				index.GetMemTotal(s.UseLiveData()), formatMemoryStr(uint64(index.GetMemTotal(s.UseLiveData()))),
 				index.GetMemUsage(s.UseLiveData()), formatMemoryStr(uint64(index.GetMemUsage(s.UseLiveData()))),
 				index.GetMemOverhead(s.UseLiveData()), formatMemoryStr(uint64(index.GetMemOverhead(s.UseLiveData()))),
 				index.GetDataSize(s.UseLiveData()), formatMemoryStr(uint64(index.GetDataSize(s.UseLiveData()))),
 				index.GetCpuUsage(s.UseLiveData()),
 				uint64(index.GetResidentRatio(s.UseLiveData())),
-				index.GetBuildPercent(s.UseLiveData()))
+				index.GetBuildPercent(s.UseLiveData()),
+				index.NoUsageInfo)
 		}
 	}
 }
@@ -1525,7 +1531,7 @@ func (s *Solution) findNumEquivalentIndex(u *IndexUsage) int {
 		for _, index := range indexer.Indexes {
 
 			// check replica
-			if index.IsReplica(u) || index.IsEquivalentIndex(u) {
+			if index.IsReplica(u) || index.IsEquivalentIndex(u, false) {
 				count++
 			}
 		}
@@ -2450,7 +2456,7 @@ func (c *IndexerConstraint) CanAddIndex(s *Solution, n *IndexerNode, u *IndexUsa
 		}
 
 		// check equivalent index
-		if index.IsEquivalentIndex(u) {
+		if index.IsEquivalentIndex(u, true) {
 			return EquivIndexViolation
 		}
 	}
@@ -2509,7 +2515,7 @@ func (c *IndexerConstraint) CanSwapIndex(sol *Solution, n *IndexerNode, s *Index
 		}
 
 		// check equivalent index
-		if index.IsEquivalentIndex(s) {
+		if index.IsEquivalentIndex(s, true) {
 			return EquivIndexViolation
 		}
 	}
@@ -2626,7 +2632,7 @@ func (c *IndexerConstraint) SatisfyIndexHAConstraintAt(s *Solution, n *IndexerNo
 		}
 
 		// check equivalent index
-		if index.IsEquivalentIndex(source) {
+		if index.IsEquivalentIndex(source, true) {
 			return false
 		}
 	}
@@ -3231,13 +3237,24 @@ func (o *IndexUsage) IsSameInst(other *IndexUsage) bool {
 	return o.DefnId == other.DefnId && o.InstId == other.InstId
 }
 
-func (o *IndexUsage) IsEquivalentIndex(other *IndexUsage) bool {
+func (o *IndexUsage) IsSamePartition(other *IndexUsage) bool {
+
+	return o.PartnId == other.PartnId
+}
+
+func (o *IndexUsage) IsEquivalentIndex(other *IndexUsage, checkSuppress bool) bool {
 
 	if o.IsSameIndex(other) {
 		return false
 	}
 
-	if !o.suppressEquivIdxCheck && !other.suppressEquivIdxCheck {
+	if !o.IsSamePartition(other) {
+		return false
+	}
+
+	// suppressEquivCheck is only enabled for eligible index.  So as long as one index
+	// has suppressEquivCheck, we should not check.
+	if !checkSuppress || !o.suppressEquivIdxCheck && !other.suppressEquivIdxCheck {
 		if o.Instance != nil && other.Instance != nil {
 			return common.IsEquivalentIndex(&o.Instance.Defn, &other.Instance.Defn)
 		}
