@@ -243,6 +243,9 @@ type Solution struct {
 	// for rebalance
 	enableExclude bool
 
+	// for placement
+	currentCost float64
+
 	// placement of indexes	in nodes
 	Placement []*IndexerNode `json:"placement,omitempty"`
 }
@@ -454,6 +457,7 @@ func (p *SAPlanner) planSingleRun(command CommandType, solution *Solution) (*Sol
 	for temperature > MinTemperature && !done {
 		lastMove := move
 		lastPositiveMove := positiveMove
+		current.currentCost = old_cost
 		for i := 0; i < IterationPerTemp; i++ {
 			new_solution, force, final := p.findNeighbor(current)
 			if new_solution != nil {
@@ -472,6 +476,7 @@ func (p *SAPlanner) planSingleRun(command CommandType, solution *Solution) (*Sol
 				// could have higher score.
 				if force || prob > rs.Float64() {
 					current = new_solution
+					current.currentCost = new_cost
 					old_cost = new_cost
 					lastUpdateTime = time.Now()
 					move++
@@ -1187,6 +1192,7 @@ func (s *Solution) clone() *Solution {
 		estimate:           s.estimate,
 		numEstimateRun:     s.numEstimateRun,
 		enableExclude:      s.enableExclude,
+		currentCost:        s.currentCost,
 	}
 
 	for _, node := range s.Placement {
@@ -3759,6 +3765,23 @@ func (p *RandomPlacement) findSwapCandidateNode(s *Solution, node *IndexerNode) 
 }
 
 //
+// Try random swap
+//
+func (p *RandomPlacement) tryRandomSwap(s *Solution, sources []*IndexerNode, targets []*IndexerNode, checkConstraint bool) bool {
+
+	// Swap can improve the quality of solution but only when the
+	// solution is fairly balanced.
+	if s.currentCost < 0.005 {
+		n := int64(p.rs.Int63n(3))
+		if n < 1 {
+			return p.randomSwap(s, sources, targets, checkConstraint)
+		}
+	}
+
+	return false
+}
+
+//
 // Randomly select a single index to move to a different node
 //
 func (p *RandomPlacement) randomMoveByLoad(s *Solution, checkConstraint bool) (bool, bool, bool) {
@@ -3833,13 +3856,8 @@ func (p *RandomPlacement) randomMoveByLoad(s *Solution, checkConstraint bool) (b
 		// pick two candidates and try to swap their indexes.
 		if source == nil {
 
-			n := int64(p.rs.Int63n(2))
-			switch n {
-			case 0:
-				if p.randomSwap(s, candidates, candidates, checkConstraint) {
-					return true, false, false
-				}
-			default:
+			if p.tryRandomSwap(s, candidates, candidates, checkConstraint) {
+				return true, false, false
 			}
 
 			// If swap fails, then randomly select a candidate as source.
@@ -3905,7 +3923,7 @@ func (p *RandomPlacement) randomMoveByLoad(s *Solution, checkConstraint bool) (b
 	}
 
 	// Give it one more try to swap constrained node
-	return p.randomSwap(s, constrained, candidates, checkConstraint), false, false
+	return p.tryRandomSwap(s, constrained, candidates, checkConstraint), false, false
 }
 
 //
