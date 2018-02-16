@@ -603,11 +603,12 @@ func rebalance(command CommandType, config *RunConfig, plan *Plan, indexes []*In
 	if len(indexes) != 0 {
 		logging.Infof("Rebalancing partitioned index (num %v)", len(indexes))
 		solution = planner.Result
+		timeLeft := config.Timeout - int(planner.ElapseTime/uint64(time.Second))
 		solution.removeEmptyDeletedNode()
 		solution.enableExclude = true
 		placement = newRandomPlacement(indexes, config.AllowSwap, false)
 		planner = newSAPlanner(cost, constraint, placement, sizing)
-		planner.SetTimeout(config.Timeout)
+		planner.SetTimeout(timeLeft)
 		planner.Plan(CommandRebalance, solution)
 	}
 
