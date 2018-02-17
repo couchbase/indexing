@@ -942,10 +942,6 @@ func (a *aggrResult) SetMaxRows(n int) {
 
 func (ar *aggrRow) CheckEqualGroup(groups []*groupKey) bool {
 
-	if len(ar.groups) != len(groups) {
-		return false
-	}
-
 	for i, gk := range ar.groups {
 		if !gk.Equals(groups[i]) {
 			return false
