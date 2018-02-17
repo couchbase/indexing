@@ -97,7 +97,7 @@ type PlacementMethod interface {
 	Add(s *Solution, indexes []*IndexUsage) error
 	InitialPlace(s *Solution, indexes []*IndexUsage) error
 	Validate(s *Solution) error
-	GetEligibleIndexes() []*IndexUsage
+	GetEligibleIndexes() map[*IndexUsage]bool
 	AddOptionalIndexes([]*IndexUsage)
 	RemoveOptionalIndexes() []*IndexUsage
 	HasOptionalIndexes() bool
@@ -109,17 +109,17 @@ type ConstraintMethod interface {
 	GetCpuQuota() uint64
 	SatisfyClusterResourceConstraint(s *Solution) bool
 	SatisfyNodeResourceConstraint(s *Solution, n *IndexerNode) bool
-	SatisfyNodeHAConstraint(s *Solution, n *IndexerNode, eligibles []*IndexUsage) bool
-	SatisfyIndexHAConstraint(s *Solution, n *IndexerNode, index *IndexUsage, eligibles []*IndexUsage) bool
-	SatisfyClusterConstraint(s *Solution, eligibles []*IndexUsage) bool
-	SatisfyNodeConstraint(s *Solution, n *IndexerNode, eligibles []*IndexUsage) bool
+	SatisfyNodeHAConstraint(s *Solution, n *IndexerNode, eligibles map[*IndexUsage]bool) bool
+	SatisfyIndexHAConstraint(s *Solution, n *IndexerNode, index *IndexUsage, eligibles map[*IndexUsage]bool) bool
+	SatisfyClusterConstraint(s *Solution, eligibles map[*IndexUsage]bool) bool
+	SatisfyNodeConstraint(s *Solution, n *IndexerNode, eligibles map[*IndexUsage]bool) bool
 	SatisfyServerGroupConstraint(s *Solution, n *IndexUsage, group string) bool
 	CanAddIndex(s *Solution, n *IndexerNode, u *IndexUsage) ViolationCode
 	CanSwapIndex(s *Solution, n *IndexerNode, t *IndexUsage, i *IndexUsage) ViolationCode
 	CanAddNode(s *Solution) bool
 	Print()
 	Validate(s *Solution) error
-	GetViolations(s *Solution, indexes []*IndexUsage) *Violations
+	GetViolations(s *Solution, indexes map[*IndexUsage]bool) *Violations
 }
 
 type SizingMethod interface {
@@ -327,7 +327,7 @@ type UsageBasedCostMethod struct {
 
 type RandomPlacement struct {
 	rs              *rand.Rand
-	indexes         map[*IndexUsage]*IndexUsage
+	indexes         map[*IndexUsage]bool
 	eligibles       []*IndexUsage
 	optionals       []*IndexUsage
 	allowSwap       bool
@@ -635,7 +635,9 @@ func (p *SAPlanner) PrintCost() {
 //
 func (p *SAPlanner) findNeighbor(s *Solution) (*Solution, bool, bool) {
 
+	currentOK := s.SatisfyClusterConstraint()
 	neighbor := s.clone()
+
 	force := false
 	done := false
 	retry := 0
@@ -643,7 +645,6 @@ func (p *SAPlanner) findNeighbor(s *Solution) (*Solution, bool, bool) {
 	for retry = 0; retry < ResizePerIteration; retry++ {
 		success, final, mustAccept := p.placement.Move(neighbor)
 		if success {
-			currentOK := s.SatisfyClusterConstraint()
 			neighborOK := neighbor.SatisfyClusterConstraint()
 			logging.Tracef("Planner::findNeighbor retry: %v", retry)
 			return neighbor, (mustAccept || force || (!currentOK && neighborOK)), final
@@ -1461,6 +1462,7 @@ func (s *Solution) ComputeDataSize() (float64, float64) {
 //
 func (s *Solution) numEmptyIndex(indexer *IndexerNode) int {
 
+	//TODO
 	count := 0
 	for _, index := range indexer.Indexes {
 		if index.GetMemUsage(s.UseLiveData()) == 0 {
@@ -1488,6 +1490,7 @@ func (s *Solution) computeIndexMovement(useNewNode bool) (uint64, uint64, uint64
 			continue
 		}
 
+		//TODO
 		for _, index := range indexer.Indexes {
 
 			// ignore cost of moving an index out of an to-be-deleted node
@@ -1932,7 +1935,7 @@ func (s *Solution) hasServerGroupWithNoReplica(u *IndexUsage) bool {
 //
 // Does the index node has replia?
 //
-func (s *Solution) hasReplia(indexer *IndexerNode, target *IndexUsage) bool {
+func (s *Solution) hasReplica(indexer *IndexerNode, target *IndexUsage) bool {
 
 	for _, index := range indexer.Indexes {
 		if index != target && index.IsReplica(target) {
@@ -2097,7 +2100,7 @@ func (s *Solution) runSizeEstimation(placement PlacementMethod) {
 
 	// only enable estimation if eligible indexes have no sizing info
 	eligibles := placement.GetEligibleIndexes()
-	for _, eligible := range eligibles {
+	for eligible, _ := range eligibles {
 		if !eligible.NoUsageInfo {
 			s.estimationOff()
 			return
@@ -2203,7 +2206,7 @@ retry1:
 			estimate(s.estimatedIndexSize)
 
 			// adjust slot size
-			for _, index := range eligibles {
+			for index, _ := range eligibles {
 				// cannot be higher than max free mem size
 				if index.EstimatedMemUsage > maxMemFree {
 					s.estimatedIndexSize = uint64(float64(s.estimatedIndexSize) * 0.9)
@@ -2345,7 +2348,7 @@ func (c *IndexerConstraint) Validate(s *Solution) error {
 //
 // Return an error with a list of violations
 //
-func (c *IndexerConstraint) GetViolations(s *Solution, eligibles []*IndexUsage) *Violations {
+func (c *IndexerConstraint) GetViolations(s *Solution, eligibles map[*IndexUsage]bool) *Violations {
 
 	violations := &Violations{
 		MemQuota: s.getConstraintMethod().GetMemQuota(),
@@ -2356,8 +2359,8 @@ func (c *IndexerConstraint) GetViolations(s *Solution, eligibles []*IndexUsage) 
 
 		// This indexer node does not satisfy constraint
 		if !c.SatisfyNodeConstraint(s, indexer, eligibles) {
-			for _, index := range eligibles {
-				if hasIndex(indexer, index) {
+			for _, index := range indexer.Indexes {
+				if isEligibleIndex(index, eligibles) {
 
 					if !c.acceptViolation(s, index, indexer) {
 						continue
@@ -2494,6 +2497,7 @@ func (c *IndexerConstraint) CanAddIndex(s *Solution, n *IndexerNode, u *IndexUsa
 		return DeleteNodeViolation
 	}
 
+	//TODO
 	for _, index := range n.Indexes {
 		// check replica
 		if index.IsReplica(u) {
@@ -2553,6 +2557,7 @@ func (c *IndexerConstraint) CanSwapIndex(sol *Solution, n *IndexerNode, s *Index
 		return DeleteNodeViolation
 	}
 
+	//TODO
 	for _, index := range n.Indexes {
 		// check replica
 		if index.IsReplica(s) {
@@ -2634,7 +2639,7 @@ func (c *IndexerConstraint) SatisfyNodeResourceConstraint(s *Solution, n *Indexe
 //
 // This function determines if a node HA constraint is satisfied.
 //
-func (c *IndexerConstraint) SatisfyNodeHAConstraint(s *Solution, n *IndexerNode, eligibles []*IndexUsage) bool {
+func (c *IndexerConstraint) SatisfyNodeHAConstraint(s *Solution, n *IndexerNode, eligibles map[*IndexUsage]bool) bool {
 
 	for offset, index := range n.Indexes {
 		if !c.SatisfyIndexHAConstraintAt(s, n, offset+1, index, eligibles) {
@@ -2648,12 +2653,12 @@ func (c *IndexerConstraint) SatisfyNodeHAConstraint(s *Solution, n *IndexerNode,
 //
 // This function determines if a HA constraint is satisfied for a particular index in indexer node.
 //
-func (c *IndexerConstraint) SatisfyIndexHAConstraint(s *Solution, n *IndexerNode, source *IndexUsage, eligibles []*IndexUsage) bool {
+func (c *IndexerConstraint) SatisfyIndexHAConstraint(s *Solution, n *IndexerNode, source *IndexUsage, eligibles map[*IndexUsage]bool) bool {
 
 	return c.SatisfyIndexHAConstraintAt(s, n, 0, source, eligibles)
 }
 
-func (c *IndexerConstraint) SatisfyIndexHAConstraintAt(s *Solution, n *IndexerNode, offset int, source *IndexUsage, eligibles []*IndexUsage) bool {
+func (c *IndexerConstraint) SatisfyIndexHAConstraintAt(s *Solution, n *IndexerNode, offset int, source *IndexUsage, eligibles map[*IndexUsage]bool) bool {
 
 	if n.isDelete {
 		return false
@@ -2727,15 +2732,15 @@ func (c *IndexerConstraint) SatisfyClusterResourceConstraint(s *Solution) bool {
 //
 // This function determines if a node constraint is satisfied.
 //
-func (c *IndexerConstraint) SatisfyNodeConstraint(s *Solution, n *IndexerNode, eligibles []*IndexUsage) bool {
+func (c *IndexerConstraint) SatisfyNodeConstraint(s *Solution, n *IndexerNode, eligibles map[*IndexUsage]bool) bool {
 
 	if n.isDelete && len(n.Indexes) != 0 {
 		return false
 	}
 
 	checkConstraint := false
-	for _, eligible := range eligibles {
-		if hasIndex(n, eligible) {
+	for _, index := range n.Indexes {
+		if isEligibleIndex(index, eligibles) {
 			checkConstraint = true
 			break
 		}
@@ -2755,7 +2760,7 @@ func (c *IndexerConstraint) SatisfyNodeConstraint(s *Solution, n *IndexerNode, e
 //
 // This function determines if cluster wide constraint is satisifed.
 //
-func (c *IndexerConstraint) SatisfyClusterConstraint(s *Solution, eligibles []*IndexUsage) bool {
+func (c *IndexerConstraint) SatisfyClusterConstraint(s *Solution, eligibles map[*IndexUsage]bool) bool {
 
 	for _, indexer := range s.Placement {
 		if !c.SatisfyNodeConstraint(s, indexer, eligibles) {
@@ -3496,7 +3501,7 @@ func (c *UsageBasedCostMethod) Validate(s *Solution) error {
 func newRandomPlacement(indexes []*IndexUsage, allowSwap bool, swapDeletedOnly bool) *RandomPlacement {
 	p := &RandomPlacement{
 		rs:              rand.New(rand.NewSource(time.Now().UnixNano())),
-		indexes:         make(map[*IndexUsage]*IndexUsage),
+		indexes:         make(map[*IndexUsage]bool),
 		eligibles:       make([]*IndexUsage, len(indexes)),
 		optionals:       nil,
 		allowSwap:       allowSwap,
@@ -3505,7 +3510,7 @@ func newRandomPlacement(indexes []*IndexUsage, allowSwap bool, swapDeletedOnly b
 
 	// index to be balanced
 	for i, index := range indexes {
-		p.indexes[index] = index
+		p.indexes[index] = true
 		p.eligibles[i] = index
 	}
 
@@ -3515,9 +3520,9 @@ func newRandomPlacement(indexes []*IndexUsage, allowSwap bool, swapDeletedOnly b
 //
 // Get index for placement
 //
-func (p *RandomPlacement) GetEligibleIndexes() []*IndexUsage {
+func (p *RandomPlacement) GetEligibleIndexes() map[*IndexUsage]bool {
 
-	return append(p.eligibles, p.optionals...)
+	return p.indexes
 }
 
 //
@@ -3527,7 +3532,7 @@ func (p *RandomPlacement) AddOptionalIndexes(indexes []*IndexUsage) {
 
 	p.optionals = append(p.optionals, indexes...)
 	for _, index := range indexes {
-		p.indexes[index] = index
+		p.indexes[index] = true
 	}
 }
 
@@ -3561,7 +3566,7 @@ func (p *RandomPlacement) Validate(s *Solution) error {
 
 	if !s.getConstraintMethod().CanAddNode(s) {
 
-		for _, index := range p.indexes {
+		for index, _ := range p.indexes {
 			numReplica := s.findNumReplica(index)
 
 			if numReplica > s.findNumLiveNode() {
@@ -3592,7 +3597,7 @@ func (p *RandomPlacement) Validate(s *Solution) error {
 	memQuota := s.getConstraintMethod().GetMemQuota()
 	//cpuQuota := float64(s.getConstraintMethod().GetCpuQuota())
 
-	for _, index := range p.indexes {
+	for index, _ := range p.indexes {
 
 		//if index.GetMemTotal(s.UseLiveData()) > memQuota || index.GetCpuUsage(s.UseLiveData()) > cpuQuota {
 		if index.GetMemTotal(s.UseLiveData()) > memQuota {
@@ -4046,10 +4051,11 @@ func (p *RandomPlacement) findCandidates(s *Solution) []*IndexerNode {
 		}
 	}
 
+	//TODO
 	// only include node with index to be rebalanced
 	for _, indexer := range s.Placement {
-		for _, index := range p.indexes {
-			if hasIndex(indexer, index) {
+		for _, index := range indexer.Indexes {
+			if _, ok := p.indexes[index]; ok {
 				candidates = append(candidates, indexer)
 				break
 			}

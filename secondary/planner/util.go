@@ -304,15 +304,9 @@ func getEligibleIndexes(indexes []*IndexUsage, eligibles []*IndexUsage) []*Index
 //
 // This function checks is the index is an eligible index
 //
-func isEligibleIndex(index *IndexUsage, eligibles []*IndexUsage) bool {
+func isEligibleIndex(index *IndexUsage, eligibles map[*IndexUsage]bool) bool {
 
-	for _, eligible := range eligibles {
-		if index == eligible {
-			return true
-		}
-	}
-
-	return false
+	return eligibles[index]
 }
 
 //
