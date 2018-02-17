@@ -167,6 +167,12 @@ type IndexerNode struct {
 
 	// intput/output: planning
 	meetConstraint bool
+	numEmptyIndex  int
+	hasEligible    bool
+	totalData      uint64
+	totalIndex     uint64
+	dataMovedIn    uint64
+	indexMovedIn   uint64
 }
 
 type IndexUsage struct {
@@ -390,6 +396,7 @@ func (p *SAPlanner) Plan(command CommandType, solution *Solution) (*Solution, er
 
 	solution.command = command
 	solution = p.adjustInitialSolutionIfNecessary(solution)
+	solution.evaluateNodes()
 
 	for i := 0; i < RunPerPlan; i++ {
 		p.Try++
@@ -730,8 +737,7 @@ func (p *SAPlanner) adjustInitialSolutionIfNecessary(s *Solution) *Solution {
 		s.enableExclude = false
 	}
 
-	// evalute if node meet constraint
-	s.evaluateNodeConstraint()
+	s.evaluateNodes()
 
 	// If not using live data, then no need to relax constraint.
 	if !s.UseLiveData() {
@@ -1148,7 +1154,7 @@ func (s *Solution) addIndex(n *IndexerNode, idx *IndexUsage) {
 	n.AddMemUsageOverhead(s, idx.GetMemUsage(s.UseLiveData()), idx.GetMemOverhead(s.UseLiveData()))
 	n.AddCpuUsage(s, idx.GetCpuUsage(s.UseLiveData()))
 	n.AddDataSize(s, idx.GetDataSize(s.UseLiveData()))
-	n.EvaluateNodeConstraint(s)
+	n.Evaluate(s)
 }
 
 //
@@ -1166,7 +1172,7 @@ func (s *Solution) removeIndex(n *IndexerNode, i int) {
 	n.SubtractMemUsageOverhead(s, idx.GetMemUsage(s.UseLiveData()), idx.GetMemOverhead(s.UseLiveData()))
 	n.SubtractCpuUsage(s, idx.GetCpuUsage(s.UseLiveData()))
 	n.SubtractDataSize(s, idx.GetDataSize(s.UseLiveData()))
-	n.EvaluateNodeConstraint(s)
+	n.Evaluate(s)
 }
 
 //
@@ -1412,14 +1418,14 @@ func (s *Solution) ComputeEmptyIndexDistribution() (float64, float64) {
 	// Compute mean number of index
 	var meanIdxUsage float64
 	for _, indexer := range s.Placement {
-		meanIdxUsage += float64(s.numEmptyIndex(indexer))
+		meanIdxUsage += float64(indexer.numEmptyIndex)
 	}
 	meanIdxUsage = meanIdxUsage / float64(len(s.Placement))
 
 	// compute variance on number of index
 	var varianceIdxUsage float64
 	for _, indexer := range s.Placement {
-		v := float64(s.numEmptyIndex(indexer)) - meanIdxUsage
+		v := float64(indexer.numEmptyIndex) - meanIdxUsage
 		varianceIdxUsage += v * v
 	}
 	varianceIdxUsage = varianceIdxUsage / float64(len(s.Placement))
@@ -1457,23 +1463,6 @@ func (s *Solution) ComputeDataSize() (float64, float64) {
 }
 
 //
-// Find the number of indexes that has no stats or sizing information.
-// This does not take into consideration for index fixed overhead.
-//
-func (s *Solution) numEmptyIndex(indexer *IndexerNode) int {
-
-	//TODO
-	count := 0
-	for _, index := range indexer.Indexes {
-		if index.GetMemUsage(s.UseLiveData()) == 0 {
-			count++
-		}
-	}
-
-	return count
-}
-
-//
 // Compute statistics on index movement
 //
 func (s *Solution) computeIndexMovement(useNewNode bool) (uint64, uint64, uint64, uint64) {
@@ -1484,28 +1473,10 @@ func (s *Solution) computeIndexMovement(useNewNode bool) (uint64, uint64, uint64
 	indexMoved := uint64(0)
 
 	for _, indexer := range s.Placement {
-
-		// ignore cost moving to a new node
-		if !useNewNode && indexer.isNew {
-			continue
-		}
-
-		//TODO
-		for _, index := range indexer.Indexes {
-
-			// ignore cost of moving an index out of an to-be-deleted node
-			if index.initialNode != nil && !index.initialNode.isDelete {
-				totalSize += index.GetDataSize(s.UseLiveData())
-				totalIndex++
-			}
-
-			// ignore cost of moving an index out of an to-be-deleted node
-			if index.initialNode != nil && !index.initialNode.isDelete &&
-				index.initialNode.NodeId != indexer.NodeId {
-				dataMoved += index.GetDataSize(s.UseLiveData())
-				indexMoved++
-			}
-		}
+		totalSize += indexer.totalData
+		dataMoved += indexer.dataMovedIn
+		totalIndex += indexer.totalIndex
+		indexMoved += indexer.indexMovedIn
 	}
 
 	return totalSize, dataMoved, totalIndex, indexMoved
@@ -1817,10 +1788,10 @@ func (s *Solution) findNumAvailLiveNode() int {
 //
 // Eavluate if each indexer meets constraint
 //
-func (s *Solution) evaluateNodeConstraint() {
+func (s *Solution) evaluateNodes() {
 
 	for _, indexer := range s.Placement {
-		indexer.EvaluateNodeConstraint(s)
+		indexer.Evaluate(s)
 	}
 }
 
@@ -2869,6 +2840,12 @@ func (o *IndexerNode) clone() *IndexerNode {
 		ActualCpuUsage:    o.ActualCpuUsage,
 		ActualDataSize:    o.ActualDataSize,
 		meetConstraint:    o.meetConstraint,
+		numEmptyIndex:     o.numEmptyIndex,
+		hasEligible:       o.hasEligible,
+		dataMovedIn:       o.dataMovedIn,
+		indexMovedIn:      o.indexMovedIn,
+		totalData:         o.totalData,
+		totalIndex:        o.totalIndex,
 	}
 
 	for i, _ := range o.Indexes {
@@ -3091,6 +3068,66 @@ func (o *IndexerNode) EvaluateNodeConstraint(s *Solution) {
 		eligibles := s.place.GetEligibleIndexes()
 		o.meetConstraint = s.constraint.SatisfyNodeConstraint(s, o, eligibles)
 	}
+}
+
+//
+// Evaluate node stats for planning purpose
+//
+func (o *IndexerNode) EvaluateNodeStats(s *Solution) {
+
+	o.numEmptyIndex = 0
+	o.totalData = 0
+	o.totalIndex = 0
+	o.dataMovedIn = 0
+	o.indexMovedIn = 0
+	o.hasEligible = false
+
+	if s.place == nil {
+		return
+	}
+
+	eligibles := s.place.GetEligibleIndexes()
+	for _, index := range o.Indexes {
+
+		// calculate num empty index
+		if index.GetMemUsage(s.UseLiveData()) == 0 {
+			o.numEmptyIndex++
+		}
+
+		// has eligible index?
+		if _, ok := eligibles[index]; ok {
+			o.hasEligible = true
+		}
+
+		// calculate data movement
+		// 1) only consider eligible index
+		// 2) ignore cost of moving an index out of an to-be-deleted node
+		// 3) ignore cost of moving to new node
+		if s.command == CommandRebalance || s.command == CommandSwap {
+			if _, ok := eligibles[index]; ok {
+
+				if index.initialNode != nil && !index.initialNode.isDelete {
+					o.totalData += index.GetDataSize(s.UseLiveData())
+					o.totalIndex++
+				}
+
+				if index.initialNode != nil && !index.initialNode.isDelete &&
+					index.initialNode.NodeId != o.NodeId && !o.isNew {
+					o.dataMovedIn += index.GetDataSize(s.UseLiveData())
+					o.indexMovedIn++
+				}
+			}
+		}
+	}
+}
+
+//
+// Evaluate indexer stats and constraints when node has changed
+//
+func (o *IndexerNode) Evaluate(s *Solution) {
+
+	o.EvaluateNodeConstraint(s)
+	o.EvaluateNodeStats(s)
 }
 
 //////////////////////////////////////////////////////////////
@@ -3477,10 +3514,10 @@ func (s *UsageBasedCostMethod) Print() {
 	logging.Infof("Indexer CPU Utilization %.4f", float64(s.CpuMean)/float64(s.constraint.GetCpuQuota()))
 	logging.Infof("Indexer Data Size Mean %v (%s)", uint64(s.DataSizeMean), formatMemoryStr(uint64(s.DataSizeMean)))
 	logging.Infof("Indexer Data Size Deviation %v (%s) (%.2f%%)", uint64(s.DataSizeStdDev), formatMemoryStr(uint64(s.DataSizeStdDev)), dataSizeUtil)
-	logging.Infof("Total Index Data (in original layout) %v", formatMemoryStr(s.TotalData))
-	logging.Infof("Index Data Moved (after planning) %v (%.2f%%)", formatMemoryStr(s.DataMoved), dataMoved)
-	logging.Infof("No. Index (in original layout) %v", formatMemoryStr(s.TotalIndex))
-	logging.Infof("No. Index Moved (after planning) %v (%.2f%%)", formatMemoryStr(s.IndexMoved), indexMoved)
+	logging.Infof("Total Index Data (from non-deleted node) %v", formatMemoryStr(s.TotalData))
+	logging.Infof("Index Data Moved (exclude new node) %v (%.2f%%)", formatMemoryStr(s.DataMoved), dataMoved)
+	logging.Infof("No. Index (from non-deleted node) %v", formatMemoryStr(s.TotalIndex))
+	logging.Infof("No. Index Moved (exclude new node) %v (%.2f%%)", formatMemoryStr(s.IndexMoved), indexMoved)
 }
 
 //
@@ -4051,14 +4088,10 @@ func (p *RandomPlacement) findCandidates(s *Solution) []*IndexerNode {
 		}
 	}
 
-	//TODO
 	// only include node with index to be rebalanced
 	for _, indexer := range s.Placement {
-		for _, index := range indexer.Indexes {
-			if _, ok := p.indexes[index]; ok {
-				candidates = append(candidates, indexer)
-				break
-			}
+		if indexer.hasEligible {
+			candidates = append(candidates, indexer)
 		}
 	}
 
@@ -4451,7 +4484,12 @@ func (p *RandomPlacement) findConstrainedNodes(s *Solution, constraint Constrain
 		}
 	}
 
-	return result
+	if len(result) > 0 {
+		return result
+	}
+
+	return indexers
+
 }
 
 //
