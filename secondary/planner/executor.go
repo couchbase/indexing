@@ -583,9 +583,16 @@ func rebalance(command CommandType, config *RunConfig, plan *Plan, indexes []*In
 	} else {
 		indexes = nil
 	}
-	placement = newRandomPlacement(indexes, config.AllowSwap, command == CommandSwap)
+
+	if command == CommandRebalance {
+		partitioned := findAllPartitionedIndexExcluding(solution, indexes)
+		if len(partitioned) != 0 {
+			indexes = append(indexes, partitioned...)
+		}
+	}
 
 	// run planner
+	placement = newRandomPlacement(indexes, config.AllowSwap, command == CommandSwap)
 	cost = newUsageBasedCostMethod(constraint, config.DataCostWeight, config.CpuCostWeight, config.MemCostWeight)
 	planner := newSAPlanner(cost, constraint, placement, sizing)
 	planner.SetTimeout(config.Timeout)
@@ -596,27 +603,6 @@ func rebalance(command CommandType, config *RunConfig, plan *Plan, indexes []*In
 	}
 	if _, err := planner.Plan(command, solution); err != nil {
 		return planner, s, err
-	}
-
-	// plan again for partitioned index
-	indexes = findAllPartitionedIndex(planner.Result)
-	if len(indexes) != 0 {
-
-		logging.Infof("******Phase 1 Finished: Run Summary ****")
-		planner.PrintRunSummary()
-		logging.Infof("****************************************")
-		logging.Infof("Phase 2 : Rebalancing partitioned index (num %v)", len(indexes))
-
-		solution = planner.Result
-		timeLeft := config.Timeout - int(planner.ElapseTime/uint64(time.Second))
-		solution.removeEmptyDeletedNode()
-		solution.enableExclude = true
-		placement = newRandomPlacement(indexes, config.AllowSwap, false)
-		planner = newSAPlanner(cost, constraint, placement, sizing)
-		planner.SetTimeout(timeLeft)
-		if _, err := planner.Plan(CommandRebalance, solution); err != nil {
-			logging.Warnf("Planner: %v", err)
-		}
 	}
 
 	// save result
@@ -931,6 +917,30 @@ func findAllPartitionedIndex(solution *Solution) []*IndexUsage {
 		for _, index := range indexer.Indexes {
 			if index.Instance != nil && common.IsPartitioned(index.Instance.Defn.PartitionScheme) {
 				result = append(result, index)
+			}
+		}
+	}
+
+	return result
+}
+
+func findAllPartitionedIndexExcluding(solution *Solution, excludes []*IndexUsage) []*IndexUsage {
+
+	result := ([]*IndexUsage)(nil)
+
+	for _, indexer := range solution.Placement {
+		for _, index := range indexer.Indexes {
+			if index.Instance != nil && common.IsPartitioned(index.Instance.Defn.PartitionScheme) {
+				found := false
+				for _, exclude := range excludes {
+					if exclude == index {
+						found = true
+						break
+					}
+				}
+				if !found {
+					result = append(result, index)
+				}
 			}
 		}
 	}
