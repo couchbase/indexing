@@ -1837,6 +1837,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.planner.variationThreshold": ConfigValue{
+		0.01,
+		"threshold on resource variation",
+		0.01,
+		false, // mutable
+		false, // case-insensitive
+	},
 }
 
 // NewConfig from another

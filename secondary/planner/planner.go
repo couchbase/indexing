@@ -90,6 +90,10 @@ type CostMethod interface {
 	Cost(s *Solution) float64
 	Print()
 	Validate(s *Solution) error
+	GetMemMean() float64
+	GetCpuMean() float64
+	GetDataMean() float64
+	ComputeResourceVariation() float64
 }
 
 type PlacementMethod interface {
@@ -254,8 +258,10 @@ type Solution struct {
 	// for rebalance
 	enableExclude bool
 
-	// for placement
-	currentCost float64
+	// for resource utilization
+	memMean  float64
+	cpuMean  float64
+	dataMean float64
 
 	// placement of indexes	in nodes
 	Placement []*IndexerNode `json:"placement,omitempty"`
@@ -287,7 +293,9 @@ type SAPlanner struct {
 	sizing     SizingMethod
 
 	// config
-	timeout int
+	timeout   int
+	runtime   *time.Time
+	threshold float64
 
 	// result
 	Result          *Solution `json:"result,omitempty"`
@@ -396,12 +404,12 @@ func (p *SAPlanner) Plan(command CommandType, solution *Solution) (*Solution, er
 
 	solution.command = command
 	solution = p.adjustInitialSolutionIfNecessary(solution)
-	solution.evaluateNodes()
 
 	for i := 0; i < RunPerPlan; i++ {
 		p.Try++
 		startTime := time.Now()
 		solution.runSizeEstimation(p.placement)
+		solution.evaluateNodes()
 
 		err = p.Validate(solution)
 		if err == nil {
@@ -453,6 +461,7 @@ func (p *SAPlanner) planSingleRun(command CommandType, solution *Solution) (*Sol
 	rs := rand.New(rand.NewSource(time.Now().UnixNano()))
 
 	old_cost := p.cost.Cost(current)
+	current.updateCost()
 	startScore := old_cost
 	startTime := time.Now()
 	lastUpdateTime := time.Now()
@@ -467,7 +476,6 @@ func (p *SAPlanner) planSingleRun(command CommandType, solution *Solution) (*Sol
 	for temperature > MinTemperature && !done {
 		lastMove := move
 		lastPositiveMove := positiveMove
-		current.currentCost = old_cost
 		for i := 0; i < IterationPerTemp; i++ {
 			new_solution, force, final := p.findNeighbor(current)
 			if new_solution != nil {
@@ -486,7 +494,7 @@ func (p *SAPlanner) planSingleRun(command CommandType, solution *Solution) (*Sol
 				// could have higher score.
 				if force || prob > rs.Float64() {
 					current = new_solution
-					current.currentCost = new_cost
+					current.updateCost()
 					old_cost = new_cost
 					lastUpdateTime = time.Now()
 					move++
@@ -507,6 +515,10 @@ func (p *SAPlanner) planSingleRun(command CommandType, solution *Solution) (*Sol
 			done = true
 		}
 
+		if p.threshold > 0 && current.cost.ComputeResourceVariation() <= p.threshold {
+			done = true
+		}
+
 		temperature = temperature * Alpha
 
 		if command == CommandPlan && initialPlan {
@@ -514,8 +526,8 @@ func (p *SAPlanner) planSingleRun(command CommandType, solution *Solution) (*Sol
 			temperature = temperature * old_cost
 		}
 
-		if p.timeout > 0 {
-			elapsed := time.Now().Sub(startTime).Seconds()
+		if p.timeout > 0 && p.runtime != nil {
+			elapsed := time.Now().Sub(*p.runtime).Seconds()
 			if elapsed >= float64(p.timeout) {
 				logging.Infof("Planner::stop planner due to timeout.  Elapsed %vs", elapsed)
 				break
@@ -544,6 +556,14 @@ func (p *SAPlanner) planSingleRun(command CommandType, solution *Solution) (*Sol
 
 func (p *SAPlanner) SetTimeout(timeout int) {
 	p.timeout = timeout
+}
+
+func (p *SAPlanner) SetRuntime(runtime *time.Time) {
+	p.runtime = runtime
+}
+
+func (p *SAPlanner) SetVariationThreshold(threshold float64) {
+	p.threshold = threshold
 }
 
 //
@@ -576,6 +596,7 @@ func (p *SAPlanner) Validate(s *Solution) error {
 func (p *SAPlanner) PrintRunSummary() {
 
 	logging.Infof("Score: %v", p.Score)
+	logging.Infof("variation: %v", p.cost.ComputeResourceVariation())
 	logging.Infof("ElapsedTime: %v", formatTimeStr(p.ElapseTime))
 	logging.Infof("ConvergenceTime: %v", formatTimeStr(p.ConvergenceTime))
 	logging.Infof("Iteration: %v", p.Iteration)
@@ -737,8 +758,6 @@ func (p *SAPlanner) adjustInitialSolutionIfNecessary(s *Solution) *Solution {
 		s.enableExclude = false
 	}
 
-	s.evaluateNodes()
-
 	// If not using live data, then no need to relax constraint.
 	if !s.UseLiveData() {
 		return s
@@ -749,6 +768,7 @@ func (p *SAPlanner) adjustInitialSolutionIfNecessary(s *Solution) *Solution {
 	}
 
 	cloned := s.clone()
+	cloned.evaluateNodes()
 
 	// Make sure we only repair when it is rebalancing
 	if s.command != CommandPlan {
@@ -1213,7 +1233,9 @@ func (s *Solution) clone() *Solution {
 		estimate:           s.estimate,
 		numEstimateRun:     s.numEstimateRun,
 		enableExclude:      s.enableExclude,
-		currentCost:        s.currentCost,
+		memMean:            s.memMean,
+		cpuMean:            s.cpuMean,
+		dataMean:           s.dataMean,
 	}
 
 	for _, node := range s.Placement {
@@ -1224,6 +1246,17 @@ func (s *Solution) clone() *Solution {
 	}
 
 	return r
+}
+
+//
+// This function update the cost stats
+//
+func (s *Solution) updateCost() {
+	if s.cost != nil {
+		s.memMean = s.cost.GetMemMean()
+		s.cpuMean = s.cost.GetCpuMean()
+		s.dataMean = s.cost.GetDataMean()
+	}
 }
 
 //
@@ -1472,11 +1505,37 @@ func (s *Solution) computeIndexMovement(useNewNode bool) (uint64, uint64, uint64
 	totalIndex := uint64(0)
 	indexMoved := uint64(0)
 
-	for _, indexer := range s.Placement {
-		totalSize += indexer.totalData
-		dataMoved += indexer.dataMovedIn
-		totalIndex += indexer.totalIndex
-		indexMoved += indexer.indexMovedIn
+	if s.place != nil {
+		for _, indexer := range s.Placement {
+			totalSize += indexer.totalData
+			dataMoved += indexer.dataMovedIn
+			totalIndex += indexer.totalIndex
+			indexMoved += indexer.indexMovedIn
+		}
+	} else {
+		for _, indexer := range s.Placement {
+
+			// ignore cost moving to a new node
+			if !useNewNode && indexer.isNew {
+				continue
+			}
+
+			for _, index := range indexer.Indexes {
+
+				// ignore cost of moving an index out of an to-be-deleted node
+				if index.initialNode != nil && !index.initialNode.isDelete {
+					totalSize += index.GetDataSize(s.UseLiveData())
+					totalIndex++
+				}
+
+				// ignore cost of moving an index out of an to-be-deleted node
+				if index.initialNode != nil && !index.initialNode.isDelete &&
+					index.initialNode.NodeId != indexer.NodeId {
+					dataMoved += index.GetDataSize(s.UseLiveData())
+					indexMoved++
+				}
+			}
+		}
 	}
 
 	return totalSize, dataMoved, totalIndex, indexMoved
@@ -2239,6 +2298,44 @@ func (s *Solution) copyEstimationFrom(source *Solution) {
 //
 func (s *Solution) canRunEstimation() bool {
 	return s.estimate
+}
+
+//
+// compute average usage for
+// 1) memory usage
+// 2) cpu
+// 3) data
+//
+func (s *Solution) computeResourceUsage(indexer *IndexerNode) float64 {
+
+	memCost := float64(0)
+	cpuCost := float64(0)
+	dataCost := float64(0)
+
+	if s.memMean != 0 {
+		memCost = float64(indexer.GetMemTotal(s.UseLiveData())) / s.memMean
+	}
+
+	if s.cpuMean != 0 {
+		cpuCost = float64(indexer.GetCpuUsage(s.UseLiveData())) / s.cpuMean
+	}
+
+	if s.dataMean != 0 {
+		dataCost = float64(indexer.GetDataSize(s.UseLiveData())) / s.dataMean
+	}
+
+	return (memCost + cpuCost + dataCost) / 3
+}
+
+//
+// compute average mean usage
+// 1) memory usage
+// 2) cpu
+// 3) data
+//
+func (s *Solution) computeMeanResourceUsage() float64 {
+
+	return (s.memMean + s.cpuMean + s.dataMean) / 3
 }
 
 //////////////////////////////////////////////////////////////
@@ -3400,6 +3497,55 @@ func newUsageBasedCostMethod(constraint ConstraintMethod,
 }
 
 //
+// Get mem mean
+//
+func (c *UsageBasedCostMethod) GetMemMean() float64 {
+	return c.MemMean
+}
+
+//
+// Get cpu mean
+//
+func (c *UsageBasedCostMethod) GetCpuMean() float64 {
+	return c.CpuMean
+}
+
+//
+// Get data mean
+//
+func (c *UsageBasedCostMethod) GetDataMean() float64 {
+	return c.DataSizeMean
+}
+
+//
+// Compute average resource variation
+//
+func (c *UsageBasedCostMethod) ComputeResourceVariation() float64 {
+
+	memCost := float64(0)
+	cpuCost := float64(0)
+	dataSizeCost := float64(0)
+	count := 0
+
+	if c.MemMean != 0 {
+		memCost = c.MemStdDev / c.MemMean
+		count++
+	}
+
+	if c.CpuMean != 0 {
+		cpuCost = c.CpuStdDev / c.CpuMean
+		count++
+	}
+
+	if c.DataSizeMean != 0 {
+		dataSizeCost = c.DataSizeStdDev / c.DataSizeMean
+		count++
+	}
+
+	return (memCost + cpuCost + dataSizeCost) / float64(count)
+}
+
+//
 // Compute cost based on variance on memory and cpu usage across indexers
 //
 func (c *UsageBasedCostMethod) Cost(s *Solution) float64 {
@@ -3867,15 +4013,11 @@ func (p *RandomPlacement) findSwapCandidateNode(s *Solution, node *IndexerNode) 
 //
 // Try random swap
 //
-func (p *RandomPlacement) tryRandomSwap(s *Solution, sources []*IndexerNode, targets []*IndexerNode, checkConstraint bool) bool {
+func (p *RandomPlacement) tryRandomSwap(s *Solution, sources []*IndexerNode, targets []*IndexerNode, checkConstraint bool, prob float64) bool {
 
-	// Swap can improve the quality of solution but only when the
-	// solution is fairly balanced.
-	if s.currentCost < 0.005 {
-		n := int64(p.rs.Int63n(3))
-		if n < 1 {
-			return p.randomSwap(s, sources, targets, checkConstraint)
-		}
+	n := p.rs.Float64()
+	if n < prob || s.cost.ComputeResourceVariation() < 0.05 {
+		return p.randomSwap(s, sources, targets, checkConstraint)
 	}
 
 	return false
@@ -3901,7 +4043,7 @@ func (p *RandomPlacement) randomMoveByLoad(s *Solution, checkConstraint bool) (b
 	logging.Tracef("Planner::constrained: len=%v, %v", len(constrained), constrained)
 	loads, total := computeLoads(s, constrained)
 
-	// Done with basic swap rebalance case?
+	// Done with basic swap rebalance case for non-partitioned index?
 	if len(s.getDeleteNodes()) == 0 &&
 		s.numDeletedNode > 0 &&
 		s.numNewNode == s.numDeletedNode &&
@@ -3956,7 +4098,8 @@ func (p *RandomPlacement) randomMoveByLoad(s *Solution, checkConstraint bool) (b
 		// pick two candidates and try to swap their indexes.
 		if source == nil {
 
-			if p.tryRandomSwap(s, candidates, candidates, checkConstraint) {
+			prob := float64(i) / float64(retryCount)
+			if p.tryRandomSwap(s, candidates, candidates, checkConstraint, prob) {
 				return true, false, false
 			}
 
@@ -4022,7 +4165,7 @@ func (p *RandomPlacement) randomMoveByLoad(s *Solution, checkConstraint bool) (b
 	}
 
 	// Give it one more try to swap constrained node
-	return p.tryRandomSwap(s, constrained, candidates, checkConstraint), false, false
+	return p.randomSwap(s, constrained, candidates, checkConstraint), false, false
 }
 
 //
@@ -4084,7 +4227,7 @@ func (p *RandomPlacement) findCandidates(s *Solution) []*IndexerNode {
 		}
 
 		if len(candidates) > 0 {
-			return candidates
+			return shuffleNode(p.rs, candidates)
 		}
 	}
 
@@ -4095,7 +4238,7 @@ func (p *RandomPlacement) findCandidates(s *Solution) []*IndexerNode {
 		}
 	}
 
-	return candidates
+	return shuffleNode(p.rs, candidates)
 }
 
 //
@@ -4103,25 +4246,27 @@ func (p *RandomPlacement) findCandidates(s *Solution) []*IndexerNode {
 //
 func (p *RandomPlacement) getRandomUncongestedNodeExcluding(s *Solution, exclude *IndexerNode, index *IndexUsage, checkConstraint bool) *IndexerNode {
 
-	if s.hasDeletedNodes() && s.hasNewNodes() {
+	/*
+		if s.hasDeletedNodes() && s.hasNewNodes() {
 
-		indexers := ([]*IndexerNode)(nil)
+			indexers := ([]*IndexerNode)(nil)
 
-		for _, indexer := range s.Placement {
-			if !indexer.ExcludeIn(s) &&
-				exclude.NodeId != indexer.NodeId &&
-				s.constraint.SatisfyNodeResourceConstraint(s, indexer) &&
-				!indexer.isDelete &&
-				indexer.isNew {
-				indexers = append(indexers, indexer)
+			for _, indexer := range s.Placement {
+				if !indexer.ExcludeIn(s) &&
+					exclude.NodeId != indexer.NodeId &&
+					s.constraint.SatisfyNodeResourceConstraint(s, indexer) &&
+					!indexer.isDelete &&
+					indexer.isNew {
+					indexers = append(indexers, indexer)
+				}
+			}
+
+			target := p.getRandomFittedNode(s, indexers, index, checkConstraint)
+			if target != nil {
+				return target
 			}
 		}
-
-		target := p.getRandomFittedNode(s, indexers, index, checkConstraint)
-		if target != nil {
-			return target
-		}
-	}
+	*/
 
 	indexers := ([]*IndexerNode)(nil)
 
@@ -4142,13 +4287,17 @@ func (p *RandomPlacement) getRandomUncongestedNodeExcluding(s *Solution, exclude
 //
 func (p *RandomPlacement) getRandomFittedNode(s *Solution, indexers []*IndexerNode, index *IndexUsage, checkConstraint bool) *IndexerNode {
 
+	indexers = shuffleNode(p.rs, indexers)
+
 	total := int64(0)
 	loads := make([]int64, len(indexers))
 
 	for i, indexer := range indexers {
 		violation := s.constraint.CanAddIndex(s, indexer, index)
 		if !checkConstraint || violation == NoViolation {
-			loads[i] = int64(computeIndexerFreeQuota(s, indexer) * 100)
+			if usage := s.computeMeanResourceUsage() - s.computeResourceUsage(indexer); usage > 0 {
+				loads[i] = int64(usage * 100)
+			}
 			total += loads[i]
 		}
 	}
@@ -4462,20 +4611,22 @@ func (p *RandomPlacement) exhaustiveMove(s *Solution, sources []*IndexerNode, ta
 //
 func (p *RandomPlacement) findConstrainedNodes(s *Solution, constraint ConstraintMethod, indexers []*IndexerNode) []*IndexerNode {
 
-	outNodes := s.getDeleteNodes()
 	result := ([]*IndexerNode)(nil)
 
-	if len(outNodes) > 0 {
-		for _, indexer := range outNodes {
-			if len(indexer.Indexes) > 0 {
-				result = append(result, indexer)
+	/*
+		outNodes := s.getDeleteNodes()
+		if len(outNodes) > 0 {
+			for _, indexer := range outNodes {
+				if len(indexer.Indexes) > 0 {
+					result = append(result, indexer)
+				}
+			}
+
+			if len(result) > 0 {
+				return shuffleNode(p.rs, result)
 			}
 		}
-
-		if len(result) > 0 {
-			return result
-		}
-	}
+	*/
 
 	// look for indexer node that do not satisfy constraint
 	for _, indexer := range indexers {

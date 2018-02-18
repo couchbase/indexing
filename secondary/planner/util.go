@@ -154,7 +154,7 @@ func computeLoads(s *Solution, indexers []*IndexerNode) ([]int64, int64) {
 	if len(indexers) > 0 {
 		loads = make([]int64, len(indexers))
 		for i, indexer := range indexers {
-			loads[i] = int64(computeIndexerUsage(s, indexer) * 100)
+			loads[i] = int64(s.computeResourceUsage(indexer) * 100)
 			total += loads[i]
 		}
 	}
@@ -200,8 +200,8 @@ func sortNodeByUsage(s *Solution, indexers []*IndexerNode) []*IndexerNode {
 		min := i
 		for j := i + 1; j < numOfIndexers; j++ {
 
-			minNodeUsage := computeIndexerUsage(s, result[min])
-			newNodeUsage := computeIndexerUsage(s, result[j])
+			minNodeUsage := s.computeResourceUsage(result[min])
+			newNodeUsage := s.computeResourceUsage(result[j])
 
 			if newNodeUsage < minNodeUsage {
 				min = j
