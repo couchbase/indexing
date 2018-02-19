@@ -53,8 +53,6 @@ type RunConfig struct {
 	DisableRepair  bool
 	Timeout        int
 	UseLive        bool
-	Runtime        *time.Time
-	Threshold      float64
 }
 
 type RunStats struct {
@@ -125,14 +123,13 @@ type IndexSpec struct {
 /////////////////////////////////////////////////////////////
 
 func ExecuteRebalance(clusterUrl string, topologyChange service.TopologyChange, masterId string, ejectOnly bool,
-	disableReplicaRepair bool, threshold float64, timeout int) (map[string]*common.TransferToken, error) {
-	runtime := time.Now()
-	return ExecuteRebalanceInternal(clusterUrl, topologyChange, masterId, false, true, ejectOnly, disableReplicaRepair, timeout, threshold, &runtime)
+	disableReplicaRepair bool, timeout int) (map[string]*common.TransferToken, error) {
+	return ExecuteRebalanceInternal(clusterUrl, topologyChange, masterId, false, true, ejectOnly, disableReplicaRepair, timeout)
 }
 
 func ExecuteRebalanceInternal(clusterUrl string,
 	topologyChange service.TopologyChange, masterId string, addNode bool, detail bool, ejectOnly bool,
-	disableReplicaRepair bool, timeout int, threshold float64, runtime *time.Time) (map[string]*common.TransferToken, error) {
+	disableReplicaRepair bool, timeout int) (map[string]*common.TransferToken, error) {
 
 	plan, err := RetrievePlanFromCluster(clusterUrl, nil)
 	if err != nil {
@@ -164,8 +161,6 @@ func ExecuteRebalanceInternal(clusterUrl string,
 	config.EjectOnly = ejectOnly
 	config.DisableRepair = disableReplicaRepair
 	config.Timeout = timeout
-	config.Runtime = runtime
-	config.Threshold = threshold
 
 	p, _, err := execute(config, CommandRebalance, plan, nil, deleteNodes)
 	if p != nil && detail {
@@ -588,21 +583,12 @@ func rebalance(command CommandType, config *RunConfig, plan *Plan, indexes []*In
 	} else {
 		indexes = nil
 	}
-
-	if command == CommandRebalance {
-		partitioned := findAllPartitionedIndexExcluding(solution, indexes)
-		if len(partitioned) != 0 {
-			indexes = append(indexes, partitioned...)
-		}
-	}
+	placement = newRandomPlacement(indexes, config.AllowSwap, command == CommandSwap)
 
 	// run planner
-	placement = newRandomPlacement(indexes, config.AllowSwap, command == CommandSwap)
 	cost = newUsageBasedCostMethod(constraint, config.DataCostWeight, config.CpuCostWeight, config.MemCostWeight)
 	planner := newSAPlanner(cost, constraint, placement, sizing)
 	planner.SetTimeout(config.Timeout)
-	planner.SetRuntime(config.Runtime)
-	planner.SetVariationThreshold(config.Threshold)
 	if config.Detail {
 		logging.Infof("************ Index Layout Before Rebalance *************")
 		solution.PrintLayout()
@@ -610,6 +596,19 @@ func rebalance(command CommandType, config *RunConfig, plan *Plan, indexes []*In
 	}
 	if _, err := planner.Plan(command, solution); err != nil {
 		return planner, s, err
+	}
+
+	// plan again for partitioned index
+	indexes = findAllPartitionedIndex(planner.Result)
+	if len(indexes) != 0 {
+		logging.Infof("Rebalancing partitioned index (num %v)", len(indexes))
+		solution = planner.Result
+		solution.removeEmptyDeletedNode()
+		solution.enableExclude = true
+		placement = newRandomPlacement(indexes, config.AllowSwap, false)
+		planner = newSAPlanner(cost, constraint, placement, sizing)
+		planner.SetTimeout(config.Timeout)
+		planner.Plan(CommandRebalance, solution)
 	}
 
 	// save result
@@ -924,30 +923,6 @@ func findAllPartitionedIndex(solution *Solution) []*IndexUsage {
 		for _, index := range indexer.Indexes {
 			if index.Instance != nil && common.IsPartitioned(index.Instance.Defn.PartitionScheme) {
 				result = append(result, index)
-			}
-		}
-	}
-
-	return result
-}
-
-func findAllPartitionedIndexExcluding(solution *Solution, excludes []*IndexUsage) []*IndexUsage {
-
-	result := ([]*IndexUsage)(nil)
-
-	for _, indexer := range solution.Placement {
-		for _, index := range indexer.Indexes {
-			if index.Instance != nil && common.IsPartitioned(index.Instance.Defn.PartitionScheme) {
-				found := false
-				for _, exclude := range excludes {
-					if exclude == index {
-						found = true
-						break
-					}
-				}
-				if !found {
-					result = append(result, index)
-				}
 			}
 		}
 	}

@@ -154,7 +154,7 @@ func computeLoads(s *Solution, indexers []*IndexerNode) ([]int64, int64) {
 	if len(indexers) > 0 {
 		loads = make([]int64, len(indexers))
 		for i, indexer := range indexers {
-			loads[i] = int64(s.computeResourceUsage(indexer) * 100)
+			loads[i] = int64(computeIndexerUsage(s, indexer) * 100)
 			total += loads[i]
 		}
 	}
@@ -200,8 +200,8 @@ func sortNodeByUsage(s *Solution, indexers []*IndexerNode) []*IndexerNode {
 		min := i
 		for j := i + 1; j < numOfIndexers; j++ {
 
-			minNodeUsage := s.computeResourceUsage(result[min])
-			newNodeUsage := s.computeResourceUsage(result[j])
+			minNodeUsage := computeIndexerUsage(s, result[min])
+			newNodeUsage := computeIndexerUsage(s, result[j])
 
 			if newNodeUsage < minNodeUsage {
 				min = j
@@ -304,9 +304,15 @@ func getEligibleIndexes(indexes []*IndexUsage, eligibles []*IndexUsage) []*Index
 //
 // This function checks is the index is an eligible index
 //
-func isEligibleIndex(index *IndexUsage, eligibles map[*IndexUsage]bool) bool {
+func isEligibleIndex(index *IndexUsage, eligibles []*IndexUsage) bool {
 
-	return eligibles[index]
+	for _, eligible := range eligibles {
+		if index == eligible {
+			return true
+		}
+	}
+
+	return false
 }
 
 //

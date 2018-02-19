@@ -132,7 +132,7 @@ func TestSimulation(t *testing.T) {
 			return
 		}
 
-		plan, err = RetrievePlanFromCluster(gClusterUrl, nil)
+		plan, err = RetrievePlanFromCluster(gClusterUrl)
 		if err != nil {
 			t.Fatal("Unable to read index layout from cluster %v. err = %s", gClusterUrl, err)
 		}
