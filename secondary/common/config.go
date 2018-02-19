@@ -1839,8 +1839,15 @@ var SystemConfig = Config{
 	},
 	"indexer.planner.variationThreshold": ConfigValue{
 		0.01,
-		"threshold on resource variation",
+		"acceptance threshold on resource variation. 0.01 means 1% variation from mean.",
 		0.01,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.planner.cpuProfile": ConfigValue{
+		false,
+		"on/off for cpu profiling",
+		false,
 		false, // mutable
 		false, // case-insensitive
 	},
