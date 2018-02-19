@@ -1831,9 +1831,16 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.planner.timeout": ConfigValue{
-		25,
+		20,
 		"timeout (sec) on planner",
-		25,
+		20,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.planner.variationThreshold": ConfigValue{
+		0.01,
+		"threshold on resource variation",
+		0.01,
 		false, // mutable
 		false, // case-insensitive
 	},

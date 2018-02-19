@@ -342,7 +342,7 @@ func main() {
 			return
 		}
 
-		tokens, err := planner.ExecuteRebalanceInternal(gClusterUrl, change, masterId, true, gDetail, true, false, 0)
+		tokens, err := planner.ExecuteRebalanceInternal(gClusterUrl, change, masterId, true, gDetail, true, false, 0, 0, nil)
 		if err != nil {
 			logging.Fatalf("Planner error: %v.", err)
 			return
