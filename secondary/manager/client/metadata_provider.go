@@ -1767,7 +1767,7 @@ RETRY1:
 			}
 
 			if len(watchers) == 0 {
-				errCode = 0
+				errCode = 1
 			} else {
 				errCode = 3
 			}
