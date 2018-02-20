@@ -1280,9 +1280,15 @@ func (r *ScanRequest) unmarshallAggrs(protoGroupAggr *protobuf.GroupAggr) error 
 
 func (r *ScanRequest) validateGroupAggr() error {
 
+	if r.isPrimary {
+		return nil
+	}
+
 	//identify leading/non-leading
 	var prevPos int32 = -1
 	r.GroupAggr.IsLeadingGroup = true
+
+outerloop:
 	for _, g := range r.GroupAggr.Group {
 		if g.KeyPos < 0 {
 			r.GroupAggr.IsLeadingGroup = false
@@ -1291,15 +1297,20 @@ func (r *ScanRequest) validateGroupAggr() error {
 			prevPos = 0
 		} else {
 			if g.KeyPos != prevPos+1 {
-				r.GroupAggr.IsLeadingGroup = false
-				break
+				for prevPos < g.KeyPos-1 {
+					prevPos++
+					if !r.hasAllEqualFilters(int(prevPos)) {
+						prevPos--
+						break
+					}
+				}
+				if g.KeyPos != prevPos+1 {
+					r.GroupAggr.IsLeadingGroup = false
+					break outerloop
+				}
 			}
 		}
 		prevPos = g.KeyPos
-	}
-
-	if r.isPrimary {
-		return nil
 	}
 
 	var err error
@@ -1336,6 +1347,25 @@ func (r *ScanRequest) validateGroupAggr() error {
 	}
 
 	return nil
+}
+
+//Returns true if all filters for the given keyPos(index field) are equal
+//and atleast one equal filter exists
+func (r *ScanRequest) hasAllEqualFilters(keyPos int) bool {
+
+	found := false
+	for _, scan := range r.Scans {
+		for _, filter := range scan.Filters {
+			if len(filter.CompositeFilters) > keyPos {
+				if !bytes.Equal(filter.CompositeFilters[keyPos].Low.Bytes(), filter.CompositeFilters[keyPos].High.Bytes()) {
+					return false
+				} else {
+					found = true
+				}
+			}
+		}
+	}
+	return found
 }
 
 func compileN1QLExpression(expr string) (expression.Expression, error) {
