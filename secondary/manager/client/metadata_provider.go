@@ -196,6 +196,12 @@ func NewMetadataProvider(cluster string, providerId string, changeCh chan bool, 
 	}
 	logging.Debugf("MetadataProvider.NewMetadataProvider(): MetadataProvider follower ID %s", s.providerId)
 
+	cinfo, err := c.FetchNewClusterInfoCache(cluster, c.DEFAULT_POOL)
+	if err != nil {
+		return nil, err
+	}
+	s.clusterVersion = cinfo.GetClusterVersion()
+
 	return s, nil
 }
 
