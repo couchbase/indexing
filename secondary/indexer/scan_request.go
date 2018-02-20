@@ -162,6 +162,9 @@ type IndexPoint struct {
 // Implements sort Interface
 type IndexPoints []IndexPoint
 
+// Implements sort Interface
+type Filters []Filter
+
 //Groupby/Aggregate pushdown
 
 type GroupKey struct {
@@ -222,6 +225,11 @@ func (ga GroupAggr) String() string {
 var (
 	ErrInvalidAggrFunc = errors.New("Invalid Aggregate Function")
 )
+
+var inclusionMatrix = [][]Inclusion{
+	{Neither, High},
+	{Low, Both},
+}
 
 /////////////////////////////////////////////////////////////////////////
 //
@@ -694,10 +702,12 @@ func (r *ScanRequest) fillFilterEquals(protoScan *protobuf.Scan, filter *Filter)
 	return nil
 }
 
+///// Compose Scans for Secondary Index
 // Create scans from sorted Index Points
 // Iterate over sorted points and keep track of applicable filters
 // between overlapped regions
 func (r *ScanRequest) composeScans(points []IndexPoint, filters []Filter) []Scan {
+
 	var scans []Scan
 	filtersMap := make(map[int]bool)
 	var filtersList []int
@@ -730,10 +740,6 @@ func (r *ScanRequest) composeScans(points []IndexPoint, filters []Filter) []Scan
 						scan.Filters = append(scan.Filters, filters[fl])
 					}
 
-					if r.isPrimary {
-						scan.ScanType = RangeReq
-					}
-
 					scans = append(scans, scan)
 					filtersList = nil
 				}
@@ -748,6 +754,7 @@ func (r *ScanRequest) composeScans(points []IndexPoint, filters []Filter) []Scan
 			scans[i].Equals = scans[i].Low
 			scans[i].ScanType = LookupReq
 		}
+
 		if scans[i].ScanType == FilterRangeReq && len(scans[i].Filters) == 1 &&
 			len(scans[i].Filters[0].CompositeFilters) == 1 {
 			// Flip inclusion if first element is descending
@@ -759,6 +766,86 @@ func (r *ScanRequest) composeScans(points []IndexPoint, filters []Filter) []Scan
 
 	return scans
 }
+
+///// Compose Scans for Primary Index
+func lowInclude(lowInclusions []Inclusion) int {
+	for _, incl := range lowInclusions {
+		if incl == Low || incl == Both {
+			return 1
+		}
+	}
+	return 0
+}
+
+func highInclude(highInclusions []Inclusion) int {
+	for _, incl := range highInclusions {
+		if incl == High || incl == Both {
+			return 1
+		}
+	}
+	return 0
+}
+
+func MergeFiltersForPrimary(scans []Scan, f2 Filter) []Scan {
+
+	getNewScans := func(scans []Scan, f Filter) []Scan {
+		sc := Scan{Low: f.Low, High: f.High, Incl: f.Inclusion, ScanType: RangeReq}
+		scans = append(scans, sc)
+		return scans
+	}
+
+	if len(scans) > 0 {
+		f1 := scans[len(scans)-1]
+		l1, h1, i1 := f1.Low, f1.High, f1.Incl
+		l2, h2, i2 := f2.Low, f2.High, f2.Inclusion
+
+		//No Merge casess
+		if l2.ComparePrefixIndexKey(h1) > 0 {
+			return getNewScans(scans, f2)
+		}
+		if (h1.ComparePrefixIndexKey(l2) == 0) &&
+			!(i1 == High || i1 == Both || i2 == Low || i2 == Both) {
+			return getNewScans(scans, f2)
+		}
+
+		// Merge cases
+		var low, high IndexKey
+		inclLow, inclHigh := 0, 0
+		if l1.ComparePrefixIndexKey(l2) == 0 {
+			low = l1
+			inclLow = lowInclude([]Inclusion{i1, i2})
+		}
+		if h1.ComparePrefixIndexKey(h2) == 0 {
+			high = h1
+			inclHigh = highInclude([]Inclusion{i1, i2})
+		}
+		if low == nil {
+			if l1.ComparePrefixIndexKey(l2) < 0 {
+				low = l1
+				inclLow = lowInclude([]Inclusion{i1})
+			} else {
+				low = l2
+				inclLow = lowInclude([]Inclusion{i2})
+			}
+		}
+		if high == nil {
+			if h1.ComparePrefixIndexKey(h2) > 0 {
+				high = h1
+				inclHigh = highInclude([]Inclusion{i1})
+			} else {
+				high = h2
+				inclHigh = highInclude([]Inclusion{i2})
+			}
+		}
+		f1.Low, f1.High = low, high
+		f1.Incl = inclusionMatrix[inclLow][inclHigh]
+		scans[len(scans)-1] = f1
+		return scans
+	}
+	return getNewScans(scans, f2)
+}
+
+///// END - Compose Scans for Primary Index
 
 func (r *ScanRequest) fillScans(protoScans []*protobuf.Scan) (localErr error) {
 	var l, h IndexKey
@@ -830,17 +917,33 @@ func (r *ScanRequest) fillScans(protoScans []*protobuf.Scan) (localErr error) {
 				continue
 			}
 
+			// When l == h, only valid case is: meta().id >= l && meta().id <= h
+			if bytes.Compare(l.Bytes(), h.Bytes()) == 0 && Inclusion(fl.GetInclusion()) != Both {
+				continue
+			}
+
+			compfil := CompositeElementFilter{
+				Low:       l,
+				High:      h,
+				Inclusion: Inclusion(fl.GetInclusion()),
+			}
+
 			filter := Filter{
-				CompositeFilters: nil,
-				Inclusion:        Inclusion(fl.GetInclusion()),
+				CompositeFilters: []CompositeElementFilter{compfil},
+				Inclusion:        compfil.Inclusion,
 				Low:              l,
 				High:             h,
 			}
 			filters = append(filters, filter)
-			p1 := IndexPoint{Value: filter.Low, FilterId: len(filters) - 1, Type: "low"}
-			p2 := IndexPoint{Value: filter.High, FilterId: len(filters) - 1, Type: "high"}
-			points = append(points, p1, p2)
 		}
+		// Sort Filters based only on low value
+		sort.Sort(Filters(filters))
+		var scans []Scan
+		for _, filter := range filters {
+			scans = MergeFiltersForPrimary(scans, filter)
+		}
+		r.Scans = scans
+		return
 	} else {
 		for _, protoScan := range protoScans {
 			skipScan := false
@@ -1259,7 +1362,7 @@ func getReverseCollatedIndexKey(input []byte, desc []bool) IndexKey {
 }
 
 func flipInclusion(incl Inclusion, desc []bool) Inclusion {
-	if desc != nil && desc[0] {
+	if len(desc) != 0 && desc[0] {
 		if incl == Low {
 			return High
 		} else if incl == High {
@@ -1424,4 +1527,42 @@ func minlen(x, y IndexPoint) IndexPoint {
 		return x
 	}
 	return y
+}
+
+/////////////////////////////////////////////////////////////////////////
+//
+// Filters Implementation
+//
+/////////////////////////////////////////////////////////////////////////
+
+func (fl Filters) Len() int {
+	return len(fl)
+}
+
+func (fl Filters) Swap(i, j int) {
+	fl[i], fl[j] = fl[j], fl[i]
+}
+
+func (fl Filters) Less(i, j int) bool {
+	return FilterLessThan(fl[i], fl[j])
+}
+
+// Return true if x < y
+func FilterLessThan(x, y Filter) bool {
+	a := x.Low
+	b := y.Low
+	if a == MinIndexKey {
+		return true
+	} else if a == MaxIndexKey {
+		return false
+	} else if b == MinIndexKey {
+		return false
+	} else if b == MaxIndexKey {
+		return true
+	}
+
+	if a.ComparePrefixIndexKey(b) < 0 {
+		return true
+	}
+	return false
 }

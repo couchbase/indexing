@@ -13,8 +13,11 @@ package planner
 import (
 	"errors"
 	"fmt"
+	"github.com/couchbase/indexing/secondary/logging"
 	"math"
 	"math/rand"
+	"os"
+	"runtime/pprof"
 	"strconv"
 	"strings"
 )
@@ -548,4 +551,17 @@ func numIndexWithNoUsageInfo(indexer *IndexerNode) int {
 	}
 
 	return count
+}
+
+func startCPUProfile(filename string) {
+	fd, err := os.Create(filename)
+	if err != nil {
+		logging.Errorf("Planner:: unable to create %q: %v\n", filename, err)
+		return
+	}
+	pprof.StartCPUProfile(fd)
+}
+
+func stopCPUProfile() {
+	pprof.StopCPUProfile()
 }
