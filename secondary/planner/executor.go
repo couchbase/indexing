@@ -1100,6 +1100,17 @@ func indexUsageFromSpec(sizing SizingMethod, spec *IndexSpec) ([]*IndexUsage, er
 	}
 	numVbuckets := config["indexer.numVbuckets"].Int()
 
+	if len(spec.PartitionScheme) == 0 {
+		spec.PartitionScheme = common.SINGLE
+	}
+
+	if spec.NumPartition == 0 {
+		spec.NumPartition = 1
+		if common.IsPartitioned(common.PartitionScheme(spec.PartitionScheme)) {
+			spec.NumPartition = uint64(config["indexer.numPartitions"].Int())
+		}
+	}
+
 	var startPartnId int
 	if spec.NumPartition > 1 {
 		startPartnId = 1

@@ -1391,12 +1391,14 @@ func (s *Solution) PrintLayout() {
 
 		logging.Infof("")
 		logging.Infof("Indexer serverGroup:%v, nodeId:%v, nodeUUID:%v, useLiveData:%v", indexer.ServerGroup, indexer.NodeId, indexer.NodeUUID, s.UseLiveData())
-		logging.Infof("Indexer total memory:%v (%s), mem:%v (%s), overhead:%v (%s), data:%v (%s) cpu:%.4f, numIndexes:%v isDeleted:%v isNew:%v exclude:%v",
+		logging.Infof("Indexer total memory:%v (%s), mem:%v (%s), overhead:%v (%s), data:%v (%s) cpu:%.4f, numIndexes:%v",
 			indexer.GetMemTotal(s.UseLiveData()), formatMemoryStr(uint64(indexer.GetMemTotal(s.UseLiveData()))),
 			indexer.GetMemUsage(s.UseLiveData()), formatMemoryStr(uint64(indexer.GetMemUsage(s.UseLiveData()))),
 			indexer.GetMemOverhead(s.UseLiveData()), formatMemoryStr(uint64(indexer.GetMemOverhead(s.UseLiveData()))),
 			indexer.GetDataSize(s.UseLiveData()), formatMemoryStr(uint64(indexer.GetDataSize(s.UseLiveData()))),
-			indexer.GetCpuUsage(s.UseLiveData()), len(indexer.Indexes), indexer.IsDeleted(), indexer.isNew, indexer.exclude)
+			indexer.GetCpuUsage(s.UseLiveData()), len(indexer.Indexes))
+		logging.Infof("Indexer isDeleted:%v isNew:%v exclude:%v meetConstraint:%v",
+			indexer.IsDeleted(), indexer.isNew, indexer.exclude, indexer.meetConstraint)
 
 		for _, index := range indexer.Indexes {
 			logging.Infof("\t\t------------------------------------------------------------------------------------------------------------------")
@@ -2877,8 +2879,9 @@ func (c *IndexerConstraint) SatisfyClusterConstraint(s *Solution, eligibles map[
 func newIndexerNode(nodeId string, sizing SizingMethod) *IndexerNode {
 
 	r := &IndexerNode{
-		NodeId:   nodeId,
-		NodeUUID: "tempNodeUUID_" + nodeId,
+		NodeId:         nodeId,
+		NodeUUID:       "tempNodeUUID_" + nodeId,
+		meetConstraint: true,
 	}
 
 	sizing.ComputeIndexerSize(r)
