@@ -472,8 +472,8 @@ func (c *RequestBroker) scatter(client []*GsiScanClient, index *common.IndexDefn
 		}
 	}
 
-	logging.Verbosef("scatter: requestId %v limit %v offset %v sorted %v pushdown limit %v pushdown offset %v pushdown sorted %v",
-		c.requestId, c.limit, c.offset, c.sorted, c.pushdownLimit, c.pushdownOffset, c.pushdownSorted)
+	logging.Verbosef("scatter: requestId %v limit %v offset %v sorted %v pushdown limit %v pushdown offset %v pushdown sorted %v isAggr %v",
+		c.requestId, c.limit, c.offset, c.sorted, c.pushdownLimit, c.pushdownOffset, c.pushdownSorted, c.grpAggr != nil)
 
 	if c.projections != nil {
 		logging.Debugf("scatter: requestId %v projection %v Desc %v", c.requestId, c.projections.EntryKeys, c.projDesc)
