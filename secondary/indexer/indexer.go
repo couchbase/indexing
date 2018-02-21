@@ -307,7 +307,13 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	addr := net.JoinHostPort("", idx.config["httpPort"].String())
 	logging.PeriodicProfile(logging.Debug, addr, "goroutine")
 	go func() {
-		if err := http.ListenAndServe(addr, nil); err != nil {
+		srv := &http.Server{
+			ReadTimeout:  time.Duration(idx.config["http.readTimeout"].Int()) * time.Second,
+			WriteTimeout: time.Duration(idx.config["http.writeTimeout"].Int()) * time.Second,
+			Addr:         addr,
+			Handler:      nil,
+		}
+		if err := srv.ListenAndServe(); err != nil {
 			logging.Fatalf("indexer:: Error Starting Http Server: %v", err)
 			common.CrashOnError(err)
 		}
