@@ -1306,6 +1306,20 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.http.readTimeout": ConfigValue{
+		1200,
+		"timeout in seconds, is indexer http server's read timeout",
+		1200,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.http.writeTimeout": ConfigValue{
+		1200,
+		"timeout in seconds, is indexer http server's write timeout",
+		1200,
+		false, // mutable
+		false, // case-insensitive
+	},
 
 	// Indexer dynamic settings
 	"indexer.settings.compaction.check_period": ConfigValue{
