@@ -983,6 +983,8 @@ func (ar *aggrRow) AddAggregate(aggrs []*aggrVal) error {
 			for j := 1; j <= agg.count-1; j++ {
 				if agg.n1qlValue {
 					ar.aggrs[i].fn.AddDeltaObj(agg.obj)
+				} else if agg.typ == c.AGG_SUM {
+					ar.aggrs[i].fn.AddDelta(agg.decoded)
 				} else {
 					ar.aggrs[i].fn.AddDeltaRaw(agg.raw)
 				}
