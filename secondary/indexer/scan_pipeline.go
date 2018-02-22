@@ -1107,7 +1107,7 @@ func projectGroupAggr(buf []byte, projection *Projection,
 				switch v := val.(type) {
 
 				case []byte:
-					if isPrimary {
+					if isPrimary && !isEncodedNull(v) {
 						val, err := encodeValue(string(v))
 						if err != nil {
 							l.Errorf("ScanPipeline::projectGroupAggr encodeValue error %v", err)
@@ -1164,6 +1164,10 @@ func encodeValue(raw interface{}) ([]byte, error) {
 	}
 
 	return encval, nil
+}
+
+func isEncodedNull(v []byte) bool {
+	return bytes.Equal(v, encodedNull)
 }
 
 /////////////////////////////////////////////////////////////////////////
