@@ -1346,6 +1346,37 @@ func TestGroupAggrPrimary(t *testing.T) {
 		}
 		executeGroupAggrTest(ga, proj, n1qlEquivalent, index, t)
 	}
+
+	{
+
+		//select count(null) from default
+		n1qlEquivalent = "select count(null) as a from default"
+
+		a1 := &qc.Aggregate{AggrFunc: c.AGG_COUNT, EntryKeyId: 1, KeyPos: -1, Expr: "NULL"}
+		aggregates := []*qc.Aggregate{a1}
+
+		ga := &qc.GroupAggr{
+			Name:               "primary",
+			Group:              nil,
+			Aggrs:              aggregates,
+			DependsOnIndexKeys: []int32{0},
+			IndexKeyNames: []string{
+				"(meta(`default`).`id`)"},
+		}
+
+		proj := &qc.IndexProjection{
+			EntryKeys: []int64{1},
+		}
+		executeGroupAggrTest(ga, proj, n1qlEquivalent, index, t)
+
+		//select min(null) from default
+		n1qlEquivalent = "select min(null) as a from default"
+
+		ga.Aggrs[0].AggrFunc = c.AGG_MIN
+		executeGroupAggrTest(ga, proj, n1qlEquivalent, index, t)
+
+	}
+
 	secondaryindex.UseClient = tmpclient
 }
 
