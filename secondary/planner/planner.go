@@ -216,6 +216,7 @@ type IndexUsage struct {
 	ActualBuildPercent    uint64  `json:"actualBuildPercent"`
 	ActualResidentPercent uint64  `json:"actualResidentPercent"`
 	ActualDataSize        uint64  `json:"actualDataSize"`
+	ActualNumDocs         uint64  `json:"actualNumDocs"`
 
 	// input: resource consumption (estimated sizing)
 	NoUsageInfo       bool   `json:"NoUsageInfo"`
@@ -1780,7 +1781,7 @@ func (s *Solution) calculateSize() {
 
 	for _, indexer := range s.Placement {
 		for _, index := range indexer.Indexes {
-			s.sizing.ComputeIndexSize(index)
+			index.ComputeSizing(s.UseLiveData(), s.sizing)
 		}
 	}
 
@@ -2157,7 +2158,11 @@ func (s *Solution) runSizeEstimation(placement PlacementMethod) {
 		return
 	}
 
-	// only enable estimation if eligible indexes have no sizing info
+	// Only enable estimation if eligible indexes have no sizing info.
+	// Do not turn on estimation if eligible has sizing info, but
+	// there are existing deferred index.   Turn it on may cause
+	// new index not being able to place properly, since existing
+	// deferred index may use up available memory during estimation.
 	eligibles := placement.GetEligibleIndexes()
 	for eligible, _ := range eligibles {
 		if !eligible.NoUsageInfo {
@@ -2211,6 +2216,10 @@ func (s *Solution) runSizeEstimation(placement PlacementMethod) {
 	// calculate total free memory
 	//
 	threshold := float64(0.2)
+	max := float64(s.computeMaxMemUsage())
+	if max < float64(s.constraint.GetMemQuota()) {
+		max = float64(s.constraint.GetMemQuota())
+	}
 
 retry1:
 	var indexers []*IndexerNode
@@ -2224,8 +2233,8 @@ retry1:
 		}
 
 		// Do not use Cpu for estimation for now since cpu measurement is fluctuating
-		freeMem := float64(s.constraint.GetMemQuota()) - float64(indexer.GetMemTotal(s.UseLiveData()))
-		freeMemRatio := freeMem / float64(s.constraint.GetMemQuota())
+		freeMem := max - float64(indexer.GetMemTotal(s.UseLiveData()))
+		freeMemRatio := freeMem / float64(max)
 		if freeMem > 0 && freeMemRatio > threshold {
 			// freeMem is a positive number
 			adjFreeMem := uint64(freeMem * 0.8)
@@ -2365,6 +2374,18 @@ func (s *Solution) computeResourceUsage(indexer *IndexerNode) float64 {
 func (s *Solution) computeMeanResourceUsage() float64 {
 
 	return 3
+}
+
+func (s *Solution) computeMaxMemUsage() uint64 {
+
+	max := uint64(0)
+	for _, indexer := range s.Placement {
+		if indexer.GetMemTotal(s.UseLiveData()) > max {
+			max = indexer.GetMemTotal(s.UseLiveData())
+		}
+	}
+
+	return max
 }
 
 //////////////////////////////////////////////////////////////
@@ -2896,9 +2917,10 @@ func newIndexerNode(nodeId string, sizing SizingMethod) *IndexerNode {
 func CreateIndexerNodeWithIndexes(nodeId string, sizing SizingMethod, indexes []*IndexUsage) *IndexerNode {
 
 	r := &IndexerNode{
-		NodeId:   nodeId,
-		NodeUUID: "tempNodeUUID_" + nodeId,
-		Indexes:  indexes,
+		NodeId:         nodeId,
+		NodeUUID:       "tempNodeUUID_" + nodeId,
+		Indexes:        indexes,
+		meetConstraint: true,
 	}
 
 	for _, index := range indexes {
@@ -3188,7 +3210,7 @@ func (o *IndexerNode) SatisfyNodeConstraint() bool {
 }
 
 //
-// Evaluate if indexer satisfy constraint
+// Evaluate if indexer satisfy constraint after adding/removing index
 //
 func (o *IndexerNode) EvaluateNodeConstraint(s *Solution, canAddIndex bool, idxToAdd *IndexUsage, idxRemoved *IndexUsage) {
 
@@ -3238,7 +3260,7 @@ func (o *IndexerNode) EvaluateNodeStats(s *Solution) {
 	for _, index := range o.Indexes {
 
 		// calculate num empty index
-		if index.GetMemUsage(s.UseLiveData()) == 0 {
+		if !index.HasSizing(s.UseLiveData()) {
 			o.numEmptyIndex++
 		}
 
@@ -3429,10 +3451,45 @@ func (o *IndexUsage) HasSizing(useLive bool) bool {
 	}
 
 	if useLive {
-		return o.ActualMemUsage != 0
+		return o.ActualMemUsage != 0 || o.ActualCpuUsage != 0 || o.ActualDataSize != 0
 	}
 
-	return o.MemUsage != 0
+	return o.MemUsage != 0 || o.CpuUsage != 0 || o.DataSize != 0
+}
+
+func (o *IndexUsage) HasSizingInputs() bool {
+
+	return o.NumOfDocs != 0 && ((!o.IsPrimary && o.AvgSecKeySize != 0) || (o.IsPrimary && o.AvgDocKeySize != 0))
+}
+
+func (o *IndexUsage) ComputeSizing(useLive bool, sizing SizingMethod) {
+
+	// Compute Sizing.  This can be based on either sizing inputs or real index stats.
+	// If coming from real index stats, this will not overwrite the derived sizing from stats (e.g. ActualMemUsage).
+	sizing.ComputeIndexSize(o)
+
+	if useLive && o.HasSizingInputs() {
+		// If an index has sizing inputs, but it does not have actual sizing stats in a live cluster, then
+		// use the computed sizing formula for planning and rebalancing.
+		// The index could be a new index to be placed, or an existing index already in cluster.
+		// For an existing index in cluster that does not have actual sizing stats:
+		// 1) A deferred index that has yet to be built
+		// 2) A index still waiting to be create/build (from create token)
+		// 3) A index from an empty bucket
+		if o.ActualMemUsage == 0 && o.ActualDataSize == 0 && o.ActualCpuUsage == 0 {
+			o.ActualMemUsage = o.MemUsage
+			o.ActualDataSize = o.DataSize
+			o.ActualCpuUsage = o.CpuUsage
+			// do not copy mem overhead since this is usually over-estimated
+			o.ActualMemOverhead = 0
+		}
+	}
+
+	if !useLive {
+		o.NoUsageInfo = o.MemUsage == 0 && o.CpuUsage == 0 && o.DataSize == 0
+	} else {
+		o.NoUsageInfo = o.ActualMemUsage == 0 && o.ActualCpuUsage == 0 && o.ActualDataSize == 0
+	}
 }
 
 func (o *IndexUsage) GetDisplayName() string {
@@ -4726,21 +4783,6 @@ func (p *RandomPlacement) findConstrainedNodes(s *Solution, constraint Constrain
 
 	result := ([]*IndexerNode)(nil)
 
-	/*
-		outNodes := s.getDeleteNodes()
-		if len(outNodes) > 0 {
-			for _, indexer := range outNodes {
-				if len(indexer.Indexes) > 0 {
-					result = append(result, indexer)
-				}
-			}
-
-			if len(result) > 0 {
-				return shuffleNode(p.rs, result)
-			}
-		}
-	*/
-
 	// look for indexer node that do not satisfy constraint
 	for _, indexer := range indexers {
 		if !indexer.SatisfyNodeConstraint() {
@@ -4913,7 +4955,7 @@ func (s *MOISizingMethod) ComputeIndexSize(idx *IndexUsage) {
 			idx.DataSize = (46 + (74+idx.AvgArrKeySize+idx.AvgDocKeySize)*idx.AvgArrSize) * idx.NumOfDocs
 		} else if idx.ActualKeySize != 0 {
 			// secondary index mem size : (46 + ActualKeySize) * NumberOfItems
-			idx.DataSize = (46 + idx.ActualKeySize) * idx.NumOfDocs
+			idx.DataSize = (46 + idx.ActualKeySize) * idx.ActualNumDocs
 		}
 	} else {
 		if idx.AvgDocKeySize != 0 {
@@ -4921,7 +4963,7 @@ func (s *MOISizingMethod) ComputeIndexSize(idx *IndexUsage) {
 			idx.DataSize = (74 + idx.AvgDocKeySize) * idx.NumOfDocs
 		} else if idx.ActualKeySize != 0 {
 			// primary index mem size : ActualKeySize * NumberOfItems
-			idx.DataSize = idx.ActualKeySize * idx.NumOfDocs
+			idx.DataSize = idx.ActualKeySize * idx.ActualNumDocs
 		}
 	}
 	idx.MemUsage = idx.DataSize
@@ -5003,7 +5045,7 @@ func (s *PlasmaSizingMethod) ComputeIndexSize(idx *IndexUsage) {
 			idx.DataSize = (46 + (74+idx.AvgArrKeySize+idx.AvgDocKeySize)*idx.AvgArrSize) * idx.NumOfDocs * 2
 		} else if idx.ActualKeySize != 0 {
 			// secondary index mem size : (46 + ActualKeySize) * NumberOfItems
-			idx.DataSize = (46 + idx.ActualKeySize) * idx.NumOfDocs
+			idx.DataSize = (46 + idx.ActualKeySize) * idx.ActualNumDocs
 		}
 	} else {
 		if idx.AvgDocKeySize != 0 {
@@ -5012,7 +5054,7 @@ func (s *PlasmaSizingMethod) ComputeIndexSize(idx *IndexUsage) {
 		} else if idx.ActualKeySize != 0 {
 			// primary index mem size : ActualKeySize * NumberOfItems
 			// actual key size = mem used / num docs (include both main and back index)
-			idx.DataSize = idx.ActualKeySize * idx.NumOfDocs
+			idx.DataSize = idx.ActualKeySize * idx.ActualNumDocs
 		}
 	}
 
@@ -5039,8 +5081,14 @@ func (s *PlasmaSizingMethod) ComputeIndexOverhead(idx *IndexUsage) uint64 {
 
 	mvcc := func() uint64 {
 		count := uint64(idx.MutationRate * 60 * 20)
-		if idx.NumOfDocs*3 < count {
-			return idx.NumOfDocs * 3
+		numDocs := uint64(0)
+		if idx.ActualNumDocs != 0 {
+			numDocs = idx.ActualNumDocs
+		} else {
+			numDocs = idx.NumOfDocs
+		}
+		if numDocs*3 < count {
+			return numDocs * 3
 		}
 		return count
 	}

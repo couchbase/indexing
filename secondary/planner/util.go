@@ -13,6 +13,7 @@ package planner
 import (
 	"errors"
 	"fmt"
+	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	"math"
 	"math/rand"
@@ -564,4 +565,38 @@ func startCPUProfile(filename string) {
 
 func stopCPUProfile() {
 	pprof.StopCPUProfile()
+}
+
+//
+// Make index usage from definition
+//
+func makeIndexUsageFromDefn(defn *common.IndexDefn, instId common.IndexInstId, partnId common.PartitionId, numPartition uint64) *IndexUsage {
+
+	index := &IndexUsage{
+		DefnId:        defn.DefnId,
+		InstId:        instId,
+		PartnId:       partnId,
+		Name:          defn.Name,
+		Bucket:        defn.Bucket,
+		IsPrimary:     defn.IsPrimary,
+		StorageMode:   common.IndexTypeToStorageMode(defn.Using).String(),
+		NumOfDocs:     defn.NumDoc / numPartition,
+		AvgSecKeySize: defn.SecKeySize,
+		AvgDocKeySize: defn.DocKeySize,
+		AvgArrSize:    defn.ArrSize,
+		AvgArrKeySize: defn.SecKeySize,
+		ResidentRatio: defn.ResidentRatio,
+		NoUsageInfo:   defn.Deferred, // This value will be reset in IndexUsage.ComputeSizing()
+	}
+
+	if defn.ResidentRatio == 0 {
+		index.ResidentRatio = 100
+	}
+
+	if !defn.IsArrayIndex {
+		index.AvgArrKeySize = 0
+		index.AvgArrSize = 0
+	}
+
+	return index
 }

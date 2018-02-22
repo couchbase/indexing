@@ -102,7 +102,7 @@ func recalculateIndexerSize(plan *Plan) {
 
 	for _, indexer := range plan.Placement {
 		for _, index := range indexer.Indexes {
-			sizing.ComputeIndexSize(index)
+			index.ComputeSizing(true, sizing)
 		}
 	}
 
@@ -279,16 +279,14 @@ func ConvertToIndexUsage(config common.Config, defn *common.IndexDefn, localMeta
 			for _, partn := range inst.Partitions {
 
 				// create an index usage object
-				index := newIndexUsage(defn.DefnId, common.IndexInstId(inst.InstId), common.PartitionId(partn.PartId), defn.Name, defn.Bucket)
+				index := makeIndexUsageFromDefn(defn, common.IndexInstId(inst.InstId), common.PartitionId(partn.PartId), uint64(inst.NumPartitions))
 
 				// index is pinned to a node
 				if len(defn.Nodes) != 0 {
 					index.Hosts = defn.Nodes
 				}
 
-				// update sizing
-				index.IsPrimary = defn.IsPrimary
-				index.StorageMode = common.IndexTypeToStorageMode(defn.Using).String()
+				// This value will be reset in IndexUsage.ComputeSizing()
 				index.NoUsageInfo = defn.Deferred && (state == common.INDEX_STATE_READY || state == common.INDEX_STATE_CREATED)
 
 				// update partition
@@ -460,7 +458,7 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 			// items_count captures number of key per index
 			key = fmt.Sprintf("%v:%v:items_count", index.Bucket, indexName)
 			if itemsCount, ok := statsMap[key]; ok {
-				index.NumOfDocs = uint64(itemsCount.(float64))
+				index.ActualNumDocs = uint64(itemsCount.(float64))
 			}
 
 			// build completion
@@ -482,6 +480,7 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 			if dataSize, ok := statsMap[key]; ok {
 				index.ActualDataSize = uint64(dataSize.(float64))
 				// calibrate memory usage based on resident percent
+				// ActualMemUsage will be rewritten later
 				index.ActualMemUsage = index.ActualDataSize * index.ActualResidentPercent / 100
 				totalIndexMemUsed += index.ActualMemUsage
 			}
@@ -496,14 +495,8 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 			} else if !index.IsPrimary {
 				// Aproximate AvgSecKeySize.   AvgSecKeySize includes both
 				// sec key len + doc key len
-				if index.NumOfDocs != 0 && index.ActualMemUsage != 0 {
-					index.ActualKeySize = index.ActualMemUsage / index.NumOfDocs
-				}
-				if index.Instance.Defn.SecKeySize != 0 {
-					index.AvgSecKeySize = index.Instance.Defn.SecKeySize
-				}
-				if index.Instance.Defn.DocKeySize != 0 {
-					index.AvgDocKeySize = index.Instance.Defn.DocKeySize
+				if index.ActualNumDocs != 0 && index.ActualDataSize != 0 {
+					index.ActualKeySize = index.ActualDataSize / index.ActualNumDocs
 				}
 			}
 
@@ -514,11 +507,8 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 			} else if index.IsPrimary {
 				// Aproximate AvgDocKeySize.  Subtract 74 bytes for main
 				// index overhead
-				if index.NumOfDocs != 0 && index.ActualMemUsage != 0 {
-					index.ActualKeySize = index.ActualMemUsage / index.NumOfDocs
-				}
-				if index.Instance.Defn.DocKeySize != 0 {
-					index.AvgDocKeySize = index.Instance.Defn.DocKeySize
+				if index.ActualNumDocs != 0 && index.ActualDataSize != 0 {
+					index.ActualKeySize = index.ActualDataSize / index.ActualNumDocs
 				}
 			}
 
@@ -526,20 +516,12 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 			key = fmt.Sprintf("%v:%v:avg_arr_size", index.Bucket, indexName)
 			if avgArrSize, ok := statsMap[key]; ok {
 				index.AvgArrSize = uint64(avgArrSize.(float64))
-			} else if !index.IsPrimary {
-				if index.Instance.Defn.IsArrayIndex && index.Instance.Defn.ArrSize != 0 {
-					index.AvgArrSize = index.Instance.Defn.ArrSize
-				}
 			}
 
 			// These stats are currently unavailable in 4.5.
 			key = fmt.Sprintf("%v:%v:avg_arr_key_size", index.Bucket, indexName)
 			if avgArrKeySize, ok := statsMap[key]; ok {
 				index.AvgArrKeySize = uint64(avgArrKeySize.(float64))
-			} else if !index.IsPrimary {
-				if index.Instance.Defn.IsArrayIndex && index.Instance.Defn.SecKeySize != 0 {
-					index.AvgArrKeySize = index.Instance.Defn.SecKeySize
-				}
 			}
 
 			// These stats are currently unavailable in 4.5.
@@ -578,13 +560,6 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 						totalScan += index.ScanRate
 					}
 				}
-			}
-
-			// resident ratio
-			if index.Instance.Defn.ResidentRatio != 0 {
-				index.ResidentRatio = index.Instance.Defn.ResidentRatio
-			} else {
-				index.ResidentRatio = 100
 			}
 		}
 
@@ -626,10 +601,6 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 				index.ActualMemUsage = index.ActualMemUsage * 100 / index.ActualBuildPercent
 				index.ActualMemOverhead = index.ActualMemOverhead * 100 / index.ActualBuildPercent
 				index.ActualDataSize = index.ActualDataSize * 100 / index.ActualBuildPercent
-			}
-
-			if index.ActualMemUsage != 0 {
-				index.NoUsageInfo = false
 			}
 
 			indexer.ActualDataSize += index.ActualDataSize
@@ -684,7 +655,6 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 
 			if usage > 0 {
 				index.ActualCpuUsage = usage
-				index.NoUsageInfo = false
 			}
 
 			indexer.ActualCpuUsage += index.ActualCpuUsage
@@ -1108,22 +1078,7 @@ func processCreateToken(clusterUrl string, indexers []*IndexerNode, config commo
 		}
 
 		makeIndexUsage := func(defn *common.IndexDefn, partition common.PartitionId) *IndexUsage {
-			index := &IndexUsage{
-				DefnId:        defn.DefnId,
-				InstId:        defn.InstId,
-				PartnId:       partition,
-				Name:          defn.Name,
-				Bucket:        defn.Bucket,
-				IsPrimary:     defn.IsPrimary,
-				StorageMode:   common.IndexTypeToStorageMode(defn.Using).String(),
-				NumOfDocs:     defn.NumDoc,
-				AvgSecKeySize: defn.SecKeySize,
-				AvgDocKeySize: defn.DocKeySize,
-				AvgArrSize:    defn.ArrSize,
-				AvgArrKeySize: defn.SecKeySize,
-				ResidentRatio: defn.ResidentRatio,
-				NoUsageInfo:   defn.SecKeySize == 0 && defn.DocKeySize == 0,
-			}
+			index := makeIndexUsageFromDefn(defn, defn.InstId, partition, uint64(defn.NumPartitions))
 
 			numVbuckets := config["indexer.numVbuckets"].Int()
 			pc := common.NewKeyPartitionContainer(numVbuckets, int(defn.NumPartitions), defn.PartitionScheme)
@@ -1140,19 +1095,20 @@ func processCreateToken(clusterUrl string, indexers []*IndexerNode, config commo
 				Pc:        pc,
 			}
 
+			// For planning, caller can specify a node list.  This will only add the pending-create index
+			// if it is in the node list.  Indexers outside of node list will not be considered for planning purpose.
+			// For rebalancing, it will not repair pending-create index on a failed node.  But it will move pending-create
+			// index for out-nodes.
+			index.pendingCreate = true
+
 			return index
 		}
 
-		// For planning, caller can specify a node list.  This will only add the pending-create index
-		// if it is in the node list.  Indexers outside of node list will not be considered for planning purpose.
-		// For rebalancing, it will not repair pending-create index on a failed node.  But it will move pending-create
-		// index for out-nodes.
 		addIndex := func(indexerId common.IndexerId, index *IndexUsage) bool {
 			for _, indexer := range indexers {
 				if common.IndexerId(indexer.IndexerId) == indexerId {
 					indexer.Indexes = append(indexer.Indexes, index)
 					index.initialNode = indexer
-					index.pendingCreate = true
 					return true
 				}
 			}

@@ -508,7 +508,9 @@ func plan(config *RunConfig, plan *Plan, indexes []*IndexUsage) (*SAPlanner, *Ru
 		indexes = filterPinnedIndexes(config, indexes)
 		placement = newRandomPlacement(indexes, config.AllowSwap, false)
 	}
-	adjustIndexSizingInfo(solution.UseLiveData(), indexes)
+
+	// Compute Index Sizing info and add them to solution
+	computeNewIndexSizingInfo(solution, indexes)
 	if err := placement.Add(solution, indexes); err != nil {
 		return nil, nil, err
 	}
@@ -857,7 +859,7 @@ func solutionFromPlan(command CommandType, config *RunConfig, sizing SizingMetho
 	constraint := newIndexerConstraint(memQuota, cpuQuota, resize, maxNumNode, maxCpuUse, maxMemUse)
 
 	r := newSolution(constraint, sizing, plan.Placement, plan.IsLive, useLive, config.DisableRepair)
-	r.calculateSize() // in case sizing formula changes
+	r.calculateSize() // in case sizing formula changes after the plan is saved
 
 	if shuffle != 0 {
 		placement := newRandomPlacement(indexes, config.AllowSwap, false)
@@ -959,19 +961,13 @@ func findAllPartitionedIndexExcluding(solution *Solution, excludes []*IndexUsage
 	return result
 }
 
-func adjustIndexSizingInfo(useLive bool, indexes []*IndexUsage) {
+//
+// This function should only be called if there are new indexes to be placed.
+//
+func computeNewIndexSizingInfo(s *Solution, indexes []*IndexUsage) {
 
 	for _, index := range indexes {
-		if index.MemUsage == 0 && index.ActualMemUsage == 0 {
-			index.NoUsageInfo = true
-		} else {
-			index.NoUsageInfo = false
-		}
-
-		if useLive && index.ActualMemUsage == 0 && index.MemUsage != 0 {
-			// do not copy mem overhead since this is usually over-estimated
-			index.ActualMemUsage = index.MemUsage
-		}
+		index.ComputeSizing(s.UseLiveData(), s.sizing)
 	}
 }
 
@@ -1142,6 +1138,11 @@ func indexUsageFromSpec(sizing SizingMethod, spec *IndexSpec) ([]*IndexUsage, er
 			index.Instance.ReplicaId = i
 			index.Instance.Pc = common.NewKeyPartitionContainer(numVbuckets, int(spec.NumPartition),
 				common.PartitionScheme(spec.PartitionScheme))
+			index.Instance.State = common.INDEX_STATE_READY
+			index.Instance.Stream = common.NIL_STREAM
+			index.Instance.Error = ""
+			index.Instance.Version = 0
+			index.Instance.RState = common.REBAL_ACTIVE
 
 			index.Instance.Defn.DefnId = defnId
 			index.Instance.Defn.Name = index.Name
@@ -1176,6 +1177,8 @@ func indexUsageFromSpec(sizing SizingMethod, spec *IndexSpec) ([]*IndexUsage, er
 			index.MutationRate = spec.MutationRate
 			index.ScanRate = spec.ScanRate
 
+			// This is need to compute stats for new indexes
+			// The index size will be recomputed later on in plan/rebalance
 			sizing.ComputeIndexSize(index)
 
 			result = append(result, index)

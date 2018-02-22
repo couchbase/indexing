@@ -478,6 +478,8 @@ func (t *simulator) indexUsage(s SizingMethod, bucket string, spec *CollectionSp
 		index.MutationRate = t.mutationRate(spec)
 		index.ScanRate = t.scanRate(spec)
 
+		// This is need to compute stats for new indexes
+		// The index size will be recomputed later on in plan/rebalance
 		s.ComputeIndexSize(index)
 
 		result[i] = index
