@@ -993,6 +993,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.plasma.LSSCleanerConcurrency": ConfigValue{
+		4,
+		"Number of concurrent threads used by the cleaner",
+		4,
+		false, // mutable,
+		false, // case-insensitive
+	},
 	"indexer.plasma.useMmapReads": ConfigValue{
 		false,
 		"Use mmap for reads",
