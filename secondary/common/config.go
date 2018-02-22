@@ -1000,6 +1000,13 @@ var SystemConfig = Config{
 		false, // mutable,
 		false, // case-insensitive
 	},
+	"indexer.plasma.AutoTuneLSSCleaner": ConfigValue{
+		false,
+		"Enable auto tuning of lss cleaning thresholds based on available free space",
+		false,
+		false, // mutable,
+		false, // case-insensitive
+	},
 	"indexer.plasma.useMmapReads": ConfigValue{
 		false,
 		"Use mmap for reads",
