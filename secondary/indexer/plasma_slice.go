@@ -1689,7 +1689,7 @@ func (s *plasmaSnapshot) Iterate(ctx IndexReaderContext, low, high IndexKey, inc
 	endKey := high.Bytes()
 	if len(endKey) > 0 {
 		if inclusion == High || inclusion == Both {
-			endKey = common.GenNextBiggerKey(endKey)
+			endKey = common.GenNextBiggerKey(endKey, s.isPrimary())
 		}
 
 		it.SetEndKey(endKey)
