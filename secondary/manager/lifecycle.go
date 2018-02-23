@@ -1516,9 +1516,11 @@ func (m *LifecycleMgr) handleResetIndex(content []byte) error {
 
 	inst, err := common.UnmarshallIndexInst(content)
 	if err != nil {
-		logging.Errorf("LifecycleMgr.handleResetIndex() : Unable to unmarshall index definition. Reason = %v", err)
+		logging.Errorf("LifecycleMgr.handleResetIndex() : Unable to unmarshall index instance. Reason = %v", err)
 		return err
 	}
+
+	logging.Infof("LifecycleMgr.handleResetIndex() : Reset Index %v", inst.InstId)
 
 	defn := &inst.Defn
 	oldDefn, err := m.repo.GetIndexDefnById(defn.DefnId)
