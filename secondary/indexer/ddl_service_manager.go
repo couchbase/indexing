@@ -420,7 +420,7 @@ func (m *DDLServiceMgr) updateStorageMode(storageMode common.StorageMode, httpAd
 
 	for _, addr := range httpAddrMap {
 
-		resp, err := postWithAuth(addr+"/settings", "application/json", bodybuf)
+		resp, err := postWithAuth(addr+"/internal/settings", "application/json", bodybuf)
 		if err != nil {
 			logging.Errorf("DDLServiceMgr:handleClusterStorageMode(). Encounter error when try to change setting.  Retry with another indexer node. Error:%v", err)
 			continue

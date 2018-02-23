@@ -147,7 +147,7 @@ type indexer struct {
 	rebalanceRunning bool
 	rebalanceToken   *RebalanceToken
 
-	bootsrapStorageMode common.StorageMode
+	bootstrapStorageMode common.StorageMode
 }
 
 type kvRequest struct {
@@ -262,10 +262,10 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 
 	idx.enableManager = idx.config["enableManager"].Bool()
 
-	idx.bootsrapStorageMode = idx.getBootstrapStorageMode(idx.config)
-	logging.Infof("bootstrap storage mode %v", idx.bootsrapStorageMode)
+	idx.bootstrapStorageMode = idx.getBootstrapStorageMode(idx.config)
+	logging.Infof("bootstrap storage mode %v", idx.bootstrapStorageMode)
 	if idx.enableManager {
-		idx.clustMgrAgent, res = NewClustMgrAgent(idx.clustMgrAgentCmdCh, idx.adminRecvCh, idx.config, idx.bootsrapStorageMode)
+		idx.clustMgrAgent, res = NewClustMgrAgent(idx.clustMgrAgentCmdCh, idx.adminRecvCh, idx.config, idx.bootstrapStorageMode)
 		if res.GetMsgType() != MSG_SUCCESS {
 			logging.Fatalf("Indexer::NewIndexer ClusterMgrAgent Init Error %+v", res)
 			return nil, res
@@ -3805,7 +3805,7 @@ func (idx *indexer) upgradeStorage() bool {
 		logging.Errorf("Indexer is mixed storage mode after storage upgrade")
 
 	} else if s != common.NOT_SET {
-		if s != idx.bootsrapStorageMode {
+		if s != idx.bootstrapStorageMode {
 			logging.Infof("Updating bootstrap storage mode to %v", s)
 			idx.postIndexStorageModeForBootstrap(idx.config, s)
 			return true
