@@ -1564,9 +1564,9 @@ func (m *LifecycleMgr) handleResetIndex(content []byte) error {
 		return nil
 	}
 
-	if common.IndexState(inst.State) == common.INDEX_STATE_INITIAL ||
-		common.IndexState(inst.State) == common.INDEX_STATE_CATCHUP ||
-		common.IndexState(inst.State) == common.INDEX_STATE_ACTIVE {
+	if common.IndexState(rinst.State) == common.INDEX_STATE_INITIAL ||
+		common.IndexState(rinst.State) == common.INDEX_STATE_CATCHUP ||
+		common.IndexState(rinst.State) == common.INDEX_STATE_ACTIVE {
 
 		topology.UpdateScheduledFlagForIndexInst(defn.DefnId, inst.InstId, true)
 	}
