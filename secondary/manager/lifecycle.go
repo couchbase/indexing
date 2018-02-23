@@ -1516,9 +1516,11 @@ func (m *LifecycleMgr) handleResetIndex(content []byte) error {
 
 	inst, err := common.UnmarshallIndexInst(content)
 	if err != nil {
-		logging.Errorf("LifecycleMgr.handleResetIndex() : Unable to unmarshall index definition. Reason = %v", err)
+		logging.Errorf("LifecycleMgr.handleResetIndex() : Unable to unmarshall index instance. Reason = %v", err)
 		return err
 	}
+
+	logging.Infof("LifecycleMgr.handleResetIndex() : Reset Index %v", inst.InstId)
 
 	defn := &inst.Defn
 	oldDefn, err := m.repo.GetIndexDefnById(defn.DefnId)
@@ -1562,9 +1564,9 @@ func (m *LifecycleMgr) handleResetIndex(content []byte) error {
 		return nil
 	}
 
-	if common.IndexState(inst.State) == common.INDEX_STATE_INITIAL ||
-		common.IndexState(inst.State) == common.INDEX_STATE_CATCHUP ||
-		common.IndexState(inst.State) == common.INDEX_STATE_ACTIVE {
+	if common.IndexState(rinst.State) == common.INDEX_STATE_INITIAL ||
+		common.IndexState(rinst.State) == common.INDEX_STATE_CATCHUP ||
+		common.IndexState(rinst.State) == common.INDEX_STATE_ACTIVE {
 
 		topology.UpdateScheduledFlagForIndexInst(defn.DefnId, inst.InstId, true)
 	}

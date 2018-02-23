@@ -547,6 +547,7 @@ func (m *IndexManager) MergePartition(defnId common.IndexDefnId, srcInstId commo
 
 func (m *IndexManager) ResetIndex(index common.IndexInst) error {
 
+	index.Pc = nil
 	content, err := common.MarshallIndexInst(&index)
 	if err != nil {
 		return err
@@ -564,6 +565,7 @@ func (m *IndexManager) DeleteIndexForBucket(bucket string, streamId common.Strea
 
 func (m *IndexManager) CleanupIndex(index common.IndexInst) error {
 
+	index.Pc = nil
 	content, err := common.MarshallIndexInst(&index)
 	if err != nil {
 		return err

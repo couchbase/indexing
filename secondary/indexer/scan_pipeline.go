@@ -983,6 +983,8 @@ func (ar *aggrRow) AddAggregate(aggrs []*aggrVal) error {
 			for j := 1; j <= agg.count-1; j++ {
 				if agg.n1qlValue {
 					ar.aggrs[i].fn.AddDeltaObj(agg.obj)
+				} else if agg.typ == c.AGG_SUM {
+					ar.aggrs[i].fn.AddDelta(agg.decoded)
 				} else {
 					ar.aggrs[i].fn.AddDeltaRaw(agg.raw)
 				}
@@ -1107,7 +1109,7 @@ func projectGroupAggr(buf []byte, projection *Projection,
 				switch v := val.(type) {
 
 				case []byte:
-					if isPrimary {
+					if isPrimary && !isEncodedNull(v) {
 						val, err := encodeValue(string(v))
 						if err != nil {
 							l.Errorf("ScanPipeline::projectGroupAggr encodeValue error %v", err)
@@ -1164,6 +1166,10 @@ func encodeValue(raw interface{}) ([]byte, error) {
 	}
 
 	return encval, nil
+}
+
+func isEncodedNull(v []byte) bool {
+	return bytes.Equal(v, encodedNull)
 }
 
 /////////////////////////////////////////////////////////////////////////

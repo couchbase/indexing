@@ -12,10 +12,12 @@ package indexer
 import (
 	"bytes"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/gob"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/ioutil"
 	"net"
 	"net/http"
 	"os"
@@ -149,7 +151,7 @@ type indexer struct {
 	mergePartitionList []mergeSpec
 	prunePartitionList []pruneSpec
 
-	bootsrapStorageMode common.StorageMode
+	bootstrapStorageMode common.StorageMode
 }
 
 type kvRequest struct {
@@ -276,10 +278,10 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 
 	idx.enableManager = idx.config["enableManager"].Bool()
 
-	idx.bootsrapStorageMode = idx.getBootstrapStorageMode(idx.config)
-	logging.Infof("bootstrap storage mode %v", idx.bootsrapStorageMode)
+	idx.bootstrapStorageMode = idx.getBootstrapStorageMode(idx.config)
+	logging.Infof("bootstrap storage mode %v", idx.bootstrapStorageMode)
 	if idx.enableManager {
-		idx.clustMgrAgent, res = NewClustMgrAgent(idx.clustMgrAgentCmdCh, idx.adminRecvCh, idx.config, idx.bootsrapStorageMode)
+		idx.clustMgrAgent, res = NewClustMgrAgent(idx.clustMgrAgentCmdCh, idx.adminRecvCh, idx.config, idx.bootstrapStorageMode)
 		if res.GetMsgType() != MSG_SUCCESS {
 			logging.Fatalf("Indexer::NewIndexer ClusterMgrAgent Init Error %+v", res)
 			return nil, res
@@ -328,7 +330,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		var reload bool = false
 		var tlslsnr *net.Listener = nil
 
-		cbauth.RegisterCertRefreshCallback(func() error {
+		cbauth.RegisterTLSRefreshCallback(func() error {
 			if tlslsnr != nil {
 				reload = true
 				(*tlslsnr).Close()
@@ -343,17 +345,37 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 					logging.Fatalf("indexer:: Error in loading SSL certificate: %v", err)
 					return
 				}
+
+				clientAuthType, err := cbauth.GetClientCertAuthType()
+				if err != nil {
+					logging.Fatalf("indexer:: Failed to get client cert auth type from cbauth, err: %v", err)
+					return
+				}
+
+				config := &tls.Config{
+					Certificates:             []tls.Certificate{cert},
+					CipherSuites:             []uint16{tls.TLS_RSA_WITH_AES_256_CBC_SHA},
+					MinVersion:               tls.VersionTLS12,
+					PreferServerCipherSuites: true,
+					ClientAuth:               clientAuthType,
+				}
+
+				if clientAuthType != tls.NoClientCert {
+					caCert, err := ioutil.ReadFile(certFile)
+					if err != nil {
+						logging.Fatalf("indexer:: Error in reading cacert file, err: %v", err)
+						return
+					}
+					caCertPool := x509.NewCertPool()
+					caCertPool.AppendCertsFromPEM(caCert)
+					config.ClientCAs = caCertPool
+				}
+
 				// allow only strong ssl as this is an internal API and interop is not a concern
 				sslsrv := &http.Server{
 					Addr:         sslAddr,
 					TLSNextProto: make(map[string]func(*http.Server, *tls.Conn, http.Handler), 0),
-					TLSConfig: &tls.Config{
-						Certificates:             []tls.Certificate{cert},
-						CipherSuites:             []uint16{tls.TLS_RSA_WITH_AES_256_CBC_SHA},
-						MinVersion:               tls.VersionTLS12,
-						PreferServerCipherSuites: true,
-						// ClientAuth:            tls.RequireAndVerifyClientCert,
-					},
+					TLSConfig:    config,
 				}
 				// replace below with ListenAndServeTLS on moving to go1.8
 				lsnr, err := net.Listen("tcp", sslAddr)
@@ -4522,7 +4544,7 @@ func (idx *indexer) upgradeStorage() bool {
 		logging.Errorf("Indexer is mixed storage mode after storage upgrade")
 
 	} else if s != common.NOT_SET {
-		if s != idx.bootsrapStorageMode {
+		if s != idx.bootstrapStorageMode {
 			logging.Infof("Updating bootstrap storage mode to %v", s)
 			idx.postIndexStorageModeForBootstrap(idx.config, s)
 			return true
