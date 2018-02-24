@@ -267,6 +267,9 @@ type Solution struct {
 
 	// placement of indexes	in nodes
 	Placement []*IndexerNode `json:"placement,omitempty"`
+
+	// constraint check
+	enforceConstraint bool
 }
 
 type Violations struct {
@@ -328,10 +331,6 @@ type UsageBasedCostMethod struct {
 	DataMoved      uint64  `json:"dataMoved,omitempty"`
 	TotalIndex     uint64  `json:"totalIndex,omitempty"`
 	IndexMoved     uint64  `json:"indexMoved,omitempty"`
-	IdxMean        float64 `json:"idxMean,omitempty"`
-	IdxStdDev      float64 `json:"idxStdDev,omitempty"`
-	MemFree        float64 `json:"memFree,omitempty"`
-	CpuFree        float64 `json:"cpuFree,omitempty"`
 	constraint     ConstraintMethod
 	dataCostWeight float64
 	cpuCostWeight  float64
@@ -1264,6 +1263,7 @@ func (s *Solution) clone() *Solution {
 		memMean:            s.memMean,
 		cpuMean:            s.cpuMean,
 		dataMean:           s.dataMean,
+		enforceConstraint:  s.enforceConstraint,
 	}
 
 	for _, node := range s.Placement {
@@ -1415,7 +1415,7 @@ func (s *Solution) PrintLayout() {
 				index.GetCpuUsage(s.UseLiveData()),
 				uint64(index.GetResidentRatio(s.UseLiveData())),
 				index.GetBuildPercent(s.UseLiveData()),
-				index.NoUsageInfo)
+				index.NoUsageInfo && index.HasSizing(s.UseLiveData()))
 		}
 	}
 }
@@ -1497,6 +1497,32 @@ func (s *Solution) ComputeEmptyIndexDistribution() (float64, float64) {
 	stdDevIdxUsage := math.Sqrt(varianceIdxUsage)
 
 	return meanIdxUsage, stdDevIdxUsage
+}
+
+//
+// This function returns the residual memory after subtracting ONLY the estimated emtpy index memory.
+// The cost function tries to maximize the total memory of emtpy index (or minimize
+// the residual memory after subtracting empty index).
+// The residual memory is further calibrated by empty index usage ratio (the total empty index memory over the total memory)
+// If there is no empty index, this function returns 0.
+//
+func (s *Solution) ComputeCapacityAfterEmptyIndex() float64 {
+
+	max := s.computeMaxMemUsage()
+	if max < s.constraint.GetMemQuota() {
+		max = s.constraint.GetMemQuota()
+	}
+
+	var emptyIdxMem uint64
+	for _, indexer := range s.Placement {
+		emptyIdxMem += indexer.computeFreeMemPerEmptyIndex(s, max, 0) * uint64(indexer.numEmptyIndex)
+	}
+
+	maxTotal := max * uint64(len(s.Placement))
+	usageAfterEmptyIdx := float64(maxTotal-emptyIdxMem) / float64(maxTotal)
+	weight := float64(emptyIdxMem) / float64(maxTotal)
+
+	return usageAfterEmptyIdx * weight
 }
 
 //
@@ -1892,6 +1918,11 @@ func (s *Solution) ignoreResourceConstraint() bool {
 	// always honor resource constriant when doing simulation
 	if !s.UseLiveData() {
 		return false
+	}
+
+	// always enforce constraint check
+	if s.enforceConstraint {
+		return true
 	}
 
 	// ignore resource constraint for plasma or fdb during rebalance
@@ -2344,7 +2375,7 @@ func (s *Solution) canRunEstimation() bool {
 // 2) cpu
 // 3) data
 //
-func (s *Solution) computeResourceUsage(indexer *IndexerNode) float64 {
+func (s *Solution) computeUsageRatio(indexer *IndexerNode) float64 {
 
 	memCost := float64(0)
 	cpuCost := float64(0)
@@ -2371,7 +2402,7 @@ func (s *Solution) computeResourceUsage(indexer *IndexerNode) float64 {
 // 2) cpu
 // 3) data
 //
-func (s *Solution) computeMeanResourceUsage() float64 {
+func (s *Solution) computeMeanUsageRatio() float64 {
 
 	return 3
 }
@@ -2615,7 +2646,6 @@ func (c *IndexerConstraint) CanAddIndex(s *Solution, n *IndexerNode, u *IndexUsa
 		return DeleteNodeViolation
 	}
 
-	//TODO
 	for _, index := range n.Indexes {
 		// check replica
 		if index.IsReplica(u) {
@@ -3300,6 +3330,24 @@ func (o *IndexerNode) Evaluate(s *Solution) {
 	o.EvaluateNodeStats(s)
 }
 
+//
+// Evaluate free memory per empty index
+//
+func (o *IndexerNode) computeFreeMemPerEmptyIndex(s *Solution, maxThreshold uint64, indexToAdd int) uint64 {
+
+	memPerEmpIndex := uint64(0)
+
+	if maxThreshold > o.GetMemTotal(s.UseLiveData()) {
+		freeMem := maxThreshold - o.GetMemTotal(s.UseLiveData())
+
+		if o.numEmptyIndex+indexToAdd > 0 {
+			memPerEmpIndex = freeMem / uint64(o.numEmptyIndex+indexToAdd)
+		}
+	}
+
+	return memPerEmpIndex
+}
+
 //////////////////////////////////////////////////////////////
 // IndexUsage
 //////////////////////////////////////////////////////////////
@@ -3662,8 +3710,6 @@ func (c *UsageBasedCostMethod) Cost(s *Solution) float64 {
 	c.MemMean, c.MemStdDev = s.ComputeMemUsage()
 	c.CpuMean, c.CpuStdDev = s.ComputeCpuUsage()
 	c.TotalData, c.DataMoved, c.TotalIndex, c.IndexMoved = s.computeIndexMovement(false)
-	c.MemFree, c.CpuFree = s.computeFreeRatio()
-	c.IdxMean, c.IdxStdDev = s.ComputeEmptyIndexDistribution()
 	c.DataSizeMean, c.DataSizeStdDev = s.ComputeDataSize()
 
 	memCost := float64(0)
@@ -3689,14 +3735,13 @@ func (c *UsageBasedCostMethod) Cost(s *Solution) float64 {
 	}
 	count++
 
-	// consider the number of "emtpy" index per node.  Empty index
-	// is index with no recored memory or cpu usage (exlcuding mem overhead).
-	// It could be index without stats or sizing information.  This
-	// help to distribute empty index evenly across nodes. Note that if
-	// an index holds no key, it may still have some memory overhead usage
-	// (from sizing).
-	if c.IdxMean != 0 {
-		emptyIdxCost = c.IdxStdDev / c.IdxMean
+	// Empty index is index with no recored memory or cpu usage (exlcuding mem overhead).
+	// It could be index without stats or sizing information.
+	// The cost function minimize the residual memory after subtracting the estimated empty
+	// index usage.
+	//
+	emptyIdxCost = s.ComputeCapacityAfterEmptyIndex()
+	if emptyIdxCost != 0 {
 		count++
 	}
 
@@ -4070,37 +4115,61 @@ func (p *RandomPlacement) RemoveEligibleIndex(indexes []*IndexUsage) {
 }
 
 //
-// This function finds a node that has least usage consumption and index count,
-// while allowing to add the "source" index to this node without violating
-// constraints.
+// This function is for finding a target node for an empty index.  An empty index is index
+// with no sizing info (e.g. deferred index). For a node with more free resource, it should be
+// able to hold more empty index.
+//
+// To achieve the goal, this function computes the free memory per empty index.  For a node
+// with higher memory per empty index, it has more capacity to hold the empty index (when the
+// empty index is eventually build).
+//
+// Along with the cost method, this function will try to optimize the solution by
+// 1) This function move emtpy index to a indexer with higher memory per empty index.
+// 2) Using cost function, it will try to get the higher mean memory per empty index
+//
+// For (1), it tries to find a better mem-per-empty-index for the index.  The node with higher
+// mem-per-empty-index will more likely to be chosen.  But it is not greedy as to avoid local maximum.
+// For (2), it will evaluate the cost by considering if the solution has higher mean memory per index.
+//
 //
 func (p *RandomPlacement) findLeastUsedAndPopulatedTargetNode(s *Solution, source *IndexUsage, exclude *IndexerNode) *IndexerNode {
 
-	memFree, cpuFree := s.computeFreeRatio()
-	threshold := memFree + cpuFree
+	max := s.computeMaxMemUsage()
+	if max < s.constraint.GetMemQuota() {
+		max = s.constraint.GetMemQuota()
+	}
 
-	for threshold >= -0.1 {
+	currentMemPerIndex := int64(exclude.computeFreeMemPerEmptyIndex(s, max, 0))
 
-		indexers := ([]*IndexerNode)(nil)
-		for _, indexer := range s.Placement {
-			if !indexer.ExcludeIn(s) &&
-				indexer.NodeId != exclude.NodeId &&
-				computeIndexerFreeQuota(s, indexer) >= threshold {
+	indexers := make([]*IndexerNode, 0, len(s.Placement))
+	loads := make([]int64, 0, len(s.Placement))
+	total := int64(0)
+
+	for _, indexer := range s.Placement {
+		if indexer.ExcludeIn(s) {
+			continue
+		}
+
+		if indexer.isDelete {
+			continue
+		}
+
+		if indexer.NodeId == exclude.NodeId {
+			continue
+		}
+
+		if s.constraint.CanAddIndex(s, indexer, source) == NoViolation {
+			memPerIndex := int64(indexer.computeFreeMemPerEmptyIndex(s, max, 1))
+			if memPerIndex > 0 && (exclude.isDelete || memPerIndex > currentMemPerIndex) {
+				loads = append(loads, memPerIndex)
 				indexers = append(indexers, indexer)
+				total += memPerIndex
 			}
 		}
+	}
 
-		if len(indexers) > 0 {
-			indexers = sortNodeByNoUsageInfoIndexCount(indexers)
-
-			for _, indexer := range indexers {
-				if s.constraint.CanAddIndex(s, indexer, source) == NoViolation {
-					return indexer
-				}
-			}
-		}
-
-		threshold -= 0.1
+	if len(indexers) != 0 {
+		return getWeightedRandomNode(p.rs, indexers, loads, total)
 	}
 
 	return nil
@@ -4139,12 +4208,14 @@ func (p *RandomPlacement) findSwapCandidateNode(s *Solution, node *IndexerNode) 
 		}
 
 		satisfyConstraint := true
+		s.enforceConstraint = true
 		for _, index := range node.Indexes {
 			if s.constraint.CanAddIndex(s, indexer, index) != NoViolation {
 				satisfyConstraint = false
 				break
 			}
 		}
+		s.enforceConstraint = false
 
 		if satisfyConstraint {
 			return indexer
@@ -4160,7 +4231,7 @@ func (p *RandomPlacement) findSwapCandidateNode(s *Solution, node *IndexerNode) 
 func (p *RandomPlacement) tryRandomSwap(s *Solution, sources []*IndexerNode, targets []*IndexerNode, checkConstraint bool, prob float64) bool {
 
 	n := p.rs.Float64()
-	if n < prob || s.cost.ComputeResourceVariation() < 0.05 {
+	if n < prob && s.cost.ComputeResourceVariation() < 0.05 {
 		return p.randomSwap(s, sources, targets, checkConstraint)
 	}
 
@@ -4238,6 +4309,7 @@ func (p *RandomPlacement) randomMoveByLoad(s *Solution, checkConstraint bool) (b
 
 		// Select an constrained candidate based on weighted probability
 		// The most constrained candidate has a higher probabilty to be selected.
+		// This function may not return a source if all indexes are empty indexes.
 		source := getWeightedRandomNode(p.rs, constrained, loads, total)
 
 		// If cannot find a constrained candidate, then try to randomly
@@ -4445,7 +4517,7 @@ func (p *RandomPlacement) getRandomFittedNode(s *Solution, indexers []*IndexerNo
 	for i, indexer := range indexers {
 		violation := s.constraint.CanAddIndex(s, indexer, index)
 		if !checkConstraint || violation == NoViolation {
-			if usage := s.computeMeanResourceUsage() - s.computeResourceUsage(indexer); usage > 0 {
+			if usage := s.computeMeanUsageRatio() - s.computeUsageRatio(indexer); usage > 0 {
 				loads[i] = int64(usage * 100)
 			}
 			total += loads[i]
