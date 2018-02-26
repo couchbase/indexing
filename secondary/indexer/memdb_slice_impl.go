@@ -1181,7 +1181,7 @@ func (mdb *memdbSlice) getCmdsCount() int {
 func (mdb *memdbSlice) logWriterStat() {
 	count := atomic.AddUint64(&mdb.flushedCount, 1)
 	if (count%10000 == 0) || count == 1 {
-		logging.Infof("logWriterStat:: %v "+
+		logging.Debugf("logWriterStat:: %v "+
 			"FlushedCount %v QueuedCount %v", mdb.idxInstId,
 			count, mdb.getCmdsCount())
 	}

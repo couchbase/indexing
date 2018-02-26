@@ -1589,7 +1589,7 @@ func newFdbFile(dirpath string, newVersion bool) string {
 func (fdb *fdbSlice) logWriterStat() {
 	count := atomic.AddUint64(&fdb.flushedCount, 1)
 	if (count%10000 == 0) || count == 1 {
-		logging.Infof("logWriterStat:: %v "+
+		logging.Debugf("logWriterStat:: %v "+
 			"FlushedCount %v QueuedCount %v", fdb.idxInstId,
 			count, len(fdb.cmdCh))
 	}
