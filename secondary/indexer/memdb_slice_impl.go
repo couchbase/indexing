@@ -670,8 +670,10 @@ func (mdb *memdbSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 		err = mdb.loadSnapshot(s.info)
 	}
 
-	logging.Infof("MemDBSlice::OpenSnapshot SliceId %v IndexInstId %v Creating New "+
-		"Snapshot %v", mdb.id, mdb.idxInstId, snapInfo)
+	if info.IsCommitted() {
+		logging.Infof("MemDBSlice::OpenSnapshot SliceId %v IndexInstId %v Creating New "+
+			"Snapshot %v", mdb.id, mdb.idxInstId, snapInfo)
+	}
 
 	return s, err
 }

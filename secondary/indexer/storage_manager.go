@@ -217,7 +217,7 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 	tsVbuuid.Crc64 = common.HashVbuuid(tsVbuuid.Vbuuids)
 
 	if snapType == common.NO_SNAP {
-		logging.Infof("StorageMgr::handleCreateSnapshot Skip Snapshot For %v "+
+		logging.Debugf("StorageMgr::handleCreateSnapshot Skip Snapshot For %v "+
 			"%v SnapType %v", streamId, bucket, snapType)
 
 		s.supvRespch <- &MsgMutMgrFlushDone{mType: STORAGE_SNAP_DONE,
@@ -358,9 +358,10 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, bucket strin
 							}
 							snapOpenDur := time.Since(snapOpenStart)
 
-							logging.Infof("StorageMgr::handleCreateSnapshot Added New Snapshot Index: %v "+
-								"PartitionId: %v SliceId: %v Crc64: %v (%v) SnapCreateDur %v SnapOpenDur %v", idxInstId, partnId, slice.Id(), tsVbuuid.Crc64, info, snapCreateDur, snapOpenDur)
-
+							if needsCommit {
+								logging.Infof("StorageMgr::handleCreateSnapshot Added New Snapshot Index: %v "+
+									"PartitionId: %v SliceId: %v Crc64: %v (%v) SnapCreateDur %v SnapOpenDur %v", idxInstId, partnId, slice.Id(), tsVbuuid.Crc64, info, snapCreateDur, snapOpenDur)
+							}
 							ss := &sliceSnapshot{
 								id:   slice.Id(),
 								snap: newSnapshot,
@@ -374,7 +375,7 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, bucket strin
 								snap: latestSnapshot,
 							}
 							sliceSnaps[slice.Id()] = ss
-							logging.Warnf("StorageMgr::handleCreateSnapshot Skipped Creating New Snapshot for Index %v "+
+							logging.Debugf("StorageMgr::handleCreateSnapshot Skipped Creating New Snapshot for Index %v "+
 								"PartitionId %v SliceId %v. No New Mutations. IsDirty %v", idxInstId, partnId, slice.Id(), slice.IsDirty())
 							logging.Debugf("StorageMgr::handleCreateSnapshot SnapTs %v FlushTs %v", snapTs, ts)
 							continue

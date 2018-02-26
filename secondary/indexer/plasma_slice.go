@@ -897,8 +897,10 @@ func (mdb *plasmaSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 		mdb.doPersistSnapshot(s)
 	}
 
-	logging.Infof("plasmaSlice::OpenSnapshot SliceId %v IndexInstId %v Creating New "+
-		"Snapshot %v", mdb.id, mdb.idxInstId, snapInfo)
+	if info.IsCommitted() {
+		logging.Infof("plasmaSlice::OpenSnapshot SliceId %v IndexInstId %v Creating New "+
+			"Snapshot %v", mdb.id, mdb.idxInstId, snapInfo)
+	}
 	mdb.setCommittedCount()
 
 	return s, nil
