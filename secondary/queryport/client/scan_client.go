@@ -578,43 +578,39 @@ func (c *GsiScanClient) MultiScanPrimary(
 	reverse, distinct bool, projection *IndexProjection, offset, limit int64,
 	cons common.Consistency, vector *TsConsistency,
 	callb ResponseHandler, rollbackTime int64, partitions []common.PartitionId) (error, bool) {
+
 	var what string
 	// serialize scans
-	protoScans := make([]*protobuf.Scan, len(scans))
-	for i, scan := range scans {
+	protoScans := make([]*protobuf.Scan, 0)
+	for _, scan := range scans {
 		if scan != nil {
 			var equals [][]byte
 			var filters []*protobuf.CompositeElementFilter
 
 			// If Seek is there, then ignore Range
 			if len(scan.Seek) > 0 {
-				equals = make([][]byte, 1)
 				var k []byte
 				key := scan.Seek[0]
-				if key != nil {
-					if k, what = curePrimaryKey(key); what == "after" {
-						return nil, true
-					}
+				if k, what = curePrimaryKey(key); what == "after" {
+					continue
 				}
-				equals[0] = k
-
+				equals = [][]byte{k}
 			} else {
-				filters = make([]*protobuf.CompositeElementFilter, len(scan.Filter))
+				filters = make([]*protobuf.CompositeElementFilter, 0)
+				skip := false
 				if scan.Filter != nil {
-					for j, f := range scan.Filter {
+					for _, f := range scan.Filter {
 						var l, h []byte
 						if f.Low != common.MinUnbounded { // Ignore if unbounded
-							if f.Low != nil {
-								if l, what = curePrimaryKey(f.Low); what == "after" {
-									return nil, true
-								}
+							if l, what = curePrimaryKey(f.Low); what == "after" {
+								skip = true
+								break
 							}
 						}
 						if f.High != common.MaxUnbounded { // Ignore if unbounded
-							if f.High != nil {
-								if h, what = curePrimaryKey(f.High); what == "before" {
-									return nil, true
-								}
+							if h, what = curePrimaryKey(f.High); what == "before" {
+								skip = true
+								break
 							}
 						}
 
@@ -622,7 +618,10 @@ func (c *GsiScanClient) MultiScanPrimary(
 							Low: l, High: h, Inclusion: proto.Uint32(uint32(f.Inclusion)),
 						}
 
-						filters[j] = fl
+						filters = append(filters, fl)
+					}
+					if skip {
+						continue
 					}
 				}
 			}
@@ -630,8 +629,12 @@ func (c *GsiScanClient) MultiScanPrimary(
 				Filters: filters,
 				Equals:  equals,
 			}
-			protoScans[i] = s
+			protoScans = append(protoScans, s)
 		}
+	}
+
+	if len(protoScans) == 0 {
+		return nil, true
 	}
 
 	//IndexProjection
@@ -970,41 +973,36 @@ func (c *GsiScanClient) MultiScanCountPrimary(
 
 	var what string
 	// serialize scans
-	protoScans := make([]*protobuf.Scan, len(scans))
-	for i, scan := range scans {
+	protoScans := make([]*protobuf.Scan, 0)
+	for _, scan := range scans {
 		if scan != nil {
 			var equals [][]byte
 			var filters []*protobuf.CompositeElementFilter
 
 			// If Seek is there, then ignore Range
 			if len(scan.Seek) > 0 {
-				equals = make([][]byte, 1)
 				var k []byte
 				key := scan.Seek[0]
-				if key != nil {
-					if k, what = curePrimaryKey(key); what == "after" {
-						return 0, nil
-					}
+				if k, what = curePrimaryKey(key); what == "after" {
+					continue
 				}
-				equals[0] = k
-
+				equals = [][]byte{k}
 			} else {
-				filters = make([]*protobuf.CompositeElementFilter, len(scan.Filter))
+				filters = make([]*protobuf.CompositeElementFilter, 0)
+				skip := false
 				if scan.Filter != nil {
-					for j, f := range scan.Filter {
+					for _, f := range scan.Filter {
 						var l, h []byte
 						if f.Low != common.MinUnbounded { // Ignore if unbounded
-							if f.Low != nil {
-								if l, what = curePrimaryKey(f.Low); what == "after" {
-									return 0, nil
-								}
+							if l, what = curePrimaryKey(f.Low); what == "after" {
+								skip = true
+								break
 							}
 						}
 						if f.High != common.MaxUnbounded { // Ignore if unbounded
-							if f.High != nil {
-								if h, what = curePrimaryKey(f.High); what == "before" {
-									return 0, nil
-								}
+							if h, what = curePrimaryKey(f.High); what == "before" {
+								skip = true
+								break
 							}
 						}
 
@@ -1012,7 +1010,11 @@ func (c *GsiScanClient) MultiScanCountPrimary(
 							Low: l, High: h, Inclusion: proto.Uint32(uint32(f.Inclusion)),
 						}
 
-						filters[j] = fl
+						filters = append(filters, fl)
+					}
+
+					if skip {
+						continue
 					}
 				}
 			}
@@ -1020,8 +1022,12 @@ func (c *GsiScanClient) MultiScanCountPrimary(
 				Filters: filters,
 				Equals:  equals,
 			}
-			protoScans[i] = s
+			protoScans = append(protoScans, s)
 		}
+	}
+
+	if len(protoScans) == 0 {
+		return 0, nil
 	}
 
 	partnIds := make([]uint64, len(partitions))
