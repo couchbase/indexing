@@ -350,16 +350,17 @@ type RandomPlacement struct {
 	swapDeletedOnly bool
 
 	// stats
-	totalIteration  int
-	randomSwapCnt   int
-	randomSwapDur   int64
-	randomSwapRetry int
-	randomMoveCnt   int
-	randomMoveDur   int64
-	exhaustSwapCnt  int
-	exhaustSwapDur  int64
-	exhaustMoveCnt  int
-	exhaustMoveDur  int64
+	totalIteration     int
+	randomSwapCnt      int
+	randomSwapDur      int64
+	randomSwapRetry    int
+	randomMoveCnt      int
+	randomMoveEmptyCnt int
+	randomMoveDur      int64
+	exhaustSwapCnt     int
+	exhaustSwapDur     int64
+	exhaustMoveCnt     int
+	exhaustMoveDur     int64
 }
 
 //////////////////////////////////////////////////////////////
@@ -1513,14 +1514,19 @@ func (s *Solution) ComputeCapacityAfterEmptyIndex() float64 {
 		max = s.constraint.GetMemQuota()
 	}
 
+	var emptyIdxCnt uint64
+	var totalIdxCnt uint64
 	var emptyIdxMem uint64
+
 	for _, indexer := range s.Placement {
 		emptyIdxMem += indexer.computeFreeMemPerEmptyIndex(s, max, 0) * uint64(indexer.numEmptyIndex)
+		emptyIdxCnt += uint64(indexer.numEmptyIndex)
+		totalIdxCnt += uint64(len(indexer.Indexes))
 	}
 
 	maxTotal := max * uint64(len(s.Placement))
 	usageAfterEmptyIdx := float64(maxTotal-emptyIdxMem) / float64(maxTotal)
-	weight := float64(emptyIdxMem) / float64(maxTotal)
+	weight := float64(emptyIdxCnt) / float64(totalIdxCnt)
 
 	return usageAfterEmptyIdx * weight
 }
@@ -3871,7 +3877,7 @@ func (p *RandomPlacement) Print() {
 	}
 
 	logging.Infof("RandomMove time: %v", formatTimeStr(uint64(p.randomMoveDur)))
-	logging.Infof("RandomMove call: %v", p.randomMoveCnt)
+	logging.Infof("RandomMove call: %v (empty index %v)", p.randomMoveCnt, p.randomMoveEmptyCnt)
 	if p.randomMoveCnt != 0 {
 		logging.Infof("RandomMove average time: %v", formatTimeStr(uint64(p.randomMoveDur/int64(p.randomMoveCnt))))
 	}
@@ -4169,6 +4175,7 @@ func (p *RandomPlacement) findLeastUsedAndPopulatedTargetNode(s *Solution, sourc
 	}
 
 	if len(indexers) != 0 {
+		p.randomMoveEmptyCnt++
 		return getWeightedRandomNode(p.rs, indexers, loads, total)
 	}
 
