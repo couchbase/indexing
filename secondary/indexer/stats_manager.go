@@ -1154,17 +1154,24 @@ func (s *statsManager) handleConfigUpdate(cmd Message) {
 }
 
 func (s *statsManager) runStatsDumpLogger() {
+	skipStorage := 0
 	for {
 		stats := s.stats.Get()
 		if stats != nil {
 			bytes, _ := stats.MarshalJSON(false, false, false)
 			var storageStats string
-			if common.GetStorageMode() != common.FORESTDB {
-				storageStats = fmt.Sprintf("\n==== StorageStats ====\n%s", s.getStorageStats())
-			} else if logging.IsEnabled(logging.Timing) {
-				storageStats = fmt.Sprintf("\n==== StorageStats ====\n%s", s.getStorageStats())
+			if skipStorage > 15 { //log storage stats every 15mins
+				if common.GetStorageMode() != common.FORESTDB {
+					storageStats = fmt.Sprintf("\n==== StorageStats ====\n%s", s.getStorageStats())
+				} else if logging.IsEnabled(logging.Timing) {
+					storageStats = fmt.Sprintf("\n==== StorageStats ====\n%s", s.getStorageStats())
+				}
+				logging.Infof("PeriodicStats = %s%s", string(bytes), storageStats)
+				skipStorage = 0
+			} else {
+				logging.Infof("PeriodicStats = %s", string(bytes))
+				skipStorage++
 			}
-			logging.Infof("PeriodicStats = %s%s", string(bytes), storageStats)
 		}
 
 		time.Sleep(time.Second * time.Duration(atomic.LoadUint64(&s.statsLogDumpInterval)))
