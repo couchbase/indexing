@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/couchbase/indexing/secondary/collatejson"
 	c "github.com/couchbase/indexing/secondary/common"
@@ -38,8 +39,10 @@ type ScanPipeline struct {
 
 	aggrRes *aggrResult
 
-	rowsReturned uint64
-	bytesRead    uint64
+	rowsReturned  uint64
+	bytesRead     uint64
+	rowsScanned   uint64
+	cacheHitRatio int
 }
 
 func (p *ScanPipeline) Cancel(err error) {
@@ -56,6 +59,14 @@ func (p ScanPipeline) RowsReturned() uint64 {
 
 func (p ScanPipeline) BytesRead() uint64 {
 	return p.bytesRead
+}
+
+func (p ScanPipeline) RowsScanned() uint64 {
+	return p.rowsScanned
+}
+
+func (p ScanPipeline) CacheHitRatio() int {
+	return p.cacheHitRatio
 }
 
 func NewScanPipeline(req *ScanRequest, w ScanResponseWriter, is IndexSnapshot, cfg c.Config) *ScanPipeline {
@@ -154,6 +165,7 @@ func (s *IndexScanSource) Routine() error {
 			return ErrIndexRollback
 		}
 		iterCount++
+		s.p.rowsScanned++
 
 		skipRow := false
 		var ck, dk [][]byte
@@ -288,6 +300,8 @@ loop:
 			break loop
 		}
 	}
+
+	s.p.cacheHitRatio = cachedEntry.CacheHitRatio()
 
 	if r.GroupAggr != nil && err == nil {
 
@@ -765,14 +779,14 @@ func computeGroupAggr(compositekeys, decodedkeys [][]byte, count int, docid, key
 
 	if !cachedEntry.Valid() || groupAggr.DependsOnPrimaryKey {
 		for i, gk := range groupAggr.Group {
-			err := computeGroupKey(groupAggr, gk, compositekeys, decodedkeys, cachedEntry.decodedvalues, docid, i)
+			err := computeGroupKey(groupAggr, gk, compositekeys, decodedkeys, cachedEntry.decodedvalues, docid, i, r)
 			if err != nil {
 				return err
 			}
 		}
 
 		for i, ak := range groupAggr.Aggrs {
-			err := computeAggrVal(groupAggr, ak, compositekeys, decodedkeys, cachedEntry.decodedvalues, docid, count, buf, i)
+			err := computeAggrVal(groupAggr, ak, compositekeys, decodedkeys, cachedEntry.decodedvalues, docid, count, buf, i, r)
 			if err != nil {
 				return err
 			}
@@ -785,7 +799,7 @@ func computeGroupAggr(compositekeys, decodedkeys [][]byte, count int, docid, key
 }
 
 func computeGroupKey(groupAggr *GroupAggr, gk *GroupKey, compositekeys,
-	decodedkeys [][]byte, decodedvalues []interface{}, docid []byte, pos int) error {
+	decodedkeys [][]byte, decodedvalues []interface{}, docid []byte, pos int, r *ScanRequest) error {
 
 	g := groupAggr.groups[pos]
 	if gk.KeyPos >= 0 {
@@ -798,7 +812,7 @@ func computeGroupKey(groupAggr *GroupAggr, gk *GroupKey, compositekeys,
 			scalar = gk.ExprValue // It is a constant expression
 		} else {
 			var err error
-			scalar, err = evaluateN1QLExpresssion(groupAggr, gk.Expr, decodedkeys, decodedvalues, docid)
+			scalar, err = evaluateN1QLExpresssion(groupAggr, gk.Expr, decodedkeys, decodedvalues, docid, r)
 			if err != nil {
 				return err
 			}
@@ -813,7 +827,7 @@ func computeGroupKey(groupAggr *GroupAggr, gk *GroupKey, compositekeys,
 
 func computeAggrVal(groupAggr *GroupAggr, ak *Aggregate,
 	compositekeys, decodedkeys [][]byte, decodedvalues []interface{}, docid []byte,
-	count int, buf []byte, pos int) error {
+	count int, buf []byte, pos int, r *ScanRequest) error {
 
 	a := groupAggr.aggrs[pos]
 	if ak.KeyPos >= 0 {
@@ -837,7 +851,7 @@ func computeAggrVal(groupAggr *GroupAggr, ak *Aggregate,
 			scalar = ak.ExprValue // It is a constant expression
 		} else {
 			var err error
-			scalar, err = evaluateN1QLExpresssion(groupAggr, ak.Expr, decodedkeys, decodedvalues, docid)
+			scalar, err = evaluateN1QLExpresssion(groupAggr, ak.Expr, decodedkeys, decodedvalues, docid, r)
 			if err != nil {
 				return err
 			}
@@ -855,7 +869,7 @@ func computeAggrVal(groupAggr *GroupAggr, ak *Aggregate,
 }
 
 func evaluateN1QLExpresssion(groupAggr *GroupAggr, expr expression.Expression,
-	decodedkeys [][]byte, decodedvalues []interface{}, docid []byte) (value.Value, error) {
+	decodedkeys [][]byte, decodedvalues []interface{}, docid []byte, r *ScanRequest) (value.Value, error) {
 
 	if groupAggr.IsPrimary {
 		for _, ik := range groupAggr.DependsOnIndexKeys {
@@ -878,10 +892,16 @@ func evaluateN1QLExpresssion(groupAggr *GroupAggr, expr expression.Expression,
 		}
 	}
 
+	t0 := time.Now()
 	scalar, _, err := expr.EvaluateForIndex(groupAggr.av, groupAggr.exprContext) // TODO: Ignore vector for now
 	if err != nil {
 		return nil, err
 	}
+
+	if r.Stats != nil {
+		r.Stats.Timings.n1qlExpr.Put(time.Since(t0))
+	}
+
 	return scalar, nil
 }
 
@@ -1278,5 +1298,15 @@ func (e *entryCache) Valid() bool {
 
 func (e *entryCache) Stats() string {
 	return fmt.Sprintf("Hit %v Miss %v", e.hit, e.miss)
+
+}
+
+func (e *entryCache) CacheHitRatio() int {
+
+	if e.hit+e.miss != 0 {
+		return int((e.hit * 100) / (e.miss + e.hit))
+	} else {
+		return 0
+	}
 
 }

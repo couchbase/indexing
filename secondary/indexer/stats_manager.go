@@ -71,6 +71,7 @@ type IndexTimingStats struct {
 	stKVMetaGet             stats.TimingStat
 	stKVMetaSet             stats.TimingStat
 	dcpSeqs                 stats.TimingStat
+	n1qlExpr                stats.TimingStat
 }
 
 func (it *IndexTimingStats) Init() {
@@ -89,6 +90,7 @@ func (it *IndexTimingStats) Init() {
 	it.stKVMetaGet.Init()
 	it.stKVMetaSet.Init()
 	it.dcpSeqs.Init()
+	it.n1qlExpr.Init()
 }
 
 type IndexStats struct {
@@ -97,59 +99,69 @@ type IndexStats struct {
 
 	partitions map[common.PartitionId]*IndexStats
 
-	scanDuration          stats.Int64Val
-	scanReqDuration       stats.Int64Val
-	scanReqInitDuration   stats.Int64Val
-	scanReqAllocDuration  stats.Int64Val
-	dcpSeqsDuration       stats.Int64Val
-	insertBytes           stats.Int64Val
-	numDocsPending        stats.Int64Val
-	scanWaitDuration      stats.Int64Val
-	numDocsIndexed        stats.Int64Val
-	numDocsProcessed      stats.Int64Val
-	numRequests           stats.Int64Val
-	numCompletedRequests  stats.Int64Val
-	numRowsReturned       stats.Int64Val
-	diskSize              stats.Int64Val
-	memUsed               stats.Int64Val
-	buildProgress         stats.Int64Val
-	completionProgress    stats.Int64Val
-	numDocsQueued         stats.Int64Val
-	deleteBytes           stats.Int64Val
-	dataSize              stats.Int64Val
-	scanBytesRead         stats.Int64Val
-	getBytes              stats.Int64Val
-	itemsCount            stats.Int64Val
-	numCommits            stats.Int64Val
-	numSnapshots          stats.Int64Val
-	numCompactions        stats.Int64Val
-	numItemsFlushed       stats.Int64Val
-	avgTsInterval         stats.Int64Val
-	avgTsItemsCount       stats.Int64Val
-	lastNumFlushQueued    stats.Int64Val
-	lastTsTime            stats.Int64Val
-	numDocsFlushQueued    stats.Int64Val
-	fragPercent           stats.Int64Val
-	sinceLastSnapshot     stats.Int64Val
-	numSnapshotWaiters    stats.Int64Val
-	numLastSnapshotReply  stats.Int64Val
-	numItemsRestored      stats.Int64Val
-	diskSnapStoreDuration stats.Int64Val
-	diskSnapLoadDuration  stats.Int64Val
-	notReadyError         stats.Int64Val
-	clientCancelError     stats.Int64Val
-	avgScanRate           stats.Int64Val
-	avgMutationRate       stats.Int64Val
-	avgDrainRate          stats.Int64Val
-	lastScanGatherTime    stats.Int64Val
-	lastNumRowsReturned   stats.Int64Val
-	lastMutateGatherTime  stats.Int64Val
-	lastNumDocsIndexed    stats.Int64Val
-	lastNumItemsFlushed   stats.Int64Val
-	lastRollbackTime      stats.TimeVal
-	progressStatTime      stats.TimeVal
-	residentPercent       stats.Int64Val
-	cacheHitPercent       stats.Int64Val
+	scanDuration              stats.Int64Val
+	scanReqDuration           stats.Int64Val
+	scanReqInitDuration       stats.Int64Val
+	scanReqAllocDuration      stats.Int64Val
+	dcpSeqsDuration           stats.Int64Val
+	insertBytes               stats.Int64Val
+	numDocsPending            stats.Int64Val
+	scanWaitDuration          stats.Int64Val
+	numDocsIndexed            stats.Int64Val
+	numDocsProcessed          stats.Int64Val
+	numRequests               stats.Int64Val
+	numCompletedRequests      stats.Int64Val
+	numRowsReturned           stats.Int64Val
+	numRequestsRange          stats.Int64Val
+	numCompletedRequestsRange stats.Int64Val
+	numRowsReturnedRange      stats.Int64Val
+	numRowsScannedRange       stats.Int64Val
+	scanCacheHitRange         stats.Int64Val
+	numRequestsAggr           stats.Int64Val
+	numCompletedRequestsAggr  stats.Int64Val
+	numRowsReturnedAggr       stats.Int64Val
+	numRowsScannedAggr        stats.Int64Val
+	scanCacheHitAggr          stats.Int64Val
+	diskSize                  stats.Int64Val
+	memUsed                   stats.Int64Val
+	buildProgress             stats.Int64Val
+	completionProgress        stats.Int64Val
+	numDocsQueued             stats.Int64Val
+	deleteBytes               stats.Int64Val
+	dataSize                  stats.Int64Val
+	scanBytesRead             stats.Int64Val
+	getBytes                  stats.Int64Val
+	itemsCount                stats.Int64Val
+	numCommits                stats.Int64Val
+	numSnapshots              stats.Int64Val
+	numCompactions            stats.Int64Val
+	numItemsFlushed           stats.Int64Val
+	avgTsInterval             stats.Int64Val
+	avgTsItemsCount           stats.Int64Val
+	lastNumFlushQueued        stats.Int64Val
+	lastTsTime                stats.Int64Val
+	numDocsFlushQueued        stats.Int64Val
+	fragPercent               stats.Int64Val
+	sinceLastSnapshot         stats.Int64Val
+	numSnapshotWaiters        stats.Int64Val
+	numLastSnapshotReply      stats.Int64Val
+	numItemsRestored          stats.Int64Val
+	diskSnapStoreDuration     stats.Int64Val
+	diskSnapLoadDuration      stats.Int64Val
+	notReadyError             stats.Int64Val
+	clientCancelError         stats.Int64Val
+	avgScanRate               stats.Int64Val
+	avgMutationRate           stats.Int64Val
+	avgDrainRate              stats.Int64Val
+	lastScanGatherTime        stats.Int64Val
+	lastNumRowsReturned       stats.Int64Val
+	lastMutateGatherTime      stats.Int64Val
+	lastNumDocsIndexed        stats.Int64Val
+	lastNumItemsFlushed       stats.Int64Val
+	lastRollbackTime          stats.TimeVal
+	progressStatTime          stats.TimeVal
+	residentPercent           stats.Int64Val
+	cacheHitPercent           stats.Int64Val
 
 	Timings IndexTimingStats
 }
@@ -179,6 +191,16 @@ func (s *IndexStats) Init() {
 	s.numRequests.Init()
 	s.numCompletedRequests.Init()
 	s.numRowsReturned.Init()
+	s.numRequestsRange.Init()
+	s.numCompletedRequestsRange.Init()
+	s.numRowsReturnedRange.Init()
+	s.numRowsScannedRange.Init()
+	s.scanCacheHitRange.Init()
+	s.numRequestsAggr.Init()
+	s.numCompletedRequestsAggr.Init()
+	s.numRowsReturnedAggr.Init()
+	s.numRowsScannedAggr.Init()
+	s.scanCacheHitAggr.Init()
 	s.diskSize.Init()
 	s.memUsed.Init()
 	s.buildProgress.Init()
@@ -504,6 +526,46 @@ func (is IndexerStats) GetStats(getPartition bool, skipEmpty bool) common.Statis
 			s.int64Stats(func(ss *IndexStats) int64 {
 				return ss.numRowsReturned.Value()
 			}))
+		addStat("num_requests_range",
+			s.int64Stats(func(ss *IndexStats) int64 {
+				return ss.numRequestsRange.Value()
+			}))
+		addStat("num_completed_requests_range",
+			s.int64Stats(func(ss *IndexStats) int64 {
+				return ss.numCompletedRequestsRange.Value()
+			}))
+		addStat("num_rows_returned_range",
+			s.int64Stats(func(ss *IndexStats) int64 {
+				return ss.numRowsReturnedRange.Value()
+			}))
+		addStat("num_rows_scanned_range",
+			s.int64Stats(func(ss *IndexStats) int64 {
+				return ss.numRowsScannedRange.Value()
+			}))
+		addStat("scan_cache_hit_range",
+			s.int64Stats(func(ss *IndexStats) int64 {
+				return ss.scanCacheHitRange.Value()
+			}))
+		addStat("num_requests_aggr",
+			s.int64Stats(func(ss *IndexStats) int64 {
+				return ss.numRequestsAggr.Value()
+			}))
+		addStat("num_completed_requests_aggr",
+			s.int64Stats(func(ss *IndexStats) int64 {
+				return ss.numCompletedRequestsAggr.Value()
+			}))
+		addStat("num_rows_returned_aggr",
+			s.int64Stats(func(ss *IndexStats) int64 {
+				return ss.numRowsReturnedAggr.Value()
+			}))
+		addStat("num_rows_scanned_aggr",
+			s.int64Stats(func(ss *IndexStats) int64 {
+				return ss.numRowsScannedAggr.Value()
+			}))
+		addStat("scan_cache_hit_aggr",
+			s.int64Stats(func(ss *IndexStats) int64 {
+				return ss.scanCacheHitAggr.Value()
+			}))
 		// partition stats
 		addStat("disk_size",
 			s.partnInt64Stats(func(ss *IndexStats) int64 {
@@ -716,6 +778,10 @@ func (is IndexerStats) GetStats(getPartition bool, skipEmpty bool) common.Statis
 		addStat("timings/storage_meta_set",
 			s.partnTimingStats(func(ss *IndexStats) *stats.TimingStat {
 				return &ss.Timings.stKVMetaSet
+			}))
+		addStat("timings/n1ql_expr_eval",
+			s.partnTimingStats(func(ss *IndexStats) *stats.TimingStat {
+				return &ss.Timings.n1qlExpr
 			}))
 	}
 
