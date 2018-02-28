@@ -820,6 +820,11 @@ func (mdb *memdbSlice) resetStores() {
 	}
 
 	mdb.initStores()
+
+	prev := atomic.LoadUint64(&mdb.committedCount)
+	atomic.AddInt64(&totalMemDBItems, -int64(prev))
+	mdb.committedCount = 0
+	mdb.idxStats.itemsCount.Set(0)
 }
 
 //Rollback slice to given snapshot. Return error if
@@ -940,6 +945,7 @@ func (mdb *memdbSlice) loadSnapshot(snapInfo *memdbSnapshotInfo) (err error) {
 func (mdb *memdbSlice) RollbackToZero() error {
 	mdb.resetStores()
 	mdb.cleanupOldSnapshotFiles(0)
+
 	return nil
 }
 

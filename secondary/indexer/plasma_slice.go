@@ -1059,6 +1059,8 @@ func (mdb *plasmaSlice) resetStores() {
 	os.RemoveAll(mdb.path)
 	mdb.newBorn = true
 	mdb.initStores()
+	mdb.setCommittedCount()
+	mdb.idxStats.itemsCount.Set(0)
 }
 
 func (mdb *plasmaSlice) Rollback(o SnapshotInfo) error {
