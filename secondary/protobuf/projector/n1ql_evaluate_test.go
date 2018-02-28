@@ -76,8 +76,9 @@ func TestN1QLTransform150(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	meta := make(map[string]interface{})
-	secKey, _, err := N1QLTransform([]byte("docid"), doc150, cExprs, meta, buf)
+	docval := qvalue.NewAnnotatedValue(qvalue.NewParsedValue(doc150, true))
+	docval.SetAttachment("meta", make(map[string]interface{} /*meta*/))
+	secKey, _, err := N1QLTransform([]byte("docid"), docval, cExprs, buf)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,8 +93,9 @@ func TestN1QLTransform2000(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	meta := make(map[string]interface{})
-	secKey, _, err := N1QLTransform([]byte("docid"), doc2000, cExprs, meta, buf)
+	docval := qvalue.NewAnnotatedValue(qvalue.NewParsedValue(doc2000, true))
+	docval.SetAttachment("meta", make(map[string]interface{} /*meta*/))
+	secKey, _, err := N1QLTransform([]byte("docid"), docval, cExprs, buf)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,17 +131,19 @@ func BenchmarkCompileN1QLExpression(b *testing.B) {
 
 func BenchmarkN1QLTransform150(b *testing.B) {
 	cExprs, _ := CompileN1QLExpression([]string{`age`})
-	meta := make(map[string]interface{})
+	docval := qvalue.NewAnnotatedValue(qvalue.NewParsedValue(doc150, true))
+	docval.SetAttachment("meta", make(map[string]interface{} /*meta*/))
 	for i := 0; i < b.N; i++ {
-		N1QLTransform([]byte("docid"), doc150, cExprs, meta, buf)
+		N1QLTransform([]byte("docid"), docval, cExprs, buf)
 	}
 }
 
 func BenchmarkN1QLTransform2000(b *testing.B) {
 	cExprs, _ := CompileN1QLExpression([]string{`age`})
-	meta := make(map[string]interface{})
+	docval := qvalue.NewAnnotatedValue(qvalue.NewParsedValue(doc2000, true))
+	docval.SetAttachment("meta", make(map[string]interface{} /*meta*/))
 	for i := 0; i < b.N; i++ {
-		N1QLTransform([]byte("docid"), doc2000, cExprs, meta, buf)
+		N1QLTransform([]byte("docid"), docval, cExprs, buf)
 	}
 }
 
