@@ -266,7 +266,8 @@ type Solution struct {
 	dataMean float64
 
 	// placement of indexes	in nodes
-	Placement []*IndexerNode `json:"placement,omitempty"`
+	Placement  []*IndexerNode `json:"placement,omitempty"`
+	indexSGMap map[string]string
 
 	// constraint check
 	enforceConstraint bool
@@ -421,6 +422,7 @@ func (p *SAPlanner) Plan(command CommandType, solution *Solution) (*Solution, er
 
 	var result *Solution
 	var err error
+	var violations *Violations
 
 	solution.command = command
 	solution = p.adjustInitialSolutionIfNecessary(solution)
@@ -433,12 +435,13 @@ func (p *SAPlanner) Plan(command CommandType, solution *Solution) (*Solution, er
 
 		err = p.Validate(solution)
 		if err == nil {
-			result, err = p.planSingleRun(command, solution)
+			result, err, violations = p.planSingleRun(command, solution)
 
-			// if err == nil, type assertion will return !ok
-			if _, ok := err.(*Violations); !ok {
+			if violations == nil {
 				return result, err
 			}
+
+			err = errors.New(violations.Error())
 
 			// copy estimation information
 			if result != nil {
@@ -470,7 +473,7 @@ func (p *SAPlanner) Plan(command CommandType, solution *Solution) (*Solution, er
 // Given a solution, this function use simulated annealing
 // to find an alternative solution with a lower cost.
 //
-func (p *SAPlanner) planSingleRun(command CommandType, solution *Solution) (*Solution, error) {
+func (p *SAPlanner) planSingleRun(command CommandType, solution *Solution) (*Solution, error, *Violations) {
 
 	current := solution.clone()
 	initialPlan := solution.initialPlan
@@ -567,11 +570,11 @@ func (p *SAPlanner) planSingleRun(command CommandType, solution *Solution) (*Sol
 
 	eligibles := p.placement.GetEligibleIndexes()
 	if !p.constraint.SatisfyClusterConstraint(p.Result, eligibles) {
-		return current, p.constraint.GetViolations(p.Result, eligibles)
+		return current, nil, p.constraint.GetViolations(p.Result, eligibles)
 	}
 
 	p.cost.Cost(p.Result)
-	return current, nil
+	return current, nil, nil
 }
 
 func (p *SAPlanner) SetTimeout(timeout int) {
@@ -777,6 +780,7 @@ func (p *SAPlanner) adjustInitialSolutionIfNecessary(s *Solution) *Solution {
 	s.numDeletedNode = s.findNumDeleteNodes()
 	s.numNewNode = s.findNumEmptyNodes()
 	s.markNewNodes()
+	s.initializeServerGroupMap()
 
 	// if there is deleted node and all nodes are excluded to take in new indexes,
 	// then do not enable node exclusion
@@ -798,9 +802,9 @@ func (p *SAPlanner) adjustInitialSolutionIfNecessary(s *Solution) *Solution {
 
 	// Make sure we only repair when it is rebalancing
 	if s.command != CommandPlan {
-		p.dropReplicaIfNecessary(cloned)
 		p.addReplicaIfNecessary(cloned)
 		p.addPartitionIfNecessary(cloned)
+		p.dropReplicaIfNecessary(cloned)
 	}
 	p.suppressEqivIndexIfNecessary(cloned)
 
@@ -1041,13 +1045,13 @@ func (p *SAPlanner) addPartitionIfNecessary(s *Solution) {
 		var allCloned []*IndexUsage
 
 		for _, indexer := range s.Placement {
-			if !indexer.ExcludeAny(s) {
+			if !indexer.isDelete && !indexer.ExcludeAny(s) {
 				available = append(available, indexer)
 			}
 		}
 
 		if len(available) == 0 {
-			logging.Warnf("Planner: Cannot repair lost partitions because all indexer nodes are excluded for rebalancing")
+			logging.Warnf("Planner: Cannot repair lost partitions because all indexer nodes are excluded or deleted for rebalancing")
 			return
 		}
 
@@ -1061,14 +1065,18 @@ func (p *SAPlanner) addPartitionIfNecessary(s *Solution) {
 				cloned.PartnId = partitionId
 				cloned.initialNode = nil
 
-				n := rand.Intn(len(available))
-				indexer := available[n]
+				// repair only if there is no replica, otherwise, replica repair would have handle this.
+				if s.findNumReplica(cloned) == 0 {
 
-				// add the new partition to the solution
-				s.addIndex(indexer, cloned, false)
-				allCloned = append(allCloned, cloned)
+					n := rand.Intn(len(available))
+					indexer := available[n]
 
-				logging.Infof("Rebuilding lost partition for (%v,%v,%v,%v)", cloned.Bucket, cloned.Name, cloned.Instance.ReplicaId, cloned.PartnId)
+					// add the new partition to the solution
+					s.addIndex(indexer, cloned, false)
+					allCloned = append(allCloned, cloned)
+
+					logging.Infof("Rebuilding lost partition for (%v,%v,%v,%v)", cloned.Bucket, cloned.Name, cloned.Instance.ReplicaId, cloned.PartnId)
+				}
 			}
 		}
 
@@ -1096,6 +1104,7 @@ func newSolution(constraint ConstraintMethod, sizing SizingMethod, indexers []*I
 		disableRepair: disableRepair,
 		estimate:      true,
 		enableExclude: true,
+		indexSGMap:    make(map[string]string),
 	}
 
 	// initialize list of indexers
@@ -1202,6 +1211,7 @@ func (s *Solution) addIndex(n *IndexerNode, idx *IndexUsage, meetConstraint bool
 	n.AddCpuUsage(s, idx.GetCpuUsage(s.UseLiveData()))
 	n.AddDataSize(s, idx.GetDataSize(s.UseLiveData()))
 	n.EvaluateNodeStats(s)
+	s.updateServerGroupMap(idx, n)
 }
 
 //
@@ -1265,6 +1275,7 @@ func (s *Solution) clone() *Solution {
 		cpuMean:            s.cpuMean,
 		dataMean:           s.dataMean,
 		enforceConstraint:  s.enforceConstraint,
+		indexSGMap:         make(map[string]string),
 	}
 
 	for _, node := range s.Placement {
@@ -1272,6 +1283,10 @@ func (s *Solution) clone() *Solution {
 			continue
 		}
 		r.Placement = append(r.Placement, node.clone())
+	}
+
+	for index, sg := range s.indexSGMap {
+		r.indexSGMap[index] = sg
 	}
 
 	return r
@@ -1981,14 +1996,28 @@ func (s *Solution) SatisfyClusterConstraint() bool {
 //
 func (s *Solution) hasReplicaInServerGroup(u *IndexUsage, group string) bool {
 
-	for _, indexer := range s.Placement {
-		if indexer.isDelete {
-			continue
+	if u.Instance != nil {
+		numReplica := int(u.Instance.Defn.NumReplica)
+		for i := 0; i < numReplica; i++ {
+			if i != u.Instance.ReplicaId {
+				key := common.FormatIndexPartnDisplayName(u.Instance.Defn.Name, i, int(u.PartnId), true)
+				if sg, ok := s.indexSGMap[key]; ok {
+					if sg == group {
+						return true
+					}
+				}
+			}
 		}
-		for _, index := range indexer.Indexes {
-			if index != u && index.IsReplica(u) { // replica
-				if group == indexer.ServerGroup {
-					return true
+	} else {
+		for _, indexer := range s.Placement {
+			if indexer.isDelete {
+				continue
+			}
+			for _, index := range indexer.Indexes {
+				if index != u && index.IsReplica(u) { // replica
+					if group == indexer.ServerGroup {
+						return true
+					}
 				}
 			}
 		}
@@ -2002,27 +2031,40 @@ func (s *Solution) hasReplicaInServerGroup(u *IndexUsage, group string) bool {
 //
 func (s *Solution) hasServerGroupWithNoReplica(u *IndexUsage) bool {
 
-	counts := make(map[string]int)
-
-	for _, indexer := range s.Placement {
-		if indexer.isDelete {
-			continue
-		}
-
-		if _, ok := counts[indexer.ServerGroup]; !ok {
-			counts[indexer.ServerGroup] = 0
-		}
-
-		for _, index := range indexer.Indexes {
-			if index != u && index.IsReplica(u) { // replica
-				counts[indexer.ServerGroup] = counts[indexer.ServerGroup] + 1
+	if u.Instance != nil {
+		numReplica := int(u.Instance.Defn.NumReplica)
+		count := 0
+		for i := 0; i < numReplica; i++ {
+			key := common.FormatIndexPartnDisplayName(u.Instance.Defn.Name, i, int(u.PartnId), true)
+			if _, ok := s.indexSGMap[key]; ok {
+				count++
 			}
 		}
-	}
+		return s.numServerGroup > count
 
-	for _, count := range counts {
-		if count == 0 {
-			return true
+	} else {
+		counts := make(map[string]int)
+
+		for _, indexer := range s.Placement {
+			if indexer.isDelete {
+				continue
+			}
+
+			if _, ok := counts[indexer.ServerGroup]; !ok {
+				counts[indexer.ServerGroup] = 0
+			}
+
+			for _, index := range indexer.Indexes {
+				if index != u && index.IsReplica(u) { // replica
+					counts[indexer.ServerGroup] = counts[indexer.ServerGroup] + 1
+				}
+			}
+		}
+
+		for _, count := range counts {
+			if count == 0 {
+				return true
+			}
 		}
 	}
 
@@ -2126,6 +2168,25 @@ func (s *Solution) hasDeletedNodes() bool {
 		}
 	}
 	return false
+}
+
+//
+// Update SG mapping for index
+//
+func (s *Solution) updateServerGroupMap(index *IndexUsage, indexer *IndexerNode) {
+	key := index.GetDisplayName()
+	s.indexSGMap[key] = indexer.ServerGroup
+}
+
+//
+// initialize SG mapping for index
+//
+func (s *Solution) initializeServerGroupMap() {
+	for _, indexer := range s.Placement {
+		for _, index := range indexer.Indexes {
+			s.updateServerGroupMap(index, indexer)
+		}
+	}
 }
 
 //
@@ -5244,6 +5305,10 @@ func (s *PlasmaSizingMethod) ComputeMinQuota(indexes []*IndexUsage, useLive bool
 // This function returns violations as a string
 //
 func (v *Violations) Error() string {
+	if v == nil {
+		return ""
+	}
+
 	err := fmt.Sprintf("\nMemoryQuota: %v\n", v.MemQuota)
 	err += fmt.Sprintf("CpuQuota: %v\n", v.CpuQuota)
 
@@ -5264,5 +5329,5 @@ func (v *Violations) Error() string {
 //
 func (v *Violations) IsEmpty() bool {
 
-	return len(v.Violations) == 0
+	return v == nil || len(v.Violations) == 0
 }
