@@ -307,14 +307,15 @@ type IndexerStats struct {
 	indexes map[common.IndexInstId]*IndexStats
 	buckets map[string]*BucketStats
 
-	numConnections    stats.Int64Val
-	memoryQuota       stats.Int64Val
-	memoryUsed        stats.Int64Val
-	memoryUsedStorage stats.Int64Val
-	memoryUsedQueue   stats.Int64Val
-	needsRestart      stats.BoolVal
-	statsResponse     stats.TimingStat
-	notFoundError     stats.Int64Val
+	numConnections     stats.Int64Val
+	memoryQuota        stats.Int64Val
+	memoryUsed         stats.Int64Val
+	memoryUsedStorage  stats.Int64Val
+	memoryTotalStorage stats.Int64Val
+	memoryUsedQueue    stats.Int64Val
+	needsRestart       stats.BoolVal
+	statsResponse      stats.TimingStat
+	notFoundError      stats.Int64Val
 
 	indexerState stats.Int64Val
 }
@@ -326,6 +327,7 @@ func (s *IndexerStats) Init() {
 	s.memoryQuota.Init()
 	s.memoryUsed.Init()
 	s.memoryUsedStorage.Init()
+	s.memoryTotalStorage.Init()
 	s.memoryUsedQueue.Init()
 	s.needsRestart.Init()
 	s.statsResponse.Init()
@@ -426,6 +428,7 @@ func (is IndexerStats) GetStats(getPartition bool, skipEmpty bool) common.Statis
 	addStat("memory_quota", is.memoryQuota.Value())
 	addStat("memory_used", is.memoryUsed.Value())
 	addStat("memory_used_storage", is.memoryUsedStorage.Value())
+	addStat("memory_total_storage", is.memoryTotalStorage.Value())
 	addStat("memory_used_queue", is.memoryUsedQueue.Value())
 	addStat("needs_restart", is.needsRestart.Value())
 	storageMode := fmt.Sprintf("%s", common.GetStorageMode())
