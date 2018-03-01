@@ -899,7 +899,7 @@ func newDcpEvent(rq *transport.MCRequest, stream *DcpStream) (event *DcpEvent) {
 		event.Opcode == transport.DCP_DELETION) && event.HasXATTR() {
 		xattrLen := int(binary.BigEndian.Uint32(rq.Body))
 		xattrData := rq.Body[4 : 4+xattrLen]
-		event.XATTR = make(map[string]interface{})
+		event.XATTR = make(map[string]interface{}, xattrLen)
 		for len(xattrData) > 0 {
 			pairLen := binary.BigEndian.Uint32(xattrData[0:])
 			xattrData = xattrData[4:]
@@ -907,9 +907,9 @@ func newDcpEvent(rq *transport.MCRequest, stream *DcpStream) (event *DcpEvent) {
 			xattrData = xattrData[pairLen:]
 			kvPair := bytes.Split(binaryPair, []byte{0x00})
 			key := string(kvPair[0])
-			var val map[string]interface{}
+			var val interface{}
 			if err := json.Unmarshal(kvPair[1], &val); err != nil {
-				arg1 := logging.TagUD(string(rq.Key))
+				arg1 := logging.TagStrUD(rq.Key)
 				logging.Errorf("Error parsing XATTR for %s: %v", arg1, err)
 			} else {
 				event.XATTR[key] = val
