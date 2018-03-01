@@ -14,7 +14,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/couchbase/cbauth/metakv"
 	c "github.com/couchbase/gometa/common"
 	"github.com/couchbase/gometa/message"
 	"github.com/couchbase/gometa/protocol"
@@ -92,10 +91,16 @@ type builder struct {
 	notifych  chan *common.IndexDefn
 	batchSize int32
 	disable   int32
+
+	commandListener *mc.CommandListener
+	listenerDonech  chan bool
 }
 
 type janitor struct {
 	manager *LifecycleMgr
+
+	commandListener *mc.CommandListener
+	listenerDonech  chan bool
 }
 
 type updator struct {
@@ -2449,42 +2454,36 @@ func (m *janitor) cleanup() {
 	//
 	logging.Infof("janitor: running cleanup.")
 
-	entries, err := metakv.ListAllChildren(mc.DeleteDDLCommandTokenPath)
-	if err != nil {
-		logging.Warnf("janitor: Failed to drop index upon cleanup.  Internal Error = %v", err)
-		return
+	entries := m.commandListener.GetNewDeleteTokens()
+	retryList := make(map[string]*mc.DeleteCommandToken)
+
+	for entry, command := range entries {
+
+		logging.Infof("janitor: Processing delete token %v", entry)
+
+		defn, err := m.manager.repo.GetIndexDefnById(command.DefnId)
+		if err != nil {
+			retryList[entry] = command
+			logging.Warnf("janitor: Failed to drop index upon cleanup.  Skp command %v.  Internal Error = %v.", entry, err)
+			continue
+		}
+
+		// index may already be deleted or does not exist in this node
+		if defn == nil {
+			continue
+		}
+
+		// Queue up the cleanup request.  The request wont' happen until bootstrap is ready.
+		if err := m.manager.requestServer.MakeAsyncRequest(client.OPCODE_DROP_INDEX, fmt.Sprintf("%v", command.DefnId), nil); err != nil {
+			retryList[entry] = command
+			logging.Warnf("janitor: Failed to drop index upon cleanup.  Skp command %v.  Internal Error = %v.", entry, err)
+		} else {
+			logging.Infof("janitor: Clean up deleted index %v during periodic cleanup ", command.DefnId)
+		}
 	}
 
-	for _, entry := range entries {
-
-		if strings.Contains(entry.Path, mc.DeleteDDLCommandTokenPath) && entry.Value != nil {
-
-			logging.Infof("janitor: Processing delete token %v", entry.Path)
-
-			command, err := mc.UnmarshallDeleteCommandToken(entry.Value)
-			if err != nil {
-				logging.Warnf("janitor: Failed to drop index upon cleanup.  Skp command %v.  Internal Error = %v.", entry.Path, err)
-				continue
-			}
-
-			defn, err := m.manager.repo.GetIndexDefnById(command.DefnId)
-			if err != nil {
-				logging.Warnf("janitor: Failed to drop index upon cleanup.  Skp command %v.  Internal Error = %v.", entry.Path, err)
-				continue
-			}
-
-			// index may already be deleted or does not exist in this node
-			if defn == nil {
-				continue
-			}
-
-			// Queue up the cleanup request.  The request wont' happen until bootstrap is ready.
-			if err := m.manager.requestServer.MakeAsyncRequest(client.OPCODE_DROP_INDEX, fmt.Sprintf("%v", command.DefnId), nil); err != nil {
-				logging.Warnf("janitor: Failed to drop index upon cleanup.  Skp command %v.  Internal Error = %v.", entry.Path, err)
-			} else {
-				logging.Infof("janitor: Clean up deleted index %v during periodic cleanup ", command.DefnId)
-			}
-		}
+	for path, token := range retryList {
+		m.commandListener.AddNewDeleteToken(path, token)
 	}
 
 	//
@@ -2536,6 +2535,10 @@ func (m *janitor) cleanup() {
 
 func (m *janitor) run() {
 
+	// start listener
+	m.commandListener.ListenTokens()
+	time.Sleep(time.Minute)
+
 	// do initial cleanup
 	m.cleanup()
 
@@ -2548,15 +2551,25 @@ func (m *janitor) run() {
 			m.cleanup()
 
 		case <-m.manager.killch:
+			m.commandListener.Close()
 			logging.Infof("janitor: Index recovery go-routine terminates.")
+
+		case <-m.listenerDonech:
+			m.listenerDonech = make(chan bool)
+			m.commandListener = mc.NewCommandListener(m.listenerDonech, false, false, true)
+			m.commandListener.ListenTokens()
 		}
 	}
 }
 
 func newJanitor(mgr *LifecycleMgr) *janitor {
 
+	donech := make(chan bool)
+
 	janitor := &janitor{
-		manager: mgr,
+		manager:         mgr,
+		commandListener: mc.NewCommandListener(donech, false, false, true),
+		listenerDonech:  donech,
 	}
 
 	return janitor
@@ -2570,6 +2583,10 @@ func newJanitor(mgr *LifecycleMgr) *janitor {
 //////////////////////////////////////////////////////////////
 
 func (s *builder) run() {
+
+	// start listener
+	s.commandListener.ListenTokens()
+	time.Sleep(time.Minute)
 
 	// wait for indexer bootstrap to complete before recover
 	s.recover()
@@ -2599,7 +2616,13 @@ func (s *builder) run() {
 			}
 
 		case <-s.manager.killch:
+			s.commandListener.Close()
 			logging.Infof("builder: Index builder terminates.")
+
+		case <-s.listenerDonech:
+			s.listenerDonech = make(chan bool)
+			s.commandListener = mc.NewCommandListener(s.listenerDonech, false, true, false)
+			s.commandListener.ListenTokens()
 		}
 	}
 }
@@ -2798,51 +2821,45 @@ func (s *builder) getQuota() (int32, map[string]bool) {
 
 func (s *builder) processBuildToken(bootstrap bool) {
 
-	entries, err := metakv.ListAllChildren(mc.BuildDDLCommandTokenPath)
-	if err != nil {
-		logging.Warnf("builder: Failed to get command token from metakv.  Internal Error = %v", err)
-		entries = nil
-	}
+	entries := s.commandListener.GetNewBuildTokens()
+	retryList := make(map[string]*mc.BuildCommandToken)
 
-	for _, entry := range entries {
+	for entry, command := range entries {
 
-		if strings.Contains(entry.Path, mc.BuildDDLCommandTokenPath) && entry.Value != nil {
+		defn, err := s.manager.repo.GetIndexDefnById(command.DefnId)
+		if err != nil {
+			retryList[entry] = command
+			logging.Warnf("builder: Unable to read index definition.  Skp command %v.  Internal Error = %v.", entry, err)
+			continue
+		}
 
-			command, err := mc.UnmarshallBuildCommandToken(entry.Value)
-			if err != nil {
-				logging.Warnf("builder: Failed to unmarshall command token.  Skp command %v.  Internal Error = %v.", entry.Path, err)
-				continue
-			}
+		// index may already be deleted or does not exist in this node
+		if defn == nil {
+			continue
+		}
 
-			defn, err := s.manager.repo.GetIndexDefnById(command.DefnId)
-			if err != nil {
-				logging.Warnf("builder: Unable to read index definition.  Skp command %v.  Internal Error = %v.", entry.Path, err)
-				continue
-			}
+		insts, err := s.manager.FindAllLocalIndexInst(defn.Bucket, defn.DefnId)
+		if err != nil {
+			retryList[entry] = command
+			logging.Warnf("builder: Unable to read index instance for definition (%v, %v).   Skipping ...",
+				defn.Bucket, defn.Name)
+			continue
+		}
 
-			// index may already be deleted or does not exist in this node
-			if defn == nil {
-				continue
-			}
+		for _, inst := range insts {
 
-			insts, err := s.manager.FindAllLocalIndexInst(defn.Bucket, defn.DefnId)
-			if err != nil {
-				logging.Warnf("builder: Unable to read index instance for definition (%v, %v).   Skipping ...",
-					defn.Bucket, defn.Name)
-				continue
-			}
+			if inst.State == uint32(common.INDEX_STATE_READY) {
+				logging.Infof("builder: Processing build token %v", entry)
 
-			for _, inst := range insts {
-
-				if inst.State == uint32(common.INDEX_STATE_READY) {
-					logging.Infof("builder: Processing build token %v", entry.Path)
-
-					if s.addPending(defn.Bucket, uint64(defn.DefnId)) {
-						logging.Infof("builder: Schedule index build for (%v, %v).", defn.Bucket, defn.Name)
-					}
+				if s.addPending(defn.Bucket, uint64(defn.DefnId)) {
+					logging.Infof("builder: Schedule index build for (%v, %v).", defn.Bucket, defn.Name)
 				}
 			}
 		}
+	}
+
+	for path, token := range retryList {
+		s.commandListener.AddNewBuildToken(path, token)
 	}
 }
 
@@ -2908,11 +2925,15 @@ func (s *builder) disableBuild() bool {
 
 func newBuilder(mgr *LifecycleMgr) *builder {
 
+	donech := make(chan bool)
+
 	builder := &builder{
-		manager:   mgr,
-		pendings:  make(map[string][]uint64),
-		notifych:  make(chan *common.IndexDefn, 10000),
-		batchSize: int32(common.SystemConfig["indexer.settings.build.batch_size"].Int()),
+		manager:         mgr,
+		pendings:        make(map[string][]uint64),
+		notifych:        make(chan *common.IndexDefn, 10000),
+		batchSize:       int32(common.SystemConfig["indexer.settings.build.batch_size"].Int()),
+		commandListener: mc.NewCommandListener(donech, false, true, false),
+		listenerDonech:  donech,
 	}
 
 	disable := common.SystemConfig["indexer.build.background.disable"].Bool()

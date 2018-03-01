@@ -58,6 +58,9 @@ type DDLServiceMgr struct {
 	killch      chan bool
 	allowDDL    bool
 	mutex       sync.Mutex
+
+	commandListener *mc.CommandListener
+	listenerDonech  chan bool
 }
 
 //
@@ -97,17 +100,21 @@ func NewDDLServiceMgr(indexerId common.IndexerId, supvCmdch MsgChannel, supvMsgc
 	numReplica := int32(config["settings.num_replica"].Int())
 	settings := &ddlSettings{numReplica: numReplica}
 
+	donech := make(chan bool)
+
 	mgr := &DDLServiceMgr{
-		indexerId:   indexerId,
-		supvCmdch:   supvCmdch,
-		supvMsgch:   supvMsgch,
-		localAddr:   localaddr,
-		clusterAddr: addr,
-		nodeID:      nodeId,
-		settings:    settings,
-		donech:      nil,
-		killch:      make(chan bool),
-		allowDDL:    true,
+		indexerId:       indexerId,
+		supvCmdch:       supvCmdch,
+		supvMsgch:       supvMsgch,
+		localAddr:       localaddr,
+		clusterAddr:     addr,
+		nodeID:          nodeId,
+		settings:        settings,
+		donech:          nil,
+		killch:          make(chan bool),
+		allowDDL:        true,
+		commandListener: mc.NewCommandListener(donech, true, false, false),
+		listenerDonech:  donech,
 	}
 
 	mgr.config.Store(config)
@@ -497,12 +504,7 @@ func (m *DDLServiceMgr) cleanupCreateCommand() {
 
 func (m *DDLServiceMgr) handleCreateCommand() {
 
-	// get all create token from metakv
-	entries, err := mc.ListCreateCommandToken()
-	if err != nil {
-		logging.Warnf("DDLServiceMgr: Failed to fetch token from metakv.  Internal Error = %v", err)
-		return
-	}
+	entries := m.commandListener.GetNewCreateTokens()
 
 	// nothing to do
 	if len(entries) == 0 {
@@ -547,24 +549,24 @@ func (m *DDLServiceMgr) handleCreateCommand() {
 		return false, common.INDEX_STATE_NIL, common.INDEXER_ID_NIL
 	}
 
-	buildMap := make(map[common.IndexDefnId]bool)
-	var deleteList []common.IndexDefnId
+	retryList := make(map[string]*mc.CreateCommandToken)
+	for path, token := range entries {
+		retryList[path] = token
+	}
 
-	for _, entry := range entries {
+	defer func() {
+		// Add back those tokens cannot be completely processed
+		for path, token := range retryList {
+			m.commandListener.AddNewCreateToken(path, token)
+		}
+	}()
+
+	buildMap := make(map[common.IndexDefnId]bool)
+	deleteMap := make(map[string]common.IndexDefnId)
+
+	for entry, token := range entries {
 
 		logging.Infof("DDLServiceMgr: processing create index token %v", entry)
-
-		defnId, err := mc.GetDefnIdFromCreateCommandTokenPath(entry)
-		if err != nil {
-			logging.Warnf("DDLServiceMgr: Failed to process create index token.  Skip %v.  Internal Error = %v.", entry, err)
-			continue
-		}
-
-		token, err := mc.FetchCreateCommandToken(defnId)
-		if err != nil {
-			logging.Warnf("DDLServiceMgr: Failed to process create index token.  Skip %v.  Internal Error = %v.", entry, err)
-			continue
-		}
 
 		if token != nil {
 
@@ -587,6 +589,7 @@ func (m *DDLServiceMgr) handleCreateCommand() {
 				if err := mc.DeleteCreateCommandToken(token.DefnId); err != nil {
 					logging.Warnf("DDLServiceMgr: Failed to remove create index token %v. Error = %v", entry, err)
 				} else {
+					delete(retryList, entry)
 					logging.Infof("DDLServiceMgr: Remove create index token %v due to delete token.", entry)
 				}
 				continue
@@ -675,7 +678,7 @@ func (m *DDLServiceMgr) handleCreateCommand() {
 
 			if canDelete {
 				// If all the instances and partitions are accounted for, then delete the create token.
-				deleteList = append(deleteList, defnId)
+				deleteMap[entry] = token.DefnId
 			}
 		}
 	}
@@ -705,7 +708,7 @@ func (m *DDLServiceMgr) handleCreateCommand() {
 
 	// At this point, we have a list of token which has all the instances and partitions being created and built.
 	// Delete those create token.
-	if len(deleteList) != 0 {
+	if len(deleteMap) != 0 {
 		// Avoid deleting create token during rebalance.  This is just for extra safety.  Even if the planner
 		// may use the create token during planning, it just mean that it is trying to create those partitions on
 		// behalf of the DDL service manager.   As long as the drop token exists, then those partitions will be
@@ -715,10 +718,11 @@ func (m *DDLServiceMgr) handleCreateCommand() {
 			return
 		}
 
-		for _, defnId := range deleteList {
+		for path, defnId := range deleteMap {
 			if err := mc.DeleteCreateCommandToken(defnId); err != nil {
 				logging.Warnf("DDLServiceMgr: Failed to remove create index token %v. Error = %v", defnId, err)
 			} else {
+				delete(retryList, path)
 				logging.Infof("DDLServiceMgr: Remove create index token %v.", defnId)
 			}
 		}
@@ -726,6 +730,8 @@ func (m *DDLServiceMgr) handleCreateCommand() {
 }
 
 func (m *DDLServiceMgr) processCreateCommand() {
+
+	m.commandListener.ListenTokens()
 
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
@@ -735,7 +741,15 @@ func (m *DDLServiceMgr) processCreateCommand() {
 		case <-ticker.C:
 			m.handleCreateCommand()
 
+		case _, ok := <-m.listenerDonech:
+			if !ok {
+				m.listenerDonech = make(chan bool)
+				m.commandListener = mc.NewCommandListener(m.listenerDonech, true, false, false)
+				m.commandListener.ListenTokens()
+			}
+
 		case <-m.killch:
+			m.commandListener.Close()
 			logging.Infof("author: Index author go-routine terminates.")
 			return
 		}
