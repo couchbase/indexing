@@ -12,7 +12,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/couchbase/indexing/secondary/common/json"
 	"github.com/couchbase/indexing/secondary/dcp/transport"
 	"github.com/couchbase/indexing/secondary/logging"
 )
@@ -842,7 +841,8 @@ type DcpEvent struct {
 	// stats
 	Ctime int64
 	// extended attributes
-	XATTR map[string]interface{}
+	RawXATTR    map[string][]byte
+	ParsedXATTR map[string]interface{}
 }
 
 func newDcpEvent(rq *transport.MCRequest, stream *DcpStream) (event *DcpEvent) {
@@ -850,7 +850,7 @@ func newDcpEvent(rq *transport.MCRequest, stream *DcpStream) (event *DcpEvent) {
 		if r := recover(); r != nil {
 			// Error parsing XATTR, Request body might be malformed
 			arg1 := logging.TagStrUD(rq.Key)
-			logging.Errorf("Panic Error parsing XATTR for %s: %v", arg1, r)
+			logging.Errorf("Panic: Error parsing RawXATTR for %s: %v", arg1, r)
 			event.Value = make([]byte, 0)
 			event.Datatype &= ^(dcpXATTR | dcpJSON)
 		}
@@ -899,21 +899,14 @@ func newDcpEvent(rq *transport.MCRequest, stream *DcpStream) (event *DcpEvent) {
 		event.Opcode == transport.DCP_DELETION) && event.HasXATTR() {
 		xattrLen := int(binary.BigEndian.Uint32(rq.Body))
 		xattrData := rq.Body[4 : 4+xattrLen]
-		event.XATTR = make(map[string]interface{}, xattrLen)
+		event.RawXATTR = make(map[string][]byte, xattrLen)
 		for len(xattrData) > 0 {
 			pairLen := binary.BigEndian.Uint32(xattrData[0:])
 			xattrData = xattrData[4:]
 			binaryPair := xattrData[:pairLen-1]
 			xattrData = xattrData[pairLen:]
 			kvPair := bytes.Split(binaryPair, []byte{0x00})
-			key := string(kvPair[0])
-			var val interface{}
-			if err := json.Unmarshal(kvPair[1], &val); err != nil {
-				arg1 := logging.TagStrUD(rq.Key)
-				logging.Errorf("Error parsing XATTR for %s: %v", arg1, err)
-			} else {
-				event.XATTR[key] = val
-			}
+			event.RawXATTR[string(kvPair[0])] = kvPair[1]
 		}
 		event.Value = make([]byte, len(rq.Body)-(4+xattrLen))
 		copy(event.Value, rq.Body[4+xattrLen:])

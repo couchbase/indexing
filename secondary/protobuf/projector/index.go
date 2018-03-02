@@ -7,6 +7,8 @@ import c "github.com/couchbase/indexing/secondary/common"
 import mcd "github.com/couchbase/indexing/secondary/dcp/transport"
 import mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
 import qvalue "github.com/couchbase/query/value"
+import qu "github.com/couchbase/indexing/secondary/common/queryutil"
+import "github.com/couchbase/indexing/secondary/common/json"
 
 type Partition interface {
 	// Hosts return full list of endpoints <host:port>
@@ -98,6 +100,7 @@ type IndexEvaluator struct {
 	whExpr   interface{}   // compiled expression
 	instance *IndexInst
 	version  FeedVersion
+	xattrs   []string
 }
 
 // NewIndexEvaluator returns a reference to a new instance
@@ -113,14 +116,17 @@ func NewIndexEvaluator(instance *IndexInst,
 	exprtype := defn.GetExprType()
 	switch exprtype {
 	case ExprType_N1QL:
+		xattrExprs := make([]string, 0)
 		// expressions to evaluate secondary-key
 		exprs := defn.GetSecExpressions()
+		xattrExprs = append(xattrExprs, exprs...)
 		ie.skExprs, err = CompileN1QLExpression(exprs)
 		if err != nil {
 			return nil, err
 		}
 		// expression to evaluate partition key
 		exprs = defn.GetPartnExpressions()
+		xattrExprs = append(xattrExprs, exprs...)
 		if len(exprs) > 0 {
 			cExprs, err := CompileN1QLExpression(exprs)
 			if err != nil {
@@ -131,6 +137,7 @@ func NewIndexEvaluator(instance *IndexInst,
 		}
 		// expression to evaluate where clause
 		expr := defn.GetWhereExpression()
+		xattrExprs = append(xattrExprs, exprs...)
 		if len(expr) > 0 {
 			cExprs, err := CompileN1QLExpression([]string{expr})
 			if err != nil {
@@ -139,6 +146,8 @@ func NewIndexEvaluator(instance *IndexInst,
 				ie.whExpr = cExprs[0]
 			}
 		}
+		_, xattrNames, _ := qu.GetXATTRNames(xattrExprs)
+		ie.xattrs = xattrNames
 
 	default:
 		logging.Errorf("invalid expression type %v\n", exprtype)
@@ -221,7 +230,7 @@ func (ie *IndexEvaluator) TransformRoute(
 		opcode = mcd.DCP_MUTATION
 	}
 
-	meta := dcpEvent2Meta(m)
+	meta := ie.dcpEvent2Meta(m)
 	docval := qvalue.NewAnnotatedValue(qvalue.NewParsedValue(m.Value, true))
 	docval.SetAttachment("meta", meta)
 	where, err := ie.wherePredicate(m, docval, encodeBuf)
@@ -403,7 +412,27 @@ func (ie *IndexEvaluator) wherePredicate(
 }
 
 // helper functions
-func dcpEvent2Meta(m *mc.DcpEvent) map[string]interface{} {
+func (ie *IndexEvaluator) dcpEvent2Meta(m *mc.DcpEvent) map[string]interface{} {
+	// If index is defined on xattr (either where-expression, part-expression
+	// or secondary-expression) then unmarshall XATTR, and only one for this
+	// event, and only used XATTRs. Cache the results for reuse.
+	if len(ie.xattrs) > 0 && m.ParsedXATTR == nil {
+		m.ParsedXATTR = make(map[string]interface{})
+	}
+	for _, xattr := range ie.xattrs {
+		if _, ok := m.ParsedXATTR[xattr]; !ok {
+			var val interface{}
+			if err := json.Unmarshal(m.RawXATTR[xattr], &val); err != nil {
+				arg1 := logging.TagStrUD(xattr)
+				arg2 := logging.TagStrUD(m.Key)
+				logging.Errorf("Error parsing XATTR %s for %s: %v",
+					arg1, arg2, err)
+			} else {
+				m.ParsedXATTR[xattr] = val
+			}
+		}
+	}
+
 	return map[string]interface{}{
 		"id":         string(m.Key),
 		"byseqno":    m.Seqno,
@@ -413,6 +442,6 @@ func dcpEvent2Meta(m *mc.DcpEvent) map[string]interface{} {
 		"locktime":   m.LockTime,
 		"nru":        m.Nru,
 		"cas":        m.Cas,
-		"xattrs":     m.XATTR,
+		"xattrs":     m.ParsedXATTR,
 	}
 }
