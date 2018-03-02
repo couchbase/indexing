@@ -670,8 +670,10 @@ func (mdb *memdbSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 		err = mdb.loadSnapshot(s.info)
 	}
 
-	logging.Infof("MemDBSlice::OpenSnapshot SliceId %v IndexInstId %v Creating New "+
-		"Snapshot %v", mdb.id, mdb.idxInstId, snapInfo)
+	if info.IsCommitted() {
+		logging.Infof("MemDBSlice::OpenSnapshot SliceId %v IndexInstId %v Creating New "+
+			"Snapshot %v", mdb.id, mdb.idxInstId, snapInfo)
+	}
 
 	return s, err
 }
@@ -818,6 +820,11 @@ func (mdb *memdbSlice) resetStores() {
 	}
 
 	mdb.initStores()
+
+	prev := atomic.LoadUint64(&mdb.committedCount)
+	atomic.AddInt64(&totalMemDBItems, -int64(prev))
+	mdb.committedCount = 0
+	mdb.idxStats.itemsCount.Set(0)
 }
 
 //Rollback slice to given snapshot. Return error if
@@ -938,6 +945,7 @@ func (mdb *memdbSlice) loadSnapshot(snapInfo *memdbSnapshotInfo) (err error) {
 func (mdb *memdbSlice) RollbackToZero() error {
 	mdb.resetStores()
 	mdb.cleanupOldSnapshotFiles(0)
+
 	return nil
 }
 
@@ -1179,7 +1187,7 @@ func (mdb *memdbSlice) getCmdsCount() int {
 func (mdb *memdbSlice) logWriterStat() {
 	count := atomic.AddUint64(&mdb.flushedCount, 1)
 	if (count%10000 == 0) || count == 1 {
-		logging.Infof("logWriterStat:: %v "+
+		logging.Debugf("logWriterStat:: %v "+
 			"FlushedCount %v QueuedCount %v", mdb.idxInstId,
 			count, mdb.getCmdsCount())
 	}

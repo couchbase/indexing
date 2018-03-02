@@ -6,6 +6,7 @@ import "github.com/couchbase/indexing/secondary/logging"
 import c "github.com/couchbase/indexing/secondary/common"
 import mcd "github.com/couchbase/indexing/secondary/dcp/transport"
 import mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
+import qvalue "github.com/couchbase/query/value"
 
 type Partition interface {
 	// Hosts return full list of endpoints <host:port>
@@ -221,24 +222,28 @@ func (ie *IndexEvaluator) TransformRoute(
 	}
 
 	meta := dcpEvent2Meta(m)
-	where, err := ie.wherePredicate(m, m.Value, meta, encodeBuf)
+	docval := qvalue.NewAnnotatedValue(qvalue.NewParsedValue(m.Value, true))
+	docval.SetAttachment("meta", meta)
+	where, err := ie.wherePredicate(m, docval, encodeBuf)
 	if err != nil {
 		return nil, err
 	}
 
 	if where && (len(m.Value) > 0 || retainDelete) { // project new secondary key
-		if npkey, err = ie.partitionKey(m, m.Key, m.Value, meta, encodeBuf); err != nil {
+		if npkey, err = ie.partitionKey(m, m.Key, docval, encodeBuf); err != nil {
 			return nil, err
 		}
-		if nkey, newBuf, err = ie.evaluate(m, m.Key, m.Value, meta, encodeBuf); err != nil {
+		if nkey, newBuf, err = ie.evaluate(m, m.Key, docval, encodeBuf); err != nil {
 			return nil, err
 		}
 	}
 	if len(m.OldValue) > 0 { // project old secondary key
-		if opkey, err = ie.partitionKey(m, m.Key, m.OldValue, meta, encodeBuf); err != nil {
+		docval = qvalue.NewAnnotatedValue(qvalue.NewParsedValue(m.OldValue, true))
+		docval.SetAttachment("meta", meta)
+		if opkey, err = ie.partitionKey(m, m.Key, docval, encodeBuf); err != nil {
 			return nil, err
 		}
-		if okey, newBuf, err = ie.evaluate(m, m.Key, m.OldValue, meta, encodeBuf); err != nil {
+		if okey, newBuf, err = ie.evaluate(m, m.Key, docval, encodeBuf); err != nil {
 			return nil, err
 		}
 	}
@@ -325,8 +330,8 @@ func (ie *IndexEvaluator) TransformRoute(
 }
 
 func (ie *IndexEvaluator) evaluate(
-	m *mc.DcpEvent, docid, doc []byte,
-	meta map[string]interface{}, encodeBuf []byte) ([]byte, []byte, error) {
+	m *mc.DcpEvent, docid []byte, docval qvalue.AnnotatedValue,
+	encodeBuf []byte) ([]byte, []byte, error) {
 
 	defn := ie.instance.GetDefinition()
 	if defn.GetIsPrimary() { // primary index supported !!
@@ -340,14 +345,14 @@ func (ie *IndexEvaluator) evaluate(
 	exprType := defn.GetExprType()
 	switch exprType {
 	case ExprType_N1QL:
-		return N1QLTransform(docid, doc, ie.skExprs, meta, encodeBuf)
+		return N1QLTransform(docid, docval, ie.skExprs, encodeBuf)
 	}
 	return nil, nil, nil
 }
 
 func (ie *IndexEvaluator) partitionKey(
-	m *mc.DcpEvent, docid, doc []byte,
-	meta map[string]interface{}, encodeBuf []byte) ([]byte, error) {
+	m *mc.DcpEvent, docid []byte, docval qvalue.AnnotatedValue,
+	encodeBuf []byte) ([]byte, error) {
 
 	defn := ie.instance.GetDefinition()
 	if ie.pkExprs == nil { // no partition key
@@ -360,15 +365,15 @@ func (ie *IndexEvaluator) partitionKey(
 	exprType := defn.GetExprType()
 	switch exprType {
 	case ExprType_N1QL:
-		out, _, err := N1QLTransform(docid, doc, ie.pkExprs, meta, nil)
+		out, _, err := N1QLTransform(docid, docval, ie.pkExprs, nil)
 		return out, err
 	}
 	return nil, nil
 }
 
 func (ie *IndexEvaluator) wherePredicate(
-	m *mc.DcpEvent, doc []byte,
-	meta map[string]interface{}, encodeBuf []byte) (bool, error) {
+	m *mc.DcpEvent, docval qvalue.AnnotatedValue,
+	encodeBuf []byte) (bool, error) {
 
 	// if where predicate is not supplied - always evaluate to `true`
 	if ie.whExpr == nil {
@@ -384,7 +389,7 @@ func (ie *IndexEvaluator) wherePredicate(
 	switch exprType {
 	case ExprType_N1QL:
 		// TODO: can be optimized by using a custom N1QL-evaluator.
-		out, _, err := N1QLTransform(nil, doc, []interface{}{ie.whExpr}, meta, encodeBuf)
+		out, _, err := N1QLTransform(nil, docval, []interface{}{ie.whExpr}, encodeBuf)
 		if out == nil { // missing is treated as false
 			return false, err
 		} else if err != nil { // errors are treated as false

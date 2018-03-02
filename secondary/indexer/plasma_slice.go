@@ -897,8 +897,10 @@ func (mdb *plasmaSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 		mdb.doPersistSnapshot(s)
 	}
 
-	logging.Infof("plasmaSlice::OpenSnapshot SliceId %v IndexInstId %v Creating New "+
-		"Snapshot %v", mdb.id, mdb.idxInstId, snapInfo)
+	if info.IsCommitted() {
+		logging.Infof("plasmaSlice::OpenSnapshot SliceId %v IndexInstId %v Creating New "+
+			"Snapshot %v", mdb.id, mdb.idxInstId, snapInfo)
+	}
 	mdb.setCommittedCount()
 
 	return s, nil
@@ -1057,6 +1059,8 @@ func (mdb *plasmaSlice) resetStores() {
 	os.RemoveAll(mdb.path)
 	mdb.newBorn = true
 	mdb.initStores()
+	mdb.setCommittedCount()
+	mdb.idxStats.itemsCount.Set(0)
 }
 
 func (mdb *plasmaSlice) Rollback(o SnapshotInfo) error {
@@ -1407,7 +1411,7 @@ func (mdb *plasmaSlice) getCmdsCount() int {
 func (mdb *plasmaSlice) logWriterStat() {
 	count := atomic.AddUint64(&mdb.flushedCount, 1)
 	if (count%10000 == 0) || count == 1 {
-		logging.Infof("logWriterStat:: %v "+
+		logging.Debugf("logWriterStat:: %v "+
 			"FlushedCount %v QueuedCount %v", mdb.idxInstId,
 			count, mdb.getCmdsCount())
 	}

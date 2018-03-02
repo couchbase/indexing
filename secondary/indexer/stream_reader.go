@@ -420,7 +420,7 @@ func (r *mutationStreamReader) logReaderStat() {
 	atomic.AddUint64(&r.mutationCount, 1)
 	c := atomic.LoadUint64(&r.mutationCount)
 	if (c%10000 == 0) || c == 1 {
-		logging.Infof("logReaderStat:: %v "+
+		logging.Debugf("logReaderStat:: %v "+
 			"MutationCount %v", r.streamId, c)
 	}
 

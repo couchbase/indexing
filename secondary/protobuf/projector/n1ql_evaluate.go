@@ -27,18 +27,13 @@ var missing = qvalue.NewValue(string(collatejson.MissingLiteral))
 // N1QLTransform will use compiled list of expression from N1QL's DDL
 // statement and evaluate a document using them to return a secondary
 // key as JSON object.
-// `meta` supplies a dictionary of,
-//      `id`, `byseqno`, `revseqno`, `flags`, `expiration`, `locktime`,
-//      `nru`, `cas`
 func N1QLTransform(
-	docid, doc []byte, cExprs []interface{},
-	meta map[string]interface{}, encodeBuf []byte) ([]byte, []byte, error) {
+	docid []byte, docval qvalue.AnnotatedValue, cExprs []interface{},
+	encodeBuf []byte) ([]byte, []byte, error) {
 
 	arrValue := make([]interface{}, 0, len(cExprs))
 	context := qexpr.NewIndexContext()
 	skip := true
-	docval := qvalue.NewAnnotatedValue(qvalue.NewParsedValue(doc, true))
-	docval.SetAttachment("meta", meta)
 	for _, cExpr := range cExprs {
 		expr := cExpr.(qexpr.Expression)
 		scalar, vector, err := expr.EvaluateForIndex(docval, context)

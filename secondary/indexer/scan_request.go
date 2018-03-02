@@ -1424,35 +1424,41 @@ func IndexKeyLessThan(a, b IndexKey) bool {
 }
 
 func (r ScanRequest) String() string {
-	var incl, span string
+	str := fmt.Sprintf("defnId:%v, instId:%v, index:%v/%v, type:%v",
+		r.DefnID, r.IndexInstId, r.Bucket, r.IndexName, r.ScanType)
 
-	switch r.Incl {
-	case Low:
-		incl = "incl:low"
-	case High:
-		incl = "incl:high"
-	case Both:
-		incl = "incl:both"
-	default:
-		incl = "incl:none"
-	}
+	if len(r.Scans) == 0 {
+		var incl, span string
 
-	if len(r.Keys) == 0 {
-		if r.ScanType == StatsReq || r.ScanType == ScanReq || r.ScanType == CountReq {
-			span = fmt.Sprintf("range (%s,%s %s)", r.Low, r.High, incl)
+		switch r.Incl {
+		case Low:
+			incl = "incl:low"
+		case High:
+			incl = "incl:high"
+		case Both:
+			incl = "incl:both"
+		default:
+			incl = "incl:none"
+		}
+
+		if len(r.Keys) == 0 {
+			if r.ScanType == StatsReq || r.ScanType == ScanReq || r.ScanType == CountReq {
+				span = fmt.Sprintf("range (%s,%s %s)", r.Low, r.High, incl)
+			} else {
+				span = "all"
+			}
 		} else {
-			span = "all"
+			span = "keys ( "
+			for _, k := range r.Keys {
+				span = span + k.String() + " "
+			}
+			span = span + ")"
 		}
-	} else {
-		span = "keys ( "
-		for _, k := range r.Keys {
-			span = span + k.String() + " "
-		}
-		span = span + ")"
-	}
 
-	str := fmt.Sprintf("defnId:%v, instId:%v, index:%v/%v, type:%v, span:%s",
-		r.DefnID, r.IndexInstId, r.Bucket, r.IndexName, r.ScanType, span)
+		str += fmt.Sprintf(", span:%s", span)
+	} else {
+		str += fmt.Sprintf(", scans: %+v", r.Scans)
+	}
 
 	if r.Limit > 0 {
 		str += fmt.Sprintf(", limit:%d", r.Limit)
