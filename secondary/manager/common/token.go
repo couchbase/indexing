@@ -13,10 +13,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/couchbase/cbauth/metakv"
 	c "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 )
 
 /////////////////////////////////////////////////////////////////////////
@@ -25,15 +28,16 @@ import (
 
 const DDLMetakvDir = c.IndexingMetaDir + "ddl/"
 const InfoMetakvDir = c.IndexingMetaDir + "info/"
+const CommandMetakvDir = DDLMetakvDir + "commandToken/"
 
-const CreateDDLCommandTokenTag = "commandToken/create/"
-const CreateDDLCommandTokenPath = DDLMetakvDir + CreateDDLCommandTokenTag
+const CreateDDLCommandTokenTag = "create/"
+const CreateDDLCommandTokenPath = CommandMetakvDir + CreateDDLCommandTokenTag
 
-const DeleteDDLCommandTokenTag = "commandToken/delete/"
-const DeleteDDLCommandTokenPath = DDLMetakvDir + DeleteDDLCommandTokenTag
+const DeleteDDLCommandTokenTag = "delete/"
+const DeleteDDLCommandTokenPath = CommandMetakvDir + DeleteDDLCommandTokenTag
 
-const BuildDDLCommandTokenTag = "commandToken/build/"
-const BuildDDLCommandTokenPath = DDLMetakvDir + BuildDDLCommandTokenTag
+const BuildDDLCommandTokenTag = "build/"
+const BuildDDLCommandTokenPath = CommandMetakvDir + BuildDDLCommandTokenTag
 
 const IndexerVersionTokenTag = "versionToken"
 const IndexerVersionTokenPath = InfoMetakvDir + IndexerVersionTokenTag
@@ -82,6 +86,18 @@ type IndexerStorageModeToken struct {
 	NodeUUID         string
 	Override         string
 	LocalStorageMode string
+}
+
+type CommandListener struct {
+	doCreate     bool
+	doBuild      bool
+	doDelete     bool
+	createTokens map[string]*CreateCommandToken
+	buildTokens  map[string]*BuildCommandToken
+	deleteTokens map[string]*DeleteCommandToken
+	mutex        sync.Mutex
+	cancelCh     chan struct{}
+	donech       chan bool
 }
 
 //////////////////////////////////////////////////////////////
@@ -528,4 +544,186 @@ func MarshallIndexerStorageModeToken(r *IndexerStorageModeToken) ([]byte, error)
 	}
 
 	return buf, nil
+}
+
+//////////////////////////////////////////////////////////////
+// CommandListener
+//////////////////////////////////////////////////////////////
+
+func NewCommandListener(donech chan bool, doCreate bool, doBuild bool, doDelete bool) *CommandListener {
+
+	return &CommandListener{
+		doCreate:     doCreate,
+		doBuild:      doBuild,
+		doDelete:     doDelete,
+		createTokens: make(map[string]*CreateCommandToken),
+		buildTokens:  make(map[string]*BuildCommandToken),
+		deleteTokens: make(map[string]*DeleteCommandToken),
+		cancelCh:     make(chan struct{}),
+		donech:       donech,
+	}
+}
+
+func (m *CommandListener) Close() {
+	close(m.cancelCh)
+}
+
+func (m *CommandListener) GetNewCreateTokens() map[string]*CreateCommandToken {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
+	if len(m.createTokens) != 0 {
+		result := m.createTokens
+		m.createTokens = make(map[string]*CreateCommandToken)
+		return result
+	}
+
+	return nil
+}
+
+func (m *CommandListener) AddNewCreateToken(path string, token *CreateCommandToken) {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	m.createTokens[path] = token
+}
+
+func (m *CommandListener) GetNewDeleteTokens() map[string]*DeleteCommandToken {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
+	if len(m.deleteTokens) != 0 {
+		result := m.deleteTokens
+		m.deleteTokens = make(map[string]*DeleteCommandToken)
+		return result
+	}
+
+	return nil
+}
+
+func (m *CommandListener) AddNewDeleteToken(path string, token *DeleteCommandToken) {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	m.deleteTokens[path] = token
+}
+
+func (m *CommandListener) GetNewBuildTokens() map[string]*BuildCommandToken {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
+	if len(m.buildTokens) != 0 {
+		result := m.buildTokens
+		m.buildTokens = make(map[string]*BuildCommandToken)
+		return result
+	}
+
+	return nil
+}
+
+func (m *CommandListener) AddNewBuildToken(path string, token *BuildCommandToken) {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	m.buildTokens[path] = token
+}
+
+func (m *CommandListener) ListenTokens() {
+
+	metaKVCallback := func(path string, value []byte, rev interface{}) error {
+		if strings.Contains(path, DeleteDDLCommandTokenPath) {
+			m.handleNewDeleteCommandToken(path, value)
+
+		} else if strings.Contains(path, BuildDDLCommandTokenPath) {
+			m.handleNewBuildCommandToken(path, value)
+
+		} else if strings.Contains(path, CreateDDLCommandTokenPath) {
+			m.handleNewCreateCommandToken(path, value)
+		}
+
+		return nil
+	}
+
+	go func() {
+		defer close(m.donech)
+
+		fn := func(r int, err error) error {
+			if r > 0 {
+				logging.Errorf("CommandListener: metakv notifier failed (%v)..Restarting %v", err, r)
+			}
+			err = metakv.RunObserveChildren(CommandMetakvDir, metaKVCallback, m.cancelCh)
+			return err
+		}
+
+		rh := c.NewRetryHelper(200, time.Second, 2, fn)
+		err := rh.Run()
+		if err != nil {
+			logging.Errorf("CommandListener: metakv notifier failed even after max retries.")
+		}
+	}()
+}
+
+func (m *CommandListener) handleNewCreateCommandToken(path string, value []byte) {
+
+	if !m.doCreate {
+		return
+	}
+
+	if value == nil {
+		delete(m.createTokens, path)
+		return
+	}
+
+	defnId, err := GetDefnIdFromCreateCommandTokenPath(path)
+	if err != nil {
+		logging.Warnf("CommandListener: Failed to process create index token.  Skip %v.  Internal Error = %v.", path, err)
+		return
+	}
+
+	token, err := FetchCreateCommandToken(defnId)
+	if err != nil {
+		logging.Warnf("CommandListener: Failed to process create index token.  Skip %v.  Internal Error = %v.", path, err)
+		return
+	}
+
+	if token != nil {
+		m.AddNewCreateToken(path, token)
+	}
+}
+
+func (m *CommandListener) handleNewBuildCommandToken(path string, value []byte) {
+
+	if !m.doBuild {
+		return
+	}
+
+	if value == nil {
+		delete(m.buildTokens, path)
+		return
+	}
+
+	token, err := UnmarshallBuildCommandToken(value)
+	if err != nil {
+		logging.Warnf("CommandListener: Failed to process build index token.  Skp %v.  Internal Error = %v.", path, err)
+		return
+	}
+
+	m.AddNewBuildToken(path, token)
+}
+
+func (m *CommandListener) handleNewDeleteCommandToken(path string, value []byte) {
+
+	if !m.doDelete {
+		return
+	}
+
+	if value == nil {
+		delete(m.deleteTokens, path)
+		return
+	}
+
+	token, err := UnmarshallDeleteCommandToken(value)
+	if err != nil {
+		logging.Warnf("CommandListener: Failed to process delete index token.  Skp %v.  Internal Error = %v.", path, err)
+		return
+	}
+
+	m.AddNewDeleteToken(path, token)
 }
