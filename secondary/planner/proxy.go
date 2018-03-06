@@ -276,6 +276,10 @@ func ConvertToIndexUsage(config common.Config, defn *common.IndexDefn, localMeta
 			state != common.INDEX_STATE_ERROR &&
 			state != common.INDEX_STATE_NIL {
 
+			if !common.IsPartitioned(defn.PartitionScheme) {
+				inst.NumPartitions = 1
+			}
+
 			for _, partn := range inst.Partitions {
 
 				// create an index usage object
