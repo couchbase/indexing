@@ -159,7 +159,7 @@ func scanSingleSlice(request *ScanRequest, scan Scan, ctx IndexReaderContext, sn
 	if scan.ScanType == AllReq {
 		err = snap.Snapshot().All(ctx, handler)
 	} else if scan.ScanType == LookupReq {
-		err = snap.Snapshot().Lookup(ctx, scan.Equals, handler)
+		err = snap.Snapshot().Range(ctx, scan.Equals, scan.Equals, Both, handler)
 	} else if scan.ScanType == RangeReq || scan.ScanType == FilterRangeReq {
 		err = snap.Snapshot().Range(ctx, scan.Low, scan.High, scan.Incl, handler)
 	}
