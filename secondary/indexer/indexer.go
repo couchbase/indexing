@@ -1454,9 +1454,16 @@ func (idx *indexer) mergePartitions() {
 		return
 	}
 
+	logging.Infof("MergePartitions: number of instances to merge: %v", len(idx.mergePartitionList))
+
 	var remaining []mergeSpec
 	if len(idx.mergePartitionList) != 0 {
 		remaining = make([]mergeSpec, 0, len(idx.mergePartitionList))
+	}
+
+	var merged map[common.IndexInstId]common.IndexInst
+	if len(idx.mergePartitionList) != 0 {
+		merged = make(map[common.IndexInstId]common.IndexInst)
 	}
 
 	for _, spec := range idx.mergePartitionList {
@@ -1465,15 +1472,52 @@ func (idx *indexer) mergePartitions() {
 		targetId := spec.tgtInstId
 		respch := spec.respch
 
-		if !idx.mergePartition(sourceId, targetId, respch) {
+		if !idx.mergePartition(sourceId, targetId, merged, respch) {
 			remaining = append(remaining, spec)
 		}
+	}
+
+	if len(merged) != 0 {
+		logging.Infof("MergePartitions: number of instances merged: %v", len(merged))
+		idx.removeMergedIndexesFromStream(merged)
 	}
 
 	idx.mergePartitionList = remaining
 }
 
-func (idx *indexer) mergePartition(sourceId common.IndexInstId, targetId common.IndexInstId, respch chan error) bool {
+func (idx *indexer) removeMergedIndexesFromStream(merged map[common.IndexInstId]common.IndexInst) {
+
+	sorted := make(map[string]map[string]map[common.StreamId]map[common.IndexState][]common.IndexInst)
+	for _, inst := range merged {
+		if _, ok := sorted[inst.Defn.Bucket]; !ok {
+			sorted[inst.Defn.Bucket] = make(map[string]map[common.StreamId]map[common.IndexState][]common.IndexInst)
+		}
+
+		if _, ok := sorted[inst.Defn.Bucket][inst.Defn.BucketUUID]; !ok {
+			sorted[inst.Defn.Bucket][inst.Defn.BucketUUID] = make(map[common.StreamId]map[common.IndexState][]common.IndexInst)
+		}
+
+		if _, ok := sorted[inst.Defn.Bucket][inst.Defn.BucketUUID][inst.Stream]; !ok {
+			sorted[inst.Defn.Bucket][inst.Defn.BucketUUID][inst.Stream] = make(map[common.IndexState][]common.IndexInst)
+		}
+
+		sorted[inst.Defn.Bucket][inst.Defn.BucketUUID][inst.Stream][inst.State] =
+			append(sorted[inst.Defn.Bucket][inst.Defn.BucketUUID][inst.Stream][inst.State], inst)
+	}
+
+	for bucket, list1 := range sorted {
+		for bucketUUID, list2 := range list1 {
+			for streamId, list3 := range list2 {
+				for state, list4 := range list3 {
+					idx.removeIndexesFromStream(list4, bucket, bucketUUID, streamId, state, nil)
+				}
+			}
+		}
+	}
+}
+
+func (idx *indexer) mergePartition(sourceId common.IndexInstId, targetId common.IndexInstId,
+	merged map[common.IndexInstId]common.IndexInst, respch chan error) bool {
 
 	if source, ok := idx.indexInstMap[sourceId]; ok {
 
@@ -1668,7 +1712,7 @@ func (idx *indexer) mergePartition(sourceId common.IndexInstId, targetId common.
 			go func() {
 
 				// The metadata commit is done asynchronously to avoid deadlock.  If metadata update fails,
-				// indexer will restart so it can restore toa a consistent state.
+				// indexer will restart so it can restore to a consistent state.
 				err := <-clustMgrRespch
 				if err != nil {
 					common.CrashOnError(err)
@@ -1687,7 +1731,7 @@ func (idx *indexer) mergePartition(sourceId common.IndexInstId, targetId common.
 			// Cleanup comprise of removing the source instance from indexer runtime data structure, as well as removing
 			// the instance from stream.  These are transient states that can be recovered upon bootstrap if metadata commit
 			// fails.
-			idx.cleanupIndexAfterMerge(source)
+			idx.cleanupIndexAfterMerge(source, merged)
 
 		} else {
 			// preValidateMergePartition must already been called prior to this.
@@ -1723,7 +1767,14 @@ func (idx *indexer) mergePartition(sourceId common.IndexInstId, targetId common.
 // Note that the source instance is already marked as DELETED in metadata
 // (through MsgClustMgrMergePartition).
 //
-func (idx *indexer) cleanupIndexAfterMerge(inst common.IndexInst) {
+func (idx *indexer) cleanupIndexAfterMerge(inst common.IndexInst, merged map[common.IndexInstId]common.IndexInst) {
+
+	// remove stream if index is active.  For deferred index, index state would not be active (CREATED).
+	if inst.State == common.INDEX_STATE_ACTIVE ||
+		inst.State == common.INDEX_STATE_CATCHUP ||
+		inst.State == common.INDEX_STATE_INITIAL {
+		merged[inst.InstId] = inst
+	}
 
 	inst.State = common.INDEX_STATE_DELETED
 	idx.indexInstMap[inst.InstId] = inst
@@ -1740,20 +1791,6 @@ func (idx *indexer) cleanupIndexAfterMerge(inst common.IndexInst) {
 	msgUpdateIndexPartnMap := &MsgUpdatePartnMap{indexPartnMap: idx.indexPartnMap}
 	if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, msgUpdateIndexPartnMap); err != nil {
 		common.CrashOnError(err)
-	}
-
-	// remove stream
-	if inst.State != common.INDEX_STATE_CREATED &&
-		inst.State != common.INDEX_STATE_READY &&
-		inst.State != common.INDEX_STATE_DELETED &&
-		inst.Stream != common.NIL_STREAM {
-
-		if !(inst.Stream == common.MAINT_STREAM &&
-			!idx.checkBucketExistsInStream(inst.Defn.Bucket, common.MAINT_STREAM, false) &&
-			idx.checkBucketExistsInStream(inst.Defn.Bucket, common.INIT_STREAM, false)) {
-
-			idx.sendStreamUpdateForDropIndex(inst, nil)
-		}
 	}
 }
 
@@ -3000,27 +3037,38 @@ func (idx *indexer) sendStreamUpdateToWorker(cmd Message, workerCmdCh MsgChannel
 func (idx *indexer) sendStreamUpdateForDropIndex(indexInst common.IndexInst,
 	clientCh MsgChannel) bool {
 
-	var cmd Message
 	var indexList []common.IndexInst
 	indexList = append(indexList, indexInst)
+
+	return idx.removeIndexesFromStream(indexList, indexInst.Defn.Bucket, indexInst.Defn.BucketUUID, indexInst.Stream, indexInst.State, clientCh)
+}
+
+func (idx *indexer) removeIndexesFromStream(indexList []common.IndexInst,
+	bucket string,
+	bucketUUID string,
+	streamId common.StreamId,
+	state common.IndexState,
+	clientCh MsgChannel) bool {
+
+	var cmd Message
 
 	var indexStreamIds []common.StreamId
 
 	//index in INIT_STREAM needs to be removed from MAINT_STREAM as well
 	//if the state is CATCHUP
-	switch indexInst.Stream {
+	switch streamId {
 
 	case common.MAINT_STREAM:
 		indexStreamIds = append(indexStreamIds, common.MAINT_STREAM)
 
 	case common.INIT_STREAM:
 		indexStreamIds = append(indexStreamIds, common.INIT_STREAM)
-		if indexInst.State == common.INDEX_STATE_CATCHUP {
+		if state == common.INDEX_STATE_CATCHUP {
 			indexStreamIds = append(indexStreamIds, common.MAINT_STREAM)
 		}
 
 	default:
-		logging.Fatalf("Indexer::sendStreamUpdateForDropIndex \n\t Unsupported StreamId %v", indexInst.Stream)
+		logging.Fatalf("Indexer::removeIndexesFromStream \n\t Unsupported StreamId %v", streamId)
 		common.CrashOnError(ErrInvalidStream)
 	}
 
@@ -3028,7 +3076,7 @@ func (idx *indexer) sendStreamUpdateForDropIndex(indexInst common.IndexInst,
 
 		respCh := make(MsgChannel)
 
-		if idx.checkBucketExistsInStream(indexInst.Defn.Bucket, streamId, false) {
+		if idx.checkBucketExistsInStream(bucket, streamId, false) {
 
 			cmd = &MsgStreamUpdate{mType: REMOVE_INDEX_LIST_FROM_STREAM,
 				streamId:  streamId,
@@ -3037,9 +3085,9 @@ func (idx *indexer) sendStreamUpdateForDropIndex(indexInst common.IndexInst,
 		} else {
 			cmd = &MsgStreamUpdate{mType: REMOVE_BUCKET_FROM_STREAM,
 				streamId: streamId,
-				bucket:   indexInst.Defn.Bucket,
+				bucket:   bucket,
 				respCh:   respCh}
-			idx.setStreamBucketState(streamId, indexInst.Defn.Bucket, STREAM_INACTIVE)
+			idx.setStreamBucketState(streamId, bucket, STREAM_INACTIVE)
 		}
 
 		//send stream update to mutation manager
@@ -3063,19 +3111,19 @@ func (idx *indexer) sendStreamUpdateForDropIndex(indexInst common.IndexInst,
 		}
 		clustAddr := idx.config["clusterAddr"].String()
 
-		reqLock := idx.acquireStreamRequestLock(indexInst.Defn.Bucket, streamId)
+		reqLock := idx.acquireStreamRequestLock(bucket, streamId)
 		go func(reqLock *kvRequest) {
 			defer idx.releaseStreamRequestLock(reqLock)
 			idx.waitStreamRequestLock(reqLock)
 		retryloop:
 			for {
 
-				if !ValidateBucket(clustAddr, indexInst.Defn.Bucket, []string{indexInst.Defn.BucketUUID}) {
-					logging.Errorf("Indexer::sendStreamUpdateForDropIndex \n\tBucket Not Found "+
-						"For Stream %v Bucket %v", streamId, indexInst.Defn.Bucket)
+				if !ValidateBucket(clustAddr, bucket, []string{bucketUUID}) {
+					logging.Errorf("Indexer::removeIndexesFromStream \n\tBucket Not Found "+
+						"For Stream %v Bucket %v", streamId, bucket)
 					idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_BUCKET_NOT_FOUND,
 						streamId: streamId,
-						bucket:   indexInst.Defn.Bucket}
+						bucket:   bucket}
 					break retryloop
 				}
 
@@ -3086,15 +3134,15 @@ func (idx *indexer) sendStreamUpdateForDropIndex(indexInst common.IndexInst,
 					switch resp.GetMsgType() {
 
 					case MSG_SUCCESS:
-						logging.Infof("Indexer::sendStreamUpdateForDropIndex Success Stream %v Bucket %v",
-							streamId, indexInst.Defn.Bucket)
+						logging.Infof("Indexer::removeIndexesFromStream Success Stream %v Bucket %v",
+							streamId, bucket)
 						break retryloop
 
 					default:
 						//log and retry for all other responses
 						respErr := resp.(*MsgError).GetError()
-						logging.Errorf("Indexer::sendStreamUpdateForDropIndex - Stream %v Bucket %v"+
-							"Error from Projector %v. Retrying.", streamId, indexInst.Defn.Bucket, respErr.cause)
+						logging.Errorf("Indexer::removeIndexesFromStream - Stream %v Bucket %v"+
+							"Error from Projector %v. Retrying.", streamId, bucket, respErr.cause)
 						time.Sleep(KV_RETRY_INTERVAL * time.Millisecond)
 
 					}
