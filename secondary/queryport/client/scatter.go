@@ -449,8 +449,10 @@ func (b *RequestBroker) reset() {
 //
 // Scatter requests over multiple connections
 //
-func (c *RequestBroker) scatter(client []*GsiScanClient, index *common.IndexDefn, targetInstId []uint64, rollback []int64,
-	partition [][]common.PartitionId, numPartition uint32, settings *ClientSettings) (count int64, err map[common.PartitionId]map[uint64]error, partial bool) {
+func (c *RequestBroker) scatter(clientMaker scanClientMaker, index *common.IndexDefn,
+	scanports []string, targetInstId []uint64, rollback []int64, partition [][]common.PartitionId,
+	numPartition uint32, settings *ClientSettings) (count int64,
+	err map[common.PartitionId]map[uint64]error, partial bool, refresh bool) {
 
 	defer func() {
 		logging.Debugf("scatter: requestId %v items recieved %v items processed %v", c.requestId, c.ReceiveCount(), c.SendCount())
@@ -460,8 +462,15 @@ func (c *RequestBroker) scatter(client []*GsiScanClient, index *common.IndexDefn
 	c.SetNumIndexers(len(partition))
 	c.defn = index
 
+	var ok bool
+	var client []*GsiScanClient
 	partition = c.filterPartitions(index, partition, numPartition)
-	client, rollback, partition = filterClients(client, rollback, partition)
+	concurrency := int(settings.MaxConcurrency())
+	ok, client, targetInstId, rollback, partition = c.makeClients(clientMaker, concurrency, index, numPartition, scanports, targetInstId, rollback, partition)
+	if !ok {
+		return 0, nil, false, true
+	}
+
 	c.analyzeOrderBy(partition, numPartition, index)
 	c.analyzeProjection(partition, numPartition, index)
 	c.changePushdownParams(partition, numPartition, index)
@@ -481,13 +490,14 @@ func (c *RequestBroker) scatter(client []*GsiScanClient, index *common.IndexDefn
 
 	if c.scan != nil {
 		err, partial = c.scatterScan2(client, index, targetInstId, rollback, partition, numPartition, settings)
-		return 0, err, partial
+		return 0, err, partial, false
 	} else if c.count != nil {
-		return c.scatterCount(client, index, targetInstId, rollback, partition, numPartition)
+		count, err, partial := c.scatterCount(client, index, targetInstId, rollback, partition, numPartition)
+		return count, err, partial, false
 	}
 
 	e := fmt.Errorf("Intenral error: Fail to process request for index %v:%v.  Unknown request handler.", index.Bucket, index.Name)
-	return 0, c.makeErrorMap(targetInstId, partition, e), false
+	return 0, c.makeErrorMap(targetInstId, partition, e), false, false
 }
 
 func (c *RequestBroker) makeErrorMap(targetInstIds []uint64, partitions [][]common.PartitionId, err error) map[common.PartitionId]map[uint64]error {
@@ -505,6 +515,80 @@ func (c *RequestBroker) makeErrorMap(targetInstIds []uint64, partitions [][]comm
 	}
 
 	return errMap
+}
+
+//
+// Make Scan client that are used in scans
+//
+func (c *RequestBroker) makeClients(maker scanClientMaker, max_concurrency int, index *common.IndexDefn, numPartition uint32,
+	scanports []string, targetInstIds []uint64, timestamps []int64, allPartitions [][]common.PartitionId) (bool, []*GsiScanClient,
+	[]uint64, []int64, [][]common.PartitionId) {
+
+	var newClient []*GsiScanClient
+	var newInstId []uint64
+	var newTS []int64
+	var newPartition [][]common.PartitionId
+	var newScanport []string
+
+	for i, partitions := range allPartitions {
+		if len(partitions) != 0 {
+			client := maker(scanports[i])
+			if client == nil {
+				return false, nil, nil, nil, nil
+			}
+
+			newClient = append(newClient, client)
+			newScanport = append(newScanport, scanports[i])
+			newInstId = append(newInstId, targetInstIds[i])
+			newTS = append(newTS, timestamps[i])
+			newPartition = append(newPartition, partitions)
+		}
+	}
+
+	if c.isPartialAggregate(allPartitions, numPartition, index) {
+		newClient, newInstId, newTS, newPartition = c.splitClients(maker, max_concurrency, newScanport, newClient, newInstId, newTS, newPartition)
+	}
+
+	return true, newClient, newInstId, newTS, newPartition
+}
+
+//
+// split the clients until it reaches the maximum parallelism
+//
+func (c *RequestBroker) splitClients(maker scanClientMaker, max_concurrency int, scanports []string, clients []*GsiScanClient, instIds []uint64,
+	timestamps []int64, allPartitions [][]common.PartitionId) ([]*GsiScanClient, []uint64, []int64, [][]common.PartitionId) {
+
+	if len(clients) >= max_concurrency {
+		return clients, instIds, timestamps, allPartitions
+	}
+
+	max := 0
+	pos := -1
+	for i, partitions := range allPartitions {
+		if len(partitions) > max {
+			max = len(partitions)
+			pos = i
+		}
+	}
+
+	// split the clients with the most partitions
+	if pos != -1 && len(allPartitions[pos]) > 1 {
+
+		len := len(allPartitions[pos]) / 2
+
+		client := maker(scanports[pos])
+		clients = append(clients, client)
+		scanports = append(scanports, scanports[pos])
+		instIds = append(instIds, instIds[pos])
+		timestamps = append(timestamps, timestamps[pos])
+		allPartitions = append(allPartitions, allPartitions[pos][len:])
+
+		allPartitions[pos] = allPartitions[pos][0:len]
+
+		return c.splitClients(maker, max_concurrency, scanports, clients, instIds, timestamps, allPartitions)
+	}
+
+	return clients, instIds, timestamps, allPartitions
 }
 
 //
@@ -1371,26 +1455,6 @@ func filterPartitionIds(allPartitions [][]common.PartitionId, filter map[common.
 	return result
 }
 
-//
-// Filter out any Scan client that are not used in scans
-//
-func filterClients(clients []*GsiScanClient, timestamps []int64, allPartitions [][]common.PartitionId) ([]*GsiScanClient, []int64, [][]common.PartitionId) {
-
-	var newClient []*GsiScanClient
-	var newTS []int64
-	var newPartition [][]common.PartitionId
-
-	for i, partitions := range allPartitions {
-		if len(partitions) != 0 {
-			newClient = append(newClient, clients[i])
-			newTS = append(newTS, timestamps[i])
-			newPartition = append(newPartition, partitions)
-		}
-	}
-
-	return newClient, newTS, newPartition
-}
-
 //--------------------------
 // API2 Push Down
 //--------------------------
@@ -1551,6 +1615,46 @@ func (c *RequestBroker) changeSorted(partitions [][]common.PartitionId, numParti
 // 2) group keys are leading index keys
 // 3) partition keys are leading index keys
 //
+func (c *RequestBroker) isPartialAggregate(partitions [][]common.PartitionId, numPartition uint32, index *common.IndexDefn) bool {
+
+	// non-partition index
+	if index.PartitionScheme == common.SINGLE {
+		return false
+	}
+
+	// aggreate query
+	if c.grpAggr != nil && len(c.grpAggr.Group) != 0 {
+
+		// check if partition keys are leading index keys
+		positions := partitionKeyPos(index)
+		if len(positions) != len(index.PartitionKeys) {
+			return true
+		}
+		for i, pos := range positions {
+			if i != pos {
+				return true
+			}
+		}
+
+		// check if group keys are leading index keys
+		for i, group := range c.grpAggr.Group {
+			if int32(i) != group.KeyPos {
+				// if group keys do not follow index key order
+				return true
+			}
+		}
+
+		// both paritition keys and group keys are in index order.
+		// check if group key and partition key are the same length (order is not important)
+		if len(index.PartitionKeys) != len(c.grpAggr.Group) {
+			return true
+		}
+	}
+
+	return false
+}
+
+//
 // We cannot sort if it is pre-aggregate result, so set sorted to false.  Otherwise, the result
 // is sorted if there is an order-by clause.
 //
@@ -1571,38 +1675,9 @@ func (c *RequestBroker) analyzeGroupBy(partitions [][]common.PartitionId, numPar
 		return
 	}
 
-	// aggreate query
-	if c.grpAggr != nil && len(c.grpAggr.Group) != 0 {
-
-		// check if partition keys are leading index keys
-		positions := partitionKeyPos(index)
-		if len(positions) != len(index.PartitionKeys) {
-			c.sorted = false
-			return
-		}
-		for i, pos := range positions {
-			if i != pos {
-				// if partition keys do not follow index key order
-				c.sorted = false
-				return
-			}
-		}
-
-		// check if group keys are leading index keys
-		for i, group := range c.grpAggr.Group {
-			if int32(i) != group.KeyPos {
-				// if group keys do not follow index key order
-				c.sorted = false
-				return
-			}
-		}
-
-		// both paritition keys and group keys are in index order.
-		// check if group key and partition key are the same length (order is not important)
-		if len(index.PartitionKeys) != len(c.grpAggr.Group) {
-			c.sorted = false
-			return
-		}
+	if c.isPartialAggregate(partitions, numPartition, index) {
+		c.sorted = false
+		return
 	}
 }
 

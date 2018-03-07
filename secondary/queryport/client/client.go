@@ -63,6 +63,9 @@ type CountRequestHandler func(*GsiScanClient, *common.IndexDefn, int64, []common
 // ResponseTimer updates timing of responses
 type ResponseTimer func(instID uint64, partitionId common.PartitionId, value float64)
 
+// scanClientMaker fetches a scan client
+type scanClientMaker func(scanport string) *GsiScanClient
+
 // Remoteaddr string in the shape of "<host:port>"
 type Remoteaddr string
 
@@ -1192,6 +1195,15 @@ func (c *GsiClient) updateExcludes(defnID uint64, excludes map[common.IndexDefnI
 	return excludes
 }
 
+func (c *GsiClient) makeScanClient(scanport string) *GsiScanClient {
+
+	if qc, ok := c.getScanClients([]string{scanport}); ok {
+		return qc[0]
+	}
+
+	return nil
+}
+
 func (c *GsiClient) doScan(defnID uint64, requestId string, broker *RequestBroker) (int64, error) {
 
 	var excludes map[common.IndexDefnId]map[common.PartitionId]map[uint64]bool
@@ -1209,10 +1221,12 @@ func (c *GsiClient) doScan(defnID uint64, requestId string, broker *RequestBroke
 		if queryports, targetDefnID, targetInstIds, rollbackTimes, partitions, numPartitions, ok := c.bridge.GetScanport(defnID, excludes, skips); ok {
 
 			index := c.bridge.GetIndexDefn(targetDefnID)
-			// make query clients from queryports
-			if qc, ok := c.getScanClients(queryports); ok {
+			count, scan_errs, partial, refresh := broker.scatter(c.makeScanClient, index, queryports, targetInstIds,
+				rollbackTimes, partitions, numPartitions, c.settings)
+
+			if !refresh {
 				foundScanport = true
-				count, scan_errs, partial := broker.scatter(qc, index, targetInstIds, rollbackTimes, partitions, numPartitions, c.settings)
+
 				if c.isTimeit(scan_errs) {
 					return count, getScanError(scan_errs)
 				}
