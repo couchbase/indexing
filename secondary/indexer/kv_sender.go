@@ -1183,6 +1183,7 @@ func convertIndexDefnToProtobuf(indexDefn c.IndexDefn) *protobuf.IndexDefn {
 		SecExpressions:     indexDefn.SecExprs,
 		PartitionScheme:    partnScheme,
 		PartnExpressions:   indexDefn.PartitionKeys,
+		HashScheme:         protobuf.HashScheme(indexDefn.HashScheme).Enum(),
 		WhereExpression:    proto.String(indexDefn.WhereExpr),
 		RetainDeletedXATTR: proto.Bool(indexDefn.RetainDeletedXATTR),
 	}

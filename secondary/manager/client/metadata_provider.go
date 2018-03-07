@@ -1218,6 +1218,7 @@ func (o *MetadataProvider) PrepareIndexDefn(
 		Immutable:          immutable,
 		IsArrayIndex:       isArrayIndex,
 		NumReplica:         uint32(numReplica),
+		HashScheme:         c.CRC32,
 		NumPartitions:      uint32(numPartition),
 		RetainDeletedXATTR: retainDeletedXATTR,
 		NumDoc:             numDoc,
@@ -1246,6 +1247,7 @@ func (o *MetadataProvider) plan(defn *c.IndexDefn, plan map[string]interface{},
 	spec.Desc = defn.Desc
 	spec.NumPartition = uint64(defn.NumPartitions)
 	spec.PartitionScheme = string(defn.PartitionScheme)
+	spec.HashScheme = uint64(defn.HashScheme)
 	spec.PartitionKeys = defn.PartitionKeys
 	spec.Replica = uint64(defn.NumReplica) + 1
 	spec.RetainDeletedXATTR = defn.RetainDeletedXATTR

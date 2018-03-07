@@ -2397,7 +2397,7 @@ func (m *ServiceMgr) generateTransferTokenForMoveIndex(req *manager.IndexRequest
 				var instList []*c.IndexInst
 				for _, inst := range insts {
 
-					pc := c.NewKeyPartitionContainer(numVbuckets, int(inst.NumPartitions), index.PartitionScheme)
+					pc := c.NewKeyPartitionContainer(numVbuckets, int(inst.NumPartitions), index.PartitionScheme, index.HashScheme)
 					for _, partition := range inst.Partitions {
 						partnDefn := c.KeyPartitionDefn{Id: c.PartitionId(partition.PartId), Version: int(partition.Version)}
 						pc.AddPartition(c.PartitionId(partition.PartId), partnDefn)

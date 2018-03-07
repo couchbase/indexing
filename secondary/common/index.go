@@ -63,6 +63,22 @@ const (
 	SINGLE                 = "SINGLE"
 )
 
+type HashScheme int
+
+const (
+	CRC32 HashScheme = iota
+)
+
+func (s HashScheme) String() string {
+
+	switch s {
+	case CRC32:
+		return "CRC32"
+	}
+
+	return "HASH_SCHEME_UNKNOWN"
+}
+
 type IndexState int
 
 const (
@@ -182,16 +198,17 @@ type IndexDefn struct {
 	ExprType        ExprType        `json:"exprType,omitempty"`
 	PartitionScheme PartitionScheme `json:"partitionScheme,omitempty"`
 	//PartitionKey is obsolete
-	PartitionKey       string   `json:"partitionKey,omitempty"`
-	WhereExpr          string   `json:"where,omitempty"`
-	Desc               []bool   `json:"desc,omitempty"`
-	Deferred           bool     `json:"deferred,omitempty"`
-	Immutable          bool     `json:"immutable,omitempty"`
-	Nodes              []string `json:"nodes,omitempty"`
-	IsArrayIndex       bool     `json:"isArrayIndex,omitempty"`
-	NumReplica         uint32   `json:"numReplica,omitempty"`
-	PartitionKeys      []string `json:"partitionKeys,omitempty"`
-	RetainDeletedXATTR bool     `json:"retainDeletedXATTR,omitempty"`
+	PartitionKey       string     `json:"partitionKey,omitempty"`
+	WhereExpr          string     `json:"where,omitempty"`
+	Desc               []bool     `json:"desc,omitempty"`
+	Deferred           bool       `json:"deferred,omitempty"`
+	Immutable          bool       `json:"immutable,omitempty"`
+	Nodes              []string   `json:"nodes,omitempty"`
+	IsArrayIndex       bool       `json:"isArrayIndex,omitempty"`
+	NumReplica         uint32     `json:"numReplica,omitempty"`
+	PartitionKeys      []string   `json:"partitionKeys,omitempty"`
+	RetainDeletedXATTR bool       `json:"retainDeletedXATTR,omitempty"`
+	HashScheme         HashScheme `json:"hashScheme,omitempty"`
 
 	// Sizing info
 	NumDoc        uint64  `json:"numDoc,omitempty"`
@@ -244,6 +261,7 @@ func (idx IndexDefn) String() string {
 	str += fmt.Sprintf("\n\t\tSecExprs: %v ", logging.TagUD(idx.SecExprs))
 	str += fmt.Sprintf("\n\t\tDesc: %v", idx.Desc)
 	str += fmt.Sprintf("\n\t\tPartitionScheme: %v ", idx.PartitionScheme)
+	str += fmt.Sprintf("\n\t\tHashScheme: %v ", idx.HashScheme.String())
 	str += fmt.Sprintf("PartitionKeys: %v ", idx.PartitionKeys)
 	str += fmt.Sprintf("WhereExpr: %v ", logging.TagUD(idx.WhereExpr))
 	str += fmt.Sprintf("RetainDeletedXATTR: %v ", idx.RetainDeletedXATTR)
@@ -266,6 +284,7 @@ func (idx IndexDefn) Clone() *IndexDefn {
 		ExprType:           idx.ExprType,
 		PartitionScheme:    idx.PartitionScheme,
 		PartitionKeys:      idx.PartitionKeys,
+		HashScheme:         idx.HashScheme,
 		WhereExpr:          idx.WhereExpr,
 		Deferred:           idx.Deferred,
 		Immutable:          idx.Immutable,
@@ -530,6 +549,7 @@ func IsEquivalentIndex(d1, d2 *IndexDefn) bool {
 		d1.IsPrimary != d2.IsPrimary ||
 		d1.ExprType != d2.ExprType ||
 		d1.PartitionScheme != d2.PartitionScheme ||
+		d1.HashScheme != d2.HashScheme ||
 		d1.WhereExpr != d2.WhereExpr ||
 		d1.RetainDeletedXATTR != d2.RetainDeletedXATTR {
 

@@ -2,6 +2,16 @@
 // source: index.proto
 // DO NOT EDIT!
 
+/*
+Package protobuf is a generated protocol buffer package.
+
+It is generated from these files:
+	index.proto
+
+It has these top-level messages:
+	IndexInst
+	IndexDefn
+*/
 package protobuf
 
 import "github.com/golang/protobuf/proto"
@@ -178,6 +188,37 @@ func (x *PartitionScheme) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// Type of Hash scheme for partitioned index
+type HashScheme int32
+
+const (
+	HashScheme_CRC32 HashScheme = 0
+)
+
+var HashScheme_name = map[int32]string{
+	0: "CRC32",
+}
+var HashScheme_value = map[string]int32{
+	"CRC32": 0,
+}
+
+func (x HashScheme) Enum() *HashScheme {
+	p := new(HashScheme)
+	*p = x
+	return p
+}
+func (x HashScheme) String() string {
+	return proto.EnumName(HashScheme_name, int32(x))
+}
+func (x *HashScheme) UnmarshalJSON(data []byte) error {
+	value, err := proto.UnmarshalJSONEnum(HashScheme_value, data, "HashScheme")
+	if err != nil {
+		return err
+	}
+	*x = HashScheme(value)
+	return nil
+}
+
 // IndexInst message as payload between co-ordinator, projector, indexer.
 type IndexInst struct {
 	InstId           *uint64          `protobuf:"varint,1,req,name=instId" json:"instId,omitempty"`
@@ -246,10 +287,11 @@ type IndexDefn struct {
 	SecExpressions  []string         `protobuf:"bytes,7,rep,name=secExpressions" json:"secExpressions,omitempty"`
 	PartitionScheme *PartitionScheme `protobuf:"varint,8,opt,name=partitionScheme,enum=protobuf.PartitionScheme" json:"partitionScheme,omitempty"`
 	// optional string          partnExpression = 9; // use expressions to evaluate doc
-	WhereExpression    *string  `protobuf:"bytes,10,opt,name=whereExpression" json:"whereExpression,omitempty"`
-	PartnExpressions   []string `protobuf:"bytes,11,rep,name=partnExpressions" json:"partnExpressions,omitempty"`
-	RetainDeletedXATTR *bool    `protobuf:"varint,12,opt,name=retainDeletedXATTR" json:"retainDeletedXATTR,omitempty"`
-	XXX_unrecognized   []byte   `json:"-"`
+	WhereExpression    *string     `protobuf:"bytes,10,opt,name=whereExpression" json:"whereExpression,omitempty"`
+	PartnExpressions   []string    `protobuf:"bytes,11,rep,name=partnExpressions" json:"partnExpressions,omitempty"`
+	RetainDeletedXATTR *bool       `protobuf:"varint,12,opt,name=retainDeletedXATTR" json:"retainDeletedXATTR,omitempty"`
+	HashScheme         *HashScheme `protobuf:"varint,13,req,name=hashScheme,enum=protobuf.HashScheme" json:"hashScheme,omitempty"`
+	XXX_unrecognized   []byte      `json:"-"`
 }
 
 func (m *IndexDefn) Reset()         { *m = IndexDefn{} }
@@ -333,9 +375,17 @@ func (m *IndexDefn) GetRetainDeletedXATTR() bool {
 	return false
 }
 
+func (m *IndexDefn) GetHashScheme() HashScheme {
+	if m != nil && m.HashScheme != nil {
+		return *m.HashScheme
+	}
+	return HashScheme_CRC32
+}
+
 func init() {
 	proto.RegisterEnum("protobuf.IndexState", IndexState_name, IndexState_value)
 	proto.RegisterEnum("protobuf.StorageType", StorageType_name, StorageType_value)
 	proto.RegisterEnum("protobuf.ExprType", ExprType_name, ExprType_value)
 	proto.RegisterEnum("protobuf.PartitionScheme", PartitionScheme_name, PartitionScheme_value)
+	proto.RegisterEnum("protobuf.HashScheme", HashScheme_name, HashScheme_value)
 }

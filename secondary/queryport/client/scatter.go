@@ -1266,7 +1266,7 @@ func (c *RequestBroker) filterPartitions(index *common.IndexDefn, partitions [][
 		return partitions
 	}
 
-	filter := partitionKeyHash(partitionKeyValues, c.scans, numPartition)
+	filter := partitionKeyHash(partitionKeyValues, c.scans, numPartition, index.HashScheme)
 	if len(filter) == 0 {
 		return partitions
 	}
@@ -1411,7 +1411,7 @@ func partitionKeyValues(requestId string, partnKeyPos []int, scans Scans) [][]in
 //
 // Generate a list of partitonId from the partition key values of each scan
 //
-func partitionKeyHash(partnKeyValues [][]interface{}, scans Scans, numPartition uint32) map[common.PartitionId]bool {
+func partitionKeyHash(partnKeyValues [][]interface{}, scans Scans, numPartition uint32, hashScheme common.HashScheme) map[common.PartitionId]bool {
 
 	if len(partnKeyValues) != len(scans) {
 		return nil
@@ -1431,7 +1431,7 @@ func partitionKeyHash(partnKeyValues [][]interface{}, scans Scans, numPartition 
 			return nil
 		}
 
-		partnId := common.HashKeyPartition(v, int(numPartition))
+		partnId := common.HashKeyPartition(v, int(numPartition), hashScheme)
 		result[partnId] = true
 	}
 

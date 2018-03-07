@@ -54,6 +54,11 @@ enum  PartitionScheme {
     RANGE = 5;
 }
 
+// Type of Hash scheme for partitioned index 
+enum  HashScheme {
+    CRC32 = 0;
+}
+
 // IndexInst message as payload between co-ordinator, projector, indexer.
 message IndexInst {
     required uint64           instId      = 1;
@@ -80,4 +85,5 @@ message IndexDefn {
     optional string          whereExpression = 10; // where predicate
     repeated string          partnExpressions  = 11; // use expressions to evaluate doc
     optional bool            retainDeletedXATTR = 12; // index XATTRs of deleted docs
+    required HashScheme      hashScheme = 13; // hash scheme for partitioned index 
 }
