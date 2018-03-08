@@ -244,6 +244,11 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, conn net.Conn,
 	if req.Stats != nil {
 		req.Stats.numRequests.Add(1)
 		req.Stats.scanReqInitDuration.Add(time.Now().Sub(ttime).Nanoseconds())
+		if req.GroupAggr != nil {
+			req.Stats.numRequestsAggr.Add(1)
+		} else {
+			req.Stats.numRequestsRange.Add(1)
+		}
 	}
 
 	t0 := time.Now()
@@ -320,13 +325,23 @@ func (s *scanCoordinator) handleScanRequest(req *ScanRequest, w ScanResponseWrit
 		req.Stats.scanBytesRead.Add(int64(scanPipeline.BytesRead()))
 		req.Stats.scanDuration.Add(scanTime.Nanoseconds())
 		req.Stats.scanWaitDuration.Add(waitTime.Nanoseconds())
+
+		if req.GroupAggr != nil {
+			req.Stats.numRowsReturnedAggr.Add(int64(scanPipeline.RowsReturned()))
+			req.Stats.numRowsScannedAggr.Add(int64(scanPipeline.RowsScanned()))
+			req.Stats.scanCacheHitAggr.Add(int64(scanPipeline.CacheHitRatio()))
+		} else {
+			req.Stats.numRowsReturnedRange.Add(int64(scanPipeline.RowsReturned()))
+			req.Stats.numRowsScannedRange.Add(int64(scanPipeline.RowsScanned()))
+			req.Stats.scanCacheHitRange.Add(int64(scanPipeline.CacheHitRatio()))
+		}
 	}
 
 	if err != nil {
 		status := fmt.Sprintf("(error = %s)", err)
 		logging.LazyVerbose(func() string {
-			return fmt.Sprintf("%s RESPONSE rows:%d, waitTime:%v, totalTime:%v, status:%s, requestId:%s",
-				req.LogPrefix, scanPipeline.RowsReturned(), waitTime, scanTime, status, req.RequestId)
+			return fmt.Sprintf("%s RESPONSE rows:%d, scanned:%d, waitTime:%v, totalTime:%v, status:%s, requestId:%s",
+				req.LogPrefix, scanPipeline.RowsReturned(), scanPipeline.RowsScanned(), waitTime, scanTime, status, req.RequestId)
 		})
 
 		if err == common.ErrClientCancel {

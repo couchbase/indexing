@@ -428,6 +428,11 @@ func (r *ScanRequest) Done() {
 	// If the requested DefnID in invalid, stats object will not be populated
 	if r.Stats != nil {
 		r.Stats.numCompletedRequests.Add(1)
+		if r.GroupAggr != nil {
+			r.Stats.numCompletedRequestsAggr.Add(1)
+		} else {
+			r.Stats.numCompletedRequestsRange.Add(1)
+		}
 	}
 
 	for _, buf := range r.keyBufList {
