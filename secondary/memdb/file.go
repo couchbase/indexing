@@ -6,7 +6,7 @@ import "errors"
 import "github.com/couchbase/indexing/secondary/fdb"
 import "bytes"
 
-const DiskBlockSize = 512 * 1024
+const DiskBlockSize = 4 * 1024 // 4K is ok for page cache writes
 
 var (
 	ErrNotEnoughSpace = errors.New("Not enough space in the buffer")
