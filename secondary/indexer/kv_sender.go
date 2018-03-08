@@ -939,16 +939,11 @@ func updateCurrentTsFromResponse(bucket string,
 func (k *kvSender) makeInitialTs(bucket string,
 	vbnos []uint32) (*protobuf.TsVbuuid, error) {
 
-	flogs, err := k.getFailoverLogs(bucket, vbnos)
-	if err != nil {
-		logging.Errorf("KVSender::makeInitialTs Unexpected Error During Failover "+
-			"Log Request for Bucket %v. Err %v", bucket, err)
-		return nil, err
-	}
-
 	ts := protobuf.NewTsVbuuid(DEFAULT_POOL, bucket, len(vbnos))
-	ts = ts.InitialRestartTs(flogs.ToFailoverLog(c.Vbno32to16(vbnos)))
 
+	for vbno := range vbnos {
+		ts.Append(uint16(vbno), 0, 0, 0, 0)
+	}
 	return ts, nil
 }
 
@@ -1183,6 +1178,7 @@ func convertIndexDefnToProtobuf(indexDefn c.IndexDefn) *protobuf.IndexDefn {
 		SecExpressions:     indexDefn.SecExprs,
 		PartitionScheme:    partnScheme,
 		PartnExpressions:   indexDefn.PartitionKeys,
+		HashScheme:         protobuf.HashScheme(indexDefn.HashScheme).Enum(),
 		WhereExpression:    proto.String(indexDefn.WhereExpr),
 		RetainDeletedXATTR: proto.Bool(indexDefn.RetainDeletedXATTR),
 	}

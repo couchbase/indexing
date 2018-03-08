@@ -364,7 +364,7 @@ func (c *clustMgrAgent) handleGetGlobalTopology(cmd Message) {
 				partitions[i] = common.PartitionId(partn.PartId)
 				versions[i] = int(partn.Version)
 			}
-			pc := c.metaNotifier.makeDefaultPartitionContainer(partitions, versions, inst.NumPartitions, idxDefn.PartitionScheme)
+			pc := c.metaNotifier.makeDefaultPartitionContainer(partitions, versions, inst.NumPartitions, idxDefn.PartitionScheme, idxDefn.HashScheme)
 
 			// create index instance
 			idxInst := common.IndexInst{
@@ -539,7 +539,7 @@ func (meta *metaNotifier) OnIndexCreate(indexDefn *common.IndexDefn, instId comm
 	logging.Infof("clustMgrAgent::OnIndexCreate Notification "+
 		"Received for Create Index %v %v partitions %v", indexDefn, reqCtx, partitions)
 
-	pc := meta.makeDefaultPartitionContainer(partitions, versions, numPartitions, indexDefn.PartitionScheme)
+	pc := meta.makeDefaultPartitionContainer(partitions, versions, numPartitions, indexDefn.PartitionScheme, indexDefn.HashScheme)
 
 	idxInst := common.IndexInst{InstId: instId,
 		Defn:       *indexDefn,
@@ -765,10 +765,10 @@ func (meta *metaNotifier) fetchStats() {
 }
 
 func (meta *metaNotifier) makeDefaultPartitionContainer(partitions []common.PartitionId, versions []int, numPartitions uint32,
-	scheme common.PartitionScheme) common.PartitionContainer {
+	scheme common.PartitionScheme, hash common.HashScheme) common.PartitionContainer {
 
 	numVbuckets := meta.config["numVbuckets"].Int()
-	pc := common.NewKeyPartitionContainer(numVbuckets, int(numPartitions), scheme)
+	pc := common.NewKeyPartitionContainer(numVbuckets, int(numPartitions), scheme, hash)
 
 	//Add one partition for now
 	addr := net.JoinHostPort("", meta.config["streamMaintPort"].String())

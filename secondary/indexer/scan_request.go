@@ -880,6 +880,7 @@ func (r *ScanRequest) fillScans(protoScans []*protobuf.Scan) (localErr error) {
 				}
 				filter.Low = key
 				filter.High = key
+				filter.Inclusion = Both
 				filters = append(filters, filter)
 
 				p1 := IndexPoint{Value: filter.Low, FilterId: len(filters) - 1, Type: "low"}

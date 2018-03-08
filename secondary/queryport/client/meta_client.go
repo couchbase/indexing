@@ -513,6 +513,7 @@ func (b *metadataClient) equivalentIndex(
 		d1.IsPrimary != d2.IsPrimary ||
 		d1.ExprType != d2.ExprType ||
 		d1.PartitionScheme != d2.PartitionScheme ||
+		d1.HashScheme != d2.HashScheme ||
 		d1.WhereExpr != d2.WhereExpr ||
 		d1.RetainDeletedXATTR != d2.RetainDeletedXATTR {
 

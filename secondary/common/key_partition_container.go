@@ -42,10 +42,11 @@ type KeyPartitionContainer struct {
 	NumPartitions int
 	PartitionSize int
 	scheme        PartitionScheme
+	hash          HashScheme
 }
 
 //NewKeyPartitionContainer initializes a new KeyPartitionContainer and returns
-func NewKeyPartitionContainer(numVbuckets int, numPartitions int, scheme PartitionScheme) PartitionContainer {
+func NewKeyPartitionContainer(numVbuckets int, numPartitions int, scheme PartitionScheme, hash HashScheme) PartitionContainer {
 
 	if !IsPartitioned(scheme) {
 		numPartitions = 1
@@ -56,6 +57,7 @@ func NewKeyPartitionContainer(numVbuckets int, numPartitions int, scheme Partiti
 		NumPartitions: numPartitions,
 		PartitionSize: numVbuckets / numPartitions,
 		scheme:        scheme,
+		hash:          hash,
 	}
 	return kpc
 
@@ -91,7 +93,7 @@ func (pc *KeyPartitionContainer) GetEndpointsByPartitionKey(key PartitionKey) []
 func (pc *KeyPartitionContainer) GetPartitionIdByPartitionKey(key PartitionKey) PartitionId {
 
 	if pc.scheme == KEY {
-		return HashKeyPartition(key, pc.NumPartitions)
+		return HashKeyPartition(key, pc.NumPartitions, pc.hash)
 	}
 
 	return PartitionId(NON_PARTITION_ID)
@@ -147,7 +149,7 @@ func (pc *KeyPartitionContainer) GetNumPartitions() int {
 	return pc.NumPartitions
 }
 
-func HashKeyPartition(key []byte, numPartitions int) PartitionId {
+func HashKeyPartition(key []byte, numPartitions int, scheme HashScheme) PartitionId {
 
 	//run hash function on partition key and return partition id
 	hash := crc32.ChecksumIEEE([]byte(key))

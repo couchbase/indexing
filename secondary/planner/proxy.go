@@ -276,6 +276,10 @@ func ConvertToIndexUsage(config common.Config, defn *common.IndexDefn, localMeta
 			state != common.INDEX_STATE_ERROR &&
 			state != common.INDEX_STATE_NIL {
 
+			if !common.IsPartitioned(defn.PartitionScheme) {
+				inst.NumPartitions = 1
+			}
+
 			for _, partn := range inst.Partitions {
 
 				// create an index usage object
@@ -291,7 +295,7 @@ func ConvertToIndexUsage(config common.Config, defn *common.IndexDefn, localMeta
 
 				// update partition
 				numVbuckets := config["indexer.numVbuckets"].Int()
-				pc := common.NewKeyPartitionContainer(numVbuckets, int(inst.NumPartitions), defn.PartitionScheme)
+				pc := common.NewKeyPartitionContainer(numVbuckets, int(inst.NumPartitions), defn.PartitionScheme, defn.HashScheme)
 
 				// Is the index being deleted by user?   Thsi will read the delete token from metakv.  If untable read from metakv,
 				// pendingDelete is false (cannot assert index is to-be-delete).
@@ -1081,7 +1085,7 @@ func processCreateToken(clusterUrl string, indexers []*IndexerNode, config commo
 			index := makeIndexUsageFromDefn(defn, defn.InstId, partition, uint64(defn.NumPartitions))
 
 			numVbuckets := config["indexer.numVbuckets"].Int()
-			pc := common.NewKeyPartitionContainer(numVbuckets, int(defn.NumPartitions), defn.PartitionScheme)
+			pc := common.NewKeyPartitionContainer(numVbuckets, int(defn.NumPartitions), defn.PartitionScheme, defn.HashScheme)
 
 			index.Instance = &common.IndexInst{
 				InstId:    defn.InstId,

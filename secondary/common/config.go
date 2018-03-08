@@ -624,6 +624,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"queryport.client.scan.max_concurrency": ConfigValue{
+		16,
+		"When performing query on partitioned index, specify maximum concurrency allowed. Use 0 to disable.",
+		16,
+		false, // mutable
+		false, // case-insensitive
+	},
 	// projector's adminport client, can be used by indexer.
 	"indexer.projectorclient.retryInterval": ConfigValue{
 		16,

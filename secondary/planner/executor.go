@@ -104,6 +104,7 @@ type IndexSpec struct {
 	RetainDeletedXATTR bool               `json:"retainDeletedXATTR,omitempty"`
 	NumPartition       uint64             `json:"numPartition,omitempty"`
 	PartitionScheme    string             `json:"partitionScheme,omitempty"`
+	HashScheme         uint64             `json:"hashScheme,omitempty"`
 	PartitionKeys      []string           `json:"partitionKeys,omitempty"`
 	Replica            uint64             `json:"replica,omitempty"`
 	Desc               []bool             `json:"desc,omitempty"`
@@ -1137,7 +1138,7 @@ func indexUsageFromSpec(sizing SizingMethod, spec *IndexSpec) ([]*IndexUsage, er
 			index.Instance.InstId = index.InstId
 			index.Instance.ReplicaId = i
 			index.Instance.Pc = common.NewKeyPartitionContainer(numVbuckets, int(spec.NumPartition),
-				common.PartitionScheme(spec.PartitionScheme))
+				common.PartitionScheme(spec.PartitionScheme), common.HashScheme(spec.HashScheme))
 			index.Instance.State = common.INDEX_STATE_READY
 			index.Instance.Stream = common.NIL_STREAM
 			index.Instance.Error = ""

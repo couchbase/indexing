@@ -29,7 +29,7 @@ func (p *KeyPartition) Hosts(inst *IndexInst) []string {
 func (p *KeyPartition) UpsertEndpoints(
 	inst *IndexInst, m *mc.DcpEvent, partKey, key, oldKey []byte) []string {
 
-	return p.getPartitionEndpoint(partKey)
+	return p.getPartitionEndpoint(partKey, inst.GetDefinition().GetHashScheme())
 }
 
 // UpsertDeletionEndpoints implements Partition{} interface.
@@ -57,9 +57,9 @@ func (p *KeyPartition) DeletionEndpoints(
 //
 // Get endpoint of a specific partition
 //
-func (p *KeyPartition) getPartitionEndpoint(partKey []byte) []string {
+func (p *KeyPartition) getPartitionEndpoint(partKey []byte, scheme HashScheme) []string {
 
-	partitionId := uint64(common.HashKeyPartition(partKey, int(p.GetNumPartition())))
+	partitionId := uint64(common.HashKeyPartition(partKey, int(p.GetNumPartition()), common.HashScheme(scheme)))
 	for _, partnId := range p.Partitions {
 		if partnId == partitionId {
 			return p.GetEndpoints()

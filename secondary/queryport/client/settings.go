@@ -27,6 +27,7 @@ type ClientSettings struct {
 	scanLagItem    uint64
 	prune_replica  int32
 	queueSize      uint64
+	concurrency    uint32
 	config         common.Config
 	cancelCh       chan struct{}
 
@@ -150,6 +151,13 @@ func (s *ClientSettings) handleSettings(config common.Config) {
 		logging.Errorf("ClientSettings: invalid setting value for queueSize=%v", queueSize)
 	}
 
+	concurrency := config["queryport.client.scan.max_concurrency"].Int()
+	if concurrency >= 0 {
+		atomic.StoreUint32(&s.concurrency, uint32(concurrency))
+	} else {
+		logging.Errorf("ClientSettings: invalid setting value for max_concurrency=%v", concurrency)
+	}
+
 	storageMode := config["indexer.settings.storage_mode"].String()
 	if len(storageMode) != 0 {
 		func() {
@@ -204,4 +212,8 @@ func (s *ClientSettings) DisablePruneReplica() bool {
 
 func (s *ClientSettings) ScanQueueSize() uint64 {
 	return atomic.LoadUint64(&s.queueSize)
+}
+
+func (s *ClientSettings) MaxConcurrency() uint32 {
+	return atomic.LoadUint32(&s.concurrency)
 }
