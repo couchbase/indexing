@@ -348,10 +348,22 @@ func (r *mutationStreamReader) syncWorker() {
 
 	ticker := time.NewTicker(time.Millisecond * time.Duration(r.syncBatchInterval))
 
+	fastpath := true
+	inactivityTick := 0
+
 	for {
 		select {
 		case <-ticker.C:
-			r.maybeSendSync()
+			if r.maybeSendSync(fastpath) {
+				inactivityTick = 0
+				fastpath = true
+			} else {
+				if inactivityTick > int(r.syncBatchInterval)*r.numWorkers {
+					fastpath = false
+				} else {
+					inactivityTick++
+				}
+			}
 		case <-r.syncStopCh:
 			ticker.Stop()
 			return
@@ -360,11 +372,19 @@ func (r *mutationStreamReader) syncWorker() {
 }
 
 //send a sync message if its due
-func (r *mutationStreamReader) maybeSendSync() {
+func (r *mutationStreamReader) maybeSendSync(fastpath bool) bool {
+
+	if !fastpath {
+		if !r.checkAnySyncDue() {
+			return false
+		}
+	}
 
 	hwt := make(map[string]*common.TsVbuuid)
 	prevSnap := make(map[string]*common.TsVbuuid)
 	numVbuckets := r.config["numVbuckets"].Int()
+
+	sent := false
 
 	r.queueMapLock.RLock()
 	for bucket, _ := range r.bucketQueueMap {
@@ -408,11 +428,35 @@ func (r *mutationStreamReader) maybeSendSync() {
 				bucket:   bucket,
 				ts:       hwt[bucket],
 				prevSnap: prevSnap[bucket]}
+			sent = true
 		}
 	}
 
 	r.queueMapLock.RUnlock()
+	return sent
 
+}
+
+//check if any worker has sync due
+func (r *mutationStreamReader) checkAnySyncDue() bool {
+
+	syncDue := false
+	r.queueMapLock.RLock()
+loop:
+	for bucket, _ := range r.bucketQueueMap {
+		for i := 0; i < r.numWorkers; i++ {
+			r.streamWorkers[i].lock.Lock()
+			if r.streamWorkers[i].bucketSyncDue[bucket] {
+				syncDue = true
+			}
+			r.streamWorkers[i].lock.Unlock()
+			if syncDue {
+				break loop
+			}
+		}
+	}
+	r.queueMapLock.RUnlock()
+	return syncDue
 }
 
 func (r *mutationStreamReader) logReaderStat() {
