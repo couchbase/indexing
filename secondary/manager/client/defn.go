@@ -68,6 +68,7 @@ type ServiceMap struct {
 	NodeUUID       string `json:"nodeUUID,omitempty"`
 	IndexerVersion uint64 `json:"indexerVersion,omitempty"`
 	ClusterVersion uint64 `json:"clusterVersion,omitempty"`
+	ExcludeNode    string `json:"excludeNode,omitempty"`
 }
 
 /////////////////////////////////////////////////////////////////////////

@@ -404,7 +404,7 @@ func (o *MetadataProvider) makePrepareIndexRequest(idxDefn *c.IndexDefn) (map[c.
 
 	if len(idxDefn.Nodes) == 0 {
 		// Get the full list of healthy watcher.  Unhealthy watcher could be unwatched.
-		watchers = o.getAllWatchers()
+		watchers = o.getAllAvailWatchers()
 	}
 
 	request := &PrepareCreateRequest{
@@ -1769,7 +1769,7 @@ RETRY1:
 	if len(nodes) == 0 {
 		if partitioned {
 			// partitioned
-			watchers := o.getAllWatchers()
+			watchers := o.getAllAvailWatchers()
 			if len(watchers) >= numReplica+1 {
 				return watchers, nil, false
 			}
@@ -1832,8 +1832,9 @@ RETRY1:
 		return nil, errors.New(fmt.Sprintf(stmt1, nodes)), true
 
 	} else if errCode == 3 {
-		stmt1 := "Fails to create index.  There are not enough indexer nodes to create index with replica count of %v"
-		return nil, errors.New(fmt.Sprintf(stmt1, numReplica)), true
+		stmt1 := "Fails to create index.  There are not enough indexer nodes to create index with replica count of %v. "
+		stmt2 := stmt1 + "Some indexer nodes may be marked as excluded."
+		return nil, errors.New(fmt.Sprintf(stmt2, numReplica)), true
 	}
 
 	return watchers, nil, false
@@ -2398,6 +2399,20 @@ func (o *MetadataProvider) getAllWatchers() []*watcher {
 	return result
 }
 
+func (o *MetadataProvider) getAllAvailWatchers() []*watcher {
+	o.mutex.Lock()
+	defer o.mutex.Unlock()
+
+	result := make([]*watcher, 0, len(o.watchers))
+	for _, watcher := range o.watchers {
+		if watcher.serviceMap.ExcludeNode != "in" &&
+			watcher.serviceMap.ExcludeNode != "inout" {
+			result = append(result, watcher)
+		}
+	}
+	return result
+}
+
 func (o *MetadataProvider) findNextAvailWatcher(excludes []*watcher, checkServerGroup bool) (*watcher, int) {
 	o.mutex.Lock()
 	defer o.mutex.Unlock()
@@ -2411,6 +2426,9 @@ func (o *MetadataProvider) findNextAvailWatcher(excludes []*watcher, checkServer
 			if watcher == exclude {
 				found = true
 			} else if checkServerGroup && watcher.getServerGroup() == exclude.getServerGroup() {
+				found = true
+			} else if watcher.serviceMap.ExcludeNode == "in" ||
+				watcher.serviceMap.ExcludeNode == "inout" {
 				found = true
 			}
 		}
@@ -3667,6 +3685,12 @@ func (w *watcher) updateServiceMapNoLock(indexerId c.IndexerId, serviceMap *Serv
 	if w.serviceMap.ClusterVersion != serviceMap.ClusterVersion {
 		logging.Infof("Received new service map.  Cluster version=%v", serviceMap.ClusterVersion)
 		w.serviceMap.ClusterVersion = serviceMap.ClusterVersion
+		needRefresh = true
+	}
+
+	if w.serviceMap.ExcludeNode != serviceMap.ExcludeNode {
+		logging.Infof("Received new service map.  ExcludeNode=%v", serviceMap.ExcludeNode)
+		w.serviceMap.ExcludeNode = serviceMap.ExcludeNode
 		needRefresh = true
 	}
 
