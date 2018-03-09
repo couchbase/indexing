@@ -532,6 +532,11 @@ func (r *ScanRequest) areFiltersNil(protoScan *protobuf.Scan) bool {
 	return areFiltersNil
 }
 
+func (r *ScanRequest) getEmptyScan() Scan {
+	key, _ := r.newKey([]byte(""))
+	return Scan{Low: key, High: key, Incl: Neither, ScanType: RangeReq}
+}
+
 // Compute the overall low, high for a Filter
 // based on composite filter ranges
 func (r *ScanRequest) fillFilterLowHigh(compFilters []CompositeElementFilter, filter *Filter) error {
@@ -875,6 +880,7 @@ func (r *ScanRequest) fillScans(protoScans []*protobuf.Scan) (localErr error) {
 	var points []IndexPoint
 
 	if r.isPrimary {
+		var scans []Scan
 		for _, protoScan := range protoScans {
 			if len(protoScan.Equals) != 0 {
 				var filter Filter
@@ -920,11 +926,13 @@ func (r *ScanRequest) fillScans(protoScans []*protobuf.Scan) (localErr error) {
 			}
 
 			if IndexKeyLessThan(h, l) {
+				scans = append(scans, r.getEmptyScan())
 				continue
 			}
 
 			// When l == h, only valid case is: meta().id >= l && meta().id <= h
 			if bytes.Compare(l.Bytes(), h.Bytes()) == 0 && Inclusion(fl.GetInclusion()) != Both {
+				scans = append(scans, r.getEmptyScan())
 				continue
 			}
 
@@ -944,7 +952,6 @@ func (r *ScanRequest) fillScans(protoScans []*protobuf.Scan) (localErr error) {
 		}
 		// Sort Filters based only on low value
 		sort.Sort(Filters(filters))
-		var scans []Scan
 		for _, filter := range filters {
 			scans = MergeFiltersForPrimary(scans, filter)
 		}
