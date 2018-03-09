@@ -109,6 +109,7 @@ type updator struct {
 	serverGroup    string
 	nodeAddr       string
 	clusterVersion uint64
+	excludeNode    string
 }
 
 //////////////////////////////////////////////////////////////
@@ -2365,6 +2366,12 @@ func (m *LifecycleMgr) getServiceMap() (*client.ServiceMap, error) {
 
 	srvMap.ClusterVersion = m.cinfo.GetClusterVersion()
 
+	exclude, err := m.repo.GetLocalValue("excludeNode")
+	if err != nil && !strings.Contains(err.Error(), "FDB_RESULT_KEY_NOT_FOUND") {
+		return nil, err
+	}
+	srvMap.ExcludeNode = string(exclude)
+
 	return srvMap, nil
 }
 
@@ -2987,15 +2994,17 @@ func (m *updator) checkServiceMap() {
 	if serviceMap.ServerGroup != m.serverGroup ||
 		m.indexerVersion != serviceMap.IndexerVersion ||
 		serviceMap.NodeAddr != m.nodeAddr ||
-		serviceMap.ClusterVersion != m.clusterVersion {
+		serviceMap.ClusterVersion != m.clusterVersion ||
+		serviceMap.ExcludeNode != m.excludeNode {
 
 		m.serverGroup = serviceMap.ServerGroup
 		m.indexerVersion = serviceMap.IndexerVersion
 		m.nodeAddr = serviceMap.NodeAddr
 		m.clusterVersion = serviceMap.ClusterVersion
+		m.excludeNode = serviceMap.ExcludeNode
 
-		logging.Infof("updator: updating service map.  server group=%v, indexerVersion=%v nodeAddr %v clusterVersion %v",
-			m.serverGroup, m.indexerVersion, m.nodeAddr, m.clusterVersion)
+		logging.Infof("updator: updating service map.  server group=%v, indexerVersion=%v nodeAddr %v clusterVersion %v excludeNode %v",
+			m.serverGroup, m.indexerVersion, m.nodeAddr, m.clusterVersion, m.excludeNode)
 
 		if err := m.manager.repo.BroadcastServiceMap(serviceMap); err != nil {
 			logging.Errorf("updator: fail to set service map.  Error = %v", err)

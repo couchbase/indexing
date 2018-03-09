@@ -496,6 +496,12 @@ func (p *SAPlanner) planSingleRun(command CommandType, solution *Solution) (*Sol
 	startTemp := temperature
 	done := false
 
+	eligibles := p.placement.GetEligibleIndexes()
+	if !p.constraint.SatisfyClusterConstraint(current, eligibles) {
+		temperature = MaxTemperature
+		startTemp = temperature
+	}
+
 	for temperature > MinTemperature && !done {
 		lastMove := move
 		lastPositiveMove := positiveMove
@@ -568,7 +574,7 @@ func (p *SAPlanner) planSingleRun(command CommandType, solution *Solution) (*Sol
 	p.PositiveMove = positiveMove
 	p.Iteration = iteration
 
-	eligibles := p.placement.GetEligibleIndexes()
+	eligibles = p.placement.GetEligibleIndexes()
 	if !p.constraint.SatisfyClusterConstraint(p.Result, eligibles) {
 		return current, nil, p.constraint.GetViolations(p.Result, eligibles)
 	}

@@ -121,7 +121,7 @@ func GetSliceSnapshots(is IndexSnapshot, partitionIds []common.PartitionId) (s [
 		return
 	}
 
-	if len(partitionIds) == 0 {
+	if is.IsEpoch() || len(partitionIds) == 0 {
 		// for backward compatibility
 		for _, p := range is.Partitions() {
 			for _, sl := range p.Slices() {
