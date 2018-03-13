@@ -6,23 +6,27 @@ import (
 	"os"
 
 	c "github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/queryport/client"
 	"github.com/couchbase/indexing/secondary/stats"
 )
 
 type ScanConfig struct {
-	Id          uint64
-	Bucket      string
-	Index       string
-	DefnId      uint64
-	Type        string
-	Limit       int64
-	Low         c.SecondaryKey
-	Lookups     []c.SecondaryKey
-	High        c.SecondaryKey
-	Inclusion   int
-	Repeat      uint32
-	NInterval   uint32 // Stats dump nrequests interval
-	Consistency bool   // Use session consistency
+	Id              uint64
+	Bucket          string
+	Index           string
+	DefnId          uint64
+	Type            string
+	Limit           int64
+	Low             c.SecondaryKey
+	Lookups         []c.SecondaryKey
+	High            c.SecondaryKey
+	Inclusion       int
+	Repeat          uint32
+	NInterval       uint32 // Stats dump nrequests interval
+	Consistency     bool   // Use session consistency
+	Scans           client.Scans
+	IndexProjection *client.IndexProjection
+	GroupAggr       *client.GroupAggr
 
 	iteration uint32
 }

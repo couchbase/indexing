@@ -91,6 +91,14 @@ func RunJob(client *qclient.GsiClient, job *Job, aggrQ chan *JobResult) {
 		requestID := os.Args[0] + uuid
 		err = client.Lookup(spec.DefnId, requestID, spec.Lookups, false,
 			spec.Limit, cons, nil, callb)
+	case "MultiScan":
+		requestID := os.Args[0] + uuid
+		err = client.MultiScan(spec.DefnId, requestID, spec.Scans, false, false, spec.IndexProjection, 0, spec.Limit,
+			cons, nil, callb)
+	case "Scan3":
+		requestID := os.Args[0] + uuid
+		err = client.Scan3(spec.DefnId, requestID, spec.Scans, false, false, spec.IndexProjection, 0, spec.Limit,
+			spec.GroupAggr, nil, cons, nil, callb)
 	}
 
 	if err != nil {
