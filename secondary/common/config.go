@@ -1768,6 +1768,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.stream_reader.markFirstSnap": ConfigValue{
+		true,
+		"Identify mutations from first DCP snapshot. Used for back index lookup optimization.",
+		true,
+		false, // mutable
+		false, // case-insensitive
+	},
 }
 
 // NewConfig from another
