@@ -5184,7 +5184,7 @@ func (idx *indexer) bulkUpdateRState(instIdList []common.IndexInstId, reqCtx *co
 
 	for _, instId := range instIdList {
 		idxInst := idx.indexInstMap[instId]
-		if reqCtx.ReqSource == common.DDLRequestSourceRebalance {
+		if reqCtx.ReqSource == common.DDLRequestSourceRebalance && idxInst.Version != 0 {
 			idxInst.RState = common.REBAL_PENDING
 		} else {
 			idxInst.RState = common.REBAL_ACTIVE

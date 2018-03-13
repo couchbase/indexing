@@ -564,11 +564,6 @@ func TestMultiScanPrimaryIndexVariations(t *testing.T) {
 	err := secondaryindex.CreateSecondaryIndex(primaryindex, bucketName, indexManagementAddress, "", nil, true, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
-	getPrimaryFilter := func(low, high interface{}, incl int) []*qc.CompositeElementFilter {
-		filter := make([]*qc.CompositeElementFilter, 1)
-		filter[0] = &qc.CompositeElementFilter{Low: low, High: high, Inclusion: qc.Inclusion(uint32(incl))}
-		return filter
-	}
 	// Scenario1: No Overlap
 	scans := make(qc.Scans, 4)
 	scans[0] = &qc.Scan{Filter: getPrimaryFilter("doc20", "doc30", 0)}
@@ -632,6 +627,17 @@ func TestMultiScanPrimaryIndexVariations(t *testing.T) {
 	scans[1] = &qc.Scan{Filter: getPrimaryFilter("doc30", "doc30", 3)}
 	runMultiScanForPrimaryIndex(primaryindex, scans, false, false, nil, 0, defaultlimit, true, false, "Boundary and Point Overlaps", t)
 
+	log.Printf("\n--- %v ---", "Primary index range null")
+	scans = make(qc.Scans, 1)
+	scans[0] = &qc.Scan{Filter: getPrimaryFilter(nil, nil, 3)}
+	scans2 := make(qc.Scans, 1)
+	scans2[0] = &qc.Scan{Filter: getPrimaryFilter("z", "a", 0)}
+	docScanResults := datautility.ExpectedMultiScanResponse_Primary(docs, scans2, false, false, 0, defaultlimit)
+	scanResults, err := secondaryindex.Scans(primaryindex, bucketName, indexScanAddress, scans, false, false, nil, 0, defaultlimit, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in scan", t)
+	err = tv.Validate(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan result validation", t)
+
 	kvutility.DeleteKeys(primaryIndexDocs, bucketName, "", clusterconfig.KVAddress)
 	for key, _ := range primaryIndexDocs {
 		delete(docs, key) // Update docs object with deleted keys
@@ -660,6 +666,12 @@ func runMultiScan(scans qc.Scans, reverse, distinct bool,
 		err = tv.Validate(docScanResults, scanResults)
 		FailTestIfError(err, "Error in scan result validation", t)
 	}
+}
+
+func getPrimaryFilter(low, high interface{}, incl int) []*qc.CompositeElementFilter {
+	filter := make([]*qc.CompositeElementFilter, 1)
+	filter[0] = &qc.CompositeElementFilter{Low: low, High: high, Inclusion: qc.Inclusion(uint32(incl))}
+	return filter
 }
 
 func runMultiScanWithIndex(indexName string, fields []string, scans qc.Scans,

@@ -1377,6 +1377,77 @@ func TestGroupAggrPrimary(t *testing.T) {
 
 	}
 
+	{
+		log.Printf("--- MB-28305 Scenario 1 ---")
+		n1qlEquivalent = "select COUNT(meta().id) as a from default where meta().id IS NULL"
+
+		a1 := &qc.Aggregate{AggrFunc: c.AGG_COUNT, EntryKeyId: 1, KeyPos: 1}
+		aggregates := []*qc.Aggregate{a1}
+
+		ga := &qc.GroupAggr{
+			Name:               "primary",
+			Group:              nil,
+			Aggrs:              aggregates,
+			DependsOnIndexKeys: []int32{0},
+			IndexKeyNames:      []string{"(meta(`default`).`id`)"},
+		}
+
+		proj := &qc.IndexProjection{
+			EntryKeys: []int64{1},
+		}
+		scans := make(qc.Scans, 1)
+		scans[0] = &qc.Scan{Filter: getPrimaryFilter(nil, nil, 3)}
+		executeGroupAggrTest2(scans, ga, proj, n1qlEquivalent, index, t)
+	}
+
+	{
+		log.Printf("--- MB-28305 Scenario 2 ---")
+		n1qlEquivalent = "select COUNT(meta().id) as a from default where meta().id > 'z' and meta().id < 'a' "
+
+		a1 := &qc.Aggregate{AggrFunc: c.AGG_COUNT, EntryKeyId: 1, KeyPos: 1}
+		aggregates := []*qc.Aggregate{a1}
+
+		ga := &qc.GroupAggr{
+			Name:               "primary",
+			Group:              nil,
+			Aggrs:              aggregates,
+			DependsOnIndexKeys: []int32{0},
+			IndexKeyNames:      []string{"(meta(`default`).`id`)"},
+		}
+
+		proj := &qc.IndexProjection{
+			EntryKeys: []int64{1},
+		}
+		scans := make(qc.Scans, 1)
+		scans[0] = &qc.Scan{Filter: getPrimaryFilter("z", "a", 0)}
+		executeGroupAggrTest2(scans, ga, proj, n1qlEquivalent, index, t)
+	}
+
+	{
+		log.Printf("--- MB-28305 Scenario 3 ---")
+		n1qlEquivalent = "select COUNT(meta().id) as a from default where meta().id IS NULL " +
+			"OR meta().id > 'doc32' and meta().id < 'doc37' "
+
+		a1 := &qc.Aggregate{AggrFunc: c.AGG_COUNT, EntryKeyId: 1, KeyPos: 0}
+		aggregates := []*qc.Aggregate{a1}
+
+		ga := &qc.GroupAggr{
+			Name:               "primary",
+			Group:              nil,
+			Aggrs:              aggregates,
+			DependsOnIndexKeys: []int32{0},
+			IndexKeyNames:      []string{"(meta(`default`).`id`)"},
+		}
+
+		proj := &qc.IndexProjection{
+			EntryKeys: []int64{1},
+		}
+		scans := make(qc.Scans, 2)
+		scans[0] = &qc.Scan{Filter: getPrimaryFilter(nil, nil, 3)}
+		scans[1] = &qc.Scan{Filter: getPrimaryFilter("doc32", "doc37", 0)}
+		executeGroupAggrTest2(scans, ga, proj, n1qlEquivalent, index, t)
+	}
+
 	secondaryindex.UseClient = tmpclient
 }
 
@@ -1385,6 +1456,18 @@ func executeGroupAggrTest(ga *qc.GroupAggr, proj *qc.IndexProjection,
 	var bucket = "default"
 	_, scanResults, err := secondaryindex.Scan3(index, bucket, indexScanAddress, getScanAllNoFilter(), false, false, proj, 0, defaultlimit, ga, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
+	err = tv.ValidateGroupAggrWithN1QL(kvaddress, clusterconfig.Username,
+		clusterconfig.Password, bucket, n1qlEquivalent, ga, proj, scanResults)
+	FailTestIfError(err, "Error in scan result validation", t)
+}
+
+// with scans provided
+func executeGroupAggrTest2(scans qc.Scans, ga *qc.GroupAggr, proj *qc.IndexProjection,
+	n1qlEquivalent, index string, t *testing.T) {
+	var bucket = "default"
+	_, scanResults, err := secondaryindex.Scan3(index, bucket, indexScanAddress, scans, false, false, proj, 0, defaultlimit, ga, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in scan", t)
+	tc.PrintGroupAggrResults(scanResults, "scanResults")
 	err = tv.ValidateGroupAggrWithN1QL(kvaddress, clusterconfig.Username,
 		clusterconfig.Password, bucket, n1qlEquivalent, ga, proj, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)

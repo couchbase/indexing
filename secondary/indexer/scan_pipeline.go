@@ -312,7 +312,8 @@ loop:
 		for {
 			entry, err := projectGroupAggr((*buf)[:0], r.Indexprojection, s.p.aggrRes, r.isPrimary)
 			if err != nil {
-				return err
+				s.CloseWithError(err)
+				break
 			}
 
 			if entry == nil {
@@ -322,7 +323,8 @@ loop:
 					//handle special group rules
 					entry, err = projectEmptyResult((*buf)[:0], r.Indexprojection, r.GroupAggr)
 					if err != nil {
-						return err
+						s.CloseWithError(err)
+						break
 					}
 
 					if entry == nil {
@@ -332,24 +334,27 @@ loop:
 					s.p.rowsReturned++
 					wrErr := s.WriteItem(entry)
 					if wrErr != nil {
-						return wrErr
+						s.CloseWithError(wrErr)
+						break
 					}
 				}
 				return nil
 			}
 
 			if err != nil {
-				return err
+				s.CloseWithError(err)
+				break
 			}
 
 			if currOffset >= r.Offset {
 				s.p.rowsReturned++
 				wrErr := s.WriteItem(entry)
 				if wrErr != nil {
-					return wrErr
+					s.CloseWithError(wrErr)
+					break
 				}
 				if s.p.rowsReturned == uint64(r.Limit) {
-					return ErrLimitReached
+					return nil
 				}
 			} else {
 				currOffset++
