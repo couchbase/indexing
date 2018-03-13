@@ -1017,8 +1017,8 @@ func (m *DDLServiceMgr) handleListCreateTokens(w http.ResponseWriter, r *http.Re
 			return
 		}
 
-		w.Write(buf)
 		w.WriteHeader(http.StatusOK)
+		w.Write(buf)
 	}
 }
 
