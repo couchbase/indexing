@@ -569,7 +569,6 @@ func (w *streamWorker) handleSingleKeyVersion(bucket string, vbucket Vbucket, vb
 	meta.vbucket = vbucket
 	meta.vbuuid = vbuuid
 	meta.seqno = Seqno(kv.GetSeqno())
-	meta.firstSnap = w.bucketFirstSnap[bucket][vbucket]
 
 	defer meta.Free()
 
@@ -615,6 +614,8 @@ func (w *streamWorker) handleSingleKeyVersion(bucket string, vbucket Vbucket, vb
 				}
 				continue
 			}
+
+			meta.firstSnap = w.bucketFirstSnap[bucket][vbucket]
 
 			//allocate new mutation first time
 			if mutk == nil {
