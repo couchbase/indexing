@@ -824,7 +824,11 @@ func getLocalStats(addr string) (*common.Statistics, error) {
 
 	resp, err := getWithCbauth(addr + "/stats?async=false&partition=true")
 	if err != nil {
-		return nil, err
+		logging.Warnf("Planner.getLocalStats(): Unable to get the most recent stats.  Try fetch cached stats.")
+		resp, err = getWithCbauth(addr + "/stats?async=true&partition=true")
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	stats := new(common.Statistics)
@@ -884,7 +888,12 @@ func getWithCbauth(url string) (*http.Response, error) {
 	cbauth.SetRequestAuthVia(req, nil)
 
 	client := http.Client{Timeout: time.Duration(10 * time.Second)}
-	return client.Do(req)
+	response, err := client.Do(req)
+	if err == nil && response.StatusCode != http.StatusOK {
+		return response, convertError(response)
+	}
+
+	return response, err
 }
 
 //
@@ -922,6 +931,22 @@ func convertResponse(r *http.Response, resp interface{}) error {
 
 	if err := json.Unmarshal(buf.Bytes(), resp); err != nil {
 		return err
+	}
+
+	return nil
+}
+
+func convertError(r *http.Response) error {
+	if r.StatusCode != http.StatusOK {
+		if r.Body != nil {
+			defer r.Body.Close()
+
+			buf := new(bytes.Buffer)
+			if cause, err := buf.ReadFrom(r.Body); err == nil {
+				return fmt.Errorf("response status:%v cause:%v", r.StatusCode, string(cause))
+			}
+		}
+		return fmt.Errorf("response status:%v cause:Unknown", r.StatusCode)
 	}
 
 	return nil
