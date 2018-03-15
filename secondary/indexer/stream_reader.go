@@ -483,6 +483,7 @@ func (r *mutationStreamReader) setIndexerState(is common.IndexerState) {
 }
 
 //Stream Worker
+type firstSnapFlag []bool
 
 type streamWorker struct {
 	workerch     chan *protobuf.VbKeyVersions //buffered channel for each worker
@@ -505,6 +506,9 @@ type streamWorker struct {
 	streamId common.StreamId
 
 	reader *mutationStreamReader
+
+	markFirstSnap   bool
+	bucketFirstSnap map[string]firstSnapFlag
 }
 
 func newStreamWorker(streamId common.StreamId, numWorkers int, workerId int, config common.Config,
@@ -518,6 +522,8 @@ func newStreamWorker(streamId common.StreamId, numWorkers int, workerId int, con
 		bucketPrevSnapMap: make(map[string]*common.TsVbuuid),
 		bucketSyncDue:     make(map[string]bool),
 		reader:            reader,
+		bucketFirstSnap:   make(map[string]firstSnapFlag),
+		markFirstSnap:     getMarkFirstSnap(config),
 	}
 	w.initBucketFilter(bucketFilter)
 	return w
@@ -608,6 +614,8 @@ func (w *streamWorker) handleSingleKeyVersion(bucket string, vbucket Vbucket, vb
 				}
 				continue
 			}
+
+			meta.firstSnap = w.bucketFirstSnap[bucket][vbucket]
 
 			//allocate new mutation first time
 			if mutk == nil {
@@ -731,6 +739,7 @@ func (w *streamWorker) initBucketFilter(bucketFilter map[string]*common.TsVbuuid
 			}
 
 			w.bucketSyncDue[b] = false
+			w.bucketFirstSnap[b] = make(firstSnapFlag, int(q.queue.GetNumVbuckets()))
 
 			//reset stat for bucket
 			stats := w.reader.stats.Get()
@@ -748,6 +757,7 @@ func (w *streamWorker) initBucketFilter(bucketFilter map[string]*common.TsVbuuid
 			delete(w.bucketFilter, b)
 			delete(w.bucketPrevSnapMap, b)
 			delete(w.bucketSyncDue, b)
+			delete(w.bucketFirstSnap, b)
 		}
 	}
 
@@ -791,6 +801,8 @@ func (w *streamWorker) checkAndSetBucketFilter(meta *MutationMeta) bool {
 				meta.vbucket, meta.bucket, w.streamId,
 				uint64(meta.seqno), uint64(meta.vbuuid),
 				filter.Seqnos[meta.vbucket], filter.Vbuuids[meta.vbucket])
+
+			w.bucketFirstSnap[meta.bucket][meta.vbucket] = false //for safety
 		}
 
 		//the filter only checks if seqno of incoming mutation is greater than
@@ -839,6 +851,14 @@ func (w *streamWorker) updateSnapInFilter(meta *MutationMeta,
 	}
 
 	if filter, ok := w.bucketFilter[meta.bucket]; ok {
+
+		//if current snapshot start from 0 and the filter doesn't have any snapshot
+		if w.markFirstSnap && snapStart == 0 && filter.Snapshots[meta.vbucket][1] == 0 {
+			w.bucketFirstSnap[meta.bucket][meta.vbucket] = true
+		} else {
+			w.bucketFirstSnap[meta.bucket][meta.vbucket] = false
+		}
+
 		if snapEnd > filter.Snapshots[meta.vbucket][1] &&
 			filter.Vbuuids[meta.vbucket] != 0 {
 
@@ -954,5 +974,11 @@ func overrideDataportConf(dpconf common.Config) common.Config {
 	}
 
 	return dpconf
+
+}
+
+func getMarkFirstSnap(config common.Config) bool {
+
+	return config["stream_reader.markFirstSnap"].Bool()
 
 }

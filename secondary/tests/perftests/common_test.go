@@ -50,6 +50,7 @@ func init() {
 	kvaddress = clusterconfig.KVAddress
 	indexManagementAddress = clusterconfig.KVAddress
 	indexScanAddress = clusterconfig.KVAddress
+	proddir, bagdir = tc.FetchMonsterToolPath()
 
 	tc.LogPerformanceStat = true
 
@@ -64,7 +65,9 @@ func init() {
 		log.Fatalf("Failed to initialize cbauth: %s", err)
 	}
 
-	proddir, bagdir = tc.FetchMonsterToolPath()
+	//Enable QE Rest server
+	err := secondaryindex.ChangeIndexerSettings("indexer.api.enableTestServer", true, clusterconfig.Username, clusterconfig.Password, kvaddress)
+	tc.HandleError(err, "Error in ChangeIndexerSettings")
 
 	if clusterconfig.IndexUsing != "" {
 		// Set clusterconfig.IndexUsing only if it is specified in config file. Else let it default to gsi
@@ -76,7 +79,6 @@ func init() {
 	}
 
 	time.Sleep(5 * time.Second)
-
 }
 
 func FailTestIfError(err error, msg string, t *testing.T) {

@@ -58,6 +58,10 @@ func init() {
 	err := secondaryindex.ChangeIndexerSettings("queryport.client.settings.backfillLimit", float64(0), clusterconfig.Username, clusterconfig.Password, kvaddress)
 	tc.HandleError(err, "Error in ChangeIndexerSettings")
 
+	//Enable QE Rest server
+	err = secondaryindex.ChangeIndexerSettings("indexer.api.enableTestServer", true, clusterconfig.Username, clusterconfig.Password, kvaddress)
+	tc.HandleError(err, "Error in ChangeIndexerSettings")
+
 	err = secondaryindex.ChangeIndexerSettings("indexer.settings.persisted_snapshot_init_build.moi.interval", float64(60000), clusterconfig.Username, clusterconfig.Password, kvaddress)
 	tc.HandleError(err, "Error in ChangeIndexerSettings")
 

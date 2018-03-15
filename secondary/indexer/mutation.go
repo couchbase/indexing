@@ -18,10 +18,11 @@ import (
 
 //MutationMeta represents meta information for a KV Mutation
 type MutationMeta struct {
-	bucket  string  //bucket for the mutation
-	vbucket Vbucket //vbucket
-	vbuuid  Vbuuid  //uuid for vbucket
-	seqno   Seqno   //vbucket sequence number for this mutation
+	bucket    string  //bucket for the mutation
+	vbucket   Vbucket //vbucket
+	vbuuid    Vbuuid  //uuid for vbucket
+	seqno     Seqno   //vbucket sequence number for this mutation
+	firstSnap bool    //belongs to first DCP snapshot
 }
 
 var mutMetaPool = sync.Pool{New: newMutationMeta}
@@ -49,6 +50,7 @@ func (m *MutationMeta) Clone() *MutationMeta {
 	meta.vbucket = m.vbucket
 	meta.vbuuid = m.vbuuid
 	meta.seqno = m.seqno
+	meta.firstSnap = m.firstSnap
 	return meta
 }
 
@@ -72,6 +74,7 @@ func (m MutationMeta) String() string {
 	str += fmt.Sprintf("Vbucket: %v ", m.vbucket)
 	str += fmt.Sprintf("Vbuuid: %v ", m.vbuuid)
 	str += fmt.Sprintf("Seqno: %v ", m.seqno)
+	str += fmt.Sprintf("FirstSnap: %v ", m.firstSnap)
 	return str
 
 }

@@ -152,6 +152,8 @@ type indexer struct {
 	prunePartitionList []pruneSpec
 
 	bootstrapStorageMode common.StorageMode
+
+	testServRunning bool
 }
 
 type kvRequest struct {
@@ -480,11 +482,8 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		return nil, res
 	}
 
-	// Start indexer endpoints for CRUD  operations.
-	// Initialize the REST servers after indexer bootstrap is completed
-	cluster := idx.config["clusterAddr"].String()
-	NewTestServer(cluster)
-	NewRestServer(cluster, idx.statsMgr)
+	// Initialize the public REST API server after indexer bootstrap is completed
+	NewRestServer(idx.config["clusterAddr"].String(), idx.statsMgr)
 
 	go idx.monitorMemUsage()
 	go idx.logMemstats()
@@ -1054,6 +1053,13 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 	if percent, ok := newConfig["settings.gc_percent"]; ok && percent.Int() > 0 {
 		logging.Infof("Indexer: Setting GC percent to %v", percent.Int())
 		debug.SetGCPercent(percent.Int())
+	}
+
+	if newConfig["api.enableTestServer"].Bool() && !idx.testServRunning {
+		// Start indexer endpoints for CRUD operations.
+		// Initialize the QE REST server on config change.
+		NewTestServer(idx.config["clusterAddr"].String())
+		idx.testServRunning = true
 	}
 
 	memdb.Debug(idx.config["settings.moi.debug"].Bool())

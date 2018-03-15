@@ -195,6 +195,7 @@ func (m *RestoreContext) cleanseBackupMetadata() {
 func (m *RestoreContext) findIndexToRestore() {
 
 	defnId2NameMap := make(map[common.IndexDefnId]string)
+	instPartnCount := make(map[common.IndexInstId]int)
 
 	for indexerId, indexes := range m.idxFromImage {
 
@@ -254,11 +255,32 @@ func (m *RestoreContext) findIndexToRestore() {
 				}
 			}
 
-			logging.Infof("RestoreContext:  Index (%v, %v, %v) does not exist in current cluster.  Make it a restore candidate.",
-				index.Bucket, index.Name, index.Instance.ReplicaId)
-
 			m.idxToRestore[common.IndexerId(indexerId)] = append(m.idxToRestore[common.IndexerId(indexerId)], index)
+			instPartnCount[index.InstId] = instPartnCount[index.InstId] + 1
 		}
+	}
+
+	//
+	// when restore the index definition, make sure all the partitions are there.  Do not restore an instance with missing partition.
+	//
+	for indexerId, indexes := range m.idxToRestore {
+		newIndexes := make([]*planner.IndexUsage, 0, len(indexes))
+
+		for _, index := range indexes {
+			count := instPartnCount[index.InstId]
+			if !common.IsPartitioned(index.Instance.Defn.PartitionScheme) || count == int(index.Instance.Pc.GetNumPartitions()) {
+				newIndexes = append(newIndexes, index)
+
+				logging.Infof("RestoreContext:  Index (%v, %v, %v, %v) does not exist in current cluster.  Make it a restore candidate.",
+					index.Bucket, index.Name, index.PartnId, index.Instance.ReplicaId)
+
+			} else {
+				logging.Infof("RestoreContext:  Find index in the restore image with missing partition. "+
+					"Skip restoring index (%v, %v, %v, %v).", index.Bucket, index.Name, index.PartnId, index.Instance.ReplicaId)
+			}
+		}
+
+		m.idxToRestore[indexerId] = newIndexes
 	}
 }
 
@@ -426,6 +448,7 @@ func (m *RestoreContext) buildIndexHostMapping(solution *planner.Solution) map[s
 							index.Instance.Defn.BucketUUID = ""
 
 							// update transient fields
+							index.Instance.Defn.InstId = index.Instance.InstId
 							index.Instance.Defn.ReplicaId = index.Instance.ReplicaId
 							index.Instance.Defn.Partitions = []common.PartitionId{index.PartnId}
 							index.Instance.Defn.Versions = []int{0}

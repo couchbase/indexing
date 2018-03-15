@@ -443,9 +443,24 @@ func (m *DDLServiceMgr) cleanupCreateCommand() {
 			exist, err := mc.DeleteCommandTokenExist(token.DefnId)
 			if err != nil {
 				logging.Warnf("DDLServiceMgr: Failed to check delete token.  Skip processing %v.  Error = %v.", entry.Path, err)
+			}
 
-			} else if exist {
+			if exist {
 				delete = true
+			} else {
+				foundAnyIndexer := false
+				for indexerId, _ := range token.Definitions {
+					_, _, _, err := m.provider.FindServiceForIndexer(indexerId)
+					if err == nil {
+						foundAnyIndexer = true
+						break
+					}
+				}
+
+				// For a given token, if we cannot any matching indexer in the cluster after rebalancing, delete the token.
+				if !foundAnyIndexer {
+					delete = true
+				}
 			}
 
 		} else {
@@ -1017,8 +1032,8 @@ func (m *DDLServiceMgr) handleListCreateTokens(w http.ResponseWriter, r *http.Re
 			return
 		}
 
-		w.Write(buf)
 		w.WriteHeader(http.StatusOK)
+		w.Write(buf)
 	}
 }
 
