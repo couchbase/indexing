@@ -359,12 +359,18 @@ func (mdb *plasmaSlice) DecrRef() {
 }
 
 func (mdb *plasmaSlice) Insert(key []byte, docid []byte, meta *MutationMeta) error {
+	op := opUpdate
+	if meta.firstSnap {
+		op = opInsert
+	}
+
 	mut := indexMutation{
-		op:    opUpdate,
+		op:    op,
 		key:   key,
 		docid: docid,
 		meta:  meta,
 	}
+
 	atomic.AddInt64(&mdb.qCount, 1)
 	mdb.cmdCh[int(meta.vbucket)%mdb.numWriters] <- mut
 	mdb.idxStats.numDocsFlushQueued.Add(1)
@@ -372,9 +378,11 @@ func (mdb *plasmaSlice) Insert(key []byte, docid []byte, meta *MutationMeta) err
 }
 
 func (mdb *plasmaSlice) Delete(docid []byte, meta *MutationMeta) error {
-	mdb.idxStats.numDocsFlushQueued.Add(1)
-	atomic.AddInt64(&mdb.qCount, 1)
-	mdb.cmdCh[int(meta.vbucket)%mdb.numWriters] <- indexMutation{op: opDelete, docid: docid}
+	if !meta.firstSnap {
+		mdb.idxStats.numDocsFlushQueued.Add(1)
+		atomic.AddInt64(&mdb.qCount, 1)
+		mdb.cmdCh[int(meta.vbucket)%mdb.numWriters] <- indexMutation{op: opDelete, docid: docid}
+	}
 	return mdb.fatalDbErr
 }
 
@@ -389,9 +397,9 @@ loop:
 		select {
 		case icmd = <-mdb.cmdCh[workerId]:
 			switch icmd.op {
-			case opUpdate:
+			case opUpdate, opInsert:
 				start = time.Now()
-				nmut = mdb.insert(icmd.key, icmd.docid, workerId, icmd.meta)
+				nmut = mdb.insert(icmd.key, icmd.docid, workerId, icmd.op == opInsert, icmd.meta)
 				elapsed = time.Since(start)
 				mdb.totalFlushTime += elapsed
 
@@ -421,7 +429,8 @@ loop:
 	}
 }
 
-func (mdb *plasmaSlice) insert(key []byte, docid []byte, workerId int, meta *MutationMeta) int {
+func (mdb *plasmaSlice) insert(key []byte, docid []byte, workerId int,
+	init bool, meta *MutationMeta) int {
 	var nmut int
 
 	if mdb.isPrimary {
@@ -430,9 +439,9 @@ func (mdb *plasmaSlice) insert(key []byte, docid []byte, workerId int, meta *Mut
 		nmut = mdb.delete(docid, workerId)
 	} else {
 		if mdb.idxDefn.IsArrayIndex {
-			nmut = mdb.insertSecArrayIndex(key, docid, workerId, meta)
+			nmut = mdb.insertSecArrayIndex(key, docid, workerId, init, meta)
 		} else {
-			nmut = mdb.insertSecIndex(key, docid, workerId, meta)
+			nmut = mdb.insertSecIndex(key, docid, workerId, init, meta)
 		}
 	}
 
@@ -462,10 +471,16 @@ func (mdb *plasmaSlice) insertPrimaryIndex(key []byte, docid []byte, workerId in
 	return 0
 }
 
-func (mdb *plasmaSlice) insertSecIndex(key []byte, docid []byte, workerId int, meta *MutationMeta) int {
+func (mdb *plasmaSlice) insertSecIndex(key []byte, docid []byte, workerId int,
+	init bool, meta *MutationMeta) int {
 	t0 := time.Now()
 
-	ndel := mdb.deleteSecIndex(docid, workerId)
+	var ndel int
+
+	// The docid does not exist if the doc is initialized for the first time
+	if !init {
+		ndel = mdb.deleteSecIndex(docid, workerId)
+	}
 
 	mdb.encodeBuf[workerId] = resizeEncodeBuf(mdb.encodeBuf[workerId], len(key), allowLargeKeys)
 	entry, err := NewSecondaryIndexEntry(key, docid, mdb.idxDefn.IsArrayIndex,
@@ -494,7 +509,8 @@ func (mdb *plasmaSlice) insertSecIndex(key []byte, docid []byte, workerId int, m
 	return 1
 }
 
-func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId int, meta *MutationMeta) (nmut int) {
+func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId int,
+	init bool, meta *MutationMeta) (nmut int) {
 	var err error
 	var oldkey []byte
 
@@ -512,9 +528,12 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 	mdb.back[workerId].Begin()
 	defer mdb.back[workerId].End()
 
-	oldkey, err = mdb.back[workerId].LookupKV(docid)
-	if err == plasma.ErrItemNotFound {
-		oldkey = nil
+	// The docid does not exist if the doc is initialized for the first time
+	if !init {
+		oldkey, err = mdb.back[workerId].LookupKV(docid)
+		if err == plasma.ErrItemNotFound {
+			oldkey = nil
+		}
 	}
 
 	var oldEntriesBytes, newEntriesBytes [][]byte

@@ -37,7 +37,8 @@ import (
 )
 
 const (
-	opUpdate = iota
+	opInsert = iota
+	opUpdate
 	opDelete
 )
 
