@@ -137,8 +137,8 @@ func NewIndexEvaluator(instance *IndexInst,
 		}
 		// expression to evaluate where clause
 		expr := defn.GetWhereExpression()
-		xattrExprs = append(xattrExprs, exprs...)
 		if len(expr) > 0 {
+			xattrExprs = append(xattrExprs, expr)
 			cExprs, err := CompileN1QLExpression([]string{expr})
 			if err != nil {
 				return nil, err

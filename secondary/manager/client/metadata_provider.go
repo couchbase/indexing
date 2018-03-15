@@ -1039,7 +1039,13 @@ func (o *MetadataProvider) PrepareIndexDefn(
 			return nil, err, retry
 		}
 
-		isXATTRIndex, XATTRNames, err := queryutil.GetXATTRNames(secExprs)
+		xattrExprs := make([]string, 0)
+		xattrExprs = append(xattrExprs, secExprs...)
+		if len(whereExpr) > 0 {
+			xattrExprs = append(xattrExprs, whereExpr)
+		}
+		xattrExprs = append(xattrExprs, partitionKeys...)
+		isXATTRIndex, XATTRNames, err := queryutil.GetXATTRNames(xattrExprs)
 		if err != nil {
 			return nil, err, retry
 		}
