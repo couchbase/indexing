@@ -486,11 +486,6 @@ func (mdb *plasmaSlice) insertSecIndex(key []byte, docid []byte, workerId int, i
 
 	var ndel int
 
-	// The docid does not exist if the doc is initialized for the first time
-	if !init {
-		ndel = mdb.deleteSecIndex(docid, workerId)
-	}
-
 	mdb.encodeBuf[workerId] = resizeEncodeBuf(mdb.encodeBuf[workerId], len(key), allowLargeKeys)
 	entry, err := NewSecondaryIndexEntry(key, docid, mdb.idxDefn.IsArrayIndex,
 		1, mdb.idxDefn.Desc, mdb.encodeBuf[workerId])
@@ -500,14 +495,22 @@ func (mdb *plasmaSlice) insertSecIndex(key []byte, docid []byte, workerId int, i
 		return ndel
 	}
 
+	// The docid does not exist if the doc is initialized for the first time
+	if !init {
+		var changed bool
+		if ndel, changed = mdb.deleteSecIndex(docid, entry, workerId); !changed {
+			return 0
+		}
+	}
+
 	if len(key) > 0 {
 		mdb.main[workerId].Begin()
 		defer mdb.main[workerId].End()
 		mdb.back[workerId].Begin()
 		defer mdb.back[workerId].End()
 
-		mdb.main[workerId].InsertKV(entry, nil)
 		backEntry := entry2BackEntry(entry)
+		mdb.main[workerId].InsertKV(entry, nil)
 		mdb.back[workerId].InsertKV(docid, backEntry)
 
 		mdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
@@ -714,7 +717,7 @@ func (mdb *plasmaSlice) delete(docid []byte, workerId int) int {
 	if mdb.isPrimary {
 		nmut = mdb.deletePrimaryIndex(docid, workerId)
 	} else if !mdb.idxDefn.IsArrayIndex {
-		nmut = mdb.deleteSecIndex(docid, workerId)
+		nmut, _ = mdb.deleteSecIndex(docid, nil, workerId)
 	} else {
 		nmut = mdb.deleteSecArrayIndex(docid, workerId)
 	}
@@ -751,7 +754,7 @@ func (mdb *plasmaSlice) deletePrimaryIndex(docid []byte, workerId int) (nmut int
 	return 0
 }
 
-func (mdb *plasmaSlice) deleteSecIndex(docid []byte, workerId int) int {
+func (mdb *plasmaSlice) deleteSecIndex(docid []byte, newEntry []byte, workerId int) (ndel int, changed bool) {
 	// Delete entry from back and main index if present
 	mdb.back[workerId].Begin()
 	defer mdb.back[workerId].End()
@@ -765,14 +768,20 @@ func (mdb *plasmaSlice) deleteSecIndex(docid []byte, workerId int) int {
 		atomic.AddInt64(&mdb.delete_bytes, int64(len(docid)))
 		mdb.main[workerId].Begin()
 		defer mdb.main[workerId].End()
-		mdb.back[workerId].DeleteKV(docid)
 		entry := backEntry2entry(docid, backEntry, buf)
+
+		// Delete the entries only if the entry is different
+		if bytes.Equal(entry, newEntry) {
+			return 0, false
+		}
+
+		mdb.back[workerId].DeleteKV(docid)
 		mdb.main[workerId].DeleteKV(entry)
 		mdb.idxStats.Timings.stKVDelete.Put(time.Since(t0))
 	}
 
 	mdb.isDirty = true
-	return 1
+	return 1, true
 }
 
 func (mdb *plasmaSlice) deleteSecArrayIndex(docid []byte, workerId int) (nmut int) {
