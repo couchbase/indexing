@@ -835,8 +835,10 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		streamId := msg.(*MsgMutMgrFlushDone).GetStreamId()
 
 		// consolidate partitions now
-		idx.mergePartitions()
-		idx.prunePartitions()
+		if streamId == common.MAINT_STREAM {
+			idx.mergePartitions(bucket)
+			idx.prunePartitions(bucket)
+		}
 
 		idx.streamBucketFlushInProgress[streamId][bucket] = false
 
@@ -1364,8 +1366,8 @@ func (idx *indexer) updateRStateOrMergePartition(srcInstId common.IndexInstId, t
 
 		idx.mergePartitionList = append(idx.mergePartitionList, spec)
 
-		if ok, _ := idx.streamBucketFlushInProgress[inst.Stream][inst.Defn.Bucket]; !ok {
-			idx.mergePartitions()
+		if ok, _ := idx.streamBucketFlushInProgress[common.MAINT_STREAM][inst.Defn.Bucket]; !ok {
+			idx.mergePartitions(inst.Defn.Bucket)
 		}
 
 	} else {
@@ -1380,8 +1382,8 @@ func (idx *indexer) updateRStateOrMergePartition(srcInstId common.IndexInstId, t
 			logging.Infof("MergePartition: sent async request to update index instance %v rstate moved to ACTIVE", tgtInstId)
 		}
 
-		if ok, _ := idx.streamBucketFlushInProgress[inst.Stream][inst.Defn.Bucket]; !ok {
-			idx.mergePartitions()
+		if ok, _ := idx.streamBucketFlushInProgress[common.MAINT_STREAM][inst.Defn.Bucket]; !ok {
+			idx.mergePartitions(inst.Defn.Bucket)
 		}
 	}
 }
@@ -1448,7 +1450,7 @@ func (idx *indexer) preValidateMergePartition(srcInstId common.IndexInstId, tgtI
 // 3) If there is any transient error during commit or after commit,
 //    the indexer can panic.
 //
-func (idx *indexer) mergePartitions() {
+func (idx *indexer) mergePartitions(bucket string) {
 
 	// Do not merge when indexer is not active
 	if is := idx.getIndexerState(); is != common.INDEXER_ACTIVE {
@@ -1460,7 +1462,7 @@ func (idx *indexer) mergePartitions() {
 		return
 	}
 
-	logging.Infof("MergePartitions: number of instances to merge: %v", len(idx.mergePartitionList))
+	logging.Infof("MergePartitions: bucket %v", bucket)
 
 	var remaining []mergeSpec
 	if len(idx.mergePartitionList) != 0 {
@@ -1478,13 +1480,14 @@ func (idx *indexer) mergePartitions() {
 		targetId := spec.tgtInstId
 		respch := spec.respch
 
-		if !idx.mergePartition(sourceId, targetId, merged, respch) {
+		if !idx.mergePartition(bucket, sourceId, targetId, merged, respch) {
 			remaining = append(remaining, spec)
 		}
 	}
 
 	if len(merged) != 0 {
-		logging.Infof("MergePartitions: number of instances merged: %v", len(merged))
+		logging.Infof("MergePartitions: number of candidates %v, number of instances merged: %v",
+			len(idx.mergePartitionList), len(merged))
 		idx.removeMergedIndexesFromStream(merged)
 	}
 
@@ -1522,12 +1525,26 @@ func (idx *indexer) removeMergedIndexesFromStream(merged map[common.IndexInstId]
 	}
 }
 
-func (idx *indexer) mergePartition(sourceId common.IndexInstId, targetId common.IndexInstId,
+func (idx *indexer) mergePartition(bucket string, sourceId common.IndexInstId, targetId common.IndexInstId,
 	merged map[common.IndexInstId]common.IndexInst, respch chan error) bool {
 
 	if source, ok := idx.indexInstMap[sourceId]; ok {
 
 		logging.Infof("MergePartition: Merge instance %v to instance %v", source.InstId, targetId)
+
+		// Only merge partition from the given bucket
+		if source.Defn.Bucket != bucket {
+			logging.Warnf("MergePartition: Source Index Instance %v is not in bucket %v.  Do not merge now.",
+				source.InstId, bucket)
+			return false
+		}
+
+		// Only merge when source is in MAINT_STREAM or NIL_STREAM (deferred index)
+		if source.Stream != common.MAINT_STREAM && source.Stream != common.NIL_STREAM {
+			logging.Warnf("MergePartition: Source Index Instance %v is not in MAINT_STREAM or NIL_STREAM.  Do not merge now.",
+				source.InstId)
+			return false
+		}
 
 		// The index has been explicitly dropped before merge can happen.
 		if source.State == common.INDEX_STATE_DELETED {
@@ -1558,6 +1575,7 @@ func (idx *indexer) mergePartition(sourceId common.IndexInstId, targetId common.
 			return true
 		}
 
+		// Source index must be in CREATED (deferred index) or ACTIVE state
 		if source.State != common.INDEX_STATE_CREATED && source.State != common.INDEX_STATE_ACTIVE {
 			logging.Warnf("MergePartition: Source Index Instance %v is not in CREATED or ACTIVE state (%v).  Do not merge now.",
 				source.InstId, source.State)
@@ -1818,8 +1836,8 @@ func (idx *indexer) handlePrunePartition(msg Message) {
 
 		idx.prunePartitionList = append(idx.prunePartitionList, spec)
 
-		if ok, _ := idx.streamBucketFlushInProgress[inst.Stream][inst.Defn.Bucket]; !ok {
-			idx.prunePartitions()
+		if ok, _ := idx.streamBucketFlushInProgress[common.MAINT_STREAM][inst.Defn.Bucket]; !ok {
+			idx.prunePartitions(inst.Defn.Bucket)
 		}
 	} else {
 		logging.Warnf("PrunePartition.  Index instance %v not found. Skip", instId)
@@ -1828,7 +1846,7 @@ func (idx *indexer) handlePrunePartition(msg Message) {
 	respch <- &MsgSuccess{}
 }
 
-func (idx *indexer) prunePartitions() {
+func (idx *indexer) prunePartitions(bucket string) {
 
 	// Do not merge when indexer is not active
 	if is := idx.getIndexerState(); is != common.INDEXER_ACTIVE {
@@ -1843,6 +1861,8 @@ func (idx *indexer) prunePartitions() {
 		return
 	}
 
+	logging.Infof("PrunePartitions: bucket %v", bucket)
+
 	var remaining []pruneSpec
 	if len(idx.prunePartitionList) != 0 {
 		remaining = make([]pruneSpec, 0, len(idx.prunePartitionList))
@@ -1853,7 +1873,7 @@ func (idx *indexer) prunePartitions() {
 		instId := spec.instId
 		partitions := spec.partitions
 
-		if !idx.prunePartition(instId, partitions) {
+		if !idx.prunePartition(bucket, instId, partitions) {
 			remaining = append(remaining, spec)
 		}
 	}
@@ -1867,11 +1887,27 @@ func (idx *indexer) prunePartitions() {
 // are put into a proxy partition with DELETED state, and they will be periodically clean up
 // asynchronously.
 //
-func (idx *indexer) prunePartition(instId common.IndexInstId, partitions []common.PartitionId) bool {
+func (idx *indexer) prunePartition(bucket string, instId common.IndexInstId, partitions []common.PartitionId) bool {
 
 	if inst, ok := idx.indexInstMap[instId]; ok {
 
 		logging.Infof("PrunePartition: Prune instance %v partitions %v", instId, partitions)
+
+		// Only prune partition from the given bucket
+		if inst.Defn.Bucket != bucket {
+			logging.Warnf("PurnePartition: Index Instance %v is not in bucket %v.  Do not prune now.",
+				inst.InstId, bucket)
+			return false
+		}
+
+		// Only merge when source is in MAINT_STREAM or NIL_STREAM (deferred index)
+		// A index instance is pruned when some of its partition has moved during rebalance.   Rebalance can happen if
+		// there is no index build (no index on INIT_STREAM).
+		if inst.Stream != common.MAINT_STREAM && inst.Stream != common.NIL_STREAM {
+			logging.Warnf("PrunePartition: Index Instance %v is not in MAINT_STREAM or NIL_STREAM.  Do not prune now.",
+				inst.InstId)
+			return false
+		}
 
 		// The index has been explicitly dropped before merge can happen.
 		if inst.State == common.INDEX_STATE_DELETED {
