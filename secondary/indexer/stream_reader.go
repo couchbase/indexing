@@ -596,9 +596,7 @@ func (w *streamWorker) handleSingleKeyVersion(bucket string, vbucket Vbucket, vb
 				w.evalFilter = false
 				//check the bucket filter to see if this mutation can be processed
 				//valid mutation will increment seqno of the filter
-				if !w.checkAndSetBucketFilter(meta) {
-					w.skipMutation = true
-				}
+				w.skipMutation, meta.firstSnap = w.checkAndSetBucketFilter(meta)
 			}
 
 			if w.skipMutation {
@@ -614,8 +612,6 @@ func (w *streamWorker) handleSingleKeyVersion(bucket string, vbucket Vbucket, vb
 				}
 				continue
 			}
-
-			meta.firstSnap = w.bucketFirstSnap[bucket][vbucket]
 
 			//allocate new mutation first time
 			if mutk == nil {
@@ -785,7 +781,9 @@ func (w *streamWorker) setBucketFilter(meta *MutationMeta) {
 //checkAndSetBucketFilter checks if mutation can be processed
 //based on the current filter. Filter is also updated with new
 //seqno/vbuuid if mutations can be processed.
-func (w *streamWorker) checkAndSetBucketFilter(meta *MutationMeta) bool {
+//Returns {skip, firstSnap} to indicate if mutations needs to be "skipped" and
+//if it belongs for first DCP snapshot.
+func (w *streamWorker) checkAndSetBucketFilter(meta *MutationMeta) (bool, bool) {
 
 	w.lock.Lock()
 	defer w.lock.Unlock()
@@ -818,18 +816,18 @@ func (w *streamWorker) checkAndSetBucketFilter(meta *MutationMeta) bool {
 			filter.Seqnos[meta.vbucket] = uint64(meta.seqno)
 			filter.Vbuuids[meta.vbucket] = uint64(meta.vbuuid)
 			w.bucketSyncDue[meta.bucket] = true
-			return true
+			return false, w.bucketFirstSnap[meta.bucket][meta.vbucket]
 		} else {
 			logging.Tracef("MutationStreamReader::checkAndSetBucketFilter Skipped "+
 				"Mutation %v for Bucket %v Stream %v. Current Filter %v", meta,
 				meta.bucket, w.streamId, filter.Seqnos[meta.vbucket])
-			return false
+			return true, false
 		}
 
 	} else {
 		logging.Debugf("MutationStreamReader::checkAndSetBucketFilter Missing"+
 			"bucket %v in Filter for Stream %v", meta.bucket, w.streamId)
-		return false
+		return true, false
 	}
 }
 
