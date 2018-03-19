@@ -286,7 +286,7 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, bucket strin
 
 					var lastPartnSnap PartitionSnapshot
 
-					if lastIndexSnap != nil {
+					if lastIndexSnap != nil && len(lastIndexSnap.Partitions()) != 0 {
 						lastPartnSnap = lastIndexSnap.Partitions()[partnId]
 					}
 					sc := partnInst.Sc
@@ -301,7 +301,7 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, bucket strin
 						}
 
 						var latestSnapshot Snapshot
-						if lastIndexSnap.Partitions() != nil {
+						if lastPartnSnap != nil {
 							lastSliceSnap := lastPartnSnap.Slices()[slice.Id()]
 							latestSnapshot = lastSliceSnap.Snapshot()
 						}
@@ -1088,11 +1088,6 @@ func (s *storageMgr) deepCloneIndexSnapshot(is IndexSnapshot, partnIds []common.
 
 			clone.partns[partnId] = ps
 		}
-	}
-
-	// if there is no partition, set partns to nil
-	if len(clone.partns) == 0 {
-		clone.partns = nil
 	}
 
 	return clone
