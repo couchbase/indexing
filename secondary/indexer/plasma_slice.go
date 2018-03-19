@@ -509,8 +509,9 @@ func (mdb *plasmaSlice) insertSecIndex(key []byte, docid []byte, workerId int, i
 		mdb.back[workerId].Begin()
 		defer mdb.back[workerId].End()
 
-		backEntry := entry2BackEntry(entry)
 		mdb.main[workerId].InsertKV(entry, nil)
+		// entry2BackEntry overwrites the buffer to remove docid
+		backEntry := entry2BackEntry(entry)
 		mdb.back[workerId].InsertKV(docid, backEntry)
 
 		mdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
