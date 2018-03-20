@@ -485,6 +485,14 @@ func (mdb *plasmaSlice) insertSecIndex(key []byte, docid []byte, workerId int, i
 	t0 := time.Now()
 
 	var ndel int
+	var changed bool
+
+	// The docid does not exist if the doc is initialized for the first time
+	if !init {
+		if ndel, changed = mdb.deleteSecIndex(docid, key, workerId); !changed {
+			return 0
+		}
+	}
 
 	mdb.encodeBuf[workerId] = resizeEncodeBuf(mdb.encodeBuf[workerId], len(key), allowLargeKeys)
 	entry, err := NewSecondaryIndexEntry(key, docid, mdb.idxDefn.IsArrayIndex,
@@ -493,14 +501,6 @@ func (mdb *plasmaSlice) insertSecIndex(key []byte, docid []byte, workerId int, i
 		logging.Errorf("plasmaSlice::insertSecIndex Slice Id %v IndexInstId %v "+
 			"Skipping docid:%s (%v)", mdb.Id, mdb.idxInstId, logging.TagStrUD(docid), err)
 		return ndel
-	}
-
-	// The docid does not exist if the doc is initialized for the first time
-	if !init {
-		var changed bool
-		if ndel, changed = mdb.deleteSecIndex(docid, entry, workerId); !changed {
-			return 0
-		}
 	}
 
 	if len(key) > 0 {
@@ -755,7 +755,7 @@ func (mdb *plasmaSlice) deletePrimaryIndex(docid []byte, workerId int) (nmut int
 	return 0
 }
 
-func (mdb *plasmaSlice) deleteSecIndex(docid []byte, newEntry []byte, workerId int) (ndel int, changed bool) {
+func (mdb *plasmaSlice) deleteSecIndex(docid []byte, compareKey []byte, workerId int) (ndel int, changed bool) {
 	// Delete entry from back and main index if present
 	mdb.back[workerId].Begin()
 	defer mdb.back[workerId].End()
@@ -765,18 +765,17 @@ func (mdb *plasmaSlice) deleteSecIndex(docid []byte, newEntry []byte, workerId i
 	buf := mdb.encodeBuf[workerId]
 
 	if err == nil {
+		// Delete the entries only if the entry is different
+		if hasEqualBackEntry(compareKey, backEntry) {
+			return 0, false
+		}
+
 		t0 := time.Now()
 		atomic.AddInt64(&mdb.delete_bytes, int64(len(docid)))
 		mdb.main[workerId].Begin()
 		defer mdb.main[workerId].End()
-		entry := backEntry2entry(docid, backEntry, buf)
-
-		// Delete the entries only if the entry is different
-		if bytes.Equal(entry, newEntry) {
-			return 0, false
-		}
-
 		mdb.back[workerId].DeleteKV(docid)
+		entry := backEntry2entry(docid, backEntry, buf)
 		mdb.main[workerId].DeleteKV(entry)
 		mdb.idxStats.Timings.stKVDelete.Put(time.Since(t0))
 	}
@@ -1837,4 +1836,13 @@ func backEntry2entry(docid []byte, bentry []byte, buf []byte) []byte {
 	count := int(binary.LittleEndian.Uint16(bentry[l-2 : l]))
 	entry, _ := NewSecondaryIndexEntry2(bentry[:l-2], docid, false, count, nil, buf[:0], false)
 	return entry.Bytes()
+}
+
+func hasEqualBackEntry(key []byte, bentry []byte) bool {
+	if key == nil || isJSONEncoded(key) {
+		return false
+	}
+
+	// Ignore 2 byte count for comparison
+	return bytes.Equal(key, bentry[:len(bentry)-2])
 }

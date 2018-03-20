@@ -128,7 +128,7 @@ func NewSecondaryIndexEntry2(key []byte, docid []byte, isArray bool,
 		return nil, ErrSecKeyNil
 	}
 
-	if key[0] == '[' { // JSON
+	if isJSONEncoded(key) {
 		if isArray {
 			if !allowLargeKeys && validateSize && isArraySecKeyLarge(key) {
 				return nil, errors.New(fmt.Sprintf("Secondary array key is too long (> %d)", maxArrayKeyLength))
@@ -524,4 +524,8 @@ func GetIndexEntryBytes(key []byte, docid []byte,
 
 	entry, err = GetIndexEntryBytes2(key, docid, isPrimary, isArray, count, desc, buf)
 	return append([]byte(nil), entry...), err
+}
+
+func isJSONEncoded(key []byte) bool {
+	return key[0] == '['
 }
