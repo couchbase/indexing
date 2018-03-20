@@ -545,7 +545,7 @@ func (c *RequestBroker) makeClients(maker scanClientMaker, max_concurrency int, 
 		}
 	}
 
-	if c.isPartialAggregate(allPartitions, numPartition, index) {
+	if c.isPartitionedAggregate(index) {
 		newClient, newInstId, newTS, newPartition = c.splitClients(maker, max_concurrency, newScanport, newClient, newInstId, newTS, newPartition)
 	}
 
@@ -1608,6 +1608,21 @@ func (c *RequestBroker) changeSorted(partitions [][]common.PartitionId, numParti
 //--------------------------
 // API3 push down
 //--------------------------
+
+func (c *RequestBroker) isPartitionedAggregate(index *common.IndexDefn) bool {
+
+	// non-partition index
+	if index.PartitionScheme == common.SINGLE {
+		return false
+	}
+
+	// aggreate query
+	if c.grpAggr != nil {
+		return true
+	}
+
+	return false
+}
 
 //
 // For aggregate query, n1ql will expect full aggregate results for partitioned index if

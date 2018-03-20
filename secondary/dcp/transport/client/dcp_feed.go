@@ -780,8 +780,9 @@ func (feed *DcpFeed) sendBufferAck(sendAck bool, bytes uint32) {
 			} else {
 				logging.Tracef("%v buffer-ack %v\n", prefix, totalBytes)
 			}
+		} else {
+			feed.toAckBytes += bytes
 		}
-		feed.toAckBytes += bytes
 	}
 }
 
