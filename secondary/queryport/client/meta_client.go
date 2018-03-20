@@ -842,6 +842,20 @@ func (b *metadataClient) pickRandom(replicas []uint64, defnID uint64,
 		return 0
 	}
 
+	numValidReplica := func(currmeta *indexTopology, partnId uint64, replicas []uint64, rollbackTimesList []map[common.PartitionId]int64) int {
+
+		var count int
+		for n, replica := range replicas {
+			_, ok1 := currmeta.insts[common.IndexInstId(replica)]
+			rollbackTime, ok2 := rollbackTimesList[n][common.PartitionId(partnId)]
+			ok3 := ok2 && rollbackTime != math.MaxInt64
+			if ok1 && ok2 && ok3 {
+				count++
+			}
+		}
+		return count
+	}
+
 	currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
 	numPartn := numPartition(currmeta, replicas)
 	startPartnId, endPartnId := partitionRange(currmeta, defnID, int(numPartn))
@@ -905,6 +919,10 @@ func (b *metadataClient) pickRandom(replicas []uint64, defnID uint64,
 			chosenInst[common.PartitionId(partnId)] = inst
 			chosenTimestamp[common.PartitionId(partnId)] = rollbackTime
 
+			// set the rollback time to 0 if there is only one valid replica
+			if numValidReplica(currmeta, partnId, replicas, rollbackTimesList) <= 1 {
+				chosenTimestamp[common.PartitionId(partnId)] = 0
+			}
 		} else {
 			// cannot find an indexer that holds an active partition
 			// try to find an indexer under rebalancing
