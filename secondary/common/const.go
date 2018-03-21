@@ -57,3 +57,5 @@ const INDEXER_CUR_VERSION = INDEXER_55_VERSION
 const DEFAULT_POOL = "default"
 
 const NON_PARTITION_ID = PartitionId(0)
+
+var NULL = []byte("null")

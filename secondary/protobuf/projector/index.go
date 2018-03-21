@@ -219,19 +219,22 @@ func (ie *IndexEvaluator) TransformRoute(
 	var npkey /*new-partition*/, opkey /*old-partition*/, nkey, okey []byte
 	var newBuf []byte
 	instn := ie.instance
+	var docval qvalue.AnnotatedValue
 
 	defn := instn.Definition
-	retainDelete := m.HasXATTR() && defn.GetRetainDeletedXATTR()
-	retainDelete = retainDelete && (m.Opcode == mcd.DCP_DELETION || m.Opcode == mcd.DCP_EXPIRATION)
+	retainDelete := m.HasXATTR() && defn.GetRetainDeletedXATTR() &&
+		(m.Opcode == mcd.DCP_DELETION || m.Opcode == mcd.DCP_EXPIRATION)
 	opcode := m.Opcode
 	if retainDelete {
 		// TODO: Replace with isMetaIndex()
 		m.TreatAsJSON()
 		opcode = mcd.DCP_MUTATION
+		docval = qvalue.NewAnnotatedValue(qvalue.NewParsedValue(c.NULL, true))
+	} else {
+		docval = qvalue.NewAnnotatedValue(qvalue.NewParsedValue(m.Value, true))
 	}
 
 	meta := ie.dcpEvent2Meta(m)
-	docval := qvalue.NewAnnotatedValue(qvalue.NewParsedValue(m.Value, true))
 	docval.SetAttachment("meta", meta)
 	where, err := ie.wherePredicate(m, docval, encodeBuf)
 	if err != nil {

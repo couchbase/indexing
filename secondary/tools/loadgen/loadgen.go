@@ -155,12 +155,7 @@ func spawnWorkers(cluster string, rn, un, dn int) chan [3]string {
 	gench := make(chan [3]string, chsz)
 	for i, bucket := range options.buckets {
 		u, err := url.Parse(cluster)
-		mf(err, "parse")
-		c, err := couchbase.Connect(u.String())
-		mf(err, "connect - "+u.String())
-		p, err := c.GetPool("default")
-		mf(err, "pool")
-		b, err := p.GetBucket(bucket)
+		b, err := c.ConnectBucket(u.String(), "default", bucket)
 		mf(err, "bucket")
 		buckets[bucket] = b
 

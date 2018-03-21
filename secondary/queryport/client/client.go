@@ -1174,6 +1174,22 @@ func (c *GsiClient) updateExcludes(defnID uint64, excludes map[common.IndexDefnI
 				// if it is EOF error and there is replica, then
 				// exclude all partitions on all replicas
 				// residing on the failed node.
+
+				// doScan() may scan the partition from insts or rebalInsts.
+				// So the failure can be coming from insts or rebalInsts.
+				// But the function GetIndexInst() will only look for the
+				// inst under insts.
+				// 1) Non-partitioned index.  InstId unqiuely identify if
+				//    it is coming from insts or rebalInsts.  If it is
+				//    coming from rebalInsts, we do not add it to exclude map.
+				// 2) Partitioned index.  Same InstId could be used in both
+				//    insts or rebalInsts.  If inst contains the partition,
+				//    then it will add to the exclude map, even if
+				//    the error may indeed coming from rebalInsts.  This is
+				//    fine since inst must be skipped in pickRandom
+				//    in the first place, otherwise, rebalInsts will not be used.
+				//    So adding it to the exclude list will not affect skipRandom.
+				//
 				if inst := c.bridge.GetIndexInst(instId); inst != nil {
 					failIndexerId := inst.IndexerId[partnId]
 
