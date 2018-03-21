@@ -1100,8 +1100,7 @@ func projectGroupAggr(buf []byte, projection *Projection,
 			gk := row.groups[projGroup.pos]
 			if gk.n1qlValue {
 				var newKey []byte
-				encodeBuf := make([]byte, 1024) // TODO: use val.MarshalJSON() to determine size
-				newKey, err = jsonEncoder.EncodeN1QLValue(gk.obj, encodeBuf[:0])
+				newKey, err = encodeN1qlVal(gk.obj)
 				if err != nil {
 					return nil, err
 				}
@@ -1191,6 +1190,21 @@ func encodeValue(raw interface{}) ([]byte, error) {
 	}
 
 	return encval, nil
+}
+
+func encodeN1qlVal(val value.Value) ([]byte, error) {
+	encodeBuf := make([]byte, 1024)
+	encoded, err := jsonEncoder.EncodeN1QLValue(val, encodeBuf[:0])
+	if err != nil && err.Error() == collatejson.ErrorOutputLen.Error() {
+		valBytes, e1 := val.MarshalJSON()
+		if e1 != nil {
+			return encoded, err
+		}
+		newBuf := make([]byte, 0, len(valBytes)*3)
+		enc, e2 := jsonEncoder.EncodeN1QLValue(val, newBuf)
+		return enc, e2
+	}
+	return encoded, err
 }
 
 func isEncodedNull(v []byte) bool {
