@@ -261,10 +261,10 @@ func (ah *CbAuthHandler) AuthenticateMemcachedConn(host string, conn *memcached.
 		return err
 	}
 
-	rh := NewRetryHelper(MAX_AUTH_RETRIES, time.Second, 2, fn)
+	rh := NewRetryHelper(MAX_AUTH_RETRIES, time.Second*3, 1, fn)
 	err := rh.Run()
 	if err != nil {
-		panic(err)
+		return err
 	}
 
 	_, err = conn.Auth(u, p)

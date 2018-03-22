@@ -931,7 +931,7 @@ func (r *ScanRequest) fillScans(protoScans []*protobuf.Scan) (localErr error) {
 			}
 
 			// When l == h, only valid case is: meta().id >= l && meta().id <= h
-			if bytes.Compare(l.Bytes(), h.Bytes()) == 0 && Inclusion(fl.GetInclusion()) != Both {
+			if l.CompareIndexKey(h) == 0 && Inclusion(fl.GetInclusion()) != Both {
 				scans = append(scans, r.getEmptyScan())
 				continue
 			}

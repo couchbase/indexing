@@ -1035,12 +1035,14 @@ func (p *SAPlanner) addPartitionIfNecessary(s *Solution) {
 	done := make(map[common.IndexInstId]bool)
 	for _, indexer := range s.Placement {
 		for _, index := range indexer.Indexes {
-			if index.Instance != nil && index.Instance.Pc != nil {
-				if _, ok := done[index.InstId]; !ok {
-					if s.findNumPartition(index) < int(index.Instance.Pc.GetNumPartitions()) {
-						candidates[index.InstId] = index
+			if !index.pendingDelete {
+				if index.Instance != nil && index.Instance.Pc != nil {
+					if _, ok := done[index.InstId]; !ok {
+						if s.findNumPartition(index) < int(index.Instance.Pc.GetNumPartitions()) {
+							candidates[index.InstId] = index
+						}
+						done[index.InstId] = true
 					}
-					done[index.InstId] = true
 				}
 			}
 		}
@@ -3919,8 +3921,10 @@ func newRandomPlacement(indexes []*IndexUsage, allowSwap bool, swapDeletedOnly b
 
 	// index to be balanced
 	for i, index := range indexes {
-		p.indexes[index] = true
-		p.eligibles[i] = index
+		if !index.pendingDelete {
+			p.indexes[index] = true
+			p.eligibles[i] = index
+		}
 	}
 
 	return p
