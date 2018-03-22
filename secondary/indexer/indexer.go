@@ -1355,7 +1355,7 @@ func (idx *indexer) handleMergePartition(msg Message) {
 func (idx *indexer) updateRStateOrMergePartition(srcInstId common.IndexInstId, tgtInstId common.IndexInstId,
 	rebalState common.RebalanceState, respch chan error) {
 
-	if inst, ok := idx.indexInstMap[srcInstId]; ok {
+	if _, ok := idx.indexInstMap[srcInstId]; ok {
 
 		spec := mergeSpec{
 			srcInstId:  srcInstId,
@@ -1365,10 +1365,6 @@ func (idx *indexer) updateRStateOrMergePartition(srcInstId common.IndexInstId, t
 		}
 
 		idx.mergePartitionList = append(idx.mergePartitionList, spec)
-
-		if ok, _ := idx.streamBucketFlushInProgress[common.MAINT_STREAM][inst.Defn.Bucket]; !ok {
-			idx.mergePartitions(inst.Defn.Bucket)
-		}
 
 	} else {
 		// This is not a proxy index instance.  No need to merge.  Just update RState.
@@ -1381,9 +1377,16 @@ func (idx *indexer) updateRStateOrMergePartition(srcInstId common.IndexInstId, t
 
 			logging.Infof("MergePartition: sent async request to update index instance %v rstate moved to ACTIVE", tgtInstId)
 		}
+	}
 
-		if ok, _ := idx.streamBucketFlushInProgress[common.MAINT_STREAM][inst.Defn.Bucket]; !ok {
-			idx.mergePartitions(inst.Defn.Bucket)
+	idx.mergePartitionForIdleBuckets()
+}
+
+func (idx *indexer) mergePartitionForIdleBuckets() {
+
+	for bucket, flushInProgress := range idx.streamBucketFlushInProgress[common.MAINT_STREAM] {
+		if !flushInProgress {
+			idx.mergePartitions(bucket)
 		}
 	}
 }

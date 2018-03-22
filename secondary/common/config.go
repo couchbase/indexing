@@ -1384,16 +1384,16 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.http.readTimeout": ConfigValue{
-		120,
+		1200,
 		"timeout in seconds, is indexer http server's read timeout",
-		120,
+		1200,
 		false, // mutable
 		false, // case-insensitive
 	},
 	"indexer.http.writeTimeout": ConfigValue{
-		120,
+		1200,
 		"timeout in seconds, is indexer http server's write timeout",
-		120,
+		1200,
 		false, // mutable
 		false, // case-insensitive
 	},
@@ -1815,9 +1815,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.rebalance.httpTimeout": ConfigValue{
-		120,
+		1200,
 		"timeout(in seconds) for http requests during rebalance",
-		120,
+		1200,
 		false, // mutable
 		false, // case-insensitive
 	},
