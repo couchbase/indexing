@@ -844,7 +844,7 @@ func (w *streamWorker) updateSnapInFilter(meta *MutationMeta,
 	}
 
 	if snapEnd-snapStart > 50000 {
-		logging.Errorf("MutationStreamReader::updateSnapInFilter Huge Snapshot Received "+
+		logging.Infof("MutationStreamReader::updateSnapInFilter Huge Snapshot Received "+
 			"for %v %v %v %v-%v", meta.bucket, meta.vbucket, w.streamId, snapStart, snapEnd)
 	}
 
