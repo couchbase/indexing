@@ -146,10 +146,14 @@ type indexer struct {
 	enableManager bool
 	cpuProfFd     *os.File
 
-	rebalanceRunning   bool
-	rebalanceToken     *RebalanceToken
+	rebalanceRunning bool
+	rebalanceToken   *RebalanceToken
+
 	mergePartitionList []mergeSpec
 	prunePartitionList []pruneSpec
+	merged             map[common.IndexInstId]common.IndexInst
+	pruned             map[common.IndexInstId]common.IndexInst
+	lastStreamUpdate   int64
 
 	bootstrapStorageMode common.StorageMode
 
@@ -203,6 +207,9 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 
 		indexInstMap:  make(common.IndexInstMap),
 		indexPartnMap: make(IndexPartnMap),
+
+		merged: make(map[common.IndexInstId]common.IndexInst),
+		pruned: make(map[common.IndexInstId]common.IndexInst),
 
 		streamBucketStatus:           make(map[common.StreamId]BucketStatus),
 		streamBucketFlushInProgress:  make(map[common.StreamId]BucketFlushInProgressMap),
@@ -1475,29 +1482,20 @@ func (idx *indexer) mergePartitions(bucket string) {
 		remaining = make([]mergeSpec, 0, len(idx.mergePartitionList))
 	}
 
-	var merged map[common.IndexInstId]common.IndexInst
-	if len(idx.mergePartitionList) != 0 {
-		merged = make(map[common.IndexInstId]common.IndexInst)
-	}
-
 	for _, spec := range idx.mergePartitionList {
 
 		sourceId := spec.srcInstId
 		targetId := spec.tgtInstId
 		respch := spec.respch
 
-		if !idx.mergePartition(bucket, sourceId, targetId, merged, respch) {
+		if !idx.mergePartition(bucket, sourceId, targetId, idx.merged, respch) {
 			remaining = append(remaining, spec)
 		}
 	}
 
-	if len(merged) != 0 {
-		logging.Infof("MergePartitions: number of candidates %v, number of instances merged: %v",
-			len(idx.mergePartitionList), len(merged))
-		idx.removeMergedIndexesFromStream(merged)
-	}
-
 	idx.mergePartitionList = remaining
+
+	idx.updateStreamForRebalance(false)
 }
 
 func (idx *indexer) removeMergedIndexesFromStream(merged map[common.IndexInstId]common.IndexInst) {
@@ -1524,6 +1522,9 @@ func (idx *indexer) removeMergedIndexesFromStream(merged map[common.IndexInstId]
 		for bucketUUID, list2 := range list1 {
 			for streamId, list3 := range list2 {
 				for state, list4 := range list3 {
+					// removeIndexesFromStream() will send update to projector.  This function spawn a go-routine after
+					// acquiring the stream lock.   The stream lock ensure the projector update is executed on serial fashion.
+					// Therefore, if mergePartitions() is called multiple times, the projector update will be executed serially.
 					idx.removeIndexesFromStream(list4, bucket, bucketUUID, streamId, state, nil)
 				}
 			}
@@ -1757,6 +1758,10 @@ func (idx *indexer) mergePartition(bucket string, sourceId common.IndexInstId, t
 				}
 			}()
 
+			if idx.lastStreamUpdate == 0 {
+				idx.lastStreamUpdate = time.Now().UnixNano()
+			}
+
 			// Cleanup the source instance. This is done in parallel clean up will proceed in parallel to metadata commit.
 			// Cleanup comprise of removing the source instance from indexer runtime data structure, as well as removing
 			// the instance from stream.  These are transient states that can be recovered upon bootstrap if metadata commit
@@ -1879,12 +1884,54 @@ func (idx *indexer) prunePartitions(bucket string) {
 		instId := spec.instId
 		partitions := spec.partitions
 
-		if !idx.prunePartition(bucket, instId, partitions) {
+		if !idx.prunePartition(bucket, instId, partitions, idx.pruned) {
 			remaining = append(remaining, spec)
 		}
 	}
 
 	idx.prunePartitionList = remaining
+
+	idx.updateStreamForRebalance(false)
+}
+
+func (idx *indexer) removePrunedIndexesFromStream(pruned map[common.IndexInstId]common.IndexInst) {
+
+	sorted := make(map[string]map[string]map[common.StreamId][]common.IndexInst)
+	for instId, _ := range pruned {
+		inst, ok := idx.indexInstMap[instId]
+		if !ok {
+			logging.Warnf("removePrunedIndexesFromStream:  inst %v does not exist in indexInstMap. Skip stream update.", instId)
+			continue
+		}
+
+		if _, ok := sorted[inst.Defn.Bucket]; !ok {
+			sorted[inst.Defn.Bucket] = make(map[string]map[common.StreamId][]common.IndexInst)
+		}
+
+		if _, ok := sorted[inst.Defn.Bucket][inst.Defn.BucketUUID]; !ok {
+			sorted[inst.Defn.Bucket][inst.Defn.BucketUUID] = make(map[common.StreamId][]common.IndexInst)
+		}
+
+		sorted[inst.Defn.Bucket][inst.Defn.BucketUUID][inst.Stream] =
+			append(sorted[inst.Defn.Bucket][inst.Defn.BucketUUID][inst.Stream], inst)
+	}
+
+	for bucket, list1 := range sorted {
+		for bucketUUID, list2 := range list1 {
+			for streamId, list3 := range list2 {
+				// sendStreamUpdateForIndex() will send update to projector.  This function spawn a go-routine after
+				// acquiring the stream lock.   The stream lock ensure the projector update is executed on serial fashion.
+				// Therefore, if prunePartitions() is called multiple times, the projector update will be executed serially.
+				// This is important since this operation requiring the indexer sends a copy of index inst to the projector.
+				// If it executes out-of-sequence, then we cannot assure that the projector will eventually receive the most
+				// up-to-date index instance.
+				//
+				// sendstreamUpdateForIndex will only retry for 10 times before it aborts.   If the indexer fails to update
+				// the projector, at worst, the projector will send more mutations to the indexer, but it will not skip mutation.
+				idx.sendStreamUpdateForIndex(list3, bucket, bucketUUID, streamId)
+			}
+		}
+	}
 }
 
 //
@@ -1893,7 +1940,8 @@ func (idx *indexer) prunePartitions(bucket string) {
 // are put into a proxy partition with DELETED state, and they will be periodically clean up
 // asynchronously.
 //
-func (idx *indexer) prunePartition(bucket string, instId common.IndexInstId, partitions []common.PartitionId) bool {
+func (idx *indexer) prunePartition(bucket string, instId common.IndexInstId, partitions []common.PartitionId,
+	prunedInst map[common.IndexInstId]common.IndexInst) bool {
 
 	if inst, ok := idx.indexInstMap[instId]; ok {
 
@@ -1906,7 +1954,7 @@ func (idx *indexer) prunePartition(bucket string, instId common.IndexInstId, par
 			return false
 		}
 
-		// Only merge when source is in MAINT_STREAM or NIL_STREAM (deferred index)
+		// Only prune when source is in MAINT_STREAM or NIL_STREAM (deferred index)
 		// A index instance is pruned when some of its partition has moved during rebalance.   Rebalance can happen if
 		// there is no index build (no index on INIT_STREAM).
 		if inst.Stream != common.MAINT_STREAM && inst.Stream != common.NIL_STREAM {
@@ -1915,7 +1963,7 @@ func (idx *indexer) prunePartition(bucket string, instId common.IndexInstId, par
 			return false
 		}
 
-		// The index has been explicitly dropped before merge can happen.
+		// The index has been explicitly dropped before prune can happen.
 		if inst.State == common.INDEX_STATE_DELETED {
 			logging.Warnf("PrunePartition:  Index Instance %v is in DELETED state.  Nothinge to prune.", instId)
 			return true
@@ -1991,11 +2039,48 @@ func (idx *indexer) prunePartition(bucket string, instId common.IndexInstId, par
 				}(partnInst, slice)
 			}
 		}
+
+		if idx.lastStreamUpdate == 0 {
+			idx.lastStreamUpdate = time.Now().UnixNano()
+		}
+
+		// If we are on the MAINT stream, then remove the old partitions from projector.
+		// For a single invocation of prunePartitions(), an inst can be pruned multiple times.
+		// This map will store the last copy of the inst after all the pruning.  The indexer
+		// will then send the final copy to the projector.    Note that the prunePartitions()
+		// can be invoked many times, and each invocation can be pruning the same instance.
+		// In this case, indexer will make multiple calls to the projector.
+		if inst.Stream == common.MAINT_STREAM {
+			prunedInst[inst.InstId] = inst
+		}
+
 	} else {
 		logging.Warnf("PrunePartition.  Index instance %v not found. Skip", instId)
 	}
 
 	return true
+}
+
+func (idx *indexer) updateStreamForRebalance(force bool) {
+
+	interval := int64(idx.config["rebalance.stream_update.interval"].Int()) * int64(time.Second)
+
+	if force || (time.Now().UnixNano()-idx.lastStreamUpdate) > interval {
+
+		if len(idx.merged) != 0 {
+			logging.Infof("MergePartitions: number of instances merged: %v", len(idx.merged))
+			idx.removeMergedIndexesFromStream(idx.merged)
+			idx.merged = make(map[common.IndexInstId]common.IndexInst)
+		}
+
+		if len(idx.pruned) != 0 {
+			logging.Infof("updateStreamAfterRebalance: number of instances pruned : %v", len(idx.pruned))
+			idx.removePrunedIndexesFromStream(idx.pruned)
+			idx.pruned = make(map[common.IndexInstId]common.IndexInst)
+		}
+
+		idx.lastStreamUpdate = 0
+	}
 }
 
 func (idx *indexer) handleBuildIndex(msg Message) {
@@ -2802,14 +2887,18 @@ func (idx *indexer) cleanupIndex(indexInst common.IndexInst,
 		return
 	}
 
-	// if it is a proxy
+	// If a proxy is deleted before merge has happened, we have to make sure that the real instance is updated.
+	// If a proxy is already merged to the real index inst, this function will not be called (since the proxy
+	// will no longer hold real data).
 	if indexInst.RealInstId != 0 && indexInst.RealInstId != indexInst.InstId {
-		// build for proxy is done.   The projector could be sending mutations to the real index inst on proxy partitions.
+		// Proxy is in CATCHUP or ACTIVe state.   This means index build is done.
+		// The projector could be sending mutations to the real index inst on those partitions from the proxy.
+		// We have to remove those proxy partitions from the real index inst when the proxy is deleted.
 		if indexInst.State == common.INDEX_STATE_CATCHUP || indexInst.State == common.INDEX_STATE_ACTIVE {
 			if realInst, ok := idx.indexInstMap[indexInst.RealInstId]; ok {
 				if realInst.Stream == indexInst.Stream {
 					if realInst.State == common.INDEX_STATE_CATCHUP || realInst.State == common.INDEX_STATE_ACTIVE {
-						idx.sendStreamUpdateForIndex(realInst)
+						idx.pruned[realInst.InstId] = realInst
 					}
 				}
 			}
@@ -2819,20 +2908,16 @@ func (idx *indexer) cleanupIndex(indexInst common.IndexInst,
 	clientCh <- &MsgSuccess{}
 }
 
-func (idx *indexer) sendStreamUpdateForIndex(indexInst common.IndexInst) {
+func (idx *indexer) sendStreamUpdateForIndex(indexInstList []common.IndexInst, bucket string, bucketUUID string, streamId common.StreamId) {
 
 	respCh := make(MsgChannel)
 	stopCh := make(StopChannel)
-
-	streamId := indexInst.Stream
-	bucket := indexInst.Defn.Bucket
-	bucketUUID := indexInst.Defn.BucketUUID
 
 	cmd := &MsgStreamUpdate{
 		mType:     ADD_INDEX_LIST_TO_STREAM,
 		streamId:  streamId,
 		bucket:    bucket,
-		indexList: []common.IndexInst{indexInst},
+		indexList: indexInstList,
 		respCh:    respCh,
 		stopCh:    stopCh}
 
@@ -3607,6 +3692,8 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 
 	// If index is a proxy, add the real index instance to the list.  This will
 	// also update the partition list of the real index instance in projector.
+	// This will ensure that the projector will be sending partition mutations to the
+	// real inst in the MAINT stream, when the proxy has become active.
 	// Note that the real inst should be active or being built at the same time as the proxy.
 	for _, index := range indexList {
 		if common.IsPartitioned(index.Defn.PartitionScheme) && index.RealInstId != 0 && index.InstId != index.RealInstId {
@@ -5223,6 +5310,11 @@ func (idx *indexer) handleDelLocalMeta(msg Message) {
 
 	if err == nil {
 		if key == RebalanceRunning {
+			// clean up the projector stream
+			// 1) If proxy inst is merged, it will be removed from stream.
+			// 2) If real inst is pruned, it will be updated with correct partition list.
+			idx.updateStreamForRebalance(true)
+
 			idx.rebalanceRunning = false
 		} else if key == RebalanceTokenTag {
 			idx.rebalanceToken = nil

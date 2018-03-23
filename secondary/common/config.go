@@ -1821,6 +1821,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.rebalance.stream_update.interval": ConfigValue{
+		600,
+		"interval for indexer to update projector stream during rebalance (sec)",
+		600,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.settings.storage_mode.disable_upgrade": ConfigValue{
 		false,
 		"Disable upgrading storage mode. This is checked on every indexer restart, " +

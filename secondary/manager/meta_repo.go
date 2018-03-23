@@ -1217,6 +1217,7 @@ func (m *MetadataRepo) mergePartitionFromTopology(indexerId string, bucket strin
 		return nil
 	}
 
+	// Delete the proxy during merge.
 	topology.RemoveIndexInstanceById(id, srcInstId)
 
 	topology.AddPartitionsForIndexInst(id, tgtInstId, indexerId, tgtPartitions, tgtVersions)
