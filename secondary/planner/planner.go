@@ -4211,7 +4211,7 @@ func (p *RandomPlacement) RemoveEligibleIndex(indexes []*IndexUsage) {
 //
 func (p *RandomPlacement) findLeastUsedAndPopulatedTargetNode(s *Solution, source *IndexUsage, exclude *IndexerNode) *IndexerNode {
 
-	max := s.computeMaxMemUsage()
+	max := uint64(float64(s.computeMaxMemUsage()) * 1.1)
 	if max < s.constraint.GetMemQuota() {
 		max = s.constraint.GetMemQuota()
 	}

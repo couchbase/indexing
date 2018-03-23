@@ -45,6 +45,9 @@ type Rebalancer struct {
 	acceptedTokens map[string]*c.TransferToken
 	sourceTokens   map[string]*c.TransferToken
 
+	drop         map[string]bool
+	pendingBuild int32
+
 	rebalToken *RebalanceToken
 	nodeId     string
 	master     bool
@@ -103,6 +106,7 @@ func NewRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *Rebal
 
 		acceptedTokens: make(map[string]*c.TransferToken),
 		sourceTokens:   make(map[string]*c.TransferToken),
+		drop:           make(map[string]bool),
 		localaddr:      localaddr,
 
 		waitForTokenPublish: make(chan struct{}),
@@ -287,20 +291,21 @@ func (r *Rebalancer) processTokenAsSource(ttid string, tt *c.TransferToken) bool
 	switch tt.State {
 
 	case c.TransferTokenReady:
-		if !r.addToWaitGroup() {
-			return true
-		}
-
 		if !r.checkValidNotifyStateSource(ttid, tt) {
 			return true
 		}
 
 		r.mu.Lock()
+		defer r.mu.Unlock()
 		r.sourceTokens[ttid] = tt
-		r.mu.Unlock()
 
 		//TODO batch this rather than one per index
-		go r.dropIndexWhenIdle(ttid, tt)
+		if r.checkIndexReadyToDrop() {
+			if !r.addToWaitGroup() {
+				return true
+			}
+			go r.dropIndexWhenIdle(ttid, tt)
+		}
 
 	default:
 		return false
@@ -309,8 +314,31 @@ func (r *Rebalancer) processTokenAsSource(ttid string, tt *c.TransferToken) bool
 
 }
 
+func (r *Rebalancer) dropIndexWhenReady() {
+
+	if r.checkIndexReadyToDrop() {
+		for ttid, tt := range r.sourceTokens {
+			if tt.State == c.TransferTokenReady {
+				if !r.drop[ttid] {
+					if r.addToWaitGroup() {
+						go r.dropIndexWhenIdle(ttid, tt)
+					}
+				}
+			}
+		}
+	}
+}
+
 func (r *Rebalancer) dropIndexWhenIdle(ttid string, tt *c.TransferToken) {
 	defer r.wg.Done()
+
+	r.mu.Lock()
+	if r.drop[ttid] {
+		r.mu.Unlock()
+		return
+	}
+	r.drop[ttid] = true
+	r.mu.Unlock()
 
 loop:
 	for {
@@ -478,6 +506,7 @@ func (r *Rebalancer) processTokenAsDest(ttid string, tt *c.TransferToken) bool {
 		}
 		if tt.IndexInst.Defn.Deferred && tt.IndexInst.State == c.INDEX_STATE_READY {
 
+			atomic.AddInt32(&r.pendingBuild, 1)
 			r.tokenMergeOrReady(ttid, tt)
 			att.State = tt.State
 
@@ -485,6 +514,7 @@ func (r *Rebalancer) processTokenAsDest(ttid string, tt *c.TransferToken) bool {
 			att.State = c.TransferTokenInProgress
 			tt.State = c.TransferTokenInProgress
 			setTransferTokenInMetakv(ttid, tt)
+			atomic.AddInt32(&r.pendingBuild, 1)
 		}
 
 		if r.checkIndexReadyToBuild() == true {
@@ -749,6 +779,11 @@ loop:
 
 }
 
+func (r *Rebalancer) checkIndexReadyToDrop() bool {
+
+	return atomic.LoadInt32(&r.pendingBuild) == 0
+}
+
 func (r *Rebalancer) tokenMergeOrReady(ttid string, tt *c.TransferToken) {
 
 	// There is no proxy
@@ -768,6 +803,9 @@ func (r *Rebalancer) tokenMergeOrReady(ttid string, tt *c.TransferToken) {
 			tt.State = c.TransferTokenCommit
 		}
 		setTransferTokenInMetakv(ttid, tt)
+		atomic.AddInt32(&r.pendingBuild, -1)
+
+		r.dropIndexWhenReady()
 
 	} else {
 		// There is a proxy. The proxy partitions need to be move
@@ -815,6 +853,7 @@ func (r *Rebalancer) tokenMergeOrReady(ttid string, tt *c.TransferToken) {
 				tt.State = c.TransferTokenCommit
 			}
 			setTransferTokenInMetakv(ttid, &tt)
+			atomic.AddInt32(&r.pendingBuild, -1)
 
 			// if rebalancer is still active, then update its runtime state.
 			if !r.isFinish() {
@@ -824,6 +863,8 @@ func (r *Rebalancer) tokenMergeOrReady(ttid string, tt *c.TransferToken) {
 				if newTT := r.acceptedTokens[ttid]; newTT != nil {
 					newTT.State = tt.State
 				}
+
+				r.dropIndexWhenReady()
 			}
 
 		}(ttid, *tt)

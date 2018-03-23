@@ -126,6 +126,7 @@ const (
 	INDEXER_UPDATE_RSTATE
 	INDEXER_MERGE_PARTITION
 	INDEXER_CANCEL_MERGE_PARTITION
+	INDEXER_MTR_FAIL
 
 	//SCAN COORDINATOR
 	SCAN_COORD_SHUTDOWN
@@ -757,6 +758,7 @@ func (m *MsgMergePartition) GetString() string {
 	return str
 }
 
+//  INDEXER_CANCEL_MERGE_PARTITION
 type MsgCancelMergePartition struct {
 	indexStateMap map[common.IndexInstId]common.RebalanceState
 	respCh        chan error
@@ -1109,6 +1111,7 @@ func (m *MsgRepairEndpoints) String() string {
 //INDEXER_INITIATE_RECOVERY
 //INDEXER_RECOVERY_DONE
 //INDEXER_BUCKET_NOT_FOUND
+//INDEXER_MTR_FAIL
 type MsgRecovery struct {
 	mType     MsgType
 	streamId  common.StreamId
@@ -1116,6 +1119,7 @@ type MsgRecovery struct {
 	restartTs *common.TsVbuuid
 	buildTs   Timestamp
 	activeTs  *common.TsVbuuid
+	inMTR     bool
 }
 
 func (m *MsgRecovery) GetMsgType() MsgType {
@@ -1140,6 +1144,10 @@ func (m *MsgRecovery) GetActiveTs() *common.TsVbuuid {
 
 func (m *MsgRecovery) GetBuildTs() Timestamp {
 	return m.buildTs
+}
+
+func (m *MsgRecovery) InMTR() bool {
+	return m.inMTR
 }
 
 type MsgRollback struct {

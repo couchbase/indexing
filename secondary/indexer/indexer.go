@@ -921,6 +921,9 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 	case INDEXER_BUCKET_NOT_FOUND:
 		idx.handleBucketNotFound(msg)
 
+	case INDEXER_MTR_FAIL:
+		idx.handleMTRFail(msg)
+
 	case INDEXER_STATS:
 		idx.handleStats(msg)
 
@@ -1355,7 +1358,7 @@ func (idx *indexer) handleMergePartition(msg Message) {
 func (idx *indexer) updateRStateOrMergePartition(srcInstId common.IndexInstId, tgtInstId common.IndexInstId,
 	rebalState common.RebalanceState, respch chan error) {
 
-	if inst, ok := idx.indexInstMap[srcInstId]; ok {
+	if _, ok := idx.indexInstMap[srcInstId]; ok {
 
 		spec := mergeSpec{
 			srcInstId:  srcInstId,
@@ -1365,10 +1368,6 @@ func (idx *indexer) updateRStateOrMergePartition(srcInstId common.IndexInstId, t
 		}
 
 		idx.mergePartitionList = append(idx.mergePartitionList, spec)
-
-		if ok, _ := idx.streamBucketFlushInProgress[common.MAINT_STREAM][inst.Defn.Bucket]; !ok {
-			idx.mergePartitions(inst.Defn.Bucket)
-		}
 
 	} else {
 		// This is not a proxy index instance.  No need to merge.  Just update RState.
@@ -1381,9 +1380,16 @@ func (idx *indexer) updateRStateOrMergePartition(srcInstId common.IndexInstId, t
 
 			logging.Infof("MergePartition: sent async request to update index instance %v rstate moved to ACTIVE", tgtInstId)
 		}
+	}
 
-		if ok, _ := idx.streamBucketFlushInProgress[common.MAINT_STREAM][inst.Defn.Bucket]; !ok {
-			idx.mergePartitions(inst.Defn.Bucket)
+	idx.mergePartitionForIdleBuckets()
+}
+
+func (idx *indexer) mergePartitionForIdleBuckets() {
+
+	for bucket, flushInProgress := range idx.streamBucketFlushInProgress[common.MAINT_STREAM] {
+		if !flushInProgress {
+			idx.mergePartitions(bucket)
 		}
 	}
 }
@@ -2657,13 +2663,33 @@ func (idx *indexer) handleStreamRequestDone(msg Message) {
 
 }
 
-func (idx *indexer) handleBucketNotFound(msg Message) {
+func (idx *indexer) handleMTRFail(msg Message) {
 
 	streamId := msg.(*MsgRecovery).GetStreamId()
 	bucket := msg.(*MsgRecovery).GetBucket()
 
+	logging.Infof("Indexer::handleMTRFail StreamId %v Bucket %v",
+		streamId, bucket)
+
+	// if in MTR, MTR must have stopped when recieving this message.
+	// Cleanup any lock that indexer may be holding.
+	delete(idx.streamBucketRequestStopCh[streamId], bucket)
+}
+
+func (idx *indexer) handleBucketNotFound(msg Message) {
+
+	streamId := msg.(*MsgRecovery).GetStreamId()
+	bucket := msg.(*MsgRecovery).GetBucket()
+	inMTR := msg.(*MsgRecovery).InMTR()
+
 	logging.Infof("Indexer::handleBucketNotFound StreamId %v Bucket %v",
 		streamId, bucket)
+
+	// if in MTR, MTR must have stopped when recieving this message.
+	// Cleanup any lock that indexer may be holding.
+	if inMTR {
+		delete(idx.streamBucketRequestStopCh[streamId], bucket)
+	}
 
 	is := idx.getIndexerState()
 	if is == common.INDEXER_PREPARE_UNPAUSE {
@@ -2976,7 +3002,8 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 					"For Stream %v Bucket %v", buildStream, bucket)
 				idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_BUCKET_NOT_FOUND,
 					streamId: buildStream,
-					bucket:   bucket}
+					bucket:   bucket,
+					inMTR:    true}
 				break retryloop
 			}
 			idx.sendMsgToKVSender(cmd)
@@ -3020,6 +3047,12 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 						logging.Errorf("Indexer::sendStreamUpdateForBuildIndex Stream %v Bucket %v "+
 							"Error from Projector %v. Not Retrying. State %v", buildStream, bucket,
 							respErr.cause, state)
+
+						idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_MTR_FAIL,
+							streamId: buildStream,
+							bucket:   bucket,
+							inMTR:    true}
+
 						break retryloop
 
 					} else {
@@ -4056,7 +4089,8 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 					"For Stream %v Bucket %v", streamId, bucket)
 				idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_BUCKET_NOT_FOUND,
 					streamId: streamId,
-					bucket:   bucket}
+					bucket:   bucket,
+					inMTR:    true}
 				break retryloop
 			}
 
@@ -4106,6 +4140,12 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 						logging.Errorf("Indexer::startBucketStream Stream %v Bucket %v "+
 							"Error from Projector %v. Not Retrying. State %v", streamId, bucket,
 							respErr.cause, state)
+
+						idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_MTR_FAIL,
+							streamId: streamId,
+							bucket:   bucket,
+							inMTR:    true}
+
 						break retryloop
 
 					} else {
