@@ -13,7 +13,7 @@ import "sort"
 import "strings"
 import "testing"
 import n1ql "github.com/couchbase/query/value"
-import "github.com/couchbase/indexing/secondary/common"
+import "github.com/couchbase/indexing/secondary/collatejson/util"
 
 var testcases = []struct {
 	text string
@@ -214,7 +214,7 @@ func TestReference(t *testing.T) {
 			blines = append(blines, code)
 		}
 
-		sort.Sort(common.ByteSlices(blines))
+		sort.Sort(util.ByteSlices(blines))
 
 		lines = lines[:0]
 		for _, line := range blines {
