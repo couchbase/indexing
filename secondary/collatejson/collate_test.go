@@ -69,7 +69,7 @@ func init() {
 	}
 
 	sort.Strings(filenames)
-	filenames = []string{"strings", "strings.ref"}
+	//filenames = []string{"strings", "strings.ref"}
 	for _, filename := range filenames {
 		if strings.HasSuffix(filename, "ref") {
 			refFiles = append(refFiles, filepath.Join(testData, filename))
@@ -325,5 +325,66 @@ func TestArrayExplodeJoin(t *testing.T) {
 
 	if !bytes.Equal(array[1], elemBS2) {
 		t.Errorf("Unexpected mismatch")
+	}
+}
+
+func TestN1QLDecode(t *testing.T) {
+	codec := NewCodec(16)
+	var object interface{}
+	bs := []byte(`["hello", "test", true, [1,2,3], 1, 23.3, null, {"key" : 100}]`)
+	json.Unmarshal(bs, &object)
+	val := n1ql.NewValue(object)
+
+	n1qlBytes, err1 := codec.EncodeN1QLValue(val, make([]byte, 0, 1024))
+	n1qlVal, err2 := codec.DecodeN1QLValue(n1qlBytes, make([]byte, 0, 1024))
+
+	if err1 != nil || err2 != nil {
+		t.Fatalf("Unexpected errors %v, %v", err1, err2)
+	}
+
+	if !val.EquivalentTo(n1qlVal) {
+		t.Errorf("Expected original and decoded n1ql values to be the same")
+	}
+}
+
+func TestN1QLDecode2(t *testing.T) {
+	codec := NewCodec(32)
+	codec.NumberType("decimal")
+	var object interface{}
+	for i, testFile := range testFiles {
+		lines := readLines(testFile, t)
+		blines := make([][]byte, 0, len(lines))
+		for _, line := range lines {
+			json.Unmarshal(line, &object)
+			code, err := codec.EncodeN1QLValue(n1ql.NewValue(object), make([]byte, 0, 1024))
+			if err != nil {
+				t.Error(err)
+			}
+			blines = append(blines, code)
+		}
+
+		sort.Sort(util.ByteSlices(blines))
+
+		lines = lines[:0]
+		for _, line := range blines {
+			//fmt.Println(string(line))
+			n1qlval, err := codec.DecodeN1QLValue(line, make([]byte, 0, 1024))
+			if err != nil {
+				t.Error(err)
+			}
+			text, err := n1qlval.MarshalJSON()
+			if err != nil {
+				t.Error(err)
+			}
+			lines = append(lines, text)
+		}
+
+		refLines := readLines(refFiles[i], t)
+		for j, line := range lines {
+			x, y := string(line), string(refLines[j])
+			if x != y {
+				t.Errorf("Mismatch in %v for %q != %q", testFile, x, y)
+			}
+		}
 	}
 }
