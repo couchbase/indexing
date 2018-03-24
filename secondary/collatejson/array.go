@@ -1,6 +1,9 @@
 package collatejson
 
-import "errors"
+import (
+	"errors"
+	n1ql "github.com/couchbase/query/value"
+)
 
 var ErrNotAnArray = errors.New("not an array")
 var ErrLenPrefixUnsupported = errors.New("arrayLenPrefix is unsupported")
@@ -83,6 +86,44 @@ func (codec *Codec) ExplodeArray2(code []byte, tmp, decbuf []byte, cktmp, dktmp 
 		if pos > explodeUpto {
 			return cktmp, dktmp, err
 		}
+	}
+
+	return cktmp, dktmp, err
+}
+
+// Explodes an encoded array, returns encoded parts as well as
+// decoded parts
+func (codec *Codec) ExplodeArray3(code []byte, tmp, decbuf []byte, cktmp [][]byte, dktmp n1ql.Values) ([][]byte, n1ql.Values, error) {
+	var err error
+	var val n1ql.Value
+
+	if codec.arrayLenPrefix {
+		return nil, nil, ErrLenPrefixUnsupported
+	}
+
+	if code[0] != TypeArray {
+		return nil, nil, ErrNotAnArray
+	}
+
+	code = code[1:]
+	elemBuf := code
+
+	pos := 0
+	for code[0] != Terminator {
+		val, code, err = codec.code2n1ql(code, tmp)
+		if err != nil {
+			break
+		}
+
+		if dktmp != nil {
+			dktmp[pos] = val
+		}
+
+		if size := len(elemBuf) - len(code); size > 0 {
+			cktmp[pos] = elemBuf[:size]
+			elemBuf = code
+		}
+		pos++
 	}
 
 	return cktmp, dktmp, err

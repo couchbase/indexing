@@ -135,10 +135,11 @@ func (s *IndexScanSource) Routine() error {
 	revbuf := secKeyBufPool.Get() //Reverse collation buffer
 	r.keyBufList = append(r.keyBufList, revbuf)
 
-	var cktmp, dktmp [][]byte
+	var cktmp [][]byte
 	cktmp = make([][]byte, len(s.p.req.IndexInst.Defn.SecExprs))
 
 	var cachedEntry entryCache
+	var dktmp value.Values
 
 	if r.GroupAggr != nil {
 		r.GroupAggr.groups = make([]*groupKey, len(r.GroupAggr.Group))
@@ -152,7 +153,7 @@ func (s *IndexScanSource) Routine() error {
 		}
 
 		if r.GroupAggr.NeedDecode {
-			dktmp = make([][]byte, len(s.p.req.IndexInst.Defn.SecExprs))
+			dktmp = make(value.Values, len(s.p.req.IndexInst.Defn.SecExprs))
 		}
 
 	}
@@ -168,7 +169,8 @@ func (s *IndexScanSource) Routine() error {
 		s.p.rowsScanned++
 
 		skipRow := false
-		var ck, dk [][]byte
+		var ck [][]byte
+		var dk value.Values
 
 		//get the key in original format
 		if hasDesc {
@@ -511,9 +513,10 @@ func filterScanRow(key []byte, scan Scan, buf []byte) (bool, [][]byte, error) {
 
 // Return true if the row needs to be skipped based on the filter
 func filterScanRow2(key []byte, scan Scan, buf, decbuf []byte, getDecoded bool,
-	cktmp, dktmp [][]byte, r *ScanRequest, cachedEntry *entryCache) (bool, [][]byte, [][]byte, error) {
+	cktmp [][]byte, dktmp value.Values, r *ScanRequest, cachedEntry *entryCache) (bool, [][]byte, value.Values, error) {
 
-	var compositekeys, decodedkeys [][]byte
+	var compositekeys [][]byte
+	var decodedkeys value.Values
 	var err error
 
 	if !r.isPrimary && cachedEntry.Exists() {
@@ -753,8 +756,8 @@ func (a aggrResult) String() string {
 	return res
 }
 
-func computeGroupAggr(compositekeys, decodedkeys [][]byte, count int, docid, key,
-	buf, decbuf []byte, aggrRes *aggrResult, groupAggr *GroupAggr, cktmp, dktmp [][]byte, cachedEntry *entryCache, r *ScanRequest) error {
+func computeGroupAggr(compositekeys [][]byte, decodedkeys value.Values, count int, docid, key,
+	buf, decbuf []byte, aggrRes *aggrResult, groupAggr *GroupAggr, cktmp [][]byte, dktmp value.Values, cachedEntry *entryCache, r *ScanRequest) error {
 
 	var err error
 
@@ -787,14 +790,14 @@ func computeGroupAggr(compositekeys, decodedkeys [][]byte, count int, docid, key
 
 	if !cachedEntry.Valid() || groupAggr.DependsOnPrimaryKey {
 		for i, gk := range groupAggr.Group {
-			err := computeGroupKey(groupAggr, gk, compositekeys, decodedkeys, cachedEntry.decodedvalues, docid, i, r)
+			err := computeGroupKey(groupAggr, gk, compositekeys, decodedkeys, docid, i, r)
 			if err != nil {
 				return err
 			}
 		}
 
 		for i, ak := range groupAggr.Aggrs {
-			err := computeAggrVal(groupAggr, ak, compositekeys, decodedkeys, cachedEntry.decodedvalues, docid, count, buf, i, r)
+			err := computeAggrVal(groupAggr, ak, compositekeys, decodedkeys, docid, count, buf, i, r)
 			if err != nil {
 				return err
 			}
@@ -806,8 +809,8 @@ func computeGroupAggr(compositekeys, decodedkeys [][]byte, count int, docid, key
 
 }
 
-func computeGroupKey(groupAggr *GroupAggr, gk *GroupKey, compositekeys,
-	decodedkeys [][]byte, decodedvalues []interface{}, docid []byte, pos int, r *ScanRequest) error {
+func computeGroupKey(groupAggr *GroupAggr, gk *GroupKey, compositekeys [][]byte,
+	decodedkeys value.Values, docid []byte, pos int, r *ScanRequest) error {
 
 	g := groupAggr.groups[pos]
 	if gk.KeyPos >= 0 {
@@ -820,7 +823,7 @@ func computeGroupKey(groupAggr *GroupAggr, gk *GroupKey, compositekeys,
 			scalar = gk.ExprValue // It is a constant expression
 		} else {
 			var err error
-			scalar, err = evaluateN1QLExpresssion(groupAggr, gk.Expr, decodedkeys, decodedvalues, docid, r)
+			scalar, err = evaluateN1QLExpresssion(groupAggr, gk.Expr, decodedkeys, docid, r)
 			if err != nil {
 				return err
 			}
@@ -834,20 +837,13 @@ func computeGroupKey(groupAggr *GroupAggr, gk *GroupKey, compositekeys,
 }
 
 func computeAggrVal(groupAggr *GroupAggr, ak *Aggregate,
-	compositekeys, decodedkeys [][]byte, decodedvalues []interface{}, docid []byte,
+	compositekeys [][]byte, decodedkeys value.Values, docid []byte,
 	count int, buf []byte, pos int, r *ScanRequest) error {
 
 	a := groupAggr.aggrs[pos]
 	if ak.KeyPos >= 0 {
 		if ak.AggrFunc == c.AGG_SUM && !groupAggr.IsPrimary {
-			if decodedvalues[ak.KeyPos] == nil {
-				actualVal, err := unmarshalValue(decodedkeys[ak.KeyPos])
-				if err != nil {
-					return err
-				}
-				decodedvalues[ak.KeyPos] = actualVal
-			}
-			a.decoded = decodedvalues[ak.KeyPos]
+			a.decoded = decodedkeys[ak.KeyPos].ActualForIndex()
 		} else {
 			a.raw = compositekeys[ak.KeyPos]
 		}
@@ -859,7 +855,7 @@ func computeAggrVal(groupAggr *GroupAggr, ak *Aggregate,
 			scalar = ak.ExprValue // It is a constant expression
 		} else {
 			var err error
-			scalar, err = evaluateN1QLExpresssion(groupAggr, ak.Expr, decodedkeys, decodedvalues, docid, r)
+			scalar, err = evaluateN1QLExpresssion(groupAggr, ak.Expr, decodedkeys, docid, r)
 			if err != nil {
 				return err
 			}
@@ -877,7 +873,7 @@ func computeAggrVal(groupAggr *GroupAggr, ak *Aggregate,
 }
 
 func evaluateN1QLExpresssion(groupAggr *GroupAggr, expr expression.Expression,
-	decodedkeys [][]byte, decodedvalues []interface{}, docid []byte, r *ScanRequest) (value.Value, error) {
+	decodedkeys value.Values, docid []byte, r *ScanRequest) (value.Value, error) {
 
 	if groupAggr.IsPrimary {
 		for _, ik := range groupAggr.DependsOnIndexKeys {
@@ -888,14 +884,7 @@ func evaluateN1QLExpresssion(groupAggr *GroupAggr, expr expression.Expression,
 			if int(ik) == len(decodedkeys) {
 				groupAggr.av.SetCover(groupAggr.IndexKeyNames[ik], value.NewValue(string(docid)))
 			} else {
-				if decodedvalues[ik] == nil {
-					actualVal, err := unmarshalValue(decodedkeys[ik])
-					if err != nil {
-						return nil, err
-					}
-					decodedvalues[ik] = actualVal
-				}
-				groupAggr.av.SetCover(groupAggr.IndexKeyNames[ik], value.NewValue(decodedvalues[ik]))
+				groupAggr.av.SetCover(groupAggr.IndexKeyNames[ik], decodedkeys[ik])
 			}
 		}
 	}
@@ -1221,13 +1210,11 @@ func isEncodedNull(v []byte) bool {
 /////////////////////////////////////////////////////////////////////////
 
 type entryCache struct {
-	entry         []byte
-	compkeys      [][]byte
-	decodedkeys   [][]byte
-	decodedvalues []interface{}
+	entry       []byte
+	compkeys    [][]byte
+	decodedkeys value.Values
 
 	compkeybuf []byte
-	deckeybuf  []byte
 	valid      bool
 
 	hit  int64
@@ -1245,33 +1232,22 @@ func (e *entryCache) Init(r *ScanRequest, needDecode bool, numcompkeys int) {
 	e.entry = (*entrybuf)[:0]
 	e.compkeybuf = *compkeybuf
 
-	if needDecode {
-		deckeybuf := secKeyBufPool.Get()
-		r.keyBufList = append(r.keyBufList, deckeybuf)
-		e.deckeybuf = *deckeybuf
-	}
-
 }
 
 func (e *entryCache) EqualsEntry(other []byte) bool {
 	return distinctCompare(e.entry, other)
 }
 
-func (e *entryCache) Get() ([][]byte, [][]byte) {
-
+func (e *entryCache) Get() ([][]byte, value.Values) {
 	return e.compkeys, e.decodedkeys
-
 }
 
-func (e *entryCache) Update(entry []byte, compositekeys [][]byte, decodedkeys [][]byte) {
+func (e *entryCache) Update(entry []byte, compositekeys [][]byte, decodedkeys value.Values) {
 
 	e.entry = append(e.entry[:0], entry...)
 
 	if len(entry) > cap(e.compkeybuf) {
 		e.compkeybuf = make([]byte, 0, len(entry)+1024)
-		if decodedkeys != nil {
-			e.deckeybuf = make([]byte, 0, len(entry)+1024)
-		}
 	}
 
 	if e.compkeys == nil {
@@ -1287,17 +1263,12 @@ func (e *entryCache) Update(entry []byte, compositekeys [][]byte, decodedkeys []
 
 	if decodedkeys != nil {
 		if e.decodedkeys == nil {
-			e.decodedkeys = make([][]byte, len(decodedkeys))
+			e.decodedkeys = make(value.Values, len(decodedkeys))
 		}
-		tmpbuf := e.deckeybuf
 		for i, k := range decodedkeys {
-			copy(tmpbuf, k)
-			e.decodedkeys[i] = tmpbuf[:len(k)]
-			tmpbuf = tmpbuf[len(k):]
+			e.decodedkeys[i] = k.Copy()
 		}
 	}
-
-	e.decodedvalues = make([]interface{}, len(compositekeys))
 
 }
 
