@@ -717,11 +717,11 @@ func (codec *Codec) DecodeN1QLValue(code, buf []byte) (val n1ql.Value, err error
 		}
 	}()
 
-	val, _, err = codec.code2n1ql(code, buf)
+	val, _, err = codec.code2n1ql(code, buf, true)
 	return val, err
 }
 
-func (codec *Codec) code2n1ql(code, text []byte) (n1ql.Value, []byte, error) {
+func (codec *Codec) code2n1ql(code, text []byte, decode bool) (n1ql.Value, []byte, error) {
 	if len(code) == 0 {
 		return nil, nil, nil
 	}
@@ -736,56 +736,68 @@ func (codec *Codec) code2n1ql(code, text []byte) (n1ql.Value, []byte, error) {
 
 	case TypeMissing:
 		datum, remaining = getDatum(code)
-		n1qlVal = n1ql.NewMissingValue()
+		if decode {
+			n1qlVal = n1ql.NewMissingValue()
+		}
 
 	case TypeNull:
 		datum, remaining = getDatum(code)
-		n1qlVal = n1ql.NewNullValue()
+		if decode {
+			n1qlVal = n1ql.NewNullValue()
+		}
 
 	case TypeTrue:
 		datum, remaining = getDatum(code)
-		n1qlVal = n1ql.TRUE_VALUE
+		if decode {
+			n1qlVal = n1ql.TRUE_VALUE
+		}
 
 	case TypeFalse:
 		datum, remaining = getDatum(code)
-		n1qlVal = n1ql.FALSE_VALUE
-
-	case TypeLength:
-		var val int64
-		datum, remaining = getDatum(code)
-		_, ts = DecodeInt(datum[1:], text)
-		val, err = strconv.ParseInt(string(ts), 10, 64)
-		if err == nil {
-			n1qlVal = n1ql.NewValue(val)
+		if decode {
+			n1qlVal = n1ql.FALSE_VALUE
 		}
 
-	case TypeNumber:
+	case TypeLength:
 		datum, remaining = getDatum(code)
-		ts = DecodeFloat(datum[1:], text)
-		ts, err = codec.denormalizeFloat(ts)
-		ts = bytes.TrimLeft(ts, "+")
-		var number Integer
-		var isInt64 bool
-		ts, isInt64 = number.TryConvertFromScientificNotation(ts)
-
-		if isInt64 {
+		if decode {
 			var val int64
+			_, ts = DecodeInt(datum[1:], text)
 			val, err = strconv.ParseInt(string(ts), 10, 64)
 			if err == nil {
 				n1qlVal = n1ql.NewValue(val)
 			}
-		} else {
-			var val float64
-			val, err = strconv.ParseFloat(string(ts), 64)
-			if err == nil {
-				n1qlVal = n1ql.NewValue(val)
+		}
+
+	case TypeNumber:
+		datum, remaining = getDatum(code)
+		if decode {
+			ts = DecodeFloat(datum[1:], text)
+			ts, err = codec.denormalizeFloat(ts)
+			ts = bytes.TrimLeft(ts, "+")
+			var number Integer
+			var isInt64 bool
+			ts, isInt64 = number.TryConvertFromScientificNotation(ts)
+
+			if isInt64 {
+				var val int64
+				val, err = strconv.ParseInt(string(ts), 10, 64)
+				if err == nil {
+					n1qlVal = n1ql.NewValue(val)
+				}
+			} else {
+				var val float64
+				val, err = strconv.ParseFloat(string(ts), 64)
+				if err == nil {
+					n1qlVal = n1ql.NewValue(val)
+				}
 			}
 		}
 
 	case TypeString:
 		var strb []byte
 		strb, remaining, err = suffixDecodeString(code[1:], text)
-		if err == nil {
+		if decode && err == nil {
 			n1qlVal = n1ql.NewValue(string(strb))
 		}
 
@@ -801,28 +813,36 @@ func (codec *Codec) code2n1ql(code, text []byte) (n1ql.Value, []byte, error) {
 				for ; l > 0; l-- {
 					ln := len(text)
 					lnc := len(code)
-					tv, code, err = codec.code2n1ql(code, text[ln:])
+					tv, code, err = codec.code2n1ql(code, text[ln:], decode)
 					if err != nil {
 						break
 					}
 					text = text[:ln+lnc-len(code)]
-					arrval = append(arrval, tv.ActualForIndex())
+					if decode {
+						arrval = append(arrval, tv.ActualForIndex())
+					}
 				}
-				n1qlVal = n1ql.NewValue(arrval)
+				if decode {
+					n1qlVal = n1ql.NewValue(arrval)
+				}
 			}
 		} else {
 			code = code[1:]
 			for code[0] != Terminator {
 				ln := len(text)
 				lnc := len(code)
-				tv, code, err = codec.code2n1ql(code, text[ln:])
+				tv, code, err = codec.code2n1ql(code, text[ln:], decode)
 				if err != nil {
 					break
 				}
 				text = text[:ln+lnc-len(code)]
-				arrval = append(arrval, tv.ActualForIndex())
+				if decode {
+					arrval = append(arrval, tv.ActualForIndex())
+				}
 			}
-			n1qlVal = n1ql.NewValue(arrval)
+			if decode {
+				n1qlVal = n1ql.NewValue(arrval)
+			}
 		}
 		remaining = code[1:] // remove Terminator
 
@@ -839,7 +859,7 @@ func (codec *Codec) code2n1ql(code, text []byte) (n1ql.Value, []byte, error) {
 					// decode key
 					ln := len(text)
 					lnc := len(code)
-					key, code, err = codec.code2n1ql(code, text[ln:])
+					key, code, err = codec.code2n1ql(code, text[ln:], decode)
 					if err != nil {
 						break
 					}
@@ -847,19 +867,23 @@ func (codec *Codec) code2n1ql(code, text []byte) (n1ql.Value, []byte, error) {
 					// decode value
 					ln = len(text)
 					lnc = len(code)
-					value, code, err = codec.code2n1ql(code, text[ln:])
+					value, code, err = codec.code2n1ql(code, text[ln:], decode)
 					if err != nil {
 						break
 					}
 					text = text[:ln+lnc-len(code)]
-					if keystr, ok := key.ActualForIndex().(string); ok {
-						objval[keystr] = value.ActualForIndex()
-					} else {
-						err = ErrInvalidKeyTypeInObject
-						break
+					if decode {
+						if keystr, ok := key.ActualForIndex().(string); ok {
+							objval[keystr] = value.ActualForIndex()
+						} else {
+							err = ErrInvalidKeyTypeInObject
+							break
+						}
 					}
 				}
-				n1qlVal = n1ql.NewValue(objval)
+				if decode {
+					n1qlVal = n1ql.NewValue(objval)
+				}
 			}
 		} else {
 			code = code[1:]
@@ -867,7 +891,7 @@ func (codec *Codec) code2n1ql(code, text []byte) (n1ql.Value, []byte, error) {
 				// decode key
 				ln := len(text)
 				lnc := len(code)
-				key, code, err = codec.code2n1ql(code, text[ln:])
+				key, code, err = codec.code2n1ql(code, text[ln:], decode)
 				if err != nil {
 					break
 				}
@@ -875,19 +899,23 @@ func (codec *Codec) code2n1ql(code, text []byte) (n1ql.Value, []byte, error) {
 				// decode value
 				ln = len(text)
 				lnc = len(code)
-				value, code, err = codec.code2n1ql(code, text[ln:])
+				value, code, err = codec.code2n1ql(code, text[ln:], decode)
 				if err != nil {
 					break
 				}
 				text = text[:ln+lnc-len(code)]
-				if keystr, ok := key.ActualForIndex().(string); ok {
-					objval[keystr] = value.ActualForIndex()
-				} else {
-					err = ErrInvalidKeyTypeInObject
-					break
+				if decode {
+					if keystr, ok := key.ActualForIndex().(string); ok {
+						objval[keystr] = value.ActualForIndex()
+					} else {
+						err = ErrInvalidKeyTypeInObject
+						break
+					}
 				}
 			}
-			n1qlVal = n1ql.NewValue(objval)
+			if decode {
+				n1qlVal = n1ql.NewValue(objval)
+			}
 		}
 		remaining = code[1:] // remove Terminator
 	}

@@ -96,6 +96,7 @@ func (codec *Codec) ExplodeArray2(code []byte, tmp, decbuf []byte, cktmp, dktmp 
 func (codec *Codec) ExplodeArray3(code []byte, tmp, decbuf []byte, cktmp [][]byte, dktmp n1ql.Values) ([][]byte, n1ql.Values, error) {
 	var err error
 	var val n1ql.Value
+	var decode bool
 
 	if codec.arrayLenPrefix {
 		return nil, nil, ErrLenPrefixUnsupported
@@ -105,12 +106,16 @@ func (codec *Codec) ExplodeArray3(code []byte, tmp, decbuf []byte, cktmp [][]byt
 		return nil, nil, ErrNotAnArray
 	}
 
+	if dktmp != nil {
+		decode = true
+	}
+
 	code = code[1:]
 	elemBuf := code
 
 	pos := 0
 	for code[0] != Terminator {
-		val, code, err = codec.code2n1ql(code, tmp)
+		val, code, err = codec.code2n1ql(code, tmp, decode)
 		if err != nil {
 			break
 		}
