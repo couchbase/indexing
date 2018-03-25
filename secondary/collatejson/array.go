@@ -36,8 +36,10 @@ func (codec *Codec) ExplodeArray(code []byte, tmp []byte) ([][]byte, error) {
 }
 
 // Explodes an encoded array, returns encoded parts as well as
-// decoded parts
-func (codec *Codec) ExplodeArray2(code []byte, tmp, decbuf []byte, cktmp, dktmp [][]byte) ([][]byte, [][]byte, error) {
+// decoded parts. Also takes an array of explode positions and
+// decode positions to determine what to explode and what to decode
+func (codec *Codec) ExplodeArray2(code []byte, tmp, decbuf []byte, cktmp, dktmp [][]byte,
+	explodePos, decPos []bool, explodeUpto int) ([][]byte, [][]byte, error) {
 	var err error
 	var text []byte
 
@@ -60,16 +62,27 @@ func (codec *Codec) ExplodeArray2(code []byte, tmp, decbuf []byte, cktmp, dktmp 
 		}
 
 		if dktmp != nil {
-			copy(decbuf, text)
-			dktmp[pos] = decbuf[:len(text)]
-			decbuf = decbuf[len(text):]
+			if decPos[pos] {
+				copy(decbuf, text)
+				x := decbuf[:len(text)]
+				dktmp[pos] = x
+				decbuf = decbuf[len(text):]
+			} else {
+				dktmp[pos] = nil
+			}
 		}
 
 		if size := len(elemBuf) - len(code); size > 0 {
-			cktmp[pos] = elemBuf[:size]
+			if explodePos[pos] {
+				cktmp[pos] = elemBuf[:size]
+			}
 			elemBuf = code
 		}
+
 		pos++
+		if pos > explodeUpto {
+			return cktmp, dktmp, err
+		}
 	}
 
 	return cktmp, dktmp, err

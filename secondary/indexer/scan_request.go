@@ -64,7 +64,7 @@ type ScanRequest struct {
 	Limit     int64
 	isPrimary bool
 
-	// New parameters for spock
+	// New parameters for API2 pushdowns
 	Scans             []Scan
 	Indexprojection   *Projection
 	Reverse           bool
@@ -75,6 +75,13 @@ type ScanRequest struct {
 	//groupby/aggregate
 
 	GroupAggr *GroupAggr
+
+	//below two arrays indicate what parts of composite keys
+	//need to be exploded and decoded. explodeUpto indicates
+	//maximum position of explode or decode
+	explodePositions []bool
+	decodePositions  []bool
+	explodeUpto      int
 
 	// New parameters for partitioned index
 	Sorted bool
@@ -380,9 +387,11 @@ func NewScanRequest(protoReq interface{},
 		if err = r.fillScans(req.GetScans()); err != nil {
 			return
 		}
+
 		if err = r.fillGroupAggr(req.GetGroupAggr()); err != nil {
 			return
 		}
+		r.setExplodePositions()
 
 	case *protobuf.ScanAllRequest:
 		r.DefnID = req.GetDefnID()
@@ -1044,6 +1053,53 @@ func (r *ScanRequest) fillScans(protoScans []*protobuf.Scan) (localErr error) {
 	return
 }
 
+// Populate list of positions of keys which need to be
+// exploded for composite filtering and index projection
+func (r *ScanRequest) setExplodePositions() {
+
+	if r.isPrimary {
+		return
+	}
+
+	maxCompositeFilters := 0
+	for _, sc := range r.Scans {
+		if sc.ScanType != FilterRangeReq {
+			continue
+		}
+
+		for _, fl := range sc.Filters {
+			num := len(fl.CompositeFilters)
+			if num > maxCompositeFilters {
+				maxCompositeFilters = num
+			}
+		}
+	}
+
+	if r.explodePositions == nil {
+		r.explodePositions = make([]bool, len(r.IndexInst.Defn.SecExprs))
+		r.decodePositions = make([]bool, len(r.IndexInst.Defn.SecExprs))
+	}
+
+	for i := 0; i < maxCompositeFilters; i++ {
+		r.explodePositions[i] = true
+	}
+
+	if r.Indexprojection != nil && r.Indexprojection.projectSecKeys {
+		for i, project := range r.Indexprojection.projectionKeys {
+			if project {
+				r.explodePositions[i] = true
+			}
+		}
+	}
+
+	// Set max position until which we need explode or decode
+	for i := 0; i < len(r.explodePositions); i++ {
+		if r.explodePositions[i] || r.decodePositions[i] {
+			r.explodeUpto = i
+		}
+	}
+}
+
 func (r *ScanRequest) setConsistency(cons common.Consistency, vector *protobuf.TsConsistency) (localErr error) {
 
 	r.Consistency = &cons
@@ -1176,6 +1232,11 @@ func (r *ScanRequest) fillGroupAggr(protoGroupAggr *protobuf.GroupAggr) (err err
 		return nil
 	}
 
+	if r.explodePositions == nil {
+		r.explodePositions = make([]bool, len(r.IndexInst.Defn.SecExprs))
+		r.decodePositions = make([]bool, len(r.IndexInst.Defn.SecExprs))
+	}
+
 	r.GroupAggr = &GroupAggr{}
 
 	if err = r.unmarshallGroupKeys(protoGroupAggr); err != nil {
@@ -1205,6 +1266,17 @@ func (r *ScanRequest) fillGroupAggr(protoGroupAggr *protobuf.GroupAggr) (err err
 		return
 	}
 
+	// Look at groupAggr.DependsOnIndexKeys to figure out
+	// explode and decode positions for N1QL expression dependencies
+	if !r.isPrimary {
+		for _, depends := range r.GroupAggr.DependsOnIndexKeys {
+			if int(depends) == len(r.IndexInst.Defn.SecExprs) {
+				continue //Expr depends on meta().id, so ignore
+			}
+			r.explodePositions[depends] = true
+			r.decodePositions[depends] = true
+		}
+	}
 	return
 }
 
@@ -1238,6 +1310,9 @@ func (r *ScanRequest) unmarshallGroupKeys(protoGroupAggr *protobuf.GroupAggr) er
 			}
 		} else {
 			r.GroupAggr.NeedExplode = true
+			if !r.isPrimary {
+				r.explodePositions[groupKey.KeyPos] = true
+			}
 		}
 
 		r.GroupAggr.Group = append(r.GroupAggr.Group, &groupKey)
@@ -1280,8 +1355,14 @@ func (r *ScanRequest) unmarshallAggrs(protoGroupAggr *protobuf.GroupAggr) error 
 		} else {
 			if aggr.AggrFunc == common.AGG_SUM {
 				r.GroupAggr.NeedDecode = true
+				if !r.isPrimary {
+					r.decodePositions[aggr.KeyPos] = true
+				}
 			}
 			r.GroupAggr.NeedExplode = true
+			if !r.isPrimary {
+				r.explodePositions[aggr.KeyPos] = true
+			}
 		}
 
 		r.GroupAggr.Aggrs = append(r.GroupAggr.Aggrs, &aggr)
