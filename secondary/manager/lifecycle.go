@@ -2020,16 +2020,25 @@ func (m *LifecycleMgr) PruneIndexInstance(id common.IndexDefnId, instId common.I
 		}
 	}
 
-	// find if there is any proxy depends on this instance
-	numProxy, err := m.findNumProxy(defn.Bucket, id, instId)
+	// Find if there is any proxy depends on this instance.  This only covers proxy that has yet
+	// to be merged to this instance.
+	numProxy, err := m.findNumValidProxy(defn.Bucket, id, instId)
 	if err != nil {
 		return err
 	}
 
+	// If there is no proxy waiting to be merged to this instance and all partitions are to be pruned,
+	// then delete this instance itself.
 	if numProxy == 0 && (len(newPartitions) == len(inst.Partitions) || len(inst.Partitions) == 0) {
 		return m.DeleteIndexInstance(id, instId, cleanup, reqCtx)
 	}
 
+	//
+	// Prune the partition from the index instance in metadata.
+	// A DELETED proxy will be created to contain the pruned partition.  The DELETED proxy will have RState = REBAL_PENDING_DELETE.
+	// The proxy is for recovery purpose only.   If the indexer crashes after metadata is updated, the DELETED proxy will
+	// get cleaned up by removing the pruned partition data during indexer bootstrap.
+	//
 	proxyInstId, err := common.NewIndexInstId()
 	if err != nil {
 		logging.Errorf("LifecycleMgr.PrunePartition() : Failed to generate index inst id. Reason = %v", err)
@@ -2041,6 +2050,11 @@ func (m *LifecycleMgr) PruneIndexInstance(id common.IndexDefnId, instId common.I
 		return err
 	}
 
+	//
+	// Once splitPartitionFromTopology() successfully returns, the metadata change is committed.  The prune operation is
+	// consider logically succeed.   It will then call the indexer to cleanup its data structure.   If indexer fails to
+	// cleanup its data structure, the indexer runtime state can be corrupted and it will require a restart.
+	//
 	if cleanup {
 		if err := m.notifier.OnPartitionPrune(instId, newPartitions, reqCtx); err != nil {
 			indexerErr, ok := err.(*common.IndexerError)
@@ -2064,7 +2078,14 @@ func (m *LifecycleMgr) PruneIndexInstance(id common.IndexDefnId, instId common.I
 // Lifecycle Mgr - support functions
 //////////////////////////////////////////////////////////////
 
-func (m *LifecycleMgr) findNumProxy(bucket string, defnId common.IndexDefnId, instId common.IndexInstId) (int, error) {
+//
+// A proxy can be
+// 1) index instance that yet to be merged.  If a proxy has been merged, it will be removed from metadata.
+// 2) A DELETED instance that contains the partitions already pruned.   This proxy is only used for crash recovery.
+//
+// This function will only return proxy belong to (1)
+//
+func (m *LifecycleMgr) findNumValidProxy(bucket string, defnId common.IndexDefnId, instId common.IndexInstId) (int, error) {
 
 	insts, err := m.FindAllLocalIndexInst(bucket, defnId)
 	if err != nil {
@@ -2073,7 +2094,7 @@ func (m *LifecycleMgr) findNumProxy(bucket string, defnId common.IndexDefnId, in
 
 	var count int
 	for _, inst := range insts {
-		if inst.RealInstId == uint64(instId) {
+		if inst.State != uint32(common.INDEX_STATE_DELETED) && inst.RealInstId == uint64(instId) {
 			count++
 		}
 	}
@@ -2514,6 +2535,8 @@ func (m *janitor) cleanup() {
 
 		for _, inst := range insts {
 			// Queue up the cleanup request.  The request wont' happen until bootstrap is ready.
+			// Do not clean up any proxy instance created due to rebalance.  These proxy instances could be left in metadata to
+			// assist cleanup during bootstrap.  Removing them by janitor could cause some data not being cleaned up.
 			if inst.State == uint32(common.INDEX_STATE_DELETED) &&
 				inst.RState != uint32(common.REBAL_PENDING_DELETE) &&
 				inst.RState != uint32(common.REBAL_MERGED) {

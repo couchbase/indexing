@@ -236,7 +236,7 @@ func (s *IndexScanSource) Routine() error {
 					*buf = make([]byte, 0, len(entry)+1024)
 				}
 
-				entry, err = projectKeys(ck, entry, (*buf)[:0], r.Indexprojection, cktmp)
+				entry, err = projectKeys(ck, entry, (*buf)[:0], r, cktmp)
 			}
 			if err != nil {
 				return err
@@ -526,7 +526,8 @@ func filterScanRow2(key []byte, scan Scan, buf, decbuf []byte, getDecoded bool,
 	}
 
 	if compositekeys == nil {
-		compositekeys, decodedkeys, err = jsonEncoder.ExplodeArray2(key, buf, decbuf, cktmp, dktmp)
+		compositekeys, decodedkeys, err = jsonEncoder.ExplodeArray2(key, buf, decbuf, cktmp, dktmp,
+			r.explodePositions, r.decodePositions, r.explodeUpto)
 		if err != nil {
 			return false, nil, nil, err
 		}
@@ -629,24 +630,25 @@ func distinctCompare(entryBytes1, entryBytes2 []byte) bool {
 	return false
 }
 
-func projectKeys(compositekeys [][]byte, key, buf []byte, projection *Projection, cktmp [][]byte) ([]byte, error) {
+func projectKeys(compositekeys [][]byte, key, buf []byte, r *ScanRequest, cktmp [][]byte) ([]byte, error) {
 	var err error
 
-	if projection.entryKeysEmpty {
+	if r.Indexprojection.entryKeysEmpty {
 		entry := secondaryIndexEntry(key)
 		buf = append(buf, key[entry.lenKey():]...)
 		return buf, nil
 	}
 
 	if compositekeys == nil {
-		compositekeys, _, err = jsonEncoder.ExplodeArray2(key, buf, nil, cktmp, nil)
+		compositekeys, _, err = jsonEncoder.ExplodeArray2(key, buf, nil, cktmp, nil,
+			r.explodePositions, r.decodePositions, r.explodeUpto)
 		if err != nil {
 			return nil, err
 		}
 	}
 
 	var keysToJoin [][]byte
-	for i, projectKey := range projection.projectionKeys {
+	for i, projectKey := range r.Indexprojection.projectionKeys {
 		if projectKey {
 			keysToJoin = append(keysToJoin, compositekeys[i])
 		}
@@ -773,7 +775,8 @@ func computeGroupAggr(compositekeys, decodedkeys [][]byte, count int, docid, key
 			}
 
 			if !cachedEntry.Valid() {
-				compositekeys, decodedkeys, err = jsonEncoder.ExplodeArray2(key, buf, decbuf, cktmp, dktmp)
+				compositekeys, decodedkeys, err = jsonEncoder.ExplodeArray2(key, buf, decbuf, cktmp, dktmp,
+					r.explodePositions, r.decodePositions, r.explodeUpto)
 				if err != nil {
 					return err
 				}
