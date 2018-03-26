@@ -124,22 +124,31 @@ func (s *IndexScanSource) Routine() error {
 	count := 1
 	checkDistinct := r.Distinct && !r.isPrimary
 
-	buf := secKeyBufPool.Get() //Composite element filtering
-	r.keyBufList = append(r.keyBufList, buf)
-	buf2 := secKeyBufPool.Get() //Tracking for distinct
-	r.keyBufList = append(r.keyBufList, buf2)
-	previousRow := (*buf2)[:0]
-	buf3 := secKeyBufPool.Get() //Decoding in ExplodeArray2
-	r.keyBufList = append(r.keyBufList, buf3)
-	docidbuf := make([]byte, 1024)
-	revbuf := secKeyBufPool.Get() //Reverse collation buffer
-	r.keyBufList = append(r.keyBufList, revbuf)
-
+	var buf, buf2, buf3, revbuf *[]byte
+	var previousRow, docidbuf []byte
 	var cktmp [][]byte
-	cktmp = make([][]byte, len(s.p.req.IndexInst.Defn.SecExprs))
-
 	var cachedEntry entryCache
 	var dktmp value.Values
+
+	initTempBuf := func() {
+		buf = secKeyBufPool.Get() //Composite element filtering
+		r.keyBufList = append(r.keyBufList, buf)
+		buf3 = secKeyBufPool.Get() //Decoding in ExplodeArray2
+		r.keyBufList = append(r.keyBufList, buf3)
+		cktmp = make([][]byte, len(s.p.req.IndexInst.Defn.SecExprs))
+	}
+
+	if checkDistinct {
+		buf2 = secKeyBufPool.Get() //Tracking for distinct
+		r.keyBufList = append(r.keyBufList, buf2)
+		previousRow = (*buf2)[:0]
+	}
+
+	hasDesc := s.p.req.IndexInst.Defn.HasDescending()
+	if hasDesc {
+		revbuf = secKeyBufPool.Get() //Reverse collation buffer
+		r.keyBufList = append(r.keyBufList, revbuf)
+	}
 
 	if r.GroupAggr != nil {
 		r.GroupAggr.groups = make([]*groupKey, len(r.GroupAggr.Group))
@@ -156,9 +165,11 @@ func (s *IndexScanSource) Routine() error {
 			dktmp = make(value.Values, len(s.p.req.IndexInst.Defn.SecExprs))
 		}
 
-	}
+		if r.GroupAggr.DependsOnPrimaryKey {
+			docidbuf = make([]byte, 1024)
+		}
 
-	hasDesc := s.p.req.IndexInst.Defn.HasDescending()
+	}
 
 	iterCount := 0
 	fn := func(entry []byte) error {
@@ -183,6 +194,9 @@ func (s *IndexScanSource) Routine() error {
 		}
 
 		if currentScan.ScanType == FilterRangeReq {
+			if buf == nil {
+				initTempBuf()
+			}
 			if len(entry) > cap(*buf) {
 				*buf = make([]byte, 0, len(entry)+1024)
 				*buf3 = make([]byte, len(entry)+1024)
@@ -206,6 +220,10 @@ func (s *IndexScanSource) Routine() error {
 
 		if r.GroupAggr != nil {
 
+			if buf == nil {
+				initTempBuf()
+			}
+
 			if ck == nil && len(entry) > cap(*buf) {
 				*buf = make([]byte, 0, len(entry)+1024)
 			}
@@ -228,6 +246,13 @@ func (s *IndexScanSource) Routine() error {
 		}
 
 		if r.Indexprojection != nil && r.Indexprojection.projectSecKeys {
+
+			if buf == nil {
+				buf = secKeyBufPool.Get()
+				r.keyBufList = append(r.keyBufList, buf)
+				cktmp = make([][]byte, len(s.p.req.IndexInst.Defn.SecExprs))
+			}
+
 			if r.GroupAggr != nil {
 				entry, err = projectGroupAggr((*buf)[:0], r.Indexprojection, s.p.aggrRes, r.isPrimary)
 				if entry == nil {
@@ -306,6 +331,11 @@ loop:
 	s.p.cacheHitRatio = cachedEntry.CacheHitRatio()
 
 	if r.GroupAggr != nil && err == nil {
+
+		if buf == nil {
+			buf = secKeyBufPool.Get()
+			r.keyBufList = append(r.keyBufList, buf)
+		}
 
 		for _, r := range s.p.aggrRes.rows {
 			r.SetFlush(true)
