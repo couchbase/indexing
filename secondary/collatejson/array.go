@@ -92,8 +92,10 @@ func (codec *Codec) ExplodeArray2(code []byte, tmp, decbuf []byte, cktmp, dktmp 
 }
 
 // Explodes an encoded array, returns encoded parts as well as
-// decoded parts
-func (codec *Codec) ExplodeArray3(code []byte, tmp, decbuf []byte, cktmp [][]byte, dktmp n1ql.Values) ([][]byte, n1ql.Values, error) {
+// decoded parts. Also takes an array of explode positions and
+// decode positions to determine what to explode and what to decode
+func (codec *Codec) ExplodeArray3(code []byte, tmp []byte, cktmp [][]byte,
+	dktmp n1ql.Values, explodePos, decPos []bool, explodeUpto int) ([][]byte, n1ql.Values, error) {
 	var err error
 	var val n1ql.Value
 	var decode bool
@@ -106,15 +108,16 @@ func (codec *Codec) ExplodeArray3(code []byte, tmp, decbuf []byte, cktmp [][]byt
 		return nil, nil, ErrNotAnArray
 	}
 
-	if dktmp != nil {
-		decode = true
-	}
-
 	code = code[1:]
 	elemBuf := code
 
 	pos := 0
 	for code[0] != Terminator {
+
+		if decPos != nil {
+			decode = decPos[pos]
+		}
+
 		val, code, err = codec.code2n1ql(code, tmp, decode)
 		if err != nil {
 			break
@@ -125,10 +128,16 @@ func (codec *Codec) ExplodeArray3(code []byte, tmp, decbuf []byte, cktmp [][]byt
 		}
 
 		if size := len(elemBuf) - len(code); size > 0 {
-			cktmp[pos] = elemBuf[:size]
+			if explodePos[pos] {
+				cktmp[pos] = elemBuf[:size]
+			}
 			elemBuf = code
 		}
+
 		pos++
+		if pos > explodeUpto {
+			return cktmp, dktmp, err
+		}
 	}
 
 	return cktmp, dktmp, err

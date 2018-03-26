@@ -124,7 +124,7 @@ func (s *IndexScanSource) Routine() error {
 	count := 1
 	checkDistinct := r.Distinct && !r.isPrimary
 
-	var buf, buf2, buf3, revbuf *[]byte
+	var buf, buf2, revbuf *[]byte
 	var previousRow, docidbuf []byte
 	var cktmp [][]byte
 	var cachedEntry entryCache
@@ -133,8 +133,6 @@ func (s *IndexScanSource) Routine() error {
 	initTempBuf := func() {
 		buf = secKeyBufPool.Get() //Composite element filtering
 		r.keyBufList = append(r.keyBufList, buf)
-		buf3 = secKeyBufPool.Get() //Decoding in ExplodeArray2
-		r.keyBufList = append(r.keyBufList, buf3)
 		cktmp = make([][]byte, len(s.p.req.IndexInst.Defn.SecExprs))
 	}
 
@@ -199,11 +197,10 @@ func (s *IndexScanSource) Routine() error {
 			}
 			if len(entry) > cap(*buf) {
 				*buf = make([]byte, 0, len(entry)+1024)
-				*buf3 = make([]byte, len(entry)+1024)
 			}
 			getDecoded := (r.GroupAggr != nil && r.GroupAggr.NeedDecode)
 			skipRow, ck, dk, err = filterScanRow2(entry, currentScan,
-				(*buf)[:0], *buf3, getDecoded, cktmp, dktmp, r, &cachedEntry)
+				(*buf)[:0], getDecoded, cktmp, dktmp, r, &cachedEntry)
 			if err != nil {
 				return err
 			}
@@ -238,7 +235,7 @@ func (s *IndexScanSource) Routine() error {
 				}
 			}
 
-			err = computeGroupAggr(ck, dk, count, docid, entry, (*buf)[:0], *buf3, s.p.aggrRes, r.GroupAggr, cktmp, dktmp, &cachedEntry, r)
+			err = computeGroupAggr(ck, dk, count, docid, entry, (*buf)[:0], s.p.aggrRes, r.GroupAggr, cktmp, dktmp, &cachedEntry, r)
 			if err != nil {
 				return err
 			}
@@ -248,9 +245,7 @@ func (s *IndexScanSource) Routine() error {
 		if r.Indexprojection != nil && r.Indexprojection.projectSecKeys {
 
 			if buf == nil {
-				buf = secKeyBufPool.Get()
-				r.keyBufList = append(r.keyBufList, buf)
-				cktmp = make([][]byte, len(s.p.req.IndexInst.Defn.SecExprs))
+				initTempBuf()
 			}
 
 			if r.GroupAggr != nil {
@@ -542,8 +537,8 @@ func filterScanRow(key []byte, scan Scan, buf []byte) (bool, [][]byte, error) {
 }
 
 // Return true if the row needs to be skipped based on the filter
-func filterScanRow2(key []byte, scan Scan, buf, decbuf []byte, getDecoded bool,
-	cktmp [][]byte, dktmp value.Values, r *ScanRequest, cachedEntry *entryCache) (bool, [][]byte, value.Values, error) {
+func filterScanRow2(key []byte, scan Scan, buf []byte, getDecoded bool, cktmp [][]byte,
+	dktmp value.Values, r *ScanRequest, cachedEntry *entryCache) (bool, [][]byte, value.Values, error) {
 
 	var compositekeys [][]byte
 	var decodedkeys value.Values
@@ -559,7 +554,7 @@ func filterScanRow2(key []byte, scan Scan, buf, decbuf []byte, getDecoded bool,
 	}
 
 	if compositekeys == nil {
-		compositekeys, decodedkeys, err = jsonEncoder.ExplodeArray2(key, buf, decbuf, cktmp, dktmp,
+		compositekeys, decodedkeys, err = jsonEncoder.ExplodeArray3(key, buf, cktmp, dktmp,
 			r.explodePositions, r.decodePositions, r.explodeUpto)
 		if err != nil {
 			return false, nil, nil, err
@@ -673,8 +668,8 @@ func projectKeys(compositekeys [][]byte, key, buf []byte, r *ScanRequest, cktmp 
 	}
 
 	if compositekeys == nil {
-		compositekeys, _, err = jsonEncoder.ExplodeArray2(key, buf, nil, cktmp, nil,
-			r.explodePositions, r.decodePositions, r.explodeUpto)
+		compositekeys, _, err = jsonEncoder.ExplodeArray3(key, buf, cktmp, nil,
+			r.explodePositions, nil, r.explodeUpto)
 		if err != nil {
 			return nil, err
 		}
@@ -787,7 +782,7 @@ func (a aggrResult) String() string {
 }
 
 func computeGroupAggr(compositekeys [][]byte, decodedkeys value.Values, count int, docid, key,
-	buf, decbuf []byte, aggrRes *aggrResult, groupAggr *GroupAggr, cktmp [][]byte, dktmp value.Values, cachedEntry *entryCache, r *ScanRequest) error {
+	buf []byte, aggrRes *aggrResult, groupAggr *GroupAggr, cktmp [][]byte, dktmp value.Values, cachedEntry *entryCache, r *ScanRequest) error {
 
 	var err error
 
@@ -808,7 +803,7 @@ func computeGroupAggr(compositekeys [][]byte, decodedkeys value.Values, count in
 			}
 
 			if !cachedEntry.Valid() {
-				compositekeys, decodedkeys, err = jsonEncoder.ExplodeArray2(key, buf, decbuf, cktmp, dktmp,
+				compositekeys, decodedkeys, err = jsonEncoder.ExplodeArray3(key, buf, cktmp, dktmp,
 					r.explodePositions, r.decodePositions, r.explodeUpto)
 				if err != nil {
 					return err
