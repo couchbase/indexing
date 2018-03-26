@@ -198,9 +198,8 @@ func (s *IndexScanSource) Routine() error {
 			if len(entry) > cap(*buf) {
 				*buf = make([]byte, 0, len(entry)+1024)
 			}
-			getDecoded := (r.GroupAggr != nil && r.GroupAggr.NeedDecode)
 			skipRow, ck, dk, err = filterScanRow2(entry, currentScan,
-				(*buf)[:0], getDecoded, cktmp, dktmp, r, &cachedEntry)
+				(*buf)[:0], cktmp, dktmp, r, &cachedEntry)
 			if err != nil {
 				return err
 			}
@@ -537,7 +536,7 @@ func filterScanRow(key []byte, scan Scan, buf []byte) (bool, [][]byte, error) {
 }
 
 // Return true if the row needs to be skipped based on the filter
-func filterScanRow2(key []byte, scan Scan, buf []byte, getDecoded bool, cktmp [][]byte,
+func filterScanRow2(key []byte, scan Scan, buf []byte, cktmp [][]byte,
 	dktmp value.Values, r *ScanRequest, cachedEntry *entryCache) (bool, [][]byte, value.Values, error) {
 
 	var compositekeys [][]byte
@@ -562,7 +561,7 @@ func filterScanRow2(key []byte, scan Scan, buf []byte, getDecoded bool, cktmp []
 	}
 
 	if !cachedEntry.Exists() {
-		cachedEntry.Init(r, getDecoded, len(compositekeys))
+		cachedEntry.Init(r)
 	}
 	if !cachedEntry.Valid() {
 		cachedEntry.Update(key, compositekeys, decodedkeys)
@@ -799,7 +798,7 @@ func computeGroupAggr(compositekeys [][]byte, decodedkeys value.Values, count in
 					cachedEntry.SetValid(false)
 				}
 			} else {
-				cachedEntry.Init(r, groupAggr.NeedDecode, len(compositekeys))
+				cachedEntry.Init(r)
 			}
 
 			if !cachedEntry.Valid() {
@@ -1246,7 +1245,7 @@ type entryCache struct {
 	miss int64
 }
 
-func (e *entryCache) Init(r *ScanRequest, needDecode bool, numcompkeys int) {
+func (e *entryCache) Init(r *ScanRequest) {
 
 	entrybuf := secKeyBufPool.Get()
 	r.keyBufList = append(r.keyBufList, entrybuf)
@@ -1291,7 +1290,9 @@ func (e *entryCache) Update(entry []byte, compositekeys [][]byte, decodedkeys va
 			e.decodedkeys = make(value.Values, len(decodedkeys))
 		}
 		for i, k := range decodedkeys {
-			e.decodedkeys[i] = k.Copy()
+			if k != nil {
+				e.decodedkeys[i] = k.Copy()
+			}
 		}
 	}
 
