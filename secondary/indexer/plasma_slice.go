@@ -200,6 +200,7 @@ func (slice *plasmaSlice) initStores() error {
 	cfg.CheckpointInterval = time.Second * time.Duration(slice.sysconf["plasma.checkpointInterval"].Int())
 	cfg.LSSCleanerConcurrency = slice.sysconf["plasma.LSSCleanerConcurrency"].Int()
 	cfg.AutoTuneLSSCleaning = slice.sysconf["plasma.AutoTuneLSSCleaner"].Bool()
+	cfg.Compression = slice.sysconf["plasma.compression"].String()
 
 	var mode plasma.IOMode
 
