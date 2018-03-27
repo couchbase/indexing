@@ -201,6 +201,7 @@ type GroupAggr struct {
 	IsPrimary           bool
 	NeedDecode          bool // Need decode values for SUM or N1QLExpr evaluation
 	NeedExplode         bool // If only constant expression
+	HasExpr             bool // Has a non constant expression
 
 	//For caching values
 	cv          *value.ScopeValue
@@ -1268,7 +1269,7 @@ func (r *ScanRequest) fillGroupAggr(protoGroupAggr *protobuf.GroupAggr) (err err
 
 	// Look at groupAggr.DependsOnIndexKeys to figure out
 	// explode and decode positions for N1QL expression dependencies
-	if !r.isPrimary {
+	if !r.isPrimary && r.GroupAggr.HasExpr {
 		for _, depends := range r.GroupAggr.DependsOnIndexKeys {
 			if int(depends) == len(r.IndexInst.Defn.SecExprs) {
 				continue //Expr depends on meta().id, so ignore
@@ -1300,6 +1301,7 @@ func (r *ScanRequest) unmarshallGroupKeys(protoGroupAggr *protobuf.GroupAggr) er
 			groupKey.Expr = expr
 			groupKey.ExprValue = expr.Value() // value will be nil if it is not constant expr
 			if groupKey.ExprValue == nil {
+				r.GroupAggr.HasExpr = true
 				r.GroupAggr.NeedDecode = true
 				r.GroupAggr.NeedExplode = true
 			}
@@ -1344,6 +1346,7 @@ func (r *ScanRequest) unmarshallAggrs(protoGroupAggr *protobuf.GroupAggr) error 
 			aggr.Expr = expr
 			aggr.ExprValue = expr.Value() // value will be nil if it is not constant expr
 			if aggr.ExprValue == nil {
+				r.GroupAggr.HasExpr = true
 				r.GroupAggr.NeedDecode = true
 				r.GroupAggr.NeedExplode = true
 			}
