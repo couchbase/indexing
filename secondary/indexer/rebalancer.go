@@ -47,6 +47,7 @@ type Rebalancer struct {
 
 	drop         map[string]bool
 	pendingBuild int32
+	dropQueue    chan string
 
 	rebalToken *RebalanceToken
 	nodeId     string
@@ -107,6 +108,7 @@ func NewRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *Rebal
 		acceptedTokens: make(map[string]*c.TransferToken),
 		sourceTokens:   make(map[string]*c.TransferToken),
 		drop:           make(map[string]bool),
+		dropQueue:      make(chan string, 10000),
 		localaddr:      localaddr,
 
 		waitForTokenPublish: make(chan struct{}),
@@ -124,6 +126,9 @@ func NewRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *Rebal
 	if r.transferTokens != nil || !master {
 		go r.observeRebalance()
 	}
+
+	go r.processDropIndexQueue()
+
 	return r
 }
 
@@ -300,12 +305,7 @@ func (r *Rebalancer) processTokenAsSource(ttid string, tt *c.TransferToken) bool
 		r.sourceTokens[ttid] = tt
 
 		//TODO batch this rather than one per index
-		if r.checkIndexReadyToDrop() {
-			if !r.addToWaitGroup() {
-				return true
-			}
-			go r.dropIndexWhenIdle(ttid, tt)
-		}
+		r.queueDropIndex(ttid)
 
 	default:
 		return false
@@ -314,14 +314,38 @@ func (r *Rebalancer) processTokenAsSource(ttid string, tt *c.TransferToken) bool
 
 }
 
-func (r *Rebalancer) dropIndexWhenReady() {
+func (r *Rebalancer) processDropIndexQueue() {
 
-	if r.checkIndexReadyToDrop() {
-		for ttid, tt := range r.sourceTokens {
+	notifych := make(chan bool, 2)
+
+	for {
+		select {
+		case <-r.cancel:
+			l.Infof("Rebalancer::processDropIndexQueue Cancel Received")
+			return
+		case <-r.done:
+			l.Infof("Rebalancer::processDropIndexQueue Done Received")
+			return
+		case ttid := <-r.dropQueue:
+			var tt c.TransferToken
+
+			r.mu.Lock()
+			tt1, ok := r.sourceTokens[ttid]
+			if ok {
+				tt = *tt1
+			}
+			r.mu.Unlock()
+
+			if !ok {
+				l.Warnf("Rebalancer::processDropIndexQueue: Cannot find token %v in r.sourceTokens. Skip drop index.", ttid)
+				continue
+			}
+
 			if tt.State == c.TransferTokenReady {
 				if !r.drop[ttid] {
 					if r.addToWaitGroup() {
-						go r.dropIndexWhenIdle(ttid, tt)
+						notifych <- true
+						go r.dropIndexWhenIdle(ttid, &tt, notifych)
 					}
 				}
 			}
@@ -329,8 +353,64 @@ func (r *Rebalancer) dropIndexWhenReady() {
 	}
 }
 
-func (r *Rebalancer) dropIndexWhenIdle(ttid string, tt *c.TransferToken) {
+//
+// Must hold lock when calling this function
+//
+func (r *Rebalancer) queueDropIndex(ttid string) {
+
+	select {
+	case <-r.cancel:
+		l.Warnf("Rebalancer::queueDropIndex: Cannot drop index when rebalance being cancel.")
+		return
+
+	case <-r.done:
+		l.Warnf("Rebalancer::queueDropIndex: Cannot drop index when rebalance is done.")
+		return
+
+	default:
+		if r.checkIndexReadyToDrop() {
+			select {
+			case r.dropQueue <- ttid:
+			default:
+				tt := r.sourceTokens[ttid]
+				if tt.State == c.TransferTokenReady {
+					if !r.drop[ttid] {
+						if r.addToWaitGroup() {
+							go r.dropIndexWhenIdle(ttid, tt, nil)
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+//
+// Must hold lock when calling this function
+//
+func (r *Rebalancer) dropIndexWhenReady() {
+
+	if r.checkIndexReadyToDrop() {
+		for ttid, tt := range r.sourceTokens {
+			if tt.State == c.TransferTokenReady {
+				if !r.drop[ttid] {
+					r.queueDropIndex(ttid)
+				}
+			}
+		}
+	}
+}
+
+func (r *Rebalancer) dropIndexWhenIdle(ttid string, tt *c.TransferToken, notifych chan bool) {
 	defer r.wg.Done()
+	defer func() {
+		if notifych != nil {
+			switch {
+			case <-notifych:
+			default:
+			}
+		}
+	}()
 
 	r.mu.Lock()
 	if r.drop[ttid] {
@@ -853,7 +933,6 @@ func (r *Rebalancer) tokenMergeOrReady(ttid string, tt *c.TransferToken) {
 				tt.State = c.TransferTokenCommit
 			}
 			setTransferTokenInMetakv(ttid, &tt)
-			atomic.AddInt32(&r.pendingBuild, -1)
 
 			// if rebalancer is still active, then update its runtime state.
 			if !r.isFinish() {
@@ -863,6 +942,7 @@ func (r *Rebalancer) tokenMergeOrReady(ttid string, tt *c.TransferToken) {
 				if newTT := r.acceptedTokens[ttid]; newTT != nil {
 					newTT.State = tt.State
 				}
+				atomic.AddInt32(&r.pendingBuild, -1)
 
 				r.dropIndexWhenReady()
 			}
