@@ -331,19 +331,29 @@ func TestArrayExplodeJoin(t *testing.T) {
 func TestN1QLDecode(t *testing.T) {
 	codec := NewCodec(16)
 	var object interface{}
-	bs := []byte(`["hello", "test", true, [1,2,3], 1, 23.3, null, {"key" : 100}]`)
-	json.Unmarshal(bs, &object)
-	val := n1ql.NewValue(object)
-
-	n1qlBytes, err1 := codec.EncodeN1QLValue(val, make([]byte, 0, 1024))
-	n1qlVal, err2 := codec.DecodeN1QLValue(n1qlBytes, make([]byte, 0, 1024))
-
-	if err1 != nil || err2 != nil {
-		t.Fatalf("Unexpected errors %v, %v", err1, err2)
+	bsArr := [][]byte{[]byte(`["hello", "test", true, [1,2,3], 1, 23.3, null, {"key" : 100}]`),
+		[]byte(`["hello", true, [1,2,3], 23.3, null, {"key" : ["a","b","c"], "key2" : [1,null, true, 3], "key3" : { "subdoc" : true, "subdoc1" : [true, false, "y"]}}]`),
+		[]byte(`[{"key" : ["a","b","c"], "key2" : [1,null, true, 3], "key3" : { "subdoc" : true, "subdoc1" : [true, false, "y"]}}]`),
+		[]byte(`[4111686018427387900, 8223372036854775808, 822337203685477618]`),
 	}
 
-	if !val.EquivalentTo(n1qlVal) {
-		t.Errorf("Expected original and decoded n1ql values to be the same")
+	for _, bs := range bsArr {
+		err := json.Unmarshal(bs, &object)
+		if err != nil {
+			t.Fatalf("Unexpected error %v", err)
+		}
+		val := n1ql.NewValue(object)
+
+		n1qlBytes, err1 := codec.EncodeN1QLValue(val, make([]byte, 0, 1024))
+		n1qlVal, err2 := codec.DecodeN1QLValue(n1qlBytes, make([]byte, 0, 1024))
+
+		if err1 != nil || err2 != nil {
+			t.Fatalf("Unexpected errors %v, %v", err1, err2)
+		}
+
+		if !val.EquivalentTo(n1qlVal) {
+			t.Errorf("Expected original and decoded n1ql values to be the same")
+		}
 	}
 }
 
@@ -397,7 +407,7 @@ func TestArrayExplodeJoin2(t *testing.T) {
 	elemBS1, _ := codec.EncodeN1QLValue(e1, make([]byte, 0, 1000))
 	elemBS2, _ := codec.EncodeN1QLValue(e2, make([]byte, 0, 1000))
 
-	array, _, err1 := codec.ExplodeArray3(arrayBS1, make([]byte, 0, 1000), nil, make([][]byte, 2), nil)
+	array, _, err1 := codec.ExplodeArray3(arrayBS1, make([]byte, 0, 1000), make([][]byte, 2), nil, []bool{true, true}, nil, 1)
 	arrayBS2, err2 := codec.JoinArray(array, make([]byte, 0, 1000))
 
 	if err1 != nil || err2 != nil {
