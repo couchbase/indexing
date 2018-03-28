@@ -1215,7 +1215,7 @@ func makeRequestBroker(
 	backfillSync *int64,
 	size int) *qclient.RequestBroker {
 
-	broker := qclient.NewRequestBroker(requestId, int64(size))
+	broker := qclient.NewRequestBroker(requestId, int64(size), conn.MaxParallelism())
 
 	factory := func(id qclient.ResponseHandlerId, instId uint64, partitions []c.PartitionId) qclient.ResponseHandler {
 		return makeResponsehandler(id, requestId, si, client, conn, broker, config, waitGroup, backfillSync, instId, partitions)

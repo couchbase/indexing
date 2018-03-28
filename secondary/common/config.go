@@ -625,9 +625,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"queryport.client.scan.max_concurrency": ConfigValue{
-		16,
+		0,
 		"When performing query on partitioned index, specify maximum concurrency allowed. Use 0 to disable.",
-		16,
+		0,
 		false, // mutable
 		false, // case-insensitive
 	},
