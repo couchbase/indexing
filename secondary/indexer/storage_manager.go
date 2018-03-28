@@ -995,7 +995,9 @@ func (s *storageMgr) handleIndexMergeSnapshot(cmd Message) {
 	}
 
 	// decrement source snapshot refcount
-	DestroyIndexSnapshot(s.indexSnapMap[srcInstId])
+	// Do not decrement source snapshot refcount.   When the proxy instance is deleted, storage manager will be notified
+	// of the new instance state.   Storage manager will then decrement the ref count at that time.
+	//DestroyIndexSnapshot(s.indexSnapMap[srcInstId])
 
 	stats := s.stats.Get()
 	idxStats := stats.indexes[tgtInstId]
