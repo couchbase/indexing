@@ -1066,7 +1066,7 @@ func (m *LifecycleMgr) BuildIndexes(ids []common.IndexDefnId,
 	if m.notifier != nil && len(instIdList) != 0 {
 
 		if errMap := m.notifier.OnIndexBuild(instIdList, buckets, reqCtx); len(errMap) != 0 {
-			logging.Errorf("LifecycleMgr.hanaleBuildIndexes() : buildIndex fails. Reason = %v", errMap)
+			logging.Errorf("LifecycleMgr.handleBuildIndexes() : buildIndex fails. Reason = %v", errMap)
 
 			for instId, build_err := range errMap {
 
