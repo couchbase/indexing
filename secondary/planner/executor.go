@@ -228,6 +228,14 @@ func genTransferToken(solution *Solution, masterId string, topologyChange servic
 						token.InstId = instId
 					}
 
+					// if there is a build token for the definition, set index STATE to active so the
+					// index will be built as part of rebalancing.
+					if index.pendingBuild && !index.pendingDelete {
+						if token.IndexInst.State == common.INDEX_STATE_CREATED || token.IndexInst.State == common.INDEX_STATE_READY {
+							token.IndexInst.State = common.INDEX_STATE_ACTIVE
+						}
+					}
+
 					tokens[tokenKey] = token
 
 				} else {
