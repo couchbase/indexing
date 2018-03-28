@@ -1714,8 +1714,8 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 	//if flushTs is not on snap boundary, merge cannot be done
 	if !flushTs.IsSnapAligned() {
 		hwt := tk.ss.streamBucketHWTMap[streamId][bucket]
-		logging.Infof("Timekeeper::checkInitStreamReadyToMerge FlushTs Not Snapshot " +
-			"Aligned. Continue both streams.")
+		logging.Infof("Timekeeper::checkInitStreamReadyToMerge FlushTs Not Snapshot "+
+			"Aligned. Continue both streams for bucket %v.", bucket)
 		logging.LazyVerbose(func() string {
 			return fmt.Sprintf("Timekeeper::checkInitStreamReadyToMerge FlushTs %v\n HWT %v", flushTs, hwt)
 		})
@@ -1725,30 +1725,30 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 	//INIT_STREAM cannot be merged to MAINT_STREAM if its not ACTIVE
 	if tk.ss.streamBucketStatus[common.MAINT_STREAM][bucket] != STREAM_ACTIVE {
 		logging.Infof("Timekeeper::checkInitStreamReadyToMerge MAINT_STREAM in %v. "+
-			"INIT_STREAM cannot be merged. Continue both streams.",
-			tk.ss.streamBucketStatus[common.MAINT_STREAM][bucket])
+			"INIT_STREAM cannot be merged. Continue both streams for bucket %v.",
+			tk.ss.streamBucketStatus[common.MAINT_STREAM][bucket], bucket)
 		return false
 	}
 
 	//If any repair is going on, merge cannot happen
 	if stopCh, ok := tk.ss.streamBucketRepairStopCh[common.MAINT_STREAM][bucket]; ok && stopCh != nil {
 
-		logging.Infof("Timekeeper::checkInitStreamReadyToMerge MAINT_STREAM In Repair." +
-			"INIT_STREAM cannot be merged. Continue both streams.")
+		logging.Infof("Timekeeper::checkInitStreamReadyToMerge MAINT_STREAM In Repair."+
+			"INIT_STREAM cannot be merged. Continue both streams for bucket %v.", bucket)
 		return false
 	}
 
 	if stopCh, ok := tk.ss.streamBucketRepairStopCh[common.INIT_STREAM][bucket]; ok && stopCh != nil {
 
-		logging.Infof("Timekeeper::checkInitStreamReadyToMerge INIT_STREAM In Repair." +
-			"INIT_STREAM cannot be merged. Continue both streams.")
+		logging.Infof("Timekeeper::checkInitStreamReadyToMerge INIT_STREAM In Repair."+
+			"INIT_STREAM cannot be merged. Continue both streams for bucket %v.", bucket)
 		return false
 	}
 
 	if ts, ok := tk.ss.streamBucketOpenTsMap[common.INIT_STREAM][bucket]; !ok || ts == nil {
 
-		logging.Infof("Timekeeper::checkInitStreamReadyToMerge INIT_STREAM MTR In Progress." +
-			"INIT_STREAM cannot be merged. Continue both streams.")
+		logging.Infof("Timekeeper::checkInitStreamReadyToMerge INIT_STREAM MTR In Progress."+
+			"INIT_STREAM cannot be merged. Continue both streams for bucket %v.", bucket)
 		return false
 	}
 

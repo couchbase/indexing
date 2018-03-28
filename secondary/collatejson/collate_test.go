@@ -13,7 +13,7 @@ import "sort"
 import "strings"
 import "testing"
 import n1ql "github.com/couchbase/query/value"
-import "github.com/couchbase/indexing/secondary/common"
+import "github.com/couchbase/indexing/secondary/collatejson/util"
 
 var testcases = []struct {
 	text string
@@ -69,7 +69,7 @@ func init() {
 	}
 
 	sort.Strings(filenames)
-	filenames = []string{"strings", "strings.ref"}
+	//filenames = []string{"strings", "strings.ref"}
 	for _, filename := range filenames {
 		if strings.HasSuffix(filename, "ref") {
 			refFiles = append(refFiles, filepath.Join(testData, filename))
@@ -214,7 +214,7 @@ func TestReference(t *testing.T) {
 			blines = append(blines, code)
 		}
 
-		sort.Sort(common.ByteSlices(blines))
+		sort.Sort(util.ByteSlices(blines))
 
 		lines = lines[:0]
 		for _, line := range blines {
@@ -310,6 +310,105 @@ func TestArrayExplodeJoin(t *testing.T) {
 
 	array, err1 := codec.ExplodeArray(arrayBS1, make([]byte, 0, 10000))
 	arrayBS2, err2 := codec.JoinArray(array, make([]byte, 0, 10000))
+
+	if err1 != nil || err2 != nil {
+		t.Fatalf("Unexpected error %v %v", err1, err2)
+	}
+
+	if !bytes.Equal(arrayBS1, arrayBS2) {
+		t.Errorf("Unexpected mismatch")
+	}
+
+	if !bytes.Equal(array[0], elemBS1) {
+		t.Errorf("Unexpected mismatch")
+	}
+
+	if !bytes.Equal(array[1], elemBS2) {
+		t.Errorf("Unexpected mismatch")
+	}
+}
+
+func TestN1QLDecode(t *testing.T) {
+	codec := NewCodec(16)
+	var object interface{}
+	bsArr := [][]byte{[]byte(`["hello", "test", true, [1,2,3], 1, 23.3, null, {"key" : 100}]`),
+		[]byte(`["hello", true, [1,2,3], 23.3, null, {"key" : ["a","b","c"], "key2" : [1,null, true, 3], "key3" : { "subdoc" : true, "subdoc1" : [true, false, "y"]}}]`),
+		[]byte(`[{"key" : ["a","b","c"], "key2" : [1,null, true, 3], "key3" : { "subdoc" : true, "subdoc1" : [true, false, "y"]}}]`),
+		[]byte(`[4111686018427387900, 8223372036854775808, 822337203685477618]`),
+	}
+
+	for _, bs := range bsArr {
+		err := json.Unmarshal(bs, &object)
+		if err != nil {
+			t.Fatalf("Unexpected error %v", err)
+		}
+		val := n1ql.NewValue(object)
+
+		n1qlBytes, err1 := codec.EncodeN1QLValue(val, make([]byte, 0, 1024))
+		n1qlVal, err2 := codec.DecodeN1QLValue(n1qlBytes, make([]byte, 0, 1024))
+
+		if err1 != nil || err2 != nil {
+			t.Fatalf("Unexpected errors %v, %v", err1, err2)
+		}
+
+		if !val.EquivalentTo(n1qlVal) {
+			t.Errorf("Expected original and decoded n1ql values to be the same")
+		}
+	}
+}
+
+func TestN1QLDecode2(t *testing.T) {
+	codec := NewCodec(32)
+	codec.NumberType("decimal")
+	var object interface{}
+	for i, testFile := range testFiles {
+		lines := readLines(testFile, t)
+		blines := make([][]byte, 0, len(lines))
+		for _, line := range lines {
+			json.Unmarshal(line, &object)
+			code, err := codec.EncodeN1QLValue(n1ql.NewValue(object), make([]byte, 0, 1024))
+			if err != nil {
+				t.Error(err)
+			}
+			blines = append(blines, code)
+		}
+
+		sort.Sort(util.ByteSlices(blines))
+
+		lines = lines[:0]
+		for _, line := range blines {
+			//fmt.Println(string(line))
+			n1qlval, err := codec.DecodeN1QLValue(line, make([]byte, 0, 1024))
+			if err != nil {
+				t.Error(err)
+			}
+			text, err := n1qlval.MarshalJSON()
+			if err != nil {
+				t.Error(err)
+			}
+			lines = append(lines, text)
+		}
+
+		refLines := readLines(refFiles[i], t)
+		for j, line := range lines {
+			x, y := string(line), string(refLines[j])
+			if x != y {
+				t.Errorf("Mismatch in %v for %q != %q", testFile, x, y)
+			}
+		}
+	}
+}
+
+func TestArrayExplodeJoin2(t *testing.T) {
+	codec := NewCodec(16)
+	e1, e2 := n1ql.NewValue("string"), n1ql.NewValue([]interface{}{1, 2, 3})
+	arrayBS1, _ := codec.EncodeN1QLValue(n1ql.NewValue([]interface{}{e1, e2}), make([]byte, 0, 1000))
+
+	elemBS1, _ := codec.EncodeN1QLValue(e1, make([]byte, 0, 1000))
+	elemBS2, _ := codec.EncodeN1QLValue(e2, make([]byte, 0, 1000))
+
+	array, _, err1 := codec.ExplodeArray3(arrayBS1, make([]byte, 0, 1000), make([][]byte, 2), nil, []bool{true, true}, nil, 1)
+	arrayBS2, err2 := codec.JoinArray(array, make([]byte, 0, 1000))
 
 	if err1 != nil || err2 != nil {
 		t.Fatalf("Unexpected error %v %v", err1, err2)

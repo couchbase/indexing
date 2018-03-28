@@ -1,6 +1,9 @@
 package collatejson
 
-import "errors"
+import (
+	"errors"
+	n1ql "github.com/couchbase/query/value"
+)
 
 var ErrNotAnArray = errors.New("not an array")
 var ErrLenPrefixUnsupported = errors.New("arrayLenPrefix is unsupported")
@@ -70,6 +73,58 @@ func (codec *Codec) ExplodeArray2(code []byte, tmp, decbuf []byte, cktmp, dktmp 
 			} else {
 				dktmp[pos] = nil
 			}
+		}
+
+		if size := len(elemBuf) - len(code); size > 0 {
+			if explodePos[pos] {
+				cktmp[pos] = elemBuf[:size]
+			}
+			elemBuf = code
+		}
+
+		pos++
+		if pos > explodeUpto {
+			return cktmp, dktmp, err
+		}
+	}
+
+	return cktmp, dktmp, err
+}
+
+// Explodes an encoded array, returns encoded parts as well as
+// decoded parts. Also takes an array of explode positions and
+// decode positions to determine what to explode and what to decode
+func (codec *Codec) ExplodeArray3(code []byte, tmp []byte, cktmp [][]byte,
+	dktmp n1ql.Values, explodePos, decPos []bool, explodeUpto int) ([][]byte, n1ql.Values, error) {
+	var err error
+	var val n1ql.Value
+	var decode bool
+
+	if codec.arrayLenPrefix {
+		return nil, nil, ErrLenPrefixUnsupported
+	}
+
+	if code[0] != TypeArray {
+		return nil, nil, ErrNotAnArray
+	}
+
+	code = code[1:]
+	elemBuf := code
+
+	pos := 0
+	for code[0] != Terminator {
+
+		if decPos != nil {
+			decode = decPos[pos]
+		}
+
+		val, code, err = codec.code2n1ql(code, tmp, decode)
+		if err != nil {
+			break
+		}
+
+		if dktmp != nil {
+			dktmp[pos] = val
 		}
 
 		if size := len(elemBuf) - len(code); size > 0 {

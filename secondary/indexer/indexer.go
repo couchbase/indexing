@@ -1394,8 +1394,16 @@ func (idx *indexer) updateRStateOrMergePartition(srcInstId common.IndexInstId, t
 
 func (idx *indexer) mergePartitionForIdleBuckets() {
 
-	for bucket, flushInProgress := range idx.streamBucketFlushInProgress[common.MAINT_STREAM] {
-		if !flushInProgress {
+	buckets := make(map[string]bool)
+	for _, spec := range idx.mergePartitionList {
+		sourceId := spec.srcInstId
+		if source, ok := idx.indexInstMap[sourceId]; ok {
+			buckets[source.Defn.Bucket] = true
+		}
+	}
+
+	for bucket, _ := range buckets {
+		if !idx.streamBucketFlushInProgress[common.MAINT_STREAM][bucket] {
 			idx.mergePartitions(bucket)
 		}
 	}
