@@ -340,6 +340,10 @@ func (ctxt *perfContext) GetScanCap() int64 {
 	return 512 // Default index scan request size
 }
 
+func (ctxt *perfContext) MaxParallelism() int {
+	return 1
+}
+
 func skey2qkey(skey c.SecondaryKey) value.Values {
 	qkey := make(value.Values, 0, len(skey))
 	for _, x := range skey {

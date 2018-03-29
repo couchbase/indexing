@@ -543,6 +543,10 @@ func (ctxt *testContext) Fatal(fatal errors.Error) {
 	fmt.Printf("scan fatal: %v\n", fatal)
 }
 
+func (ctxt *testContext) MaxParallelism() int {
+	return 1
+}
+
 func WaitForIndexOnline(n1qlclient datastore.Indexer, indexName string, index datastore.Index) (datastore.Index, error) {
 
 	var err error
