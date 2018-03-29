@@ -52,8 +52,9 @@ type RequestBroker struct {
 	timer   ResponseTimer
 
 	// initialization
-	requestId string
-	size      int64
+	requestId   string
+	size        int64
+	concurrency int
 
 	// scatter/gather
 	queues   []*Queue
@@ -106,11 +107,12 @@ const (
 //
 // New Request Broker
 //
-func NewRequestBroker(requestId string, size int64) *RequestBroker {
+func NewRequestBroker(requestId string, size int64, concurrency int) *RequestBroker {
 
 	return &RequestBroker{
 		requestId:      requestId,
 		size:           size,
+		concurrency:    concurrency,
 		sorted:         true,
 		pushdownSorted: true,
 		limit:          math.MaxInt64,
@@ -462,10 +464,14 @@ func (c *RequestBroker) scatter(clientMaker scanClientMaker, index *common.Index
 	c.SetNumIndexers(len(partition))
 	c.defn = index
 
+	concurrency := c.concurrency
+	if concurrency < 1 {
+		concurrency = int(settings.MaxConcurrency())
+	}
+
 	var ok bool
 	var client []*GsiScanClient
 	partition = c.filterPartitions(index, partition, numPartition)
-	concurrency := int(settings.MaxConcurrency())
 	ok, client, targetInstId, rollback, partition = c.makeClients(clientMaker, concurrency, index, numPartition, scanports, targetInstId, rollback, partition)
 	if !ok {
 		return 0, nil, false, true
@@ -1192,7 +1198,7 @@ func (d *bypassResponseReader) Error() error {
 
 func makeDefaultRequestBroker(cb ResponseHandler) *RequestBroker {
 
-	broker := NewRequestBroker("", 256)
+	broker := NewRequestBroker("", 256, -1)
 
 	factory := func(id ResponseHandlerId, instId uint64, partitions []common.PartitionId) ResponseHandler {
 		return makeDefaultResponseHandler(id, broker, instId, partitions)

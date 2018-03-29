@@ -233,6 +233,7 @@ type IndexUsage struct {
 	// input: flag to indicate if the index in delete or create token
 	pendingDelete bool // true if there is a delete token associated with this index
 	pendingCreate bool // true if there is a create token associated with this index
+	pendingBuild  bool // true if there is a build token associated with this index
 
 	// mutable: hint for placement / constraint
 	suppressEquivIdxCheck bool

@@ -418,9 +418,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.dataport.dataChanSize": ConfigValue{
-		10000,
+		1000,
 		"request channel size of indexer dataport's gen-server routine",
-		10000,
+		1000,
 		true,  // immutable
 		false, // case-insensitive
 	},
@@ -625,9 +625,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"queryport.client.scan.max_concurrency": ConfigValue{
-		16,
+		0,
 		"When performing query on partitioned index, specify maximum concurrency allowed. Use 0 to disable.",
-		16,
+		0,
 		false, // mutable
 		false, // case-insensitive
 	},
@@ -829,18 +829,18 @@ var SystemConfig = Config{
 	},
 
 	"indexer.stream_reader.fdb.workerBuffer": ConfigValue{
-		uint64(10000),
+		uint64(3000),
 		"Buffer Size for stream reader worker to hold mutations " +
 			"before being enqueued in mutation queue",
-		uint64(10000),
+		uint64(3000),
 		false, // mutable
 		false, // case-insensitive
 	},
 
 	"indexer.stream_reader.fdb.mutationBuffer": ConfigValue{
-		uint64(10000),
+		uint64(3000),
 		"Buffer Size to hold incoming mutations from dataport",
-		uint64(10000),
+		uint64(3000),
 		false, // mutable
 		false, // case-insensitive
 	},
@@ -882,18 +882,18 @@ var SystemConfig = Config{
 	},
 
 	"indexer.stream_reader.moi.workerBuffer": ConfigValue{
-		uint64(30000),
+		uint64(2000),
 		"Buffer Size for stream reader worker to hold mutations " +
 			"before being enqueued in mutation queue",
-		uint64(30000),
+		uint64(2000),
 		false, // mutable
 		false, // case-insensitive
 	},
 
 	"indexer.stream_reader.moi.mutationBuffer": ConfigValue{
-		uint64(10000),
+		uint64(1000),
 		"Buffer Size to hold incoming mutations from dataport",
-		uint64(10000),
+		uint64(1000),
 		false, // mutable
 		false, // case-insensitive
 	},
@@ -1241,26 +1241,26 @@ var SystemConfig = Config{
 	},
 
 	"indexer.stream_reader.plasma.workerBuffer": ConfigValue{
-		uint64(10000),
+		uint64(2000),
 		"Buffer Size for stream reader worker to hold mutations " +
 			"before being enqueued in mutation queue",
-		uint64(10000),
+		uint64(2000),
 		false, // mutable
 		false, // case-insensitive
 	},
 
 	"indexer.stream_reader.plasma.mutationBuffer": ConfigValue{
-		uint64(3000),
+		uint64(1000),
 		"Buffer Size to hold incoming mutations from dataport",
-		uint64(3000),
+		uint64(1000),
 		false, // mutable
 		false, // case-insensitive
 	},
 
 	"indexer.dataport.plasma.dataChanSize": ConfigValue{
-		3000,
+		1000,
 		"request channel size of indexer dataport's gen-server routine",
-		3000,
+		1000,
 		false, // mutable
 		false, // case-insensitive
 	},

@@ -183,6 +183,10 @@ func (ctxt *qcmdContext) Fatal(fatal errors.Error) {
 	fmt.Printf("scan fatal: %v\n", fatal)
 }
 
+func (ctxt *qcmdContext) MaxParallelism() int {
+	return 1
+}
+
 func delay(n int) {
 	count := float64(0)
 	for i := 0; i < n; i++ {

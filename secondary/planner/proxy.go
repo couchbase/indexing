@@ -305,6 +305,12 @@ func ConvertToIndexUsage(config common.Config, defn *common.IndexDefn, localMeta
 				}
 				index.pendingDelete = pendingDelete
 
+				pendingBuild, err := mc.BuildCommandTokenExist(defn.DefnId)
+				if err != nil {
+					return nil, err
+				}
+				index.pendingBuild = pendingBuild
+
 				// get the version from inst or partition
 				version := partn.Version
 				if version == 0 && version != inst.Version {

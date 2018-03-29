@@ -342,6 +342,10 @@ func (ctxt *qcmdContext) Fatal(fatal qerrors.Error) {
 	fmt.Printf("scan fatal: %v\n", fatal)
 }
 
+func (ctxt *qcmdContext) MaxParallelism() int {
+	return 1
+}
+
 func cleanbackfillFiles() {
 	dir := backfillDir()
 	files, err := ioutil.ReadDir(dir)
