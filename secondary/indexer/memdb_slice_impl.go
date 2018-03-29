@@ -20,6 +20,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -241,6 +242,37 @@ func NewMemDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 
 	slice.setCommittedCount()
 	return slice, nil
+}
+
+var (
+	moiWriterSemaphoreCh chan bool
+	moiWritersAllowed    int
+	initLock             sync.Mutex
+)
+
+func updateMOIWriters(to int) {
+	if to > cap(moiWriterSemaphoreCh) {
+		to = cap(moiWriterSemaphoreCh)
+	}
+	initLock.Lock()
+	defer initLock.Unlock()
+	if to == moiWritersAllowed {
+		return
+	}
+	if to < moiWritersAllowed {
+		for i := to; i < moiWritersAllowed; i++ {
+			moiWriterSemaphoreCh <- true
+		}
+	} else {
+		for i := moiWritersAllowed; i < to; i++ {
+			<-moiWriterSemaphoreCh
+		}
+	}
+}
+
+func init() {
+	moiWritersAllowed = runtime.NumCPU() * 4
+	moiWriterSemaphoreCh = make(chan bool, moiWritersAllowed)
 }
 
 func (slice *memdbSlice) initStores() {
@@ -704,7 +736,20 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot) {
 		}
 
 		mdb.confLock.RUnlock()
-		err := mdb.mainstore.StoreToDisk(tmpdir, s.info.MainSnap, concurrency, nil)
+
+		var firstItem bool = true
+		limitWriterThreads := func(itm *memdb.ItemEntry) {
+			if firstItem {
+				moiWriterSemaphoreCh <- true
+				firstItem = false
+			}
+		}
+		defer func() {
+			if !firstItem { // Only post if callback above ran
+				<-moiWriterSemaphoreCh
+			}
+		}()
+		err := mdb.mainstore.StoreToDisk(tmpdir, s.info.MainSnap, concurrency, limitWriterThreads)
 		if err == nil {
 			var fd *os.File
 			var bs []byte

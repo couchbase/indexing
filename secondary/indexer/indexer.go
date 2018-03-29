@@ -240,6 +240,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	idx.stats.memoryQuota.Set(memQuota)
 	plasma.SetMemoryQuota(int64(float64(memQuota) * PLASMA_MEMQUOTA_FRAC))
 	memdb.Debug(idx.config["settings.moi.debug"].Bool())
+	updateMOIWriters(idx.config["settings.moi.persistence_threads"].Int())
 	reclaimBlockSize := int64(idx.config["plasma.LSSReclaimBlockSize"].Int())
 	plasma.SetLogReclaimBlockSize(reclaimBlockSize)
 
@@ -1041,6 +1042,19 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 			common.GetStorageMode() == common.NOT_SET {
 			logging.Infof("Indexer::handleConfigUpdate restart indexer due to memory_quota")
 			idx.stats.needsRestart.Set(true)
+		}
+	}
+	if common.GetStorageMode() == common.MOI {
+		if moiPersisters := newConfig["settings.moi.persistence_threads"].Int(); moiPersisters != idx.config["settings.moi.persistence_threads"].Int() {
+			if moiPersisters <= cap(moiWriterSemaphoreCh) {
+				logging.Infof("Indexer: Setting MOI persisters to %v",
+					moiPersisters)
+			} else {
+				logging.Infof(
+					"Indexer: Limiting MOI persisters to %v instead of %v",
+					cap(moiWriterSemaphoreCh), moiPersisters)
+			}
+			go updateMOIWriters(moiPersisters)
 		}
 	}
 
