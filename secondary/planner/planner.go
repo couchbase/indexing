@@ -18,6 +18,7 @@ import (
 	"math"
 	"math/rand"
 	"strconv"
+	"sync"
 	"time"
 )
 
@@ -395,6 +396,66 @@ type IndexerConstraint struct {
 }
 
 //////////////////////////////////////////////////////////////
+// Sync pool
+//////////////////////////////////////////////////////////////
+
+type SolutionPool struct {
+	pool *sync.Pool
+}
+
+func newSolutionPool() *SolutionPool {
+	fn := func() interface{} {
+		return &Solution{}
+	}
+
+	return &SolutionPool{
+		pool: &sync.Pool{
+			New: fn,
+		},
+	}
+}
+
+func (p *SolutionPool) Get() *Solution {
+	return p.pool.Get().(*Solution)
+}
+
+func (p *SolutionPool) Put(buf *Solution) {
+	p.pool.Put(buf)
+}
+
+type IndexerNodePool struct {
+	pool *sync.Pool
+}
+
+func newIndexerNodePool() *IndexerNodePool {
+	fn := func() interface{} {
+		return &IndexerNode{}
+	}
+
+	return &IndexerNodePool{
+		pool: &sync.Pool{
+			New: fn,
+		},
+	}
+}
+
+func (p *IndexerNodePool) Get() *IndexerNode {
+	return p.pool.Get().(*IndexerNode)
+}
+
+func (p *IndexerNodePool) Put(buf *IndexerNode) {
+	p.pool.Put(buf)
+}
+
+var solutionPool *SolutionPool
+var indexerNodePool *IndexerNodePool
+
+func init() {
+	solutionPool = newSolutionPool()
+	indexerNodePool = newIndexerNodePool()
+}
+
+//////////////////////////////////////////////////////////////
 // SAPlanner
 //////////////////////////////////////////////////////////////
 
@@ -523,6 +584,7 @@ func (p *SAPlanner) planSingleRun(command CommandType, solution *Solution) (*Sol
 				// not need to change the temperature since new solution
 				// could have higher score.
 				if force || prob > rs.Float64() {
+					current.free()
 					current = new_solution
 					current.updateCost()
 					old_cost = new_cost
@@ -530,6 +592,9 @@ func (p *SAPlanner) planSingleRun(command CommandType, solution *Solution) (*Sol
 					move++
 
 					logging.Tracef("Planner::accept solution: new_cost %v temp %v", new_cost, temperature)
+
+				} else {
+					new_solution.free()
 				}
 
 				iteration++
@@ -1262,30 +1327,30 @@ func (s *Solution) removeIndexes(indexes []*IndexUsage) {
 //
 func (s *Solution) clone() *Solution {
 
-	r := &Solution{
-		command:            s.command,
-		constraint:         s.constraint,
-		sizing:             s.sizing,
-		cost:               s.cost,
-		place:              s.place,
-		Placement:          ([]*IndexerNode)(nil),
-		isLiveData:         s.isLiveData,
-		useLiveData:        s.useLiveData,
-		initialPlan:        s.initialPlan,
-		numServerGroup:     s.numServerGroup,
-		numDeletedNode:     s.numDeletedNode,
-		numNewNode:         s.numNewNode,
-		disableRepair:      s.disableRepair,
-		estimatedIndexSize: s.estimatedIndexSize,
-		estimate:           s.estimate,
-		numEstimateRun:     s.numEstimateRun,
-		enableExclude:      s.enableExclude,
-		memMean:            s.memMean,
-		cpuMean:            s.cpuMean,
-		dataMean:           s.dataMean,
-		enforceConstraint:  s.enforceConstraint,
-		indexSGMap:         make(map[string]string),
-	}
+	r := solutionPool.Get()
+
+	r.command = s.command
+	r.constraint = s.constraint
+	r.sizing = s.sizing
+	r.cost = s.cost
+	r.place = s.place
+	r.Placement = make([]*IndexerNode, 0, len(s.Placement))
+	r.isLiveData = s.isLiveData
+	r.useLiveData = s.useLiveData
+	r.initialPlan = s.initialPlan
+	r.numServerGroup = s.numServerGroup
+	r.numDeletedNode = s.numDeletedNode
+	r.numNewNode = s.numNewNode
+	r.disableRepair = s.disableRepair
+	r.estimatedIndexSize = s.estimatedIndexSize
+	r.estimate = s.estimate
+	r.numEstimateRun = s.numEstimateRun
+	r.enableExclude = s.enableExclude
+	r.memMean = s.memMean
+	r.cpuMean = s.cpuMean
+	r.dataMean = s.dataMean
+	r.enforceConstraint = s.enforceConstraint
+	r.indexSGMap = make(map[string]string)
 
 	for _, node := range s.Placement {
 		if node.isDelete && len(node.Indexes) == 0 {
@@ -1299,6 +1364,15 @@ func (s *Solution) clone() *Solution {
 	}
 
 	return r
+}
+
+func (s *Solution) free() {
+
+	for _, node := range s.Placement {
+		node.free()
+	}
+
+	solutionPool.Put(s)
 }
 
 //
@@ -1323,7 +1397,7 @@ func (s *Solution) removeEmptyDeletedNode() {
 		if node.isDelete && len(node.Indexes) == 0 {
 			continue
 		}
-		result = append(result, node.clone())
+		result = append(result, node)
 	}
 
 	s.Placement = result
@@ -3075,40 +3149,45 @@ func (o *IndexerNode) GetMovedIndex() []*IndexUsage {
 //
 func (o *IndexerNode) clone() *IndexerNode {
 
-	r := &IndexerNode{
-		NodeId:            o.NodeId,
-		NodeUUID:          o.NodeUUID,
-		IndexerId:         o.IndexerId,
-		RestUrl:           o.RestUrl,
-		ServerGroup:       o.ServerGroup,
-		StorageMode:       o.StorageMode,
-		MemUsage:          o.MemUsage,
-		MemOverhead:       o.MemOverhead,
-		DataSize:          o.DataSize,
-		CpuUsage:          o.CpuUsage,
-		DiskUsage:         o.DiskUsage,
-		Indexes:           make([]*IndexUsage, len(o.Indexes)),
-		isDelete:          o.isDelete,
-		isNew:             o.isNew,
-		exclude:           o.exclude,
-		ActualMemUsage:    o.ActualMemUsage,
-		ActualMemOverhead: o.ActualMemOverhead,
-		ActualCpuUsage:    o.ActualCpuUsage,
-		ActualDataSize:    o.ActualDataSize,
-		meetConstraint:    o.meetConstraint,
-		numEmptyIndex:     o.numEmptyIndex,
-		hasEligible:       o.hasEligible,
-		dataMovedIn:       o.dataMovedIn,
-		indexMovedIn:      o.indexMovedIn,
-		totalData:         o.totalData,
-		totalIndex:        o.totalIndex,
-	}
+	r := indexerNodePool.Get()
+
+	r.NodeId = o.NodeId
+	r.NodeUUID = o.NodeUUID
+	r.IndexerId = o.IndexerId
+	r.RestUrl = o.RestUrl
+	r.ServerGroup = o.ServerGroup
+	r.StorageMode = o.StorageMode
+	r.MemUsage = o.MemUsage
+	r.MemOverhead = o.MemOverhead
+	r.DataSize = o.DataSize
+	r.CpuUsage = o.CpuUsage
+	r.DiskUsage = o.DiskUsage
+	r.Indexes = make([]*IndexUsage, len(o.Indexes))
+	r.isDelete = o.isDelete
+	r.isNew = o.isNew
+	r.exclude = o.exclude
+	r.ActualMemUsage = o.ActualMemUsage
+	r.ActualMemOverhead = o.ActualMemOverhead
+	r.ActualCpuUsage = o.ActualCpuUsage
+	r.ActualDataSize = o.ActualDataSize
+	r.meetConstraint = o.meetConstraint
+	r.numEmptyIndex = o.numEmptyIndex
+	r.hasEligible = o.hasEligible
+	r.dataMovedIn = o.dataMovedIn
+	r.indexMovedIn = o.indexMovedIn
+	r.totalData = o.totalData
+	r.totalIndex = o.totalIndex
 
 	for i, _ := range o.Indexes {
 		r.Indexes[i] = o.Indexes[i]
 	}
 
 	return r
+}
+
+func (o *IndexerNode) free() {
+
+	indexerNodePool.Put(o)
 }
 
 //

@@ -318,6 +318,10 @@ func (r *Rebalancer) processDropIndexQueue() {
 
 	notifych := make(chan bool, 2)
 
+	first := true
+	cfg := r.config.Load()
+	waitTime := cfg["rebalance.drop_index.wait_time"].Int()
+
 	for {
 		select {
 		case <-r.cancel:
@@ -328,6 +332,14 @@ func (r *Rebalancer) processDropIndexQueue() {
 			return
 		case ttid := <-r.dropQueue:
 			var tt c.TransferToken
+
+			if first {
+				// If it is the first drop, let wait to give a chance for the target's metaadta
+				// being synchronized with the cbq nodes.  This is to ensure that the cbq nodes
+				// can direct scan to the target nodes, before we start dropping the index in the source.
+				time.Sleep(time.Duration(waitTime) * time.Second)
+				first = false
+			}
 
 			r.mu.Lock()
 			tt1, ok := r.sourceTokens[ttid]

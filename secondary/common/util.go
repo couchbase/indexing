@@ -637,9 +637,11 @@ func IndexStatement(def IndexDefn, printNodes bool) string {
 	}
 
 	withExpr := ""
-	if def.Immutable {
-		withExpr += "\"immutable\":true"
-	}
+	/*
+		if def.Immutable {
+			withExpr += "\"immutable\":true"
+		}
+	*/
 
 	if def.Deferred {
 		if len(withExpr) != 0 {

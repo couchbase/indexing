@@ -1828,6 +1828,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.rebalance.drop_index.wait_time": ConfigValue{
+		1,
+		"wait time for rebalancer to start drop index after all indexes are built (sec)",
+		1,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.settings.storage_mode.disable_upgrade": ConfigValue{
 		false,
 		"Disable upgrading storage mode. This is checked on every indexer restart, " +

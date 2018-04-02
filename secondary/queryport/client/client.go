@@ -368,6 +368,7 @@ type GsiClient struct {
 	metaCh       chan bool      // listen to metadata changes
 	settings     *ClientSettings
 	killch       chan bool
+	numScans     int64
 }
 
 // NewGsiClient returns client to access GSI cluster.
@@ -1222,6 +1223,9 @@ func (c *GsiClient) makeScanClient(scanport string) *GsiScanClient {
 
 func (c *GsiClient) doScan(defnID uint64, requestId string, broker *RequestBroker) (int64, error) {
 
+	atomic.AddInt64(&c.numScans, 1)
+	defer atomic.AddInt64(&c.numScans, -1)
+
 	var excludes map[common.IndexDefnId]map[common.PartitionId]map[uint64]bool
 	var err error
 
@@ -1424,6 +1428,7 @@ func makeWithMetaProvider(
 	}
 	c.updateScanClients()
 	go c.listenMetaChange(c.killch)
+	go c.logstats(c.killch)
 	return c, nil
 }
 
@@ -1432,6 +1437,25 @@ func (c *GsiClient) listenMetaChange(killch chan bool) {
 		select {
 		case <-c.metaCh:
 			c.updateScanClients()
+		case <-killch:
+			return
+		}
+	}
+}
+
+func (c *GsiClient) logstats(killch chan bool) {
+
+	logtick := time.Duration(c.config["logtick"].Int()) * time.Millisecond
+	tick := time.NewTicker(logtick)
+
+	defer func() {
+		tick.Stop()
+	}()
+
+	for {
+		select {
+		case <-tick.C:
+			logging.Infof("num concurrent scans {%v}", atomic.LoadInt64(&c.numScans))
 		case <-killch:
 			return
 		}
