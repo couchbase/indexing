@@ -507,9 +507,24 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"queryport.client.settings.poolSize": ConfigValue{
+		5000,
+		"number of simultaneous active connections in a pool",
+		5000,
+		true,  // immutable
+		false, // case-insensitive
+	},
+	"queryport.client.settings.minPoolSizeWM": ConfigValue{
 		1000,
-		"number simultaneous active connections connections in a pool",
+		"Minimum number of simultaneous active connections in a pool." +
+			" Once reached, never gets reduced below this value.",
 		1000,
+		true,  // immutable
+		false, // case-insensitive
+	},
+	"queryport.client.settings.relConnBatchSize": ConfigValue{
+		100,
+		"Number of connection to be released in a single iteration",
+		100,
 		true,  // immutable
 		false, // case-insensitive
 	},

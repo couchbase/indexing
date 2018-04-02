@@ -37,6 +37,8 @@ type GsiScanClient struct {
 	cpTimeout          time.Duration
 	cpAvailWaitTimeout time.Duration
 	logPrefix          string
+	minPoolSizeWM      int32
+	relConnBatchSize   int32
 
 	serverVersion uint32
 }
@@ -53,10 +55,12 @@ func NewGsiScanClient(queryport string, config common.Config) (*GsiScanClient, e
 		cpTimeout:          time.Duration(config["connPoolTimeout"].Int()),
 		cpAvailWaitTimeout: t,
 		logPrefix:          fmt.Sprintf("[GsiScanClient:%q]", queryport),
+		minPoolSizeWM:      int32(config["settings.minPoolSizeWM"].Int()),
+		relConnBatchSize:   int32(config["settings.relConnBatchSize"].Int()),
 	}
 	c.pool = newConnectionPool(
 		queryport, c.poolSize, c.poolOverflow, c.maxPayload, c.cpTimeout,
-		c.cpAvailWaitTimeout)
+		c.cpAvailWaitTimeout, c.minPoolSizeWM, c.relConnBatchSize)
 	logging.Infof("%v started ...\n", c.logPrefix)
 
 	if version, err := c.Helo(); err == nil || err == io.EOF {
