@@ -426,3 +426,82 @@ func TestArrayExplodeJoin2(t *testing.T) {
 		t.Errorf("Unexpected mismatch")
 	}
 }
+
+func TestMB28956(t *testing.T) {
+	codec := NewCodec(16)
+
+	var valArr []int64 = []int64{360, 1234, 8223372036854775808, 1, 100000000, 360000000}
+
+	var number Integer
+	var cs []byte
+
+	for _, val := range valArr {
+		code = make([]byte, 0, 1000)
+		code = append(code, TypeNumber)
+
+		//incorrect format
+		intStr, err := number.ConvertToScientificNotation_TestOnly(val)
+		if err != nil {
+			t.Fatalf("Unexpected error %v", err)
+		}
+		cs = EncodeFloat([]byte(intStr), code[1:])
+		code = code[:len(code)+len(cs)]
+		code = append(code, Terminator)
+
+		//fixed format
+		fixed, err := codec.FixEncodedInt([]byte(code), make([]byte, 0, 1000))
+		if err != nil {
+			t.Fatalf("Unexpected error %v", err)
+		}
+
+		//correct format
+		code = code[:1]
+		intStr1, err := number.ConvertToScientificNotation(val)
+		if err != nil {
+			t.Fatalf("Unexpected error %v", err)
+		}
+
+		cs = EncodeFloat([]byte(intStr1), code[1:])
+
+		code = code[:len(code)+len(cs)]
+		code = append(code, Terminator)
+
+		if !bytes.Equal(code, fixed) {
+			t.Errorf("Expected fixed and encoded values to be the same")
+		}
+
+	}
+
+}
+
+func TestFixEncodedInt(t *testing.T) {
+	codec := NewCodec(16)
+	var object interface{}
+	bsArr := [][]byte{[]byte(`1.1`),
+		[]byte(`["hello", "test", true, [1,2,3], 1, 23.3, null, {"key" : 100}]`),
+		[]byte(`["hello", true, [1,2,3], 23.3, null, {"key" : ["apple","blue","cat"], "key2" : [1,null, "test", true, 3], "key3" : { "subdoc" : true, "subdoc1" : [true, false, "yellow"]}}]`),
+		[]byte(`[{"key" : ["abcde","bdab","cat"], "key2" : [1.2500,null, true, 310, "test"], "key3" : { "subdoc" : true, "subdoc1" : [true, false, "yellow", 342.60, 36000000]}}]`),
+		[]byte(`[4111686018427387900, 8223372036854775808, 822337203685477618]`),
+	}
+
+	for _, bs := range bsArr {
+		err := json.Unmarshal(bs, &object)
+		if err != nil {
+			t.Fatalf("Unexpected error %v", err)
+		}
+		val := n1ql.NewValue(object)
+
+		n1qlBytes, err1 := codec.EncodeN1QLValue(val, make([]byte, 0, 10000))
+		fixedBytes, err2 := codec.FixEncodedInt(n1qlBytes, make([]byte, 0, 10000))
+
+		if err1 != nil || err2 != nil {
+			t.Fatalf("Unexpected errors %v, %v", err1, err2)
+		}
+
+		if !bytes.Equal(fixedBytes, n1qlBytes) {
+			t.Errorf("Expected json and n1ql encoded values to be the same")
+			t.Logf("n1qlBytes %v \t %v \n", n1qlBytes, string(n1qlBytes))
+			t.Logf("fixedByte %v \t %v \n", fixedBytes, string(fixedBytes))
+		}
+	}
+}
