@@ -629,10 +629,17 @@ type Integer struct{}
 
 // Formats an int64 to scientic notation. Example:
 // 75284 converts to 7.5284e+04
-// 1200000 converts to 1.200000e+06
+// 1200000 converts to 1.2e+06
 // -612988654 converts to -6.12988654e+08
 // This is used in encode path
 func (i *Integer) ConvertToScientificNotation(val int64) (string, error) {
+
+	// For integers that can be represented precisely with
+	// float64, return using FormatFloat
+	if val < 9007199254740991 && val > -9007199254740991 {
+		return strconv.FormatFloat(float64(val), 'e', -1, 64), nil
+	}
+
 	intStr := strconv.FormatInt(val, 10)
 	if len(intStr) == 0 {
 		return "", nil
@@ -647,7 +654,7 @@ func (i *Integer) ConvertToScientificNotation(val int64) (string, error) {
 		if len(rem) == 0 { // The integer is a single digit number
 			return first + ".e+00"
 		} else {
-			return first + "." + rem + "e+" + strconv.Itoa(len(rem))
+			return first + "." + strings.TrimRight(rem, "0") + "e+" + strconv.Itoa(len(rem))
 		}
 	}
 
@@ -691,8 +698,10 @@ func (i *Integer) TryConvertFromScientificNotation(val []byte) (ret []byte, isIn
 		return val, false // error condition, return input format
 	}
 
-	if exp > 0 && (int(exp) == len(mantissa)) {
-		// It is an integer
+	if exp > 0 && (int(exp) >= len(mantissa)) { // It is an integer
+		if int(exp) > len(mantissa) {
+			mantissa = mantissa + strings.Repeat("0", int(exp)-len(mantissa))
+		}
 		if characteristic == "0" {
 			return []byte(sign + mantissa), true
 		} else {
