@@ -40,6 +40,11 @@ type metadataClient struct {
 	stNotifyCh     chan map[common.IndexInstId]map[common.PartitionId]common.Statistics
 
 	settings *ClientSettings
+
+	refreshLock    sync.Mutex
+	refreshCond    *sync.Cond
+	refreshCnt     int
+	refreshWaitCnt int
 }
 
 // sherlock topology management, multi-node & single-partition.
@@ -71,6 +76,9 @@ func newMetaBridgeClient(
 		stNotifyCh: make(chan map[common.IndexInstId]map[common.PartitionId]common.Statistics, 1),
 		settings:   settings,
 	}
+	b.refreshCond = sync.NewCond(&b.refreshLock)
+	b.refreshCnt = 0
+
 	b.servicesNotifierRetryTm = config["servicesNotifierRetryTm"].Int()
 	b.logtick = time.Duration(config["logtick"].Int()) * time.Millisecond
 	b.randomWeight = config["load.randomWeight"].Float64()
@@ -112,7 +120,27 @@ func (b *metadataClient) Refresh() ([]*mclient.IndexMetadata, uint64, uint64, er
 	currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
 
 	if currmeta.version < b.mdClient.GetMetadataVersion() {
-		b.safeupdate(nil, false)
+		b.refreshLock.Lock()
+
+		if b.refreshCnt > 0 {
+			b.refreshWaitCnt++
+			logging.Debugf("Refresh(): wait metadata update.  Refresh Count %v Wait Count %v", b.refreshCnt, b.refreshWaitCnt)
+			b.refreshCond.Wait()
+			b.refreshWaitCnt--
+			b.refreshLock.Unlock()
+		} else {
+			logging.Debugf("Refresh(): refresh metadata. Refresh Count %v Wait Count %v", b.refreshCnt, b.refreshWaitCnt)
+			b.refreshCnt++
+			b.refreshLock.Unlock()
+
+			b.safeupdate(nil, false)
+
+			b.refreshLock.Lock()
+			b.refreshCnt--
+			b.refreshCond.Broadcast()
+			b.refreshLock.Unlock()
+		}
+
 		currmeta = (*indexTopology)(atomic.LoadPointer(&b.indexers))
 	}
 
