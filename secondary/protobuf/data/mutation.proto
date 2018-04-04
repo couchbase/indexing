@@ -11,6 +11,11 @@ enum Command {
     StreamEnd      = 7; // control command
 }
 
+enum ProjectorVersion {
+    V5_1_0 = 1;
+    V5_1_1 = 2;
+}
+
 // A single mutation message that will framed and transported by router.
 // For efficiency mutations from mutiple vbuckets (bounded to same connection)
 // can be packed into the same message.
@@ -35,6 +40,7 @@ message VbKeyVersions {
     required uint64      vbuuid     = 3; // unique id to detect branch history
     required string      bucketname = 4;
     repeated KeyVersions kvs        = 5; // list of key-versions
+    optional ProjectorVersion projVer = 6; // projector version
 }
 
 // mutations are broadly divided into data and control messages. The division

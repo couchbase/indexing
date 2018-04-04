@@ -13,7 +13,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/couchbase/indexing/secondary/common"
+	c "github.com/couchbase/indexing/secondary/common"
 )
 
 //MutationMeta represents meta information for a KV Mutation
@@ -22,6 +22,7 @@ type MutationMeta struct {
 	vbucket Vbucket //vbucket
 	vbuuid  Vbuuid  //uuid for vbucket
 	seqno   Seqno   //vbucket sequence number for this mutation
+	projVer c.ProjectorVersion
 }
 
 var mutMetaPool = sync.Pool{New: newMutationMeta}
@@ -49,6 +50,7 @@ func (m *MutationMeta) Clone() *MutationMeta {
 	meta.vbucket = m.vbucket
 	meta.vbuuid = m.vbuuid
 	meta.seqno = m.seqno
+	meta.projVer = m.projVer
 	return meta
 }
 
@@ -123,11 +125,11 @@ func (mk *MutationKeys) Free() {
 }
 
 type Mutation struct {
-	uuid     common.IndexInstId // index-id
-	command  byte               // command the index
-	key      []byte             // key-version for index
-	oldkey   []byte             // previous key-version, if available
-	partnkey []byte             // partition key
+	uuid     c.IndexInstId // index-id
+	command  byte          // command the index
+	key      []byte        // key-version for index
+	oldkey   []byte        // previous key-version, if available
+	partnkey []byte        // partition key
 }
 
 var mutPool = sync.Pool{New: newMutation}
