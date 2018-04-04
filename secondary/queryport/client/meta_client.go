@@ -1441,7 +1441,9 @@ func (b *metadataClient) updateTopology(
 	currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
 
 	// Refresh indexer version
-	b.mdClient.RefreshIndexerVersion()
+	if force {
+		b.mdClient.RefreshIndexerVersion()
+	}
 
 	mindexes, version := b.mdClient.ListIndex()
 	// detect change in indexer cluster or indexes.
