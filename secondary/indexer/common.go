@@ -175,3 +175,13 @@ type MetaUpdateFields struct {
 	partitions bool
 	version    bool
 }
+
+type EncodeCompatMode int
+
+const (
+	CHECK_VERSION EncodeCompatMode = iota
+	FORCE_ENABLE
+	FORCE_DISABLE
+)
+
+var gEncodeCompatMode EncodeCompatMode
