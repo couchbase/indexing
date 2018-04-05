@@ -430,7 +430,8 @@ func TestArrayExplodeJoin2(t *testing.T) {
 func TestMB28956(t *testing.T) {
 	codec := NewCodec(16)
 
-	var valArr []int64 = []int64{360, 1234, 8223372036854775808, 1, 100000000, 360000000}
+	var valArr []int64 = []int64{360, 1234, 8223372036854775808, 1, 100000000, 360000000,
+		-360, -1234, -8223372036854775808, -1, -100000000, -360000000}
 
 	var number Integer
 	var cs []byte
@@ -479,9 +480,9 @@ func TestFixEncodedInt(t *testing.T) {
 	var object interface{}
 	bsArr := [][]byte{[]byte(`1.1`),
 		[]byte(`["hello", "test", true, [1,2,3], 1, 23.3, null, {"key" : 100}]`),
-		[]byte(`["hello", true, [1,2,3], 23.3, null, {"key" : ["apple","blue","cat"], "key2" : [1,null, "test", true, 3], "key3" : { "subdoc" : true, "subdoc1" : [true, false, "yellow"]}}]`),
-		[]byte(`[{"key" : ["abcde","bdab","cat"], "key2" : [1.2500,null, true, 310, "test"], "key3" : { "subdoc" : true, "subdoc1" : [true, false, "yellow", 342.60, 36000000]}}]`),
-		[]byte(`[4111686018427387900, 8223372036854775808, 822337203685477618]`),
+		[]byte(`["hello", true, [1,2,3], -23.3, null, {"key" : ["apple","blue","cat"], "key2" : [1,null, "test", true, -0.099836], "key3" : { "subdoc" : true, "subdoc1" : [true, false, "yellow"]}}]`),
+		[]byte(`[{"key" : ["abcde","bdab","cat"], "key2" : [-1.2500,null, true, 310, "test", 0.00034], "key3" : { "subdoc" : true, "subdoc1" : [true, false, "yellow", 342.60, 36000000]}}]`),
+		[]byte(`[4111686018427387900, -8223372036854775808, 822337203685477618]`),
 	}
 
 	for _, bs := range bsArr {
