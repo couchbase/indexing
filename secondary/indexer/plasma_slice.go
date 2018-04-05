@@ -1350,6 +1350,8 @@ func (mdb *plasmaSlice) Statistics() (StorageStatistics, error) {
 
 	mdb.idxStats.residentPercent.Set(common.ComputePercent(numRecsMem, numRecsDisk))
 	mdb.idxStats.cacheHitPercent.Set(common.ComputePercent(cacheHits, cacheMiss))
+	mdb.idxStats.cacheHits.Set(cacheHits)
+	mdb.idxStats.cacheMisses.Set(cacheMiss)
 	return sts, nil
 }
 
