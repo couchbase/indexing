@@ -371,6 +371,12 @@ func initGlobalSettings(oldCfg, newCfg common.Config) {
 
 	setLogger(newCfg)
 	useMutationSyncPool = newCfg["indexer.useMutationSyncPool"].Bool()
+
+	newEncodeCompatMode := EncodeCompatMode(newCfg["indexer.encoding.encode_compat_mode"].Int())
+	if gEncodeCompatMode != newEncodeCompatMode {
+		gEncodeCompatMode = newEncodeCompatMode
+		logging.Infof("Set EncodeCompatMode %v", gEncodeCompatMode)
+	}
 }
 
 func initStorageSettings(newCfg common.Config) {

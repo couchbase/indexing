@@ -47,6 +47,9 @@ func init() {
 	} else {
 		encBufPool = common.NewByteBufferPool(maxIndexEntrySize + ENCODE_BUF_SAFE_PAD)
 	}
+
+	//0 - based on projector version, 1 - force enable, 2 - force disable
+	gEncodeCompatMode = EncodeCompatMode(common.SystemConfig["indexer.encoding.encode_compat_mode"].Int())
 }
 
 // Generic index entry abstraction (primary or secondary)
@@ -115,12 +118,13 @@ func (e *primaryIndexEntry) String() string {
 // The MSB of right byte of docid length indicates whether count is encoded or not
 type secondaryIndexEntry []byte
 
-func NewSecondaryIndexEntry(key []byte, docid []byte, isArray bool, count int, desc []bool, buf []byte) (secondaryIndexEntry, error) {
-	return NewSecondaryIndexEntry2(key, docid, isArray, count, desc, buf, true)
+func NewSecondaryIndexEntry(key []byte, docid []byte, isArray bool, count int,
+	desc []bool, buf []byte, meta *MutationMeta) (secondaryIndexEntry, error) {
+	return NewSecondaryIndexEntry2(key, docid, isArray, count, desc, buf, true, meta)
 }
 
 func NewSecondaryIndexEntry2(key []byte, docid []byte, isArray bool,
-	count int, desc []bool, buf []byte, validateSize bool) (secondaryIndexEntry, error) {
+	count int, desc []bool, buf []byte, validateSize bool, meta *MutationMeta) (secondaryIndexEntry, error) {
 	var err error
 	var offset int
 
@@ -147,7 +151,20 @@ func NewSecondaryIndexEntry2(key []byte, docid []byte, isArray bool,
 		} else if !allowLargeKeys && validateSize && len(key) > maxSecKeyBufferLen {
 			return nil, errors.New(fmt.Sprintf("Encoded secondary key is too long (> %d)", maxSecKeyBufferLen))
 		}
-		buf = append(buf, key...)
+
+		fixed := false
+		if meta != nil && gEncodeCompatMode != FORCE_DISABLE {
+			if (gEncodeCompatMode == FORCE_ENABLE) || (gEncodeCompatMode == CHECK_VERSION && meta.projVer < common.ProjVer_5_1_1) {
+				fixed = true
+				if buf, err = jsonEncoder.FixEncodedInt(key, buf); err != nil {
+					return nil, err
+				}
+			}
+		}
+
+		if !fixed {
+			buf = append(buf, key...)
+		}
 	}
 
 	if desc != nil {
@@ -464,13 +481,13 @@ func IndexEntrySize(key []byte, docid []byte) int {
 }
 
 // Return encoded key with docid without size check
-func GetIndexEntryBytes3(key []byte, docid []byte,
-	isPrimary bool, isArray bool, count int, desc []bool, buf []byte) (bs []byte, err error) {
+func GetIndexEntryBytes3(key []byte, docid []byte, isPrimary bool, isArray bool,
+	count int, desc []bool, buf []byte, meta *MutationMeta) (bs []byte, err error) {
 
 	if isPrimary {
 		bs, err = NewPrimaryIndexEntry(docid)
 	} else {
-		bs, err = NewSecondaryIndexEntry2(key, docid, isArray, count, desc, buf, false)
+		bs, err = NewSecondaryIndexEntry2(key, docid, isArray, count, desc, buf, false, meta)
 		if err == ErrSecKeyNil {
 			return nil, nil
 		}
@@ -479,13 +496,13 @@ func GetIndexEntryBytes3(key []byte, docid []byte,
 	return bs, err
 }
 
-func GetIndexEntryBytes2(key []byte, docid []byte,
-	isPrimary bool, isArray bool, count int, desc []bool, buf []byte) (bs []byte, err error) {
+func GetIndexEntryBytes2(key []byte, docid []byte, isPrimary bool, isArray bool,
+	count int, desc []bool, buf []byte, meta *MutationMeta) (bs []byte, err error) {
 
 	if isPrimary {
 		bs, err = NewPrimaryIndexEntry(docid)
 	} else {
-		bs, err = NewSecondaryIndexEntry(key, docid, isArray, count, desc, buf)
+		bs, err = NewSecondaryIndexEntry(key, docid, isArray, count, desc, buf, meta)
 		if err == ErrSecKeyNil {
 			return nil, nil
 		}
@@ -494,8 +511,8 @@ func GetIndexEntryBytes2(key []byte, docid []byte,
 	return bs, err
 }
 
-func GetIndexEntryBytes(key []byte, docid []byte,
-	isPrimary bool, isArray bool, count int, desc []bool) (entry []byte, err error) {
+func GetIndexEntryBytes(key []byte, docid []byte, isPrimary bool, isArray bool,
+	count int, desc []bool, meta *MutationMeta) (entry []byte, err error) {
 
 	var bufPool *common.BytesBufPool
 	var bufPtr *[]byte
@@ -522,6 +539,6 @@ func GetIndexEntryBytes(key []byte, docid []byte,
 		}()
 	}
 
-	entry, err = GetIndexEntryBytes2(key, docid, isPrimary, isArray, count, desc, buf)
+	entry, err = GetIndexEntryBytes2(key, docid, isPrimary, isArray, count, desc, buf, meta)
 	return append([]byte(nil), entry...), err
 }

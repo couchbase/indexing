@@ -7,7 +7,7 @@ import (
 
 func newSKEntry(key, docid []byte) (secondaryIndexEntry, error) {
 	buf := make([]byte, 0, 4096*3)
-	return NewSecondaryIndexEntry(key, docid, false, 1, nil, buf)
+	return NewSecondaryIndexEntry(key, docid, false, 1, nil, buf, nil)
 }
 
 func TestPrimaryIndexEntry(t *testing.T) {
@@ -177,7 +177,7 @@ func TestLongDocIdEntry(t *testing.T) {
 	docid := make([]byte, 258, 300)
 	buf := make([]byte, 0, 4096)
 
-	e, err := NewSecondaryIndexEntry(key, docid, false, 2, nil, buf)
+	e, err := NewSecondaryIndexEntry(key, docid, false, 2, nil, buf, nil)
 	if err != nil {
 		t.Errorf("Got error %v", err)
 		return

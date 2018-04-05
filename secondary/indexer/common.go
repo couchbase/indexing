@@ -172,3 +172,13 @@ type MetaUpdateFields struct {
 	buildTs bool
 	rstate  bool
 }
+
+type EncodeCompatMode int
+
+const (
+	CHECK_VERSION EncodeCompatMode = iota
+	FORCE_ENABLE
+	FORCE_DISABLE
+)
+
+var gEncodeCompatMode EncodeCompatMode

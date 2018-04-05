@@ -1760,6 +1760,14 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.encoding.encode_compat_mode": ConfigValue{
+		0,
+		"enable indexer to re-encode keys from projector, to avoid MB-28956" +
+			"0 - enable based on projector version, 1 - force enable, 2 - force disable",
+		0,
+		false, // mutable
+		false, // case-insensitive
+	},
 }
 
 // NewConfig from another

@@ -274,7 +274,7 @@ func (fdb *fdbSlice) DecrRef() {
 //If forestdb has encountered any fatal error condition,
 //it will be returned as error.
 func (fdb *fdbSlice) Insert(rawKey []byte, docid []byte, meta *MutationMeta) error {
-	key, err := GetIndexEntryBytes(rawKey, docid, fdb.idxDefn.IsPrimary, fdb.idxDefn.IsArrayIndex, 1, fdb.idxDefn.Desc)
+	key, err := GetIndexEntryBytes(rawKey, docid, fdb.idxDefn.IsPrimary, fdb.idxDefn.IsArrayIndex, 1, fdb.idxDefn.Desc, meta)
 	if err != nil {
 		return err
 	}
@@ -573,7 +573,7 @@ func (fdb *fdbSlice) insertSecArrayIndex(key []byte, rawKey []byte, docid []byte
 			}
 			// TODO: Ensure sufficient buffer size and use method that skips size check for bug MB-22183
 			if keyToBeDeleted, err = GetIndexEntryBytes3(item, docid, false, false,
-				oldKeyCount[i], fdb.idxDefn.Desc, tmpBuf); err != nil {
+				oldKeyCount[i], fdb.idxDefn.Desc, tmpBuf, nil); err != nil {
 
 				encBufPool.Put(tmpBufPtr)
 				// TODO: Handle skipped item here
@@ -593,7 +593,7 @@ func (fdb *fdbSlice) insertSecArrayIndex(key []byte, rawKey []byte, docid []byte
 			tmpBufPtr := encBufPool.Get()
 			defer encBufPool.Put(tmpBufPtr)
 			if keyToBeAdded, err = GetIndexEntryBytes2(item, docid, false, false,
-				newKeyCount[i], fdb.idxDefn.Desc, (*tmpBufPtr)[:0]); err != nil {
+				newKeyCount[i], fdb.idxDefn.Desc, (*tmpBufPtr)[:0], nil); err != nil {
 
 				encBufPool.Put(tmpBufPtr)
 				// TODO: Handle skipped item here
@@ -821,7 +821,7 @@ func (fdb *fdbSlice) deleteSecArrayIndex(docid []byte, workerId int) (nmut int) 
 		}
 		// TODO: Use method that skips size check for bug MB-22183
 		if keyToBeDeleted, err = GetIndexEntryBytes3(item, docid, false, false, keyCount[i],
-			fdb.idxDefn.Desc, tmpBuf); err != nil {
+			fdb.idxDefn.Desc, tmpBuf, nil); err != nil {
 			encBufPool.Put(tmpBufPtr)
 			fdb.checkFatalDbError(err)
 			logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error from GetIndexEntryBytes2 for entry to be deleted from main index %v", fdb.id, fdb.idxInstId, err)
