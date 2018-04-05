@@ -1040,8 +1040,19 @@ func makePartitionIds(ids []uint64) []common.PartitionId {
 	}
 
 	result := make([]common.PartitionId, len(ids))
-	for i, id := range ids {
-		result[i] = common.PartitionId(id)
+	for i := 0; i < len(ids); i++ {
+		min := i
+		for j := i + 1; j < len(ids); j++ {
+			if ids[min] > ids[j] {
+				min = j
+			}
+		}
+
+		tmp := ids[i]
+		ids[i] = ids[min]
+		ids[min] = tmp
+
+		result[i] = common.PartitionId(ids[i])
 	}
 
 	return result
