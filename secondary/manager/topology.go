@@ -450,7 +450,7 @@ func (t *IndexTopology) AddPartitionsForIndexInst(defnId common.IndexDefnId, ins
 	return false
 }
 
-func (t *IndexTopology) SplitPartitionsForIndexInst(defnId common.IndexDefnId, instId common.IndexInstId, proxyInstId common.IndexInstId,
+func (t *IndexTopology) SplitPartitionsForIndexInst(defnId common.IndexDefnId, instId common.IndexInstId, tombstoneInstId common.IndexInstId,
 	partitions []common.PartitionId) bool {
 
 	for i, _ := range t.Definitions {
@@ -458,13 +458,13 @@ func (t *IndexTopology) SplitPartitionsForIndexInst(defnId common.IndexDefnId, i
 			for j, _ := range t.Definitions[i].Instances {
 				if t.Definitions[i].Instances[j].InstId == uint64(instId) {
 
-					var proxyInst IndexInstDistribution
-					proxyInst = t.Definitions[i].Instances[j]
-					proxyInst.InstId = uint64(proxyInstId)
-					proxyInst.RealInstId = uint64(instId)
-					proxyInst.State = uint32(common.INDEX_STATE_DELETED)
-					proxyInst.RState = uint32(common.REBAL_PENDING_DELETE)
-					proxyInst.Partitions = nil
+					var tombstone IndexInstDistribution
+					tombstone = t.Definitions[i].Instances[j]
+					tombstone.InstId = uint64(tombstoneInstId)
+					tombstone.RealInstId = uint64(instId)
+					tombstone.State = uint32(common.INDEX_STATE_DELETED)
+					tombstone.RState = uint32(common.REBAL_PENDING_DELETE)
+					tombstone.Partitions = nil
 
 					for _, partnId := range partitions {
 						for k, partition := range t.Definitions[i].Instances[j].Partitions {
@@ -478,8 +478,8 @@ func (t *IndexTopology) SplitPartitionsForIndexInst(defnId common.IndexDefnId, i
 										append(t.Definitions[i].Instances[j].Partitions[0:k], t.Definitions[i].Instances[j].Partitions[k+1:]...)
 								}
 
-								// add partition to the proxy instance
-								proxyInst.Partitions = append(proxyInst.Partitions, partition)
+								// add partition to the tombstone
+								tombstone.Partitions = append(tombstone.Partitions, partition)
 							}
 						}
 					}
@@ -488,9 +488,9 @@ func (t *IndexTopology) SplitPartitionsForIndexInst(defnId common.IndexDefnId, i
 						t.Definitions[i].Instances[j].Partitions = nil
 					}
 
-					change := len(proxyInst.Partitions) != 0
+					change := len(tombstone.Partitions) != 0
 					if change {
-						t.Definitions[i].Instances = append(t.Definitions[i].Instances, proxyInst)
+						t.Definitions[i].Instances = append(t.Definitions[i].Instances, tombstone)
 					}
 					return change
 				}
@@ -501,7 +501,7 @@ func (t *IndexTopology) SplitPartitionsForIndexInst(defnId common.IndexDefnId, i
 	return false
 }
 
-func (t *IndexTopology) RemovePartitionsFromPendingDeleteIndexInst(defnId common.IndexDefnId, instId common.IndexInstId, partitions []uint64) bool {
+func (t *IndexTopology) RemovePartitionsFromTombstone(defnId common.IndexDefnId, instId common.IndexInstId, partitions []uint64) bool {
 
 	change := false
 	for i, _ := range t.Definitions {

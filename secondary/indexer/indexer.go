@@ -2029,54 +2029,57 @@ func (idx *indexer) prunePartition(bucket string, instId common.IndexInstId, par
 			}
 		}
 
-		idx.indexInstMap[instId] = inst
+		if len(pruned) != 0 {
 
-		// Prune partitions in storage manager snapshot.  This must be done before metadata is updated.
-		// This is to make sure that once the metadata is published to client, scan will not fail since
-		// client may see the new partition list from metadata.
-		idx.storageMgrCmdCh <- &MsgIndexPruneSnapshot{
-			instId:     inst.InstId,
-			partitions: partitions,
-		}
-		if resp := <-idx.storageMgrCmdCh; resp.GetMsgType() != MSG_SUCCESS {
-			respErr := resp.(*MsgError).GetError()
-			logging.Errorf("PrunePartition.  Fail to prune index snapshot for index %v. Cause: %v", inst.InstId, respErr.cause)
-			common.CrashOnError(respErr.cause)
-		}
+			idx.indexInstMap[instId] = inst
 
-		// Update index maps with this index
-		msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
-		msgUpdateIndexPartnMap := &MsgUpdatePartnMap{indexPartnMap: idx.indexPartnMap}
-		if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, msgUpdateIndexPartnMap); err != nil {
-			common.CrashOnError(err)
-		}
-
-		// Soft delete the slice
-		for _, partnInst := range pruned {
-			//close all the slices
-			for _, slice := range partnInst.Sc.GetAllSlices() {
-				go func(partnInst PartitionInst, slice Slice) {
-					slice.Close()
-					//wipe the physical files
-					slice.Destroy()
-					logging.Infof("Prune Partiiton: destroy slice inst %v partn %v path %v",
-						slice.IndexInstId(), partnInst.Defn.GetPartitionId(), slice.Path())
-				}(partnInst, slice)
+			// Prune partitions in storage manager snapshot.  This must be done before metadata is updated.
+			// This is to make sure that once the metadata is published to client, scan will not fail since
+			// client may see the new partition list from metadata.
+			idx.storageMgrCmdCh <- &MsgIndexPruneSnapshot{
+				instId:     inst.InstId,
+				partitions: partitions,
 			}
-		}
+			if resp := <-idx.storageMgrCmdCh; resp.GetMsgType() != MSG_SUCCESS {
+				respErr := resp.(*MsgError).GetError()
+				logging.Errorf("PrunePartition.  Fail to prune index snapshot for index %v. Cause: %v", inst.InstId, respErr.cause)
+				common.CrashOnError(respErr.cause)
+			}
 
-		if idx.lastStreamUpdate == 0 {
-			idx.lastStreamUpdate = time.Now().UnixNano()
-		}
+			// Update index maps with this index
+			msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
+			msgUpdateIndexPartnMap := &MsgUpdatePartnMap{indexPartnMap: idx.indexPartnMap}
+			if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, msgUpdateIndexPartnMap); err != nil {
+				common.CrashOnError(err)
+			}
 
-		// If we are on the MAINT stream, then remove the old partitions from projector.
-		// For a single invocation of prunePartitions(), an inst can be pruned multiple times.
-		// This map will store the last copy of the inst after all the pruning.  The indexer
-		// will then send the final copy to the projector.    Note that the prunePartitions()
-		// can be invoked many times, and each invocation can be pruning the same instance.
-		// In this case, indexer will make multiple calls to the projector.
-		if inst.Stream == common.MAINT_STREAM {
-			prunedInst[inst.InstId] = inst
+			// Soft delete the slice
+			for _, partnInst := range pruned {
+				//close all the slices
+				for _, slice := range partnInst.Sc.GetAllSlices() {
+					go func(partnInst PartitionInst, slice Slice) {
+						slice.Close()
+						//wipe the physical files
+						slice.Destroy()
+						logging.Infof("Prune Partiiton: destroy slice inst %v partn %v path %v",
+							slice.IndexInstId(), partnInst.Defn.GetPartitionId(), slice.Path())
+					}(partnInst, slice)
+				}
+			}
+
+			if idx.lastStreamUpdate == 0 {
+				idx.lastStreamUpdate = time.Now().UnixNano()
+			}
+
+			// If we are on the MAINT stream, then remove the old partitions from projector.
+			// For a single invocation of prunePartitions(), an inst can be pruned multiple times.
+			// This map will store the last copy of the inst after all the pruning.  The indexer
+			// will then send the final copy to the projector.    Note that the prunePartitions()
+			// can be invoked many times, and each invocation can be pruning the same instance.
+			// In this case, indexer will make multiple calls to the projector.
+			if inst.Stream == common.MAINT_STREAM {
+				prunedInst[inst.InstId] = inst
+			}
 		}
 
 	} else {

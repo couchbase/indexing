@@ -1139,7 +1139,7 @@ func (m *MetadataRepo) addInstanceToTopology(defn *common.IndexDefn, instId comm
 		for i, p := range partitions {
 			partns[i] = uint64(p)
 		}
-		topology.RemovePartitionsFromPendingDeleteIndexInst(defn.DefnId, instId, partns)
+		topology.RemovePartitionsFromTombstone(defn.DefnId, instId, partns)
 
 		topology.AddIndexInstance(defn.Bucket, defn.Name, uint64(defn.DefnId),
 			uint64(instId), uint32(common.INDEX_STATE_CREATED), string(indexerId),
@@ -1225,7 +1225,7 @@ func (m *MetadataRepo) mergePartitionFromTopology(indexerId string, bucket strin
 
 	// Delete the proxy during merge.
 	topology.RemoveIndexInstanceById(id, srcInstId)
-	topology.RemovePartitionsFromPendingDeleteIndexInst(id, tgtInstId, tgtPartitions)
+	topology.RemovePartitionsFromTombstone(id, tgtInstId, tgtPartitions)
 
 	topology.AddPartitionsForIndexInst(id, tgtInstId, indexerId, tgtPartitions, tgtVersions)
 	topology.UpdateVersionForIndexInst(id, tgtInstId, tgtInstVersion)
@@ -1240,7 +1240,7 @@ func (m *MetadataRepo) mergePartitionFromTopology(indexerId string, bucket strin
 //
 // Split partitions from Topology
 //
-func (m *MetadataRepo) splitPartitionFromTopology(bucket string, id common.IndexDefnId, instId common.IndexInstId, proxyInstId common.IndexInstId,
+func (m *MetadataRepo) splitPartitionFromTopology(bucket string, id common.IndexDefnId, instId common.IndexInstId, tombstoneInstId common.IndexInstId,
 	partitions []common.PartitionId) error {
 
 	// get existing topology
@@ -1252,7 +1252,7 @@ func (m *MetadataRepo) splitPartitionFromTopology(bucket string, id common.Index
 		return nil
 	}
 
-	topology.SplitPartitionsForIndexInst(id, instId, proxyInstId, partitions)
+	topology.SplitPartitionsForIndexInst(id, instId, tombstoneInstId, partitions)
 
 	if err = m.SetTopologyByBucket(topology.Bucket, topology); err != nil {
 		return err
