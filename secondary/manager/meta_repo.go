@@ -1135,6 +1135,12 @@ func (m *MetadataRepo) addInstanceToTopology(defn *common.IndexDefn, instId comm
 			uint64(defn.InstVersion), rState, uint64(replicaId), partitions, versions,
 			numPartitions, scheduled, string(defn.Using), uint64(realInstId))
 	} else {
+		partns := make([]uint64, len(partitions))
+		for i, p := range partitions {
+			partns[i] = uint64(p)
+		}
+		topology.RemovePartitionsFromPendingDeleteIndexInst(defn.DefnId, instId, partns)
+
 		topology.AddIndexInstance(defn.Bucket, defn.Name, uint64(defn.DefnId),
 			uint64(instId), uint32(common.INDEX_STATE_CREATED), string(indexerId),
 			uint64(defn.InstVersion), rState, uint64(replicaId), partitions, versions,
