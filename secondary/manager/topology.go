@@ -501,6 +501,46 @@ func (t *IndexTopology) SplitPartitionsForIndexInst(defnId common.IndexDefnId, i
 	return false
 }
 
+func (t *IndexTopology) RemovePartitionsFromPendingDeleteIndexInst(defnId common.IndexDefnId, instId common.IndexInstId, partitions []uint64) bool {
+
+	change := false
+	for i, _ := range t.Definitions {
+		if t.Definitions[i].DefnId == uint64(defnId) {
+			for j, _ := range t.Definitions[i].Instances {
+
+				if t.Definitions[i].Instances[j].RealInstId == uint64(instId) &&
+					t.Definitions[i].Instances[j].State == uint32(common.INDEX_STATE_DELETED) &&
+					t.Definitions[i].Instances[j].RState == uint32(common.REBAL_PENDING_DELETE) {
+
+					for _, partnId := range partitions {
+						for k, partition := range t.Definitions[i].Instances[j].Partitions {
+							if partnId == partition.PartId {
+								change = true
+
+								// remove partition from the existing instance
+								if k == len(t.Definitions[i].Instances[j].Partitions)-1 {
+									t.Definitions[i].Instances[j].Partitions = t.Definitions[i].Instances[j].Partitions[:k]
+								} else {
+									t.Definitions[i].Instances[j].Partitions =
+										append(t.Definitions[i].Instances[j].Partitions[0:k], t.Definitions[i].Instances[j].Partitions[k+1:]...)
+								}
+							}
+						}
+					}
+
+					if len(t.Definitions[i].Instances[j].Partitions) == 0 {
+						t.Definitions[i].Instances[j].Partitions = nil
+					}
+
+					return change
+				}
+			}
+		}
+	}
+
+	return false
+}
+
 func (t *IndexTopology) DeleteAllPartitionsForIndexInst(defnId common.IndexDefnId, instId common.IndexInstId) bool {
 
 	for i, _ := range t.Definitions {
