@@ -32,6 +32,8 @@ type PartitionContainer interface {
 	GetAllPartitionIds() ([]PartitionId, []int)
 	GetPartitionById(PartitionId) PartitionDefn
 	GetNumPartitions() int
+
+	Clone() PartitionContainer
 }
 
 //PartitionDefn is a generic interface which defines

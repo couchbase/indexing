@@ -52,7 +52,8 @@ func NewKeyPartitionContainer(numVbuckets int, numPartitions int, scheme Partiti
 		numPartitions = 1
 	}
 
-	kpc := &KeyPartitionContainer{PartitionMap: make(map[PartitionId]KeyPartitionDefn),
+	kpc := &KeyPartitionContainer{
+		PartitionMap:  make(map[PartitionId]KeyPartitionDefn),
 		NumVbuckets:   numVbuckets,
 		NumPartitions: numPartitions,
 		PartitionSize: numVbuckets / numPartitions,
@@ -147,6 +148,16 @@ func (pc *KeyPartitionContainer) GetPartitionById(id PartitionId) PartitionDefn 
 //GetNumPartitions returns the number of partitions in this container
 func (pc *KeyPartitionContainer) GetNumPartitions() int {
 	return pc.NumPartitions
+}
+
+func (pc *KeyPartitionContainer) Clone() PartitionContainer {
+	clone := NewKeyPartitionContainer(pc.NumVbuckets, pc.NumPartitions, pc.scheme, pc.hash)
+
+	for id, partition := range pc.PartitionMap {
+		clone.AddPartition(id, partition)
+	}
+
+	return clone
 }
 
 func HashKeyPartition(key []byte, numPartitions int, scheme HashScheme) PartitionId {

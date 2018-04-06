@@ -951,16 +951,21 @@ func (s *scanCoordinator) findIndexInstance(
 
 	hasIndex := false
 	isPartition := false
+
 	ctx := make([]IndexReaderContext, len(partitionIds))
 	missing := make(map[common.IndexInstId][]common.PartitionId)
-	for _, inst := range s.indexInstMap {
+
+	indexInstMap := s.indexInstMap
+	indexPartnMap := s.indexPartnMap
+
+	for _, inst := range indexInstMap {
 		if inst.State != common.INDEX_STATE_ACTIVE || (inst.RState != common.REBAL_ACTIVE && inst.RState != common.REBAL_PENDING) {
 			continue
 		}
 		if inst.Defn.DefnId == common.IndexDefnId(defnID) {
 			hasIndex = true
 			isPartition = common.IsPartitioned(inst.Defn.PartitionScheme)
-			if pmap, ok := s.indexPartnMap[inst.InstId]; ok {
+			if pmap, ok := indexPartnMap[inst.InstId]; ok {
 				found := true
 				for i, partnId := range partitionIds {
 					if partition, ok := pmap[partnId]; ok {

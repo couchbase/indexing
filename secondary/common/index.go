@@ -429,7 +429,9 @@ func CopyIndexInstMap(inMap IndexInstMap) IndexInstMap {
 
 	outMap := make(IndexInstMap)
 	for k, v := range inMap {
-		outMap[k] = v
+		vv := v
+		vv.Pc = v.Pc.Clone()
+		outMap[k] = vv
 	}
 	return outMap
 }
