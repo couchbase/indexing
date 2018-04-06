@@ -72,6 +72,39 @@ func (x *Command) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+type ProjectorVersion int32
+
+const (
+	ProjectorVersion_V5_1_0 ProjectorVersion = 1
+	ProjectorVersion_V5_1_1 ProjectorVersion = 2
+)
+
+var ProjectorVersion_name = map[int32]string{
+	1: "V5_1_0",
+	2: "V5_1_1",
+}
+var ProjectorVersion_value = map[string]int32{
+	"V5_1_0": 1,
+	"V5_1_1": 2,
+}
+
+func (x ProjectorVersion) Enum() *ProjectorVersion {
+	p := new(ProjectorVersion)
+	*p = x
+	return p
+}
+func (x ProjectorVersion) String() string {
+	return proto.EnumName(ProjectorVersion_name, int32(x))
+}
+func (x *ProjectorVersion) UnmarshalJSON(data []byte) error {
+	value, err := proto.UnmarshalJSONEnum(ProjectorVersion_value, data, "ProjectorVersion")
+	if err != nil {
+		return err
+	}
+	*x = ProjectorVersion(value)
+	return nil
+}
+
 // A single mutation message that will framed and transported by router.
 // For efficiency mutations from mutiple vbuckets (bounded to same connection)
 // can be packed into the same message.
@@ -142,11 +175,12 @@ func (m *VbConnectionMap) GetVbuuids() []uint64 {
 }
 
 type VbKeyVersions struct {
-	Vbucket          *uint32        `protobuf:"varint,2,req,name=vbucket" json:"vbucket,omitempty"`
-	Vbuuid           *uint64        `protobuf:"varint,3,req,name=vbuuid" json:"vbuuid,omitempty"`
-	Bucketname       *string        `protobuf:"bytes,4,req,name=bucketname" json:"bucketname,omitempty"`
-	Kvs              []*KeyVersions `protobuf:"bytes,5,rep,name=kvs" json:"kvs,omitempty"`
-	XXX_unrecognized []byte         `json:"-"`
+	Vbucket          *uint32           `protobuf:"varint,2,req,name=vbucket" json:"vbucket,omitempty"`
+	Vbuuid           *uint64           `protobuf:"varint,3,req,name=vbuuid" json:"vbuuid,omitempty"`
+	Bucketname       *string           `protobuf:"bytes,4,req,name=bucketname" json:"bucketname,omitempty"`
+	Kvs              []*KeyVersions    `protobuf:"bytes,5,rep,name=kvs" json:"kvs,omitempty"`
+	ProjVer          *ProjectorVersion `protobuf:"varint,6,opt,name=projVer,enum=protobuf.ProjectorVersion" json:"projVer,omitempty"`
+	XXX_unrecognized []byte            `json:"-"`
 }
 
 func (m *VbKeyVersions) Reset()         { *m = VbKeyVersions{} }
@@ -179,6 +213,13 @@ func (m *VbKeyVersions) GetKvs() []*KeyVersions {
 		return m.Kvs
 	}
 	return nil
+}
+
+func (m *VbKeyVersions) GetProjVer() ProjectorVersion {
+	if m != nil && m.ProjVer != nil {
+		return *m.ProjVer
+	}
+	return ProjectorVersion_V5_1_0
 }
 
 // mutations are broadly divided into data and control messages. The division
@@ -271,4 +312,5 @@ func (m *KeyVersions) GetPartnkeys() [][]byte {
 
 func init() {
 	proto.RegisterEnum("protobuf.Command", Command_name, Command_value)
+	proto.RegisterEnum("protobuf.ProjectorVersion", ProjectorVersion_name, ProjectorVersion_value)
 }

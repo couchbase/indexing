@@ -629,10 +629,50 @@ type Integer struct{}
 
 // Formats an int64 to scientic notation. Example:
 // 75284 converts to 7.5284e+04
-// 1200000 converts to 1.200000e+06
+// 1200000 converts to 1.2e+06
 // -612988654 converts to -6.12988654e+08
 // This is used in encode path
 func (i *Integer) ConvertToScientificNotation(val int64) (string, error) {
+
+	// For integers that can be represented precisely with
+	// float64, return using FormatFloat
+	if val < 9007199254740991 && val > -9007199254740991 {
+		return strconv.FormatFloat(float64(val), 'e', -1, 64), nil
+	}
+
+	intStr := strconv.FormatInt(val, 10)
+	if len(intStr) == 0 {
+		return "", nil
+	}
+
+	format := func(str string) string {
+		var first, rem string
+		first = str[0:1]
+		if len(str) >= 2 {
+			rem = str[1:]
+		}
+		if len(rem) == 0 { // The integer is a single digit number
+			return first + ".e+00"
+		} else {
+			return first + "." + strings.TrimRight(rem, "0") + "e+" + strconv.Itoa(len(rem))
+		}
+	}
+
+	var enotation string
+	sign := ""
+	if intStr[0:1] == "-" || intStr[0:1] == "+" { // The integer has a sign
+		sign = intStr[0:1]
+		enotation = format(intStr[1:])
+	} else {
+		enotation = format(intStr)
+	}
+
+	return sign + enotation, nil
+}
+
+// This function has been retained to support unit tests.
+// Regular code path should use ConvertToScientificNotation.
+func (i *Integer) ConvertToScientificNotation_TestOnly(val int64) (string, error) {
 	intStr := strconv.FormatInt(val, 10)
 	if len(intStr) == 0 {
 		return "", nil
@@ -691,8 +731,10 @@ func (i *Integer) TryConvertFromScientificNotation(val []byte) (ret []byte, isIn
 		return val, false // error condition, return input format
 	}
 
-	if exp > 0 && (int(exp) == len(mantissa)) {
-		// It is an integer
+	if exp > 0 && (int(exp) >= len(mantissa)) { // It is an integer
+		if int(exp) > len(mantissa) {
+			mantissa = mantissa + strings.Repeat("0", int(exp)-len(mantissa))
+		}
 		if characteristic == "0" {
 			return []byte(sign + mantissa), true
 		} else {
@@ -920,4 +962,187 @@ func (codec *Codec) code2n1ql(code, text []byte, decode bool) (n1ql.Value, []byt
 		remaining = code[1:] // remove Terminator
 	}
 	return n1qlVal, remaining, err
+}
+
+// FixEncodedInt is a special purpose method only to address MB-28956.
+// Do not use otherwise.
+func (codec *Codec) FixEncodedInt(code, buf []byte) ([]byte, error) {
+
+	var fixed []byte
+	var err error
+
+	defer func() {
+		if r := recover(); r != nil {
+			if strings.Contains(fmt.Sprint(r), "slice bounds out of range") {
+				err = ErrorOutputLen
+			} else {
+				err = fmt.Errorf("%v", r)
+			}
+		}
+	}()
+
+	fixed, _, err = codec.fixEncodedInt(code, buf)
+	return fixed, err
+}
+
+// fixEncodedInt is a special purpose method only to address MB-28956.
+// Do not use otherwise.
+func (codec *Codec) fixEncodedInt(code, text []byte) ([]byte, []byte, error) {
+	if len(code) == 0 {
+		return text, code, nil
+	}
+
+	var ts, remaining, datum []byte
+	var err error
+
+	switch code[0] {
+	case Terminator:
+		remaining = code
+
+	case TypeMissing, TypeNull, TypeTrue, TypeFalse, TypeLength:
+		datum, remaining = getDatum(code)
+		text = append(text, datum...)
+		text = append(text, Terminator)
+
+	case TypeNumber:
+		text = append(text, TypeNumber)
+
+		datum, remaining = getDatum(code)
+		ts = DecodeFloat(datum[1:], text[1:])
+		ts, err = codec.denormalizeFloat(ts)
+		ts = bytes.TrimLeft(ts, "+")
+
+		var number Integer
+		var isInt64 bool
+		ts, isInt64 = number.TryConvertFromScientificNotation(ts)
+
+		if isInt64 {
+			var intStr string
+			var intval int64
+			intval, err = strconv.ParseInt(string(ts), 10, 64)
+			if err != nil {
+				break
+			}
+			intStr, err = number.ConvertToScientificNotation(intval)
+			ts = EncodeFloat([]byte(intStr), text[1:])
+		} else {
+			var val float64
+			val, err = strconv.ParseFloat(string(ts), 64)
+			ts, err = codec.normalizeFloat(val, text[1:])
+		}
+
+		text = append(text, ts...)
+		text = append(text, Terminator)
+
+	case TypeString:
+		datum, remaining, err = getStringDatum(code)
+		text = append(text, datum...)
+		text = append(text, Terminator)
+
+	case TypeArray:
+		var l int
+		text = append(text, TypeArray)
+		if codec.arrayLenPrefix {
+			datum, code = getDatum(code[1:])
+			_, ts := DecodeInt(datum[1:], text[1:])
+			l, err = strconv.Atoi(string(ts))
+
+			text = append(text, datum...)
+			text = append(text, Terminator)
+			if err == nil {
+				for ; l > 0; l-- {
+					ln := len(text)
+					ts, code, err = codec.fixEncodedInt(code, text[ln:])
+					if err != nil {
+						break
+					}
+					text = append(text, ts...)
+				}
+			}
+		} else {
+			code = code[1:]
+			for code[0] != Terminator {
+				ln := len(text)
+				ts, code, err = codec.fixEncodedInt(code, text[ln:])
+				if err != nil {
+					break
+				}
+				text = append(text, ts...)
+			}
+		}
+		remaining = code[1:] // remove Terminator
+		text = append(text, Terminator)
+
+	case TypeObj:
+		var l int
+		var key, value []byte
+		text = append(text, TypeObj)
+		if codec.propertyLenPrefix {
+			datum, code = getDatum(code[1:])
+			_, ts := DecodeInt(datum[1:], text[1:])
+			l, err = strconv.Atoi(string(ts))
+
+			text = append(text, datum...)
+			text = append(text, Terminator)
+			if err == nil {
+				for ; l > 0; l-- {
+					// decode key
+					ln := len(text)
+					key, code, err = codec.fixEncodedInt(code, text[ln:])
+					if err != nil {
+						break
+					}
+					text = append(text, key...)
+					// decode value
+					ln = len(text)
+					value, code, err = codec.fixEncodedInt(code, text[ln:])
+					if err != nil {
+						break
+					}
+					text = append(text, value...)
+				}
+			}
+		} else {
+			code = code[1:]
+			for code[0] != Terminator {
+				// decode key
+				ln := len(text)
+				key, code, err = codec.fixEncodedInt(code, text[ln:])
+				if err != nil {
+					break
+				}
+				text = append(text, key...)
+				// decode value
+				ln = len(text)
+				value, code, err = codec.fixEncodedInt(code, text[ln:])
+				if err != nil {
+					break
+				}
+				text = append(text, value...)
+			}
+		}
+		remaining = code[1:] // remove Terminator
+		text = append(text, Terminator)
+	}
+	return text, remaining, err
+}
+
+func getStringDatum(code []byte) ([]byte, []byte, error) {
+	for i := 0; i < len(code); i++ {
+		x := code[i]
+		if x == Terminator {
+			i++
+			switch x = code[i]; x {
+			case Terminator:
+				if i == (len(code)) {
+					return nil, nil, nil
+				}
+				return code[:i], code[i+1:], nil
+			default:
+				return nil, nil, ErrorSuffixDecoding
+			}
+			continue
+		}
+	}
+	return nil, nil, ErrorSuffixDecoding
 }

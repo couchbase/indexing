@@ -54,7 +54,13 @@ func CopyIndexPartnMap(inMap IndexPartnMap) IndexPartnMap {
 
 	outMap := make(IndexPartnMap)
 	for k, v := range inMap {
-		outMap[k] = v
+
+		pmap := make(PartitionInstMap)
+		for id, inst := range v {
+			pmap[id] = inst
+		}
+
+		outMap[k] = pmap
 	}
 	return outMap
 }

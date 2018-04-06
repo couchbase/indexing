@@ -30,6 +30,7 @@ func protobufEncode(payload interface{}) (data []byte, err error) {
 				Bucketname: proto.String(vb.Bucket),
 				Vbucket:    proto.Uint32(uint32(vb.Vbucket)),
 				Vbuuid:     proto.Uint64(vb.Vbuuid),
+				ProjVer:    protobuf.ProjectorVersion(int32(vb.ProjVer)).Enum(),
 			}
 			pvb.Kvs = make([]*protobuf.KeyVersions, 0, len(vb.Kvs))
 			for _, kv := range vb.Kvs { // for each mutation

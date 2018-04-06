@@ -381,6 +381,7 @@ func (mdb *plasmaSlice) Insert(key []byte, docid []byte, meta *MutationMeta) err
 		op:    op,
 		key:   key,
 		docid: docid,
+		meta:  meta,
 	}
 
 	atomic.AddInt64(&mdb.qCount, 1)
@@ -411,7 +412,7 @@ loop:
 			switch icmd.op {
 			case opUpdate, opInsert:
 				start = time.Now()
-				nmut = mdb.insert(icmd.key, icmd.docid, workerId, icmd.op == opInsert)
+				nmut = mdb.insert(icmd.key, icmd.docid, workerId, icmd.op == opInsert, icmd.meta)
 				elapsed = time.Since(start)
 				mdb.totalFlushTime += elapsed
 
@@ -441,7 +442,8 @@ loop:
 	}
 }
 
-func (mdb *plasmaSlice) insert(key []byte, docid []byte, workerId int, init bool) int {
+func (mdb *plasmaSlice) insert(key []byte, docid []byte, workerId int,
+	init bool, meta *MutationMeta) int {
 	var nmut int
 
 	if mdb.isPrimary {
@@ -450,9 +452,9 @@ func (mdb *plasmaSlice) insert(key []byte, docid []byte, workerId int, init bool
 		nmut = mdb.delete(docid, workerId)
 	} else {
 		if mdb.idxDefn.IsArrayIndex {
-			nmut = mdb.insertSecArrayIndex(key, docid, workerId, init)
+			nmut = mdb.insertSecArrayIndex(key, docid, workerId, init, meta)
 		} else {
-			nmut = mdb.insertSecIndex(key, docid, workerId, init)
+			nmut = mdb.insertSecIndex(key, docid, workerId, init, meta)
 		}
 	}
 
@@ -481,7 +483,7 @@ func (mdb *plasmaSlice) insertPrimaryIndex(key []byte, docid []byte, workerId in
 	return 0
 }
 
-func (mdb *plasmaSlice) insertSecIndex(key []byte, docid []byte, workerId int, init bool) int {
+func (mdb *plasmaSlice) insertSecIndex(key []byte, docid []byte, workerId int, init bool, meta *MutationMeta) int {
 	t0 := time.Now()
 
 	var ndel int
@@ -496,7 +498,7 @@ func (mdb *plasmaSlice) insertSecIndex(key []byte, docid []byte, workerId int, i
 
 	mdb.encodeBuf[workerId] = resizeEncodeBuf(mdb.encodeBuf[workerId], len(key), allowLargeKeys)
 	entry, err := NewSecondaryIndexEntry(key, docid, mdb.idxDefn.IsArrayIndex,
-		1, mdb.idxDefn.Desc, mdb.encodeBuf[workerId])
+		1, mdb.idxDefn.Desc, mdb.encodeBuf[workerId], meta)
 	if err != nil {
 		logging.Errorf("plasmaSlice::insertSecIndex Slice Id %v IndexInstId %v "+
 			"Skipping docid:%s (%v)", mdb.Id, mdb.idxInstId, logging.TagStrUD(docid), err)
@@ -522,7 +524,8 @@ func (mdb *plasmaSlice) insertSecIndex(key []byte, docid []byte, workerId int, i
 	return 1
 }
 
-func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId int, init bool) (nmut int) {
+func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId int,
+	init bool, meta *MutationMeta) (nmut int) {
 	var err error
 	var oldkey []byte
 
@@ -613,7 +616,7 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 			item := indexEntriesToBeDeleted[i]
 			if item != nil { // nil item indicates it should be ignored
 				entry, err := NewSecondaryIndexEntry(item, docid, false,
-					oldKeyCount[i], mdb.idxDefn.Desc, mdb.encodeBuf[workerId][:0])
+					oldKeyCount[i], mdb.idxDefn.Desc, mdb.encodeBuf[workerId][:0], nil)
 				common.CrashOnError(err)
 				// Add back
 				mdb.main[workerId].InsertKV(entry, nil)
@@ -626,7 +629,7 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 			key := indexEntriesToBeAdded[i]
 			if key != nil { // nil item indicates it should be ignored
 				entry, err := NewSecondaryIndexEntry(key, docid, false,
-					newKeyCount[i], mdb.idxDefn.Desc, mdb.encodeBuf[workerId][:0])
+					newKeyCount[i], mdb.idxDefn.Desc, mdb.encodeBuf[workerId][:0], meta)
 				common.CrashOnError(err)
 				// Delete back
 				mdb.main[workerId].DeleteKV(entry)
@@ -640,7 +643,7 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 			var keyToBeDeleted []byte
 			mdb.encodeBuf[workerId] = resizeEncodeBuf(mdb.encodeBuf[workerId], len(item), true)
 			if keyToBeDeleted, err = GetIndexEntryBytes3(item, docid, false, false,
-				oldKeyCount[i], mdb.idxDefn.Desc, mdb.encodeBuf[workerId]); err != nil {
+				oldKeyCount[i], mdb.idxDefn.Desc, mdb.encodeBuf[workerId], nil); err != nil {
 				rollbackDeletes(i - 1)
 				logging.Errorf("plasmaSlice::insertSecArrayIndex SliceId %v IndexInstId %v Error forming entry "+
 					"to be added to main index. Skipping docid:%s Error: %v",
@@ -662,7 +665,7 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 			var keyToBeAdded []byte
 			mdb.encodeBuf[workerId] = resizeEncodeBuf(mdb.encodeBuf[workerId], len(item), allowLargeKeys)
 			if keyToBeAdded, err = GetIndexEntryBytes2(item, docid, false, false,
-				newKeyCount[i], mdb.idxDefn.Desc, mdb.encodeBuf[workerId]); err != nil {
+				newKeyCount[i], mdb.idxDefn.Desc, mdb.encodeBuf[workerId], meta); err != nil {
 				rollbackDeletes(len(indexEntriesToBeDeleted) - 1)
 				rollbackAdds(i - 1)
 				logging.Errorf("plasmaSlice::insertSecArrayIndex SliceId %v IndexInstId %v Error forming entry "+
@@ -832,7 +835,7 @@ func (mdb *plasmaSlice) deleteSecArrayIndex(docid []byte, workerId int) (nmut in
 		tmpBuf = resizeEncodeBuf(mdb.encodeBuf[workerId], len(item), true)
 		// TODO: Use method that skips size check for bug MB-22183
 		if keyToBeDeleted, err = GetIndexEntryBytes3(item, docid, false, false, keyCount[i],
-			mdb.idxDefn.Desc, tmpBuf); err != nil {
+			mdb.idxDefn.Desc, tmpBuf, nil); err != nil {
 			common.CrashOnError(err)
 			logging.Errorf("plasmaSlice::deleteSecArrayIndex \n\tSliceId %v IndexInstId %v Error from GetIndexEntryBytes2 "+
 				"for entry to be deleted from main index %v", mdb.id, mdb.idxInstId, err)
@@ -1350,6 +1353,8 @@ func (mdb *plasmaSlice) Statistics() (StorageStatistics, error) {
 
 	mdb.idxStats.residentPercent.Set(common.ComputePercent(numRecsMem, numRecsDisk))
 	mdb.idxStats.cacheHitPercent.Set(common.ComputePercent(cacheHits, cacheMiss))
+	mdb.idxStats.cacheHits.Set(cacheHits)
+	mdb.idxStats.cacheMisses.Set(cacheMiss)
 	return sts, nil
 }
 
@@ -1834,7 +1839,7 @@ func entry2BackEntry(entry secondaryIndexEntry) []byte {
 func backEntry2entry(docid []byte, bentry []byte, buf []byte) []byte {
 	l := len(bentry)
 	count := int(binary.LittleEndian.Uint16(bentry[l-2 : l]))
-	entry, _ := NewSecondaryIndexEntry2(bentry[:l-2], docid, false, count, nil, buf[:0], false)
+	entry, _ := NewSecondaryIndexEntry2(bentry[:l-2], docid, false, count, nil, buf[:0], false, nil)
 	return entry.Bytes()
 }
 

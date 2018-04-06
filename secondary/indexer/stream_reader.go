@@ -539,7 +539,7 @@ func (w *streamWorker) start() {
 
 		case vb := <-w.workerch:
 			w.handleKeyVersions(vb.GetBucketname(), Vbucket(vb.GetVbucket()),
-				Vbuuid(vb.GetVbuuid()), vb.GetKvs())
+				Vbuuid(vb.GetVbuuid()), vb.GetKvs(), common.ProjectorVersion(vb.GetProjVer()))
 
 		case <-w.workerStopCh:
 			return
@@ -551,10 +551,10 @@ func (w *streamWorker) start() {
 }
 
 func (w *streamWorker) handleKeyVersions(bucket string, vbucket Vbucket, vbuuid Vbuuid,
-	kvs []*protobuf.KeyVersions) {
+	kvs []*protobuf.KeyVersions, projVer common.ProjectorVersion) {
 
 	for _, kv := range kvs {
-		w.handleSingleKeyVersion(bucket, vbucket, vbuuid, kv)
+		w.handleSingleKeyVersion(bucket, vbucket, vbuuid, kv, projVer)
 	}
 
 }
@@ -562,13 +562,14 @@ func (w *streamWorker) handleKeyVersions(bucket string, vbucket Vbucket, vbuuid 
 //handleSingleKeyVersion processes a single mutation based on the command type
 //A mutation is put in a worker queue and control message is sent to supervisor
 func (w *streamWorker) handleSingleKeyVersion(bucket string, vbucket Vbucket, vbuuid Vbuuid,
-	kv *protobuf.KeyVersions) {
+	kv *protobuf.KeyVersions, projVer common.ProjectorVersion) {
 
 	meta := NewMutationMeta()
 	meta.bucket = bucket
 	meta.vbucket = vbucket
 	meta.vbuuid = vbuuid
 	meta.seqno = Seqno(kv.GetSeqno())
+	meta.projVer = projVer
 
 	defer meta.Free()
 

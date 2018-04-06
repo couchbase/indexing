@@ -1521,8 +1521,8 @@ func IndexKeyLessThan(a, b IndexKey) bool {
 }
 
 func (r ScanRequest) String() string {
-	str := fmt.Sprintf("defnId:%v, instId:%v, index:%v/%v, type:%v",
-		r.DefnID, r.IndexInstId, r.Bucket, r.IndexName, r.ScanType)
+	str := fmt.Sprintf("defnId:%v, instId:%v, index:%v/%v, type:%v, partitions:%v",
+		r.DefnID, r.IndexInstId, r.Bucket, r.IndexName, r.ScanType, r.PartitionIds)
 
 	if len(r.Scans) == 0 {
 		var incl, span string

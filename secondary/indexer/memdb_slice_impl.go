@@ -20,6 +20,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -48,6 +49,7 @@ type indexMutation struct {
 	op    int
 	key   []byte
 	docid []byte
+	meta  *MutationMeta
 }
 
 func docIdFromEntryBytes(e []byte) []byte {
@@ -242,6 +244,37 @@ func NewMemDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	return slice, nil
 }
 
+var (
+	moiWriterSemaphoreCh chan bool
+	moiWritersAllowed    int
+	initLock             sync.Mutex
+)
+
+func updateMOIWriters(to int) {
+	if to > cap(moiWriterSemaphoreCh) {
+		to = cap(moiWriterSemaphoreCh)
+	}
+	initLock.Lock()
+	defer initLock.Unlock()
+	if to == moiWritersAllowed {
+		return
+	}
+	if to < moiWritersAllowed {
+		for i := to; i < moiWritersAllowed; i++ {
+			moiWriterSemaphoreCh <- true
+		}
+	} else {
+		for i := moiWritersAllowed; i < to; i++ {
+			<-moiWriterSemaphoreCh
+		}
+	}
+}
+
+func init() {
+	moiWritersAllowed = runtime.NumCPU() * 4
+	moiWriterSemaphoreCh = make(chan bool, moiWritersAllowed)
+}
+
 func (slice *memdbSlice) initStores() {
 	cfg := memdb.DefaultConfig()
 	if slice.sysconf["moi.useMemMgmt"].Bool() {
@@ -294,6 +327,7 @@ func (mdb *memdbSlice) Insert(key []byte, docid []byte, meta *MutationMeta) erro
 		op:    opUpdate,
 		key:   key,
 		docid: docid,
+		meta:  meta,
 	}
 	atomic.AddInt64(&mdb.qCount, 1)
 	mdb.cmdCh[int(meta.vbucket)%mdb.numWriters] <- mut
@@ -321,7 +355,7 @@ loop:
 			switch icmd.op {
 			case opUpdate:
 				start = time.Now()
-				nmut = mdb.insert(icmd.key, icmd.docid, workerId)
+				nmut = mdb.insert(icmd.key, icmd.docid, workerId, icmd.meta)
 				elapsed = time.Since(start)
 				mdb.totalFlushTime += elapsed
 
@@ -351,7 +385,7 @@ loop:
 	}
 }
 
-func (mdb *memdbSlice) insert(key []byte, docid []byte, workerId int) int {
+func (mdb *memdbSlice) insert(key []byte, docid []byte, workerId int, meta *MutationMeta) int {
 	var nmut int
 
 	if mdb.isPrimary {
@@ -360,9 +394,9 @@ func (mdb *memdbSlice) insert(key []byte, docid []byte, workerId int) int {
 		nmut = mdb.delete(docid, workerId)
 	} else {
 		if mdb.idxDefn.IsArrayIndex {
-			nmut = mdb.insertSecArrayIndex(key, docid, workerId)
+			nmut = mdb.insertSecArrayIndex(key, docid, workerId, meta)
 		} else {
-			nmut = mdb.insertSecIndex(key, docid, workerId)
+			nmut = mdb.insertSecIndex(key, docid, workerId, meta)
 		}
 	}
 
@@ -382,7 +416,8 @@ func (mdb *memdbSlice) insertPrimaryIndex(key []byte, docid []byte, workerId int
 	return 1
 }
 
-func (mdb *memdbSlice) insertSecIndex(key []byte, docid []byte, workerId int) int {
+func (mdb *memdbSlice) insertSecIndex(key []byte, docid []byte, workerId int, meta *MutationMeta) int {
+
 	// 1. Insert entry into main index
 	// 2. Upsert into backindex with docid, mainnode pointer
 	// 3. Delete old entry from main index if back index had
@@ -391,7 +426,7 @@ func (mdb *memdbSlice) insertSecIndex(key []byte, docid []byte, workerId int) in
 
 	mdb.encodeBuf[workerId] = resizeEncodeBuf(mdb.encodeBuf[workerId], len(key), allowLargeKeys)
 	entry, err := NewSecondaryIndexEntry(key, docid, mdb.idxDefn.IsArrayIndex,
-		1, mdb.idxDefn.Desc, mdb.encodeBuf[workerId])
+		1, mdb.idxDefn.Desc, mdb.encodeBuf[workerId], meta)
 	if err != nil {
 		logging.Errorf("MemDBSlice::insertSecIndex Slice Id %v IndexInstId %v "+
 			"Skipping docid:%s (%v)", mdb.Id, mdb.idxInstId, logging.TagStrUD(docid), err)
@@ -416,7 +451,8 @@ func (mdb *memdbSlice) insertSecIndex(key []byte, docid []byte, workerId int) in
 	return 1
 }
 
-func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId int) int {
+func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId int,
+	meta *MutationMeta) int {
 
 	mdb.arrayBuf[workerId] = resizeArrayBuf(mdb.arrayBuf[workerId], len(keys))
 
@@ -487,7 +523,7 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 		if item != nil { // nil item indicates it should not be deleted
 			mdb.encodeBuf[workerId] = resizeEncodeBuf(mdb.encodeBuf[workerId], len(item), true)
 			entry, err := NewSecondaryIndexEntry2(item, docid, false,
-				oldKeyCount[i], nil, mdb.encodeBuf[workerId][:0], false)
+				oldKeyCount[i], nil, mdb.encodeBuf[workerId][:0], false, nil)
 			if err != nil {
 				logging.Errorf("MemDBSlice::insertSecArrayIndex Slice Id %v IndexInstId %v "+
 					"Skipping docid:%s (%v)", mdb.Id, mdb.idxInstId, logging.TagStrUD(docid), err)
@@ -505,7 +541,7 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 			t0 := time.Now()
 			mdb.encodeBuf[workerId] = resizeEncodeBuf(mdb.encodeBuf[workerId], len(key), allowLargeKeys)
 			entry, err := NewSecondaryIndexEntry(key, docid, false,
-				newKeyCount[i], mdb.idxDefn.Desc, mdb.encodeBuf[workerId][:0])
+				newKeyCount[i], mdb.idxDefn.Desc, mdb.encodeBuf[workerId][:0], meta)
 			if err != nil {
 				logging.Errorf("MemDBSlice::insertSecArrayIndex Slice Id %v IndexInstId %v "+
 					"Skipping docid:%s (%v)", mdb.Id, mdb.idxInstId, logging.TagStrUD(docid), err)
@@ -700,7 +736,20 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot) {
 		}
 
 		mdb.confLock.RUnlock()
-		err := mdb.mainstore.StoreToDisk(tmpdir, s.info.MainSnap, concurrency, nil)
+
+		var firstItem bool = true
+		limitWriterThreads := func(itm *memdb.ItemEntry) {
+			if firstItem {
+				moiWriterSemaphoreCh <- true
+				firstItem = false
+			}
+		}
+		defer func() {
+			if !firstItem { // Only post if callback above ran
+				<-moiWriterSemaphoreCh
+			}
+		}()
+		err := mdb.mainstore.StoreToDisk(tmpdir, s.info.MainSnap, concurrency, limitWriterThreads)
 		if err == nil {
 			var fd *os.File
 			var bs []byte

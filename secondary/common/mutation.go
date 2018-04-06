@@ -31,6 +31,14 @@ const (
 	Snapshot                       // control command
 )
 
+type ProjectorVersion byte
+
+//Projector Version
+const (
+	ProjVer_5_1_0 ProjectorVersion = iota + 1
+	ProjVer_5_1_1
+)
+
 // Payload either carries `vbmap` or `vbs`.
 type Payload struct {
 	Payltyp byte
@@ -126,11 +134,12 @@ type VbKeyVersions struct {
 	Vbuuid  uint64         // unique id to detect branch history
 	Kvs     []*KeyVersions // N number of mutations
 	Uuid    string
+	ProjVer ProjectorVersion
 }
 
 // NewVbKeyVersions return a reference to a single vbucket payload
 func NewVbKeyVersions(bucket string, vbno uint16, vbuuid uint64, maxMutations int) *VbKeyVersions {
-	vb := &VbKeyVersions{Bucket: bucket, Vbucket: vbno, Vbuuid: vbuuid}
+	vb := &VbKeyVersions{Bucket: bucket, Vbucket: vbno, Vbuuid: vbuuid, ProjVer: ProjVer_5_1_1}
 	vb.Kvs = make([]*KeyVersions, 0, maxMutations)
 	vb.Uuid = StreamID(bucket, vbno)
 	return vb
