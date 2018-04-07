@@ -959,6 +959,8 @@ func (s *scanCoordinator) findIndexInstance(
 	indexPartnMap := s.indexPartnMap
 
 	for _, inst := range indexInstMap {
+		// Allow REBAL_PENDING to be scanned.  During merge partition, the metadata is updated before inst map is broadcasted.  So
+		// there is a chance that cbq is aware of the metadata change ahead of scan coorindator.
 		if inst.State != common.INDEX_STATE_ACTIVE || (inst.RState != common.REBAL_ACTIVE && inst.RState != common.REBAL_PENDING) {
 			continue
 		}
