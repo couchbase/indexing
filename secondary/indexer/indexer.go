@@ -101,8 +101,6 @@ type indexer struct {
 	//TODO Remove this once cbq bridge support goes away
 	bucketCreateClientChMap map[string]MsgChannel
 
-	bucketStreamMergeInProgress map[string]bool
-
 	wrkrRecvCh          MsgChannel //channel to receive messages from workers
 	internalRecvCh      MsgChannel //buffered channel to queue worker requests
 	adminRecvCh         MsgChannel //channel to receive admin messages
@@ -223,7 +221,6 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		bucketBuildTs:                make(map[string]Timestamp),
 		bucketRollbackTimes:          make(map[string]int64),
 		bucketCreateClientChMap:      make(map[string]MsgChannel),
-		bucketStreamMergeInProgress:  make(map[string]bool),
 	}
 
 	logging.Infof("Indexer::NewIndexer Status Warmup")
@@ -2714,7 +2711,6 @@ func (idx *indexer) handleMergeStreamAck(msg Message) {
 			state == STREAM_RECOVERY {
 			logging.Infof("Indexer::handleMergeStreamAck Skip MergeStreamAck %v %v %v",
 				streamId, bucket, state)
-			idx.bucketStreamMergeInProgress[bucket] = false
 			return
 		}
 
@@ -2726,8 +2722,6 @@ func (idx *indexer) handleMergeStreamAck(msg Message) {
 			streamId: common.MAINT_STREAM,
 			bucket:   bucket}
 		<-idx.tkCmdCh
-
-		idx.bucketStreamMergeInProgress[bucket] = false
 
 		//send the ack to timekeeper
 		idx.tkCmdCh <- msg
@@ -3553,15 +3547,6 @@ func (idx *indexer) checkDuplicateIndex(indexInst common.IndexInst,
 func (idx *indexer) checkDuplicateInitialBuildRequest(bucket string,
 	instIdList []common.IndexInstId, respCh MsgChannel, errMap map[common.IndexInstId]error) bool {
 
-	// Check if stream merge is in progress for this bucket.
-	if inProg, ok := idx.bucketStreamMergeInProgress[bucket]; ok {
-		if inProg {
-			logging.Errorf("Indexer::checkDuplicateInitialBuildRequest Stream Merge" +
-							" for bucket %v is in progress", bucket)
-			return false
-		}
-	}
-
 	//if initial build is already running for some other index on this bucket,
 	//cannot start another one
 	for _, index := range idx.indexInstMap {
@@ -3871,8 +3856,6 @@ func (idx *indexer) handleMergeInitStream(msg Message) {
 
 	bucket := msg.(*MsgTKMergeStream).GetBucket()
 	streamId := msg.(*MsgTKMergeStream).GetStreamId()
-
-	idx.bucketStreamMergeInProgress[bucket] = true
 
 	logging.Infof("Indexer::handleMergeInitStream Bucket: %v Stream: %v", bucket, streamId)
 
