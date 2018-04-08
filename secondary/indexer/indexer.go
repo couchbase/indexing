@@ -843,10 +843,10 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		streamId := msg.(*MsgMutMgrFlushDone).GetStreamId()
 
 		// consolidate partitions now
-		if streamId == common.MAINT_STREAM {
-			idx.mergePartitions(bucket)
-			idx.prunePartitions(bucket)
-		}
+		idx.mergePartitions(bucket, streamId)
+		idx.mergePartitionForIdleBuckets()
+		idx.prunePartitions(bucket, streamId)
+		idx.prunePartitionForIdleBuckets()
 
 		idx.streamBucketFlushInProgress[streamId][bucket] = false
 
@@ -1406,19 +1406,35 @@ func (idx *indexer) updateRStateOrMergePartition(srcInstId common.IndexInstId, t
 	idx.mergePartitionForIdleBuckets()
 }
 
+// When a inst needs to be merged, one of the following can happens:
+// 1) index RState is set to ACTIVE
+// 2) index is merged
+// 2) merge is postponed because flush is in progress.
+// 3) merge is postponed because the source is not active.
+// 4) merge is postponed because of other reasons (indxer pause, recovery).
+//
+// For those merge that is postponed, indexer needs to retry when the bucket flush is idle.
+//
 func (idx *indexer) mergePartitionForIdleBuckets() {
 
-	buckets := make(map[string]bool)
-	for _, spec := range idx.mergePartitionList {
-		sourceId := spec.srcInstId
-		if source, ok := idx.indexInstMap[sourceId]; ok {
-			buckets[source.Defn.Bucket] = true
+	if len(idx.mergePartitionList) > 0 {
+		buckets := make(map[string]map[common.StreamId]bool)
+		for _, spec := range idx.mergePartitionList {
+			sourceId := spec.srcInstId
+			if source, ok := idx.indexInstMap[sourceId]; ok {
+				if _, ok := buckets[source.Defn.Bucket]; !ok {
+					buckets[source.Defn.Bucket] = make(map[common.StreamId]bool)
+				}
+				buckets[source.Defn.Bucket][source.Stream] = true
+			}
 		}
-	}
 
-	for bucket, _ := range buckets {
-		if !idx.streamBucketFlushInProgress[common.MAINT_STREAM][bucket] {
-			idx.mergePartitions(bucket)
+		for bucket, streams := range buckets {
+			for streamId, _ := range streams {
+				if !idx.streamBucketFlushInProgress[streamId][bucket] {
+					idx.mergePartitions(bucket, streamId)
+				}
+			}
 		}
 	}
 }
@@ -1467,7 +1483,11 @@ func (idx *indexer) preValidateMergePartition(srcInstId common.IndexInstId, tgtI
 // This function merge the partitions from a source index instance to a target index instance.
 // Prior to this point, the source index instance has been treated as an independent index instance.
 //
-// This function should be called when indexer is in quiescent point, e.g. when flush is done.
+// Merge partiton can only be performed when:
+// 1) After a snapshot
+// 2) there is no flush (idle bucket)
+// 3) There is no recovery for bucket stream
+// 4) Indexer is active
 //
 // This function is idempotent.  For example, after the source index instance is merged to the
 // target, the indexer crash before the source index instance is cleaned up.   This function can
@@ -1485,7 +1505,36 @@ func (idx *indexer) preValidateMergePartition(srcInstId common.IndexInstId, tgtI
 // 3) If there is any transient error during commit or after commit,
 //    the indexer can panic.
 //
-func (idx *indexer) mergePartitions(bucket string) {
+// Merge partition updates the indexer's state in 4 phases:
+// 1) update indexer internal data structure
+// 2) move partitions in index snapshot in storage manager
+// 3) update index metadata.  Once metadata is updated, the
+//    merge operation is considered committed.
+// 4) remove the merged inst from bucket stream
+//
+// For step (4), stream update is queued and done in batches.
+// If the corresponding stream is closed, all queued stream
+// update will be removed.   All queued stream will also be
+// cleared when the stream restarted.
+//
+// If recovery starts,
+// 1) bucket stream will be closed during prepare phase.   Any queued
+//    stream update will be dropped
+// 2) For any in-flight stream update that has already started, it can succeed
+//    or fail.  If fail, stream update will abort due to recovery.
+//    Recovery can only start after all in-flight are done (due to stream lock).
+// 3) When bucket stream re-starts for recovery, the bucket stream
+//    will use the latest state of each index inst.  So those merged inst
+//    will not be included in the new bucket stream.
+// 4) New merge operation will be deferred until recovery is done.   So
+//    no new stream update will be queued while there is recovery.
+// 5) After recvovery is done, merge operation will be processed as normal.
+//
+// For deferred index, partitions can be merged during recovery.   There is
+// no stream update for deferred index.
+//
+//
+func (idx *indexer) mergePartitions(bucket string, streamId common.StreamId) {
 
 	// Do not merge when indexer is not active
 	if is := idx.getIndexerState(); is != common.INDEXER_ACTIVE {
@@ -1497,7 +1546,13 @@ func (idx *indexer) mergePartitions(bucket string) {
 		return
 	}
 
-	logging.Infof("MergePartitions: bucket %v", bucket)
+	// Do not merge during recovery
+	if streamId != common.NIL_STREAM && idx.getStreamBucketState(streamId, bucket) != STREAM_ACTIVE {
+		logging.Debugf("MergePartition.  Indexer in recovery.  Cannot merge instance.")
+		return
+	}
+
+	logging.Infof("MergePartitions: bucket %v streamId %v", bucket, streamId)
 
 	var remaining []mergeSpec
 	if len(idx.mergePartitionList) != 0 {
@@ -1510,7 +1565,7 @@ func (idx *indexer) mergePartitions(bucket string) {
 		targetId := spec.tgtInstId
 		respch := spec.respch
 
-		if !idx.mergePartition(bucket, sourceId, targetId, idx.merged, respch) {
+		if !idx.mergePartition(bucket, streamId, sourceId, targetId, idx.merged, respch) {
 			remaining = append(remaining, spec)
 		}
 	}
@@ -1547,14 +1602,49 @@ func (idx *indexer) removeMergedIndexesFromStream(merged map[common.IndexInstId]
 					// removeIndexesFromStream() will send update to projector.  This function spawn a go-routine after
 					// acquiring the stream lock.   The stream lock ensure the projector update is executed on serial fashion.
 					// Therefore, if mergePartitions() is called multiple times, the projector update will be executed serially.
-					idx.removeIndexesFromStream(list4, bucket, bucketUUID, streamId, state, nil)
+					if streamId != common.NIL_STREAM && idx.getStreamBucketState(streamId, bucket) == STREAM_ACTIVE {
+						idx.removeIndexesFromStream(list4, bucket, bucketUUID, streamId, state, nil)
+					}
 				}
 			}
 		}
 	}
 }
 
-func (idx *indexer) mergePartition(bucket string, sourceId common.IndexInstId, targetId common.IndexInstId,
+func (idx *indexer) removePendingStreamUpdate(indexes map[common.IndexInstId]common.IndexInst, streamId common.StreamId,
+	bucket string) map[common.IndexInstId]common.IndexInst {
+
+	remaining := make(map[common.IndexInstId]common.IndexInst)
+
+	sorted := make(map[string]map[common.StreamId][]common.IndexInst)
+	for instId, _ := range indexes {
+		inst, ok := idx.indexInstMap[instId]
+		if !ok {
+			logging.Warnf("removePendingStreamUpdate:  inst %v does not exist in indexInstMap. Skip stream update.", instId)
+			continue
+		}
+
+		if _, ok := sorted[inst.Defn.Bucket]; !ok {
+			sorted[inst.Defn.Bucket] = make(map[common.StreamId][]common.IndexInst)
+		}
+
+		sorted[inst.Defn.Bucket][inst.Stream] = append(sorted[inst.Defn.Bucket][inst.Stream], inst)
+	}
+
+	for bucket1, list1 := range sorted {
+		for streamId1, list2 := range list1 {
+			if bucket1 != bucket || streamId1 != streamId {
+				for _, inst := range list2 {
+					remaining[inst.InstId] = inst
+				}
+			}
+		}
+	}
+
+	return remaining
+}
+
+func (idx *indexer) mergePartition(bucket string, streamId common.StreamId, sourceId common.IndexInstId, targetId common.IndexInstId,
 	merged map[common.IndexInstId]common.IndexInst, respch chan error) bool {
 
 	if source, ok := idx.indexInstMap[sourceId]; ok {
@@ -1565,6 +1655,13 @@ func (idx *indexer) mergePartition(bucket string, sourceId common.IndexInstId, t
 		if source.Defn.Bucket != bucket {
 			logging.Warnf("MergePartition: Source Index Instance %v is not in bucket %v.  Do not merge now.",
 				source.InstId, bucket)
+			return false
+		}
+
+		// Only merge partition from the given stream
+		if source.Stream != streamId {
+			logging.Warnf("MergePartition: Source Index Instance %v is not in stream %v.  Do not merge now.",
+				source.InstId, streamId)
 			return false
 		}
 
@@ -1869,32 +1966,78 @@ func (idx *indexer) handlePrunePartition(msg Message) {
 
 		idx.prunePartitionList = append(idx.prunePartitionList, spec)
 
-		if ok, _ := idx.streamBucketFlushInProgress[common.MAINT_STREAM][inst.Defn.Bucket]; !ok {
-			idx.prunePartitions(inst.Defn.Bucket)
+		if ok, _ := idx.streamBucketFlushInProgress[inst.Stream][inst.Defn.Bucket]; !ok {
+			idx.prunePartitions(inst.Defn.Bucket, inst.Stream)
 		}
 	} else {
 		logging.Warnf("PrunePartition.  Index instance %v not found. Skip", instId)
 	}
 
+	idx.prunePartitionForIdleBuckets()
+
 	respch <- &MsgSuccess{}
 }
 
-func (idx *indexer) prunePartitions(bucket string) {
-
-	// Do not merge when indexer is not active
-	if is := idx.getIndexerState(); is != common.INDEXER_ACTIVE {
-		if len(idx.prunePartitionList) != 0 {
-			logging.Warnf("PrunePartition.  Indexer inactive.  Cannot prune instance.")
-		}
-		return
-	}
+//
+// Prune partition is for updating indexer's state after a partition is
+// removed from an index instance.    When indexer handles this request,
+// the index inst metadata is already updated with the partitioned removed.
+// Therefore, indexer must handle this request to ensure the indexer's
+// state in sync with metadata.
+//
+// Prune partiton can only be performed when:
+// 1) After a snapshot
+// 2) there is no flush (idle bucket)
+// 3) There is no recovery for bucket stream
+// 4) Indexer is active
+//
+// Prune partition updates the indexer's state in 4 phases:
+// 1) update indexer internal data structure
+// 2) remove partitions from index snapshot in storage manager
+// 3) remove partition's data file
+// 4) update bucket stream to remove partitions from index
+//
+// For step (4), stream update is queued and done in batches.
+// If the corresponding stream is closed, all queued stream
+// update will be removed.   All queued stream will also be
+// cleared when the stream restarted.
+//
+// If recovery starts,
+// 1) bucket stream will be closed during prepare phase.   Any queued
+//    stream update will be dropped
+// 2) For any in-flight stream update that has already started, it can succeed
+//    or fail.  If fail, stream update will abort due to recovery.
+//    Recovery can only start after all in-flight are done (due to stream lock).
+// 3) When bucket stream re-starts for recovery, the bucket stream
+//    will use the latest state of the index inst. So pruned partitions
+//    will not be included in the new bucket stream.
+// 4) New prune partition will be deferred until recovery is done.   So
+//    no new stream update will be queued while there is recovery.
+// 5) After recvovery is done, prune partition will be processed as normal.
+//
+// For deferred index, partitions can be pruned during recovery.   There is
+// no stream update for deferred index.
+//
+func (idx *indexer) prunePartitions(bucket string, streamId common.StreamId) {
 
 	// nothing to prune
 	if len(idx.prunePartitionList) == 0 {
 		return
 	}
 
-	logging.Infof("PrunePartitions: bucket %v", bucket)
+	// Do not prune when indexer is not active
+	if is := idx.getIndexerState(); is != common.INDEXER_ACTIVE {
+		logging.Warnf("PrunePartition.  Indexer inactive.  Cannot prune instance.")
+		return
+	}
+
+	// Do not prune during recovery
+	if streamId != common.NIL_STREAM && idx.getStreamBucketState(streamId, bucket) != STREAM_ACTIVE {
+		logging.Debugf("PrunePartition.  Indexer in recovery.  Cannot prune instance.")
+		return
+	}
+
+	logging.Infof("PrunePartitions: bucket %v stream %v", bucket, streamId)
 
 	var remaining []pruneSpec
 	if len(idx.prunePartitionList) != 0 {
@@ -1906,7 +2049,7 @@ func (idx *indexer) prunePartitions(bucket string) {
 		instId := spec.instId
 		partitions := spec.partitions
 
-		if !idx.prunePartition(bucket, instId, partitions, idx.pruned) {
+		if !idx.prunePartition(bucket, streamId, instId, partitions, idx.pruned) {
 			remaining = append(remaining, spec)
 		}
 	}
@@ -1950,7 +2093,9 @@ func (idx *indexer) removePrunedIndexesFromStream(pruned map[common.IndexInstId]
 				//
 				// sendstreamUpdateForIndex will only retry for 10 times before it aborts.   If the indexer fails to update
 				// the projector, at worst, the projector will send more mutations to the indexer, but it will not skip mutation.
-				idx.sendStreamUpdateForIndex(list3, bucket, bucketUUID, streamId)
+				if streamId != common.NIL_STREAM && idx.getStreamBucketState(streamId, bucket) == STREAM_ACTIVE {
+					idx.sendStreamUpdateForIndex(list3, bucket, bucketUUID, streamId)
+				}
 			}
 		}
 	}
@@ -1962,7 +2107,7 @@ func (idx *indexer) removePrunedIndexesFromStream(pruned map[common.IndexInstId]
 // are put into a proxy partition with DELETED state, and they will be periodically clean up
 // asynchronously.
 //
-func (idx *indexer) prunePartition(bucket string, instId common.IndexInstId, partitions []common.PartitionId,
+func (idx *indexer) prunePartition(bucket string, streamId common.StreamId, instId common.IndexInstId, partitions []common.PartitionId,
 	prunedInst map[common.IndexInstId]common.IndexInst) bool {
 
 	if inst, ok := idx.indexInstMap[instId]; ok {
@@ -1973,6 +2118,13 @@ func (idx *indexer) prunePartition(bucket string, instId common.IndexInstId, par
 		if inst.Defn.Bucket != bucket {
 			logging.Warnf("PurnePartition: Index Instance %v is not in bucket %v.  Do not prune now.",
 				inst.InstId, bucket)
+			return false
+		}
+
+		// Only prune partition from the given streamId
+		if inst.Stream != streamId {
+			logging.Warnf("PurnePartition: Index Instance %v is not in stream %v.  Do not prune now.",
+				inst.InstId, streamId)
 			return false
 		}
 
@@ -2068,13 +2220,13 @@ func (idx *indexer) prunePartition(bucket string, instId common.IndexInstId, par
 				idx.lastStreamUpdate = time.Now().UnixNano()
 			}
 
-			// If we are on the MAINT stream, then remove the old partitions from projector.
+			// If it is not a deferred index (NIL_STREAM), then remove the old partitions from projector.
 			// For a single invocation of prunePartitions(), an inst can be pruned multiple times.
 			// This map will store the last copy of the inst after all the pruning.  The indexer
 			// will then send the final copy to the projector.    Note that the prunePartitions()
 			// can be invoked many times, and each invocation can be pruning the same instance.
 			// In this case, indexer will make multiple calls to the projector.
-			if inst.Stream == common.MAINT_STREAM {
+			if inst.Stream != common.NIL_STREAM {
 				prunedInst[inst.InstId] = inst
 			}
 		}
@@ -2084,6 +2236,36 @@ func (idx *indexer) prunePartition(bucket string, instId common.IndexInstId, par
 	}
 
 	return true
+}
+
+// When a inst needs to be pruned, one of the following can happens:
+// 1) index is pruned
+// 2) prune is postponed because flush is in progress.
+// 3) prune is postponed because of other reasons (indxer pause, recovery).
+//
+// For those prune that is postponed, indexer needs to retry when the bucket flush is idle.
+//
+func (idx *indexer) prunePartitionForIdleBuckets() {
+
+	if len(idx.prunePartitionList) > 0 {
+		buckets := make(map[string]map[common.StreamId]bool)
+		for _, spec := range idx.prunePartitionList {
+			if inst, ok := idx.indexInstMap[spec.instId]; ok {
+				if _, ok := buckets[inst.Defn.Bucket]; !ok {
+					buckets[inst.Defn.Bucket] = make(map[common.StreamId]bool)
+				}
+				buckets[inst.Defn.Bucket][inst.Stream] = true
+			}
+		}
+
+		for bucket, streams := range buckets {
+			for streamId, _ := range streams {
+				if !idx.streamBucketFlushInProgress[streamId][bucket] {
+					idx.prunePartitions(bucket, streamId)
+				}
+			}
+		}
+	}
 }
 
 func (idx *indexer) updateStreamForRebalance(force bool) {
@@ -2972,6 +3154,12 @@ func (idx *indexer) sendStreamUpdateForIndex(indexInstList []common.IndexInst, b
 					break retryloop
 
 				default:
+					if idx.getStreamBucketState(streamId, bucket) != STREAM_ACTIVE {
+						logging.Warnf("Indexer::sendStreamUpdateForIndex Stream %v Bucket %v "+
+							"Bucket stream not active. Aborting.", streamId, bucket)
+						break retryloop
+					}
+
 					//log and retry for all other responses
 					respErr := resp.(*MsgError).GetError()
 
@@ -2983,6 +3171,7 @@ func (idx *indexer) sendStreamUpdateForIndex(indexInstList []common.IndexInst, b
 						logging.Warnf("Indexer::sendStreamUpdateForIndex Stream %v Bucket %v "+
 							"Error from Projector %v. Aborting.", streamId, bucket, respErr.cause)
 						break retryloop
+
 					} else if retryCount < 10 {
 						logging.Errorf("Indexer::sendStreamUpdateForIndex Stream %v Bucket %v "+
 							"Error from Projector %v. Retrying.", streamId, bucket, respErr.cause)
@@ -3324,6 +3513,12 @@ func (idx *indexer) removeIndexesFromStream(indexList []common.IndexInst,
 						break retryloop
 
 					default:
+						if idx.getStreamBucketState(streamId, bucket) != STREAM_ACTIVE {
+							logging.Warnf("Indexer::removeIndexesFromStream Stream %v Bucket %v "+
+								"Bucket stream not active. Aborting.", streamId, bucket)
+							break retryloop
+						}
+
 						//log and retry for all other responses
 						respErr := resp.(*MsgError).GetError()
 						logging.Errorf("Indexer::removeIndexesFromStream - Stream %v Bucket %v"+
@@ -4034,6 +4229,9 @@ func (idx *indexer) stopBucketStream(streamId common.StreamId, bucket string) {
 
 	logging.Infof("Indexer::stopBucketStream Stream: %v Bucket %v", streamId, bucket)
 
+	idx.merged = idx.removePendingStreamUpdate(idx.merged, streamId, bucket)
+	idx.pruned = idx.removePendingStreamUpdate(idx.pruned, streamId, bucket)
+
 	respCh := make(MsgChannel)
 	stopCh := make(StopChannel)
 
@@ -4102,6 +4300,9 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 
 	logging.Infof("Indexer::startBucketStream Stream: %v Bucket: %v RestartTS %v",
 		streamId, bucket, restartTs)
+
+	idx.merged = idx.removePendingStreamUpdate(idx.merged, streamId, bucket)
+	idx.pruned = idx.removePendingStreamUpdate(idx.pruned, streamId, bucket)
 
 	var indexList []common.IndexInst
 	var bucketUUIDList []string

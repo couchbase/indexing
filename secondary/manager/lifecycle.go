@@ -1855,6 +1855,8 @@ func (m *LifecycleMgr) DeleteOrPruneIndexInstance(defn common.IndexDefn, cleanup
 	logging.Infof("LifecycleMgr.DeleteOrPruneIndexInstance() : index defnId %v instance id %v real instance id %v partitions %v",
 		id, instId, defn.RealInstId, defn.Partitions)
 
+	stream := common.NIL_STREAM
+
 	inst, err := m.FindLocalIndexInst(defn.Bucket, id, instId)
 	if err != nil {
 		logging.Errorf("LifecycleMgr.DeleteOrPruneIndexInstance() : Encountered error during delete index. Error = %v", err)
@@ -1872,10 +1874,15 @@ func (m *LifecycleMgr) DeleteOrPruneIndexInstance(defn common.IndexDefn, cleanup
 			return nil
 		}
 		instId = common.IndexInstId(inst.InstId)
+		stream = common.StreamId(inst.StreamId)
+
+	} else {
+		stream = common.StreamId(inst.StreamId)
 	}
 
-	if len(defn.Partitions) == 0 {
-		// If this is coming from drop index
+	if len(defn.Partitions) == 0 || stream == common.INIT_STREAM {
+		// 1) If this is coming from drop index, or
+		// 2) It is from INIT_STREAM (cannot prune on INIT_STREAM)
 		return m.DeleteIndexInstance(id, instId, cleanup, reqCtx)
 	}
 
@@ -1985,6 +1992,32 @@ func (m *LifecycleMgr) MergePartition(id common.IndexDefnId, srcInstId common.In
 	}
 	if defn == nil {
 		logging.Infof("LifecycleMgr.MergePartition() : index %v does not exist.", id)
+		return nil
+	}
+
+	// Check if the source inst still exist
+	inst, err := m.FindLocalIndexInst(defn.Bucket, id, srcInstId)
+	if err != nil {
+		// Cannot read bucket topology.  Likely a transient error.  But without index inst, we cannot
+		// proceed without letting indexer to clean up.
+		logging.Errorf("LifecycleMgr.MergePartition() : Encountered error during merge index. Error = %v", err)
+		return err
+	}
+	if inst == nil || inst.State == uint32(common.INDEX_STATE_DELETED) {
+		// no match index instance to merge
+		return nil
+	}
+
+	// Check if the target inst still exist
+	inst, err = m.FindLocalIndexInst(defn.Bucket, id, tgtInstId)
+	if err != nil {
+		// Cannot read bucket topology.  Likely a transient error.  But without index inst, we cannot
+		// proceed without letting indexer to clean up.
+		logging.Errorf("LifecycleMgr.MergePartition() : Encountered error during merge index. Error = %v", err)
+		return err
+	}
+	if inst == nil || inst.State == uint32(common.INDEX_STATE_DELETED) {
+		// no match index instance to merge
 		return nil
 	}
 
