@@ -1021,6 +1021,13 @@ var SystemConfig = Config{
 		false, // mutable,
 		false, // case-insensitive
 	},
+	"indexer.plasma.MaxPageSize": ConfigValue{
+		128 * 1024,
+		"Used with AutoTuneLSSCleaner; target page size limit",
+		128 * 1024,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.plasma.useMmapReads": ConfigValue{
 		false,
 		"Use mmap for reads",
