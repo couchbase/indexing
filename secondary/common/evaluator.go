@@ -1,5 +1,6 @@
 package common
 
+import qvalue "github.com/couchbase/query/value"
 import mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
 
 // Evaluator interface for projector, to be implemented by
@@ -22,5 +23,5 @@ type Evaluator interface {
 
 	// TransformRoute will transform document consumable by
 	// downstream, returns data to be published to endpoints.
-	TransformRoute(vbuuid uint64, m *mc.DcpEvent, data map[string]interface{}, encodeBuf []byte) ([]byte, error)
+	TransformRoute(vbuuid uint64, m *mc.DcpEvent, data map[string]interface{}, encodeBuf []byte, docval qvalue.AnnotatedValue) ([]byte, error)
 }

@@ -204,7 +204,7 @@ func (ie *IndexEvaluator) StreamEndData(
 // TransformRoute implement Evaluator{} interface.
 func (ie *IndexEvaluator) TransformRoute(
 	vbuuid uint64, m *mc.DcpEvent, data map[string]interface{},
-	encodeBuf []byte) ([]byte, error) {
+	encodeBuf []byte, docval qvalue.AnnotatedValue) ([]byte, error) {
 	var err error
 	defer func() { // panic safe
 		if r := recover(); r != nil {
@@ -219,7 +219,6 @@ func (ie *IndexEvaluator) TransformRoute(
 	var npkey /*new-partition*/, opkey /*old-partition*/, nkey, okey []byte
 	var newBuf []byte
 	instn := ie.instance
-	var docval qvalue.AnnotatedValue
 
 	defn := instn.Definition
 	retainDelete := m.HasXATTR() && defn.GetRetainDeletedXATTR() &&
@@ -229,9 +228,8 @@ func (ie *IndexEvaluator) TransformRoute(
 		// TODO: Replace with isMetaIndex()
 		m.TreatAsJSON()
 		opcode = mcd.DCP_MUTATION
-		docval = qvalue.NewAnnotatedValue(qvalue.NewParsedValue(c.NULL, true))
-	} else {
-		docval = qvalue.NewAnnotatedValue(qvalue.NewParsedValue(m.Value, true))
+		nvalue := qvalue.NewParsedValueWithOptions(c.NULL, true, true)
+		docval = qvalue.NewAnnotatedValue(nvalue)
 	}
 
 	meta := ie.dcpEvent2Meta(m)
@@ -250,7 +248,8 @@ func (ie *IndexEvaluator) TransformRoute(
 		}
 	}
 	if len(m.OldValue) > 0 { // project old secondary key
-		docval = qvalue.NewAnnotatedValue(qvalue.NewParsedValue(m.OldValue, true))
+		nvalue := qvalue.NewParsedValueWithOptions(m.OldValue, true, true)
+		docval = qvalue.NewAnnotatedValue(nvalue)
 		docval.SetAttachment("meta", meta)
 		if opkey, err = ie.partitionKey(m, m.Key, docval, encodeBuf); err != nil {
 			return nil, err
