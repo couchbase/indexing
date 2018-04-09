@@ -171,7 +171,7 @@ func RunCommands(cluster string, cfg *Config, statsW io.Writer) (*Result, error)
 	}
 
 	config := c.SystemConfig.SectionConfig("queryport.client.", true)
-	config.SetValue("settings.poolSize", int(cfg.Concurrency))
+	config.SetValue("settings.poolSize", int(cfg.Concurrency*2))
 	config.SetValue("readDeadline", 0)
 	config.SetValue("writeDeadline", 0)
 

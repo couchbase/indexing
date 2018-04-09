@@ -344,13 +344,13 @@ func (m *LifecycleMgr) dispatchRequest(request *requestHolder, factory *message.
 	case client.OPCODE_BROADCAST_STATS:
 		m.handleBroadcastStats(content)
 	case client.OPCODE_RESET_INDEX:
-		m.handleResetIndex(content)
+		err = m.handleResetIndex(content)
 	case client.OPCODE_CONFIG_UPDATE:
-		m.handleConfigUpdate(content)
+		err = m.handleConfigUpdate(content)
 	case client.OPCODE_DROP_OR_PRUNE_INSTANCE:
-		m.handleDeleteOrPruneIndexInstance(content, common.NewRebalanceRequestContext())
+		err = m.handleDeleteOrPruneIndexInstance(content, common.NewRebalanceRequestContext())
 	case client.OPCODE_MERGE_PARTITION:
-		m.handleMergePartition(content, common.NewRebalanceRequestContext())
+		err = m.handleMergePartition(content, common.NewRebalanceRequestContext())
 	case client.OPCODE_PREPARE_CREATE_INDEX:
 		result, err = m.handlePrepareCreateIndex(content)
 	case client.OPCODE_COMMIT_CREATE_INDEX:
@@ -1200,6 +1200,7 @@ func (m *LifecycleMgr) DeleteIndex(id common.IndexDefnId, notify bool,
 		for _, inst := range insts {
 			// Can call index delete again even after indexer has cleaned up -- if indexer crashes after
 			// this point but before it can delete the index definition.
+			// Note that the phsyical index is removed asynchronously by the indexer.
 			if err := m.notifier.OnIndexDelete(common.IndexInstId(inst.InstId), defn.Bucket, reqCtx); err != nil {
 				// Do not remove index defnition if indexer is unable to delete the index.   This is to ensure the
 				// the client can call DeleteIndex again and free up indexer resource.
@@ -1828,6 +1829,24 @@ func (m *LifecycleMgr) handleDeleteOrPruneIndexInstance(content []byte, reqCtx *
 	return m.DeleteOrPruneIndexInstance(change.Defn, change.Cleanup, reqCtx)
 }
 
+//
+// DeleteOrPruneIndexInstance either delete index, delete instance or prune instance, depending on metadata state and
+// given index definition.   This operation is idempotent.   Caller (e.g. rebalancer) can retry this operation until
+// successful.    If this operation returns successfully, it means that
+// 1) metadata is cleaned up
+// 2) indexer internal data structure is cleaned up
+// 3) index data files are cleaned up asynchronously.
+// 4) projector stream is cleaned up asyncrhronously.
+//
+// Note that if a new create index instance request comes before previously created index files are removed, the
+// indexer may crash.  This can happen during rebalance:
+// 1) partitioned index can use the same index inst id
+// 2) index data file uses index inst id
+// After indexer crash, rebalancer recovery logic will kick in to remove the newly created index.
+//
+// For projector, stream operation is serialized.  So stream request for new index cannot proceed until the delete request
+// has processed.
+//
 func (m *LifecycleMgr) DeleteOrPruneIndexInstance(defn common.IndexDefn, cleanup bool, reqCtx *common.MetadataRequestContext) error {
 
 	id := defn.DefnId
@@ -1916,6 +1935,7 @@ func (m *LifecycleMgr) DeleteIndexInstance(id common.IndexDefnId, instId common.
 			return err
 		}
 
+		// Note that the phsyical index is removed asynchronously by the indexer.
 		if err := m.notifier.OnIndexDelete(instId, defn.Bucket, reqCtx); err != nil {
 			indexerErr, ok := err.(*common.IndexerError)
 			if ok && indexerErr.Code != common.IndexNotExist {
@@ -1924,13 +1944,14 @@ func (m *LifecycleMgr) DeleteIndexInstance(id common.IndexDefnId, instId common.
 				return err
 
 			} else if !strings.Contains(err.Error(), "Unknown Index Instance") {
-				logging.Errorf("LifecycleMgr.handleDeleteIndex(): Encountered error when dropping index: %v.  Drop index will be retried in background",
+				logging.Errorf("LifecycleMgr.handleDeleteInstance(): Encountered error when dropping index: %v.",
 					err.Error())
 				return err
 			}
 		}
 	}
 
+	// Remove the index instance from metadata.
 	m.repo.deleteInstanceFromTopology(defn.Bucket, id, instId)
 
 	return nil
@@ -2035,17 +2056,20 @@ func (m *LifecycleMgr) PruneIndexInstance(id common.IndexDefnId, instId common.I
 
 	//
 	// Prune the partition from the index instance in metadata.
-	// A DELETED proxy will be created to contain the pruned partition.  The DELETED proxy will have RState = REBAL_PENDING_DELETE.
-	// The proxy is for recovery purpose only.   If the indexer crashes after metadata is updated, the DELETED proxy will
-	// get cleaned up by removing the pruned partition data during indexer bootstrap.
+	// A DELETED inst (tombstone) will be created to contain the pruned partition.  The tombstone will have RState = REBAL_PENDING_DELETE.
+	// The tombstone is for recovery purpose only.   If the indexer crashes after metadata is updated, the tombstone will
+	// get cleaned up by removing the pruned partition data during indexer bootstrap.  The slice file will also get cleanup during
+	// crash recovery.
+	// When a index instance is merged or created, it has to remove its partition from tombstone to ensure that tombstone does not
+	// accidently delete the instance.
 	//
-	proxyInstId, err := common.NewIndexInstId()
+	tombstoneInstId, err := common.NewIndexInstId()
 	if err != nil {
 		logging.Errorf("LifecycleMgr.PrunePartition() : Failed to generate index inst id. Reason = %v", err)
 		return err
 	}
 
-	if err := m.repo.splitPartitionFromTopology(defn.Bucket, id, instId, proxyInstId, newPartitions); err != nil {
+	if err := m.repo.splitPartitionFromTopology(defn.Bucket, id, instId, tombstoneInstId, newPartitions); err != nil {
 		logging.Errorf("LifecycleMgr.PrunePartition() : Failed to find split index.  Reason = %v", err)
 		return err
 	}

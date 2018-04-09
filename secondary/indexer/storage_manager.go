@@ -910,12 +910,24 @@ func (s *storageMgr) handleIndexMergeSnapshot(cmd Message) {
 
 	} else {
 
-		//make sure that the timestamp is the same between source and target snapshot
-		//This comparison will only cover the seqno and vbuuids.
-		//Note that even if the index instance has 0 mutation or no new mutation, storage
-		//manager will always create a new indexSnapshot with the current timestamp at end of
-		//flush. So the source and target snapshot should not have different timestamp.
-		if !target.Timestamp().Equal2(source.Timestamp(), false) {
+		// Make sure that the source timestamp is greater than or equal to the target timestamp.
+		// This comparison will only cover the seqno and vbuuids.
+		//
+		// Note that even if the index instance has 0 mutation or no new mutation, storage
+		// manager will always create a new indexSnapshot with the current timestamp during
+		// snapshot.
+		//
+		// But there is a chance that merge happens before snapshot.  In this case, source
+		// could have a higher snapshot than target:
+		// 1) source is merged to MAINT stream from INIT stream
+		// 2) after (1), there is no flush/snapshot before merge partition happens
+		//
+		// Here, we just have to make sure that the source has a timestamp at least as high
+		// as the target to detect potential data loss.   The merged snapshot will use the
+		// target timestamp.    Since target timestamp cannot be higher than source snapshot,
+		// there is no risk of data loss.
+		//
+		if !source.Timestamp().EqualOrGreater(target.Timestamp()) {
 			s.muSnap.Unlock()
 			s.supvCmdch <- &MsgError{
 				err: Error{code: ERROR_STORAGE_MGR_MERGE_SNAPSHOT_FAIL,

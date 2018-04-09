@@ -293,6 +293,36 @@ func (ts *TsVbuuid) Equal2(other *TsVbuuid, compareSnapshot bool) bool {
 	return true
 }
 
+// Equal returns whether `ts` is equal or greater than `other`
+func (ts *TsVbuuid) EqualOrGreater(other *TsVbuuid) bool {
+	if ts != nil && other == nil ||
+		ts == nil && other != nil {
+		return false
+	}
+
+	if ts == nil && other == nil {
+		return true
+	}
+
+	if len(ts.Seqnos) != len(other.Seqnos) {
+		return false
+	}
+
+	for i, seqno := range ts.Seqnos {
+		if other.Seqnos[i] > seqno {
+			return false
+		}
+	}
+
+	for i, vbuuid := range ts.Vbuuids {
+		if other.Vbuuids[i] != vbuuid {
+			return false
+		}
+	}
+
+	return true
+}
+
 // Clone of TsVbuuid
 func (ts *TsVbuuid) Clone() *TsVbuuid {
 
