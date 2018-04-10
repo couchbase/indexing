@@ -30,6 +30,8 @@ import (
 	"github.com/couchbase/plasma"
 )
 
+var errStorageCorrupted = fmt.Errorf("Storage corrupted and unrecoverable")
+
 func init() {
 	plasma.SetLogger(&logging.SystemLogger)
 }
@@ -156,7 +158,15 @@ func newPlasmaSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	slice.readers = make(chan *plasma.Reader, numReaders)
 
 	slice.isPrimary = isPrimary
+
 	if err := slice.initStores(); err != nil {
+		// Index is unusable. Remove the data files and reinit
+		if plasma.IsFatalError(err) {
+			logging.Errorf("plasmaSlice:NewplasmaSlice Id %v IndexInstId %v "+
+				"fatal error occured: %v", sliceId, idxInstId, err)
+			err = errStorageCorrupted
+		}
+
 		return nil, err
 	}
 
@@ -258,11 +268,6 @@ func (slice *plasmaSlice) initStores() error {
 		for i := 0; i < slice.numWriters; i++ {
 			slice.main[i] = slice.mainstore.NewWriter()
 		}
-
-		for i := 0; i < cap(slice.readers); i++ {
-			slice.readers <- slice.mainstore.NewReader()
-		}
-
 	}()
 
 	if !slice.isPrimary {
@@ -285,9 +290,21 @@ func (slice *plasmaSlice) initStores() error {
 
 	wg.Wait()
 	if mErr != nil {
+		if !slice.isPrimary && bErr == nil {
+			slice.backstore.Close()
+		}
+
 		return mErr
 	} else if bErr != nil {
+		if mErr == nil {
+			slice.mainstore.Close()
+		}
+
 		return bErr
+	}
+
+	for i := 0; i < cap(slice.readers); i++ {
+		slice.readers <- slice.mainstore.NewReader()
 	}
 
 	if !slice.newBorn {
