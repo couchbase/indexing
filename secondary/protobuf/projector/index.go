@@ -7,6 +7,7 @@ import c "github.com/couchbase/indexing/secondary/common"
 import mcd "github.com/couchbase/indexing/secondary/dcp/transport"
 import mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
 import qvalue "github.com/couchbase/query/value"
+import qexpr "github.com/couchbase/query/expression"
 import qu "github.com/couchbase/indexing/secondary/common/queryutil"
 import "github.com/couchbase/indexing/secondary/common/json"
 
@@ -203,8 +204,9 @@ func (ie *IndexEvaluator) StreamEndData(
 
 // TransformRoute implement Evaluator{} interface.
 func (ie *IndexEvaluator) TransformRoute(
-	vbuuid uint64, m *mc.DcpEvent, data map[string]interface{},
-	encodeBuf []byte, docval qvalue.AnnotatedValue) ([]byte, error) {
+	vbuuid uint64, m *mc.DcpEvent, data map[string]interface{}, encodeBuf []byte,
+	docval qvalue.AnnotatedValue, context qexpr.Context) ([]byte, error) {
+
 	var err error
 	defer func() { // panic safe
 		if r := recover(); r != nil {
@@ -234,16 +236,18 @@ func (ie *IndexEvaluator) TransformRoute(
 
 	meta := ie.dcpEvent2Meta(m)
 	docval.SetAttachment("meta", meta)
-	where, err := ie.wherePredicate(m, docval, encodeBuf)
+	where, err := ie.wherePredicate(m, docval, context, encodeBuf)
 	if err != nil {
 		return nil, err
 	}
 
 	if where && (len(m.Value) > 0 || retainDelete) { // project new secondary key
-		if npkey, err = ie.partitionKey(m, m.Key, docval, encodeBuf); err != nil {
+		npkey, err = ie.partitionKey(m, m.Key, docval, context, encodeBuf)
+		if err != nil {
 			return nil, err
 		}
-		if nkey, newBuf, err = ie.evaluate(m, m.Key, docval, encodeBuf); err != nil {
+		nkey, newBuf, err = ie.evaluate(m, m.Key, docval, context, encodeBuf)
+		if err != nil {
 			return nil, err
 		}
 	}
@@ -251,10 +255,12 @@ func (ie *IndexEvaluator) TransformRoute(
 		nvalue := qvalue.NewParsedValueWithOptions(m.OldValue, true, true)
 		docval = qvalue.NewAnnotatedValue(nvalue)
 		docval.SetAttachment("meta", meta)
-		if opkey, err = ie.partitionKey(m, m.Key, docval, encodeBuf); err != nil {
+		opkey, err = ie.partitionKey(m, m.Key, docval, context, encodeBuf)
+		if err != nil {
 			return nil, err
 		}
-		if okey, newBuf, err = ie.evaluate(m, m.Key, docval, encodeBuf); err != nil {
+		okey, newBuf, err = ie.evaluate(m, m.Key, docval, context, encodeBuf)
+		if err != nil {
 			return nil, err
 		}
 	}
@@ -342,7 +348,7 @@ func (ie *IndexEvaluator) TransformRoute(
 
 func (ie *IndexEvaluator) evaluate(
 	m *mc.DcpEvent, docid []byte, docval qvalue.AnnotatedValue,
-	encodeBuf []byte) ([]byte, []byte, error) {
+	context qexpr.Context, encodeBuf []byte) ([]byte, []byte, error) {
 
 	defn := ie.instance.GetDefinition()
 	if defn.GetIsPrimary() { // primary index supported !!
@@ -356,14 +362,14 @@ func (ie *IndexEvaluator) evaluate(
 	exprType := defn.GetExprType()
 	switch exprType {
 	case ExprType_N1QL:
-		return N1QLTransform(docid, docval, ie.skExprs, encodeBuf)
+		return N1QLTransform(docid, docval, context, ie.skExprs, encodeBuf)
 	}
 	return nil, nil, nil
 }
 
 func (ie *IndexEvaluator) partitionKey(
 	m *mc.DcpEvent, docid []byte, docval qvalue.AnnotatedValue,
-	encodeBuf []byte) ([]byte, error) {
+	context qexpr.Context, encodeBuf []byte) ([]byte, error) {
 
 	defn := ie.instance.GetDefinition()
 	if ie.pkExprs == nil { // no partition key
@@ -376,7 +382,7 @@ func (ie *IndexEvaluator) partitionKey(
 	exprType := defn.GetExprType()
 	switch exprType {
 	case ExprType_N1QL:
-		out, _, err := N1QLTransform(docid, docval, ie.pkExprs, nil)
+		out, _, err := N1QLTransform(docid, docval, context, ie.pkExprs, nil)
 		return out, err
 	}
 	return nil, nil
@@ -384,7 +390,7 @@ func (ie *IndexEvaluator) partitionKey(
 
 func (ie *IndexEvaluator) wherePredicate(
 	m *mc.DcpEvent, docval qvalue.AnnotatedValue,
-	encodeBuf []byte) (bool, error) {
+	context qexpr.Context, encodeBuf []byte) (bool, error) {
 
 	// if where predicate is not supplied - always evaluate to `true`
 	if ie.whExpr == nil {
@@ -400,7 +406,7 @@ func (ie *IndexEvaluator) wherePredicate(
 	switch exprType {
 	case ExprType_N1QL:
 		// TODO: can be optimized by using a custom N1QL-evaluator.
-		out, _, err := N1QLTransform(nil, docval, []interface{}{ie.whExpr}, encodeBuf)
+		out, _, err := N1QLTransform(nil, docval, context, []interface{}{ie.whExpr}, encodeBuf)
 		if out == nil { // missing is treated as false
 			return false, err
 		} else if err != nil { // errors are treated as false

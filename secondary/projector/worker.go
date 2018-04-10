@@ -23,6 +23,7 @@ import "fmt"
 import "strconv"
 
 import qvalue "github.com/couchbase/query/value"
+import qexpr "github.com/couchbase/query/expression"
 import mcd "github.com/couchbase/indexing/secondary/dcp/transport"
 import mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
 import c "github.com/couchbase/indexing/secondary/common"
@@ -386,9 +387,12 @@ func (worker *VbucketWorker) handleEvent(m *mc.DcpEvent) *Vbucket {
 		// for each engine distribute transformations to endpoints.
 		fmsg := "%v ##%x TransformRoute: %v\n"
 		nvalue := qvalue.NewParsedValueWithOptions(m.Value, true, true)
+		context := qexpr.NewIndexContext()
 		docval := qvalue.NewAnnotatedValue(nvalue)
 		for _, engine := range worker.engines {
-			newBuf, err := engine.TransformRoute(v.vbuuid, m, dataForEndpoints, worker.encodeBuf, docval)
+			newBuf, err := engine.TransformRoute(
+				v.vbuuid, m, dataForEndpoints, worker.encodeBuf, docval, context,
+			)
 			if err != nil {
 				logging.Errorf(fmsg, logPrefix, m.Opaque, err)
 			}
