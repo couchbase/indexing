@@ -1346,6 +1346,8 @@ func (mdb *plasmaSlice) Statistics() (StorageStatistics, error) {
 	cacheHits += pStats.CacheHits
 	cacheMiss += pStats.CacheMisses
 	sts.MemUsed = pStats.MemSz + pStats.MemSzIndex
+	sts.InsertBytes = pStats.BytesWritten
+	sts.GetBytes = pStats.LSSBlkReadBytes
 
 	internalData = append(internalData, fmt.Sprintf("{\n\"MainStore\":\n%s", pStats))
 	if !mdb.isPrimary {
@@ -1356,6 +1358,8 @@ func (mdb *plasmaSlice) Statistics() (StorageStatistics, error) {
 		cacheMiss += pStats.CacheMisses
 		sts.MemUsed += pStats.MemSz + pStats.MemSzIndex
 		internalData = append(internalData, fmt.Sprintf(",\n\"BackStore\":\n%s", pStats))
+		sts.InsertBytes += pStats.BytesWritten
+		sts.GetBytes += pStats.LSSBlkReadBytes
 	}
 
 	internalData = append(internalData, "}\n")

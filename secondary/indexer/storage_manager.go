@@ -439,6 +439,7 @@ func (s *storageMgr) updateSnapIntervalStat(idxStats *IndexStats) {
 
 	idxStats.updateAllPartitionStats(
 		func(idxStats *IndexStats) {
+
 			// Compute avgTsItemsCount
 			last = idxStats.lastNumFlushQueued.Value()
 			curr = idxStats.numDocsFlushQueued.Value()
@@ -795,6 +796,7 @@ func (s *storageMgr) handleStats(cmd Message) {
 			if common.GetStorageMode() != common.MOI {
 				idxStats.fragPercent.Set(int64(st.GetFragmentation()))
 			}
+
 			idxStats.getBytes.Set(st.Stats.GetBytes)
 			idxStats.insertBytes.Set(st.Stats.InsertBytes)
 			idxStats.deleteBytes.Set(st.Stats.DeleteBytes)
@@ -802,7 +804,7 @@ func (s *storageMgr) handleStats(cmd Message) {
 			// compute mutation rate
 			now := time.Now().UnixNano()
 			elapsed := float64(now-idxStats.lastMutateGatherTime.Value()) / float64(time.Second)
-			if elapsed > 0 {
+			if elapsed > 60 {
 				numDocsIndexed := idxStats.numDocsIndexed.Value()
 				mutationRate := float64(numDocsIndexed-idxStats.lastNumDocsIndexed.Value()) / elapsed
 				idxStats.avgMutationRate.Set(int64((mutationRate + float64(idxStats.avgMutationRate.Value())) / 2))
@@ -812,6 +814,14 @@ func (s *storageMgr) handleStats(cmd Message) {
 				drainRate := float64(numItemsFlushed-idxStats.lastNumItemsFlushed.Value()) / elapsed
 				idxStats.avgDrainRate.Set(int64((drainRate + float64(idxStats.avgDrainRate.Value())) / 2))
 				idxStats.lastNumItemsFlushed.Set(numItemsFlushed)
+
+				diskBytes := idxStats.getBytes.Value() + idxStats.insertBytes.Value() + idxStats.deleteBytes.Value()
+				diskBps := float64(diskBytes-idxStats.lastDiskBytes.Value()) / elapsed
+				idxStats.avgDiskBps.Set(int64((diskBps + float64(idxStats.avgDiskBps.Value())) / 2))
+				idxStats.lastDiskBytes.Set(diskBytes)
+
+				logging.Debugf("StorageManager.handleStats: partition %v DiskBps %v avgDiskBps %v drain rate %v",
+					st.PartnId, diskBps, idxStats.avgDiskBps.Value(), idxStats.avgDrainRate.Value())
 
 				idxStats.lastMutateGatherTime.Set(now)
 			}

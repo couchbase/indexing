@@ -153,11 +153,13 @@ type IndexStats struct {
 	avgScanRate               stats.Int64Val
 	avgMutationRate           stats.Int64Val
 	avgDrainRate              stats.Int64Val
+	avgDiskBps                stats.Int64Val
 	lastScanGatherTime        stats.Int64Val
 	lastNumRowsReturned       stats.Int64Val
 	lastMutateGatherTime      stats.Int64Val
 	lastNumDocsIndexed        stats.Int64Val
 	lastNumItemsFlushed       stats.Int64Val
+	lastDiskBytes             stats.Int64Val
 	lastRollbackTime          stats.TimeVal
 	progressStatTime          stats.TimeVal
 	residentPercent           stats.Int64Val
@@ -234,11 +236,13 @@ func (s *IndexStats) Init() {
 	s.avgScanRate.Init()
 	s.avgMutationRate.Init()
 	s.avgDrainRate.Init()
+	s.avgDiskBps.Init()
 	s.lastScanGatherTime.Init()
 	s.lastNumRowsReturned.Init()
 	s.lastMutateGatherTime.Init()
 	s.lastNumDocsIndexed.Init()
 	s.lastNumItemsFlushed.Init()
+	s.lastDiskBytes.Init()
 	s.lastRollbackTime.Init()
 	s.progressStatTime.Init()
 	s.residentPercent.Init()
@@ -709,6 +713,11 @@ func (is IndexerStats) GetStats(getPartition bool, skipEmpty bool) common.Statis
 		addStat("avg_drain_rate",
 			s.partnAvgInt64Stats(func(ss *IndexStats) int64 {
 				return ss.avgDrainRate.Value()
+			}))
+		// partition stats
+		addStat("avg_disk_bps",
+			s.partnAvgInt64Stats(func(ss *IndexStats) int64 {
+				return ss.avgDiskBps.Value()
 			}))
 		addStat("last_rollback_time", s.lastRollbackTime.Value())
 		addStat("progress_stat_time", s.progressStatTime.Value())

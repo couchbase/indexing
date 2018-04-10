@@ -94,6 +94,7 @@ type CostMethod interface {
 	GetMemMean() float64
 	GetCpuMean() float64
 	GetDataMean() float64
+	GetDiskMean() float64
 	ComputeResourceVariation() float64
 }
 
@@ -162,6 +163,7 @@ type IndexerNode struct {
 	ActualMemOverhead uint64  `json:"actualMemOverhead"`
 	ActualCpuUsage    float64 `json:"actualCpuUsage"`
 	ActualDataSize    uint64  `json:"actualDataSize"`
+	ActualDiskUsage   uint64  `json:"actualDiskUsage"`
 
 	// input: index residing on the node
 	Indexes []*IndexUsage `json:"indexes"`
@@ -200,6 +202,7 @@ type IndexUsage struct {
 	NumOfDocs     uint64  `json:"numOfDocs"`
 	ResidentRatio float64 `json:"residentRatio,omitempty"`
 	MutationRate  uint64  `json:"mutationRate"`
+	DrainRate     uint64  `json:"drainRate"`
 	ScanRate      uint64  `json:"scanRate"`
 
 	// input: resource consumption (from sizing equation)
@@ -218,6 +221,8 @@ type IndexUsage struct {
 	ActualResidentPercent uint64  `json:"actualResidentPercent"`
 	ActualDataSize        uint64  `json:"actualDataSize"`
 	ActualNumDocs         uint64  `json:"actualNumDocs"`
+	ActualDiskUsage       uint64  `json:"actualDiskUsage"`
+	ActualMemStats        uint64  `json:"actualMemStats"`
 
 	// input: resource consumption (estimated sizing)
 	NoUsageInfo       bool   `json:"NoUsageInfo"`
@@ -266,6 +271,7 @@ type Solution struct {
 	memMean  float64
 	cpuMean  float64
 	dataMean float64
+	diskMean float64
 
 	// placement of indexes	in nodes
 	Placement  []*IndexerNode `json:"placement,omitempty"`
@@ -328,6 +334,8 @@ type UsageBasedCostMethod struct {
 	MemStdDev      float64 `json:"memStdDev,omitempty"`
 	CpuMean        float64 `json:"cpuMean,omitempty"`
 	CpuStdDev      float64 `json:"cpuStdDev,omitempty"`
+	DiskMean       float64 `json:"diskMean,omitempty"`
+	DiskStdDev     float64 `json:"diskStdDev,omitempty"`
 	DataSizeMean   float64 `json:"dataSizeMean,omitempty"`
 	DataSizeStdDev float64 `json:"dataSizeStdDev,omitempty"`
 	TotalData      uint64  `json:"totalData,omitempty"`
@@ -1284,6 +1292,7 @@ func (s *Solution) addIndex(n *IndexerNode, idx *IndexUsage, meetConstraint bool
 	n.AddMemUsageOverhead(s, idx.GetMemUsage(s.UseLiveData()), idx.GetMemOverhead(s.UseLiveData()))
 	n.AddCpuUsage(s, idx.GetCpuUsage(s.UseLiveData()))
 	n.AddDataSize(s, idx.GetDataSize(s.UseLiveData()))
+	n.AddDiskUsage(s, idx.GetDiskUsage(s.UseLiveData()))
 	n.EvaluateNodeStats(s)
 	s.updateServerGroupMap(idx, n)
 }
@@ -1302,6 +1311,7 @@ func (s *Solution) removeIndex(n *IndexerNode, i int) {
 	n.SubtractMemUsageOverhead(s, idx.GetMemUsage(s.UseLiveData()), idx.GetMemOverhead(s.UseLiveData()))
 	n.SubtractCpuUsage(s, idx.GetCpuUsage(s.UseLiveData()))
 	n.SubtractDataSize(s, idx.GetDataSize(s.UseLiveData()))
+	n.SubtractDiskUsage(s, idx.GetDiskUsage(s.UseLiveData()))
 
 	n.EvaluateNodeConstraint(s, false, nil, idx)
 	n.EvaluateNodeStats(s)
@@ -1349,6 +1359,7 @@ func (s *Solution) clone() *Solution {
 	r.memMean = s.memMean
 	r.cpuMean = s.cpuMean
 	r.dataMean = s.dataMean
+	r.diskMean = s.diskMean
 	r.enforceConstraint = s.enforceConstraint
 	r.indexSGMap = make(map[string]string)
 
@@ -1383,6 +1394,7 @@ func (s *Solution) updateCost() {
 		s.memMean = s.cost.GetMemMean()
 		s.cpuMean = s.cost.GetCpuMean()
 		s.dataMean = s.cost.GetDataMean()
+		s.diskMean = s.cost.GetDiskMean()
 	}
 }
 
@@ -1491,12 +1503,14 @@ func (s *Solution) PrintLayout() {
 
 		logging.Infof("")
 		logging.Infof("Indexer serverGroup:%v, nodeId:%v, nodeUUID:%v, useLiveData:%v", indexer.ServerGroup, indexer.NodeId, indexer.NodeUUID, s.UseLiveData())
-		logging.Infof("Indexer total memory:%v (%s), mem:%v (%s), overhead:%v (%s), data:%v (%s) cpu:%.4f, numIndexes:%v",
+		logging.Infof("Indexer total memory:%v (%s), mem:%v (%s), overhead:%v (%s), data:%v (%s) cpu:%.4f, io:%v (%s), numIndexes:%v",
 			indexer.GetMemTotal(s.UseLiveData()), formatMemoryStr(uint64(indexer.GetMemTotal(s.UseLiveData()))),
 			indexer.GetMemUsage(s.UseLiveData()), formatMemoryStr(uint64(indexer.GetMemUsage(s.UseLiveData()))),
 			indexer.GetMemOverhead(s.UseLiveData()), formatMemoryStr(uint64(indexer.GetMemOverhead(s.UseLiveData()))),
 			indexer.GetDataSize(s.UseLiveData()), formatMemoryStr(uint64(indexer.GetDataSize(s.UseLiveData()))),
-			indexer.GetCpuUsage(s.UseLiveData()), len(indexer.Indexes))
+			indexer.GetCpuUsage(s.UseLiveData()),
+			indexer.GetDiskUsage(s.UseLiveData()), formatMemoryStr(uint64(indexer.GetDiskUsage(s.UseLiveData()))),
+			len(indexer.Indexes))
 		logging.Infof("Indexer isDeleted:%v isNew:%v exclude:%v meetConstraint:%v",
 			indexer.IsDeleted(), indexer.isNew, indexer.exclude, indexer.meetConstraint)
 
@@ -1506,12 +1520,13 @@ func (s *Solution) PrintLayout() {
 				index.GetDisplayName(), index.Bucket, index.DefnId, index.InstId, index.PartnId,
 				index.initialNode == nil || index.initialNode.NodeId != indexer.NodeId, !index.suppressEquivIdxCheck,
 				index.pendingCreate)
-			logging.Infof("\t\tIndex total memory:%v (%s), mem:%v (%s), overhead:%v (%s), data:%v (%s) cpu:%.4f resident:%v%% build:%v%% estimated:%v",
+			logging.Infof("\t\tIndex total memory:%v (%s), mem:%v (%s), overhead:%v (%s), data:%v (%s) cpu:%.4f io:%v (%s) resident:%v%% build:%v%% estimated:%v",
 				index.GetMemTotal(s.UseLiveData()), formatMemoryStr(uint64(index.GetMemTotal(s.UseLiveData()))),
 				index.GetMemUsage(s.UseLiveData()), formatMemoryStr(uint64(index.GetMemUsage(s.UseLiveData()))),
 				index.GetMemOverhead(s.UseLiveData()), formatMemoryStr(uint64(index.GetMemOverhead(s.UseLiveData()))),
 				index.GetDataSize(s.UseLiveData()), formatMemoryStr(uint64(index.GetDataSize(s.UseLiveData()))),
 				index.GetCpuUsage(s.UseLiveData()),
+				index.GetDiskUsage(s.UseLiveData()), formatMemoryStr(uint64(index.GetDiskUsage(s.UseLiveData()))),
 				uint64(index.GetResidentRatio(s.UseLiveData())),
 				index.GetBuildPercent(s.UseLiveData()),
 				index.NoUsageInfo && index.HasSizing(s.UseLiveData()))
@@ -1527,14 +1542,14 @@ func (s *Solution) ComputeMemUsage() (float64, float64) {
 	// Compute mean memory usage
 	var meanMemUsage float64
 	for _, indexerUsage := range s.Placement {
-		meanMemUsage += float64(indexerUsage.GetMemTotal(s.UseLiveData()))
+		meanMemUsage += float64(indexerUsage.GetMemUsage(s.UseLiveData()))
 	}
 	meanMemUsage = meanMemUsage / float64(len(s.Placement))
 
 	// compute memory variance
 	var varianceMemUsage float64
 	for _, indexerUsage := range s.Placement {
-		v := float64(indexerUsage.GetMemTotal(s.UseLiveData())) - meanMemUsage
+		v := float64(indexerUsage.GetMemUsage(s.UseLiveData())) - meanMemUsage
 		varianceMemUsage += v * v
 	}
 	varianceMemUsage = varianceMemUsage / float64(len(s.Placement))
@@ -1569,6 +1584,32 @@ func (s *Solution) ComputeCpuUsage() (float64, float64) {
 	stdDevCpuUsage := math.Sqrt(varianceCpuUsage)
 
 	return meanCpuUsage, stdDevCpuUsage
+}
+
+//
+// Compute statistics on disk Usage
+//
+func (s *Solution) ComputeDiskUsage() (float64, float64) {
+
+	// Compute mean disk usage
+	var meanDiskUsage float64
+	for _, indexerUsage := range s.Placement {
+		meanDiskUsage += float64(indexerUsage.GetDiskUsage(s.UseLiveData()))
+	}
+	meanDiskUsage = meanDiskUsage / float64(len(s.Placement))
+
+	// compute disk variance
+	var varianceDiskUsage float64
+	for _, indexerUsage := range s.Placement {
+		v := float64(indexerUsage.GetDiskUsage(s.UseLiveData())) - meanDiskUsage
+		varianceDiskUsage += v * v
+	}
+	varianceDiskUsage = varianceDiskUsage / float64(len(s.Placement))
+
+	// compute disk std dev
+	stdDevDiskUsage := math.Sqrt(varianceDiskUsage)
+
+	return meanDiskUsage, stdDevDiskUsage
 }
 
 //
@@ -2524,12 +2565,14 @@ func (s *Solution) canRunEstimation() bool {
 // 1) memory usage
 // 2) cpu
 // 3) data
+// 4) io
 //
 func (s *Solution) computeUsageRatio(indexer *IndexerNode) float64 {
 
 	memCost := float64(0)
 	cpuCost := float64(0)
 	dataCost := float64(0)
+	diskCost := float64(0)
 
 	if s.memMean != 0 {
 		memCost = float64(indexer.GetMemTotal(s.UseLiveData())) / s.memMean
@@ -2543,7 +2586,11 @@ func (s *Solution) computeUsageRatio(indexer *IndexerNode) float64 {
 		dataCost = float64(indexer.GetDataSize(s.UseLiveData())) / s.dataMean
 	}
 
-	return (memCost + cpuCost + dataCost) / 3
+	if s.diskMean != 0 {
+		diskCost = float64(indexer.GetDiskUsage(s.UseLiveData())) / s.diskMean
+	}
+
+	return (memCost + cpuCost + dataCost + diskCost) / 4
 }
 
 //
@@ -2551,10 +2598,11 @@ func (s *Solution) computeUsageRatio(indexer *IndexerNode) float64 {
 // 1) memory usage
 // 2) cpu
 // 3) data
+// 4) io
 //
 func (s *Solution) computeMeanUsageRatio() float64 {
 
-	return 3
+	return 4
 }
 
 func (s *Solution) computeMaxMemUsage() uint64 {
@@ -3170,6 +3218,7 @@ func (o *IndexerNode) clone() *IndexerNode {
 	r.ActualMemOverhead = o.ActualMemOverhead
 	r.ActualCpuUsage = o.ActualCpuUsage
 	r.ActualDataSize = o.ActualDataSize
+	r.ActualDiskUsage = o.ActualDiskUsage
 	r.meetConstraint = o.meetConstraint
 	r.numEmptyIndex = o.numEmptyIndex
 	r.hasEligible = o.hasEligible
@@ -3341,6 +3390,38 @@ func (o *IndexerNode) SubtractDataSize(s *Solution, datasize uint64) {
 		o.ActualDataSize -= datasize
 	} else {
 		o.DataSize -= datasize
+	}
+}
+
+//
+// Get disk bps
+//
+func (o *IndexerNode) GetDiskUsage(useLive bool) uint64 {
+
+	if useLive {
+		return o.ActualDiskUsage
+	}
+
+	return 0
+}
+
+//
+// Add disk bps
+//
+func (o *IndexerNode) AddDiskUsage(s *Solution, diskUsage uint64) {
+
+	if s.UseLiveData() {
+		o.ActualDiskUsage += diskUsage
+	}
+}
+
+//
+// Subtract disk bps
+//
+func (o *IndexerNode) SubtractDiskUsage(s *Solution, diskUsage uint64) {
+
+	if s.UseLiveData() {
+		o.ActualDiskUsage -= diskUsage
 	}
 }
 
@@ -3617,6 +3698,23 @@ func (o *IndexUsage) GetDataSize(useLive bool) uint64 {
 }
 
 //
+// Get disk Usage
+//
+func (o *IndexUsage) GetDiskUsage(useLive bool) uint64 {
+
+	if o.NoUsageInfo {
+		return 0
+	}
+
+	if useLive {
+		return o.ActualDiskUsage
+	}
+
+	return 0
+}
+
+//
+//
 // Get resident ratio
 //
 func (o *IndexUsage) GetResidentRatio(useLive bool) float64 {
@@ -3829,13 +3927,27 @@ func (c *UsageBasedCostMethod) GetDataMean() float64 {
 }
 
 //
-// Compute average resource variation
+// Get disk mean
+//
+func (c *UsageBasedCostMethod) GetDiskMean() float64 {
+	return c.DiskMean
+}
+
+//
+// Compute average resource variation across 4 dimensions:
+// 1) memory
+// 2) cpu
+// 3) disk
+// 4) data size
+// This computes a "score" from 0 to 4.  The lowest the score,
+// the lower the variation.
 //
 func (c *UsageBasedCostMethod) ComputeResourceVariation() float64 {
 
 	memCost := float64(0)
 	cpuCost := float64(0)
 	dataSizeCost := float64(0)
+	diskCost := float64(0)
 	count := 0
 
 	if c.MemMean != 0 {
@@ -3853,7 +3965,12 @@ func (c *UsageBasedCostMethod) ComputeResourceVariation() float64 {
 		count++
 	}
 
-	return (memCost + cpuCost + dataSizeCost) / float64(count)
+	if c.DiskMean != 0 {
+		diskCost = c.DiskStdDev / c.DiskMean
+		count++
+	}
+
+	return (memCost + cpuCost + dataSizeCost + diskCost) / float64(count)
 }
 
 //
@@ -3864,11 +3981,13 @@ func (c *UsageBasedCostMethod) Cost(s *Solution) float64 {
 	// compute usage statistics
 	c.MemMean, c.MemStdDev = s.ComputeMemUsage()
 	c.CpuMean, c.CpuStdDev = s.ComputeCpuUsage()
+	c.DiskMean, c.DiskStdDev = s.ComputeDiskUsage()
 	c.TotalData, c.DataMoved, c.TotalIndex, c.IndexMoved = s.computeIndexMovement(false)
 	c.DataSizeMean, c.DataSizeStdDev = s.ComputeDataSize()
 
 	memCost := float64(0)
 	cpuCost := float64(0)
+	diskCost := float64(0)
 	movementCost := float64(0)
 	indexCost := float64(0)
 	emptyIdxCost := float64(0)
@@ -3890,7 +4009,12 @@ func (c *UsageBasedCostMethod) Cost(s *Solution) float64 {
 	}
 	count++
 
-	// Empty index is index with no recored memory or cpu usage (exlcuding mem overhead).
+	if c.DiskMean != 0 {
+		diskCost = c.DiskStdDev / c.DiskMean
+	}
+	count++
+
+	// Empty index is index with no recorded memory or cpu usage (exlcuding mem overhead).
 	// It could be index without stats or sizing information.
 	// The cost function minimize the residual memory after subtracting the estimated empty
 	// index usage.
@@ -3923,10 +4047,10 @@ func (c *UsageBasedCostMethod) Cost(s *Solution) float64 {
 		count++
 	}
 
-	logging.Tracef("Planner::cost: mem cost %v cpu cost %v data moved %v index moved %v emptyIdx cost %v dataSize cost %v count %v",
-		memCost, cpuCost, movementCost, indexCost, emptyIdxCost, dataSizeCost, count)
+	logging.Tracef("Planner::cost: mem cost %v cpu cost %v data moved %v index moved %v emptyIdx cost %v dataSize cost %v disk cost %v count %v",
+		memCost, cpuCost, movementCost, indexCost, emptyIdxCost, dataSizeCost, diskCost, count)
 
-	return (memCost + cpuCost + emptyIdxCost + movementCost + indexCost + dataSizeCost) / float64(count)
+	return (memCost + cpuCost + emptyIdxCost + movementCost + indexCost + dataSizeCost + diskCost) / float64(count)
 }
 
 //
@@ -3936,6 +4060,7 @@ func (s *UsageBasedCostMethod) Print() {
 
 	var memUtil float64
 	var cpuUtil float64
+	var diskUtil float64
 	var dataSizeUtil float64
 	var dataMoved float64
 	var indexMoved float64
@@ -3952,6 +4077,10 @@ func (s *UsageBasedCostMethod) Print() {
 		dataSizeUtil = float64(s.DataSizeStdDev) / float64(s.DataSizeMean) * 100
 	}
 
+	if s.DiskMean != 0 {
+		diskUtil = float64(s.DiskStdDev) / float64(s.DiskMean) * 100
+	}
+
 	if s.TotalData != 0 {
 		dataMoved = float64(s.DataMoved) / float64(s.TotalData) * 100
 	}
@@ -3966,6 +4095,8 @@ func (s *UsageBasedCostMethod) Print() {
 	logging.Infof("Indexer CPU Mean %.4f", s.CpuMean)
 	logging.Infof("Indexer CPU Deviation %.2f (%.2f%%)", s.CpuStdDev, cpuUtil)
 	logging.Infof("Indexer CPU Utilization %.4f", float64(s.CpuMean)/float64(s.constraint.GetCpuQuota()))
+	logging.Infof("Indexer IO Mean %.4f", s.DiskMean)
+	logging.Infof("Indexer IO Deviation %.2f (%.2f%%)", s.DiskStdDev, diskUtil)
 	logging.Infof("Indexer Data Size Mean %v (%s)", uint64(s.DataSizeMean), formatMemoryStr(uint64(s.DataSizeMean)))
 	logging.Infof("Indexer Data Size Deviation %v (%s) (%.2f%%)", uint64(s.DataSizeStdDev), formatMemoryStr(uint64(s.DataSizeStdDev)), dataSizeUtil)
 	logging.Infof("Total Index Data (from non-deleted node) %v", formatMemoryStr(s.TotalData))
