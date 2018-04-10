@@ -98,7 +98,7 @@ type PlacementMethod interface {
 	Validate(s *Solution) error
 	GetEligibleIndexes() []*IndexUsage
 	AddOptionalIndexes([]*IndexUsage)
-	RemoveOptionalIndexes()
+	RemoveOptionalIndexes() []*IndexUsage
 	HasOptionalIndexes() bool
 	RemoveEligibleIndex([]*IndexUsage)
 }
@@ -362,7 +362,8 @@ func (p *SAPlanner) Plan(command CommandType, solution *Solution) (*Solution, er
 		// If planner has retries 3 times, then remove any optional indexes.
 		if i > 3 && p.placement.HasOptionalIndexes() {
 			logging.Infof("Cannot rebuild lost replica due to resource constraint in cluster.  Will not rebuild lost replica.")
-			p.placement.RemoveOptionalIndexes()
+			optionals := p.placement.RemoveOptionalIndexes()
+			solution.removeIndexes(optionals)
 		}
 
 		logging.Infof("Planner::Fail to create plan satisyfig constraint. Re-planning. Num of Try=%v.  Elapsed Time=%v",
@@ -983,6 +984,21 @@ func (s *Solution) removeIndex(n *IndexerNode, i int) {
 
 	n.SubtractMemUsageOverhead(s, idx.GetMemUsage(s.UseLiveData()), idx.GetMemOverhead(s.UseLiveData()))
 	n.SubtractCpuUsage(s, idx.GetCpuUsage(s.UseLiveData()))
+}
+
+//
+// Remove indexes in topology
+//
+func (s *Solution) removeIndexes(indexes []*IndexUsage) {
+	for _, target := range indexes {
+		for _, indexer := range s.Placement {
+			for i, index := range indexer.Indexes {
+				if index == target {
+					s.removeIndex(indexer, i)
+				}
+			}
+		}
+	}
 }
 
 //
@@ -2591,13 +2607,16 @@ func (p *RandomPlacement) AddOptionalIndexes(indexes []*IndexUsage) {
 //
 // Remove optional index for placement
 //
-func (p *RandomPlacement) RemoveOptionalIndexes() {
+func (p *RandomPlacement) RemoveOptionalIndexes() []*IndexUsage {
 
 	for _, index := range p.optionals {
 		delete(p.indexes, index)
 	}
 
+	result := p.optionals
 	p.optionals = nil
+
+	return result
 }
 
 //
