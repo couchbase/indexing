@@ -122,6 +122,7 @@ type IndexStats struct {
 	numRowsReturnedAggr       stats.Int64Val
 	numRowsScannedAggr        stats.Int64Val
 	scanCacheHitAggr          stats.Int64Val
+	numRowsScanned            stats.Int64Val
 	diskSize                  stats.Int64Val
 	memUsed                   stats.Int64Val
 	buildProgress             stats.Int64Val
@@ -155,7 +156,7 @@ type IndexStats struct {
 	avgDrainRate              stats.Int64Val
 	avgDiskBps                stats.Int64Val
 	lastScanGatherTime        stats.Int64Val
-	lastNumRowsReturned       stats.Int64Val
+	lastNumRowsScanned        stats.Int64Val
 	lastMutateGatherTime      stats.Int64Val
 	lastNumDocsIndexed        stats.Int64Val
 	lastNumItemsFlushed       stats.Int64Val
@@ -205,6 +206,7 @@ func (s *IndexStats) Init() {
 	s.numRowsReturnedAggr.Init()
 	s.numRowsScannedAggr.Init()
 	s.scanCacheHitAggr.Init()
+	s.numRowsScanned.Init()
 	s.diskSize.Init()
 	s.memUsed.Init()
 	s.buildProgress.Init()
@@ -238,7 +240,7 @@ func (s *IndexStats) Init() {
 	s.avgDrainRate.Init()
 	s.avgDiskBps.Init()
 	s.lastScanGatherTime.Init()
-	s.lastNumRowsReturned.Init()
+	s.lastNumRowsScanned.Init()
 	s.lastMutateGatherTime.Init()
 	s.lastNumDocsIndexed.Init()
 	s.lastNumItemsFlushed.Init()
@@ -253,6 +255,15 @@ func (s *IndexStats) Init() {
 	s.Timings.Init()
 
 	s.partitions = make(map[common.PartitionId]*IndexStats)
+}
+
+func (s *IndexStats) getPartitions() []common.PartitionId {
+
+	partitions := make([]common.PartitionId, 0, len(s.partitions))
+	for id, _ := range s.partitions {
+		partitions = append(partitions, id)
+	}
+	return partitions
 }
 
 func (s *IndexStats) addPartition(id common.PartitionId) {
@@ -276,6 +287,11 @@ func (s *IndexStats) updatePartitionStats(pid common.PartitionId, f func(*IndexS
 	if ps, ok := s.partitions[pid]; ok {
 		f(ps)
 	}
+}
+
+func (s *IndexStats) getPartitionStats(pid common.PartitionId) *IndexStats {
+
+	return s.partitions[pid]
 }
 
 func (s *IndexStats) partnInt64Stats(f func(*IndexStats) int64) int64 {
@@ -575,6 +591,11 @@ func (is IndexerStats) GetStats(getPartition bool, skipEmpty bool) common.Statis
 				return ss.scanCacheHitAggr.Value()
 			}))
 		// partition stats
+		addStat("num_rows_scanned",
+			s.partnInt64Stats(func(ss *IndexStats) int64 {
+				return ss.numRowsScanned.Value()
+			}))
+		// partition stats
 		addStat("disk_size",
 			s.partnInt64Stats(func(ss *IndexStats) int64 {
 				return ss.diskSize.Value()
@@ -700,23 +721,24 @@ func (is IndexerStats) GetStats(getPartition bool, skipEmpty bool) common.Statis
 			s.int64Stats(func(ss *IndexStats) int64 {
 				return ss.clientCancelError.Value()
 			}))
+		// partition stats
 		addStat("avg_scan_rate",
-			s.int64Stats(func(ss *IndexStats) int64 {
+			s.partnInt64Stats(func(ss *IndexStats) int64 {
 				return ss.avgScanRate.Value()
 			}))
 		// partition stats
 		addStat("avg_mutation_rate",
-			s.partnAvgInt64Stats(func(ss *IndexStats) int64 {
+			s.partnInt64Stats(func(ss *IndexStats) int64 {
 				return ss.avgMutationRate.Value()
 			}))
 		// partition stats
 		addStat("avg_drain_rate",
-			s.partnAvgInt64Stats(func(ss *IndexStats) int64 {
+			s.partnInt64Stats(func(ss *IndexStats) int64 {
 				return ss.avgDrainRate.Value()
 			}))
 		// partition stats
 		addStat("avg_disk_bps",
-			s.partnAvgInt64Stats(func(ss *IndexStats) int64 {
+			s.partnInt64Stats(func(ss *IndexStats) int64 {
 				return ss.avgDiskBps.Value()
 			}))
 		addStat("last_rollback_time", s.lastRollbackTime.Value())

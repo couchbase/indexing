@@ -30,6 +30,19 @@ const (
 // scatter range scan
 //--------------------------
 
+func getPartitionId(request *ScanRequest, pos int) common.PartitionId {
+
+	// For nil-snapshot, it has empty list of snapshot.  So return 0, since there won't be any stats.
+	// For non-partitioned index, len(request.PartitionIds) is either 1 or 0.   If it is 1, then
+	// request.PartitionIds[0] returns partitionId 0.
+	//
+	if len(request.PartitionIds) > pos {
+		return request.PartitionIds[pos]
+	}
+
+	return common.PartitionId(0)
+}
+
 func scatter(request *ScanRequest, scan Scan, snapshots []SliceSnapshot, cb EntryCallback, config common.Config) (err error) {
 
 	if len(snapshots) == 0 {
@@ -37,7 +50,8 @@ func scatter(request *ScanRequest, scan Scan, snapshots []SliceSnapshot, cb Entr
 	}
 
 	if len(snapshots) == 1 {
-		return scanOne(request, scan, snapshots, cb)
+		partitionId := getPartitionId(request, 0)
+		return scanOne(request, scan, snapshots, partitionId, cb)
 	}
 
 	return scanMultiple(request, scan, snapshots, cb, config)
@@ -70,7 +84,8 @@ func scanMultiple(request *ScanRequest, scan Scan, snapshots []SliceSnapshot, cb
 	// run scatter
 	for i, snap := range snapshots {
 		wg.Add(1)
-		go scanSingleSlice(request, scan, request.Ctxs[i], snap, queues[i], &wg, errch, nil)
+		partitionId := getPartitionId(request, i)
+		go scanSingleSlice(request, scan, request.Ctxs[i], snap, partitionId, queues[i], &wg, errch, nil)
 	}
 
 	// wait for scatter to be done
@@ -104,10 +119,10 @@ func scanMultiple(request *ScanRequest, scan Scan, snapshots []SliceSnapshot, cb
 	return
 }
 
-func scanOne(request *ScanRequest, scan Scan, snapshots []SliceSnapshot, cb EntryCallback) (err error) {
+func scanOne(request *ScanRequest, scan Scan, snapshots []SliceSnapshot, partitionId common.PartitionId, cb EntryCallback) (err error) {
 
 	errch := make(chan error, 1)
-	count := scanSingleSlice(request, scan, request.Ctxs[0], snapshots[0], nil, nil, errch, cb)
+	count := scanSingleSlice(request, scan, request.Ctxs[0], snapshots[0], partitionId, nil, nil, errch, cb)
 
 	logging.Debugf("scan_scatter:scanOnce: scan done. Count %v", count)
 
@@ -122,13 +137,17 @@ func scanOne(request *ScanRequest, scan Scan, snapshots []SliceSnapshot, cb Entr
 	return
 }
 
-func scanSingleSlice(request *ScanRequest, scan Scan, ctx IndexReaderContext, snap SliceSnapshot, queue *Queue,
-	wg *sync.WaitGroup, errch chan error, cb EntryCallback) (count int) {
+func scanSingleSlice(request *ScanRequest, scan Scan, ctx IndexReaderContext, snap SliceSnapshot, partitionId common.PartitionId,
+	queue *Queue, wg *sync.WaitGroup, errch chan error, cb EntryCallback) (count int) {
 
 	defer func() {
 		if wg != nil {
 			wg.Done()
 		}
+
+		request.Stats.updatePartitionStats(partitionId, func(ps *IndexStats) {
+			ps.numRowsScanned.Add(int64(count))
+		})
 	}()
 
 	handler := func(entry []byte) error {
