@@ -2589,7 +2589,7 @@ func (idx *indexer) checkDuplicateInitialBuildRequest(bucket string,
 		if ((index.State == common.INDEX_STATE_INITIAL ||
 			index.State == common.INDEX_STATE_CATCHUP) &&
 			index.Defn.Bucket == bucket) ||
-			idx.checkStreamRequestPending(index.Stream, bucket) {
+			idx.checkStreamRequestPending(common.INIT_STREAM, bucket) {
 
 			errStr := fmt.Sprintf("Build Already In Progress. Bucket %v", bucket)
 			logging.Errorf("Indexer::checkDuplicateInitialBuildRequest %v, %v", index, bucket)
