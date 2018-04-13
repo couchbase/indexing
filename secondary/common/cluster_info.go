@@ -39,7 +39,7 @@ const BUCKET_UUID_NIL = ""
 // local management service for obtaining cluster information.
 // Info cache can be updated by using Refresh() method.
 type ClusterInfoCache struct {
-	sync.Mutex
+	sync.RWMutex
 	url       string
 	poolName  string
 	logPrefix string
@@ -56,6 +56,17 @@ type ClusterInfoCache struct {
 	failedNodes []couchbase.Node
 	addNodes    []couchbase.Node
 	version     uint64
+}
+
+// Helper object that keeps an instance of ClusterInfoCache cached
+// and updated periodically or when things change in the cluster
+// Readers/Consumers must lock cinfo before using it
+type ClusterInfoClient struct {
+	cinfo                   *ClusterInfoCache
+	clusterURL              string
+	pool                    string
+	servicesNotifierRetryTm int
+	finch                   chan bool
 }
 
 type NodeId int
@@ -205,6 +216,13 @@ func (c *ClusterInfoCache) Fetch() error {
 
 	rh := NewRetryHelper(c.retries, time.Second, 1, fn)
 	return rh.Run()
+}
+
+func (c *ClusterInfoCache) FetchWithLock() error {
+	c.Lock()
+	defer c.Unlock()
+
+	return c.Fetch()
 }
 
 func (c *ClusterInfoCache) fetchServerGroups() error {
@@ -583,4 +601,82 @@ func (c *ClusterInfoCache) getStaticServicePort(srvc string) (string, error) {
 		return "", ErrInvalidService
 	}
 
+}
+
+func NewClusterInfoClient(clusterURL string, pool string, config Config) (c *ClusterInfoClient, err error) {
+	cic := &ClusterInfoClient{
+		clusterURL: clusterURL,
+		pool:       pool,
+		finch:      make(chan bool),
+	}
+	cic.servicesNotifierRetryTm = 1000 // TODO: read from config
+
+	cinfo, err := FetchNewClusterInfoCache(clusterURL, pool)
+	if err != nil {
+		return nil, err
+	}
+	cic.cinfo = cinfo
+
+	go cic.watchClusterChanges()
+	return cic, err
+}
+
+// Consumer must lock returned cinfo before using it
+func (c *ClusterInfoClient) GetClusterInfoCache() *ClusterInfoCache {
+	return c.cinfo
+}
+
+func (c *ClusterInfoClient) watchClusterChanges() {
+	selfRestart := func() {
+		time.Sleep(time.Duration(c.servicesNotifierRetryTm) * time.Millisecond)
+		go c.watchClusterChanges()
+	}
+
+	clusterAuthURL, err := ClusterAuthUrl(c.clusterURL)
+	if err != nil {
+		logging.Errorf("ClusterInfoClient ClusterAuthUrl(): %v\n", err)
+		selfRestart()
+		return
+	}
+
+	scn, err := NewServicesChangeNotifier(clusterAuthURL, c.pool)
+	if err != nil {
+		logging.Errorf("ClusterInfoClient NewServicesChangeNotifier(): %v\n", err)
+		selfRestart()
+		return
+	}
+	defer scn.Close()
+
+	ticker := time.NewTicker(time.Duration(5) * time.Minute)
+	defer ticker.Stop()
+
+	// For observing node services config
+	ch := scn.GetNotifyCh()
+	for {
+		select {
+		case _, ok := <-ch:
+			if !ok {
+				selfRestart()
+				return
+			} else if err := c.cinfo.FetchWithLock(); err != nil {
+				logging.Errorf("cic.cinfo.FetchWithLock(): %v\n", err)
+				selfRestart()
+				return
+			}
+		case <-ticker.C:
+			if err := c.cinfo.FetchWithLock(); err != nil {
+				logging.Errorf("cic.cinfo.FetchWithLock(): %v\n", err)
+				selfRestart()
+				return
+			}
+		case <-c.finch:
+			return
+		}
+	}
+}
+
+func (c *ClusterInfoClient) Close() {
+	defer func() { recover() }() // in case async Close is called. Do we need this?
+
+	close(c.finch)
 }

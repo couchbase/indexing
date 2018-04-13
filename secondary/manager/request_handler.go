@@ -349,10 +349,15 @@ func (m *requestHandlerContext) getBucket(r *http.Request) string {
 
 func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, bucket string) ([]IndexStatus, []string, error) {
 
-	cinfo, err := m.mgr.FetchNewClusterInfoCache()
-	if err != nil {
-		return nil, nil, err
+	var cinfo *common.ClusterInfoCache
+	cinfo = m.mgr.cinfoClient.GetClusterInfoCache()
+
+	if cinfo == nil {
+		return nil, nil, errors.New("ClusterInfoCache unavailable in IndexManager")
 	}
+
+	cinfo.RLock()
+	defer cinfo.RUnlock()
 
 	// find all nodes that has a index http service
 	nids := cinfo.GetNodesByServiceType(common.INDEX_HTTP_SERVICE)
