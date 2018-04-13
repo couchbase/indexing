@@ -712,7 +712,15 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 				index.ActualCpuUsage = usage
 			}
 
+			index.ActualDrainRate = index.MutationRate
+			if index.MutationRate < index.DrainRate {
+				index.ActualDrainRate = index.DrainRate
+			}
+			index.ActualScanRate = index.ScanRate
+
 			indexer.ActualCpuUsage += index.ActualCpuUsage
+			indexer.ActualDrainRate += index.ActualDrainRate
+			indexer.ActualScanRate += index.ActualScanRate
 		}
 	}
 
