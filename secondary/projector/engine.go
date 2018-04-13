@@ -3,6 +3,8 @@
 
 package projector
 
+import qvalue "github.com/couchbase/query/value"
+import qexpr "github.com/couchbase/query/expression"
 import mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
 import c "github.com/couchbase/indexing/secondary/common"
 
@@ -62,8 +64,10 @@ func (engine *Engine) StreamEndData(
 
 // TransformRoute data to endpoints.
 func (engine *Engine) TransformRoute(
-	vbuuid uint64, m *mc.DcpEvent, data map[string]interface{},
-	encodeBuf []byte) ([]byte, error) {
+	vbuuid uint64, m *mc.DcpEvent, data map[string]interface{}, encodeBuf []byte,
+	docval qvalue.AnnotatedValue, context qexpr.Context) ([]byte, error) {
 
-	return engine.evaluator.TransformRoute(vbuuid, m, data, encodeBuf)
+	return engine.evaluator.TransformRoute(
+		vbuuid, m, data, encodeBuf, docval, context,
+	)
 }

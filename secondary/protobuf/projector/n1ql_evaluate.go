@@ -28,11 +28,11 @@ var missing = qvalue.NewValue(string(collatejson.MissingLiteral))
 // statement and evaluate a document using them to return a secondary
 // key as JSON object.
 func N1QLTransform(
-	docid []byte, docval qvalue.AnnotatedValue, cExprs []interface{},
+	docid []byte, docval qvalue.AnnotatedValue, context qexpr.Context,
+	cExprs []interface{},
 	encodeBuf []byte) ([]byte, []byte, error) {
 
 	arrValue := make([]interface{}, 0, len(cExprs))
-	context := qexpr.NewIndexContext()
 	skip := true
 	for _, cExpr := range cExprs {
 		expr := cExpr.(qexpr.Expression)

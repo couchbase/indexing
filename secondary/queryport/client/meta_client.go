@@ -984,8 +984,23 @@ func (b *metadataClient) pickRandom(replicas []uint64, defnID uint64,
 func (b *metadataClient) filterByTiming(currmeta *indexTopology, replicas []uint64, rollbackTimes []map[common.PartitionId]int64,
 	startPartnId uint64, endPartnId uint64) {
 
+	numRollbackTimes := func(partnId uint64) int {
+		count := 0
+		for _, partnMap := range rollbackTimes {
+			if _, ok := partnMap[common.PartitionId(partnId)]; ok {
+				count++
+			}
+		}
+		return count
+	}
+
 	if rand.Float64() >= b.randomWeight {
 		for partnId := startPartnId; partnId < endPartnId; partnId++ {
+			// Do not prune if there is only replica with this partition
+			if numRollbackTimes(partnId) <= 1 {
+				continue
+			}
+
 			loadList := make([]float64, len(replicas))
 			for i, instId := range replicas {
 				if load, ok := currmeta.loads[common.IndexInstId(instId)]; ok {

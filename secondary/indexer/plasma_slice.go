@@ -30,6 +30,8 @@ import (
 	"github.com/couchbase/plasma"
 )
 
+var errStorageCorrupted = fmt.Errorf("Storage corrupted and unrecoverable")
+
 func init() {
 	plasma.SetLogger(&logging.SystemLogger)
 }
@@ -156,7 +158,15 @@ func newPlasmaSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	slice.readers = make(chan *plasma.Reader, numReaders)
 
 	slice.isPrimary = isPrimary
+
 	if err := slice.initStores(); err != nil {
+		// Index is unusable. Remove the data files and reinit
+		if plasma.IsFatalError(err) {
+			logging.Errorf("plasmaSlice:NewplasmaSlice Id %v IndexInstId %v "+
+				"fatal error occured: %v", sliceId, idxInstId, err)
+			err = errStorageCorrupted
+		}
+
 		return nil, err
 	}
 
@@ -200,6 +210,8 @@ func (slice *plasmaSlice) initStores() error {
 	cfg.CheckpointInterval = time.Second * time.Duration(slice.sysconf["plasma.checkpointInterval"].Int())
 	cfg.LSSCleanerConcurrency = slice.sysconf["plasma.LSSCleanerConcurrency"].Int()
 	cfg.AutoTuneLSSCleaning = slice.sysconf["plasma.AutoTuneLSSCleaner"].Bool()
+	cfg.Compression = slice.sysconf["plasma.compression"].String()
+	cfg.MaxPageSize = slice.sysconf["plasma.MaxPageSize"].Int()
 
 	var mode plasma.IOMode
 
@@ -222,7 +234,7 @@ func (slice *plasmaSlice) initStores() error {
 	mCfg.MaxPageLSSSegments = slice.sysconf["plasma.mainIndex.maxLSSPageSegments"].Int()
 	mCfg.LSSCleanerThreshold = slice.sysconf["plasma.mainIndex.LSSFragmentation"].Int()
 	mCfg.LSSCleanerMaxThreshold = slice.sysconf["plasma.mainIndex.maxLSSFragmentation"].Int()
-	mCfg.LogPrefix = fmt.Sprintf("%s/%s/Mainstore ", slice.idxDefn.Bucket, slice.idxDefn.Name)
+	mCfg.LogPrefix = fmt.Sprintf("%s/%s/Mainstore#%d ", slice.idxDefn.Bucket, slice.idxDefn.Name, slice.idxInstId)
 
 	bCfg.MaxDeltaChainLen = slice.sysconf["plasma.backIndex.maxNumPageDeltas"].Int()
 	bCfg.MaxPageItems = slice.sysconf["plasma.backIndex.pageSplitThreshold"].Int()
@@ -230,7 +242,7 @@ func (slice *plasmaSlice) initStores() error {
 	bCfg.MaxPageLSSSegments = slice.sysconf["plasma.backIndex.maxLSSPageSegments"].Int()
 	bCfg.LSSCleanerThreshold = slice.sysconf["plasma.backIndex.LSSFragmentation"].Int()
 	bCfg.LSSCleanerMaxThreshold = slice.sysconf["plasma.backIndex.maxLSSFragmentation"].Int()
-	bCfg.LogPrefix = fmt.Sprintf("%s/%s/Backstore ", slice.idxDefn.Bucket, slice.idxDefn.Name)
+	bCfg.LogPrefix = fmt.Sprintf("%s/%s/Backstore#%d ", slice.idxDefn.Bucket, slice.idxDefn.Name, slice.idxInstId)
 
 	if slice.hasPersistence {
 		mCfg.File = filepath.Join(slice.path, "mainIndex")
@@ -256,11 +268,6 @@ func (slice *plasmaSlice) initStores() error {
 		for i := 0; i < slice.numWriters; i++ {
 			slice.main[i] = slice.mainstore.NewWriter()
 		}
-
-		for i := 0; i < cap(slice.readers); i++ {
-			slice.readers <- slice.mainstore.NewReader()
-		}
-
 	}()
 
 	if !slice.isPrimary {
@@ -283,9 +290,21 @@ func (slice *plasmaSlice) initStores() error {
 
 	wg.Wait()
 	if mErr != nil {
+		if !slice.isPrimary && bErr == nil {
+			slice.backstore.Close()
+		}
+
 		return mErr
 	} else if bErr != nil {
+		if mErr == nil {
+			slice.mainstore.Close()
+		}
+
 		return bErr
+	}
+
+	for i := 0; i < cap(slice.readers); i++ {
+		slice.readers <- slice.mainstore.NewReader()
 	}
 
 	if !slice.newBorn {
@@ -1376,6 +1395,7 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 
 	updatePlasmaConfig(cfg)
 	mdb.mainstore.AutoTuneLSSCleaning = cfg["plasma.AutoTuneLSSCleaner"].Bool()
+	mdb.mainstore.MaxPageSize = cfg["plasma.MaxPageSize"].Int()
 
 	mdb.mainstore.CheckpointInterval = time.Second * time.Duration(cfg["plasma.checkpointInterval"].Int())
 	mdb.mainstore.MaxPageLSSSegments = mdb.sysconf["plasma.mainIndex.maxLSSPageSegments"].Int()
@@ -1391,6 +1411,7 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 
 	if !mdb.isPrimary {
 		mdb.backstore.AutoTuneLSSCleaning = cfg["plasma.AutoTuneLSSCleaner"].Bool()
+		mdb.backstore.MaxPageSize = cfg["plasma.MaxPageSize"].Int()
 		mdb.backstore.CheckpointInterval = mdb.mainstore.CheckpointInterval
 		mdb.backstore.MaxPageLSSSegments = mdb.sysconf["plasma.backIndex.maxLSSPageSegments"].Int()
 		mdb.backstore.LSSCleanerThreshold = mdb.sysconf["plasma.backIndex.LSSFragmentation"].Int()

@@ -979,6 +979,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.plasma.compression": ConfigValue{
+		"snappy",
+		"Compression algorithm",
+		"snappy",
+		false, // mutable
+		true,  // case-sensitive
+	},
 	"indexer.plasma.persistenceCPUPercent": ConfigValue{
 		50,
 		"Percentage of cpu used for persistence",
@@ -1012,6 +1019,13 @@ var SystemConfig = Config{
 		"Enable auto tuning of lss cleaning thresholds based on available free space",
 		false,
 		false, // mutable,
+		false, // case-insensitive
+	},
+	"indexer.plasma.MaxPageSize": ConfigValue{
+		128 * 1024,
+		"Used with AutoTuneLSSCleaner; target page size limit",
+		128 * 1024,
+		false, // mutable
 		false, // case-insensitive
 	},
 	"indexer.plasma.useMmapReads": ConfigValue{
