@@ -119,6 +119,9 @@ if [ "$MODE" = "test" ]; then
       GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
   fi
 
+  cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/collatejson
+  GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
+
   cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/indexer
   GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
 fi
