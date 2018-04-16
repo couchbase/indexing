@@ -165,7 +165,7 @@ func (feed *Feed) MutationTopic(
 	resp, err := c.FailsafeOp(feed.reqch, respch, cmd, feed.finch)
 	err = c.OpError(err, resp, 1)
 	if err != nil {
-		return &protobuf.TopicResponse{}, err
+		return &protobuf.TopicResponse{Topic: proto.String(feed.topic)}, err
 	}
 	return resp[0].(*protobuf.TopicResponse), nil
 }
@@ -180,7 +180,7 @@ func (feed *Feed) RestartVbuckets(
 	resp, err := c.FailsafeOp(feed.reqch, respch, cmd, feed.finch)
 	err = c.OpError(err, resp, 1)
 	if err != nil {
-		return &protobuf.TopicResponse{}, err
+		return &protobuf.TopicResponse{Topic: proto.String(feed.topic)}, err
 	}
 	return resp[0].(*protobuf.TopicResponse), nil
 }
@@ -208,7 +208,7 @@ func (feed *Feed) AddBuckets(
 	resp, err := c.FailsafeOp(feed.reqch, respch, cmd, feed.finch)
 	err = c.OpError(err, resp, 1)
 	if err != nil {
-		return &protobuf.TopicResponse{}, err
+		return &protobuf.TopicResponse{Topic: proto.String(feed.topic)}, err
 	}
 	return resp[0].(*protobuf.TopicResponse), nil
 }
@@ -237,7 +237,7 @@ func (feed *Feed) AddInstances(
 	resp, err := c.FailsafeOp(feed.reqch, respch, cmd, feed.finch)
 	err = c.OpError(err, resp, 1)
 	if err != nil {
-		return &protobuf.TimestampResponse{}, err
+		return &protobuf.TimestampResponse{Topic: proto.String(feed.topic)}, err
 	}
 	return resp[0].(*protobuf.TimestampResponse), nil
 }
