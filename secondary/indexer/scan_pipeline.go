@@ -43,6 +43,8 @@ type ScanPipeline struct {
 	bytesRead     uint64
 	rowsScanned   uint64
 	cacheHitRatio int
+	exprEvalDur   time.Duration
+	exprEvalNum   int64
 }
 
 func (p *ScanPipeline) Cancel(err error) {
@@ -67,6 +69,10 @@ func (p ScanPipeline) RowsScanned() uint64 {
 
 func (p ScanPipeline) CacheHitRatio() int {
 	return p.cacheHitRatio
+}
+
+func (p ScanPipeline) AvgExprEvalDur() time.Duration {
+	return time.Duration(int64(p.exprEvalDur) / p.exprEvalNum)
 }
 
 func NewScanPipeline(req *ScanRequest, w ScanResponseWriter, is IndexSnapshot, cfg c.Config) *ScanPipeline {
@@ -243,7 +249,7 @@ func (s *IndexScanSource) Routine() error {
 				}
 			}
 
-			err = computeGroupAggr(ck, dk, count, docid, entry, (*buf)[:0], s.p.aggrRes, r.GroupAggr, cktmp, dktmp, &cachedEntry, r)
+			err = computeGroupAggr(ck, dk, count, docid, entry, (*buf)[:0], s.p.aggrRes, r.GroupAggr, cktmp, dktmp, &cachedEntry, s.p)
 			if err != nil {
 				return err
 			}
@@ -790,7 +796,7 @@ func (a aggrResult) String() string {
 }
 
 func computeGroupAggr(compositekeys [][]byte, decodedkeys value.Values, count int, docid, key,
-	buf []byte, aggrRes *aggrResult, groupAggr *GroupAggr, cktmp [][]byte, dktmp value.Values, cachedEntry *entryCache, r *ScanRequest) error {
+	buf []byte, aggrRes *aggrResult, groupAggr *GroupAggr, cktmp [][]byte, dktmp value.Values, cachedEntry *entryCache, p *ScanPipeline) error {
 
 	var err error
 
@@ -807,12 +813,12 @@ func computeGroupAggr(compositekeys [][]byte, decodedkeys value.Values, count in
 					cachedEntry.SetValid(false)
 				}
 			} else {
-				cachedEntry.Init(r)
+				cachedEntry.Init(p.req)
 			}
 
 			if !cachedEntry.Valid() {
 				compositekeys, decodedkeys, err = jsonEncoder.ExplodeArray3(key, buf, cktmp, dktmp,
-					r.explodePositions, r.decodePositions, r.explodeUpto)
+					p.req.explodePositions, p.req.decodePositions, p.req.explodeUpto)
 				if err != nil {
 					return err
 				}
@@ -823,14 +829,14 @@ func computeGroupAggr(compositekeys [][]byte, decodedkeys value.Values, count in
 
 	if !cachedEntry.Valid() || groupAggr.DependsOnPrimaryKey {
 		for i, gk := range groupAggr.Group {
-			err := computeGroupKey(groupAggr, gk, compositekeys, decodedkeys, docid, i, r)
+			err := computeGroupKey(groupAggr, gk, compositekeys, decodedkeys, docid, i, p)
 			if err != nil {
 				return err
 			}
 		}
 
 		for i, ak := range groupAggr.Aggrs {
-			err := computeAggrVal(groupAggr, ak, compositekeys, decodedkeys, docid, count, buf, i, r)
+			err := computeAggrVal(groupAggr, ak, compositekeys, decodedkeys, docid, count, buf, i, p)
 			if err != nil {
 				return err
 			}
@@ -843,7 +849,7 @@ func computeGroupAggr(compositekeys [][]byte, decodedkeys value.Values, count in
 }
 
 func computeGroupKey(groupAggr *GroupAggr, gk *GroupKey, compositekeys [][]byte,
-	decodedkeys value.Values, docid []byte, pos int, r *ScanRequest) error {
+	decodedkeys value.Values, docid []byte, pos int, p *ScanPipeline) error {
 
 	g := groupAggr.groups[pos]
 	if gk.KeyPos >= 0 {
@@ -856,7 +862,7 @@ func computeGroupKey(groupAggr *GroupAggr, gk *GroupKey, compositekeys [][]byte,
 			scalar = gk.ExprValue // It is a constant expression
 		} else {
 			var err error
-			scalar, err = evaluateN1QLExpresssion(groupAggr, gk.Expr, decodedkeys, docid, r)
+			scalar, err = evaluateN1QLExpresssion(groupAggr, gk.Expr, decodedkeys, docid, p)
 			if err != nil {
 				return err
 			}
@@ -871,7 +877,7 @@ func computeGroupKey(groupAggr *GroupAggr, gk *GroupKey, compositekeys [][]byte,
 
 func computeAggrVal(groupAggr *GroupAggr, ak *Aggregate,
 	compositekeys [][]byte, decodedkeys value.Values, docid []byte,
-	count int, buf []byte, pos int, r *ScanRequest) error {
+	count int, buf []byte, pos int, p *ScanPipeline) error {
 
 	a := groupAggr.aggrs[pos]
 	if ak.KeyPos >= 0 {
@@ -888,7 +894,7 @@ func computeAggrVal(groupAggr *GroupAggr, ak *Aggregate,
 			scalar = ak.ExprValue // It is a constant expression
 		} else {
 			var err error
-			scalar, err = evaluateN1QLExpresssion(groupAggr, ak.Expr, decodedkeys, docid, r)
+			scalar, err = evaluateN1QLExpresssion(groupAggr, ak.Expr, decodedkeys, docid, p)
 			if err != nil {
 				return err
 			}
@@ -906,7 +912,7 @@ func computeAggrVal(groupAggr *GroupAggr, ak *Aggregate,
 }
 
 func evaluateN1QLExpresssion(groupAggr *GroupAggr, expr expression.Expression,
-	decodedkeys value.Values, docid []byte, r *ScanRequest) (value.Value, error) {
+	decodedkeys value.Values, docid []byte, p *ScanPipeline) (value.Value, error) {
 
 	if groupAggr.IsPrimary {
 		for _, ik := range groupAggr.DependsOnIndexKeys {
@@ -928,9 +934,8 @@ func evaluateN1QLExpresssion(groupAggr *GroupAggr, expr expression.Expression,
 		return nil, err
 	}
 
-	if r.Stats != nil {
-		r.Stats.Timings.n1qlExpr.Put(time.Since(t0))
-	}
+	p.exprEvalDur += time.Since(t0)
+	p.exprEvalNum++
 
 	return scalar, nil
 }
