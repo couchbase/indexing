@@ -489,10 +489,25 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 			key = fmt.Sprintf("%v:%v:data_size", index.Bucket, indexName)
 			if dataSize, ok := statsMap[key]; ok {
 				index.ActualDataSize = uint64(dataSize.(float64))
+			}
+
+			// memory usage per index
+			key = fmt.Sprintf("%v:%v:memory_used", index.Bucket, indexName)
+			if memUsed, ok := statsMap[key]; ok {
+				index.ActualMemStats = uint64(memUsed.(float64))
+				index.ActualMemUsage = index.ActualMemStats
+				totalIndexMemUsed += index.ActualMemUsage
+			} else {
 				// calibrate memory usage based on resident percent
 				// ActualMemUsage will be rewritten later
 				index.ActualMemUsage = index.ActualDataSize * index.ActualResidentPercent / 100
 				totalIndexMemUsed += index.ActualMemUsage
+			}
+
+			// disk usage per index
+			key = fmt.Sprintf("%v:%v:avg_disk_bps", index.Bucket, indexName)
+			if diskUsed, ok := statsMap[key]; ok {
+				index.ActualDiskUsage = uint64(diskUsed.(float64))
 			}
 
 			// avg_sec_key_size is currently unavailable in 4.5.   To estimate,
@@ -534,11 +549,20 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 				index.AvgArrKeySize = uint64(avgArrKeySize.(float64))
 			}
 
+			// avg_drain_rate computes the actual number of rows persisted to storage.
+			// This does not include incoming rows that are filtered out by back-index.
 			// These stats are currently unavailable in 4.5.
 			key = fmt.Sprintf("%v:%v:avg_drain_rate", index.Bucket, indexName)
+			if avgDrainRate, ok := statsMap[key]; ok {
+				index.DrainRate = uint64(avgDrainRate.(float64))
+			}
+
+			// avg_mutation_rate computes the incoming number of docs.
+			// This does not include the individual element in an array index.
+			// These stats are currently unavailable in 4.5.
+			key = fmt.Sprintf("%v:%v:avg_mutation_rate", index.Bucket, indexName)
 			if avgMutationRate, ok := statsMap[key]; ok {
 				index.MutationRate = uint64(avgMutationRate.(float64))
-				totalMutation += index.MutationRate
 			} else {
 				key = fmt.Sprintf("%v:%v:num_flush_queued", index.Bucket, indexName)
 				if flushQueuedStat, ok := statsMap[key]; ok {
@@ -549,6 +573,18 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 						totalMutation += index.MutationRate
 					}
 				}
+			}
+
+			// In general, drain rate should be greater or equal to mutation rate.
+			// Mutation rate could be greater than drain rate if index is based on field A
+			// which is a slow mutating field.  But there are more rapidly changing field
+			// in the document.  In this case, mutation will still be sent to index A.
+			// Indexer will still spend CPU on mutation, but they will get dropped by the back-index,
+			// since field A has not changed.
+			if index.MutationRate < index.DrainRate {
+				totalMutation += index.DrainRate
+			} else {
+				totalMutation += index.MutationRate
 			}
 
 			// These stats are currently unavailable in 4.5.
@@ -597,7 +633,9 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 				ratio = float64(index.ActualMemUsage) / float64(totalIndexMemUsed)
 			}
 
-			index.ActualMemUsage = uint64(float64(actualStorageMem) * ratio)
+			if index.ActualMemStats == 0 {
+				index.ActualMemUsage = uint64(float64(actualStorageMem) * ratio)
+			}
 
 			if actualTotalMem > actualStorageMem {
 				index.ActualMemOverhead = uint64(float64(actualTotalMem-actualStorageMem) * ratio)
@@ -616,6 +654,7 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 			indexer.ActualDataSize += index.ActualDataSize
 			indexer.ActualMemUsage += index.ActualMemUsage
 			indexer.ActualMemOverhead += index.ActualMemOverhead
+			indexer.ActualDiskUsage += index.ActualDiskUsage
 		}
 
 		// Compute the estimated cpu usage for each index.  This also computes the aggregated indexer cpu usage.
@@ -643,7 +682,13 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 
 			mutationRatio := float64(0)
 			if totalMutation != 0 {
-				mutationRatio = float64(index.MutationRate) / float64(totalMutation)
+
+				rate := index.MutationRate
+				if index.MutationRate < index.DrainRate {
+					rate = index.DrainRate
+				}
+
+				mutationRatio = float64(rate) / float64(totalMutation)
 			}
 
 			scanRatio := float64(0)
@@ -667,7 +712,15 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 				index.ActualCpuUsage = usage
 			}
 
+			index.ActualDrainRate = index.MutationRate
+			if index.MutationRate < index.DrainRate {
+				index.ActualDrainRate = index.DrainRate
+			}
+			index.ActualScanRate = index.ScanRate
+
 			indexer.ActualCpuUsage += index.ActualCpuUsage
+			indexer.ActualDrainRate += index.ActualDrainRate
+			indexer.ActualScanRate += index.ActualScanRate
 		}
 	}
 

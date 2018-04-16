@@ -94,6 +94,9 @@ type CostMethod interface {
 	GetMemMean() float64
 	GetCpuMean() float64
 	GetDataMean() float64
+	GetDiskMean() float64
+	GetScanMean() float64
+	GetDrainMean() float64
 	ComputeResourceVariation() float64
 }
 
@@ -162,6 +165,9 @@ type IndexerNode struct {
 	ActualMemOverhead uint64  `json:"actualMemOverhead"`
 	ActualCpuUsage    float64 `json:"actualCpuUsage"`
 	ActualDataSize    uint64  `json:"actualDataSize"`
+	ActualDiskUsage   uint64  `json:"actualDiskUsage"`
+	ActualDrainRate   uint64  `json:"actualDrainRate"`
+	ActualScanRate    uint64  `json:"actualScanRate"`
 
 	// input: index residing on the node
 	Indexes []*IndexUsage `json:"indexes"`
@@ -200,6 +206,7 @@ type IndexUsage struct {
 	NumOfDocs     uint64  `json:"numOfDocs"`
 	ResidentRatio float64 `json:"residentRatio,omitempty"`
 	MutationRate  uint64  `json:"mutationRate"`
+	DrainRate     uint64  `json:"drainRate"`
 	ScanRate      uint64  `json:"scanRate"`
 
 	// input: resource consumption (from sizing equation)
@@ -218,6 +225,10 @@ type IndexUsage struct {
 	ActualResidentPercent uint64  `json:"actualResidentPercent"`
 	ActualDataSize        uint64  `json:"actualDataSize"`
 	ActualNumDocs         uint64  `json:"actualNumDocs"`
+	ActualDiskUsage       uint64  `json:"actualDiskUsage"`
+	ActualMemStats        uint64  `json:"actualMemStats"`
+	ActualDrainRate       uint64  `json:"actualDrainRate"`
+	ActualScanRate        uint64  `json:"actualScanRate"`
 
 	// input: resource consumption (estimated sizing)
 	NoUsageInfo       bool   `json:"NoUsageInfo"`
@@ -263,9 +274,12 @@ type Solution struct {
 	enableExclude bool
 
 	// for resource utilization
-	memMean  float64
-	cpuMean  float64
-	dataMean float64
+	memMean   float64
+	cpuMean   float64
+	dataMean  float64
+	diskMean  float64
+	drainMean float64
+	scanMean  float64
 
 	// placement of indexes	in nodes
 	Placement  []*IndexerNode `json:"placement,omitempty"`
@@ -328,6 +342,12 @@ type UsageBasedCostMethod struct {
 	MemStdDev      float64 `json:"memStdDev,omitempty"`
 	CpuMean        float64 `json:"cpuMean,omitempty"`
 	CpuStdDev      float64 `json:"cpuStdDev,omitempty"`
+	DiskMean       float64 `json:"diskMean,omitempty"`
+	DiskStdDev     float64 `json:"diskStdDev,omitempty"`
+	DrainMean      float64 `json:"drainMean,omitempty"`
+	DrainStdDev    float64 `json:"drainStdDev,omitempty"`
+	ScanMean       float64 `json:"scanMean,omitempty"`
+	ScanStdDev     float64 `json:"scanStdDev,omitempty"`
 	DataSizeMean   float64 `json:"dataSizeMean,omitempty"`
 	DataSizeStdDev float64 `json:"dataSizeStdDev,omitempty"`
 	TotalData      uint64  `json:"totalData,omitempty"`
@@ -1281,9 +1301,14 @@ func (s *Solution) findIndexOffset(node *IndexerNode, index *IndexUsage) int {
 func (s *Solution) addIndex(n *IndexerNode, idx *IndexUsage, meetConstraint bool) {
 	n.EvaluateNodeConstraint(s, meetConstraint, idx, nil)
 	n.Indexes = append(n.Indexes, idx)
+
 	n.AddMemUsageOverhead(s, idx.GetMemUsage(s.UseLiveData()), idx.GetMemOverhead(s.UseLiveData()))
 	n.AddCpuUsage(s, idx.GetCpuUsage(s.UseLiveData()))
 	n.AddDataSize(s, idx.GetDataSize(s.UseLiveData()))
+	n.AddDiskUsage(s, idx.GetDiskUsage(s.UseLiveData()))
+	n.AddScanRate(s, idx.GetScanRate(s.UseLiveData()))
+	n.AddDrainRate(s, idx.GetDrainRate(s.UseLiveData()))
+
 	n.EvaluateNodeStats(s)
 	s.updateServerGroupMap(idx, n)
 }
@@ -1302,6 +1327,9 @@ func (s *Solution) removeIndex(n *IndexerNode, i int) {
 	n.SubtractMemUsageOverhead(s, idx.GetMemUsage(s.UseLiveData()), idx.GetMemOverhead(s.UseLiveData()))
 	n.SubtractCpuUsage(s, idx.GetCpuUsage(s.UseLiveData()))
 	n.SubtractDataSize(s, idx.GetDataSize(s.UseLiveData()))
+	n.SubtractDiskUsage(s, idx.GetDiskUsage(s.UseLiveData()))
+	n.SubtractScanRate(s, idx.GetScanRate(s.UseLiveData()))
+	n.SubtractDrainRate(s, idx.GetDrainRate(s.UseLiveData()))
 
 	n.EvaluateNodeConstraint(s, false, nil, idx)
 	n.EvaluateNodeStats(s)
@@ -1349,6 +1377,9 @@ func (s *Solution) clone() *Solution {
 	r.memMean = s.memMean
 	r.cpuMean = s.cpuMean
 	r.dataMean = s.dataMean
+	r.diskMean = s.diskMean
+	r.scanMean = s.scanMean
+	r.drainMean = s.drainMean
 	r.enforceConstraint = s.enforceConstraint
 	r.indexSGMap = make(map[string]string)
 
@@ -1383,6 +1414,9 @@ func (s *Solution) updateCost() {
 		s.memMean = s.cost.GetMemMean()
 		s.cpuMean = s.cost.GetCpuMean()
 		s.dataMean = s.cost.GetDataMean()
+		s.diskMean = s.cost.GetDiskMean()
+		s.scanMean = s.cost.GetScanMean()
+		s.drainMean = s.cost.GetDrainMean()
 	}
 }
 
@@ -1491,30 +1525,37 @@ func (s *Solution) PrintLayout() {
 
 		logging.Infof("")
 		logging.Infof("Indexer serverGroup:%v, nodeId:%v, nodeUUID:%v, useLiveData:%v", indexer.ServerGroup, indexer.NodeId, indexer.NodeUUID, s.UseLiveData())
-		logging.Infof("Indexer total memory:%v (%s), mem:%v (%s), overhead:%v (%s), data:%v (%s) cpu:%.4f, numIndexes:%v",
+		logging.Infof("Indexer total memory:%v (%s), mem:%v (%s), overhead:%v (%s), data:%v (%s) cpu:%.4f, io:%v (%s), scan:%v drain:%v numIndexes:%v",
 			indexer.GetMemTotal(s.UseLiveData()), formatMemoryStr(uint64(indexer.GetMemTotal(s.UseLiveData()))),
 			indexer.GetMemUsage(s.UseLiveData()), formatMemoryStr(uint64(indexer.GetMemUsage(s.UseLiveData()))),
 			indexer.GetMemOverhead(s.UseLiveData()), formatMemoryStr(uint64(indexer.GetMemOverhead(s.UseLiveData()))),
 			indexer.GetDataSize(s.UseLiveData()), formatMemoryStr(uint64(indexer.GetDataSize(s.UseLiveData()))),
-			indexer.GetCpuUsage(s.UseLiveData()), len(indexer.Indexes))
+			indexer.GetCpuUsage(s.UseLiveData()),
+			indexer.GetDiskUsage(s.UseLiveData()), formatMemoryStr(uint64(indexer.GetDiskUsage(s.UseLiveData()))),
+			indexer.GetScanRate(s.UseLiveData()), indexer.GetDrainRate(s.UseLiveData()),
+			len(indexer.Indexes))
 		logging.Infof("Indexer isDeleted:%v isNew:%v exclude:%v meetConstraint:%v",
 			indexer.IsDeleted(), indexer.isNew, indexer.exclude, indexer.meetConstraint)
 
 		for _, index := range indexer.Indexes {
 			logging.Infof("\t\t------------------------------------------------------------------------------------------------------------------")
-			logging.Infof("\t\tIndex name:%v, bucket:%v, defnId:%v, instId:%v, Partition: %v, new/moved:%v equivCheck:%v pendingCreate:%v",
+			logging.Infof("\t\tIndex name:%v, bucket:%v, defnId:%v, instId:%v, Partition: %v, new/moved:%v",
 				index.GetDisplayName(), index.Bucket, index.DefnId, index.InstId, index.PartnId,
-				index.initialNode == nil || index.initialNode.NodeId != indexer.NodeId, !index.suppressEquivIdxCheck,
-				index.pendingCreate)
-			logging.Infof("\t\tIndex total memory:%v (%s), mem:%v (%s), overhead:%v (%s), data:%v (%s) cpu:%.4f resident:%v%% build:%v%% estimated:%v",
+				index.initialNode == nil || index.initialNode.NodeId != indexer.NodeId)
+			logging.Infof("\t\tIndex total memory:%v (%s), mem:%v (%s), overhead:%v (%s), data:%v (%s) cpu:%.4f io:%v (%s) scan:%v drain:%v",
 				index.GetMemTotal(s.UseLiveData()), formatMemoryStr(uint64(index.GetMemTotal(s.UseLiveData()))),
 				index.GetMemUsage(s.UseLiveData()), formatMemoryStr(uint64(index.GetMemUsage(s.UseLiveData()))),
 				index.GetMemOverhead(s.UseLiveData()), formatMemoryStr(uint64(index.GetMemOverhead(s.UseLiveData()))),
 				index.GetDataSize(s.UseLiveData()), formatMemoryStr(uint64(index.GetDataSize(s.UseLiveData()))),
 				index.GetCpuUsage(s.UseLiveData()),
+				index.GetDiskUsage(s.UseLiveData()), formatMemoryStr(uint64(index.GetDiskUsage(s.UseLiveData()))),
+				index.GetScanRate(s.UseLiveData()), index.GetDrainRate(s.UseLiveData()))
+			logging.Infof("\t\tIndex resident:%v%% build:%v%% estimated:%v equivCheck:%v pendingCreate:%v pendingDelete:%v",
 				uint64(index.GetResidentRatio(s.UseLiveData())),
 				index.GetBuildPercent(s.UseLiveData()),
-				index.NoUsageInfo && index.HasSizing(s.UseLiveData()))
+				index.NoUsageInfo && index.HasSizing(s.UseLiveData()),
+				!index.suppressEquivIdxCheck,
+				index.pendingCreate, index.pendingDelete)
 		}
 	}
 }
@@ -1527,14 +1568,14 @@ func (s *Solution) ComputeMemUsage() (float64, float64) {
 	// Compute mean memory usage
 	var meanMemUsage float64
 	for _, indexerUsage := range s.Placement {
-		meanMemUsage += float64(indexerUsage.GetMemTotal(s.UseLiveData()))
+		meanMemUsage += float64(indexerUsage.GetMemUsage(s.UseLiveData()))
 	}
 	meanMemUsage = meanMemUsage / float64(len(s.Placement))
 
 	// compute memory variance
 	var varianceMemUsage float64
 	for _, indexerUsage := range s.Placement {
-		v := float64(indexerUsage.GetMemTotal(s.UseLiveData())) - meanMemUsage
+		v := float64(indexerUsage.GetMemUsage(s.UseLiveData())) - meanMemUsage
 		varianceMemUsage += v * v
 	}
 	varianceMemUsage = varianceMemUsage / float64(len(s.Placement))
@@ -1569,6 +1610,84 @@ func (s *Solution) ComputeCpuUsage() (float64, float64) {
 	stdDevCpuUsage := math.Sqrt(varianceCpuUsage)
 
 	return meanCpuUsage, stdDevCpuUsage
+}
+
+//
+// Compute statistics on disk Usage
+//
+func (s *Solution) ComputeDiskUsage() (float64, float64) {
+
+	// Compute mean disk usage
+	var meanDiskUsage float64
+	for _, indexerUsage := range s.Placement {
+		meanDiskUsage += float64(indexerUsage.GetDiskUsage(s.UseLiveData()))
+	}
+	meanDiskUsage = meanDiskUsage / float64(len(s.Placement))
+
+	// compute disk variance
+	var varianceDiskUsage float64
+	for _, indexerUsage := range s.Placement {
+		v := float64(indexerUsage.GetDiskUsage(s.UseLiveData())) - meanDiskUsage
+		varianceDiskUsage += v * v
+	}
+	varianceDiskUsage = varianceDiskUsage / float64(len(s.Placement))
+
+	// compute disk std dev
+	stdDevDiskUsage := math.Sqrt(varianceDiskUsage)
+
+	return meanDiskUsage, stdDevDiskUsage
+}
+
+//
+// Compute statistics on drain rate
+//
+func (s *Solution) ComputeDrainRate() (float64, float64) {
+
+	// Compute mean drain rate
+	var meanDrainRate float64
+	for _, indexerUsage := range s.Placement {
+		meanDrainRate += float64(indexerUsage.GetDrainRate(s.UseLiveData()))
+	}
+	meanDrainRate = meanDrainRate / float64(len(s.Placement))
+
+	// compute drain rate variance
+	var varianceDrainRate float64
+	for _, indexerUsage := range s.Placement {
+		v := float64(indexerUsage.GetDrainRate(s.UseLiveData())) - meanDrainRate
+		varianceDrainRate += v * v
+	}
+	varianceDrainRate = varianceDrainRate / float64(len(s.Placement))
+
+	// compute drain rate std dev
+	stdDevDrainRate := math.Sqrt(varianceDrainRate)
+
+	return meanDrainRate, stdDevDrainRate
+}
+
+//
+// Compute statistics on scan rate
+//
+func (s *Solution) ComputeScanRate() (float64, float64) {
+
+	// Compute mean scan rate
+	var meanScanRate float64
+	for _, indexerUsage := range s.Placement {
+		meanScanRate += float64(indexerUsage.GetScanRate(s.UseLiveData()))
+	}
+	meanScanRate = meanScanRate / float64(len(s.Placement))
+
+	// compute scan rate variance
+	var varianceScanRate float64
+	for _, indexerUsage := range s.Placement {
+		v := float64(indexerUsage.GetScanRate(s.UseLiveData())) - meanScanRate
+		varianceScanRate += v * v
+	}
+	varianceScanRate = varianceScanRate / float64(len(s.Placement))
+
+	// compute scan rate std dev
+	stdDevScanRate := math.Sqrt(varianceScanRate)
+
+	return meanScanRate, stdDevScanRate
 }
 
 //
@@ -1699,38 +1818,6 @@ func (s *Solution) computeIndexMovement(useNewNode bool) (uint64, uint64, uint64
 	}
 
 	return totalSize, dataMoved, totalIndex, indexMoved
-}
-
-//
-// Compute indexer free ratio
-//
-func (s *Solution) computeFreeRatio() (float64, float64) {
-
-	cpuTotal := float64(0)
-	memTotal := float64(0)
-	count := uint64(0)
-
-	for _, indexer := range s.Placement {
-
-		cpu := (float64(s.constraint.GetCpuQuota()) - float64(indexer.GetCpuUsage(s.UseLiveData()))) / float64(s.constraint.GetCpuQuota())
-		mem := (float64(s.constraint.GetMemQuota()) - float64(indexer.GetMemTotal(s.UseLiveData()))) / float64(s.constraint.GetMemQuota())
-
-		if cpu > 0 {
-			cpuTotal += cpu
-		}
-
-		if mem > 0 {
-			memTotal += mem
-		}
-
-		count++
-	}
-
-	if count > 0 {
-		return (memTotal / float64(count)), (cpuTotal / float64(count))
-	} else {
-		return 0, 0
-	}
 }
 
 //
@@ -2524,26 +2611,45 @@ func (s *Solution) canRunEstimation() bool {
 // 1) memory usage
 // 2) cpu
 // 3) data
+// 4) io
+// 5) drain rate
+// 6) scan rate
 //
 func (s *Solution) computeUsageRatio(indexer *IndexerNode) float64 {
 
 	memCost := float64(0)
-	cpuCost := float64(0)
+	//cpuCost := float64(0)
 	dataCost := float64(0)
+	diskCost := float64(0)
+	drainCost := float64(0)
+	scanCost := float64(0)
 
 	if s.memMean != 0 {
-		memCost = float64(indexer.GetMemTotal(s.UseLiveData())) / s.memMean
+		memCost = float64(indexer.GetMemUsage(s.UseLiveData())) / s.memMean
 	}
 
-	if s.cpuMean != 0 {
-		cpuCost = float64(indexer.GetCpuUsage(s.UseLiveData())) / s.cpuMean
-	}
+	//if s.cpuMean != 0 {
+	//	cpuCost = float64(indexer.GetCpuUsage(s.UseLiveData())) / s.cpuMean
+	//}
 
 	if s.dataMean != 0 {
 		dataCost = float64(indexer.GetDataSize(s.UseLiveData())) / s.dataMean
 	}
 
-	return (memCost + cpuCost + dataCost) / 3
+	if s.diskMean != 0 {
+		diskCost = float64(indexer.GetDiskUsage(s.UseLiveData())) / s.diskMean
+	}
+
+	if s.drainMean != 0 {
+		drainCost = float64(indexer.GetDrainRate(s.UseLiveData())) / s.drainMean
+	}
+
+	if s.scanMean != 0 {
+		scanCost = float64(indexer.GetScanRate(s.UseLiveData())) / s.scanMean
+	}
+
+	//return (memCost + cpuCost + dataCost + diskCost + drainCost + scanCost) / 6
+	return (memCost + dataCost + diskCost + drainCost + scanCost) / 5
 }
 
 //
@@ -2551,10 +2657,14 @@ func (s *Solution) computeUsageRatio(indexer *IndexerNode) float64 {
 // 1) memory usage
 // 2) cpu
 // 3) data
+// 4) io
+// 5) drain rate
+// 6) scan rate
 //
 func (s *Solution) computeMeanUsageRatio() float64 {
 
-	return 3
+	//return 6
+	return 5
 }
 
 func (s *Solution) computeMaxMemUsage() uint64 {
@@ -2620,12 +2730,12 @@ func (c *IndexerConstraint) Validate(s *Solution) error {
 	}
 
 	var totalIndexMem uint64
-	var totalIndexCpu float64
+	//var totalIndexCpu float64
 
 	for _, indexer := range s.Placement {
 		for _, index := range indexer.Indexes {
 			totalIndexMem += index.GetMemTotal(s.UseLiveData())
-			totalIndexCpu += index.GetCpuUsage(s.UseLiveData())
+			//totalIndexCpu += index.GetCpuUsage(s.UseLiveData())
 		}
 	}
 
@@ -3170,6 +3280,9 @@ func (o *IndexerNode) clone() *IndexerNode {
 	r.ActualMemOverhead = o.ActualMemOverhead
 	r.ActualCpuUsage = o.ActualCpuUsage
 	r.ActualDataSize = o.ActualDataSize
+	r.ActualDiskUsage = o.ActualDiskUsage
+	r.ActualDrainRate = o.ActualDrainRate
+	r.ActualScanRate = o.ActualScanRate
 	r.meetConstraint = o.meetConstraint
 	r.numEmptyIndex = o.numEmptyIndex
 	r.hasEligible = o.hasEligible
@@ -3341,6 +3454,102 @@ func (o *IndexerNode) SubtractDataSize(s *Solution, datasize uint64) {
 		o.ActualDataSize -= datasize
 	} else {
 		o.DataSize -= datasize
+	}
+}
+
+//
+// Get disk bps
+//
+func (o *IndexerNode) GetDiskUsage(useLive bool) uint64 {
+
+	if useLive {
+		return o.ActualDiskUsage
+	}
+
+	return 0
+}
+
+//
+// Add disk bps
+//
+func (o *IndexerNode) AddDiskUsage(s *Solution, diskUsage uint64) {
+
+	if s.UseLiveData() {
+		o.ActualDiskUsage += diskUsage
+	}
+}
+
+//
+// Subtract disk bps
+//
+func (o *IndexerNode) SubtractDiskUsage(s *Solution, diskUsage uint64) {
+
+	if s.UseLiveData() {
+		o.ActualDiskUsage -= diskUsage
+	}
+}
+
+//
+// Get scan rate
+//
+func (o *IndexerNode) GetScanRate(useLive bool) uint64 {
+
+	if useLive {
+		return o.ActualScanRate
+	}
+
+	return 0
+}
+
+//
+// Add scan rate
+//
+func (o *IndexerNode) AddScanRate(s *Solution, scanRate uint64) {
+
+	if s.UseLiveData() {
+		o.ActualScanRate += scanRate
+	}
+}
+
+//
+// Subtract scan rate
+//
+func (o *IndexerNode) SubtractScanRate(s *Solution, scanRate uint64) {
+
+	if s.UseLiveData() {
+		o.ActualScanRate -= scanRate
+	}
+}
+
+//
+// Get drain rate
+//
+func (o *IndexerNode) GetDrainRate(useLive bool) uint64 {
+
+	if useLive {
+		return o.ActualDrainRate
+	}
+
+	return 0
+}
+
+//
+// Add drain rate
+//
+func (o *IndexerNode) AddDrainRate(s *Solution, drainRate uint64) {
+
+	if s.UseLiveData() {
+		o.ActualDrainRate += drainRate
+	}
+}
+
+//
+// Subtract drain rate
+//
+func (o *IndexerNode) SubtractDrainRate(s *Solution, drainRate uint64) {
+
+	if s.UseLiveData() {
+		o.ActualDrainRate -= drainRate
 	}
 }
 
@@ -3617,6 +3826,55 @@ func (o *IndexUsage) GetDataSize(useLive bool) uint64 {
 }
 
 //
+// Get disk Usage
+//
+func (o *IndexUsage) GetDiskUsage(useLive bool) uint64 {
+
+	if o.NoUsageInfo {
+		return 0
+	}
+
+	if useLive {
+		return o.ActualDiskUsage
+	}
+
+	return 0
+}
+
+//
+// Get scan rate
+//
+func (o *IndexUsage) GetScanRate(useLive bool) uint64 {
+
+	if o.NoUsageInfo {
+		return 0
+	}
+
+	if useLive {
+		return o.ActualScanRate
+	}
+
+	return 0
+}
+
+//
+// Get drain rate
+//
+func (o *IndexUsage) GetDrainRate(useLive bool) uint64 {
+
+	if o.NoUsageInfo {
+		return 0
+	}
+
+	if useLive {
+		return o.ActualDrainRate
+	}
+
+	return 0
+}
+
+//
+//
 // Get resident ratio
 //
 func (o *IndexUsage) GetResidentRatio(useLive bool) float64 {
@@ -3654,10 +3912,12 @@ func (o *IndexUsage) HasSizing(useLive bool) bool {
 	}
 
 	if useLive {
-		return o.ActualMemUsage != 0 || o.ActualCpuUsage != 0 || o.ActualDataSize != 0
+		//return o.ActualMemUsage != 0 || o.ActualCpuUsage != 0 || o.ActualDataSize != 0
+		return o.ActualMemUsage != 0 || o.ActualDataSize != 0
 	}
 
-	return o.MemUsage != 0 || o.CpuUsage != 0 || o.DataSize != 0
+	//return o.MemUsage != 0 || o.CpuUsage != 0 || o.DataSize != 0
+	return o.MemUsage != 0 || o.DataSize != 0
 }
 
 func (o *IndexUsage) HasSizingInputs() bool {
@@ -3679,7 +3939,8 @@ func (o *IndexUsage) ComputeSizing(useLive bool, sizing SizingMethod) {
 		// 1) A deferred index that has yet to be built
 		// 2) A index still waiting to be create/build (from create token)
 		// 3) A index from an empty bucket
-		if o.ActualMemUsage == 0 && o.ActualDataSize == 0 && o.ActualCpuUsage == 0 {
+		//if o.ActualMemUsage == 0 && o.ActualDataSize == 0 && o.ActualCpuUsage == 0 {
+		if o.ActualMemUsage == 0 && o.ActualDataSize == 0 {
 			o.ActualMemUsage = o.MemUsage
 			o.ActualDataSize = o.DataSize
 			o.ActualCpuUsage = o.CpuUsage
@@ -3689,9 +3950,11 @@ func (o *IndexUsage) ComputeSizing(useLive bool, sizing SizingMethod) {
 	}
 
 	if !useLive {
-		o.NoUsageInfo = o.MemUsage == 0 && o.CpuUsage == 0 && o.DataSize == 0
+		//o.NoUsageInfo = o.MemUsage == 0 && o.CpuUsage == 0 && o.DataSize == 0
+		o.NoUsageInfo = o.MemUsage == 0 && o.DataSize == 0
 	} else {
-		o.NoUsageInfo = o.ActualMemUsage == 0 && o.ActualCpuUsage == 0 && o.ActualDataSize == 0
+		//o.NoUsageInfo = o.ActualMemUsage == 0 && o.ActualCpuUsage == 0 && o.ActualDataSize == 0
+		o.NoUsageInfo = o.ActualMemUsage == 0 && o.ActualDataSize == 0
 	}
 }
 
@@ -3829,13 +4092,44 @@ func (c *UsageBasedCostMethod) GetDataMean() float64 {
 }
 
 //
-// Compute average resource variation
+// Get disk mean
+//
+func (c *UsageBasedCostMethod) GetDiskMean() float64 {
+	return c.DiskMean
+}
+
+//
+// Get scan mean
+//
+func (c *UsageBasedCostMethod) GetScanMean() float64 {
+	return c.ScanMean
+}
+
+//
+// Get drain mean
+//
+func (c *UsageBasedCostMethod) GetDrainMean() float64 {
+	return c.DrainMean
+}
+
+//
+//
+// Compute average resource variation across 4 dimensions:
+// 1) memory
+// 2) cpu
+// 3) disk
+// 4) data size
+// This computes a "score" from 0 to 4.  The lowest the score,
+// the lower the variation.
 //
 func (c *UsageBasedCostMethod) ComputeResourceVariation() float64 {
 
 	memCost := float64(0)
-	cpuCost := float64(0)
+	//cpuCost := float64(0)
 	dataSizeCost := float64(0)
+	diskCost := float64(0)
+	drainCost := float64(0)
+	scanCost := float64(0)
 	count := 0
 
 	if c.MemMean != 0 {
@@ -3843,17 +4137,35 @@ func (c *UsageBasedCostMethod) ComputeResourceVariation() float64 {
 		count++
 	}
 
-	if c.CpuMean != 0 {
-		cpuCost = c.CpuStdDev / c.CpuMean
-		count++
-	}
+	/*
+		if c.CpuMean != 0 {
+			cpuCost = c.CpuStdDev / c.CpuMean
+			count++
+		}
+	*/
 
 	if c.DataSizeMean != 0 {
 		dataSizeCost = c.DataSizeStdDev / c.DataSizeMean
 		count++
 	}
 
-	return (memCost + cpuCost + dataSizeCost) / float64(count)
+	if c.DiskMean != 0 {
+		diskCost = c.DiskStdDev / c.DiskMean
+		count++
+	}
+
+	if c.DrainMean != 0 {
+		drainCost = c.DrainStdDev / c.DrainMean
+		count++
+	}
+
+	if c.ScanMean != 0 {
+		scanCost = c.ScanStdDev / c.ScanMean
+		count++
+	}
+
+	// return (memCost + cpuCost + dataSizeCost + diskCost + drainCost + scanCost) / float64(count)
+	return (memCost + dataSizeCost + diskCost + drainCost + scanCost) / float64(count)
 }
 
 //
@@ -3864,11 +4176,17 @@ func (c *UsageBasedCostMethod) Cost(s *Solution) float64 {
 	// compute usage statistics
 	c.MemMean, c.MemStdDev = s.ComputeMemUsage()
 	c.CpuMean, c.CpuStdDev = s.ComputeCpuUsage()
+	c.DiskMean, c.DiskStdDev = s.ComputeDiskUsage()
+	c.ScanMean, c.ScanStdDev = s.ComputeScanRate()
+	c.DrainMean, c.DrainStdDev = s.ComputeDrainRate()
 	c.TotalData, c.DataMoved, c.TotalIndex, c.IndexMoved = s.computeIndexMovement(false)
 	c.DataSizeMean, c.DataSizeStdDev = s.ComputeDataSize()
 
 	memCost := float64(0)
-	cpuCost := float64(0)
+	//cpuCost := float64(0)
+	diskCost := float64(0)
+	drainCost := float64(0)
+	scanCost := float64(0)
 	movementCost := float64(0)
 	indexCost := float64(0)
 	emptyIdxCost := float64(0)
@@ -3880,17 +4198,34 @@ func (c *UsageBasedCostMethod) Cost(s *Solution) float64 {
 	}
 	count++
 
-	if c.cpuCostWeight > 0 && c.CpuMean != 0 {
-		cpuCost = c.CpuStdDev / c.CpuMean * c.cpuCostWeight
-	}
-	count++
+	/*
+		if c.cpuCostWeight > 0 && c.CpuMean != 0 {
+			cpuCost = c.CpuStdDev / c.CpuMean * c.cpuCostWeight
+			count++
+		}
+	*/
 
 	if c.DataSizeMean != 0 {
 		dataSizeCost = c.DataSizeStdDev / c.DataSizeMean
 	}
 	count++
 
-	// Empty index is index with no recored memory or cpu usage (exlcuding mem overhead).
+	if c.DiskMean != 0 {
+		diskCost = c.DiskStdDev / c.DiskMean
+		count++
+	}
+
+	if c.ScanMean != 0 {
+		scanCost = c.ScanStdDev / c.ScanMean
+		count++
+	}
+
+	if c.DrainMean != 0 {
+		drainCost = c.DrainStdDev / c.DrainMean
+		count++
+	}
+
+	// Empty index is index with no recorded memory or cpu usage (exlcuding mem overhead).
 	// It could be index without stats or sizing information.
 	// The cost function minimize the residual memory after subtracting the estimated empty
 	// index usage.
@@ -3903,9 +4238,8 @@ func (c *UsageBasedCostMethod) Cost(s *Solution) float64 {
 	// UsageCost is used as a weight to scale the impact of
 	// moving data during rebalance.  Usage cost is affected by:
 	// 1) relative ratio of memory deviation and memory mean
-	// 2) relative ratio of cpu deviation and cpu mean
-	// 3) relative ratio of data size deviation and data size mean
-	usageCost := (cpuCost + memCost + dataSizeCost) / float64(3)
+	// 2) relative ratio of data size deviation and data size mean
+	usageCost := (memCost + dataSizeCost) / float64(2)
 
 	if c.dataCostWeight > 0 && c.TotalData != 0 {
 		// The cost of moving data is inversely adjust by the usage cost.
@@ -3923,10 +4257,13 @@ func (c *UsageBasedCostMethod) Cost(s *Solution) float64 {
 		count++
 	}
 
-	logging.Tracef("Planner::cost: mem cost %v cpu cost %v data moved %v index moved %v emptyIdx cost %v dataSize cost %v count %v",
-		memCost, cpuCost, movementCost, indexCost, emptyIdxCost, dataSizeCost, count)
+	//logging.Tracef("Planner::cost: mem cost %v cpu cost %v data moved %v index moved %v emptyIdx cost %v dataSize cost %v disk cost %v drain %v scan %v count %v",
+	//	memCost, cpuCost, movementCost, indexCost, emptyIdxCost, dataSizeCost, diskCost, drainCost, scanCost, count)
+	logging.Tracef("Planner::cost: mem cost %v data moved %v index moved %v emptyIdx cost %v dataSize cost %v disk cost %v drain %v scan %v count %v",
+		memCost, movementCost, indexCost, emptyIdxCost, dataSizeCost, diskCost, drainCost, scanCost, count)
 
-	return (memCost + cpuCost + emptyIdxCost + movementCost + indexCost + dataSizeCost) / float64(count)
+	//return (memCost + cpuCost + emptyIdxCost + movementCost + indexCost + dataSizeCost + diskCost + drainCost + scanCost) / float64(count)
+	return (memCost + emptyIdxCost + movementCost + indexCost + dataSizeCost + diskCost + drainCost + scanCost) / float64(count)
 }
 
 //
@@ -3936,6 +4273,9 @@ func (s *UsageBasedCostMethod) Print() {
 
 	var memUtil float64
 	var cpuUtil float64
+	var diskUtil float64
+	var drainUtil float64
+	var scanUtil float64
 	var dataSizeUtil float64
 	var dataMoved float64
 	var indexMoved float64
@@ -3952,6 +4292,18 @@ func (s *UsageBasedCostMethod) Print() {
 		dataSizeUtil = float64(s.DataSizeStdDev) / float64(s.DataSizeMean) * 100
 	}
 
+	if s.DiskMean != 0 {
+		diskUtil = float64(s.DiskStdDev) / float64(s.DiskMean) * 100
+	}
+
+	if s.DrainMean != 0 {
+		drainUtil = float64(s.DrainStdDev) / float64(s.DrainMean) * 100
+	}
+
+	if s.ScanMean != 0 {
+		scanUtil = float64(s.ScanStdDev) / float64(s.ScanMean) * 100
+	}
+
 	if s.TotalData != 0 {
 		dataMoved = float64(s.DataMoved) / float64(s.TotalData) * 100
 	}
@@ -3966,6 +4318,12 @@ func (s *UsageBasedCostMethod) Print() {
 	logging.Infof("Indexer CPU Mean %.4f", s.CpuMean)
 	logging.Infof("Indexer CPU Deviation %.2f (%.2f%%)", s.CpuStdDev, cpuUtil)
 	logging.Infof("Indexer CPU Utilization %.4f", float64(s.CpuMean)/float64(s.constraint.GetCpuQuota()))
+	logging.Infof("Indexer IO Mean %.4f", s.DiskMean)
+	logging.Infof("Indexer IO Deviation %.2f (%.2f%%)", s.DiskStdDev, diskUtil)
+	logging.Infof("Indexer Drain Rate Mean %.4f", s.DrainMean)
+	logging.Infof("Indexer Drain Rate Deviation %.2f (%.2f%%)", s.DrainStdDev, drainUtil)
+	logging.Infof("Indexer Scan Rate Mean %.4f", s.ScanMean)
+	logging.Infof("Indexer Scan Rate Deviation %.2f (%.2f%%)", s.ScanStdDev, scanUtil)
 	logging.Infof("Indexer Data Size Mean %v (%s)", uint64(s.DataSizeMean), formatMemoryStr(uint64(s.DataSizeMean)))
 	logging.Infof("Indexer Data Size Deviation %v (%s) (%.2f%%)", uint64(s.DataSizeStdDev), formatMemoryStr(uint64(s.DataSizeStdDev)), dataSizeUtil)
 	logging.Infof("Total Index Data (from non-deleted node) %v", formatMemoryStr(s.TotalData))
@@ -4139,12 +4497,12 @@ func (p *RandomPlacement) Validate(s *Solution) error {
 			found := false
 			for _, indexer := range s.Placement {
 				freeMem := s.getConstraintMethod().GetMemQuota()
-				freeCpu := float64(s.getConstraintMethod().GetCpuQuota())
+				//freeCpu := float64(s.getConstraintMethod().GetCpuQuota())
 
 				for _, index2 := range indexer.Indexes {
 					if !p.isEligibleIndex(index2) {
 						freeMem -= index2.GetMemTotal(s.UseLiveData())
-						freeCpu -= index2.GetCpuUsage(s.UseLiveData())
+						//freeCpu -= index2.GetCpuUsage(s.UseLiveData())
 					}
 				}
 
@@ -4912,8 +5270,9 @@ func (p *RandomPlacement) exhaustiveSwap(s *Solution, sources []*IndexerNode, ta
 						continue
 					}
 
-					if sourceIndex.GetMemTotal(s.UseLiveData()) >= targetIndex.GetMemTotal(s.UseLiveData()) &&
-						sourceIndex.GetCpuUsage(s.UseLiveData()) >= targetIndex.GetCpuUsage(s.UseLiveData()) {
+					//if sourceIndex.GetMemTotal(s.UseLiveData()) >= targetIndex.GetMemTotal(s.UseLiveData()) &&
+					//	sourceIndex.GetCpuUsage(s.UseLiveData()) >= targetIndex.GetCpuUsage(s.UseLiveData()) {
+					if sourceIndex.GetMemTotal(s.UseLiveData()) >= targetIndex.GetMemTotal(s.UseLiveData()) {
 
 						targetViolation := s.constraint.CanSwapIndex(s, target, sourceIndex, targetIndex)
 						sourceViolation := s.constraint.CanSwapIndex(s, source, targetIndex, sourceIndex)

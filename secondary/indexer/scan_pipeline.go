@@ -115,6 +115,15 @@ type IndexScanWriter struct {
 }
 
 func (s *IndexScanSource) Routine() error {
+
+	//Temporary log for troubleshooting MB-29261
+	defer func() {
+		if r := recover(); r != nil {
+			l.Fatalf("IndexScanSource - panic detected while processing %s", s.p.req)
+			panic(r)
+		}
+	}()
+
 	var err error
 	defer s.CloseWrite()
 
@@ -1259,6 +1268,19 @@ func (e *entryCache) Init(r *ScanRequest) {
 }
 
 func (e *entryCache) EqualsEntry(other []byte) bool {
+
+	//Temporary log for troubleshooting MB-29261
+	defer func() {
+		if r := recover(); r != nil {
+			l.Fatalf("EntryCache - panic detected")
+			e1 := secondaryIndexEntry(e.entry)
+			e2 := secondaryIndexEntry(other)
+			l.Fatalf("Cached - Raw %v Entry %s", e1.Bytes(), e1)
+			l.Fatalf("Other - Raw %v Entry %s", e2.Bytes(), e2)
+			panic(r)
+		}
+	}()
+
 	return distinctCompare(e.entry, other)
 }
 

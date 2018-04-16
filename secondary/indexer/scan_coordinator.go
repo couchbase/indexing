@@ -687,12 +687,20 @@ func (s *scanCoordinator) handleStats(cmd Message) {
 			// compute scan rate
 			now := time.Now().UnixNano()
 			elapsed := float64(now-idxStats.lastScanGatherTime.Value()) / float64(time.Second)
-			if elapsed > 0 {
-				numRowsReturned := idxStats.numRowsReturned.Value()
-				scanRate := float64(numRowsReturned-idxStats.lastNumRowsReturned.Value()) / elapsed
-				idxStats.avgScanRate.Set(int64((scanRate + float64(idxStats.avgScanRate.Value())) / 2))
-				idxStats.lastScanGatherTime.Set(now)
-				idxStats.lastNumRowsReturned.Set(numRowsReturned)
+			if elapsed > 60 {
+				partitions := idxStats.getPartitions()
+				for _, pid := range partitions {
+					partnStats := idxStats.getPartitionStats(pid)
+					numRowsScanned := partnStats.numRowsScanned.Value()
+					scanRate := float64(numRowsScanned-partnStats.lastNumRowsScanned.Value()) / elapsed
+					partnStats.avgScanRate.Set(int64((scanRate + float64(partnStats.avgScanRate.Value())) / 2))
+					partnStats.lastNumRowsScanned.Set(numRowsScanned)
+
+					logging.Debugf("scanCoordinator.handleStats: index %v partition %v numRowsScanned %v scan rate %v avg scan rate %v",
+						id, pid, numRowsScanned, scanRate, partnStats.avgScanRate.Value())
+
+					idxStats.lastScanGatherTime.Set(now)
+				}
 			}
 		}
 		replych <- true

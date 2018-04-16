@@ -369,6 +369,7 @@ type GsiClient struct {
 	settings     *ClientSettings
 	killch       chan bool
 	numScans     int64
+	scanResponse int64
 }
 
 // NewGsiClient returns client to access GSI cluster.
@@ -1241,6 +1242,7 @@ func (c *GsiClient) doScan(defnID uint64, requestId string, broker *RequestBroke
 		if queryports, targetDefnID, targetInstIds, rollbackTimes, partitions, numPartitions, ok := c.bridge.GetScanport(defnID, excludes, skips); ok {
 
 			index := c.bridge.GetIndexDefn(targetDefnID)
+			start := time.Now()
 			count, scan_errs, partial, refresh := broker.scatter(c.makeScanClient, index, queryports, targetInstIds,
 				rollbackTimes, partitions, numPartitions, c.settings)
 
@@ -1248,6 +1250,7 @@ func (c *GsiClient) doScan(defnID uint64, requestId string, broker *RequestBroke
 				foundScanport = true
 
 				if c.isTimeit(scan_errs) {
+					c.updateScanResponse(time.Now().Sub(start).Nanoseconds())
 					return count, getScanError(scan_errs)
 				}
 
@@ -1456,10 +1459,17 @@ func (c *GsiClient) logstats(killch chan bool) {
 		select {
 		case <-tick.C:
 			logging.Infof("num concurrent scans {%v}", atomic.LoadInt64(&c.numScans))
+			logging.Infof("average scan response {%v ms}", atomic.LoadInt64(&c.scanResponse)/int64(time.Millisecond))
 		case <-killch:
 			return
 		}
 	}
+}
+
+func (c *GsiClient) updateScanResponse(value int64) {
+
+	current := atomic.LoadInt64(&c.scanResponse)
+	atomic.StoreInt64(&c.scanResponse, (current+value)/2)
 }
 
 //--------------------------
