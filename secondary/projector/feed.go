@@ -693,7 +693,7 @@ func (feed *Feed) start(
 	feed.version = req.GetVersion()
 
 	// update engines and endpoints
-	if err = feed.processSubscribers(opaque, req); err != nil { // :SideEffect:
+	if _, err = feed.processSubscribers(opaque, req); err != nil { // :SideEffect:
 		return err
 	}
 	for _, ts := range req.GetReqTimestamps() {
@@ -948,7 +948,7 @@ func (feed *Feed) addBuckets(
 	req *protobuf.AddBucketsRequest, opaque uint16) (err error) {
 
 	// update engines and endpoints
-	if err = feed.processSubscribers(opaque, req); err != nil { // :SideEffect:
+	if _, err = feed.processSubscribers(opaque, req); err != nil { // :SideEffect:
 		return err
 	}
 
@@ -1048,12 +1048,15 @@ func (feed *Feed) addInstances(
 	errResp := &protobuf.TimestampResponse{Topic: proto.String(feed.topic)}
 
 	// update engines and endpoints
-	if err := feed.processSubscribers(opaque, req); err != nil { // :SideEffect:
+	buckets, err := feed.processSubscribers(opaque, req) // :SideEffect:
+	if err != nil {
 		return errResp, err
 	}
-	var err error
-	// post to kv data-path
-	for bucketn, engines := range feed.engines {
+
+	// post to kv data-path for buckets from new subscribers
+	// do not touch the kv data-path for buckets that are not part of addInstances
+	for _, bucketn := range buckets {
+		engines := feed.engines[bucketn]
 		if kvdata, ok := feed.kvdata[bucketn]; ok {
 			curSeqnos, err := kvdata.AddEngines(opaque, engines, feed.endpoints)
 			if err != nil {
@@ -1067,6 +1070,7 @@ func (feed *Feed) addInstances(
 			err = projC.ErrorInvalidBucket
 		}
 	}
+
 	return tsResp, err
 }
 
@@ -1454,19 +1458,21 @@ func (feed *Feed) startDataPath(
 }
 
 // - return ErrorInconsistentFeed for malformed feed request
-func (feed *Feed) processSubscribers(opaque uint16, req Subscriber) error {
+func (feed *Feed) processSubscribers(opaque uint16, req Subscriber) ([]string, error) {
 	evaluators, routers, err := feed.subscribers(opaque, req)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// start fresh set of all endpoints from routers.
 	if err = feed.startEndpoints(opaque, routers); err != nil {
-		return err
+		return nil, err
 	}
 	// update feed engines.
+	buckets := make([]string, 0, len(evaluators))
 	for uuid, evaluator := range evaluators {
 		bucketn := evaluator.Bucket()
+		buckets = append(buckets, bucketn)
 		m, ok := feed.engines[bucketn]
 		if !ok {
 			m = make(map[uint64]*Engine)
@@ -1475,7 +1481,7 @@ func (feed *Feed) processSubscribers(opaque uint16, req Subscriber) error {
 		m[uuid] = engine
 		feed.engines[bucketn] = m // :SideEffect:
 	}
-	return nil
+	return buckets, nil
 }
 
 // feed.endpoints is updated with freshly started endpoint,
