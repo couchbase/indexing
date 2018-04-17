@@ -72,7 +72,11 @@ func (p ScanPipeline) CacheHitRatio() int {
 }
 
 func (p ScanPipeline) AvgExprEvalDur() time.Duration {
-	return time.Duration(int64(p.exprEvalDur) / p.exprEvalNum)
+
+	if p.exprEvalNum != 0 {
+		return time.Duration(int64(p.exprEvalDur) / p.exprEvalNum)
+	}
+	return time.Duration(0)
 }
 
 func NewScanPipeline(req *ScanRequest, w ScanResponseWriter, is IndexSnapshot, cfg c.Config) *ScanPipeline {
