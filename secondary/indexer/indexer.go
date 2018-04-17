@@ -3958,6 +3958,7 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 	go func(reqLock *kvRequest) {
 		defer idx.releaseStreamRequestLock(reqLock)
 		idx.waitStreamRequestLock(reqLock)
+		count := 0
 	retryloop:
 		for {
 			if !ValidateBucket(clustAddr, bucket, bucketUUIDList) {
@@ -3987,6 +3988,7 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 				default:
 					//log and retry for all other responses
 					respErr := resp.(*MsgError).GetError()
+					count++
 
 					//If projector returns TopicMissing/GenServerClosed, AddInstance
 					//cannot succeed. This needs to be aborted so that stream lock is
@@ -3996,6 +3998,20 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 						logging.Warnf("Indexer::handleInitialBuildDone Stream %v Bucket %v "+
 							"Error from Projector %v. Aborting.", streamId, bucket, respErr.cause)
 						break retryloop
+
+					} else if count > 20 {
+						// Start recovery if cannot add instances over threshold.  If the projector
+						// state is not correct, this ensures projector state will get cleaned up.
+						logging.Errorf("Indexer::handleInitialBuildDone Stream %v Bucket %v "+
+							"Error from Projector %v. Start recovery after 20 retries.", streamId, bucket, respErr.cause)
+
+						idx.internalRecvCh <- &MsgRecovery{
+							mType:    INDEXER_INIT_PREP_RECOVERY,
+							streamId: common.MAINT_STREAM,
+							bucket:   bucket,
+						}
+						break retryloop
+
 					} else {
 
 						logging.Errorf("Indexer::handleInitialBuildDone Stream %v Bucket %v "+
