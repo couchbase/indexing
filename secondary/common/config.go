@@ -21,6 +21,7 @@ import "github.com/couchbase/indexing/secondary/logging"
 import "sync/atomic"
 import "unsafe"
 import "runtime"
+import "math"
 
 // NOTE:
 // following settings are related to each other.
@@ -35,7 +36,7 @@ import "runtime"
 //		"indexer.dataport.tcpReadDeadline": 300 * 1000
 
 // formula to compute the default CPU allocation for projector.
-var projector_maxCpuPercent = runtime.NumCPU() * 100
+var projector_maxCpuPercent = int(math.Max(400.0, float64(runtime.NumCPU())*100.0*0.25))
 
 // Threadsafe config holder object
 type ConfigHolder struct {
