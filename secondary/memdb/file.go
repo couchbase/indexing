@@ -23,12 +23,14 @@ func init() {
 type FileWriter interface {
 	Open(path string) error
 	WriteItem(*Item) error
+	Checksum() uint32
 	Close() error
 }
 
 type FileReader interface {
 	Open(path string) error
 	ReadItem() (*Item, error)
+	Checksum() uint32
 	Close() error
 }
 
@@ -53,11 +55,12 @@ func (m *MemDB) newFileReader(t FileType, ver int) FileReader {
 }
 
 type rawFileWriter struct {
-	db   *MemDB
-	fd   *os.File
-	w    *bufio.Writer
-	buf  []byte
-	path string
+	db       *MemDB
+	fd       *os.File
+	w        *bufio.Writer
+	buf      []byte
+	path     string
+	checksum uint32
 }
 
 func (f *rawFileWriter) Open(path string) error {
@@ -71,7 +74,13 @@ func (f *rawFileWriter) Open(path string) error {
 }
 
 func (f *rawFileWriter) WriteItem(itm *Item) error {
-	return f.db.EncodeItem(itm, f.buf, f.w)
+	checksum, err := f.db.EncodeItem(itm, f.buf, f.w)
+	f.checksum = f.checksum ^ checksum
+	return err
+}
+
+func (f *rawFileWriter) Checksum() uint32 {
+	return f.checksum
 }
 
 func (f *rawFileWriter) Close() error {
@@ -86,12 +95,13 @@ func (f *rawFileWriter) Close() error {
 }
 
 type rawFileReader struct {
-	version int
-	db      *MemDB
-	fd      *os.File
-	r       *bufio.Reader
-	buf     []byte
-	path    string
+	version  int
+	db       *MemDB
+	fd       *os.File
+	r        *bufio.Reader
+	buf      []byte
+	path     string
+	checksum uint32
 }
 
 func (f *rawFileReader) Open(path string) error {
@@ -105,7 +115,15 @@ func (f *rawFileReader) Open(path string) error {
 }
 
 func (f *rawFileReader) ReadItem() (*Item, error) {
-	return f.db.DecodeItem(f.version, f.buf, f.r)
+	itm, checksum, err := f.db.DecodeItem(f.version, f.buf, f.r)
+	if itm != nil { // Checksum excludes terminal nil item
+		f.checksum = f.checksum ^ checksum
+	}
+	return itm, err
+}
+
+func (f *rawFileReader) Checksum() uint32 {
+	return f.checksum
 }
 
 func (f *rawFileReader) Close() error {
@@ -113,11 +131,12 @@ func (f *rawFileReader) Close() error {
 }
 
 type forestdbFileWriter struct {
-	db    *MemDB
-	file  *forestdb.File
-	store *forestdb.KVStore
-	buf   []byte
-	wbuf  bytes.Buffer
+	db       *MemDB
+	file     *forestdb.File
+	store    *forestdb.KVStore
+	buf      []byte
+	wbuf     bytes.Buffer
+	checksum uint32
 }
 
 func (f *forestdbFileWriter) Open(path string) error {
@@ -133,12 +152,17 @@ func (f *forestdbFileWriter) Open(path string) error {
 
 func (f *forestdbFileWriter) WriteItem(itm *Item) error {
 	f.wbuf.Reset()
-	err := f.db.EncodeItem(itm, f.buf, &f.wbuf)
+	checksum, err := f.db.EncodeItem(itm, f.buf, &f.wbuf)
 	if err == nil {
+		f.checksum = checksum
 		err = f.store.SetKV(f.wbuf.Bytes(), nil)
 	}
 
 	return err
+}
+
+func (f *forestdbFileWriter) Checksum() uint32 {
+	return f.checksum
 }
 
 func (f *forestdbFileWriter) Close() error {
@@ -154,11 +178,12 @@ func (f *forestdbFileWriter) Close() error {
 }
 
 type forestdbFileReader struct {
-	db    *MemDB
-	file  *forestdb.File
-	store *forestdb.KVStore
-	iter  *forestdb.Iterator
-	buf   []byte
+	db       *MemDB
+	file     *forestdb.File
+	store    *forestdb.KVStore
+	iter     *forestdb.Iterator
+	buf      []byte
+	checksum uint32
 }
 
 func (f *forestdbFileReader) Open(path string) error {
@@ -186,10 +211,14 @@ func (f *forestdbFileReader) ReadItem() (*Item, error) {
 	f.iter.Next()
 	if err == nil {
 		rbuf := bytes.NewBuffer(doc.Key())
-		itm, err = f.db.DecodeItem(0, f.buf, rbuf)
+		itm, f.checksum, err = f.db.DecodeItem(0, f.buf, rbuf)
 	}
 
 	return itm, err
+}
+
+func (f *forestdbFileReader) Checksum() uint32 {
+	return f.checksum
 }
 
 func (f *forestdbFileReader) Close() error {
