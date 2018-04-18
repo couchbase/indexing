@@ -220,6 +220,8 @@ func TestGroupAggrNonLeading(t *testing.T) {
 	ga.Group = ga.Group[1:]
 	proj.EntryKeys = proj.EntryKeys[1:]
 
+	ga.AllowPartialAggr = true
+
 	expectedResults := make(tc.GroupAggrScanResponse, 4)
 	expectedResults[0] = []interface{}{int64(1), int64(60), int64(4)}
 	expectedResults[1] = []interface{}{int64(2), int64(140), int64(4)}
@@ -304,6 +306,7 @@ func TestGroupAggrLeading_N1QLExprs(t *testing.T) {
 	var bucketName = "default"
 
 	ga, proj, n1qlEquivalent := basicGroupAggrN1QLExprs1()
+
 	_, scanResults, err := secondaryindex.Scan3(index1, bucketName, indexScanAddress, getScanAllNoFilter(), false, false, proj, 0, defaultlimit, ga, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
 	err = tv.ValidateGroupAggrWithN1QL(kvaddress, clusterconfig.Username,
@@ -348,6 +351,7 @@ func basicGroupAggrN1QLExprs1() (*qc.GroupAggr, *qc.IndexProjection, string) {
 			"(`default`.`Month`)",
 			"(`default`.`Sale`)",
 			"(meta(`default`).`id`)"},
+		AllowPartialAggr: true,
 	}
 
 	proj := &qc.IndexProjection{
@@ -382,6 +386,7 @@ func basicGroupAggrN1QLExprs2() (*qc.GroupAggr, *qc.IndexProjection, string) {
 			"(`default`.`Month`)",
 			"(`default`.`Sale`)",
 			"(meta(`default`).`id`)"},
+		AllowPartialAggr: true,
 	}
 
 	proj := &qc.IndexProjection{
@@ -433,6 +438,7 @@ func TestGroupAggrLimit(t *testing.T) {
 
 		ga.Group = ga.Group[1:]
 		proj.EntryKeys = proj.EntryKeys[1:]
+		ga.AllowPartialAggr = true
 
 		expectedResults := make(tc.GroupAggrScanResponse, 2)
 		expectedResults[0] = []interface{}{int64(1), int64(60), int64(4)}
@@ -474,6 +480,7 @@ func TestGroupAggrOffset(t *testing.T) {
 
 		ga.Group = ga.Group[1:]
 		proj.EntryKeys = proj.EntryKeys[1:]
+		ga.AllowPartialAggr = true
 
 		expectedResults := make(tc.GroupAggrScanResponse, 2)
 		expectedResults[0] = []interface{}{int64(2), int64(140), int64(4)}
@@ -897,9 +904,10 @@ func TestGroupAggr1(t *testing.T) {
 	aggregates = []*qc.Aggregate{a1, a2, a3}
 
 	ga = &qc.GroupAggr{
-		Name:  "S1",
-		Group: groups,
-		Aggrs: aggregates,
+		Name:             "S1",
+		Group:            groups,
+		Aggrs:            aggregates,
+		AllowPartialAggr: true,
 	}
 	proj = &qc.IndexProjection{
 		EntryKeys: []int64{6, 7, 8, 9, 10},
@@ -956,9 +964,10 @@ func TestGroupAggrArrayIndex(t *testing.T) {
 	aggregates = []*qc.Aggregate{a1, a2}
 
 	ga = &qc.GroupAggr{
-		Name:  "S2",
-		Group: groups,
-		Aggrs: aggregates,
+		Name:             "S2",
+		Group:            groups,
+		Aggrs:            aggregates,
+		AllowPartialAggr: true,
 	}
 	proj = &qc.IndexProjection{
 		EntryKeys: []int64{6, 7, 8},
@@ -997,9 +1006,10 @@ func TestGroupAggrArrayIndex(t *testing.T) {
 	aggregates = []*qc.Aggregate{a1}
 
 	ga = &qc.GroupAggr{
-		Name:  "S4",
-		Group: groups,
-		Aggrs: aggregates,
+		Name:             "S4",
+		Group:            groups,
+		Aggrs:            aggregates,
+		AllowPartialAggr: true,
 	}
 	proj = &qc.IndexProjection{
 		EntryKeys: []int64{6, 7, 8},
@@ -1017,9 +1027,10 @@ func TestGroupAggrArrayIndex(t *testing.T) {
 	aggregates = []*qc.Aggregate{a1}
 
 	ga = &qc.GroupAggr{
-		Name:  "S5",
-		Group: groups,
-		Aggrs: aggregates,
+		Name:             "S5",
+		Group:            groups,
+		Aggrs:            aggregates,
+		AllowPartialAggr: true,
 	}
 	proj = &qc.IndexProjection{
 		EntryKeys: []int64{6, 7},
