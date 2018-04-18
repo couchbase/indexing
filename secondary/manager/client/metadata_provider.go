@@ -1123,7 +1123,7 @@ func (o *MetadataProvider) PrepareIndexDefn(
 		}
 
 		if _, ok := plan["num_replica"]; ok {
-			if len(nodes) != 0 {
+			if !c.IsPartitioned(partitionScheme) && len(nodes) != 0 {
 				if numReplica != len(nodes)-1 {
 					return nil, errors.New("Fails to create index.  Parameter num_replica should be one less than parameter nodes."), false
 				}
