@@ -73,6 +73,11 @@ func scanMultiple(request *ScanRequest, scan Scan, snapshots []SliceSnapshot, cb
 	for i := 0; i < len(snapshots); i++ {
 		queues[i] = NewQueue(int64(size), int64(limit), notifych)
 	}
+	defer func() {
+		for _, queue := range queues {
+			queue.Close()
+		}
+	}()
 
 	// run gather
 	if sorted {
@@ -445,8 +450,11 @@ func gather(request *ScanRequest, queues []*Queue, donech chan bool, notifych ch
 	defer close(donech)
 
 	ensembleSize := len(queues)
-	rows := make([]Row, ensembleSize)
 	sorted := make([]int, ensembleSize)
+
+	rows := make([]Row, ensembleSize)
+	initRows(rows)
+	defer freeRows(rows)
 
 	// initial sort
 	isSorted := false
@@ -508,7 +516,10 @@ func forward(request *ScanRequest, queues []*Queue, donech chan bool, notifych c
 	defer close(donech)
 
 	ensembleSize := len(queues)
+
 	rows := make([]Row, ensembleSize)
+	initRows(rows)
+	defer freeRows(rows)
 
 	for {
 		if len(errch) != 0 {
