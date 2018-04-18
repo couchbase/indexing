@@ -1169,6 +1169,7 @@ func (c *GsiScanClient) Scan3(
 			DependsOnIndexKeys: groupAggr.DependsOnIndexKeys,
 			IndexKeyNames:      protoIndexKeyNames,
 			AllowPartialAggr:   proto.Bool(groupAggr.AllowPartialAggr),
+			OnePerPrimaryKey:   proto.Bool(groupAggr.OnePerPrimaryKey),
 		}
 	}
 

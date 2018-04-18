@@ -1858,6 +1858,7 @@ func n1qlgroupaggrtogsi(groupAggs *datastore.IndexGroupAggregates) *qclient.Grou
 		DependsOnIndexKeys: dependsOnIndexKeys,
 		IndexKeyNames:      groupAggs.IndexKeyNames,
 		AllowPartialAggr:   groupAggs.AllowPartialAggr,
+		OnePerPrimaryKey:   groupAggs.OneForPrimaryKey,
 	}
 
 	return ga

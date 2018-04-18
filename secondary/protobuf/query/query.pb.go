@@ -938,6 +938,7 @@ type GroupAggr struct {
 	DependsOnIndexKeys []int32      `protobuf:"varint,4,rep,name=dependsOnIndexKeys" json:"dependsOnIndexKeys,omitempty"`
 	IndexKeyNames      [][]byte     `protobuf:"bytes,5,rep,name=indexKeyNames" json:"indexKeyNames,omitempty"`
 	AllowPartialAggr   *bool        `protobuf:"varint,6,opt,name=allowPartialAggr" json:"allowPartialAggr,omitempty"`
+	OnePerPrimaryKey   *bool        `protobuf:"varint,7,opt,name=onePerPrimaryKey" json:"onePerPrimaryKey,omitempty"`
 	XXX_unrecognized   []byte       `json:"-"`
 }
 
@@ -983,6 +984,13 @@ func (m *GroupAggr) GetIndexKeyNames() [][]byte {
 func (m *GroupAggr) GetAllowPartialAggr() bool {
 	if m != nil && m.AllowPartialAggr != nil {
 		return *m.AllowPartialAggr
+	}
+	return false
+}
+
+func (m *GroupAggr) GetOnePerPrimaryKey() bool {
+	if m != nil && m.OnePerPrimaryKey != nil {
+		return *m.OnePerPrimaryKey
 	}
 	return false
 }

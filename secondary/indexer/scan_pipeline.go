@@ -229,8 +229,10 @@ func (s *IndexScanSource) Routine() error {
 		}
 
 		if !r.isPrimary {
-			e := secondaryIndexEntry(entry)
-			count = e.Count()
+			if r.GroupAggr != nil && !r.GroupAggr.OnePerPrimaryKey {
+				e := secondaryIndexEntry(entry)
+				count = e.Count()
+			}
 		}
 
 		if r.GroupAggr != nil {
