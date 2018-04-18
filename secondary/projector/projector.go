@@ -116,6 +116,7 @@ func (p *Projector) ResetConfig(config c.Config) {
 		logging.SetLogLevel(logging.Level(cv.String()))
 	}
 	if cv, ok := config["projector.maxCpuPercent"]; ok {
+		logging.Infof("Projector CPU set at %v", cv.Int())
 		c.SetNumCPUs(cv.Int())
 	}
 	if cv, ok := config["projector.gogc"]; ok {

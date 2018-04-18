@@ -81,9 +81,9 @@ message IndexDefn {
     required ExprType        exprType        = 6; // how to interpret `expressions` strings
     repeated string          secExpressions  = 7; // use expressions to evaluate doc
     optional PartitionScheme partitionScheme = 8;
-    //optional string          partnExpression = 9; // use expressions to evaluate doc
+    optional string          partnExpression = 9; // Unused. Required during rolling upgrade.
     optional string          whereExpression = 10; // where predicate
     repeated string          partnExpressions  = 11; // use expressions to evaluate doc
     optional bool            retainDeletedXATTR = 12; // index XATTRs of deleted docs
-    required HashScheme      hashScheme = 13; // hash scheme for partitioned index 
+    optional HashScheme      hashScheme = 13; // hash scheme for partitioned index 
 }

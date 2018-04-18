@@ -111,6 +111,7 @@ type GroupAggr struct {
 	Aggrs              []*Aggregate // aggregates with in the group, nil means no aggregates
 	DependsOnIndexKeys []int32      // GROUP and Aggregates Depends on List of index keys positions
 	IndexKeyNames      []string     // Index key names used in expressions
+	AllowPartialAggr   bool         // Partial aggregates are allowed
 }
 
 type IndexKeyOrder struct {

@@ -8,6 +8,7 @@ Package protobuf is a generated protocol buffer package.
 It is generated from these files:
 	common.proto
 	index.proto
+	partn_key.proto
 	partn_single.proto
 	partn_tp.proto
 	projector.proto

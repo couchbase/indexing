@@ -197,11 +197,13 @@ type GroupAggr struct {
 	DependsOnIndexKeys  []int32      // GROUP and Aggregates Depends on List of index keys positions
 	IndexKeyNames       []string     // Index key names used in expressions
 	DependsOnPrimaryKey bool
-	IsLeadingGroup      bool // Group by key(s) are leading subset
-	IsPrimary           bool
-	NeedDecode          bool // Need decode values for SUM or N1QLExpr evaluation
-	NeedExplode         bool // If only constant expression
-	HasExpr             bool // Has a non constant expression
+	AllowPartialAggr    bool // Partial aggregates are allowed
+
+	IsLeadingGroup bool // Group by key(s) are leading subset
+	IsPrimary      bool
+	NeedDecode     bool // Need decode values for SUM or N1QLExpr evaluation
+	NeedExplode    bool // If only constant expression
+	HasExpr        bool // Has a non constant expression
 
 	//For caching values
 	cv          *value.ScopeValue
@@ -1263,6 +1265,8 @@ func (r *ScanRequest) fillGroupAggr(protoGroupAggr *protobuf.GroupAggr) (err err
 		r.GroupAggr.IndexKeyNames = append(r.GroupAggr.IndexKeyNames, string(d))
 	}
 
+	r.GroupAggr.AllowPartialAggr = protoGroupAggr.GetAllowPartialAggr()
+
 	if err = r.validateGroupAggr(); err != nil {
 		return
 	}
@@ -1411,6 +1415,12 @@ outerloop:
 	}
 
 	var err error
+
+	if r.GroupAggr.IsLeadingGroup == r.GroupAggr.AllowPartialAggr {
+		err = fmt.Errorf("Requested Partial Aggr %v Not Supported For Given Scan", r.GroupAggr.AllowPartialAggr)
+		logging.Errorf("ScanRequest::validateGroupAggr %v ", err)
+		return err
+	}
 
 	//validate aggregates
 	for _, a := range r.GroupAggr.Aggrs {

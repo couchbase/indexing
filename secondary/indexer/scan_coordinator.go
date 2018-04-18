@@ -330,6 +330,7 @@ func (s *scanCoordinator) handleScanRequest(req *ScanRequest, w ScanResponseWrit
 			req.Stats.numRowsReturnedAggr.Add(int64(scanPipeline.RowsReturned()))
 			req.Stats.numRowsScannedAggr.Add(int64(scanPipeline.RowsScanned()))
 			req.Stats.scanCacheHitAggr.Add(int64(scanPipeline.CacheHitRatio()))
+			req.Stats.Timings.n1qlExpr.Put(scanPipeline.AvgExprEvalDur())
 		} else {
 			req.Stats.numRowsReturnedRange.Add(int64(scanPipeline.RowsReturned()))
 			req.Stats.numRowsScannedRange.Add(int64(scanPipeline.RowsScanned()))

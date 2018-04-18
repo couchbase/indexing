@@ -182,4 +182,5 @@ message GroupAggr {
     repeated Aggregate aggrs               = 3;
     repeated int32     dependsOnIndexKeys  = 4;
     repeated bytes     indexKeyNames = 5;
+    optional bool      allowPartialAggr = 6;
 }
