@@ -1418,7 +1418,7 @@ outerloop:
 
 	var err error
 
-	if r.GroupAggr.IsLeadingGroup == r.GroupAggr.AllowPartialAggr {
+	if !r.GroupAggr.AllowPartialAggr && !r.GroupAggr.IsLeadingGroup {
 		err = fmt.Errorf("Requested Partial Aggr %v Not Supported For Given Scan", r.GroupAggr.AllowPartialAggr)
 		logging.Errorf("ScanRequest::validateGroupAggr %v ", err)
 		return err
