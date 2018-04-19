@@ -167,6 +167,8 @@ type IndexStats struct {
 	cacheHitPercent           stats.Int64Val
 	cacheHits                 stats.Int64Val
 	cacheMisses               stats.Int64Val
+	numRecsInMem              stats.Int64Val
+	numRecsOnDisk             stats.Int64Val
 
 	Timings IndexTimingStats
 }
@@ -251,6 +253,8 @@ func (s *IndexStats) Init() {
 	s.cacheHitPercent.Init()
 	s.cacheHits.Init()
 	s.cacheMisses.Init()
+	s.numRecsInMem.Init()
+	s.numRecsOnDisk.Init()
 
 	s.Timings.Init()
 
@@ -764,6 +768,16 @@ func (is IndexerStats) GetStats(getPartition bool, skipEmpty bool) common.Statis
 				return ss.cacheMisses.Value()
 			}))
 
+		addStat("recs_in_mem",
+			s.partnInt64Stats(func(ss *IndexStats) int64 {
+				return ss.numRecsInMem.Value()
+			}))
+
+		addStat("recs_on_disk",
+			s.partnInt64Stats(func(ss *IndexStats) int64 {
+				return ss.numRecsOnDisk.Value()
+			}))
+
 		addStat("timings/dcp_getseqs",
 			s.partnTimingStats(func(ss *IndexStats) *stats.TimingStat {
 				return &ss.Timings.dcpSeqs
@@ -998,6 +1012,16 @@ func (s *IndexStats) constructIndexStats(skipEmpty bool, version string) common.
 	addStat("cache_misses",
 		s.partnInt64Stats(func(ss *IndexStats) int64 {
 			return ss.cacheMisses.Value()
+		}))
+
+	addStat("recs_in_mem",
+		s.partnInt64Stats(func(ss *IndexStats) int64 {
+			return ss.numRecsInMem.Value()
+		}))
+
+	addStat("recs_on_disk",
+		s.partnInt64Stats(func(ss *IndexStats) int64 {
+			return ss.numRecsOnDisk.Value()
 		}))
 
 	return indexStats
