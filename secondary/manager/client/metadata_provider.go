@@ -684,6 +684,11 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn, plan map
 	// nodes will be excluded from planning.    If the user provides a specific node list, those nodes will be used.
 	//
 	layout, err := o.plan(idxDefn, plan, watcherMap)
+	if err != nil && strings.Contains(err.Error(), "Index already exist") {
+		o.cancelPrepareIndexRequest(idxDefn, watcherMap)
+		return err
+	}
+
 	if err != nil {
 		logging.Errorf("Encounter planner error.  Use round robin strategy for planning. Error: %v", err)
 

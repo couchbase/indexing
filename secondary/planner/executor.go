@@ -346,8 +346,26 @@ func ExecutePlan(clusterUrl string, indexSpecs []*IndexSpec, nodes []string, ove
 		}
 	}
 
+	if err = verifyDuplicateIndex(plan, indexSpecs); err != nil {
+		return nil, err
+	}
+
 	detail := logging.IsEnabled(logging.Info)
 	return ExecutePlanWithOptions(plan, indexSpecs, detail, "", "", -1, -1, -1, false, true)
+}
+
+func verifyDuplicateIndex(plan *Plan, indexSpecs []*IndexSpec) error {
+	for _, spec := range indexSpecs {
+		for _, indexer := range plan.Placement {
+			for _, index := range indexer.Indexes {
+				if index.Name == spec.Name && index.Bucket == spec.Bucket {
+					return errors.New(fmt.Sprintf("Index already exist.  Fail to create %v in bucket %v", spec.Name, spec.Bucket))
+				}
+			}
+		}
+	}
+
+	return nil
 }
 
 //////////////////////////////////////////////////////////////
