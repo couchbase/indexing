@@ -13,15 +13,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/couchbase/cbauth/service"
-	"github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/logging"
 	"io/ioutil"
 	"math"
 	"math/rand"
 	"os"
 	"strconv"
 	"time"
+
+	"github.com/couchbase/cbauth/service"
+	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 )
 
 //////////////////////////////////////////////////////////////
@@ -463,7 +464,7 @@ func execute(config *RunConfig, command CommandType, p *Plan, indexSpecs []*Inde
 		return plan(config, p, indexes)
 
 	} else if command == CommandRebalance || command == CommandSwap {
-		if plan == nil {
+		if p == nil {
 			return nil, nil, errors.New("missing argument: either workload or plan must be present")
 		}
 
