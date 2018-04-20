@@ -827,6 +827,147 @@ func TestGroupAggrNull(t *testing.T) {
 	}
 }
 
+func updateGroupAggDocs() tc.KeyValues {
+
+	docs := make(tc.KeyValues)
+
+	docs["doc7"] = Aggdoc{Year: "2017", Month: 1, Sale: 10}
+	docs["doc8"] = Aggdoc{Year: "2017", Month: 1, Sale: 10}
+	docs["doc9"] = Aggdoc{Year: "2017", Month: 1, Sale: 10.5}
+	docs["doc10"] = Aggdoc{Year: "2017", Month: 1, Sale: 10.5}
+	docs["doc11"] = Aggdoc{Year: "2017", Month: 1, Sale: 20.7}
+	docs["doc12"] = Aggdoc{Year: "2017", Month: 1, Sale: 20}
+	docs["doc13"] = Aggdoc{Year: "2017", Month: 1, Sale: 20}
+	docs["doc14"] = Aggdoc{Year: "2017", Month: 1, Sale: 20.7}
+	docs["doc15"] = Aggdoc{Year: "2017", Month: 1, Sale: 20.0}
+
+	docs["doc16"] = Aggdoc{Year: "2017", Month: 4, Sale: 10.5}
+	docs["doc32"] = Aggdoc{Year: "2017", Month: 4, Sale: 10.5}
+	docs["doc33"] = Aggdoc{Year: "2017", Month: 4, Sale: 10}
+	docs["doc34"] = Aggdoc{Year: "2017", Month: 4, Sale: 20}
+	docs["doc35"] = Aggdoc{Year: "2017", Month: 4, Sale: 20}
+	docs["doc36"] = Aggdoc{Year: "2017", Month: 4, Sale: 20.7}
+	docs["doc37"] = Aggdoc{Year: "2017", Month: 4, Sale: 20.7}
+	docs["doc38"] = Aggdoc{Year: "2017", Month: 4, Sale: 15}
+
+	docs["doc39"] = Aggdoc{Year: "2020", Month: 1, Sale: 411168601842738790}
+	docs["doc40"] = Aggdoc{Year: "2020", Month: 1, Sale: 411168601842738790}
+	docs["doc41"] = Aggdoc{Year: "2020", Month: 1, Sale: 922337203685477580}
+	docs["doc42"] = Aggdoc{Year: "2020", Month: 1, Sale: 922337203685477580}
+	docs["doc43"] = Aggdoc{Year: "2020", Month: 4, Sale: -822337203685477580}
+	docs["doc44"] = Aggdoc{Year: "2020", Month: 4, Sale: -822337203685477580}
+	docs["doc45"] = Aggdoc{Year: "2020", Month: 4, Sale: 10}
+
+	return docs
+
+}
+
+func TestGroupAggrInt64(t *testing.T) {
+	log.Printf("In TestGroupAggrInt64()")
+
+	log.Printf("Updating the default bucket")
+	docs := updateGroupAggDocs()
+	kvutility.SetKeyValues(docs, "default", "", clusterconfig.KVAddress)
+
+	var index1 = "index_agg"
+	var bucketName = "default"
+
+	{
+		ga, proj := basicGroupAggr()
+
+		expectedResults := make(tc.GroupAggrScanResponse, 2)
+		expectedResults[0] = []interface{}{"2017", int64(1), float64(142.4), int64(9)}
+		expectedResults[1] = []interface{}{"2017", int64(4), float64(127.4), int64(8)}
+
+		_, scanResults, err := secondaryindex.Scan3(index1, bucketName, indexScanAddress, getPartialMatchFilter2(), false, false, proj, 0, defaultlimit, ga, c.SessionConsistency, nil)
+		FailTestIfError(err, "Error in scan", t)
+		err = tv.ValidateGroupAggrResult(expectedResults, scanResults)
+		FailTestIfError(err, "Error in scan result validation", t)
+	}
+
+	{
+		ga, proj := basicGroupAggr()
+
+		ga.Aggrs[0].Distinct = true
+		ga.Aggrs[1].Distinct = true
+
+		expectedResults := make(tc.GroupAggrScanResponse, 2)
+		expectedResults[0] = []interface{}{"2017", int64(1), float64(61.2), int64(4)}
+		expectedResults[1] = []interface{}{"2017", int64(4), float64(76.2), int64(5)}
+
+		_, scanResults, err := secondaryindex.Scan3(index1, bucketName, indexScanAddress, getPartialMatchFilter2(), false, false, proj, 0, defaultlimit, ga, c.SessionConsistency, nil)
+		FailTestIfError(err, "Error in scan", t)
+		err = tv.ValidateGroupAggrResult(expectedResults, scanResults)
+		FailTestIfError(err, "Error in scan result validation", t)
+	}
+
+	{
+		ga, proj := basicGroupAggr()
+
+		expectedResults := make(tc.GroupAggrScanResponse, 2)
+		expectedResults[0] = []interface{}{"2020", int64(1), int64(2667011611056432740), int64(4)}
+		expectedResults[1] = []interface{}{"2020", int64(4), int64(-1644674407370955150), int64(3)}
+
+		_, scanResults, err := secondaryindex.Scan3(index1, bucketName, indexScanAddress, getDistinctFilter(), false, false, proj, 0, defaultlimit, ga, c.SessionConsistency, nil)
+		FailTestIfError(err, "Error in scan", t)
+		err = tv.ValidateGroupAggrResult(expectedResults, scanResults)
+		FailTestIfError(err, "Error in scan result validation", t)
+	}
+
+	{
+		ga, proj := basicGroupAggr()
+
+		ga.Aggrs[0].Distinct = true
+		ga.Aggrs[1].Distinct = true
+
+		expectedResults := make(tc.GroupAggrScanResponse, 2)
+		expectedResults[0] = []interface{}{"2020", int64(1), int64(1333505805528216370), int64(2)}
+		expectedResults[1] = []interface{}{"2020", int64(4), int64(-822337203685477570), int64(2)}
+
+		_, scanResults, err := secondaryindex.Scan3(index1, bucketName, indexScanAddress, getDistinctFilter(), false, false, proj, 0, defaultlimit, ga, c.SessionConsistency, nil)
+		FailTestIfError(err, "Error in scan", t)
+		err = tv.ValidateGroupAggrResult(expectedResults, scanResults)
+		FailTestIfError(err, "Error in scan result validation", t)
+	}
+
+	docs = make(tc.KeyValues)
+	docs["doc39"] = Aggdoc{Year: "2020", Month: 1, Sale: 4111686018427387900}
+	docs["doc40"] = Aggdoc{Year: "2020", Month: 1, Sale: 4111686018427387900}
+	docs["doc43"] = Aggdoc{Year: "2020", Month: 4, Sale: -8223372036854775808}
+	docs["doc44"] = Aggdoc{Year: "2020", Month: 4, Sale: -8223372036854775808}
+
+	kvutility.SetKeyValues(docs, "default", "", clusterconfig.KVAddress)
+
+	{
+		ga, proj := basicGroupAggr()
+
+		expectedResults := make(tc.GroupAggrScanResponse, 2)
+		expectedResults[0] = []interface{}{"2020", int64(1), float64(10068046444225730000), int64(4)}
+		expectedResults[1] = []interface{}{"2020", int64(4), float64(-16446744073709552000), int64(3)}
+
+		_, scanResults, err := secondaryindex.Scan3(index1, bucketName, indexScanAddress, getDistinctFilter(), false, false, proj, 0, defaultlimit, ga, c.SessionConsistency, nil)
+		FailTestIfError(err, "Error in scan", t)
+		err = tv.ValidateGroupAggrResult(expectedResults, scanResults)
+		FailTestIfError(err, "Error in scan result validation", t)
+	}
+
+	{
+		ga, proj := basicGroupAggr()
+
+		ga.Aggrs[0].Distinct = true
+		ga.Aggrs[1].Distinct = true
+
+		expectedResults := make(tc.GroupAggrScanResponse, 2)
+		expectedResults[0] = []interface{}{"2020", int64(1), int64(5034023222112865480), int64(2)}
+		expectedResults[1] = []interface{}{"2020", int64(4), int64(-8223372036854775798), int64(2)}
+
+		_, scanResults, err := secondaryindex.Scan3(index1, bucketName, indexScanAddress, getDistinctFilter(), false, false, proj, 0, defaultlimit, ga, c.SessionConsistency, nil)
+		FailTestIfError(err, "Error in scan", t)
+		err = tv.ValidateGroupAggrResult(expectedResults, scanResults)
+		FailTestIfError(err, "Error in scan result validation", t)
+	}
+}
+
 ///////////////////////////////////////////////////////////////////////
 // New Tests with N1QL query based validation and with vaster dataset
 ///////////////////////////////////////////////////////////////////////
