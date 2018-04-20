@@ -124,6 +124,16 @@ if [ "$MODE" = "test" ]; then
 
   cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/indexer
   GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
+
+  # Get ulimit -n: If less than 1024, set it to 1024.
+  ulimitVal=$(ulimit -n)
+  if [ 1024 -gt $ulimitVal ]; then
+    echo "Setting ulimit to 1024"
+    ulimit -n 1024
+  fi
+
+  cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/queryport/client
+  GOMAXPROCS=16 go test -timeout 15m -v 2>&1 | tee -a $WORKSPACE/test.log
 fi
 
 

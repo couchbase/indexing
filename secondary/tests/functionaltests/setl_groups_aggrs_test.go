@@ -1177,6 +1177,36 @@ func TestGroupAggrArrayIndex(t *testing.T) {
 	}
 	executeGroupAggrTest(ga, proj, n1qlEquivalent, i2, t)
 
+	//S13: Test for OnePerPrimaryKey
+	log.Printf("Scenario 13")
+
+	stmt := "CREATE INDEX test_oneperprimarykey ON default(ALL ARRAY v1 FOR v1 IN friends END, company, age)"
+	_, err = tc.ExecuteN1QLStatement(kvaddress, clusterconfig.Username, clusterconfig.Password, bucket, stmt, false)
+	FailTestIfError(err, "Error in index test_oneperprimarykey", t)
+
+	n1qlEquivalent = "SELECT COUNT(company) as a, SUM(age) as b FROM default USE INDEX(`#primary`) " +
+		" WHERE ANY v1 IN friends SATISFIES v1 == \"Aaron\" END "
+
+	a1 = &qc.Aggregate{AggrFunc: c.AGG_COUNT, EntryKeyId: 7, KeyPos: 1}
+	a2 = &qc.Aggregate{AggrFunc: c.AGG_SUM, EntryKeyId: 8, KeyPos: 2}
+	aggregates = []*qc.Aggregate{a1, a2}
+
+	ga = &qc.GroupAggr{
+		Name:             "S13",
+		Group:            nil,
+		Aggrs:            aggregates,
+		OnePerPrimaryKey: true,
+	}
+	proj = &qc.IndexProjection{
+		EntryKeys: []int64{7, 8},
+	}
+
+	scans := make(qc.Scans, 1)
+	filter1 := make([]*qc.CompositeElementFilter, 1)
+	filter1[0] = &qc.CompositeElementFilter{Low: "Aaron", High: "Aaron", Inclusion: qc.Inclusion(uint32(3))}
+	scans[0] = &qc.Scan{Filter: filter1}
+
+	executeGroupAggrTest2(scans, ga, proj, n1qlEquivalent, i2, t)
 }
 
 func TestGroupAggrPrimary(t *testing.T) {

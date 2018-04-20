@@ -112,6 +112,7 @@ type GroupAggr struct {
 	DependsOnIndexKeys []int32      // GROUP and Aggregates Depends on List of index keys positions
 	IndexKeyNames      []string     // Index key names used in expressions
 	AllowPartialAggr   bool         // Partial aggregates are allowed
+	OnePerPrimaryKey   bool         // Leading Key is ALL & equality span consider one per docid
 }
 
 type IndexKeyOrder struct {

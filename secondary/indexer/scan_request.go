@@ -198,6 +198,7 @@ type GroupAggr struct {
 	IndexKeyNames       []string     // Index key names used in expressions
 	DependsOnPrimaryKey bool
 	AllowPartialAggr    bool // Partial aggregates are allowed
+	OnePerPrimaryKey    bool // Leading Key is ALL & equality span consider one per docid
 
 	IsLeadingGroup bool // Group by key(s) are leading subset
 	IsPrimary      bool
@@ -1266,6 +1267,7 @@ func (r *ScanRequest) fillGroupAggr(protoGroupAggr *protobuf.GroupAggr) (err err
 	}
 
 	r.GroupAggr.AllowPartialAggr = protoGroupAggr.GetAllowPartialAggr()
+	r.GroupAggr.OnePerPrimaryKey = protoGroupAggr.GetOnePerPrimaryKey()
 
 	if err = r.validateGroupAggr(); err != nil {
 		return
@@ -1416,7 +1418,7 @@ outerloop:
 
 	var err error
 
-	if r.GroupAggr.IsLeadingGroup == r.GroupAggr.AllowPartialAggr {
+	if !r.GroupAggr.AllowPartialAggr && !r.GroupAggr.IsLeadingGroup {
 		err = fmt.Errorf("Requested Partial Aggr %v Not Supported For Given Scan", r.GroupAggr.AllowPartialAggr)
 		logging.Errorf("ScanRequest::validateGroupAggr %v ", err)
 		return err

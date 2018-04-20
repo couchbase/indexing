@@ -4,10 +4,17 @@ import "errors"
 import "fmt"
 import "net"
 import "time"
+import "sync/atomic"
 
 import "github.com/couchbase/indexing/secondary/logging"
 import "github.com/couchbase/indexing/secondary/transport"
 import protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
+import gometrics "github.com/rcrowley/go-metrics"
+
+const (
+	CONN_RELEASE_INTERVAL      = 5  // Seconds. Don't change as long as go-metrics/ewma is being used.
+	NUM_CONN_RELEASE_INTERVALS = 60 // Don't change as long as go-metrics/ewma is being used.
+)
 
 // ErrorClosedPool
 var ErrorClosedPool = errors.New("queryport.closedPool")
@@ -24,10 +31,16 @@ type connectionPool struct {
 	connections chan *connection
 	createsem   chan bool
 	// config params
-	maxPayload   int
-	timeout      time.Duration
-	availTimeout time.Duration
-	logPrefix    string
+	maxPayload       int
+	timeout          time.Duration
+	availTimeout     time.Duration
+	logPrefix        string
+	curActConns      int32
+	minPoolSizeWM    int32
+	freeConns        int32
+	relConnBatchSize int32
+	stopCh           chan bool
+	ewma             gometrics.EWMA
 }
 
 type connection struct {
@@ -38,19 +51,26 @@ type connection struct {
 func newConnectionPool(
 	host string,
 	poolSize, poolOverflow, maxPayload int,
-	timeout, availTimeout time.Duration) *connectionPool {
+	timeout, availTimeout time.Duration,
+	minPoolSizeWM int32, relConnBatchSize int32) *connectionPool {
 
 	cp := &connectionPool{
-		host:         host,
-		connections:  make(chan *connection, poolSize),
-		createsem:    make(chan bool, poolSize+poolOverflow),
-		maxPayload:   maxPayload,
-		timeout:      timeout,
-		availTimeout: availTimeout,
-		logPrefix:    fmt.Sprintf("[Queryport-connpool:%v]", host),
+		host:             host,
+		connections:      make(chan *connection, poolSize),
+		createsem:        make(chan bool, poolSize+poolOverflow),
+		maxPayload:       maxPayload,
+		timeout:          timeout,
+		availTimeout:     availTimeout,
+		logPrefix:        fmt.Sprintf("[Queryport-connpool:%v]", host),
+		minPoolSizeWM:    minPoolSizeWM,
+		relConnBatchSize: relConnBatchSize,
+		stopCh:           make(chan bool, 1),
 	}
 	cp.mkConn = cp.defaultMkConn
-	logging.Infof("%v started poolsize %v overflow %v ...\n", cp.logPrefix, poolSize, poolOverflow)
+	cp.ewma = gometrics.NewEWMA5()
+	logging.Infof("%v started poolsize %v overflow %v low WM %v relConn batch size %v ...\n",
+		cp.logPrefix, poolSize, poolOverflow, minPoolSizeWM, relConnBatchSize)
+	go cp.releaseConnsRoutine()
 	return cp
 }
 
@@ -77,6 +97,7 @@ func (cp *connectionPool) Close() (err error) {
 			logging.Verbosef("%s", logging.StackTrace())
 		}
 	}()
+	cp.stopCh <- true
 	close(cp.connections)
 	for connectn := range cp.connections {
 		connectn.conn.Close()
@@ -107,6 +128,8 @@ func (cp *connectionPool) GetWithTimeout(d time.Duration) (connectn *connection,
 			return nil, ErrorClosedPool
 		}
 		logging.Debugf("%v new connection from pool\n", cp.logPrefix)
+		atomic.AddInt32(&cp.freeConns, -1)
+		atomic.AddInt32(&cp.curActConns, 1)
 		return connectn, nil
 	default:
 	}
@@ -122,6 +145,8 @@ func (cp *connectionPool) GetWithTimeout(d time.Duration) (connectn *connection,
 			return nil, ErrorClosedPool
 		}
 		logging.Debugf("%v new connection (avail1) from pool\n", cp.logPrefix)
+		atomic.AddInt32(&cp.freeConns, -1)
+		atomic.AddInt32(&cp.curActConns, 1)
 		return connectn, nil
 
 	case <-t.C:
@@ -135,6 +160,8 @@ func (cp *connectionPool) GetWithTimeout(d time.Duration) (connectn *connection,
 				return nil, ErrorClosedPool
 			}
 			logging.Debugf("%v new connection (avail2) from pool\n", cp.logPrefix)
+			atomic.AddInt32(&cp.freeConns, -1)
+			atomic.AddInt32(&cp.curActConns, 1)
 			return connectn, nil
 
 		case cp.createsem <- true:
@@ -148,6 +175,7 @@ func (cp *connectionPool) GetWithTimeout(d time.Duration) (connectn *connection,
 				<-cp.createsem
 			}
 			logging.Debugf("%v new connection (create) from pool\n", cp.logPrefix)
+			atomic.AddInt32(&cp.curActConns, 1)
 			return connectn, err
 
 		case <-t.C:
@@ -161,6 +189,7 @@ func (cp *connectionPool) Get() (*connection, error) {
 }
 
 func (cp *connectionPool) Return(connectn *connection, healthy bool) {
+	defer atomic.AddInt32(&cp.curActConns, -1)
 	if connectn.conn == nil {
 		return
 	}
@@ -185,6 +214,7 @@ func (cp *connectionPool) Return(connectn *connection, healthy bool) {
 		select {
 		case cp.connections <- connectn:
 			logging.Debugf("%v connection %q reclaimed to pool\n", cp.logPrefix, laddr)
+			atomic.AddInt32(&cp.freeConns, 1)
 		default:
 			logging.Debugf("%v closing overflow connection %q poolSize=%v\n", cp.logPrefix, laddr, len(cp.connections))
 			<-cp.createsem
@@ -195,5 +225,76 @@ func (cp *connectionPool) Return(connectn *connection, healthy bool) {
 		logging.Infof("%v closing unhealthy connection %q\n", cp.logPrefix, laddr)
 		<-cp.createsem
 		connectn.conn.Close()
+	}
+}
+
+func max(a, b int32) int32 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func (cp *connectionPool) numConnsToRetain() (int32, bool) {
+	avg := cp.ewma.Rate()
+	act := atomic.LoadInt32(&cp.curActConns)
+	num := max(act, int32(avg))
+	num = max(cp.minPoolSizeWM, num)
+	fc := atomic.LoadInt32(&cp.freeConns)
+	totalConns := act + fc
+	if totalConns-cp.relConnBatchSize >= num {
+		// Don't release more than relConnBatchSize number of connections
+		// in 1 iteration
+		return totalConns - cp.relConnBatchSize, true
+	}
+	return totalConns, false
+}
+
+func (cp *connectionPool) releaseConns(numRetConns int32) {
+	for {
+		fc := atomic.LoadInt32(&cp.freeConns)
+		act := atomic.LoadInt32(&cp.curActConns)
+		totalConns := act + fc
+		if totalConns > numRetConns && fc > 0 {
+			select {
+			case conn, ok := <-cp.connections:
+				if !ok {
+					return
+				}
+				atomic.AddInt32(&cp.freeConns, -1)
+				conn.conn.Close()
+			default:
+				break
+			}
+		} else {
+			break
+		}
+	}
+}
+
+func (cp *connectionPool) releaseConnsRoutine() {
+	i := 0
+	for {
+		time.Sleep(time.Second)
+		select {
+		case <-cp.stopCh:
+			logging.Infof("%v Stopping releaseConnsRoutine", cp.logPrefix)
+			return
+
+		default:
+			// ewma.Update happens every second
+			act := atomic.LoadInt32(&cp.curActConns)
+			cp.ewma.Update(int64(act))
+
+			// ewma.Tick() and ewma.Rate() is called every 5 seconds.
+			if i == CONN_RELEASE_INTERVAL-1 {
+				cp.ewma.Tick()
+				numRetConns, needToFreeConns := cp.numConnsToRetain()
+				if needToFreeConns {
+					cp.releaseConns(numRetConns)
+				}
+			}
+			i = (i + 1) % CONN_RELEASE_INTERVAL
+		}
 	}
 }
