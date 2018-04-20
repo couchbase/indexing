@@ -126,7 +126,6 @@ type IndexScanWriter struct {
 
 func (s *IndexScanSource) Routine() error {
 
-	//Temporary log for troubleshooting MB-29261
 	defer func() {
 		if r := recover(); r != nil {
 			l.Fatalf("IndexScanSource - panic detected while processing %s", s.p.req)
@@ -1281,7 +1280,6 @@ func (e *entryCache) Init(r *ScanRequest) {
 
 func (e *entryCache) EqualsEntry(other []byte) bool {
 
-	//Temporary log for troubleshooting MB-29261
 	defer func() {
 		if r := recover(); r != nil {
 			l.Fatalf("EntryCache - panic detected")
