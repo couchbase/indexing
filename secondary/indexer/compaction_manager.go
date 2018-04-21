@@ -213,8 +213,70 @@ func (cd *compactionDaemon) needsCompaction(is IndexStorageStats, config common.
 	return false
 }
 
-func (cd *compactionDaemon) loop() {
+func (cd *compactionDaemon) compactFDB(hasStartedToday bool) bool {
+
 	var stats []IndexStorageStats
+
+	conf := cd.config.Load()
+
+	replych := make(chan []IndexStorageStats)
+	statReq := &MsgIndexStorageStats{respch: replych}
+	cd.msgch <- statReq
+	stats = <-replych
+
+	// each compaction interval cannot go over 24 hours if specified.
+	abortTime := time.Now().Add(time.Duration(24) * time.Hour)
+	checkTime := time.Now()
+
+	mode := strings.ToLower(conf["compaction_mode"].String())
+	if mode == "circular" {
+		// if circular compaction, run full compaction at most once a day.
+		if atomic.LoadInt32(&cd.lastCheckDay) != int32(checkTime.Weekday()) {
+			hasStartedToday = false
+			atomic.StoreInt32(&cd.lastCheckDay, int32(checkTime.Weekday()))
+		}
+
+		if hasStartedToday {
+			return true
+		}
+	}
+
+	for _, is := range stats {
+		conf = cd.config.Load() // refresh to get up-to-date settings
+		needUpgrade := is.Stats.NeedUpgrade
+		if needUpgrade || cd.needsCompaction(is, conf, checkTime, abortTime) {
+			hasStartedToday = true
+
+			errch := make(chan error)
+			compactReq := &MsgIndexCompact{
+				instId:    is.InstId,
+				errch:     errch,
+				abortTime: abortTime,
+			}
+			logging.Infof("CompactionDaemon: Compacting index instance:%v", is.InstId)
+			if needUpgrade {
+				common.Console(cd.clusterAddr, "Compacting index %v.%v for upgrade", is.Bucket, is.Name)
+			}
+			cd.msgch <- compactReq
+			err := <-errch
+			if err == nil {
+				logging.Infof("CompactionDaemon: Finished compacting index instance:%v", is.InstId)
+				if needUpgrade {
+					common.Console(cd.clusterAddr, "Finished compacting index %v.%v for upgrade", is.Bucket, is.Name)
+				}
+			} else {
+				logging.Errorf("CompactionDaemon: Index instance:%v Compaction failed with reason - %v", is.InstId, err)
+				if needUpgrade {
+					common.Console(cd.clusterAddr, "Compaction for index %v.%v failed with reason - %v", is.Bucket, is.Name, err)
+				}
+			}
+		}
+	}
+
+	return hasStartedToday
+}
+
+func (cd *compactionDaemon) loop() {
 	hasStartedToday := false
 
 loop:
@@ -224,63 +286,8 @@ loop:
 
 			conf := cd.config.Load()
 			if common.GetStorageMode() == common.FORESTDB {
-
 				if ok {
-					replych := make(chan []IndexStorageStats)
-					statReq := &MsgIndexStorageStats{respch: replych}
-					cd.msgch <- statReq
-					stats = <-replych
-
-					// each compaction interval cannot go over 24 hours if specified.
-					abortTime := time.Now().Add(time.Duration(24) * time.Hour)
-					checkTime := time.Now()
-
-					mode := strings.ToLower(conf["compaction_mode"].String())
-					if mode == "circular" {
-						// if circular compaction, run full compaction at most once a day.
-						if atomic.LoadInt32(&cd.lastCheckDay) != int32(checkTime.Weekday()) {
-							hasStartedToday = false
-							atomic.StoreInt32(&cd.lastCheckDay, int32(checkTime.Weekday()))
-						}
-
-						if hasStartedToday {
-							dur := time.Second * time.Duration(conf["check_period"].Int())
-							cd.timer.Reset(dur)
-							continue
-						}
-					}
-
-					for _, is := range stats {
-						conf = cd.config.Load() // refresh to get up-to-date settings
-						needUpgrade := is.Stats.NeedUpgrade
-						if needUpgrade || cd.needsCompaction(is, conf, checkTime, abortTime) {
-							hasStartedToday = true
-
-							errch := make(chan error)
-							compactReq := &MsgIndexCompact{
-								instId:    is.InstId,
-								errch:     errch,
-								abortTime: abortTime,
-							}
-							logging.Infof("CompactionDaemon: Compacting index instance:%v", is.InstId)
-							if needUpgrade {
-								common.Console(cd.clusterAddr, "Compacting index %v.%v for upgrade", is.Bucket, is.Name)
-							}
-							cd.msgch <- compactReq
-							err := <-errch
-							if err == nil {
-								logging.Infof("CompactionDaemon: Finished compacting index instance:%v", is.InstId)
-								if needUpgrade {
-									common.Console(cd.clusterAddr, "Finished compacting index %v.%v for upgrade", is.Bucket, is.Name)
-								}
-							} else {
-								logging.Errorf("CompactionDaemon: Index instance:%v Compaction failed with reason - %v", is.InstId, err)
-								if needUpgrade {
-									common.Console(cd.clusterAddr, "Compaction for index %v.%v failed with reason - %v", is.Bucket, is.Name, err)
-								}
-							}
-						}
-					}
+					hasStartedToday = cd.compactFDB(hasStartedToday)
 				}
 			}
 
