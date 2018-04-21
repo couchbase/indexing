@@ -35,9 +35,15 @@ type compactionDaemon struct {
 	timer        *time.Timer
 	msgch        MsgChannel
 	config       common.ConfigHolder
+	stats        IndexerStatsHolder
+	indexInstMap common.IndexInstMap
 	clusterAddr  string
 	lastCheckDay int32
 }
+
+//////////////////////////////////////////////////////////////////
+// CompactionDaemon
+//////////////////////////////////////////////////////////////////
 
 func (cd *compactionDaemon) Start() {
 	if !cd.started {
@@ -301,6 +307,10 @@ loop:
 	}
 }
 
+//////////////////////////////////////////////////////////////////
+// CompactionManager
+//////////////////////////////////////////////////////////////////
+
 func NewCompactionManager(supvCmdCh MsgChannel, supvMsgCh MsgChannel,
 	config common.Config) (CompactionManager, Message) {
 	cm := &compactionManager{
@@ -332,6 +342,9 @@ loop:
 					cfg := fullConfig.SectionConfig("settings.compaction.", true)
 					cd.ResetConfig(cfg)
 					cm.supvCmdCh <- &MsgSuccess{}
+				} else if cmd.GetMsgType() == UPDATE_INDEX_INSTANCE_MAP {
+					cm.handleIndexMap(cmd, cd)
+					cm.supvCmdCh <- &MsgSuccess{}
 				}
 			} else {
 				break loop
@@ -355,4 +368,14 @@ func (cm *compactionManager) newCompactionDaemon() *compactionDaemon {
 	cd.config.Store(cfg)
 
 	return cd
+}
+
+func (cm *compactionManager) handleIndexMap(cmd Message, cd *compactionDaemon) {
+
+	statsObj := cmd.(*MsgUpdateInstMap).GetStatsObject()
+	indexInstMap := cmd.(*MsgUpdateInstMap).GetIndexInstMap()
+	if statsObj != nil && cd != nil {
+		cd.stats.Set(statsObj)
+		cd.indexInstMap = indexInstMap
+	}
 }

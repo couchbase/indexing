@@ -3615,6 +3615,11 @@ func (idx *indexer) distributeIndexMapsToWorkers(msgUpdateIndexInstMap Message,
 		return err
 	}
 
+	if err := idx.sendUpdatedIndexMapToWorker(msgUpdateIndexInstMap, nil, idx.compactMgrCmdCh,
+		"compactionManager"); err != nil {
+		return err
+	}
+
 	return nil
 }
 
