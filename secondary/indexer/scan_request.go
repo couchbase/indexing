@@ -233,6 +233,26 @@ func (ga GroupAggr) String() string {
 	return str
 }
 
+func (g GroupKey) String() string {
+	str := "Group: "
+	str += fmt.Sprintf(" EntryKeyId %v", g.EntryKeyId)
+	str += fmt.Sprintf(" KeyPos %v", g.KeyPos)
+	str += fmt.Sprintf(" Expr %v", logging.TagUD(g.Expr))
+	str += fmt.Sprintf(" ExprValue %v", logging.TagUD(g.ExprValue))
+	return str
+}
+
+func (a Aggregate) String() string {
+	str := "Aggregate: "
+	str += fmt.Sprintf(" AggrFunc %v", a.AggrFunc)
+	str += fmt.Sprintf(" EntryKeyId %v", a.EntryKeyId)
+	str += fmt.Sprintf(" KeyPos %v", a.KeyPos)
+	str += fmt.Sprintf(" Expr %v", logging.TagUD(a.Expr))
+	str += fmt.Sprintf(" ExprValue %v", logging.TagUD(a.ExprValue))
+	str += fmt.Sprintf(" Distinct %v", a.Distinct)
+	return str
+}
+
 var (
 	ErrInvalidAggrFunc = errors.New("Invalid Aggregate Function")
 )
@@ -1564,9 +1584,9 @@ func (r ScanRequest) String() string {
 			span = span + ")"
 		}
 
-		str += fmt.Sprintf(", span:%s", span)
+		str += fmt.Sprintf(", span:%s", logging.TagUD(span))
 	} else {
-		str += fmt.Sprintf(", scans: %+v", r.Scans)
+		str += fmt.Sprintf(", scans: %+v", logging.TagUD(r.Scans))
 	}
 
 	if r.Limit > 0 {
