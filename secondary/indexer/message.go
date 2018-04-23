@@ -96,7 +96,7 @@ const (
 	CLUST_MGR_INDEXER_READY
 	CLUST_MGR_REBALANCE_RUNNING
 	CLUST_MGR_CLEANUP_INDEX
-	CLUST_MGR_DROP_INSTANCE
+	CLUST_MGR_CLEANUP_PARTITION
 	CLUST_MGR_MERGE_PARTITION
 	CLUST_MGR_PRUNE_PARTITION
 
@@ -783,25 +783,48 @@ func (m *MsgCancelMergePartition) GetString() string {
 	return str
 }
 
-// CLUST_MGR_DROP_INSTANCE
-type MsgClustMgrDropInstance struct {
-	defn common.IndexDefn
+// CLUST_MGR_CLEANUP_PARTITION
+type MsgClustMgrCleanupPartition struct {
+	defn             common.IndexDefn
+	instId           common.IndexInstId
+	partnId          common.PartitionId
+	replicaId        int
+	updateStatusOnly bool
 }
 
-func (m *MsgClustMgrDropInstance) GetMsgType() MsgType {
-	return CLUST_MGR_DROP_INSTANCE
+func (m *MsgClustMgrCleanupPartition) GetMsgType() MsgType {
+	return CLUST_MGR_CLEANUP_PARTITION
 }
 
-func (m *MsgClustMgrDropInstance) GetDefn() common.IndexDefn {
+func (m *MsgClustMgrCleanupPartition) GetDefn() common.IndexDefn {
 	return m.defn
 }
 
-func (m *MsgClustMgrDropInstance) GetString() string {
+func (m *MsgClustMgrCleanupPartition) GetInstId() common.IndexInstId {
+	return m.instId
+}
 
-	str := "\n\tMessage: MsgDropInstance"
-	str += fmt.Sprintf("\n\tType: %v", CLUST_MGR_DROP_INSTANCE)
+func (m *MsgClustMgrCleanupPartition) GetPartitionId() common.PartitionId {
+	return m.partnId
+}
+
+func (m *MsgClustMgrCleanupPartition) GetReplicaId() int {
+	return m.replicaId
+}
+
+func (m *MsgClustMgrCleanupPartition) UpdateStatusOnly() bool {
+	return m.updateStatusOnly
+}
+
+func (m *MsgClustMgrCleanupPartition) GetString() string {
+
+	str := "\n\tMessage: MsgCleanupPartition"
+	str += fmt.Sprintf("\n\tType: %v", CLUST_MGR_CLEANUP_PARTITION)
 	str += fmt.Sprintf("\n\tIndex defn Id: %v", m.defn.DefnId)
-	str += fmt.Sprintf("\n\tIndex inst Id: %v", m.defn.InstId)
+	str += fmt.Sprintf("\n\tIndex inst Id: %v", m.instId)
+	str += fmt.Sprintf("\n\tIndex partition Id: %v", m.partnId)
+	str += fmt.Sprintf("\n\tIndex replica Id: %v", m.replicaId)
+	str += fmt.Sprintf("\n\tUpdate Status Only: %v", m.updateStatusOnly)
 	return str
 }
 
@@ -1704,8 +1727,8 @@ func (m MsgType) String() string {
 		return "CLUST_MGR_REBALANCE_RUNNING"
 	case CLUST_MGR_CLEANUP_INDEX:
 		return "CLUST_MGR_CLEANUP_INDEX"
-	case CLUST_MGR_DROP_INSTANCE:
-		return "CLUST_MGR_DROP_INSTANCE"
+	case CLUST_MGR_CLEANUP_PARTITION:
+		return "CLUST_MGR_CLEANUP_PARTITION"
 	case CLUST_MGR_MERGE_PARTITION:
 		return "CLUST_MGR_MERGE_PARTITION"
 	case CLUST_MGR_PRUNE_PARTITION:

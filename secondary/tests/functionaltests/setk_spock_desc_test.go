@@ -23,13 +23,19 @@ func TestMultiScanDescSetup(t *testing.T) {
 	var index3 = "index_company_name_age_desc"
 	var bucketName = "default"
 
-	err := secondaryindex.CreateSecondaryIndex2(index1, bucketName, indexManagementAddress, "", []string{"company", "name"}, []bool{true, true}, false, nil, true, defaultIndexActiveTimeout, nil)
+	err := secondaryindex.CreateSecondaryIndex2(index1, bucketName, indexManagementAddress,
+		"", []string{"company", "name"}, []bool{true, true}, false, nil, c.SINGLE, nil, true,
+		defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
-	err = secondaryindex.CreateSecondaryIndex2(index2, bucketName, indexManagementAddress, "", []string{"company"}, []bool{true}, false, nil, true, defaultIndexActiveTimeout, nil)
+	err = secondaryindex.CreateSecondaryIndex2(index2, bucketName, indexManagementAddress,
+		"", []string{"company"}, []bool{true}, false, nil, c.SINGLE, nil, true,
+		defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
-	err = secondaryindex.CreateSecondaryIndex2(index3, bucketName, indexManagementAddress, "", []string{"company", "name", "age"}, []bool{false, true, false}, false, nil, true, defaultIndexActiveTimeout, nil)
+	err = secondaryindex.CreateSecondaryIndex2(index3, bucketName, indexManagementAddress,
+		"", []string{"company", "name", "age"}, []bool{false, true, false}, false, nil, c.SINGLE,
+		nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
 }
@@ -337,7 +343,7 @@ func runMultiScanDesc(scans qc.Scans, reverse, distinct bool,
 
 	if validateOnlyCount {
 		if len(scanResults) != len(docScanResults) {
-			msg := fmt.Sprintf("Length of expected results %v is not equal to length of scan results", len(docScanResults), len(scanResults))
+			msg := fmt.Sprintf("Length of expected results %v is not equal to length of scan results %v", len(docScanResults), len(scanResults))
 			FailTestIfError(errors.New(msg), "Error in scan result validation", t)
 		}
 	} else {
