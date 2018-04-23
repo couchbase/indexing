@@ -1285,7 +1285,7 @@ func (fdb *fdbSlice) IsDirty() bool {
 	return fdb.isDirty
 }
 
-func (fdb *fdbSlice) Compact(abortTime time.Time) error {
+func (fdb *fdbSlice) Compact(abortTime time.Time, minFrag int) error {
 	fdb.IncrRef()
 	defer fdb.DecrRef()
 

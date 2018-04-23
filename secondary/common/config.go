@@ -1479,6 +1479,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.settings.compaction.plasma.manual": ConfigValue{
+		true,
+		"Enable plasma manual compaction",
+		true,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.settings.persisted_snapshot.interval": ConfigValue{
 		uint64(5000), // keep in sync with index_settings_manager.erl
 		"Persisted snapshotting interval in milliseconds",

@@ -1122,6 +1122,7 @@ func (s *storageMgr) handleIndexCompaction(cmd Message) {
 	req := cmd.(*MsgIndexCompact)
 	errch := req.GetErrorChannel()
 	abortTime := req.GetAbortTime()
+	minFrag := req.GetMinFrag()
 	var slices []Slice
 
 	inst, ok := s.indexInstMap[req.GetInstId()]
@@ -1149,7 +1150,7 @@ func (s *storageMgr) handleIndexCompaction(cmd Message) {
 	// Perform file compaction without blocking storage manager main loop
 	go func() {
 		for _, slice := range slices {
-			err := slice.Compact(abortTime)
+			err := slice.Compact(abortTime, minFrag)
 			slice.DecrRef()
 			if err != nil {
 				errch <- err

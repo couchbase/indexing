@@ -1302,6 +1302,7 @@ type MsgIndexCompact struct {
 	partnId   common.PartitionId
 	errch     chan error
 	abortTime time.Time
+	minFrag   int
 }
 
 func (m *MsgIndexCompact) GetMsgType() MsgType {
@@ -1322,6 +1323,10 @@ func (m *MsgIndexCompact) GetErrorChannel() chan error {
 
 func (m *MsgIndexCompact) GetAbortTime() time.Time {
 	return m.abortTime
+}
+
+func (m *MsgIndexCompact) GetMinFrag() int {
+	return m.minFrag
 }
 
 //KV_STREAM_REPAIR

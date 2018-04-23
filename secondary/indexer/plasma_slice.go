@@ -71,6 +71,7 @@ type plasmaSlice struct {
 	isSoftDeleted bool
 	isSoftClosed  bool
 	numPartitions int
+	isCompacting  bool
 
 	cmdCh  []chan indexMutation
 	stopCh []DoneChannel
@@ -253,6 +254,7 @@ func (slice *plasmaSlice) initStores() error {
 	cfg.AutoTuneLSSCleaning = slice.sysconf["plasma.AutoTuneLSSCleaner"].Bool()
 	cfg.Compression = slice.sysconf["plasma.compression"].String()
 	cfg.MaxPageSize = slice.sysconf["plasma.MaxPageSize"].Int()
+	cfg.AutoLSSCleaning = !slice.sysconf["settings.compaction.plasma.manual"].Bool()
 
 	if slice.numPartitions != 1 {
 		cfg.LSSCleanerConcurrency = 1
@@ -1376,8 +1378,75 @@ func (mdb *plasmaSlice) IsDirty() bool {
 	return mdb.isDirty
 }
 
-func (mdb *plasmaSlice) Compact(abortTime time.Time) error {
-	return nil
+func (mdb *plasmaSlice) IsCompacting() bool {
+	mdb.lock.Lock()
+	defer mdb.lock.Unlock()
+	return mdb.isCompacting
+}
+
+func (mdb *plasmaSlice) SetCompacting(compacting bool) {
+	mdb.lock.Lock()
+	defer mdb.lock.Unlock()
+	mdb.isCompacting = compacting
+}
+
+func (mdb *plasmaSlice) IsSoftDeleted() bool {
+	mdb.lock.Lock()
+	defer mdb.lock.Unlock()
+	return mdb.isSoftDeleted
+}
+
+func (mdb *plasmaSlice) IsSoftClosed() bool {
+	mdb.lock.Lock()
+	defer mdb.lock.Unlock()
+	return mdb.isSoftClosed
+}
+
+func (mdb *plasmaSlice) Compact(abortTime time.Time, minFrag int) error {
+
+	if mdb.IsCompacting() {
+		return nil
+	}
+
+	var err error
+	var wg sync.WaitGroup
+
+	mdb.SetCompacting(true)
+	defer mdb.SetCompacting(false)
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+
+		shouldClean := func() bool {
+			if mdb.IsSoftDeleted() || mdb.IsSoftClosed() {
+				return false
+			}
+			return mdb.mainstore.TriggerLSSCleaner(minFrag, mdb.mainstore.LSSCleanerMinSize)
+		}
+
+		err = mdb.mainstore.CleanLSS(shouldClean)
+	}()
+
+	if !mdb.isPrimary && mdb.backstore != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+
+			shouldClean := func() bool {
+				if mdb.IsSoftDeleted() || mdb.IsSoftClosed() {
+					return false
+				}
+				return mdb.backstore.TriggerLSSCleaner(minFrag, mdb.backstore.LSSCleanerMinSize)
+			}
+
+			err = mdb.backstore.CleanLSS(shouldClean)
+		}()
+	}
+
+	wg.Wait()
+
+	return err
 }
 
 func (mdb *plasmaSlice) Statistics() (StorageStatistics, error) {

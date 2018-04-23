@@ -1165,7 +1165,7 @@ func (mdb *memdbSlice) IsDirty() bool {
 	return mdb.isDirty
 }
 
-func (mdb *memdbSlice) Compact(abortTime time.Time) error {
+func (mdb *memdbSlice) Compact(abortTime time.Time, minFrag int) error {
 	return nil
 }
 

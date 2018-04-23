@@ -12,11 +12,16 @@ package indexer
 import (
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
+)
+
+const (
+	PLASMA_CLEANER_MIN_SIZE = int64(16 * 1024 * 1024)
 )
 
 type CompactionManager interface {
@@ -37,8 +42,18 @@ type compactionDaemon struct {
 	config       common.ConfigHolder
 	stats        IndexerStatsHolder
 	indexInstMap common.IndexInstMap
+	indexes      map[string]*indexCompaction
 	clusterAddr  string
 	lastCheckDay int32
+	mutex        sync.Mutex
+}
+
+type indexCompaction struct {
+	instId        common.IndexInstId
+	partitionId   common.PartitionId
+	startTime     int64
+	fragmentation int64
+	garbage       int64
 }
 
 //////////////////////////////////////////////////////////////////
@@ -91,6 +106,41 @@ func (cd *compactionDaemon) ResetConfig(c common.Config) {
 		atomic.StoreInt32(&cd.lastCheckDay, -1)
 	}
 }
+
+func (cd *compactionDaemon) loop() {
+	hasStartedToday := false
+
+loop:
+	for {
+		select {
+		case _, ok := <-cd.timer.C:
+
+			if stats := cd.stats.Get(); stats != nil && stats.indexerState.Value() != int64(common.INDEXER_BOOTSTRAP) {
+				if common.GetStorageMode() == common.FORESTDB {
+					if ok {
+						hasStartedToday = cd.compactFDB(hasStartedToday)
+					}
+				} else if common.GetStorageMode() == common.PLASMA {
+					if ok {
+						cd.compactPlasma()
+					}
+				}
+			}
+
+			conf := cd.config.Load()
+			dur := time.Second * time.Duration(conf["check_period"].Int())
+			cd.timer.Reset(dur)
+
+		case <-cd.quitch:
+			cd.quitch <- true
+			break loop
+		}
+	}
+}
+
+//////////////////////////////////////////////////////////////////
+// Compact FDB
+//////////////////////////////////////////////////////////////////
 
 func (cd *compactionDaemon) needsCompaction(is IndexStorageStats, config common.Config, checkTime time.Time, abortTime time.Time) bool {
 
@@ -256,6 +306,7 @@ func (cd *compactionDaemon) compactFDB(hasStartedToday bool) bool {
 			errch := make(chan error)
 			compactReq := &MsgIndexCompact{
 				instId:    is.InstId,
+				partnId:   is.PartnId,
 				errch:     errch,
 				abortTime: abortTime,
 			}
@@ -282,29 +333,175 @@ func (cd *compactionDaemon) compactFDB(hasStartedToday bool) bool {
 	return hasStartedToday
 }
 
-func (cd *compactionDaemon) loop() {
-	hasStartedToday := false
+//////////////////////////////////////////////////////////////////
+// Compact plasma
+//////////////////////////////////////////////////////////////////
 
-loop:
-	for {
-		select {
-		case _, ok := <-cd.timer.C:
+func (cd *compactionDaemon) compactPlasma() {
 
-			conf := cd.config.Load()
-			if common.GetStorageMode() == common.FORESTDB {
-				if ok {
-					hasStartedToday = cd.compactFDB(hasStartedToday)
+	// There is no stats.  Skip compaction
+	if cd.stats.Get() == nil {
+		logging.Debugf("CompactionDaemon: No index stats. Skip compaction")
+		return
+	}
+
+	// There is no index.  Skip compaction.
+	if len(cd.indexInstMap) == 0 {
+		logging.Debugf("CompactionDaemon: No index. Skip compaction")
+		return
+	}
+
+	config := cd.config.Load()
+	if !config["plasma.manual"].Bool() {
+		logging.Debugf("CompactionDaemon: Plasma manual compaction is off. Skip compaction")
+		return
+	}
+
+	msgs := cd.addIndexOverFragThreshold()
+	for _, msg := range msgs {
+		go cd.runCompaction(msg)
+	}
+}
+
+func (cd *compactionDaemon) addIndexOverFragThreshold() []*MsgIndexCompact {
+
+	var compactMsgs []*MsgIndexCompact
+
+	config := cd.config.Load()
+	threshold := config["min_frag"].Int()
+	stats := cd.stats.Get()
+
+	for _, inst := range cd.indexInstMap {
+		for _, partn := range inst.Pc.GetAllPartitions() {
+			partnStats := stats.GetPartitionStats(inst.InstId, partn.GetPartitionId())
+
+			// if index frag threshold is over limit
+			if partnStats != nil &&
+				partnStats.fragPercent.Value() > int64(0) &&
+				partnStats.fragPercent.Value() > int64(threshold) &&
+				partnStats.diskSize.Value() > PLASMA_CLEANER_MIN_SIZE {
+
+				// if index is not running compaction, add it now.
+				if cd.addIndexCompaction(inst.InstId, partn.GetPartitionId(), partnStats) {
+					logging.Infof("CompactionDaemon: inst %v partition %v fragmentation %v over threshod %v.",
+						inst.InstId, partn.GetPartitionId(), partnStats.fragPercent.Value(), threshold)
+					compactMsgs = append(compactMsgs, newMsgIndexCompact(inst.InstId, partn.GetPartitionId(), threshold))
+				}
+			}
+		}
+	}
+
+	return compactMsgs
+}
+
+func (cd *compactionDaemon) runCompaction(compactReq *MsgIndexCompact) {
+
+	logging.Infof("CompactionDaemon: run compaction for inst %v partition %v.",
+		compactReq.GetInstId(), compactReq.GetPartitionId())
+
+	cd.msgch <- compactReq
+	err := <-compactReq.GetErrorChannel()
+
+	if err != nil {
+		logging.Errorf("CompactionDaemon: Fail to run compaction for inst %v partition %v. Error=%v",
+			compactReq.GetInstId(), compactReq.GetPartitionId(), err)
+	}
+
+	if cd.removeIndexCompaction(compactReq.GetInstId(), compactReq.GetPartitionId()) {
+		logging.Infof("CompactionDaemon: compaction done for inst %v partition %v.",
+			compactReq.GetInstId(), compactReq.GetPartitionId())
+	}
+}
+
+func (cd *compactionDaemon) updateIndexInstMap(indexInstMap common.IndexInstMap) {
+	cd.mutex.Lock()
+	defer cd.mutex.Unlock()
+
+	clone := common.CopyIndexInstMap(indexInstMap)
+	indexes := make(map[string]*indexCompaction)
+
+	for name, idxCompact := range cd.indexes {
+		found := false
+		for instId, inst := range clone {
+			for _, partn := range inst.Pc.GetAllPartitions() {
+				if instId == idxCompact.instId && partn.GetPartitionId() == idxCompact.partitionId {
+					found = true
+					break
 				}
 			}
 
-			dur := time.Second * time.Duration(conf["check_period"].Int())
-			cd.timer.Reset(dur)
+			if found {
+				break
+			}
+		}
 
-		case <-cd.quitch:
-			cd.quitch <- true
-			break loop
+		if found {
+			indexes[name] = idxCompact
 		}
 	}
+
+	cd.indexInstMap = clone
+	cd.indexes = indexes
+}
+
+func (cd *compactionDaemon) removeIndexCompaction(instId common.IndexInstId, partitionId common.PartitionId) bool {
+	cd.mutex.Lock()
+	defer cd.mutex.Unlock()
+
+	instName := indexCompactionName(instId, partitionId)
+	if _, ok := cd.indexes[instName]; ok {
+		delete(cd.indexes, instName)
+		return true
+	}
+	return false
+}
+
+func (cd *compactionDaemon) addIndexCompaction(instId common.IndexInstId, partitionId common.PartitionId, stats *IndexStats) bool {
+	cd.mutex.Lock()
+	defer cd.mutex.Unlock()
+
+	instName := indexCompactionName(instId, partitionId)
+	if _, ok := cd.indexes[instName]; !ok {
+		cd.indexes[instName] = newIndexCompaction(instId, partitionId, stats)
+		return true
+	}
+	return false
+}
+
+func newMsgIndexCompact(instId common.IndexInstId, partnId common.PartitionId, minFrag int) *MsgIndexCompact {
+
+	return &MsgIndexCompact{
+		instId:  instId,
+		partnId: partnId,
+		errch:   make(chan error),
+		minFrag: minFrag,
+	}
+}
+
+func newIndexCompaction(instId common.IndexInstId, partnId common.PartitionId, stats *IndexStats) *indexCompaction {
+
+	compact := &indexCompaction{
+		instId:        instId,
+		partitionId:   partnId,
+		startTime:     time.Now().UnixNano(),
+		fragmentation: stats.fragPercent.Value(),
+		garbage:       computeGarbage(stats),
+	}
+
+	return compact
+}
+
+func indexCompactionName(instId common.IndexInstId, partitionId common.PartitionId) string {
+	return fmt.Sprint("%v:%v", instId, partitionId)
+}
+
+func computeGarbage(stats *IndexStats) int64 {
+
+	if stats.diskSize.Value() > 0 && stats.dataSize.Value() > 0 && stats.dataSize.Value() < stats.diskSize.Value() {
+		return stats.diskSize.Value() - stats.dataSize.Value()
+	}
+
+	return 0
 }
 
 //////////////////////////////////////////////////////////////////
@@ -345,6 +542,8 @@ loop:
 				} else if cmd.GetMsgType() == UPDATE_INDEX_INSTANCE_MAP {
 					cm.handleIndexMap(cmd, cd)
 					cm.supvCmdCh <- &MsgSuccess{}
+				} else {
+					cm.supvCmdCh <- &MsgSuccess{}
 				}
 			} else {
 				break loop
@@ -364,6 +563,7 @@ func (cm *compactionManager) newCompactionDaemon() *compactionDaemon {
 		msgch:        cm.supvMsgCh,
 		clusterAddr:  clusterAddr,
 		lastCheckDay: -1,
+		indexes:      make(map[string]*indexCompaction),
 	}
 	cd.config.Store(cfg)
 
@@ -376,6 +576,6 @@ func (cm *compactionManager) handleIndexMap(cmd Message, cd *compactionDaemon) {
 	indexInstMap := cmd.(*MsgUpdateInstMap).GetIndexInstMap()
 	if statsObj != nil && cd != nil {
 		cd.stats.Set(statsObj)
-		cd.indexInstMap = indexInstMap
+		cd.updateIndexInstMap(indexInstMap)
 	}
 }
