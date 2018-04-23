@@ -1137,9 +1137,12 @@ func (s *storageMgr) handleIndexCompaction(cmd Message) {
 
 	// Increment rc for slices
 	for _, partnInst := range partnMap {
-		for _, slice := range partnInst.Sc.GetAllSlices() {
-			slice.IncrRef()
-			slices = append(slices, slice)
+		// non-partitioned index has partitionId 0
+		if partnInst.Defn.GetPartitionId() == req.GetPartitionId() {
+			for _, slice := range partnInst.Sc.GetAllSlices() {
+				slice.IncrRef()
+				slices = append(slices, slice)
+			}
 		}
 	}
 
