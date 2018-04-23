@@ -27,6 +27,7 @@ var version = 1
 var (
 	ErrMaxSnapshotsLimitReached = fmt.Errorf("Maximum snapshots limit reached")
 	ErrShutdown                 = fmt.Errorf("MemDB instance has been shutdown")
+	ErrCorruptSnapshot          = fmt.Errorf("MemDB snapshot checksum failed")
 )
 
 type KeyCompare func([]byte, []byte) int
@@ -860,6 +861,7 @@ func (m *MemDB) StoreToDisk(dir string, snap *Snapshot, concurr int, itmCallback
 
 	writers := make([]FileWriter, shards)
 	files := make([]string, shards)
+	checksums := make([]uint32, shards)
 	defer func() {
 		for _, w := range writers {
 			if w != nil {
@@ -884,6 +886,7 @@ func (m *MemDB) StoreToDisk(dir string, snap *Snapshot, concurr int, itmCallback
 	if m.useDeltaFiles {
 		deltaWriters := make([]FileWriter, m.numWriters())
 		deltaFiles := make([]string, m.numWriters())
+		deltaChecksums := make([]uint32, m.numWriters())
 		defer func() {
 			for _, w := range deltaWriters {
 				if w != nil {
@@ -923,6 +926,13 @@ func (m *MemDB) StoreToDisk(dir string, snap *Snapshot, concurr int, itmCallback
 			if err = m.changeDeltaWrState(dwStateTerminate, nil, nil); err == nil {
 				bs, _ := json.Marshal(deltaFiles)
 				err = ioutil.WriteFile(filepath.Join(deltadir, "files.json"), bs, 0660)
+				if err == nil {
+					for id, dwr := range deltaWriters {
+						deltaChecksums[id] = dwr.Checksum()
+					}
+					bs, _ = json.Marshal(deltaChecksums)
+					err = ioutil.WriteFile(filepath.Join(deltadir, "checksums.json"), bs, 0660)
+				}
 			}
 		}()
 	}
@@ -949,6 +959,13 @@ func (m *MemDB) StoreToDisk(dir string, snap *Snapshot, concurr int, itmCallback
 		if err = m.Visitor(snap, visitorCallback, shards, concurr); err == nil {
 			bs, _ := json.Marshal(files)
 			err = ioutil.WriteFile(filepath.Join(datadir, "files.json"), bs, 0660)
+			if err == nil {
+				for id, wr := range writers {
+					checksums[id] = wr.Checksum()
+				}
+				bs, _ = json.Marshal(checksums)
+				err = ioutil.WriteFile(filepath.Join(datadir, "checksums.json"), bs, 0660)
+			}
 		}
 	}
 
@@ -959,6 +976,7 @@ func (m *MemDB) LoadFromDisk(dir string, concurr int, callb ItemCallback) (*Snap
 	var wg sync.WaitGroup
 	datadir := filepath.Join(dir, "data")
 	var files []string
+	var checksums []uint32
 	manifestdir := dir
 	var version int
 
@@ -977,6 +995,12 @@ func (m *MemDB) LoadFromDisk(dir string, concurr int, callb ItemCallback) (*Snap
 		return nil, err
 	} else {
 		json.Unmarshal(bs, &files)
+	}
+
+	if bs, err := ioutil.ReadFile(filepath.Join(datadir, "checksums.json")); err == nil {
+		json.Unmarshal(bs, &checksums)
+	} else {
+		checksums = make([]uint32, len(files))
 	}
 
 	var nodeCallb skiplist.NodeCallback
@@ -1042,6 +1066,11 @@ func (m *MemDB) LoadFromDisk(dir string, concurr int, callb ItemCallback) (*Snap
 	}
 	close(wchan)
 	wg.Wait()
+	for i, rdr := range readers {
+		if checksums[i] != 0 && checksums[i] != rdr.Checksum() {
+			return nil, ErrCorruptSnapshot
+		}
+	}
 
 	for _, err := range errors {
 		if err != nil {
@@ -1066,6 +1095,10 @@ func (m *MemDB) LoadFromDisk(dir string, concurr int, callb ItemCallback) (*Snap
 		readers := make([]FileReader, len(files))
 		errors := make([]error, len(files))
 		writers := make([]*Writer, concurr)
+		deltaChecksums := make([]uint32, len(files))
+		if bs, err := ioutil.ReadFile(filepath.Join(deltadir, "checksums.json")); err == nil {
+			json.Unmarshal(bs, &deltaChecksums)
+		}
 
 		defer func() {
 			for _, r := range readers {
@@ -1133,6 +1166,12 @@ func (m *MemDB) LoadFromDisk(dir string, concurr int, callb ItemCallback) (*Snap
 		}
 		close(wchan)
 		wg.Wait()
+
+		for i, rdr := range readers {
+			if deltaChecksums[i] != 0 && deltaChecksums[i] != rdr.Checksum() {
+				return nil, ErrCorruptSnapshot
+			}
+		}
 
 		for _, err := range errors {
 			if err != nil {

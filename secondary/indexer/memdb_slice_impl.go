@@ -1186,6 +1186,11 @@ func (mdb *memdbSlice) Statistics() (StorageStatistics, error) {
 	sts.DataSize = mdb.mainstore.MemoryInUse()
 	sts.MemUsed = mdb.mainstore.MemoryInUse() + ntMemUsed
 	sts.DiskSize = mdb.diskSize()
+
+        // Ideally, we should also count items in backstore. But numRecsInMem is mainly used for resident % computation
+        // and for MOI it's always 100%. So an approximate number is fine as numRecsOnDisk will always be 0
+        mdb.idxStats.numRecsInMem.Set(mdb.mainstore.ItemsCount())
+
 	return sts, nil
 }
 
