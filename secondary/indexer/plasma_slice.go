@@ -1418,6 +1418,10 @@ func (mdb *plasmaSlice) Compact(abortTime time.Time, minFrag int) error {
 	go func() {
 		defer wg.Done()
 
+		if mdb.mainstore.AutoLSSCleaning {
+			return
+		}
+
 		shouldClean := func() bool {
 			if mdb.IsSoftDeleted() || mdb.IsSoftClosed() {
 				return false
@@ -1432,6 +1436,10 @@ func (mdb *plasmaSlice) Compact(abortTime time.Time, minFrag int) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+
+			if mdb.backstore.AutoLSSCleaning {
+				return
+			}
 
 			shouldClean := func() bool {
 				if mdb.IsSoftDeleted() || mdb.IsSoftClosed() {

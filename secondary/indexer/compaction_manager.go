@@ -11,6 +11,8 @@ package indexer
 
 import (
 	"fmt"
+	"math"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -42,18 +44,18 @@ type compactionDaemon struct {
 	config       common.ConfigHolder
 	stats        IndexerStatsHolder
 	indexInstMap common.IndexInstMap
-	indexes      map[string]*indexCompaction
+	compactions  map[string]*indexCompaction
+	history      map[string]*indexCompaction
 	clusterAddr  string
 	lastCheckDay int32
 	mutex        sync.Mutex
 }
 
 type indexCompaction struct {
-	instId        common.IndexInstId
-	partitionId   common.PartitionId
-	startTime     int64
-	fragmentation int64
-	garbage       int64
+	instId      common.IndexInstId
+	partitionId common.PartitionId
+	startTime   int64
+	endTime     int64
 }
 
 //////////////////////////////////////////////////////////////////
@@ -337,6 +339,12 @@ func (cd *compactionDaemon) compactFDB(hasStartedToday bool) bool {
 // Compact plasma
 //////////////////////////////////////////////////////////////////
 
+type compactionHistory []*indexCompaction
+
+func (c compactionHistory) Len() int           { return len(c) }
+func (c compactionHistory) Swap(i, j int)      { c[i], c[j] = c[j], c[i] }
+func (c compactionHistory) Less(i, j int) bool { return c[i].endTime < c[j].endTime }
+
 func (cd *compactionDaemon) compactPlasma() {
 
 	// There is no stats.  Skip compaction
@@ -357,13 +365,29 @@ func (cd *compactionDaemon) compactPlasma() {
 		return
 	}
 
-	msgs := cd.addIndexOverFragThreshold()
+	cd.mutex.Lock()
+	defer cd.mutex.Unlock()
+
+	msgs := cd.addMandatory()
+	msgs = append(msgs, cd.addOptional()...)
 	for _, msg := range msgs {
 		go cd.runCompaction(msg)
 	}
 }
 
-func (cd *compactionDaemon) addIndexOverFragThreshold() []*MsgIndexCompact {
+//
+// Add plasma instance (index partition) for mandatory compaction.
+// Plasma instance is mandatory for compaction if fragmentation is over min fragmentation threshold.
+// Plasma throttle write throughput if fragmentation is over max limit.   Therefore, it
+// is important to compact as soon as the index cross the min_frag threshold, so the log cleaner
+// has chance to catch up with the mutation rate.
+//
+// Note that fragmentation ratio does not indicate the time it will take for log cleaning
+// to finish.  An large partition with low fragmentation may have more garbage than a small
+// partition with high frag ratio.   Since IO bandwdith is fixed, it will take more take
+// to compact the large partition.
+//
+func (cd *compactionDaemon) addMandatory() []*MsgIndexCompact {
 
 	var compactMsgs []*MsgIndexCompact
 
@@ -382,8 +406,8 @@ func (cd *compactionDaemon) addIndexOverFragThreshold() []*MsgIndexCompact {
 				partnStats.diskSize.Value() > PLASMA_CLEANER_MIN_SIZE {
 
 				// if index is not running compaction, add it now.
-				if cd.addIndexCompaction(inst.InstId, partn.GetPartitionId(), partnStats) {
-					logging.Infof("CompactionDaemon: inst %v partition %v fragmentation %v over threshod %v.",
+				if cd.addIndexCompactionNoLock(inst.InstId, partn.GetPartitionId(), partnStats) {
+					logging.Infof("CompactionDaemon: mandatory compaction: inst %v partition %v fragmentation %v over threshod %v.",
 						inst.InstId, partn.GetPartitionId(), partnStats.fragPercent.Value(), threshold)
 					compactMsgs = append(compactMsgs, newMsgIndexCompact(inst.InstId, partn.GetPartitionId(), threshold))
 				}
@@ -394,10 +418,115 @@ func (cd *compactionDaemon) addIndexOverFragThreshold() []*MsgIndexCompact {
 	return compactMsgs
 }
 
+//
+// Add index for optional compaction.   Optional compaction is for plasma instances (partitions) that are below
+// min_frag threshold.   If the number of ongoing compactions is below a quota (compaction.plasma.optional.quota),
+// compaction manager will add additional discretionary partition for compaction.  The discrentionary partition
+// are based on a round-robin basis.  The idea is to allow partitions to be always compacted, with the goal of
+// keeping them under mandatory min_frag threshold.  Since this is done in a continous, rotating basis, it
+// has the tendency to spread out log cleanning IO bandwdith consumption.
+//
+// Given the same fragmentation ratio, let assume each partition consumes the same IO bandwith per sec for log cleaning.
+// Let denote B as IO bandwidth consumed by log cleaner per sec per partition.    The total bandwith per sec would be B * N,
+// where N is the number of partitions for optional compaction.   B * N would remain fairly constant when N is constant.  A
+// larger partition would take more time to compact, but this does not affect the total bandwith per sec.
+//
+// By keeping N as a fraction of total number of partitions, this can also keep total IO consumption
+// from growing proportionally with the number of partitions.
+//
+// Large partition with low fragmentation ratio may take up more disk space than small partition.
+// The partition index may seldom gets compacted under mandatory compaction.   Optional compaction will
+// allow those large partitions to have a chance to clean its garbage more often.
+//
+func (cd *compactionDaemon) addOptional() []*MsgIndexCompact {
+
+	var compactMsgs []*MsgIndexCompact
+
+	// Config paramaters:
+	// 1) Quota - the number of index under compaction.  If the number is under quota,
+	//    then daemon will add discretionary indexes for compaction.
+	// 2) optional threshold - The min frag for the index to be considered for optional compaction.
+	// 3) decrement - Percentage of fragementation to be reduced for optional compaction.
+	//
+	config := cd.config.Load()
+	threshold := config["min_frag"].Int()
+	optionalQuota := config["plasma.optional.quota"].Int()
+	optionalThreshold := config["plasma.optional.min_frag"].Int()
+	optionalDecr := config["plasma.optional.decrement"].Int()
+	stats := cd.stats.Get()
+
+	//
+	// Calculate the number of indexes for optional compaction.
+	//
+	allowance := int(math.Ceil(float64(cd.numInstancesNoLock())*float64(optionalQuota)/100.0)) - cd.numCompactionsNoLock()
+	if allowance <= 0 {
+		return compactMsgs
+	}
+
+	//
+	// Find the index eligible for optional compaction
+	// 1) fragmentation > 0
+	// 2) fragemention between optional threshold and mandatory threshold
+	// 3) greater than min disk size (plasma requirements)
+	// 4) compaction is not currently running for the index
+	//
+	sorted := make(compactionHistory, 0, len(cd.history))
+
+	for _, hist := range cd.history {
+		partnStats := stats.GetPartitionStats(hist.instId, hist.partitionId)
+
+		if partnStats != nil &&
+			partnStats.fragPercent.Value() > int64(0) &&
+			partnStats.fragPercent.Value() < int64(threshold) &&
+			partnStats.fragPercent.Value() > int64(optionalThreshold) &&
+			partnStats.fragPercent.Value()-int64(optionalDecr) > int64(0) &&
+			partnStats.diskSize.Value() > PLASMA_CLEANER_MIN_SIZE {
+
+			// if index is not running compaction, add it now.
+			if !cd.isIndexCompactingNoLock(hist.instId, hist.partitionId) {
+				sorted = append(sorted, hist)
+			}
+		}
+	}
+
+	// Sort the index based on the last time if finish compaction (endTime)
+	// Pick the indexes based on the number of optional compaction allowed
+	sort.Sort(sorted)
+	if len(sorted) > allowance {
+		sorted = sorted[:allowance]
+	}
+
+	//
+	// Add the index for optional compaction
+	//
+	for _, hist := range sorted {
+		partnStats := stats.GetPartitionStats(hist.instId, hist.partitionId)
+		if cd.addIndexCompactionNoLock(hist.instId, hist.partitionId, partnStats) {
+
+			// The target fragmentation is lower of
+			// 1) current fragment - decrement
+			// 2) optional compaction threshold
+			target := int(partnStats.fragPercent.Value()) - optionalDecr
+			if optionalThreshold < target {
+				target = optionalThreshold
+			}
+
+			logging.Infof("CompactionDaemon: optional compaction: inst %v partition %v fragmentation %v target %v.",
+				hist.instId, hist.partitionId, partnStats.fragPercent.Value(), target)
+
+			compactMsgs = append(compactMsgs, newMsgIndexCompact(hist.instId, hist.partitionId, target))
+		}
+	}
+
+	return compactMsgs
+}
+
 func (cd *compactionDaemon) runCompaction(compactReq *MsgIndexCompact) {
 
 	logging.Infof("CompactionDaemon: run compaction for inst %v partition %v.",
 		compactReq.GetInstId(), compactReq.GetPartitionId())
+
+	cd.updateCompactionStartTime(compactReq.GetInstId(), compactReq.GetPartitionId(), time.Now().UnixNano())
 
 	cd.msgch <- compactReq
 	err := <-compactReq.GetErrorChannel()
@@ -411,20 +540,23 @@ func (cd *compactionDaemon) runCompaction(compactReq *MsgIndexCompact) {
 		logging.Infof("CompactionDaemon: compaction done for inst %v partition %v.",
 			compactReq.GetInstId(), compactReq.GetPartitionId())
 	}
+
+	cd.updateCompactionEndTime(compactReq.GetInstId(), compactReq.GetPartitionId(), time.Now().UnixNano())
 }
 
 func (cd *compactionDaemon) updateIndexInstMap(indexInstMap common.IndexInstMap) {
 	cd.mutex.Lock()
 	defer cd.mutex.Unlock()
 
-	clone := common.CopyIndexInstMap(indexInstMap)
-	indexes := make(map[string]*indexCompaction)
+	compactions := make(map[string]*indexCompaction)
+	history := make(map[string]*indexCompaction)
 
-	for name, idxCompact := range cd.indexes {
+	// prune running compaction from non-existent index
+	for name, compaction := range cd.compactions {
 		found := false
-		for instId, inst := range clone {
+		for instId, inst := range indexInstMap {
 			for _, partn := range inst.Pc.GetAllPartitions() {
-				if instId == idxCompact.instId && partn.GetPartitionId() == idxCompact.partitionId {
+				if instId == compaction.instId && partn.GetPartitionId() == compaction.partitionId {
 					found = true
 					break
 				}
@@ -436,12 +568,58 @@ func (cd *compactionDaemon) updateIndexInstMap(indexInstMap common.IndexInstMap)
 		}
 
 		if found {
-			indexes[name] = idxCompact
+			compactions[name] = compaction
 		}
 	}
 
-	cd.indexInstMap = clone
-	cd.indexes = indexes
+	// prune compaction history from non-existent index
+	for name, hist := range cd.history {
+		found := false
+		for instId, inst := range indexInstMap {
+			for _, partn := range inst.Pc.GetAllPartitions() {
+				if instId == hist.instId && partn.GetPartitionId() == hist.partitionId {
+					found = true
+					break
+				}
+			}
+
+			if found {
+				break
+			}
+		}
+
+		if found {
+			history[name] = hist
+		}
+	}
+
+	// add compaction history for new index
+	for _, inst := range indexInstMap {
+		for _, partn := range inst.Pc.GetAllPartitions() {
+			name := indexCompactionName(inst.InstId, partn.GetPartitionId())
+			if _, ok := cd.history[name]; !ok {
+				history[name] = &indexCompaction{
+					instId:      inst.InstId,
+					partitionId: partn.GetPartitionId(),
+					endTime:     math.MaxInt64,
+				}
+			}
+		}
+	}
+
+	cd.indexInstMap = indexInstMap
+	cd.compactions = compactions
+	cd.history = history
+}
+
+func (cd *compactionDaemon) numInstancesNoLock() int {
+
+	count := 0
+	instMap := cd.indexInstMap
+	for _, inst := range instMap {
+		count += len(inst.Pc.GetAllPartitions())
+	}
+	return count
 }
 
 func (cd *compactionDaemon) removeIndexCompaction(instId common.IndexInstId, partitionId common.PartitionId) bool {
@@ -449,23 +627,50 @@ func (cd *compactionDaemon) removeIndexCompaction(instId common.IndexInstId, par
 	defer cd.mutex.Unlock()
 
 	instName := indexCompactionName(instId, partitionId)
-	if _, ok := cd.indexes[instName]; ok {
-		delete(cd.indexes, instName)
+	if _, ok := cd.compactions[instName]; ok {
+		delete(cd.compactions, instName)
 		return true
 	}
 	return false
 }
 
-func (cd *compactionDaemon) addIndexCompaction(instId common.IndexInstId, partitionId common.PartitionId, stats *IndexStats) bool {
+func (cd *compactionDaemon) addIndexCompactionNoLock(instId common.IndexInstId, partitionId common.PartitionId, stats *IndexStats) bool {
+	instName := indexCompactionName(instId, partitionId)
+	if _, ok := cd.compactions[instName]; !ok {
+		cd.compactions[instName] = newIndexCompaction(instId, partitionId, stats)
+		return true
+	}
+	return false
+}
+
+func (cd *compactionDaemon) isIndexCompactingNoLock(instId common.IndexInstId, partitionId common.PartitionId) bool {
+	instName := indexCompactionName(instId, partitionId)
+	_, ok := cd.compactions[instName]
+	return ok
+}
+
+func (cd *compactionDaemon) numCompactionsNoLock() int {
+	return len(cd.compactions)
+}
+
+func (cd *compactionDaemon) updateCompactionStartTime(instId common.IndexInstId, partitionId common.PartitionId, startTime int64) {
 	cd.mutex.Lock()
 	defer cd.mutex.Unlock()
 
 	instName := indexCompactionName(instId, partitionId)
-	if _, ok := cd.indexes[instName]; !ok {
-		cd.indexes[instName] = newIndexCompaction(instId, partitionId, stats)
-		return true
+	if hist, ok := cd.history[instName]; ok {
+		hist.startTime = startTime
 	}
-	return false
+}
+
+func (cd *compactionDaemon) updateCompactionEndTime(instId common.IndexInstId, partitionId common.PartitionId, endTime int64) {
+	cd.mutex.Lock()
+	defer cd.mutex.Unlock()
+
+	instName := indexCompactionName(instId, partitionId)
+	if hist, ok := cd.history[instName]; ok {
+		hist.endTime = endTime
+	}
 }
 
 func newMsgIndexCompact(instId common.IndexInstId, partnId common.PartitionId, minFrag int) *MsgIndexCompact {
@@ -481,11 +686,8 @@ func newMsgIndexCompact(instId common.IndexInstId, partnId common.PartitionId, m
 func newIndexCompaction(instId common.IndexInstId, partnId common.PartitionId, stats *IndexStats) *indexCompaction {
 
 	compact := &indexCompaction{
-		instId:        instId,
-		partitionId:   partnId,
-		startTime:     time.Now().UnixNano(),
-		fragmentation: stats.fragPercent.Value(),
-		garbage:       computeGarbage(stats),
+		instId:      instId,
+		partitionId: partnId,
 	}
 
 	return compact
@@ -540,8 +742,12 @@ loop:
 					cd.ResetConfig(cfg)
 					cm.supvCmdCh <- &MsgSuccess{}
 				} else if cmd.GetMsgType() == UPDATE_INDEX_INSTANCE_MAP {
-					cm.handleIndexMap(cmd, cd)
+					stats := cmd.(*MsgUpdateInstMap).GetStatsObject()
+					indexInstMap := cmd.(*MsgUpdateInstMap).GetIndexInstMap()
+					clone := common.CopyIndexInstMap(indexInstMap)
 					cm.supvCmdCh <- &MsgSuccess{}
+
+					cm.handleIndexMap(stats, clone, cd)
 				} else {
 					cm.supvCmdCh <- &MsgSuccess{}
 				}
@@ -563,19 +769,17 @@ func (cm *compactionManager) newCompactionDaemon() *compactionDaemon {
 		msgch:        cm.supvMsgCh,
 		clusterAddr:  clusterAddr,
 		lastCheckDay: -1,
-		indexes:      make(map[string]*indexCompaction),
+		compactions:  make(map[string]*indexCompaction),
+		history:      make(map[string]*indexCompaction),
 	}
 	cd.config.Store(cfg)
 
 	return cd
 }
 
-func (cm *compactionManager) handleIndexMap(cmd Message, cd *compactionDaemon) {
-
-	statsObj := cmd.(*MsgUpdateInstMap).GetStatsObject()
-	indexInstMap := cmd.(*MsgUpdateInstMap).GetIndexInstMap()
-	if statsObj != nil && cd != nil {
-		cd.stats.Set(statsObj)
+func (cm *compactionManager) handleIndexMap(stats *IndexerStats, indexInstMap common.IndexInstMap, cd *compactionDaemon) {
+	if stats != nil && cd != nil {
+		cd.stats.Set(stats)
 		cd.updateIndexInstMap(indexInstMap)
 	}
 }

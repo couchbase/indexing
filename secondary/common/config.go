@@ -1480,9 +1480,30 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.settings.compaction.plasma.manual": ConfigValue{
-		true,
+		false,
 		"Enable plasma manual compaction",
-		true,
+		false,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.settings.compaction.plasma.optional.min_frag": ConfigValue{
+		20,
+		"Compaction fragmentation threshold percentage for optional compaction",
+		20,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.settings.compaction.plasma.optional.decrement": ConfigValue{
+		5,
+		"Compaction fragmentation decrement percentage for optional compaction",
+		5,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.settings.compaction.plasma.optional.quota": ConfigValue{
+		25,
+		"Percentage of plasma instances eligible for optional compaction",
+		25,
 		false, // mutable
 		false, // case-insensitive
 	},
