@@ -69,6 +69,7 @@ type plasmaSlice struct {
 	isPrimary     bool
 	isSoftDeleted bool
 	isSoftClosed  bool
+	isPartitioned bool
 
 	cmdCh  []chan indexMutation
 	stopCh []DoneChannel
@@ -161,6 +162,7 @@ func newPlasmaSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	slice.readers = make(chan *plasma.Reader, numReaders)
 
 	slice.isPrimary = isPrimary
+	slice.isPartitioned = isPartitioned
 
 	if err := slice.initStores(); err != nil {
 		// Index is unusable. Remove the data files and reinit
@@ -180,7 +182,7 @@ func newPlasmaSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	}
 
 	logging.Infof("plasmaSlice:NewplasmaSlice Created New Slice Id %v IndexInstId %v partitionId %v "+
-		"WriterThreads %v", sliceId, idxInstId, partitionId, slice.numWriters)
+		"WriterThreads %v cleaner %v", sliceId, idxInstId, partitionId, slice.numWriters, slice.mainstore.LSSCleanerConcurrency)
 
 	for i := 0; i < slice.numWriters; i++ {
 		slice.stopCh[i] = make(DoneChannel)
@@ -215,6 +217,10 @@ func (slice *plasmaSlice) initStores() error {
 	cfg.AutoTuneLSSCleaning = slice.sysconf["plasma.AutoTuneLSSCleaner"].Bool()
 	cfg.Compression = slice.sysconf["plasma.compression"].String()
 	cfg.MaxPageSize = slice.sysconf["plasma.MaxPageSize"].Int()
+
+	if slice.isPartitioned {
+		cfg.LSSCleanerConcurrency = 1
+	}
 
 	var mode plasma.IOMode
 
