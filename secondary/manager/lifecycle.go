@@ -349,6 +349,8 @@ func (m *LifecycleMgr) dispatchRequest(request *requestHolder, factory *message.
 		err = m.handleConfigUpdate(content)
 	case client.OPCODE_DROP_OR_PRUNE_INSTANCE:
 		err = m.handleDeleteOrPruneIndexInstance(content, common.NewRebalanceRequestContext())
+	case client.OPCODE_DROP_OR_PRUNE_INSTANCE_DDL:
+		err = m.handleDeleteOrPruneIndexInstance(content, common.NewUserRequestContext())
 	case client.OPCODE_MERGE_PARTITION:
 		err = m.handleMergePartition(content, common.NewRebalanceRequestContext())
 	case client.OPCODE_PREPARE_CREATE_INDEX:
@@ -411,8 +413,7 @@ func (m *LifecycleMgr) handlePrepareCreateIndex(content []byte) ([]byte, error) 
 			}
 		}
 
-		value, _ := m.repo.GetLocalValue("RebalanceRunning")
-		if len(value) != 0 {
+		if _, err := m.repo.GetLocalValue("RebalanceRunning"); err == nil {
 			logging.Infof("LifecycleMgr.handlePrepareCreateIndex() : Reject %v because rebalance in progress", prepareCreateIndex.DefnId)
 			response := &client.PrepareCreateResponse{Accept: false}
 			return client.MarshallPrepareCreateResponse(response)
@@ -464,8 +465,7 @@ func (m *LifecycleMgr) handleCommitCreateIndex(content []byte) ([]byte, error) {
 		return client.MarshallCommitCreateResponse(response)
 	}
 
-	value, _ := m.repo.GetLocalValue("RebalanceRunning")
-	if len(value) != 0 {
+	if _, err := m.repo.GetLocalValue("RebalanceRunning"); err == nil {
 		logging.Infof("LifecycleMgr.handleCommitCreateIndex() : Reject %v because rebalance in progress", commitCreateIndex.DefnId)
 		response := &client.PrepareCreateResponse{Accept: false}
 		return client.MarshallPrepareCreateResponse(response)
@@ -2534,6 +2534,11 @@ func (m *LifecycleMgr) verifyBucket(bucket string) (string, error) {
 //
 func (m *janitor) cleanup() {
 
+	// if rebalancing is running
+	if _, err := m.manager.repo.GetLocalValue("RebalanceRunning"); err == nil {
+		return
+	}
+
 	//
 	// Cleanup based on delete token
 	//
@@ -2559,7 +2564,7 @@ func (m *janitor) cleanup() {
 		}
 
 		// Queue up the cleanup request.  The request wont' happen until bootstrap is ready.
-		if err := m.manager.requestServer.MakeAsyncRequest(client.OPCODE_DROP_INDEX, fmt.Sprintf("%v", command.DefnId), nil); err != nil {
+		if err := m.manager.requestServer.MakeRequest(client.OPCODE_DROP_INDEX, fmt.Sprintf("%v", command.DefnId), nil); err != nil {
 			retryList[entry] = command
 			logging.Warnf("janitor: Failed to drop index upon cleanup.  Skp command %v.  Internal Error = %v.", entry, err)
 		} else {
@@ -2605,7 +2610,9 @@ func (m *janitor) cleanup() {
 				msg := &dropInstance{Defn: idxDefn, Cleanup: true}
 				if buf, err := json.Marshal(&msg); err == nil {
 
-					if err := m.manager.requestServer.MakeAsyncRequest(client.OPCODE_DROP_OR_PRUNE_INSTANCE, fmt.Sprintf("%v", idxDefn.DefnId), buf); err != nil {
+					if err := m.manager.requestServer.MakeRequest(client.OPCODE_DROP_OR_PRUNE_INSTANCE_DDL,
+						fmt.Sprintf("%v", idxDefn.DefnId), buf); err != nil {
+
 						logging.Warnf("janitor: Failed to drop instance upon cleanup.  Skip instance (%v, %v, %v).  Internal Error = %v.",
 							defn.Bucket, defn.Name, inst.InstId, err)
 					} else {
