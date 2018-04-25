@@ -542,12 +542,14 @@ func (is IndexerStats) GetStats(getPartition bool, skipEmpty bool) common.Statis
 			s.int64Stats(func(ss *IndexStats) int64 {
 				return ss.numDocsProcessed.Value()
 			}))
+		// partition stats
 		addStat("num_requests",
-			s.int64Stats(func(ss *IndexStats) int64 {
+			s.partnInt64Stats(func(ss *IndexStats) int64 {
 				return ss.numRequests.Value()
 			}))
+		// partition stats
 		addStat("num_completed_requests",
-			s.int64Stats(func(ss *IndexStats) int64 {
+			s.partnInt64Stats(func(ss *IndexStats) int64 {
 				return ss.numCompletedRequests.Value()
 			}))
 		addStat("num_rows_returned",

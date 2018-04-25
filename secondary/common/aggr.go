@@ -92,13 +92,17 @@ func NewAggrFunc(typ AggrFuncType, val interface{}, distinct bool, n1qlValue boo
 }
 
 type AggrFuncSum struct {
-	typ      AggrFuncType
-	val      float64
-	validVal bool
-	distinct bool
-	lastVal  float64
+	typ AggrFuncType
 
+	fval     float64
+	fLastVal float64
+	ival     int64
+	iLastVal int64
+
+	validVal  bool
+	distinct  bool
 	n1qlValue bool
+	isInt64   bool
 }
 
 func (a AggrFuncSum) Type() AggrFuncType {
@@ -109,7 +113,12 @@ func (a AggrFuncSum) Value() interface{} {
 	if !a.validVal {
 		return nil
 	}
-	return a.val
+
+	if a.isInt64 {
+		return a.ival
+	} else {
+		return a.fval
+	}
 }
 
 func (a AggrFuncSum) Distinct() bool {
@@ -133,21 +142,53 @@ func (a *AggrFuncSum) AddDelta(delta interface{}) {
 
 	case float64:
 		a.validVal = true
-		if a.distinct {
-			if !a.checkDistinct(v) {
-				return
+
+		if a.isInt64 {
+			if a.distinct {
+				if !a.checkDistinctFloat(v) {
+					return
+				}
 			}
+			a.fval = float64(a.ival) + v
+		} else {
+			if a.distinct {
+				if !a.checkDistinctFloat(v) {
+					return
+				}
+			}
+			a.fval += v
 		}
-		a.val += v
+		a.isInt64 = false
 
 	case int64:
-		a.validVal = true
-		if a.distinct {
-			if !a.checkDistinct(float64(v)) {
-				return
+
+		if !a.isInt64 && a.validVal {
+			a.validVal = true
+			if a.distinct {
+				if !a.checkDistinctInt(v) {
+					return
+				}
+			}
+			a.fval += float64(v)
+		} else {
+			a.validVal = true
+			if a.distinct {
+				if !a.checkDistinctInt(v) {
+					return
+				}
+			}
+			temp := a.ival + v
+
+			//handle overflow (https://blog.regehr.org/archives/1139)
+			if (a.ival >= 0 && v >= 0 && temp < 0) ||
+				(a.ival < 0 && v < 0 && temp >= 0) {
+				a.fval = float64(a.ival) + float64(v)
+				a.isInt64 = false
+			} else {
+				a.ival = temp
+				a.isInt64 = true
 			}
 		}
-		a.val += float64(v) // TODO: Do not convert. Support SUM for both int64 and float64
 
 	case nil, bool, []interface{}, map[string]interface{}, string:
 		//ignored
@@ -161,19 +202,34 @@ func (a *AggrFuncSum) AddDeltaRaw(delta []byte) {
 	//not implemented
 }
 
-func (a *AggrFuncSum) checkDistinct(newVal float64) bool {
+func (a *AggrFuncSum) checkDistinctFloat(newVal float64) bool {
 
-	if a.lastVal == newVal {
+	if a.fLastVal == newVal {
 		return false
 	}
 
-	a.lastVal = newVal
+	a.fLastVal = newVal
+	return true
+
+}
+
+func (a *AggrFuncSum) checkDistinctInt(newVal int64) bool {
+
+	if a.iLastVal == newVal {
+		return false
+	}
+
+	a.iLastVal = newVal
 	return true
 
 }
 
 func (a AggrFuncSum) String() string {
-	return fmt.Sprintf("Type %v Value %v Distinct %v LastVal %v", a.typ, a.val, a.distinct, a.lastVal)
+	if a.isInt64 {
+		return fmt.Sprintf("Type %v Value %v Distinct %v LastVal %v", a.typ, a.ival, a.distinct, a.iLastVal)
+	} else {
+		return fmt.Sprintf("Type %v Value %v Distinct %v LastVal %v", a.typ, a.fval, a.distinct, a.fLastVal)
+	}
 }
 
 type AggrFuncCount struct {
