@@ -58,9 +58,10 @@ type plasmaSlice struct {
 
 	readers chan *plasma.Reader
 
-	idxDefn   common.IndexDefn
-	idxDefnId common.IndexDefnId
-	idxInstId common.IndexInstId
+	idxDefn    common.IndexDefn
+	idxDefnId  common.IndexDefnId
+	idxInstId  common.IndexInstId
+	idxPartnId common.PartitionId
 
 	status        SliceStatus
 	isActive      bool
@@ -100,7 +101,8 @@ type plasmaSlice struct {
 }
 
 func newPlasmaSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
-	idxInstId common.IndexInstId, isPrimary bool,
+	idxInstId common.IndexInstId, partitionId common.PartitionId,
+	isPrimary bool, isPartitioned bool,
 	sysconf common.Config, idxStats *IndexStats) (*plasmaSlice, error) {
 
 	slice := &plasmaSlice{}
@@ -122,6 +124,7 @@ func newPlasmaSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	slice.path = path
 	slice.idxInstId = idxInstId
 	slice.idxDefnId = idxDefn.DefnId
+	slice.idxPartnId = partitionId
 	slice.idxDefn = idxDefn
 	slice.id = sliceId
 	slice.numWriters = sysconf["numSliceWriters"].Int()
@@ -162,8 +165,8 @@ func newPlasmaSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	if err := slice.initStores(); err != nil {
 		// Index is unusable. Remove the data files and reinit
 		if plasma.IsFatalError(err) {
-			logging.Errorf("plasmaSlice:NewplasmaSlice Id %v IndexInstId %v "+
-				"fatal error occured: %v", sliceId, idxInstId, err)
+			logging.Errorf("plasmaSlice:NewplasmaSlice Id %v IndexInstId %v PartitionId %v "+
+				"fatal error occured: %v", sliceId, idxInstId, partitionId, err)
 			err = errStorageCorrupted
 		}
 
@@ -176,8 +179,8 @@ func newPlasmaSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 		return nil, err
 	}
 
-	logging.Infof("plasmaSlice:NewplasmaSlice Created New Slice Id %v IndexInstId %v "+
-		"WriterThreads %v", sliceId, idxInstId, slice.numWriters)
+	logging.Infof("plasmaSlice:NewplasmaSlice Created New Slice Id %v IndexInstId %v partitionId %v "+
+		"WriterThreads %v", sliceId, idxInstId, partitionId, slice.numWriters)
 
 	for i := 0; i < slice.numWriters; i++ {
 		slice.stopCh[i] = make(DoneChannel)
@@ -234,7 +237,7 @@ func (slice *plasmaSlice) initStores() error {
 	mCfg.MaxPageLSSSegments = slice.sysconf["plasma.mainIndex.maxLSSPageSegments"].Int()
 	mCfg.LSSCleanerThreshold = slice.sysconf["plasma.mainIndex.LSSFragmentation"].Int()
 	mCfg.LSSCleanerMaxThreshold = slice.sysconf["plasma.mainIndex.maxLSSFragmentation"].Int()
-	mCfg.LogPrefix = fmt.Sprintf("%s/%s/Mainstore#%d ", slice.idxDefn.Bucket, slice.idxDefn.Name, slice.idxInstId)
+	mCfg.LogPrefix = fmt.Sprintf("%s/%s/Mainstore#%d:%d ", slice.idxDefn.Bucket, slice.idxDefn.Name, slice.idxInstId, slice.idxPartnId)
 
 	bCfg.MaxDeltaChainLen = slice.sysconf["plasma.backIndex.maxNumPageDeltas"].Int()
 	bCfg.MaxPageItems = slice.sysconf["plasma.backIndex.pageSplitThreshold"].Int()
@@ -242,7 +245,7 @@ func (slice *plasmaSlice) initStores() error {
 	bCfg.MaxPageLSSSegments = slice.sysconf["plasma.backIndex.maxLSSPageSegments"].Int()
 	bCfg.LSSCleanerThreshold = slice.sysconf["plasma.backIndex.LSSFragmentation"].Int()
 	bCfg.LSSCleanerMaxThreshold = slice.sysconf["plasma.backIndex.maxLSSFragmentation"].Int()
-	bCfg.LogPrefix = fmt.Sprintf("%s/%s/Backstore#%d ", slice.idxDefn.Bucket, slice.idxDefn.Name, slice.idxInstId)
+	bCfg.LogPrefix = fmt.Sprintf("%s/%s/Backstore#%d:%d ", slice.idxDefn.Bucket, slice.idxDefn.Name, slice.idxInstId, slice.idxPartnId)
 
 	if slice.hasPersistence {
 		mCfg.File = filepath.Join(slice.path, "mainIndex")
@@ -308,14 +311,14 @@ func (slice *plasmaSlice) initStores() error {
 	}
 
 	if !slice.newBorn {
-		logging.Infof("plasmaSlice::doRecovery SliceId %v IndexInstId %v Recovering from recovery point ..",
-			slice.id, slice.idxInstId)
+		logging.Infof("plasmaSlice::doRecovery SliceId %v IndexInstId %v PartitionId %v Recovering from recovery point ..",
+			slice.id, slice.idxInstId, slice.idxPartnId)
 		err = slice.doRecovery()
 		dur := time.Since(t0)
 		if err == nil {
 			slice.idxStats.diskSnapLoadDuration.Set(int64(dur / time.Millisecond))
-			logging.Infof("plasmaSlice::doRecovery SliceId %v IndexInstId %v Warmup took %v",
-				slice.id, slice.idxInstId, dur)
+			logging.Infof("plasmaSlice::doRecovery SliceId %v IndexInstId %v PartitionId %v Warmup took %v",
+				slice.id, slice.idxInstId, slice.idxPartnId, dur)
 		}
 	}
 
@@ -357,8 +360,8 @@ func (mdb *plasmaSlice) doRecovery() error {
 	}
 
 	if len(snaps) == 0 {
-		logging.Infof("plasmaSlice::doRecovery SliceId %v IndexInstId %v Unable to find recovery point. Resetting store ..",
-			mdb.id, mdb.idxInstId)
+		logging.Infof("plasmaSlice::doRecovery SliceId %v IndexInstId %v PartitionId %v Unable to find recovery point. Resetting store ..",
+			mdb.id, mdb.idxInstId, mdb.idxPartnId)
 		mdb.resetStores()
 	} else {
 		err := mdb.restore(snaps[0])
@@ -442,8 +445,8 @@ loop:
 				mdb.totalFlushTime += elapsed
 
 			default:
-				logging.Errorf("plasmaSlice::handleCommandsWorker \n\tSliceId %v IndexInstId %v Received "+
-					"Unknown Command %v", mdb.id, mdb.idxInstId, logging.TagUD(icmd))
+				logging.Errorf("plasmaSlice::handleCommandsWorker \n\tSliceId %v IndexInstId %v PartitionId %v Received "+
+					"Unknown Command %v", mdb.id, mdb.idxInstId, mdb.idxPartnId, logging.TagUD(icmd))
 			}
 
 			mdb.idxStats.numItemsFlushed.Add(int64(nmut))
@@ -519,8 +522,8 @@ func (mdb *plasmaSlice) insertSecIndex(key []byte, docid []byte, workerId int, i
 	entry, err := NewSecondaryIndexEntry(key, docid, mdb.idxDefn.IsArrayIndex,
 		1, mdb.idxDefn.Desc, mdb.encodeBuf[workerId], meta)
 	if err != nil {
-		logging.Errorf("plasmaSlice::insertSecIndex Slice Id %v IndexInstId %v "+
-			"Skipping docid:%s (%v)", mdb.Id, mdb.idxInstId, logging.TagStrUD(docid), err)
+		logging.Errorf("plasmaSlice::insertSecIndex Slice Id %v IndexInstId %v PartitionId %v "+
+			"Skipping docid:%s (%v)", mdb.Id, mdb.idxInstId, mdb.idxPartnId, logging.TagStrUD(docid), err)
 		return ndel
 	}
 
@@ -595,9 +598,9 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 		mdb.arrayBuf1[workerId] = resizeArrayBuf(mdb.arrayBuf1[workerId], newbufLen)
 
 		if err != nil {
-			logging.Errorf("plasmaSlice::insertSecArrayIndex SliceId %v IndexInstId %v Error in retrieving "+
+			logging.Errorf("plasmaSlice::insertSecArrayIndex SliceId %v IndexInstId %v PartitionId %v Error in retrieving "+
 				"compostite old secondary keys. Skipping docid:%s Error: %v",
-				mdb.id, mdb.idxInstId, logging.TagStrUD(docid), err)
+				mdb.id, mdb.idxInstId, mdb.idxPartnId, logging.TagStrUD(docid), err)
 			mdb.deleteSecArrayIndex(docid, workerId)
 			return 0
 		}
@@ -609,9 +612,9 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 			mdb.arrayBuf2[workerId], mdb.isArrayDistinct, !allowLargeKeys)
 		mdb.arrayBuf2[workerId] = resizeArrayBuf(mdb.arrayBuf2[workerId], newbufLen)
 		if err != nil {
-			logging.Errorf("plasmaSlice::insertSecArrayIndex SliceId %v IndexInstId %v Error in creating "+
+			logging.Errorf("plasmaSlice::insertSecArrayIndex SliceId %v IndexInstId %v PartitionId %v Error in creating "+
 				"compostite new secondary keys. Skipping docid:%s Error: %v",
-				mdb.id, mdb.idxInstId, logging.TagStrUD(docid), err)
+				mdb.id, mdb.idxInstId, mdb.idxPartnId, logging.TagStrUD(docid), err)
 			mdb.deleteSecArrayIndex(docid, workerId)
 			return 0
 		}
@@ -664,9 +667,9 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 			if keyToBeDeleted, err = GetIndexEntryBytes3(item, docid, false, false,
 				oldKeyCount[i], mdb.idxDefn.Desc, mdb.encodeBuf[workerId], nil); err != nil {
 				rollbackDeletes(i - 1)
-				logging.Errorf("plasmaSlice::insertSecArrayIndex SliceId %v IndexInstId %v Error forming entry "+
+				logging.Errorf("plasmaSlice::insertSecArrayIndex SliceId %v IndexInstId %v PartitionId %v Error forming entry "+
 					"to be added to main index. Skipping docid:%s Error: %v",
-					mdb.id, mdb.idxInstId, logging.TagStrUD(docid), err)
+					mdb.id, mdb.idxInstId, mdb.idxPartnId, logging.TagStrUD(docid), err)
 				mdb.deleteSecArrayIndex(docid, workerId)
 				return 0
 			}
@@ -687,9 +690,9 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 				newKeyCount[i], mdb.idxDefn.Desc, mdb.encodeBuf[workerId], meta); err != nil {
 				rollbackDeletes(len(indexEntriesToBeDeleted) - 1)
 				rollbackAdds(i - 1)
-				logging.Errorf("plasmaSlice::insertSecArrayIndex SliceId %v IndexInstId %v Error forming entry "+
+				logging.Errorf("plasmaSlice::insertSecArrayIndex SliceId %v IndexInstId %v PartitionId %v Error forming entry "+
 					"to be added to main index. Skipping docid:%s Error: %v",
-					mdb.id, mdb.idxInstId, logging.TagStrUD(docid), err)
+					mdb.id, mdb.idxInstId, mdb.idxPartnId, logging.TagStrUD(docid), err)
 				mdb.deleteSecArrayIndex(docid, workerId)
 				return 0
 			}
@@ -838,8 +841,8 @@ func (mdb *plasmaSlice) deleteSecArrayIndex(docid []byte, workerId int) (nmut in
 	if err != nil {
 		// TODO: Do not crash for non-storage operation. Force delete the old entries
 		common.CrashOnError(err)
-		logging.Errorf("plasmaSlice::deleteSecArrayIndex \n\tSliceId %v IndexInstId %v Error in retrieving "+
-			"compostite old secondary keys %v", mdb.id, mdb.idxInstId, err)
+		logging.Errorf("plasmaSlice::deleteSecArrayIndex \n\tSliceId %v IndexInstId %v PartitionId %v Error in retrieving "+
+			"compostite old secondary keys %v", mdb.id, mdb.idxInstId, mdb.idxPartnId, err)
 		return
 	}
 
@@ -856,8 +859,8 @@ func (mdb *plasmaSlice) deleteSecArrayIndex(docid []byte, workerId int) (nmut in
 		if keyToBeDeleted, err = GetIndexEntryBytes3(item, docid, false, false, keyCount[i],
 			mdb.idxDefn.Desc, tmpBuf, nil); err != nil {
 			common.CrashOnError(err)
-			logging.Errorf("plasmaSlice::deleteSecArrayIndex \n\tSliceId %v IndexInstId %v Error from GetIndexEntryBytes2 "+
-				"for entry to be deleted from main index %v", mdb.id, mdb.idxInstId, err)
+			logging.Errorf("plasmaSlice::deleteSecArrayIndex \n\tSliceId %v IndexInstId %v PartitionId %v Error from GetIndexEntryBytes2 "+
+				"for entry to be deleted from main index %v", mdb.id, mdb.idxInstId, mdb.idxPartnId, err)
 			return
 		}
 		t0 := time.Now()
@@ -904,11 +907,12 @@ type plasmaSnapshotInfo struct {
 }
 
 type plasmaSnapshot struct {
-	slice     *plasmaSlice
-	idxDefnId common.IndexDefnId
-	idxInstId common.IndexInstId
-	ts        *common.TsVbuuid
-	info      SnapshotInfo
+	slice      *plasmaSlice
+	idxDefnId  common.IndexDefnId
+	idxInstId  common.IndexInstId
+	idxPartnId common.PartitionId
+	ts         *common.TsVbuuid
+	info       SnapshotInfo
 
 	MainSnap *plasma.Snapshot
 	BackSnap *plasma.Snapshot
@@ -925,12 +929,13 @@ func (mdb *plasmaSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 	snapInfo := info.(*plasmaSnapshotInfo)
 
 	s := &plasmaSnapshot{slice: mdb,
-		idxDefnId: mdb.idxDefnId,
-		idxInstId: mdb.idxInstId,
-		info:      info,
-		ts:        snapInfo.Timestamp(),
-		committed: info.IsCommitted(),
-		MainSnap:  mdb.mainstore.NewSnapshot(),
+		idxDefnId:  mdb.idxDefnId,
+		idxInstId:  mdb.idxInstId,
+		idxPartnId: mdb.idxPartnId,
+		info:       info,
+		ts:         snapInfo.Timestamp(),
+		committed:  info.IsCommitted(),
+		MainSnap:   mdb.mainstore.NewSnapshot(),
 	}
 
 	if !mdb.isPrimary {
@@ -945,8 +950,8 @@ func (mdb *plasmaSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 	}
 
 	if info.IsCommitted() {
-		logging.Infof("plasmaSlice::OpenSnapshot SliceId %v IndexInstId %v Creating New "+
-			"Snapshot %v", mdb.id, mdb.idxInstId, snapInfo)
+		logging.Infof("plasmaSlice::OpenSnapshot SliceId %v IndexInstId %v PartitionId %v Creating New "+
+			"Snapshot %v", mdb.id, mdb.idxInstId, mdb.idxPartnId, snapInfo)
 	}
 	mdb.setCommittedCount()
 
@@ -965,7 +970,7 @@ func (mdb *plasmaSlice) doPersistSnapshot(s *plasmaSnapshot) {
 		go func() {
 			defer atomic.StoreInt32(&mdb.isPersistorActive, 0)
 
-			logging.Infof("PlasmaSlice Slice Id %v, IndexInstId %v Creating recovery point ...", mdb.id, mdb.idxInstId)
+			logging.Infof("PlasmaSlice Slice Id %v, IndexInstId %v, PartitionId %v Creating recovery point ...", mdb.id, mdb.idxInstId, mdb.idxPartnId)
 			t0 := time.Now()
 
 			meta, err := json.Marshal(s.ts)
@@ -986,8 +991,8 @@ func (mdb *plasmaSlice) doPersistSnapshot(s *plasmaSnapshot) {
 			wg.Wait()
 
 			dur := time.Since(t0)
-			logging.Infof("PlasmaSlice Slice Id %v, IndexInstId %v Created recovery point (took %v)",
-				mdb.id, mdb.idxInstId, dur)
+			logging.Infof("PlasmaSlice Slice Id %v, IndexInstId %v, PartitionId %v Created recovery point (took %v)",
+				mdb.id, mdb.idxInstId, mdb.idxPartnId, dur)
 			mdb.idxStats.diskSnapStoreDuration.Set(int64(dur / time.Millisecond))
 
 			// Cleanup old recovery points
@@ -1008,8 +1013,8 @@ func (mdb *plasmaSlice) doPersistSnapshot(s *plasmaSnapshot) {
 			}
 		}()
 	} else {
-		logging.Infof("PlasmaSlice Slice Id %v, IndexInstId %v Skipping ondisk"+
-			" snapshot. A snapshot writer is in progress.", mdb.id, mdb.idxInstId)
+		logging.Infof("PlasmaSlice Slice Id %v, IndexInstId %v, PartitionId %v Skipping ondisk"+
+			" snapshot. A snapshot writer is in progress.", mdb.id, mdb.idxInstId, mdb.idxPartnId)
 	}
 }
 
@@ -1249,8 +1254,8 @@ func (mdb *plasmaSlice) Close() {
 	mdb.lock.Lock()
 	defer mdb.lock.Unlock()
 
-	logging.Infof("plasmaSlice::Close Closing Slice Id %v, IndexInstId %v, "+
-		"IndexDefnId %v", mdb.idxInstId, mdb.idxDefnId, mdb.id)
+	logging.Infof("plasmaSlice::Close Closing Slice Id %v, IndexInstId %v, PartitionId %v "+
+		"IndexDefnId %v", mdb.idxInstId, mdb.idxDefnId, mdb.idxPartnId, mdb.id)
 
 	//signal shutdown for command handler routines
 	for i := 0; i < mdb.numWriters; i++ {
@@ -1272,8 +1277,8 @@ func (mdb *plasmaSlice) Destroy() {
 	defer mdb.lock.Unlock()
 
 	if mdb.refCount > 0 {
-		logging.Infof("plasmaSlice::Destroy Softdeleted Slice Id %v, IndexInstId %v, "+
-			"IndexDefnId %v", mdb.id, mdb.idxInstId, mdb.idxDefnId)
+		logging.Infof("plasmaSlice::Destroy Softdeleted Slice Id %v, IndexInstId %v, PartitionId %v "+
+			"IndexDefnId %v", mdb.id, mdb.idxInstId, mdb.idxPartnId, mdb.idxDefnId)
 		mdb.isSoftDeleted = true
 	} else {
 		tryDeleteplasmaSlice(mdb)
@@ -1438,6 +1443,7 @@ func (mdb *plasmaSlice) String() string {
 	str := fmt.Sprintf("SliceId: %v ", mdb.id)
 	str += fmt.Sprintf("File: %v ", mdb.path)
 	str += fmt.Sprintf("Index: %v ", mdb.idxInstId)
+	str += fmt.Sprintf("Partition: %v ", mdb.idxPartnId)
 
 	return str
 
@@ -1447,7 +1453,7 @@ func tryDeleteplasmaSlice(mdb *plasmaSlice) {
 	//cleanup the disk directory
 	if err := os.RemoveAll(mdb.path); err != nil {
 		logging.Errorf("plasmaSlice::Destroy Error Cleaning Up Slice Id %v, "+
-			"IndexInstId %v, IndexDefnId %v. Error %v", mdb.id, mdb.idxInstId, mdb.idxDefnId, err)
+			"IndexInstId %v, PartitionId %v, IndexDefnId %v. Error %v", mdb.id, mdb.idxInstId, mdb.idxPartnId, mdb.idxDefnId, err)
 	}
 }
 
@@ -1468,8 +1474,8 @@ func (mdb *plasmaSlice) getCmdsCount() int {
 func (mdb *plasmaSlice) logWriterStat() {
 	count := atomic.AddUint64(&mdb.flushedCount, 1)
 	if (count%10000 == 0) || count == 1 {
-		logging.Debugf("logWriterStat:: %v "+
-			"FlushedCount %v QueuedCount %v", mdb.idxInstId,
+		logging.Debugf("logWriterStat:: %v:%v "+
+			"FlushedCount %v QueuedCount %v", mdb.idxInstId, mdb.idxPartnId,
 			count, mdb.getCmdsCount())
 	}
 
@@ -1553,6 +1559,7 @@ func (s *plasmaSnapshot) Destroy() {
 func (s *plasmaSnapshot) String() string {
 
 	str := fmt.Sprintf("Index: %v ", s.idxInstId)
+	str += fmt.Sprintf("PartitionId: %v ", s.idxPartnId)
 	str += fmt.Sprintf("SliceId: %v ", s.slice.Id())
 	str += fmt.Sprintf("TS: %v ", s.ts)
 	return str

@@ -40,7 +40,8 @@ var (
 //Delete can be called concurrently.
 //Returns error in case slice cannot be initialized.
 func NewForestDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
-	idxInstId common.IndexInstId, isPrimary bool,
+	idxInstId common.IndexInstId, partitionId common.PartitionId,
+	isPrimary bool, isPartitioned bool,
 	sysconf common.Config, idxStats *IndexStats) (*fdbSlice, error) {
 
 	info, err := os.Stat(path)
