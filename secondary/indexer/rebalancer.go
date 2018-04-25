@@ -443,7 +443,7 @@ loop:
 			break loop
 		default:
 
-			stats, err := getLocalStats(r.localaddr)
+			stats, err := getLocalStats(r.localaddr, true)
 			if err != nil {
 				l.Errorf("Rebalancer::dropIndexWhenIdle Error Fetching Local Stats %v %v", r.localaddr, err)
 				break
@@ -455,20 +455,26 @@ loop:
 				break
 			}
 
-			sname := fmt.Sprintf("%s:%s:", tt.IndexInst.Defn.Bucket, tt.IndexInst.DisplayName())
-			sname_completed := sname + "num_completed_requests"
-			sname_requests := sname + "num_requests"
+			pending := float64(0)
+			for _, partitionId := range tt.IndexInst.Defn.Partitions {
 
-			var num_completed, num_requests float64
-			if _, ok := statsMap[sname_completed]; ok {
-				num_completed = statsMap[sname_completed].(float64)
-				num_requests = statsMap[sname_requests].(float64)
-			} else {
-				l.Infof("Rebalancer::dropIndexWhenIdle Missing Stats %v %v. Retrying...", sname_completed, sname_requests)
-				break
+				partnName := c.FormatIndexPartnDisplayName(tt.IndexInst.Defn.Name, tt.IndexInst.ReplicaId, int(partitionId), true)
+
+				sname := fmt.Sprintf("%s:%s:", tt.IndexInst.Defn.Bucket, partnName)
+				sname_completed := sname + "num_completed_requests"
+				sname_requests := sname + "num_requests"
+
+				var num_completed, num_requests float64
+				if _, ok := statsMap[sname_completed]; ok {
+					num_completed = statsMap[sname_completed].(float64)
+					num_requests = statsMap[sname_requests].(float64)
+				} else {
+					l.Infof("Rebalancer::dropIndexWhenIdle Missing Stats %v %v. Retrying...", sname_completed, sname_requests)
+					break
+				}
+
+				pending += num_requests - num_completed
 			}
-
-			pending := num_requests - num_completed
 
 			if pending > 0 {
 				l.Infof("Rebalancer::dropIndexWhenIdle Index %v:%v Pending Scan %v", tt.IndexInst.Defn.Bucket, tt.IndexInst.Defn.Name, pending)
@@ -757,7 +763,7 @@ loop:
 			break loop
 		default:
 
-			stats, err := getLocalStats(r.localaddr)
+			stats, err := getLocalStats(r.localaddr, false)
 			if err != nil {
 				l.Errorf("Rebalancer::waitForIndexBuild Error Fetching Local Stats %v %v", r.localaddr, err)
 				break
@@ -1223,9 +1229,13 @@ func (r *Rebalancer) getBuildProgressFromStatus(status *manager.IndexStatusRespo
 //
 // This function gets the indexer stats for a specific indexer host.
 //
-func getLocalStats(addr string) (*c.Statistics, error) {
+func getLocalStats(addr string, partitioned bool) (*c.Statistics, error) {
 
-	resp, err := getWithAuth(addr + "/stats?async=true")
+	queryStr := "/stats?async=true"
+	if partitioned {
+		queryStr += "&partition=true"
+	}
+	resp, err := getWithAuth(addr + queryStr)
 	if err != nil {
 		return nil, err
 	}
