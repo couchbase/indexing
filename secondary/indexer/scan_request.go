@@ -200,11 +200,12 @@ type GroupAggr struct {
 	AllowPartialAggr    bool // Partial aggregates are allowed
 	OnePerPrimaryKey    bool // Leading Key is ALL & equality span consider one per docid
 
-	IsLeadingGroup bool // Group by key(s) are leading subset
-	IsPrimary      bool
-	NeedDecode     bool // Need decode values for SUM or N1QLExpr evaluation
-	NeedExplode    bool // If only constant expression
-	HasExpr        bool // Has a non constant expression
+	IsLeadingGroup     bool // Group by key(s) are leading subset
+	IsPrimary          bool
+	NeedDecode         bool // Need decode values for SUM or N1QLExpr evaluation
+	NeedExplode        bool // If only constant expression
+	HasExpr            bool // Has a non constant expression
+	FirstValidAggrOnly bool // Scan storage entries upto first valid value - MB-27861
 
 	//For caching values
 	cv          *value.ScopeValue
@@ -1480,7 +1481,84 @@ outerloop:
 		}
 	}
 
+	r.GroupAggr.FirstValidAggrOnly = r.processFirstValidAggrOnly()
 	return nil
+}
+
+// Scan needs to process only first valid aggregate value
+// if below rules are satisfied. It is an optimization added for MB-27861
+func (r *ScanRequest) processFirstValidAggrOnly() bool {
+
+	if len(r.GroupAggr.Group) != 0 {
+		return false
+	}
+
+	if len(r.GroupAggr.Aggrs) != 1 {
+		return false
+	}
+
+	aggr := r.GroupAggr.Aggrs[0]
+
+	if aggr.AggrFunc != common.AGG_MIN &&
+		aggr.AggrFunc != common.AGG_MAX &&
+		aggr.AggrFunc != common.AGG_COUNT {
+		return false
+	}
+
+	checkEqualityFilters := func(keyPos int32) bool {
+		if keyPos < 0 {
+			return false
+		}
+		if keyPos == 0 {
+			return true
+		}
+		return r.hasAllEqualFiltersUpto(int(keyPos) - 1)
+	}
+
+	isAscKey := func(keyPos int32) bool {
+		if !r.IndexInst.Defn.HasDescending() {
+			return true
+		}
+		if r.IndexInst.Defn.Desc[keyPos] {
+			return false
+		}
+		return true
+	}
+
+	if aggr.AggrFunc == common.AGG_MIN {
+		if !checkEqualityFilters(aggr.KeyPos) {
+			return false
+		}
+
+		return isAscKey(aggr.KeyPos)
+	}
+
+	if aggr.AggrFunc == common.AGG_MAX {
+		if !checkEqualityFilters(aggr.KeyPos) {
+			return false
+		}
+
+		return !isAscKey(aggr.KeyPos)
+	}
+
+	// Rule applies for COUNT(DISTINCT const_expr)
+	if aggr.AggrFunc == common.AGG_COUNT {
+		if aggr.ExprValue != nil && aggr.Distinct {
+			return true
+		}
+		return false
+	}
+
+	return false
+}
+
+func (r *ScanRequest) hasAllEqualFiltersUpto(keyPos int) bool {
+	for i := 0; i <= keyPos; i++ {
+		if !r.hasAllEqualFilters(i) {
+			return false
+		}
+	}
+	return true
 }
 
 //Returns true if all filters for the given keyPos(index field) are equal

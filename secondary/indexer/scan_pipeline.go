@@ -37,7 +37,8 @@ type ScanPipeline struct {
 	req    *ScanRequest
 	config c.Config
 
-	aggrRes *aggrResult
+	aggrRes         *aggrResult
+	stopAggregation bool
 
 	rowsReturned  uint64
 	bytesRead     uint64
@@ -301,7 +302,7 @@ func (s *IndexScanSource) Routine() error {
 				if wrErr != nil {
 					return wrErr
 				}
-				if s.p.rowsReturned == uint64(r.Limit) {
+				if s.p.rowsReturned == uint64(r.Limit) || s.p.stopAggregation {
 					return ErrLimitReached
 				}
 			} else {
@@ -346,7 +347,6 @@ loop:
 	s.p.cacheHitRatio = cachedEntry.CacheHitRatio()
 
 	if r.GroupAggr != nil && err == nil {
-
 		if buf == nil {
 			buf = secKeyBufPool.Get()
 			r.keyBufList = append(r.keyBufList, buf)
@@ -849,8 +849,8 @@ func computeGroupAggr(compositekeys [][]byte, decodedkeys value.Values, count in
 		}
 	}
 
-	aggrRes.AddNewGroup(groupAggr.groups, groupAggr.aggrs, cachedEntry.Valid())
-	return nil
+	err = aggrRes.AddNewGroup(groupAggr, p, cachedEntry.Valid())
+	return err
 
 }
 
@@ -892,7 +892,6 @@ func computeAggrVal(groupAggr *GroupAggr, ak *Aggregate,
 		} else {
 			a.raw = compositekeys[ak.KeyPos]
 		}
-
 	} else {
 		//process expr
 		var scalar value.Value
@@ -914,7 +913,6 @@ func computeAggrVal(groupAggr *GroupAggr, ak *Aggregate,
 	a.distinct = ak.Distinct
 	a.count = count
 	return nil
-
 }
 
 func evaluateN1QLExpresssion(groupAggr *GroupAggr, expr expression.Expression,
@@ -946,35 +944,55 @@ func evaluateN1QLExpresssion(groupAggr *GroupAggr, expr expression.Expression,
 	return scalar, nil
 }
 
-func (ar *aggrResult) AddNewGroup(groups []*groupKey, aggrs []*aggrVal, cacheValid bool) error {
+func checkFirstValidRow(row *aggrRow, groupAggr *GroupAggr, p *ScanPipeline) {
+	if groupAggr.FirstValidAggrOnly {
+		agg := row.aggrs[0]
+		if agg.typ == c.AGG_MIN || agg.typ == c.AGG_MAX {
+			if agg.fn.IsValid() {
+				row.SetFlush(true)
+				p.stopAggregation = true
+			}
+		}
+		if agg.typ == c.AGG_COUNT {
+			if agg.fn.Value() == 1 {
+				row.SetFlush(true)
+				p.stopAggregation = true
+			}
+		}
+	}
+}
+
+func (ar *aggrResult) AddNewGroup(groupAggr *GroupAggr, p *ScanPipeline, cacheValid bool) error {
 
 	var err error
 
 	if cacheValid && len(ar.rows) == 1 {
-		err = ar.rows[0].AddAggregate(aggrs)
+		err = ar.rows[0].AddAggregate(groupAggr.aggrs)
 		if err != nil {
 			return err
 		}
+		checkFirstValidRow(ar.rows[0], groupAggr, p)
 		return nil
 	}
 
 	nomatch := true
 	for _, row := range ar.rows {
-		if row.CheckEqualGroup(groups) {
+		if row.CheckEqualGroup(groupAggr.groups) {
 			nomatch = false
-			err = row.AddAggregate(aggrs)
+			err = row.AddAggregate(groupAggr.aggrs)
 			if err != nil {
 				return err
 			}
+			checkFirstValidRow(ar.rows[0], groupAggr, p)
 			break
 		}
 	}
 
 	if nomatch {
-		newRow := &aggrRow{groups: make([]*groupKey, len(groups)),
-			aggrs: make([]*aggrVal, len(aggrs))}
+		newRow := &aggrRow{groups: make([]*groupKey, len(groupAggr.groups)),
+			aggrs: make([]*aggrVal, len(groupAggr.aggrs))}
 
-		for i, g := range groups {
+		for i, g := range groupAggr.groups {
 			if g.n1qlValue {
 				newRow.groups[i] = &groupKey{obj: g.obj, projectId: g.projectId, n1qlValue: true}
 			} else {
@@ -984,17 +1002,17 @@ func (ar *aggrResult) AddNewGroup(groups []*groupKey, aggrs []*aggrVal, cacheVal
 			}
 		}
 
-		newRow.AddAggregate(aggrs)
+		newRow.AddAggregate(groupAggr.aggrs)
 
 		//flush the first row
 		if len(ar.rows) >= ar.maxRows {
 			ar.rows[0].SetFlush(true)
 		}
 		ar.rows = append(ar.rows, newRow)
+		checkFirstValidRow(ar.rows[0], groupAggr, p)
 	}
 
 	return nil
-
 }
 
 func (a *aggrResult) SetMaxRows(n int) {
