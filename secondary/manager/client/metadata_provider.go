@@ -170,7 +170,7 @@ type watcherCallback func(string, c.IndexerId, c.IndexerId)
 
 var REQUEST_CHANNEL_COUNT = 1000
 
-var VALID_PARAM_NAMES = []string{"nodes", "defer_build", "retain_deleted_xattr", "immutable",
+var VALID_PARAM_NAMES = []string{"nodes", "defer_build", "retain_deleted_xattr",
 	"num_partition", "num_replica", "docKeySize", "secKeySize", "arrSize", "numDoc", "residentRatio"}
 
 ///////////////////////////////////////////////////////
@@ -1089,17 +1089,7 @@ func (o *MetadataProvider) PrepareIndexDefn(
 			}
 		}
 
-		if len(partitionKeys) == 0 {
-
-			partitionKeys, err, retry = o.getPartitionKeyParam(plan, secExprs)
-			if err != nil {
-				return nil, err, retry
-			}
-
-			if len(partitionKeys) != 0 {
-				partitionScheme = c.KEY
-			}
-
+		if len(partitionKeys) != 0 {
 			if clusterVersion < c.INDEXER_55_VERSION {
 				return nil,
 					errors.New("Fails to create index.  Partitioned index is enabled only after cluster is fully upgraded and there is no failed node."),
@@ -1540,20 +1530,6 @@ func (o *MetadataProvider) validatePartitionKeys(partitionScheme c.PartitionSche
 	}
 
 	return nil
-}
-
-func (o *MetadataProvider) getPartitionKeyParam(plan map[string]interface{}, secKeys []string) ([]string, error, bool) {
-
-	partitionKey, ok := plan["partition_key"].(string)
-	if ok {
-		var keys []string
-		for _, key := range strings.Split(partitionKey, ",") {
-			keys = append(keys, key)
-		}
-		return keys, nil, false
-	}
-
-	return nil, nil, false
 }
 
 func (o *MetadataProvider) getNumPartitionParam(scheme c.PartitionScheme, plan map[string]interface{}, version uint64) (int, error, bool) {
