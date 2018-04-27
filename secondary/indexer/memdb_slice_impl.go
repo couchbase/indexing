@@ -137,9 +137,10 @@ type memdbSlice struct {
 	// Each table is only operated by the writer owner
 	back []*nodetable.NodeTable
 
-	idxDefn   common.IndexDefn
-	idxDefnId common.IndexDefnId
-	idxInstId common.IndexInstId
+	idxDefn    common.IndexDefn
+	idxDefnId  common.IndexDefnId
+	idxInstId  common.IndexInstId
+	idxPartnId common.PartitionId
 
 	status        SliceStatus
 	isActive      bool
@@ -177,7 +178,8 @@ type memdbSlice struct {
 }
 
 func NewMemDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
-	idxInstId common.IndexInstId, isPrimary bool, hasPersistance bool,
+	idxInstId common.IndexInstId, partitionId common.PartitionId,
+	isPrimary bool, isPartitioned bool, hasPersistance bool,
 	sysconf common.Config, idxStats *IndexStats) (*memdbSlice, error) {
 
 	info, err := os.Stat(path)
@@ -200,6 +202,7 @@ func NewMemDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	slice.idxInstId = idxInstId
 	slice.idxDefnId = idxDefn.DefnId
 	slice.idxDefn = idxDefn
+	slice.idxPartnId = partitionId
 	slice.id = sliceId
 	slice.numWriters = sysconf["numSliceWriters"].Int()
 	slice.maxRollbacks = sysconf["settings.moi.recovery.max_rollbacks"].Int()
@@ -231,8 +234,8 @@ func NewMemDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 		return nil, err
 	}
 
-	logging.Infof("MemDBSlice:NewMemDBSlice Created New Slice Id %v IndexInstId %v "+
-		"WriterThreads %v Persistence %v", sliceId, idxInstId, slice.numWriters, slice.hasPersistence)
+	logging.Infof("MemDBSlice:NewMemDBSlice Created New Slice Id %v IndexInstId %v PartitionId %v "+
+		"WriterThreads %v Persistence %v", sliceId, idxInstId, partitionId, slice.numWriters, slice.hasPersistence)
 
 	for i := 0; i < slice.numWriters; i++ {
 		slice.stopCh[i] = make(DoneChannel)
@@ -366,8 +369,8 @@ loop:
 				mdb.totalFlushTime += elapsed
 
 			default:
-				logging.Errorf("MemDBSlice::handleCommandsWorker \n\tSliceId %v IndexInstId %v Received "+
-					"Unknown Command %v", mdb.id, mdb.idxInstId, logging.TagUD(icmd))
+				logging.Errorf("MemDBSlice::handleCommandsWorker \n\tSliceId %v IndexInstId %v PartitionId %v Received "+
+					"Unknown Command %v", mdb.id, mdb.idxInstId, mdb.idxPartnId, logging.TagUD(icmd))
 			}
 
 			mdb.idxStats.numItemsFlushed.Add(int64(nmut))
@@ -428,8 +431,8 @@ func (mdb *memdbSlice) insertSecIndex(key []byte, docid []byte, workerId int, me
 	entry, err := NewSecondaryIndexEntry(key, docid, mdb.idxDefn.IsArrayIndex,
 		1, mdb.idxDefn.Desc, mdb.encodeBuf[workerId], meta)
 	if err != nil {
-		logging.Errorf("MemDBSlice::insertSecIndex Slice Id %v IndexInstId %v "+
-			"Skipping docid:%s (%v)", mdb.Id, mdb.idxInstId, logging.TagStrUD(docid), err)
+		logging.Errorf("MemDBSlice::insertSecIndex Slice Id %v IndexInstId %v PartitionId %v "+
+			"Skipping docid:%s (%v)", mdb.Id, mdb.idxInstId, mdb.idxPartnId, logging.TagStrUD(docid), err)
 		return mdb.deleteSecIndex(docid, workerId)
 	}
 
@@ -525,8 +528,8 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 			entry, err := NewSecondaryIndexEntry2(item, docid, false,
 				oldKeyCount[i], nil, mdb.encodeBuf[workerId][:0], false, nil)
 			if err != nil {
-				logging.Errorf("MemDBSlice::insertSecArrayIndex Slice Id %v IndexInstId %v "+
-					"Skipping docid:%s (%v)", mdb.Id, mdb.idxInstId, logging.TagStrUD(docid), err)
+				logging.Errorf("MemDBSlice::insertSecArrayIndex Slice Id %v IndexInstId %v PartitionId %v "+
+					"Skipping docid:%s (%v)", mdb.Id, mdb.idxInstId, mdb.idxPartnId, logging.TagStrUD(docid), err)
 				return emptyList()
 			}
 			node := list.Remove(entry)
@@ -543,8 +546,8 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 			entry, err := NewSecondaryIndexEntry(key, docid, false,
 				newKeyCount[i], mdb.idxDefn.Desc, mdb.encodeBuf[workerId][:0], meta)
 			if err != nil {
-				logging.Errorf("MemDBSlice::insertSecArrayIndex Slice Id %v IndexInstId %v "+
-					"Skipping docid:%s (%v)", mdb.Id, mdb.idxInstId, logging.TagStrUD(docid), err)
+				logging.Errorf("MemDBSlice::insertSecArrayIndex Slice Id %v IndexInstId %v PartitionId %v "+
+					"Skipping docid:%s (%v)", mdb.Id, mdb.idxInstId, mdb.idxPartnId, logging.TagStrUD(docid), err)
 				return emptyList()
 			}
 			newNode := mdb.main[workerId].Put2(entry)
@@ -671,12 +674,13 @@ type memdbSnapshotInfo struct {
 }
 
 type memdbSnapshot struct {
-	slice     *memdbSlice
-	idxDefnId common.IndexDefnId
-	idxInstId common.IndexInstId
-	ts        *common.TsVbuuid
-	info      *memdbSnapshotInfo
-	committed bool
+	slice      *memdbSlice
+	idxDefnId  common.IndexDefnId
+	idxInstId  common.IndexInstId
+	idxPartnId common.PartitionId
+	ts         *common.TsVbuuid
+	info       *memdbSnapshotInfo
+	committed  bool
 
 	refCount int32
 }
@@ -689,11 +693,12 @@ func (mdb *memdbSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 	snapInfo := info.(*memdbSnapshotInfo)
 
 	s := &memdbSnapshot{slice: mdb,
-		idxDefnId: mdb.idxDefnId,
-		idxInstId: mdb.idxInstId,
-		info:      info.(*memdbSnapshotInfo),
-		ts:        snapInfo.Timestamp(),
-		committed: info.IsCommitted(),
+		idxDefnId:  mdb.idxDefnId,
+		idxInstId:  mdb.idxInstId,
+		idxPartnId: mdb.idxPartnId,
+		info:       info.(*memdbSnapshotInfo),
+		ts:         snapInfo.Timestamp(),
+		committed:  info.IsCommitted(),
 	}
 
 	s.Open()
@@ -708,8 +713,8 @@ func (mdb *memdbSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 	}
 
 	if info.IsCommitted() {
-		logging.Infof("MemDBSlice::OpenSnapshot SliceId %v IndexInstId %v Creating New "+
-			"Snapshot %v", mdb.id, mdb.idxInstId, snapInfo)
+		logging.Infof("MemDBSlice::OpenSnapshot SliceId %v IndexInstId %v PartitionId %v Creating New "+
+			"Snapshot %v", mdb.id, mdb.idxInstId, mdb.idxPartnId, snapInfo)
 	}
 
 	return s, err
@@ -772,18 +777,18 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot) {
 
 		if err == nil {
 			dur := time.Since(t0)
-			logging.Infof("MemDBSlice Slice Id %v, Threads %d, IndexInstId %v created ondisk"+
-				" snapshot %v. Took %v", mdb.id, concurrency, mdb.idxInstId, dir, dur)
+			logging.Infof("MemDBSlice Slice Id %v, Threads %d, IndexInstId %v, PartitionId %v created ondisk"+
+				" snapshot %v. Took %v", mdb.id, concurrency, mdb.idxInstId, mdb.idxPartnId, dir, dur)
 			mdb.idxStats.diskSnapStoreDuration.Set(int64(dur / time.Millisecond))
 		} else {
-			logging.Errorf("MemDBSlice Slice Id %v, IndexInstId %v failed to"+
-				" create ondisk snapshot %v (error=%v)", mdb.id, mdb.idxInstId, dir, err)
+			logging.Errorf("MemDBSlice Slice Id %v, IndexInstId %v, PartitionId %v failed to"+
+				" create ondisk snapshot %v (error=%v)", mdb.id, mdb.idxInstId, mdb.idxPartnId, dir, err)
 			os.RemoveAll(tmpdir)
 			os.RemoveAll(dir)
 		}
 	} else {
-		logging.Infof("MemDBSlice Slice Id %v, IndexInstId %v Skipping ondisk"+
-			" snapshot. A snapshot writer is in progress.", mdb.id, mdb.idxInstId)
+		logging.Infof("MemDBSlice Slice Id %v, IndexInstId %v, PartitionId %v Skipping ondisk"+
+			" snapshot. A snapshot writer is in progress.", mdb.id, mdb.idxInstId, mdb.idxPartnId)
 		s.info.MainSnap.Close()
 	}
 }
@@ -917,8 +922,8 @@ func (mdb *memdbSlice) Rollback(info SnapshotInfo) error {
 func (mdb *memdbSlice) loadSnapshot(snapInfo *memdbSnapshotInfo) (err error) {
 	defer func() {
 		if r := recover(); r != nil || err != nil {
-			logging.Errorf("MemDBSlice::loadSnapshot Slice Id %v, IndexInstId %v failed to recover from the snapshot %v (err=%v,%v)",
-				mdb.id, mdb.idxInstId, snapInfo.dataPath, r, err)
+			logging.Errorf("MemDBSlice::loadSnapshot Slice Id %v, IndexInstId %v, PartitionId %v failed to recover from the snapshot %v (err=%v,%v)",
+				mdb.id, mdb.idxInstId, mdb.idxPartnId, snapInfo.dataPath, r, err)
 			os.RemoveAll(snapInfo.dataPath)
 			os.Exit(1)
 		}
@@ -932,8 +937,8 @@ func (mdb *memdbSlice) loadSnapshot(snapInfo *memdbSnapshotInfo) (err error) {
 
 	partShardCh := make([]chan *memdb.ItemEntry, mdb.numWriters)
 
-	logging.Infof("MemDBSlice::loadSnapshot Slice Id %v, IndexInstId %v reading %v",
-		mdb.id, mdb.idxInstId, snapInfo.dataPath)
+	logging.Infof("MemDBSlice::loadSnapshot Slice Id %v, IndexInstId %v, PartitionId %v reading %v",
+		mdb.id, mdb.idxInstId, mdb.idxPartnId, snapInfo.dataPath)
 
 	t0 := time.Now()
 	if !mdb.isPrimary {
@@ -978,11 +983,11 @@ func (mdb *memdbSlice) loadSnapshot(snapInfo *memdbSnapshotInfo) (err error) {
 	if err == nil {
 		snapInfo.MainSnap = snap
 		mdb.setCommittedCount()
-		logging.Infof("MemDBSlice::loadSnapshot Slice Id %v, IndexInstId %v finished reading %v. Took %v",
-			mdb.id, mdb.idxInstId, snapInfo.dataPath, dur)
+		logging.Infof("MemDBSlice::loadSnapshot Slice Id %v, IndexInstId %v, PartitionId %v finished reading %v. Took %v",
+			mdb.id, mdb.idxInstId, mdb.idxPartnId, snapInfo.dataPath, dur)
 	} else {
-		logging.Errorf("MemDBSlice::loadSnapshot Slice Id %v, IndexInstId %v failed to load snapshot %v error(%v).",
-			mdb.id, mdb.idxInstId, snapInfo.dataPath, err)
+		logging.Errorf("MemDBSlice::loadSnapshot Slice Id %v, IndexInstId %v, PartitionId %v failed to load snapshot %v error(%v).",
+			mdb.id, mdb.idxInstId, mdb.idxPartnId, snapInfo.dataPath, err)
 	}
 
 	mdb.idxStats.diskSnapLoadDuration.Set(int64(dur / time.Millisecond))
@@ -1080,8 +1085,8 @@ func (mdb *memdbSlice) Close() {
 	prev := atomic.LoadUint64(&mdb.committedCount)
 	atomic.AddInt64(&totalMemDBItems, -int64(prev))
 
-	logging.Infof("MemDBSlice::Close Closing Slice Id %v, IndexInstId %v, "+
-		"IndexDefnId %v", mdb.idxInstId, mdb.idxDefnId, mdb.id)
+	logging.Infof("MemDBSlice::Close Closing Slice Id %v, IndexInstId %v, PartitionId %v, "+
+		"IndexDefnId %v", mdb.idxInstId, mdb.idxPartnId, mdb.idxDefnId, mdb.id)
 
 	//signal shutdown for command handler routines
 	for i := 0; i < mdb.numWriters; i++ {
@@ -1103,8 +1108,8 @@ func (mdb *memdbSlice) Destroy() {
 	defer mdb.lock.Unlock()
 
 	if mdb.refCount > 0 {
-		logging.Infof("MemDBSlice::Destroy Softdeleted Slice Id %v, IndexInstId %v, "+
-			"IndexDefnId %v", mdb.id, mdb.idxInstId, mdb.idxDefnId)
+		logging.Infof("MemDBSlice::Destroy Softdeleted Slice Id %v, IndexInstId %v, PartitionId %v, "+
+			"IndexDefnId %v", mdb.id, mdb.idxInstId, mdb.idxPartnId, mdb.idxDefnId)
 		mdb.isSoftDeleted = true
 	} else {
 		tryDeletememdbSlice(mdb)
@@ -1187,9 +1192,9 @@ func (mdb *memdbSlice) Statistics() (StorageStatistics, error) {
 	sts.MemUsed = mdb.mainstore.MemoryInUse() + ntMemUsed
 	sts.DiskSize = mdb.diskSize()
 
-        // Ideally, we should also count items in backstore. But numRecsInMem is mainly used for resident % computation
-        // and for MOI it's always 100%. So an approximate number is fine as numRecsOnDisk will always be 0
-        mdb.idxStats.numRecsInMem.Set(mdb.mainstore.ItemsCount())
+	// Ideally, we should also count items in backstore. But numRecsInMem is mainly used for resident % computation
+	// and for MOI it's always 100%. So an approximate number is fine as numRecsOnDisk will always be 0
+	mdb.idxStats.numRecsInMem.Set(mdb.mainstore.ItemsCount())
 
 	return sts, nil
 }
@@ -1211,6 +1216,7 @@ func (mdb *memdbSlice) String() string {
 	str := fmt.Sprintf("SliceId: %v ", mdb.id)
 	str += fmt.Sprintf("File: %v ", mdb.path)
 	str += fmt.Sprintf("Index: %v ", mdb.idxInstId)
+	str += fmt.Sprintf("Partition: %v ", mdb.idxPartnId)
 
 	return str
 
@@ -1221,7 +1227,7 @@ func tryDeletememdbSlice(mdb *memdbSlice) {
 	//cleanup the disk directory
 	if err := os.RemoveAll(mdb.path); err != nil {
 		logging.Errorf("MemDBSlice::Destroy Error Cleaning Up Slice Id %v, "+
-			"IndexInstId %v, IndexDefnId %v. Error %v", mdb.id, mdb.idxInstId, mdb.idxDefnId, err)
+			"IndexInstId %v, PartitionId %v, IndexDefnId %v. Error %v", mdb.id, mdb.idxInstId, mdb.idxPartnId, mdb.idxDefnId, err)
 	}
 }
 
@@ -1242,8 +1248,8 @@ func (mdb *memdbSlice) getCmdsCount() int {
 func (mdb *memdbSlice) logWriterStat() {
 	count := atomic.AddUint64(&mdb.flushedCount, 1)
 	if (count%10000 == 0) || count == 1 {
-		logging.Debugf("logWriterStat:: %v "+
-			"FlushedCount %v QueuedCount %v", mdb.idxInstId,
+		logging.Debugf("logWriterStat:: %v:%v "+
+			"FlushedCount %v QueuedCount %v", mdb.idxInstId, mdb.idxPartnId,
 			count, mdb.getCmdsCount())
 	}
 
@@ -1322,6 +1328,7 @@ func (s *memdbSnapshot) Destroy() {
 func (s *memdbSnapshot) String() string {
 
 	str := fmt.Sprintf("Index: %v ", s.idxInstId)
+	str += fmt.Sprintf("Partition: %v ", s.idxPartnId)
 	str += fmt.Sprintf("SliceId: %v ", s.slice.Id())
 	str += fmt.Sprintf("TS: %v ", s.ts)
 	return str

@@ -16,7 +16,7 @@ import (
 )
 
 func NewPlasmaSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
-	idxInstId common.IndexInstId, isPrimary bool,
+	idxInstId common.IndexInstId, partitionId common.PartitionId, isPrimary bool, isPartitioned bool,
 	sysconf common.Config, idxStats *IndexStats) (Slice, error) {
 	panic("Plasma is only supported in Enterprise Edition")
 }

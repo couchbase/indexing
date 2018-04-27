@@ -39,7 +39,7 @@ func do_test1() {
 	stats := &indexer.IndexStats{}
 	stats.Init()
 
-	slice, _ := indexer.NewForestDBSlice(".", 0, 1, 1, false, config, stats)
+	slice, _ := indexer.NewForestDBSlice(".", 0, 1, 1, 1, false, false, config, stats)
 
 	log.Println("***** GENERATING *****")
 	numItems := 5000000

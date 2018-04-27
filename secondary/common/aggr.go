@@ -52,6 +52,7 @@ type AggrFunc interface {
 	AddDeltaRaw(delta []byte)
 	Value() interface{}
 	Distinct() bool
+	IsValid() bool
 }
 
 var (
@@ -123,6 +124,10 @@ func (a AggrFuncSum) Value() interface{} {
 
 func (a AggrFuncSum) Distinct() bool {
 	return a.distinct
+}
+
+func (a AggrFuncSum) IsValid() bool {
+	return a.validVal
 }
 
 //Only numeric values are considered.
@@ -254,6 +259,10 @@ func (a AggrFuncCount) Distinct() bool {
 	return a.distinct
 }
 
+func (a AggrFuncCount) IsValid() bool {
+	return true
+}
+
 func (a *AggrFuncCount) AddDelta(delta interface{}) {
 	//not implemented
 }
@@ -348,6 +357,10 @@ func (a AggrFuncCountN) Value() interface{} {
 
 func (a AggrFuncCountN) Distinct() bool {
 	return a.distinct
+}
+
+func (a AggrFuncCountN) IsValid() bool {
+	return true
 }
 
 func (a *AggrFuncCountN) AddDelta(delta interface{}) {
@@ -458,6 +471,10 @@ func (a AggrFuncMin) Distinct() bool {
 	return a.distinct
 }
 
+func (a AggrFuncMin) IsValid() bool {
+	return a.validVal
+}
+
 func (a *AggrFuncMin) AddDelta(delta interface{}) {
 	//not implemented
 }
@@ -535,6 +552,10 @@ func (a AggrFuncMax) Value() interface{} {
 
 func (a AggrFuncMax) Distinct() bool {
 	return a.distinct
+}
+
+func (a AggrFuncMax) IsValid() bool {
+	return a.validVal
 }
 
 func (a *AggrFuncMax) AddDelta(delta interface{}) {

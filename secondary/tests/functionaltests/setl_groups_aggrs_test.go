@@ -1350,6 +1350,291 @@ func TestGroupAggrArrayIndex(t *testing.T) {
 	executeGroupAggrTest2(scans, ga, proj, n1qlEquivalent, i2, t)
 }
 
+//Test MIN/MAX/COUNT optimization MB-27861
+func TestGroupAggr_FirstValidAggrOnly(t *testing.T) {
+	log.Printf("In TestGroupAggr_FirstValidAggrOnly()")
+
+	var i1 = "idx_asc_3field"
+	var i2 = "idx_desc_3field"
+
+	indexExpr1 := []string{"company", "age", "`first-name`"}
+	indexExpr2 := []string{"company", "age", "`first-name`"}
+	var bucket = "default"
+	err := secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+	FailTestIfError(err, "Error in DropAllSecondaryIndexes", t)
+
+	time.Sleep(5 * time.Second)
+
+	stmt := "create primary index on default"
+	_, err = tc.ExecuteN1QLStatement(kvaddress, clusterconfig.Username, clusterconfig.Password, bucket, stmt, false)
+	FailTestIfError(err, "Error in creating primary index", t)
+
+	err = secondaryindex.CreateSecondaryIndex(i1, bucket, indexManagementAddress, "", indexExpr1, false, nil, true, defaultIndexActiveTimeout, nil)
+	FailTestIfError(err, "Error in creating the index", t)
+
+	err = secondaryindex.CreateSecondaryIndex2(i2, bucket, indexManagementAddress, "", indexExpr2, []bool{true, false, false}, false, nil, true, defaultIndexActiveTimeout, nil)
+	FailTestIfError(err, "Error in creating the index", t)
+
+	log.Printf("=== MIN no group by ===") // flag true
+	n1qlEquivalent := "SELECT MIN(company) AS a FROM default USE INDEX(`#primary`) " +
+		" WHERE company > \"A\" "
+	a1 := &qc.Aggregate{AggrFunc: c.AGG_MIN, EntryKeyId: 7, KeyPos: 0}
+	aggregates := []*qc.Aggregate{a1}
+	ga := &qc.GroupAggr{Name: "S1", Group: nil, Aggrs: aggregates}
+
+	proj := &qc.IndexProjection{EntryKeys: []int64{7}}
+	scans := make(qc.Scans, 1)
+	filter1 := make([]*qc.CompositeElementFilter, 1)
+	filter1[0] = &qc.CompositeElementFilter{Low: "A", High: c.MaxUnbounded, Inclusion: qc.Inclusion(uint32(3))}
+	scans[0] = &qc.Scan{Filter: filter1}
+	executeGroupAggrTest2(scans, ga, proj, n1qlEquivalent, i1, t)
+
+	log.Printf("=== MIN no group by, no row match ===") // flag true
+	n1qlEquivalent = "SELECT MIN(company) AS a FROM default USE INDEX(`#primary`) " +
+		" WHERE company = \"blah\" "
+	a1 = &qc.Aggregate{AggrFunc: c.AGG_MIN, EntryKeyId: 7, KeyPos: 0}
+	aggregates = []*qc.Aggregate{a1}
+	ga = &qc.GroupAggr{Group: nil, Aggrs: aggregates}
+
+	proj = &qc.IndexProjection{EntryKeys: []int64{7}}
+	scans = make(qc.Scans, 1)
+	filter1 = make([]*qc.CompositeElementFilter, 1)
+	filter1[0] = &qc.CompositeElementFilter{Low: "blah", High: "blah", Inclusion: qc.Inclusion(uint32(3))}
+	scans[0] = &qc.Scan{Filter: filter1}
+	executeGroupAggrTest2(scans, ga, proj, n1qlEquivalent, i1, t)
+
+	log.Printf("=== MIN with group by ===") // flag false
+	n1qlEquivalent = "SELECT MIN(company) AS a, company as b FROM default USE INDEX(`#primary`) " +
+		" WHERE company > \"A\" GROUP BY company"
+	a1 = &qc.Aggregate{AggrFunc: c.AGG_MIN, EntryKeyId: 7, KeyPos: 0}
+	aggregates = []*qc.Aggregate{a1}
+	g1 := &qc.GroupKey{EntryKeyId: 8, KeyPos: 0}
+	groups := []*qc.GroupKey{g1}
+	ga = &qc.GroupAggr{Group: groups, Aggrs: aggregates}
+
+	proj = &qc.IndexProjection{EntryKeys: []int64{7, 8}}
+	scans = make(qc.Scans, 1)
+	filter1 = make([]*qc.CompositeElementFilter, 1)
+	filter1[0] = &qc.CompositeElementFilter{Low: "A", High: c.MaxUnbounded, Inclusion: qc.Inclusion(uint32(3))}
+	scans[0] = &qc.Scan{Filter: filter1}
+	executeGroupAggrTest2(scans, ga, proj, n1qlEquivalent, i1, t)
+
+	log.Printf("=== MIN with group by, no row match ===") // flag false
+	n1qlEquivalent = "SELECT MIN(company) AS a, company as b FROM default USE INDEX(`#primary`) " +
+		" WHERE company = \"blah\" GROUP BY company"
+	a1 = &qc.Aggregate{AggrFunc: c.AGG_MIN, EntryKeyId: 7, KeyPos: 0}
+	aggregates = []*qc.Aggregate{a1}
+	g1 = &qc.GroupKey{EntryKeyId: 8, KeyPos: 0}
+	groups = []*qc.GroupKey{g1}
+	ga = &qc.GroupAggr{Group: groups, Aggrs: aggregates}
+
+	proj = &qc.IndexProjection{EntryKeys: []int64{7, 8}}
+	scans = make(qc.Scans, 1)
+	filter1 = make([]*qc.CompositeElementFilter, 1)
+	filter1[0] = &qc.CompositeElementFilter{Low: "blah", High: "blah", Inclusion: qc.Inclusion(uint32(3))}
+	scans[0] = &qc.Scan{Filter: filter1}
+	executeGroupAggrTest2(scans, ga, proj, n1qlEquivalent, i1, t)
+
+	log.Printf("=== One Aggr, no group by ===") // flag true
+	n1qlEquivalent = "SELECT MIN(company) AS a FROM default USE INDEX(`#primary`) " +
+		" WHERE company BETWEEN \"F\" and \"P\" "
+	a1 = &qc.Aggregate{AggrFunc: c.AGG_MIN, EntryKeyId: 7, KeyPos: 0}
+	aggregates = []*qc.Aggregate{a1}
+	ga = &qc.GroupAggr{Group: nil, Aggrs: aggregates}
+
+	proj = &qc.IndexProjection{EntryKeys: []int64{7}}
+	scans = make(qc.Scans, 1)
+	filter1 = make([]*qc.CompositeElementFilter, 1)
+	filter1[0] = &qc.CompositeElementFilter{Low: "F", High: "P", Inclusion: qc.Inclusion(uint32(3))}
+	scans[0] = &qc.Scan{Filter: filter1}
+	executeGroupAggrTest2(scans, ga, proj, n1qlEquivalent, i1, t)
+
+	log.Printf("=== One Aggr, no group by, no row match ===") // flag true
+	n1qlEquivalent = "SELECT MIN(company) AS a FROM default USE INDEX(`#primary`) " +
+		" WHERE company = \"blah\" "
+	a1 = &qc.Aggregate{AggrFunc: c.AGG_MIN, EntryKeyId: 7, KeyPos: 0}
+	aggregates = []*qc.Aggregate{a1}
+	ga = &qc.GroupAggr{Group: nil, Aggrs: aggregates}
+
+	proj = &qc.IndexProjection{EntryKeys: []int64{7}}
+	scans = make(qc.Scans, 1)
+	filter1 = make([]*qc.CompositeElementFilter, 1)
+	filter1[0] = &qc.CompositeElementFilter{Low: "blah", High: "blah", Inclusion: qc.Inclusion(uint32(3))}
+	scans[0] = &qc.Scan{Filter: filter1}
+	executeGroupAggrTest2(scans, ga, proj, n1qlEquivalent, i1, t)
+
+	log.Printf("=== Multiple Aggr, no group by ===") // flag false
+	n1qlEquivalent = "SELECT MIN(company) AS a, MIN(age) as b FROM default USE INDEX(`#primary`) " +
+		" WHERE company BETWEEN \"F\" and \"P\" "
+	a1 = &qc.Aggregate{AggrFunc: c.AGG_MIN, EntryKeyId: 7, KeyPos: 0}
+	a2 := &qc.Aggregate{AggrFunc: c.AGG_MIN, EntryKeyId: 8, KeyPos: 1}
+	aggregates = []*qc.Aggregate{a1, a2}
+	ga = &qc.GroupAggr{Group: nil, Aggrs: aggregates}
+
+	proj = &qc.IndexProjection{EntryKeys: []int64{7, 8}}
+	scans = make(qc.Scans, 1)
+	filter1 = make([]*qc.CompositeElementFilter, 1)
+	filter1[0] = &qc.CompositeElementFilter{Low: "F", High: "P", Inclusion: qc.Inclusion(uint32(3))}
+	scans[0] = &qc.Scan{Filter: filter1}
+	executeGroupAggrTest2(scans, ga, proj, n1qlEquivalent, i1, t)
+
+	log.Printf("=== Multiple Aggr, no group by, no row match ===") // flag false
+	n1qlEquivalent = "SELECT MIN(company) AS a, MIN(age) as b FROM default USE INDEX(`#primary`) " +
+		" WHERE company = \"blah\" "
+	a1 = &qc.Aggregate{AggrFunc: c.AGG_MIN, EntryKeyId: 7, KeyPos: 0}
+	a2 = &qc.Aggregate{AggrFunc: c.AGG_MIN, EntryKeyId: 8, KeyPos: 1}
+	aggregates = []*qc.Aggregate{a1, a2}
+	ga = &qc.GroupAggr{Group: nil, Aggrs: aggregates}
+
+	proj = &qc.IndexProjection{EntryKeys: []int64{7, 8}}
+	scans = make(qc.Scans, 1)
+	filter1 = make([]*qc.CompositeElementFilter, 1)
+	filter1[0] = &qc.CompositeElementFilter{Low: "blah", High: "blah", Inclusion: qc.Inclusion(uint32(3))}
+	scans[0] = &qc.Scan{Filter: filter1}
+	executeGroupAggrTest2(scans, ga, proj, n1qlEquivalent, i1, t)
+
+	log.Printf("=== No Aggr, 1 group by ===") // flag false
+	n1qlEquivalent = "SELECT company AS a FROM default USE INDEX(`#primary`) " +
+		" WHERE company BETWEEN \"F\" and \"P\" GROUP BY company "
+	g1 = &qc.GroupKey{EntryKeyId: 8, KeyPos: 0}
+	groups = []*qc.GroupKey{g1}
+	ga = &qc.GroupAggr{Group: groups, Aggrs: nil}
+
+	proj = &qc.IndexProjection{EntryKeys: []int64{8}}
+	scans = make(qc.Scans, 1)
+	filter1 = make([]*qc.CompositeElementFilter, 1)
+	filter1[0] = &qc.CompositeElementFilter{Low: "F", High: "P", Inclusion: qc.Inclusion(uint32(3))}
+	scans[0] = &qc.Scan{Filter: filter1}
+	executeGroupAggrTest2(scans, ga, proj, n1qlEquivalent, i1, t)
+
+	log.Printf("=== Aggr on non-leading key, previous equality filter, no group ===") // flag true
+	n1qlEquivalent = "SELECT MIN(age) AS a FROM default USE INDEX(`#primary`) " +
+		" WHERE company = \"ISODRIVE\"  "
+	a1 = &qc.Aggregate{AggrFunc: c.AGG_MIN, EntryKeyId: 7, KeyPos: 1}
+	aggregates = []*qc.Aggregate{a1}
+	ga = &qc.GroupAggr{Group: nil, Aggrs: aggregates}
+
+	proj = &qc.IndexProjection{EntryKeys: []int64{7}}
+	scans = make(qc.Scans, 1)
+	filter1 = make([]*qc.CompositeElementFilter, 1)
+	filter1[0] = &qc.CompositeElementFilter{Low: "ISODRIVE", High: "ISODRIVE", Inclusion: qc.Inclusion(uint32(3))}
+	scans[0] = &qc.Scan{Filter: filter1}
+	executeGroupAggrTest2(scans, ga, proj, n1qlEquivalent, i1, t)
+
+	log.Printf("=== Aggr on non-leading key, previous equality filters, no group ===") // flag true
+	n1qlEquivalent = "SELECT MIN(`first-name`) AS a FROM default USE INDEX(`#primary`) " +
+		" WHERE company = \"ISODRIVE\" and age = 39 "
+	a1 = &qc.Aggregate{AggrFunc: c.AGG_MIN, EntryKeyId: 7, KeyPos: 2}
+	aggregates = []*qc.Aggregate{a1}
+	ga = &qc.GroupAggr{Group: nil, Aggrs: aggregates}
+
+	proj = &qc.IndexProjection{EntryKeys: []int64{7}}
+	scans = make(qc.Scans, 1)
+	filter1 = make([]*qc.CompositeElementFilter, 2)
+	filter1[0] = &qc.CompositeElementFilter{Low: "ISODRIVE", High: "ISODRIVE", Inclusion: qc.Inclusion(uint32(3))}
+	filter1[1] = &qc.CompositeElementFilter{Low: 39, High: 39, Inclusion: qc.Inclusion(uint32(3))}
+	scans[0] = &qc.Scan{Filter: filter1}
+	executeGroupAggrTest2(scans, ga, proj, n1qlEquivalent, i1, t)
+
+	log.Printf("=== Aggr on non-leading key, previous non-equality filters, no group ===") // flag false
+	n1qlEquivalent = "SELECT MIN(`first-name`) AS a FROM default USE INDEX(`#primary`) " +
+		" WHERE company BETWEEN \"F\" and \"P\"  "
+	a1 = &qc.Aggregate{AggrFunc: c.AGG_MIN, EntryKeyId: 7, KeyPos: 2}
+	aggregates = []*qc.Aggregate{a1}
+	ga = &qc.GroupAggr{Group: nil, Aggrs: aggregates}
+
+	proj = &qc.IndexProjection{EntryKeys: []int64{7}}
+	scans = make(qc.Scans, 1)
+	filter1 = make([]*qc.CompositeElementFilter, 1)
+	filter1[0] = &qc.CompositeElementFilter{Low: "F", High: "P", Inclusion: qc.Inclusion(uint32(3))}
+	scans[0] = &qc.Scan{Filter: filter1}
+	executeGroupAggrTest2(scans, ga, proj, n1qlEquivalent, i1, t)
+
+	log.Printf("=== MIN on desc, no group ===") // flag false
+	n1qlEquivalent = "SELECT MIN(company) AS a FROM default USE INDEX(`#primary`) " +
+		" WHERE company BETWEEN \"F\" and \"P\"  "
+	a1 = &qc.Aggregate{AggrFunc: c.AGG_MIN, EntryKeyId: 7, KeyPos: 0}
+	aggregates = []*qc.Aggregate{a1}
+	ga = &qc.GroupAggr{Group: nil, Aggrs: aggregates}
+
+	proj = &qc.IndexProjection{EntryKeys: []int64{7}}
+	scans = make(qc.Scans, 1)
+	filter1 = make([]*qc.CompositeElementFilter, 1)
+	filter1[0] = &qc.CompositeElementFilter{Low: "F", High: "P", Inclusion: qc.Inclusion(uint32(3))}
+	scans[0] = &qc.Scan{Filter: filter1}
+	executeGroupAggrTest2(scans, ga, proj, n1qlEquivalent, i2, t)
+
+	log.Printf("=== MAX on asc, no group ===") // flag false
+	n1qlEquivalent = "SELECT MAX(company) AS a FROM default USE INDEX(`#primary`) " +
+		" WHERE company BETWEEN \"F\" and \"P\"  "
+	a1 = &qc.Aggregate{AggrFunc: c.AGG_MAX, EntryKeyId: 7, KeyPos: 0}
+	aggregates = []*qc.Aggregate{a1}
+	ga = &qc.GroupAggr{Group: nil, Aggrs: aggregates}
+
+	proj = &qc.IndexProjection{EntryKeys: []int64{7}}
+	scans = make(qc.Scans, 1)
+	filter1 = make([]*qc.CompositeElementFilter, 1)
+	filter1[0] = &qc.CompositeElementFilter{Low: "F", High: "P", Inclusion: qc.Inclusion(uint32(3))}
+	scans[0] = &qc.Scan{Filter: filter1}
+	executeGroupAggrTest2(scans, ga, proj, n1qlEquivalent, i1, t)
+
+	log.Printf("=== MAX on desc, no group ===") // flag true
+	n1qlEquivalent = "SELECT MAX(company) AS a FROM default USE INDEX(`#primary`) " +
+		" WHERE company BETWEEN \"F\" and \"P\"  "
+	a1 = &qc.Aggregate{AggrFunc: c.AGG_MAX, EntryKeyId: 7, KeyPos: 0}
+	aggregates = []*qc.Aggregate{a1}
+	ga = &qc.GroupAggr{Group: nil, Aggrs: aggregates}
+
+	proj = &qc.IndexProjection{EntryKeys: []int64{7}}
+	scans = make(qc.Scans, 1)
+	filter1 = make([]*qc.CompositeElementFilter, 1)
+	filter1[0] = &qc.CompositeElementFilter{Low: "F", High: "P", Inclusion: qc.Inclusion(uint32(3))}
+	scans[0] = &qc.Scan{Filter: filter1}
+	executeGroupAggrTest2(scans, ga, proj, n1qlEquivalent, i2, t)
+
+	log.Printf("=== COUNT(DISTINCT const_expr, no group ===") // flag true
+	n1qlEquivalent = "SELECT COUNT(DISTINCT 2+3) AS a FROM default USE INDEX(`#primary`) " +
+		" WHERE company BETWEEN \"F\" and \"P\"  "
+	a1 = &qc.Aggregate{AggrFunc: c.AGG_COUNT, EntryKeyId: 7, KeyPos: -1, Expr: "2+3", Distinct: true}
+	aggregates = []*qc.Aggregate{a1}
+	ga = &qc.GroupAggr{Group: nil, Aggrs: aggregates}
+
+	proj = &qc.IndexProjection{EntryKeys: []int64{7}}
+	scans = make(qc.Scans, 1)
+	filter1 = make([]*qc.CompositeElementFilter, 1)
+	filter1[0] = &qc.CompositeElementFilter{Low: "F", High: "P", Inclusion: qc.Inclusion(uint32(3))}
+	scans[0] = &qc.Scan{Filter: filter1}
+	executeGroupAggrTest2(scans, ga, proj, n1qlEquivalent, i2, t)
+
+	log.Printf("=== COUNT(DISTINCT const_expr, no group, no row match ===") // flag true
+	n1qlEquivalent = "SELECT COUNT(DISTINCT 2+3) AS a FROM default USE INDEX(`#primary`) " +
+		" WHERE company = \"blah\"  "
+	a1 = &qc.Aggregate{AggrFunc: c.AGG_COUNT, EntryKeyId: 7, KeyPos: -1, Expr: "2+3", Distinct: true}
+	aggregates = []*qc.Aggregate{a1}
+	ga = &qc.GroupAggr{Group: nil, Aggrs: aggregates}
+
+	proj = &qc.IndexProjection{EntryKeys: []int64{7}}
+	scans = make(qc.Scans, 1)
+	filter1 = make([]*qc.CompositeElementFilter, 1)
+	filter1[0] = &qc.CompositeElementFilter{Low: "blah", High: "blah", Inclusion: qc.Inclusion(uint32(3))}
+	scans[0] = &qc.Scan{Filter: filter1}
+	executeGroupAggrTest2(scans, ga, proj, n1qlEquivalent, i2, t)
+
+	log.Printf("=== COUNT(const_expr, no group ===") // flag false
+	n1qlEquivalent = "SELECT COUNT(2+3) AS a FROM default USE INDEX(`#primary`) " +
+		" WHERE company BETWEEN \"F\" and \"P\"  "
+	a1 = &qc.Aggregate{AggrFunc: c.AGG_COUNT, EntryKeyId: 7, KeyPos: -1, Expr: "2+3"}
+	aggregates = []*qc.Aggregate{a1}
+	ga = &qc.GroupAggr{Group: nil, Aggrs: aggregates}
+
+	proj = &qc.IndexProjection{EntryKeys: []int64{7}}
+	scans = make(qc.Scans, 1)
+	filter1 = make([]*qc.CompositeElementFilter, 1)
+	filter1[0] = &qc.CompositeElementFilter{Low: "F", High: "P", Inclusion: qc.Inclusion(uint32(3))}
+	scans[0] = &qc.Scan{Filter: filter1}
+	executeGroupAggrTest2(scans, ga, proj, n1qlEquivalent, i2, t)
+}
+
 func TestGroupAggrPrimary(t *testing.T) {
 	log.Printf("In TestGroupAggrPrimary()")
 
@@ -1649,7 +1934,9 @@ func executeGroupAggrTest2(scans qc.Scans, ga *qc.GroupAggr, proj *qc.IndexProje
 	var bucket = "default"
 	_, scanResults, err := secondaryindex.Scan3(index, bucket, indexScanAddress, scans, false, false, proj, 0, defaultlimit, ga, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
-	tc.PrintGroupAggrResults(scanResults, "scanResults")
+	if len(scanResults) == 1 {
+		tc.PrintGroupAggrResults(scanResults, "scanResults")
+	}
 	err = tv.ValidateGroupAggrWithN1QL(kvaddress, clusterconfig.Username,
 		clusterconfig.Password, bucket, n1qlEquivalent, ga, proj, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)

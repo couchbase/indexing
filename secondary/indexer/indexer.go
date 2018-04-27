@@ -5801,16 +5801,20 @@ func NewSlice(id SliceId, indInst *common.IndexInst, partnInst *PartitionInst,
 		logging.Errorf("Indexer::NewSlice Failed to check bucket type ephemeral: %v\n", err)
 		return nil, err
 	}
+
+	partitionId := partnInst.Defn.GetPartitionId()
+	isPartitioned := common.IsPartitioned(indInst.Defn.PartitionScheme)
+
 	switch indInst.Defn.Using {
 	case common.MemDB, common.MemoryOptimized:
-		slice, err = NewMemDBSlice(path, id, indInst.Defn, indInst.InstId, indInst.Defn.IsPrimary, !ephemeral, conf,
-			stats.GetPartitionStats(indInst.InstId, partnInst.Defn.GetPartitionId()))
+		slice, err = NewMemDBSlice(path, id, indInst.Defn, indInst.InstId, partitionId, indInst.Defn.IsPrimary, !ephemeral, isPartitioned, conf,
+			stats.GetPartitionStats(indInst.InstId, partitionId))
 	case common.ForestDB:
-		slice, err = NewForestDBSlice(path, id, indInst.Defn, indInst.InstId, indInst.Defn.IsPrimary, conf,
-			stats.GetPartitionStats(indInst.InstId, partnInst.Defn.GetPartitionId()))
+		slice, err = NewForestDBSlice(path, id, indInst.Defn, indInst.InstId, partitionId, indInst.Defn.IsPrimary, isPartitioned, conf,
+			stats.GetPartitionStats(indInst.InstId, partitionId))
 	case common.PlasmaDB:
-		slice, err = NewPlasmaSlice(path, id, indInst.Defn, indInst.InstId, indInst.Defn.IsPrimary, conf,
-			stats.GetPartitionStats(indInst.InstId, partnInst.Defn.GetPartitionId()))
+		slice, err = NewPlasmaSlice(path, id, indInst.Defn, indInst.InstId, partitionId, indInst.Defn.IsPrimary, isPartitioned, conf,
+			stats.GetPartitionStats(indInst.InstId, partitionId))
 	}
 
 	return
