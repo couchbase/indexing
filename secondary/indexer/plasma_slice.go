@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -69,7 +70,7 @@ type plasmaSlice struct {
 	isPrimary     bool
 	isSoftDeleted bool
 	isSoftClosed  bool
-	isPartitioned bool
+	numPartitions int
 
 	cmdCh  []chan indexMutation
 	stopCh []DoneChannel
@@ -78,8 +79,10 @@ type plasmaSlice struct {
 
 	fatalDbErr error
 
-	numWriters   int
-	maxRollbacks int
+	numWriters             int
+	numWritersFromConfig   int
+	sliceBufSizeFromConfig uint64
+	maxRollbacks           int
 
 	totalFlushTime  time.Duration
 	totalCommitTime time.Duration
@@ -103,7 +106,7 @@ type plasmaSlice struct {
 
 func newPlasmaSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	idxInstId common.IndexInstId, partitionId common.PartitionId,
-	isPrimary bool, isPartitioned bool,
+	isPrimary bool, numPartitions int,
 	sysconf common.Config, idxStats *IndexStats) (*plasmaSlice, error) {
 
 	slice := &plasmaSlice{}
@@ -128,41 +131,22 @@ func newPlasmaSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	slice.idxPartnId = partitionId
 	slice.idxDefn = idxDefn
 	slice.id = sliceId
-	slice.numWriters = sysconf["numSliceWriters"].Int()
+	slice.numWritersFromConfig = sysconf["numSliceWriters"].Int()
+	slice.sliceBufSizeFromConfig = sysconf["settings.sliceBufSize"].Uint64()
 	slice.hasPersistence = !sysconf["plasma.disablePersistence"].Bool()
 
 	slice.maxRollbacks = sysconf["settings.plasma.recovery.max_rollbacks"].Int()
-
-	sliceBufSize := sysconf["settings.sliceBufSize"].Uint64()
-	if sliceBufSize < uint64(slice.numWriters) {
-		sliceBufSize = uint64(slice.numWriters)
-	}
 
 	updatePlasmaConfig(sysconf)
 	if sysconf["plasma.UseQuotaTuner"].Bool() {
 		go plasma.RunMemQuotaTuner()
 	}
 
-	slice.encodeBuf = make([][]byte, slice.numWriters)
-	slice.arrayBuf1 = make([][]byte, slice.numWriters)
-	slice.arrayBuf2 = make([][]byte, slice.numWriters)
-	slice.cmdCh = make([]chan indexMutation, slice.numWriters)
-
-	for i := 0; i < slice.numWriters; i++ {
-		slice.cmdCh[i] = make(chan indexMutation, sliceBufSize/uint64(slice.numWriters))
-		slice.encodeBuf[i] = make([]byte, 0, maxIndexEntrySize)
-		slice.arrayBuf1[i] = make([]byte, 0, maxArrayIndexEntrySize)
-		slice.arrayBuf2[i] = make([]byte, 0, maxArrayIndexEntrySize)
-	}
-
-	slice.workerDone = make([]chan bool, slice.numWriters)
-	slice.stopCh = make([]DoneChannel, slice.numWriters)
-
 	numReaders := slice.sysconf["plasma.numReaders"].Int()
 	slice.readers = make(chan *plasma.Reader, numReaders)
 
 	slice.isPrimary = isPrimary
-	slice.isPartitioned = isPartitioned
+	slice.numPartitions = numPartitions
 
 	if err := slice.initStores(); err != nil {
 		// Index is unusable. Remove the data files and reinit
@@ -181,8 +165,40 @@ func newPlasmaSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 		return nil, err
 	}
 
+	slice.initWriters(int(math.Ceil(float64(slice.numWritersFromConfig) / float64(slice.numPartitions))))
+
 	logging.Infof("plasmaSlice:NewplasmaSlice Created New Slice Id %v IndexInstId %v partitionId %v "+
 		"WriterThreads %v cleaner %v", sliceId, idxInstId, partitionId, slice.numWriters, slice.mainstore.LSSCleanerConcurrency)
+
+	slice.setCommittedCount()
+	return slice, nil
+}
+
+func (slice *plasmaSlice) initWriters(numWriters int) {
+
+	var wg sync.WaitGroup
+
+	slice.numWriters = numWriters
+
+	slice.encodeBuf = make([][]byte, slice.numWriters)
+	slice.arrayBuf1 = make([][]byte, slice.numWriters)
+	slice.arrayBuf2 = make([][]byte, slice.numWriters)
+	slice.cmdCh = make([]chan indexMutation, slice.numWriters)
+
+	sliceBufSize := slice.sliceBufSizeFromConfig
+	if sliceBufSize < uint64(slice.numWriters) {
+		sliceBufSize = uint64(slice.numWriters)
+	}
+
+	for i := 0; i < slice.numWriters; i++ {
+		slice.cmdCh[i] = make(chan indexMutation, sliceBufSize/uint64(slice.numWriters))
+		slice.encodeBuf[i] = make([]byte, 0, maxIndexEntrySize)
+		slice.arrayBuf1[i] = make([]byte, 0, maxArrayIndexEntrySize)
+		slice.arrayBuf2[i] = make([]byte, 0, maxArrayIndexEntrySize)
+	}
+
+	slice.workerDone = make([]chan bool, slice.numWriters)
+	slice.stopCh = make([]DoneChannel, slice.numWriters)
 
 	for i := 0; i < slice.numWriters; i++ {
 		slice.stopCh[i] = make(DoneChannel)
@@ -190,8 +206,28 @@ func newPlasmaSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 		go slice.handleCommandsWorker(i)
 	}
 
-	slice.setCommittedCount()
-	return slice, nil
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		slice.main = make([]*plasma.Writer, slice.numWriters)
+		for i := 0; i < slice.numWriters; i++ {
+			slice.main[i] = slice.mainstore.NewWriter()
+		}
+	}()
+
+	if !slice.isPrimary {
+		// Recover backindex
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			slice.back = make([]*plasma.Writer, slice.numWriters)
+			for i := 0; i < slice.numWriters; i++ {
+				slice.back[i] = slice.backstore.NewWriter()
+			}
+		}()
+	}
+
+	wg.Wait()
 }
 
 func (slice *plasmaSlice) initStores() error {
@@ -218,7 +254,7 @@ func (slice *plasmaSlice) initStores() error {
 	cfg.Compression = slice.sysconf["plasma.compression"].String()
 	cfg.MaxPageSize = slice.sysconf["plasma.MaxPageSize"].Int()
 
-	if slice.isPartitioned {
+	if slice.numPartitions != 1 {
 		cfg.LSSCleanerConcurrency = 1
 	}
 

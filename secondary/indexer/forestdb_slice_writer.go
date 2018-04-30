@@ -41,7 +41,7 @@ var (
 //Returns error in case slice cannot be initialized.
 func NewForestDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	idxInstId common.IndexInstId, partitionId common.PartitionId,
-	isPrimary bool, isPartitioned bool,
+	isPrimary bool, numPartitions int,
 	sysconf common.Config, idxStats *IndexStats) (*fdbSlice, error) {
 
 	info, err := os.Stat(path)

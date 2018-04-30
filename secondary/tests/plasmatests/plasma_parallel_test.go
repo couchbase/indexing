@@ -467,10 +467,10 @@ func createSlice1(c *Context) {
 
 	instID, err1 := common.NewIndexInstId()
 	common.CrashOnError(err1)
-	slice1, err1 := indexer.NewMemDBSlice(c.memDbDir, 0, idxDefn1, instID, common.PartitionId(0), false, false, true, config, stats)
+	slice1, err1 := indexer.NewMemDBSlice(c.memDbDir, 0, idxDefn1, instID, common.PartitionId(0), false, true, 1, config, stats)
 	common.CrashOnError(err1)
 	c.memDbSlice = slice1
-	slice, err := indexer.NewPlasmaSlice(c.plasmaDir, 0, idxDefn, instID, common.Partition(0), false, false, config, stats)
+	slice, err := indexer.NewPlasmaSlice(c.plasmaDir, 0, idxDefn, instID, common.Partition(0), false, 1, config, stats)
 	common.CrashOnError(err)
 	c.plasmaSlice = slice
 }

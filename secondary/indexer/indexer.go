@@ -5803,17 +5803,17 @@ func NewSlice(id SliceId, indInst *common.IndexInst, partnInst *PartitionInst,
 	}
 
 	partitionId := partnInst.Defn.GetPartitionId()
-	isPartitioned := common.IsPartitioned(indInst.Defn.PartitionScheme)
+	numPartitions := indInst.Pc.GetNumPartitions()
 
 	switch indInst.Defn.Using {
 	case common.MemDB, common.MemoryOptimized:
-		slice, err = NewMemDBSlice(path, id, indInst.Defn, indInst.InstId, partitionId, indInst.Defn.IsPrimary, !ephemeral, isPartitioned, conf,
+		slice, err = NewMemDBSlice(path, id, indInst.Defn, indInst.InstId, partitionId, indInst.Defn.IsPrimary, !ephemeral, numPartitions, conf,
 			stats.GetPartitionStats(indInst.InstId, partitionId))
 	case common.ForestDB:
-		slice, err = NewForestDBSlice(path, id, indInst.Defn, indInst.InstId, partitionId, indInst.Defn.IsPrimary, isPartitioned, conf,
+		slice, err = NewForestDBSlice(path, id, indInst.Defn, indInst.InstId, partitionId, indInst.Defn.IsPrimary, numPartitions, conf,
 			stats.GetPartitionStats(indInst.InstId, partitionId))
 	case common.PlasmaDB:
-		slice, err = NewPlasmaSlice(path, id, indInst.Defn, indInst.InstId, partitionId, indInst.Defn.IsPrimary, isPartitioned, conf,
+		slice, err = NewPlasmaSlice(path, id, indInst.Defn, indInst.InstId, partitionId, indInst.Defn.IsPrimary, numPartitions, conf,
 			stats.GetPartitionStats(indInst.InstId, partitionId))
 	}
 
