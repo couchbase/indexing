@@ -112,7 +112,6 @@ type indexer struct {
 	mutMgrCmdCh        MsgChannel //channel to send commands to mutation manager
 	storageMgrCmdCh    MsgChannel //channel to send commands to storage manager
 	tkCmdCh            MsgChannel //channel to send commands to timekeeper
-	adminMgrCmdCh      MsgChannel //channel to send commands to admin port manager
 	rebalMgrCmdCh      MsgChannel //channel to send commands to rebalance manager
 	ddlSrvMgrCmdCh     MsgChannel //channel to send commands to ddl service manager
 	compactMgrCmdCh    MsgChannel //channel to send commands to compaction manager
@@ -128,7 +127,6 @@ type indexer struct {
 	storageMgr    StorageManager    //handle to storage manager
 	compactMgr    CompactionManager //handle to compaction manager
 	mutMgr        MutationManager   //handle to mutation manager
-	adminMgr      AdminManager      //handle to admin port manager
 	rebalMgr      RebalanceMgr      //handle to rebalance manager
 	ddlSrvMgr     *DDLServiceMgr    //handle to ddl service manager
 	clustMgrAgent ClustMgrAgent     //handle to ClustMgrAgent
@@ -193,7 +191,6 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		mutMgrCmdCh:        make(MsgChannel),
 		storageMgrCmdCh:    make(MsgChannel),
 		tkCmdCh:            make(MsgChannel),
-		adminMgrCmdCh:      make(MsgChannel),
 		rebalMgrCmdCh:      make(MsgChannel),
 		ddlSrvMgrCmdCh:     make(MsgChannel),
 		compactMgrCmdCh:    make(MsgChannel),
@@ -431,23 +428,6 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	//indexer needs to restart
 	idx.updateStorageMode(idx.config)
 
-	//Register with Index Coordinator
-	if err := idx.registerWithCoordinator(); err != nil {
-		//log error and exit
-	}
-
-	//sync topology
-	if err := idx.syncTopologyWithCoordinator(); err != nil {
-		//log error and exit
-	}
-
-	//Start Admin port listener
-	idx.adminMgr, res = NewAdminManager(idx.adminMgrCmdCh, idx.adminRecvCh)
-	if res.GetMsgType() != MSG_SUCCESS {
-		logging.Fatalf("Indexer::NewIndexer Admin Manager Init Error %+v", res)
-		return nil, res
-	}
-
 	//Start DDL Service Manager
 	//Initialize DDL Service Manager before rebalance manager so DDL service manager is ready
 	//when Rebalancing manager receives ns_server rebalancing callback.
@@ -605,29 +585,6 @@ func (idx *indexer) releaseStreamRequestLock(req *kvRequest) {
 			common.CrashOnError(errors.New("releaseStreamRequestLock: streamBucketRequestLock is not initialized"))
 		}
 	}
-}
-
-func (idx *indexer) registerWithCoordinator() error {
-
-	//get the IndexerId from persistence and send it to Index Coordinator
-
-	//if there is no IndexerId, send an empty one. Coordinator will assign
-	//a new IndexerId in that case and treat this as a fresh node.
-	return nil
-
-}
-
-func (idx *indexer) syncTopologyWithCoordinator() error {
-
-	//get the latest topology from coordinator
-	return nil
-}
-
-func (idx *indexer) recoverPersistedSnapshots() error {
-
-	//recover persisted snapshots from disk
-	return nil
-
 }
 
 //run starts the main loop for the indexer
@@ -3213,10 +3170,6 @@ func (idx *indexer) shutdownWorkers() {
 	//shutdown timekeeper
 	idx.tkCmdCh <- &MsgGeneral{mType: TK_SHUTDOWN}
 	<-idx.tkCmdCh
-
-	//shutdown admin manager
-	idx.adminMgrCmdCh <- &MsgGeneral{mType: ADMIN_MGR_SHUTDOWN}
-	<-idx.adminMgrCmdCh
 
 	if idx.enableManager {
 		//shutdown cluster manager
