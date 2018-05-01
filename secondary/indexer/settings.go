@@ -43,6 +43,8 @@ type settingsManager struct {
 	config          common.Config
 	cancelCh        chan struct{}
 	compactionToken []byte
+	indexerReady    bool
+	notifyPending   bool
 }
 
 func NewSettingsManager(supvCmdch MsgChannel,
@@ -87,6 +89,8 @@ func NewSettingsManager(supvCmdch MsgChannel,
 			os.Exit(1)
 		}
 	}()
+
+	go s.run()
 
 	indexerConfig := config.SectionConfig("indexer.", true)
 	return s, indexerConfig, &MsgSuccess{}
@@ -244,6 +248,7 @@ loop:
 					s.supvCmdch <- &MsgSuccess{}
 					break loop
 				}
+				s.handleSupervisorCommands(cmd)
 			} else {
 				break loop
 			}
@@ -251,26 +256,31 @@ loop:
 	}
 }
 
+func (s *settingsManager) handleSupervisorCommands(cmd Message) {
+	switch cmd.GetMsgType() {
+
+	case CLUST_MGR_INDEXER_READY:
+		s.handleIndexerReady()
+
+	default:
+		logging.Fatalf("settingsManager::handleSupervisorCommands Unknown Message %+v", cmd)
+		common.CrashOnError(errors.New("Unknown Msg On Supv Channel"))
+	}
+
+}
+
 func (s *settingsManager) metaKVCallback(path string, value []byte, rev interface{}) error {
+
+	if !s.indexerReady && (path == common.IndexingSettingsMetaPath || path == indexCompactonMetaPath) {
+		s.notifyPending = true
+		logging.Infof("SettingsMgr:: Dropped request %v %v. Any setting change will get applied once Indexer is ready.", path, string(value))
+		return nil
+	}
+
 	if path == common.IndexingSettingsMetaPath {
-		logging.Infof("New settings received: \n%s", string(value))
-
-		upgradedConfig, upgraded := tryUpgradeConfig(value)
-		if upgraded {
-			if err := metakv.Set(common.IndexingSettingsMetaPath, upgradedConfig, rev); err != nil {
-				return err
-			}
-			return nil
-		}
-
-		config := s.config.Clone()
-		config.Update(value)
-		initGlobalSettings(s.config, config)
-		s.config = config
-
-		indexerConfig := s.config.SectionConfig("indexer.", true)
-		s.supvMsgch <- &MsgConfigUpdate{
-			cfg: indexerConfig,
+		err := s.applySettings(path, value, rev)
+		if err != nil {
+			return err
 		}
 	} else if path == indexCompactonMetaPath {
 		currentToken := s.compactionToken
@@ -307,6 +317,32 @@ func (s *settingsManager) metaKVCallback(path string, value []byte, rev interfac
 	return nil
 }
 
+func (s *settingsManager) applySettings(path string, value []byte, rev interface{}) error {
+
+	logging.Infof("New settings received: \n%s", string(value))
+
+	var err error
+	upgradedConfig, upgraded := tryUpgradeConfig(value)
+	if upgraded {
+		if err := metakv.Set(common.IndexingSettingsMetaPath, upgradedConfig, rev); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	config := s.config.Clone()
+	config.Update(value)
+	initGlobalSettings(s.config, config)
+	s.config = config
+
+	indexerConfig := s.config.SectionConfig("indexer.", true)
+	s.supvMsgch <- &MsgConfigUpdate{
+		cfg: indexerConfig,
+	}
+
+	return err
+}
+
 func (s *settingsManager) handleFreeMemoryReq(w http.ResponseWriter, r *http.Request) {
 	creds, ok := s.validateAuth(w, r)
 	if !ok {
@@ -336,6 +372,28 @@ func (s *settingsManager) handleForceGCReq(w http.ResponseWriter, r *http.Reques
 	logging.Infof("Received force GC request. Executing GC...")
 	runtime.GC()
 	s.writeOk(w)
+}
+
+func (s *settingsManager) handleIndexerReady() {
+
+	s.supvCmdch <- &MsgSuccess{}
+
+	s.indexerReady = true
+
+	if s.notifyPending {
+		logging.Infof("SettingsMgr::handleIndexerReady apply pending setting changes")
+		s.notifyPending = false
+		config, rev, err := metakv.Get(common.IndexingSettingsMetaPath)
+		if err != nil {
+			logging.Errorf("SettingsMgr::handleIndexerReady Err Metakv Get for Settings %v", err)
+			return
+		}
+		if err = s.applySettings(common.IndexingSettingsMetaPath, config, rev); err != nil {
+			logging.Errorf("SettingsMgr::handleIndexerReady Err Applying Settings %v", err)
+			return
+		}
+	}
+
 }
 
 func setLogger(config common.Config) {

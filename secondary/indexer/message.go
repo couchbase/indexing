@@ -127,6 +127,7 @@ const (
 	INDEXER_MERGE_PARTITION
 	INDEXER_CANCEL_MERGE_PARTITION
 	INDEXER_MTR_FAIL
+	INDEXER_STORAGE_WARMUP_DONE
 
 	//SCAN COORDINATOR
 	SCAN_COORD_SHUTDOWN
@@ -1524,6 +1525,23 @@ func (m *MsgUpdateIndexRState) GetRState() common.RebalanceState {
 	return m.rstate
 }
 
+type MsgStorageWarmupDone struct {
+	err          error
+	needsRestart bool
+}
+
+func (m *MsgStorageWarmupDone) GetMsgType() MsgType {
+	return INDEXER_STORAGE_WARMUP_DONE
+}
+
+func (m *MsgStorageWarmupDone) GetError() error {
+	return m.err
+}
+
+func (m *MsgStorageWarmupDone) NeedsRestart() bool {
+	return m.needsRestart
+}
+
 //Helper function to return string for message type
 
 func (m MsgType) String() string {
@@ -1651,6 +1669,8 @@ func (m MsgType) String() string {
 		return "INDEXER_MERGE_PARTITION"
 	case INDEXER_CANCEL_MERGE_PARTITION:
 		return "INDEXER_CANCEL_MERGE_PARTITION"
+	case INDEXER_STORAGE_WARMUP_DONE:
+		return "INDEXER_STORAGE_WARMUP_DONE"
 
 	case SCAN_COORD_SHUTDOWN:
 		return "SCAN_COORD_SHUTDOWN"

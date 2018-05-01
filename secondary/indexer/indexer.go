@@ -230,6 +230,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	}
 
 	idx.stats = NewIndexerStats()
+	idx.initFromConfig()
 
 	logging.Infof("Indexer::NewIndexer Starting with Vbuckets %v", idx.config["numVbuckets"].Int())
 
@@ -298,21 +299,8 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 
 	idx.initHttpServer()
 
-	//read persisted indexer state
-	needsRestart, err := idx.bootstrap(snapshotNotifych)
-	if err != nil {
-		logging.Fatalf("Indexer::Unable to Bootstrap Indexer from Persisted Metadata %v", err)
-		return nil, &MsgError{err: Error{cause: err}}
-	}
-
-	if needsRestart {
-		logging.Infof("Restarting indexer after storage upgrade")
-		idx.stats.needsRestart.Set(true)
-	}
-
-	//if storageMode has changed in settings while bootstrap was in progress
-	//indexer needs to restart
-	idx.updateStorageMode(idx.config)
+	//bootstrap phase 1
+	idx.bootstrap1(snapshotNotifych)
 
 	//Start DDL Service Manager
 	//Initialize DDL Service Manager before rebalance manager so DDL service manager is ready
@@ -329,40 +317,6 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		logging.Fatalf("Indexer::NewIndexer Rebalance Manager Init Error %+v", res)
 		return nil, res
 	}
-
-	if idx.getIndexerState() == common.INDEXER_BOOTSTRAP {
-		idx.setIndexerState(common.INDEXER_ACTIVE)
-		idx.stats.indexerState.Set(int64(common.INDEXER_ACTIVE))
-	}
-
-	idx.scanCoordCmdCh <- &MsgIndexerState{mType: INDEXER_RESUME, rollbackTimes: idx.bucketRollbackTimes}
-	<-idx.scanCoordCmdCh
-
-	// Persist node uuid in Metadata store
-	idx.clustMgrAgentCmdCh <- &MsgClustMgrLocal{
-		mType: CLUST_MGR_SET_LOCAL,
-		key:   INDEXER_NODE_UUID,
-		value: idx.config["nodeuuid"].String(),
-	}
-
-	respMsg := <-idx.clustMgrAgentCmdCh
-	resp := respMsg.(*MsgClustMgrLocal)
-
-	errMsg := resp.GetError()
-	if errMsg != nil {
-		logging.Fatalf("Indexer::NewIndexer Unable to set INDEXER_NODE_UUID In Local"+
-			"Meta Storage. Err %v", errMsg)
-		common.CrashOnError(errMsg)
-	}
-
-	logging.Infof("Indexer::NewIndexer Status %v", idx.getIndexerState())
-
-	// Initialize the public REST API server after indexer bootstrap is completed
-	NewRestServer(idx.config["clusterAddr"].String(), idx.statsMgr)
-
-	go idx.monitorMemUsage()
-	go idx.logMemstats()
-	go idx.collectProgressStats(true)
 
 	//start the main indexer loop
 	idx.run()
@@ -940,6 +894,9 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 
 	case INDEXER_CANCEL_MERGE_PARTITION:
 		idx.handleCancelMergePartition(msg)
+
+	case INDEXER_STORAGE_WARMUP_DONE:
+		idx.handleStorageWarmupDone(msg)
 
 	default:
 		logging.Fatalf("Indexer::handleWorkerMsgs Unknown Message %+v", msg)
@@ -4571,7 +4528,7 @@ func (idx *indexer) checkDuplicateDropRequest(indexInst common.IndexInst,
 	return false
 }
 
-func (idx *indexer) bootstrap(snapshotNotifych chan IndexSnapshot) (bool, error) {
+func (idx *indexer) bootstrap1(snapshotNotifych chan IndexSnapshot) error {
 
 	logging.Infof("Indexer::indexer version %v", common.INDEXER_CUR_VERSION)
 	idx.genIndexerId()
@@ -4584,20 +4541,55 @@ func (idx *indexer) bootstrap(snapshotNotifych chan IndexSnapshot) (bool, error)
 
 	idx.recoverRebalanceState()
 
-	//recover indexes from local metadata
-	needsRestart, err := idx.initFromPersistedState()
+	err := idx.recoverIndexInstMap()
 	if err != nil {
-		return needsRestart, err
+		logging.Fatalf("Indexer::initFromPersistedState Error Recovering IndexInstMap %v", err)
+		return err
 	}
 
-	//Start Storage Manager
-	var res Message
-	idx.storageMgr, res = NewStorageManager(idx.storageMgrCmdCh, idx.wrkrRecvCh,
-		idx.indexPartnMap, idx.config, snapshotNotifych)
-	if res.GetMsgType() == MSG_ERROR {
-		err := res.(*MsgError).GetError()
-		logging.Fatalf("Indexer::NewIndexer Storage Manager Init Error %v", err)
-		return needsRestart, err.cause
+	logging.Infof("Indexer::initFromPersistedState Recovered IndexInstMap %v", idx.indexInstMap)
+
+	idx.validateIndexInstMap()
+
+	go func() {
+		//recover indexes from local metadata
+		needsRestart, err := idx.initFromPersistedState()
+		if err != nil {
+			idx.internalRecvCh <- &MsgStorageWarmupDone{err: err, needsRestart: needsRestart}
+			return
+		}
+
+		//Start Storage Manager
+		var res Message
+		idx.storageMgr, res = NewStorageManager(idx.storageMgrCmdCh, idx.wrkrRecvCh,
+			idx.indexPartnMap, idx.config, snapshotNotifych)
+		if res.GetMsgType() == MSG_ERROR {
+			err := res.(*MsgError).GetError()
+			logging.Fatalf("Indexer::NewIndexer Storage Manager Init Error %v", err)
+			idx.internalRecvCh <- &MsgStorageWarmupDone{err: err.cause, needsRestart: needsRestart}
+			return
+		}
+
+		idx.internalRecvCh <- &MsgStorageWarmupDone{err: err, needsRestart: needsRestart}
+	}()
+
+	return nil
+
+}
+
+func (idx *indexer) handleStorageWarmupDone(msg Message) {
+
+	err := msg.(*MsgStorageWarmupDone).GetError()
+	needsRestart := msg.(*MsgStorageWarmupDone).NeedsRestart()
+
+	if err != nil {
+		logging.Fatalf("Indexer::Unable to Bootstrap Indexer from Persisted Metadata %v", err)
+		common.CrashOnError(err)
+	}
+
+	if needsRestart {
+		logging.Infof("Restarting indexer after storage upgrade")
+		idx.stats.needsRestart.Set(true)
 	}
 
 	//send updated maps
@@ -4608,6 +4600,49 @@ func (idx *indexer) bootstrap(snapshotNotifych chan IndexSnapshot) (bool, error)
 	if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, msgUpdateIndexPartnMap); err != nil {
 		common.CrashOnError(err)
 	}
+
+	err = idx.bootstrap2()
+	if err != nil {
+		common.CrashOnError(err)
+	}
+
+	if idx.getIndexerState() == common.INDEXER_BOOTSTRAP {
+		idx.setIndexerState(common.INDEXER_ACTIVE)
+		idx.stats.indexerState.Set(int64(common.INDEXER_ACTIVE))
+	}
+
+	idx.scanCoordCmdCh <- &MsgIndexerState{mType: INDEXER_RESUME, rollbackTimes: idx.bucketRollbackTimes}
+	<-idx.scanCoordCmdCh
+
+	// Persist node uuid in Metadata store
+	idx.clustMgrAgentCmdCh <- &MsgClustMgrLocal{
+		mType: CLUST_MGR_SET_LOCAL,
+		key:   INDEXER_NODE_UUID,
+		value: idx.config["nodeuuid"].String(),
+	}
+
+	respMsg := <-idx.clustMgrAgentCmdCh
+	resp := respMsg.(*MsgClustMgrLocal)
+
+	errMsg := resp.GetError()
+	if errMsg != nil {
+		logging.Fatalf("Indexer::NewIndexer Unable to set INDEXER_NODE_UUID In Local"+
+			"Meta Storage. Err %v", errMsg)
+		common.CrashOnError(errMsg)
+	}
+
+	logging.Infof("Indexer::NewIndexer Status %v", idx.getIndexerState())
+
+	// Initialize the public REST API server after indexer bootstrap is completed
+	NewRestServer(idx.config["clusterAddr"].String(), idx.statsMgr)
+
+	go idx.monitorMemUsage()
+	go idx.logMemstats()
+	go idx.collectProgressStats(true)
+
+}
+
+func (idx *indexer) bootstrap2() error {
 
 	if common.GetStorageMode() == common.MOI {
 		idx.clustMgrAgentCmdCh <- &MsgClustMgrLocal{
@@ -4658,19 +4693,31 @@ func (idx *indexer) bootstrap(snapshotNotifych chan IndexSnapshot) (bool, error)
 	// ready to process DDL
 	msg := &MsgClustMgrUpdate{mType: CLUST_MGR_INDEXER_READY}
 	if err := idx.sendMsgToClusterMgr(msg); err != nil {
-		return needsRestart, err
+		return err
+	}
+
+	//send Ready to Settings Manager
+	if resp := idx.sendStreamUpdateToWorker(msg, idx.settingsMgrCmdCh,
+		"SettingsMgr"); resp.GetMsgType() != MSG_SUCCESS {
+		return resp.(*MsgError).GetError().cause
+	}
+
+	//send Ready to Rebalance Manager
+	if resp := idx.sendStreamUpdateToWorker(msg, idx.rebalMgrCmdCh,
+		"RebalanceMgr"); resp.GetMsgType() != MSG_SUCCESS {
+		return resp.(*MsgError).GetError().cause
 	}
 
 	//if there are no indexes, return from here
 	if len(idx.indexInstMap) == 0 {
-		return needsRestart, nil
+		return nil
 	}
 
 	if ok := idx.startStreams(); !ok {
-		return needsRestart, errors.New("Unable To Start DCP Streams")
+		return errors.New("Unable To Start DCP Streams")
 	}
 
-	return needsRestart, nil
+	return nil
 }
 
 func (idx *indexer) recoverRebalanceState() {
@@ -4786,16 +4833,6 @@ func (idx *indexer) genIndexerId() {
 }
 
 func (idx *indexer) initFromPersistedState() (bool, error) {
-
-	err := idx.recoverIndexInstMap()
-	if err != nil {
-		logging.Fatalf("Indexer::initFromPersistedState Error Recovering IndexInstMap %v", err)
-		return false, err
-	}
-
-	logging.Infof("Indexer::initFromPersistedState Recovered IndexInstMap %v", idx.indexInstMap)
-
-	idx.validateIndexInstMap()
 
 	needsRestart := idx.upgradeStorage()
 

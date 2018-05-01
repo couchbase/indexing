@@ -26,10 +26,12 @@ import (
 	"time"
 
 	"github.com/couchbase/cbauth/metakv"
+	"github.com/couchbase/cbauth/service"
 	c "github.com/couchbase/indexing/secondary/common"
 	l "github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager"
 	"github.com/couchbase/indexing/secondary/manager/client"
+	"github.com/couchbase/indexing/secondary/planner"
 )
 
 type DoneCallback func(err error, cancel <-chan struct{})
@@ -81,14 +83,17 @@ type Rebalancer struct {
 	config c.ConfigHolder
 
 	lastKnownProgress map[c.IndexInstId]float64
+
+	change     *service.TopologyChange
+	runPlanner bool
 }
 
 func NewRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *RebalanceToken,
 	nodeId string, master bool, progress ProgressCallback, done DoneCallback,
-	supvMsgch MsgChannel, localaddr string, config c.Config) *Rebalancer {
+	supvMsgch MsgChannel, localaddr string, config c.Config, change *service.TopologyChange, runPlanner bool) *Rebalancer {
 
-	l.Infof("NewRebalancer nodeId %v rebalToken %v master %v localaddr %v", nodeId,
-		rebalToken, master, localaddr)
+	l.Infof("NewRebalancer nodeId %v rebalToken %v master %v localaddr %v runPlanner %v", nodeId,
+		rebalToken, master, localaddr, runPlanner)
 
 	r := &Rebalancer{
 		transferTokens: transferTokens,
@@ -113,23 +118,89 @@ func NewRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *Rebal
 
 		waitForTokenPublish: make(chan struct{}),
 		lastKnownProgress:   make(map[c.IndexInstId]float64),
+
+		change:     change,
+		runPlanner: runPlanner,
 	}
 
 	r.config.Store(config)
 
 	if master {
-		go r.doRebalance()
+		go r.initRebalAsync()
 	} else {
 		close(r.waitForTokenPublish)
-	}
-
-	if r.transferTokens != nil || !master {
 		go r.observeRebalance()
 	}
 
 	go r.processDropIndexQueue()
 
 	return r
+}
+
+func (r *Rebalancer) initRebalAsync() {
+
+	//short circuit
+	if r.transferTokens == nil && !r.runPlanner {
+		r.cb.progress(1.0, r.cancel)
+		r.finish(nil)
+		return
+	}
+	cfg := r.config.Load()
+
+	if r.runPlanner {
+	loop:
+		for {
+			select {
+			case <-r.cancel:
+				l.Infof("Rebalancer::initRebalAsync Cancel Received")
+				return
+
+			case <-r.done:
+				l.Infof("Rebalancer::initRebalAsync Done Received")
+				return
+
+			default:
+				allWarmedup, _ := checkAllIndexersWarmedup(cfg["clusterAddr"].String())
+
+				if allWarmedup {
+
+					topology, err := getGlobalTopology(r.localaddr)
+					if err != nil {
+						l.Errorf("Rebalancer::initRebalAsync Error Fetching Topology %v", err)
+						go r.finish(err)
+						return
+					}
+
+					l.Infof("Rebalancer::initRebalAsync Global Topology %v", topology)
+
+					onEjectOnly := cfg["rebalance.node_eject_only"].Bool()
+					disableReplicaRepair := cfg["rebalance.disable_replica_repair"].Bool()
+					timeout := cfg["planner.timeout"].Int()
+					threshold := cfg["planner.variationThreshold"].Float64()
+					cpuProfile := cfg["planner.cpuProfile"].Bool()
+
+					start := time.Now()
+					r.transferTokens, err = planner.ExecuteRebalance(cfg["clusterAddr"].String(), *r.change,
+						r.nodeId, onEjectOnly, disableReplicaRepair, threshold, timeout, cpuProfile)
+					if err != nil {
+						l.Errorf("Rebalancer::initRebalAsync Planner Error %v", err)
+						go r.finish(err)
+						return
+					}
+					if len(r.transferTokens) == 0 {
+						r.transferTokens = nil
+					}
+					elapsed := time.Since(start)
+					l.Infof("Rebalancer::initRebalAsync Planner Time Taken %v", elapsed)
+					break loop
+				}
+			}
+			l.Errorf("Rebalancer::initRebalAsync All Indexers Not Active. Waiting...")
+			time.Sleep(5 * time.Second)
+		}
+	}
+
+	go r.doRebalance()
 }
 
 func (r *Rebalancer) Cancel() {
@@ -194,13 +265,22 @@ func (r *Rebalancer) addToWaitGroup() bool {
 func (r *Rebalancer) doRebalance() {
 
 	if r.transferTokens != nil {
-		r.publishTransferTokens()
+		select {
+		case <-r.cancel:
+			l.Infof("Rebalancer::doRebalance Cancel Received. Skip Publishing Tokens.")
+			return
+
+		default:
+			r.publishTransferTokens()
+			close(r.waitForTokenPublish)
+			go r.observeRebalance()
+		}
 	} else {
 		r.cb.progress(1.0, r.cancel)
 		r.finish(nil)
+		return
 	}
 
-	close(r.waitForTokenPublish)
 }
 
 func (r *Rebalancer) publishTransferTokens() {
@@ -1296,6 +1376,63 @@ func getLocalMeta(addr string) (*manager.LocalIndexMetadata, error) {
 	}
 
 	return localMeta, nil
+}
+
+//returs if all indexers are warmedup and addr of any paused indexer
+func checkAllIndexersWarmedup(clusterURL string) (bool, []string) {
+
+	var pausedAddr []string
+
+	cinfo, err := c.FetchNewClusterInfoCache(clusterURL, c.DEFAULT_POOL)
+	if err != nil {
+		l.Errorf("Rebalancer::checkAllIndexersWarmedup Error Fetching Cluster Information %v", err)
+		return false, nil
+	}
+
+	nids := cinfo.GetNodesByServiceType(c.INDEX_HTTP_SERVICE)
+	url := "/stats?async=true"
+
+	allWarmedup := true
+
+	for _, nid := range nids {
+
+		addr, err := cinfo.GetServiceAddress(nid, c.INDEX_HTTP_SERVICE)
+		if err == nil {
+
+			resp, err := getWithAuth(addr + url)
+			if err != nil {
+				l.Infof("Rebalancer::checkAllIndexersWarmedup Error Fetching Stats %v From %v", err, addr)
+				return false, nil
+			}
+
+			stats := new(c.Statistics)
+			if err := convertResponse(resp, stats); err != nil {
+				l.Infof("Rebalancer::checkAllIndexersWarmedup Error Convert Response %v From %v", err, addr)
+				return false, nil
+			}
+
+			statsMap := stats.ToMap()
+			if statsMap == nil {
+				l.Infof("Rebalancer::checkAllIndexersWarmedup Nil Stats From %v", addr)
+				return false, nil
+			}
+
+			if state, ok := statsMap["indexer_state"]; ok {
+				if state == "Paused" {
+					l.Infof("Rebalancer::checkAllIndexersWarmedup Paused state detected for %v", addr)
+					pausedAddr = append(pausedAddr, addr)
+				} else if state != "Active" {
+					l.Infof("Rebalancer::checkAllIndexersWarmedup Indexer %v State %v", addr, state)
+					allWarmedup = false
+				}
+			}
+		} else {
+			l.Errorf("Rebalancer::checkAllIndexersWarmedup Error Fetching Service Address %v", err)
+			return false, nil
+		}
+	}
+
+	return allWarmedup, pausedAddr
 }
 
 //

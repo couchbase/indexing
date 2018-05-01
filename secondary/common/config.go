@@ -1938,9 +1938,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.planner.timeout": ConfigValue{
-		20,
+		300,
 		"timeout (sec) on planner",
-		20,
+		300,
 		false, // mutable
 		false, // case-insensitive
 	},

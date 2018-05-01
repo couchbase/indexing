@@ -39,7 +39,6 @@ import (
 	l "github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager"
 	"github.com/couchbase/indexing/secondary/manager/client"
-	"github.com/couchbase/indexing/secondary/planner"
 )
 
 //RebalanceMgr manages the integration with ns-server and
@@ -74,6 +73,9 @@ type ServiceMgr struct {
 	localhttp string
 
 	moveStatusCh chan error
+
+	cleanupPending bool
+	indexerReady   bool
 }
 
 type rebalanceContext struct {
@@ -149,8 +151,12 @@ func NewRebalanceMgr(supvCmdch MsgChannel, supvMsgch MsgChannel, config c.Config
 	mgr.rebalanceToken = rebalanceToken
 	mgr.localhttp = mgr.getLocalHttpAddr()
 
-	go mgr.recoverRebalance()
+	if rebalanceToken != nil {
+		mgr.cleanupPending = true
+	}
+
 	go mgr.run()
+	go mgr.initService()
 
 	return mgr, &MsgSuccess{}
 }
@@ -160,8 +166,6 @@ func (m *ServiceMgr) initService() {
 	l.Infof("RebalanceMgr::initService Init")
 
 	go m.registerWithServer()
-	go m.listenMoveIndex()
-	go m.rebalanceJanitor()
 	go m.updateNodeList()
 
 	http.HandleFunc("/registerRebalanceToken", m.handleRegisterRebalanceToken)
@@ -175,7 +179,7 @@ func (m *ServiceMgr) initService() {
 //update node list after restart
 func (m *ServiceMgr) updateNodeList() {
 
-	topology, err := m.getGlobalTopology()
+	topology, err := getGlobalTopology(m.localhttp)
 	if err != nil {
 		l.Errorf("ServiceMgr::updateNodeList Error Fetching Topology %v", err)
 		return
@@ -231,6 +235,9 @@ func (m *ServiceMgr) handleSupervisorCommands(cmd Message) {
 	case CONFIG_SETTINGS_UPDATE:
 		m.handleConfigUpdate(cmd)
 
+	case CLUST_MGR_INDEXER_READY:
+		m.handleIndexerReady(cmd)
+
 	default:
 		l.Fatalf("ServiceMgr::handleSupervisorCommands Unknown Message %+v", cmd)
 		c.CrashOnError(errors.New("Unknown Msg On Supv Channel"))
@@ -242,6 +249,14 @@ func (m *ServiceMgr) handleConfigUpdate(cmd Message) {
 	cfgUpdate := cmd.(*MsgConfigUpdate)
 	m.config.Store(cfgUpdate.GetConfig())
 	m.supvCmdch <- &MsgSuccess{}
+}
+
+func (m *ServiceMgr) handleIndexerReady(cmd Message) {
+
+	m.supvCmdch <- &MsgSuccess{}
+
+	go m.recoverRebalance()
+
 }
 
 func (m *ServiceMgr) registerWithServer() {
@@ -384,6 +399,10 @@ func (m *ServiceMgr) PrepareTopologyChange(change service.TopologyChange) error 
 
 func (m *ServiceMgr) prepareFailover(change service.TopologyChange) error {
 
+	if !m.indexerReady {
+		return nil
+	}
+
 	var err error
 	if m.rebalanceToken != nil && m.rebalanceToken.Source == RebalSourceClusterOp {
 
@@ -463,6 +482,12 @@ func (m *ServiceMgr) prepareFailover(change service.TopologyChange) error {
 func (m *ServiceMgr) prepareRebalance(change service.TopologyChange) error {
 
 	var err error
+	if m.cleanupPending {
+		err = errors.New("indexer rebalance failure - cleanup in progress")
+		l.Errorf("ServiceMgr::prepareRebalance %v", err)
+		return err
+	}
+
 	if m.rebalanceToken != nil && m.rebalanceToken.Source == RebalSourceMoveIndex {
 		err = errors.New("indexer rebalance failure - move index in progress")
 		l.Errorf("ServiceMgr::prepareRebalance %v", err)
@@ -559,15 +584,16 @@ func (m *ServiceMgr) startFailover(change service.TopologyChange) error {
 	m.updateRebalanceProgressLOCKED(0)
 
 	m.rebalancer = NewRebalancer(nil, nil, string(m.nodeInfo.NodeID), true,
-		m.rebalanceProgressCallback, m.rebalanceDoneCallback, m.supvMsgch, "", m.config.Load())
+		m.rebalanceProgressCallback, m.rebalanceDoneCallback, m.supvMsgch, "", m.config.Load(), nil, false)
 
 	return nil
 }
 
 func (m *ServiceMgr) startRebalance(change service.TopologyChange) error {
 
-	var topology *manager.ClusterIndexMetadata
+	var runPlanner bool
 	var transferTokens map[string]*c.TransferToken
+
 	if isSingleNodeRebal(change) {
 		if change.KeepNodes[0].NodeInfo.NodeID == m.nodeInfo.NodeID {
 			l.Infof("ServiceMgr::startRebalance I'm the only node in cluster. Nothing to do.")
@@ -581,6 +607,7 @@ func (m *ServiceMgr) startRebalance(change service.TopologyChange) error {
 	} else {
 
 		var err error
+
 		err = m.cleanupOrphanTokens(change)
 		if err != nil {
 			l.Errorf("ServiceMgr::startRebalance Error During Cleanup Orphan Tokens %v", err)
@@ -608,46 +635,17 @@ func (m *ServiceMgr) startRebalance(change service.TopologyChange) error {
 			return err
 		}
 
-		topology, err = m.getGlobalTopology()
-		if err != nil {
-			m.runCleanupPhaseLOCKED(RebalanceTokenPath, true)
-			return err
-		}
-
-		l.Infof("ServiceMgr::startRebalance Global Topology %v", topology)
-
 		cfg := m.config.Load()
-		start := time.Now()
 
 		if c.GetBuildMode() != c.ENTERPRISE {
 			l.Infof("ServiceMgr::startRebalance skip planner for non-enterprise edition")
-
+			runPlanner = false
 		} else if cfg["rebalance.disable_index_move"].Bool() {
 			l.Infof("ServiceMgr::startRebalance skip planner as disable_index_move is set")
-
-		} else if cfg["rebalance.use_simple_planner"].Bool() {
-			planner := NewSimplePlanner(topology, change, string(m.nodeInfo.NodeID))
-			transferTokens = planner.PlanIndexMoves()
+			runPlanner = false
 		} else {
-			onEjectOnly := cfg["rebalance.node_eject_only"].Bool()
-			disableReplicaRepair := cfg["rebalance.disable_replica_repair"].Bool()
-			timeout := cfg["planner.timeout"].Int()
-			threshold := cfg["planner.variationThreshold"].Float64()
-			cpuProfile := cfg["planner.cpuProfile"].Bool()
-
-			transferTokens, err = planner.ExecuteRebalance(cfg["clusterAddr"].String(), change,
-				string(m.nodeInfo.NodeID), onEjectOnly, disableReplicaRepair, threshold, timeout, cpuProfile)
-			if err != nil {
-				l.Errorf("ServiceMgr::startRebalance Planner Error %v", err)
-				m.runCleanupPhaseLOCKED(RebalanceTokenPath, true)
-				return err
-			}
-			if len(transferTokens) == 0 {
-				transferTokens = nil
-			}
+			runPlanner = true
 		}
-		elapsed := time.Since(start)
-		l.Infof("ServiceMgr::startRebalance Planner Time Taken %v", elapsed)
 	}
 
 	ctx := &rebalanceContext{
@@ -660,7 +658,7 @@ func (m *ServiceMgr) startRebalance(change service.TopologyChange) error {
 
 	m.rebalancer = NewRebalancer(transferTokens, m.rebalanceToken, string(m.nodeInfo.NodeID),
 		true, m.rebalanceProgressCallback, m.rebalanceDoneCallback, m.supvMsgch,
-		m.localhttp, m.config.Load())
+		m.localhttp, m.config.Load(), &change, runPlanner)
 
 	return nil
 }
@@ -774,19 +772,21 @@ func (m *ServiceMgr) runCleanupPhaseLOCKED(path string, isMaster bool) error {
 		}
 	}
 
-	rtokens, err := m.getCurrRebalTokens()
-	if err != nil {
-		l.Errorf("ServiceMgr::runCleanupPhase Error Fetching Metakv Tokens %v", err)
-	}
-
-	if rtokens != nil && len(rtokens.TT) != 0 {
-		err := m.cleanupTransferTokens(rtokens.TT)
+	if m.indexerReady {
+		rtokens, err := m.getCurrRebalTokens()
 		if err != nil {
-			l.Errorf("ServiceMgr::runCleanupPhase Error Cleaning Transfer Tokens %v", err)
+			l.Errorf("ServiceMgr::runCleanupPhase Error Fetching Metakv Tokens %v", err)
+		}
+
+		if rtokens != nil && len(rtokens.TT) != 0 {
+			err := m.cleanupTransferTokens(rtokens.TT)
+			if err != nil {
+				l.Errorf("ServiceMgr::runCleanupPhase Error Cleaning Transfer Tokens %v", err)
+			}
 		}
 	}
 
-	err = m.cleanupLocalRToken()
+	err := m.cleanupLocalRToken()
 	if err != nil {
 		return err
 	}
@@ -1516,7 +1516,10 @@ func (m *ServiceMgr) onRebalanceDoneLOCKED(err error) {
 			}
 		}
 
-		m.runCleanupPhaseLOCKED(RebalanceTokenPath, true)
+		if !m.cleanupPending {
+			m.runCleanupPhaseLOCKED(RebalanceTokenPath, true)
+		}
+
 		m.rebalanceCtx = nil
 
 		m.updateStateLOCKED(func(s *state) {
@@ -1722,26 +1725,35 @@ func (m *ServiceMgr) recoverRebalance() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	rtokens, err := m.getCurrRebalTokens()
-	if err != nil {
-		l.Errorf("ServiceMgr::recoverRebalance Error Fetching Metakv Tokens %v", err)
-		c.CrashOnError(err)
-	}
+	m.indexerReady = true
 
-	if rtokens != nil {
-		if rtokens.RT != nil {
-			m.doRecoverRebalance(rtokens.RT)
+	if m.cleanupPending {
+
+		rtokens, err := m.getCurrRebalTokens()
+		if err != nil {
+			l.Errorf("ServiceMgr::recoverRebalance Error Fetching Metakv Tokens %v", err)
+			c.CrashOnError(err)
 		}
-		if rtokens.MT != nil {
-			m.doRecoverMoveIndex(rtokens.MT)
+
+		if rtokens != nil {
+			if rtokens.RT != nil {
+				m.doRecoverRebalance(rtokens.RT)
+			}
+			if rtokens.MT != nil {
+				m.doRecoverMoveIndex(rtokens.MT)
+			}
+		}
+
+		if m.rebalanceRunning {
+			m.runCleanupPhaseLOCKED(RebalanceTokenPath, false)
 		}
 	}
 
-	if m.rebalanceRunning {
-		m.runCleanupPhaseLOCKED(RebalanceTokenPath, false)
-	}
+	m.cleanupPending = false
 
-	go m.initService()
+	go m.listenMoveIndex()
+	go m.rebalanceJanitor()
+
 }
 
 func (m *ServiceMgr) doRecoverRebalance(gtoken *RebalanceToken) {
@@ -1812,6 +1824,12 @@ func (m *ServiceMgr) handleCleanupRebalance(w http.ResponseWriter, r *http.Reque
 		l.Infof("ServiceMgr::handleCleanupRebalance Processing Request %v", l.TagUD(r))
 		m.mu.Lock()
 		defer m.mu.Unlock()
+
+		if !m.indexerReady {
+			l.Errorf("ServiceMgr::handleCleanupRebalance Cannot Process Request %v", c.ErrIndexerInBootstrap)
+			m.writeError(w, c.ErrIndexerInBootstrap)
+			return
+		}
 
 		rtokens, err := m.getCurrRebalTokens()
 		if err != nil {
@@ -1949,7 +1967,7 @@ func (m *ServiceMgr) handleRegisterRebalanceToken(w http.ResponseWriter, r *http
 
 			m.rebalancerF = NewRebalancer(nil, &rebalToken, string(m.nodeInfo.NodeID),
 				false, nil, m.rebalanceDoneCallback, m.supvMsgch,
-				m.localhttp, m.config.Load())
+				m.localhttp, m.config.Load(), nil, false)
 			m.writeOk(w)
 			return
 
@@ -1967,9 +1985,8 @@ func (m *ServiceMgr) handleRegisterRebalanceToken(w http.ResponseWriter, r *http
 
 }
 
-func (m *ServiceMgr) getGlobalTopology() (*manager.ClusterIndexMetadata, error) {
+func getGlobalTopology(addr string) (*manager.ClusterIndexMetadata, error) {
 
-	addr := m.localhttp
 	url := "/getIndexMetadata"
 
 	resp, err := getWithAuth(addr + url)
@@ -2085,7 +2102,7 @@ func (m *ServiceMgr) processMoveIndex(path string, value []byte, rev interface{}
 			}
 			m.rebalancerF = NewRebalancer(nil, &rebalToken, string(m.nodeInfo.NodeID),
 				false, nil, m.moveIndexDoneCallback, m.supvMsgch,
-				m.localhttp, m.config.Load())
+				m.localhttp, m.config.Load(), nil, false)
 		}
 	}
 
@@ -2101,6 +2118,7 @@ func (m *ServiceMgr) handleMoveIndex(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.Method == "POST" {
+
 		bytes, _ := ioutil.ReadAll(r.Body)
 		in := make(map[string]interface{})
 		if err := json.Unmarshal(bytes, &in); err != nil {
@@ -2132,7 +2150,7 @@ func (m *ServiceMgr) handleMoveIndex(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		topology, err := m.getGlobalTopology()
+		topology, err := getGlobalTopology(m.localhttp)
 		if err != nil {
 			send(http.StatusInternalServerError, w, err.Error())
 			return
@@ -2252,12 +2270,23 @@ func (m *ServiceMgr) initMoveIndex(req *manager.IndexRequest, nodes []string) (e
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	if !m.indexerReady {
+		l.Errorf("ServiceMgr::handleMoveIndex Cannot Process Request %v", c.ErrIndexerInBootstrap)
+		return c.ErrIndexerInBootstrap, false
+	}
+
 	if m.checkRebalanceRunning() {
 		return errors.New("Cannot Process Move Index - Rebalance/MoveIndex In Progress"), false
 	}
 
 	if m.state.rebalanceID != "" {
 		return errors.New("Cannot Process Move Index - Failover In Progress"), false
+	}
+
+	cfg := m.config.Load()
+	allWarmedup, _ := checkAllIndexersWarmedup(cfg["clusterAddr"].String())
+	if !allWarmedup {
+		return errors.New("Cannot Process Move Index - All Indexers are not Active"), false
 	}
 
 	if err := m.genMoveIndexToken(); err != nil {
@@ -2293,8 +2322,12 @@ func (m *ServiceMgr) initMoveIndex(req *manager.IndexRequest, nodes []string) (e
 		return err, false
 	}
 
+	//sleep for a bit to let the rebalance token propagate to other nodes via metakv.
+	//unlike rebalance, this is not a fully coordinated step for move index.
+	time.Sleep(2 * time.Second)
+
 	rebalancer := NewRebalancer(transferTokens, m.rebalanceToken, string(m.nodeInfo.NodeID),
-		true, nil, m.moveIndexDoneCallback, m.supvMsgch, m.localhttp, m.config.Load())
+		true, nil, m.moveIndexDoneCallback, m.supvMsgch, m.localhttp, m.config.Load(), nil, false)
 
 	m.rebalancer = rebalancer
 	m.rebalanceRunning = true
@@ -2344,7 +2377,7 @@ func (m *ServiceMgr) registerMoveIndexTokenInMetakv(token *RebalanceToken) error
 func (m *ServiceMgr) generateTransferTokenForMoveIndex(req *manager.IndexRequest,
 	reqNodes []string) (map[string]*c.TransferToken, error) {
 
-	topology, err := m.getGlobalTopology()
+	topology, err := getGlobalTopology(m.localhttp)
 	if err != nil {
 		return nil, err
 	}
