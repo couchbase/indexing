@@ -221,7 +221,6 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	}
 
 	logging.Infof("Indexer::NewIndexer Status Warmup")
-	snapshotNotifych := make(chan IndexSnapshot, 100)
 
 	var res Message
 	idx.settingsMgr, idx.config, res = NewSettingsManager(idx.settingsMgrCmdCh, idx.wrkrRecvCh, config)
@@ -232,28 +231,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 
 	idx.stats = NewIndexerStats()
 
-	// Read memquota setting
-	memQuota := int64(idx.config["settings.memory_quota"].Uint64())
-	idx.stats.memoryQuota.Set(memQuota)
-	plasma.SetMemoryQuota(int64(float64(memQuota) * PLASMA_MEMQUOTA_FRAC))
-	memdb.Debug(idx.config["settings.moi.debug"].Bool())
-	updateMOIWriters(idx.config["settings.moi.persistence_threads"].Int())
-	reclaimBlockSize := int64(idx.config["plasma.LSSReclaimBlockSize"].Int())
-	plasma.SetLogReclaimBlockSize(reclaimBlockSize)
-
 	logging.Infof("Indexer::NewIndexer Starting with Vbuckets %v", idx.config["numVbuckets"].Int())
-
-	idx.initStreamAddressMap()
-	idx.initStreamFlushMap()
-	idx.initServiceAddressMap()
-
-	isEnterprise := idx.config["isEnterprise"].Bool()
-	if isEnterprise {
-		common.SetBuildMode(common.ENTERPRISE)
-	} else {
-		common.SetBuildMode(common.COMMUNITY)
-	}
-	logging.Infof("Indexer::NewIndexer Build Mode Set %v", common.GetBuildMode())
 
 	//Start Mutation Manager
 	idx.mutMgr, res = NewMutationManager(idx.mutMgrCmdCh, idx.wrkrRecvCh, idx.config)
@@ -277,6 +255,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	}
 
 	//Start Scan Coordinator
+	snapshotNotifych := make(chan IndexSnapshot, 100)
 	idx.scanCoord, res = NewScanCoordinator(idx.scanCoordCmdCh, idx.wrkrRecvCh, idx.config, snapshotNotifych)
 	if res.GetMsgType() != MSG_SUCCESS {
 		logging.Fatalf("Indexer::NewIndexer Scan Coordinator Init Error %+v", res)
@@ -289,8 +268,6 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		logging.Fatalf("Indexer::NewCompactionmanager Init Error %+v", res)
 		return nil, res
 	}
-
-	idx.enableManager = idx.config["enableManager"].Bool()
 
 	idx.bootstrapStorageMode = idx.getBootstrapStorageMode(idx.config)
 	logging.Infof("bootstrap storage mode %v", idx.bootstrapStorageMode)
@@ -319,9 +296,114 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	idx.scanCoordCmdCh <- &MsgIndexerState{mType: INDEXER_BOOTSTRAP}
 	<-idx.scanCoordCmdCh
 
+	idx.initHttpServer()
+
+	//read persisted indexer state
+	needsRestart, err := idx.bootstrap(snapshotNotifych)
+	if err != nil {
+		logging.Fatalf("Indexer::Unable to Bootstrap Indexer from Persisted Metadata %v", err)
+		return nil, &MsgError{err: Error{cause: err}}
+	}
+
+	if needsRestart {
+		logging.Infof("Restarting indexer after storage upgrade")
+		idx.stats.needsRestart.Set(true)
+	}
+
+	//if storageMode has changed in settings while bootstrap was in progress
+	//indexer needs to restart
+	idx.updateStorageMode(idx.config)
+
+	//Start DDL Service Manager
+	//Initialize DDL Service Manager before rebalance manager so DDL service manager is ready
+	//when Rebalancing manager receives ns_server rebalancing callback.
+	idx.ddlSrvMgr, res = NewDDLServiceMgr(common.IndexerId(idx.id), idx.ddlSrvMgrCmdCh, idx.wrkrRecvCh, idx.config)
+	if res.GetMsgType() != MSG_SUCCESS {
+		logging.Fatalf("Indexer::NewIndexer DDL Service Manager Init Error %+v", res)
+		return nil, res
+	}
+
+	//Start Rebalance Manager
+	idx.rebalMgr, res = NewRebalanceMgr(idx.rebalMgrCmdCh, idx.wrkrRecvCh, idx.config, idx.rebalanceRunning, idx.rebalanceToken)
+	if res.GetMsgType() != MSG_SUCCESS {
+		logging.Fatalf("Indexer::NewIndexer Rebalance Manager Init Error %+v", res)
+		return nil, res
+	}
+
+	if idx.getIndexerState() == common.INDEXER_BOOTSTRAP {
+		idx.setIndexerState(common.INDEXER_ACTIVE)
+		idx.stats.indexerState.Set(int64(common.INDEXER_ACTIVE))
+	}
+
+	idx.scanCoordCmdCh <- &MsgIndexerState{mType: INDEXER_RESUME, rollbackTimes: idx.bucketRollbackTimes}
+	<-idx.scanCoordCmdCh
+
+	// Persist node uuid in Metadata store
+	idx.clustMgrAgentCmdCh <- &MsgClustMgrLocal{
+		mType: CLUST_MGR_SET_LOCAL,
+		key:   INDEXER_NODE_UUID,
+		value: idx.config["nodeuuid"].String(),
+	}
+
+	respMsg := <-idx.clustMgrAgentCmdCh
+	resp := respMsg.(*MsgClustMgrLocal)
+
+	errMsg := resp.GetError()
+	if errMsg != nil {
+		logging.Fatalf("Indexer::NewIndexer Unable to set INDEXER_NODE_UUID In Local"+
+			"Meta Storage. Err %v", errMsg)
+		common.CrashOnError(errMsg)
+	}
+
+	logging.Infof("Indexer::NewIndexer Status %v", idx.getIndexerState())
+
+	// Initialize the public REST API server after indexer bootstrap is completed
+	NewRestServer(idx.config["clusterAddr"].String(), idx.statsMgr)
+
+	go idx.monitorMemUsage()
+	go idx.logMemstats()
+	go idx.collectProgressStats(true)
+
+	//start the main indexer loop
+	idx.run()
+
+	return idx, &MsgSuccess{}
+
+}
+
+func (idx *indexer) initFromConfig() {
+
+	// Read memquota setting
+	memQuota := int64(idx.config["settings.memory_quota"].Uint64())
+	idx.stats.memoryQuota.Set(memQuota)
+	plasma.SetMemoryQuota(int64(float64(memQuota) * PLASMA_MEMQUOTA_FRAC))
+	memdb.Debug(idx.config["settings.moi.debug"].Bool())
+	updateMOIWriters(idx.config["settings.moi.persistence_threads"].Int())
+	reclaimBlockSize := int64(idx.config["plasma.LSSReclaimBlockSize"].Int())
+	plasma.SetLogReclaimBlockSize(reclaimBlockSize)
+
+	idx.initStreamAddressMap()
+	idx.initStreamFlushMap()
+	idx.initServiceAddressMap()
+
+	idx.enableManager = idx.config["enableManager"].Bool()
+
+	isEnterprise := idx.config["isEnterprise"].Bool()
+	if isEnterprise {
+		common.SetBuildMode(common.ENTERPRISE)
+	} else {
+		common.SetBuildMode(common.COMMUNITY)
+	}
+	logging.Infof("Indexer::NewIndexer Build Mode Set %v", common.GetBuildMode())
+
+}
+
+func (idx *indexer) initHttpServer() {
+
 	// Setup http server
 	addr := net.JoinHostPort("", idx.config["httpPort"].String())
 	logging.PeriodicProfile(logging.Debug, addr, "goroutine")
+
 	go func() {
 		srv := &http.Server{
 			ReadTimeout:  time.Duration(idx.config["http.readTimeout"].Int()) * time.Second,
@@ -411,77 +493,6 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 			}
 		}()
 	}
-
-	//read persisted indexer state
-	needsRestart, err := idx.bootstrap(snapshotNotifych)
-	if err != nil {
-		logging.Fatalf("Indexer::Unable to Bootstrap Indexer from Persisted Metadata %v", err)
-		return nil, &MsgError{err: Error{cause: err}}
-	}
-
-	if needsRestart {
-		logging.Infof("Restarting indexer after storage upgrade")
-		idx.stats.needsRestart.Set(true)
-	}
-
-	//if storageMode has changed in settings while bootstrap was in progress
-	//indexer needs to restart
-	idx.updateStorageMode(idx.config)
-
-	//Start DDL Service Manager
-	//Initialize DDL Service Manager before rebalance manager so DDL service manager is ready
-	//when Rebalancing manager receives ns_server rebalancing callback.
-	idx.ddlSrvMgr, res = NewDDLServiceMgr(common.IndexerId(idx.id), idx.ddlSrvMgrCmdCh, idx.wrkrRecvCh, idx.config)
-	if res.GetMsgType() != MSG_SUCCESS {
-		logging.Fatalf("Indexer::NewIndexer DDL Service Manager Init Error %+v", res)
-		return nil, res
-	}
-
-	//Start Rebalance Manager
-	idx.rebalMgr, res = NewRebalanceMgr(idx.rebalMgrCmdCh, idx.wrkrRecvCh, idx.config, idx.rebalanceRunning, idx.rebalanceToken)
-	if res.GetMsgType() != MSG_SUCCESS {
-		logging.Fatalf("Indexer::NewIndexer Rebalance Manager Init Error %+v", res)
-		return nil, res
-	}
-
-	if idx.getIndexerState() == common.INDEXER_BOOTSTRAP {
-		idx.setIndexerState(common.INDEXER_ACTIVE)
-		idx.stats.indexerState.Set(int64(common.INDEXER_ACTIVE))
-	}
-
-	idx.scanCoordCmdCh <- &MsgIndexerState{mType: INDEXER_RESUME, rollbackTimes: idx.bucketRollbackTimes}
-	<-idx.scanCoordCmdCh
-
-	// Persist node uuid in Metadata store
-	idx.clustMgrAgentCmdCh <- &MsgClustMgrLocal{
-		mType: CLUST_MGR_SET_LOCAL,
-		key:   INDEXER_NODE_UUID,
-		value: idx.config["nodeuuid"].String(),
-	}
-
-	respMsg := <-idx.clustMgrAgentCmdCh
-	resp := respMsg.(*MsgClustMgrLocal)
-
-	errMsg := resp.GetError()
-	if errMsg != nil {
-		logging.Fatalf("Indexer::NewIndexer Unable to set INDEXER_NODE_UUID In Local"+
-			"Meta Storage. Err %v", errMsg)
-		common.CrashOnError(errMsg)
-	}
-
-	logging.Infof("Indexer::NewIndexer Status %v", idx.getIndexerState())
-
-	// Initialize the public REST API server after indexer bootstrap is completed
-	NewRestServer(idx.config["clusterAddr"].String(), idx.statsMgr)
-
-	go idx.monitorMemUsage()
-	go idx.logMemstats()
-	go idx.collectProgressStats(true)
-
-	//start the main indexer loop
-	idx.run()
-
-	return idx, &MsgSuccess{}
 
 }
 
