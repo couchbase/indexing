@@ -18,8 +18,8 @@ import (
 func NewPlasmaSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	idxInstId common.IndexInstId, partitionId common.PartitionId,
 	isPrimary bool, numPartitions int,
-	sysconf common.Config, idxStats *IndexStats) (*plasmaSlice, error) {
+	sysconf common.Config, idxStats *IndexStats, indexerStats *IndexerStats) (*plasmaSlice, error) {
 	return newPlasmaSlice(path, sliceId,
 		idxDefn, idxInstId, partitionId, isPrimary, numPartitions,
-		sysconf, idxStats)
+		sysconf, idxStats, indexerStats)
 }

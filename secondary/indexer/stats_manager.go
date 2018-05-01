@@ -507,6 +507,9 @@ func (is IndexerStats) GetStats(getPartition bool, skipEmpty bool) common.Statis
 	addStat("storage_mode", storageMode)
 	addStat("num_cpu_core", num_cpu_core)
 	addStat("cpu_utilization", getCpuPercent())
+	addStat("memory_rss", getRSS())
+	addStat("memory_free", getMemFree())
+	addStat("memory_total", getMemTotal())
 
 	indexerState := common.IndexerState(is.indexerState.Value())
 	if indexerState == common.INDEXER_PREPARE_UNPAUSE {

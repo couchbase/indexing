@@ -52,3 +52,42 @@ func (h *SystemStats) ProcessCpuPercent() (C.sigar_pid_t, float64, error) {
 
 	return h.pid, float64(cpu.percent) * 100, nil
 }
+
+//
+// Get RSS
+//
+func (h *SystemStats) ProcessRSS() (C.sigar_pid_t, uint64, error) {
+
+	var mem C.sigar_proc_mem_t
+	if err := C.sigar_proc_mem_get(h.handle, h.pid, &mem); err != C.SIGAR_OK {
+		return C.sigar_pid_t(0), uint64(0), errors.New(fmt.Sprintf("Fail to get RSS.  Err=%v", C.sigar_strerror(h.handle, err)))
+	}
+
+	return h.pid, uint64(mem.resident), nil
+}
+
+//
+// Get Free memory
+//
+func (h *SystemStats) FreeMem() (uint64, error) {
+
+	var mem C.sigar_mem_t
+	if err := C.sigar_mem_get(h.handle, &mem); err != C.SIGAR_OK {
+		return uint64(0), errors.New(fmt.Sprintf("Fail to get free memory.  Err=%v", C.sigar_strerror(h.handle, err)))
+	}
+
+	return uint64(mem.free), nil
+}
+
+//
+// Get Total memory
+//
+func (h *SystemStats) TotalMem() (uint64, error) {
+
+	var mem C.sigar_mem_t
+	if err := C.sigar_mem_get(h.handle, &mem); err != C.SIGAR_OK {
+		return uint64(0), errors.New(fmt.Sprintf("Fail to get total memory.  Err=%v", C.sigar_strerror(h.handle, err)))
+	}
+
+	return uint64(mem.total), nil
+}

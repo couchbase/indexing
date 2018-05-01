@@ -1093,6 +1093,10 @@ func (mdb *memdbSlice) NewSnapshot(ts *common.TsVbuuid, commit bool) (SnapshotIn
 	return newSnapshotInfo, err
 }
 
+func (mdb *memdbSlice) FlushDone() {
+	// no-op
+}
+
 //checkAllWorkersDone return true if all workers have
 //finished processing
 func (mdb *memdbSlice) checkAllWorkersDone() bool {

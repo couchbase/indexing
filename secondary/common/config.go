@@ -1156,6 +1156,48 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.plasma.writer.tuning.enable": ConfigValue{
+		true,
+		"Tune number of writers dynamically",
+		true,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.writer.tuning.adjust.interval": ConfigValue{
+		100,
+		"Interval to check if writers needs to be adjusted (millis)",
+		100,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.writer.tuning.sampling.interval": ConfigValue{
+		20,
+		"Sampling interval for stats (millis)",
+		20,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.writer.tuning.sampling.window": ConfigValue{
+		5000,
+		"Duration for which stats is kept for sampling (millis)",
+		5000,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.writer.tuning.throughput.scalingFactor": ConfigValue{
+		float64(0.2),
+		"Scaling factoring for minimum percentage increase on drain rate after expanding writer",
+		float64(0.2),
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.writer.tuning.throttling.threshold": ConfigValue{
+		10,
+		"Number of misses on minimum drain rate before throttling writers",
+		10,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.plasma.memtuner.maxFreeMemory": ConfigValue{
 		1024 * 1024 * 1024 * 8,
 		"Max free memory",

@@ -2982,6 +2982,7 @@ func (idx *indexer) cleanupIndexData(indexInst common.IndexInst,
 	//update internal maps
 	delete(idx.indexInstMap, indexInstId)
 	delete(idx.indexPartnMap, indexInstId)
+	deleteFreeWriters(indexInst.InstId)
 
 	msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
 	msgUpdateIndexPartnMap := &MsgUpdatePartnMap{indexPartnMap: idx.indexPartnMap}
@@ -5910,17 +5911,18 @@ func NewSlice(id SliceId, indInst *common.IndexInst, partnInst *PartitionInst,
 
 	partitionId := partnInst.Defn.GetPartitionId()
 	numPartitions := indInst.Pc.GetNumPartitions()
+	instId := GetRealIndexInstId(indInst)
 
 	switch indInst.Defn.Using {
 	case common.MemDB, common.MemoryOptimized:
-		slice, err = NewMemDBSlice(path, id, indInst.Defn, indInst.InstId, partitionId, indInst.Defn.IsPrimary, !ephemeral, numPartitions, conf,
+		slice, err = NewMemDBSlice(path, id, indInst.Defn, instId, partitionId, indInst.Defn.IsPrimary, !ephemeral, numPartitions, conf,
 			stats.GetPartitionStats(indInst.InstId, partitionId))
 	case common.ForestDB:
-		slice, err = NewForestDBSlice(path, id, indInst.Defn, indInst.InstId, partitionId, indInst.Defn.IsPrimary, numPartitions, conf,
+		slice, err = NewForestDBSlice(path, id, indInst.Defn, instId, partitionId, indInst.Defn.IsPrimary, numPartitions, conf,
 			stats.GetPartitionStats(indInst.InstId, partitionId))
 	case common.PlasmaDB:
-		slice, err = NewPlasmaSlice(path, id, indInst.Defn, indInst.InstId, partitionId, indInst.Defn.IsPrimary, numPartitions, conf,
-			stats.GetPartitionStats(indInst.InstId, partitionId))
+		slice, err = NewPlasmaSlice(path, id, indInst.Defn, instId, partitionId, indInst.Defn.IsPrimary, numPartitions, conf,
+			stats.GetPartitionStats(indInst.InstId, partitionId), stats)
 	}
 
 	return
