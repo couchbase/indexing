@@ -37,6 +37,7 @@ type ProjectorVersion byte
 const (
 	ProjVer_5_1_0 ProjectorVersion = iota + 1
 	ProjVer_5_1_1
+	ProjVer_5_5_0
 )
 
 // Payload either carries `vbmap` or `vbs`.
@@ -139,7 +140,7 @@ type VbKeyVersions struct {
 
 // NewVbKeyVersions return a reference to a single vbucket payload
 func NewVbKeyVersions(bucket string, vbno uint16, vbuuid uint64, maxMutations int) *VbKeyVersions {
-	vb := &VbKeyVersions{Bucket: bucket, Vbucket: vbno, Vbuuid: vbuuid, ProjVer: ProjVer_5_1_1}
+	vb := &VbKeyVersions{Bucket: bucket, Vbucket: vbno, Vbuuid: vbuuid, ProjVer: ProjVer_5_5_0}
 	vb.Kvs = make([]*KeyVersions, 0, maxMutations)
 	vb.Uuid = StreamID(bucket, vbno)
 	return vb
