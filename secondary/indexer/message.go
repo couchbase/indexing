@@ -1299,8 +1299,10 @@ func (m *MsgStatsRequest) FetchDcp() bool {
 
 type MsgIndexCompact struct {
 	instId    common.IndexInstId
+	partnId   common.PartitionId
 	errch     chan error
 	abortTime time.Time
+	minFrag   int
 }
 
 func (m *MsgIndexCompact) GetMsgType() MsgType {
@@ -1311,12 +1313,20 @@ func (m *MsgIndexCompact) GetInstId() common.IndexInstId {
 	return m.instId
 }
 
+func (m *MsgIndexCompact) GetPartitionId() common.PartitionId {
+	return m.partnId
+}
+
 func (m *MsgIndexCompact) GetErrorChannel() chan error {
 	return m.errch
 }
 
 func (m *MsgIndexCompact) GetAbortTime() time.Time {
 	return m.abortTime
+}
+
+func (m *MsgIndexCompact) GetMinFrag() int {
+	return m.minFrag
 }
 
 //KV_STREAM_REPAIR

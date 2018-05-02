@@ -286,6 +286,13 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		return nil, res
 	}
 
+	// Start compaction manager
+	idx.compactMgr, res = NewCompactionManager(idx.compactMgrCmdCh, idx.wrkrRecvCh, idx.config)
+	if res.GetMsgType() != MSG_SUCCESS {
+		logging.Fatalf("Indexer::NewCompactionmanager Init Error %+v", res)
+		return nil, res
+	}
+
 	idx.enableManager = idx.config["enableManager"].Bool()
 
 	idx.bootstrapStorageMode = idx.getBootstrapStorageMode(idx.config)
@@ -483,12 +490,6 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	}
 
 	logging.Infof("Indexer::NewIndexer Status %v", idx.getIndexerState())
-
-	idx.compactMgr, res = NewCompactionManager(idx.compactMgrCmdCh, idx.wrkrRecvCh, idx.config)
-	if res.GetMsgType() != MSG_SUCCESS {
-		logging.Fatalf("Indexer::NewCompactionmanager Init Error %+v", res)
-		return nil, res
-	}
 
 	// Initialize the public REST API server after indexer bootstrap is completed
 	NewRestServer(idx.config["clusterAddr"].String(), idx.statsMgr)
@@ -1073,6 +1074,12 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 	if newConfig["settings.allow_large_keys"].Bool() !=
 		idx.config["settings.allow_large_keys"].Bool() {
 		logging.Infof("Indexer::handleConfigUpdate restart indexer due to allow_large_keys")
+		idx.stats.needsRestart.Set(true)
+	}
+
+	if newConfig["settings.compaction.plasma.manual"].Bool() !=
+		idx.config["settings.compaction.plasma.manual"].Bool() {
+		logging.Infof("Indexer::handleConfigUpdate restart indexer due to compaction.plasma.manual")
 		idx.stats.needsRestart.Set(true)
 	}
 
@@ -3615,6 +3622,11 @@ func (idx *indexer) distributeIndexMapsToWorkers(msgUpdateIndexInstMap Message,
 		return err
 	}
 
+	if err := idx.sendUpdatedIndexMapToWorker(msgUpdateIndexInstMap, nil, idx.compactMgrCmdCh,
+		"compactionManager"); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -5803,17 +5815,17 @@ func NewSlice(id SliceId, indInst *common.IndexInst, partnInst *PartitionInst,
 	}
 
 	partitionId := partnInst.Defn.GetPartitionId()
-	isPartitioned := common.IsPartitioned(indInst.Defn.PartitionScheme)
+	numPartitions := indInst.Pc.GetNumPartitions()
 
 	switch indInst.Defn.Using {
 	case common.MemDB, common.MemoryOptimized:
-		slice, err = NewMemDBSlice(path, id, indInst.Defn, indInst.InstId, partitionId, indInst.Defn.IsPrimary, !ephemeral, isPartitioned, conf,
+		slice, err = NewMemDBSlice(path, id, indInst.Defn, indInst.InstId, partitionId, indInst.Defn.IsPrimary, !ephemeral, numPartitions, conf,
 			stats.GetPartitionStats(indInst.InstId, partitionId))
 	case common.ForestDB:
-		slice, err = NewForestDBSlice(path, id, indInst.Defn, indInst.InstId, partitionId, indInst.Defn.IsPrimary, isPartitioned, conf,
+		slice, err = NewForestDBSlice(path, id, indInst.Defn, indInst.InstId, partitionId, indInst.Defn.IsPrimary, numPartitions, conf,
 			stats.GetPartitionStats(indInst.InstId, partitionId))
 	case common.PlasmaDB:
-		slice, err = NewPlasmaSlice(path, id, indInst.Defn, indInst.InstId, partitionId, indInst.Defn.IsPrimary, isPartitioned, conf,
+		slice, err = NewPlasmaSlice(path, id, indInst.Defn, indInst.InstId, partitionId, indInst.Defn.IsPrimary, numPartitions, conf,
 			stats.GetPartitionStats(indInst.InstId, partitionId))
 	}
 

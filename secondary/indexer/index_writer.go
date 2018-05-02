@@ -56,7 +56,7 @@ type IndexWriter interface {
 	Statistics() (StorageStatistics, error)
 
 	// Perform file compaction
-	Compact(abortTime time.Time) error
+	Compact(abortTime time.Time, minFrag int) error
 
 	// Dealloc resources
 	Close()

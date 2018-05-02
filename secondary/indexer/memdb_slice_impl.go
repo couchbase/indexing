@@ -179,7 +179,7 @@ type memdbSlice struct {
 
 func NewMemDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	idxInstId common.IndexInstId, partitionId common.PartitionId,
-	isPrimary bool, isPartitioned bool, hasPersistance bool,
+	isPrimary bool, hasPersistance bool, numPartitions int,
 	sysconf common.Config, idxStats *IndexStats) (*memdbSlice, error) {
 
 	info, err := os.Stat(path)
@@ -1165,7 +1165,7 @@ func (mdb *memdbSlice) IsDirty() bool {
 	return mdb.isDirty
 }
 
-func (mdb *memdbSlice) Compact(abortTime time.Time) error {
+func (mdb *memdbSlice) Compact(abortTime time.Time, minFrag int) error {
 	return nil
 }
 

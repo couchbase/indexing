@@ -1122,6 +1122,7 @@ func (s *storageMgr) handleIndexCompaction(cmd Message) {
 	req := cmd.(*MsgIndexCompact)
 	errch := req.GetErrorChannel()
 	abortTime := req.GetAbortTime()
+	minFrag := req.GetMinFrag()
 	var slices []Slice
 
 	inst, ok := s.indexInstMap[req.GetInstId()]
@@ -1137,16 +1138,19 @@ func (s *storageMgr) handleIndexCompaction(cmd Message) {
 
 	// Increment rc for slices
 	for _, partnInst := range partnMap {
-		for _, slice := range partnInst.Sc.GetAllSlices() {
-			slice.IncrRef()
-			slices = append(slices, slice)
+		// non-partitioned index has partitionId 0
+		if partnInst.Defn.GetPartitionId() == req.GetPartitionId() {
+			for _, slice := range partnInst.Sc.GetAllSlices() {
+				slice.IncrRef()
+				slices = append(slices, slice)
+			}
 		}
 	}
 
 	// Perform file compaction without blocking storage manager main loop
 	go func() {
 		for _, slice := range slices {
-			err := slice.Compact(abortTime)
+			err := slice.Compact(abortTime, minFrag)
 			slice.DecrRef()
 			if err != nil {
 				errch <- err

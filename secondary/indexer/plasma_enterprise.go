@@ -17,9 +17,9 @@ import (
 
 func NewPlasmaSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	idxInstId common.IndexInstId, partitionId common.PartitionId,
-	isPrimary bool, isPartitioned bool,
+	isPrimary bool, numPartitions int,
 	sysconf common.Config, idxStats *IndexStats) (*plasmaSlice, error) {
 	return newPlasmaSlice(path, sliceId,
-		idxDefn, idxInstId, partitionId, isPrimary, isPartitioned,
+		idxDefn, idxInstId, partitionId, isPrimary, numPartitions,
 		sysconf, idxStats)
 }
