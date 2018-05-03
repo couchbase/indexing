@@ -115,6 +115,22 @@ else
   echo "none"
 fi
 
+cd $WORKSPACE/goproj/src/github.com/couchbase/eventing
+echo "Switching eventing to unstable"
+git checkout unstable 1>>$WORKSPACE/make.log 2>&1 || error_exit "git checkout unstable"
+git pull 1>>$WORKSPACE/make.log 2>&1 || error_exit "git pull"
+current="`git rev-parse HEAD`"
+test -f ~/eventing.good || (echo $current > ~/eventing.good)
+good="`cat ~/eventing.good`"
+echo -n "eventing is at <a href='https://github.com/couchbase/eventing/commit/$current'>${current:0:7}</a>, changes since last good build: "
+if [ "$current" != "$good" ]; then
+  echo
+  git log --pretty='format: <a href="https://github.com/couchbase/eventing/commit/%H">%h</a> %s' $good..HEAD
+  echo
+else
+  echo "none"
+fi
+
 cd $WORKSPACE/goproj/src/github.com/couchbase/query
 current="`git rev-parse HEAD`"
 test -f ~/query.good || (echo $current > ~/query.good)
