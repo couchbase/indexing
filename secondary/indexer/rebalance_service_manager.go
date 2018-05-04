@@ -2256,6 +2256,10 @@ func (m *ServiceMgr) initMoveIndex(req *manager.IndexRequest, nodes []string) (e
 		return errors.New("Cannot Process Move Index - Rebalance/MoveIndex In Progress"), false
 	}
 
+	if m.state.rebalanceID != "" {
+		return errors.New("Cannot Process Move Index - Failover In Progress"), false
+	}
+
 	if err := m.genMoveIndexToken(); err != nil {
 		m.rebalanceToken = nil
 		return err, false
