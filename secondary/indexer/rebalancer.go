@@ -432,6 +432,7 @@ func (r *Rebalancer) dropIndexWhenIdle(ttid string, tt *c.TransferToken, notifyc
 	r.drop[ttid] = true
 	r.mu.Unlock()
 
+	missingStatRetry := 0
 loop:
 	for {
 		select {
@@ -470,9 +471,16 @@ loop:
 					num_requests = statsMap[sname_requests].(float64)
 				} else {
 					l.Infof("Rebalancer::dropIndexWhenIdle Missing Stats %v %v. Retrying...", sname_completed, sname_requests)
+					missingStatRetry++
+					if missingStatRetry > 10 {
+						if r.needRetryForDrop(ttid, tt) {
+							break
+						} else {
+							break loop
+						}
+					}
 					break
 				}
-
 				pending += num_requests - num_completed
 			}
 
@@ -526,6 +534,36 @@ loop:
 		}
 		time.Sleep(5 * time.Second)
 	}
+}
+
+func (r *Rebalancer) needRetryForDrop(ttid string, tt *c.TransferToken) bool {
+
+	localMeta, err := getLocalMeta(r.localaddr)
+	if err != nil {
+		l.Errorf("Rebalancer::dropIndexWhenIdle Error Fetching Local Meta %v %v", r.localaddr, err)
+		return true
+	}
+	status, errStr := getIndexStatusFromMeta(tt, localMeta)
+	if errStr != "" {
+		l.Errorf("Rebalancer::dropIndexWhenIdle Error Fetching Index Status %v %v", r.localaddr, errStr)
+		return true
+	}
+
+	if status == c.INDEX_STATE_NIL {
+		//if index cannot be found in metadata, most likely its drop has already succeeded.
+		//instead of waiting indefinitely, it is better to assume success and proceed.
+		l.Infof("Rebalancer::dropIndexWhenIdle Missing Metadata for %v. Assume success and abort retry", tt.IndexInst)
+		tt.State = c.TransferTokenCommit
+		setTransferTokenInMetakv(ttid, tt)
+
+		r.mu.Lock()
+		r.sourceTokens[ttid] = tt
+		r.mu.Unlock()
+
+		return false
+	}
+
+	return true
 }
 
 func (r *Rebalancer) processTokenAsDest(ttid string, tt *c.TransferToken) bool {
@@ -788,19 +826,10 @@ loop:
 				}
 			}
 
-			url := "/getLocalIndexMetadata"
-			resp, err := getWithAuth(r.localaddr + url)
+			localMeta, err := getLocalMeta(r.localaddr)
 			if err != nil {
-				l.Errorf("Rebalancer::waitForIndexBuild Error getting local metadata %v %v", r.localaddr+url, err)
+				l.Errorf("Rebalancer::waitForIndexBuild Error Fetching Local Meta %v %v", r.localaddr, err)
 				break
-			}
-
-			defer resp.Body.Close()
-			localMeta := new(manager.LocalIndexMetadata)
-			bytes, _ := ioutil.ReadAll(resp.Body)
-			if err := json.Unmarshal(bytes, &localMeta); err != nil {
-				l.Errorf("Rebalancer::waitForIndexBuild Error unmarshal response %v %v", r.localaddr+url, err)
-				return
 			}
 
 			r.mu.Lock()
@@ -817,7 +846,7 @@ loop:
 
 				status, err := getIndexStatusFromMeta(tt, localMeta)
 				if err != "" {
-					l.Errorf("Rebalancer::waitForIndexBuild Error Fetching Index Status %v %v", r.localaddr+url, err)
+					l.Errorf("Rebalancer::waitForIndexBuild Error Fetching Index Status %v %v", r.localaddr, err)
 					break
 				}
 				sname := fmt.Sprintf("%s:%s:", tt.IndexInst.Defn.Bucket, tt.IndexInst.DisplayName())
@@ -1246,6 +1275,26 @@ func getLocalStats(addr string, partitioned bool) (*c.Statistics, error) {
 	}
 
 	return stats, nil
+}
+
+func getLocalMeta(addr string) (*manager.LocalIndexMetadata, error) {
+
+	url := "/getLocalIndexMetadata"
+	resp, err := getWithAuth(addr + url)
+	if err != nil {
+		l.Errorf("Rebalancer::getLocalMeta Error getting local metadata %v %v", addr+url, err)
+		return nil, err
+	}
+
+	defer resp.Body.Close()
+	localMeta := new(manager.LocalIndexMetadata)
+	bytes, _ := ioutil.ReadAll(resp.Body)
+	if err := json.Unmarshal(bytes, &localMeta); err != nil {
+		l.Errorf("Rebalancer::getLocalMeta Error unmarshal response %v %v", addr+url, err)
+		return nil, err
+	}
+
+	return localMeta, nil
 }
 
 //
