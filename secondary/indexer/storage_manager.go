@@ -17,6 +17,7 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/fdb"
 	"github.com/couchbase/indexing/secondary/logging"
+	"sort"
 	"sync"
 	"time"
 )
@@ -489,6 +490,21 @@ func (s *storageMgr) updateSnapMapAndNotify(is IndexSnapshot, idxStats *IndexSta
 	idxStats.numLastSnapshotReply.Set(numReplies)
 }
 
+func (sm *storageMgr) getSortedPartnInst(partnMap PartitionInstMap) partitionInstList {
+
+	if len(partnMap) == 0 {
+		return partitionInstList(nil)
+	}
+
+	result := make(partitionInstList, 0, len(partnMap))
+	for _, partnInst := range partnMap {
+		result = append(result, partnInst)
+	}
+
+	sort.Sort(result)
+	return result
+}
+
 //handleRollback will rollback to given timestamp
 func (sm *storageMgr) handleRollback(cmd Message) {
 
@@ -509,7 +525,8 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 			idxInst.State != common.INDEX_STATE_DELETED {
 
 			//for all partitions managed by this indexer
-			for _, partnInst := range partnMap {
+			partnInstList := sm.getSortedPartnInst(partnMap)
+			for _, partnInst := range partnInstList {
 				partnId := partnInst.Defn.GetPartitionId()
 				sc := partnInst.Sc
 

@@ -21,6 +21,14 @@ type PartitionInst struct {
 	Sc   SliceContainer
 }
 
+type partitionInstList []PartitionInst
+
+func (s partitionInstList) Len() int      { return len(s) }
+func (s partitionInstList) Swap(i, j int) { s[i], s[j] = s[j], s[i] }
+func (s partitionInstList) Less(i, j int) bool {
+	return s[i].Defn.GetPartitionId() < s[j].Defn.GetPartitionId()
+}
+
 //IndexPartnMap maps a IndexInstId to PartitionInstMap
 type IndexPartnMap map[common.IndexInstId]PartitionInstMap
 

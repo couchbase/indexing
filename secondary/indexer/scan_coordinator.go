@@ -228,6 +228,11 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, conn net.Conn,
 		})
 	}
 
+	if req.hasRollback != nil && req.hasRollback.Load() == true {
+		s.handleError(req.LogPrefix, w.Error(ErrIndexRollback))
+		return
+	}
+
 	if s.tryRespondWithError(w, req, err) {
 		return
 	}
