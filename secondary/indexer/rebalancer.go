@@ -435,6 +435,7 @@ func (r *Rebalancer) dropIndexWhenIdle(ttid string, tt *c.TransferToken, notifyc
 	missingStatRetry := 0
 loop:
 	for {
+	labelselect:
 		select {
 		case <-r.cancel:
 			l.Infof("Rebalancer::dropIndexWhenIdle Cancel Received")
@@ -474,12 +475,12 @@ loop:
 					missingStatRetry++
 					if missingStatRetry > 10 {
 						if r.needRetryForDrop(ttid, tt) {
-							break
+							break labelselect
 						} else {
 							break loop
 						}
 					}
-					break
+					break labelselect
 				}
 				pending += num_requests - num_completed
 			}
