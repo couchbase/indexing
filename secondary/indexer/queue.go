@@ -14,16 +14,6 @@ import (
 )
 
 //-----------------------------
-// Buffer pool
-//-----------------------------
-
-var queueBufPool *common.BytesBufPool
-
-func init() {
-	queueBufPool = common.NewByteBufferPool(DEFAULT_MAX_SEC_KEY_LEN + MAX_DOCID_LEN + 2)
-}
-
-//-----------------------------
 // Queue with a rotating buffer
 //-----------------------------
 
@@ -50,12 +40,14 @@ type Queue struct {
 
 	enqCount int64
 	deqCount int64
+
+	bufPool *common.BytesBufPool
 }
 
 //
 // Constructor
 //
-func NewQueue(size int64, limit int64, notifych chan bool) *Queue {
+func NewQueue(size int64, limit int64, notifych chan bool, bufPool *common.BytesBufPool) *Queue {
 
 	rbuf := &Queue{}
 	rbuf.size = size
@@ -65,8 +57,9 @@ func NewQueue(size int64, limit int64, notifych chan bool) *Queue {
 	rbuf.enqch = make(chan bool, 1)
 	rbuf.deqch = make(chan bool, 1)
 	rbuf.donech = make(chan bool)
+	rbuf.bufPool = bufPool
 
-	initRows(rbuf.buf)
+	initRows(rbuf.buf, rbuf.bufPool)
 	return rbuf
 }
 
@@ -114,7 +107,7 @@ func (b *Queue) Enqueue(key *Row) {
 				next = 0
 			}
 
-			tmp := b.buf[b.free].copyKey(key.key)
+			tmp := b.buf[b.free].copyKey(b.bufPool, key.key)
 			b.buf[b.free] = *key
 			b.buf[b.free].key = tmp
 			b.free = next
@@ -149,7 +142,7 @@ func (b *Queue) Dequeue(row *Row) bool {
 				next = 0
 			}
 
-			tmp := row.copyKey(b.buf[b.head].key)
+			tmp := row.copyKey(b.bufPool, b.buf[b.head].key)
 			*row = b.buf[b.head]
 			row.key = tmp
 			b.head = next
@@ -180,7 +173,7 @@ func (b *Queue) Peek(row *Row) bool {
 	count := atomic.LoadInt64(&b.count)
 
 	if count > 0 {
-		tmp := row.copyKey(b.buf[b.head].key)
+		tmp := row.copyKey(b.bufPool, b.buf[b.head].key)
 		*row = b.buf[b.head]
 		row.key = tmp
 		return true
@@ -214,7 +207,7 @@ func (b *Queue) Close() {
 
 	if atomic.SwapInt32(&b.isClose, 1) == 0 {
 		close(b.donech)
-		freeRows(b.buf)
+		freeRows(b.buf, b.bufPool)
 	}
 }
 
@@ -222,9 +215,9 @@ func (b *Queue) Close() {
 // Row
 //-----------------------------
 
-func (r *Row) copyKey(key []byte) []byte {
+func (r *Row) copyKey(bufPool *common.BytesBufPool, key []byte) []byte {
 	if len(key) > cap(r.key) {
-		r.freeKeyBuf()
+		r.freeKeyBuf(bufPool)
 		r.key = make([]byte, 0, len(key))
 	}
 
@@ -234,26 +227,26 @@ func (r *Row) copyKey(key []byte) []byte {
 	return r.key
 }
 
-func (r *Row) initKeyBuf() {
-	bufPtr := queueBufPool.Get()
+func (r *Row) initKeyBuf(bufPool *common.BytesBufPool) {
+	bufPtr := bufPool.Get()
 	r.key = (*bufPtr)[:0]
 }
 
-func (r *Row) freeKeyBuf() {
+func (r *Row) freeKeyBuf(bufPool *common.BytesBufPool) {
 	if r.key != nil {
-		queueBufPool.Put(&r.key)
+		bufPool.Put(&r.key)
 		r.key = nil
 	}
 }
 
-func initRows(rows []Row) {
+func initRows(rows []Row, bufPool *common.BytesBufPool) {
 	for _, row := range rows {
-		row.initKeyBuf()
+		row.initKeyBuf(bufPool)
 	}
 }
 
-func freeRows(rows []Row) {
+func freeRows(rows []Row, bufPool *common.BytesBufPool) {
 	for _, row := range rows {
-		row.freeKeyBuf()
+		row.freeKeyBuf(bufPool)
 	}
 }

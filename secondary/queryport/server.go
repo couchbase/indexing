@@ -21,7 +21,9 @@ import (
 // channel, until `quitch` is closed. When there are
 // no more response to post handler shall close `respch`.
 type RequestHandler func(
-	req interface{}, conn net.Conn, quitch <-chan bool)
+	req interface{}, ctx interface{}, conn net.Conn, quitch <-chan bool)
+
+type ConnectionHandler func() interface{}
 
 type request struct {
 	r      interface{}
@@ -38,6 +40,7 @@ func newRequest(r interface{}) (req request) {
 type Server struct {
 	laddr string         // address to listen
 	callb RequestHandler // callback to application on incoming request.
+	conb  ConnectionHandler
 	// local fields
 	mu  sync.Mutex
 	lis net.Listener
@@ -57,12 +60,13 @@ type ServerStats struct {
 
 // NewServer creates a new queryport daemon.
 func NewServer(
-	laddr string, callb RequestHandler,
+	laddr string, callb RequestHandler, conb ConnectionHandler,
 	config c.Config) (s *Server, err error) {
 
 	s = &Server{
 		laddr:          laddr,
 		callb:          callb,
+		conb:           conb,
 		maxPayload:     config["maxPayload"].Int(),
 		readDeadline:   time.Duration(config["readDeadline"].Int()),
 		writeDeadline:  time.Duration(config["writeDeadline"].Int()),
@@ -159,8 +163,13 @@ func (s *Server) handleConnection(conn net.Conn) {
 	rcvch := make(chan request, s.streamChanSize)
 	go s.doReceive(conn, rcvch)
 
+	var ctx interface{}
+	if s.conb != nil {
+		ctx = s.conb()
+	}
+
 	for req := range rcvch {
-		s.callb(req.r, conn, req.quitch) // blocking call
+		s.callb(req.r, ctx, conn, req.quitch) // blocking call
 		transport.SendResponseEnd(conn)
 	}
 }

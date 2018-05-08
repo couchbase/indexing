@@ -71,7 +71,7 @@ func scanMultiple(request *ScanRequest, scan Scan, snapshots []SliceSnapshot, cb
 	queues := make([]*Queue, len(snapshots))
 	size, limit := queueSize(len(snapshots), sorted, config)
 	for i := 0; i < len(snapshots); i++ {
-		queues[i] = NewQueue(int64(size), int64(limit), notifych)
+		queues[i] = NewQueue(int64(size), int64(limit), notifych, request.connCtx.bufPool)
 	}
 	defer func() {
 		for _, queue := range queues {
@@ -453,8 +453,8 @@ func gather(request *ScanRequest, queues []*Queue, donech chan bool, notifych ch
 	sorted := make([]int, ensembleSize)
 
 	rows := make([]Row, ensembleSize)
-	initRows(rows)
-	defer freeRows(rows)
+	initRows(rows, request.connCtx.bufPool)
+	defer freeRows(rows, request.connCtx.bufPool)
 
 	// initial sort
 	isSorted := false
@@ -518,8 +518,8 @@ func forward(request *ScanRequest, queues []*Queue, donech chan bool, notifych c
 	ensembleSize := len(queues)
 
 	rows := make([]Row, ensembleSize)
-	initRows(rows)
-	defer freeRows(rows)
+	initRows(rows, request.connCtx.bufPool)
+	defer freeRows(rows, request.connCtx.bufPool)
 
 	for {
 		if len(errch) != 0 {
