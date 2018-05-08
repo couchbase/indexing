@@ -630,6 +630,10 @@ func (m *LifecycleMgr) CreateIndexOrInstance(defn *common.IndexDefn, scheduled b
 		return err
 	}
 
+	if err := m.verifyDuplicateInstance(defn, reqCtx); err != nil {
+		return err
+	}
+
 	hasIndex := existDefn != nil && (defn.DefnId == existDefn.DefnId)
 	isPartitioned := common.IsPartitioned(defn.PartitionScheme)
 
@@ -893,6 +897,40 @@ func (m *LifecycleMgr) setPartition(defn *common.IndexDefn) ([]common.PartitionI
 	defn.Versions = nil
 
 	return partitions, versions, numPartitions
+}
+
+func (m *LifecycleMgr) verifyDuplicateInstance(defn *common.IndexDefn, reqCtx *common.MetadataRequestContext) error {
+
+	existDefn, err := m.repo.GetIndexDefnByName(defn.Bucket, defn.Name)
+	if err != nil {
+		logging.Errorf("LifecycleMgr.CreateIndexInstance() : createIndex fails. Reason = %v", err)
+		return err
+	}
+
+	if existDefn != nil {
+		// The index already exist in this node.  Make sure there is no overlapping partition.
+		topology, err := m.repo.GetTopologyByBucket(existDefn.Bucket)
+		if err != nil {
+			logging.Errorf("LifecycleMgr.CreateIndexInstance() : fails to find index instance. Reason = %v", err)
+			return err
+		}
+
+		if topology != nil {
+			insts := topology.GetIndexInstancesByDefn(existDefn.DefnId)
+
+			// Go through each partition that we want to create for this index instance
+			for _, inst := range insts {
+
+				// Guard against duplicate index instance id
+				if common.IndexInstId(inst.InstId) == defn.InstId &&
+					common.IndexState(inst.State) != common.INDEX_STATE_DELETED {
+					return fmt.Errorf("Duplicate Index Instance %v.", inst.InstId)
+				}
+			}
+		}
+	}
+
+	return nil
 }
 
 func (m *LifecycleMgr) verifyDuplicateDefn(defn *common.IndexDefn, reqCtx *common.MetadataRequestContext) (*common.IndexDefn, error) {
