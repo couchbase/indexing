@@ -1002,9 +1002,9 @@ func (mdb *plasmaSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 	return s, nil
 }
 
-func (mdb *plasmaSlice) doPersistSnapshot(s *plasmaSnapshot) {
-	var wg sync.WaitGroup
+var plasmaPersistenceMutex sync.Mutex
 
+func (mdb *plasmaSlice) doPersistSnapshot(s *plasmaSnapshot) {
 	if atomic.CompareAndSwapInt32(&mdb.isPersistorActive, 0, 1) {
 		s.MainSnap.Open()
 		if !mdb.isPrimary {
@@ -1023,16 +1023,27 @@ func (mdb *plasmaSlice) doPersistSnapshot(s *plasmaSnapshot) {
 			binary.BigEndian.PutUint64(timeHdr, uint64(time.Now().UnixNano()))
 			meta = append(timeHdr, meta...)
 
-			wg.Add(1)
-			go func() {
-				mdb.mainstore.CreateRecoveryPoint(s.MainSnap, meta)
-				wg.Done()
+			var isPersistenceInitialized bool = true
+			serializePersistence := func(rp *plasma.RecoveryPoint) error {
+				if isPersistenceInitialized {
+					plasmaPersistenceMutex.Lock()
+					isPersistenceInitialized = false
+				}
+				return nil
+			}
+			defer func() {
+				if !isPersistenceInitialized { // Only unlock if lock was successful
+					plasmaPersistenceMutex.Unlock()
+				}
 			}()
 
+			var concurr int = int(float32(runtime.NumCPU())*float32(mdb.sysconf["plasma.persistenceCPUPercent"].Int())/(100*2) + 0.5)
+			mdb.mainstore.CreateRecoveryPoint(s.MainSnap, meta,
+				concurr, serializePersistence)
+
 			if !mdb.isPrimary {
-				mdb.backstore.CreateRecoveryPoint(s.BackSnap, meta)
+				mdb.backstore.CreateRecoveryPoint(s.BackSnap, meta, concurr, nil)
 			}
-			wg.Wait()
 
 			dur := time.Since(t0)
 			logging.Infof("PlasmaSlice Slice Id %v, IndexInstId %v, PartitionId %v Created recovery point (took %v)",

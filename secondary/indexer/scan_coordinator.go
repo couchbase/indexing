@@ -93,7 +93,7 @@ func NewScanCoordinator(supvCmdch MsgChannel, supvMsgch MsgChannel,
 
 	addr := net.JoinHostPort("", config["scanPort"].String())
 	queryportCfg := config.SectionConfig("queryport.", true)
-	s.serv, err = queryport.NewServer(addr, s.serverCallback, queryportCfg)
+	s.serv, err = queryport.NewServer(addr, s.serverCallback, createConnectionContext, queryportCfg)
 
 	if err != nil {
 		errMsg := &MsgError{err: Error{code: ERROR_SCAN_COORD_QUERYPORT_FAIL,
@@ -199,12 +199,12 @@ func (s *scanCoordinator) handleSupvervisorCommands(cmd Message) {
 //
 /////////////////////////////////////////////////////////////////////////
 
-func (s *scanCoordinator) serverCallback(protoReq interface{}, conn net.Conn,
+func (s *scanCoordinator) serverCallback(protoReq interface{}, ctx interface{}, conn net.Conn,
 	cancelCh <-chan bool) {
 
 	ttime := time.Now()
 
-	req, err := NewScanRequest(protoReq, cancelCh, s)
+	req, err := NewScanRequest(protoReq, ctx, cancelCh, s)
 	atime := time.Now()
 	w := NewProtoWriter(req.ScanType, conn)
 	defer func() {

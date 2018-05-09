@@ -105,6 +105,8 @@ type ScanRequest struct {
 	hasRollback *atomic.Value
 
 	sco *scanCoordinator
+
+	connCtx *ConnectionContext
 }
 
 type Projection struct {
@@ -269,7 +271,7 @@ var inclusionMatrix = [][]Inclusion{
 //
 /////////////////////////////////////////////////////////////////////////
 
-func NewScanRequest(protoReq interface{},
+func NewScanRequest(protoReq interface{}, ctx interface{},
 	cancelCh <-chan bool, s *scanCoordinator) (r *ScanRequest, err error) {
 
 	r = new(ScanRequest)
@@ -289,6 +291,12 @@ func NewScanRequest(protoReq interface{},
 
 	isBootstrapMode := s.isBootstrapMode()
 	r.projectPrimaryKey = true
+
+	if ctx == nil {
+		r.connCtx = createConnectionContext().(*ConnectionContext)
+	} else {
+		r.connCtx = ctx.(*ConnectionContext)
+	}
 
 	switch req := protoReq.(type) {
 	case *protobuf.HeloRequest:
@@ -1813,4 +1821,23 @@ func FilterLessThan(x, y Filter) bool {
 		return true
 	}
 	return false
+}
+
+/////////////////////////////////////////////////////////////////////////
+//
+// Connection Handler
+//
+/////////////////////////////////////////////////////////////////////////
+
+type ConnectionContext struct {
+	bufPool *common.BytesBufPool
+}
+
+func createConnectionContext() interface{} {
+
+	ctx := &ConnectionContext{
+		bufPool: common.NewByteBufferPool(DEFAULT_MAX_SEC_KEY_LEN + MAX_DOCID_LEN + 2),
+	}
+
+	return ctx
 }
