@@ -684,11 +684,8 @@ func (c *RequestBroker) scatterScan2(client []*GsiScanClient, index *common.Inde
 	}
 
 	// Wait for all scatter routine is done
-	// If we are using gatherer, then do not wait unless there is an error.
-	if !c.useGather() || len(errMap) != 0 {
-		for i, _ := range client {
-			<-donech_scatter[i]
-		}
+	for i, _ := range client {
+		<-donech_scatter[i]
 	}
 
 	errMap = c.GetError()
