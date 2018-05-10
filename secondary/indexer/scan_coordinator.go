@@ -249,15 +249,17 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, ctx interface{}, 
 	if req.Stats != nil {
 		req.Stats.scanReqInitDuration.Add(time.Now().Sub(ttime).Nanoseconds())
 
+		req.Stats.numRequests.Add(1)
+		if req.GroupAggr != nil {
+			req.Stats.numRequestsAggr.Add(1)
+		} else {
+			req.Stats.numRequestsRange.Add(1)
+		}
+
 		for _, partitionId := range req.PartitionIds {
 			req.Stats.updatePartitionStats(partitionId,
 				func(stats *IndexStats) {
 					stats.numRequests.Add(1)
-					if req.GroupAggr != nil {
-						stats.numRequestsAggr.Add(1)
-					} else {
-						stats.numRequestsRange.Add(1)
-					}
 				})
 		}
 	}

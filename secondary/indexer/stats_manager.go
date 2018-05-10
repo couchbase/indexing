@@ -279,6 +279,18 @@ func (s *IndexStats) addPartition(id common.PartitionId) {
 	}
 }
 
+func (s IndexStats) clone() *IndexStats {
+	var clone IndexStats
+	clone = s
+
+	clone.partitions = make(map[common.PartitionId]*IndexStats)
+	for k, v := range s.partitions {
+		clone.partitions[k] = v
+	}
+
+	return &clone
+}
+
 func (s *IndexStats) updateAllPartitionStats(f func(*IndexStats)) {
 
 	for _, ps := range s.partitions {
@@ -542,16 +554,10 @@ func (is IndexerStats) GetStats(getPartition bool, skipEmpty bool) common.Statis
 			s.int64Stats(func(ss *IndexStats) int64 {
 				return ss.numDocsProcessed.Value()
 			}))
-		// partition stats
-		addStat("num_requests",
-			s.partnInt64Stats(func(ss *IndexStats) int64 {
-				return ss.numRequests.Value()
-			}))
-		// partition stats
-		addStat("num_completed_requests",
-			s.partnInt64Stats(func(ss *IndexStats) int64 {
-				return ss.numCompletedRequests.Value()
-			}))
+		// partition and index stats
+		addStat("num_requests", s.numRequests.Value())
+		// partition and index stats
+		addStat("num_completed_requests", s.numCompletedRequests.Value())
 		addStat("num_rows_returned",
 			s.int64Stats(func(ss *IndexStats) int64 {
 				return ss.numRowsReturned.Value()
@@ -759,27 +765,29 @@ func (is IndexerStats) GetStats(getPartition bool, skipEmpty bool) common.Statis
 			s.partnAvgInt64Stats(func(ss *IndexStats) int64 {
 				return ss.cacheHitPercent.Value()
 			}))
-
+		// partition stats
 		addStat("cache_hits",
 			s.partnInt64Stats(func(ss *IndexStats) int64 {
 				return ss.cacheHits.Value()
 			}))
-
+		// partition stats
 		addStat("cache_misses",
 			s.partnInt64Stats(func(ss *IndexStats) int64 {
 				return ss.cacheMisses.Value()
 			}))
-
+		// partition stats
 		addStat("recs_in_mem",
 			s.partnInt64Stats(func(ss *IndexStats) int64 {
 				return ss.numRecsInMem.Value()
 			}))
-
+		// partition stats
 		addStat("recs_on_disk",
 			s.partnInt64Stats(func(ss *IndexStats) int64 {
 				return ss.numRecsOnDisk.Value()
 			}))
 
+		// Timing stats.  If timing stat is partitioned, the final value
+		// is aggreated across the partitions (sum, count, sumOfSq).
 		addStat("timings/dcp_getseqs",
 			s.partnTimingStats(func(ss *IndexStats) *stats.TimingStat {
 				return &ss.Timings.dcpSeqs
@@ -1005,22 +1013,22 @@ func (s *IndexStats) constructIndexStats(skipEmpty bool, version string) common.
 		s.partnAvgInt64Stats(func(ss *IndexStats) int64 {
 			return ss.cacheHitPercent.Value()
 		}))
-
+	// partition stats
 	addStat("cache_hits",
 		s.partnInt64Stats(func(ss *IndexStats) int64 {
 			return ss.cacheHits.Value()
 		}))
-
+	// partition stats
 	addStat("cache_misses",
 		s.partnInt64Stats(func(ss *IndexStats) int64 {
 			return ss.cacheMisses.Value()
 		}))
-
+	// partition stats
 	addStat("recs_in_mem",
 		s.partnInt64Stats(func(ss *IndexStats) int64 {
 			return ss.numRecsInMem.Value()
 		}))
-
+	// partition stats
 	addStat("recs_on_disk",
 		s.partnInt64Stats(func(ss *IndexStats) int64 {
 			return ss.numRecsOnDisk.Value()
@@ -1055,7 +1063,7 @@ func (s IndexerStats) Clone() *IndexerStats {
 	clone.indexes = make(map[common.IndexInstId]*IndexStats)
 	clone.buckets = make(map[string]*BucketStats)
 	for k, v := range s.indexes {
-		clone.indexes[k] = v
+		clone.indexes[k] = v.clone()
 	}
 	for k, v := range s.buckets {
 		clone.buckets[k] = v
