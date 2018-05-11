@@ -1041,48 +1041,27 @@ func (mdb *plasmaSlice) doPersistSnapshot(s *plasmaSnapshot) {
 			binary.BigEndian.PutUint64(timeHdr, uint64(time.Now().UnixNano()))
 			meta = append(timeHdr, meta...)
 
-			// To prevent persistence from eating up all the disk bandwidth
-			// and slowing down query, we wish to ensure that only 1 instance
-			// gets persisted at once across all instances on this node.
 			var isPersistenceInitialized bool = true
-			// Since both main and back snapshots are open, we wish to ensure
-			// that serialization of the main and back index persistence happens
-			// only via this callback to ensure that neither of these snapshots
-			// are held open until the other completes recovery point creation.
-			tokenCh := make(chan bool, 1) // To locally serialize main & back
-			tokenCh <- true
 			serializePersistence := func(rp *plasma.RecoveryPoint) error {
 				if isPersistenceInitialized {
-					<-tokenCh
 					plasmaPersistenceMutex.Lock()
 					isPersistenceInitialized = false
 				}
 				return nil
 			}
-
-			var concurr int = int(float32(runtime.NumCPU())*float32(mdb.sysconf["plasma.persistenceCPUPercent"].Int())/(100*2) + 0.5)
-			var wg sync.WaitGroup
-			wg.Add(1)
-			go func() {
-				mdb.mainstore.CreateRecoveryPoint(s.MainSnap, meta,
-					concurr, serializePersistence)
-
-				if !isPersistenceInitialized {
-					tokenCh <- true
+			defer func() {
+				if !isPersistenceInitialized { // Only unlock if lock was successful
 					plasmaPersistenceMutex.Unlock()
 				}
-				wg.Done()
 			}()
 
+			var concurr int = int(float32(runtime.NumCPU())*float32(mdb.sysconf["plasma.persistenceCPUPercent"].Int())/(100*2) + 0.5)
+			mdb.mainstore.CreateRecoveryPoint(s.MainSnap, meta,
+				concurr, serializePersistence)
+
 			if !mdb.isPrimary {
-				mdb.backstore.CreateRecoveryPoint(s.BackSnap, meta, concurr,
-					serializePersistence)
+				mdb.backstore.CreateRecoveryPoint(s.BackSnap, meta, concurr, nil)
 			}
-			if !isPersistenceInitialized {
-				tokenCh <- true
-				plasmaPersistenceMutex.Unlock()
-			}
-			wg.Wait()
 
 			dur := time.Since(t0)
 			logging.Infof("PlasmaSlice Slice Id %v, IndexInstId %v, PartitionId %v Created recovery point (took %v)",
