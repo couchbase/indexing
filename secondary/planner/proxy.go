@@ -313,8 +313,11 @@ func ConvertToIndexUsage(config common.Config, defn *common.IndexDefn, localMeta
 
 				// get the version from inst or partition
 				version := partn.Version
-				if version == 0 && version != inst.Version {
-					version = inst.Version
+				if !common.IsPartitioned(defn.PartitionScheme) {
+					// for backward compatibility on non-partitioned index (pre-5.5)
+					if version == 0 && version != inst.Version {
+						version = inst.Version
+					}
 				}
 
 				// update internal info
