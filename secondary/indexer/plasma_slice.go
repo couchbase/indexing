@@ -1077,10 +1077,10 @@ func (mdb *plasmaSlice) doPersistSnapshot(s *plasmaSnapshot) {
 			if !mdb.isPrimary {
 				mdb.backstore.CreateRecoveryPoint(s.BackSnap, meta, concurr,
 					serializePersistence)
-				if !isPersistenceInitialized {
-					tokenCh <- true
-					plasmaPersistenceMutex.Unlock()
-				}
+			}
+			if !isPersistenceInitialized {
+				tokenCh <- true
+				plasmaPersistenceMutex.Unlock()
 			}
 			wg.Wait()
 
