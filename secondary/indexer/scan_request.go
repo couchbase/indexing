@@ -1832,14 +1832,25 @@ func FilterLessThan(x, y Filter) bool {
 /////////////////////////////////////////////////////////////////////////
 
 type ConnectionContext struct {
-	bufPool *common.BytesBufPool
+	bufPool    map[common.PartitionId]*common.BytesBufPool
+	defBufPool *common.BytesBufPool
 }
 
 func createConnectionContext() interface{} {
+	return &ConnectionContext{
+		bufPool:    make(map[common.PartitionId]*common.BytesBufPool),
+		defBufPool: common.NewByteBufferPool(DEFAULT_MAX_SEC_KEY_LEN + MAX_DOCID_LEN + 2),
+	}
+}
 
-	ctx := &ConnectionContext{
-		bufPool: common.NewByteBufferPool(DEFAULT_MAX_SEC_KEY_LEN + MAX_DOCID_LEN + 2),
+func (c *ConnectionContext) GetBufPool(partitionId common.PartitionId) *common.BytesBufPool {
+	if _, ok := c.bufPool[partitionId]; !ok {
+		c.bufPool[partitionId] = common.NewByteBufferPool(DEFAULT_MAX_SEC_KEY_LEN + MAX_DOCID_LEN + 2)
 	}
 
-	return ctx
+	return c.bufPool[partitionId]
+}
+
+func (c *ConnectionContext) GetDefaultBufPool() *common.BytesBufPool {
+	return c.defBufPool
 }
