@@ -280,7 +280,6 @@ func updateMOIWriters(to int) {
 			<-moiWriterSemaphoreCh
 		}
 	}
-	moiWritersAllowed = to
 }
 
 func init() {
