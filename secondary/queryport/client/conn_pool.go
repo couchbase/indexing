@@ -14,6 +14,7 @@ import gometrics "github.com/rcrowley/go-metrics"
 const (
 	CONN_RELEASE_INTERVAL      = 5  // Seconds. Don't change as long as go-metrics/ewma is being used.
 	NUM_CONN_RELEASE_INTERVALS = 60 // Don't change as long as go-metrics/ewma is being used.
+	CONN_COUNT_LOG_INTERVAL    = 60 // Seconds.
 )
 
 // ErrorClosedPool
@@ -245,6 +246,7 @@ func (cp *connectionPool) numConnsToRetain() (int32, bool) {
 	if totalConns-cp.relConnBatchSize >= num {
 		// Don't release more than relConnBatchSize number of connections
 		// in 1 iteration
+		logging.Debugf("%v releasinng connections ...", cp.logPrefix)
 		return totalConns - cp.relConnBatchSize, true
 	}
 	return totalConns, false
@@ -274,6 +276,7 @@ func (cp *connectionPool) releaseConns(numRetConns int32) {
 
 func (cp *connectionPool) releaseConnsRoutine() {
 	i := 0
+	j := 0
 	for {
 		time.Sleep(time.Second)
 		select {
@@ -294,7 +297,15 @@ func (cp *connectionPool) releaseConnsRoutine() {
 					cp.releaseConns(numRetConns)
 				}
 			}
+
+			// Log active and free connection count history every minute.
+			fc := atomic.LoadInt32(&cp.freeConns)
+			if j == CONN_COUNT_LOG_INTERVAL-1 {
+				logging.Infof("%v active conns %v, free conns %v", cp.logPrefix, act, fc)
+			}
+
 			i = (i + 1) % CONN_RELEASE_INTERVAL
+			j = (j + 1) % CONN_COUNT_LOG_INTERVAL
 		}
 	}
 }
