@@ -1515,16 +1515,6 @@ func (r *ScanRequest) processFirstValidAggrOnly() bool {
 		return false
 	}
 
-	checkEqualityFilters := func(keyPos int32) bool {
-		if keyPos < 0 {
-			return false
-		}
-		if keyPos == 0 {
-			return true
-		}
-		return r.hasAllEqualFiltersUpto(int(keyPos) - 1)
-	}
-
 	isAscKey := func(keyPos int32) bool {
 		if !r.IndexInst.Defn.HasDescending() {
 			return true
@@ -1536,15 +1526,15 @@ func (r *ScanRequest) processFirstValidAggrOnly() bool {
 	}
 
 	if aggr.AggrFunc == common.AGG_MIN {
-		if !checkEqualityFilters(aggr.KeyPos) {
+		// Optimization for keyPos > 0 - MB-29605
+		if aggr.KeyPos != 0 {
 			return false
 		}
-
 		return isAscKey(aggr.KeyPos)
 	}
 
 	if aggr.AggrFunc == common.AGG_MAX {
-		if !checkEqualityFilters(aggr.KeyPos) {
+		if aggr.KeyPos != 0 {
 			return false
 		}
 
