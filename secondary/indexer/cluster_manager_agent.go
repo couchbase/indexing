@@ -156,8 +156,8 @@ func (c *clustMgrAgent) handleSupvervisorCommands(cmd Message) {
 	case CONFIG_SETTINGS_UPDATE:
 		c.handleConfigUpdate(cmd)
 
-	case CLUST_MGR_CLEANUP_PARTITION:
-		c.handleCleanupPartition(cmd)
+	case CLUST_MGR_DROP_INSTANCE:
+		c.handleDropInstance(cmd)
 
 	case CLUST_MGR_MERGE_PARTITION:
 		c.handleMergePartition(cmd)
@@ -230,18 +230,13 @@ func (c *clustMgrAgent) handleUpdateTopologyForIndex(cmd Message) {
 
 }
 
-func (c *clustMgrAgent) handleCleanupPartition(cmd Message) {
+func (c *clustMgrAgent) handleDropInstance(cmd Message) {
 
-	logging.Infof("ClustMgr:handleCleanupPartition%v", cmd)
+	logging.Infof("ClustMgr:handleDropInstance%v", cmd)
 
-	msg := cmd.(*MsgClustMgrCleanupPartition)
-	defn := msg.GetDefn()
+	defn := cmd.(*MsgClustMgrDropInstance).GetDefn()
 
-	defn.InstId = msg.GetInstId()
-	defn.ReplicaId = msg.GetReplicaId()
-	defn.Partitions = append(defn.Partitions, msg.GetPartitionId())
-
-	if err := c.mgr.CleanupPartition(defn, msg.UpdateStatusOnly()); err != nil {
+	if err := c.mgr.DropOrPruneInstance(defn, false); err != nil {
 		common.CrashOnError(err)
 	}
 

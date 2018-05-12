@@ -35,14 +35,6 @@ type IndexPartnMap map[common.IndexInstId]PartitionInstMap
 //PartitionInstMap maps a PartitionId to PartitionInst
 type PartitionInstMap map[common.PartitionId]PartitionInst
 
-func (fp PartitionInstMap) Add(partnId common.PartitionId, inst PartitionInst) PartitionInstMap {
-	if fp == nil {
-		fp = make(PartitionInstMap)
-	}
-	fp[partnId] = inst
-	return fp
-}
-
 func (pm IndexPartnMap) String() string {
 
 	str := "\n"

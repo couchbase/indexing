@@ -4,17 +4,11 @@ import (
 	"errors"
 	"fmt"
 	c "github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/natsort"
 	qc "github.com/couchbase/indexing/secondary/queryport/client"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 	"github.com/couchbase/query/expression"
 	"github.com/couchbase/query/parser/n1ql"
-	"io/ioutil"
 	"log"
-	"math/rand"
-	"os"
-	"path"
-	"path/filepath"
 	"time"
 )
 
@@ -95,8 +89,7 @@ func CreateSecondaryIndex(
 // Creates an index and waits for it to become active
 func CreateSecondaryIndex2(
 	indexName, bucketName, server, whereExpr string, indexFields []string, desc []bool, isPrimary bool, with []byte,
-	partnScheme c.PartitionScheme, partnKeys []string, skipIfExists bool, indexActiveTimeoutSeconds int64,
-	client *qc.GsiClient) error {
+	skipIfExists bool, indexActiveTimeoutSeconds int64, client *qc.GsiClient) error {
 
 	if client == nil {
 		c, e := CreateClient(server, "2itest")
@@ -126,7 +119,7 @@ func CreateSecondaryIndex2(
 
 	start := time.Now()
 	defnID, err := client.CreateIndex3(indexName, bucketName, IndexUsing, exprType, whereExpr, secExprs, desc, isPrimary,
-		partnScheme, partnKeys, with)
+		c.SINGLE, nil, with)
 	if err == nil {
 		log.Printf("Created the secondary index %v. Waiting for it become active", indexName)
 		e := WaitTillIndexActive(defnID, client, indexActiveTimeoutSeconds)
@@ -462,158 +455,4 @@ func BuildAllSecondaryIndexes(server string, indexActiveTimeoutSeconds int64) er
 	}
 
 	return err
-}
-
-func CorruptIndex(indexName, bucketName, dirPath, indexUsing string, partnId c.PartitionId) error {
-	if indexUsing == "forestdb" {
-		return corruptForestdbIndex(indexName, bucketName, dirPath, partnId)
-	} else if indexUsing == "plasma" {
-		return corruptPlasmaIndex(indexName, bucketName, dirPath, partnId)
-	} else if indexUsing == "memory_optimized" {
-		return corruptMOIIndex(indexName, bucketName, dirPath, partnId)
-	} else {
-		msg := fmt.Sprintf("Unknown indexUsing %v", indexUsing)
-		return errors.New(msg)
-	}
-}
-
-func corruptPlasmaIndex(indexName, bucketName, dirPath string, partnId c.PartitionId) error {
-	var err error
-	var slicePath string
-	slicePath, err = tc.GetIndexSlicePath(indexName, bucketName, dirPath, partnId)
-	if err != nil {
-		return err
-	}
-
-	log.Printf("Corrupting index %v slicePath %v", indexName, slicePath)
-	// Corrupt only main index
-	mainIndexFilePath := filepath.Join(slicePath, "mainIndex")
-	mainIndexErrFilePath := path.Join(mainIndexFilePath, "error")
-	log.Printf("Corrupting index %v mainIndexErrFilePath %v", indexName, mainIndexErrFilePath)
-	err = ioutil.WriteFile(mainIndexErrFilePath, []byte("Fatal error: Automation Induced Storage Corruption"), 0755)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-// This method will corrupt all available snapshots.
-func corruptMOIIndex(indexName, bucketName, dirPath string, partnId c.PartitionId) error {
-	var err error
-	var slicePath string
-	slicePath, err = tc.GetIndexSlicePath(indexName, bucketName, dirPath, partnId)
-	if err != nil {
-		return err
-	}
-
-	log.Printf("Corrupting index %v slicePath %v", indexName, slicePath)
-
-	infos, err := tc.GetMemDBSnapshots(slicePath)
-	if err != nil {
-		return err
-	}
-
-	snapInfoContainer := tc.NewSnapshotInfoContainer(infos)
-	allSnapshots := snapInfoContainer.List()
-
-	if len(allSnapshots) == 0 {
-		return errors.New("Latest Snapshot not found")
-	}
-
-	for _, snapInfo := range allSnapshots {
-		fmt.Println("snapshot datapath = ", snapInfo.DataPath)
-		datadir := filepath.Join(snapInfo.DataPath, "data")
-
-		// corrupt checksums.json. This ensures corruption even in case of empty partition.
-		// TODO: Don't assume 8 shards.
-		ioutil.WriteFile(filepath.Join(datadir, "checksums.json"), []byte("[1,1,1,1,1,1,1,1]"), 0755)
-	}
-
-	return nil
-}
-
-func corruptForestdbIndex(indexName, bucketName, dirPath string, partnId c.PartitionId) error {
-	var err error
-	var slicePath string
-	slicePath, err = tc.GetIndexSlicePath(indexName, bucketName, dirPath, partnId)
-	if err != nil {
-		return err
-	}
-
-	log.Printf("Corrupting index %v slicePath %v", indexName, slicePath)
-
-	pattern := fmt.Sprintf("data.fdb.*")
-	files, _ := filepath.Glob(filepath.Join(slicePath, pattern))
-	natsort.Strings(files)
-
-	if len(files) <= 0 {
-		return errors.New("No forestdb file found")
-	}
-
-	fpath := files[len(files)-1]
-	log.Printf("Corrupting index %v slicePath %v filepath %v", indexName, slicePath, fpath)
-
-	cwr, errOF := os.OpenFile(fpath, os.O_WRONLY, 0755)
-	if errOF != nil {
-		return errOF
-	}
-
-	fi, errStat := cwr.Stat()
-	if errStat != nil {
-		return errStat
-	}
-
-	sz := fi.Size()
-	asize := sz - 1024
-	if asize < 0 {
-		errors.New("Too small forestdb file")
-	}
-
-	b := make([]byte, asize)
-	rand.Read(b)
-	cwr.WriteAt(b, sz-asize)
-	cwr.Close()
-
-	return nil
-}
-
-func CorruptMOIIndexLatestSnapshot(indexName, bucketName, dirPath, indexUsing string, partnId c.PartitionId) error {
-	if indexUsing != "memory_optimized" {
-		msg := fmt.Sprintf("Unexpected indexUsing %v", indexUsing)
-		return errors.New(msg)
-	}
-
-	var err error
-	var slicePath string
-	slicePath, err = tc.GetIndexSlicePath(indexName, bucketName, dirPath, partnId)
-	if err != nil {
-		return err
-	}
-
-	log.Printf("Corrupting index %v slicePath %v", indexName, slicePath)
-
-	infos, err := tc.GetMemDBSnapshots(slicePath)
-	if err != nil {
-		return err
-	}
-
-	snapInfoContainer := tc.NewSnapshotInfoContainer(infos)
-	latestSnapshotInfo := snapInfoContainer.GetLatest()
-
-	if latestSnapshotInfo == nil {
-		return errors.New("Latest Snapshot not found")
-	}
-
-	CorruptMOIIndexBySnapshotPath(latestSnapshotInfo.DataPath)
-	return nil
-}
-
-func CorruptMOIIndexBySnapshotPath(snapPath string) {
-	fmt.Println("snapshot datapath = ", snapPath)
-
-	datadir := filepath.Join(snapPath, "data")
-
-	// corrupt checksums.json. This ensures corruption even in case of empty partition.
-	// TODO: Don't assume 8 shards.
-	ioutil.WriteFile(filepath.Join(datadir, "checksums.json"), []byte("[1,1,1,1,1,1,1,1]"), 0755)
 }

@@ -502,12 +502,11 @@ func (m *IndexManager) UpdateIndexInstanceSync(bucket string, defnId common.Inde
 	return m.requestServer.MakeRequest(client.OPCODE_UPDATE_INDEX_INST, fmt.Sprintf("%v", defnId), buf)
 }
 
-func (m *IndexManager) DropOrPruneInstance(defn common.IndexDefn, notify bool) error {
+func (m *IndexManager) DropOrPruneInstance(defn common.IndexDefn, cleanup bool) error {
 
 	inst := &dropInstance{
-		Defn:             defn,
-		Notify:           notify,
-		UpdateStatusOnly: false,
+		Defn:    defn,
+		Cleanup: cleanup,
 	}
 
 	buf, e := json.Marshal(&inst)
@@ -517,23 +516,6 @@ func (m *IndexManager) DropOrPruneInstance(defn common.IndexDefn, notify bool) e
 
 	logging.Debugf("IndexManager.DropInstance(): making request for drop instance")
 	return m.requestServer.MakeRequest(client.OPCODE_DROP_OR_PRUNE_INSTANCE, fmt.Sprintf("%v", defn.DefnId), buf)
-}
-
-func (m *IndexManager) CleanupPartition(defn common.IndexDefn, updateStatusOnly bool) error {
-
-	inst := &dropInstance{
-		Defn:             defn,
-		Notify:           false,
-		UpdateStatusOnly: updateStatusOnly,
-	}
-
-	buf, e := json.Marshal(&inst)
-	if e != nil {
-		return e
-	}
-
-	logging.Debugf("IndexManager.CleanupPartition(): making request for cleanup partition")
-	return m.requestServer.MakeRequest(client.OPCODE_CLEANUP_PARTITION, fmt.Sprintf("%v", defn.DefnId), buf)
 }
 
 func (m *IndexManager) MergePartition(defnId common.IndexDefnId, srcInstId common.IndexInstId, srcRState common.RebalanceState,

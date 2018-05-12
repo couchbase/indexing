@@ -1309,7 +1309,7 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 
 	//allocate partition/slice
 	var partnInstMap PartitionInstMap
-	if partnInstMap, _, err = idx.initPartnInstance(indexInst, clientCh, false); err != nil {
+	if partnInstMap, err = idx.initPartnInstance(indexInst, clientCh); err != nil {
 		return
 	}
 
@@ -3543,11 +3543,10 @@ func (idx *indexer) removeIndexesFromStream(indexList []common.IndexInst,
 }
 
 func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
-	respCh MsgChannel, bootstrapPhase bool) (PartitionInstMap, PartitionInstMap, error) {
+	respCh MsgChannel) (PartitionInstMap, error) {
 
 	//initialize partitionInstMap for this index
 	partnInstMap := make(PartitionInstMap)
-	var failedPartnInstances PartitionInstMap
 
 	//get all partitions for this index
 	partnDefnList := indexInst.Pc.GetAllPartitions()
@@ -3569,13 +3568,6 @@ func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 
 			partnInstMap[partnDefn.GetPartitionId()] = partnInst
 		} else {
-			if bootstrapPhase && err == errStorageCorrupted {
-				errStr := fmt.Sprintf("storage corruption for indexInst %v partnDefn %v", indexInst, partnDefn)
-				logging.Errorf("Indexer:: initPartnInstance %v", errStr)
-				failedPartnInstances = failedPartnInstances.Add(partnDefn.GetPartitionId(), partnInst)
-				continue
-			}
-
 			errStr := fmt.Sprintf("Error creating slice %v", err)
 			logging.Errorf("Indexer::initPartnInstance %v. Abort.", errStr)
 			err1 := errors.New(errStr)
@@ -3587,11 +3579,11 @@ func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 						cause:    err1,
 						category: INDEXER}}
 			}
-			return nil, nil, err1
+			return nil, err1
 		}
 	}
 
-	return partnInstMap, failedPartnInstances, nil
+	return partnInstMap, nil
 }
 
 func (idx *indexer) distributeIndexMapsToWorkers(msgUpdateIndexInstMap Message,
@@ -4858,33 +4850,9 @@ func (idx *indexer) initFromPersistedState() (bool, error) {
 
 		//allocate partition/slice
 		var partnInstMap PartitionInstMap
-		var failedPartnInstances PartitionInstMap
 		var err error
-		if partnInstMap, failedPartnInstances, err = idx.initPartnInstance(inst, nil, true); err != nil {
+		if partnInstMap, err = idx.initPartnInstance(inst, nil); err != nil {
 			return needsRestart, err
-		}
-
-		// Cleanup all partition instances for which, initPartnInstance has failed due to storage corruption
-		for failedPartnId, failedPartnInstance := range failedPartnInstances {
-			logMsg := "Detected storage corruption for index %v, partition id %v. Starting cleanup."
-			common.Console(idx.config["clusterAddr"].String(), logMsg, inst.Defn.Name, failedPartnId)
-
-			logging.Infof("Indexer::initFromPersistedState Starting cleanup for %v", failedPartnInstance)
-			// Can this return an error?
-			idx.forceCleanupIndexPartition(&inst, failedPartnId, failedPartnInstance)
-			logging.Infof("Indexer::initFromPersistedState Done cleanup for %v", failedPartnInstance)
-
-			logMsg = "Cleaup done for index %v, partition id %v."
-			common.Console(idx.config["clusterAddr"].String(), logMsg, inst.Defn.Name, failedPartnId)
-		}
-
-		// If there are no partitions left, don't add this index instance to the indexInstMap
-		if len(failedPartnInstances) != 0 && len(inst.Pc.GetAllPartitions()) == 0 {
-			logging.Infof("Indexer::initFromPersistedState Skipping index instance %v", inst.InstId)
-			idx.stats.RemoveIndex(inst.InstId)
-			delete(idx.indexInstMap, inst.InstId)
-			delete(idx.indexPartnMap, inst.InstId)
-			continue
 		}
 
 		idx.indexInstMap[inst.InstId] = inst
@@ -4893,60 +4861,6 @@ func (idx *indexer) initFromPersistedState() (bool, error) {
 
 	return needsRestart, nil
 
-}
-
-// Force cleanup on index partition.
-// This needs to be called only during bootstrap.
-func (idx *indexer) forceCleanupIndexPartition(indexInst *common.IndexInst,
-	partnId common.PartitionId, partnInst PartitionInst) {
-
-	// mark metadata
-	logging.Infof("Indexer::forceCleanupIndexPartition %v %v mark metadata as deleted", indexInst.InstId, partnId)
-
-	msg := &MsgClustMgrCleanupPartition{
-		defn:             indexInst.Defn,
-		instId:           indexInst.InstId,
-		replicaId:        indexInst.ReplicaId,
-		partnId:          partnInst.Defn.GetPartitionId(),
-		updateStatusOnly: true,
-	}
-
-	if err := idx.sendMsgToClusterMgr(msg); err != nil {
-		logging.Errorf("Indexer::forceCleanupIndexPartition %v %v Got error %v in marking metadata as deleted",
-			indexInst.InstId, partnId, err)
-		common.CrashOnError(err)
-	}
-
-	//cleanup the disk directory
-	logging.Infof("Indexer::forceCleanupIndexPartition Cleaning up data files for %v %v",
-		indexInst.InstId, partnId)
-
-	if err := idx.forceCleanupPartitionData(indexInst, partnId, SliceId(0)); err != nil {
-		logging.Infof("Indexer::forceCleanupIndexPartition Error (%v) in cleaning up data files for %v %v",
-			err, indexInst.InstId, partnId)
-	}
-
-	// cleanup partition internal data structure
-	logging.Infof("Indexer::forceCleanupIndexPartition %v %v Cleanup partition in-memory data structure",
-		indexInst.InstId, partnId)
-
-	indexInst.Pc.RemovePartition(partnId)
-	idx.stats.RemovePartitionStats(indexInst.InstId, partnId)
-
-	// delete metadata
-	logging.Infof("Indexer::forceCleanupIndexPartition %v %v actually delete metadata", indexInst.InstId, partnId)
-
-	msg = &MsgClustMgrCleanupPartition{
-		defn:      indexInst.Defn,
-		instId:    indexInst.InstId,
-		replicaId: indexInst.ReplicaId,
-		partnId:   partnInst.Defn.GetPartitionId(),
-	}
-
-	if err := idx.sendMsgToClusterMgr(msg); err != nil {
-		logging.Errorf("Indexer::forceCleanupIndexPartition %v %v Got error %v in deleting metadata.  Metadata will be deleted on next indexer restart.",
-			indexInst.InstId, partnId, err)
-	}
 }
 
 func (idx *indexer) recoverIndexInstMap() error {
@@ -5264,15 +5178,17 @@ func (idx *indexer) validateIndexInstMap() {
 func (idx *indexer) forceCleanupIndexData(inst *common.IndexInst, sliceId SliceId) error {
 
 	if inst.RState != common.REBAL_MERGED {
+		storage_dir := idx.config["storage_dir"].String()
 
 		partnDefnList := inst.Pc.GetAllPartitions()
 		for _, partnDefn := range partnDefnList {
+			path := filepath.Join(storage_dir, IndexPath(inst, partnDefn.GetPartitionId(), sliceId))
 
 			logging.Infof("Indexer::forceCleanupIndexData Cleaning Up partition %v, "+
 				"IndexInstId %v, IndexDefnId %v ", partnDefn.GetPartitionId(), inst.InstId, inst.Defn.DefnId)
 
 			//cleanup the disk directory
-			if err := idx.forceCleanupPartitionData(inst, partnDefn.GetPartitionId(), sliceId); err != nil {
+			if err := os.RemoveAll(path); err != nil {
 				logging.Errorf("Indexer::forceCleanupIndexData Error Cleaning Up partition %v, "+
 					"IndexInstId %v, IndexDefnId %v. Error %v", partnDefn.GetPartitionId(), inst.InstId, inst.Defn.DefnId, err)
 				return err
@@ -5281,15 +5197,6 @@ func (idx *indexer) forceCleanupIndexData(inst *common.IndexInst, sliceId SliceI
 	}
 	return nil
 
-}
-
-//force cleanup of index partition data should only be used when storage manager has not yet
-//been initialized
-func (idx *indexer) forceCleanupPartitionData(inst *common.IndexInst, partitionId common.PartitionId, sliceId SliceId) error {
-
-	storage_dir := idx.config["storage_dir"].String()
-	path := filepath.Join(storage_dir, IndexPath(inst, partitionId, sliceId))
-	return os.RemoveAll(path)
 }
 
 //On recovery, deleted indexes are ignored. There can be

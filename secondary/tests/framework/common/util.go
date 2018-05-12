@@ -3,10 +3,7 @@ package common
 import (
 	"compress/gzip"
 	"encoding/json"
-	"errors"
-	"fmt"
 	"github.com/couchbase/gocb"
-	c "github.com/couchbase/indexing/secondary/common"
 	"io"
 	"io/ioutil"
 	"log"
@@ -219,112 +216,4 @@ func ExecuteN1QLStatement(clusterAddr, username, password, bucketName,
 		results = append(results, row)
 	}
 	return results, nil
-}
-
-func GetIndexSlicePath(indexName, bucketName, dirPath string, partnId c.PartitionId) (string, error) {
-	p := []string{bucketName, indexName, ""}
-	prefix := strings.Join(p, "_")
-	var files []string
-	indexSuffix := fmt.Sprintf("_%d.index", partnId)
-
-	walkFn := func(pth string, finfo os.FileInfo, err error) error {
-		if !finfo.IsDir() {
-			return nil
-		}
-
-		if len(pth) <= len(dirPath) {
-			return nil
-		}
-
-		dirName := pth[len(dirPath)+len(string(os.PathSeparator)):]
-		if strings.Contains(dirName, string(os.PathSeparator)) {
-			return nil
-		}
-
-		if !strings.HasPrefix(dirName, prefix) {
-			return nil
-		}
-
-		if !strings.HasSuffix(dirName, indexSuffix) {
-			return nil
-		}
-
-		rem := dirName[len(prefix):]
-
-		rem = rem[:len(rem)-len(indexSuffix)]
-		if strings.Contains(rem, "_") {
-			return nil
-		}
-
-		files = append(files, pth)
-		return nil
-	}
-
-	err := filepath.Walk(dirPath, walkFn)
-	if err != nil {
-		msg := fmt.Sprintf("Error %v during directory walk", err)
-		return "", errors.New(msg)
-	}
-
-	if len(files) != 1 {
-		msg := fmt.Sprintf("Unexpected number of slice paths found %v", files)
-		return "", errors.New(msg)
-	}
-
-	return files[0], nil
-}
-
-func GetMOILatestSnapshotPath(indexName, bucketName, dirPath string,
-	partnId c.PartitionId) (string, error) {
-	slicePath, err := GetIndexSlicePath(indexName, bucketName, dirPath, partnId)
-	if err != nil {
-		return "", err
-	}
-
-	pattern := "*"
-	files, errGlob := filepath.Glob(filepath.Join(slicePath, pattern))
-	if errGlob != nil {
-		return "", errGlob
-	}
-
-	return files[len(files)-1], nil
-}
-
-func GetIndexerSetting(indexerAddr string, setting string) (interface{}, error) {
-	var err error
-
-	addr := fmt.Sprintf("http://%v/settings?internal=ok", indexerAddr)
-	req, errNR := http.NewRequest("GET", addr, nil)
-	if errNR != nil {
-		return nil, errNR
-	}
-
-	req.SetBasicAuth("Administrator", "asdasd")
-
-	resp, errResp := http.DefaultClient.Do(req)
-	if errResp != nil {
-		return nil, errResp
-	}
-
-	defer resp.Body.Close()
-
-	r := make(map[string]interface{})
-
-	var p []byte
-	p, err = ioutil.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-
-	err = json.Unmarshal(p, &r)
-	if err != nil {
-		return nil, err
-	}
-
-	val, ok := r[setting]
-	if !ok {
-		return nil, errors.New("Setting not found.")
-	}
-
-	return val, nil
 }

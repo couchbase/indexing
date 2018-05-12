@@ -45,7 +45,6 @@ const (
 	OPCODE_REBALANCE_RUNNING                        = OPCODE_COMMIT_CREATE_INDEX + 1
 	OPCODE_CREATE_INDEX_DEFER_BUILD                 = OPCODE_REBALANCE_RUNNING + 1
 	OPCODE_DROP_OR_PRUNE_INSTANCE_DDL               = OPCODE_CREATE_INDEX_DEFER_BUILD + 1
-	OPCODE_CLEANUP_PARTITION                        = OPCODE_DROP_OR_PRUNE_INSTANCE_DDL + 1
 )
 
 /////////////////////////////////////////////////////////////////////////

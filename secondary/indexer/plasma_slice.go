@@ -151,10 +151,12 @@ func newPlasmaSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 
 	if err := slice.initStores(); err != nil {
 		// Index is unusable. Remove the data files and reinit
-		if err == errStorageCorrupted {
+		if plasma.IsFatalError(err) {
 			logging.Errorf("plasmaSlice:NewplasmaSlice Id %v IndexInstId %v PartitionId %v "+
 				"fatal error occured: %v", sliceId, idxInstId, partitionId, err)
+			err = errStorageCorrupted
 		}
+
 		return nil, err
 	}
 
@@ -303,9 +305,9 @@ func (slice *plasmaSlice) initStores() error {
 	go func() {
 		defer wg.Done()
 
-		slice.mainstore, mErr = plasma.New(mCfg)
-		if mErr != nil {
-			mErr = fmt.Errorf("Unable to initialize %s, err = %v", mCfg.File, mErr)
+		slice.mainstore, err = plasma.New(mCfg)
+		if err != nil {
+			mErr = fmt.Errorf("Unable to initialize %s, err = %v", mCfg.File, err)
 			return
 		}
 
@@ -320,9 +322,9 @@ func (slice *plasmaSlice) initStores() error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			slice.backstore, bErr = plasma.New(bCfg)
-			if bErr != nil {
-				bErr = fmt.Errorf("Unable to initialize %s, err = %v", bCfg.File, bErr)
+			slice.backstore, err = plasma.New(bCfg)
+			if err != nil {
+				bErr = fmt.Errorf("Unable to initialize %s, err = %v", bCfg.File, err)
 				return
 			}
 
@@ -334,37 +336,17 @@ func (slice *plasmaSlice) initStores() error {
 	}
 
 	wg.Wait()
-
-	// In case of errors, close the opened stores
 	if mErr != nil {
 		if !slice.isPrimary && bErr == nil {
 			slice.backstore.Close()
 		}
+
+		return mErr
 	} else if bErr != nil {
 		if mErr == nil {
 			slice.mainstore.Close()
 		}
-	}
 
-	// Return fatal error with higher priority.
-	if mErr != nil && plasma.IsFatalError(mErr) {
-		logging.Errorf("plasmaSlice:NewplasmaSlice Id %v IndexInstId %v "+
-			"fatal error occured: %v", slice.Id, slice.idxInstId, mErr)
-		return errStorageCorrupted
-	}
-
-	if bErr != nil && plasma.IsFatalError(bErr) {
-		logging.Errorf("plasmaSlice:NewplasmaSlice Id %v IndexInstId %v "+
-			"fatal error occured: %v", slice.Id, slice.idxInstId, bErr)
-		return errStorageCorrupted
-	}
-
-	// If both mErr and bErr are not fatal, return mErr with higher priority
-	if mErr != nil {
-		return mErr
-	}
-
-	if bErr != nil {
 		return bErr
 	}
 
@@ -1316,8 +1298,8 @@ func (mdb *plasmaSlice) Close() {
 	mdb.lock.Lock()
 	defer mdb.lock.Unlock()
 
-	logging.Infof("plasmaSlice::Close Closing Slice Id %v, IndexInstId %v, PartitionId %v, "+
-		"IndexDefnId %v", mdb.id, mdb.idxInstId, mdb.idxPartnId, mdb.idxDefnId)
+	logging.Infof("plasmaSlice::Close Closing Slice Id %v, IndexInstId %v, PartitionId %v "+
+		"IndexDefnId %v", mdb.idxInstId, mdb.idxDefnId, mdb.idxPartnId, mdb.id)
 
 	//signal shutdown for command handler routines
 	for i := 0; i < mdb.numWriters; i++ {
