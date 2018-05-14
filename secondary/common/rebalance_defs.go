@@ -146,7 +146,8 @@ func (tt TransferToken) String() string {
 	}
 	str += fmt.Sprintf("InstId: %v ", tt.InstId)
 	str += fmt.Sprintf("RealInstId: %v ", tt.RealInstId)
-	str += fmt.Sprintf("Partitions: %v", tt.IndexInst.Defn.Partitions)
+	str += fmt.Sprintf("Partitions: %v ", tt.IndexInst.Defn.Partitions)
+	str += fmt.Sprintf("Versions: %v ", tt.IndexInst.Defn.Versions)
 	str += fmt.Sprintf("Inst: %v \n", tt.IndexInst)
 	return str
 

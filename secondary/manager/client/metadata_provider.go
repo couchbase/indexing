@@ -3125,8 +3125,10 @@ func (r *metadataRepo) updateTopology(topology *mc.IndexTopology, indexerId c.In
 				r.instances[defnId][c.IndexInstId(instRef.InstId)] = make(map[c.PartitionId]map[uint64]*mc.IndexInstDistribution)
 			}
 
-			for _, partnRef := range instRef.Partitions {
-				if partnRef.Version == 0 && instRef.Version != partnRef.Version {
+			for k, partnRef := range instRef.Partitions {
+				// for backward compatiblity on non-partitioned index (pre-5.5.)
+				if partnRef.PartId == 0 && partnRef.Version == 0 && instRef.Version != partnRef.Version {
+					instRef.Partitions[k].Version = instRef.Version
 					partnRef.Version = instRef.Version
 				}
 
