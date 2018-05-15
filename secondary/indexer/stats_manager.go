@@ -1236,9 +1236,15 @@ func (s *statsManager) getStorageStats() string {
 func (s *statsManager) handleStorageStatsReq(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "POST" || r.Method == "GET" {
 
-		w.WriteHeader(200)
-		w.Write([]byte(s.getStorageStats()))
+		stats := s.stats.Get()
 
+		if common.IndexerState(stats.indexerState.Value()) != common.INDEXER_BOOTSTRAP {
+			w.WriteHeader(200)
+			w.Write([]byte(s.getStorageStats()))
+		} else {
+			w.WriteHeader(200)
+			w.Write([]byte("Indexer In Warmup. Please try again later."))
+		}
 	} else {
 		w.WriteHeader(400)
 		w.Write([]byte("Unsupported method"))
@@ -1266,9 +1272,16 @@ func (s *statsManager) handleStatsResetReq(w http.ResponseWriter, r *http.Reques
 	}
 
 	if r.Method == "POST" || r.Method == "GET" {
-		s.supvMsgch <- &MsgResetStats{}
-		w.WriteHeader(200)
-		w.Write([]byte("OK"))
+		stats := s.stats.Get()
+
+		if common.IndexerState(stats.indexerState.Value()) != common.INDEXER_BOOTSTRAP {
+			s.supvMsgch <- &MsgResetStats{}
+			w.WriteHeader(200)
+			w.Write([]byte("OK"))
+		} else {
+			w.WriteHeader(200)
+			w.Write([]byte("Indexer In Warmup. Please try again later."))
+		}
 	} else {
 		w.WriteHeader(400)
 		w.Write([]byte("Unsupported method"))

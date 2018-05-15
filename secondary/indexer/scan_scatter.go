@@ -71,19 +71,22 @@ func scanMultiple(request *ScanRequest, scan Scan, snapshots []SliceSnapshot, cb
 	queues := make([]*Queue, len(snapshots))
 	size, limit := queueSize(len(snapshots), sorted, config)
 	for i := 0; i < len(snapshots); i++ {
-		queues[i] = NewQueue(int64(size), int64(limit), notifych, request.connCtx.bufPool)
+		bufPool := request.connCtx.GetBufPool(getPartitionId(request, i))
+		queues[i] = NewQueue(int64(size), int64(limit), notifych, bufPool)
 	}
 	defer func() {
 		for _, queue := range queues {
 			queue.Close()
+			queue.Free()
 		}
 	}()
 
 	// run gather
+	bufPool := request.connCtx.GetDefaultBufPool()
 	if sorted {
-		go gather(request, queues, donech, notifych, killch, errch, cb)
+		go gather(request, queues, donech, notifych, killch, errch, cb, bufPool)
 	} else {
-		go forward(request, queues, donech, notifych, killch, errch, cb)
+		go forward(request, queues, donech, notifych, killch, errch, cb, bufPool)
 	}
 
 	// run scatter
@@ -108,10 +111,10 @@ func scanMultiple(request *ScanRequest, scan Scan, snapshots []SliceSnapshot, cb
 		// stop gather go-routine
 		close(killch)
 		errch <- err
-	} else {
-		// wait for gather to be done
-		<-donech
 	}
+
+	// wait for gather to be done
+	<-donech
 
 	enqCount := int64(0)
 	deqCount := int64(0)
@@ -445,7 +448,7 @@ func scan_pick(request *ScanRequest, queues []*Queue, rows []Row, sorted []int) 
 }
 
 func gather(request *ScanRequest, queues []*Queue, donech chan bool, notifych chan bool, killch chan bool,
-	errch chan error, cb EntryCallback) {
+	errch chan error, cb EntryCallback, bufPool *common.BytesBufPool) {
 
 	defer close(donech)
 
@@ -453,8 +456,8 @@ func gather(request *ScanRequest, queues []*Queue, donech chan bool, notifych ch
 	sorted := make([]int, ensembleSize)
 
 	rows := make([]Row, ensembleSize)
-	initRows(rows, request.connCtx.bufPool)
-	defer freeRows(rows, request.connCtx.bufPool)
+	initRows(rows, bufPool)
+	defer freeRows(rows, bufPool)
 
 	// initial sort
 	isSorted := false
@@ -511,15 +514,15 @@ func gather(request *ScanRequest, queues []*Queue, donech chan bool, notifych ch
 }
 
 func forward(request *ScanRequest, queues []*Queue, donech chan bool, notifych chan bool, killch chan bool,
-	errch chan error, cb EntryCallback) {
+	errch chan error, cb EntryCallback, bufPool *common.BytesBufPool) {
 
 	defer close(donech)
 
 	ensembleSize := len(queues)
 
 	rows := make([]Row, ensembleSize)
-	initRows(rows, request.connCtx.bufPool)
-	defer freeRows(rows, request.connCtx.bufPool)
+	initRows(rows, bufPool)
+	defer freeRows(rows, bufPool)
 
 	for {
 		if len(errch) != 0 {

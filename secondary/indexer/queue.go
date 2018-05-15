@@ -207,8 +207,11 @@ func (b *Queue) Close() {
 
 	if atomic.SwapInt32(&b.isClose, 1) == 0 {
 		close(b.donech)
-		freeRows(b.buf, b.bufPool)
 	}
+}
+
+func (b *Queue) Free() {
+	freeRows(b.buf, b.bufPool)
 }
 
 //-----------------------------

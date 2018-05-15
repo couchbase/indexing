@@ -1515,16 +1515,6 @@ func (r *ScanRequest) processFirstValidAggrOnly() bool {
 		return false
 	}
 
-	checkEqualityFilters := func(keyPos int32) bool {
-		if keyPos < 0 {
-			return false
-		}
-		if keyPos == 0 {
-			return true
-		}
-		return r.hasAllEqualFiltersUpto(int(keyPos) - 1)
-	}
-
 	isAscKey := func(keyPos int32) bool {
 		if !r.IndexInst.Defn.HasDescending() {
 			return true
@@ -1536,15 +1526,15 @@ func (r *ScanRequest) processFirstValidAggrOnly() bool {
 	}
 
 	if aggr.AggrFunc == common.AGG_MIN {
-		if !checkEqualityFilters(aggr.KeyPos) {
+		// Optimization for keyPos > 0 - MB-29605
+		if aggr.KeyPos != 0 {
 			return false
 		}
-
 		return isAscKey(aggr.KeyPos)
 	}
 
 	if aggr.AggrFunc == common.AGG_MAX {
-		if !checkEqualityFilters(aggr.KeyPos) {
+		if aggr.KeyPos != 0 {
 			return false
 		}
 
@@ -1832,14 +1822,25 @@ func FilterLessThan(x, y Filter) bool {
 /////////////////////////////////////////////////////////////////////////
 
 type ConnectionContext struct {
-	bufPool *common.BytesBufPool
+	bufPool    map[common.PartitionId]*common.BytesBufPool
+	defBufPool *common.BytesBufPool
 }
 
 func createConnectionContext() interface{} {
+	return &ConnectionContext{
+		bufPool:    make(map[common.PartitionId]*common.BytesBufPool),
+		defBufPool: common.NewByteBufferPool(DEFAULT_MAX_SEC_KEY_LEN + MAX_DOCID_LEN + 2),
+	}
+}
 
-	ctx := &ConnectionContext{
-		bufPool: common.NewByteBufferPool(DEFAULT_MAX_SEC_KEY_LEN + MAX_DOCID_LEN + 2),
+func (c *ConnectionContext) GetBufPool(partitionId common.PartitionId) *common.BytesBufPool {
+	if _, ok := c.bufPool[partitionId]; !ok {
+		c.bufPool[partitionId] = common.NewByteBufferPool(DEFAULT_MAX_SEC_KEY_LEN + MAX_DOCID_LEN + 2)
 	}
 
-	return ctx
+	return c.bufPool[partitionId]
+}
+
+func (c *ConnectionContext) GetDefaultBufPool() *common.BytesBufPool {
+	return c.defBufPool
 }
