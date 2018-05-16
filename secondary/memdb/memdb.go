@@ -322,6 +322,8 @@ type restoreStats struct {
 }
 
 type MemDB struct {
+	sync.Mutex
+
 	id           int
 	store        *skiplist.Skiplist
 	currSn       uint32
@@ -411,7 +413,9 @@ func (m *MemDB) Close() {
 		time.Sleep(time.Millisecond)
 	}
 
+	m.Lock()
 	m.hasShutdown = true
+	m.Unlock()
 
 	// Acquire gc chan ownership
 	// This will make sure that no other goroutine will write to gcchan
@@ -849,10 +853,18 @@ func (m *MemDB) StoreToDisk(dir string, snap *Snapshot, concurr int, itmCallback
 		}
 	}()
 
+	m.Lock()
+	if m.hasShutdown {
+		m.Unlock()
+		return ErrShutdown
+	}
+
 	if m.useMemoryMgmt {
 		m.shutdownWg1.Add(1)
 		defer m.shutdownWg1.Done()
 	}
+
+	m.Unlock()
 
 	manifestdir := dir
 	datadir := filepath.Join(dir, "data")
