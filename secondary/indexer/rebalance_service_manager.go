@@ -547,8 +547,6 @@ func (m *ServiceMgr) StartTopologyChange(change service.TopologyChange) error {
 
 func (m *ServiceMgr) startFailover(change service.TopologyChange) error {
 
-	m.cleanupOrphanTokens(change)
-
 	ctx := &rebalanceContext{
 		rev:    0,
 		change: change,
