@@ -2408,8 +2408,8 @@ func (m *ServiceMgr) getNodeIdFromDest(dest string) (string, error) {
 		}
 
 	}
-	errStr := fmt.Sprintf("Unable to find Index service for destination %v", dest)
-	l.Errorf("ServiceMgr::getNodeIdFromDest %v")
+	errStr := fmt.Sprintf("Unable to find Index service for destination %v or desintation is not part of the cluster", dest)
+	l.Errorf("ServiceMgr::getNodeIdFromDest %v", errStr)
 
 	return "", errors.New(errStr)
 }
