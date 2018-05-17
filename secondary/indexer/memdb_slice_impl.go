@@ -226,6 +226,15 @@ func NewMemDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 
 	slice.isPrimary = isPrimary
 	slice.hasPersistence = hasPersistance
+
+	// Check if there is a storage corruption error
+	err = slice.checkStorageCorruptionError()
+	if err != nil {
+		logging.Errorf("memdbSlice:NewMemDBSlice Id %v IndexInstId %v "+
+			"fatal error occured: %v", sliceId, idxInstId, err)
+		return nil, err
+	}
+
 	slice.initStores()
 
 	// Array related initialization
@@ -301,6 +310,15 @@ func (slice *memdbSlice) initStores() {
 			slice.back[i] = nodetable.New(hashDocId, nodeEquality)
 		}
 	}
+}
+
+func (mdb *memdbSlice) checkStorageCorruptionError() error {
+	if data, err := ioutil.ReadFile(filepath.Join(mdb.path, "error")); err == nil {
+		if string(data) == fmt.Sprintf("%v", errStorageCorrupted) {
+			return errStorageCorrupted
+		}
+	}
+	return nil
 }
 
 func (mdb *memdbSlice) IncrRef() {
@@ -922,10 +940,19 @@ func (mdb *memdbSlice) Rollback(info SnapshotInfo) error {
 func (mdb *memdbSlice) loadSnapshot(snapInfo *memdbSnapshotInfo) (err error) {
 	defer func() {
 		if r := recover(); r != nil || err != nil {
-			logging.Errorf("MemDBSlice::loadSnapshot Slice Id %v, IndexInstId %v, PartitionId %v failed to recover from the snapshot %v (err=%v,%v)",
+			logging.Errorf("MemDBSlice::loadSnapshot Slice Id %v, IndexInstId %v PartitionId %v failed to recover from the snapshot %v (err=%v,%v)",
 				mdb.id, mdb.idxInstId, mdb.idxPartnId, snapInfo.dataPath, r, err)
-			os.RemoveAll(snapInfo.dataPath)
-			os.Exit(1)
+			if err != errStorageCorrupted {
+				os.RemoveAll(snapInfo.dataPath)
+				os.Exit(1)
+			} else {
+				// Persist error in a file. Next time indexer comes up, required cleanup will happen.
+				os.RemoveAll(snapInfo.dataPath)
+				msg := fmt.Sprintf("%v", errStorageCorrupted)
+				ioutil.WriteFile(filepath.Join(mdb.path, "error"), []byte(msg), 0755)
+			}
+		} else {
+			os.RemoveAll(filepath.Join(mdb.path, "error"))
 		}
 	}()
 
@@ -971,6 +998,12 @@ func (mdb *memdbSlice) loadSnapshot(snapInfo *memdbSnapshotInfo) (err error) {
 
 	var snap *memdb.Snapshot
 	snap, err = mdb.mainstore.LoadFromDisk(snapInfo.dataPath, concurrency, backIndexCallback)
+	if err == memdb.ErrCorruptSnapshot {
+		err = errStorageCorrupted
+		logging.Errorf("MemDBSlice::loadSnapshot Slice Id %v, IndexInstId %v failed to load snapshot %v error(%v).",
+			mdb.id, mdb.idxInstId, snapInfo.dataPath, err)
+		return
+	}
 
 	if !mdb.isPrimary {
 		for wId := 0; wId < mdb.numWriters; wId++ {
@@ -1086,7 +1119,7 @@ func (mdb *memdbSlice) Close() {
 	atomic.AddInt64(&totalMemDBItems, -int64(prev))
 
 	logging.Infof("MemDBSlice::Close Closing Slice Id %v, IndexInstId %v, PartitionId %v, "+
-		"IndexDefnId %v", mdb.idxInstId, mdb.idxPartnId, mdb.idxDefnId, mdb.id)
+		"IndexDefnId %v", mdb.id, mdb.idxInstId, mdb.idxPartnId, mdb.idxDefnId)
 
 	//signal shutdown for command handler routines
 	for i := 0; i < mdb.numWriters; i++ {

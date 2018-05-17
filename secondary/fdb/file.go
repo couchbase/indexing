@@ -31,6 +31,8 @@ const (
 	FdbV2FileVersion
 )
 
+var FDB_CORRUPTION_ERR = fmt.Errorf("Storage corrupted and unrecoverable")
+
 // Database handle
 type File struct {
 	dbfile *C.fdb_file_handle
@@ -54,6 +56,9 @@ func Open(filename string, config *Config) (*File, error) {
 	errNo := C.fdb_open(&rv.dbfile, dbname, config.config)
 	Log.Tracef("fdb_open ret rv:%p errNo:%v rv:%v", &rv, errNo, rv)
 	if errNo != RESULT_SUCCESS {
+		if errNo == C.FDB_NONRECOVERABLE_ERR {
+			return nil, FDB_CORRUPTION_ERR
+		}
 		return nil, Error(errNo)
 	}
 	return &rv, nil

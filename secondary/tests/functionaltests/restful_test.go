@@ -978,7 +978,7 @@ func waitforindex(id string) (error, bool) {
 	}
 	indexi, ok := indexes[id]
 	if !ok {
-		return fmt.Errorf("index %d is not found", id), false
+		return fmt.Errorf("index %v is not found", id), false
 	}
 
 	index := indexi.(map[string]interface{})

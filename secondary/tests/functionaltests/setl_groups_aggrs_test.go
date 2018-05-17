@@ -1372,7 +1372,8 @@ func TestGroupAggr_FirstValidAggrOnly(t *testing.T) {
 	err = secondaryindex.CreateSecondaryIndex(i1, bucket, indexManagementAddress, "", indexExpr1, false, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
-	err = secondaryindex.CreateSecondaryIndex2(i2, bucket, indexManagementAddress, "", indexExpr2, []bool{true, false, false}, false, nil, true, defaultIndexActiveTimeout, nil)
+	err = secondaryindex.CreateSecondaryIndex2(i2, bucket, indexManagementAddress, "", indexExpr2, 
+		[]bool{true, false, false}, false, nil, c.SINGLE, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	log.Printf("=== MIN no group by ===") // flag true

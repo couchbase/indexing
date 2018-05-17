@@ -17,6 +17,7 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/fdb"
 	"github.com/couchbase/indexing/secondary/logging"
+	"os"
 	"sort"
 	"sync"
 	"time"
@@ -69,6 +70,8 @@ type snapshotWaiter struct {
 	idxInstId common.IndexInstId
 	expired   time.Time
 }
+
+type PartnSnapMap map[common.PartitionId]PartitionSnapshot
 
 func newSnapshotWaiter(idxId common.IndexInstId, ts *common.TsVbuuid,
 	cons common.Consistency,
@@ -1179,6 +1182,73 @@ func (s *storageMgr) handleIndexCompaction(cmd Message) {
 	}()
 }
 
+// Used for forestdb and memdb slices.
+func (s *storageMgr) openSnapshot(idxInstId common.IndexInstId, partnInst PartitionInst,
+	partnSnapMap PartnSnapMap) (PartnSnapMap, *common.TsVbuuid, error) {
+
+	pid := partnInst.Defn.GetPartitionId()
+	sc := partnInst.Sc
+
+	//there is only one slice for now
+	slice := sc.GetSliceById(0)
+	infos, err := slice.GetSnapshots()
+	// TODO: Proper error handling if possible
+	if err != nil {
+		panic("Unable to read snapinfo -" + err.Error())
+	}
+
+	snapInfoContainer := NewSnapshotInfoContainer(infos)
+	allSnapShots := snapInfoContainer.List()
+
+	snapFound := false
+	usableSnapFound := false
+	var tsVbuuid *common.TsVbuuid
+	for _, snapInfo := range allSnapShots {
+		snapFound = true
+		logging.Infof("StorageMgr::openAnySnapshot IndexInst:%v Attempting to open snapshot (%v)",
+			idxInstId, snapInfo)
+		usableSnapshot, err := slice.OpenSnapshot(snapInfo)
+		if err != nil {
+			if err == errStorageCorrupted {
+				// Slice has already cleaned up the snapshot files. Try with older snapshot.
+				// Note: plasma and forestdb never return errStorageCorrupted for OpenSnapshot.
+				// So, we continue only in case of MOI.
+				continue
+			} else {
+				panic("Unable to open snapshot -" + err.Error())
+			}
+		}
+		ss := &sliceSnapshot{
+			id:   SliceId(0),
+			snap: usableSnapshot,
+		}
+
+		tsVbuuid = snapInfo.Timestamp()
+
+		sid := SliceId(0)
+
+		ps := &partitionSnapshot{
+			id:     pid,
+			slices: map[SliceId]SliceSnapshot{sid: ss},
+		}
+
+		partnSnapMap[pid] = ps
+		usableSnapFound = true
+		break
+	}
+
+	if !snapFound {
+		partnSnapMap = nil
+		return partnSnapMap, tsVbuuid, nil
+	}
+
+	if !usableSnapFound {
+		return partnSnapMap, nil, errStorageCorrupted
+	}
+
+	return partnSnapMap, tsVbuuid, nil
+}
+
 // Update index-snapshot map using index partition map
 // This function should be called only during initialization
 // of storage manager and during rollback.
@@ -1189,6 +1259,7 @@ func (s *storageMgr) updateIndexSnapMap(indexPartnMap IndexPartnMap,
 
 	s.muSnap.Lock()
 	defer s.muSnap.Unlock()
+	needRestart := false
 
 	for idxInstId, partnMap := range indexPartnMap {
 
@@ -1210,52 +1281,20 @@ func (s *storageMgr) updateIndexSnapMap(indexPartnMap IndexPartnMap,
 		s.notifySnapshotDeletion(idxInstId)
 
 		var tsVbuuid *common.TsVbuuid
-		partnSnapMap := make(map[common.PartitionId]PartitionSnapshot)
+		var err error
+		partnSnapMap := make(PartnSnapMap)
 
 		for _, partnInst := range partnMap {
-
-			pid := partnInst.Defn.GetPartitionId()
-			sc := partnInst.Sc
-
-			//there is only one slice for now
-			slice := sc.GetSliceById(0)
-			infos, err := slice.GetSnapshots()
-			// TODO: Proper error handling if possible
+			partnSnapMap, tsVbuuid, err = s.openSnapshot(idxInstId, partnInst, partnSnapMap)
 			if err != nil {
-				panic("Unable to read snapinfo -" + err.Error())
-			}
-
-			snapInfoContainer := NewSnapshotInfoContainer(infos)
-			latestSnapshotInfo := snapInfoContainer.GetLatest()
-
-			if latestSnapshotInfo != nil {
-				logging.Infof("StorageMgr::updateIndexSnapMap IndexInst:%v Attempting to open snapshot (%v)",
-					idxInstId, latestSnapshotInfo)
-				latestSnapshot, err := slice.OpenSnapshot(latestSnapshotInfo)
-				if err != nil {
+				if err == errStorageCorrupted {
+					needRestart = true
+				} else {
 					panic("Unable to open snapshot -" + err.Error())
 				}
-				ss := &sliceSnapshot{
-					id:   SliceId(0),
-					snap: latestSnapshot,
-				}
+			}
 
-				tsVbuuid = latestSnapshotInfo.Timestamp()
-
-				sid := SliceId(0)
-
-				ps := &partitionSnapshot{
-					id:     pid,
-					slices: map[SliceId]SliceSnapshot{sid: ss},
-				}
-
-				partnSnapMap[pid] = ps
-
-			} else {
-				// If it fails to open a snapshot for one of the slice/partition,
-				// do not compute the snapshot for the index instance.  This function
-				// will return a nil snapshot.
-				partnSnapMap = nil
+			if partnSnapMap == nil {
 				break
 			}
 		}
@@ -1271,6 +1310,10 @@ func (s *storageMgr) updateIndexSnapMap(indexPartnMap IndexPartnMap,
 		} else {
 			s.addNilSnapshot(idxInstId, bucket)
 		}
+	}
+
+	if needRestart {
+		os.Exit(1)
 	}
 }
 
