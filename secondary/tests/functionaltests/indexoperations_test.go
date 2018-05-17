@@ -2,11 +2,13 @@ package functionaltests
 
 import (
 	c "github.com/couchbase/indexing/secondary/common"
+	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 	"github.com/couchbase/indexing/secondary/tests/framework/datautility"
 	"github.com/couchbase/indexing/secondary/tests/framework/secondaryindex"
 	tv "github.com/couchbase/indexing/secondary/tests/framework/validation"
 	"log"
 	"testing"
+	"time"
 )
 
 func TestScanAfterBucketPopulate(t *testing.T) {
@@ -18,6 +20,25 @@ func TestScanAfterBucketPopulate(t *testing.T) {
 	docScanResults := datautility.ExpectedScanResponse_string(docs, "eyeColor", "b", "c", 3)
 	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{"b"}, []interface{}{"c"}, 3, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
+	err = tv.Validate(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan result validation: ", t)
+}
+
+func TestRestartNilSnapshot(t *testing.T) {
+	log.Printf("In TestRestartNilSnapshot()")
+
+	var err error
+
+	err = secondaryindex.CreateSecondaryIndex("idx_age", "default", indexManagementAddress, "", []string{"age"}, false, nil, true, defaultIndexActiveTimeout, nil)
+	FailTestIfError(err, "Error in creating the index", t)
+
+	// Restart indexer process and wait for some time.
+	log.Printf("Restarting indexer process ...")
+	tc.KillIndexer()
+	time.Sleep(10 * time.Second)
+	docScanResults := datautility.ExpectedScanResponse_string(docs, "eyeColor", "b", "c", 3)
+	scanResults, err1 := secondaryindex.Range("index_eyeColor", "default", indexScanAddress, []interface{}{"b"}, []interface{}{"c"}, 3, false, defaultlimit, c.SessionConsistency, nil)
+	FailTestIfError(err1, "Error in scan", t)
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation: ", t)
 }

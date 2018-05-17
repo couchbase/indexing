@@ -4105,6 +4105,9 @@ func (idx *indexer) makeRestartTs(streamId common.StreamId) map[string]*common.T
 			if latestSnapInfo != nil {
 				ts := latestSnapInfo.Timestamp()
 				if oldTs, ok := restartTs[idxInst.Defn.Bucket]; ok {
+					if oldTs == nil {
+						continue
+					}
 					if !ts.AsRecent(oldTs) {
 						restartTs[idxInst.Defn.Bucket] = ts
 					}
@@ -4113,9 +4116,7 @@ func (idx *indexer) makeRestartTs(streamId common.StreamId) map[string]*common.T
 				}
 			} else {
 				//set restartTs to nil for this bucket
-				if _, ok := restartTs[idxInst.Defn.Bucket]; !ok {
-					restartTs[idxInst.Defn.Bucket] = nil
-				}
+				restartTs[idxInst.Defn.Bucket] = nil
 			}
 		}
 	}
