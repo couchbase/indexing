@@ -237,7 +237,6 @@ func (slice *plasmaSlice) initStores() error {
 	cfg.LSSLogSegmentSize = int64(slice.sysconf["plasma.LSSSegmentFileSize"].Int())
 	cfg.UseCompression = slice.sysconf["plasma.useCompression"].Bool()
 	cfg.AutoSwapper = true
-	cfg.NumPersistorThreads = int(float32(runtime.NumCPU())*float32(slice.sysconf["plasma.persistenceCPUPercent"].Int())/(100*2) + 0.5)
 	cfg.DisableReadCaching = slice.sysconf["plasma.disableReadCaching"].Bool()
 	cfg.AutoMVCCPurging = slice.sysconf["plasma.purger.enabled"].Bool()
 	cfg.PurgerInterval = time.Duration(slice.sysconf["plasma.purger.interval"].Int()) * time.Second
@@ -1021,8 +1020,6 @@ func (mdb *plasmaSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 }
 
 func (mdb *plasmaSlice) doPersistSnapshot(s *plasmaSnapshot) {
-	var wg sync.WaitGroup
-
 	if atomic.CompareAndSwapInt32(&mdb.isPersistorActive, 0, 1) {
 		s.MainSnap.Open()
 		if !mdb.isPrimary {
@@ -1041,14 +1038,18 @@ func (mdb *plasmaSlice) doPersistSnapshot(s *plasmaSnapshot) {
 			binary.BigEndian.PutUint64(timeHdr, uint64(time.Now().UnixNano()))
 			meta = append(timeHdr, meta...)
 
+			var concurr int = int(float32(runtime.NumCPU())*float32(mdb.sysconf["plasma.persistenceCPUPercent"].Int())/(100) + 0.5)
+			var wg sync.WaitGroup
 			wg.Add(1)
 			go func() {
-				mdb.mainstore.CreateRecoveryPoint(s.MainSnap, meta)
+				mdb.mainstore.CreateRecoveryPoint(s.MainSnap, meta,
+					concurr, nil)
 				wg.Done()
 			}()
 
 			if !mdb.isPrimary {
-				mdb.backstore.CreateRecoveryPoint(s.BackSnap, meta)
+				mdb.backstore.CreateRecoveryPoint(s.BackSnap, meta, concurr,
+					nil)
 			}
 			wg.Wait()
 
