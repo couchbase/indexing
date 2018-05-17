@@ -834,7 +834,7 @@ func (o *MetadataProvider) createIndex(idxDefn *c.IndexDefn, plan map[string]int
 		return errors.New(fmt.Sprintf("Fails to create index.  Cannot find enough indexer node for replica.  numReplica=%v.", idxDefn.NumReplica))
 	}
 
-	indexerIds := make([]c.IndexerId, len(watchers))
+	indexerIds := make([]c.IndexerId, 0, len(watchers))
 	for _, watcher := range watchers {
 		indexerIds = append(indexerIds, watcher.getIndexerId())
 	}

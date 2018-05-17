@@ -49,7 +49,8 @@ func N1QLRange(indexName, bucketName, server string, low, high []interface{}, in
 		return nil, err
 	}
 	logging.SetLogLevel(logging.Error)
-	conn, err := datastore.NewSizedIndexConnection(100000, &testContext{})
+	tctx := &testContext{}
+	conn, err := datastore.NewSizedIndexConnection(100000, tctx)
 	if err != nil {
 		log.Fatalf("error creating SizedIndexConnection: %v\n", err)
 	}
@@ -76,10 +77,10 @@ func N1QLRange(indexName, bucketName, server string, low, high []interface{}, in
 		index.Scan(requestid, span, false, limit, cons, nil, conn)
 	}()
 
-	results := getresultsfromchannel(conn.EntryChannel(), index.IsPrimary())
+	results, err2 := getresultsfromchannel(conn.EntryChannel(), index.IsPrimary(), tctx)
 	elapsed := time.Since(start)
 	tc.LogPerfStat("Range", elapsed)
-	return results, nil
+	return results, err2
 }
 
 func N1QLLookup(indexName, bucketName, server string, values []interface{},
@@ -90,7 +91,8 @@ func N1QLLookup(indexName, bucketName, server string, values []interface{},
 		return nil, err
 	}
 	logging.SetLogLevel(logging.Error)
-	conn, err := datastore.NewSizedIndexConnection(100000, &testContext{})
+	tctx := &testContext{}
+	conn, err := datastore.NewSizedIndexConnection(100000, tctx)
 	if err != nil {
 		log.Fatalf("error creating SizedIndexConnection: %v\n", err)
 	}
@@ -117,10 +119,10 @@ func N1QLLookup(indexName, bucketName, server string, values []interface{},
 		index.Scan(requestid, span, false, limit, cons, nil, conn)
 	}()
 
-	results := getresultsfromchannel(conn.EntryChannel(), index.IsPrimary())
+	results, err2 := getresultsfromchannel(conn.EntryChannel(), index.IsPrimary(), tctx)
 	elapsed := time.Since(start)
 	tc.LogPerfStat("Lookup", elapsed)
-	return results, nil
+	return results, err2
 }
 
 func N1QLScanAll(indexName, bucketName, server string, limit int64,
@@ -131,7 +133,8 @@ func N1QLScanAll(indexName, bucketName, server string, limit int64,
 		return nil, err
 	}
 	logging.SetLogLevel(logging.Error)
-	conn, err := datastore.NewSizedIndexConnection(100000, &testContext{})
+	tctx := &testContext{}
+	conn, err := datastore.NewSizedIndexConnection(100000, tctx)
 	if err != nil {
 		log.Fatalf("error creating SizedIndexConnection: %v\n", err)
 	}
@@ -157,10 +160,10 @@ func N1QLScanAll(indexName, bucketName, server string, limit int64,
 		index.Scan(requestid, span, false, limit, cons, nil, conn)
 	}()
 
-	results := getresultsfromchannel(conn.EntryChannel(), index.IsPrimary())
+	results, err2 := getresultsfromchannel(conn.EntryChannel(), index.IsPrimary(), tctx)
 	elapsed := time.Since(start)
 	tc.LogPerfStat("ScanAll", elapsed)
-	return results, nil
+	return results, err2
 }
 
 func N1QLScans(indexName, bucketName, server string, scans qc.Scans, reverse, distinct bool,
@@ -172,7 +175,8 @@ func N1QLScans(indexName, bucketName, server string, scans qc.Scans, reverse, di
 		return nil, err
 	}
 	logging.SetLogLevel(logging.Error)
-	conn, err := datastore.NewSizedIndexConnection(100000, &testContext{})
+	tctx := &testContext{}
+	conn, err := datastore.NewSizedIndexConnection(100000, tctx)
 	if err != nil {
 		log.Fatalf("error creating SizedIndexConnection: %v\n", err)
 	}
@@ -215,10 +219,10 @@ func N1QLScans(indexName, bucketName, server string, scans qc.Scans, reverse, di
 		}
 	}()
 
-	results := getresultsfromchannel(conn.EntryChannel(), index.IsPrimary())
+	results, err2 := getresultsfromchannel(conn.EntryChannel(), index.IsPrimary(), tctx)
 	elapsed := time.Since(start)
 	tc.LogPerfStat("MultiScan", elapsed)
-	return results, nil
+	return results, err2
 }
 
 func N1QLMultiScanCount(indexName, bucketName, server string, scans qc.Scans, distinct bool,
@@ -283,7 +287,8 @@ func N1QLScan3(indexName, bucketName, server string, scans qc.Scans, reverse, di
 	}
 	logging.SetLogLevel(logging.Error)
 
-	conn, err := datastore.NewSizedIndexConnection(100000, &testContext{})
+	tctx := &testContext{}
+	conn, err := datastore.NewSizedIndexConnection(100000, tctx)
 	if err != nil {
 		log.Fatalf("error creating SizedIndexConnection: %v\n", err)
 	}
@@ -331,15 +336,16 @@ func N1QLScan3(indexName, bucketName, server string, scans qc.Scans, reverse, di
 
 	var results tc.ScanResponse
 	var garesults tc.GroupAggrScanResponse
+	var err2 error
 	if groupAggr != nil {
 		garesults = resultsforaggrgates(conn.EntryChannel())
 	} else {
-		results = getresultsfromchannel(conn.EntryChannel(), index.IsPrimary())
+		results, err2 = getresultsfromchannel(conn.EntryChannel(), index.IsPrimary(), tctx)
 	}
 
 	elapsed := time.Since(start)
 	tc.LogPerfStat("MultiScan", elapsed)
-	return results, garesults, nil
+	return results, garesults, err2
 }
 
 func filtertoranges2(filters []*qc.CompositeElementFilter) datastore.Ranges2 {
@@ -446,9 +452,11 @@ func getConsistency(consistency c.Consistency) datastore.ScanConsistency {
 	return cons
 }
 
-func getresultsfromchannel(ch datastore.EntryChannel, isprimary bool) tc.ScanResponse {
+func getresultsfromchannel(ch datastore.EntryChannel, isprimary bool, tctx *testContext) (tc.ScanResponse, error) {
+
 	scanResults := make(tc.ScanResponse)
 	ok := true
+	var err error
 	for ok {
 		entry, ok := <-ch
 		if ok {
@@ -461,7 +469,12 @@ func getresultsfromchannel(ch datastore.EntryChannel, isprimary bool) tc.ScanRes
 			break
 		}
 	}
-	return scanResults
+
+	if tctx.err != nil {
+		err = tctx.err
+	}
+
+	return scanResults, err
 }
 
 func resultsforaggrgates(ch datastore.EntryChannel) tc.GroupAggrScanResponse {
@@ -525,7 +538,9 @@ func gsiaggrtypeton1ql(gsiaggr c.AggrFuncType) datastore.AggregateType {
 	return datastore.AGG_COUNT
 }
 
-type testContext struct{}
+type testContext struct {
+	err error
+}
 
 func (ctxt *testContext) GetScanCap() int64 {
 	return 512 // Default index scan request size
@@ -533,6 +548,7 @@ func (ctxt *testContext) GetScanCap() int64 {
 
 func (ctxt *testContext) Error(err errors.Error) {
 	fmt.Printf("Scan error: %v\n", err)
+	ctxt.err = err.Cause()
 }
 
 func (ctxt *testContext) Warning(wrn errors.Error) {

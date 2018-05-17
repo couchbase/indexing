@@ -1263,7 +1263,7 @@ func (r *Rebalancer) computeProgress() (progress float64) {
 		if state == c.TransferTokenCommit || state == c.TransferTokenDeleted {
 			totalProgress += 100.00
 		} else {
-			totalProgress += r.getBuildProgressFromStatus(statusResp, tt.InstId, tt.RealInstId)
+			totalProgress += r.getBuildProgressFromStatus(statusResp, tt.InstId, tt.RealInstId, tt.DestId)
 		}
 	}
 
@@ -1308,32 +1308,50 @@ func getIndexStatusFromMeta(tt *c.TransferToken, localMeta *manager.LocalIndexMe
 	return state, msg
 }
 
-func (r *Rebalancer) getBuildProgressFromStatus(status *manager.IndexStatusResponse, instId c.IndexInstId, realInstId c.IndexInstId) float64 {
+func (r *Rebalancer) getBuildProgressFromStatus(status *manager.IndexStatusResponse, instId c.IndexInstId, realInstId c.IndexInstId, destId string) float64 {
 
 	realInstProgress := 0.0
-	for _, idx := range status.Status {
-		if idx.InstId == instId && idx.Status == "Replicating" {
-			l.Infof("Rebalancer::getBuildProgressFromStatus %v %v", idx.InstId, idx.Progress)
-			r.lastKnownProgress[idx.InstId] = idx.Progress
-			return idx.Progress
-		} else if realInstId != 0 && idx.InstId == realInstId && idx.Status == "Replicating" {
-			if realInstProgress == 0.0 {
-				realInstProgress = idx.Progress
-			} else {
-				realInstProgress = (realInstProgress + idx.Progress) / 2.0
+	count := 0
+
+	updateProgress := func(id c.IndexInstId) {
+		for _, idx := range status.Status {
+			if idx.InstId == id {
+				// This function is called for every transfer token before it has becomes COMMITTED or DELETED.
+				// The index may have not be in REAL_PENDING state but the token has not yet moved to COMMITTED/DELETED state.
+				// So we need to return progress even if it is not replicating.
+				if idx.Status == "Replicating" || idx.NodeUUID == destId {
+					progress, ok := r.lastKnownProgress[id]
+					if !ok || idx.Progress > 0 {
+						progress = idx.Progress
+					}
+
+					l.Infof("Rebalancer::getBuildProgressFromStatus %v %v %v", idx.InstId, realInstId, progress)
+					realInstProgress += progress
+					count++
+				}
 			}
 		}
 	}
-	if realInstId != 0 && realInstProgress != 0.0 {
-		l.Infof("Rebalancer::getBuildProgressFromStatus %v %v", realInstId, realInstProgress)
-		r.lastKnownProgress[instId] = realInstProgress
-		return realInstProgress
+
+	// If it is a partitioned index, it is possible that we cannot find progress from instId:
+	// 1) partition is built using realInstId
+	// 2) partition has already been merged to instance with realInstId
+	// In either case, coutn will be 0 after calling updateProgress(instId) and it will find progress
+	// using realInstId later.
+	updateProgress(instId)
+
+	if count == 0 {
+		updateProgress(realInstId)
 	}
+
+	if count > 0 {
+		r.lastKnownProgress[instId] = realInstProgress / float64(count)
+	}
+
 	if p, ok := r.lastKnownProgress[instId]; ok {
 		return p
 	}
 	return 0.0
-
 }
 
 //
