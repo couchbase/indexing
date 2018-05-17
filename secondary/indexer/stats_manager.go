@@ -472,6 +472,7 @@ func (s *IndexerStats) RemoveIndex(id common.IndexInstId) {
 func (is IndexerStats) GetStats(getPartition bool, skipEmpty bool) common.Statistics {
 
 	var prefix string
+	var instId string
 
 	statsMap := make(map[string]interface{})
 	addStat := func(k string, v interface{}) {
@@ -481,6 +482,15 @@ func (is IndexerStats) GetStats(getPartition bool, skipEmpty bool) common.Statis
 			statsMap[fmt.Sprintf("%s%s", prefix, k)] = v
 		} else if s, ok := v.(string); ok && len(s) != 0 && s != "0 0 0" && s != "0" {
 			statsMap[fmt.Sprintf("%s%s", prefix, k)] = v
+		}
+	}
+	addStatByInstId := func(k string, v interface{}) {
+		if !skipEmpty {
+			statsMap[fmt.Sprintf("%s%s", instId, k)] = v
+		} else if n, ok := v.(int64); ok && n != 0 {
+			statsMap[fmt.Sprintf("%s%s", instId, k)] = v
+		} else if s, ok := v.(string); ok && len(s) != 0 && s != "0 0 0" && s != "0" {
+			statsMap[fmt.Sprintf("%s%s", instId, k)] = v
 		}
 	}
 
@@ -621,7 +631,7 @@ func (is IndexerStats) GetStats(getPartition bool, skipEmpty bool) common.Statis
 			s.int64Stats(func(ss *IndexStats) int64 {
 				return ss.buildProgress.Value()
 			}))
-		addStat("completion_progress",
+		addStatByInstId("completion_progress",
 			s.int64Stats(func(ss *IndexStats) int64 {
 				return ss.completionProgress.Value()
 			}))
@@ -854,10 +864,11 @@ func (is IndexerStats) GetStats(getPartition bool, skipEmpty bool) common.Statis
 			}))
 	}
 
-	for _, s := range is.indexes {
+	for k, s := range is.indexes {
 
 		name := common.FormatIndexInstDisplayName(s.name, s.replicaId)
 		prefix = fmt.Sprintf("%s:%s:", s.bucket, name)
+		instId = fmt.Sprintf("%v:", k)
 
 		addIndexStats(s)
 

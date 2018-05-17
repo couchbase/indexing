@@ -121,6 +121,7 @@ type IndexStatus struct {
 	Partitioned  bool               `json:"partitioned"`
 	NumPartition int                `json:"numPartition"`
 	PartitionMap map[string][]int   `json:"partitionMap"`
+	NodeUUID     string             `json:"nodeUUID,omitempty"`
 }
 
 type indexStatusSorter []IndexStatus
@@ -521,7 +522,7 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, bucket string
 							}
 
 							progress := float64(0)
-							key = fmt.Sprintf("%v:%v:completion_progress", defn.Bucket, name)
+							key = fmt.Sprintf("%v:completion_progress", instance.InstId)
 							if stat, ok := stats.ToMap()[key]; ok {
 								progress = math.Float64frombits(uint64(stat.(float64)))
 							}
@@ -550,6 +551,7 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, bucket string
 								Partitioned:  common.IsPartitioned(defn.PartitionScheme),
 								NumPartition: len(instance.Partitions),
 								PartitionMap: partitionMap,
+								NodeUUID:     localMeta.NodeUUID,
 							}
 
 							list = append(list, status)
@@ -577,6 +579,7 @@ func (m *requestHandlerContext) consolideIndexStatus(statuses []IndexStatus) []I
 
 	for _, status := range statuses {
 		if s2, ok := statusMap[status.InstId]; !ok {
+			status.NodeUUID = ""
 			statusMap[status.InstId] = status
 		} else {
 			s2.Status = m.consolideStateStr(s2.Status, status.Status)
@@ -584,6 +587,7 @@ func (m *requestHandlerContext) consolideIndexStatus(statuses []IndexStatus) []I
 			s2.Completion = (s2.Completion + status.Completion) / 2
 			s2.Progress = (s2.Progress + status.Progress) / 2.0
 			s2.NumPartition += status.NumPartition
+			s2.NodeUUID = ""
 			if len(status.Error) != 0 {
 				s2.Error = fmt.Sprintf("%v %v", s2.Error, status.Error)
 			}
