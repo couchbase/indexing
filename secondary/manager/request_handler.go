@@ -122,6 +122,9 @@ type IndexStatus struct {
 	NumPartition int                `json:"numPartition"`
 	PartitionMap map[string][]int   `json:"partitionMap"`
 	NodeUUID     string             `json:"nodeUUID,omitempty"`
+	NumReplica   int                `json:"numReplica"`
+	IndexName    string             `json:"indexName"`
+	ReplicaId    int                `json:"replicaId"`
 }
 
 type indexStatusSorter []IndexStatus
@@ -552,6 +555,9 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, bucket string
 								NumPartition: len(instance.Partitions),
 								PartitionMap: partitionMap,
 								NodeUUID:     localMeta.NodeUUID,
+								NumReplica:   int(defn.NumReplica),
+								IndexName:    defn.Name,
+								ReplicaId:    int(instance.ReplicaId),
 							}
 
 							list = append(list, status)
