@@ -1019,6 +1019,8 @@ func (mdb *plasmaSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 	return s, nil
 }
 
+var plasmaPersistenceMutex sync.Mutex
+
 func (mdb *plasmaSlice) doPersistSnapshot(s *plasmaSnapshot) {
 	if atomic.CompareAndSwapInt32(&mdb.isPersistorActive, 0, 1) {
 		s.MainSnap.Open()
@@ -1038,18 +1040,38 @@ func (mdb *plasmaSlice) doPersistSnapshot(s *plasmaSnapshot) {
 			binary.BigEndian.PutUint64(timeHdr, uint64(time.Now().UnixNano()))
 			meta = append(timeHdr, meta...)
 
-			var concurr int = int(float32(runtime.NumCPU())*float32(mdb.sysconf["plasma.persistenceCPUPercent"].Int())/(100) + 0.5)
+			// To prevent persistence from eating up all the disk bandwidth
+			// and slowing down query, we wish to ensure that only 1 instance
+			// gets persisted at once across all instances on this node.
+			// Since both main and back snapshots are open, we wish to ensure
+			// that serialization of the main and back index persistence happens
+			// only via this callback to ensure that neither of these snapshots
+			// are held open until the other completes recovery point creation.
+			tokenCh := make(chan bool, 1) // To locally serialize main & back
+			tokenCh <- true
+			serializePersistence := func(s *plasma.Plasma) error {
+				<-tokenCh
+				plasmaPersistenceMutex.Lock()
+				return nil
+			}
+
+			var concurr int = int(float32(runtime.NumCPU())*float32(mdb.sysconf["plasma.persistenceCPUPercent"].Int())/(100*2) + 0.5)
+
 			var wg sync.WaitGroup
 			wg.Add(1)
 			go func() {
 				mdb.mainstore.CreateRecoveryPoint(s.MainSnap, meta,
-					concurr, nil)
+					concurr, serializePersistence)
+				tokenCh <- true
+				plasmaPersistenceMutex.Unlock()
 				wg.Done()
 			}()
 
 			if !mdb.isPrimary {
 				mdb.backstore.CreateRecoveryPoint(s.BackSnap, meta, concurr,
-					nil)
+					serializePersistence)
+				tokenCh <- true
+				plasmaPersistenceMutex.Unlock()
 			}
 			wg.Wait()
 
