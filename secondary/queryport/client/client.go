@@ -14,6 +14,8 @@ import "io"
 import "net"
 import "sync/atomic"
 import "fmt"
+import "syscall"
+import "strings"
 
 import "github.com/couchbase/indexing/secondary/logging"
 import "github.com/couchbase/indexing/secondary/common"
@@ -1555,6 +1557,9 @@ func isgone(scan_err error) bool {
 	if scan_err == io.EOF {
 		return true
 	} else if err, ok := scan_err.(net.Error); ok && err.Timeout() {
+		return true
+	} else if strings.Contains(scan_err.Error(), syscall.ECONNRESET.Error()) || // connection reset
+		strings.Contains(scan_err.Error(), syscall.EPIPE.Error()) { // broken pipe
 		return true
 	}
 	return false
