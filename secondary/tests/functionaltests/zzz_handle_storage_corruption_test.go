@@ -62,7 +62,7 @@ func forceKillIndexer() {
 	time.Sleep(30 * time.Second)
 }
 
-/*func TestIdxCorruptBasicSanityMultipleIndices(t *testing.T) {
+func TestIdxCorruptBasicSanityMultipleIndices(t *testing.T) {
 	// Due to pickEquivalent implementation in meta_client and retry in doScan,
 	// Queries on corrupt indices may succeed. So, cleanup all indices before
 	// starting corruption tests.
@@ -127,7 +127,7 @@ func forceKillIndexer() {
 	err = verifyDeletedPath(slicePath)
 
 	FailTestIfError(err, "Error in verifyDeletedPath", t)
-}*/
+}
 
 func TestIdxCorruptPartitionedIndex(t *testing.T) {
 	if clusterconfig.IndexUsing == "forestdb" {
