@@ -341,6 +341,7 @@ func (m *mutationMgr) handleOpenStream(cmd Message) {
 	indexList := cmd.(*MsgStreamUpdate).GetIndexList()
 	bucket := cmd.(*MsgStreamUpdate).GetBucket()
 	restartTs := cmd.(*MsgStreamUpdate).GetRestartTs()
+	allowMarkFirsSnap := cmd.(*MsgStreamUpdate).AllowMarkFirstSnap()
 
 	bucketFilter := make(map[string]*common.TsVbuuid)
 	bucketFilter[bucket] = restartTs
@@ -383,7 +384,7 @@ func (m *mutationMgr) handleOpenStream(cmd Message) {
 
 	reader, errMsg := CreateMutationStreamReader(streamId, bucketQueueMap, bucketFilter,
 		cmdCh, m.mutMgrRecvCh, getNumStreamWorkers(m.config), m.stats.Get(),
-		m.config, m.indexerState)
+		m.config, m.indexerState, allowMarkFirsSnap)
 
 	if reader == nil {
 		//send the error back on supv channel
