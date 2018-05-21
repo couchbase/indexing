@@ -2099,13 +2099,14 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 	respCh := make(MsgChannel)
 
 	cmd = &MsgStreamUpdate{mType: OPEN_STREAM,
-		streamId:     buildStream,
-		bucket:       bucket,
-		indexList:    indexList,
-		buildTs:      buildTs,
-		respCh:       respCh,
-		restartTs:    nil,
-		rollbackTime: idx.bucketRollbackTimes[bucket]}
+		streamId:           buildStream,
+		bucket:             bucket,
+		indexList:          indexList,
+		buildTs:            buildTs,
+		respCh:             respCh,
+		restartTs:          nil,
+		allowMarkFirstSnap: true,
+		rollbackTime:       idx.bucketRollbackTimes[bucket]}
 
 	//send stream update to timekeeper
 	if resp := idx.sendStreamUpdateToWorker(cmd, idx.tkCmdCh,
@@ -3166,15 +3167,18 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 	respCh := make(MsgChannel)
 	stopCh := make(StopChannel)
 
+	//diable first snapshot optimization when recovering indexes as
+	//plasma cannot deal with duplicate inserts
 	cmd := &MsgStreamUpdate{mType: OPEN_STREAM,
-		streamId:     streamId,
-		bucket:       bucket,
-		indexList:    indexList,
-		restartTs:    restartTs,
-		buildTs:      idx.bucketBuildTs[bucket],
-		respCh:       respCh,
-		stopCh:       stopCh,
-		rollbackTime: idx.bucketRollbackTimes[bucket]}
+		streamId:           streamId,
+		bucket:             bucket,
+		indexList:          indexList,
+		restartTs:          restartTs,
+		buildTs:            idx.bucketBuildTs[bucket],
+		respCh:             respCh,
+		stopCh:             stopCh,
+		allowMarkFirstSnap: false,
+		rollbackTime:       idx.bucketRollbackTimes[bucket]}
 
 	//send stream update to timekeeper
 	if resp := idx.sendStreamUpdateToWorker(cmd, idx.tkCmdCh,
