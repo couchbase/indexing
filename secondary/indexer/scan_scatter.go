@@ -82,11 +82,10 @@ func scanMultiple(request *ScanRequest, scan Scan, snapshots []SliceSnapshot, cb
 	}()
 
 	// run gather
-	bufPool := request.connCtx.GetDefaultBufPool()
 	if sorted {
-		go gather(request, queues, donech, notifych, killch, errch, cb, bufPool)
+		go gather(request, queues, donech, notifych, killch, errch, cb)
 	} else {
-		go forward(request, queues, donech, notifych, killch, errch, cb, bufPool)
+		go forward(request, queues, donech, notifych, killch, errch, cb)
 	}
 
 	// run scatter
@@ -448,7 +447,7 @@ func scan_pick(request *ScanRequest, queues []*Queue, rows []Row, sorted []int) 
 }
 
 func gather(request *ScanRequest, queues []*Queue, donech chan bool, notifych chan bool, killch chan bool,
-	errch chan error, cb EntryCallback, bufPool *common.BytesBufPool) {
+	errch chan error, cb EntryCallback) {
 
 	defer close(donech)
 
@@ -456,8 +455,14 @@ func gather(request *ScanRequest, queues []*Queue, donech chan bool, notifych ch
 	sorted := make([]int, ensembleSize)
 
 	rows := make([]Row, ensembleSize)
-	initRows(rows, bufPool)
-	defer freeRows(rows, bufPool)
+	for i := 0; i < ensembleSize; i++ {
+		rows[i].init(newAllocator(0, queues[i].GetBytesBuf()))
+	}
+	defer func() {
+		for i := 0; i < ensembleSize; i++ {
+			rows[i].freeKeyBuf()
+		}
+	}()
 
 	// initial sort
 	isSorted := false
@@ -514,15 +519,21 @@ func gather(request *ScanRequest, queues []*Queue, donech chan bool, notifych ch
 }
 
 func forward(request *ScanRequest, queues []*Queue, donech chan bool, notifych chan bool, killch chan bool,
-	errch chan error, cb EntryCallback, bufPool *common.BytesBufPool) {
+	errch chan error, cb EntryCallback) {
 
 	defer close(donech)
 
 	ensembleSize := len(queues)
 
 	rows := make([]Row, ensembleSize)
-	initRows(rows, bufPool)
-	defer freeRows(rows, bufPool)
+	for i := 0; i < ensembleSize; i++ {
+		rows[i].init(newAllocator(0, queues[i].GetBytesBuf()))
+	}
+	defer func() {
+		for i := 0; i < ensembleSize; i++ {
+			rows[i].freeKeyBuf()
+		}
+	}()
 
 	for {
 		if len(errch) != 0 {

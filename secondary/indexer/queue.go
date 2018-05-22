@@ -17,10 +17,22 @@ import (
 // Queue with a rotating buffer
 //-----------------------------
 
+type allocator struct {
+	bufPool *common.BytesBufPool
+	unused  [][]byte
+
+	size  int64
+	count int64
+	head  int64
+	free  int64
+}
+
 type Row struct {
 	key  []byte
 	len  int
 	last bool
+
+	mem *allocator
 }
 
 type Queue struct {
@@ -41,7 +53,7 @@ type Queue struct {
 	enqCount int64
 	deqCount int64
 
-	bufPool *common.BytesBufPool
+	mem *allocator
 }
 
 //
@@ -57,9 +69,12 @@ func NewQueue(size int64, limit int64, notifych chan bool, bufPool *common.Bytes
 	rbuf.enqch = make(chan bool, 1)
 	rbuf.deqch = make(chan bool, 1)
 	rbuf.donech = make(chan bool)
-	rbuf.bufPool = bufPool
+	rbuf.mem = newAllocator(size, bufPool)
 
-	initRows(rbuf.buf, rbuf.bufPool)
+	for i, _ := range rbuf.buf {
+		rbuf.buf[i].init(rbuf.mem)
+	}
+
 	return rbuf
 }
 
@@ -107,9 +122,8 @@ func (b *Queue) Enqueue(key *Row) {
 				next = 0
 			}
 
-			tmp := b.buf[b.free].copyKey(b.bufPool, key.key)
-			b.buf[b.free] = *key
-			b.buf[b.free].key = tmp
+			b.buf[b.free].copy(key)
+
 			b.free = next
 			if atomic.AddInt64(&b.count, 1) == b.limit || key.last {
 				b.notifyEnq()
@@ -142,10 +156,11 @@ func (b *Queue) Dequeue(row *Row) bool {
 				next = 0
 			}
 
-			tmp := row.copyKey(b.bufPool, b.buf[b.head].key)
-			*row = b.buf[b.head]
-			row.key = tmp
+			row.copy(&b.buf[b.head])
+
+			b.buf[b.head].freeKeyBuf()
 			b.head = next
+
 			if atomic.AddInt64(&b.count, -1) == (b.size - 1) {
 				b.notifyDeq()
 			}
@@ -173,9 +188,7 @@ func (b *Queue) Peek(row *Row) bool {
 	count := atomic.LoadInt64(&b.count)
 
 	if count > 0 {
-		tmp := row.copyKey(b.bufPool, b.buf[b.head].key)
-		*row = b.buf[b.head]
-		row.key = tmp
+		row.copy(&b.buf[b.head])
 		return true
 	}
 
@@ -211,45 +224,134 @@ func (b *Queue) Close() {
 }
 
 func (b *Queue) Free() {
-	freeRows(b.buf, b.bufPool)
+	for i := 0; i < int(b.size); i++ {
+		b.buf[i].freeKeyBuf()
+	}
+
+	b.mem.close()
+}
+
+func (b *Queue) GetBytesBuf() *common.BytesBufPool {
+	return b.mem.bufPool
+}
+
+//-----------------------------
+// allocator
+//-----------------------------
+
+func newAllocator(size int64, bufPool *common.BytesBufPool) *allocator {
+
+	r := &allocator{
+		size:    size,
+		unused:  make([][]byte, size),
+		bufPool: bufPool,
+	}
+
+	return r
+}
+
+func (r *allocator) get() []byte {
+
+	count := atomic.LoadInt64(&r.count)
+
+	if count == 0 || r.size == 0 {
+		bufPtr := r.bufPool.Get()
+		return (*bufPtr)[:0]
+	}
+
+	bufPtr := r.unused[r.head]
+	r.unused[r.head] = nil
+
+	next := r.head + 1
+	if next >= r.size {
+		next = 0
+	}
+	r.head = next
+
+	atomic.AddInt64(&r.count, -1)
+
+	return bufPtr[:0]
+}
+
+func (r *allocator) put(buf []byte) {
+
+	if buf == nil {
+		return
+	}
+
+	count := atomic.LoadInt64(&r.count)
+
+	if count == r.size || r.size == 0 {
+		r.bufPool.Put(&buf)
+		return
+	}
+
+	r.unused[r.free] = buf
+
+	next := r.free + 1
+	if next >= r.size {
+		next = 0
+	}
+	r.free = next
+
+	atomic.AddInt64(&r.count, 1)
+}
+
+func (r *allocator) close() {
+
+	for i := 0; i < int(r.size); i++ {
+		if r.unused[i] != nil {
+			r.bufPool.Put(&r.unused[i])
+			r.unused[i] = nil
+		}
+	}
 }
 
 //-----------------------------
 // Row
 //-----------------------------
 
-func (r *Row) copyKey(bufPool *common.BytesBufPool, key []byte) []byte {
+func (r *Row) copy(source *Row) {
+
+	r.len = source.len
+	r.last = source.last
+	r.copyKey(source.key)
+}
+
+func (r *Row) copyKey(key []byte) {
+	if len(key) == 0 {
+		if r.key != nil {
+			r.key = r.key[:0]
+		}
+		return
+	}
+
+	if r.key == nil {
+		r.initKeyBuf()
+	}
+
 	if len(key) > cap(r.key) {
-		r.freeKeyBuf(bufPool)
 		r.key = make([]byte, 0, len(key))
 	}
 
 	r.key = r.key[:0]
 	r.key = append(r.key, key...)
 
-	return r.key
+	return
 }
 
-func (r *Row) initKeyBuf(bufPool *common.BytesBufPool) {
-	bufPtr := bufPool.Get()
-	r.key = (*bufPtr)[:0]
+func (r *Row) initKeyBuf() {
+	bufPtr := r.mem.get()
+	r.key = bufPtr[:0]
 }
 
-func (r *Row) freeKeyBuf(bufPool *common.BytesBufPool) {
+func (r *Row) freeKeyBuf() {
 	if r.key != nil {
-		bufPool.Put(&r.key)
+		r.mem.put(r.key)
 		r.key = nil
 	}
 }
 
-func initRows(rows []Row, bufPool *common.BytesBufPool) {
-	for _, row := range rows {
-		row.initKeyBuf(bufPool)
-	}
-}
-
-func freeRows(rows []Row, bufPool *common.BytesBufPool) {
-	for _, row := range rows {
-		row.freeKeyBuf(bufPool)
-	}
+func (r *Row) init(mem *allocator) {
+	r.mem = mem
 }
