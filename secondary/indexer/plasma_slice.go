@@ -31,7 +31,8 @@ import (
 	"github.com/couchbase/plasma"
 )
 
-var errStorageCorrupted = fmt.Errorf("Storage corrupted and unrecoverable")
+// Note - CE builds do not pull in plasma_slice.go
+// Do not put any shared variables here
 
 func init() {
 	plasma.SetLogger(&logging.SystemLogger)
