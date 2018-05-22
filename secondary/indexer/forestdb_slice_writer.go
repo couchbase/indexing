@@ -92,6 +92,9 @@ retry:
 			logging.Warnf("NewForestDBSlice(): Open failed with no_db_header error...Resetting the forestdb file")
 			os.Remove(filepath)
 			goto retry
+		} else if err == forestdb.FDB_CORRUPTION_ERR {
+			logging.Errorf("NewForestDBSlice(): Open failed error %v", forestdb.FDB_CORRUPTION_ERR)
+			return nil, errStorageCorrupted
 		}
 		return nil, err
 	}
@@ -101,11 +104,21 @@ retry:
 
 	//open a separate file handle for compaction
 	if slice.compactFd, err = forestdb.Open(filepath, config); err != nil {
+		if err == forestdb.FDB_CORRUPTION_ERR {
+			logging.Errorf("NewForestDBSlice(): Open failed error %v", forestdb.FDB_CORRUPTION_ERR)
+			return nil, errStorageCorrupted
+		}
+
 		return nil, err
 	}
 
 	config.SetOpenFlags(forestdb.OPEN_FLAG_RDONLY)
 	if slice.statFd, err = forestdb.Open(filepath, config); err != nil {
+		if err == forestdb.FDB_CORRUPTION_ERR {
+			logging.Errorf("NewForestDBSlice(): Open failed error %v", forestdb.FDB_CORRUPTION_ERR)
+			return nil, errStorageCorrupted
+		}
+
 		return nil, err
 	}
 	slice.fileVersion = slice.statFd.GetFileVersion()
@@ -1197,7 +1210,7 @@ func (fdb *fdbSlice) Close() {
 	defer fdb.lock.Unlock()
 
 	logging.Infof("ForestDBSlice::Close Closing Slice Id %v, IndexInstId %v, "+
-		"IndexDefnId %v", fdb.idxInstId, fdb.idxDefnId, fdb.id)
+		"IndexDefnId %v", fdb.id, fdb.idxInstId, fdb.idxDefnId)
 
 	//signal shutdown for command handler routines
 	for i := 0; i < fdb.numWriters; i++ {
@@ -1544,14 +1557,18 @@ func tryDeleteFdbSlice(fdb *fdbSlice) {
 
 func tryCloseFdbSlice(fdb *fdbSlice) {
 	//close the main index
-	if fdb.main[0] != nil {
-		fdb.main[0].Close()
+	if len(fdb.main) == 1 {
+		if fdb.main[0] != nil {
+			fdb.main[0].Close()
+		}
 	}
 
 	if !fdb.isPrimary {
 		//close the back index
-		if fdb.back[0] != nil {
-			fdb.back[0].Close()
+		if len(fdb.back) == 1 {
+			if fdb.back[0] != nil {
+				fdb.back[0].Close()
+			}
 		}
 	}
 
@@ -1559,9 +1576,17 @@ func tryCloseFdbSlice(fdb *fdbSlice) {
 		fdb.meta.Close()
 	}
 
-	fdb.statFd.Close()
-	fdb.compactFd.Close()
-	fdb.dbfile.Close()
+	if fdb.statFd != nil {
+		fdb.statFd.Close()
+	}
+
+	if fdb.compactFd != nil {
+		fdb.compactFd.Close()
+	}
+
+	if fdb.dbfile != nil {
+		fdb.dbfile.Close()
+	}
 }
 
 func newFdbFile(dirpath string, newVersion bool) string {

@@ -151,12 +151,10 @@ func newPlasmaSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 
 	if err := slice.initStores(); err != nil {
 		// Index is unusable. Remove the data files and reinit
-		if plasma.IsFatalError(err) {
+		if err == errStorageCorrupted {
 			logging.Errorf("plasmaSlice:NewplasmaSlice Id %v IndexInstId %v PartitionId %v "+
 				"fatal error occured: %v", sliceId, idxInstId, partitionId, err)
-			err = errStorageCorrupted
 		}
-
 		return nil, err
 	}
 
@@ -239,7 +237,6 @@ func (slice *plasmaSlice) initStores() error {
 	cfg.LSSLogSegmentSize = int64(slice.sysconf["plasma.LSSSegmentFileSize"].Int())
 	cfg.UseCompression = slice.sysconf["plasma.useCompression"].Bool()
 	cfg.AutoSwapper = true
-	cfg.NumPersistorThreads = int(float32(runtime.NumCPU())*float32(slice.sysconf["plasma.persistenceCPUPercent"].Int())/(100*2) + 0.5)
 	cfg.DisableReadCaching = slice.sysconf["plasma.disableReadCaching"].Bool()
 	cfg.AutoMVCCPurging = slice.sysconf["plasma.purger.enabled"].Bool()
 	cfg.PurgerInterval = time.Duration(slice.sysconf["plasma.purger.interval"].Int()) * time.Second
@@ -305,9 +302,9 @@ func (slice *plasmaSlice) initStores() error {
 	go func() {
 		defer wg.Done()
 
-		slice.mainstore, err = plasma.New(mCfg)
-		if err != nil {
-			mErr = fmt.Errorf("Unable to initialize %s, err = %v", mCfg.File, err)
+		slice.mainstore, mErr = plasma.New(mCfg)
+		if mErr != nil {
+			mErr = fmt.Errorf("Unable to initialize %s, err = %v", mCfg.File, mErr)
 			return
 		}
 
@@ -322,9 +319,9 @@ func (slice *plasmaSlice) initStores() error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			slice.backstore, err = plasma.New(bCfg)
-			if err != nil {
-				bErr = fmt.Errorf("Unable to initialize %s, err = %v", bCfg.File, err)
+			slice.backstore, bErr = plasma.New(bCfg)
+			if bErr != nil {
+				bErr = fmt.Errorf("Unable to initialize %s, err = %v", bCfg.File, bErr)
 				return
 			}
 
@@ -336,17 +333,37 @@ func (slice *plasmaSlice) initStores() error {
 	}
 
 	wg.Wait()
+
+	// In case of errors, close the opened stores
 	if mErr != nil {
 		if !slice.isPrimary && bErr == nil {
 			slice.backstore.Close()
 		}
-
-		return mErr
 	} else if bErr != nil {
 		if mErr == nil {
 			slice.mainstore.Close()
 		}
+	}
 
+	// Return fatal error with higher priority.
+	if mErr != nil && plasma.IsFatalError(mErr) {
+		logging.Errorf("plasmaSlice:NewplasmaSlice Id %v IndexInstId %v "+
+			"fatal error occured: %v", slice.Id, slice.idxInstId, mErr)
+		return errStorageCorrupted
+	}
+
+	if bErr != nil && plasma.IsFatalError(bErr) {
+		logging.Errorf("plasmaSlice:NewplasmaSlice Id %v IndexInstId %v "+
+			"fatal error occured: %v", slice.Id, slice.idxInstId, bErr)
+		return errStorageCorrupted
+	}
+
+	// If both mErr and bErr are not fatal, return mErr with higher priority
+	if mErr != nil {
+		return mErr
+	}
+
+	if bErr != nil {
 		return bErr
 	}
 
@@ -1002,9 +1019,9 @@ func (mdb *plasmaSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 	return s, nil
 }
 
-func (mdb *plasmaSlice) doPersistSnapshot(s *plasmaSnapshot) {
-	var wg sync.WaitGroup
+var plasmaPersistenceMutex sync.Mutex
 
+func (mdb *plasmaSlice) doPersistSnapshot(s *plasmaSnapshot) {
 	if atomic.CompareAndSwapInt32(&mdb.isPersistorActive, 0, 1) {
 		s.MainSnap.Open()
 		if !mdb.isPrimary {
@@ -1023,14 +1040,38 @@ func (mdb *plasmaSlice) doPersistSnapshot(s *plasmaSnapshot) {
 			binary.BigEndian.PutUint64(timeHdr, uint64(time.Now().UnixNano()))
 			meta = append(timeHdr, meta...)
 
+			// To prevent persistence from eating up all the disk bandwidth
+			// and slowing down query, we wish to ensure that only 1 instance
+			// gets persisted at once across all instances on this node.
+			// Since both main and back snapshots are open, we wish to ensure
+			// that serialization of the main and back index persistence happens
+			// only via this callback to ensure that neither of these snapshots
+			// are held open until the other completes recovery point creation.
+			tokenCh := make(chan bool, 1) // To locally serialize main & back
+			tokenCh <- true
+			serializePersistence := func(s *plasma.Plasma) error {
+				<-tokenCh
+				plasmaPersistenceMutex.Lock()
+				return nil
+			}
+
+			var concurr int = int(float32(runtime.NumCPU())*float32(mdb.sysconf["plasma.persistenceCPUPercent"].Int())/(100*2) + 0.5)
+
+			var wg sync.WaitGroup
 			wg.Add(1)
 			go func() {
-				mdb.mainstore.CreateRecoveryPoint(s.MainSnap, meta)
+				mdb.mainstore.CreateRecoveryPoint(s.MainSnap, meta,
+					concurr, serializePersistence)
+				tokenCh <- true
+				plasmaPersistenceMutex.Unlock()
 				wg.Done()
 			}()
 
 			if !mdb.isPrimary {
-				mdb.backstore.CreateRecoveryPoint(s.BackSnap, meta)
+				mdb.backstore.CreateRecoveryPoint(s.BackSnap, meta, concurr,
+					serializePersistence)
+				tokenCh <- true
+				plasmaPersistenceMutex.Unlock()
 			}
 			wg.Wait()
 
@@ -1298,8 +1339,8 @@ func (mdb *plasmaSlice) Close() {
 	mdb.lock.Lock()
 	defer mdb.lock.Unlock()
 
-	logging.Infof("plasmaSlice::Close Closing Slice Id %v, IndexInstId %v, PartitionId %v "+
-		"IndexDefnId %v", mdb.idxInstId, mdb.idxDefnId, mdb.idxPartnId, mdb.id)
+	logging.Infof("plasmaSlice::Close Closing Slice Id %v, IndexInstId %v, PartitionId %v, "+
+		"IndexDefnId %v", mdb.id, mdb.idxInstId, mdb.idxPartnId, mdb.idxDefnId)
 
 	//signal shutdown for command handler routines
 	for i := 0; i < mdb.numWriters; i++ {
