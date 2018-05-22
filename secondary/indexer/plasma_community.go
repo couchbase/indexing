@@ -15,6 +15,8 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 )
 
+var errStorageCorrupted = fmt.Errorf("Storage corrupted and unrecoverable")
+
 func NewPlasmaSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	idxInstId common.IndexInstId, partitionId common.PartitionId, isPrimary bool, numPartitions int,
 	sysconf common.Config, idxStats *IndexStats, indexerStats *IndexerStats) (Slice, error) {
