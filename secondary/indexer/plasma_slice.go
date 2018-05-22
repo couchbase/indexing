@@ -498,7 +498,7 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 	var err error
 	var oldkey []byte
 
-	mdb.arrayBuf2[workerId] = resizeArrayBuf(mdb.arrayBuf2[workerId], len(key))
+	mdb.arrayBuf2[workerId] = resizeArrayBuf(mdb.arrayBuf2[workerId], 3*len(key))
 
 	if !allowLargeKeys && len(key) > maxArrayIndexEntrySize {
 		logging.Errorf("plasmaSlice::insertSecArrayIndex Error indexing docid: %s in Slice: %v. Error: Encoded array key (size %v) too long (> %v). Skipped.",
@@ -528,7 +528,7 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 		}
 
 		var tmpBuf []byte
-		if len(oldkey) > cap(mdb.arrayBuf1[workerId]) {
+		if len(oldkey)*3 > cap(mdb.arrayBuf1[workerId]) {
 			tmpBuf = make([]byte, 0, len(oldkey)*3)
 		} else {
 			tmpBuf = mdb.arrayBuf1[workerId]
@@ -764,7 +764,7 @@ func (mdb *plasmaSlice) deleteSecArrayIndex(docid []byte, workerId int) (nmut in
 	}
 
 	var tmpBuf []byte
-	if len(olditm) > cap(mdb.arrayBuf1[workerId]) {
+	if len(olditm)*3 > cap(mdb.arrayBuf1[workerId]) {
 		tmpBuf = make([]byte, 0, len(olditm)*3)
 	} else {
 		tmpBuf = mdb.arrayBuf1[workerId]
