@@ -23,3 +23,7 @@ func NewPlasmaSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	sysconf common.Config, idxStats *IndexStats, indexerStats *IndexerStats) (Slice, error) {
 	panic("Plasma is only supported in Enterprise Edition")
 }
+
+func deleteFreeWriters(instId common.IndexInstId) {
+	// do nothing
+}
