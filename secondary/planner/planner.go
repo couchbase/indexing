@@ -867,6 +867,7 @@ func (p *SAPlanner) adjustInitialSolutionIfNecessary(s *Solution) *Solution {
 	s.sizing = p.sizing
 	s.cost = p.cost
 	s.place = p.placement
+	s.numServerGroup = s.findNumServerGroup()
 
 	// update the number of new nodes and deleted node
 	s.numDeletedNode = s.findNumDeleteNodes()
@@ -1344,6 +1345,7 @@ func (s *Solution) removeIndexes(indexes []*IndexUsage) {
 			for i, index := range indexer.Indexes {
 				if index == target {
 					s.removeIndex(indexer, i)
+					s.updateServerGroupMap(index, nil)
 				}
 			}
 		}
@@ -2167,7 +2169,7 @@ func (s *Solution) SatisfyClusterConstraint() bool {
 func (s *Solution) hasReplicaInServerGroup(u *IndexUsage, group string) bool {
 
 	if u.Instance != nil {
-		numReplica := int(u.Instance.Defn.NumReplica)
+		numReplica := int(u.Instance.Defn.NumReplica) + 1
 		for i := 0; i < numReplica; i++ {
 			if i != u.Instance.ReplicaId {
 				key := common.FormatIndexPartnDisplayName(u.Instance.Defn.Name, i, int(u.PartnId), true)
@@ -2202,15 +2204,15 @@ func (s *Solution) hasReplicaInServerGroup(u *IndexUsage, group string) bool {
 func (s *Solution) hasServerGroupWithNoReplica(u *IndexUsage) bool {
 
 	if u.Instance != nil {
-		numReplica := int(u.Instance.Defn.NumReplica)
-		count := 0
+		numReplica := int(u.Instance.Defn.NumReplica) + 1
+		counts := make(map[string]bool)
 		for i := 0; i < numReplica; i++ {
 			key := common.FormatIndexPartnDisplayName(u.Instance.Defn.Name, i, int(u.PartnId), true)
-			if _, ok := s.indexSGMap[key]; ok {
-				count++
+			if group, ok := s.indexSGMap[key]; ok {
+				counts[group] = true
 			}
 		}
-		return s.numServerGroup > count
+		return s.numServerGroup > len(counts)
 
 	} else {
 		counts := make(map[string]int)
@@ -2345,7 +2347,11 @@ func (s *Solution) hasDeletedNodes() bool {
 //
 func (s *Solution) updateServerGroupMap(index *IndexUsage, indexer *IndexerNode) {
 	key := index.GetDisplayName()
-	s.indexSGMap[key] = indexer.ServerGroup
+	if indexer != nil {
+		s.indexSGMap[key] = indexer.ServerGroup
+	} else {
+		delete(s.indexSGMap, key)
+	}
 }
 
 //
