@@ -98,6 +98,8 @@ type state struct {
 
 	servers []service.NodeID
 
+	isBalanced bool
+
 	rebalanceID   string
 	rebalanceTask *service.Task
 }
@@ -156,14 +158,19 @@ func NewRebalanceMgr(supvCmdch MsgChannel, supvMsgch MsgChannel, config c.Config
 	}
 
 	go mgr.run()
-	go mgr.initService()
+	go mgr.initService(mgr.cleanupPending)
 
 	return mgr, &MsgSuccess{}
 }
 
-func (m *ServiceMgr) initService() {
+func (m *ServiceMgr) initService(cleanupPending bool) {
 
 	l.Infof("RebalanceMgr::initService Init")
+
+	//allow trivial cleanups to finish to reduce noise
+	if cleanupPending {
+		time.Sleep(5 * time.Second)
+	}
 
 	go m.registerWithServer()
 	go m.updateNodeList()
@@ -198,7 +205,7 @@ func (m *ServiceMgr) updateNodeList() {
 		m.updateStateLOCKED(func(s *state) {
 			s.servers = nodeList
 		})
-		l.Errorf("ServiceMgr::updateNodeList Updated Node List %v", nodeList)
+		l.Infof("ServiceMgr::updateNodeList Updated Node List %v", nodeList)
 	}
 
 }
@@ -483,7 +490,9 @@ func (m *ServiceMgr) prepareRebalance(change service.TopologyChange) error {
 
 	var err error
 	if m.cleanupPending {
-		err = errors.New("indexer rebalance failure - cleanup in progress")
+		m.isBalanced = false
+		err = errors.New("indexer rebalance failure - cleanup pending from previous  " +
+			"failed/aborted rebalance/failover/move index. please retry the request later.")
 		l.Errorf("ServiceMgr::prepareRebalance %v", err)
 		return err
 	}
@@ -492,13 +501,6 @@ func (m *ServiceMgr) prepareRebalance(change service.TopologyChange) error {
 		err = errors.New("indexer rebalance failure - move index in progress")
 		l.Errorf("ServiceMgr::prepareRebalance %v", err)
 		return err
-	}
-
-	if c.GetBuildMode() == c.ENTERPRISE {
-		if m.checkDDLRunning() {
-			l.Errorf("ServiceMgr::prepareRebalance Found DDL Running. Cannot Initiate Prepare Phase")
-			return errors.New("indexer rebalance failure - ddl in progress")
-		}
 	}
 
 	if m.rebalanceToken != nil && m.rebalanceToken.Source == RebalSourceClusterOp {
@@ -519,6 +521,27 @@ func (m *ServiceMgr) prepareRebalance(change service.TopologyChange) error {
 		}
 	}
 
+	if m.checkLocalCleanupPending() {
+		l.Warnf("ServiceMgr::prepareRebalance Found Pending Local Cleanup Token. Run Cleanup.")
+		if err = m.runCleanupPhaseLOCKED(RebalanceTokenPath, false); err != nil {
+			return err
+		}
+		//check again if the cleanup was successful
+		if m.checkLocalCleanupPending() {
+			err = errors.New("indexer rebalance failure - cleanup pending from previous  " +
+				"failed/aborted rebalance/failover/move index. please retry the request later.")
+			l.Errorf("ServiceMgr::prepareRebalance %v", err)
+			return err
+		}
+	}
+
+	if c.GetBuildMode() == c.ENTERPRISE {
+		if m.checkDDLRunning() {
+			l.Errorf("ServiceMgr::prepareRebalance Found DDL Running. Cannot Initiate Prepare Phase")
+			return errors.New("indexer rebalance failure - ddl in progress")
+		}
+	}
+
 	l.Infof("ServiceMgr::prepareRebalance Init Prepare Phase")
 
 	if isSingleNodeRebal(change) {
@@ -534,6 +557,8 @@ func (m *ServiceMgr) prepareRebalance(change service.TopologyChange) error {
 			return err
 		}
 	}
+
+	m.isBalanced = true
 
 	return nil
 }
@@ -873,18 +898,21 @@ func (m *ServiceMgr) cleanupOrphanTokens(change service.TopologyChange) error {
 		}
 	}
 
+	var ownerId string
+	var ownerAlive bool
 	for ttid, tt := range rtokens.TT {
 
-		masterAlive = false
+		ownerAlive = false
+		ownerId = m.getTransferTokenOwner(tt)
 		for _, node := range change.KeepNodes {
-			if tt.MasterId == string(node.NodeInfo.NodeID) {
-				masterAlive = true
+			if ownerId == string(node.NodeInfo.NodeID) {
+				ownerAlive = true
 				break
 			}
 		}
 
-		if !masterAlive {
-			l.Infof("ServiceMgr::cleanupOrphanTokens Cleaning Up Token %v %v", ttid, tt)
+		if !ownerAlive {
+			l.Infof("ServiceMgr::cleanupOrphanTokens Cleaning Up Token Owner %v %v %v", ownerId, ttid, tt)
 			err := MetakvDel(RebalanceMetakvDir + ttid)
 			if err != nil {
 				l.Errorf("ServiceMgr::cleanupOrphanTokens Unable to delete TransferToken from "+
@@ -1681,7 +1709,7 @@ func (m *ServiceMgr) stateToTopology(s state) *service.Topology {
 	} else {
 		topology.Nodes = append([]service.NodeID(nil), m.nodeInfo.NodeID)
 	}
-	topology.IsBalanced = true
+	topology.IsBalanced = m.isBalanced
 	topology.Messages = nil
 
 	return topology
@@ -1726,6 +1754,7 @@ func (m *ServiceMgr) recoverRebalance() {
 	m.indexerReady = true
 
 	if m.cleanupPending {
+		l.Infof("ServiceMgr::recoverRebalance Init Pending Cleanup")
 
 		rtokens, err := m.getCurrRebalTokens()
 		if err != nil {
@@ -1770,6 +1799,67 @@ func (m *ServiceMgr) doRecoverMoveIndex(gtoken *RebalanceToken) {
 
 	l.Infof("ServiceMgr::doRecoverMoveIndex Found Global Rebalance Token %v.", gtoken)
 	m.runCleanupPhaseLOCKED(MoveIndexTokenPath, true)
+}
+
+func (m *ServiceMgr) checkLocalCleanupPending() bool {
+
+	rtokens, err := m.getCurrRebalTokens()
+	if err != nil {
+		l.Errorf("ServiceMgr::checkLocalCleanupPending Error Fetching Metakv Tokens %v", err)
+		return true
+	}
+
+	if rtokens != nil && len(rtokens.TT) != 0 {
+		for _, tt := range rtokens.TT {
+			ownerId := m.getTransferTokenOwner(tt)
+			if ownerId == string(m.nodeInfo.NodeID) {
+				l.Infof("ServiceMgr::checkLocalCleanupPending Found Local Pending Cleanup Token %v", tt)
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+func (m *ServiceMgr) checkGlobalCleanupPending() bool {
+
+	rtokens, err := m.getCurrRebalTokens()
+	if err != nil {
+		l.Errorf("ServiceMgr::checkGlobalCleanupPending Error Fetching Metakv Tokens %v", err)
+		return true
+	}
+
+	if rtokens != nil && len(rtokens.TT) != 0 {
+		for _, tt := range rtokens.TT {
+			ownerId := m.getTransferTokenOwner(tt)
+			for _, s := range m.servers {
+				if ownerId == string(s) {
+					l.Infof("ServiceMgr::checkGlobalCleanupPending Found Global Pending Cleanup for Owner %v Token %v", ownerId, tt)
+					return true
+				}
+			}
+			l.Infof("ServiceMgr::checkGlobalCleanupPending Found Global Pending Cleanup Token Without Owner Token %v", tt)
+		}
+	}
+
+	return false
+}
+
+func (m *ServiceMgr) getTransferTokenOwner(tt *c.TransferToken) string {
+
+	switch tt.State {
+	case c.TransferTokenReady:
+		return tt.SourceId
+	case c.TransferTokenCreated, c.TransferTokenAccepted, c.TransferTokenRefused,
+		c.TransferTokenInitate, c.TransferTokenInProgress, c.TransferTokenMerge:
+		return tt.DestId
+	case c.TransferTokenCommit, c.TransferTokenDeleted:
+		return tt.MasterId
+	}
+
+	return ""
+
 }
 
 /////////////////////////////////////////////////////////////////////////
@@ -2268,17 +2358,30 @@ func (m *ServiceMgr) initMoveIndex(req *manager.IndexRequest, nodes []string) (e
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	var err error
 	if !m.indexerReady {
-		l.Errorf("ServiceMgr::handleMoveIndex Cannot Process Request %v", c.ErrIndexerInBootstrap)
+		l.Errorf("ServiceMgr::initMoveIndex Cannot Process Request %v", c.ErrIndexerInBootstrap)
 		return c.ErrIndexerInBootstrap, false
 	}
 
 	if m.checkRebalanceRunning() {
-		return errors.New("Cannot Process Move Index - Rebalance/MoveIndex In Progress"), false
+		err = errors.New("Cannot Process Move Index - Rebalance/MoveIndex In Progress")
+		l.Errorf("ServiceMgr::initMoveIndex %v", err)
+		return err, false
 	}
 
 	if m.state.rebalanceID != "" {
-		return errors.New("Cannot Process Move Index - Failover In Progress"), false
+		err = errors.New("Cannot Process Move Index - Failover In Progress")
+		l.Errorf("ServiceMgr::initMoveIndex %v", err)
+		return err, false
+	}
+
+	//check globally as move index init happens on only one node
+	if m.checkGlobalCleanupPending() {
+		err = errors.New("Cannot Process Move Index - cleanup pending from previous " +
+			"failed/aborted rebalance/failover/move index. please retry the request later.")
+		l.Errorf("ServiceMgr::initMoveIndex %v", err)
+		return err, false
 	}
 
 	cfg := m.config.Load()
