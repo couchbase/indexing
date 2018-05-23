@@ -106,7 +106,9 @@ func (feed *DcpFeed) DcpGetFailoverLog(
 	respch := make(chan []interface{}, 1)
 	cmd := []interface{}{dfCmdGetFailoverlog, opaque, vblist, respch}
 	resp, err := failsafeOp(feed.reqch, respch, cmd, feed.finch)
-	err = opError(err, resp, 1)
+	if err = opError(err, resp, 1); err != nil {
+		return nil, err
+	}
 	return resp[0].(map[uint16]*FailoverLog), err
 }
 
