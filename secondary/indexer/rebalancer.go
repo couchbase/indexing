@@ -266,14 +266,8 @@ func (r *Rebalancer) processTransferToken(ttid string, tt *c.TransferToken) {
 func (r *Rebalancer) processTokenAsSource(ttid string, tt *c.TransferToken) bool {
 
 	if tt.RebalId != r.rebalToken.RebalId {
-		l.Errorf("Rebalancer::processTokenAsSource Found TransferToken with Unknown "+
-			"RebalanceId. Token RId %v Local RId %v. Deleting.", tt.RebalId,
-			r.rebalToken.RebalId)
-		err := MetakvDel(RebalanceMetakvDir + ttid)
-		if err != nil {
-			l.Errorf("Rebalancer::processTokenAsSource Unable to delete TransferToken "+
-				"In Metakv. %v. Err %v", tt, err)
-		}
+		l.Warnf("Rebalancer::processTokenAsSource Found TransferToken with Unknown "+
+			"RebalanceId. Local RId %v Token %v. Ignored.", r.rebalToken.RebalId, tt)
 		return true
 	}
 
@@ -395,14 +389,8 @@ loop:
 func (r *Rebalancer) processTokenAsDest(ttid string, tt *c.TransferToken) bool {
 
 	if tt.RebalId != r.rebalToken.RebalId {
-		l.Errorf("Rebalancer::processTokenAsDest Found TransferToken with Unknown "+
-			"RebalanceId. Token RId %v Local RId %v. Deleting.", tt.RebalId,
-			r.rebalToken.RebalId)
-		err := MetakvDel(RebalanceMetakvDir + ttid)
-		if err != nil {
-			l.Errorf("Rebalancer::processTokenAsDest Unable to delete TransferToken "+
-				"In Metakv. %v. Err %v", tt, err)
-		}
+		l.Warnf("Rebalancer::processTokenAsDest Found TransferToken with Unknown "+
+			"RebalanceId. Local RId %v Token %v. Ignored.", r.rebalToken.RebalId, tt)
 		return true
 	}
 
@@ -750,14 +738,8 @@ loop:
 func (r *Rebalancer) processTokenAsMaster(ttid string, tt *c.TransferToken) bool {
 
 	if tt.RebalId != r.rebalToken.RebalId {
-		l.Errorf("Rebalancer::processTokenAsMaster Found TransferToken with Unknown "+
-			"RebalanceId. Token RId %v Local RId %v. Deleting.", tt.RebalId,
-			r.rebalToken.RebalId)
-		err := MetakvDel(RebalanceMetakvDir + ttid)
-		if err != nil {
-			l.Errorf("Rebalancer::processTokenAsMaster Unable to delete TransferToken "+
-				"In Metakv. %v. Err %v", tt, err)
-		}
+		l.Warnf("Rebalancer::processTokenAsMaster Found TransferToken with Unknown "+
+			"RebalanceId. Local RId %v Token %v. Ignored.", r.rebalToken.RebalId, tt)
 		return true
 	}
 
