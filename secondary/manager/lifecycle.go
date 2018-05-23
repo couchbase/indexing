@@ -1788,12 +1788,17 @@ func (m *updator) run() {
 	ticker := time.NewTicker(time.Second * 60)
 	defer ticker.Stop()
 
-	m.checkServiceMap()
+	lastUpdate := time.Now()
+	m.checkServiceMap(false)
 
 	for {
 		select {
 		case <-ticker.C:
-			m.checkServiceMap()
+			update := time.Now().Sub(lastUpdate) > (time.Minute * time.Duration(5))
+			m.checkServiceMap(update)
+			if update {
+				lastUpdate = time.Now()
+			}
 
 		case <-m.manager.killch:
 			logging.Infof("updator: Index recovery go-routine terminates.")
@@ -1801,7 +1806,7 @@ func (m *updator) run() {
 	}
 }
 
-func (m *updator) checkServiceMap() {
+func (m *updator) checkServiceMap(update bool) {
 
 	serviceMap, err := m.manager.getServiceMap()
 	if err != nil {
@@ -1809,7 +1814,8 @@ func (m *updator) checkServiceMap() {
 		return
 	}
 
-	if serviceMap.ServerGroup != m.serverGroup ||
+	if update ||
+		serviceMap.ServerGroup != m.serverGroup ||
 		m.indexerVersion != serviceMap.IndexerVersion ||
 		serviceMap.NodeAddr != m.nodeAddr ||
 		serviceMap.ClusterVersion != m.clusterVersion {
