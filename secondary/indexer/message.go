@@ -367,6 +367,8 @@ type MsgStreamUpdate struct {
 	bucket       string
 	restartTs    *common.TsVbuuid
 	rollbackTime int64
+
+	allowMarkFirstSnap bool
 }
 
 func (m *MsgStreamUpdate) GetMsgType() MsgType {
@@ -403,6 +405,10 @@ func (m *MsgStreamUpdate) GetRestartTs() *common.TsVbuuid {
 
 func (m *MsgStreamUpdate) GetRollbackTime() int64 {
 	return m.rollbackTime
+}
+
+func (m *MsgStreamUpdate) AllowMarkFirstSnap() bool {
+	return m.allowMarkFirstSnap
 }
 
 func (m *MsgStreamUpdate) String() string {

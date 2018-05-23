@@ -132,6 +132,8 @@ func createSliceFunc(ctx smat.Context) (next smat.State, err error) {
 	config := common.SystemConfig.SectionConfig(
 		"indexer.", true)
 	config.SetValue("settings.moi.debug", true)
+	indexerStats := &indexer.IndexerStats{}
+	indexerStats.Init()
 	stats := &indexer.IndexStats{}
 	stats.Init()
 	idxDefn := common.IndexDefn{
@@ -149,7 +151,7 @@ func createSliceFunc(ctx smat.Context) (next smat.State, err error) {
 	if err != nil {
 		return nil, err
 	}
-	c.slice, err = indexer.NewPlasmaSlice(c.plasmaDir, 0, idxDefn, instID, common.PartitionId(0), false, 1, config, stats)
+	c.slice, err = indexer.NewPlasmaSlice(c.plasmaDir, 0, idxDefn, instID, common.PartitionId(0), false, 1, config, stats, indexerStats)
 	if err != nil {
 		return nil, err
 	}

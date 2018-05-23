@@ -224,11 +224,14 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 		logging.Debugf("StorageMgr::handleCreateSnapshot Skip Snapshot For %v "+
 			"%v SnapType %v", streamId, bucket, snapType)
 
-		s.supvRespch <- &MsgMutMgrFlushDone{mType: STORAGE_SNAP_DONE,
-			streamId: streamId,
-			bucket:   bucket,
-			ts:       tsVbuuid,
-			aborted:  flushWasAborted}
+		s.muSnap.Lock()
+		defer s.muSnap.Unlock()
+
+		indexInstMap := common.CopyIndexInstMap(s.indexInstMap)
+		indexPartnMap := CopyIndexPartnMap(s.indexPartnMap)
+
+		go s.flushDone(streamId, bucket, indexInstMap, indexPartnMap, tsVbuuid, flushWasAborted)
+
 		return
 	}
 
@@ -338,6 +341,8 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, bucket strin
 								needsCommit = forceCommit
 							}
 
+							slice.FlushDone()
+
 							snapCreateStart := time.Now()
 							if info, err = slice.NewSnapshot(newTsVbuuid, needsCommit); err != nil {
 								logging.Errorf("handleCreateSnapshot::handleCreateSnapshot Error "+
@@ -425,6 +430,42 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, bucket strin
 		ts:       tsVbuuid,
 		aborted:  flushWasAborted}
 
+}
+
+func (s *storageMgr) flushDone(streamId common.StreamId, bucket string, indexInstMap common.IndexInstMap, indexPartnMap IndexPartnMap,
+	tsVbuuid *common.TsVbuuid, flushWasAborted bool) {
+
+	if common.GetStorageMode() == common.PLASMA {
+		var wg sync.WaitGroup
+
+		for idxInstId, partnMap := range indexPartnMap {
+			wg.Add(1)
+			go func(idxInstId common.IndexInstId, partnMap PartitionInstMap) {
+				defer wg.Done()
+
+				idxInst := indexInstMap[idxInstId]
+				if idxInst.Defn.Bucket == bucket &&
+					idxInst.Stream == streamId &&
+					idxInst.State != common.INDEX_STATE_DELETED {
+
+					for _, partnInst := range partnMap {
+						for _, slice := range partnInst.Sc.GetAllSlices() {
+							slice.FlushDone()
+						}
+					}
+				}
+			}(idxInstId, partnMap)
+		}
+
+		wg.Wait()
+	}
+
+	s.supvRespch <- &MsgMutMgrFlushDone{
+		mType:    STORAGE_SNAP_DONE,
+		streamId: streamId,
+		bucket:   bucket,
+		ts:       tsVbuuid,
+		aborted:  flushWasAborted}
 }
 
 func (s *storageMgr) updateSnapIntervalStat(idxStats *IndexStats) {

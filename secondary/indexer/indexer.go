@@ -2982,6 +2982,7 @@ func (idx *indexer) cleanupIndexData(indexInst common.IndexInst,
 	//update internal maps
 	delete(idx.indexInstMap, indexInstId)
 	delete(idx.indexPartnMap, indexInstId)
+	deleteFreeWriters(indexInst.InstId)
 
 	msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
 	msgUpdateIndexPartnMap := &MsgUpdatePartnMap{indexPartnMap: idx.indexPartnMap}
@@ -3179,13 +3180,14 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 	respCh := make(MsgChannel)
 
 	cmd = &MsgStreamUpdate{mType: OPEN_STREAM,
-		streamId:     buildStream,
-		bucket:       bucket,
-		indexList:    indexList,
-		buildTs:      buildTs,
-		respCh:       respCh,
-		restartTs:    nil,
-		rollbackTime: idx.bucketRollbackTimes[bucket]}
+		streamId:           buildStream,
+		bucket:             bucket,
+		indexList:          indexList,
+		buildTs:            buildTs,
+		respCh:             respCh,
+		restartTs:          nil,
+		allowMarkFirstSnap: true,
+		rollbackTime:       idx.bucketRollbackTimes[bucket]}
 
 	//send stream update to timekeeper
 	if resp := idx.sendStreamUpdateToWorker(cmd, idx.tkCmdCh,
@@ -4315,15 +4317,18 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 	respCh := make(MsgChannel)
 	stopCh := make(StopChannel)
 
+	//diable first snapshot optimization when recovering indexes as
+	//plasma cannot deal with duplicate inserts
 	cmd := &MsgStreamUpdate{mType: OPEN_STREAM,
-		streamId:     streamId,
-		bucket:       bucket,
-		indexList:    indexList,
-		restartTs:    restartTs,
-		buildTs:      idx.bucketBuildTs[bucket],
-		respCh:       respCh,
-		stopCh:       stopCh,
-		rollbackTime: idx.bucketRollbackTimes[bucket]}
+		streamId:           streamId,
+		bucket:             bucket,
+		indexList:          indexList,
+		restartTs:          restartTs,
+		buildTs:            idx.bucketBuildTs[bucket],
+		respCh:             respCh,
+		stopCh:             stopCh,
+		allowMarkFirstSnap: false,
+		rollbackTime:       idx.bucketRollbackTimes[bucket]}
 
 	//send stream update to timekeeper
 	if resp := idx.sendStreamUpdateToWorker(cmd, idx.tkCmdCh,
@@ -5420,6 +5425,9 @@ func (idx *indexer) makeRestartTs(streamId common.StreamId) map[string]*common.T
 				if latestSnapInfo != nil {
 					ts := latestSnapInfo.Timestamp()
 					if oldTs, ok := restartTs[idxInst.Defn.Bucket]; ok {
+						if oldTs == nil {
+							continue
+						}
 						if !ts.AsRecent(oldTs) {
 							restartTs[idxInst.Defn.Bucket] = ts
 						}
@@ -5428,9 +5436,7 @@ func (idx *indexer) makeRestartTs(streamId common.StreamId) map[string]*common.T
 					}
 				} else {
 					//set restartTs to nil for this bucket
-					if _, ok := restartTs[idxInst.Defn.Bucket]; !ok {
-						restartTs[idxInst.Defn.Bucket] = nil
-					}
+					restartTs[idxInst.Defn.Bucket] = nil
 				}
 			}
 		}
@@ -5910,17 +5916,18 @@ func NewSlice(id SliceId, indInst *common.IndexInst, partnInst *PartitionInst,
 
 	partitionId := partnInst.Defn.GetPartitionId()
 	numPartitions := indInst.Pc.GetNumPartitions()
+	instId := GetRealIndexInstId(indInst)
 
 	switch indInst.Defn.Using {
 	case common.MemDB, common.MemoryOptimized:
-		slice, err = NewMemDBSlice(path, id, indInst.Defn, indInst.InstId, partitionId, indInst.Defn.IsPrimary, !ephemeral, numPartitions, conf,
+		slice, err = NewMemDBSlice(path, id, indInst.Defn, instId, partitionId, indInst.Defn.IsPrimary, !ephemeral, numPartitions, conf,
 			stats.GetPartitionStats(indInst.InstId, partitionId))
 	case common.ForestDB:
-		slice, err = NewForestDBSlice(path, id, indInst.Defn, indInst.InstId, partitionId, indInst.Defn.IsPrimary, numPartitions, conf,
+		slice, err = NewForestDBSlice(path, id, indInst.Defn, instId, partitionId, indInst.Defn.IsPrimary, numPartitions, conf,
 			stats.GetPartitionStats(indInst.InstId, partitionId))
 	case common.PlasmaDB:
-		slice, err = NewPlasmaSlice(path, id, indInst.Defn, indInst.InstId, partitionId, indInst.Defn.IsPrimary, numPartitions, conf,
-			stats.GetPartitionStats(indInst.InstId, partitionId))
+		slice, err = NewPlasmaSlice(path, id, indInst.Defn, instId, partitionId, indInst.Defn.IsPrimary, numPartitions, conf,
+			stats.GetPartitionStats(indInst.InstId, partitionId), stats)
 	}
 
 	return

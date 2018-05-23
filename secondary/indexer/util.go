@@ -77,6 +77,14 @@ func IndexPath(inst *common.IndexInst, partnId common.PartitionId, sliceId Slice
 	return fmt.Sprintf("%s_%s_%d_%d.index", inst.Defn.Bucket, inst.Defn.Name, instId, partnId)
 }
 
+func GetRealIndexInstId(inst *common.IndexInst) common.IndexInstId {
+	instId := inst.InstId
+	if inst.IsProxy() {
+		instId = inst.RealInstId
+	}
+	return instId
+}
+
 func GetCurrentKVTs(cluster, pooln, bucketn string, numVbs int) (Timestamp, error) {
 
 	var seqnos []uint64

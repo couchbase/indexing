@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -81,10 +82,9 @@ type plasmaSlice struct {
 
 	fatalDbErr error
 
-	numWriters             int
-	numWritersFromConfig   int
-	sliceBufSizeFromConfig uint64
-	maxRollbacks           int
+	numWriters    int
+	maxNumWriters int
+	maxRollbacks  int
 
 	totalFlushTime  time.Duration
 	totalCommitTime time.Duration
@@ -104,12 +104,46 @@ type plasmaSlice struct {
 	arrayBuf2 [][]byte
 
 	hasPersistence bool
+
+	indexerStats *IndexerStats
+
+	//
+	// The following fields are used for tuning writers
+	//
+
+	// stats sampling
+	drainTime     int64          // elapsed time for draining
+	numItems      int64          // num of items in each flush
+	drainRate     *common.Sample // samples of drain rate per writer (numItems per writer per flush interval)
+	mutationRate  *common.Sample // samples of mutation rate (numItems per flush interval)
+	lastCheckTime int64          // last time when checking whether writers need adjustment
+
+	// logging
+	numExpand int // number of expansion
+	numReduce int // number of reduction
+
+	// throttling
+	minimumDrainRate float64 // minimum drain rate after adding/removing writer
+	saturateCount    int     // number of misses on meeting minimum drain rate
+
+	// config
+	enableWriterTuning bool    // enable tuning on writers
+	adjustInterval     uint64  // interval to check whether writer need tuning
+	samplingWindow     uint64  // sampling window
+	samplingInterval   uint64  // sampling interval
+	snapInterval       uint64  // snapshot interval
+	scalingFactor      float64 // scaling factor for percentage increase on drain rate
+	threshold          int     // threshold on number of misses on drain rate
+
+	writerLock    sync.Mutex // mutex for writer tuning
+	samplerStopCh chan bool  // stop sampler
+	token         *token     // token
 }
 
 func newPlasmaSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	idxInstId common.IndexInstId, partitionId common.PartitionId,
 	isPrimary bool, numPartitions int,
-	sysconf common.Config, idxStats *IndexStats) (*plasmaSlice, error) {
+	sysconf common.Config, idxStats *IndexStats, indexerStats *IndexerStats) (*plasmaSlice, error) {
 
 	slice := &plasmaSlice{}
 
@@ -120,6 +154,7 @@ func newPlasmaSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	}
 
 	slice.idxStats = idxStats
+	slice.indexerStats = indexerStats
 
 	slice.get_bytes = 0
 	slice.insert_bytes = 0
@@ -133,8 +168,7 @@ func newPlasmaSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	slice.idxPartnId = partitionId
 	slice.idxDefn = idxDefn
 	slice.id = sliceId
-	slice.numWritersFromConfig = sysconf["numSliceWriters"].Int()
-	slice.sliceBufSizeFromConfig = sysconf["settings.sliceBufSize"].Uint64()
+	slice.maxNumWriters = sysconf["numSliceWriters"].Int()
 	slice.hasPersistence = !sysconf["plasma.disablePersistence"].Bool()
 
 	slice.maxRollbacks = sysconf["settings.plasma.recovery.max_rollbacks"].Int()
@@ -149,6 +183,17 @@ func newPlasmaSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 
 	slice.isPrimary = isPrimary
 	slice.numPartitions = numPartitions
+
+	slice.samplingWindow = uint64(sysconf["plasma.writer.tuning.sampling.window"].Int()) * uint64(time.Millisecond)
+	slice.enableWriterTuning = sysconf["plasma.writer.tuning.enable"].Bool()
+	slice.adjustInterval = uint64(sysconf["plasma.writer.tuning.adjust.interval"].Int()) * uint64(time.Millisecond)
+	slice.samplingInterval = uint64(sysconf["plasma.writer.tuning.sampling.interval"].Int()) * uint64(time.Millisecond)
+	slice.scalingFactor = sysconf["plasma.writer.tuning.throughput.scalingFactor"].Float64()
+	slice.threshold = sysconf["plasma.writer.tuning.throttling.threshold"].Int()
+	slice.drainRate = common.NewSample(int(slice.samplingWindow / slice.samplingInterval))
+	slice.mutationRate = common.NewSample(int(slice.samplingWindow / slice.samplingInterval))
+	slice.samplerStopCh = make(chan bool)
+	slice.snapInterval = sysconf["settings.inmemory_snapshot.moi.interval"].Uint64() * uint64(time.Millisecond)
 
 	if err := slice.initStores(); err != nil {
 		// Index is unusable. Remove the data files and reinit
@@ -165,69 +210,14 @@ func newPlasmaSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 		return nil, err
 	}
 
-	slice.initWriters(int(math.Ceil(float64(slice.numWritersFromConfig) / float64(slice.numPartitions))))
+	// intiialize and start the writers
+	slice.setupWriters()
 
 	logging.Infof("plasmaSlice:NewplasmaSlice Created New Slice Id %v IndexInstId %v partitionId %v "+
 		"WriterThreads %v cleaner %v", sliceId, idxInstId, partitionId, slice.numWriters, slice.mainstore.LSSCleanerConcurrency)
 
 	slice.setCommittedCount()
 	return slice, nil
-}
-
-func (slice *plasmaSlice) initWriters(numWriters int) {
-
-	var wg sync.WaitGroup
-
-	slice.numWriters = numWriters
-
-	slice.encodeBuf = make([][]byte, slice.numWriters)
-	slice.arrayBuf1 = make([][]byte, slice.numWriters)
-	slice.arrayBuf2 = make([][]byte, slice.numWriters)
-	slice.cmdCh = make([]chan indexMutation, slice.numWriters)
-
-	sliceBufSize := slice.sliceBufSizeFromConfig
-	if sliceBufSize < uint64(slice.numWriters) {
-		sliceBufSize = uint64(slice.numWriters)
-	}
-
-	for i := 0; i < slice.numWriters; i++ {
-		slice.cmdCh[i] = make(chan indexMutation, sliceBufSize/uint64(slice.numWriters))
-		slice.encodeBuf[i] = make([]byte, 0, maxIndexEntrySize)
-		slice.arrayBuf1[i] = make([]byte, 0, maxArrayIndexEntrySize)
-		slice.arrayBuf2[i] = make([]byte, 0, maxArrayIndexEntrySize)
-	}
-
-	slice.workerDone = make([]chan bool, slice.numWriters)
-	slice.stopCh = make([]DoneChannel, slice.numWriters)
-
-	for i := 0; i < slice.numWriters; i++ {
-		slice.stopCh[i] = make(DoneChannel)
-		slice.workerDone[i] = make(chan bool)
-		go slice.handleCommandsWorker(i)
-	}
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		slice.main = make([]*plasma.Writer, slice.numWriters)
-		for i := 0; i < slice.numWriters; i++ {
-			slice.main[i] = slice.mainstore.NewWriter()
-		}
-	}()
-
-	if !slice.isPrimary {
-		// Recover backindex
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			slice.back = make([]*plasma.Writer, slice.numWriters)
-			for i := 0; i < slice.numWriters; i++ {
-				slice.back[i] = slice.backstore.NewWriter()
-			}
-		}()
-	}
-
-	wg.Wait()
 }
 
 func (slice *plasmaSlice) initStores() error {
@@ -308,11 +298,6 @@ func (slice *plasmaSlice) initStores() error {
 			mErr = fmt.Errorf("Unable to initialize %s, err = %v", mCfg.File, mErr)
 			return
 		}
-
-		slice.main = make([]*plasma.Writer, slice.numWriters)
-		for i := 0; i < slice.numWriters; i++ {
-			slice.main[i] = slice.mainstore.NewWriter()
-		}
 	}()
 
 	if !slice.isPrimary {
@@ -324,11 +309,6 @@ func (slice *plasmaSlice) initStores() error {
 			if bErr != nil {
 				bErr = fmt.Errorf("Unable to initialize %s, err = %v", bCfg.File, bErr)
 				return
-			}
-
-			slice.back = make([]*plasma.Writer, slice.numWriters)
-			for i := 0; i < slice.numWriters; i++ {
-				slice.back[i] = slice.backstore.NewWriter()
 			}
 		}()
 	}
@@ -476,8 +456,8 @@ func (mdb *plasmaSlice) Insert(key []byte, docid []byte, meta *MutationMeta) err
 
 func (mdb *plasmaSlice) Delete(docid []byte, meta *MutationMeta) error {
 	if !meta.firstSnap {
-		mdb.idxStats.numDocsFlushQueued.Add(1)
 		atomic.AddInt64(&mdb.qCount, 1)
+		mdb.idxStats.numDocsFlushQueued.Add(1)
 		mdb.cmdCh[int(meta.vbucket)%mdb.numWriters] <- indexMutation{op: opDelete, docid: docid}
 	}
 	return mdb.fatalDbErr
@@ -515,8 +495,15 @@ loop:
 			mdb.idxStats.numDocsIndexed.Add(1)
 			atomic.AddInt64(&mdb.qCount, -1)
 
-		case <-mdb.stopCh[workerId]:
-			mdb.stopCh[workerId] <- true
+			if mdb.enableWriterTuning {
+				atomic.AddInt64(&mdb.drainTime, elapsed.Nanoseconds())
+				atomic.AddInt64(&mdb.numItems, int64(nmut))
+			}
+
+		case _, ok := <-mdb.stopCh[workerId]:
+			if ok {
+				mdb.stopCh[workerId] <- true
+			}
 			break loop
 
 		case <-mdb.workerDone[workerId]:
@@ -613,7 +600,7 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 	var err error
 	var oldkey []byte
 
-	mdb.arrayBuf2[workerId] = resizeArrayBuf(mdb.arrayBuf2[workerId], len(key))
+	mdb.arrayBuf2[workerId] = resizeArrayBuf(mdb.arrayBuf2[workerId], 3*len(key))
 
 	if !allowLargeKeys && len(key) > maxArrayIndexEntrySize {
 		logging.Errorf("plasmaSlice::insertSecArrayIndex Error indexing docid: %s in Slice: %v. Error: Encoded array key (size %v) too long (> %v). Skipped.",
@@ -644,7 +631,7 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 		}
 
 		var tmpBuf []byte
-		if len(oldkey) > cap(mdb.arrayBuf1[workerId]) {
+		if len(oldkey)*3 > cap(mdb.arrayBuf1[workerId]) {
 			tmpBuf = make([]byte, 0, len(oldkey)*3)
 		} else {
 			tmpBuf = mdb.arrayBuf1[workerId]
@@ -887,7 +874,7 @@ func (mdb *plasmaSlice) deleteSecArrayIndex(docid []byte, workerId int) (nmut in
 	}
 
 	var tmpBuf []byte
-	if len(olditm) > cap(mdb.arrayBuf1[workerId]) {
+	if len(olditm)*3 > cap(mdb.arrayBuf1[workerId]) {
 		tmpBuf = make([]byte, 0, len(olditm)*3)
 	} else {
 		tmpBuf = mdb.arrayBuf1[workerId]
@@ -1189,6 +1176,9 @@ func (mdb *plasmaSlice) resetStores() {
 		<-mdb.readers
 	}
 
+	numWriters := mdb.numWriters
+	mdb.freeAllWriters()
+
 	mdb.mainstore.Close()
 	if !mdb.isPrimary {
 		mdb.backstore.Close()
@@ -1197,6 +1187,7 @@ func (mdb *plasmaSlice) resetStores() {
 	os.RemoveAll(mdb.path)
 	mdb.newBorn = true
 	mdb.initStores()
+	mdb.startWriters(numWriters)
 	mdb.setCommittedCount()
 	mdb.idxStats.itemsCount.Set(0)
 }
@@ -1316,6 +1307,19 @@ func (mdb *plasmaSlice) NewSnapshot(ts *common.TsVbuuid, commit bool) (SnapshotI
 	return newSnapshotInfo, nil
 }
 
+func (mdb *plasmaSlice) FlushDone() {
+
+	mdb.waitPersist()
+
+	qc := atomic.LoadInt64(&mdb.qCount)
+	if qc > 0 {
+		common.CrashOnError(errors.New("Slice Invariant Violation - commit with pending mutations"))
+	}
+
+	// Adjust the number of writers at inmemory snapshot or persisted snapshot
+	mdb.adjustWriters()
+}
+
 //checkAllWorkersDone return true if all workers have
 //finished processing
 func (mdb *plasmaSlice) checkAllWorkersDone() bool {
@@ -1344,16 +1348,26 @@ func (mdb *plasmaSlice) Close() {
 		"IndexDefnId %v", mdb.id, mdb.idxInstId, mdb.idxPartnId, mdb.idxDefnId)
 
 	//signal shutdown for command handler routines
-	for i := 0; i < mdb.numWriters; i++ {
-		mdb.stopCh[i] <- true
-		<-mdb.stopCh[i]
-	}
+	mdb.cleanupWritersOnClose()
 
 	if mdb.refCount > 0 {
 		mdb.isSoftClosed = true
 	} else {
 		tryCloseplasmaSlice(mdb)
 	}
+}
+
+func (mdb *plasmaSlice) cleanupWritersOnClose() {
+
+	for i := 0; i < mdb.numWriters; i++ {
+		mdb.stopCh[i] <- true
+		<-mdb.stopCh[i]
+	}
+
+	mdb.token.increment(mdb.numWriters)
+
+	mdb.freeAllWriters()
+	close(mdb.samplerStopCh)
 }
 
 //Destroy removes the database file from disk.
@@ -2045,4 +2059,668 @@ func hasEqualBackEntry(key []byte, bentry []byte) bool {
 
 	// Ignore 2 byte count for comparison
 	return bytes.Equal(key, bentry[:len(bentry)-2])
+}
+
+////////////////////////////////////////////////////////////
+// Writer Auto-Tuning
+////////////////////////////////////////////////////////////
+
+//
+// Default number of num writers
+//
+func (slice *plasmaSlice) numWritersPerPartition() int {
+	return int(math.Ceil(float64(slice.maxNumWriters) / float64(slice.numPartitions)))
+}
+
+//
+// Get command handler queue size
+//
+func (slice *plasmaSlice) defaultCmdQueueSize() uint64 {
+
+	sliceBufSize := slice.sysconf["settings.sliceBufSize"].Uint64()
+	numWriters := slice.numWritersPerPartition()
+
+	if sliceBufSize < uint64(numWriters) {
+		sliceBufSize = uint64(numWriters)
+	}
+
+	return sliceBufSize / uint64(numWriters)
+}
+
+//
+// Allocate array for writers
+//
+func (slice *plasmaSlice) setupWriters() {
+
+	// initialize buffer
+	slice.encodeBuf = make([][]byte, 0, slice.maxNumWriters)
+	slice.arrayBuf1 = make([][]byte, 0, slice.maxNumWriters)
+	slice.arrayBuf2 = make([][]byte, 0, slice.maxNumWriters)
+
+	// initialize comand handler
+	slice.cmdCh = make([]chan indexMutation, 0, slice.maxNumWriters)
+	slice.workerDone = make([]chan bool, 0, slice.maxNumWriters)
+	slice.stopCh = make([]DoneChannel, 0, slice.maxNumWriters)
+
+	// initialize writers
+	slice.main = make([]*plasma.Writer, 0, slice.maxNumWriters)
+	slice.back = make([]*plasma.Writer, 0, slice.maxNumWriters)
+
+	// initialize tokens
+	slice.token = registerFreeWriters(slice.idxInstId, slice.maxNumWriters)
+
+	// start writers
+	numWriter := slice.numWritersPerPartition()
+	slice.token.decrement(numWriter, true)
+	slice.startWriters(numWriter)
+
+	// start stats sampler
+	go slice.runSampler()
+}
+
+//
+// Initialize any field related to numWriters
+//
+func (slice *plasmaSlice) initWriters(numWriters int) {
+
+	curNumWriters := len(slice.cmdCh)
+
+	// initialize buffer
+	slice.encodeBuf = slice.encodeBuf[:numWriters]
+	slice.arrayBuf1 = slice.arrayBuf1[:numWriters]
+	slice.arrayBuf2 = slice.arrayBuf2[:numWriters]
+	for i := curNumWriters; i < numWriters; i++ {
+		slice.encodeBuf[i] = make([]byte, 0, maxIndexEntrySize)
+		slice.arrayBuf1[i] = make([]byte, 0, maxArrayIndexEntrySize)
+		slice.arrayBuf2[i] = make([]byte, 0, maxArrayIndexEntrySize)
+	}
+
+	// initialize command handler
+	queueSize := slice.defaultCmdQueueSize()
+	slice.cmdCh = slice.cmdCh[:numWriters]
+	slice.workerDone = slice.workerDone[:numWriters]
+	slice.stopCh = slice.stopCh[:numWriters]
+	for i := curNumWriters; i < numWriters; i++ {
+		slice.cmdCh[i] = make(chan indexMutation, queueSize)
+		slice.workerDone[i] = make(chan bool)
+		slice.stopCh[i] = make(DoneChannel)
+
+		go slice.handleCommandsWorker(i)
+	}
+
+	// initialize mainsotre workers
+	slice.main = slice.main[:numWriters]
+	for i := curNumWriters; i < numWriters; i++ {
+		slice.main[i] = slice.mainstore.NewWriter()
+	}
+
+	// initialize backstore writers
+	if !slice.isPrimary {
+		slice.back = slice.back[:numWriters]
+		for i := curNumWriters; i < numWriters; i++ {
+			slice.back[i] = slice.backstore.NewWriter()
+		}
+	}
+}
+
+//
+// Start the writers by passing in the desired number of writers
+//
+func (slice *plasmaSlice) startWriters(numWriters int) {
+
+	// If slice already have more writers that the desired number, return.
+	if slice.numWriters >= numWriters {
+		return
+	}
+
+	// If desired number is more than length of the slice, then need to resize.
+	if numWriters > len(slice.cmdCh) {
+		slice.stopWriters(0)
+		slice.initWriters(numWriters)
+	}
+
+	// update the number of slice writers
+	slice.numWriters = numWriters
+}
+
+//
+// Stop the writers by passing in the desired number of writers
+//
+func (slice *plasmaSlice) stopWriters(numWriters int) {
+
+	// If slice already have fewer writers that the desired number, return.
+	if numWriters >= slice.numWriters {
+		return
+	}
+
+	// free writer memory
+	for i := numWriters; i < slice.numWriters; i++ {
+		slice.main[i].ResetBuffers()
+		if !slice.isPrimary {
+			slice.back[i].ResetBuffers()
+		}
+	}
+
+	// update the number of slice writers
+	slice.numWriters = numWriters
+}
+
+//
+// Free all writers
+//
+func (slice *plasmaSlice) freeAllWriters() {
+
+	slice.stopWriters(0)
+
+	for _, stopCh := range slice.stopCh {
+		close(stopCh)
+	}
+
+	slice.encodeBuf = slice.encodeBuf[:0]
+	slice.arrayBuf1 = slice.arrayBuf1[:0]
+	slice.arrayBuf2 = slice.arrayBuf2[:0]
+
+	slice.cmdCh = slice.cmdCh[:0]
+	slice.workerDone = slice.workerDone[:0]
+	slice.stopCh = slice.stopCh[:0]
+
+	slice.main = slice.main[:0]
+	if !slice.isPrimary {
+		slice.back = slice.back[:0]
+	}
+}
+
+//
+// Logging
+//
+func (slice *plasmaSlice) logSample(numWriters int) {
+
+	logging.Infof("plasmaSlice %v:%v mutation rate %.2f drain rate %.2f saturateCount %v minimum drain rate %.2f",
+		slice.idxInstId, slice.idxPartnId,
+		slice.adjustedMeanMutationRate(),
+		slice.adjustedMeanDrainRate()*float64(numWriters),
+		slice.saturateCount,
+		slice.minimumDrainRate)
+}
+
+//
+// Expand the number of writer
+//
+func (slice *plasmaSlice) expandWriters(needed int) {
+
+	// increment writer one at a 1 to avoid saturation.    This means that
+	// it will be less responsive for sporadic traffic.  It will take
+	// longer for stale=false query to catch up when there is a spike in
+	// mutation rate.
+
+	//increment := int(needed - slice.numWriters)
+	increment := 1
+
+	mean := slice.adjustedMeanDrainRate() * float64(slice.numWriters)
+	if increment > 0 && mean > 0 {
+		// Is there any free writer available?
+		if increment = slice.token.decrement(increment, false); increment > 0 {
+			lastNumWriters := slice.numWriters
+
+			// start writer
+			slice.startWriters(slice.numWriters + increment)
+
+			slice.minimumDrainRate = slice.computeMinimumDrainRate(lastNumWriters)
+			slice.numExpand++
+
+			logging.Verbosef("plasmaSlice %v:%v expand writers from %v to %v (standby writer %v) token %v",
+				slice.idxInstId, slice.idxPartnId, lastNumWriters, slice.numWriters,
+				len(slice.cmdCh)-slice.numWriters, slice.token.num())
+
+			slice.logSample(lastNumWriters)
+		}
+	}
+}
+
+//
+// Reduce the number of writer
+//
+func (slice *plasmaSlice) reduceWriters(needed int) {
+
+	//decrement := int(math.Ceil(float64(slice.numWriters-needed) / 2))
+	decrement := 1
+
+	if decrement > 0 {
+		lastNumWriters := slice.numWriters
+
+		// stop writer
+		slice.stopWriters(slice.numWriters - decrement)
+
+		// add token after the writer is freed
+		slice.token.increment(decrement)
+
+		slice.minimumDrainRate = slice.computeMinimumDrainRate(lastNumWriters)
+		slice.numReduce++
+
+		logging.Verbosef("plasmaSlice %v:%v reduce writers from %v to %v (standby writer %v) token %v",
+			slice.idxInstId, slice.idxPartnId, lastNumWriters, slice.numWriters,
+			len(slice.cmdCh)-slice.numWriters, slice.token.num())
+
+		slice.logSample(lastNumWriters)
+	}
+}
+
+//
+// Calculate minimum drain rate
+// Minimum drain rate is calculated everytime when expanding or reducing writers, so it keeps
+// adjusting to the trailing 1 second mean drain rate. If drain rate is trending down,
+// then minimum drain rate will also trending down.
+//
+func (slice *plasmaSlice) computeMinimumDrainRate(lastNumWriters int) float64 {
+
+	// compute expected drain rate based on mean drain rate adjusted based on memory usage
+	mean := slice.adjustedMeanDrainRate() * float64(lastNumWriters)
+	newMean := mean * float64(slice.numWriters) / float64(lastNumWriters)
+
+	if slice.numWriters > lastNumWriters {
+		return mean + ((newMean - mean) * slice.scalingFactor)
+	}
+
+	return newMean
+}
+
+//
+// Does drain rate meet the minimum level?
+//
+func (slice *plasmaSlice) meetMinimumDrainRate() {
+
+	// If the slice does not meet the minimum drain rate requirement after expanding/reducing writers, increment
+	// saturation count.  Saturation count is token to keep track of how many misses on minimum drain rate.
+	// If drain rate is not saturated or trending down, normal flucturation in drain rate should not keep
+	// saturation count reaching threshold.
+	//
+	// The minimum drain rate is computed to be an easy-to-reach target in order to reduce chances of false
+	// positive on drain rate saturation.
+	//
+	// If drain rate is saturated or trending down, there will be more misses than hits.  The saturation count should increase,
+	// since the minimum drain rate is trailing the actual drain rate.
+	//
+	if slice.adjustedMeanDrainRateWithInterval(slice.adjustInterval)*float64(slice.numWriters) < slice.minimumDrainRate {
+		if slice.saturateCount < slice.threshold {
+			slice.saturateCount++
+		}
+	} else {
+		if slice.saturateCount > 0 {
+			slice.saturateCount--
+		}
+	}
+}
+
+//
+// Adjust number of writers needed
+//
+func (slice *plasmaSlice) adjustNumWritersNeeded(needed int) int {
+
+	// Find a victim to release token if running out of token
+	if slice.token.num() < 0 {
+		if float64(slice.numWriters)/float64(slice.maxNumWriters) > rand.Float64() {
+			return slice.numWriters - 1
+		}
+	}
+
+	// do not allow expansion when memory is full
+	if slice.memoryFull() && needed > slice.numWriters {
+		return slice.numWriters
+	}
+
+	// There are different situations where drain rate goes down and cannot meet minimum requiremnts:
+	// 1) IO saturation
+	// 2) new plasma instance is added to the node
+	// 3) log cleaner running
+	// 4) DGM ratio goes down
+	//
+	// If it gets 10 misses, then it could mean the drain rate has saturated or trending down over 1s interval.
+	// If so, redcue the number of writers by 1, and re-calibrate by recomputing the minimum drain rate again.
+	// In the next interval, if the 100ms drain rate is able to meet the minimum requirement, it will allow
+	// number of writers to expand. Otherwise, it will keep reducing the number of writers until it can meet
+	// the minimum drain rate.
+	//
+	if slice.saturateCount >= slice.threshold {
+		return slice.numWriters - 1
+	}
+
+	return needed
+}
+
+//
+// Adjust the number of writer
+//
+func (slice *plasmaSlice) adjustWriters() {
+
+	slice.writerLock.Lock()
+	defer slice.writerLock.Unlock()
+
+	// Is it the time to adjust the number of writers?
+	if slice.shouldAdjustWriter() {
+		slice.meetMinimumDrainRate()
+
+		needed := slice.numWritersNeeded()
+		needed = slice.adjustNumWritersNeeded(needed)
+
+		if slice.canExpandWriters(needed) {
+			slice.expandWriters(needed)
+		} else if slice.canReduceWriters(needed) {
+			slice.reduceWriters(needed)
+		}
+	}
+}
+
+//
+// Expand the writer when
+// 1) enableWriterTuning is enabled
+// 2) numWriters is fewer than the maxNumWriters
+// 3) numWriters needed is greater than numWriters
+// 4) drain rate has increased since the last expansion
+//
+func (slice *plasmaSlice) canExpandWriters(needed int) bool {
+
+	return slice.enableWriterTuning &&
+		slice.numWriters < slice.maxNumWriters &&
+		needed > slice.numWriters
+}
+
+//
+// Reduce the writer when
+// 1) enableWriterTuning is enabled
+// 2) numWriters is greater than 1
+// 3) numWriters needed is fewer than numWriters
+//
+func (slice *plasmaSlice) canReduceWriters(needed int) bool {
+
+	return slice.enableWriterTuning &&
+		slice.numWriters > 1 &&
+		needed < slice.numWriters
+}
+
+//
+// Update the sample based on the stats collected in last flush
+// Drain rate and mutation rate is measured based on the
+// number of incoming and written keys.   It does not include
+// the size of the key.
+//
+func (slice *plasmaSlice) updateSample(elapsed int64, needLog bool) {
+
+	slice.writerLock.Lock()
+	defer slice.writerLock.Unlock()
+
+	drainTime := float64(atomic.LoadInt64(&slice.drainTime))
+	mutations := float64(atomic.LoadInt64(&slice.numItems))
+
+	// Update the drain rate.
+	drainRate := float64(0)
+	if drainTime > 0 {
+		// drain rate = num of items written per writer per second
+		drainRate = mutations / drainTime * float64(slice.snapInterval)
+	}
+	drainRatePerWriter := drainRate / float64(slice.numWriters)
+	slice.drainRate.Update(drainRatePerWriter)
+
+	// Update mutation rate.
+	mutationRate := mutations / float64(elapsed) * float64(slice.snapInterval)
+	slice.mutationRate.Update(mutationRate)
+
+	// reset stats
+	atomic.StoreInt64(&slice.drainTime, 0)
+	atomic.StoreInt64(&slice.numItems, 0)
+
+	// periodic logging
+	if needLog {
+		logging.Infof("plasmaSlice %v:%v numWriter %v standby writer %v token %v numExpand %v numReduce %v",
+			slice.idxInstId, slice.idxPartnId, slice.numWriters, len(slice.cmdCh)-slice.numWriters, slice.token.num(),
+			slice.numExpand, slice.numReduce)
+
+		slice.logSample(slice.numWriters)
+
+		slice.numExpand = 0
+		slice.numReduce = 0
+	}
+}
+
+//
+// Check if it is time to adjust the writer
+//
+func (slice *plasmaSlice) shouldAdjustWriter() bool {
+
+	if !slice.enableWriterTuning {
+		return false
+	}
+
+	now := time.Now().UnixNano()
+	if now-slice.lastCheckTime > int64(slice.adjustInterval) {
+		slice.lastCheckTime = now
+		return true
+	}
+
+	return false
+}
+
+//
+// Mutation rate is always calculated using adjust interval (100ms), adjusted based on memory utilization.
+// Short interval for mutation rate alllows more responsiveness. Drain rate is calculated at 1s interval to
+// reduce variation.   Therefore, fluctation in mutation rate is more likely to cause writers to expand/reduce
+// than fluctation in drain rate. The implementation attempts to make allocate/de-allocate writers efficiently
+// to faciliate constant expansion/reduction of writers.
+//
+func (slice *plasmaSlice) numWritersNeeded() int {
+
+	mutationRate := slice.adjustedMeanMutationRate()
+	drainRate := slice.adjustedMeanDrainRate()
+
+	// If drain rate is 0, there is no expansion.
+	if drainRate > 0 {
+		needed := int(math.Ceil(mutationRate / drainRate))
+
+		if needed == 0 {
+			needed = 1
+		}
+
+		if needed > slice.maxNumWriters {
+			needed = slice.maxNumWriters
+		}
+
+		return needed
+	}
+
+	// return 1 if there is no mutation
+	if mutationRate <= 0 {
+		return 1
+	}
+
+	// If drain rate is 0 but mutation rate is not 0, then return current numWriters
+	return slice.numWriters
+}
+
+//
+// Run sampler every second
+
+func (slice *plasmaSlice) runSampler() {
+
+	if !slice.enableWriterTuning {
+		return
+	}
+
+	lastTime := time.Now()
+	lastLogTime := lastTime
+
+	ticker := time.NewTicker(time.Duration(slice.samplingInterval))
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			needLog := time.Now().Sub(lastLogTime).Nanoseconds() > int64(time.Minute)
+			slice.updateSample(time.Now().Sub(lastTime).Nanoseconds(), needLog)
+			lastTime = time.Now()
+			if needLog {
+				lastLogTime = lastTime
+			}
+		case <-slice.samplerStopCh:
+			return
+		}
+	}
+}
+
+type windowFunc func(sample *common.Sample, count int) float64
+
+//
+// Get mean drain rate adjusted based on memory uasge
+//
+func (slice *plasmaSlice) adjustedMeanDrainRate() float64 {
+
+	return slice.adjustedMeanDrainRateWithInterval(uint64(time.Second))
+}
+
+func (slice *plasmaSlice) adjustedMeanDrainRateWithInterval(interval uint64) float64 {
+
+	window := func(sample *common.Sample, count int) float64 { return sample.WindowMean(count) }
+	return slice.computeAdjustedAggregate(window, slice.drainRate, interval)
+}
+
+//
+// Get std dev drain rate adjusted based on memory uasge
+//
+func (slice *plasmaSlice) adjustedStdDevDrainRate() float64 {
+
+	window := func(sample *common.Sample, count int) float64 { return sample.WindowStdDev(count) }
+	return slice.computeAdjustedAggregate(window, slice.drainRate, uint64(time.Second))
+}
+
+//
+// Get mean mutation rate adjusted based on memory uasge
+//
+func (slice *plasmaSlice) adjustedMeanMutationRate() float64 {
+
+	window := func(sample *common.Sample, count int) float64 { return sample.WindowMean(count) }
+	return slice.computeAdjustedAggregate(window, slice.mutationRate, slice.adjustInterval)
+}
+
+//
+// Get std dev mutation rate adjusted based on memory uasge
+//
+func (slice *plasmaSlice) adjustedStdDevMutationRate() float64 {
+
+	window := func(sample *common.Sample, count int) float64 { return sample.WindowStdDev(count) }
+	return slice.computeAdjustedAggregate(window, slice.mutationRate, slice.adjustInterval)
+}
+
+func (slice *plasmaSlice) computeAdjustedAggregate(window windowFunc, sample *common.Sample, interval uint64) float64 {
+
+	count := int(interval / slice.samplingInterval)
+
+	if float64(slice.memoryAvail()) < float64(slice.memoryLimit())*0.20 && slice.memoryAvail() > 0 {
+		count = count * int(slice.memoryLimit()/slice.memoryAvail())
+		if count > int(slice.samplingWindow/slice.samplingInterval) {
+			count = int(slice.samplingWindow / slice.samplingInterval)
+		}
+	}
+
+	return window(sample, count)
+}
+
+//
+// get memory limit
+//
+func (slice *plasmaSlice) memoryLimit() float64 {
+
+	//return float64(slice.indexerStats.memoryQuota.Value())
+	return float64(getMemTotal())
+}
+
+//
+// get available memory left
+//
+func (slice *plasmaSlice) memoryAvail() float64 {
+
+	//return float64(slice.indexerStats.memoryQuota.Value()) - float64(slice.indexerStats.memoryUsed.Value())
+	return float64(getMemFree())
+}
+
+//
+// get memory used
+//
+func (slice *plasmaSlice) memoryUsed() float64 {
+
+	//return float64(slice.indexerStats.memoryUsed.Value())
+	return slice.memoryLimit() - slice.memoryAvail()
+}
+
+//
+// memory full
+//
+func (slice *plasmaSlice) memoryFull() bool {
+
+	return (float64(slice.memoryAvail()) < float64(slice.memoryLimit())*0.1)
+}
+
+////////////////////////////////////////////////////////////
+// Writer Tokens
+////////////////////////////////////////////////////////////
+
+var freeWriters tokens
+
+func init() {
+	freeWriters.tokens = make(map[common.IndexInstId]*token)
+}
+
+type token struct {
+	value int64
+}
+
+func (t *token) num() int64 {
+	return atomic.LoadInt64(&t.value)
+}
+
+func (t *token) increment(increment int) {
+
+	atomic.AddInt64(&t.value, int64(increment))
+}
+
+func (t *token) decrement(decrement int, force bool) int {
+
+	for {
+		if count := atomic.LoadInt64(&t.value); count > 0 || force {
+			d := int64(decrement)
+
+			if !force {
+				if int64(decrement) > count {
+					d = count
+				}
+			}
+
+			if atomic.CompareAndSwapInt64(&t.value, count, count-d) {
+				return int(d)
+			}
+		} else {
+			break
+		}
+	}
+
+	return 0
+}
+
+type tokens struct {
+	mutex  sync.RWMutex
+	tokens map[common.IndexInstId]*token
+}
+
+func registerFreeWriters(instId common.IndexInstId, count int) *token {
+
+	freeWriters.mutex.Lock()
+	defer freeWriters.mutex.Unlock()
+
+	if _, ok := freeWriters.tokens[instId]; !ok {
+		freeWriters.tokens[instId] = &token{value: int64(count)}
+	}
+	return freeWriters.tokens[instId]
+}
+
+func deleteFreeWriters(instId common.IndexInstId) {
+	freeWriters.mutex.Lock()
+	defer freeWriters.mutex.Unlock()
+	delete(freeWriters.tokens, instId)
 }

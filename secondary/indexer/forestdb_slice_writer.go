@@ -1185,6 +1185,10 @@ func (fdb *fdbSlice) NewSnapshot(ts *common.TsVbuuid, commit bool) (SnapshotInfo
 	return newSnapshotInfo, nil
 }
 
+func (fdb *fdbSlice) FlushDone() {
+	// no-op
+}
+
 //checkAllWorkersDone return true if all workers have
 //finished processing
 func (fdb *fdbSlice) checkAllWorkersDone() bool {

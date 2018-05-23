@@ -40,6 +40,9 @@ type IndexWriter interface {
 	// Create commited commited snapshot or inmemory snapshot
 	NewSnapshot(*common.TsVbuuid, bool) (SnapshotInfo, error)
 
+	// Notify flush is done
+	FlushDone()
+
 	// Get the list of commited snapshots
 	GetSnapshots() ([]SnapshotInfo, error)
 

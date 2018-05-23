@@ -67,7 +67,7 @@ type mutationStreamReader struct {
 //In case returned MutationStreamReader is nil, Message will have the error msg.
 func CreateMutationStreamReader(streamId common.StreamId, bucketQueueMap BucketQueueMap,
 	bucketFilter map[string]*common.TsVbuuid, supvCmdch MsgChannel, supvRespch MsgChannel,
-	numWorkers int, stats *IndexerStats, config common.Config, is common.IndexerState) (MutationStreamReader, Message) {
+	numWorkers int, stats *IndexerStats, config common.Config, is common.IndexerState, allowMarkFirstSnap bool) (MutationStreamReader, Message) {
 
 	//start a new mutation stream
 	streamMutch := make(chan interface{}, getMutationBufferSize(config))
@@ -113,7 +113,7 @@ func CreateMutationStreamReader(streamId common.StreamId, bucketQueueMap BucketQ
 	logging.Infof("MutationStreamReader: Setting Stream Workers %v %v", r.streamId, numWorkers)
 
 	for i := 0; i < numWorkers; i++ {
-		r.streamWorkers[i] = newStreamWorker(streamId, numWorkers, i, config, r, bucketFilter)
+		r.streamWorkers[i] = newStreamWorker(streamId, numWorkers, i, config, r, bucketFilter, allowMarkFirstSnap)
 		go r.streamWorkers[i].start()
 	}
 
@@ -512,7 +512,7 @@ type streamWorker struct {
 }
 
 func newStreamWorker(streamId common.StreamId, numWorkers int, workerId int, config common.Config,
-	reader *mutationStreamReader, bucketFilter map[string]*common.TsVbuuid) *streamWorker {
+	reader *mutationStreamReader, bucketFilter map[string]*common.TsVbuuid, allowMarkFirstSnap bool) *streamWorker {
 
 	w := &streamWorker{streamId: streamId,
 		workerId:          workerId,
@@ -523,8 +523,12 @@ func newStreamWorker(streamId common.StreamId, numWorkers int, workerId int, con
 		bucketSyncDue:     make(map[string]bool),
 		reader:            reader,
 		bucketFirstSnap:   make(map[string]firstSnapFlag),
-		markFirstSnap:     getMarkFirstSnap(config),
 	}
+
+	if allowMarkFirstSnap {
+		w.markFirstSnap = getMarkFirstSnap(config)
+	}
+
 	w.initBucketFilter(bucketFilter)
 	return w
 
