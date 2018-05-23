@@ -219,18 +219,36 @@ else
   echo "none"
 fi
 
-cd $WORKSPACE
 PRODUCT_VERSION=${RELEASE}-${BLD_NUM}-rel
+
+cd $WORKSPACE
 rm -f *.rpm *.deb
 rm -rf ~/rpmbuild
 rm -rf $WORKSPACE/voltron/build/deb
 rm -rf /opt/couchbase/*
 find goproj godeps -name \*.a -print0 | xargs -0 rm -f
-
-cd $WORKSPACE
 mkdir -p build
 cd build
+echo "Building CE version of the product"
+cmake -D CMAKE_INSTALL_PREFIX=/opt/couchbase \
+      -D CMAKE_PREFIX_PATH=/opt/couchbase \
+      -D CMAKE_BUILD_TYPE=RelWithDebInfo \
+      -D PRODUCT_VERSION=${PRODUCT_VERSION} \
+      -D BUILD_ENTERPRISE=FALSE \
+      -D CB_DOWNLOAD_DEPS=1 \
+      -D SNAPPY_OPTION=Disable \
+      .. 1>>$WORKSPACE/make.log 2>&1
+test $? -eq 0 || error_exit "CE build"
 
+cd $WORKSPACE
+rm -f *.rpm *.deb
+rm -rf ~/rpmbuild
+rm -rf $WORKSPACE/voltron/build/deb
+rm -rf /opt/couchbase/*
+find goproj godeps -name \*.a -print0 | xargs -0 rm -f
+rm -rf build
+mkdir -p build
+cd build
 echo "Building main product"
 cmake -D CMAKE_INSTALL_PREFIX=/opt/couchbase \
       -D CMAKE_PREFIX_PATH=/opt/couchbase \
