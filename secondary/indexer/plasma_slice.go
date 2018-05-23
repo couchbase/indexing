@@ -2661,8 +2661,6 @@ func (slice *plasmaSlice) memoryFull() bool {
 // Writer Tokens
 ////////////////////////////////////////////////////////////
 
-var freeWriters tokens
-
 func init() {
 	freeWriters.tokens = make(map[common.IndexInstId]*token)
 }
