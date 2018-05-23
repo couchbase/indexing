@@ -16,10 +16,13 @@ import (
 )
 
 var errStorageCorrupted = fmt.Errorf("Storage corrupted and unrecoverable")
-var freeWriters tokens
 
 func NewPlasmaSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	idxInstId common.IndexInstId, partitionId common.PartitionId, isPrimary bool, numPartitions int,
 	sysconf common.Config, idxStats *IndexStats, indexerStats *IndexerStats) (Slice, error) {
 	panic("Plasma is only supported in Enterprise Edition")
+}
+
+func deleteFreeWriters(instId common.IndexInstId) {
+	// do nothing
 }

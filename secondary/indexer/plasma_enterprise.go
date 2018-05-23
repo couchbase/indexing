@@ -17,7 +17,6 @@ import (
 )
 
 var errStorageCorrupted = fmt.Errorf("Storage corrupted and unrecoverable")
-var freeWriters tokens
 
 func NewPlasmaSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	idxInstId common.IndexInstId, partitionId common.PartitionId,
