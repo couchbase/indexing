@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -1825,20 +1826,57 @@ const (
 	ScanBufPoolSize = DEFAULT_MAX_SEC_KEY_LEN + MAX_DOCID_LEN + 2
 )
 
+const (
+	ScanQueue = "ScanQueue"
+)
+
+type ConCacheObj interface {
+	Free() bool
+}
+
 type ConnectionContext struct {
 	bufPool map[common.PartitionId]*common.BytesBufPool
+	cache   map[string]ConCacheObj
+	mutex   sync.RWMutex
 }
 
 func createConnectionContext() interface{} {
 	return &ConnectionContext{
 		bufPool: make(map[common.PartitionId]*common.BytesBufPool),
+		cache:   make(map[string]ConCacheObj),
 	}
 }
 
 func (c *ConnectionContext) GetBufPool(partitionId common.PartitionId) *common.BytesBufPool {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
 	if _, ok := c.bufPool[partitionId]; !ok {
 		c.bufPool[partitionId] = common.NewByteBufferPool(ScanBufPoolSize)
 	}
 
 	return c.bufPool[partitionId]
+}
+
+func (c *ConnectionContext) Get(id string) ConCacheObj {
+	c.mutex.RLock()
+	defer c.mutex.RUnlock()
+	return c.cache[id]
+}
+
+func (c *ConnectionContext) Put(id string, obj ConCacheObj) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	c.cache[id] = obj
+}
+
+func (c *ConnectionContext) ResetCache() {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	for key, obj := range c.cache {
+		if obj.Free() {
+			delete(c.cache, key)
+		}
+	}
 }

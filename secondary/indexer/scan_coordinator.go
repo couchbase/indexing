@@ -202,6 +202,15 @@ func (s *scanCoordinator) handleSupvervisorCommands(cmd Message) {
 func (s *scanCoordinator) serverCallback(protoReq interface{}, ctx interface{}, conn net.Conn,
 	cancelCh <-chan bool) {
 
+	if protoReq == queryport.Ping {
+		if ctx != nil {
+			if conCtx := ctx.(*ConnectionContext); conCtx != nil {
+				conCtx.ResetCache()
+			}
+		}
+		return
+	}
+
 	ttime := time.Now()
 
 	req, err := NewScanRequest(protoReq, ctx, cancelCh, s)
@@ -296,7 +305,6 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, ctx interface{}, 
 			ctx.Done()
 		}
 	}
-
 }
 
 func (s *scanCoordinator) processRequest(req *ScanRequest, w ScanResponseWriter,

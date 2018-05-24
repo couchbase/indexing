@@ -30,6 +30,8 @@ type request struct {
 	quitch chan bool
 }
 
+var Ping *request = &request{}
+
 func newRequest(r interface{}) (req request) {
 	req.r = r
 	req.quitch = make(chan bool)
@@ -160,8 +162,11 @@ func (s *Server) handleConnection(conn net.Conn) {
 	}
 
 	// start a receive routine.
+	killch := make(chan bool)
 	rcvch := make(chan request, s.streamChanSize)
-	go s.doReceive(conn, rcvch)
+
+	go s.doReceive(conn, rcvch, killch)
+	go s.doPing(rcvch, killch)
 
 	var ctx interface{}
 	if s.conb != nil {
@@ -170,13 +175,15 @@ func (s *Server) handleConnection(conn net.Conn) {
 
 	for req := range rcvch {
 		s.callb(req.r, ctx, conn, req.quitch) // blocking call
-		transport.SendResponseEnd(conn)
+		if req.r != Ping {
+			transport.SendResponseEnd(conn)
+		}
 	}
 }
 
 // receive requests from remote, when this function returns
 // the connection is expected to be closed.
-func (s *Server) doReceive(conn net.Conn, rcvch chan<- request) {
+func (s *Server) doReceive(conn net.Conn, rcvch chan<- request, killch chan bool) {
 	raddr := conn.RemoteAddr()
 
 	// transport buffer for receiving
@@ -215,5 +222,24 @@ loop:
 			rcvch <- currRequest
 		}
 	}
+
+	close(killch)
+}
+
+func (s *Server) doPing(rcvch chan<- request, killch chan bool) {
+
+	ticker := time.NewTicker(time.Minute * time.Duration(5))
+	defer ticker.Stop()
+
+loop2:
+	for {
+		select {
+		case <-ticker.C:
+			rcvch <- newRequest(Ping)
+		case <-killch:
+			break loop2
+		}
+	}
+
 	close(rcvch)
 }

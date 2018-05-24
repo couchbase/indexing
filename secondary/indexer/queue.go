@@ -25,6 +25,9 @@ type allocator struct {
 	count int64
 	head  int64
 	free  int64
+
+	//stats
+	numMalloc int64
 }
 
 type Row struct {
@@ -59,7 +62,7 @@ type Queue struct {
 //
 // Constructor
 //
-func NewQueue(size int64, limit int64, notifych chan bool, bufPool *common.BytesBufPool) *Queue {
+func NewQueue(size int64, limit int64, notifych chan bool, mem *allocator) *Queue {
 
 	rbuf := &Queue{}
 	rbuf.size = size
@@ -69,7 +72,7 @@ func NewQueue(size int64, limit int64, notifych chan bool, bufPool *common.Bytes
 	rbuf.enqch = make(chan bool, 1)
 	rbuf.deqch = make(chan bool, 1)
 	rbuf.donech = make(chan bool)
-	rbuf.mem = newAllocator(size, bufPool)
+	rbuf.mem = mem
 
 	for i, _ := range rbuf.buf {
 		rbuf.buf[i].init(rbuf.mem)
@@ -227,12 +230,14 @@ func (b *Queue) Free() {
 	for i := 0; i < int(b.size); i++ {
 		b.buf[i].freeKeyBuf()
 	}
-
-	b.mem.close()
 }
 
 func (b *Queue) GetBytesBuf() *common.BytesBufPool {
 	return b.mem.bufPool
+}
+
+func (b *Queue) GetAllocator() *allocator {
+	return b.mem
 }
 
 //-----------------------------
@@ -255,6 +260,7 @@ func (r *allocator) get() []byte {
 	count := atomic.LoadInt64(&r.count)
 
 	if count == 0 || r.size == 0 {
+		atomic.AddInt64(&r.numMalloc, 1)
 		bufPtr := r.bufPool.Get()
 		return (*bufPtr)[:0]
 	}
@@ -297,7 +303,7 @@ func (r *allocator) put(buf []byte) {
 	atomic.AddInt64(&r.count, 1)
 }
 
-func (r *allocator) close() {
+func (r *allocator) Free() bool {
 
 	for i := 0; i < int(r.size); i++ {
 		if r.unused[i] != nil {
@@ -305,6 +311,12 @@ func (r *allocator) close() {
 			r.unused[i] = nil
 		}
 	}
+
+	r.count = 0
+	r.free = 0
+	r.head = 0
+
+	return true
 }
 
 //-----------------------------
