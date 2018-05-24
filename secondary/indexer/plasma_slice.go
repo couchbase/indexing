@@ -228,6 +228,8 @@ func (slice *plasmaSlice) initStores() error {
 	cfg.LSSLogSegmentSize = int64(slice.sysconf["plasma.LSSSegmentFileSize"].Int())
 	cfg.UseCompression = slice.sysconf["plasma.useCompression"].Bool()
 	cfg.AutoSwapper = true
+	cfg.NumEvictorThreads = int(float32(runtime.NumCPU())*
+		float32(slice.sysconf["plasma.evictionCPUPercent"].Int())/(100) + 0.5)
 	cfg.DisableReadCaching = slice.sysconf["plasma.disableReadCaching"].Bool()
 	cfg.AutoMVCCPurging = slice.sysconf["plasma.purger.enabled"].Bool()
 	cfg.PurgerInterval = time.Duration(slice.sysconf["plasma.purger.interval"].Int()) * time.Second

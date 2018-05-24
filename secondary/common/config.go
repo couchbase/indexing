@@ -1009,6 +1009,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.plasma.evictionCPUPercent": ConfigValue{
+		50,
+		"Percentage of cpu used for plasma evictions",
+		50,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.plasma.LSSSegmentFileSize": ConfigValue{
 		plasmaLogSegSize(),
 		"LSS log segment maxsize per file",
