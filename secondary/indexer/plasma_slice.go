@@ -2274,7 +2274,9 @@ func (slice *plasmaSlice) expandWriters(needed int) {
 				slice.idxInstId, slice.idxPartnId, lastNumWriters, slice.numWriters,
 				len(slice.cmdCh)-slice.numWriters, slice.token.num())
 
-			slice.logSample(lastNumWriters)
+			if logging.IsEnabled(logging.Verbose) {
+				slice.logSample(lastNumWriters)
+			}
 		}
 	}
 }
@@ -2303,7 +2305,9 @@ func (slice *plasmaSlice) reduceWriters(needed int) {
 			slice.idxInstId, slice.idxPartnId, lastNumWriters, slice.numWriters,
 			len(slice.cmdCh)-slice.numWriters, slice.token.num())
 
-		slice.logSample(lastNumWriters)
+		if logging.IsEnabled(logging.Verbose) {
+			slice.logSample(lastNumWriters)
+		}
 	}
 }
 
@@ -2382,9 +2386,11 @@ func (slice *plasmaSlice) adjustNumWritersNeeded(needed int) int {
 	// number of writers to expand. Otherwise, it will keep reducing the number of writers until it can meet
 	// the minimum drain rate.
 	//
-	if slice.saturateCount >= slice.threshold {
-		return slice.numWriters - 1
-	}
+	/*
+		if slice.saturateCount >= slice.threshold {
+			return slice.numWriters - 1
+		}
+	*/
 
 	return needed
 }
