@@ -11,6 +11,7 @@ package indexer
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/pipeline"
@@ -71,13 +72,28 @@ func scanMultiple(request *ScanRequest, scan Scan, snapshots []SliceSnapshot, cb
 	queues := make([]*Queue, len(snapshots))
 	size, limit := queueSize(len(snapshots), sorted, config)
 	for i := 0; i < len(snapshots); i++ {
-		bufPool := request.connCtx.GetBufPool(getPartitionId(request, i))
-		queues[i] = NewQueue(int64(size), int64(limit), notifych, bufPool)
+		partitionId := getPartitionId(request, i)
+
+		var m *allocator
+		if v := request.connCtx.Get(fmt.Sprintf("%v%v", ScanQueue, partitionId)); v == nil {
+			bufPool := request.connCtx.GetBufPool(partitionId)
+			m = newAllocator(int64(size), bufPool)
+		} else {
+			m = v.(*allocator)
+		}
+
+		queues[i] = NewQueue(int64(size), int64(limit), notifych, m)
 	}
 	defer func() {
-		for _, queue := range queues {
+		for i, queue := range queues {
 			queue.Close()
 			queue.Free()
+
+			partitionId := getPartitionId(request, i)
+			if m := queue.GetAllocator(); m != nil {
+				//logging.Debugf("Free allocator %p partition id %v count %v malloc %v", m, partitionId, m.count, m.numMalloc)
+				request.connCtx.Put(fmt.Sprintf("%v%v", ScanQueue, partitionId), m)
+			}
 		}
 	}()
 
