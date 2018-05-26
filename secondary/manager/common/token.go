@@ -581,6 +581,13 @@ func (m *CommandListener) GetNewCreateTokens() map[string]*CreateCommandToken {
 	return nil
 }
 
+func (m *CommandListener) HasNewCreateTokens() bool {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
+	return len(m.createTokens) != 0
+}
+
 func (m *CommandListener) AddNewCreateToken(path string, token *CreateCommandToken) {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
