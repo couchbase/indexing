@@ -7,12 +7,16 @@ import (
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 	"github.com/couchbase/indexing/secondary/tests/framework/kvutility"
 	"github.com/couchbase/indexing/secondary/tests/framework/secondaryindex"
+	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
+
+const CORRUPT_DATA_SUBDIR = ".corruptData"
 
 func waitTillIndexBecomesActive(indexName, bucketName, indexManagementAddress string, timeout int) error {
 	ti := 0
@@ -406,5 +410,68 @@ func TestIdxCorruptMOITwoSnapsBothCorrupt(t *testing.T) {
 	if errRange == nil {
 		err = errors.New("Unexpected success of scan as index was corrupted")
 		FailTestIfError(err, "Error in scan of corrupt index", t)
+	}
+}
+
+func TestIdxCorruptBackup(t *testing.T) {
+	// Step 0: Enable backup
+	var err error
+	err = secondaryindex.ChangeIndexerSettings("indexer.settings.enable_corrupt_index_backup",
+		true, clusterconfig.Username, clusterconfig.Password, kvaddress)
+	tc.HandleError(err, "Error in ChangeIndexerSettings")
+
+	// Step 1: Create index
+	fmt.Println("Creating index ...")
+	err = secondaryindex.CreateSecondaryIndex2("corrupt_idx6_age", "default", indexManagementAddress,
+		"", []string{"age"}, []bool{false}, false, nil, c.SINGLE, nil, false, 60, nil)
+	FailTestIfError(err, "Error in creating the index", t)
+
+	hosts, errHosts := secondaryindex.GetIndexerNodesHttpAddresses(indexManagementAddress)
+	if len(hosts) > 1 {
+		errHosts = errors.New("Unexpected number of hosts")
+	}
+	FailTestIfError(errHosts, "Error in GetIndexerNodesHttpAddresses", t)
+	fmt.Println("hosts =", hosts)
+
+	indexStorageDir, errGetSetting := tc.GetIndexerSetting(hosts[0], "indexer.storage_dir")
+	FailTestIfError(errGetSetting, "Error in GetIndexerSetting", t)
+
+	strIndexStorageDir := fmt.Sprintf("%v", indexStorageDir)
+	absIndexStorageDir, err1 := filepath.Abs(strIndexStorageDir)
+	FailTestIfError(err1, "Error while finding absolute path", t)
+
+	var slicePath string
+	slicePath, err = tc.GetIndexSlicePath("corrupt_idx6_age", "default",
+		absIndexStorageDir, c.PartitionId(0))
+
+	// Step 2: Corrupt the index corrupt_idx3_age partition 10
+	err = secondaryindex.CorruptIndex("corrupt_idx6_age", "default", absIndexStorageDir,
+		clusterconfig.IndexUsing, 0)
+	FailTestIfError(err, "Error while corrupting the index", t)
+
+	// Step 3: Restart indexer process and wait for some time.
+	forceKillIndexer()
+
+	// Step 4: Verify that partition is cleaned up
+	err = verifyDeletedPath(slicePath)
+	FailTestIfError(err, "Error in verifyDeletedPath", t)
+
+	// Step 5: Verify that backup folder exists
+	corruptDataDir := filepath.Join(absIndexStorageDir, CORRUPT_DATA_SUBDIR)
+	files, err := ioutil.ReadDir(corruptDataDir)
+	FailTestIfError(err, "Error while ioutil.ReadDir(corruptDataDir)", t)
+
+	_, sliceP := filepath.Split(slicePath)
+
+	found := false
+	for _, f := range files {
+		if strings.HasSuffix(f.Name(), sliceP) {
+			found = true
+		}
+	}
+
+	if !found {
+		err = errors.New("Backup folder %v doesn't exist")
+		FailTestIfError(err, "Error while verifying backup folder existance", t)
 	}
 }

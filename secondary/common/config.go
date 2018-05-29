@@ -1958,6 +1958,20 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.settings.enable_corrupt_index_backup": ConfigValue{
+		false,
+		"When corrupted index is found, backup the corrupted index data files.",
+		false,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.settings.corrupt_index_num_backups": ConfigValue{
+		1,
+		"Number of corrupted index backups to be retained, per index.",
+		1,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.build.background.disable": ConfigValue{
 		false,
 		"Disable background index build, except during upgrade",

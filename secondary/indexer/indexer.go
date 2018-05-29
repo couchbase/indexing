@@ -77,6 +77,11 @@ var (
 	ErrBucketEphemeral          = errors.New("Ephemeral Buckets Must Use MOI Storage")
 )
 
+// Backup corrupt index data files
+const (
+	CORRUPT_DATA_SUBDIR = ".corruptData"
+)
+
 type indexer struct {
 	id    string
 	state common.IndexerState
@@ -4901,6 +4906,81 @@ func (idx *indexer) initFromPersistedState() (bool, error) {
 
 }
 
+// "move" the data files from original location to backup location.
+// return true if any error has occured during backup and cleanup is needed.
+// return false if "move" is successful and no need to cleanup data.
+func (idx *indexer) backupCorruptIndexDataFiles(indexInst *common.IndexInst,
+	partnId common.PartitionId, sliceId SliceId) (needsDataCleanup bool) {
+	logging.Infof("Indexer::backupCorruptIndexDataFiles %v %v take backup of corrupt data files",
+		indexInst.InstId, partnId)
+
+	if idx.config["settings.corrupt_index_num_backups"].Int() < 1 {
+		logging.Infof("Indexer::backupCorruptIndexDataFiles %v %v no need to backup as num backups is < 1",
+			indexInst.InstId, partnId)
+		needsDataCleanup = true
+		return
+	}
+
+	storageDir := idx.config["storage_dir"].String()
+	corruptDataDir := filepath.Join(storageDir, CORRUPT_DATA_SUBDIR)
+	if err := os.MkdirAll(corruptDataDir, 0755); err != nil {
+		logging.Errorf("Indexer::backupCorruptIndexDataFiles %v %v error %v while taking backup:MkdirAll %v",
+			indexInst.InstId, partnId, err, corruptDataDir)
+		needsDataCleanup = true
+		return
+	}
+
+	indexPath := IndexPath(indexInst, partnId, sliceId)
+
+	// delete old backups if any
+	deleteOldBackups := func() error {
+		files, err := ioutil.ReadDir(corruptDataDir)
+		if err != nil {
+			logging.Errorf("Indexer::backupCorruptIndexDataFiles %v %v error %v while taking backup:ReadDir %v",
+				indexInst.InstId, partnId, err, corruptDataDir)
+			return err
+		}
+
+		for _, f := range files {
+			if strings.HasSuffix(f.Name(), indexPath) {
+				fpath := filepath.Join(corruptDataDir, f.Name())
+				logging.Infof("Indexer::backupCorruptIndexDataFiles %v %v deleting path %v",
+					indexInst.InstId, partnId, fpath)
+				if err = os.RemoveAll(fpath); err != nil {
+					logging.Errorf("Indexer::backupCorruptIndexDataFiles %v %v error %v while removing old backup",
+						indexInst.InstId, partnId, err, corruptDataDir)
+					return err
+				}
+			}
+		}
+		return nil
+	}
+
+	if err := deleteOldBackups(); err != nil {
+		needsDataCleanup = true
+		return
+	}
+
+	srcPath := filepath.Join(storageDir, indexPath)
+	t := time.Now()
+	strTime := fmt.Sprintf("%d-%02d-%02dT%02d-%02d-%02d-%03d", t.Year(), t.Month(),
+		t.Day(), t.Hour(), t.Minute(), t.Second(), t.Nanosecond()/1000/1000)
+	destIndexPath := strTime + "_" + indexPath
+	destPath := filepath.Join(corruptDataDir, destIndexPath)
+
+	if err := os.Rename(srcPath, destPath); err != nil {
+		logging.Errorf("Indexer::backupCorruptIndexDataFiles %v %v error %v while taking backup:Rename(%v, %v)",
+			indexInst.InstId, partnId, err, srcPath, destPath)
+		needsDataCleanup = true
+		return
+	}
+
+	logging.Infof("Indexer::backupCorruptIndexDataFiles %v %v backup is stroed at %v",
+		indexInst.InstId, partnId, destPath)
+	needsDataCleanup = false
+	return
+}
+
 // Force cleanup on index partition.
 // This needs to be called only during bootstrap.
 func (idx *indexer) forceCleanupIndexPartition(indexInst *common.IndexInst,
@@ -4927,9 +5007,17 @@ func (idx *indexer) forceCleanupIndexPartition(indexInst *common.IndexInst,
 	logging.Infof("Indexer::forceCleanupIndexPartition Cleaning up data files for %v %v",
 		indexInst.InstId, partnId)
 
-	if err := idx.forceCleanupPartitionData(indexInst, partnId, SliceId(0)); err != nil {
-		logging.Infof("Indexer::forceCleanupIndexPartition Error (%v) in cleaning up data files for %v %v",
-			err, indexInst.InstId, partnId)
+	// backup the corrupt index data files, if enabled
+	needsDataCleanup := true
+	if idx.config["settings.enable_corrupt_index_backup"].Bool() {
+		needsDataCleanup = idx.backupCorruptIndexDataFiles(indexInst, partnId, SliceId(0))
+	}
+
+	if needsDataCleanup {
+		if err := idx.forceCleanupPartitionData(indexInst, partnId, SliceId(0)); err != nil {
+			logging.Infof("Indexer::forceCleanupIndexPartition Error (%v) in cleaning up data files for %v %v",
+				err, indexInst.InstId, partnId)
+		}
 	}
 
 	// cleanup partition internal data structure
