@@ -519,10 +519,7 @@ func (m *DDLServiceMgr) cleanupCreateCommand() {
 
 func (m *DDLServiceMgr) handleCreateCommand() {
 
-	entries := m.commandListener.GetNewCreateTokens()
-
-	// nothing to do
-	if len(entries) == 0 {
+	if !m.commandListener.HasNewCreateTokens() {
 		return
 	}
 
@@ -562,6 +559,13 @@ func (m *DDLServiceMgr) handleCreateCommand() {
 			}
 		}
 		return false, common.INDEX_STATE_NIL, common.INDEXER_ID_NIL
+	}
+
+	entries := m.commandListener.GetNewCreateTokens()
+
+	// nothing to do
+	if len(entries) == 0 {
+		return
 	}
 
 	retryList := make(map[string]*mc.CreateCommandToken)
