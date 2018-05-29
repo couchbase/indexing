@@ -833,19 +833,17 @@ func computeGroupAggr(compositekeys [][]byte, decodedkeys value.Values, count in
 		}
 	}
 
-	if !cachedEntry.Valid() || groupAggr.DependsOnPrimaryKey {
-		for i, gk := range groupAggr.Group {
-			err := computeGroupKey(groupAggr, gk, compositekeys, decodedkeys, docid, i, p)
-			if err != nil {
-				return err
-			}
+	for i, gk := range groupAggr.Group {
+		err := computeGroupKey(groupAggr, gk, compositekeys, decodedkeys, docid, i, p, cachedEntry.Valid())
+		if err != nil {
+			return err
 		}
+	}
 
-		for i, ak := range groupAggr.Aggrs {
-			err := computeAggrVal(groupAggr, ak, compositekeys, decodedkeys, docid, count, buf, i, p)
-			if err != nil {
-				return err
-			}
+	for i, ak := range groupAggr.Aggrs {
+		err := computeAggrVal(groupAggr, ak, compositekeys, decodedkeys, docid, count, buf, i, p, cachedEntry.Valid())
+		if err != nil {
+			return err
 		}
 	}
 
@@ -855,14 +853,14 @@ func computeGroupAggr(compositekeys [][]byte, decodedkeys value.Values, count in
 }
 
 func computeGroupKey(groupAggr *GroupAggr, gk *GroupKey, compositekeys [][]byte,
-	decodedkeys value.Values, docid []byte, pos int, p *ScanPipeline) error {
+	decodedkeys value.Values, docid []byte, pos int, p *ScanPipeline, cacheValid bool) error {
 
 	g := groupAggr.groups[pos]
 	if gk.KeyPos >= 0 {
 		g.raw = compositekeys[gk.KeyPos]
 		g.projectId = gk.EntryKeyId
 
-	} else {
+	} else if !cacheValid || groupAggr.DependsOnPrimaryKey {
 		var scalar value.Value
 		if gk.ExprValue != nil {
 			scalar = gk.ExprValue // It is a constant expression
@@ -883,7 +881,7 @@ func computeGroupKey(groupAggr *GroupAggr, gk *GroupKey, compositekeys [][]byte,
 
 func computeAggrVal(groupAggr *GroupAggr, ak *Aggregate,
 	compositekeys [][]byte, decodedkeys value.Values, docid []byte,
-	count int, buf []byte, pos int, p *ScanPipeline) error {
+	count int, buf []byte, pos int, p *ScanPipeline, cacheValid bool) error {
 
 	a := groupAggr.aggrs[pos]
 	if ak.KeyPos >= 0 {
@@ -892,7 +890,7 @@ func computeAggrVal(groupAggr *GroupAggr, ak *Aggregate,
 		} else {
 			a.raw = compositekeys[ak.KeyPos]
 		}
-	} else {
+	} else if !cacheValid || groupAggr.DependsOnPrimaryKey {
 		//process expr
 		var scalar value.Value
 		if ak.ExprValue != nil {
