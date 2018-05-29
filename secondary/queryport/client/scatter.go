@@ -1367,7 +1367,9 @@ func partitionKeyValues(requestId string, partnKeyPos []int, scans Scans) [][]in
 					if pos != MetaIdPos && reflect.DeepEqual(scan.Filter[pos].Low, scan.Filter[pos].High) {
 						partnKeyValues[scanPos] = append(partnKeyValues[scanPos], qvalue.NewValue(scan.Filter[pos].Low))
 
-					} else if pos == MetaIdPos && len(scan.Filter) == 1 {
+					} else if pos == MetaIdPos &&
+						len(scan.Filter) == 1 &&
+						reflect.DeepEqual(scan.Filter[0].Low, scan.Filter[0].High) {
 						// n1ql only push down span on primary key for metaId()
 						// it will not push down on expr on metaId()
 						partnKeyValues[scanPos] = append(partnKeyValues[scanPos], qvalue.NewValue(scan.Filter[0].Low))
@@ -1394,7 +1396,9 @@ func partitionKeyValues(requestId string, partnKeyPos []int, scans Scans) [][]in
 					if pos != MetaIdPos {
 						partnKeyValues[scanPos] = append(partnKeyValues[scanPos], qvalue.NewValue(scan.Seek[pos]))
 
-					} else if pos == MetaIdPos && len(scan.Filter) == 1 {
+					} else if pos == MetaIdPos &&
+						len(scan.Filter) == 1 &&
+						reflect.DeepEqual(scan.Filter[0].Low, scan.Filter[0].High) {
 						// n1ql only push down span on primary key for metaId()
 						// it will not push down on expr on metaId()
 						partnKeyValues[scanPos] = append(partnKeyValues[scanPos], qvalue.NewValue(scan.Seek[0]))
