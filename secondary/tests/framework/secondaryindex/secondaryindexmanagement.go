@@ -11,8 +11,6 @@ import (
 	"github.com/couchbase/query/parser/n1ql"
 	"io/ioutil"
 	"log"
-	"math/rand"
-	"os"
 	"path"
 	"path/filepath"
 	"time"
@@ -553,26 +551,15 @@ func corruptForestdbIndex(indexName, bucketName, dirPath string, partnId c.Parti
 	fpath := files[len(files)-1]
 	log.Printf("Corrupting index %v slicePath %v filepath %v", indexName, slicePath, fpath)
 
-	cwr, errOF := os.OpenFile(fpath, os.O_WRONLY, 0755)
-	if errOF != nil {
-		return errOF
+	fm, err := NewFDBFilemgr(fpath)
+	if err != nil {
+		return err
 	}
 
-	fi, errStat := cwr.Stat()
-	if errStat != nil {
-		return errStat
+	err = fm.CorruptForestdbFile()
+	if err != nil {
+		return err
 	}
-
-	sz := fi.Size()
-	asize := sz - 1024
-	if asize < 0 {
-		errors.New("Too small forestdb file")
-	}
-
-	b := make([]byte, asize)
-	rand.Read(b)
-	cwr.WriteAt(b, sz-asize)
-	cwr.Close()
 
 	return nil
 }
