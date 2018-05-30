@@ -17,6 +17,7 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/fdb"
 	"github.com/couchbase/indexing/secondary/logging"
+	"math"
 	"os"
 	"sort"
 	"sync"
@@ -454,14 +455,18 @@ func (s *storageMgr) flushDone(streamId common.StreamId, bucket string, indexIns
 		return false
 	}
 
-	if common.GetStorageMode() == common.PLASMA {
+	checkInterval := func() int64 {
 
-		duration := int64(s.config["plasma.writer.tuning.adjust.interval"].Int()) * int64(time.Millisecond)
 		if isInitial() {
-			duration = int64(time.Minute)
+			return int64(time.Minute)
 		}
 
-		if time.Now().UnixNano()-s.lastFlushDone > duration &&
+		return math.MaxInt64
+	}
+
+	if common.GetStorageMode() == common.PLASMA {
+
+		if time.Now().UnixNano()-s.lastFlushDone > checkInterval() &&
 			s.config["plasma.writer.tuning.enable"].Bool() {
 
 			var wg sync.WaitGroup
