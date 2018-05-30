@@ -1311,6 +1311,10 @@ func (mdb *plasmaSlice) NewSnapshot(ts *common.TsVbuuid, commit bool) (SnapshotI
 
 func (mdb *plasmaSlice) FlushDone() {
 
+	if !mdb.enableWriterTuning {
+		return
+	}
+
 	mdb.waitPersist()
 
 	qc := atomic.LoadInt64(&mdb.qCount)

@@ -59,6 +59,8 @@ type storageMgr struct {
 	stats IndexerStatsHolder
 
 	muSnap sync.Mutex //lock to protect snapMap and waitersMap
+
+	lastFlushDone int64
 }
 
 type IndexSnapMap map[common.IndexInstId]IndexSnapshot
@@ -423,6 +425,7 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, bucket strin
 	}
 
 	wg.Wait()
+	s.lastFlushDone = time.Now().UnixNano()
 
 	s.supvRespch <- &MsgMutMgrFlushDone{mType: STORAGE_SNAP_DONE,
 		streamId: streamId,
@@ -435,29 +438,56 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, bucket strin
 func (s *storageMgr) flushDone(streamId common.StreamId, bucket string, indexInstMap common.IndexInstMap, indexPartnMap IndexPartnMap,
 	tsVbuuid *common.TsVbuuid, flushWasAborted bool) {
 
-	if common.GetStorageMode() == common.PLASMA {
-		var wg sync.WaitGroup
-
-		for idxInstId, partnMap := range indexPartnMap {
-			wg.Add(1)
-			go func(idxInstId common.IndexInstId, partnMap PartitionInstMap) {
-				defer wg.Done()
-
-				idxInst := indexInstMap[idxInstId]
-				if idxInst.Defn.Bucket == bucket &&
-					idxInst.Stream == streamId &&
-					idxInst.State != common.INDEX_STATE_DELETED {
-
-					for _, partnInst := range partnMap {
-						for _, slice := range partnInst.Sc.GetAllSlices() {
-							slice.FlushDone()
-						}
-					}
-				}
-			}(idxInstId, partnMap)
+	isInitial := func() bool {
+		if streamId == common.INIT_STREAM {
+			return true
 		}
 
-		wg.Wait()
+		for _, inst := range indexInstMap {
+			if inst.Stream == streamId &&
+				inst.Defn.Bucket == bucket &&
+				(inst.State == common.INDEX_STATE_INITIAL || inst.State == common.INDEX_STATE_CATCHUP) {
+				return true
+			}
+		}
+
+		return false
+	}
+
+	if common.GetStorageMode() == common.PLASMA {
+
+		duration := int64(s.config["plasma.writer.tuning.adjust.interval"].Int()) * int64(time.Millisecond)
+		if isInitial() {
+			duration = int64(time.Minute)
+		}
+
+		if time.Now().UnixNano()-s.lastFlushDone > duration &&
+			s.config["plasma.writer.tuning.enable"].Bool() {
+
+			var wg sync.WaitGroup
+
+			for idxInstId, partnMap := range indexPartnMap {
+				wg.Add(1)
+				go func(idxInstId common.IndexInstId, partnMap PartitionInstMap) {
+					defer wg.Done()
+
+					idxInst := indexInstMap[idxInstId]
+					if idxInst.Defn.Bucket == bucket &&
+						idxInst.Stream == streamId &&
+						idxInst.State != common.INDEX_STATE_DELETED {
+
+						for _, partnInst := range partnMap {
+							for _, slice := range partnInst.Sc.GetAllSlices() {
+								slice.FlushDone()
+							}
+						}
+					}
+				}(idxInstId, partnMap)
+			}
+
+			wg.Wait()
+			s.lastFlushDone = time.Now().UnixNano()
+		}
 	}
 
 	s.supvRespch <- &MsgMutMgrFlushDone{
