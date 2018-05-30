@@ -702,7 +702,8 @@ func CreateIndexDDL(solution *Solution) string {
 		}
 		index.Instance.Defn.Deferred = true
 
-		stmt := common.IndexStatement(index.Instance.Defn, true) + ";\n"
+		numPartitions := index.Instance.Pc.GetNumPartitions()
+		stmt := common.IndexStatement(index.Instance.Defn, numPartitions, true) + ";\n"
 
 		stmts += stmt
 	}
