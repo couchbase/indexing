@@ -17,6 +17,7 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/fdb"
 	"github.com/couchbase/indexing/secondary/logging"
+	"math"
 	"os"
 	"sort"
 	"sync"
@@ -59,6 +60,8 @@ type storageMgr struct {
 	stats IndexerStatsHolder
 
 	muSnap sync.Mutex //lock to protect snapMap and waitersMap
+
+	lastFlushDone int64
 }
 
 type IndexSnapMap map[common.IndexInstId]IndexSnapshot
@@ -423,6 +426,7 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, bucket strin
 	}
 
 	wg.Wait()
+	s.lastFlushDone = time.Now().UnixNano()
 
 	s.supvRespch <- &MsgMutMgrFlushDone{mType: STORAGE_SNAP_DONE,
 		streamId: streamId,
@@ -435,29 +439,60 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, bucket strin
 func (s *storageMgr) flushDone(streamId common.StreamId, bucket string, indexInstMap common.IndexInstMap, indexPartnMap IndexPartnMap,
 	tsVbuuid *common.TsVbuuid, flushWasAborted bool) {
 
-	if common.GetStorageMode() == common.PLASMA {
-		var wg sync.WaitGroup
-
-		for idxInstId, partnMap := range indexPartnMap {
-			wg.Add(1)
-			go func(idxInstId common.IndexInstId, partnMap PartitionInstMap) {
-				defer wg.Done()
-
-				idxInst := indexInstMap[idxInstId]
-				if idxInst.Defn.Bucket == bucket &&
-					idxInst.Stream == streamId &&
-					idxInst.State != common.INDEX_STATE_DELETED {
-
-					for _, partnInst := range partnMap {
-						for _, slice := range partnInst.Sc.GetAllSlices() {
-							slice.FlushDone()
-						}
-					}
-				}
-			}(idxInstId, partnMap)
+	isInitial := func() bool {
+		if streamId == common.INIT_STREAM {
+			return true
 		}
 
-		wg.Wait()
+		for _, inst := range indexInstMap {
+			if inst.Stream == streamId &&
+				inst.Defn.Bucket == bucket &&
+				(inst.State == common.INDEX_STATE_INITIAL || inst.State == common.INDEX_STATE_CATCHUP) {
+				return true
+			}
+		}
+
+		return false
+	}
+
+	checkInterval := func() int64 {
+
+		if isInitial() {
+			return int64(time.Minute)
+		}
+
+		return math.MaxInt64
+	}
+
+	if common.GetStorageMode() == common.PLASMA {
+
+		if time.Now().UnixNano()-s.lastFlushDone > checkInterval() &&
+			s.config["plasma.writer.tuning.enable"].Bool() {
+
+			var wg sync.WaitGroup
+
+			for idxInstId, partnMap := range indexPartnMap {
+				wg.Add(1)
+				go func(idxInstId common.IndexInstId, partnMap PartitionInstMap) {
+					defer wg.Done()
+
+					idxInst := indexInstMap[idxInstId]
+					if idxInst.Defn.Bucket == bucket &&
+						idxInst.Stream == streamId &&
+						idxInst.State != common.INDEX_STATE_DELETED {
+
+						for _, partnInst := range partnMap {
+							for _, slice := range partnInst.Sc.GetAllSlices() {
+								slice.FlushDone()
+							}
+						}
+					}
+				}(idxInstId, partnMap)
+			}
+
+			wg.Wait()
+			s.lastFlushDone = time.Now().UnixNano()
+		}
 	}
 
 	s.supvRespch <- &MsgMutMgrFlushDone{

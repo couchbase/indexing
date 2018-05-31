@@ -329,6 +329,14 @@ func (worker *VbucketWorker) updateEndpoints(
 var traceMutFormat = "%v ##%x DcpEvent %v:%v <<%v>>\n"
 
 func (worker *VbucketWorker) handleEvent(m *mc.DcpEvent) *Vbucket {
+
+	defer func() {
+		if r := recover(); r != nil {
+			logging.Fatalf("VbucketWorker.handleEvent key = %v value = %v", logging.TagStrUD(m.Key), logging.TagStrUD(m.Value))
+			panic(r)
+		}
+	}()
+
 	vbno := m.VBucket
 	v, vbok := worker.vbuckets[vbno]
 	logPrefix := worker.logPrefix
