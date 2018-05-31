@@ -2638,19 +2638,17 @@ func isValidIndexInst(inst *InstanceDefn) bool {
 //
 // This function return true if the index instance has all the partitions
 //
-func isWellFormed(inst *InstanceDefn) bool {
+func isWellFormed(defn *c.IndexDefn, inst *InstanceDefn) bool {
 
-	if len(inst.IndexerId) == 1 {
+	if !c.IsPartitioned(defn.PartitionScheme) {
 		for partnId, _ := range inst.IndexerId {
 			if partnId != c.NON_PARTITION_ID {
 				return false
 			}
 		}
-	} else if len(inst.IndexerId) != int(inst.NumPartitions) {
-		return false
 	}
 
-	return true
+	return len(inst.IndexerId) == int(inst.NumPartitions)
 }
 
 ///////////////////////////////////////////////////////
@@ -2936,10 +2934,10 @@ func (r *metadataRepo) hasDefnIgnoreStatus(indexerId c.IndexerId, defnId c.Index
 // Only Consider instance with Active RState and full partitions
 func (r *metadataRepo) hasWellFormedInstMatchingStatusNoLock(defnId c.IndexDefnId, status []c.IndexState) bool {
 
-	if meta, ok := r.indices[defnId]; ok && meta != nil && len(meta.Instances) != 0 {
+	if meta, ok := r.indices[defnId]; ok && meta != nil && meta.Definition != nil && len(meta.Instances) != 0 {
 		for _, s := range status {
 			for _, inst := range meta.Instances {
-				if inst.State == s && isWellFormed(inst) {
+				if inst.State == s && isWellFormed(meta.Definition, inst) {
 					return true
 				}
 			}

@@ -1136,7 +1136,7 @@ func indexUsageFromSpec(sizing SizingMethod, spec *IndexSpec) ([]*IndexUsage, er
 	}
 
 	var startPartnId int
-	if spec.NumPartition > 1 {
+	if common.IsPartitioned(common.PartitionScheme(spec.PartitionScheme)) {
 		startPartnId = 1
 	}
 
