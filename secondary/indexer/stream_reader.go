@@ -798,7 +798,7 @@ func (w *streamWorker) checkAndSetBucketFilter(meta *MutationMeta) (bool, bool) 
 		if uint64(meta.seqno) < filter.Snapshots[meta.vbucket][0] ||
 			uint64(meta.seqno) > filter.Snapshots[meta.vbucket][1] {
 
-			logging.Warnf("MutationStreamReader::checkAndSetBucketFilter Out-of-bound Seqno. "+
+			logging.Debugf("MutationStreamReader::checkAndSetBucketFilter Out-of-bound Seqno. "+
 				"Snapshot %v-%v for vb %v %v %v. New seqno %v vbuuid %v.  Current Seqno %v vbuuid %v",
 				filter.Snapshots[meta.vbucket][0], filter.Snapshots[meta.vbucket][1],
 				meta.vbucket, meta.bucket, w.streamId,
