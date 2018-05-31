@@ -2373,9 +2373,21 @@ func (slice *plasmaSlice) adjustNumWritersNeeded(needed int) int {
 		}
 	}
 
-	// do not allow expansion when memory is full
-	if slice.memoryFull() && needed > slice.numWriters {
+	// do not allow expansion when reaching minimum memory
+	if slice.minimumMemory() && needed > slice.numWriters {
 		return slice.numWriters
+	}
+
+	// limit writer when memory is 95% full
+	if slice.memoryFull() &&
+		needed > slice.numWriters &&
+		needed > slice.numWritersPerPartition() {
+
+		if slice.numWriters > slice.numWritersPerPartition() {
+			return slice.numWriters
+		}
+
+		return slice.numWritersPerPartition()
 	}
 
 	// There are different situations where drain rate goes down and cannot meet minimum requiremnts:
@@ -2666,7 +2678,15 @@ func (slice *plasmaSlice) memoryUsed() float64 {
 //
 func (slice *plasmaSlice) memoryFull() bool {
 
-	return (float64(slice.memoryAvail()) < float64(slice.memoryLimit())*0.1)
+	return (float64(slice.memoryAvail()) < float64(slice.memoryLimit())*0.05)
+}
+
+//
+// minimum memory  (10M)
+//
+func (slice *plasmaSlice) minimumMemory() bool {
+
+	return (float64(slice.memoryAvail()) <= float64(20*1024*1024))
 }
 
 ////////////////////////////////////////////////////////////
