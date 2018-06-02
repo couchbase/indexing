@@ -768,9 +768,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.numPartitions": ConfigValue{
-		16,
+		8,
 		"Number of vbuckets",
-		16,
+		8,
 		true,  // immutable
 		false, // case-insensitive
 	},
