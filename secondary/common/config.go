@@ -1164,9 +1164,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.plasma.writer.tuning.enable": ConfigValue{
-		true,
+		false,
 		"Tune number of writers dynamically",
-		true,
+		false,
 		false, // mutable
 		false, // case-insensitive
 	},
