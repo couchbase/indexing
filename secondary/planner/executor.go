@@ -182,12 +182,18 @@ func ExecuteRebalanceInternal(clusterUrl string,
 		return nil, err
 	}
 
-	return genTransferToken(p.Result, masterId, topologyChange)
+	return genTransferToken(p.Result, masterId, topologyChange, deleteNodes)
 }
 
-func genTransferToken(solution *Solution, masterId string, topologyChange service.TopologyChange) (map[string]*common.TransferToken, error) {
+func genTransferToken(solution *Solution, masterId string, topologyChange service.TopologyChange,
+	deleteNodes []string) (map[string]*common.TransferToken, error) {
 
 	tokens := make(map[string]*common.TransferToken)
+
+	if len(deleteNodes) == 0 && !solution.hasNewNodes() {
+		logging.Infof("Planner: No new indexer node or deleted indexer node.  Skip rebalance")
+		return tokens, nil
+	}
 
 	for _, indexer := range solution.Placement {
 		for _, index := range indexer.Indexes {
