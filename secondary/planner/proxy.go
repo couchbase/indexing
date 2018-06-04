@@ -157,7 +157,7 @@ func getIndexLayout(clusterUrl string, config common.Config, hosts []string) ([]
 		if len(hosts) != 0 {
 			found := false
 			for _, host := range hosts {
-				if host == node.NodeId {
+				if strings.ToLower(host) == strings.ToLower(node.NodeId) {
 					found = true
 				}
 			}
