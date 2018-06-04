@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"math/rand"
 )
 
 const CORRUPT_DATA_SUBDIR = ".corruptData"
@@ -168,15 +169,15 @@ func TestIdxCorruptPartitionedIndex(t *testing.T) {
 	numPartns, err := strconv.Atoi(numPartnsStr)
 	FailTestIfError(err, "Error while Atoi", t)
 
-	if int(numPartns) != 16 {
-		err = errors.New("Test case not implemeted for numPartns != 16")
-		FailTestIfError(err, "Error : Unsupported number of partitions", t)
+	if int(numPartns) <= 1 {
+		return
 	}
 
 	// Get slice paths for all partitions
 	slicePaths := make(map[int]string)
-	partnToCorrupt := c.PartitionId(10)
-	for i := 1; i <= 16; i++ {
+	partnToCorrupt := c.PartitionId(rand.Intn(int(numPartns)) + 1)
+	fmt.Println("Corrupting partn id", partnToCorrupt)
+	for i := 1; i <= int(numPartns); i++ {
 		fmt.Println("Getting slicepath for ", i)
 		slicePaths[i], err = tc.GetIndexSlicePath("corrupt_idx3_age", "default",
 			absIndexStorageDir, c.PartitionId(i))
@@ -217,7 +218,7 @@ func TestIdxCorruptPartitionedIndex(t *testing.T) {
 	}
 
 	// Step 7: corrupt all remaining partitions
-	for i := 1; i <= 16; i++ {
+	for i := 1; i <= int(numPartns); i++ {
 		if c.PartitionId(i) == partnToCorrupt {
 			fmt.Println("Skip corrupting partition", i)
 			continue
@@ -240,7 +241,7 @@ func TestIdxCorruptPartitionedIndex(t *testing.T) {
 	}
 
 	// Step 10: Validate all slice paths are deleted.
-	for i := 1; i <= 16; i++ {
+	for i := 1; i <= int(numPartns); i++ {
 		err = verifyDeletedPath(slicePaths[i])
 		FailTestIfError(err, "Error in verifyDeletedPath", t)
 	}

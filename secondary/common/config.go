@@ -768,9 +768,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.numPartitions": ConfigValue{
-		16,
+		8,
 		"Number of vbuckets",
-		16,
+		8,
 		true,  // immutable
 		false, // case-insensitive
 	},
@@ -1164,9 +1164,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.plasma.writer.tuning.enable": ConfigValue{
-		true,
+		false,
 		"Tune number of writers dynamically",
-		true,
+		false,
 		false, // mutable
 		false, // case-insensitive
 	},
@@ -1980,16 +1980,16 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.scan.queue_size": ConfigValue{
-		100,
+		20,
 		"When performing scan scattering in indexer, specify the queue size for the scatterer.",
-		100,
+		20,
 		false, // mutable
 		false, // case-insensitive
 	},
 	"indexer.scan.notify_count": ConfigValue{
-		30,
+		5,
 		"When performing scan scattering in indexer, specify the minimum item count in queue before notifying gatherer on new item arrival.",
-		30,
+		5,
 		false, // mutable
 		false, // case-insensitive
 	},
