@@ -8,13 +8,13 @@ import (
 	"github.com/couchbase/indexing/secondary/tests/framework/kvutility"
 	"github.com/couchbase/indexing/secondary/tests/framework/secondaryindex"
 	"io/ioutil"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
-	"math/rand"
 )
 
 const CORRUPT_DATA_SUBDIR = ".corruptData"
@@ -60,6 +60,19 @@ func verifyDeletedPath(Pth string) error {
 	return nil
 }
 
+func verifyPathExists(Pth string) (bool, error) {
+	_, errStat := os.Stat(Pth)
+	if errStat == nil {
+		return true, nil
+	}
+
+	if os.IsNotExist(errStat) {
+		return false, nil
+	}
+
+	return false, errStat
+}
+
 func forceKillIndexer() {
 	// restart the indexer
 	fmt.Println("Restarting indexer process ...")
@@ -93,12 +106,18 @@ func TestIdxCorruptBasicSanityMultipleIndices(t *testing.T) {
 	FailTestIfError(errHosts, "Error in GetIndexerNodesHttpAddresses", t)
 	fmt.Println("hosts =", hosts)
 
-	indexStorageDir, errGetSetting := tc.GetIndexerSetting(hosts[0], "indexer.storage_dir")
+	indexStorageDir, errGetSetting := tc.GetIndexerSetting(hosts[0], "indexer.storage_dir",
+		clusterconfig.Username, clusterconfig.Password)
 	FailTestIfError(errGetSetting, "Error in GetIndexerSetting", t)
 
 	strIndexStorageDir := fmt.Sprintf("%v", indexStorageDir)
 	absIndexStorageDir, err1 := filepath.Abs(strIndexStorageDir)
 	FailTestIfError(err1, "Error while finding absolute path", t)
+
+	ok, _ := verifyPathExists(absIndexStorageDir)
+	if !ok {
+		return
+	}
 
 	var slicePath string
 	slicePath, err = tc.GetIndexSlicePath("corrupt_idx1_age", "default", absIndexStorageDir, 0)
@@ -153,14 +172,21 @@ func TestIdxCorruptPartitionedIndex(t *testing.T) {
 	FailTestIfError(errHosts, "Error in GetIndexerNodesHttpAddresses", t)
 	fmt.Println("hosts =", hosts)
 
-	indexStorageDir, errGetSetting := tc.GetIndexerSetting(hosts[0], "indexer.storage_dir")
+	indexStorageDir, errGetSetting := tc.GetIndexerSetting(hosts[0], "indexer.storage_dir",
+		clusterconfig.Username, clusterconfig.Password)
 	FailTestIfError(errGetSetting, "Error in GetIndexerSetting", t)
 
 	strIndexStorageDir := fmt.Sprintf("%v", indexStorageDir)
 	absIndexStorageDir, err1 := filepath.Abs(strIndexStorageDir)
 	FailTestIfError(err1, "Error while finding absolute path", t)
 
-	numPartnsIf, errGetNumPartn := tc.GetIndexerSetting(hosts[0], "indexer.numPartitions")
+	ok, _ := verifyPathExists(absIndexStorageDir)
+	if !ok {
+		return
+	}
+
+	numPartnsIf, errGetNumPartn := tc.GetIndexerSetting(hosts[0], "indexer.numPartitions",
+		clusterconfig.Username, clusterconfig.Password)
 	FailTestIfError(errGetNumPartn, "Error in errGetNumPartn", t)
 
 	fmt.Println("indexer.numPartitions =", numPartnsIf)
@@ -272,12 +298,18 @@ func TestIdxCorruptMOITwoSnapsOneCorrupt(t *testing.T) {
 	FailTestIfError(errHosts, "Error in GetIndexerNodesHttpAddresses", t)
 	fmt.Println("hosts =", hosts)
 
-	indexStorageDir, errGetSetting := tc.GetIndexerSetting(hosts[0], "indexer.storage_dir")
+	indexStorageDir, errGetSetting := tc.GetIndexerSetting(hosts[0], "indexer.storage_dir",
+		clusterconfig.Username, clusterconfig.Password)
 	FailTestIfError(errGetSetting, "Error in GetIndexerSetting", t)
 
 	strIndexStorageDir := fmt.Sprintf("%v", indexStorageDir)
 	absIndexStorageDir, err1 := filepath.Abs(strIndexStorageDir)
 	FailTestIfError(err1, "Error while finding absolute path", t)
+
+	ok, _ := verifyPathExists(absIndexStorageDir)
+	if !ok {
+		return
+	}
 
 	var slicePath string
 	slicePath, err = tc.GetIndexSlicePath("corrupt_idx4_age", "default", absIndexStorageDir, 0)
@@ -353,12 +385,18 @@ func TestIdxCorruptMOITwoSnapsBothCorrupt(t *testing.T) {
 	FailTestIfError(errHosts, "Error in GetIndexerNodesHttpAddresses", t)
 	fmt.Println("hosts =", hosts)
 
-	indexStorageDir, errGetSetting := tc.GetIndexerSetting(hosts[0], "indexer.storage_dir")
+	indexStorageDir, errGetSetting := tc.GetIndexerSetting(hosts[0], "indexer.storage_dir",
+		clusterconfig.Username, clusterconfig.Password)
 	FailTestIfError(errGetSetting, "Error in GetIndexerSetting", t)
 
 	strIndexStorageDir := fmt.Sprintf("%v", indexStorageDir)
 	absIndexStorageDir, err1 := filepath.Abs(strIndexStorageDir)
 	FailTestIfError(err1, "Error while finding absolute path", t)
+
+	ok, _ := verifyPathExists(absIndexStorageDir)
+	if !ok {
+		return
+	}
 
 	var slicePath string
 	slicePath, err = tc.GetIndexSlicePath("corrupt_idx5_name", "default", absIndexStorageDir, 0)
@@ -434,12 +472,18 @@ func TestIdxCorruptBackup(t *testing.T) {
 	FailTestIfError(errHosts, "Error in GetIndexerNodesHttpAddresses", t)
 	fmt.Println("hosts =", hosts)
 
-	indexStorageDir, errGetSetting := tc.GetIndexerSetting(hosts[0], "indexer.storage_dir")
+	indexStorageDir, errGetSetting := tc.GetIndexerSetting(hosts[0], "indexer.storage_dir",
+		clusterconfig.Username, clusterconfig.Password)
 	FailTestIfError(errGetSetting, "Error in GetIndexerSetting", t)
 
 	strIndexStorageDir := fmt.Sprintf("%v", indexStorageDir)
 	absIndexStorageDir, err1 := filepath.Abs(strIndexStorageDir)
 	FailTestIfError(err1, "Error while finding absolute path", t)
+
+	ok, _ := verifyPathExists(absIndexStorageDir)
+	if !ok {
+		return
+	}
 
 	var slicePath string
 	slicePath, err = tc.GetIndexSlicePath("corrupt_idx6_age", "default",

@@ -290,7 +290,7 @@ func GetMOILatestSnapshotPath(indexName, bucketName, dirPath string,
 	return files[len(files)-1], nil
 }
 
-func GetIndexerSetting(indexerAddr string, setting string) (interface{}, error) {
+func GetIndexerSetting(indexerAddr, setting, username, password string) (interface{}, error) {
 	var err error
 
 	addr := fmt.Sprintf("http://%v/settings?internal=ok", indexerAddr)
@@ -299,7 +299,7 @@ func GetIndexerSetting(indexerAddr string, setting string) (interface{}, error) 
 		return nil, errNR
 	}
 
-	req.SetBasicAuth("Administrator", "asdasd")
+	req.SetBasicAuth(username, password)
 
 	resp, errResp := http.DefaultClient.Do(req)
 	if errResp != nil {
