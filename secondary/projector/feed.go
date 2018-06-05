@@ -1245,6 +1245,20 @@ func (feed *Feed) cleanupBucket(bucketn string, enginesOk bool) {
 	// close upstream
 	feeder, ok := feed.feeders[bucketn]
 	if ok {
+		// drain the .C channel until it gets closed or if this feed
+		// happends to get closed.
+		go func(C <-chan *mc.DcpEvent, finch chan bool) {
+			for {
+				select {
+				case _, ok := <-C:
+					if ok == false {
+						return
+					}
+				case <-finch:
+					return
+				}
+			}
+		}(feeder.GetChannel(), feed.finch)
 		feeder.CloseFeed()
 	}
 	delete(feed.feeders, bucketn) // :SideEffect:
