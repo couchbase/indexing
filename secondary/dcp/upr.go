@@ -166,7 +166,9 @@ func (b *Bucket) StartDcpFeedOver(
 	feed.activeVbOnly = config["activeVbOnly"].(bool)
 
 	feed.C = feed.output
-	if feed.connectToNodes(kvaddrs, opaque, flags, config) != nil {
+	if err := feed.connectToNodes(kvaddrs, opaque, flags, config); err != nil {
+		logging.Errorf("%v ##%x Bucket::StartDcpFeedOver : error %v in connectToNodes",
+			feed.logPrefix, opaque, err)
 		return nil, ErrorInvalidBucket
 	}
 	go feed.genServer(feed.reqch, opaque)
@@ -335,6 +337,8 @@ func (feed *DcpFeed) connectToNodes(
 				for _, singleFeed := range nodeFeeds {
 					singleFeed.dcpFeed.Close()
 				}
+				fmsg := "%v ##%x DcpFeed::connectToNodes StartDcpFeed failed for %v with err %v\n"
+				logging.Errorf(fmsg, prefix, opaque, feedname, err)
 				return memcached.ErrorInvalidFeed
 			}
 			// add the node to the connection map
