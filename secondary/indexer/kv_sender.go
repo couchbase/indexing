@@ -256,6 +256,11 @@ func (k *kvSender) openMutationStream(streamId c.StreamId, indexInstList []c.Ind
 		return
 	}
 
+	numVbuckets := k.config["numVbuckets"].Int()
+	if len(vbnos) != numVbuckets {
+		logging.Warnf("KVSender::openMutationStream mismatch in number of configured vbuckets. conf %v actual %v", numVbuckets, vbnos)
+	}
+
 	restartTsList, err := k.makeRestartTsForVbs(bucket, restartTs, vbnos)
 	if err != nil {
 		logging.Errorf("KVSender::openMutationStream %v %v Error making restart ts %v",
@@ -286,11 +291,11 @@ func (k *kvSender) openMutationStream(streamId c.StreamId, indexInstList []c.Ind
 					err = ret
 				} else {
 					activeTs = updateActiveTsFromResponse(bucket, activeTs, res)
+					rollbackTs = updateRollbackTsFromResponse(bucket, rollbackTs, res)
 					if rollbackTs != nil {
 						logging.Infof("KVSender::openMutationStream %v %v Projector %v Rollback Received %v",
 							streamId, bucket, addr, rollbackTs)
 					}
-					rollbackTs = updateRollbackTsFromResponse(bucket, rollbackTs, res)
 				}
 			}, stopCh)
 		}
@@ -322,9 +327,9 @@ func (k *kvSender) openMutationStream(streamId c.StreamId, indexInstList []c.Ind
 
 	if rollbackTs != nil {
 		//convert from protobuf to native format
-		numVbuckets := k.config["numVbuckets"].Int()
 		var nativeTs *c.TsVbuuid
 		if restartTsList != nil {
+			logging.Infof("KVSender::openMutationStream restartTsList %v", restartTsList)
 			nativeTs = restartTsList.Union(rollbackTs).ToTsVbuuid(numVbuckets)
 		} else {
 			nativeTs = rollbackTs.ToTsVbuuid(numVbuckets)
@@ -341,7 +346,6 @@ func (k *kvSender) openMutationStream(streamId c.StreamId, indexInstList []c.Ind
 				severity: FATAL,
 				cause:    err}}
 	} else {
-		numVbuckets := k.config["numVbuckets"].Int()
 		respCh <- &MsgSuccessOpenStream{activeTs: activeTs.ToTsVbuuid(numVbuckets)}
 	}
 }
