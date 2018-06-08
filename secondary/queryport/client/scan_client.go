@@ -67,7 +67,7 @@ func NewGsiScanClient(queryport string, config common.Config) (*GsiScanClient, e
 		atomic.StoreUint32(&c.serverVersion, version)
 	} else {
 		c.pool.Close()
-		return nil, fmt.Errorf("%s: unable to obtain server version", queryport)
+		return nil, fmt.Errorf("%s: unable to obtain server version. Error = %v", queryport, err)
 	}
 
 	return c, nil
