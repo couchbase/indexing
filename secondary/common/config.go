@@ -1206,9 +1206,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.plasma.memtuner.maxFreeMemory": ConfigValue{
-		1024 * 1024 * 1024 * 10,
+		1024 * 1024 * 1024 * 8,
 		"Max free memory",
-		1024 * 1024 * 1024 * 10,
+		1024 * 1024 * 1024 * 8,
 		false,
 		false,
 	},
