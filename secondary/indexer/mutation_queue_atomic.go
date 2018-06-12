@@ -186,6 +186,15 @@ func (q *atomicMutationQueue) DequeueUptoSeqno(vbucket Vbucket, seqno Seqno) (
 func (q *atomicMutationQueue) dequeueUptoSeqno(vbucket Vbucket, seqno Seqno,
 	datach chan *MutationKeys, errch chan bool) {
 
+	defer func() {
+		if r := recover(); r != nil {
+			head := (*node)(atomic.LoadPointer(&q.head[vbucket]))
+			m := head.next.mutation
+			logging.Fatalf("MutationQueue - panic detected mutation %v vb %v seqno %v", m, vbucket, seqno)
+			panic(r)
+		}
+	}()
+
 	var dequeueSeq Seqno
 	var totalWait int
 
