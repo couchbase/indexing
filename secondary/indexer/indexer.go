@@ -2152,6 +2152,7 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 	go func(reqLock *kvRequest) {
 		defer idx.releaseStreamRequestLock(reqLock)
 		idx.waitStreamRequestLock(reqLock)
+		count := 0
 
 	retryloop:
 		for {
@@ -2198,6 +2199,7 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 				default:
 					//log and retry for all other responses
 					respErr := resp.(*MsgError).GetError()
+					count++
 
 					state := idx.getStreamBucketState(buildStream, bucket)
 
@@ -2213,10 +2215,23 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 
 						break retryloop
 
+					} else if count > MAX_PROJ_RETRY {
+						// Start recovery if max retries has reached. If the projector
+						// state is not correct, this ensures projector state will get cleaned up.
+						logging.Errorf("Indexer::sendStreamUpdateForBuildIndex Stream %v Bucket %v "+
+							"Error from Projector %v. Start recovery after %v retries.", buildStream,
+							bucket, respErr.cause, MAX_PROJ_RETRY)
+
+						idx.internalRecvCh <- &MsgRecovery{
+							mType:    INDEXER_INIT_PREP_RECOVERY,
+							streamId: buildStream,
+							bucket:   bucket,
+						}
+						break retryloop
 					} else {
 						logging.Errorf("Indexer::sendStreamUpdateForBuildIndex Stream %v Bucket %v "+
-							"Error from Projector %v. Retrying.", buildStream, bucket,
-							respErr.cause)
+							"Error from Projector %v. Retrying %v.", buildStream, bucket,
+							respErr.cause, count)
 						time.Sleep(KV_RETRY_INTERVAL * time.Millisecond)
 					}
 				}
@@ -2823,11 +2838,12 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 							"Error from Projector %v. Aborting.", streamId, bucket, respErr.cause)
 						break retryloop
 
-					} else if count > 20 {
+					} else if count > MAX_PROJ_RETRY {
 						// Start recovery if cannot add instances over threshold.  If the projector
 						// state is not correct, this ensures projector state will get cleaned up.
 						logging.Errorf("Indexer::handleInitialBuildDone Stream %v Bucket %v "+
-							"Error from Projector %v. Start recovery after 20 retries.", streamId, bucket, respErr.cause)
+							"Error from Projector %v. Start recovery after %v retries.", streamId,
+							bucket, respErr.cause, MAX_PROJ_RETRY)
 
 						idx.internalRecvCh <- &MsgRecovery{
 							mType:    INDEXER_INIT_PREP_RECOVERY,
@@ -3232,6 +3248,7 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 	go func(reqLock *kvRequest) {
 		defer idx.releaseStreamRequestLock(reqLock)
 		idx.waitStreamRequestLock(reqLock)
+		count := 0
 	retryloop:
 		for {
 			//validate bucket before every try
@@ -3284,6 +3301,7 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 				default:
 					//log and retry for all other responses
 					respErr := resp.(*MsgError).GetError()
+					count++
 
 					state := idx.getStreamBucketState(streamId, bucket)
 
@@ -3299,10 +3317,23 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 
 						break retryloop
 
+					} else if count > MAX_PROJ_RETRY {
+						// Start recovery if max retries has reached..  If the projector
+						// state is not correct, this ensures projector state will get cleaned up.
+						logging.Errorf("Indexer::startBucketStream Stream %v Bucket %v "+
+							"Error from Projector %v. Start recovery after %v retries.", streamId,
+							bucket, respErr.cause, MAX_PROJ_RETRY)
+
+						idx.internalRecvCh <- &MsgRecovery{
+							mType:    INDEXER_INIT_PREP_RECOVERY,
+							streamId: streamId,
+							bucket:   bucket,
+						}
+						break retryloop
 					} else {
 						logging.Errorf("Indexer::startBucketStream Stream %v Bucket %v "+
-							"Error from Projector %v. Retrying.", streamId, bucket,
-							respErr.cause)
+							"Error from Projector %v. Retrying %v.", streamId, bucket,
+							respErr.cause, count)
 						time.Sleep(KV_RETRY_INTERVAL * time.Millisecond)
 					}
 				}
