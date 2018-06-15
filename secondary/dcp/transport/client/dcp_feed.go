@@ -294,19 +294,6 @@ func (feed *DcpFeed) handlePacket(
 
 	sendAck := false
 	prefix := feed.logPrefix
-	if pkt.Opcode == transport.DCP_NOOP {
-		noop := &transport.MCResponse{
-			Opcode: transport.DCP_NOOP, Opaque: pkt.Opaque,
-		}
-		if err := feed.conn.TransmitResponse(noop); err != nil {
-			logging.Errorf("%v NOOP.Transmit(): %v", prefix, err)
-		} else {
-			fmsg := "%v responded to NOOP ok ...\n"
-			logging.Tracef(fmsg, prefix)
-		}
-		return "ok" // for NOOP, bytes are not counted for for buffer-ack
-	}
-
 	stream := feed.vbstreams[vb]
 	if stream == nil {
 		feed.stats.TotalSpurious++
@@ -1100,6 +1087,21 @@ loop:
 		} else if err != nil {
 			logging.Errorf("%v doReceive(): %v\n", feed.logPrefix, err)
 			break loop
+		}
+
+		// Immediately respond to NOOP and listen for next message.
+		// NOOPs are not accounted for buffer-ack.
+		if pkt.Opcode == transport.DCP_NOOP {
+			noop := &transport.MCResponse{
+				Opcode: transport.DCP_NOOP, Opaque: pkt.Opaque,
+			}
+			if err := feed.conn.TransmitResponse(noop); err != nil {
+				logging.Errorf("%v NOOP.Transmit(): %v", feed.logPrefix, err)
+			} else {
+				fmsg := "%v responded to NOOP ok ...\n"
+				logging.Tracef(fmsg, feed.logPrefix)
+			}
+			continue loop
 		}
 
 		logging.LazyTrace(func() string {
