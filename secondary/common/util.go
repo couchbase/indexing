@@ -884,10 +884,14 @@ func DiskUsage(dir string) (int64, error) {
 	return sz, nil
 }
 
-func GenNextBiggerKey(b []byte) []byte {
+func GenNextBiggerKey(b []byte, isPrimary bool) []byte {
 	var x big.Int
-	// Remove last 1 byte terminator encoding
-	x.SetBytes(b[:len(b)-1])
+	if !isPrimary {
+		// Remove last 1 byte terminator encoding
+		x.SetBytes(b[:len(b)-1])
+	} else {
+		x.SetBytes(b[:len(b)])
+	}
 	x.Add(&x, big.NewInt(1))
 	return x.Bytes()
 }
