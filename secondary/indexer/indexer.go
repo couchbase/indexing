@@ -4600,9 +4600,11 @@ func (idx *indexer) bootstrap1(snapshotNotifych chan IndexSnapshot) error {
 
 	idx.validateIndexInstMap()
 
+	needsRestart := idx.upgradeStorage()
+
 	go func() {
 		//recover indexes from local metadata
-		needsRestart, err := idx.initFromPersistedState()
+		err := idx.initFromPersistedState()
 		if err != nil {
 			idx.internalRecvCh <- &MsgStorageWarmupDone{err: err, needsRestart: needsRestart}
 			return
@@ -4881,9 +4883,7 @@ func (idx *indexer) genIndexerId() {
 
 }
 
-func (idx *indexer) initFromPersistedState() (bool, error) {
-
-	needsRestart := idx.upgradeStorage()
+func (idx *indexer) initFromPersistedState() error {
 
 	// Set the storage mode specific to this indexer node
 	common.SetStorageMode(idx.getLocalStorageMode(idx.config))
@@ -4903,7 +4903,7 @@ func (idx *indexer) initFromPersistedState() (bool, error) {
 		var failedPartnInstances PartitionInstMap
 		var err error
 		if partnInstMap, failedPartnInstances, err = idx.initPartnInstance(inst, nil, true); err != nil {
-			return needsRestart, err
+			return err
 		}
 
 		// Cleanup all partition instances for which, initPartnInstance has failed due to storage corruption
@@ -4933,7 +4933,7 @@ func (idx *indexer) initFromPersistedState() (bool, error) {
 		idx.indexPartnMap[inst.InstId] = partnInstMap
 	}
 
-	return needsRestart, nil
+	return nil
 
 }
 
