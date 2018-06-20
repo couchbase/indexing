@@ -23,6 +23,7 @@ import "net"
 import "time"
 import "strconv"
 import "strings"
+import "sync/atomic"
 
 import c "github.com/couchbase/indexing/secondary/common"
 import "github.com/couchbase/indexing/secondary/transport"
@@ -47,6 +48,7 @@ type RouterEndpoint struct {
 	// gen-server
 	ch    chan []interface{} // carries control commands
 	finch chan bool
+	done  uint32
 	// downstream
 	pkt  *transport.TransportPacket
 	conn net.Conn
@@ -120,13 +122,8 @@ const (
 
 // Ping whether endpoint is active, synchronous call.
 func (endpoint *RouterEndpoint) Ping() bool {
-	respch := make(chan []interface{}, 1)
-	cmd := []interface{}{endpCmdPing, respch}
-	resp, err := c.FailsafeOp(endpoint.ch, respch, cmd, endpoint.finch)
-	if err != nil {
-		return false
-	}
-	return resp[0].(bool)
+
+	return atomic.LoadUint32(&endpoint.done) == 0
 }
 
 // ResetConfig synchronous call.
@@ -187,6 +184,7 @@ func (endpoint *RouterEndpoint) run(ch chan []interface{}) {
 		// close the connection
 		endpoint.conn.Close()
 		// close this endpoint
+		atomic.StoreUint32(&endpoint.done, 1)
 		close(endpoint.finch)
 		logging.Infof("%v ... stopped\n", endpoint.logPrefix)
 	}()
