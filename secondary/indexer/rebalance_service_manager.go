@@ -544,14 +544,10 @@ func (m *ServiceMgr) prepareRebalance(change service.TopologyChange) error {
 
 	l.Infof("ServiceMgr::prepareRebalance Init Prepare Phase")
 
-	if isSingleNodeRebal(change) {
-		if change.KeepNodes[0].NodeInfo.NodeID == m.nodeInfo.NodeID {
-			l.Infof("ServiceMgr::prepareRebalance I'm the only node in cluster. Nothing to do.")
-		} else {
-			err := errors.New("indexer - node receiving prepare request not part of cluster")
-			l.Errorf("ServiceMgr::prepareRebalance %v", err)
-			return err
-		}
+	if isSingleNodeRebal(change) && change.KeepNodes[0].NodeInfo.NodeID != m.nodeInfo.NodeID {
+		err := errors.New("indexer - node receiving prepare request not part of cluster")
+		l.Errorf("ServiceMgr::prepareRebalance %v", err)
+		return err
 	} else {
 		if err := m.initPreparePhaseRebalance(); err != nil {
 			return err
@@ -617,16 +613,12 @@ func (m *ServiceMgr) startRebalance(change service.TopologyChange) error {
 	var runPlanner bool
 	var transferTokens map[string]*c.TransferToken
 
-	if isSingleNodeRebal(change) {
-		if change.KeepNodes[0].NodeInfo.NodeID == m.nodeInfo.NodeID {
-			l.Infof("ServiceMgr::startRebalance I'm the only node in cluster. Nothing to do.")
-		} else {
-			err := errors.New("Node receiving Start request not part of cluster")
-			l.Errorf("ServiceMgr::startRebalance %v Self %v Cluster %v", err, m.nodeInfo.NodeID,
-				change.KeepNodes[0].NodeInfo.NodeID)
-			m.runCleanupPhaseLOCKED(RebalanceTokenPath, true)
-			return err
-		}
+	if isSingleNodeRebal(change) && change.KeepNodes[0].NodeInfo.NodeID != m.nodeInfo.NodeID {
+		err := errors.New("Node receiving Start request not part of cluster")
+		l.Errorf("ServiceMgr::startRebalance %v Self %v Cluster %v", err, m.nodeInfo.NodeID,
+			change.KeepNodes[0].NodeInfo.NodeID)
+		m.runCleanupPhaseLOCKED(RebalanceTokenPath, true)
+		return err
 	} else {
 
 		var err error
