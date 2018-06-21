@@ -190,11 +190,6 @@ func genTransferToken(solution *Solution, masterId string, topologyChange servic
 
 	tokens := make(map[string]*common.TransferToken)
 
-	if len(deleteNodes) == 0 && !solution.hasNewNodes() {
-		logging.Infof("Planner: No new indexer node or deleted indexer node.  Skip rebalance")
-		return tokens, nil
-	}
-
 	for _, indexer := range solution.Placement {
 		for _, index := range indexer.Indexes {
 			if index.initialNode != nil && index.initialNode.NodeId != indexer.NodeId && !index.pendingCreate {
@@ -627,7 +622,7 @@ func rebalance(command CommandType, config *RunConfig, plan *Plan, indexes []*In
 		indexes = nil
 	}
 
-	if command == CommandRebalance {
+	if command == CommandRebalance && (len(outIndexes) != 0 || solution.findNumEmptyNodes() != 0) {
 		partitioned := findAllPartitionedIndexExcluding(solution, indexes)
 		if len(partitioned) != 0 {
 			indexes = append(indexes, partitioned...)
