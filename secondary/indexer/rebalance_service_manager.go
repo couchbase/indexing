@@ -2225,6 +2225,11 @@ func (m *ServiceMgr) handleMoveIndex(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		if c.GetBuildMode() != c.ENTERPRISE {
+			send(http.StatusBadRequest, w, "Alter index is only supported in Enterprise Edition")
+			return
+		}
+
 		permission := fmt.Sprintf("cluster.bucket[%s].n1ql.index!alter", bucket)
 		if !c.IsAllowed(creds, []string{permission}, w) {
 			return
@@ -2286,6 +2291,11 @@ func (m *ServiceMgr) handleMoveIndexInternal(w http.ResponseWriter, r *http.Requ
 		if err := json.Unmarshal(bytes, &req); err != nil {
 			l.Errorf("ServiceMgr::handleMoveIndexInternal %v", err)
 			sendIndexResponseWithError(http.StatusBadRequest, w, err.Error())
+			return
+		}
+
+		if c.GetBuildMode() != c.ENTERPRISE {
+			sendIndexResponseWithError(http.StatusBadRequest, w, "Alter index is only supported in Enterprise Edition")
 			return
 		}
 
