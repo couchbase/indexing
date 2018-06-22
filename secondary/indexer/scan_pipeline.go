@@ -1319,7 +1319,7 @@ func (e *entryCache) Update(entry []byte, compositekeys [][]byte, decodedkeys va
 	e.entry = append(e.entry[:0], entry...)
 
 	if len(entry) > cap(e.compkeybuf) {
-		e.compkeybuf = make([]byte, 0, len(entry)+1024)
+		e.compkeybuf = make([]byte, len(entry)+1024, len(entry)+1024)
 	}
 
 	if e.compkeys == nil {
