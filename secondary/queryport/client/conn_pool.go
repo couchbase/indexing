@@ -174,9 +174,10 @@ func (cp *connectionPool) GetWithTimeout(d time.Duration) (connectn *connection,
 			if err != nil {
 				// On error, release our create hold
 				<-cp.createsem
+			} else {
+				atomic.AddInt32(&cp.curActConns, 1)
 			}
 			logging.Debugf("%v new connection (create) from pool\n", cp.logPrefix)
-			atomic.AddInt32(&cp.curActConns, 1)
 			return connectn, err
 
 		case <-t.C:

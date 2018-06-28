@@ -6,6 +6,7 @@ import (
 	"net"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/couchbase/indexing/secondary/logging"
@@ -118,25 +119,45 @@ func (s *Server) Close() (err error) {
 }
 
 // go-routine to listen for new connections, if this routine goes down -
-// server is shutdown and reason notified back to application.
+// listener is restarted
 func (s *Server) listener() {
+
+	selfRestart := func() {
+		var err error
+		s.mu.Lock()
+		defer s.mu.Unlock()
+
+		if s.lis != nil { // if s.lis == nil, then Server.Close() was called
+			s.lis.Close()
+			if s.lis, err = net.Listen("tcp", s.laddr); err != nil {
+				logging.Errorf("%v failed starting %v !!\n", s.logPrefix, err)
+				panic(err)
+			}
+			logging.Errorf("%v Restarting listener\n", s.logPrefix)
+			go s.listener()
+		}
+	}
+
 	defer func() {
 		if r := recover(); r != nil {
 			logging.Errorf("%v listener() crashed: %v\n", s.logPrefix, r)
 			logging.Errorf("%s", logging.StackTrace())
 		}
-		go s.Close()
+		selfRestart()
 	}()
 
 	for {
 		if conn, err := s.lis.Accept(); err == nil {
 			go s.handleConnection(conn)
+
 		} else {
-			if e, ok := err.(*net.OpError); ok && e.Op != "accept" {
-				panic(err)
+			e, ok := err.(*net.OpError)
+			if ok && (e.Err == syscall.EMFILE || e.Err == syscall.ENFILE) {
+				logging.Errorf("%v Accept() Error: %v. Retrying Accept.\n", s.logPrefix, err)
+				continue
 			}
-			logging.Errorf("%v Accept(): %v\n", s.logPrefix, err)
-			break
+			logging.Errorf("%v Accept() Error: %v\n", s.logPrefix, err)
+			break //After loop breaks, selfRestart() is called in defer
 		}
 	}
 }

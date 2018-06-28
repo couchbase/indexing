@@ -1365,11 +1365,6 @@ func (mdb *plasmaSlice) Close() {
 
 func (mdb *plasmaSlice) cleanupWritersOnClose() {
 
-	for i := 0; i < mdb.numWriters; i++ {
-		mdb.stopCh[i] <- true
-		<-mdb.stopCh[i]
-	}
-
 	mdb.token.increment(mdb.numWriters)
 
 	mdb.freeAllWriters()
@@ -2219,7 +2214,8 @@ func (slice *plasmaSlice) freeAllWriters() {
 	slice.stopWriters(0)
 
 	for _, stopCh := range slice.stopCh {
-		close(stopCh)
+		stopCh <- true
+		<-stopCh
 	}
 
 	slice.encodeBuf = slice.encodeBuf[:0]

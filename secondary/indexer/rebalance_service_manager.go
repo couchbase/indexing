@@ -544,14 +544,10 @@ func (m *ServiceMgr) prepareRebalance(change service.TopologyChange) error {
 
 	l.Infof("ServiceMgr::prepareRebalance Init Prepare Phase")
 
-	if isSingleNodeRebal(change) {
-		if change.KeepNodes[0].NodeInfo.NodeID == m.nodeInfo.NodeID {
-			l.Infof("ServiceMgr::prepareRebalance I'm the only node in cluster. Nothing to do.")
-		} else {
-			err := errors.New("indexer - node receiving prepare request not part of cluster")
-			l.Errorf("ServiceMgr::prepareRebalance %v", err)
-			return err
-		}
+	if isSingleNodeRebal(change) && change.KeepNodes[0].NodeInfo.NodeID != m.nodeInfo.NodeID {
+		err := errors.New("indexer - node receiving prepare request not part of cluster")
+		l.Errorf("ServiceMgr::prepareRebalance %v", err)
+		return err
 	} else {
 		if err := m.initPreparePhaseRebalance(); err != nil {
 			return err
@@ -615,18 +611,15 @@ func (m *ServiceMgr) startFailover(change service.TopologyChange) error {
 func (m *ServiceMgr) startRebalance(change service.TopologyChange) error {
 
 	var runPlanner bool
+	var skipRebalance bool
 	var transferTokens map[string]*c.TransferToken
 
-	if isSingleNodeRebal(change) {
-		if change.KeepNodes[0].NodeInfo.NodeID == m.nodeInfo.NodeID {
-			l.Infof("ServiceMgr::startRebalance I'm the only node in cluster. Nothing to do.")
-		} else {
-			err := errors.New("Node receiving Start request not part of cluster")
-			l.Errorf("ServiceMgr::startRebalance %v Self %v Cluster %v", err, m.nodeInfo.NodeID,
-				change.KeepNodes[0].NodeInfo.NodeID)
-			m.runCleanupPhaseLOCKED(RebalanceTokenPath, true)
-			return err
-		}
+	if isSingleNodeRebal(change) && change.KeepNodes[0].NodeInfo.NodeID != m.nodeInfo.NodeID {
+		err := errors.New("Node receiving Start request not part of cluster")
+		l.Errorf("ServiceMgr::startRebalance %v Self %v Cluster %v", err, m.nodeInfo.NodeID,
+			change.KeepNodes[0].NodeInfo.NodeID)
+		m.runCleanupPhaseLOCKED(RebalanceTokenPath, true)
+		return err
 	} else {
 
 		var err error
@@ -651,7 +644,7 @@ func (m *ServiceMgr) startRebalance(change service.TopologyChange) error {
 			return errors.New("Protocol Conflict Error: Existing Rebalance Token Found")
 		}
 
-		err = m.initStartPhase(change)
+		err, skipRebalance = m.initStartPhase(change)
 		if err != nil {
 			l.Errorf("ServiceMgr::startRebalance Error During Start Phase Init %v", err)
 			m.runCleanupPhaseLOCKED(RebalanceTokenPath, true)
@@ -665,6 +658,9 @@ func (m *ServiceMgr) startRebalance(change service.TopologyChange) error {
 			runPlanner = false
 		} else if cfg["rebalance.disable_index_move"].Bool() {
 			l.Infof("ServiceMgr::startRebalance skip planner as disable_index_move is set")
+			runPlanner = false
+		} else if skipRebalance {
+			l.Infof("ServiceMgr::startRebalance skip planner due to skipRebalance flag")
 			runPlanner = false
 		} else {
 			runPlanner = true
@@ -1230,26 +1226,28 @@ func (m *ServiceMgr) rebalanceJanitor() {
 
 }
 
-func (m *ServiceMgr) initStartPhase(change service.TopologyChange) error {
+func (m *ServiceMgr) initStartPhase(change service.TopologyChange) (error, bool) {
 
 	var err error
+	var skipRebalance bool
+
 	if err = m.genRebalanceToken(); err != nil {
-		return err
+		return err, true
 	}
 
 	if err = m.registerLocalRebalanceToken(); err != nil {
-		return err
+		return err, true
 	}
 
 	if err = m.registerRebalanceTokenInMetakv(); err != nil {
-		return err
+		return err, true
 	}
 
-	if err = m.registerGlobalRebalanceToken(change); err != nil {
-		return err
+	if err, skipRebalance = m.registerGlobalRebalanceToken(change); err != nil {
+		return err, skipRebalance
 	}
 
-	return nil
+	return nil, skipRebalance
 }
 
 func (m *ServiceMgr) genRebalanceToken() error {
@@ -1369,7 +1367,7 @@ func (m *ServiceMgr) observeGlobalRebalanceToken(rebalToken RebalanceToken) bool
 
 }
 
-func (m *ServiceMgr) registerGlobalRebalanceToken(change service.TopologyChange) error {
+func (m *ServiceMgr) registerGlobalRebalanceToken(change service.TopologyChange) (error, bool) {
 
 	m.cinfo.Lock()
 	defer m.cinfo.Unlock()
@@ -1394,8 +1392,15 @@ func (m *ServiceMgr) registerGlobalRebalanceToken(change service.TopologyChange)
 
 		allKnownNodes := len(change.KeepNodes) + len(change.EjectNodes)
 		if len(nids) != allKnownNodes {
+
+			if isSingleNodeRebal(change) {
+				l.Infof("ServiceMgr::registerGlobalRebalanceToken ClusterInfo Node List doesn't "+
+					"match Known Nodes in Rebalance Request. Skip Rebalance. cinfo %v, change %v", m.cinfo, change)
+				return nil, true
+			}
+
 			err = errors.New("ClusterInfo Node List doesn't match Known Nodes in Rebalance Request")
-			l.Errorf("ServiceMgr::registerGlobalRebalanceToken %v Retrying %v", err, i)
+			l.Errorf("ServiceMgr::registerGlobalRebalanceToken %v %v %v Retrying %v", err, nids, allKnownNodes, i)
 			continue
 		}
 		valid = true
@@ -1403,8 +1408,8 @@ func (m *ServiceMgr) registerGlobalRebalanceToken(change service.TopologyChange)
 	}
 
 	if !valid {
-		l.Errorf("ServiceMgr::registerGlobalRebalanceToken cinfo %v change %v", m.cinfo, m.rebalanceCtx.change)
-		return err
+		l.Errorf("ServiceMgr::registerGlobalRebalanceToken cinfo %v change %v", m.cinfo, change)
+		return err, true
 	}
 
 	url := "/registerRebalanceToken"
@@ -1417,7 +1422,7 @@ func (m *ServiceMgr) registerGlobalRebalanceToken(change service.TopologyChange)
 			localaddr, err := m.cinfo.GetLocalServiceAddress(c.INDEX_HTTP_SERVICE)
 			if err != nil {
 				l.Errorf("ServiceMgr::registerGlobalRebalanceToken Error Fetching Local Service Address %v", err)
-				return errors.New(fmt.Sprintf("Fail to retrieve http endpoint for local node %v", err))
+				return errors.New(fmt.Sprintf("Fail to retrieve http endpoint for local node %v", err)), true
 			}
 
 			if addr == localaddr {
@@ -1428,7 +1433,7 @@ func (m *ServiceMgr) registerGlobalRebalanceToken(change service.TopologyChange)
 			body, err := json.Marshal(&m.rebalanceToken)
 			if err != nil {
 				l.Errorf("ServiceMgr::registerGlobalRebalanceToken Error registering rebalance token on %v %v", addr+url, err)
-				return err
+				return err, true
 			}
 
 			bodybuf := bytes.NewBuffer(body)
@@ -1436,19 +1441,19 @@ func (m *ServiceMgr) registerGlobalRebalanceToken(change service.TopologyChange)
 			resp, err := postWithAuth(addr+url, "application/json", bodybuf)
 			if err != nil {
 				l.Errorf("ServiceMgr::registerGlobalRebalanceToken Error registering rebalance token on %v %v", addr+url, err)
-				return err
+				return err, true
 			}
 			resp.Body.Close()
 
 		} else {
 			l.Errorf("ServiceMgr::registerGlobalRebalanceToken Error Fetching Service Address %v", err)
-			return errors.New(fmt.Sprintf("Fail to retrieve http endpoint for index node %v", err))
+			return errors.New(fmt.Sprintf("Fail to retrieve http endpoint for index node %v", err)), true
 		}
 
 		l.Infof("ServiceMgr::registerGlobalRebalanceToken Successfully registered rebalance token on %v", addr+url)
 	}
 
-	return nil
+	return nil, false
 
 }
 
@@ -2233,6 +2238,11 @@ func (m *ServiceMgr) handleMoveIndex(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		if c.GetBuildMode() != c.ENTERPRISE {
+			send(http.StatusBadRequest, w, "Alter index is only supported in Enterprise Edition")
+			return
+		}
+
 		permission := fmt.Sprintf("cluster.bucket[%s].n1ql.index!alter", bucket)
 		if !c.IsAllowed(creds, []string{permission}, w) {
 			return
@@ -2294,6 +2304,11 @@ func (m *ServiceMgr) handleMoveIndexInternal(w http.ResponseWriter, r *http.Requ
 		if err := json.Unmarshal(bytes, &req); err != nil {
 			l.Errorf("ServiceMgr::handleMoveIndexInternal %v", err)
 			sendIndexResponseWithError(http.StatusBadRequest, w, err.Error())
+			return
+		}
+
+		if c.GetBuildMode() != c.ENTERPRISE {
+			sendIndexResponseWithError(http.StatusBadRequest, w, "Alter index is only supported in Enterprise Edition")
 			return
 		}
 

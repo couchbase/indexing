@@ -178,7 +178,7 @@ func (feed *DcpFeed) genServer(
 	}()
 
 	prefix := feed.logPrefix
-	latencyTick := int64(10 * 1000) // in milli-seconds
+	latencyTick := int64(60 * 1000) // in milli-seconds
 	if val, ok := config["latencyTick"]; ok && val != nil {
 		latencyTick = int64(val.(int)) // in milli-seconds
 	}
@@ -192,7 +192,13 @@ loop:
 		select {
 		case <-latencyTm.C:
 			fmsg := "%v dcp latency stats %v\n"
-			logging.Infof(fmsg, prefix, feed.dcplatency)
+			logging.Infof(fmsg, feed.logPrefix, feed.dcplatency)
+			fmsg = "%v dcp stats %v\n"
+			logging.Infof(fmsg, feed.logPrefix, feed.stats.String(feed))
+			if feed.stats.TotalSpurious > 0 {
+				fmsg = "%v detected spurious messages for inactive streams\n"
+				logging.Fatalf(fmsg, feed.logPrefix)
+			}
 
 		case msg := <-reqch:
 			cmd := msg[0].(byte)
@@ -288,24 +294,18 @@ func (feed *DcpFeed) handlePacket(
 
 	sendAck := false
 	prefix := feed.logPrefix
-	if pkt.Opcode == transport.DCP_NOOP {
-		noop := &transport.MCResponse{
-			Opcode: transport.DCP_NOOP, Opaque: pkt.Opaque,
-		}
-		if err := feed.conn.TransmitResponse(noop); err != nil {
-			logging.Errorf("%v NOOP.Transmit(): %v", prefix, err)
-		} else {
-			fmsg := "%v responded to NOOP ok ...\n"
-			logging.Tracef(fmsg, prefix)
-		}
-		return "ok" // for NOOP, bytes are not counted for for buffer-ack
-	}
-
 	stream := feed.vbstreams[vb]
 	if stream == nil {
-		fmsg := "%v spurious %v for %d: %#v\n"
-		arg1 := logging.TagUD(pkt)
-		logging.Fatalf(fmsg, prefix, pkt.Opcode, vb, arg1)
+		feed.stats.TotalSpurious++
+		// log first 10000 spurious messages
+		logok := feed.stats.TotalSpurious < 10000
+		// then log 1 spurious message for every 1000.
+		logok = logok || (feed.stats.TotalSpurious%1000) == 1
+		if logok {
+			fmsg := "%v spurious %v for %d: %#v\n"
+			arg1 := logging.TagUD(pkt)
+			logging.Fatalf(fmsg, prefix, pkt.Opcode, vb, arg1)
+		}
 		return "ok" // yeah it not _my_ mistake...
 	}
 
@@ -316,6 +316,7 @@ func (feed *DcpFeed) handlePacket(
 	case transport.DCP_STREAMREQ:
 		event = newDcpEvent(pkt, stream)
 		feed.handleStreamRequest(res, vb, stream, event)
+		feed.stats.TotalStreamReq++
 
 	case transport.DCP_MUTATION, transport.DCP_DELETION,
 		transport.DCP_EXPIRATION:
@@ -330,6 +331,7 @@ func (feed *DcpFeed) handlePacket(
 		delete(feed.vbstreams, vb)
 		fmsg := "%v ##%x DCP_STREAMEND for vb %d\n"
 		logging.Debugf(fmsg, prefix, stream.AppOpaque, vb)
+		feed.stats.TotalStreamEnd++
 
 	case transport.DCP_SNAPSHOT:
 		event = newDcpEvent(pkt, stream)
@@ -363,6 +365,7 @@ func (feed *DcpFeed) handlePacket(
 		delete(feed.vbstreams, vb)
 		fmsg := "%v ##%x DCP_CLOSESTREAM for vb %d\n"
 		logging.Debugf(fmsg, prefix, stream.AppOpaque, vb)
+		feed.stats.TotalCloseStream++
 
 	case transport.DCP_CONTROL, transport.DCP_BUFFERACK:
 		if res.Status != transport.SUCCESS {
@@ -943,10 +946,24 @@ func (event *DcpEvent) String() string {
 
 // DcpStats on mutations/snapshots/buff-acks.
 type DcpStats struct {
+	TotalBufferAckSent uint64
 	TotalBytes         uint64
 	TotalMutation      uint64
-	TotalBufferAckSent uint64
 	TotalSnapShot      uint64
+	TotalStreamReq     uint64
+	TotalCloseStream   uint64
+	TotalStreamEnd     uint64
+	TotalSpurious      uint64
+}
+
+func (stats *DcpStats) String(feed *DcpFeed) string {
+	return fmt.Sprintf(
+		"bytes: %v buffacks: %v toAckBytes: %v streamreqs: %v "+
+			"snapshots: %v mutations: %v streamends: %v closestreams: %v",
+		stats.TotalBytes, stats.TotalBufferAckSent, feed.toAckBytes,
+		stats.TotalStreamReq, stats.TotalSnapShot, stats.TotalMutation,
+		stats.TotalStreamEnd, stats.TotalCloseStream,
+	)
 }
 
 // FailoverLog containing vvuid and sequnce number
@@ -1070,6 +1087,21 @@ loop:
 		} else if err != nil {
 			logging.Errorf("%v doReceive(): %v\n", feed.logPrefix, err)
 			break loop
+		}
+
+		// Immediately respond to NOOP and listen for next message.
+		// NOOPs are not accounted for buffer-ack.
+		if pkt.Opcode == transport.DCP_NOOP {
+			noop := &transport.MCResponse{
+				Opcode: transport.DCP_NOOP, Opaque: pkt.Opaque,
+			}
+			if err := feed.conn.TransmitResponse(noop); err != nil {
+				logging.Errorf("%v NOOP.Transmit(): %v", feed.logPrefix, err)
+			} else {
+				fmsg := "%v responded to NOOP ok ...\n"
+				logging.Tracef(fmsg, feed.logPrefix)
+			}
+			continue loop
 		}
 
 		logging.LazyTrace(func() string {
