@@ -1814,9 +1814,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.settings.moi.persistence_threads": ConfigValue{
-		(runtime.NumCPU()*3 + 1) / 4,
+		(runtime.GOMAXPROCS(0) + 1) / 2,
 		"Number of concurrent threads scanning index for persistence",
-		(runtime.NumCPU()*3 + 1) / 4,
+		(runtime.GOMAXPROCS(0) + 1) / 2,
 		false, // mutable
 		false, // case-insensitive
 	},
