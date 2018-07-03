@@ -126,8 +126,8 @@ func (s *IndexScanSource) Routine() error {
 		}
 
 		if currentScan.ScanType == FilterRangeReq {
-			if len(entry) > cap(*buf) {
-				*buf = make([]byte, 0, len(entry)+1024)
+			if len(entry)*3 > cap(*buf) {
+				*buf = make([]byte, 0, (len(entry)*3)+1024)
 			}
 			skipRow, ck, err = filterScanRow(entry, currentScan, (*buf)[:0], r.isPrimary)
 			if err != nil {
@@ -139,8 +139,8 @@ func (s *IndexScanSource) Routine() error {
 		}
 
 		if !r.isPrimary && r.Indexprojection != nil && r.Indexprojection.projectSecKeys {
-			if ck == nil && len(entry) > cap(*buf) {
-				*buf = make([]byte, 0, len(entry)+1024)
+			if ck == nil && len(entry)*3 > cap(*buf) {
+				*buf = make([]byte, 0, (len(entry)*3)+1024)
 			}
 			entry, err = projectKeys(ck, entry, (*buf)[:0], r.Indexprojection)
 			if err != nil {
@@ -468,8 +468,8 @@ func projectLeadingKey(compositekeys [][]byte, key []byte, buf *[]byte) ([]byte,
 
 	codec := collatejson.NewCodec(16)
 	if compositekeys == nil {
-		if len(key) > cap(*buf) {
-			*buf = make([]byte, 0, len(key)+RESIZE_PAD)
+		if len(key)*3 > cap(*buf) {
+			*buf = make([]byte, 0, (len(key)*3)+RESIZE_PAD)
 		}
 		compositekeys, err = codec.ExplodeArray(key, (*buf)[:0])
 		if err != nil {
