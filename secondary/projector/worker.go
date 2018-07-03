@@ -28,6 +28,7 @@ import mcd "github.com/couchbase/indexing/secondary/dcp/transport"
 import mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
 import c "github.com/couchbase/indexing/secondary/common"
 import "github.com/couchbase/indexing/secondary/logging"
+import "os"
 
 // VbucketWorker is immutable structure defined for each vbucket.
 type VbucketWorker struct {
@@ -293,6 +294,8 @@ loop:
 				} else if m.Opaque != v.opaque {
 					fmsg := "%v ##%x mismatch with vbucket.##%x %v"
 					logging.Fatalf(fmsg, logPrefix, m.Opaque, v.opaque, m.Opcode)
+					//workaround for MB-30327. this state should never happen.
+					os.Exit(1)
 				}
 
 			case vwCmdClose:
