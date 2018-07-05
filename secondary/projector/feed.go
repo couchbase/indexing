@@ -817,7 +817,7 @@ func (feed *Feed) restartVbuckets(
 		if ok3 {
 			ts = ts.FilterByVbuckets(c.Vbno32to16(reqTs.GetVbnos()))
 		}
-		reqTs = ts.Union(ts)
+		reqTs = ts.Union(reqTs)
 
 		// open or acquire the upstream feeder object.
 		feeder, e := feed.openFeeder(opaque, pooln, bucketn)
