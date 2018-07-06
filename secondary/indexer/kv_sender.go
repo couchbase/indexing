@@ -1085,7 +1085,10 @@ func (k *kvSender) getProjAddrsForVbuckets(bucket string, vbnos []uint16) ([]str
 
 	var addrList []string
 
-	nodes := k.cInfoCache.GetNodesByServiceType("projector")
+	nodes, err := k.cInfoCache.GetNodesByBucket(bucket)
+	if err != nil {
+		return nil, err
+	}
 
 	for _, n := range nodes {
 		vbs, err := k.cInfoCache.GetVBuckets(n, bucket)
