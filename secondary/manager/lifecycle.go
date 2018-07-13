@@ -74,6 +74,7 @@ type dropInstance struct {
 	Defn             common.IndexDefn `json:"defn,omitempty"`
 	Notify           bool             `json:"notify,omitempty"`
 	UpdateStatusOnly bool             `json:"updateStatus,omitempty"`
+	DeletedOnly      bool             `json:"deletedOnly,omitempty"`
 }
 
 type mergePartition struct {
@@ -672,8 +673,27 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scheduled bool,
 	if err != nil {
 		return err
 	}
+
 	if realInstId != 0 {
-		instId = realInstId
+		realInst, err := m.FindLocalIndexInst(defn.Bucket, defn.DefnId, realInstId)
+		if err != nil {
+			logging.Errorf("LifecycleMgr.CreateIndex() : CreateIndex fails. Reason = %v", err)
+			return err
+		}
+
+		// Lifeccyle mgr is the source of truth of metadata.  If it sees that there is an existing index instance in
+		// DELETED state, it means that indexer has not been able to delete this instance.   Given that index defn does
+		// not exist, we can simply delete the index instance without notifying indexer.
+		if realInst != nil && common.IndexState(realInst.State) == common.INDEX_STATE_DELETED {
+			logging.Infof("LifecycleMgr.CreateIndex() : Remove deleted index instances for index %v", defn.DefnId)
+			m.repo.deleteIndexFromTopology(defn.Bucket, defn.DefnId)
+			realInst = nil
+		}
+
+		if realInst == nil {
+			instId = realInstId
+			realInstId = 0
+		}
 	}
 
 	replicaId := m.setReplica(defn)
@@ -698,7 +718,7 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scheduled bool,
 	// It is possible to create index of the same name later, as long as the new index has a different
 	// definition id, since an index is consider valid only if it has both index definiton and index instance.
 	// So the dangling index definition is considered invalid.
-	if err := m.repo.addIndexToTopology(defn, instId, replicaId, partitions, versions, numPartitions, 0, !defn.Deferred && scheduled); err != nil {
+	if err := m.repo.addIndexToTopology(defn, instId, replicaId, partitions, versions, numPartitions, realInstId, !defn.Deferred && scheduled); err != nil {
 		logging.Errorf("LifecycleMgr.CreateIndex() : createIndex fails. Reason = %v", err)
 		m.repo.DropIndexById(defn.DefnId)
 		return err
@@ -1293,7 +1313,7 @@ func (m *LifecycleMgr) handleCleanupIndexMetadata(content []byte) error {
 		return err
 	}
 
-	return m.DeleteIndexInstance(inst.Defn.DefnId, inst.InstId, false, false, nil)
+	return m.DeleteIndexInstance(inst.Defn.DefnId, inst.InstId, false, false, false, nil)
 }
 
 //-----------------------------------------------------------
@@ -1697,6 +1717,19 @@ func (m *LifecycleMgr) CreateIndexInstance(defn *common.IndexDefn, scheduled boo
 			logging.Errorf("LifecycleMgr.CreateIndexInstance() : CreateIndexInstance fails. Reason = %v", err)
 			return err
 		}
+
+		// Lifeccyle mgr is the source of truth of metadata.  If it sees that there is an existing index instance in
+		// DELETED state, it means that indexer has not been able to delete this instance.  Try to delete it now before
+		// creating an identical instance.
+		if realInst != nil && common.IndexState(realInst.State) == common.INDEX_STATE_DELETED {
+			logging.Infof("LifecycleMgr.CreateIndexInstance() : Remove deleted index instance %v", realInst.InstId)
+			if err := m.DeleteIndexInstance(defn.DefnId, realInstId, true, false, true, reqCtx); err != nil {
+				logging.Errorf("LifecycleMgr.CreateIndexInstance() : CreateIndexInstance fails while trying to delete old index instance. Reason = %v", err)
+				return err
+			}
+			realInst = nil
+		}
+
 		if realInst == nil {
 			instId = realInstId
 			realInstId = 0
@@ -1733,7 +1766,7 @@ func (m *LifecycleMgr) CreateIndexInstance(defn *common.IndexDefn, scheduled boo
 	if m.notifier != nil {
 		if err := m.notifier.OnIndexCreate(defn, instId, replicaId, partitions, versions, numPartitions, realInstId, reqCtx); err != nil {
 			logging.Errorf("LifecycleMgr.CreateIndexInstance() : CreateIndexInstance fails. Reason = %v", err)
-			m.DeleteIndexInstance(defn.DefnId, instId, false, false, reqCtx)
+			m.DeleteIndexInstance(defn.DefnId, instId, false, false, false, reqCtx)
 			return err
 		}
 	}
@@ -1748,7 +1781,7 @@ func (m *LifecycleMgr) CreateIndexInstance(defn *common.IndexDefn, scheduled boo
 	// the index will be repaired upon bootstrap or cleanup by janitor.
 	if err := m.updateIndexState(defn.Bucket, defn.DefnId, instId, common.INDEX_STATE_READY); err != nil {
 		logging.Errorf("LifecycleMgr.CreateIndexInstance() : CreateIndexInstance fails. Reason = %v", err)
-		m.DeleteIndexInstance(defn.DefnId, instId, false, false, reqCtx)
+		m.DeleteIndexInstance(defn.DefnId, instId, false, false, false, reqCtx)
 		return err
 	}
 
@@ -1769,13 +1802,13 @@ func (m *LifecycleMgr) CreateIndexInstance(defn *common.IndexDefn, scheduled boo
 
 			if len(errList) != 0 {
 				logging.Errorf("LifecycleMgr.CreateIndexInstance() : build index fails.  Reason = %v", errList[0])
-				m.DeleteIndexInstance(defn.DefnId, instId, false, false, reqCtx)
+				m.DeleteIndexInstance(defn.DefnId, instId, false, false, false, reqCtx)
 				return errList[0]
 			}
 
 			if len(skipList) != 0 {
 				logging.Errorf("LifecycleMgr.CreateIndexInstance() : build index fails due to internal errors.")
-				m.DeleteIndexInstance(defn.DefnId, instId, false, false, reqCtx)
+				m.DeleteIndexInstance(defn.DefnId, instId, false, false, false, reqCtx)
 				return errors.New("Failed to create index due to internal build error.  Please retry the operation.")
 			}
 		}
@@ -1873,7 +1906,7 @@ func (m *LifecycleMgr) handleDeleteOrPruneIndexInstance(content []byte, reqCtx *
 		return err
 	}
 
-	return m.DeleteOrPruneIndexInstance(change.Defn, change.Notify, change.UpdateStatusOnly, reqCtx)
+	return m.DeleteOrPruneIndexInstance(change.Defn, change.Notify, change.UpdateStatusOnly, change.DeletedOnly, reqCtx)
 }
 
 //
@@ -1894,7 +1927,8 @@ func (m *LifecycleMgr) handleDeleteOrPruneIndexInstance(content []byte, reqCtx *
 // For projector, stream operation is serialized.  So stream request for new index cannot proceed until the delete request
 // has processed.
 //
-func (m *LifecycleMgr) DeleteOrPruneIndexInstance(defn common.IndexDefn, notify bool, updateStatusOnly bool, reqCtx *common.MetadataRequestContext) error {
+func (m *LifecycleMgr) DeleteOrPruneIndexInstance(defn common.IndexDefn, notify bool, updateStatusOnly bool, deletedOnly bool,
+	reqCtx *common.MetadataRequestContext) error {
 
 	id := defn.DefnId
 	instId := defn.InstId
@@ -1927,17 +1961,21 @@ func (m *LifecycleMgr) DeleteOrPruneIndexInstance(defn common.IndexDefn, notify 
 		stream = common.StreamId(inst.StreamId)
 	}
 
+	if deletedOnly && inst.State != uint32(common.INDEX_STATE_DELETED) {
+		return nil
+	}
+
 	if len(defn.Partitions) == 0 || stream == common.INIT_STREAM {
 		// 1) If this is coming from drop index, or
 		// 2) It is from INIT_STREAM (cannot prune on INIT_STREAM)
-		return m.DeleteIndexInstance(id, instId, notify, updateStatusOnly, reqCtx)
+		return m.DeleteIndexInstance(id, instId, notify, updateStatusOnly, false, reqCtx)
 	}
 
 	return m.PruneIndexInstance(id, instId, defn.Partitions, notify, updateStatusOnly, reqCtx)
 }
 
 func (m *LifecycleMgr) DeleteIndexInstance(id common.IndexDefnId, instId common.IndexInstId, notify bool,
-	updateStatusOnly bool, reqCtx *common.MetadataRequestContext) error {
+	updateStatusOnly bool, instanceOnly bool, reqCtx *common.MetadataRequestContext) error {
 
 	logging.Infof("LifecycleMgr.DeleteIndexInstance() : index defnId %v instance id %v", id, instId)
 
@@ -1977,7 +2015,7 @@ func (m *LifecycleMgr) DeleteIndexInstance(id common.IndexDefnId, instId common.
 	}
 
 	// This is no other instance to delete.  Delete the index itself.
-	if validInst == 0 {
+	if validInst == 0 && !instanceOnly {
 		logging.Infof("LifecycleMgr.DeleteIndexInstance() : there is only a single instance.  Delete index %v", id)
 		return m.DeleteIndex(id, notify, updateStatusOnly, reqCtx)
 	}
@@ -2011,6 +2049,47 @@ func (m *LifecycleMgr) DeleteIndexInstance(id common.IndexDefnId, instId common.
 
 	// Remove the index instance from metadata.
 	m.repo.deleteInstanceFromTopology(defn.Bucket, id, instId)
+
+	// Remove the real proxy if necessary
+	m.deleteRealIndexInstIfNecessary(defn, inst, notify, updateStatusOnly, instanceOnly, reqCtx)
+
+	return nil
+}
+
+func (m *LifecycleMgr) deleteRealIndexInstIfNecessary(defn *common.IndexDefn, inst *IndexInstDistribution,
+	notify bool, updateStatusOnly bool, instanceOnly bool, reqCtx *common.MetadataRequestContext) error {
+
+	// There is no real inst
+	if inst.RealInstId == 0 || inst.InstId == inst.RealInstId {
+		return nil
+	}
+
+	// Find the real inst
+	realInst, err := m.FindLocalIndexInst(defn.Bucket, defn.DefnId, common.IndexInstId(inst.RealInstId))
+	if err != nil {
+		logging.Errorf("LifecycleMgr.deleteRealIndexInstIfNecessary() : Encountered error during delete index. Error = %v", err)
+		return err
+	}
+
+	// Do nothing if the real inst is already gone
+	if realInst == nil {
+		return nil
+	}
+
+	// Find if there is any proxy depends on real instance.  This only covers proxy that has yet
+	// to be merged to this instance.
+	numProxy, err := m.findNumValidProxy(defn.Bucket, defn.DefnId, common.IndexInstId(realInst.InstId))
+	if err != nil {
+		return err
+	}
+
+	// If there is no proxy waiting to be merged to the real instance and real inst has no partition,
+	// then delete the real instance itself.  If this happens during bootstrap when the proxy is being
+	// cleanup, then just mark the real instance as deleted.  The janitor will clean up this index eventually.
+	if numProxy == 0 && len(realInst.Partitions) == 0 {
+		logging.Infof("LifecycleMgr.deleteRealIndexInstIfNecessary() : Removing empty real inst %v", realInst.InstId)
+		return m.DeleteIndexInstance(defn.DefnId, common.IndexInstId(realInst.InstId), notify, !notify, instanceOnly, reqCtx)
+	}
 
 	return nil
 }
@@ -2135,7 +2214,7 @@ func (m *LifecycleMgr) PruneIndexInstance(id common.IndexDefnId, instId common.I
 	// If there is no proxy waiting to be merged to this instance and all partitions are to be pruned,
 	// then delete this instance itself.
 	if numProxy == 0 && (len(newPartitions) == len(inst.Partitions) || len(inst.Partitions) == 0) {
-		return m.DeleteIndexInstance(id, instId, notify, updateStatusOnly, reqCtx)
+		return m.DeleteIndexInstance(id, instId, notify, updateStatusOnly, false, reqCtx)
 	}
 
 	//
@@ -2665,7 +2744,7 @@ func (m *janitor) cleanup() {
 				idxDefn.InstId = common.IndexInstId(inst.InstId)
 				idxDefn.Partitions = nil
 
-				msg := &dropInstance{Defn: idxDefn, Notify: true}
+				msg := &dropInstance{Defn: idxDefn, Notify: true, DeletedOnly: true}
 				if buf, err := json.Marshal(&msg); err == nil {
 
 					if err := m.manager.requestServer.MakeRequest(client.OPCODE_DROP_OR_PRUNE_INSTANCE_DDL,
