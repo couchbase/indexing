@@ -3446,6 +3446,12 @@ func (idx *indexer) removeIndexesFromStream(indexList []common.IndexInst,
 
 		respCh := make(MsgChannel)
 
+		if idx.getStreamBucketState(streamId, bucket) == STREAM_INACTIVE {
+			logging.Warnf("Indexer::removeIndexesFromStream Stream %v Bucket %v "+
+				"Bucket stream not active. Skipping.", streamId, bucket)
+			continue
+		}
+
 		if idx.checkBucketExistsInStream(bucket, streamId, false) {
 
 			cmd = &MsgStreamUpdate{mType: REMOVE_INDEX_LIST_FROM_STREAM,
