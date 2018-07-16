@@ -2210,13 +2210,13 @@ func (slice *plasmaSlice) stopWriters(numWriters int) {
 // Free all writers
 //
 func (slice *plasmaSlice) freeAllWriters() {
-
-	slice.stopWriters(0)
-
+	// Stop all command workers
 	for _, stopCh := range slice.stopCh {
 		stopCh <- true
 		<-stopCh
 	}
+
+	slice.stopWriters(0)
 
 	slice.encodeBuf = slice.encodeBuf[:0]
 	slice.arrayBuf1 = slice.arrayBuf1[:0]
