@@ -291,7 +291,9 @@ func CollectSeqnos(kvfeeds map[string]*kvConn) (l_seqnos []uint64, err error) {
 		go func(index int, feed *kvConn) {
 			defer wg.Done()
 			kv_seqnos_node[index] = feed.seqsbuf
+			feed.mc.SetReadDeadline(time.Now().Add(20 * time.Second))
 			errors[index] = couchbase.GetSeqs(feed.mc, kv_seqnos_node[index], feed.tmpbuf)
+			feed.mc.SetReadDeadline(time.Time{})
 		}(i, feed)
 		i++
 	}

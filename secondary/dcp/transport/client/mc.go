@@ -49,6 +49,10 @@ func (c *Client) Close() error {
 	return c.conn.Close()
 }
 
+func (c *Client) SetReadDeadline(t time.Time) error {
+	return c.conn.(net.Conn).SetReadDeadline(t)
+}
+
 // IsHealthy returns true unless the client is belived to have
 // difficulty communicating to its server.
 //
