@@ -228,6 +228,11 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	logging.Infof("Indexer::NewIndexer Status Warmup")
 
 	var res Message
+
+	// Setting manager must be the first component to initialized.  In particular, setting manager will
+	// read from indexer settings from metakv, including clsuter-level storage mode.   Since metakv is
+	// eventually consistent, if setting cannot read the latest settings from metakv during this step,
+	// those new settings will be delievered to the indexer through a callback.
 	idx.settingsMgr, idx.config, res = NewSettingsManager(idx.settingsMgrCmdCh, idx.wrkrRecvCh, config)
 	if res.GetMsgType() != MSG_SUCCESS {
 		logging.Fatalf("Indexer::NewIndexer settingsMgr Init Error %+v", res)
@@ -275,6 +280,10 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		return nil, res
 	}
 
+	// Find out if there is a bootstrapStorageMode for this node.   Bootstrap storage mode is
+	// set during storage upgrade to instruct the indexer to use this storage for bootstraping
+	// indexer components.   During storage upgrade, indexer may need to restart so it
+	// can boostrap with the bootstrap storage mode.
 	idx.bootstrapStorageMode = idx.getBootstrapStorageMode(idx.config)
 	logging.Infof("bootstrap storage mode %v", idx.bootstrapStorageMode)
 	if idx.enableManager {
@@ -355,6 +364,15 @@ func (idx *indexer) initFromConfig() {
 	}
 	logging.Infof("Indexer::NewIndexer Build Mode Set %v", common.GetBuildMode())
 
+	// Check if clsuter storage mode is set
+	storageMode := idx.config["settings.storage_mode"].String()
+	if storageMode != "" {
+		if common.SetClusterStorageModeStr(storageMode) {
+			logging.Infof("Indexer::Cluster Storage Mode Set %v", common.GetClusterStorageMode())
+		} else {
+			logging.Fatalf("Indexer::Cluster Invalid Storage Mode %v", storageMode)
+		}
+	}
 }
 
 func (idx *indexer) initHttpServer() {
@@ -4600,10 +4618,14 @@ func (idx *indexer) bootstrap1(snapshotNotifych chan IndexSnapshot) error {
 
 	idx.validateIndexInstMap()
 
+	// Upgrade storage depending on the storage mode of the indexes residing on this node.
+	// This step does not depend on the cluster storage mode (from metakv).   The indexer
+	// may need to restart if the bootstrap storage mode is different than the storage mode of
+	// the upgraded indexes.
 	needsRestart := idx.upgradeStorage()
 
 	go func() {
-		//recover indexes from local metadata
+		//Recover indexes from local metadata.
 		err := idx.initFromPersistedState()
 		if err != nil {
 			idx.internalRecvCh <- &MsgStorageWarmupDone{err: err, needsRestart: needsRestart}

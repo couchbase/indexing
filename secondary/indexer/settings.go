@@ -56,6 +56,7 @@ func NewSettingsManager(supvCmdch MsgChannel,
 		cancelCh:  make(chan struct{}),
 	}
 
+	// This method will merge metakv indexer settings onto default settings.
 	config, err := common.GetSettingsConfig(config)
 	if err != nil {
 		return s, nil, &MsgError{
