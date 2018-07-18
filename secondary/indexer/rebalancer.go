@@ -280,11 +280,11 @@ func (r *Rebalancer) processTokenAsSource(ttid string, tt *c.TransferToken) bool
 	switch tt.State {
 
 	case c.TransferTokenReady:
-		if !r.addToWaitGroup() {
+		if !r.checkValidNotifyStateSource(ttid, tt) {
 			return true
 		}
 
-		if !r.checkValidNotifyStateSource(ttid, tt) {
+		if !r.addToWaitGroup() {
 			return true
 		}
 
