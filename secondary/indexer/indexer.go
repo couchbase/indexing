@@ -208,6 +208,16 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		return nil, res
 	}
 
+	// Check if clsuter storage mode is set
+	storageMode := idx.config["settings.storage_mode"].String()
+	if storageMode != "" {
+		if common.SetClusterStorageModeStr(storageMode) {
+			logging.Infof("Indexer::Cluster Storage Mode Set %v", common.GetClusterStorageMode())
+		} else {
+			logging.Fatalf("Indexer::Cluster Invalid Storage Mode %v", storageMode)
+		}
+	}
+
 	idx.stats = NewIndexerStats()
 
 	// Read memquota setting
