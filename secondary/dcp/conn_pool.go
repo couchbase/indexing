@@ -51,29 +51,33 @@ func newConnectionPool(host string, ah AuthHandler, poolSize, poolOverflow int) 
 // ConnPoolTimeout is notified whenever connections are acquired from a pool.
 var ConnPoolCallback func(host string, source string, start time.Time, err error)
 
-func defaultMkConn(host string, ah AuthHandler) (*memcached.Client, error) {
-	conn, err := memcached.Connect("tcp", host)
+func defaultMkConn(
+	host string, ah AuthHandler) (conn *memcached.Client, err error) {
+
+	conn, err = memcached.Connect("tcp", host)
 	if err != nil {
 		return nil, err
 	}
 
-	if gah, ok := ah.(GenericMcdAuthHandler); ok {
-		err = gah.AuthenticateMemcachedConn(host, conn)
+	defer func() {
 		if err != nil {
 			conn.Close()
-			return nil, err
+			conn = nil
+			return
 		}
-		return conn, nil
+		conn.SetReadDeadline(time.Time{})
+	}()
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+
+	if gah, ok := ah.(GenericMcdAuthHandler); ok {
+		err = gah.AuthenticateMemcachedConn(host, conn)
+		return
 	}
 	name, pass := ah.GetCredentials()
 	if name != "default" {
 		_, err = conn.Auth(name, pass)
-		if err != nil {
-			conn.Close()
-			return nil, err
-		}
 	}
-	return conn, nil
+	return
 }
 
 func (cp *connectionPool) Close() (err error) {
