@@ -82,6 +82,7 @@ type updator struct {
 	serverGroup    string
 	nodeAddr       string
 	clusterVersion uint64
+	storageMode    uint64
 }
 
 //////////////////////////////////////////////////////////////
@@ -1251,6 +1252,8 @@ func (m *LifecycleMgr) getServiceMap() (*client.ServiceMap, error) {
 
 	srvMap.ClusterVersion = m.cinfo.GetClusterVersion()
 
+	srvMap.StorageMode = uint64(common.GetStorageMode())
+
 	return srvMap, nil
 }
 
@@ -1818,15 +1821,17 @@ func (m *updator) checkServiceMap(update bool) {
 		serviceMap.ServerGroup != m.serverGroup ||
 		m.indexerVersion != serviceMap.IndexerVersion ||
 		serviceMap.NodeAddr != m.nodeAddr ||
-		serviceMap.ClusterVersion != m.clusterVersion {
+		serviceMap.ClusterVersion != m.clusterVersion ||
+		serviceMap.StorageMode != m.storageMode {
 
 		m.serverGroup = serviceMap.ServerGroup
 		m.indexerVersion = serviceMap.IndexerVersion
 		m.nodeAddr = serviceMap.NodeAddr
 		m.clusterVersion = serviceMap.ClusterVersion
+		m.storageMode = serviceMap.StorageMode
 
-		logging.Infof("updator: updating service map.  server group=%v, indexerVersion=%v nodeAddr %v clusterVersion %v",
-			m.serverGroup, m.indexerVersion, m.nodeAddr, m.clusterVersion)
+		logging.Infof("updator: updating service map.  server group=%v, indexerVersion=%v nodeAddr %v clusterVersion %v storageMode %v",
+			m.serverGroup, m.indexerVersion, m.nodeAddr, m.clusterVersion, m.storageMode)
 
 		if err := m.manager.repo.BroadcastServiceMap(serviceMap); err != nil {
 			logging.Errorf("updator: fail to set service map.  Error = %v", err)

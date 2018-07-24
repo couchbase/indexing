@@ -117,6 +117,7 @@ type ServiceMap struct {
 	NodeUUID       string `json:"nodeUUID,omitempty"`
 	IndexerVersion uint64 `json:"indexerVersion,omitempty"`
 	ClusterVersion uint64 `json:"clusterVersion,omitempty"`
+	StorageMode    uint64 `json:"storageMode,omitempty"`
 }
 
 type IndexStats struct {

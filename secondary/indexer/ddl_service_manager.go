@@ -340,11 +340,14 @@ func (m *DDLServiceMgr) handleClusterStorageMode(httpAddrMap map[string]string) 
 
 	storageMode := common.StorageMode(common.NOT_SET)
 	initialized := false
+	indexCount := 0
 
 	indexes, _ := m.provider.ListIndex()
 	for _, index := range indexes {
 
 		for _, inst := range index.Instances {
+
+			indexCount++
 
 			// Any plasma index should have storage mode in index instance.
 			// So skip any index that does not have storage mode (either not
@@ -373,6 +376,10 @@ func (m *DDLServiceMgr) handleClusterStorageMode(httpAddrMap map[string]string) 
 				return
 			}
 		}
+	}
+
+	if indexCount == 0 {
+		storageMode = m.provider.GetStorageMode()
 	}
 
 	// if storage mode for all indexes converge, then change storage mode setting
