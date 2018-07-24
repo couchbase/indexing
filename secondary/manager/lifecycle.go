@@ -111,6 +111,7 @@ type updator struct {
 	nodeAddr       string
 	clusterVersion uint64
 	excludeNode    string
+	storageMode    uint64
 }
 
 //////////////////////////////////////////////////////////////
@@ -2505,6 +2506,8 @@ func (m *LifecycleMgr) getServiceMap() (*client.ServiceMap, error) {
 	}
 	srvMap.ExcludeNode = string(exclude)
 
+	srvMap.StorageMode = uint64(common.GetStorageMode())
+
 	return srvMap, nil
 }
 
@@ -3143,16 +3146,18 @@ func (m *updator) checkServiceMap(update bool) {
 		m.indexerVersion != serviceMap.IndexerVersion ||
 		serviceMap.NodeAddr != m.nodeAddr ||
 		serviceMap.ClusterVersion != m.clusterVersion ||
-		serviceMap.ExcludeNode != m.excludeNode {
+		serviceMap.ExcludeNode != m.excludeNode ||
+		serviceMap.StorageMode != m.storageMode {
 
 		m.serverGroup = serviceMap.ServerGroup
 		m.indexerVersion = serviceMap.IndexerVersion
 		m.nodeAddr = serviceMap.NodeAddr
 		m.clusterVersion = serviceMap.ClusterVersion
 		m.excludeNode = serviceMap.ExcludeNode
+		m.storageMode = serviceMap.StorageMode
 
 		logging.Infof("updator: updating service map.  server group=%v, indexerVersion=%v nodeAddr %v clusterVersion %v excludeNode %v",
-			m.serverGroup, m.indexerVersion, m.nodeAddr, m.clusterVersion, m.excludeNode)
+			m.serverGroup, m.indexerVersion, m.nodeAddr, m.clusterVersion, m.excludeNode, m.storageMode)
 
 		if err := m.manager.repo.BroadcastServiceMap(serviceMap); err != nil {
 			logging.Errorf("updator: fail to set service map.  Error = %v", err)

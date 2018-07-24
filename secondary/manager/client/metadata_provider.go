@@ -2136,6 +2136,33 @@ func (o *MetadataProvider) allWatchersRunningNoLock() bool {
 }
 
 //
+// Get the storage mode
+//
+func (o *MetadataProvider) GetStorageMode() c.StorageMode {
+
+	o.mutex.Lock()
+	defer o.mutex.Unlock()
+
+	storageMode := c.StorageMode(c.NOT_SET)
+	initialized := false
+
+	for _, watcher := range o.watchers {
+
+		if !initialized {
+			storageMode = watcher.getStorageMode()
+			initialized = true
+			continue
+		}
+
+		if storageMode != watcher.getStorageMode() {
+			return c.NOT_SET
+		}
+	}
+
+	return storageMode
+}
+
+//
 // Get the Indexer Version
 //
 func (o *MetadataProvider) GetIndexerVersion() uint64 {
@@ -3681,6 +3708,12 @@ func (w *watcher) updateServiceMapNoLock(indexerId c.IndexerId, serviceMap *Serv
 		needRefresh = true
 	}
 
+	if w.serviceMap.StorageMode != serviceMap.StorageMode {
+		logging.Infof("Received new service map.  StorageMode=%v", serviceMap.StorageMode)
+		w.serviceMap.StorageMode = serviceMap.StorageMode
+		needRefresh = true
+	}
+
 	return needRefresh
 }
 
@@ -3770,6 +3803,18 @@ func (w *watcher) getClusterVersion() uint64 {
 	}
 
 	return w.serviceMap.ClusterVersion
+}
+
+func (w *watcher) getStorageMode() c.StorageMode {
+
+	w.mutex.Lock()
+	defer w.mutex.Unlock()
+
+	if w.serviceMap == nil {
+		panic("Index node metadata is not initialized")
+	}
+
+	return c.StorageMode(w.serviceMap.StorageMode)
 }
 
 func (w *watcher) getNodeAddr() string {
