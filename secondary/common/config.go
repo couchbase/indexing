@@ -1744,6 +1744,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.rebalance.transferBatchSize": ConfigValue{
+		3,
+		"batch size of indexes transferred in one iteration during rebalance. 0 disables batching.",
+		3,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.settings.storage_mode.disable_upgrade": ConfigValue{
 		false,
 		"Disable upgrading storage mode. This is checked on every indexer restart, " +
