@@ -1724,9 +1724,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.rebalance.httpTimeout": ConfigValue{
-		120,
+		1200,
 		"timeout(in seconds) for http requests during rebalance",
-		120,
+		1200,
 		false, // mutable
 		false, // case-insensitive
 	},
