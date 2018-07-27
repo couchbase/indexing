@@ -761,15 +761,21 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot) {
 
 		mdb.confLock.RUnlock()
 
-		var firstItem bool = true
+		// StoreToDisk call below will spawn 'concurrency' go routines to write
+		// and will wait for this group to complete.
+		// To ensure that CPU isn't overwhelmed, we limit how many such groups
+		// can run in parallel.
+		// To avoid holding a snapshot we must limit the caller via the item callback,
+		// But as this callback is invoked per item, per writer,
+		// it is enough to throttle just one writer go routine of each batch.
+		var throttleToken int64
 		limitWriterThreads := func(itm *memdb.ItemEntry) {
-			if firstItem {
+			if atomic.CompareAndSwapInt64(&throttleToken, 0, 1) {
 				moiWriterSemaphoreCh <- true
-				firstItem = false
 			}
 		}
 		defer func() {
-			if !firstItem { // Only post if callback above ran
+			if throttleToken == 1 { // Only post if callback above ran
 				<-moiWriterSemaphoreCh
 			}
 		}()
