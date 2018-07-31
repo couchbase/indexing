@@ -16,6 +16,7 @@ import (
 
 	ap "github.com/couchbase/indexing/secondary/adminport"
 	c "github.com/couchbase/indexing/secondary/common"
+	mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
 	"github.com/couchbase/indexing/secondary/logging"
 	projC "github.com/couchbase/indexing/secondary/projector/client"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
@@ -166,6 +167,11 @@ func (p *Projector) ResetConfig(config c.Config) {
 		if p.takeMEMProfile(fname) {
 			logging.Infof("%v mem profile => %q\n", p.logPrefix, fname)
 		}
+	}
+
+	if cv, ok := config["projector.memcachedTimeout"]; ok {
+		mc.SetDcpMemcachedTimeout(uint32(cv.Int()))
+		logging.Infof("%v memcachedTimeout set to %v\n", p.logPrefix, uint32(cv.Int()))
 	}
 
 	logging.Infof("%v\n", c.LogRuntime())

@@ -399,19 +399,36 @@ func (feed *DcpFeed) doDcpGetFailoverLog(
 		Opaque: opaqueFailover,
 	}
 	failoverLogs := make(map[uint16]*FailoverLog)
+
 	for _, vBucket := range vblist {
 		rq.VBucket = vBucket
-		if err := feed.conn.Transmit(rq); err != nil {
-			fmsg := "%v ##%x doDcpGetFailoverLog.Transmit(): %v"
-			logging.Errorf(fmsg, feed.logPrefix, opaque, err)
-			return nil, err
+
+		var msg []interface{}
+		err1 := func() error {
+			feed.conn.SetMcdConnectionDeadline()
+			defer feed.conn.ResetMcdConnectionDeadline()
+
+			if err := feed.conn.Transmit(rq); err != nil {
+				fmsg := "%v ##%x doDcpGetFailoverLog.Transmit(): %v"
+				logging.Errorf(fmsg, feed.logPrefix, opaque, err)
+				return err
+			}
+
+			var ok bool
+			msg, ok = <-rcvch
+			if !ok {
+				fmsg := "%v ##%x doDcpGetFailoverLog.rcvch closed"
+				logging.Errorf(fmsg, feed.logPrefix, opaque)
+				return ErrorConnection
+			}
+
+			return nil
+		}()
+
+		if err1 != nil {
+			return nil, err1
 		}
-		msg, ok := <-rcvch
-		if !ok {
-			fmsg := "%v ##%x doDcpGetFailoverLog.rcvch closed"
-			logging.Errorf(fmsg, feed.logPrefix, opaque)
-			return nil, ErrorConnection
-		}
+
 		pkt := msg[0].(*transport.MCRequest)
 		req := &transport.MCResponse{
 			Opcode: pkt.Opcode,
@@ -510,6 +527,10 @@ func (feed *DcpFeed) doDcpOpen(
 	binary.BigEndian.PutUint32(rq.Extras[4:], flags) // we are consumer
 
 	prefix := feed.logPrefix
+
+	feed.conn.SetMcdConnectionDeadline()
+	defer feed.conn.ResetMcdConnectionDeadline()
+
 	if err := feed.conn.Transmit(rq); err != nil {
 		return err
 	}

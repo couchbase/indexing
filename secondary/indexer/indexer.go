@@ -374,6 +374,11 @@ func (idx *indexer) initFromConfig() {
 			logging.Fatalf("Indexer::Cluster Invalid Storage Mode %v", storageMode)
 		}
 	}
+
+	if mcdTimeout, ok := idx.config["memcachedTimeout"]; ok {
+		common.SetDcpMemcachedTimeout(uint32(mcdTimeout.Int()))
+		logging.Infof("memcachedTimeout set to %v\n", uint32(mcdTimeout.Int()))
+	}
 }
 
 func GetHTTPMux() *http.ServeMux {
@@ -1072,6 +1077,13 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 		// Initialize the QE REST server on config change.
 		NewTestServer(idx.config["clusterAddr"].String())
 		idx.testServRunning = true
+	}
+
+	if mcdTimeout, ok := newConfig["memcachedTimeout"]; ok {
+		if mcdTimeout.Int() != idx.config["memcachedTimeout"].Int() {
+			common.SetDcpMemcachedTimeout(uint32(mcdTimeout.Int()))
+			logging.Infof("memcachedTimeout set to %v\n", uint32(mcdTimeout.Int()))
+		}
 	}
 
 	memdb.Debug(idx.config["settings.moi.debug"].Bool())
