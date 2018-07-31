@@ -15,6 +15,7 @@ import "runtime/debug"
 
 import ap "github.com/couchbase/indexing/secondary/adminport"
 import c "github.com/couchbase/indexing/secondary/common"
+import mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
 import projC "github.com/couchbase/indexing/secondary/projector/client"
 import protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
 import "github.com/golang/protobuf/proto"
@@ -198,6 +199,11 @@ func (p *Projector) ResetConfig(config c.Config) {
 		} else {
 			logging.Errorf("Missing mem-profile o/p filename\n")
 		}
+	}
+
+	if cv, ok := config["projector.memcachedTimeout"]; ok {
+		mc.SetDcpMemcachedTimeout(uint32(cv.Int()))
+		logging.Infof("%v memcachedTimeout set to %v\n", p.logPrefix, uint32(cv.Int()))
 	}
 
 	logging.Infof("%v\n", c.LogRuntime())

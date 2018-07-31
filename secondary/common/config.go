@@ -389,6 +389,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"projector.memcachedTimeout": ConfigValue{
+		120, // In Seconds
+		"Timeout for projector to memcached communication (In Seconds)",
+		120,
+		false, // mutable
+		false, // case-insensitive
+	},
 	// projector's adminport client, can be used by manager
 	"manager.projectorclient.retryInterval": ConfigValue{
 		16,
@@ -2103,6 +2110,13 @@ var SystemConfig = Config{
 		0,
 		"minimum file size for compaction",
 		0,     // default - 4M
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.memcachedTimeout": ConfigValue{
+		120, // In Seconds
+		"Timeout for indexer to memcached communication (In Seconds)",
+		120,
 		false, // mutable
 		false, // case-insensitive
 	},

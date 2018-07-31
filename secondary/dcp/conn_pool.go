@@ -65,9 +65,7 @@ func defaultMkConn(
 			conn = nil
 			return
 		}
-		conn.SetReadDeadline(time.Time{})
 	}()
-	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 
 	if gah, ok := ah.(GenericMcdAuthHandler); ok {
 		err = gah.AuthenticateMemcachedConn(host, conn)
@@ -253,6 +251,10 @@ func (cp *connectionPool) GetDcpConn(name DcpFeedName) (*memcached.Client, error
 	rq.Extras = make([]byte, 8)
 	binary.BigEndian.PutUint32(rq.Extras[:4], 0)
 	binary.BigEndian.PutUint32(rq.Extras[4:], 1) // we are consumer
+
+	mc.SetMcdConnectionDeadline()
+	defer mc.ResetMcdConnectionDeadline()
+
 	if err := mc.Transmit(rq); err != nil {
 		return nil, err
 	}
@@ -274,6 +276,9 @@ func GetSeqs(mc *memcached.Client, seqnos []uint64, buf []byte) error {
 
 	rq.Extras = make([]byte, 4)
 	binary.BigEndian.PutUint32(rq.Extras, 1) // Only active vbuckets
+
+	mc.SetMcdConnectionDeadline()
+	defer mc.ResetMcdConnectionDeadline()
 
 	if err := mc.Transmit(rq); err != nil {
 		return err
