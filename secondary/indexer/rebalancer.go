@@ -86,6 +86,9 @@ type Rebalancer struct {
 
 	change     *service.TopologyChange
 	runPlanner bool
+
+	transferTokenBatches [][]string
+	currBatchTokens      []string
 }
 
 func NewRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *RebalanceToken,
@@ -121,6 +124,8 @@ func NewRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *Rebal
 
 		change:     change,
 		runPlanner: runPlanner,
+
+		transferTokenBatches: make([][]string, 0),
 	}
 
 	r.config.Store(config)
@@ -271,7 +276,8 @@ func (r *Rebalancer) doRebalance() {
 			return
 
 		default:
-			r.publishTransferTokens()
+			r.createTransferBatches()
+			r.publishTransferTokenBatch()
 			close(r.waitForTokenPublish)
 			go r.observeRebalance()
 		}
@@ -283,12 +289,43 @@ func (r *Rebalancer) doRebalance() {
 
 }
 
-func (r *Rebalancer) publishTransferTokens() {
+func (r *Rebalancer) createTransferBatches() {
 
-	l.Infof("Rebalancer::publishTransferTokens Registered Transfer Token In Metakv %v", r.transferTokens)
+	cfg := r.config.Load()
+	batchSize := cfg["rebalance.transferBatchSize"].Int()
 
-	for ttid, tt := range r.transferTokens {
-		setTransferTokenInMetakv(ttid, tt)
+	var batch []string
+	for ttid, _ := range r.transferTokens {
+		if batch == nil {
+			batch = make([]string, 0, batchSize)
+		}
+		batch = append(batch, ttid)
+
+		if len(batch) == batchSize {
+			r.transferTokenBatches = append(r.transferTokenBatches, batch)
+			batch = nil
+		}
+	}
+
+	if len(batch) != 0 {
+		r.transferTokenBatches = append(r.transferTokenBatches, batch)
+	}
+
+	l.Infof("Rebalancer::createTransferBatches Transfer Batches %v", r.transferTokenBatches)
+}
+
+func (r *Rebalancer) publishTransferTokenBatch() {
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.currBatchTokens = r.transferTokenBatches[0]
+	r.transferTokenBatches = r.transferTokenBatches[1:]
+
+	l.Infof("Rebalancer::publishTransferTokenBatch Registered Transfer Token In Metakv %v", r.currBatchTokens)
+
+	for _, ttid := range r.currBatchTokens {
+		setTransferTokenInMetakv(ttid, r.transferTokens[ttid])
 	}
 
 }
@@ -1119,6 +1156,10 @@ func (r *Rebalancer) processTokenAsMaster(ttid string, tt *c.TransferToken) bool
 			l.Infof("Rebalancer::processTokenAsMaster No Tokens Found. Mark Done.")
 			r.cancelMetakv()
 			go r.finish(nil)
+		} else {
+			if r.checkCurrBatchDone() {
+				r.publishTransferTokenBatch()
+			}
 		}
 
 	default:
@@ -1266,6 +1307,20 @@ func (r *Rebalancer) checkAllTokensDone() bool {
 	defer r.mu.RUnlock()
 
 	for _, tt := range r.transferTokens {
+		if tt.State != c.TransferTokenDeleted {
+			return false
+		}
+	}
+	return true
+}
+
+func (r *Rebalancer) checkCurrBatchDone() bool {
+
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	for _, ttid := range r.currBatchTokens {
+		tt := r.transferTokens[ttid]
 		if tt.State != c.TransferTokenDeleted {
 			return false
 		}
