@@ -155,6 +155,8 @@ const (
 
 	STATS_RESET
 	REPAIR_ABORT
+
+	INDEXER_DDL_IN_PROGRESS_RESPONSE
 )
 
 type Message interface {
@@ -1521,15 +1523,32 @@ func (m *MsgIndexerState) GetRollbackTimes() map[string]int64 {
 }
 
 type MsgCheckDDLInProgress struct {
-	respCh chan bool
+	respCh MsgChannel
 }
 
 func (m *MsgCheckDDLInProgress) GetMsgType() MsgType {
 	return INDEXER_CHECK_DDL_IN_PROGRESS
 }
 
-func (m *MsgCheckDDLInProgress) GetRespCh() chan bool {
+func (m *MsgCheckDDLInProgress) GetRespCh() MsgChannel {
 	return m.respCh
+}
+
+type MsgDDLInProgressResponse struct {
+	ddlInProgress        bool
+	inProgressIndexNames []string
+}
+
+func (m *MsgDDLInProgressResponse) GetMsgType() MsgType {
+	return INDEXER_DDL_IN_PROGRESS_RESPONSE
+}
+
+func (m *MsgDDLInProgressResponse) GetInProgressIndexNames() []string {
+	return m.inProgressIndexNames
+}
+
+func (m *MsgDDLInProgressResponse) GetDDLInProgress() bool {
+	return m.ddlInProgress
 }
 
 type MsgUpdateIndexRState struct {

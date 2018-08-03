@@ -537,9 +537,10 @@ func (m *ServiceMgr) prepareRebalance(change service.TopologyChange) error {
 	}
 
 	if c.GetBuildMode() == c.ENTERPRISE {
-		if m.checkDDLRunning() {
-			l.Errorf("ServiceMgr::prepareRebalance Found DDL Running. Cannot Initiate Prepare Phase")
-			return errors.New("indexer rebalance failure - ddl in progress")
+		if ddlRunning, ddlRunningIndexNames := m.checkDDLRunning(); ddlRunning {
+			l.Errorf("ServiceMgr::prepareRebalance Found index build Running. Cannot Initiate Prepare Phase")
+			fmtMsg := "indexer rebalance failure - index build is in progress for indexes: %v."
+			return errors.New(fmt.Sprintf(fmtMsg, ddlRunningIndexNames))
 		}
 	}
 
@@ -710,11 +711,15 @@ func (m *ServiceMgr) isNoOpRebal(change service.TopologyChange) bool {
 
 }
 
-func (m *ServiceMgr) checkDDLRunning() bool {
+func (m *ServiceMgr) checkDDLRunning() (bool, []string) {
 
-	respCh := make(chan bool)
+	respCh := make(MsgChannel)
 	m.supvMsgch <- &MsgCheckDDLInProgress{respCh: respCh}
-	return <-respCh
+	msg := <-respCh
+
+	ddlInProgress := msg.(*MsgDDLInProgressResponse).GetDDLInProgress()
+	inProgressIndexNames := msg.(*MsgDDLInProgressResponse).GetInProgressIndexNames()
+	return ddlInProgress, inProgressIndexNames
 }
 
 func (m *ServiceMgr) checkRebalanceRunning() bool {
