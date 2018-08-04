@@ -46,13 +46,12 @@ func (p *Projector) mainAdminPort(reqch chan ap.Request) {
 	grHandler := pprof.Handler("goroutine")
 	hpHandler := pprof.Handler("heap")
 	tcHandler := pprof.Handler("threadcreate")
-	profHandler := pprof.Handler("profile")
 	p.admind.RegisterHTTPHandler("/debug/pprof", pprof.Index)
 	p.admind.RegisterHTTPHandler("/debug/pprof/block", blockHandler)
 	p.admind.RegisterHTTPHandler("/debug/pprof/goroutine", grHandler)
 	p.admind.RegisterHTTPHandler("/debug/pprof/heap", hpHandler)
 	p.admind.RegisterHTTPHandler("/debug/pprof/threadcreate", tcHandler)
-	p.admind.RegisterHTTPHandler("/debug/pprof/profile", profHandler)
+	p.admind.RegisterHTTPHandler("/debug/pprof/profile", pprof.Profile)
 
 	expvar.Publish("projector", expvar.Func(p.doStatistics))
 
