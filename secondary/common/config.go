@@ -1164,26 +1164,26 @@ var SystemConfig = Config{
 	},
 
 	"indexer.stream_reader.plasma.workerBuffer": ConfigValue{
-		uint64(10000),
+		uint64(2000),
 		"Buffer Size for stream reader worker to hold mutations " +
 			"before being enqueued in mutation queue",
-		uint64(10000),
+		uint64(2000),
 		false, // mutable
 		false, // case-insensitive
 	},
 
 	"indexer.stream_reader.plasma.mutationBuffer": ConfigValue{
-		uint64(3000),
+		uint64(1000),
 		"Buffer Size to hold incoming mutations from dataport",
-		uint64(3000),
+		uint64(1000),
 		false, // mutable
 		false, // case-insensitive
 	},
 
 	"indexer.dataport.plasma.dataChanSize": ConfigValue{
-		3000,
+		1000,
 		"request channel size of indexer dataport's gen-server routine",
-		3000,
+		1000,
 		false, // mutable
 		false, // case-insensitive
 	},
