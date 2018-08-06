@@ -94,7 +94,7 @@ func ParseArgs(arguments []string) (*Command, []string, *flag.FlagSet, error) {
 	// options for setting configuration
 	fset.StringVar(&cmdOptions.ConfigKey, "ckey", "", "Config key")
 	fset.StringVar(&cmdOptions.ConfigVal, "cval", "", "Config value")
-	fset.StringVar(&cmdOptions.Using, "using", c.PlasmaDB, "storage type to use")
+	fset.StringVar(&cmdOptions.Using, "using", "gsi", "storage type to use")
 
 	// not useful to expose in sherlock
 	cmdOptions.ExprType = "N1QL"
