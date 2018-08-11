@@ -154,7 +154,7 @@ var handlerContext requestHandlerContext
 // Registration
 ///////////////////////////////////////////////////////
 
-func registerRequestHandler(mgr *IndexManager, clusterUrl string) {
+func registerRequestHandler(mgr *IndexManager, clusterUrl string, mux *http.ServeMux) {
 
 	handlerContext.initializer.Do(func() {
 		defer func() {
@@ -163,18 +163,18 @@ func registerRequestHandler(mgr *IndexManager, clusterUrl string) {
 			}
 		}()
 
-		http.HandleFunc("/createIndex", handlerContext.createIndexRequest)
-		http.HandleFunc("/createIndexRebalance", handlerContext.createIndexRequestRebalance)
-		http.HandleFunc("/dropIndex", handlerContext.dropIndexRequest)
-		http.HandleFunc("/buildIndex", handlerContext.buildIndexRequest)
-		http.HandleFunc("/getLocalIndexMetadata", handlerContext.handleLocalIndexMetadataRequest)
-		http.HandleFunc("/getIndexMetadata", handlerContext.handleIndexMetadataRequest)
-		http.HandleFunc("/restoreIndexMetadata", handlerContext.handleRestoreIndexMetadataRequest)
-		http.HandleFunc("/getIndexStatus", handlerContext.handleIndexStatusRequest)
-		http.HandleFunc("/getIndexStatement", handlerContext.handleIndexStatementRequest)
-		http.HandleFunc("/planIndex", handlerContext.handleIndexPlanRequest)
-		http.HandleFunc("/settings/storageMode", handlerContext.handleIndexStorageModeRequest)
-		http.HandleFunc("/settings/planner", handlerContext.handlePlannerRequest)
+		mux.HandleFunc("/createIndex", handlerContext.createIndexRequest)
+		mux.HandleFunc("/createIndexRebalance", handlerContext.createIndexRequestRebalance)
+		mux.HandleFunc("/dropIndex", handlerContext.dropIndexRequest)
+		mux.HandleFunc("/buildIndex", handlerContext.buildIndexRequest)
+		mux.HandleFunc("/getLocalIndexMetadata", handlerContext.handleLocalIndexMetadataRequest)
+		mux.HandleFunc("/getIndexMetadata", handlerContext.handleIndexMetadataRequest)
+		mux.HandleFunc("/restoreIndexMetadata", handlerContext.handleRestoreIndexMetadataRequest)
+		mux.HandleFunc("/getIndexStatus", handlerContext.handleIndexStatusRequest)
+		mux.HandleFunc("/getIndexStatement", handlerContext.handleIndexStatementRequest)
+		mux.HandleFunc("/planIndex", handlerContext.handleIndexPlanRequest)
+		mux.HandleFunc("/settings/storageMode", handlerContext.handleIndexStorageModeRequest)
+		mux.HandleFunc("/settings/planner", handlerContext.handlePlannerRequest)
 	})
 
 	handlerContext.mgr = mgr

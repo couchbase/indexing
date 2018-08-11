@@ -99,6 +99,18 @@ func NewHTTPServer(config c.Config, reqch chan<- Request) Server {
 	return s
 }
 
+func validateAuth(w http.ResponseWriter, r *http.Request) bool {
+	_, valid, err := c.IsAuthValid(r)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(err.Error() + "\n"))
+	} else if valid == false {
+		w.WriteHeader(401)
+		w.Write([]byte("401 Unauthorized\n"))
+	}
+	return valid
+}
+
 // Register is part of Server interface.
 func (s *httpServer) Register(msg MessageMarshaller) (err error) {
 	s.mu.Lock()
@@ -228,6 +240,7 @@ func (s *httpServer) shutdown() {
 
 // handle incoming request.
 func (s *httpServer) systemHandler(w http.ResponseWriter, r *http.Request) {
+
 	var err error
 	var dataIn, dataOut []byte
 
@@ -311,6 +324,11 @@ func (s *httpServer) systemHandler(w http.ResponseWriter, r *http.Request) {
 
 // handle expvar request.
 func (s *httpServer) expvarHandler(w http.ResponseWriter, r *http.Request) {
+	valid := validateAuth(w, r)
+	if !valid {
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	fmt.Fprintf(w, "{\n")
 	first := true

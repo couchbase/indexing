@@ -46,8 +46,9 @@ func NewTestServer(cluster string) (*testServer, Message) {
 	}
 	testapi.config = config
 
-	http.HandleFunc("/internal/indexes", testapi.handleIndexes)
-	http.HandleFunc("/internal/index/", testapi.handleIndex)
+	mux := GetHTTPMux()
+	mux.HandleFunc("/internal/indexes", testapi.handleIndexes)
+	mux.HandleFunc("/internal/index/", testapi.handleIndex)
 	return testapi, nil
 }
 
