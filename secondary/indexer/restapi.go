@@ -46,8 +46,9 @@ func NewRestServer(cluster string) (*restServer, Message) {
 	}
 	restapi.config = config
 
-	http.HandleFunc("/api/indexes", restapi.handleIndexes)
-	http.HandleFunc("/api/index/", restapi.handleIndex)
+	mux := GetHTTPMux()
+	mux.HandleFunc("/api/indexes", restapi.handleIndexes)
+	mux.HandleFunc("/api/index/", restapi.handleIndex)
 	return restapi, nil
 }
 

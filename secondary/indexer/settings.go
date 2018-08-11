@@ -65,12 +65,6 @@ func NewSettingsManager(supvCmdch MsgChannel,
 	}
 
 	initGlobalSettings(nil, config)
-	http.HandleFunc("/settings", s.handleSettingsReq)
-	http.HandleFunc("/internal/settings", s.handleInternalSettingsReq)
-	http.HandleFunc("/triggerCompaction", s.handleCompactionTrigger)
-	http.HandleFunc("/settings/runtime/freeMemory", s.handleFreeMemoryReq)
-	http.HandleFunc("/settings/runtime/forceGC", s.handleForceGCReq)
-	http.HandleFunc("/plasmaDiag", s.handlePlasmaDiag)
 
 	go func() {
 		fn := func(r int, err error) error {
@@ -90,6 +84,16 @@ func NewSettingsManager(supvCmdch MsgChannel,
 
 	indexerConfig := config.SectionConfig("indexer.", true)
 	return s, indexerConfig, &MsgSuccess{}
+}
+
+func (s *settingsManager) RegisterRestEndpoints() {
+	mux := GetHTTPMux()
+	mux.HandleFunc("/settings", s.handleSettingsReq)
+	mux.HandleFunc("/internal/settings", s.handleInternalSettingsReq)
+	mux.HandleFunc("/triggerCompaction", s.handleCompactionTrigger)
+	mux.HandleFunc("/settings/runtime/freeMemory", s.handleFreeMemoryReq)
+	mux.HandleFunc("/settings/runtime/forceGC", s.handleForceGCReq)
+	mux.HandleFunc("/plasmaDiag", s.handlePlasmaDiag)
 }
 
 func (s *settingsManager) writeOk(w http.ResponseWriter) {

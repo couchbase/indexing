@@ -463,15 +463,19 @@ func NewStatsManager(supvCmdch MsgChannel,
 
 	s.config.Store(config)
 
-	http.HandleFunc("/stats", s.handleStatsReq)
-	http.HandleFunc("/stats/mem", s.handleMemStatsReq)
-	http.HandleFunc("/stats/storage/mm", s.handleStorageMMStatsReq)
-	http.HandleFunc("/stats/storage", s.handleStorageStatsReq)
-	http.HandleFunc("/stats/reset", s.handleStatsResetReq)
 	go s.run()
 	go s.runStatsDumpLogger()
 	StartCpuCollector()
 	return s, &MsgSuccess{}
+}
+
+func (s *statsManager) RegisterRestEndpoints() {
+	mux := GetHTTPMux()
+	mux.HandleFunc("/stats", s.handleStatsReq)
+	mux.HandleFunc("/stats/mem", s.handleMemStatsReq)
+	mux.HandleFunc("/stats/storage/mm", s.handleStorageMMStatsReq)
+	mux.HandleFunc("/stats/storage", s.handleStorageStatsReq)
+	mux.HandleFunc("/stats/reset", s.handleStatsResetReq)
 }
 
 func (s *statsManager) tryUpdateStats(sync bool) {
@@ -525,6 +529,13 @@ func (s *statsManager) tryUpdateStats(sync bool) {
 }
 
 func (s *statsManager) handleStatsReq(w http.ResponseWriter, r *http.Request) {
+	_, valid, _ := common.IsAuthValid(r)
+	if !valid {
+		w.WriteHeader(401)
+		w.Write([]byte("401 Unauthorized"))
+		return
+	}
+
 	sync := false
 	if r.Method == "POST" || r.Method == "GET" {
 		if r.URL.Query().Get("async") == "false" {
@@ -547,6 +558,13 @@ func (s *statsManager) handleStatsReq(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *statsManager) handleMemStatsReq(w http.ResponseWriter, r *http.Request) {
+	_, valid, _ := common.IsAuthValid(r)
+	if !valid {
+		w.WriteHeader(401)
+		w.Write([]byte("401 Unauthorized"))
+		return
+	}
+
 	stats := new(runtime.MemStats)
 	if r.Method == "POST" || r.Method == "GET" {
 		runtime.ReadMemStats(stats)
@@ -585,6 +603,13 @@ func (s *statsManager) getStorageStats() string {
 }
 
 func (s *statsManager) handleStorageStatsReq(w http.ResponseWriter, r *http.Request) {
+	_, valid, _ := common.IsAuthValid(r)
+	if !valid {
+		w.WriteHeader(401)
+		w.Write([]byte("401 Unauthorized"))
+		return
+	}
+
 	if r.Method == "POST" || r.Method == "GET" {
 
 		w.WriteHeader(200)
@@ -597,6 +622,13 @@ func (s *statsManager) handleStorageStatsReq(w http.ResponseWriter, r *http.Requ
 }
 
 func (s *statsManager) handleStorageMMStatsReq(w http.ResponseWriter, r *http.Request) {
+	_, valid, _ := common.IsAuthValid(r)
+	if !valid {
+		w.WriteHeader(401)
+		w.Write([]byte("401 Unauthorized"))
+		return
+	}
+
 	if r.Method == "POST" || r.Method == "GET" {
 
 		w.WriteHeader(200)

@@ -18,6 +18,7 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager/client"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
@@ -181,9 +182,6 @@ func NewIndexManagerInternal(config common.Config, storageMode common.StorageMod
 	// start lifecycle manager
 	mgr.lifecycleMgr.Run(mgr.repo, mgr.requestServer)
 
-	// register request handler
-	registerRequestHandler(mgr, mgr.clusterURL)
-
 	// coordinator
 	mgr.coordinator = nil
 
@@ -205,6 +203,11 @@ func NewIndexManager(requestAddr string,
     return NewIndexManagerInternal(requestAddr, leaderAddr, config, nil)
 }
 */
+
+func (mgr *IndexManager) RegisterRestEndpoints(mux *http.ServeMux) {
+	// register request handler
+	registerRequestHandler(mgr, mgr.clusterURL, mux)
+}
 
 func (mgr *IndexManager) StartCoordinator(config string) {
 

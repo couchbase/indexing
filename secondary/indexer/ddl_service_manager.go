@@ -100,7 +100,8 @@ func NewDDLServiceMgr(supvCmdch MsgChannel, supvMsgch MsgChannel, config common.
 
 	mgr.config.Store(config)
 
-	http.HandleFunc("/listMetadataTokens", mgr.handleListMetadataTokens)
+	mux := GetHTTPMux()
+	mux.HandleFunc("/listMetadataTokens", mgr.handleListMetadataTokens)
 
 	gDDLServiceMgrLck.Lock()
 	defer gDDLServiceMgrLck.Unlock()

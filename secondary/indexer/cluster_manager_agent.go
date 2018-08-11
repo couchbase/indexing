@@ -21,6 +21,8 @@ import (
 
 //ClustMgrAgent provides the mechanism to talk to Index Coordinator
 type ClustMgrAgent interface {
+	// Used to register rest apis served by cluster manager.
+	RegisterRestEndpoints()
 }
 
 type clustMgrAgent struct {
@@ -80,6 +82,11 @@ func NewClustMgrAgent(supvCmdch MsgChannel, supvRespch MsgChannel, cfg common.Co
 
 	return c, &MsgSuccess{}
 
+}
+
+func (c *clustMgrAgent) RegisterRestEndpoints() {
+	mux := GetHTTPMux()
+	c.mgr.RegisterRestEndpoints(mux)
 }
 
 //run starts the clustmgrAgent loop which listens to messages

@@ -1,6 +1,7 @@
 package common
 
 import "errors"
+import "expvar"
 import "fmt"
 import "io"
 import "io/ioutil"
@@ -11,6 +12,7 @@ import "os"
 import "strconv"
 import "strings"
 import "net/http"
+import "net/http/pprof"
 import "runtime"
 import "hash/crc64"
 import "reflect"
@@ -956,4 +958,130 @@ func ComputePercent(a, b int64) int64 {
 	}
 
 	return 0
+}
+
+func validateAuth(w http.ResponseWriter, r *http.Request) bool {
+	_, valid, err := IsAuthValid(r)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(err.Error() + "\n"))
+	} else if valid == false {
+		w.WriteHeader(401)
+		w.Write([]byte("401 Unauthorized\n"))
+	}
+	return valid
+}
+
+func GrHandler(rw http.ResponseWriter, r *http.Request) {
+
+	valid := validateAuth(rw, r)
+	if !valid {
+		return
+	}
+
+	hndlr := pprof.Handler("goroutine")
+	hndlr.ServeHTTP(rw, r)
+}
+
+func BlockHandler(rw http.ResponseWriter, r *http.Request) {
+
+	valid := validateAuth(rw, r)
+	if !valid {
+		return
+	}
+
+	hndlr := pprof.Handler("block")
+	hndlr.ServeHTTP(rw, r)
+}
+
+func HeapHandler(rw http.ResponseWriter, r *http.Request) {
+
+	valid := validateAuth(rw, r)
+	if !valid {
+		return
+	}
+
+	hndlr := pprof.Handler("heap")
+	hndlr.ServeHTTP(rw, r)
+}
+
+func TCHandler(rw http.ResponseWriter, r *http.Request) {
+
+	valid := validateAuth(rw, r)
+	if !valid {
+		return
+	}
+
+	hndlr := pprof.Handler("threadcreate")
+	hndlr.ServeHTTP(rw, r)
+}
+
+func PProfHandler(rw http.ResponseWriter, r *http.Request) {
+
+	valid := validateAuth(rw, r)
+	if !valid {
+		return
+	}
+
+	pprof.Index(rw, r)
+}
+
+func ProfileHandler(rw http.ResponseWriter, r *http.Request) {
+
+	valid := validateAuth(rw, r)
+	if !valid {
+		return
+	}
+
+	pprof.Profile(rw, r)
+}
+
+func CmdlineHandler(rw http.ResponseWriter, r *http.Request) {
+
+	valid := validateAuth(rw, r)
+	if !valid {
+		return
+	}
+
+	pprof.Cmdline(rw, r)
+}
+
+func SymbolHandler(rw http.ResponseWriter, r *http.Request) {
+
+	valid := validateAuth(rw, r)
+	if !valid {
+		return
+	}
+
+	pprof.Symbol(rw, r)
+}
+
+func TraceHandler(rw http.ResponseWriter, r *http.Request) {
+
+	valid := validateAuth(rw, r)
+	if !valid {
+		return
+	}
+
+	pprof.Trace(rw, r)
+}
+
+func ExpvarHandler(rw http.ResponseWriter, r *http.Request) {
+
+	valid := validateAuth(rw, r)
+	if !valid {
+		return
+	}
+
+	rw.Header().Set("Content-Type", "application/json; charset=utf-8")
+	fmt.Fprintf(rw, "{\n")
+	first := true
+	expvar.Do(func(kv expvar.KeyValue) {
+		if !first {
+			fmt.Fprintf(rw, ",\n")
+		}
+		first = false
+		fmt.Fprintf(rw, "%q: %s", kv.Key, kv.Value)
+	})
+	fmt.Fprintf(rw, "\n}\n")
 }
