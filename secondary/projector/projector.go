@@ -634,8 +634,25 @@ func (p *Projector) doStatistics() interface{} {
 // http handlers
 //--------------
 
+func validateAuth(w http.ResponseWriter, r *http.Request) bool {
+	_, valid, err := c.IsAuthValid(r)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(err.Error() + "\n"))
+	} else if valid == false {
+		w.WriteHeader(401)
+		w.Write([]byte("401 Unauthorized\n"))
+	}
+	return valid
+}
+
 // handle projector statistics
 func (p *Projector) handleStats(w http.ResponseWriter, r *http.Request) {
+	valid := validateAuth(w, r)
+	if !valid {
+		return
+	}
+
 	logging.Infof("%s Request %q\n", p.logPrefix, r.URL.Path)
 
 	contentType := r.Header.Get("Content-Type")
@@ -656,6 +673,11 @@ func (p *Projector) handleStats(w http.ResponseWriter, r *http.Request) {
 
 // handle settings
 func (p *Projector) handleSettings(w http.ResponseWriter, r *http.Request) {
+	valid := validateAuth(w, r)
+	if !valid {
+		return
+	}
+
 	logging.Infof("%s Request %q %q\n", p.logPrefix, r.Method, r.URL.Path)
 	switch r.Method {
 	case "GET":

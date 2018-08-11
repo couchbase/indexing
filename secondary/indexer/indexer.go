@@ -48,6 +48,7 @@ type Indexer interface {
 var StreamAddrMap StreamAddressMap
 var StreamTopicName map[common.StreamId]string
 var ServiceAddrMap map[string]string
+var httpMux *http.ServeMux
 
 type BucketIndexCountMap map[string]int
 type BucketFlushInProgressMap map[string]bool
@@ -375,19 +376,46 @@ func (idx *indexer) initFromConfig() {
 	}
 }
 
+func GetHTTPMux() *http.ServeMux {
+	if httpMux == nil {
+		panic("httpMux is not initialized.")
+	}
+
+	return httpMux
+}
+
 func (idx *indexer) initHttpServer() {
 
 	// Setup http server
 	addr := net.JoinHostPort("", idx.config["httpPort"].String())
 	logging.PeriodicProfile(logging.Debug, addr, "goroutine")
 
+	overrideHttpDebugHandlers := func() {
+		mux := GetHTTPMux()
+		mux.HandleFunc("/debug/pprof/", common.PProfHandler)
+		mux.HandleFunc("/debug/pprof/goroutine", common.GrHandler)
+		mux.HandleFunc("/debug/pprof/block", common.BlockHandler)
+		mux.HandleFunc("/debug/pprof/heap", common.HeapHandler)
+		mux.HandleFunc("/debug/pprof/threadcreate", common.TCHandler)
+		mux.HandleFunc("/debug/pprof/profile", common.ProfileHandler)
+		mux.HandleFunc("/debug/pprof/cmdline", common.CmdlineHandler)
+		mux.HandleFunc("/debug/pprof/symbol", common.SymbolHandler)
+		mux.HandleFunc("/debug/pprof/trace", common.TraceHandler)
+		mux.HandleFunc("/debug/vars", common.ExpvarHandler)
+	}
+
 	go func() {
+		httpMux = http.NewServeMux()
 		srv := &http.Server{
 			ReadTimeout:  time.Duration(idx.config["http.readTimeout"].Int()) * time.Second,
 			WriteTimeout: time.Duration(idx.config["http.writeTimeout"].Int()) * time.Second,
 			Addr:         addr,
-			Handler:      nil,
+			Handler:      httpMux,
 		}
+		overrideHttpDebugHandlers()
+		idx.settingsMgr.RegisterRestEndpoints()
+		idx.statsMgr.RegisterRestEndpoints()
+		idx.clustMgrAgent.RegisterRestEndpoints()
 		if err := srv.ListenAndServe(); err != nil {
 			logging.Fatalf("indexer:: Error Starting Http Server: %v", err)
 			common.CrashOnError(err)
