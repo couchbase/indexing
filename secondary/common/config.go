@@ -1085,6 +1085,13 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
+	"indexer.plasma.memtuner.overshootRatio": ConfigValue{
+		float64(0.15),
+		"Allow RSS to overshoot quota by this ratio",
+		float64(0.15),
+		false,
+		false,
+	},
 	"indexer.plasma.memtuner.trimDownRatio": ConfigValue{
 		float64(0.10),
 		"Memtuner trimdown ratio",

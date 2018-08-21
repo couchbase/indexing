@@ -1345,6 +1345,7 @@ func updatePlasmaConfig(cfg common.Config) {
 	plasma.MTunerTrimDownRatio = cfg["plasma.memtuner.trimDownRatio"].Float64()
 	plasma.MTunerIncrementRatio = cfg["plasma.memtuner.incrementRatio"].Float64()
 	plasma.MTunerMinQuotaRatio = cfg["plasma.memtuner.minQuotaRatio"].Float64()
+	plasma.MTunerOvershootRatio = cfg["plasma.memtuner.overshootRatio"].Float64()
 	plasma.MTunerIncrCeilPercent = cfg["plasma.memtuner.incrCeilPercent"].Float64()
 	plasma.MTunerMinQuota = int64(cfg["plasma.memtuner.minQuota"].Int())
 }
