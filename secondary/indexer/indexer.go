@@ -404,8 +404,8 @@ func (idx *indexer) initHttpServer() {
 		mux.HandleFunc("/debug/vars", common.ExpvarHandler)
 	}
 
+	httpMux = http.NewServeMux()
 	go func() {
-		httpMux = http.NewServeMux()
 		srv := &http.Server{
 			ReadTimeout:  time.Duration(idx.config["http.readTimeout"].Int()) * time.Second,
 			WriteTimeout: time.Duration(idx.config["http.writeTimeout"].Int()) * time.Second,
