@@ -15,6 +15,7 @@ const seqsReqChanSize = 20000
 const seqsBufSize = 64 * 1024
 
 var errConnClosed = errors.New("dcpSeqnos - conn closed already")
+var errCollectSeqnosPanic = errors.New("Recovered from an error in CollectSeqnos")
 
 // cache Bucket{} and DcpFeed{} objects, its underlying connections
 // to make Stats-Seqnos fast.
@@ -279,6 +280,15 @@ func BucketSeqnos(cluster, pooln, bucketn string) (l_seqnos []uint64, err error)
 }
 
 func CollectSeqnos(kvfeeds map[string]*kvConn) (l_seqnos []uint64, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			// Return error as callers take care of retry.
+			logging.Errorf("%v: number of kvfeeds is %d", errCollectSeqnosPanic, len(kvfeeds))
+			l_seqnos = nil
+			err = errCollectSeqnosPanic
+		}
+	}()
+
 	var wg sync.WaitGroup
 
 	// Buffer for storing kv_seqs from each node
