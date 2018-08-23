@@ -48,7 +48,8 @@ func NewRestServer(cluster string, stMgr *statsManager) (*restServer, Message) {
 	log.Infof("%v starting RESTful services", cluster)
 	restapi := &restServer{statsMgr: stMgr}
 	initHandlers(restapi)
-	http.HandleFunc("/api/", restapi.routeRequest)
+	mux := GetHTTPMux()
+	mux.HandleFunc("/api/", restapi.routeRequest)
 	return restapi, nil
 }
 

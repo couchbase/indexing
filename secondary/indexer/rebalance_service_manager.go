@@ -175,12 +175,13 @@ func (m *ServiceMgr) initService(cleanupPending bool) {
 	go m.registerWithServer()
 	go m.updateNodeList()
 
-	http.HandleFunc("/registerRebalanceToken", m.handleRegisterRebalanceToken)
-	http.HandleFunc("/listRebalanceTokens", m.handleListRebalanceTokens)
-	http.HandleFunc("/cleanupRebalance", m.handleCleanupRebalance)
-	http.HandleFunc("/moveIndex", m.handleMoveIndex)
-	http.HandleFunc("/moveIndexInternal", m.handleMoveIndexInternal)
-	http.HandleFunc("/nodeuuid", m.handleNodeuuid)
+	mux := GetHTTPMux()
+	mux.HandleFunc("/registerRebalanceToken", m.handleRegisterRebalanceToken)
+	mux.HandleFunc("/listRebalanceTokens", m.handleListRebalanceTokens)
+	mux.HandleFunc("/cleanupRebalance", m.handleCleanupRebalance)
+	mux.HandleFunc("/moveIndex", m.handleMoveIndex)
+	mux.HandleFunc("/moveIndexInternal", m.handleMoveIndexInternal)
+	mux.HandleFunc("/nodeuuid", m.handleNodeuuid)
 }
 
 //update node list after restart

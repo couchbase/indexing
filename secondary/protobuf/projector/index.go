@@ -430,13 +430,15 @@ func (ie *IndexEvaluator) dcpEvent2Meta(m *mc.DcpEvent) map[string]interface{} {
 	for _, xattr := range ie.xattrs {
 		if _, ok := m.ParsedXATTR[xattr]; !ok {
 			var val interface{}
-			if err := json.Unmarshal(m.RawXATTR[xattr], &val); err != nil {
-				arg1 := logging.TagStrUD(xattr)
-				arg2 := logging.TagStrUD(m.Key)
-				logging.Errorf("Error parsing XATTR %s for %s: %v",
-					arg1, arg2, err)
-			} else {
-				m.ParsedXATTR[xattr] = val
+			if len(m.RawXATTR[xattr]) != 0 {
+				if err := json.Unmarshal(m.RawXATTR[xattr], &val); err != nil {
+					arg1 := logging.TagStrUD(xattr)
+					arg2 := logging.TagStrUD(m.Key)
+					logging.Errorf("Error parsing XATTR %s for %s: %v",
+						arg1, arg2, err)
+				} else {
+					m.ParsedXATTR[xattr] = val
+				}
 			}
 		}
 	}

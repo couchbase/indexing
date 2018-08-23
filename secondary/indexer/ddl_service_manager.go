@@ -119,8 +119,9 @@ func NewDDLServiceMgr(indexerId common.IndexerId, supvCmdch MsgChannel, supvMsgc
 
 	mgr.config.Store(config)
 
-	http.HandleFunc("/listMetadataTokens", mgr.handleListMetadataTokens)
-	http.HandleFunc("/listCreateTokens", mgr.handleListCreateTokens)
+	mux := GetHTTPMux()
+	mux.HandleFunc("/listMetadataTokens", mgr.handleListMetadataTokens)
+	mux.HandleFunc("/listCreateTokens", mgr.handleListCreateTokens)
 
 	go mgr.run()
 

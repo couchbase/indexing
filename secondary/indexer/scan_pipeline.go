@@ -1290,7 +1290,7 @@ func (e *entryCache) Init(r *ScanRequest) {
 	r.keyBufList = append(r.keyBufList, compkeybuf)
 
 	e.entry = (*entrybuf)[:0]
-	e.compkeybuf = *compkeybuf
+	e.compkeybuf = (*compkeybuf)[:0]
 
 }
 
@@ -1319,16 +1319,16 @@ func (e *entryCache) Update(entry []byte, compositekeys [][]byte, decodedkeys va
 	e.entry = append(e.entry[:0], entry...)
 
 	if len(entry) > cap(e.compkeybuf) {
-		e.compkeybuf = make([]byte, len(entry)+1024, len(entry)+1024)
+		e.compkeybuf = make([]byte, 0, len(entry)+1024)
 	}
 
 	if e.compkeys == nil {
 		e.compkeys = make([][]byte, len(compositekeys))
 	}
 
-	tmpbuf := e.compkeybuf
+	tmpbuf := e.compkeybuf[:0]
 	for i, k := range compositekeys {
-		copy(tmpbuf, k)
+		tmpbuf = append(tmpbuf[:0], k...)
 		e.compkeys[i] = tmpbuf[:len(k)]
 		tmpbuf = tmpbuf[len(k):]
 	}

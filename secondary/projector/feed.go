@@ -1749,13 +1749,13 @@ func (feed *Feed) topicResponse() *protobuf.TopicResponse {
 	xs := make([]*protobuf.TsVbuuid, 0, len(feed.actTss))
 	for _, ts := range feed.actTss {
 		if ts != nil {
-			xs = append(xs, ts)
+			xs = append(xs, ts.Clone())
 		}
 	}
 	ys := make([]*protobuf.TsVbuuid, 0, len(feed.rollTss))
 	for _, ts := range feed.rollTss {
 		if ts != nil && !ts.IsEmpty() {
-			ys = append(ys, ts)
+			ys = append(ys, ts.Clone())
 		}
 	}
 	return &protobuf.TopicResponse{
