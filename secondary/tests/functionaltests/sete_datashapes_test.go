@@ -196,6 +196,11 @@ func TestSameIndexNameInTwoBuckets(t *testing.T) {
 //Test for large keys with special characters like \t & < >
 // MB-30861
 func TestLargeKeysSplChars(t *testing.T) {
+	if secondaryindex.IndexUsing == "forestdb" {
+		log.Printf("Skipping test TestLargeKeysSplChars() for forestdb")
+		return
+	}
+
 	log.Printf("In TestLargeKeysSplChars()")
 
 	var bucketName = "default"
