@@ -317,13 +317,15 @@ func (codec *Codec) code2json(code, text []byte) ([]byte, []byte, error) {
 		text = append(text, boolFalse...)
 
 	case TypeLength:
+		var scratch [128]byte
 		datum, remaining = getDatum(code)
-		_, ts = DecodeInt(datum[1:], text)
-		text = text[:len(text)+len(ts)]
+		_, ts = DecodeInt(datum[1:], scratch[:0])
+		text = append(text, ts...)
 
 	case TypeNumber:
+		var scratch [128]byte
 		datum, remaining = getDatum(code)
-		ts = DecodeFloat(datum[1:], text)
+		ts = DecodeFloat(datum[1:], scratch[:0])
 		ts, err = codec.denormalizeFloat(ts)
 		ts = bytes.TrimLeft(ts, "+")
 		var number Integer
@@ -341,19 +343,18 @@ func (codec *Codec) code2json(code, text []byte) ([]byte, []byte, error) {
 
 	case TypeArray:
 		var l int
+		var scratch [128]byte
 		text = append(text, '[')
 		if codec.arrayLenPrefix {
 			datum, code = getDatum(code[1:])
-			_, ts := DecodeInt(datum[1:], text[1:])
+			_, ts := DecodeInt(datum[1:], scratch[:0])
 			l, err = strconv.Atoi(string(ts))
 			if err == nil {
 				for ; l > 0; l-- {
-					ln := len(text)
-					ts, code, err = codec.code2json(code, text[ln:])
+					text, code, err = codec.code2json(code, text)
 					if err != nil {
 						break
 					}
-					text = text[:ln+len(ts)]
 					if l > 1 {
 						text = append(text, ',')
 					}
@@ -366,12 +367,10 @@ func (codec *Codec) code2json(code, text []byte) ([]byte, []byte, error) {
 				if comma {
 					text = append(text, ',')
 				}
-				ln := len(text)
-				ts, code, err = codec.code2json(code, text[ln:])
+				text, code, err = codec.code2json(code, text)
 				if err != nil {
 					break
 				}
-				text = text[:ln+len(ts)]
 				comma = true
 			}
 		}
@@ -379,30 +378,26 @@ func (codec *Codec) code2json(code, text []byte) ([]byte, []byte, error) {
 		text = append(text, ']')
 
 	case TypeObj:
+		var scratch [128]byte
 		var l int
-		var key, value []byte
 		text = append(text, '{')
 		if codec.propertyLenPrefix {
 			datum, code = getDatum(code[1:])
-			_, ts := DecodeInt(datum[1:], text[1:])
+			_, ts := DecodeInt(datum[1:], scratch[:0])
 			l, err = strconv.Atoi(string(ts))
 			if err == nil {
 				for ; l > 0; l-- {
 					// decode key
-					ln := len(text)
-					key, code, err = codec.code2json(code, text[ln:])
+					text, code, err = codec.code2json(code, text)
 					if err != nil {
 						break
 					}
-					text = text[:ln+len(key)]
 					text = append(text, ':')
 					// decode value
-					ln = len(text)
-					key, code, err = codec.code2json(code, text[ln:])
+					text, code, err = codec.code2json(code, text)
 					if err != nil {
 						break
 					}
-					text = text[:ln+len(key)]
 					if l > 1 {
 						text = append(text, ',')
 					}
@@ -416,20 +411,16 @@ func (codec *Codec) code2json(code, text []byte) ([]byte, []byte, error) {
 					text = append(text, ',')
 				}
 				// decode key
-				ln := len(text)
-				key, code, err = codec.code2json(code, text[ln:])
+				text, code, err = codec.code2json(code, text)
 				if err != nil {
 					break
 				}
-				text = text[:ln+len(key)]
 				text = append(text, ':')
 				// decode value
-				ln = len(text)
-				value, code, err = codec.code2json(code, text[ln:])
+				text, code, err = codec.code2json(code, text)
 				if err != nil {
 					break
 				}
-				text = text[:ln+len(value)]
 				comma = true
 			}
 		}

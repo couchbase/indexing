@@ -8,8 +8,10 @@ import (
 	"github.com/couchbase/indexing/secondary/tests/framework/secondaryindex"
 	tv "github.com/couchbase/indexing/secondary/tests/framework/validation"
 	"log"
+	"math/rand"
 	"os/user"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -189,6 +191,83 @@ func TestSameIndexNameInTwoBuckets(t *testing.T) {
 
 	tc.ClearMap(docs)
 	UpdateKVDocs(bucketDocs[0], docs)
+}
+
+//Test for large keys with special characters like \t & < >
+// MB-30861
+func TestLargeKeysSplChars(t *testing.T) {
+	if secondaryindex.IndexUsing == "forestdb" {
+		log.Printf("Skipping test TestLargeKeysSplChars() for forestdb")
+		return
+	}
+
+	log.Printf("In TestLargeKeysSplChars()")
+
+	var bucketName = "default"
+	numDocs := 100
+	prodfile := filepath.Join(proddir, "test2.prod")
+	docsToCreate := GenerateJsons(numDocs, seed, prodfile, bagdir)
+	for k, v := range docsToCreate {
+		json := v.(map[string]interface{})
+		json["str"] = splstr(randomNum(4000, 5000))
+		json["strarray"] = splstrArray(randomNum(50, 100), randomNum(4000, 5000))
+		json["nestedobj"] = nestedobj(randomNum(5, 10), randomNum(4000, 5000))
+		docsToCreate[k] = json
+	}
+	UpdateKVDocs(docsToCreate, docs)
+
+	kvutility.SetKeyValues(docsToCreate, bucketName, "", clusterconfig.KVAddress)
+	err := secondaryindex.CreateSecondaryIndex("idspl1", bucketName, indexManagementAddress, "", []string{"str"}, false, nil, true, defaultIndexActiveTimeout, nil)
+	FailTestIfError(err, "Error in creating the index idspl1", t)
+	err = secondaryindex.CreateSecondaryIndex("idspl2", bucketName, indexManagementAddress, "", []string{"ALL strarray"}, false, nil, true, defaultIndexActiveTimeout, nil)
+	FailTestIfError(err, "Error in creating the index idspl2", t)
+	err = secondaryindex.CreateSecondaryIndex("idspl3", bucketName, indexManagementAddress, "", []string{"nestedobj"}, false, nil, true, defaultIndexActiveTimeout, nil)
+	FailTestIfError(err, "Error in creating the index idspl3", t)
+
+	docScanResults := datautility.ExpectedScanAllResponse(docs, "str")
+	scanResults, err := secondaryindex.ScanAll("idspl1", bucketName, indexScanAddress, defaultlimit, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in scan 1: ", t)
+	err = tv.Validate(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan 1:  result validation", t)
+
+	docScanResults1 := datautility.ExpectedArrayScanResponse_string(docs, "strarray", " ", "z", 3, false)
+	scanResults1, err := secondaryindex.ArrayIndex_Range("idspl2", bucketName, indexScanAddress, []interface{}{" "}, []interface{}{"z"}, 3, false, defaultlimit, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in scan 2: ", t)
+	err = tv.ValidateArrayResult(docScanResults1, scanResults1)
+	FailTestIfError(err, "Error in scan 2:  result validation", t)
+
+	docScanResults = datautility.ExpectedScanAllResponse(docs, "nestedobj")
+	scanResults, err = secondaryindex.ScanAll("idspl3", bucketName, indexScanAddress, defaultlimit, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in scan 3: ", t)
+	err = tv.Validate(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan 3:  result validation", t)
+}
+
+func splstr(strlen int) string {
+	chars := []string{"\t", "&", "<", ">", "a", "1"}
+	var newstr string
+	for i := 0; i < strlen; i++ {
+		newstr += chars[rand.Intn(len(chars))]
+	}
+	return newstr
+}
+
+func splstrArray(size, strlen int) []string {
+	strArray := make([]string, 0, size)
+	for i := 0; i < size; i++ {
+		strArray = append(strArray, splstr(strlen))
+	}
+	return strArray
+}
+
+func nestedobj(depth, strlen int) interface{} {
+	if depth == 0 {
+		return nil
+	}
+	obj := make(map[string]interface{})
+	obj[strconv.Itoa(depth)] = splstr(strlen)
+	obj["f"+strconv.Itoa(depth)] = nestedobj(strlen, depth-1)
+	return obj
 }
 
 func generateDocsWithSpecialCharacters(numDocs int, prodFileName, field string) tc.KeyValues {
