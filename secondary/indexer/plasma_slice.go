@@ -1045,7 +1045,7 @@ func (mdb *plasmaSlice) doPersistSnapshot(s *plasmaSnapshot) {
 				return nil
 			}
 
-			var concurr int = int(float32(runtime.NumCPU())*float32(mdb.sysconf["plasma.persistenceCPUPercent"].Int())/(100*2) + 0.5)
+			var concurr int = int(float32(runtime.NumCPU())*float32(mdb.sysconf["plasma.persistenceCPUPercent"].Int())/(100*2) + 0.75)
 
 			var wg sync.WaitGroup
 			wg.Add(1)
