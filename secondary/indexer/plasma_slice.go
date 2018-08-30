@@ -1045,7 +1045,7 @@ func (mdb *plasmaSlice) doPersistSnapshot(s *plasmaSnapshot) {
 				return nil
 			}
 
-			var concurr int = int(float32(runtime.NumCPU())*float32(mdb.sysconf["plasma.persistenceCPUPercent"].Int())/(100*2) + 0.5)
+			var concurr int = int(float32(runtime.NumCPU())*float32(mdb.sysconf["plasma.persistenceCPUPercent"].Int())/(100*2) + 0.75)
 
 			var wg sync.WaitGroup
 			wg.Add(1)
@@ -2129,12 +2129,16 @@ func (slice *plasmaSlice) initWriters(numWriters int) {
 
 	// initialize buffer
 	slice.encodeBuf = slice.encodeBuf[:numWriters]
-	slice.arrayBuf1 = slice.arrayBuf1[:numWriters]
-	slice.arrayBuf2 = slice.arrayBuf2[:numWriters]
+	if slice.idxDefn.IsArrayIndex {
+		slice.arrayBuf1 = slice.arrayBuf1[:numWriters]
+		slice.arrayBuf2 = slice.arrayBuf2[:numWriters]
+	}
 	for i := curNumWriters; i < numWriters; i++ {
 		slice.encodeBuf[i] = make([]byte, 0, maxIndexEntrySize)
-		slice.arrayBuf1[i] = make([]byte, 0, maxArrayIndexEntrySize)
-		slice.arrayBuf2[i] = make([]byte, 0, maxArrayIndexEntrySize)
+		if slice.idxDefn.IsArrayIndex {
+			slice.arrayBuf1[i] = make([]byte, 0, maxArrayIndexEntrySize)
+			slice.arrayBuf2[i] = make([]byte, 0, maxArrayIndexEntrySize)
+		}
 	}
 
 	// initialize command handler
