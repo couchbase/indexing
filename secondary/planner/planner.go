@@ -803,7 +803,15 @@ func (p *SAPlanner) addReplicaIfNecessary(s *Solution) {
 			numReplica := s.findNumReplica(index)
 			if index.Instance != nil && int(index.Instance.Defn.NumReplica+1) > numReplica &&
 				numReplica < numLiveNode && !index.pendingDelete {
-				addCandidates[index] = indexer
+
+				target := s.FindIndexerWithNoReplica(index)
+				if target == nil {
+					target = indexer
+				}
+
+				if target != nil {
+					addCandidates[index] = target
+				}
 			}
 		}
 
@@ -1578,6 +1586,33 @@ func (s *Solution) FindIndexerWithReplica(name string, bucket string, replicaId 
 			if index.Name == name && index.Bucket == bucket && index.Instance != nil && index.Instance.ReplicaId == replicaId {
 				return indexer
 			}
+		}
+	}
+
+	return nil
+}
+
+//
+// Find the indexer node that does not contain the replica
+// This ignores any indexer that is deleted or cannot rebalance
+//
+func (s *Solution) FindIndexerWithNoReplica(source *IndexUsage) *IndexerNode {
+
+	for _, indexer := range s.Placement {
+		if indexer.IsDeleted() {
+			continue
+		}
+
+		found := false
+		for _, index := range indexer.Indexes {
+			if source.IsReplica(index) {
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			return indexer
 		}
 	}
 
@@ -2425,6 +2460,11 @@ func (o *IndexUsage) GetDisplayName() string {
 	return o.Instance.DisplayName()
 }
 
+func (o *IndexUsage) IsReplica(other *IndexUsage) bool {
+
+	return o.DefnId == other.DefnId
+}
+
 //////////////////////////////////////////////////////////////
 // UsageBasedCostMethod
 //////////////////////////////////////////////////////////////
@@ -2824,6 +2864,8 @@ func (p *RandomPlacement) findLeastUsedAndPopulatedTargetNode(s *Solution, sourc
 		}
 
 		if len(indexers) > 0 {
+
+			indexers = sortNodeByUsage(s, indexers)
 			indexers = sortNodeByNoUsageIndexCount(indexers)
 
 			for _, indexer := range indexers {
@@ -2982,10 +3024,16 @@ func (p *RandomPlacement) randomMoveByLoad(s *Solution, checkConstraint bool) (b
 		target := (*IndexerNode)(nil)
 		if index.NoUsage {
 			target = p.findLeastUsedAndPopulatedTargetNode(s, index, source)
+
 		} else {
 			// Select an uncongested indexer which is different from source.
 			// The most uncongested indexer has a higher probability to be selected.
 			target = p.getRandomUncongestedNodeExcluding(s, source, index, checkConstraint)
+
+			if target == nil {
+				// If there is no uncongested node, then find a node that is less congested.
+				target = p.findLeastUsedAndPopulatedTargetNode(s, index, source)
+			}
 		}
 
 		if target == nil {
