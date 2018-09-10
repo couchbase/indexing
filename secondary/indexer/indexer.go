@@ -3446,6 +3446,12 @@ func (idx *indexer) removeIndexesFromStream(indexList []common.IndexInst,
 
 		respCh := make(MsgChannel)
 
+		if idx.getStreamBucketState(streamId, bucket) == STREAM_INACTIVE {
+			logging.Warnf("Indexer::removeIndexesFromStream Stream %v Bucket %v "+
+				"Bucket stream not active. Skipping.", streamId, bucket)
+			continue
+		}
+
 		if idx.checkBucketExistsInStream(bucket, streamId, false) {
 
 			cmd = &MsgStreamUpdate{mType: REMOVE_INDEX_LIST_FROM_STREAM,
@@ -3786,23 +3792,28 @@ func (idx *indexer) handleCheckDDLInProgress(msg Message) {
 	ddlMsg := msg.(*MsgCheckDDLInProgress)
 	respCh := ddlMsg.GetRespCh()
 
-	respCh <- idx.checkDDLInProgress()
+	ddlInProgress, inProgressIndexNames := idx.checkDDLInProgress()
+	respCh <- &MsgDDLInProgressResponse{
+		ddlInProgress:        ddlInProgress,
+		inProgressIndexNames: inProgressIndexNames}
 
 	return
 }
 
-func (idx *indexer) checkDDLInProgress() bool {
+func (idx *indexer) checkDDLInProgress() (bool, []string) {
 
 	ddlInProgress := false
+	inProgressIndexNames := make([]string, 0, len(idx.indexInstMap))
 	for _, index := range idx.indexInstMap {
 
 		if (index.State == common.INDEX_STATE_INITIAL ||
 			index.State == common.INDEX_STATE_CATCHUP) ||
 			idx.checkStreamRequestPending(common.INIT_STREAM, index.Defn.Bucket) {
 			ddlInProgress = true
+			inProgressIndexNames = append(inProgressIndexNames, index.Defn.Name)
 		}
 	}
-	return ddlInProgress
+	return ddlInProgress, inProgressIndexNames
 }
 
 func (idx *indexer) handleUpdateIndexRState(msg Message) {
@@ -5777,7 +5788,7 @@ func (idx *indexer) handleSetLocalMeta(msg Message) {
 	checkDDL := msg.(*MsgClustMgrLocal).GetCheckDDL()
 
 	if key == RebalanceRunning && checkDDL {
-		if idx.checkDDLInProgress() {
+		if inProgress, _ := idx.checkDDLInProgress(); inProgress {
 			logging.Errorf("ServiceMgr::handleSetLocalMeta Found DDL Running. Key %v", key)
 			err := errors.New("indexer rebalance failure - ddl in progress")
 			respch <- &MsgClustMgrLocal{

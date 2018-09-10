@@ -483,7 +483,7 @@ loop:
 				seqno, _, sStart, sEnd, err := reqTs.Get(cmd.vbno)
 				if err != nil {
 					fmsg := "%v ##%x backch flush %v: %v\n"
-					logging.Fatalf(fmsg, prefix, cmd.opaque, cmd, err)
+					logging.Errorf(fmsg, prefix, cmd.opaque, cmd, err)
 				}
 				if ok && reqTs != nil {
 					reqTs = reqTs.FilterByVbuckets([]uint16{cmd.vbno})
