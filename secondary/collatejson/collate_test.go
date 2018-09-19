@@ -482,7 +482,7 @@ func TestFixEncodedInt(t *testing.T) {
 		[]byte(`["hello", "test", true, [1,2,3], 1, 23.3, null, {"key" : 100}]`),
 		[]byte(`["hello", true, [1,2,3], -23.3, null, {"key" : ["apple","blue","cat"], "key2" : [1,null, "test", true, -0.099836], "key3" : { "subdoc" : true, "subdoc1" : [true, false, "yellow"]}}]`),
 		[]byte(`[{"key" : ["abcde","bdab","cat"], "key2" : [-1.2500,null, true, 310, "test", 0.00034], "key3" : { "subdoc" : true, "subdoc1" : [true, false, "yellow", 342.60, 36000000]}}]`),
-		[]byte(`[4111686018427387900, -8223372036854775808, 822337203685477618]`),
+		[]byte(`[4111686018427387900, -8223372036854775808, 822337203685477618, 123456789123456700000, 12345678912345678912345]`),
 	}
 
 	for _, bs := range bsArr {
@@ -503,6 +503,31 @@ func TestFixEncodedInt(t *testing.T) {
 			t.Errorf("Expected json and n1ql encoded values to be the same")
 			t.Logf("n1qlBytes %v \t %v \n", n1qlBytes, string(n1qlBytes))
 			t.Logf("fixedByte %v \t %v \n", fixedBytes, string(fixedBytes))
+		}
+	}
+}
+
+func TestN1QLDecodeLargeInt64(t *testing.T) {
+	codec := NewCodec(16)
+	var object interface{}
+	bsArr := [][]byte{[]byte(`10068046444225730000`)}
+
+	for _, bs := range bsArr {
+		err := json.Unmarshal(bs, &object)
+		if err != nil {
+			t.Fatalf("Unexpected error %v", err)
+		}
+		val := n1ql.NewValue(object)
+
+		n1qlBytes, err1 := codec.EncodeN1QLValue(val, make([]byte, 0, 1024))
+		n1qlVal, err2 := codec.DecodeN1QLValue(n1qlBytes, make([]byte, 0, 1024))
+
+		if err1 != nil || err2 != nil {
+			t.Fatalf("Unexpected errors %v, %v", err1, err2)
+		}
+
+		if !val.EquivalentTo(n1qlVal) {
+			t.Errorf("Expected original and decoded n1ql values to be the same")
 		}
 	}
 }
