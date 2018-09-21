@@ -71,6 +71,7 @@ message ScanRequest {
 	repeated uint64				partitionIds     = 13;
     optional GroupAggr        groupAggr       = 14;
     optional bool             sorted          = 15;
+    optional uint32           dataEncFmt      = 16;
 }
 
 // Full table scan request from indexer.
@@ -82,6 +83,7 @@ message ScanAllRequest {
     optional string        requestId = 5;
 	optional int64		   rollbackTime    = 6;
 	repeated uint64		   partitionIds     = 7;
+	optional uint32        dataEncFmt       = 8;
 }
 
 // Request by client to stop streaming the query results.

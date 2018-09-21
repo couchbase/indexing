@@ -21,6 +21,12 @@ type testServer struct {
 	config  c.Config
 }
 
+var SyncPools []*c.BytesBufPool
+
+func init() {
+	SyncPools = qclient.InitializeSyncPools()
+}
+
 const UnboundedLiteral = "~[]{}UnboundedTruenilNA~"
 
 func NewTestServer(cluster string) (*testServer, Message) {
@@ -34,7 +40,11 @@ func NewTestServer(cluster string) (*testServer, Message) {
 	qconf := config.SectionConfig("queryport.client.", true /*trim*/)
 
 	client, _ := qclient.NewGsiClient(cluster, qconf)
-	testapi := &testServer{cluster: cluster, client: client, config: qconf}
+	testapi := &testServer{
+		cluster: cluster,
+		client:  client,
+		config:  qconf,
+	}
 
 	if err != nil {
 		return testapi, &MsgError{
@@ -629,19 +639,23 @@ func (api *testServer) doLookup(w http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	var skeys []c.SecondaryKey
 	var pkeys [][]byte
+	var skeys *c.ScanResultEntries
 
 	w.WriteHeader(http.StatusOK)
 
 	empty := true
 	err = nil
+	dataEncFmt := api.client.GetDataEncodingFormat()
+
 	e := api.client.Lookup(
 		uint64(index.Definition.DefnId), "", equals, distinct, limit, cons, ts,
 		func(res qclient.ResponseReader) bool {
 			if err = res.Error(); err != nil {
 				return false
-			} else if skeys, pkeys, err = res.GetEntries(); err != nil {
+			}
+
+			if skeys, pkeys, err = res.GetEntries(dataEncFmt); err != nil {
 				return false
 			}
 			//nil means no more data
@@ -780,13 +794,15 @@ func (api *testServer) doRange(w http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	var skeys []c.SecondaryKey
+	var skeys *c.ScanResultEntries
 	var pkeys [][]byte
 
 	w.WriteHeader(http.StatusOK)
 
 	empty := true
 	err = nil
+	dataEncFmt := api.client.GetDataEncodingFormat()
+
 	e := api.client.Range(
 		uint64(index.Definition.DefnId), "", low, high,
 		incl2incl(inclusion), distinct, limit,
@@ -794,7 +810,7 @@ func (api *testServer) doRange(w http.ResponseWriter, request *http.Request) {
 		func(res qclient.ResponseReader) bool {
 			if err = res.Error(); err != nil {
 				return false
-			} else if skeys, pkeys, err = res.GetEntries(); err != nil {
+			} else if skeys, pkeys, err = res.GetEntries(dataEncFmt); err != nil {
 				return false
 			}
 			//nil means no more data
@@ -939,10 +955,12 @@ func (api *testServer) doMultiScan(w http.ResponseWriter, request *http.Request)
 		return
 	}
 
-	var skeys []c.SecondaryKey
+	var skeys *c.ScanResultEntries
 	var pkeys [][]byte
 
 	w.WriteHeader(http.StatusOK)
+
+	dataEncFmt := api.client.GetDataEncodingFormat()
 
 	empty := true
 	err = nil
@@ -953,7 +971,7 @@ func (api *testServer) doMultiScan(w http.ResponseWriter, request *http.Request)
 		func(res qclient.ResponseReader) bool {
 			if err = res.Error(); err != nil {
 				return false
-			} else if skeys, pkeys, err = res.GetEntries(); err != nil {
+			} else if skeys, pkeys, err = res.GetEntries(dataEncFmt); err != nil {
 				return false
 			}
 			//nil means no more data
@@ -1131,10 +1149,12 @@ func (api *testServer) doScanall(w http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	var skeys []c.SecondaryKey
+	var skeys *c.ScanResultEntries
 	var pkeys [][]byte
 
 	w.WriteHeader(http.StatusOK)
+
+	dataEncFmt := api.client.GetDataEncodingFormat()
 
 	empty := true
 	err = nil
@@ -1143,7 +1163,7 @@ func (api *testServer) doScanall(w http.ResponseWriter, request *http.Request) {
 		func(res qclient.ResponseReader) bool {
 			if err = res.Error(); err != nil {
 				return false
-			} else if skeys, pkeys, err = res.GetEntries(); err != nil {
+			} else if skeys, pkeys, err = res.GetEntries(dataEncFmt); err != nil {
 				return false
 			}
 			//nil means no more data
@@ -1297,11 +1317,26 @@ func (api *testServer) makeError(err error) string {
 	return fmt.Sprintf(`{"error":"%v"}`, err)
 }
 
-func (api *testServer) makeEntries(
-	skeys []c.SecondaryKey, pkeys [][]byte) (string, error) {
+func (api *testServer) makeEntries(skeys *c.ScanResultEntries,
+	pkeys [][]byte) (string, error) {
+
+	tmpbuf, tmpbufPoolIdx := qclient.GetFromPools()
+	defer func() {
+		qclient.PutInPools(tmpbuf, tmpbufPoolIdx)
+	}()
+
+	maxTempBufSize := uint64(api.config["queryport.client.settings.maxTempBufSize"].Int())
+	result, err, retBuf := skeys.Get(tmpbuf, maxTempBufSize)
+	if err != nil {
+		return "", err
+	}
+
+	if retBuf != nil {
+		tmpbuf = retBuf
+	}
 
 	entries := []string{}
-	for i, skey := range skeys {
+	for i, skey := range result {
 		data, err := json.Marshal(skey)
 		if err != nil {
 			return "", err

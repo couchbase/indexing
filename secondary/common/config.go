@@ -647,6 +647,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"queryport.client.settings.maxTempBufSize": ConfigValue{
+		64 * 1024 * 1024,
+		"Max size of temporary buffer required to decode index keys",
+		64 * 1024 * 1024,
+		false, // mutable
+		false, // case-insensitive
+	},
 	// projector's adminport client, can be used by indexer.
 	"indexer.projectorclient.retryInterval": ConfigValue{
 		16,

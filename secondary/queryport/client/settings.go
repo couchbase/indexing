@@ -34,6 +34,8 @@ type ClientSettings struct {
 	storageMode string
 	mutex       sync.RWMutex
 
+	maxTempBufSize uint64
+
 	needRefresh bool
 }
 
@@ -158,6 +160,13 @@ func (s *ClientSettings) handleSettings(config common.Config) {
 		logging.Errorf("ClientSettings: invalid setting value for max_concurrency=%v", concurrency)
 	}
 
+	maxTempBufSize := config["queryport.client.settings.maxTempBufSize"].Int()
+	if maxTempBufSize >= 0 {
+		atomic.StoreUint64(&s.maxTempBufSize, uint64(maxTempBufSize))
+	} else {
+		logging.Errorf("ClientSettings: invalid setting value for maxTempBufSize=%v", maxTempBufSize)
+	}
+
 	storageMode := config["indexer.settings.storage_mode"].String()
 	if len(storageMode) != 0 {
 		func() {
@@ -216,4 +225,8 @@ func (s *ClientSettings) ScanQueueSize() uint64 {
 
 func (s *ClientSettings) MaxConcurrency() uint32 {
 	return atomic.LoadUint32(&s.concurrency)
+}
+
+func (s *ClientSettings) MaxTempBufSize() uint64 {
+	return atomic.LoadUint64(&s.maxTempBufSize)
 }

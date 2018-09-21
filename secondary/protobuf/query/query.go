@@ -7,24 +7,37 @@ import c "github.com/couchbase/indexing/secondary/common"
 import "github.com/golang/protobuf/proto"
 
 // GetEntries implements queryport.client.ResponseReader{} method.
-func (r *ResponseStream) GetEntries() ([]c.SecondaryKey, [][]byte, error) {
+func (r *ResponseStream) GetEntries(dataEncFmt c.DataEncodingFormat) (*c.ScanResultEntries, [][]byte, error) {
 	entries := r.GetIndexEntries()
-	skeys := make([]c.SecondaryKey, 0, len(entries))
+	result := c.NewScanResultEntries(dataEncFmt)
+	result.Make(len(entries))
 	pkeys := make([][]byte, 0, len(entries))
+	var dataEncFmtError error
 	for _, entry := range entries {
 		secKeyData := entry.GetEntryKey()
 		if len(secKeyData) > 0 {
-			skey := make(c.SecondaryKey, 0)
-			if err := json.Unmarshal(entry.GetEntryKey(), &skey); err != nil {
-				return nil, nil, err
+			if dataEncFmt == c.DATA_ENC_COLLATEJSON {
+				result, dataEncFmtError = result.Append(secKeyData)
+			} else if dataEncFmt == c.DATA_ENC_JSON {
+				skey := make(c.SecondaryKey, 0)
+				if err := json.Unmarshal(entry.GetEntryKey(), &skey); err != nil {
+					return nil, nil, err
+				}
+				result, dataEncFmtError = result.Append(skey)
+			} else {
+				return nil, nil, c.ErrUnexpectedDataEncFmt
 			}
-			skeys = append(skeys, skey)
 		} else {
-			skeys = append(skeys, nil)
+			result, dataEncFmtError = result.Append(nil)
 		}
+
+		if dataEncFmtError != nil {
+			return nil, nil, dataEncFmtError
+		}
+
 		pkeys = append(pkeys, entry.GetPrimaryKey())
 	}
-	return skeys, pkeys, nil
+	return result, pkeys, nil
 }
 
 // Error implements queryport.client.ResponseReader{} method.
@@ -38,8 +51,9 @@ func (r *ResponseStream) Error() error {
 }
 
 // GetEntries implements queryport.client.ResponseReader{} method.
-func (r *StreamEndResponse) GetEntries() ([]c.SecondaryKey, [][]byte, error) {
-	return nil, nil, nil
+func (r *StreamEndResponse) GetEntries(dataEncFmt c.DataEncodingFormat) (*c.ScanResultEntries, [][]byte, error) {
+	var results c.ScanResultEntries
+	return &results, nil, nil
 }
 
 // Error implements queryport.client.ResponseReader{} method.

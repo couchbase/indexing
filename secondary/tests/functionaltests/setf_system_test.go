@@ -1129,7 +1129,7 @@ func TestDeleteBucketWhileInitialIndexBuild(t *testing.T) {
 	if err != nil {
 		log.Printf("============== DBG: Scan of second bucket %v with index %v failed. Expected & actual results are below:", bucketNames[1], indexNames[2])
 		tc.PrintScanResults(docScanResults, "docScanResults")
-		tc.PrintScanResults(scanResults, "scanResults")
+		tc.PrintScanResultsActual(scanResults, "scanResults")
 	}
 	FailTestIfError(err, "Error in scan 2 result validation", t)
 

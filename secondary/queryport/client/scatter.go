@@ -16,7 +16,6 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/couchbase/indexing/secondary/collatejson"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/query/value"
@@ -24,6 +23,7 @@ import (
 	//"runtime"
 	"encoding/json"
 	"os"
+	"runtime"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -41,6 +41,35 @@ import (
 var (
 	NotMyPartition = "Not my partition"
 )
+
+var SyncPools []*common.BytesBufPool
+var NUM_SYNC_POOLS int
+var syncPoolsCtr uint32
+
+func InitializeSyncPools() []*common.BytesBufPool {
+	NUM_SYNC_POOLS = runtime.NumCPU() * 2
+	pools := make([]*common.BytesBufPool, NUM_SYNC_POOLS)
+	for i := 0; i < NUM_SYNC_POOLS; i++ {
+		pools[i] = common.NewByteBufferPool(common.SECKEY_BUFSIZE)
+	}
+	return pools
+}
+
+func GetFromPools() (*[]byte, uint32) {
+	// No need to worry about the integer overflow.
+	idx := atomic.AddUint32(&syncPoolsCtr, 1)
+	poolIdx := idx % uint32(NUM_SYNC_POOLS)
+	buf := SyncPools[int(poolIdx)].Get()
+	return buf, poolIdx
+}
+
+func PutInPools(buf *[]byte, poolIdx uint32) {
+	SyncPools[int(poolIdx)].Put(buf)
+}
+
+func init() {
+	SyncPools = InitializeSyncPools()
+}
 
 //--------------------------
 // request broker
@@ -91,6 +120,12 @@ type RequestBroker struct {
 	sendCount    int64
 	receiveCount int64
 	numIndexers  int64
+	dataEncFmt   uint32 // common.DataEncodingFormat
+
+	// Temporary bufferes needed for DecodeN1QLValues.
+	tmpbufs        []*[]byte
+	tmpbufsPoolIdx []uint32
+	maxTempBufSize uint64
 }
 
 type doneStatus struct {
@@ -613,6 +648,16 @@ func (c *RequestBroker) scatterScan(client []*GsiScanClient, index *common.Index
 		c.bGather = true
 	}
 
+	var tmpbuf *[]byte
+	var tmpbufPoolIdx uint32
+	c.tmpbufs = make([]*[]byte, len(client))
+	c.tmpbufsPoolIdx = make([]uint32, len(client))
+	for i := 0; i < len(client); i++ {
+		tmpbuf, tmpbufPoolIdx = GetFromPools()
+		c.tmpbufs[i] = tmpbuf
+		c.tmpbufsPoolIdx[i] = tmpbufPoolIdx
+	}
+
 	if c.useGather() {
 		c.queues = make([]*Queue, len(client))
 		size := queueSize(int(c.size), len(client), c.sorted, settings)
@@ -641,6 +686,10 @@ func (c *RequestBroker) scatterScan(client []*GsiScanClient, index *common.Index
 		}
 	}
 
+	for i, _ := range client {
+		PutInPools(c.tmpbufs[i], c.tmpbufsPoolIdx[i])
+	}
+
 	if c.useGather() && err == nil {
 		<-donech_gather
 	}
@@ -656,6 +705,16 @@ func (c *RequestBroker) scatterScan2(client []*GsiScanClient, index *common.Inde
 
 	if len(partition) > 1 {
 		c.bGather = true
+	}
+
+	var tmpbuf *[]byte
+	var tmpbufPoolIdx uint32
+	c.tmpbufs = make([]*[]byte, len(client))
+	c.tmpbufsPoolIdx = make([]uint32, len(client))
+	for i := 0; i < len(client); i++ {
+		tmpbuf, tmpbufPoolIdx = GetFromPools()
+		c.tmpbufs[i] = tmpbuf
+		c.tmpbufsPoolIdx[i] = tmpbufPoolIdx
 	}
 
 	if c.useGather() {
@@ -689,6 +748,10 @@ func (c *RequestBroker) scatterScan2(client []*GsiScanClient, index *common.Inde
 	// Wait for all scatter routine is done
 	for i, _ := range client {
 		<-donech_scatter[i]
+	}
+
+	for i, _ := range client {
+		PutInPools(c.tmpbufs[i], c.tmpbufsPoolIdx[i])
 	}
 
 	errMap = c.GetError()
@@ -875,6 +938,14 @@ func (c *RequestBroker) gather(donech chan bool) {
 	var curOffset int64 = 0
 	var curLimit int64 = 0
 
+	var cont bool
+	var retBuf *[]byte
+
+	tmpbuf, tmpbufPoolIdx := GetFromPools()
+	defer func() {
+		PutInPools(tmpbuf, tmpbufPoolIdx)
+	}()
+
 	for {
 		var id int
 
@@ -906,7 +977,11 @@ func (c *RequestBroker) gather(donech chan bool) {
 
 			curLimit++
 			c.Partial(true)
-			if !c.sender(rows[id].pkey, rows[id].value, rows[id].skey) {
+			cont, retBuf = c.sender(rows[id].pkey, rows[id].value, rows[id].skey, tmpbuf)
+			if retBuf != nil {
+				tmpbuf = retBuf
+			}
+			if !cont {
 				c.done()
 				return
 			}
@@ -955,6 +1030,14 @@ func (c *RequestBroker) forward(donech chan bool) {
 	var curOffset int64 = 0
 	var curLimit int64 = 0
 
+	var cont bool
+	var retBuf *[]byte
+
+	tmpbuf, tmpbufPoolIdx := GetFromPools()
+	defer func() {
+		PutInPools(tmpbuf, tmpbufPoolIdx)
+	}()
+
 	for {
 		if c.isClose() {
 			return
@@ -982,7 +1065,11 @@ func (c *RequestBroker) forward(donech chan bool) {
 
 					curLimit++
 					c.Partial(true)
-					if !c.sender(rows[i].pkey, rows[i].value, rows[i].skey) {
+					cont, retBuf = c.sender(rows[i].pkey, rows[i].value, rows[i].skey, tmpbuf)
+					if retBuf != nil {
+						tmpbuf = retBuf
+					}
+					if !cont {
 						c.done()
 						return
 					}
@@ -1126,48 +1213,66 @@ func (c *RequestBroker) countSingleNode(id ResponseHandlerId, client *GsiScanCli
 // has a chance to handle the rows first (e.g. backfill).    The caller will then forward the rows back to the
 // broker for additional processing (e.g. gather).
 //
-func (c *RequestBroker) SendEntries(id ResponseHandlerId, pkeys [][]byte, skeys []common.SecondaryKey) bool {
+func (c *RequestBroker) SendEntries(id ResponseHandlerId, pkeys [][]byte,
+	skeys *common.ScanResultEntries) (bool, error) {
 
 	// StreamEndResponse has nil pkeys and nil skeys
-	if len(pkeys) == 0 && len(skeys) == 0 {
+	if len(pkeys) == 0 && skeys.GetLength() == 0 {
 		if c.useGather() {
 			var r Row
 			r.last = true
 			c.queues[int(id)].Enqueue(&r)
 		}
-		return false
+		return false, nil
 	}
 
 	if c.isClose() {
-		return false
+		return false, nil
 	}
 
-	for i, skey := range skeys {
+	var err error
+	var rb *[]byte
+	var cont bool
 
+	tmpbuf := c.tmpbufs[int(id)]
+	defer func() {
+		c.tmpbufs[int(id)] = tmpbuf
+	}()
+
+	for i := 0; i < skeys.GetLength(); i++ {
 		if c.useGather() {
 			var vals []value.Value
 			if c.sorted {
-				vals = make([]value.Value, len(skey))
-				for j := 0; j < len(skey); j++ {
-					if s, ok := skey[j].(string); ok && collatejson.MissingLiteral.Equal(s) {
-						vals[j] = value.NewMissingValue()
-					} else {
-						vals[j] = value.NewValue(skey[j])
-					}
+				vals, err, rb = skeys.Getkth(tmpbuf, i, c.maxTempBufSize)
+				if err != nil {
+					logging.Errorf("Error %v in RequestBroker::SendEntries", err)
+					return false, err
 				}
+
+				if rb != nil {
+					tmpbuf = rb
+				}
+			}
+
+			if c.sorted && len(vals) == 0 {
+				vals = make(value.Values, 0)
 			}
 
 			var r Row
 			r.pkey = pkeys[i]
 			r.value = vals
-			r.skey = skey
+			r.skey = skeys.GetkthKey(i)
 			c.queues[int(id)].Enqueue(&r)
 		} else {
 
 			c.Partial(true)
-			if !c.sender(pkeys[i], nil, skey) {
+			cont, rb = c.sender(pkeys[i], nil, skeys.GetkthKey(i), tmpbuf)
+			if rb != nil {
+				tmpbuf = rb
+			}
+			if !cont {
 				c.done()
-				return false
+				return false, nil
 			}
 		}
 	}
@@ -1176,7 +1281,7 @@ func (c *RequestBroker) SendEntries(id ResponseHandlerId, pkeys [][]byte, skeys 
 		c.queues[int(id)].NotifyEnq()
 	}
 
-	return !c.isClose()
+	return !c.isClose(), nil
 }
 
 //--------------------------
@@ -1185,34 +1290,50 @@ func (c *RequestBroker) SendEntries(id ResponseHandlerId, pkeys [][]byte, skeys 
 
 type bypassResponseReader struct {
 	pkey []byte
-	skey common.SecondaryKey
+	skey common.ScanResultKey
 }
 
-func (d *bypassResponseReader) GetEntries() ([]common.SecondaryKey, [][]byte, error) {
-	return []common.SecondaryKey{d.skey}, [][]byte{d.pkey}, nil
+func (d *bypassResponseReader) GetEntries(dataEncFmt common.DataEncodingFormat) (*common.ScanResultEntries, [][]byte, error) {
+	entries := common.NewScanResultEntries(dataEncFmt)
+	entries.Make(1)
+	entry, err := d.skey.GetRaw()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	entries, err = entries.Append(entry)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return entries, [][]byte{d.pkey}, nil
 }
 
 func (d *bypassResponseReader) Error() error {
 	return nil
 }
 
-func makeDefaultRequestBroker(cb ResponseHandler) *RequestBroker {
+func makeDefaultRequestBroker(cb ResponseHandler,
+	dataEncFmt common.DataEncodingFormat,
+	maxTempBufSize uint64) *RequestBroker {
 
 	broker := NewRequestBroker("", 256, -1)
+	broker.SetMaxTempBufSize(maxTempBufSize)
+	broker.SetDataEncodingFormat(dataEncFmt)
 
 	factory := func(id ResponseHandlerId, instId uint64, partitions []common.PartitionId) ResponseHandler {
 		return makeDefaultResponseHandler(id, broker, instId, partitions)
 	}
 
-	sender := func(pkey []byte, mskey []value.Value, uskey common.SecondaryKey) bool {
+	sender := func(pkey []byte, mskey []value.Value, uskey common.ScanResultKey, tmpbuf *[]byte) (bool, *[]byte) {
 		broker.IncrementSendCount()
 		if cb != nil {
 			var reader bypassResponseReader
 			reader.pkey = pkey
 			reader.skey = uskey
-			return cb(&reader)
+			return cb(&reader), nil
 		}
-		return true
+		return true, nil
 	}
 
 	broker.SetResponseHandlerFactory(factory)
@@ -1224,26 +1345,32 @@ func makeDefaultRequestBroker(cb ResponseHandler) *RequestBroker {
 func makeDefaultResponseHandler(id ResponseHandlerId, broker *RequestBroker, instId uint64, partitions []common.PartitionId) ResponseHandler {
 
 	handler := func(resp ResponseReader) bool {
+		var cont bool
 		err := resp.Error()
 		if err != nil {
 			logging.Errorf("defaultResponseHandler: %v", err)
 			broker.Error(err, instId, partitions)
 			return false
 		}
-		skeys, pkeys, err := resp.GetEntries()
+		skeys, pkeys, err := resp.GetEntries(broker.GetDataEncodingFormat())
 		if err != nil {
 			logging.Errorf("defaultResponseHandler: %v", err)
 			broker.Error(err, instId, partitions)
 			return false
 		}
-		if len(pkeys) != 0 || len(skeys) != 0 {
+		if len(pkeys) != 0 || skeys.GetLength() != 0 {
 			if len(pkeys) != 0 {
 				broker.IncrementReceiveCount(len(pkeys))
 			} else {
-				broker.IncrementReceiveCount(len(skeys))
+				broker.IncrementReceiveCount(skeys.GetLength())
 			}
 		}
-		return broker.SendEntries(id, pkeys, skeys)
+		cont, err = broker.SendEntries(id, pkeys, skeys)
+		if err != nil {
+			logging.Errorf("defaultResponseHandler: SendEntries %v", err)
+			broker.Error(err, instId, partitions)
+		}
+		return cont
 	}
 
 	return handler
@@ -1804,6 +1931,22 @@ func (c *RequestBroker) analyzeProjection(partitions [][]common.PartitionId, num
 			}
 		}
 	}
+}
+
+func (c *RequestBroker) SetDataEncodingFormat(val common.DataEncodingFormat) {
+	atomic.StoreUint32(&c.dataEncFmt, uint32(val))
+}
+
+func (c *RequestBroker) GetDataEncodingFormat() common.DataEncodingFormat {
+	return common.DataEncodingFormat(atomic.LoadUint32(&c.dataEncFmt))
+}
+
+func (c *RequestBroker) SetMaxTempBufSize(val uint64) {
+	atomic.StoreUint64(&c.maxTempBufSize, val)
+}
+
+func (c *RequestBroker) GetMaxTempBufSize() uint64 {
+	return atomic.LoadUint64(&c.maxTempBufSize)
 }
 
 //--------------------------

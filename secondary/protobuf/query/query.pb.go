@@ -317,6 +317,7 @@ type ScanRequest struct {
 	PartitionIds     []uint64         `protobuf:"varint,13,rep,name=partitionIds" json:"partitionIds,omitempty"`
 	GroupAggr        *GroupAggr       `protobuf:"bytes,14,opt,name=groupAggr" json:"groupAggr,omitempty"`
 	Sorted           *bool            `protobuf:"varint,15,opt,name=sorted" json:"sorted,omitempty"`
+	DataEncFmt       *uint32          `protobuf:"varint,16,opt,name=dataEncFmt" json:"dataEncFmt,omitempty"`
 	XXX_unrecognized []byte           `json:"-"`
 }
 
@@ -429,6 +430,13 @@ func (m *ScanRequest) GetSorted() bool {
 	return false
 }
 
+func (m *ScanRequest) GetDataEncFmt() uint32 {
+	if m != nil && m.DataEncFmt != nil {
+		return *m.DataEncFmt
+	}
+	return 0
+}
+
 // Full table scan request from indexer.
 type ScanAllRequest struct {
 	DefnID           *uint64        `protobuf:"varint,1,req,name=defnID" json:"defnID,omitempty"`
@@ -438,6 +446,7 @@ type ScanAllRequest struct {
 	RequestId        *string        `protobuf:"bytes,5,opt,name=requestId" json:"requestId,omitempty"`
 	RollbackTime     *int64         `protobuf:"varint,6,opt,name=rollbackTime" json:"rollbackTime,omitempty"`
 	PartitionIds     []uint64       `protobuf:"varint,7,rep,name=partitionIds" json:"partitionIds,omitempty"`
+	DataEncFmt       *uint32        `protobuf:"varint,8,opt,name=dataEncFmt" json:"dataEncFmt,omitempty"`
 	XXX_unrecognized []byte         `json:"-"`
 }
 
@@ -492,6 +501,13 @@ func (m *ScanAllRequest) GetPartitionIds() []uint64 {
 		return m.PartitionIds
 	}
 	return nil
+}
+
+func (m *ScanAllRequest) GetDataEncFmt() uint32 {
+	if m != nil && m.DataEncFmt != nil {
+		return *m.DataEncFmt
+	}
+	return 0
 }
 
 // Request by client to stop streaming the query results.

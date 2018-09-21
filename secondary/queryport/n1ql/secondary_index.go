@@ -491,6 +491,7 @@ func (gsi *gsiKeyspace) Refresh() errors.Error {
 
 	// has metadata version changed?
 	if cachedVersion < version || cachedClusterVersion < clusterVersion {
+		gsi.gsiClient.UpdateDataEncodingFormat(clusterVersion)
 
 		si_s := make([]*secondaryIndex, 0, len(indexes))
 		for _, index := range indexes {
@@ -585,7 +586,7 @@ func (gsi *gsiKeyspace) getIndexFromVersion(index *secondaryIndex,
 	clusterVersion uint64) datastore.Index {
 
 	switch clusterVersion {
-	case c.INDEXER_55_VERSION:
+	case c.INDEXER_55_VERSION, c.INDEXER_65_VERSION:
 		si2 := &secondaryIndex2{secondaryIndex: *index}
 		si3 := datastore.Index(&secondaryIndex3{secondaryIndex2: *si2})
 		return si3
@@ -601,7 +602,7 @@ func (gsi *gsiKeyspace) getPrimaryIndexFromVersion(index *secondaryIndex,
 	clusterVersion uint64) datastore.PrimaryIndex {
 
 	switch clusterVersion {
-	case c.INDEXER_55_VERSION:
+	case c.INDEXER_55_VERSION, c.INDEXER_65_VERSION:
 		si2 := &secondaryIndex2{secondaryIndex: *index}
 		si3 := datastore.PrimaryIndex(&secondaryIndex3{secondaryIndex2: *si2})
 		return si3
@@ -1216,13 +1217,17 @@ func makeRequestBroker(
 	size int) *qclient.RequestBroker {
 
 	broker := qclient.NewRequestBroker(requestId, int64(size), conn.MaxParallelism())
+	dataEncFmt := client.GetDataEncodingFormat()
+	broker.SetMaxTempBufSize(si.gsi.getMaxTempBufSize())
+
+	broker.SetDataEncodingFormat(dataEncFmt)
 
 	factory := func(id qclient.ResponseHandlerId, instId uint64, partitions []c.PartitionId) qclient.ResponseHandler {
 		return makeResponsehandler(id, requestId, si, client, conn, broker, config, waitGroup, backfillSync, instId, partitions)
 	}
 
-	sender := func(pkey []byte, value []value.Value, skey c.SecondaryKey) bool {
-		return sendEntry(broker, si, pkey, value, skey, conn)
+	sender := func(pkey []byte, value []value.Value, skey c.ScanResultKey, tmpbuf *[]byte) (bool, *[]byte) {
+		return sendEntry(broker, si, pkey, value, skey, conn, tmpbuf)
 	}
 
 	broker.SetResponseHandlerFactory(factory)
@@ -1277,6 +1282,7 @@ func makeResponsehandler(
 	//    scatter/gather.
 	//
 	backfill := func() {
+		var skeys c.ScanResultEntries
 		name := tmpfile.Name()
 		defer func() {
 			if readfd != nil {
@@ -1292,7 +1298,6 @@ func makeResponsehandler(
 		}()
 		l.Debugf(
 			"%v %q started backfill for %v ...\n", lprefix, requestId, name)
-
 		for {
 			if pending := atomic.LoadInt64(&backfillEntries); pending > 0 {
 				atomic.AddInt64(&backfillEntries, -1)
@@ -1311,7 +1316,6 @@ func makeResponsehandler(
 				return
 			}
 
-			skeys := make([]c.SecondaryKey, 0)
 			if err := dec.Decode(&skeys); err != nil {
 				fmsg := "%v %q decoding from backfill %v: %v\n"
 				l.Errorf(fmsg, lprefix, requestId, name, err)
@@ -1327,7 +1331,7 @@ func makeResponsehandler(
 				broker.Error(err, instId, partitions)
 				return
 			}
-			l.Tracef("%v backfill read %v entries\n", lprefix, len(skeys))
+			l.Tracef("%v backfill read %v entries\n", lprefix, skeys.GetLength())
 			if primed == false {
 				atomic.AddInt64(&si.gsi.primedur, int64(time.Since(starttm)))
 				primed = true
@@ -1338,10 +1342,17 @@ func makeResponsehandler(
 				ln = len(entryChannel)
 			}
 
-			if ln > 0 && len(skeys) > 0 {
+			if ln > 0 && skeys.GetLength() > 0 {
 				atomic.AddInt64(&si.gsi.throttledur, int64(time.Since(ticktm)))
 			}
-			if !broker.SendEntries(id, pkeys, skeys) {
+			cont, err := broker.SendEntries(id, pkeys, &skeys)
+			if err != nil {
+				fmsg := "%v %q error %v in SendEntries\n"
+				l.Errorf(fmsg, lprefix, requestId, err)
+				conn.Error(n1qlError(client, err))
+				broker.Error(err, instId, partitions)
+			}
+			if !cont {
 				return
 			}
 			ticktm = time.Now()
@@ -1374,18 +1385,19 @@ func makeResponsehandler(
 			broker.Error(err, instId, partitions)
 			return false
 		}
-		skeys, pkeys, err := data.GetEntries()
+
+		dataEncFmt := broker.GetDataEncodingFormat()
+		skeys, pkeys, err := data.GetEntries(dataEncFmt)
 		if err != nil {
 			conn.Error(n1qlError(client, err))
 			broker.Error(err, instId, partitions)
 			return false
 		}
-
-		if len(pkeys) != 0 || len(skeys) != 0 {
+		if len(pkeys) != 0 || skeys.GetLength() != 0 {
 			if len(pkeys) != 0 {
 				broker.IncrementReceiveCount(len(pkeys))
 			} else {
-				broker.IncrementReceiveCount(len(skeys))
+				broker.IncrementReceiveCount(skeys.GetLength())
 			}
 		}
 
@@ -1399,7 +1411,7 @@ func makeResponsehandler(
 			cp = cap(entryChannel)
 		}
 
-		if backfillLimit > 0 && tmpfile == nil && ((cp - ln) < len(skeys)) {
+		if backfillLimit > 0 && tmpfile == nil && ((cp - ln) < skeys.GetLength()) {
 			prefix := BACKFILLPREFIX + strconv.Itoa(os.Getpid())
 			tmpfile, err = ioutil.TempFile(si.gsi.getTmpSpaceDir(), prefix)
 			name := ""
@@ -1446,7 +1458,7 @@ func makeResponsehandler(
 				return false
 			}
 
-			l.Tracef("%v backfill %v entries\n", lprefix, len(skeys))
+			l.Tracef("%v backfill %v entries\n", lprefix, skeys.GetLength())
 			if atomic.LoadInt64(&backfillFin) > 0 {
 				return false
 			}
@@ -1464,15 +1476,22 @@ func makeResponsehandler(
 
 		} else {
 			fmsg := "%v response cap:%v len:%v entries:%v\n"
-			l.Tracef(fmsg, lprefix, cp, ln, len(skeys))
+			l.Tracef(fmsg, lprefix, cp, ln, skeys.GetLength())
 			if primed == false {
 				atomic.AddInt64(&si.gsi.primedur, int64(time.Since(starttm)))
 				primed = true
 			}
-			if int(ln) > 0 && len(skeys) > 0 {
+			if int(ln) > 0 && skeys.GetLength() > 0 {
 				atomic.AddInt64(&si.gsi.throttledur, int64(time.Since(ticktm)))
 			}
-			if !broker.SendEntries(id, pkeys, skeys) {
+			cont, err := broker.SendEntries(id, pkeys, skeys)
+			if err != nil {
+				fmsg := "%v %q error %v in SendEntries\n"
+				l.Errorf(fmsg, lprefix, requestId, err)
+				conn.Error(n1qlError(client, err))
+				broker.Error(err, instId, partitions)
+			}
+			if !cont {
 				return false
 			}
 			ticktm = time.Now()
@@ -1663,7 +1682,9 @@ func init() {
 	gob.Register([]interface{}{})
 }
 
-func sendEntry(broker *qclient.RequestBroker, si *secondaryIndex, pkey []byte, value []value.Value, skey c.SecondaryKey, conn *datastore.IndexConnection) bool {
+func sendEntry(broker *qclient.RequestBroker, si *secondaryIndex, pkey []byte,
+	value []value.Value, skey c.ScanResultKey,
+	conn *datastore.IndexConnection, tmpbuf *[]byte) (bool, *[]byte) {
 
 	var start time.Time
 	blockedtm, blocked := int64(0), false
@@ -1671,8 +1692,15 @@ func sendEntry(broker *qclient.RequestBroker, si *secondaryIndex, pkey []byte, v
 	entryChannel := conn.EntryChannel()
 	stopChannel := conn.StopChannel()
 
+	var err error
+	var retBuf *[]byte
 	if value == nil {
-		value = skey2Values(skey)
+		value, err, retBuf = skey.Get(tmpbuf, broker.GetMaxTempBufSize())
+		if err != nil {
+			msg := fmt.Sprintf("Error %v in sendEntry", err)
+			conn.Error(errors.NewError(err, msg))
+			return false, nil
+		}
 	}
 
 	// Primary-key is mandatory.
@@ -1686,7 +1714,7 @@ func sendEntry(broker *qclient.RequestBroker, si *secondaryIndex, pkey []byte, v
 	select {
 	case entryChannel <- e:
 	case <-stopChannel:
-		return false
+		return false, nil
 	}
 	if blocked {
 		blockedtm += int64(time.Since(start))
@@ -1695,7 +1723,7 @@ func sendEntry(broker *qclient.RequestBroker, si *secondaryIndex, pkey []byte, v
 
 	atomic.AddInt64(&si.gsi.blockeddur, blockedtm)
 	broker.IncrementSendCount()
-	return true
+	return true, retBuf
 }
 
 func (gsi *gsiKeyspace) logstats(logtick time.Duration) {
@@ -2091,6 +2119,10 @@ func getDefaultTmpDir() string {
 	os.Remove(file.Name()) // remove this file.
 
 	return default_temp_dir
+}
+
+func (gsi *gsiKeyspace) getMaxTempBufSize() uint64 {
+	return gsi.gsiClient.Settings().MaxTempBufSize()
 }
 
 //-------------------------------------

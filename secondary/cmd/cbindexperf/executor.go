@@ -53,12 +53,20 @@ func RunJob(client *qclient.GsiClient, job *Job, aggrQ chan *JobResult) {
 		}
 	}
 
+	dataEncFmt := client.GetDataEncodingFormat()
+
 	callb := func(res qclient.ResponseReader) bool {
 		if res.Error() != nil {
 			errFn(res.Error().Error())
 			return false
 		} else {
-			_, pkeys, err := res.GetEntries()
+			var pkeys [][]byte
+			var err error
+			_, pkeys, err = res.GetEntries(dataEncFmt)
+			// The purpose of cbindexperf is to measure indexer's
+			// performance. so, we don't need to decode n1ql values
+			// in case of cjson
+
 			if err != nil {
 				errFn(err.Error())
 				return false

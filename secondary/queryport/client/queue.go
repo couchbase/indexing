@@ -21,7 +21,7 @@ import (
 type Row struct {
 	pkey  []byte
 	value []value.Value
-	skey  common.SecondaryKey
+	skey  common.ScanResultKey
 	last  bool
 }
 

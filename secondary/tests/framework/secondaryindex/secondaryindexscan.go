@@ -16,11 +16,16 @@ var UseClient = "gsi"
 var DescCollation = false
 
 func RangeWithClient(indexName, bucketName, server string, low, high []interface{}, inclusion uint32,
-	distinct bool, limit int64, consistency c.Consistency, vector *qc.TsConsistency, client *qc.GsiClient) (tc.ScanResponse, error) {
+	distinct bool, limit int64, consistency c.Consistency, vector *qc.TsConsistency, client *qc.GsiClient) (tc.ScanResponseActual, error) {
 	var scanErr error
 	scanErr = nil
 	defnID, _ := GetDefnID(client, bucketName, indexName)
-	scanResults := make(tc.ScanResponse)
+	scanResults := make(tc.ScanResponseActual)
+
+	tmpbuf, tmpbufPoolIdx := qc.GetFromPools()
+	defer func() {
+		qc.PutInPools(tmpbuf, tmpbufPoolIdx)
+	}()
 
 	start := time.Now()
 	connErr := client.Range(
@@ -30,10 +35,18 @@ func RangeWithClient(indexName, bucketName, server string, low, high []interface
 			if err := response.Error(); err != nil {
 				scanErr = err
 				return false
-			} else if skeys, pkeys, err := response.GetEntries(); err != nil {
+			} else if keys, pkeys, err := response.GetEntries(c.DATA_ENC_COLLATEJSON); err != nil {
 				scanErr = err
 				return false
 			} else {
+				skeys, err1, retBuf := keys.Get(tmpbuf, client.GetMaxTempBufSize())
+				if err1 != nil {
+					tc.HandleError(err1, "err in keys.Get")
+					return false
+				}
+				if retBuf != nil {
+					tmpbuf = retBuf
+				}
 				for i, skey := range skeys {
 					primaryKey := string(pkeys[i])
 					if _, keyPresent := scanResults[primaryKey]; keyPresent {
@@ -61,7 +74,7 @@ func RangeWithClient(indexName, bucketName, server string, low, high []interface
 }
 
 func Range(indexName, bucketName, server string, low, high []interface{}, inclusion uint32,
-	distinct bool, limit int64, consistency c.Consistency, vector *qc.TsConsistency) (tc.ScanResponse, error) {
+	distinct bool, limit int64, consistency c.Consistency, vector *qc.TsConsistency) (tc.ScanResponseActual, error) {
 
 	distinct = false
 	if UseClient == "n1ql" {
@@ -82,7 +95,13 @@ func Range(indexName, bucketName, server string, low, high []interface{}, inclus
 	defer client.Close()
 
 	defnID, _ := GetDefnID(client, bucketName, indexName)
-	scanResults := make(tc.ScanResponse)
+	scanResults := make(tc.ScanResponseActual)
+
+	tmpbuf, tmpbufPoolIdx := qc.GetFromPools()
+	defer func() {
+		qc.PutInPools(tmpbuf, tmpbufPoolIdx)
+	}()
+
 	start := time.Now()
 	connErr := client.Range(
 		defnID, "", c.SecondaryKey(low), c.SecondaryKey(high), qc.Inclusion(inclusion), distinct, limit,
@@ -91,10 +110,18 @@ func Range(indexName, bucketName, server string, low, high []interface{}, inclus
 			if err := response.Error(); err != nil {
 				scanErr = err
 				return false
-			} else if skeys, pkeys, err := response.GetEntries(); err != nil {
+			} else if keys, pkeys, err := response.GetEntries(c.DATA_ENC_COLLATEJSON); err != nil {
 				scanErr = err
 				return false
 			} else {
+				skeys, err1, retBuf := keys.Get(tmpbuf, client.GetMaxTempBufSize())
+				if err1 != nil {
+					tc.HandleError(err1, "err in keys.Get")
+					return false
+				}
+				if retBuf != nil {
+					tmpbuf = retBuf
+				}
 				for i, skey := range skeys {
 					primaryKey := string(pkeys[i])
 					if _, keyPresent := scanResults[primaryKey]; keyPresent {
@@ -103,7 +130,7 @@ func Range(indexName, bucketName, server string, low, high []interface{}, inclus
 					} else {
 						// Test collation only if CheckCollation is true
 						if CheckCollation == true && len(skey) > 0 {
-							secVal := skey2Values(skey)[0]
+							secVal := skey[0]
 							if previousSecKey == nil {
 								previousSecKey = secVal
 							} else {
@@ -143,7 +170,9 @@ func Range(indexName, bucketName, server string, low, high []interface{}, inclus
 	return scanResults, nil
 }
 
-func Lookup(indexName, bucketName, server string, values []interface{}, distinct bool, limit int64, consistency c.Consistency, vector *qc.TsConsistency) (tc.ScanResponse, error) {
+func Lookup(indexName, bucketName, server string, values []interface{},
+	distinct bool, limit int64, consistency c.Consistency,
+	vector *qc.TsConsistency) (tc.ScanResponseActual, error) {
 
 	distinct = false
 	if UseClient == "n1ql" {
@@ -163,7 +192,12 @@ func Lookup(indexName, bucketName, server string, values []interface{}, distinct
 	defer client.Close()
 
 	defnID, _ := GetDefnID(client, bucketName, indexName)
-	scanResults := make(tc.ScanResponse)
+	scanResults := make(tc.ScanResponseActual)
+
+	tmpbuf, tmpbufPoolIdx := qc.GetFromPools()
+	defer func() {
+		qc.PutInPools(tmpbuf, tmpbufPoolIdx)
+	}()
 
 	start := time.Now()
 	connErr := client.Lookup(
@@ -173,10 +207,18 @@ func Lookup(indexName, bucketName, server string, values []interface{}, distinct
 			if err := response.Error(); err != nil {
 				scanErr = err
 				return false
-			} else if skeys, pkeys, err := response.GetEntries(); err != nil {
+			} else if keys, pkeys, err := response.GetEntries(c.DATA_ENC_COLLATEJSON); err != nil {
 				scanErr = err
 				return false
 			} else {
+				skeys, err1, retBuf := keys.Get(tmpbuf, client.GetMaxTempBufSize())
+				if err1 != nil {
+					tc.HandleError(err1, "err in keys.Get")
+					return false
+				}
+				if retBuf != nil {
+					tmpbuf = retBuf
+				}
 				for i, skey := range skeys {
 					primaryKey := string(pkeys[i])
 					if _, keyPresent := scanResults[primaryKey]; keyPresent {
@@ -203,7 +245,8 @@ func Lookup(indexName, bucketName, server string, values []interface{}, distinct
 	return scanResults, nil
 }
 
-func ScanAll(indexName, bucketName, server string, limit int64, consistency c.Consistency, vector *qc.TsConsistency) (tc.ScanResponse, error) {
+func ScanAll(indexName, bucketName, server string, limit int64,
+	consistency c.Consistency, vector *qc.TsConsistency) (tc.ScanResponseActual, error) {
 
 	if UseClient == "n1ql" {
 		log.Printf("Using n1ql client")
@@ -222,7 +265,12 @@ func ScanAll(indexName, bucketName, server string, limit int64, consistency c.Co
 	defer client.Close()
 
 	defnID, _ := GetDefnID(client, bucketName, indexName)
-	scanResults := make(tc.ScanResponse)
+	scanResults := make(tc.ScanResponseActual)
+
+	tmpbuf, tmpbufPoolIdx := qc.GetFromPools()
+	defer func() {
+		qc.PutInPools(tmpbuf, tmpbufPoolIdx)
+	}()
 
 	start := time.Now()
 	connErr := client.ScanAll(
@@ -232,10 +280,18 @@ func ScanAll(indexName, bucketName, server string, limit int64, consistency c.Co
 			if err := response.Error(); err != nil {
 				scanErr = err
 				return false
-			} else if skeys, pkeys, err := response.GetEntries(); err != nil {
+			} else if keys, pkeys, err := response.GetEntries(c.DATA_ENC_COLLATEJSON); err != nil {
 				scanErr = err
 				return false
 			} else {
+				skeys, err1, retBuf := keys.Get(tmpbuf, client.GetMaxTempBufSize())
+				if err1 != nil {
+					tc.HandleError(err1, "err in keys.Get")
+					return false
+				}
+				if retBuf != nil {
+					tmpbuf = retBuf
+				}
 				for i, skey := range skeys {
 					primaryKey := string(pkeys[i])
 					if _, keyPresent := scanResults[primaryKey]; keyPresent {
@@ -244,7 +300,7 @@ func ScanAll(indexName, bucketName, server string, limit int64, consistency c.Co
 					} else {
 						// Test collation only if CheckCollation is true
 						if CheckCollation == true && len(skey) > 0 {
-							secVal := skey2Values(skey)[0]
+							secVal := skey[0]
 							if previousSecKey == nil {
 								previousSecKey = secVal
 							} else {
@@ -332,7 +388,7 @@ func RangeStatistics(indexName, bucketName, server string, low, high []interface
 
 func Scans(indexName, bucketName, server string, scans qc.Scans, reverse, distinct bool,
 	projection *qc.IndexProjection, offset, limit int64,
-	consistency c.Consistency, vector *qc.TsConsistency) (tc.ScanResponse, error) {
+	consistency c.Consistency, vector *qc.TsConsistency) (tc.ScanResponseActual, error) {
 
 	if UseClient == "n1ql" {
 		log.Printf("Using n1ql client")
@@ -352,7 +408,12 @@ func Scans(indexName, bucketName, server string, scans qc.Scans, reverse, distin
 	defer client.Close()
 
 	defnID, _ := GetDefnID(client, bucketName, indexName)
-	scanResults := make(tc.ScanResponse)
+	scanResults := make(tc.ScanResponseActual)
+
+	tmpbuf, tmpbufPoolIdx := qc.GetFromPools()
+	defer func() {
+		qc.PutInPools(tmpbuf, tmpbufPoolIdx)
+	}()
 
 	count := 0
 	start := time.Now()
@@ -364,11 +425,19 @@ func Scans(indexName, bucketName, server string, scans qc.Scans, reverse, distin
 				scanErr = err
 				log.Printf("ScanError = %v ", scanErr)
 				return false
-			} else if skeys, pkeys, err := response.GetEntries(); err != nil {
+			} else if keys, pkeys, err := response.GetEntries(c.DATA_ENC_COLLATEJSON); err != nil {
 				scanErr = err
 				log.Printf("ScanError = %v ", scanErr)
 				return false
 			} else {
+				skeys, err1, retBuf := keys.Get(tmpbuf, client.GetMaxTempBufSize())
+				if err1 != nil {
+					tc.HandleError(err1, "err in keys.Get")
+					return false
+				}
+				if retBuf != nil {
+					tmpbuf = retBuf
+				}
 				for i, skey := range skeys {
 					primaryKey := string(pkeys[i])
 					//log.Printf("Scanresult count = %v: %v  : %v ", count, skey, primaryKey)
@@ -380,7 +449,7 @@ func Scans(indexName, bucketName, server string, scans qc.Scans, reverse, distin
 					} else {
 						// Test collation only if CheckCollation is true
 						if CheckCollation == true && len(skey) > 0 {
-							secVal := skey2Values(skey)[0]
+							secVal := skey[0]
 							if previousSecKey == nil {
 								previousSecKey = secVal
 							} else {
@@ -440,7 +509,7 @@ func MultiScanCount(indexName, bucketName, server string, scans qc.Scans, distin
 
 func Scan3(indexName, bucketName, server string, scans qc.Scans, reverse, distinct bool,
 	projection *qc.IndexProjection, offset, limit int64, groupAggr *qc.GroupAggr,
-	consistency c.Consistency, vector *qc.TsConsistency) (tc.ScanResponse, tc.GroupAggrScanResponse, error) {
+	consistency c.Consistency, vector *qc.TsConsistency) (tc.ScanResponseActual, tc.GroupAggrScanResponseActual, error) {
 
 	if UseClient == "n1ql" {
 		log.Printf("Using n1ql client")
@@ -461,8 +530,13 @@ func Scan3(indexName, bucketName, server string, scans qc.Scans, reverse, distin
 
 	defnID, _ := GetDefnID(client, bucketName, indexName)
 
-	scanResults := make(tc.ScanResponse)
-	var groupAggrScanResults tc.GroupAggrScanResponse
+	scanResults := make(tc.ScanResponseActual)
+	var groupAggrScanResults tc.GroupAggrScanResponseActual
+
+	tmpbuf, tmpbufPoolIdx := qc.GetFromPools()
+	defer func() {
+		qc.PutInPools(tmpbuf, tmpbufPoolIdx)
+	}()
 
 	count := 0
 	start := time.Now()
@@ -475,11 +549,19 @@ func Scan3(indexName, bucketName, server string, scans qc.Scans, reverse, distin
 					scanErr = err
 					log.Printf("ScanError = %v ", scanErr)
 					return false
-				} else if skeys, pkeys, err := response.GetEntries(); err != nil {
+				} else if keys, pkeys, err := response.GetEntries(c.DATA_ENC_COLLATEJSON); err != nil {
 					scanErr = err
 					log.Printf("ScanError = %v ", scanErr)
 					return false
 				} else {
+					skeys, err1, retBuf := keys.Get(tmpbuf, client.GetMaxTempBufSize())
+					if err1 != nil {
+						tc.HandleError(err1, "err in keys.Get")
+						return false
+					}
+					if retBuf != nil {
+						tmpbuf = retBuf
+					}
 					for i, skey := range skeys {
 						primaryKey := string(pkeys[i])
 						//log.Printf("Scanresult count = %v: %v  : %v ", count, skey, primaryKey)
@@ -491,7 +573,7 @@ func Scan3(indexName, bucketName, server string, scans qc.Scans, reverse, distin
 						} else {
 							// Test collation only if CheckCollation is true
 							if CheckCollation == true && len(skey) > 0 {
-								secVal := skey2Values(skey)[0]
+								secVal := skey[0]
 								if previousSecKey == nil {
 									previousSecKey = secVal
 								} else {
@@ -514,11 +596,19 @@ func Scan3(indexName, bucketName, server string, scans qc.Scans, reverse, distin
 					scanErr = err
 					log.Printf("ScanError = %v ", scanErr)
 					return false
-				} else if skeys, _, err := response.GetEntries(); err != nil {
+				} else if keys, _, err := response.GetEntries(c.DATA_ENC_COLLATEJSON); err != nil {
 					scanErr = err
 					log.Printf("ScanError = %v ", scanErr)
 					return false
 				} else {
+					skeys, err1, retBuf := keys.Get(tmpbuf, client.GetMaxTempBufSize())
+					if err1 != nil {
+						tc.HandleError(err1, "err in keys.Get")
+						return false
+					}
+					if retBuf != nil {
+						tmpbuf = retBuf
+					}
 					for _, skey := range skeys {
 						count++
 						groupAggrScanResults = append(groupAggrScanResults, skey)

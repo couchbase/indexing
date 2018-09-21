@@ -255,6 +255,18 @@ func (e secondaryIndexEntry) ReadSecKey(buf []byte) ([]byte, error) {
 	return buf, nil
 }
 
+func (e secondaryIndexEntry) ReadSecKeyCJson(buf []byte) []byte {
+	var encoded []byte
+	doclen := e.lenDocId()
+	if e.isCountEncoded() {
+		encoded = e[0 : len(e)-doclen-4]
+	} else {
+		encoded = e[0 : len(e)-doclen-2]
+	}
+
+	return encoded
+}
+
 func (e *secondaryIndexEntry) Bytes() []byte {
 	return []byte(*e)
 }

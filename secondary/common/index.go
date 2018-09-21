@@ -11,6 +11,7 @@ package common
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/couchbase/indexing/secondary/logging"
 	"strings"
@@ -644,3 +645,14 @@ func NewRebalanceRequestContext() *MetadataRequestContext {
 func NewUserRequestContext() *MetadataRequestContext {
 	return &MetadataRequestContext{ReqSource: DDLRequestSourceUser}
 }
+
+// Format of the data encoding, when it is being transferred over the wire
+// from indexer to GsiClient during scan
+type DataEncodingFormat uint32
+
+const (
+	DATA_ENC_JSON DataEncodingFormat = iota + 1
+	DATA_ENC_COLLATEJSON
+)
+
+var ErrUnexpectedDataEncFmt = errors.New("Unexpected data encoding format")
