@@ -44,8 +44,9 @@ type VbucketWorker struct {
 	engines   map[uint64]*Engine
 	endpoints map[string]c.RouterEndpoint
 	// server channels
-	reqch chan []interface{}
-	finch chan bool
+	sbch   chan []interface{}
+	datach chan []interface{}
+	finch  chan bool
 	// config params
 	logPrefix   string
 	mutChanSize int
@@ -72,14 +73,15 @@ func NewVbucketWorker(
 		vbuckets:  make(map[uint16]*Vbucket),
 		engines:   make(map[uint64]*Engine),
 		endpoints: make(map[string]c.RouterEndpoint),
-		reqch:     make(chan []interface{}, mutChanSize),
+		sbch:      make(chan []interface{}, mutChanSize),
+		datach:    make(chan []interface{}, mutChanSize),
 		finch:     make(chan bool),
 		encodeBuf: make([]byte, 0, encodeBufSize),
 	}
 	fmsg := "WRKR[%v<-%v<-%v #%v]"
 	worker.logPrefix = fmt.Sprintf(fmsg, id, bucket, feed.cluster, feed.topic)
 	worker.mutChanSize = mutChanSize
-	go worker.run(worker.reqch)
+	go worker.run(worker.datach, worker.sbch)
 	return worker
 }
 
@@ -98,14 +100,14 @@ const (
 // Event will post an DcpEvent, asychronous call.
 func (worker *VbucketWorker) Event(m *mc.DcpEvent) error {
 	cmd := []interface{}{vwCmdEvent, m}
-	return c.FailsafeOpAsync(worker.reqch, cmd, worker.finch)
+	return c.FailsafeOpAsync(worker.datach, cmd, worker.finch)
 }
 
 // SyncPulse will trigger worker to generate a sync pulse for all its
 // vbuckets, asychronous call.
 func (worker *VbucketWorker) SyncPulse() error {
 	cmd := []interface{}{vwCmdSyncPulse}
-	return c.FailsafeOpAsync(worker.reqch, cmd, worker.finch)
+	return c.FailsafeOpAsync(worker.datach, cmd, worker.finch)
 }
 
 // GetVbuckets will return the list of active vbuckets managed by this
@@ -113,7 +115,7 @@ func (worker *VbucketWorker) SyncPulse() error {
 func (worker *VbucketWorker) GetVbuckets() ([]*Vbucket, error) {
 	respch := make(chan []interface{}, 1)
 	cmd := []interface{}{vwCmdGetVbuckets, respch}
-	resp, err := c.FailsafeOp(worker.reqch, respch, cmd, worker.finch)
+	resp, err := c.FailsafeOp(worker.sbch, respch, cmd, worker.finch)
 	if err != nil {
 		return nil, err
 	}
@@ -128,7 +130,7 @@ func (worker *VbucketWorker) AddEngines(
 
 	respch := make(chan []interface{}, 1)
 	cmd := []interface{}{vwCmdAddEngines, opaque, engines, endpoints, respch}
-	resp, err := c.FailsafeOp(worker.reqch, respch, cmd, worker.finch)
+	resp, err := c.FailsafeOp(worker.sbch, respch, cmd, worker.finch)
 	if err != nil {
 		return nil, err
 	}
@@ -142,7 +144,7 @@ func (worker *VbucketWorker) DeleteEngines(
 
 	respch := make(chan []interface{}, 1)
 	cmd := []interface{}{vwCmdDelEngines, opaque, engines, respch}
-	_, err := c.FailsafeOp(worker.reqch, respch, cmd, worker.finch)
+	_, err := c.FailsafeOp(worker.sbch, respch, cmd, worker.finch)
 	return err
 }
 
@@ -150,7 +152,7 @@ func (worker *VbucketWorker) DeleteEngines(
 func (worker *VbucketWorker) ResetConfig(config c.Config) error {
 	respch := make(chan []interface{}, 1)
 	cmd := []interface{}{vwCmdResetConfig, config, respch}
-	_, err := c.FailsafeOp(worker.reqch, respch, cmd, worker.finch)
+	_, err := c.FailsafeOp(worker.sbch, respch, cmd, worker.finch)
 	return err
 }
 
@@ -158,7 +160,7 @@ func (worker *VbucketWorker) ResetConfig(config c.Config) error {
 func (worker *VbucketWorker) GetStatistics() (map[string]interface{}, error) {
 	respch := make(chan []interface{}, 1)
 	cmd := []interface{}{vwCmdGetStats, respch}
-	resp, err := c.FailsafeOp(worker.reqch, respch, cmd, worker.finch)
+	resp, err := c.FailsafeOp(worker.sbch, respch, cmd, worker.finch)
 	if err != nil {
 		return nil, err
 	}
@@ -169,13 +171,13 @@ func (worker *VbucketWorker) GetStatistics() (map[string]interface{}, error) {
 func (worker *VbucketWorker) Close() error {
 	respch := make(chan []interface{}, 1)
 	cmd := []interface{}{vwCmdClose, respch}
-	_, err := c.FailsafeOp(worker.reqch, respch, cmd, worker.finch)
+	_, err := c.FailsafeOp(worker.sbch, respch, cmd, worker.finch)
 	return err
 }
 
 // routine handles data path for a single worker handling one
 // or more vbuckets.
-func (worker *VbucketWorker) run(reqch chan []interface{}) {
+func (worker *VbucketWorker) run(datach, sbch chan []interface{}) {
 	logPrefix := worker.logPrefix
 	logging.Infof("%v started ...", logPrefix)
 
@@ -201,9 +203,26 @@ func (worker *VbucketWorker) run(reqch chan []interface{}) {
 loop:
 	for {
 		select {
-		case msg := <-reqch:
+		case msg := <-datach:
 			cmd := msg[0].(byte)
 			switch cmd {
+			case vwCmdEvent:
+				m := msg[1].(*mc.DcpEvent)
+				v := worker.handleEvent(m)
+				if v == nil {
+					fmsg := "%v ##%x nil vbucket %v for %v"
+					logging.Fatalf(fmsg, logPrefix, m.Opaque, m.VBucket, m.Opcode)
+
+				} else if m.Opcode == mcd.DCP_STREAMEND {
+					delete(worker.vbuckets, v.vbno)
+
+				} else if m.Opaque != v.opaque {
+					fmsg := "%v ##%x mismatch with vbucket.##%x %v"
+					logging.Fatalf(fmsg, logPrefix, m.Opaque, v.opaque, m.Opcode)
+					//workaround for MB-30327. this state should never happen.
+					os.Exit(1)
+				}
+
 			case vwCmdSyncPulse:
 				for _, v := range worker.vbuckets {
 					if data := v.makeSyncData(worker.engines); data != nil {
@@ -217,7 +236,10 @@ loop:
 						logging.Errorf(fmsg, logPrefix, worker.opaque, v.vbno)
 					}
 				}
-
+			}
+		case msg := <-sbch:
+			cmd := msg[0].(byte)
+			switch cmd {
 			case vwCmdGetVbuckets:
 				vbuckets := make([]*Vbucket, 0, len(worker.vbuckets))
 				for _, v := range worker.vbuckets {
@@ -280,23 +302,6 @@ loop:
 			case vwCmdResetConfig:
 				_, respch := msg[1].(c.Config), msg[2].(chan []interface{})
 				respch <- []interface{}{nil}
-
-			case vwCmdEvent:
-				m := msg[1].(*mc.DcpEvent)
-				v := worker.handleEvent(m)
-				if v == nil {
-					fmsg := "%v ##%x nil vbucket %v for %v"
-					logging.Fatalf(fmsg, logPrefix, m.Opaque, m.VBucket, m.Opcode)
-
-				} else if m.Opcode == mcd.DCP_STREAMEND {
-					delete(worker.vbuckets, v.vbno)
-
-				} else if m.Opaque != v.opaque {
-					fmsg := "%v ##%x mismatch with vbucket.##%x %v"
-					logging.Fatalf(fmsg, logPrefix, m.Opaque, v.opaque, m.Opcode)
-					//workaround for MB-30327. this state should never happen.
-					os.Exit(1)
-				}
 
 			case vwCmdClose:
 				logging.Infof("%v ##%x closed\n", logPrefix, worker.opaque)
