@@ -1030,6 +1030,11 @@ func (fdb *fdbSlice) Rollback(info SnapshotInfo) error {
 //not possible
 func (fdb *fdbSlice) RollbackToZero() error {
 
+	//before rollback make sure there are no mutations
+	//in the slice buffer. Timekeeper will make sure there
+	//are no flush workers before calling rollback.
+	fdb.waitPersist()
+
 	zeroSeqNum := forestdb.SeqNum(0)
 	var err error
 
