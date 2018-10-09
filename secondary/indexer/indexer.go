@@ -382,7 +382,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 				tlslsnr = &val
 				reload = false
 				logging.Infof("indexer:: SSL server started: %v", sslAddr)
-				err = http.Serve(*tlslsnr, nil)
+				err = http.Serve(*tlslsnr, httpMux)
 				if reload {
 					logging.Warnf("indexer:: SSL certificate change: %v", err)
 				} else {
