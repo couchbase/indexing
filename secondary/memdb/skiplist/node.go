@@ -91,3 +91,8 @@ func (n *Node) dcasNext(level int, prevPtr, newPtr *Node, prevIsdeleted, newIsde
 
 	return swapped
 }
+
+// debugMarkFree was undefined for non intel architectures so added the placeholder
+func debugMarkFree(*Node) {
+	return
+}
