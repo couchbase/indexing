@@ -464,9 +464,9 @@ func (c *RequestBroker) scatter(clientMaker scanClientMaker, index *common.Index
 	c.SetNumIndexers(len(partition))
 	c.defn = index
 
-	concurrency := c.concurrency
-	if concurrency < 1 {
-		concurrency = int(settings.MaxConcurrency())
+	concurrency := int(settings.MaxConcurrency())
+	if concurrency == 0 {
+		concurrency = int(numPartition)
 	}
 
 	var ok bool
