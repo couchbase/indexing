@@ -355,10 +355,6 @@ func (ie *IndexEvaluator) evaluate(
 		return []byte(`["` + string(docid) + `"]`), nil, nil
 	}
 
-	if m.IsJSON() == false {
-		return nil, nil, nil
-	}
-
 	exprType := defn.GetExprType()
 	switch exprType {
 	case ExprType_N1QL:
@@ -373,9 +369,6 @@ func (ie *IndexEvaluator) partitionKey(
 
 	defn := ie.instance.GetDefinition()
 	if ie.pkExprs == nil { // no partition key
-		return nil, nil
-	}
-	if m.IsJSON() == false {
 		return nil, nil
 	}
 
@@ -395,10 +388,6 @@ func (ie *IndexEvaluator) wherePredicate(
 	// if where predicate is not supplied - always evaluate to `true`
 	if ie.whExpr == nil {
 		return true, nil
-	}
-
-	if m.IsJSON() == false {
-		return false, nil
 	}
 
 	defn := ie.instance.GetDefinition()
