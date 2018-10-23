@@ -402,7 +402,14 @@ func (worker *VbucketWorker) handleEvent(m *mc.DcpEvent) *Vbucket {
 		dataForEndpoints := make(map[string]interface{})
 		// for each engine distribute transformations to endpoints.
 		fmsg := "%v ##%x TransformRoute: %v\n"
-		nvalue := qvalue.NewParsedValueWithOptions(m.Value, m.IsJSON(), true)
+
+		var nvalue qvalue.Value
+		if m.IsJSON() {
+			nvalue = qvalue.NewParsedValueWithOptions(m.Value, true, true)
+		} else {
+			nvalue = qvalue.NewBinaryValue(m.Value)
+		}
+
 		context := qexpr.NewIndexContext()
 		docval := qvalue.NewAnnotatedValue(nvalue)
 		for _, engine := range worker.engines {
