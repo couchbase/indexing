@@ -128,6 +128,10 @@ else
   echo "none"
 fi
 
+echo "cherry-picking query change for indexing on binary docs"
+git fetch http://review.couchbase.org/query refs/changes/18/100818/3 && git cherry-pick FETCH_HEAD
+
+
 cd $WORKSPACE/goproj/src/github.com/couchbase/gometa
 current="`git rev-parse HEAD`"
 test -f ~/gometa.good || (echo $current > ~/gometa.good)
