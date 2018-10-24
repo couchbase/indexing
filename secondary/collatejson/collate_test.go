@@ -14,6 +14,8 @@ import "strings"
 import "testing"
 import n1ql "github.com/couchbase/query/value"
 import "github.com/couchbase/indexing/secondary/collatejson/util"
+import "bufio"
+import "os"
 
 var testcases = []struct {
 	text string
@@ -530,4 +532,127 @@ func TestN1QLDecodeLargeInt64(t *testing.T) {
 			t.Errorf("Expected original and decoded n1ql values to be the same")
 		}
 	}
+}
+
+func TestMixedModeFixEncodedInt(t *testing.T) {
+	codec := NewCodec(16)
+	var object interface{}
+
+	bsArr := [][]byte{[]byte(`[4111686018427387900, -8223372036854775808, 822337203685477618]`)}
+
+	file, err := os.Open("../tests/testdata/numbertests")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		num := scanner.Text()
+		if len(num) == 0 || num[0] == '#' {
+			continue
+		}
+		bsArr = append(bsArr, []byte(fmt.Sprintf("[%v]", num)))
+	}
+
+	for _, bs := range bsArr {
+		fmt.Printf("TESTING %s \n", bs)
+
+		err := json.Unmarshal(bs, &object)
+		if err != nil {
+			t.Fatalf("Unexpected error %v", err)
+		}
+		val := n1ql.NewValue(object)
+
+		oldn1qlBytes, err := codec.encodeN1QL_50(val, make([]byte, 0, 10000))
+		if err != nil {
+			t.Fatalf("Unexpected error from encodeN1QL_50 %v", err)
+		}
+
+		fixedBytes, err := codec.FixEncodedInt(oldn1qlBytes, make([]byte, 0, 10000))
+		if err != nil {
+			t.Fatalf("Unexpected error from FixEncodedInt %v", err)
+		}
+
+		val1, err := codec.DecodeN1QLValue(fixedBytes, make([]byte, 0, 10000))
+		if err != nil {
+			t.Fatalf("Unexpected error from first DecodeN1QLValue %v", err)
+		}
+
+		n1qlBytes, err := codec.EncodeN1QLValue(val, make([]byte, 0, 10000))
+		if err != nil {
+			t.Fatalf("Unexpected error from EncodeN1QLValue %v", err)
+		}
+
+		val2, err := codec.DecodeN1QLValue(fixedBytes, make([]byte, 0, 10000))
+		if err != nil {
+			t.Fatalf("Unexpected error from second DecodeN1QLValue %v", err)
+		}
+
+		if !bytes.Equal(fixedBytes, n1qlBytes) {
+			t.Errorf("Expected fixedEncodedBytes and N1QLEncoded values to be the same")
+			t.Logf("fixedBytes %v \t %v \n", fixedBytes, string(fixedBytes))
+			t.Logf("n1qlBytes %v \t %v \n", n1qlBytes, string(n1qlBytes))
+		}
+
+		if !val.EquivalentTo(val1) {
+			t.Errorf("Expected original and fixEncodedInt decoded n1ql values to be the same")
+		}
+
+		if !val.EquivalentTo(val2) {
+			t.Errorf("Expected original and decoded n1ql values to be the same")
+		}
+
+		fmt.Printf("PASS \n")
+	}
+
+}
+
+// This is for unit test only to test
+// for projector < 5.1.1 and indexer >= 5.1.1
+func (codec *Codec) encodeN1QL_50(val n1ql.Value, code []byte) ([]byte, error) {
+	var cs []byte
+	var err error
+
+	switch val.Type() {
+	case n1ql.NUMBER:
+		act := val.ActualForIndex()
+		code = append(code, TypeNumber)
+		var cs []byte
+		switch act.(type) {
+		case float64:
+			cs, err = codec.normalizeFloat(act.(float64), code[1:])
+		case int64:
+			var intStr string
+			var number Integer
+			intStr, err = number.ConvertToScientificNotation_TestOnly(act.(int64))
+			cs = EncodeFloat([]byte(intStr), code[1:])
+		}
+		if err == nil {
+			code = code[:len(code)+len(cs)]
+			code = append(code, Terminator)
+		}
+	case n1ql.ARRAY:
+		act := val.ActualForIndex().([]interface{})
+		code = append(code, TypeArray)
+		if codec.arrayLenPrefix {
+			arrlen := Length(len(act))
+			if cs, err = codec.json2code(arrlen, code[1:]); err == nil {
+				code = code[:len(code)+len(cs)]
+			}
+		}
+		if err == nil {
+			for _, val := range act {
+				l := len(code)
+				cs, err = codec.encodeN1QL_50(n1ql.NewValue(val), code[l:])
+				if err == nil {
+					code = code[:l+len(cs)]
+					continue
+				}
+				break
+			}
+			code = append(code, Terminator)
+		}
+	}
+	return code, err
 }
