@@ -1,16 +1,19 @@
 package functionaltests
 
 import (
+	"github.com/couchbase/gocb"
 	c "github.com/couchbase/indexing/secondary/common"
 	qc "github.com/couchbase/indexing/secondary/queryport/client"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
+
 	//"github.com/couchbase/indexing/secondary/tests/framework/datautility"
-	"github.com/couchbase/indexing/secondary/tests/framework/kvutility"
-	"github.com/couchbase/indexing/secondary/tests/framework/secondaryindex"
-	tv "github.com/couchbase/indexing/secondary/tests/framework/validation"
 	"log"
 	"testing"
 	"time"
+
+	"github.com/couchbase/indexing/secondary/tests/framework/kvutility"
+	"github.com/couchbase/indexing/secondary/tests/framework/secondaryindex"
+	tv "github.com/couchbase/indexing/secondary/tests/framework/validation"
 )
 
 var tmpclient string
@@ -40,7 +43,7 @@ func TestGroupAggrSetup(t *testing.T) {
 	FailTestIfError(err, "Error in creating the index", t)
 
 	n1qlstatement := "create primary index on default"
-	_, err = tc.ExecuteN1QLStatement(kvaddress, clusterconfig.Username, clusterconfig.Password, bucket, n1qlstatement, false)
+	_, err = tc.ExecuteN1QLStatement(kvaddress, clusterconfig.Username, clusterconfig.Password, bucket, n1qlstatement, false, gocb.NotBounded)
 	FailTestIfError(err, "Error in creating primary index", t)
 }
 
@@ -1005,7 +1008,7 @@ func TestGroupAggr1(t *testing.T) {
 	indexExpr := []string{"company", "age", "eyeColor", "`address`.`number`", "age", "`first-name`"}
 
 	stmt := "create primary index on default"
-	_, err = tc.ExecuteN1QLStatement(kvaddress, clusterconfig.Username, clusterconfig.Password, bucket, stmt, false)
+	_, err = tc.ExecuteN1QLStatement(kvaddress, clusterconfig.Username, clusterconfig.Password, bucket, stmt, false, gocb.NotBounded)
 	FailTestIfError(err, "Error in creating primary index", t)
 
 	err = secondaryindex.CreateSecondaryIndex(index, bucket, indexManagementAddress, "", indexExpr, false, nil, true, defaultIndexActiveTimeout, nil)
@@ -1322,7 +1325,7 @@ func TestGroupAggrArrayIndex(t *testing.T) {
 	log.Printf("Scenario 13")
 
 	stmt := "CREATE INDEX test_oneperprimarykey ON default(ALL ARRAY v1 FOR v1 IN friends END, company, age)"
-	_, err = tc.ExecuteN1QLStatement(kvaddress, clusterconfig.Username, clusterconfig.Password, bucket, stmt, false)
+	_, err = tc.ExecuteN1QLStatement(kvaddress, clusterconfig.Username, clusterconfig.Password, bucket, stmt, false, gocb.NotBounded)
 	FailTestIfError(err, "Error in index test_oneperprimarykey", t)
 
 	n1qlEquivalent = "SELECT COUNT(company) as a, SUM(age) as b FROM default USE INDEX(`#primary`) " +
@@ -1366,13 +1369,13 @@ func TestGroupAggr_FirstValidAggrOnly(t *testing.T) {
 	time.Sleep(5 * time.Second)
 
 	stmt := "create primary index on default"
-	_, err = tc.ExecuteN1QLStatement(kvaddress, clusterconfig.Username, clusterconfig.Password, bucket, stmt, false)
+	_, err = tc.ExecuteN1QLStatement(kvaddress, clusterconfig.Username, clusterconfig.Password, bucket, stmt, false, gocb.NotBounded)
 	FailTestIfError(err, "Error in creating primary index", t)
 
 	err = secondaryindex.CreateSecondaryIndex(i1, bucket, indexManagementAddress, "", indexExpr1, false, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
-	err = secondaryindex.CreateSecondaryIndex2(i2, bucket, indexManagementAddress, "", indexExpr2, 
+	err = secondaryindex.CreateSecondaryIndex2(i2, bucket, indexManagementAddress, "", indexExpr2,
 		[]bool{true, false, false}, false, nil, c.SINGLE, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 

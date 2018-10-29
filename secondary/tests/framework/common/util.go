@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/couchbase/gocb"
-	c "github.com/couchbase/indexing/secondary/common"
 	"io"
 	"io/ioutil"
 	"log"
@@ -16,6 +14,9 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/couchbase/gocb"
+	c "github.com/couchbase/indexing/secondary/common"
 )
 
 var LogPerformanceStat = false
@@ -183,7 +184,7 @@ func LogPerfStat(apiName string, elapsed time.Duration) {
 }
 
 func ExecuteN1QLStatement(clusterAddr, username, password, bucketName,
-	statement string, disableAggrPushdown bool) ([]interface{}, error) {
+	statement string, disableAggrPushdown bool, consistency gocb.ConsistencyMode) ([]interface{}, error) {
 
 	clusterAddr = "http://" + clusterAddr
 	cluster, err := gocb.Connect(clusterAddr)
@@ -203,6 +204,7 @@ func ExecuteN1QLStatement(clusterAddr, username, password, bucketName,
 	}
 
 	query := gocb.NewN1qlQuery(statement)
+	query.Consistency(consistency)
 
 	if disableAggrPushdown {
 		query.Custom("n1ql_feat_ctrl", "1")
