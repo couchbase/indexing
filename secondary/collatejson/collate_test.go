@@ -382,7 +382,7 @@ func TestFixEncodedInt(t *testing.T) {
 		[]byte(`["hello", "test", true, [1,2,3], 1, 23.3, null, {"key" : 100}]`),
 		[]byte(`["hello", true, [1,2,3], 23.3, null, {"key" : ["apple","blue","cat"], "key2" : [1,null, "test", true, 3], "key3" : { "subdoc" : true, "subdoc1" : [true, false, "yellow"]}}]`),
 		[]byte(`[{"key" : ["abcde","bdab","cat"], "key2" : [1.2500,null, true, 310, "test"], "key3" : { "subdoc" : true, "subdoc1" : [true, false, "yellow", 342.60, 36000000]}}]`),
-		[]byte(`[4111686018427387900, 8223372036854775808, 822337203685477618]`),
+		[]byte(`[4111686018427387900, 8223372036854775808, 822337203685477618, 123456789123456700000, 12345678912345678912345]`),
 	}
 
 	for _, bs := range bsArr {

@@ -329,7 +329,7 @@ func (codec *Codec) code2json(code, text []byte) ([]byte, []byte, error) {
 		ts, err = codec.denormalizeFloat(ts)
 		ts = bytes.TrimLeft(ts, "+")
 		var number Integer
-		ts, _ = number.TryConvertFromScientificNotation(ts)
+		ts, _, _ = number.TryConvertFromScientificNotation(ts, false)
 		text = append(text, ts...)
 
 	case TypeString:
@@ -694,7 +694,8 @@ func (i *Integer) ConvertToScientificNotation_TestOnly(val int64) (string, error
 // If float, return e notation
 // If integer, convert from e notation to standard notation
 // This is used in decode path
-func (i *Integer) TryConvertFromScientificNotation(val []byte) (ret []byte, isInt64 bool) {
+func (i *Integer) TryConvertFromScientificNotation(val []byte,
+	getInt64 bool) (ret []byte, isInt64 bool, i64 int64) {
 	defer func() {
 		if r := recover(); r != nil {
 			ret = val
@@ -716,21 +717,45 @@ func (i *Integer) TryConvertFromScientificNotation(val []byte) (ret []byte, isIn
 
 	exp, err := strconv.ParseInt(number[ePos+1:], 10, 64)
 	if err != nil {
-		return val, false // error condition, return input format
+		return val, false, 0 // error condition, return input format
 	}
 
-	if exp > 0 && (int(exp) >= len(mantissa)) { // It is an integer
+	// If the exponent is more than 20, the number won't fit in int64 number
+	// format. So, treat it as float.
+	if exp > 20 {
+		return val, false, 0
+	}
+
+	if exp > 0 && (int(exp) >= len(mantissa)) { // It is possibly an integer
 		if int(exp) > len(mantissa) {
 			mantissa = mantissa + strings.Repeat("0", int(exp)-len(mantissa))
 		}
 		if characteristic == "0" {
-			return []byte(sign + mantissa), true
+			// strconv.ParseInt is a single loop iteration over the input
+			// and hence is not a bad choice
+			if getInt64 {
+				i64, err = strconv.ParseInt(sign+mantissa, 10, 64)
+				if err != nil {
+					// May not be an integer. In case of malformed input
+					// further call to ParseFloat will fail too.
+					return val, false, 0
+				}
+			}
+			return []byte(sign + mantissa), true, i64
 		} else {
-			return []byte(sign + characteristic + mantissa), true
+			if getInt64 {
+				i64, err = strconv.ParseInt(sign+characteristic+mantissa, 10, 64)
+				if err != nil {
+					// May not be an integer. In case of malformed input
+					// further call to ParseFloat will fail too.
+					return val, false, 0
+				}
+			}
+			return []byte(sign + characteristic + mantissa), true, i64
 		}
 	}
 
-	return val, false
+	return val, false, 0
 }
 
 // FixEncodedInt is a special purpose method only to address MB-28956.
@@ -783,15 +808,11 @@ func (codec *Codec) fixEncodedInt(code, text []byte) ([]byte, []byte, error) {
 
 		var number Integer
 		var isInt64 bool
-		ts, isInt64 = number.TryConvertFromScientificNotation(ts)
+		var intval int64
+		ts, isInt64, intval = number.TryConvertFromScientificNotation(ts, true)
 
 		if isInt64 {
 			var intStr string
-			var intval int64
-			intval, err = strconv.ParseInt(string(ts), 10, 64)
-			if err != nil {
-				break
-			}
 			intStr, err = number.ConvertToScientificNotation(intval)
 			ts = EncodeFloat([]byte(intStr), text[1:])
 		} else {
