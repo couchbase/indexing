@@ -62,6 +62,7 @@ GoInstall (TARGET projector PACKAGE github.com/couchbase/indexing/secondary/cmd/
 GoInstall (TARGET cbindex PACKAGE github.com/couchbase/indexing/secondary/cmd/cbindex
   GOPATH "${PROJECT_SOURCE_DIR}/../../../.." "${GODEPSDIR}"
   GOTAGS "${TAGS}"
+  CGO_INCLUDE_DIRS "${CGO_INCLUDE_DIRS}"
   LDFLAGS "${LDFLAGS}"
   INSTALL_PATH bin
   GOVERSION 1.7.6)
