@@ -12,23 +12,26 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"math"
+	"reflect"
+	"strings"
+
 	"github.com/couchbase/indexing/secondary/collatejson"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/query/value"
-	"math"
-	"reflect"
-	"strings"
+
 	//"runtime"
 	"encoding/json"
-	"github.com/couchbase/query/expression"
-	"github.com/couchbase/query/expression/parser"
-	qvalue "github.com/couchbase/query/value"
 	"os"
 	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/couchbase/query/expression"
+	"github.com/couchbase/query/expression/parser"
+	qvalue "github.com/couchbase/query/value"
 )
 
 //--------------------------
@@ -1767,6 +1770,9 @@ func (c *RequestBroker) analyzeOrderBy(partitions [][]common.PartitionId, numPar
 		// If the order-by key is not in the projection, then add it.
 		// Cbq-engine pushes order-by only if the order-by keys match the leading index keys.
 		// So order-by key must be an index key.
+		if c.projections == nil {
+			c.projections = &IndexProjection{}
+		}
 		for _, order := range c.indexOrder.KeyPos {
 			if !projection[int64(order)] {
 				c.projections.EntryKeys = append(c.projections.EntryKeys, int64(order))
