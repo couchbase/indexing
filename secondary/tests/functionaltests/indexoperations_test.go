@@ -1,14 +1,19 @@
 package functionaltests
 
 import (
-	c "github.com/couchbase/indexing/secondary/common"
-	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
-	"github.com/couchbase/indexing/secondary/tests/framework/datautility"
-	"github.com/couchbase/indexing/secondary/tests/framework/secondaryindex"
-	tv "github.com/couchbase/indexing/secondary/tests/framework/validation"
+	"errors"
 	"log"
 	"testing"
 	"time"
+
+	"github.com/couchbase/gocb"
+
+	c "github.com/couchbase/indexing/secondary/common"
+	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
+	"github.com/couchbase/indexing/secondary/tests/framework/datautility"
+	"github.com/couchbase/indexing/secondary/tests/framework/kvutility"
+	"github.com/couchbase/indexing/secondary/tests/framework/secondaryindex"
+	tv "github.com/couchbase/indexing/secondary/tests/framework/validation"
 )
 
 func TestScanAfterBucketPopulate(t *testing.T) {
@@ -356,4 +361,127 @@ func TestScanWithNoTimeout(t *testing.T) {
 	FailTestIfError(err, "Error in scan", t)
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation: ", t)
+}
+
+func TestIndexingOnBinaryBucketMeta(t *testing.T) {
+	log.Printf("In TestIndexingOnBinaryBucketMeta()")
+	log.Printf("\t 1. Populate a bucekt with binary docs and create indexs on the `id`, `cas` and `expiration` fields of Metadata")
+	log.Printf("\t 2. Validate the test by comparing the items_count of indexes and the number of docs in the bucket for each of the fields")
+	indexName_id := "index_binary_meta_id"
+	indexName_cas := "index_binary_meta_cas"
+	indexName_expiration := "index_binary_meta_expiration"
+	bucket1 := "default"
+	bucket2 := "binaryBucket"
+	numDocs := 10
+	kvutility.EditBucket(bucket1, "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256")
+	kvutility.CreateBucket(bucket2, "sasl", "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256", "")
+	time.Sleep(30 * time.Second)
+
+	docs := GenerateBinaryDocs(numDocs, bucket2, "", clusterconfig.KVAddress, clusterconfig.Username, clusterconfig.Password)
+
+	err := secondaryindex.CreateSecondaryIndex(indexName_id, bucket2, indexManagementAddress, "", []string{"meta().id"}, false, nil, true, defaultIndexActiveTimeout, nil)
+	FailTestIfError(err, "Error creating"+indexName_id+" on binary docs", t)
+	time.Sleep(5 * time.Second)
+
+	stats := secondaryindex.GetIndexStats(indexName_id, bucket2, clusterconfig.Username, clusterconfig.Password, kvaddress)
+	itemsCount := stats[bucket2+":"+indexName_id+":items_count"].(float64)
+	log.Printf("items_count stat is %v for index %v", itemsCount, indexName_id)
+
+	if itemsCount != float64(len(docs)) {
+		log.Printf("Expected number items count = %v, actual items_count stat returned = %v", len(docs), itemsCount)
+		err = errors.New("items_count is incorrect for index " + indexName_id)
+		FailTestIfError(err, "Error in TestIndexingOnBinaryBucketMeta", t)
+	}
+
+	err = secondaryindex.DropSecondaryIndex(indexName_id, bucket2, indexManagementAddress)
+	FailTestIfError(err, "Error dropping "+indexName_id, t)
+
+	// Test for CAS
+	err = secondaryindex.CreateSecondaryIndex(indexName_cas, bucket2, indexManagementAddress, "", []string{"meta().cas"}, false, nil, true, defaultIndexActiveTimeout, nil)
+	FailTestIfError(err, "Error creating"+indexName_cas+" on binary docs", t)
+	time.Sleep(5 * time.Second)
+
+	stats = secondaryindex.GetIndexStats(indexName_cas, bucket2, clusterconfig.Username, clusterconfig.Password, kvaddress)
+	itemsCount = stats[bucket2+":"+indexName_cas+":items_count"].(float64)
+	log.Printf("items_count stat is %v for index %v", itemsCount, indexName_cas)
+
+	if itemsCount != float64(len(docs)) {
+		log.Printf("Expected number items count = %v, actual items_count stat returned = %v", len(docs), itemsCount)
+		err = errors.New("items_count is incorrect for index " + indexName_cas)
+		FailTestIfError(err, "Error in TestIndexingOnBinaryBucketMeta", t)
+	}
+
+	err = secondaryindex.DropSecondaryIndex(indexName_cas, bucket2, indexManagementAddress)
+	FailTestIfError(err, "Error dropping "+indexName_cas, t)
+
+	// Test for expiration
+	err = secondaryindex.CreateSecondaryIndex(indexName_expiration, bucket2, indexManagementAddress, "", []string{"meta().expiration"}, false, nil, true, defaultIndexActiveTimeout, nil)
+	FailTestIfError(err, "Error creating"+indexName_cas+" on binary docs", t)
+	time.Sleep(5 * time.Second)
+
+	stats = secondaryindex.GetIndexStats(indexName_expiration, bucket2, clusterconfig.Username, clusterconfig.Password, kvaddress)
+	itemsCount = stats[bucket2+":"+indexName_expiration+":items_count"].(float64)
+	log.Printf("items_count stat is %v for index %v", itemsCount, indexName_expiration)
+
+	if itemsCount != float64(len(docs)) {
+		log.Printf("Expected number items count = %v, actual items_count stat returned = %v", len(docs), itemsCount)
+		err = errors.New("items_count is incorrect for index " + indexName_expiration)
+		FailTestIfError(err, "Error in TestIndexingOnBinaryBucketMeta", t)
+	}
+	err = secondaryindex.DropSecondaryIndex(indexName_expiration, bucket2, indexManagementAddress)
+	FailTestIfError(err, "Error dropping "+indexName_expiration, t)
+
+	kvutility.DeleteBucket(bucket2, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+	kvutility.EditBucket(bucket1, "", clusterconfig.Username, clusterconfig.Password, kvaddress, "512")
+	time.Sleep(30 * time.Second) // Sleep after bucket create or delete
+}
+
+func TestRetainDeleteXATTRBinaryDocs(t *testing.T) {
+	log.Printf("In TestRetainDeleteXATTRBinaryDocs()")
+	log.Printf("\t 1. Populate a bucket with binary docs having system XATTRS")
+	log.Printf("\t 2. Create index on the system XATTRS with \"retain_deleted_xattr\" attribute set to true")
+	log.Printf("\t 3. Delete the documents in the bucket")
+	log.Printf("\t 4. Query for the meta() information in the source bucket. The total number of results should be equivalent to the number of documents in the bucket before deletion of documents")
+
+	indexname_xattr := "index_system_xattr"
+	bucket1 := "default"
+	bucket2 := "binaryBucket"
+	numDocs := 10
+	kvutility.EditBucket(bucket1, "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256")
+	kvutility.CreateBucket(bucket2, "sasl", "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256", "")
+	time.Sleep(30 * time.Second)
+
+	docs := GenerateBinaryDocsWithXATTRS(numDocs, bucket2, "", "http://"+kvaddress, clusterconfig.Username, clusterconfig.Password)
+
+	err := secondaryindex.CreateSecondaryIndex(indexname_xattr, bucket2, indexManagementAddress, "", []string{"meta().xattrs._sync1"}, false, []byte("{\"retain_deleted_xattr\":true}"), true, defaultIndexActiveTimeout, nil)
+	FailTestIfError(err, "Error creating"+indexname_xattr+" on binary docs", t)
+	time.Sleep(5 * time.Second)
+
+	stats := secondaryindex.GetIndexStats(indexname_xattr, bucket2, clusterconfig.Username, clusterconfig.Password, kvaddress)
+	itemsCount := stats[bucket2+":"+indexname_xattr+":items_count"].(float64)
+
+	if itemsCount != float64(len(docs)) {
+		log.Printf("Expected number items count = %v, actual items_count stat returned = %v", len(docs), itemsCount)
+		err = errors.New("items_count is incorrect for index " + indexname_xattr)
+		FailTestIfError(err, "Error in TestRetainDeleteXATTRBinaryDocs", t)
+	}
+
+	// Delete the documents inside the bucket
+	kvutility.DeleteKeys(docs, bucket2, "", kvaddress)
+	log.Printf("Deleted all the documents in the bucket: " + bucket2 + " successfully")
+
+	//Now execute a n1ql query on Source bucket
+	n1qlstatement := "select meta() from " + bucket2 + " where META().xattrs._sync1 is not null"
+	results, err := tc.ExecuteN1QLStatement(clusterconfig.KVAddress, clusterconfig.Username, clusterconfig.Password, bucket2, n1qlstatement, false, gocb.RequestPlus)
+	FailTestIfError(err, "Error in creating primary index", t)
+
+	if itemsCount != float64(len(results)) {
+		log.Printf("Expected number of results = %v, actual items_count stat returned = %v", len(results), itemsCount)
+		err = errors.New("resulsts are incorrect for index " + indexname_xattr)
+		FailTestIfError(err, "Error in TestRetainDeleteXATTRBinaryDocs", t)
+	}
+
+	kvutility.DeleteBucket(bucket2, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+	kvutility.EditBucket(bucket1, "", clusterconfig.Username, clusterconfig.Password, kvaddress, "512")
+	time.Sleep(30 * time.Second) // Sleep after bucket create or delete*/
 }

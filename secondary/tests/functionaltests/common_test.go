@@ -2,6 +2,14 @@ package functionaltests
 
 import (
 	"flag"
+	"io/ioutil"
+	"log" //"os"
+	"os/user"
+	"path/filepath"
+	"runtime"
+	"testing"
+	"time"
+
 	"github.com/couchbase/cbauth"
 	json "github.com/couchbase/indexing/secondary/common/json"
 	"github.com/couchbase/indexing/secondary/logging"
@@ -9,18 +17,9 @@ import (
 	"github.com/couchbase/indexing/secondary/tests/framework/datautility"
 	"github.com/couchbase/indexing/secondary/tests/framework/kvutility"
 	"github.com/couchbase/indexing/secondary/tests/framework/secondaryindex"
-	// tv "github.com/couchbase/indexing/secondary/tests/framework/validation"
 	"github.com/prataprc/goparsec"
 	"github.com/prataprc/monster"
 	"github.com/prataprc/monster/common"
-	"log"
-	//"os"
-	"io/ioutil"
-	"os/user"
-	"path/filepath"
-	"runtime"
-	"testing"
-	"time"
 )
 
 var docs, mut_docs tc.KeyValues
@@ -187,6 +186,18 @@ func GenerateJsons(count, seed int, prodfile, bagdir string) tc.KeyValues {
 	}
 
 	return keyValues
+}
+
+func GenerateBinaryDocs(numDocs int, bucketName, bucketPassword, hostaddress, serverUsername, serverPassword string) tc.KeyValues {
+	docsToCreate := generateDocs(numDocs, "users.prod")
+	kvutility.SetBinaryValues(docsToCreate, bucketName, bucketPassword, hostaddress)
+	return docsToCreate
+}
+
+func GenerateBinaryDocsWithXATTRS(numDocs int, bucketName, bucketPassword, hostaddress, serverUsername, serverPassword string) tc.KeyValues {
+	docsToCreate := generateDocs(numDocs, "users.prod")
+	kvutility.SetBinaryValuesWithXattrs(docsToCreate, bucketName, bucketPassword, hostaddress, serverUsername, serverPassword)
+	return docsToCreate
 }
 
 func compile(s parsec.Scanner) parsec.ParsecNode {

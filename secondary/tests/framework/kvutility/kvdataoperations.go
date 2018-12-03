@@ -1,15 +1,19 @@
 package kvutility
 
 import (
+	"bytes"
+	"encoding/gob"
 	"encoding/json"
-	c "github.com/couchbase/indexing/secondary/common"
-	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/couchbase/gocb"
+	c "github.com/couchbase/indexing/secondary/common"
+	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 )
 
 // ToDo: Refactor Code
@@ -33,6 +37,49 @@ func SetKeyValues(keyValues tc.KeyValues, bucketName string, password string, ho
 	for key, value := range keyValues {
 		err = b.Set(key, 0, value)
 		tc.HandleError(err, "set")
+	}
+	b.Close()
+}
+
+func GetBytes(key interface{}) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := gob.NewEncoder(&buf)
+	err := enc.Encode(key)
+	if err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func SetBinaryValuesWithXattrs(keyValues tc.KeyValues, bucketName string, password string, hostaddress, serverUsername, serverPassword string) {
+	cluster, _ := gocb.Connect(hostaddress)
+	cluster.Authenticate(gocb.PasswordAuthenticator{
+		Username: serverUsername,
+		Password: serverPassword,
+	})
+
+	bucket, err := cluster.OpenBucket(bucketName, "")
+
+	for key, value := range keyValues {
+		if bytes, err := GetBytes(value); err == nil {
+			bucket.Insert(key, &bytes, 0)
+			bucket.MutateIn(key, 0, 0).UpsertEx("_sync1", "1000", gocb.SubdocFlagXattr|gocb.SubdocFlagCreatePath).Execute()
+		}
+		tc.HandleError(err, "setRaw")
+	}
+}
+
+func SetBinaryValues(keyValues tc.KeyValues, bucketName string, password string, hostaddress string) {
+	url := "http://" + bucketName + ":" + password + "@" + hostaddress
+
+	b, err := c.ConnectBucket(url, "default", bucketName)
+	tc.HandleError(err, "bucket")
+
+	for key, value := range keyValues {
+		if bytes, err := GetBytes(value); err == nil {
+			err = b.SetRaw(key, 0, bytes)
+		}
+		tc.HandleError(err, "setRaw")
 	}
 	b.Close()
 }

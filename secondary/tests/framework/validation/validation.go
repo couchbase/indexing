@@ -4,13 +4,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
+	"reflect"
+	"time"
+
+	"github.com/couchbase/gocb"
 	c "github.com/couchbase/indexing/secondary/common"
 	qc "github.com/couchbase/indexing/secondary/queryport/client"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 	"github.com/couchbase/query/value"
-	"log"
-	"reflect"
-	"time"
 )
 
 func Validate(expectedResponse, actualResponse tc.ScanResponse) error {
@@ -84,7 +86,7 @@ func ValidateGroupAggrWithN1QL(clusterAddr, bucketName, username, password, n1ql
 	groupAggr *qc.GroupAggr, indexProjection *qc.IndexProjection,
 	actualResp tc.GroupAggrScanResponse) error {
 
-	results, err := tc.ExecuteN1QLStatement(clusterAddr, bucketName, username, password, n1qlstatement, true)
+	results, err := tc.ExecuteN1QLStatement(clusterAddr, bucketName, username, password, n1qlstatement, true, gocb.NotBounded)
 	if err != nil {
 		return err
 	}

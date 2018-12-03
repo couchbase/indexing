@@ -2,6 +2,7 @@ package couchbase
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -298,8 +299,11 @@ func queryRestAPI(
 			res.Status, u.String(), bod)
 	}
 
-	d := json.NewDecoder(res.Body)
+	bodyBytes, _ := ioutil.ReadAll(res.Body)
+	responseBody := ioutil.NopCloser(bytes.NewBuffer(bodyBytes))
+	d := json.NewDecoder(responseBody)
 	if err = d.Decode(&out); err != nil {
+		logging.Errorf("queryRestAPI: Error while decoding the response from path: %s, response body: %s", path, string(bodyBytes))
 		return err
 	}
 	return nil
