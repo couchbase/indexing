@@ -25,12 +25,12 @@ func TestPayloadVbmap(t *testing.T) {
 
 func TestKVEqual(t *testing.T) {
 	seqno, docid, maxCount := uint64(10), []byte("document-name"), 10
-	kv1 := NewKeyVersions(seqno, docid, maxCount)
-	kv2 := NewKeyVersions(seqno, docid, maxCount)
+	kv1 := NewKeyVersions(seqno, docid, int64(maxCount), 0)
+	kv2 := NewKeyVersions(seqno, docid, int64(maxCount), 0)
 	for i := 0; i < maxCount; i++ {
 		uuid := uint64(i * 10000)
-		kv1.AddUpsert(uuid, []byte("newkey"), []byte("oldkey"))
-		kv2.AddUpsert(uuid, []byte("newkey"), []byte("oldkey"))
+		kv1.AddUpsert(uuid, []byte("newkey"), []byte("oldkey"), nil)
+		kv2.AddUpsert(uuid, []byte("newkey"), []byte("oldkey"), nil)
 	}
 	if kv1.Equal(kv2) == false {
 		t.Fatal("failed KeyVersions equality")
@@ -53,10 +53,10 @@ func TestPayloadKeyVersions(t *testing.T) {
 		vbno, vbuuid := uint16(i), uint64(i*10)
 		vb := NewVbKeyVersions("default", vbno, vbuuid, 1000)
 		for j := 0; j < 10; j++ { // for 10 mutations
-			kv := NewKeyVersions(512 /*seqno*/, []byte("Bourne"), nIndexes)
-			kv.AddUpsert(uuids[0], keys[0], oldkeys[0])
-			kv.AddUpsert(uuids[1], keys[1], oldkeys[1])
-			kv.AddUpsert(uuids[2], keys[2], oldkeys[2])
+			kv := NewKeyVersions(512 /*seqno*/, []byte("Bourne"), int64(nIndexes), 0)
+			kv.AddUpsert(uuids[0], keys[0], oldkeys[0], nil)
+			kv.AddUpsert(uuids[1], keys[1], oldkeys[1], nil)
+			kv.AddUpsert(uuids[2], keys[2], oldkeys[2], nil)
 			vb.AddKeyVersions(kv)
 		}
 		p.AddVbKeyVersions(vb)
@@ -69,12 +69,12 @@ func TestPayloadKeyVersions(t *testing.T) {
 
 func BenchmarkKVEqual(b *testing.B) {
 	seqno, docid, maxCount := uint64(10), []byte("document-name"), 10
-	kv1 := NewKeyVersions(seqno, docid, maxCount)
-	kv2 := NewKeyVersions(seqno, docid, maxCount)
+	kv1 := NewKeyVersions(seqno, docid, int64(maxCount), 0)
+	kv2 := NewKeyVersions(seqno, docid, int64(maxCount), 0)
 	for i := 0; i < maxCount; i++ {
 		uuid := uint64(i * 10000)
-		kv1.AddUpsert(uuid, []byte("newkey"), []byte("oldkey"))
-		kv2.AddUpsert(uuid, []byte("newkey"), []byte("oldkey"))
+		kv1.AddUpsert(uuid, []byte("newkey"), []byte("oldkey"), nil)
+		kv2.AddUpsert(uuid, []byte("newkey"), []byte("oldkey"), nil)
 	}
 
 	b.ResetTimer()
