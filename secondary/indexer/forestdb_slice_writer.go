@@ -256,6 +256,8 @@ type fdbSlice struct {
 	confLock   sync.RWMutex
 	statFdLock sync.Mutex
 
+	lastRollbackTs *common.TsVbuuid
+
 	// Array processing
 	arrayExprPosition int
 	isArrayDistinct   bool
@@ -1023,7 +1025,13 @@ func (fdb *fdbSlice) Rollback(info SnapshotInfo) error {
 		return err
 	}
 
-	return fdb.dbfile.Commit(forestdb.COMMIT_MANUAL_WAL_FLUSH)
+	err = fdb.dbfile.Commit(forestdb.COMMIT_MANUAL_WAL_FLUSH)
+
+	if err == nil {
+		fdb.lastRollbackTs = info.Timestamp()
+	}
+
+	return err
 }
 
 //RollbackToZero rollbacks the slice to initial state. Return error if
@@ -1067,7 +1075,13 @@ func (fdb *fdbSlice) RollbackToZero() error {
 		}
 	}
 
+	fdb.lastRollbackTs = nil
+
 	return nil
+}
+
+func (fdb *fdbSlice) LastRollbackTs() *common.TsVbuuid {
+	return fdb.lastRollbackTs
 }
 
 //slice insert/delete methods are async. There

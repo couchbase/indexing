@@ -617,7 +617,28 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 						panic("Unable read snapinfo -" + err.Error())
 					}
 					s := NewSnapshotInfoContainer(infos)
-					snapInfo := s.GetOlderThanTS(rollbackTs)
+
+					//if dcp has requested rollback to 0 for any vb, it is better to
+					//try with all available disk snapshots. The rollback could be
+					//due to vbuuid mismatch and using an older disk snapshot may work.
+					var snapInfo SnapshotInfo
+					if rollbackTs.HasZeroSeqNum() {
+						lastRollbackTs := slice.LastRollbackTs()
+						latestSnapInfo := s.GetLatest()
+
+						if latestSnapInfo == nil || lastRollbackTs == nil {
+							logging.Infof("StorageMgr::handleRollback latestSnapInfo %v lastRollbackTs %v. Use latest snapshot.", latestSnapInfo, lastRollbackTs)
+							snapInfo = latestSnapInfo
+						} else if lastRollbackTs.Equal(latestSnapInfo.Timestamp()) {
+							//discard the snapshot for which the stream request has already been made
+							s.RemoveLatest()
+							snapInfo = s.GetLatest()
+							logging.Infof("StorageMgr::handleRollback Discarding Already Used Snapshot %v. Next snapshot %v", latestSnapInfo, snapInfo)
+						}
+					} else {
+						snapInfo = s.GetOlderThanTS(rollbackTs)
+					}
+
 					if snapInfo != nil {
 						err := slice.Rollback(snapInfo)
 						if err == nil {
