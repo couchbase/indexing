@@ -169,6 +169,8 @@ type memdbSlice struct {
 
 	isPersistorActive int32
 
+	lastRollbackTs *common.TsVbuuid
+
 	// Array processing
 	arrayExprPosition int
 	isArrayDistinct   bool
@@ -945,6 +947,8 @@ func (mdb *memdbSlice) Rollback(info SnapshotInfo) error {
 	}
 
 	mdb.resetStores()
+
+	mdb.lastRollbackTs = info.Timestamp()
 	return nil
 }
 
@@ -1051,7 +1055,13 @@ func (mdb *memdbSlice) RollbackToZero() error {
 	mdb.resetStores()
 	mdb.cleanupOldSnapshotFiles(0)
 
+	mdb.lastRollbackTs = nil
+
 	return nil
+}
+
+func (mdb *memdbSlice) LastRollbackTs() *common.TsVbuuid {
+	return mdb.lastRollbackTs
 }
 
 //slice insert/delete methods are async. There
