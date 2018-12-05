@@ -88,6 +88,8 @@ type Plan struct {
 	MemQuota  uint64         `json:"memQuota,omitempty"`
 	CpuQuota  uint64         `json:"cpuQuota,omitempty"`
 	IsLive    bool           `json:"isLive,omitempty"`
+
+	UsedReplicaIdMap map[common.IndexDefnId]map[int]bool
 }
 
 type IndexSpec struct {
@@ -153,6 +155,13 @@ func ExecuteRebalanceInternal(clusterUrl string,
 			return nil, errors.New(fmt.Sprintf("Unable to find indexer node with node UUID %v", node.NodeID))
 		}
 		deleteNodes[i] = nodes[string(node.NodeID)]
+	}
+
+	// make sure we have all the keep nodes
+	for _, node := range topologyChange.KeepNodes {
+		if _, ok := nodes[string(node.NodeInfo.NodeID)]; !ok {
+			return nil, errors.New(fmt.Sprintf("Unable to find indexer node with node UUID %v", node.NodeInfo.NodeID))
+		}
 	}
 
 	var numNode int
@@ -367,6 +376,74 @@ func verifyDuplicateIndex(plan *Plan, indexSpecs []*IndexSpec) error {
 	}
 
 	return nil
+}
+
+func ExecuteReplicaRepair(clusterUrl string, defnId common.IndexDefnId, increment int, nodes []string, override bool) (*Solution, error) {
+
+	plan, err := RetrievePlanFromCluster(clusterUrl, nodes)
+	if err != nil {
+		return nil, fmt.Errorf("Unable to read index layout from cluster %v. err = %s", clusterUrl, err)
+	}
+
+	if override && len(nodes) != 0 {
+		for _, indexer := range plan.Placement {
+			found := false
+			for _, node := range nodes {
+				if indexer.NodeId == node {
+					found = true
+					break
+				}
+			}
+
+			if found {
+				indexer.UnsetExclude()
+			} else {
+				indexer.SetExclude("in")
+			}
+		}
+	}
+
+	config := DefaultRunConfig()
+	config.Detail = logging.IsEnabled(logging.Info)
+	config.Resize = false
+
+	p, err := replicaRepair(config, plan, defnId, increment)
+	if p != nil && config.Detail {
+		logging.Infof("************ Indexer Layout *************")
+		p.Print()
+		logging.Infof("****************************************")
+	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	return p.Result, nil
+}
+
+func ExecuteReplicaDrop(clusterUrl string, defnId common.IndexDefnId, nodes []string, numPartition int, decrement int) (*Solution, []int, error) {
+
+	plan, err := RetrievePlanFromCluster(clusterUrl, nodes)
+	if err != nil {
+		return nil, nil, fmt.Errorf("Unable to read index layout from cluster %v. err = %s", clusterUrl, err)
+	}
+
+	config := DefaultRunConfig()
+	config.Detail = logging.IsEnabled(logging.Info)
+	config.Resize = false
+
+	p, original, result, err := replicaDrop(config, plan, defnId, numPartition, decrement)
+	if p != nil && config.Detail {
+		logging.Infof("************ Indexer Layout *************")
+		p.Print()
+		logging.Infof("****************************************")
+	}
+
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return original, result, nil
 }
 
 func ExecuteRetrieve(clusterUrl string, nodes []string, output string) (*Solution, error) {
@@ -688,6 +765,84 @@ func rebalance(command CommandType, config *RunConfig, plan *Plan, indexes []*In
 	return planner, s, nil
 }
 
+func replicaRepair(config *RunConfig, plan *Plan, defnId common.IndexDefnId, increment int) (*SAPlanner, error) {
+
+	var constraint ConstraintMethod
+	var sizing SizingMethod
+	var placement PlacementMethod
+	var cost CostMethod
+
+	var solution *Solution
+
+	// create an initial solution from plan
+	sizing = newGeneralSizingMethod()
+	solution, constraint, _, _, _ = solutionFromPlan(CommandRepair, config, sizing, plan)
+
+	// run planner
+	placement = newRandomPlacement(nil, config.AllowSwap, false)
+	cost = newUsageBasedCostMethod(constraint, config.DataCostWeight, config.CpuCostWeight, config.MemCostWeight)
+	planner := newSAPlanner(cost, constraint, placement, sizing)
+	planner.SetTimeout(config.Timeout)
+	planner.SetRuntime(config.Runtime)
+	planner.SetVariationThreshold(config.Threshold)
+	planner.SetCpuProfile(config.CpuProfile)
+
+	for _, indexer := range solution.Placement {
+		for _, index := range indexer.Indexes {
+			if index.DefnId == defnId {
+				index.Instance.Defn.NumReplica += uint32(increment)
+			}
+		}
+	}
+
+	if config.Detail {
+		logging.Infof("************ Index Layout Before Rebalance *************")
+		solution.PrintLayout()
+		logging.Infof("****************************************")
+	}
+
+	if _, err := planner.Plan(CommandRepair, solution); err != nil {
+		return planner, err
+	}
+
+	return planner, nil
+}
+
+func replicaDrop(config *RunConfig, plan *Plan, defnId common.IndexDefnId, numPartition int, decrement int) (*SAPlanner, *Solution, []int, error) {
+
+	var constraint ConstraintMethod
+	var sizing SizingMethod
+	var placement PlacementMethod
+	var cost CostMethod
+
+	var solution *Solution
+	var err error
+	var result []int
+	var original *Solution
+
+	// create an initial solution from plan
+	sizing = newGeneralSizingMethod()
+	solution, constraint, _, _, _ = solutionFromPlan(CommandDrop, config, sizing, plan)
+
+	// run planner
+	placement = newRandomPlacement(nil, config.AllowSwap, false)
+	cost = newUsageBasedCostMethod(constraint, config.DataCostWeight, config.CpuCostWeight, config.MemCostWeight)
+	planner := newSAPlanner(cost, constraint, placement, sizing)
+	planner.SetTimeout(config.Timeout)
+	planner.SetRuntime(config.Runtime)
+	planner.SetVariationThreshold(config.Threshold)
+	planner.SetCpuProfile(config.CpuProfile)
+
+	if config.Detail {
+		logging.Infof("************ Index Layout Before Drop Replica *************")
+		solution.PrintLayout()
+		logging.Infof("****************************************")
+	}
+
+	original, result, err = planner.DropReplica(solution, defnId, numPartition, decrement)
+	return planner, original, result, err
+}
+
 //////////////////////////////////////////////////////////////
 // Generate DDL
 /////////////////////////////////////////////////////////////
@@ -733,7 +888,7 @@ func CreateIndexDDL(solution *Solution) string {
 		index.Instance.Defn.Deferred = true
 
 		numPartitions := index.Instance.Pc.GetNumPartitions()
-		stmt := common.IndexStatement(index.Instance.Defn, numPartitions, true) + ";\n"
+		stmt := common.IndexStatement(index.Instance.Defn, numPartitions, int(index.Instance.Defn.NumReplica), true) + ";\n"
 
 		stmts += stmt
 	}
@@ -890,7 +1045,7 @@ func solutionFromPlan(command CommandType, config *RunConfig, sizing SizingMetho
 	shuffle := config.Shuffle
 	maxCpuUse := config.MaxCpuUse
 	maxMemUse := config.MaxMemUse
-	useLive := config.UseLive || command == CommandRebalance || command == CommandSwap
+	useLive := config.UseLive || command == CommandRebalance || command == CommandSwap || command == CommandRepair || command == CommandDrop
 
 	movedData := uint64(0)
 	movedIndex := uint64(0)
@@ -918,6 +1073,7 @@ func solutionFromPlan(command CommandType, config *RunConfig, sizing SizingMetho
 
 	r := newSolution(constraint, sizing, plan.Placement, plan.IsLive, useLive, config.DisableRepair)
 	r.calculateSize() // in case sizing formula changes after the plan is saved
+	r.usedReplicaIdMap = plan.UsedReplicaIdMap
 
 	if shuffle != 0 {
 		placement := newRandomPlacement(indexes, config.AllowSwap, false)

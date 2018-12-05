@@ -10,6 +10,7 @@
 package client
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/couchbase/gometa/common"
@@ -26,6 +27,7 @@ import (
 	"math"
 	"math/rand"
 	"net"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -394,22 +396,23 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 //
 // This function makes a call to create index using new protocol (vulcan).
 //
-func (o *MetadataProvider) makePrepareIndexRequest(idxDefn *c.IndexDefn) (map[c.IndexerId]int, error) {
+func (o *MetadataProvider) makePrepareIndexRequest(defnId c.IndexDefnId, name string, bucket string, nodes []string,
+	partitionScheme c.PartitionScheme, numReplica int) (map[c.IndexerId]int, error) {
 
 	// do a preliminary check
-	watchers, err, _ := o.findWatchersWithRetry(idxDefn.Nodes, int(idxDefn.NumReplica), c.IsPartitioned(idxDefn.PartitionScheme))
+	watchers, err, _ := o.findWatchersWithRetry(nodes, numReplica, c.IsPartitioned(partitionScheme))
 	if err != nil {
 		return nil, err
 	}
 
-	if len(idxDefn.Nodes) == 0 {
+	if len(nodes) == 0 {
 		// Get the full list of healthy watcher.  Unhealthy watcher could be unwatched.
 		watchers = o.getAllAvailWatchers()
 	}
 
 	request := &PrepareCreateRequest{
 		Op:          PREPARE,
-		DefnId:      idxDefn.DefnId,
+		DefnId:      defnId,
 		RequesterId: o.providerId,
 		Timeout:     int64(time.Duration(3) * time.Minute),
 	}
@@ -430,7 +433,7 @@ func (o *MetadataProvider) makePrepareIndexRequest(idxDefn *c.IndexDefn) (map[c.
 	// 2) If the cbq nodes see a non-overlapping subset of indexers, then both will succeed.   But for each cbq node, the
 	//    planner will only use its subset of nodes for planning.
 	//
-	key := fmt.Sprintf("%d", idxDefn.DefnId)
+	key := fmt.Sprintf("%d", defnId)
 	for _, w := range watchers {
 
 		wg.Add(1)
@@ -445,18 +448,18 @@ func (o *MetadataProvider) makePrepareIndexRequest(idxDefn *c.IndexDefn) (map[c.
 			// if there is a network partitioning between the metadata provider and indexer, makeRequest would not return until timeout.
 			content, err := w.makeRequest(OPCODE_PREPARE_CREATE_INDEX, key, requestMsg)
 			if err != nil {
-				logging.Errorf("Fail to prepare index creation on %v. Error: %v", w.getAdminAddr(), err)
+				logging.Errorf("Fail to process prepare request on %v. Error: %v", w.getAdminAddr(), err)
 				return
 			}
 
 			response, err := UnmarshallPrepareCreateResponse(content)
 			if err != nil {
-				logging.Errorf("Fail to prepare index creation on %v. Error: %v", w.getAdminAddr(), err)
+				logging.Errorf("Fail to process prepare request on %v. Error: %v", w.getAdminAddr(), err)
 				return
 			}
 
 			if response != nil && response.Accept {
-				logging.Infof("Indexer %v accept prepare create request. Index (%v, %v)", w.getAdminAddr(), idxDefn.Bucket, idxDefn.Name)
+				logging.Infof("Indexer %v accept prepare request. Index (%v, %v)", w.getAdminAddr(), bucket, name)
 				atomic.AddUint32(&accept, 1)
 				return
 			}
@@ -466,7 +469,7 @@ func (o *MetadataProvider) makePrepareIndexRequest(idxDefn *c.IndexDefn) (map[c.
 	wg.Wait()
 
 	if accept < uint32(len(watcherMap)) {
-		errStr := "Create index cannot proceed due to rebalance in progress, " +
+		errStr := "Create index or Alter replica cannot proceed due to rebalance in progress, " +
 			"another concurrent create index request, network partition, node failover, or indexer failure."
 		return watcherMap, errors.New(errStr)
 	}
@@ -477,11 +480,11 @@ func (o *MetadataProvider) makePrepareIndexRequest(idxDefn *c.IndexDefn) (map[c.
 //
 // This function clean up prepare index request
 //
-func (o *MetadataProvider) cancelPrepareIndexRequest(idxDefn *c.IndexDefn, watcherMap map[c.IndexerId]int) {
+func (o *MetadataProvider) cancelPrepareIndexRequest(defnId c.IndexDefnId, watcherMap map[c.IndexerId]int) {
 
 	request := &PrepareCreateRequest{
 		Op:          CANCEL_PREPARE,
-		DefnId:      idxDefn.DefnId,
+		DefnId:      defnId,
 		RequesterId: o.providerId,
 	}
 
@@ -491,7 +494,7 @@ func (o *MetadataProvider) cancelPrepareIndexRequest(idxDefn *c.IndexDefn, watch
 		return
 	}
 
-	key := fmt.Sprintf("%d", idxDefn.DefnId)
+	key := fmt.Sprintf("%d", defnId)
 	for indexerId, _ := range watcherMap {
 
 		go func(indexerId c.IndexerId) {
@@ -516,32 +519,15 @@ func (o *MetadataProvider) cancelPrepareIndexRequest(idxDefn *c.IndexDefn, watch
 //
 // This function makes a call to create index using new protocol (vulcan).
 //
-func (o *MetadataProvider) makeCommitIndexRequest(idxDefn *c.IndexDefn, layout map[int]map[c.IndexerId][]c.PartitionId,
-	watcherMap map[c.IndexerId]int) error {
-
-	definitions := make(map[c.IndexerId][]c.IndexDefn)
-	for replicaId, indexerPartitionMap := range layout {
-		instId, err := c.NewIndexInstId()
-		if err != nil {
-			return fmt.Errorf("Internal Error = %v.", err)
-		}
-
-		for indexerId, partitions := range indexerPartitionMap {
-			temp := *idxDefn
-
-			temp.InstId = instId
-			temp.ReplicaId = replicaId
-			temp.Partitions = partitions
-			temp.Versions = make([]int, len(partitions))
-
-			definitions[indexerId] = append(definitions[indexerId], temp)
-		}
-	}
+func (o *MetadataProvider) makeCommitIndexRequest(op CommitCreateRequestOp, idxDefn *c.IndexDefn, requestId uint64,
+	definitions map[c.IndexerId][]c.IndexDefn, watcherMap map[c.IndexerId]int) error {
 
 	request := &CommitCreateRequest{
+		Op:          op,
 		DefnId:      idxDefn.DefnId,
 		RequesterId: o.providerId,
 		Definitions: definitions,
+		RequestId:   requestId,
 	}
 
 	requestMsg, err := MarshallCommitCreateRequest(request)
@@ -671,9 +657,9 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn, plan map
 	// 2) This create index request has been explicity canceled
 	// 3) Indexer has timed out
 	//
-	watcherMap, err := o.makePrepareIndexRequest(idxDefn)
+	watcherMap, err := o.makePrepareIndexRequest(idxDefn.DefnId, idxDefn.Name, idxDefn.Bucket, idxDefn.Nodes, idxDefn.PartitionScheme, int(idxDefn.NumReplica))
 	if err != nil {
-		o.cancelPrepareIndexRequest(idxDefn, watcherMap)
+		o.cancelPrepareIndexRequest(idxDefn.DefnId, watcherMap)
 		logging.Errorf("Fail to create index: %v", err)
 		return err
 	}
@@ -683,9 +669,9 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn, plan map
 	// The planner will use nodes that metadta provider sees for planning.  All inactive_failed, inactive_new and unhealthy
 	// nodes will be excluded from planning.    If the user provides a specific node list, those nodes will be used.
 	//
-	layout, err := o.plan(idxDefn, plan, watcherMap)
+	layout, definitions, err := o.plan(idxDefn, plan, watcherMap)
 	if err != nil && strings.Contains(err.Error(), "Index already exist") {
-		o.cancelPrepareIndexRequest(idxDefn, watcherMap)
+		o.cancelPrepareIndexRequest(idxDefn.DefnId, watcherMap)
 		return err
 	}
 
@@ -708,7 +694,7 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn, plan map
 	// The first indexer that responds with success will create a token so that it can roll forward even if this
 	// metadata provider has died.  Other indexer will observe the token and proceed with the request.
 	//
-	err = o.makeCommitIndexRequest(idxDefn, layout, watcherMap)
+	err = o.makeCommitIndexRequest(NEW_INDEX, idxDefn, 0, definitions, watcherMap)
 	if err != nil {
 		logging.Errorf("Fail to create index: %v", err)
 		return err
@@ -1229,11 +1215,12 @@ func (o *MetadataProvider) PrepareIndexDefn(
 		ResidentRatio:      residentRatio,
 	}
 
+	idxDefn.NumReplica2.Initialize(idxDefn.NumReplica)
+
 	return idxDefn, nil, false
 }
 
-func (o *MetadataProvider) plan(defn *c.IndexDefn, plan map[string]interface{},
-	watcherMap map[c.IndexerId]int) (map[int]map[c.IndexerId][]c.PartitionId, error) {
+func (o *MetadataProvider) prepareIndexSpec(defn *c.IndexDefn) *planner.IndexSpec {
 
 	var spec planner.IndexSpec
 	spec.DefnId = defn.DefnId
@@ -1263,20 +1250,6 @@ func (o *MetadataProvider) plan(defn *c.IndexDefn, plan map[string]interface{},
 	spec.MutationRate = 0
 	spec.ScanRate = 0
 
-	nodes := defn.Nodes
-
-	if len(defn.Nodes) == 0 {
-		// If user does not specify a node list, then get the node list where we have acquired locks.
-		nodes := make([]string, 0, len(watcherMap))
-		for indexerId, _ := range watcherMap {
-			watcher, err := o.findWatcherByIndexerId(indexerId)
-			if err != nil {
-				return nil, errors.New("Fail to invokve planner.  Some of the indexers may be down or network partitioned from query process.")
-			}
-			nodes = append(nodes, strings.ToLower(watcher.getNodeAddr()))
-		}
-	}
-
 	// Get the storage mode from setting.  This is ONLY used for sizing purpose.  The actual
 	// storage mode of the index will be determined when indexer receives create index request.
 	// 1) if cluster storage mode is plasma, use plasma sizing.
@@ -1286,25 +1259,220 @@ func (o *MetadataProvider) plan(defn *c.IndexDefn, plan map[string]interface{},
 	// 4) if cluster storage mode is not available, then ignore sizing input.
 	spec.Using = o.settings.StorageMode()
 
-	solution, err := planner.ExecutePlan(o.clusterUrl, []*planner.IndexSpec{&spec}, nodes, len(defn.Nodes) != 0)
-	if err != nil {
-		return nil, err
+	return &spec
+}
+
+func (o *MetadataProvider) prepareNodeList(defn *c.IndexDefn, watcherMap map[c.IndexerId]int) ([]string, error) {
+
+	nodes := defn.Nodes
+
+	if len(defn.Nodes) == 0 {
+		// If user does not specify a node list, then get the node list where we have acquired locks.
+		nodes = make([]string, 0, len(watcherMap))
+		for indexerId, _ := range watcherMap {
+			watcher, err := o.findWatcherByIndexerId(indexerId)
+			if err != nil {
+				return nil, errors.New("Fail to invokve planner.  Some of the indexers may be down or network partitioned from query process.")
+			}
+			nodes = append(nodes, strings.ToLower(watcher.getNodeAddr()))
+		}
 	}
 
-	result := make(map[int]map[c.IndexerId][]c.PartitionId)
+	return nodes, nil
+}
+
+//
+// Verify watchers matching the given node list
+//
+func (o *MetadataProvider) verifyNodeList(nodeList []string, watcherMap map[c.IndexerId]int) (bool, error) {
+
+	if len(nodeList) != len(watcherMap) {
+		return false, nil
+	}
+
+	// If user does not specify a node list, then get the node list where we have acquired locks.
+	for indexerId, _ := range watcherMap {
+		watcher, err := o.findWatcherByIndexerId(indexerId)
+		if err != nil {
+			return false, err
+		}
+
+		found := false
+		for _, nodeAddr := range nodeList {
+			if strings.ToLower(nodeAddr) == strings.ToLower(watcher.getNodeAddr()) {
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			return false, nil
+		}
+	}
+
+	return true, nil
+}
+
+func (o *MetadataProvider) plan(defn *c.IndexDefn, plan map[string]interface{},
+	watcherMap map[c.IndexerId]int) (map[int]map[c.IndexerId][]c.PartitionId, map[c.IndexerId][]c.IndexDefn, error) {
+
+	spec := o.prepareIndexSpec(defn)
+	nodes, err := o.prepareNodeList(defn, watcherMap)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	solution, err := planner.ExecutePlan(o.clusterUrl, []*planner.IndexSpec{spec}, nodes, len(defn.Nodes) != 0)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	layout := make(map[int]map[c.IndexerId][]c.PartitionId)
 	for _, indexer := range solution.Placement {
 		for _, index := range indexer.Indexes {
 			if index.DefnId == defn.DefnId {
-				if _, ok := result[index.Instance.ReplicaId]; !ok {
-					result[index.Instance.ReplicaId] = make(map[c.IndexerId][]c.PartitionId)
+				if _, ok := layout[index.Instance.ReplicaId]; !ok {
+					layout[index.Instance.ReplicaId] = make(map[c.IndexerId][]c.PartitionId)
 				}
-				result[index.Instance.ReplicaId][c.IndexerId(indexer.IndexerId)] =
-					append(result[index.Instance.ReplicaId][c.IndexerId(indexer.IndexerId)], index.PartnId)
+				layout[index.Instance.ReplicaId][c.IndexerId(indexer.IndexerId)] =
+					append(layout[index.Instance.ReplicaId][c.IndexerId(indexer.IndexerId)], index.PartnId)
 			}
 		}
 	}
 
-	return result, nil
+	definitions := make(map[c.IndexerId][]c.IndexDefn)
+	for replicaId, indexerPartitionMap := range layout {
+		instId, err := c.NewIndexInstId()
+		if err != nil {
+			return nil, nil, fmt.Errorf("Internal Error = %v.", err)
+		}
+
+		for indexerId, partitions := range indexerPartitionMap {
+			temp := *defn
+
+			temp.InstId = instId
+			temp.ReplicaId = replicaId
+			temp.Partitions = partitions
+			temp.Versions = make([]int, len(partitions))
+
+			definitions[indexerId] = append(definitions[indexerId], temp)
+		}
+	}
+
+	return layout, definitions, nil
+}
+
+func (o *MetadataProvider) replicaRepair(defn *c.IndexDefn, numReplica c.Counter, increment int, plan map[string]interface{},
+	watcherMap map[c.IndexerId]int) (map[int]map[c.IndexerId][]c.PartitionId, map[c.IndexerId][]c.IndexDefn, error) {
+
+	curCount, _ := numReplica.Value()
+	totalCount := int(curCount) + increment
+
+	nodes, err := o.prepareNodeList(defn, watcherMap)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Use the planner to find out where to place the replica.
+	// If planner cannot read from the given list of nodes, it will return error.
+	solution, err := planner.ExecuteReplicaRepair(o.clusterUrl, defn.DefnId, increment, nodes, false)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// make sure the number of indexer in the computed plan matches the number of nodes
+	if len(nodes) != len(solution.Placement) {
+		err := fmt.Errorf("Cluster has failed nodes, undergo network partition, or unable to determine indexer node status.")
+		return nil, nil, err
+	}
+
+	// build the layout and index definitions
+	definitions := make(map[c.IndexerId][]c.IndexDefn)
+	layout := make(map[int]map[c.IndexerId][]c.PartitionId)
+	for _, indexer := range solution.Placement {
+		for _, index := range indexer.Indexes {
+			if index.DefnId == defn.DefnId {
+				if _, ok := layout[index.Instance.ReplicaId]; !ok {
+					layout[index.Instance.ReplicaId] = make(map[c.IndexerId][]c.PartitionId)
+				}
+
+				if _, ok := layout[index.Instance.ReplicaId][c.IndexerId(indexer.IndexerId)]; !ok {
+					temp := *defn
+					temp.NumReplica2 = numReplica
+					temp.NumReplica2.Increment(uint32(increment))
+					temp.InstId = index.Instance.InstId
+					temp.ReplicaId = index.Instance.ReplicaId
+					temp.NumPartitions = uint32(index.Instance.Pc.GetNumPartitions())
+
+					definitions[c.IndexerId(indexer.IndexerId)] = append(definitions[c.IndexerId(indexer.IndexerId)], temp)
+				}
+
+				layout[index.Instance.ReplicaId][c.IndexerId(indexer.IndexerId)] =
+					append(layout[index.Instance.ReplicaId][c.IndexerId(indexer.IndexerId)], index.PartnId)
+			}
+		}
+	}
+
+	// Make sure that planner has all the replica
+	if len(layout) != int(totalCount+1) {
+		logging.Errorf("Fail to allocate the requested number of replica. len(layout) %v totalCount+1 (%v).", len(layout), totalCount)
+		return nil, nil, fmt.Errorf("Fail to allocate the requested number of replica.")
+	}
+
+	// update the partitions and versions for the definitions
+	for replicaId, indexerPartitionMap := range layout {
+		for indexerId, partitions := range indexerPartitionMap {
+			defns := definitions[indexerId]
+			for i, _ := range defns {
+				if defns[i].ReplicaId == replicaId {
+					defns[i].Partitions = partitions
+					defns[i].Versions = make([]int, len(partitions))
+				}
+			}
+		}
+	}
+
+	return layout, definitions, nil
+}
+
+func (o *MetadataProvider) replicaDrop(defn *c.IndexDefn, numReplica c.Counter, decrement int, numPartition int, plan map[string]interface{},
+	watcherMap map[c.IndexerId]int) ([]c.IndexInstId, []int, error) {
+
+	nodes, err := o.prepareNodeList(defn, watcherMap)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	solution, replicaIds, err := planner.ExecuteReplicaDrop(o.clusterUrl, defn.DefnId, nodes, numPartition, decrement)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if len(replicaIds) != decrement {
+		return nil, nil, fmt.Errorf("Number of copies of indexes to be dropped (%v) are less than number requested (%v).", len(replicaIds), decrement)
+	}
+
+	instIds := []c.IndexInstId(nil)
+	for _, replicaId := range replicaIds {
+		found := false
+		for _, indexer := range solution.Placement {
+			for _, index := range indexer.Indexes {
+				if index.DefnId == defn.DefnId {
+					if index.Instance.ReplicaId == replicaId {
+						instIds = append(instIds, index.InstId)
+						found = true
+						break
+					}
+				}
+			}
+
+			if found {
+				break
+			}
+		}
+	}
+
+	return instIds, replicaIds, nil
 }
 
 func (o *MetadataProvider) isDecending(desc []bool) bool {
@@ -1572,30 +1740,35 @@ func (o *MetadataProvider) getReplicaParam(plan map[string]interface{}, version 
 		numReplica = int(o.settings.NumReplica())
 	}
 
-	numReplica2, ok := plan["num_replica"].(float64)
+	numReplica2, ok := plan["num_replica"].(int64)
 	if !ok {
-		numReplica_str, ok := plan["num_replica"].(string)
-		if ok {
-			var err error
-			numReplica3, err := strconv.ParseInt(numReplica_str, 10, 64)
-			if err != nil {
-				return 0, errors.New("Fails to create index.  Parameter num_replica must be a integer value."), false
-			}
-			numReplica = int(numReplica3)
+		numReplica2, ok := plan["num_replica"].(float64)
+		if !ok {
+			numReplica_str, ok := plan["num_replica"].(string)
+			if ok {
+				var err error
+				numReplica2, err := strconv.ParseInt(numReplica_str, 10, 64)
+				if err != nil {
+					return 0, errors.New("Parameter num_replica must be a integer value."), false
+				}
+				numReplica = int(numReplica2)
 
-		} else if _, ok := plan["num_replica"]; ok {
-			return 0, errors.New("Fails to create index.  Parameter num_replica must be a integer value."), false
+			} else if v, ok := plan["num_replica"]; ok {
+				return 0, fmt.Errorf("Parameter num_replica must be a integer value (%v).", reflect.TypeOf(v)), false
+			}
+		} else {
+			numReplica = int(numReplica2)
 		}
 	} else {
 		numReplica = int(numReplica2)
 	}
 
 	if numReplica > 0 && version < c.INDEXER_50_VERSION {
-		return 0, errors.New("Fails to create index with replica.   This option is enabled after cluster is fully upgraded and there is no failed node."), false
+		return 0, errors.New("Replica is not supported.  This option is enabled after cluster is fully upgraded and there is no failed node."), false
 	}
 
 	if numReplica < 0 {
-		return 0, errors.New("Fails to create index.  Parameter num_replica must be a positive value."), false
+		return 0, errors.New("Parameter num_replica must be a positive value."), false
 	}
 
 	return numReplica, nil, false
@@ -1989,6 +2162,96 @@ func (o *MetadataProvider) SendBuildIndexRequest(indexerId c.IndexerId, idList [
 	return nil
 }
 
+func (o *MetadataProvider) BroadcastAlterReplicaCountRequest(defn *c.IndexDefn) error {
+	o.mutex.Lock()
+	defer o.mutex.Unlock()
+
+	content, err := c.MarshallIndexDefn(defn)
+	if err != nil {
+		return err
+	}
+
+	for _, watcher := range o.watchers {
+		_, err = watcher.makeRequest(OPCODE_UPDATE_REPLICA_COUNT, "Alter Replica Count", content)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (o *MetadataProvider) SendAlterReplicaCountRequest(indexerId c.IndexerId, defn *c.IndexDefn, addr string) error {
+
+	watcher, err := o.findAliveWatcherByIndexerId(indexerId)
+	if err != nil {
+		return fmt.Errorf("Cannot reach node %v.  Alter replica count will be retried in background once network connection is re-established.", addr)
+	}
+
+	content, err := c.MarshallIndexDefn(defn)
+	if err != nil {
+		return err
+	}
+
+	_, err = watcher.makeRequest(OPCODE_UPDATE_REPLICA_COUNT, "Alter Replica Count", content)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (o *MetadataProvider) SendGetReplicaCountRequest(indexerId c.IndexerId, defnId c.IndexDefnId) (*c.Counter, error) {
+
+	watcher, err := o.findAliveWatcherByIndexerId(indexerId)
+	if err != nil {
+		return nil, fmt.Errorf("Cannot reach node.")
+	}
+
+	content, err := json.Marshal(defnId)
+	if err != nil {
+		return nil, err
+	}
+
+	result, err := watcher.makeRequest(OPCODE_GET_REPLICA_COUNT, "Get Index Num Replica", content)
+	if err != nil {
+		return nil, err
+	}
+
+	numReplica, err := c.UnmarshallCounter(result)
+	if err != nil {
+		return nil, err
+	}
+
+	return numReplica, nil
+}
+
+func (o *MetadataProvider) SendCheckTokenRequest(indexerId c.IndexerId, defnId c.IndexDefnId, flag uint32) (bool, error) {
+
+	watcher, err := o.findAliveWatcherByIndexerId(indexerId)
+	if err != nil {
+		return false, fmt.Errorf("Cannot reach node.")
+	}
+
+	check := CheckToken{DefnId: defnId, Flag: flag}
+	content, err := MarshallCheckToken(&check)
+	if err != nil {
+		return false, err
+	}
+
+	result, err := watcher.makeRequest(OPCODE_CHECK_TOKEN_EXIST, "Get Token Exist", content)
+	if err != nil {
+		return false, err
+	}
+
+	var exist bool
+	if err := json.Unmarshal(result, &exist); err != nil {
+		return false, err
+	}
+
+	return exist, nil
+}
+
 func (o *MetadataProvider) ListIndex() ([]*IndexMetadata, uint64) {
 
 	indices, version := o.repo.listDefnWithValidInst()
@@ -2039,15 +2302,289 @@ func (o *MetadataProvider) UpdateServiceAddrForIndexer(id c.IndexerId, adminport
 }
 
 func (o *MetadataProvider) findIndexByName(name string, bucket string) *IndexMetadata {
+	o.mutex.Lock()
+	defer o.mutex.Unlock()
 
-	indices, _ := o.repo.listDefnWithValidInst()
+	indices, _ := o.repo.listDefnWithValidInstNoLock()
 	for _, meta := range indices {
-		if o.isValidIndexFromActiveIndexer(meta) {
-			if meta.Definition.Name == name && meta.Definition.Bucket == bucket {
+		if meta.Definition.Name == name && meta.Definition.Bucket == bucket {
+			// will not hold lock on metadataRepo
+			if o.isValidIndexFromActiveIndexerNoLock(meta) {
 				return meta
 			}
 		}
 	}
+
+	return nil
+}
+
+//
+// Get the list of nodes from a healthy cluster.  This function depends on ns-server
+// to provide cluster info, and since cluster info is eventual consistent, this
+// function cannot always return immedidate cluster status.  This function can only
+// provides a snapshot of healthy cluster nodes at a point in time.
+//
+func (o *MetadataProvider) getNodesInHealthyCluster() ([]string, error) {
+
+	// Lock down metadata provider while checking cluster.  This will block any watchMetadata()
+	// or unwatchMetadata(). This lock ensures the state of metadata provider does not change between
+	// checkProviderHealthNoLock() and getAllWatcherNodeAddrNoLock().
+	o.mutex.Lock()
+	defer o.mutex.Unlock()
+
+	// Check cluster health
+	// 1) All watchers are alive (have live connections)
+	// 2) The number of watchers match the number of active nodes
+	// 3) There is no failed node
+	// 4) There is no unhealthy node
+	// 5) Watcher is not in the middle of synchronization with indexer (timeout at 100ms)
+	healthy, err := o.checkProviderHealthNoLock()
+	if err != nil {
+		return nil, err
+	}
+
+	if !healthy {
+		return nil, errors.New("Clsuter has failed nodes, undergo network partition, or unable to determine indexer node status.")
+	}
+
+	// Get the list of nodes in the healthy cluster
+	nodes := o.getAllWatcherNodeAddrNoLock()
+
+	return nodes, nil
+}
+
+//
+// The caller must acquire locks on indexer before calling this method. This ensures that there is
+// no concurrent create/alter index running in parallel.
+//
+func (o *MetadataProvider) getNumReplica(defnId c.IndexDefnId, name string, bucket string, watcherMap map[c.IndexerId]int) (*c.Counter, error) {
+
+	// Get num replica from each watcher/indexer.  Each indexer will lookup numReplica
+	// 1) create token
+	// 2) local index definition
+	// Metadata provider will merge the num replica (convergent counter) from each indexer to determine the latest value.
+	//
+	var numReplica c.Counter
+	for indexerId, _ := range watcherMap {
+		numReplica2, err := o.SendGetReplicaCountRequest(indexerId, defnId)
+		if err != nil {
+			logging.Errorf("Cannot retrieve num replica from index %v from indexer %v", defnId, indexerId)
+			return nil, err
+		}
+
+		if numReplica2 != nil && numReplica2.IsValid() {
+			result, merged, err := numReplica.MergeWith(*numReplica2)
+			if err != nil {
+				logging.Errorf("Cannot merge counter for index defnition %v from indexer %v", defnId, indexerId)
+				return nil, err
+			}
+			if merged {
+				numReplica = result
+			}
+		}
+	}
+
+	if !numReplica.IsValid() {
+		return nil, fmt.Errorf("Cannot determine number of replica for index (%v, %v)", name, bucket)
+	}
+
+	return &numReplica, nil
+}
+
+func (o *MetadataProvider) AlterReplicaCount(defnId c.IndexDefnId, plan map[string]interface{}) error {
+
+	// Support for 6.5 and onwards
+	clusterVersion := o.GetClusterVersion()
+	if clusterVersion < c.INDEXER_65_VERSION {
+		return errors.New("Alter index requires version 6.5 or higher")
+	}
+
+	// Verify if the cluster is in a healthy state.  Retrieve the node list from healthy cluster.
+	nodeList, err := o.getNodesInHealthyCluster()
+	if err != nil {
+		return fmt.Errorf("Fail to alter index: %v", err)
+	}
+
+	// Find the index metadata.   We don't need the index metadata to be latest.  We just need
+	// the definition for acquiring exclusive lock from indexer.
+	idxMeta := o.findIndex(defnId)
+	if idxMeta == nil {
+		return fmt.Errorf("Index %s does not exist.", defnId)
+	}
+
+	count, err, _ := o.getReplicaParam(plan, clusterVersion)
+	if err != nil {
+		return fmt.Errorf("Fail to alter index: %v", err)
+	}
+
+	//
+	// Prepare phase.  This is to seek full quorum from all the indexers by acquiring locks.
+	//
+	// This operation will fail if
+	// 1) Any indexer is unreachable
+	// 2) Any indexer is serving another create/alter index request
+	//
+	// Once the full quorum is achieved, the indexer will not accept any other create/alter index request until:
+	// 1) This create/alter index request has completed
+	// 2) This create/alter index request has been explicity canceled
+	// 3) Indexer has timed out
+	//
+	defn := *idxMeta.Definition
+	numPartition := idxMeta.numPartitions()
+	watcherMap, err := o.makePrepareIndexRequest(defn.DefnId, defn.Name, defn.Bucket, defn.Nodes, defn.PartitionScheme, count)
+	if err != nil {
+		o.cancelPrepareIndexRequest(defn.DefnId, watcherMap)
+		return fmt.Errorf("Fail to alter index: %v", err)
+	}
+
+	// We have a snapshot of node list from a healthy cluster.
+	// Let see if the watcher map matches the node list.
+	valid, err := o.verifyNodeList(nodeList, watcherMap)
+	if err != nil {
+		o.cancelPrepareIndexRequest(defn.DefnId, watcherMap)
+		return fmt.Errorf("Fail to alter index: %v", err)
+	}
+	if !valid {
+		o.cancelPrepareIndexRequest(defn.DefnId, watcherMap)
+		return fmt.Errorf("Cluster has failed nodes, undergo network partition, or unable to determine indexer node status.")
+	}
+
+	// Fetch the numReplica
+	numReplica, err := o.getNumReplica(defn.DefnId, defn.Name, defn.Bucket, watcherMap)
+	if err != nil {
+		o.cancelPrepareIndexRequest(defn.DefnId, watcherMap)
+		return fmt.Errorf("Fail to alter index: %v", err)
+	}
+	curCount, _ := numReplica.Value()
+
+	logging.Infof("alter replica count.  Current num replica %v new replica count %v", curCount, count)
+
+	// Check if we already have the desired number of replica
+	if int(curCount) == count {
+		o.cancelPrepareIndexRequest(defn.DefnId, watcherMap)
+		return fmt.Errorf("Index already has %v number of replica.", curCount)
+	}
+
+	if int(curCount) < count {
+		// add replica
+		if err := o.addReplica(&defn, watcherMap, *numReplica, count-int(curCount), (map[string]interface{})(nil)); err != nil {
+			return fmt.Errorf("Fail to alter index: %v", err)
+		}
+
+	} else {
+		// remove replica
+		if err := o.removeReplica(&defn, watcherMap, *numReplica, int(curCount)-count, numPartition, (map[string]interface{})(nil)); err != nil {
+			return fmt.Errorf("Fail to alter index: %v", err)
+		}
+	}
+
+	return nil
+}
+
+//
+// This function adds replica count of an index.
+//
+func (o *MetadataProvider) addReplica(idxDefn *c.IndexDefn, watcherMap map[c.IndexerId]int, numReplica c.Counter,
+	increment int, plan map[string]interface{}) error {
+
+	// Check for any create or drop token
+	for indexerId, _ := range watcherMap {
+		exist, err := o.SendCheckTokenRequest(indexerId, idxDefn.DefnId, DROP_INDEX_TOKEN)
+		if err != nil {
+			o.cancelPrepareIndexRequest(idxDefn.DefnId, watcherMap)
+			logging.Errorf("Fail to alter index: %v", err)
+			return err
+		}
+		if exist {
+			o.cancelPrepareIndexRequest(idxDefn.DefnId, watcherMap)
+			err := fmt.Errorf("Cannot alter index while the index is in the process of being dropped.")
+			logging.Errorf("Fail to alter index: %v", err)
+			return err
+		}
+	}
+
+	//
+	// Plan Phase.
+	// The planner will use nodes that metadta provider sees for planning.  All inactive_failed, inactive_new and unhealthy
+	// nodes will be excluded from planning.    If the user provides a specific node list, those nodes will be used.
+	//
+	_, definitions, err := o.replicaRepair(idxDefn, numReplica, increment, plan, watcherMap)
+	if err != nil {
+		o.cancelPrepareIndexRequest(idxDefn.DefnId, watcherMap)
+		return err
+	}
+
+	//
+	// Commit Phase.  Metadata Provider will send a commit request to at least one indexer.  If at least one indexer
+	// responds with success, then it means there won't be another concurrent create/alter index request.    Even though
+	// the metadata provider may not have full quorum, this create/alter index request can roll forward.
+	//
+	// The first indexer that responds with success will create a token so that it can roll forward even if this
+	// metadata provider has died.  Other indexer will observe the token and proceed with the request.
+	//
+	requestId, err := c.NewIndexInstId()
+	if err != nil {
+		return err
+	}
+	err = o.makeCommitIndexRequest(ADD_REPLICA, idxDefn, uint64(requestId), definitions, watcherMap)
+	if err != nil {
+		logging.Errorf("Fail to alter index: %v", err)
+		return err
+	}
+
+	logging.Infof("Commit add replica on index %v with requestId %v", idxDefn.DefnId, requestId)
+
+	return nil
+}
+
+//
+// This function removes replica count of an index.
+//
+func (o *MetadataProvider) removeReplica(idxDefn *c.IndexDefn, watcherMap map[c.IndexerId]int, numReplica c.Counter, decrement int,
+	numPartition int, plan map[string]interface{}) error {
+
+	//
+	// Plan Phase.
+	// The planner will use nodes that metadta provider sees for planning.  All inactive_failed, inactive_new and unhealthy
+	// nodes will be excluded from planning.    If the user provides a specific node list, those nodes will be used.
+	//
+	instIds, replicaIds, err := o.replicaDrop(idxDefn, numReplica, decrement, numPartition, plan, watcherMap)
+	if err != nil {
+		o.cancelPrepareIndexRequest(idxDefn.DefnId, watcherMap)
+		logging.Errorf("Fail to drop index replica: %v", err)
+		return err
+	}
+
+	definitions := make([]c.IndexDefn, 0, len(instIds))
+	for i, instId := range instIds {
+		temp := *idxDefn
+		temp.InstId = instId
+		temp.ReplicaId = replicaIds[i]
+		temp.NumReplica2 = numReplica
+		temp.NumReplica2.Decrement(uint32(decrement))
+		definitions = append(definitions, temp)
+	}
+
+	definitionsMap := make(map[c.IndexerId][]c.IndexDefn)
+	for indexerId, _ := range watcherMap {
+		definitionsMap[indexerId] = definitions
+	}
+
+	//
+	// Commit Phase.  Metadata Provider will send a commit request to at least one indexer.  If at least one indexer
+	// responds with success, then it means there won't be another concurrent create/alter index request.    Even though
+	// the metadata provider may not have full quorum, this create/alter index request can roll forward.
+	//
+	// The first indexer that responds with success will create a token so that it can roll forward even if this
+	// metadata provider has died.  Other indexer will observe the token and proceed with the request.
+	//
+	err = o.makeCommitIndexRequest(DROP_REPLICA, idxDefn, 0, definitionsMap, watcherMap)
+	if err != nil {
+		logging.Errorf("Fail to alter index: %v", err)
+		return err
+	}
+
+	logging.Infof("Commit drop replica on index %v replicaIds %v", idxDefn.DefnId, replicaIds)
 
 	return nil
 }
@@ -2133,6 +2670,13 @@ func (o *MetadataProvider) allWatchersRunningNoLock() bool {
 	actual := atomic.LoadInt32(&o.numWatcher)
 
 	return expected == actual
+}
+
+//
+// Get number of watchers
+//
+func (o *MetadataProvider) getNumWatchers() int32 {
+	return atomic.LoadInt32(&o.numWatcher)
 }
 
 //
@@ -2289,7 +2833,7 @@ func (o *MetadataProvider) RefreshIndexerVersion() uint64 {
 ///////////////////////////////////////////////////////
 
 // A watcher is active only when it is ready to accept request.  This
-// means synchronization phase is done with the indexer.  This does not
+// means initial synchronization phase is done with the indexer.  This does not
 // mean the watcher is connected to the indexer at the moment when this
 // call is made.  This is not a network liveness check on the indexer.
 // But this can check if UnwatchMetadata has been called on this indexer.
@@ -2400,6 +2944,32 @@ func (o *MetadataProvider) FindIndexIgnoreStatus(id c.IndexDefnId) *IndexMetadat
 	return nil
 }
 
+//
+// This function returns the index regardless of its state or well-formed (all partitions).
+// This function will not return the index if it does not have any valid instance or partition.
+// In other words, this function will return the index if it has at least one non-DELETED
+// instance with Active RState.
+//
+func (o *MetadataProvider) FindIndexInstanceIgnoreStatus(id c.IndexDefnId, instId c.IndexInstId) *IndexMetadata {
+
+	indices, _ := o.repo.listAllDefn()
+	if meta, ok := indices[id]; ok {
+		for _, inst := range meta.Instances {
+			if inst.InstId == instId {
+				return meta
+			}
+		}
+
+		for _, inst := range meta.InstsInRebalance {
+			if inst.InstId == instId {
+				return meta
+			}
+		}
+	}
+
+	return nil
+}
+
 func (o *MetadataProvider) getAllWatchers() []*watcher {
 	o.mutex.Lock()
 	defer o.mutex.Unlock()
@@ -2423,6 +2993,15 @@ func (o *MetadataProvider) getAllAvailWatchers() []*watcher {
 			watcher.serviceMap.ExcludeNode != "inout" {
 			result = append(result, watcher)
 		}
+	}
+	return result
+}
+
+func (o *MetadataProvider) getAllWatcherNodeAddrNoLock() []string {
+
+	result := make([]string, 0, len(o.watchers))
+	for _, watcher := range o.watchers {
+		result = append(result, watcher.getNodeAddr())
 	}
 	return result
 }
@@ -2573,6 +3152,15 @@ func (o *MetadataProvider) isValidIndexFromActiveIndexer(meta *IndexMetadata) bo
 	o.mutex.RLock()
 	defer o.mutex.RUnlock()
 
+	return o.isValidIndexFromActiveIndexerNoLock(meta)
+}
+
+// Return index metadata if
+// 1) Index defn has valid status
+// 2) At least one index instance has valid status
+// 3) Partitions in the valid index instance has not been unwatched
+func (o *MetadataProvider) isValidIndexFromActiveIndexerNoLock(meta *IndexMetadata) bool {
+
 	if !isValidIndex(meta) {
 		return false
 	}
@@ -2618,6 +3206,73 @@ func (o *MetadataProvider) refreshStats(stats map[c.IndexInstId]map[c.PartitionI
 		default:
 		}
 	}
+}
+
+//
+// Refresh cluster info. Check for failed and unhealthy node.
+// This function depends on ns-server for getting cluster info.
+// Since cluster info is eventual consistent, this does not
+// necessarily reflect immediate cluster status.
+//
+func (o *MetadataProvider) checkClusterHealth() (bool, error) {
+
+	cinfo, err := c.FetchNewClusterInfoCache(o.clusterUrl, c.DEFAULT_POOL)
+	if err != nil {
+		return false, err
+	}
+
+	activeNodes := len(cinfo.GetActiveIndexerNodes()) // all active indexer node (known ports + unknown ports + unhealthy node)
+	failedNodes := len(cinfo.GetFailedIndexerNodes()) // failover indexer node
+	newNodes := len(cinfo.GetNewIndexerNodes())       // new indexer node
+	unhealthyNodes := 0                               // active, unhealthy indexer node with known ports
+
+	for _, node := range cinfo.GetNodesByServiceType("indexAdmin") {
+		status, err := cinfo.GetNodeStatus(node)
+		if err != nil {
+			return false, err
+		}
+
+		if status != "healthy" {
+			unhealthyNodes++
+		}
+	}
+
+	o.SetClusterStatus(activeNodes, failedNodes, unhealthyNodes, newNodes)
+
+	return o.isClusterHealthy(), nil
+}
+
+//
+// 1) Check cluster health (see checkClusterHealth)
+// 2) Check if number of watchers matching number of active nodes
+// 3) Check if all watchers are ready to receive requests
+//    - connected to indexer
+//    - not in the middle of synchronization with indexer
+//
+func (o *MetadataProvider) checkProviderHealthNoLock() (bool, error) {
+
+	healthy, err := o.checkClusterHealth()
+	if err != nil {
+		return false, err
+	}
+
+	if !healthy {
+		return false, nil
+	}
+
+	// Check if all indexers are available
+	// This will check if there is network partition.
+	return o.AllWatchersAliveNoLock(), nil
+}
+
+//
+// This function checks if cluster is healthy
+// 1) no failed node
+// 2) no unhealthy node
+//
+func (o *MetadataProvider) isClusterHealthy() bool {
+	return atomic.LoadInt32(&o.numFailedNode) == 0 &&
+		atomic.LoadInt32(&o.numUnhealthyNode) == 0
 }
 
 //
@@ -2695,6 +3350,14 @@ func newMetadataRepo(provider *MetadataProvider) *metadataRepo {
 	}
 }
 
+func (r *metadataRepo) RLock() {
+	r.mutex.RLock()
+}
+
+func (r *metadataRepo) RUnlock() {
+	r.mutex.RUnlock()
+}
+
 func (r *metadataRepo) listAllDefn() (map[c.IndexDefnId]*IndexMetadata, uint64) {
 
 	r.mutex.RLock()
@@ -2710,8 +3373,9 @@ func (r *metadataRepo) listAllDefn() (map[c.IndexDefnId]*IndexMetadata, uint64) 
 			instsInRebalance := make([]*InstanceDefn, len(meta.InstsInRebalance))
 			copy(instsInRebalance, meta.InstsInRebalance)
 
+			defn := *meta.Definition
 			tmp := &IndexMetadata{
-				Definition:       meta.Definition,
+				Definition:       &defn,
 				State:            meta.State,
 				Error:            meta.Error,
 				Instances:        insts,
@@ -2730,6 +3394,11 @@ func (r *metadataRepo) listDefnWithValidInst() (map[c.IndexDefnId]*IndexMetadata
 	r.mutex.RLock()
 	defer r.mutex.RUnlock()
 
+	return r.listDefnWithValidInstNoLock()
+}
+
+func (r *metadataRepo) listDefnWithValidInstNoLock() (map[c.IndexDefnId]*IndexMetadata, uint64) {
+
 	result := make(map[c.IndexDefnId]*IndexMetadata)
 	for id, meta := range r.indices {
 		if isValidIndex(meta) {
@@ -2747,8 +3416,9 @@ func (r *metadataRepo) listDefnWithValidInst() (map[c.IndexDefnId]*IndexMetadata
 				}
 			}
 
+			defn := *meta.Definition
 			tmp := &IndexMetadata{
-				Definition:       meta.Definition,
+				Definition:       &defn,
 				State:            meta.State,
 				Error:            meta.Error,
 				Instances:        insts,
@@ -2772,12 +3442,19 @@ func (r *metadataRepo) addDefn(defn *c.IndexDefn) {
 	// A definition can have mutliple physical copies.  If
 	// we have seen a copy already, then it is not necessary
 	// to add another copy again.
-	if _, ok := r.definitions[defn.DefnId]; !ok {
+	if cached, ok := r.definitions[defn.DefnId]; !ok {
 		r.definitions[defn.DefnId] = defn
 		r.indices[defn.DefnId] = r.makeIndexMetadata(defn)
 
 		r.updateIndexMetadataNoLock(defn.DefnId)
 		r.incrementVersion()
+	} else {
+		if result, changed, err := cached.NumReplica2.MergeWith(defn.NumReplica2); err == nil {
+			if changed {
+				cached.NumReplica2 = result
+				r.incrementVersion()
+			}
+		}
 	}
 }
 
@@ -3503,6 +4180,24 @@ func (r *metadataRepo) notifyIndexerClose(indexerId c.IndexerId) {
 			close(event.notifyCh)
 		}
 	}
+}
+
+///////////////////////////////////////////////////////
+// private function : IndexMetadata
+///////////////////////////////////////////////////////
+
+func (m *IndexMetadata) numPartitions() int {
+
+	if len(m.Instances) > 0 {
+		return int(m.Instances[0].NumPartitions)
+	}
+
+	return -1
+}
+
+func (m *IndexMetadata) numInstances() int {
+
+	return len(m.Instances)
 }
 
 ///////////////////////////////////////////////////////

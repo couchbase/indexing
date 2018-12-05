@@ -600,7 +600,7 @@ func SetNumCPUs(percent int) int {
 	return ncpu
 }
 
-func IndexStatement(def IndexDefn, numPartitions int, printNodes bool) string {
+func IndexStatement(def IndexDefn, numPartitions int, numReplica int, printNodes bool) string {
 	var stmt string
 	primCreate := "CREATE PRIMARY INDEX `%s` ON `%s`"
 	secCreate := "CREATE INDEX `%s` ON `%s`(%s)"
@@ -677,12 +677,16 @@ func IndexStatement(def IndexDefn, numPartitions int, printNodes bool) string {
 		withExpr += " ]"
 	}
 
-	if def.NumReplica != 0 {
+	if numReplica == -1 {
+		numReplica = def.GetNumReplica()
+	}
+
+	if numReplica != 0 {
 		if len(withExpr) != 0 {
 			withExpr += ","
 		}
 
-		withExpr += fmt.Sprintf(" \"num_replica\":%v", def.NumReplica)
+		withExpr += fmt.Sprintf(" \"num_replica\":%v", numReplica)
 	}
 
 	if IsPartitioned(def.PartitionScheme) {

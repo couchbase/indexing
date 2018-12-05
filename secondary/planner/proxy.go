@@ -65,13 +65,24 @@ func RetrievePlanFromCluster(clusterUrl string, hosts []string) (*Plan, error) {
 		return nil, err
 	}
 
+	replicaMap := generateReplicaMap(indexers)
+
+	if err := processDeleteToken(clusterUrl, indexers, config); err != nil {
+		return nil, err
+	}
+
+	if err := processDropInstanceToken(clusterUrl, indexers, config, replicaMap); err != nil {
+		return nil, err
+	}
+
 	cleanseIndexLayout(indexers)
 
 	// If there is no indexer, plan.Placement will be nil.
 	plan := &Plan{Placement: indexers,
-		MemQuota: 0,
-		CpuQuota: 0,
-		IsLive:   true,
+		MemQuota:         0,
+		CpuQuota:         0,
+		IsLive:           true,
+		UsedReplicaIdMap: replicaMap,
 	}
 
 	err = getIndexStats(clusterUrl, plan)
@@ -80,6 +91,11 @@ func RetrievePlanFromCluster(clusterUrl string, hosts []string) (*Plan, error) {
 	}
 
 	err = getIndexSettings(clusterUrl, plan)
+	if err != nil {
+		return nil, err
+	}
+
+	err = getIndexNumReplica(clusterUrl, plan)
 	if err != nil {
 		return nil, err
 	}
@@ -902,7 +918,7 @@ func getLocalStats(addr string) (*common.Statistics, error) {
 }
 
 //
-// This function gets the indexer stats for a specific indexer host.
+// This function gets the create tokens for a specific indexer host.
 //
 func getLocalCreateTokens(addr string) (*mc.CreateCommandTokenList, error) {
 
@@ -912,6 +928,42 @@ func getLocalCreateTokens(addr string) (*mc.CreateCommandTokenList, error) {
 	}
 
 	tokens := new(mc.CreateCommandTokenList)
+	if err := convertResponse(resp, tokens); err != nil {
+		return nil, err
+	}
+
+	return tokens, nil
+}
+
+//
+// This function gets the delete tokens for a specific indexer host.
+//
+func getLocalDeleteTokens(addr string) (*mc.DeleteCommandTokenList, error) {
+
+	resp, err := getWithCbauth(addr + "/listDeleteTokens")
+	if err != nil {
+		return nil, err
+	}
+
+	tokens := new(mc.DeleteCommandTokenList)
+	if err := convertResponse(resp, tokens); err != nil {
+		return nil, err
+	}
+
+	return tokens, nil
+}
+
+//
+// This function gets the drop instance tokens for a specific indexer host.
+//
+func getLocalDropInstanceTokens(addr string) (*mc.DropInstanceCommandTokenList, error) {
+
+	resp, err := getWithCbauth(addr + "/listDropInstanceTokens")
+	if err != nil {
+		return nil, err
+	}
+
+	tokens := new(mc.DropInstanceCommandTokenList)
 	if err := convertResponse(resp, tokens); err != nil {
 		return nil, err
 	}
@@ -935,6 +987,24 @@ func getLocalSettings(addr string) (map[string]interface{}, error) {
 	}
 
 	return settings, nil
+}
+
+//
+// This function gets the num replica for a specific indexer host.
+//
+func getLocalNumReplicas(addr string) (map[common.IndexDefnId]common.Counter, error) {
+
+	resp, err := getWithCbauth(addr + "/listReplicaCount")
+	if err != nil {
+		return nil, err
+	}
+
+	numReplicas := make(map[common.IndexDefnId]common.Counter)
+	if err := convertResponse(resp, &numReplicas); err != nil {
+		return nil, err
+	}
+
+	return numReplicas, nil
 }
 
 func getWithCbauth(url string) (*http.Response, error) {
@@ -1225,4 +1295,272 @@ func processCreateToken(clusterUrl string, indexers []*IndexerNode, config commo
 	}
 
 	return nil
+}
+
+//
+// There may be delete token that has yet to process.  Update the indexer layout based on token information.
+//
+func processDeleteToken(clusterUrl string, indexers []*IndexerNode, config common.Config) error {
+
+	cinfo, err := clusterInfoCache(clusterUrl)
+	if err != nil {
+		logging.Errorf("Planner::processDeleteToken: Error from connecting to cluster at %v. Error = %v", clusterUrl, err)
+		return err
+	}
+
+	clusterVersion := cinfo.GetClusterVersion()
+	if clusterVersion < common.INDEXER_55_VERSION {
+		logging.Infof("Planner::Cluster in upgrade.  Skip fetching delete token.")
+		return nil
+	}
+
+	// find all nodes that has a index http service
+	nids := cinfo.GetNodesByServiceType(common.INDEX_HTTP_SERVICE)
+
+	for _, nid := range nids {
+
+		// Find the indexer host name
+		nodeId, err := getIndexerHost(cinfo, nid)
+		if err != nil {
+			logging.Errorf("Planner::processDeleteToken: Error from initializing indexer node. Error = %v", err)
+			return err
+		}
+
+		// look up the corresponding indexer object based on the nodeId
+		indexer := findIndexerByNodeId(indexers, nodeId)
+		if indexer == nil {
+			logging.Verbosef("Planner::processDeleteToken: Skip indexer %v since it is not in the included list")
+			continue
+		}
+
+		// obtain the admin port for the indexer node
+		addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE)
+		if err != nil {
+			logging.Errorf("Planner::processDeleteToken: Error from getting service address for node %v. Error = %v", nodeId, err)
+			return err
+		}
+
+		// Read the delete token from the indexer node using REST.  This is to ensure that it can read the token from the node
+		// that place the token.   If that node is partitioned away, then it will rely on other nodes that have got the token.
+		// If there is no node that can provide the token,
+		// 1) the planner will not consider those pending-delete index for planning
+		// 2) the planner could end up repairing replica for those definitions
+		tokens, err := getLocalDeleteTokens(addr)
+		if err != nil {
+			logging.Errorf("Planner::processDeleteToken: Error from reading delete tokens for node %v. Error = %v", nodeId, err)
+			return err
+		}
+
+		// nothing to do
+		if len(tokens.Tokens) == 0 {
+			logging.Infof("Planner::processDeleteToken: There is no delete token to process for node %v", nodeId)
+			continue
+		}
+
+		for _, token := range tokens.Tokens {
+			logging.Infof("Planner: Processing delete token for index %v from node %v", token.DefnId, nodeId)
+			for _, indexer := range indexers {
+				indexes := make([]*IndexUsage, 0, len(indexer.Indexes))
+				for _, index := range indexer.Indexes {
+					if index.DefnId != token.DefnId {
+						indexes = append(indexes, index)
+					} else {
+						logging.Infof("Planner: Remove index (%v, %v) due to delete token.", index.GetDisplayName(), index.Bucket)
+					}
+				}
+				indexer.Indexes = indexes
+			}
+		}
+	}
+
+	return nil
+}
+
+//
+// There may be drop instance token that has yet to process.  Update the indexer layout based on token information.
+//
+func processDropInstanceToken(clusterUrl string, indexers []*IndexerNode, config common.Config,
+	replicaIdMap map[common.IndexDefnId]map[int]bool) error {
+
+	cinfo, err := clusterInfoCache(clusterUrl)
+	if err != nil {
+		logging.Errorf("Planner::processDropInstanceToken: Error from connecting to cluster at %v. Error = %v", clusterUrl, err)
+		return err
+	}
+
+	clusterVersion := cinfo.GetClusterVersion()
+	if clusterVersion < common.INDEXER_65_VERSION {
+		logging.Infof("Planner::Cluster in upgrade.  Skip fetching drop instance token.")
+		return nil
+	}
+
+	// find all nodes that has a index http service
+	nids := cinfo.GetNodesByServiceType(common.INDEX_HTTP_SERVICE)
+
+	for _, nid := range nids {
+
+		// Find the indexer host name
+		nodeId, err := getIndexerHost(cinfo, nid)
+		if err != nil {
+			logging.Errorf("Planner::processDropInstanceToken: Error from initializing indexer node. Error = %v", err)
+			return err
+		}
+
+		// look up the corresponding indexer object based on the nodeId
+		indexer := findIndexerByNodeId(indexers, nodeId)
+		if indexer == nil {
+			logging.Verbosef("Planner::processDropInstanceToken: Skip indexer %v since it is not in the included list")
+			continue
+		}
+
+		// obtain the admin port for the indexer node
+		addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE)
+		if err != nil {
+			logging.Errorf("Planner::processDropInstanceToken: Error from getting service address for node %v. Error = %v", nodeId, err)
+			return err
+		}
+
+		// Read the drop instance token from the indexer node using REST.  This is to ensure that it can read the token from the node
+		// that place the token.   If that node is partitioned away, then it will rely on other nodes that have got the token.
+		// If there is no node that can provide the token,
+		// 1) the planner will not consider those pending-delete index for planning
+		// 2) the planner could end up repairing replica for those definitions
+		// 3) when handling drop replica, it may not drop an already deleted replica
+		tokens, err := getLocalDropInstanceTokens(addr)
+		if err != nil {
+			logging.Errorf("Planner::processDropInstanceToken: Error from reading drop instance tokens for node %v. Error = %v", nodeId, err)
+			return err
+		}
+
+		// nothing to do
+		if len(tokens.Tokens) == 0 {
+			logging.Infof("Planner::processDropInstanceToken: There is no drop instance token to process for node %v", nodeId)
+			continue
+		}
+
+		for _, token := range tokens.Tokens {
+			logging.Infof("Planner: Processing drop instance token for index %v (replicaId %v inst %v) from node %v",
+				token.DefnId, token.ReplicaId, token.InstId, nodeId)
+			found := false
+			for _, indexer := range indexers {
+				indexes := make([]*IndexUsage, 0, len(indexer.Indexes))
+				for _, index := range indexer.Indexes {
+					if index.DefnId != token.DefnId || index.InstId != token.InstId {
+						indexes = append(indexes, index)
+					} else {
+						found = true
+						logging.Infof("Planner: Remove index (%v, %v) due to drop instance token.", index.GetDisplayName(), index.Bucket)
+					}
+				}
+				indexer.Indexes = indexes
+			}
+
+			if found {
+				replicaIdMap[token.DefnId][token.ReplicaId] = true
+			}
+		}
+	}
+
+	return nil
+}
+
+//
+// get index numReplica
+//
+func getIndexNumReplica(clusterUrl string, plan *Plan) error {
+
+	cinfo, err := clusterInfoCache(clusterUrl)
+	if err != nil {
+		logging.Errorf("Planner::getIndexNumReplica: Error from connecting to cluster at %v. Error = %v", clusterUrl, err)
+		return err
+	}
+
+	clusterVersion := cinfo.GetClusterVersion()
+	if clusterVersion < common.INDEXER_65_VERSION {
+		logging.Infof("Planner::Cluster in upgrade.  Skip fetching drop instance token.")
+		return nil
+	}
+
+	// find all nodes that has a index http service
+	nids := cinfo.GetNodesByServiceType(common.INDEX_HTTP_SERVICE)
+
+	if len(nids) == 0 {
+		return errors.New("No indexing service available.")
+	}
+
+	numReplicas := make(map[common.IndexDefnId]common.Counter)
+
+	for _, nid := range nids {
+
+		// Find the indexer host name
+		nodeId, err := getIndexerHost(cinfo, nid)
+		if err != nil {
+			logging.Errorf("Planner::getIndexNumReplica: Error from initializing indexer node. Error = %v", err)
+			return err
+		}
+
+		// look up the corresponding indexer object based on the nodeId
+		indexer := findIndexerByNodeId(plan.Placement, nodeId)
+		if indexer == nil {
+			logging.Verbosef("Planner::getIndexNumReplica: Skip indexer %v since it is not in the included list")
+			continue
+		}
+
+		// obtain the admin port for the indexer node
+		addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE)
+		if err != nil {
+			logging.Errorf("Planner::getIndexNumReplica: Error from getting service address for node %v. Error = %v", nodeId, err)
+			return err
+		}
+
+		localNumReplicas, err := getLocalNumReplicas(addr)
+		if err != nil {
+			logging.Errorf("Planner::getIndexNumReplica: Error from reading index num replica for node %v. Error = %v", nodeId, err)
+			return err
+		}
+
+		for defnId, numReplica1 := range localNumReplicas {
+			if numReplica2, ok := numReplicas[defnId]; !ok {
+				numReplicas[defnId] = numReplica1
+			} else {
+				newNumReplica, merged, err := numReplica2.MergeWith(numReplica1)
+				if err != nil {
+					logging.Errorf("Planner::getIndexNumReplica: Error merging num replica for node %v. Error = %v", nodeId, err)
+					return err
+				}
+				if merged {
+					numReplicas[defnId] = newNumReplica
+				}
+			}
+		}
+	}
+
+	for _, indexer := range plan.Placement {
+		for _, index := range indexer.Indexes {
+			cached := numReplicas[index.DefnId]
+			index.Instance.Defn.NumReplica, _ = cached.Value()
+			index.Instance.Defn.NumReplica2 = cached
+		}
+	}
+
+	return nil
+}
+
+//
+// Generate a map for replicaId
+//
+func generateReplicaMap(indexers []*IndexerNode) map[common.IndexDefnId]map[int]bool {
+
+	result := make(map[common.IndexDefnId]map[int]bool)
+	for _, indexer := range indexers {
+		for _, index := range indexer.Indexes {
+			if _, ok := result[index.DefnId]; !ok {
+				result[index.DefnId] = make(map[int]bool)
+			}
+
+			result[index.DefnId][index.Instance.ReplicaId] = true
+		}
+	}
+
+	return result
 }

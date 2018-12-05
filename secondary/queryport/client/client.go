@@ -183,6 +183,9 @@ type BridgeAccessor interface {
 	// MoveIndex to move a set of indexes to different node.
 	MoveIndex(defnID uint64, with map[string]interface{}) error
 
+	// AlterReplicaCount to change replica count of index
+	AlterReplicaCount(defnID uint64, with map[string]interface{}) error
+
 	// DropIndex to drop index specified by `defnID`.
 	// - if index is in deferred build state, it shall be removed
 	//   from deferred list.
@@ -558,6 +561,18 @@ func (c *GsiClient) MoveIndex(defnID uint64, with map[string]interface{}) error 
 	begin := time.Now()
 	err := c.bridge.MoveIndex(defnID, with)
 	fmsg := "MoveIndex %v - elapsed(%v), err(%v)"
+	logging.Infof(fmsg, defnID, time.Since(begin), err)
+	return err
+}
+
+// AlterReplicaCount implements BridgeAccessor{} interface.
+func (c *GsiClient) AlterReplicaCount(defnID uint64, with map[string]interface{}) error {
+	if c.bridge == nil {
+		return ErrorClientUninitialized
+	}
+	begin := time.Now()
+	err := c.bridge.AlterReplicaCount(defnID, with)
+	fmsg := "AlterReplicaCount %v - elapsed(%v), err(%v)"
 	logging.Infof(fmsg, defnID, time.Since(begin), err)
 	return err
 }

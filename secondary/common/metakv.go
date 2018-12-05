@@ -80,6 +80,33 @@ func MetakvRecurciveDel(dirpath string) error {
 	return err
 }
 
+func MetakvList(dirpath string) ([]string, error) {
+
+	if len(dirpath) == 0 {
+		return nil, fmt.Errorf("Empty metakv path")
+	}
+
+	if string(dirpath[len(dirpath)-1]) != "/" {
+		dirpath = fmt.Sprintf("%v/", dirpath)
+	}
+
+	entries, err := metakv.ListAllChildren(dirpath)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(entries) == 0 {
+		return nil, nil
+	}
+
+	var result []string
+	for _, entry := range entries {
+		result = append(result, entry.Path)
+	}
+
+	return result, nil
+}
+
 func MetakvBigValueSet(path string, v interface{}) error {
 
 	if len(path) == 0 {

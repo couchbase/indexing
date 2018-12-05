@@ -39,6 +39,9 @@ const DeleteDDLCommandTokenPath = CommandMetakvDir + DeleteDDLCommandTokenTag
 const BuildDDLCommandTokenTag = "build/"
 const BuildDDLCommandTokenPath = CommandMetakvDir + BuildDDLCommandTokenTag
 
+const DropInstanceDDLCommandTokenTag = "dropInstance/"
+const DropInstanceDDLCommandTokenPath = CommandMetakvDir + DropInstanceDDLCommandTokenTag
+
 const IndexerVersionTokenTag = "versionToken"
 const IndexerVersionTokenPath = InfoMetakvDir + IndexerVersionTokenTag
 
@@ -64,6 +67,11 @@ type CreateCommandToken struct {
 	DefnId      c.IndexDefnId
 	BucketUUID  string
 	Definitions map[c.IndexerId][]c.IndexDefn
+	RequestId   uint64
+}
+
+type DeleteCommandTokenList struct {
+	Tokens []DeleteCommandToken
 }
 
 type DeleteCommandToken struct {
@@ -78,6 +86,17 @@ type BuildCommandToken struct {
 	DefnId c.IndexDefnId
 }
 
+type DropInstanceCommandTokenList struct {
+	Tokens []DropInstanceCommandToken
+}
+
+type DropInstanceCommandToken struct {
+	DefnId    c.IndexDefnId
+	InstId    c.IndexInstId
+	ReplicaId int
+	Defn      c.IndexDefn
+}
+
 type IndexerVersionToken struct {
 	Version uint64
 }
@@ -89,15 +108,17 @@ type IndexerStorageModeToken struct {
 }
 
 type CommandListener struct {
-	doCreate     bool
-	doBuild      bool
-	doDelete     bool
-	createTokens map[string]*CreateCommandToken
-	buildTokens  map[string]*BuildCommandToken
-	deleteTokens map[string]*DeleteCommandToken
-	mutex        sync.Mutex
-	cancelCh     chan struct{}
-	donech       chan bool
+	doCreate       bool
+	doBuild        bool
+	doDelete       bool
+	doDropInst     bool
+	createTokens   map[string]*CreateCommandToken
+	buildTokens    map[string]*BuildCommandToken
+	deleteTokens   map[string]*DeleteCommandToken
+	dropInstTokens map[string]*DropInstanceCommandToken
+	mutex          sync.Mutex
+	cancelCh       chan struct{}
+	donech         chan bool
 }
 
 //////////////////////////////////////////////////////////////
@@ -107,15 +128,21 @@ type CommandListener struct {
 //
 // Generate a token to metakv for recovery purpose
 //
-func PostCreateCommandToken(defnId c.IndexDefnId, bucketUUID string, defns map[c.IndexerId][]c.IndexDefn) error {
+func PostCreateCommandToken(defnId c.IndexDefnId, bucketUUID string, requestId uint64, defns map[c.IndexerId][]c.IndexDefn) error {
 
 	commandToken := &CreateCommandToken{
 		DefnId:      defnId,
 		BucketUUID:  bucketUUID,
 		Definitions: defns,
+		RequestId:   requestId,
 	}
 
-	id := fmt.Sprintf("%v", defnId)
+	var id string
+	if requestId == 0 {
+		id = fmt.Sprintf("%v", defnId)
+	} else {
+		id = fmt.Sprintf("%v/%v", defnId, requestId)
+	}
 	return c.MetakvBigValueSet(CreateDDLCommandTokenPath+id, commandToken)
 }
 
@@ -124,32 +151,60 @@ func PostCreateCommandToken(defnId c.IndexDefnId, bucketUUID string, defns map[c
 //
 func CreateCommandTokenExist(defnId c.IndexDefnId) (bool, error) {
 
-	token, err := FetchCreateCommandToken(defnId)
+	id := fmt.Sprintf("%v", defnId)
+	paths, err := c.MetakvBigValueList(CreateDDLCommandTokenPath + id)
 	if err != nil {
 		return false, err
 	}
 
-	return token != nil, nil
+	return len(paths) != 0, nil
 }
 
 //
-// Does token exist? Return true only if token exist and there is no error.
+// Delete create command token
 //
-func DeleteCreateCommandToken(defnId c.IndexDefnId) error {
+func DeleteCreateCommandToken(defnId c.IndexDefnId, requestId uint64) error {
 
-	id := fmt.Sprintf("%v", defnId)
+	var id string
+	if requestId == 0 {
+		id = fmt.Sprintf("%v", defnId)
+	} else {
+		id = fmt.Sprintf("%v/%v", defnId, requestId)
+	}
 	return c.MetakvBigValueDel(CreateDDLCommandTokenPath + id)
+}
+
+//
+// Delete all create command token
+//
+func DeleteAllCreateCommandToken(defnId c.IndexDefnId) error {
+
+	tokens, err := ListAndFetchCreateCommandToken(defnId)
+	if err != nil {
+		return err
+	}
+
+	for _, token := range tokens {
+		DeleteCreateCommandToken(token.DefnId, token.RequestId)
+	}
+
+	return nil
 }
 
 //
 // Fetch create command token
 // This function take metakv path
 //
-func FetchCreateCommandToken(defnId c.IndexDefnId) (*CreateCommandToken, error) {
+func FetchCreateCommandToken(defnId c.IndexDefnId, requestId uint64) (*CreateCommandToken, error) {
 
 	token := &CreateCommandToken{}
 
-	id := fmt.Sprintf("%v", defnId)
+	var id string
+	if requestId == 0 {
+		id = fmt.Sprintf("%v", defnId)
+	} else {
+		id = fmt.Sprintf("%v/%v", defnId, requestId)
+	}
 	exists, err := c.MetakvBigValueGet(CreateDDLCommandTokenPath+id, token)
 	if err != nil {
 		return nil, err
@@ -172,25 +227,82 @@ func ListCreateCommandToken() ([]string, error) {
 	return paths, nil
 }
 
-func GetDefnIdFromCreateCommandTokenPath(path string) (c.IndexDefnId, error) {
+func ListAndFetchCreateCommandToken(defnId c.IndexDefnId) ([]*CreateCommandToken, error) {
+
+	id := fmt.Sprintf("%v", defnId)
+	paths, err := c.MetakvBigValueList(CreateDDLCommandTokenPath + id)
+	if err != nil {
+		return nil, err
+	}
+
+	var result []*CreateCommandToken
+	if len(paths) > 0 {
+		result = make([]*CreateCommandToken, 0, len(paths))
+		for _, path := range paths {
+			token := &CreateCommandToken{}
+			exists, err := c.MetakvBigValueGet(path, token)
+			if err != nil {
+				logging.Errorf("ListAndFetchCreateCommandToken: path %v err %v", path, err)
+				return nil, err
+			}
+
+			if exists {
+				result = append(result, token)
+			}
+		}
+	}
+
+	return result, nil
+}
+
+func GetDefnIdFromCreateCommandTokenPath(path string) (c.IndexDefnId, uint64, error) {
 
 	if len(path) <= len(CreateDDLCommandTokenPath) {
-		return c.IndexDefnId(0), fmt.Errorf("Invalid path %v", path)
+		return c.IndexDefnId(0), 0, fmt.Errorf("Invalid path %v", path)
 	}
 
 	path = path[len(CreateDDLCommandTokenPath):]
 
-	loc := strings.LastIndex(path, "/")
-	if loc != -1 {
-		path = path[:loc]
+	// Get DefnId
+	var defnId c.IndexDefnId
+	if len(path) != 0 {
+		var defnIdStr string
+
+		if loc := strings.Index(path, "/"); loc != -1 {
+			defnIdStr = path[:loc]
+
+			if loc != len(path)-1 {
+				path = path[loc+1:]
+			} else {
+				path = ""
+			}
+		} else {
+			defnIdStr = path
+		}
+
+		temp, err := strconv.ParseUint(defnIdStr, 10, 64)
+		if err != nil {
+			return c.IndexDefnId(0), 0, err
+		}
+		defnId = c.IndexDefnId(temp)
 	}
 
-	id, err := strconv.ParseUint(path, 10, 64)
-	if err != nil {
-		return c.IndexDefnId(0), err
+	// Get requestId
+	var requestId uint64
+	if len(path) != 0 {
+
+		if loc := strings.Index(path, "/"); loc != -1 {
+			path = path[:loc]
+		}
+
+		temp, err := strconv.ParseUint(path, 10, 64)
+		if err != nil {
+			return c.IndexDefnId(0), 0, err
+		}
+		requestId = uint64(temp)
 	}
 
-	return c.IndexDefnId(id), nil
+	return c.IndexDefnId(defnId), requestId, nil
 }
 
 //
@@ -248,6 +360,36 @@ func DeleteCommandTokenExist(defnId c.IndexDefnId) (bool, error) {
 }
 
 //
+// Return the list of delete token
+//
+func ListDeleteCommandToken() ([]*DeleteCommandToken, error) {
+
+	paths, err := c.MetakvList(DeleteDDLCommandTokenPath)
+	if err != nil {
+		return nil, err
+	}
+
+	var result []*DeleteCommandToken
+
+	if len(paths) != 0 {
+		result = make([]*DeleteCommandToken, 0, len(paths))
+		for _, path := range paths {
+			token := &DeleteCommandToken{}
+			exist, err := c.MetakvGet(path, token)
+			if err != nil {
+				return nil, err
+			}
+
+			if exist {
+				result = append(result, token)
+			}
+		}
+	}
+
+	return result, nil
+}
+
+//
 // Unmarshall
 //
 func UnmarshallDeleteCommandToken(data []byte) (*DeleteCommandToken, error) {
@@ -261,6 +403,26 @@ func UnmarshallDeleteCommandToken(data []byte) (*DeleteCommandToken, error) {
 }
 
 func MarshallDeleteCommandToken(r *DeleteCommandToken) ([]byte, error) {
+
+	buf, err := json.Marshal(&r)
+	if err != nil {
+		return nil, err
+	}
+
+	return buf, nil
+}
+
+func UnmarshallDeleteCommandTokenList(data []byte) (*DeleteCommandTokenList, error) {
+
+	r := new(DeleteCommandTokenList)
+	if err := json.Unmarshal(data, r); err != nil {
+		return nil, err
+	}
+
+	return r, nil
+}
+
+func MarshallDeleteCommandTokenList(r *DeleteCommandTokenList) ([]byte, error) {
 
 	buf, err := json.Marshal(&r)
 	if err != nil {
@@ -318,6 +480,141 @@ func UnmarshallBuildCommandToken(data []byte) (*BuildCommandToken, error) {
 // Marshall
 //
 func MarshallBuildCommandToken(r *BuildCommandToken) ([]byte, error) {
+
+	buf, err := json.Marshal(&r)
+	if err != nil {
+		return nil, err
+	}
+
+	return buf, nil
+}
+
+//////////////////////////////////////////////////////////////
+// Drop Instance Token Management
+//////////////////////////////////////////////////////////////
+
+//
+// Generate a token to metakv for recovery purpose
+//
+func PostDropInstanceCommandToken(defnId c.IndexDefnId, instId c.IndexInstId, replicaId int, defn c.IndexDefn) error {
+
+	commandToken := &DropInstanceCommandToken{
+		DefnId:    defnId,
+		InstId:    instId,
+		ReplicaId: replicaId,
+		Defn:      defn,
+	}
+
+	id := fmt.Sprintf("%v/%v", defnId, instId)
+	if err := c.MetakvBigValueSet(DropInstanceDDLCommandTokenPath+id, commandToken); err != nil {
+		return errors.New(fmt.Sprintf("Fail to drop index instance.  Internal Error = %v", err))
+	}
+
+	return nil
+}
+
+//
+// Does token exist? Return true only if token exist and there is no error.
+//
+func DropInstanceCommandTokenExist(defnId c.IndexDefnId, instId c.IndexInstId) (bool, error) {
+
+	commandToken := &DropInstanceCommandToken{}
+	id := fmt.Sprintf("%v/%v", defnId, instId)
+	return c.MetakvBigValueGet(DropInstanceDDLCommandTokenPath+id, commandToken)
+}
+
+//
+// Return the list of drop instance command token for a given index
+//
+func ListAndFetchDropInstanceCommandToken(defnId c.IndexDefnId) ([]*DropInstanceCommandToken, error) {
+
+	id := fmt.Sprintf("%v/", defnId)
+	paths, err := c.MetakvBigValueList(DropInstanceDDLCommandTokenPath + id)
+	if err != nil {
+		return nil, err
+	}
+
+	var result []*DropInstanceCommandToken
+	if len(paths) > 0 {
+		result = make([]*DropInstanceCommandToken, 0, len(paths))
+		for _, path := range paths {
+			token := &DropInstanceCommandToken{}
+			exists, err := c.MetakvBigValueGet(path, token)
+			if err != nil {
+				logging.Errorf("ListDropInstanceCommandToken: path %v err %v", path, err)
+				return nil, err
+			}
+
+			if exists {
+				result = append(result, token)
+			}
+		}
+	}
+
+	return result, nil
+}
+
+func ListAndFetchAllDropInstanceCommandToken() ([]*DropInstanceCommandToken, error) {
+
+	paths, err := c.MetakvBigValueList(DropInstanceDDLCommandTokenPath)
+	if err != nil {
+		return nil, err
+	}
+
+	var result []*DropInstanceCommandToken
+	if len(paths) > 0 {
+		result = make([]*DropInstanceCommandToken, 0, len(paths))
+		for _, path := range paths {
+			token := &DropInstanceCommandToken{}
+			exists, err := c.MetakvBigValueGet(path, token)
+			if err != nil {
+				logging.Errorf("ListAllDropInstanceCommandToken: path %v err %v", path, err)
+				return nil, err
+			}
+
+			if exists {
+				result = append(result, token)
+			}
+		}
+	}
+
+	return result, nil
+}
+
+//
+// Unmarshall
+//
+func UnmarshallDropInstanceCommandToken(data []byte) (*DropInstanceCommandToken, error) {
+
+	r := new(DropInstanceCommandToken)
+	if err := json.Unmarshal(data, r); err != nil {
+		return nil, err
+	}
+
+	return r, nil
+}
+
+func MarshallDropInstanceCommandToken(r *DropInstanceCommandToken) ([]byte, error) {
+
+	buf, err := json.Marshal(&r)
+	if err != nil {
+		return nil, err
+	}
+
+	return buf, nil
+}
+
+func UnmarshallDropInstanceCommandTokenList(data []byte) (*DropInstanceCommandTokenList, error) {
+
+	r := new(DropInstanceCommandTokenList)
+	if err := json.Unmarshal(data, r); err != nil {
+		return nil, err
+	}
+
+	return r, nil
+}
+
+func MarshallDropInstanceCommandTokenList(r *DropInstanceCommandTokenList) ([]byte, error) {
 
 	buf, err := json.Marshal(&r)
 	if err != nil {
@@ -550,17 +847,19 @@ func MarshallIndexerStorageModeToken(r *IndexerStorageModeToken) ([]byte, error)
 // CommandListener
 //////////////////////////////////////////////////////////////
 
-func NewCommandListener(donech chan bool, doCreate bool, doBuild bool, doDelete bool) *CommandListener {
+func NewCommandListener(donech chan bool, doCreate bool, doBuild bool, doDelete bool, doDropInst bool) *CommandListener {
 
 	return &CommandListener{
-		doCreate:     doCreate,
-		doBuild:      doBuild,
-		doDelete:     doDelete,
-		createTokens: make(map[string]*CreateCommandToken),
-		buildTokens:  make(map[string]*BuildCommandToken),
-		deleteTokens: make(map[string]*DeleteCommandToken),
-		cancelCh:     make(chan struct{}),
-		donech:       donech,
+		doCreate:       doCreate,
+		doBuild:        doBuild,
+		doDelete:       doDelete,
+		doDropInst:     doDropInst,
+		createTokens:   make(map[string]*CreateCommandToken),
+		buildTokens:    make(map[string]*BuildCommandToken),
+		deleteTokens:   make(map[string]*DeleteCommandToken),
+		dropInstTokens: make(map[string]*DropInstanceCommandToken),
+		cancelCh:       make(chan struct{}),
+		donech:         donech,
 	}
 }
 
@@ -613,6 +912,25 @@ func (m *CommandListener) AddNewDeleteToken(path string, token *DeleteCommandTok
 	m.deleteTokens[path] = token
 }
 
+func (m *CommandListener) GetNewDropInstanceTokens() map[string]*DropInstanceCommandToken {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
+	if len(m.dropInstTokens) != 0 {
+		result := m.dropInstTokens
+		m.dropInstTokens = make(map[string]*DropInstanceCommandToken)
+		return result
+	}
+
+	return nil
+}
+
+func (m *CommandListener) AddNewDropInstanceToken(path string, token *DropInstanceCommandToken) {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	m.dropInstTokens[path] = token
+}
+
 func (m *CommandListener) GetNewBuildTokens() map[string]*BuildCommandToken {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
@@ -635,7 +953,10 @@ func (m *CommandListener) AddNewBuildToken(path string, token *BuildCommandToken
 func (m *CommandListener) ListenTokens() {
 
 	metaKVCallback := func(path string, value []byte, rev interface{}) error {
-		if strings.Contains(path, DeleteDDLCommandTokenPath) {
+		if strings.Contains(path, DropInstanceDDLCommandTokenPath) {
+			m.handleNewDropInstanceCommandToken(path, value)
+
+		} else if strings.Contains(path, DeleteDDLCommandTokenPath) {
 			m.handleNewDeleteCommandToken(path, value)
 
 		} else if strings.Contains(path, BuildDDLCommandTokenPath) {
@@ -678,13 +999,13 @@ func (m *CommandListener) handleNewCreateCommandToken(path string, value []byte)
 		return
 	}
 
-	defnId, err := GetDefnIdFromCreateCommandTokenPath(path)
+	defnId, requestId, err := GetDefnIdFromCreateCommandTokenPath(path)
 	if err != nil {
 		logging.Warnf("CommandListener: Failed to process create index token.  Skip %v.  Internal Error = %v.", path, err)
 		return
 	}
 
-	token, err := FetchCreateCommandToken(defnId)
+	token, err := FetchCreateCommandToken(defnId, requestId)
 	if err != nil {
 		logging.Warnf("CommandListener: Failed to process create index token.  Skip %v.  Internal Error = %v.", path, err)
 		return
@@ -733,4 +1054,24 @@ func (m *CommandListener) handleNewDeleteCommandToken(path string, value []byte)
 	}
 
 	m.AddNewDeleteToken(path, token)
+}
+
+func (m *CommandListener) handleNewDropInstanceCommandToken(path string, value []byte) {
+
+	if !m.doDropInst {
+		return
+	}
+
+	if value == nil {
+		delete(m.dropInstTokens, path)
+		return
+	}
+
+	token, err := UnmarshallDropInstanceCommandToken(value)
+	if err != nil {
+		logging.Warnf("CommandListener: Failed to process drop index instance token.  Skp %v.  Internal Error = %v.", path, err)
+		return
+	}
+
+	m.AddNewDropInstanceToken(path, token)
 }
