@@ -95,6 +95,8 @@ type plasmaSlice struct {
 
 	isPersistorActive int32
 
+	lastRollbackTs *common.TsVbuuid
+
 	// Array processing
 	arrayExprPosition int
 	isArrayDistinct   bool
@@ -1213,6 +1215,10 @@ func (mdb *plasmaSlice) Rollback(o SnapshotInfo) error {
 		mdb.readers <- readers[i]
 	}
 
+	if err == nil {
+		mdb.lastRollbackTs = o.Timestamp()
+	}
+
 	return err
 }
 
@@ -1258,7 +1264,13 @@ func (mdb *plasmaSlice) RollbackToZero() error {
 
 	mdb.resetStores()
 
+	mdb.lastRollbackTs = nil
+
 	return nil
+}
+
+func (mdb *plasmaSlice) LastRollbackTs() *common.TsVbuuid {
+	return mdb.lastRollbackTs
 }
 
 //slice insert/delete methods are async. There

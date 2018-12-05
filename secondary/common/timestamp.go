@@ -118,6 +118,15 @@ func (ts *TsVbuuid) IsEpoch() bool {
 	return true
 }
 
+func (ts *TsVbuuid) HasZeroSeqNum() bool {
+	for _, seqno := range ts.Seqnos {
+		if seqno == 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // CheckVbuuids will check whether vbuuids in timestamp `ts` is same
 // as that of `other`.
 func (ts *TsVbuuid) CheckCrc64(other *TsVbuuid) bool {
