@@ -620,7 +620,7 @@ func (feed *DcpFeed) doDcpOpen(
 		rq := &transport.MCRequest{
 			Opcode: transport.DCP_CONTROL,
 			Key:    []byte("set_noop_interval"),
-			Body:   []byte("120"),
+			Body:   []byte("20"),
 		}
 		if err := feed.conn.Transmit(rq); err != nil {
 			fmsg := "%v ##%x doDcpOpen.Transmit(set_noop_interval): %v"
