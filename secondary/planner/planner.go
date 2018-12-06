@@ -1184,7 +1184,7 @@ func (p *SAPlanner) addReplicaIfNecessary(s *Solution) {
 
 	// Check to see if it is needed to add replica
 	for _, indexer := range s.Placement {
-		addCandidates := make(map[*IndexUsage]*IndexerNode)
+		addCandidates := make(map[*IndexUsage][]*IndexerNode)
 
 		for _, index := range indexer.Indexes {
 			// If the number of replica in cluster is smaller than the desired number
@@ -1195,13 +1195,13 @@ func (p *SAPlanner) addReplicaIfNecessary(s *Solution) {
 			if index.Instance != nil && int(index.Instance.Defn.NumReplica+1) > numReplica &&
 				numReplica < numLiveNode && !index.pendingDelete {
 
-				target := s.FindIndexerWithNoReplica(index)
-				if target == nil && !indexer.ExcludeAny(s) {
-					target = indexer
+				targets := s.FindIndexerWithNoReplica(index)
+				if len(targets) == 0 && !indexer.ExcludeAny(s) {
+					targets = []*IndexerNode{indexer}
 				}
 
-				if target != nil {
-					addCandidates[index] = target
+				if len(targets) != 0 {
+					addCandidates[index] = targets
 				}
 			}
 		}
@@ -1209,12 +1209,15 @@ func (p *SAPlanner) addReplicaIfNecessary(s *Solution) {
 		if len(addCandidates) != 0 {
 			clonedCandidates := ([]*IndexUsage)(nil)
 
-			for index, indexer := range addCandidates {
+			for index, indexers := range addCandidates {
 				numReplica := s.findNumReplica(index)
 				missing := s.findMissingReplica(index)
 
 				for replicaId, instId := range missing {
-					if numReplica < numLiveNode {
+					if numReplica < numLiveNode && len(indexers) != 0 {
+
+						indexer := indexers[0]
+						indexers = indexers[1:]
 
 						if index.Instance != nil {
 
@@ -2539,8 +2542,9 @@ func (s *Solution) FindIndexerWithReplica(name string, bucket string, partnId co
 // Find the indexer node that does not contain the replica
 // This ignores any indexer that is deleted or cannot rebalance
 //
-func (s *Solution) FindIndexerWithNoReplica(source *IndexUsage) *IndexerNode {
+func (s *Solution) FindIndexerWithNoReplica(source *IndexUsage) []*IndexerNode {
 
+	result := make([]*IndexerNode, 0, len(s.Placement))
 	for _, indexer := range s.Placement {
 		if indexer.IsDeleted() || indexer.ExcludeAny(s) {
 			continue
@@ -2555,11 +2559,11 @@ func (s *Solution) FindIndexerWithNoReplica(source *IndexUsage) *IndexerNode {
 		}
 
 		if !found {
-			return indexer
+			result = append(result, indexer)
 		}
 	}
 
-	return nil
+	return result
 }
 
 //
