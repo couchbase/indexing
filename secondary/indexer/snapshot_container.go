@@ -73,6 +73,17 @@ func (sc *snapshotInfoContainer) RemoveOldest() error {
 	return nil
 }
 
+//RemoveLatest removes the latest snapshot from container.
+func (sc *snapshotInfoContainer) RemoveLatest() error {
+	e := sc.snapshotList.Front()
+
+	if e != nil {
+		sc.snapshotList.Remove(e)
+	}
+
+	return nil
+}
+
 //RemoveRecentThanTS discards all the snapshots from container
 //which are more recent than the given timestamp. The snaphots
 //being removed are closed as well.

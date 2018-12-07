@@ -55,6 +55,9 @@ type IndexWriter interface {
 	//Rollback to initial state
 	RollbackToZero() error
 
+	//Return TS for last rollback operation
+	LastRollbackTs() *common.TsVbuuid
+
 	// Statistics used for compaction trigger
 	Statistics() (StorageStatistics, error)
 
