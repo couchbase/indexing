@@ -361,6 +361,19 @@ func main() {
 			logging.Infof("Transfer Token Index InstId : %v", token.InstId)
 		}
 
+	} else if gCommand == "retrieve" {
+
+		config := planner.DefaultRunConfig()
+		config.Detail = logging.IsEnabled(logging.Info)
+		config.Resize = false
+		config.Output = gOutput
+
+		_, err := planner.ExecuteRetrieveWithOptions(plan, config)
+		if err != nil {
+			logging.Fatalf("Planner error: %v.", err)
+			return
+		}
+
 	} else {
 		logging.Fatalf("Invalid argument: Invalid value for 'command' : %v", gCommand)
 		usage()
