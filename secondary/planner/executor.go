@@ -369,6 +369,35 @@ func verifyDuplicateIndex(plan *Plan, indexSpecs []*IndexSpec) error {
 	return nil
 }
 
+func ExecuteRetrieve(clusterUrl string, nodes []string, output string) (*Solution, error) {
+
+	plan, err := RetrievePlanFromCluster(clusterUrl, nodes)
+	if err != nil {
+		return nil, errors.New(fmt.Sprintf("Unable to read index layout from cluster %v. err = %s", clusterUrl, err))
+	}
+
+	config := DefaultRunConfig()
+	config.Detail = logging.IsEnabled(logging.Info)
+	config.Resize = false
+	config.Output = output
+
+	return ExecuteRetrieveWithOptions(plan, config)
+}
+
+func ExecuteRetrieveWithOptions(plan *Plan, config *RunConfig) (*Solution, error) {
+
+	sizing := newGeneralSizingMethod()
+	solution, constraint, _, _, _ := solutionFromPlan(CommandRebalance, config, sizing, plan)
+
+	if config.Output != "" {
+		if err := savePlan(config.Output, solution, constraint); err != nil {
+			return nil, err
+		}
+	}
+
+	return solution, nil
+}
+
 //////////////////////////////////////////////////////////////
 // Execution
 /////////////////////////////////////////////////////////////
