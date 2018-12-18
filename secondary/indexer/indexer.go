@@ -453,11 +453,17 @@ func (idx *indexer) initHttpServer() {
 					return
 				}
 
+				cbauthTLScfg, err1 := cbauth.GetTLSConfig()
+				if err1 != nil {
+					logging.Errorf("Error in getting cbauth tls config: %v", err1.Error())
+					return
+				}
+
 				config := &tls.Config{
 					Certificates:             []tls.Certificate{cert},
-					CipherSuites:             []uint16{tls.TLS_RSA_WITH_AES_256_CBC_SHA},
-					MinVersion:               tls.VersionTLS12,
-					PreferServerCipherSuites: true,
+					CipherSuites:             cbauthTLScfg.CipherSuites,
+					MinVersion:               cbauthTLScfg.MinVersion,
+					PreferServerCipherSuites: cbauthTLScfg.PreferServerCipherSuites,
 					ClientAuth:               clientAuthType,
 				}
 
