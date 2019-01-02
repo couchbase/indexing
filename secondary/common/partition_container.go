@@ -34,6 +34,7 @@ type PartitionContainer interface {
 	GetNumPartitions() int
 
 	Clone() PartitionContainer
+	CheckPartitionExists(PartitionId) bool
 }
 
 //PartitionDefn is a generic interface which defines

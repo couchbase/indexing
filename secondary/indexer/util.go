@@ -13,6 +13,8 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/couchbase/indexing/secondary/common"
@@ -75,6 +77,42 @@ func IndexPath(inst *common.IndexInst, partnId common.PartitionId, sliceId Slice
 		instId = inst.RealInstId
 	}
 	return fmt.Sprintf("%s_%s_%d_%d.index", inst.Defn.Bucket, inst.Defn.Name, instId, partnId)
+}
+
+// This has to follow the pattern in IndexPath function defined above.
+func GetIndexPathPattern() string {
+	return "*_*_*_*.index"
+}
+
+// This has to follow the pattern in IndexPath function defined above.
+func GetInstIdPartnIdFromPath(idxPath string) (common.IndexInstId,
+	common.PartitionId, error) {
+
+	pathComponents := strings.Split(idxPath, "_")
+	if len(pathComponents) < 4 {
+		err := errors.New(fmt.Sprintf("Malformed index path %v", idxPath))
+		return common.IndexInstId(0), common.PartitionId(0), err
+	}
+
+	strInstId := pathComponents[len(pathComponents)-2]
+	instId, err := strconv.ParseUint(strInstId, 10, 64)
+	if err != nil {
+		return common.IndexInstId(0), common.PartitionId(0), err
+	}
+
+	partnComponents := strings.Split(pathComponents[len(pathComponents)-1], ".")
+	if len(partnComponents) != 2 {
+		err := errors.New(fmt.Sprintf("Malformed index path %v", idxPath))
+		return common.IndexInstId(0), common.PartitionId(0), err
+	}
+
+	strPartnId := partnComponents[0]
+	partnId, err := strconv.ParseUint(strPartnId, 10, 64)
+	if err != nil {
+		return common.IndexInstId(0), common.PartitionId(0), err
+	}
+
+	return common.IndexInstId(instId), common.PartitionId(partnId), nil
 }
 
 func GetRealIndexInstId(inst *common.IndexInst) common.IndexInstId {

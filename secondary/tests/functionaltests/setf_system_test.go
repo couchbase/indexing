@@ -2,12 +2,7 @@ package functionaltests
 
 import (
 	"errors"
-	"log"
-	"strings"
-	"sync"
-	"testing"
-	"time"
-
+	"fmt"
 	c "github.com/couchbase/indexing/secondary/common"
 	qc "github.com/couchbase/indexing/secondary/queryport/client"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
@@ -17,6 +12,13 @@ import (
 	tv "github.com/couchbase/indexing/secondary/tests/framework/validation"
 	"github.com/couchbase/query/expression"
 	"github.com/couchbase/query/parser/n1ql"
+	"log"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
 )
 
 func TestBuildDeferredAnotherBuilding(t *testing.T) {
@@ -1384,6 +1386,149 @@ func SkipTestDeferFalse_DropIndexWhileBuilding(t *testing.T) {
 	} else {
 		log.Printf("Scan failed as expected with error: %v\n", e)
 	}
+}
+
+func getIndexerStorageDir(t *testing.T) string {
+	hosts, errHosts := secondaryindex.GetIndexerNodesHttpAddresses(indexManagementAddress)
+	FailTestIfError(errHosts, "Error in GetIndexerNodesHttpAddresses", t)
+
+	if len(hosts) > 1 {
+		// Just return from here, don't fail the test
+		log.Printf("Skipping TestOrphanIndexCleanup as number of hosts = %d\n", len(hosts))
+		return ""
+	}
+
+	indexStorageDir, errGetSetting := tc.GetIndexerSetting(hosts[0], "indexer.storage_dir",
+		clusterconfig.Username, clusterconfig.Password)
+	FailTestIfError(errGetSetting, "Error in GetIndexerSetting", t)
+
+	strIndexStorageDir := fmt.Sprintf("%v", indexStorageDir)
+	absIndexStorageDir, err1 := filepath.Abs(strIndexStorageDir)
+	FailTestIfError(err1, "Error while finding absolute path", t)
+
+	exists, _ := verifyPathExists(absIndexStorageDir)
+
+	if !exists {
+		// Just return from here, don't fail the test
+		log.Printf("Skipping TestOrphanIndexCleanup as indexStorageDir %v does not exists\n",
+			indexStorageDir)
+		return ""
+	}
+
+	return absIndexStorageDir
+}
+
+func TestOrphanIndexCleanup(t *testing.T) {
+	// Explicitly create orphan index folder.
+	// Restart the indexer
+	// Check if orphan index folder gets deleted.
+
+	absIndexStorageDir := getIndexerStorageDir(t)
+	if absIndexStorageDir == "" {
+		return
+	}
+
+	// Drop all existing secondary indexes.
+	e := secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+	FailTestIfError(e, "Error in DropAllSecondaryIndexes", t)
+	time.Sleep(10 * time.Second)
+
+	// Create a regular index - keep this index alive to verify that
+	// non-orphan indexes are not deleted.
+	err := secondaryindex.CreateSecondaryIndex("idx1_age_regular", "default", indexManagementAddress,
+		"", []string{"age"}, false, nil, false, 60, nil)
+	FailTestIfError(err, "Error in creating the index", t)
+
+	// One more regular index
+	err = secondaryindex.CreateSecondaryIndex("idx2_company_regular", "default", indexManagementAddress,
+		"", []string{"company"}, false, nil, false, 60, nil)
+	FailTestIfError(err, "Error in creating the index", t)
+
+	// Verify the index is queryable
+	_, err = secondaryindex.Range("idx1_age_regular", "default", indexScanAddress, []interface{}{35},
+		[]interface{}{40}, 1, false, defaultlimit, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in range scan", t)
+	log.Printf("Query on idx1_age_regular is successful\n")
+
+	_, err = secondaryindex.Range("idx2_company_regular", "default", indexScanAddress, []interface{}{"G"},
+		[]interface{}{"M"}, 1, false, defaultlimit, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in range scan", t)
+	log.Printf("Query on idx2_company_regular is successful\n")
+
+	// This is an implementation of IndexPath from indexer package.
+	idxPath := fmt.Sprintf("%s_%s_%d_%d.index", "dummy_bucket_name", "dummy_index_name",
+		c.IndexInstId(12345), 4)
+	idxFullPath := filepath.Join(absIndexStorageDir, idxPath)
+	err = os.MkdirAll(idxFullPath, 0755)
+	FailTestIfError(err, "Error creating dummy orphan index", t)
+
+	// restart the indexer
+	forceKillIndexer()
+
+	// Verify that the idexer has come up - and query on non-orphan index succeeds.
+	_, err = secondaryindex.Range("idx1_age_regular", "default", indexScanAddress, []interface{}{35},
+		[]interface{}{40}, 1, false, defaultlimit, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in range scan after indexer restart", t)
+	log.Printf("Query on idx1_age_regular is successful - after indexer restart.\n")
+
+	_, err = secondaryindex.Range("idx2_company_regular", "default", indexScanAddress, []interface{}{"G"},
+		[]interface{}{"M"}, 1, false, defaultlimit, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in range scan", t)
+	log.Printf("Query on idx2_company_regular is successful - after indexer restart.\n")
+
+	err = verifyDeletedPath(idxFullPath)
+	FailTestIfError(err, "Cleanup of orphan index did not happen", t)
+}
+
+func TestOrphanPartitionCleanup(t *testing.T) {
+	// Explicitly create orphan index folder.
+	// Restart the indexer
+	// Check if orphan index folder gets deleted.
+
+	if clusterconfig.IndexUsing == "forestdb" {
+		fmt.Println("Not running TestOrphanPartitionCleanup for forestdb")
+		return
+	}
+
+	absIndexStorageDir := getIndexerStorageDir(t)
+	if absIndexStorageDir == "" {
+		return
+	}
+
+	var err error
+	err = secondaryindex.CreateSecondaryIndex2("idx3_age_regular", "default", indexManagementAddress,
+		"", []string{"age"}, []bool{false}, false, nil, c.KEY, []string{"age"}, false, 60, nil)
+	FailTestIfError(err, "Error in creating the index", t)
+
+	// Verify the index is queryable
+	_, err = secondaryindex.Range("idx3_age_regular", "default", indexScanAddress, []interface{}{35},
+		[]interface{}{40}, 1, false, defaultlimit, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in range scan", t)
+
+	log.Printf("Query on idx3_age_regular is successful\n")
+
+	slicePath, err := tc.GetIndexSlicePath("idx3_age_regular", "default", absIndexStorageDir, c.PartitionId(1))
+	FailTestIfError(err, "Error in GetIndexSlicePath", t)
+
+	comps := strings.Split(slicePath, "_")
+	dummyPartnPath := strings.Join(comps[:len(comps)-1], "_")
+	dummyPartnPath += fmt.Sprintf("_%d.index", c.PartitionId(404))
+
+	err = os.MkdirAll(dummyPartnPath, 0755)
+	FailTestIfError(err, "Error creating dummy orphan partition", t)
+
+	// restart the indexer
+	forceKillIndexer()
+
+	// Verify that the idexer has come up - and query on non-orphan index succeeds.
+	_, err = secondaryindex.Range("idx3_age_regular", "default", indexScanAddress, []interface{}{35},
+		[]interface{}{40}, 1, false, defaultlimit, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in range scan after indexer restart", t)
+
+	log.Printf("Query on idx3_age_regular is successful - after indexer restart.\n")
+
+	err = verifyDeletedPath(dummyPartnPath)
+	FailTestIfError(err, "Cleanup of orphan partition did not happen", t)
 }
 
 func DropIndexThread(wg *sync.WaitGroup, t *testing.T, index, bucket string) {

@@ -145,6 +145,15 @@ func (pc *KeyPartitionContainer) GetPartitionById(id PartitionId) PartitionDefn 
 	}
 }
 
+// Check if partition with specified id exists
+func (pc *KeyPartitionContainer) CheckPartitionExists(id PartitionId) bool {
+	if _, ok := pc.PartitionMap[id]; ok {
+		return true
+	} else {
+		return false
+	}
+}
+
 //GetNumPartitions returns the number of partitions in this container
 func (pc *KeyPartitionContainer) GetNumPartitions() int {
 	return pc.NumPartitions
