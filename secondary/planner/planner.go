@@ -2173,6 +2173,7 @@ func (s *Solution) hasReplicaInServerGroup(u *IndexUsage, group string) bool {
 		for i := 0; i < numReplica; i++ {
 			if i != u.Instance.ReplicaId {
 				key := common.FormatIndexPartnDisplayName(u.Instance.Defn.Name, i, int(u.PartnId), true)
+				key = fmt.Sprintf("%v %v", key, u.Bucket)
 				if sg, ok := s.indexSGMap[key]; ok {
 					if sg == group {
 						return true
@@ -2208,6 +2209,7 @@ func (s *Solution) hasServerGroupWithNoReplica(u *IndexUsage) bool {
 		counts := make(map[string]bool)
 		for i := 0; i < numReplica; i++ {
 			key := common.FormatIndexPartnDisplayName(u.Instance.Defn.Name, i, int(u.PartnId), true)
+			key = fmt.Sprintf("%v %v", key, u.Bucket)
 			if group, ok := s.indexSGMap[key]; ok {
 				counts[group] = true
 			}
@@ -2347,6 +2349,7 @@ func (s *Solution) hasDeletedNodes() bool {
 //
 func (s *Solution) updateServerGroupMap(index *IndexUsage, indexer *IndexerNode) {
 	key := index.GetDisplayName()
+	key = fmt.Sprintf("%v %v", key, index.Bucket)
 	if indexer != nil {
 		s.indexSGMap[key] = indexer.ServerGroup
 	} else {
