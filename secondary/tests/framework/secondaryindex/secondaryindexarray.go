@@ -46,7 +46,7 @@ func ArrayIndex_Range(indexName, bucketName, server string, low, high []interfac
 			if err := response.Error(); err != nil {
 				scanErr = err
 				return false
-			} else if keys, pkeys, err := response.GetEntries(c.DATA_ENC_COLLATEJSON); err != nil {
+			} else if keys, pkeys, err := response.GetEntries(client.GetDataEncodingFormat()); err != nil {
 				scanErr = err
 				return false
 			} else {

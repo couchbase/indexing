@@ -35,7 +35,7 @@ func RangeWithClient(indexName, bucketName, server string, low, high []interface
 			if err := response.Error(); err != nil {
 				scanErr = err
 				return false
-			} else if keys, pkeys, err := response.GetEntries(c.DATA_ENC_COLLATEJSON); err != nil {
+			} else if keys, pkeys, err := response.GetEntries(client.GetDataEncodingFormat()); err != nil {
 				scanErr = err
 				return false
 			} else {
@@ -110,7 +110,7 @@ func Range(indexName, bucketName, server string, low, high []interface{}, inclus
 			if err := response.Error(); err != nil {
 				scanErr = err
 				return false
-			} else if keys, pkeys, err := response.GetEntries(c.DATA_ENC_COLLATEJSON); err != nil {
+			} else if keys, pkeys, err := response.GetEntries(client.GetDataEncodingFormat()); err != nil {
 				scanErr = err
 				return false
 			} else {
@@ -207,7 +207,7 @@ func Lookup(indexName, bucketName, server string, values []interface{},
 			if err := response.Error(); err != nil {
 				scanErr = err
 				return false
-			} else if keys, pkeys, err := response.GetEntries(c.DATA_ENC_COLLATEJSON); err != nil {
+			} else if keys, pkeys, err := response.GetEntries(client.GetDataEncodingFormat()); err != nil {
 				scanErr = err
 				return false
 			} else {
@@ -280,7 +280,7 @@ func ScanAll(indexName, bucketName, server string, limit int64,
 			if err := response.Error(); err != nil {
 				scanErr = err
 				return false
-			} else if keys, pkeys, err := response.GetEntries(c.DATA_ENC_COLLATEJSON); err != nil {
+			} else if keys, pkeys, err := response.GetEntries(client.GetDataEncodingFormat()); err != nil {
 				scanErr = err
 				return false
 			} else {
@@ -425,7 +425,7 @@ func Scans(indexName, bucketName, server string, scans qc.Scans, reverse, distin
 				scanErr = err
 				log.Printf("ScanError = %v ", scanErr)
 				return false
-			} else if keys, pkeys, err := response.GetEntries(c.DATA_ENC_COLLATEJSON); err != nil {
+			} else if keys, pkeys, err := response.GetEntries(client.GetDataEncodingFormat()); err != nil {
 				scanErr = err
 				log.Printf("ScanError = %v ", scanErr)
 				return false
@@ -549,7 +549,7 @@ func Scan3(indexName, bucketName, server string, scans qc.Scans, reverse, distin
 					scanErr = err
 					log.Printf("ScanError = %v ", scanErr)
 					return false
-				} else if keys, pkeys, err := response.GetEntries(c.DATA_ENC_COLLATEJSON); err != nil {
+				} else if keys, pkeys, err := response.GetEntries(client.GetDataEncodingFormat()); err != nil {
 					scanErr = err
 					log.Printf("ScanError = %v ", scanErr)
 					return false
@@ -596,7 +596,7 @@ func Scan3(indexName, bucketName, server string, scans qc.Scans, reverse, distin
 					scanErr = err
 					log.Printf("ScanError = %v ", scanErr)
 					return false
-				} else if keys, _, err := response.GetEntries(c.DATA_ENC_COLLATEJSON); err != nil {
+				} else if keys, _, err := response.GetEntries(client.GetDataEncodingFormat()); err != nil {
 					scanErr = err
 					log.Printf("ScanError = %v ", scanErr)
 					return false
