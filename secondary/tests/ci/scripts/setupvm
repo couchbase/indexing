@@ -1,0 +1,15 @@
+#!/bin/bash -xv
+set -e
+sudo rm -rf /var/www/lost+found
+sudo rm -rf /opt/build/lost+found
+sudo cp -r ~admin/xvdb/.htaccess /var/www/
+sudo cp -r ~admin/xvdb/var/www/* /var/www/
+sudo chown -r buildbot.buildbot /var/www
+sudo chown -r buildbot.buildbot /opt/build
+if grep -qs CCACHE_DIR ~/.profile; then
+  echo ccache already setup
+else
+  echo 'export PATH="/usr/lib/ccache:$PATH"' >> ~/.profile
+  echo 'export CCACHE_DIR=/opt/.ccache' >> ~/.profile
+  echo 'max_size = 12G' >> /opt/.ccache/ccache.conf
+fi

@@ -1,2 +1,3 @@
-xdcr.uniXDCR.unidirectional.load_with_ops
-xdcr.uniXDCR.unidirectional.load_with_failover
+TestRetainDeleteXATTRBinaryDocs
+github.com/couchbase/indexing/secondary/tests/functionaltests
+
