@@ -446,27 +446,44 @@ loop:
 			if dataEncFmt == c.DATA_ENC_COLLATEJSON {
 				sk = row
 			} else if dataEncFmt == c.DATA_ENC_JSON {
-				sk, _ = jsonEncoder.Decode(row, t)
+				sk, err = jsonEncoder.Decode(row, t)
+				if err != nil {
+					err = fmt.Errorf("Collatejson decode error: %v", err)
+					l.Errorf("Error (%v) in Decode for row %v, "+
+						"req = %s", err, row, d.p.req)
+					d.CloseWithError(err)
+					break loop
+				}
 			} else {
 				err = c.ErrUnexpectedDataEncFmt
 				d.CloseWithError(err)
-				break
+				break loop
 			}
 		} else if d.p.req.isPrimary {
-			sk, docid = piSplitEntry(row, t)
+			sk, docid, err = piSplitEntry(row, t)
+			if err != nil {
+				d.CloseWithError(err)
+				break loop
+			}
 		} else {
 			if dataEncFmt == c.DATA_ENC_COLLATEJSON {
 				sk, docid, err = siSplitEntryCJson(row)
 				if err != nil {
 					d.CloseWithError(err)
-					break
+					break loop
 				}
 			} else if dataEncFmt == c.DATA_ENC_JSON {
-				sk, docid, _ = siSplitEntry(row, t)
+				sk, docid, _, err = siSplitEntry(row, t)
+				if err != nil {
+					l.Errorf("Error (%v) in siSplitEntry for row %v, "+
+						"req = %s", err, row, d.p.req)
+					d.CloseWithError(err)
+					break loop
+				}
 			} else {
 				err = c.ErrUnexpectedDataEncFmt
 				d.CloseWithError(err)
-				break
+				break loop
 			}
 		}
 
@@ -535,22 +552,31 @@ loop:
 	return err
 }
 
-func piSplitEntry(entry []byte, tmp []byte) ([]byte, []byte) {
+func piSplitEntry(entry []byte, tmp []byte) ([]byte, []byte, error) {
 	e := primaryIndexEntry(entry)
 	sk, err := e.ReadSecKey(tmp)
-	c.CrashOnError(err)
+	if err != nil {
+		return nil, nil, err
+	}
 	docid, err := e.ReadDocId(sk)
-	return sk, docid[len(sk):]
+	if err != nil {
+		return nil, nil, err
+	}
+	return sk, docid[len(sk):], nil
 }
 
-func siSplitEntry(entry []byte, tmp []byte) ([]byte, []byte, int) {
+func siSplitEntry(entry []byte, tmp []byte) ([]byte, []byte, int, error) {
 	e := secondaryIndexEntry(entry)
 	sk, err := e.ReadSecKey(tmp)
-	c.CrashOnError(err)
+	if err != nil {
+		return nil, nil, 0, err
+	}
 	docid, err := e.ReadDocId(sk)
-	c.CrashOnError(err)
+	if err != nil {
+		return nil, nil, 0, err
+	}
 	count := e.Count()
-	return sk, docid[len(sk):], count
+	return sk, docid[len(sk):], count, nil
 }
 
 func siSplitEntryCJson(entry []byte) ([]byte, []byte, error) {

@@ -250,6 +250,7 @@ func (e secondaryIndexEntry) ReadSecKey(buf []byte) ([]byte, error) {
 	}
 
 	if buf, err = jsonEncoder.Decode(encoded, buf); err != nil {
+		err = fmt.Errorf("Collatejson decode error: %v", err)
 		return nil, err
 	}
 	return buf, nil
