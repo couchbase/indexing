@@ -21,7 +21,9 @@ IF (APPLE)
 ENDIF ()
 
 IF (WIN32)
-  SET (LDFLAGS "${LDFLAGS} -linkmode internal")
+   if("${MSVC_VERSION}" LESS 1910)
+      SET (LDFLAGS "${LDFLAGS} -linkmode internal")
+   endif()
 ENDIF ()
 
 GET_FILENAME_COMPONENT (CURL_LIBRARY_DIR "${CURL_LIBRARIES}" DIRECTORY)
