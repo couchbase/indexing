@@ -52,6 +52,7 @@ type VbucketWorker struct {
 	mutChanSize int
 
 	encodeBuf []byte
+	meta      map[string]interface{}
 }
 
 // NewVbucketWorker creates a new routine to handle this vbucket stream.
@@ -81,6 +82,7 @@ func NewVbucketWorker(
 	fmsg := "WRKR[%v<-%v<-%v #%v]"
 	worker.logPrefix = fmt.Sprintf(fmsg, id, bucket, feed.cluster, feed.topic)
 	worker.mutChanSize = mutChanSize
+	worker.meta = make(map[string]interface{}, 9)
 	go worker.run(worker.datach, worker.sbch)
 	return worker
 }
@@ -414,7 +416,7 @@ func (worker *VbucketWorker) handleEvent(m *mc.DcpEvent) *Vbucket {
 		docval := qvalue.NewAnnotatedValue(nvalue)
 		for _, engine := range worker.engines {
 			newBuf, err := engine.TransformRoute(
-				v.vbuuid, m, dataForEndpoints, worker.encodeBuf, docval, context,
+				v.vbuuid, m, dataForEndpoints, worker.encodeBuf, docval, context, worker.meta,
 			)
 			if err != nil {
 				logging.Errorf(fmsg, logPrefix, m.Opaque, err)

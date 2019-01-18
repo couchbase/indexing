@@ -26,6 +26,6 @@ type Evaluator interface {
 	// downstream, returns data to be published to endpoints.
 	TransformRoute(
 		vbuuid uint64, m *mc.DcpEvent, data map[string]interface{}, encodeBuf []byte,
-		docval qvalue.AnnotatedValue, context qexpr.Context,
+		docval qvalue.AnnotatedValue, context qexpr.Context, meta map[string]interface{},
 	) ([]byte, error)
 }
