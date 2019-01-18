@@ -651,7 +651,7 @@ func NewUserRequestContext() *MetadataRequestContext {
 type DataEncodingFormat uint32
 
 const (
-	DATA_ENC_JSON DataEncodingFormat = iota + 1
+	DATA_ENC_JSON DataEncodingFormat = iota
 	DATA_ENC_COLLATEJSON
 )
 

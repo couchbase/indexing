@@ -1218,7 +1218,6 @@ func makeRequestBroker(
 
 	broker := qclient.NewRequestBroker(requestId, int64(size), conn.MaxParallelism())
 	dataEncFmt := client.GetDataEncodingFormat()
-	broker.SetMaxTempBufSize(si.gsi.getMaxTempBufSize())
 
 	broker.SetDataEncodingFormat(dataEncFmt)
 
@@ -1282,7 +1281,6 @@ func makeResponsehandler(
 	//    scatter/gather.
 	//
 	backfill := func() {
-		var skeys c.ScanResultEntries
 		name := tmpfile.Name()
 		defer func() {
 			if readfd != nil {
@@ -1299,6 +1297,7 @@ func makeResponsehandler(
 		l.Debugf(
 			"%v %q started backfill for %v ...\n", lprefix, requestId, name)
 		for {
+			var skeys c.ScanResultEntries
 			if pending := atomic.LoadInt64(&backfillEntries); pending > 0 {
 				atomic.AddInt64(&backfillEntries, -1)
 			} else if done := atomic.LoadInt64(backfillSync); done == DONEREQUEST {
@@ -1351,6 +1350,7 @@ func makeResponsehandler(
 				l.Errorf(fmsg, lprefix, requestId, err)
 				conn.Error(n1qlError(client, err))
 				broker.Error(err, instId, partitions)
+				return
 			}
 			if !cont {
 				return
@@ -1490,6 +1490,7 @@ func makeResponsehandler(
 				l.Errorf(fmsg, lprefix, requestId, err)
 				conn.Error(n1qlError(client, err))
 				broker.Error(err, instId, partitions)
+				return false
 			}
 			if !cont {
 				return false
@@ -1695,7 +1696,7 @@ func sendEntry(broker *qclient.RequestBroker, si *secondaryIndex, pkey []byte,
 	var err error
 	var retBuf *[]byte
 	if value == nil {
-		value, err, retBuf = skey.Get(tmpbuf, broker.GetMaxTempBufSize())
+		value, err, retBuf = skey.Get(tmpbuf)
 		if err != nil {
 			msg := fmt.Sprintf("Error %v in sendEntry", err)
 			conn.Error(errors.NewError(err, msg))
@@ -2119,10 +2120,6 @@ func getDefaultTmpDir() string {
 	os.Remove(file.Name()) // remove this file.
 
 	return default_temp_dir
-}
-
-func (gsi *gsiKeyspace) getMaxTempBufSize() uint64 {
-	return gsi.gsiClient.Settings().MaxTempBufSize()
 }
 
 //-------------------------------------

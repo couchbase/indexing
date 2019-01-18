@@ -39,7 +39,7 @@ func RangeWithClient(indexName, bucketName, server string, low, high []interface
 				scanErr = err
 				return false
 			} else {
-				skeys, err1, retBuf := keys.Get(tmpbuf, client.GetMaxTempBufSize())
+				skeys, err1, retBuf := keys.Get(tmpbuf)
 				if err1 != nil {
 					tc.HandleError(err1, "err in keys.Get")
 					return false
@@ -114,7 +114,7 @@ func Range(indexName, bucketName, server string, low, high []interface{}, inclus
 				scanErr = err
 				return false
 			} else {
-				skeys, err1, retBuf := keys.Get(tmpbuf, client.GetMaxTempBufSize())
+				skeys, err1, retBuf := keys.Get(tmpbuf)
 				if err1 != nil {
 					tc.HandleError(err1, "err in keys.Get")
 					return false
@@ -211,7 +211,7 @@ func Lookup(indexName, bucketName, server string, values []interface{},
 				scanErr = err
 				return false
 			} else {
-				skeys, err1, retBuf := keys.Get(tmpbuf, client.GetMaxTempBufSize())
+				skeys, err1, retBuf := keys.Get(tmpbuf)
 				if err1 != nil {
 					tc.HandleError(err1, "err in keys.Get")
 					return false
@@ -284,7 +284,7 @@ func ScanAll(indexName, bucketName, server string, limit int64,
 				scanErr = err
 				return false
 			} else {
-				skeys, err1, retBuf := keys.Get(tmpbuf, client.GetMaxTempBufSize())
+				skeys, err1, retBuf := keys.Get(tmpbuf)
 				if err1 != nil {
 					tc.HandleError(err1, "err in keys.Get")
 					return false
@@ -430,7 +430,7 @@ func Scans(indexName, bucketName, server string, scans qc.Scans, reverse, distin
 				log.Printf("ScanError = %v ", scanErr)
 				return false
 			} else {
-				skeys, err1, retBuf := keys.Get(tmpbuf, client.GetMaxTempBufSize())
+				skeys, err1, retBuf := keys.Get(tmpbuf)
 				if err1 != nil {
 					tc.HandleError(err1, "err in keys.Get")
 					return false
@@ -554,7 +554,7 @@ func Scan3(indexName, bucketName, server string, scans qc.Scans, reverse, distin
 					log.Printf("ScanError = %v ", scanErr)
 					return false
 				} else {
-					skeys, err1, retBuf := keys.Get(tmpbuf, client.GetMaxTempBufSize())
+					skeys, err1, retBuf := keys.Get(tmpbuf)
 					if err1 != nil {
 						tc.HandleError(err1, "err in keys.Get")
 						return false
@@ -601,7 +601,7 @@ func Scan3(indexName, bucketName, server string, scans qc.Scans, reverse, distin
 					log.Printf("ScanError = %v ", scanErr)
 					return false
 				} else {
-					skeys, err1, retBuf := keys.Get(tmpbuf, client.GetMaxTempBufSize())
+					skeys, err1, retBuf := keys.Get(tmpbuf)
 					if err1 != nil {
 						tc.HandleError(err1, "err in keys.Get")
 						return false

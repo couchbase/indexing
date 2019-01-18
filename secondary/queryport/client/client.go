@@ -375,8 +375,6 @@ type GsiClient struct {
 	numScans     int64
 	scanResponse int64
 	dataEncFmt   uint32
-
-	maxTempBufSize uint64
 }
 
 // NewGsiClient returns client to access GSI cluster.
@@ -404,9 +402,10 @@ func NewGsiClientWithSettings(
 	_, _, clusterVer, refreshErr = c.Refresh()
 	if refreshErr == nil {
 		c.UpdateDataEncodingFormat(clusterVer)
+	} else {
+		// Use old data format if c.Refresh() returns error
+		c.SetDataEncodingFormat(common.DATA_ENC_JSON)
 	}
-
-	c.SetMaxTempBufSize(uint64(config["settings.maxTempBufSize"].Int()))
 
 	return c, nil
 }
@@ -598,7 +597,7 @@ func (c *GsiClient) Lookup(
 	callb ResponseHandler) (err error) {
 
 	dataEncFmt := c.GetDataEncodingFormat()
-	broker := makeDefaultRequestBroker(callb, dataEncFmt, c.maxTempBufSize)
+	broker := makeDefaultRequestBroker(callb, dataEncFmt)
 	return c.LookupInternal(defnID, requestId, values, distinct, limit, cons, vector, broker)
 }
 
@@ -656,7 +655,7 @@ func (c *GsiClient) Range(
 	callb ResponseHandler) (err error) {
 
 	dataEncFmt := c.GetDataEncodingFormat()
-	broker := makeDefaultRequestBroker(callb, dataEncFmt, c.maxTempBufSize)
+	broker := makeDefaultRequestBroker(callb, dataEncFmt)
 	return c.RangeInternal(defnID, requestId, low, high, inclusion, distinct, limit, cons, vector, broker)
 }
 
@@ -734,7 +733,7 @@ func (c *GsiClient) ScanAll(
 	callb ResponseHandler) (err error) {
 
 	dataEncFmt := c.GetDataEncodingFormat()
-	broker := makeDefaultRequestBroker(callb, dataEncFmt, c.maxTempBufSize)
+	broker := makeDefaultRequestBroker(callb, dataEncFmt)
 	return c.ScanAllInternal(defnID, requestId, limit, cons, vector, broker)
 }
 
@@ -789,7 +788,7 @@ func (c *GsiClient) MultiScan(
 	callb ResponseHandler) (err error) {
 
 	dataEncFmt := c.GetDataEncodingFormat()
-	broker := makeDefaultRequestBroker(callb, dataEncFmt, c.maxTempBufSize)
+	broker := makeDefaultRequestBroker(callb, dataEncFmt)
 	return c.MultiScanInternal(defnID, requestId, scans, reverse, distinct, projection, offset, limit, cons, vector, broker)
 }
 
@@ -855,7 +854,8 @@ func (c *GsiClient) CountLookup(
 	defnID uint64, requestId string, values []common.SecondaryKey,
 	cons common.Consistency, vector *TsConsistency) (count int64, err error) {
 
-	broker := makeDefaultRequestBroker(nil, common.DATA_ENC_JSON, c.maxTempBufSize)
+	dataEncFmt := c.GetDataEncodingFormat()
+	broker := makeDefaultRequestBroker(nil, dataEncFmt)
 	return c.CountLookupInternal(defnID, requestId, values, cons, vector, broker)
 }
 
@@ -917,7 +917,8 @@ func (c *GsiClient) CountRange(
 	inclusion Inclusion,
 	cons common.Consistency, vector *TsConsistency) (count int64, err error) {
 
-	broker := makeDefaultRequestBroker(nil, common.DATA_ENC_JSON, c.maxTempBufSize)
+	dataEncFmt := c.GetDataEncodingFormat()
+	broker := makeDefaultRequestBroker(nil, dataEncFmt)
 	return c.CountRangeInternal(defnID, requestId, low, high, inclusion, cons, vector, broker)
 }
 
@@ -986,7 +987,8 @@ func (c *GsiClient) MultiScanCount(
 	scans Scans, distinct bool,
 	cons common.Consistency, vector *TsConsistency) (count int64, err error) {
 
-	broker := makeDefaultRequestBroker(nil, common.DATA_ENC_JSON, c.maxTempBufSize)
+	dataEncFmt := c.GetDataEncodingFormat()
+	broker := makeDefaultRequestBroker(nil, dataEncFmt)
 	return c.MultiScanCountInternal(defnID, requestId, scans, distinct, cons, vector, broker)
 }
 
@@ -1042,7 +1044,7 @@ func (c *GsiClient) Scan3(
 	callb ResponseHandler) (err error) {
 
 	dataEncFmt := c.GetDataEncodingFormat()
-	broker := makeDefaultRequestBroker(callb, dataEncFmt, c.maxTempBufSize)
+	broker := makeDefaultRequestBroker(callb, dataEncFmt)
 	return c.Scan3Internal(defnID, requestId, scans, reverse, distinct,
 		projection, offset, limit, groupAggr, indexOrder, cons, vector, broker)
 }
@@ -1529,14 +1531,6 @@ func (c *GsiClient) SetDataEncodingFormat(val common.DataEncodingFormat) {
 
 func (c *GsiClient) GetDataEncodingFormat() common.DataEncodingFormat {
 	return common.DataEncodingFormat(atomic.LoadUint32(&c.dataEncFmt))
-}
-
-func (c *GsiClient) SetMaxTempBufSize(val uint64) {
-	atomic.StoreUint64(&c.maxTempBufSize, val)
-}
-
-func (c *GsiClient) GetMaxTempBufSize() uint64 {
-	return atomic.LoadUint64(&c.maxTempBufSize)
 }
 
 //--------------------------

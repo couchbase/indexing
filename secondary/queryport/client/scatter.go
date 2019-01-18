@@ -125,7 +125,6 @@ type RequestBroker struct {
 	// Temporary bufferes needed for DecodeN1QLValues.
 	tmpbufs        []*[]byte
 	tmpbufsPoolIdx []uint32
-	maxTempBufSize uint64
 }
 
 type doneStatus struct {
@@ -1233,6 +1232,7 @@ func (c *RequestBroker) SendEntries(id ResponseHandlerId, pkeys [][]byte,
 	var err error
 	var rb *[]byte
 	var cont bool
+	var skey common.ScanResultKey
 
 	tmpbuf := c.tmpbufs[int(id)]
 	defer func() {
@@ -1243,9 +1243,9 @@ func (c *RequestBroker) SendEntries(id ResponseHandlerId, pkeys [][]byte,
 		if c.useGather() {
 			var vals []value.Value
 			if c.sorted {
-				vals, err, rb = skeys.Getkth(tmpbuf, i, c.maxTempBufSize)
+				vals, err, rb = skeys.Getkth(tmpbuf, i)
 				if err != nil {
-					logging.Errorf("Error %v in RequestBroker::SendEntries", err)
+					logging.Errorf("Error %v in RequestBroker::SendEntries Getkth", err)
 					return false, err
 				}
 
@@ -1261,12 +1261,21 @@ func (c *RequestBroker) SendEntries(id ResponseHandlerId, pkeys [][]byte,
 			var r Row
 			r.pkey = pkeys[i]
 			r.value = vals
-			r.skey = skeys.GetkthKey(i)
+			r.skey, err = skeys.GetkthKey(i)
+			if err != nil {
+				logging.Errorf("Error %v in RequestBroker::SendEntries GetkthKey", err)
+				return false, err
+			}
 			c.queues[int(id)].Enqueue(&r)
 		} else {
 
 			c.Partial(true)
-			cont, rb = c.sender(pkeys[i], nil, skeys.GetkthKey(i), tmpbuf)
+			skey, err = skeys.GetkthKey(i)
+			if err != nil {
+				logging.Errorf("Error %v in RequestBroker::SendEntries GetkthKey", err)
+				return false, err
+			}
+			cont, rb = c.sender(pkeys[i], nil, skey, tmpbuf)
 			if rb != nil {
 				tmpbuf = rb
 			}
@@ -1314,11 +1323,9 @@ func (d *bypassResponseReader) Error() error {
 }
 
 func makeDefaultRequestBroker(cb ResponseHandler,
-	dataEncFmt common.DataEncodingFormat,
-	maxTempBufSize uint64) *RequestBroker {
+	dataEncFmt common.DataEncodingFormat) *RequestBroker {
 
 	broker := NewRequestBroker("", 256, -1)
-	broker.SetMaxTempBufSize(maxTempBufSize)
 	broker.SetDataEncodingFormat(dataEncFmt)
 
 	factory := func(id ResponseHandlerId, instId uint64, partitions []common.PartitionId) ResponseHandler {
@@ -1369,6 +1376,7 @@ func makeDefaultResponseHandler(id ResponseHandlerId, broker *RequestBroker, ins
 		if err != nil {
 			logging.Errorf("defaultResponseHandler: SendEntries %v", err)
 			broker.Error(err, instId, partitions)
+			return false
 		}
 		return cont
 	}
@@ -1939,14 +1947,6 @@ func (c *RequestBroker) SetDataEncodingFormat(val common.DataEncodingFormat) {
 
 func (c *RequestBroker) GetDataEncodingFormat() common.DataEncodingFormat {
 	return common.DataEncodingFormat(atomic.LoadUint32(&c.dataEncFmt))
-}
-
-func (c *RequestBroker) SetMaxTempBufSize(val uint64) {
-	atomic.StoreUint64(&c.maxTempBufSize, val)
-}
-
-func (c *RequestBroker) GetMaxTempBufSize() uint64 {
-	return atomic.LoadUint64(&c.maxTempBufSize)
 }
 
 //--------------------------

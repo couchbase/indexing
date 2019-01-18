@@ -10,12 +10,6 @@ import (
 	"time"
 )
 
-var SyncPools []*c.BytesBufPool
-
-func init() {
-	SyncPools = qc.InitializeSyncPools()
-}
-
 func ArrayIndex_Range(indexName, bucketName, server string, low, high []interface{}, inclusion uint32,
 	distinct bool, limit int64, consistency c.Consistency, vector *qc.TsConsistency) (tc.ArrayIndexScanResponseActual, error) {
 	var scanErr error
@@ -52,7 +46,7 @@ func ArrayIndex_Range(indexName, bucketName, server string, low, high []interfac
 			} else {
 				// scanResults[primaryKey] = make([][]interface{}, len(skeys))
 
-				skeys, err1, retBuf := keys.Get(tmpbuf, client.GetMaxTempBufSize())
+				skeys, err1, retBuf := keys.Get(tmpbuf)
 				if err1 != nil {
 					tc.HandleError(err1, "err in keys.Get")
 					return false

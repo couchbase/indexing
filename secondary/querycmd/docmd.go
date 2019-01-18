@@ -194,9 +194,10 @@ func HandleCommand(
 		} else {
 			if verbose == false {
 				for i, pkey := range pkeys {
-					skey, err, retBuf := skeys.Getkth(tmpbuf, i, client.GetMaxTempBufSize())
+					skey, err, retBuf := skeys.Getkth(tmpbuf, i)
 					if err != nil {
 						fmt.Fprint(w, "Error: %v", err)
+						return false
 					}
 					if retBuf != nil {
 						tmpbuf = retBuf

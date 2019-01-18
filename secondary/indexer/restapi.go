@@ -21,12 +21,6 @@ type testServer struct {
 	config  c.Config
 }
 
-var SyncPools []*c.BytesBufPool
-
-func init() {
-	SyncPools = qclient.InitializeSyncPools()
-}
-
 const UnboundedLiteral = "~[]{}UnboundedTruenilNA~"
 
 func NewTestServer(cluster string) (*testServer, Message) {
@@ -1325,8 +1319,7 @@ func (api *testServer) makeEntries(skeys *c.ScanResultEntries,
 		qclient.PutInPools(tmpbuf, tmpbufPoolIdx)
 	}()
 
-	maxTempBufSize := uint64(api.config["queryport.client.settings.maxTempBufSize"].Int())
-	result, err, retBuf := skeys.Get(tmpbuf, maxTempBufSize)
+	result, err, retBuf := skeys.Get(tmpbuf)
 	if err != nil {
 		return "", err
 	}

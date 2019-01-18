@@ -446,14 +446,19 @@ loop:
 				sk = row
 			} else if dataEncFmt == c.DATA_ENC_JSON {
 				sk, _ = jsonEncoder.Decode(row, t)
+			} else {
+				err = c.ErrUnexpectedDataEncFmt
+				d.CloseWithError(err)
+				break
 			}
 		} else if d.p.req.isPrimary {
 			sk, docid = piSplitEntry(row, t)
 		} else {
 			if dataEncFmt == c.DATA_ENC_COLLATEJSON {
-				sk, docid, _, err = siSplitEntryCJson(row, t)
+				sk, docid, err = siSplitEntryCJson(row)
 				if err != nil {
 					d.CloseWithError(err)
+					break
 				}
 			} else if dataEncFmt == c.DATA_ENC_JSON {
 				sk, docid, _ = siSplitEntry(row, t)
@@ -547,12 +552,14 @@ func siSplitEntry(entry []byte, tmp []byte) ([]byte, []byte, int) {
 	return sk, docid[len(sk):], count
 }
 
-func siSplitEntryCJson(entry []byte, tmp []byte) ([]byte, []byte, int, error) {
+func siSplitEntryCJson(entry []byte) ([]byte, []byte, error) {
 	e := secondaryIndexEntry(entry)
-	sk := e.ReadSecKeyCJson(tmp)
+	sk := e.ReadSecKeyCJson()
 	docid, err := e.ReadDocId(sk)
-	count := e.Count()
-	return sk, docid[len(sk):], count, err
+	if err != nil {
+		return nil, nil, err
+	}
+	return sk, docid[len(sk):], nil
 }
 
 // Return true if the row needs to be skipped based on the filter

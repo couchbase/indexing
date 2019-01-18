@@ -1,6 +1,7 @@
 package functionaltests
 
 import (
+	"fmt"
 	c "github.com/couchbase/indexing/secondary/common"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 	"github.com/couchbase/indexing/secondary/tests/framework/datautility"
@@ -203,13 +204,14 @@ func TestLargeKeysSplChars(t *testing.T) {
 
 	log.Printf("In TestLargeKeysSplChars()")
 
+	chars := []string{"\t", "&", "<", ">", "a", "1"}
 	var bucketName = "default"
 	numDocs := 100
 	prodfile := filepath.Join(proddir, "test2.prod")
 	docsToCreate := GenerateJsons(numDocs, seed, prodfile, bagdir)
 	for k, v := range docsToCreate {
 		json := v.(map[string]interface{})
-		json["str"] = splstr(randomNum(4000, 5000))
+		json["str"] = splstr(randomNum(4000, 5000), chars)
 		json["strarray"] = splstrArray(randomNum(50, 100), randomNum(4000, 5000))
 		json["nestedobj"] = nestedobj(randomNum(5, 10), randomNum(4000, 5000))
 		docsToCreate[k] = json
@@ -243,29 +245,98 @@ func TestLargeKeysSplChars(t *testing.T) {
 	FailTestIfError(err, "Error in scan 3:  result validation", t)
 }
 
-func splstr(strlen int) string {
-	chars := []string{"\t", "&", "<", ">", "a", "1"}
-	var newstr string
-	for i := 0; i < strlen; i++ {
-		newstr += chars[rand.Intn(len(chars))]
+func TestVeryLargeIndexKey(t *testing.T) {
+	if secondaryindex.IndexUsing == "forestdb" {
+		log.Printf("Skipping test TestVeryLargeIndexKey() for forestdb")
+		return
 	}
-	return newstr
+
+	e := secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+	FailTestIfError(e, "Error in DropAllSecondaryIndexes", t)
+
+	tc.ClearMap(docs)
+	kvutility.FlushBucket("default", "", clusterconfig.Username,
+		clusterconfig.Password, clusterconfig.KVAddress)
+	time.Sleep(5 * time.Second)
+
+	log.Printf("TestLargeIndexKey:: Flushed the bucket")
+
+	expResponse := make(tc.ScanResponse)
+
+	key := "VeryLargeIndexKey1"
+	doc := make(map[string]interface{})
+	val := make(map[string]interface{})
+	v1 := make(map[string]interface{})
+	v2 := make(map[string]interface{})
+	chars := []string{"\t", "&", "<", ">"}
+	v3 := splstr(3*1024*1024, chars)
+	v2["b"] = v3
+	v1["a"] = v2
+	val["v"] = v1
+	doc[key] = val
+
+	expResponse[key] = make([]interface{}, 1)
+	expResponse[key][0] = v1
+
+	key1 := "VeryLargeIndexKey2"
+	val = make(map[string]interface{})
+	v1 = make(map[string]interface{})
+	v2 = make(map[string]interface{})
+	chars = []string{"a", "b", "c", "d", "e", "f", "g", "h"}
+	v3 = splstr(19*1024*1024, chars)
+	v2["b"] = v3
+	v1["a"] = v2
+	val["v"] = v1
+	doc[key1] = val
+
+	expResponse[key1] = make([]interface{}, 1)
+	expResponse[key1][0] = v1
+
+	log.Printf("clusterconfig.KVAddress = %v", clusterconfig.KVAddress)
+	kvutility.SetKeyValues(doc, "default", "", clusterconfig.KVAddress)
+
+	err := secondaryindex.CreateSecondaryIndex("i1", "default", indexManagementAddress, "",
+		[]string{"v"}, false, nil, true, defaultIndexActiveTimeout, nil)
+	FailTestIfError(err, "Error in creating the index", t)
+
+	scanResults, err := secondaryindex.ScanAll("i1", "default", indexScanAddress,
+		defaultlimit, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in scan 1: ", t)
+	err = tv.Validate(expResponse, scanResults)
+	FailTestIfError(err, "Error in scan 1:  result validation", t)
+
+	e = secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+	FailTestIfError(e, "Error in DropAllSecondaryIndexes", t)
+
+	kvutility.FlushBucket("default", "", clusterconfig.Username,
+		clusterconfig.Password, clusterconfig.KVAddress)
+	time.Sleep(5 * time.Second)
+}
+
+func splstr(strlen int, chars []string) string {
+	newstr := make([]byte, strlen)
+	for i := 0; i < strlen; i++ {
+		newstr[i] = chars[rand.Intn(len(chars))][0]
+	}
+	return fmt.Sprintf("%s", newstr)
 }
 
 func splstrArray(size, strlen int) []string {
+	chars := []string{"\t", "&", "<", ">", "a", "1"}
 	strArray := make([]string, 0, size)
 	for i := 0; i < size; i++ {
-		strArray = append(strArray, splstr(strlen))
+		strArray = append(strArray, splstr(strlen, chars))
 	}
 	return strArray
 }
 
 func nestedobj(depth, strlen int) interface{} {
+	chars := []string{"\t", "&", "<", ">", "a", "1"}
 	if depth == 0 {
 		return nil
 	}
 	obj := make(map[string]interface{})
-	obj[strconv.Itoa(depth)] = splstr(strlen)
+	obj[strconv.Itoa(depth)] = splstr(strlen, chars)
 	obj["f"+strconv.Itoa(depth)] = nestedobj(strlen, depth-1)
 	return obj
 }

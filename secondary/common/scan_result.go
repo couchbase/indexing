@@ -32,15 +32,25 @@ type ScanResultKey struct {
 	DataEncFmt DataEncodingFormat
 }
 
-func (k ScanResultKey) Get(buffer *[]byte,
-	maxTempBufSize uint64) ([]qvalue.Value, error, *[]byte) {
+// This function returns decoded n1ql value, error (if any) and retbuf.
+// retbuf is nil, if temporary buffer passed as input to Get() was sufficient
+// in size. If the input buffer was insufficient, new buffer is allocated
+// and returned to the caller - for reuse.
+func (k ScanResultKey) Get(buffer *[]byte) ([]qvalue.Value, error, *[]byte) {
 
 	var err error
 	var vals []qvalue.Value
 	var retbuf *[]byte
 
 	if k.DataEncFmt == DATA_ENC_COLLATEJSON {
-		vals, err, retbuf = retryDecode(k.Skeycjson, buffer, maxTempBufSize)
+		buf := *buffer
+		buf = buf[:0]
+		if len(k.Skeycjson)*SECKEY_TMPBUF_MULTIPLIER > cap(buf) {
+			buf = make([]byte, 0, len(k.Skeycjson)*SECKEY_TMPBUF_MULTIPLIER)
+			retbuf = &buf
+		}
+
+		vals, err = codec.DecodeN1QLValues(k.Skeycjson, buf)
 		if err != nil {
 			logging.Errorf("Error %v in DecodeN1QLValues", err)
 			return nil, ErrDecodeScanResult, nil
@@ -81,7 +91,6 @@ type ScanResultEntries struct {
 	Skeys      []ScanResultKey
 	DataEncFmt DataEncodingFormat
 	Ctr        int
-	Length     int
 }
 
 func NewScanResultEntries(dataEncFmt DataEncodingFormat) *ScanResultEntries {
@@ -92,15 +101,13 @@ func NewScanResultEntries(dataEncFmt DataEncodingFormat) *ScanResultEntries {
 }
 
 func (s *ScanResultEntries) Make(length int) {
-	s.Length = length
 	s.Skeys = make([]ScanResultKey, length)
 }
 
 func (s *ScanResultEntries) Append(skey interface{}) (*ScanResultEntries, error) {
-	if s.Ctr >= s.Length {
+	if s.Ctr >= len(s.Skeys) {
 		skey := ScanResultKey{DataEncFmt: s.DataEncFmt}
 		s.Skeys = append(s.Skeys, skey)
-		s.Length = len(s.Skeys)
 	}
 
 	s.Skeys[s.Ctr].DataEncFmt = s.DataEncFmt
@@ -124,13 +131,12 @@ func (s *ScanResultEntries) Append(skey interface{}) (*ScanResultEntries, error)
 	return s, nil
 }
 
-func (s *ScanResultEntries) Get(buf *[]byte,
-	maxTempBufSize uint64) ([]qvalue.Values, error, *[]byte) {
+func (s *ScanResultEntries) Get(buf *[]byte) ([]qvalue.Values, error, *[]byte) {
 
 	var retBuf *[]byte
-	result := make([]qvalue.Values, len(s.Skeys))
-	for i := 0; i < len(s.Skeys); i++ {
-		r, err, rb := s.Skeys[i].Get(buf, maxTempBufSize)
+	result := make([]qvalue.Values, s.Ctr)
+	for i := 0; i < s.Ctr; i++ {
+		r, err, rb := s.Skeys[i].Get(buf)
 		if err != nil {
 			return result, err, nil
 		}
@@ -143,21 +149,27 @@ func (s *ScanResultEntries) Get(buf *[]byte,
 	return result, nil, retBuf
 }
 
-func (s *ScanResultEntries) Getkth(buf *[]byte, k int,
-	maxTempBufSize uint64) (qvalue.Values, error, *[]byte) {
+func (s *ScanResultEntries) Getkth(buf *[]byte, k int) (qvalue.Values, error, *[]byte) {
+	if k >= s.Ctr || k >= len(s.Skeys) {
+		return nil, ErrSliceTooSmall, nil
+	}
 
-	return s.Skeys[k].Get(buf, maxTempBufSize)
+	return s.Skeys[k].Get(buf)
 }
 
 func (s *ScanResultEntries) GetLength() int {
 	if s == nil {
 		return 0
 	}
-	return len(s.Skeys)
+	return s.Ctr
 }
 
-func (s *ScanResultEntries) GetkthKey(k int) ScanResultKey {
-	return s.Skeys[k]
+func (s *ScanResultEntries) GetkthKey(k int) (ScanResultKey, error) {
+	if k >= s.Ctr || k >= len(s.Skeys) {
+		return ScanResultKey{}, ErrSliceTooSmall
+	}
+
+	return s.Skeys[k], nil
 }
 
 // --------------------------
@@ -179,40 +191,4 @@ func FixMissingLiteral(skey []qvalue.Value) []qvalue.Value {
 		}
 	}
 	return vals
-}
-
-func retryDecode(key []byte, buf *[]byte,
-	maxTempBufSize uint64) ([]qvalue.Value, error, *[]byte) {
-
-	var bufRealloc bool
-	var retBuf *[]byte
-
-	buffer := *buf
-	buffer = buffer[:0]
-
-	if len(key)*SECKEY_TMPBUF_MULTIPLIER > cap(buffer) {
-		buffer = make([]byte, 0, len(key)*SECKEY_TMPBUF_MULTIPLIER)
-		bufRealloc = true
-	}
-
-	for {
-		vals, err := codec.DecodeN1QLValues(key, buffer)
-		if err == nil {
-			if bufRealloc {
-				retBuf = &buffer
-			}
-			return vals, nil, retBuf
-		} else if err == collatejson.ErrorOutputLen {
-			bufsz := cap(buffer)
-			if bufsz > int(maxTempBufSize) {
-				logging.Errorf("Buffer size %v insufficient. Giving up.", bufsz)
-				return nil, err, nil
-			}
-			logging.Warnf("Buffer size %v insufficient. Retrying with larger size %v.", bufsz, bufsz*2)
-			buffer = make([]byte, 0, bufsz*2)
-			bufRealloc = true
-		} else {
-			return nil, err, nil
-		}
-	}
 }
