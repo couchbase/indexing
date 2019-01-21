@@ -4,14 +4,15 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	c "github.com/couchbase/indexing/secondary/common"
-	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
 	"strconv"
 	"strings"
+
+	c "github.com/couchbase/indexing/secondary/common"
+	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 )
 
 type IndexProperties struct {
@@ -85,6 +86,19 @@ func GetIndexStats(indexName, bucketName, serverUserName, serverPassword, hostad
 			if strings.Contains(statKey, bucketName+":"+indexName) {
 				indexStats[statKey] = stats[statKey]
 			}
+		}
+	}
+	return indexStats
+}
+
+func GetStats(serverUserName, serverPassword, hostaddress string) map[string]interface{} {
+	indexNodes, _ := GetIndexerNodesHttpAddresses(hostaddress)
+	indexStats := make(map[string]interface{})
+
+	for _, indexNode := range indexNodes {
+		stats := GetStatsForIndexerHttpAddress(indexNode, serverUserName, serverPassword)
+		for statKey := range stats {
+			indexStats[statKey] = stats[statKey]
 		}
 	}
 	return indexStats

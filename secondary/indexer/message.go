@@ -12,8 +12,9 @@ package indexer
 
 import (
 	"fmt"
-	"github.com/couchbase/indexing/secondary/common"
 	"time"
+
+	"github.com/couchbase/indexing/secondary/common"
 )
 
 type MsgType int16
@@ -154,6 +155,12 @@ const (
 	INDEX_STATS_DONE
 
 	STATS_RESET
+	STATS_PERSISTER_START
+	STATS_PERSISTER_STOP
+	STATS_PERSISTER_FORCE_PERSIST
+	STATS_PERSISTER_CONFIG_UPDATE
+	STATS_READ_PERSISTED_STATS
+
 	REPAIR_ABORT
 
 	INDEXER_DDL_IN_PROGRESS_RESPONSE
@@ -1504,6 +1511,29 @@ func (m *MsgResetStats) GetMsgType() MsgType {
 	return STATS_RESET
 }
 
+//STATS_PERSISTER_START
+//STATS_PERSISTER_STOP
+//STATS_PERSISTER_FORCE_PERSIST
+//STATS_PERSISTER_CONFIG_UPDATE
+//STATS_READ_PERSISTED_STATS
+type MsgStatsPersister struct {
+	mType  MsgType
+	stats  *IndexerStats
+	respCh chan bool
+}
+
+func (m *MsgStatsPersister) GetMsgType() MsgType {
+	return m.mType
+}
+
+func (m *MsgStatsPersister) GetStats() *IndexerStats {
+	return m.stats
+}
+
+func (m *MsgStatsPersister) GetResponseChannel() chan bool {
+	return m.respCh
+}
+
 //INDEXER_PAUSE
 //INDEXER_RESUME
 //INDEXER_PREPARE_UNPAUSE
@@ -1802,6 +1832,17 @@ func (m MsgType) String() string {
 
 	case STATS_RESET:
 		return "STATS_RESET"
+
+	case STATS_PERSISTER_START:
+		return "STATS_PERSISTER_START"
+	case STATS_PERSISTER_STOP:
+		return "STATS_PERSISTER_STOP"
+	case STATS_PERSISTER_FORCE_PERSIST:
+		return "STATS_PERSISTER_FORCE_PERSIST"
+	case STATS_PERSISTER_CONFIG_UPDATE:
+		return "STATS_PERSISTER_CONFIG_UPDATE"
+	case STATS_READ_PERSISTED_STATS:
+		return "STATS_READ_PERSISTED_STATS"
 
 	default:
 		return "UNKNOWN_MSG_TYPE"

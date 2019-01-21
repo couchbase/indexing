@@ -949,6 +949,9 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 	case INDEXER_STORAGE_WARMUP_DONE:
 		idx.handleStorageWarmupDone(msg)
 
+	case STATS_READ_PERSISTED_STATS:
+		idx.handleReadPersistedStats(msg)
+
 	default:
 		logging.Fatalf("Indexer::handleWorkerMsgs Unknown Message %+v", msg)
 		common.CrashOnError(errors.New("Unknown Msg On Worker Channel"))
@@ -4752,6 +4755,17 @@ func (idx *indexer) handleStorageWarmupDone(msg Message) {
 	go idx.logMemstats()
 	go idx.collectProgressStats(true)
 
+	idx.statsMgrCmdCh <- &MsgStatsPersister{
+		mType: STATS_PERSISTER_START,
+	}
+	<-idx.statsMgrCmdCh
+}
+
+func (idx *indexer) handleReadPersistedStats(msg Message) {
+	respCh := msg.(*MsgStatsPersister).GetResponseChannel()
+	idx.statsMgrCmdCh <- msg
+	<-idx.statsMgrCmdCh
+	respCh <- true
 }
 
 func (idx *indexer) bootstrap2() error {
@@ -4951,14 +4965,20 @@ func (idx *indexer) initFromPersistedState() error {
 	initStorageSettings(idx.config)
 	logging.Infof("Indexer::local storage mode %v", common.GetStorageMode().String())
 
+	// Initialize stats objects and update stats from persistence
 	for _, inst := range idx.indexInstMap {
-
 		if inst.State != common.INDEX_STATE_DELETED {
 			for _, partnDefn := range inst.Pc.GetAllPartitions() {
 				idx.stats.AddPartition(inst.InstId, inst.Defn.Bucket, inst.Defn.Name, inst.ReplicaId, partnDefn.GetPartitionId())
 			}
 		}
+	}
 
+	// Stats that are initialized in previous loop
+	// need to be populated with values from persistence store
+	idx.updateStatsFromPersistence()
+
+	for _, inst := range idx.indexInstMap {
 		//allocate partition/slice
 		var partnInstMap PartitionInstMap
 		var failedPartnInstances PartitionInstMap
@@ -4995,6 +5015,18 @@ func (idx *indexer) initFromPersistedState() error {
 	}
 
 	return nil
+
+}
+
+// Send a message to stats manager to retrieve stats from
+// persisted state and wait for it to complete
+func (idx *indexer) updateStatsFromPersistence() {
+	respCh := make(chan bool)
+	idx.internalRecvCh <- &MsgStatsPersister{
+		mType:  STATS_READ_PERSISTED_STATS,
+		stats:  idx.stats,
+		respCh: respCh}
+	<-respCh
 
 }
 

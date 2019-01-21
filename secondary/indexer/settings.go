@@ -495,6 +495,18 @@ func validateSettings(value []byte, current common.Config, internal bool) error 
 		}
 	}
 
+	if val, ok := newConfig["indexer.statsPersistenceInterval"]; ok {
+		if val.Uint64() < 0 {
+			return errors.New("statsPersistenceInterval should be an integer 0 or greater")
+		}
+	}
+
+	if val, ok := newConfig["indexer.statsPersistenceChunkSize"]; ok {
+		if val.Int() <= 0 {
+			return errors.New("statsPersistenceChunkSize should be an integer greater than 0")
+		}
+	}
+
 	if !internal {
 		if val, ok := newConfig["indexer.settings.storage_mode"]; ok {
 			if len(val.String()) != 0 {

@@ -3,11 +3,8 @@ package functionaltests
 import (
 	"errors"
 	"fmt"
-	c "github.com/couchbase/indexing/secondary/common"
-	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
-	"github.com/couchbase/indexing/secondary/tests/framework/kvutility"
-	"github.com/couchbase/indexing/secondary/tests/framework/secondaryindex"
 	"io/ioutil"
+	"log"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -15,6 +12,11 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	c "github.com/couchbase/indexing/secondary/common"
+	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
+	"github.com/couchbase/indexing/secondary/tests/framework/kvutility"
+	"github.com/couchbase/indexing/secondary/tests/framework/secondaryindex"
 )
 
 const CORRUPT_DATA_SUBDIR = ".corruptData"
@@ -519,4 +521,68 @@ func TestIdxCorruptBackup(t *testing.T) {
 		err = errors.New("Backup folder %v doesn't exist")
 		FailTestIfError(err, "Error while verifying backup folder existance", t)
 	}
+}
+
+func TestStatsPersistence(t *testing.T) {
+	log.Printf("In TestStatsPersistence()")
+
+	bucketName := "default"
+	indexNames := [...]string{"index_age", "index_gender", "index_city"}
+	indexFields := [...]string{"age", "gender", "address.city"}
+
+	e := secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+	FailTestIfError(e, "Error in DropAllSecondaryIndexes", t)
+
+	kvdocs := generateDocs(1000, "users.prod")
+	UpdateKVDocs(kvdocs, docs)
+	kvutility.SetKeyValues(kvdocs, bucketName, "", clusterconfig.KVAddress)
+
+	for i := 0; i < 3; i++ {
+		err := secondaryindex.CreateSecondaryIndex(indexNames[i], bucketName, indexManagementAddress, "", []string{indexFields[i]}, false, nil, true, defaultIndexActiveTimeout, nil)
+		FailTestIfError(err, "Error in creating the index", t)
+	}
+
+	testPersistence := func(enabled bool, persistenceInterval uint64) {
+		log.Printf("=== Testing for persistence enabled = %v, with interval = %v  ===", enabled, persistenceInterval)
+		err := secondaryindex.ChangeIndexerSettings("indexer.statsPersistenceInterval", persistenceInterval, clusterconfig.Username, clusterconfig.Password, kvaddress)
+		tc.HandleError(err, "Error in ChangeIndexerSettings")
+		tc.KillIndexer()
+		time.Sleep(5 * time.Second)
+
+		for i := 0; i < 3; i++ {
+			_, err := secondaryindex.ScanAll(indexNames[i], bucketName, indexScanAddress, defaultlimit, c.SessionConsistency, nil)
+			FailTestIfError(err, "Error in ScanAll", t)
+		}
+
+		lqt1 := make([]float64, 3)
+		stats := secondaryindex.GetStats(clusterconfig.Username, clusterconfig.Password, kvaddress)
+		for i := 0; i < 3; i++ {
+			lqt1[i] = stats[bucketName+":"+indexNames[i]+":last_query_time"].(float64)
+		}
+
+		time.Sleep(time.Duration(persistenceInterval+2) * time.Second)
+		tc.KillIndexer()
+		time.Sleep(5 * time.Second)
+
+		stats = secondaryindex.GetStats(clusterconfig.Username, clusterconfig.Password, kvaddress)
+		for i := 0; i < 3; i++ {
+			lqt := stats[bucketName+":"+indexNames[i]+":last_query_time"].(float64)
+			if enabled {
+				if lqt != lqt1[i] {
+					err := errors.New(fmt.Sprintf("last_query_time stat mistach after restart for index %v: Before: %v After %v", indexNames[i], lqt1[i], lqt))
+					FailTestIfError(err, "Error in TestStatsPersistence", t)
+				}
+			} else {
+				if lqt == lqt1[i] {
+					err := errors.New(fmt.Sprintf("last_query_time stat unexpected match with stats persistence disabled for index %v", indexNames[i]))
+					FailTestIfError(err, "Error in TestStatsPersistence", t)
+				}
+			}
+		}
+	}
+
+	testPersistence(true, 5)
+	testPersistence(false, 0)
+	testPersistence(true, 10)
+	testPersistence(true, 5)
 }
