@@ -14,6 +14,7 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager"
+	mc "github.com/couchbase/indexing/secondary/manager/common"
 	"net"
 	"sync/atomic"
 	"time"
@@ -392,6 +393,23 @@ func (c *clustMgrAgent) handleGetGlobalTopology(cmd Message) {
 				OldStorageMode: inst.OldStorageMode,
 				Pc:             pc,
 				RealInstId:     common.IndexInstId(inst.RealInstId),
+			}
+
+			if idxInst.State != common.INDEX_STATE_DELETED {
+				exist1, err := mc.DeleteCommandTokenExist(idxDefn.DefnId)
+				if err != nil {
+					logging.Warnf("Error when reading delete command token for defn %v", idxDefn.DefnId)
+				}
+
+				exist2, err := mc.DropInstanceCommandTokenExist(idxDefn.DefnId, idxInst.InstId)
+				if err != nil {
+					logging.Warnf("Error when reading delete command token for index (%v, %v)", idxDefn.DefnId, idxInst.InstId)
+				}
+
+				if exist1 || exist2 {
+					idxInst.State = common.INDEX_STATE_DELETED
+					logging.Infof("Delete token found for index (%v, %v).  Setting index state to DELETED", idxDefn.DefnId, idxInst.InstId)
+				}
 			}
 
 			indexInstMap[idxInst.InstId] = idxInst
