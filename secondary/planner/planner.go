@@ -569,7 +569,7 @@ func (p *SAPlanner) Plan(command CommandType, solution *Solution) (*Solution, er
 // Given a solution, this function finds a replica to drop while
 // maintaining HA constraint.
 //
-func (p *SAPlanner) DropReplica(solution *Solution, defnId common.IndexDefnId, numPartition int, decrement int) (*Solution, []int, error) {
+func (p *SAPlanner) DropReplica(solution *Solution, defnId common.IndexDefnId, numPartition int, decrement int, dropReplicaId int) (*Solution, []int, error) {
 
 	// setup
 	if p.cpuProfile {
@@ -602,6 +602,15 @@ func (p *SAPlanner) DropReplica(solution *Solution, defnId common.IndexDefnId, n
 				replicaPartitionMap[replicaId] = make(map[common.PartitionId]bool)
 			}
 			replicaPartitionMap[replicaId][partitionId] = true
+		}
+	}
+
+	// if a specific replicaId is specified, then drop that one.
+	if dropReplicaId != -1 {
+		if _, ok := replicaPartitionMap[dropReplicaId]; ok {
+			return solution, []int{dropReplicaId}, nil
+		} else {
+			return nil, nil, fmt.Errorf("Fail to drop replica.  Replica (%v) does not exist", dropReplicaId)
 		}
 	}
 

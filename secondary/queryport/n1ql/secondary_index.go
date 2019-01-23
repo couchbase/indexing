@@ -1173,9 +1173,9 @@ func (si *secondaryIndex3) Alter(requestId string, with value.Value) (
 			return nil, errors.NewError(e, "GSI AlterIndex()")
 		}
 		return datastore.Index(si), nil
-	case "alter_replica":
+	case "replica_count", "drop_replica":
 		client := si.gsi.gsiClient
-		e := client.AlterReplicaCount(si.defnID, withMap)
+		e := client.AlterReplicaCount(action.(string), si.defnID, withMap)
 		if e != nil {
 			return nil, errors.NewError(e, "GSI AlterIndex()")
 		}

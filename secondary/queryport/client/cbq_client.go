@@ -190,7 +190,7 @@ func (b *cbqClient) MoveIndex(defnID uint64, plan map[string]interface{}) error 
 }
 
 // AlterReplicaCount implement BridgeAccessor{} interface.
-func (b *cbqClient) AlterReplicaCount(defnID uint64, plan map[string]interface{}) error {
+func (b *cbqClient) AlterReplicaCount(action string, defnID uint64, plan map[string]interface{}) error {
 	panic("cbqClient does not implement alter replica count")
 }
 

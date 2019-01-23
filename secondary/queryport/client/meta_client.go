@@ -312,8 +312,8 @@ func (b *metadataClient) MoveIndex(defnID uint64, planJSON map[string]interface{
 }
 
 // AlterReplicaCount implements BridgeAccessor{} interface.
-func (b *metadataClient) AlterReplicaCount(defnID uint64, planJSON map[string]interface{}) error {
-	return b.mdClient.AlterReplicaCount(common.IndexDefnId(defnID), planJSON)
+func (b *metadataClient) AlterReplicaCount(action string, defnID uint64, planJSON map[string]interface{}) error {
+	return b.mdClient.AlterReplicaCount(action, common.IndexDefnId(defnID), planJSON)
 }
 
 // DropIndex implements BridgeAccessor{} interface.

@@ -421,7 +421,7 @@ func ExecuteReplicaRepair(clusterUrl string, defnId common.IndexDefnId, incremen
 	return p.Result, nil
 }
 
-func ExecuteReplicaDrop(clusterUrl string, defnId common.IndexDefnId, nodes []string, numPartition int, decrement int) (*Solution, []int, error) {
+func ExecuteReplicaDrop(clusterUrl string, defnId common.IndexDefnId, nodes []string, numPartition int, decrement int, dropReplicaId int) (*Solution, []int, error) {
 
 	plan, err := RetrievePlanFromCluster(clusterUrl, nodes)
 	if err != nil {
@@ -432,7 +432,7 @@ func ExecuteReplicaDrop(clusterUrl string, defnId common.IndexDefnId, nodes []st
 	config.Detail = logging.IsEnabled(logging.Info)
 	config.Resize = false
 
-	p, original, result, err := replicaDrop(config, plan, defnId, numPartition, decrement)
+	p, original, result, err := replicaDrop(config, plan, defnId, numPartition, decrement, dropReplicaId)
 	if p != nil && config.Detail {
 		logging.Infof("************ Indexer Layout *************")
 		p.Print()
@@ -808,7 +808,7 @@ func replicaRepair(config *RunConfig, plan *Plan, defnId common.IndexDefnId, inc
 	return planner, nil
 }
 
-func replicaDrop(config *RunConfig, plan *Plan, defnId common.IndexDefnId, numPartition int, decrement int) (*SAPlanner, *Solution, []int, error) {
+func replicaDrop(config *RunConfig, plan *Plan, defnId common.IndexDefnId, numPartition int, decrement int, dropReplicaId int) (*SAPlanner, *Solution, []int, error) {
 
 	var constraint ConstraintMethod
 	var sizing SizingMethod
@@ -839,7 +839,7 @@ func replicaDrop(config *RunConfig, plan *Plan, defnId common.IndexDefnId, numPa
 		logging.Infof("****************************************")
 	}
 
-	original, result, err = planner.DropReplica(solution, defnId, numPartition, decrement)
+	original, result, err = planner.DropReplica(solution, defnId, numPartition, decrement, dropReplicaId)
 	return planner, original, result, err
 }
 

@@ -1435,7 +1435,7 @@ func (o *MetadataProvider) replicaRepair(defn *c.IndexDefn, numReplica c.Counter
 	return layout, definitions, nil
 }
 
-func (o *MetadataProvider) replicaDrop(defn *c.IndexDefn, numReplica c.Counter, decrement int, numPartition int, plan map[string]interface{},
+func (o *MetadataProvider) replicaDrop(defn *c.IndexDefn, numReplica c.Counter, decrement int, numPartition int, dropReplicaId int, plan map[string]interface{},
 	watcherMap map[c.IndexerId]int) ([]c.IndexInstId, []int, error) {
 
 	nodes, err := o.prepareNodeList(defn, watcherMap)
@@ -1443,7 +1443,7 @@ func (o *MetadataProvider) replicaDrop(defn *c.IndexDefn, numReplica c.Counter, 
 		return nil, nil, err
 	}
 
-	solution, replicaIds, err := planner.ExecuteReplicaDrop(o.clusterUrl, defn.DefnId, nodes, numPartition, decrement)
+	solution, replicaIds, err := planner.ExecuteReplicaDrop(o.clusterUrl, defn.DefnId, nodes, numPartition, decrement, dropReplicaId)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1772,6 +1772,92 @@ func (o *MetadataProvider) getReplicaParam(plan map[string]interface{}, version 
 	}
 
 	return numReplica, nil, false
+}
+
+func (o *MetadataProvider) getReplicaParam2(plan map[string]interface{}, version uint64) (int, error, bool) {
+
+	numReplica := int(-1)
+
+	numReplica2, ok := plan["num_replica"].(int64)
+	if !ok {
+		numReplica2, ok := plan["num_replica"].(float64)
+		if !ok {
+			numReplica_str, ok := plan["num_replica"].(string)
+			if ok {
+				var err error
+				numReplica2, err := strconv.ParseInt(numReplica_str, 10, 64)
+				if err != nil {
+					return 0, errors.New("Parameter num_replica must be a integer value."), false
+				}
+				numReplica = int(numReplica2)
+				if numReplica < 0 {
+					return 0, errors.New("Parameter num_replica must be a positive value."), false
+				}
+
+			} else if v, ok := plan["num_replica"]; ok {
+				return 0, fmt.Errorf("Parameter num_replica must be a integer value (%v).", reflect.TypeOf(v)), false
+			}
+		} else {
+			numReplica = int(numReplica2)
+			if numReplica < 0 {
+				return 0, errors.New("Parameter num_replica must be a positive value."), false
+			}
+		}
+	} else {
+		numReplica = int(numReplica2)
+		if numReplica < 0 {
+			return 0, errors.New("Parameter num_replica must be a positive value."), false
+		}
+	}
+
+	if numReplica > -1 && version < c.INDEXER_65_VERSION {
+		return 0, errors.New("Replica is not supported.  This option is enabled after cluster is fully upgraded and there is no failed node."), false
+	}
+
+	return numReplica, nil, false
+}
+
+func (o *MetadataProvider) getReplicaIdParam(plan map[string]interface{}, version uint64) (int, error, bool) {
+
+	replicaId := int(-1)
+
+	replicaId2, ok := plan["replicaId"].(int64)
+	if !ok {
+		replicaId2, ok := plan["replicaId"].(float64)
+		if !ok {
+			replicaId_str, ok := plan["replicaId"].(string)
+			if ok {
+				var err error
+				replicaId2, err := strconv.ParseInt(replicaId_str, 10, 64)
+				if err != nil {
+					return 0, errors.New("Parameter replicaId must be a integer value."), false
+				}
+				replicaId = int(replicaId2)
+				if replicaId < 0 {
+					return 0, errors.New("Parameter replicaId must be a positive value."), false
+				}
+
+			} else if v, ok := plan["replicaId"]; ok {
+				return 0, fmt.Errorf("Parameter replicaId must be a integer value (%v).", reflect.TypeOf(v)), false
+			}
+		} else {
+			replicaId = int(replicaId2)
+			if replicaId < 0 {
+				return 0, errors.New("Parameter replicaId must be a positive value."), false
+			}
+		}
+	} else {
+		replicaId = int(replicaId2)
+		if replicaId < 0 {
+			return 0, errors.New("Parameter replicaId must be a positive value."), false
+		}
+	}
+
+	if replicaId > -1 && version < c.INDEXER_65_VERSION {
+		return 0, errors.New("ReplicaId is not supported.  This option is enabled after cluster is fully upgraded and there is no failed node."), false
+	}
+
+	return replicaId, nil, false
 }
 
 func (o *MetadataProvider) getDocKeySizeParam(plan map[string]interface{}) (uint64, error, bool) {
@@ -2391,7 +2477,7 @@ func (o *MetadataProvider) getNumReplica(defnId c.IndexDefnId, name string, buck
 	return &numReplica, nil
 }
 
-func (o *MetadataProvider) AlterReplicaCount(defnId c.IndexDefnId, plan map[string]interface{}) error {
+func (o *MetadataProvider) AlterReplicaCount(action string, defnId c.IndexDefnId, plan map[string]interface{}) error {
 
 	// Support for 6.5 and onwards
 	clusterVersion := o.GetClusterVersion()
@@ -2412,9 +2498,31 @@ func (o *MetadataProvider) AlterReplicaCount(defnId c.IndexDefnId, plan map[stri
 		return fmt.Errorf("Index %s does not exist.", defnId)
 	}
 
-	count, err, _ := o.getReplicaParam(plan, clusterVersion)
-	if err != nil {
-		return fmt.Errorf("Fail to alter index: %v", err)
+	dropReplicaId := -1
+	count := -1
+
+	if action == "replica_count" {
+		var err error
+		count, err, _ = o.getReplicaParam2(plan, clusterVersion)
+		if err != nil {
+			return fmt.Errorf("Fail to alter index: %v", err)
+		}
+
+		if count == -1 {
+			return fmt.Errorf("Missing argument num_replica")
+		}
+	}
+
+	if action == "drop_replica" {
+		var err error
+		dropReplicaId, err, _ = o.getReplicaIdParam(plan, clusterVersion)
+		if err != nil {
+			return fmt.Errorf("Fail to alter index: %v", err)
+		}
+
+		if dropReplicaId == -1 {
+			return fmt.Errorf("Missing argument replicaId")
+		}
 	}
 
 	//
@@ -2459,7 +2567,15 @@ func (o *MetadataProvider) AlterReplicaCount(defnId c.IndexDefnId, plan map[stri
 
 	logging.Infof("alter replica count.  Current num replica %v new replica count %v", curCount, count)
 
-	// Check if we already have the desired number of replica
+	// drop replica
+	if dropReplicaId != -1 {
+		if err := o.removeReplica(&defn, watcherMap, *numReplica, 1, numPartition, dropReplicaId, (map[string]interface{})(nil)); err != nil {
+			return fmt.Errorf("Fail to alter index: %v", err)
+		}
+		return nil
+	}
+
+	// Alter replica_count.   Check if we already have the desired number of replica
 	if int(curCount) == count {
 		o.cancelPrepareIndexRequest(defn.DefnId, watcherMap)
 		return fmt.Errorf("Index already has %v number of replica.", curCount)
@@ -2473,7 +2589,7 @@ func (o *MetadataProvider) AlterReplicaCount(defnId c.IndexDefnId, plan map[stri
 
 	} else {
 		// remove replica
-		if err := o.removeReplica(&defn, watcherMap, *numReplica, int(curCount)-count, numPartition, (map[string]interface{})(nil)); err != nil {
+		if err := o.removeReplica(&defn, watcherMap, *numReplica, int(curCount)-count, numPartition, dropReplicaId, (map[string]interface{})(nil)); err != nil {
 			return fmt.Errorf("Fail to alter index: %v", err)
 		}
 	}
@@ -2541,14 +2657,14 @@ func (o *MetadataProvider) addReplica(idxDefn *c.IndexDefn, watcherMap map[c.Ind
 // This function removes replica count of an index.
 //
 func (o *MetadataProvider) removeReplica(idxDefn *c.IndexDefn, watcherMap map[c.IndexerId]int, numReplica c.Counter, decrement int,
-	numPartition int, plan map[string]interface{}) error {
+	numPartition int, dropReplicaId int, plan map[string]interface{}) error {
 
 	//
 	// Plan Phase.
 	// The planner will use nodes that metadta provider sees for planning.  All inactive_failed, inactive_new and unhealthy
 	// nodes will be excluded from planning.    If the user provides a specific node list, those nodes will be used.
 	//
-	instIds, replicaIds, err := o.replicaDrop(idxDefn, numReplica, decrement, numPartition, plan, watcherMap)
+	instIds, replicaIds, err := o.replicaDrop(idxDefn, numReplica, decrement, numPartition, dropReplicaId, plan, watcherMap)
 	if err != nil {
 		o.cancelPrepareIndexRequest(idxDefn.DefnId, watcherMap)
 		logging.Errorf("Fail to drop index replica: %v", err)
