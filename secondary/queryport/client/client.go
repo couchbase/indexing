@@ -65,6 +65,9 @@ type CountRequestHandler func(*GsiScanClient, *common.IndexDefn, int64, []common
 // ResponseTimer updates timing of responses
 type ResponseTimer func(instID uint64, partitionId common.PartitionId, value float64)
 
+// ResponseWaiter for backfill done
+type BackfillWaiter func()
+
 // scanClientMaker fetches a scan client
 type scanClientMaker func(scanport string) *GsiScanClient
 
@@ -1259,7 +1262,7 @@ func (c *GsiClient) doScan(defnID uint64, requestId string, broker *RequestBroke
 				}
 
 				excludes = c.updateExcludes(defnID, excludes, scan_errs)
-				if len(scan_errs) != 0 && !isAnyGone(scan_errs) && partial {
+				if len(scan_errs) != 0 && partial {
 					// partially succeeded scans, we don't reset-hash and we don't retry
 					return 0, getScanError(scan_errs)
 
