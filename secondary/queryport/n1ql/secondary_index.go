@@ -1234,8 +1234,15 @@ func makeRequestBroker(
 		return sendEntry(broker, si, pkey, value, skey, conn, tmpbuf)
 	}
 
+	backfillWaiter := func() {
+		if waitGroup != nil {
+			waitGroup.Wait()
+		}
+	}
+
 	broker.SetResponseHandlerFactory(factory)
 	broker.SetResponseSender(sender)
+	broker.SetBackfillWaiter(backfillWaiter)
 
 	return broker
 }
@@ -1303,6 +1310,11 @@ func makeResponsehandler(
 			"%v %q started backfill for %v ...\n", lprefix, requestId, name)
 		for {
 			var skeys c.ScanResultEntries
+
+			if broker.IsClose() {
+				return
+			}
+
 			if pending := atomic.LoadInt64(&backfillEntries); pending > 0 {
 				atomic.AddInt64(&backfillEntries, -1)
 			} else if done := atomic.LoadInt64(backfillSync); done == DONEREQUEST {
