@@ -825,7 +825,20 @@ var SystemConfig = Config{
 		true,  // immutable
 		false, // case-insensitive
 	},
-
+	"indexer.statsPersistenceInterval": ConfigValue{
+		uint64(900),
+		"Periodic stats persistence interval in seconds. Value of 0 disables persistence",
+		uint64(900),
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.statsPersistenceChunkSize": ConfigValue{
+		20 * 1024 * 1024,
+		"Size of individual chunk while persisting stats in bytes",
+		20 * 1024 * 1024,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.memstats_cache_timeout": ConfigValue{
 		uint64(60000),
 		"Memstats cache ttl in millis",

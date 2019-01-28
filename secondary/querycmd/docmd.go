@@ -173,16 +173,36 @@ func HandleCommand(
 
 	indexes, _, _, err := client.Refresh()
 
+	dataEncFmt := client.GetDataEncodingFormat()
+
+	var tmpbuf *[]byte
+	var tmpbufPoolIdx uint32
+
 	entries := 0
 	callb := func(res qclient.ResponseReader) bool {
 		if res.Error() != nil {
 			fmt.Fprintln(w, "Error: ", res)
-		} else if skeys, pkeys, err := res.GetEntries(); err != nil {
+			return true
+		}
+
+		var skeys *c.ScanResultEntries
+		var pkeys [][]byte
+		var err error
+
+		if skeys, pkeys, err = res.GetEntries(dataEncFmt); err != nil {
 			fmt.Fprintln(w, "Error: ", err)
 		} else {
 			if verbose == false {
 				for i, pkey := range pkeys {
-					fmt.Fprintf(w, "%v ... %v\n", skeys[i], string(pkey))
+					skey, err, retBuf := skeys.Getkth(tmpbuf, i)
+					if err != nil {
+						fmt.Fprint(w, "Error: %v", err)
+						return false
+					}
+					if retBuf != nil {
+						tmpbuf = retBuf
+					}
+					fmt.Fprintf(w, "%v ... %v\n", skey, string(pkey))
 				}
 			}
 			entries += len(pkeys)
@@ -277,6 +297,11 @@ func HandleCommand(
 	case "scan":
 		var state c.IndexState
 
+		tmpbuf, tmpbufPoolIdx = qclient.GetFromPools()
+		defer func() {
+			qclient.PutInPools(tmpbuf, tmpbufPoolIdx)
+		}()
+
 		index, _ := GetIndex(client, bucket, iname)
 		defnID := uint64(index.Definition.DefnId)
 		fmt.Fprintln(w, "Scan index:")
@@ -303,6 +328,11 @@ func HandleCommand(
 
 	case "scanAll":
 		var state c.IndexState
+
+		tmpbuf, tmpbufPoolIdx = qclient.GetFromPools()
+		defer func() {
+			qclient.PutInPools(tmpbuf, tmpbufPoolIdx)
+		}()
 
 		index, found := GetIndex(client, bucket, iname)
 		if !found {

@@ -167,7 +167,8 @@ func (c *GsiScanClient) Lookup(
 	cons common.Consistency, vector *TsConsistency,
 	callb ResponseHandler,
 	rollbackTime int64,
-	partitions []common.PartitionId) (error, bool) {
+	partitions []common.PartitionId,
+	dataEncFmt common.DataEncodingFormat) (error, bool) {
 
 	// serialize lookup value.
 	equals := make([][]byte, 0, len(values))
@@ -210,6 +211,7 @@ func (c *GsiScanClient) Lookup(
 		RollbackTime: proto.Int64(rollbackTime),
 		PartitionIds: partnIds,
 		Sorted:       proto.Bool(true),
+		DataEncFmt:   proto.Uint32(uint32(dataEncFmt)),
 	}
 	if vector != nil {
 		req.Vector = protobuf.NewTsConsistency(
@@ -242,7 +244,8 @@ func (c *GsiScanClient) Lookup(
 func (c *GsiScanClient) Range(
 	defnID uint64, requestId string, low, high common.SecondaryKey, inclusion Inclusion,
 	distinct bool, limit int64, cons common.Consistency, vector *TsConsistency,
-	callb ResponseHandler, rollbackTime int64, partitions []common.PartitionId) (error, bool) {
+	callb ResponseHandler, rollbackTime int64, partitions []common.PartitionId,
+	dataEncFmt common.DataEncodingFormat) (error, bool) {
 
 	// serialize low and high values.
 	l, err := json.Marshal(low)
@@ -289,6 +292,7 @@ func (c *GsiScanClient) Range(
 		RollbackTime: proto.Int64(rollbackTime),
 		PartitionIds: partnIds,
 		Sorted:       proto.Bool(true),
+		DataEncFmt:   proto.Uint32(uint32(dataEncFmt)),
 	}
 	if vector != nil {
 		req.Vector = protobuf.NewTsConsistency(
@@ -320,7 +324,8 @@ func (c *GsiScanClient) Range(
 func (c *GsiScanClient) RangePrimary(
 	defnID uint64, requestId string, low, high []byte, inclusion Inclusion,
 	distinct bool, limit int64, cons common.Consistency, vector *TsConsistency,
-	callb ResponseHandler, rollbackTime int64, partitions []common.PartitionId) (error, bool) {
+	callb ResponseHandler, rollbackTime int64, partitions []common.PartitionId,
+	dataEncFmt common.DataEncodingFormat) (error, bool) {
 
 	connectn, err := c.pool.Get()
 	if err != nil {
@@ -358,6 +363,7 @@ func (c *GsiScanClient) RangePrimary(
 		RollbackTime: proto.Int64(rollbackTime),
 		PartitionIds: partnIds,
 		Sorted:       proto.Bool(true),
+		DataEncFmt:   proto.Uint32(uint32(dataEncFmt)),
 	}
 	if vector != nil {
 		req.Vector = protobuf.NewTsConsistency(
@@ -389,7 +395,8 @@ func (c *GsiScanClient) RangePrimary(
 func (c *GsiScanClient) ScanAll(
 	defnID uint64, requestId string, limit int64,
 	cons common.Consistency, vector *TsConsistency,
-	callb ResponseHandler, rollbackTime int64, partitions []common.PartitionId) (error, bool) {
+	callb ResponseHandler, rollbackTime int64, partitions []common.PartitionId,
+	dataEncFmt common.DataEncodingFormat) (error, bool) {
 
 	connectn, err := c.pool.Get()
 	if err != nil {
@@ -419,6 +426,7 @@ func (c *GsiScanClient) ScanAll(
 		Cons:         proto.Uint32(uint32(cons)),
 		RollbackTime: proto.Int64(rollbackTime),
 		PartitionIds: partnIds,
+		DataEncFmt:   proto.Uint32(uint32(dataEncFmt)),
 	}
 	if vector != nil {
 		req.Vector = protobuf.NewTsConsistency(
@@ -449,7 +457,8 @@ func (c *GsiScanClient) MultiScan(
 	defnID uint64, requestId string, scans Scans,
 	reverse, distinct bool, projection *IndexProjection, offset, limit int64,
 	cons common.Consistency, vector *TsConsistency,
-	callb ResponseHandler, rollbackTime int64, partitions []common.PartitionId) (error, bool) {
+	callb ResponseHandler, rollbackTime int64, partitions []common.PartitionId,
+	dataEncFmt common.DataEncodingFormat) (error, bool) {
 
 	// serialize scans
 	protoScans := make([]*protobuf.Scan, len(scans))
@@ -550,6 +559,7 @@ func (c *GsiScanClient) MultiScan(
 		RollbackTime:    proto.Int64(rollbackTime),
 		PartitionIds:    partnIds,
 		Sorted:          proto.Bool(true),
+		DataEncFmt:      proto.Uint32(uint32(dataEncFmt)),
 	}
 	if vector != nil {
 		req.Vector = protobuf.NewTsConsistency(
@@ -581,7 +591,8 @@ func (c *GsiScanClient) MultiScanPrimary(
 	defnID uint64, requestId string, scans Scans,
 	reverse, distinct bool, projection *IndexProjection, offset, limit int64,
 	cons common.Consistency, vector *TsConsistency,
-	callb ResponseHandler, rollbackTime int64, partitions []common.PartitionId) (error, bool) {
+	callb ResponseHandler, rollbackTime int64, partitions []common.PartitionId,
+	dataEncFmt common.DataEncodingFormat) (error, bool) {
 
 	var what string
 	// serialize scans
@@ -687,6 +698,7 @@ func (c *GsiScanClient) MultiScanPrimary(
 		RollbackTime:    proto.Int64(rollbackTime),
 		PartitionIds:    partnIds,
 		Sorted:          proto.Bool(true),
+		DataEncFmt:      proto.Uint32(uint32(dataEncFmt)),
 	}
 	if vector != nil {
 		req.Vector = protobuf.NewTsConsistency(
@@ -1074,7 +1086,8 @@ func (c *GsiScanClient) Scan3(
 	reverse, distinct bool, projection *IndexProjection, offset, limit int64,
 	groupAggr *GroupAggr, sorted bool,
 	cons common.Consistency, vector *TsConsistency,
-	callb ResponseHandler, rollbackTime int64, partitions []common.PartitionId) (error, bool) {
+	callb ResponseHandler, rollbackTime int64, partitions []common.PartitionId,
+	dataEncFmt common.DataEncodingFormat) (error, bool) {
 
 	// serialize scans
 	protoScans := make([]*protobuf.Scan, len(scans))
@@ -1215,6 +1228,7 @@ func (c *GsiScanClient) Scan3(
 		PartitionIds:    partnIds,
 		GroupAggr:       protoGroupAggr,
 		Sorted:          proto.Bool(sorted),
+		DataEncFmt:      proto.Uint32(uint32(dataEncFmt)),
 	}
 	if vector != nil {
 		req.Vector = protobuf.NewTsConsistency(
@@ -1247,7 +1261,8 @@ func (c *GsiScanClient) Scan3Primary(
 	reverse, distinct bool, projection *IndexProjection, offset, limit int64,
 	groupAggr *GroupAggr, sorted bool,
 	cons common.Consistency, vector *TsConsistency,
-	callb ResponseHandler, rollbackTime int64, partitions []common.PartitionId) (error, bool) {
+	callb ResponseHandler, rollbackTime int64, partitions []common.PartitionId,
+	dataEncFmt common.DataEncodingFormat) (error, bool) {
 
 	var what string
 	// serialize scans
@@ -1392,6 +1407,7 @@ func (c *GsiScanClient) Scan3Primary(
 		PartitionIds:    partnIds,
 		GroupAggr:       protoGroupAggr,
 		Sorted:          proto.Bool(sorted),
+		DataEncFmt:      proto.Uint32(uint32(dataEncFmt)),
 	}
 	if vector != nil {
 		req.Vector = protobuf.NewTsConsistency(

@@ -41,7 +41,7 @@ type ResponseReader interface {
 	// GetEntries returns a list of secondary-key and corresponding
 	// primary-key if returned value is nil, then there are no more
 	// entries for this query.
-	GetEntries() ([]common.SecondaryKey, [][]byte, error)
+	GetEntries(dataEncFmt common.DataEncodingFormat) (*common.ScanResultEntries, [][]byte, error)
 
 	// Error returns the error value, if nil there is no error.
 	Error() error
@@ -51,7 +51,7 @@ type ResponseReader interface {
 // after streams from multiple servers/ResponseHandler have been merged.
 // mskey - marshalled sec key (as Value)
 // uskey - unmarshalled sec key (as byte)
-type ResponseSender func(pkey []byte, mskey []value.Value, uskey common.SecondaryKey) bool
+type ResponseSender func(pkey []byte, mskey []value.Value, uskey common.ScanResultKey, tmpbuf *[]byte) (bool, *[]byte)
 
 // ResponseHandlerFactory returns an instance of ResponseHandler
 type ResponseHandlerFactory func(id ResponseHandlerId, instId uint64, partitions []common.PartitionId) ResponseHandler
@@ -374,6 +374,7 @@ type GsiClient struct {
 	killch       chan bool
 	numScans     int64
 	scanResponse int64
+	dataEncFmt   uint32
 }
 
 // NewGsiClient returns client to access GSI cluster.
@@ -395,7 +396,17 @@ func NewGsiClientWithSettings(
 		return nil, err
 	}
 	c.maxvb = -1
-	c.Refresh()
+
+	var clusterVer uint64
+	var refreshErr error
+	_, _, clusterVer, refreshErr = c.Refresh()
+	if refreshErr == nil {
+		c.UpdateDataEncodingFormat(clusterVer)
+	} else {
+		// Use old data format if c.Refresh() returns error
+		c.SetDataEncodingFormat(common.DATA_ENC_JSON)
+	}
+
 	return c, nil
 }
 
@@ -417,6 +428,17 @@ func (c *GsiClient) Sync() error {
 		return ErrorClientUninitialized
 	}
 	return c.bridge.Sync()
+}
+
+func (c *GsiClient) UpdateDataEncodingFormat(clusterVer uint64) {
+	if clusterVer >= common.INDEXER_65_VERSION {
+		msg := "GsiClient::UpdateUsecjson: using collatejson as data format "
+		msg += "between indexer and GsiClient"
+		logging.Infof(msg)
+		c.SetDataEncodingFormat(common.DATA_ENC_COLLATEJSON)
+	} else {
+		c.SetDataEncodingFormat(common.DATA_ENC_JSON)
+	}
 }
 
 // Refresh implements BridgeAccessor{} interface.
@@ -574,7 +596,8 @@ func (c *GsiClient) Lookup(
 	cons common.Consistency, vector *TsConsistency,
 	callb ResponseHandler) (err error) {
 
-	broker := makeDefaultRequestBroker(callb)
+	dataEncFmt := c.GetDataEncodingFormat()
+	broker := makeDefaultRequestBroker(callb, dataEncFmt)
 	return c.LookupInternal(defnID, requestId, values, distinct, limit, cons, vector, broker)
 }
 
@@ -600,13 +623,15 @@ func (c *GsiClient) LookupInternal(
 		callb ResponseHandler) (error, bool) {
 		var err error
 
+		dataEncFmt := broker.GetDataEncodingFormat()
+
 		vector, err = c.getConsistency(qc, cons, vector, index.Bucket)
 		if err != nil {
 			return err, false
 		}
 		return qc.Lookup(
 			uint64(index.DefnId), requestId, values, distinct, broker.GetLimit(), cons,
-			vector, callb, rollbackTime, partitions)
+			vector, callb, rollbackTime, partitions, dataEncFmt)
 	}
 
 	broker.SetScanRequestHandler(handler)
@@ -629,7 +654,8 @@ func (c *GsiClient) Range(
 	cons common.Consistency, vector *TsConsistency,
 	callb ResponseHandler) (err error) {
 
-	broker := makeDefaultRequestBroker(callb)
+	dataEncFmt := c.GetDataEncodingFormat()
+	broker := makeDefaultRequestBroker(callb, dataEncFmt)
 	return c.RangeInternal(defnID, requestId, low, high, inclusion, distinct, limit, cons, vector, broker)
 }
 
@@ -655,6 +681,8 @@ func (c *GsiClient) RangeInternal(
 		handler ResponseHandler) (error, bool) {
 		var err error
 
+		dataEncFmt := broker.GetDataEncodingFormat()
+
 		vector, err = c.getConsistency(qc, cons, vector, index.Bucket)
 		if err != nil {
 			return err, false
@@ -675,12 +703,14 @@ func (c *GsiClient) RangeInternal(
 			}
 			return qc.RangePrimary(
 				uint64(index.DefnId), requestId, l, h, inclusion, distinct,
-				broker.GetLimit(), cons, vector, handler, rollbackTime, partitions)
+				broker.GetLimit(), cons, vector, handler, rollbackTime,
+				partitions, dataEncFmt)
 		}
 		// dealing with secondary index.
 		return qc.Range(
 			uint64(index.DefnId), requestId, low, high, inclusion, distinct,
-			broker.GetLimit(), cons, vector, handler, rollbackTime, partitions)
+			broker.GetLimit(), cons, vector, handler, rollbackTime, partitions,
+			dataEncFmt)
 	}
 
 	broker.SetScanRequestHandler(handler)
@@ -702,7 +732,8 @@ func (c *GsiClient) ScanAll(
 	cons common.Consistency, vector *TsConsistency,
 	callb ResponseHandler) (err error) {
 
-	broker := makeDefaultRequestBroker(callb)
+	dataEncFmt := c.GetDataEncodingFormat()
+	broker := makeDefaultRequestBroker(callb, dataEncFmt)
 	return c.ScanAllInternal(defnID, requestId, limit, cons, vector, broker)
 }
 
@@ -727,11 +758,14 @@ func (c *GsiClient) ScanAllInternal(
 		handler ResponseHandler) (error, bool) {
 		var err error
 
+		dataEncFmt := broker.GetDataEncodingFormat()
+
 		vector, err = c.getConsistency(qc, cons, vector, index.Bucket)
 		if err != nil {
 			return err, false
 		}
-		return qc.ScanAll(uint64(index.DefnId), requestId, broker.GetLimit(), cons, vector, handler, rollbackTime, partitions)
+		return qc.ScanAll(uint64(index.DefnId), requestId, broker.GetLimit(),
+			cons, vector, handler, rollbackTime, partitions, dataEncFmt)
 	}
 
 	broker.SetScanRequestHandler(handler)
@@ -753,7 +787,8 @@ func (c *GsiClient) MultiScan(
 	cons common.Consistency, vector *TsConsistency,
 	callb ResponseHandler) (err error) {
 
-	broker := makeDefaultRequestBroker(callb)
+	dataEncFmt := c.GetDataEncodingFormat()
+	broker := makeDefaultRequestBroker(callb, dataEncFmt)
 	return c.MultiScanInternal(defnID, requestId, scans, reverse, distinct, projection, offset, limit, cons, vector, broker)
 }
 
@@ -778,6 +813,8 @@ func (c *GsiClient) MultiScanInternal(
 		handler ResponseHandler) (error, bool) {
 		var err error
 
+		dataEncFmt := broker.GetDataEncodingFormat()
+
 		vector, err = c.getConsistency(qc, cons, vector, index.Bucket)
 		if err != nil {
 			return err, false
@@ -786,12 +823,14 @@ func (c *GsiClient) MultiScanInternal(
 		if c.bridge.IsPrimary(uint64(index.DefnId)) {
 			return qc.MultiScanPrimary(
 				uint64(index.DefnId), requestId, scans, reverse, distinct,
-				projection, broker.GetOffset(), broker.GetLimit(), cons, vector, handler, rollbackTime, partitions)
+				projection, broker.GetOffset(), broker.GetLimit(), cons,
+				vector, handler, rollbackTime, partitions, dataEncFmt)
 		}
 
 		return qc.MultiScan(
 			uint64(index.DefnId), requestId, scans, reverse, distinct,
-			projection, broker.GetOffset(), broker.GetLimit(), cons, vector, handler, rollbackTime, partitions)
+			projection, broker.GetOffset(), broker.GetLimit(), cons, vector,
+			handler, rollbackTime, partitions, dataEncFmt)
 	}
 
 	broker.SetScanRequestHandler(handler)
@@ -815,7 +854,8 @@ func (c *GsiClient) CountLookup(
 	defnID uint64, requestId string, values []common.SecondaryKey,
 	cons common.Consistency, vector *TsConsistency) (count int64, err error) {
 
-	broker := makeDefaultRequestBroker(nil)
+	dataEncFmt := c.GetDataEncodingFormat()
+	broker := makeDefaultRequestBroker(nil, dataEncFmt)
 	return c.CountLookupInternal(defnID, requestId, values, cons, vector, broker)
 }
 
@@ -877,7 +917,8 @@ func (c *GsiClient) CountRange(
 	inclusion Inclusion,
 	cons common.Consistency, vector *TsConsistency) (count int64, err error) {
 
-	broker := makeDefaultRequestBroker(nil)
+	dataEncFmt := c.GetDataEncodingFormat()
+	broker := makeDefaultRequestBroker(nil, dataEncFmt)
 	return c.CountRangeInternal(defnID, requestId, low, high, inclusion, cons, vector, broker)
 }
 
@@ -946,7 +987,8 @@ func (c *GsiClient) MultiScanCount(
 	scans Scans, distinct bool,
 	cons common.Consistency, vector *TsConsistency) (count int64, err error) {
 
-	broker := makeDefaultRequestBroker(nil)
+	dataEncFmt := c.GetDataEncodingFormat()
+	broker := makeDefaultRequestBroker(nil, dataEncFmt)
 	return c.MultiScanCountInternal(defnID, requestId, scans, distinct, cons, vector, broker)
 }
 
@@ -1001,7 +1043,8 @@ func (c *GsiClient) Scan3(
 	cons common.Consistency, vector *TsConsistency,
 	callb ResponseHandler) (err error) {
 
-	broker := makeDefaultRequestBroker(callb)
+	dataEncFmt := c.GetDataEncodingFormat()
+	broker := makeDefaultRequestBroker(callb, dataEncFmt)
 	return c.Scan3Internal(defnID, requestId, scans, reverse, distinct,
 		projection, offset, limit, groupAggr, indexOrder, cons, vector, broker)
 }
@@ -1028,6 +1071,8 @@ func (c *GsiClient) Scan3Internal(
 		handler ResponseHandler) (error, bool) {
 		var err error
 
+		dataEncFmt := broker.GetDataEncodingFormat()
+
 		vector, err = c.getConsistency(qc, cons, vector, index.Bucket)
 		if err != nil {
 			return err, false
@@ -1036,12 +1081,16 @@ func (c *GsiClient) Scan3Internal(
 		if c.bridge.IsPrimary(uint64(index.DefnId)) {
 			return qc.Scan3Primary(
 				uint64(index.DefnId), requestId, scans, reverse, distinct,
-				projection, broker.GetOffset(), broker.GetLimit(), groupAggr, broker.GetSorted(), cons, vector, handler, rollbackTime, partitions)
+				projection, broker.GetOffset(), broker.GetLimit(), groupAggr,
+				broker.GetSorted(), cons, vector, handler, rollbackTime,
+				partitions, dataEncFmt)
 		}
 
 		return qc.Scan3(
 			uint64(index.DefnId), requestId, scans, reverse, distinct,
-			projection, broker.GetOffset(), broker.GetLimit(), groupAggr, broker.GetSorted(), cons, vector, handler, rollbackTime, partitions)
+			projection, broker.GetOffset(), broker.GetLimit(), groupAggr,
+			broker.GetSorted(), cons, vector, handler, rollbackTime,
+			partitions, dataEncFmt)
 	}
 
 	broker.SetScanRequestHandler(handler)
@@ -1474,6 +1523,14 @@ func (c *GsiClient) updateScanResponse(value int64) {
 
 	current := atomic.LoadInt64(&c.scanResponse)
 	atomic.StoreInt64(&c.scanResponse, (current+value)/2)
+}
+
+func (c *GsiClient) SetDataEncodingFormat(val common.DataEncodingFormat) {
+	atomic.StoreUint32(&c.dataEncFmt, uint32(val))
+}
+
+func (c *GsiClient) GetDataEncodingFormat() common.DataEncodingFormat {
+	return common.DataEncodingFormat(atomic.LoadUint32(&c.dataEncFmt))
 }
 
 //--------------------------

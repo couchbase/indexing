@@ -7,18 +7,21 @@ if [ "$WORKSPACE" = "" ]; then
   exit 2
 fi
 
-if [ "$STORAGE" = "memdb" ]; then
-  exit 0
+if [ "$CIBOT" = "true" ]; then
+   sleep 60
+   exit 0
 fi
 
-for i in {1..60}; do
+if [ "$STORAGE" = "memdb" ]; then
+   sleep 60
+   exit 0
+fi
+
+for i in {1..240}; do
   cd $WORKSPACE
   sleep 60
-
-  branch=unstable
-  current="`git ls-remote git://github.com/couchbase/indexing $branch | awk '{print $1}'`"
+  current="`git ls-remote git://github.com/couchbase/indexing $BRANCH | awk '{print $1}'`"
   good="`cat ~/indexing.good`"
   if [ "$current" != "$good" ]; then exit 0; fi
-  
 done
 

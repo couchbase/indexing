@@ -943,7 +943,7 @@ func validateEntries(expected tc.ScanResponse, entries []interface{}) error {
 		m := entry.(map[string]interface{})
 		out[m["docid"].(string)] = m["key"].([]interface{})
 	}
-	if err := tv.Validate(expected, out); err != nil {
+	if err := tv.ValidateOld(expected, out); err != nil {
 		return err
 	}
 	return nil

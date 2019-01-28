@@ -2,7 +2,6 @@ package secondaryindex
 
 import (
 	"errors"
-	// "github.com/couchbase/indexing/secondary/collatejson"
 	c "github.com/couchbase/indexing/secondary/common"
 	qc "github.com/couchbase/indexing/secondary/queryport/client"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
@@ -12,7 +11,7 @@ import (
 )
 
 func ArrayIndex_Range(indexName, bucketName, server string, low, high []interface{}, inclusion uint32,
-	distinct bool, limit int64, consistency c.Consistency, vector *qc.TsConsistency) (tc.ArrayIndexScanResponse, error) {
+	distinct bool, limit int64, consistency c.Consistency, vector *qc.TsConsistency) (tc.ArrayIndexScanResponseActual, error) {
 	var scanErr error
 	scanErr = nil
 	var previousSecKey value.Value
@@ -25,7 +24,12 @@ func ArrayIndex_Range(indexName, bucketName, server string, low, high []interfac
 	defer client.Close()
 
 	defnID, _ := GetDefnID(client, bucketName, indexName)
-	scanResults := make(tc.ArrayIndexScanResponse)
+	scanResults := make(tc.ArrayIndexScanResponseActual)
+
+	tmpbuf, tmpbufPoolIdx := qc.GetFromPools()
+	defer func() {
+		qc.PutInPools(tmpbuf, tmpbufPoolIdx)
+	}()
 
 	start := time.Now()
 	connErr := client.Range(
@@ -36,16 +40,25 @@ func ArrayIndex_Range(indexName, bucketName, server string, low, high []interfac
 			if err := response.Error(); err != nil {
 				scanErr = err
 				return false
-			} else if skeys, pkeys, err := response.GetEntries(); err != nil {
+			} else if keys, pkeys, err := response.GetEntries(client.GetDataEncodingFormat()); err != nil {
 				scanErr = err
 				return false
 			} else {
 				// scanResults[primaryKey] = make([][]interface{}, len(skeys))
+
+				skeys, err1, retBuf := keys.Get(tmpbuf)
+				if err1 != nil {
+					tc.HandleError(err1, "err in keys.Get")
+					return false
+				}
+				if retBuf != nil {
+					tmpbuf = retBuf
+				}
 				for i, skey := range skeys {
 					primaryKey := string(pkeys[i])
 					// Test collation only if CheckCollation is true
 					if CheckCollation == true && len(skey) > 0 {
-						secVal := skey2Values(skey)[0]
+						secVal := skey[0]
 						if previousSecKey == nil {
 							previousSecKey = secVal
 						} else {

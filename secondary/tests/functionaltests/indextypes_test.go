@@ -284,7 +284,7 @@ func TestLookupJsonObject(t *testing.T) {
 	docScanResults := datautility.ExpectedLookupResponse_json(docs, "address.streetaddress", value)
 	scanResults, err := secondaryindex.Lookup(indexName, bucketName, indexScanAddress, []interface{}{value}, false, defaultlimit, c.SessionConsistency, nil)
 	tc.PrintScanResults(docScanResults, "docScanResults")
-	tc.PrintScanResults(scanResults, "scanResults")
+	tc.PrintScanResultsActual(scanResults, "scanResults")
 	FailTestIfError(err, "Error in scan", t)
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
@@ -306,7 +306,7 @@ func TestLookupObjDifferentOrdering(t *testing.T) {
 	docScanResults := datautility.ExpectedLookupResponse_json(docs, "address.streetaddress", value)
 	scanResults, err := secondaryindex.Lookup(indexName, bucketName, indexScanAddress, []interface{}{value}, false, defaultlimit, c.SessionConsistency, nil)
 	tc.PrintScanResults(docScanResults, "docScanResults")
-	tc.PrintScanResults(scanResults, "scanResults")
+	tc.PrintScanResultsActual(scanResults, "scanResults")
 	FailTestIfError(err, "Error in scan", t)
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
@@ -345,7 +345,7 @@ func TestRangeJsonObject(t *testing.T) {
 	docScanResults["User3bf51f08-0bac-4c03-bcec-5c255cbdde2c"] = []interface{}{value1}
 	docScanResults["Userbb48952f-f8d1-4e04-a0e1-96b9019706fb"] = []interface{}{value2}
 	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{low}, []interface{}{high}, 3, false, defaultlimit, c.SessionConsistency, nil)
-	tc.PrintScanResults(scanResults, "scanResults")
+	tc.PrintScanResultsActual(scanResults, "scanResults")
 	tc.PrintScanResults(docScanResults, "docScanResults")
 	FailTestIfError(err, "Error in scan", t)
 	err = tv.Validate(docScanResults, scanResults)
@@ -606,7 +606,7 @@ func TestBasicArrayDataType_Lookup(t *testing.T) {
 	arrayValue := []string{"reprehenderit", "tempor", "officia", "exercitation", "labore", "sunt", "tempor"}
 
 	scanResults, err := secondaryindex.Lookup(indexName, bucketName, indexScanAddress, []interface{}{arrayValue}, false, defaultlimit, c.SessionConsistency, nil)
-	tc.PrintScanResults(scanResults, "scanResults")
+	tc.PrintScanResultsActual(scanResults, "scanResults")
 	FailTestIfError(err, "Error in scan", t)
 	if len(scanResults) != 1 {
 		e := errors.New("Lookup should return exactly one result")
@@ -635,7 +635,7 @@ func TestArrayDataType_LookupMissingArrayValue(t *testing.T) {
 	// Document has array: "reprehenderit", "tempor", "officia", "exercitation", "labore", "sunt", "tempor"
 	arrayValue := []string{"A", "B", "C", "D", "E", "F", "G"} // an array that doesnt exist in  tags field
 	scanResults, err := secondaryindex.Lookup(indexName, bucketName, indexScanAddress, []interface{}{arrayValue}, false, defaultlimit, c.SessionConsistency, nil)
-	tc.PrintScanResults(scanResults, "scanResults")
+	tc.PrintScanResultsActual(scanResults, "scanResults")
 	FailTestIfError(err, "Error in scan", t)
 	if len(scanResults) != 0 {
 		e := errors.New("Lookup should not return any doc key as array looked is missing in docs")
@@ -658,7 +658,7 @@ func TestArrayDataType_LookupWrongOrder(t *testing.T) {
 	// Document has array: "reprehenderit", "tempor", "officia", "exercitation", "labore", "sunt", "tempor"
 	arrayValue := []string{"reprehenderit", "tempor", "officia", "labore", "sunt", "tempor", "exercitation"} // Re-ordered the array elements
 	scanResults, err := secondaryindex.Lookup(indexName, bucketName, indexScanAddress, []interface{}{arrayValue}, false, defaultlimit, c.SessionConsistency, nil)
-	tc.PrintScanResults(scanResults, "scanResults")
+	tc.PrintScanResultsActual(scanResults, "scanResults")
 	FailTestIfError(err, "Error in scan", t)
 	if len(scanResults) != 0 {
 		e := errors.New("Lookup should not return any doc key as array was looked up in wrong order")
@@ -684,7 +684,7 @@ func TestArrayDataType_LookupSubset(t *testing.T) {
 	// arrayValue2 := []string{ "reprehenderit", "officia", "tempor", "exercitation", "labore", "sunt", "tempor"}    // Removed a repeating element from original arrayValue
 
 	scanResults, err := secondaryindex.Lookup(indexName, bucketName, indexScanAddress, []interface{}{arrayValue1}, false, defaultlimit, c.SessionConsistency, nil)
-	tc.PrintScanResults(scanResults, "scanResults")
+	tc.PrintScanResultsActual(scanResults, "scanResults")
 	FailTestIfError(err, "Error in scan", t)
 	if len(scanResults) != 0 {
 		e := errors.New("Lookup should not return any doc key as lookup key was array's subset")
@@ -731,7 +731,7 @@ func SkipTestScanDistinctParameter(t *testing.T) {
 	// var limit int
 	// limit = 10
 	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{35}, []interface{}{40}, 1, false, defaultlimit, c.SessionConsistency, nil)
-	tc.PrintScanResults(scanResults, "scanResults")
+	tc.PrintScanResultsActual(scanResults, "scanResults")
 	FailTestIfError(err, "Error in scan", t)
 	// Todo: Verify the results in scanresults
 }

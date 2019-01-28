@@ -438,13 +438,35 @@ loop:
 			(*tmpBuf) = make([]byte, len(row)*3, len(row)*3)
 		}
 
+		dataEncFmt := d.p.req.dataEncFmt
+
 		t := (*tmpBuf)[:0]
 		if d.p.req.GroupAggr != nil {
-			sk, _ = jsonEncoder.Decode(row, t)
+			if dataEncFmt == c.DATA_ENC_COLLATEJSON {
+				sk = row
+			} else if dataEncFmt == c.DATA_ENC_JSON {
+				sk, _ = jsonEncoder.Decode(row, t)
+			} else {
+				err = c.ErrUnexpectedDataEncFmt
+				d.CloseWithError(err)
+				break
+			}
 		} else if d.p.req.isPrimary {
 			sk, docid = piSplitEntry(row, t)
 		} else {
-			sk, docid, _ = siSplitEntry(row, t)
+			if dataEncFmt == c.DATA_ENC_COLLATEJSON {
+				sk, docid, err = siSplitEntryCJson(row)
+				if err != nil {
+					d.CloseWithError(err)
+					break
+				}
+			} else if dataEncFmt == c.DATA_ENC_JSON {
+				sk, docid, _ = siSplitEntry(row, t)
+			} else {
+				err = c.ErrUnexpectedDataEncFmt
+				d.CloseWithError(err)
+				break
+			}
 		}
 
 		d.p.bytesRead += uint64(len(sk) + len(docid))
@@ -528,6 +550,16 @@ func siSplitEntry(entry []byte, tmp []byte) ([]byte, []byte, int) {
 	c.CrashOnError(err)
 	count := e.Count()
 	return sk, docid[len(sk):], count
+}
+
+func siSplitEntryCJson(entry []byte) ([]byte, []byte, error) {
+	e := secondaryIndexEntry(entry)
+	sk := e.ReadSecKeyCJson()
+	docid, err := e.ReadDocId(sk)
+	if err != nil {
+		return nil, nil, err
+	}
+	return sk, docid[len(sk):], nil
 }
 
 // Return true if the row needs to be skipped based on the filter

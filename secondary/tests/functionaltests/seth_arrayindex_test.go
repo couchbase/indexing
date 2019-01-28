@@ -9,6 +9,7 @@ import (
 	"github.com/couchbase/indexing/secondary/tests/framework/kvutility"
 	"github.com/couchbase/indexing/secondary/tests/framework/secondaryindex"
 	tv "github.com/couchbase/indexing/secondary/tests/framework/validation"
+	"github.com/couchbase/query/value"
 	"log"
 	"strconv"
 	"testing"
@@ -205,13 +206,19 @@ func TestArrayIndexCornerCases(t *testing.T) {
 	createSpecialArrayDoc(EMPTY, key, field_name, field_tags, bucketName)
 	scanAllAndValidate(indexName1, bucketName, key, nil, t)
 	scanAllAndValidate(indexName2, bucketName, key, nil, t)
-	scanAllAndValidate(indexName3, bucketName, key, []interface{}{docs[key].(map[string]interface{})[field_name], tc.MissingLiteral}, t)
+	vals := make(value.Values, 0)
+	vals = append(vals, value.NewValue(docs[key].(map[string]interface{})[field_name]))
+	vals = append(vals, value.NewMissingValue())
+	scanAllAndValidateActual(indexName3, bucketName, key, vals, t)
 
 	log.Printf("\n\n--------ScanAll for MISSING array--------")
 	createSpecialArrayDoc(MISSING, key, field_name, field_tags, bucketName)
 	scanAllAndValidate(indexName1, bucketName, key, nil, t)
 	scanAllAndValidate(indexName2, bucketName, key, nil, t)
-	scanAllAndValidate(indexName3, bucketName, key, []interface{}{docs[key].(map[string]interface{})[field_name], tc.MissingLiteral}, t)
+	vals = make(value.Values, 0)
+	vals = append(vals, value.NewValue(docs[key].(map[string]interface{})[field_name]))
+	vals = append(vals, value.NewMissingValue())
+	scanAllAndValidateActual(indexName3, bucketName, key, vals, t)
 
 	log.Printf("\n\n--------ScanAll for NULL array--------")
 	createSpecialArrayDoc(NULL, key, field_name, field_tags, bucketName)
@@ -385,7 +392,7 @@ func createSpecialArrayDoc(at ArrayType, key, nonArrayFieldName, arrayFieldName,
 
 func scanAllAndValidate(indexName, bucketName, docID string, expectedScanResult []interface{}, t *testing.T) {
 	scanResults, err := secondaryindex.ScanAll(indexName, bucketName, indexScanAddress, defaultlimit, c.SessionConsistency, nil)
-	tc.PrintScanResults(scanResults, "scanResults")
+	tc.PrintScanResultsActual(scanResults, "scanResults")
 	if expectedScanResult == nil { // Expecting 0 results
 		if len(scanResults) != 0 {
 			FailTestIfError(errors.New("Expected 0 results"), "Error in scan result validation", t)
@@ -394,6 +401,21 @@ func scanAllAndValidate(indexName, bucketName, docID string, expectedScanResult 
 		docScanResults := make(tc.ScanResponse)
 		docScanResults[docID] = expectedScanResult
 		err = tv.Validate(docScanResults, scanResults)
+		FailTestIfError(err, "Error in scan result validation", t)
+	}
+}
+
+func scanAllAndValidateActual(indexName, bucketName, docID string, expectedScanResult value.Values, t *testing.T) {
+	scanResults, err := secondaryindex.ScanAll(indexName, bucketName, indexScanAddress, defaultlimit, c.SessionConsistency, nil)
+	tc.PrintScanResultsActual(scanResults, "scanResults")
+	if expectedScanResult == nil { // Expecting 0 results
+		if len(scanResults) != 0 {
+			FailTestIfError(errors.New("Expected 0 results"), "Error in scan result validation", t)
+		}
+	} else {
+		docScanResults := make(tc.ScanResponseActual)
+		docScanResults[docID] = expectedScanResult
+		err = tv.ValidateActual(docScanResults, scanResults)
 		FailTestIfError(err, "Error in scan result validation", t)
 	}
 }

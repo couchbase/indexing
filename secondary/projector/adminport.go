@@ -1,6 +1,8 @@
 package projector
 
 import "expvar"
+import "os"
+import "time"
 
 import ap "github.com/couchbase/indexing/secondary/adminport"
 import c "github.com/couchbase/indexing/secondary/common"
@@ -50,7 +52,21 @@ func (p *Projector) mainAdminPort(reqch chan ap.Request) {
 
 	expvar.Publish("projector", expvar.Func(p.doStatistics))
 
-	p.admind.Start()
+	fn := func(r int, err error) error {
+		if r > 0 {
+			logging.Errorf("Adminport Start() failed with error %v .. Retrying %v", err, r)
+		}
+		err = p.admind.Start()
+		return err
+	}
+
+	rh := c.NewRetryHelper(6, time.Second*10, 1, fn)
+	err := rh.Run()
+	if err != nil {
+		logging.Errorf("Adminport Start() failed even after max retries. Error = %v "+
+			"Restarting projector.", err)
+		os.Exit(1)
+	}
 
 loop:
 	for {

@@ -108,6 +108,8 @@ type ScanRequest struct {
 	sco *scanCoordinator
 
 	connCtx *ConnectionContext
+
+	dataEncFmt common.DataEncodingFormat
 }
 
 type Projection struct {
@@ -379,6 +381,7 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 		r.Sorted = req.GetSorted()
 		r.Reverse = req.GetReverse()
 		proj := req.GetIndexprojection()
+		r.dataEncFmt = common.DataEncodingFormat(req.GetDataEncFmt())
 		if proj == nil {
 			r.Distinct = req.GetDistinct()
 		}
@@ -439,7 +442,7 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 		r.Scans = make([]Scan, 1)
 		r.Scans[0].ScanType = AllReq
 		r.Sorted = true
-
+		r.dataEncFmt = common.DataEncodingFormat(req.GetDataEncFmt())
 		if isBootstrapMode {
 			err = common.ErrIndexerInBootstrap
 			return

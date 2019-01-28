@@ -635,7 +635,7 @@ func TestMultiScanPrimaryIndexVariations(t *testing.T) {
 	docScanResults := datautility.ExpectedMultiScanResponse_Primary(docs, scans2, false, false, 0, defaultlimit)
 	scanResults, err := secondaryindex.Scans(primaryindex, bucketName, indexScanAddress, scans, false, false, nil, 0, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
-	err = tv.Validate(docScanResults, scanResults)
+	err = tv.ValidateActual(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
 
 	kvutility.DeleteKeys(primaryIndexDocs, bucketName, "", clusterconfig.KVAddress)
@@ -781,7 +781,7 @@ func runMultiScanForPrimaryIndex(indexName string, scans qc.Scans,
 			FailTestIfError(errors.New(msg), "Error in scan result validation", t)
 		}
 	} else {
-		err = tv.Validate(docScanResults, scanResults)
+		err = tv.ValidateActual(docScanResults, scanResults)
 		FailTestIfError(err, "Error in scan result validation", t)
 	}
 }

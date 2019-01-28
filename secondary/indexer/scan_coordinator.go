@@ -258,7 +258,9 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, ctx interface{}, 
 	if req.Stats != nil {
 		req.Stats.scanReqInitDuration.Add(time.Now().Sub(ttime).Nanoseconds())
 
+		now := time.Now().UnixNano()
 		req.Stats.numRequests.Add(1)
+		req.Stats.lastScanTime.Set(now)
 		if req.GroupAggr != nil {
 			req.Stats.numRequestsAggr.Add(1)
 		} else {
@@ -269,6 +271,7 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, ctx interface{}, 
 			req.Stats.updatePartitionStats(partitionId,
 				func(stats *IndexStats) {
 					stats.numRequests.Add(1)
+					stats.lastScanTime.Set(now)
 				})
 		}
 	}
@@ -714,13 +717,13 @@ func (s *scanCoordinator) handleStats(cmd Message) {
 				for _, pid := range partitions {
 					partnStats := idxStats.getPartitionStats(pid)
 					numRowsScanned := partnStats.numRowsScanned.Value()
-					scanRate := float64(numRowsScanned-partnStats.lastNumRowsScanned.Value()) / elapsed
-					partnStats.avgScanRate.Set(int64((scanRate + float64(partnStats.avgScanRate.Value())) / 2))
+					if idxStats.lastScanGatherTime.Value() != int64(0) {
+						scanRate := float64(numRowsScanned-partnStats.lastNumRowsScanned.Value()) / elapsed
+						partnStats.avgScanRate.Set(int64((scanRate + float64(partnStats.avgScanRate.Value())) / 2))
+						logging.Debugf("scanCoordinator.handleStats: index %v partition %v numRowsScanned %v scan rate %v avg scan rate %v",
+							id, pid, numRowsScanned, scanRate, partnStats.avgScanRate.Value())
+					}
 					partnStats.lastNumRowsScanned.Set(numRowsScanned)
-
-					logging.Debugf("scanCoordinator.handleStats: index %v partition %v numRowsScanned %v scan rate %v avg scan rate %v",
-						id, pid, numRowsScanned, scanRate, partnStats.avgScanRate.Value())
-
 					idxStats.lastScanGatherTime.Set(now)
 				}
 			}

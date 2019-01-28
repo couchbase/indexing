@@ -10,21 +10,29 @@
 package indexer
 
 import (
+	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"hash/crc32"
+	"io/ioutil"
 	"net/http"
+	"os"
+	"path"
 	"runtime"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 	"unsafe"
 
-	"errors"
 	"github.com/couchbase/indexing/secondary/common"
+	commonjson "github.com/couchbase/indexing/secondary/common/json"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/stats"
 	"github.com/couchbase/indexing/secondary/stubs/nitro/mm"
-	"strings"
+	"github.com/golang/snappy"
 )
 
 var uptime time.Time
@@ -110,6 +118,7 @@ type IndexStats struct {
 	numDocsIndexed            stats.Int64Val
 	numDocsProcessed          stats.Int64Val
 	numRequests               stats.Int64Val
+	lastScanTime              stats.Int64Val
 	numCompletedRequests      stats.Int64Val
 	numRowsReturned           stats.Int64Val
 	numRequestsRange          stats.Int64Val
@@ -196,6 +205,7 @@ func (s *IndexStats) Init() {
 	s.numDocsIndexed.Init()
 	s.numDocsProcessed.Init()
 	s.numRequests.Init()
+	s.lastScanTime.Init()
 	s.numCompletedRequests.Init()
 	s.numRowsReturned.Init()
 	s.numRequestsRange.Init()
@@ -569,6 +579,9 @@ func (is IndexerStats) GetStats(getPartition bool, skipEmpty bool) common.Statis
 			}))
 		// partition and index stats
 		addStat("num_requests", s.numRequests.Value())
+
+		addStat("last_query_time", s.lastScanTime.Value())
+
 		// partition and index stats
 		addStat("num_completed_requests", s.numCompletedRequests.Value())
 		addStat("num_rows_returned",
@@ -1101,18 +1114,26 @@ type statsManager struct {
 	lastStatTime          time.Time
 	cacheUpdateInProgress bool
 	statsLogDumpInterval  uint64
+
+	statsPersister           StatsPersister
+	statsPersistenceInterval uint64
+	exitPersister            uint64
 }
 
 func NewStatsManager(supvCmdch MsgChannel,
 	supvMsgch MsgChannel, config common.Config) (*statsManager, Message) {
 	s := &statsManager{
-		supvCmdch:            supvCmdch,
-		supvMsgch:            supvMsgch,
-		lastStatTime:         time.Unix(0, 0),
-		statsLogDumpInterval: config["settings.statsLogDumpInterval"].Uint64(),
+		supvCmdch:                supvCmdch,
+		supvMsgch:                supvMsgch,
+		lastStatTime:             time.Unix(0, 0),
+		statsLogDumpInterval:     config["settings.statsLogDumpInterval"].Uint64(),
+		statsPersistenceInterval: config["statsPersistenceInterval"].Uint64(),
 	}
 
 	s.config.Store(config)
+	statsDir := path.Join(config["storage_dir"].String(), STATS_DATA_DIR)
+	chunkSz := config["statsPersistenceChunkSize"].Int()
+	s.statsPersister = NewFlatFilePersister(statsDir, chunkSz)
 
 	go s.run()
 	go s.runStatsDumpLogger()
@@ -1342,13 +1363,22 @@ loop:
 			if ok {
 				switch cmd.GetMsgType() {
 				case STORAGE_MGR_SHUTDOWN:
-					logging.Infof("SettingsManager::run Shutting Down")
+					logging.Infof("StatsManager::run Shutting Down")
+					atomic.StoreUint64(&s.exitPersister, 1)
 					s.supvCmdch <- &MsgSuccess{}
 					break loop
 				case UPDATE_INDEX_INSTANCE_MAP:
 					s.handleIndexInstanceUpdate(cmd)
 				case CONFIG_SETTINGS_UPDATE:
 					s.handleConfigUpdate(cmd)
+				case STATS_PERSISTER_START:
+					go s.runStatsPersister()
+					s.supvCmdch <- &MsgSuccess{}
+				case STATS_READ_PERSISTED_STATS:
+					req := cmd.(*MsgStatsPersister)
+					stats := req.GetStats()
+					s.updateStatsFromPersistence(stats)
+					s.supvCmdch <- &MsgSuccess{}
 				}
 			} else {
 				break loop
@@ -1366,7 +1396,13 @@ func (s *statsManager) handleIndexInstanceUpdate(cmd Message) {
 func (s *statsManager) handleConfigUpdate(cmd Message) {
 	cfg := cmd.(*MsgConfigUpdate)
 	s.config.Store(cfg.GetConfig())
+
 	atomic.StoreUint64(&s.statsLogDumpInterval, cfg.GetConfig()["settings.statsLogDumpInterval"].Uint64())
+	atomic.StoreUint64(&s.statsPersistenceInterval, cfg.GetConfig()["statsPersistenceInterval"].Uint64())
+
+	chunksz := cfg.GetConfig()["statsPersistenceChunkSize"].Int()
+	s.statsPersister.SetConfig(chunkSz, chunksz)
+
 	s.supvCmdch <- &MsgSuccess{}
 }
 
@@ -1395,10 +1431,269 @@ func (s *statsManager) runStatsDumpLogger() {
 	}
 }
 
+const last_query_time = "lqt"
+const avg_scan_rate = "asr"
+const num_rows_scanned = "nrs"
+const last_num_rows_scanned = "lrs"
+const chunkSz = "chunkSz"
+
+// Periodically persist a subset of index stats
+func (s *statsManager) runStatsPersister() {
+
+	defer func() {
+		if r := recover(); r != nil {
+			logging.Warnf("Encountered panic while running stats persister. Error: %v. Restarting persister.", r)
+			time.Sleep(1 * time.Second)
+			go s.runStatsPersister()
+		}
+	}()
+
+	persist := func() { // persist only if statsPersistenceInterval > 0
+		if atomic.LoadUint64(&s.statsPersistenceInterval) > 0 {
+			indexerStats := s.stats.Get()
+			if indexerStats != nil {
+				statsToBePersisted := make(map[string]interface{})
+				for k, indexStats := range indexerStats.indexes {
+					instdId := strconv.FormatUint(uint64(k), 10)
+					statsToBePersisted[instdId+":"+last_query_time] = indexStats.lastScanTime.Value()
+
+					for pk, partnStats := range indexStats.partitions {
+						partnId := strconv.FormatUint(uint64(pk), 10)
+						statsToBePersisted[instdId+":"+partnId+":"+avg_scan_rate] = partnStats.avgScanRate.Value()
+						statsToBePersisted[instdId+":"+partnId+":"+num_rows_scanned] = partnStats.numRowsScanned.Value()
+						statsToBePersisted[instdId+":"+partnId+":"+last_num_rows_scanned] = partnStats.lastNumRowsScanned.Value()
+					}
+				}
+				err := s.statsPersister.PersistStats(statsToBePersisted)
+				if err != nil {
+					logging.Warnf("Encountered error while persisting stats. Error: %v", err)
+				}
+			}
+		}
+	}
+
+	closePersister := func() {
+		err := s.statsPersister.Close()
+		if err != nil {
+			logging.Warnf("Error closing the persister: %v", err)
+		}
+	}
+
+loop:
+	for {
+		if atomic.LoadUint64(&s.exitPersister) == 1 { // exitPersister is 1 only when stats manager shuts down
+			logging.Infof("Exiting stats persister")
+			break loop
+		}
+		interval := atomic.LoadUint64(&s.statsPersistenceInterval)
+		if interval == 0 {
+			closePersister()
+			time.Sleep(time.Second * 600) // Sleep for default interval if persistence is disabled
+		} else {
+			persist()
+			time.Sleep(time.Second * time.Duration(interval))
+		}
+	}
+}
+
+func (s *statsManager) updateStatsFromPersistence(indexerStats *IndexerStats) {
+
+	defer func() {
+		if r := recover(); r != nil {
+			logging.Warnf("Encountered error while reading persisted stats. Skipping read. Error: %v", r)
+		}
+	}()
+
+	persistedStats, err := s.statsPersister.ReadPersistedStats()
+	if err != nil {
+		logging.Warnf("Encountered error while reading persisted stats. Skipping read. Error: %v", err)
+		return
+	}
+
+	getInt64Val := func(value interface{}, statName string) (int64, bool) {
+		val, ok := value.(int64)
+		if !ok {
+			logging.Warnf("StatsPersister: Unable to read stat %v from persistence. Skipping the stat", statName)
+		}
+		return val, ok
+	}
+
+	for k, value := range persistedStats {
+		kstrs := strings.Split(k, ":")
+		// len(kstrs): 1 =>indexer stat, 2 =>index stat, 3 =>partition stat
+
+		if len(kstrs) == 2 { // index level stat
+			id, _ := strconv.ParseUint(kstrs[0], 10, 64)
+			instdId := common.IndexInstId(id)
+			if _, ok := indexerStats.indexes[instdId]; !ok {
+				continue
+			}
+			statName := kstrs[1]
+			switch statName {
+			case last_query_time:
+				val, ok := getInt64Val(value, statName)
+				if ok {
+					indexerStats.indexes[instdId].lastScanTime.Set(val)
+				}
+			}
+		}
+		if len(kstrs) == 3 { // partition level stat
+			id, _ := strconv.ParseUint(kstrs[0], 10, 64)
+			instdId := common.IndexInstId(id)
+			if _, ok := indexerStats.indexes[instdId]; !ok {
+				continue
+			}
+			pid, _ := strconv.ParseUint(kstrs[1], 10, 64)
+			partnId := common.PartitionId(pid)
+			if _, ok := indexerStats.indexes[instdId].partitions[partnId]; !ok {
+				continue
+			}
+			statName := kstrs[2]
+			switch statName {
+			case avg_scan_rate:
+				val, ok := getInt64Val(value, statName)
+				if ok {
+					indexerStats.indexes[instdId].partitions[partnId].avgScanRate.Set(val)
+				}
+			case num_rows_scanned:
+				val, ok := getInt64Val(value, statName)
+				if ok {
+					indexerStats.indexes[instdId].partitions[partnId].numRowsScanned.Set(val)
+				}
+			case last_num_rows_scanned:
+				val, ok := getInt64Val(value, statName)
+				if ok {
+					indexerStats.indexes[instdId].partitions[partnId].lastNumRowsScanned.Set(val)
+				}
+			}
+		}
+	}
+}
+
 func postiveNum(n int64) int64 {
 	if n < 0 {
 		return 0
 	}
 
 	return n
+}
+
+// STATS PERSISITER INTERFACE
+type StatsPersister interface {
+	PersistStats(stats map[string]interface{}) error
+	ReadPersistedStats() (map[string]interface{}, error)
+	SetConfig(key string, value interface{})
+	GetConfig(key string) interface{}
+	Close() error
+}
+
+const STATS_DATA_DIR = "indexstats"
+
+// Flat file persister
+type FlatFileStatsPersister struct {
+	statsDir    string
+	filePath    string
+	newFilePath string
+
+	config map[string]interface{}
+}
+
+func NewFlatFilePersister(dir string, chunksz int) *FlatFileStatsPersister {
+	os.MkdirAll(dir, 0755)
+	file := path.Join(dir, "stats")
+	newfile := path.Join(dir, "stats_new")
+	fp := FlatFileStatsPersister{
+		statsDir:    dir,
+		filePath:    file,
+		newFilePath: newfile,
+	}
+	fp.config = make(map[string]interface{})
+	fp.SetConfig(chunkSz, chunksz)
+	return &fp
+}
+
+func (fp *FlatFileStatsPersister) PersistStats(stats map[string]interface{}) error {
+
+	statsJson, err := commonjson.Marshal(stats)
+	if err != nil {
+		return err
+	}
+
+	// Improvement: Implement chunking for large file sizes
+	// chunkSize := fp.GetConfig("chunkSize")
+
+	// 8 bytes header for metadata
+	// byte 1 : indicates if data is compressed(0 or 1)
+	// bytes 2 to 5 : checksum of content
+	// remaining bytes - currently unused
+	header := make([]byte, 8)
+	header[0] = byte(uint8(1))
+
+	compressed := snappy.Encode(nil, statsJson)
+	checkSum := crc32.ChecksumIEEE(compressed)
+	binary.BigEndian.PutUint32(header[1:5], checkSum)
+
+	content := append(header, compressed...)
+	err = ioutil.WriteFile(fp.newFilePath, content, 0755)
+	if err != nil {
+		return err
+	}
+
+	err = os.Rename(fp.newFilePath, fp.filePath)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (fp *FlatFileStatsPersister) ReadPersistedStats() (map[string]interface{}, error) {
+
+	content, err := ioutil.ReadFile(fp.filePath)
+	if err != nil {
+		return nil, err
+	}
+
+	var statsJson []byte
+	header := content[0:8]
+
+	checkSumHeader := binary.BigEndian.Uint32(header[1:5])
+	checkSumContent := crc32.ChecksumIEEE(content[8:])
+	if checkSumHeader != checkSumContent {
+		return nil, errors.New("ReadPersistedStats: Stats file content checksum mismatch")
+	}
+
+	compressed := uint8(header[0])
+	if compressed == 1 { //Uncompress the content
+		statsJson, err = snappy.Decode(nil, content[8:])
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		statsJson = content[8:]
+	}
+	var stats map[string]interface{}
+	err = commonjson.Unmarshal(statsJson, &stats)
+	if err != nil {
+		return nil, err
+	}
+	return stats, nil
+}
+
+func (fp *FlatFileStatsPersister) SetConfig(key string, value interface{}) {
+	fp.config[key] = value
+}
+
+func (fp *FlatFileStatsPersister) GetConfig(key string) interface{} {
+	return fp.config[key]
+}
+
+func (fp *FlatFileStatsPersister) Close() error {
+	if err := os.RemoveAll(fp.filePath); err != nil {
+		return err
+	}
+	if err := os.RemoveAll(fp.newFilePath); err != nil {
+		return err
+	}
+	return nil
 }

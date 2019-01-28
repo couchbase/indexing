@@ -10,3 +10,5 @@ killall beam.smp epmd
 killall python
 killall -9 memcached.json
 killall -9 memcached
+killall -9 indexer
+killall -9 projector

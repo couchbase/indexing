@@ -2,12 +2,18 @@
 
 if [ ! -f ~/.cienv ]; then
 cat > ~/.cienv <<EOF
+    export CINAME=ci2i-unstable
+    export CIBOT=true
     export WORKSPACE=/opt/build
-    export RELEASE=5.0.0
-    export MANIFEST="couchbase-server/spock.xml"
+    export RELEASE=6.5.0
+    export MANIFEST="couchbase-server/mad-hatter/6.5.0.xml"
+    export MODE="sanity,unit,functional,integration"
+    export BRANCH="unstable"
     export MODE="test"
-    #export PEGGED=3277
-    export STORAGE="plasma"
+    export WATCHERS="siri@couchbase.com"
+    export PEGGED=0
+    # use below if gerrit patchsets need to be ordered (so adding CI bot is not enough)
+    # export GERRIT="10051 20012 31241"
 EOF
 fi
 source ~/.cienv
@@ -18,7 +24,7 @@ if [ "$WORKSPACE" = "" ]; then
 fi
 
 if [ "$MODE" = "" ]; then
-  echo MODE must be set to 'test' or 'perf'
+  echo MODE must be some combination of: 'sanity,unit,functional,integration'
   exit 2
 fi
 
@@ -44,23 +50,21 @@ dobuild clean 1>>/var/www/gsi-current.html 2>&1; rc=$?
 test $rc -eq 0 && dotest 1>>/var/www/gsi-current.html 2>&1; rc=$?
 echo '</pre>' >> /var/www/gsi-current.html
 if [ $rc -eq 0 ]; then status=pass; else status=fail; fi
-if [ "$MODE" = "perf" ]; then status=perf; fi
 echo '<pre>' >> /var/www/gsi-current.html
 gzip ${WORKSPACE}/logs.tar 2>&1 1>/dev/null
 echo "Version: <a href='versions-$TS.cfg'>versions-$TS.cfg</a>" >> /var/www/gsi-current.html
 echo "Build Log: <a href='make-$TS.log'>make-$TS.log</a>" >> /var/www/gsi-current.html
 echo "Server Log: <a href='logs-$TS.tar.gz'>logs-$TS.tar.gz</a>" >> /var/www/gsi-current.html
 echo "</pre><h1>Finished</h1></body></html>" >> /var/www/gsi-current.html
-cp  /var/www/gsi-current.html /var/www/gsi-$STORAGE-$TS.$status.html
+cp  /var/www/gsi-current.html /var/www/gsi-$TS.$status.html
 mv ${WORKSPACE}/make.log /var/www/make-$TS.log
 mv ${WORKSPACE}/logs.tar.gz /var/www/logs-$TS.tar.gz
 mv ${WORKSPACE}/versions.cfg /var/www/versions-$TS.cfg
-if [ "$MODE" = "perf" ]; then dotiming; fi
 case "$STORAGE" in
-	"plasma") export STORAGE="memdb"  ;;
-	"memdb")  export STORAGE="fdb"    ;;
-	"fdb")    export STORAGE="plasma" ;;
-	*)        export STORAGE="plasma" ;;
+  "plasma") export STORAGE="memdb"  ;;
+  "memdb")  export STORAGE="fdb"    ;;
+  "fdb")    export STORAGE="plasma" ;;
+  *)        export STORAGE="plasma" ;;
 esac
 perl -pi -e "s/export STORAGE=.*/export STORAGE=$STORAGE/g" ~/.cienv
 dowatch

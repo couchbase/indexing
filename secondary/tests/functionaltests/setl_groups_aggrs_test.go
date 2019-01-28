@@ -7,6 +7,7 @@ import (
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 
 	//"github.com/couchbase/indexing/secondary/tests/framework/datautility"
+	"github.com/couchbase/query/value"
 	"log"
 	"testing"
 	"time"
@@ -592,7 +593,7 @@ func TestGroupAggrMultDataTypes(t *testing.T) {
 	ga, proj := basicGroupAggr()
 
 	expectedResults := make(tc.GroupAggrScanResponse, 8)
-	expectedResults[0] = []interface{}{"2019", tc.MissingLiteral, int64(15), int64(2)}
+	expectedResults[0] = []interface{}{"2019", value.MISSING_VALUE, int64(15), int64(2)}
 	expectedResults[1] = []interface{}{"2019", nil, int64(15), int64(2)}
 	expectedResults[2] = []interface{}{"2019", false, int64(15), int64(2)}
 	expectedResults[3] = []interface{}{"2019", true, int64(15), int64(2)}
@@ -1939,7 +1940,7 @@ func executeGroupAggrTest2(scans qc.Scans, ga *qc.GroupAggr, proj *qc.IndexProje
 	_, scanResults, err := secondaryindex.Scan3(index, bucket, indexScanAddress, scans, false, false, proj, 0, defaultlimit, ga, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
 	if len(scanResults) == 1 {
-		tc.PrintGroupAggrResults(scanResults, "scanResults")
+		tc.PrintGroupAggrResultsActual(scanResults, "scanResults")
 	}
 	err = tv.ValidateGroupAggrWithN1QL(kvaddress, clusterconfig.Username,
 		clusterconfig.Password, bucket, n1qlEquivalent, ga, proj, scanResults)

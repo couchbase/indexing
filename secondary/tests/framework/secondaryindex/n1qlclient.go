@@ -42,7 +42,7 @@ func N1QLCreateSecondaryIndex(
 }
 
 func N1QLRange(indexName, bucketName, server string, low, high []interface{}, inclusion uint32,
-	distinct bool, limit int64, consistency c.Consistency, vector *qc.TsConsistency) (tc.ScanResponse, error) {
+	distinct bool, limit int64, consistency c.Consistency, vector *qc.TsConsistency) (tc.ScanResponseActual, error) {
 
 	client, err := nclient.NewGSIIndexer(server, "default", bucketName)
 	if err != nil {
@@ -84,7 +84,7 @@ func N1QLRange(indexName, bucketName, server string, low, high []interface{}, in
 }
 
 func N1QLLookup(indexName, bucketName, server string, values []interface{},
-	distinct bool, limit int64, consistency c.Consistency, vector *qc.TsConsistency) (tc.ScanResponse, error) {
+	distinct bool, limit int64, consistency c.Consistency, vector *qc.TsConsistency) (tc.ScanResponseActual, error) {
 
 	client, err := nclient.NewGSIIndexer(server, "default", bucketName)
 	if err != nil {
@@ -126,7 +126,7 @@ func N1QLLookup(indexName, bucketName, server string, values []interface{},
 }
 
 func N1QLScanAll(indexName, bucketName, server string, limit int64,
-	consistency c.Consistency, vector *qc.TsConsistency) (tc.ScanResponse, error) {
+	consistency c.Consistency, vector *qc.TsConsistency) (tc.ScanResponseActual, error) {
 
 	client, err := nclient.NewGSIIndexer(server, "default", bucketName)
 	if err != nil {
@@ -168,7 +168,7 @@ func N1QLScanAll(indexName, bucketName, server string, limit int64,
 
 func N1QLScans(indexName, bucketName, server string, scans qc.Scans, reverse, distinct bool,
 	projection *qc.IndexProjection, offset, limit int64,
-	consistency c.Consistency, vector *qc.TsConsistency) (tc.ScanResponse, error) {
+	consistency c.Consistency, vector *qc.TsConsistency) (tc.ScanResponseActual, error) {
 
 	client, err := nclient.NewGSIIndexer(server, "default", bucketName)
 	if err != nil {
@@ -279,7 +279,7 @@ func N1QLMultiScanCount(indexName, bucketName, server string, scans qc.Scans, di
 
 func N1QLScan3(indexName, bucketName, server string, scans qc.Scans, reverse, distinct bool,
 	projection *qc.IndexProjection, offset, limit int64, groupAggr *qc.GroupAggr,
-	consistency c.Consistency, vector *qc.TsConsistency) (tc.ScanResponse, tc.GroupAggrScanResponse, error) {
+	consistency c.Consistency, vector *qc.TsConsistency) (tc.ScanResponseActual, tc.GroupAggrScanResponseActual, error) {
 
 	client, err := nclient.NewGSIIndexer(server, "default", bucketName)
 	if err != nil {
@@ -334,8 +334,8 @@ func N1QLScan3(indexName, bucketName, server string, scans qc.Scans, reverse, di
 		}
 	}()
 
-	var results tc.ScanResponse
-	var garesults tc.GroupAggrScanResponse
+	var results tc.ScanResponseActual
+	var garesults tc.GroupAggrScanResponseActual
 	var err2 error
 	if groupAggr != nil {
 		garesults = resultsforaggrgates(conn.EntryChannel())
@@ -452,9 +452,9 @@ func getConsistency(consistency c.Consistency) datastore.ScanConsistency {
 	return cons
 }
 
-func getresultsfromchannel(ch datastore.EntryChannel, isprimary bool, tctx *testContext) (tc.ScanResponse, error) {
+func getresultsfromchannel(ch datastore.EntryChannel, isprimary bool, tctx *testContext) (tc.ScanResponseActual, error) {
 
-	scanResults := make(tc.ScanResponse)
+	scanResults := make(tc.ScanResponseActual)
 	ok := true
 	var err error
 	for ok {
@@ -463,7 +463,7 @@ func getresultsfromchannel(ch datastore.EntryChannel, isprimary bool, tctx *test
 			if isprimary {
 				scanResults[entry.PrimaryKey] = nil
 			} else {
-				scanResults[entry.PrimaryKey] = values2SKey(entry.EntryKey)
+				scanResults[entry.PrimaryKey] = entry.EntryKey
 			}
 		} else {
 			break
@@ -477,14 +477,14 @@ func getresultsfromchannel(ch datastore.EntryChannel, isprimary bool, tctx *test
 	return scanResults, err
 }
 
-func resultsforaggrgates(ch datastore.EntryChannel) tc.GroupAggrScanResponse {
-	scanResults := make(tc.GroupAggrScanResponse, 0)
+func resultsforaggrgates(ch datastore.EntryChannel) tc.GroupAggrScanResponseActual {
+	scanResults := make(tc.GroupAggrScanResponseActual, 0)
 	ok := true
 	for ok {
 		entry, ok := <-ch
 		if ok {
 			log.Printf("Scanresult Row  %v : %v ", entry.EntryKey, entry.PrimaryKey)
-			scanResults = append(scanResults, values2SKey(entry.EntryKey))
+			scanResults = append(scanResults, entry.EntryKey)
 		} else {
 			break
 		}

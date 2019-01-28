@@ -531,10 +531,15 @@ func (p *SAPlanner) Plan(command CommandType, solution *Solution) (*Solution, er
 			}
 		}
 
+		logging.Infof("Planner::Fail to create plan satisyfig constraint. Re-planning. Num of Try=%v.  Elapsed Time=%v",
+			p.Try, formatTimeStr(uint64(time.Now().Sub(startTime).Nanoseconds())))
+
 		// If planner get to this point, it means we see violation errors.
 		// If planner has retries 3 times, then remove any optional indexes.
 		if i > 3 && p.placement.HasOptionalIndexes() {
 			logging.Infof("Cannot rebuild lost replica due to resource constraint in cluster.  Will not rebuild lost replica.")
+			logging.Warnf(err.Error())
+
 			optionals := p.placement.RemoveOptionalIndexes()
 			solution.removeIndexes(optionals)
 		}
@@ -543,9 +548,10 @@ func (p *SAPlanner) Plan(command CommandType, solution *Solution) (*Solution, er
 		if i == 3 && solution.numDeletedNode != 0 {
 			solution.enableExclude = false
 		}
+	}
 
-		logging.Infof("Planner::Fail to create plan satisyfig constraint. Re-planning. Num of Try=%v.  Elapsed Time=%v",
-			p.Try, formatTimeStr(uint64(time.Now().Sub(startTime).Nanoseconds())))
+	if err != nil {
+		logging.Errorf(err.Error())
 	}
 
 	return result, err
@@ -2173,6 +2179,7 @@ func (s *Solution) hasReplicaInServerGroup(u *IndexUsage, group string) bool {
 		for i := 0; i < numReplica; i++ {
 			if i != u.Instance.ReplicaId {
 				key := common.FormatIndexPartnDisplayName(u.Instance.Defn.Name, i, int(u.PartnId), true)
+				key = fmt.Sprintf("%v %v", key, u.Bucket)
 				if sg, ok := s.indexSGMap[key]; ok {
 					if sg == group {
 						return true
@@ -2199,7 +2206,7 @@ func (s *Solution) hasReplicaInServerGroup(u *IndexUsage, group string) bool {
 }
 
 //
-// Check if any server group without this replica
+// Check if any server group without this replica (excluding self)
 //
 func (s *Solution) hasServerGroupWithNoReplica(u *IndexUsage) bool {
 
@@ -2207,9 +2214,12 @@ func (s *Solution) hasServerGroupWithNoReplica(u *IndexUsage) bool {
 		numReplica := int(u.Instance.Defn.NumReplica) + 1
 		counts := make(map[string]bool)
 		for i := 0; i < numReplica; i++ {
-			key := common.FormatIndexPartnDisplayName(u.Instance.Defn.Name, i, int(u.PartnId), true)
-			if group, ok := s.indexSGMap[key]; ok {
-				counts[group] = true
+			if i != u.Instance.ReplicaId {
+				key := common.FormatIndexPartnDisplayName(u.Instance.Defn.Name, i, int(u.PartnId), true)
+				key = fmt.Sprintf("%v %v", key, u.Bucket)
+				if group, ok := s.indexSGMap[key]; ok {
+					counts[group] = true
+				}
 			}
 		}
 		return s.numServerGroup > len(counts)
@@ -2347,6 +2357,7 @@ func (s *Solution) hasDeletedNodes() bool {
 //
 func (s *Solution) updateServerGroupMap(index *IndexUsage, indexer *IndexerNode) {
 	key := index.GetDisplayName()
+	key = fmt.Sprintf("%v %v", key, index.Bucket)
 	if indexer != nil {
 		s.indexSGMap[key] = indexer.ServerGroup
 	} else {
@@ -2774,10 +2785,17 @@ func (c *IndexerConstraint) GetViolations(s *Solution, eligibles map[*IndexUsage
 
 		// This indexer node does not satisfy constraint
 		if !c.SatisfyNodeConstraint(s, indexer, eligibles) {
+
+			satisfyResourceConstraint := c.SatisfyNodeResourceConstraint(s, indexer)
+
 			for _, index := range indexer.Indexes {
 				if isEligibleIndex(index, eligibles) {
 
 					if !c.acceptViolation(s, index, indexer) {
+						continue
+					}
+
+					if satisfyResourceConstraint && c.SatisfyIndexHAConstraint(s, indexer, index, eligibles) {
 						continue
 					}
 
@@ -2887,7 +2905,7 @@ func (c *IndexerConstraint) SatisfyServerGroupConstraint(s *Solution, u *IndexUs
 		return true
 	}
 
-	// There are replica in this server group. Check to see if there are any server group without this index.
+	// There are replica in this server group. Check to see if there are any server group without this index (excluding self).
 	hasServerGroupWithNoReplica := s.hasServerGroupWithNoReplica(u)
 	if !hasServerGroupWithNoReplica {
 		// every server group has a replica of this index
@@ -4853,7 +4871,7 @@ func (p *RandomPlacement) randomMoveByLoad(s *Solution, checkConstraint bool) (b
 		now := time.Now()
 
 		// From the candidate, randomly select a movable index.
-		index := p.getRandomEligibleIndex(p.rs, source.Indexes)
+		index := p.getRandomEligibleIndex(s, s.constraint, p.rs, source)
 		if index == nil {
 			continue
 		}
@@ -4891,12 +4909,14 @@ func (p *RandomPlacement) randomMoveByLoad(s *Solution, checkConstraint bool) (b
 		// See if the index can be moved while obeying resource constraint.
 		violation := s.constraint.CanAddIndex(s, target, index)
 		if !checkConstraint || violation == NoViolation {
-			logging.Tracef("Planner::move: source %v index %v target %v checkConstraint %v",
-				source.NodeId, index, target.NodeId, checkConstraint)
+			force := source.isDelete || !s.constraint.SatisfyIndexHAConstraint(s, source, index, p.GetEligibleIndexes())
 			s.moveIndex(source, index, target, checkConstraint)
 			p.randomMoveDur += time.Now().Sub(now).Nanoseconds()
 			p.randomMoveCnt++
-			return true, false, source.isDelete
+
+			logging.Tracef("Planner::move1: source %v index '%v' (%v) target %v checkConstraint %v force %v",
+				source.NodeId, index.GetDisplayName(), index.Bucket, target.NodeId, checkConstraint, force)
+			return true, false, force
 
 		} else {
 			logging.Tracef("Planner::try move fail: violation %s", violation)
@@ -5068,12 +5088,26 @@ func (p *RandomPlacement) getRandomFittedNode(s *Solution, indexers []*IndexerNo
 //
 // Find a random index
 //
-func (p *RandomPlacement) getRandomEligibleIndex(rs *rand.Rand, indexes []*IndexUsage) *IndexUsage {
+func (p *RandomPlacement) getRandomEligibleIndex(s *Solution, constraint ConstraintMethod, rs *rand.Rand, node *IndexerNode) *IndexUsage {
 
 	var candidates []*IndexUsage
-	for _, index := range indexes {
-		if _, ok := p.indexes[index]; ok {
-			candidates = append(candidates, index)
+
+	if !node.SatisfyNodeConstraint() {
+		eligibles := p.GetEligibleIndexes()
+		for _, index := range node.Indexes {
+			if _, ok := p.indexes[index]; ok {
+				if !constraint.SatisfyIndexHAConstraint(s, node, index, eligibles) {
+					candidates = append(candidates, index)
+				}
+			}
+		}
+	}
+
+	if len(candidates) == 0 {
+		for _, index := range node.Indexes {
+			if _, ok := p.indexes[index]; ok {
+				candidates = append(candidates, index)
+			}
 		}
 	}
 
@@ -5172,8 +5206,8 @@ func (p *RandomPlacement) randomSwap(s *Solution, sources []*IndexerNode, target
 			continue
 		}
 
-		sourceIndex := p.getRandomEligibleIndex(p.rs, source.Indexes)
-		targetIndex := p.getRandomEligibleIndex(p.rs, target.Indexes)
+		sourceIndex := p.getRandomEligibleIndex(s, s.getConstraintMethod(), p.rs, source)
+		targetIndex := p.getRandomEligibleIndex(s, s.getConstraintMethod(), p.rs, target)
 
 		if sourceIndex == nil || targetIndex == nil {
 			continue
@@ -5202,8 +5236,9 @@ func (p *RandomPlacement) randomSwap(s *Solution, sources []*IndexerNode, target
 		targetViolation := s.constraint.CanSwapIndex(s, source, targetIndex, sourceIndex)
 
 		if !checkConstraint || (sourceViolation == NoViolation && targetViolation == NoViolation) {
-			logging.Tracef("Planner::swap: source %v source index %v target %v target index %v checkConstraint %v",
-				source.NodeId, sourceIndex, target.NodeId, targetIndex, checkConstraint)
+			logging.Tracef("Planner::swap: source %v source index '%v' (%v) target %v target index '%v' (%v) checkConstraint %v",
+				source.NodeId, sourceIndex.GetDisplayName(), sourceIndex.Bucket,
+				target.NodeId, targetIndex.GetDisplayName(), targetIndex.Bucket, checkConstraint)
 			s.moveIndex(source, sourceIndex, target, checkConstraint)
 			s.moveIndex(target, targetIndex, source, checkConstraint)
 			return true
@@ -5289,8 +5324,9 @@ func (p *RandomPlacement) exhaustiveSwap(s *Solution, sources []*IndexerNode, ta
 							source.NodeId, target.NodeId)
 
 						if !checkConstraint || (targetViolation == NoViolation && sourceViolation == NoViolation) {
-							logging.Tracef("Planner::exhaustive swap: source %v source index %v target %v target index %v checkConstraint %v",
-								source.NodeId, sourceIndex, target.NodeId, targetIndex, checkConstraint)
+							logging.Tracef("Planner::exhaustive swap: source %v source index '%v' (%v) target %v target index '%v' (%v) checkConstraint %v",
+								source.NodeId, sourceIndex.GetDisplayName(), sourceIndex.Bucket,
+								target.NodeId, targetIndex.GetDisplayName(), targetIndex.Bucket, checkConstraint)
 							s.moveIndex(source, sourceIndex, target, checkConstraint)
 							s.moveIndex(target, targetIndex, source, checkConstraint)
 							return true
@@ -5332,10 +5368,12 @@ func (p *RandomPlacement) exhaustiveMove(s *Solution, sources []*IndexerNode, ta
 			// If index has no usage info, then swap only if violate HA constraint.
 			if !sourceIndex.HasSizing(s.UseLiveData()) {
 				if target := p.findLeastUsedAndPopulatedTargetNode(s, sourceIndex, source); target != nil {
-					logging.Tracef("Planner::exhaustive move: source %v index %v target %v checkConstraint %v",
-						source.NodeId, sourceIndex, target.NodeId, checkConstraint)
+					force := source.isDelete || !s.constraint.SatisfyIndexHAConstraint(s, source, sourceIndex, p.GetEligibleIndexes())
 					s.moveIndex(source, sourceIndex, target, false)
-					return true, source.isDelete
+
+					logging.Tracef("Planner::exhaustive move: source %v index '%v' (%v) target %v checkConstraint %v force %v",
+						source.NodeId, sourceIndex.GetDisplayName(), sourceIndex.Bucket, target.NodeId, checkConstraint, force)
+					return true, force
 				}
 				continue
 			}
@@ -5356,10 +5394,12 @@ func (p *RandomPlacement) exhaustiveMove(s *Solution, sources []*IndexerNode, ta
 				// See if the index can be moved while obeying resource constraint.
 				violation := s.constraint.CanAddIndex(s, target, sourceIndex)
 				if !checkConstraint || violation == NoViolation {
-					logging.Tracef("Planner::exhaustive move: source %v index %v target %v checkConstraint %v",
-						source.NodeId, sourceIndex, target.NodeId, checkConstraint)
+					force := source.isDelete || !s.constraint.SatisfyIndexHAConstraint(s, source, sourceIndex, p.GetEligibleIndexes())
 					s.moveIndex(source, sourceIndex, target, checkConstraint)
-					return true, source.isDelete
+
+					logging.Tracef("Planner::exhaustive move2: source %v index '%v' (%v) target %v checkConstraint %v force %v",
+						source.NodeId, sourceIndex.GetDisplayName(), sourceIndex.Bucket, target.NodeId, checkConstraint, force)
+					return true, force
 
 				} else {
 					logging.Tracef("Planner::try exhaustive move fail: violation %s", violation)

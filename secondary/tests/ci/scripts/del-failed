@@ -1,0 +1,3 @@
+#!/bin/bash
+cd /var/www
+rm `ls *fail* | awk -F- '{print "*"$2"-"$3"*"}' | sed 's/.fail.html//'`

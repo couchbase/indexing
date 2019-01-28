@@ -2,17 +2,18 @@ package functionaltests
 
 import (
 	"errors"
+	"log"
+	"math/rand"
+	"path/filepath"
+	"testing"
+	"time"
+
 	c "github.com/couchbase/indexing/secondary/common"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 	"github.com/couchbase/indexing/secondary/tests/framework/datautility"
 	"github.com/couchbase/indexing/secondary/tests/framework/kvutility"
 	"github.com/couchbase/indexing/secondary/tests/framework/secondaryindex"
 	tv "github.com/couchbase/indexing/secondary/tests/framework/validation"
-	"log"
-	"math/rand"
-	"path/filepath"
-	"testing"
-	"time"
 )
 
 var seed int

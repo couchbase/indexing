@@ -977,6 +977,54 @@ func (codec *Codec) code2n1ql(code, text []byte, decode bool) (n1ql.Value, []byt
 	return n1qlVal, remaining, err
 }
 
+// DecodeN1QLValues takes collatejson encoded data as input, and returns
+// the rows in n1ql.Values format, as required by n1ql.
+// Note: Caller is responsible for providing sufficiently sized buffer
+// Otherwise it may panic
+func (codec *Codec) DecodeN1QLValues(code, buf []byte) (vals n1ql.Values, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			if strings.Contains(fmt.Sprint(r), "slice bounds out of range") {
+				err = ErrorOutputLen
+			} else {
+				err = fmt.Errorf("%v", r)
+			}
+		}
+	}()
+
+	if len(code) == 0 {
+		return nil, nil
+	}
+
+	// Assume that its an array.
+	if code[0] != TypeArray {
+		return nil, ErrNotAnArray
+	}
+
+	code = code[1:]
+
+	// There aren't any in-product users of arrayLenPrefix
+	if codec.arrayLenPrefix {
+		return nil, ErrLenPrefixUnsupported
+	}
+
+	text := buf
+	var tv n1ql.Value
+
+	vals = make(n1ql.Values, 0)
+	for code[0] != Terminator {
+		ln := len(text)
+		lnc := len(code)
+		tv, code, err = codec.code2n1ql(code, text[ln:], true)
+		if err != nil {
+			break
+		}
+		text = text[:ln+lnc-len(code)]
+		vals = append(vals, tv)
+	}
+	return vals, err
+}
+
 // FixEncodedInt is a special purpose method only to address MB-28956.
 // Do not use otherwise.
 func (codec *Codec) FixEncodedInt(code, buf []byte) ([]byte, error) {

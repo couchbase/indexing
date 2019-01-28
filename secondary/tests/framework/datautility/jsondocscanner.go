@@ -6,6 +6,7 @@ import (
 	c "github.com/couchbase/indexing/secondary/common"
 	qc "github.com/couchbase/indexing/secondary/queryport/client"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
+	"github.com/couchbase/query/value"
 	"log"
 	"reflect"
 	"sort"
@@ -444,8 +445,8 @@ func ExpectedScanResponse_RangePrimary(docs tc.KeyValues, low, high string, incl
 	return results
 }
 
-func ExpectedArrayScanResponse_string(docs tc.KeyValues, jsonPath string, low, high string, inclusion int64, isDistinct bool) tc.ArrayIndexScanResponse {
-	results := make(tc.ArrayIndexScanResponse)
+func ExpectedArrayScanResponse_string(docs tc.KeyValues, jsonPath string, low, high string, inclusion int64, isDistinct bool) tc.ArrayIndexScanResponseActual {
+	results := make(tc.ArrayIndexScanResponseActual)
 	fields := strings.Split(jsonPath, ".")
 	var json map[string]interface{}
 	var f string
@@ -493,26 +494,28 @@ func ExpectedArrayScanResponse_string(docs tc.KeyValues, jsonPath string, low, h
 			}
 
 			for _, item := range sortedArray {
+				values := make(value.Values, 0)
+				values = append(values, value.NewValue(item))
 				switch inclusion {
 				case 0:
 					if item > low && item < high {
-						results[k] = append(results[k], []interface{}{item})
+						results[k] = append(results[k], values)
 					}
 				case 1:
 					if item >= low && item < high {
-						results[k] = append(results[k], []interface{}{item})
+						results[k] = append(results[k], values)
 					}
 				case 2:
 					if item > low && item <= high {
-						results[k] = append(results[k], []interface{}{item})
+						results[k] = append(results[k], values)
 					}
 				case 3:
 					if item >= low && item <= high {
-						results[k] = append(results[k], []interface{}{item})
+						results[k] = append(results[k], values)
 					}
 				default:
 					if item > low && item < high {
-						results[k] = append(results[k], []interface{}{item})
+						results[k] = append(results[k], values)
 					}
 				}
 			}
@@ -545,26 +548,28 @@ func ExpectedArrayScanResponse_string(docs tc.KeyValues, jsonPath string, low, h
 			}
 
 			for _, item := range sortedArray {
+				values := make(value.Values, 0)
+				values = append(values, value.NewValue(item))
 				switch inclusion {
 				case 0:
 					if item > low && item < high {
-						results[k] = append(results[k], []interface{}{item})
+						results[k] = append(results[k], values)
 					}
 				case 1:
 					if item >= low && item < high {
-						results[k] = append(results[k], []interface{}{item})
+						results[k] = append(results[k], values)
 					}
 				case 2:
 					if item > low && item <= high {
-						results[k] = append(results[k], []interface{}{item})
+						results[k] = append(results[k], values)
 					}
 				case 3:
 					if item >= low && item <= high {
-						results[k] = append(results[k], []interface{}{item})
+						results[k] = append(results[k], values)
 					}
 				default:
 					if item > low && item < high {
-						results[k] = append(results[k], []interface{}{item})
+						results[k] = append(results[k], values)
 					}
 				}
 			}
@@ -686,9 +691,9 @@ func ExpectedMultiScanResponse(docs tc.KeyValues, compositeFieldPaths []string, 
 
 // MultiScan for Primary index
 func ExpectedMultiScanResponse_Primary(docs tc.KeyValues, scans qc.Scans,
-	reverse, distinct bool, offset, limit int64) tc.ScanResponse {
+	reverse, distinct bool, offset, limit int64) tc.ScanResponseActual {
 
-	results := make(tc.ScanResponse)
+	results := make(tc.ScanResponseActual)
 
 	for k, _ := range docs {
 		field := k
