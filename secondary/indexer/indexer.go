@@ -2752,18 +2752,18 @@ func (idx *indexer) handleInitRecovery(msg Message) {
 			logging.Infof("Indexer::handleInitRecovery StreamId %v Bucket %v Using RetryTs %v",
 				streamId, bucket, rts)
 			idx.streamBucketRetryTs[streamId][bucket] = nil
-			idx.startBucketStream(streamId, bucket, rts, nil)
+			idx.startBucketStream(streamId, bucket, rts, nil, nil)
 		} else {
 			restartTs, err := idx.processRollback(streamId, bucket, ts)
 			if err != nil {
 				common.CrashOnError(err)
 			}
-			idx.startBucketStream(streamId, bucket, restartTs, nil)
+			idx.startBucketStream(streamId, bucket, restartTs, nil, nil)
 
 			go idx.collectProgressStats(true)
 		}
 	} else {
-		idx.startBucketStream(streamId, bucket, restartTs, retryTs)
+		idx.startBucketStream(streamId, bucket, restartTs, retryTs, nil)
 	}
 
 }
@@ -2832,7 +2832,7 @@ func (idx *indexer) handleKVStreamRepair(msg Message) {
 	if idx.checkStreamRequestPending(streamId, bucket) == false {
 		logging.Infof("Indexer::handleKVStreamRepair Initiate Stream Repair %v Bucket %v",
 			streamId, bucket)
-		idx.startBucketStream(streamId, bucket, restartTs, nil)
+		idx.startBucketStream(streamId, bucket, restartTs, nil, nil)
 	} else {
 		logging.Infof("Indexer::handleKVStreamRepair Ignore Stream Repair Request for Stream "+
 			"%v Bucket %v. Request In Progress.", streamId, bucket)
@@ -4354,7 +4354,7 @@ func (idx *indexer) stopBucketStream(streamId common.StreamId, bucket string) {
 }
 
 func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
-	restartTs *common.TsVbuuid, retryTs *common.TsVbuuid) {
+	restartTs *common.TsVbuuid, retryTs *common.TsVbuuid, allNilSnapsOnWarmup map[string]bool) {
 
 	logging.Infof("Indexer::startBucketStream Stream: %v Bucket: %v RestartTS %v",
 		streamId, bucket, restartTs)
@@ -4416,6 +4416,16 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 	respCh := make(MsgChannel)
 	stopCh := make(StopChannel)
 
+	//allow first snap optimization when restarting from 0.
+	//this cannot be done when warming up if some indexes have nil snapshots
+	//in a bucket while others don't
+	allowMarkFirstSnap := false
+	if restartTs == nil {
+		if allNilSnapsOnWarmup == nil || (allNilSnapsOnWarmup != nil && allNilSnapsOnWarmup[bucket] == true) {
+			allowMarkFirstSnap = true
+		}
+	}
+
 	//diable first snapshot optimization when recovering indexes as
 	//plasma cannot deal with duplicate inserts
 	cmd := &MsgStreamUpdate{mType: OPEN_STREAM,
@@ -4426,7 +4436,7 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 		buildTs:            idx.bucketBuildTs[bucket],
 		respCh:             respCh,
 		stopCh:             stopCh,
-		allowMarkFirstSnap: false,
+		allowMarkFirstSnap: allowMarkFirstSnap,
 		rollbackTime:       idx.bucketRollbackTimes[bucket]}
 
 	//send stream update to timekeeper
@@ -5598,7 +5608,7 @@ func isValidRecoveryState(state common.IndexState) bool {
 func (idx *indexer) startStreams() bool {
 
 	//Start MAINT_STREAM
-	restartTs := idx.makeRestartTs(common.MAINT_STREAM)
+	restartTs, allNilSnaps := idx.makeRestartTs(common.MAINT_STREAM)
 
 	idx.stateLock.Lock()
 	idx.streamBucketStatus[common.MAINT_STREAM] = make(BucketStatus)
@@ -5606,19 +5616,19 @@ func (idx *indexer) startStreams() bool {
 
 	for bucket, ts := range restartTs {
 		idx.bucketRollbackTimes[bucket] = time.Now().UnixNano()
-		idx.startBucketStream(common.MAINT_STREAM, bucket, ts, nil)
+		idx.startBucketStream(common.MAINT_STREAM, bucket, ts, nil, allNilSnaps)
 		idx.setStreamBucketState(common.MAINT_STREAM, bucket, STREAM_ACTIVE)
 	}
 
 	//Start INIT_STREAM
-	restartTs = idx.makeRestartTs(common.INIT_STREAM)
+	restartTs, allNilSnaps = idx.makeRestartTs(common.INIT_STREAM)
 
 	idx.stateLock.Lock()
 	idx.streamBucketStatus[common.INIT_STREAM] = make(BucketStatus)
 	idx.stateLock.Unlock()
 
 	for bucket, ts := range restartTs {
-		idx.startBucketStream(common.INIT_STREAM, bucket, ts, nil)
+		idx.startBucketStream(common.INIT_STREAM, bucket, ts, nil, allNilSnaps)
 		idx.setStreamBucketState(common.INIT_STREAM, bucket, STREAM_ACTIVE)
 	}
 
@@ -5626,9 +5636,10 @@ func (idx *indexer) startStreams() bool {
 
 }
 
-func (idx *indexer) makeRestartTs(streamId common.StreamId) map[string]*common.TsVbuuid {
+func (idx *indexer) makeRestartTs(streamId common.StreamId) (map[string]*common.TsVbuuid, map[string]bool) {
 
 	restartTs := make(map[string]*common.TsVbuuid)
+	allNilSnaps := make(map[string]bool)
 
 	for idxInstId, partnMap := range idx.indexPartnMap {
 		idxInst := idx.indexInstMap[idxInstId]
@@ -5651,9 +5662,14 @@ func (idx *indexer) makeRestartTs(streamId common.StreamId) map[string]*common.T
 				s := NewSnapshotInfoContainer(infos)
 				latestSnapInfo := s.GetLatest()
 
+				if _, ok := allNilSnaps[idxInst.Defn.Bucket]; !ok {
+					allNilSnaps[idxInst.Defn.Bucket] = true
+				}
+
 				//There may not be a valid snapshot info if no flush
 				//happened for this index
 				if latestSnapInfo != nil {
+					allNilSnaps[idxInst.Defn.Bucket] = false
 					ts := latestSnapInfo.Timestamp()
 					if oldTs, ok := restartTs[idxInst.Defn.Bucket]; ok {
 						if oldTs == nil {
@@ -5672,7 +5688,7 @@ func (idx *indexer) makeRestartTs(streamId common.StreamId) map[string]*common.T
 			}
 		}
 	}
-	return restartTs
+	return restartTs, allNilSnaps
 }
 
 func (idx *indexer) closeAllStreams() {
@@ -6907,4 +6923,3 @@ func (idx *indexer) setRollbackTs(streamId common.StreamId, bucket string,
 		idx.streamBucketRollbackTs[streamId] = bucketRollbackTs
 	}
 }
-
