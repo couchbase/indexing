@@ -472,7 +472,7 @@ func createSlice1(c *Context) {
 	slice1, err1 := indexer.NewMemDBSlice(c.memDbDir, 0, idxDefn1, instID, common.PartitionId(0), false, true, 1, config, stats)
 	common.CrashOnError(err1)
 	c.memDbSlice = slice1
-	slice, err := indexer.NewPlasmaSlice(c.plasmaDir, 0, idxDefn, instID, common.Partition(0), false, 1, config, stats, indexerStats)
+	slice, err := indexer.NewPlasmaSlice(c.plasmaDir, 0, idxDefn, instID, common.PartitionId(0), false, 1, config, stats, indexerStats)
 	common.CrashOnError(err)
 	c.plasmaSlice = slice
 }
@@ -630,11 +630,13 @@ func scan1(c *Context, wg *sync.WaitGroup) {
 	reader1 := c.plasmaSlice.GetReaderContext()
 	reader1.Init()
 	scanReqMemDb := new(indexer.ScanRequest)
-	scanReqMemDb.Ctx = reader
+	scanReqMemDb.Ctxs = make([]indexer.IndexReaderContext, 1)
+	scanReqMemDb.Ctxs[0] = reader
 	stopchMemDb := make(indexer.StopChannel)
 	scanReqPlasma := new(indexer.ScanRequest)
-	scanReqPlasma.Ctx = reader1
-	defer scanReqPlasma.Ctx.Done()
+	scanReqPlasma.Ctxs = make([]indexer.IndexReaderContext, 1)
+	scanReqPlasma.Ctxs[0] = reader1
+	defer scanReqPlasma.Ctxs[0].Done()
 	stopchPlasma := make(indexer.StopChannel)
 
 	if len(c.memDbSnaps) > 1 && len(c.plasmaSnaps) > 1 {
@@ -663,9 +665,9 @@ func scan1(c *Context, wg *sync.WaitGroup) {
 		var countRange, countRange1 uint64
 		var err1, err2 error
 
-		countRange, err1 = c.memDbSnaps[index].CountRange(scanReqMemDb.Ctx, scanReqMemDb.Low, scanReqMemDb.High, scanReqMemDb.Incl, stopchMemDb)
+		countRange, err1 = c.memDbSnaps[index].CountRange(scanReqMemDb.Ctxs[0], scanReqMemDb.Low, scanReqMemDb.High, scanReqMemDb.Incl, stopchMemDb)
 		common.CrashOnError(err1)
-		countRange1, err2 = c.plasmaSnaps[index].CountRange(scanReqPlasma.Ctx, scanReqPlasma.Low, scanReqPlasma.High, scanReqPlasma.Incl, stopchPlasma)
+		countRange1, err2 = c.plasmaSnaps[index].CountRange(scanReqPlasma.Ctxs[0], scanReqPlasma.Low, scanReqPlasma.High, scanReqPlasma.Incl, stopchPlasma)
 		common.CrashOnError(err2)
 		if countRange != countRange1 {
 			fmt.Print("\n Mismatch countRange : MemDb ", countRange, " and Plasma : ", countRange1, "\n")
@@ -677,9 +679,9 @@ func scan1(c *Context, wg *sync.WaitGroup) {
 	var countTotal, countTotal1 uint64
 	var err1, err2 error
 
-	countTotal, err1 = c.memDbSnaps[index].CountTotal(scanReqMemDb.Ctx, stopchMemDb)
+	countTotal, err1 = c.memDbSnaps[index].CountTotal(scanReqMemDb.Ctxs[0], stopchMemDb)
 	common.CrashOnError(err1)
-	countTotal1, err2 = c.plasmaSnaps[index].CountTotal(scanReqPlasma.Ctx, stopchPlasma)
+	countTotal1, err2 = c.plasmaSnaps[index].CountTotal(scanReqPlasma.Ctxs[0], stopchPlasma)
 	common.CrashOnError(err2)
 	if countTotal != countTotal1 {
 		fmt.Print("\n Mismatch countTotal : MemDb ", countTotal, " and Plasma : ", countTotal1, "\n")
@@ -688,9 +690,9 @@ func scan1(c *Context, wg *sync.WaitGroup) {
 	}
 
 	var countLookup, countLookup1 uint64
-	countLookup, err1 = c.memDbSnaps[index].CountLookup(scanReqMemDb.Ctx, scanReqMemDb.Keys, stopchMemDb)
+	countLookup, err1 = c.memDbSnaps[index].CountLookup(scanReqMemDb.Ctxs[0], scanReqMemDb.Keys, stopchMemDb)
 	common.CrashOnError(err1)
-	countLookup1, err2 = c.plasmaSnaps[index].CountLookup(scanReqPlasma.Ctx, scanReqPlasma.Keys, stopchPlasma)
+	countLookup1, err2 = c.plasmaSnaps[index].CountLookup(scanReqPlasma.Ctxs[0], scanReqPlasma.Keys, stopchPlasma)
 	common.CrashOnError(err2)
 	if countLookup != countLookup1 {
 		fmt.Print("\n Mismatch countLookup : MemDb ", countLookup, " and Plasma : ", countLookup1, "\n")
@@ -708,10 +710,12 @@ func scanAll(c *Context, wg *sync.WaitGroup) {
 	reader1 := c.plasmaSlice.GetReaderContext()
 	reader1.Init()
 	scanReqMemDb := new(indexer.ScanRequest)
-	scanReqMemDb.Ctx = reader
+	scanReqMemDb.Ctxs = make([]indexer.IndexReaderContext, 1)
+	scanReqMemDb.Ctxs[0] = reader
 	scanReqPlasma := new(indexer.ScanRequest)
-	scanReqPlasma.Ctx = reader1
-	defer scanReqPlasma.Ctx.Done()
+	scanReqPlasma.Ctxs = make([]indexer.IndexReaderContext, 1)
+	scanReqPlasma.Ctxs[0] = reader1
+	defer scanReqPlasma.Ctxs[0].Done()
 
 	if len(c.memDbSnaps) > 1 && len(c.plasmaSnaps) > 1 {
 		index = rand.Intn(len(c.memDbSnaps) - 1)
@@ -739,9 +743,9 @@ func scanAll(c *Context, wg *sync.WaitGroup) {
 		}
 		return nil
 	}
-	err1 := c.memDbSnaps[index].All(scanReqMemDb.Ctx, callb)
+	err1 := c.memDbSnaps[index].All(scanReqMemDb.Ctxs[0], callb)
 	common.CrashOnError(err1)
-	err2 := c.plasmaSnaps[index].All(scanReqPlasma.Ctx, callb1)
+	err2 := c.plasmaSnaps[index].All(scanReqPlasma.Ctxs[0], callb1)
 	common.CrashOnError(err2)
 	if count != count1 {
 		fmt.Print("\ncount : ", count)
@@ -771,10 +775,12 @@ func scanRange(c *Context, wg *sync.WaitGroup) {
 	reader1 := c.plasmaSlice.GetReaderContext()
 	reader1.Init()
 	scanReqMemDb := new(indexer.ScanRequest)
-	scanReqMemDb.Ctx = reader
+	scanReqMemDb.Ctxs = make([]indexer.IndexReaderContext, 1)
+	scanReqMemDb.Ctxs[0] = reader
 	scanReqPlasma := new(indexer.ScanRequest)
-	scanReqPlasma.Ctx = reader1
-	defer scanReqPlasma.Ctx.Done()
+	scanReqPlasma.Ctxs = make([]indexer.IndexReaderContext, 1)
+	scanReqPlasma.Ctxs[0] = reader1
+	defer scanReqPlasma.Ctxs[0].Done()
 
 	if len(c.memDbSnaps) > 1 && len(c.plasmaSnaps) > 1 {
 		index = rand.Intn(len(c.memDbSnaps) - 1)
@@ -804,9 +810,9 @@ func scanRange(c *Context, wg *sync.WaitGroup) {
 	}
 	low, _ := indexer.NewSecondaryKey([]byte("a"), make([]byte, 5000))
 	high, _ := indexer.NewSecondaryKey([]byte("z"), make([]byte, 5000))
-	err2 := c.plasmaSnaps[index].Range(scanReqPlasma.Ctx, low, high, indexer.Both, callb1)
+	err2 := c.plasmaSnaps[index].Range(scanReqPlasma.Ctxs[0], low, high, indexer.Both, callb1)
 	common.CrashOnError(err2)
-	err1 := c.memDbSnaps[index].Range(scanReqMemDb.Ctx, low, high, indexer.Both, callb)
+	err1 := c.memDbSnaps[index].Range(scanReqMemDb.Ctxs[0], low, high, indexer.Both, callb)
 	common.CrashOnError(err1)
 
 	fmt.Print("\ncount : ", count)
