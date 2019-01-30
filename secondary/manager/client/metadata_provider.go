@@ -2640,6 +2640,7 @@ func (o *MetadataProvider) addReplica(idxDefn *c.IndexDefn, watcherMap map[c.Ind
 	//
 	requestId, err := c.NewIndexInstId()
 	if err != nil {
+		o.cancelPrepareIndexRequest(idxDefn.DefnId, watcherMap)
 		return err
 	}
 	err = o.makeCommitIndexRequest(ADD_REPLICA, idxDefn, uint64(requestId), definitions, watcherMap)

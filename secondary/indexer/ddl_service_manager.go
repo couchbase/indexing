@@ -620,7 +620,6 @@ func (m *DDLServiceMgr) handleCreateCommand() {
 			exist, err := mc.DeleteCommandTokenExist(token.DefnId)
 			if err != nil {
 				logging.Warnf("DDLServiceMgr: Failed to check delete token.  Skip processing %v.  Error = %v.", entry, err)
-				continue
 
 			} else if exist {
 				// Avoid deleting create token during rebalance.  This is just for extra safety.  Even if the planner
@@ -648,8 +647,6 @@ func (m *DDLServiceMgr) handleCreateCommand() {
 			canDelete := true
 
 			for indexerId, definitions := range token.Definitions {
-				alterReplicaMap := make(map[common.IndexDefnId]common.Counter)
-
 				for _, defn := range definitions {
 					var newPartitionList []common.PartitionId
 					var newVersionList []int
@@ -658,8 +655,6 @@ func (m *DDLServiceMgr) handleCreateCommand() {
 					exist, err := mc.DropInstanceCommandTokenExist(token.DefnId, defn.InstId)
 					if err != nil {
 						logging.Warnf("DDLServiceMgr: Failed to check drop instance token.  Skip processing %v.  Error = %v.", entry, err)
-						canDelete = false
-						continue
 					}
 					if exist {
 						logging.Infof("DDLServiceMgr: Drop instance token exist.  Will not create index instance for %v.", entry)
@@ -698,9 +693,6 @@ func (m *DDLServiceMgr) handleCreateCommand() {
 						if !found && indexerId == m.indexerId {
 							newPartitionList = append(newPartitionList, partition)
 							newVersionList = append(newVersionList, 0)
-
-						} else if found && indexerId2 == m.indexerId && defn.NumReplica2.IsValid() {
-							alterReplicaMap[defn.DefnId] = defn.NumReplica2
 						}
 
 						// If the partition is not deferred, then we may need to build it.
@@ -751,24 +743,6 @@ func (m *DDLServiceMgr) handleCreateCommand() {
 						}
 					}
 				}
-
-				// Try update replica count
-				if len(alterReplicaMap) != 0 {
-					for defnId, numReplica := range alterReplicaMap {
-
-						var defn common.IndexDefn
-						defn.DefnId = defnId
-						defn.NumReplica2 = numReplica
-
-						logging.Infof("DDLServiceMgr: Update Replica Count.  Index Defn %v replica Count %v", defnId, numReplica)
-
-						if err := provider.SendAlterReplicaCountRequest(m.indexerId, &defn, m.localAddr); err != nil {
-							// All errors received from alter replica count are expected to be recoverable.
-							logging.Warnf("DDLServiceMgr: Failed to alter replica count. Error = %v.", err)
-							canDelete = false
-						}
-					}
-				}
 			}
 
 			if canDelete {
@@ -811,9 +785,33 @@ func (m *DDLServiceMgr) handleCreateCommand() {
 		if !m.canProcessDDL() {
 			logging.Infof("DDLServiceMgr: cannot delete create token during rebalancing")
 			return
+
 		}
 
 		for path, token := range deleteMap {
+			var defn common.IndexDefn
+			var numReplica common.Counter
+
+			for _, definitions := range token.Definitions {
+				if len(definitions) != 0 {
+					numReplica = definitions[0].NumReplica2
+					break
+				}
+			}
+
+			if numReplica.IsValid() {
+				defn.DefnId = token.DefnId
+				defn.NumReplica2 = numReplica
+
+				logging.Infof("DDLServiceMgr: Update Replica Count.  Index Defn %v replica Count %v", defn.DefnId, defn.NumReplica2)
+
+				if err := provider.BroadcastAlterReplicaCountRequest(&defn); err != nil {
+					// All errors received from alter replica count are expected to be recoverable.
+					logging.Warnf("DDLServiceMgr: Failed to alter replica count. Error = %v.", err)
+					continue
+				}
+			}
+
 			if err := mc.DeleteCreateCommandToken(token.DefnId, token.RequestId); err != nil {
 				logging.Warnf("DDLServiceMgr: Failed to remove create index token %v. Error = %v", token.DefnId, err)
 			} else {

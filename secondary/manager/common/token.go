@@ -141,7 +141,7 @@ func PostCreateCommandToken(defnId c.IndexDefnId, bucketUUID string, requestId u
 	if requestId == 0 {
 		id = fmt.Sprintf("%v", defnId)
 	} else {
-		id = fmt.Sprintf("%v/%v", defnId, requestId)
+		id = fmt.Sprintf("%v-%v", defnId, requestId)
 	}
 	return c.MetakvBigValueSet(CreateDDLCommandTokenPath+id, commandToken)
 }
@@ -169,7 +169,7 @@ func DeleteCreateCommandToken(defnId c.IndexDefnId, requestId uint64) error {
 	if requestId == 0 {
 		id = fmt.Sprintf("%v", defnId)
 	} else {
-		id = fmt.Sprintf("%v/%v", defnId, requestId)
+		id = fmt.Sprintf("%v-%v", defnId, requestId)
 	}
 	return c.MetakvBigValueDel(CreateDDLCommandTokenPath + id)
 }
@@ -203,7 +203,7 @@ func FetchCreateCommandToken(defnId c.IndexDefnId, requestId uint64) (*CreateCom
 	if requestId == 0 {
 		id = fmt.Sprintf("%v", defnId)
 	} else {
-		id = fmt.Sprintf("%v/%v", defnId, requestId)
+		id = fmt.Sprintf("%v-%v", defnId, requestId)
 	}
 	exists, err := c.MetakvBigValueGet(CreateDDLCommandTokenPath+id, token)
 	if err != nil {
@@ -268,7 +268,7 @@ func GetDefnIdFromCreateCommandTokenPath(path string) (c.IndexDefnId, uint64, er
 	if len(path) != 0 {
 		var defnIdStr string
 
-		if loc := strings.Index(path, "/"); loc != -1 {
+		if loc := strings.Index(path, "-"); loc != -1 {
 			defnIdStr = path[:loc]
 
 			if loc != len(path)-1 {
@@ -277,7 +277,12 @@ func GetDefnIdFromCreateCommandTokenPath(path string) (c.IndexDefnId, uint64, er
 				path = ""
 			}
 		} else {
+			if loc := strings.Index(path, "/"); loc != -1 {
+				path = path[:loc]
+			}
+
 			defnIdStr = path
+			path = ""
 		}
 
 		temp, err := strconv.ParseUint(defnIdStr, 10, 64)
