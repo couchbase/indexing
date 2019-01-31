@@ -1497,7 +1497,9 @@ func (s *Solution) removeIndexes(indexes []*IndexUsage) {
 				if index == target {
 					s.removeIndex(indexer, i)
 					s.updateServerGroupMap(index, nil)
-					delete(s.replicaMap[index.DefnId][index.PartnId], index.Instance.ReplicaId)
+					if index.Instance != nil {
+						delete(s.replicaMap[index.DefnId][index.PartnId], index.Instance.ReplicaId)
+					}
 				}
 			}
 		}
@@ -1514,7 +1516,9 @@ func (s *Solution) removeReplicas(defnId common.IndexDefnId, replicaId int) {
 			if index.DefnId == defnId && int(index.Instance.ReplicaId) == replicaId {
 				s.removeIndex(indexer, i)
 				s.updateServerGroupMap(index, nil)
-				delete(s.replicaMap[index.DefnId][index.PartnId], index.Instance.ReplicaId)
+				if index.Instance != nil {
+					delete(s.replicaMap[index.DefnId][index.PartnId], index.Instance.ReplicaId)
+				}
 				goto RETRY
 			}
 		}
@@ -2600,21 +2604,23 @@ func (s *Solution) hasDeletedNodes() bool {
 // Update SG mapping for index
 //
 func (s *Solution) updateServerGroupMap(index *IndexUsage, indexer *IndexerNode) {
-	if indexer != nil {
-		if _, ok := s.indexSGMap[index.DefnId]; !ok {
-			s.indexSGMap[index.DefnId] = make(map[common.PartitionId]map[int]string)
-		}
+	if index.Instance != nil {
+		if indexer != nil {
+			if _, ok := s.indexSGMap[index.DefnId]; !ok {
+				s.indexSGMap[index.DefnId] = make(map[common.PartitionId]map[int]string)
+			}
 
-		if _, ok := s.indexSGMap[index.DefnId][index.PartnId]; !ok {
-			s.indexSGMap[index.DefnId][index.PartnId] = make(map[int]string)
-		}
+			if _, ok := s.indexSGMap[index.DefnId][index.PartnId]; !ok {
+				s.indexSGMap[index.DefnId][index.PartnId] = make(map[int]string)
+			}
 
-		s.indexSGMap[index.DefnId][index.PartnId][index.Instance.ReplicaId] = indexer.ServerGroup
+			s.indexSGMap[index.DefnId][index.PartnId][index.Instance.ReplicaId] = indexer.ServerGroup
 
-	} else {
-		if _, ok := s.indexSGMap[index.DefnId]; ok {
-			if _, ok := s.indexSGMap[index.DefnId][index.PartnId]; ok {
-				delete(s.indexSGMap[index.DefnId][index.PartnId], index.Instance.ReplicaId)
+		} else {
+			if _, ok := s.indexSGMap[index.DefnId]; ok {
+				if _, ok := s.indexSGMap[index.DefnId][index.PartnId]; ok {
+					delete(s.indexSGMap[index.DefnId][index.PartnId], index.Instance.ReplicaId)
+				}
 			}
 		}
 	}
@@ -2638,15 +2644,17 @@ func (s *Solution) generateReplicaMap() {
 
 	for _, indexer := range s.Placement {
 		for _, index := range indexer.Indexes {
-			if _, ok := s.replicaMap[index.DefnId]; !ok {
-				s.replicaMap[index.DefnId] = make(map[common.PartitionId]map[int]*IndexUsage)
-			}
+			if index.Instance != nil {
+				if _, ok := s.replicaMap[index.DefnId]; !ok {
+					s.replicaMap[index.DefnId] = make(map[common.PartitionId]map[int]*IndexUsage)
+				}
 
-			if _, ok := s.replicaMap[index.DefnId][index.PartnId]; !ok {
-				s.replicaMap[index.DefnId][index.PartnId] = make(map[int]*IndexUsage)
-			}
+				if _, ok := s.replicaMap[index.DefnId][index.PartnId]; !ok {
+					s.replicaMap[index.DefnId][index.PartnId] = make(map[int]*IndexUsage)
+				}
 
-			s.replicaMap[index.DefnId][index.PartnId][index.Instance.ReplicaId] = index
+				s.replicaMap[index.DefnId][index.PartnId][index.Instance.ReplicaId] = index
+			}
 		}
 	}
 }
