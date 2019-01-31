@@ -1278,7 +1278,7 @@ func processCreateToken(clusterUrl string, indexers []*IndexerNode, config commo
 
 		for _, token := range tokens.Tokens {
 
-			logging.Infof("Planner: Processing create token for index %v from node %v", token.DefnId, nodeId)
+			logging.Verbosef("Planner: Processing create token for index %v from node %v", token.DefnId, nodeId)
 
 			for indexerId, definitions := range token.Definitions {
 				for _, defn := range definitions {
@@ -1358,7 +1358,7 @@ func processDeleteToken(clusterUrl string, indexers []*IndexerNode, config commo
 		}
 
 		for _, token := range tokens.Tokens {
-			logging.Infof("Planner: Processing delete token for index %v from node %v", token.DefnId, nodeId)
+			logging.Verbosef("Planner: Processing delete token for index %v from node %v", token.DefnId, nodeId)
 			for _, indexer := range indexers {
 				indexes := make([]*IndexUsage, 0, len(indexer.Indexes))
 				for _, index := range indexer.Indexes {
@@ -1439,7 +1439,7 @@ func processDropInstanceToken(clusterUrl string, indexers []*IndexerNode, config
 		}
 
 		for _, token := range tokens.Tokens {
-			logging.Infof("Planner: Processing drop instance token for index %v (replicaId %v inst %v) from node %v",
+			logging.Verbosef("Planner: Processing drop instance token for index %v (replicaId %v inst %v) from node %v",
 				token.DefnId, token.ReplicaId, token.InstId, nodeId)
 			found := false
 			for _, indexer := range indexers {
