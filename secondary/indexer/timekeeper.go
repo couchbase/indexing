@@ -250,7 +250,7 @@ func (tk *timekeeper) handleStreamOpen(cmd Message) {
 	case STREAM_INACTIVE, STREAM_PREPARE_DONE:
 		tk.ss.initBucketInStream(streamId, bucket)
 		if restartTs != nil {
-			tk.ss.streamBucketRestartTsMap[streamId][bucket] = restartTs
+			tk.ss.streamBucketRestartTsMap[streamId][bucket] = restartTs.Copy()
 			tk.ss.setHWTFromRestartTs(streamId, bucket)
 		}
 		tk.ss.setRollbackTime(bucket, rollbackTime)
@@ -528,7 +528,13 @@ func (tk *timekeeper) handleFlushDone(cmd Message) {
 	if _, ok := bucketFlushInProgressTsMap[bucket]; ok {
 		//store the last flushed TS
 		fts := bucketFlushInProgressTsMap[bucket]
+		lts := bucketLastFlushedTsMap[bucket]
+
 		bucketLastFlushedTsMap[bucket] = fts
+
+		if fts != nil {
+			tk.ss.updatePrevVbuuid(streamId, bucket, fts, lts)
+		}
 
 		// check if each flush time is snap aligned. If so, make a copy.
 		if fts != nil && fts.IsSnapAligned() {
@@ -2407,10 +2413,13 @@ func (tk *timekeeper) initiateRecovery(streamId common.StreamId,
 
 	if tk.ss.streamBucketStatus[streamId][bucket] == STREAM_PREPARE_DONE {
 
+		var retryTs *common.TsVbuuid
 		restartTs := tk.ss.computeRestartTs(streamId, bucket)
+
 		//adjust for non-snap aligned ts
 		if restartTs != nil {
 			tk.ss.adjustNonSnapAlignedVbs(restartTs, streamId, bucket, nil, false)
+			retryTs = tk.ss.computeRetryTs(streamId, bucket, restartTs)
 		}
 
 		tk.stopTimer(streamId, bucket)
@@ -2420,7 +2429,8 @@ func (tk *timekeeper) initiateRecovery(streamId common.StreamId,
 		tk.supvRespch <- &MsgRecovery{mType: INDEXER_INITIATE_RECOVERY,
 			streamId:  streamId,
 			bucket:    bucket,
-			restartTs: restartTs}
+			restartTs: restartTs,
+			retryTs:   retryTs}
 		logging.Infof("Timekeeper::initiateRecovery StreamId %v Bucket %v "+
 			"RestartTs %v", streamId, bucket, restartTs)
 	} else {

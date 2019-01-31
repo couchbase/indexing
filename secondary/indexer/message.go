@@ -1159,6 +1159,7 @@ type MsgRecovery struct {
 	buildTs   Timestamp
 	activeTs  *common.TsVbuuid
 	inMTR     bool
+	retryTs   *common.TsVbuuid
 }
 
 func (m *MsgRecovery) GetMsgType() MsgType {
@@ -1187,6 +1188,10 @@ func (m *MsgRecovery) GetBuildTs() Timestamp {
 
 func (m *MsgRecovery) InMTR() bool {
 	return m.inMTR
+}
+
+func (m *MsgRecovery) GetRetryTs() *common.TsVbuuid {
+	return m.retryTs
 }
 
 type MsgRollback struct {
