@@ -647,6 +647,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"queryport.client.allowCJsonScanFormat": ConfigValue{
+		true,
+		"Allow collatejson as data format between queryport client and indexer.",
+		true,
+		false, // mutable
+		false, // case-insensitive
+	},
 	// projector's adminport client, can be used by indexer.
 	"indexer.projectorclient.retryInterval": ConfigValue{
 		16,

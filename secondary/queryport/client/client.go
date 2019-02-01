@@ -1540,6 +1540,10 @@ func (c *GsiClient) SetDataEncodingFormat(val common.DataEncodingFormat) {
 }
 
 func (c *GsiClient) GetDataEncodingFormat() common.DataEncodingFormat {
+	if !c.Settings().AllowCJsonScanFormat() {
+		return common.DATA_ENC_JSON
+	}
+
 	return common.DataEncodingFormat(atomic.LoadUint32(&c.dataEncFmt))
 }
 
