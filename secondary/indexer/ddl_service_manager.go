@@ -113,7 +113,7 @@ func NewDDLServiceMgr(indexerId common.IndexerId, supvCmdch MsgChannel, supvMsgc
 		donech:          nil,
 		killch:          make(chan bool),
 		allowDDL:        true,
-		commandListener: mc.NewCommandListener(donech, true, false, false),
+		commandListener: mc.NewCommandListener(donech, true, false, false, false),
 		listenerDonech:  donech,
 	}
 
@@ -122,6 +122,8 @@ func NewDDLServiceMgr(indexerId common.IndexerId, supvCmdch MsgChannel, supvMsgc
 	mux := GetHTTPMux()
 	mux.HandleFunc("/listMetadataTokens", mgr.handleListMetadataTokens)
 	mux.HandleFunc("/listCreateTokens", mgr.handleListCreateTokens)
+	mux.HandleFunc("/listDeleteTokens", mgr.handleListDeleteTokens)
+	mux.HandleFunc("/listDropInstanceTokens", mgr.handleListDropInstanceTokens)
 
 	go mgr.run()
 
@@ -248,6 +250,7 @@ func (m *DDLServiceMgr) rebalanceDone(change *service.TopologyChange, isCancel b
 
 	m.cleanupCreateCommand()
 	m.cleanupDropCommand()
+	m.cleanupDropInstanceCommand()
 	m.cleanupBuildCommand()
 	m.handleClusterStorageMode(httpAddrMap)
 }
@@ -416,24 +419,45 @@ func (m *DDLServiceMgr) cleanupCreateCommand() {
 		return
 	}
 
-	deleted := make(map[common.IndexDefnId]bool)
-	malformed := make(map[common.IndexDefnId]bool)
+	deleted := make(map[common.IndexDefnId]map[uint64]bool)
+	malformed := make(map[common.IndexDefnId]map[uint64]bool)
+
+	isDeleted := func(defnId common.IndexDefnId, requestId uint64) bool {
+		if _, ok := deleted[defnId]; ok {
+			return deleted[defnId][requestId]
+		}
+		return false
+	}
+
+	addDeleted := func(defnId common.IndexDefnId, requestId uint64) {
+		if _, ok := deleted[defnId]; !ok {
+			deleted[defnId] = make(map[uint64]bool)
+		}
+		deleted[defnId][requestId] = true
+	}
+
+	addMalformed := func(defnId common.IndexDefnId, requestId uint64) {
+		if _, ok := malformed[defnId]; !ok {
+			malformed[defnId] = make(map[uint64]bool)
+		}
+		malformed[defnId][requestId] = true
+	}
 
 	for _, entry := range entries {
 
 		delete := false
 
-		defnId, err := mc.GetDefnIdFromCreateCommandTokenPath(entry.Path)
+		defnId, requestId, err := mc.GetDefnIdFromCreateCommandTokenPath(entry.Path)
 		if err != nil {
 			logging.Warnf("DDLServiceMgr: Failed to process create index token.  Skip %v.  Internal Error = %v.", entry.Path, err)
 			continue
 		}
 
-		if deleted[defnId] {
+		if isDeleted(defnId, requestId) {
 			continue
 		}
 
-		token, err := mc.FetchCreateCommandToken(defnId)
+		token, err := mc.FetchCreateCommandToken(defnId, requestId)
 		if err != nil {
 			logging.Warnf("DDLServiceMgr: Failed to process create index token.  Skip %v.  Internal Error = %v.", entry.Path, err)
 			continue
@@ -467,17 +491,17 @@ func (m *DDLServiceMgr) cleanupCreateCommand() {
 		} else {
 			// There is an entry in metakv, but cannot fetch the token.  The token can be malformed or there is a create DDL
 			// in progress.
-			malformed[defnId] = true
+			addMalformed(defnId, requestId)
 		}
 
-		if delete && !deleted[defnId] {
+		if delete && !isDeleted(defnId, requestId) {
 			// If a drop token exist, then delete the create token.
-			if err := mc.DeleteCreateCommandToken(defnId); err != nil {
+			if err := mc.DeleteCreateCommandToken(defnId, requestId); err != nil {
 				logging.Warnf("DDLServiceMgr: Failed to remove create index token %v. Error = %v", entry.Path, err)
 			} else {
 				logging.Infof("DDLServiceMgr: Remove create index token %v.", entry.Path)
 			}
-			deleted[defnId] = true
+			addDeleted(defnId, requestId)
 		}
 	}
 
@@ -489,29 +513,31 @@ func (m *DDLServiceMgr) cleanupCreateCommand() {
 		if m.provider.AllWatchersAlive() {
 
 			// Go through the list of tokens that have failed before.
-			for defnId, _ := range malformed {
+			for defnId, requestIds := range malformed {
+				for requestId, _ := range requestIds {
 
-				// If already deleted, then ingore it.
-				if deleted[defnId] {
-					continue
-				}
-
-				// Try to fetch it again.  See if this time being successful.
-				token, err := mc.FetchCreateCommandToken(defnId)
-				if err != nil {
-					continue
-				}
-
-				// Still cannot fetch the token.   Then it means the token could be deleted or
-				// still being malformed.  Delete the token.
-				if token == nil {
-					// If a drop token exist, then delete the create token.
-					if err := mc.DeleteCreateCommandToken(defnId); err != nil {
-						logging.Warnf("DDLServiceMgr: Failed to remove create index token %v. Error = %v", defnId, err)
-					} else {
-						logging.Infof("DDLServiceMgr: Remove create index token %v.", defnId)
+					// If already deleted, then ingore it.
+					if isDeleted(defnId, requestId) {
+						continue
 					}
-					deleted[defnId] = true
+
+					// Try to fetch it again.  See if this time being successful.
+					token, err := mc.FetchCreateCommandToken(defnId, requestId)
+					if err != nil {
+						continue
+					}
+
+					// Still cannot fetch the token.   Then it means the token could be deleted or
+					// still being malformed.  Delete the token.
+					if token == nil {
+						// If a drop token exist, then delete the create token.
+						if err := mc.DeleteCreateCommandToken(defnId, requestId); err != nil {
+							logging.Warnf("DDLServiceMgr: Failed to remove create index token %v. Error = %v", defnId, err)
+						} else {
+							logging.Infof("DDLServiceMgr: Remove create index token %v.", defnId)
+						}
+						addDeleted(defnId, requestId)
+					}
 				}
 			}
 		}
@@ -582,7 +608,7 @@ func (m *DDLServiceMgr) handleCreateCommand() {
 	}()
 
 	buildMap := make(map[common.IndexDefnId]bool)
-	deleteMap := make(map[string]common.IndexDefnId)
+	deleteMap := make(map[string]*mc.CreateCommandToken)
 
 	for entry, token := range entries {
 
@@ -606,7 +632,7 @@ func (m *DDLServiceMgr) handleCreateCommand() {
 				}
 
 				// If a drop token exist, then delete the create token.
-				if err := mc.DeleteCreateCommandToken(token.DefnId); err != nil {
+				if err := mc.DeleteCreateCommandToken(token.DefnId, token.RequestId); err != nil {
 					logging.Warnf("DDLServiceMgr: Failed to remove create index token %v. Error = %v", entry, err)
 				} else {
 					delete(retryList, entry)
@@ -625,6 +651,16 @@ func (m *DDLServiceMgr) handleCreateCommand() {
 					var newPartitionList []common.PartitionId
 					var newVersionList []int
 
+					// If there is a drop token, then do not process the create token.
+					exist, err := mc.DropInstanceCommandTokenExist(token.DefnId, defn.InstId)
+					if err != nil {
+						logging.Warnf("DDLServiceMgr: Failed to check drop instance token.  Skip processing %v.  Error = %v.", entry, err)
+					}
+					if exist {
+						logging.Infof("DDLServiceMgr: Drop instance token exist.  Will not create index instance for %v.", entry)
+						continue
+					}
+
 					// for every partition for this instance, check to see if the partition exist in the cluster.
 					for _, partition := range defn.Partitions {
 
@@ -633,7 +669,8 @@ func (m *DDLServiceMgr) handleCreateCommand() {
 						indexerId2 := common.INDEXER_ID_NIL
 
 						// find if partition exist in cluster
-						if index := provider.FindIndexIgnoreStatus(defn.DefnId); index != nil {
+						index := provider.FindIndexIgnoreStatus(defn.DefnId)
+						if index != nil {
 							found, status, indexerId2 = findPartition(defn.InstId, partition, index.Instances)
 							if !found {
 								// is the partition under rebalance?
@@ -643,6 +680,12 @@ func (m *DDLServiceMgr) handleCreateCommand() {
 
 						// cannot delete if not found or has not been built
 						if !found || (!defn.Deferred && status < common.INDEX_STATE_INITIAL) {
+							canDelete = false
+						}
+
+						// cannot delete if it is deferred but overall index state is INITIAL/CATCHUP/ACTIVE
+						if defn.Deferred && found && status < common.INDEX_STATE_INITIAL && index != nil &&
+							(index.State == common.INDEX_STATE_INITIAL || index.State == common.INDEX_STATE_CATCHUP || index.State == common.INDEX_STATE_ACTIVE) {
 							canDelete = false
 						}
 
@@ -656,6 +699,12 @@ func (m *DDLServiceMgr) handleCreateCommand() {
 						// 1) If the partition is not found
 						// 2) The partition has not been build and it matches the local indexer id
 						if !defn.Deferred && found && status < common.INDEX_STATE_INITIAL && indexerId2 == m.indexerId {
+							buildMap[defn.DefnId] = true
+						}
+
+						// If index is deferred, but overall index status is active, build the remaining replica/partition.
+						if defn.Deferred && found && status < common.INDEX_STATE_INITIAL && indexerId2 == m.indexerId && index != nil &&
+							(index.State == common.INDEX_STATE_INITIAL || index.State == common.INDEX_STATE_CATCHUP || index.State == common.INDEX_STATE_ACTIVE) {
 							buildMap[defn.DefnId] = true
 						}
 					}
@@ -698,7 +747,7 @@ func (m *DDLServiceMgr) handleCreateCommand() {
 
 			if canDelete {
 				// If all the instances and partitions are accounted for, then delete the create token.
-				deleteMap[entry] = token.DefnId
+				deleteMap[entry] = token
 			}
 		}
 	}
@@ -736,14 +785,38 @@ func (m *DDLServiceMgr) handleCreateCommand() {
 		if !m.canProcessDDL() {
 			logging.Infof("DDLServiceMgr: cannot delete create token during rebalancing")
 			return
+
 		}
 
-		for path, defnId := range deleteMap {
-			if err := mc.DeleteCreateCommandToken(defnId); err != nil {
-				logging.Warnf("DDLServiceMgr: Failed to remove create index token %v. Error = %v", defnId, err)
+		for path, token := range deleteMap {
+			var defn common.IndexDefn
+			var numReplica common.Counter
+
+			for _, definitions := range token.Definitions {
+				if len(definitions) != 0 {
+					numReplica = definitions[0].NumReplica2
+					break
+				}
+			}
+
+			if numReplica.IsValid() {
+				defn.DefnId = token.DefnId
+				defn.NumReplica2 = numReplica
+
+				logging.Infof("DDLServiceMgr: Update Replica Count.  Index Defn %v replica Count %v", defn.DefnId, defn.NumReplica2)
+
+				if err := provider.BroadcastAlterReplicaCountRequest(&defn); err != nil {
+					// All errors received from alter replica count are expected to be recoverable.
+					logging.Warnf("DDLServiceMgr: Failed to alter replica count. Error = %v.", err)
+					continue
+				}
+			}
+
+			if err := mc.DeleteCreateCommandToken(token.DefnId, token.RequestId); err != nil {
+				logging.Warnf("DDLServiceMgr: Failed to remove create index token %v. Error = %v", token.DefnId, err)
 			} else {
 				delete(retryList, path)
-				logging.Infof("DDLServiceMgr: Remove create index token %v.", defnId)
+				logging.Infof("DDLServiceMgr: Remove create index token %v.", token.DefnId)
 			}
 		}
 	}
@@ -764,7 +837,7 @@ func (m *DDLServiceMgr) processCreateCommand() {
 		case _, ok := <-m.listenerDonech:
 			if !ok {
 				m.listenerDonech = make(chan bool)
-				m.commandListener = mc.NewCommandListener(m.listenerDonech, true, false, false)
+				m.commandListener = mc.NewCommandListener(m.listenerDonech, true, false, false, false)
 				m.commandListener.ListenTokens()
 			}
 
@@ -772,6 +845,87 @@ func (m *DDLServiceMgr) processCreateCommand() {
 			m.commandListener.Close()
 			logging.Infof("author: Index author go-routine terminates.")
 			return
+		}
+	}
+}
+
+//////////////////////////////////////////////////////////////
+// Drop Instance Token
+//////////////////////////////////////////////////////////////
+
+//
+// Recover drop instance command
+//
+func (m *DDLServiceMgr) cleanupDropInstanceCommand() {
+
+	entries, err := metakv.ListAllChildren(mc.DropInstanceDDLCommandTokenPath)
+	if err != nil {
+		logging.Warnf("DDLServiceMgr: Failed to cleanup delete index instance token upon rebalancing.  Skip cleanup.  Internal Error = %v", err)
+		return
+	}
+
+	if len(entries) == 0 {
+		return
+	}
+
+	for _, entry := range entries {
+
+		if strings.Contains(entry.Path, mc.DropInstanceDDLCommandTokenPath) && entry.Value != nil {
+
+			logging.Infof("DDLServiceMgr: processing delete index instance token %v", entry.Path)
+
+			command, err := mc.UnmarshallDropInstanceCommandToken(entry.Value)
+			if err != nil {
+				logging.Warnf("DDLServiceMgr: Failed to clean delete index instance token upon rebalancing.  Skp command %v.  Internal Error = %v.",
+					entry.Path, err)
+				continue
+			}
+
+			// If there is a create token, then do not process the drop token.  Let the create token being dropped first to avoid
+			// any unexpected raise condition.  This is more for safety than necessity.
+			exist, err := mc.CreateCommandTokenExist(command.DefnId)
+			if err != nil {
+				logging.Warnf("DDLServiceMgr: Failed to check create token.  Skip command %v.  Error = %v.", entry.Path, err)
+				continue
+			}
+
+			// If a create token exist, then skip processing the drop token.
+			if exist {
+				logging.Warnf("DDLServiceMgr: Create token exist for %v.  Skip processing drop token %v.", command.DefnId, entry.Path)
+				continue
+			}
+
+			// Find if the index still exist in the cluster.  DDLServiceManger will only cleanup the delete token IF there is no index instance.
+			// This means the indexer must have been able to process the deleted token before DDLServiceManager has a chance to clean it up.
+			//
+			// 1) It will skip DELETED index.  DELETED index will be cleaned up by lifecycle manager periodically.
+			// 2) At this point, the metadata provider has been connected to all indexer at least once (refreshOnTopology gurantees that).   So
+			//    metadata provider has a snapshot of the metadata from each indexer at some point in time.   It will return index even if metadata
+			//    provider is not connected to the indexer at the exact moment when this call is made.
+			//
+			//
+			if m.provider.FindIndexInstanceIgnoreStatus(command.DefnId, command.InstId) == nil {
+				var defn common.IndexDefn
+				defn.DefnId = command.DefnId
+				defn.NumReplica2 = command.Defn.NumReplica2
+
+				logging.Infof("DDLServiceMgr: Update Replica Count.  Index Defn %v replica Count %v", defn.DefnId, defn.NumReplica2)
+
+				if err := m.provider.BroadcastAlterReplicaCountRequest(&defn); err != nil {
+					// All errors received from alter replica count are expected to be recoverable.
+					logging.Warnf("DDLServiceMgr: Failed to alter replica count. Error = %v.", err)
+					continue
+				}
+
+				// There is no index in the cluster,  remove token
+				if err := MetakvDel(entry.Path); err != nil {
+					logging.Warnf("DDLServiceMgr: Failed to remove delete index token %v. Error = %v", entry.Path, err)
+				} else {
+					logging.Infof("DDLServiceMgr: Remove delete index token %v.", entry.Path)
+				}
+			} else {
+				logging.Infof("DDLServiceMgr: Indexer still holding index definiton.  Skip removing delete index token %v.", entry.Path)
+			}
 		}
 	}
 }
@@ -966,14 +1120,14 @@ func (m *DDLServiceMgr) handleListMetadataTokens(w http.ResponseWriter, r *http.
 
 		for _, entry := range createTokens {
 
-			defnId, err := mc.GetDefnIdFromCreateCommandTokenPath(entry)
+			defnId, requestId, err := mc.GetDefnIdFromCreateCommandTokenPath(entry)
 			if err != nil {
 				w.WriteHeader(http.StatusInternalServerError)
 				w.Write([]byte(err.Error() + "\n"))
 				return
 			}
 
-			token, err := mc.FetchCreateCommandToken(defnId)
+			token, err := mc.FetchCreateCommandToken(defnId, requestId)
 			if err != nil {
 				w.WriteHeader(http.StatusInternalServerError)
 				w.Write([]byte(err.Error() + "\n"))
@@ -1018,14 +1172,14 @@ func (m *DDLServiceMgr) handleListCreateTokens(w http.ResponseWriter, r *http.Re
 
 		for _, entry := range createTokens {
 
-			defnId, err := mc.GetDefnIdFromCreateCommandTokenPath(entry)
+			defnId, requestId, err := mc.GetDefnIdFromCreateCommandTokenPath(entry)
 			if err != nil {
 				w.WriteHeader(http.StatusInternalServerError)
 				w.Write([]byte(err.Error() + "\n"))
 				continue
 			}
 
-			token, err := mc.FetchCreateCommandToken(defnId)
+			token, err := mc.FetchCreateCommandToken(defnId, requestId)
 			if err != nil {
 				w.WriteHeader(http.StatusInternalServerError)
 				w.Write([]byte(err.Error() + "\n"))
@@ -1039,6 +1193,84 @@ func (m *DDLServiceMgr) handleListCreateTokens(w http.ResponseWriter, r *http.Re
 
 		buf, err := mc.MarshallCreateCommandTokenList(list)
 		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(err.Error() + "\n"))
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+		w.Write(buf)
+	}
+}
+
+func (m *DDLServiceMgr) handleListDeleteTokens(w http.ResponseWriter, r *http.Request) {
+
+	if !m.validateAuth(w, r) {
+		logging.Errorf("DDLServiceMgr::handleListDeleteTokens Validation Failure for Request %v", r)
+		return
+	}
+
+	if r.Method == "GET" {
+
+		logging.Infof("DDLServiceMgr::handleListDeleteTokens Processing Request %v", r)
+
+		deleteTokens, err := mc.ListDeleteCommandToken()
+		if err != nil {
+			logging.Errorf("DDLServiceMgr::handleListDeleteTokens error %v", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(err.Error() + "\n"))
+			return
+		}
+
+		list := &mc.DeleteCommandTokenList{}
+		list.Tokens = make([]mc.DeleteCommandToken, 0, len(deleteTokens))
+
+		for _, token := range deleteTokens {
+			list.Tokens = append(list.Tokens, *token)
+		}
+
+		buf, err := mc.MarshallDeleteCommandTokenList(list)
+		if err != nil {
+			logging.Errorf("DDLServiceMgr::handleListDeleteTokens error %v", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(err.Error() + "\n"))
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+		w.Write(buf)
+	}
+}
+
+func (m *DDLServiceMgr) handleListDropInstanceTokens(w http.ResponseWriter, r *http.Request) {
+
+	if !m.validateAuth(w, r) {
+		logging.Errorf("DDLServiceMgr::handleListDropInstanceTokens Validation Failure for Request %v", r)
+		return
+	}
+
+	if r.Method == "GET" {
+
+		logging.Infof("DDLServiceMgr::handleListDropInstanceTokens Processing Request %v", r)
+
+		deleteTokens, err := mc.ListAndFetchAllDropInstanceCommandToken()
+		if err != nil {
+			logging.Errorf("DDLServiceMgr::handleListDropInstanceTokens Error %v", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(err.Error() + "\n"))
+			return
+		}
+
+		list := &mc.DropInstanceCommandTokenList{}
+		list.Tokens = make([]mc.DropInstanceCommandToken, 0, len(deleteTokens))
+
+		for _, token := range deleteTokens {
+			list.Tokens = append(list.Tokens, *token)
+		}
+
+		buf, err := mc.MarshallDropInstanceCommandTokenList(list)
+		if err != nil {
+			logging.Errorf("DDLServiceMgr::handleListDropInstanceTokens Error %v", err)
 			w.WriteHeader(http.StatusInternalServerError)
 			w.Write([]byte(err.Error() + "\n"))
 			return

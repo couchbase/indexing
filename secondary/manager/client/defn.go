@@ -46,6 +46,10 @@ const (
 	OPCODE_CREATE_INDEX_DEFER_BUILD                 = OPCODE_REBALANCE_RUNNING + 1
 	OPCODE_DROP_OR_PRUNE_INSTANCE_DDL               = OPCODE_CREATE_INDEX_DEFER_BUILD + 1
 	OPCODE_CLEANUP_PARTITION                        = OPCODE_DROP_OR_PRUNE_INSTANCE_DDL + 1
+	OPCODE_DROP_INSTANCE                            = OPCODE_CLEANUP_PARTITION + 1
+	OPCODE_UPDATE_REPLICA_COUNT                     = OPCODE_DROP_INSTANCE + 1
+	OPCODE_GET_REPLICA_COUNT                        = OPCODE_UPDATE_REPLICA_COUNT + 1
+	OPCODE_CHECK_TOKEN_EXIST                        = OPCODE_GET_REPLICA_COUNT + 1
 )
 
 /////////////////////////////////////////////////////////////////////////
@@ -83,7 +87,7 @@ type IndexStats struct {
 }
 
 /////////////////////////////////////////////////////////////////////////
-// Create Index
+// Create/Alter Index
 ////////////////////////////////////////////////////////////////////////
 
 type PrepareCreateRequestOp int
@@ -107,14 +111,40 @@ type PrepareCreateResponse struct {
 	Accept bool `json:"accept,omitempty"`
 }
 
+type CommitCreateRequestOp int
+
+const (
+	NEW_INDEX CommitCreateRequestOp = iota
+	ADD_REPLICA
+	DROP_REPLICA
+)
+
 type CommitCreateRequest struct {
+	Op          CommitCreateRequestOp         `json:"op,omitempty"`
 	DefnId      c.IndexDefnId                 `json:"defnId,omitempty"`
 	RequesterId string                        `json:"requesterId,omitempty"`
 	Definitions map[c.IndexerId][]c.IndexDefn `json:"definitions,omitempty"`
+	RequestId   uint64                        `json:"requestId,omitempty"`
 }
 
 type CommitCreateResponse struct {
 	Accept bool `json:"accept,omitempty"`
+}
+
+/////////////////////////////////////////////////////////////////////////
+// Check Token
+////////////////////////////////////////////////////////////////////////
+
+const (
+	CREATE_INDEX_TOKEN  uint32 = 0x0001
+	DROP_INDEX_TOKEN           = 0x0010
+	DROP_INSTANCE_TOKEN        = 0x0100
+)
+
+type CheckToken struct {
+	DefnId c.IndexDefnId `json:"defnId,omitempty"`
+	InstId c.IndexInstId `json:"instId,omitempty"`
+	Flag   uint32        `json:"flag,omitempty"`
 }
 
 /////////////////////////////////////////////////////////////////////////
@@ -310,6 +340,26 @@ func MarshallCommitCreateResponse(commitCreateResponse *CommitCreateResponse) ([
 	}
 
 	logging.Debugf("MarshallCommitCreateResponse: %v", string(buf))
+
+	return buf, nil
+}
+
+func UnmarshallChecKToken(data []byte) (*CheckToken, error) {
+
+	checkToken := new(CheckToken)
+	if err := json.Unmarshal(data, checkToken); err != nil {
+		return nil, err
+	}
+
+	return checkToken, nil
+}
+
+func MarshallCheckToken(checkToken *CheckToken) ([]byte, error) {
+
+	buf, err := json.Marshal(&checkToken)
+	if err != nil {
+		return nil, err
+	}
 
 	return buf, nil
 }

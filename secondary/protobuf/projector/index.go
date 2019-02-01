@@ -205,7 +205,7 @@ func (ie *IndexEvaluator) StreamEndData(
 // TransformRoute implement Evaluator{} interface.
 func (ie *IndexEvaluator) TransformRoute(
 	vbuuid uint64, m *mc.DcpEvent, data map[string]interface{}, encodeBuf []byte,
-	docval qvalue.AnnotatedValue, context qexpr.Context) ([]byte, error) {
+	docval qvalue.AnnotatedValue, context qexpr.Context, meta map[string]interface{}) ([]byte, error) {
 
 	var err error
 	defer func() { // panic safe
@@ -234,7 +234,7 @@ func (ie *IndexEvaluator) TransformRoute(
 		docval = qvalue.NewAnnotatedValue(nvalue)
 	}
 
-	meta := ie.dcpEvent2Meta(m)
+	ie.dcpEvent2Meta(m, meta)
 	docval.SetAttachment("meta", meta)
 	where, err := ie.wherePredicate(m, docval, context, encodeBuf)
 	if err != nil {
@@ -409,7 +409,7 @@ func (ie *IndexEvaluator) wherePredicate(
 }
 
 // helper functions
-func (ie *IndexEvaluator) dcpEvent2Meta(m *mc.DcpEvent) map[string]interface{} {
+func (ie *IndexEvaluator) dcpEvent2Meta(m *mc.DcpEvent, meta map[string]interface{}) {
 	// If index is defined on xattr (either where-expression, part-expression
 	// or secondary-expression) then unmarshall XATTR, and only one for this
 	// event, and only used XATTRs. Cache the results for reuse.
@@ -432,15 +432,13 @@ func (ie *IndexEvaluator) dcpEvent2Meta(m *mc.DcpEvent) map[string]interface{} {
 		}
 	}
 
-	return map[string]interface{}{
-		"id":         string(m.Key),
-		"byseqno":    m.Seqno,
-		"revseqno":   m.RevSeqno,
-		"flags":      m.Flags,
-		"expiration": m.Expiry,
-		"locktime":   m.LockTime,
-		"nru":        m.Nru,
-		"cas":        m.Cas,
-		"xattrs":     m.ParsedXATTR,
-	}
+	meta["id"] = string(m.Key)
+	meta["byseqno"] = m.Seqno
+	meta["revseqno"] = m.RevSeqno
+	meta["flags"] = m.Flags
+	meta["expiration"] = m.Expiry
+	meta["locktime"] = m.LockTime
+	meta["nru"] = m.Nru
+	meta["cas"] = m.Cas
+	meta["xattrs"] = m.ParsedXATTR
 }

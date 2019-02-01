@@ -103,6 +103,7 @@ type janitor struct {
 
 	commandListener *mc.CommandListener
 	listenerDonech  chan bool
+	runch           chan bool
 }
 
 type updator struct {
@@ -362,11 +363,19 @@ func (m *LifecycleMgr) dispatchRequest(request *requestHolder, factory *message.
 	case client.OPCODE_PREPARE_CREATE_INDEX:
 		result, err = m.handlePrepareCreateIndex(content)
 	case client.OPCODE_COMMIT_CREATE_INDEX:
-		result, err = m.handleCommitCreateIndex(content)
+		result, err = m.handleCommit(content)
 	case client.OPCODE_REBALANCE_RUNNING:
 		err = m.handleRebalanceRunning(content)
 	case client.OPCODE_CREATE_INDEX_DEFER_BUILD:
 		err = m.handleCreateIndex(key, content, common.NewUserRequestContext())
+	case client.OPCODE_DROP_INSTANCE:
+		err = m.handleDropInstance(content, common.NewUserRequestContext())
+	case client.OPCODE_UPDATE_REPLICA_COUNT:
+		err = m.handleUpdateReplicaCount(content)
+	case client.OPCODE_GET_REPLICA_COUNT:
+		result, err = m.handleGetIndexReplicaCount(content)
+	case client.OPCODE_CHECK_TOKEN_EXIST:
+		result, err = m.handleCheckTokenExist(content)
 	}
 
 	logging.Debugf("LifecycleMgr.dispatchRequest () : send response for requestId %d, op %d, len(result) %d", reqId, op, len(result))
@@ -447,15 +456,31 @@ func (m *LifecycleMgr) handlePrepareCreateIndex(content []byte) ([]byte, error) 
 }
 
 //
-// Commit create index
+// handle Commit operation
 //
-func (m *LifecycleMgr) handleCommitCreateIndex(content []byte) ([]byte, error) {
+func (m *LifecycleMgr) handleCommit(content []byte) ([]byte, error) {
 
-	commitCreateIndex, err := client.UnmarshallCommitCreateRequest(content)
+	commit, err := client.UnmarshallCommitCreateRequest(content)
 	if err != nil {
-		logging.Errorf("LifecycleMgr.handleCommitCreateIndex() : commitCreateIndex fails. Unable to unmarshall request. Reason = %v", err)
+		logging.Errorf("LifecycleMgr.handleCommit() : Unable to unmarshall request. Reason = %v", err)
 		return nil, err
 	}
+
+	if commit.Op == client.NEW_INDEX {
+		return m.handleCommitCreateIndex(commit)
+	} else if commit.Op == client.ADD_REPLICA {
+		return m.handleCommitAddReplica(commit)
+	} else if commit.Op == client.DROP_REPLICA {
+		return m.handleCommitDropReplica(commit)
+	}
+
+	return nil, fmt.Errorf("Unknown operation %v", commit.Op)
+}
+
+//
+// Commit create index
+//
+func (m *LifecycleMgr) handleCommitCreateIndex(commitCreateIndex *client.CommitCreateRequest) ([]byte, error) {
 
 	if m.prepareLock == nil {
 		logging.Infof("LifecycleMgr.handleCommitCreateIndex() : Reject %v because there is no lock", commitCreateIndex.DefnId)
@@ -485,7 +510,7 @@ func (m *LifecycleMgr) handleCommitCreateIndex(content []byte) ([]byte, error) {
 	if commit {
 		// If fails to post the command token, the return failure.  If none of the indexer can post the command token,
 		// the command token will be malformed and it will get cleaned up by DDLServiceMgr upon rebalancing.
-		if err1 := mc.PostCreateCommandToken(defnId, bucketUUID, definitions); err1 != nil {
+		if err1 := mc.PostCreateCommandToken(defnId, bucketUUID, 0, definitions); err1 != nil {
 			logging.Infof("LifecycleMgr.handleCommitCreateIndex() : Reject %v because fail to post token", commitCreateIndex.DefnId)
 
 			if err == nil {
@@ -585,6 +610,321 @@ func (m *LifecycleMgr) processCommitToken(defnId common.IndexDefnId, layout map[
 
 	// these definitions are not for my indexer, do not create commit token.
 	return false, "", nil
+}
+
+//-----------------------------------------------------------
+// Atomic Alter Index
+//-----------------------------------------------------------
+
+//
+// Commit add replica
+//
+func (m *LifecycleMgr) handleCommitAddReplica(commitRequest *client.CommitCreateRequest) ([]byte, error) {
+
+	if common.GetBuildMode() != common.ENTERPRISE {
+		err := errors.New("Index Replica not supported in non-Enterprise Edition")
+		logging.Errorf("LifecycleMgr.handleCommitAddReplica() : %v", err)
+		response := &client.CommitCreateResponse{Accept: false}
+		return client.MarshallCommitCreateResponse(response)
+	}
+
+	if m.prepareLock == nil {
+		logging.Infof("LifecycleMgr.handleCommitAddReplica() : Reject %v because there is no lock", commitRequest.DefnId)
+		response := &client.CommitCreateResponse{Accept: false}
+		return client.MarshallCommitCreateResponse(response)
+	}
+
+	if m.prepareLock.RequesterId != commitRequest.RequesterId ||
+		m.prepareLock.DefnId != commitRequest.DefnId {
+
+		logging.Infof("LifecycleMgr.handleCommitAddReplica() : Reject %v because defnId and requesterId do not match", commitRequest.DefnId)
+		response := &client.CommitCreateResponse{Accept: false}
+		return client.MarshallCommitCreateResponse(response)
+	}
+
+	if _, err := m.repo.GetLocalValue("RebalanceRunning"); err == nil {
+		logging.Infof("LifecycleMgr.handleCommitAddReplica() : Reject %v because rebalance in progress", commitRequest.DefnId)
+		response := &client.CommitCreateResponse{Accept: false}
+		return client.MarshallCommitCreateResponse(response)
+	}
+
+	defnId := commitRequest.DefnId
+	definitions := commitRequest.Definitions
+	requestId := commitRequest.RequestId
+	m.prepareLock = nil
+
+	commit, numReplica, bucketUUID, err := m.processAddReplicaCommitToken(defnId, definitions)
+	if commit {
+		// If fails to post the command token, the return failure.  If none of the indexer can post the command token,
+		// the command token will be malformed and it will get cleaned up by DDLServiceMgr upon rebalancing.
+		if err1 := mc.PostCreateCommandToken(defnId, bucketUUID, requestId, definitions); err1 != nil {
+			logging.Infof("LifecycleMgr.handleCommitAddReplica() : Reject %v because fail to post token", commitRequest.DefnId)
+
+			if err == nil {
+				err = fmt.Errorf("Alter Index fails.  Cause: %v", err1)
+			}
+
+			response := &client.CommitCreateResponse{Accept: false}
+			msg, _ := client.MarshallCommitCreateResponse(response)
+			return msg, err
+		}
+
+		// We are successful in creating the commit token.  Now try updating index replica count.  This operation is idempotent,
+		// so even if it fails, DDLServiceMgr will retry as long as the token is created.
+		m.updateIndexReplicaCount(defnId, *numReplica)
+
+		logging.Infof("LifecycleMgr.handleCommitAddReplica() : Create token posted for %v", defnId)
+		response := &client.CommitCreateResponse{Accept: true}
+		msg, err1 := client.MarshallCommitCreateResponse(response)
+		if err1 != nil {
+			if err == nil {
+				err = err1
+			}
+		}
+
+		return msg, err
+	}
+
+	logging.Infof("LifecycleMgr.handleCommitAddReplica() : Create token posted for %v", defnId)
+	response := &client.CommitCreateResponse{Accept: false}
+	msg, _ := client.MarshallCommitCreateResponse(response)
+	return msg, err
+}
+
+//
+// Process commit token for add replica index
+//
+func (m *LifecycleMgr) processAddReplicaCommitToken(defnId common.IndexDefnId, layout map[common.IndexerId][]common.IndexDefn) (bool,
+	*common.Counter, string, error) {
+
+	indexerId, err := m.repo.GetLocalIndexerId()
+	if err != nil {
+		return false, nil, "", fmt.Errorf("Alter Index fails.  Internal Error: %v", err)
+	}
+
+	if definitions, ok := layout[indexerId]; ok && len(definitions) > 0 {
+
+		// Get the bucket UUID. This is needed for creating commit token.
+		defn := definitions[0]
+		if err := m.setBucketUUID(&defn); err != nil {
+			return false, nil, "", err
+		}
+
+		// create commit token
+		return true, &defn.NumReplica2, defn.BucketUUID, nil
+	}
+
+	// these definitions are not for my indexer, do not create commit token.
+	return false, nil, "", nil
+}
+
+//
+// Commit remove replica
+//
+func (m *LifecycleMgr) handleCommitDropReplica(commitRequest *client.CommitCreateRequest) ([]byte, error) {
+
+	if common.GetBuildMode() != common.ENTERPRISE {
+		err := errors.New("Index Replica not supported in non-Enterprise Edition")
+		logging.Errorf("LifecycleMgr.handleCommitDropReplica() : %v", err)
+		response := &client.CommitCreateResponse{Accept: false}
+		return client.MarshallCommitCreateResponse(response)
+	}
+
+	if m.prepareLock == nil {
+		logging.Infof("LifecycleMgr.handleCommitDropReplica() : Reject %v because there is no lock", commitRequest.DefnId)
+		response := &client.CommitCreateResponse{Accept: false}
+		return client.MarshallCommitCreateResponse(response)
+	}
+
+	if m.prepareLock.RequesterId != commitRequest.RequesterId ||
+		m.prepareLock.DefnId != commitRequest.DefnId {
+
+		logging.Infof("LifecycleMgr.handleCommitDropReplica() : Reject %v because defnId and requesterId do not match", commitRequest.DefnId)
+		response := &client.CommitCreateResponse{Accept: false}
+		return client.MarshallCommitCreateResponse(response)
+	}
+
+	if _, err := m.repo.GetLocalValue("RebalanceRunning"); err == nil {
+		logging.Infof("LifecycleMgr.handleCommitDropReplica() : Reject %v because rebalance in progress", commitRequest.DefnId)
+		response := &client.CommitCreateResponse{Accept: false}
+		return client.MarshallCommitCreateResponse(response)
+	}
+
+	indexerId, err := m.repo.GetLocalIndexerId()
+	if err != nil {
+		logging.Infof("LifecycleMgr.handleCommitDropReplica() : Error: %v", err)
+		response := &client.CommitCreateResponse{Accept: false}
+		return client.MarshallCommitCreateResponse(response)
+	}
+
+	definitions := commitRequest.Definitions[indexerId]
+	m.prepareLock = nil
+
+	for _, defn := range definitions {
+
+		defnId := defn.DefnId
+		instId := defn.InstId
+		replicaId := defn.ReplicaId
+
+		// If fails to post the command token, the return failure.  If none of the indexer can post the command token,
+		// the command token will be malformed and it will get cleaned up by DDLServiceMgr upon rebalancing.
+		if err1 := mc.PostDropInstanceCommandToken(defnId, instId, replicaId, defn); err1 != nil {
+			logging.Infof("LifecycleMgr.handleCommitDropReplica() : Reject %v because fail to post token", defnId)
+
+			if err == nil {
+				err = fmt.Errorf("Alter Index fails.  Cause: %v", err1)
+			}
+		} else {
+			logging.Infof("LifecycleMgr.handleCommitDropReplica() : Drop Instance token posted for instance %v", instId)
+
+			// We are successful in creating the commit token.  Now try updating index replica count.  This operation is idempotent,
+			// so even if it fails, DDLServiceMgr will retry as long as the token is created.
+			m.updateIndexReplicaCount(defn.DefnId, defn.NumReplica2)
+		}
+	}
+
+	response := &client.CommitCreateResponse{Accept: err == nil}
+	msg, err1 := client.MarshallCommitCreateResponse(response)
+	if err1 != nil {
+		if err == nil {
+			err = err1
+		}
+	}
+
+	m.janitor.runOnce()
+
+	return msg, err
+}
+
+//
+// handle updating replica count
+//
+func (m *LifecycleMgr) handleUpdateReplicaCount(content []byte) error {
+
+	defn, err := common.UnmarshallIndexDefn(content)
+	if err != nil {
+		logging.Errorf("LifecycleMgr.handleUpdateReplicaCount() : Unable to unmarshall request. Reason = %v", err)
+		return err
+	}
+
+	return m.updateIndexReplicaCount(defn.DefnId, defn.NumReplica2)
+}
+
+// Update replica Count. This function is idepmpotent.
+func (m *LifecycleMgr) updateIndexReplicaCount(defnId common.IndexDefnId, numReplica common.Counter) error {
+
+	existDefn, err := m.repo.GetIndexDefnById(defnId)
+	if err != nil {
+		logging.Errorf("LifecycleMgr.updateIndexReplicaCount() : %v", err)
+		return err
+	}
+
+	if existDefn == nil {
+		logging.Infof("LifecycleMgr.updateIndexReplicaCount() : Index Definition does not exist for %v.  No update is performed.", defnId)
+		return nil
+	}
+
+	newNumReplica, changed, err := existDefn.NumReplica2.MergeWith(numReplica)
+	if err != nil {
+		logging.Errorf("LifecycleMgr.updateIndexReplicaCount() : %v", err)
+		return err
+	}
+
+	if changed {
+		defn := *existDefn
+		defn.NumReplica2 = newNumReplica
+		if err := m.repo.UpdateIndex(&defn); err != nil {
+			logging.Errorf("LifecycleMgr.updateIndexReplicaCount() : alter index fails for index %v. Reason = %v", defnId, err)
+			return err
+		}
+	}
+
+	return nil
+}
+
+//
+// handle retrieve index replica count
+//
+func (m *LifecycleMgr) handleGetIndexReplicaCount(content []byte) ([]byte, error) {
+
+	var defnId common.IndexDefnId
+	if err := json.Unmarshal(content, &defnId); err != nil {
+		logging.Errorf("LifecycleMgr.handleGetIndexReplicaCount() : Unable to unmarshall. Reason = %v", err)
+		return nil, err
+	}
+
+	existDefn, err := m.repo.GetIndexDefnById(defnId)
+	if err != nil {
+		logging.Errorf("LifecycleMgr.handleGetIndexReplicaCount() : %v", err)
+		return nil, err
+	}
+
+	var numReplica *common.Counter
+
+	if existDefn != nil {
+		var err error
+		numReplica, err = GetLatestReplicaCount(existDefn)
+		if err != nil {
+			logging.Errorf("LifecycleMgr.handleGetIndexReplicaCount(): Fail to merge counter with index definition for index %v: %v", defnId, err)
+			return nil, err
+		}
+	}
+
+	result, err := common.MarshallCounter(numReplica)
+	if err != nil {
+		logging.Errorf("LifecycleMgr.handleGetIndexReplicaCount() : Unable to marshall. Reason = %v", err)
+		return nil, err
+	}
+
+	return result, nil
+}
+
+//
+// handle check for tokens
+//
+func (m *LifecycleMgr) handleCheckTokenExist(content []byte) ([]byte, error) {
+
+	checkToken, err := client.UnmarshallChecKToken(content)
+	if err != nil {
+		logging.Errorf("LifecycleMgr.handleCheckTokenExist() : Unable to unmarshall. Reason = %v", err)
+		return nil, err
+	}
+
+	exist := false
+	if (checkToken.Flag & client.CREATE_INDEX_TOKEN) != 0 {
+		t, err := mc.CreateCommandTokenExist(checkToken.DefnId)
+		if err != nil {
+			logging.Errorf("LifecycleMgr.handleCheckTokenExist(): Fail to retrieve create token for index %v: %v", checkToken.DefnId, err)
+			return nil, err
+		}
+		exist = exist || t
+	}
+
+	if (checkToken.Flag & client.DROP_INDEX_TOKEN) != 0 {
+		t, err := mc.DeleteCommandTokenExist(checkToken.DefnId)
+		if err != nil {
+			logging.Errorf("LifecycleMgr.handleCheckTokenExist(): Fail to retrieve delete token for index %v: %v", checkToken.DefnId, err)
+			return nil, err
+		}
+		exist = exist || t
+	}
+
+	if (checkToken.Flag & client.DROP_INSTANCE_TOKEN) != 0 {
+		t, err := mc.DropInstanceCommandTokenExist(checkToken.DefnId, checkToken.InstId)
+		if err != nil {
+			logging.Errorf("LifecycleMgr.handleCheckTokenExist(): Fail to retrieve delete instance token for instance %v: %v", checkToken.InstId, err)
+			return nil, err
+		}
+		exist = exist || t
+	}
+
+	result, err := json.Marshal(&exist)
+	if err != nil {
+		logging.Errorf("LifecycleMgr.handleCheckTokenExist() : Unable to marshall. Reason = %v", err)
+		return nil, err
+	}
+
+	return result, nil
 }
 
 //-----------------------------------------------------------
@@ -1001,6 +1341,79 @@ func (m *LifecycleMgr) verifyDuplicateDefn(defn *common.IndexDefn, reqCtx *commo
 	return existDefn, nil
 }
 
+func GetLatestReplicaCount(defn *common.IndexDefn) (*common.Counter, error) {
+
+	merge := func(numReplica *common.Counter, defn *common.IndexDefn) (*common.Counter, error) {
+
+		if defn == nil {
+			return numReplica, nil
+		}
+
+		if defn.NumReplica2.IsValid() {
+			result, merged, err := numReplica.MergeWith(defn.NumReplica2)
+			if err != nil {
+				return nil, err
+			}
+			if merged {
+				numReplica = &result
+			}
+
+		} else if !numReplica.IsValid() {
+			numReplica.Initialize(defn.NumReplica)
+		}
+
+		return numReplica, nil
+	}
+
+	numReplica := &common.Counter{}
+	defnId := defn.DefnId
+
+	// Check if there is any create token.  If so, it means that there is a pending create or alter index.
+	// The create token should contain the latest numReplica.
+	tokens2, err := mc.ListAndFetchCreateCommandToken(defnId)
+	if err != nil {
+		logging.Errorf("LifecycleMgr.GetLatestReplicaCount(): Fail to retrieve create token for index %v: %v", defnId, err)
+		return nil, err
+	}
+
+	for _, token := range tokens2 {
+		// Get the numReplica from the create command token.
+		for _, definitions := range token.Definitions {
+			if len(definitions) != 0 {
+				numReplica, err = merge(numReplica, &definitions[0])
+				if err != nil {
+					logging.Errorf("LifecycleMgr.GetLatestReplicaCount(): Fail to merge counter with create token for index %v: %v", defnId, err)
+					return nil, err
+				}
+				break
+			}
+		}
+	}
+
+	// Get numReplica from drop instance token.
+	tokens, err := mc.ListAndFetchDropInstanceCommandToken(defnId)
+	if err != nil {
+		logging.Errorf("LifecycleMgr.GetLatestReplicaCount(): Fail to retrieve drop instance token for index %v: %v", defnId, err)
+		return nil, err
+	}
+
+	for _, token := range tokens {
+		numReplica, err = merge(numReplica, &token.Defn)
+		if err != nil {
+			logging.Errorf("LifecycleMgr.GetLatestReplicaCount(): Fail to merge counter with drop instance token for index %v: %v", defnId, err)
+			return nil, err
+		}
+	}
+
+	numReplica, err = merge(numReplica, defn)
+	if err != nil {
+		logging.Errorf("LifecycleMgr.GetLatestReplicaCount(): Fail to merge counter with index definition for index %v: %v", defnId, err)
+		return nil, err
+	}
+
+	return numReplica, nil
+}
+
 //-----------------------------------------------------------
 // Build Index
 //-----------------------------------------------------------
@@ -1108,7 +1521,8 @@ func (m *LifecycleMgr) BuildIndexes(ids []common.IndexDefnId,
 			}
 
 			// Reset any previous error
-			m.UpdateIndexInstance(defn.Bucket, id, common.IndexInstId(inst.InstId), common.INDEX_STATE_NIL, common.NIL_STREAM, "", nil, inst.RState, nil, nil, -1)
+			m.UpdateIndexInstance(defn.Bucket, id, common.IndexInstId(inst.InstId), common.INDEX_STATE_NIL, common.NIL_STREAM, "", nil,
+				inst.RState, nil, nil, -1)
 
 			instIdList = append(instIdList, common.IndexInstId(inst.InstId))
 			inst2DefnMap[common.IndexInstId(inst.InstId)] = defn.DefnId
@@ -1407,7 +1821,7 @@ func (m *LifecycleMgr) handleDeleteBucket(bucket string, content []byte) error {
 					if err := m.DeleteIndex(common.IndexDefnId(defn.DefnId), false, false, nil); err != nil {
 						result = err
 					}
-					mc.DeleteCreateCommandToken(common.IndexDefnId(defn.DefnId))
+					mc.DeleteAllCreateCommandToken(common.IndexDefnId(defn.DefnId))
 
 				} else {
 					for _, instRef := range defnRef.Instances {
@@ -1420,7 +1834,7 @@ func (m *LifecycleMgr) handleDeleteBucket(bucket string, content []byte) error {
 							if err := m.DeleteIndex(common.IndexDefnId(defn.DefnId), false, false, nil); err != nil {
 								result = err
 							}
-							mc.DeleteCreateCommandToken(common.IndexDefnId(defn.DefnId))
+							mc.DeleteAllCreateCommandToken(common.IndexDefnId(defn.DefnId))
 
 							break
 						}
@@ -1454,14 +1868,14 @@ func (m *LifecycleMgr) deleteCreateTokenForBucket(bucket string) error {
 
 	for _, entry := range entries {
 
-		defnId, err := mc.GetDefnIdFromCreateCommandTokenPath(entry)
+		defnId, requestId, err := mc.GetDefnIdFromCreateCommandTokenPath(entry)
 		if err != nil {
 			logging.Warnf("LifecycleMgr: Failed to process create index token %v.  Internal Error = %v.", entry, err)
 			result = err
 			continue
 		}
 
-		token, err := mc.FetchCreateCommandToken(defnId)
+		token, err := mc.FetchCreateCommandToken(defnId, requestId)
 		if err != nil {
 			logging.Warnf("LifecycleMgr: Failed to process create index token %v.  Internal Error = %v.", entry, err)
 			result = err
@@ -1471,7 +1885,7 @@ func (m *LifecycleMgr) deleteCreateTokenForBucket(bucket string) error {
 		if token != nil {
 			for _, definitions := range token.Definitions {
 				if len(definitions) > 0 && definitions[0].Bucket == bucket {
-					if err := mc.DeleteCreateCommandToken(definitions[0].DefnId); err != nil {
+					if err := mc.DeleteCreateCommandToken(definitions[0].DefnId, requestId); err != nil {
 						logging.Warnf("LifecycleMgr: Failed to delete create index token %v.  Internal Error = %v.", entry, err)
 						result = err
 					}
@@ -1531,7 +1945,7 @@ func (m *LifecycleMgr) handleCleanupDeferIndexFromBucket(bucket string) error {
 									logging.Errorf("LifecycleMgr.handleCleanupDeferIndexFromBucket: Encountered error %v", err)
 									continue
 								}
-								mc.DeleteCreateCommandToken(common.IndexDefnId(defn.DefnId))
+								mc.DeleteAllCreateCommandToken(common.IndexDefnId(defn.DefnId))
 								break
 							}
 						}
@@ -1898,6 +2312,16 @@ func (m *LifecycleMgr) verifyOverlapPartition(defn *common.IndexDefn, reqCtx *co
 //-----------------------------------------------------------
 // Delete Index Instance
 //-----------------------------------------------------------
+
+func (m *LifecycleMgr) handleDropInstance(content []byte, reqCtx *common.MetadataRequestContext) error {
+
+	change := new(dropInstance)
+	if err := json.Unmarshal(content, change); err != nil {
+		return err
+	}
+
+	return m.DeleteIndexInstance(change.Defn.DefnId, change.Defn.InstId, change.Notify, change.UpdateStatusOnly, false, reqCtx)
+}
 
 func (m *LifecycleMgr) handleDeleteOrPruneIndexInstance(content []byte, reqCtx *common.MetadataRequestContext) error {
 
@@ -2714,6 +3138,99 @@ func (m *janitor) cleanup() {
 	}
 
 	//
+	// Cleanup based on drop instance token
+	//
+	entries2 := m.commandListener.GetNewDropInstanceTokens()
+	retryList2 := make(map[string]*mc.DropInstanceCommandToken)
+
+	for entry, command := range entries2 {
+
+		logging.Infof("janitor: Processing drop instance token %v", entry)
+
+		defn, err := m.manager.repo.GetIndexDefnById(command.DefnId)
+		if err != nil {
+			retryList2[entry] = command
+			logging.Warnf("janitor: Failed to drop index isntance upon cleanup.  Skp command %v.  Internal Error = %v.", entry, err)
+			continue
+		}
+
+		// index may already be deleted or does not exist in this node
+		if defn == nil {
+			continue
+		}
+
+		inst, err := m.manager.FindLocalIndexInst(defn.Bucket, command.DefnId, command.InstId)
+		if err != nil {
+			retryList2[entry] = command
+			logging.Warnf("janitor: Failed to find index instance (%v, %v) during cleanup. Internal error = %v.  Skipping.", defn.Bucket, defn.Name, err)
+			continue
+		}
+
+		if inst != nil &&
+			inst.State != uint32(common.INDEX_STATE_DELETED) &&
+			inst.RState != uint32(common.REBAL_PENDING_DELETE) &&
+			inst.RState != uint32(common.REBAL_MERGED) {
+
+			idxDefn := *defn
+			idxDefn.InstId = common.IndexInstId(command.InstId)
+			idxDefn.Partitions = nil
+
+			msg := &dropInstance{Defn: idxDefn, Notify: true, UpdateStatusOnly: false, DeletedOnly: false}
+			if buf, err := json.Marshal(&msg); err == nil {
+
+				if err := m.manager.requestServer.MakeRequest(client.OPCODE_DROP_INSTANCE,
+					fmt.Sprintf("%v", command.DefnId), buf); err != nil {
+
+					retryList2[entry] = command
+					logging.Warnf("janitor: Failed to drop instance upon cleanup.  Skip instance (%v, %v, %v).  Internal Error = %v.",
+						defn.Bucket, defn.Name, inst.InstId, err)
+					continue
+				} else {
+					logging.Infof("janitor: Clean up deleted instance (%v, %v, %v) during periodic cleanup ", defn.Bucket, defn.Name, inst.InstId)
+				}
+			} else {
+				retryList2[entry] = command
+				logging.Warnf("janitor: Failed to drop instance upon cleanup.  Skip instance (%v, %v, %v).  Internal Error = %v.",
+					defn.Bucket, defn.Name, inst.InstId, err)
+				continue
+			}
+		}
+
+		//
+		// update the replica count
+		//
+		needsMerge, err := defn.NumReplica2.NeedMergeWith(command.Defn.NumReplica2)
+		if err != nil {
+			retryList2[entry] = command
+			logging.Warnf("janitor: Failed to update replica count for index (%v, %v).  Internal Error = %v.", defn.Bucket, defn.Name, err)
+			continue
+		}
+
+		if needsMerge {
+			idxDefn := *defn
+			idxDefn.NumReplica2 = command.Defn.NumReplica2
+
+			content, err := common.MarshallIndexDefn(&idxDefn)
+			if err != nil {
+				retryList2[entry] = command
+				logging.Warnf("janitor: Failed to update replica count for index (%v, %v).  Internal Error = %v.", defn.Bucket, defn.Name, err)
+				continue
+			}
+
+			if err := m.manager.requestServer.MakeRequest(client.OPCODE_UPDATE_REPLICA_COUNT, "", content); err != nil {
+				retryList2[entry] = command
+				logging.Warnf("janitor: Failed to update replia count cleanup.  Skip (%v, %v).  Internal Error = %v.",
+					defn.Bucket, defn.Name, err)
+				continue
+			}
+		}
+	}
+
+	for path, token := range retryList2 {
+		m.commandListener.AddNewDropInstanceToken(path, token)
+	}
+
+	//
 	// Cleanup based on index status (DELETED index)
 	//
 
@@ -2781,15 +3298,25 @@ func (m *janitor) run() {
 		case <-ticker.C:
 			m.cleanup()
 
+		case <-m.runch:
+			m.cleanup()
+
 		case <-m.manager.killch:
 			m.commandListener.Close()
 			logging.Infof("janitor: Index recovery go-routine terminates.")
 
 		case <-m.listenerDonech:
 			m.listenerDonech = make(chan bool)
-			m.commandListener = mc.NewCommandListener(m.listenerDonech, false, false, true)
+			m.commandListener = mc.NewCommandListener(m.listenerDonech, false, false, true, true)
 			m.commandListener.ListenTokens()
 		}
+	}
+}
+
+func (m *janitor) runOnce() {
+	select {
+	case m.runch <- true:
+	default:
 	}
 }
 
@@ -2799,8 +3326,9 @@ func newJanitor(mgr *LifecycleMgr) *janitor {
 
 	janitor := &janitor{
 		manager:         mgr,
-		commandListener: mc.NewCommandListener(donech, false, false, true),
+		commandListener: mc.NewCommandListener(donech, false, false, true, true),
 		listenerDonech:  donech,
+		runch:           make(chan bool),
 	}
 
 	return janitor
@@ -2852,7 +3380,7 @@ func (s *builder) run() {
 
 		case <-s.listenerDonech:
 			s.listenerDonech = make(chan bool)
-			s.commandListener = mc.NewCommandListener(s.listenerDonech, false, true, false)
+			s.commandListener = mc.NewCommandListener(s.listenerDonech, false, true, false, false)
 			s.commandListener.ListenTokens()
 		}
 	}
@@ -3163,7 +3691,7 @@ func newBuilder(mgr *LifecycleMgr) *builder {
 		pendings:        make(map[string][]uint64),
 		notifych:        make(chan *common.IndexDefn, 10000),
 		batchSize:       int32(common.SystemConfig["indexer.settings.build.batch_size"].Int()),
-		commandListener: mc.NewCommandListener(donech, false, true, false),
+		commandListener: mc.NewCommandListener(donech, false, true, false, false),
 		listenerDonech:  donech,
 	}
 

@@ -241,7 +241,8 @@ func scanFunc(ctx smat.Context) (next smat.State, err error) {
 	reader := c.slice.GetReaderContext()
 	reader.Init()
 	scanReq := new(indexer.ScanRequest)
-	scanReq.Ctx = reader
+	scanReq.Ctxs = make([]indexer.IndexReaderContext, 1)
+	scanReq.Ctxs[0] = reader
 	stopch := make(indexer.StopChannel)
 	for i := 1; i < 5; i++ {
 		if scanReq.Low == nil && scanReq.High == nil {
@@ -253,7 +254,7 @@ func scanFunc(ctx smat.Context) (next smat.State, err error) {
 			fmt.Print("Stats Count Total : ", statsCountTotal, "\n")
 		} else {
 			var countRange uint64
-			countRange, err11 := c.snap.CountRange(scanReq.Ctx, scanReq.Low, scanReq.High, scanReq.Incl, stopch)
+			countRange, err11 := c.snap.CountRange(scanReq.Ctxs[0], scanReq.Low, scanReq.High, scanReq.Incl, stopch)
 			if err11 != nil {
 				return nil, err11
 			}
@@ -261,14 +262,14 @@ func scanFunc(ctx smat.Context) (next smat.State, err error) {
 		}
 
 		var countTotal uint64
-		countTotal, err10 := c.snap.CountTotal(scanReq.Ctx, stopch)
+		countTotal, err10 := c.snap.CountTotal(scanReq.Ctxs[0], stopch)
 		if err10 != nil {
 			return nil, err10
 		}
 		fmt.Print("Count Total : ", countTotal, "\n")
 
 		var countLookup uint64
-		countLookup, err12 := c.snap.CountLookup(scanReq.Ctx, scanReq.Keys, stopch)
+		countLookup, err12 := c.snap.CountLookup(scanReq.Ctxs[0], scanReq.Keys, stopch)
 		if err12 != nil {
 			return nil, err12
 		}

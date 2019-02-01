@@ -585,33 +585,31 @@ func (gsi *gsiKeyspace) delIndex(id string) {
 func (gsi *gsiKeyspace) getIndexFromVersion(index *secondaryIndex,
 	clusterVersion uint64) datastore.Index {
 
-	switch clusterVersion {
-	case c.INDEXER_55_VERSION, c.INDEXER_65_VERSION:
+	if clusterVersion >= c.INDEXER_55_VERSION {
 		si2 := &secondaryIndex2{secondaryIndex: *index}
 		si3 := datastore.Index(&secondaryIndex3{secondaryIndex2: *si2})
 		return si3
-	case c.INDEXER_50_VERSION:
+	} else if clusterVersion >= c.INDEXER_50_VERSION {
 		si2 := datastore.Index(&secondaryIndex2{secondaryIndex: *index})
 		return si2
-	default:
-		return datastore.Index(index)
 	}
+
+	return datastore.Index(index)
 }
 
 func (gsi *gsiKeyspace) getPrimaryIndexFromVersion(index *secondaryIndex,
 	clusterVersion uint64) datastore.PrimaryIndex {
 
-	switch clusterVersion {
-	case c.INDEXER_55_VERSION, c.INDEXER_65_VERSION:
+	if clusterVersion >= c.INDEXER_55_VERSION {
 		si2 := &secondaryIndex2{secondaryIndex: *index}
 		si3 := datastore.PrimaryIndex(&secondaryIndex3{secondaryIndex2: *si2})
 		return si3
-	case c.INDEXER_50_VERSION:
+	} else if clusterVersion >= c.INDEXER_50_VERSION {
 		si2 := datastore.PrimaryIndex(&secondaryIndex2{secondaryIndex: *index})
 		return si2
-	default:
-		return datastore.PrimaryIndex(index)
 	}
+
+	return datastore.PrimaryIndex(index)
 }
 
 //------------------
@@ -1171,6 +1169,13 @@ func (si *secondaryIndex3) Alter(requestId string, with value.Value) (
 	case "move":
 		client := si.gsi.gsiClient
 		e := client.MoveIndex(si.defnID, withMap)
+		if e != nil {
+			return nil, errors.NewError(e, "GSI AlterIndex()")
+		}
+		return datastore.Index(si), nil
+	case "replica_count", "drop_replica":
+		client := si.gsi.gsiClient
+		e := client.AlterReplicaCount(action.(string), si.defnID, withMap)
 		if e != nil {
 			return nil, errors.NewError(e, "GSI AlterIndex()")
 		}

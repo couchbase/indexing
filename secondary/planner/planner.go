@@ -17,6 +17,7 @@ import (
 	"github.com/couchbase/indexing/secondary/logging"
 	"math"
 	"math/rand"
+	"sort"
 	"strconv"
 	"sync"
 	"time"
@@ -62,6 +63,8 @@ const (
 	CommandPlan      CommandType = "plan"
 	CommandRebalance             = "rebalance"
 	CommandSwap                  = "swap"
+	CommandRepair                = "repair"
+	CommandDrop                  = "drop"
 )
 
 // constant - violation code
@@ -106,7 +109,9 @@ type PlacementMethod interface {
 	InitialPlace(s *Solution, indexes []*IndexUsage) error
 	Validate(s *Solution) error
 	GetEligibleIndexes() map[*IndexUsage]bool
+	IsEligibleIndex(*IndexUsage) bool
 	AddOptionalIndexes([]*IndexUsage)
+	AddRequiredIndexes([]*IndexUsage)
 	RemoveOptionalIndexes() []*IndexUsage
 	HasOptionalIndexes() bool
 	RemoveEligibleIndex([]*IndexUsage)
@@ -282,8 +287,11 @@ type Solution struct {
 	scanMean  float64
 
 	// placement of indexes	in nodes
-	Placement  []*IndexerNode `json:"placement,omitempty"`
-	indexSGMap map[string]string
+	Placement []*IndexerNode `json:"placement,omitempty"`
+
+	indexSGMap       map[common.IndexDefnId]map[common.PartitionId]map[int]string
+	replicaMap       map[common.IndexDefnId]map[common.PartitionId]map[int]*IndexUsage
+	usedReplicaIdMap map[common.IndexDefnId]map[int]bool
 
 	// constraint check
 	enforceConstraint bool
@@ -555,6 +563,132 @@ func (p *SAPlanner) Plan(command CommandType, solution *Solution) (*Solution, er
 	}
 
 	return result, err
+}
+
+//
+// Given a solution, this function finds a replica to drop while
+// maintaining HA constraint.
+//
+func (p *SAPlanner) DropReplica(solution *Solution, defnId common.IndexDefnId, numPartition int, decrement int, dropReplicaId int) (*Solution, []int, error) {
+
+	// setup
+	if p.cpuProfile {
+		startCPUProfile("planner.pprof")
+		defer stopCPUProfile()
+	}
+
+	solution.command = CommandDrop
+	solution = p.adjustInitialSolutionIfNecessary(solution)
+
+	// set eligible index
+	var eligibles []*IndexUsage
+	for _, indexer := range solution.Placement {
+		for _, index := range indexer.Indexes {
+			if index.DefnId == defnId {
+				eligibles = append(eligibles, index)
+			}
+		}
+	}
+	p.placement.AddRequiredIndexes(eligibles)
+
+	// find all replicaId for the definition
+	// healthy replica -- replica with all partitions
+	// unhealthy replica -- replica with missing partitions
+	allReplicaIds := solution.replicaMap[defnId]
+	replicaPartitionMap := make(map[int]map[common.PartitionId]bool)
+	for partitionId, replicaIds := range allReplicaIds {
+		for replicaId, _ := range replicaIds {
+			if _, ok := replicaPartitionMap[replicaId]; !ok {
+				replicaPartitionMap[replicaId] = make(map[common.PartitionId]bool)
+			}
+			replicaPartitionMap[replicaId][partitionId] = true
+		}
+	}
+
+	// if a specific replicaId is specified, then drop that one.
+	if dropReplicaId != -1 {
+		if _, ok := replicaPartitionMap[dropReplicaId]; ok {
+			return solution, []int{dropReplicaId}, nil
+		} else {
+			return nil, nil, fmt.Errorf("Fail to drop replica.  Replica (%v) does not exist", dropReplicaId)
+		}
+	}
+
+	var unhealthy []int
+	var healthy []int
+	for replicaId, partitionIds := range replicaPartitionMap {
+		if len(partitionIds) == numPartition {
+			healthy = append(healthy, replicaId)
+		} else {
+			unhealthy = append(unhealthy, replicaId)
+		}
+	}
+
+	if len(healthy)+len(unhealthy)-decrement <= 0 {
+		return nil, nil, fmt.Errorf("Index only has %v replica.  Cannot satsify request to drop %v copy", len(healthy)+len(unhealthy)-1, decrement)
+	}
+
+	reverse := func(arr []int) {
+		sort.Ints(arr)
+		for i := 0; i < len(arr)/2; i++ {
+			tmp := arr[i]
+			arr[i] = arr[len(arr)-1-i]
+			arr[len(arr)-1-i] = tmp
+		}
+	}
+
+	// try to drop the unhealthy replica first
+	var result []int
+	numDrop := 0
+
+	current := solution.clone()
+	current.evaluateNodes()
+
+	reverse(unhealthy)
+	for _, replicaId := range unhealthy {
+		if numDrop == decrement {
+			p.Result = current
+			return solution, result, nil
+		}
+
+		current.removeReplicas(defnId, replicaId)
+
+		numDrop++
+		result = append(result, replicaId)
+	}
+
+	// Have we dropped enough replica yet?
+	if numDrop == decrement {
+		p.Result = current
+		return solution, result, nil
+	}
+
+	// try to drop the healthy replica
+	// make sure constraint is enforced
+	reverse(healthy)
+	for _, replicaId := range healthy {
+		if numDrop == decrement {
+			p.Result = current
+			return solution, result, nil
+		}
+
+		current.removeReplicas(defnId, replicaId)
+
+		if !p.constraint.SatisfyClusterConstraint(current, p.placement.GetEligibleIndexes()) {
+			logging.Warnf("Dropping replica %v for index %v.   Cluster may not follow server group constraint after drop.",
+				replicaId, defnId)
+		}
+
+		numDrop++
+		result = append(result, replicaId)
+	}
+
+	if numDrop == decrement {
+		p.Result = current
+		return solution, result, nil
+	}
+
+	return nil, nil, fmt.Errorf("Unsable to drop %v replica without violating availability constraint", decrement)
 }
 
 //
@@ -900,12 +1034,16 @@ func (p *SAPlanner) adjustInitialSolutionIfNecessary(s *Solution) *Solution {
 	cloned.evaluateNodes()
 
 	// Make sure we only repair when it is rebalancing
-	if s.command != CommandPlan {
+	if s.command == CommandRebalance || s.command == CommandSwap || s.command == CommandRepair {
 		p.addReplicaIfNecessary(cloned)
-		p.addPartitionIfNecessary(cloned)
-		p.dropReplicaIfNecessary(cloned)
+
+		if s.command == CommandRebalance || s.command == CommandSwap {
+			p.addPartitionIfNecessary(cloned)
+			p.dropReplicaIfNecessary(cloned)
+		}
 	}
 	p.suppressEqivIndexIfNecessary(cloned)
+	cloned.generateReplicaMap()
 
 	if s.command != CommandPlan {
 		// Validate only for rebalancing
@@ -1109,7 +1247,11 @@ func (p *SAPlanner) addReplicaIfNecessary(s *Solution) {
 			}
 
 			if len(clonedCandidates) != 0 {
-				p.placement.AddOptionalIndexes(clonedCandidates)
+				if s.command == CommandRepair {
+					p.placement.AddRequiredIndexes(clonedCandidates)
+				} else {
+					p.placement.AddOptionalIndexes(clonedCandidates)
+				}
 			}
 		}
 	}
@@ -1194,18 +1336,21 @@ func (p *SAPlanner) addPartitionIfNecessary(s *Solution) {
 //
 // Constructor
 //
-func newSolution(constraint ConstraintMethod, sizing SizingMethod, indexers []*IndexerNode, isLive bool, useLive bool, disableRepair bool) *Solution {
+func newSolution(constraint ConstraintMethod, sizing SizingMethod, indexers []*IndexerNode, isLive bool, useLive bool,
+	disableRepair bool) *Solution {
 
 	r := &Solution{
-		constraint:    constraint,
-		sizing:        sizing,
-		Placement:     make([]*IndexerNode, len(indexers)),
-		isLiveData:    isLive,
-		useLiveData:   useLive,
-		disableRepair: disableRepair,
-		estimate:      true,
-		enableExclude: true,
-		indexSGMap:    make(map[string]string),
+		constraint:       constraint,
+		sizing:           sizing,
+		Placement:        make([]*IndexerNode, len(indexers)),
+		isLiveData:       isLive,
+		useLiveData:      useLive,
+		disableRepair:    disableRepair,
+		estimate:         true,
+		enableExclude:    true,
+		indexSGMap:       make(map[common.IndexDefnId]map[common.PartitionId]map[int]string),
+		replicaMap:       make(map[common.IndexDefnId]map[common.PartitionId]map[int]*IndexUsage),
+		usedReplicaIdMap: make(map[common.IndexDefnId]map[int]bool),
 	}
 
 	// initialize list of indexers
@@ -1352,7 +1497,29 @@ func (s *Solution) removeIndexes(indexes []*IndexUsage) {
 				if index == target {
 					s.removeIndex(indexer, i)
 					s.updateServerGroupMap(index, nil)
+					if index.Instance != nil {
+						delete(s.replicaMap[index.DefnId][index.PartnId], index.Instance.ReplicaId)
+					}
 				}
+			}
+		}
+	}
+}
+
+//
+// Remove replica
+//
+func (s *Solution) removeReplicas(defnId common.IndexDefnId, replicaId int) {
+	for _, indexer := range s.Placement {
+	RETRY:
+		for i, index := range indexer.Indexes {
+			if index.DefnId == defnId && int(index.Instance.ReplicaId) == replicaId {
+				s.removeIndex(indexer, i)
+				s.updateServerGroupMap(index, nil)
+				if index.Instance != nil {
+					delete(s.replicaMap[index.DefnId][index.PartnId], index.Instance.ReplicaId)
+				}
+				goto RETRY
 			}
 		}
 	}
@@ -1389,7 +1556,9 @@ func (s *Solution) clone() *Solution {
 	r.scanMean = s.scanMean
 	r.drainMean = s.drainMean
 	r.enforceConstraint = s.enforceConstraint
-	r.indexSGMap = make(map[string]string)
+	r.indexSGMap = make(map[common.IndexDefnId]map[common.PartitionId]map[int]string)
+	r.replicaMap = make(map[common.IndexDefnId]map[common.PartitionId]map[int]*IndexUsage)
+	r.usedReplicaIdMap = make(map[common.IndexDefnId]map[int]bool)
 
 	for _, node := range s.Placement {
 		if node.isDelete && len(node.Indexes) == 0 {
@@ -1398,8 +1567,31 @@ func (s *Solution) clone() *Solution {
 		r.Placement = append(r.Placement, node.clone())
 	}
 
-	for index, sg := range s.indexSGMap {
-		r.indexSGMap[index] = sg
+	for defnId, partitions := range s.indexSGMap {
+		r.indexSGMap[defnId] = make(map[common.PartitionId]map[int]string)
+		for partnId, replicaIds := range partitions {
+			r.indexSGMap[defnId][partnId] = make(map[int]string)
+			for replicaId, sg := range replicaIds {
+				r.indexSGMap[defnId][partnId][replicaId] = sg
+			}
+		}
+	}
+
+	for defnId, partitions := range s.replicaMap {
+		r.replicaMap[defnId] = make(map[common.PartitionId]map[int]*IndexUsage)
+		for partnId, replicaIds := range partitions {
+			r.replicaMap[defnId][partnId] = make(map[int]*IndexUsage)
+			for replicaId, index := range replicaIds {
+				r.replicaMap[defnId][partnId][replicaId] = index
+			}
+		}
+	}
+
+	for defnId, replicaIds := range s.usedReplicaIdMap {
+		r.usedReplicaIdMap[defnId] = make(map[int]bool)
+		for replicaId, _ := range replicaIds {
+			r.usedReplicaIdMap[defnId][replicaId] = true
+		}
 	}
 
 	return r
@@ -1873,11 +2065,11 @@ func (s *Solution) findNumReplica(u *IndexUsage) int {
 func (s *Solution) findMissingReplica(u *IndexUsage) map[int]common.IndexInstId {
 
 	found := make(map[int]common.IndexInstId)
-	instances := make(map[common.IndexInstId]bool)
+	instances := make(map[common.IndexInstId]int)
 	for _, indexer := range s.Placement {
 		for _, index := range indexer.Indexes {
 
-			// check replica (including self)
+			// check replica for each partition (including self)
 			if index.IsReplica(u) {
 				if index.Instance == nil {
 					logging.Warnf("Cannot determinte replicaId for index (%v,%v)", index.Name, index.Bucket)
@@ -1886,8 +2078,13 @@ func (s *Solution) findMissingReplica(u *IndexUsage) map[int]common.IndexInstId 
 				found[index.Instance.ReplicaId] = index.InstId
 			}
 
+			// check instance/replica for the index definition (including self)
 			if index.IsSameIndex(u) {
-				instances[index.InstId] = true
+				if index.Instance == nil {
+					logging.Warnf("Cannot determinte replicaId for index (%v,%v)", index.Name, index.Bucket)
+					return (map[int]common.IndexInstId)(nil)
+				}
+				instances[index.InstId] = index.Instance.ReplicaId
 			}
 		}
 	}
@@ -1896,24 +2093,24 @@ func (s *Solution) findMissingReplica(u *IndexUsage) map[int]common.IndexInstId 
 	// numReplica excludes itself
 	missing := make(map[int]common.IndexInstId)
 	if u.Instance != nil {
-		for i := 0; i < int(u.Instance.Defn.NumReplica+1); i++ {
-			if _, ok := found[i]; !ok {
-				missing[i] = 0
+		// Going through all the instances of this definition (across partitions).
+		// Find if any replica is missing for this partition.
+		for instId, replicaId := range instances {
+			if _, ok := found[replicaId]; !ok {
+				missing[replicaId] = instId
+			}
+		}
 
-				// Replica is missing.  Found out which instance with the missing replica.
-				for instId, _ := range instances {
+		add := int(u.Instance.Defn.NumReplica+1) - len(missing) - len(found)
+		if add > 0 {
+			for k := 0; k < add; k++ {
+				for i := 0; i < int(math.MaxUint32); i++ {
+					_, ok1 := found[i]
+					_, ok2 := missing[i]
+					_, ok3 := s.usedReplicaIdMap[u.DefnId][i]
 
-					match := false
-					for _, instId2 := range found {
-						if instId2 == instId {
-							match = true
-							break
-						}
-					}
-
-					// There is an index inst with no matching replica
-					if !match {
-						missing[i] = instId
+					if !ok1 && !ok2 && !ok3 {
+						missing[i] = 0
 						break
 					}
 				}
@@ -2127,7 +2324,7 @@ func (s *Solution) ignoreResourceConstraint() bool {
 	// ignore resource constraint for plasma or fdb during rebalance
 	// for plasma and forestdb, memory and cpu represents transient working set and this can change over time.
 	// for MOI, memory consumption is not transient so constraint needs to be honored.
-	if s.command == CommandRebalance || s.command == CommandSwap {
+	if s.command == CommandRebalance || s.command == CommandSwap || s.command == CommandRepair {
 		// planner tends to even out memory, cpu and data usage across nodes based on cost function.
 		// so ignore resource constraint assuming the resources will even out
 		//return !s.isMOICluster()
@@ -2169,18 +2366,32 @@ func (s *Solution) SatisfyClusterConstraint() bool {
 	return true
 }
 
+func (s *Solution) findServerGroup(defnId common.IndexDefnId, partnId common.PartitionId, replicaId int) (string, bool) {
+
+	partitions, ok := s.indexSGMap[defnId]
+	if !ok {
+		return "", false
+	}
+
+	replicas, ok := partitions[partnId]
+	if !ok {
+		return "", false
+	}
+
+	sg, ok := replicas[replicaId]
+	return sg, ok
+}
+
 //
 // Check if there is any replica (excluding serlf) in the server group
 //
 func (s *Solution) hasReplicaInServerGroup(u *IndexUsage, group string) bool {
 
 	if u.Instance != nil {
-		numReplica := int(u.Instance.Defn.NumReplica) + 1
-		for i := 0; i < numReplica; i++ {
+		replicas := s.replicaMap[u.DefnId][u.PartnId]
+		for i, _ := range replicas {
 			if i != u.Instance.ReplicaId {
-				key := common.FormatIndexPartnDisplayName(u.Instance.Defn.Name, i, int(u.PartnId), true)
-				key = fmt.Sprintf("%v %v", key, u.Bucket)
-				if sg, ok := s.indexSGMap[key]; ok {
+				if sg, ok := s.findServerGroup(u.DefnId, u.PartnId, i); ok {
 					if sg == group {
 						return true
 					}
@@ -2211,13 +2422,11 @@ func (s *Solution) hasReplicaInServerGroup(u *IndexUsage, group string) bool {
 func (s *Solution) hasServerGroupWithNoReplica(u *IndexUsage) bool {
 
 	if u.Instance != nil {
-		numReplica := int(u.Instance.Defn.NumReplica) + 1
 		counts := make(map[string]bool)
-		for i := 0; i < numReplica; i++ {
+		replicas := s.replicaMap[u.DefnId][u.PartnId]
+		for i, _ := range replicas {
 			if i != u.Instance.ReplicaId {
-				key := common.FormatIndexPartnDisplayName(u.Instance.Defn.Name, i, int(u.PartnId), true)
-				key = fmt.Sprintf("%v %v", key, u.Bucket)
-				if group, ok := s.indexSGMap[key]; ok {
+				if group, ok := s.findServerGroup(u.DefnId, u.PartnId, i); ok {
 					counts[group] = true
 				}
 			}
@@ -2252,6 +2461,45 @@ func (s *Solution) hasServerGroupWithNoReplica(u *IndexUsage) bool {
 
 	return false
 }
+
+//
+// For a given index, find out all replica with the lower replicaId.
+// The given index should have the higher replica count in its server
+// group than all its replica (with lower replicaId).
+//
+/*
+func (s *Solution) hasHighestReplicaCountInServerGroup(u *IndexUsage) bool {
+
+	if !s.place.IsEligibleIndex(u) {
+		return true
+	}
+
+	counts := make(map[string]int)
+	replicaIds := make([]int)
+	for i, _ := range s.replicaMap[u.DefnId][u.PartnId] {
+		if i < u.Instance.ReplicaId {
+			if sg, ok := s.findServerGroup(u.DefnId, u.PartnId, i); ok {
+				counts[group]++
+				replicaIds = append(replicas, i)
+			}
+		}
+	}
+
+	idxSG := s.findServerGroup(u.DefnId, u.PartnId, u.Instance.ReplicaId)
+	for i := 0; i < len(replicaIds); i++ {
+		replica := s.replicaMap[u.DefnId][u.PartnId][i]
+		if s.place.IsEligibleIndex(replica) {
+			sg := s.findServerGroup(u.DefnId, u.PartnId, i)
+
+			if counts[idxSG] < counts[sg] {
+				return false
+			}
+		}
+	}
+
+	return true
+}
+*/
 
 //
 // Does the index node has replia?
@@ -2356,12 +2604,25 @@ func (s *Solution) hasDeletedNodes() bool {
 // Update SG mapping for index
 //
 func (s *Solution) updateServerGroupMap(index *IndexUsage, indexer *IndexerNode) {
-	key := index.GetDisplayName()
-	key = fmt.Sprintf("%v %v", key, index.Bucket)
-	if indexer != nil {
-		s.indexSGMap[key] = indexer.ServerGroup
-	} else {
-		delete(s.indexSGMap, key)
+	if index.Instance != nil {
+		if indexer != nil {
+			if _, ok := s.indexSGMap[index.DefnId]; !ok {
+				s.indexSGMap[index.DefnId] = make(map[common.PartitionId]map[int]string)
+			}
+
+			if _, ok := s.indexSGMap[index.DefnId][index.PartnId]; !ok {
+				s.indexSGMap[index.DefnId][index.PartnId] = make(map[int]string)
+			}
+
+			s.indexSGMap[index.DefnId][index.PartnId][index.Instance.ReplicaId] = indexer.ServerGroup
+
+		} else {
+			if _, ok := s.indexSGMap[index.DefnId]; ok {
+				if _, ok := s.indexSGMap[index.DefnId][index.PartnId]; ok {
+					delete(s.indexSGMap[index.DefnId][index.PartnId], index.Instance.ReplicaId)
+				}
+			}
+		}
 	}
 }
 
@@ -2372,6 +2633,28 @@ func (s *Solution) initializeServerGroupMap() {
 	for _, indexer := range s.Placement {
 		for _, index := range indexer.Indexes {
 			s.updateServerGroupMap(index, indexer)
+		}
+	}
+}
+
+//
+// Generate a map for replicaId
+//
+func (s *Solution) generateReplicaMap() {
+
+	for _, indexer := range s.Placement {
+		for _, index := range indexer.Indexes {
+			if index.Instance != nil {
+				if _, ok := s.replicaMap[index.DefnId]; !ok {
+					s.replicaMap[index.DefnId] = make(map[common.PartitionId]map[int]*IndexUsage)
+				}
+
+				if _, ok := s.replicaMap[index.DefnId][index.PartnId]; !ok {
+					s.replicaMap[index.DefnId][index.PartnId] = make(map[int]*IndexUsage)
+				}
+
+				s.replicaMap[index.DefnId][index.PartnId][index.Instance.ReplicaId] = index
+			}
 		}
 	}
 }
@@ -3691,7 +3974,7 @@ func (o *IndexerNode) EvaluateNodeStats(s *Solution) {
 		// 1) only consider eligible index
 		// 2) ignore cost of moving an index out of an to-be-deleted node
 		// 3) ignore cost of moving to new node
-		if s.command == CommandRebalance || s.command == CommandSwap {
+		if s.command == CommandRebalance || s.command == CommandSwap || s.command == CommandRepair {
 			if _, ok := eligibles[index]; ok {
 
 				if index.initialNode != nil && !index.initialNode.isDelete {
@@ -4074,6 +4357,10 @@ func (o *IndexUsage) IsPlasma() bool {
 	return o.StorageMode == common.PlasmaDB
 }
 
+func (o *IndexUsage) IsNew() bool {
+	return o.initialNode == nil
+}
+
 //////////////////////////////////////////////////////////////
 // UsageBasedCostMethod
 //////////////////////////////////////////////////////////////
@@ -4437,6 +4724,14 @@ func (p *RandomPlacement) GetEligibleIndexes() map[*IndexUsage]bool {
 }
 
 //
+// Is it an eligible index?
+//
+func (p *RandomPlacement) IsEligibleIndex(index *IndexUsage) bool {
+
+	return p.indexes[index]
+}
+
+//
 // Add optional index for placement
 //
 func (p *RandomPlacement) AddOptionalIndexes(indexes []*IndexUsage) {
@@ -4444,6 +4739,17 @@ func (p *RandomPlacement) AddOptionalIndexes(indexes []*IndexUsage) {
 	p.optionals = append(p.optionals, indexes...)
 	for _, index := range indexes {
 		p.indexes[index] = true
+	}
+}
+
+//
+// Add index for placement
+//
+func (p *RandomPlacement) AddRequiredIndexes(indexes []*IndexUsage) {
+
+	for _, index := range indexes {
+		p.indexes[index] = true
+		p.eligibles = append(p.eligibles, index)
 	}
 }
 

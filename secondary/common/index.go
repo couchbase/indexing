@@ -210,6 +210,7 @@ type IndexDefn struct {
 	PartitionKeys      []string   `json:"partitionKeys,omitempty"`
 	RetainDeletedXATTR bool       `json:"retainDeletedXATTR,omitempty"`
 	HashScheme         HashScheme `json:"hashScheme,omitempty"`
+	NumReplica2        Counter    `json:"NumReplica2,omitempty"`
 
 	// Sizing info
 	NumDoc        uint64  `json:"numDoc,omitempty"`
@@ -257,7 +258,7 @@ func (idx IndexDefn) String() string {
 	str += fmt.Sprintf("Using: %v ", idx.Using)
 	str += fmt.Sprintf("Bucket: %v ", idx.Bucket)
 	str += fmt.Sprintf("IsPrimary: %v ", idx.IsPrimary)
-	str += fmt.Sprintf("NumReplica: %v ", idx.NumReplica)
+	str += fmt.Sprintf("NumReplica: %v ", idx.GetNumReplica())
 	str += fmt.Sprintf("InstVersion: %v ", idx.InstVersion)
 	str += fmt.Sprintf("\n\t\tSecExprs: %v ", logging.TagUD(idx.SecExprs))
 	str += fmt.Sprintf("\n\t\tDesc: %v", idx.Desc)
@@ -297,6 +298,7 @@ func (idx IndexDefn) Clone() *IndexDefn {
 		SecKeySize:         idx.SecKeySize,
 		DocKeySize:         idx.DocKeySize,
 		ArrSize:            idx.ArrSize,
+		NumReplica2:        idx.NumReplica2,
 	}
 }
 
@@ -311,6 +313,16 @@ func (idx *IndexDefn) HasDescending() bool {
 	}
 	return false
 
+}
+
+func (idx *IndexDefn) GetNumReplica() int {
+
+	numReplica, hasValue := idx.NumReplica2.Value()
+	if !hasValue {
+		return int(idx.NumReplica)
+	}
+
+	return int(numReplica)
 }
 
 func (idx IndexInst) IsProxy() bool {

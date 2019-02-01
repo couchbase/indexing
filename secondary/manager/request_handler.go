@@ -175,6 +175,7 @@ func registerRequestHandler(mgr *IndexManager, clusterUrl string, mux *http.Serv
 		mux.HandleFunc("/planIndex", handlerContext.handleIndexPlanRequest)
 		mux.HandleFunc("/settings/storageMode", handlerContext.handleIndexStorageModeRequest)
 		mux.HandleFunc("/settings/planner", handlerContext.handlePlannerRequest)
+		mux.HandleFunc("/listReplicaCount", handlerContext.handleListLocalReplicaCountRequest)
 	})
 
 	handlerContext.mgr = mgr
@@ -393,8 +394,30 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, bucket string
 	// find all nodes that has a index http service
 	nids := cinfo.GetNodesByServiceType(common.INDEX_HTTP_SERVICE)
 
+	numReplicas := make(map[common.IndexDefnId]common.Counter)
+	defns := make(map[common.IndexDefnId]common.IndexDefn)
 	list := make([]IndexStatus, 0)
 	failedNodes := make([]string, 0)
+
+	mergeCounter := func(defnId common.IndexDefnId, counter common.Counter) {
+		if current, ok := numReplicas[defnId]; ok {
+			newValue, merged, err := current.MergeWith(counter)
+			if err != nil {
+				logging.Errorf("Fail to merge replica count. Error: %v", err)
+				return
+			}
+
+			if merged {
+				numReplicas[defnId] = newValue
+			}
+
+			return
+		}
+
+		if counter.IsValid() {
+			numReplicas[defnId] = counter
+		}
+	}
 
 	for _, nid := range nids {
 
@@ -450,6 +473,9 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, bucket string
 				if !isAllowed(creds, []string{permission}, nil) {
 					continue
 				}
+
+				mergeCounter(defn.DefnId, defn.NumReplica2)
+				defns[defn.DefnId] = defn
 
 				if topology := findTopologyByBucket(localMeta.IndexTopologies, defn.Bucket); topology != nil {
 
@@ -547,7 +573,7 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, bucket string
 								Status:       stateStr,
 								Error:        errStr,
 								Hosts:        []string{curl},
-								Definition:   common.IndexStatement(defn, int(instance.NumPartitions), true),
+								Definition:   common.IndexStatement(defn, int(instance.NumPartitions), -1, true),
 								Completion:   completion,
 								Progress:     progress,
 								Scheduled:    instance.Scheduled,
@@ -555,7 +581,7 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, bucket string
 								NumPartition: len(instance.Partitions),
 								PartitionMap: partitionMap,
 								NodeUUID:     localMeta.NodeUUID,
-								NumReplica:   int(defn.NumReplica),
+								NumReplica:   int(defn.GetNumReplica()),
 								IndexName:    defn.Name,
 								ReplicaId:    int(instance.ReplicaId),
 							}
@@ -569,6 +595,17 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, bucket string
 			logging.Debugf("RequestHandler::getIndexStatus: Error from GetServiceAddress (indexHttp) for node id %v. Error = %v", nid, err)
 			failedNodes = append(failedNodes, addr)
 			continue
+		}
+	}
+
+	//Fix replica count
+	for _, index := range list {
+		if counter, ok := numReplicas[index.DefnId]; ok {
+			numReplica, exist := counter.Value()
+			if exist {
+				index.Definition = common.IndexStatement(defns[index.DefnId], index.NumPartition, int(numReplica), true)
+				index.NumReplica = int(numReplica)
+			}
 		}
 	}
 
@@ -1129,6 +1166,63 @@ func (m *requestHandlerContext) handlePlannerRequest(w http.ResponseWriter, r *h
 	} else {
 		sendHttpError(w, "value must be in, out or inout", http.StatusBadRequest)
 	}
+}
+
+//////////////////////////////////////////////////////
+// Alter Index
+///////////////////////////////////////////////////////
+
+func (m *requestHandlerContext) handleListLocalReplicaCountRequest(w http.ResponseWriter, r *http.Request) {
+
+	creds, ok := doAuth(r, w)
+	if !ok {
+		return
+	}
+
+	result, err := m.getLocalReplicaCount(creds)
+	if err == nil {
+		send(http.StatusOK, w, result)
+	} else {
+		logging.Debugf("RequestHandler::handleListReplicaCountRequest: err %v", err)
+		sendHttpError(w, " Unable to retrieve index metadata", http.StatusInternalServerError)
+	}
+}
+
+func (m *requestHandlerContext) getLocalReplicaCount(creds cbauth.Creds) (map[common.IndexDefnId]common.Counter, error) {
+
+	result := make(map[common.IndexDefnId]common.Counter)
+
+	repo := m.mgr.getMetadataRepo()
+	iter, err := repo.NewIterator()
+	if err != nil {
+		return nil, err
+	}
+	defer iter.Close()
+
+	var defn *common.IndexDefn
+	permissions := make(map[string]bool)
+
+	_, defn, err = iter.Next()
+	for err == nil {
+		if _, ok := permissions[defn.Bucket]; !ok {
+			permission := fmt.Sprintf("cluster.bucket[%s].n1ql.index!list", defn.Bucket)
+			if !isAllowed(creds, []string{permission}, nil) {
+				return nil, fmt.Errorf("Permission denied on reading metadata for bucket %v", defn.Bucket)
+			}
+			permissions[defn.Bucket] = true
+		}
+
+		var numReplica *common.Counter
+		numReplica, err = GetLatestReplicaCount(defn)
+		if err != nil {
+			return nil, fmt.Errorf("Fail to retreive replica count.  Error: %v", err)
+		}
+
+		result[defn.DefnId] = *numReplica
+		_, defn, err = iter.Next()
+	}
+
+	return result, nil
 }
 
 ///////////////////////////////////////////////////////

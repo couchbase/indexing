@@ -189,6 +189,11 @@ func (b *cbqClient) MoveIndex(defnID uint64, plan map[string]interface{}) error 
 	panic("cbqClient does not implement move index")
 }
 
+// AlterReplicaCount implement BridgeAccessor{} interface.
+func (b *cbqClient) AlterReplicaCount(action string, defnID uint64, plan map[string]interface{}) error {
+	panic("cbqClient does not implement alter replica count")
+}
+
 // DropIndex implement BridgeAccessor{} interface.
 func (b *cbqClient) DropIndex(defnID uint64) error {
 	var resp *http.Response
