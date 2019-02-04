@@ -397,7 +397,7 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 func (o *MetadataProvider) makePrepareIndexRequest(idxDefn *c.IndexDefn) (map[c.IndexerId]int, error) {
 
 	// do a preliminary check
-	watchers, err, _ := o.findWatchersWithRetry(idxDefn.Nodes, int(idxDefn.NumReplica), c.IsPartitioned(idxDefn.PartitionScheme))
+	watchers, err, _ := o.findWatchersWithRetry(idxDefn.Nodes, int(idxDefn.NumReplica), c.IsPartitioned(idxDefn.PartitionScheme), false)
 	if err != nil {
 		return nil, err
 	}
@@ -821,7 +821,7 @@ func (o *MetadataProvider) createIndex(idxDefn *c.IndexDefn, plan map[string]int
 
 	// For non-partitioned index, this will return nodes with fewest indexes.  The number of nodes match the number of replica.
 	// For partitioned index, it return all healthy nodes.
-	watchers, err, _ := o.findWatchersWithRetry(idxDefn.Nodes, int(idxDefn.NumReplica), c.IsPartitioned(idxDefn.PartitionScheme))
+	watchers, err, _ := o.findWatchersWithRetry(idxDefn.Nodes, int(idxDefn.NumReplica), c.IsPartitioned(idxDefn.PartitionScheme), true)
 	if err != nil {
 		return err
 	}
@@ -1746,7 +1746,7 @@ func (o *MetadataProvider) getResidentRatioParam(plan map[string]interface{}) (f
 	return residentRatio, nil, false
 }
 
-func (o *MetadataProvider) findWatchersWithRetry(nodes []string, numReplica int, partitioned bool) ([]*watcher, error, bool) {
+func (o *MetadataProvider) findWatchersWithRetry(nodes []string, numReplica int, partitioned bool, legacy bool) ([]*watcher, error, bool) {
 
 	var watchers []*watcher
 	count := 0
@@ -1774,16 +1774,17 @@ RETRY1:
 				watcher, numWatcher = o.findNextAvailWatcher(watchers, false)
 			}
 			if watcher == nil {
-				watchers = nil
-				if numWatcher == 0 {
-					errCode = 1
-				} else {
-					errCode = 3
+				if len(watchers) < numReplica+1 {
+					watchers = nil
+					if numWatcher == 0 {
+						errCode = 1
+					} else {
+						errCode = 3
+					}
 				}
 			} else {
 				watchers = append(watchers, watcher)
-
-				if len(watchers) < numReplica+1 {
+				if !legacy || len(watchers) < numReplica+1 {
 					goto RETRY1
 				}
 			}
