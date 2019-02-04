@@ -482,8 +482,8 @@ func genData1(c *Context) {
 	c.keys = make([][]byte, c.numItems)
 	c.docid = make([][]byte, c.numItems)
 	for i := 0; i < c.numItems; i++ {
-		c.keys[i] = []byte(fmt.Sprint("keys%v", rand.Intn(10000000000)))
-		c.docid[i] = []byte(fmt.Sprint("docid%v", rand.Intn(10000000000)))
+		c.keys[i] = []byte(fmt.Sprintf("keys%v", rand.Intn(10000000000)))
+		c.docid[i] = []byte(fmt.Sprintf("docid%v", rand.Intn(10000000000)))
 	}
 }
 
@@ -493,10 +493,10 @@ func genData2(c *Context) {
 	c.docid = make([][]byte, c.numItems)
 	for i := 0; i < c.numItems; i++ {
 		hasher := md5.New()
-		hasher.Write([]byte(fmt.Sprint("keys%v", rand.Intn(10000000000))))
+		hasher.Write([]byte(fmt.Sprintf("keys%v", rand.Intn(10000000000))))
 		c.keys[i] = []byte(strings.Repeat(hex.EncodeToString(hasher.Sum(nil)), rand.Intn(10)+1))
 		hasher = md5.New()
-		hasher.Write([]byte(fmt.Sprint("docid%v", rand.Intn(10000000000))))
+		hasher.Write([]byte(fmt.Sprintf("docid%v", rand.Intn(10000000000))))
 		c.docid[i] = []byte(strings.Repeat(hex.EncodeToString(hasher.Sum(nil)), rand.Intn(10)+1))
 	}
 }
@@ -506,8 +506,8 @@ func genData3(c *Context) {
 	keys1 := make([]string, c.numItems)
 	docid1 := make([]string, c.numItems)
 	for i := 0; i < c.numItems; i++ {
-		keys1[i] = string(fmt.Sprint("keys%v", rand.Intn(10000000000)))
-		docid1[i] = string(fmt.Sprint("docid%v", rand.Intn(10000000000)))
+		keys1[i] = string(fmt.Sprintf("keys%v", rand.Intn(10000000000)))
+		docid1[i] = string(fmt.Sprintf("docid%v", rand.Intn(10000000000)))
 	}
 	sort.Strings(keys1)
 	sort.Strings(docid1)
