@@ -1253,11 +1253,21 @@ func (m *ServiceMgr) initStartPhase(change service.TopologyChange) (error, bool)
 
 func (m *ServiceMgr) genRebalanceToken() error {
 
+	m.cinfo.Lock()
+	defer m.cinfo.Unlock()
+
+	var localIP string
+	if err := m.cinfo.Fetch(); err == nil {
+		localIP, _ = m.cinfo.GetLocalHostname()
+	}
+
 	cfg := m.config.Load()
+
 	m.rebalanceToken = &RebalanceToken{
 		MasterId: cfg["nodeuuid"].String(),
 		RebalId:  m.state.rebalanceID,
 		Source:   RebalSourceClusterOp,
+		MasterIP: localIP,
 	}
 	return nil
 }
