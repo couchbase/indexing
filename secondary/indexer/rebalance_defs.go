@@ -53,6 +53,7 @@ type RebalanceToken struct {
 	RebalId  string
 	Source   RebalSource
 	Error    string
+	MasterIP string
 }
 
 type RebalTokens struct {
