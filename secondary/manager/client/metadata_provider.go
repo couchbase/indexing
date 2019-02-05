@@ -1262,11 +1262,11 @@ func (o *MetadataProvider) prepareIndexSpec(defn *c.IndexDefn) *planner.IndexSpe
 	return &spec
 }
 
-func (o *MetadataProvider) prepareNodeList(defn *c.IndexDefn, watcherMap map[c.IndexerId]int) ([]string, error) {
+func (o *MetadataProvider) prepareNodeList(nodeList []string, watcherMap map[c.IndexerId]int) ([]string, error) {
 
-	nodes := defn.Nodes
+	nodes := nodeList
 
-	if len(defn.Nodes) == 0 {
+	if len(nodeList) == 0 {
 		// If user does not specify a node list, then get the node list where we have acquired locks.
 		nodes = make([]string, 0, len(watcherMap))
 		for indexerId, _ := range watcherMap {
@@ -1317,7 +1317,7 @@ func (o *MetadataProvider) plan(defn *c.IndexDefn, plan map[string]interface{},
 	watcherMap map[c.IndexerId]int) (map[int]map[c.IndexerId][]c.PartitionId, map[c.IndexerId][]c.IndexDefn, error) {
 
 	spec := o.prepareIndexSpec(defn)
-	nodes, err := o.prepareNodeList(defn, watcherMap)
+	nodes, err := o.prepareNodeList(defn.Nodes, watcherMap)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1368,7 +1368,7 @@ func (o *MetadataProvider) replicaRepair(defn *c.IndexDefn, numReplica c.Counter
 	curCount, _ := numReplica.Value()
 	totalCount := int(curCount) + increment
 
-	nodes, err := o.prepareNodeList(defn, watcherMap)
+	nodes, err := o.prepareNodeList(nil, watcherMap)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1438,7 +1438,7 @@ func (o *MetadataProvider) replicaRepair(defn *c.IndexDefn, numReplica c.Counter
 func (o *MetadataProvider) replicaDrop(defn *c.IndexDefn, numReplica c.Counter, decrement int, numPartition int, dropReplicaId int, plan map[string]interface{},
 	watcherMap map[c.IndexerId]int) ([]c.IndexInstId, []int, error) {
 
-	nodes, err := o.prepareNodeList(defn, watcherMap)
+	nodes, err := o.prepareNodeList(nil, watcherMap)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -2562,7 +2562,7 @@ func (o *MetadataProvider) AlterReplicaCount(action string, defnId c.IndexDefnId
 	//
 	defn := *idxMeta.Definition
 	numPartition := idxMeta.numPartitions()
-	watcherMap, err := o.makePrepareIndexRequest(defn.DefnId, defn.Name, defn.Bucket, defn.Nodes, defn.PartitionScheme, count)
+	watcherMap, err := o.makePrepareIndexRequest(defn.DefnId, defn.Name, defn.Bucket, nil, defn.PartitionScheme, count)
 	if err != nil {
 		o.cancelPrepareIndexRequest(defn.DefnId, watcherMap)
 		return fmt.Errorf("Fail to alter index: %v", err)
