@@ -974,7 +974,10 @@ func (m *requestHandlerContext) handleRestoreIndexMetadataRequest(w http.Respons
 	}
 
 	// Restore
-	context := createRestoreContext(image, m.clusterUrl)
+	bucket := m.getBucket(r)
+	logging.Infof("restore to target bucket %v", bucket)
+
+	context := createRestoreContext(image, m.clusterUrl, bucket)
 	hostIndexMap, err := context.computeIndexLayout()
 	if err != nil {
 		send(http.StatusInternalServerError, w, &RestoreResponse{Code: RESP_ERROR, Error: fmt.Sprintf("Unable to restore metadata.  Error=%v", err)})
