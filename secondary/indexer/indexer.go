@@ -2682,22 +2682,30 @@ func (idx *indexer) handleInitPrepRecovery(msg Message) {
 	rollbackTs := msg.(*MsgRecovery).GetRestartTs()
 	retryTs := msg.(*MsgRecovery).GetRetryTs()
 
-	if rollbackTs != nil {
-		idx.setRollbackTs(streamId, bucket, rollbackTs)
+	//if the stream is inactive(e.g. all indexes get dropped)
+	if idx.getStreamBucketState(streamId, bucket) == STREAM_INACTIVE {
+		logging.Infof("Indexer::handleInitPrepRecovery StreamId %v Bucket %v State %v. "+
+			"Skipping INIT_PREPARE and Cleaning up.", streamId, bucket, idx.getStreamBucketState(streamId, bucket))
+		idx.cleanupStreamBucketState(streamId, bucket)
+	} else {
+		if rollbackTs != nil {
+			idx.setRollbackTs(streamId, bucket, rollbackTs)
+		}
+
+		if retryTs != nil {
+			idx.setRetryTsForRecovery(streamId, bucket, retryTs)
+		}
+
+		idx.setStreamBucketState(streamId, bucket, STREAM_PREPARE_RECOVERY)
+
+		logging.Infof("Indexer::handleInitPrepRecovery StreamId %v Bucket %v %v",
+			streamId, bucket, STREAM_PREPARE_RECOVERY)
+
+		//fwd the msg to timekeeper
+		idx.tkCmdCh <- msg
+		<-idx.tkCmdCh
+
 	}
-
-	if retryTs != nil {
-		idx.setRetryTsForRecovery(streamId, bucket, retryTs)
-	}
-
-	idx.setStreamBucketState(streamId, bucket, STREAM_PREPARE_RECOVERY)
-
-	logging.Infof("Indexer::handleInitPrepRecovery StreamId %v Bucket %v %v",
-		streamId, bucket, STREAM_PREPARE_RECOVERY)
-
-	//fwd the msg to timekeeper
-	idx.tkCmdCh <- msg
-	<-idx.tkCmdCh
 }
 
 func (idx *indexer) handlePrepareUnpause(msg Message) {
@@ -2781,10 +2789,7 @@ func (idx *indexer) handleRecoveryDone(msg Message) {
 	idx.tkCmdCh <- msg
 	<-idx.tkCmdCh
 
-	delete(idx.streamBucketRequestStopCh[streamId], bucket)
-	delete(idx.streamBucketRollbackTs[streamId], bucket)
-	delete(idx.streamBucketRetryTs[streamId], bucket)
-
+	idx.cleanupStreamBucketState(streamId, bucket)
 	idx.bucketBuildTs[bucket] = buildTs
 
 	//during recovery, if all indexes of a bucket gets dropped,
@@ -6922,4 +6927,11 @@ func (idx *indexer) setRollbackTs(streamId common.StreamId, bucket string,
 		bucketRollbackTs[bucket] = rollbackTs
 		idx.streamBucketRollbackTs[streamId] = bucketRollbackTs
 	}
+}
+
+func (idx *indexer) cleanupStreamBucketState(streamId common.StreamId, bucket string) {
+
+	delete(idx.streamBucketRequestStopCh[streamId], bucket)
+	delete(idx.streamBucketRollbackTs[streamId], bucket)
+	delete(idx.streamBucketRetryTs[streamId], bucket)
 }
