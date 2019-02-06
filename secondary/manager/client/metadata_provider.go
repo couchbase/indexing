@@ -400,7 +400,7 @@ func (o *MetadataProvider) makePrepareIndexRequest(defnId c.IndexDefnId, name st
 	partitionScheme c.PartitionScheme, numReplica int) (map[c.IndexerId]int, error) {
 
 	// do a preliminary check
-	watchers, err, _ := o.findWatchersWithRetry(nodes, numReplica, c.IsPartitioned(partitionScheme))
+	watchers, err, _ := o.findWatchersWithRetry(nodes, numReplica, c.IsPartitioned(partitionScheme), false)
 	if err != nil {
 		return nil, err
 	}
@@ -807,7 +807,7 @@ func (o *MetadataProvider) createIndex(idxDefn *c.IndexDefn, plan map[string]int
 
 	// For non-partitioned index, this will return nodes with fewest indexes.  The number of nodes match the number of replica.
 	// For partitioned index, it return all healthy nodes.
-	watchers, err, _ := o.findWatchersWithRetry(idxDefn.Nodes, int(idxDefn.NumReplica), c.IsPartitioned(idxDefn.PartitionScheme))
+	watchers, err, _ := o.findWatchersWithRetry(idxDefn.Nodes, int(idxDefn.NumReplica), c.IsPartitioned(idxDefn.PartitionScheme), true)
 	if err != nil {
 		return err
 	}
@@ -1262,11 +1262,11 @@ func (o *MetadataProvider) prepareIndexSpec(defn *c.IndexDefn) *planner.IndexSpe
 	return &spec
 }
 
-func (o *MetadataProvider) prepareNodeList(defn *c.IndexDefn, watcherMap map[c.IndexerId]int) ([]string, error) {
+func (o *MetadataProvider) prepareNodeList(nodeList []string, watcherMap map[c.IndexerId]int) ([]string, error) {
 
-	nodes := defn.Nodes
+	nodes := nodeList
 
-	if len(defn.Nodes) == 0 {
+	if len(nodeList) == 0 {
 		// If user does not specify a node list, then get the node list where we have acquired locks.
 		nodes = make([]string, 0, len(watcherMap))
 		for indexerId, _ := range watcherMap {
@@ -1317,7 +1317,7 @@ func (o *MetadataProvider) plan(defn *c.IndexDefn, plan map[string]interface{},
 	watcherMap map[c.IndexerId]int) (map[int]map[c.IndexerId][]c.PartitionId, map[c.IndexerId][]c.IndexDefn, error) {
 
 	spec := o.prepareIndexSpec(defn)
-	nodes, err := o.prepareNodeList(defn, watcherMap)
+	nodes, err := o.prepareNodeList(defn.Nodes, watcherMap)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1368,7 +1368,7 @@ func (o *MetadataProvider) replicaRepair(defn *c.IndexDefn, numReplica c.Counter
 	curCount, _ := numReplica.Value()
 	totalCount := int(curCount) + increment
 
-	nodes, err := o.prepareNodeList(defn, watcherMap)
+	nodes, err := o.prepareNodeList(nil, watcherMap)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1438,7 +1438,7 @@ func (o *MetadataProvider) replicaRepair(defn *c.IndexDefn, numReplica c.Counter
 func (o *MetadataProvider) replicaDrop(defn *c.IndexDefn, numReplica c.Counter, decrement int, numPartition int, dropReplicaId int, plan map[string]interface{},
 	watcherMap map[c.IndexerId]int) ([]c.IndexInstId, []int, error) {
 
-	nodes, err := o.prepareNodeList(defn, watcherMap)
+	nodes, err := o.prepareNodeList(nil, watcherMap)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -2005,7 +2005,7 @@ func (o *MetadataProvider) getResidentRatioParam(plan map[string]interface{}) (f
 	return residentRatio, nil, false
 }
 
-func (o *MetadataProvider) findWatchersWithRetry(nodes []string, numReplica int, partitioned bool) ([]*watcher, error, bool) {
+func (o *MetadataProvider) findWatchersWithRetry(nodes []string, numReplica int, partitioned bool, legacy bool) ([]*watcher, error, bool) {
 
 	var watchers []*watcher
 	count := 0
@@ -2033,16 +2033,17 @@ RETRY1:
 				watcher, numWatcher = o.findNextAvailWatcher(watchers, false)
 			}
 			if watcher == nil {
-				watchers = nil
-				if numWatcher == 0 {
-					errCode = 1
-				} else {
-					errCode = 3
+				if len(watchers) < numReplica+1 {
+					watchers = nil
+					if numWatcher == 0 {
+						errCode = 1
+					} else {
+						errCode = 3
+					}
 				}
 			} else {
 				watchers = append(watchers, watcher)
-
-				if len(watchers) < numReplica+1 {
+				if !legacy || len(watchers) < numReplica+1 {
 					goto RETRY1
 				}
 			}
@@ -2103,7 +2104,7 @@ func (o *MetadataProvider) DropIndex(defnID c.IndexDefnId) error {
 	}
 
 	// find watcher -- This method does not check index status (return the watcher even
-	// if index is in deleted status). This return an error if  watcher (holding the index)
+	// if index is in created status). This return an error if  watcher (holding the index)
 	// is dropped asynchronously (concurrent unwatchMetadata).
 	watchers, err := o.findWatchersByDefnIdIgnoreStatus(defnID)
 	if err != nil {
@@ -2146,38 +2147,60 @@ func (o *MetadataProvider) BuildIndexes(defnIDs []c.IndexDefnId) error {
 
 	for _, id := range defnIDs {
 
-		// find index -- this method will not return the index if the index is in DELETED
-		// status (but defn exists).  This will only return an instance that is valid.
-		meta := o.findIndex(id)
-		if meta == nil {
-			return errors.New("Cannot build index. Index Definition not found")
+		// Has the index been deleted?
+		found, err := mc.DeleteCommandTokenExist(id)
+		if err != nil {
+			return errors.New(fmt.Sprintf("Fail to Build Index due to internal errors.  Error=%v.", err))
+		}
+		if found {
+			logging.Warnf("Index %v have been deleted. Skip build index.", id)
+			continue
 		}
 
-		if len(meta.Instances) == 0 {
-			return errors.New("Cannot build index. Index Definition not found or index is currently being rebalanced.")
+		// Has the index been built?
+		found, err = mc.BuildCommandTokenExist(id)
+		if err != nil {
+			return errors.New(fmt.Sprintf("Fail to Build Index due to internal errors.  Error=%v.", err))
+		}
+		if found {
+			logging.Warnf("Index %v has already built. Skip build index.", id)
+			continue
 		}
 
-		for _, inst := range meta.Instances {
-			if inst.State != c.INDEX_STATE_READY {
+		// find index -- this method will not return deleted index. This will only return an instance
+		// that is valid.
+		//
+		// If meta not found, it could mean index is deleted or there is a race condition so
+		// index metadata has not yet reached cbq. In this case, we will still send the index
+		// over to indexer for it to decide whether build is necessary.
+		if meta := o.findIndex(id); meta != nil {
 
-				if inst.State == c.INDEX_STATE_INITIAL || inst.State == c.INDEX_STATE_CATCHUP {
-					return errors.New(fmt.Sprintf("Index %s is being built .", meta.Definition.Name))
+			checkState := func(state c.IndexState) bool {
+				if state != c.INDEX_STATE_READY && state != c.INDEX_STATE_CREATED {
+					if state == c.INDEX_STATE_INITIAL || state == c.INDEX_STATE_CATCHUP {
+						logging.Warnf("Index %v is being built .", meta.Definition.Name)
+					} else if state == c.INDEX_STATE_ACTIVE {
+						logging.Warnf("Index %v has already built .", meta.Definition.Name)
+					} else {
+						logging.Warnf("Index %v have been deleted.", meta.Definition.Name)
+					}
+					return false
 				}
+				return true
+			}
 
-				if inst.State == c.INDEX_STATE_ACTIVE {
-					return errors.New(fmt.Sprintf("Index %s is already built .", meta.Definition.Name))
-				}
-
-				return errors.New("Cannot build index. Index Definition not found")
+			// metadata exist, check if we should build the index by checking index state.
+			if !checkState(meta.State) {
+				continue
 			}
 		}
 
 		// find watcher -- This method does not check index status (return the watcher even
-		// if index is in deleted status). So this return an error if  watcher is dropped
+		// if index is in created status). So this return an error if  watcher is dropped
 		// asynchronously (some parallel go-routine unwatchMetadata).
 		watchers, err := o.findWatchersByDefnIdIgnoreStatus(id)
 		if err != nil {
-			return errors.New(fmt.Sprintf("Cannot locate cluster node hosting Index %s.", meta.Definition.Name))
+			return errors.New(fmt.Sprintf("Fail to Build Index due to internal errors.  Error=%v.", err))
 		}
 
 		// There is at least one watcher (one indexer node)
@@ -2539,7 +2562,7 @@ func (o *MetadataProvider) AlterReplicaCount(action string, defnId c.IndexDefnId
 	//
 	defn := *idxMeta.Definition
 	numPartition := idxMeta.numPartitions()
-	watcherMap, err := o.makePrepareIndexRequest(defn.DefnId, defn.Name, defn.Bucket, defn.Nodes, defn.PartitionScheme, count)
+	watcherMap, err := o.makePrepareIndexRequest(defn.DefnId, defn.Name, defn.Bucket, nil, defn.PartitionScheme, count)
 	if err != nil {
 		o.cancelPrepareIndexRequest(defn.DefnId, watcherMap)
 		return fmt.Errorf("Fail to alter index: %v", err)
@@ -3187,11 +3210,7 @@ func (o *MetadataProvider) findWatchersByDefnIdIgnoreStatus(defnId c.IndexDefnId
 		}
 	}
 
-	if len(result) != 0 {
-		return result, nil
-	}
-
-	return nil, errors.New("Cannot find indexer node with index.")
+	return result, nil
 }
 
 func (o *MetadataProvider) findWatcherByIndexerId(id c.IndexerId) (*watcher, error) {
@@ -3855,6 +3874,16 @@ func (r *metadataRepo) removeInstForIndexerNoLock(indexerId c.IndexerId, bucket 
 	r.instances = newInstsByDefnId
 }
 
+// Removing an index with no index instance:
+// 1) All the index instances have been deleted.
+// 2) If indexer is partitioned away from metadata provider (unhealthy indexer), the correpsonding instance will be removed.
+//    If all instances are removed, the defn will be removed.  The index will be materialized again when those indexers are
+//    reconnected to metadata provider (through watchMetadata).
+//   - If indexer is temporalily disconnected from metadata provider (e.g. indexer crash), index will not be removed.
+//   - An indexer under heavy load (max out cpu) will exhibit symptoms of network partition
+// 3) If indexer node has failed over or rebalanced out of the cluster, the corresponding instance will be removed.
+//    If all instances are removed, the defn will be removed.
+//
 func (r *metadataRepo) cleanupOrphanDefnNoLock(indexerId c.IndexerId, bucket string) {
 
 	deleteDefn := ([]c.IndexDefnId)(nil)
@@ -4013,6 +4042,17 @@ func (r *metadataRepo) makeIndexMetadata(defn *c.IndexDefn) *IndexMetadata {
 	}
 }
 
+//
+// This materializes an IndexMetadata.  It can be one of the following after materialization:
+// 1) A new index with no instance created yet (State=CREATED, len(instances) == 0).
+// 2) A new index with one or more instances in CREATED state (State=CREATED, len(instances) != 0)
+// 3) A index with one or more valid instances (State={READY|INITIAL|CATCHUP|ACTIVE}, len(instances) !=0)
+// 4) A pending delete index with one or more remaining valid instances (State={READY|INITIAL|CATCHUP|ACTIVE}, len(instances) !=0)
+// 5) A deleted index with no instances (State={CREATED}, len(instances) == 0)
+//
+// Under rebalance, indexer will make copy of instance under rebalance.  IndexMetadata will also contain copies under rebalance.
+// In addition, those copies can be promoted to "active" instance if there is no correpsonding active instance.
+//
 func (r *metadataRepo) updateIndexMetadataNoLock(defnId c.IndexDefnId) {
 
 	meta, ok := r.indices[defnId]

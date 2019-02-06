@@ -26,6 +26,7 @@ type RestoreContext struct {
 	clusterUrl   string
 	image        *ClusterIndexMetadata
 	current      *planner.Plan
+	target       string
 	idxFromImage map[common.IndexerId][]*planner.IndexUsage
 	idxToRestore map[common.IndexerId][]*planner.IndexUsage
 	indexerMap   map[common.IndexerId]common.IndexerId
@@ -38,11 +39,12 @@ type RestoreContext struct {
 //
 // Initialize restore context
 //
-func createRestoreContext(image *ClusterIndexMetadata, clusterUrl string) *RestoreContext {
+func createRestoreContext(image *ClusterIndexMetadata, clusterUrl string, bucket string) *RestoreContext {
 
 	context := &RestoreContext{
 		clusterUrl:   clusterUrl,
 		image:        image,
+		target:       bucket,
 		idxFromImage: make(map[common.IndexerId][]*planner.IndexUsage),
 		idxToRestore: make(map[common.IndexerId][]*planner.IndexUsage),
 		indexerMap:   make(map[common.IndexerId]common.IndexerId),
@@ -62,7 +64,9 @@ func (m *RestoreContext) computeIndexLayout() (map[string][]*common.IndexDefn, e
 	}
 
 	// convert image to IndexUsage
-	m.convertImage()
+	if err := m.convertImage(); err != nil {
+		return nil, err
+	}
 
 	// cleanse the image
 	m.cleanseBackupMetadata()
@@ -118,6 +122,7 @@ func (m *RestoreContext) convertImage() error {
 		return err
 	}
 
+	origBucket := make(map[string]bool)
 	for _, meta := range m.image.Metadata {
 		for _, defn := range meta.IndexDefinitions {
 
@@ -143,9 +148,22 @@ func (m *RestoreContext) convertImage() error {
 					logging.Infof("RestoreContext:  Processing index in backup image (%v, %v).", index.Bucket, index.Name)
 				}
 
+				if len(m.target) != 0 && index.Bucket != m.target {
+					logging.Infof("RestoreContext:  convert index %v from bucket %v to target bucket (%v)", index.Name, index.Bucket, m.target)
+					origBucket[index.Bucket] = true
+					index.Bucket = m.target
+					if index.Instance != nil {
+						index.Instance.Defn.Bucket = m.target
+					}
+				}
+
 				m.idxFromImage[common.IndexerId(meta.IndexerId)] = append(m.idxFromImage[common.IndexerId(meta.IndexerId)], index)
 			}
 		}
+	}
+
+	if len(m.target) != 0 && len(origBucket) > 1 {
+		return fmt.Errorf("Backup metadata has indexes from multiple buckets.  Cannot restore indexes to a single bucket %v", m.target)
 	}
 
 	return nil
@@ -287,6 +305,9 @@ func (m *RestoreContext) findIndexToRestore() error {
 
 			temp := *index
 			temp.InstId = instId
+			if temp.Instance != nil {
+				temp.Instance.InstId = instId
+			}
 			m.idxToRestore[common.IndexerId(indexerId)] = append(m.idxToRestore[common.IndexerId(indexerId)], &temp)
 		}
 	}

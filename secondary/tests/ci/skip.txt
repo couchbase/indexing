@@ -1,3 +1,2 @@
 TestRetainDeleteXATTRBinaryDocs
 github.com/couchbase/indexing/secondary/tests/functionaltests
-

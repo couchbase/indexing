@@ -82,6 +82,7 @@ type RequestBroker struct {
 	factory ResponseHandlerFactory
 	sender  ResponseSender
 	timer   ResponseTimer
+	waiter  BackfillWaiter
 
 	// initialization
 	requestId   string
@@ -196,6 +197,14 @@ func (b *RequestBroker) SetResponseSender(sender ResponseSender) {
 func (b *RequestBroker) SetResponseTimer(timer ResponseTimer) {
 
 	b.timer = timer
+}
+
+//
+// Set BackfillWaiter
+//
+func (b *RequestBroker) SetBackfillWaiter(waiter BackfillWaiter) {
+
+	b.waiter = waiter
 }
 
 //
@@ -357,7 +366,7 @@ func (b *RequestBroker) close() {
 //
 // Is the request broker closed
 //
-func (b *RequestBroker) isClose() bool {
+func (b *RequestBroker) IsClose() bool {
 
 	return atomic.LoadInt32(&b.closed) == 1
 }
@@ -466,7 +475,8 @@ func (b *RequestBroker) reset() {
 	b.partial = 0 // false
 
 	// backfill
-	b.backfills = nil
+	// do not reset backfills
+	//b.backfills = nil
 
 	// stats
 	b.sendCount = 0
@@ -494,7 +504,7 @@ func (c *RequestBroker) scatter(clientMaker scanClientMaker, index *common.Index
 	err map[common.PartitionId]map[uint64]error, partial bool, refresh bool) {
 
 	defer func() {
-		logging.Debugf("scatter: requestId %v items recieved %v items processed %v", c.requestId, c.ReceiveCount(), c.SendCount())
+		logging.Verbosef("scatter: requestId %v items recieved %v items processed %v", c.requestId, c.ReceiveCount(), c.SendCount())
 	}()
 
 	c.reset()
@@ -748,6 +758,21 @@ func (c *RequestBroker) scatterScan2(client []*GsiScanClient, index *common.Inde
 	for i, _ := range client {
 		<-donech_scatter[i]
 	}
+	logging.Debugf("RequestBroker.scatterScan2: requestId %v scatter done", c.requestId)
+
+	// Wait for gather to finish (all rows are sent to cbq)
+	if c.useGather() {
+		<-donech_gather
+	}
+	logging.Debugf("RequestBroker.scatterScan2: requestId %v gather done", c.requestId)
+
+	// if there is an error, wait for backfill done before retrying.
+	// This is to make sure the backfill goroutine will not interfere
+	// with retry execution.
+	if c.waiter != nil {
+		c.waiter()
+		logging.Debugf("RequestBroker.scatterScan2: requestId %v backfill done", c.requestId)
+	}
 
 	for i, _ := range client {
 		PutInPools(c.tmpbufs[i], c.tmpbufsPoolIdx[i])
@@ -918,7 +943,7 @@ func (c *RequestBroker) gather(donech chan bool) {
 	// initial sort
 	isSorted := false
 	for !isSorted {
-		if c.isClose() {
+		if c.IsClose() {
 			return
 		}
 
@@ -948,12 +973,14 @@ func (c *RequestBroker) gather(donech chan bool) {
 	for {
 		var id int
 
-		if c.isClose() {
+		if c.IsClose() {
 			return
 		}
 
 		id = c.pick(rows, sorted)
 		if id == Done {
+			// just to be safe.  Call c.done()
+			c.done()
 			return
 		}
 
@@ -1010,7 +1037,7 @@ func (c *RequestBroker) forward(donech chan bool) {
 	// least one row before streaming response back.
 	isSorted := false
 	for !isSorted {
-		if c.isClose() {
+		if c.IsClose() {
 			return
 		}
 
@@ -1038,7 +1065,7 @@ func (c *RequestBroker) forward(donech chan bool) {
 	}()
 
 	for {
-		if c.isClose() {
+		if c.IsClose() {
 			return
 		}
 
@@ -1083,6 +1110,8 @@ func (c *RequestBroker) forward(donech chan bool) {
 		}
 
 		if count == size {
+			// just to be safe.  Call c.done()
+			c.done()
 			return
 		}
 
@@ -1165,7 +1194,7 @@ func (c *RequestBroker) scanSingleNode(id ResponseHandlerId, client *GsiScanClie
 		// If there is any error, then stop the broker.
 		// This will force other go-routine to terminate.
 
-		c.Partial(partial)
+		//c.Partial(partial)
 		c.Error(err, instId, partition)
 
 	} else {
@@ -1215,6 +1244,10 @@ func (c *RequestBroker) countSingleNode(id ResponseHandlerId, client *GsiScanCli
 func (c *RequestBroker) SendEntries(id ResponseHandlerId, pkeys [][]byte,
 	skeys *common.ScanResultEntries) (bool, error) {
 
+	if c.IsClose() {
+		return false, nil
+	}
+
 	// StreamEndResponse has nil pkeys and nil skeys
 	if len(pkeys) == 0 && skeys.GetLength() == 0 {
 		if c.useGather() {
@@ -1222,10 +1255,6 @@ func (c *RequestBroker) SendEntries(id ResponseHandlerId, pkeys [][]byte,
 			r.last = true
 			c.queues[int(id)].Enqueue(&r)
 		}
-		return false, nil
-	}
-
-	if c.isClose() {
 		return false, nil
 	}
 
@@ -1290,7 +1319,7 @@ func (c *RequestBroker) SendEntries(id ResponseHandlerId, pkeys [][]byte,
 		c.queues[int(id)].NotifyEnq()
 	}
 
-	return !c.isClose(), nil
+	return !c.IsClose(), nil
 }
 
 //--------------------------
