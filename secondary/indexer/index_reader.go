@@ -76,7 +76,7 @@ type IndexReader interface {
 
 // Abstract context implemented by storage subsystem
 type IndexReaderContext interface {
-	Init()
+	Init(chan bool) bool
 	Done()
 	SetCursorKey(cur *[]byte)
 	GetCursorKey() *[]byte

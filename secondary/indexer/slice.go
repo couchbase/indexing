@@ -52,7 +52,8 @@ type cursorCtx struct {
 	cursor *[]byte
 }
 
-func (ctx *cursorCtx) Init() {
+func (ctx *cursorCtx) Init(donech chan bool) bool {
+	return true
 }
 
 func (ctx *cursorCtx) Done() {

@@ -377,8 +377,14 @@ type plasmaReaderCtx struct {
 	cursorCtx
 }
 
-func (ctx *plasmaReaderCtx) Init() {
-	ctx.r = <-ctx.ch
+func (ctx *plasmaReaderCtx) Init(donech chan bool) bool {
+	select {
+	case ctx.r = <-ctx.ch:
+		return true
+	case <-donech:
+	}
+
+	return false
 }
 
 func (ctx *plasmaReaderCtx) Done() {

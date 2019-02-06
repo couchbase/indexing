@@ -230,6 +230,14 @@ loop:
 			} else {
 				logging.Errorf("%v connection %q exited %v\n", s.logPrefix, raddr, err)
 			}
+
+			// With this, connection close or error becomes ClientCancelErr.  But this
+			// will ensure request will terminate if it is waiting for snapshot or
+			// reader context.  This allows connection to be closed on the server side
+			// without being blocked.
+			if currRequest.quitch != nil {
+				close(currRequest.quitch)
+			}
 			break loop
 		}
 
@@ -238,7 +246,15 @@ loop:
 			format := "%v connection %s client requested quit"
 			logging.Debugf(format, s.logPrefix, raddr)
 			close(currRequest.quitch)
+
+			// reset currRequest such that subsequent connection close will not try to
+			// close the quitch channel twice.
+			currRequest.quitch = nil
 		} else {
+			// Each queryport connection can only handle one client request at a time. Client must ensure that:
+			// 1) If there is network error (e.g. timeout), connection is not going to be reused.
+			// 2) If client cancel request, EndStreamRequest must be sent.
+			// 3) Connection is not reused until current client request is successfully finished or canceled.
 			currRequest = newRequest(reqMsg)
 			rcvch <- currRequest
 		}
