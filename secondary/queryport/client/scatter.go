@@ -88,6 +88,7 @@ type RequestBroker struct {
 	requestId   string
 	size        int64
 	concurrency int
+	retry       bool
 
 	// scatter/gather
 	queues   []*Queue
@@ -296,6 +297,17 @@ func (b *RequestBroker) SetProjection(projection *IndexProjection) {
 func (b *RequestBroker) SetIndexOrder(indexOrder *IndexKeyOrder) {
 
 	b.indexOrder = indexOrder
+}
+
+//
+// Retry
+//
+func (b *RequestBroker) SetRetry(retry bool) {
+	b.retry = retry
+}
+
+func (b *RequestBroker) DoRetry() bool {
+	return b.retry
 }
 
 //

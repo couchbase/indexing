@@ -92,7 +92,7 @@ func (c *GsiScanClient) Helo() (uint32, error) {
 		Version: proto.Uint32(uint32(protobuf.ProtobufVersion())),
 	}
 
-	resp, err := c.doRequestResponse(req, "")
+	resp, err := c.doRequestResponse(req, "", true)
 	if err != nil {
 		return 0, err
 	}
@@ -113,7 +113,7 @@ func (c *GsiScanClient) LookupStatistics(
 		DefnID: proto.Uint64(defnID),
 		Span:   &protobuf.Span{Equals: [][]byte{val}},
 	}
-	resp, err := c.doRequestResponse(req, "")
+	resp, err := c.doRequestResponse(req, "", true)
 	if err != nil {
 		return nil, err
 	}
@@ -148,7 +148,7 @@ func (c *GsiScanClient) RangeStatistics(
 			},
 		},
 	}
-	resp, err := c.doRequestResponse(req, "")
+	resp, err := c.doRequestResponse(req, "", true)
 	if err != nil {
 		return nil, err
 	}
@@ -168,7 +168,8 @@ func (c *GsiScanClient) Lookup(
 	callb ResponseHandler,
 	rollbackTime int64,
 	partitions []common.PartitionId,
-	dataEncFmt common.DataEncodingFormat) (error, bool) {
+	dataEncFmt common.DataEncodingFormat,
+	retry bool) (error, bool) {
 
 	// serialize lookup value.
 	equals := make([][]byte, 0, len(values))
@@ -179,22 +180,6 @@ func (c *GsiScanClient) Lookup(
 		}
 		equals = append(equals, val)
 	}
-
-	connectn, err := c.pool.Get()
-	if err != nil {
-		return err, false
-	}
-	healthy := true
-	closeStream := false
-	conn, pkt := connectn.conn, connectn.pkt
-	defer func() {
-		go func() {
-			if closeStream {
-				_, healthy = c.closeStream(conn, pkt, requestId)
-			}
-			c.pool.Return(connectn, healthy)
-		}()
-	}()
 
 	partnIds := make([]uint64, len(partitions))
 	for i, partnId := range partitions {
@@ -218,25 +203,73 @@ func (c *GsiScanClient) Lookup(
 			vector.Vbnos, vector.Seqnos, vector.Vbuuids, vector.Crc64)
 	}
 
-	// ---> protobuf.ScanRequest
-	if err := c.sendRequest(conn, pkt, req); err != nil {
-		fmsg := "%v Lookup(%v) request transport failed `%v`\n"
-		logging.Errorf(fmsg, c.logPrefix, requestId, err)
-		healthy = false
+	return c.doStreamingWithRetry(requestId, req, callb, "Lookup", retry)
+}
+
+func (c *GsiScanClient) doStreamingWithRetry(requestId string, req interface{}, callb ResponseHandler,
+	caller string, retry bool) (error, bool /*partial*/) {
+
+	partial, healthy, closeStream := false, true, false
+
+	connectn, err := c.pool.Get()
+	if err != nil {
 		return err, false
 	}
 
-	cont, partial := true, false
+	defer func() {
+		go func() {
+			if healthy && closeStream {
+				conn, pkt := connectn.conn, connectn.pkt
+				_, healthy = c.closeStream(conn, pkt, requestId)
+			}
+			c.pool.Return(connectn, healthy)
+		}()
+	}()
+
+	renew := func() bool {
+		var err1 error
+		connectn, err1 = c.pool.Renew(connectn)
+
+		if connectn != nil && err1 == nil {
+			logging.Verbosef("%v renew connection from %v to %v", requestId, connectn.conn.LocalAddr(), connectn.conn.RemoteAddr())
+		}
+
+		return err1 == nil
+	}
+
+STREAM_RETRY:
+
+	conn, pkt := connectn.conn, connectn.pkt
+
+	// ---> protobuf.ScanRequest
+	err = c.sendRequest(conn, pkt, req)
+	if isgone(err) && retry && renew() {
+		retry, healthy, closeStream = false, true, false
+		goto STREAM_RETRY
+	}
+	if err != nil {
+		fmsg := "%v %s request transport failed `%v`\n"
+		logging.Errorf(fmsg, c.logPrefix, requestId, err)
+		healthy = false
+		return err, partial
+	}
+
+	cont := true
 	for cont {
 		// <--- protobuf.ResponseStream
 		cont, healthy, err, closeStream = c.streamResponse(conn, pkt, callb, requestId)
+		if isgone(err) && !partial && retry && renew() {
+			retry, healthy, closeStream = false, true, false
+			goto STREAM_RETRY
+		}
 		if err != nil { // if err, cont should have been set to false
-			fmsg := "%v Lookup(%s) response failed `%v`\n"
-			logging.Errorf(fmsg, c.logPrefix, requestId, err)
+			fmsg := "%v %v(%v) response failed `%v`\n"
+			logging.Errorf(fmsg, c.logPrefix, caller, requestId, err)
 		} else { // partially succeeded
 			partial = true
 		}
 	}
+
 	return err, partial
 }
 
@@ -245,7 +278,7 @@ func (c *GsiScanClient) Range(
 	defnID uint64, requestId string, low, high common.SecondaryKey, inclusion Inclusion,
 	distinct bool, limit int64, cons common.Consistency, vector *TsConsistency,
 	callb ResponseHandler, rollbackTime int64, partitions []common.PartitionId,
-	dataEncFmt common.DataEncodingFormat) (error, bool) {
+	dataEncFmt common.DataEncodingFormat, retry bool) (error, bool) {
 
 	// serialize low and high values.
 	l, err := json.Marshal(low)
@@ -256,22 +289,6 @@ func (c *GsiScanClient) Range(
 	if err != nil {
 		return err, false
 	}
-
-	connectn, err := c.pool.Get()
-	if err != nil {
-		return err, false
-	}
-	healthy := true
-	closeStream := false
-	conn, pkt := connectn.conn, connectn.pkt
-	defer func() {
-		go func() {
-			if closeStream {
-				_, healthy = c.closeStream(conn, pkt, requestId)
-			}
-			c.pool.Return(connectn, healthy)
-		}()
-	}()
 
 	partnIds := make([]uint64, len(partitions))
 	for i, partnId := range partitions {
@@ -298,26 +315,8 @@ func (c *GsiScanClient) Range(
 		req.Vector = protobuf.NewTsConsistency(
 			vector.Vbnos, vector.Seqnos, vector.Vbuuids, vector.Crc64)
 	}
-	// ---> protobuf.ScanRequest
-	if err := c.sendRequest(conn, pkt, req); err != nil {
-		fmsg := "%v Range(%v) request transport failed `%v`\n"
-		logging.Errorf(fmsg, c.logPrefix, requestId, err)
-		healthy = false
-		return err, false
-	}
 
-	cont, partial := true, false
-	for cont {
-		// <--- protobuf.ResponseStream
-		cont, healthy, err, closeStream = c.streamResponse(conn, pkt, callb, requestId)
-		if err != nil { // if err, cont should have been set to false
-			fmsg := "%v Range(%v) response failed `%v`\n"
-			logging.Errorf(fmsg, c.logPrefix, requestId, err)
-		} else { // partial succeeded
-			partial = true
-		}
-	}
-	return err, partial
+	return c.doStreamingWithRetry(requestId, req, callb, "Range", retry)
 }
 
 // Range scan index between low and high.
@@ -325,23 +324,7 @@ func (c *GsiScanClient) RangePrimary(
 	defnID uint64, requestId string, low, high []byte, inclusion Inclusion,
 	distinct bool, limit int64, cons common.Consistency, vector *TsConsistency,
 	callb ResponseHandler, rollbackTime int64, partitions []common.PartitionId,
-	dataEncFmt common.DataEncodingFormat) (error, bool) {
-
-	connectn, err := c.pool.Get()
-	if err != nil {
-		return err, false
-	}
-	healthy := true
-	closeStream := false
-	conn, pkt := connectn.conn, connectn.pkt
-	defer func() {
-		go func() {
-			if closeStream {
-				_, healthy = c.closeStream(conn, pkt, requestId)
-			}
-			c.pool.Return(connectn, healthy)
-		}()
-	}()
+	dataEncFmt common.DataEncodingFormat, retry bool) (error, bool) {
 
 	partnIds := make([]uint64, len(partitions))
 	for i, partnId := range partitions {
@@ -369,26 +352,8 @@ func (c *GsiScanClient) RangePrimary(
 		req.Vector = protobuf.NewTsConsistency(
 			vector.Vbnos, vector.Seqnos, vector.Vbuuids, vector.Crc64)
 	}
-	// ---> protobuf.ScanRequest
-	if err := c.sendRequest(conn, pkt, req); err != nil {
-		fmsg := "%v RangePrimary(%v) request transport failed `%v`\n"
-		logging.Errorf(fmsg, c.logPrefix, requestId, err)
-		healthy = false
-		return err, false
-	}
 
-	cont, partial := true, false
-	for cont {
-		// <--- protobuf.ResponseStream
-		cont, healthy, err, closeStream = c.streamResponse(conn, pkt, callb, requestId)
-		if err != nil { // if err, cont should have been set to false
-			fmsg := "%v RangePrimary(%v) response failed `%v`\n"
-			logging.Errorf(fmsg, c.logPrefix, requestId, err)
-		} else {
-			partial = true
-		}
-	}
-	return err, partial
+	return c.doStreamingWithRetry(requestId, req, callb, "RangePrimary", retry)
 }
 
 // ScanAll for full table scan.
@@ -396,23 +361,7 @@ func (c *GsiScanClient) ScanAll(
 	defnID uint64, requestId string, limit int64,
 	cons common.Consistency, vector *TsConsistency,
 	callb ResponseHandler, rollbackTime int64, partitions []common.PartitionId,
-	dataEncFmt common.DataEncodingFormat) (error, bool) {
-
-	connectn, err := c.pool.Get()
-	if err != nil {
-		return err, false
-	}
-	healthy := true
-	closeStream := false
-	conn, pkt := connectn.conn, connectn.pkt
-	defer func() {
-		go func() {
-			if closeStream {
-				_, healthy = c.closeStream(conn, pkt, requestId)
-			}
-			c.pool.Return(connectn, healthy)
-		}()
-	}()
+	dataEncFmt common.DataEncodingFormat, retry bool) (error, bool) {
 
 	partnIds := make([]uint64, len(partitions))
 	for i, partnId := range partitions {
@@ -432,25 +381,8 @@ func (c *GsiScanClient) ScanAll(
 		req.Vector = protobuf.NewTsConsistency(
 			vector.Vbnos, vector.Seqnos, vector.Vbuuids, vector.Crc64)
 	}
-	if err := c.sendRequest(conn, pkt, req); err != nil {
-		fmsg := "%v ScanAll(%v) request transport failed `%v`\n"
-		logging.Errorf(fmsg, c.logPrefix, requestId, err)
-		healthy = false
-		return err, false
-	}
 
-	cont, partial := true, false
-	for cont {
-		// <--- protobuf.ResponseStream
-		cont, healthy, err, closeStream = c.streamResponse(conn, pkt, callb, requestId)
-		if err != nil { // if err, cont should have been set to false
-			fmsg := "%v ScanAll(%v) response failed `%v`\n"
-			logging.Errorf(fmsg, c.logPrefix, requestId, err)
-		} else {
-			partial = true
-		}
-	}
-	return err, partial
+	return c.doStreamingWithRetry(requestId, req, callb, "ScanAll", retry)
 }
 
 func (c *GsiScanClient) MultiScan(
@@ -458,7 +390,7 @@ func (c *GsiScanClient) MultiScan(
 	reverse, distinct bool, projection *IndexProjection, offset, limit int64,
 	cons common.Consistency, vector *TsConsistency,
 	callb ResponseHandler, rollbackTime int64, partitions []common.PartitionId,
-	dataEncFmt common.DataEncodingFormat) (error, bool) {
+	dataEncFmt common.DataEncodingFormat, retry bool) (error, bool) {
 
 	// serialize scans
 	protoScans := make([]*protobuf.Scan, len(scans))
@@ -522,22 +454,6 @@ func (c *GsiScanClient) MultiScan(
 		}
 	}
 
-	connectn, err := c.pool.Get()
-	if err != nil {
-		return err, false
-	}
-	healthy := true
-	closeStream := false
-	conn, pkt := connectn.conn, connectn.pkt
-	defer func() {
-		go func() {
-			if closeStream {
-				_, healthy = c.closeStream(conn, pkt, requestId)
-			}
-			c.pool.Return(connectn, healthy)
-		}()
-	}()
-
 	partnIds := make([]uint64, len(partitions))
 	for i, partnId := range partitions {
 		partnIds[i] = uint64(partnId)
@@ -565,26 +481,8 @@ func (c *GsiScanClient) MultiScan(
 		req.Vector = protobuf.NewTsConsistency(
 			vector.Vbnos, vector.Seqnos, vector.Vbuuids, vector.Crc64)
 	}
-	// ---> protobuf.ScanRequest
-	if err := c.sendRequest(conn, pkt, req); err != nil {
-		fmsg := "%v Range(%v) request transport failed `%v`\n"
-		logging.Errorf(fmsg, c.logPrefix, requestId, err)
-		healthy = false
-		return err, false
-	}
 
-	cont, partial := true, false
-	for cont {
-		// <--- protobuf.ResponseStream
-		cont, healthy, err, closeStream = c.streamResponse(conn, pkt, callb, requestId)
-		if err != nil { // if err, cont should have been set to false
-			fmsg := "%v Scans(%v) response failed `%v`\n"
-			logging.Errorf(fmsg, c.logPrefix, requestId, err)
-		} else { // partial succeeded
-			partial = true
-		}
-	}
-	return err, partial
+	return c.doStreamingWithRetry(requestId, req, callb, "MultiScan", retry)
 }
 
 func (c *GsiScanClient) MultiScanPrimary(
@@ -592,7 +490,7 @@ func (c *GsiScanClient) MultiScanPrimary(
 	reverse, distinct bool, projection *IndexProjection, offset, limit int64,
 	cons common.Consistency, vector *TsConsistency,
 	callb ResponseHandler, rollbackTime int64, partitions []common.PartitionId,
-	dataEncFmt common.DataEncodingFormat) (error, bool) {
+	dataEncFmt common.DataEncodingFormat, retry bool) (error, bool) {
 
 	var what string
 	// serialize scans
@@ -661,22 +559,6 @@ func (c *GsiScanClient) MultiScanPrimary(
 		}
 	}
 
-	connectn, err := c.pool.Get()
-	if err != nil {
-		return err, false
-	}
-	healthy := true
-	closeStream := false
-	conn, pkt := connectn.conn, connectn.pkt
-	defer func() {
-		go func() {
-			if closeStream {
-				_, healthy = c.closeStream(conn, pkt, requestId)
-			}
-			c.pool.Return(connectn, healthy)
-		}()
-	}()
-
 	partnIds := make([]uint64, len(partitions))
 	for i, partnId := range partitions {
 		partnIds[i] = uint64(partnId)
@@ -704,32 +586,14 @@ func (c *GsiScanClient) MultiScanPrimary(
 		req.Vector = protobuf.NewTsConsistency(
 			vector.Vbnos, vector.Seqnos, vector.Vbuuids, vector.Crc64)
 	}
-	// ---> protobuf.ScanRequest
-	if err := c.sendRequest(conn, pkt, req); err != nil {
-		fmsg := "%v Range(%v) request transport failed `%v`\n"
-		logging.Errorf(fmsg, c.logPrefix, requestId, err)
-		healthy = false
-		return err, false
-	}
 
-	cont, partial := true, false
-	for cont {
-		// <--- protobuf.ResponseStream
-		cont, healthy, err, closeStream = c.streamResponse(conn, pkt, callb, requestId)
-		if err != nil { // if err, cont should have been set to false
-			fmsg := "%v Scans(%v) response failed `%v`\n"
-			logging.Errorf(fmsg, c.logPrefix, requestId, err)
-		} else { // partial succeeded
-			partial = true
-		}
-	}
-	return err, partial
+	return c.doStreamingWithRetry(requestId, req, callb, "MultiScanPrimary", retry)
 }
 
 // CountLookup to count number entries for given set of keys.
 func (c *GsiScanClient) CountLookup(
 	defnID uint64, requestId string, values []common.SecondaryKey,
-	cons common.Consistency, vector *TsConsistency, rollbackTime int64, partitions []common.PartitionId) (int64, error) {
+	cons common.Consistency, vector *TsConsistency, rollbackTime int64, partitions []common.PartitionId, retry bool) (int64, error) {
 
 	// serialize match value.
 	equals := make([][]byte, 0, len(values))
@@ -758,7 +622,7 @@ func (c *GsiScanClient) CountLookup(
 		req.Vector = protobuf.NewTsConsistency(
 			vector.Vbnos, vector.Seqnos, vector.Vbuuids, vector.Crc64)
 	}
-	resp, err := c.doRequestResponse(req, requestId)
+	resp, err := c.doRequestResponse(req, requestId, retry)
 	if err != nil {
 		return 0, err
 	}
@@ -773,7 +637,7 @@ func (c *GsiScanClient) CountLookup(
 // CountLookup to count number entries for given set of keys for primary index
 func (c *GsiScanClient) CountLookupPrimary(
 	defnID uint64, requestId string, values [][]byte,
-	cons common.Consistency, vector *TsConsistency, rollbackTime int64, partitions []common.PartitionId) (int64, error) {
+	cons common.Consistency, vector *TsConsistency, rollbackTime int64, partitions []common.PartitionId, retry bool) (int64, error) {
 
 	partnIds := make([]uint64, len(partitions))
 	for i, partnId := range partitions {
@@ -792,7 +656,7 @@ func (c *GsiScanClient) CountLookupPrimary(
 		req.Vector = protobuf.NewTsConsistency(
 			vector.Vbnos, vector.Seqnos, vector.Vbuuids, vector.Crc64)
 	}
-	resp, err := c.doRequestResponse(req, requestId)
+	resp, err := c.doRequestResponse(req, requestId, retry)
 	if err != nil {
 		return 0, err
 	}
@@ -807,7 +671,7 @@ func (c *GsiScanClient) CountLookupPrimary(
 // CountRange to count number entries in the given range.
 func (c *GsiScanClient) CountRange(
 	defnID uint64, requestId string, low, high common.SecondaryKey, inclusion Inclusion,
-	cons common.Consistency, vector *TsConsistency, rollbackTime int64, partitions []common.PartitionId) (int64, error) {
+	cons common.Consistency, vector *TsConsistency, rollbackTime int64, partitions []common.PartitionId, retry bool) (int64, error) {
 
 	// serialize low and high values.
 	l, err := json.Marshal(low)
@@ -841,7 +705,7 @@ func (c *GsiScanClient) CountRange(
 			vector.Vbnos, vector.Seqnos, vector.Vbuuids, vector.Crc64)
 	}
 
-	resp, err := c.doRequestResponse(req, requestId)
+	resp, err := c.doRequestResponse(req, requestId, retry)
 	if err != nil {
 		return 0, err
 	}
@@ -856,7 +720,7 @@ func (c *GsiScanClient) CountRange(
 // CountRange to count number entries in the given range for primary index
 func (c *GsiScanClient) CountRangePrimary(
 	defnID uint64, requestId string, low, high []byte, inclusion Inclusion,
-	cons common.Consistency, vector *TsConsistency, rollbackTime int64, partitions []common.PartitionId) (int64, error) {
+	cons common.Consistency, vector *TsConsistency, rollbackTime int64, partitions []common.PartitionId, retry bool) (int64, error) {
 
 	partnIds := make([]uint64, len(partitions))
 	for i, partnId := range partitions {
@@ -880,7 +744,7 @@ func (c *GsiScanClient) CountRangePrimary(
 			vector.Vbnos, vector.Seqnos, vector.Vbuuids, vector.Crc64)
 	}
 
-	resp, err := c.doRequestResponse(req, requestId)
+	resp, err := c.doRequestResponse(req, requestId, retry)
 	if err != nil {
 		return 0, err
 	}
@@ -894,7 +758,7 @@ func (c *GsiScanClient) CountRangePrimary(
 
 func (c *GsiScanClient) MultiScanCount(
 	defnID uint64, requestId string, scans Scans, distinct bool,
-	cons common.Consistency, vector *TsConsistency, rollbackTime int64, partitions []common.PartitionId) (int64, error) {
+	cons common.Consistency, vector *TsConsistency, rollbackTime int64, partitions []common.PartitionId, retry bool) (int64, error) {
 
 	// serialize scans
 	protoScans := make([]*protobuf.Scan, len(scans))
@@ -971,7 +835,7 @@ func (c *GsiScanClient) MultiScanCount(
 			vector.Vbnos, vector.Seqnos, vector.Vbuuids, vector.Crc64)
 	}
 
-	resp, err := c.doRequestResponse(req, requestId)
+	resp, err := c.doRequestResponse(req, requestId, retry)
 	if err != nil {
 		return 0, err
 	}
@@ -985,7 +849,7 @@ func (c *GsiScanClient) MultiScanCount(
 
 func (c *GsiScanClient) MultiScanCountPrimary(
 	defnID uint64, requestId string, scans Scans, distinct bool,
-	cons common.Consistency, vector *TsConsistency, rollbackTime int64, partitions []common.PartitionId) (int64, error) {
+	cons common.Consistency, vector *TsConsistency, rollbackTime int64, partitions []common.PartitionId, retry bool) (int64, error) {
 
 	var what string
 	// serialize scans
@@ -1069,7 +933,7 @@ func (c *GsiScanClient) MultiScanCountPrimary(
 			vector.Vbnos, vector.Seqnos, vector.Vbuuids, vector.Crc64)
 	}
 
-	resp, err := c.doRequestResponse(req, requestId)
+	resp, err := c.doRequestResponse(req, requestId, retry)
 	if err != nil {
 		return 0, err
 	}
@@ -1087,7 +951,7 @@ func (c *GsiScanClient) Scan3(
 	groupAggr *GroupAggr, sorted bool,
 	cons common.Consistency, vector *TsConsistency,
 	callb ResponseHandler, rollbackTime int64, partitions []common.PartitionId,
-	dataEncFmt common.DataEncodingFormat) (error, bool) {
+	dataEncFmt common.DataEncodingFormat, retry bool) (error, bool) {
 
 	// serialize scans
 	protoScans := make([]*protobuf.Scan, len(scans))
@@ -1190,22 +1054,6 @@ func (c *GsiScanClient) Scan3(
 		}
 	}
 
-	connectn, err := c.pool.Get()
-	if err != nil {
-		return err, false
-	}
-	healthy := true
-	closeStream := false
-	conn, pkt := connectn.conn, connectn.pkt
-	defer func() {
-		go func() {
-			if closeStream {
-				_, healthy = c.closeStream(conn, pkt, requestId)
-			}
-			c.pool.Return(connectn, healthy)
-		}()
-	}()
-
 	partnIds := make([]uint64, len(partitions))
 	for i, partnId := range partitions {
 		partnIds[i] = uint64(partnId)
@@ -1234,26 +1082,8 @@ func (c *GsiScanClient) Scan3(
 		req.Vector = protobuf.NewTsConsistency(
 			vector.Vbnos, vector.Seqnos, vector.Vbuuids, vector.Crc64)
 	}
-	// ---> protobuf.ScanRequest
-	if err := c.sendRequest(conn, pkt, req); err != nil {
-		fmsg := "%v Range(%v) request transport failed `%v`\n"
-		logging.Errorf(fmsg, c.logPrefix, requestId, err)
-		healthy = false
-		return err, false
-	}
 
-	cont, partial := true, false
-	for cont {
-		// <--- protobuf.ResponseStream
-		cont, healthy, err, closeStream = c.streamResponse(conn, pkt, callb, requestId)
-		if err != nil { // if err, cont should have been set to false
-			fmsg := "%v Scans(%v) response failed `%v`\n"
-			logging.Errorf(fmsg, c.logPrefix, requestId, err)
-		} else { // partial succeeded
-			partial = true
-		}
-	}
-	return err, partial
+	return c.doStreamingWithRetry(requestId, req, callb, "Scan3", retry)
 }
 
 func (c *GsiScanClient) Scan3Primary(
@@ -1262,7 +1092,7 @@ func (c *GsiScanClient) Scan3Primary(
 	groupAggr *GroupAggr, sorted bool,
 	cons common.Consistency, vector *TsConsistency,
 	callb ResponseHandler, rollbackTime int64, partitions []common.PartitionId,
-	dataEncFmt common.DataEncodingFormat) (error, bool) {
+	dataEncFmt common.DataEncodingFormat, retry bool) (error, bool) {
 
 	var what string
 	// serialize scans
@@ -1369,22 +1199,6 @@ func (c *GsiScanClient) Scan3Primary(
 		}
 	}
 
-	connectn, err := c.pool.Get()
-	if err != nil {
-		return err, false
-	}
-	healthy := true
-	closeStream := false
-	conn, pkt := connectn.conn, connectn.pkt
-	defer func() {
-		go func() {
-			if closeStream {
-				_, healthy = c.closeStream(conn, pkt, requestId)
-			}
-			c.pool.Return(connectn, healthy)
-		}()
-	}()
-
 	partnIds := make([]uint64, len(partitions))
 	for i, partnId := range partitions {
 		partnIds[i] = uint64(partnId)
@@ -1413,26 +1227,8 @@ func (c *GsiScanClient) Scan3Primary(
 		req.Vector = protobuf.NewTsConsistency(
 			vector.Vbnos, vector.Seqnos, vector.Vbuuids, vector.Crc64)
 	}
-	// ---> protobuf.ScanRequest
-	if err := c.sendRequest(conn, pkt, req); err != nil {
-		fmsg := "%v Range(%v) request transport failed `%v`\n"
-		logging.Errorf(fmsg, c.logPrefix, requestId, err)
-		healthy = false
-		return err, false
-	}
 
-	cont, partial := true, false
-	for cont {
-		// <--- protobuf.ResponseStream
-		cont, healthy, err, closeStream = c.streamResponse(conn, pkt, callb, requestId)
-		if err != nil { // if err, cont should have been set to false
-			fmsg := "%v Scans(%v) response failed `%v`\n"
-			logging.Errorf(fmsg, c.logPrefix, requestId, err)
-		} else { // partial succeeded
-			partial = true
-		}
-	}
-	return err, partial
+	return c.doStreamingWithRetry(requestId, req, callb, "Scan3Primary", retry)
 }
 
 func (c *GsiScanClient) Close() error {
@@ -1440,7 +1236,7 @@ func (c *GsiScanClient) Close() error {
 }
 
 func (c *GsiScanClient) doRequestResponse(
-	req interface{}, requestId string) (interface{}, error) {
+	req interface{}, requestId string, retry bool) (interface{}, error) {
 
 	connectn, err := c.pool.Get()
 	if err != nil {
@@ -1449,10 +1245,25 @@ func (c *GsiScanClient) doRequestResponse(
 	healthy := true
 	defer func() { c.pool.Return(connectn, healthy) }()
 
+	renew := func() bool {
+		logging.Verbosef("%v renew connection %v", requestId, c.pool.host)
+
+		var err1 error
+		connectn, err1 = c.pool.Renew(connectn)
+		return err1 == nil
+	}
+
+REQUEST_RESPONSE_RETRY:
+
 	conn, pkt := connectn.conn, connectn.pkt
 
 	// ---> protobuf.*Request
-	if err := c.sendRequest(conn, pkt, req); err != nil {
+	err = c.sendRequest(conn, pkt, req)
+	if isgone(err) && retry && renew() {
+		retry = false
+		goto REQUEST_RESPONSE_RETRY
+	}
+	if err != nil {
 		fmsg := "%v %T(%v) request transport failed `%v`\n"
 		arg1 := logging.TagUD(req)
 		logging.Errorf(fmsg, c.logPrefix, arg1, requestId, err)
@@ -1464,6 +1275,10 @@ func (c *GsiScanClient) doRequestResponse(
 	c.trySetDeadline(conn, c.readDeadline)
 	// <--- protobuf.*Response
 	resp, err := pkt.Receive(conn)
+	if isgone(err) && retry && renew() {
+		retry = false
+		goto REQUEST_RESPONSE_RETRY
+	}
 	if err != nil {
 		fmsg := "%v req(%v) connection %v response %T transport failed `%v`\n"
 		arg1 := logging.TagUD(req)
@@ -1474,7 +1289,12 @@ func (c *GsiScanClient) doRequestResponse(
 
 	c.trySetDeadline(conn, c.readDeadline)
 	// <--- protobuf.StreamEndResponse (skipped) TODO: knock this off.
-	if endResp, err := pkt.Receive(conn); err != nil {
+	endResp, err := pkt.Receive(conn)
+	if isgone(err) && retry && renew() {
+		retry = false
+		goto REQUEST_RESPONSE_RETRY
+	}
+	if err != nil {
 		fmsg := "%v req(%v) connection %v response %T transport failed `%v`\n"
 		arg1 := logging.TagUD(req)
 		logging.Errorf(fmsg, c.logPrefix, requestId, laddr, arg1, err)
@@ -1555,6 +1375,7 @@ func (c *GsiScanClient) closeStream(
 		healthy = false
 		return
 	}
+
 	fmsg := "%v req(%v) connection %q transmitted protobuf.EndStreamRequest"
 	logging.Tracef(fmsg, c.logPrefix, requestId, laddr)
 

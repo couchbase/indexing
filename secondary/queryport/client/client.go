@@ -649,7 +649,7 @@ func (c *GsiClient) LookupInternal(
 		}
 		return qc.Lookup(
 			uint64(index.DefnId), requestId, values, distinct, broker.GetLimit(), cons,
-			vector, callb, rollbackTime, partitions, dataEncFmt)
+			vector, callb, rollbackTime, partitions, dataEncFmt, broker.DoRetry())
 	}
 
 	broker.SetScanRequestHandler(handler)
@@ -722,13 +722,13 @@ func (c *GsiClient) RangeInternal(
 			return qc.RangePrimary(
 				uint64(index.DefnId), requestId, l, h, inclusion, distinct,
 				broker.GetLimit(), cons, vector, handler, rollbackTime,
-				partitions, dataEncFmt)
+				partitions, dataEncFmt, broker.DoRetry())
 		}
 		// dealing with secondary index.
 		return qc.Range(
 			uint64(index.DefnId), requestId, low, high, inclusion, distinct,
 			broker.GetLimit(), cons, vector, handler, rollbackTime, partitions,
-			dataEncFmt)
+			dataEncFmt, broker.DoRetry())
 	}
 
 	broker.SetScanRequestHandler(handler)
@@ -783,7 +783,7 @@ func (c *GsiClient) ScanAllInternal(
 			return err, false
 		}
 		return qc.ScanAll(uint64(index.DefnId), requestId, broker.GetLimit(),
-			cons, vector, handler, rollbackTime, partitions, dataEncFmt)
+			cons, vector, handler, rollbackTime, partitions, dataEncFmt, broker.DoRetry())
 	}
 
 	broker.SetScanRequestHandler(handler)
@@ -842,13 +842,13 @@ func (c *GsiClient) MultiScanInternal(
 			return qc.MultiScanPrimary(
 				uint64(index.DefnId), requestId, scans, reverse, distinct,
 				projection, broker.GetOffset(), broker.GetLimit(), cons,
-				vector, handler, rollbackTime, partitions, dataEncFmt)
+				vector, handler, rollbackTime, partitions, dataEncFmt, broker.DoRetry())
 		}
 
 		return qc.MultiScan(
 			uint64(index.DefnId), requestId, scans, reverse, distinct,
 			projection, broker.GetOffset(), broker.GetLimit(), cons, vector,
-			handler, rollbackTime, partitions, dataEncFmt)
+			handler, rollbackTime, partitions, dataEncFmt, broker.DoRetry())
 	}
 
 	broker.SetScanRequestHandler(handler)
@@ -912,11 +912,11 @@ func (c *GsiClient) CountLookupInternal(
 			}
 
 			count, err = qc.CountLookupPrimary(
-				uint64(index.DefnId), requestId, equals, cons, vector, rollbackTime, partitions)
+				uint64(index.DefnId), requestId, equals, cons, vector, rollbackTime, partitions, broker.DoRetry())
 			return count, err, false
 		}
 
-		count, err = qc.CountLookup(uint64(index.DefnId), requestId, values, cons, vector, rollbackTime, partitions)
+		count, err = qc.CountLookup(uint64(index.DefnId), requestId, values, cons, vector, rollbackTime, partitions, broker.DoRetry())
 		return count, err, false
 	}
 
@@ -982,12 +982,12 @@ func (c *GsiClient) CountRangeInternal(
 				}
 			}
 			count, err = qc.CountRangePrimary(
-				uint64(index.DefnId), requestId, l, h, inclusion, cons, vector, rollbackTime, partitions)
+				uint64(index.DefnId), requestId, l, h, inclusion, cons, vector, rollbackTime, partitions, broker.DoRetry())
 			return count, err, false
 		}
 
 		count, err = qc.CountRange(
-			uint64(index.DefnId), requestId, low, high, inclusion, cons, vector, rollbackTime, partitions)
+			uint64(index.DefnId), requestId, low, high, inclusion, cons, vector, rollbackTime, partitions, broker.DoRetry())
 		return count, err, false
 	}
 
@@ -1036,12 +1036,12 @@ func (c *GsiClient) MultiScanCountInternal(
 		}
 		if c.bridge.IsPrimary(uint64(index.DefnId)) {
 			count, err = qc.MultiScanCountPrimary(
-				uint64(index.DefnId), requestId, scans, distinct, cons, vector, rollbackTime, partitions)
+				uint64(index.DefnId), requestId, scans, distinct, cons, vector, rollbackTime, partitions, broker.DoRetry())
 			return count, err, false
 		}
 
 		count, err = qc.MultiScanCount(
-			uint64(index.DefnId), requestId, scans, distinct, cons, vector, rollbackTime, partitions)
+			uint64(index.DefnId), requestId, scans, distinct, cons, vector, rollbackTime, partitions, broker.DoRetry())
 		return count, err, false
 	}
 
@@ -1101,14 +1101,14 @@ func (c *GsiClient) Scan3Internal(
 				uint64(index.DefnId), requestId, scans, reverse, distinct,
 				projection, broker.GetOffset(), broker.GetLimit(), groupAggr,
 				broker.GetSorted(), cons, vector, handler, rollbackTime,
-				partitions, dataEncFmt)
+				partitions, dataEncFmt, broker.DoRetry())
 		}
 
 		return qc.Scan3(
 			uint64(index.DefnId), requestId, scans, reverse, distinct,
 			projection, broker.GetOffset(), broker.GetLimit(), groupAggr,
 			broker.GetSorted(), cons, vector, handler, rollbackTime,
-			partitions, dataEncFmt)
+			partitions, dataEncFmt, broker.DoRetry())
 	}
 
 	broker.SetScanRequestHandler(handler)
@@ -1233,9 +1233,6 @@ func (c *GsiClient) updateExcludes(defnID uint64, excludes map[common.IndexDefnI
 		excludes[defnId] = make(map[common.PartitionId]map[uint64]bool)
 	}
 
-	// num of replica or equivalent index (including self)
-	numReplica := c.bridge.NumReplica(defnID)
-
 	for partnId, instErrMap := range errMap {
 		for instId, err := range instErrMap {
 			if !isgone(err) {
@@ -1243,8 +1240,8 @@ func (c *GsiClient) updateExcludes(defnID uint64, excludes map[common.IndexDefnI
 					excludes[defnId][partnId] = make(map[uint64]bool)
 				}
 				excludes[defnId][partnId][instId] = true
-			} else if numReplica > 1 {
-				// if it is EOF error and there is replica, then
+			} else {
+				// if it is network error, then
 				// exclude all partitions on all replicas
 				// residing on the failed node.
 
@@ -1306,7 +1303,6 @@ func (c *GsiClient) doScan(defnID uint64, requestId string, broker *RequestBroke
 
 	wait := c.config["retryIntervalScanport"].Int()
 	retry := c.config["retryScanPort"].Int()
-	evictRetry := c.config["settings.poolSize"].Int()
 	for i := 0; true; {
 		foundScanport := false
 
@@ -1330,11 +1326,6 @@ func (c *GsiClient) doScan(defnID uint64, requestId string, broker *RequestBroke
 					// partially succeeded scans, we don't reset-hash and we don't retry
 					return 0, getScanError(scan_errs)
 
-				} else if isAnyGone(scan_errs) && evictRetry > 0 {
-					logging.Warnf("evict retry (%v)...\n", evictRetry)
-					evictRetry--
-					continue
-
 				} else { // TODO: make this error message precise
 					// reset the hash so that we do a full STATS for next query.
 					c.setBucketHash(index.Bucket, 0)
@@ -1351,8 +1342,8 @@ func (c *GsiClient) doScan(defnID uint64, requestId string, broker *RequestBroke
 
 		// If there is an error coming from indexer that cannot serve the scan request
 		// (including io error), then exclude this defnID and retry with another replica.
-		// If we exhaust all the replica, then GetScanport() will return ok1=false.
-		if foundScanport && evictRetry > 0 {
+		// If we exhaust all the replica, then GetScanport() will return ok=false.
+		if foundScanport {
 			logging.Warnf(
 				"Scan failed with error for index %v.  Trying scan again with replica, reqId:%v : %v ...\n",
 				defnID, requestId, err)
@@ -1364,6 +1355,7 @@ func (c *GsiClient) doScan(defnID uint64, requestId string, broker *RequestBroke
 		if i = i + 1; i < retry {
 			excludes = nil
 			skips = make(map[common.IndexDefnId]bool)
+			broker.SetRetry(true)
 			logging.Warnf(
 				"Fail to find indexers to satisfy query request.  Trying scan again for index %v, reqId:%v : %v ...\n",
 				defnID, requestId, err)
@@ -1627,6 +1619,10 @@ func isAnyGone(scan_err map[common.PartitionId]map[uint64]error) bool {
 }
 
 func isgone(scan_err error) bool {
+	if scan_err == nil {
+		return false
+	}
+
 	// if indexer crash in the middle of scan, it can return EOF
 	// if a scan is sent to a already crashed indexer, it will return connection refused
 	if scan_err == io.EOF {

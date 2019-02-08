@@ -186,13 +186,25 @@ func (cp *connectionPool) GetWithTimeout(d time.Duration) (connectn *connection,
 	}
 }
 
+func (cp *connectionPool) Renew(conn *connection) (*connection, error) {
+
+	newConn, err := cp.mkConn(cp.host)
+	if err == nil {
+		logging.Infof("%v closing unhealthy connection %q\n", cp.logPrefix, conn.conn.LocalAddr())
+		conn.conn.Close()
+		conn = newConn
+	}
+
+	return conn, err
+}
+
 func (cp *connectionPool) Get() (*connection, error) {
 	return cp.GetWithTimeout(cp.timeout * time.Millisecond)
 }
 
 func (cp *connectionPool) Return(connectn *connection, healthy bool) {
 	defer atomic.AddInt32(&cp.curActConns, -1)
-	if connectn.conn == nil {
+	if connectn == nil || connectn.conn == nil {
 		return
 	}
 
