@@ -25,6 +25,7 @@ const openConnFlag = uint32(0x1)
 const includeXATTR = uint32(0x4)
 const dcpJSON = uint8(0x1)
 const dcpXATTR = uint8(0x4)
+const bufferAckPeriod = 20
 
 // error codes
 var ErrorInvalidLog = errors.New("couchbase.errorInvalidLog")
@@ -47,9 +48,10 @@ type DcpFeed struct {
 	finch     chan bool
 	logPrefix string
 	// stats
-	toAckBytes  uint32   // bytes client has read
-	maxAckBytes uint32   // Max buffer control ack bytes
-	stats       DcpStats // Stats for dcp client
+	toAckBytes  uint32    // bytes client has read
+	maxAckBytes uint32    // Max buffer control ack bytes
+	lastAckTime time.Time // last time when BufferAck was sent
+	stats       DcpStats  // Stats for dcp client
 	dcplatency  *Average
 }
 
@@ -74,6 +76,7 @@ func NewDcpFeed(
 	mc.Hijack()
 	feed.conn = mc
 	rcvch := make(chan []interface{}, dataChanSize)
+	feed.lastAckTime = time.Now()
 	go feed.genServer(opaque, feed.reqch, feed.finch, rcvch, config)
 	go feed.doReceive(rcvch, feed.finch, mc)
 	logging.Infof("%v ##%x feed started ...", feed.logPrefix, opaque)
@@ -771,8 +774,7 @@ func (feed *DcpFeed) sendBufferAck(sendAck bool, bytes uint32) {
 	prefix := feed.logPrefix
 	if sendAck {
 		totalBytes := feed.toAckBytes + bytes
-		if totalBytes > feed.maxAckBytes {
-			feed.toAckBytes = 0
+		if totalBytes > feed.maxAckBytes || time.Since(feed.lastAckTime).Seconds() > bufferAckPeriod {
 			bufferAck := &transport.MCRequest{
 				Opcode: transport.DCP_BUFFERACK,
 			}
@@ -780,10 +782,14 @@ func (feed *DcpFeed) sendBufferAck(sendAck bool, bytes uint32) {
 			binary.BigEndian.PutUint32(bufferAck.Extras[:4], uint32(totalBytes))
 			feed.stats.TotalBufferAckSent++
 			if err := feed.conn.Transmit(bufferAck); err != nil {
-				logging.Errorf("%v NOOP.Transmit(): %v", prefix, err)
+				logging.Errorf("%v NOOP.Transmit(): %v, lastAckTime: %v", prefix, err, feed.lastAckTime.UnixNano())
 
 			} else {
-				logging.Tracef("%v buffer-ack %v\n", prefix, totalBytes)
+				// Reset the counters only on a successful BufferAck
+				feed.toAckBytes = 0
+				feed.lastAckTime = time.Now()
+				feed.stats.LastAckTime = feed.lastAckTime.UnixNano()
+				logging.Tracef("%v buffer-ack %v, lastAckTime: %v\n", prefix, totalBytes, feed.lastAckTime.UnixNano())
 			}
 		} else {
 			feed.toAckBytes += bytes
@@ -954,15 +960,17 @@ type DcpStats struct {
 	TotalCloseStream   uint64
 	TotalStreamEnd     uint64
 	TotalSpurious      uint64
+	LastAckTime        int64
 }
 
 func (stats *DcpStats) String(feed *DcpFeed) string {
 	return fmt.Sprintf(
 		"bytes: %v buffacks: %v toAckBytes: %v streamreqs: %v "+
-			"snapshots: %v mutations: %v streamends: %v closestreams: %v",
+			"snapshots: %v mutations: %v streamends: %v closestreams: %v "+
+			"lastAckTime: %v",
 		stats.TotalBytes, stats.TotalBufferAckSent, feed.toAckBytes,
 		stats.TotalStreamReq, stats.TotalSnapShot, stats.TotalMutation,
-		stats.TotalStreamEnd, stats.TotalCloseStream,
+		stats.TotalStreamEnd, stats.TotalCloseStream, stats.LastAckTime,
 	)
 }
 
