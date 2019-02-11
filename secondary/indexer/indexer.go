@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"io/ioutil"
+	"math"
 	"net"
 	"net/http"
 	"os"
@@ -271,7 +272,8 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 
 	//Start Scan Coordinator
 	snapshotNotifych := make(chan IndexSnapshot, 100)
-	idx.scanCoord, res = NewScanCoordinator(idx.scanCoordCmdCh, idx.wrkrRecvCh, idx.config, snapshotNotifych)
+	idx.scanCoord, res = NewScanCoordinator(idx.scanCoordCmdCh, idx.wrkrRecvCh,
+		idx.config, snapshotNotifych, idx.stats.Clone())
 	if res.GetMsgType() != MSG_SUCCESS {
 		logging.Fatalf("Indexer::NewIndexer Scan Coordinator Init Error %+v", res)
 		return nil, res
@@ -905,7 +907,7 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		idx.tkCmdCh <- msg
 		<-idx.tkCmdCh
 
-	case INDEX_STATS_DONE:
+	case INDEX_STATS_DONE, INDEX_STATS_BROADCAST:
 		idx.clustMgrAgentCmdCh <- msg
 		<-idx.clustMgrAgentCmdCh
 
@@ -960,6 +962,13 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 
 	case STATS_READ_PERSISTED_STATS:
 		idx.handleReadPersistedStats(msg)
+
+	case UPDATE_MAP_WORKER:
+		idx.handleUpdateMapToWorker(msg)
+
+	case STORAGE_UPDATE_SNAP_MAP:
+		idx.storageMgrCmdCh <- msg
+		<-idx.storageMgrCmdCh
 
 	default:
 		logging.Fatalf("Indexer::handleWorkerMsgs Unknown Message %+v", msg)
@@ -4701,13 +4710,6 @@ func (idx *indexer) bootstrap1(snapshotNotifych chan IndexSnapshot) error {
 	needsRestart := idx.upgradeStorage()
 
 	go func() {
-		//Recover indexes from local metadata.
-		err := idx.initFromPersistedState()
-		if err != nil {
-			idx.internalRecvCh <- &MsgStorageWarmupDone{err: err, needsRestart: needsRestart}
-			return
-		}
-
 		//Start Storage Manager
 		var res Message
 		idx.storageMgr, res = NewStorageManager(idx.storageMgrCmdCh, idx.wrkrRecvCh,
@@ -4716,6 +4718,13 @@ func (idx *indexer) bootstrap1(snapshotNotifych chan IndexSnapshot) error {
 			err := res.(*MsgError).GetError()
 			logging.Fatalf("Indexer::NewIndexer Storage Manager Init Error %v", err)
 			idx.internalRecvCh <- &MsgStorageWarmupDone{err: err.cause, needsRestart: needsRestart}
+			return
+		}
+
+		//Recover indexes from local metadata.
+		err := idx.initFromPersistedState()
+		if err != nil {
+			idx.internalRecvCh <- &MsgStorageWarmupDone{err: err, needsRestart: needsRestart}
 			return
 		}
 
@@ -4933,6 +4942,22 @@ func (idx *indexer) recoverRebalanceState() {
 	logging.Infof("Indexer::recoverRebalanceState RebalanceRunning %v RebalanceToken %v", idx.rebalanceRunning, idx.rebalanceToken)
 }
 
+func (idx *indexer) handleUpdateMapToWorker(msg Message) {
+	req := msg.(*MsgUpdateWorker)
+	workerCh := req.GetWorkerCh()
+	workerStr := req.GetWorkerStr()
+	instMap := req.GetIndexInstMap()
+	partnMap := req.GetIndexPartnMap()
+	respCh := req.GetRespCh()
+
+	//send updated maps
+	msgUpdateIndexInstMap := idx.newIndexInstMsg(instMap)
+	msgUpdateIndexPartnMap := &MsgUpdatePartnMap{indexPartnMap: partnMap}
+
+	err := idx.sendUpdatedIndexMapToWorker(msgUpdateIndexInstMap, msgUpdateIndexPartnMap, workerCh, workerStr)
+	respCh <- err
+}
+
 func (idx *indexer) genIndexerId() {
 
 	if idx.enableManager {
@@ -5012,6 +5037,10 @@ func (idx *indexer) initFromPersistedState() error {
 	// need to be populated with values from persistence store
 	idx.updateStatsFromPersistence()
 
+	stats := idx.stats.Clone()
+	localIndexInstMap := make(common.IndexInstMap)
+	localIndexPartnMap := make(IndexPartnMap)
+
 	for _, inst := range idx.indexInstMap {
 		//allocate partition/slice
 		var partnInstMap PartitionInstMap
@@ -5046,10 +5075,34 @@ func (idx *indexer) initFromPersistedState() error {
 
 		idx.indexInstMap[inst.InstId] = inst
 		idx.indexPartnMap[inst.InstId] = partnInstMap
+
+		localIndexInstMap[inst.InstId] = inst
+		localIndexPartnMap[inst.InstId] = partnInstMap
+
+		//update index maps in storage manager
+		err = idx.sendInstMapToWorker(idx.storageMgrCmdCh, "StorageMgr", localIndexInstMap, localIndexPartnMap)
+		if err != nil { // continue in case of error
+			continue
+		}
+
+		idx.internalRecvCh <- &MsgUpdateSnapMap{
+			idxInstId: inst.InstId,
+			idxInst:   inst,
+			partnMap:  partnInstMap,
+			streamId:  common.ALL_STREAMS,
+			bucket:    "",
+		}
+
+		//update index maps in scan coordinator
+		err = idx.sendInstMapToWorker(idx.scanCoordCmdCh, "ScanCoordinator", localIndexInstMap, localIndexPartnMap)
+		if err != nil { // continue in case of error
+			continue
+		}
+
+		idx.broadcastBootstrapStats(stats, inst.InstId)
 	}
 
 	return nil
-
 }
 
 // Send a message to stats manager to retrieve stats from
@@ -5062,6 +5115,37 @@ func (idx *indexer) updateStatsFromPersistence() {
 		respCh: respCh}
 	<-respCh
 
+}
+
+func (idx *indexer) sendInstMapToWorker(wCh MsgChannel, wStr string,
+	instMap common.IndexInstMap, partnMap IndexPartnMap) error {
+
+	respCh := make(chan error)
+	idx.internalRecvCh <- &MsgUpdateWorker{
+		workerCh:      wCh,
+		workerStr:     wStr,
+		indexInstMap:  instMap,
+		indexPartnMap: partnMap,
+		respCh:        respCh,
+	}
+	err := <-respCh
+	return err
+}
+
+// broadcast stats to clients
+func (idx *indexer) broadcastBootstrapStats(stats *IndexerStats,
+	id common.IndexInstId) {
+
+	idxStats := stats.indexes[id]
+	idxStats.numDocsPending.Set(math.MaxInt64)
+	idxStats.numDocsQueued.Set(math.MaxInt64)
+	idxStats.lastRollbackTime.Set(time.Now().UnixNano())
+	idxStats.progressStatTime.Set(time.Now().UnixNano())
+	notifyStats := stats.GetStats(false, false)
+	idx.internalRecvCh <- &MsgStatsRequest{
+		mType: INDEX_STATS_BROADCAST,
+		stats: notifyStats,
+	}
 }
 
 // "move" the data files from original location to backup location.
