@@ -205,7 +205,8 @@ func (ie *IndexEvaluator) StreamEndData(
 // TransformRoute implement Evaluator{} interface.
 func (ie *IndexEvaluator) TransformRoute(
 	vbuuid uint64, m *mc.DcpEvent, data map[string]interface{}, encodeBuf []byte,
-	docval qvalue.AnnotatedValue, context qexpr.Context, meta map[string]interface{}) ([]byte, error) {
+	docval qvalue.AnnotatedValue, context qexpr.Context, meta map[string]interface{},
+	numIndexes int) ([]byte, error) {
 
 	var err error
 	defer func() { // panic safe
@@ -286,7 +287,7 @@ func (ie *IndexEvaluator) TransformRoute(
 				for _, raddr := range raddrs {
 					dkv, ok := data[raddr].(*c.DataportKeyVersions)
 					if !ok {
-						kv := c.NewKeyVersions(seqno, m.Key, 4, m.Ctime)
+						kv := c.NewKeyVersions(seqno, m.Key, numIndexes, m.Ctime)
 						kv.AddUpsert(uuid, nkey, okey, npkey)
 						dkv = &c.DataportKeyVersions{bucket, vbno, vbuuid, kv}
 					} else {
@@ -301,7 +302,7 @@ func (ie *IndexEvaluator) TransformRoute(
 				for _, raddr := range raddrs {
 					dkv, ok := data[raddr].(*c.DataportKeyVersions)
 					if !ok {
-						kv := c.NewKeyVersions(seqno, m.Key, 4, m.Ctime)
+						kv := c.NewKeyVersions(seqno, m.Key, numIndexes, m.Ctime)
 						kv.AddUpsertDeletion(uuid, okey, npkey)
 						dkv = &c.DataportKeyVersions{bucket, vbno, vbuuid, kv}
 					} else {
@@ -317,7 +318,7 @@ func (ie *IndexEvaluator) TransformRoute(
 			for _, raddr := range raddrs {
 				dkv, ok := data[raddr].(*c.DataportKeyVersions)
 				if !ok {
-					kv := c.NewKeyVersions(seqno, m.Key, 4, m.Ctime)
+					kv := c.NewKeyVersions(seqno, m.Key, numIndexes, m.Ctime)
 					kv.AddUpsertDeletion(uuid, okey, npkey)
 					dkv = &c.DataportKeyVersions{bucket, vbno, vbuuid, kv}
 				} else {
@@ -334,7 +335,7 @@ func (ie *IndexEvaluator) TransformRoute(
 		for _, raddr := range raddrs {
 			dkv, ok := data[raddr].(*c.DataportKeyVersions)
 			if !ok {
-				kv := c.NewKeyVersions(seqno, m.Key, 4, m.Ctime)
+				kv := c.NewKeyVersions(seqno, m.Key, numIndexes, m.Ctime)
 				kv.AddDeletion(uuid, okey, npkey)
 				dkv = &c.DataportKeyVersions{bucket, vbno, vbuuid, kv}
 			} else {

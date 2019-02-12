@@ -27,5 +27,6 @@ type Evaluator interface {
 	TransformRoute(
 		vbuuid uint64, m *mc.DcpEvent, data map[string]interface{}, encodeBuf []byte,
 		docval qvalue.AnnotatedValue, context qexpr.Context, meta map[string]interface{},
+		numIndexes int,
 	) ([]byte, error)
 }
