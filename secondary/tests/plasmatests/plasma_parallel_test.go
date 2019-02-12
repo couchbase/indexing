@@ -901,19 +901,19 @@ func randomGenerator(c *Context) (arr []int) {
 
 func getPlasmaDiagnostics() (backStore int, mainStore int) {
 	reader := strings.NewReader(`{"Cmd":"listDBs"}`)
-	request, err := http.NewRequest("POST", "http://0:8080/plasmaDiag", reader)
+	request, err := http.NewRequest("POST", "http://127.0.0.1:8080/plasmaDiag", reader)
 	common.CrashOnError(err)
 	request.Header.Set("Content-Type", "application/json")
-	client := http.Client{Timeout: time.Duration(10 * time.Second)}
+	client := http.Client{Timeout: time.Duration(60 * time.Second)}
 	resp, err1 := client.Do(request)
 	common.CrashOnError(err1)
 	responseData, err := ioutil.ReadAll(resp.Body)
 	responseString := string(responseData)
 	fmt.Println(responseString)
-	re := regexp.MustCompile(`Backstore\s+:\s+(\d+)`)
+	re := regexp.MustCompile(`Backstore#.+\s(\d+)`)
 	match := re.FindStringSubmatch(responseString)
 	backStor, _ := strconv.Atoi(match[1])
-	re = regexp.MustCompile(`Mainstore\s+:\s+(\d+)`)
+	re = regexp.MustCompile(`Mainstore#.+\s(\d+)`)
 	match = re.FindStringSubmatch(responseString)
 	mainStor, _ := strconv.Atoi(match[1])
 	return backStor, mainStor
@@ -941,19 +941,19 @@ func rebalancePageSizes(wg *sync.WaitGroup, backStore int, mainStore int, iterat
 		var jsonMainStore string = `{"Cmd": "rebalance"` + `,` + `"Args": [` + strconv.Itoa(mainStore) + `,` + string1 + `]}`
 		readerBackStore := strings.NewReader(jsonBackStore)
 		readerMainStore := strings.NewReader(jsonMainStore)
-		request, err := http.NewRequest("POST", "http://0:8080/plasmaDiag", readerBackStore)
+		request, err := http.NewRequest("POST", "http://127.0.0.1:8080/plasmaDiag", readerBackStore)
 		common.CrashOnError(err)
 		request.Header.Set("Content-Type", "application/json")
-		client := http.Client{Timeout: time.Duration(100 * time.Second)}
+		client := http.Client{Timeout: time.Duration(300 * time.Second)}
 		resp, err1 := client.Do(request)
 		common.CrashOnError(err1)
 		responseData, err := ioutil.ReadAll(resp.Body)
 		responseString := string(responseData)
 		fmt.Println(responseString)
-		request, err = http.NewRequest("POST", "http://0:8080/plasmaDiag", readerMainStore)
+		request, err = http.NewRequest("POST", "http://127.0.0.1:8080/plasmaDiag", readerMainStore)
 		common.CrashOnError(err)
 		request.Header.Set("Content-Type", "application/json")
-		client = http.Client{Timeout: time.Duration(100 * time.Second)}
+		client = http.Client{Timeout: time.Duration(300 * time.Second)}
 		resp, err1 = client.Do(request)
 		common.CrashOnError(err1)
 		responseData, err = ioutil.ReadAll(resp.Body)

@@ -296,9 +296,37 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, ctx interface{}, 
 	}()
 
 	if len(req.Ctxs) != 0 {
+		var err error
+		donech := make(chan bool)
+
+		go func() {
+			select {
+			case <-req.getTimeoutCh():
+				err = common.ErrScanTimedOut
+				close(donech)
+			case <-req.CancelCh:
+				err = common.ErrClientCancel
+				close(donech)
+			case <-donech:
+			}
+		}()
+
+		numCtxs := 0
 		for _, ctx := range req.Ctxs {
-			ctx.Init()
+			if !ctx.Init(donech) {
+				break
+			}
+			numCtxs++
 		}
+
+		if s.tryRespondWithError(w, req, err) {
+			for i := 0; i < numCtxs; i++ {
+				req.Ctxs[i].Done()
+			}
+			return
+		}
+
+		close(donech)
 	}
 
 	s.processRequest(req, w, is, t0)
@@ -526,6 +554,9 @@ func (s *scanCoordinator) getRequestedIndexSnapshot(r *ScanRequest) (snap IndexS
 	case <-r.getTimeoutCh():
 		go readDeallocSnapshot(snapResch)
 		msg = common.ErrScanTimedOut
+	case <-r.CancelCh:
+		go readDeallocSnapshot(snapResch)
+		msg = common.ErrClientCancel
 	}
 
 	switch msg.(type) {
