@@ -49,7 +49,7 @@ func GetIndexerNodesHttpAddresses(hostaddress string) ([]string, error) {
 
 func GetStatsForIndexerHttpAddress(indexerHttpAddr, serverUserName, serverPassword string) map[string]interface{} {
 	client := &http.Client{}
-	address := "http://" + indexerHttpAddr + "/stats"
+	address := "http://" + indexerHttpAddr + "/stats?async=false"
 
 	req, _ := http.NewRequest("GET", address, nil)
 	req.SetBasicAuth(serverUserName, serverPassword)

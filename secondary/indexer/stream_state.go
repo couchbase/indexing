@@ -37,6 +37,7 @@ type StreamState struct {
 	streamBucketLastSnapMarker    map[common.StreamId]BucketLastSnapMarker
 
 	streamBucketLastSnapAlignFlushedTsMap map[common.StreamId]BucketLastFlushedTsMap
+	streamBucketPrevVbuuidTs              map[common.StreamId]BucketPrevVbuuidTs
 
 	streamBucketRestartVbErrMap   map[common.StreamId]BucketRestartVbErrMap
 	streamBucketRestartVbTsMap    map[common.StreamId]BucketRestartVbTsMap
@@ -65,6 +66,7 @@ type BucketNeedsCommitMap map[string]bool
 type BucketHasBuildCompTSMap map[string]bool
 type BucketNewTsReqdMap map[string]bool
 type BucketLastSnapMarker map[string]*common.TsVbuuid
+type BucketPrevVbuuidTs map[string]*common.TsVbuuid
 
 type BucketTsListMap map[string]*list.List
 type BucketFlushInProgressTsMap map[string]*common.TsVbuuid
@@ -116,6 +118,7 @@ func InitStreamState(config common.Config) *StreamState {
 		streamBucketLastPersistTime:           make(map[common.StreamId]BucketLastPersistTime),
 		streamBucketSkippedInMemTs:            make(map[common.StreamId]BucketSkippedInMemTs),
 		streamBucketLastSnapMarker:            make(map[common.StreamId]BucketLastSnapMarker),
+		streamBucketPrevVbuuidTs:              make(map[common.StreamId]BucketPrevVbuuidTs),
 		bucketRollbackTime:                    make(map[string]int64),
 	}
 
@@ -204,6 +207,9 @@ func (ss *StreamState) initNewStream(streamId common.StreamId) {
 	bucketLastSnapMarker := make(BucketLastSnapMarker)
 	ss.streamBucketLastSnapMarker[streamId] = bucketLastSnapMarker
 
+	bucketPrevVbuuidTs := make(BucketPrevVbuuidTs)
+	ss.streamBucketPrevVbuuidTs[streamId] = bucketPrevVbuuidTs
+
 	ss.streamStatus[streamId] = STREAM_ACTIVE
 
 }
@@ -237,6 +243,7 @@ func (ss *StreamState) initBucketInStream(streamId common.StreamId,
 	ss.streamBucketStartTimeMap[streamId][bucket] = uint64(0)
 	ss.streamBucketSkippedInMemTs[streamId][bucket] = 0
 	ss.streamBucketLastSnapMarker[streamId][bucket] = common.NewTsVbuuid(bucket, numVbuckets)
+	ss.streamBucketPrevVbuuidTs[streamId][bucket] = common.NewTsVbuuid(bucket, numVbuckets)
 
 	ss.streamBucketStatus[streamId][bucket] = STREAM_ACTIVE
 
@@ -276,6 +283,7 @@ func (ss *StreamState) cleanupBucketFromStream(streamId common.StreamId,
 	delete(ss.streamBucketOpenTsMap[streamId], bucket)
 	delete(ss.streamBucketStartTimeMap[streamId], bucket)
 	delete(ss.streamBucketLastSnapMarker[streamId], bucket)
+	delete(ss.streamBucketPrevVbuuidTs[streamId], bucket)
 	delete(ss.streamBucketSkippedInMemTs[streamId], bucket)
 
 	ss.streamBucketStatus[streamId][bucket] = STREAM_INACTIVE
@@ -312,6 +320,7 @@ func (ss *StreamState) resetStreamState(streamId common.StreamId) {
 	delete(ss.streamBucketStartTimeMap, streamId)
 	delete(ss.streamBucketSkippedInMemTs, streamId)
 	delete(ss.streamBucketLastSnapMarker, streamId)
+	delete(ss.streamBucketPrevVbuuidTs, streamId)
 
 	ss.streamStatus[streamId] = STREAM_INACTIVE
 
@@ -408,6 +417,8 @@ func (ss *StreamState) setHWTFromRestartTs(streamId common.StreamId,
 			ss.streamBucketLastFlushedTsMap[streamId][bucket] = restartTs.Copy()
 			logging.Verbosef("StreamState::setHWTFromRestartTs HWT Set For "+
 				"Bucket %v StreamId %v. TS %v.", bucket, streamId, restartTs)
+
+			ss.streamBucketPrevVbuuidTs[streamId][bucket] = restartTs.Copy()
 
 		} else {
 			logging.Warnf("StreamState::setHWTFromRestartTs RestartTs Not Found For "+
@@ -985,4 +996,51 @@ func (ss *StreamState) disableSnapAlignForPendingTs(streamId common.StreamId, bu
 		logging.Infof("StreamState::disableSnapAlignForPendingTs Stream %v Bucket %v Disabled Snap Align for %v TS", streamId, bucket, disableCount)
 
 	}
+}
+
+func (ss *StreamState) updatePrevVbuuid(streamId common.StreamId, bucket string,
+	fts *common.TsVbuuid, lts *common.TsVbuuid) {
+
+	if lts == nil {
+		ss.streamBucketPrevVbuuidTs[streamId][bucket] = fts.Copy()
+		return
+	}
+
+	pts := ss.streamBucketPrevVbuuidTs[streamId][bucket]
+	for i, vbuuid := range pts.Vbuuids {
+		if vbuuid == 0 || fts.Vbuuids[i] != lts.Vbuuids[i] {
+			pts.Vbuuids[i] = lts.Vbuuids[i]
+			pts.Seqnos[i] = lts.Seqnos[i]
+		}
+
+	}
+}
+
+//if there is a different vbuuid for the same seqno, use that to
+//retry dcp stream request in case of rollback. this scenario could
+//happen if a node fails over and we have more recent vbuuid than
+//kv replica
+func (ss *StreamState) computeRetryTs(streamId common.StreamId,
+	bucket string, restartTs *common.TsVbuuid) *common.TsVbuuid {
+
+	var retryTs *common.TsVbuuid
+
+	if pts, ok := ss.streamBucketPrevVbuuidTs[streamId][bucket]; ok && pts != nil {
+
+		retryTs = restartTs.Copy()
+		valid := false
+
+		for i, _ := range pts.Vbuuids {
+			if retryTs.Seqnos[i] == pts.Seqnos[i] &&
+				retryTs.Vbuuids[i] != pts.Vbuuids[i] {
+				retryTs.Vbuuids[i] = pts.Vbuuids[i]
+				valid = true
+			}
+		}
+		if !valid {
+			retryTs = nil
+		}
+	}
+
+	return retryTs
 }

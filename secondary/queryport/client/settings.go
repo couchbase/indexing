@@ -34,15 +34,17 @@ type ClientSettings struct {
 	storageMode string
 	mutex       sync.RWMutex
 
-	needRefresh bool
+	needRefresh          bool
+	allowCJsonScanFormat uint32
 }
 
 func NewClientSettings(needRefresh bool) *ClientSettings {
 
 	s := &ClientSettings{
-		config:      nil,
-		cancelCh:    make(chan struct{}, 1),
-		needRefresh: needRefresh,
+		config:               nil,
+		cancelCh:             make(chan struct{}, 1),
+		needRefresh:          needRefresh,
+		allowCJsonScanFormat: 1, // Initialize to default config value
 	}
 
 	if needRefresh {
@@ -158,6 +160,19 @@ func (s *ClientSettings) handleSettings(config common.Config) {
 		logging.Errorf("ClientSettings: invalid setting value for max_concurrency=%v", concurrency)
 	}
 
+	allowCJsonScanFormat, ok := config["queryport.client.allowCJsonScanFormat"]
+	if ok {
+		if allowCJsonScanFormat.Bool() {
+			atomic.StoreUint32(&s.allowCJsonScanFormat, 1)
+		} else {
+			atomic.StoreUint32(&s.allowCJsonScanFormat, 0)
+		}
+	} else {
+		// Use default config value on error
+		logging.Errorf("ClientSettings: missing allowCJsonScanFormat")
+		atomic.StoreUint32(&s.allowCJsonScanFormat, 1)
+	}
+
 	storageMode := config["indexer.settings.storage_mode"].String()
 	if len(storageMode) != 0 {
 		func() {
@@ -216,4 +231,8 @@ func (s *ClientSettings) ScanQueueSize() uint64 {
 
 func (s *ClientSettings) MaxConcurrency() uint32 {
 	return atomic.LoadUint32(&s.concurrency)
+}
+
+func (s *ClientSettings) AllowCJsonScanFormat() bool {
+	return atomic.LoadUint32(&s.allowCJsonScanFormat) == 1
 }
