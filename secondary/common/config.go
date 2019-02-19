@@ -410,6 +410,14 @@ var SystemConfig = Config{
 		true,  // immutable
 		false, // case-insensitive
 	},
+	// indexer encryption
+	"indexer.encryption.encryptLocalhost": ConfigValue{
+		false,
+		"enable encryption on local host",
+		false,
+		true,  // immutable
+		false, // case-insensitive
+	},
 	// indexer dataport parameters
 	"indexer.dataport.genServerChanSize": ConfigValue{
 		1024,

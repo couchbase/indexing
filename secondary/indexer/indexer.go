@@ -38,6 +38,7 @@ import (
 	"github.com/couchbase/indexing/secondary/memdb"
 	"github.com/couchbase/indexing/secondary/memdb/nodetable"
 	projClient "github.com/couchbase/indexing/secondary/projector/client"
+	"github.com/couchbase/indexing/secondary/security"
 	"github.com/couchbase/indexing/secondary/stubs/nitro/mm"
 	"github.com/couchbase/indexing/secondary/stubs/nitro/plasma"
 )
@@ -244,6 +245,18 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		return nil, res
 	}
 
+	//Initialize security context
+	err := idx.initSecurityContext()
+	if err != nil {
+		idxErr := Error{
+			code:     ERROR_INDEXER_INTERNAL_ERROR,
+			severity: FATAL,
+			cause:    err,
+			category: INDEXER,
+		}
+		return nil, &MsgError{err: idxErr}
+	}
+
 	idx.stats = NewIndexerStats()
 	idx.initFromConfig()
 
@@ -343,6 +356,50 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 
 	return idx, &MsgSuccess{}
 
+}
+
+func (idx *indexer) initSecurityContext() error {
+
+	certFile := idx.config["certFile"].String()
+	keyFile := idx.config["keyFile"].String()
+	clusterAddr := idx.config["clusterAddr"].String()
+	encryptLocalHost := idx.config["encryption.encryptLocalhost"].Bool()
+	logger := func(err error) { common.Console(clusterAddr, err.Error()) }
+	if err := security.InitSecurityContext(logger, clusterAddr, certFile, keyFile, encryptLocalHost); err != nil {
+		return err
+	}
+
+	return refreshSecurityContextOnTopology(clusterAddr)
+}
+
+func refreshSecurityContextOnTopology(clusterAddr string) error {
+
+	fn := func(r int, e error) error {
+		var cinfo *common.ClusterInfoCache
+		url, err := common.ClusterAuthUrl(clusterAddr)
+		if err != nil {
+			return err
+		}
+
+		cinfo, err = common.NewClusterInfoCache(url, DEFAULT_POOL)
+		if err != nil {
+			return err
+		}
+
+		cinfo.Lock()
+		defer cinfo.Unlock()
+
+		if err := cinfo.Fetch(); err != nil {
+			return err
+		}
+
+		security.SetEncryptPortMapping(cinfo.EncryptPortMapping())
+
+		return nil
+	}
+
+	helper := common.NewRetryHelper(10, time.Second, 1, fn)
+	return helper.Run()
 }
 
 func (idx *indexer) initFromConfig() {
