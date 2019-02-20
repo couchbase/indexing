@@ -39,6 +39,7 @@ import (
 	l "github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager"
 	"github.com/couchbase/indexing/secondary/manager/client"
+	"github.com/couchbase/indexing/secondary/security"
 )
 
 //RebalanceMgr manages the integration with ns-server and
@@ -2870,43 +2871,13 @@ func (m *ServiceMgr) getLocalHttpAddr() string {
 }
 
 func getWithAuth(url string) (*http.Response, error) {
-
-	if !strings.HasPrefix(url, "http://") {
-		url = "http://" + url
-	}
-
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return nil, err
-	}
-	err = cbauth.SetRequestAuthVia(req, nil)
-	if err != nil {
-		l.Errorf("ServiceMgr::getWithAuth Error setting auth %v", err)
-	}
-
-	client := http.Client{Timeout: time.Duration(rebalanceHttpTimeout) * time.Second}
-	return client.Do(req)
+	params := &security.RequestParams{Timeout: time.Duration(rebalanceHttpTimeout) * time.Second}
+	return security.GetWithAuth(url, params)
 }
 
 func postWithAuth(url string, bodyType string, body io.Reader) (*http.Response, error) {
-
-	if !strings.HasPrefix(url, "http://") {
-		url = "http://" + url
-	}
-
-	req, err := http.NewRequest("POST", url, body)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", bodyType)
-	err = cbauth.SetRequestAuthVia(req, nil)
-	if err != nil {
-		l.Errorf("ServiceMgr::postWithAuth Error setting auth %v", err)
-		return nil, err
-	}
-
-	client := http.Client{Timeout: time.Duration(rebalanceHttpTimeout) * time.Second}
-	return client.Do(req)
+	params := &security.RequestParams{Timeout: time.Duration(rebalanceHttpTimeout) * time.Second}
+	return security.PostWithAuth(url, bodyType, body, params)
 }
 
 func sendIndexResponseWithError(status int, w http.ResponseWriter, msg string) {

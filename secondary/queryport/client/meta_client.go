@@ -17,9 +17,8 @@ import "math"
 import "strconv"
 import "sort"
 
-import "github.com/couchbase/cbauth"
-
 import "github.com/couchbase/indexing/secondary/logging"
+import "github.com/couchbase/indexing/secondary/security"
 import common "github.com/couchbase/indexing/secondary/common"
 import mclient "github.com/couchbase/indexing/secondary/manager/client"
 
@@ -1933,22 +1932,6 @@ func (b *metadataClient) watchClusterChanges() {
 }
 
 func postWithAuth(url string, bodyType string, body io.Reader, timeout time.Duration) (*http.Response, error) {
-
-	if !strings.HasPrefix(url, "http://") {
-		url = "http://" + url
-	}
-
-	req, err := http.NewRequest("POST", url, body)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", bodyType)
-	err = cbauth.SetRequestAuthVia(req, nil)
-	if err != nil {
-		logging.Errorf("Error setting auth %v", err)
-		return nil, err
-	}
-
-	client := http.Client{Timeout: timeout}
-	return client.Do(req)
+	params := &security.RequestParams{Timeout: time.Duration(timeout) * time.Second}
+	return security.PostWithAuth(url, bodyType, body, params)
 }

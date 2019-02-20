@@ -15,6 +15,7 @@ import "bytes"
 import "io/ioutil"
 import "net/http"
 import "strings"
+import "github.com/couchbase/indexing/secondary/security"
 
 // httpClient is a concrete type implementing Client interface.
 type httpClient struct {
@@ -24,15 +25,21 @@ type httpClient struct {
 }
 
 // NewHTTPClient returns a new instance of Client over HTTP.
-func NewHTTPClient(listenAddr, urlPrefix string) Client {
+func NewHTTPClient(listenAddr, urlPrefix string) (Client, error) {
 	if !strings.HasPrefix(listenAddr, "http://") {
 		listenAddr = "http://" + listenAddr
 	}
+
+	client, err := security.MakeClient(listenAddr)
+	if err != nil {
+		return nil, err
+	}
+
 	return &httpClient{
 		serverAddr: listenAddr,
 		urlPrefix:  urlPrefix,
-		httpc:      http.DefaultClient,
-	}
+		httpc:      client,
+	}, nil
 }
 
 // Request is part of `Client` interface
@@ -46,13 +53,20 @@ func (c *httpClient) Request(msg, resp MessageMarshaller) (err error) {
 		// create request
 		bodybuf := bytes.NewBuffer(body)
 		url := c.serverAddr + c.urlPrefix + msg.Name()
-		req, err := http.NewRequest("POST", url, bodybuf)
+
+		surl, err := security.GetURL(url)
+		if err != nil {
+			return nil, err
+		}
+
+		req, err := http.NewRequest("POST", surl.String(), bodybuf)
 		if err != nil {
 			return nil, err
 		}
 		req.Header.Add("Content-Type", msg.ContentType())
 		// POST request and return back the response
 		return c.httpc.Do(req)
+
 	}, resp)
 }
 

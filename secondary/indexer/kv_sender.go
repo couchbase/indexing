@@ -283,8 +283,11 @@ func (k *kvSender) openMutationStream(streamId c.StreamId, indexInstList []c.Ind
 		for _, addr := range addrs {
 
 			execWithStopCh(func() {
-				ap := newProjClient(addr)
-				if res, ret := k.sendMutationTopicRequest(ap, topic, restartTsList, protoInstList); ret != nil {
+				if ap, ret := newProjClient(addr); ret != nil {
+					logging.Errorf("KVSender::openMutationStream %v %v Error %v when creating HTTP client to %v",
+						streamId, bucket, ret, addr)
+					err = ret
+				} else if res, ret := k.sendMutationTopicRequest(ap, topic, restartTsList, protoInstList); ret != nil {
 					//for all errors, retry
 					logging.Errorf("KVSender::openMutationStream %v %v Error Received %v from %v",
 						streamId, bucket, ret, addr)
@@ -380,9 +383,11 @@ func (k *kvSender) restartVbuckets(streamId c.StreamId, restartTs *c.TsVbuuid,
 
 		for _, addr := range addrs {
 			aborted = execWithStopCh(func() {
-				ap := newProjClient(addr)
-
-				if res, ret := k.sendRestartVbuckets(ap, topic, connErrVbs, protoRestartTs); ret != nil {
+				if ap, ret := newProjClient(addr); ret != nil {
+					logging.Errorf("KVSender::restartVbuckets %v %v Error %v when creating HTTP client to %v",
+						streamId, restartTs.Bucket, ret, addr)
+					err = ret
+				} else if res, ret := k.sendRestartVbuckets(ap, topic, connErrVbs, protoRestartTs); ret != nil {
 					//retry for all errors
 					logging.Errorf("KVSender::restartVbuckets %v %v Error Received %v from %v",
 						streamId, restartTs.Bucket, ret, addr)
@@ -462,8 +467,11 @@ func (k *kvSender) addIndexForExistingBucket(streamId c.StreamId, bucket string,
 		err = nil
 		for _, addr := range addrs {
 			execWithStopCh(func() {
-				ap := newProjClient(addr)
-				if res, ret := sendAddInstancesRequest(ap, topic, protoInstList); ret != nil {
+				if ap, ret := newProjClient(addr); ret != nil {
+					logging.Errorf("KVSender::addIndexForExistingBucket %v %v Error %v when creating HTTP client to %v",
+						streamId, bucket, ret, addr)
+					err = ret
+				} else if res, ret := sendAddInstancesRequest(ap, topic, protoInstList); ret != nil {
 					logging.Errorf("KVSender::addIndexForExistingBucket %v %v Error Received %v from %v",
 						streamId, bucket, ret, addr)
 					err = ret
@@ -531,8 +539,11 @@ func (k *kvSender) deleteIndexesFromStream(streamId c.StreamId, indexInstList []
 		err = nil
 		for _, addr := range addrs {
 			execWithStopCh(func() {
-				ap := newProjClient(addr)
-				if ret := sendDelInstancesRequest(ap, topic, uuids); ret != nil {
+				if ap, ret := newProjClient(addr); ret != nil {
+					logging.Errorf("KVSender::deleteIndexesFromStream %v %v Error %v when creating HTTP client to %v",
+						streamId, indexInstList[0].Defn.Bucket, ret, addr)
+					err = ret
+				} else if ret := sendDelInstancesRequest(ap, topic, uuids); ret != nil {
 					logging.Errorf("KVSender::deleteIndexesFromStream %v %v Error Received %v from %v",
 						streamId, indexInstList[0].Defn.Bucket, ret, addr)
 					//Treat TopicMissing/GenServer.Closed/InvalidBucket as success
@@ -587,8 +598,11 @@ func (k *kvSender) deleteBucketsFromStream(streamId c.StreamId, buckets []string
 		err = nil
 		for _, addr := range addrs {
 			execWithStopCh(func() {
-				ap := newProjClient(addr)
-				if ret := sendDelBucketsRequest(ap, topic, buckets); ret != nil {
+				if ap, ret := newProjClient(addr); ret != nil {
+					logging.Errorf("KVSender::deleteBucketsFromStream %v %v Error %v when creating HTTP client to %v",
+						streamId, buckets[0], ret, addr)
+					err = ret
+				} else if ret := sendDelBucketsRequest(ap, topic, buckets); ret != nil {
 					logging.Errorf("KVSender::deleteBucketsFromStream %v %v Error Received %v from %v",
 						streamId, buckets[0], ret, addr)
 					//Treat TopicMissing/GenServer.Closed as success
@@ -642,8 +656,11 @@ func (k *kvSender) closeMutationStream(streamId c.StreamId, bucket string,
 		err = nil
 		for _, addr := range addrs {
 			execWithStopCh(func() {
-				ap := newProjClient(addr)
-				if ret := sendShutdownTopic(ap, topic); ret != nil {
+				if ap, ret := newProjClient(addr); ret != nil {
+					logging.Errorf("KVSender::closeMutationStream %v %v Error %v when creating HTTP client to %v",
+						streamId, bucket, ret, addr)
+					err = ret
+				} else if ret := sendShutdownTopic(ap, topic); ret != nil {
 					logging.Errorf("KVSender::closeMutationStream %v %v Error Received %v from %v",
 						streamId, bucket, ret, addr)
 					//Treat TopicMissing/GenServer.Closed as success
@@ -985,6 +1002,7 @@ func (k *kvSender) getFailoverLogs(bucket string,
 	vbnos []uint32) (*protobuf.FailoverLogResponse, error) {
 
 	var err error
+	var client *projClient.Client
 	var res *protobuf.FailoverLogResponse
 
 	addrs, err := k.getAllProjectorAddrs()
@@ -995,7 +1013,13 @@ func (k *kvSender) getFailoverLogs(bucket string,
 loop:
 	for _, addr := range addrs {
 		//create client for node's projectors
-		client := newProjClient(addr)
+		client, err = newProjClient(addr)
+		if err != nil {
+			logging.Errorf("KVSender::getFailoverlogs %v Error %v when creating HTTP client to %v",
+				bucket, err, addr)
+			continue
+		}
+
 		if res, err = client.GetFailoverLogs(DEFAULT_POOL, bucket, vbnos); err == nil {
 			break loop
 		}
@@ -1003,8 +1027,10 @@ loop:
 
 	if logging.IsEnabled(logging.Debug) {
 		s := ""
-		for _, l := range res.GetLogs() {
-			s += fmt.Sprintf("\t%v\n", l)
+		if res != nil {
+			for _, l := range res.GetLogs() {
+				s += fmt.Sprintf("\t%v\n", l)
+			}
 		}
 		logging.Debugf("KVSender::getFailoverLogs Failover Log Response Error %v \n%v", err, s)
 	}
@@ -1272,7 +1298,7 @@ func addPartnInfoToProtoInst(cfg c.Config, cinfo *c.ClusterInfoCache,
 }
 
 //create client for node's projectors
-func newProjClient(addr string) *projClient.Client {
+func newProjClient(addr string) (*projClient.Client, error) {
 
 	config := c.SystemConfig.SectionConfig("indexer.projectorclient.", true)
 	config.SetValue("retryInterval", 0) //no retry

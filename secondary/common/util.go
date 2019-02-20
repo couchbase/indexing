@@ -26,6 +26,7 @@ import "github.com/couchbase/cbauth/cbauthimpl"
 import "github.com/couchbase/indexing/secondary/dcp"
 import "github.com/couchbase/indexing/secondary/dcp/transport/client"
 import "github.com/couchbase/indexing/secondary/logging"
+import "github.com/couchbase/indexing/secondary/security"
 
 const IndexNamePattern = "^[A-Za-z0-9#_-]+$"
 
@@ -806,15 +807,9 @@ func Console(clusterAddr string, format string, v ...interface{}) error {
 	}
 	clusterAddr += "/_log"
 
-	req, err := http.NewRequest("POST", clusterAddr, reader)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	cbauth.SetRequestAuthVia(req, nil)
-
-	client := http.Client{Timeout: time.Duration(10 * time.Second)}
-	_, err = client.Do(req)
+	params := &security.RequestParams{Timeout: time.Duration(10) * time.Second}
+	res, err := security.PostWithAuth(clusterAddr, "application/x-www-form-urlencoded", reader, params)
+	res.Body.Close()
 
 	return err
 }

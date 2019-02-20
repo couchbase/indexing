@@ -16,6 +16,7 @@ import "os"
 
 import "github.com/couchbase/cbauth"
 import "github.com/couchbase/indexing/secondary/logging"
+import "github.com/couchbase/indexing/secondary/security"
 import c "github.com/couchbase/indexing/secondary/common"
 import mclient "github.com/couchbase/indexing/secondary/manager/client"
 import qclient "github.com/couchbase/indexing/secondary/queryport/client"
@@ -418,7 +419,6 @@ func HandleCommand(
 		}
 		host, sport, _ := net.SplitHostPort(adminurl)
 		iport, _ := strconv.Atoi(sport)
-		client := http.Client{}
 
 		//
 		// hack, fix this
@@ -426,7 +426,17 @@ func HandleCommand(
 		ihttp := iport + 2
 		url := "http://" + host + ":" + strconv.Itoa(ihttp) + "/settings"
 
-		oreq, err := http.NewRequest("GET", url, nil)
+		surl, err := security.GetURL(url)
+		if err != nil {
+			return err
+		}
+
+		client, err := security.MakeClient(surl.String())
+		if err != nil {
+			return err
+		}
+
+		oreq, err := http.NewRequest("GET", surl.String(), nil)
 		if cmd.Auth != "" {
 			up := strings.Split(cmd.Auth, ":")
 			oreq.SetBasicAuth(up[0], up[1])
@@ -459,7 +469,7 @@ func HandleCommand(
 			if err != nil {
 				return err
 			}
-			preq, err := http.NewRequest("POST", url, bytes.NewBuffer(pbody))
+			preq, err := http.NewRequest("POST", surl.String(), bytes.NewBuffer(pbody))
 			if cmd.Auth != "" {
 				up := strings.Split(cmd.Auth, ":")
 				preq.SetBasicAuth(up[0], up[1])
