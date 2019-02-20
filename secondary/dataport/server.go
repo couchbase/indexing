@@ -62,6 +62,7 @@ import c "github.com/couchbase/indexing/secondary/common"
 import protobuf "github.com/couchbase/indexing/secondary/protobuf/data"
 import "github.com/couchbase/indexing/secondary/transport"
 import "github.com/couchbase/indexing/secondary/logging"
+import "github.com/couchbase/indexing/secondary/security"
 
 // Error codes
 
@@ -167,7 +168,8 @@ func NewServer(
 		readDeadline: time.Duration(config["tcpReadDeadline"].Int()),
 	}
 	s.logPrefix = fmt.Sprintf("DATP[->dataport %q]", laddr)
-	if s.lis, err = net.Listen("tcp", laddr); err != nil {
+
+	if s.lis, err = security.MakeListener(laddr); err != nil {
 		logging.Errorf("%v failed starting! %v\n", s.logPrefix, err)
 		return nil, err
 	}

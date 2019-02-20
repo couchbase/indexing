@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/security"
 
 	c "github.com/couchbase/indexing/secondary/common"
 
@@ -79,7 +80,7 @@ func NewServer(
 	}
 	keepAliveInterval := config["keepAliveInterval"].Int()
 	s.keepAliveInterval = time.Duration(keepAliveInterval) * time.Second
-	if s.lis, err = net.Listen("tcp", laddr); err != nil {
+	if s.lis, err = security.MakeListener(laddr); err != nil {
 		logging.Errorf("%v failed starting %v !!\n", s.logPrefix, err)
 		return nil, err
 	}
@@ -129,7 +130,7 @@ func (s *Server) listener() {
 
 		if s.lis != nil { // if s.lis == nil, then Server.Close() was called
 			s.lis.Close()
-			if s.lis, err = net.Listen("tcp", s.laddr); err != nil {
+			if s.lis, err = security.MakeListener(s.laddr); err != nil {
 				logging.Errorf("%v failed starting %v !!\n", s.logPrefix, err)
 				panic(err)
 			}

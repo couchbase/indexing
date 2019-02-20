@@ -11,8 +11,6 @@ package indexer
 
 import (
 	"bytes"
-	"crypto/tls"
-	"crypto/x509"
 	"encoding/gob"
 	"encoding/json"
 	"errors"
@@ -30,7 +28,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/couchbase/cbauth"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/fdb"
 	"github.com/couchbase/indexing/secondary/logging"
@@ -484,75 +481,46 @@ func (idx *indexer) initHttpServer() {
 		}
 	}()
 
-	sslPort := idx.config["httpsPort"].String()
-	if sslPort != "" {
-		certFile := idx.config["certFile"].String()
-		keyFile := idx.config["keyFile"].String()
+	if security.EncryptionEnabled() {
+
+		sslPort := idx.config["httpsPort"].String()
+		if len(sslPort) == 0 {
+			logging.Fatalf("indexer:: ssl port is missing")
+			return
+		}
+
 		sslAddr := net.JoinHostPort("", sslPort)
 
 		var reload bool = false
 		var tlslsnr *net.Listener = nil
 
-		cbauth.RegisterTLSRefreshCallback(func() error {
-			if tlslsnr != nil {
-				reload = true
-				(*tlslsnr).Close()
-			}
-			return nil
-		})
+		security.RegisterCallback("indexer.initHttpServer",
+			func() error {
+				if tlslsnr != nil {
+					reload = true
+					(*tlslsnr).Close()
+				}
+				return nil
+			})
 
 		go func() {
 			for {
-				cert, err := tls.LoadX509KeyPair(certFile, keyFile)
-				if err != nil {
-					logging.Fatalf("indexer:: Error in loading SSL certificate: %v", err)
-					return
-				}
-
-				clientAuthType, err := cbauth.GetClientCertAuthType()
-				if err != nil {
-					logging.Fatalf("indexer:: Failed to get client cert auth type from cbauth, err: %v", err)
-					return
-				}
-
-				cbauthTLScfg, err1 := cbauth.GetTLSConfig()
-				if err1 != nil {
-					logging.Errorf("Error in getting cbauth tls config: %v", err1.Error())
-					return
-				}
-
-				config := &tls.Config{
-					Certificates:             []tls.Certificate{cert},
-					CipherSuites:             cbauthTLScfg.CipherSuites,
-					MinVersion:               cbauthTLScfg.MinVersion,
-					PreferServerCipherSuites: cbauthTLScfg.PreferServerCipherSuites,
-					ClientAuth:               clientAuthType,
-				}
-
-				if clientAuthType != tls.NoClientCert {
-					caCert, err := ioutil.ReadFile(certFile)
-					if err != nil {
-						logging.Fatalf("indexer:: Error in reading cacert file, err: %v", err)
-						return
-					}
-					caCertPool := x509.NewCertPool()
-					caCertPool.AppendCertsFromPEM(caCert)
-					config.ClientCAs = caCertPool
-				}
-
 				// allow only strong ssl as this is an internal API and interop is not a concern
 				sslsrv := &http.Server{
-					Addr:         sslAddr,
-					TLSNextProto: make(map[string]func(*http.Server, *tls.Conn, http.Handler), 0),
-					TLSConfig:    config,
+					Addr: sslAddr,
 				}
+				if err := security.SecureServer(sslsrv); err != nil {
+					logging.Fatalf("indexer:: Error in securing HTTP server: %v", err)
+					return
+				}
+
 				// replace below with ListenAndServeTLS on moving to go1.8
-				lsnr, err := net.Listen("tcp", sslAddr)
+				val, err := security.MakeListener(sslAddr)
 				if err != nil {
 					logging.Fatalf("indexer:: Error in listenting to SSL port: %v", err)
 					return
 				}
-				val := tls.NewListener(lsnr, sslsrv.TLSConfig)
+
 				tlslsnr = &val
 				reload = false
 				logging.Infof("indexer:: SSL server started: %v", sslAddr)
@@ -566,7 +534,6 @@ func (idx *indexer) initHttpServer() {
 			}
 		}()
 	}
-
 }
 
 func (idx *indexer) collectProgressStats(fetchDcp bool) {

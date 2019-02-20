@@ -73,7 +73,8 @@ func NewProjector(maxvbs int, config c.Config) *Projector {
 	apConfig := config.SectionConfig("projector.adminport.", true)
 	apConfig.SetValue("name", "PRAM")
 	reqch := make(chan ap.Request)
-	p.admind = ap.NewHTTPServer(apConfig, reqch)
+	p.admind, err = ap.NewHTTPServer(apConfig, reqch)
+	c.CrashOnError(err)
 
 	// set GOGC percent
 	gogc := pconfig["gogc"].Int()

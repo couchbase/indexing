@@ -36,6 +36,7 @@ import "reflect"
 import "sync"
 import "time"
 
+import "github.com/couchbase/indexing/secondary/security"
 import "github.com/couchbase/indexing/secondary/logging"
 import c "github.com/couchbase/indexing/secondary/common"
 
@@ -67,7 +68,7 @@ type httpServer struct {
 
 // NewHTTPServer creates an instance of admin-server.
 // Start() will actually start the server.
-func NewHTTPServer(config c.Config, reqch chan<- Request) Server {
+func NewHTTPServer(config c.Config, reqch chan<- Request) (Server, error) {
 	s := &httpServer{
 		messages:      make(map[string]MessageMarshaller),
 		conns:         make([]net.Conn, 0),
@@ -96,7 +97,12 @@ func NewHTTPServer(config c.Config, reqch chan<- Request) Server {
 		WriteTimeout:   s.wtimeout * time.Millisecond,
 		MaxHeaderBytes: s.maxHdrlen,
 	}
-	return s
+
+	if err := security.SecureServer(s.srv); err != nil {
+		return nil, err
+	}
+
+	return s, nil
 }
 
 func validateAuth(w http.ResponseWriter, r *http.Request) bool {
@@ -196,7 +202,7 @@ func (s *httpServer) Start() (err error) {
 		return ErrorServerStarted
 	}
 
-	if s.lis, err = net.Listen("tcp", s.srv.Addr); err != nil {
+	if s.lis, err = security.MakeListener(s.srv.Addr); err != nil {
 		logging.Fatalf("%v Unable to start server, LISTEN FAILED %v\n", s.logPrefix, err)
 		return err
 	}
