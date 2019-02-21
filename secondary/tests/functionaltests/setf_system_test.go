@@ -44,7 +44,7 @@ func TestBuildDeferredAnotherBuilding(t *testing.T) {
 	defn1, _ := secondaryindex.GetDefnID(client1, bucketName, index1)
 	err = secondaryindex.BuildIndexesAsync([]uint64{defn1}, indexManagementAddress, defaultIndexActiveTimeout)
 	FailTestIfError(err, "Error from BuildIndexesAsync of index1", t)
-	time.Sleep(1 * time.Second)
+	time.Sleep(100 * time.Millisecond)
 
 	err = secondaryindex.BuildIndex(index2, bucketName, indexManagementAddress, defaultIndexActiveTimeout)
 	if err == nil {
