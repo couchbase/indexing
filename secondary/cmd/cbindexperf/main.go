@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"runtime"
+	"runtime/debug"
 	"runtime/pprof"
 	"strings"
 	"time"
@@ -31,6 +32,7 @@ func main() {
 	cpuprofile := flag.String("cpuprofile", "", "write cpu profile to file")
 	memprofile := flag.String("memprofile", "", "write mem profile to file")
 	logLevel := flag.String("logLevel", "error", "Log Level")
+	gcpercent := flag.Int("gcpercent", 100, "GC percentage")
 
 	flag.Parse()
 
@@ -66,6 +68,12 @@ func main() {
 	if err != nil {
 		fmt.Printf("Failed to initialize cbauth: %s\n", err)
 		os.Exit(1)
+	}
+
+	// Go runtime has default gc percent as 100.
+	if *gcpercent != 100 {
+		fmt.Println("Setting gc percentage to", *gcpercent)
+		debug.SetGCPercent(*gcpercent)
 	}
 
 	cfg, err := parseConfig(*config)
