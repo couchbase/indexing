@@ -298,15 +298,30 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, ctx interface{}, 
 	if len(req.Ctxs) != 0 {
 		var err error
 		donech := make(chan bool)
+		var mutex sync.Mutex
 
 		go func() {
 			select {
 			case <-req.getTimeoutCh():
-				err = common.ErrScanTimedOut
-				close(donech)
+				mutex.Lock()
+				defer mutex.Unlock()
+
+				select {
+				case <-donech:
+				default:
+					err = common.ErrScanTimedOut
+					close(donech)
+				}
 			case <-req.CancelCh:
-				err = common.ErrClientCancel
-				close(donech)
+				mutex.Lock()
+				defer mutex.Unlock()
+
+				select {
+				case <-donech:
+				default:
+					err = common.ErrClientCancel
+					close(donech)
+				}
 			case <-donech:
 			}
 		}()
@@ -319,14 +334,19 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, ctx interface{}, 
 			numCtxs++
 		}
 
-		if s.tryRespondWithError(w, req, err) {
-			for i := 0; i < numCtxs; i++ {
-				req.Ctxs[i].Done()
-			}
-			return
-		}
+		func() {
+			mutex.Lock()
+			defer mutex.Unlock()
 
-		close(donech)
+			if s.tryRespondWithError(w, req, err) {
+				for i := 0; i < numCtxs; i++ {
+					req.Ctxs[i].Done()
+				}
+				return
+			}
+
+			close(donech)
+		}()
 	}
 
 	s.processRequest(req, w, is, t0)

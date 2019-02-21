@@ -415,8 +415,14 @@ func (worker *VbucketWorker) handleEvent(m *mc.DcpEvent) *Vbucket {
 		context := qexpr.NewIndexContext()
 		docval := qvalue.NewAnnotatedValue(nvalue)
 		for _, engine := range worker.engines {
+			// Slices in KeyVersions struct are updated for all the indexes
+			// belonging to this bucket. Hence, pre-allocate the memory for
+			// slices with number of indexes instead of expanding the slice
+			// due to lack of size. This helps to reduce the re-allocs and
+			// therefore reduces the garbage generated.
 			newBuf, err := engine.TransformRoute(
-				v.vbuuid, m, dataForEndpoints, worker.encodeBuf, docval, context, worker.meta,
+				v.vbuuid, m, dataForEndpoints, worker.encodeBuf, docval, context,
+				worker.meta, len(worker.engines),
 			)
 			if err != nil {
 				logging.Errorf(fmsg, logPrefix, m.Opaque, err)
