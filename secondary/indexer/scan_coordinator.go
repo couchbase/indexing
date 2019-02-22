@@ -185,6 +185,9 @@ func (s *scanCoordinator) handleSupvervisorCommands(cmd Message) {
 	case INDEXER_ROLLBACK:
 		s.handleIndexerRollback(cmd)
 
+	case INDEXER_SECURITY_CHANGE:
+		s.handleSecurityChange(cmd)
+
 	default:
 		logging.Errorf("ScanCoordinator: Received Unknown Command %v", cmd)
 		s.supvCmdch <- &MsgError{
@@ -877,6 +880,23 @@ func (s *scanCoordinator) handleIndexerRollback(cmd Message) {
 		s.setRollbackInProgress(msg.bucket, true)
 	} else {
 		s.setRollbackInProgress(msg.bucket, false)
+	}
+
+	s.supvCmdch <- &MsgSuccess{}
+}
+
+func (s *scanCoordinator) handleSecurityChange(cmd Message) {
+
+	err := s.serv.ResetConnections()
+	if err != nil {
+		idxErr := Error{
+			code:     ERROR_INDEXER_INTERNAL_ERROR,
+			severity: FATAL,
+			cause:    err,
+			category: INDEXER,
+		}
+		s.supvCmdch <- &MsgError{err: idxErr}
+		return
 	}
 
 	s.supvCmdch <- &MsgSuccess{}

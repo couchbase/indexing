@@ -11,6 +11,7 @@ package client
 
 import (
 	"encoding/json"
+	"fmt"
 	"github.com/couchbase/gometa/common"
 	c "github.com/couchbase/indexing/secondary/common"
 	logging "github.com/couchbase/indexing/secondary/logging"
@@ -51,6 +52,68 @@ const (
 	OPCODE_GET_REPLICA_COUNT                        = OPCODE_UPDATE_REPLICA_COUNT + 1
 	OPCODE_CHECK_TOKEN_EXIST                        = OPCODE_GET_REPLICA_COUNT + 1
 )
+
+func Op2String(op common.OpCode) string {
+	switch op {
+	case OPCODE_CREATE_INDEX:
+		return "OPCODE_CREATE_INDEX"
+	case OPCODE_DROP_INDEX:
+		return "OPCODE_DROP_INDEX"
+	case OPCODE_BUILD_INDEX:
+		return "OPCODE_BUILD_INDEX"
+	case OPCODE_UPDATE_INDEX_INST:
+		return "OPCODE_UPDATE_INDEX_INST"
+	case OPCODE_SERVICE_MAP:
+		return "OPCODE_SERVICE_MAP"
+	case OPCODE_DELETE_BUCKET:
+		return "OPCODE_DELETE_BUCKET"
+	case OPCODE_INDEXER_READY:
+		return "OPCODE_INDEXER_READY"
+	case OPCODE_CLEANUP_INDEX:
+		return "OPCODE_CLEANUP_INDEX"
+	case OPCODE_CLEANUP_DEFER_INDEX:
+		return "OPCODE_CLEANUP_DEFER_INDEX"
+	case OPCODE_CREATE_INDEX_REBAL:
+		return "OPCODE_CREATE_INDEX_REBAL"
+	case OPCODE_BUILD_INDEX_REBAL:
+		return "OPCODE_BUILD_INDEX_REBAL"
+	case OPCODE_DROP_INDEX_REBAL:
+		return "OPCODE_DROP_INDEX_REBAL"
+	case OPCODE_BROADCAST_STATS:
+		return "OPCODE_BROADCAST_STATS"
+	case OPCODE_BUILD_INDEX_RETRY:
+		return "OPCODE_BUILD_INDEX_RETRY"
+	case OPCODE_RESET_INDEX:
+		return "OPCODE_RESET_INDEX"
+	case OPCODE_CONFIG_UPDATE:
+		return "OPCODE_CONFIG_UPDATE"
+	case OPCODE_DROP_OR_PRUNE_INSTANCE:
+		return "OPCODE_DROP_OR_PRUNE_INSTANCE"
+	case OPCODE_MERGE_PARTITION:
+		return "OPCODE_MERGE_PARTITION"
+	case OPCODE_PREPARE_CREATE_INDEX:
+		return "OPCODE_PREPARE_CREATE_INDEX"
+	case OPCODE_COMMIT_CREATE_INDEX:
+		return "OPCODE_COMMIT_CREATE_INDEX"
+	case OPCODE_REBALANCE_RUNNING:
+		return "OPCODE_REBALANCE_RUNNING"
+	case OPCODE_CREATE_INDEX_DEFER_BUILD:
+		return "OPCODE_CREATE_INDEX_DEFER_BUILD"
+	case OPCODE_DROP_OR_PRUNE_INSTANCE_DDL:
+		return "OPCODE_DROP_OR_PRUNE_INSTANCE_DDL"
+	case OPCODE_CLEANUP_PARTITION:
+		return "OPCODE_CLEANUP_PARTITION"
+	case OPCODE_DROP_INSTANCE:
+		return "OPCODE_DROP_INSTANCE"
+	case OPCODE_UPDATE_REPLICA_COUNT:
+		return "OPCODE_UPDATE_REPLICA_COUNT"
+	case OPCODE_GET_REPLICA_COUNT:
+		return "OPCODE_GET_REPLICA_COUNT"
+	case OPCODE_CHECK_TOKEN_EXIST:
+		return "OPCODE_CHECK_TOKEN_EXIST"
+	}
+	return fmt.Sprintf("%v", op)
+}
 
 /////////////////////////////////////////////////////////////////////////
 // Index List

@@ -57,6 +57,8 @@ import "fmt"
 import "io"
 import "net"
 import "time"
+import "sync"
+import "syscall"
 
 import c "github.com/couchbase/indexing/secondary/common"
 import protobuf "github.com/couchbase/indexing/secondary/protobuf/data"
@@ -141,6 +143,8 @@ type Server struct {
 	maxPayload   int           // maximum payload length from router
 	readDeadline time.Duration // timeout, in millisecond, reading from socket
 	logPrefix    string
+
+	mu sync.Mutex
 }
 
 // NewServer creates a new dataport daemon.
@@ -173,8 +177,8 @@ func NewServer(
 		logging.Errorf("%v failed starting! %v\n", s.logPrefix, err)
 		return nil, err
 	}
-	go listener(s.logPrefix, s.lis, s.reqch) // spawn daemon
-	go s.genServer(s.reqch, s.datach)        // spawn gen-server
+	go s.listener()                   // spawn daemon
+	go s.genServer(s.reqch, s.datach) // spawn gen-server
 	logging.Infof("%v started ...", s.logPrefix)
 	return s, nil
 }
@@ -213,6 +217,13 @@ func (s *Server) Close() (err error) {
 	return c.OpError(err, resp, 0)
 }
 
+func (s *Server) ResetConnections() (err error) {
+	respch := make(chan []interface{}, 1)
+	cmd := []interface{}{serverMessage{cmd: serverCmdResetConnections}, respch}
+	resp, err := c.FailsafeOp(s.reqch, respch, cmd, s.finch)
+	return c.OpError(err, resp, 0)
+}
+
 // gen-server commands
 const (
 	serverCmdNewConnection byte = iota + 1
@@ -220,6 +231,7 @@ const (
 	serverCmdVbKeyVersions
 	serverCmdError
 	serverCmdClose
+	serverCmdResetConnections
 )
 
 // gen server routine for dataport server.
@@ -319,6 +331,12 @@ func (s *Server) genServer(reqch, datach chan []interface{}) {
 			respch := cmd[1].(chan []interface{})
 			s.handleClose()
 			respch <- []interface{}{nil}
+
+		case serverCmdResetConnections:
+			logging.Errorf("%v %q reset connections ...\n", s.logPrefix, s.laddr)
+			respch := cmd[1].(chan []interface{})
+			err := s.handleResetConnections()
+			respch <- []interface{}{err}
 		}
 	}
 
@@ -380,7 +398,12 @@ func (s *Server) handleClose() {
 		}
 	}()
 
-	s.lis.Close() // close listener daemon
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.lis != nil {
+		s.lis.Close() // close listener daemon
+	}
 
 	for raddr, nc := range s.conns {
 		closeConnection(s.logPrefix, raddr, nc)
@@ -390,6 +413,47 @@ func (s *Server) handleClose() {
 
 	logging.Infof("%v ... stopped\n", s.logPrefix)
 	return
+}
+
+// restart
+func (s *Server) handleResetConnections() error {
+
+	func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+
+		// close listener daemon
+		if s.lis != nil {
+			s.lis.Close()
+			s.lis = nil
+		}
+	}()
+
+	// close connections (simulate network partition)
+	for _, nc := range s.conns {
+		nc.conn.Close()
+	}
+
+	// restart listener
+	fn := func(r int, e error) error {
+		var err error
+		s.mu.Lock()
+		defer s.mu.Unlock()
+
+		if s.lis, err = security.MakeListener(s.laddr); err != nil {
+			logging.Errorf("%v failed starting listener %v! %v\n", s.logPrefix, s.laddr, err)
+			return err
+		}
+		go s.listener() // spawn daemon
+
+		return nil
+	}
+	helper := c.NewRetryHelper(10, time.Second, 1, fn)
+	if err := helper.Run(); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // start a connection worker to read mutation message for a subset of vbuckets.
@@ -510,19 +574,47 @@ func remoteConnections(raddr string, conns map[string]*netConn) []string {
 
 // go-routine to listen for new connections, if this routine goes down -
 // server is shutdown and reason notified back to application.
-func listener(prefix string, lis net.Listener, reqch chan []interface{}) {
-loop:
-	for {
-		// TODO: handle `err` for lis.Close() and avoid panic(err)
-		if conn, err := lis.Accept(); err != nil {
-			e, ok := err.(*net.OpError)
-			// NOTE: AcceptEx for windows op.
-			if ok && (e.Op == "accept" || e.Op == "AcceptEx") {
-				logging.Infof("%v ... stopped\n", prefix)
-				break loop
-			} else {
+func (s *Server) listener() {
+
+	lis := func() net.Listener {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		return s.lis
+	}()
+
+	selfRestart := func() {
+		var err error
+		s.mu.Lock()
+		defer s.mu.Unlock()
+
+		if s.lis != nil && lis == s.lis { // if s.lis == nil, then Server.Close() was called
+			s.lis.Close()
+			if s.lis, err = security.MakeListener(s.laddr); err != nil {
+				logging.Errorf("%v failed starting %v !!\n", s.logPrefix, err)
 				panic(err)
 			}
+			logging.Errorf("%v Restarting listener\n", s.logPrefix)
+			go s.listener()
+		}
+	}
+
+	defer func() {
+		if r := recover(); r != nil {
+			logging.Errorf("%v listener() crashed: %v\n", s.logPrefix, r)
+			logging.Errorf("%s", logging.StackTrace())
+		}
+		selfRestart()
+	}()
+
+	for {
+		if conn, err := lis.Accept(); err != nil {
+			e, ok := err.(*net.OpError)
+			if ok && (e.Err == syscall.EMFILE || e.Err == syscall.ENFILE) {
+				logging.Errorf("%v Accept() Error: %v. Retrying Accept.\n", s.logPrefix, err)
+				continue
+			}
+			logging.Errorf("%v Accept() Error: %v\n", s.logPrefix, err)
+			break //After loop breaks, selfRestart() is called in defer
 
 		} else {
 			msg := serverMessage{
@@ -530,7 +622,7 @@ loop:
 				raddr: conn.RemoteAddr().String(),
 				args:  []interface{}{conn},
 			}
-			reqch <- []interface{}{msg}
+			s.reqch <- []interface{}{msg}
 		}
 	}
 }

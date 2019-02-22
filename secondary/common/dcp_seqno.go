@@ -279,6 +279,24 @@ func BucketSeqnos(cluster, pooln, bucketn string) (l_seqnos []uint64, err error)
 	return
 }
 
+func ResetBucketSeqnos() error {
+	dcp_buckets_seqnos.rw.Lock()
+
+	bucketns := make([]string, 0, len(dcp_buckets_seqnos.buckets))
+
+	for bucketn, _ := range dcp_buckets_seqnos.buckets {
+		bucketns = append(bucketns, bucketn)
+	}
+
+	dcp_buckets_seqnos.rw.Unlock()
+
+	for _, bucketn := range bucketns {
+		delDBSbucket(bucketn, false)
+	}
+
+	return nil
+}
+
 func CollectSeqnos(kvfeeds map[string]*kvConn) (l_seqnos []uint64, err error) {
 	defer func() {
 		if r := recover(); r != nil {

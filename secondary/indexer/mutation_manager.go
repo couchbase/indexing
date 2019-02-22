@@ -301,6 +301,9 @@ func (m *mutationMgr) handleSupervisorCommands(cmd Message) {
 	case INDEXER_RESUME:
 		m.handleIndexerResume(cmd)
 
+	case INDEXER_SECURITY_CHANGE:
+		m.handleSecurityChange(cmd)
+
 	default:
 		logging.Fatalf("MutationMgr::handleSupervisorCommands Received Unknown Command %v", cmd)
 		common.CrashOnError(errors.New("Unknown Command On Supervisor Channel"))
@@ -1117,6 +1120,33 @@ func (m *mutationMgr) handleIndexerResume(cmd Message) {
 	m.indexerState = common.INDEXER_ACTIVE
 
 	m.supvCmdch <- &MsgSuccess{}
+}
+
+func (m *mutationMgr) handleSecurityChange(cmd Message) {
+
+	m.lock.Lock()
+	defer m.lock.Unlock()
+
+	var msg Message
+
+	for streamId, _ := range m.streamReaderMap {
+
+		respMsg := m.sendMsgToStreamReader(streamId, cmd)
+
+		if respMsg.GetMsgType() == MSG_SUCCESS {
+			logging.Infof("MutationMgr::handleSecurityChange Stream %v Succceed", streamId)
+		} else {
+			logging.Errorf("MutationMgr::handleSecurityChange Fatal Error %v %v", streamId,
+				respMsg.(*MsgError).GetError())
+			msg = respMsg
+		}
+	}
+
+	if msg == nil {
+		msg = &MsgSuccess{}
+	}
+
+	m.supvCmdch <- msg
 }
 
 func getMutationQueueMemFrac(config common.Config) float64 {

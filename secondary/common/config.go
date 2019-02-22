@@ -80,6 +80,14 @@ var SystemConfig = Config{
 		true,  // immutable
 		false, // case-insensitive
 	},
+	// security parameters
+	"security.encryption.encryptLocalhost": ConfigValue{
+		true,
+		"enable encryption on local host",
+		true,
+		true,  // immutable
+		false, // case-insensitive
+	},
 	// projector parameters
 	"projector.name": ConfigValue{
 		"projector",
@@ -407,14 +415,6 @@ var SystemConfig = Config{
 		"/adminport/",
 		"url prefix (script-path) for adminport used by projector",
 		"/adminport/",
-		true,  // immutable
-		false, // case-insensitive
-	},
-	// indexer encryption
-	"indexer.encryption.encryptLocalhost": ConfigValue{
-		false,
-		"enable encryption on local host",
-		false,
 		true,  // immutable
 		false, // case-insensitive
 	},

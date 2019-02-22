@@ -42,6 +42,8 @@ type IndexManager struct {
 	quota         uint64
 	clusterURL    string
 
+	repoName string
+
 	// bucket monitor
 	monitorKillch chan bool
 
@@ -155,7 +157,7 @@ func NewIndexManagerInternal(config common.Config, storageMode common.StorageMod
 	//mgr.repo, err = NewMetadataRepo(requestAddr, leaderAddr, config, mgr)
 	mgr.basepath = config["storage_dir"].String()
 	os.Mkdir(mgr.basepath, 0755)
-	repoName := filepath.Join(mgr.basepath, gometaC.REPOSITORY_NAME)
+	mgr.repoName = filepath.Join(mgr.basepath, gometaC.REPOSITORY_NAME)
 
 	cic, err := common.NewClusterInfoClient(mgr.clusterURL, common.DEFAULT_POOL, config)
 	if err != nil {
@@ -174,7 +176,7 @@ func NewIndexManagerInternal(config common.Config, storageMode common.StorageMod
 		return nil, err
 	}
 
-	mgr.repo, mgr.requestServer, err = NewLocalMetadataRepo(adminPort, mgr.eventMgr, mgr.lifecycleMgr, repoName, mgr.quota)
+	mgr.repo, mgr.requestServer, err = NewLocalMetadataRepo(adminPort, mgr.eventMgr, mgr.lifecycleMgr, mgr.repoName, mgr.quota)
 	if err != nil {
 		mgr.Close()
 		return nil, err
@@ -231,6 +233,62 @@ func (m *IndexManager) IsClose() bool {
 	defer m.mutex.Unlock()
 
 	return m.isClosed
+}
+
+//
+// Reset Connections
+//
+func (m *IndexManager) ResetConnections(notifier MetadataNotifier) error {
+
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
+	if m.isClosed {
+		return nil
+	}
+
+	// close lifecycle mgr
+	logging.Infof("manager ResetConnection: terminating lifecycle mgr")
+	m.lifecycleMgr.Terminate()
+
+	// close repo
+	logging.Infof("manager ResetConnection: closing metadata repo")
+	m.repo.Close()
+	time.Sleep(time.Second)
+
+	// Create new lifecycle manager
+	logging.Infof("manager ResetConnection: creating new lifecycle mgr")
+	lifecycleMgr, err := NewLifecycleMgr(nil, m.clusterURL)
+	if err != nil {
+		return err
+	}
+	m.lifecycleMgr = lifecycleMgr
+
+	cinfo := m.cinfoClient.GetClusterInfoCache()
+	cinfo.RLock()
+
+	adminPort, err := cinfo.GetLocalServicePort(common.INDEX_ADMIN_SERVICE)
+	if err != nil {
+		cinfo.RUnlock()
+		return err
+	}
+
+	cinfo.RUnlock()
+
+	// Create new metadata repo
+	logging.Infof("manager ResetConnection: restarting metadadta repo")
+	m.repo, m.requestServer, err = NewLocalMetadataRepo(adminPort, m.eventMgr, m.lifecycleMgr, m.repoName, m.quota)
+	if err != nil {
+		return err
+	}
+
+	// Run lifecycle mgr
+	logging.Infof("manager ResetConnection: restarting lifecycle mgr")
+	m.RegisterNotifier(notifier)
+	m.lifecycleMgr.Run(m.repo, m.requestServer)
+	m.NotifyIndexerReady()
+
+	return nil
 }
 
 //
