@@ -39,6 +39,7 @@ import "time"
 import "github.com/couchbase/indexing/secondary/logging"
 import "github.com/couchbase/indexing/secondary/common"
 import "github.com/couchbase/indexing/secondary/transport"
+import "github.com/couchbase/indexing/secondary/security"
 
 // ErrorClientEmptyKeys
 var ErrorClientEmptyKeys = errors.New("dataport.clientEmptyKeys")
@@ -101,7 +102,7 @@ func NewClient(
 	c.logPrefix = fmt.Sprintf("ENDC[%v<-%v #%v]", raddr, cluster, topic)
 	// open connections with remote
 	for i := 0; i < parConns; i++ {
-		if conn, err = net.Dial("tcp", raddr); err != nil {
+		if conn, err = security.MakeConn(raddr); err != nil {
 			logging.Errorf("%v Dialing to %q: %v\n", c.logPrefix, raddr, err)
 			c.doClose()
 			return nil, err
