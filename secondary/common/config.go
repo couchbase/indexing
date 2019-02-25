@@ -2056,6 +2056,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.scan.enable_fast_count": ConfigValue{
+		true,
+		"enable fast count optimization for aggregate pushdown",
+		true,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.planner.timeout": ConfigValue{
 		300,
 		"timeout (sec) on planner",

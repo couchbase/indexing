@@ -378,6 +378,8 @@ func (s *scanCoordinator) processRequest(req *ScanRequest, w ScanResponseWriter,
 		s.handleMultiScanCountRequest(req, w, is, t0)
 	case StatsReq:
 		s.handleStatsRequest(req, w, is)
+	case FastCountReq:
+		s.handleFastCountRequest(req, w, is, t0)
 	}
 }
 
@@ -500,6 +502,57 @@ func (s *scanCoordinator) handleMultiScanCountRequest(req *ScanRequest, w ScanRe
 	logging.Verbosef("%s RESPONSE count:%d status:ok", req.LogPrefix, rows)
 	err = w.Count(rows)
 	s.handleError(req.LogPrefix, err)
+}
+
+func (s *scanCoordinator) handleFastCountRequest(req *ScanRequest, w ScanResponseWriter,
+	is IndexSnapshot, t0 time.Time) {
+	var rows uint64
+	var err error
+	var snapshots []SliceSnapshot
+
+	stopch := make(StopChannel)
+	cancelCb := NewCancelCallback(req, func(e error) {
+		err = e
+		close(stopch)
+	})
+	cancelCb.Run()
+	defer cancelCb.Done()
+
+	for _, scan := range req.Scans {
+		if snapshots, err = GetSliceSnapshots(is, req.PartitionIds); err == nil {
+			r, err1 := scatterFastCount(req, scan, snapshots, stopch)
+			if err1 != nil {
+				err = err1
+				break
+			}
+			rows += r
+		}
+	}
+
+	if s.tryRespondWithError(w, req, err) {
+		return
+	}
+
+	logging.Verbosef("%s RESPONSE count:%d status:ok", req.LogPrefix, rows)
+
+	var sk []byte
+	if req.dataEncFmt == common.DATA_ENC_COLLATEJSON {
+		result := []uint64{rows}
+		sk, err = encodeValue(result)
+		if s.tryRespondWithError(w, req, err) {
+			return
+		}
+	} else if req.dataEncFmt == common.DATA_ENC_JSON {
+		result := []uint64{rows}
+		sk, err = json.Marshal(result)
+		if s.tryRespondWithError(w, req, err) {
+			return
+		}
+	}
+
+	err = w.Row(nil, sk)
+	s.handleError(req.LogPrefix, err)
+
 }
 
 func (s *scanCoordinator) handleStatsRequest(req *ScanRequest, w ScanResponseWriter,
