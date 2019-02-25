@@ -38,6 +38,7 @@ const (
 	ScanAllReq                    = "scanAll"
 	HeloReq                       = "helo"
 	MultiScanCountReq             = "multiscancount"
+	FastCountReq                  = "fastcountreq" //generated internally
 )
 
 type ScanRequest struct {
@@ -422,7 +423,7 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 			return
 		}
 
-		if err = r.fillGroupAggr(req.GetGroupAggr()); err != nil {
+		if err = r.fillGroupAggr(req.GetGroupAggr(), req.GetScans()); err != nil {
 			return
 		}
 		r.setExplodePositions()
@@ -1267,7 +1268,7 @@ func validateIndexProjectionGroupAggr(projection *protobuf.IndexProjection, prot
 	return indexProjection, nil
 }
 
-func (r *ScanRequest) fillGroupAggr(protoGroupAggr *protobuf.GroupAggr) (err error) {
+func (r *ScanRequest) fillGroupAggr(protoGroupAggr *protobuf.GroupAggr, protoScans []*protobuf.Scan) (err error) {
 
 	if protoGroupAggr == nil {
 		return nil
@@ -1321,6 +1322,14 @@ func (r *ScanRequest) fillGroupAggr(protoGroupAggr *protobuf.GroupAggr) (err err
 			r.decodePositions[depends] = true
 		}
 	}
+
+	cfg := r.sco.config.Load()
+	if cfg["scan.enable_fast_count"].Bool() {
+		if r.canUseFastCount(protoScans) {
+			r.ScanType = FastCountReq
+		}
+	}
+
 	return
 }
 
@@ -1551,6 +1560,134 @@ func (r *ScanRequest) processFirstValidAggrOnly() bool {
 	}
 
 	return false
+}
+
+func (r *ScanRequest) canUseFastCount(protoScans []*protobuf.Scan) bool {
+
+	//only one aggregate
+	if len(r.GroupAggr.Aggrs) != 1 {
+		return false
+	}
+
+	//no group by
+	if len(r.GroupAggr.Group) != 0 {
+		return false
+	}
+
+	//ignore array index
+	if r.IndexInst.Defn.IsArrayIndex {
+		return false
+	}
+
+	//ignore primary index
+	if r.IndexInst.Defn.IsPrimary {
+		return false
+	}
+
+	aggr := r.GroupAggr.Aggrs[0]
+
+	//only non distinct count
+	if aggr.AggrFunc != common.AGG_COUNT || aggr.Distinct {
+		return false
+	}
+
+	if r.canUseFastCountNoWhere() {
+		return true
+	}
+	if r.canUseFastCountWhere(protoScans) {
+		return true
+	}
+	return false
+
+}
+
+func (r *ScanRequest) canUseFastCountWhere(protoScans []*protobuf.Scan) bool {
+
+	aggr := r.GroupAggr.Aggrs[0]
+	//only the first leading key or constant expression
+	if aggr.KeyPos == 0 || aggr.ExprValue != nil {
+		//if index has where clause
+		if r.IndexInst.Defn.WhereExpr != "" {
+
+			for _, scan := range protoScans {
+				//compute filter covers
+				wExpr, err := parser.Parse(r.IndexInst.Defn.WhereExpr)
+				if err != nil {
+					logging.Errorf("%v Error parsing where expr %v", r.LogPrefix, err)
+				}
+
+				fc := make(map[string]value.Value)
+				fc = wExpr.FilterCovers(fc)
+
+				for i, fl := range scan.Filters {
+
+					//only equal filter is supported
+					if !checkEqualFilter(fl) {
+						return false
+					}
+
+					var cv *value.ScopeValue
+					var av value.AnnotatedValue
+
+					cv = value.NewScopeValue(make(map[string]interface{}), nil)
+					av = value.NewAnnotatedValue(cv)
+
+					av.SetCover(r.IndexInst.Defn.SecExprs[i], value.NewValue(fl.Low))
+
+					cv1 := av.Covers()
+					fields := cv1.Fields()
+
+					for f, v := range fields {
+						if v1, ok := fc[f]; ok {
+							if v != v1 {
+								return false
+							}
+						} else {
+							return false
+						}
+					}
+				}
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (r *ScanRequest) canUseFastCountNoWhere() bool {
+
+	aggr := r.GroupAggr.Aggrs[0]
+
+	//only the first leading key or constant expression
+	if aggr.KeyPos == 0 || aggr.ExprValue != nil {
+
+		//full index scan
+		if len(r.Scans) == 1 {
+			scan := r.Scans[0]
+			if len(scan.Filters) == 1 {
+				filter := scan.Filters[0]
+				if len(filter.CompositeFilters) == 1 {
+					if isEncodedNull(filter.CompositeFilters[0].Low.Bytes()) &&
+						filter.CompositeFilters[0].High.Bytes() == nil &&
+						(filter.CompositeFilters[0].Inclusion == Low ||
+							filter.CompositeFilters[0].Inclusion == Neither) {
+						return true
+					}
+				}
+			}
+		}
+	}
+
+	return false
+}
+
+func checkEqualFilter(fl *protobuf.CompositeElementFilter) bool {
+
+	if !bytes.Equal(fl.Low, fl.High) && Inclusion(fl.GetInclusion()) != Both {
+		return false
+	}
+	return true
+
 }
 
 func (r *ScanRequest) hasAllEqualFiltersUpto(keyPos int) bool {

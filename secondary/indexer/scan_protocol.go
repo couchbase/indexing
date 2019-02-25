@@ -69,7 +69,7 @@ func (w *protoResponseWriter) Error(err error) error {
 		res = &protobuf.CountResponse{
 			Count: proto.Int64(0), Err: protoErr,
 		}
-	case ScanAllReq, ScanReq:
+	case ScanAllReq, ScanReq, FastCountReq:
 		res = &protobuf.ResponseStream{
 			Err: protoErr,
 		}
@@ -157,7 +157,7 @@ func (w *protoResponseWriter) Done() error {
 	defer p.PutBlock(w.encBuf)
 	defer p.PutBlock(w.rowBuf)
 
-	if (w.scanType == ScanReq || w.scanType == ScanAllReq) && w.rowSize > 0 {
+	if (w.scanType == ScanReq || w.scanType == ScanAllReq || w.scanType == FastCountReq) && w.rowSize > 0 {
 		res := &protobuf.ResponseStream{IndexEntries: w.rowEntries}
 		err := protobuf.EncodeAndWrite(w.conn, *w.encBuf, res)
 		if err != nil {

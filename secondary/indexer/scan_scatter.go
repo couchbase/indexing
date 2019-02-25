@@ -385,6 +385,64 @@ func statsSingleSlice(request *ScanRequest, ctx IndexReaderContext, snap SliceSn
 }
 
 //--------------------------
+// scatter fast count
+//--------------------------
+
+func scatterFastCount(request *ScanRequest, scan Scan, snapshots []SliceSnapshot, stop StopChannel) (count uint64, err error) {
+
+	if len(snapshots) == 0 {
+		return
+	}
+
+	var wg sync.WaitGroup
+
+	errch := make(chan error, len(snapshots))
+
+	// run scatter
+	for i, snap := range snapshots {
+		wg.Add(1)
+		go fastCountSingleSlice(request, scan, request.Ctxs[i], snap, &wg, errch, stop, &count)
+	}
+
+	// wait for scatter to be done
+	wg.Wait()
+
+	if len(errch) > 0 {
+		err = <-errch
+	}
+
+	return
+}
+
+func fastCountSingleSlice(request *ScanRequest, scan Scan, ctx IndexReaderContext, snap SliceSnapshot, wg *sync.WaitGroup,
+	errch chan error, stopch StopChannel, count *uint64) {
+
+	defer func() {
+		wg.Done()
+	}()
+
+	var err error
+	var cnt uint64
+	var nullCnt uint64
+
+	if scan.Incl == Low || scan.Incl == Both {
+		cnt, err = snap.Snapshot().CountTotal(ctx, stopch)
+	} else if scan.Incl == Neither {
+		nullCnt, err = snap.Snapshot().CountRange(ctx, scan.Low, scan.Low, Both, stopch)
+		if err == nil {
+			cnt, err = snap.Snapshot().CountTotal(ctx, stopch)
+		}
+	}
+
+	if err != nil {
+		errch <- err
+	} else {
+		cnt = cnt - nullCnt
+		atomic.AddUint64(count, cnt)
+	}
+}
+
+//--------------------------
 // gather range scan
 //--------------------------
 
