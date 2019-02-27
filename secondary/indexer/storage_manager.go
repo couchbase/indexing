@@ -1366,13 +1366,12 @@ func (s *storageMgr) updateIndexSnapMap(indexPartnMap IndexPartnMap,
 	}
 }
 
+// Caller of updateIndexSnapMapForIndex should ensure
+// locking and subsequent unlocking of muSnap
 func (s *storageMgr) updateIndexSnapMapForIndex(idxInstId common.IndexInstId, idxInst common.IndexInst,
 	partnMap PartitionInstMap, streamId common.StreamId, bucket string) {
 
-	s.muSnap.Lock()
-	defer s.muSnap.Unlock()
 	needRestart := false
-
 	//if bucket and stream have been provided
 	if bucket != "" && streamId != common.ALL_STREAMS {
 		//skip the index if either bucket or stream don't match
@@ -1434,7 +1433,9 @@ func (s *storageMgr) handleUpdateIndexSnapMapForIndex(cmd Message) {
 	streamId := req.GetStreamId()
 	bucket := req.GetBucket()
 
+	s.muSnap.Lock()
 	s.updateIndexSnapMapForIndex(idxInstId, idxInst, partnMap, streamId, bucket)
+	s.muSnap.Unlock()
 
 	s.supvCmdch <- &MsgSuccess{}
 }
