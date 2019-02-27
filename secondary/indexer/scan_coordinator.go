@@ -280,6 +280,9 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, ctx interface{}, 
 
 	t0 := time.Now()
 	is, err := s.getRequestedIndexSnapshot(req)
+	if err == common.ErrScanTimedOut && req.Stats != nil {
+		req.Stats.numScanTimeouts.Add(1)
+	}
 	if s.tryRespondWithError(w, req, err) {
 		return
 	}
@@ -419,8 +422,13 @@ func (s *scanCoordinator) handleScanRequest(req *ScanRequest, w ScanResponseWrit
 				req.LogPrefix, scanPipeline.RowsReturned(), scanPipeline.RowsScanned(), waitTime, scanTime, status, req.RequestId)
 		})
 
-		if err == common.ErrClientCancel {
+		switch err {
+		case common.ErrClientCancel:
 			req.Stats.clientCancelError.Add(1)
+		case common.ErrScanTimedOut:
+			req.Stats.numScanTimeouts.Add(1)
+		default:
+			req.Stats.numScanErrors.Add(1)
 		}
 	} else {
 		status := "ok"

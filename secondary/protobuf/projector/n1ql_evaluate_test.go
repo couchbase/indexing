@@ -4,13 +4,14 @@ import (
 	"bytes"
 	"compress/bzip2"
 	"encoding/json"
-	"github.com/couchbase/indexing/secondary/collatejson"
-	qexpr "github.com/couchbase/query/expression"
-	qvalue "github.com/couchbase/query/value"
 	"io/ioutil"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/couchbase/indexing/secondary/collatejson"
+	qexpr "github.com/couchbase/query/expression"
+	qvalue "github.com/couchbase/query/value"
 )
 
 // TODO:
@@ -21,6 +22,7 @@ var testdata = "../../tests/testdata"
 var usersBzip2 = filepath.Join(testdata, "users.json.bz2")
 var projectsBzip2 = filepath.Join(testdata, "projects.json.bz2")
 var buf = make([]byte, 0, 10000)
+var stats IndexEvaluatorStats
 
 var doc150 = []byte(`{ "type": "user", "first-name": "Daniel", "last-name": "Fred", "age": 32, "emailid": "Daniel@gmail.com", "city": "Kathmandu", "gender": "female" }`)
 var doc2000 = []byte(
@@ -79,7 +81,7 @@ func TestN1QLTransform150(t *testing.T) {
 	docval := qvalue.NewAnnotatedValue(qvalue.NewParsedValue(doc150, true))
 	docval.SetAttachment("meta", make(map[string]interface{} /*meta*/))
 	context := qexpr.NewIndexContext()
-	secKey, _, err := N1QLTransform([]byte("docid"), docval, context, cExprs, buf)
+	secKey, _, err := N1QLTransform([]byte("docid"), docval, context, cExprs, buf, &stats)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +99,7 @@ func TestN1QLTransform2000(t *testing.T) {
 	docval := qvalue.NewAnnotatedValue(qvalue.NewParsedValue(doc2000, true))
 	docval.SetAttachment("meta", make(map[string]interface{} /*meta*/))
 	context := qexpr.NewIndexContext()
-	secKey, _, err := N1QLTransform([]byte("docid"), docval, context, cExprs, buf)
+	secKey, _, err := N1QLTransform([]byte("docid"), docval, context, cExprs, buf, &stats)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +139,7 @@ func BenchmarkN1QLTransform150(b *testing.B) {
 	docval.SetAttachment("meta", make(map[string]interface{} /*meta*/))
 	context := qexpr.NewIndexContext()
 	for i := 0; i < b.N; i++ {
-		N1QLTransform([]byte("docid"), docval, context, cExprs, buf)
+		N1QLTransform([]byte("docid"), docval, context, cExprs, buf, &stats)
 	}
 }
 
@@ -147,7 +149,7 @@ func BenchmarkN1QLTransform2000(b *testing.B) {
 	docval.SetAttachment("meta", make(map[string]interface{} /*meta*/))
 	context := qexpr.NewIndexContext()
 	for i := 0; i < b.N; i++ {
-		N1QLTransform([]byte("docid"), docval, context, cExprs, buf)
+		N1QLTransform([]byte("docid"), docval, context, cExprs, buf, &stats)
 	}
 }
 

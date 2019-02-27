@@ -1,5 +1,6 @@
 package protobuf
 
+import "time"
 import "github.com/couchbase/indexing/secondary/logging"
 import "github.com/couchbase/indexing/secondary/collatejson"
 import qexpr "github.com/couchbase/query/expression"
@@ -30,13 +31,18 @@ var missing = qvalue.NewValue(string(collatejson.MissingLiteral))
 func N1QLTransform(
 	docid []byte, docval qvalue.AnnotatedValue, context qexpr.Context,
 	cExprs []interface{},
-	encodeBuf []byte) ([]byte, []byte, error) {
+	encodeBuf []byte, stats *IndexEvaluatorStats) ([]byte, []byte, error) {
 
 	arrValue := make([]interface{}, 0, len(cExprs))
 	skip := true
 	for _, cExpr := range cExprs {
 		expr := cExpr.(qexpr.Expression)
+		start := time.Now()
 		scalar, vector, err := expr.EvaluateForIndex(docval, context)
+		elapsed := time.Since(start)
+		if stats != nil {
+			stats.add(elapsed)
+		}
 		if err != nil {
 			exprstr := qexpr.NewStringer().Visit(expr)
 			fmsg := "EvaluateForIndex(%q) for docid %v, err: %v skip document"

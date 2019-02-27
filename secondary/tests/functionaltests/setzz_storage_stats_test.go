@@ -526,6 +526,8 @@ func TestIdxCorruptBackup(t *testing.T) {
 func TestStatsPersistence(t *testing.T) {
 	log.Printf("In TestStatsPersistence()")
 
+	lastKnownScanTimeStat := "last_known_scan_time"
+
 	bucketName := "default"
 	indexNames := [...]string{"index_age", "index_gender", "index_city"}
 	indexFields := [...]string{"age", "gender", "address.city"}
@@ -557,7 +559,7 @@ func TestStatsPersistence(t *testing.T) {
 		lqt1 := make([]float64, 3)
 		stats := secondaryindex.GetStats(clusterconfig.Username, clusterconfig.Password, kvaddress)
 		for i := 0; i < 3; i++ {
-			lqt1[i] = stats[bucketName+":"+indexNames[i]+":last_query_time"].(float64)
+			lqt1[i] = stats[bucketName+":"+indexNames[i]+":"+lastKnownScanTimeStat].(float64)
 		}
 
 		time.Sleep(time.Duration(persistenceInterval+2) * time.Second)
@@ -566,15 +568,15 @@ func TestStatsPersistence(t *testing.T) {
 
 		stats = secondaryindex.GetStats(clusterconfig.Username, clusterconfig.Password, kvaddress)
 		for i := 0; i < 3; i++ {
-			lqt := stats[bucketName+":"+indexNames[i]+":last_query_time"].(float64)
+			lqt := stats[bucketName+":"+indexNames[i]+":"+lastKnownScanTimeStat].(float64)
 			if enabled {
 				if lqt != lqt1[i] {
-					err := errors.New(fmt.Sprintf("last_query_time stat mistach after restart for index %v: Before: %v After %v", indexNames[i], lqt1[i], lqt))
+					err := errors.New(fmt.Sprintf("%v stat mistach after restart for index %v: Before: %v After %v", lastKnownScanTimeStat, indexNames[i], lqt1[i], lqt))
 					FailTestIfError(err, "Error in TestStatsPersistence", t)
 				}
 			} else {
 				if lqt == lqt1[i] {
-					err := errors.New(fmt.Sprintf("last_query_time stat unexpected match with stats persistence disabled for index %v", indexNames[i]))
+					err := errors.New(fmt.Sprintf("%v stat unexpected match with stats persistence disabled for index %v", lastKnownScanTimeStat, indexNames[i]))
 					FailTestIfError(err, "Error in TestStatsPersistence", t)
 				}
 			}
