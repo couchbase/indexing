@@ -76,7 +76,8 @@ type scanCoordinator struct {
 // Any async message to supervisor is sent to supvMsgch.
 // If supvCmdch get closed, ScanCoordinator will shut itself down.
 func NewScanCoordinator(supvCmdch MsgChannel, supvMsgch MsgChannel,
-	config common.Config, snapshotNotifych chan IndexSnapshot) (ScanCoordinator, Message) {
+	config common.Config, snapshotNotifych chan IndexSnapshot,
+	stats *IndexerStats) (ScanCoordinator, Message) {
 	var err error
 
 	s := &scanCoordinator{
@@ -106,6 +107,7 @@ func NewScanCoordinator(supvCmdch MsgChannel, supvMsgch MsgChannel,
 	}
 
 	s.setIndexerState(common.INDEXER_BOOTSTRAP)
+	s.stats.Set(stats)
 
 	// main loop
 	go s.run()
@@ -555,6 +557,15 @@ func (s *scanCoordinator) getRequestedIndexSnapshot(r *ScanRequest) (snap IndexS
 		return nil, err
 	} else if snapshot != nil {
 		return snapshot, nil
+	}
+
+	// We have not found a consistent snapshot at this point. If indexer is in
+	// bootstrap and reqeuest is for consistent scan, we dont want to wait further
+	// for consistent snapshots as streams will not be started yet. It would be
+	// better to return an error right away instead of scan time so that replica
+	// can be retried by the client.
+	if s.isBootstrapMode() && *r.Consistency != common.AnyConsistency {
+		return nil, common.ErrIndexNotReady
 	}
 
 	snapResch := make(chan interface{}, 1)
@@ -1079,6 +1090,14 @@ func (s *scanCoordinator) findIndexInstance(
 			return nil, nil, ErrNotMyIndex
 		}
 	}
+
+	if s.isBootstrapMode() {
+		// Since madhatter, scanning of warmed up index during indexer bootstrap
+		// is allowed. If indexer is in bootstrap and index is not found, it implies
+		// index is not warmed up yet. Return IndexNotReady error.
+		return nil, nil, common.ErrIndexNotReady
+	}
+
 	return nil, nil, common.ErrIndexNotFound
 }
 

@@ -14,6 +14,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
+	"strings"
+	"sync/atomic"
+	"time"
+	"unsafe"
+
 	c "github.com/couchbase/gometa/common"
 	"github.com/couchbase/gometa/message"
 	"github.com/couchbase/gometa/protocol"
@@ -22,10 +28,6 @@ import (
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager/client"
 	mc "github.com/couchbase/indexing/secondary/manager/common"
-	"math"
-	"strings"
-	"sync/atomic"
-	"time"
 	//"runtime/debug"
 )
 
@@ -49,11 +51,24 @@ type LifecycleMgr struct {
 	updator       *updator
 	requestServer RequestServer
 	prepareLock   *client.PrepareCreateRequest
+	stats         StatsHolder
 }
 
 type requestHolder struct {
 	request protocol.RequestMsg
 	fid     string
+}
+
+type StatsHolder struct {
+	ptr unsafe.Pointer
+}
+
+func (h StatsHolder) Get() *common.Statistics {
+	return (*common.Statistics)(atomic.LoadPointer(&h.ptr))
+}
+
+func (h *StatsHolder) Set(s *common.Statistics) {
+	atomic.StorePointer(&h.ptr, unsafe.Pointer(s))
 }
 
 type topologyChange struct {
@@ -148,6 +163,7 @@ func (m *LifecycleMgr) Run(repo *MetadataRepo, requestServer RequestServer) {
 	m.repo = repo
 	m.requestServer = requestServer
 	go m.processRequest()
+	go m.broadcastStats()
 }
 
 func (m *LifecycleMgr) RegisterNotifier(notifier MetadataNotifier) {
@@ -205,7 +221,8 @@ func (m *LifecycleMgr) OnNewRequest(fid string, request protocol.RequestMsg) {
 				op == client.OPCODE_DELETE_BUCKET ||
 				op == client.OPCODE_CLEANUP_INDEX ||
 				op == client.OPCODE_CLEANUP_PARTITION ||
-				op == client.OPCODE_RESET_INDEX {
+				op == client.OPCODE_RESET_INDEX ||
+				op == client.OPCODE_BROADCAST_STATS {
 				m.bootstraps <- req
 				return
 			}
@@ -347,7 +364,7 @@ func (m *LifecycleMgr) dispatchRequest(request *requestHolder, factory *message.
 	case client.OPCODE_BUILD_INDEX_RETRY:
 		err = m.handleBuildIndexes(content, common.NewUserRequestContext(), true)
 	case client.OPCODE_BROADCAST_STATS:
-		m.handleBroadcastStats(content)
+		m.handleNotifyStats(content)
 	case client.OPCODE_RESET_INDEX:
 		err = m.handleResetIndex(content)
 	case client.OPCODE_CONFIG_UPDATE:
@@ -1968,7 +1985,7 @@ func (m *LifecycleMgr) handleCleanupDeferIndexFromBucket(bucket string) error {
 // Broadcast Stats
 //-----------------------------------------------------------
 
-func (m *LifecycleMgr) handleBroadcastStats(buf []byte) {
+func (m *LifecycleMgr) handleNotifyStats(buf []byte) {
 
 	if len(buf) > 0 {
 		stats := make(common.Statistics)
@@ -1984,14 +2001,35 @@ func (m *LifecycleMgr) handleBroadcastStats(buf []byte) {
 					filtered[key] = value
 				}
 			}
-
-			idxStats := &client.IndexStats{Stats: filtered}
-			if err := m.repo.BroadcastIndexStats(idxStats); err != nil {
-				logging.Errorf("lifecycleMgr: fail to send index stats.  Error = %v", err)
-			}
+			m.stats.Set(&filtered)
 
 		} else {
 			logging.Errorf("lifecycleMgr: fail to marshall index stats.  Error = %v", err)
+		}
+	}
+}
+
+// Broadcast stats in a go-routine
+func (m *LifecycleMgr) broadcastStats() {
+
+	ticker := time.NewTicker(time.Second * 5)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			filtered := m.stats.Get()
+			if filtered != nil {
+				idxStats := &client.IndexStats{Stats: *filtered}
+				if err := m.repo.BroadcastIndexStats(idxStats); err != nil {
+					logging.Errorf("lifecycleMgr: fail to send index stats.  Error = %v", err)
+				}
+			}
+
+		case <-m.killch:
+			// lifecycle manager shutdown
+			logging.Debugf("LifecycleMgr.broadcastStats(): received kill signal. Shutting down broadcastStats routine.")
+			return
 		}
 	}
 }

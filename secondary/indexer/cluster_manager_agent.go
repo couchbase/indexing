@@ -11,13 +11,14 @@ package indexer
 
 import (
 	"errors"
+	"net"
+	"sync/atomic"
+	"time"
+
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager"
 	mc "github.com/couchbase/indexing/secondary/manager/common"
-	"net"
-	"sync/atomic"
-	"time"
 )
 
 //ClustMgrAgent provides the mechanism to talk to Index Coordinator
@@ -160,6 +161,9 @@ func (c *clustMgrAgent) handleSupvervisorCommands(cmd Message) {
 
 	case INDEX_STATS_DONE:
 		c.handleStats(cmd)
+
+	case INDEX_STATS_BROADCAST:
+		c.handleBroadcastStats(cmd)
 
 	case CONFIG_SETTINGS_UPDATE:
 		c.handleConfigUpdate(cmd)
@@ -314,6 +318,15 @@ func (c *clustMgrAgent) handleStatsInternal() {
 	stats := c.stats.Get()
 	if stats != nil {
 		c.mgr.NotifyStats(stats.GetStats(false, false))
+	}
+}
+
+func (c *clustMgrAgent) handleBroadcastStats(cmd Message) {
+
+	c.supvCmdch <- &MsgSuccess{}
+	stats := cmd.(*MsgStatsRequest).GetStats()
+	if stats != nil {
+		c.mgr.NotifyStats(stats)
 	}
 }
 

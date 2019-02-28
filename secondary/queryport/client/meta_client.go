@@ -1739,10 +1739,26 @@ func (b *metadataClient) updateStats(stats map[common.IndexInstId]map[common.Par
 		for partitionId, stats := range statsByPartitions {
 
 			if v := stats.Get("num_docs_pending"); v != nil {
-				pending := int64(v.(float64))
+				var pending, total int64
+				if v.(float64) == float64(math.MaxInt64) {
+					pending = math.MaxInt64
+				} else {
+					pending = int64(v.(float64))
+				}
+
 				if v := stats.Get("num_docs_queued"); v != nil {
-					queued := int64(v.(float64))
-					newStats.updatePendingItem(partitionId, pending+queued)
+					var queued int64
+					if v.(float64) == float64(math.MaxInt64) {
+						queued = math.MaxInt64
+					} else {
+						queued = int64(v.(float64))
+					}
+					if pending == math.MaxInt64 || queued == math.MaxInt64 {
+						total = math.MaxInt64
+					} else {
+						total = pending + queued
+					}
+					newStats.updatePendingItem(partitionId, total)
 				}
 			}
 

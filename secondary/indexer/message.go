@@ -69,6 +69,7 @@ const (
 	STORAGE_SNAP_DONE
 	STORAGE_INDEX_MERGE_SNAPSHOT
 	STORAGE_INDEX_PRUNE_SNAPSHOT
+	STORAGE_UPDATE_SNAP_MAP
 
 	//KVSender
 	KV_SENDER_SHUTDOWN
@@ -138,6 +139,7 @@ const (
 	//COMMON
 	UPDATE_INDEX_INSTANCE_MAP
 	UPDATE_INDEX_PARTITION_MAP
+	UPDATE_MAP_WORKER
 
 	OPEN_STREAM
 	ADD_INDEX_LIST_TO_STREAM
@@ -153,6 +155,7 @@ const (
 	INDEX_PROGRESS_STATS
 	INDEXER_STATS
 	INDEX_STATS_DONE
+	INDEX_STATS_BROADCAST
 
 	STATS_RESET
 	STATS_PERSISTER_START
@@ -542,6 +545,39 @@ func (m *MsgUpdatePartnMap) String() string {
 	str := "\n\tMessage: MsgUpdatePartnMap"
 	str += fmt.Sprintf("%v", m.indexPartnMap)
 	return str
+}
+
+//UPDATE_MAP_WORKER
+type MsgUpdateWorker struct {
+	workerCh      MsgChannel
+	workerStr     string
+	indexInstMap  common.IndexInstMap
+	indexPartnMap IndexPartnMap
+	respCh        chan error
+}
+
+func (m *MsgUpdateWorker) GetMsgType() MsgType {
+	return UPDATE_MAP_WORKER
+}
+
+func (m *MsgUpdateWorker) GetWorkerCh() MsgChannel {
+	return m.workerCh
+}
+
+func (m *MsgUpdateWorker) GetWorkerStr() string {
+	return m.workerStr
+}
+
+func (m *MsgUpdateWorker) GetIndexInstMap() common.IndexInstMap {
+	return m.indexInstMap
+}
+
+func (m *MsgUpdateWorker) GetIndexPartnMap() IndexPartnMap {
+	return m.indexPartnMap
+}
+
+func (m *MsgUpdateWorker) GetRespCh() chan error {
+	return m.respCh
 }
 
 //MUT_MGR_FLUSH_DONE
@@ -1311,6 +1347,36 @@ func (m *MsgIndexPruneSnapshot) GetPartitions() []common.PartitionId {
 	return m.partitions
 }
 
+//STORAGE_UPDATE_SNAP_MAP
+type MsgUpdateSnapMap struct {
+	idxInstId common.IndexInstId
+	idxInst   common.IndexInst
+	partnMap  PartitionInstMap
+	streamId  common.StreamId
+	bucket    string
+}
+
+func (m *MsgUpdateSnapMap) GetMsgType() MsgType {
+	return STORAGE_UPDATE_SNAP_MAP
+}
+
+func (m *MsgUpdateSnapMap) GetInstId() common.IndexInstId {
+	return m.idxInstId
+}
+
+func (m *MsgUpdateSnapMap) GetInst() common.IndexInst {
+	return m.idxInst
+}
+func (m *MsgUpdateSnapMap) GetPartnMap() PartitionInstMap {
+	return m.partnMap
+}
+func (m *MsgUpdateSnapMap) GetStreamId() common.StreamId {
+	return m.streamId
+}
+func (m *MsgUpdateSnapMap) GetBucket() string {
+	return m.bucket
+}
+
 type MsgIndexStorageStats struct {
 	respch chan []IndexStorageStats
 }
@@ -1327,6 +1393,7 @@ type MsgStatsRequest struct {
 	mType    MsgType
 	respch   chan bool
 	fetchDcp bool
+	stats    common.Statistics
 }
 
 func (m *MsgStatsRequest) GetMsgType() MsgType {
@@ -1339,6 +1406,10 @@ func (m *MsgStatsRequest) GetReplyChannel() chan bool {
 
 func (m *MsgStatsRequest) FetchDcp() bool {
 	return m.fetchDcp
+}
+
+func (m *MsgStatsRequest) GetStats() common.Statistics {
+	return m.stats
 }
 
 type MsgIndexCompact struct {
@@ -1762,6 +1833,8 @@ func (m MsgType) String() string {
 		return "UPDATE_INDEX_INSTANCE_MAP"
 	case UPDATE_INDEX_PARTITION_MAP:
 		return "UPDATE_INDEX_PARTITION_MAP"
+	case UPDATE_MAP_WORKER:
+		return "UPDATE_MAP_WORKER"
 
 	case OPEN_STREAM:
 		return "OPEN_STREAM"
@@ -1831,12 +1904,16 @@ func (m MsgType) String() string {
 		return "STORAGE_INDEX_MERGE_SNAPSHOT"
 	case STORAGE_INDEX_PRUNE_SNAPSHOT:
 		return "STORAGE_INDEX_PRUNE_SNAPSHOT"
+	case STORAGE_UPDATE_SNAP_MAP:
+		return "STORAGE_UPDATE_SNAP_MAP"
 
 	case CONFIG_SETTINGS_UPDATE:
 		return "CONFIG_SETTINGS_UPDATE"
 
 	case STATS_RESET:
 		return "STATS_RESET"
+	case INDEX_STATS_BROADCAST:
+		return "INDEX_STATS_BROADCAST"
 
 	case STATS_PERSISTER_START:
 		return "STATS_PERSISTER_START"

@@ -292,7 +292,6 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 
 	r.CancelCh = cancelCh
 
-	isBootstrapMode := s.isBootstrapMode()
 	r.projectPrimaryKey = true
 
 	if ctx == nil {
@@ -310,10 +309,6 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 		r.ScanType = StatsReq
 		r.Incl = Inclusion(req.GetSpan().GetRange().GetInclusion())
 		r.Sorted = true
-		if isBootstrapMode {
-			err = common.ErrIndexerInBootstrap
-			return
-		}
 		if err = r.setIndexParams(); err != nil {
 			return
 		}
@@ -336,11 +331,6 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 		r.ScanType = CountReq
 		r.Incl = Inclusion(req.GetSpan().GetRange().GetInclusion())
 		r.Sorted = true
-
-		if isBootstrapMode {
-			err = common.ErrIndexerInBootstrap
-			return
-		}
 
 		if err = r.setIndexParams(); err != nil {
 			return
@@ -386,10 +376,7 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 			r.Distinct = req.GetDistinct()
 		}
 		r.Offset = req.GetOffset()
-		if isBootstrapMode {
-			err = common.ErrIndexerInBootstrap
-			return
-		}
+
 		if err = r.setIndexParams(); err != nil {
 			return
 		}
@@ -443,10 +430,6 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 		r.Scans[0].ScanType = AllReq
 		r.Sorted = true
 		r.dataEncFmt = common.DataEncodingFormat(req.GetDataEncFmt())
-		if isBootstrapMode {
-			err = common.ErrIndexerInBootstrap
-			return
-		}
 
 		if err = r.setIndexParams(); err != nil {
 			return

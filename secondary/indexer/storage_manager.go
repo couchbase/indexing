@@ -14,14 +14,15 @@ import (
 	"encoding/gob"
 	"errors"
 	"fmt"
-	"github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/fdb"
-	"github.com/couchbase/indexing/secondary/logging"
 	"math"
 	"os"
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/fdb"
+	"github.com/couchbase/indexing/secondary/logging"
 )
 
 var (
@@ -132,8 +133,6 @@ func NewStorageManager(supvCmdch MsgChannel, supvRespch MsgChannel,
 		}
 	}
 
-	s.updateIndexSnapMap(indexPartnMap, common.ALL_STREAMS, "")
-
 	//start Storage Manager loop which listens to commands from its supervisor
 	go s.run()
 
@@ -201,6 +200,10 @@ func (s *storageMgr) handleSupvervisorCommands(cmd Message) {
 
 	case STORAGE_INDEX_PRUNE_SNAPSHOT:
 		s.handleIndexPruneSnapshot(cmd)
+
+	case STORAGE_UPDATE_SNAP_MAP:
+		s.handleUpdateIndexSnapMapForIndex(cmd)
+
 	}
 }
 
@@ -857,7 +860,7 @@ func (s *storageMgr) handleGetIndexSnapshot(cmd Message) {
 	defer s.muSnap.Unlock()
 
 	// Return snapshot immediately if a matching snapshot exists already
-	// Otherwise add into waiters list so that next snapshot creation event
+	// Else add into waiters list so that next snapshot creation event
 	// can notify the requester when a snapshot with matching timestamp
 	// is available.
 	is := s.indexSnapMap[req.GetIndexId()]
@@ -1356,62 +1359,85 @@ func (s *storageMgr) updateIndexSnapMap(indexPartnMap IndexPartnMap,
 
 	s.muSnap.Lock()
 	defer s.muSnap.Unlock()
-	needRestart := false
 
 	for idxInstId, partnMap := range indexPartnMap {
+		idxInst := s.indexInstMap[idxInstId]
+		s.updateIndexSnapMapForIndex(idxInstId, idxInst, partnMap, streamId, bucket)
+	}
+}
 
-		//if bucket and stream have been provided
-		if bucket != "" && streamId != common.ALL_STREAMS {
-			idxInst := s.indexInstMap[idxInstId]
-			//skip the index if either bucket or stream don't match
-			if idxInst.Defn.Bucket != bucket || idxInst.Stream != streamId {
-				continue
-			}
-			//skip deleted indexes
-			if idxInst.State == common.INDEX_STATE_DELETED {
-				continue
+// Caller of updateIndexSnapMapForIndex should ensure
+// locking and subsequent unlocking of muSnap
+func (s *storageMgr) updateIndexSnapMapForIndex(idxInstId common.IndexInstId, idxInst common.IndexInst,
+	partnMap PartitionInstMap, streamId common.StreamId, bucket string) {
+
+	needRestart := false
+	//if bucket and stream have been provided
+	if bucket != "" && streamId != common.ALL_STREAMS {
+		//skip the index if either bucket or stream don't match
+		if idxInst.Defn.Bucket != bucket || idxInst.Stream != streamId {
+			return
+		}
+		//skip deleted indexes
+		if idxInst.State == common.INDEX_STATE_DELETED {
+			return
+		}
+	}
+
+	DestroyIndexSnapshot(s.indexSnapMap[idxInstId])
+	delete(s.indexSnapMap, idxInstId)
+	s.notifySnapshotDeletion(idxInstId)
+
+	var tsVbuuid *common.TsVbuuid
+	var err error
+	partnSnapMap := make(PartnSnapMap)
+
+	for _, partnInst := range partnMap {
+		partnSnapMap, tsVbuuid, err = s.openSnapshot(idxInstId, partnInst, partnSnapMap)
+		if err != nil {
+			if err == errStorageCorrupted {
+				needRestart = true
+			} else {
+				panic("Unable to open snapshot -" + err.Error())
 			}
 		}
 
-		DestroyIndexSnapshot(s.indexSnapMap[idxInstId])
-		delete(s.indexSnapMap, idxInstId)
-		s.notifySnapshotDeletion(idxInstId)
-
-		var tsVbuuid *common.TsVbuuid
-		var err error
-		partnSnapMap := make(PartnSnapMap)
-
-		for _, partnInst := range partnMap {
-			partnSnapMap, tsVbuuid, err = s.openSnapshot(idxInstId, partnInst, partnSnapMap)
-			if err != nil {
-				if err == errStorageCorrupted {
-					needRestart = true
-				} else {
-					panic("Unable to open snapshot -" + err.Error())
-				}
-			}
-
-			if partnSnapMap == nil {
-				break
-			}
+		if partnSnapMap == nil {
+			break
 		}
+	}
 
-		if len(partnSnapMap) != 0 {
-			is := &indexSnapshot{
-				instId: idxInstId,
-				ts:     tsVbuuid,
-				partns: partnSnapMap,
-			}
-			s.indexSnapMap[idxInstId] = is
-			s.notifySnapshotCreation(is)
-		} else {
-			s.addNilSnapshot(idxInstId, bucket)
+	if len(partnSnapMap) != 0 {
+		is := &indexSnapshot{
+			instId: idxInstId,
+			ts:     tsVbuuid,
+			partns: partnSnapMap,
 		}
+		s.indexSnapMap[idxInstId] = is
+		s.notifySnapshotCreation(is)
+	} else {
+		s.addNilSnapshot(idxInstId, bucket)
 	}
 
 	if needRestart {
 		os.Exit(1)
 	}
+}
+
+func (s *storageMgr) handleUpdateIndexSnapMapForIndex(cmd Message) {
+
+	req := cmd.(*MsgUpdateSnapMap)
+	idxInstId := req.GetInstId()
+	idxInst := req.GetInst()
+	partnMap := req.GetPartnMap()
+	streamId := req.GetStreamId()
+	bucket := req.GetBucket()
+
+	s.muSnap.Lock()
+	s.updateIndexSnapMapForIndex(idxInstId, idxInst, partnMap, streamId, bucket)
+	s.muSnap.Unlock()
+
+	s.supvCmdch <- &MsgSuccess{}
 }
 
 func copyIndexSnapMap(inMap IndexSnapMap) IndexSnapMap {
