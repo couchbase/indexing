@@ -34,6 +34,7 @@ var keys [][]byte
 var vals [][]byte
 var wg sync.WaitGroup
 var smatDebug = false
+var dummyChan chan bool
 
 func smatLog(prefix, format string, args ...interface{}) {
 	if smatDebug {
@@ -239,7 +240,7 @@ func scanFunc(ctx smat.Context) (next smat.State, err error) {
 	c := ctx.(*smatContext)
 
 	reader := c.slice.GetReaderContext()
-	reader.Init()
+	reader.Init(dummyChan)
 	scanReq := new(indexer.ScanRequest)
 	scanReq.Ctxs = make([]indexer.IndexReaderContext, 1)
 	scanReq.Ctxs[0] = reader
