@@ -1,6 +1,7 @@
 package functionaltests
 
 import (
+	"encoding/json"
 	"fmt"
 	c "github.com/couchbase/indexing/secondary/common"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
@@ -259,7 +260,7 @@ func TestVeryLargeIndexKey(t *testing.T) {
 		clusterconfig.Password, clusterconfig.KVAddress)
 	time.Sleep(5 * time.Second)
 
-	log.Printf("TestLargeIndexKey:: Flushed the bucket")
+	log.Printf("TestVeryLargeIndexKey:: Flushed the bucket")
 
 	expResponse := make(tc.ScanResponse)
 
@@ -313,6 +314,178 @@ func TestVeryLargeIndexKey(t *testing.T) {
 	time.Sleep(5 * time.Second)
 }
 
+// Index key size = c.TEMP_BUF_SIZE +/- delta
+// delta = 10%
+// Index key data types
+// 1. Simple data types like strings and numbers (of type int and float)
+// 2. Composite data types like arrays and nested objects
+//    where the arrays and nested objects can contain numbers and strings
+// Here c.SECKEY_TEMP_BUF_PADDING will be ignored on purpose.
+func TestTempBufScanResult(t *testing.T) {
+	if secondaryindex.IndexUsing == "forestdb" {
+		log.Printf("Skipping test TestTempBufScanResult() for forestdb")
+		return
+	}
+
+	e := secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+	FailTestIfError(e, "Error in DropAllSecondaryIndexes", t)
+
+	tc.ClearMap(docs)
+	kvutility.FlushBucket("default", "", clusterconfig.Username,
+		clusterconfig.Password, clusterconfig.KVAddress)
+	time.Sleep(5 * time.Second)
+
+	log.Printf("TestTempBufScanResult:: Flushed the bucket")
+
+	strlen := c.TEMP_BUF_SIZE
+	newdocs := make(map[string]interface{})
+	expResponse := make(tc.ScanResponse)
+
+	// Array of floats
+	var floats interface{}
+	err := json.Unmarshal([]byte(generateFloatArrayJson(strlen, float64(10.0))), &floats)
+	FailTestIfError(err, "Error in json.Unmarshal generateFloatArrayJson", t)
+	m := make(map[string]interface{})
+	m["idxKey"] = floats
+	newdocs["k1"] = m
+	expResponse["k1"] = make([]interface{}, 1)
+	expResponse["k1"][0] = floats
+
+	// Array of strings
+	var strings interface{}
+	strArr := generateStringArrayJson(strlen, float64(10.0))
+	err = json.Unmarshal([]byte(strArr), &strings)
+	FailTestIfError(err, "Error in json.Unmarshal generateStringArrayJson", t)
+	m = make(map[string]interface{})
+	m["idxKey"] = strings
+	newdocs["k2"] = m
+	expResponse["k2"] = make([]interface{}, 1)
+	expResponse["k2"][0] = strings
+
+	// A long string
+	chars := []string{"a", "b", "c", "d", "e", "f", "g", "h"}
+	newdocs["k3"] = make(map[string]interface{})
+	l := recalcStrlen(strlen, float64(0.0))
+	s := splstr(l, chars)
+	m = make(map[string]interface{})
+	m["idxKey"] = s
+	newdocs["k3"] = m
+	expResponse["k3"] = make([]interface{}, 1)
+	expResponse["k3"][0] = s
+
+	// Another long string
+	newdocs["k4"] = make(map[string]interface{})
+	l = recalcStrlen(strlen, float64(10.0))
+	s = splstr(l, chars)
+	m = make(map[string]interface{})
+	m["idxKey"] = s
+	newdocs["k4"] = m
+	expResponse["k4"] = make([]interface{}, 1)
+	expResponse["k4"][0] = s
+
+	// Nested object of strings
+	newdocs["k5"] = make(map[string]interface{})
+	o := nestedobj(4, strlen/4)
+	m = make(map[string]interface{})
+	m["idxKey"] = o
+	newdocs["k5"] = m
+	expResponse["k5"] = make([]interface{}, 1)
+	expResponse["k5"][0] = o
+
+	// Array of a string and a float
+	l = recalcStrlen(strlen, float64(10.0))
+	a := make([]byte, 0, l)
+	s = "[\"" + splstr(l, chars) + "\"," + "0.12" + "]"
+	a = append(a, []byte(s)...)
+	var arr interface{}
+	err = json.Unmarshal(a, &arr)
+	FailTestIfError(err, "Error in json.Unmarshal: array of a string and a float", t)
+	newdocs["k6"] = make(map[string]interface{})
+	m = make(map[string]interface{})
+	m["idxKey"] = arr
+	newdocs["k6"] = m
+	expResponse["k6"] = make([]interface{}, 1)
+	expResponse["k6"][0] = arr
+
+	// Nested object of floats
+	newdocs["k7"] = make(map[string]interface{})
+	o = nestedobjFloat(256)
+	m = make(map[string]interface{})
+	m["idxKey"] = o
+	newdocs["k7"] = m
+	expResponse["k7"] = make([]interface{}, 1)
+	expResponse["k7"][0] = o
+
+	// Set docs in kv
+	kvutility.SetKeyValues(newdocs, "default", "", clusterconfig.KVAddress)
+
+	// Create index
+	err = secondaryindex.CreateSecondaryIndex("index_idxKey", "default", indexManagementAddress, "",
+		[]string{"idxKey"}, false, nil, true, defaultIndexActiveTimeout, nil)
+	FailTestIfError(err, "Error in creating the index", t)
+
+	// Scan results
+	scanResults, err := secondaryindex.ScanAll("index_idxKey", "default", indexScanAddress,
+		defaultlimit, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in scan 1: ", t)
+	err = tv.Validate(expResponse, scanResults)
+	FailTestIfError(err, "Error in scan 1:  result validation", t)
+
+	// Cleanup
+	e = secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+	FailTestIfError(e, "Error in DropAllSecondaryIndexes", t)
+
+	kvutility.FlushBucket("default", "", clusterconfig.Username,
+		clusterconfig.Password, clusterconfig.KVAddress)
+	time.Sleep(5 * time.Second)
+}
+
+func recalcStrlen(strlen int, deltaPercent float64) int {
+	delta := float64(strlen) * rand.Float64() * deltaPercent / 100.0
+	if rand.Intn(100) > 50 {
+		delta *= -1
+	}
+	return strlen + int(delta)
+}
+
+func generateFloatArrayJson(strlen int, deltaPercent float64) string {
+	strlen = recalcStrlen(strlen, deltaPercent)
+
+	sampleFloats := []string{"0.12", "1.23", "123.456", "123456.123456",
+		"12345.48732468362846238674", "-0.34", "-1.67", "-456.456",
+		"-98765.98765", "-12345.3984573498759784395749545"}
+
+	l := len(sampleFloats)
+	str := make([]byte, 0, strlen)
+	str = append(str, "["...)
+	for i := 0; i < strlen; {
+		v := sampleFloats[rand.Intn(l)] + ","
+		str = append(str, v...)
+		i += len(v)
+	}
+	// Remove last comma.
+	str = str[:len(str)-1]
+	str = append(str, "]"...)
+	return string(str)
+}
+
+func generateStringArrayJson(strlen int, deltaPercent float64) string {
+	strlen = recalcStrlen(strlen, deltaPercent)
+	str := make([]byte, 0, strlen)
+	str = append(str, "["...)
+
+	chars := []string{"a", "b", "c", "d", "e", "f", "g", "h"}
+	for i := 0; i < strlen; {
+		v := "\"" + splstr(rand.Intn(int(strlen/4)), chars) + "\","
+		str = append(str, v...)
+		i += len(v)
+	}
+	// Remove last comma.
+	str = str[:len(str)-1]
+	str = append(str, "]"...)
+	return string(str)
+}
+
 func splstr(strlen int, chars []string) string {
 	newstr := make([]byte, strlen)
 	for i := 0; i < strlen; i++ {
@@ -338,6 +511,20 @@ func nestedobj(depth, strlen int) interface{} {
 	obj := make(map[string]interface{})
 	obj[strconv.Itoa(depth)] = splstr(strlen, chars)
 	obj["f"+strconv.Itoa(depth)] = nestedobj(strlen, depth-1)
+	return obj
+}
+
+func nestedobjFloat(depth int) interface{} {
+	if depth == 0 {
+		return nil
+	}
+	sampleFloats := []float64{0.12, 1.23, 123.456, 123456.123456, 0.000000124,
+		12345.48732468362846238674, -0.34, -1.67, -456.456, -0.00000000789,
+		-98765.98765, -12345.3984573498759784395749545}
+	l := len(sampleFloats)
+	obj := make(map[string]interface{})
+	obj[strconv.Itoa(depth)] = sampleFloats[rand.Intn(l)]
+	obj["f"+strconv.Itoa(depth)] = nestedobjFloat(depth - 1)
 	return obj
 }
 
