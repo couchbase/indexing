@@ -10,6 +10,11 @@ import (
 	"github.com/couchbase/indexing/secondary/stats"
 )
 
+
+type TestConfig struct {
+	RandomKeyLen    uint32
+}
+
 type ScanConfig struct {
 	Id              uint64
 	Bucket          string
@@ -27,6 +32,7 @@ type ScanConfig struct {
 	Scans           client.Scans
 	IndexProjection *client.IndexProjection
 	GroupAggr       *client.GroupAggr
+	TestSpec        *TestConfig
 
 	iteration uint32
 }
