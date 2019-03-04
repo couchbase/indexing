@@ -95,10 +95,16 @@ func TestBufferedScan_BackfillDisabled(t *testing.T) {
 	if err != nil {
 		FailTestIfError(err, "TestBufferedScan_BackfillDisabled failed", t)
 	}
-	count, ch := 0, conn.EntryChannel()
+	count, sender := 0, conn.Sender()
 	now := time.Now()
+	var ok bool
 	go doquery(int64(1), conn)
-	for range ch {
+	for {
+		_, ok = sender.GetEntry()
+		if !ok {
+			break
+		}
+
 		time.Sleep(1 * time.Millisecond)
 		count++
 	}
@@ -120,10 +126,15 @@ func TestBufferedScan_BackfillDisabled(t *testing.T) {
 	if err != nil {
 		FailTestIfError(err, "TestBufferedScan_BackfillDisabled failed", t)
 	}
-	count, ch = 0, conn.EntryChannel()
+	count, sender = 0, conn.Sender()
 	now = time.Now()
 	go doquery(int64(1000), conn)
-	for range ch {
+	for {
+		_, ok = sender.GetEntry()
+		if !ok {
+			break
+		}
+
 		time.Sleep(1 * time.Millisecond)
 		count++
 	}
@@ -205,10 +216,16 @@ func TestBufferedScan_BackfillEnabled(t *testing.T) {
 	if err != nil {
 		FailTestIfError(err, "TestBufferedScan_BackfillEnabled failed", t)
 	}
-	count, ch := 0, conn.EntryChannel()
+	count, sender := 0, conn.Sender()
 	now := time.Now()
+	var ok bool
 	go doquery(int64(1), conn)
-	for range ch {
+	for {
+		_, ok = sender.GetEntry()
+		if !ok {
+			break
+		}
+
 		time.Sleep(10 * time.Millisecond)
 		count++
 	}
@@ -232,10 +249,15 @@ func TestBufferedScan_BackfillEnabled(t *testing.T) {
 	if err != nil {
 		FailTestIfError(err, "TestBufferedScan_BackfillEnabled failed", t)
 	}
-	count, ch = 0, conn.EntryChannel()
+	count, sender = 0, conn.Sender()
 	now = time.Now()
 	go doquery(int64(1000), conn)
-	for range ch {
+	for {
+		_, ok = sender.GetEntry()
+		if !ok {
+			break
+		}
+
 		count++
 	}
 	log.Printf("limit=1000,chsize=256; received %v items; took %v\n",
@@ -258,7 +280,7 @@ func TestBufferedScan_BackfillEnabled(t *testing.T) {
 		FailTestIfError(err, "TestBufferedScan_BackfillEnabled failed", t)
 	}
 
-	count, ch = 0, conn.EntryChannel()
+	count, sender = 0, conn.Sender()
 	go doquery(int64(1000), conn)
 	time.Sleep(1 * time.Second)
 	if len(getbackfillFiles(backfillDir())) != 1 {
@@ -266,7 +288,12 @@ func TestBufferedScan_BackfillEnabled(t *testing.T) {
 		FailTestIfError(e, "TestBufferedScan_BackfillEnabled failed", t)
 	}
 	now = time.Now()
-	for range ch {
+	for {
+		_, ok = sender.GetEntry()
+		if !ok {
+			break
+		}
+
 		time.Sleep(10 * time.Millisecond)
 		count++
 	}
@@ -294,10 +321,15 @@ func TestBufferedScan_BackfillEnabled(t *testing.T) {
 				FailTestIfError(err, "TestBufferedScan_BackfillEnabled failed", t)
 			}
 
-			count, ch := 0, conn.EntryChannel()
+			count, sender := 0, conn.Sender()
 			go doquery(int64(50000), conn)
 			now := time.Now()
-			for range ch {
+			for {
+				_, ok = sender.GetEntry()
+				if !ok {
+					break
+				}
+
 				time.Sleep(20 * time.Millisecond)
 				count++
 			}
