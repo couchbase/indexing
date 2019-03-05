@@ -47,6 +47,7 @@ type StreamState struct {
 	streamBucketAbortInProgressMap   map[common.StreamId]BucketAbortInProgressMap
 	streamBucketFlushEnabledMap      map[common.StreamId]BucketFlushEnabledMap
 	streamBucketDrainEnabledMap      map[common.StreamId]BucketDrainEnabledMap
+	streamBucketFlushDone            map[common.StreamId]BucketFlushDone
 
 	streamBucketIndexCountMap   map[common.StreamId]BucketIndexCountMap
 	streamBucketRepairStopCh    map[common.StreamId]BucketRepairStopCh
@@ -73,6 +74,7 @@ type BucketFlushInProgressTsMap map[string]*common.TsVbuuid
 type BucketAbortInProgressMap map[string]bool
 type BucketFlushEnabledMap map[string]bool
 type BucketDrainEnabledMap map[string]bool
+type BucketFlushDone map[string]DoneChannel
 
 type BucketRestartVbErrMap map[string]bool
 type BucketRestartVbTsMap map[string]*common.TsVbuuid
@@ -105,6 +107,7 @@ func InitStreamState(config common.Config) *StreamState {
 		streamBucketStartTimeMap:              make(map[common.StreamId]BucketStartTimeMap),
 		streamBucketFlushEnabledMap:           make(map[common.StreamId]BucketFlushEnabledMap),
 		streamBucketDrainEnabledMap:           make(map[common.StreamId]BucketDrainEnabledMap),
+		streamBucketFlushDone:                 make(map[common.StreamId]BucketFlushDone),
 		streamBucketVbStatusMap:               make(map[common.StreamId]BucketVbStatusMap),
 		streamBucketVbRefCountMap:             make(map[common.StreamId]BucketVbRefCountMap),
 		streamBucketRestartVbErrMap:           make(map[common.StreamId]BucketRestartVbErrMap),
@@ -171,6 +174,9 @@ func (ss *StreamState) initNewStream(streamId common.StreamId) {
 	bucketDrainEnabledMap := make(BucketDrainEnabledMap)
 	ss.streamBucketDrainEnabledMap[streamId] = bucketDrainEnabledMap
 
+	bucketFlushDone := make(BucketFlushDone)
+	ss.streamBucketFlushDone[streamId] = bucketFlushDone
+
 	bucketVbStatusMap := make(BucketVbStatusMap)
 	ss.streamBucketVbStatusMap[streamId] = bucketVbStatusMap
 
@@ -229,6 +235,7 @@ func (ss *StreamState) initBucketInStream(streamId common.StreamId,
 	ss.streamBucketLastSnapAlignFlushedTsMap[streamId][bucket] = nil
 	ss.streamBucketFlushEnabledMap[streamId][bucket] = true
 	ss.streamBucketDrainEnabledMap[streamId][bucket] = true
+	ss.streamBucketFlushDone[streamId][bucket] = nil
 	ss.streamBucketVbStatusMap[streamId][bucket] = NewTimestamp(numVbuckets)
 	ss.streamBucketVbRefCountMap[streamId][bucket] = NewTimestamp(numVbuckets)
 	ss.streamBucketRestartVbRetryMap[streamId][bucket] = NewTimestamp(numVbuckets)
@@ -286,6 +293,11 @@ func (ss *StreamState) cleanupBucketFromStream(streamId common.StreamId,
 	delete(ss.streamBucketPrevVbuuidTs[streamId], bucket)
 	delete(ss.streamBucketSkippedInMemTs[streamId], bucket)
 
+	if donech, ok := ss.streamBucketFlushDone[streamId][bucket];ok && donech != nil {
+		close(donech)
+	}
+	delete(ss.streamBucketFlushDone[streamId], bucket)
+
 	ss.streamBucketStatus[streamId][bucket] = STREAM_INACTIVE
 
 	logging.Infof("StreamState::cleanupBucketFromStream Bucket %v Deleted from "+
@@ -307,6 +319,7 @@ func (ss *StreamState) resetStreamState(streamId common.StreamId) {
 	delete(ss.streamBucketLastSnapAlignFlushedTsMap, streamId)
 	delete(ss.streamBucketFlushEnabledMap, streamId)
 	delete(ss.streamBucketDrainEnabledMap, streamId)
+	delete(ss.streamBucketFlushDone, streamId)
 	delete(ss.streamBucketVbStatusMap, streamId)
 	delete(ss.streamBucketVbRefCountMap, streamId)
 	delete(ss.streamBucketRestartVbRetryMap, streamId)

@@ -519,6 +519,12 @@ func (tk *timekeeper) handleFlushDone(cmd Message) {
 	bucketLastFlushedTsMap := tk.ss.streamBucketLastFlushedTsMap[streamId]
 	bucketFlushInProgressTsMap := tk.ss.streamBucketFlushInProgressTsMap[streamId]
 
+	doneCh := tk.ss.streamBucketFlushDone[streamId][bucket]
+	if doneCh != nil {
+		close(doneCh)
+		tk.ss.streamBucketFlushDone[streamId][bucket] = nil
+	}
+
 	if flushWasAborted {
 
 		tk.processFlushAbort(streamId, bucket)
@@ -792,6 +798,11 @@ func (tk *timekeeper) handleFlushAbortDone(cmd Message) {
 			//if there is flush in progress, mark it as done
 			if bucketFlushInProgressTsMap[bucket] != nil {
 				bucketFlushInProgressTsMap[bucket] = nil
+				doneCh := tk.ss.streamBucketFlushDone[streamId][bucket]
+				if doneCh != nil {
+					close(doneCh)
+					tk.ss.streamBucketFlushDone[streamId][bucket] = nil
+				}
 			}
 		} else {
 			//this bucket is already gone from this stream, may be because
@@ -2071,7 +2082,16 @@ func (tk *timekeeper) sendNewStabilityTS(flushTs *common.TsVbuuid, bucket string
 
 	tk.ss.streamBucketFlushInProgressTsMap[streamId][bucket] = flushTs
 
+	var stopCh StopChannel
+	var doneCh DoneChannel
+
 	monitor_ts := tk.config["timekeeper.monitor_flush"].Bool()
+
+	if monitor_ts {
+		stopCh = tk.ss.streamBucketTimerStopCh[streamId][bucket]
+		doneCh = make(DoneChannel)
+		tk.ss.streamBucketFlushDone[streamId][bucket] = doneCh
+	}
 
 	go func() {
 		tk.supvRespch <- &MsgTKStabilityTS{ts: flushTs,
@@ -2082,26 +2102,40 @@ func (tk *timekeeper) sendNewStabilityTS(flushTs *common.TsVbuuid, bucket string
 		if monitor_ts {
 
 			var totalWait int
-			ticker := time.NewTicker(time.Second * 60)
-			for _ = range ticker.C {
-				tk.lock.Lock()
+			ticker := time.NewTicker(time.Second * 10)
+			defer ticker.Stop()
 
-				flushInProgress := tk.ss.streamBucketFlushInProgressTsMap[streamId][bucket]
-				if flushTs.Equal(flushInProgress) {
-					totalWait += 60
+			for {
 
-					if totalWait > 300 {
-						lastFlushedTs := tk.ss.streamBucketLastFlushedTsMap[streamId][bucket]
-						hwt := tk.ss.streamBucketHWTMap[streamId][bucket]
-						logging.Warnf("Timekeeper::flushMonitor Waiting For Flush "+
-							"to finish for %v seconds. FlushTs %v \n LastFlushTs %v \n HWT %v", totalWait,
-							flushTs, lastFlushedTs, hwt)
-					}
-				} else {
-					tk.lock.Unlock()
+				select {
+
+				case <-stopCh:
 					return
+				case <-doneCh:
+					return
+
+				case <-ticker.C:
+
+					tk.lock.Lock()
+					flushInProgress := tk.ss.streamBucketFlushInProgressTsMap[streamId][bucket]
+					if flushTs.Equal(flushInProgress) {
+						totalWait += 10
+
+						if totalWait > 60 {
+							lastFlushedTs := tk.ss.streamBucketLastFlushedTsMap[streamId][bucket]
+							hwt := tk.ss.streamBucketHWTMap[streamId][bucket]
+							logging.Warnf("Timekeeper::flushMonitor Waiting for flush "+
+								"to finish for %v seconds. Stream %v Bucket %v.", totalWait, streamId, bucket)
+							logging.Verbosef("Timekeeper::flushMonitor FlushTs %v \n LastFlushTs %v \n HWT %v", flushTs,
+								lastFlushedTs, hwt)
+						}
+					} else {
+						tk.lock.Unlock()
+						return
+					}
+					tk.lock.Unlock()
 				}
-				tk.lock.Unlock()
+
 			}
 		}
 
