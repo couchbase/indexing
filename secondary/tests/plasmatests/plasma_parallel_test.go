@@ -628,7 +628,7 @@ func scan1(c *Context, wg *sync.WaitGroup) {
 
 	reader := c.memDbSlice.GetReaderContext()
 	reader1 := c.plasmaSlice.GetReaderContext()
-	reader1.Init()
+	reader1.Init(dummyChan)
 	scanReqMemDb := new(indexer.ScanRequest)
 	scanReqMemDb.Ctxs = make([]indexer.IndexReaderContext, 1)
 	scanReqMemDb.Ctxs[0] = reader
@@ -708,7 +708,7 @@ func scanAll(c *Context, wg *sync.WaitGroup) {
 
 	reader := c.memDbSlice.GetReaderContext()
 	reader1 := c.plasmaSlice.GetReaderContext()
-	reader1.Init()
+	reader1.Init(dummyChan)
 	scanReqMemDb := new(indexer.ScanRequest)
 	scanReqMemDb.Ctxs = make([]indexer.IndexReaderContext, 1)
 	scanReqMemDb.Ctxs[0] = reader
@@ -773,7 +773,7 @@ func scanRange(c *Context, wg *sync.WaitGroup) {
 
 	reader := c.memDbSlice.GetReaderContext()
 	reader1 := c.plasmaSlice.GetReaderContext()
-	reader1.Init()
+	reader1.Init(dummyChan)
 	scanReqMemDb := new(indexer.ScanRequest)
 	scanReqMemDb.Ctxs = make([]indexer.IndexReaderContext, 1)
 	scanReqMemDb.Ctxs[0] = reader
