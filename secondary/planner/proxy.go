@@ -1309,7 +1309,7 @@ func processDeleteToken(clusterUrl string, indexers []*IndexerNode, config commo
 	}
 
 	clusterVersion := cinfo.GetClusterVersion()
-	if clusterVersion < common.INDEXER_55_VERSION {
+	if clusterVersion < common.INDEXER_65_VERSION {
 		logging.Infof("Planner::Cluster in upgrade.  Skip fetching delete token.")
 		return nil
 	}
