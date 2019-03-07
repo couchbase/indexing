@@ -11,6 +11,7 @@ cat > ~/.cienv <<EOF
     export BRANCH="unstable"
     export MODE="test"
     export WATCHERS="siri@couchbase.com"
+    export STORAGE="plasma"
     export PEGGED=0
     # use below if gerrit patchsets need to be ordered (so adding CI bot is not enough)
     # export GERRIT="10051 20012 31241"

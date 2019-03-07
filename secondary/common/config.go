@@ -136,10 +136,10 @@ var SystemConfig = Config{
 		false,      // case-insensitive
 	},
 	"projector.mutationChanSize": ConfigValue{
-		500,
+		150,
 		"channel size of projector's vbucket workers, " +
 			"changing this value does not affect existing feeds.",
-		500,
+		150,
 		false, // mutable
 		false, // case-insensitive
 	},
@@ -168,9 +168,9 @@ var SystemConfig = Config{
 	},
 	"projector.vbucketWorkers": ConfigValue{
 		64,
-		"number of vbuckets to be handled by a single worker",
+		"number of workers handling the vbuckets",
 		64,
-		true,  // immutable
+		false, // mutable
 		false, // case-insensitive
 	},
 	"projector.syncTimeout": ConfigValue{
@@ -182,9 +182,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"projector.kvstatTick": ConfigValue{
-		5 * 60 * 1000, // 5 minutes
+		1 * 60 * 1000, // 1 minute
 		"tick, in milliseconds, to log kvdata statistics",
-		5 * 60 * 1000, // 5 minutes
+		1 * 60 * 1000, // 1 minute
 		false,         // mutable
 		false,         // case-insensitive
 	},
@@ -242,10 +242,10 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"projector.dcp.dataChanSize": ConfigValue{
-		10000,
+		1000,
 		"channel size for DCP's data path routines, " +
 			"changing this value does not affect existing feeds.",
-		10000,
+		1000,
 		false, // mutable
 		false, // case-insensitive
 	},
@@ -257,11 +257,11 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"projector.dcp.latencyTick": ConfigValue{
-		5 * 60 * 1000, // 5 minute
+		1 * 60 * 1000, // 1 minute
 		"in milliseconds, periodically log cumulative stats of dcp latency",
-		5 * 60 * 1000,
-		false, // mutable
-		false, // case-insensitive
+		1 * 60 * 1000, // 1 minute
+		false,         // mutable
+		false,         // case-insensitive
 	},
 	"projector.dcp.activeVbOnly": ConfigValue{
 		true,
@@ -325,11 +325,11 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"projector.dataport.keyChanSize": ConfigValue{
-		100000,
+		5000,
 		"channel size of dataport endpoints data input, " +
 			"does not affect existing feeds.",
-		100000,
-		true,  // immutable
+		5000,
+		false, // mutable
 		false, // case-insensitive
 	},
 	"projector.dataport.bufferSize": ConfigValue{
@@ -368,9 +368,9 @@ var SystemConfig = Config{
 		false,       // case-insensitive
 	},
 	"projector.dataport.statTick": ConfigValue{
-		5 * 60 * 1000, // 5 minutes
+		1 * 60 * 1000, // 1 minute
 		"tick, in milliseconds, to log endpoint statistics",
-		5 * 60 * 1000, // 5 minutes
+		1 * 60 * 1000, // 1 minute
 		false,         // mutable
 		false,         // case-insensitive
 	},
