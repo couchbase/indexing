@@ -1238,7 +1238,9 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 	if newConfig["api.enableTestServer"].Bool() && !idx.testServRunning {
 		// Start indexer endpoints for CRUD operations.
 		// Initialize the QE REST server on config change.
-		NewTestServer(idx.config["clusterAddr"].String())
+		certFile := idx.config["certFile"].String()
+		keyFile := idx.config["keyFile"].String()
+		NewTestServer(idx.config["clusterAddr"].String(), certFile, keyFile)
 		idx.testServRunning = true
 	}
 

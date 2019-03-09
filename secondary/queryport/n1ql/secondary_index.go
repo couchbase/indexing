@@ -21,6 +21,7 @@ import "encoding/gob"
 import "strconv"
 import "io/ioutil"
 import "sync/atomic"
+import "net/url"
 
 import l "github.com/couchbase/indexing/secondary/logging"
 import c "github.com/couchbase/indexing/secondary/common"
@@ -123,7 +124,7 @@ func NewGSIIndexer(
 		return nil, errors.NewError(err, "GSI config instantiation failed")
 	}
 	qconf := conf.SectionConfig("queryport.client.", true /*trim*/)
-	client, err := getSingletonClient(clusterURL, qconf)
+	client, err := getSingletonClient(clusterURL, conf)
 	if err != nil {
 		l.Errorf("%v GSI instantiation failed: %v", gsi.logPrefix, err)
 		return nil, errors.NewError(err, "GSI client instantiation failed")
@@ -1681,13 +1682,25 @@ var muclient sync.Mutex
 var singletonClient *qclient.GsiClient
 
 func getSingletonClient(
-	clusterURL string, qconf c.Config) (*qclient.GsiClient, error) {
+	clusterURL string, conf c.Config) (*qclient.GsiClient, error) {
 
 	muclient.Lock()
 	defer muclient.Unlock()
 	if singletonClient == nil {
-		l.Debugf("creating singleton for URL %v", clusterURL)
-		client, err := qclient.NewGsiClientWithSettings(clusterURL, qconf, true)
+
+		if strings.Contains(strings.ToLower(clusterURL), "http") ||
+			strings.Contains(strings.ToLower(clusterURL), "https") {
+			parsedUrl, err := url.Parse(clusterURL)
+			if err != nil {
+				return nil, err
+			}
+			clusterURL = parsedUrl.Host
+		}
+
+		l.Infof("creating GsiClient for %v", clusterURL)
+		qconf := conf.SectionConfig("queryport.client.", true /*trim*/)
+		encryptLocalHost := conf["security.encryption.encryptLocalhost"].Bool()
+		client, err := qclient.NewGsiClientWithSettings(clusterURL, qconf, true, encryptLocalHost)
 		if err != nil {
 			return nil, fmt.Errorf("in NewGsiClient(): %v", err)
 		}
