@@ -421,15 +421,7 @@ func (s *scanCoordinator) handleScanRequest(req *ScanRequest, w ScanResponseWrit
 			return fmt.Sprintf("%s RESPONSE rows:%d, scanned:%d, waitTime:%v, totalTime:%v, status:%s, requestId:%s",
 				req.LogPrefix, scanPipeline.RowsReturned(), scanPipeline.RowsScanned(), waitTime, scanTime, status, req.RequestId)
 		})
-
-		switch err {
-		case common.ErrClientCancel:
-			req.Stats.clientCancelError.Add(1)
-		case common.ErrScanTimedOut:
-			req.Stats.numScanTimeouts.Add(1)
-		default:
-			req.Stats.numScanErrors.Add(1)
-		}
+		s.updateErrStats(req, err)
 	} else {
 		status := "ok"
 		logging.LazyVerbose(func() string {
@@ -733,9 +725,7 @@ func (s *scanCoordinator) handleError(prefix string, err error) {
 
 func (s *scanCoordinator) tryRespondWithError(w ScanResponseWriter, req *ScanRequest, err error) bool {
 	if err != nil {
-		if err == common.ErrIndexNotReady && req.Stats != nil {
-			req.Stats.notReadyError.Add(1)
-		} else if err == common.ErrIndexNotFound {
+		if err == common.ErrIndexNotFound {
 			stats := s.stats.Get()
 			stats.notFoundError.Add(1)
 		} else if err == common.ErrIndexerInBootstrap {
@@ -745,11 +735,27 @@ func (s *scanCoordinator) tryRespondWithError(w ScanResponseWriter, req *ScanReq
 			logging.Infof("%s REQUEST %s", req.LogPrefix, req)
 			logging.Infof("%s RESPONSE status:(error = %s), requestId: %v", req.LogPrefix, err, req.RequestId)
 		}
+		s.updateErrStats(req, err)
 		s.handleError(req.LogPrefix, w.Error(err))
 		return true
 	}
 
 	return false
+}
+
+func (s *scanCoordinator) updateErrStats(req *ScanRequest, err error) {
+	if req.Stats != nil {
+		switch err {
+		case common.ErrClientCancel:
+			req.Stats.clientCancelError.Add(1)
+		case common.ErrScanTimedOut:
+			req.Stats.numScanTimeouts.Add(1)
+		case common.ErrIndexNotReady:
+			req.Stats.notReadyError.Add(1)
+		default:
+			req.Stats.numScanErrors.Add(1)
+		}
+	}
 }
 
 /////////////////////////////////////////////////////////////////////////
