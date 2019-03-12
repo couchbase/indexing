@@ -1,6 +1,7 @@
 package protobuf
 
 import "fmt"
+import "time"
 
 import "github.com/couchbase/indexing/secondary/logging"
 import c "github.com/couchbase/indexing/secondary/common"
@@ -102,6 +103,7 @@ type IndexEvaluator struct {
 	instance *IndexInst
 	version  FeedVersion
 	xattrs   []string
+	stats    IndexEvaluatorStats
 }
 
 // NewIndexEvaluator returns a reference to a new instance
@@ -112,6 +114,7 @@ func NewIndexEvaluator(instance *IndexInst,
 	var err error
 
 	ie := &IndexEvaluator{instance: instance, version: version}
+
 	// compile expressions once and reuse it many times.
 	defn := ie.instance.GetDefinition()
 	exprtype := defn.GetExprType()
@@ -154,6 +157,8 @@ func NewIndexEvaluator(instance *IndexInst,
 		logging.Errorf("invalid expression type %v\n", exprtype)
 		return nil, fmt.Errorf("invalid expression type %v", exprtype)
 	}
+
+	ie.stats = IndexEvaluatorStats{}
 	return ie, nil
 }
 
@@ -347,6 +352,10 @@ func (ie *IndexEvaluator) TransformRoute(
 	return newBuf, nil
 }
 
+func (ie *IndexEvaluator) Stats() interface{} {
+	return ie.stats
+}
+
 func (ie *IndexEvaluator) evaluate(
 	m *mc.DcpEvent, docid []byte, docval qvalue.AnnotatedValue,
 	context qexpr.Context, encodeBuf []byte) ([]byte, []byte, error) {
@@ -359,7 +368,7 @@ func (ie *IndexEvaluator) evaluate(
 	exprType := defn.GetExprType()
 	switch exprType {
 	case ExprType_N1QL:
-		return N1QLTransform(docid, docval, context, ie.skExprs, encodeBuf)
+		return N1QLTransform(docid, docval, context, ie.skExprs, encodeBuf, &ie.stats)
 	}
 	return nil, nil, nil
 }
@@ -376,7 +385,7 @@ func (ie *IndexEvaluator) partitionKey(
 	exprType := defn.GetExprType()
 	switch exprType {
 	case ExprType_N1QL:
-		out, _, err := N1QLTransform(docid, docval, context, ie.pkExprs, nil)
+		out, _, err := N1QLTransform(docid, docval, context, ie.pkExprs, nil, &ie.stats)
 		return out, err
 	}
 	return nil, nil
@@ -396,7 +405,7 @@ func (ie *IndexEvaluator) wherePredicate(
 	switch exprType {
 	case ExprType_N1QL:
 		// TODO: can be optimized by using a custom N1QL-evaluator.
-		out, _, err := N1QLTransform(nil, docval, context, []interface{}{ie.whExpr}, encodeBuf)
+		out, _, err := N1QLTransform(nil, docval, context, []interface{}{ie.whExpr}, encodeBuf, &ie.stats)
 		if out == nil { // missing is treated as false
 			return false, err
 		} else if err != nil { // errors are treated as false
@@ -442,4 +451,14 @@ func (ie *IndexEvaluator) dcpEvent2Meta(m *mc.DcpEvent, meta map[string]interfac
 	meta["nru"] = m.Nru
 	meta["cas"] = m.Cas
 	meta["xattrs"] = m.ParsedXATTR
+}
+
+type IndexEvaluatorStats struct {
+	Count    int64
+	TotalDur int64
+}
+
+func (ies *IndexEvaluatorStats) add(duration time.Duration) {
+	ies.Count++
+	ies.TotalDur += duration.Nanoseconds()
 }

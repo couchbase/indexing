@@ -29,4 +29,6 @@ type Evaluator interface {
 		docval qvalue.AnnotatedValue, context qexpr.Context, meta map[string]interface{},
 		numIndexes int,
 	) ([]byte, error)
+
+	Stats() interface{}
 }

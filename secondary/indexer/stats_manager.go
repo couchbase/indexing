@@ -160,6 +160,8 @@ type IndexStats struct {
 	diskSnapLoadDuration      stats.Int64Val
 	notReadyError             stats.Int64Val
 	clientCancelError         stats.Int64Val
+	numScanTimeouts           stats.Int64Val
+	numScanErrors             stats.Int64Val
 	avgScanRate               stats.Int64Val
 	avgMutationRate           stats.Int64Val
 	avgDrainRate              stats.Int64Val
@@ -247,6 +249,8 @@ func (s *IndexStats) Init() {
 	s.diskSnapLoadDuration.Init()
 	s.notReadyError.Init()
 	s.clientCancelError.Init()
+	s.numScanTimeouts.Init()
+	s.numScanErrors.Init()
 	s.avgScanRate.Init()
 	s.avgMutationRate.Init()
 	s.avgDrainRate.Init()
@@ -580,7 +584,7 @@ func (is IndexerStats) GetStats(getPartition bool, skipEmpty bool) common.Statis
 		// partition and index stats
 		addStat("num_requests", s.numRequests.Value())
 
-		addStat("last_query_time", s.lastScanTime.Value())
+		addStat("last_known_scan_time", s.lastScanTime.Value())
 
 		// partition and index stats
 		addStat("num_completed_requests", s.numCompletedRequests.Value())
@@ -758,6 +762,14 @@ func (is IndexerStats) GetStats(getPartition bool, skipEmpty bool) common.Statis
 		addStat("client_cancel_errcount",
 			s.int64Stats(func(ss *IndexStats) int64 {
 				return ss.clientCancelError.Value()
+			}))
+		addStat("num_scan_timeouts",
+			s.int64Stats(func(ss *IndexStats) int64 {
+				return ss.numScanTimeouts.Value()
+			}))
+		addStat("num_scan_errors",
+			s.int64Stats(func(ss *IndexStats) int64 {
+				return ss.numScanErrors.Value()
 			}))
 		// partition stats
 		addStat("avg_scan_rate",
@@ -966,6 +978,7 @@ func (is IndexerStats) constructIndexerStats(skipEmpty bool, version string) com
 	case "v1":
 		addStat("memory_quota", is.memoryQuota.Value())
 		addStat("memory_used", is.memoryUsed.Value())
+		addStat("memory_total_storage", is.memoryTotalStorage.Value())
 
 		indexerState := common.IndexerState(is.indexerState.Value())
 		if indexerState == common.INDEXER_PREPARE_UNPAUSE {
@@ -981,6 +994,11 @@ func (s *IndexStats) constructIndexStats(skipEmpty bool, version string) common.
 	indexStats := make(map[string]interface{})
 	addStat := addStatFactory(skipEmpty, indexStats)
 
+	reqs := s.int64Stats(func(ss *IndexStats) int64 {
+		return ss.numRequests.Value()
+	})
+	pendingReqs := reqs - s.numCompletedRequests.Value()
+
 	addStat("total_scan_duration",
 		s.int64Stats(func(ss *IndexStats) int64 {
 			return ss.scanDuration.Value()
@@ -994,10 +1012,9 @@ func (s *IndexStats) constructIndexStats(skipEmpty bool, version string) common.
 		s.partnInt64Stats(func(ss *IndexStats) int64 {
 			return ss.numDocsIndexed.Value()
 		}))
-	addStat("num_requests",
-		s.int64Stats(func(ss *IndexStats) int64 {
-			return ss.numRequests.Value()
-		}))
+	addStat("num_requests", reqs)
+	addStat("num_pending_requests", pendingReqs)
+
 	addStat("num_rows_returned",
 		s.int64Stats(func(ss *IndexStats) int64 {
 			return ss.numRowsReturned.Value()
@@ -1059,6 +1076,31 @@ func (s *IndexStats) constructIndexStats(skipEmpty bool, version string) common.
 	addStat("recs_on_disk",
 		s.partnInt64Stats(func(ss *IndexStats) int64 {
 			return ss.numRecsOnDisk.Value()
+		}))
+	addStat("num_items_flushed",
+		s.partnInt64Stats(func(ss *IndexStats) int64 {
+			return ss.numItemsFlushed.Value()
+		}))
+
+	// last_known_scan_time stat name because exact scan time cant be
+	// known if indexer restarts within statsPersistenceInterval
+	addStat("last_known_scan_time", s.lastScanTime.Value())
+
+	addStat("initial_build_progress",
+		s.int64Stats(func(ss *IndexStats) int64 {
+			return ss.buildProgress.Value()
+		}))
+	addStat("avg_drain_rate",
+		s.partnInt64Stats(func(ss *IndexStats) int64 {
+			return ss.avgDrainRate.Value()
+		}))
+	addStat("num_scan_timeouts",
+		s.int64Stats(func(ss *IndexStats) int64 {
+			return ss.numScanTimeouts.Value()
+		}))
+	addStat("num_scan_errors",
+		s.int64Stats(func(ss *IndexStats) int64 {
+			return ss.numScanErrors.Value()
 		}))
 
 	return indexStats
@@ -1431,7 +1473,7 @@ func (s *statsManager) runStatsDumpLogger() {
 	}
 }
 
-const last_query_time = "lqt"
+const last_known_scan_time = "lqt" //last_query_time
 const avg_scan_rate = "asr"
 const num_rows_scanned = "nrs"
 const last_num_rows_scanned = "lrs"
@@ -1455,7 +1497,7 @@ func (s *statsManager) runStatsPersister() {
 				statsToBePersisted := make(map[string]interface{})
 				for k, indexStats := range indexerStats.indexes {
 					instdId := strconv.FormatUint(uint64(k), 10)
-					statsToBePersisted[instdId+":"+last_query_time] = indexStats.lastScanTime.Value()
+					statsToBePersisted[instdId+":"+last_known_scan_time] = indexStats.lastScanTime.Value()
 
 					for pk, partnStats := range indexStats.partitions {
 						partnId := strconv.FormatUint(uint64(pk), 10)
@@ -1530,7 +1572,7 @@ func (s *statsManager) updateStatsFromPersistence(indexerStats *IndexerStats) {
 			}
 			statName := kstrs[1]
 			switch statName {
-			case last_query_time:
+			case last_known_scan_time:
 				val, ok := getInt64Val(value, statName)
 				if ok {
 					indexerStats.indexes[instdId].lastScanTime.Set(val)
