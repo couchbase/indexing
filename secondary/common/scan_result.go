@@ -13,8 +13,8 @@ var (
 )
 
 const (
-	SECKEY_TMPBUF_MULTIPLIER = 6
-	SECKEY_BUFSIZE           = 16 * 1024
+	SECKEY_TEMP_BUF_PADDING = 32
+	TEMP_BUF_SIZE           = 4096
 )
 
 var codec *collatejson.Codec
@@ -45,8 +45,8 @@ func (k ScanResultKey) Get(buffer *[]byte) ([]qvalue.Value, error, *[]byte) {
 	if k.DataEncFmt == DATA_ENC_COLLATEJSON {
 		buf := *buffer
 		buf = buf[:0]
-		if len(k.Skeycjson)*SECKEY_TMPBUF_MULTIPLIER > cap(buf) {
-			buf = make([]byte, 0, len(k.Skeycjson)*SECKEY_TMPBUF_MULTIPLIER)
+		if len(k.Skeycjson)+SECKEY_TEMP_BUF_PADDING > cap(buf) {
+			buf = make([]byte, 0, len(k.Skeycjson)+SECKEY_TEMP_BUF_PADDING)
 			retbuf = &buf
 		}
 
