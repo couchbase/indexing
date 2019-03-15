@@ -181,6 +181,11 @@ type IndexStats struct {
 	numRecsInMem              stats.Int64Val
 	numRecsOnDisk             stats.Int64Val
 
+	//stats needed for avg_scan_latency
+	lastScanDuration stats.Int64Val
+	lastNumRequests  stats.Int64Val
+	avgScanLatency   stats.Int64Val
+
 	Timings IndexTimingStats
 }
 
@@ -269,6 +274,11 @@ func (s *IndexStats) Init() {
 	s.cacheMisses.Init()
 	s.numRecsInMem.Init()
 	s.numRecsOnDisk.Init()
+
+	//stats needed for avg_scan_latency
+	s.lastScanDuration.Init()
+	s.lastNumRequests.Init()
+	s.avgScanLatency.Init()
 
 	s.Timings.Init()
 
@@ -544,7 +554,16 @@ func (is IndexerStats) GetStats(getPartition bool, skipEmpty bool) common.Statis
 			scanReqDur := s.int64Stats(func(ss *IndexStats) int64 { return ss.scanReqDuration.Value() })
 			scanReqInitDur := s.int64Stats(func(ss *IndexStats) int64 { return ss.scanReqInitDuration.Value() })
 			scanReqAllocDur := s.int64Stats(func(ss *IndexStats) int64 { return ss.scanReqAllocDuration.Value() })
-			scanLat = scanDur / reqs
+
+			reqsSince := reqs - s.lastNumRequests.Value()
+			if reqsSince > 0 {
+				currScanLat := (scanDur - s.lastScanDuration.Value()) / reqsSince
+				scanLat = (currScanLat + s.avgScanLatency.Value()) / 2
+				s.lastScanDuration.Set(scanDur)
+				s.lastNumRequests.Set(reqs)
+				s.avgScanLatency.Set(scanLat)
+			}
+
 			waitLat = waitDur / reqs
 			scanReqLat = scanReqDur / reqs
 			scanReqInitLat = scanReqInitDur / reqs
@@ -718,7 +737,8 @@ func (is IndexerStats) GetStats(getPartition bool, skipEmpty bool) common.Statis
 			s.partnInt64Stats(func(ss *IndexStats) int64 {
 				return ss.numItemsFlushed.Value()
 			}))
-		addStat("avg_scan_latency", scanLat)
+
+		addStat("avg_scan_latency", s.avgScanLatency.Value())
 		addStat("avg_scan_wait_latency", waitLat)
 		addStat("avg_scan_request_latency", scanReqLat)
 		addStat("avg_scan_request_init_latency", scanReqInitLat)
@@ -1085,6 +1105,8 @@ func (s *IndexStats) constructIndexStats(skipEmpty bool, version string) common.
 	// last_known_scan_time stat name because exact scan time cant be
 	// known if indexer restarts within statsPersistenceInterval
 	addStat("last_known_scan_time", s.lastScanTime.Value())
+
+	addStat("avg_scan_latency", s.avgScanLatency.Value())
 
 	addStat("initial_build_progress",
 		s.int64Stats(func(ss *IndexStats) int64 {
