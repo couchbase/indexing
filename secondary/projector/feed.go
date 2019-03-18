@@ -670,6 +670,9 @@ func (feed *Feed) handleCommand(msg []interface{}) (status string) {
 			// For this bucket, get kvstats
 			bucketStats.kvstats = kvdata.GetKVStats()
 
+			// For this bucket, get workerStats
+			bucketStats.wrkrStats = kvdata.GetWorkerStats()
+
 			// Update feed stats for this bucket
 			feedStats.bucketStats[bucket] = bucketStats
 		}

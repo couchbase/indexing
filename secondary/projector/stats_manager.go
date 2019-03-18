@@ -1,6 +1,7 @@
 package projector
 
 import (
+	"fmt"
 	"sync/atomic"
 	"time"
 	"unsafe"
@@ -18,16 +19,18 @@ const (
 )
 
 type BucketStats struct {
-	dcpStats map[string]interface{}
-	kvstats  map[string]interface{}
+	dcpStats  map[string]interface{}
+	kvstats   map[string]interface{}
+	wrkrStats map[string][]interface{}
 
-	// lastVbseqnosLogTime
+	// Time when last vbseqnos were logged
 	lastVbseqnosLogTime int64
 }
 
 func (bs *BucketStats) Init() {
 	bs.dcpStats = make(map[string]interface{}, 0)
 	bs.kvstats = make(map[string]interface{}, 0)
+	bs.wrkrStats = make(map[string][]interface{}, 0)
 
 	bs.lastVbseqnosLogTime = time.Now().UnixNano()
 }
@@ -42,9 +45,20 @@ func (bs *BucketStats) clone() *BucketStats {
 	}
 
 	for key, value := range bs.kvstats {
-		cbs.kvstats[key] = value
+		if value != nil {
+			cbs.kvstats[key] = value
+		}
 	}
 
+	for key, value := range bs.wrkrStats {
+		if value != nil {
+			wrkrstat := make([]interface{}, 0)
+			for _, stat := range value {
+				wrkrstat = append(wrkrstat, stat)
+			}
+			cbs.wrkrStats[key] = wrkrstat
+		}
+	}
 	return cbs
 }
 
@@ -226,6 +240,17 @@ func (sm *statsManager) logger() {
 							continue
 						}
 					}
+
+					for key, value := range bucketStats.wrkrStats {
+						// Get the type of any worker
+						switch (value[0]).(type) {
+						case *WorkerStats:
+							logging.Infof("%v stats: %v", key, Accmulate(value))
+						default:
+							logging.Errorf("Unknown worker stats type for %v", key)
+							continue
+						}
+					}
 				}
 
 				// Log the endpoint stats for this feed
@@ -250,4 +275,15 @@ func (sm *statsManager) logger() {
 		}
 		time.Sleep(time.Second * time.Duration(atomic.LoadInt64(&sm.statsLogDumpInterval)))
 	}
+}
+
+func Accmulate(wrkr []interface{}) string {
+	var dataChLen, outgoingMut uint64
+	for _, stats := range wrkr {
+		wrkrStat := stats.(*WorkerStats)
+		dataChLen += wrkrStat.datachLen.Value()
+		outgoingMut += wrkrStat.outgoingMut.Value()
+	}
+	return fmt.Sprintf(
+		"{\"datachLen\":%v,\"outgoingMut\":%v}", dataChLen, outgoingMut)
 }

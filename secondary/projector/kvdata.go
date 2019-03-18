@@ -47,7 +47,8 @@ type KVData struct {
 	syncTimeout time.Duration // in milliseconds
 	logPrefix   string
 	// statistics
-	stats *KvdataStats
+	stats     *KvdataStats
+	wrkrStats []interface{}
 }
 
 type KvdataStats struct {
@@ -156,6 +157,9 @@ func NewKVData(
 	}
 	// start workers
 	kvdata.workers = kvdata.spawnWorkers(feed, bucket, config, opaque)
+	// Gather stats pointers from all workers
+	kvdata.updateWorkerStats()
+
 	go kvdata.runScatter(reqTs, mutch)
 	logging.Infof("%v ##%x started ...\n", kvdata.logPrefix, opaque)
 	return kvdata
@@ -242,11 +246,32 @@ func (kvdata *KVData) Close() error {
 }
 
 func (kvdata *KVData) GetKVStats() map[string]interface{} {
+	if kvdata.stats.IsClosed() {
+		return nil
+	}
 	fmsg := "KVDT[<-%v<-%v #%v] ##%v"
 	key := fmt.Sprintf(fmsg, kvdata.bucket, kvdata.feed.cluster, kvdata.topic, kvdata.opaque)
 	kvstat := make(map[string]interface{}, 0)
 	kvstat[key] = kvdata.stats
 	return kvstat
+}
+
+func (kvdata *KVData) GetWorkerStats() map[string][]interface{} {
+	if kvdata.stats.IsClosed() {
+		return nil
+	}
+	fmsg := "WRKR[<-%v<-%v #%v] ##%v"
+	key := fmt.Sprintf(fmsg, kvdata.bucket, kvdata.feed.cluster, kvdata.topic, kvdata.opaque)
+	wrkrstat := make(map[string][]interface{}, 0)
+	wrkrstat[key] = kvdata.wrkrStats
+	return wrkrstat
+}
+
+func (kvdata *KVData) updateWorkerStats() {
+	kvdata.wrkrStats = make([]interface{}, 0, len(kvdata.workers))
+	for _, wrkr := range kvdata.workers {
+		kvdata.wrkrStats = append(kvdata.wrkrStats, wrkr.stats)
+	}
 }
 
 // go-routine handles data path.
