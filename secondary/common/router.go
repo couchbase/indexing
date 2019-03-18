@@ -63,6 +63,10 @@ type RouterEndpoint interface {
 	// synchronous call.
 	GetStatistics() map[string]interface{}
 
+	// GetStats retrieves the endpoint name and pointer to the
+	// statistics object from endpoint
+	GetStats() map[string]interface{}
+
 	// Close will shutdown this endpoint and release its resources,
 	// synchronous call.
 	Close() error

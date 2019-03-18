@@ -185,6 +185,7 @@ const (
 	ufCmdRequestStream byte = iota + 1
 	ufCmdCloseStream
 	ufCmdGetSeqnos
+	ufCmdGetStats
 	ufCmdClose
 )
 
@@ -244,6 +245,16 @@ func (feed *DcpFeed) Close() error {
 	return opError(err, resp, 0)
 }
 
+func (feed *DcpFeed) GetStats() map[string]interface{} {
+	respch := make(chan []interface{}, 1)
+	cmd := []interface{}{ufCmdGetStats, respch}
+	resp, err := failsafeOp(feed.reqch, respch, cmd, feed.finch)
+	if err == nil {
+		return resp[0].(map[string]interface{})
+	}
+	return nil
+}
+
 func (feed *DcpFeed) genServer(reqch chan []interface{}, opaque uint16) {
 	closeNodeFeeds := func() {
 		for _, nodeFeeds := range feed.nodeFeeds {
@@ -293,6 +304,11 @@ loop:
 				respch := msg[1].(chan []interface{})
 				seqnos, err := feed.dcpGetSeqnos()
 				respch <- []interface{}{seqnos, err}
+
+			case ufCmdGetStats:
+				respch := msg[1].(chan []interface{})
+				dcpStats := feed.getStats()
+				respch <- []interface{}{dcpStats, nil}
 
 			case ufCmdClose:
 				closeNodeFeeds()
@@ -516,6 +532,19 @@ func (feed *DcpFeed) dcpGetSeqnos() (map[uint16]uint64, error) {
 		count--
 	}
 	return seqnos, nil
+}
+
+func (feed *DcpFeed) getStats() map[string]interface{} {
+	dcpStats := make(map[string]interface{}, 0)
+	for _, nodeFeeds := range feed.nodeFeeds {
+		for _, singleFeed := range nodeFeeds {
+			if stats := singleFeed.dcpFeed.GetStats(); stats != nil {
+				key := fmt.Sprintf("DCPT[%v] ##%v", singleFeed.dcpFeed.Name(), singleFeed.dcpFeed.Opaque())
+				dcpStats[key] = singleFeed.dcpFeed.GetStats()
+			}
+		}
+	}
+	return dcpStats
 }
 
 func addtofeed(nodeFeeds []*FeedInfo) (*FeedInfo, bool) {

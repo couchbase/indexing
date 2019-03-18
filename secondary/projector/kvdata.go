@@ -45,13 +45,13 @@ type KVData struct {
 	finch chan bool
 	// misc.
 	syncTimeout time.Duration // in milliseconds
-	kvstatTick  time.Duration // in milliseconds
 	logPrefix   string
 	// statistics
 	stats *KvdataStats
 }
 
 type KvdataStats struct {
+	closed      stats.BoolVal
 	hbCount     stats.Uint64Val
 	eventCount  stats.Uint64Val
 	reqCount    stats.Uint64Val
@@ -68,6 +68,7 @@ type KvdataStats struct {
 }
 
 func (kvstats *KvdataStats) Init(numVbuckets int) {
+	kvstats.closed.Init()
 	kvstats.hbCount.Init()
 	kvstats.eventCount.Init()
 	kvstats.reqCount.Init()
@@ -84,6 +85,37 @@ func (kvstats *KvdataStats) Init(numVbuckets int) {
 	for i, _ := range kvstats.vbseqnos {
 		kvstats.vbseqnos[i].Init()
 	}
+}
+
+func (kvstats *KvdataStats) IsClosed() bool {
+	return kvstats.closed.Value()
+}
+
+func (stats *KvdataStats) String() (string, string) {
+	var stitems [15]string
+	stitems[0] = `"hbCount":` + strconv.FormatUint(stats.hbCount.Value(), 10)
+	stitems[1] = `"eventCount":` + strconv.FormatUint(stats.eventCount.Value(), 10)
+	stitems[2] = `"reqCount":` + strconv.FormatUint(stats.reqCount.Value(), 10)
+	stitems[3] = `"endCount":` + strconv.FormatUint(stats.endCount.Value(), 10)
+	stitems[4] = `"snapStat.samples":` + strconv.FormatInt(stats.snapStat.Count(), 10)
+	stitems[5] = `"snapStat.min":` + strconv.FormatInt(stats.snapStat.Min(), 10)
+	stitems[6] = `"snapStat.max":` + strconv.FormatInt(stats.snapStat.Max(), 10)
+	stitems[7] = `"snapStat.avg":` + strconv.FormatInt(stats.snapStat.Mean(), 10)
+	stitems[8] = `"upsertCount":` + strconv.FormatUint(stats.upsertCount.Value(), 10)
+	stitems[9] = `"deleteCount":` + strconv.FormatUint(stats.deleteCount.Value(), 10)
+	stitems[10] = `"exprCount":` + strconv.FormatUint(stats.exprCount.Value(), 10)
+	stitems[11] = `"ainstCount":` + strconv.FormatUint(stats.ainstCount.Value(), 10)
+	stitems[12] = `"dinstCount":` + strconv.FormatUint(stats.dinstCount.Value(), 10)
+	stitems[13] = `"tsCount":` + strconv.FormatUint(stats.tsCount.Value(), 10)
+	stitems[14] = `"mutChLen":` + strconv.FormatUint(stats.mutchLen.Value(), 10)
+	statjson := strings.Join(stitems[:], ",")
+	statsStr := fmt.Sprintf("{%v}", statjson)
+
+	var vbseqnos string
+	for _, v := range stats.vbseqnos {
+		vbseqnos += fmt.Sprintf("%v ", v.Value())
+	}
+	return statsStr, vbseqnos
 }
 
 // NewKVData create a new data-path instance.
@@ -116,8 +148,6 @@ func NewKVData(
 	kvdata.logPrefix = fmt.Sprintf(fmsg, bucket, feed.cluster, feed.topic)
 	kvdata.syncTimeout = time.Duration(config["syncTimeout"].Int())
 	kvdata.syncTimeout *= time.Millisecond
-	kvdata.kvstatTick = time.Duration(config["kvstatTick"].Int())
-	kvdata.kvstatTick *= time.Millisecond
 	for uuid, engine := range engines {
 		kvdata.engines[uuid] = engine
 	}
@@ -211,6 +241,14 @@ func (kvdata *KVData) Close() error {
 	return err
 }
 
+func (kvdata *KVData) GetKVStats() map[string]interface{} {
+	fmsg := "KVDT[<-%v<-%v #%v] ##%v"
+	key := fmt.Sprintf(fmsg, kvdata.bucket, kvdata.feed.cluster, kvdata.topic, kvdata.opaque)
+	kvstat := make(map[string]interface{}, 0)
+	kvstat[key] = kvdata.stats
+	return kvstat
+}
+
 // go-routine handles data path.
 func (kvdata *KVData) runScatter(
 	ts *protobuf.TsVbuuid, mutch <-chan *mc.DcpEvent) {
@@ -229,37 +267,11 @@ func (kvdata *KVData) runScatter(
 		kvdata.workers = nil
 		kvdata.feed.PostFinKVdata(kvdata.bucket)
 		close(kvdata.finch)
+		//Update closed in stats object and log the stats before exiting
+		kvdata.stats.closed.Set(true)
+		kvdata.logStats()
 		logging.Infof("%v ##%x ... stopped\n", kvdata.logPrefix, kvdata.opaque)
 	}()
-
-	vbseqnos := make([]uint64, 1024)
-
-	// stats
-	statSince := time.Now()
-	var stitems [16]string
-	logstats := func() {
-		stitems[0] = `"topic":"` + kvdata.topic + `"`
-		stitems[1] = `"bucket":"` + kvdata.bucket + `"`
-		stitems[2] = `"hbCount":` + strconv.Itoa(int(kvdata.stats.hbCount.Value()))
-		stitems[3] = `"eventCount":` + strconv.Itoa(int(kvdata.stats.eventCount.Value()))
-		stitems[4] = `"reqCount":` + strconv.Itoa(int(kvdata.stats.reqCount.Value()))
-		stitems[5] = `"endCount":` + strconv.Itoa(int(kvdata.stats.endCount.Value()))
-		stitems[6] = `"snapStat.samples":` + strconv.Itoa(int(kvdata.stats.snapStat.Count()))
-		stitems[7] = `"snapStat.min":` + strconv.Itoa(int(kvdata.stats.snapStat.Min()))
-		stitems[8] = `"snapStat.max":` + strconv.Itoa(int(kvdata.stats.snapStat.Max()))
-		stitems[9] = `"snapStat.avg":` + strconv.Itoa(int(kvdata.stats.snapStat.Mean()))
-		stitems[10] = `"upsertCount":` + strconv.Itoa(int(kvdata.stats.upsertCount.Value()))
-		stitems[11] = `"deleteCount":` + strconv.Itoa(int(kvdata.stats.deleteCount.Value()))
-		stitems[12] = `"exprCount":` + strconv.Itoa(int(kvdata.stats.exprCount.Value()))
-		stitems[13] = `"ainstCount":` + strconv.Itoa(int(kvdata.stats.ainstCount.Value()))
-		stitems[14] = `"dinstCount":` + strconv.Itoa(int(kvdata.stats.dinstCount.Value()))
-		stitems[15] = `"tsCount":` + strconv.Itoa(int(kvdata.stats.tsCount.Value()))
-		statjson := strings.Join(stitems[:], ",")
-		fmsg := "%v ##%x stats {%v}\n"
-		logging.Infof(fmsg, kvdata.logPrefix, kvdata.opaque, statjson)
-		fmsg = "%v ##%x vbseqnos %v\n"
-		logging.Infof(fmsg, kvdata.logPrefix, kvdata.opaque, vbseqnos)
-	}
 
 	heartBeat := time.After(kvdata.syncTimeout)
 	fmsg := "%v ##%x heartbeat (%v) loaded ...\n"
@@ -294,12 +306,6 @@ loop:
 					logging.Errorf(fmsg, kvdata.logPrefix, kvdata.opaque, err)
 				}
 			}()
-
-			// log stats ?
-			if time.Since(statSince) > kvdata.kvstatTick {
-				logstats()
-				statSince = time.Now()
-			}
 
 		case msg := <-kvdata.sbch:
 			cmd := msg[0].(byte)
@@ -395,13 +401,6 @@ loop:
 						kvdata.logPrefix, kvdata.opaque, kvdata.syncTimeout)
 					heartBeat = time.After(kvdata.syncTimeout)
 				}
-				if cv, ok := config["kvstatTick"]; ok {
-					kvdata.kvstatTick = time.Duration(cv.Int())
-					kvdata.kvstatTick *= time.Millisecond
-					logging.Infof(
-						"%v ##%x kvstat-tick settings reloaded: %v\n",
-						kvdata.logPrefix, kvdata.opaque, kvdata.kvstatTick)
-				}
 				for _, worker := range kvdata.workers {
 					if err := worker.ResetConfig(config); err != nil {
 						panic(err)
@@ -426,7 +425,6 @@ loop:
 			}
 		}
 	}
-	logstats()
 }
 
 func (kvdata *KVData) scatterMutation(
@@ -537,6 +535,14 @@ func (kvdata *KVData) publishStreamEnd() {
 			kvdata.feed.PostStreamEnd(kvdata.bucket, m)
 		}
 	}
+}
+
+func (kvdata *KVData) logStats() {
+	stats, vbseqnos := kvdata.stats.String()
+	fmsg := "KVDT[<-%v<-%v #%v] ##%v"
+	key := fmt.Sprintf(fmsg, kvdata.bucket, kvdata.feed.cluster, kvdata.topic, kvdata.opaque)
+	logging.Infof("%v stats: %v", key, stats)
+	logging.Infof("%v vbseqnos: [%v]", key, vbseqnos)
 }
 
 func (kvdata *KVData) newStats() c.Statistics {

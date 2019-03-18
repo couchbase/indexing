@@ -44,6 +44,10 @@ type BucketFeeder interface {
 
 	// CloseFeed ends all active streams on this feed and free its resources.
 	CloseFeed() (err error)
+
+	// GetStats retrieves the pointer to stats objects from all DCP feeds
+	// along with the bucket to which the DCP feeds belong to
+	GetStats() map[string]interface{}
 }
 
 // concrete type implementing BucketFeeder
@@ -124,4 +128,9 @@ func (bdcp *bucketDcp) CloseFeed() error {
 	bdcp.dcpFeed.Close()
 	bdcp.bucket.Close()
 	return nil
+}
+
+// GetStats() implements Feeder{} interface.
+func (bdcp *bucketDcp) GetStats() map[string]interface{} {
+	return bdcp.dcpFeed.GetStats()
 }

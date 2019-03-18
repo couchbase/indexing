@@ -4,7 +4,7 @@ import "fmt"
 import "time"
 
 import "github.com/couchbase/indexing/secondary/logging"
-import "github.com/couchbase/indexing/secondary/dcp"
+import couchbase "github.com/couchbase/indexing/secondary/dcp"
 import mcd "github.com/couchbase/indexing/secondary/dcp/transport"
 import mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
 import c "github.com/couchbase/indexing/secondary/common"
@@ -71,6 +71,7 @@ type Feed struct {
 	epFactory  c.RouterEndpointFactory
 	config     c.Config
 	logPrefix  string
+	stats      *FeedStats
 }
 
 // NewFeed creates a new topic feed.
@@ -81,7 +82,6 @@ type Feed struct {
 //    feedChanSize: channel size for feed's control path and back path
 //    mutationChanSize: channel size of projector's data path routine
 //    syncTimeout: timeout, in ms, for sending periodic Sync messages
-//    kvstatTick: timeout, in ms, for logging kvstats
 //    routerEndpointFactory: endpoint factory
 func NewFeed(
 	pooln, topic string,
@@ -116,7 +116,9 @@ func NewFeed(
 		endTimeout: time.Duration(config["feedWaitStreamEndTimeout"].Int()),
 		epFactory:  epf,
 		config:     config,
+		stats:      &FeedStats{},
 	}
+	feed.stats.Init()
 	feed.logPrefix = fmt.Sprintf("FEED[<=>%v(%v)]", topic, feed.cluster)
 
 	go feed.genServer()
@@ -142,6 +144,7 @@ const (
 	fCmdShutdown
 	fCmdGetTopicResponse
 	fCmdGetStatistics
+	fCmdGetStats
 	fCmdResetConfig
 	fCmdDeleteEndpoint
 	fCmdPing
@@ -323,6 +326,18 @@ func (feed *Feed) GetStatistics() c.Statistics {
 	resp, err := c.FailsafeOp(feed.reqch, respch, cmd, feed.finch)
 	if resp != nil && err == nil {
 		return resp[0].(c.Statistics)
+	}
+	return nil
+}
+
+// Return pointers to the stats objects for this feed.
+// Synchronous call.
+func (feed *Feed) GetStats() *FeedStats {
+	respch := make(chan []interface{}, 1)
+	cmd := []interface{}{fCmdGetStats, respch}
+	resp, err := c.FailsafeOp(feed.reqch, respch, cmd, feed.finch)
+	if resp != nil && err == nil {
+		return resp[0].(*FeedStats)
 	}
 	return nil
 }
@@ -641,6 +656,31 @@ func (feed *Feed) handleCommand(msg []interface{}) (status string) {
 	case fCmdGetStatistics:
 		respch := msg[1].(chan []interface{})
 		respch <- []interface{}{feed.getStatistics()}
+
+	case fCmdGetStats:
+		feedStats := feed.stats
+		// For this feed, iterate through all buckets
+		for bucket, kvdata := range feed.kvdata {
+			bucketStats := &BucketStats{}
+
+			if feeder := feed.feeders[bucket]; feeder != nil {
+				bucketStats.dcpStats = feeder.GetStats()
+			}
+
+			// For this bucket, get kvstats
+			bucketStats.kvstats = kvdata.GetKVStats()
+
+			// Update feed stats for this bucket
+			feedStats.bucketStats[bucket] = bucketStats
+		}
+
+		for _, value := range feed.endpoints {
+			// For each feed, there exists only one end point. Therefore,
+			// this loop is iterated only once
+			feedStats.endpStats = value.GetStats()
+		}
+		respch := msg[1].(chan []interface{})
+		respch <- []interface{}{feedStats}
 
 	case fCmdResetConfig:
 		config, respch := msg[1].(c.Config), msg[2].(chan []interface{})
@@ -1267,6 +1307,10 @@ func (feed *Feed) cleanupBucket(bucketn string, enginesOk bool) {
 		kvdata.Close()
 	}
 	delete(feed.kvdata, bucketn) // :SideEffect:
+	if _, ok := feed.stats.bucketStats[bucketn]; ok {
+		delete(feed.stats.bucketStats, bucketn)
+	}
+
 	fmsg := "%v ##%x bucket %v removed ..."
 	logging.Infof(fmsg, feed.logPrefix, feed.opaque, bucketn)
 }
@@ -1827,7 +1871,6 @@ func FeedConfigParams() []string {
 		"encodeBufSize",
 		"routerEndpointFactory",
 		"syncTimeout",
-		"kvstatTick",
 		// dcp configuration
 		"dcp.dataChanSize",
 		"dcp.genChanSize",
@@ -1840,7 +1883,6 @@ func FeedConfigParams() []string {
 		"dataport.bufferSize",
 		"dataport.bufferTimeout",
 		"dataport.harakiriTimeout",
-		"dataport.statTick",
 		"dataport.maxPayload"}
 	return paramNames
 }

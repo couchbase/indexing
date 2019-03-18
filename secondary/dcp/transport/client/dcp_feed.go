@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/couchbase/indexing/secondary/dcp/transport"
@@ -42,6 +44,7 @@ var ErrorInvalidFeed = errors.New("dcp.invalidFeed")
 type DcpFeed struct {
 	conn      *Client // connection to DCP producer
 	name      string
+	opaque    uint16
 	outch     chan<- *DcpEvent      // Exported channel for receiving DCP events
 	vbstreams map[uint16]*DcpStream // vb->stream mapping
 	// genserver
@@ -53,6 +56,7 @@ type DcpFeed struct {
 	maxAckBytes uint32    // Max buffer control ack bytes
 	lastAckTime time.Time // last time when BufferAck was sent
 	stats       *DcpStats // Stats for dcp client
+	done        uint32
 }
 
 // NewDcpFeed creates a new DCP Feed.
@@ -65,6 +69,7 @@ func NewDcpFeed(
 	feed := &DcpFeed{
 		name:      name,
 		outch:     outch,
+		opaque:    opaque,
 		vbstreams: make(map[uint16]*DcpStream),
 		reqch:     make(chan []interface{}, genChanSize),
 		finch:     make(chan bool),
@@ -85,6 +90,17 @@ func NewDcpFeed(
 
 func (feed *DcpFeed) Name() string {
 	return feed.name
+}
+
+func (feed *DcpFeed) Opaque() uint16 {
+	return feed.opaque
+}
+
+func (feed *DcpFeed) GetStats() interface{} {
+	if atomic.LoadUint32(&feed.done) == 0 {
+		return interface{}(feed.stats)
+	}
+	return nil
 }
 
 // DcpOpen to connect with a DCP producer.
@@ -177,6 +193,10 @@ func (feed *DcpFeed) genServer(
 		close(feed.finch)
 		feed.conn.Close()
 		feed.conn = nil
+		atomic.StoreUint32(&feed.done, 1)
+		//Update closed in stats object and log the stats before exiting
+		feed.stats.Closed.Set(true)
+		feed.logStats()
 		logging.Infof("%v ##%x ... stopped\n", feed.logPrefix, opaque)
 	}()
 
@@ -194,12 +214,8 @@ loop:
 	for {
 		select {
 		case <-latencyTm.C:
-			fmsg := "%v dcp latency stats %v\n"
-			logging.Infof(fmsg, feed.logPrefix, feed.stats.Dcplatency.MarshallJSON())
-			fmsg = "%v dcp stats %v\n"
-			logging.Infof(fmsg, feed.logPrefix, feed.stats.String(feed))
 			if feed.stats.TotalSpurious.Value() > 0 {
-				fmsg = "%v detected spurious messages for inactive streams\n"
+				fmsg := "%v detected spurious messages for inactive streams\n"
 				logging.Fatalf(fmsg, feed.logPrefix)
 			}
 
@@ -1009,6 +1025,7 @@ func (event *DcpEvent) String() string {
 // DcpStats on mutations/snapshots/buff-acks.
 // DcpStats on mutations/snapshots/buff-acks.
 type DcpStats struct {
+	Closed             stats.BoolVal
 	TotalBufferAckSent stats.Uint64Val
 	TotalBytes         stats.Uint64Val
 	TotalMutation      stats.Uint64Val
@@ -1033,6 +1050,7 @@ type DcpStats struct {
 }
 
 func (dcpStats *DcpStats) Init() {
+	dcpStats.Closed.Init()
 	dcpStats.TotalBufferAckSent.Init()
 	dcpStats.TotalBytes.Init()
 	dcpStats.TotalMutation.Init()
@@ -1052,7 +1070,11 @@ func (dcpStats *DcpStats) Init() {
 	dcpStats.IncomingMsg.Init()
 }
 
-func (stats *DcpStats) String(feed *DcpFeed) string {
+func (stats *DcpStats) IsClosed() bool {
+	return stats.Closed.Value()
+}
+
+func (stats *DcpStats) String() (string, string) {
 	now := time.Now()
 	getTimeDur := func(t int64) time.Duration {
 		if t == 0 {
@@ -1061,18 +1083,34 @@ func (stats *DcpStats) String(feed *DcpFeed) string {
 		return now.Sub(time.Unix(0, t))
 	}
 
-	return fmt.Sprintf(
-		"bytes: %v buffacks: %v toAckBytes: %v streamreqs: %v "+
-			"snapshots: %v mutations: %v streamends: %v closestreams: %v "+
-			"lastAckTime: %v LastNoopSend: %v LastNoopRecv: %v "+
-			"LastMsgSend: %v LastMsgRecv: %v incomingMsg: %v",
-		stats.TotalBytes.Value(), stats.TotalBufferAckSent.Value(), stats.ToAckBytes.Value(),
-		stats.TotalStreamReq.Value(), stats.TotalSnapShot.Value(), stats.TotalMutation.Value(),
-		stats.TotalStreamEnd.Value(), stats.TotalCloseStream.Value(),
-		getTimeDur(stats.LastAckTime.Value()), getTimeDur(stats.LastNoopSend.Value()),
-		getTimeDur(stats.LastNoopRecv.Value()), getTimeDur(stats.LastMsgSend.Value()),
-		getTimeDur(stats.LastMsgRecv.Value()), stats.IncomingMsg.Value(),
-	)
+	var stitems [15]string
+	stitems[0] = `"bytes":` + strconv.FormatUint(stats.TotalBytes.Value(), 10)
+	stitems[1] = `"bufferacks":` + strconv.FormatUint(stats.TotalBufferAckSent.Value(), 10)
+	stitems[2] = `"toAckBytes":` + strconv.FormatUint(stats.ToAckBytes.Value(), 10)
+	stitems[3] = `"streamreqs":` + strconv.FormatUint(stats.TotalStreamReq.Value(), 10)
+	stitems[4] = `"snapshots":` + strconv.FormatUint(stats.TotalSnapShot.Value(), 10)
+	stitems[5] = `"mutations":` + strconv.FormatUint(stats.TotalMutation.Value(), 10)
+	stitems[6] = `"streamends":` + strconv.FormatUint(stats.TotalStreamEnd.Value(), 10)
+	stitems[7] = `"closestreams":` + strconv.FormatUint(stats.TotalCloseStream.Value(), 10)
+	stitems[8] = `"lastAckTime":` + getTimeDur(stats.LastAckTime.Value()).String()
+	stitems[9] = `"lastNoopSend":` + getTimeDur(stats.LastNoopSend.Value()).String()
+	stitems[10] = `"lastNoopRecv":` + getTimeDur(stats.LastNoopRecv.Value()).String()
+	stitems[11] = `"lastMsgSend":` + getTimeDur(stats.LastMsgSend.Value()).String()
+	stitems[12] = `"lastMsgRecv":` + getTimeDur(stats.LastMsgRecv.Value()).String()
+	stitems[13] = `"rcvchLen":` + strconv.FormatUint(stats.RcvchLen.Value(), 10)
+	stitems[14] = `"incomingMsg":` + strconv.FormatUint(stats.IncomingMsg.Value(), 10)
+	statjson := strings.Join(stitems[:], ",")
+
+	statsStr := fmt.Sprintf("{%v}", statjson)
+	latencyStr := stats.Dcplatency.MarshallJSON()
+	return statsStr, latencyStr
+}
+
+func (feed *DcpFeed) logStats() {
+	stats, latency := feed.stats.String()
+	key := fmt.Sprintf("DCPT[%v] ##%v", feed.Name(), feed.Opaque())
+	logging.Infof("%v dcp latency stats %v", key, latency)
+	logging.Infof("%v stats: %v", key, stats)
 }
 
 // FailoverLog containing vvuid and sequnce number
