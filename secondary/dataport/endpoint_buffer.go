@@ -36,22 +36,22 @@ func (b *endpointBuffers) addKeyVersions(
 		for _, cmd := range kv.Commands {
 			switch cmd {
 			case c.Upsert:
-				endpoint.upsertCount++
+				endpoint.stats.upsertCount.Add(1)
 			case c.Deletion:
-				endpoint.deleteCount++
+				endpoint.stats.deleteCount.Add(1)
 			case c.UpsertDeletion:
-				endpoint.upsdelCount++
+				endpoint.stats.upsdelCount.Add(1)
 			case c.Sync:
-				endpoint.syncCount++
+				endpoint.stats.syncCount.Add(1)
 			case c.StreamBegin:
-				endpoint.beginCount++
+				endpoint.stats.beginCount.Add(1)
 			case c.StreamEnd:
-				endpoint.endCount++
+				endpoint.stats.endCount.Add(1)
 			case c.Snapshot:
-				endpoint.snapCount++
+				endpoint.stats.snapCount.Add(1)
 			}
 		}
-		endpoint.mutCount++
+		endpoint.stats.mutCount.Add(1)
 	}
 }
 
@@ -66,7 +66,7 @@ func (b *endpointBuffers) flushBuffers(
 		vbs = append(vbs, vb)
 		for _, kv := range vb.Kvs {
 			if kv.Ctime > 0 {
-				endpoint.prjLatency.Add(time.Now().UnixNano() - kv.Ctime)
+				endpoint.stats.prjLatency.Add(time.Now().UnixNano() - kv.Ctime)
 			}
 		}
 	}

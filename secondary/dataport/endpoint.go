@@ -29,6 +29,7 @@ import c "github.com/couchbase/indexing/secondary/common"
 import "github.com/couchbase/indexing/secondary/transport"
 import "github.com/couchbase/indexing/secondary/logging"
 import "github.com/couchbase/indexing/secondary/security"
+import "github.com/couchbase/indexing/secondary/stats"
 
 // RouterEndpoint structure, per topic, to gather key-versions / mutations
 // from one or more vbuckets and push them downstream to a
@@ -37,6 +38,7 @@ type RouterEndpoint struct {
 	topic     string
 	timestamp int64  // immutable
 	raddr     string // immutable
+	cluster   string
 	// config params
 	logPrefix string
 	keyChSize int // channel size for key-versions
@@ -54,16 +56,35 @@ type RouterEndpoint struct {
 	pkt  *transport.TransportPacket
 	conn net.Conn
 	// statistics
-	mutCount    int64
-	upsertCount int64
-	deleteCount int64
-	upsdelCount int64
-	syncCount   int64
-	beginCount  int64
-	endCount    int64
-	snapCount   int64
-	flushCount  int64
-	prjLatency  *Average
+	stats *EndpointStats
+}
+
+type EndpointStats struct {
+	mutCount    stats.Uint64Val
+	upsertCount stats.Uint64Val
+	deleteCount stats.Uint64Val
+	upsdelCount stats.Uint64Val
+	syncCount   stats.Uint64Val
+	beginCount  stats.Uint64Val
+	endCount    stats.Uint64Val
+	snapCount   stats.Uint64Val
+	flushCount  stats.Uint64Val
+	prjLatency  stats.Average
+	endpChLen   stats.Uint64Val
+}
+
+func (stats *EndpointStats) Init() {
+	stats.mutCount.Init()
+	stats.upsertCount.Init()
+	stats.deleteCount.Init()
+	stats.upsdelCount.Init()
+	stats.syncCount.Init()
+	stats.beginCount.Init()
+	stats.endCount.Init()
+	stats.snapCount.Init()
+	stats.flushCount.Init()
+	stats.prjLatency.Init()
+	stats.endpChLen.Init()
 }
 
 // NewRouterEndpoint instantiate a new RouterEndpoint
@@ -80,6 +101,7 @@ func NewRouterEndpoint(
 	endpoint := &RouterEndpoint{
 		topic:      topic,
 		raddr:      raddr,
+		cluster:    cluster,
 		finch:      make(chan bool),
 		timestamp:  time.Now().UnixNano(),
 		keyChSize:  config["keyChanSize"].Int(),
@@ -88,8 +110,9 @@ func NewRouterEndpoint(
 		statTick:   time.Duration(config["statTick"].Int()),
 		bufferTm:   time.Duration(config["bufferTimeout"].Int()),
 		harakiriTm: time.Duration(config["harakiriTimeout"].Int()),
-		prjLatency: &Average{},
+		stats:      &EndpointStats{},
 	}
+	endpoint.stats.Init()
 	endpoint.ch = make(chan []interface{}, endpoint.keyChSize)
 	endpoint.conn = conn
 	// TODO: add configuration params for transport flags.
@@ -193,21 +216,20 @@ func (endpoint *RouterEndpoint) run(ch chan []interface{}) {
 	statSince := time.Now()
 	var stitems [14]string
 	logstats := func() {
-		prjLatency := endpoint.prjLatency
 		stitems[0] = `"topic":"` + endpoint.topic + `"`
 		stitems[1] = `"raddr":"` + endpoint.raddr + `"`
-		stitems[2] = `"mutCount":` + strconv.Itoa(int(endpoint.mutCount))
-		stitems[3] = `"upsertCount":` + strconv.Itoa(int(endpoint.upsertCount))
-		stitems[4] = `"deleteCount":` + strconv.Itoa(int(endpoint.deleteCount))
-		stitems[5] = `"upsdelCount":` + strconv.Itoa(int(endpoint.upsertCount))
-		stitems[6] = `"syncCount":` + strconv.Itoa(int(endpoint.syncCount))
-		stitems[7] = `"beginCount":` + strconv.Itoa(int(endpoint.beginCount))
-		stitems[8] = `"endCount":` + strconv.Itoa(int(endpoint.endCount))
-		stitems[9] = `"snapCount":` + strconv.Itoa(int(endpoint.snapCount))
-		stitems[10] = `"flushCount":` + strconv.Itoa(int(endpoint.flushCount))
-		stitems[11] = `"latency.min":` + strconv.Itoa(int(prjLatency.Min()))
-		stitems[12] = `"latency.max":` + strconv.Itoa(int(prjLatency.Max()))
-		stitems[13] = `"latency.avg":` + strconv.Itoa(int(prjLatency.Mean()))
+		stitems[2] = `"mutCount":` + strconv.Itoa(int(endpoint.stats.mutCount.Value()))
+		stitems[3] = `"upsertCount":` + strconv.Itoa(int(endpoint.stats.upsertCount.Value()))
+		stitems[4] = `"deleteCount":` + strconv.Itoa(int(endpoint.stats.deleteCount.Value()))
+		stitems[5] = `"upsdelCount":` + strconv.Itoa(int(endpoint.stats.upsertCount.Value()))
+		stitems[6] = `"syncCount":` + strconv.Itoa(int(endpoint.stats.syncCount.Value()))
+		stitems[7] = `"beginCount":` + strconv.Itoa(int(endpoint.stats.beginCount.Value()))
+		stitems[8] = `"endCount":` + strconv.Itoa(int(endpoint.stats.endCount.Value()))
+		stitems[9] = `"snapCount":` + strconv.Itoa(int(endpoint.stats.snapCount.Value()))
+		stitems[10] = `"flushCount":` + strconv.Itoa(int(endpoint.stats.flushCount.Value()))
+		stitems[11] = `"latency.min":` + strconv.Itoa(int(endpoint.stats.prjLatency.Min()))
+		stitems[12] = `"latency.max":` + strconv.Itoa(int(endpoint.stats.prjLatency.Max()))
+		stitems[13] = `"latency.avg":` + strconv.Itoa(int(endpoint.stats.prjLatency.Mean()))
 		statjson := strings.Join(stitems[:], ",")
 		fmsg := "%v stats {%v}\n"
 		logging.Infof(fmsg, endpoint.logPrefix, statjson)
@@ -226,7 +248,7 @@ func (endpoint *RouterEndpoint) run(ch chan []interface{}) {
 			if err != nil {
 				logging.Errorf("%v flushBuffers() %v\n", endpoint.logPrefix, err)
 			}
-			endpoint.flushCount++
+			endpoint.stats.flushCount.Add(1)
 		}
 		messageCount = 0
 		if time.Since(statSince) > endpoint.statTick {
@@ -240,6 +262,7 @@ loop:
 	for {
 		select {
 		case msg := <-ch:
+			endpoint.stats.endpChLen.Set(uint64(len(ch)))
 			switch msg[0].(byte) {
 			case endpCmdPing:
 				respch := msg[1].(chan []interface{})

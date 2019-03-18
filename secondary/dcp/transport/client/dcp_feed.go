@@ -14,6 +14,7 @@ import (
 
 	"github.com/couchbase/indexing/secondary/dcp/transport"
 	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/stats"
 )
 
 const dcpMutationExtraLen = 16
@@ -51,8 +52,7 @@ type DcpFeed struct {
 	toAckBytes  uint32    // bytes client has read
 	maxAckBytes uint32    // Max buffer control ack bytes
 	lastAckTime time.Time // last time when BufferAck was sent
-	stats       DcpStats  // Stats for dcp client
-	dcplatency  *Average
+	stats       *DcpStats // Stats for dcp client
 }
 
 // NewDcpFeed creates a new DCP Feed.
@@ -69,10 +69,10 @@ func NewDcpFeed(
 		reqch:     make(chan []interface{}, genChanSize),
 		finch:     make(chan bool),
 		// TODO: would be nice to add host-addr as part of prefix.
-		logPrefix:  fmt.Sprintf("DCPT[%s]", name),
-		dcplatency: &Average{},
+		logPrefix: fmt.Sprintf("DCPT[%s]", name),
+		stats:     &DcpStats{},
 	}
-
+	feed.stats.Init()
 	mc.Hijack()
 	feed.conn = mc
 	rcvch := make(chan []interface{}, dataChanSize)
@@ -195,10 +195,10 @@ loop:
 		select {
 		case <-latencyTm.C:
 			fmsg := "%v dcp latency stats %v\n"
-			logging.Infof(fmsg, feed.logPrefix, feed.dcplatency)
+			logging.Infof(fmsg, feed.logPrefix, feed.stats.Dcplatency.MarshallJSON())
 			fmsg = "%v dcp stats %v\n"
 			logging.Infof(fmsg, feed.logPrefix, feed.stats.String(feed))
-			if feed.stats.TotalSpurious > 0 {
+			if feed.stats.TotalSpurious.Value() > 0 {
 				fmsg = "%v detected spurious messages for inactive streams\n"
 				logging.Fatalf(fmsg, feed.logPrefix)
 			}
@@ -283,7 +283,7 @@ func (feed *DcpFeed) handlePacket(
 	pkt *transport.MCRequest, bytes int) string {
 
 	var event *DcpEvent
-	feed.stats.TotalBytes += uint64(bytes)
+	feed.stats.TotalBytes.Add(uint64(bytes))
 	res := &transport.MCResponse{
 		Opcode: pkt.Opcode,
 		Cas:    pkt.Cas,
@@ -299,11 +299,11 @@ func (feed *DcpFeed) handlePacket(
 	prefix := feed.logPrefix
 	stream := feed.vbstreams[vb]
 	if stream == nil {
-		feed.stats.TotalSpurious++
+		feed.stats.TotalSpurious.Add(1)
 		// log first 10000 spurious messages
-		logok := feed.stats.TotalSpurious < 10000
+		logok := feed.stats.TotalSpurious.Value() < 10000
 		// then log 1 spurious message for every 1000.
-		logok = logok || (feed.stats.TotalSpurious%1000) == 1
+		logok = logok || (feed.stats.TotalSpurious.Value()%1000) == 1
 		if logok {
 			fmsg := "%v spurious %v for %d: %#v\n"
 			arg1 := logging.TagUD(pkt)
@@ -312,20 +312,20 @@ func (feed *DcpFeed) handlePacket(
 		return "ok" // yeah it not _my_ mistake...
 	}
 
-	defer func() { feed.dcplatency.Add(computeLatency(stream)) }()
+	defer func() { feed.stats.Dcplatency.Add(computeLatency(stream)) }()
 
 	stream.LastSeen = time.Now().UnixNano()
 	switch pkt.Opcode {
 	case transport.DCP_STREAMREQ:
 		event = newDcpEvent(pkt, stream)
 		feed.handleStreamRequest(res, vb, stream, event)
-		feed.stats.TotalStreamReq++
+		feed.stats.TotalStreamReq.Add(1)
 
 	case transport.DCP_MUTATION, transport.DCP_DELETION,
 		transport.DCP_EXPIRATION:
 		event = newDcpEvent(pkt, stream)
 		stream.Seqno = event.Seqno
-		feed.stats.TotalMutation++
+		feed.stats.TotalMutation.Add(1)
 		sendAck = true
 
 	case transport.DCP_STREAMEND:
@@ -334,7 +334,7 @@ func (feed *DcpFeed) handlePacket(
 		delete(feed.vbstreams, vb)
 		fmsg := "%v ##%x DCP_STREAMEND for vb %d\n"
 		logging.Debugf(fmsg, prefix, stream.AppOpaque, vb)
-		feed.stats.TotalStreamEnd++
+		feed.stats.TotalStreamEnd.Add(1)
 
 	case transport.DCP_SNAPSHOT:
 		event = newDcpEvent(pkt, stream)
@@ -343,7 +343,7 @@ func (feed *DcpFeed) handlePacket(
 		event.SnapshotType = binary.BigEndian.Uint32(pkt.Extras[16:20])
 		stream.Snapstart = event.SnapstartSeq
 		stream.Snapend = event.SnapendSeq
-		feed.stats.TotalSnapShot++
+		feed.stats.TotalSnapShot.Add(1)
 		sendAck = true
 		if (stream.Snapend - stream.Snapstart) > 50000 {
 			fmsg := "%v ##%x DCP_SNAPSHOT for vb %d snapshot {%v,%v}\n"
@@ -368,7 +368,7 @@ func (feed *DcpFeed) handlePacket(
 		delete(feed.vbstreams, vb)
 		fmsg := "%v ##%x DCP_CLOSESTREAM for vb %d\n"
 		logging.Debugf(fmsg, prefix, stream.AppOpaque, vb)
-		feed.stats.TotalCloseStream++
+		feed.stats.TotalCloseStream.Add(1)
 
 	case transport.DCP_CONTROL, transport.DCP_BUFFERACK:
 		if res.Status != transport.SUCCESS {
@@ -416,7 +416,7 @@ func (feed *DcpFeed) doDcpGetFailoverLog(
 				logging.Errorf(fmsg, feed.logPrefix, opaque, err)
 				return err
 			}
-			feed.stats.LastMsgSend = time.Now().UnixNano()
+			feed.stats.LastMsgSend.Set(time.Now().UnixNano())
 
 			var ok bool
 			msg, ok = <-rcvch
@@ -483,7 +483,7 @@ func (feed *DcpFeed) doDcpGetSeqnos(
 		logging.Errorf(fmsg, feed.logPrefix, rq.Opaque, err)
 		return nil, err
 	}
-	feed.stats.LastMsgSend = time.Now().UnixNano()
+	feed.stats.LastMsgSend.Set(time.Now().UnixNano())
 	msg, ok := <-rcvch
 	if !ok {
 		fmsg := "%v ##%x doDcpGetSeqnos.rcvch closed"
@@ -542,7 +542,7 @@ func (feed *DcpFeed) doDcpOpen(
 	if err := feed.conn.Transmit(rq); err != nil {
 		return err
 	}
-	feed.stats.LastMsgSend = time.Now().UnixNano()
+	feed.stats.LastMsgSend.Set(time.Now().UnixNano())
 	msg, ok := <-rcvch
 	if !ok {
 		logging.Errorf("%v ##%x doDcpOpen.rcvch closed", prefix, opaque)
@@ -584,7 +584,7 @@ func (feed *DcpFeed) doDcpOpen(
 			logging.Errorf(fmsg, prefix, opaque, err)
 			return err
 		}
-		feed.stats.LastMsgSend = time.Now().UnixNano()
+		feed.stats.LastMsgSend.Set(time.Now().UnixNano())
 		msg, ok := <-rcvch
 		if !ok {
 			fmsg := "%v ##%x doDcpOpen.DCP_CONTROL.rcvch (connection_buffer_size) closed"
@@ -625,7 +625,7 @@ func (feed *DcpFeed) doDcpOpen(
 			logging.Errorf(fmsg, prefix, opaque, err)
 			return err
 		}
-		feed.stats.LastMsgSend = time.Now().UnixNano()
+		feed.stats.LastMsgSend.Set(time.Now().UnixNano())
 		logging.Infof("%v ##%x sending enable_noop", prefix, opaque)
 		msg, ok := <-rcvch
 		if !ok {
@@ -659,7 +659,7 @@ func (feed *DcpFeed) doDcpOpen(
 			logging.Errorf(fmsg, prefix, opaque, err)
 			return err
 		}
-		feed.stats.LastMsgSend = time.Now().UnixNano()
+		feed.stats.LastMsgSend.Set(time.Now().UnixNano())
 		logging.Infof("%v ##%x sending set_noop_interval", prefix, opaque)
 		msg, ok := <-rcvch
 		if !ok {
@@ -716,7 +716,7 @@ func (feed *DcpFeed) doDcpRequestStream(
 		logging.Errorf(fmsg, prefix, opaqueMSB, err)
 		return err
 	}
-	feed.stats.LastMsgSend = time.Now().UnixNano()
+	feed.stats.LastMsgSend.Set(time.Now().UnixNano())
 	stream := &DcpStream{
 		AppOpaque: opaqueMSB,
 		Vbucket:   vbno,
@@ -753,7 +753,7 @@ func (feed *DcpFeed) doDcpCloseStream(vbno, opaqueMSB uint16) error {
 		return err
 	}
 
-	feed.stats.LastMsgSend = time.Now().UnixNano()
+	feed.stats.LastMsgSend.Set(time.Now().UnixNano())
 	return nil
 }
 
@@ -826,7 +826,7 @@ func (feed *DcpFeed) sendBufferAck(sendAck bool, bytes uint32) {
 			}
 			bufferAck.Extras = make([]byte, 4)
 			binary.BigEndian.PutUint32(bufferAck.Extras[:4], uint32(totalBytes))
-			feed.stats.TotalBufferAckSent++
+			feed.stats.TotalBufferAckSent.Add(1)
 
 			func() {
 				// Timeout here will unblock genServer() thread after some time.
@@ -838,14 +838,17 @@ func (feed *DcpFeed) sendBufferAck(sendAck bool, bytes uint32) {
 				} else {
 					// Reset the counters only on a successful BufferAck
 					feed.toAckBytes = 0
+					feed.stats.ToAckBytes.Set(0)
 					feed.lastAckTime = time.Now()
-					feed.stats.LastMsgSend = feed.lastAckTime.UnixNano()
-					feed.stats.LastAckTime = feed.lastAckTime.UnixNano()
+					feed.stats.LastMsgSend.Set(feed.lastAckTime.UnixNano())
+					feed.stats.LastAckTime.Set(feed.lastAckTime.UnixNano())
 					logging.Tracef("%v buffer-ack %v, lastAckTime: %v\n", prefix, totalBytes, feed.lastAckTime.UnixNano())
 				}
 			}()
+
 		} else {
 			feed.toAckBytes += bytes
+			feed.stats.ToAckBytes.Set(uint64(feed.toAckBytes))
 		}
 	}
 }
@@ -1004,22 +1007,49 @@ func (event *DcpEvent) String() string {
 }
 
 // DcpStats on mutations/snapshots/buff-acks.
+// DcpStats on mutations/snapshots/buff-acks.
 type DcpStats struct {
-	TotalBufferAckSent uint64
-	TotalBytes         uint64
-	TotalMutation      uint64
-	TotalSnapShot      uint64
-	TotalStreamReq     uint64
-	TotalCloseStream   uint64
-	TotalStreamEnd     uint64
-	TotalSpurious      uint64
+	TotalBufferAckSent stats.Uint64Val
+	TotalBytes         stats.Uint64Val
+	TotalMutation      stats.Uint64Val
+	TotalSnapShot      stats.Uint64Val
+	TotalStreamReq     stats.Uint64Val
+	TotalCloseStream   stats.Uint64Val
+	TotalStreamEnd     stats.Uint64Val
+	TotalSpurious      stats.Uint64Val
+	ToAckBytes         stats.Uint64Val
 
 	// Last memcached communication times
-	LastAckTime  int64
-	LastNoopSend int64
-	LastNoopRecv int64
-	LastMsgSend  int64
-	LastMsgRecv  int64
+	LastAckTime  stats.Int64Val
+	LastNoopSend stats.Int64Val
+	LastNoopRecv stats.Int64Val
+	LastMsgSend  stats.Int64Val
+	LastMsgRecv  stats.Int64Val
+
+	RcvchLen   stats.Uint64Val
+	Dcplatency stats.Average
+	// This stat help to determine the drain rate of dcp feed
+	IncomingMsg stats.Uint64Val
+}
+
+func (dcpStats *DcpStats) Init() {
+	dcpStats.TotalBufferAckSent.Init()
+	dcpStats.TotalBytes.Init()
+	dcpStats.TotalMutation.Init()
+	dcpStats.TotalSnapShot.Init()
+	dcpStats.TotalStreamReq.Init()
+	dcpStats.TotalCloseStream.Init()
+	dcpStats.TotalStreamEnd.Init()
+	dcpStats.TotalSpurious.Init()
+	dcpStats.ToAckBytes.Init()
+	dcpStats.LastAckTime.Init()
+	dcpStats.LastNoopSend.Init()
+	dcpStats.LastNoopRecv.Init()
+	dcpStats.LastMsgSend.Init()
+	dcpStats.LastMsgRecv.Init()
+	dcpStats.RcvchLen.Init()
+	dcpStats.Dcplatency.Init()
+	dcpStats.IncomingMsg.Init()
 }
 
 func (stats *DcpStats) String(feed *DcpFeed) string {
@@ -1035,13 +1065,13 @@ func (stats *DcpStats) String(feed *DcpFeed) string {
 		"bytes: %v buffacks: %v toAckBytes: %v streamreqs: %v "+
 			"snapshots: %v mutations: %v streamends: %v closestreams: %v "+
 			"lastAckTime: %v LastNoopSend: %v LastNoopRecv: %v "+
-			"LastMsgSend: %v LastMsgRecv: %v",
-		stats.TotalBytes, stats.TotalBufferAckSent, feed.toAckBytes,
-		stats.TotalStreamReq, stats.TotalSnapShot, stats.TotalMutation,
-		stats.TotalStreamEnd, stats.TotalCloseStream,
-		getTimeDur(stats.LastAckTime), getTimeDur(stats.LastNoopSend),
-		getTimeDur(stats.LastNoopRecv), getTimeDur(stats.LastMsgSend),
-		getTimeDur(stats.LastMsgRecv),
+			"LastMsgSend: %v LastMsgRecv: %v incomingMsg: %v",
+		stats.TotalBytes.Value(), stats.TotalBufferAckSent.Value(), stats.ToAckBytes.Value(),
+		stats.TotalStreamReq.Value(), stats.TotalSnapShot.Value(), stats.TotalMutation.Value(),
+		stats.TotalStreamEnd.Value(), stats.TotalCloseStream.Value(),
+		getTimeDur(stats.LastAckTime.Value()), getTimeDur(stats.LastNoopSend.Value()),
+		getTimeDur(stats.LastNoopRecv.Value()), getTimeDur(stats.LastMsgSend.Value()),
+		getTimeDur(stats.LastMsgRecv.Value()), stats.IncomingMsg.Value(),
 	)
 }
 
@@ -1169,12 +1199,12 @@ loop:
 		}
 
 		now := time.Now().UnixNano()
-		feed.stats.LastMsgRecv = now
+		feed.stats.LastMsgRecv.Set(now)
 
 		// Immediately respond to NOOP and listen for next message.
 		// NOOPs are not accounted for buffer-ack.
 		if pkt.Opcode == transport.DCP_NOOP {
-			feed.stats.LastNoopRecv = now
+			feed.stats.LastNoopRecv.Set(now)
 			noop := &transport.MCResponse{
 				Opcode: transport.DCP_NOOP, Opaque: pkt.Opaque,
 			}
@@ -1188,8 +1218,8 @@ loop:
 					logging.Errorf("%v NOOP.Transmit(): %v", feed.logPrefix, err)
 				} else {
 					now = time.Now().UnixNano()
-					feed.stats.LastNoopSend = now
-					feed.stats.LastMsgSend = now
+					feed.stats.LastNoopSend.Set(now)
+					feed.stats.LastMsgSend.Set(now)
 					fmsg := "%v responded to NOOP ok ...\n"
 					logging.Tracef(fmsg, feed.logPrefix)
 				}
@@ -1207,6 +1237,7 @@ loop:
 		}
 		select {
 		case rcvch <- []interface{}{&pkt, bytes}:
+			feed.stats.IncomingMsg.Add(1)
 		case <-finch:
 			break loop
 		}

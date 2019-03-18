@@ -22,6 +22,7 @@ import "strconv"
 import "strings"
 
 import "github.com/couchbase/indexing/secondary/logging"
+import "github.com/couchbase/indexing/secondary/stats"
 import mcd "github.com/couchbase/indexing/secondary/dcp/transport"
 import mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
 import c "github.com/couchbase/indexing/secondary/common"
@@ -47,17 +48,42 @@ type KVData struct {
 	kvstatTick  time.Duration // in milliseconds
 	logPrefix   string
 	// statistics
-	hbCount     int64
-	eventCount  int64
-	reqCount    int64
-	endCount    int64
-	snapStat    *Average
-	upsertCount int64
-	deleteCount int64
-	exprCount   int64
-	ainstCount  int64
-	dinstCount  int64
-	tsCount     int64
+	stats *KvdataStats
+}
+
+type KvdataStats struct {
+	hbCount     stats.Uint64Val
+	eventCount  stats.Uint64Val
+	reqCount    stats.Uint64Val
+	endCount    stats.Uint64Val
+	snapStat    stats.Average
+	upsertCount stats.Uint64Val
+	deleteCount stats.Uint64Val
+	exprCount   stats.Uint64Val
+	ainstCount  stats.Uint64Val
+	dinstCount  stats.Uint64Val
+	tsCount     stats.Uint64Val
+	mutchLen    stats.Uint64Val
+	vbseqnos    []stats.Uint64Val
+}
+
+func (kvstats *KvdataStats) Init(numVbuckets int) {
+	kvstats.hbCount.Init()
+	kvstats.eventCount.Init()
+	kvstats.reqCount.Init()
+	kvstats.endCount.Init()
+	kvstats.snapStat.Init()
+	kvstats.upsertCount.Init()
+	kvstats.deleteCount.Init()
+	kvstats.exprCount.Init()
+	kvstats.ainstCount.Init()
+	kvstats.dinstCount.Init()
+	kvstats.tsCount.Init()
+	kvstats.mutchLen.Init()
+	kvstats.vbseqnos = make([]stats.Uint64Val, numVbuckets)
+	for i, _ := range kvstats.vbseqnos {
+		kvstats.vbseqnos[i].Init()
+	}
 }
 
 // NewKVData create a new data-path instance.
@@ -80,10 +106,12 @@ func NewKVData(
 		endpoints: make(map[string]c.RouterEndpoint),
 		// 16 is enough, there can't be more than that many out-standing
 		// control calls on this feed.
-		sbch:     make(chan []interface{}, 16),
-		finch:    make(chan bool),
-		snapStat: &Average{},
+		sbch:  make(chan []interface{}, 16),
+		finch: make(chan bool),
+		stats: &KvdataStats{},
 	}
+	numVbuckets := config["maxVbuckets"].Int()
+	kvdata.stats.Init(numVbuckets)
 	fmsg := "KVDT[<-%v<-%v #%v]"
 	kvdata.logPrefix = fmt.Sprintf(fmsg, bucket, feed.cluster, feed.topic)
 	kvdata.syncTimeout = time.Duration(config["syncTimeout"].Int())
@@ -210,23 +238,22 @@ func (kvdata *KVData) runScatter(
 	statSince := time.Now()
 	var stitems [16]string
 	logstats := func() {
-		snapStat := kvdata.snapStat
 		stitems[0] = `"topic":"` + kvdata.topic + `"`
 		stitems[1] = `"bucket":"` + kvdata.bucket + `"`
-		stitems[2] = `"hbCount":` + strconv.Itoa(int(kvdata.hbCount))
-		stitems[3] = `"eventCount":` + strconv.Itoa(int(kvdata.eventCount))
-		stitems[4] = `"reqCount":` + strconv.Itoa(int(kvdata.reqCount))
-		stitems[5] = `"endCount":` + strconv.Itoa(int(kvdata.endCount))
-		stitems[6] = `"snapStat.samples":` + strconv.Itoa(int(snapStat.Count()))
-		stitems[7] = `"snapStat.min":` + strconv.Itoa(int(snapStat.Min()))
-		stitems[8] = `"snapStat.max":` + strconv.Itoa(int(snapStat.Max()))
-		stitems[9] = `"snapStat.avg":` + strconv.Itoa(int(snapStat.Mean()))
-		stitems[10] = `"upsertCount":` + strconv.Itoa(int(kvdata.upsertCount))
-		stitems[11] = `"deleteCount":` + strconv.Itoa(int(kvdata.deleteCount))
-		stitems[12] = `"exprCount":` + strconv.Itoa(int(kvdata.exprCount))
-		stitems[13] = `"ainstCount":` + strconv.Itoa(int(kvdata.ainstCount))
-		stitems[14] = `"dinstCount":` + strconv.Itoa(int(kvdata.dinstCount))
-		stitems[15] = `"tsCount":` + strconv.Itoa(int(kvdata.tsCount))
+		stitems[2] = `"hbCount":` + strconv.Itoa(int(kvdata.stats.hbCount.Value()))
+		stitems[3] = `"eventCount":` + strconv.Itoa(int(kvdata.stats.eventCount.Value()))
+		stitems[4] = `"reqCount":` + strconv.Itoa(int(kvdata.stats.reqCount.Value()))
+		stitems[5] = `"endCount":` + strconv.Itoa(int(kvdata.stats.endCount.Value()))
+		stitems[6] = `"snapStat.samples":` + strconv.Itoa(int(kvdata.stats.snapStat.Count()))
+		stitems[7] = `"snapStat.min":` + strconv.Itoa(int(kvdata.stats.snapStat.Min()))
+		stitems[8] = `"snapStat.max":` + strconv.Itoa(int(kvdata.stats.snapStat.Max()))
+		stitems[9] = `"snapStat.avg":` + strconv.Itoa(int(kvdata.stats.snapStat.Mean()))
+		stitems[10] = `"upsertCount":` + strconv.Itoa(int(kvdata.stats.upsertCount.Value()))
+		stitems[11] = `"deleteCount":` + strconv.Itoa(int(kvdata.stats.deleteCount.Value()))
+		stitems[12] = `"exprCount":` + strconv.Itoa(int(kvdata.stats.exprCount.Value()))
+		stitems[13] = `"ainstCount":` + strconv.Itoa(int(kvdata.stats.ainstCount.Value()))
+		stitems[14] = `"dinstCount":` + strconv.Itoa(int(kvdata.stats.dinstCount.Value()))
+		stitems[15] = `"tsCount":` + strconv.Itoa(int(kvdata.stats.tsCount.Value()))
 		statjson := strings.Join(stitems[:], ",")
 		fmsg := "%v ##%x stats {%v}\n"
 		logging.Infof(fmsg, kvdata.logPrefix, kvdata.opaque, statjson)
@@ -245,12 +272,14 @@ loop:
 			if ok == false { // upstream has closed
 				break loop
 			}
-			kvdata.eventCount++
-			vbseqnos[m.VBucket], _ = kvdata.scatterMutation(m, ts)
+			kvdata.stats.eventCount.Add(1)
+			kvdata.stats.mutchLen.Set(uint64(len(mutch)))
+			seqno, _ := kvdata.scatterMutation(m, ts)
+			kvdata.stats.vbseqnos[m.VBucket].Set(uint64(seqno))
 
 		case <-heartBeat:
 			heartBeat = nil
-			kvdata.hbCount++
+			kvdata.stats.hbCount.Add(1)
 
 			// propogate the sync-pulse via separate routine so that
 			// the data-path is not blocked.
@@ -308,7 +337,7 @@ loop:
 						}
 					}
 				}
-				kvdata.ainstCount++
+				kvdata.stats.ainstCount.Add(1)
 				respch <- []interface{}{curSeqnos, nil}
 
 			case kvCmdDelEngines:
@@ -326,23 +355,23 @@ loop:
 					fmsg := "%v ##%x deleted engine %q"
 					logging.Infof(fmsg, kvdata.logPrefix, opaque, engineKey)
 				}
-				kvdata.dinstCount++
+				kvdata.stats.dinstCount.Add(1)
 				respch <- []interface{}{nil}
 
 			case kvCmdTs:
 				_ /*opaque*/ = msg[1].(uint16)
 				ts = ts.Union(msg[2].(*protobuf.TsVbuuid))
 				respch := msg[3].(chan []interface{})
-				kvdata.tsCount++
+				kvdata.stats.tsCount.Add(1)
 				respch <- []interface{}{nil}
 
 			case kvCmdGetStats:
 				respch := msg[1].(chan []interface{})
 				stats := kvdata.newStats()
-				stats.Set("events", float64(kvdata.eventCount))
-				stats.Set("addInsts", float64(kvdata.ainstCount))
-				stats.Set("delInsts", float64(kvdata.dinstCount))
-				stats.Set("tsCount", float64(kvdata.tsCount))
+				stats.Set("events", float64(kvdata.stats.eventCount.Value()))
+				stats.Set("addInsts", float64(kvdata.stats.ainstCount.Value()))
+				stats.Set("delInsts", float64(kvdata.stats.dinstCount.Value()))
+				stats.Set("tsCount", float64(kvdata.stats.tsCount.Value()))
 				statVbuckets := make(map[string]interface{})
 				for _, worker := range kvdata.workers {
 					if stats, err := worker.GetStatistics(); err != nil {
@@ -431,7 +460,7 @@ func (kvdata *KVData) scatterMutation(
 			}
 			seqno = m.Seqno
 		}
-		kvdata.reqCount++
+		kvdata.stats.reqCount.Add(1)
 		kvdata.feed.PostStreamRequest(kvdata.bucket, m)
 
 	case mcd.DCP_STREAMEND:
@@ -448,7 +477,7 @@ func (kvdata *KVData) scatterMutation(
 				panic(err)
 			}
 		}
-		kvdata.endCount++
+		kvdata.stats.endCount.Add(1)
 		kvdata.feed.PostStreamEnd(kvdata.bucket, m)
 
 	case mcd.DCP_SNAPSHOT:
@@ -460,7 +489,7 @@ func (kvdata *KVData) scatterMutation(
 			fmsg := "%v ##%x snapshot window is %v\n"
 			logging.Warnf(fmsg, kvdata.logPrefix, m.Opaque, snapwindow)
 		}
-		kvdata.snapStat.Add(snapwindow)
+		kvdata.stats.snapStat.Add(snapwindow)
 
 	case mcd.DCP_MUTATION, mcd.DCP_DELETION, mcd.DCP_EXPIRATION:
 		seqno = m.Seqno
@@ -469,11 +498,11 @@ func (kvdata *KVData) scatterMutation(
 		}
 		switch m.Opcode {
 		case mcd.DCP_MUTATION:
-			kvdata.upsertCount++
+			kvdata.stats.upsertCount.Add(1)
 		case mcd.DCP_DELETION:
-			kvdata.deleteCount++
+			kvdata.stats.deleteCount.Add(1)
 		case mcd.DCP_EXPIRATION:
-			kvdata.exprCount++
+			kvdata.stats.exprCount.Add(1)
 		}
 	}
 	return
