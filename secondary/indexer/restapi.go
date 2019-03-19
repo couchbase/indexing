@@ -23,7 +23,7 @@ type testServer struct {
 
 const UnboundedLiteral = "~[]{}UnboundedTruenilNA~"
 
-func NewTestServer(cluster string) (*testServer, Message) {
+func NewTestServer(cluster string, certFile string, keyFile string) (*testServer, Message) {
 	log.Infof("%v starting internal RESTful services", cluster)
 
 	// get the singleton-client
@@ -32,6 +32,8 @@ func NewTestServer(cluster string) (*testServer, Message) {
 		return nil, nil
 	}
 	qconf := config.SectionConfig("queryport.client.", true /*trim*/)
+	qconf.SetValue("encryption.certFile", certFile)
+	qconf.SetValue("encryption.keyFile", keyFile)
 
 	client, _ := qclient.NewGsiClient(cluster, qconf)
 	testapi := &testServer{

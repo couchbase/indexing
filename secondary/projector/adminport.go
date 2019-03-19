@@ -1,6 +1,5 @@
 package projector
 
-import "expvar"
 import "os"
 import "time"
 
@@ -49,8 +48,6 @@ func (p *Projector) mainAdminPort(reqch chan ap.Request) {
 	p.admind.RegisterHTTPHandler("/debug/pprof/heap", c.HeapHandler)
 	p.admind.RegisterHTTPHandler("/debug/pprof/threadcreate", c.TCHandler)
 	p.admind.RegisterHTTPHandler("/debug/pprof/profile", c.ProfileHandler)
-
-	expvar.Publish("projector", expvar.Func(p.doStatistics))
 
 	fn := func(r int, err error) error {
 		if r > 0 {

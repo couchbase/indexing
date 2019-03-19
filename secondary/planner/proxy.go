@@ -13,10 +13,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/couchbase/cbauth"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	mc "github.com/couchbase/indexing/secondary/manager/common"
+	"github.com/couchbase/indexing/secondary/security"
 	"net"
 	"net/http"
 	"runtime"
@@ -1009,18 +1009,8 @@ func getLocalNumReplicas(addr string) (map[common.IndexDefnId]common.Counter, er
 
 func getWithCbauth(url string) (*http.Response, error) {
 
-	if !strings.HasPrefix(url, "http://") {
-		url = "http://" + url
-	}
-
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return nil, err
-	}
-	cbauth.SetRequestAuthVia(req, nil)
-
-	client := http.Client{Timeout: time.Duration(10 * time.Second)}
-	response, err := client.Do(req)
+	params := &security.RequestParams{Timeout: time.Duration(10) * time.Second}
+	response, err := security.GetWithAuth(url, params)
 	if err == nil && response.StatusCode != http.StatusOK {
 		return response, convertError(response)
 	}

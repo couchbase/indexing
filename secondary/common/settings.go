@@ -26,15 +26,22 @@ const (
 )
 
 func GetSettingsConfig(cfg Config) (Config, error) {
-	newConfig := cfg.Clone()
-	current, _, err := metakv.Get(IndexingSettingsMetaPath)
-	if err == nil {
-		if len(current) > 0 {
-			newConfig.Update(current)
+	var newConfig Config
+	fn := func(r int, err error) error {
+		newConfig = cfg.Clone()
+		current, _, err := metakv.Get(IndexingSettingsMetaPath)
+		if err == nil {
+			if len(current) > 0 {
+				newConfig.Update(current)
+			}
+		} else {
+			logging.Errorf("GetSettingsConfig() failed: %v", err)
 		}
-	} else {
-		logging.Errorf("GetSettingsConfig() failed: %v", err)
+		return err
 	}
+
+	rh := NewRetryHelper(MAX_METAKV_RETRIES, time.Second*3, 1, fn)
+	err := rh.Run()
 	return newConfig, err
 }
 

@@ -174,6 +174,9 @@ func (c *clustMgrAgent) handleSupvervisorCommands(cmd Message) {
 	case CLUST_MGR_MERGE_PARTITION:
 		c.handleMergePartition(cmd)
 
+	case INDEXER_SECURITY_CHANGE:
+		c.handleSecurityChange(cmd)
+
 	default:
 		logging.Errorf("ClusterMgrAgent::handleSupvervisorCommands Unknown Message %v", cmd)
 	}
@@ -276,6 +279,23 @@ func (c *clustMgrAgent) handleMergePartition(cmd Message) {
 	go func() {
 		respch <- c.mgr.MergePartition(defnId, srcInstId, srcRState, tgtInstId, tgtInstVersion, tgtPartitions, tgtVersions)
 	}()
+
+	c.supvCmdch <- &MsgSuccess{}
+}
+
+func (c *clustMgrAgent) handleSecurityChange(cmd Message) {
+
+	err := c.mgr.ResetConnections(c.metaNotifier)
+	if err != nil {
+		idxErr := Error{
+			code:     ERROR_INDEXER_INTERNAL_ERROR,
+			severity: FATAL,
+			cause:    err,
+			category: INDEXER,
+		}
+		c.supvCmdch <- &MsgError{err: idxErr}
+		return
+	}
 
 	c.supvCmdch <- &MsgSuccess{}
 }

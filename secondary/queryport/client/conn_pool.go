@@ -8,6 +8,7 @@ import "sync/atomic"
 
 import "github.com/couchbase/indexing/secondary/logging"
 import "github.com/couchbase/indexing/secondary/transport"
+import "github.com/couchbase/indexing/secondary/security"
 import protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
 import gometrics "github.com/rcrowley/go-metrics"
 
@@ -80,7 +81,7 @@ var ConnPoolCallback func(host string, source string, start time.Time, err error
 
 func (cp *connectionPool) defaultMkConn(host string) (*connection, error) {
 	logging.Infof("%v open new connection ...\n", cp.logPrefix)
-	conn, err := net.Dial("tcp", host)
+	conn, err := security.MakeConn(host)
 	if err != nil {
 		return nil, err
 	}

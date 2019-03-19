@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/security"
 
 	c "github.com/couchbase/indexing/secondary/common"
 
@@ -55,6 +56,8 @@ type Server struct {
 	streamChanSize    int
 	logPrefix         string
 	nConnections      int64
+
+	conns map[string]net.Conn
 }
 
 type ServerStats struct {
@@ -76,10 +79,11 @@ func NewServer(
 		streamChanSize: config["streamChanSize"].Int(),
 		logPrefix:      fmt.Sprintf("[Queryport %q]", laddr),
 		nConnections:   0,
+		conns:          make(map[string]net.Conn),
 	}
 	keepAliveInterval := config["keepAliveInterval"].Int()
 	s.keepAliveInterval = time.Duration(keepAliveInterval) * time.Second
-	if s.lis, err = net.Listen("tcp", laddr); err != nil {
+	if s.lis, err = security.MakeListener(laddr); err != nil {
 		logging.Errorf("%v failed starting %v !!\n", s.logPrefix, err)
 		return nil, err
 	}
@@ -118,18 +122,86 @@ func (s *Server) Close() (err error) {
 	return
 }
 
+func (s *Server) ResetConnections() error {
+
+	// close listener
+	s.Close()
+
+	// close all existing connections
+	func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+
+		for _, conn := range s.conns {
+			s.deregisterConnNoLock(conn)
+			conn.Close()
+		}
+	}()
+
+	// Existing connection will continue to run.  They need to
+	// be closed by the clients by flushing their connection pools.
+	logging.Infof("%v ... restarting listener\n", s.logPrefix)
+
+	fn := func(r int, e error) error {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+
+		// Restart listener.
+		var err error
+		if s.lis, err = security.MakeListener(s.laddr); err != nil {
+			logging.Errorf("%v failed starting listener %v %v !!\n", s.logPrefix, s.laddr, err)
+			return err
+		}
+		go s.listener()
+
+		return nil
+	}
+	helper := c.NewRetryHelper(10, time.Second, 1, fn)
+	if err := helper.Run(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (s *Server) registerConn(conn net.Conn) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.conns[conn.RemoteAddr().String()] = conn
+}
+
+func (s *Server) deregisterConn(conn net.Conn) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.deregisterConnNoLock(conn)
+}
+
+func (s *Server) deregisterConnNoLock(conn net.Conn) bool {
+	_, ok := s.conns[conn.RemoteAddr().String()]
+	if ok {
+		delete(s.conns, conn.RemoteAddr().String())
+	}
+	return ok
+}
+
 // go-routine to listen for new connections, if this routine goes down -
 // listener is restarted
 func (s *Server) listener() {
+
+	lis := func() net.Listener {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		return s.lis
+	}()
 
 	selfRestart := func() {
 		var err error
 		s.mu.Lock()
 		defer s.mu.Unlock()
 
-		if s.lis != nil { // if s.lis == nil, then Server.Close() was called
+		if s.lis != nil && s.lis == lis { // if s.lis == nil, then Server.Close() was called
 			s.lis.Close()
-			if s.lis, err = net.Listen("tcp", s.laddr); err != nil {
+			if s.lis, err = security.MakeListener(s.laddr); err != nil {
 				logging.Errorf("%v failed starting %v !!\n", s.logPrefix, err)
 				panic(err)
 			}
@@ -147,7 +219,8 @@ func (s *Server) listener() {
 	}()
 
 	for {
-		if conn, err := s.lis.Accept(); err == nil {
+		if conn, err := lis.Accept(); err == nil {
+			s.registerConn(conn)
 			go s.handleConnection(conn)
 
 		} else {
@@ -172,7 +245,9 @@ func (s *Server) handleConnection(conn net.Conn) {
 
 	raddr := conn.RemoteAddr()
 	defer func() {
-		conn.Close()
+		if s.deregisterConn(conn) {
+			conn.Close()
+		}
 		logging.Infof("%v connection %v closed\n", s.logPrefix, raddr)
 	}()
 
@@ -263,7 +338,7 @@ loop:
 	close(killch)
 }
 
-func (s *Server) doPing(rcvch chan<- request, killch chan bool) {
+func (s *Server) doPing(rcvch chan request, killch chan bool) {
 
 	ticker := time.NewTicker(time.Minute * time.Duration(5))
 	defer ticker.Stop()
@@ -275,6 +350,16 @@ loop2:
 			rcvch <- newRequest(Ping)
 		case <-killch:
 			break loop2
+		}
+	}
+
+	// empty the receive channel
+loop3:
+	for {
+		select {
+		case <-rcvch:
+		default:
+			break loop3
 		}
 	}
 

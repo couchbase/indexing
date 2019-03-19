@@ -19,6 +19,7 @@ import (
 	"github.com/couchbase/indexing/secondary/manager/client"
 	mc "github.com/couchbase/indexing/secondary/manager/common"
 	"github.com/couchbase/indexing/secondary/planner"
+	"github.com/couchbase/indexing/secondary/security"
 	"io"
 	"math"
 	"net/http"
@@ -1324,36 +1325,13 @@ func isAllowed(creds cbauth.Creds, permissions []string, w http.ResponseWriter) 
 }
 
 func getWithAuth(url string) (*http.Response, error) {
-
-	if !strings.HasPrefix(url, "http://") {
-		url = "http://" + url
-	}
-
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return nil, err
-	}
-	cbauth.SetRequestAuthVia(req, nil)
-
-	client := http.Client{Timeout: time.Duration(10 * time.Second)}
-	return client.Do(req)
+	params := &security.RequestParams{Timeout: time.Duration(10) * time.Second}
+	return security.GetWithAuth(url, params)
 }
 
 func postWithAuth(url string, bodyType string, body io.Reader) (*http.Response, error) {
-
-	if !strings.HasPrefix(url, "http://") {
-		url = "http://" + url
-	}
-
-	req, err := http.NewRequest("POST", url, body)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", bodyType)
-	cbauth.SetRequestAuthVia(req, nil)
-
-	client := http.Client{Timeout: time.Duration(10 * time.Second)}
-	return client.Do(req)
+	params := &security.RequestParams{Timeout: time.Duration(10) * time.Second}
+	return security.PostWithAuth(url, bodyType, body, params)
 }
 
 func findTopologyByBucket(topologies []IndexTopology, bucket string) *IndexTopology {

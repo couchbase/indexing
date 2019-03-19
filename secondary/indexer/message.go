@@ -130,6 +130,7 @@ const (
 	INDEXER_CANCEL_MERGE_PARTITION
 	INDEXER_MTR_FAIL
 	INDEXER_STORAGE_WARMUP_DONE
+	INDEXER_SECURITY_CHANGE
 
 	//SCAN COORDINATOR
 	SCAN_COORD_SHUTDOWN
@@ -1585,6 +1586,13 @@ type MsgResetStats struct {
 
 func (m *MsgResetStats) GetMsgType() MsgType {
 	return STATS_RESET
+}
+
+type MsgSecurityChange struct {
+}
+
+func (m *MsgSecurityChange) GetMsgType() MsgType {
+	return INDEXER_SECURITY_CHANGE
 }
 
 //STATS_PERSISTER_START

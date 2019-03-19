@@ -80,6 +80,14 @@ var SystemConfig = Config{
 		true,  // immutable
 		false, // case-insensitive
 	},
+	// security parameters
+	"security.encryption.encryptLocalhost": ConfigValue{
+		true,
+		"enable encryption on local host",
+		true,
+		true,  // immutable
+		false, // case-insensitive
+	},
 	// projector parameters
 	"projector.name": ConfigValue{
 		"projector",
@@ -651,6 +659,20 @@ var SystemConfig = Config{
 		true,
 		"Allow collatejson as data format between queryport client and indexer.",
 		true,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"queryport.client.encryption.certFile": ConfigValue{
+		"",
+		"Default location of certifcate file",
+		"",
+		false, // mutable
+		false, // case-insensitive
+	},
+	"queryport.client.encryption.keyFile": ConfigValue{
+		"",
+		"Default location of key file",
+		"",
 		false, // mutable
 		false, // case-insensitive
 	},

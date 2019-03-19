@@ -12,6 +12,7 @@ import (
 
 	"github.com/couchbase/indexing/secondary/dcp"
 	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/security"
 )
 
 var (
@@ -27,6 +28,17 @@ const (
 	INDEX_ADMIN_SERVICE = "indexAdmin"
 	INDEX_SCAN_SERVICE  = "indexScan"
 	INDEX_HTTP_SERVICE  = "indexHttp"
+	INDEX_HTTPS_SERVICE = "indexHttps"
+	KV_SERVICE          = "kv"
+	KV_SSL_SERVICE      = "kvSSL"
+	MGMT_SERVICE        = "mgmt"
+	MGMT_SSL_SERVICE    = "mgmtSSL"
+	CBQ_SERVICE         = "n1ql"
+	CBQ_SSL_SERVICE     = "n1qlSSL"
+	INDEX_PROJECTOR     = "projector"
+	INDEX_DATA_INIT     = "indexStreamInit"
+	INDEX_DATA_MAINT    = "indexStreamMaint"
+	INDEX_DATA_CATUP    = "indexStreamCatchup"
 )
 
 const CLUSTER_INFO_DEFAULT_RETRIES = 300
@@ -57,6 +69,8 @@ type ClusterInfoCache struct {
 	addNodes     []couchbase.Node
 	version      uint32
 	minorVersion uint32
+
+	encryptPortMapping map[string]string
 }
 
 // Helper object that keeps an instance of ClusterInfoCache cached
@@ -198,6 +212,7 @@ func (c *ClusterInfoCache) Fetch() error {
 			return err
 		}
 		c.nodesvs = poolServs.NodesExt
+		c.buildEncryptPortMapping()
 
 		if err := c.fetchServerGroups(); err != nil {
 			return err
@@ -228,6 +243,71 @@ func (c *ClusterInfoCache) FetchWithLock() error {
 	defer c.Unlock()
 
 	return c.Fetch()
+}
+
+func (c *ClusterInfoCache) buildEncryptPortMapping() {
+	mapping := make(map[string]string)
+
+	//default (hardcode in ns-server)
+	mapping["11210"] = "11207" //kv
+	mapping["8093"] = "18093"  //cbq
+	mapping["9100"] = "9100"   //gsi admin
+	mapping["9101"] = "9101"   //gsi scan
+	mapping["9102"] = "19102"  //gsi http
+	mapping["9103"] = "9103"   //gsi init stream
+	mapping["9104"] = "9104"   //gsi catchup stream
+	mapping["9105"] = "9105"   //gsi maint stream
+	mapping["9999"] = "9999"   //gsi http
+
+	// go through service port map for floating ports
+	for _, node := range c.nodesvs {
+		_, ok := node.Services[INDEX_HTTP_SERVICE]
+		_, ok1 := node.Services[INDEX_HTTPS_SERVICE]
+		if ok && ok1 {
+			mapping[fmt.Sprint(node.Services[INDEX_HTTP_SERVICE])] = fmt.Sprint(node.Services[INDEX_HTTPS_SERVICE])
+		}
+
+		if _, ok := node.Services[INDEX_SCAN_SERVICE]; ok {
+			mapping[fmt.Sprint(node.Services[INDEX_SCAN_SERVICE])] = fmt.Sprint(node.Services[INDEX_SCAN_SERVICE])
+		}
+
+		if _, ok := node.Services[INDEX_ADMIN_SERVICE]; ok {
+			mapping[fmt.Sprint(node.Services[INDEX_ADMIN_SERVICE])] = fmt.Sprint(node.Services[INDEX_ADMIN_SERVICE])
+		}
+
+		if _, ok := node.Services[INDEX_PROJECTOR]; ok {
+			mapping[fmt.Sprint(node.Services[INDEX_PROJECTOR])] = fmt.Sprint(node.Services[INDEX_PROJECTOR])
+		}
+
+		if _, ok := node.Services[INDEX_DATA_INIT]; ok {
+			mapping[fmt.Sprint(node.Services[INDEX_DATA_INIT])] = fmt.Sprint(node.Services[INDEX_DATA_INIT])
+		}
+
+		if _, ok := node.Services[INDEX_DATA_MAINT]; ok {
+			mapping[fmt.Sprint(node.Services[INDEX_DATA_MAINT])] = fmt.Sprint(node.Services[INDEX_DATA_MAINT])
+		}
+
+		if _, ok := node.Services[INDEX_DATA_CATUP]; ok {
+			mapping[fmt.Sprint(node.Services[INDEX_DATA_CATUP])] = fmt.Sprint(node.Services[INDEX_DATA_CATUP])
+		}
+
+		_, ok = node.Services[KV_SERVICE]
+		_, ok1 = node.Services[KV_SSL_SERVICE]
+		if ok && ok1 {
+			mapping[fmt.Sprint(node.Services[KV_SERVICE])] = fmt.Sprint(node.Services[KV_SSL_SERVICE])
+		}
+		_, ok = node.Services[CBQ_SERVICE]
+		_, ok1 = node.Services[CBQ_SSL_SERVICE]
+		if ok && ok1 {
+			mapping[fmt.Sprint(node.Services[CBQ_SERVICE])] = fmt.Sprint(node.Services[CBQ_SSL_SERVICE])
+		}
+	}
+
+	c.encryptPortMapping = mapping
+}
+
+func (c *ClusterInfoCache) EncryptPortMapping() map[string]string {
+	return c.encryptPortMapping
 }
 
 func (c *ClusterInfoCache) fetchServerGroups() error {
@@ -416,6 +496,7 @@ func (c *ClusterInfoCache) GetServiceAddress(nid NodeId, srvc string) (addr stri
 	}
 
 	node := c.nodesvs[nid]
+
 	if port, ok = node.Services[srvc]; !ok {
 		logging.Errorf("%vInvalid Service %v for node %v. Nodes %v \n NodeServices %v",
 			c.logPrefix, srvc, node, c.nodes, c.nodesvs)
@@ -429,10 +510,12 @@ func (c *ClusterInfoCache) GetServiceAddress(nid NodeId, srvc string) (addr stri
 	if err != nil {
 		return "", errors.New("Unable to parse cluster url - " + err.Error())
 	}
-	h, _, _ := net.SplitHostPort(cUrl.Host)
+	h, p, _ := net.SplitHostPort(cUrl.Host)
 	if node.Hostname == "" {
 		node.Hostname = h
 	}
+
+	p = security.EncryptPort(node.Hostname, p)
 
 	addr = net.JoinHostPort(node.Hostname, fmt.Sprint(port))
 	return

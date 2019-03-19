@@ -1,5 +1,6 @@
 package projector
 
+import "expvar"
 import "fmt"
 import "sync"
 import "io"
@@ -18,6 +19,7 @@ import projC "github.com/couchbase/indexing/secondary/projector/client"
 import protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
 import "github.com/golang/protobuf/proto"
 import "github.com/couchbase/indexing/secondary/logging"
+import "github.com/couchbase/indexing/secondary/security"
 
 // Projector data structure, a projector is connected to
 // one or more upstream kv-nodes. Works in tandem with
@@ -37,16 +39,24 @@ type Projector struct {
 	maxvbs      int
 	cpuProfFd   *os.File
 	logPrefix   string
+
+	certFile             string
+	keyFile              string
+	reqch                chan ap.Request
+	enableSecurityChange chan bool
 }
 
 // NewProjector creates a news projector instance and
 // starts a corresponding adminport.
-func NewProjector(maxvbs int, config c.Config) *Projector {
+func NewProjector(maxvbs int, config c.Config, certFile string, keyFile string) *Projector {
 	p := &Projector{
-		topics:         make(map[string]*Feed),
-		topicSerialize: make(map[string]*sync.Mutex),
-		maxvbs:         maxvbs,
-		pooln:          "default", // TODO: should this be configurable ?
+		topics:               make(map[string]*Feed),
+		topicSerialize:       make(map[string]*sync.Mutex),
+		maxvbs:               maxvbs,
+		pooln:                "default", // TODO: should this be configurable ?
+		certFile:             certFile,
+		keyFile:              keyFile,
+		enableSecurityChange: make(chan bool),
 	}
 
 	// Setup dynamic configuration propagation
@@ -65,15 +75,21 @@ func NewProjector(maxvbs int, config c.Config) *Projector {
 
 	p.logPrefix = fmt.Sprintf("PROJ[%s]", p.adminport)
 
+	encryptLocalHost := config["security.encryption.encryptLocalhost"].Bool()
+	if err := p.initSecurityContext(encryptLocalHost); err != nil {
+		c.CrashOnError(fmt.Errorf("Fail to initialize security context: %v", err))
+	}
+
 	cluster := p.clusterAddr
 	if !strings.HasPrefix(p.clusterAddr, "http://") {
 		cluster = "http://" + cluster
 	}
 
-	apConfig := config.SectionConfig("projector.adminport.", true)
-	apConfig.SetValue("name", "PRAM")
-	reqch := make(chan ap.Request)
-	p.admind = ap.NewHTTPServer(apConfig, reqch)
+	p.setupHTTP()
+	expvar.Publish("projector", expvar.Func(p.doStatistics))
+
+	// projector is now ready to take security change
+	close(p.enableSecurityChange)
 
 	// set GOGC percent
 	gogc := pconfig["gogc"].Int()
@@ -84,7 +100,6 @@ func NewProjector(maxvbs int, config c.Config) *Projector {
 	watchInterval := config["projector.watchInterval"].Int()
 	staleTimeout := config["projector.staleTimeout"].Int()
 	go c.MemstatLogger(int64(config["projector.memstatTick"].Int()))
-	go p.mainAdminPort(reqch)
 	go p.watcherDameon(watchInterval, staleTimeout)
 
 	callb := func(cfg c.Config) {
@@ -96,6 +111,23 @@ func NewProjector(maxvbs int, config c.Config) *Projector {
 
 	logging.Infof("%v started ...\n", p.logPrefix)
 	return p
+}
+
+func (p *Projector) setupHTTP() {
+	fn := func(r int, e error) (err error) {
+		apConfig := p.config.SectionConfig("projector.adminport.", true)
+		apConfig.SetValue("name", "PRAM")
+
+		p.reqch = make(chan ap.Request)
+		p.admind, err = ap.NewHTTPServer(apConfig, p.reqch)
+		return err
+	}
+	helper := c.NewRetryHelper(10, time.Second, 1, fn)
+	if err := helper.Run(); err != nil {
+		c.CrashOnError(fmt.Errorf("Fail to restart https server on security change. Error %v", err))
+	}
+
+	go p.mainAdminPort(p.reqch)
 }
 
 // GetConfig returns the config object from projector.
@@ -808,4 +840,70 @@ func requestRead(r io.Reader, data []byte) (err error) {
 		return nil
 	}
 	return err
+}
+
+func (p *Projector) initSecurityContext(encryptLocalHost bool) error {
+
+	logger := func(err error) { c.Console(p.clusterAddr, err.Error()) }
+	if err := security.InitSecurityContext(logger, p.clusterAddr, p.certFile, p.keyFile, encryptLocalHost); err != nil {
+		return err
+	}
+
+	fn := func() error {
+		select {
+		case <-p.enableSecurityChange:
+		default:
+			logging.Infof("Receive security change during indexer bootstrap.  Restarting projector ...")
+			os.Exit(1)
+		}
+
+		if err := refreshSecurityContextOnTopology(p.clusterAddr); err != nil {
+			return err
+		}
+
+		// restart HTTPS server
+		p.admind.Stop()
+		time.Sleep(500 * time.Millisecond)
+		p.setupHTTP()
+
+		return nil
+	}
+
+	security.RegisterCallback("projector", fn)
+
+	if err := refreshSecurityContextOnTopology(p.clusterAddr); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func refreshSecurityContextOnTopology(clusterAddr string) error {
+
+	fn := func(r int, e error) error {
+		var cinfo *c.ClusterInfoCache
+		url, err := c.ClusterAuthUrl(clusterAddr)
+		if err != nil {
+			return err
+		}
+
+		cinfo, err = c.NewClusterInfoCache(url, "default")
+		if err != nil {
+			return err
+		}
+
+		cinfo.Lock()
+		defer cinfo.Unlock()
+
+		if err := cinfo.Fetch(); err != nil {
+			return err
+		}
+
+		security.SetEncryptPortMapping(cinfo.EncryptPortMapping())
+
+		return nil
+	}
+
+	helper := c.NewRetryHelper(10, time.Second, 1, fn)
+	return helper.Run()
 }

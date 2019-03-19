@@ -21,6 +21,7 @@ import "encoding/gob"
 import "strconv"
 import "io/ioutil"
 import "sync/atomic"
+import "net/url"
 
 import l "github.com/couchbase/indexing/secondary/logging"
 import c "github.com/couchbase/indexing/secondary/common"
@@ -123,7 +124,7 @@ func NewGSIIndexer(
 		return nil, errors.NewError(err, "GSI config instantiation failed")
 	}
 	qconf := conf.SectionConfig("queryport.client.", true /*trim*/)
-	client, err := getSingletonClient(clusterURL, qconf)
+	client, err := getSingletonClient(clusterURL, conf)
 	if err != nil {
 		l.Errorf("%v GSI instantiation failed: %v", gsi.logPrefix, err)
 		return nil, errors.NewError(err, "GSI client instantiation failed")
@@ -841,13 +842,13 @@ func (si *secondaryIndex) Scan(
 	cons datastore.ScanConsistency, vector timestamp.Vector,
 	conn *datastore.IndexConnection) {
 
-	entryChannel := conn.EntryChannel()
+	sender := conn.Sender()
 	var backfillSync int64
 
 	var waitGroup sync.WaitGroup
 	var broker *qclient.RequestBroker
 
-	defer close(entryChannel)
+	defer sender.Close()
 	defer func() { // cleanup tmpfile
 		waitGroup.Wait()
 		si.cleanupBackfillFile(requestId, broker)
@@ -861,7 +862,7 @@ func (si *secondaryIndex) Scan(
 	client, cnf := si.gsi.gsiClient, si.gsi.config
 	if span.Seek != nil {
 		seek := values2SKey(span.Seek)
-		broker = makeRequestBroker(requestId, si, client, conn, cnf, &waitGroup, &backfillSync, cap(entryChannel))
+		broker = makeRequestBroker(requestId, si, client, conn, cnf, &waitGroup, &backfillSync, sender.Capacity())
 		err := client.LookupInternal(
 			si.defnID, requestId, []c.SecondaryKey{seek}, distinct, limit,
 			n1ql2GsiConsistency[cons], vector2ts(vector), broker)
@@ -871,7 +872,7 @@ func (si *secondaryIndex) Scan(
 	} else {
 		low, high := values2SKey(span.Range.Low), values2SKey(span.Range.High)
 		incl := n1ql2GsiInclusion[span.Range.Inclusion]
-		broker = makeRequestBroker(requestId, si, client, conn, cnf, &waitGroup, &backfillSync, cap(entryChannel))
+		broker = makeRequestBroker(requestId, si, client, conn, cnf, &waitGroup, &backfillSync, sender.Capacity())
 		err := client.RangeInternal(
 			si.defnID, requestId, low, high, incl, distinct, limit,
 			n1ql2GsiConsistency[cons], vector2ts(vector), broker)
@@ -888,13 +889,13 @@ func (si *secondaryIndex) ScanEntries(
 	requestId string, limit int64, cons datastore.ScanConsistency,
 	vector timestamp.Vector, conn *datastore.IndexConnection) {
 
-	entryChannel := conn.EntryChannel()
+	sender := conn.Sender()
 	var backfillSync int64
 
 	var waitGroup sync.WaitGroup
 	var broker *qclient.RequestBroker
 
-	defer close(entryChannel)
+	defer sender.Close()
 	defer func() {
 		waitGroup.Wait()
 		si.cleanupBackfillFile(requestId, broker)
@@ -906,7 +907,7 @@ func (si *secondaryIndex) ScanEntries(
 	starttm := time.Now()
 
 	client, cnf := si.gsi.gsiClient, si.gsi.config
-	broker = makeRequestBroker(requestId, si, client, conn, cnf, &waitGroup, &backfillSync, cap(entryChannel))
+	broker = makeRequestBroker(requestId, si, client, conn, cnf, &waitGroup, &backfillSync, sender.Capacity())
 	err := client.ScanAllInternal(
 		si.defnID, requestId, limit,
 		n1ql2GsiConsistency[cons], vector2ts(vector), broker)
@@ -933,15 +934,15 @@ func (si *secondaryIndex2) Scan2(
 	cons datastore.ScanConsistency, vector timestamp.Vector,
 	conn *datastore.IndexConnection) {
 
-	entryChannel := conn.EntryChannel()
+	sender := conn.Sender()
 	var backfillSync int64
 	var waitGroup sync.WaitGroup
 	var broker *qclient.RequestBroker
 
-	defer close(entryChannel)
+	defer sender.Close()
 	defer func() {
 		if broker != nil {
-			l.Debugf("scan2: scan request %v closing entryChannel.  Receive Count %v Sent Count %v",
+			l.Debugf("scan2: scan request %v closing sender.  Receive Count %v Sent Count %v",
 				requestId, broker.ReceiveCount(), broker.SendCount())
 		}
 	}()
@@ -959,7 +960,7 @@ func (si *secondaryIndex2) Scan2(
 
 	gsiscans := n1qlspanstogsi(spans)
 	gsiprojection := n1qlprojectiontogsi(projection)
-	broker = makeRequestBroker(requestId, &si.secondaryIndex, client, conn, cnf, &waitGroup, &backfillSync, cap(entryChannel))
+	broker = makeRequestBroker(requestId, &si.secondaryIndex, client, conn, cnf, &waitGroup, &backfillSync, sender.Capacity())
 	err := client.MultiScanInternal(
 		si.defnID, requestId, gsiscans, reverse, distinct,
 		gsiprojection, offset, limit,
@@ -1088,15 +1089,15 @@ func (si *secondaryIndex3) Scan3(
 	cons datastore.ScanConsistency, vector timestamp.Vector,
 	conn *datastore.IndexConnection) {
 
-	entryChannel := conn.EntryChannel()
+	sender := conn.Sender()
 	var backfillSync int64
 	var waitGroup sync.WaitGroup
 	var broker *qclient.RequestBroker
 
-	defer close(entryChannel)
+	defer sender.Close()
 	defer func() {
 		if broker != nil {
-			l.Debugf("scan3: scan request %v closing entryChannel.  Receive Count %v Sent Count %v",
+			l.Debugf("scan3: scan request %v closing sender.  Receive Count %v Sent Count %v",
 				requestId, broker.ReceiveCount(), broker.SendCount())
 		}
 	}()
@@ -1116,7 +1117,7 @@ func (si *secondaryIndex3) Scan3(
 	gsiprojection := n1qlprojectiontogsi(projection)
 	gsigroupaggr := n1qlgroupaggrtogsi(groupAggs)
 	indexorder := n1qlindexordertogsi(indexOrders)
-	broker = makeRequestBroker(requestId, &si.secondaryIndex, client, conn, cnf, &waitGroup, &backfillSync, cap(entryChannel))
+	broker = makeRequestBroker(requestId, &si.secondaryIndex, client, conn, cnf, &waitGroup, &backfillSync, sender.Capacity())
 	err := client.Scan3Internal(
 		si.defnID, requestId, gsiscans, reverse, distinctAfterProjection,
 		gsiprojection, offset, limit, gsigroupaggr, indexorder,
@@ -1260,7 +1261,7 @@ func makeResponsehandler(
 	instId uint64,
 	partitions []c.PartitionId) qclient.ResponseHandler {
 
-	entryChannel := conn.EntryChannel()
+	sender := conn.Sender()
 
 	var enc *gob.Encoder
 	var dec *gob.Decoder
@@ -1304,7 +1305,9 @@ func makeResponsehandler(
 				"%v %q finished backfill for %v ...\n",
 				lprefix, requestId, name)
 
-			recover() // need this because entryChannel() would have closed
+			if r := recover(); r != nil {
+				l.Errorf("%v %q Error %v during backfill", lprefix, requestId, r)
+			}
 		}()
 		l.Debugf(
 			"%v %q started backfill for %v ...\n", lprefix, requestId, name)
@@ -1355,7 +1358,7 @@ func makeResponsehandler(
 
 			ln := int(broker.Len(id))
 			if ln < 0 {
-				ln = len(entryChannel)
+				ln = sender.Length()
 			}
 
 			if ln > 0 && skeys.GetLength() > 0 {
@@ -1420,12 +1423,12 @@ func makeResponsehandler(
 
 		ln := int(broker.Len(id))
 		if ln < 0 {
-			ln = len(entryChannel)
+			ln = sender.Length()
 		}
 
 		cp := int(broker.Cap(id))
 		if cp < 0 {
-			cp = cap(entryChannel)
+			cp = sender.Capacity()
 		}
 
 		if backfillLimit > 0 && tmpfile == nil && ((cp - ln) < skeys.GetLength()) {
@@ -1679,13 +1682,25 @@ var muclient sync.Mutex
 var singletonClient *qclient.GsiClient
 
 func getSingletonClient(
-	clusterURL string, qconf c.Config) (*qclient.GsiClient, error) {
+	clusterURL string, conf c.Config) (*qclient.GsiClient, error) {
 
 	muclient.Lock()
 	defer muclient.Unlock()
 	if singletonClient == nil {
-		l.Debugf("creating singleton for URL %v", clusterURL)
-		client, err := qclient.NewGsiClientWithSettings(clusterURL, qconf, true)
+
+		if strings.Contains(strings.ToLower(clusterURL), "http") ||
+			strings.Contains(strings.ToLower(clusterURL), "https") {
+			parsedUrl, err := url.Parse(clusterURL)
+			if err != nil {
+				return nil, err
+			}
+			clusterURL = parsedUrl.Host
+		}
+
+		l.Infof("creating GsiClient for %v", clusterURL)
+		qconf := conf.SectionConfig("queryport.client.", true /*trim*/)
+		encryptLocalHost := conf["security.encryption.encryptLocalhost"].Bool()
+		client, err := qclient.NewGsiClientWithSettings(clusterURL, qconf, true, encryptLocalHost)
 		if err != nil {
 			return nil, fmt.Errorf("in NewGsiClient(): %v", err)
 		}
@@ -1707,8 +1722,7 @@ func sendEntry(broker *qclient.RequestBroker, si *secondaryIndex, pkey []byte,
 	var start time.Time
 	blockedtm, blocked := int64(0), false
 
-	entryChannel := conn.EntryChannel()
-	stopChannel := conn.StopChannel()
+	sender := conn.Sender()
 
 	var err error
 	var retBuf *[]byte
@@ -1725,15 +1739,16 @@ func sendEntry(broker *qclient.RequestBroker, si *secondaryIndex, pkey []byte,
 	e := &datastore.IndexEntry{
 		PrimaryKey: string(pkey),
 		EntryKey:   value}
-	cp, ln := cap(entryChannel), len(entryChannel)
+	cp, ln := sender.Capacity(), sender.Length()
 	if ln == cp {
 		start, blocked = time.Now(), true
 	}
-	select {
-	case entryChannel <- e:
-	case <-stopChannel:
+
+	cont := sender.SendEntry(e)
+	if !cont {
 		return false, nil
 	}
+
 	if blocked {
 		blockedtm += int64(time.Since(start))
 		blocked = false

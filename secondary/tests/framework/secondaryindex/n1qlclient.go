@@ -77,7 +77,7 @@ func N1QLRange(indexName, bucketName, server string, low, high []interface{}, in
 		index.Scan(requestid, span, false, limit, cons, nil, conn)
 	}()
 
-	results, err2 := getresultsfromchannel(conn.EntryChannel(), index.IsPrimary(), tctx)
+	results, err2 := getresultsfromsender(conn.Sender(), index.IsPrimary(), tctx)
 	elapsed := time.Since(start)
 	tc.LogPerfStat("Range", elapsed)
 	return results, err2
@@ -119,7 +119,7 @@ func N1QLLookup(indexName, bucketName, server string, values []interface{},
 		index.Scan(requestid, span, false, limit, cons, nil, conn)
 	}()
 
-	results, err2 := getresultsfromchannel(conn.EntryChannel(), index.IsPrimary(), tctx)
+	results, err2 := getresultsfromsender(conn.Sender(), index.IsPrimary(), tctx)
 	elapsed := time.Since(start)
 	tc.LogPerfStat("Lookup", elapsed)
 	return results, err2
@@ -160,7 +160,7 @@ func N1QLScanAll(indexName, bucketName, server string, limit int64,
 		index.Scan(requestid, span, false, limit, cons, nil, conn)
 	}()
 
-	results, err2 := getresultsfromchannel(conn.EntryChannel(), index.IsPrimary(), tctx)
+	results, err2 := getresultsfromsender(conn.Sender(), index.IsPrimary(), tctx)
 	elapsed := time.Since(start)
 	tc.LogPerfStat("ScanAll", elapsed)
 	return results, err2
@@ -219,7 +219,7 @@ func N1QLScans(indexName, bucketName, server string, scans qc.Scans, reverse, di
 		}
 	}()
 
-	results, err2 := getresultsfromchannel(conn.EntryChannel(), index.IsPrimary(), tctx)
+	results, err2 := getresultsfromsender(conn.Sender(), index.IsPrimary(), tctx)
 	elapsed := time.Since(start)
 	tc.LogPerfStat("MultiScan", elapsed)
 	return results, err2
@@ -338,9 +338,9 @@ func N1QLScan3(indexName, bucketName, server string, scans qc.Scans, reverse, di
 	var garesults tc.GroupAggrScanResponseActual
 	var err2 error
 	if groupAggr != nil {
-		garesults = resultsforaggrgates(conn.EntryChannel())
+		garesults = resultsforaggrgates(conn.Sender())
 	} else {
-		results, err2 = getresultsfromchannel(conn.EntryChannel(), index.IsPrimary(), tctx)
+		results, err2 = getresultsfromsender(conn.Sender(), index.IsPrimary(), tctx)
 	}
 
 	elapsed := time.Since(start)
@@ -452,13 +452,13 @@ func getConsistency(consistency c.Consistency) datastore.ScanConsistency {
 	return cons
 }
 
-func getresultsfromchannel(ch datastore.EntryChannel, isprimary bool, tctx *testContext) (tc.ScanResponseActual, error) {
+func getresultsfromsender(sender datastore.Sender, isprimary bool, tctx *testContext) (tc.ScanResponseActual, error) {
 
 	scanResults := make(tc.ScanResponseActual)
 	ok := true
 	var err error
 	for ok {
-		entry, ok := <-ch
+		entry, ok := sender.GetEntry()
 		if ok {
 			if isprimary {
 				scanResults[entry.PrimaryKey] = nil
@@ -477,11 +477,11 @@ func getresultsfromchannel(ch datastore.EntryChannel, isprimary bool, tctx *test
 	return scanResults, err
 }
 
-func resultsforaggrgates(ch datastore.EntryChannel) tc.GroupAggrScanResponseActual {
+func resultsforaggrgates(sender datastore.Sender) tc.GroupAggrScanResponseActual {
 	scanResults := make(tc.GroupAggrScanResponseActual, 0)
 	ok := true
 	for ok {
-		entry, ok := <-ch
+		entry, ok := sender.GetEntry()
 		if ok {
 			log.Printf("Scanresult Row  %v : %v ", entry.EntryKey, entry.PrimaryKey)
 			scanResults = append(scanResults, entry.EntryKey)

@@ -21,6 +21,7 @@ import (
 
 	"github.com/couchbase/indexing/secondary/dcp/transport/client"
 	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/security"
 )
 
 // HTTPClient to use for REST and view operations.
@@ -282,13 +283,7 @@ func queryRestAPI(
 		u.Path = path
 	}
 
-	req, err := http.NewRequest("GET", u.String(), nil)
-	if err != nil {
-		return err
-	}
-	maybeAddAuth(req, authHandler)
-
-	res, err := HTTPClient.Do(req)
+	res, err := security.GetWithAuth(u.String(), nil)
 	if err != nil {
 		return err
 	}
@@ -343,7 +338,6 @@ func (c *Client) runObserveStreamingEndpoint(path string,
 
 	u := *c.BaseURL
 	u.User = nil
-	authHandler := c.ah
 	if q := strings.Index(path, "?"); q > 0 {
 		u.Path = path[:q]
 		u.RawQuery = path[q+1:]
@@ -351,13 +345,7 @@ func (c *Client) runObserveStreamingEndpoint(path string,
 		u.Path = path
 	}
 
-	req, err := http.NewRequest("GET", u.String(), nil)
-	if err != nil {
-		return err
-	}
-	maybeAddAuth(req, authHandler)
-
-	res, err := HTTPClient.Do(req)
+	res, err := security.GetWithAuth(u.String(), nil)
 	if err != nil {
 		return err
 	}

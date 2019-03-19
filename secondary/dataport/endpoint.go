@@ -28,6 +28,7 @@ import "sync/atomic"
 import c "github.com/couchbase/indexing/secondary/common"
 import "github.com/couchbase/indexing/secondary/transport"
 import "github.com/couchbase/indexing/secondary/logging"
+import "github.com/couchbase/indexing/secondary/security"
 
 // RouterEndpoint structure, per topic, to gather key-versions / mutations
 // from one or more vbuckets and push them downstream to a
@@ -71,7 +72,7 @@ func NewRouterEndpoint(
 	cluster, topic, raddr string, maxvbs int,
 	config c.Config) (*RouterEndpoint, error) {
 
-	conn, err := net.Dial("tcp", raddr)
+	conn, err := security.MakeConn(raddr)
 	if err != nil {
 		return nil, err
 	}

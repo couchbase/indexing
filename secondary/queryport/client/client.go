@@ -16,9 +16,11 @@ import "sync/atomic"
 import "fmt"
 import "syscall"
 import "strings"
+import "sync"
 
 import "github.com/couchbase/indexing/secondary/logging"
 import "github.com/couchbase/indexing/secondary/common"
+import "github.com/couchbase/indexing/secondary/security"
 import mclient "github.com/couchbase/indexing/secondary/manager/client"
 import "github.com/couchbase/query/value"
 
@@ -356,6 +358,7 @@ type GsiAccessor interface {
 }
 
 var useMetadataProvider = true
+var pInitOnce sync.Once
 
 // IndexerService returns the status of the indexer node
 // as observed by the GsiClient.
@@ -387,16 +390,16 @@ type GsiClient struct {
 func NewGsiClient(
 	cluster string, config common.Config) (c *GsiClient, err error) {
 
-	return NewGsiClientWithSettings(cluster, config, false)
+	return NewGsiClientWithSettings(cluster, config, false, true)
 }
 
 func NewGsiClientWithSettings(
-	cluster string, config common.Config, needRefresh bool) (c *GsiClient, err error) {
+	cluster string, config common.Config, needRefresh bool, encryptLocalHost bool) (c *GsiClient, err error) {
 
 	if useMetadataProvider {
-		c, err = makeWithMetaProvider(cluster, config, needRefresh)
+		c, err = makeWithMetaProvider(cluster, config, needRefresh, encryptLocalHost)
 	} else {
-		c, err = makeWithCbq(cluster, config)
+		c, err = makeWithCbq(cluster, config, encryptLocalHost)
 	}
 	if err != nil {
 		return nil, err
@@ -1456,12 +1459,17 @@ func (c *GsiClient) getBucketHash(bucketn string) (uint64, bool) {
 }
 
 // create GSI client using cbqBridge and ScanCoordinator
-func makeWithCbq(cluster string, config common.Config) (*GsiClient, error) {
+func makeWithCbq(cluster string, config common.Config, encryptLocalHost bool) (*GsiClient, error) {
 	var err error
 	c := &GsiClient{
 		cluster: cluster,
 		config:  config,
 	}
+
+	if err := c.initSecurityContext(encryptLocalHost); err != nil {
+		return nil, err
+	}
+
 	atomic.StorePointer(&c.bucketHash, (unsafe.Pointer)(new(map[string]uint64)))
 	if c.bridge, err = newCbqClient(cluster); err != nil {
 		return nil, err
@@ -1477,7 +1485,7 @@ func makeWithCbq(cluster string, config common.Config) (*GsiClient, error) {
 }
 
 func makeWithMetaProvider(
-	cluster string, config common.Config, needRefresh bool) (c *GsiClient, err error) {
+	cluster string, config common.Config, needRefresh bool, encryptLocalHost bool) (c *GsiClient, err error) {
 
 	c = &GsiClient{
 		cluster:      cluster,
@@ -1487,6 +1495,11 @@ func makeWithMetaProvider(
 		settings:     NewClientSettings(needRefresh),
 		killch:       make(chan bool, 1),
 	}
+
+	if err := c.initSecurityContext(encryptLocalHost); err != nil {
+		return nil, err
+	}
+
 	atomic.StorePointer(&c.bucketHash, (unsafe.Pointer)(new(map[string]uint64)))
 	c.bridge, err = newMetaBridgeClient(cluster, config, c.metaCh, c.settings)
 	if err != nil {
@@ -1662,4 +1675,58 @@ func getScanError(errMap map[common.PartitionId]map[uint64]error) error {
 	}
 
 	return fmt.Errorf("%v", allErrs)
+}
+
+func (c *GsiClient) initSecurityContext(encryptLocalHost bool) (err error) {
+
+	pInitOnce.Do(func() {
+		certFile := c.config["encryption.certFile"].String()
+		keyFile := c.config["encryption.keyFile"].String()
+
+		logger := func(err error) { common.Console(c.cluster, err.Error()) }
+		if err = security.InitSecurityContext(logger, c.cluster, certFile, keyFile, encryptLocalHost); err != nil {
+			return
+		}
+
+		fn := func() error {
+			return refreshSecurityContextOnTopology(c.cluster)
+		}
+		security.RegisterCallback("gsiclient", fn)
+
+		if err = refreshSecurityContextOnTopology(c.cluster); err != nil {
+			return
+		}
+	})
+
+	return
+}
+
+func refreshSecurityContextOnTopology(clusterAddr string) error {
+
+	fn := func(r int, e error) error {
+		var cinfo *common.ClusterInfoCache
+		url, err := common.ClusterAuthUrl(clusterAddr)
+		if err != nil {
+			return err
+		}
+
+		cinfo, err = common.NewClusterInfoCache(url, "default")
+		if err != nil {
+			return err
+		}
+
+		cinfo.Lock()
+		defer cinfo.Unlock()
+
+		if err := cinfo.Fetch(); err != nil {
+			return err
+		}
+
+		security.SetEncryptPortMapping(cinfo.EncryptPortMapping())
+
+		return nil
+	}
+
+	helper := common.NewRetryHelper(10, time.Second, 1, fn)
+	return helper.Run()
 }

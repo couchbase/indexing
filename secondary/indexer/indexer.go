@@ -11,8 +11,6 @@ package indexer
 
 import (
 	"bytes"
-	"crypto/tls"
-	"crypto/x509"
 	"encoding/gob"
 	"encoding/json"
 	"errors"
@@ -30,7 +28,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/couchbase/cbauth"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/fdb"
 	"github.com/couchbase/indexing/secondary/logging"
@@ -38,6 +35,7 @@ import (
 	"github.com/couchbase/indexing/secondary/memdb"
 	"github.com/couchbase/indexing/secondary/memdb/nodetable"
 	projClient "github.com/couchbase/indexing/secondary/projector/client"
+	"github.com/couchbase/indexing/secondary/security"
 	"github.com/couchbase/indexing/secondary/stubs/nitro/mm"
 	"github.com/couchbase/indexing/secondary/stubs/nitro/plasma"
 )
@@ -164,6 +162,12 @@ type indexer struct {
 
 	bootstrapStorageMode common.StorageMode
 
+	httpSrvLock sync.Mutex
+	httpsSrv    *http.Server
+	tlsListener net.Listener
+
+	enableSecurityChange chan bool
+
 	testServRunning bool
 }
 
@@ -228,6 +232,8 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		bucketBuildTs:                make(map[string]Timestamp),
 		bucketRollbackTimes:          make(map[string]int64),
 		bucketCreateClientChMap:      make(map[string]MsgChannel),
+
+		enableSecurityChange: make(chan bool),
 	}
 
 	logging.Infof("Indexer::NewIndexer Status Warmup")
@@ -242,6 +248,19 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	if res.GetMsgType() != MSG_SUCCESS {
 		logging.Fatalf("Indexer::NewIndexer settingsMgr Init Error %+v", res)
 		return nil, res
+	}
+
+	//Initialize security context
+	encryptLocalHost := config["security.encryption.encryptLocalhost"].Bool()
+	err := idx.initSecurityContext(encryptLocalHost)
+	if err != nil {
+		idxErr := Error{
+			code:     ERROR_INDEXER_INTERNAL_ERROR,
+			severity: FATAL,
+			cause:    err,
+			category: INDEXER,
+		}
+		return nil, &MsgError{err: idxErr}
 	}
 
 	idx.stats = NewIndexerStats()
@@ -317,7 +336,12 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	idx.scanCoordCmdCh <- &MsgIndexerState{mType: INDEXER_BOOTSTRAP}
 	<-idx.scanCoordCmdCh
 
-	idx.initHttpServer()
+	if err := idx.initHTTP(); err != nil {
+		common.CrashOnError(err)
+	}
+
+	// indexer is now ready to take security change
+	close(idx.enableSecurityChange)
 
 	//bootstrap phase 1
 	idx.bootstrap1(snapshotNotifych)
@@ -343,6 +367,127 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 
 	return idx, &MsgSuccess{}
 
+}
+
+func (idx *indexer) initSecurityContext(encryptLocalHost bool) error {
+
+	certFile := idx.config["certFile"].String()
+	keyFile := idx.config["keyFile"].String()
+	clusterAddr := idx.config["clusterAddr"].String()
+	logger := func(err error) { common.Console(clusterAddr, err.Error()) }
+	if err := security.InitSecurityContext(logger, clusterAddr, certFile, keyFile, encryptLocalHost); err != nil {
+		return err
+	}
+
+	fn := func() error {
+		select {
+		case <-idx.enableSecurityChange:
+		default:
+			logging.Infof("Receive security change during indexer bootstrap.  Restarting indexer ...")
+			os.Exit(1)
+		}
+
+		msg := &MsgSecurityChange{}
+		idx.internalRecvCh <- msg
+
+		return nil
+	}
+
+	security.RegisterCallback("indexer", fn)
+
+	if err := refreshSecurityContextOnTopology(clusterAddr); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func refreshSecurityContextOnTopology(clusterAddr string) error {
+
+	fn := func(r int, e error) error {
+		var cinfo *common.ClusterInfoCache
+		url, err := common.ClusterAuthUrl(clusterAddr)
+		if err != nil {
+			return err
+		}
+
+		cinfo, err = common.NewClusterInfoCache(url, DEFAULT_POOL)
+		if err != nil {
+			return err
+		}
+
+		cinfo.Lock()
+		defer cinfo.Unlock()
+
+		if err := cinfo.Fetch(); err != nil {
+			return err
+		}
+
+		security.SetEncryptPortMapping(cinfo.EncryptPortMapping())
+
+		return nil
+	}
+
+	helper := common.NewRetryHelper(10, time.Second, 1, fn)
+	return helper.Run()
+}
+
+func (idx *indexer) handleSecurityChange(msg Message) {
+
+	exitFn := func(msg string) {
+		logging.Infof(msg)
+		os.Exit(1)
+	}
+
+	logging.Infof("handleSecurityChange: refresh security context")
+	clusterAddr := idx.config["clusterAddr"].String()
+	if err := refreshSecurityContextOnTopology(clusterAddr); err != nil {
+		exitFn(fmt.Sprintf("Fail to refresh security contexxt on security change. Error %v", err))
+	}
+
+	// restart lifecyclemgr
+	logging.Infof("handleSecurityChange: restarting index manager")
+	if err := idx.sendMsgToWorker(msg, idx.clustMgrAgentCmdCh); err != nil {
+		exitFn(fmt.Sprintf("Fail to restart lifecycle mgr on security change. Error %v", err))
+	}
+
+	//restart mutation manager
+	logging.Infof("handleSecurityChange: restarting mutation manager")
+	if err := idx.sendMsgToWorker(msg, idx.mutMgrCmdCh); err != nil {
+		exitFn(fmt.Sprintf("Fail to restart mutation mgr on security change. Error %v", err))
+	}
+
+	//restart scan coordinator
+	logging.Infof("handleSecurityChange: restarting scan coordinator")
+	if err := idx.sendMsgToWorker(msg, idx.scanCoordCmdCh); err != nil {
+		exitFn(fmt.Sprintf("Fail to restart scan coordinator on security change. Error %v", err))
+	}
+
+	// restart HTTPS server
+	idx.httpSrvLock.Lock()
+	if idx.httpsSrv != nil {
+		// This does not close connections.  Use idx.httpSrv.Close() on 1.11
+		idx.tlsListener.Close()
+		idx.httpsSrv = nil
+		idx.tlsListener = nil
+	}
+	idx.httpSrvLock.Unlock()
+	time.Sleep(1 * time.Second)
+
+	fn := func(r int, e error) error {
+		logging.Infof("handleSecurityChange: restarting http/https server")
+		return idx.initHttpsServer()
+	}
+	helper := common.NewRetryHelper(10, time.Second, 1, fn)
+	if err := helper.Run(); err != nil {
+		exitFn(fmt.Sprintf("Fail to restart https server on security change. Error %v", err))
+	}
+
+	// reset memcached connection
+	logging.Infof("handleSecurityChange: restarting bucket sequence cache")
+	common.ResetBucketSeqnos()
+
+	logging.Infof("handleSecurityChange: done")
 }
 
 func (idx *indexer) initFromConfig() {
@@ -389,127 +534,129 @@ func GetHTTPMux() *http.ServeMux {
 	return httpMux
 }
 
-func (idx *indexer) initHttpServer() {
+func (idx *indexer) initHTTP() error {
+	idx.initHTTPMux()
+	idx.initPeriodicProfile()
+	if err := idx.initHttpServer(); err != nil {
+		return err
+	}
+	return idx.initHttpsServer()
+}
+
+func (idx *indexer) initHTTPMux() {
+
+	httpMux = http.NewServeMux()
+
+	overrideHttpDebugHandlers := func() {
+		httpMux.HandleFunc("/debug/pprof/", common.PProfHandler)
+		httpMux.HandleFunc("/debug/pprof/goroutine", common.GrHandler)
+		httpMux.HandleFunc("/debug/pprof/block", common.BlockHandler)
+		httpMux.HandleFunc("/debug/pprof/heap", common.HeapHandler)
+		httpMux.HandleFunc("/debug/pprof/threadcreate", common.TCHandler)
+		httpMux.HandleFunc("/debug/pprof/profile", common.ProfileHandler)
+		httpMux.HandleFunc("/debug/pprof/cmdline", common.CmdlineHandler)
+		httpMux.HandleFunc("/debug/pprof/symbol", common.SymbolHandler)
+		httpMux.HandleFunc("/debug/pprof/trace", common.TraceHandler)
+		httpMux.HandleFunc("/debug/vars", common.ExpvarHandler)
+	}
+
+	overrideHttpDebugHandlers()
+	idx.settingsMgr.RegisterRestEndpoints()
+	idx.statsMgr.RegisterRestEndpoints()
+	idx.clustMgrAgent.RegisterRestEndpoints()
+}
+
+func (idx *indexer) initPeriodicProfile() {
+	addr := net.JoinHostPort("", idx.config["httpPort"].String())
+	logging.PeriodicProfile(logging.Debug, addr, "goroutine")
+}
+
+func (idx *indexer) initHttpServer() error {
 
 	// Setup http server
 	addr := net.JoinHostPort("", idx.config["httpPort"].String())
-	logging.PeriodicProfile(logging.Debug, addr, "goroutine")
 
-	overrideHttpDebugHandlers := func() {
-		mux := GetHTTPMux()
-		mux.HandleFunc("/debug/pprof/", common.PProfHandler)
-		mux.HandleFunc("/debug/pprof/goroutine", common.GrHandler)
-		mux.HandleFunc("/debug/pprof/block", common.BlockHandler)
-		mux.HandleFunc("/debug/pprof/heap", common.HeapHandler)
-		mux.HandleFunc("/debug/pprof/threadcreate", common.TCHandler)
-		mux.HandleFunc("/debug/pprof/profile", common.ProfileHandler)
-		mux.HandleFunc("/debug/pprof/cmdline", common.CmdlineHandler)
-		mux.HandleFunc("/debug/pprof/symbol", common.SymbolHandler)
-		mux.HandleFunc("/debug/pprof/trace", common.TraceHandler)
-		mux.HandleFunc("/debug/vars", common.ExpvarHandler)
+	logging.Infof("indexer:: Staring http server : %v", addr)
+
+	srv := &http.Server{
+		ReadTimeout:  time.Duration(idx.config["http.readTimeout"].Int()) * time.Second,
+		WriteTimeout: time.Duration(idx.config["http.writeTimeout"].Int()) * time.Second,
+		Addr:         addr,
+		Handler:      GetHTTPMux(),
 	}
 
-	httpMux = http.NewServeMux()
+	lsnr, err := net.Listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("Error in creating TCP Listener: %v", err)
+	}
+
 	go func() {
-		srv := &http.Server{
-			ReadTimeout:  time.Duration(idx.config["http.readTimeout"].Int()) * time.Second,
-			WriteTimeout: time.Duration(idx.config["http.writeTimeout"].Int()) * time.Second,
-			Addr:         addr,
-			Handler:      httpMux,
-		}
-		overrideHttpDebugHandlers()
-		idx.settingsMgr.RegisterRestEndpoints()
-		idx.statsMgr.RegisterRestEndpoints()
-		idx.clustMgrAgent.RegisterRestEndpoints()
-		if err := srv.ListenAndServe(); err != nil {
-			logging.Fatalf("indexer:: Error Starting Http Server: %v", err)
-			common.CrashOnError(err)
+		// replace below with ListenAndServe on moving to go1.8
+		if err := srv.Serve(lsnr); err != nil {
+			// This does not close connections.  Use idx.httpSrv.Close() on 1.11
+			lsnr.Close()
+			logging.Errorf("indexer:: Error from Http Server: %v", err)
+
+			// self restart
+			time.Sleep(time.Duration(10) * time.Second)
+			go idx.initHttpServer()
 		}
 	}()
 
+	return nil
+}
+
+func (idx *indexer) initHttpsServer() error {
+
 	sslPort := idx.config["httpsPort"].String()
-	if sslPort != "" {
-		certFile := idx.config["certFile"].String()
-		keyFile := idx.config["keyFile"].String()
+	if security.EncryptionEnabled() || len(sslPort) != 0 {
+
 		sslAddr := net.JoinHostPort("", sslPort)
 
-		var reload bool = false
-		var tlslsnr *net.Listener = nil
+		// allow only strong ssl as this is an internal API and interop is not a concern
+		sslsrv := &http.Server{
+			Addr:    sslAddr,
+			Handler: GetHTTPMux(),
+		}
+		if err := security.SecureServer(sslsrv); err != nil {
+			return fmt.Errorf("Error in securing HTTPS server: %v", err)
+		}
 
-		cbauth.RegisterTLSRefreshCallback(func() error {
-			if tlslsnr != nil {
-				reload = true
-				(*tlslsnr).Close()
-			}
-			return nil
-		})
+		// replace below with ListenAndServeTLS on moving to go1.8
+		lsnr, err := security.MakeListener(sslAddr)
+		if err != nil {
+			return fmt.Errorf("Error in creating SSL Listener: %v", err)
+		}
+
+		logging.Infof("indexer:: SSL server started: %v", sslAddr)
+
+		idx.httpSrvLock.Lock()
+		idx.httpsSrv = sslsrv
+		idx.tlsListener = lsnr
+		idx.httpSrvLock.Unlock()
 
 		go func() {
-			for {
-				cert, err := tls.LoadX509KeyPair(certFile, keyFile)
-				if err != nil {
-					logging.Fatalf("indexer:: Error in loading SSL certificate: %v", err)
-					return
-				}
+			if err := sslsrv.Serve(lsnr); err != nil {
+				logging.Errorf("HTTPS Server terminates on error: %v", err)
 
-				clientAuthType, err := cbauth.GetClientCertAuthType()
-				if err != nil {
-					logging.Fatalf("indexer:: Failed to get client cert auth type from cbauth, err: %v", err)
-					return
-				}
+				idx.httpSrvLock.Lock()
+				if idx.httpsSrv != nil && idx.httpsSrv == sslsrv {
+					// This does not close connections.  Use idx.httpSrv.Close() on 1.11
+					idx.tlsListener.Close()
 
-				cbauthTLScfg, err1 := cbauth.GetTLSConfig()
-				if err1 != nil {
-					logging.Errorf("Error in getting cbauth tls config: %v", err1.Error())
-					return
-				}
+					// reset before releasing the lock
+					idx.httpsSrv = nil
+					idx.tlsListener = nil
 
-				config := &tls.Config{
-					Certificates:             []tls.Certificate{cert},
-					CipherSuites:             cbauthTLScfg.CipherSuites,
-					MinVersion:               cbauthTLScfg.MinVersion,
-					PreferServerCipherSuites: cbauthTLScfg.PreferServerCipherSuites,
-					ClientAuth:               clientAuthType,
+					// self restart
+					go idx.initHttpsServer()
 				}
-
-				if clientAuthType != tls.NoClientCert {
-					caCert, err := ioutil.ReadFile(certFile)
-					if err != nil {
-						logging.Fatalf("indexer:: Error in reading cacert file, err: %v", err)
-						return
-					}
-					caCertPool := x509.NewCertPool()
-					caCertPool.AppendCertsFromPEM(caCert)
-					config.ClientCAs = caCertPool
-				}
-
-				// allow only strong ssl as this is an internal API and interop is not a concern
-				sslsrv := &http.Server{
-					Addr:         sslAddr,
-					TLSNextProto: make(map[string]func(*http.Server, *tls.Conn, http.Handler), 0),
-					TLSConfig:    config,
-				}
-				// replace below with ListenAndServeTLS on moving to go1.8
-				lsnr, err := net.Listen("tcp", sslAddr)
-				if err != nil {
-					logging.Fatalf("indexer:: Error in listenting to SSL port: %v", err)
-					return
-				}
-				val := tls.NewListener(lsnr, sslsrv.TLSConfig)
-				tlslsnr = &val
-				reload = false
-				logging.Infof("indexer:: SSL server started: %v", sslAddr)
-				err = http.Serve(*tlslsnr, httpMux)
-				if reload {
-					logging.Warnf("indexer:: SSL certificate change: %v", err)
-				} else {
-					logging.Fatalf("indexer:: Error in SSL Server: %v", err)
-					return
-				}
+				idx.httpSrvLock.Unlock()
 			}
 		}()
 	}
 
+	return nil
 }
 
 func (idx *indexer) collectProgressStats(fetchDcp bool) {
@@ -970,6 +1117,9 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		idx.storageMgrCmdCh <- msg
 		<-idx.storageMgrCmdCh
 
+	case INDEXER_SECURITY_CHANGE:
+		idx.handleSecurityChange(msg)
+
 	default:
 		logging.Fatalf("Indexer::handleWorkerMsgs Unknown Message %+v", msg)
 		common.CrashOnError(errors.New("Unknown Msg On Worker Channel"))
@@ -1088,7 +1238,9 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 	if newConfig["api.enableTestServer"].Bool() && !idx.testServRunning {
 		// Start indexer endpoints for CRUD operations.
 		// Initialize the QE REST server on config change.
-		NewTestServer(idx.config["clusterAddr"].String())
+		certFile := idx.config["certFile"].String()
+		keyFile := idx.config["keyFile"].String()
+		NewTestServer(idx.config["clusterAddr"].String(), certFile, keyFile)
 		idx.testServRunning = true
 	}
 
@@ -5930,6 +6082,33 @@ func (idx *indexer) sendMsgToClusterMgr(msg Message) error {
 			"from Cluster Manager")
 		common.CrashOnError(errors.New("Unknown Response"))
 
+	}
+
+	return nil
+}
+
+func (idx *indexer) sendMsgToWorker(msg Message, cmdCh MsgChannel) error {
+
+	cmdCh <- msg
+
+	if res, ok := <-cmdCh; ok {
+
+		switch res.GetMsgType() {
+
+		case MSG_SUCCESS:
+			return nil
+
+		case MSG_ERROR:
+			err := res.(*MsgError).GetError()
+			return err.cause
+
+		default:
+			logging.Errorf("Indexer::sendMsgToWorker Unknown Response %v", res)
+			return fmt.Errorf("Fail to send message to worker: Unknown Response")
+		}
+	} else {
+		logging.Errorf("clustMgrAgent::sendMsgToWorker Channel Close ")
+		return fmt.Errorf("Fail to send message to worker: Closed Channel")
 	}
 
 	return nil

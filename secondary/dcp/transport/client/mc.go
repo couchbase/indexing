@@ -12,6 +12,7 @@ import (
 
 	"github.com/couchbase/indexing/secondary/dcp/transport"
 	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/security"
 )
 
 const bufsize = 1024
@@ -28,7 +29,7 @@ var dialFun = net.Dial
 
 // Connect to a memcached server.
 func Connect(prot, dest string) (rv *Client, err error) {
-	conn, err := dialFun(prot, dest)
+	conn, err := security.MakeConn(dest)
 	if err != nil {
 		return nil, err
 	}

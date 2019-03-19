@@ -141,13 +141,17 @@ type Client struct {
 // - `retryInterval` is specified in milliseconds.
 //   if retryInterval is ZERO, API will not perform retry.
 // - if `maxRetries` is ZERO, will perform indefinite retry.
-func NewClient(adminport string, maxvbs int, config c.Config) *Client {
+func NewClient(adminport string, maxvbs int, config c.Config) (*Client, error) {
 	retryInterval := config["retryInterval"].Int()
 	maxRetries := config["maxRetries"].Int()
 	expBackoff := config["exponentialBackoff"].Int()
 
 	urlPrefix := config["urlPrefix"].String()
-	ap := ap.NewHTTPClient(adminport, urlPrefix)
+	ap, err := ap.NewHTTPClient(adminport, urlPrefix)
+	if err != nil {
+		return nil, err
+	}
+
 	client := &Client{
 		adminport:     adminport,
 		ap:            ap,
@@ -156,7 +160,7 @@ func NewClient(adminport string, maxvbs int, config c.Config) *Client {
 		maxRetries:    maxRetries,
 		expBackoff:    expBackoff,
 	}
-	return client
+	return client, nil
 }
 
 // GetVbmap from projector, for a set of kvnodes.

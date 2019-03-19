@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 	"unsafe"
@@ -52,6 +53,8 @@ type LifecycleMgr struct {
 	requestServer RequestServer
 	prepareLock   *client.PrepareCreateRequest
 	stats         StatsHolder
+	done          sync.WaitGroup
+	isDone        bool
 }
 
 type requestHolder struct {
@@ -171,9 +174,10 @@ func (m *LifecycleMgr) RegisterNotifier(notifier MetadataNotifier) {
 }
 
 func (m *LifecycleMgr) Terminate() {
-	if m.killch != nil {
+	if !m.isDone {
+		m.isDone = true
 		close(m.killch)
-		m.killch = nil
+		m.done.Wait()
 	}
 }
 
@@ -253,6 +257,9 @@ func (m *LifecycleMgr) processRequest() {
 	logging.Debugf("LifecycleMgr.processRequest(): LifecycleMgr is ready to proces request")
 	factory := message.NewConcreteMsgFactory()
 
+	m.done.Add(1)
+	defer m.done.Done()
+
 	// process any requests form the boostrap phase.   Once indexer is ready, this channel
 	// will be closed, and this go-routine will proceed to process regular message.
 END_BOOTSTRAP:
@@ -267,7 +274,7 @@ END_BOOTSTRAP:
 			}
 		case <-m.killch:
 			// server shutdown
-			logging.Debugf("LifecycleMgr.processRequest(): receive kill signal. Stop boostrap request processing.")
+			logging.Infof("LifecycleMgr.processRequest(): receive kill signal. Stop boostrap request processing.")
 			return
 		}
 	}
@@ -283,7 +290,7 @@ END_BOOTSTRAP:
 					m.dispatchRequest(request, factory)
 				} else {
 					// server shutdown.
-					logging.Debugf("LifecycleMgr.handleRequest(): channel for receiving client request is closed. Terminate.")
+					logging.Infof("LifecycleMgr.handleRequest(): channel for receiving client request is closed. Terminate.")
 					return false
 				}
 			default:
@@ -301,7 +308,7 @@ END_BOOTSTRAP:
 				m.dispatchRequest(request, factory)
 			} else {
 				// server shutdown.
-				logging.Debugf("LifecycleMgr.handleRequest(): channel for receiving client request is closed. Terminate.")
+				logging.Infof("LifecycleMgr.handleRequest(): channel for receiving client request is closed. Terminate.")
 				return
 			}
 		case request, ok := <-m.incomings:
@@ -314,12 +321,12 @@ END_BOOTSTRAP:
 				}
 			} else {
 				// server shutdown.
-				logging.Debugf("LifecycleMgr.handleRequest(): channel for receiving client request is closed. Terminate.")
+				logging.Infof("LifecycleMgr.handleRequest(): channel for receiving client request is closed. Terminate.")
 				return
 			}
 		case <-m.killch:
 			// server shutdown
-			logging.Debugf("LifecycleMgr.processRequest(): receive kill signal. Stop Client request processing.")
+			logging.Infof("LifecycleMgr.processRequest(): receive kill signal. Stop Client request processing.")
 			return
 		}
 	}
@@ -337,6 +344,14 @@ func (m *LifecycleMgr) dispatchRequest(request *requestHolder, factory *message.
 
 	var err error = nil
 	var result []byte = nil
+
+	start := time.Now()
+	defer func() {
+		if op != client.OPCODE_BROADCAST_STATS {
+			logging.Infof("lifecycleMgr.dispatchRequest: op %v elapsed %v len(expediates) %v len(incomings) %v",
+				client.Op2String(op), time.Now().Sub(start), len(m.expedites), len(m.incomings))
+		}
+	}()
 
 	switch op {
 	case client.OPCODE_CREATE_INDEX:
@@ -2012,6 +2027,9 @@ func (m *LifecycleMgr) handleNotifyStats(buf []byte) {
 // Broadcast stats in a go-routine
 func (m *LifecycleMgr) broadcastStats() {
 
+	m.done.Add(1)
+	defer m.done.Done()
+
 	ticker := time.NewTicker(time.Second * 5)
 	defer ticker.Stop()
 
@@ -2028,7 +2046,7 @@ func (m *LifecycleMgr) broadcastStats() {
 
 		case <-m.killch:
 			// lifecycle manager shutdown
-			logging.Debugf("LifecycleMgr.broadcastStats(): received kill signal. Shutting down broadcastStats routine.")
+			logging.Infof("LifecycleMgr.broadcastStats(): received kill signal. Shutting down broadcastStats routine.")
 			return
 		}
 	}
@@ -3321,6 +3339,9 @@ func (m *janitor) cleanup() {
 
 func (m *janitor) run() {
 
+	m.manager.done.Add(1)
+	defer m.manager.done.Done()
+
 	// start listener
 	m.commandListener.ListenTokens()
 	time.Sleep(time.Minute)
@@ -3341,7 +3362,8 @@ func (m *janitor) run() {
 
 		case <-m.manager.killch:
 			m.commandListener.Close()
-			logging.Infof("janitor: Index recovery go-routine terminates.")
+			logging.Infof("janitor: go-routine terminates.")
+			return
 
 		case <-m.listenerDonech:
 			m.listenerDonech = make(chan bool)
@@ -3381,6 +3403,9 @@ func newJanitor(mgr *LifecycleMgr) *janitor {
 
 func (s *builder) run() {
 
+	s.manager.done.Add(1)
+	defer s.manager.done.Done()
+
 	// start listener
 	s.commandListener.ListenTokens()
 	time.Sleep(time.Minute)
@@ -3404,7 +3429,15 @@ func (s *builder) run() {
 			// Sleep before checking for index to build.  When a recovered node starts up, it needs to wait until
 			// the rebalancing token is saved.  This is to avoid the bulider to get ahead of the rebalancer.
 			// Otherwise, rebalancer could fail if builder has issued an index build ahead of the rebalancer.
-			time.Sleep(time.Second * 120)
+			timer := time.NewTimer(time.Second * 120)
+			defer timer.Stop()
+			select {
+			case <-timer.C:
+			case <-s.manager.killch:
+				s.commandListener.Close()
+				logging.Infof("builder: go-routine terminates.")
+				return
+			}
 
 			buildList, quota := s.getBuildList()
 
@@ -3414,7 +3447,8 @@ func (s *builder) run() {
 
 		case <-s.manager.killch:
 			s.commandListener.Close()
-			logging.Infof("builder: Index builder terminates.")
+			logging.Infof("builder: go-routine terminates.")
+			return
 
 		case <-s.listenerDonech:
 			s.listenerDonech = make(chan bool)
@@ -3757,6 +3791,9 @@ func newUpdator(mgr *LifecycleMgr) *updator {
 
 func (m *updator) run() {
 
+	m.manager.done.Add(1)
+	defer m.manager.done.Done()
+
 	ticker := time.NewTicker(time.Second * 60)
 	defer ticker.Stop()
 
@@ -3773,7 +3810,8 @@ func (m *updator) run() {
 			}
 
 		case <-m.manager.killch:
-			logging.Infof("updator: Index recovery go-routine terminates.")
+			logging.Infof("updator: go-routine terminates.")
+			return
 		}
 	}
 }

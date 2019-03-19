@@ -26,6 +26,9 @@ var options struct {
 	loglevel    string
 	diagDir     string
 	isIPv6      bool
+	certFile    string
+	keyFile     string
+	httpsPort   string
 }
 
 func argParse() string {
@@ -39,6 +42,9 @@ func argParse() string {
 	fset.StringVar(&options.auth, "auth", "", "Auth user and password")
 	fset.StringVar(&options.diagDir, "diagDir", "./", "Directory for writing projector diagnostic information")
 	fset.BoolVar(&options.isIPv6, "ipv6", false, "IPV6 cluster")
+	fset.StringVar(&options.certFile, "certFile", "", "Index https X509 certificate file")
+	fset.StringVar(&options.keyFile, "keyFile", "", "Index https cert key file")
+	fset.StringVar(&options.httpsPort, "httpsPort", "", "projector https port")
 
 	logging.Infof("Parsing the args")
 
@@ -108,7 +114,28 @@ func main() {
 	c.SetIpv6(options.isIPv6)
 
 	go c.ExitOnStdinClose()
-	projector.NewProjector(options.numVbuckets, config)
+
+	certFile := options.certFile
+	if len(certFile) == 0 && len(options.diagDir) != 0 {
+		if last := strings.LastIndex(options.diagDir, "/"); last != -1 {
+			certFile = options.diagDir[:last]
+			if len(certFile) != 0 {
+				certFile = certFile + "/config/memcached-cert.pem"
+			}
+		}
+	}
+
+	keyFile := options.keyFile
+	if len(keyFile) == 0 && len(options.diagDir) != 0 {
+		if last := strings.LastIndex(options.diagDir, "/"); last != -1 {
+			keyFile = options.diagDir[:last]
+			if len(keyFile) != 0 {
+				keyFile = keyFile + "/config/memcached-key.pem"
+			}
+		}
+	}
+
+	projector.NewProjector(options.numVbuckets, config, certFile, keyFile)
 
 	<-done
 }

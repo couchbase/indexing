@@ -305,6 +305,19 @@ func (r *mutationStreamReader) handleSupervisorCommands(cmd Message) Message {
 		r.setIndexerState(common.INDEXER_PAUSED)
 		return &MsgSuccess{}
 
+	case INDEXER_SECURITY_CHANGE:
+		logging.Infof("MutationStreamReader::handleSecurityChange")
+		if err := r.stream.ResetConnections(); err != nil {
+			idxErr := Error{
+				code:     ERROR_INDEXER_INTERNAL_ERROR,
+				severity: FATAL,
+				cause:    err,
+				category: INDEXER,
+			}
+			return &MsgError{err: idxErr}
+		}
+		return &MsgSuccess{}
+
 	default:
 		logging.Errorf("MutationStreamReader::handleSupervisorCommands Received Unknown Command %v", cmd)
 		return &MsgError{
