@@ -1680,6 +1680,10 @@ func getScanError(errMap map[common.PartitionId]map[uint64]error) error {
 func (c *GsiClient) initSecurityContext(encryptLocalHost bool) (err error) {
 
 	pInitOnce.Do(func() {
+		logging.Infof("GsiClient: skip initializing security context")
+	})
+
+	pInitOnce.Do(func() {
 		certFile := c.config["encryption.certFile"].String()
 		keyFile := c.config["encryption.keyFile"].String()
 
