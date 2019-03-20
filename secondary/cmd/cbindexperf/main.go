@@ -89,8 +89,6 @@ func main() {
 		}
 	}
 
-	SeedInit()
-
 	t0 := time.Now()
 	res, err := RunCommands(*cluster, cfg, statsW)
 	handleError(err)
