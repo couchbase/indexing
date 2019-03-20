@@ -225,10 +225,13 @@ func (p *SecurityContext) refresh(code uint64) error {
 
 	newSetting := &SecuritySetting{}
 
+	hasEnabled := false
+
 	oldSetting := GetSecuritySetting()
 	if oldSetting != nil {
 		temp := *oldSetting
 		newSetting = &temp
+		hasEnabled = oldSetting.encryptionEnabled
 	}
 
 	if code&cbauth.CFG_CHANGE_CERTS_TLSCONFIG != 0 {
@@ -252,15 +255,19 @@ func (p *SecurityContext) refresh(code uint64) error {
 	p.mutex.RLock()
 	defer p.mutex.RUnlock()
 
-	for key, notifier := range p.notifiers {
-		logging.Infof("Notify security setting change for %v", key)
-		if err := notifier(); err != nil {
-			err1 := fmt.Errorf("Fail to refresh security setting for %v: %v", key, err)
-			if p.logger != nil {
-				p.logger(err1)
+	if hasEnabled || hasEnabled != newSetting.encryptionEnabled {
+		for key, notifier := range p.notifiers {
+			logging.Infof("Notify security setting change for %v", key)
+			if err := notifier(); err != nil {
+				err1 := fmt.Errorf("Fail to refresh security setting for %v: %v", key, err)
+				if p.logger != nil {
+					p.logger(err1)
+				}
+				logging.Fatalf(err1.Error())
 			}
-			logging.Fatalf(err1.Error())
 		}
+	} else {
+		logging.Infof("encryption is not enabled.   Do not notify security change")
 	}
 
 	p.initializer.Do(func() {
