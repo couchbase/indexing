@@ -151,7 +151,7 @@ func NewLifecycleMgr(notifier MetadataNotifier, clusterURL string) (*LifecycleMg
 		clusterURL:   clusterURL,
 		incomings:    make(chan *requestHolder, 100000),
 		expedites:    make(chan *requestHolder, 100000),
-		outgoings:    make(chan c.Packet, 1000),
+		outgoings:    make(chan c.Packet, 100000),
 		killch:       make(chan bool),
 		bootstraps:   make(chan *requestHolder, 1000),
 		indexerReady: false}
@@ -348,8 +348,8 @@ func (m *LifecycleMgr) dispatchRequest(request *requestHolder, factory *message.
 	start := time.Now()
 	defer func() {
 		if op != client.OPCODE_BROADCAST_STATS {
-			logging.Infof("lifecycleMgr.dispatchRequest: op %v elapsed %v len(expediates) %v len(incomings) %v",
-				client.Op2String(op), time.Now().Sub(start), len(m.expedites), len(m.incomings))
+			logging.Infof("lifecycleMgr.dispatchRequest: op %v elapsed %v len(expediates) %v len(incomings) %v len(outgoings) %v",
+				client.Op2String(op), time.Now().Sub(start), len(m.expedites), len(m.incomings), len(m.outgoings))
 		}
 	}()
 
