@@ -115,6 +115,12 @@ git checkout $BRANCH 1>>$WORKSPACE/make.log 2>&1 || error_exit "git checkout $BR
 git pull 1>>$WORKSPACE/make.log 2>&1 || error_exit "git pull"
 note_version nitro $WORKSPACE/goproj/src/github.com/couchbase/nitro
 
+cd $WORKSPACE/goproj/src/github.com/couchbase/gometa
+echo "Switching gometa to master"
+git checkout master 1>>$WORKSPACE/make.log 2>&1 || error_exit "git checkout master"
+git pull 1>>$WORKSPACE/make.log 2>&1 || error_exit "git pull"
+note_version gometa $WORKSPACE/goproj/src/github.com/couchbase/gometa
+
 cd $WORKSPACE/testrunner
 echo "Switching testrunner to master"
 git checkout master 1>>$WORKSPACE/make.log 2>&1 || error_exit "git checkout master"
