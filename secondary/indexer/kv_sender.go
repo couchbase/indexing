@@ -31,6 +31,12 @@ const (
 	MAX_KV_REQUEST_RETRY    int    = 0
 	BACKOFF_FACTOR          int    = 2
 	MAX_CLUSTER_FETCH_RETRY int    = 600
+
+	// op_monitor constants
+	KV_SENDER_OP_MONITOR_SIZE     int = 1024
+	KV_SENDER_OP_MONITOR_BATCHSZ  int = 0          // No batching
+	KV_SENDER_OP_MONITOR_INTERVAL int = 1000       // In Milliseconds
+	TOPIC_REQUEST_TIMEOUT         int = 300 * 1000 // In Milliseconds
 )
 
 //KVSender provides the mechanism to talk to KV(projector, router etc)
@@ -43,6 +49,7 @@ type kvSender struct {
 
 	cInfoCache *c.ClusterInfoCache
 	config     c.Config
+	monitor    *c.OperationsMonitor
 }
 
 func NewKVSender(supvCmdch MsgChannel, supvRespch MsgChannel,
@@ -62,6 +69,12 @@ func NewKVSender(supvCmdch MsgChannel, supvRespch MsgChannel,
 		supvRespch: supvRespch,
 		cInfoCache: cinfo,
 		config:     config,
+		monitor: c.NewOperationsMonitor(
+			"kvSender",
+			KV_SENDER_OP_MONITOR_SIZE,
+			KV_SENDER_OP_MONITOR_INTERVAL,
+			KV_SENDER_OP_MONITOR_BATCHSZ,
+		),
 	}
 
 	k.cInfoCache.SetMaxRetries(MAX_CLUSTER_FETCH_RETRY)
@@ -92,6 +105,7 @@ loop:
 				k.handleSupvervisorCommands(cmd)
 			} else {
 				//supervisor channel closed. exit
+				k.monitor.Close()
 				break loop
 			}
 
@@ -283,6 +297,17 @@ func (k *kvSender) openMutationStream(streamId c.StreamId, indexInstList []c.Ind
 		for _, addr := range addrs {
 
 			execWithStopCh(func() {
+				doneCh := make(chan bool)
+				timeout := time.Duration(TOPIC_REQUEST_TIMEOUT) * time.Millisecond
+				_ = k.monitor.AddOperation(
+					c.NewOperation(timeout, doneCh, func(elapsed time.Duration) {
+						msg := "Slow/Hung Operation: KVSender::sendMutationTopicRequest"
+						msg += " did not respond for %v for projector %v topic %v"
+						logging.Warnf(msg, elapsed, addr, topic)
+					},
+					),
+				)
+
 				if ap, ret := newProjClient(addr); ret != nil {
 					logging.Errorf("KVSender::openMutationStream %v %v Error %v when creating HTTP client to %v",
 						streamId, bucket, ret, addr)
@@ -300,6 +325,7 @@ func (k *kvSender) openMutationStream(streamId c.StreamId, indexInstList []c.Ind
 							streamId, bucket, addr, rollbackTs)
 					}
 				}
+				close(doneCh)
 			}, stopCh)
 		}
 
@@ -383,6 +409,17 @@ func (k *kvSender) restartVbuckets(streamId c.StreamId, restartTs *c.TsVbuuid,
 
 		for _, addr := range addrs {
 			aborted = execWithStopCh(func() {
+				doneCh := make(chan bool)
+				timeout := time.Duration(TOPIC_REQUEST_TIMEOUT) * time.Millisecond
+				_ = k.monitor.AddOperation(
+					c.NewOperation(timeout, doneCh, func(elapsed time.Duration) {
+						msg := "Slow/Hung Operation: KVSender::sendRestartVbuckets"
+						msg += " did not respond for %v for projector %v topic %v"
+						logging.Warnf(msg, elapsed, addr, topic)
+					},
+					),
+				)
+
 				if ap, ret := newProjClient(addr); ret != nil {
 					logging.Errorf("KVSender::restartVbuckets %v %v Error %v when creating HTTP client to %v",
 						streamId, restartTs.Bucket, ret, addr)
@@ -395,6 +432,7 @@ func (k *kvSender) restartVbuckets(streamId c.StreamId, restartTs *c.TsVbuuid,
 				} else {
 					rollbackTs = updateRollbackTsFromResponse(restartTs.Bucket, rollbackTs, res)
 				}
+				close(doneCh)
 			}, stopCh)
 		}
 
@@ -467,6 +505,17 @@ func (k *kvSender) addIndexForExistingBucket(streamId c.StreamId, bucket string,
 		err = nil
 		for _, addr := range addrs {
 			execWithStopCh(func() {
+				doneCh := make(chan bool)
+				timeout := time.Duration(TOPIC_REQUEST_TIMEOUT) * time.Millisecond
+				_ = k.monitor.AddOperation(
+					c.NewOperation(timeout, doneCh, func(elapsed time.Duration) {
+						msg := "Slow/Hung Operation: KVSender::sendAddInstancesRequest"
+						msg += " did not respond for %v for projector %v topic %v"
+						logging.Warnf(msg, elapsed, addr, topic)
+					},
+					),
+				)
+
 				if ap, ret := newProjClient(addr); ret != nil {
 					logging.Errorf("KVSender::addIndexForExistingBucket %v %v Error %v when creating HTTP client to %v",
 						streamId, bucket, ret, addr)
@@ -478,6 +527,7 @@ func (k *kvSender) addIndexForExistingBucket(streamId c.StreamId, bucket string,
 				} else {
 					currentTs = updateCurrentTsFromResponse(bucket, currentTs, res)
 				}
+				close(doneCh)
 			}, stopCh)
 		}
 
@@ -539,6 +589,17 @@ func (k *kvSender) deleteIndexesFromStream(streamId c.StreamId, indexInstList []
 		err = nil
 		for _, addr := range addrs {
 			execWithStopCh(func() {
+				doneCh := make(chan bool)
+				timeout := time.Duration(TOPIC_REQUEST_TIMEOUT) * time.Millisecond
+				_ = k.monitor.AddOperation(
+					c.NewOperation(timeout, doneCh, func(elapsed time.Duration) {
+						msg := "Slow/Hung Operation: KVSender::sendDelInstancesRequest"
+						msg += " did not respond for %v for projector %v topic %v"
+						logging.Warnf(msg, elapsed, addr, topic)
+					},
+					),
+				)
+
 				if ap, ret := newProjClient(addr); ret != nil {
 					logging.Errorf("KVSender::deleteIndexesFromStream %v %v Error %v when creating HTTP client to %v",
 						streamId, indexInstList[0].Defn.Bucket, ret, addr)
@@ -556,6 +617,7 @@ func (k *kvSender) deleteIndexesFromStream(streamId c.StreamId, indexInstList []
 						err = ret
 					}
 				}
+				close(doneCh)
 			}, stopCh)
 		}
 		return err
@@ -598,6 +660,17 @@ func (k *kvSender) deleteBucketsFromStream(streamId c.StreamId, buckets []string
 		err = nil
 		for _, addr := range addrs {
 			execWithStopCh(func() {
+				doneCh := make(chan bool)
+				timeout := time.Duration(TOPIC_REQUEST_TIMEOUT) * time.Millisecond
+				_ = k.monitor.AddOperation(
+					c.NewOperation(timeout, doneCh, func(elapsed time.Duration) {
+						msg := "Slow/Hung Operation: KVSender::sendDelBucketsRequest"
+						msg += " did not respond for %v for projector %v topic %v"
+						logging.Warnf(msg, elapsed, addr, topic)
+					},
+					),
+				)
+
 				if ap, ret := newProjClient(addr); ret != nil {
 					logging.Errorf("KVSender::deleteBucketsFromStream %v %v Error %v when creating HTTP client to %v",
 						streamId, buckets[0], ret, addr)
@@ -614,6 +687,7 @@ func (k *kvSender) deleteBucketsFromStream(streamId c.StreamId, buckets []string
 						err = ret
 					}
 				}
+				close(doneCh)
 			}, stopCh)
 		}
 		return err
@@ -656,6 +730,17 @@ func (k *kvSender) closeMutationStream(streamId c.StreamId, bucket string,
 		err = nil
 		for _, addr := range addrs {
 			execWithStopCh(func() {
+				doneCh := make(chan bool)
+				timeout := time.Duration(TOPIC_REQUEST_TIMEOUT) * time.Millisecond
+				_ = k.monitor.AddOperation(
+					c.NewOperation(timeout, doneCh, func(elapsed time.Duration) {
+						msg := "Slow/Hung Operation: KVSender::sendShutdownTopic"
+						msg += " did not respond for %v for projector %v topic %v"
+						logging.Warnf(msg, elapsed, addr, topic)
+					},
+					),
+				)
+
 				if ap, ret := newProjClient(addr); ret != nil {
 					logging.Errorf("KVSender::closeMutationStream %v %v Error %v when creating HTTP client to %v",
 						streamId, bucket, ret, addr)
@@ -672,6 +757,7 @@ func (k *kvSender) closeMutationStream(streamId c.StreamId, bucket string,
 						err = ret
 					}
 				}
+				close(doneCh)
 			}, stopCh)
 		}
 		return err
