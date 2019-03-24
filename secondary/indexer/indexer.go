@@ -445,6 +445,16 @@ func (idx *indexer) handleSecurityChange(msg Message) {
 		exitFn(fmt.Sprintf("Fail to refresh security contexxt on security change. Error %v", err))
 	}
 
+	// stop HTTPS server
+	idx.httpSrvLock.Lock()
+	if idx.httpsSrv != nil {
+		// This does not close connections.  Use idx.httpSrv.Close() on 1.11
+		idx.tlsListener.Close()
+		idx.httpsSrv = nil
+		idx.tlsListener = nil
+	}
+	idx.httpSrvLock.Unlock()
+
 	// restart lifecyclemgr
 	logging.Infof("handleSecurityChange: restarting index manager")
 	if err := idx.sendMsgToWorker(msg, idx.clustMgrAgentCmdCh); err != nil {
@@ -463,17 +473,7 @@ func (idx *indexer) handleSecurityChange(msg Message) {
 		exitFn(fmt.Sprintf("Fail to restart scan coordinator on security change. Error %v", err))
 	}
 
-	// restart HTTPS server
-	idx.httpSrvLock.Lock()
-	if idx.httpsSrv != nil {
-		// This does not close connections.  Use idx.httpSrv.Close() on 1.11
-		idx.tlsListener.Close()
-		idx.httpsSrv = nil
-		idx.tlsListener = nil
-	}
-	idx.httpSrvLock.Unlock()
-	time.Sleep(1 * time.Second)
-
+	// start HTTPS server
 	fn := func(r int, e error) error {
 		logging.Infof("handleSecurityChange: restarting http/https server")
 		return idx.initHttpsServer()

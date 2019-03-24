@@ -247,48 +247,8 @@ func (m *IndexManager) ResetConnections(notifier MetadataNotifier) error {
 		return nil
 	}
 
-	// close lifecycle mgr
-	logging.Infof("manager ResetConnection: terminating lifecycle mgr")
-	m.lifecycleMgr.Terminate()
-
-	// close repo
 	logging.Infof("manager ResetConnection: closing metadata repo")
-	m.repo.Close()
-	time.Sleep(time.Second)
-
-	// Create new lifecycle manager
-	logging.Infof("manager ResetConnection: creating new lifecycle mgr")
-	lifecycleMgr, err := NewLifecycleMgr(nil, m.clusterURL)
-	if err != nil {
-		return err
-	}
-	m.lifecycleMgr = lifecycleMgr
-
-	cinfo := m.cinfoClient.GetClusterInfoCache()
-	cinfo.RLock()
-
-	adminPort, err := cinfo.GetLocalServicePort(common.INDEX_ADMIN_SERVICE)
-	if err != nil {
-		cinfo.RUnlock()
-		return err
-	}
-
-	cinfo.RUnlock()
-
-	// Create new metadata repo
-	logging.Infof("manager ResetConnection: restarting metadadta repo")
-	m.repo, m.requestServer, err = NewLocalMetadataRepo(adminPort, m.eventMgr, m.lifecycleMgr, m.repoName, m.quota)
-	if err != nil {
-		return err
-	}
-
-	// Run lifecycle mgr
-	logging.Infof("manager ResetConnection: restarting lifecycle mgr")
-	m.RegisterNotifier(notifier)
-	m.lifecycleMgr.Run(m.repo, m.requestServer)
-	m.NotifyIndexerReady()
-
-	return nil
+	return m.repo.ResetConnections()
 }
 
 //
