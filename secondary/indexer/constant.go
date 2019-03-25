@@ -73,3 +73,10 @@ const PLASMA_MEMQUOTA_FRAC = 0.9
 const SCAN_ROLLBACK_ERROR_BATCHSIZE = 1000
 
 const MAX_PROJ_RETRY = 20
+
+// Constants for stats persistence in snapshot meta
+const SNAPSHOT_META_VERSION_MOI_1 = 1
+const SNAPSHOT_META_VERSION_PLASMA_1 = 1
+const SNAP_STATS_KEY_SIZES = "key_size_dist"
+const SNAP_STATS_ARRKEY_SIZES = "arrkey_size_dist"
+const SNAP_STATS_KEY_SIZES_SINCE = "key_size_stats_since"
