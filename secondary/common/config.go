@@ -662,20 +662,6 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
-	"queryport.client.encryption.certFile": ConfigValue{
-		"",
-		"Default location of certifcate file",
-		"",
-		false, // mutable
-		false, // case-insensitive
-	},
-	"queryport.client.encryption.keyFile": ConfigValue{
-		"",
-		"Default location of key file",
-		"",
-		false, // mutable
-		false, // case-insensitive
-	},
 	// projector's adminport client, can be used by indexer.
 	"indexer.projectorclient.retryInterval": ConfigValue{
 		16,
