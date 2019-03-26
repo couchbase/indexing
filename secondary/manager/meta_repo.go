@@ -125,9 +125,12 @@ func NewLocalMetadataRepo(msgAddr string,
 	eventMgr *eventManager,
 	reqHandler protocol.CustomRequestHandler,
 	repoName string,
-	quota uint64) (*MetadataRepo, RequestServer, error) {
+	quota uint64,
+	sleepDur uint64,
+	threshold uint8,
+	minFileSize uint64) (*MetadataRepo, RequestServer, error) {
 
-	ref, err := newLocalRepoRef(msgAddr, eventMgr, reqHandler, repoName, quota)
+	ref, err := newLocalRepoRef(msgAddr, eventMgr, reqHandler, repoName, quota, sleepDur, threshold, minFileSize)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -651,10 +654,13 @@ func newLocalRepoRef(msgAddr string,
 	eventMgr *eventManager,
 	reqHandler protocol.CustomRequestHandler,
 	repoName string,
-	quota uint64) (*LocalRepoRef, error) {
+	quota uint64,
+	sleepDur uint64,
+	threshold uint8,
+	minFileSize uint64) (*LocalRepoRef, error) {
 
 	repoRef := &LocalRepoRef{eventMgr: eventMgr, notifier: nil}
-	server, err := gometa.RunEmbeddedServerWithCustomHandler(msgAddr, nil, reqHandler, repoName, quota)
+	server, err := gometa.RunEmbeddedServerWithCustomHandler2(msgAddr, nil, reqHandler, repoName, quota, sleepDur, threshold, minFileSize)
 	if err != nil {
 		return nil, err
 	}

@@ -2099,6 +2099,27 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.metadata.compaction.sleepDuration": ConfigValue{
+		30,
+		"sleep interval between metadata compaction",
+		900,   // 15 min
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.metadata.compaction.threshold": ConfigValue{
+		10,
+		"compaction threshold percentage",
+		30,    // 30%
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.metadata.compaction.minFileSize": ConfigValue{
+		10000,
+		"minimum file size for compaction",
+		0,     // default - 4M
+		false, // mutable
+		false, // case-insensitive
+	},
 }
 
 // NewConfig from another
