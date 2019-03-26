@@ -610,7 +610,10 @@ func (p *SAPlanner) DropReplica(solution *Solution, defnId common.IndexDefnId, n
 		if _, ok := replicaPartitionMap[dropReplicaId]; ok {
 			return solution, []int{dropReplicaId}, nil
 		} else {
-			return nil, nil, fmt.Errorf("Fail to drop replica.  Replica (%v) does not exist", dropReplicaId)
+			msg1 := fmt.Sprintf("Fail to drop replica.  Replica (%v) does not exist.", dropReplicaId)
+			msg2 := "If the replica has been rebalanced out of the cluster, it will be repaired when a new indexer node is rebalanced in."
+			msg3 := "Use alter index to lower the replica count to avoid repair during next rebalance."
+			return nil, nil, fmt.Errorf("%v %v %v", msg1, msg2, msg3)
 		}
 	}
 
