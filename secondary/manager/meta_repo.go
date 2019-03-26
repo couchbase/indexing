@@ -46,6 +46,7 @@ type RepoRef interface {
 	getLocalValue(name string) (string, error)
 	deleteLocalValue(name string) error
 	close()
+	resetConnections() error
 }
 
 type RemoteRepoRef struct {
@@ -203,6 +204,11 @@ func (c *MetadataRepo) Close() {
 		c.isClosed = true
 		c.repo.close()
 	}
+}
+
+func (c *MetadataRepo) ResetConnections() error {
+
+	return c.repo.resetConnections()
 }
 
 ///////////////////////////////////////////////////////
@@ -706,6 +712,12 @@ func (c *LocalRepoRef) close() {
 	c.server.Terminate()
 }
 
+func (c *LocalRepoRef) resetConnections() error {
+
+	// c.server.Terminate() is idempotent
+	return c.server.ResetConnections()
+}
+
 func getEventType(key string) EventType {
 
 	evtType := EVENT_NONE
@@ -878,6 +890,11 @@ func (c *RemoteRepoRef) close() {
 		c.watcher.Close()
 		c.watcher = nil
 	}
+}
+
+func (c *RemoteRepoRef) resetConnections() error {
+	// no-op
+	return nil
 }
 
 func (c *RemoteRepoRef) registerNotifier(notifier MetadataNotifier) {

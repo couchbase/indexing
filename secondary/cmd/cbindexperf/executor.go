@@ -36,7 +36,7 @@ type JobResult struct {
 	dur  int64
 }
 
-func RunJob(client *qclient.GsiClient, job *Job, aggrQ chan *JobResult) {
+func RunJob(client *qclient.GsiClient, job *Job, aggrQ chan *JobResult, scanRange ScanRange) {
 	var err error
 	var rows int64
 
@@ -45,9 +45,12 @@ func RunJob(client *qclient.GsiClient, job *Job, aggrQ chan *JobResult) {
 	if result != nil {
 		result.Id = spec.Id
 	}
+	if scanRange == nil {
+		scanRange = DefaultScanRange{}
+	}
 
 	errFn := func(e string) {
-		fmt.Printf("REQ:%d scan error occured: %s\n", spec.Id, e)
+		fmt.Printf("REQ:%d scan error occurred: %s\n", spec.Id, e)
 		if result != nil {
 			atomic.AddUint64(&result.ErrorCount, 1)
 		}
@@ -93,7 +96,7 @@ func RunJob(client *qclient.GsiClient, job *Job, aggrQ chan *JobResult) {
 		err = client.ScanAll(spec.DefnId, requestID, spec.Limit, cons, nil, callb)
 	case "Range":
 		requestID := os.Args[0] + uuid
-		err = client.Range(spec.DefnId, requestID, spec.Low, spec.High,
+		err = client.Range(spec.DefnId, requestID, scanRange.GetLow(spec), scanRange.GetHigh(spec),
 			qclient.Inclusion(spec.Inclusion), false, spec.Limit, cons, nil, callb)
 	case "Lookup":
 		requestID := os.Args[0] + uuid
@@ -101,12 +104,12 @@ func RunJob(client *qclient.GsiClient, job *Job, aggrQ chan *JobResult) {
 			spec.Limit, cons, nil, callb)
 	case "MultiScan":
 		requestID := os.Args[0] + uuid
-		err = client.MultiScan(spec.DefnId, requestID, spec.Scans, false, false, spec.IndexProjection, 0, spec.Limit,
-			cons, nil, callb)
+		err = client.MultiScan(spec.DefnId, requestID, spec.Scans, false, false, spec.IndexProjection, 0,
+			spec.Limit, cons, nil, callb)
 	case "Scan3":
 		requestID := os.Args[0] + uuid
-		err = client.Scan3(spec.DefnId, requestID, spec.Scans, false, false, spec.IndexProjection, 0, spec.Limit,
-			spec.GroupAggr, nil, cons, nil, callb)
+		err = client.Scan3(spec.DefnId, requestID, scanRange.GetScans(spec), false, false, spec.IndexProjection,
+			0, spec.Limit, spec.GroupAggr, nil, cons, nil, callb)
 	}
 
 	if err != nil {
@@ -128,7 +131,8 @@ func Worker(jobQ chan *Job, c *qclient.GsiClient, aggrQ chan *JobResult, wg *syn
 	defer wg.Done()
 
 	for job := range jobQ {
-		RunJob(c, job, aggrQ)
+		scanRange := ScanRangeFactory(job.spec)
+		RunJob(c, job, aggrQ, scanRange)
 	}
 }
 
@@ -249,7 +253,7 @@ func RunCommands(cluster string, cfg *Config, statsW io.Writer) (*Result, error)
 	for _, client := range clients {
 		for _, spec := range cfg.ScanSpecs {
 			job := &Job{spec: spec, result: nil}
-			RunJob(client, job, nil)
+			RunJob(client, job, nil, nil)
 			break
 		}
 	}
@@ -259,7 +263,6 @@ func RunCommands(cluster string, cfg *Config, statsW io.Writer) (*Result, error)
 
 	// Round robin scheduling of jobs
 	var allFinished bool
-
 loop:
 	for {
 		allFinished = true

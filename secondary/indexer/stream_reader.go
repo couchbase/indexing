@@ -908,7 +908,7 @@ func (w *streamWorker) updateSnapInFilter(meta *MutationMeta,
 				filter.Snapshots[meta.vbucket][1], filter.Vbuuids[meta.vbucket])
 		}
 	} else {
-		logging.Errorf("MutationStreamReader::updateSnapInFilter Missing"+
+		logging.Debugf("MutationStreamReader::updateSnapInFilter Missing"+
 			"bucket %v in Filter for Stream %v", meta.bucket, w.streamId)
 	}
 

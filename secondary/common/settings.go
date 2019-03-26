@@ -11,6 +11,7 @@ package common
 
 import (
 	"os"
+	"sync/atomic"
 	"time"
 
 	"github.com/couchbase/cbauth/metakv"
@@ -18,6 +19,8 @@ import (
 )
 
 const MAX_METAKV_RETRIES = 100
+
+var maxMetaKVRetries = int32(MAX_METAKV_RETRIES)
 
 const (
 	IndexingMetaDir          = "/indexing/"
@@ -40,7 +43,7 @@ func GetSettingsConfig(cfg Config) (Config, error) {
 		return err
 	}
 
-	rh := NewRetryHelper(MAX_METAKV_RETRIES, time.Second*3, 1, fn)
+	rh := NewRetryHelper(int(maxMetaKVRetries), time.Second*3, 1, fn)
 	err := rh.Run()
 	return newConfig, err
 }
@@ -72,4 +75,14 @@ func SetupSettingsNotifier(callb func(Config), cancelCh chan struct{}) {
 		}
 	}()
 	return
+}
+
+// For standalone tests where MetaKV is not present, call this method
+// to attempt MetaKV retry only once
+func EnableStandaloneTest() {
+	atomic.StoreInt32(&maxMetaKVRetries, 1)
+}
+
+func DisableStandaloneTest() {
+	atomic.StoreInt32(&maxMetaKVRetries, int32(MAX_METAKV_RETRIES))
 }
