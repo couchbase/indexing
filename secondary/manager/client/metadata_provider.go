@@ -1448,10 +1448,6 @@ func (o *MetadataProvider) replicaDrop(defn *c.IndexDefn, numReplica c.Counter, 
 		return nil, nil, err
 	}
 
-	if len(replicaIds) != decrement {
-		return nil, nil, fmt.Errorf("Number of copies of indexes to be dropped (%v) are less than number requested (%v).", len(replicaIds), decrement)
-	}
-
 	instIds := []c.IndexInstId(nil)
 	for _, replicaId := range replicaIds {
 		found := false
@@ -2700,6 +2696,15 @@ func (o *MetadataProvider) removeReplica(idxDefn *c.IndexDefn, watcherMap map[c.
 		temp := *idxDefn
 		temp.InstId = instId
 		temp.ReplicaId = replicaIds[i]
+		temp.NumReplica2 = numReplica
+		temp.NumReplica2.Decrement(uint32(decrement))
+		definitions = append(definitions, temp)
+	}
+
+	if len(definitions) == 0 {
+		temp := *idxDefn
+		temp.InstId = c.IndexInstId(0)
+		temp.ReplicaId = int(math.MaxInt64)
 		temp.NumReplica2 = numReplica
 		temp.NumReplica2.Decrement(uint32(decrement))
 		definitions = append(definitions, temp)

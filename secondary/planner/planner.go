@@ -614,6 +614,17 @@ func (p *SAPlanner) DropReplica(solution *Solution, defnId common.IndexDefnId, n
 		}
 	}
 
+	if len(eligibles) != 0 {
+		u := eligibles[0]
+
+		if u.Instance != nil {
+			// If cluster has already fewer replica than requested, then just return.
+			if int(u.Instance.Defn.NumReplica)-decrement+1 >= len(allReplicaIds) {
+				return solution, []int{}, nil
+			}
+		}
+	}
+
 	var unhealthy []int
 	var healthy []int
 	for replicaId, partitionIds := range replicaPartitionMap {

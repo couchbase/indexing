@@ -798,21 +798,24 @@ func (m *LifecycleMgr) handleCommitDropReplica(commitRequest *client.CommitCreat
 		instId := defn.InstId
 		replicaId := defn.ReplicaId
 
-		// If fails to post the command token, the return failure.  If none of the indexer can post the command token,
-		// the command token will be malformed and it will get cleaned up by DDLServiceMgr upon rebalancing.
-		if err1 := mc.PostDropInstanceCommandToken(defnId, instId, replicaId, defn); err1 != nil {
-			logging.Infof("LifecycleMgr.handleCommitDropReplica() : Reject %v because fail to post token", defnId)
+		if replicaId != int(math.MaxInt64) {
 
-			if err == nil {
-				err = fmt.Errorf("Alter Index fails.  Cause: %v", err1)
+			// If fails to post the command token, the return failure.  If none of the indexer can post the command token,
+			// the command token will be malformed and it will get cleaned up by DDLServiceMgr upon rebalancing.
+			if err1 := mc.PostDropInstanceCommandToken(defnId, instId, replicaId, defn); err1 != nil {
+				logging.Errorf("LifecycleMgr.handleCommitDropReplica() : Reject %v because fail to post token", defnId)
+
+				if err == nil {
+					err = fmt.Errorf("Alter Index fails.  Cause: %v", err1)
+				}
+			} else {
+				logging.Infof("LifecycleMgr.handleCommitDropReplica() : Drop Instance token posted for instance %v", instId)
 			}
-		} else {
-			logging.Infof("LifecycleMgr.handleCommitDropReplica() : Drop Instance token posted for instance %v", instId)
-
-			// We are successful in creating the commit token.  Now try updating index replica count.  This operation is idempotent,
-			// so even if it fails, DDLServiceMgr will retry as long as the token is created.
-			m.updateIndexReplicaCount(defn.DefnId, defn.NumReplica2)
 		}
+
+		// Now try updating index replica count.  This operation is idempotent, so even if it fails, DDLServiceMgr
+		// will retry as long as the token is created.
+		m.updateIndexReplicaCount(defn.DefnId, defn.NumReplica2)
 	}
 
 	response := &client.CommitCreateResponse{Accept: err == nil}
