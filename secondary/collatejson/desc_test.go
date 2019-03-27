@@ -4,6 +4,7 @@ package collatejson
 
 import (
 	"bytes"
+	n1ql "github.com/couchbase/query/value"
 	"testing"
 )
 
@@ -306,4 +307,182 @@ func TestCodecDescPropLen(t *testing.T) {
 		}
 
 	}
+}
+
+var testcasesdescspl = []struct {
+	key  []interface{}
+	desc []bool
+}{
+
+	{[]interface{}{"a\x00c"},
+		[]bool{true},
+	},
+	{[]interface{}{"ab\x00"},
+		[]bool{true},
+	},
+	{[]interface{}{"ab\xff"},
+		[]bool{true},
+	},
+	{[]interface{}{"a\xffc"},
+		[]bool{true},
+	},
+
+	{[]interface{}{"a\x00c"},
+		[]bool{false},
+	},
+	{[]interface{}{"ab\x00"},
+		[]bool{false},
+	},
+	{[]interface{}{"ab\xff"},
+		[]bool{false},
+	},
+	{[]interface{}{"a\xffc"},
+		[]bool{false},
+	},
+
+	{[]interface{}{"hello", "ab\x00"},
+		[]bool{true, false},
+	},
+	{[]interface{}{"hello", "ab\x00"},
+		[]bool{false, true},
+	},
+	{[]interface{}{"\x00ab", "hello"},
+		[]bool{false, true},
+	},
+	{[]interface{}{"\x00ab", "hello"},
+		[]bool{true, false},
+	},
+
+	{[]interface{}{"hello", "ab\xff"},
+		[]bool{true, false},
+	},
+	{[]interface{}{"hello", "ab\xff"},
+		[]bool{false, true},
+	},
+	{[]interface{}{"\xffab", "hello"},
+		[]bool{false, true},
+	},
+	{[]interface{}{"\xffab", "hello"},
+		[]bool{true, false},
+	},
+
+	{[]interface{}{"he\t\rllo", "ab\x00", 123},
+		[]bool{true, true, true},
+	},
+	{[]interface{}{"hel\tlo", nil, "ab\x00"},
+		[]bool{true, true, true},
+	},
+	{[]interface{}{"hel\t\rlo", "ab\x00",true},
+		[]bool{true, true, true},
+	},
+
+	{[]interface{}{"hel\t\rlo", "ab\xff", 123},
+		[]bool{true, true, true},
+	},
+	{[]interface{}{"hel\t\rlo", nil, "ab\xff"},
+		[]bool{true, true, true},
+	},
+	{[]interface{}{"hel\t\rlo", "ab\xff","b\x00c"},
+		[]bool{true, true, true},
+	},
+	{[]interface{}{"hel\t\rlo", "ab\xff","b\x00c"},
+		[]bool{true, true, false},
+	},
+	{[]interface{}{"hel\t\rlo", "ab\xff","b\x00c"},
+		[]bool{true, false, true},
+	},
+
+
+	{[]interface{}{"a\x00b", "a\xffb"},
+		[]bool{true, true},
+	},
+	{[]interface{}{"a\x00b", "a\xffb"},
+		[]bool{false, false},
+	},
+	{[]interface{}{"a\x00b", "a\xffb"},
+		[]bool{true, false},
+	},
+	{[]interface{}{"a\x00b", "a\xffb"},
+		[]bool{false, true},
+	},
+
+	{[]interface{}{"a\xffb", "a\x00b"},
+		[]bool{true, true},
+	},
+	{[]interface{}{"a\xffb", "a\x00b"},
+		[]bool{false, false},
+	},
+	{[]interface{}{"a\xffb", "a\x00b"},
+		[]bool{true, false},
+	},
+	{[]interface{}{"a\xffb", "a\x00b"},
+		[]bool{false, true},
+	},
+
+	{[]interface{}{"\xff", "a\x00b"},
+		[]bool{true, true},
+	},
+	{[]interface{}{"\x00", "a\xffb"},
+		[]bool{true, true},
+	},
+	{[]interface{}{"\xff", "a\x00b"},
+		[]bool{true, false},
+	},
+	{[]interface{}{"\x00", "a\xffb"},
+		[]bool{true, false},
+	},
+	{[]interface{}{"\xff", "a\x00b"},
+		[]bool{false, true},
+	},
+	{[]interface{}{"\x00", "a\xffb"},
+		[]bool{false, true},
+	},
+
+	{[]interface{}{"hel\t\rlo", "ab\xff","b\x00c", "abc", "ac\x00", "\xffab"},
+		[]bool{true, true, true, true, true, true},
+	},
+	{[]interface{}{"hel\t\rlo", "ab\xff","b\x00c", "abc", "ac\x00", "\xffab"},
+		[]bool{false, false, false, false, false, true},
+	},
+	{[]interface{}{"hel\t\rlo", "ab\xff","b\x00c", "abc", "ac\x00", "\xffab"},
+		[]bool{false, true, false, true, false, true},
+	},
+
+	//255,0
+	{[]interface{}{"a\xff\x00b", "a\x00b"},
+		[]bool{false, true},
+	},
+	//255,254
+	{[]interface{}{"a\xff\xfeb", "a\x00b"},
+		[]bool{false, true},
+	},
+}
+
+func TestCodecDescSplChar(t *testing.T) {
+
+	codec := NewCodec(16)
+	for _, tcase := range testcasesdescspl {
+		n1qlVal := n1ql.NewValue(tcase.key)
+		encVal, err := codec.EncodeN1QLValue(n1qlVal, make([]byte, 0, 10000))
+		if err != nil {
+			t.Fatalf("Unexpected error %v", err)
+		}
+
+		//reverse
+		codec.ReverseCollate(encVal, tcase.desc)
+
+		//re-reverse
+		codec.ReverseCollate(encVal, tcase.desc)
+
+		decVal, err1 := codec.DecodeN1QLValue(encVal, make([]byte, 0, 10000))
+
+		if err1 != nil {
+			t.Fatalf("Unexpected error %v", err1)
+		}
+
+		if !decVal.EquivalentTo(n1qlVal) {
+			t.Errorf("Expected original and decoded n1ql values to be the same. Orig %v Decoded %v", n1qlVal, decVal)
+		}
+	}
+
 }
