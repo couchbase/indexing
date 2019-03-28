@@ -460,10 +460,21 @@ func getresultsfromsender(sender datastore.Sender, isprimary bool, tctx *testCon
 	for ok {
 		entry, ok := sender.GetEntry()
 		if ok {
+			// GetEntry() returns:
+			// (1) nil, true    - in case of all done
+			// (2) nil, false   - in case of explicit stop
 			if isprimary {
-				scanResults[entry.PrimaryKey] = nil
+				if entry != nil {
+					scanResults[entry.PrimaryKey] = nil
+				} else {
+					break
+				}
 			} else {
-				scanResults[entry.PrimaryKey] = entry.EntryKey
+				if entry != nil {
+					scanResults[entry.PrimaryKey] = entry.EntryKey
+				} else {
+					break
+				}
 			}
 		} else {
 			break
@@ -483,6 +494,9 @@ func resultsforaggrgates(sender datastore.Sender) tc.GroupAggrScanResponseActual
 	for ok {
 		entry, ok := sender.GetEntry()
 		if ok {
+			if entry == nil {
+				break
+			}
 			log.Printf("Scanresult Row  %v : %v ", entry.EntryKey, entry.PrimaryKey)
 			scanResults = append(scanResults, entry.EntryKey)
 		} else {
