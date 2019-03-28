@@ -1680,22 +1680,10 @@ func getScanError(errMap map[common.PartitionId]map[uint64]error) error {
 func (c *GsiClient) initSecurityContext(encryptLocalHost bool) (err error) {
 
 	pInitOnce.Do(func() {
-		logging.Infof("GsiClient: skip initializing security context")
-	})
-
-	pInitOnce.Do(func() {
-		certFile := c.config["encryption.certFile"].String()
-		keyFile := c.config["encryption.keyFile"].String()
-
 		logger := func(err error) { common.Console(c.cluster, err.Error()) }
-		if err = security.InitSecurityContext(logger, c.cluster, certFile, keyFile, encryptLocalHost); err != nil {
+		if err = security.InitSecurityContextForClient(logger, c.cluster, "", "", encryptLocalHost); err != nil {
 			return
 		}
-
-		fn := func() error {
-			return refreshSecurityContextOnTopology(c.cluster)
-		}
-		security.RegisterCallback("gsiclient", fn)
 
 		if err = refreshSecurityContextOnTopology(c.cluster); err != nil {
 			return

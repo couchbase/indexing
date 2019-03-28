@@ -141,6 +141,52 @@ func InitSecurityContext(logger ConsoleLogger, localhost string, certFile string
 	return
 }
 
+func InitSecurityContextForClient(logger ConsoleLogger, localhost string, certFile string, keyFile string, encryptLocalHost bool) (err error) {
+
+	pContextInitializer.Do(func() {
+		var ips map[string]bool
+		ips, err = buildLocalAddr(localhost)
+		if err != nil {
+			return
+		}
+
+		pSecurityContext.logger = logger
+		pSecurityContext.certFile = certFile
+		pSecurityContext.keyFile = keyFile
+		pSecurityContext.encryptLocalHost = encryptLocalHost
+		pSecurityContext.localhosts = ips
+	})
+
+	return
+}
+
+func Refresh(tlsConfig cbauth.TLSConfig, encryptConfig cbauth.ClusterEncryptionConfig, certFile string, keyFile string) {
+
+	logging.Infof("Recieve security change notification. encryption=%v", encryptConfig.EncryptData)
+
+	newSetting := &SecuritySetting{}
+
+	oldSetting := GetSecuritySetting()
+	if oldSetting != nil {
+		temp := *oldSetting
+		newSetting = &temp
+	}
+
+	newSetting.tlsPreference = &tlsConfig
+	newSetting.encryptionEnabled = encryptConfig.EncryptData
+	newSetting.disableNonSSLPort = encryptConfig.DisableNonSSLPorts
+
+	if err := pSecurityContext.refreshCert(certFile, keyFile, newSetting); err != nil {
+		logging.Errorf("error in reading certifcate %v", err)
+		return
+	}
+
+	if err := pSecurityContext.update(newSetting); err != nil {
+		logging.Errorf("Fail to update security setting %v", err)
+		return
+	}
+}
+
 func buildLocalAddr(localhost string) (map[string]bool, error) {
 
 	hostname, _, err := net.SplitHostPort(localhost)
@@ -225,13 +271,10 @@ func (p *SecurityContext) refresh(code uint64) error {
 
 	newSetting := &SecuritySetting{}
 
-	hasEnabled := false
-
 	oldSetting := GetSecuritySetting()
 	if oldSetting != nil {
 		temp := *oldSetting
 		newSetting = &temp
-		hasEnabled = oldSetting.encryptionEnabled
 	}
 
 	if code&cbauth.CFG_CHANGE_CERTS_TLSCONFIG != 0 {
@@ -239,7 +282,7 @@ func (p *SecurityContext) refresh(code uint64) error {
 			return err
 		}
 
-		if err := p.refreshCert(newSetting); err != nil {
+		if err := p.refreshCert(p.certFile, p.keyFile, newSetting); err != nil {
 			return err
 		}
 	}
@@ -248,6 +291,17 @@ func (p *SecurityContext) refresh(code uint64) error {
 		if err := p.refreshEncryption(newSetting); err != nil {
 			return err
 		}
+	}
+
+	return p.update(newSetting)
+}
+
+func (p *SecurityContext) update(newSetting *SecuritySetting) error {
+
+	hasEnabled := false
+	oldSetting := GetSecuritySetting()
+	if oldSetting != nil {
+		hasEnabled = oldSetting.encryptionEnabled
 	}
 
 	UpdateSecuritySetting(newSetting)
@@ -296,14 +350,14 @@ func (p *SecurityContext) refreshConfig(setting *SecuritySetting) error {
 	return nil
 }
 
-func (p *SecurityContext) refreshCert(setting *SecuritySetting) error {
+func (p *SecurityContext) refreshCert(certFile string, keyFile string, setting *SecuritySetting) error {
 
-	if len(p.certFile) == 0 || len(p.keyFile) == 0 {
+	if len(certFile) == 0 || len(keyFile) == 0 {
 		logging.Warnf("certifcate location is missing.  Cannot refresh certifcate")
 		return nil
 	}
 
-	cert, err := tls.LoadX509KeyPair(p.certFile, p.keyFile)
+	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
 	if err != nil {
 		err1 := fmt.Errorf("Fail to due generate SSL certificate: %v", err)
 		if p.logger != nil {
@@ -313,7 +367,7 @@ func (p *SecurityContext) refreshCert(setting *SecuritySetting) error {
 		return err
 	}
 
-	certInBytes, err := ioutil.ReadFile(p.certFile)
+	certInBytes, err := ioutil.ReadFile(certFile)
 	if err != nil {
 		err1 := fmt.Errorf("Fail to due load SSL certificate from file: %v", err)
 		if p.logger != nil {

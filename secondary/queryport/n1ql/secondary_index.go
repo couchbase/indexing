@@ -26,6 +26,8 @@ import "net/url"
 import l "github.com/couchbase/indexing/secondary/logging"
 import c "github.com/couchbase/indexing/secondary/common"
 import "github.com/couchbase/indexing/secondary/collatejson"
+
+import "github.com/couchbase/indexing/secondary/security"
 import qclient "github.com/couchbase/indexing/secondary/queryport/client"
 import mclient "github.com/couchbase/indexing/secondary/manager/client"
 import "github.com/couchbase/query/datastore"
@@ -141,6 +143,14 @@ func NewGSIIndexer(
 	go gsi.logstats(logtick)
 	go gsi.backfillMonitor(5 * time.Second)
 	return gsi, nil
+}
+
+//
+// change security setting
+//
+func (gsi *gsiKeyspace) SetConnectionSecurityConfig(conf *datastore.ConnectionSecurityConfig) {
+
+	security.Refresh(conf.TLSConfig, conf.ClusterEncryptionConfig, conf.CertFile, conf.KeyFile)
 }
 
 // KeyspaceId implements datastore.Indexer{} interface.
