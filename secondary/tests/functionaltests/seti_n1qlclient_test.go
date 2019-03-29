@@ -97,11 +97,13 @@ func TestBufferedScan_BackfillDisabled(t *testing.T) {
 	}
 	count, sender := 0, conn.Sender()
 	now := time.Now()
-	var ok bool
 	go doquery(int64(1), conn)
 	for {
-		_, ok = sender.GetEntry()
+		entry, ok := sender.GetEntry()
 		if !ok {
+			break
+		}
+		if entry == nil {
 			break
 		}
 
@@ -130,8 +132,11 @@ func TestBufferedScan_BackfillDisabled(t *testing.T) {
 	now = time.Now()
 	go doquery(int64(1000), conn)
 	for {
-		_, ok = sender.GetEntry()
+		entry, ok := sender.GetEntry()
 		if !ok {
+			break
+		}
+		if entry == nil {
 			break
 		}
 
@@ -218,11 +223,13 @@ func TestBufferedScan_BackfillEnabled(t *testing.T) {
 	}
 	count, sender := 0, conn.Sender()
 	now := time.Now()
-	var ok bool
 	go doquery(int64(1), conn)
 	for {
-		_, ok = sender.GetEntry()
+		entry, ok := sender.GetEntry()
 		if !ok {
+			break
+		}
+		if entry == nil {
 			break
 		}
 
@@ -253,8 +260,11 @@ func TestBufferedScan_BackfillEnabled(t *testing.T) {
 	now = time.Now()
 	go doquery(int64(1000), conn)
 	for {
-		_, ok = sender.GetEntry()
+		entry, ok := sender.GetEntry()
 		if !ok {
+			break
+		}
+		if entry == nil {
 			break
 		}
 
@@ -289,8 +299,11 @@ func TestBufferedScan_BackfillEnabled(t *testing.T) {
 	}
 	now = time.Now()
 	for {
-		_, ok = sender.GetEntry()
+		entry, ok := sender.GetEntry()
 		if !ok {
+			break
+		}
+		if entry == nil {
 			break
 		}
 
@@ -325,8 +338,11 @@ func TestBufferedScan_BackfillEnabled(t *testing.T) {
 			go doquery(int64(50000), conn)
 			now := time.Now()
 			for {
-				_, ok = sender.GetEntry()
+				entry, ok := sender.GetEntry()
 				if !ok {
+					break
+				}
+				if entry == nil {
 					break
 				}
 
