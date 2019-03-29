@@ -389,6 +389,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"projector.memcachedTimeout": ConfigValue{
+		120, // In Seconds
+		"Timeout for projector to memcached communication (In Seconds)",
+		120,
+		false, // mutable
+		false, // case-insensitive
+	},
 	// projector's adminport client, can be used by manager
 	"manager.projectorclient.retryInterval": ConfigValue{
 		16,
@@ -659,20 +666,6 @@ var SystemConfig = Config{
 		true,
 		"Allow collatejson as data format between queryport client and indexer.",
 		true,
-		false, // mutable
-		false, // case-insensitive
-	},
-	"queryport.client.encryption.certFile": ConfigValue{
-		"",
-		"Default location of certifcate file",
-		"",
-		false, // mutable
-		false, // case-insensitive
-	},
-	"queryport.client.encryption.keyFile": ConfigValue{
-		"",
-		"Default location of key file",
-		"",
 		false, // mutable
 		false, // case-insensitive
 	},
@@ -2096,6 +2089,34 @@ var SystemConfig = Config{
 		"enable indexer to re-encode keys from projector, to avoid MB-28956" +
 			"0 - enable based on projector version, 1 - force enable, 2 - force disable",
 		0,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.metadata.compaction.sleepDuration": ConfigValue{
+		900,
+		"sleep interval between metadata compaction",
+		900,   // 15 min
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.metadata.compaction.threshold": ConfigValue{
+		0,
+		"compaction threshold percentage",
+		30,    // 30%
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.metadata.compaction.minFileSize": ConfigValue{
+		0,
+		"minimum file size for compaction",
+		0,     // default - 4M
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.memcachedTimeout": ConfigValue{
+		120, // In Seconds
+		"Timeout for indexer to memcached communication (In Seconds)",
+		120,
 		false, // mutable
 		false, // case-insensitive
 	},

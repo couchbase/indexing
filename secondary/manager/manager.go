@@ -176,7 +176,13 @@ func NewIndexManagerInternal(config common.Config, storageMode common.StorageMod
 		return nil, err
 	}
 
-	mgr.repo, mgr.requestServer, err = NewLocalMetadataRepo(adminPort, mgr.eventMgr, mgr.lifecycleMgr, mgr.repoName, mgr.quota)
+	sleepDur := config["metadata.compaction.sleepDuration"].Int()
+	threshold := config["metadata.compaction.threshold"].Int()
+	minFileSize := config["metadata.compaction.minFileSize"].Int()
+	logging.Infof("Starting metadadta repo: quota %v sleep duration %v threshold %v min file size %v",
+		mgr.quota, sleepDur, threshold, minFileSize)
+	mgr.repo, mgr.requestServer, err = NewLocalMetadataRepo(adminPort, mgr.eventMgr, mgr.lifecycleMgr, mgr.repoName, mgr.quota,
+		uint64(sleepDur), uint8(threshold), uint64(minFileSize))
 	if err != nil {
 		mgr.Close()
 		return nil, err

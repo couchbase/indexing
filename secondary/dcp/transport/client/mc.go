@@ -8,6 +8,7 @@ import (
 	"math"
 	"net"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/couchbase/indexing/secondary/dcp/transport"
@@ -26,6 +27,18 @@ type Client struct {
 }
 
 var dialFun = net.Dial
+
+// Timeout for memcached communication where indexer/projector
+// is actively waiting. In Seconds.
+var DcpMemcachedTimeout uint32 = 120
+
+func GetDcpMemcachedTimeout() uint32 {
+	return atomic.LoadUint32(&DcpMemcachedTimeout)
+}
+
+func SetDcpMemcachedTimeout(val uint32) {
+	atomic.StoreUint32(&DcpMemcachedTimeout, val)
+}
 
 // Connect to a memcached server.
 func Connect(prot, dest string) (rv *Client, err error) {
@@ -50,8 +63,31 @@ func (c *Client) Close() error {
 	return c.conn.Close()
 }
 
-func (c *Client) SetReadDeadline(t time.Time) error {
-	return c.conn.(net.Conn).SetReadDeadline(t)
+func (c *Client) SetDeadline(t time.Time) error {
+	return c.conn.(net.Conn).SetDeadline(t)
+}
+
+// Set Memcached Connection Deadline.
+// Ignore the error in SetDeadline, if any.
+// There are no side effects in SetDeadline error codepaths.
+func (c *Client) SetMcdConnectionDeadline() {
+	timeout := time.Duration(GetDcpMemcachedTimeout()) * time.Second
+	err := c.SetDeadline(time.Now().Add(timeout))
+	if err != nil {
+		logging.Debugf("Error in SetMcdConnectionDeadline: %v", err)
+	}
+}
+
+// Reset Memcached Connection Deadline.
+// Log the error in SetDeadline, if any. If SetMcdConnectionDeadline
+// was successful, and ResetMcdConnectionDeadline fails, the connection may
+// get closed during some other IO operation. So, report the error if any.
+// No need to explicitly fail the product workflow.
+func (c *Client) ResetMcdConnectionDeadline() {
+	err := c.SetDeadline(time.Time{})
+	if err != nil {
+		logging.Errorf("Error in ResetMcdConnectionDeadline: %v", err)
+	}
 }
 
 // IsHealthy returns true unless the client is belived to have
@@ -65,6 +101,9 @@ func (c Client) IsHealthy() bool {
 
 // Send a custom request and get the response.
 func (c *Client) Send(req *transport.MCRequest) (rv *transport.MCResponse, err error) {
+	c.SetMcdConnectionDeadline()
+	defer c.ResetMcdConnectionDeadline()
+
 	_, err = transmitRequest(c.conn, req)
 	if err != nil {
 		c.healthy = false
