@@ -88,7 +88,7 @@ func NewClustMgrAgent(supvCmdch MsgChannel, supvRespch MsgChannel, cfg common.Co
 
 func (c *clustMgrAgent) RegisterRestEndpoints() {
 	mux := GetHTTPMux()
-	c.mgr.RegisterRestEndpoints(mux)
+	c.mgr.RegisterRestEndpoints(mux, c.config)
 }
 
 //run starts the clustmgrAgent loop which listens to messages
