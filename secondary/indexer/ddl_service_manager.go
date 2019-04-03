@@ -518,9 +518,13 @@ func (m *DDLServiceMgr) cleanupCreateCommand() {
 	}
 }
 
-func (m *DDLServiceMgr) handleCreateCommand() {
+func (m *DDLServiceMgr) handleCreateCommand(needRefresh bool) {
 
-	if !m.commandListener.HasNewCreateTokens() {
+	if !needRefresh && !m.commandListener.HasNewCreateTokens() {
+		return
+	}
+
+	if needRefresh && !m.commandListener.HasCreateTokens() {
 		return
 	}
 
@@ -753,13 +757,26 @@ func (m *DDLServiceMgr) processCreateCommand() {
 
 	m.commandListener.ListenTokens()
 
+	lastCheck := time.Now()
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 
 	for {
+		retryInterval := 5 * time.Minute
+		if config := m.config.Load(); config != nil {
+			retryInterval = time.Duration(config["ddl.create.retryInterval"].Int()) * time.Second
+		}
+
 		select {
 		case <-ticker.C:
-			m.handleCreateCommand()
+			needRefresh := false
+			if time.Now().Sub(lastCheck) > retryInterval {
+				logging.Infof("DDLServiceMgr checking create token progress")
+				needRefresh = true
+				lastCheck = time.Now()
+			}
+
+			m.handleCreateCommand(needRefresh)
 
 		case _, ok := <-m.listenerDonech:
 			if !ok {

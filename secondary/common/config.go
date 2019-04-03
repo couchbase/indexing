@@ -2057,6 +2057,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.ddl.create.retryInterval": ConfigValue{
+		300, // In Seconds
+		"Interval to retry create index token (In Seconds)",
+		300,
+		false, // mutable
+		false, // case-insensitive
+	},
 }
 
 // NewConfig from another
