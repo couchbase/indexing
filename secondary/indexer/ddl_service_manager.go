@@ -1163,7 +1163,8 @@ func (m *DDLServiceMgr) newMetadataProvider(nodes map[service.NodeID]bool) (*cli
 			if err != nil {
 				return nil, nil, err
 			}
-			adminAddrMap[adminAddr] = adminAddr
+			nodeUUID := cinfo.GetNodeUUID(nid)
+			adminAddrMap[nodeUUID] = adminAddr
 		}
 	}
 

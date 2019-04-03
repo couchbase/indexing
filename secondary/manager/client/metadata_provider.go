@@ -2061,6 +2061,16 @@ func (o *MetadataProvider) Close() {
 	for _, watcher := range o.watchers {
 		watcher.close()
 	}
+
+	for indexerId, killch := range o.pendings {
+		logging.Infof("MetadataProvider.Close(): removing pending indexerId %v", indexerId)
+		delete(o.pendings, indexerId)
+
+		// notify retryHelper to terminate.  This is for
+		// watcher that is still waiting to complete
+		// handshake with indexer.
+		killch <- true
+	}
 }
 
 //
@@ -2324,26 +2334,30 @@ func (o *MetadataProvider) retryHelper(watcher *watcher, readych chan bool, inde
 	}
 
 	// add the watcher
-	func() {
+	killed := func() bool {
 		o.mutex.Lock()
 		defer o.mutex.Unlock()
 
 		// make sure watcher is still active. Unwatch metadata could have
 		// been called just after watcher.notifyReady has finished.
 		if _, ok := o.pendings[tempIndexerId]; !ok {
+			logging.Infof("MetadataProvider.retryHelper(): Removing pending watcher on Close() or UnwatchMetadata().  IndexerId %v", tempIndexerId)
 			watcher.close()
 			watcher.cleanupIndices(o.repo)
-			return
+			return true
 		}
 
 		o.addWatcherNoLock(watcher, tempIndexerId)
+		return false
 	}()
 
-	logging.Infof("WatchMetadata(): Successfully connected to indexer at %v after retry.", indexAdminPort)
+	if !killed {
+		logging.Infof("WatchMetadata(): Successfully connected to indexer at %v after retry.", indexAdminPort)
 
-	indexerId := watcher.getIndexerId()
-	if callback != nil {
-		callback(indexAdminPort, indexerId, tempIndexerId)
+		indexerId := watcher.getIndexerId()
+		if callback != nil {
+			callback(indexAdminPort, indexerId, tempIndexerId)
+		}
 	}
 }
 
