@@ -277,6 +277,11 @@ func (c *ClusterInfoCache) GetServerGroup(nid NodeId) string {
 	return c.node2group[nid]
 }
 
+func (c *ClusterInfoCache) GetNodeUUID(nid NodeId) string {
+
+	return c.nodes[nid].NodeUUID
+}
+
 func (c *ClusterInfoCache) GetNodesByServiceType(srvc string) (nids []NodeId) {
 	for i, svs := range c.nodesvs {
 		if _, ok := svs.Services[srvc]; ok {
