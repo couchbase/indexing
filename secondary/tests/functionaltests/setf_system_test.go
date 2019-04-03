@@ -2,6 +2,12 @@ package functionaltests
 
 import (
 	"errors"
+	"log"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
 	c "github.com/couchbase/indexing/secondary/common"
 	qc "github.com/couchbase/indexing/secondary/queryport/client"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
@@ -11,11 +17,6 @@ import (
 	tv "github.com/couchbase/indexing/secondary/tests/framework/validation"
 	"github.com/couchbase/query/expression"
 	"github.com/couchbase/query/parser/n1ql"
-	"log"
-	"strings"
-	"sync"
-	"testing"
-	"time"
 )
 
 func TestBuildDeferredAnotherBuilding(t *testing.T) {
@@ -690,6 +691,90 @@ func TestDropSecondIndexSecondDeferBuilding(t *testing.T) {
 	docScanResults = datautility.ExpectedScanAllResponse(docs, "gender")
 	scanResults, err = secondaryindex.ScanAll(index3, bucketName, indexScanAddress, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan index3", t)
+	err = tv.Validate(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan result validation", t)
+}
+
+// 11. Multiple Indexes, create 2 deferred indexes. Start building one and wait for it to complete.
+// Start building the second index. While the second index is building, drop the first index and
+// then drop the second index. After both the indexes are dropped, start building third index
+// The build of thrid index should finish successfully
+// Note: This test depends on timing of operations. The first and second indexes have to be
+// dropped in the same order while the second index is building
+func TestCreateAfterDropWhileIndexBuilding(t *testing.T) {
+	log.Printf("In TestCreateAfterDropWhileIndexBuilding()")
+
+	var bucketName = "default"
+	var index1 = "id_company"
+	var index2 = "id_age"
+	var index3 = "id_gender"
+
+	e := secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+	FailTestIfError(e, "Error in DropAllSecondaryIndexes", t)
+
+	docsToCreate := generateDocs(100000, "users.prod")
+	UpdateKVDocs(docsToCreate, docs)
+	log.Printf("Setting JSON docs in KV")
+	kvutility.SetKeyValues(docsToCreate, "default", "", clusterconfig.KVAddress)
+
+	client, _ := secondaryindex.CreateClient(indexManagementAddress, "test2client")
+	defer client.Close()
+
+	// Start building first index
+	err := secondaryindex.CreateSecondaryIndexAsync(index1, bucketName, indexManagementAddress, "", []string{"company"}, false, []byte("{\"defer_build\": true}"), true, nil)
+	FailTestIfError(err, "Error in creating the index", t)
+
+	defn1, _ := secondaryindex.GetDefnID(client, bucketName, index1)
+	defnIds := []uint64{defn1}
+
+	err = secondaryindex.BuildIndexesAsync(defnIds, indexManagementAddress, defaultIndexActiveTimeout)
+	FailTestIfError(err, "Error from BuildIndexesAsync", t)
+	time.Sleep(1 * time.Second)
+
+	// Wait for first index to become active
+	e = secondaryindex.WaitTillIndexActive(defn1, client, defaultIndexActiveTimeout)
+	if e != nil {
+		FailTestIfError(e, "Error in WaitTillIndexActive for index1", t)
+	}
+
+	// Create index2
+	err = secondaryindex.CreateSecondaryIndexAsync(index2, bucketName, indexManagementAddress, "", []string{"age"}, false, []byte("{\"defer_build\": true}"), true, nil)
+	FailTestIfError(err, "Error in creating the index", t)
+
+	defn2, _ := secondaryindex.GetDefnID(client, bucketName, index2)
+	defnIds = []uint64{defn2}
+
+	// Build index2
+	err = secondaryindex.BuildIndexesAsync(defnIds, indexManagementAddress, defaultIndexActiveTimeout)
+	FailTestIfError(err, "Error from BuildIndexesAsync", t)
+	time.Sleep(1 * time.Second)
+
+	// While index2 is building, drop index1
+	err = secondaryindex.DropSecondaryIndex(index1, bucketName, indexManagementAddress)
+	FailTestIfError(err, "Error dropping index1", t)
+
+	// Drop index 2
+	err = secondaryindex.DropSecondaryIndex(index2, bucketName, indexManagementAddress)
+	FailTestIfError(err, "Error dropping index2", t)
+	time.Sleep(5 * time.Second)
+
+	// Create third index
+	err = secondaryindex.CreateSecondaryIndexAsync(index3, bucketName, indexManagementAddress, "", []string{"gender"}, false, []byte("{\"defer_build\": true}"), true, nil)
+	FailTestIfError(err, "Error in creating the index: index3", t)
+
+	err = secondaryindex.BuildIndexes([]string{index3}, bucketName, indexManagementAddress, defaultIndexActiveTimeout)
+	FailTestIfError(err, "Error in deferred index build index3", t)
+	time.Sleep(1 * time.Second)
+
+	defn3, _ := secondaryindex.GetDefnID(client, bucketName, index3)
+	e = secondaryindex.WaitTillIndexActive(defn3, client, defaultIndexActiveTimeout)
+	if e != nil {
+		FailTestIfError(e, "Error in WaitTillIndexActive for index1", t)
+	}
+
+	docScanResults := datautility.ExpectedScanResponse_string(docs, "gender", "male", "male", 3)
+	scanResults, err := secondaryindex.Range(index3, bucketName, indexScanAddress, []interface{}{"male"}, []interface{}{"male"}, 3, false, defaultlimit, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in scan", t)
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
 }
