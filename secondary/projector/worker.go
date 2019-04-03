@@ -220,6 +220,15 @@ func (worker *VbucketWorker) run(datach, sbch chan []interface{}) {
 
 loop:
 	for {
+		// Prioritize control channel over other channels
+		select {
+		case msg := <-sbch:
+			if breakloop := worker.handleCommand(msg); breakloop {
+				break loop
+			}
+		default:
+		}
+
 		select {
 		case msg := <-datach:
 			worker.stats.datachLen.Set(uint64(len(datach)))
@@ -258,79 +267,86 @@ loop:
 				}
 			}
 		case msg := <-sbch:
-			cmd := msg[0].(byte)
-			switch cmd {
-			case vwCmdGetVbuckets:
-				vbuckets := make([]*Vbucket, 0, len(worker.vbuckets))
-				for _, v := range worker.vbuckets {
-					vbuckets = append(vbuckets, v)
-				}
-				respch := msg[1].(chan []interface{})
-				respch <- []interface{}{vbuckets}
-
-			case vwCmdAddEngines:
-				worker.engines = make(map[uint64]*Engine)
-				opaque := msg[1].(uint16)
-				if msg[2] != nil {
-					fmsg := "%v ##%x AddEngine %v\n"
-					for uuid, engine := range msg[2].(map[uint64]*Engine) {
-						worker.engines[uuid] = engine
-						logging.Tracef(fmsg, logPrefix, opaque, uuid)
-					}
-					worker.printCtrl(worker.engines)
-				}
-				if msg[3] != nil {
-					endpoints := msg[3].(map[string]c.RouterEndpoint)
-					worker.endpoints = worker.updateEndpoints(opaque, endpoints)
-					worker.printCtrl(worker.endpoints)
-				}
-				cseqnos := make(map[uint16]uint64)
-				for _, v := range worker.vbuckets {
-					cseqnos[v.vbno] = v.seqno
-				}
-				respch := msg[4].(chan []interface{})
-				respch <- []interface{}{cseqnos}
-
-			case vwCmdDelEngines:
-				opaque := msg[1].(uint16)
-				fmsg := "%v ##%x vwCmdDeleteEngines\n"
-				logging.Tracef(fmsg, logPrefix, opaque)
-				engineKeys := msg[2].([]uint64)
-				fmsg = "%v ##%x DelEngine %v\n"
-				for _, uuid := range engineKeys {
-					delete(worker.engines, uuid)
-					logging.Tracef(fmsg, logPrefix, opaque, uuid)
-				}
-				fmsg = "%v ##%x deleted engines %v\n"
-				logging.Tracef(fmsg, logPrefix, opaque, engineKeys)
-				respch := msg[3].(chan []interface{})
-				respch <- []interface{}{nil}
-
-			case vwCmdGetStats:
-				logging.Tracef("%v vwCmdStatistics\n", worker.logPrefix)
-				stats := make(map[string]interface{})
-				for vbno, v := range worker.vbuckets {
-					stats[strconv.Itoa(int(vbno))] = map[string]interface{}{
-						"syncs":     float64(v.syncCount),
-						"snapshots": float64(v.sshotCount),
-						"mutations": float64(v.mutationCount),
-					}
-				}
-				respch := msg[1].(chan []interface{})
-				respch <- []interface{}{stats}
-
-			case vwCmdResetConfig:
-				_, respch := msg[1].(c.Config), msg[2].(chan []interface{})
-				respch <- []interface{}{nil}
-
-			case vwCmdClose:
-				logging.Infof("%v ##%x closed\n", logPrefix, worker.opaque)
-				respch := msg[1].(chan []interface{})
-				respch <- []interface{}{nil}
+			if breakloop := worker.handleCommand(msg); breakloop {
 				break loop
 			}
 		}
 	}
+}
+
+func (worker *VbucketWorker) handleCommand(msg []interface{}) bool {
+	cmd := msg[0].(byte)
+	switch cmd {
+	case vwCmdGetVbuckets:
+		vbuckets := make([]*Vbucket, 0, len(worker.vbuckets))
+		for _, v := range worker.vbuckets {
+			vbuckets = append(vbuckets, v)
+		}
+		respch := msg[1].(chan []interface{})
+		respch <- []interface{}{vbuckets}
+
+	case vwCmdAddEngines:
+		worker.engines = make(map[uint64]*Engine)
+		opaque := msg[1].(uint16)
+		if msg[2] != nil {
+			fmsg := "%v ##%x AddEngine %v\n"
+			for uuid, engine := range msg[2].(map[uint64]*Engine) {
+				worker.engines[uuid] = engine
+				logging.Tracef(fmsg, worker.logPrefix, opaque, uuid)
+			}
+			worker.printCtrl(worker.engines)
+		}
+		if msg[3] != nil {
+			endpoints := msg[3].(map[string]c.RouterEndpoint)
+			worker.endpoints = worker.updateEndpoints(opaque, endpoints)
+			worker.printCtrl(worker.endpoints)
+		}
+		cseqnos := make(map[uint16]uint64)
+		for _, v := range worker.vbuckets {
+			cseqnos[v.vbno] = v.seqno
+		}
+		respch := msg[4].(chan []interface{})
+		respch <- []interface{}{cseqnos}
+
+	case vwCmdDelEngines:
+		opaque := msg[1].(uint16)
+		fmsg := "%v ##%x vwCmdDeleteEngines\n"
+		logging.Tracef(fmsg, worker.logPrefix, opaque)
+		engineKeys := msg[2].([]uint64)
+		fmsg = "%v ##%x DelEngine %v\n"
+		for _, uuid := range engineKeys {
+			delete(worker.engines, uuid)
+			logging.Tracef(fmsg, worker.logPrefix, opaque, uuid)
+		}
+		fmsg = "%v ##%x deleted engines %v\n"
+		logging.Tracef(fmsg, worker.logPrefix, opaque, engineKeys)
+		respch := msg[3].(chan []interface{})
+		respch <- []interface{}{nil}
+
+	case vwCmdGetStats:
+		logging.Tracef("%v vwCmdStatistics\n", worker.logPrefix)
+		stats := make(map[string]interface{})
+		for vbno, v := range worker.vbuckets {
+			stats[strconv.Itoa(int(vbno))] = map[string]interface{}{
+				"syncs":     float64(v.syncCount),
+				"snapshots": float64(v.sshotCount),
+				"mutations": float64(v.mutationCount),
+			}
+		}
+		respch := msg[1].(chan []interface{})
+		respch <- []interface{}{stats}
+
+	case vwCmdResetConfig:
+		_, respch := msg[1].(c.Config), msg[2].(chan []interface{})
+		respch <- []interface{}{nil}
+
+	case vwCmdClose:
+		logging.Infof("%v ##%x closed\n", worker.logPrefix, worker.opaque)
+		respch := msg[1].(chan []interface{})
+		respch <- []interface{}{nil}
+		return true
+	}
+	return false
 }
 
 // only endpoints that host engines defined on this vbucket.
