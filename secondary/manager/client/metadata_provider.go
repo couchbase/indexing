@@ -1103,11 +1103,11 @@ func (o *MetadataProvider) PrepareIndexDefn(
 			return nil, err, retry
 		}
 
-		if _, ok := plan["num_replica"]; ok {
-			if !c.IsPartitioned(partitionScheme) && len(nodes) != 0 {
-				if numReplica != len(nodes)-1 {
-					return nil, errors.New("Fails to create index.  Parameter num_replica should be one less than parameter nodes."), false
-				}
+		if numReplica != 0 && len(nodes) != 0 {
+			if numReplica > len(nodes)-1 {
+				errStr := fmt.Sprintf("Fails to create index.  There are more replica than specified node list (%v).  ", nodes)
+				errStr += "Please check the parameter 'num_replica' or setting 'indexer.settings.num_replica'."
+				return nil, errors.New(errStr), false
 			}
 		}
 
