@@ -176,7 +176,7 @@ func TestOperationsMonitorBatchSize(t *testing.T) {
 	m.Close()
 }
 
-func TestOperationsMonitorAtScale(t *testing.T) {
+func TestOperationsMonitorAtScaleInterval(t *testing.T) {
 	m := NewOperationsMonitor("6", 5000, 5, 0)
 	time.Sleep(10 * time.Millisecond)
 

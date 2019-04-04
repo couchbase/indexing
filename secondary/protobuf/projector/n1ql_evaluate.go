@@ -34,7 +34,7 @@ func N1QLTransform(
 	encodeBuf []byte, stats *IndexEvaluatorStats) ([]byte, []byte, error) {
 
 	arrValue := make([]interface{}, 0, len(cExprs))
-	skip := true
+	isLeadingKey := true
 	for _, cExpr := range cExprs {
 		expr := cExpr.(qexpr.Expression)
 		start := time.Now()
@@ -62,14 +62,14 @@ func N1QLTransform(
 				return nil, nil, nil
 			}
 			key := scalar
-			if key.Type() == qvalue.MISSING && skip {
+			if key.Type() == qvalue.MISSING && isLeadingKey {
 				return nil, nil, nil
 
 			} else if key.Type() == qvalue.MISSING {
 				arrValue = append(arrValue, key)
 				continue
 			}
-			skip = false
+			isLeadingKey = false
 			arrValue = append(arrValue, key)
 		} else {
 			if vector == nil { //nil is ERROR condition
@@ -81,19 +81,22 @@ func N1QLTransform(
 				return nil, nil, nil
 			}
 
-			if skip { //array is leading
-				if len(vector) == 0 { //array is empty
+			if isLeadingKey {
+				//if array is leading key and empty, skip indexing the entry
+				if isArrayEmpty(vector) {
 					return nil, nil, nil
 				}
-				if len(vector) == 1 && vector[0].Type() == qvalue.MISSING { //array is missing
+				//if array is leading key and missing, skip indexing the entry
+				if isArrayMissing(vector) {
 					return nil, nil, nil
 				}
-			} else if !skip {
-				if len(vector) == 0 { //array is non-leading and is empty
+			} else {
+				//if array is non-leading key and empty, treat it as missing
+				if isArrayEmpty(vector) {
 					vector = []qvalue.Value{missing}
 				}
 			}
-			skip = false
+			isLeadingKey = false
 
 			arrValue = append(arrValue, qvalue.NewValue([]qvalue.Value(vector)))
 		}
@@ -149,4 +152,12 @@ func CollateJSONEncode(val qvalue.Value, encodeBuf []byte) ([]byte, []byte, erro
 		return append([]byte(nil), enc...), newBuf, e2
 	}
 	return append([]byte(nil), encoded...), nil, err
+}
+
+func isArrayEmpty(vector qvalue.Values) bool {
+	return (len(vector) == 0)
+}
+
+func isArrayMissing(vector qvalue.Values) bool {
+	return (len(vector) == 1 && vector[0].Type() == qvalue.MISSING)
 }
