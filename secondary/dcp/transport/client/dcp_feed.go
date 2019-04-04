@@ -471,6 +471,9 @@ func (feed *DcpFeed) doDcpGetSeqnos(
 	rq.Extras = make([]byte, 4)
 	binary.BigEndian.PutUint32(rq.Extras, 1) // Only active vbuckets
 
+	feed.conn.SetMcdConnectionDeadline()
+	defer feed.conn.ResetMcdConnectionDeadline()
+
 	if err := feed.conn.Transmit(rq); err != nil {
 		fmsg := "%v ##%x doDcpGetSeqnos.Transmit(): %v"
 		logging.Errorf(fmsg, feed.logPrefix, rq.Opaque, err)
@@ -691,6 +694,14 @@ func (feed *DcpFeed) doDcpRequestStream(
 	binary.BigEndian.PutUint64(rq.Extras[40:48], snapEnd)
 
 	prefix := feed.logPrefix
+
+	// Here, timeout can occur due to slow memcached. The error handling
+	// in the projector feed takes care of cleanning up of the connections.
+	// After closing connections, pressure on memcached may get eased, and
+	// retry (from indexer side) may succeed.
+	feed.conn.SetMcdConnectionDeadline()
+	defer feed.conn.ResetMcdConnectionDeadline()
+
 	if err := feed.conn.Transmit(rq); err != nil {
 		fmsg := "%v ##%x doDcpRequestStream.Transmit(): %v"
 		logging.Errorf(fmsg, prefix, opaqueMSB, err)
@@ -721,11 +732,17 @@ func (feed *DcpFeed) doDcpCloseStream(vbno, opaqueMSB uint16) error {
 		VBucket: vbno,
 		Opaque:  composeOpaque(vbno, opaqueMSB),
 	}
+
+	// In case of DCP_CLOSESTREAM, feed.conn.Transmit won't have any
+	// network timeout. This is called in restartVBuckets workflow
+	// on indexer side. In this case, indexer does not retry on error.
+	// For now, let's just report slow/hung operation on indexer.
 	if err := feed.conn.Transmit(rq); err != nil {
 		fmsg := "%v ##%x (##%x) doDcpCloseStream.Transmit(): %v"
 		logging.Errorf(fmsg, prefix, opaqueMSB, stream.AppOpaque, err)
 		return err
 	}
+
 	return nil
 }
 
@@ -800,12 +817,18 @@ func (feed *DcpFeed) sendBufferAck(sendAck bool, bytes uint32) {
 			bufferAck.Extras = make([]byte, 4)
 			binary.BigEndian.PutUint32(bufferAck.Extras[:4], uint32(totalBytes))
 			feed.stats.TotalBufferAckSent++
-			if err := feed.conn.Transmit(bufferAck); err != nil {
-				logging.Errorf("%v NOOP.Transmit(): %v", prefix, err)
 
-			} else {
-				logging.Tracef("%v buffer-ack %v\n", prefix, totalBytes)
-			}
+			func() {
+				// Timeout here will unblock genServer() thread after some time.
+				feed.conn.SetMcdConnectionDeadline()
+				defer feed.conn.ResetMcdConnectionDeadline()
+				if err := feed.conn.Transmit(bufferAck); err != nil {
+					logging.Errorf("%v NOOP.Transmit(): %v", prefix, err)
+
+				} else {
+					logging.Tracef("%v buffer-ack %v\n", prefix, totalBytes)
+				}
+			}()
 		} else {
 			feed.toAckBytes += bytes
 		}
@@ -1116,12 +1139,20 @@ loop:
 			noop := &transport.MCResponse{
 				Opcode: transport.DCP_NOOP, Opaque: pkt.Opaque,
 			}
-			if err := conn.TransmitResponse(noop); err != nil {
-				logging.Errorf("%v NOOP.Transmit(): %v", feed.logPrefix, err)
-			} else {
-				fmsg := "%v responded to NOOP ok ...\n"
-				logging.Tracef(fmsg, feed.logPrefix)
-			}
+
+			func() {
+				// Timeout here will unblock doReceive() thread after some time.
+				feed.conn.SetMcdConnectionDeadline()
+				defer feed.conn.ResetMcdConnectionDeadline()
+
+				if err := feed.conn.TransmitResponse(noop); err != nil {
+					logging.Errorf("%v NOOP.Transmit(): %v", feed.logPrefix, err)
+				} else {
+					fmsg := "%v responded to NOOP ok ...\n"
+					logging.Tracef(fmsg, feed.logPrefix)
+				}
+			}()
+
 			continue loop
 		}
 
