@@ -109,6 +109,7 @@ type IndexerStorageModeToken struct {
 
 type CommandListener struct {
 	doCreate       bool
+	hasNewCreate   bool
 	doBuild        bool
 	doDelete       bool
 	doDropInst     bool
@@ -885,11 +886,20 @@ func (m *CommandListener) GetNewCreateTokens() map[string]*CreateCommandToken {
 	return nil
 }
 
-func (m *CommandListener) HasNewCreateTokens() bool {
+func (m *CommandListener) HasCreateTokens() bool {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 
 	return len(m.createTokens) != 0
+}
+
+func (m *CommandListener) HasNewCreateTokens() bool {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
+	result := m.hasNewCreate
+	m.hasNewCreate = false
+	return result
 }
 
 func (m *CommandListener) AddNewCreateToken(path string, token *CreateCommandToken) {
@@ -1017,6 +1027,7 @@ func (m *CommandListener) handleNewCreateCommandToken(path string, value []byte)
 	}
 
 	if token != nil {
+		m.hasNewCreate = true
 		m.AddNewCreateToken(path, token)
 	}
 }
