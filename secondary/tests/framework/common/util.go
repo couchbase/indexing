@@ -15,8 +15,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/couchbase/gocb"
 	c "github.com/couchbase/indexing/secondary/common"
+	"gopkg.in/couchbase/gocb.v1"
 )
 
 var LogPerformanceStat = false

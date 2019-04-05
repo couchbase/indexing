@@ -7,11 +7,11 @@ import (
 	"reflect"
 	"time"
 
-	"github.com/couchbase/gocb"
 	c "github.com/couchbase/indexing/secondary/common"
 	qc "github.com/couchbase/indexing/secondary/queryport/client"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 	"github.com/couchbase/query/value"
+	"gopkg.in/couchbase/gocb.v1"
 )
 
 func convertExpectedResponse(exp tc.ScanResponse) tc.ScanResponseActual {
