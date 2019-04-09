@@ -669,6 +669,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"queryport.client.usePlanner": ConfigValue{
+		true,
+		"boolean flag to direct whether to use planner for non-partitioned index",
+		true,
+		false, // mutable
+		false, // case-insensitive
+	},
 	// projector's adminport client, can be used by indexer.
 	"indexer.projectorclient.retryInterval": ConfigValue{
 		16,
