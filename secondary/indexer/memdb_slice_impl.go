@@ -97,23 +97,6 @@ func byteItemCompare(a, b []byte) int {
 	return bytes.Compare(a, b)
 }
 
-func resizeEncodeBuf(encodeBuf []byte, keylen int, doResize bool) []byte {
-	if doResize && keylen+MAX_KEY_EXTRABYTES_LEN > cap(encodeBuf) {
-		// TODO: Shrink the buffer periodically or as needed
-		newSize := keylen + MAX_KEY_EXTRABYTES_LEN + ENCODE_BUF_SAFE_PAD
-		encodeBuf = make([]byte, 0, newSize)
-	}
-	return encodeBuf
-}
-
-func resizeArrayBuf(arrayBuf []byte, keylen int) []byte {
-	if allowLargeKeys && keylen > cap(arrayBuf) {
-		newSize := keylen + MAX_KEY_EXTRABYTES_LEN + ENCODE_BUF_SAFE_PAD
-		arrayBuf = make([]byte, 0, newSize)
-	}
-	return arrayBuf
-}
-
 var totalMemDBItems int64 = 0
 
 type memdbSlice struct {
@@ -462,6 +445,7 @@ func (mdb *memdbSlice) insertSecIndex(key []byte, docid []byte, workerId int, me
 	}
 
 	newNode := mdb.main[workerId].Put2(entry)
+
 	mdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
 	atomic.AddInt64(&mdb.insert_bytes, int64(len(docid)+len(entry)))
 
@@ -470,9 +454,11 @@ func (mdb *memdbSlice) insertSecIndex(key []byte, docid []byte, workerId int, me
 		if updated, oldNode := mdb.back[workerId].Update(entry, unsafe.Pointer(newNode)); updated {
 			t0 := time.Now()
 			mdb.main[workerId].DeleteNode((*skiplist.Node)(oldNode))
+			subtractKeySizeStat(mdb.idxStats, getNodeItemSize((*skiplist.Node)(oldNode)))
 			mdb.idxStats.Timings.stKVDelete.Put(time.Since(t0))
 			atomic.AddInt64(&mdb.delete_bytes, int64(len(docid)))
 		}
+		addKeySizeStat(mdb.idxStats, len(entry))
 	}
 
 	mdb.isDirty = true
@@ -533,6 +519,7 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 		for _, item := range entriesToRemove {
 			node := list.Remove(item)
 			mdb.main[workerId].DeleteNode(node)
+			subtractKeySizeStat(mdb.idxStats, getNodeItemSize(node))
 		}
 		mdb.isDirty = true
 		return 0
@@ -559,6 +546,7 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 			}
 			node := list.Remove(entry)
 			mdb.main[workerId].DeleteNode(node)
+			subtractKeySizeStat(mdb.idxStats, len(entry))
 			nmut++
 		}
 	}
@@ -582,6 +570,7 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 				mdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
 				atomic.AddInt64(&mdb.insert_bytes, int64(len(entry)))
 			}
+			addKeySizeStat(mdb.idxStats, len(entry))
 		}
 	}
 
@@ -638,6 +627,7 @@ func (mdb *memdbSlice) deleteSecIndex(docid []byte, workerId int) int {
 		atomic.AddInt64(&mdb.delete_bytes, int64(len(docid)))
 		t0 = time.Now()
 		mdb.main[workerId].DeleteNode((*skiplist.Node)(node))
+		subtractKeySizeStat(mdb.idxStats, getNodeItemSize((*skiplist.Node)(node)))
 		mdb.idxStats.Timings.stKVDelete.Put(time.Since(t0))
 	}
 	mdb.isDirty = true
@@ -663,6 +653,7 @@ func (mdb *memdbSlice) deleteSecArrayIndex(docid []byte, workerId int) (nmut int
 	for _, item := range oldEntriesBytes {
 		node := list.Remove(item)
 		mdb.main[workerId].DeleteNode(node)
+		subtractKeySizeStat(mdb.idxStats, getNodeItemSize(node))
 	}
 
 	mdb.isDirty = true
@@ -696,6 +687,11 @@ type memdbSnapshotInfo struct {
 
 	Committed bool `json:"-"`
 	dataPath  string
+
+	IndexStats map[string]interface{}
+	Version    int
+	InstId     common.IndexInstId
+	PartnId    common.PartitionId
 }
 
 type memdbSnapshot struct {
@@ -789,6 +785,16 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot) {
 		if err == nil {
 			var fd *os.File
 			var bs []byte
+
+			// Add details to snapshot info and persist it
+			snapshotStats := make(map[string]interface{})
+			snapshotStats[SNAP_STATS_KEY_SIZES] = getKeySizesStats(mdb.idxStats)
+			snapshotStats[SNAP_STATS_KEY_SIZES_SINCE] = mdb.idxStats.keySizeStatsSince.Value()
+			s.info.IndexStats = snapshotStats
+			s.info.Version = SNAPSHOT_META_VERSION_MOI_1
+			s.info.InstId = mdb.idxInstId
+			s.info.PartnId = mdb.idxPartnId
+
 			bs, err = json.Marshal(s.info)
 			if err == nil {
 				fd, err = os.OpenFile(manifest, os.O_WRONLY|os.O_CREATE, 0755)
@@ -911,6 +917,9 @@ func (mdb *memdbSlice) resetStores() {
 	atomic.AddInt64(&totalMemDBItems, -int64(prev))
 	mdb.committedCount = 0
 	mdb.idxStats.itemsCount.Set(0)
+
+	resetKeySizeStats(mdb.idxStats)
+	// Slice is rolling back to zero, but there is no need to update keySizeStatsSince
 }
 
 //Rollback slice to given snapshot. Return error if
@@ -950,6 +959,29 @@ func (mdb *memdbSlice) Rollback(info SnapshotInfo) error {
 
 	mdb.lastRollbackTs = info.Timestamp()
 	return nil
+}
+
+func (mdb *memdbSlice) updateStatsFromSnapshotMeta(o SnapshotInfo) {
+
+	// Update stats *if* available in snapshot info
+	// In case of upgrade, older snapshots will not have stats
+	// which can lead to inaccurate stats for upgraded indexes
+	stats := o.Stats()
+	if stats != nil {
+		keySizes := stats[SNAP_STATS_KEY_SIZES].([]interface{})
+		mdb.idxStats.numKeySize64.Set(safeGetInt64(keySizes[0]))
+		mdb.idxStats.numKeySize256.Set(safeGetInt64(keySizes[1]))
+		mdb.idxStats.numKeySize1K.Set(safeGetInt64(keySizes[2]))
+		mdb.idxStats.numKeySize4K.Set(safeGetInt64(keySizes[3]))
+		mdb.idxStats.numKeySize100K.Set(safeGetInt64(keySizes[4]))
+		mdb.idxStats.numKeySizeGt100K.Set(safeGetInt64(keySizes[5]))
+
+		mdb.idxStats.keySizeStatsSince.Set(safeGetInt64(stats[SNAP_STATS_KEY_SIZES_SINCE]))
+	} else {
+		// Since stats are not available, update keySizeStatsSince to current time
+		// to indicate we start tracking the stat since now.
+		mdb.idxStats.keySizeStatsSince.Set(time.Now().UnixNano())
+	}
 }
 
 func (mdb *memdbSlice) loadSnapshot(snapInfo *memdbSnapshotInfo) (err error) {
@@ -1038,6 +1070,7 @@ func (mdb *memdbSlice) loadSnapshot(snapInfo *memdbSnapshotInfo) (err error) {
 			mdb.id, mdb.idxInstId, mdb.idxPartnId, snapInfo.dataPath, err)
 	}
 
+	mdb.updateStatsFromSnapshotMeta(snapInfo)
 	mdb.idxStats.diskSnapLoadDuration.Set(int64(dur / time.Millisecond))
 	mdb.idxStats.numItemsRestored.Set(mdb.mainstore.ItemsCount())
 	return
@@ -1325,6 +1358,10 @@ func (info *memdbSnapshotInfo) Timestamp() *common.TsVbuuid {
 
 func (info *memdbSnapshotInfo) IsCommitted() bool {
 	return info.Committed
+}
+
+func (info *memdbSnapshotInfo) Stats() map[string]interface{} {
+	return info.IndexStats
 }
 
 func (info *memdbSnapshotInfo) String() string {
@@ -1670,4 +1707,130 @@ func newSnapshotPath(dirpath string) string {
 	file := time.Now().Format("snapshot.2006-01-02.15:04:05.000")
 	file = strings.Replace(file, ":", "", -1)
 	return filepath.Join(dirpath, file)
+}
+
+////////////////////////////////////////////////////////////
+// Helper functions for moi and plasma slice writers
+////////////////////////////////////////////////////////////
+
+func resizeEncodeBuf(encodeBuf []byte, keylen int, doResize bool) []byte {
+	if doResize && keylen+MAX_KEY_EXTRABYTES_LEN > cap(encodeBuf) {
+		// TODO: Shrink the buffer periodically or as needed
+		newSize := keylen + MAX_KEY_EXTRABYTES_LEN + ENCODE_BUF_SAFE_PAD
+		encodeBuf = make([]byte, 0, newSize)
+	}
+	return encodeBuf
+}
+
+func resizeArrayBuf(arrayBuf []byte, keylen int) []byte {
+	if allowLargeKeys && keylen > cap(arrayBuf) {
+		newSize := keylen + MAX_KEY_EXTRABYTES_LEN + ENCODE_BUF_SAFE_PAD
+		arrayBuf = make([]byte, 0, newSize)
+	}
+	return arrayBuf
+}
+
+func addKeySizeStat(stats *IndexStats, keySize int) {
+	updateKeySizeStat(stats, keySize, 1)
+}
+
+func subtractKeySizeStat(stats *IndexStats, keySize int) {
+	updateKeySizeStat(stats, keySize, -1)
+}
+
+func updateKeySizeStat(stats *IndexStats, keySize int, incr int64) {
+	switch {
+	case keySize <= 64:
+		stats.numKeySize64.Add(incr)
+	case keySize <= 256:
+		stats.numKeySize256.Add(incr)
+	case keySize <= 1024:
+		stats.numKeySize1K.Add(incr)
+	case keySize <= 4096:
+		stats.numKeySize4K.Add(incr)
+	case keySize <= 102400:
+		stats.numKeySize100K.Add(incr)
+	case keySize > 102400:
+		stats.numKeySizeGt100K.Add(incr)
+	}
+
+	if stats.keySizeStatsSince.Value() == 0 {
+		stats.keySizeStatsSince.Set(time.Now().UnixNano())
+	}
+}
+
+func addArrayKeySizeStat(stats *IndexStats, keySize int) {
+	updateArrayKeySizeStat(stats, keySize, 1)
+}
+
+func subtractArrayKeySizeStat(stats *IndexStats, keySize int) {
+	updateArrayKeySizeStat(stats, keySize, -1)
+}
+
+func updateArrayKeySizeStat(stats *IndexStats, keySize int, incr int64) {
+	switch {
+	case keySize <= 64:
+		stats.numArrayKeySize64.Add(incr)
+	case keySize <= 256:
+		stats.numArrayKeySize256.Add(incr)
+	case keySize <= 1024:
+		stats.numArrayKeySize1K.Add(incr)
+	case keySize <= 4096:
+		stats.numArrayKeySize4K.Add(incr)
+	case keySize <= 102400:
+		stats.numArrayKeySize100K.Add(incr)
+	case keySize > 102400:
+		stats.numArrayKeySizeGt100K.Add(incr)
+	}
+
+	if stats.keySizeStatsSince.Value() == 0 {
+		stats.keySizeStatsSince.Set(time.Now().UnixNano())
+	}
+}
+
+func getKeySizesStats(stats *IndexStats) []int64 {
+	return []int64{stats.numKeySize64.Value(),
+		stats.numKeySize256.Value(), stats.numKeySize1K.Value(),
+		stats.numKeySize4K.Value(), stats.numKeySize100K.Value(),
+		stats.numKeySizeGt100K.Value()}
+}
+
+func getArrayKeySizesStats(stats *IndexStats) []int64 {
+	return []int64{stats.numArrayKeySize64.Value(),
+		stats.numArrayKeySize256.Value(), stats.numArrayKeySize1K.Value(),
+		stats.numArrayKeySize4K.Value(), stats.numArrayKeySize100K.Value(),
+		stats.numArrayKeySizeGt100K.Value()}
+}
+
+func resetKeySizeStats(stats *IndexStats) {
+	stats.numKeySize64.Set(0)
+	stats.numKeySize256.Set(0)
+	stats.numKeySize1K.Set(0)
+	stats.numKeySize4K.Set(0)
+	stats.numKeySize100K.Set(0)
+	stats.numKeySizeGt100K.Set(0)
+}
+
+func resetArrKeySizeStats(stats *IndexStats) {
+	stats.numArrayKeySize64.Set(0)
+	stats.numArrayKeySize256.Set(0)
+	stats.numArrayKeySize1K.Set(0)
+	stats.numArrayKeySize4K.Set(0)
+	stats.numArrayKeySize100K.Set(0)
+	stats.numArrayKeySizeGt100K.Set(0)
+}
+
+// Safely get an int64 from interface{}
+// json unmarhsaling can give a number as float64 or int64
+// depending on json package used (encoding/json or common/json)
+func safeGetInt64(inp interface{}) int64 {
+	if val, ok := inp.(float64); ok {
+		return int64(val)
+	}
+	return inp.(int64)
+}
+
+func getNodeItemSize(node *skiplist.Node) int {
+	item := (*memdb.Item)(node.Item())
+	return len(item.Bytes())
 }

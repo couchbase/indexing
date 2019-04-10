@@ -1465,7 +1465,8 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 
 	partitions := indexInst.Pc.GetAllPartitions()
 	for _, partnDefn := range partitions {
-		idx.stats.AddPartition(indexInst.InstId, indexInst.Defn.Bucket, indexInst.Defn.Name, indexInst.ReplicaId, partnDefn.GetPartitionId())
+		idx.stats.AddPartition(indexInst.InstId, indexInst.Defn.Bucket, indexInst.Defn.Name,
+			indexInst.ReplicaId, partnDefn.GetPartitionId(), indexInst.Defn.IsArrayIndex)
 	}
 
 	//allocate partition/slice
@@ -5228,7 +5229,8 @@ func (idx *indexer) initFromPersistedState() error {
 	for _, inst := range idx.indexInstMap {
 		if inst.State != common.INDEX_STATE_DELETED {
 			for _, partnDefn := range inst.Pc.GetAllPartitions() {
-				idx.stats.AddPartition(inst.InstId, inst.Defn.Bucket, inst.Defn.Name, inst.ReplicaId, partnDefn.GetPartitionId())
+				idx.stats.AddPartition(inst.InstId, inst.Defn.Bucket, inst.Defn.Name,
+					inst.ReplicaId, partnDefn.GetPartitionId(), inst.Defn.IsArrayIndex)
 			}
 		}
 	}

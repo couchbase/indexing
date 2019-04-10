@@ -596,7 +596,7 @@ func (mdb *plasmaSlice) insertSecIndex(key []byte, docid []byte, workerId int, i
 		// entry2BackEntry overwrites the buffer to remove docid
 		backEntry := entry2BackEntry(entry)
 		mdb.back[workerId].InsertKV(docid, backEntry)
-
+		addKeySizeStat(mdb.idxStats, len(entry))
 		mdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
 		atomic.AddInt64(&mdb.insert_bytes, int64(len(docid)+len(entry)))
 	}
@@ -701,6 +701,7 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 				common.CrashOnError(err)
 				// Add back
 				mdb.main[workerId].InsertKV(entry, nil)
+				addKeySizeStat(mdb.idxStats, len(entry))
 			}
 		}
 	}
@@ -714,6 +715,7 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 				common.CrashOnError(err)
 				// Delete back
 				mdb.main[workerId].DeleteKV(entry)
+				subtractKeySizeStat(mdb.idxStats, len(entry))
 			}
 		}
 	}
@@ -734,6 +736,7 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 			}
 			t0 := time.Now()
 			mdb.main[workerId].DeleteKV(keyToBeDeleted)
+			subtractKeySizeStat(mdb.idxStats, len(keyToBeDeleted))
 			mdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
 			atomic.AddInt64(&mdb.delete_bytes, int64(len(keyToBeDeleted)))
 			nmut++
@@ -757,6 +760,7 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 			}
 			t0 := time.Now()
 			mdb.main[workerId].InsertKV(keyToBeAdded, nil)
+			addKeySizeStat(mdb.idxStats, len(keyToBeAdded))
 			mdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
 			atomic.AddInt64(&mdb.insert_bytes, int64(len(keyToBeAdded)))
 			nmut++
@@ -769,6 +773,7 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 		if oldkey != nil {
 			t0 := time.Now()
 			mdb.back[workerId].DeleteKV(docid)
+			subtractArrayKeySizeStat(mdb.idxStats, len(oldkey))
 			mdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
 			atomic.AddInt64(&mdb.delete_bytes, int64(len(docid)))
 		}
@@ -782,12 +787,14 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 		if oldkey != nil {
 			t0 := time.Now()
 			mdb.back[workerId].DeleteKV(docid)
+			subtractArrayKeySizeStat(mdb.idxStats, len(oldkey))
 			mdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
 			atomic.AddInt64(&mdb.delete_bytes, int64(len(docid)))
 		}
 
 		t0 := time.Now()
 		mdb.back[workerId].InsertKV(docid, key)
+		addArrayKeySizeStat(mdb.idxStats, len(key))
 		mdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
 		atomic.AddInt64(&mdb.insert_bytes, int64(len(docid)+len(key)))
 	}
@@ -840,6 +847,7 @@ func (mdb *plasmaSlice) deletePrimaryIndex(docid []byte, workerId int) (nmut int
 }
 
 func (mdb *plasmaSlice) deleteSecIndex(docid []byte, compareKey []byte, workerId int) (ndel int, changed bool) {
+
 	// Delete entry from back and main index if present
 	mdb.back[workerId].Begin()
 	defer mdb.back[workerId].End()
@@ -861,6 +869,7 @@ func (mdb *plasmaSlice) deleteSecIndex(docid []byte, compareKey []byte, workerId
 		mdb.back[workerId].DeleteKV(docid)
 		entry := backEntry2entry(docid, backEntry, buf)
 		mdb.main[workerId].DeleteKV(entry)
+		subtractKeySizeStat(mdb.idxStats, len(entry))
 		mdb.idxStats.Timings.stKVDelete.Put(time.Since(t0))
 	}
 
@@ -924,6 +933,7 @@ func (mdb *plasmaSlice) deleteSecArrayIndex(docid []byte, workerId int) (nmut in
 		}
 		t0 := time.Now()
 		mdb.main[workerId].DeleteKV(keyToBeDeleted)
+		subtractKeySizeStat(mdb.idxStats, len(keyToBeDeleted))
 		mdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
 		atomic.AddInt64(&mdb.delete_bytes, int64(len(keyToBeDeleted)))
 	}
@@ -931,6 +941,7 @@ func (mdb *plasmaSlice) deleteSecArrayIndex(docid []byte, workerId int) (nmut in
 	//delete from the back index
 	t0 = time.Now()
 	mdb.back[workerId].DeleteKV(docid)
+	subtractArrayKeySizeStat(mdb.idxStats, len(olditm))
 	mdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
 	atomic.AddInt64(&mdb.delete_bytes, int64(len(docid)))
 	mdb.isDirty = true
@@ -963,6 +974,11 @@ type plasmaSnapshotInfo struct {
 	Count     int64
 
 	mRP, bRP *plasma.RecoveryPoint
+
+	IndexStats map[string]interface{}
+	Version    int
+	InstId     common.IndexInstId
+	PartnId    common.PartitionId
 }
 
 type plasmaSnapshot struct {
@@ -971,7 +987,7 @@ type plasmaSnapshot struct {
 	idxInstId  common.IndexInstId
 	idxPartnId common.PartitionId
 	ts         *common.TsVbuuid
-	info       SnapshotInfo
+	info       *plasmaSnapshotInfo
 
 	MainSnap *plasma.Snapshot
 	BackSnap *plasma.Snapshot
@@ -991,7 +1007,7 @@ func (mdb *plasmaSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 		idxDefnId:  mdb.idxDefnId,
 		idxInstId:  mdb.idxInstId,
 		idxPartnId: mdb.idxPartnId,
-		info:       info,
+		info:       snapInfo,
 		ts:         snapInfo.Timestamp(),
 		committed:  info.IsCommitted(),
 		MainSnap:   mdb.mainstore.NewSnapshot(),
@@ -1032,7 +1048,16 @@ func (mdb *plasmaSlice) doPersistSnapshot(s *plasmaSnapshot) {
 			logging.Infof("PlasmaSlice Slice Id %v, IndexInstId %v, PartitionId %v Creating recovery point ...", mdb.id, mdb.idxInstId, mdb.idxPartnId)
 			t0 := time.Now()
 
-			meta, err := json.Marshal(s.ts)
+			snapshotStats := make(map[string]interface{})
+			snapshotStats[SNAP_STATS_KEY_SIZES] = getKeySizesStats(mdb.idxStats)
+			snapshotStats[SNAP_STATS_ARRKEY_SIZES] = getArrayKeySizesStats(mdb.idxStats)
+			snapshotStats[SNAP_STATS_KEY_SIZES_SINCE] = mdb.idxStats.keySizeStatsSince.Value()
+			s.info.IndexStats = snapshotStats
+			s.info.Version = SNAPSHOT_META_VERSION_PLASMA_1
+			s.info.InstId = mdb.idxInstId
+			s.info.PartnId = mdb.idxPartnId
+
+			meta, err := json.Marshal(s.info)
 			common.CrashOnError(err)
 			timeHdr := make([]byte, 8)
 			binary.BigEndian.PutUint64(timeHdr, uint64(time.Now().UnixNano()))
@@ -1104,7 +1129,6 @@ func (mdb *plasmaSlice) doPersistSnapshot(s *plasmaSnapshot) {
 func (mdb *plasmaSlice) GetSnapshots() ([]SnapshotInfo, error) {
 	var mRPs, bRPs []*plasma.RecoveryPoint
 	var minRP, maxRP []byte
-
 	getRPs := func(rpts []*plasma.RecoveryPoint) []*plasma.RecoveryPoint {
 		var newRpts []*plasma.RecoveryPoint
 		for _, rp := range rpts {
@@ -1157,8 +1181,25 @@ func (mdb *plasmaSlice) GetSnapshots() ([]SnapshotInfo, error) {
 			Count: mRPs[i].ItemsCount(),
 		}
 
-		if err := json.Unmarshal(info.mRP.Meta()[8:], &info.Ts); err != nil {
+		var snapMeta map[string]interface{}
+		if err := json.Unmarshal(info.mRP.Meta()[8:], &snapMeta); err != nil {
 			return nil, fmt.Errorf("Unable to decode snapshot meta err %v", err)
+		}
+
+		if _, ok := snapMeta["Version"]; ok {
+			// new format
+			var err error
+			var snapInfo plasmaSnapshotInfo
+			if err = json.Unmarshal(info.mRP.Meta()[8:], &snapInfo); err != nil {
+				return nil, fmt.Errorf("Unable to decode snapshot info from meta. err %v", err)
+			}
+			info.Ts = snapInfo.Ts
+			info.IndexStats = snapInfo.IndexStats
+		} else {
+			// old format
+			if err := json.Unmarshal(info.mRP.Meta()[8:], &info.Ts); err != nil {
+				return nil, fmt.Errorf("Unable to decode snapshot meta err %v", err)
+			}
 		}
 
 		if !mdb.isPrimary {
@@ -1200,6 +1241,10 @@ func (mdb *plasmaSlice) resetStores() {
 	mdb.startWriters(numWriters)
 	mdb.setCommittedCount()
 	mdb.idxStats.itemsCount.Set(0)
+
+	resetKeySizeStats(mdb.idxStats)
+	resetArrKeySizeStats(mdb.idxStats)
+	// Slice is rolling back to zero, but there is no need to update keySizeStatsSince
 }
 
 func (mdb *plasmaSlice) Rollback(o SnapshotInfo) error {
@@ -1259,7 +1304,42 @@ func (mdb *plasmaSlice) restore(o SnapshotInfo) error {
 		return fmt.Errorf("Rollback error %v %v", mErr, bErr)
 	}
 
+	// Update stats available in snapshot info
+	mdb.updateStatsFromSnapshotMeta(o)
 	return nil
+}
+
+// Update stats available in snapshot info
+func (mdb *plasmaSlice) updateStatsFromSnapshotMeta(o SnapshotInfo) {
+
+	// Update stats *if* available in snapshot info
+	// In case of upgrade, older snapshots will not have stats
+	// in which case, do not update index stats
+	stats := o.Stats()
+	if stats != nil {
+		keySizes := stats[SNAP_STATS_KEY_SIZES].([]interface{})
+		arrkeySizes := stats[SNAP_STATS_ARRKEY_SIZES].([]interface{})
+
+		mdb.idxStats.numKeySize64.Set(safeGetInt64(keySizes[0]))
+		mdb.idxStats.numKeySize256.Set(safeGetInt64(keySizes[1]))
+		mdb.idxStats.numKeySize1K.Set(safeGetInt64(keySizes[2]))
+		mdb.idxStats.numKeySize4K.Set(safeGetInt64(keySizes[3]))
+		mdb.idxStats.numKeySize100K.Set(safeGetInt64(keySizes[4]))
+		mdb.idxStats.numKeySizeGt100K.Set(safeGetInt64(keySizes[5]))
+
+		mdb.idxStats.numArrayKeySize64.Set(safeGetInt64(arrkeySizes[0]))
+		mdb.idxStats.numArrayKeySize256.Set(safeGetInt64(arrkeySizes[1]))
+		mdb.idxStats.numArrayKeySize1K.Set(safeGetInt64(arrkeySizes[2]))
+		mdb.idxStats.numArrayKeySize4K.Set(safeGetInt64(arrkeySizes[3]))
+		mdb.idxStats.numArrayKeySize100K.Set(safeGetInt64(arrkeySizes[4]))
+		mdb.idxStats.numArrayKeySizeGt100K.Set(safeGetInt64(arrkeySizes[5]))
+
+		mdb.idxStats.keySizeStatsSince.Set(safeGetInt64(stats[SNAP_STATS_KEY_SIZES_SINCE]))
+	} else {
+		// Since stats are not available, update keySizeStatsSince to current time
+		// to indicate we start tracking the stat since now.
+		mdb.idxStats.keySizeStatsSince.Set(time.Now().UnixNano())
+	}
 }
 
 //RollbackToZero rollbacks the slice to initial state. Return error if
@@ -1682,6 +1762,10 @@ func (info *plasmaSnapshotInfo) Timestamp() *common.TsVbuuid {
 
 func (info *plasmaSnapshotInfo) IsCommitted() bool {
 	return info.Committed
+}
+
+func (info *plasmaSnapshotInfo) Stats() map[string]interface{} {
+	return info.IndexStats
 }
 
 func (info *plasmaSnapshotInfo) String() string {

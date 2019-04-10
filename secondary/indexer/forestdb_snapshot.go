@@ -29,6 +29,7 @@ type fdbSnapshotInfo struct {
 	BackSeq   forestdb.SeqNum
 	MetaSeq   forestdb.SeqNum
 	Committed bool
+	stats     map[string]interface{}
 }
 
 func (info *fdbSnapshotInfo) Timestamp() *common.TsVbuuid {
@@ -37,6 +38,10 @@ func (info *fdbSnapshotInfo) Timestamp() *common.TsVbuuid {
 
 func (info *fdbSnapshotInfo) IsCommitted() bool {
 	return info.Committed
+}
+
+func (info *fdbSnapshotInfo) Stats() map[string]interface{} {
+	return info.stats
 }
 
 func (info *fdbSnapshotInfo) String() string {

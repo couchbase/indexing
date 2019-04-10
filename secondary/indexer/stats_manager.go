@@ -104,6 +104,7 @@ func (it *IndexTimingStats) Init() {
 type IndexStats struct {
 	name, bucket string
 	replicaId    int
+	isArrayIndex bool
 
 	partitions map[common.PartitionId]*IndexStats
 
@@ -180,6 +181,22 @@ type IndexStats struct {
 	cacheMisses               stats.Int64Val
 	numRecsInMem              stats.Int64Val
 	numRecsOnDisk             stats.Int64Val
+
+	numKeySize64     stats.Int64Val // 0 - 64
+	numKeySize256    stats.Int64Val // 65 - 256
+	numKeySize1K     stats.Int64Val // 257 - 1K
+	numKeySize4K     stats.Int64Val // 1025 to 4096
+	numKeySize100K   stats.Int64Val // 4097 - 102400
+	numKeySizeGt100K stats.Int64Val // > 102400
+
+	numArrayKeySize64     stats.Int64Val
+	numArrayKeySize256    stats.Int64Val
+	numArrayKeySize1K     stats.Int64Val
+	numArrayKeySize4K     stats.Int64Val
+	numArrayKeySize100K   stats.Int64Val
+	numArrayKeySizeGt100K stats.Int64Val
+
+	keySizeStatsSince stats.Int64Val // Since when are key size stats tracked
 
 	//stats needed for avg_scan_latency
 	lastScanDuration stats.Int64Val
@@ -275,6 +292,22 @@ func (s *IndexStats) Init() {
 	s.numRecsInMem.Init()
 	s.numRecsOnDisk.Init()
 
+	s.numKeySize64.Init()
+	s.numKeySize256.Init()
+	s.numKeySize1K.Init()
+	s.numKeySize4K.Init()
+	s.numKeySize100K.Init()
+	s.numKeySizeGt100K.Init()
+
+	s.numArrayKeySize64.Init()
+	s.numArrayKeySize256.Init()
+	s.numArrayKeySize1K.Init()
+	s.numArrayKeySize4K.Init()
+	s.numArrayKeySize100K.Init()
+	s.numArrayKeySizeGt100K.Init()
+
+	s.keySizeStatsSince.Init()
+
 	//stats needed for avg_scan_latency
 	s.lastScanDuration.Init()
 	s.lastNumRequests.Init()
@@ -332,6 +365,18 @@ func (s *IndexStats) updatePartitionStats(pid common.PartitionId, f func(*IndexS
 func (s *IndexStats) getPartitionStats(pid common.PartitionId) *IndexStats {
 
 	return s.partitions[pid]
+}
+
+func (s *IndexStats) partnMaxInt64Stats(f func(*IndexStats) int64) int64 {
+
+	var v int64
+	for _, ps := range s.partitions {
+		pv := f(ps)
+		if pv > v {
+			v = pv
+		}
+	}
+	return v
 }
 
 func (s *IndexStats) partnInt64Stats(f func(*IndexStats) int64) int64 {
@@ -426,11 +471,12 @@ func (s *IndexerStats) Reset() {
 	*s = IndexerStats{}
 	s.Init()
 	for k, v := range old.indexes {
-		s.AddIndex(k, v.bucket, v.name, v.replicaId)
+		s.AddIndex(k, v.bucket, v.name, v.replicaId, v.isArrayIndex)
 	}
 }
 
-func (s *IndexerStats) AddIndex(id common.IndexInstId, bucket string, name string, replicaId int) {
+func (s *IndexerStats) AddIndex(id common.IndexInstId, bucket string, name string,
+	replicaId int, isArrIndex bool) {
 
 	b, ok := s.buckets[bucket]
 	if !ok {
@@ -440,7 +486,8 @@ func (s *IndexerStats) AddIndex(id common.IndexInstId, bucket string, name strin
 	}
 
 	if _, ok := s.indexes[id]; !ok {
-		idxStats := &IndexStats{name: name, bucket: bucket, replicaId: replicaId}
+		idxStats := &IndexStats{name: name, bucket: bucket,
+			replicaId: replicaId, isArrayIndex: isArrIndex}
 		idxStats.Init()
 		s.indexes[id] = idxStats
 
@@ -448,10 +495,11 @@ func (s *IndexerStats) AddIndex(id common.IndexInstId, bucket string, name strin
 	}
 }
 
-func (s *IndexerStats) AddPartition(id common.IndexInstId, bucket string, name string, replicaId int, partitionId common.PartitionId) {
+func (s *IndexerStats) AddPartition(id common.IndexInstId, bucket string, name string,
+	replicaId int, partitionId common.PartitionId, isArrIndex bool) {
 
 	if _, ok := s.indexes[id]; !ok {
-		s.AddIndex(id, bucket, name, replicaId)
+		s.AddIndex(id, bucket, name, replicaId, isArrIndex)
 	}
 
 	s.indexes[id].addPartition(partitionId)
@@ -491,6 +539,56 @@ func (s *IndexerStats) RemoveIndex(id common.IndexInstId) {
 	if b.indexCount == 0 {
 		delete(s.buckets, idx.bucket)
 	}
+}
+
+func (s *IndexStats) getKeySizeStats() map[string]interface{} {
+
+	keySizeStats := make(map[string]interface{})
+	keySizeStats["(0-64)"] = s.partnInt64Stats(func(ss *IndexStats) int64 {
+		return ss.numKeySize64.Value()
+	})
+	keySizeStats["(65-256)"] = s.partnInt64Stats(func(ss *IndexStats) int64 {
+		return ss.numKeySize256.Value()
+	})
+	keySizeStats["(257-1024)"] = s.partnInt64Stats(func(ss *IndexStats) int64 {
+		return ss.numKeySize1K.Value()
+	})
+	keySizeStats["(1025-4096)"] = s.partnInt64Stats(func(ss *IndexStats) int64 {
+		return ss.numKeySize4K.Value()
+	})
+	keySizeStats["(4097-102400)"] = s.partnInt64Stats(func(ss *IndexStats) int64 {
+		return ss.numKeySize100K.Value()
+	})
+	keySizeStats["(102401-max)"] = s.partnInt64Stats(func(ss *IndexStats) int64 {
+		return ss.numKeySizeGt100K.Value()
+	})
+	return keySizeStats
+}
+
+// arrkey_size_distribution is applicable only for plasma array index
+func (s *IndexStats) getArrKeySizeStats() map[string]interface{} {
+
+	keySizeStats := make(map[string]interface{})
+	keySizeStats["(0-64)"] = s.partnInt64Stats(func(ss *IndexStats) int64 {
+		return ss.numArrayKeySize64.Value()
+	})
+	keySizeStats["(65-256)"] = s.partnInt64Stats(func(ss *IndexStats) int64 {
+		return ss.numArrayKeySize256.Value()
+	})
+	keySizeStats["(257-1024)"] = s.partnInt64Stats(func(ss *IndexStats) int64 {
+		return ss.numArrayKeySize1K.Value()
+	})
+	keySizeStats["(1025-4096)"] = s.partnInt64Stats(func(ss *IndexStats) int64 {
+		return ss.numArrayKeySize4K.Value()
+	})
+	keySizeStats["(4097-102400)"] = s.partnInt64Stats(func(ss *IndexStats) int64 {
+		return ss.numArrayKeySize100K.Value()
+	})
+	keySizeStats["(102401-max)"] = s.partnInt64Stats(func(ss *IndexStats) int64 {
+		return ss.numArrayKeySizeGt100K.Value()
+	})
+
+	return keySizeStats
 }
 
 func (is IndexerStats) GetStats(getPartition bool, skipEmpty bool) common.Statistics {
@@ -688,6 +786,17 @@ func (is IndexerStats) GetStats(getPartition bool, skipEmpty bool) common.Statis
 			s.partnInt64Stats(func(ss *IndexStats) int64 {
 				return ss.dataSize.Value()
 			}))
+
+		// partition stats
+		addStat("key_size_distribution", s.getKeySizeStats())
+		if common.GetStorageMode() == common.PLASMA && s.isArrayIndex {
+			addStat("arrkey_size_distribution", s.getArrKeySizeStats())
+		}
+		addStat("key_size_stats_since",
+			s.partnMaxInt64Stats(func(ss *IndexStats) int64 {
+				return ss.keySizeStatsSince.Value()
+			}))
+
 		// partition stats
 		addStat("frag_percent",
 			s.partnAvgInt64Stats(func(ss *IndexStats) int64 {
