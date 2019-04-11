@@ -21,8 +21,11 @@ import (
 	"github.com/couchbase/indexing/secondary/planner"
 	"github.com/couchbase/indexing/secondary/security"
 	"io"
+	"io/ioutil"
 	"math"
 	"net/http"
+	"os"
+	"path"
 	"sort"
 	"strconv"
 	"strings"
@@ -69,6 +72,7 @@ type LocalIndexMetadata struct {
 	IndexerId        string             `json:"indexerId,omitempty"`
 	NodeUUID         string             `json:"nodeUUID,omitempty"`
 	StorageMode      string             `json:"storageMode,omitempty"`
+	Timestamp        int64              `json:"timestamp,omitempty"`
 	LocalSettings    map[string]string  `json:"localSettings,omitempty"`
 	IndexTopologies  []IndexTopology    `json:"topologies,omitempty"`
 	IndexDefinitions []common.IndexDefn `json:"definitions,omitempty"`
@@ -126,6 +130,7 @@ type IndexStatus struct {
 	NumReplica   int                `json:"numReplica"`
 	IndexName    string             `json:"indexName"`
 	ReplicaId    int                `json:"replicaId"`
+	Stale        bool               `json:"stale"`
 }
 
 type indexStatusSorter []IndexStatus
@@ -145,8 +150,19 @@ const (
 
 type requestHandlerContext struct {
 	initializer sync.Once
+	finalizer   sync.Once
 	mgr         *IndexManager
 	clusterUrl  string
+
+	metaDir    string
+	statsDir   string
+	metaCh     chan map[string]*LocalIndexMetadata
+	statsCh    chan map[string]*common.Statistics
+	metaCache  map[string]*LocalIndexMetadata
+	statsCache map[string]*common.Statistics
+
+	mutex  sync.RWMutex
+	doneCh chan bool
 }
 
 var handlerContext requestHandlerContext
@@ -155,7 +171,7 @@ var handlerContext requestHandlerContext
 // Registration
 ///////////////////////////////////////////////////////
 
-func registerRequestHandler(mgr *IndexManager, clusterUrl string, mux *http.ServeMux) {
+func registerRequestHandler(mgr *IndexManager, clusterUrl string, mux *http.ServeMux, config common.Config) {
 
 	handlerContext.initializer.Do(func() {
 		defer func() {
@@ -177,10 +193,34 @@ func registerRequestHandler(mgr *IndexManager, clusterUrl string, mux *http.Serv
 		mux.HandleFunc("/settings/storageMode", handlerContext.handleIndexStorageModeRequest)
 		mux.HandleFunc("/settings/planner", handlerContext.handlePlannerRequest)
 		mux.HandleFunc("/listReplicaCount", handlerContext.handleListLocalReplicaCountRequest)
+		mux.HandleFunc("/getCachedLocalIndexMetadata", handlerContext.handleCachedLocalIndexMetadataRequest)
+		mux.HandleFunc("/getCachedStats", handlerContext.handleCachedStats)
+
+		cacheDir := path.Join(config["storage_dir"].String(), "cache")
+		handlerContext.metaDir = path.Join(cacheDir, "meta")
+		handlerContext.statsDir = path.Join(cacheDir, "stats")
+
+		os.MkdirAll(handlerContext.metaDir, 0755)
+		os.MkdirAll(handlerContext.statsDir, 0755)
+
+		handlerContext.metaCh = make(chan map[string]*LocalIndexMetadata, 100)
+		handlerContext.statsCh = make(chan map[string]*common.Statistics, 100)
+		handlerContext.doneCh = make(chan bool)
+
+		handlerContext.metaCache = make(map[string]*LocalIndexMetadata)
+		handlerContext.statsCache = make(map[string]*common.Statistics)
+
+		go handlerContext.runPersistor()
 	})
 
 	handlerContext.mgr = mgr
 	handlerContext.clusterUrl = clusterUrl
+}
+
+func (m *requestHandlerContext) Close() {
+	m.finalizer.Do(func() {
+		close(m.doneCh)
+	})
 }
 
 ///////////////////////////////////////////////////////
@@ -399,6 +439,8 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, bucket string
 	defns := make(map[common.IndexDefnId]common.IndexDefn)
 	list := make([]IndexStatus, 0)
 	failedNodes := make([]string, 0)
+	metaToCache := make(map[string]*LocalIndexMetadata)
+	statsToCache := make(map[string]*common.Statistics)
 
 	mergeCounter := func(defnId common.IndexDefnId, counter common.Counter) {
 		if current, ok := numReplicas[defnId]; ok {
@@ -422,46 +464,49 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, bucket string
 
 	for _, nid := range nids {
 
+		mgmtAddr, err := cinfo.GetServiceAddress(nid, "mgmt")
+		if err != nil {
+			logging.Errorf("RequestHandler::getIndexStatus: Error from GetServiceAddress (mgmt) for node id %v. Error = %v", nid, err)
+			continue
+		}
+
 		addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE)
 		if err == nil {
 
-			resp, err := getWithAuth(addr + "/getLocalIndexMetadata")
+			u, err := security.GetURL(addr)
 			if err != nil {
+				logging.Debugf("RequestHandler::getIndexStatus: Fail to parse URL %v", addr)
+				failedNodes = append(failedNodes, mgmtAddr)
+				continue
+			}
+
+			stale := false
+			metaToCache[u.Host] = nil
+			localMeta, latest, err := m.getLocalMetadataForNode(addr, u.Host, cinfo)
+			if localMeta == nil || err != nil {
 				logging.Debugf("RequestHandler::getIndexStatus: Error while retrieving %v with auth %v", addr+"/getLocalIndexMetadata", err)
-				failedNodes = append(failedNodes, addr)
-				continue
-			}
-			defer resp.Body.Close()
-
-			localMeta := new(LocalIndexMetadata)
-			status := convertResponse(resp, localMeta)
-			if status == RESP_ERROR {
-				logging.Debugf("RequestHandler::getIndexStatus: Error from convertResponse for localMeta: %v", err)
-				failedNodes = append(failedNodes, addr)
+				failedNodes = append(failedNodes, mgmtAddr)
 				continue
 			}
 
-			curl, err := cinfo.GetServiceAddress(nid, "mgmt")
-			if err != nil {
-				logging.Debugf("RequestHandler::getIndexStatus: Error from  GetServiceAddress (mgmt) for node id %v. Error = %v", nid, err)
-				failedNodes = append(failedNodes, addr)
-				continue
+			if !latest {
+				stale = true
+			} else {
+				metaToCache[u.Host] = localMeta
 			}
 
-			resp, err = getWithAuth(addr + "/stats?async=true")
-			if err != nil {
+			statsToCache[u.Host] = nil
+			stats, latest, err := m.getStatsForNode(addr, u.Host, cinfo)
+			if stats == nil || err != nil {
 				logging.Debugf("RequestHandler::getIndexStatus: Error while retrieving %v with auth %v", addr+"/stats?async=true", err)
-				failedNodes = append(failedNodes, addr)
+				failedNodes = append(failedNodes, mgmtAddr)
 				continue
 			}
-			defer resp.Body.Close()
 
-			stats := new(common.Statistics)
-			status = convertResponse(resp, stats)
-			if status == RESP_ERROR {
-				logging.Debugf("RequestHandler::getIndexStatus: Error from convertResponse for stats: %v", err)
-				failedNodes = append(failedNodes, addr)
-				continue
+			if !latest {
+				stale = true
+			} else {
+				statsToCache[u.Host] = stats
 			}
 
 			for _, defn := range localMeta.IndexDefinitions {
@@ -559,7 +604,7 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, bucket string
 
 							partitionMap := make(map[string][]int)
 							for _, partnDef := range instance.Partitions {
-								partitionMap[curl] = append(partitionMap[curl], int(partnDef.PartId))
+								partitionMap[mgmtAddr] = append(partitionMap[mgmtAddr], int(partnDef.PartId))
 							}
 
 							status := IndexStatus{
@@ -573,7 +618,7 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, bucket string
 								IndexType:    string(defn.Using),
 								Status:       stateStr,
 								Error:        errStr,
-								Hosts:        []string{curl},
+								Hosts:        []string{mgmtAddr},
 								Definition:   common.IndexStatement(defn, int(instance.NumPartitions), -1, true),
 								Completion:   completion,
 								Progress:     progress,
@@ -585,6 +630,7 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, bucket string
 								NumReplica:   int(defn.GetNumReplica()),
 								IndexName:    defn.Name,
 								ReplicaId:    int(instance.ReplicaId),
+								Stale:        stale,
 							}
 
 							list = append(list, status)
@@ -594,7 +640,7 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, bucket string
 			}
 		} else {
 			logging.Debugf("RequestHandler::getIndexStatus: Error from GetServiceAddress (indexHttp) for node id %v. Error = %v", nid, err)
-			failedNodes = append(failedNodes, addr)
+			failedNodes = append(failedNodes, mgmtAddr)
 			continue
 		}
 	}
@@ -613,6 +659,10 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, bucket string
 	if !getAll {
 		list = m.consolideIndexStatus(list)
 	}
+
+	// persist local meta and stats to disk cache
+	m.metaCh <- metaToCache
+	m.statsCh <- statsToCache
 
 	return list, failedNodes, nil
 }
@@ -639,6 +689,7 @@ func (m *requestHandlerContext) consolideIndexStatus(statuses []IndexStatus) []I
 			for host, partitions := range status.PartitionMap {
 				s2.PartitionMap[host] = partitions
 			}
+			s2.Stale = s2.Stale || status.Stale
 
 			statusMap[status.InstId] = s2
 		}
@@ -888,6 +939,8 @@ func (m *requestHandlerContext) getLocalIndexMetadata(creds cbauth.Creds, bucket
 	meta.StorageMode = string(common.StorageModeToIndexType(common.GetStorageMode()))
 	meta.LocalSettings = make(map[string]string)
 
+	meta.Timestamp = time.Now().UnixNano()
+
 	if exclude, err := m.mgr.GetLocalValue("excludeNode"); err == nil {
 		meta.LocalSettings["excludeNode"] = exclude
 	}
@@ -929,6 +982,67 @@ func (m *requestHandlerContext) getLocalIndexMetadata(creds cbauth.Creds, bucket
 	}
 
 	return meta, nil
+}
+
+///////////////////////////////////////////////////////
+// Cached LocalIndexMetadata and Stats
+///////////////////////////////////////////////////////
+
+func (m *requestHandlerContext) handleCachedLocalIndexMetadataRequest(w http.ResponseWriter, r *http.Request) {
+
+	creds, ok := doAuth(r, w)
+	if !ok {
+		return
+	}
+
+	host := r.FormValue("host")
+	host = strings.Trim(host, "\"")
+
+	meta, err := m.getLocalMetadataFromDisk(host)
+	if meta != nil && err == nil {
+		newMeta := *meta
+		newMeta.IndexDefinitions = make([]common.IndexDefn, 0, len(meta.IndexDefinitions))
+		newMeta.IndexTopologies = make([]IndexTopology, 0, len(meta.IndexTopologies))
+
+		for _, defn := range meta.IndexDefinitions {
+			permission := fmt.Sprintf("cluster.bucket[%s].n1ql.index!list", defn.Bucket)
+			if isAllowed(creds, []string{permission}, nil) {
+				newMeta.IndexDefinitions = append(newMeta.IndexDefinitions, defn)
+			}
+		}
+
+		for _, topology := range meta.IndexTopologies {
+			permission := fmt.Sprintf("cluster.bucket[%s].n1ql.index!list", topology.Bucket)
+			if isAllowed(creds, []string{permission}, nil) {
+				newMeta.IndexTopologies = append(newMeta.IndexTopologies, topology)
+			}
+		}
+
+		send(http.StatusOK, w, newMeta)
+
+	} else {
+		logging.Debugf("RequestHandler::handleCachedLocalIndexMetadataRequest: err %v", err)
+		sendHttpError(w, " Unable to retrieve index metadata", http.StatusInternalServerError)
+	}
+}
+
+func (m *requestHandlerContext) handleCachedStats(w http.ResponseWriter, r *http.Request) {
+
+	_, ok := doAuth(r, w)
+	if !ok {
+		return
+	}
+
+	host := r.FormValue("host")
+	host = strings.Trim(host, "\"")
+
+	stats, err := m.getIndexStatsFromDisk(host)
+	if stats != nil && err == nil {
+		send(http.StatusOK, w, stats)
+	} else {
+		logging.Debugf("RequestHandler::handleCachedLocalIndexMetadataRequest: err %v", err)
+		sendHttpError(w, " Unable to retrieve index metadata", http.StatusInternalServerError)
+	}
 }
 
 ///////////////////////////////////////////////////////
@@ -1367,4 +1481,474 @@ func (s indexStatusSorter) Less(i, j int) bool {
 	}
 
 	return s[i].Bucket < s[j].Bucket
+}
+
+///////////////////////////////////////////////////////
+// retrieve / persist cached local index metadata
+///////////////////////////////////////////////////////
+
+func (m *requestHandlerContext) getLocalMetadataForNode(addr string, host string, cinfo *common.ClusterInfoCache) (*LocalIndexMetadata, bool, error) {
+
+	meta, err := m.getLocalMetadataFromREST(addr, host)
+	if err == nil {
+		return meta, true, nil
+	}
+
+	if cinfo.GetClusterVersion() >= common.INDEXER_65_VERSION {
+		var latest *LocalIndexMetadata
+		nids := cinfo.GetNodesByServiceType(common.INDEX_HTTP_SERVICE)
+		for _, nid := range nids {
+			addr, err1 := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE)
+			if err1 == nil {
+				cached, err1 := m.getCachedLocalMetadataFromREST(addr, host)
+				if cached != nil && err1 == nil {
+					if latest == nil || cached.Timestamp > latest.Timestamp {
+						latest = cached
+					}
+				}
+			}
+		}
+
+		if latest != nil {
+			return latest, false, nil
+		}
+	}
+
+	return nil, false, err
+}
+
+func (m *requestHandlerContext) getLocalMetadataFromREST(addr string, hostname string) (*LocalIndexMetadata, error) {
+
+	resp, err := getWithAuth(addr + "/getLocalIndexMetadata")
+	defer func() {
+		if resp != nil && resp.Body != nil {
+			resp.Body.Close()
+		}
+	}()
+
+	if err == nil {
+		localMeta := new(LocalIndexMetadata)
+		if status := convertResponse(resp, localMeta); status == RESP_SUCCESS {
+
+			m.mutex.Lock()
+			filename := host2file(hostname)
+			if _, ok := m.metaCache[filename]; ok {
+				logging.Debugf("getLocalMetadataFromREST: remove metadata form in-memory cache %v", filename)
+				delete(m.metaCache, filename)
+			}
+			m.mutex.Unlock()
+
+			return localMeta, nil
+		}
+
+		err = fmt.Errorf("Fail to unmarshal response from %v", hostname)
+	}
+
+	return nil, err
+}
+
+func (m *requestHandlerContext) getCachedLocalMetadataFromREST(addr string, host string) (*LocalIndexMetadata, error) {
+
+	resp, err := getWithAuth(fmt.Sprintf("%v/getCachedLocalIndexMetadata?host=\"%v\"", addr, host))
+	defer func() {
+		if resp != nil && resp.Body != nil {
+			resp.Body.Close()
+		}
+	}()
+
+	if err == nil {
+		localMeta := new(LocalIndexMetadata)
+		if status := convertResponse(resp, localMeta); status == RESP_SUCCESS {
+			return localMeta, nil
+		}
+
+		err = fmt.Errorf("Fail to unmarshal response from %v", host)
+	}
+
+	return nil, err
+}
+
+func (m *requestHandlerContext) getLocalMetadataFromDisk(hostname string) (*LocalIndexMetadata, error) {
+
+	filename := host2file(hostname)
+
+	m.mutex.RLock()
+	if meta, ok := m.metaCache[filename]; ok && meta != nil {
+		logging.Debugf("getLocalMetadataFromDisk(): found metadata from in-memory cache %v", filename)
+		m.mutex.RUnlock()
+		return meta, nil
+	}
+	m.mutex.RUnlock()
+
+	filepath := path.Join(m.metaDir, filename)
+
+	content, err := ioutil.ReadFile(filepath)
+	if err != nil {
+		logging.Errorf("getLocalMetadataFromDisk(): fail to read metadata from file %v.  Error %v", filepath, err)
+		return nil, err
+	}
+
+	localMeta := new(LocalIndexMetadata)
+	if err := json.Unmarshal(content, localMeta); err != nil {
+		logging.Errorf("getLocalMetadataFromDisk(): fail to unmarshal metadata from file %v.  Error %v", filepath, err)
+		return nil, err
+	}
+
+	m.mutex.Lock()
+	logging.Debugf("getLocalMetadataFromDisk(): save metadata to in-memory cache %v", filename)
+	m.metaCache[filename] = localMeta
+	m.mutex.Unlock()
+
+	return localMeta, nil
+}
+
+func (m *requestHandlerContext) saveLocalMetadataToDisk(hostname string, meta *LocalIndexMetadata) error {
+
+	filename := host2file(hostname)
+	filepath := path.Join(m.metaDir, filename)
+	temp := path.Join(m.metaDir, filename+".tmp")
+
+	content, err := json.Marshal(meta)
+	if err != nil {
+		logging.Errorf("saveLocalMetadatasToDisk(): fail to marshal metadata to file %v.  Error %v", filepath, err)
+		return err
+	}
+
+	err = ioutil.WriteFile(temp, content, 0755)
+	if err != nil {
+		logging.Errorf("saveLocalMetadataToDisk(): fail to save metadata to file %v.  Error %v", temp, err)
+		return err
+	}
+
+	err = os.Rename(temp, filepath)
+	if err != nil {
+		logging.Errorf("saveLocalMetadataToDisk(): fail to rename metadata to file %v.  Error %v", filepath, err)
+		return err
+	}
+
+	logging.Debugf("saveLocalMetadataToDisk(): successfully written metadata to disk for %v", filename)
+
+	return nil
+}
+
+func (m *requestHandlerContext) cleanupLocalMetadataOnDisk(hostnames []string) {
+
+	filenames := make([]string, len(hostnames))
+	for i, hostname := range hostnames {
+		filenames[i] = host2file(hostname)
+	}
+
+	files, err := ioutil.ReadDir(m.metaDir)
+	if err != nil {
+		logging.Errorf("cleanupLocalMetadataOnDisk(): fail to read directory %v.  Error %v", m.metaDir, err)
+		return
+	}
+
+	for _, file := range files {
+		filename := file.Name()
+
+		found := false
+		for _, filename2 := range filenames {
+			if filename2 == filename {
+				found = true
+			}
+		}
+
+		if !found {
+			filepath := path.Join(m.metaDir, filename)
+			if err := os.RemoveAll(filepath); err != nil {
+				logging.Errorf("cleanupLocalMetadataOnDisk(): fail to remove file %v.  Error %v", filepath, err)
+			}
+
+			logging.Debugf("cleanupLocalMetadataOnDisk(): succesfully removing file %v from cache.", filepath)
+
+			m.mutex.Lock()
+			if _, ok := m.metaCache[filename]; ok {
+				logging.Debugf("cleanupMetadataFromDisk: remove metadata form in-memory cache %v", filename)
+				delete(m.metaCache, filename)
+			}
+			m.mutex.Unlock()
+		}
+	}
+}
+
+///////////////////////////////////////////////////////
+// retrieve / persist cached index stats
+///////////////////////////////////////////////////////
+
+func (m *requestHandlerContext) getStatsForNode(addr string, host string, cinfo *common.ClusterInfoCache) (*common.Statistics, bool, error) {
+
+	stats, err := m.getStatsFromREST(addr, host)
+	if err == nil {
+		return stats, true, nil
+	}
+
+	if cinfo.GetClusterVersion() >= common.INDEXER_65_VERSION {
+		var latest *common.Statistics
+		nids := cinfo.GetNodesByServiceType(common.INDEX_HTTP_SERVICE)
+		for _, nid := range nids {
+			addr, err1 := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE)
+			if err1 == nil {
+				cached, err1 := m.getCachedStatsFromREST(addr, host)
+				if cached != nil && err1 == nil {
+					if latest == nil {
+						latest = cached
+						continue
+					}
+
+					ts1 := latest.Get("timestamp")
+					if ts1 == nil {
+						latest = cached
+						continue
+					}
+
+					ts2 := cached.Get("timestamp")
+					if ts2 == nil {
+						continue
+					}
+
+					t1, ok1 := ts1.(float64)
+					t2, ok2 := ts2.(float64)
+
+					if ok1 && ok2 {
+						if t2 > t1 {
+							latest = cached
+						}
+					}
+				}
+			}
+		}
+
+		if latest != nil {
+			return latest, false, nil
+		}
+	}
+
+	return nil, false, err
+}
+
+func (m *requestHandlerContext) getStatsFromREST(addr string, hostname string) (*common.Statistics, error) {
+
+	resp, err := getWithAuth(addr + "/stats?async=true")
+	defer func() {
+		if resp != nil && resp.Body != nil {
+			resp.Body.Close()
+		}
+	}()
+
+	if err == nil {
+		stats := new(common.Statistics)
+		if status := convertResponse(resp, stats); status == RESP_SUCCESS {
+
+			m.mutex.Lock()
+			filename := host2file(hostname)
+			if _, ok := m.statsCache[filename]; ok {
+				logging.Debugf("getStatsFromREST: remove stats from in-memory cache %v", filename)
+				delete(m.statsCache, filename)
+			}
+			m.mutex.Unlock()
+
+			return stats, nil
+		}
+
+		err = fmt.Errorf("Fail to unmarshal response from %v", hostname)
+	}
+
+	return nil, err
+}
+
+func (m *requestHandlerContext) getCachedStatsFromREST(addr string, host string) (*common.Statistics, error) {
+
+	resp, err := getWithAuth(fmt.Sprintf("%v/getCachedStats?host=\"%v\"", addr, host))
+	defer func() {
+		if resp != nil && resp.Body != nil {
+			resp.Body.Close()
+		}
+	}()
+
+	if err == nil {
+		stats := new(common.Statistics)
+		if status := convertResponse(resp, stats); status == RESP_SUCCESS {
+			return stats, nil
+		}
+
+		err = fmt.Errorf("Fail to unmarshal response from %v", host)
+	}
+
+	return nil, err
+}
+
+func (m *requestHandlerContext) getIndexStatsFromDisk(hostname string) (*common.Statistics, error) {
+
+	filename := host2file(hostname)
+
+	m.mutex.RLock()
+	if stats, ok := m.statsCache[filename]; ok && stats != nil {
+		logging.Debugf("getIndexStatsFromDisk(): found stats from in-memory cache %v", filename)
+		m.mutex.RUnlock()
+		return stats, nil
+	}
+	m.mutex.RUnlock()
+
+	filepath := path.Join(m.statsDir, filename)
+
+	content, err := ioutil.ReadFile(filepath)
+	if err != nil {
+		logging.Errorf("getIndexStatsFromDisk(): fail to read stats from file %v.  Error %v", filepath, err)
+		return nil, err
+	}
+
+	stats := new(common.Statistics)
+	if err := json.Unmarshal(content, stats); err != nil {
+		logging.Errorf("getIndexStatsFromDisk(): fail to unmarshal stats from file %v.  Error %v", filepath, err)
+		return nil, err
+	}
+
+	m.mutex.Lock()
+	m.statsCache[filename] = stats
+	logging.Debugf("getIndexStatsFromDisk(): save stats to in-memory cache %v", filename)
+	m.mutex.Unlock()
+
+	return stats, nil
+}
+
+func (m *requestHandlerContext) saveIndexStatsToDisk(hostname string, stats *common.Statistics) error {
+
+	filename := host2file(hostname)
+	filepath := path.Join(m.statsDir, filename)
+	temp := path.Join(m.statsDir, filename+".tmp")
+
+	content, err := json.Marshal(stats)
+	if err != nil {
+		logging.Errorf("saveIndexStatsToDisk(): fail to marshal stats to file %v.  Error %v", filepath, err)
+		return err
+	}
+
+	err = ioutil.WriteFile(temp, content, 0755)
+	if err != nil {
+		logging.Errorf("saveIndexStatsToDisk(): fail to save stats to file %v.  Error %v", temp, err)
+		return err
+	}
+
+	err = os.Rename(temp, filepath)
+	if err != nil {
+		logging.Errorf("saveIndexStatsToDisk(): fail to rename stats to file %v.  Error %v", filepath, err)
+		return err
+	}
+
+	logging.Debugf("saveIndexStatsToDisk(): successfully written stats to disk for %v", filename)
+
+	return nil
+}
+
+func (m *requestHandlerContext) cleanupIndexStatsOnDisk(hostnames []string) {
+
+	filenames := make([]string, len(hostnames))
+	for i, hostname := range hostnames {
+		filenames[i] = host2file(hostname)
+	}
+
+	files, err := ioutil.ReadDir(m.statsDir)
+	if err != nil {
+		logging.Errorf("cleanupStatsOnDisk(): fail to read directory %v.  Error %v", m.statsDir, err)
+		return
+	}
+
+	for _, file := range files {
+		filename := file.Name()
+
+		found := false
+		for _, filename2 := range filenames {
+			if filename2 == filename {
+				found = true
+			}
+		}
+
+		if !found {
+			filepath := path.Join(m.statsDir, filename)
+			if err := os.RemoveAll(filepath); err != nil {
+				logging.Errorf("cleanupStatsOnDisk(): fail to remove file %v.  Error %v", filepath, err)
+			}
+
+			logging.Debugf("cleanupIndexStatsOnDisk(): succesfully removing file %v from cache.", filepath)
+
+			m.mutex.Lock()
+			if _, ok := m.statsCache[filename]; ok {
+				logging.Debugf("cleanupStatsOnDisk: remove stats from in-memory cache %v", filename)
+				delete(m.statsCache, filename)
+			}
+			m.mutex.Unlock()
+		}
+	}
+}
+
+///////////////////////////////////////////////////////
+// persistor
+///////////////////////////////////////////////////////
+
+func (m *requestHandlerContext) runPersistor() {
+
+	updateMeta := func(v map[string]*LocalIndexMetadata) {
+		hostnames := make([]string, 0, len(v))
+
+		for host, meta := range v {
+			if meta != nil {
+				m.saveLocalMetadataToDisk(host, meta)
+			}
+			hostnames = append(hostnames, host)
+		}
+
+		m.cleanupLocalMetadataOnDisk(hostnames)
+	}
+
+	updateStats := func(v map[string]*common.Statistics) {
+		hostnames := make([]string, 0, len(v))
+
+		for host, stats := range v {
+			if stats != nil {
+				m.saveIndexStatsToDisk(host, stats)
+			}
+			hostnames = append(hostnames, host)
+		}
+
+		m.cleanupIndexStatsOnDisk(hostnames)
+	}
+
+	for {
+		select {
+		case v, ok := <-m.metaCh:
+			if !ok {
+				return
+			}
+
+			for len(m.metaCh) > 0 {
+				v = <-m.metaCh
+			}
+
+			updateMeta(v)
+
+		case v, ok := <-m.statsCh:
+			if !ok {
+				return
+			}
+
+			for len(m.statsCh) > 0 {
+				v = <-m.statsCh
+			}
+
+			updateStats(v)
+
+		case <-m.doneCh:
+			logging.Infof("request_handler persistor exits")
+			return
+		}
+	}
+}
+
+func host2file(hostname string) string {
+
+	hostname = strings.Replace(hostname, ".", "_", -1)
+	hostname = strings.Replace(hostname, ":", "_", -1)
+
+	return hostname
 }
