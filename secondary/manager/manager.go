@@ -213,9 +213,9 @@ func NewIndexManager(requestAddr string,
 }
 */
 
-func (mgr *IndexManager) RegisterRestEndpoints(mux *http.ServeMux) {
+func (mgr *IndexManager) RegisterRestEndpoints(mux *http.ServeMux, config common.Config) {
 	// register request handler
-	registerRequestHandler(mgr, mgr.clusterURL, mux)
+	registerRequestHandler(mgr, mgr.clusterURL, mux, config)
 }
 
 func (mgr *IndexManager) StartCoordinator(config string) {
