@@ -43,26 +43,10 @@ func getEncodedDatum(code []byte) (datum []byte, remaining []byte) {
 func getEncodedString(code []byte) ([]byte, []byte, error) {
 	for i := 0; i < len(code); i++ {
 		x := code[i]
-		if x == Terminator {
+		if x == Terminator || x == ^Terminator {
 			i++
 			switch x = code[i]; x {
-			case TerminatorSuffix:
-				//keep moving
-			case Terminator:
-				if i == (len(code)) {
-					return nil, nil, nil
-				}
-				return code[:i+1], code[i+1:], nil
-			default:
-				return nil, nil, ErrorSuffixDecoding
-			}
-			continue
-		} else if x == ^Terminator {
-			i++
-			switch x = code[i]; x {
-			case ^TerminatorSuffix:
-				//keep moving
-			case ^Terminator:
+			case Terminator, ^Terminator:
 				if i == (len(code)) {
 					return nil, nil, nil
 				}

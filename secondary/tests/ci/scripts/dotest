@@ -80,11 +80,6 @@ collect_logs() {
   tar -C $WORKSPACE --transform "s/^/logs-$phase-/" -uf $WORKSPACE/logs.tar run.log 1>/dev/null 2>&1
 }
 
-setUsernamePassword() {
-   export Username=$(grep -E -o ".Username\":.{0,20}" ../config/buildtest_$STORAGE.json | awk '{print $2}' | cut -d'"' -f2)
-   export Password=$(grep -E -o ".Password\":.{0,20}" ../config/buildtest_$STORAGE.json | awk '{print $2}' | cut -d'"' -f2)
-}
-
 error_email() {
   if [ ! -f ~/.cigreen ]; then return; fi
   rm ~/.cigreen
@@ -189,18 +184,12 @@ export phase=functional
 if [[ "$MODE" == *"$phase"* ]]; then
   stop_cluster
   start_cluster
-  setUsernamePassword
-  export CBAUTH_REVRPC_URL="http://$Username:$Password@127.0.0.1:9000/query"
+  export CBAUTH_REVRPC_URL="http://Administrator:asdasd@127.0.0.1:9000/query"
   echo "</pre><h4>Functional tests</h4><pre>"
   cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/tests/functionaltests
   go test -timeout 4h -v -cbconfig ../config/buildtest_$STORAGE.json -useclient n1ql 2>&1 | tee -a $WORKSPACE/test.log
-  echo "Indexer Go routine dump logged in $WORKSPACE/ns_server/logs/n_1/indexer_pprof1.log"
-  curl http://$Username:$Password@127.0.0.1:9108/debug/pprof/goroutine?debug=1 > $WORKSPACE/ns_server/logs/n_1/indexer_functests_pprof.log
-
   cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/tests/largedatatests
   go test -timeout 8h -v -cbconfig ../config/buildtest_$STORAGE.json -useclient n1ql 2>&1 | tee -a $WORKSPACE/test.log
-  echo "Indexer Go routine dump logged in $WORKSPACE/ns_server/logs/n_1/indexer_pprof2.log"
-  curl http://$Username:$Password@127.0.0.1:9108/debug/pprof/goroutine?debug=1 > $WORKSPACE/ns_server/logs/n_1/indexer_largedata_pprof.log
   collect_logs
   stop_cluster
 fi

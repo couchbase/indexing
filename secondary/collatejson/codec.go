@@ -501,9 +501,7 @@ func suffixEncodeString(s []byte, code []byte) []byte {
 	for _, x := range text {
 		code = append(code, x)
 		if x == Terminator {
-			code = append(code, TerminatorSuffix)
-		} else if x == ^Terminator {
-			code = append(code, ^TerminatorSuffix)
+			code = append(code, 1)
 		}
 	}
 	code = append(code, Terminator)
@@ -516,7 +514,7 @@ func suffixDecodeString(code []byte, text []byte) ([]byte, []byte, error) {
 		if x == Terminator {
 			i++
 			switch x = code[i]; x {
-			case TerminatorSuffix:
+			case 1:
 				text = append(text, 0)
 			case Terminator:
 				if i == (len(code) - 1) {
@@ -525,23 +523,6 @@ func suffixDecodeString(code []byte, text []byte) ([]byte, []byte, error) {
 				return text, code[i+1:], nil
 			default:
 				return nil, nil, ErrorSuffixDecoding
-			}
-			continue
-		} else if x == ^Terminator {
-			switch x = code[i+1]; x {
-			case ^TerminatorSuffix:
-				i++ //skip the suffix
-				text = append(text, ^Terminator)
-			case ^Terminator:
-				i++ //skip the terminator
-				if i == (len(code) - 1) {
-					return text, nil, nil
-				}
-				return text, code[i+1:], nil
-			default:
-				//support single ^terminator
-				//for backward compatibility
-				text = append(text, ^Terminator)
 			}
 			continue
 		}

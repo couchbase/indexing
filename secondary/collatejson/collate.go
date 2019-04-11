@@ -80,8 +80,6 @@ const (
 	TypeObj
 )
 
-const TerminatorSuffix byte = 1
-
 // Codec structure
 type Codec struct {
 	arrayLenPrefix    bool        // if true, first sort arrays based on its length
@@ -1192,8 +1190,6 @@ func getStringDatum(code []byte) ([]byte, []byte, error) {
 		if x == Terminator {
 			i++
 			switch x = code[i]; x {
-			case TerminatorSuffix:
-				//keep moving
 			case Terminator:
 				if i == (len(code)) {
 					return nil, nil, nil

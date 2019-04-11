@@ -616,7 +616,6 @@ func (is IndexerStats) GetStats(getPartition bool, skipEmpty bool) common.Statis
 		}
 	}
 
-	addStat("timestamp", fmt.Sprintf("%v", time.Now().UnixNano()))
 	addStat("uptime", fmt.Sprintf("%s", time.Since(uptime)))
 	addStat("num_connections", is.numConnections.Value())
 	addStat("index_not_found_errcount", is.notFoundError.Value())
