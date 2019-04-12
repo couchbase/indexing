@@ -180,7 +180,7 @@ if [[ "$MODE" == *"$phase"* ]]; then
   GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
 
   cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/indexer
-  GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
+  GOMAXPROCS=16 go test -vet=off -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
 
   cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/queryport/client
   GOMAXPROCS=16 go test -timeout 15m -v 2>&1 | tee -a $WORKSPACE/test.log
