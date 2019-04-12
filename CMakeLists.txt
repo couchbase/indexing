@@ -65,16 +65,19 @@ GoInstall (TARGET cbindex PACKAGE github.com/couchbase/indexing/secondary/cmd/cb
   GOPATH "${PROJECT_SOURCE_DIR}/../../../.." "${GODEPSDIR}"
   GOTAGS "${TAGS}"
   CGO_INCLUDE_DIRS "${CGO_INCLUDE_DIRS}"
+  CGO_LIBRARY_DIRS "${CGO_LIBRARY_DIRS}"
   LDFLAGS "${LDFLAGS}"
   INSTALL_PATH bin
-  GOVERSION 1.7.6)
+  GOVERSION 1.11.4)
 
 GoInstall (TARGET cbindexperf PACKAGE github.com/couchbase/indexing/secondary/cmd/cbindexperf
   GOPATH "${PROJECT_SOURCE_DIR}/../../../.." "${GODEPSDIR}"
+  CGO_INCLUDE_DIRS "${CGO_INCLUDE_DIRS}"
+  CGO_LIBRARY_DIRS "${CGO_LIBRARY_DIRS}"
   GOTAGS "${TAGS}"
   LDFLAGS "${LDFLAGS}"
   INSTALL_PATH bin
-  GOVERSION 1.7.6)
+  GOVERSION 1.11.4)
 
 GoInstall (TARGET cbindexplan PACKAGE github.com/couchbase/indexing/secondary/cmd/cbindexplan
   GOPATH "${PROJECT_SOURCE_DIR}/../../../.." "${GODEPSDIR}"
@@ -84,5 +87,5 @@ GoInstall (TARGET cbindexplan PACKAGE github.com/couchbase/indexing/secondary/cm
   GOTAGS "${TAGS}"
   LDFLAGS "${LDFLAGS}"
   INSTALL_PATH bin OUTPUT cbindexplan
-  GOVERSION 1.7.6)
+  GOVERSION 1.11.4)
 
