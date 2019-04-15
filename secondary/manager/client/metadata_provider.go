@@ -46,6 +46,7 @@ type Settings interface {
 	NumReplica() int32
 	NumPartition() int32
 	StorageMode() string
+	UsePlanner() bool
 }
 
 ///////////////////////////////////////////////////////
@@ -380,7 +381,7 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 	}
 
 	clusterVersion := o.GetClusterVersion()
-	if clusterVersion < c.INDEXER_55_VERSION {
+	if clusterVersion < c.INDEXER_55_VERSION || (!o.settings.UsePlanner() && !c.IsPartitioned(idxDefn.PartitionScheme)) {
 		if err := o.createIndex(idxDefn, plan); err != nil {
 			return c.IndexDefnId(0), err, false
 		}
@@ -804,6 +805,8 @@ func (o *MetadataProvider) createLayoutWithRoundRobin(idxDefn *c.IndexDefn, inde
 // This function create index using old protocol (spock).
 //
 func (o *MetadataProvider) createIndex(idxDefn *c.IndexDefn, plan map[string]interface{}) error {
+
+	logging.Infof("Using old protocol for create index")
 
 	// For non-partitioned index, this will return nodes with fewest indexes.  The number of nodes match the number of replica.
 	// For partitioned index, it return all healthy nodes.

@@ -28,6 +28,7 @@ type ClientSettings struct {
 	prune_replica  int32
 	queueSize      uint64
 	concurrency    uint32
+	usePlanner     uint32
 	config         common.Config
 	cancelCh       chan struct{}
 
@@ -173,6 +174,19 @@ func (s *ClientSettings) handleSettings(config common.Config) {
 		atomic.StoreUint32(&s.allowCJsonScanFormat, 1)
 	}
 
+	usePlanner, ok := config["queryport.client.usePlanner"]
+	if ok {
+		if usePlanner.Bool() {
+			atomic.StoreUint32(&s.usePlanner, 1)
+		} else {
+			atomic.StoreUint32(&s.usePlanner, 0)
+		}
+	} else {
+		// Use default config value on error
+		logging.Errorf("ClientSettings: missing usePlanner")
+		atomic.StoreUint32(&s.usePlanner, 1)
+	}
+
 	storageMode := config["indexer.settings.storage_mode"].String()
 	if len(storageMode) != 0 {
 		func() {
@@ -235,4 +249,8 @@ func (s *ClientSettings) MaxConcurrency() uint32 {
 
 func (s *ClientSettings) AllowCJsonScanFormat() bool {
 	return atomic.LoadUint32(&s.allowCJsonScanFormat) == 1
+}
+
+func (s *ClientSettings) UsePlanner() bool {
+	return atomic.LoadUint32(&s.usePlanner) == 1
 }

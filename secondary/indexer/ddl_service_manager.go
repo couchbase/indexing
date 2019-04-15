@@ -1522,6 +1522,10 @@ func (s *ddlSettings) StorageMode() string {
 	return s.storageMode
 }
 
+func (s *ddlSettings) UsePlanner() bool {
+	return true
+}
+
 func (s *ddlSettings) handleSettings(config common.Config) {
 
 	numReplica := int32(config["settings.num_replica"].Int())
