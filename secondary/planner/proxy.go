@@ -32,6 +32,7 @@ type LocalIndexMetadata struct {
 	IndexerId        string             `json:"indexerId,omitempty"`
 	NodeUUID         string             `json:"nodeUUID,omitempty"`
 	StorageMode      string             `json:"storageMode,omitempty"`
+	Timestamp        int64              `json:"timestamp,omitempty"`
 	LocalSettings    map[string]string  `json:"localSettings,omitempty"`
 	IndexTopologies  []mc.IndexTopology `json:"topologies,omitempty"`
 	IndexDefinitions []common.IndexDefn `json:"definitions,omitempty"`

@@ -416,6 +416,7 @@ func (feed *DcpFeed) doDcpGetFailoverLog(
 				logging.Errorf(fmsg, feed.logPrefix, opaque, err)
 				return err
 			}
+			feed.stats.LastMsgSend = time.Now().UnixNano()
 
 			var ok bool
 			msg, ok = <-rcvch
@@ -482,6 +483,7 @@ func (feed *DcpFeed) doDcpGetSeqnos(
 		logging.Errorf(fmsg, feed.logPrefix, rq.Opaque, err)
 		return nil, err
 	}
+	feed.stats.LastMsgSend = time.Now().UnixNano()
 	msg, ok := <-rcvch
 	if !ok {
 		fmsg := "%v ##%x doDcpGetSeqnos.rcvch closed"
@@ -540,6 +542,7 @@ func (feed *DcpFeed) doDcpOpen(
 	if err := feed.conn.Transmit(rq); err != nil {
 		return err
 	}
+	feed.stats.LastMsgSend = time.Now().UnixNano()
 	msg, ok := <-rcvch
 	if !ok {
 		logging.Errorf("%v ##%x doDcpOpen.rcvch closed", prefix, opaque)
@@ -581,6 +584,7 @@ func (feed *DcpFeed) doDcpOpen(
 			logging.Errorf(fmsg, prefix, opaque, err)
 			return err
 		}
+		feed.stats.LastMsgSend = time.Now().UnixNano()
 		msg, ok := <-rcvch
 		if !ok {
 			fmsg := "%v ##%x doDcpOpen.DCP_CONTROL.rcvch (connection_buffer_size) closed"
@@ -621,6 +625,7 @@ func (feed *DcpFeed) doDcpOpen(
 			logging.Errorf(fmsg, prefix, opaque, err)
 			return err
 		}
+		feed.stats.LastMsgSend = time.Now().UnixNano()
 		logging.Infof("%v ##%x sending enable_noop", prefix, opaque)
 		msg, ok := <-rcvch
 		if !ok {
@@ -654,6 +659,7 @@ func (feed *DcpFeed) doDcpOpen(
 			logging.Errorf(fmsg, prefix, opaque, err)
 			return err
 		}
+		feed.stats.LastMsgSend = time.Now().UnixNano()
 		logging.Infof("%v ##%x sending set_noop_interval", prefix, opaque)
 		msg, ok := <-rcvch
 		if !ok {
@@ -710,6 +716,7 @@ func (feed *DcpFeed) doDcpRequestStream(
 		logging.Errorf(fmsg, prefix, opaqueMSB, err)
 		return err
 	}
+	feed.stats.LastMsgSend = time.Now().UnixNano()
 	stream := &DcpStream{
 		AppOpaque: opaqueMSB,
 		Vbucket:   vbno,
@@ -746,6 +753,7 @@ func (feed *DcpFeed) doDcpCloseStream(vbno, opaqueMSB uint16) error {
 		return err
 	}
 
+	feed.stats.LastMsgSend = time.Now().UnixNano()
 	return nil
 }
 
@@ -831,6 +839,7 @@ func (feed *DcpFeed) sendBufferAck(sendAck bool, bytes uint32) {
 					// Reset the counters only on a successful BufferAck
 					feed.toAckBytes = 0
 					feed.lastAckTime = time.Now()
+					feed.stats.LastMsgSend = feed.lastAckTime.UnixNano()
 					feed.stats.LastAckTime = feed.lastAckTime.UnixNano()
 					logging.Tracef("%v buffer-ack %v, lastAckTime: %v\n", prefix, totalBytes, feed.lastAckTime.UnixNano())
 				}
@@ -1004,17 +1013,35 @@ type DcpStats struct {
 	TotalCloseStream   uint64
 	TotalStreamEnd     uint64
 	TotalSpurious      uint64
-	LastAckTime        int64
+
+	// Last memcached communication times
+	LastAckTime  int64
+	LastNoopSend int64
+	LastNoopRecv int64
+	LastMsgSend  int64
+	LastMsgRecv  int64
 }
 
 func (stats *DcpStats) String(feed *DcpFeed) string {
+	now := time.Now()
+	getTimeDur := func(t int64) time.Duration {
+		if t == 0 {
+			return time.Duration(0 * time.Second)
+		}
+		return now.Sub(time.Unix(0, t))
+	}
+
 	return fmt.Sprintf(
 		"bytes: %v buffacks: %v toAckBytes: %v streamreqs: %v "+
 			"snapshots: %v mutations: %v streamends: %v closestreams: %v "+
-			"lastAckTime: %v",
+			"lastAckTime: %v LastNoopSend: %v LastNoopRecv: %v "+
+			"LastMsgSend: %v LastMsgRecv: %v",
 		stats.TotalBytes, stats.TotalBufferAckSent, feed.toAckBytes,
 		stats.TotalStreamReq, stats.TotalSnapShot, stats.TotalMutation,
-		stats.TotalStreamEnd, stats.TotalCloseStream, stats.LastAckTime,
+		stats.TotalStreamEnd, stats.TotalCloseStream,
+		getTimeDur(stats.LastAckTime), getTimeDur(stats.LastNoopSend),
+		getTimeDur(stats.LastNoopRecv), getTimeDur(stats.LastMsgSend),
+		getTimeDur(stats.LastMsgRecv),
 	)
 }
 
@@ -1141,9 +1168,13 @@ loop:
 			break loop
 		}
 
+		now := time.Now().UnixNano()
+		feed.stats.LastMsgRecv = now
+
 		// Immediately respond to NOOP and listen for next message.
 		// NOOPs are not accounted for buffer-ack.
 		if pkt.Opcode == transport.DCP_NOOP {
+			feed.stats.LastNoopRecv = now
 			noop := &transport.MCResponse{
 				Opcode: transport.DCP_NOOP, Opaque: pkt.Opaque,
 			}
@@ -1156,6 +1187,9 @@ loop:
 				if err := feed.conn.TransmitResponse(noop); err != nil {
 					logging.Errorf("%v NOOP.Transmit(): %v", feed.logPrefix, err)
 				} else {
+					now = time.Now().UnixNano()
+					feed.stats.LastNoopSend = now
+					feed.stats.LastMsgSend = now
 					fmsg := "%v responded to NOOP ok ...\n"
 					logging.Tracef(fmsg, feed.logPrefix)
 				}
