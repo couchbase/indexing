@@ -1447,7 +1447,8 @@ func (s *statsManager) getStorageStats() string {
 		if i > 0 {
 			result += ","
 		}
-		result += fmt.Sprintf("{\n\"Index\": \"%s:%s\", \"Id\": %d,\n", sts.Bucket, sts.Name, sts.InstId)
+		result += fmt.Sprintf("{\n\"Index\": \"%s:%s\", \"Id\": %d, \"PartitionId\": %d,\n",
+			sts.Bucket, sts.Name, sts.InstId, sts.PartnId)
 		result += fmt.Sprintf("\"Stats\":\n")
 		for _, data := range sts.GetInternalData() {
 			result += data

@@ -153,10 +153,10 @@ func (b *metadataClient) Nodes() ([]*IndexerService, error) {
 	nodes := make(map[string]*IndexerService)
 	for indexerID := range currmeta.topology {
 		if indexerID != common.INDEXER_ID_NIL {
-			a, q, _, err := b.mdClient.FindServiceForIndexer(indexerID)
+			a, q, h, err := b.mdClient.FindServiceForIndexer(indexerID)
 			if err == nil {
 				nodes[a] = &IndexerService{
-					Adminport: a, Queryport: q, Status: "initial",
+					Adminport: a, Httpport: h, Queryport: q, Status: "initial",
 				}
 			}
 		}
@@ -1934,4 +1934,9 @@ func (b *metadataClient) watchClusterChanges() {
 func postWithAuth(url string, bodyType string, body io.Reader, timeout time.Duration) (*http.Response, error) {
 	params := &security.RequestParams{Timeout: time.Duration(timeout) * time.Second}
 	return security.PostWithAuth(url, bodyType, body, params)
+}
+
+func getWithAuth(url string) (*http.Response, error) {
+	params := &security.RequestParams{Timeout: time.Duration(10) * time.Second}
+	return security.GetWithAuth(url, params)
 }

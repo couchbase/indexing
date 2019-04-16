@@ -1281,7 +1281,10 @@ func (mdb *memdbSlice) Statistics() (StorageStatistics, error) {
 			ntMemUsed += mdb.back[i].MemoryInUse()
 		}
 	}
-
+	internalData = append(internalData, ",\n")
+	internalData = append(internalData, fmt.Sprintf(`"data_size": %v`, mdb.mainstore.MemoryInUse()))
+	internalData = append(internalData, ",\n")
+	internalData = append(internalData, fmt.Sprintf(`"items_count": %v`, mdb.mainstore.ItemsCount()))
 	internalData = append(internalData, "\n}")
 
 	sts.InternalData = internalData
