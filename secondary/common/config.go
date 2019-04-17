@@ -189,13 +189,6 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
-	"projector.kvstatTick": ConfigValue{
-		1 * 60 * 1000, // 1 minute
-		"tick, in milliseconds, to log kvdata statistics",
-		1 * 60 * 1000, // 1 minute
-		false,         // mutable
-		false,         // case-insensitive
-	},
 	"projector.watchInterval": ConfigValue{
 		5 * 60 * 1000, // 5 minutes
 		"periodic tick, in milli-seconds to check for stale feeds, " +
@@ -375,12 +368,19 @@ var SystemConfig = Config{
 		true,        // immutable
 		false,       // case-insensitive
 	},
-	"projector.dataport.statTick": ConfigValue{
-		1 * 60 * 1000, // 1 minute
-		"tick, in milliseconds, to log endpoint statistics",
-		1 * 60 * 1000, // 1 minute
-		false,         // mutable
-		false,         // case-insensitive
+	"projector.statsLogDumpInterval": ConfigValue{
+		60, // 1 minute
+		"in seconds, periodically log stats of all projector components",
+		60,    // 1 minute
+		false, // mutable
+		false, // case-insensitive
+	},
+	"projector.vbseqnosLogInterval": ConfigValue{
+		300, // 5 minutes
+		"in seconds, periodically log vbseqnos at KVData",
+		300,   // 5 minutes
+		false, // mutable
+		false, // case-insensitive
 	},
 	"projector.gogc": ConfigValue{
 		100, // 100 percent

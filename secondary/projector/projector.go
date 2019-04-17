@@ -45,6 +45,12 @@ type Projector struct {
 	keyFile              string
 	reqch                chan ap.Request
 	enableSecurityChange chan bool
+	//Statistics
+	stats       *ProjectorStats
+	statsMgr    *statsManager
+	statsCmdCh  chan []interface{}
+	statsStopCh chan bool
+	statsMutex  sync.RWMutex
 }
 
 // NewProjector creates a news projector instance and
@@ -58,6 +64,8 @@ func NewProjector(maxvbs int, config c.Config, certFile string, keyFile string) 
 		certFile:             certFile,
 		keyFile:              keyFile,
 		enableSecurityChange: make(chan bool),
+		statsCmdCh:           make(chan []interface{}, 1),
+		statsStopCh:          make(chan bool, 1),
 	}
 
 	// Setup dynamic configuration propagation
@@ -70,6 +78,10 @@ func NewProjector(maxvbs int, config c.Config, certFile string, keyFile string) 
 	p.adminport = pconfig["adminport.listenAddr"].String()
 	ef := config["projector.routerEndpointFactory"]
 	config["projector.routerEndpointFactory"] = ef
+
+	p.stats = NewProjectorStats()
+	p.statsMgr = NewStatsManager(p.statsCmdCh, p.statsStopCh, config)
+	p.UpdateStatsMgr(p.stats.Clone())
 
 	p.config = config
 	p.ResetConfig(config)
@@ -161,6 +173,14 @@ func (p *Projector) ResetConfig(config c.Config) {
 	if cv, ok := config["projector.memstatTick"]; ok {
 		c.Memstatch <- int64(cv.Int())
 	}
+	if cv, ok := config["projector.statsLogDumpInterval"]; ok {
+		value := cv.Int()
+		p.statsCmdCh <- []interface{}{STATS_LOG_INTERVAL_UPDATE, value}
+	}
+	if cv, ok := config["projector.vbseqnosLogInterval"]; ok {
+		value := cv.Int()
+		p.statsCmdCh <- []interface{}{VBSEQNOS_LOG_INTERVAL_UPDATE, value}
+	}
 	p.config = p.config.Override(config)
 
 	// CPU-profiling
@@ -216,6 +236,7 @@ func (p *Projector) GetFeedConfig() c.Config {
 
 	config, _ := c.NewConfig(map[string]interface{}{})
 	config["clusterAddr"] = p.config["clusterAddr"] // copy by value.
+	config["maxVbuckets"] = p.config["maxVbuckets"]
 	pconfig := p.config.SectionConfig("projector.", true /*trim*/)
 	for _, key := range FeedConfigParams() {
 		config.Set(key, pconfig[key])
@@ -290,6 +311,29 @@ func (p *Projector) DelFeed(topic string) (err error) {
 		logging.Infof(fmsg, p.logPrefix, opaque, time.Since(now))
 	}()
 	return
+}
+
+func (p *Projector) UpdateStats(topic string, feed *Feed) {
+	feedStats := feed.GetStats()
+
+	p.statsMutex.Lock()
+	if feedStats != nil {
+		p.stats.feedStats[topic] = feedStats
+	} else {
+		// Feed is closed
+		delete(p.stats.feedStats, topic)
+	}
+
+	clonedStats := p.stats.Clone()
+	p.statsMutex.Unlock()
+
+	p.UpdateStatsMgr(clonedStats)
+
+}
+
+func (p *Projector) UpdateStatsMgr(clone *ProjectorStats) {
+	msg := []interface{}{UPDATE_STATS_MAP, clone}
+	p.statsCmdCh <- msg
 }
 
 //---- handler for admin-port request
@@ -427,6 +471,7 @@ func (p *Projector) doMutationTopic(
 	if err != nil {
 		response.SetErr(err)
 	}
+	p.UpdateStats(topic, feed)
 	p.AddFeed(topic, feed)
 	return response
 }
@@ -460,6 +505,7 @@ func (p *Projector) doRestartVbuckets(
 
 	response, err := feed.RestartVbuckets(request, opaque)
 	if err == nil {
+		p.UpdateStats(topic, feed)
 		return response
 	}
 	return response.SetErr(err)
@@ -489,6 +535,7 @@ func (p *Projector) doShutdownVbuckets(
 	}
 
 	err = feed.ShutdownVbuckets(request, opaque)
+	p.UpdateStats(topic, feed)
 	return protobuf.NewError(err)
 }
 
@@ -520,6 +567,7 @@ func (p *Projector) doAddBuckets(
 
 	response, err := feed.AddBuckets(request, opaque)
 	if err == nil {
+		p.UpdateStats(topic, feed)
 		return response
 	}
 	return response.SetErr(err)
@@ -548,6 +596,7 @@ func (p *Projector) doDelBuckets(
 	}
 
 	err = feed.DelBuckets(request, opaque)
+	p.UpdateStats(topic, feed)
 	return protobuf.NewError(err)
 }
 
@@ -575,6 +624,7 @@ func (p *Projector) doAddInstances(
 	if err != nil {
 		response.SetErr(err)
 	}
+	p.UpdateStats(topic, feed)
 	return response
 }
 
@@ -598,6 +648,7 @@ func (p *Projector) doDelInstances(
 	}
 
 	err = feed.DelInstances(request, opaque)
+	p.UpdateStats(topic, feed)
 	return protobuf.NewError(err)
 }
 
@@ -622,6 +673,7 @@ func (p *Projector) doRepairEndpoints(
 	}
 
 	err = feed.RepairEndpoints(request, opaque)
+	p.UpdateStats(topic, feed)
 	return protobuf.NewError(err)
 }
 
@@ -647,6 +699,14 @@ func (p *Projector) doShutdownTopic(
 
 	p.DelFeed(topic)
 	err = feed.Shutdown(opaque)
+	if err == nil {
+		p.statsMutex.Lock()
+		delete(p.stats.feedStats, topic)
+		clonedStats := p.stats.Clone()
+		p.statsMutex.Unlock()
+
+		p.UpdateStatsMgr(clonedStats)
+	}
 	return protobuf.NewError(err)
 }
 

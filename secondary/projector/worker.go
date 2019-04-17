@@ -28,6 +28,7 @@ import mcd "github.com/couchbase/indexing/secondary/dcp/transport"
 import mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
 import c "github.com/couchbase/indexing/secondary/common"
 import "github.com/couchbase/indexing/secondary/logging"
+import "github.com/couchbase/indexing/secondary/stats"
 import "os"
 
 // VbucketWorker is immutable structure defined for each vbucket.
@@ -53,6 +54,19 @@ type VbucketWorker struct {
 
 	encodeBuf []byte
 	meta      map[string]interface{}
+	stats     *WorkerStats
+}
+
+type WorkerStats struct {
+	datachLen stats.Uint64Val
+
+	// Number of mutations consumed from this worker
+	outgoingMut stats.Uint64Val
+}
+
+func (stats *WorkerStats) Init() {
+	stats.datachLen.Init()
+	stats.outgoingMut.Init()
 }
 
 // NewVbucketWorker creates a new routine to handle this vbucket stream.
@@ -78,7 +92,9 @@ func NewVbucketWorker(
 		datach:    make(chan []interface{}, mutChanSize),
 		finch:     make(chan bool),
 		encodeBuf: make([]byte, 0, encodeBufSize),
+		stats:     &WorkerStats{},
 	}
+	worker.stats.Init()
 	fmsg := "WRKR[%v<-%v<-%v #%v]"
 	worker.logPrefix = fmt.Sprintf(fmsg, id, bucket, feed.cluster, feed.topic)
 	worker.mutChanSize = mutChanSize
@@ -206,9 +222,11 @@ loop:
 	for {
 		select {
 		case msg := <-datach:
+			worker.stats.datachLen.Set(uint64(len(datach)))
 			cmd := msg[0].(byte)
 			switch cmd {
 			case vwCmdEvent:
+				worker.stats.outgoingMut.Add(1)
 				m := msg[1].(*mc.DcpEvent)
 				v := worker.handleEvent(m)
 				if v == nil {

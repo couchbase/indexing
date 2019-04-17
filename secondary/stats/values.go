@@ -26,8 +26,38 @@ func (v Int64Val) MarshalJSON() ([]byte, error) {
 	return []byte(fmt.Sprint(value)), nil
 }
 
+func (v *Int64Val) CAS(old, new int64) bool {
+	return atomic.CompareAndSwapInt64(v.val, old, new)
+}
+
 func (v Int64Val) Value() int64 {
 	value := atomic.LoadInt64(v.val)
+	return value
+}
+
+type Uint64Val struct {
+	val *uint64
+}
+
+func (v *Uint64Val) Init() {
+	v.val = new(uint64)
+}
+
+func (v *Uint64Val) Add(delta uint64) {
+	atomic.AddUint64(v.val, delta)
+}
+
+func (v *Uint64Val) Set(nv uint64) {
+	atomic.StoreUint64(v.val, nv)
+}
+
+func (v Uint64Val) MarshalJSON() ([]byte, error) {
+	value := atomic.LoadUint64(v.val)
+	return []byte(fmt.Sprint(value)), nil
+}
+
+func (v Uint64Val) Value() uint64 {
+	value := atomic.LoadUint64(v.val)
 	return value
 }
 

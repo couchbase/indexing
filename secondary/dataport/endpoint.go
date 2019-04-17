@@ -29,6 +29,7 @@ import c "github.com/couchbase/indexing/secondary/common"
 import "github.com/couchbase/indexing/secondary/transport"
 import "github.com/couchbase/indexing/secondary/logging"
 import "github.com/couchbase/indexing/secondary/security"
+import "github.com/couchbase/indexing/secondary/stats"
 
 // RouterEndpoint structure, per topic, to gather key-versions / mutations
 // from one or more vbuckets and push them downstream to a
@@ -37,6 +38,7 @@ type RouterEndpoint struct {
 	topic     string
 	timestamp int64  // immutable
 	raddr     string // immutable
+	cluster   string
 	// config params
 	logPrefix string
 	keyChSize int // channel size for key-versions
@@ -45,7 +47,7 @@ type RouterEndpoint struct {
 	bufferSize int           // size of buffer to wait till flush
 	bufferTm   time.Duration // timeout to flush endpoint-buffer
 	harakiriTm time.Duration // timeout after which endpoint commits harakiri
-	statTick   time.Duration // timeout for logging statistics
+
 	// gen-server
 	ch    chan []interface{} // carries control commands
 	finch chan bool
@@ -54,16 +56,60 @@ type RouterEndpoint struct {
 	pkt  *transport.TransportPacket
 	conn net.Conn
 	// statistics
-	mutCount    int64
-	upsertCount int64
-	deleteCount int64
-	upsdelCount int64
-	syncCount   int64
-	beginCount  int64
-	endCount    int64
-	snapCount   int64
-	flushCount  int64
-	prjLatency  *Average
+	stats *EndpointStats
+}
+
+type EndpointStats struct {
+	closed      stats.BoolVal
+	mutCount    stats.Uint64Val
+	upsertCount stats.Uint64Val
+	deleteCount stats.Uint64Val
+	upsdelCount stats.Uint64Val
+	syncCount   stats.Uint64Val
+	beginCount  stats.Uint64Val
+	endCount    stats.Uint64Val
+	snapCount   stats.Uint64Val
+	flushCount  stats.Uint64Val
+	prjLatency  stats.Average
+	endpChLen   stats.Uint64Val
+}
+
+func (stats *EndpointStats) Init() {
+	stats.closed.Init()
+	stats.mutCount.Init()
+	stats.upsertCount.Init()
+	stats.deleteCount.Init()
+	stats.upsdelCount.Init()
+	stats.syncCount.Init()
+	stats.beginCount.Init()
+	stats.endCount.Init()
+	stats.snapCount.Init()
+	stats.flushCount.Init()
+	stats.prjLatency.Init()
+	stats.endpChLen.Init()
+}
+
+func (stats *EndpointStats) IsClosed() bool {
+	return stats.closed.Value()
+}
+
+func (stats *EndpointStats) String() string {
+	var stitems [13]string
+	stitems[0] = `"mutCount":` + strconv.FormatUint(stats.mutCount.Value(), 10)
+	stitems[1] = `"upsertCount":` + strconv.FormatUint(stats.upsertCount.Value(), 10)
+	stitems[2] = `"deleteCount":` + strconv.FormatUint(stats.deleteCount.Value(), 10)
+	stitems[3] = `"upsdelCount":` + strconv.FormatUint(stats.upsertCount.Value(), 10)
+	stitems[4] = `"syncCount":` + strconv.FormatUint(stats.syncCount.Value(), 10)
+	stitems[5] = `"beginCount":` + strconv.FormatUint(stats.beginCount.Value(), 10)
+	stitems[6] = `"endCount":` + strconv.FormatUint(stats.endCount.Value(), 10)
+	stitems[7] = `"snapCount":` + strconv.FormatUint(stats.snapCount.Value(), 10)
+	stitems[8] = `"flushCount":` + strconv.FormatUint(stats.flushCount.Value(), 10)
+	stitems[9] = `"latency.min":` + strconv.FormatInt(stats.prjLatency.Min(), 10)
+	stitems[10] = `"latency.max":` + strconv.FormatInt(stats.prjLatency.Max(), 10)
+	stitems[11] = `"latency.avg":` + strconv.FormatInt(stats.prjLatency.Mean(), 10)
+	stitems[12] = `"endpChLen":` + strconv.FormatUint(stats.endpChLen.Value(), 10)
+	statjson := strings.Join(stitems[:], ",")
+	return fmt.Sprintf("{%v}", statjson)
 }
 
 // NewRouterEndpoint instantiate a new RouterEndpoint
@@ -80,16 +126,17 @@ func NewRouterEndpoint(
 	endpoint := &RouterEndpoint{
 		topic:      topic,
 		raddr:      raddr,
+		cluster:    cluster,
 		finch:      make(chan bool),
 		timestamp:  time.Now().UnixNano(),
 		keyChSize:  config["keyChanSize"].Int(),
 		block:      config["remoteBlock"].Bool(),
 		bufferSize: config["bufferSize"].Int(),
-		statTick:   time.Duration(config["statTick"].Int()),
 		bufferTm:   time.Duration(config["bufferTimeout"].Int()),
 		harakiriTm: time.Duration(config["harakiriTimeout"].Int()),
-		prjLatency: &Average{},
+		stats:      &EndpointStats{},
 	}
+	endpoint.stats.Init()
 	endpoint.ch = make(chan []interface{}, endpoint.keyChSize)
 	endpoint.conn = conn
 	// TODO: add configuration params for transport flags.
@@ -99,7 +146,6 @@ func NewRouterEndpoint(
 	endpoint.pkt.SetEncoder(transport.EncodingProtobuf, protobufEncode)
 	endpoint.pkt.SetDecoder(transport.EncodingProtobuf, protobufDecode)
 
-	endpoint.statTick *= time.Millisecond
 	endpoint.bufferTm *= time.Millisecond
 	endpoint.harakiriTm *= time.Millisecond
 
@@ -153,6 +199,27 @@ func (endpoint *RouterEndpoint) GetStatistics() map[string]interface{} {
 	return resp[0].(map[string]interface{})
 }
 
+// Get the map of endpoint name to pointer for the stats object
+func (endpoint *RouterEndpoint) GetStats() map[string]interface{} {
+	if atomic.LoadUint32(&endpoint.done) == 0 && endpoint.stats != nil {
+		endpStat := make(map[string]interface{}, 0)
+		key := fmt.Sprintf(
+			"ENDP[<-(%v,%4x)<-%v #%v]",
+			endpoint.raddr, uint16(endpoint.timestamp), endpoint.cluster, endpoint.topic)
+		endpStat[key] = endpoint.stats
+		return endpStat
+	}
+	return nil
+}
+
+func (endpoint *RouterEndpoint) logStats() {
+	key := fmt.Sprintf(
+		"<-(%v,%4x)<-%v #%v",
+		endpoint.raddr, uint16(endpoint.timestamp), endpoint.cluster, endpoint.topic)
+	stats := endpoint.stats.String()
+	logging.Infof("ENDP[%v] stats: %v", key, stats)
+}
+
 // Close this endpoint.
 func (endpoint *RouterEndpoint) Close() error {
 	respch := make(chan []interface{}, 1)
@@ -187,31 +254,11 @@ func (endpoint *RouterEndpoint) run(ch chan []interface{}) {
 		// close this endpoint
 		atomic.StoreUint32(&endpoint.done, 1)
 		close(endpoint.finch)
+		//Update closed in stats object and log the stats before exiting
+		endpoint.stats.closed.Set(true)
+		endpoint.logStats()
 		logging.Infof("%v ... stopped\n", endpoint.logPrefix)
 	}()
-
-	statSince := time.Now()
-	var stitems [14]string
-	logstats := func() {
-		prjLatency := endpoint.prjLatency
-		stitems[0] = `"topic":"` + endpoint.topic + `"`
-		stitems[1] = `"raddr":"` + endpoint.raddr + `"`
-		stitems[2] = `"mutCount":` + strconv.Itoa(int(endpoint.mutCount))
-		stitems[3] = `"upsertCount":` + strconv.Itoa(int(endpoint.upsertCount))
-		stitems[4] = `"deleteCount":` + strconv.Itoa(int(endpoint.deleteCount))
-		stitems[5] = `"upsdelCount":` + strconv.Itoa(int(endpoint.upsertCount))
-		stitems[6] = `"syncCount":` + strconv.Itoa(int(endpoint.syncCount))
-		stitems[7] = `"beginCount":` + strconv.Itoa(int(endpoint.beginCount))
-		stitems[8] = `"endCount":` + strconv.Itoa(int(endpoint.endCount))
-		stitems[9] = `"snapCount":` + strconv.Itoa(int(endpoint.snapCount))
-		stitems[10] = `"flushCount":` + strconv.Itoa(int(endpoint.flushCount))
-		stitems[11] = `"latency.min":` + strconv.Itoa(int(prjLatency.Min()))
-		stitems[12] = `"latency.max":` + strconv.Itoa(int(prjLatency.Max()))
-		stitems[13] = `"latency.avg":` + strconv.Itoa(int(prjLatency.Mean()))
-		statjson := strings.Join(stitems[:], ",")
-		fmsg := "%v stats {%v}\n"
-		logging.Infof(fmsg, endpoint.logPrefix, statjson)
-	}
 
 	raddr := endpoint.raddr
 	lastActiveTime := time.Now()
@@ -226,13 +273,9 @@ func (endpoint *RouterEndpoint) run(ch chan []interface{}) {
 			if err != nil {
 				logging.Errorf("%v flushBuffers() %v\n", endpoint.logPrefix, err)
 			}
-			endpoint.flushCount++
+			endpoint.stats.flushCount.Add(1)
 		}
 		messageCount = 0
-		if time.Since(statSince) > endpoint.statTick {
-			logstats()
-			statSince = time.Now()
-		}
 		return
 	}
 
@@ -240,6 +283,7 @@ loop:
 	for {
 		select {
 		case msg := <-ch:
+			endpoint.stats.endpChLen.Set(uint64(len(ch)))
 			switch msg[0].(byte) {
 			case endpCmdPing:
 				respch := msg[1].(chan []interface{})
@@ -275,10 +319,6 @@ loop:
 				}
 				if cv, ok := config["bufferSize"]; ok {
 					endpoint.bufferSize = cv.Int()
-				}
-				if cv, ok := config["statTick"]; ok {
-					endpoint.statTick = time.Duration(cv.Int())
-					endpoint.statTick *= time.Millisecond
 				}
 				if cv, ok := config["bufferTimeout"]; ok {
 					endpoint.bufferTm = time.Duration(cv.Int())
@@ -330,7 +370,6 @@ loop:
 			harakiri.Reset(endpoint.harakiriTm)
 		}
 	}
-	logstats()
 }
 
 func (endpoint *RouterEndpoint) newStats() c.Statistics {

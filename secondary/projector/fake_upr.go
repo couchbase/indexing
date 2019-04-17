@@ -104,3 +104,8 @@ func (b *FakeBucket) CloseFeed() (err error) {
 func (s *FakeStream) run(mutch chan *mc.DcpEvent) {
 	// TODO: generate mutation events
 }
+
+// GetStats is method receiver for BucketFeeder interface
+func (b *FakeBucket) GetStats() map[string]interface{} {
+	return nil
+}
