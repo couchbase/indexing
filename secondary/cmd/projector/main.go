@@ -116,24 +116,28 @@ func main() {
 	go c.ExitOnStdinClose()
 
 	certFile := options.certFile
-	if len(certFile) == 0 && len(options.diagDir) != 0 {
-		if last := strings.LastIndex(options.diagDir, "/"); last != -1 {
-			certFile = options.diagDir[:last]
-			if len(certFile) != 0 {
-				certFile = certFile + "/config/memcached-cert.pem"
+	/*
+		if len(certFile) == 0 && len(options.diagDir) != 0 {
+			if last := strings.LastIndex(options.diagDir, "/"); last != -1 {
+				certFile = options.diagDir[:last]
+				if len(certFile) != 0 {
+					certFile = certFile + "/config/memcached-cert.pem"
+				}
 			}
 		}
-	}
+	*/
 
 	keyFile := options.keyFile
-	if len(keyFile) == 0 && len(options.diagDir) != 0 {
-		if last := strings.LastIndex(options.diagDir, "/"); last != -1 {
-			keyFile = options.diagDir[:last]
-			if len(keyFile) != 0 {
-				keyFile = keyFile + "/config/memcached-key.pem"
+	/*
+		if len(keyFile) == 0 && len(options.diagDir) != 0 {
+			if last := strings.LastIndex(options.diagDir, "/"); last != -1 {
+				keyFile = options.diagDir[:last]
+				if len(keyFile) != 0 {
+					keyFile = keyFile + "/config/memcached-key.pem"
+				}
 			}
 		}
-	}
+	*/
 
 	projector.NewProjector(options.numVbuckets, config, certFile, keyFile)
 
