@@ -304,6 +304,15 @@ func (kvdata *KVData) runScatter(
 
 loop:
 	for {
+		// Prioritize control channel over other channels
+		select {
+		case msg := <-kvdata.sbch:
+			if breakloop := kvdata.handleCommand(msg, ts, heartBeat); breakloop {
+				break loop
+			}
+		default:
+		}
+
 		select {
 		case m, ok := <-mutch:
 			if ok == false { // upstream has closed
@@ -333,123 +342,130 @@ loop:
 			}()
 
 		case msg := <-kvdata.sbch:
-			cmd := msg[0].(byte)
-			switch cmd {
-			case kvCmdAddEngines:
-				opaque := msg[1].(uint16)
-				respch := msg[4].(chan []interface{})
-				if msg[2] != nil { // collect engines
-					for uuid, engine := range msg[2].(map[uint64]*Engine) {
-						if _, ok := kvdata.engines[uuid]; !ok {
-							fmsg := "%v ##%x new engine added %v"
-							logging.Infof(fmsg, kvdata.logPrefix, opaque, uuid)
-						}
-						kvdata.engines[uuid] = engine
-					}
-				}
-				if msg[3] != nil { // collect endpoints
-					rv := msg[3].(map[string]c.RouterEndpoint)
-					for raddr, endp := range rv {
-						fmsg := "%v ##%x updated endpoint %q"
-						logging.Infof(fmsg, kvdata.logPrefix, opaque, raddr)
-						kvdata.endpoints[raddr] = endp
-					}
-				}
-				curSeqnos := make(map[uint16]uint64)
-				if kvdata.engines != nil || kvdata.endpoints != nil {
-					engns, endpts := kvdata.engines, kvdata.endpoints
-					for _, worker := range kvdata.workers {
-						cseqnos, err := worker.AddEngines(opaque, engns, endpts)
-						if err != nil {
-							panic(err)
-						}
-						for vbno, cseqno := range cseqnos {
-							curSeqnos[vbno] = cseqno
-						}
-					}
-				}
-				kvdata.stats.ainstCount.Add(1)
-				respch <- []interface{}{curSeqnos, nil}
-
-			case kvCmdDelEngines:
-				opaque := msg[1].(uint16)
-				engineKeys := msg[2].([]uint64)
-				respch := msg[3].(chan []interface{})
-				for _, worker := range kvdata.workers {
-					err := worker.DeleteEngines(opaque, engineKeys)
-					if err != nil {
-						panic(err)
-					}
-				}
-				for _, engineKey := range engineKeys {
-					delete(kvdata.engines, engineKey)
-					fmsg := "%v ##%x deleted engine %q"
-					logging.Infof(fmsg, kvdata.logPrefix, opaque, engineKey)
-				}
-				kvdata.stats.dinstCount.Add(1)
-				respch <- []interface{}{nil}
-
-			case kvCmdTs:
-				_ /*opaque*/ = msg[1].(uint16)
-				ts = ts.Union(msg[2].(*protobuf.TsVbuuid))
-				respch := msg[3].(chan []interface{})
-				kvdata.stats.tsCount.Add(1)
-				respch <- []interface{}{nil}
-
-			case kvCmdGetStats:
-				respch := msg[1].(chan []interface{})
-				stats := kvdata.newStats()
-				stats.Set("events", float64(kvdata.stats.eventCount.Value()))
-				stats.Set("addInsts", float64(kvdata.stats.ainstCount.Value()))
-				stats.Set("delInsts", float64(kvdata.stats.dinstCount.Value()))
-				stats.Set("tsCount", float64(kvdata.stats.tsCount.Value()))
-				statVbuckets := make(map[string]interface{})
-				for _, worker := range kvdata.workers {
-					if stats, err := worker.GetStatistics(); err != nil {
-						panic(err)
-					} else {
-						for vbno_s, stat := range stats {
-							statVbuckets[vbno_s] = stat
-						}
-					}
-				}
-				stats.Set("vbuckets", statVbuckets)
-				respch <- []interface{}{map[string]interface{}(stats)}
-
-			case kvCmdResetConfig:
-				config, respch := msg[1].(c.Config), msg[2].(chan []interface{})
-				if cv, ok := config["syncTimeout"]; ok && heartBeat != nil {
-					kvdata.syncTimeout = time.Duration(cv.Int())
-					kvdata.syncTimeout *= time.Millisecond
-					logging.Infof(
-						"%v ##%x heart-beat settings reloaded: %v\n",
-						kvdata.logPrefix, kvdata.opaque, kvdata.syncTimeout)
-					heartBeat = time.After(kvdata.syncTimeout)
-				}
-				for _, worker := range kvdata.workers {
-					if err := worker.ResetConfig(config); err != nil {
-						panic(err)
-					}
-				}
-				kvdata.config = kvdata.config.Override(config)
-				respch <- []interface{}{nil}
-
-			case kvCmdReloadHeartBeat:
-				respch := msg[1].(chan []interface{})
-				heartBeat = time.After(kvdata.syncTimeout)
-				respch <- []interface{}{nil}
-
-			case kvCmdClose:
-				for _, worker := range kvdata.workers {
-					worker.Close()
-				}
-				kvdata.workers = nil
-				respch := msg[1].(chan []interface{})
-				respch <- []interface{}{nil}
+			if breakloop := kvdata.handleCommand(msg, ts, heartBeat); breakloop {
 				break loop
 			}
 		}
 	}
+}
+
+func (kvdata *KVData) handleCommand(msg []interface{}, ts *protobuf.TsVbuuid, heartBeat <-chan time.Time) bool {
+	cmd := msg[0].(byte)
+	switch cmd {
+	case kvCmdAddEngines:
+		opaque := msg[1].(uint16)
+		respch := msg[4].(chan []interface{})
+		if msg[2] != nil { // collect engines
+			for uuid, engine := range msg[2].(map[uint64]*Engine) {
+				if _, ok := kvdata.engines[uuid]; !ok {
+					fmsg := "%v ##%x new engine added %v"
+					logging.Infof(fmsg, kvdata.logPrefix, opaque, uuid)
+				}
+				kvdata.engines[uuid] = engine
+			}
+		}
+		if msg[3] != nil { // collect endpoints
+			rv := msg[3].(map[string]c.RouterEndpoint)
+			for raddr, endp := range rv {
+				fmsg := "%v ##%x updated endpoint %q"
+				logging.Infof(fmsg, kvdata.logPrefix, opaque, raddr)
+				kvdata.endpoints[raddr] = endp
+			}
+		}
+		curSeqnos := make(map[uint16]uint64)
+		if kvdata.engines != nil || kvdata.endpoints != nil {
+			engns, endpts := kvdata.engines, kvdata.endpoints
+			for _, worker := range kvdata.workers {
+				cseqnos, err := worker.AddEngines(opaque, engns, endpts)
+				if err != nil {
+					panic(err)
+				}
+				for vbno, cseqno := range cseqnos {
+					curSeqnos[vbno] = cseqno
+				}
+			}
+		}
+		kvdata.stats.ainstCount.Add(1)
+		respch <- []interface{}{curSeqnos, nil}
+
+	case kvCmdDelEngines:
+		opaque := msg[1].(uint16)
+		engineKeys := msg[2].([]uint64)
+		respch := msg[3].(chan []interface{})
+		for _, worker := range kvdata.workers {
+			err := worker.DeleteEngines(opaque, engineKeys)
+			if err != nil {
+				panic(err)
+			}
+		}
+		for _, engineKey := range engineKeys {
+			delete(kvdata.engines, engineKey)
+			fmsg := "%v ##%x deleted engine %q"
+			logging.Infof(fmsg, kvdata.logPrefix, opaque, engineKey)
+		}
+		kvdata.stats.dinstCount.Add(1)
+		respch <- []interface{}{nil}
+
+	case kvCmdTs:
+		_ /*opaque*/ = msg[1].(uint16)
+		ts = ts.Union(msg[2].(*protobuf.TsVbuuid))
+		respch := msg[3].(chan []interface{})
+		kvdata.stats.tsCount.Add(1)
+		respch <- []interface{}{nil}
+
+	case kvCmdGetStats:
+		respch := msg[1].(chan []interface{})
+		stats := kvdata.newStats()
+		stats.Set("events", float64(kvdata.stats.eventCount.Value()))
+		stats.Set("addInsts", float64(kvdata.stats.ainstCount.Value()))
+		stats.Set("delInsts", float64(kvdata.stats.dinstCount.Value()))
+		stats.Set("tsCount", float64(kvdata.stats.tsCount.Value()))
+		statVbuckets := make(map[string]interface{})
+		for _, worker := range kvdata.workers {
+			if stats, err := worker.GetStatistics(); err != nil {
+				panic(err)
+			} else {
+				for vbno_s, stat := range stats {
+					statVbuckets[vbno_s] = stat
+				}
+			}
+		}
+		stats.Set("vbuckets", statVbuckets)
+		respch <- []interface{}{map[string]interface{}(stats)}
+
+	case kvCmdResetConfig:
+		config, respch := msg[1].(c.Config), msg[2].(chan []interface{})
+		if cv, ok := config["syncTimeout"]; ok && heartBeat != nil {
+			kvdata.syncTimeout = time.Duration(cv.Int())
+			kvdata.syncTimeout *= time.Millisecond
+			logging.Infof(
+				"%v ##%x heart-beat settings reloaded: %v\n",
+				kvdata.logPrefix, kvdata.opaque, kvdata.syncTimeout)
+			heartBeat = time.After(kvdata.syncTimeout)
+		}
+		for _, worker := range kvdata.workers {
+			if err := worker.ResetConfig(config); err != nil {
+				panic(err)
+			}
+		}
+		kvdata.config = kvdata.config.Override(config)
+		respch <- []interface{}{nil}
+
+	case kvCmdReloadHeartBeat:
+		respch := msg[1].(chan []interface{})
+		heartBeat = time.After(kvdata.syncTimeout)
+		respch <- []interface{}{nil}
+
+	case kvCmdClose:
+		for _, worker := range kvdata.workers {
+			worker.Close()
+		}
+		kvdata.workers = nil
+		respch := msg[1].(chan []interface{})
+		respch <- []interface{}{nil}
+		return true
+	}
+	return false
 }
 
 func (kvdata *KVData) scatterMutation(
