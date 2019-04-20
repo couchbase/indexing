@@ -52,6 +52,8 @@ func TestBufferedScan_BackfillDisabled(t *testing.T) {
 	if err != nil {
 		FailTestIfError(err, "TestBufferedScan_BackfillDisabled failed in creating n1ql client", t)
 	}
+	defer n1ql.CloseGsiKeyspace(n1qlclient)
+
 	rangeKey := []string{`address`}
 	rangeExprs := make(qexpr.Expressions, 0)
 	for _, key := range rangeKey {
@@ -176,6 +178,8 @@ func TestBufferedScan_BackfillEnabled(t *testing.T) {
 	if err != nil {
 		FailTestIfError(err, "TestBufferedScan_BackfillEnabled failed in creating n1ql client", t)
 	}
+	defer n1ql.CloseGsiKeyspace(n1qlclient)
+
 	rangeKey := []string{`address`}
 	rangeExprs := make(qexpr.Expressions, 0)
 	for _, key := range rangeKey {
