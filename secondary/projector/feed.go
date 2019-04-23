@@ -662,6 +662,9 @@ func (feed *Feed) handleCommand(msg []interface{}) (status string) {
 		// For this feed, iterate through all buckets
 		for bucket, kvdata := range feed.kvdata {
 			bucketStats := &BucketStats{}
+			bucketStats.topic = feed.topic
+			bucketStats.bucket = bucket
+			bucketStats.opaque = feed.opaque
 
 			if feeder := feed.feeders[bucket]; feeder != nil {
 				bucketStats.dcpStats = feeder.GetStats()
@@ -672,6 +675,13 @@ func (feed *Feed) handleCommand(msg []interface{}) (status string) {
 
 			// For this bucket, get workerStats
 			bucketStats.wrkrStats = kvdata.GetWorkerStats()
+
+			// For this bucket, get evaluator stats
+			engines := feed.engines[bucket]
+			bucketStats.evaluatorStats = make(map[uint64]interface{})
+			for uuid, engine := range engines {
+				bucketStats.evaluatorStats[uuid] = engine.GetEvaluatorStats()
+			}
 
 			// Update feed stats for this bucket
 			feedStats.bucketStats[bucket] = bucketStats
@@ -1615,6 +1625,7 @@ func (feed *Feed) subscribers(
 	req Subscriber) (map[uint64]c.Evaluator, map[uint64]c.Router, error) {
 
 	evaluators, err := req.GetEvaluators()
+
 	if err != nil {
 		fmsg := "%v ##%x malformed evaluators: %v\n"
 		logging.Fatalf(fmsg, feed.logPrefix, opaque, err)

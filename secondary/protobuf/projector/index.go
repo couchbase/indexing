@@ -1,16 +1,20 @@
 package protobuf
 
-import "fmt"
-import "time"
+import (
+	"fmt"
+	"time"
 
-import "github.com/couchbase/indexing/secondary/logging"
-import c "github.com/couchbase/indexing/secondary/common"
-import mcd "github.com/couchbase/indexing/secondary/dcp/transport"
-import mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
-import qvalue "github.com/couchbase/query/value"
-import qexpr "github.com/couchbase/query/expression"
-import qu "github.com/couchbase/indexing/secondary/common/queryutil"
-import "github.com/couchbase/indexing/secondary/common/json"
+	"github.com/couchbase/indexing/secondary/stats"
+
+	c "github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/common/json"
+	qu "github.com/couchbase/indexing/secondary/common/queryutil"
+	mcd "github.com/couchbase/indexing/secondary/dcp/transport"
+	mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
+	"github.com/couchbase/indexing/secondary/logging"
+	qexpr "github.com/couchbase/query/expression"
+	qvalue "github.com/couchbase/query/value"
+)
 
 type Partition interface {
 	// Hosts return full list of endpoints <host:port>
@@ -103,7 +107,7 @@ type IndexEvaluator struct {
 	instance *IndexInst
 	version  FeedVersion
 	xattrs   []string
-	stats    IndexEvaluatorStats
+	stats    *IndexEvaluatorStats
 }
 
 // NewIndexEvaluator returns a reference to a new instance
@@ -158,7 +162,8 @@ func NewIndexEvaluator(instance *IndexInst,
 		return nil, fmt.Errorf("invalid expression type %v", exprtype)
 	}
 
-	ie.stats = IndexEvaluatorStats{}
+	ie.stats = &IndexEvaluatorStats{}
+	ie.stats.Init()
 	return ie, nil
 }
 
@@ -368,7 +373,7 @@ func (ie *IndexEvaluator) evaluate(
 	exprType := defn.GetExprType()
 	switch exprType {
 	case ExprType_N1QL:
-		return N1QLTransform(docid, docval, context, ie.skExprs, encodeBuf, &ie.stats)
+		return N1QLTransform(docid, docval, context, ie.skExprs, encodeBuf, ie.stats)
 	}
 	return nil, nil, nil
 }
@@ -385,7 +390,7 @@ func (ie *IndexEvaluator) partitionKey(
 	exprType := defn.GetExprType()
 	switch exprType {
 	case ExprType_N1QL:
-		out, _, err := N1QLTransform(docid, docval, context, ie.pkExprs, nil, &ie.stats)
+		out, _, err := N1QLTransform(docid, docval, context, ie.pkExprs, nil, ie.stats)
 		return out, err
 	}
 	return nil, nil
@@ -405,7 +410,7 @@ func (ie *IndexEvaluator) wherePredicate(
 	switch exprType {
 	case ExprType_N1QL:
 		// TODO: can be optimized by using a custom N1QL-evaluator.
-		out, _, err := N1QLTransform(nil, docval, context, []interface{}{ie.whExpr}, encodeBuf, &ie.stats)
+		out, _, err := N1QLTransform(nil, docval, context, []interface{}{ie.whExpr}, encodeBuf, ie.stats)
 		if out == nil { // missing is treated as false
 			return false, err
 		} else if err != nil { // errors are treated as false
@@ -454,11 +459,43 @@ func (ie *IndexEvaluator) dcpEvent2Meta(m *mc.DcpEvent, meta map[string]interfac
 }
 
 type IndexEvaluatorStats struct {
-	Count    int64
-	TotalDur int64
+	Count     stats.Int64Val
+	TotalDur  stats.Int64Val
+	PrevCount stats.Int64Val
+	PrevDur   stats.Int64Val
+	SMA       stats.Int64Val // Simple moving average
+}
+
+func (ie *IndexEvaluatorStats) Init() {
+	ie.Count.Init()
+	ie.TotalDur.Init()
+	ie.PrevCount.Init()
+	ie.PrevDur.Init()
+	ie.SMA.Init()
 }
 
 func (ies *IndexEvaluatorStats) add(duration time.Duration) {
-	ies.Count++
-	ies.TotalDur += duration.Nanoseconds()
+	ies.Count.Add(1)
+	ies.TotalDur.Add(duration.Nanoseconds())
+}
+
+// Implements simple moving average. Returns the moving average value
+func (ies *IndexEvaluatorStats) MovingAvg() int64 {
+	count := ies.Count.Value()
+	prevCount := ies.PrevCount.Value()
+	totalDur := ies.TotalDur.Value()
+	prevDur := ies.PrevDur.Value()
+	prevSMA := ies.SMA.Value()
+
+	if count-prevCount > 0 {
+		newAvg := (totalDur - prevDur) / (count - prevCount)
+		if prevCount > 0 {
+			newAvg = (prevSMA + newAvg) / 2
+		}
+		ies.SMA.Set(newAvg)
+		ies.PrevCount.Set(count)
+		ies.PrevDur.Set(totalDur)
+	}
+
+	return ies.SMA.Value()
 }
