@@ -2452,7 +2452,7 @@ func (o *MetadataProvider) getNodesInHealthyCluster() ([]string, error) {
 	}
 
 	if !healthy {
-		return nil, errors.New("Clsuter has failed nodes, undergo network partition, or unable to determine indexer node status.")
+		return nil, errors.New("Cluster has failed nodes, undergo network partition, or unable to determine indexer node status.")
 	}
 
 	// Get the list of nodes in the healthy cluster
