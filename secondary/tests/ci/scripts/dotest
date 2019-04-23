@@ -227,6 +227,7 @@ fi
 export phase=integration
 if [[ "$MODE" == *"$phase"* ]]; then
   echo "</pre><h4>Integration tests</h4><pre>"
+  export LD_LIBRARY_PATH=""
   cd $WORKSPACE/testrunner
   [ "$STORAGE" = "memdb" ] && export TYPE="memory_optimized"
   [ "$STORAGE" = "plasma" ] && export TYPE="plasma"

@@ -1,7 +1,12 @@
 package secondaryindex
 
 import (
+	e "errors"
 	"fmt"
+	"log"
+	"strconv"
+	"time"
+
 	"github.com/couchbase/indexing/secondary/collatejson"
 	c "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
@@ -13,9 +18,6 @@ import (
 	"github.com/couchbase/query/expression"
 	"github.com/couchbase/query/expression/parser"
 	"github.com/couchbase/query/value"
-	"log"
-	"strconv"
-	"time"
 )
 
 // Creates an index and waits for it to become active
@@ -346,6 +348,49 @@ func N1QLScan3(indexName, bucketName, server string, scans qc.Scans, reverse, di
 	elapsed := time.Since(start)
 	tc.LogPerfStat("MultiScan", elapsed)
 	return results, garesults, err2
+}
+
+func N1QLStorageStatistics(indexName, bucketName, server string) ([]map[string]interface{}, error) {
+
+	client, err := nclient.NewGSIIndexer(server, "default", bucketName)
+	if err != nil {
+		return nil, err
+	}
+	logging.SetLogLevel(logging.Error)
+
+	requestid := getrequestid()
+	index, err := client.IndexByName(indexName)
+	if err != nil {
+		return nil, err
+	}
+
+	var err1 error
+	index, err1 = WaitForIndexOnline(client, indexName, index)
+	if err1 != nil {
+		return nil, err1
+	}
+
+	index4, useScan4 := index.(datastore.Index4)
+
+	if !useScan4 {
+		return nil, e.New("Index4 implementation unavailable")
+	}
+
+	stats, err2 := index4.StorageStatistics(requestid)
+	statsArr := convertN1QLStats(stats)
+	return statsArr, err2
+}
+
+func convertN1QLStats(stats []map[datastore.IndexStatType]value.Value) []map[string]interface{} {
+	statsArr := make([]map[string]interface{}, 0)
+	for _, stat := range stats {
+		newMap := make(map[string]interface{})
+		for key, val := range stat {
+			newMap[string(key)] = val.ActualForIndex()
+		}
+		statsArr = append(statsArr, newMap)
+	}
+	return statsArr
 }
 
 func filtertoranges2(filters []*qc.CompositeElementFilter) datastore.Ranges2 {

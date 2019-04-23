@@ -596,7 +596,12 @@ func (gsi *gsiKeyspace) delIndex(id string) {
 func (gsi *gsiKeyspace) getIndexFromVersion(index *secondaryIndex,
 	clusterVersion uint64) datastore.Index {
 
-	if clusterVersion >= c.INDEXER_55_VERSION {
+	if clusterVersion >= c.INDEXER_65_VERSION {
+		si2 := &secondaryIndex2{secondaryIndex: *index}
+		si3 := &secondaryIndex3{secondaryIndex2: *si2}
+		si4 := datastore.Index(&secondaryIndex4{secondaryIndex3: *si3})
+		return si4
+	} else if clusterVersion >= c.INDEXER_55_VERSION {
 		si2 := &secondaryIndex2{secondaryIndex: *index}
 		si3 := datastore.Index(&secondaryIndex3{secondaryIndex2: *si2})
 		return si3
@@ -611,7 +616,12 @@ func (gsi *gsiKeyspace) getIndexFromVersion(index *secondaryIndex,
 func (gsi *gsiKeyspace) getPrimaryIndexFromVersion(index *secondaryIndex,
 	clusterVersion uint64) datastore.PrimaryIndex {
 
-	if clusterVersion >= c.INDEXER_55_VERSION {
+	if clusterVersion >= c.INDEXER_65_VERSION {
+		si2 := &secondaryIndex2{secondaryIndex: *index}
+		si3 := &secondaryIndex3{secondaryIndex2: *si2}
+		si4 := datastore.PrimaryIndex(&secondaryIndex4{secondaryIndex3: *si3})
+		return si4
+	} else if clusterVersion >= c.INDEXER_55_VERSION {
 		si2 := &secondaryIndex2{secondaryIndex: *index}
 		si3 := datastore.PrimaryIndex(&secondaryIndex3{secondaryIndex2: *si2})
 		return si3
@@ -1216,6 +1226,51 @@ func (si *secondaryIndex3) ScanEntries3(
 
 //-------------------------------------
 // datastore API3 implementation end
+//-------------------------------------
+
+//-------------------------------------
+// datastore API4 implementation
+//-------------------------------------
+
+type secondaryIndex4 struct {
+	secondaryIndex3
+}
+
+func (si *secondaryIndex4) StorageMode() (datastore.IndexStorageMode, errors.Error) {
+	storage := c.IndexTypeToStorageMode(si.using)
+	switch storage {
+	case c.MOI:
+		return datastore.INDEX_MODE_MOI, nil
+	case c.PLASMA:
+		return datastore.INDEX_MODE_PLASMA, nil
+	case c.FORESTDB:
+		return datastore.INDEX_MODE_FDB, nil
+	}
+	return "", errors.NewError(nil, "Index4 StorageMode(): Unknown storage mode")
+}
+
+func (si *secondaryIndex4) LeadKeyHistogram(requestId string) (*datastore.Histogram, errors.Error) {
+	return nil, errors.NewNotImplemented("Index4 LeadKeyHistogram")
+}
+
+func (si *secondaryIndex4) StorageStatistics(requestid string) ([]map[datastore.IndexStatType]value.Value,
+	errors.Error) {
+
+	if si == nil {
+		return nil, ErrorIndexEmpty
+	}
+	client := si.gsi.gsiClient
+
+	stats, e := client.StorageStatistics(si.defnID, requestid)
+	if e != nil {
+		return nil, n1qlError(client, e)
+	}
+
+	return gsistatston1ql(stats), nil
+}
+
+//-------------------------------------
+// datastore API4 implementation end
 //-------------------------------------
 
 //-------------------------------------
@@ -1969,6 +2024,43 @@ func n1qlaggrtypetogsi(aggrType datastore.AggregateType) c.AggrFuncType {
 	default:
 		return c.AGG_INVALID
 	}
+}
+
+func gsistatston1ql(stats []map[string]interface{}) []map[datastore.IndexStatType]value.Value {
+	storageStats := make([]map[datastore.IndexStatType]value.Value, 0)
+	for _, partitionStats := range stats {
+		n1qlPartnStats := make(map[datastore.IndexStatType]value.Value)
+		for key, val := range partitionStats {
+			n1qlKey, ok := gsistatnameton1ql(key)
+			if ok {
+				n1qlPartnStats[n1qlKey] = value.NewValue(val)
+			}
+		}
+		storageStats = append(storageStats, n1qlPartnStats)
+	}
+	return storageStats
+}
+
+func gsistatnameton1ql(name string) (datastore.IndexStatType, bool) {
+	switch name {
+	case qclient.STAT_PARTITION_ID:
+		return datastore.IX_STAT_PARTITION_ID, true
+	case qclient.STAT_NUM_PAGES:
+		return datastore.IX_STAT_NUM_PAGES, true
+	case qclient.STAT_NUM_ITEMS:
+		return datastore.IX_STAT_NUM_ITEMS, true
+	case qclient.STAT_RESIDENT_RATIO:
+		return datastore.IX_STAT_RES_RATIO, true
+	case qclient.STAT_NUM_INSERT:
+		return datastore.IX_STAT_NUM_INSERT, true
+	case qclient.STAT_NUM_DELETE:
+		return datastore.IX_STAT_NUM_DELETE, true
+	case qclient.STAT_AVG_ITEM_SIZE:
+		return datastore.IX_STAT_AVG_ITEM_SIZE, true
+	case qclient.STAT_AVG_PAGE_SIZE:
+		return datastore.IX_STAT_AVG_PAGE_SIZE, true
+	}
+	return datastore.IndexStatType(""), false
 }
 
 //-------------------------------------

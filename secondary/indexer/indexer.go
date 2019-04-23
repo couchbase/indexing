@@ -4904,6 +4904,9 @@ func (idx *indexer) bootstrap1(snapshotNotifych chan IndexSnapshot) error {
 
 	idx.validateIndexInstMap()
 
+	// Cleanup orphan indexes, if any.
+	idx.cleanupOrphanIndexes()
+
 	// Upgrade storage depending on the storage mode of the indexes residing on this node.
 	// This step does not depend on the cluster storage mode (from metakv).   The indexer
 	// may need to restart if the bootstrap storage mode is different than the storage mode of
@@ -4934,6 +4937,79 @@ func (idx *indexer) bootstrap1(snapshotNotifych chan IndexSnapshot) error {
 
 	return nil
 
+}
+
+func (idx *indexer) createRealInstIdMap() common.IndexInstMap {
+	realInstIdMap := make(common.IndexInstMap)
+	for _, inst := range idx.indexInstMap {
+		if inst.IsProxy() {
+			newInst := inst
+			newInst.Pc = inst.Pc.Clone()
+			realInstIdMap[inst.RealInstId] = newInst
+		}
+	}
+	return realInstIdMap
+}
+
+func (idx *indexer) cleanupOrphanIndexes() {
+	storageDir := idx.config["storage_dir"].String()
+	pattern := GetIndexPathPattern()
+
+	flist, err := filepath.Glob(filepath.Join(storageDir, pattern))
+	if err != nil {
+		logging.Warnf("Error %v during cleaning up the orphan indexes.", err)
+		return
+	}
+
+	instExists := func(instId common.IndexInstId,
+		partnId common.PartitionId, m common.IndexInstMap) bool {
+
+		if inst, ok := m[instId]; !ok {
+			// Orphan Index Instance
+			return false
+		} else {
+			if exists := inst.Pc.CheckPartitionExists(partnId); !exists {
+				// Orphan Partition Instance
+				return false
+			}
+		}
+		return true
+	}
+
+	realInstIdMap := idx.createRealInstIdMap()
+
+	stDirPathLen := len(storageDir) + len(string(os.PathSeparator))
+	orphanIndexList := make([]string, 0, len(flist))
+	for _, f := range flist {
+		instId, partnId, err := GetInstIdPartnIdFromPath(f[stDirPathLen:])
+		if err != nil {
+			logging.Warnf("Error %v during GetInstIdPartnIdFromPath for %v.", err, f)
+			continue
+		}
+
+		// Check if instId, partnId exists
+		if instExists(instId, partnId, idx.indexInstMap) {
+			continue
+		}
+
+		// Check if realInstId, partnId exists
+		if instExists(instId, partnId, realInstIdMap) {
+			continue
+		}
+
+		logging.Infof("Found orphan index slice %v. Scheduling it for cleanup.", f)
+		orphanIndexList = append(orphanIndexList, f)
+	}
+
+	go func() {
+		for _, f := range orphanIndexList {
+			if err := os.RemoveAll(f); err != nil {
+				logging.Warnf("Error %v while removing orphan index data for %v.", err, f)
+			} else {
+				logging.Infof("Cleaned up the orphan index slice %v.", f)
+			}
+		}
+	}()
 }
 
 func (idx *indexer) handleStorageWarmupDone(msg Message) {

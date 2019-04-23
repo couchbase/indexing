@@ -17,6 +17,9 @@ import "fmt"
 import "syscall"
 import "strings"
 import "sync"
+import "io/ioutil"
+import "errors"
+import commonjson "github.com/couchbase/indexing/secondary/common/json"
 
 import "github.com/couchbase/indexing/secondary/logging"
 import "github.com/couchbase/indexing/secondary/common"
@@ -355,6 +358,10 @@ type GsiAccessor interface {
 		groupAggr *GroupAggr,
 		cons common.Consistency, vector *TsConsistency,
 		broker *RequestBroker) error
+
+	// StorageStatistics API4 for getting per partition storage stats.
+	// Return value is a slice of maps, each map is storage stats per partition
+	StorageStatistics(defnID uint64, requestId string) ([]map[string]interface{}, error)
 }
 
 var useMetadataProvider = true
@@ -365,6 +372,7 @@ var pInitOnce sync.Once
 type IndexerService struct {
 	Adminport string
 	Queryport string
+	Httpport  string
 	Status    string // one of "initial", "online", "recovery"
 }
 
@@ -1134,6 +1142,161 @@ func (c *GsiClient) Scan3Internal(
 	return
 }
 
+//-------------------------------------
+// StorageStatistics implementation
+//-------------------------------------
+type StorageStats struct {
+	Index       string
+	Id          uint64
+	PartitionId common.PartitionId
+	Stats       map[string]interface{}
+}
+
+const STAT_PARTITION_ID = "PARTITION_ID"
+const STAT_NUM_PAGES = "NUM_PAGES"
+const STAT_NUM_ITEMS = "NUM_ITEMS"
+const STAT_RESIDENT_RATIO = "RESIDENT_RATIO"
+const STAT_NUM_INSERT = "NUM_INSERT"
+const STAT_NUM_DELETE = "NUM_DELETE"
+const STAT_AVG_ITEM_SIZE = "AVG_ITEM_SIZE"
+const STAT_AVG_PAGE_SIZE = "AVG_PAGE_SIZE"
+
+// A set of partitions for given index definition is chosen using metaclient's
+// GetScanport. It returns a set of target replica InstanceIds with corresponding
+// PartitionIds per InstanceID. It is possible that some partitions are from one
+// replica and other are from a different replica, this is the same logic that applies
+// when partitions/replica are chosen do a scan (See doScan).
+// There is no replica retry based on excludes for storage stats. Consumer of this
+// API should retry in case of error.
+//
+// Steps to retrieve StorageStatistics:
+// 1. Get a set of queryports, corresponding targetInstanceIds and partitions per InstanceId
+// 2. Get adminports from queryports and construct statsUrls for participating indexer nodes
+// 3. For stats of each node, get targetInstanceId of corresponding node and pick partition stats
+//    for that targetInstanceId.
+// 4. Filter relevant storage stats as needed by CBO
+func (c *GsiClient) StorageStatistics(defnID uint64, requestId string) ([]map[string]interface{}, error) {
+
+	var excludes map[common.IndexDefnId]map[common.PartitionId]map[uint64]bool
+	skips := make(map[common.IndexDefnId]bool)
+
+	storageMode := c.Settings().StorageMode()
+
+	if storageMode == "forestdb" {
+		// StorageStatistics not supported for forestdb
+		return nil, nil
+	}
+
+	if queryports, _, targetInstIds, _, partitions, _, ok := c.bridge.GetScanport(defnID, excludes, skips); ok {
+
+		// urls is list of Stats REST endpoints for all indexer nodes
+		// hosting the requested index
+		statUrls := []string{}
+		nodes, err := c.Nodes()
+		if err != nil {
+			return nil, err
+		}
+
+		for _, qp := range queryports {
+			for _, n := range nodes {
+				if qp == n.Queryport {
+					url := "http://" + n.Httpport + "/stats/storage"
+					statUrls = append(statUrls, url)
+				}
+			}
+		}
+
+		stats, err := getStatsFromIndexerNodes(statUrls, targetInstIds, partitions, storageMode)
+		if err != nil {
+			return nil, err
+		}
+		return stats, nil
+	}
+
+	return nil, errors.New("Unable to retrieve storage statistics from any replica index.")
+}
+
+func getStatsFromIndexerNodes(statUrls []string, targetInstIds []uint64,
+	partitions [][]common.PartitionId, storageMode string) ([]map[string]interface{}, error) {
+
+	storageStats := make([]map[string]interface{}, 0)
+	for i, statUrl := range statUrls {
+
+		resp, err := getWithAuth(statUrl)
+		if err != nil {
+			return nil, err
+		}
+		defer resp.Body.Close()
+		bytes, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			errStr := fmt.Sprintf("Error reading stats from %v : %v", statUrl, err)
+			return nil, errors.New(errStr)
+		}
+
+		var nodeStats []StorageStats
+		err = commonjson.Unmarshal(bytes, &nodeStats)
+		if err != nil {
+			errStr := fmt.Sprintf("Error unmarshalling stats from %v : %v", statUrl, err)
+			return nil, errors.New(errStr)
+		}
+		for _, nodeStat := range nodeStats {
+			if targetInstIds[i] == nodeStat.Id && contains(partitions[i], nodeStat.PartitionId) {
+				partnStats := getStatsForPartition(nodeStat, storageMode)
+				storageStats = append(storageStats, partnStats)
+			}
+		}
+	}
+	return storageStats, nil
+}
+
+func contains(partitionIds []common.PartitionId, partitionId common.PartitionId) bool {
+	for _, id := range partitionIds {
+		if partitionId == id {
+			return true
+		}
+	}
+	return false
+}
+
+func getStatsForPartition(instStats StorageStats, storageMode string) map[string]interface{} {
+
+	if storageMode == "plasma" {
+		storageStats := make(map[string]interface{})
+		storageStats[STAT_PARTITION_ID] = instStats.PartitionId
+		stats := instStats.Stats
+		mainStoreStats := stats["MainStore"].(map[string]interface{})
+		storageStats[STAT_NUM_PAGES] = mainStoreStats["num_pages"]
+		storageStats[STAT_NUM_ITEMS] = mainStoreStats["items_count"]
+		storageStats[STAT_RESIDENT_RATIO] = mainStoreStats["resident_ratio"]
+		storageStats[STAT_NUM_INSERT] = mainStoreStats["inserts"]
+		storageStats[STAT_NUM_DELETE] = mainStoreStats["deletes"]
+		storageStats[STAT_AVG_ITEM_SIZE] = mainStoreStats["avg_item_size"]
+		storageStats[STAT_AVG_PAGE_SIZE] = mainStoreStats["avg_page_size"]
+		return storageStats
+	}
+
+	if storageMode == "memory_optimized" {
+		storageStats := make(map[string]interface{})
+		storageStats[STAT_PARTITION_ID] = instStats.PartitionId
+		stats := instStats.Stats
+		items_count := stats["items_count"].(int64)
+		data_size := stats["data_size"].(int64)
+		avg_item_size := int64(0)
+		if items_count > 0 {
+			avg_item_size = data_size / items_count
+		}
+		storageStats[STAT_NUM_ITEMS] = items_count
+		storageStats[STAT_AVG_ITEM_SIZE] = avg_item_size
+		return storageStats
+	}
+
+	return nil
+}
+
+//-------------------------------------
+// StorageStatistics implementation end
+//-------------------------------------
+
 // DescribeError return error description as human readable string.
 func (c *GsiClient) DescribeError(err error) string {
 	if desc, ok := errorDescriptions[err.Error()]; ok {
@@ -1310,7 +1473,6 @@ func (c *GsiClient) doScan(defnID uint64, requestId string, broker *RequestBroke
 		foundScanport := false
 
 		if queryports, targetDefnID, targetInstIds, rollbackTimes, partitions, numPartitions, ok := c.bridge.GetScanport(defnID, excludes, skips); ok {
-
 			index := c.bridge.GetIndexDefn(targetDefnID)
 			start := time.Now()
 			count, scan_errs, partial, refresh := broker.scatter(c.makeScanClient, index, queryports, targetInstIds,

@@ -544,6 +544,9 @@ func TestStatsPersistence(t *testing.T) {
 		FailTestIfError(err, "Error in creating the index", t)
 	}
 
+	err := secondaryindex.CreateSecondaryIndex("p1", bucketName, indexManagementAddress, "", nil, true, nil, true, defaultIndexActiveTimeout, nil)
+	FailTestIfError(err, "Error in creating primary index p1", t)
+
 	testPersistence := func(enabled bool, persistenceInterval uint64) {
 		log.Printf("=== Testing for persistence enabled = %v, with interval = %v  ===", enabled, persistenceInterval)
 		err := secondaryindex.ChangeIndexerSettings("indexer.statsPersistenceInterval", persistenceInterval, clusterconfig.Username, clusterconfig.Password, kvaddress)
@@ -587,4 +590,24 @@ func TestStatsPersistence(t *testing.T) {
 	testPersistence(false, 0)
 	testPersistence(true, 10)
 	testPersistence(true, 5)
+}
+
+func TestStats_StorageStatistics(t *testing.T) {
+	log.Printf("In TestStats_StorageStatistics()")
+
+	bucketName := "default"
+
+	err := secondaryindex.CreateSecondaryIndex("index_age", bucketName, indexManagementAddress, "", []string{"age"}, false, nil, true, defaultIndexActiveTimeout, nil)
+	FailTestIfError(err, "Error in creating the index", t)
+
+	stats, err := secondaryindex.N1QLStorageStatistics("index_age", bucketName, indexScanAddress)
+	FailTestIfError(err, "Error from N1QLStorageStatistics", t)
+	log.Printf("Stats from Index4 StorageStatistics for index %v are %v", "index_age", stats)
+
+	err = secondaryindex.CreateSecondaryIndex("p1", bucketName, indexManagementAddress, "", nil, true, nil, true, defaultIndexActiveTimeout, nil)
+	FailTestIfError(err, "Error in creating primary index", t)
+
+	stats, err = secondaryindex.N1QLStorageStatistics("p1", bucketName, indexScanAddress)
+	FailTestIfError(err, "Error from N1QLStorageStatistics", t)
+	log.Printf("Stats from Index4 StorageStatistics for index %v are %v", "p1", stats)
 }
