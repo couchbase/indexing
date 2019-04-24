@@ -623,12 +623,12 @@ func (idx *indexer) initHttpsServer() error {
 			Addr:    sslAddr,
 			Handler: GetHTTPMux(),
 		}
-		if err := security.SecureServer(sslsrv); err != nil {
+		if err := security.SecureHTTPServer(sslsrv); err != nil {
 			return fmt.Errorf("Error in securing HTTPS server: %v", err)
 		}
 
 		// replace below with ListenAndServeTLS on moving to go1.8
-		lsnr, err := security.MakeListener(sslAddr)
+		lsnr, err := security.MakeAndSecureTCPListener(sslAddr)
 		if err != nil {
 			return fmt.Errorf("Error in creating SSL Listener: %v", err)
 		}

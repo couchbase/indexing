@@ -220,6 +220,11 @@ func setupServerTLSConfig() (*tls.Config, error) {
 		return nil, nil
 	}
 
+	return getTLSConfigFromSetting(setting)
+}
+
+func getTLSConfigFromSetting(setting *SecuritySetting) (*tls.Config, error) {
+
 	// Get certifiicate and cbauth config
 	cert := setting.certificate
 	if cert == nil {
@@ -276,6 +281,36 @@ func MakeTLSListener(tcpListener net.Listener) (net.Listener, error) {
 	}
 
 	return tcpListener, nil
+}
+
+//
+// Make a new tcp listener for given address.
+// Always make it secure, even if the security is not enabled.
+//
+func MakeAndSecureTCPListener(addr string) (net.Listener, error) {
+
+	addr, err := EncryptPortFromAddr(addr)
+	if err != nil {
+		return nil, err
+	}
+
+	tcpListener, err := makeTCPListener(addr)
+	if err != nil {
+		return nil, err
+	}
+
+	setting := GetSecuritySetting()
+	if setting == nil {
+		return nil, fmt.Errorf("Security setting required for TLS listener")
+	}
+
+	config, err := getTLSConfigFromSetting(setting)
+	if err != nil {
+		return nil, err
+	}
+
+	tlsListener := tls.NewListener(tcpListener, config)
+	return tlsListener, nil
 }
 
 //
@@ -607,6 +642,32 @@ func MakeHTTPSServer(server *http.Server) error {
 
 	// get server TLSConfig
 	config, err := setupServerTLSConfig()
+	if err != nil {
+		return err
+	}
+
+	if config != nil {
+		server.TLSConfig = config
+		server.TLSNextProto = make(map[string]func(*http.Server, *tls.Conn, http.Handler), 0)
+
+		logging.Infof("HTTPS server created for %v", server.Addr)
+	}
+
+	return nil
+}
+
+//
+// Secure the HTTP Server by setting TLS config
+// Always secure the given HTTP server (even if the security is not enabled).
+//
+func SecureHTTPServer(server *http.Server) error {
+
+	setting := GetSecuritySetting()
+	if setting == nil {
+		return fmt.Errorf("Security setting required for https server")
+	}
+
+	config, err := getTLSConfigFromSetting(setting)
 	if err != nil {
 		return err
 	}
