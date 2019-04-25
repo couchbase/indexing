@@ -453,8 +453,9 @@ func (mdb *memdbSlice) insertSecIndex(key []byte, docid []byte, workerId int, me
 	if newNode != nil {
 		if updated, oldNode := mdb.back[workerId].Update(entry, unsafe.Pointer(newNode)); updated {
 			t0 := time.Now()
+			oldSz := getNodeItemSize((*skiplist.Node)(oldNode))
 			mdb.main[workerId].DeleteNode((*skiplist.Node)(oldNode))
-			subtractKeySizeStat(mdb.idxStats, getNodeItemSize((*skiplist.Node)(oldNode)))
+			subtractKeySizeStat(mdb.idxStats, oldSz)
 			mdb.idxStats.Timings.stKVDelete.Put(time.Since(t0))
 			atomic.AddInt64(&mdb.delete_bytes, int64(len(docid)))
 		}
@@ -518,8 +519,9 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 		entriesToRemove := list.Keys()
 		for _, item := range entriesToRemove {
 			node := list.Remove(item)
+			oldSz := getNodeItemSize(node)
 			mdb.main[workerId].DeleteNode(node)
-			subtractKeySizeStat(mdb.idxStats, getNodeItemSize(node))
+			subtractKeySizeStat(mdb.idxStats, oldSz)
 		}
 		mdb.isDirty = true
 		return 0
@@ -544,9 +546,10 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 					"Skipping docid:%s (%v)", mdb.Id, mdb.idxInstId, mdb.idxPartnId, logging.TagStrUD(docid), err)
 				return emptyList()
 			}
+			oldSz := len(entry)
 			node := list.Remove(entry)
 			mdb.main[workerId].DeleteNode(node)
-			subtractKeySizeStat(mdb.idxStats, len(entry))
+			subtractKeySizeStat(mdb.idxStats, oldSz)
 			nmut++
 		}
 	}
@@ -626,8 +629,9 @@ func (mdb *memdbSlice) deleteSecIndex(docid []byte, workerId int) int {
 		mdb.idxStats.Timings.stKVDelete.Put(time.Since(t0))
 		atomic.AddInt64(&mdb.delete_bytes, int64(len(docid)))
 		t0 = time.Now()
+		oldSz := getNodeItemSize((*skiplist.Node)(node))
 		mdb.main[workerId].DeleteNode((*skiplist.Node)(node))
-		subtractKeySizeStat(mdb.idxStats, getNodeItemSize((*skiplist.Node)(node)))
+		subtractKeySizeStat(mdb.idxStats, oldSz)
 		mdb.idxStats.Timings.stKVDelete.Put(time.Since(t0))
 	}
 	mdb.isDirty = true
@@ -652,8 +656,9 @@ func (mdb *memdbSlice) deleteSecArrayIndex(docid []byte, workerId int) (nmut int
 	// Delete each entry in oldEntriesBytes
 	for _, item := range oldEntriesBytes {
 		node := list.Remove(item)
+		oldSz := getNodeItemSize(node)
 		mdb.main[workerId].DeleteNode(node)
-		subtractKeySizeStat(mdb.idxStats, getNodeItemSize(node))
+		subtractKeySizeStat(mdb.idxStats, oldSz)
 	}
 
 	mdb.isDirty = true

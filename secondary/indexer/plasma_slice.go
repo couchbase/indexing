@@ -714,8 +714,9 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 					newKeyCount[i], mdb.idxDefn.Desc, mdb.encodeBuf[workerId][:0], meta)
 				common.CrashOnError(err)
 				// Delete back
+				entrySz := len(entry)
 				mdb.main[workerId].DeleteKV(entry)
-				subtractKeySizeStat(mdb.idxStats, len(entry))
+				subtractKeySizeStat(mdb.idxStats, entrySz)
 			}
 		}
 	}
@@ -735,8 +736,9 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 				return 0
 			}
 			t0 := time.Now()
+			keyDelSz := len(keyToBeDeleted)
 			mdb.main[workerId].DeleteKV(keyToBeDeleted)
-			subtractKeySizeStat(mdb.idxStats, len(keyToBeDeleted))
+			subtractKeySizeStat(mdb.idxStats, keyDelSz)
 			mdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
 			atomic.AddInt64(&mdb.delete_bytes, int64(len(keyToBeDeleted)))
 			nmut++
@@ -772,8 +774,9 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 	if key == nil {
 		if oldkey != nil {
 			t0 := time.Now()
+			oldSz := len(oldkey)
 			mdb.back[workerId].DeleteKV(docid)
-			subtractArrayKeySizeStat(mdb.idxStats, len(oldkey))
+			subtractArrayKeySizeStat(mdb.idxStats, oldSz)
 			mdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
 			atomic.AddInt64(&mdb.delete_bytes, int64(len(docid)))
 		}
@@ -786,8 +789,9 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 
 		if oldkey != nil {
 			t0 := time.Now()
+			oldSz := len(oldkey)
 			mdb.back[workerId].DeleteKV(docid)
-			subtractArrayKeySizeStat(mdb.idxStats, len(oldkey))
+			subtractArrayKeySizeStat(mdb.idxStats, oldSz)
 			mdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
 			atomic.AddInt64(&mdb.delete_bytes, int64(len(docid)))
 		}
@@ -868,8 +872,9 @@ func (mdb *plasmaSlice) deleteSecIndex(docid []byte, compareKey []byte, workerId
 		defer mdb.main[workerId].End()
 		mdb.back[workerId].DeleteKV(docid)
 		entry := backEntry2entry(docid, backEntry, buf)
+		entrySz := len(entry)
 		mdb.main[workerId].DeleteKV(entry)
-		subtractKeySizeStat(mdb.idxStats, len(entry))
+		subtractKeySizeStat(mdb.idxStats, entrySz)
 		mdb.idxStats.Timings.stKVDelete.Put(time.Since(t0))
 	}
 
@@ -938,16 +943,18 @@ func (mdb *plasmaSlice) deleteSecArrayIndexNoTx(docid []byte, workerId int) (nmu
 			return
 		}
 		t0 := time.Now()
+		keyDelSz := len(keyToBeDeleted)
 		mdb.main[workerId].DeleteKV(keyToBeDeleted)
-		subtractKeySizeStat(mdb.idxStats, len(keyToBeDeleted))
+		subtractKeySizeStat(mdb.idxStats, keyDelSz)
 		mdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
 		atomic.AddInt64(&mdb.delete_bytes, int64(len(keyToBeDeleted)))
 	}
 
 	//delete from the back index
 	t0 = time.Now()
+	oldSz := len(olditm)
 	mdb.back[workerId].DeleteKV(docid)
-	subtractArrayKeySizeStat(mdb.idxStats, len(olditm))
+	subtractArrayKeySizeStat(mdb.idxStats, oldSz)
 	mdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
 	atomic.AddInt64(&mdb.delete_bytes, int64(len(docid)))
 	mdb.isDirty = true
