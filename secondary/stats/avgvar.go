@@ -6,11 +6,14 @@ import "fmt"
 // Average maintains the average and variance of a stream
 // of numbers in a space-efficient manner.
 type Average struct {
-	min   Int64Val
-	max   Int64Val
-	count Int64Val
-	sum   Int64Val
-	sumsq Int64Val
+	min       Int64Val
+	max       Int64Val
+	count     Int64Val
+	sum       Int64Val
+	sumsq     Int64Val
+	prevCount Int64Val
+	prevSum   Int64Val
+	prevSMA   Int64Val
 }
 
 func (av *Average) Init() {
@@ -20,6 +23,9 @@ func (av *Average) Init() {
 	av.count.Init()
 	av.sum.Init()
 	av.sumsq.Init()
+	av.prevCount.Init()
+	av.prevSum.Init()
+	av.prevSMA.Init()
 }
 
 // Add a sample to counting average.
@@ -91,12 +97,42 @@ func (av *Average) Sd() int64 {
 	return int64(math.Sqrt(float64(av.Variance())))
 }
 
+// Compute the simple moving average value.
+// Multiple threads can call this method for the same Average object
+// E.g., Endpoint when exiting, stats_manger.go periodically
+func (av *Average) MovingAvg() int64 {
+	for {
+		count := av.count.Value()
+		prevCount := av.prevCount.Value()
+		newSum := av.sum.Value()
+		prevSum := av.prevSum.Value()
+		prevSMA := av.prevSMA.Value()
+
+		var windowAvg int64
+		if count > prevCount {
+			windowAvg = (newSum - prevSum) / (count - prevCount)
+		}
+		newAvg := (prevSMA + windowAvg) / 2
+		if av.prevSMA.CAS(prevSMA, newAvg) {
+			av.prevCount.Set(count)
+			av.prevSum.Set(newSum)
+			return newAvg
+		}
+		// On CAS failure attempt a retry. As of this commit, It is okay to
+		// retry as there are at max only two threads contending for the same
+		// object i.e. logger thread in stats_manger.go (once every
+		// statsLogDumpInterval seconds) and either of genServer thread in
+		// dcp_feed.go or run() thread in endpoint.go
+	}
+}
+
 func (av *Average) MarshallJSON() string {
 	samples := av.count.Value()
 	min := av.Min()
 	max := av.Max()
 	mean := av.Mean()
 	variance := av.Variance()
-	return fmt.Sprintf("{\"samples\": %v, \"min\": %v, \"max\": %v, \"mean\": %v, \"variance\": %v}",
-		samples, min, max, mean, variance)
+	movingAvg := av.MovingAvg()
+	return fmt.Sprintf("{\"samples\": %v, \"min\": %v, \"max\": %v, \"mean\": %v, \"variance\": %v,\"movingAvg\":%v}",
+		samples, min, max, mean, variance, movingAvg)
 }
