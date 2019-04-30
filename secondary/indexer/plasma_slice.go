@@ -654,7 +654,7 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 			logging.Errorf("plasmaSlice::insertSecArrayIndex SliceId %v IndexInstId %v PartitionId %v Error in retrieving "+
 				"compostite old secondary keys. Skipping docid:%s Error: %v",
 				mdb.id, mdb.idxInstId, mdb.idxPartnId, logging.TagStrUD(docid), err)
-			mdb.deleteSecArrayIndex(docid, workerId)
+			mdb.deleteSecArrayIndexNoTx(docid, workerId)
 			return 0
 		}
 	}
@@ -668,7 +668,7 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 			logging.Errorf("plasmaSlice::insertSecArrayIndex SliceId %v IndexInstId %v PartitionId %v Error in creating "+
 				"compostite new secondary keys. Skipping docid:%s Error: %v",
 				mdb.id, mdb.idxInstId, mdb.idxPartnId, logging.TagStrUD(docid), err)
-			mdb.deleteSecArrayIndex(docid, workerId)
+			mdb.deleteSecArrayIndexNoTx(docid, workerId)
 			return 0
 		}
 	}
@@ -723,7 +723,7 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 				logging.Errorf("plasmaSlice::insertSecArrayIndex SliceId %v IndexInstId %v PartitionId %v Error forming entry "+
 					"to be added to main index. Skipping docid:%s Error: %v",
 					mdb.id, mdb.idxInstId, mdb.idxPartnId, logging.TagStrUD(docid), err)
-				mdb.deleteSecArrayIndex(docid, workerId)
+				mdb.deleteSecArrayIndexNoTx(docid, workerId)
 				return 0
 			}
 			t0 := time.Now()
@@ -746,7 +746,7 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 				logging.Errorf("plasmaSlice::insertSecArrayIndex SliceId %v IndexInstId %v PartitionId %v Error forming entry "+
 					"to be added to main index. Skipping docid:%s Error: %v",
 					mdb.id, mdb.idxInstId, mdb.idxPartnId, logging.TagStrUD(docid), err)
-				mdb.deleteSecArrayIndex(docid, workerId)
+				mdb.deleteSecArrayIndexNoTx(docid, workerId)
 				return 0
 			}
 			t0 := time.Now()
@@ -863,11 +863,20 @@ func (mdb *plasmaSlice) deleteSecIndex(docid []byte, compareKey []byte, workerId
 }
 
 func (mdb *plasmaSlice) deleteSecArrayIndex(docid []byte, workerId int) (nmut int) {
-	var olditm []byte
-	var err error
 
 	mdb.back[workerId].Begin()
 	defer mdb.back[workerId].End()
+
+	mdb.main[workerId].Begin()
+	defer mdb.main[workerId].End()
+
+	return mdb.deleteSecArrayIndexNoTx(docid, workerId)
+}
+
+func (mdb *plasmaSlice) deleteSecArrayIndexNoTx(docid []byte, workerId int) (nmut int) {
+	var olditm []byte
+	var err error
+
 	olditm, err = mdb.back[workerId].LookupKV(docid)
 	if err == plasma.ErrItemNotFound {
 		olditm = nil
@@ -898,9 +907,6 @@ func (mdb *plasmaSlice) deleteSecArrayIndex(docid []byte, workerId int) (nmut in
 			"compostite old secondary keys %v", mdb.id, mdb.idxInstId, mdb.idxPartnId, err)
 		return
 	}
-
-	mdb.main[workerId].Begin()
-	defer mdb.main[workerId].End()
 
 	var t0 time.Time
 	// Delete each of indexEntriesToBeDeleted from main index
