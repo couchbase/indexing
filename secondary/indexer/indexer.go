@@ -4020,7 +4020,7 @@ func (idx *indexer) checkDDLInProgress() (bool, []string) {
 			index.State == common.INDEX_STATE_CATCHUP) ||
 			idx.checkStreamRequestPending(common.INIT_STREAM, index.Defn.Bucket) {
 			ddlInProgress = true
-			inProgressIndexNames = append(inProgressIndexNames, index.Defn.Name)
+			inProgressIndexNames = append(inProgressIndexNames, index.Defn.Bucket+":"+index.Defn.Name)
 		}
 	}
 	return ddlInProgress, inProgressIndexNames
@@ -6249,14 +6249,13 @@ func (idx *indexer) handleSetLocalMeta(msg Message) {
 	checkDDL := msg.(*MsgClustMgrLocal).GetCheckDDL()
 
 	if key == RebalanceRunning && checkDDL {
-		if inProgress, _ := idx.checkDDLInProgress(); inProgress {
-			logging.Errorf("ServiceMgr::handleSetLocalMeta Found DDL Running. Key %v", key)
-			err := errors.New("indexer rebalance failure - ddl in progress")
+		if inProgress, indexList := idx.checkDDLInProgress(); inProgress {
 			respch <- &MsgClustMgrLocal{
-				mType: CLUST_MGR_SET_LOCAL,
-				key:   key,
-				value: value,
-				err:   err,
+				mType:             CLUST_MGR_SET_LOCAL,
+				key:               key,
+				value:             value,
+				err:               ErrDDLRunning,
+				inProgressIndexes: indexList,
 			}
 			return
 		}

@@ -77,6 +77,8 @@ type ServiceMgr struct {
 
 	cleanupPending bool
 	indexerReady   bool
+
+	p runParams
 }
 
 type rebalanceContext struct {
@@ -105,8 +107,15 @@ type state struct {
 	rebalanceTask *service.Task
 }
 
+type runParams struct {
+	ddlRunning           bool
+	ddlRunningIndexNames []string
+}
+
 var rebalanceHttpTimeout int
 var MoveIndexStarted = "Move Index has started. Check Indexes UI for progress and Logs UI for any error"
+
+var ErrDDLRunning = errors.New("indexer rebalance failure - ddl in progress")
 
 func NewRebalanceMgr(supvCmdch MsgChannel, supvMsgch MsgChannel, config c.Config,
 	rebalanceRunning bool, rebalanceToken *RebalanceToken) (RebalanceMgr, Message) {
@@ -538,11 +547,8 @@ func (m *ServiceMgr) prepareRebalance(change service.TopologyChange) error {
 	}
 
 	if c.GetBuildMode() == c.ENTERPRISE {
-		if ddlRunning, ddlRunningIndexNames := m.checkDDLRunning(); ddlRunning {
-			l.Errorf("ServiceMgr::prepareRebalance Found index build Running. Cannot Initiate Prepare Phase")
-			fmtMsg := "indexer rebalance failure - index build is in progress for indexes: %v."
-			return errors.New(fmt.Sprintf(fmtMsg, ddlRunningIndexNames))
-		}
+		m.p.ddlRunning, m.p.ddlRunningIndexNames = m.checkDDLRunning()
+		l.Infof("ServiceMgr::prepareRebalance Found DDL Running %v", m.p.ddlRunningIndexNames)
 	}
 
 	l.Infof("ServiceMgr::prepareRebalance Init Prepare Phase")
@@ -606,7 +612,7 @@ func (m *ServiceMgr) startFailover(change service.TopologyChange) error {
 	m.updateRebalanceProgressLOCKED(0)
 
 	m.rebalancer = NewRebalancer(nil, nil, string(m.nodeInfo.NodeID), true,
-		m.rebalanceProgressCallback, m.rebalanceDoneCallback, m.supvMsgch, "", m.config.Load(), nil, false)
+		m.rebalanceProgressCallback, m.rebalanceDoneCallback, m.supvMsgch, "", m.config.Load(), nil, false, nil)
 
 	return nil
 }
@@ -680,7 +686,7 @@ func (m *ServiceMgr) startRebalance(change service.TopologyChange) error {
 
 	m.rebalancer = NewRebalancer(transferTokens, m.rebalanceToken, string(m.nodeInfo.NodeID),
 		true, m.rebalanceProgressCallback, m.rebalanceDoneCallback, m.supvMsgch,
-		m.localhttp, m.config.Load(), &change, runPlanner)
+		m.localhttp, m.config.Load(), &change, runPlanner, &m.p)
 
 	return nil
 }
@@ -1291,11 +1297,20 @@ func (m *ServiceMgr) registerRebalanceRunning(checkDDL bool) error {
 	respMsg := <-respch
 	resp := respMsg.(*MsgClustMgrLocal)
 
+	m.resetRunParams()
+
 	errMsg := resp.GetError()
 	if errMsg != nil {
-		l.Errorf("ServiceMgr::registerRebalanceRunning Unable to set RebalanceRunning In Local"+
-			"Meta Storage. Err %v", errMsg)
-		return errMsg
+		if errMsg == ErrDDLRunning {
+			m.p.ddlRunning = true
+			m.p.ddlRunningIndexNames = resp.GetInProgressIndexes()
+			l.Infof("ServiceMgr::registerRebalanceRunning Found DDL Running %v", m.p.ddlRunningIndexNames)
+		} else {
+			l.Errorf("ServiceMgr::registerRebalanceRunning Unable to set RebalanceRunning In Local"+
+				"Meta Storage. Err %v", errMsg)
+
+			return errMsg
+		}
 	}
 
 	// for ddl service manager
@@ -2077,7 +2092,7 @@ func (m *ServiceMgr) handleRegisterRebalanceToken(w http.ResponseWriter, r *http
 
 			m.rebalancerF = NewRebalancer(nil, &rebalToken, string(m.nodeInfo.NodeID),
 				false, nil, m.rebalanceDoneCallback, m.supvMsgch,
-				m.localhttp, m.config.Load(), nil, false)
+				m.localhttp, m.config.Load(), nil, false, &m.p)
 			m.writeOk(w)
 			return
 
@@ -2199,7 +2214,12 @@ func (m *ServiceMgr) processMoveIndex(path string, value []byte, rev interface{}
 			m.rebalanceRunning = true
 			m.rebalanceToken = &rebalToken
 			var err error
-			if err = m.registerRebalanceRunning(true); err != nil {
+			if err = m.registerRebalanceRunning(true); err != nil || m.p.ddlRunning {
+				if m.p.ddlRunning {
+					l.Errorf("ServiceMgr::processMoveIndex Found index build running. Cannot process move index.")
+					fmtMsg := "move index failure - index build is in progress for indexes: %v."
+					err = errors.New(fmt.Sprintf(fmtMsg, m.p.ddlRunningIndexNames))
+				}
 				m.setErrorInMoveIndexToken(&rebalToken, err)
 				m.runCleanupPhaseLOCKED(MoveIndexTokenPath, false)
 				return nil
@@ -2212,7 +2232,7 @@ func (m *ServiceMgr) processMoveIndex(path string, value []byte, rev interface{}
 			}
 			m.rebalancerF = NewRebalancer(nil, &rebalToken, string(m.nodeInfo.NodeID),
 				false, nil, m.moveIndexDoneCallback, m.supvMsgch,
-				m.localhttp, m.config.Load(), nil, false)
+				m.localhttp, m.config.Load(), nil, false, nil)
 		}
 	}
 
@@ -2440,7 +2460,12 @@ func (m *ServiceMgr) initMoveIndex(req *manager.IndexRequest, nodes []string) (e
 		return nil, true
 	}
 
-	if err = m.registerRebalanceRunning(true); err != nil {
+	if err = m.registerRebalanceRunning(true); err != nil || m.p.ddlRunning {
+		if m.p.ddlRunning {
+			l.Errorf("ServiceMgr::handleMoveIndex Found index build running. Cannot process move index.")
+			fmtMsg := "move index failure - index build is in progress for indexes: %v."
+			err = errors.New(fmt.Sprintf(fmtMsg, m.p.ddlRunningIndexNames))
+		}
 		m.runCleanupPhaseLOCKED(MoveIndexTokenPath, false)
 		return err, false
 	}
@@ -2460,7 +2485,7 @@ func (m *ServiceMgr) initMoveIndex(req *manager.IndexRequest, nodes []string) (e
 	time.Sleep(2 * time.Second)
 
 	rebalancer := NewRebalancer(transferTokens, m.rebalanceToken, string(m.nodeInfo.NodeID),
-		true, nil, m.moveIndexDoneCallback, m.supvMsgch, m.localhttp, m.config.Load(), nil, false)
+		true, nil, m.moveIndexDoneCallback, m.supvMsgch, m.localhttp, m.config.Load(), nil, false, nil)
 
 	m.rebalancer = rebalancer
 	m.rebalanceRunning = true
@@ -2824,6 +2849,11 @@ func (m *ServiceMgr) getLocalMeta(key string) (string, error) {
 	err := resp.GetError()
 
 	return val, err
+}
+
+func (m *ServiceMgr) resetRunParams() {
+	m.p.ddlRunning = false
+	m.p.ddlRunningIndexNames = nil
 }
 
 func (m *ServiceMgr) writeOk(w http.ResponseWriter) {

@@ -1537,12 +1537,13 @@ func (m *MsgClustMgrTopology) GetInstMap() common.IndexInstMap {
 //CLUST_MGR_SET_LOCAL
 //CLUST_MGR_DEL_LOCAL
 type MsgClustMgrLocal struct {
-	mType    MsgType
-	key      string
-	value    string
-	err      error
-	respch   MsgChannel
-	checkDDL bool
+	mType             MsgType
+	key               string
+	value             string
+	err               error
+	respch            MsgChannel
+	checkDDL          bool
+	inProgressIndexes []string
 }
 
 func (m *MsgClustMgrLocal) GetMsgType() MsgType {
@@ -1567,6 +1568,10 @@ func (m *MsgClustMgrLocal) GetRespCh() MsgChannel {
 
 func (m *MsgClustMgrLocal) GetCheckDDL() bool {
 	return m.checkDDL
+}
+
+func (m *MsgClustMgrLocal) GetInProgressIndexes() []string {
+	return m.inProgressIndexes
 }
 
 type MsgConfigUpdate struct {
