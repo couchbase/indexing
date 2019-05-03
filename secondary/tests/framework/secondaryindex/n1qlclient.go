@@ -27,6 +27,11 @@ func N1QLCreateSecondaryIndex(
 
 	log.Printf("N1QLCreateSecondaryIndex :: server = %v", server)
 	nc, err := nclient.NewGSIIndexer(server, "default", bucketName)
+	if err != nil {
+		return err
+	}
+	defer nclient.CloseGsiKeyspace(nc)
+
 	logging.SetLogLevel(logging.Error)
 	requestId := "12345"
 	exprs := make(expression.Expressions, 0, len(indexFields))
@@ -50,6 +55,8 @@ func N1QLRange(indexName, bucketName, server string, low, high []interface{}, in
 	if err != nil {
 		return nil, err
 	}
+	defer nclient.CloseGsiKeyspace(client)
+
 	logging.SetLogLevel(logging.Error)
 	tctx := &testContext{}
 	conn, err := datastore.NewSizedIndexConnection(100000, tctx)
@@ -92,6 +99,8 @@ func N1QLLookup(indexName, bucketName, server string, values []interface{},
 	if err != nil {
 		return nil, err
 	}
+	defer nclient.CloseGsiKeyspace(client)
+
 	logging.SetLogLevel(logging.Error)
 	tctx := &testContext{}
 	conn, err := datastore.NewSizedIndexConnection(100000, tctx)
@@ -134,6 +143,8 @@ func N1QLScanAll(indexName, bucketName, server string, limit int64,
 	if err != nil {
 		return nil, err
 	}
+	defer nclient.CloseGsiKeyspace(client)
+
 	logging.SetLogLevel(logging.Error)
 	tctx := &testContext{}
 	conn, err := datastore.NewSizedIndexConnection(100000, tctx)
@@ -176,6 +187,8 @@ func N1QLScans(indexName, bucketName, server string, scans qc.Scans, reverse, di
 	if err != nil {
 		return nil, err
 	}
+	defer nclient.CloseGsiKeyspace(client)
+
 	logging.SetLogLevel(logging.Error)
 	tctx := &testContext{}
 	conn, err := datastore.NewSizedIndexConnection(100000, tctx)
@@ -234,6 +247,8 @@ func N1QLMultiScanCount(indexName, bucketName, server string, scans qc.Scans, di
 	if err != nil {
 		return 0, err
 	}
+	defer nclient.CloseGsiKeyspace(client)
+
 	logging.SetLogLevel(logging.Error)
 
 	requestid := getrequestid()
@@ -287,6 +302,8 @@ func N1QLScan3(indexName, bucketName, server string, scans qc.Scans, reverse, di
 	if err != nil {
 		return nil, nil, err
 	}
+	defer nclient.CloseGsiKeyspace(client)
+
 	logging.SetLogLevel(logging.Error)
 
 	tctx := &testContext{}
@@ -356,6 +373,8 @@ func N1QLStorageStatistics(indexName, bucketName, server string) ([]map[string]i
 	if err != nil {
 		return nil, err
 	}
+	defer nclient.CloseGsiKeyspace(client)
+
 	logging.SetLogLevel(logging.Error)
 
 	requestid := getrequestid()

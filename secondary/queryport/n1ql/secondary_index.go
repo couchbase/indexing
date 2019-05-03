@@ -98,6 +98,10 @@ type gsiKeyspace struct {
 	logPrefix      string
 	version        uint64
 	clusterVersion uint64
+
+	logstatsStopCh    chan bool
+	backfillMonStopCh chan bool
+	closed            uint32
 }
 
 // NewGSIIndexer manage new set of indexes under namespace->keyspace,
@@ -111,11 +115,13 @@ func NewGSIIndexer(
 	l.SetLogLevel(l.Info)
 
 	gsi := &gsiKeyspace{
-		clusterURL:     clusterURL,
-		namespace:      namespace,
-		keyspace:       keyspace,
-		indexes:        make(map[uint64]datastore.Index), // defnID -> index
-		primaryIndexes: make(map[uint64]datastore.PrimaryIndex),
+		clusterURL:        clusterURL,
+		namespace:         namespace,
+		keyspace:          keyspace,
+		indexes:           make(map[uint64]datastore.Index), // defnID -> index
+		primaryIndexes:    make(map[uint64]datastore.PrimaryIndex),
+		logstatsStopCh:    make(chan bool),
+		backfillMonStopCh: make(chan bool),
 	}
 	tm := time.Now().UnixNano()
 	gsi.logPrefix = fmt.Sprintf("GSIC[%s/%s-%v]", namespace, keyspace, tm)
@@ -631,6 +637,31 @@ func (gsi *gsiKeyspace) getPrimaryIndexFromVersion(index *secondaryIndex,
 	}
 
 	return datastore.PrimaryIndex(index)
+}
+
+// Closing gsiKeyspace only means stopping of the stats logger and
+// backfill monitor. This will enable garbage collection of the
+// gsiKeyspace object.
+//
+// New scan request on closed gsiKeyspace can lead to scans reading
+// stale value of backfillSize, which can lead to:
+// (1) exceeding backfill limit (can lead to disk getting full)
+//     OR
+// (2) false scan failures (due to backfillLimit) which require backfill.
+//
+// So, to be safe, caller should NEVER call Close() when
+// (1) There are any ongoing queries using this gsiKeyspace object.
+//     OR
+// (2) New incoming queries are expected to use this gsiKeyspace object.
+func (gsi *gsiKeyspace) Close() {
+	if atomic.CompareAndSwapUint32(&gsi.closed, 0, 1) {
+		close(gsi.backfillMonStopCh)
+		close(gsi.logstatsStopCh)
+	}
+}
+
+func CloseGsiKeyspace(gsi datastore.Indexer) {
+	gsi.(*gsiKeyspace).Close()
 }
 
 //------------------
@@ -1832,24 +1863,29 @@ func (gsi *gsiKeyspace) logstats(logtick time.Duration) {
 
 	sofar := int64(0)
 	for {
-		<-tick.C
-		scandur := atomic.LoadInt64(&gsi.scandur)
-		blockeddur := atomic.LoadInt64(&gsi.blockeddur)
-		throttledur := atomic.LoadInt64(&gsi.throttledur)
-		primedur := atomic.LoadInt64(&gsi.primedur)
-		totalscans := atomic.LoadInt64(&gsi.totalscans)
-		totalbackfills := atomic.LoadInt64(&gsi.totalbackfills)
-		if totalscans > sofar {
-			fmsg := `%v logstats %q {` +
-				`"gsi_scan_count":%v,"gsi_scan_duration":%v,` +
-				`"gsi_throttle_duration":%v,` +
-				`"gsi_prime_duration":%v,"gsi_blocked_duration":%v,` +
-				`"gsi_totalbackfills":%v}`
-			l.Infof(
-				fmsg, gsi.logPrefix, gsi.keyspace, totalscans, scandur,
-				throttledur, primedur, blockeddur, totalbackfills)
+		select {
+		case <-gsi.logstatsStopCh:
+			return
+
+		case <-tick.C:
+			scandur := atomic.LoadInt64(&gsi.scandur)
+			blockeddur := atomic.LoadInt64(&gsi.blockeddur)
+			throttledur := atomic.LoadInt64(&gsi.throttledur)
+			primedur := atomic.LoadInt64(&gsi.primedur)
+			totalscans := atomic.LoadInt64(&gsi.totalscans)
+			totalbackfills := atomic.LoadInt64(&gsi.totalbackfills)
+			if totalscans > sofar {
+				fmsg := `%v logstats %q {` +
+					`"gsi_scan_count":%v,"gsi_scan_duration":%v,` +
+					`"gsi_throttle_duration":%v,` +
+					`"gsi_prime_duration":%v,"gsi_blocked_duration":%v,` +
+					`"gsi_totalbackfills":%v}`
+				l.Infof(
+					fmsg, gsi.logPrefix, gsi.keyspace, totalscans, scandur,
+					throttledur, primedur, blockeddur, totalbackfills)
+			}
+			sofar = totalscans
 		}
-		sofar = totalscans
 	}
 }
 
@@ -1860,21 +1896,26 @@ func (gsi *gsiKeyspace) backfillMonitor(period time.Duration) {
 	}()
 
 	for {
-		<-tick.C
-		n1ql_backfill_temp_dir := gsi.getTmpSpaceDir()
-		files, err := ioutil.ReadDir(n1ql_backfill_temp_dir)
-		if err != nil {
+		select {
+		case <-gsi.backfillMonStopCh:
 			return
-		}
 
-		size := int64(0)
-		for _, file := range files {
-			fname := path.Join(n1ql_backfill_temp_dir, file.Name())
-			if strings.Contains(fname, BACKFILLPREFIX) {
-				size += int64(file.Size())
+		case <-tick.C:
+			n1ql_backfill_temp_dir := gsi.getTmpSpaceDir()
+			files, err := ioutil.ReadDir(n1ql_backfill_temp_dir)
+			if err != nil {
+				return
 			}
+
+			size := int64(0)
+			for _, file := range files {
+				fname := path.Join(n1ql_backfill_temp_dir, file.Name())
+				if strings.Contains(fname, BACKFILLPREFIX) {
+					size += int64(file.Size())
+				}
+			}
+			atomic.StoreInt64(&gsi.backfillSize, size)
 		}
-		atomic.StoreInt64(&gsi.backfillSize, size)
 	}
 }
 

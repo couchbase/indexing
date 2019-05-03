@@ -94,7 +94,7 @@ func (stats *EndpointStats) IsClosed() bool {
 }
 
 func (stats *EndpointStats) String() string {
-	var stitems [13]string
+	var stitems [14]string
 	stitems[0] = `"mutCount":` + strconv.FormatUint(stats.mutCount.Value(), 10)
 	stitems[1] = `"upsertCount":` + strconv.FormatUint(stats.upsertCount.Value(), 10)
 	stitems[2] = `"deleteCount":` + strconv.FormatUint(stats.deleteCount.Value(), 10)
@@ -107,7 +107,8 @@ func (stats *EndpointStats) String() string {
 	stitems[9] = `"latency.min":` + strconv.FormatInt(stats.prjLatency.Min(), 10)
 	stitems[10] = `"latency.max":` + strconv.FormatInt(stats.prjLatency.Max(), 10)
 	stitems[11] = `"latency.avg":` + strconv.FormatInt(stats.prjLatency.Mean(), 10)
-	stitems[12] = `"endpChLen":` + strconv.FormatUint(stats.endpChLen.Value(), 10)
+	stitems[12] = `"latency.movingAvg":` + strconv.FormatInt(stats.prjLatency.MovingAvg(), 10)
+	stitems[13] = `"endpChLen":` + strconv.FormatUint(stats.endpChLen.Value(), 10)
 	statjson := strings.Join(stitems[:], ",")
 	return fmt.Sprintf("{%v}", statjson)
 }

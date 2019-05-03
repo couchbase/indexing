@@ -299,7 +299,7 @@ func queryRestAPI(
 	responseBody := ioutil.NopCloser(bytes.NewBuffer(bodyBytes))
 	d := json.NewDecoder(responseBody)
 	if err = d.Decode(&out); err != nil {
-		logging.Errorf("queryRestAPI: Error while decoding the response from path: %s, response body: %s", path, string(bodyBytes))
+		logging.Errorf("queryRestAPI: Error while decoding the response from path: %s, response body: %s, err: %v", path, string(bodyBytes), err)
 		return err
 	}
 	return nil
@@ -311,7 +311,10 @@ func (c *Client) RunObservePool(pool string, callb func(interface{}) error, canc
 	path := "/poolsStreaming/" + pool
 	decoder := func(bs []byte) (interface{}, error) {
 		var pool Pool
-		err := json.Unmarshal(bs, &pool)
+		var err error
+		if err = json.Unmarshal(bs, &pool); err != nil {
+			logging.Errorf("RunObservePool: Error while decoding the response from path: %s, response body: %s, err: %v", path, string(bs), err)
+		}
 		return &pool, err
 	}
 
@@ -324,7 +327,10 @@ func (c *Client) RunObserveNodeServices(pool string, callb func(interface{}) err
 	path := "/pools/" + pool + "/nodeServicesStreaming"
 	decoder := func(bs []byte) (interface{}, error) {
 		var ps PoolServices
-		err := json.Unmarshal(bs, &ps)
+		var err error
+		if err = json.Unmarshal(bs, &ps); err != nil {
+			logging.Errorf("RunObserveNodeServices: Error while decoding the response from path: %s, response body: %s, err: %v", path, string(bs), err)
+		}
 		return &ps, err
 	}
 
