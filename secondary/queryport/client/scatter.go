@@ -47,7 +47,7 @@ var NUM_SYNC_POOLS int
 var syncPoolsCtr uint32
 
 func InitializeSyncPools() []*common.BytesBufPool {
-	NUM_SYNC_POOLS = runtime.NumCPU() * 2
+	NUM_SYNC_POOLS = runtime.GOMAXPROCS(0) * 2
 	pools := make([]*common.BytesBufPool, NUM_SYNC_POOLS)
 	for i := 0; i < NUM_SYNC_POOLS; i++ {
 		pools[i] = common.NewByteBufferPool(common.TEMP_BUF_SIZE)

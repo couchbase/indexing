@@ -832,9 +832,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.numSliceWriters": ConfigValue{
-		runtime.NumCPU(),
+		runtime.GOMAXPROCS(0),
 		"Number of Writer Threads for a Slice",
-		runtime.NumCPU(),
+		runtime.GOMAXPROCS(0),
 		true,  // immutable
 		false, // case-insensitive
 	},
@@ -1024,9 +1024,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.plasma.numReaders": ConfigValue{
-		runtime.NumCPU() * 3,
+		runtime.GOMAXPROCS(0) * 3,
 		"Numbers of readers for plasma",
-		runtime.NumCPU() * 3,
+		runtime.GOMAXPROCS(0) * 3,
 		false, // mutable
 		false, // case-insensitive
 	},
@@ -1870,9 +1870,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.settings.moi.recovery_threads": ConfigValue{
-		runtime.NumCPU(),
+		runtime.GOMAXPROCS(0),
 		"Number of concurrent threads for rebuilding index from disk snapshot",
-		runtime.NumCPU(),
+		runtime.GOMAXPROCS(0),
 		false, // mutable
 		false, // case-insensitive
 	},

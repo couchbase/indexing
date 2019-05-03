@@ -230,7 +230,7 @@ func (slice *plasmaSlice) initStores() error {
 	cfg.LSSLogSegmentSize = int64(slice.sysconf["plasma.LSSSegmentFileSize"].Int())
 	cfg.UseCompression = slice.sysconf["plasma.useCompression"].Bool()
 	cfg.AutoSwapper = true
-	cfg.NumEvictorThreads = int(float32(runtime.NumCPU())*
+	cfg.NumEvictorThreads = int(float32(runtime.GOMAXPROCS(0))*
 		float32(slice.sysconf["plasma.evictionCPUPercent"].Int())/(100) + 0.5)
 	cfg.DisableReadCaching = slice.sysconf["plasma.disableReadCaching"].Bool()
 	cfg.AutoMVCCPurging = slice.sysconf["plasma.purger.enabled"].Bool()
@@ -1091,7 +1091,7 @@ func (mdb *plasmaSlice) doPersistSnapshot(s *plasmaSnapshot) {
 				return nil
 			}
 
-			var concurr int = int(float32(runtime.NumCPU())*float32(mdb.sysconf["plasma.persistenceCPUPercent"].Int())/(100*2) + 0.75)
+			var concurr int = int(float32(runtime.GOMAXPROCS(0))*float32(mdb.sysconf["plasma.persistenceCPUPercent"].Int())/(100*2) + 0.75)
 
 			var wg sync.WaitGroup
 			wg.Add(1)
