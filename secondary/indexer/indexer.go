@@ -1125,6 +1125,9 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 	case INDEXER_SECURITY_CHANGE:
 		idx.handleSecurityChange(msg)
 
+	case STORAGE_ROLLBACK_DONE:
+		idx.handleStorageRollbackDone(msg)
+
 	default:
 		logging.Fatalf("Indexer::handleWorkerMsgs Unknown Message %+v", msg)
 		common.CrashOnError(errors.New("Unknown Msg On Worker Channel"))
@@ -2936,17 +2939,38 @@ func (idx *indexer) handleInitRecovery(msg Message) {
 			idx.streamBucketRetryTs[streamId][bucket] = nil
 			idx.startBucketStream(streamId, bucket, rts, nil, nil)
 		} else {
-			restartTs, err := idx.processRollback(streamId, bucket, ts)
-			if err != nil {
-				common.CrashOnError(err)
-			}
-			idx.startBucketStream(streamId, bucket, restartTs, nil, nil)
-
-			go idx.collectProgressStats(true)
+			idx.processRollback(streamId, bucket, ts)
 		}
 	} else {
 		idx.startBucketStream(streamId, bucket, restartTs, retryTs, nil)
 	}
+
+}
+
+func (idx *indexer) handleStorageRollbackDone(msg Message) {
+
+	bucket := msg.(*MsgRollbackDone).GetBucket()
+	streamId := msg.(*MsgRollbackDone).GetStreamId()
+	restartTs := msg.(*MsgRollbackDone).GetRestartTs()
+	err := msg.(*MsgRollbackDone).GetError()
+
+	//notify storage rollback done
+	if streamId == common.MAINT_STREAM {
+		idx.scanCoordCmdCh <- &MsgRollback{
+			streamId:     streamId,
+			bucket:       bucket,
+			rollbackTime: 0,
+		}
+		<-idx.scanCoordCmdCh
+	}
+
+	if err != nil {
+		logging.Fatalf("Indexer::handleStorageRollbackDone Error during Rollback %v", err)
+		common.CrashOnError(err)
+	}
+
+	idx.startBucketStream(streamId, bucket, restartTs, nil, nil)
+	go idx.collectProgressStats(true)
 
 }
 
@@ -4776,7 +4800,7 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 }
 
 func (idx *indexer) processRollback(streamId common.StreamId,
-	bucket string, rollbackTs *common.TsVbuuid) (*common.TsVbuuid, error) {
+	bucket string, rollbackTs *common.TsVbuuid) {
 
 	if streamId == common.MAINT_STREAM {
 		idx.bucketRollbackTimes[bucket] = time.Now().UnixNano()
@@ -4794,23 +4818,7 @@ func (idx *indexer) processRollback(streamId common.StreamId,
 	}
 
 	idx.storageMgrCmdCh <- msg
-	res := <-idx.storageMgrCmdCh
-
-	//notify storage rollback done
-	if streamId == common.MAINT_STREAM {
-		msg.rollbackTime = 0
-		idx.scanCoordCmdCh <- msg
-		<-idx.scanCoordCmdCh
-	}
-
-	if res.GetMsgType() != MSG_ERROR {
-		rollbackTs := res.(*MsgRollback).GetRollbackTs()
-		return rollbackTs, nil
-	} else {
-		logging.Fatalf("Indexer::processRollback Error during Rollback %v", res)
-		respErr := res.(*MsgError).GetError()
-		return nil, respErr.cause
-	}
+	<-idx.storageMgrCmdCh
 
 }
 

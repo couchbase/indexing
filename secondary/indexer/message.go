@@ -115,6 +115,7 @@ const (
 	INDEXER_RECOVERY_DONE
 	INDEXER_BUCKET_NOT_FOUND
 	INDEXER_ROLLBACK
+	STORAGE_ROLLBACK_DONE
 	STREAM_REQUEST_DONE
 	INDEXER_PAUSE
 	INDEXER_RESUME
@@ -1258,6 +1259,33 @@ func (m *MsgRollback) GetRollbackTime() int64 {
 	return m.rollbackTime
 }
 
+type MsgRollbackDone struct {
+	streamId  common.StreamId
+	bucket    string
+	restartTs *common.TsVbuuid
+	err       error
+}
+
+func (m *MsgRollbackDone) GetMsgType() MsgType {
+	return STORAGE_ROLLBACK_DONE
+}
+
+func (m *MsgRollbackDone) GetStreamId() common.StreamId {
+	return m.streamId
+}
+
+func (m *MsgRollbackDone) GetBucket() string {
+	return m.bucket
+}
+
+func (m *MsgRollbackDone) GetRestartTs() *common.TsVbuuid {
+	return m.restartTs
+}
+
+func (m *MsgRollbackDone) GetError() error {
+	return m.err
+}
+
 type MsgRepairAbort struct {
 	streamId common.StreamId
 	bucket   string
@@ -1810,6 +1838,8 @@ func (m MsgType) String() string {
 		return "INDEXER_BUCKET_NOT_FOUND"
 	case INDEXER_ROLLBACK:
 		return "INDEXER_ROLLBACK"
+	case STORAGE_ROLLBACK_DONE:
+		return "STORAGE_ROLLBACK_DONE"
 	case STREAM_REQUEST_DONE:
 		return "STREAM_REQUEST_DONE"
 	case INDEXER_PAUSE:
