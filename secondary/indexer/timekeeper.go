@@ -63,6 +63,7 @@ type InitialBuildInfo struct {
 	buildTs              Timestamp
 	buildDoneAckReceived bool
 	minMergeTs           *common.TsVbuuid //minimum merge ts for init stream
+	addInstPending       bool
 }
 
 //timeout in milliseconds to batch the vbuckets
@@ -1377,6 +1378,7 @@ func (tk *timekeeper) handleInitBuildDoneAck(cmd Message) {
 	//successfully added to MAINT_STREAM. Set the buildDoneAck flag and the
 	//mergeTs for the Catchup state indexes.
 	if streamId == common.INIT_STREAM {
+		tk.setAddInstPending(streamId, bucket, false)
 		if mergeTs != nil {
 			tk.setMergeTs(streamId, bucket, mergeTs)
 		} else {
@@ -1697,6 +1699,8 @@ func (tk *timekeeper) checkInitialBuildDone(streamId common.StreamId,
 
 				logging.Infof("Timekeeper::checkInitialBuildDone Initial Build Done Index: %v "+
 					"Stream: %v Bucket: %v BuildTS: %v", idx.InstId, streamId, bucket, buildInfo.buildTs)
+
+				tk.setAddInstPending(streamId, bucket, true)
 
 				//generate init build done msg
 				tk.supvRespch <- &MsgTKInitBuildDone{
@@ -2379,6 +2383,23 @@ func (tk *timekeeper) changeIndexStateForBucket(bucket string, state common.Inde
 
 }
 
+func (tk *timekeeper) setAddInstPending(streamId common.StreamId, bucket string, val bool) {
+
+	if streamId != common.INIT_STREAM {
+		return
+	}
+
+	for _, buildInfo := range tk.indexBuildInfo {
+		idx := buildInfo.indexInst
+		if idx.Defn.Bucket == bucket &&
+			idx.Stream == streamId &&
+			idx.State == common.INDEX_STATE_CATCHUP {
+			buildInfo.addInstPending = val
+
+		}
+	}
+}
+
 //check if any index for the given bucket is in initial state
 func (tk *timekeeper) checkAnyInitialStateIndex(bucket string) bool {
 
@@ -3034,7 +3055,8 @@ func (tk *timekeeper) setMergeTs(streamId common.StreamId, bucket string,
 
 	for _, buildInfo := range tk.indexBuildInfo {
 		if buildInfo.indexInst.Defn.Bucket == bucket &&
-			buildInfo.indexInst.State == common.INDEX_STATE_CATCHUP {
+			buildInfo.indexInst.State == common.INDEX_STATE_CATCHUP &&
+			buildInfo.addInstPending == false {
 			buildInfo.buildDoneAckReceived = true
 			//set minMergeTs. stream merge can only happen at or above this
 			//TS as projector guarantees new index definitions have been applied
