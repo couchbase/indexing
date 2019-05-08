@@ -679,7 +679,7 @@ func queueSize(partition int, sorted bool, cfg common.Config) (int, int) {
 	size := cfg["scan.queue_size"].Int()
 	limit := cfg["scan.notify_count"].Int()
 
-	numCpu := runtime.NumCPU()
+	numCpu := runtime.GOMAXPROCS(0)
 
 	if numCpu >= partition || !sorted {
 		return size, limit

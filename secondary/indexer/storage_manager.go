@@ -590,6 +590,8 @@ func (sm *storageMgr) getSortedPartnInst(partnMap PartitionInstMap) partitionIns
 //handleRollback will rollback to given timestamp
 func (sm *storageMgr) handleRollback(cmd Message) {
 
+	sm.supvCmdch <- &MsgSuccess{}
+
 	streamId := cmd.(*MsgRollback).GetStreamId()
 	rollbackTs := cmd.(*MsgRollback).GetRollbackTs()
 	bucket := cmd.(*MsgRollback).GetBucket()
@@ -652,10 +654,9 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 						} else {
 							//send error response back
 							//TODO handle the case where some of the slices fail to rollback
-							sm.supvCmdch <- &MsgError{err: Error{code: ERROR_STORAGE_MGR_ROLLBACK_FAIL,
-								severity: FATAL,
-								category: STORAGE_MGR,
-								cause:    err}}
+							sm.supvRespch <- &MsgRollbackDone{streamId: streamId,
+								bucket: bucket,
+								err:    err}
 							return
 						}
 
@@ -672,10 +673,9 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 						} else {
 							//send error response back
 							//TODO handle the case where some of the slices fail to rollback
-							sm.supvCmdch <- &MsgError{err: Error{code: ERROR_STORAGE_MGR_ROLLBACK_FAIL,
-								severity: FATAL,
-								category: STORAGE_MGR,
-								cause:    err}}
+							sm.supvRespch <- &MsgRollbackDone{streamId: streamId,
+								bucket: bucket,
+								err:    err}
 							return
 						}
 					}
@@ -715,9 +715,9 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 		bStats.numRollbacks.Add(1)
 	}
 
-	sm.supvCmdch <- &MsgRollback{streamId: streamId,
-		bucket:     bucket,
-		rollbackTs: respTs}
+	sm.supvRespch <- &MsgRollbackDone{streamId: streamId,
+		bucket:    bucket,
+		restartTs: respTs}
 
 }
 

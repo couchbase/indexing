@@ -89,14 +89,17 @@ type Rebalancer struct {
 
 	transferTokenBatches [][]string
 	currBatchTokens      []string
+
+	runParam *runParams
 }
 
 func NewRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *RebalanceToken,
 	nodeId string, master bool, progress ProgressCallback, done DoneCallback,
-	supvMsgch MsgChannel, localaddr string, config c.Config, change *service.TopologyChange, runPlanner bool) *Rebalancer {
+	supvMsgch MsgChannel, localaddr string, config c.Config, change *service.TopologyChange,
+	runPlanner bool, runParam *runParams) *Rebalancer {
 
-	l.Infof("NewRebalancer nodeId %v rebalToken %v master %v localaddr %v runPlanner %v", nodeId,
-		rebalToken, master, localaddr, runPlanner)
+	l.Infof("NewRebalancer nodeId %v rebalToken %v master %v localaddr %v runPlanner %v runParam %v", nodeId,
+		rebalToken, master, localaddr, runPlanner, runParam)
 
 	r := &Rebalancer{
 		transferTokens: transferTokens,
@@ -126,6 +129,8 @@ func NewRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *Rebal
 		runPlanner: runPlanner,
 
 		transferTokenBatches: make([][]string, 0),
+
+		runParam: runParam,
 	}
 
 	r.config.Store(config)
@@ -270,6 +275,12 @@ func (r *Rebalancer) addToWaitGroup() bool {
 func (r *Rebalancer) doRebalance() {
 
 	if r.transferTokens != nil {
+
+		if ddl, err := r.checkDDLRunning(); ddl {
+			r.finish(err)
+			return
+		}
+
 		select {
 		case <-r.cancel:
 			l.Infof("Rebalancer::doRebalance Cancel Received. Skip Publishing Tokens.")
@@ -380,6 +391,11 @@ func (r *Rebalancer) processTransferToken(ttid string, tt *c.TransferToken) {
 	}
 
 	defer r.wg.Done()
+
+	if ddl, err := r.checkDDLRunning(); ddl {
+		r.setTransferTokenError(ttid, tt, err.Error())
+		return
+	}
 
 	var processed bool
 	if tt.MasterId == r.nodeId {
@@ -1326,6 +1342,17 @@ func (r *Rebalancer) checkCurrBatchDone() bool {
 		}
 	}
 	return true
+}
+
+func (r *Rebalancer) checkDDLRunning() (bool, error) {
+
+	if r.runParam != nil && r.runParam.ddlRunning {
+		l.Errorf("Rebalancer::doRebalance Found index build running. Cannot process rebalance.")
+		fmtMsg := "indexer rebalance failure - index build is in progress for indexes: %v."
+		err := errors.New(fmt.Sprintf(fmtMsg, r.runParam.ddlRunningIndexNames))
+		return true, err
+	}
+	return false, nil
 }
 
 func getIndexStatusFromMeta(tt *c.TransferToken, localMeta *manager.LocalIndexMetadata) (c.IndexState, string) {
