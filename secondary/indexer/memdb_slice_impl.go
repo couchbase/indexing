@@ -423,6 +423,7 @@ func (mdb *memdbSlice) insertPrimaryIndex(key []byte, docid []byte, workerId int
 	mdb.main[workerId].Put(entry)
 	mdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
 	atomic.AddInt64(&mdb.insert_bytes, int64(len(entry)))
+	mdb.idxStats.dataSize.Add(int64(len(entry)))
 	mdb.isDirty = true
 	return 1
 }
@@ -447,7 +448,6 @@ func (mdb *memdbSlice) insertSecIndex(key []byte, docid []byte, workerId int, me
 	newNode := mdb.main[workerId].Put2(entry)
 
 	mdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
-	atomic.AddInt64(&mdb.insert_bytes, int64(len(docid)+len(entry)))
 
 	// Insert succeeded. Failure means same entry already exist.
 	if newNode != nil {
@@ -455,11 +455,19 @@ func (mdb *memdbSlice) insertSecIndex(key []byte, docid []byte, workerId int, me
 			t0 := time.Now()
 			oldSz := getNodeItemSize((*skiplist.Node)(oldNode))
 			mdb.main[workerId].DeleteNode((*skiplist.Node)(oldNode))
-			subtractKeySizeStat(mdb.idxStats, oldSz)
 			mdb.idxStats.Timings.stKVDelete.Put(time.Since(t0))
+
+			mdb.idxStats.dataSize.Add(0 - int64(oldSz))
+			subtractKeySizeStat(mdb.idxStats, oldSz)
 			atomic.AddInt64(&mdb.delete_bytes, int64(len(docid)))
+		} else {
+			// First time insert into back store
+			mdb.idxStats.backstoreDataSize.Add(int64(len(docid) + 2))
+			mdb.idxStats.dataSize.Add(int64(len(docid) + 2))
 		}
+		mdb.idxStats.dataSize.Add(int64(len(entry)))
 		addKeySizeStat(mdb.idxStats, len(entry))
+		atomic.AddInt64(&mdb.insert_bytes, int64(len(docid)+len(entry)))
 	}
 
 	mdb.isDirty = true
@@ -494,6 +502,8 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 	// Otherwise, by the time back update happens the pointing node
 	// may be freed and update operation may crash.
 	_, ptr := mdb.back[workerId].Remove(lookupentry)
+	mdb.idxStats.backstoreDataSize.Add(0 - int64(len(lookupentry)))
+	mdb.idxStats.dataSize.Add(0 - int64(len(lookupentry)))
 
 	list := memdb.NewNodeList((*skiplist.Node)(ptr))
 	oldEntriesBytes := list.Keys()
@@ -521,6 +531,7 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 			node := list.Remove(item)
 			oldSz := getNodeItemSize(node)
 			mdb.main[workerId].DeleteNode(node)
+			mdb.idxStats.dataSize.Add(0 - int64(oldSz))
 			subtractKeySizeStat(mdb.idxStats, oldSz)
 		}
 		mdb.isDirty = true
@@ -549,6 +560,7 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 			oldSz := len(entry)
 			node := list.Remove(entry)
 			mdb.main[workerId].DeleteNode(node)
+			mdb.idxStats.dataSize.Add(0 - int64(oldSz))
 			subtractKeySizeStat(mdb.idxStats, oldSz)
 			nmut++
 		}
@@ -571,14 +583,19 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 			if newNode != nil { // Ignore if duplicate key
 				list.Add(newNode)
 				mdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
+
+				mdb.idxStats.dataSize.Add(int64(len(entry)))
+				addKeySizeStat(mdb.idxStats, len(entry))
 				atomic.AddInt64(&mdb.insert_bytes, int64(len(entry)))
 			}
-			addKeySizeStat(mdb.idxStats, len(entry))
 		}
 	}
 
 	// Update back index entry
 	mdb.back[workerId].Update(lookupentry, unsafe.Pointer(list.Head()))
+
+	mdb.idxStats.backstoreDataSize.Add(int64(len(lookupentry)))
+	mdb.idxStats.dataSize.Add(int64(len(lookupentry)))
 	mdb.isDirty = true
 	return nmut
 }
@@ -613,6 +630,8 @@ func (mdb *memdbSlice) deletePrimaryIndex(docid []byte, workerId int) (nmut int)
 	itm := entry.Bytes()
 	mdb.main[workerId].Delete(itm)
 	mdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
+
+	mdb.idxStats.dataSize.Add(0 - int64(len(entry.Bytes())))
 	atomic.AddInt64(&mdb.delete_bytes, int64(len(entry.Bytes())))
 	mdb.isDirty = true
 	return 1
@@ -627,12 +646,18 @@ func (mdb *memdbSlice) deleteSecIndex(docid []byte, workerId int) int {
 	success, node := mdb.back[workerId].Remove(lookupentry)
 	if success {
 		mdb.idxStats.Timings.stKVDelete.Put(time.Since(t0))
+
+		mdb.idxStats.backstoreDataSize.Add(0 - int64(len(lookupentry)))
 		atomic.AddInt64(&mdb.delete_bytes, int64(len(docid)))
-		t0 = time.Now()
+
 		oldSz := getNodeItemSize((*skiplist.Node)(node))
+		t0 = time.Now()
 		mdb.main[workerId].DeleteNode((*skiplist.Node)(node))
-		subtractKeySizeStat(mdb.idxStats, oldSz)
 		mdb.idxStats.Timings.stKVDelete.Put(time.Since(t0))
+
+		// Reduce the data size for both main store and back store
+		mdb.idxStats.dataSize.Add(0 - int64(len(lookupentry)+oldSz))
+		subtractKeySizeStat(mdb.idxStats, oldSz)
 	}
 	mdb.isDirty = true
 	return 1
@@ -651,6 +676,9 @@ func (mdb *memdbSlice) deleteSecArrayIndex(docid []byte, workerId int) (nmut int
 	t0 := time.Now()
 	mdb.back[workerId].Remove(lookupentry)
 	mdb.idxStats.Timings.stKVDelete.Put(time.Since(t0))
+
+	mdb.idxStats.backstoreDataSize.Add(0 - int64(len(lookupentry)))
+	mdb.idxStats.dataSize.Add(0 - int64(len(lookupentry)))
 	atomic.AddInt64(&mdb.delete_bytes, int64(len(lookupentry)))
 
 	// Delete each entry in oldEntriesBytes
@@ -658,6 +686,7 @@ func (mdb *memdbSlice) deleteSecArrayIndex(docid []byte, workerId int) (nmut int
 		node := list.Remove(item)
 		oldSz := getNodeItemSize(node)
 		mdb.main[workerId].DeleteNode(node)
+		mdb.idxStats.dataSize.Add(0 - int64(oldSz))
 		subtractKeySizeStat(mdb.idxStats, oldSz)
 	}
 
@@ -797,6 +826,8 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot) {
 			snapshotStats := make(map[string]interface{})
 			snapshotStats[SNAP_STATS_KEY_SIZES] = getKeySizesStats(mdb.idxStats)
 			snapshotStats[SNAP_STATS_KEY_SIZES_SINCE] = mdb.idxStats.keySizeStatsSince.Value()
+			snapshotStats[SNAP_STATS_DATA_SIZE] = mdb.idxStats.dataSize.Value()
+			snapshotStats[SNAP_STATS_BACKSTORE_DATA_SIZE] = mdb.idxStats.backstoreDataSize.Value()
 			s.info.IndexStats = snapshotStats
 			s.info.Version = SNAPSHOT_META_VERSION_MOI_1
 			s.info.InstId = mdb.idxInstId
@@ -927,6 +958,9 @@ func (mdb *memdbSlice) resetStores() {
 
 	resetKeySizeStats(mdb.idxStats)
 	// Slice is rolling back to zero, but there is no need to update keySizeStatsSince
+
+	mdb.idxStats.backstoreDataSize.Set(0)
+	mdb.idxStats.dataSize.Set(0)
 }
 
 //Rollback slice to given snapshot. Return error if
@@ -982,6 +1016,8 @@ func (mdb *memdbSlice) updateStatsFromSnapshotMeta(o SnapshotInfo) {
 		mdb.idxStats.numKeySize4K.Set(safeGetInt64(keySizes[3]))
 		mdb.idxStats.numKeySize100K.Set(safeGetInt64(keySizes[4]))
 		mdb.idxStats.numKeySizeGt100K.Set(safeGetInt64(keySizes[5]))
+		mdb.idxStats.dataSize.Set(safeGetInt64(stats[SNAP_STATS_DATA_SIZE]))
+		mdb.idxStats.backstoreDataSize.Set(safeGetInt64(stats[SNAP_STATS_BACKSTORE_DATA_SIZE]))
 
 		mdb.idxStats.keySizeStatsSince.Set(safeGetInt64(stats[SNAP_STATS_KEY_SIZES_SINCE]))
 	} else {
@@ -1295,7 +1331,6 @@ func (mdb *memdbSlice) Statistics() (StorageStatistics, error) {
 	internalData = append(internalData, "\n}")
 
 	sts.InternalData = internalData
-	sts.DataSize = mdb.mainstore.MemoryInUse()
 	sts.MemUsed = mdb.mainstore.MemoryInUse() + ntMemUsed
 	sts.DiskSize = mdb.diskSize()
 
