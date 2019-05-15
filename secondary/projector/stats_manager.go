@@ -10,6 +10,7 @@ import (
 	"github.com/couchbase/indexing/secondary/dataport"
 	memcached "github.com/couchbase/indexing/secondary/dcp/transport/client"
 	"github.com/couchbase/indexing/secondary/logging"
+	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
 )
 
 const (
@@ -19,25 +20,40 @@ const (
 )
 
 type BucketStats struct {
-	dcpStats  map[string]interface{}
-	kvstats   map[string]interface{}
+	bucket string
+	topic  string
+	opaque uint16
+
+	// Key -> Log prefix of DCP Feed
+	// Value -> Pointer to stats object of DCP feed
+	dcpStats map[string]interface{}
+
+	// Key -> Log prefix of KVData
+	// Value -> Pointer to stats object KVData
+	kvstats map[string]interface{}
+
+	// Key -> Log prefix for Workers
+	// Value -> Slice containing pointer to stats object of all workers
 	wrkrStats map[string][]interface{}
 
-	// Time when last vbseqnos were logged
-	lastVbseqnosLogTime int64
+	// Key -> Index instance ID
+	// Value -> Pointer to stats object for index evaluator
+	evaluatorStats map[uint64]interface{}
 }
 
 func (bs *BucketStats) Init() {
 	bs.dcpStats = make(map[string]interface{}, 0)
 	bs.kvstats = make(map[string]interface{}, 0)
 	bs.wrkrStats = make(map[string][]interface{}, 0)
-
-	bs.lastVbseqnosLogTime = time.Now().UnixNano()
+	bs.evaluatorStats = make(map[uint64]interface{})
 }
 
 func (bs *BucketStats) clone() *BucketStats {
 	cbs := &BucketStats{}
 	cbs.Init()
+	cbs.topic = bs.topic
+	cbs.bucket = bs.bucket
+	cbs.opaque = bs.opaque
 	for key, value := range bs.dcpStats {
 		if value != nil {
 			cbs.dcpStats[key] = value
@@ -57,6 +73,12 @@ func (bs *BucketStats) clone() *BucketStats {
 				wrkrstat = append(wrkrstat, stat)
 			}
 			cbs.wrkrStats[key] = wrkrstat
+		}
+	}
+
+	for key, value := range bs.evaluatorStats {
+		if value != nil {
+			cbs.evaluatorStats[key] = value
 		}
 	}
 	return cbs
@@ -95,12 +117,17 @@ func (fs *FeedStats) clone() *FeedStats {
 type ProjectorStats struct {
 	feedStats map[string]*FeedStats
 
-	// For other projector level stats
+	statsLogTime        int64 // Time when component stats were logged
+	lastVbseqnosLogTime int64 // Time when last vbseqnos were logged
+	evalStatsLogTime    int64 // Time when last eval stats were logged
 }
 
 func NewProjectorStats() *ProjectorStats {
 	ps := &ProjectorStats{}
 	ps.Init()
+	ps.lastVbseqnosLogTime = time.Now().UnixNano()
+	ps.evalStatsLogTime = time.Now().UnixNano()
+	ps.statsLogTime = time.Now().UnixNano()
 	return ps
 }
 
@@ -115,6 +142,10 @@ func (ps *ProjectorStats) Clone() *ProjectorStats {
 		clonedFeedStat := feedStat.clone()
 		cps.feedStats[topic] = clonedFeedStat
 	}
+
+	cps.lastVbseqnosLogTime = ps.lastVbseqnosLogTime
+	cps.evalStatsLogTime = ps.evalStatsLogTime
+	cps.statsLogTime = ps.statsLogTime
 	return cps
 }
 
@@ -137,6 +168,7 @@ type statsManager struct {
 	stopLogger           int32
 	statsLogDumpInterval int64
 	vbseqnosLogInterval  int64
+	evalStatsLogInterval int64
 	lastStatTime         time.Time
 	config               common.ConfigHolder
 }
@@ -155,15 +187,20 @@ func NewStatsManager(cmdCh chan []interface{}, stopCh chan bool, config common.C
 		atomic.StoreInt64(&sm.statsLogDumpInterval, int64(60))
 	}
 
-	if val, ok := config["projector.vbseqnosLogInterval"]; ok {
-		atomic.StoreInt64(&sm.vbseqnosLogInterval, int64(val.Int()))
+	si := atomic.LoadInt64(&sm.statsLogDumpInterval)
+	if val, ok := config["projector.vbseqnosLogIntervalMultiplier"]; ok {
+		atomic.StoreInt64(&sm.vbseqnosLogInterval, int64(val.Int())*si)
 	} else {
-		// Use default value of 300 seconds
-		atomic.StoreInt64(&sm.vbseqnosLogInterval, int64(300))
+		// Use default value of 5 * statsLogDumpInterval seconds
+		atomic.StoreInt64(&sm.vbseqnosLogInterval, 5*si)
 	}
 
-	logging.Infof("StatsManager: Stats logging interval set to: %v seconds", time.Duration(sm.statsLogDumpInterval).Seconds())
-	logging.Infof("StatsManager: vbseqnos logging interval set to: %v seconds", time.Duration(sm.vbseqnosLogInterval).Seconds())
+	// Use default value of 300 seconds
+	atomic.StoreInt64(&sm.evalStatsLogInterval, int64(300))
+
+	logging.Infof("StatsManager: Stats logging interval set to: %v seconds", atomic.LoadInt64(&sm.statsLogDumpInterval))
+	logging.Infof("StatsManager: vbseqnos logging interval set to: %v seconds", atomic.LoadInt64(&sm.vbseqnosLogInterval))
+	logging.Infof("StatsManager: eval stats logging interval set to: %v seconds", atomic.LoadInt64(&sm.evalStatsLogInterval))
 
 	sm.config.Store(config)
 	go sm.run()
@@ -184,7 +221,7 @@ func (sm *statsManager) run() {
 				atomic.StoreInt64(&sm.statsLogDumpInterval, int64(val))
 			case VBSEQNOS_LOG_INTERVAL_UPDATE:
 				val := msg[1].(int)
-				atomic.StoreInt64(&sm.vbseqnosLogInterval, int64(val))
+				atomic.StoreInt64(&sm.vbseqnosLogInterval, int64(val)*atomic.LoadInt64(&sm.statsLogDumpInterval))
 			}
 		case <-sm.stopCh:
 			atomic.StoreInt32(&sm.stopLogger, 1)
@@ -198,74 +235,131 @@ func (sm *statsManager) logger() {
 		//Get the projector stats
 		ps := sm.stats.Get()
 		if ps != nil {
+			now := time.Now().UnixNano()
+			var logStats, logVbsenos, logEvalStats bool
+
+			// Check if projector component stats should be logged in this iteration
+			if (now - ps.statsLogTime) > atomic.LoadInt64(&sm.statsLogDumpInterval)*1e9 {
+				logStats = true
+				ps.statsLogTime = now
+			}
+			// Check if vbseqnos should be logged in this iteration
+			if (now - ps.lastVbseqnosLogTime) > atomic.LoadInt64(&sm.vbseqnosLogInterval)*1e9 {
+				logVbsenos = true
+				ps.lastVbseqnosLogTime = now
+			}
+			// Check if eval stats should be logged in this iteration
+			if (now - ps.evalStatsLogTime) > atomic.LoadInt64(&sm.evalStatsLogInterval)*1e9 {
+				logEvalStats = true
+				ps.evalStatsLogTime = now
+			}
+
 			// For each topic
 			for _, feedStats := range ps.feedStats {
 				// For each bucket
 				for _, bucketStats := range feedStats.bucketStats {
-					for key, value := range bucketStats.dcpStats {
-						switch value.(type) {
-						case *memcached.DcpStats:
-							val := value.(*memcached.DcpStats)
-							if !val.IsClosed() {
-								stats, latency := val.String()
-								logging.Infof("%v dcp latency stats %v", key, latency)
-								logging.Infof("%v stats: %v", key, stats)
-							} else {
-								logging.Tracef("%v closed", key)
-							}
-						default:
-							logging.Errorf("Unknown Dcp stats type for %v", key)
-							continue
-						}
-					}
 
-					for key, value := range bucketStats.kvstats {
-						switch (value).(type) {
-						case *KvdataStats:
-							val := (value).(*KvdataStats)
-							if !val.IsClosed() {
-								stats, vbseqnos := val.String()
-								logging.Infof("%v stats: %v", key, stats)
-								// Log vbseqno's for every "vbseqnosLogInterval" seconds
-								now := time.Now().UnixNano()
-								if (now - bucketStats.lastVbseqnosLogTime) > atomic.LoadInt64(&sm.vbseqnosLogInterval)*1e9 {
-									logging.Infof("%v vbseqnos: [%v]", key, vbseqnos)
-									bucketStats.lastVbseqnosLogTime = now
+					if logStats {
+						for key, value := range bucketStats.dcpStats {
+							switch value.(type) {
+							case *memcached.DcpStats:
+								val := value.(*memcached.DcpStats)
+								if !val.IsClosed() {
+									stats, latency := val.String()
+									logging.Infof("%v dcp latency stats %v", key, latency)
+									logging.Infof("%v stats: %v", key, stats)
+								} else {
+									logging.Tracef("%v closed", key)
 								}
-							} else {
-								logging.Tracef("%v closed", key)
+							default:
+								logging.Errorf("Unknown Dcp stats type for %v", key)
+								continue
 							}
-						default:
-							logging.Errorf("Unknown Kvdata stats type for %v", key)
-							continue
+						}
+
+						for key, value := range bucketStats.kvstats {
+							switch (value).(type) {
+							case *KvdataStats:
+								val := (value).(*KvdataStats)
+								if !val.IsClosed() {
+									stats, _ := val.String()
+									logging.Infof("%v stats: %v", key, stats)
+								} else {
+									logging.Tracef("%v closed", key)
+								}
+							default:
+								logging.Errorf("Unknown Kvdata stats type for %v", key)
+								continue
+							}
+						}
+
+						for key, value := range bucketStats.wrkrStats {
+							// Get the type of any worker
+							switch (value[0]).(type) {
+							case *WorkerStats:
+								logging.Infof("%v stats: %v", key, Accmulate(value))
+							default:
+								logging.Errorf("Unknown worker stats type for %v", key)
+								continue
+							}
 						}
 					}
 
-					for key, value := range bucketStats.wrkrStats {
-						// Get the type of any worker
-						switch (value[0]).(type) {
-						case *WorkerStats:
-							logging.Infof("%v stats: %v", key, Accmulate(value))
-						default:
-							logging.Errorf("Unknown worker stats type for %v", key)
-							continue
+					// Log vbseqno's for every "vbseqnosLogInterval" seconds
+					if logVbsenos {
+						for key, value := range bucketStats.kvstats {
+							switch (value).(type) {
+							case *KvdataStats:
+								val := (value).(*KvdataStats)
+								if !val.IsClosed() {
+									_, vbseqnos := val.String()
+									logging.Infof("%v vbseqnos: [%v]", key, vbseqnos)
+								} else {
+									logging.Tracef("%v closed", key)
+								}
+							default:
+								logging.Errorf("Unknown Kvdata stats type for %v", key)
+								continue
+							}
+						}
+					}
+
+					// Log eval stats for every evalStatsLogInterval
+					if logEvalStats {
+						// As of this commit, only IndexEvaluatorStats are supported
+						logPrefix := fmt.Sprintf("EVAL[%v #%v] ##%v ", bucketStats.bucket, bucketStats.topic, bucketStats.opaque)
+						var evalStats string
+						for key, value := range bucketStats.evaluatorStats {
+							switch (value).(type) {
+							case *protobuf.IndexEvaluatorStats:
+								avg := value.(*protobuf.IndexEvaluatorStats).MovingAvg()
+								evalStats += fmt.Sprintf("\"%v\":%v,", key, avg)
+							default:
+								logging.Errorf("%v Unknown type for evaluator stats", logPrefix)
+								continue
+							}
+						}
+						if len(evalStats) > 0 {
+							logging.Infof("%v stats: {%v}", logPrefix, evalStats[0:len(evalStats)-1])
 						}
 					}
 				}
 
-				// Log the endpoint stats for this feed
-				for key, value := range feedStats.endpStats {
-					switch value.(type) {
-					case *dataport.EndpointStats:
-						val := value.(*dataport.EndpointStats)
-						if !val.IsClosed() {
-							logging.Infof("%v stats: %v", key, val.String())
-						} else {
-							logging.Tracef("%v closed", key)
+				if logStats {
+					// Log the endpoint stats for this feed
+					for key, value := range feedStats.endpStats {
+						switch value.(type) {
+						case *dataport.EndpointStats:
+							val := value.(*dataport.EndpointStats)
+							if !val.IsClosed() {
+								logging.Infof("%v stats: %v", key, val.String())
+							} else {
+								logging.Tracef("%v closed", key)
+							}
+						default:
+							logging.Errorf("Unknown Endpoint stats type for %v", key)
+							continue
 						}
-					default:
-						logging.Errorf("Unknown Endpoint stats type for %v", key)
-						continue
 					}
 				}
 			}

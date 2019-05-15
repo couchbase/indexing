@@ -72,3 +72,8 @@ func (engine *Engine) TransformRoute(
 		vbuuid, m, data, encodeBuf, docval, context, meta, numIndexes,
 	)
 }
+
+// GetEvaluatorStats returns the pointer to the stats object for this engine
+func (engine *Engine) GetEvaluatorStats() interface{} {
+	return engine.evaluator.Stats()
+}

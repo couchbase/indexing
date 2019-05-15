@@ -375,10 +375,10 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
-	"projector.vbseqnosLogInterval": ConfigValue{
-		300, // 5 minutes
-		"in seconds, periodically log vbseqnos at KVData",
-		300,   // 5 minutes
+	"projector.vbseqnosLogIntervalMultiplier": ConfigValue{
+		5, // 5 * statsLogDumpInterval
+		"Number of cycles (each cycle with statsLogDumpInterval seconds) to wait before logging vbseqnos",
+		5,     // 5 * statsLogDumpInterval
 		false, // mutable
 		false, // case-insensitive
 	},
