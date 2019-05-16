@@ -31,6 +31,9 @@ var dialFun = net.Dial
 // is actively waiting. In Seconds.
 var DcpMemcachedTimeout uint32 = 120
 
+// 30 minutes
+const DcpMutationReadTimeout uint32 = 1800
+
 func GetDcpMemcachedTimeout() uint32 {
 	return atomic.LoadUint32(&DcpMemcachedTimeout)
 }
@@ -66,6 +69,14 @@ func (c *Client) SetDeadline(t time.Time) error {
 	return c.conn.(net.Conn).SetDeadline(t)
 }
 
+func (c *Client) SetReadDeadline(t time.Time) error {
+	return c.conn.(net.Conn).SetReadDeadline(t)
+}
+
+func (c *Client) SetWriteDeadline(t time.Time) error {
+	return c.conn.(net.Conn).SetWriteDeadline(t)
+}
+
 // Set Memcached Connection Deadline.
 // Ignore the error in SetDeadline, if any.
 // There are no side effects in SetDeadline error codepaths.
@@ -86,6 +97,40 @@ func (c *Client) ResetMcdConnectionDeadline() {
 	err := c.SetDeadline(time.Time{})
 	if err != nil {
 		logging.Errorf("Error in ResetMcdConnectionDeadline: %v", err)
+	}
+}
+
+// Set Memcached Connection WriteDeadline.
+func (c *Client) SetMcdConnectionWriteDeadline() {
+	timeout := time.Duration(GetDcpMemcachedTimeout()) * time.Second
+	err := c.SetWriteDeadline(time.Now().Add(timeout))
+	if err != nil {
+		logging.Debugf("Error in SetMcdConnectionWriteDeadline: %v", err)
+	}
+}
+
+// Reset Memcached Connection WriteDeadline.
+func (c *Client) ResetMcdConnectionWriteDeadline() {
+	err := c.SetWriteDeadline(time.Time{})
+	if err != nil {
+		logging.Errorf("Error in ResetMcdConnectionWriteDeadline: %v", err)
+	}
+}
+
+// Set Memcached Connection ReadDeadline.
+func (c *Client) SetMcdMutationReadDeadline() {
+	timeout := time.Duration(DcpMutationReadTimeout) * time.Second
+	err := c.SetReadDeadline(time.Now().Add(timeout))
+	if err != nil {
+		logging.Debugf("Error in SetMcdConnectionReadDeadline: %v", err)
+	}
+}
+
+// Reset Memcached Connection ReadDeadline.
+func (c *Client) ResetMcdMutationReadDeadline() {
+	err := c.SetReadDeadline(time.Time{})
+	if err != nil {
+		logging.Errorf("Error in ResetMcdConnectionReadDeadline: %v", err)
 	}
 }
 
