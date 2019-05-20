@@ -12,9 +12,10 @@ package indexer
 // This file implements IndexReader interface
 import (
 	"errors"
+	"time"
+
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
-	"time"
 )
 
 var (

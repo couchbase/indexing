@@ -42,10 +42,6 @@ const DECODE_ERR_THRESHOLD = 100
 
 var secKeyBufPool *common.BytesBufPool
 
-func init() {
-	secKeyBufPool = common.NewByteBufferPool(maxSecKeyBufferLen + ENCODE_BUF_SAFE_PAD)
-}
-
 type ScanCoordinator interface {
 }
 

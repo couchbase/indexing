@@ -1165,7 +1165,6 @@ func (idx *indexer) updateStorageMode(newConfig common.Config) {
 			if idx.canSetStorageMode(confStorageMode) {
 				if common.SetStorageModeStr(confStorageMode) {
 					logging.Infof("Indexer::updateStorageMode Storage Mode Set %v", common.GetStorageMode())
-					initStorageSettings(newConfig)
 					idx.stats.needsRestart.Set(true)
 				} else {
 					logging.Infof("Indexer::updateStorageMode Invalid Storage Mode %v", confStorageMode)
@@ -1181,7 +1180,6 @@ func (idx *indexer) updateStorageMode(newConfig common.Config) {
 			} else {
 				if common.SetStorageModeStr(confStorageMode) {
 					logging.Infof("Indexer::updateStorageMode Storage Mode Set %v", common.GetStorageMode())
-					initStorageSettings(newConfig)
 					idx.stats.needsRestart.Set(true)
 				} else {
 					logging.Infof("Indexer::updateStorageMode Invalid Storage Mode %v", confStorageMode)
@@ -1223,24 +1221,6 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 			}
 			go updateMOIWriters(moiPersisters)
 		}
-	}
-
-	if newConfig["settings.max_array_seckey_size"].Int() !=
-		idx.config["settings.max_array_seckey_size"].Int() {
-		logging.Infof("Indexer::handleConfigUpdate restart indexer due to max_array_seckey_size")
-		idx.stats.needsRestart.Set(true)
-	}
-
-	if newConfig["settings.max_seckey_size"].Int() !=
-		idx.config["settings.max_seckey_size"].Int() {
-		logging.Infof("Indexer::handleConfigUpdate restart indexer due to max_seckey_size")
-		idx.stats.needsRestart.Set(true)
-	}
-
-	if newConfig["settings.allow_large_keys"].Bool() !=
-		idx.config["settings.allow_large_keys"].Bool() {
-		logging.Infof("Indexer::handleConfigUpdate restart indexer due to allow_large_keys")
-		idx.stats.needsRestart.Set(true)
 	}
 
 	if newConfig["settings.compaction.plasma.manual"].Bool() !=
@@ -5317,7 +5297,7 @@ func (idx *indexer) initFromPersistedState() error {
 
 	// Set the storage mode specific to this indexer node
 	common.SetStorageMode(idx.getLocalStorageMode(idx.config))
-	initStorageSettings(idx.config)
+	initBufPools(idx.config)
 	logging.Infof("Indexer::local storage mode %v", common.GetStorageMode().String())
 
 	// Initialize stats objects and update stats from persistence

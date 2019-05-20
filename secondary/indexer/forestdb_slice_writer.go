@@ -173,6 +173,7 @@ retry:
 		slice.workerDone[i] = make(chan bool)
 		go slice.handleCommandsWorker(i)
 	}
+	slice.keySzConf = getKeySizeConfig(slice.sysconf)
 
 	logging.Infof("ForestDBSlice:NewForestDBSlice Created New Slice Id %v IndexInstId %v "+
 		"WriterThreads %v", sliceId, idxInstId, slice.numWriters)
@@ -261,6 +262,9 @@ type fdbSlice struct {
 	// Array processing
 	arrayExprPosition int
 	isArrayDistinct   bool
+
+	keySzConf     keySizeConfig
+	bufResizeFlag int32 //0 or 1: indicates if slice buffers need resize
 }
 
 func (fdb *fdbSlice) IncrRef() {
@@ -290,7 +294,9 @@ func (fdb *fdbSlice) DecrRef() {
 //If forestdb has encountered any fatal error condition,
 //it will be returned as error.
 func (fdb *fdbSlice) Insert(rawKey []byte, docid []byte, meta *MutationMeta) error {
-	key, err := GetIndexEntryBytes(rawKey, docid, fdb.idxDefn.IsPrimary, fdb.idxDefn.IsArrayIndex, 1, fdb.idxDefn.Desc, meta)
+	szConf := fdb.updateSliceBuffers()
+	key, err := GetIndexEntryBytes(rawKey, docid, fdb.idxDefn.IsPrimary, fdb.idxDefn.IsArrayIndex,
+		1, fdb.idxDefn.Desc, meta, szConf)
 	if err != nil {
 		return err
 	}
@@ -306,6 +312,7 @@ func (fdb *fdbSlice) Insert(rawKey []byte, docid []byte, meta *MutationMeta) err
 //If forestdb has encountered any fatal error condition,
 //it will be returned as error.
 func (fdb *fdbSlice) Delete(docid []byte, meta *MutationMeta) error {
+	fdb.updateSliceBuffers()
 	fdb.idxStats.numDocsFlushQueued.Add(1)
 	atomic.AddInt64(&fdb.qCount, 1)
 	fdb.cmdCh <- docid
@@ -364,6 +371,21 @@ loop:
 
 		}
 	}
+}
+
+func (fdb *fdbSlice) updateSliceBuffers() keySizeConfig {
+
+	if atomic.LoadInt32(&fdb.bufResizeFlag) >= 1 {
+		fdb.confLock.RLock()
+		fdb.keySzConf = getKeySizeConfig(fdb.sysconf)
+		fdb.confLock.RUnlock()
+		// ForestDB does not support multiwriters
+		// Hence, reset the slice buffer pools here
+		encBufPool = common.NewByteBufferPool(fdb.keySzConf.maxIndexEntrySize + ENCODE_BUF_SAFE_PAD)
+		arrayEncBufPool = common.NewByteBufferPool(fdb.keySzConf.maxArrayIndexEntrySize + ENCODE_BUF_SAFE_PAD)
+		atomic.AddInt32(&fdb.bufResizeFlag, -1)
+	}
+	return fdb.keySzConf
 }
 
 //insert does the actual insert in forestdb
@@ -512,6 +534,8 @@ func (fdb *fdbSlice) insertSecArrayIndex(key []byte, rawKey []byte, docid []byte
 
 	var oldEntriesBytes, newEntriesBytes [][]byte
 	var oldKeyCount, newKeyCount []int
+	var newbufLen int
+
 	if oldkey != nil {
 		if bytes.Equal(oldkey, key) {
 			logging.Tracef("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Received Unchanged Key for "+
@@ -521,7 +545,7 @@ func (fdb *fdbSlice) insertSecArrayIndex(key []byte, rawKey []byte, docid []byte
 
 		var tmpBuf []byte
 		// If old key is larger than max array limit, always handle it
-		if len(oldkey) > maxArrayIndexEntrySize {
+		if len(oldkey) > fdb.keySzConf.maxArrayIndexEntrySize {
 			// Allocate thrice the size of old key for array explosion
 			tmpBuf = make([]byte, 0, len(oldkey)*3) //TODO: Revisit the size of tmpBuf
 		} else {
@@ -536,7 +560,7 @@ func (fdb *fdbSlice) insertSecArrayIndex(key []byte, rawKey []byte, docid []byte
 		}
 
 		if oldEntriesBytes, oldKeyCount, _, err = ArrayIndexItems(oldkey, fdb.arrayExprPosition,
-			tmpBuf, fdb.isArrayDistinct, false); err != nil {
+			tmpBuf, fdb.isArrayDistinct, false, fdb.keySzConf); err != nil {
 			logging.Errorf("ForestDBSlice::insert SliceId %v IndexInstId %v Error in retrieving "+
 				"compostite old secondary keys. Skipping docid:%s Error: %v", fdb.id, fdb.idxInstId, logging.TagStrUD(docid), err)
 			return fdb.deleteSecArrayIndex(docid, workerId)
@@ -551,13 +575,14 @@ func (fdb *fdbSlice) insertSecArrayIndex(key []byte, rawKey []byte, docid []byte
 
 		tmpBufPtr := arrayEncBufPool.Get()
 		defer arrayEncBufPool.Put(tmpBufPtr)
-		newEntriesBytes, newKeyCount, _, err = ArrayIndexItems(key, fdb.arrayExprPosition,
-			(*tmpBufPtr)[:0], fdb.isArrayDistinct, true)
+		newEntriesBytes, newKeyCount, newbufLen, err = ArrayIndexItems(key, fdb.arrayExprPosition,
+			(*tmpBufPtr)[:0], fdb.isArrayDistinct, true, fdb.keySzConf)
 		if err != nil {
 			logging.Errorf("ForestDBSlice::insert SliceId %v IndexInstId %v Error in creating "+
 				"compostite new secondary keys. Skipping docid:%s Error: %v", fdb.id, fdb.idxInstId, logging.TagStrUD(docid), err)
 			return fdb.deleteSecArrayIndex(docid, workerId)
 		}
+		*tmpBufPtr = resizeArrayBuf((*tmpBufPtr)[:0], newbufLen, true)
 	}
 
 	var indexEntriesToBeAdded, indexEntriesToBeDeleted [][]byte
@@ -582,17 +607,14 @@ func (fdb *fdbSlice) insertSecArrayIndex(key []byte, rawKey []byte, docid []byte
 			tmpBufPtr := encBufPool.Get()
 			defer encBufPool.Put(tmpBufPtr)
 
-			if len(item)+MAX_KEY_EXTRABYTES_LEN > maxSecKeyBufferLen {
+			if len(item)+MAX_KEY_EXTRABYTES_LEN > fdb.keySzConf.maxSecKeyBufferLen {
 				tmpBuf = make([]byte, 0, len(item)+MAX_KEY_EXTRABYTES_LEN)
 			} else {
 				tmpBuf = (*tmpBufPtr)[:0]
 			}
 			// TODO: Ensure sufficient buffer size and use method that skips size check for bug MB-22183
 			if keyToBeDeleted, err = GetIndexEntryBytes3(item, docid, false, false,
-				oldKeyCount[i], fdb.idxDefn.Desc, tmpBuf, nil); err != nil {
-
-				encBufPool.Put(tmpBufPtr)
-				// TODO: Handle skipped item here
+				oldKeyCount[i], fdb.idxDefn.Desc, tmpBuf, nil, fdb.keySzConf); err != nil {
 				logging.Errorf("ForestDBSlice::insert SliceId %v IndexInstId %v Error forming entry "+
 					"to be deleted from main index. Skipping docid:%s Error: %v", fdb.id, fdb.idxInstId, logging.TagStrUD(docid), err)
 				return fdb.deleteSecArrayIndex(docid, workerId)
@@ -608,16 +630,16 @@ func (fdb *fdbSlice) insertSecArrayIndex(key []byte, rawKey []byte, docid []byte
 			var keyToBeAdded []byte
 			tmpBufPtr := encBufPool.Get()
 			defer encBufPool.Put(tmpBufPtr)
-			if keyToBeAdded, err = GetIndexEntryBytes2(item, docid, false, false,
-				newKeyCount[i], fdb.idxDefn.Desc, (*tmpBufPtr)[:0], nil); err != nil {
 
-				encBufPool.Put(tmpBufPtr)
-				// TODO: Handle skipped item here
+			// GetIndexEntryBytes2 validates size as well expand buffer if needed
+			if keyToBeAdded, err = GetIndexEntryBytes2(item, docid, false, false,
+				newKeyCount[i], fdb.idxDefn.Desc, (*tmpBufPtr)[:0], nil, fdb.keySzConf); err != nil {
 				logging.Errorf("ForestDBSlice::insert SliceId %v IndexInstId %v Error forming entry "+
 					"to be added to main index. Skipping docid:%s Error: %v", fdb.id, fdb.idxInstId, logging.TagStrUD(docid), err)
 				return fdb.deleteSecArrayIndex(docid, workerId)
 			}
 			keysToBeAdded = append(keysToBeAdded, keyToBeAdded)
+			*tmpBufPtr = resizeArrayBuf((*tmpBufPtr)[:0], len(keysToBeAdded), true)
 		}
 	}
 
@@ -796,7 +818,7 @@ func (fdb *fdbSlice) deleteSecArrayIndex(docid []byte, workerId int) (nmut int) 
 
 	var tmpBuf []byte
 	// If old key is larger than max array limit, always handle it
-	if len(olditm) > maxArrayIndexEntrySize {
+	if len(olditm) > fdb.keySzConf.maxArrayIndexEntrySize {
 		// Allocate thrice the size of old key for array explosion
 		tmpBuf = make([]byte, 0, len(olditm)*3)
 	} else {
@@ -811,7 +833,7 @@ func (fdb *fdbSlice) deleteSecArrayIndex(docid []byte, workerId int) (nmut int) 
 	}
 
 	indexEntriesToBeDeleted, keyCount, _, err := ArrayIndexItems(olditm, fdb.arrayExprPosition,
-		tmpBuf, fdb.isArrayDistinct, false)
+		tmpBuf, fdb.isArrayDistinct, false, fdb.keySzConf)
 
 	if err != nil {
 		// TODO: Do not crash for non-storage operation. Force delete the old entries
@@ -830,15 +852,14 @@ func (fdb *fdbSlice) deleteSecArrayIndex(docid []byte, workerId int) (nmut int) 
 		tmpBufPtr := encBufPool.Get()
 		defer encBufPool.Put(tmpBufPtr)
 
-		if len(item)+MAX_KEY_EXTRABYTES_LEN > maxSecKeyBufferLen {
+		if len(item)+MAX_KEY_EXTRABYTES_LEN > fdb.keySzConf.maxSecKeyBufferLen {
 			tmpBuf = make([]byte, 0, len(item)+MAX_KEY_EXTRABYTES_LEN)
 		} else {
 			tmpBuf = (*tmpBufPtr)[:0]
 		}
-		// TODO: Use method that skips size check for bug MB-22183
+
 		if keyToBeDeleted, err = GetIndexEntryBytes3(item, docid, false, false, keyCount[i],
-			fdb.idxDefn.Desc, tmpBuf, nil); err != nil {
-			encBufPool.Put(tmpBufPtr)
+			fdb.idxDefn.Desc, tmpBuf, nil, fdb.keySzConf); err != nil {
 			fdb.checkFatalDbError(err)
 			logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error from GetIndexEntryBytes2 for entry to be deleted from main index %v", fdb.id, fdb.idxInstId, err)
 			return
@@ -1478,6 +1499,7 @@ func (fdb *fdbSlice) UpdateConfig(cfg common.Config) {
 	fdb.confLock.Lock()
 	defer fdb.confLock.Unlock()
 
+	oldCfg := fdb.sysconf
 	fdb.sysconf = cfg
 
 	// update circular compaction setting in fdb
@@ -1494,6 +1516,22 @@ func (fdb *fdbSlice) UpdateConfig(cfg common.Config) {
 		logging.Errorf("ForestDBSlice::UpdateConfig Error Changing Circular Compaction Params. Slice Id %v, "+
 			"IndexInstId %v, IndexDefnId %v ReuseThreshold %v KeepHeaders %v. Error %v",
 			fdb.id, fdb.idxInstId, fdb.idxDefnId, reuse_threshold, kept_headers, err)
+	}
+
+	bufResizeNeeded := false
+	if cfg["settings.max_array_seckey_size"].Int() !=
+		oldCfg["settings.max_array_seckey_size"].Int() {
+		bufResizeNeeded = true
+	}
+	if cfg["settings.max_seckey_size"].Int() !=
+		oldCfg["settings.max_seckey_size"].Int() {
+		bufResizeNeeded = true
+	}
+	if bufResizeNeeded {
+		keyCfg := getKeySizeConfig(cfg)
+		if keyCfg.allowLargeKeys == false {
+			atomic.AddInt32(&fdb.bufResizeFlag, 1)
+		}
 	}
 }
 

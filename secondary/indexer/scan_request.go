@@ -111,6 +111,7 @@ type ScanRequest struct {
 	connCtx *ConnectionContext
 
 	dataEncFmt common.DataEncodingFormat
+	keySzCfg   keySizeConfig
 }
 
 type Projection struct {
@@ -300,6 +301,8 @@ func NewScanRequest(protoReq interface{}, ctx interface{},
 	} else {
 		r.connCtx = ctx.(*ConnectionContext)
 	}
+
+	r.keySzCfg = getKeySizeConfig(cfg)
 
 	switch req := protoReq.(type) {
 	case *protobuf.HeloRequest:
@@ -498,7 +501,7 @@ func (r *ScanRequest) newKey(k []byte) (IndexKey, error) {
 	if r.isPrimary {
 		return NewPrimaryKey(k)
 	} else {
-		return NewSecondaryKey(k, r.getKeyBuffer())
+		return NewSecondaryKey(k, r.getKeyBuffer(), r.keySzCfg.maxSecKeyLen)
 	}
 }
 

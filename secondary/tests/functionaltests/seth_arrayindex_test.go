@@ -3,6 +3,11 @@ package functionaltests
 import (
 	"errors"
 	"fmt"
+	"log"
+	"strconv"
+	"testing"
+	"time"
+
 	c "github.com/couchbase/indexing/secondary/common"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 	"github.com/couchbase/indexing/secondary/tests/framework/datautility"
@@ -10,10 +15,6 @@ import (
 	"github.com/couchbase/indexing/secondary/tests/framework/secondaryindex"
 	tv "github.com/couchbase/indexing/secondary/tests/framework/validation"
 	"github.com/couchbase/query/value"
-	"log"
-	"strconv"
-	"testing"
-	"time"
 )
 
 // Simple array with string array items
@@ -240,12 +241,27 @@ func TestArrayIndexCornerCases(t *testing.T) {
 	secondaryindex.UseClient = tmp
 }
 
-func TestArraySizeIncreaseDecrease(t *testing.T) {
-	log.Printf("In TestArraySizeIncreaseDecrease()")
+// Test key size settings with allow_large_keys = false
+// Test is enhanced to include increase/decrease in settings
+// for non-array index
+func TestArraySizeIncreaseDecrease1(t *testing.T) {
+	log.Printf("In TestArraySizeIncreaseDecrease1()")
+
+	changeKeySzSettings := func(secKeySz, arrKeySz int) {
+
+		err := secondaryindex.ChangeIndexerSettings("indexer.settings.max_seckey_size", float64(secKeySz), clusterconfig.Username, clusterconfig.Password, kvaddress)
+		FailTestIfError(err, "Error in ChangeIndexerSettings", t)
+
+		err = secondaryindex.ChangeIndexerSettings("indexer.settings.max_array_seckey_size", float64(arrKeySz), clusterconfig.Username, clusterconfig.Password, kvaddress)
+		FailTestIfError(err, "Error in ChangeIndexerSettings", t)
+
+		time.Sleep(1 * time.Second)
+	}
 
 	var bucketName = "default"
-	indexName := "arr1"
-	indexExpr := "ALL friends"
+	index1 := "arr1"
+	index2 := "arr2"
+	index3 := "idx3"
 
 	e := secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
 	FailTestIfError(e, "Error in DropAllSecondaryIndexes", t)
@@ -253,51 +269,217 @@ func TestArraySizeIncreaseDecrease(t *testing.T) {
 
 	err := secondaryindex.ChangeIndexerSettings("indexer.settings.allow_large_keys", false, clusterconfig.Username, clusterconfig.Password, kvaddress)
 	FailTestIfError(err, "Error in ChangeIndexerSettings", t)
-	time.Sleep(5 * time.Second) // Wait for restart after this setting change
+	time.Sleep(1 * time.Second) // no restart of indexer
 
-	err = secondaryindex.ChangeIndexerSettings("indexer.settings.max_array_seckey_size", float64(5120), clusterconfig.Username, clusterconfig.Password, kvaddress)
-	FailTestIfError(err, "Error in ChangeIndexerSettings", t)
-	time.Sleep(2 * time.Second)
+	changeKeySzSettings(100, 2000)
 
-	kvdocs := createArrayDocs(100, 6000)
+	kvdocs := createArrayDocs(100, 6000, 200)
 	kvutility.SetKeyValues(kvdocs, bucketName, "", clusterconfig.KVAddress)
 
-	err = secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{indexExpr}, false, nil, true, defaultIndexActiveTimeout, nil)
+	kvdocs2 := createArrayDocs(10, 5, 5)
+	kvutility.SetKeyValues(kvdocs2, bucketName, "", clusterconfig.KVAddress)
+	UpdateKVDocs(kvdocs2, kvdocs)
+
+	err = secondaryindex.CreateSecondaryIndex(index1, bucketName, indexManagementAddress, "", []string{"ALL friends"}, false, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
-	scanResults, err := secondaryindex.ArrayIndex_Range(indexName, bucketName, indexScanAddress, []interface{}{"#"}, []interface{}{"zzz"}, 1, false, defaultlimit, c.SessionConsistency, nil)
-	if len(scanResults) != 0 {
-		FailTestIfError(errors.New("Expected 0 results due to size limit"), "Error in scan result validation", t)
+	err = secondaryindex.CreateSecondaryIndex(index2, bucketName, indexManagementAddress, "", []string{"ALL name"}, false, nil, true, defaultIndexActiveTimeout, nil)
+	FailTestIfError(err, "Error in creating the index", t)
+
+	err = secondaryindex.CreateSecondaryIndex(index3, bucketName, indexManagementAddress, "", []string{"name"}, false, nil, true, defaultIndexActiveTimeout, nil)
+	FailTestIfError(err, "Error in creating the index", t)
+
+	scanResults, err := secondaryindex.ArrayIndex_Range(index1, bucketName, indexScanAddress, []interface{}{"#"}, []interface{}{"zzz"}, 1, false, defaultlimit, c.SessionConsistency, nil)
+	if len(scanResults) != 10 {
+		log.Printf("Len of scanResults = %v", len(scanResults))
+		tc.PrintArrayScanResultsActual(scanResults, "scanResults")
+		FailTestIfError(errors.New("Expected 50 results and 600K items skipped due to size limit"), "Error in scan result validation", t)
+	}
+
+	scanResults, err = secondaryindex.ArrayIndex_Range(index2, bucketName, indexScanAddress, []interface{}{"#"}, []interface{}{"zzz"}, 1, false, defaultlimit, c.SessionConsistency, nil)
+	if len(scanResults) != 10 {
+		log.Printf("Len of scanResults = %v", len(scanResults))
+		tc.PrintArrayScanResultsActual(scanResults, "scanResults")
+		FailTestIfError(errors.New("Expected 10 results and 100 items skipped due to size limit"), "Error in scan result validation", t)
+	}
+
+	scanResults2, err := secondaryindex.ScanAll(index3, bucketName, indexScanAddress, defaultlimit, c.SessionConsistency, nil)
+	log.Printf("Length of scanResults = %d", len(scanResults2))
+	if len(scanResults2) != 10 {
+		log.Printf("Len of scanResults2 = %v", len(scanResults2))
+		FailTestIfError(errors.New("Expected 10 results and 100 items skipped due to size limit"), "Error in scan result validation", t)
 	}
 
 	// Change setting to higher value
-	err = secondaryindex.ChangeIndexerSettings("indexer.settings.max_array_seckey_size", float64(51200), clusterconfig.Username, clusterconfig.Password, kvaddress)
-	FailTestIfError(err, "Error in ChangeIndexerSettings", t)
-	time.Sleep(5 * time.Second) // Wait for restart after this setting change
+	changeKeySzSettings(4096, 51200)
 
 	// Update docs
 	kvdocs = updateDocsArrayField(kvdocs, bucketName)
 	docScanResults := datautility.ExpectedArrayScanResponse_string(kvdocs, "friends", "a", "g", 1, false)
-	scanResults, err = secondaryindex.ArrayIndex_Range(indexName, bucketName, indexScanAddress, []interface{}{"a"}, []interface{}{"g"}, 1, false, defaultlimit, c.SessionConsistency, nil)
+	scanResults, err = secondaryindex.ArrayIndex_Range(index1, bucketName, indexScanAddress, []interface{}{"a"}, []interface{}{"g"}, 1, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
 	err = tv.ValidateArrayResult(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
 
+	docScanResults2 := datautility.ExpectedScanResponse_string(kvdocs, "name", "a", "g", 1)
+	scanResults2, err = secondaryindex.Range(index2, bucketName, indexScanAddress, []interface{}{"a"}, []interface{}{"g"}, 1, false, defaultlimit, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in scan", t)
+	err = tv.Validate(docScanResults2, scanResults2)
+	FailTestIfError(err, "Error in scan result validation", t)
+
+	docScanResults3 := datautility.ExpectedScanResponse_string(kvdocs, "name", "a", "g", 1)
+	scanResults3, err := secondaryindex.Range(index3, bucketName, indexScanAddress, []interface{}{"a"}, []interface{}{"g"}, 1, false, defaultlimit, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in scan", t)
+	err = tv.Validate(docScanResults3, scanResults3)
+	FailTestIfError(err, "Error in scan result validation", t)
+
 	// Change setting to low value
-	err = secondaryindex.ChangeIndexerSettings("indexer.settings.max_array_seckey_size", float64(4096), clusterconfig.Username, clusterconfig.Password, kvaddress)
-	FailTestIfError(err, "Error in ChangeIndexerSettings", t)
-	time.Sleep(5 * time.Second) // Wait for restart after this setting change
+	changeKeySzSettings(100, 2200)
 
 	// Update docs
 	kvdocs = updateDocsArrayField(kvdocs, bucketName)
-	scanResults, err = secondaryindex.ArrayIndex_Range(indexName, bucketName, indexScanAddress, []interface{}{"#"}, []interface{}{"zzz"}, 1, false, defaultlimit, c.SessionConsistency, nil)
-	if len(scanResults) != 0 {
-		FailTestIfError(errors.New("Expected 0 results due to size limit"), "Error in scan result validation", t)
+
+	scanResults, err = secondaryindex.ArrayIndex_Range(index1, bucketName, indexScanAddress, []interface{}{"#"}, []interface{}{"zzz"}, 1, false, defaultlimit, c.SessionConsistency, nil)
+	if len(scanResults) != 10 {
+		log.Printf("Len of scanResults = %v", len(scanResults))
+		FailTestIfError(errors.New("Expected 50 results and 600K items skipped due to size limit"), "Error in scan result validation", t)
 	}
 
-	err = secondaryindex.ChangeIndexerSettings("indexer.settings.allow_large_keys", true, clusterconfig.Username, clusterconfig.Password, kvaddress)
+	scanResults, err = secondaryindex.ArrayIndex_Range(index2, bucketName, indexScanAddress, []interface{}{"#"}, []interface{}{"zzz"}, 1, false, defaultlimit, c.SessionConsistency, nil)
+	if len(scanResults) != 10 {
+		log.Printf("Len of scanResults = %v", len(scanResults))
+		FailTestIfError(errors.New("Expected 50 results and 600K items skipped due to size limit"), "Error in scan result validation", t)
+	}
+
+	scanResults2, err = secondaryindex.ScanAll(index3, bucketName, indexScanAddress, defaultlimit, c.SessionConsistency, nil)
+	log.Printf("Length of scanResults = %d", len(scanResults2))
+	if len(scanResults2) != 10 {
+		log.Printf("Len of scanResults2 = %v", len(scanResults2))
+		FailTestIfError(errors.New("Expected 10 results and 100 items skipped due to size limit"), "Error in scan result validation", t)
+	}
+
+	// Change setting to default values
+	changeKeySzSettings(4608, 10240)
+}
+
+// Test key size settings with allow_large_keys = true
+func TestArraySizeIncreaseDecrease2(t *testing.T) {
+	log.Printf("In TestArraySizeIncreaseDecrease2()")
+
+	if clusterconfig.IndexUsing == "forestdb" {
+		fmt.Println("Skip test as allow_large_keys = true is not supported for forestdb")
+		return
+	}
+
+	changeKeySzSettings := func(secKeySz, arrKeySz int) {
+
+		err := secondaryindex.ChangeIndexerSettings("indexer.settings.max_seckey_size", float64(secKeySz), clusterconfig.Username, clusterconfig.Password, kvaddress)
+		FailTestIfError(err, "Error in ChangeIndexerSettings", t)
+
+		err = secondaryindex.ChangeIndexerSettings("indexer.settings.max_array_seckey_size", float64(arrKeySz), clusterconfig.Username, clusterconfig.Password, kvaddress)
+		FailTestIfError(err, "Error in ChangeIndexerSettings", t)
+
+		time.Sleep(1 * time.Second)
+	}
+
+	var bucketName = "default"
+	index1 := "arr1"
+	index2 := "arr2"
+	index3 := "idx3"
+
+	e := secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+	FailTestIfError(e, "Error in DropAllSecondaryIndexes", t)
+	kvutility.FlushBucket(bucketName, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+
+	err := secondaryindex.ChangeIndexerSettings("indexer.settings.allow_large_keys", true, clusterconfig.Username, clusterconfig.Password, kvaddress)
 	FailTestIfError(err, "Error in ChangeIndexerSettings", t)
-	time.Sleep(5 * time.Second) // Wait for restart after this setting change
+	time.Sleep(1 * time.Second) // no restart of indexer
+
+	changeKeySzSettings(100, 2000)
+
+	kvdocs := createArrayDocs(100, 6000, 200)
+	kvutility.SetKeyValues(kvdocs, bucketName, "", clusterconfig.KVAddress)
+
+	kvdocs2 := createArrayDocs(10, 5, 5)
+	kvutility.SetKeyValues(kvdocs2, bucketName, "", clusterconfig.KVAddress)
+	UpdateKVDocs(kvdocs2, kvdocs)
+
+	err = secondaryindex.CreateSecondaryIndex(index1, bucketName, indexManagementAddress, "", []string{"ALL friends"}, false, nil, true, defaultIndexActiveTimeout, nil)
+	FailTestIfError(err, "Error in creating the index", t)
+
+	err = secondaryindex.CreateSecondaryIndex(index2, bucketName, indexManagementAddress, "", []string{"ALL name"}, false, nil, true, defaultIndexActiveTimeout, nil)
+	FailTestIfError(err, "Error in creating the index", t)
+
+	err = secondaryindex.CreateSecondaryIndex(index3, bucketName, indexManagementAddress, "", []string{"name"}, false, nil, true, defaultIndexActiveTimeout, nil)
+	FailTestIfError(err, "Error in creating the index", t)
+
+	docScanResults := datautility.ExpectedArrayScanResponse_string(kvdocs, "friends", "a", "g", 1, false)
+	scanResults, err := secondaryindex.ArrayIndex_Range(index1, bucketName, indexScanAddress, []interface{}{"a"}, []interface{}{"g"}, 1, false, defaultlimit, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in scan", t)
+	err = tv.ValidateArrayResult(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan result validation", t)
+
+	docScanResults2 := datautility.ExpectedScanResponse_string(kvdocs, "name", "a", "g", 1)
+	scanResults2, err := secondaryindex.Range(index2, bucketName, indexScanAddress, []interface{}{"a"}, []interface{}{"g"}, 1, false, defaultlimit, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in scan", t)
+	err = tv.Validate(docScanResults2, scanResults2)
+	FailTestIfError(err, "Error in scan result validation", t)
+
+	docScanResults3 := datautility.ExpectedScanResponse_string(kvdocs, "name", "a", "g", 1)
+	scanResults3, err := secondaryindex.Range(index3, bucketName, indexScanAddress, []interface{}{"a"}, []interface{}{"g"}, 1, false, defaultlimit, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in scan", t)
+	err = tv.Validate(docScanResults3, scanResults3)
+	FailTestIfError(err, "Error in scan result validation", t)
+
+	// Change setting to higher value
+	changeKeySzSettings(4096, 51200)
+
+	// Update docs
+	kvdocs = updateDocsArrayField(kvdocs, bucketName)
+	docScanResults = datautility.ExpectedArrayScanResponse_string(kvdocs, "friends", "a", "g", 1, false)
+	scanResults, err = secondaryindex.ArrayIndex_Range(index1, bucketName, indexScanAddress, []interface{}{"a"}, []interface{}{"g"}, 1, false, defaultlimit, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in scan", t)
+	err = tv.ValidateArrayResult(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan result validation", t)
+
+	docScanResults2 = datautility.ExpectedScanResponse_string(kvdocs, "name", "a", "g", 1)
+	scanResults2, err = secondaryindex.Range(index2, bucketName, indexScanAddress, []interface{}{"a"}, []interface{}{"g"}, 1, false, defaultlimit, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in scan", t)
+	err = tv.Validate(docScanResults2, scanResults2)
+	FailTestIfError(err, "Error in scan result validation", t)
+
+	docScanResults3 = datautility.ExpectedScanResponse_string(kvdocs, "name", "a", "g", 1)
+	scanResults3, err = secondaryindex.Range(index3, bucketName, indexScanAddress, []interface{}{"a"}, []interface{}{"g"}, 1, false, defaultlimit, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in scan", t)
+	err = tv.Validate(docScanResults3, scanResults3)
+	FailTestIfError(err, "Error in scan result validation", t)
+
+	// Change setting to low value
+	changeKeySzSettings(100, 2200)
+
+	// Update docs
+	kvdocs = updateDocsArrayField(kvdocs, bucketName)
+
+	docScanResults = datautility.ExpectedArrayScanResponse_string(kvdocs, "friends", "a", "g", 1, false)
+	scanResults, err = secondaryindex.ArrayIndex_Range(index1, bucketName, indexScanAddress, []interface{}{"a"}, []interface{}{"g"}, 1, false, defaultlimit, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in scan", t)
+	err = tv.ValidateArrayResult(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan result validation", t)
+
+	docScanResults2 = datautility.ExpectedScanResponse_string(kvdocs, "name", "a", "g", 1)
+	scanResults2, err = secondaryindex.Range(index2, bucketName, indexScanAddress, []interface{}{"a"}, []interface{}{"g"}, 1, false, defaultlimit, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in scan", t)
+	err = tv.Validate(docScanResults2, scanResults2)
+	FailTestIfError(err, "Error in scan result validation", t)
+
+	docScanResults3 = datautility.ExpectedScanResponse_string(kvdocs, "name", "a", "g", 1)
+	scanResults3, err = secondaryindex.Range(index3, bucketName, indexScanAddress, []interface{}{"a"}, []interface{}{"g"}, 1, false, defaultlimit, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in scan", t)
+	err = tv.Validate(docScanResults3, scanResults3)
+	FailTestIfError(err, "Error in scan result validation", t)
+
+	// Change setting to default values
+	changeKeySzSettings(4608, 10240)
 }
 
 func updateDocsArrayField(kvdocs tc.KeyValues, bucketName string) tc.KeyValues {
@@ -308,6 +490,7 @@ func updateDocsArrayField(kvdocs tc.KeyValues, bucketName string) tc.KeyValues {
 		arr := json["friends"].([]string)
 		arr[0] = fmt.Sprintf("%s_%v", arr[0], randomNum(0, 10000))
 		json["friends"] = arr
+		json["name"] = fmt.Sprintf("%s_%v", json["name"].(string), randomNum(0, 10000))
 		keysToBeUpdated[k] = json
 	}
 	kvdocs = keysToBeUpdated
@@ -317,7 +500,7 @@ func updateDocsArrayField(kvdocs tc.KeyValues, bucketName string) tc.KeyValues {
 }
 
 // create docs with arrays with size atleast 5 times numArrayItems
-func createArrayDocs(numDocs, numArrayItems int) tc.KeyValues {
+func createArrayDocs(numDocs, numArrayItems, indvKeySize int) tc.KeyValues {
 	log.Printf("Start of createArrayDocs()")
 	arrDocs := make(tc.KeyValues)
 	for i := 0; i < numDocs; i++ {
@@ -330,6 +513,7 @@ func createArrayDocs(numDocs, numArrayItems int) tc.KeyValues {
 			arr = append(arr, randString(randomNum(5, 7)))
 		}
 		value["friends"] = arr
+		value["name"] = randString(randomNum(float64(indvKeySize*5), float64(indvKeySize*6)))
 		arrDocs[key] = value
 	}
 	log.Printf("End of createArrayDocs()")
