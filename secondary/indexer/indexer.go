@@ -3096,17 +3096,7 @@ func (idx *indexer) cleanupIndex(indexInst common.IndexInst,
 		}
 	}
 
-	// If INIT_STREAM is in STREAM_INACTIVE, then clean up instances in MAINT_STREAM
-	// that are in state INDEX_STATE_DELETED
-	bucket := indexInst.Defn.Bucket
-	if indexInst.Stream == common.INIT_STREAM && idx.getStreamBucketState(common.INIT_STREAM, bucket) == STREAM_INACTIVE {
-		logging.Infof("Indexer::cleanupIndex INIT_STREAM is in state STREAM_INACTIVE. Attempting clean-up of MAINT_STREAM. Bucket: %v", bucket)
-		idx.cleanupMaintStream(bucket)
-	}
-
-	if clientCh != nil {
-		clientCh <- &MsgSuccess{}
-	}
+	clientCh <- &MsgSuccess{}
 }
 
 func (idx *indexer) sendStreamUpdateForIndex(indexInstList []common.IndexInst, bucket string, bucketUUID string, streamId common.StreamId) {
@@ -4191,32 +4181,6 @@ func (idx *indexer) handleMergeInitStream(msg Message) {
 
 	logging.Infof("Indexer::handleMergeInitStream Merge Done Bucket: %v Stream: %v",
 		bucket, streamId)
-
-	// On a successful merge, clean-up instances in MAINT_STREAM that are in state
-	// INDEX_STATE_DELETED
-	idx.cleanupMaintStream(bucket)
-}
-
-// cleanupMaintStream cleanes up all the instances in MAINT_STREAM which are in state
-// INDEX_STATE_DELETED when INIT_STREAM is in state STREAM_INACTIVE
-func (idx *indexer) cleanupMaintStream(bucket string) {
-	if idx.getStreamBucketState(common.INIT_STREAM, bucket) != STREAM_INACTIVE {
-		return
-	}
-
-	maintStreamInstList := idx.getIndexListForBucketAndStream(common.MAINT_STREAM, bucket)
-	var cleanupInstList []common.IndexInst
-
-	for _, maintStreamInst := range maintStreamInstList {
-		if maintStreamInst.State == common.INDEX_STATE_DELETED {
-			cleanupInstList = append(cleanupInstList, maintStreamInst)
-		}
-	}
-
-	for _, cleanupInst := range cleanupInstList {
-		logging.Infof("Indexer::cleanupMaintStream Cleaning up instance: %v", cleanupInst.InstId)
-		idx.cleanupIndex(cleanupInst, nil)
-	}
 }
 
 //checkBucketExistsInStream returns true if there is no index in the given stream
