@@ -865,6 +865,9 @@ func computeGroupAggr(compositekeys [][]byte, decodedkeys value.Values, count in
 		}
 	}
 
+	// SetCover for Annotated Value
+	setCoverForExprEval(groupAggr, decodedkeys, docid)
+
 	for i, gk := range groupAggr.Group {
 		err := computeGroupKey(groupAggr, gk, compositekeys, decodedkeys, docid, i, p, cachedEntry.Valid())
 		if err != nil {
@@ -945,22 +948,26 @@ func computeAggrVal(groupAggr *GroupAggr, ak *Aggregate,
 	return nil
 }
 
-func evaluateN1QLExpresssion(groupAggr *GroupAggr, expr expression.Expression,
-	decodedkeys value.Values, docid []byte, p *ScanPipeline) (value.Value, error) {
-
-	if groupAggr.IsPrimary {
-		for _, ik := range groupAggr.DependsOnIndexKeys {
-			groupAggr.av.SetCover(groupAggr.IndexKeyNames[ik], value.NewValue(string(docid)))
-		}
-	} else {
-		for _, ik := range groupAggr.DependsOnIndexKeys {
-			if int(ik) == len(decodedkeys) {
+func setCoverForExprEval(groupAggr *GroupAggr, decodedkeys value.Values, docid []byte) {
+	if groupAggr.HasExpr {
+		if groupAggr.IsPrimary {
+			for _, ik := range groupAggr.DependsOnIndexKeys {
 				groupAggr.av.SetCover(groupAggr.IndexKeyNames[ik], value.NewValue(string(docid)))
-			} else {
-				groupAggr.av.SetCover(groupAggr.IndexKeyNames[ik], decodedkeys[ik])
+			}
+		} else {
+			for _, ik := range groupAggr.DependsOnIndexKeys {
+				if int(ik) == len(decodedkeys) {
+					groupAggr.av.SetCover(groupAggr.IndexKeyNames[ik], value.NewValue(string(docid)))
+				} else {
+					groupAggr.av.SetCover(groupAggr.IndexKeyNames[ik], decodedkeys[ik])
+				}
 			}
 		}
 	}
+}
+
+func evaluateN1QLExpresssion(groupAggr *GroupAggr, expr expression.Expression,
+	decodedkeys value.Values, docid []byte, p *ScanPipeline) (value.Value, error) {
 
 	t0 := time.Now()
 	scalar, _, err := expr.EvaluateForIndex(groupAggr.av, groupAggr.exprContext) // TODO: Ignore vector for now
