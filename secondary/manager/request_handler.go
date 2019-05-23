@@ -13,12 +13,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/couchbase/cbauth"
-	"github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/logging"
-	"github.com/couchbase/indexing/secondary/manager/client"
-	mc "github.com/couchbase/indexing/secondary/manager/common"
-	"github.com/couchbase/indexing/secondary/planner"
 	"io"
 	"math"
 	"net/http"
@@ -27,6 +21,13 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/couchbase/cbauth"
+	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/manager/client"
+	mc "github.com/couchbase/indexing/secondary/manager/common"
+	"github.com/couchbase/indexing/secondary/planner"
 )
 
 ///////////////////////////////////////////////////////
@@ -396,6 +397,21 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, bucket string
 	list := make([]IndexStatus, 0)
 	failedNodes := make([]string, 0)
 
+	defns := make(map[common.IndexDefnId]common.IndexDefn)
+	defnToHostMap := make(map[common.IndexDefnId][]string)
+	isInstanceDeferred := make(map[common.IndexInstId]bool)
+
+	addHost := func(defnId common.IndexDefnId, hostAddr string) {
+		if hostList, ok := defnToHostMap[defnId]; ok {
+			for _, host := range hostList {
+				if strings.Compare(hostAddr, host) == 0 {
+					return
+				}
+			}
+		}
+		defnToHostMap[defnId] = append(defnToHostMap[defnId], hostAddr)
+	}
+
 	for _, nid := range nids {
 
 		addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE)
@@ -450,6 +466,8 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, bucket string
 				if !isAllowed(creds, []string{permission}, nil) {
 					continue
 				}
+
+				defns[defn.DefnId] = defn
 
 				if topology := findTopologyByBucket(localMeta.IndexTopologies, defn.Bucket); topology != nil {
 
@@ -535,6 +553,9 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, bucket string
 								partitionMap[curl] = append(partitionMap[curl], int(partnDef.PartId))
 							}
 
+							addHost(defn.DefnId, curl)
+							isInstanceDeferred[common.IndexInstId(instance.InstId)] = defn.Deferred
+
 							status := IndexStatus{
 								DefnId:       defn.DefnId,
 								InstId:       common.IndexInstId(instance.InstId),
@@ -569,6 +590,36 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, bucket string
 			logging.Debugf("RequestHandler::getIndexStatus: Error from GetServiceAddress (indexHttp) for node id %v. Error = %v", nid, err)
 			failedNodes = append(failedNodes, addr)
 			continue
+		}
+	}
+
+	// Fix index definition so that the "nodes" field inside
+	// "with" clause show the current set of nodes on which
+	// the index resides.
+	//
+	// If the index resides on different nodes, the "nodes" clause
+	// is populated on UI irrespective of whether the index is
+	// explicitly defined with "nodes" clause or not
+	//
+	// If the index resides only on one node, the "nodes" clause is
+	// populated on UI only if the index definition is defined with
+	// "nodes" clause
+	for i, index := range list {
+		defnId := index.DefnId
+		defn := defns[defnId]
+		if len(defnToHostMap[defnId]) > 1 {
+			defn.Nodes = defnToHostMap[defnId]
+			// The deferred field will be set to true by default for a rebalanced index
+			// For the non-rebalanced index, it can either be true or false depending on
+			// how it was created
+			defn.Deferred = isInstanceDeferred[index.InstId]
+			list[i].Definition = common.IndexStatement(defn, index.NumPartition, true)
+		} else {
+			if defn.Nodes != nil {
+				defn.Nodes = defnToHostMap[defnId]
+				defn.Deferred = isInstanceDeferred[index.InstId]
+				list[i].Definition = common.IndexStatement(defn, index.NumPartition, true)
+			}
 		}
 	}
 
