@@ -13,13 +13,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/couchbase/cbauth"
-	"github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/logging"
-	"github.com/couchbase/indexing/secondary/manager/client"
-	mc "github.com/couchbase/indexing/secondary/manager/common"
-	"github.com/couchbase/indexing/secondary/planner"
-	"github.com/couchbase/indexing/secondary/security"
 	"io"
 	"io/ioutil"
 	"math"
@@ -31,6 +24,14 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/couchbase/cbauth"
+	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/manager/client"
+	mc "github.com/couchbase/indexing/secondary/manager/common"
+	"github.com/couchbase/indexing/secondary/planner"
+	"github.com/couchbase/indexing/secondary/security"
 )
 
 ///////////////////////////////////////////////////////
@@ -442,6 +443,9 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, bucket string
 	metaToCache := make(map[string]*LocalIndexMetadata)
 	statsToCache := make(map[string]*common.Statistics)
 
+	defnToHostMap := make(map[common.IndexDefnId][]string)
+	isInstanceDeferred := make(map[common.IndexInstId]bool)
+
 	mergeCounter := func(defnId common.IndexDefnId, counter common.Counter) {
 		if current, ok := numReplicas[defnId]; ok {
 			newValue, merged, err := current.MergeWith(counter)
@@ -460,6 +464,17 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, bucket string
 		if counter.IsValid() {
 			numReplicas[defnId] = counter
 		}
+	}
+
+	addHost := func(defnId common.IndexDefnId, hostAddr string) {
+		if hostList, ok := defnToHostMap[defnId]; ok {
+			for _, host := range hostList {
+				if strings.Compare(hostAddr, host) == 0 {
+					return
+				}
+			}
+		}
+		defnToHostMap[defnId] = append(defnToHostMap[defnId], hostAddr)
 	}
 
 	for _, nid := range nids {
@@ -607,6 +622,9 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, bucket string
 								partitionMap[mgmtAddr] = append(partitionMap[mgmtAddr], int(partnDef.PartId))
 							}
 
+							addHost(defn.DefnId, mgmtAddr)
+							isInstanceDeferred[common.IndexInstId(instance.InstId)] = defn.Deferred
+
 							status := IndexStatus{
 								DefnId:       defn.DefnId,
 								InstId:       common.IndexInstId(instance.InstId),
@@ -646,13 +664,36 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, bucket string
 	}
 
 	//Fix replica count
-	for _, index := range list {
+	for i, index := range list {
 		if counter, ok := numReplicas[index.DefnId]; ok {
 			numReplica, exist := counter.Value()
 			if exist {
-				index.Definition = common.IndexStatement(defns[index.DefnId], index.NumPartition, int(numReplica), true)
-				index.NumReplica = int(numReplica)
+				list[i].NumReplica = int(numReplica)
 			}
+		}
+	}
+
+	// Fix index definition so that the "nodes" field inside
+	// "with" clause show the current set of nodes on which
+	// the index resides.
+	//
+	// If the index resides on different nodes, the "nodes" clause
+	// is populated on UI irrespective of whether the index is
+	// explicitly defined with "nodes" clause or not
+	//
+	// If the index resides only on one node, the "nodes" clause is
+	// populated on UI only if the index definition is explicitly
+	// defined with "nodes" clause
+	for i, index := range list {
+		defnId := index.DefnId
+		defn := defns[defnId]
+		if len(defnToHostMap[defnId]) > 1 || defn.Nodes != nil {
+			defn.Nodes = defnToHostMap[defnId]
+			// The deferred field will be set to true by default for a rebalanced index
+			// For the non-rebalanced index, it can either be true or false depending on
+			// how it was created
+			defn.Deferred = isInstanceDeferred[index.InstId]
+			list[i].Definition = common.IndexStatement(defn, index.NumPartition, index.NumReplica, true)
 		}
 	}
 
