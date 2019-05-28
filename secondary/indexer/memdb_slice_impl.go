@@ -729,6 +729,8 @@ func (mdb *memdbSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 
 	s.Open()
 	s.slice.IncrRef()
+	s.slice.idxStats.numOpenSnapshots.Add(1)
+
 	if s.committed && mdb.hasPersistence {
 		s.info.MainSnap.Open()
 		go mdb.doPersistSnapshot(s)
@@ -1430,7 +1432,7 @@ func (s *memdbSnapshot) Close() error {
 
 func (s *memdbSnapshot) Destroy() {
 	s.info.MainSnap.Close()
-
+	s.slice.idxStats.numOpenSnapshots.Add(-1)
 	defer s.slice.DecrRef()
 }
 

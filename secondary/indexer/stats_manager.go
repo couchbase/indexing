@@ -145,6 +145,7 @@ type IndexStats struct {
 	itemsCount                stats.Int64Val
 	numCommits                stats.Int64Val
 	numSnapshots              stats.Int64Val
+	numOpenSnapshots          stats.Int64Val
 	numCompactions            stats.Int64Val
 	numItemsFlushed           stats.Int64Val
 	avgTsInterval             stats.Int64Val
@@ -260,6 +261,7 @@ func (s *IndexStats) Init() {
 	s.lastTsTime.Init()
 	s.numCommits.Init()
 	s.numSnapshots.Init()
+	s.numOpenSnapshots.Init()
 	s.numCompactions.Init()
 	s.numItemsFlushed.Init()
 	s.numDocsFlushQueued.Init()
@@ -832,6 +834,10 @@ func (is IndexerStats) GetStats(getPartition bool, skipEmpty bool) common.Statis
 		addStat("num_snapshots",
 			s.int64Stats(func(ss *IndexStats) int64 {
 				return ss.numSnapshots.Value()
+			}))
+		addStat("num_open_snapshots",
+			s.int64Stats(func(ss *IndexStats) int64 { // Partition and index stat
+				return ss.numOpenSnapshots.Value()
 			}))
 		addStat("num_compactions",
 			s.int64Stats(func(ss *IndexStats) int64 {
