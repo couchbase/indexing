@@ -38,6 +38,7 @@ type ClientSettings struct {
 	needRefresh          bool
 	allowCJsonScanFormat uint32
 	allowPartialQuorum   uint32
+	allowScheduleCreate  uint32
 }
 
 func NewClientSettings(needRefresh bool) *ClientSettings {
@@ -188,6 +189,18 @@ func (s *ClientSettings) handleSettings(config common.Config) {
 		atomic.StoreUint32(&s.allowPartialQuorum, 0)
 	}
 
+	allowScheduleCreate, ok := config["indexer.allowScheduleCreate"]
+	if ok {
+		if allowScheduleCreate.Bool() {
+			atomic.StoreUint32(&s.allowScheduleCreate, 1)
+		} else {
+			atomic.StoreUint32(&s.allowScheduleCreate, 0)
+		}
+	} else {
+		logging.Errorf("ClientSettings: missing allowScheduleCreate")
+		atomic.StoreUint32(&s.allowScheduleCreate, 0)
+	}
+
 	usePlanner, ok := config["queryport.client.usePlanner"]
 	if ok {
 		if usePlanner.Bool() {
@@ -267,6 +280,10 @@ func (s *ClientSettings) AllowCJsonScanFormat() bool {
 
 func (s *ClientSettings) AllowPartialQuorum() bool {
 	return atomic.LoadUint32(&s.allowPartialQuorum) == 1
+}
+
+func (s *ClientSettings) AllowScheduleCreate() bool {
+	return atomic.LoadUint32(&s.allowScheduleCreate) == 1
 }
 
 func (s *ClientSettings) UsePlanner() bool {

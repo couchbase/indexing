@@ -10,12 +10,14 @@
 package client
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
 	"math/rand"
 	"net"
+	"net/http"
 	"reflect"
 	"strconv"
 	"strings"
@@ -32,6 +34,7 @@ import (
 	"github.com/couchbase/indexing/secondary/logging"
 	mc "github.com/couchbase/indexing/secondary/manager/common"
 	"github.com/couchbase/indexing/secondary/planner"
+	"github.com/couchbase/indexing/secondary/security"
 	"github.com/couchbase/query/expression"
 	"github.com/couchbase/query/expression/parser"
 )
@@ -49,6 +52,7 @@ type Settings interface {
 	StorageMode() string
 	UsePlanner() bool
 	AllowPartialQuorum() bool
+	AllowScheduleCreate() bool
 }
 
 ///////////////////////////////////////////////////////
@@ -177,6 +181,8 @@ var REQUEST_CHANNEL_COUNT = 1000
 
 var VALID_PARAM_NAMES = []string{"nodes", "defer_build", "retain_deleted_xattr",
 	"num_partition", "num_replica", "docKeySize", "secKeySize", "arrSize", "numDoc", "residentRatio"}
+
+var ErrWaitScheduleTimeout = fmt.Errorf("Timeout in checking for schedule create token.")
 
 ///////////////////////////////////////////////////////
 // Public function : MetadataProvider
@@ -398,7 +404,8 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 			return c.IndexDefnId(0), err, false
 		}
 	} else {
-		if err := o.recoverableCreateIndex(idxDefn, plan); err != nil {
+		scheduleOnFailure := o.settings.AllowScheduleCreate()
+		if err := o.recoverableCreateIndex(idxDefn, plan, scheduleOnFailure); err != nil {
 			return c.IndexDefnId(0), err, false
 		}
 	}
@@ -411,12 +418,12 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 //
 func (o *MetadataProvider) makePrepareIndexRequest(defnId c.IndexDefnId, name string,
 	bucket, scope, collection string, nodes []string, partitionScheme c.PartitionScheme,
-	numReplica int, checkDuplicateIndex bool) (map[c.IndexerId]int, error) {
+	numReplica int, checkDuplicateIndex bool) (map[c.IndexerId]int, error, bool) {
 
 	// do a preliminary check
 	watchers, err, _ := o.findWatchersWithRetry(nodes, numReplica, c.IsPartitioned(partitionScheme), false)
 	if err != nil {
-		return nil, err
+		return nil, err, false
 	}
 
 	if len(nodes) == 0 {
@@ -440,11 +447,13 @@ func (o *MetadataProvider) makePrepareIndexRequest(defnId c.IndexDefnId, name st
 
 	requestMsg, err := MarshallPrepareCreateRequest(request)
 	if err != nil {
-		return nil, err
+		return nil, err, false
 	}
 
 	var wg *sync.WaitGroup = new(sync.WaitGroup)
 	var accept uint32
+	var schedule uint32
+	var duplicate uint32
 
 	watcherMap := make(map[c.IndexerId]int)
 
@@ -486,19 +495,42 @@ func (o *MetadataProvider) makePrepareIndexRequest(defnId c.IndexDefnId, name st
 				atomic.AddUint32(&accept, 1)
 				return
 			}
+
+			if response != nil {
+				logging.Infof("Indexer %v rejected request for index (%v, %v, %v, %v) with reason %v",
+					w.getAdminAddr(), bucket, scope, collection, name, response.Msg)
+
+				if response.Msg == RespAnotherIndexCreation {
+					atomic.AddUint32(&schedule, 1)
+					return
+				}
+
+				if response.Msg == RespDuplicateIndex {
+					atomic.AddUint32(&duplicate, 1)
+					return
+				}
+
+			}
 		}(w)
 	}
 
 	wg.Wait()
 
 	if accept < uint32(len(watcherMap)) {
-		errStr := "Create index or Alter replica cannot proceed due to rebalance in progress, " +
-			"another concurrent create index request, network partition, node failover, " +
-			"indexer failure, or presence of duplicate index name."
-		return watcherMap, errors.New(errStr)
+		if atomic.LoadUint32(&duplicate) > 0 {
+			errStr := "Create index cannot proceed due to presence of duplicate index name."
+			return watcherMap, errors.New(errStr), false
+		} else if (atomic.LoadUint32(&schedule) + accept) < uint32(len(watcherMap)) {
+			errStr := "Create index or Alter replica cannot proceed due to rebalance in progress, " +
+				"network partition, node failover or indexer failure."
+			return watcherMap, errors.New(errStr), false
+		} else {
+			errStr := "Create index or Alter replica cannot proceed due to another concurrent create index request."
+			return watcherMap, errors.New(errStr), true
+		}
 	}
 
-	return watcherMap, nil
+	return watcherMap, nil, false
 }
 
 //
@@ -664,10 +696,188 @@ func (o *MetadataProvider) makeCommitIndexRequest(op CommitCreateRequestOp, idxD
 	return createErr
 }
 
+// TODO: This needs to check for StopScheduleCreateToken as well.
+func (o *MetadataProvider) verifyDuplicateScheduleToken(idxDefn *c.IndexDefn) error {
+	tokens, err := mc.ListAllScheduleCreateTokens()
+	if err != nil {
+		logging.Errorf("verifyDuplicateScheduleToken:: error %v in ListAllScheduleCreateTokens", err)
+		return err
+	}
+
+	for _, token := range tokens {
+		defn := token.Definition
+		if defn.Bucket == idxDefn.Bucket &&
+			defn.Scope == idxDefn.Scope &&
+			defn.Collection == idxDefn.Collection &&
+			defn.Name == idxDefn.Name {
+
+			return fmt.Errorf("Duplicate index id %v is already scheduled for creation.", defn.DefnId)
+		}
+	}
+
+	return nil
+}
+
+func (o *MetadataProvider) scheduleIndexCreation(idxDefn *c.IndexDefn,
+	plan map[string]interface{}) error {
+
+	err := o.verifyDuplicateScheduleToken(idxDefn)
+	if err != nil {
+		return err
+	}
+
+	//
+	// choose one indexer and let it post the token
+	//
+	nodes := make(map[string]*watcher)
+	watchers := o.getAllWatchers()
+	for _, w := range watchers {
+		if w.serviceMap.ExcludeNode == "in" ||
+			w.serviceMap.ExcludeNode == "inout" {
+
+			continue
+		}
+
+		nodes[strings.ToLower(w.getNodeAddr())] = w
+	}
+
+	if len(nodes) <= 0 {
+		return fmt.Errorf("No candidate indexer node found for posting schedule create token "+
+			"for index (%v, %v, %v, %v)", idxDefn.Bucket, idxDefn.Scope, idxDefn.Collection, idxDefn.Name)
+	}
+
+	//
+	// validate availability of input nodes, if any.
+	//
+	for _, n := range idxDefn.Nodes {
+		_, ok := nodes[strings.ToLower(n)]
+		if !ok {
+			return fmt.Errorf("Indexer node (%v) not found. The node may be failed or "+
+				"under rebalance or network partitioned from query process.", n)
+		}
+	}
+
+	var indexer *watcher
+
+	if len(idxDefn.Nodes) != 0 {
+		n := idxDefn.Nodes[0]
+		for addr, node := range nodes {
+			if addr == n {
+				indexer = node
+				break
+			}
+		}
+	}
+
+	if indexer == nil {
+		if len(idxDefn.Nodes) != 0 {
+			logging.Warnf("Cannot find the candidate indexer node to post schedule create token, "+
+				"which belongs in the user-specified list of nodes, for index (%v, %v, %v, %v)",
+				idxDefn.Bucket, idxDefn.Scope, idxDefn.Collection, idxDefn.Name)
+		}
+
+		for _, node := range nodes {
+			indexer = node
+			break
+		}
+	}
+
+	if indexer == nil {
+		return fmt.Errorf("No candidate indexer node found for posting schedule create token.")
+	}
+
+	return o.makeScheduleCreateRequest(idxDefn, plan, indexer)
+}
+
+func (o *MetadataProvider) makeScheduleCreateRequest(idxDefn *c.IndexDefn,
+	plan map[string]interface{}, indexer *watcher) error {
+
+	addr := indexer.getHttpAddr()
+	url := addr + "/postScheduleCreateRequest"
+
+	req := &ScheduleCreateRequest{
+		Definition: *idxDefn,
+		Plan:       plan,
+		IndexerId:  indexer.getIndexerId(),
+	}
+
+	buf, err := json.Marshal(req)
+	if err != nil {
+		return err
+	}
+
+	bytesBuf := bytes.NewBuffer(buf)
+	params := &security.RequestParams{Timeout: time.Duration(10) * time.Second}
+
+	var resp *http.Response
+	resp, err = security.PostWithAuth(url, "application/json", bytesBuf, params)
+	if err != nil {
+		logging.Errorf("MetadataProvider::makeScheduleCreateRequest: error in PostWithAuth: %v, for index (%v, %v, %v, %v)",
+			err, idxDefn.Bucket, idxDefn.Scope, idxDefn.Collection, idxDefn.Name)
+		return err
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		logging.Errorf("MetadataProvider::makeScheduleCreateRequest: unexpected http status: %v, for index (%v, %v, %v, %v)",
+			resp.StatusCode, idxDefn.Bucket, idxDefn.Scope, idxDefn.Collection, idxDefn.Name)
+
+		var msg interface{}
+		buf := new(bytes.Buffer)
+		if _, err := buf.ReadFrom(resp.Body); err != nil {
+			logging.Errorf("MetadataProvider::makeScheduleCreateRequest: error in reading response body: %v, for index (%v, %v, %v, %v)",
+				err, idxDefn.Bucket, idxDefn.Scope, idxDefn.Collection, idxDefn.Name)
+			return err
+		}
+
+		if err := json.Unmarshal(buf.Bytes(), msg); err != nil {
+			logging.Errorf("MetadataProvider::makeScheduleCreateRequest: error in unmarshalling response body: %v, for index (%v, %v, %v, %v)",
+				err, idxDefn.Bucket, idxDefn.Scope, idxDefn.Collection, idxDefn.Name)
+			return err
+		}
+
+		return fmt.Errorf("Error in posting schedule create request %v", msg)
+	}
+
+	err = o.waitForScheduleCreateToken(idxDefn.DefnId)
+	if err != nil {
+		return err
+	}
+
+	logging.Infof("Indexer %v has posted schedule create token for index (%v, %v, %v, %v)",
+		indexer.getIndexerId(), idxDefn.Bucket, idxDefn.Scope, idxDefn.Collection, idxDefn.Name)
+
+	return nil
+}
+
+func (o *MetadataProvider) waitForScheduleCreateToken(defnId c.IndexDefnId) error {
+	tries := 20
+	for i := 0; i < tries; i++ {
+		exists, err := mc.ScheduleCreateTokenExist(defnId)
+		if err != nil || !exists {
+			time.Sleep(3 * time.Second)
+			continue
+		}
+
+		return nil
+	}
+
+	return ErrWaitScheduleTimeout
+}
+
+// This should be called for the defn, that is not yet persisted in index metadata.
+func (o *MetadataProvider) CreateIndexWithDefnAndPlan(idxDefn *c.IndexDefn,
+	plan map[string]interface{}) error {
+
+	// TODO: Check for existing idxDefn.DefnId.
+	// This will be called from metadata_provider.
+	return o.recoverableCreateIndex(idxDefn, plan, false)
+}
+
 //
 // This function create index using new protocol (vulcan).
 //
-func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn, plan map[string]interface{}) error {
+func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn,
+	plan map[string]interface{}, scheduleOnFailure bool) error {
 
 	//
 	// Prepare Phase.  This is to seek full quorum from all the indexers.
@@ -694,15 +904,39 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn, plan map
 		useNodes = idxDefn.Nodes
 	}
 
-	watcherMap, err := o.makePrepareIndexRequest(idxDefn.DefnId, idxDefn.Name,
+	watcherMap, err, canSchedule := o.makePrepareIndexRequest(idxDefn.DefnId, idxDefn.Name,
 		idxDefn.Bucket, idxDefn.Scope, idxDefn.Collection, useNodes,
 		idxDefn.PartitionScheme, int(idxDefn.NumReplica), true)
+
 	if err != nil {
 		o.cancelPrepareIndexRequest(idxDefn.DefnId, watcherMap)
+		msg := fmt.Sprintf("Index creation for index %v, bucket %v, scope %v, collection %v"+
+			" cannot start. Reason: %v", idxDefn.Name, idxDefn.Bucket, idxDefn.Scope, idxDefn.Collection, err)
+
+		clusterVersion := o.GetClusterVersion()
+		if scheduleOnFailure && canSchedule && clusterVersion >= c.INDEXER_70_VERSION {
+			scheduleErr := o.scheduleIndexCreation(idxDefn, plan)
+			if scheduleErr == nil {
+				msg += "\n\t Scheduled the index creation in the background."
+				logging.Warnf("%v", msg)
+				return fmt.Errorf("%v", msg)
+			} else {
+				if scheduleErr.Error() == ErrWaitScheduleTimeout.Error() {
+					msg += fmt.Sprintf("\n\t Scheduling of index creation was attempted. Please check for index status later.")
+				} else {
+					msg += fmt.Sprintf("\n\t Could not schedule index creation in the background. Reason: %v", scheduleErr)
+					logging.Errorf("%v", msg)
+				}
+			}
+		}
+
 		logging.Errorf("Fail to create index: %v", err)
 		return err
 	}
 
+	//
+	// Validate idxDefn.Nodes
+	//
 	if len(idxDefn.Nodes) != 0 {
 		// If specified, validate if all the input nodes are available.
 		// Since makePrepareIndexRequest is called with empty nodes list,
@@ -2704,8 +2938,9 @@ func (o *MetadataProvider) AlterReplicaCount(action string, defnId c.IndexDefnId
 	//
 	defn := *idxMeta.Definition
 	numPartition := idxMeta.numPartitions()
-	watcherMap, err := o.makePrepareIndexRequest(defn.DefnId, defn.Name, defn.Bucket,
+	watcherMap, err, _ := o.makePrepareIndexRequest(defn.DefnId, defn.Name, defn.Bucket,
 		defn.Scope, defn.Collection, nil, defn.PartitionScheme, count, false)
+
 	if err != nil {
 		o.cancelPrepareIndexRequest(defn.DefnId, watcherMap)
 		return fmt.Errorf("Fail to alter index: %v", err)

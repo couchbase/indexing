@@ -113,7 +113,7 @@ func NewDDLServiceMgr(indexerId common.IndexerId, supvCmdch MsgChannel, supvMsgc
 		donech:          nil,
 		killch:          make(chan bool),
 		allowDDL:        true,
-		commandListener: mc.NewCommandListener(donech, true, false, false, false),
+		commandListener: mc.NewCommandListener(donech, true, false, false, false, false),
 		listenerDonech:  donech,
 	}
 
@@ -124,6 +124,7 @@ func NewDDLServiceMgr(indexerId common.IndexerId, supvCmdch MsgChannel, supvMsgc
 	mux.HandleFunc("/listCreateTokens", mgr.handleListCreateTokens)
 	mux.HandleFunc("/listDeleteTokens", mgr.handleListDeleteTokens)
 	mux.HandleFunc("/listDropInstanceTokens", mgr.handleListDropInstanceTokens)
+	mux.HandleFunc("/listScheduleCreateTokens", mgr.handleListScheduleCreateTokens)
 
 	go mgr.run()
 
@@ -861,7 +862,7 @@ func (m *DDLServiceMgr) processCreateCommand() {
 		case _, ok := <-m.listenerDonech:
 			if !ok {
 				m.listenerDonech = make(chan bool)
-				m.commandListener = mc.NewCommandListener(m.listenerDonech, true, false, false, false)
+				m.commandListener = mc.NewCommandListener(m.listenerDonech, true, false, false, false, false)
 				m.commandListener.ListenTokens()
 			}
 
@@ -1306,6 +1307,45 @@ func (m *DDLServiceMgr) handleListDropInstanceTokens(w http.ResponseWriter, r *h
 	}
 }
 
+func (m *DDLServiceMgr) handleListScheduleCreateTokens(w http.ResponseWriter, r *http.Request) {
+
+	if !m.validateAuth(w, r) {
+		logging.Errorf("DDLServiceMgr::handleListScheduleCreateTokens Validation Failure for Request %v", r)
+		return
+	}
+
+	if r.Method == "GET" {
+
+		logging.Infof("DDLServiceMgr::handleListScheduleCreateTokens Processing Request %v", r)
+
+		scheduleTokens, err := mc.ListAllScheduleCreateTokens()
+		if err != nil {
+			logging.Errorf("DDLServiceMgr::handleListScheduleCreateTokens Error %v", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(err.Error() + "\n"))
+			return
+		}
+
+		list := &mc.ScheduleCreateTokenList{}
+		list.Tokens = make([]mc.ScheduleCreateToken, 0, len(scheduleTokens))
+
+		for _, token := range scheduleTokens {
+			list.Tokens = append(list.Tokens, *token)
+		}
+
+		buf, err := mc.MarshallScheduleCreateTokenList(list)
+		if err != nil {
+			logging.Errorf("DDLServiceMgr::handleListDropInstanceTokens Error %v", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(err.Error() + "\n"))
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+		w.Write(buf)
+	}
+}
+
 func (m *DDLServiceMgr) validateAuth(w http.ResponseWriter, r *http.Request) bool {
 	_, valid, err := common.IsAuthValid(r)
 	if err != nil {
@@ -1538,6 +1578,10 @@ func (s *ddlSettings) UsePlanner() bool {
 // DDLServiceMgr does not trigger recoverableCreateIndex for index creation.
 // So, this setting will not be used by DDLServiceMgr.
 func (s *ddlSettings) AllowPartialQuorum() bool {
+	return false
+}
+
+func (s *ddlSettings) AllowScheduleCreate() bool {
 	return false
 }
 
