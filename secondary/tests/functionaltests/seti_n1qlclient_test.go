@@ -117,6 +117,7 @@ func TestBufferedScan_BackfillDisabled(t *testing.T) {
 		count, time.Since(now))
 	time.Sleep(1 * time.Second)
 	if len(getbackfillFiles(backfillDir())) > 0 {
+		printBackfillFilesInfo()
 		e := errors.New("Unexpected backfill file")
 		FailTestIfError(e, "TestBufferedScan_BackfillDisabled failed", t)
 	} else if ctxt.err != nil {
@@ -149,6 +150,7 @@ func TestBufferedScan_BackfillDisabled(t *testing.T) {
 		count, time.Since(now))
 	time.Sleep(1 * time.Second)
 	if len(getbackfillFiles(backfillDir())) > 0 {
+		printBackfillFilesInfo()
 		e := errors.New("Unexpected backfill file")
 		FailTestIfError(e, "TestBufferedScan_BackfillDisabled failed", t)
 	} else if ctxt.err != nil {
@@ -245,6 +247,7 @@ func TestBufferedScan_BackfillEnabled(t *testing.T) {
 		count, time.Since(now))
 	time.Sleep(1 * time.Second)
 	if len(getbackfillFiles(backfillDir())) > 0 {
+		printBackfillFilesInfo()
 		e := errors.New("Unexpected backfill file")
 		FailTestIfError(e, "TestBufferedScan_BackfillEnabled failed", t)
 	} else if ctxt.err != nil {
@@ -278,6 +281,7 @@ func TestBufferedScan_BackfillEnabled(t *testing.T) {
 		count, time.Since(now))
 	time.Sleep(1 * time.Second)
 	if len(getbackfillFiles(backfillDir())) > 0 {
+		printBackfillFilesInfo()
 		e := errors.New("Unexpected backfill file")
 		FailTestIfError(e, "TestBufferedScan_BackfillEnabled failed", t)
 	} else if ctxt.err != nil {
@@ -298,6 +302,7 @@ func TestBufferedScan_BackfillEnabled(t *testing.T) {
 	go doquery(int64(1000), conn)
 	time.Sleep(1 * time.Second)
 	if len(getbackfillFiles(backfillDir())) != 1 {
+		printBackfillFilesInfo()
 		e := errors.New("Expected one backfill file")
 		FailTestIfError(e, "TestBufferedScan_BackfillEnabled failed", t)
 	}
@@ -318,6 +323,7 @@ func TestBufferedScan_BackfillEnabled(t *testing.T) {
 		count, time.Since(now))
 	time.Sleep(1 * time.Second)
 	if len(getbackfillFiles(backfillDir())) > 0 {
+		printBackfillFilesInfo()
 		e := errors.New("Expected backfill file to be deleted")
 		FailTestIfError(e, "TestBufferedScan_BackfillEnabled failed", t)
 	} else if ctxt.err != nil {
@@ -368,6 +374,7 @@ func TestBufferedScan_BackfillEnabled(t *testing.T) {
 	}
 	time.Sleep(1 * time.Second)
 	if len(getbackfillFiles(backfillDir())) > 0 {
+		printBackfillFilesInfo()
 		e := errors.New("Expected backfill file to be deleted")
 		FailTestIfError(e, "TestBufferedScan_BackfillEnabled failed", t)
 	}
@@ -439,5 +446,30 @@ func process_response_delay(n int) {
 	count := float64(0)
 	for i := 0; i < n; i++ {
 		count *= float64(i)
+	}
+}
+
+func printBackfillFilesInfo() {
+	dir := backfillDir()
+
+	files, err := ioutil.ReadDir(dir)
+	if err != nil {
+		log.Printf("Error (%v) in getting listing for backfill directory\n", err)
+	}
+
+	for _, file := range files {
+		fname := path.Join(dir, file.Name())
+		if strings.Contains(fname, n1ql.BACKFILLPREFIX) {
+			finfo, err := os.Stat(fname)
+			if err != nil {
+				log.Printf("Backfill file found. Error (%v) in getting stat "+
+					"info about file %v\n", err, fname)
+			} else {
+				log.Printf("Backfill file found %v. File size: %v, Last "+
+					"modified time: %v\n", fname, finfo.Size(), finfo.ModTime())
+			}
+		} else {
+			log.Printf("Non-backfill file found: %v\n", fname)
+		}
 	}
 }
