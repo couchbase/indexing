@@ -6706,6 +6706,15 @@ kvtsloop:
 		buildTs, err = GetCurrentKVTs(clustAddr, "default", bucket, numVb)
 		if err != nil {
 			logging.Errorf("Indexer::computeBucketBuildTs Error Fetching BuildTs %v", err)
+			var uuid string
+			uuid, err = common.GetBucketUUID(clustAddr, bucket)
+			if err == nil && uuid == common.BUCKET_UUID_NIL {
+				// BUCKET_UUID_NIL is returned in non-error case
+				// if bucket does not exist. Do not infinitely retry if bucket does not exist.
+				err = errors.New(fmt.Sprintf("Bucket %v does not exist anymore.", bucket))
+				logging.Errorf("Indexer::computeBucketBuildTs Error: %v", err)
+				return
+			}
 			time.Sleep(KV_RETRY_INTERVAL * time.Millisecond)
 		} else {
 			break kvtsloop

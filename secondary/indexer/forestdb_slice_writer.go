@@ -945,7 +945,7 @@ func (fdb *fdbSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 			"Snapshot %v", fdb.id, fdb.idxInstId, snapInfo)
 	}
 	err := s.Create()
-
+	fdb.idxStats.numOpenSnapshots.Add(1)
 	return s, err
 }
 

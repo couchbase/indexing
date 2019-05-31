@@ -1032,6 +1032,7 @@ func (mdb *plasmaSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 
 	s.Open()
 	s.slice.IncrRef()
+	s.slice.idxStats.numOpenSnapshots.Add(1)
 
 	if s.committed && mdb.hasPersistence {
 		mdb.doPersistSnapshot(s)
@@ -1844,7 +1845,7 @@ func (s *plasmaSnapshot) Destroy() {
 	if s.BackSnap != nil {
 		s.BackSnap.Close()
 	}
-
+	s.slice.idxStats.numOpenSnapshots.Add(-1)
 	defer s.slice.DecrRef()
 }
 

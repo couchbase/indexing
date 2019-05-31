@@ -160,6 +160,7 @@ func (s *fdbSnapshot) Destroy() {
 	if !s.committed {
 		s.slice.idxStats.Timings.stSnapshotClose.Put(time.Now().Sub(t0))
 	}
+	s.slice.idxStats.numOpenSnapshots.Add(-1)
 }
 
 func (s *fdbSnapshot) String() string {
