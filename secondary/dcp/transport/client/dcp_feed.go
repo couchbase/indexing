@@ -1249,10 +1249,10 @@ loop:
 
 			func() {
 				// Timeout here will unblock doReceive() thread after some time.
-				feed.conn.SetMcdConnectionDeadline()
-				defer feed.conn.ResetMcdConnectionDeadline()
+				conn.SetMcdConnectionDeadline()
+				defer conn.ResetMcdConnectionDeadline()
 
-				if err := feed.conn.TransmitResponse(noop); err != nil {
+				if err := conn.TransmitResponse(noop); err != nil {
 					logging.Errorf("%v NOOP.Transmit(): %v", feed.logPrefix, err)
 				} else {
 					now = time.Now().UnixNano()
