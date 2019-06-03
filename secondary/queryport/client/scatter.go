@@ -88,6 +88,11 @@ type RequestBroker struct {
 	projDesc       []bool
 	distinct       bool
 
+	// Additional key positions (not in projection list) added due to
+	// IndexKeyOrder for sorting purpose. These additions keys need to be
+	// pruned from index entry row before sending to N1QL
+	indexOrderPosPruneMap map[int64]bool
+
 	// stats
 	sendCount    int64
 	receiveCount int64
@@ -250,10 +255,14 @@ func (b *RequestBroker) SetGroupAggr(grpAggr *GroupAggr) {
 
 //
 // Set Projection
+// Also reset indexOrderPosPruneMap. There should be analyzeOrderBy invoked
+// after SetProjection is called to ensure indexOrderPosPruneMap is
+// correctly populated
 //
 func (b *RequestBroker) SetProjection(projection *IndexProjection) {
 
 	b.projections = projection
+	b.indexOrderPosPruneMap = nil
 }
 
 //
@@ -345,6 +354,31 @@ func (b *RequestBroker) IncrementReceiveCount(count int) {
 func (b *RequestBroker) IncrementSendCount() {
 
 	atomic.AddInt64(&b.sendCount, 1)
+}
+
+// Prune the additional keys added for Order By processing
+func (b *RequestBroker) pruneOrderByProjections(vals value.Values) value.Values {
+
+	if len(b.indexOrderPosPruneMap) == 0 {
+		// Nothing to prune, return
+		return vals
+	}
+
+	if len(vals) == 0 { // if vals is nil or empty
+		return vals
+	}
+
+	inclPos := 0
+	for i, val := range vals {
+		if _, ok := b.indexOrderPosPruneMap[int64(i)]; !ok {
+			// i is not in the map, which means this pos was not additionally
+			// added by analyzeOrderBy. Include this in final result
+			vals[inclPos] = val
+			inclPos++
+		}
+	}
+
+	return vals[:inclPos]
 }
 
 func (b *RequestBroker) SetNumIndexers(num int) {
@@ -933,7 +967,12 @@ func (c *RequestBroker) gather(donech chan bool) {
 
 			curLimit++
 			c.Partial(true)
-			if !c.sender(rows[id].pkey, rows[id].value, rows[id].skey) {
+
+			// Remove additional keys in result row added due to Order By
+			// processing. This is needed only for partitioned index
+			// with Order By. So pruning is needed only in the gather() method
+			prunedRow := c.pruneOrderByProjections(rows[id].value)
+			if !c.sender(rows[id].pkey, prunedRow, rows[id].skey) {
 				c.done()
 				return
 			}
@@ -1771,11 +1810,21 @@ func (c *RequestBroker) analyzeOrderBy(partitions [][]common.PartitionId, numPar
 		// Cbq-engine pushes order-by only if the order-by keys match the leading index keys.
 		// So order-by key must be an index key.
 		if c.projections == nil {
-			c.projections = &IndexProjection{}
+			// Everything should be projected. Else this can cause order by to
+			// prune positions which need to be present
+			return
+		}
+
+		if c.indexOrderPosPruneMap == nil {
+			c.indexOrderPosPruneMap = make(map[int64]bool)
 		}
 		for _, order := range c.indexOrder.KeyPos {
 			if !projection[int64(order)] {
 				c.projections.EntryKeys = append(c.projections.EntryKeys, int64(order))
+				if _, ok := c.indexOrderPosPruneMap[int64(order)]; !ok {
+					// If not present the map, add
+					c.indexOrderPosPruneMap[int64(order)] = true
+				}
 				projection[int64(order)] = true
 			}
 		}
