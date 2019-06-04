@@ -1095,7 +1095,7 @@ loop:
 			noop := &transport.MCResponse{
 				Opcode: transport.DCP_NOOP, Opaque: pkt.Opaque,
 			}
-			if err := feed.conn.TransmitResponse(noop); err != nil {
+			if err := conn.TransmitResponse(noop); err != nil {
 				logging.Errorf("%v NOOP.Transmit(): %v", feed.logPrefix, err)
 			} else {
 				fmsg := "%v responded to NOOP ok ...\n"
