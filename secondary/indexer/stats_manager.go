@@ -139,7 +139,8 @@ type IndexStats struct {
 	completionProgress        stats.Int64Val
 	numDocsQueued             stats.Int64Val
 	deleteBytes               stats.Int64Val
-	dataSize                  stats.Int64Val
+	dataSize                  stats.Int64Val // Sum of all data inserted into main store and back store
+	backstoreDataSize         stats.Int64Val // Sum of all data inserted into back store
 	scanBytesRead             stats.Int64Val
 	getBytes                  stats.Int64Val
 	itemsCount                stats.Int64Val
@@ -251,6 +252,7 @@ func (s *IndexStats) Init() {
 	s.numDocsQueued.Init()
 	s.deleteBytes.Init()
 	s.dataSize.Init()
+	s.backstoreDataSize.Init()
 	s.fragPercent.Init()
 	s.scanBytesRead.Init()
 	s.getBytes.Init()
@@ -788,6 +790,12 @@ func (is IndexerStats) GetStats(getPartition bool, skipEmpty bool) common.Statis
 		addStat("data_size",
 			s.partnInt64Stats(func(ss *IndexStats) int64 {
 				return ss.dataSize.Value()
+			}))
+
+		// partition stats
+		addStat("backstore_data_size",
+			s.partnInt64Stats(func(ss *IndexStats) int64 {
+				return ss.backstoreDataSize.Value()
 			}))
 
 		// partition stats

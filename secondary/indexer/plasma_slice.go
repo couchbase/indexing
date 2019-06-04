@@ -557,6 +557,7 @@ func (mdb *plasmaSlice) insertPrimaryIndex(key []byte, docid []byte, workerId in
 		mdb.main[workerId].InsertKV(entry, nil)
 		mdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
 		atomic.AddInt64(&mdb.insert_bytes, int64(len(entry)))
+		mdb.idxStats.dataSize.Add(int64(len(entry)))
 		mdb.isDirty = true
 		return 1
 	}
@@ -596,8 +597,12 @@ func (mdb *plasmaSlice) insertSecIndex(key []byte, docid []byte, workerId int, i
 		// entry2BackEntry overwrites the buffer to remove docid
 		backEntry := entry2BackEntry(entry)
 		mdb.back[workerId].InsertKV(docid, backEntry)
-		addKeySizeStat(mdb.idxStats, len(entry))
 		mdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
+
+		mdb.idxStats.backstoreDataSize.Add(int64(len(docid) + len(backEntry)))
+		// dataSize is the sum of all data inserted into main store and back store
+		mdb.idxStats.dataSize.Add(int64(len(docid) + len(backEntry) + len(entry)))
+		addKeySizeStat(mdb.idxStats, len(entry))
 		atomic.AddInt64(&mdb.insert_bytes, int64(len(docid)+len(entry)))
 	}
 
@@ -701,6 +706,7 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 				common.CrashOnError(err)
 				// Add back
 				mdb.main[workerId].InsertKV(entry, nil)
+				mdb.idxStats.dataSize.Add(int64(len(entry)))
 				addKeySizeStat(mdb.idxStats, len(entry))
 			}
 		}
@@ -716,6 +722,7 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 				// Delete back
 				entrySz := len(entry)
 				mdb.main[workerId].DeleteKV(entry)
+				mdb.idxStats.dataSize.Add(0 - int64(entrySz))
 				subtractKeySizeStat(mdb.idxStats, entrySz)
 			}
 		}
@@ -735,12 +742,15 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 				mdb.deleteSecArrayIndexNoTx(docid, workerId)
 				return 0
 			}
-			t0 := time.Now()
 			keyDelSz := len(keyToBeDeleted)
+
+			t0 := time.Now()
 			mdb.main[workerId].DeleteKV(keyToBeDeleted)
-			subtractKeySizeStat(mdb.idxStats, keyDelSz)
 			mdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
-			atomic.AddInt64(&mdb.delete_bytes, int64(len(keyToBeDeleted)))
+
+			mdb.idxStats.dataSize.Add(0 - int64(keyDelSz))
+			subtractKeySizeStat(mdb.idxStats, keyDelSz)
+			atomic.AddInt64(&mdb.delete_bytes, int64(keyDelSz))
 			nmut++
 		}
 	}
@@ -760,10 +770,13 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 				mdb.deleteSecArrayIndexNoTx(docid, workerId)
 				return 0
 			}
+
 			t0 := time.Now()
 			mdb.main[workerId].InsertKV(keyToBeAdded, nil)
-			addKeySizeStat(mdb.idxStats, len(keyToBeAdded))
 			mdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
+
+			mdb.idxStats.dataSize.Add(int64(len(keyToBeAdded)))
+			addKeySizeStat(mdb.idxStats, len(keyToBeAdded))
 			atomic.AddInt64(&mdb.insert_bytes, int64(len(keyToBeAdded)))
 			nmut++
 		}
@@ -776,8 +789,11 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 			t0 := time.Now()
 			oldSz := len(oldkey)
 			mdb.back[workerId].DeleteKV(docid)
-			subtractArrayKeySizeStat(mdb.idxStats, oldSz)
 			mdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
+
+			mdb.idxStats.backstoreDataSize.Add(0 - int64(len(docid)+oldSz))
+			mdb.idxStats.dataSize.Add(0 - int64(len(docid)+oldSz))
+			subtractArrayKeySizeStat(mdb.idxStats, oldSz)
 			atomic.AddInt64(&mdb.delete_bytes, int64(len(docid)))
 		}
 	} else { //set the back index entry <docid, encodedkey>
@@ -791,15 +807,21 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 			t0 := time.Now()
 			oldSz := len(oldkey)
 			mdb.back[workerId].DeleteKV(docid)
-			subtractArrayKeySizeStat(mdb.idxStats, oldSz)
 			mdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
+
+			mdb.idxStats.backstoreDataSize.Add(0 - int64(len(docid)+oldSz))
+			mdb.idxStats.dataSize.Add(0 - int64(len(docid)+oldSz))
+			subtractArrayKeySizeStat(mdb.idxStats, oldSz)
 			atomic.AddInt64(&mdb.delete_bytes, int64(len(docid)))
 		}
 
 		t0 := time.Now()
 		mdb.back[workerId].InsertKV(docid, key)
-		addArrayKeySizeStat(mdb.idxStats, len(key))
 		mdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
+
+		mdb.idxStats.backstoreDataSize.Add(int64(len(docid) + len(key)))
+		mdb.idxStats.dataSize.Add(int64(len(docid) + len(key)))
+		addArrayKeySizeStat(mdb.idxStats, len(key))
 		atomic.AddInt64(&mdb.insert_bytes, int64(len(docid)+len(key)))
 	}
 
@@ -842,7 +864,10 @@ func (mdb *plasmaSlice) deletePrimaryIndex(docid []byte, workerId int) (nmut int
 	if _, err := mdb.main[workerId].LookupKV(entry); err == plasma.ErrItemNoValue {
 		mdb.main[workerId].DeleteKV(itm)
 		mdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
+
+		mdb.idxStats.dataSize.Add(0 - int64(len(entry.Bytes())))
 		atomic.AddInt64(&mdb.delete_bytes, int64(len(entry.Bytes())))
+
 		mdb.isDirty = true
 		return 1
 	}
@@ -871,11 +896,15 @@ func (mdb *plasmaSlice) deleteSecIndex(docid []byte, compareKey []byte, workerId
 		mdb.main[workerId].Begin()
 		defer mdb.main[workerId].End()
 		mdb.back[workerId].DeleteKV(docid)
+		mdb.idxStats.backstoreDataSize.Add(0 - int64(len(docid)+len(backEntry)))
+
 		entry := backEntry2entry(docid, backEntry, buf)
 		entrySz := len(entry)
 		mdb.main[workerId].DeleteKV(entry)
-		subtractKeySizeStat(mdb.idxStats, entrySz)
 		mdb.idxStats.Timings.stKVDelete.Put(time.Since(t0))
+
+		mdb.idxStats.dataSize.Add(0 - int64(len(docid)+len(backEntry)+entrySz))
+		subtractKeySizeStat(mdb.idxStats, entrySz)
 	}
 
 	mdb.isDirty = true
@@ -945,18 +974,24 @@ func (mdb *plasmaSlice) deleteSecArrayIndexNoTx(docid []byte, workerId int) (nmu
 		t0 := time.Now()
 		keyDelSz := len(keyToBeDeleted)
 		mdb.main[workerId].DeleteKV(keyToBeDeleted)
-		subtractKeySizeStat(mdb.idxStats, keyDelSz)
 		mdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
-		atomic.AddInt64(&mdb.delete_bytes, int64(len(keyToBeDeleted)))
+
+		mdb.idxStats.dataSize.Add(0 - int64(keyDelSz))
+		subtractKeySizeStat(mdb.idxStats, keyDelSz)
+		atomic.AddInt64(&mdb.delete_bytes, int64(keyDelSz))
 	}
 
 	//delete from the back index
 	t0 = time.Now()
 	oldSz := len(olditm)
 	mdb.back[workerId].DeleteKV(docid)
-	subtractArrayKeySizeStat(mdb.idxStats, oldSz)
 	mdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
+
+	mdb.idxStats.backstoreDataSize.Add(0 - int64(len(docid)+oldSz))
+	mdb.idxStats.dataSize.Add(0 - int64(len(docid)+oldSz))
+	subtractArrayKeySizeStat(mdb.idxStats, oldSz)
 	atomic.AddInt64(&mdb.delete_bytes, int64(len(docid)))
+
 	mdb.isDirty = true
 	return len(indexEntriesToBeDeleted)
 }
@@ -1066,6 +1101,8 @@ func (mdb *plasmaSlice) doPersistSnapshot(s *plasmaSnapshot) {
 			snapshotStats[SNAP_STATS_KEY_SIZES] = getKeySizesStats(mdb.idxStats)
 			snapshotStats[SNAP_STATS_ARRKEY_SIZES] = getArrayKeySizesStats(mdb.idxStats)
 			snapshotStats[SNAP_STATS_KEY_SIZES_SINCE] = mdb.idxStats.keySizeStatsSince.Value()
+			snapshotStats[SNAP_STATS_DATA_SIZE] = mdb.idxStats.dataSize.Value()
+			snapshotStats[SNAP_STATS_BACKSTORE_DATA_SIZE] = mdb.idxStats.backstoreDataSize.Value()
 			s.info.IndexStats = snapshotStats
 			s.info.Version = SNAPSHOT_META_VERSION_PLASMA_1
 			s.info.InstId = mdb.idxInstId
@@ -1259,6 +1296,9 @@ func (mdb *plasmaSlice) resetStores() {
 	resetKeySizeStats(mdb.idxStats)
 	resetArrKeySizeStats(mdb.idxStats)
 	// Slice is rolling back to zero, but there is no need to update keySizeStatsSince
+
+	mdb.idxStats.backstoreDataSize.Set(0)
+	mdb.idxStats.dataSize.Set(0)
 }
 
 func (mdb *plasmaSlice) Rollback(o SnapshotInfo) error {
@@ -1347,6 +1387,9 @@ func (mdb *plasmaSlice) updateStatsFromSnapshotMeta(o SnapshotInfo) {
 		mdb.idxStats.numArrayKeySize4K.Set(safeGetInt64(arrkeySizes[3]))
 		mdb.idxStats.numArrayKeySize100K.Set(safeGetInt64(arrkeySizes[4]))
 		mdb.idxStats.numArrayKeySizeGt100K.Set(safeGetInt64(arrkeySizes[5]))
+
+		mdb.idxStats.dataSize.Set(safeGetInt64(stats[SNAP_STATS_DATA_SIZE]))
+		mdb.idxStats.backstoreDataSize.Set(safeGetInt64(stats[SNAP_STATS_BACKSTORE_DATA_SIZE]))
 
 		mdb.idxStats.keySizeStatsSince.Set(safeGetInt64(stats[SNAP_STATS_KEY_SIZES_SINCE]))
 	} else {
@@ -1659,10 +1702,9 @@ func (mdb *plasmaSlice) Statistics() (StorageStatistics, error) {
 
 	sts.InternalData = internalData
 	if mdb.hasPersistence {
-		_, sts.DataSize, sts.DiskSize = mdb.mainstore.GetLSSInfo()
+		_, _, sts.DiskSize = mdb.mainstore.GetLSSInfo()
 		if !mdb.isPrimary {
-			_, bsDataSz, bsDiskSz := mdb.backstore.GetLSSInfo()
-			sts.DataSize += bsDataSz
+			_, _, bsDiskSz := mdb.backstore.GetLSSInfo()
 			sts.DiskSize += bsDiskSz
 		}
 	}

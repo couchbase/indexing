@@ -80,3 +80,5 @@ const SNAPSHOT_META_VERSION_PLASMA_1 = 1
 const SNAP_STATS_KEY_SIZES = "key_size_dist"
 const SNAP_STATS_ARRKEY_SIZES = "arrkey_size_dist"
 const SNAP_STATS_KEY_SIZES_SINCE = "key_size_stats_since"
+const SNAP_STATS_DATA_SIZE = "data_size"
+const SNAP_STATS_BACKSTORE_DATA_SIZE = "backstore_data_size"
