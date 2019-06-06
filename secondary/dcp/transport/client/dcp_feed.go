@@ -52,11 +52,12 @@ type DcpFeed struct {
 	finch     chan bool
 	logPrefix string
 	// stats
-	toAckBytes  uint32    // bytes client has read
-	maxAckBytes uint32    // Max buffer control ack bytes
-	lastAckTime time.Time // last time when BufferAck was sent
-	stats       *DcpStats // Stats for dcp client
-	done        uint32
+	toAckBytes         uint32    // bytes client has read
+	maxAckBytes        uint32    // Max buffer control ack bytes
+	lastAckTime        time.Time // last time when BufferAck was sent
+	stats              *DcpStats // Stats for dcp client
+	done               uint32
+	enableReadDeadline int32 // 0 => Read deadline is disabled in doReceive, 1 => enabled
 }
 
 // NewDcpFeed creates a new DCP Feed.
@@ -413,6 +414,14 @@ func (feed *DcpFeed) doDcpGetFailoverLog(
 	vblist []uint16,
 	rcvch chan []interface{}) (map[uint16]*FailoverLog, error) {
 
+	// Enable read deadline at function exit
+	// As this method is called only once (i.e. at the start of DCP feed),
+	// it is ok to set the value of readDeadline to "1" and not reset it later
+	defer func() {
+		atomic.StoreInt32(&feed.enableReadDeadline, 1)
+		feed.conn.SetMcdMutationReadDeadline()
+	}()
+
 	rq := &transport.MCRequest{
 		Opcode: transport.DCP_FAILOVERLOG,
 		Opaque: opaqueFailover,
@@ -483,6 +492,14 @@ func (feed *DcpFeed) doDcpGetFailoverLog(
 func (feed *DcpFeed) doDcpGetSeqnos(
 	rcvch chan []interface{}) (map[uint16]uint64, error) {
 
+	// Enable read deadline at function exit
+	// As this method is called only once (i.e. at the start of DCP feed),
+	// it is ok to set the value of readDeadline to "1" and not reset it later
+	defer func() {
+		atomic.StoreInt32(&feed.enableReadDeadline, 1)
+		feed.conn.SetMcdMutationReadDeadline()
+	}()
+
 	rq := &transport.MCRequest{
 		Opcode: transport.DCP_GET_SEQNO,
 		Opaque: opaqueGetseqno,
@@ -551,6 +568,14 @@ func (feed *DcpFeed) doDcpOpen(
 	binary.BigEndian.PutUint32(rq.Extras[4:], flags) // we are consumer
 
 	prefix := feed.logPrefix
+
+	// Enable read deadline at function exit
+	// As this method is called only once (i.e. at the start of DCP feed),
+	// it is ok to set the value of readDeadline to "1" and not reset it later
+	defer func() {
+		atomic.StoreInt32(&feed.enableReadDeadline, 1)
+		feed.conn.SetMcdMutationReadDeadline()
+	}()
 
 	feed.conn.SetMcdConnectionDeadline()
 	defer feed.conn.ResetMcdConnectionDeadline()
@@ -724,8 +749,8 @@ func (feed *DcpFeed) doDcpRequestStream(
 	// in the projector feed takes care of cleanning up of the connections.
 	// After closing connections, pressure on memcached may get eased, and
 	// retry (from indexer side) may succeed.
-	feed.conn.SetMcdConnectionDeadline()
-	defer feed.conn.ResetMcdConnectionDeadline()
+	feed.conn.SetMcdConnectionWriteDeadline()
+	defer feed.conn.ResetMcdConnectionWriteDeadline()
 
 	if err := feed.conn.Transmit(rq); err != nil {
 		fmsg := "%v ##%x doDcpRequestStream.Transmit(): %v"
@@ -846,8 +871,8 @@ func (feed *DcpFeed) sendBufferAck(sendAck bool, bytes uint32) {
 
 			func() {
 				// Timeout here will unblock genServer() thread after some time.
-				feed.conn.SetMcdConnectionDeadline()
-				defer feed.conn.ResetMcdConnectionDeadline()
+				feed.conn.SetMcdConnectionWriteDeadline()
+				defer feed.conn.ResetMcdConnectionWriteDeadline()
 
 				if err := feed.conn.Transmit(bufferAck); err != nil {
 					logging.Errorf("%v buffer-ack Transmit(): %v, lastAckTime: %v", prefix, err, feed.lastAckTime.UnixNano())
@@ -1219,10 +1244,37 @@ func (feed *DcpFeed) doReceive(
 		tick.Stop()
 	}()
 
+	var bytes int
+	var err error
+	// Cached version of feed.readDeadline
+	// Used inorder to prevent atomic access to feed.readDeadline in every iteration of "loop"
+	var enableReadDeadline bool
 loop:
 	for {
 		pkt := transport.MCRequest{} // always a new instance.
-		bytes, err := pkt.Receive(conn.conn, headerBuf[:])
+
+		// Enable read deadline only when doDcpOpen or doDcpGetFailoverLog or doDcpGetDeqnos
+		// finish execution as these methods require a different read deadline
+		if !enableReadDeadline {
+			enableReadDeadline = (atomic.LoadInt32(&feed.enableReadDeadline) == 1)
+			bytes, err = pkt.Receive(conn.conn, headerBuf[:])
+		} else {
+			// In cases where projector misses TCP notificatons like connection closure,
+			// the dcp_feed would continuously wait for data on the connection resulting
+			// in index build getting stuck.
+			// In such scenarios, the read deadline would terminate the blocking read
+			// calls thereby unblocking the dcp_feed. This is only a safe-guard measure
+			// to handle highly unlikely scenarios like missing TCP notifications. In
+			// those cases, an "i/o timeout" error will be returned to the reader.
+			conn.SetMcdMutationReadDeadline()
+			bytes, err = pkt.Receive(conn.conn, headerBuf[:])
+			// Resetting the read deadline here is unnecessary because doReceive() is the
+			// only thread reading data from conn after read deadline is enabled.
+			// If reset does not happen here, then the next SetMcdMutationReadDeadline
+			// would update the deadline
+			// conn.ResetMcdMutationReadDeadline()
+		}
+
 		if err != nil && err == io.EOF {
 			logging.Infof("%v EOF received\n", feed.logPrefix)
 			break loop

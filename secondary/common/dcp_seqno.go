@@ -167,6 +167,15 @@ func addDBSbucket(cluster, pooln, bucketn string) (err error) {
 		logging.Errorf("GetVBmap() failed: %v\n", err)
 		return err
 	}
+
+	// Empty kv-nodes list without error should never happen.
+	// Return an error and caller can retry on error if needed.
+	if len(m) == 0 {
+		err = fmt.Errorf("Empty kv-nodes list")
+		logging.Errorf("addDBSbucket:: Error %v for bucket %v", err, bucketn)
+		return err
+	}
+
 	// calculate and cache the number of vbuckets.
 	if dcp_buckets_seqnos.numVbs == 0 { // to happen only first time.
 		for _, vbnos := range m {
@@ -312,6 +321,12 @@ func CollectSeqnos(kvfeeds map[string]*kvConn) (l_seqnos []uint64, err error) {
 	// Buffer for storing kv_seqs from each node
 	kv_seqnos_node := make([][]uint64, len(kvfeeds))
 	errors := make([]error, len(kvfeeds))
+
+	if len(kvfeeds) == 0 {
+		err = fmt.Errorf("Empty kvfeeds")
+		logging.Errorf("CollectSeqnos:: %v", err)
+		return nil, err
+	}
 
 	i := 0
 	for _, feed := range kvfeeds {
