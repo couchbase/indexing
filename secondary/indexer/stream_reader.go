@@ -21,6 +21,7 @@ import (
 	"github.com/couchbase/indexing/secondary/dataport"
 	"github.com/couchbase/indexing/secondary/logging"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/data"
+	Stats "github.com/couchbase/indexing/secondary/stats"
 )
 
 //MutationStreamReader reads a Dataport and stores the incoming mutations
@@ -67,7 +68,8 @@ type mutationStreamReader struct {
 //In case returned MutationStreamReader is nil, Message will have the error msg.
 func CreateMutationStreamReader(streamId common.StreamId, bucketQueueMap BucketQueueMap,
 	bucketFilter map[string]*common.TsVbuuid, supvCmdch MsgChannel, supvRespch MsgChannel,
-	numWorkers int, stats *IndexerStats, config common.Config, is common.IndexerState, allowMarkFirstSnap bool) (MutationStreamReader, Message) {
+	numWorkers int, stats *IndexerStats, config common.Config, is common.IndexerState,
+	allowMarkFirstSnap bool, vbMap *VbMapHolder) (MutationStreamReader, Message) {
 
 	//start a new mutation stream
 	streamMutch := make(chan interface{}, getMutationBufferSize(config))
@@ -113,7 +115,7 @@ func CreateMutationStreamReader(streamId common.StreamId, bucketQueueMap BucketQ
 	logging.Infof("MutationStreamReader: Setting Stream Workers %v %v", r.streamId, numWorkers)
 
 	for i := 0; i < numWorkers; i++ {
-		r.streamWorkers[i] = newStreamWorker(streamId, numWorkers, i, config, r, bucketFilter, allowMarkFirstSnap)
+		r.streamWorkers[i] = newStreamWorker(streamId, numWorkers, i, config, r, bucketFilter, allowMarkFirstSnap, vbMap)
 		go r.streamWorkers[i].start()
 	}
 
@@ -522,10 +524,13 @@ type streamWorker struct {
 
 	markFirstSnap   bool
 	bucketFirstSnap map[string]firstSnapFlag
+
+	vbMap *VbMapHolder
 }
 
 func newStreamWorker(streamId common.StreamId, numWorkers int, workerId int, config common.Config,
-	reader *mutationStreamReader, bucketFilter map[string]*common.TsVbuuid, allowMarkFirstSnap bool) *streamWorker {
+	reader *mutationStreamReader, bucketFilter map[string]*common.TsVbuuid, allowMarkFirstSnap bool,
+	vbMap *VbMapHolder) *streamWorker {
 
 	w := &streamWorker{streamId: streamId,
 		workerId:          workerId,
@@ -536,6 +541,7 @@ func newStreamWorker(streamId common.StreamId, numWorkers int, workerId int, con
 		bucketSyncDue:     make(map[string]bool),
 		reader:            reader,
 		bucketFirstSnap:   make(map[string]firstSnapFlag),
+		vbMap:             vbMap,
 	}
 
 	if allowMarkFirstSnap {
@@ -572,6 +578,12 @@ func (w *streamWorker) handleKeyVersions(bucket string, vbucket Vbucket, vbuuid 
 
 	for _, kv := range kvs {
 		w.handleSingleKeyVersion(bucket, vbucket, vbuuid, kv, projVer)
+		if kv.GetPrjMovingAvg() > 0 {
+			avg := w.getLatencyObj(bucket, vbucket)
+			if avg != nil {
+				avg.Set(kv.GetPrjMovingAvg())
+			}
+		}
 	}
 
 }
@@ -666,6 +678,7 @@ func (w *streamWorker) handleSingleKeyVersion(bucket string, vbucket Vbucket, vb
 			//send message to supervisor to take decision
 			msg := &MsgStream{mType: STREAM_READER_STREAM_BEGIN,
 				streamId: w.streamId,
+				host:     kv.GetDocid(), // For projector versions prior to 6.5, docid would be "nil"
 				meta:     meta.Clone()}
 			w.reader.supvRespch <- msg
 
@@ -934,6 +947,26 @@ func (w *streamWorker) updateVbuuidInFilter(meta *MutationMeta) {
 			meta.vbucket, meta.vbuuid, w.streamId)
 	}
 
+}
+
+func (w *streamWorker) getLatencyObj(bucket string, vbucket Vbucket) *Stats.Int64Val {
+	perStreamBucket := fmt.Sprintf("%v/%v", w.streamId, bucket)
+
+	vbMap := w.vbMap.Get()
+	if vbMap != nil {
+		if vbToHostMap, ok := vbMap[perStreamBucket]; ok && vbToHostMap != nil {
+			if host, ok := vbToHostMap[vbucket]; ok {
+				stats := w.reader.stats.Get()
+				latencyMap := stats.prjLatencyMap.Get()
+				if latencyMap != nil {
+					if avg, ok := latencyMap[host]; ok {
+						return avg.(*Stats.Int64Val)
+					}
+				}
+			}
+		}
+	}
+	return nil
 }
 
 //helper functions

@@ -38,7 +38,7 @@ func (engine *Engine) Endpoints() []string {
 func (engine *Engine) StreamBeginData(
 	vbno uint16, vbuuid, seqno uint64) interface{} {
 
-	return engine.evaluator.StreamBeginData(vbno, vbuuid, seqno)
+	return engine.evaluator.StreamBeginData(vbno, vbuuid, seqno, GetHostAddress())
 }
 
 // SyncData from this engine.

@@ -150,6 +150,7 @@ const (
 	REMOVE_BUCKET_FROM_STREAM
 	CLOSE_STREAM
 	CLEANUP_STREAM
+	CLEANUP_PRJ_STATS
 
 	CONFIG_SETTINGS_UPDATE
 
@@ -241,6 +242,7 @@ func (m *MsgTimestamp) GetTimestamp() Timestamp {
 type MsgStream struct {
 	mType    MsgType
 	streamId common.StreamId
+	host     []byte
 	meta     *MutationMeta
 	snapshot *MutationSnapshot
 }
@@ -255,6 +257,10 @@ func (m *MsgStream) GetMutationMeta() *MutationMeta {
 
 func (m *MsgStream) GetStreamId() common.StreamId {
 	return m.streamId
+}
+
+func (m *MsgStream) GetHost() []byte {
+	return m.host
 }
 
 func (m *MsgStream) GetSnapshot() *MutationSnapshot {
@@ -372,6 +378,7 @@ func (m *MsgUpdateBucketQueue) String() string {
 //REMOVE_INDEX_LIST_FROM_STREAM
 //CLOSE_STREAM
 //CLEANUP_STREAM
+//CLEANUP_PRJ_STATS
 type MsgStreamUpdate struct {
 	mType        MsgType
 	streamId     common.StreamId
@@ -1910,6 +1917,8 @@ func (m MsgType) String() string {
 		return "CLOSE_STREAM"
 	case CLEANUP_STREAM:
 		return "CLEANUP_STREAM"
+	case CLEANUP_PRJ_STATS:
+		return "CLEANUP_PRJ_STATS"
 
 	case KV_SENDER_RESTART_VBUCKETS:
 		return "KV_SENDER_RESTART_VBUCKETS"

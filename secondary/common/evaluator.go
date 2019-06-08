@@ -11,7 +11,7 @@ type Evaluator interface {
 	Bucket() string
 
 	// StreamBeginData is generated for downstream.
-	StreamBeginData(vbno uint16, vbuuid, seqno uint64) (data interface{})
+	StreamBeginData(vbno uint16, vbuuid, seqno uint64, hostname string) (data interface{})
 
 	// Sync is generated for downstream.
 	SyncData(vbno uint16, vbuuid, seqno uint64) (data interface{})

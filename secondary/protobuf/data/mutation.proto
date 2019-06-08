@@ -68,11 +68,12 @@ message VbKeyVersions {
 // fields `docid`, `uuids`, `keys`, `oldkeys` are valid only for
 // Upsert, Deletion, UpsertDeletion messages.
 message KeyVersions {
-    required uint64 seqno    = 1; // sequence number corresponding to this mutation
-    optional bytes  docid    = 2; // primary document id
-    repeated uint64 uuids    = 3; // uuids, hosting key-version
-    repeated uint32 commands = 4; // list of command for each uuid
-    repeated bytes  keys     = 5; // key-versions for each uuids listed above
-    repeated bytes  oldkeys  = 6; // key-versions from old copy of the document
-    repeated bytes  partnkeys = 7; // partition key for each key-version 
+    required uint64 seqno     = 1; // sequence number corresponding to this mutation
+    optional bytes  docid     = 2; // primary document id
+    repeated uint64 uuids     = 3; // uuids, hosting key-version
+    repeated uint32 commands  = 4; // list of command for each uuid
+    repeated bytes  keys      = 5; // key-versions for each uuids listed above
+    repeated bytes  oldkeys   = 6; // key-versions from old copy of the document
+    repeated bytes  partnkeys = 7; // partition key for each key-version
+    optional int64  prjMovingAvg = 8; // Moving avg. latency of mutation processing in projector
 }

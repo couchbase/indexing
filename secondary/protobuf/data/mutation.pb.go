@@ -254,6 +254,7 @@ type KeyVersions struct {
 	Keys             [][]byte `protobuf:"bytes,5,rep,name=keys" json:"keys,omitempty"`
 	Oldkeys          [][]byte `protobuf:"bytes,6,rep,name=oldkeys" json:"oldkeys,omitempty"`
 	Partnkeys        [][]byte `protobuf:"bytes,7,rep,name=partnkeys" json:"partnkeys,omitempty"`
+	PrjMovingAvg     *int64   `protobuf:"varint,8,opt,name=prjMovingAvg" json:"prjMovingAvg,omitempty"`
 	XXX_unrecognized []byte   `json:"-"`
 }
 
@@ -308,6 +309,13 @@ func (m *KeyVersions) GetPartnkeys() [][]byte {
 		return m.Partnkeys
 	}
 	return nil
+}
+
+func (m *KeyVersions) GetPrjMovingAvg() int64 {
+	if m != nil && m.PrjMovingAvg != nil {
+		return *m.PrjMovingAvg
+	}
+	return 0
 }
 
 func init() {

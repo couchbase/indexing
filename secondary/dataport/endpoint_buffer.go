@@ -7,13 +7,14 @@ import c "github.com/couchbase/indexing/secondary/common"
 import "github.com/couchbase/indexing/secondary/transport"
 
 type endpointBuffers struct {
-	raddr string
-	vbs   map[string]*c.VbKeyVersions // uuid -> VbKeyVersions
+	raddr       string
+	vbs         map[string]*c.VbKeyVersions // uuid -> VbKeyVersions
+	lastAvgSent int64
 }
 
 func newEndpointBuffers(raddr string) *endpointBuffers {
 	vbs := make(map[string]*c.VbKeyVersions)
-	b := &endpointBuffers{raddr, vbs}
+	b := &endpointBuffers{raddr: raddr, vbs: vbs}
 	return b
 }
 
@@ -66,7 +67,17 @@ func (b *endpointBuffers) flushBuffers(
 		vbs = append(vbs, vb)
 		for _, kv := range vb.Kvs {
 			if kv.Ctime > 0 {
-				endpoint.stats.prjLatency.Add(time.Now().UnixNano() - kv.Ctime)
+				now := time.Now().UnixNano()
+				endpoint.stats.prjLatency.Add(now - kv.Ctime)
+
+				// Send moving average latency to indexer only once every second
+				if now-b.lastAvgSent > int64(time.Second) {
+					b.lastAvgSent = now
+					// Populate Ctime with moving average
+					kv.Ctime = endpoint.stats.prjLatency.MovingAvg()
+				} else {
+					kv.Ctime = 0 // Clear kv.Ctime so that we do not send it to indexer
+				}
 			}
 		}
 	}
