@@ -931,6 +931,7 @@ func (tk *timekeeper) handleStreamBegin(cmd Message) {
 	if tk.indexerState == INDEXER_PREPARE_UNPAUSE {
 		logging.Warnf("Timekeeper::handleStreamBegin Received StreamBegin In "+
 			"Prepare Unpause State. Bucket %v Stream %v. Ignored.", meta.bucket, streamId)
+		tk.supvCmdch <- &MsgSuccess{}
 		return
 	}
 
@@ -1015,6 +1016,7 @@ func (tk *timekeeper) handleStreamEnd(cmd Message) {
 	if tk.indexerState == INDEXER_PREPARE_UNPAUSE {
 		logging.Warnf("Timekeeper::handleStreamEnd Received StreamEnd In "+
 			"Prepare Unpause State. Bucket %v Stream %v. Ignored.", meta.bucket, streamId)
+		tk.supvCmdch <- &MsgSuccess{}
 		return
 	}
 
@@ -1246,6 +1248,7 @@ func (tk *timekeeper) handleStreamConnErrorInternal(streamId common.StreamId, bu
 	if tk.indexerState == INDEXER_PREPARE_UNPAUSE {
 		logging.Warnf("Timekeeper::handleStreamConnError Received ConnError In "+
 			"Prepare Unpause State. Bucket %v Stream %v. Ignored.", bucket, streamId)
+		tk.supvCmdch <- &MsgSuccess{}
 		return
 	}
 
@@ -1455,6 +1458,7 @@ func (tk *timekeeper) handleStreamRequestDone(cmd Message) {
 	if tk.indexerState == INDEXER_PREPARE_UNPAUSE {
 		logging.Warnf("Timekeeper::handleStreamRequestDone Skip Repair Check In "+
 			"Prepare Unpause State. Bucket %v Stream %v.", bucket, streamId)
+		tk.supvCmdch <- &MsgSuccess{}
 		return
 	}
 
@@ -1524,6 +1528,7 @@ func (tk *timekeeper) handleRecoveryDone(cmd Message) {
 	if tk.indexerState == INDEXER_PREPARE_UNPAUSE {
 		logging.Warnf("Timekeeper::handleRecoveryDone Skip Repair Check In "+
 			"Prepare Unpause State. Bucket %v Stream %v.", bucket, streamId)
+		tk.supvCmdch <- &MsgSuccess{}
 		return
 	}
 

@@ -13,16 +13,17 @@ import (
 	//"fmt"
 	"encoding/json"
 	"fmt"
-	gometaC "github.com/couchbase/gometa/common"
-	gometaL "github.com/couchbase/gometa/log"
-	"github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/logging"
-	"github.com/couchbase/indexing/secondary/manager/client"
 	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
+
+	gometaC "github.com/couchbase/gometa/common"
+	gometaL "github.com/couchbase/gometa/log"
+	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/manager/client"
 )
 
 ///////////////////////////////////////////////////////
@@ -700,6 +701,8 @@ func (m *IndexManager) monitorBucket(killch chan bool) {
 					// (e.g. indexer is slow or blocked), it won't keep generating new request.
 					m.requestServer.MakeRequest(client.OPCODE_CLEANUP_DEFER_INDEX, bucket, []byte{})
 				}
+			} else {
+				logging.Errorf("IndexManager.MonitorBucket(): Error occurred while getting buckets for cleanup %v", err)
 			}
 		case <-killch:
 			return
@@ -720,17 +723,17 @@ func (m *IndexManager) getBucketForCleanup() ([]string, error) {
 		return result, nil
 	}
 
+	cinfo := m.cinfoClient.GetClusterInfoCache()
+	cinfo.RLock()
+	defer cinfo.RUnlock()
+
 	// iterate through each bucket
 	for _, key := range globalTop.TopologyKeys {
 
 		bucket := getBucketFromTopologyKey(key)
 
-		// Get bucket UUID.  If err=nil, bucket uuid is BUCKET_UUID_NIL for non-existent bucket.
-		currentUUID, err := m.lifecycleMgr.getBucketUUID(bucket)
-		if err != nil {
-			// If err != nil, then cannot connect to fetch bucket info.  Retry it at later time.
-			return nil, err
-		}
+		// Get bucket UUID. Bucket uuid is BUCKET_UUID_NIL for non-existent bucket.
+		currentUUID := cinfo.GetBucketUUID(bucket)
 
 		topology, err := m.repo.GetTopologyByBucket(bucket)
 		if err == nil && topology != nil {
