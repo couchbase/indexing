@@ -538,6 +538,9 @@ func (feed *DcpFeed) getStats() map[string]interface{} {
 	dcpStats := make(map[string]interface{}, 0)
 	for _, nodeFeeds := range feed.nodeFeeds {
 		for _, singleFeed := range nodeFeeds {
+			if singleFeed == nil {
+				continue
+			}
 			if stats := singleFeed.dcpFeed.GetStats(); stats != nil {
 				key := fmt.Sprintf("DCPT[%v] ##%v", singleFeed.dcpFeed.Name(), singleFeed.dcpFeed.Opaque())
 				dcpStats[key] = singleFeed.dcpFeed.GetStats()
