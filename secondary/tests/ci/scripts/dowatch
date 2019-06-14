@@ -20,8 +20,11 @@ fi
 for i in {1..240}; do
   cd $WORKSPACE
   sleep 60
-  current="`git ls-remote git://github.com/couchbase/indexing $BRANCH | awk '{print $1}'`"
+  current="`git ls-remote ssh://github.com/couchbase/indexing $BRANCH | awk '{print $1}'`"
   good="`cat ~/indexing.good`"
+  if [ "$current" != "$good" ]; then exit 0; fi
+  current="`git ls-remote ssh://github.com/couchbase/plasma $BRANCH | awk '{print $1}'`"
+  good="`cat ~/plasma.good`"
   if [ "$current" != "$good" ]; then exit 0; fi
 done
 
