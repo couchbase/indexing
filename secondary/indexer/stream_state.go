@@ -765,6 +765,7 @@ func (ss *StreamState) updateHWT(streamId common.StreamId,
 			//store the new snap marker in hwt
 			ts.Snapshots[i][0] = hwt.Snapshots[i][0]
 			ts.Snapshots[i][1] = hwt.Snapshots[i][1]
+			ts.Vbuuids[i] = hwt.Vbuuids[i]
 			ss.streamBucketNewTsReqdMap[streamId][bucket] = true
 			if prevSnap.Seqnos[i] != prevSnap.Snapshots[i][1] {
 				logging.Warnf("StreamState::updateHWT Received Partial Last Snapshot in HWT "+
