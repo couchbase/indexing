@@ -595,7 +595,8 @@ func (s *IndexStats) getArrKeySizeStats() map[string]interface{} {
 	return keySizeStats
 }
 
-func (is IndexerStats) GetStats(getPartition bool, skipEmpty bool) common.Statistics {
+func (is IndexerStats) GetStats(getPartition bool, skipEmpty bool,
+	essential bool) common.Statistics {
 
 	var prefix string
 	var instId string
@@ -968,72 +969,76 @@ func (is IndexerStats) GetStats(getPartition bool, skipEmpty bool) common.Statis
 				return ss.numRecsOnDisk.Value()
 			}))
 
-		// Timing stats.  If timing stat is partitioned, the final value
-		// is aggreated across the partitions (sum, count, sumOfSq).
-		addStat("timings/dcp_getseqs",
-			s.partnTimingStats(func(ss *IndexStats) *stats.TimingStat {
-				return &ss.Timings.dcpSeqs
-			}))
-		addStat("timings/storage_clone_handle",
-			s.partnTimingStats(func(ss *IndexStats) *stats.TimingStat {
-				return &ss.Timings.stCloneHandle
-			}))
-		addStat("timings/storage_commit",
-			s.partnTimingStats(func(ss *IndexStats) *stats.TimingStat {
-				return &ss.Timings.stCommit
-			}))
-		addStat("timings/storage_new_iterator",
-			s.partnTimingStats(func(ss *IndexStats) *stats.TimingStat {
-				return &ss.Timings.stNewIterator
-			}))
-		addStat("timings/storage_snapshot_create",
-			s.partnTimingStats(func(ss *IndexStats) *stats.TimingStat {
-				return &ss.Timings.stSnapshotCreate
-			}))
-		addStat("timings/storage_snapshot_close",
-			s.partnTimingStats(func(ss *IndexStats) *stats.TimingStat {
-				return &ss.Timings.stSnapshotClose
-			}))
-		addStat("timings/storage_persist_snapshot_create",
-			s.partnTimingStats(func(ss *IndexStats) *stats.TimingStat {
-				return &ss.Timings.stPersistSnapshotCreate
-			}))
-		addStat("timings/storage_get",
-			s.partnTimingStats(func(ss *IndexStats) *stats.TimingStat {
-				return &ss.Timings.stKVGet
-			}))
-		addStat("timings/storage_set",
-			s.partnTimingStats(func(ss *IndexStats) *stats.TimingStat {
-				return &ss.Timings.stKVSet
-			}))
-		addStat("timings/storage_iterator_next",
-			s.partnTimingStats(func(ss *IndexStats) *stats.TimingStat {
-				return &ss.Timings.stIteratorNext
-			}))
-		addStat("timings/scan_pipeline_iterate",
-			s.partnTimingStats(func(ss *IndexStats) *stats.TimingStat {
-				return &ss.Timings.stScanPipelineIterate
-			}))
-		addStat("timings/storage_del",
-			s.partnTimingStats(func(ss *IndexStats) *stats.TimingStat {
-				return &ss.Timings.stKVDelete
-			}))
-		addStat("timings/storage_info",
-			s.partnTimingStats(func(ss *IndexStats) *stats.TimingStat {
-				return &ss.Timings.stKVInfo
-			}))
-		addStat("timings/storage_meta_get",
-			s.partnTimingStats(func(ss *IndexStats) *stats.TimingStat {
-				return &ss.Timings.stKVMetaGet
-			}))
-		addStat("timings/storage_meta_set",
-			s.partnTimingStats(func(ss *IndexStats) *stats.TimingStat {
-				return &ss.Timings.stKVMetaSet
-			}))
-		addStat("timings/n1ql_expr_eval",
-			s.partnTimingStats(func(ss *IndexStats) *stats.TimingStat {
-				return &ss.Timings.n1qlExpr
-			}))
+		if !essential {
+
+			// Timing stats.  If timing stat is partitioned, the final value
+			// is aggreated across the partitions (sum, count, sumOfSq).
+			addStat("timings/dcp_getseqs",
+				s.partnTimingStats(func(ss *IndexStats) *stats.TimingStat {
+					return &ss.Timings.dcpSeqs
+				}))
+			addStat("timings/storage_clone_handle",
+				s.partnTimingStats(func(ss *IndexStats) *stats.TimingStat {
+					return &ss.Timings.stCloneHandle
+				}))
+			addStat("timings/storage_commit",
+				s.partnTimingStats(func(ss *IndexStats) *stats.TimingStat {
+					return &ss.Timings.stCommit
+				}))
+			addStat("timings/storage_new_iterator",
+				s.partnTimingStats(func(ss *IndexStats) *stats.TimingStat {
+					return &ss.Timings.stNewIterator
+				}))
+			addStat("timings/storage_snapshot_create",
+				s.partnTimingStats(func(ss *IndexStats) *stats.TimingStat {
+					return &ss.Timings.stSnapshotCreate
+				}))
+			addStat("timings/storage_snapshot_close",
+				s.partnTimingStats(func(ss *IndexStats) *stats.TimingStat {
+					return &ss.Timings.stSnapshotClose
+				}))
+			addStat("timings/storage_persist_snapshot_create",
+				s.partnTimingStats(func(ss *IndexStats) *stats.TimingStat {
+					return &ss.Timings.stPersistSnapshotCreate
+				}))
+			addStat("timings/storage_get",
+				s.partnTimingStats(func(ss *IndexStats) *stats.TimingStat {
+					return &ss.Timings.stKVGet
+				}))
+			addStat("timings/storage_set",
+				s.partnTimingStats(func(ss *IndexStats) *stats.TimingStat {
+					return &ss.Timings.stKVSet
+				}))
+			addStat("timings/storage_iterator_next",
+				s.partnTimingStats(func(ss *IndexStats) *stats.TimingStat {
+					return &ss.Timings.stIteratorNext
+				}))
+			addStat("timings/scan_pipeline_iterate",
+				s.partnTimingStats(func(ss *IndexStats) *stats.TimingStat {
+					return &ss.Timings.stScanPipelineIterate
+				}))
+			addStat("timings/storage_del",
+				s.partnTimingStats(func(ss *IndexStats) *stats.TimingStat {
+					return &ss.Timings.stKVDelete
+				}))
+			addStat("timings/storage_info",
+				s.partnTimingStats(func(ss *IndexStats) *stats.TimingStat {
+					return &ss.Timings.stKVInfo
+				}))
+			addStat("timings/storage_meta_get",
+				s.partnTimingStats(func(ss *IndexStats) *stats.TimingStat {
+					return &ss.Timings.stKVMetaGet
+				}))
+			addStat("timings/storage_meta_set",
+				s.partnTimingStats(func(ss *IndexStats) *stats.TimingStat {
+					return &ss.Timings.stKVMetaSet
+				}))
+			addStat("timings/n1ql_expr_eval",
+				s.partnTimingStats(func(ss *IndexStats) *stats.TimingStat {
+					return &ss.Timings.n1qlExpr
+				}))
+
+		}
 	}
 
 	for k, s := range is.indexes {
@@ -1252,8 +1257,9 @@ func (s *IndexStats) constructIndexStats(skipEmpty bool, version string) common.
 	return indexStats
 }
 
-func (is IndexerStats) MarshalJSON(partition bool, pretty bool, skipEmpty bool) ([]byte, error) {
-	stats := is.GetStats(partition, skipEmpty)
+func (is IndexerStats) MarshalJSON(partition bool, pretty bool,
+	skipEmpty bool, essential bool) ([]byte, error) {
+	stats := is.GetStats(partition, skipEmpty, essential)
 
 	if !pretty {
 		return json.Marshal(stats)
@@ -1419,7 +1425,7 @@ func (s *statsManager) handleStatsReq(w http.ResponseWriter, r *http.Request) {
 		if common.IndexerState(stats.indexerState.Value()) != common.INDEXER_BOOTSTRAP {
 			s.tryUpdateStats(sync)
 		}
-		bytes, _ := stats.MarshalJSON(partition, pretty, skipEmpty)
+		bytes, _ := stats.MarshalJSON(partition, pretty, skipEmpty, false)
 		w.WriteHeader(200)
 		w.Write(bytes)
 		stats.statsResponse.Put(time.Since(t0))
@@ -1597,10 +1603,14 @@ func (s *statsManager) handleConfigUpdate(cmd Message) {
 
 func (s *statsManager) runStatsDumpLogger() {
 	skipStorage := 0
+	essential := true
 	for {
 		stats := s.stats.Get()
 		if stats != nil {
-			bytes, _ := stats.MarshalJSON(false, false, false)
+			if logging.IsEnabled(logging.Verbose) {
+				essential = false
+			}
+			bytes, _ := stats.MarshalJSON(false, false, false, essential)
 			var storageStats string
 			if skipStorage > 15 { //log storage stats every 15mins
 				if common.GetStorageMode() != common.FORESTDB {
