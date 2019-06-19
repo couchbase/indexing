@@ -3,7 +3,7 @@
 export PATH=$PATH:~/bin
 
 rm -rf ~/.ciscripts
-git clone -q git://github.com/couchbase/indexing ~/.ciscripts
+git clone -q ssh://github.com/couchbase/indexing ~/.ciscripts
 cd ~/.ciscripts
 (source ~/.cienv && git checkout $BRANCH)
 
