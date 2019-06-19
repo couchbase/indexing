@@ -49,6 +49,7 @@ type KVData struct {
 	// statistics
 	stats     *KvdataStats
 	wrkrStats []interface{}
+	heartBeat <-chan time.Time
 }
 
 type KvdataStats struct {
@@ -298,7 +299,7 @@ func (kvdata *KVData) runScatter(
 		logging.Infof("%v ##%x ... stopped\n", kvdata.logPrefix, kvdata.opaque)
 	}()
 
-	heartBeat := time.After(kvdata.syncTimeout)
+	kvdata.heartBeat = time.After(kvdata.syncTimeout)
 	fmsg := "%v ##%x heartbeat (%v) loaded ...\n"
 	logging.Infof(fmsg, kvdata.logPrefix, kvdata.opaque, kvdata.syncTimeout)
 
@@ -307,7 +308,7 @@ loop:
 		// Prioritize control channel over other channels
 		select {
 		case msg := <-kvdata.sbch:
-			if breakloop := kvdata.handleCommand(msg, ts, heartBeat); breakloop {
+			if breakloop := kvdata.handleCommand(msg, ts); breakloop {
 				break loop
 			}
 		default:
@@ -323,8 +324,8 @@ loop:
 			seqno, _ := kvdata.scatterMutation(m, ts)
 			kvdata.stats.vbseqnos[m.VBucket].Set(uint64(seqno))
 
-		case <-heartBeat:
-			heartBeat = nil
+		case <-kvdata.heartBeat:
+			kvdata.heartBeat = nil
 			kvdata.stats.hbCount.Add(1)
 
 			// propogate the sync-pulse via separate routine so that
@@ -342,14 +343,14 @@ loop:
 			}()
 
 		case msg := <-kvdata.sbch:
-			if breakloop := kvdata.handleCommand(msg, ts, heartBeat); breakloop {
+			if breakloop := kvdata.handleCommand(msg, ts); breakloop {
 				break loop
 			}
 		}
 	}
 }
 
-func (kvdata *KVData) handleCommand(msg []interface{}, ts *protobuf.TsVbuuid, heartBeat <-chan time.Time) bool {
+func (kvdata *KVData) handleCommand(msg []interface{}, ts *protobuf.TsVbuuid) bool {
 	cmd := msg[0].(byte)
 	switch cmd {
 	case kvCmdAddEngines:
@@ -435,13 +436,15 @@ func (kvdata *KVData) handleCommand(msg []interface{}, ts *protobuf.TsVbuuid, he
 
 	case kvCmdResetConfig:
 		config, respch := msg[1].(c.Config), msg[2].(chan []interface{})
-		if cv, ok := config["syncTimeout"]; ok && heartBeat != nil {
+		if cv, ok := config["syncTimeout"]; ok {
 			kvdata.syncTimeout = time.Duration(cv.Int())
 			kvdata.syncTimeout *= time.Millisecond
 			logging.Infof(
 				"%v ##%x heart-beat settings reloaded: %v\n",
 				kvdata.logPrefix, kvdata.opaque, kvdata.syncTimeout)
-			heartBeat = time.After(kvdata.syncTimeout)
+		}
+		if kvdata.heartBeat != nil {
+			kvdata.heartBeat = time.After(kvdata.syncTimeout)
 		}
 		for _, worker := range kvdata.workers {
 			if err := worker.ResetConfig(config); err != nil {
@@ -453,7 +456,7 @@ func (kvdata *KVData) handleCommand(msg []interface{}, ts *protobuf.TsVbuuid, he
 
 	case kvCmdReloadHeartBeat:
 		respch := msg[1].(chan []interface{})
-		heartBeat = time.After(kvdata.syncTimeout)
+		kvdata.heartBeat = time.After(kvdata.syncTimeout)
 		respch <- []interface{}{nil}
 
 	case kvCmdClose:
