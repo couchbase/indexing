@@ -1511,6 +1511,34 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.enableAsyncOpenStream": ConfigValue{
+		true,
+		"Enable async stream open operation between indexer and projector",
+		true,
+		true,  // mutable
+		false, // case-insensitive
+	},
+	"indexer.timekeeper.rollback.StreamBeginWaitTime": ConfigValue{
+		30, // 30 minutes
+		"Max wait time after the last received stream begin (in second) before rollback takes place during stream repair. ",
+		30,
+		true,  // mutable
+		false, // case-insensitive
+	},
+	"indexer.timekeeper.escalate.StreamBeginWaitTime": ConfigValue{
+		30 * 60, // 30 minutes
+		"Max wait time after the last received stream begin (in second) escalate to the next repair action during stream repair. ",
+		30 * 60,
+		true,  // mutable
+		false, // case-insensitive
+	},
+	"indexer.timekeeper.streamRepairWaitTime": ConfigValue{
+		60, // 1 minute
+		"Wait time between retrying stream repair (in second)",
+		60,
+		true,  // mutable
+		false, // case-insensitive
+	},
 	"indexer.http.readTimeout": ConfigValue{
 		1200,
 		"timeout in seconds, is indexer http server's read timeout",

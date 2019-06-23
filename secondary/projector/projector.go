@@ -470,7 +470,7 @@ func (p *Projector) doMutationTopic(
 	defer p.releaseFeed(topic)
 	if feed == nil {
 		config := p.GetFeedConfig()
-		feed, err = NewFeed(p.pooln, topic, p, config, opaque)
+		feed, err = NewFeed(p.pooln, topic, p, config, opaque, request.GetAsync())
 		if err != nil {
 			fmsg := "%v ##%x unable to create feed %v\n"
 			logging.Errorf(fmsg, prefix, opaque, topic)

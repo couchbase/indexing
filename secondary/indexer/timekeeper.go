@@ -240,6 +240,7 @@ func (tk *timekeeper) handleStreamOpen(cmd Message) {
 	bucket := cmd.(*MsgStreamUpdate).GetBucket()
 	restartTs := cmd.(*MsgStreamUpdate).GetRestartTs()
 	rollbackTime := cmd.(*MsgStreamUpdate).GetRollbackTime()
+	async := cmd.(*MsgStreamUpdate).GetAsync()
 
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
@@ -262,6 +263,7 @@ func (tk *timekeeper) handleStreamOpen(cmd Message) {
 			tk.ss.setHWTFromRestartTs(streamId, bucket)
 		}
 		tk.ss.setRollbackTime(bucket, rollbackTime)
+		tk.ss.streamBucketAsyncMap[streamId][bucket] = async
 		tk.addIndextoStream(cmd)
 		tk.startTimer(streamId, bucket)
 
@@ -508,6 +510,7 @@ func (tk *timekeeper) removeBucketFromStream(streamId common.StreamId,
 	//actual cleanup happens in initRecovery
 	if status == STREAM_PREPARE_RECOVERY {
 		tk.ss.streamBucketStatus[streamId][bucket] = STREAM_PREPARE_RECOVERY
+		tk.ss.clearAllRepairState(streamId, bucket)
 	} else {
 		tk.stopTimer(streamId, bucket)
 		tk.ss.cleanupBucketFromStream(streamId, bucket)
@@ -1008,41 +1011,148 @@ func (tk *timekeeper) handleStreamBegin(cmd Message) {
 
 	case STREAM_ACTIVE:
 
-		// When receivng a StreamBegin, it means that the projector claims ownership
-		// of a vbucket.   Keep track of how many projectors are claiming ownership.
-		tk.ss.incVbRefCount(streamId, meta.bucket, meta.vbucket)
+		needRepair := false
 
-		/*NOTE - (MadHatter) Generation of new snapshot on Vbuuid change has been disabled.
-		//Consistent scans do not depend on vbuuid. If at all that logic changes,
-		//new snapshots will need to be generated at every vbuuid change.
-		//This change helps to reduce the possibility of rollback from memcached as
-		//memcached can loose vbuuid in crash/restart loop while indexer can update its
-		//HWT and generate snapshot for it. On restart of DCP stream with those vbuuids,
-		//memcached could ask to rollback to 0.
-		*/
+		// For bookkeeping, timekeeper needs to make sure that it will be eventually correct:
+		// 1) There is only one KV node claims ownership for each vb
+		// 2) Each KV node accepts the restart seqno for each vb
+		//
+		// Expected projector behavior (for async mode):
+		// 1) stream request only apply to master vb
+		// 2) projector ensures all control message are processed in sequence.
+		// 3) projector keeps track of pending vb and active vb.
+		//    - Pending vb = vb being requested that has not yet acknowledged by kv.
+		//    - Active vb = vb acknowledged AND accepted by kv.  The projector has claimed ownership of this vb.
+		// 4) projector does not process start/restart for pending vb or active vb.
+		// 5) projector does not process vb shutdown for pending vb
+		// 6) projector does not claim vb ownerhip if vb is rolled back (it is not an active vb).
+		//
+		// For bookkeeping,
+		// 1) Each vb has a status
+		//    VBS_STREAM_BEGIN                  - one node has claimed ownership of this vb
+		//                                      - A node CLAIMS ownership even if it sends a Stream Begin with rollack status.
+		//    VBS_STERAM_END                    - current owner has released ownership of this vb.
+		//                                        Will figure out new ownership by restarting vb.
+		//    VBS_INIT (init)                   - ownership unknown -- no projector has claimed ownerhsip yet.
+		//    VBS_CONN_ERROR (connection error) - ownership unknown  -- projector may have claimed ownership, but we don't know for certain.
+		//                                      - Will figure out ownership by shutdown/restart vb sequence.
+		// 2) If there is more than 1 node claims ownership (StreamBegin), it has to raise connection error on the vb (VBS_CONN_ERROR).
+		// 3) If there is more than 1 node release ownership (StreamEnd), it will also raise connection error on the vb.
+		//    - It is an no-op in receiving StreamEnd until ownership is known
+		// 4) After a node release ownership (StreamEnd), it will try to figure out new ownership by restarting vb.
+		//    If no node claims ownership after max retry, it will raise connection error.
+		// 5) If there is a physical network error, it will raise connection error.
+		// 6) If there is missing vb during MTR, flag the error and restart vb.
+		// 7) Once all vb has started, it has to start recovery if any vb has rolled back.
+		//
+		// Raising connection error helps to identify the vb owner:
+		// 1) clear book keeping for the vb
+		//    - clear the ref count
+		//    - clear rollbackTs
+		// 2) broadcast vb shutdown to all projectors
+		// 3) broadcast vb restart to all projectors
+		// 4) start reference counting until receving the first streamBegin
+		//    - If there is only 1 vb owner, there would eventually be only single stream-begin (ref count set to 1)
+		//
+		// Timekeeper only asserts that there is 1 vb owner, but it does not verify the vb owner with ns-server vbmap.  If
+		// timekeeper receives multiple Stream Begin, special care must be taken to make sure rollbackTs is coming from the
+		// actual vb owner:
+		// 1) If multiple Stream Begin causes ref count > 1, connection error is rasied.  This reset rollback Ts and seek
+		//    the actual vb owner to re-identify itself (through shutdown/restart).
+		// 2) If Stream End is received, clear the rollback Ts.   Stream repair will seek the actual vb owner to re-identify itself.
+		//
+		// Note:
+		// 1) retry (shutdown/restart) due to connection error (VBS_CONN_ERROR) does not have effect on pending vb.
+		//    - projector cannot cancel pending vb even if shutting down vb
+		// 2) projector can send repeated StreamBegin with ROLLBACK on repeated MTR or RestartVb.
+		// 3) Do not assume that projector must send StreamBegin before StreamEnd (depending on dcp)
+		//    - a pending vb get rebalanced.  DCP can send StreamEnd on rebalanced.
+		//
 
-		//update the HWT of this stream and bucket with the vbuuid
-		bucketHWTMap := tk.ss.streamBucketHWTMap[streamId]
+		// If status is STREAM_SUCCESS, proceed as usual.  Pre-6.5, status is always STREAM_SUCCESS.
+		if cmd.(*MsgStream).GetStatus() == common.STREAM_SUCCESS {
 
-		// Always use the vbuuid of the last StreamBegin
-		ts := bucketHWTMap[meta.bucket]
-		ts.Vbuuids[meta.vbucket] = uint64(meta.vbuuid)
+			// When receivng a StreamBegin, it means that the projector claims ownership
+			// of a vbucket.   Keep track of how many projectors are claiming ownership.
+			tk.ss.incVbRefCount(streamId, meta.bucket, meta.vbucket)
 
-		// New TS needs to be generated for vbuuid change as stale=false scans
-		// can only succeed if all vbuuids are latest. Also if there are no docs
-		// in a vbucket and its stream begin arrives later than all mutations,
-		// there will be no TS with that vbuuid.
-		tk.ss.streamBucketNewTsReqdMap[streamId][meta.bucket] = true
+			/*NOTE - (MadHatter) Generation of new snapshot on Vbuuid change has been disabled.
+			//Consistent scans do not depend on vbuuid. If at all that logic changes,
+			//new snapshots will need to be generated at every vbuuid change.
+			//This change helps to reduce the possibility of rollback from memcached as
+			//memcached can loose vbuuid in crash/restart loop while indexer can update its
+			//HWT and generate snapshot for it. On restart of DCP stream with those vbuuids,
+			//memcached could ask to rollback to 0.
+			*/
 
-		tk.ss.updateVbStatus(streamId, meta.bucket, []Vbucket{meta.vbucket}, VBS_STREAM_BEGIN)
+			//update the HWT of this stream and bucket with the vbuuid
+			bucketHWTMap := tk.ss.streamBucketHWTMap[streamId]
 
-		count := tk.ss.getVbRefCount(streamId, meta.bucket, meta.vbucket)
-		if count > 1 {
-			if stopCh, ok := tk.ss.streamBucketRepairStopCh[streamId][meta.bucket]; !ok || stopCh == nil {
-				tk.ss.clearRestartVbRetry(streamId, meta.bucket, meta.vbucket)
-				tk.ss.streamBucketRepairStopCh[streamId][meta.bucket] = make(StopChannel)
-				logging.Infof("Timekeeper::handleStreamBegin RepairStream due to vb ref count > 1. "+
+			// Always use the vbuuid of the last StreamBegin
+			ts := bucketHWTMap[meta.bucket]
+			ts.Vbuuids[meta.vbucket] = uint64(meta.vbuuid)
+
+			// New TS needs to be generated for vbuuid change as stale=false scans
+			// can only succeed if all vbuuids are latest. Also if there are no docs
+			// in a vbucket and its stream begin arrives later than all mutations,
+			// there will be no TS with that vbuuid.
+			tk.ss.streamBucketNewTsReqdMap[streamId][meta.bucket] = true
+
+			tk.ss.updateVbStatus(streamId, meta.bucket, []Vbucket{meta.vbucket}, VBS_STREAM_BEGIN)
+
+			// record the time when receiving the last StreamBegin
+			tk.ss.streamBucketLastBeginTime[streamId][meta.bucket] = uint64(time.Now().UnixNano())
+
+			//  record ActiveTs
+			tk.ss.addKVActiveTs(streamId, meta.bucket, meta.vbucket, uint64(meta.seqno), uint64(meta.vbuuid))
+			tk.ss.clearKVRollbackTs(streamId, meta.bucket, meta.vbucket)
+			tk.ss.clearKVPendingTs(streamId, meta.bucket, meta.vbucket)
+			tk.ss.clearLastRepairTime(streamId, meta.bucket, meta.vbucket)
+			tk.ss.clearRepairState(streamId, meta.bucket, meta.vbucket)
+
+			if tk.ss.getVbRefCount(streamId, meta.bucket, meta.vbucket) > 1 {
+				logging.Infof("Timekeeper::handleStreamBegin \n\tOwner count > 1. Treat as CONN_ERR. "+
 					"StreamId %v MutationMeta %v", streamId, meta)
+
+				// This will trigger repairStream, as well as replying to supervisor channel
+				tk.handleStreamConnErrorInternal(streamId, meta.bucket, []Vbucket{meta.vbucket})
+				return
+			}
+		}
+
+		// If status is STREAM_ROLLBACK, set rollbackTs in stream state.  Update vb status to
+		// STREAM_BEGIN since at least one projector has claimed this vb (even though it needs
+		// rollback).  Trigger stream repair.
+		// Do not update ref count since projector repeatedly send STREAM_ROLLBACK to indexer.
+		if cmd.(*MsgStream).GetStatus() == common.STREAM_ROLLBACK {
+			logging.Warnf("Timekeeper::handleStreamBegin StreamBegin rollback for StreamId %v "+
+				"Bucket %v vbucket %v. Rollback (%v, %16x). ", streamId, meta.bucket, meta.vbucket, meta.seqno, meta.vbuuid)
+
+			tk.ss.updateVbStatus(streamId, meta.bucket, []Vbucket{meta.vbucket}, VBS_STREAM_BEGIN)
+
+			// record the time when receiving the first rollback for this vb.  Note that projector
+			// can keep sending rollback streamBegin on repeated MTR or restartVB.  So only set
+			// begin time on the first time we see rollback.
+			if _, vbuuid := tk.ss.getKVRollbackTs(streamId, meta.bucket, meta.vbucket); vbuuid == 0 {
+				tk.ss.streamBucketLastBeginTime[streamId][meta.bucket] = uint64(time.Now().UnixNano())
+			}
+
+			// record the rollback Ts
+			tk.ss.addKVRollbackTs(streamId, meta.bucket, meta.vbucket, uint64(meta.seqno), uint64(meta.vbuuid))
+			tk.ss.clearKVActiveTs(streamId, meta.bucket, meta.vbucket)
+			tk.ss.clearKVPendingTs(streamId, meta.bucket, meta.vbucket)
+			tk.ss.clearLastRepairTime(streamId, meta.bucket, meta.vbucket)
+			tk.ss.clearRepairState(streamId, meta.bucket, meta.vbucket)
+
+			// Trigger repair.   If this is the last vb, then we will need to rollback.
+			needRepair = true
+		}
+
+		// Trigger stream repair.
+		if needRepair {
+			if stopCh, ok := tk.ss.streamBucketRepairStopCh[streamId][meta.bucket]; !ok || stopCh == nil {
+				tk.ss.streamBucketRepairStopCh[streamId][meta.bucket] = make(StopChannel)
+				logging.Infof("Timekeeper::handleStreamBegin start repairStream. StreamId %v MutationMeta %v", streamId, meta)
 				go tk.repairStream(streamId, meta.bucket)
 			}
 		}
@@ -1124,10 +1234,17 @@ func (tk *timekeeper) handleStreamEnd(cmd Message) {
 
 			} else {
 
-				// If Count => 0.  This could be just normal vb take-over during rebalancing.
 				tk.ss.updateVbStatus(streamId, meta.bucket, []Vbucket{meta.vbucket}, VBS_STREAM_END)
+				tk.ss.setLastRepairTime(streamId, meta.bucket, meta.vbucket)
+
+				// clear all Ts for this vbucket
+				tk.ss.clearKVActiveTs(streamId, meta.bucket, meta.vbucket)
+				tk.ss.clearKVPendingTs(streamId, meta.bucket, meta.vbucket)
+				tk.ss.clearKVRollbackTs(streamId, meta.bucket, meta.vbucket)
+				tk.ss.clearRepairState(streamId, meta.bucket, meta.vbucket)
+
+				// If Count => 0.  This could be just normal vb take-over during rebalancing.
 				if stopCh, ok := tk.ss.streamBucketRepairStopCh[streamId][meta.bucket]; !ok || stopCh == nil {
-					tk.ss.clearRestartVbRetry(streamId, meta.bucket, meta.vbucket)
 					tk.ss.streamBucketRepairStopCh[streamId][meta.bucket] = make(StopChannel)
 					logging.Infof("Timekeeper::handleStreamEnd RepairStream due to StreamEnd. "+
 						"StreamId %v MutationMeta %v", streamId, meta)
@@ -1273,26 +1390,40 @@ func (tk *timekeeper) repairMissingStreamBegin(streamId common.StreamId) {
 				// if the vb are still missing StreamBegin, then we need to repair this bucket.
 				if len(vbList) != 0 {
 					toFix[bucket] = vbList
-					delete(newMissing, bucket)
 				}
 			}
 
 			// Repair the vb in the bucket
+			maxInterval := uint64(tk.config["timekeeper.escalate.StreamBeginWaitTime"].Int()) * uint64(time.Second)
+
 			for bucket, vbList := range toFix {
 
 				bucketStatus := tk.ss.streamBucketStatus[streamId][bucket]
 				if len(vbList) != 0 && (bucketStatus == STREAM_ACTIVE || bucketStatus == STREAM_RECOVERY) {
-					logging.Infof("timekeeper.repairWithMissingStreamBegin. "+
-						"Raise ConnectionError stream %v bucket %v vblist %v",
-						streamId, bucket, vbList)
 
-					msg := &MsgStreamInfo{mType: STREAM_READER_CONN_ERROR,
-						streamId: streamId,
-						bucket:   bucket,
-						vbList:   vbList,
+					// If there is missing vb and timekeeper has not received StreamBegin for any vb for over the threshold,
+					// then raise an error on those vbs.
+					if now-uint64(tk.ss.streamBucketLastBeginTime[streamId][bucket]) > uint64(maxInterval) {
+
+						//flag the missing vb as error and repair stream.  Do not raise connection error.
+						for _, vb := range vbList {
+							tk.ss.updateVbStatus(streamId, bucket, []Vbucket{vb}, VBS_STREAM_END)
+							tk.ss.clearVbRefCount(streamId, bucket, vb)
+
+							// clear all Ts for this vbucket
+							tk.ss.clearKVActiveTs(streamId, bucket, vb)
+							tk.ss.clearKVPendingTs(streamId, bucket, vb)
+							tk.ss.clearKVRollbackTs(streamId, bucket, vb)
+							tk.ss.clearRepairState(streamId, bucket, vb)
+							tk.ss.setLastRepairTime(streamId, bucket, vb)
+						}
+
+						if stopCh, ok := tk.ss.streamBucketRepairStopCh[streamId][bucket]; !ok || stopCh == nil {
+							tk.ss.streamBucketRepairStopCh[streamId][bucket] = make(StopChannel)
+							logging.Infof("Timekeeper::repairWithMissingStreamBegin. Repair StreamId %v bucket %v vbuckets %v", streamId, bucket, vbList)
+							go tk.repairStream(streamId, bucket)
+						}
 					}
-
-					tk.supvRespch <- msg
 				}
 			}
 
@@ -1522,6 +1653,7 @@ func (tk *timekeeper) handleStreamRequestDone(cmd Message) {
 	streamId := cmd.(*MsgStreamInfo).GetStreamId()
 	bucket := cmd.(*MsgStreamInfo).GetBucket()
 	activeTs := cmd.(*MsgStreamInfo).GetActiveTs()
+	pendingTs := cmd.(*MsgStreamInfo).GetPendingTs()
 
 	logging.Infof("Timekeeper::handleStreamRequestDone StreamId %v Bucket %v",
 		streamId, bucket)
@@ -1529,7 +1661,19 @@ func (tk *timekeeper) handleStreamRequestDone(cmd Message) {
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
 
-	tk.ss.streamBucketOpenTsMap[streamId][bucket] = activeTs
+	tk.ss.streamBucketKVActiveTsMap[streamId][bucket] = activeTs
+	openTs := activeTs
+
+	tk.ss.streamBucketKVPendingTsMap[streamId][bucket] = pendingTs
+	if pendingTs != nil {
+		openTs = pendingTs.Union(openTs)
+	}
+
+	if openTs == nil {
+		openTs = common.NewTsVbuuid(bucket, tk.config["numVbuckets"].Int())
+	}
+
+	tk.ss.streamBucketOpenTsMap[streamId][bucket] = openTs
 	tk.ss.streamBucketStartTimeMap[streamId][bucket] = uint64(time.Now().UnixNano())
 
 	//Check for possiblity of build done after stream request done.
@@ -1578,6 +1722,7 @@ func (tk *timekeeper) handleRecoveryDone(cmd Message) {
 	bucket := cmd.(*MsgRecovery).GetBucket()
 	mergeTs := cmd.(*MsgRecovery).GetRestartTs()
 	activeTs := cmd.(*MsgRecovery).GetActiveTs()
+	pendingTs := cmd.(*MsgRecovery).GetPendingTs()
 
 	logging.Infof("Timekeeper::handleRecoveryDone StreamId %v Bucket %v",
 		streamId, bucket)
@@ -1585,8 +1730,20 @@ func (tk *timekeeper) handleRecoveryDone(cmd Message) {
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
 
+	tk.ss.streamBucketKVActiveTsMap[streamId][bucket] = activeTs
+	openTs := activeTs
+
+	tk.ss.streamBucketKVPendingTsMap[streamId][bucket] = pendingTs
+	if pendingTs != nil {
+		openTs = pendingTs.Union(openTs)
+	}
+
+	if openTs == nil {
+		openTs = common.NewTsVbuuid(bucket, tk.config["numVbuckets"].Int())
+	}
+
 	tk.resetWaitForRecovery(streamId, bucket)
-	tk.ss.streamBucketOpenTsMap[streamId][bucket] = activeTs
+	tk.ss.streamBucketOpenTsMap[streamId][bucket] = openTs
 	tk.ss.streamBucketStartTimeMap[streamId][bucket] = uint64(time.Now().UnixNano())
 
 	//once MAINT_STREAM gets successfully restarted in recovery, use the restartTs
@@ -2644,6 +2801,54 @@ func (tk *timekeeper) handleStreamCleanup(cmd Message) {
 
 }
 
+//
+// RepairStream decides on the repair action for each vb:
+// 1) StreamEnd
+// 2) ConnErr due to network failure
+// 3) ConnErr due to incorrect ref count
+// 4) Failed StreamBegin (Missing StreamBegin)
+// 5) Rollback
+//
+// Repair action can be:
+// 1) RestartVb
+//    - symptoms: StreamEnd, Failed StreamBegin
+//    - effective when projector's vb is not pending or active
+// 2) ShutdownVb/RestartVb
+//    - symptoms: ConnErr + symptoms of RestartVb
+//    - effective when projector's vb is not pending
+// 3) Rollabck
+//    - symptoms: KV rollback
+//    - effective when projector's vb rollback
+// 4) MTR
+//    - symptoms: TopicMissing, InvalidBucket
+//    - effective when projector loses its bookkeeping
+// 5) Recovery (no rollback)
+//    - symptoms: All other repair actions ineffective
+//    - effective when projector's vb is pending
+// 6) Recovery (rollback)
+//    - symptoms: StreamBegin with rollback
+//    - effective when streamBegin with rollback
+//
+// escalation policy:
+// 1) RestartVb -> ShutdownVb/RestartVb
+//    - Indexer vb: StreamEnd
+//    - projector vb: Active
+//      - escalate if no new StreamBegin in indexer.timekeeper.escalate.StreamBeginWaitTime
+//    - projector vb: Pending
+//      - escalate if no new StreamBegin in (indexer.timekeeper.escalate.StreamBeginWaitTime * 2)
+// 2) ShutdownVb/RestartVb -> MTR
+//    - Indexer vb: ConnErr
+//    - projector vb: Active
+//      - escalate if no new StreamBegin in indexer.timekeeper.escalate.StreamBeginWaitTime
+//    - projector vb: Pending
+//      - escalate if no new StreamBegin in (indexer.timekeeper.escalate.StreamBeginWaitTime * 2)
+// 3) MTR -> Recovery
+//    - Indexer vb: ConnErr
+//    - projector vb: Active
+//      - escalate if no new StreamBegin in indexer.timekeeper.escalate.StreamBeginWaitTime
+//    - projector vb: Pending
+//      - escalate if no new StreamBegin in (indexer.timekeeper.escalate.StreamBeginWaitTime * 2)
+//
 func (tk *timekeeper) repairStream(streamId common.StreamId,
 	bucket string) {
 
@@ -2661,9 +2866,42 @@ func (tk *timekeeper) repairStream(streamId common.StreamId,
 		return
 	}
 
+	// Start rollback if necessary:
+	needsRollback, canRollback := tk.ss.canRollbackNow(streamId, bucket)
+	if canRollback {
+
+		logging.Infof("Timekeeper::repairStream need rollback for %v %v. Sending Init Prepare.", streamId, bucket)
+
+		// Initiate recovery.   It will reset bucket book keeping upon prepare recovery.
+		tk.supvRespch <- &MsgRecovery{
+			mType:     INDEXER_INIT_PREP_RECOVERY,
+			streamId:  streamId,
+			bucket:    bucket,
+			restartTs: tk.ss.computeRollbackTs(streamId, bucket),
+		}
+
+		delete(tk.ss.streamBucketRepairStopCh[streamId], bucket)
+		return
+	}
+
+	// Start MTR if necessary.  This happens if indexer has not received any new StreamBegin over max wait time, and there
+	// are still ConnErr.   tk.lock must be hold without releasing, while calling startMTROnRetry and repairStreamWithMTR.
+	if tk.ss.startMTROnRetry(streamId, bucket) {
+
+		logging.Infof("Timekeeper::repairStream need MTR for %v %v. Sending StreamRepair.", streamId, bucket)
+
+		resp := &MsgKVStreamRepair{
+			streamId: streamId,
+			bucket:   bucket,
+		}
+
+		tk.repairStreamWithMTR(streamId, bucket, resp)
+		return
+	}
+
 	//prepare repairTs with all vbs in STREAM_END, REPAIR status and
 	//send that to KVSender to repair
-	if repairTs, needRepair, connErrVbs := tk.ss.getRepairTsForBucket(streamId, bucket); needRepair {
+	if repairTs, needRepair, connErrVbs, repairVbs := tk.ss.getRepairTsForBucket(streamId, bucket); needRepair {
 
 		respCh := make(MsgChannel)
 		stopCh := tk.ss.streamBucketRepairStopCh[streamId][bucket]
@@ -2673,12 +2911,13 @@ func (tk *timekeeper) repairStream(streamId common.StreamId,
 			restartTs:  repairTs,
 			respCh:     respCh,
 			stopCh:     stopCh,
-			connErrVbs: connErrVbs}
-
-		// before retrying, clear up the previous marker on retry error.
-		tk.ss.clearRestartVbError(streamId, bucket)
+			connErrVbs: connErrVbs,
+			repairVbs:  repairVbs}
 
 		go tk.sendRestartMsg(restartMsg)
+
+	} else if needsRollback {
+		go tk.repairStream(streamId, bucket)
 
 	} else {
 		delete(tk.ss.streamBucketRepairStopCh[streamId], bucket)
@@ -2700,6 +2939,8 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 
 	streamId := restartMsg.(*MsgRestartVbuckets).GetStreamId()
 	bucket := restartMsg.(*MsgRestartVbuckets).GetBucket()
+	repairVbs := restartMsg.(*MsgRestartVbuckets).RepairVbs()
+	shutdownVbs := restartMsg.(*MsgRestartVbuckets).ConnErrVbs()
 
 	//if timekeeper has moved to prepare unpause state, ignore
 	//the response message as all streams are going to be
@@ -2717,10 +2958,22 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 		//nothing to do
 		logging.Infof("Timekeeper::sendRestartMsg Repair Aborted %v %v", streamId, bucket)
 
-	case MSG_SUCCESS:
+	case KV_SENDER_RESTART_VBUCKETS_RESPONSE:
 		//allow sufficient time for control messages to come in
 		//after projector has confirmed success
-		time.Sleep(KV_RETRY_INTERVAL * time.Millisecond)
+
+		waitTime := tk.config["timekeeper.streamRepairWaitTime"].Int()
+		time.Sleep(time.Duration(waitTime) * time.Second)
+
+		restartRespMsg := kvresp.(*MsgRestartVbucketsResponse)
+		activeTs := restartRespMsg.GetActiveTs()
+		pendingTs := restartRespMsg.GetPendingTs()
+
+		tk.lock.Lock()
+		tk.ss.streamBucketKVActiveTsMap[streamId][bucket] = activeTs
+		tk.ss.streamBucketKVPendingTsMap[streamId][bucket] = pendingTs
+		tk.ss.updateRepairState(streamId, bucket, repairVbs, shutdownVbs)
+		tk.lock.Unlock()
 
 		//check for more vbuckets in repair state
 		tk.repairStream(streamId, bucket)
@@ -2739,16 +2992,71 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 
 		//if rollback msg, call initPrepareRecovery
 		logging.Infof("Timekeeper::sendRestartMsg Received Rollback Msg For "+
-			"%v %v. Sending Init Prepare.", streamId, bucket)
+			"%v %v. Update RollbackTs.", streamId, bucket)
 
-		tk.supvRespch <- &MsgRecovery{mType: INDEXER_INIT_PREP_RECOVERY,
-			streamId: streamId,
-			bucket:   bucket}
+		// There is rollback while repairing stream.  RollbackTs could be coming from
+		// 1) Unrelated to the vb under repair
+		// 2) Due to vb under repair
+		// In either case, indexer expects getting StreamBegin even if vb is rolled back.  This will
+		// set the Vb back to STREAM_BEGIN status.  Once all vb are in STREAM_BEGIN status, repairStream
+		// will trigger recovery.
+		rollbackTs := kvresp.(*MsgRollback).GetRollbackTs()
+		if rollbackTs != nil && rollbackTs.Len() > 0 {
+
+			tk.lock.RLock()
+			ts := rollbackTs.Union(tk.ss.streamBucketKVRollbackTsMap[streamId][bucket])
+			if ts != nil {
+				tk.ss.streamBucketKVRollbackTsMap[streamId][bucket] = ts
+			}
+			tk.lock.RUnlock()
+
+			if ts == nil {
+				logging.Errorf("Timekeeper::sendRestartMsg Received Rollback Msg For "+
+					"%v %v. Fail to merge rollbackTs in timekeeper.  Send InitPrepRecovery right away.  RollbackTs %v",
+					streamId, bucket, rollbackTs)
+
+				tk.supvRespch <- &MsgRecovery{
+					mType:     INDEXER_INIT_PREP_RECOVERY,
+					streamId:  streamId,
+					bucket:    bucket,
+					restartTs: tk.ss.computeRollbackTs(streamId, bucket),
+				}
+
+				tk.lock.RLock()
+				delete(tk.ss.streamBucketRepairStopCh[streamId], bucket)
+				tk.lock.RUnlock()
+
+				return
+			}
+
+			tk.lock.RLock()
+			// update repair state even if there is rollback
+			tk.ss.updateRepairState(streamId, bucket, repairVbs, shutdownVbs)
+			tk.lock.RUnlock()
+
+			tk.repairStream(streamId, bucket)
+
+		} else {
+			logging.Errorf("Timekeeper::sendRestartMsg Received Rollback Msg For "+
+				"%v %v. RollbackTs is empty.  Send InitPrepRecovery right away.", streamId, bucket)
+
+			tk.supvRespch <- &MsgRecovery{
+				mType:     INDEXER_INIT_PREP_RECOVERY,
+				streamId:  streamId,
+				bucket:    bucket,
+				restartTs: tk.ss.computeRollbackTs(streamId, bucket),
+			}
+
+			tk.lock.RLock()
+			delete(tk.ss.streamBucketRepairStopCh[streamId], bucket)
+			tk.lock.RUnlock()
+		}
 
 	case KV_STREAM_REPAIR:
 
-		logging.Infof("Timekeeper::sendRestartMsg Received KV Repair Msg For "+
-			"Stream %v Bucket %v. Attempting Stream Repair.", streamId, bucket)
+		// KV Sender has requested a MTR.  Do not clear vb status since
+		// this will make timekeeper diverge from projector.   vb status
+		// should only be reset on recovery or vb shutdown.
 
 		tk.lock.Lock()
 		defer tk.lock.Unlock()
@@ -2760,23 +3068,27 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 			return
 		}
 
-		//reset timer for open stream
-		tk.ss.streamBucketOpenTsMap[streamId][bucket] = nil
-		tk.ss.streamBucketStartTimeMap[streamId][bucket] = uint64(0)
+		// If we need recovery, then trigger recovery right away.
+		if tk.ss.needsRollback(streamId, bucket) {
 
-		resp := kvresp.(*MsgKVStreamRepair)
+			logging.Infof("Timekeeper::sendRestartMsg Received KV Repair Msg For "+
+				"Stream %v Bucket %v. Attempting Rollback.", streamId, bucket)
 
-		//for stream repair, use the HWT. If there has been a rollback, it will
-		//be detected as response of the MTR. Without rollback, even if a vbucket
-		//has moved to a new node, using HWT is sufficient.
-		resp.restartTs = tk.ss.streamBucketHWTMap[streamId][bucket].Copy()
+			tk.supvRespch <- &MsgRecovery{
+				mType:     INDEXER_INIT_PREP_RECOVERY,
+				streamId:  streamId,
+				bucket:    bucket,
+				restartTs: tk.ss.computeRollbackTs(streamId, bucket),
+			}
 
-		//adjust for non-snap aligned ts
-		tk.ss.adjustNonSnapAlignedVbs(resp.restartTs, streamId, bucket, nil, false)
+			delete(tk.ss.streamBucketRepairStopCh[streamId], bucket)
+			return
+		}
 
-		delete(tk.ss.streamBucketRepairStopCh[streamId], bucket)
+		logging.Infof("Timekeeper::sendRestartMsg Received KV Repair Msg For "+
+			"Stream %v Bucket %v. Attempting Stream Repair.", streamId, bucket)
 
-		tk.supvRespch <- resp
+		tk.repairStreamWithMTR(streamId, bucket, kvresp.(*MsgKVStreamRepair))
 
 	default:
 
@@ -2815,18 +3127,49 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 			status := tk.ss.streamBucketStatus[streamId][bucket]
 
 			if status == STREAM_INACTIVE {
-				tk.lock.Unlock()
 				logging.Infof("Timekeeper::sendRestartMsg Found Stream %v Bucket %v In "+
 					"State %v. Skipping RestartVbucket Retry.", streamId, bucket, status)
+
+				tk.lock.Unlock()
 				return
 			}
 
-			tk.ss.markRestartVbError(streamId, bucket)
 			tk.lock.Unlock()
 			tk.repairStream(streamId, bucket)
 		}
 	}
 
+}
+
+func (tk *timekeeper) repairStreamWithMTR(streamId common.StreamId, bucket string, resp *MsgKVStreamRepair) {
+
+	//for stream repair, use the HWT. If there has been a rollback, it will
+	//be detected as response of the MTR. Without rollback, even if a vbucket
+	//has moved to a new node, using HWT is sufficient.
+	resp.restartTs = tk.ss.streamBucketHWTMap[streamId][bucket].Copy()
+	resp.async = tk.ss.streamBucketAsyncMap[streamId][bucket]
+
+	//adjust for non-snap aligned ts
+	tk.ss.adjustNonSnapAlignedVbs(resp.restartTs, streamId, bucket, nil, false)
+
+	//reset timer for open stream
+	tk.ss.streamBucketOpenTsMap[streamId][bucket] = nil
+	tk.ss.streamBucketStartTimeMap[streamId][bucket] = uint64(0)
+
+	// stop repair
+	delete(tk.ss.streamBucketRepairStopCh[streamId], bucket)
+
+	// Update repair state of each vb now, even though MTR has not completed yet, since
+	// repairStream will terminate after this function.
+	for i, _ := range tk.ss.streamBucketRepairStateMap[streamId][bucket] {
+		if tk.ss.streamBucketRepairStateMap[streamId][bucket][i] == REPAIR_SHUTDOWN_VB {
+			logging.Infof("timekeeper::repairStreamWithMTR - set repair state to REPAIR_MTR for %v bucket %v vb %v", streamId, bucket, i)
+			tk.ss.streamBucketRepairStateMap[streamId][bucket][i] = REPAIR_MTR
+			tk.ss.setLastRepairTime(streamId, bucket, Vbucket(i))
+		}
+	}
+
+	tk.supvRespch <- resp
 }
 
 func (tk *timekeeper) handleUpdateIndexInstMap(cmd Message) {

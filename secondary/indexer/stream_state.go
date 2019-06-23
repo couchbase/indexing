@@ -39,9 +39,7 @@ type StreamState struct {
 	streamBucketLastSnapAlignFlushedTsMap map[common.StreamId]BucketLastFlushedTsMap
 	streamBucketPrevVbuuidTs              map[common.StreamId]BucketPrevVbuuidTs
 
-	streamBucketRestartVbErrMap   map[common.StreamId]BucketRestartVbErrMap
-	streamBucketRestartVbTsMap    map[common.StreamId]BucketRestartVbTsMap
-	streamBucketRestartVbRetryMap map[common.StreamId]BucketRestartVbRetryMap
+	streamBucketRestartVbTsMap map[common.StreamId]BucketRestartVbTsMap
 
 	streamBucketFlushInProgressTsMap map[common.StreamId]BucketFlushInProgressTsMap
 	streamBucketAbortInProgressMap   map[common.StreamId]BucketAbortInProgressMap
@@ -54,6 +52,20 @@ type StreamState struct {
 	streamBucketTimerStopCh     map[common.StreamId]BucketTimerStopCh
 	streamBucketLastPersistTime map[common.StreamId]BucketLastPersistTime
 	streamBucketSkippedInMemTs  map[common.StreamId]BucketSkippedInMemTs
+
+	streamBucketAsyncMap map[common.StreamId]BucketStreamAsyncMap
+
+	streamBucketKVRollbackTsMap map[common.StreamId]BucketKVRollbackTsMap
+	streamBucketKVActiveTsMap   map[common.StreamId]BucketKVActiveTsMap
+	streamBucketKVPendingTsMap  map[common.StreamId]BucketKVPendingTsMap
+
+	// state for managing vb repair
+	// 1) When a vb needs a repair, RepairTime is updated.
+	// 2) A repair action is performed.  Once the action is completed, RepairState is updated.
+	// 3) If RepairTime exceeds waitTime (action not effective), escalate to the next action by updating repairTime.
+	streamBucketLastBeginTime     map[common.StreamId]BucketStreamLastBeginTime
+	streamBucketLastRepairTimeMap map[common.StreamId]BucketStreamLastRepairTimeMap
+	streamBucketRepairStateMap    map[common.StreamId]BucketStreamRepairStateMap
 
 	bucketRollbackTime map[string]int64
 }
@@ -76,9 +88,7 @@ type BucketFlushEnabledMap map[string]bool
 type BucketDrainEnabledMap map[string]bool
 type BucketFlushDone map[string]DoneChannel
 
-type BucketRestartVbErrMap map[string]bool
 type BucketRestartVbTsMap map[string]*common.TsVbuuid
-type BucketRestartVbRetryMap map[string]Timestamp
 
 type BucketVbStatusMap map[string]Timestamp
 type BucketVbRefCountMap map[string]Timestamp
@@ -87,7 +97,25 @@ type BucketTimerStopCh map[string]StopChannel
 type BucketLastPersistTime map[string]time.Time
 type BucketSkippedInMemTs map[string]uint64
 
+type BucketStreamAsyncMap map[string]bool
+type BucketStreamLastBeginTime map[string]uint64
+type BucketStreamLastRepairTimeMap map[string]Timestamp
+type BucketKVRollbackTsMap map[string]*common.TsVbuuid
+type BucketKVActiveTsMap map[string]*common.TsVbuuid
+type BucketKVPendingTsMap map[string]*common.TsVbuuid
+type BucketStreamRepairStateMap map[string][]RepairState
+
 type BucketStatus map[string]StreamStatus
+
+type RepairState byte
+
+const (
+	REPAIR_NONE RepairState = iota
+	REPAIR_RESTART_VB
+	REPAIR_SHUTDOWN_VB
+	REPAIR_MTR
+	REPAIR_RECOVERY
+)
 
 func InitStreamState(config common.Config) *StreamState {
 
@@ -103,26 +131,32 @@ func InitStreamState(config common.Config) *StreamState {
 		streamBucketLastFlushedTsMap:          make(map[common.StreamId]BucketLastFlushedTsMap),
 		streamBucketLastSnapAlignFlushedTsMap: make(map[common.StreamId]BucketLastFlushedTsMap),
 		streamBucketRestartTsMap:              make(map[common.StreamId]BucketRestartTsMap),
-		streamBucketOpenTsMap:                 make(map[common.StreamId]BucketOpenTsMap),
-		streamBucketStartTimeMap:              make(map[common.StreamId]BucketStartTimeMap),
-		streamBucketFlushEnabledMap:           make(map[common.StreamId]BucketFlushEnabledMap),
-		streamBucketDrainEnabledMap:           make(map[common.StreamId]BucketDrainEnabledMap),
-		streamBucketFlushDone:                 make(map[common.StreamId]BucketFlushDone),
-		streamBucketVbStatusMap:               make(map[common.StreamId]BucketVbStatusMap),
-		streamBucketVbRefCountMap:             make(map[common.StreamId]BucketVbRefCountMap),
-		streamBucketRestartVbErrMap:           make(map[common.StreamId]BucketRestartVbErrMap),
-		streamBucketRestartVbTsMap:            make(map[common.StreamId]BucketRestartVbTsMap),
-		streamBucketRestartVbRetryMap:         make(map[common.StreamId]BucketRestartVbRetryMap),
-		streamStatus:                          make(map[common.StreamId]StreamStatus),
-		streamBucketStatus:                    make(map[common.StreamId]BucketStatus),
-		streamBucketIndexCountMap:             make(map[common.StreamId]BucketIndexCountMap),
-		streamBucketRepairStopCh:              make(map[common.StreamId]BucketRepairStopCh),
-		streamBucketTimerStopCh:               make(map[common.StreamId]BucketTimerStopCh),
-		streamBucketLastPersistTime:           make(map[common.StreamId]BucketLastPersistTime),
-		streamBucketSkippedInMemTs:            make(map[common.StreamId]BucketSkippedInMemTs),
-		streamBucketLastSnapMarker:            make(map[common.StreamId]BucketLastSnapMarker),
-		streamBucketPrevVbuuidTs:              make(map[common.StreamId]BucketPrevVbuuidTs),
-		bucketRollbackTime:                    make(map[string]int64),
+
+		streamBucketOpenTsMap:         make(map[common.StreamId]BucketOpenTsMap),
+		streamBucketStartTimeMap:      make(map[common.StreamId]BucketStartTimeMap),
+		streamBucketFlushEnabledMap:   make(map[common.StreamId]BucketFlushEnabledMap),
+		streamBucketDrainEnabledMap:   make(map[common.StreamId]BucketDrainEnabledMap),
+		streamBucketFlushDone:         make(map[common.StreamId]BucketFlushDone),
+		streamBucketVbStatusMap:       make(map[common.StreamId]BucketVbStatusMap),
+		streamBucketVbRefCountMap:     make(map[common.StreamId]BucketVbRefCountMap),
+		streamBucketRestartVbTsMap:    make(map[common.StreamId]BucketRestartVbTsMap),
+		streamStatus:                  make(map[common.StreamId]StreamStatus),
+		streamBucketStatus:            make(map[common.StreamId]BucketStatus),
+		streamBucketIndexCountMap:     make(map[common.StreamId]BucketIndexCountMap),
+		streamBucketRepairStopCh:      make(map[common.StreamId]BucketRepairStopCh),
+		streamBucketTimerStopCh:       make(map[common.StreamId]BucketTimerStopCh),
+		streamBucketLastPersistTime:   make(map[common.StreamId]BucketLastPersistTime),
+		streamBucketSkippedInMemTs:    make(map[common.StreamId]BucketSkippedInMemTs),
+		streamBucketLastSnapMarker:    make(map[common.StreamId]BucketLastSnapMarker),
+		streamBucketPrevVbuuidTs:      make(map[common.StreamId]BucketPrevVbuuidTs),
+		bucketRollbackTime:            make(map[string]int64),
+		streamBucketAsyncMap:          make(map[common.StreamId]BucketStreamAsyncMap),
+		streamBucketLastBeginTime:     make(map[common.StreamId]BucketStreamLastBeginTime),
+		streamBucketLastRepairTimeMap: make(map[common.StreamId]BucketStreamLastRepairTimeMap),
+		streamBucketKVRollbackTsMap:   make(map[common.StreamId]BucketKVRollbackTsMap),
+		streamBucketKVActiveTsMap:     make(map[common.StreamId]BucketKVActiveTsMap),
+		streamBucketKVPendingTsMap:    make(map[common.StreamId]BucketKVPendingTsMap),
+		streamBucketRepairStateMap:    make(map[common.StreamId]BucketStreamRepairStateMap),
 	}
 
 	return ss
@@ -183,12 +217,6 @@ func (ss *StreamState) initNewStream(streamId common.StreamId) {
 	bucketVbRefCountMap := make(BucketVbRefCountMap)
 	ss.streamBucketVbRefCountMap[streamId] = bucketVbRefCountMap
 
-	bucketRestartVbRetryMap := make(BucketRestartVbRetryMap)
-	ss.streamBucketRestartVbRetryMap[streamId] = bucketRestartVbRetryMap
-
-	bucketRestartVbErrMap := make(BucketRestartVbErrMap)
-	ss.streamBucketRestartVbErrMap[streamId] = bucketRestartVbErrMap
-
 	bucketRestartVbTsMap := make(BucketRestartVbTsMap)
 	ss.streamBucketRestartVbTsMap[streamId] = bucketRestartVbTsMap
 
@@ -216,6 +244,27 @@ func (ss *StreamState) initNewStream(streamId common.StreamId) {
 	bucketPrevVbuuidTs := make(BucketPrevVbuuidTs)
 	ss.streamBucketPrevVbuuidTs[streamId] = bucketPrevVbuuidTs
 
+	bucketStreamAsyncMap := make(BucketStreamAsyncMap)
+	ss.streamBucketAsyncMap[streamId] = bucketStreamAsyncMap
+
+	bucketStreamLastBeginTime := make(BucketStreamLastBeginTime)
+	ss.streamBucketLastBeginTime[streamId] = bucketStreamLastBeginTime
+
+	bucketStreamLastRepairTimeMap := make(BucketStreamLastRepairTimeMap)
+	ss.streamBucketLastRepairTimeMap[streamId] = bucketStreamLastRepairTimeMap
+
+	bucketKVRollbackTsMap := make(BucketKVRollbackTsMap)
+	ss.streamBucketKVRollbackTsMap[streamId] = bucketKVRollbackTsMap
+
+	bucketKVActiveTsMap := make(BucketKVActiveTsMap)
+	ss.streamBucketKVActiveTsMap[streamId] = bucketKVActiveTsMap
+
+	bucketKVPendingTsMap := make(BucketKVPendingTsMap)
+	ss.streamBucketKVPendingTsMap[streamId] = bucketKVPendingTsMap
+
+	bucketStreamRepairStateMap := make(BucketStreamRepairStateMap)
+	ss.streamBucketRepairStateMap[streamId] = bucketStreamRepairStateMap
+
 	ss.streamStatus[streamId] = STREAM_ACTIVE
 
 }
@@ -238,9 +287,7 @@ func (ss *StreamState) initBucketInStream(streamId common.StreamId,
 	ss.streamBucketFlushDone[streamId][bucket] = nil
 	ss.streamBucketVbStatusMap[streamId][bucket] = NewTimestamp(numVbuckets)
 	ss.streamBucketVbRefCountMap[streamId][bucket] = NewTimestamp(numVbuckets)
-	ss.streamBucketRestartVbRetryMap[streamId][bucket] = NewTimestamp(numVbuckets)
 	ss.streamBucketRestartVbTsMap[streamId][bucket] = nil
-	ss.streamBucketRestartVbErrMap[streamId][bucket] = false
 	ss.streamBucketIndexCountMap[streamId][bucket] = 0
 	ss.streamBucketRepairStopCh[streamId][bucket] = nil
 	ss.streamBucketTimerStopCh[streamId][bucket] = make(StopChannel)
@@ -251,6 +298,13 @@ func (ss *StreamState) initBucketInStream(streamId common.StreamId,
 	ss.streamBucketSkippedInMemTs[streamId][bucket] = 0
 	ss.streamBucketLastSnapMarker[streamId][bucket] = common.NewTsVbuuid(bucket, numVbuckets)
 	ss.streamBucketPrevVbuuidTs[streamId][bucket] = common.NewTsVbuuid(bucket, numVbuckets)
+	ss.streamBucketAsyncMap[streamId][bucket] = false
+	ss.streamBucketLastBeginTime[streamId][bucket] = 0
+	ss.streamBucketLastRepairTimeMap[streamId][bucket] = NewTimestamp(numVbuckets)
+	ss.streamBucketKVRollbackTsMap[streamId][bucket] = common.NewTsVbuuid(bucket, numVbuckets)
+	ss.streamBucketKVActiveTsMap[streamId][bucket] = common.NewTsVbuuid(bucket, numVbuckets)
+	ss.streamBucketKVPendingTsMap[streamId][bucket] = common.NewTsVbuuid(bucket, numVbuckets)
+	ss.streamBucketRepairStateMap[streamId][bucket] = make([]RepairState, numVbuckets)
 
 	ss.streamBucketStatus[streamId][bucket] = STREAM_ACTIVE
 
@@ -279,8 +333,6 @@ func (ss *StreamState) cleanupBucketFromStream(streamId common.StreamId,
 	delete(ss.streamBucketDrainEnabledMap[streamId], bucket)
 	delete(ss.streamBucketVbStatusMap[streamId], bucket)
 	delete(ss.streamBucketVbRefCountMap[streamId], bucket)
-	delete(ss.streamBucketRestartVbRetryMap[streamId], bucket)
-	delete(ss.streamBucketRestartVbErrMap[streamId], bucket)
 	delete(ss.streamBucketRestartVbTsMap[streamId], bucket)
 	delete(ss.streamBucketIndexCountMap[streamId], bucket)
 	delete(ss.streamBucketRepairStopCh[streamId], bucket)
@@ -292,6 +344,13 @@ func (ss *StreamState) cleanupBucketFromStream(streamId common.StreamId,
 	delete(ss.streamBucketLastSnapMarker[streamId], bucket)
 	delete(ss.streamBucketPrevVbuuidTs[streamId], bucket)
 	delete(ss.streamBucketSkippedInMemTs[streamId], bucket)
+	delete(ss.streamBucketAsyncMap[streamId], bucket)
+	delete(ss.streamBucketLastBeginTime[streamId], bucket)
+	delete(ss.streamBucketLastRepairTimeMap[streamId], bucket)
+	delete(ss.streamBucketKVRollbackTsMap[streamId], bucket)
+	delete(ss.streamBucketKVActiveTsMap[streamId], bucket)
+	delete(ss.streamBucketKVPendingTsMap[streamId], bucket)
+	delete(ss.streamBucketRepairStateMap[streamId], bucket)
 
 	if donech, ok := ss.streamBucketFlushDone[streamId][bucket]; ok && donech != nil {
 		close(donech)
@@ -322,8 +381,6 @@ func (ss *StreamState) resetStreamState(streamId common.StreamId) {
 	delete(ss.streamBucketFlushDone, streamId)
 	delete(ss.streamBucketVbStatusMap, streamId)
 	delete(ss.streamBucketVbRefCountMap, streamId)
-	delete(ss.streamBucketRestartVbRetryMap, streamId)
-	delete(ss.streamBucketRestartVbErrMap, streamId)
 	delete(ss.streamBucketRestartVbTsMap, streamId)
 	delete(ss.streamBucketIndexCountMap, streamId)
 	delete(ss.streamBucketLastPersistTime, streamId)
@@ -334,6 +391,13 @@ func (ss *StreamState) resetStreamState(streamId common.StreamId) {
 	delete(ss.streamBucketSkippedInMemTs, streamId)
 	delete(ss.streamBucketLastSnapMarker, streamId)
 	delete(ss.streamBucketPrevVbuuidTs, streamId)
+	delete(ss.streamBucketAsyncMap, streamId)
+	delete(ss.streamBucketLastBeginTime, streamId)
+	delete(ss.streamBucketLastRepairTimeMap, streamId)
+	delete(ss.streamBucketKVRollbackTsMap, streamId)
+	delete(ss.streamBucketKVActiveTsMap, streamId)
+	delete(ss.streamBucketKVPendingTsMap, streamId)
+	delete(ss.streamBucketRepairStateMap, streamId)
 
 	ss.streamStatus[streamId] = STREAM_INACTIVE
 
@@ -359,21 +423,6 @@ func (ss *StreamState) setRollbackTime(bucket string, rollbackTime int64) {
 	if rollbackTime != 0 {
 		ss.bucketRollbackTime[bucket] = rollbackTime
 	}
-}
-
-func (ss *StreamState) clearRestartVbRetry(streamId common.StreamId, bucket string, vb Vbucket) {
-
-	ss.streamBucketRestartVbRetryMap[streamId][bucket][vb] = Seqno(0)
-}
-
-func (ss *StreamState) markRestartVbError(streamId common.StreamId, bucket string) {
-
-	ss.streamBucketRestartVbErrMap[streamId][bucket] = true
-}
-
-func (ss *StreamState) clearRestartVbError(streamId common.StreamId, bucket string) {
-
-	ss.streamBucketRestartVbErrMap[streamId][bucket] = false
 }
 
 func (ss *StreamState) getVbRefCount(streamId common.StreamId, bucket string, vb Vbucket) int {
@@ -413,6 +462,26 @@ func (ss *StreamState) computeRestartTs(streamId common.StreamId,
 	return restartTs
 }
 
+//computes the rollback Ts for the given bucket and stream
+func (ss *StreamState) computeRollbackTs(streamId common.StreamId, bucket string) *common.TsVbuuid {
+
+	if rollTs, ok := ss.streamBucketKVRollbackTsMap[streamId][bucket]; ok && rollTs.Len() > 0 {
+		// Get restart Ts
+		restartTs := ss.computeRestartTs(streamId, bucket)
+		if restartTs == nil {
+			numVbuckets := ss.config["numVbuckets"].Int()
+			restartTs = common.NewTsVbuuid(bucket, numVbuckets)
+		} else {
+			ss.adjustNonSnapAlignedVbs(restartTs, streamId, bucket, nil, false)
+		}
+
+		// overlay KV rollback Ts on top of restart Ts
+		return restartTs.Union(ss.streamBucketKVRollbackTsMap[streamId][bucket])
+	}
+
+	return nil
+}
+
 func (ss *StreamState) setHWTFromRestartTs(streamId common.StreamId,
 	bucket string) {
 
@@ -440,16 +509,35 @@ func (ss *StreamState) setHWTFromRestartTs(streamId common.StreamId,
 	}
 }
 
+func (ss *StreamState) updateRepairState(streamId common.StreamId,
+	bucket string, repairVbs []Vbucket, shutdownVbs []Vbucket) {
+
+	for _, vbno := range repairVbs {
+		if ss.streamBucketVbStatusMap[streamId][bucket][vbno] == VBS_STREAM_END &&
+			ss.streamBucketRepairStateMap[streamId][bucket][int(vbno)] == REPAIR_NONE {
+			logging.Infof("StreamState::set repair state to RESTART_VB for %v bucket %v vb %v", streamId, bucket, vbno)
+			ss.streamBucketRepairStateMap[streamId][bucket][int(vbno)] = REPAIR_RESTART_VB
+		}
+	}
+
+	for _, vbno := range shutdownVbs {
+		if ss.streamBucketVbStatusMap[streamId][bucket][vbno] == VBS_CONN_ERROR &&
+			ss.streamBucketRepairStateMap[streamId][bucket][int(vbno)] == REPAIR_RESTART_VB {
+			logging.Infof("StreamState::set repair state to SHUTDOWN_VB for %v bucket %v vb %v", streamId, bucket, vbno)
+			ss.streamBucketRepairStateMap[streamId][bucket][int(vbno)] = REPAIR_SHUTDOWN_VB
+		}
+	}
+}
+
 // This function gets the list of vb and seqno to repair stream.
 // Termination condition for stream repair:
 // 1) All vb are in StreamBegin state
 // 2) All vb have ref count == 1
 // 3) There is no error in stream repair
 func (ss *StreamState) getRepairTsForBucket(streamId common.StreamId,
-	bucket string) (*common.TsVbuuid, bool, []Vbucket) {
+	bucket string) (*common.TsVbuuid, bool, []Vbucket, []Vbucket) {
 
-	// always repair if the last repair is not successful
-	anythingToRepair := ss.streamBucketRestartVbErrMap[streamId][bucket]
+	anythingToRepair := false
 
 	numVbuckets := ss.config["numVbuckets"].Int()
 	repairTs := common.NewTsVbuuid(bucket, numVbuckets)
@@ -458,44 +546,36 @@ func (ss *StreamState) getRepairTsForBucket(streamId common.StreamId,
 	var count = 0
 
 	hwtTs := ss.streamBucketHWTMap[streamId][bucket]
-	hasConnError := ss.hasConnectionError(streamId, bucket)
 
-	// First step : Find out if there is any StreamEnd or ConnError on any vb.
+	// First step: Find out if any StreamEnd needs to be escalated to ConnErr.
+	// If so, add it to ShutdownVbs (for shutdown/restart).
 	for i, s := range ss.streamBucketVbStatusMap[streamId][bucket] {
-		if s == VBS_STREAM_END || s == VBS_CONN_ERROR {
+		if s == VBS_STREAM_END &&
+			ss.canShutdownOnRetry(streamId, bucket, Vbucket(i)) {
 
-			repairVbs = ss.addRepairTs(repairTs, hwtTs, Vbucket(i), repairVbs)
-			count++
-			anythingToRepair = true
-			if hasConnError {
-				// Make sure that we shutdown vb for BOTH StreamEnd and
-				// ConnErr.  This is to ensure to cover the case where
-				// indexer may miss a StreamBegin from the new owner
-				// due to connection error. Dataport will not be able
-				// to tell indexer that vb needs to start since
-				// StreamBegin never arrives.
-				shutdownVbs = append(shutdownVbs, Vbucket(i))
-			}
+			logging.Infof("StreamState::getRepairTsForBucket\n\t"+
+				"Bucket %v StreamId %v Vbucket %v exceeds repair wait time. Convert to CONN_ERROR.",
+				bucket, streamId, i)
+
+			ss.makeConnectionError(streamId, bucket, Vbucket(i))
 		}
 	}
 
-	// Second step: Find out if any StreamEnd over max retry limit.  If so,
-	// add it to ShutdownVbs (for shutdown/restart).  Only need to do this
-	// if there is no vb marked with conn error because vb with StreamEnd
-	// would already be in shutdownVbs, if there is connErr.
-	if !hasConnError {
-		for i, s := range ss.streamBucketVbStatusMap[streamId][bucket] {
-			if s == VBS_STREAM_END {
-				vbs := ss.streamBucketRestartVbRetryMap[streamId][bucket]
-				vbs[i] = Seqno(int(vbs[i]) + 1)
+	// Second step : Repair any StreamEnd, ConnError on any vb.
+	for i, s := range ss.streamBucketVbStatusMap[streamId][bucket] {
+		if s == VBS_STREAM_END || s == VBS_CONN_ERROR {
 
-				if int(vbs[i]) > REPAIR_RETRY_BEFORE_SHUTDOWN {
-					logging.Infof("StreamState::getRepairTsForBucket\n\t"+
-						"Bucket %v StreamId %v Vbucket %v repair is being retried for %v times.",
-						bucket, streamId, i, vbs[i])
-					ss.clearRestartVbRetry(streamId, bucket, Vbucket(i))
-					shutdownVbs = append(shutdownVbs, Vbucket(i))
-				}
+			count++
+			anythingToRepair = true
+			repairVbs = ss.addRepairTs(repairTs, hwtTs, Vbucket(i), repairVbs)
+
+			if s == VBS_CONN_ERROR &&
+				ss.streamBucketRepairStateMap[streamId][bucket][i] < REPAIR_SHUTDOWN_VB {
+				logging.Infof("StreamState::getRepairTsForBucket\n\t"+
+					"Bucket %v StreamId %v Vbucket %v. Shutdown/Restart Vb.",
+					bucket, streamId, i)
+
+				shutdownVbs = append(shutdownVbs, Vbucket(i))
 			}
 		}
 	}
@@ -505,13 +585,13 @@ func (ss *StreamState) getRepairTsForBucket(streamId common.StreamId,
 	// to connection error).  Make the vb as ConnErr and continue to repair.
 	// Note: Do not check for VBS_INIT.  RepairMissingStreamBegin will ensure that
 	// indexer is getting all StreamBegin.
-	if !anythingToRepair {
+	if !anythingToRepair && !ss.needsRollback(streamId, bucket) {
 		for i, s := range ss.streamBucketVbStatusMap[streamId][bucket] {
-			count := ss.streamBucketVbRefCountMap[streamId][bucket][i]
-			if count != 1 && s != VBS_INIT {
+			refCount := ss.streamBucketVbRefCountMap[streamId][bucket][i]
+			if refCount != 1 && s != VBS_INIT {
 				logging.Infof("StreamState::getRepairTsForBucket\n\t"+
 					"Bucket %v StreamId %v Vbucket %v have ref count (%v != 1). Convert to CONN_ERROR.",
-					bucket, streamId, i, count)
+					bucket, streamId, i, refCount)
 				// Make it a ConnErr such that subsequent retry will
 				// force a shutdown/restart sequence.
 				ss.makeConnectionError(streamId, bucket, Vbucket(i))
@@ -523,30 +603,8 @@ func (ss *StreamState) getRepairTsForBucket(streamId common.StreamId,
 		}
 	}
 
-	// Forth Step: If there is something to repair, but indexer has received StreamBegin for
-	// all vb, then retry with the last timestamp.
-	if anythingToRepair && count == 0 {
-		logging.Infof("StreamState::getRepairTsForBucket\n\t"+
-			"Bucket %v StreamId %v previous repair fails. Retry using previous repairTs",
-			bucket, streamId)
-
-		ts := ss.streamBucketRestartVbTsMap[streamId][bucket]
-		if ts != nil {
-			repairTs = ts.Copy()
-		} else {
-			repairTs = hwtTs.Copy()
-		}
-
-		shutdownVbs = nil
-		vbnos := repairTs.GetVbnos()
-		for _, vbno := range vbnos {
-			shutdownVbs = append(shutdownVbs, Vbucket(vbno))
-		}
-	}
-
 	if !anythingToRepair {
 		ss.streamBucketRestartVbTsMap[streamId][bucket] = nil
-		ss.clearRestartVbError(streamId, bucket)
 	} else {
 		ss.streamBucketRestartVbTsMap[streamId][bucket] = repairTs.Copy()
 	}
@@ -557,7 +615,123 @@ func (ss *StreamState) getRepairTsForBucket(streamId common.StreamId,
 		"Bucket %v StreamId %v repairTS %v",
 		bucket, streamId, repairTs)
 
-	return repairTs, anythingToRepair, shutdownVbs
+	return repairTs, anythingToRepair, shutdownVbs, repairVbs
+}
+
+func (ss *StreamState) canShutdownOnRetry(streamId common.StreamId, bucket string, vbno Vbucket) bool {
+
+	if status := ss.streamBucketVbStatusMap[streamId][bucket][int(vbno)]; status != VBS_STREAM_END {
+		return false
+	}
+
+	if ss.streamBucketRepairStateMap[streamId][bucket][int(vbno)] != REPAIR_RESTART_VB {
+		return false
+	}
+
+	waitTime := int64(ss.config["timekeeper.escalate.StreamBeginWaitTime"].Int()) * int64(time.Second)
+
+	if _, pendingVbuuid := ss.getKVPendingTs(streamId, bucket, vbno); pendingVbuuid != 0 {
+		// acknowledged by projector but not yet active
+		waitTime = waitTime * 2
+	}
+
+	if waitTime > 0 {
+		exceedBeginTime := time.Now().UnixNano()-int64(ss.streamBucketLastBeginTime[streamId][bucket]) > waitTime
+		exceedRepairTime := time.Now().UnixNano()-int64(ss.streamBucketLastRepairTimeMap[streamId][bucket][vbno]) > waitTime
+
+		return exceedBeginTime && exceedRepairTime
+	}
+
+	return false
+}
+
+func (ss *StreamState) startMTROnRetry(streamId common.StreamId, bucket string) bool {
+
+	startMTR := false
+
+	for vbno, status := range ss.streamBucketVbStatusMap[streamId][bucket] {
+
+		if status == VBS_STREAM_END {
+			return false
+		}
+
+		if status != VBS_CONN_ERROR {
+			continue
+		}
+
+		if ss.streamBucketRepairStateMap[streamId][bucket][vbno] != REPAIR_SHUTDOWN_VB {
+			continue
+		}
+
+		waitTime := int64(ss.config["timekeeper.escalate.StreamBeginWaitTime"].Int()) * int64(time.Second)
+
+		if _, pendingVbuuid := ss.getKVPendingTs(streamId, bucket, Vbucket(vbno)); pendingVbuuid != 0 {
+			// acknowledged by projector but not yet active
+			waitTime = waitTime * 2
+		}
+
+		if waitTime > 0 {
+			exceedBeginTime := time.Now().UnixNano()-int64(ss.streamBucketLastBeginTime[streamId][bucket]) > waitTime
+			exceedRepairTime := time.Now().UnixNano()-int64(ss.streamBucketLastRepairTimeMap[streamId][bucket][vbno]) > waitTime
+
+			if exceedBeginTime && exceedRepairTime {
+				startMTR = true
+			}
+		}
+	}
+
+	return startMTR
+}
+
+func (ss *StreamState) startRecoveryOnRetry(streamId common.StreamId, bucket string) bool {
+
+	//FIXME: Currently, timekeeper can hang on initial index build if
+	// 1) it is the first index
+	// 2) there is recovery (no rollback) got triggered during initial build
+	// There is race condition:
+	// 1) During recovery, timekeeper execute checkInitialBuildDone.
+	// 2) If build is now done due to recovery, timekeeper can delete the build info.
+	// 3) Timekeeper now call indexer to checkInitialBuildDone
+	// 4) Indexer will skip
+	// 5) Later on when recoveryDone, timekeeper will call checkInitialBuildDone again.
+	// 6) But since build info is deleted, it will not trigger another buildDone action.
+	// 7) Indexer, therfore, cannot move the index to ACTIVE state.
+	return false
+
+	startRecovery := false
+
+	for vbno, status := range ss.streamBucketVbStatusMap[streamId][bucket] {
+
+		if status == VBS_STREAM_END {
+			return false
+		}
+
+		if status != VBS_CONN_ERROR {
+			continue
+		}
+
+		if ss.streamBucketRepairStateMap[streamId][bucket][vbno] != REPAIR_MTR {
+			continue
+		}
+
+		waitTime := int64(ss.config["timekeeper.escalate.StreamBeginWaitTime"].Int()) * int64(time.Second)
+
+		if _, pendingVbuuid := ss.getKVPendingTs(streamId, bucket, Vbucket(vbno)); pendingVbuuid != 0 {
+			// acknowledged by projector but not yet active
+			waitTime = waitTime * 2
+		}
+
+		if waitTime > 0 {
+			exceedBeginTime := time.Now().UnixNano()-int64(ss.streamBucketLastBeginTime[streamId][bucket]) > waitTime
+			exceedRepairTime := time.Now().UnixNano()-int64(ss.streamBucketLastRepairTimeMap[streamId][bucket][vbno]) > waitTime
+
+			if exceedBeginTime && exceedRepairTime {
+				startRecovery = true
+			}
+		}
+	}
+
+	return startRecovery
 }
 
 func (ss *StreamState) hasConnectionError(streamId common.StreamId, bucket string) bool {
@@ -576,9 +750,18 @@ func (ss *StreamState) hasConnectionError(streamId common.StreamId, bucket strin
 //
 func (ss *StreamState) makeConnectionError(streamId common.StreamId, bucket string, vbno Vbucket) {
 
-	ss.clearVbRefCount(streamId, bucket, vbno)
 	ss.streamBucketVbStatusMap[streamId][bucket][vbno] = VBS_CONN_ERROR
-	ss.clearRestartVbRetry(streamId, bucket, vbno)
+	ss.clearVbRefCount(streamId, bucket, vbno)
+
+	// clear rollbackTs and failTs for this vbucket
+	ss.clearKVActiveTs(streamId, bucket, vbno)
+	ss.clearKVPendingTs(streamId, bucket, vbno)
+	ss.clearKVRollbackTs(streamId, bucket, vbno)
+
+	ss.streamBucketRepairStateMap[streamId][bucket][vbno] = REPAIR_RESTART_VB
+	ss.setLastRepairTime(streamId, bucket, vbno)
+
+	logging.Infof("StreamState::connection error - set repair state to RESTART_VB for %v bucket %v vb %v", streamId, bucket, vbno)
 }
 
 func (ss *StreamState) addRepairTs(repairTs *common.TsVbuuid, hwtTs *common.TsVbuuid, vbno Vbucket, repairSeqno []Vbucket) []Vbucket {
@@ -589,6 +772,242 @@ func (ss *StreamState) addRepairTs(repairTs *common.TsVbuuid, hwtTs *common.TsVb
 	repairTs.Snapshots[vbno][1] = hwtTs.Snapshots[vbno][1]
 
 	return append(repairSeqno, vbno)
+}
+
+func (ss *StreamState) addKVRollbackTs(streamId common.StreamId, bucket string, vbno Vbucket, seqno uint64, vbuuid uint64) {
+
+	rollbackTs := ss.streamBucketKVRollbackTsMap[streamId][bucket]
+	if rollbackTs == nil {
+		numVbuckets := ss.config["numVbuckets"].Int()
+		rollbackTs = common.NewTsVbuuid(bucket, numVbuckets)
+		ss.streamBucketKVRollbackTsMap[streamId][bucket] = rollbackTs
+	}
+
+	rollbackTs.Seqnos[vbno] = seqno
+	rollbackTs.Vbuuids[vbno] = vbuuid
+	rollbackTs.Snapshots[vbno][0] = 0
+	rollbackTs.Snapshots[vbno][1] = 0
+}
+
+func (ss *StreamState) clearKVRollbackTs(streamId common.StreamId, bucket string, vbno Vbucket) {
+
+	rollbackTs := ss.streamBucketKVRollbackTsMap[streamId][bucket]
+	if rollbackTs != nil {
+		rollbackTs.Seqnos[vbno] = 0
+		rollbackTs.Vbuuids[vbno] = 0
+		rollbackTs.Snapshots[vbno][0] = 0
+		rollbackTs.Snapshots[vbno][1] = 0
+	}
+}
+
+func (ss *StreamState) getKVRollbackTs(streamId common.StreamId, bucket string, vbno Vbucket) (uint64, uint64) {
+
+	rollbackTs := ss.streamBucketKVRollbackTsMap[streamId][bucket]
+	if rollbackTs == nil {
+		return 0, 0
+	}
+	return rollbackTs.Seqnos[vbno], rollbackTs.Vbuuids[vbno]
+}
+
+func (ss *StreamState) needsRollback(streamId common.StreamId, bucket string) bool {
+
+	rollbackTs := ss.streamBucketKVRollbackTsMap[streamId][bucket]
+	for _, vbuuid := range rollbackTs.Vbuuids {
+		if vbuuid != 0 {
+			return true
+		}
+	}
+
+	return false
+}
+
+func (ss *StreamState) numKVRollbackTs(streamId common.StreamId, bucket string) int {
+
+	count := 0
+	rollbackTs := ss.streamBucketKVRollbackTsMap[streamId][bucket]
+	for _, vbuuid := range rollbackTs.Vbuuids {
+		if vbuuid != 0 {
+			count++
+		}
+	}
+
+	return count
+}
+
+func (ss *StreamState) addKVActiveTs(streamId common.StreamId, bucket string, vbno Vbucket, seqno uint64, vbuuid uint64) {
+
+	activeTs := ss.streamBucketKVActiveTsMap[streamId][bucket]
+	if activeTs == nil {
+		numVbuckets := ss.config["numVbuckets"].Int()
+		activeTs = common.NewTsVbuuid(bucket, numVbuckets)
+		ss.streamBucketKVActiveTsMap[streamId][bucket] = activeTs
+	}
+
+	activeTs.Seqnos[vbno] = seqno
+	activeTs.Vbuuids[vbno] = vbuuid
+	activeTs.Snapshots[vbno][0] = 0
+	activeTs.Snapshots[vbno][1] = 0
+}
+
+func (ss *StreamState) clearKVActiveTs(streamId common.StreamId, bucket string, vbno Vbucket) {
+
+	activeTs := ss.streamBucketKVActiveTsMap[streamId][bucket]
+	if activeTs != nil {
+		activeTs.Seqnos[vbno] = 0
+		activeTs.Vbuuids[vbno] = 0
+		activeTs.Snapshots[vbno][0] = 0
+		activeTs.Snapshots[vbno][1] = 0
+	}
+}
+
+func (ss *StreamState) getKVActiveTs(streamId common.StreamId, bucket string, vbno Vbucket) (uint64, uint64) {
+
+	activeTs := ss.streamBucketKVActiveTsMap[streamId][bucket]
+	if activeTs == nil {
+		return 0, 0
+	}
+
+	return activeTs.Seqnos[vbno], activeTs.Vbuuids[vbno]
+}
+
+func (ss *StreamState) addKVPendingTs(streamId common.StreamId, bucket string, vbno Vbucket, seqno uint64, vbuuid uint64) {
+
+	pendingTs := ss.streamBucketKVPendingTsMap[streamId][bucket]
+	if pendingTs == nil {
+		numVbuckets := ss.config["numVbuckets"].Int()
+		pendingTs = common.NewTsVbuuid(bucket, numVbuckets)
+		ss.streamBucketKVPendingTsMap[streamId][bucket] = pendingTs
+	}
+
+	pendingTs.Seqnos[vbno] = seqno
+	pendingTs.Vbuuids[vbno] = vbuuid
+	pendingTs.Snapshots[vbno][0] = 0
+	pendingTs.Snapshots[vbno][1] = 0
+}
+
+func (ss *StreamState) clearKVPendingTs(streamId common.StreamId, bucket string, vbno Vbucket) {
+
+	pendingTs := ss.streamBucketKVPendingTsMap[streamId][bucket]
+	if pendingTs != nil {
+		pendingTs.Seqnos[vbno] = 0
+		pendingTs.Vbuuids[vbno] = 0
+		pendingTs.Snapshots[vbno][0] = 0
+		pendingTs.Snapshots[vbno][1] = 0
+	}
+}
+
+func (ss *StreamState) getKVPendingTs(streamId common.StreamId, bucket string, vbno Vbucket) (uint64, uint64) {
+
+	pendingTs := ss.streamBucketKVPendingTsMap[streamId][bucket]
+	if pendingTs == nil {
+		return 0, 0
+	}
+
+	return pendingTs.Seqnos[vbno], pendingTs.Vbuuids[vbno]
+}
+
+func (ss *StreamState) setLastRepairTime(streamId common.StreamId, bucket string, vbno Vbucket) {
+
+	repairTimeMap := ss.streamBucketLastRepairTimeMap[streamId][bucket]
+	if repairTimeMap == nil {
+		numVbuckets := ss.config["numVbuckets"].Int()
+		repairTimeMap = NewTimestamp(numVbuckets)
+		ss.streamBucketLastRepairTimeMap[streamId][bucket] = repairTimeMap
+	}
+	repairTimeMap[vbno] = Seqno(time.Now().UnixNano())
+}
+
+func (ss *StreamState) getLastRepairTime(streamId common.StreamId, bucket string, vbno Vbucket) int64 {
+
+	repairTimeMap := ss.streamBucketLastRepairTimeMap[streamId][bucket]
+	if repairTimeMap == nil {
+		return 0
+	}
+	return int64(repairTimeMap[vbno])
+}
+
+func (ss *StreamState) clearLastRepairTime(streamId common.StreamId, bucket string, vbno Vbucket) {
+
+	repairTimeMap := ss.streamBucketLastRepairTimeMap[streamId][bucket]
+	if repairTimeMap != nil {
+		repairTimeMap[vbno] = Seqno(0)
+	}
+}
+
+func (ss *StreamState) resetAllLastRepairTime(streamId common.StreamId, bucket string) {
+
+	now := Seqno(time.Now().UnixNano())
+	for i, t := range ss.streamBucketLastRepairTimeMap[streamId][bucket] {
+		if t != 0 {
+			ss.streamBucketLastRepairTimeMap[streamId][bucket][i] = now
+		}
+	}
+}
+
+func (ss *StreamState) clearRepairState(streamId common.StreamId, bucket string, vbno Vbucket) {
+
+	state := ss.streamBucketRepairStateMap[streamId][bucket]
+	if state != nil {
+		ss.streamBucketRepairStateMap[streamId][bucket][vbno] = REPAIR_NONE
+	}
+}
+
+func (ss *StreamState) clearAllRepairState(streamId common.StreamId, bucket string) {
+
+	logging.Infof("StreamState::clear all repair state for %v bucket %v", streamId, bucket)
+
+	numVbuckets := ss.config["numVbuckets"].Int()
+	ss.streamBucketRepairStateMap[streamId][bucket] = make([]RepairState, numVbuckets)
+	ss.streamBucketLastBeginTime[streamId][bucket] = 0
+	ss.streamBucketLastRepairTimeMap[streamId][bucket] = NewTimestamp(numVbuckets)
+	ss.streamBucketKVActiveTsMap[streamId][bucket] = common.NewTsVbuuid(bucket, numVbuckets)
+	ss.streamBucketKVPendingTsMap[streamId][bucket] = common.NewTsVbuuid(bucket, numVbuckets)
+	ss.streamBucketKVRollbackTsMap[streamId][bucket] = common.NewTsVbuuid(bucket, numVbuckets)
+}
+
+//
+// Return true if all vb has received streamBegin regardless of rollbackTs.
+// If indexer has seen StreamBegin for a vb, but the vb has later received
+// StreamEnd or ConnErr, this function will still return false.
+//
+func (ss *StreamState) seenAllVbs(streamId common.StreamId, bucket string) bool {
+
+	numVbuckets := ss.config["numVbuckets"].Int()
+	vbs := ss.streamBucketVbStatusMap[streamId][bucket]
+
+	for i := 0; i < numVbuckets; i++ {
+		status := vbs[i]
+		if status != VBS_STREAM_BEGIN {
+			return false
+		}
+	}
+
+	return true
+}
+
+func (ss *StreamState) canRollbackNow(streamId common.StreamId, bucket string) (bool, bool) {
+
+	canRollback := false
+	needsRollback := false
+
+	if ss.needsRollback(streamId, bucket) {
+		needsRollback = true
+
+		numRollback := ss.numKVRollbackTs(streamId, bucket)
+		numVbuckets := ss.config["numVbuckets"].Int()
+
+		waitTime := int64(ss.config["timekeeper.rollback.StreamBeginWaitTime"].Int()) * int64(time.Second)
+		exceedWaitTime := time.Now().UnixNano()-int64(ss.streamBucketLastBeginTime[streamId][bucket]) > waitTime
+
+		canRollback = !ss.streamBucketAsyncMap[streamId][bucket] || exceedWaitTime || numRollback == numVbuckets
+	}
+
+	if !needsRollback {
+		needsRollback = ss.startRecoveryOnRetry(streamId, bucket)
+		canRollback = needsRollback
+	}
+
+	return needsRollback, canRollback
 }
 
 //If a snapshot marker has been received but no mutation for that snapshot,

@@ -2857,6 +2857,7 @@ func (idx *indexer) handleInitPrepRecovery(msg Message) {
 	streamId := msg.(*MsgRecovery).GetStreamId()
 	rollbackTs := msg.(*MsgRecovery).GetRestartTs()
 	retryTs := msg.(*MsgRecovery).GetRetryTs()
+	requestCh := msg.(*MsgRecovery).GetRequestCh()
 
 	//if the stream is inactive(e.g. all indexes get dropped)
 	if idx.getStreamBucketState(streamId, bucket) == STREAM_INACTIVE {
@@ -2864,6 +2865,28 @@ func (idx *indexer) handleInitPrepRecovery(msg Message) {
 			"Skipping INIT_PREPARE and Cleaning up.", streamId, bucket, idx.getStreamBucketState(streamId, bucket))
 		idx.cleanupStreamBucketState(streamId, bucket)
 	} else {
+
+		allowRequest := true
+
+		// If this is a new recovery request
+		if requestCh == nil {
+			// Do not allow recovery if there is an MTR or recovery going on.
+			if idx.streamBucketRequestStopCh[streamId][bucket] != nil ||
+				idx.getStreamBucketState(streamId, bucket) != STREAM_ACTIVE {
+				allowRequest = false
+			}
+		} else {
+			// If this is a recursive request, make sure it has the same requestStopCh.
+			if idx.streamBucketRequestStopCh[streamId][bucket] != requestCh {
+				allowRequest = false
+			}
+		}
+
+		if !allowRequest {
+			logging.Infof("handleInitPrepRecovery: stream %v bucket %v cannot initiate another recovery while previous recovery in progress.")
+			return
+		}
+
 		if rollbackTs != nil {
 			idx.setRollbackTs(streamId, bucket, rollbackTs)
 		}
@@ -2936,12 +2959,12 @@ func (idx *indexer) handleInitRecovery(msg Message) {
 			logging.Infof("Indexer::handleInitRecovery StreamId %v Bucket %v Using RetryTs %v",
 				streamId, bucket, rts)
 			idx.streamBucketRetryTs[streamId][bucket] = nil
-			idx.startBucketStream(streamId, bucket, rts, nil, nil)
+			idx.startBucketStream(streamId, bucket, rts, nil, nil, false, false)
 		} else {
 			idx.processRollback(streamId, bucket, ts)
 		}
 	} else {
-		idx.startBucketStream(streamId, bucket, restartTs, retryTs, nil)
+		idx.startBucketStream(streamId, bucket, restartTs, retryTs, nil, false, false)
 	}
 
 }
@@ -2968,7 +2991,7 @@ func (idx *indexer) handleStorageRollbackDone(msg Message) {
 		common.CrashOnError(err)
 	}
 
-	idx.startBucketStream(streamId, bucket, restartTs, nil, nil)
+	idx.startBucketStream(streamId, bucket, restartTs, nil, nil, false, false)
 	go idx.collectProgressStats(true)
 
 }
@@ -3012,6 +3035,7 @@ func (idx *indexer) handleKVStreamRepair(msg Message) {
 	bucket := msg.(*MsgKVStreamRepair).GetBucket()
 	streamId := msg.(*MsgKVStreamRepair).GetStreamId()
 	restartTs := msg.(*MsgKVStreamRepair).GetRestartTs()
+	async := msg.(*MsgKVStreamRepair).GetAsync()
 
 	is := idx.getIndexerState()
 	if is == common.INDEXER_PREPARE_UNPAUSE {
@@ -3032,7 +3056,7 @@ func (idx *indexer) handleKVStreamRepair(msg Message) {
 	if idx.checkStreamRequestPending(streamId, bucket) == false {
 		logging.Infof("Indexer::handleKVStreamRepair Initiate Stream Repair %v Bucket %v",
 			streamId, bucket)
-		idx.startBucketStream(streamId, bucket, restartTs, nil, nil)
+		idx.startBucketStream(streamId, bucket, restartTs, nil, nil, true, async)
 	} else {
 		logging.Infof("Indexer::handleKVStreamRepair Ignore Stream Repair Request for Stream "+
 			"%v Bucket %v. Request In Progress.", streamId, bucket)
@@ -3501,6 +3525,11 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 
 	respCh := make(MsgChannel)
 
+	clustAddr := idx.config["clusterAddr"].String()
+	numVb := idx.config["numVbuckets"].Int()
+	enableAsync := idx.config["enableAsyncOpenStream"].Bool()
+
+	async := enableAsync && clusterVersion(clustAddr) >= common.INDEXER_65_VERSION
 	cmd = &MsgStreamUpdate{mType: OPEN_STREAM,
 		streamId:           buildStream,
 		bucket:             bucket,
@@ -3509,7 +3538,8 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 		respCh:             respCh,
 		restartTs:          nil,
 		allowMarkFirstSnap: true,
-		rollbackTime:       idx.bucketRollbackTimes[bucket]}
+		rollbackTime:       idx.bucketRollbackTimes[bucket],
+		async:              async}
 
 	//send stream update to timekeeper
 	if resp := idx.sendStreamUpdateToWorker(cmd, idx.tkCmdCh,
@@ -3539,9 +3569,6 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 		idx.streamBucketRequestStopCh[buildStream] = make(BucketRequestStopCh)
 	}
 	idx.streamBucketRequestStopCh[buildStream][bucket] = stopCh
-
-	clustAddr := idx.config["clusterAddr"].String()
-	numVb := idx.config["numVbuckets"].Int()
 
 	reqLock := idx.acquireStreamRequestLock(bucket, buildStream)
 	go func(reqLock *kvRequest) {
@@ -3574,13 +3601,15 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 					//This makes sure indexer doesn't use a timestamp which can never
 					//be caught up to (due to kv rollback).
 					//if there is a failover after this, it will be observed as a rollback
+
 					// Asyncronously compute the KV timestamp
 					go idx.computeBucketBuildTsAsync(clustAddr, bucket, numVb, buildStream)
 
 					idx.internalRecvCh <- &MsgStreamInfo{mType: STREAM_REQUEST_DONE,
-						streamId: buildStream,
-						bucket:   bucket,
-						activeTs: resp.(*MsgSuccessOpenStream).GetActiveTs(),
+						streamId:  buildStream,
+						bucket:    bucket,
+						activeTs:  resp.(*MsgSuccessOpenStream).GetActiveTs(),
+						pendingTs: resp.(*MsgSuccessOpenStream).GetPendingTs(),
 					}
 					break retryloop
 
@@ -3617,15 +3646,17 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 							bucket, respErr.cause, MAX_PROJ_RETRY)
 
 						idx.internalRecvCh <- &MsgRecovery{
-							mType:    INDEXER_INIT_PREP_RECOVERY,
-							streamId: buildStream,
-							bucket:   bucket,
+							mType:     INDEXER_INIT_PREP_RECOVERY,
+							streamId:  buildStream,
+							bucket:    bucket,
+							requestCh: stopCh,
 						}
 						break retryloop
 					} else {
 						logging.Errorf("Indexer::sendStreamUpdateForBuildIndex Stream %v Bucket %v "+
 							"Error from Projector %v. Retrying %v.", buildStream, bucket,
 							respErr.cause, count)
+
 						time.Sleep(KV_RETRY_INTERVAL * time.Millisecond)
 					}
 				}
@@ -4308,7 +4339,6 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 								bucket:   bucket,
 							}
 							break retryloop
-
 						}
 					} else {
 						logging.Errorf("Indexer::handleInitialBuildDone Stream %v Bucket %v "+
@@ -4635,7 +4665,8 @@ func (idx *indexer) stopBucketStream(streamId common.StreamId, bucket string) {
 }
 
 func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
-	restartTs *common.TsVbuuid, retryTs *common.TsVbuuid, allNilSnapsOnWarmup map[string]bool) {
+	restartTs *common.TsVbuuid, retryTs *common.TsVbuuid, allNilSnapsOnWarmup map[string]bool,
+	inRepair bool, async bool) {
 
 	logging.Infof("Indexer::startBucketStream Stream: %v Bucket: %v RestartTS %v",
 		streamId, bucket, restartTs)
@@ -4712,6 +4743,14 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 		bucketInRecovery = true
 	}
 
+	clustAddr := idx.config["clusterAddr"].String()
+	numVb := idx.config["numVbuckets"].Int()
+	enableAsync := idx.config["enableAsyncOpenStream"].Bool()
+
+	if !inRepair {
+		async = enableAsync && clusterVersion(clustAddr) >= common.INDEXER_65_VERSION
+	}
+
 	//diable first snapshot optimization when recovering indexes as
 	//plasma cannot deal with duplicate inserts
 	cmd := &MsgStreamUpdate{mType: OPEN_STREAM,
@@ -4724,7 +4763,7 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 		allowMarkFirstSnap: allowMarkFirstSnap,
 		rollbackTime:       idx.bucketRollbackTimes[bucket],
 		bucketInRecovery:   bucketInRecovery,
-	}
+		async:              async}
 
 	//send stream update to timekeeper
 	if resp := idx.sendStreamUpdateToWorker(cmd, idx.tkCmdCh,
@@ -4746,9 +4785,6 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 		idx.streamBucketRequestStopCh[streamId] = make(BucketRequestStopCh)
 	}
 	idx.streamBucketRequestStopCh[streamId][bucket] = stopCh
-
-	clustAddr := idx.config["clusterAddr"].String()
-	numVb := idx.config["numVbuckets"].Int()
 
 	reqLock := idx.acquireStreamRequestLock(bucket, streamId)
 	go func(reqLock *kvRequest) {
@@ -4783,6 +4819,7 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 					//This makes sure indexer doesn't use a timestamp which can never
 					//be caught up to (due to kv rollback).
 					//if there is a failover after this, it will be observed as a rollback
+
 					// Asyncronously compute the KV timestamp
 					go idx.computeBucketBuildTsAsync(clustAddr, bucket, numVb, streamId)
 
@@ -4790,7 +4827,9 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 						streamId:  streamId,
 						bucket:    bucket,
 						restartTs: restartTs,
-						activeTs:  resp.(*MsgSuccessOpenStream).GetActiveTs()}
+						activeTs:  resp.(*MsgSuccessOpenStream).GetActiveTs(),
+						pendingTs: resp.(*MsgSuccessOpenStream).GetPendingTs(),
+					}
 					break retryloop
 
 				case INDEXER_ROLLBACK:
@@ -4801,7 +4840,8 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 						streamId:  streamId,
 						bucket:    bucket,
 						restartTs: rollbackTs,
-						retryTs:   retryTs}
+						retryTs:   retryTs,
+						requestCh: stopCh}
 					break retryloop
 
 				default:
@@ -4831,9 +4871,10 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 							bucket, respErr.cause, MAX_PROJ_RETRY)
 
 						idx.internalRecvCh <- &MsgRecovery{
-							mType:    INDEXER_INIT_PREP_RECOVERY,
-							streamId: streamId,
-							bucket:   bucket,
+							mType:     INDEXER_INIT_PREP_RECOVERY,
+							streamId:  streamId,
+							bucket:    bucket,
+							requestCh: stopCh,
 						}
 						break retryloop
 					} else {
@@ -6041,7 +6082,7 @@ func (idx *indexer) startStreams() bool {
 
 	for bucket, ts := range restartTs {
 		idx.bucketRollbackTimes[bucket] = time.Now().UnixNano()
-		idx.startBucketStream(common.MAINT_STREAM, bucket, ts, nil, allNilSnaps)
+		idx.startBucketStream(common.MAINT_STREAM, bucket, ts, nil, allNilSnaps, false, false)
 		idx.setStreamBucketState(common.MAINT_STREAM, bucket, STREAM_ACTIVE)
 	}
 
@@ -6053,7 +6094,7 @@ func (idx *indexer) startStreams() bool {
 	idx.stateLock.Unlock()
 
 	for bucket, ts := range restartTs {
-		idx.startBucketStream(common.INIT_STREAM, bucket, ts, nil, allNilSnaps)
+		idx.startBucketStream(common.INIT_STREAM, bucket, ts, nil, allNilSnaps, false, false)
 		idx.setStreamBucketState(common.INIT_STREAM, bucket, STREAM_ACTIVE)
 	}
 

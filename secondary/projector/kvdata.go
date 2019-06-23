@@ -45,6 +45,8 @@ type KVData struct {
 	opaque  uint16
 	workers []*VbucketWorker
 	config  c.Config
+	async   bool
+
 	// evaluators and subscribers
 	engines   map[uint64]*Engine
 	endpoints map[string]c.RouterEndpoint
@@ -172,7 +174,8 @@ func NewKVData(
 	endpoints map[string]c.RouterEndpoint,
 	mutch <-chan *mc.DcpEvent,
 	kvaddr string,
-	config c.Config) (*KVData, error) {
+	config c.Config,
+	async bool) (*KVData, error) {
 
 	kvdata := &KVData{
 		feed:      feed,
@@ -188,6 +191,7 @@ func NewKVData(
 		finch:  make(chan bool),
 		stats:  &KvdataStats{},
 		kvaddr: kvaddr,
+		async:  async,
 	}
 
 	uuid, err := common.NewUUID()
@@ -537,6 +541,12 @@ func (kvdata *KVData) scatterMutation(
 			fmsg := "%v ##%x StreamRequest ROLLBACK: %v\n"
 			arg1 := logging.TagUD(m)
 			logging.Infof(fmsg, kvdata.logPrefix, m.Opaque, arg1)
+
+			if kvdata.async {
+				if err := worker.Event(m); err != nil {
+					panic(err)
+				}
+			}
 
 		} else if m.Status != mcd.SUCCESS {
 			fmsg := "%v ##%x StreamRequest %s: %v\n"

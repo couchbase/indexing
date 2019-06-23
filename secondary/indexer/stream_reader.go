@@ -673,13 +673,30 @@ func (w *streamWorker) handleSingleKeyVersion(bucket string, vbucket Vbucket, vb
 
 		case common.StreamBegin:
 
-			w.updateVbuuidInFilter(meta)
+			status := common.STREAM_SUCCESS
+			code := byte(0)
+
+			len := len(kv.GetKeys()[i])
+			if len >= 1 {
+				status = common.StreamStatus(kv.GetKeys()[i][0])
+			}
+			if len >= 2 {
+				code = kv.GetKeys()[i][1]
+			}
+
+			if status == common.STREAM_SUCCESS {
+				w.updateVbuuidInFilter(meta)
+			}
 
 			//send message to supervisor to take decision
-			msg := &MsgStream{mType: STREAM_READER_STREAM_BEGIN,
+			msg := &MsgStream{
+				mType:    STREAM_READER_STREAM_BEGIN,
 				streamId: w.streamId,
 				host:     kv.GetDocid(), // For projector versions prior to 6.5, docid would be "nil"
-				meta:     meta.Clone()}
+				meta:     meta.Clone(),
+				status:   status,
+				errCode:  code,
+			}
 			w.reader.supvRespch <- msg
 
 		case common.StreamEnd:

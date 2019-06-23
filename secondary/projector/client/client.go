@@ -250,14 +250,15 @@ func (client *Client) GetFailoverLogs(
 // * rollback-timestamps contain vbucket entries that need rollback.
 func (client *Client) InitialTopicRequest(
 	topic, pooln, endpointType string,
-	instances []*protobuf.Instance) (*protobuf.TopicResponse, error) {
+	instances []*protobuf.Instance,
+	async bool) (*protobuf.TopicResponse, error) {
 
 	buckets := make(map[string]bool, 0)
 	for _, instance := range instances {
 		buckets[instance.GetBucket()] = true
 	}
 
-	req := protobuf.NewMutationTopicRequest(topic, endpointType, instances)
+	req := protobuf.NewMutationTopicRequest(topic, endpointType, instances, async)
 	for bucketn := range buckets {
 		ts, err := client.InitialRestartTimestamp(pooln, bucketn)
 		if err != nil {
@@ -314,9 +315,10 @@ func (client *Client) InitialTopicRequest(
 func (client *Client) MutationTopicRequest(
 	topic, endpointType string,
 	reqTimestamps []*protobuf.TsVbuuid,
-	instances []*protobuf.Instance) (*protobuf.TopicResponse, error) {
+	instances []*protobuf.Instance,
+	async bool) (*protobuf.TopicResponse, error) {
 
-	req := protobuf.NewMutationTopicRequest(topic, endpointType, instances)
+	req := protobuf.NewMutationTopicRequest(topic, endpointType, instances, async)
 	req.ReqTimestamps = reqTimestamps
 	res := &protobuf.TopicResponse{}
 	err := client.withRetry(

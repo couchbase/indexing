@@ -12,6 +12,15 @@ import (
 	"fmt"
 )
 
+// Stream Response Status Code
+type StreamStatus byte
+
+const (
+	STREAM_SUCCESS StreamStatus = iota // 0
+	STREAM_FAIL
+	STREAM_ROLLBACK
+)
+
 // types of payload
 const (
 	PayloadKeyVersions byte = iota + 1
@@ -280,8 +289,8 @@ func (kv *KeyVersions) AddDropData() {
 }
 
 // AddStreamBegin add StreamBegin command for a new vbucket.
-func (kv *KeyVersions) AddStreamBegin() {
-	kv.addKey(0, StreamBegin, nil, nil, nil)
+func (kv *KeyVersions) AddStreamBegin(status byte, code byte) {
+	kv.addKey(0, StreamBegin, []byte{status, code}, nil, nil)
 }
 
 // AddStreamEnd add StreamEnd command for a vbucket shutdown.

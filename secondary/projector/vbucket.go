@@ -5,6 +5,7 @@ import "fmt"
 import mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
 import c "github.com/couchbase/indexing/secondary/common"
 import "github.com/couchbase/indexing/secondary/logging"
+import mcd "github.com/couchbase/indexing/secondary/dcp/transport"
 
 // Vbucket is immutable structure defined for each vbucket.
 type Vbucket struct {
@@ -39,7 +40,7 @@ func NewVbucket(
 }
 
 func (v *Vbucket) makeStreamBeginData(
-	engines map[uint64]*Engine) (data interface{}) {
+	engines map[uint64]*Engine, status byte, code byte) (data interface{}) {
 
 	defer func() {
 		if r := recover(); r != nil {
@@ -59,7 +60,7 @@ func (v *Vbucket) makeStreamBeginData(
 	}
 	// using the first engine that is capable of it.
 	for _, engine := range engines {
-		data := engine.StreamBeginData(v.vbno, v.vbuuid, v.seqno)
+		data := engine.StreamBeginData(v.vbno, v.vbuuid, v.seqno, status, code)
 		if data != nil {
 			return data
 		}
@@ -156,4 +157,17 @@ func (v *Vbucket) makeStreamEndData(
 		}
 	}
 	return nil
+}
+
+func (v *Vbucket) mcStatus2StreamStatus(s mcd.Status) c.StreamStatus {
+
+	if s == mcd.SUCCESS {
+		return c.STREAM_SUCCESS
+	}
+
+	if s == mcd.ROLLBACK {
+		return c.STREAM_ROLLBACK
+	}
+
+	return c.STREAM_FAIL
 }

@@ -47,6 +47,7 @@ message MutationTopicRequest {
     // initial list of instances applicable for this topic
     repeated Instance    instances  = 4;
     optional FeedVersion version    = 5 [default=sherlock];
+    optional bool        async      = 6;
 }
 
 // Response back for
@@ -57,6 +58,7 @@ message TopicResponse {
     repeated TsVbuuid activeTimestamps   = 3; // original requested timestamp
     repeated TsVbuuid rollbackTimestamps = 4; // sort order
     optional Error    err                = 5;
+    repeated TsVbuuid pendingTimestamps  = 6; // requested timestamp yet being active
 }
 
 // Response back for

@@ -391,19 +391,26 @@ func (worker *VbucketWorker) handleEvent(m *mc.DcpEvent) *Vbucket {
 
 	switch m.Opcode {
 	case mcd.DCP_STREAMREQ: // broadcast StreamBegin
-		if vbok {
-			fmsg := "%v ##%x duplicate OpStreamRequest: %v\n"
-			arg1 := logging.TagUD(m)
-			logging.Errorf(fmsg, logPrefix, m.Opaque, arg1)
-			return v
+
+		if m.Status == mcd.SUCCESS {
+			if vbok {
+				fmsg := "%v ##%x duplicate OpStreamRequest: %v\n"
+				arg1 := logging.TagUD(m)
+				logging.Errorf(fmsg, logPrefix, m.Opaque, arg1)
+				return v
+			}
 		}
 		// opens up the path
 		cluster, topic, bucket := worker.cluster, worker.topic, worker.bucket
 		config, opaque, vbuuid := worker.config, m.Opaque, m.VBuuid
 		v = NewVbucket(
 			cluster, topic, bucket, opaque, vbno, vbuuid, m.Seqno, config)
-		worker.vbuckets[vbno] = v
-		if data := v.makeStreamBeginData(worker.engines); data != nil {
+
+		if m.Status == mcd.SUCCESS {
+			worker.vbuckets[vbno] = v
+		}
+
+		if data := v.makeStreamBeginData(worker.engines, byte(v.mcStatus2StreamStatus(m.Status)), byte(m.Status)); data != nil {
 			worker.broadcast2Endpoints(data)
 		} else {
 			fmsg := "%v ##%x StreamBeginData NOT PUBLISHED for vbucket %v\n"

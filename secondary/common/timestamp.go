@@ -164,6 +164,38 @@ func (ts *TsVbuuid) AsRecent(other *TsVbuuid) bool {
 	return true
 }
 
+func (ts *TsVbuuid) Union(other *TsVbuuid) *TsVbuuid {
+
+	if ts == nil {
+		return other
+	}
+
+	if other == nil {
+		return ts
+	}
+
+	if ts.Bucket != other.Bucket {
+		return nil
+	}
+
+	if len(ts.Vbuuids) != len(other.Vbuuids) {
+		return nil
+	}
+
+	result := other.Clone()
+	result.Crc64 = 0
+	for i, _ := range result.Vbuuids {
+		if ts.Vbuuids[i] != 0 && result.Vbuuids[i] == 0 {
+			result.Seqnos[i] = ts.Seqnos[i]
+			result.Vbuuids[i] = ts.Vbuuids[i]
+			result.Snapshots[i][0] = ts.Snapshots[i][0]
+			result.Snapshots[i][1] = ts.Snapshots[i][1]
+		}
+	}
+
+	return result
+}
+
 // AsRecentTs will check whether timestamp `ts` is atleast as recent as
 // timestamp `other`.
 func (ts *TsVbuuid) AsRecentTs(other *TsVbuuid) bool {

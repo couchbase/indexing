@@ -174,13 +174,11 @@ func (ie *IndexEvaluator) Bucket() string {
 
 // StreamBeginData implement Evaluator{} interface.
 func (ie *IndexEvaluator) StreamBeginData(
-	vbno uint16, vbuuid, seqno uint64, hostaddr string) (data interface{}) {
+	vbno uint16, vbuuid, seqno uint64, hostaddr string, status byte, code byte) (data interface{}) {
 
 	bucket := ie.Bucket()
-	// For stream begin messages, projector's host address is sent as docid
-	// The docid has to be cleared at the downstream for stream begin message
 	kv := c.NewKeyVersions(seqno, []byte(hostaddr), 1, 0 /*ctime*/)
-	kv.AddStreamBegin()
+	kv.AddStreamBegin(status, code)
 	return &c.DataportKeyVersions{bucket, vbno, vbuuid, kv}
 }
 
