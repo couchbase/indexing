@@ -1369,24 +1369,30 @@ func (mdb *plasmaSlice) updateStatsFromSnapshotMeta(o SnapshotInfo) {
 	// Update stats *if* available in snapshot info
 	// In case of upgrade, older snapshots will not have stats
 	// in which case, do not update index stats
+	// Older snapshots may have only subset of stats persisted
+	// For stats not available through persistence, set default values
 	stats := o.Stats()
 	if stats != nil {
 		keySizes := stats[SNAP_STATS_KEY_SIZES].([]interface{})
 		arrkeySizes := stats[SNAP_STATS_ARRKEY_SIZES].([]interface{})
 
-		mdb.idxStats.numKeySize64.Set(safeGetInt64(keySizes[0]))
-		mdb.idxStats.numKeySize256.Set(safeGetInt64(keySizes[1]))
-		mdb.idxStats.numKeySize1K.Set(safeGetInt64(keySizes[2]))
-		mdb.idxStats.numKeySize4K.Set(safeGetInt64(keySizes[3]))
-		mdb.idxStats.numKeySize100K.Set(safeGetInt64(keySizes[4]))
-		mdb.idxStats.numKeySizeGt100K.Set(safeGetInt64(keySizes[5]))
+		if keySizes != nil && len(keySizes) == 6 {
+			mdb.idxStats.numKeySize64.Set(safeGetInt64(keySizes[0]))
+			mdb.idxStats.numKeySize256.Set(safeGetInt64(keySizes[1]))
+			mdb.idxStats.numKeySize1K.Set(safeGetInt64(keySizes[2]))
+			mdb.idxStats.numKeySize4K.Set(safeGetInt64(keySizes[3]))
+			mdb.idxStats.numKeySize100K.Set(safeGetInt64(keySizes[4]))
+			mdb.idxStats.numKeySizeGt100K.Set(safeGetInt64(keySizes[5]))
+		}
 
-		mdb.idxStats.numArrayKeySize64.Set(safeGetInt64(arrkeySizes[0]))
-		mdb.idxStats.numArrayKeySize256.Set(safeGetInt64(arrkeySizes[1]))
-		mdb.idxStats.numArrayKeySize1K.Set(safeGetInt64(arrkeySizes[2]))
-		mdb.idxStats.numArrayKeySize4K.Set(safeGetInt64(arrkeySizes[3]))
-		mdb.idxStats.numArrayKeySize100K.Set(safeGetInt64(arrkeySizes[4]))
-		mdb.idxStats.numArrayKeySizeGt100K.Set(safeGetInt64(arrkeySizes[5]))
+		if arrkeySizes != nil && len(arrkeySizes) == 6 {
+			mdb.idxStats.numArrayKeySize64.Set(safeGetInt64(arrkeySizes[0]))
+			mdb.idxStats.numArrayKeySize256.Set(safeGetInt64(arrkeySizes[1]))
+			mdb.idxStats.numArrayKeySize1K.Set(safeGetInt64(arrkeySizes[2]))
+			mdb.idxStats.numArrayKeySize4K.Set(safeGetInt64(arrkeySizes[3]))
+			mdb.idxStats.numArrayKeySize100K.Set(safeGetInt64(arrkeySizes[4]))
+			mdb.idxStats.numArrayKeySizeGt100K.Set(safeGetInt64(arrkeySizes[5]))
+		}
 
 		mdb.idxStats.dataSize.Set(safeGetInt64(stats[SNAP_STATS_DATA_SIZE]))
 		mdb.idxStats.backstoreDataSize.Set(safeGetInt64(stats[SNAP_STATS_BACKSTORE_DATA_SIZE]))

@@ -1010,12 +1010,16 @@ func (mdb *memdbSlice) updateStatsFromSnapshotMeta(o SnapshotInfo) {
 	stats := o.Stats()
 	if stats != nil {
 		keySizes := stats[SNAP_STATS_KEY_SIZES].([]interface{})
-		mdb.idxStats.numKeySize64.Set(safeGetInt64(keySizes[0]))
-		mdb.idxStats.numKeySize256.Set(safeGetInt64(keySizes[1]))
-		mdb.idxStats.numKeySize1K.Set(safeGetInt64(keySizes[2]))
-		mdb.idxStats.numKeySize4K.Set(safeGetInt64(keySizes[3]))
-		mdb.idxStats.numKeySize100K.Set(safeGetInt64(keySizes[4]))
-		mdb.idxStats.numKeySizeGt100K.Set(safeGetInt64(keySizes[5]))
+
+		if keySizes != nil && len(keySizes) == 6 {
+			mdb.idxStats.numKeySize64.Set(safeGetInt64(keySizes[0]))
+			mdb.idxStats.numKeySize256.Set(safeGetInt64(keySizes[1]))
+			mdb.idxStats.numKeySize1K.Set(safeGetInt64(keySizes[2]))
+			mdb.idxStats.numKeySize4K.Set(safeGetInt64(keySizes[3]))
+			mdb.idxStats.numKeySize100K.Set(safeGetInt64(keySizes[4]))
+			mdb.idxStats.numKeySizeGt100K.Set(safeGetInt64(keySizes[5]))
+		}
+
 		mdb.idxStats.dataSize.Set(safeGetInt64(stats[SNAP_STATS_DATA_SIZE]))
 		mdb.idxStats.backstoreDataSize.Set(safeGetInt64(stats[SNAP_STATS_BACKSTORE_DATA_SIZE]))
 
@@ -1868,7 +1872,12 @@ func resetArrKeySizeStats(stats *IndexStats) {
 // Safely get an int64 from interface{}
 // json unmarhsaling can give a number as float64 or int64
 // depending on json package used (encoding/json or common/json)
+// If input is nil, return default value
 func safeGetInt64(inp interface{}) int64 {
+	if inp == nil {
+		return 0
+	}
+
 	if val, ok := inp.(float64); ok {
 		return int64(val)
 	}
