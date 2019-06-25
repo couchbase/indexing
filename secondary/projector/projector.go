@@ -915,7 +915,7 @@ func (p *Projector) initSecurityContext(encryptLocalHost bool) error {
 		return err
 	}
 
-	fn := func() error {
+	fn := func(refreshCert bool, refreshEncrypt bool) error {
 		select {
 		case <-p.enableSecurityChange:
 		default:

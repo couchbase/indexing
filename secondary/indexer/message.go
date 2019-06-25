@@ -1622,10 +1622,20 @@ func (m *MsgResetStats) GetMsgType() MsgType {
 }
 
 type MsgSecurityChange struct {
+	refreshCert    bool
+	refreshEncrypt bool
 }
 
 func (m *MsgSecurityChange) GetMsgType() MsgType {
 	return INDEXER_SECURITY_CHANGE
+}
+
+func (m *MsgSecurityChange) RefreshCert() bool {
+	return m.refreshCert
+}
+
+func (m *MsgSecurityChange) RefreshEncrypt() bool {
+	return m.refreshEncrypt
 }
 
 //STATS_PERSISTER_START

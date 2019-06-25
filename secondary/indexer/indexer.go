@@ -379,7 +379,7 @@ func (idx *indexer) initSecurityContext(encryptLocalHost bool) error {
 		return err
 	}
 
-	fn := func() error {
+	fn := func(refreshCert bool, refreshEncrypt bool) error {
 		select {
 		case <-idx.enableSecurityChange:
 		default:
@@ -387,7 +387,10 @@ func (idx *indexer) initSecurityContext(encryptLocalHost bool) error {
 			os.Exit(1)
 		}
 
-		msg := &MsgSecurityChange{}
+		msg := &MsgSecurityChange{
+			refreshCert:    refreshCert,
+			refreshEncrypt: refreshEncrypt,
+		}
 		idx.internalRecvCh <- msg
 
 		return nil
@@ -439,10 +442,14 @@ func (idx *indexer) handleSecurityChange(msg Message) {
 		os.Exit(1)
 	}
 
-	logging.Infof("handleSecurityChange: refresh security context")
-	clusterAddr := idx.config["clusterAddr"].String()
-	if err := refreshSecurityContextOnTopology(clusterAddr); err != nil {
-		exitFn(fmt.Sprintf("Fail to refresh security contexxt on security change. Error %v", err))
+	refreshEncrypt := msg.(*MsgSecurityChange).RefreshEncrypt()
+
+	if refreshEncrypt {
+		logging.Infof("handleSecurityChange: refresh security context")
+		clusterAddr := idx.config["clusterAddr"].String()
+		if err := refreshSecurityContextOnTopology(clusterAddr); err != nil {
+			exitFn(fmt.Sprintf("Fail to refresh security contexxt on security change. Error %v", err))
+		}
 	}
 
 	// stop HTTPS server
@@ -455,22 +462,24 @@ func (idx *indexer) handleSecurityChange(msg Message) {
 	}
 	idx.httpSrvLock.Unlock()
 
-	// restart lifecyclemgr
-	logging.Infof("handleSecurityChange: restarting index manager")
-	if err := idx.sendMsgToWorker(msg, idx.clustMgrAgentCmdCh); err != nil {
-		exitFn(fmt.Sprintf("Fail to restart lifecycle mgr on security change. Error %v", err))
-	}
+	if refreshEncrypt {
+		// restart lifecyclemgr
+		logging.Infof("handleSecurityChange: restarting index manager")
+		if err := idx.sendMsgToWorker(msg, idx.clustMgrAgentCmdCh); err != nil {
+			exitFn(fmt.Sprintf("Fail to restart lifecycle mgr on security change. Error %v", err))
+		}
 
-	//restart mutation manager
-	logging.Infof("handleSecurityChange: restarting mutation manager")
-	if err := idx.sendMsgToWorker(msg, idx.mutMgrCmdCh); err != nil {
-		exitFn(fmt.Sprintf("Fail to restart mutation mgr on security change. Error %v", err))
-	}
+		//restart mutation manager
+		logging.Infof("handleSecurityChange: restarting mutation manager")
+		if err := idx.sendMsgToWorker(msg, idx.mutMgrCmdCh); err != nil {
+			exitFn(fmt.Sprintf("Fail to restart mutation mgr on security change. Error %v", err))
+		}
 
-	//restart scan coordinator
-	logging.Infof("handleSecurityChange: restarting scan coordinator")
-	if err := idx.sendMsgToWorker(msg, idx.scanCoordCmdCh); err != nil {
-		exitFn(fmt.Sprintf("Fail to restart scan coordinator on security change. Error %v", err))
+		//restart scan coordinator
+		logging.Infof("handleSecurityChange: restarting scan coordinator")
+		if err := idx.sendMsgToWorker(msg, idx.scanCoordCmdCh); err != nil {
+			exitFn(fmt.Sprintf("Fail to restart scan coordinator on security change. Error %v", err))
+		}
 	}
 
 	// start HTTPS server
@@ -483,9 +492,11 @@ func (idx *indexer) handleSecurityChange(msg Message) {
 		exitFn(fmt.Sprintf("Fail to restart https server on security change. Error %v", err))
 	}
 
-	// reset memcached connection
-	logging.Infof("handleSecurityChange: restarting bucket sequence cache")
-	common.ResetBucketSeqnos()
+	if refreshEncrypt {
+		// reset memcached connection
+		logging.Infof("handleSecurityChange: restarting bucket sequence cache")
+		common.ResetBucketSeqnos()
+	}
 
 	logging.Infof("handleSecurityChange: done")
 }
