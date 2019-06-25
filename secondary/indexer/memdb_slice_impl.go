@@ -354,9 +354,21 @@ func (mdb *memdbSlice) Delete(docid []byte, meta *MutationMeta) error {
 }
 
 func (mdb *memdbSlice) handleCommandsWorker(workerId int) {
+
 	var start time.Time
 	var elapsed time.Duration
 	var icmd indexMutation
+
+	defer func() {
+		if r := recover(); r != nil {
+			logging.Fatalf("MemDBSlice::handleCommandsWorker: panic detected while processing mutation for "+
+				"operation %v key = %s docid = %s Index %v, Bucket %v, IndexInstId %v, "+
+				"PartitionId %v", icmd.op, logging.TagStrUD(icmd.key), logging.TagStrUD(icmd.docid),
+				mdb.idxDefn.Name, mdb.idxDefn.Bucket, mdb.idxInstId, mdb.idxPartnId)
+			logging.Fatalf("%s", logging.StackTraceAll())
+			panic(r)
+		}
+	}()
 
 loop:
 	for {

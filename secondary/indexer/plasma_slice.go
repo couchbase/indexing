@@ -478,6 +478,17 @@ func (mdb *plasmaSlice) handleCommandsWorker(workerId int) {
 	var elapsed time.Duration
 	var icmd indexMutation
 
+	defer func() {
+		if r := recover(); r != nil {
+			logging.Fatalf("plasmaSlice::handleCommandsWorker: panic detected while processing mutation for "+
+				"operation %v key = %s docid = %s Index %v, Bucket %v, IndexInstId %v, "+
+				"PartitionId %v", icmd.op, logging.TagStrUD(icmd.key), logging.TagStrUD(icmd.docid),
+				mdb.idxDefn.Name, mdb.idxDefn.Bucket, mdb.idxInstId, mdb.idxPartnId)
+			logging.Fatalf("%s", logging.StackTraceAll())
+			panic(r)
+		}
+	}()
+
 loop:
 	for {
 		var nmut int
