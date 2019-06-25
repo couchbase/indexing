@@ -715,46 +715,6 @@ func (is IndexerStats) GetStats(getPartition bool, skipEmpty bool,
 			s.int64Stats(func(ss *IndexStats) int64 {
 				return ss.numRowsReturned.Value()
 			}))
-		addStat("num_requests_range",
-			s.int64Stats(func(ss *IndexStats) int64 {
-				return ss.numRequestsRange.Value()
-			}))
-		addStat("num_completed_requests_range",
-			s.int64Stats(func(ss *IndexStats) int64 {
-				return ss.numCompletedRequestsRange.Value()
-			}))
-		addStat("num_rows_returned_range",
-			s.int64Stats(func(ss *IndexStats) int64 {
-				return ss.numRowsReturnedRange.Value()
-			}))
-		addStat("num_rows_scanned_range",
-			s.int64Stats(func(ss *IndexStats) int64 {
-				return ss.numRowsScannedRange.Value()
-			}))
-		addStat("scan_cache_hit_range",
-			s.int64Stats(func(ss *IndexStats) int64 {
-				return ss.scanCacheHitRange.Value()
-			}))
-		addStat("num_requests_aggr",
-			s.int64Stats(func(ss *IndexStats) int64 {
-				return ss.numRequestsAggr.Value()
-			}))
-		addStat("num_completed_requests_aggr",
-			s.int64Stats(func(ss *IndexStats) int64 {
-				return ss.numCompletedRequestsAggr.Value()
-			}))
-		addStat("num_rows_returned_aggr",
-			s.int64Stats(func(ss *IndexStats) int64 {
-				return ss.numRowsReturnedAggr.Value()
-			}))
-		addStat("num_rows_scanned_aggr",
-			s.int64Stats(func(ss *IndexStats) int64 {
-				return ss.numRowsScannedAggr.Value()
-			}))
-		addStat("scan_cache_hit_aggr",
-			s.int64Stats(func(ss *IndexStats) int64 {
-				return ss.scanCacheHitAggr.Value()
-			}))
 		// partition stats
 		addStat("num_rows_scanned",
 			s.partnInt64Stats(func(ss *IndexStats) int64 {
@@ -773,10 +733,6 @@ func (is IndexerStats) GetStats(getPartition bool, skipEmpty bool,
 		addStat("build_progress",
 			s.int64Stats(func(ss *IndexStats) int64 {
 				return ss.buildProgress.Value()
-			}))
-		addStatByInstId("completion_progress",
-			s.int64Stats(func(ss *IndexStats) int64 {
-				return ss.completionProgress.Value()
 			}))
 		addStat("num_docs_queued",
 			s.int64Stats(func(ss *IndexStats) int64 {
@@ -866,8 +822,6 @@ func (is IndexerStats) GetStats(getPartition bool, skipEmpty bool,
 		addStat("avg_scan_latency", s.avgScanLatency.Value())
 		addStat("avg_scan_wait_latency", waitLat)
 		addStat("avg_scan_request_latency", scanReqLat)
-		addStat("avg_scan_request_init_latency", scanReqInitLat)
-		addStat("avg_scan_request_alloc_latency", scanReqAllocLat)
 		// partition stats
 		addStat("num_flush_queued",
 			s.partnInt64Stats(func(ss *IndexStats) int64 {
@@ -1036,6 +990,52 @@ func (is IndexerStats) GetStats(getPartition bool, skipEmpty bool,
 			addStat("timings/n1ql_expr_eval",
 				s.partnTimingStats(func(ss *IndexStats) *stats.TimingStat {
 					return &ss.Timings.n1qlExpr
+				}))
+			addStat("avg_scan_request_init_latency", scanReqInitLat)
+			addStat("avg_scan_request_alloc_latency", scanReqAllocLat)
+			addStat("num_requests_range",
+				s.int64Stats(func(ss *IndexStats) int64 {
+					return ss.numRequestsRange.Value()
+				}))
+			addStat("num_completed_requests_range",
+				s.int64Stats(func(ss *IndexStats) int64 {
+					return ss.numCompletedRequestsRange.Value()
+				}))
+			addStat("num_rows_returned_range",
+				s.int64Stats(func(ss *IndexStats) int64 {
+					return ss.numRowsReturnedRange.Value()
+				}))
+			addStat("num_rows_scanned_range",
+				s.int64Stats(func(ss *IndexStats) int64 {
+					return ss.numRowsScannedRange.Value()
+				}))
+			addStat("scan_cache_hit_range",
+				s.int64Stats(func(ss *IndexStats) int64 {
+					return ss.scanCacheHitRange.Value()
+				}))
+			addStat("num_requests_aggr",
+				s.int64Stats(func(ss *IndexStats) int64 {
+					return ss.numRequestsAggr.Value()
+				}))
+			addStat("num_completed_requests_aggr",
+				s.int64Stats(func(ss *IndexStats) int64 {
+					return ss.numCompletedRequestsAggr.Value()
+				}))
+			addStat("num_rows_returned_aggr",
+				s.int64Stats(func(ss *IndexStats) int64 {
+					return ss.numRowsReturnedAggr.Value()
+				}))
+			addStat("num_rows_scanned_aggr",
+				s.int64Stats(func(ss *IndexStats) int64 {
+					return ss.numRowsScannedAggr.Value()
+				}))
+			addStat("scan_cache_hit_aggr",
+				s.int64Stats(func(ss *IndexStats) int64 {
+					return ss.scanCacheHitAggr.Value()
+				}))
+			addStatByInstId("completion_progress",
+				s.int64Stats(func(ss *IndexStats) int64 {
+					return ss.completionProgress.Value()
 				}))
 
 		}
