@@ -16,17 +16,24 @@
 
 package projector
 
-import "fmt"
-import "time"
-import "strconv"
-import "strings"
+import (
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
 
-import "github.com/couchbase/indexing/secondary/logging"
-import "github.com/couchbase/indexing/secondary/stats"
-import mcd "github.com/couchbase/indexing/secondary/dcp/transport"
-import mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
-import c "github.com/couchbase/indexing/secondary/common"
-import protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
+	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/stats"
+
+	mcd "github.com/couchbase/indexing/secondary/dcp/transport"
+
+	mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
+
+	c "github.com/couchbase/indexing/secondary/common"
+
+	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
+)
 
 // KVData captures an instance of data-path for single kv-node
 // from upstream connection.
@@ -50,6 +57,7 @@ type KVData struct {
 	stats     *KvdataStats
 	wrkrStats []interface{}
 	heartBeat <-chan time.Time
+	uuid      uint64 // immutable
 }
 
 type KvdataStats struct {
@@ -128,7 +136,7 @@ func NewKVData(
 	engines map[uint64]*Engine,
 	endpoints map[string]c.RouterEndpoint,
 	mutch <-chan *mc.DcpEvent,
-	config c.Config) *KVData {
+	config c.Config) (*KVData, error) {
 
 	kvdata := &KVData{
 		feed:      feed,
@@ -144,6 +152,14 @@ func NewKVData(
 		finch: make(chan bool),
 		stats: &KvdataStats{},
 	}
+
+	uuid, err := common.NewUUID()
+	if err != nil {
+		logging.Errorf("%v ##%x common.NewUUID() failed: %v", kvdata.logPrefix, kvdata.opaque, err)
+		return nil, err
+	}
+	kvdata.uuid = uuid.Uint64()
+
 	numVbuckets := config["maxVbuckets"].Int()
 	kvdata.stats.Init(numVbuckets)
 	fmsg := "KVDT[<-%v<-%v #%v]"
@@ -156,14 +172,15 @@ func NewKVData(
 	for raddr, endpoint := range endpoints {
 		kvdata.endpoints[raddr] = endpoint
 	}
+
 	// start workers
 	kvdata.workers = kvdata.spawnWorkers(feed, bucket, config, opaque)
 	// Gather stats pointers from all workers
 	kvdata.updateWorkerStats()
 
 	go kvdata.runScatter(reqTs, mutch)
-	logging.Infof("%v ##%x started ...\n", kvdata.logPrefix, opaque)
-	return kvdata
+	logging.Infof("%v ##%x started, uuid: %v ...\n", kvdata.logPrefix, opaque, kvdata.uuid)
+	return kvdata, nil
 }
 
 // commands to server
@@ -291,7 +308,7 @@ func (kvdata *KVData) runScatter(
 			worker.Close()
 		}
 		kvdata.workers = nil
-		kvdata.feed.PostFinKVdata(kvdata.bucket)
+		kvdata.feed.PostFinKVdata(kvdata.bucket, kvdata.uuid)
 		close(kvdata.finch)
 		//Update closed in stats object and log the stats before exiting
 		kvdata.stats.closed.Set(true)
@@ -503,7 +520,7 @@ func (kvdata *KVData) scatterMutation(
 			seqno = m.Seqno
 		}
 		kvdata.stats.reqCount.Add(1)
-		kvdata.feed.PostStreamRequest(kvdata.bucket, m)
+		kvdata.feed.PostStreamRequest(kvdata.bucket, m, kvdata.uuid)
 
 	case mcd.DCP_STREAMEND:
 		if m.Status != mcd.SUCCESS {
@@ -520,7 +537,7 @@ func (kvdata *KVData) scatterMutation(
 			}
 		}
 		kvdata.stats.endCount.Add(1)
-		kvdata.feed.PostStreamEnd(kvdata.bucket, m)
+		kvdata.feed.PostStreamEnd(kvdata.bucket, m, kvdata.uuid)
 
 	case mcd.DCP_SNAPSHOT:
 		if worker.Event(m) != nil {
@@ -576,7 +593,7 @@ func (kvdata *KVData) publishStreamEnd() {
 				VBucket: v.vbno,
 				Opaque:  v.opaque,
 			}
-			kvdata.feed.PostStreamEnd(kvdata.bucket, m)
+			kvdata.feed.PostStreamEnd(kvdata.bucket, m, kvdata.uuid)
 		}
 	}
 }

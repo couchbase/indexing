@@ -181,7 +181,7 @@ func Refresh(tlsConfig cbauth.TLSConfig, encryptConfig cbauth.ClusterEncryptionC
 		return
 	}
 
-	if err := pSecurityContext.update(newSetting); err != nil {
+	if err := pSecurityContext.update(newSetting, true); err != nil {
 		logging.Errorf("Fail to update security setting %v", err)
 		return
 	}
@@ -293,35 +293,37 @@ func (p *SecurityContext) refresh(code uint64) error {
 		}
 	}
 
-	return p.update(newSetting)
+	return p.update(newSetting, code&cbauth.CFG_CHANGE_CERTS_TLSCONFIG != 0)
 }
 
-func (p *SecurityContext) update(newSetting *SecuritySetting) error {
+func (p *SecurityContext) update(newSetting *SecuritySetting, refreshCert bool) error {
 
 	hasEnabled := false
 	oldSetting := GetSecuritySetting()
 	if oldSetting != nil {
 		hasEnabled = oldSetting.encryptionEnabled
 	}
+	refreshEncrypt := hasEnabled || hasEnabled != newSetting.encryptionEnabled
 
 	UpdateSecuritySetting(newSetting)
+
+	if !refreshEncrypt && !refreshCert {
+		logging.Infof("encryption is not enabled or no certificate refresh.   Do not notify security change")
+		return nil
+	}
 
 	p.mutex.RLock()
 	defer p.mutex.RUnlock()
 
-	if hasEnabled || hasEnabled != newSetting.encryptionEnabled {
-		for key, notifier := range p.notifiers {
-			logging.Infof("Notify security setting change for %v", key)
-			if err := notifier(); err != nil {
-				err1 := fmt.Errorf("Fail to refresh security setting for %v: %v", key, err)
-				if p.logger != nil {
-					p.logger(err1)
-				}
-				logging.Fatalf(err1.Error())
+	for key, notifier := range p.notifiers {
+		logging.Infof("Notify security setting change for %v", key)
+		if err := notifier(refreshCert, refreshEncrypt); err != nil {
+			err1 := fmt.Errorf("Fail to refresh security setting for %v: %v", key, err)
+			if p.logger != nil {
+				p.logger(err1)
 			}
+			logging.Fatalf(err1.Error())
 		}
-	} else {
-		logging.Infof("encryption is not enabled.   Do not notify security change")
 	}
 
 	p.initializer.Do(func() {
@@ -409,7 +411,7 @@ func (p *SecurityContext) refreshEncryption(setting *SecuritySetting) error {
 // Security Change Notifier
 //////////////////////////////////////////////////////
 
-type SecurityChangeNotifier func() error
+type SecurityChangeNotifier func(refreshCert bool, refreshEncrypt bool) error
 
 func RegisterCallback(key string, cb SecurityChangeNotifier) {
 	pSecurityContext.mutex.Lock()

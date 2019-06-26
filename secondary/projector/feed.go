@@ -375,16 +375,17 @@ type controlStreamRequest struct {
 	vbno   uint16
 	vbuuid uint64
 	seqno  uint64 // also doubles as rollback-seqno
+	uuid   uint64 // UUID of the kvdata that initiated this mesasge transfer
 }
 
 func (v *controlStreamRequest) Repr() string {
-	return fmt.Sprintf("{controlStreamRequest, %v, %s, %d, %x, %d, ##%x}",
-		v.status, v.bucket, v.vbno, v.vbuuid, v.seqno, v.opaque)
+	return fmt.Sprintf("{controlStreamRequest, %v, %s, %d, %x, %d, ##%x, %v}",
+		v.status, v.bucket, v.vbno, v.vbuuid, v.seqno, v.opaque, v.uuid)
 }
 
 // PostStreamRequest feedback from data-path.
 // Asynchronous call.
-func (feed *Feed) PostStreamRequest(bucket string, m *mc.DcpEvent) {
+func (feed *Feed) PostStreamRequest(bucket string, m *mc.DcpEvent, kvdataUUID uint64) {
 	var respch chan []interface{}
 	cmd := &controlStreamRequest{
 		bucket: bucket,
@@ -393,6 +394,7 @@ func (feed *Feed) PostStreamRequest(bucket string, m *mc.DcpEvent) {
 		vbno:   m.VBucket,
 		vbuuid: m.VBuuid,
 		seqno:  m.Seqno, // can also be roll-back seqno, based on status
+		uuid:   kvdataUUID,
 	}
 	fmsg := "%v ##%x backch %T %v\n"
 	logging.Infof(fmsg, feed.logPrefix, m.Opaque, cmd, cmd.Repr())
@@ -410,22 +412,24 @@ type controlStreamEnd struct {
 	opaque uint16
 	status mcd.Status
 	vbno   uint16
+	uuid   uint64 // UUID of the kvdata that initiated this mesasge transfer
 }
 
 func (v *controlStreamEnd) Repr() string {
-	return fmt.Sprintf("{controlStreamEnd, %v, %s, %d, %x}",
-		v.status, v.bucket, v.vbno, v.opaque)
+	return fmt.Sprintf("{controlStreamEnd, %v, %s, %d, ##%x, %v}",
+		v.status, v.bucket, v.vbno, v.opaque, v.uuid)
 }
 
 // PostStreamEnd feedback from data-path.
 // Asynchronous call.
-func (feed *Feed) PostStreamEnd(bucket string, m *mc.DcpEvent) {
+func (feed *Feed) PostStreamEnd(bucket string, m *mc.DcpEvent, kvdataUUID uint64) {
 	var respch chan []interface{}
 	cmd := &controlStreamEnd{
 		bucket: bucket,
 		opaque: m.Opaque,
 		status: m.Status,
 		vbno:   m.VBucket,
+		uuid:   kvdataUUID,
 	}
 	fmsg := "%v ##%x backch %T %v\n"
 	logging.Infof(fmsg, feed.logPrefix, m.Opaque, cmd, cmd.Repr())
@@ -440,17 +444,18 @@ func (feed *Feed) PostStreamEnd(bucket string, m *mc.DcpEvent) {
 
 type controlFinKVData struct {
 	bucket string
+	uuid   uint64 // UUID of the kvdata that initiated this mesasge transfer
 }
 
 func (v *controlFinKVData) Repr() string {
-	return fmt.Sprintf("{controlFinKVData, %s}", v.bucket)
+	return fmt.Sprintf("{controlFinKVData, %s, %v}", v.bucket, v.uuid)
 }
 
 // PostFinKVdata feedback from data-path.
 // Asynchronous call.
-func (feed *Feed) PostFinKVdata(bucket string) {
+func (feed *Feed) PostFinKVdata(bucket string, kvdataUUID uint64) {
 	var respch chan []interface{}
-	cmd := &controlFinKVData{bucket: bucket}
+	cmd := &controlFinKVData{bucket: bucket, uuid: kvdataUUID}
 	fmsg := "%v backch %T %v\n"
 	logging.Infof(fmsg, feed.logPrefix, cmd, cmd.Repr())
 	err := c.FailsafeOpNoblock(feed.backch, []interface{}{cmd}, feed.finch)
@@ -494,7 +499,43 @@ loop:
 
 		case msg = <-feed.backch:
 			if cmd, ok := msg[0].(*controlStreamRequest); ok {
-				reqTs, ok := feed.reqTss[cmd.bucket]
+				// This check is required to avoid race in the following scenario:
+				//
+				// 1. Indexer sends fCmdStart, feed opens connections with DCP upstream
+				//    and starts sending DCP_STREAMREQ messages for each of the vb's
+				// 2. Due to a slow memcached, the streamreq message for one vb timesout
+				// 3. DCPP sends stream begin messages for successful DCP_STREAMREQ
+				//    messages and kvdata puts them in feed.backch
+				// 4. Due to the timeout error while starting dcp streams, feed.cleanupBucket()
+				//    is invoked
+				// 5. This would clean-up the KVData instance and indexer sends MTR again
+				// 6. In this MTR, the stream begin messages from earlier MTR would not be
+				//    processed (in feed.waitStreamRequests()) as the opaque values differ
+				//    and these stream begin messages will be read here
+				//
+				// As uuid's would be different for different instances of kvdata, we compare the
+				// uuid's before actually trying to process the STREAM_BEGIN messages. If there is
+				// a mismatch, we ignore the message
+				if kvdata, ok := feed.kvdata[cmd.bucket]; ok {
+					if cmd.uuid != kvdata.uuid {
+						logging.Infof("%v The kvdata instance %v for bucket %v is already cleaned up."+
+							" Current kvdata instance is: %v. Ignoring controlStreamRequest for vbucket: %v",
+							feed.logPrefix, cmd.uuid, cmd.bucket, kvdata.uuid, cmd.vbno)
+						continue
+					}
+				} else { // KVData instance does not exist. Ignore the message
+					logging.Infof("%v The kvdata instance for bucket %v does not exist."+
+						" Ignoring controlStreamRequest for vbucket: %v", feed.logPrefix, cmd.bucket, cmd.vbno)
+					continue
+				}
+
+				var reqTs *protobuf.TsVbuuid
+				if reqTs, ok = feed.reqTss[cmd.bucket]; !ok {
+					fmsg := "%v ##%x ignoring backch message %T: %v\n"
+					logging.Warnf(fmsg, prefix, cmd.opaque, cmd, cmd.Repr())
+					continue
+				}
+
 				seqno, _, sStart, sEnd, err := reqTs.Get(cmd.vbno)
 				if err != nil {
 					fmsg := "%v ##%x backch flush %v: %v\n"
@@ -526,10 +567,36 @@ loop:
 
 				} else {
 					fmsg := "%v ##%x backch flush error %T: %v\n"
-					logging.Errorf(fmsg, prefix, cmd, cmd.opaque, cmd.Repr())
+					logging.Errorf(fmsg, prefix, cmd.opaque, cmd, cmd.Repr())
 				}
 
 			} else if cmd, ok := msg[0].(*controlStreamEnd); ok {
+				// This check is required to avoid race in the following scenario:
+				// 1. When feed.cleanUpBucket() is triggerred, it invokes feeder.closeFeed()
+				// 2. feeder.CloseFeed() would publish STREAMEND messages
+				// 3. If kvdata reads the STREAMEND messages before closing, it would publish
+				//    the STREAMEND messages to feed.backch
+				// 4. After feed.cleanupBucket() exits, feed processes messages on reqch and backch
+				// 5. If an fCmdStart from indexer arrives on feed's reqch and it is processed before
+				//    messages on backch, then at the time STREAMEND messages from backch are processed
+				//    the book-keeping for vbuckets goes out of sync with KV engine
+				//
+				// As uuid's would be different for different instances of kvdata, we compare the
+				// uuid's before actually trying to process the STREAM_END messages. If there is
+				// a mismatch, we ignore the message
+				if kvdata, ok := feed.kvdata[cmd.bucket]; ok {
+					if cmd.uuid != kvdata.uuid {
+						logging.Warnf("%v The kvdata instance %v for bucket %v is already cleaned up."+
+							" Current kvdata instance is: %v. Ignoring controlStreamEnd for vbucket: %v",
+							feed.logPrefix, cmd.uuid, cmd.bucket, kvdata.uuid, cmd.vbno)
+						continue
+					}
+				} else { // KVData instance does not exist. Ignore the message
+					logging.Infof("%v The kvdata instance for bucket %v does not exist."+
+						" Ignoring controlStreamEnd for vbucket: %v", feed.logPrefix, cmd.bucket, cmd.vbno)
+					continue
+				}
+
 				fmsg := "%v ##%x backch flush %T: %v\n"
 				logging.Infof(fmsg, prefix, cmd.opaque, cmd, cmd.Repr())
 				reqTs, ok := feed.reqTss[cmd.bucket]
@@ -549,6 +616,33 @@ loop:
 				}
 
 			} else if cmd, ok := msg[0].(*controlFinKVData); ok {
+				// This check is required to avoid race in the following scenario:
+				// 1. When feed.cleanUpBucket() is triggerred, it invokes kvdata.Close()
+				// 2. kvdata.Close() will stop the genServer() and posts response back to feed.
+				//    The defer() block execution in kvdata's genServer() is yet to happen
+				// 3. feed.cleanupBucket() will go-ahead delete the kvdata entry for the bucket
+				// 4. feed now waits on reqch and backch for messages
+				// 5. fCmdStart from indexer arrives on feed and feed initializes kvdata for the bucket
+				// 6. The defer() block from kvdata that got closed starts it's execution and it posts
+				//    controlFinKVData message
+				// 7. This message would cleanup the bucket again which got initialized with fCmdStart
+				//
+				// As uuid's would be different for different instances of kvdata, we compare the
+				// uuid's before actually trying to process the controlFinKVData message. If there is
+				// a mismatch, we ignore the message
+				if kvdata, ok := feed.kvdata[cmd.bucket]; ok {
+					if cmd.uuid != kvdata.uuid {
+						logging.Warnf("%v The kvdata instance %v for bucket %v is already cleaned up."+
+							" Current kvdata instance is: %v. Ignoring controlFinKVData",
+							feed.logPrefix, cmd.uuid, cmd.bucket, kvdata.uuid)
+						continue
+					}
+				} else { // KVData instance does not exist. Ignore the message
+					logging.Infof("%v The kvdata instance for bucket %v does not exist."+
+						" Ignoring controlFinKVData message", feed.logPrefix, cmd.bucket)
+					continue
+				}
+
 				fmsg := "%v ##%x backch flush %T -- %v\n"
 				logging.Infof(fmsg, prefix, feed.opaque, cmd, cmd.Repr())
 				_, ok := feed.actTss[cmd.bucket]
@@ -783,7 +877,12 @@ func (feed *Feed) start(
 		}
 		feed.feeders[bucketn] = feeder // :SideEffect:
 		// open data-path, if not already open.
-		kvdata := feed.startDataPath(bucketn, feeder, opaque, ts)
+		kvdata, e := feed.startDataPath(bucketn, feeder, opaque, ts)
+		if e != nil {
+			err = e
+			feed.cleanupBucket(bucketn, false)
+			continue
+		}
 		engines, _ := feed.engines[bucketn]
 		kvdata.AddEngines(opaque, engines, feed.endpoints)
 		feed.kvdata[bucketn] = kvdata // :SideEffect:
@@ -881,7 +980,13 @@ func (feed *Feed) restartVbuckets(
 		}
 		feed.feeders[bucketn] = feeder // :SideEffect:
 		// open data-path, if not already open.
-		kvdata := feed.startDataPath(bucketn, feeder, opaque, ts)
+		kvdata, e := feed.startDataPath(bucketn, feeder, opaque, ts)
+		if e != nil { // all feed errors are fatal, skip this bucket.
+			err = e
+			feed.cleanupBucket(bucketn, false)
+			continue
+		}
+
 		feed.kvdata[bucketn] = kvdata // :SideEffect:
 		// (re)start the upstream, after filtering out remote vbuckets.
 		e = feed.bucketFeed(opaque, false, true, ts, feeder)
@@ -1038,8 +1143,15 @@ func (feed *Feed) addBuckets(
 			continue
 		}
 		feed.feeders[bucketn] = feeder // :SideEffect:
+
 		// open data-path, if not already open.
-		kvdata := feed.startDataPath(bucketn, feeder, opaque, ts)
+		kvdata, e := feed.startDataPath(bucketn, feeder, opaque, ts)
+		if e != nil { // all feed errors are fatal, skip this bucket.
+			err = e
+			feed.cleanupBucket(bucketn, false)
+			continue
+		}
+
 		engines, _ := feed.engines[bucketn]
 		kvdata.AddEngines(opaque, engines, feed.endpoints)
 		feed.kvdata[bucketn] = kvdata // :SideEffect:
@@ -1513,8 +1625,8 @@ func (feed *Feed) getLocalVbuckets(
 func (feed *Feed) startDataPath(
 	bucketn string, feeder BucketFeeder,
 	opaque uint16,
-	ts *protobuf.TsVbuuid) *KVData {
-
+	ts *protobuf.TsVbuuid) (*KVData, error) {
+	var err error
 	mutch := feeder.GetChannel()
 	kvdata, ok := feed.kvdata[bucketn]
 	if ok {
@@ -1522,10 +1634,10 @@ func (feed *Feed) startDataPath(
 
 	} else { // pass engines & endpoints to kvdata.
 		engs, ends := feed.engines[bucketn], feed.endpoints
-		kvdata = NewKVData(
+		kvdata, err = NewKVData(
 			feed, bucketn, opaque, ts, engs, ends, mutch, feed.config)
 	}
-	return kvdata
+	return kvdata, err
 }
 
 // - return ErrorInconsistentFeed for malformed feed request
