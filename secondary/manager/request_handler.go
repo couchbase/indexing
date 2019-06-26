@@ -536,7 +536,6 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, bucket string
 				}
 
 				mergeCounter(defn.DefnId, defn.NumReplica2)
-				defns[defn.DefnId] = defn
 
 				if topology := findTopologyByBucket(localMeta.IndexTopologies, defn.Bucket); topology != nil {
 
@@ -624,6 +623,7 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, bucket string
 
 							addHost(defn.DefnId, mgmtAddr)
 							isInstanceDeferred[common.IndexInstId(instance.InstId)] = defn.Deferred
+							defn.NumPartitions = instance.NumPartitions
 
 							status := IndexStatus{
 								DefnId:       defn.DefnId,
@@ -655,6 +655,7 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, bucket string
 						}
 					}
 				}
+				defns[defn.DefnId] = defn
 			}
 		} else {
 			logging.Debugf("RequestHandler::getIndexStatus: Error from GetServiceAddress (indexHttp) for node id %v. Error = %v", nid, err)
@@ -693,7 +694,7 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, bucket string
 			// For the non-rebalanced index, it can either be true or false depending on
 			// how it was created
 			defn.Deferred = isInstanceDeferred[index.InstId]
-			list[i].Definition = common.IndexStatement(defn, index.NumPartition, index.NumReplica, true)
+			list[i].Definition = common.IndexStatement(defn, int(defn.NumPartitions), index.NumReplica, true)
 		}
 	}
 
