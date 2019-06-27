@@ -225,7 +225,7 @@ func (r *mutationMgr) panicHandler() {
 		}
 
 		logging.Fatalf("MutationManager Panic Err %v", err)
-		logging.Fatalf("%s", logging.StackTrace())
+		logging.Fatalf("%s", logging.StackTraceAll())
 
 		//shutdown the mutation manager
 		select {
