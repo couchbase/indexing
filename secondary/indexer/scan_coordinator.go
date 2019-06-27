@@ -331,7 +331,7 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, ctx interface{}, 
 			numCtxs++
 		}
 
-		func() {
+		cont := func() bool {
 			mutex.Lock()
 			defer mutex.Unlock()
 
@@ -339,11 +339,16 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, ctx interface{}, 
 				for i := 0; i < numCtxs; i++ {
 					req.Ctxs[i].Done()
 				}
-				return
+				return false
 			}
 
 			close(donech)
+			return true
 		}()
+
+		if !cont {
+			return
+		}
 	}
 
 	s.processRequest(req, w, is, t0)
