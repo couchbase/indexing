@@ -4583,7 +4583,7 @@ func (idx *indexer) stopBucketStream(streamId common.StreamId, bucket string) {
 				switch resp.GetMsgType() {
 
 				case MSG_SUCCESS:
-					logging.Errorf("Indexer::stopBucketStream Success Stream %v Bucket %v ",
+					logging.Infof("Indexer::stopBucketStream Success Stream %v Bucket %v ",
 						streamId, bucket)
 					idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_PREPARE_DONE,
 						streamId: streamId,

@@ -10,6 +10,7 @@ import "net/http"
 import "io/ioutil"
 import "runtime/debug"
 import l "log"
+import "runtime"
 
 // Log levels
 type LogLevel int16
@@ -168,6 +169,13 @@ func (log *destination) StackTrace() string {
 	return log.getStackTrace(2, debug.Stack())
 }
 
+// StackTraceAll prints all goroutine stacks at specified log level
+func (log *destination) StackTraceAll() string {
+	buf := make([]byte, 500000)
+	n := runtime.Stack(buf, true)
+	return string(buf[0:n])
+}
+
 // Get profiling info
 func Profile(port string, endpoints ...string) string {
 	if strings.HasPrefix(port, ":") {
@@ -302,6 +310,11 @@ func Tracef(format string, v ...interface{}) {
 // StackTrace prints current stack at specified log level
 func StackTrace() string {
 	return SystemLogger.getStackTrace(2, debug.Stack())
+}
+
+// StackTraceAll prints all goroutine stacks at specified log level
+func StackTraceAll() string {
+	return SystemLogger.StackTraceAll()
 }
 
 // Set the base log level

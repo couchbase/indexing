@@ -130,7 +130,7 @@ func (s *IndexScanSource) Routine() error {
 	defer func() {
 		if r := recover(); r != nil {
 			l.Fatalf("IndexScanSource - panic detected while processing %s", s.p.req)
-			l.Fatalf("%s", l.StackTrace())
+			l.Fatalf("%s", l.StackTraceAll())
 			panic(r)
 		}
 	}()
