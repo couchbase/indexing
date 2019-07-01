@@ -3,17 +3,18 @@ package secondaryindex
 import (
 	"errors"
 	"fmt"
+	"io/ioutil"
+	"log"
+	"path"
+	"path/filepath"
+	"time"
+
 	c "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/natsort"
 	qc "github.com/couchbase/indexing/secondary/queryport/client"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 	"github.com/couchbase/query/expression"
 	"github.com/couchbase/query/parser/n1ql"
-	"io/ioutil"
-	"log"
-	"path"
-	"path/filepath"
-	"time"
 )
 
 var IndexUsing = "gsi"
@@ -348,6 +349,20 @@ func IndexExistsWithClient(indexName, bucketName, server string, client *qc.GsiC
 		}
 	}
 	return false
+}
+
+func ListAllSecondaryIndexes(header string, client *qc.GsiClient) error {
+	indexes, _, _, err := client.Refresh()
+	if err != nil {
+		log.Printf("ListAllSecondaryIndexes() %v: Error from client.Refresh(): %v ", header, err)
+		return err
+	}
+
+	for _, index := range indexes {
+		defn := index.Definition
+		log.Printf("ListAllSecondaryIndexes() for %v: Index %v Bucket %v", header, defn.Name, defn.Bucket)
+	}
+	return nil
 }
 
 func DropSecondaryIndex(indexName, bucketName, server string) error {

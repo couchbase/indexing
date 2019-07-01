@@ -1,16 +1,17 @@
 package largedatatests
 
 import (
-	c "github.com/couchbase/indexing/secondary/common"
-	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
-	kv "github.com/couchbase/indexing/secondary/tests/framework/kvutility"
-	"github.com/couchbase/indexing/secondary/tests/framework/secondaryindex"
 	"log"
 	"math/rand"
 	"path/filepath"
 	"sync"
 	"testing"
 	"time"
+
+	c "github.com/couchbase/indexing/secondary/common"
+	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
+	kv "github.com/couchbase/indexing/secondary/tests/framework/kvutility"
+	"github.com/couchbase/indexing/secondary/tests/framework/secondaryindex"
 )
 
 var kvdocs tc.KeyValues
@@ -100,7 +101,7 @@ func CreateDeleteDocsForDuration(wg *sync.WaitGroup, seconds float64) {
 }
 
 func RangeScanForDuration_ltr(header string, wg *sync.WaitGroup, seconds float64, t *testing.T, indexName, bucketName, server string) {
-	log.Printf("In Range Scan")
+	log.Printf("In Range Scan for %v", header)
 	defer wg.Done()
 
 	client, e := secondaryindex.CreateClient(clusterconfig.KVAddress, "RangeForDuration")
@@ -108,6 +109,9 @@ func RangeScanForDuration_ltr(header string, wg *sync.WaitGroup, seconds float64
 		FailTestIfError(e, "RangeScanForDuration Thread:: Error in gsi client creation", t)
 	}
 	defer client.Close()
+
+	err := secondaryindex.ListAllSecondaryIndexes(header, client)
+	FailTestIfError(err, "RangeScanForDuration Thread:: Error from ListAllSecondaryIndexes", t)
 
 	start := time.Now()
 	i := 1
