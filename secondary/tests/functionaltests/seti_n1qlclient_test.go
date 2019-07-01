@@ -92,6 +92,10 @@ func TestBufferedScan_BackfillDisabled(t *testing.T) {
 
 	// ******* query with limit 1 and read slow
 	cleanbackfillFiles()
+
+	// No backfill files should show up here.
+	printBackfillFilesInfo()
+
 	ctxt := &qcmdContext{}
 	conn, err := datastore.NewSizedIndexConnection(256, ctxt)
 	if err != nil {
@@ -409,16 +413,27 @@ func cleanbackfillFiles() {
 	dir := backfillDir()
 	files, err := ioutil.ReadDir(dir)
 	if err != nil {
+		log.Printf("Error (%v) in getting listing for backfill directory (%s)\n", err, dir)
 		return
 	}
+
 	for _, file := range files {
-		os.Remove(file.Name())
+		fname := path.Join(dir, file.Name())
+
+		// The backfill dir for the tests may include files created by other programs. Avoid removing them.
+		if strings.Contains(fname, n1ql.BACKFILLPREFIX) {
+			log.Printf("Removing backfill file (%s)\n", fname)
+			if err = os.Remove(fname); err != nil {
+				log.Printf("Error (%v) in removing backfill file (%s)\n", err, fname)
+			}
+		}
 	}
 }
 
 func getbackfillFiles(dir string) []string {
 	files, err := ioutil.ReadDir(dir)
 	if err != nil {
+		log.Printf("Error (%v) in getting listing for backfill directory (%s)\n", err, dir)
 		return nil
 	}
 	rv := make([]string, 0)
