@@ -12,10 +12,11 @@ package indexer
 import (
 	"bytes"
 	"errors"
+	"sort"
+
 	"github.com/couchbase/indexing/secondary/collatejson"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
-	"sort"
 )
 
 var (
@@ -79,6 +80,22 @@ func ArrayIndexItems(bs []byte, arrPos int, buf []byte,
 	itemArrays, err := splitSecondaryArrayKey(bs, arrPos, buf)
 	if err != nil {
 		return nil, nil, len(buf), err
+	}
+
+	// The exploded keys in itemArrays point to incoming encoded key.
+	// The buffer is free to be re-used at this point. The buffer is used to
+	// form joined keys to be indexed. Check if size of buffer is sufficient
+	// to hold all joined entries. If not, reallocate the buffer. This is to avoid
+	// overallocation through append in collatejson JoinArray
+	totalSz := 0
+	for i := range itemArrays {
+		for j := range itemArrays[i] {
+			totalSz += len(itemArrays[i][j]) + 2 // add 2 for TypeArray and Terminator
+		}
+	}
+
+	if totalSz > cap(buf) {
+		buf = make([]byte, 0, totalSz+RESIZE_PAD)
 	}
 
 	codec := collatejson.NewCodec(16)
