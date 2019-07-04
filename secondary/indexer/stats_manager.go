@@ -1312,6 +1312,7 @@ type statsManager struct {
 	statsPersister           StatsPersister
 	statsPersistenceInterval uint64
 	exitPersister            uint64
+	statsUpdaterStopCh       chan bool
 }
 
 func NewStatsManager(supvCmdch MsgChannel,
@@ -1422,7 +1423,9 @@ func (s *statsManager) handleStatsReq(w http.ResponseWriter, r *http.Request) {
 		stats := s.stats.Get()
 
 		t0 := time.Now()
-		if common.IndexerState(stats.indexerState.Value()) != common.INDEXER_BOOTSTRAP {
+		// If the caller has requested stats with async = false, caller wants
+		// the updated stats. tryUpdateStats will ensure the updated stats.
+		if common.IndexerState(stats.indexerState.Value()) != common.INDEXER_BOOTSTRAP && sync == true {
 			s.tryUpdateStats(sync)
 		}
 		bytes, _ := stats.MarshalJSON(partition, pretty, skipEmpty, false)
@@ -1551,6 +1554,7 @@ func (s *statsManager) handleStatsResetReq(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *statsManager) run() {
+
 loop:
 	for {
 		select {
@@ -1560,9 +1564,20 @@ loop:
 				case STORAGE_MGR_SHUTDOWN:
 					logging.Infof("StatsManager::run Shutting Down")
 					atomic.StoreUint64(&s.exitPersister, 1)
+					if s.statsUpdaterStopCh != nil {
+						close(s.statsUpdaterStopCh)
+					}
 					s.supvCmdch <- &MsgSuccess{}
 					break loop
 				case UPDATE_INDEX_INSTANCE_MAP:
+					// Start the stats updater routine when the index inst map
+					// is received for the first time. This ensures that
+					// indexer state is set as INDEXER_BOOTSTRAP, before stats
+					// updater starts.
+					if s.statsUpdaterStopCh == nil {
+						s.statsUpdaterStopCh = make(chan bool)
+						go s.statsUpdater(s.statsUpdaterStopCh)
+					}
 					s.handleIndexInstanceUpdate(cmd)
 				case CONFIG_SETTINGS_UPDATE:
 					s.handleConfigUpdate(cmd)
@@ -1582,6 +1597,37 @@ loop:
 	}
 }
 
+func (s *statsManager) statsUpdater(stopCh chan bool) {
+
+	// Set stats Updater's interval such that tryUpdateStats is called at least
+	// as frequently as stats_cache_timeout. Keep the interval at max 1 second
+	// as the ns_server makes stats request every second.
+	conf := s.config.Load()
+	timeout := time.Millisecond * time.Duration(conf["stats_cache_timeout"].Uint64())
+	if int64(timeout) > int64(time.Second) {
+		timeout = time.Second
+	}
+
+	ticker := time.NewTicker(timeout)
+	defer ticker.Stop()
+
+loop:
+	for {
+		select {
+		case <-stopCh:
+			break loop
+
+		case <-ticker.C:
+			stats := s.stats.Get()
+			if stats != nil {
+				if common.IndexerState(stats.indexerState.Value()) != common.INDEXER_BOOTSTRAP {
+					s.tryUpdateStats(false)
+				}
+			}
+		}
+	}
+}
+
 func (s *statsManager) handleIndexInstanceUpdate(cmd Message) {
 	req := cmd.(*MsgUpdateInstMap)
 	s.stats.Set(req.GetStatsObject())
@@ -1590,6 +1636,8 @@ func (s *statsManager) handleIndexInstanceUpdate(cmd Message) {
 
 func (s *statsManager) handleConfigUpdate(cmd Message) {
 	cfg := cmd.(*MsgConfigUpdate)
+	oldTimeout := s.config.Load()["stats_cache_timeout"].Uint64()
+	newTimeout := cfg.GetConfig()["stats_cache_timeout"].Uint64()
 	s.config.Store(cfg.GetConfig())
 
 	atomic.StoreUint64(&s.statsLogDumpInterval, cfg.GetConfig()["settings.statsLogDumpInterval"].Uint64())
@@ -1597,6 +1645,14 @@ func (s *statsManager) handleConfigUpdate(cmd Message) {
 
 	chunksz := cfg.GetConfig()["statsPersistenceChunkSize"].Int()
 	s.statsPersister.SetConfig(chunkSz, chunksz)
+
+	// Stop and start the stats updater routine., if required.
+	if oldTimeout != newTimeout {
+		close(s.statsUpdaterStopCh)
+		newStopCh := make(chan bool)
+		s.statsUpdaterStopCh = newStopCh
+		go s.statsUpdater(s.statsUpdaterStopCh)
+	}
 
 	s.supvCmdch <- &MsgSuccess{}
 }
