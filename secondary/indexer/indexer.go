@@ -104,6 +104,7 @@ type indexer struct {
 	bucketRollbackTimes map[string]int64
 
 	bucketBuildTs map[string]Timestamp
+	buildTsLock   map[common.StreamId]map[string]*sync.Mutex
 
 	//TODO Remove this once cbq bridge support goes away
 	bucketCreateClientChMap map[string]MsgChannel
@@ -230,6 +231,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		streamBucketRequestQueue:     make(map[common.StreamId]map[string]chan *kvRequest),
 		streamBucketRequestLock:      make(map[common.StreamId]map[string]chan *sync.Mutex),
 		bucketBuildTs:                make(map[string]Timestamp),
+		buildTsLock:                  make(map[common.StreamId]map[string]*sync.Mutex),
 		bucketRollbackTimes:          make(map[string]int64),
 		bucketCreateClientChMap:      make(map[string]MsgChannel),
 
@@ -1141,6 +1143,9 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 
 	case STORAGE_ROLLBACK_DONE:
 		idx.handleStorageRollbackDone(msg)
+
+	case INDEXER_UPDATE_BUILD_TS:
+		idx.handleUpdateBuildTs(msg)
 
 	default:
 		logging.Fatalf("Indexer::handleWorkerMsgs Unknown Message %+v", msg)
@@ -2972,7 +2977,6 @@ func (idx *indexer) handleRecoveryDone(msg Message) {
 
 	bucket := msg.(*MsgRecovery).GetBucket()
 	streamId := msg.(*MsgRecovery).GetStreamId()
-	buildTs := msg.(*MsgRecovery).GetBuildTs()
 
 	logging.Infof("Indexer::handleRecoveryDone StreamId %v Bucket %v ",
 		streamId, bucket)
@@ -2982,7 +2986,6 @@ func (idx *indexer) handleRecoveryDone(msg Message) {
 	<-idx.tkCmdCh
 
 	idx.cleanupStreamBucketState(streamId, bucket)
-	idx.bucketBuildTs[bucket] = buildTs
 
 	//during recovery, if all indexes of a bucket gets dropped,
 	//the stream needs to be stopped for that bucket.
@@ -3185,7 +3188,6 @@ func (idx *indexer) handleStreamRequestDone(msg Message) {
 
 	streamId := msg.(*MsgStreamInfo).GetStreamId()
 	bucket := msg.(*MsgStreamInfo).GetBucket()
-	buildTs := msg.(*MsgStreamInfo).GetBuildTs()
 
 	logging.Infof("Indexer::handleStreamRequestDone StreamId %v Bucket %v",
 		streamId, bucket)
@@ -3195,8 +3197,6 @@ func (idx *indexer) handleStreamRequestDone(msg Message) {
 	<-idx.tkCmdCh
 
 	delete(idx.streamBucketRequestStopCh[streamId], bucket)
-	idx.bucketBuildTs[bucket] = buildTs
-
 }
 
 func (idx *indexer) handleMTRFail(msg Message) {
@@ -3531,6 +3531,8 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 		common.CrashOnError(respErr.cause)
 	}
 
+	idx.initBuildTsLock(buildStream, bucket)
+
 	stopCh := make(StopChannel)
 
 	if _, ok := idx.streamBucketRequestStopCh[buildStream]; !ok {
@@ -3572,16 +3574,15 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 					//This makes sure indexer doesn't use a timestamp which can never
 					//be caught up to (due to kv rollback).
 					//if there is a failover after this, it will be observed as a rollback
-					buildTs, err := computeBucketBuildTs(clustAddr, bucket, numVb)
-					if err == nil {
-						idx.internalRecvCh <- &MsgStreamInfo{mType: STREAM_REQUEST_DONE,
-							streamId: buildStream,
-							bucket:   bucket,
-							buildTs:  buildTs,
-							activeTs: resp.(*MsgSuccessOpenStream).GetActiveTs(),
-						}
-						break retryloop
+					// Asyncronously compute the KV timestamp
+					go idx.computeBucketBuildTsAsync(clustAddr, bucket, numVb, buildStream)
+
+					idx.internalRecvCh <- &MsgStreamInfo{mType: STREAM_REQUEST_DONE,
+						streamId: buildStream,
+						bucket:   bucket,
+						activeTs: resp.(*MsgSuccessOpenStream).GetActiveTs(),
 					}
+					break retryloop
 
 				case INDEXER_ROLLBACK:
 					//an initial build request should never receive rollback message
@@ -4718,7 +4719,6 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 		bucket:             bucket,
 		indexList:          indexList,
 		restartTs:          restartTs,
-		buildTs:            idx.bucketBuildTs[bucket],
 		respCh:             respCh,
 		stopCh:             stopCh,
 		allowMarkFirstSnap: allowMarkFirstSnap,
@@ -4739,6 +4739,8 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 		respErr := resp.(*MsgError).GetError()
 		common.CrashOnError(respErr.cause)
 	}
+
+	idx.initBuildTsLock(streamId, bucket)
 
 	if _, ok := idx.streamBucketRequestStopCh[streamId]; !ok {
 		idx.streamBucketRequestStopCh[streamId] = make(BucketRequestStopCh)
@@ -4781,16 +4783,15 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 					//This makes sure indexer doesn't use a timestamp which can never
 					//be caught up to (due to kv rollback).
 					//if there is a failover after this, it will be observed as a rollback
-					buildTs, err := computeBucketBuildTs(clustAddr, bucket, numVb)
-					if err == nil {
-						idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_RECOVERY_DONE,
-							streamId:  streamId,
-							bucket:    bucket,
-							buildTs:   buildTs,
-							restartTs: restartTs,
-							activeTs:  resp.(*MsgSuccessOpenStream).GetActiveTs()}
-						break retryloop
-					}
+					// Asyncronously compute the KV timestamp
+					go idx.computeBucketBuildTsAsync(clustAddr, bucket, numVb, streamId)
+
+					idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_RECOVERY_DONE,
+						streamId:  streamId,
+						bucket:    bucket,
+						restartTs: restartTs,
+						activeTs:  resp.(*MsgSuccessOpenStream).GetActiveTs()}
+					break retryloop
 
 				case INDEXER_ROLLBACK:
 					logging.Infof("Indexer::startBucketStream Rollback from "+
@@ -5289,6 +5290,26 @@ func (idx *indexer) handleUpdateMapToWorker(msg Message) {
 
 	err := idx.sendUpdatedIndexMapToWorker(msgUpdateIndexInstMap, msgUpdateIndexPartnMap, workerCh, workerStr)
 	respCh <- err
+}
+
+func (idx *indexer) handleUpdateBuildTs(msg Message) {
+	bucket := msg.(*MsgStreamUpdate).GetBucket()
+	buildTs := msg.(*MsgStreamUpdate).GetTimestamp()
+	streamId := msg.(*MsgStreamUpdate).GetStreamId()
+
+	if buildTs != nil {
+		idx.bucketBuildTs[bucket] = buildTs
+
+		streamState := idx.getStreamBucketState(streamId, bucket)
+		if streamState != STREAM_INACTIVE {
+			// Update timekeeper with buildTs
+			idx.tkCmdCh <- msg
+			<-idx.tkCmdCh
+		} else {
+			logging.Infof("Indexer::handleUpdateBuildTs Skiping updateBuildTs message to "+
+				"timekeeper as stream: %v is in state: %v for bucket: %v", streamId, streamState, bucket)
+		}
+	}
 }
 
 func (idx *indexer) genIndexerId() {
@@ -5889,30 +5910,6 @@ func (idx *indexer) validateIndexInstMap() {
 				bucketValid[bucket] = bucketValid[bucket] && bucketUUIDValid
 			} else {
 				bucketValid[bucket] = bucketUUIDValid
-			}
-
-			//also set the buildTs for initial state index.
-			//TODO buildTs to be part of index instance
-			if bucketUUIDValid {
-				cluster := idx.config["clusterAddr"].String()
-				numVbuckets := idx.config["numVbuckets"].Int()
-
-				var buildTs Timestamp
-				fn := func(r int, err error) error {
-					if r > 0 {
-						logging.Warnf("Indexer::validateIndexInstMap Bucket %s is not yet ready (err = %v) Retrying(%d)..", bucket, err, r)
-					}
-					buildTs, err = GetCurrentKVTs(cluster, "default", bucket, numVbuckets)
-					return err
-				}
-				rh := common.NewRetryHelper(MAX_KVWARMUP_RETRIES, time.Second, 1, fn)
-				err := rh.Run()
-				if err != nil {
-					logging.Fatalf("Indexer::validateIndexInstMap Bucket %s not ready even after max retries. Restarting indexer.", bucket)
-					os.Exit(1)
-				} else {
-					idx.bucketBuildTs[bucket] = buildTs
-				}
 			}
 		}
 	}
@@ -6750,6 +6747,35 @@ func dumpMemProfile(filename string) bool {
 	return true
 }
 
+func (idx *indexer) computeBucketBuildTsAsync(clusterAddr string, bucket string, numVb int, streamId common.StreamId) {
+
+	// Acquire the buildTsLock
+	// The buildTsLock is per bucket per stream lock. It serves two purposes:
+	// (i) It serializes the update of buildTs to indexer and timekeeper so that
+	//     the buildTs computed earlier by one go-routine can not overwrite the
+	//     buildTs computed later by another go-routine
+	// (ii) Incase of any issues with KV, it prevents multiple go-routines to
+	//      flood the logs with error messages while fetching the KVT's
+	mutex := idx.buildTsLock[streamId][bucket]
+	mutex.Lock()
+	defer mutex.Unlock()
+
+	buildTs, err := computeBucketBuildTs(clusterAddr, bucket, numVb)
+	if err != nil {
+		logging.Errorf("Indexer::computeBucketBuildTsAsync, stream: %v, bucket: %v, err: %v", streamId, bucket, err)
+	} else {
+		msgBuildTs := &MsgStreamUpdate{
+			mType:    INDEXER_UPDATE_BUILD_TS,
+			streamId: streamId,
+			bucket:   bucket,
+			buildTs:  buildTs,
+		}
+		// Send a message to indexer to update the buildTs.
+		// Indexer would forward this message to timekeeper
+		idx.internalRecvCh <- msgBuildTs
+	}
+}
+
 //calculates buildTs for bucket. This is a blocking call
 //which will keep trying till success as indexer cannot work
 //without a buildts.
@@ -7392,4 +7418,13 @@ func (idx *indexer) cleanupStreamBucketState(streamId common.StreamId, bucket st
 	delete(idx.streamBucketRequestStopCh[streamId], bucket)
 	delete(idx.streamBucketRollbackTs[streamId], bucket)
 	delete(idx.streamBucketRetryTs[streamId], bucket)
+}
+
+func (idx *indexer) initBuildTsLock(streamId common.StreamId, bucket string) {
+	if _, ok := idx.buildTsLock[streamId]; !ok {
+		idx.buildTsLock[streamId] = make(map[string]*sync.Mutex)
+	}
+	if _, ok := idx.buildTsLock[streamId][bucket]; !ok {
+		idx.buildTsLock[streamId][bucket] = &sync.Mutex{}
+	}
 }

@@ -139,6 +139,9 @@ func (tk *timekeeper) handleSupervisorCommands(cmd Message) {
 	case ADD_INDEX_LIST_TO_STREAM:
 		tk.handleAddIndextoStream(cmd)
 
+	case INDEXER_UPDATE_BUILD_TS:
+		tk.handleUpdateBuildTs(cmd)
+
 	case REMOVE_INDEX_LIST_FROM_STREAM:
 		tk.handleRemoveIndexFromStream(cmd)
 
@@ -389,6 +392,48 @@ func (tk *timekeeper) addIndextoStream(cmd Message) {
 		}
 	}
 
+}
+
+func (tk *timekeeper) handleUpdateBuildTs(cmd Message) {
+	logging.Infof("Timekeeper::handleUpdateBuildTs %v", cmd)
+
+	tk.lock.Lock()
+	defer tk.lock.Unlock()
+
+	streamId := cmd.(*MsgStreamUpdate).GetStreamId()
+	bucket := cmd.(*MsgStreamUpdate).GetBucket()
+	state := tk.ss.streamBucketStatus[streamId][bucket]
+
+	// Ignore UPDATE_BUILD_TS msg for inactive and recovery phase. For recovery,
+	// stream will get re-opened and build done will get re-computed.
+	if state == STREAM_INACTIVE || state == STREAM_PREPARE_DONE ||
+		state == STREAM_PREPARE_RECOVERY {
+		logging.Infof("Timekeeper::handleUpdateBuildTs Ignore updateBuildTs "+
+			"for Bucket: %v StreamId: %v State: %v", bucket, streamId, state)
+		tk.supvCmdch <- &MsgSuccess{}
+		return
+	}
+
+	tk.updateBuildTs(cmd)
+
+	//Check for possiblity of build done after buildTs is updated.
+	//In case of crash recovery, if there are no mutations, there is
+	//no flush happening, which can cause index to be in initial state.
+	if !tk.ss.checkAnyFlushPending(streamId, bucket) &&
+		!tk.ss.checkAnyAbortPending(streamId, bucket) {
+		lastFlushedTs := tk.ss.streamBucketLastFlushedTsMap[streamId][bucket]
+		tk.checkInitialBuildDone(streamId, bucket, lastFlushedTs)
+	}
+
+	tk.supvCmdch <- &MsgSuccess{}
+}
+
+func (tk *timekeeper) updateBuildTs(cmd Message) {
+	buildTs := cmd.(*MsgStreamUpdate).GetTimestamp()
+	streamId := cmd.(*MsgStreamUpdate).GetStreamId()
+	bucket := cmd.(*MsgStreamUpdate).GetBucket()
+
+	tk.setBuildTs(streamId, bucket, buildTs)
 }
 
 func (tk *timekeeper) handleRemoveIndexFromStream(cmd Message) {
@@ -1476,7 +1521,6 @@ func (tk *timekeeper) handleStreamRequestDone(cmd Message) {
 
 	streamId := cmd.(*MsgStreamInfo).GetStreamId()
 	bucket := cmd.(*MsgStreamInfo).GetBucket()
-	buildTs := cmd.(*MsgStreamInfo).GetBuildTs()
 	activeTs := cmd.(*MsgStreamInfo).GetActiveTs()
 
 	logging.Infof("Timekeeper::handleStreamRequestDone StreamId %v Bucket %v",
@@ -1485,7 +1529,6 @@ func (tk *timekeeper) handleStreamRequestDone(cmd Message) {
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
 
-	tk.setBuildTs(streamId, bucket, buildTs)
 	tk.ss.streamBucketOpenTsMap[streamId][bucket] = activeTs
 	tk.ss.streamBucketStartTimeMap[streamId][bucket] = uint64(time.Now().UnixNano())
 
@@ -1533,7 +1576,6 @@ func (tk *timekeeper) handleRecoveryDone(cmd Message) {
 
 	streamId := cmd.(*MsgRecovery).GetStreamId()
 	bucket := cmd.(*MsgRecovery).GetBucket()
-	buildTs := cmd.(*MsgRecovery).GetBuildTs()
 	mergeTs := cmd.(*MsgRecovery).GetRestartTs()
 	activeTs := cmd.(*MsgRecovery).GetActiveTs()
 
@@ -1543,7 +1585,6 @@ func (tk *timekeeper) handleRecoveryDone(cmd Message) {
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
 
-	tk.setBuildTs(streamId, bucket, buildTs)
 	tk.resetWaitForRecovery(streamId, bucket)
 	tk.ss.streamBucketOpenTsMap[streamId][bucket] = activeTs
 	tk.ss.streamBucketStartTimeMap[streamId][bucket] = uint64(time.Now().UnixNano())
@@ -1592,7 +1633,7 @@ func (tk *timekeeper) handleRecoveryDone(cmd Message) {
 
 	// Check if the stream needs repair for missing streamBegin
 	if tk.vbCheckerStopCh == nil {
-		logging.Infof("Timekeeper::handleStreamRequestDone Call RepairMissingStreamBegin to check for vbucket for repair. "+
+		logging.Infof("Timekeeper::handleRecoveryDone Call RepairMissingStreamBegin to check for vbucket for repair. "+
 			"StreamId %v bucket %v", streamId, bucket)
 		tk.vbCheckerStopCh = make(chan bool)
 		go tk.repairMissingStreamBegin(streamId)
@@ -1725,8 +1766,9 @@ func (tk *timekeeper) checkInitialBuildDone(streamId common.StreamId,
 			idx.Stream == streamId &&
 			idx.State == common.INDEX_STATE_INITIAL {
 
-			//if buildTs is zero, initial build is done
-			if buildInfo.buildTs.IsZeroTs() {
+			if buildInfo.buildTs == nil {
+				initBuildDone = false
+			} else if buildInfo.buildTs.IsZeroTs() { //if buildTs is zero, initial build is done
 				initBuildDone = true
 			} else if flushTs == nil {
 				initBuildDone = false
@@ -1741,7 +1783,6 @@ func (tk *timekeeper) checkInitialBuildDone(streamId common.StreamId,
 			}
 
 			if initBuildDone {
-
 				//change all indexes of this bucket to Catchup state if the flush
 				//is for INIT_STREAM
 				if streamId == common.INIT_STREAM {
@@ -3106,7 +3147,6 @@ func (tk *timekeeper) setBuildTs(streamId common.StreamId, bucket string,
 			buildInfo.buildTs = buildTs
 		}
 	}
-
 }
 
 //setMergeTs sets the mergeTs for catchup state indexes in case of recovery.
