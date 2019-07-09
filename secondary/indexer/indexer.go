@@ -1047,6 +1047,9 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 	case TK_INIT_BUILD_DONE_ACK:
 		idx.handleInitBuildDoneAck(msg)
 
+	case TK_ADD_INSTANCE_FAIL:
+		idx.handleAddInstanceFail(msg)
+
 	case TK_MERGE_STREAM_ACK:
 		idx.handleMergeStreamAck(msg)
 
@@ -3070,6 +3073,49 @@ func (idx *indexer) handleInitBuildDoneAck(msg Message) {
 
 }
 
+func (idx *indexer) handleAddInstanceFail(msg Message) {
+
+	streamId := msg.(*MsgTKInitBuildDone).GetStreamId()
+	bucket := msg.(*MsgTKInitBuildDone).GetBucket()
+
+	logging.Infof("Indexer::handleAddInstanceFail StreamId %v Bucket %v",
+		streamId, bucket)
+
+	switch streamId {
+
+	case common.INIT_STREAM:
+
+		//notify failure to timekeeper
+		idx.tkCmdCh <- msg
+		<-idx.tkCmdCh
+
+		mergeStreamId := common.MAINT_STREAM
+
+		//initiate recovery if not already in progress
+		//it is ok to skip ADD_FAIL if recovery is already in progess
+		//as at this point the index state change has already been
+		//picked up by MAINT_STREAM recovery
+		state := idx.getStreamBucketState(mergeStreamId, bucket)
+
+		if state == STREAM_INACTIVE ||
+			state == STREAM_PREPARE_RECOVERY ||
+			state == STREAM_RECOVERY {
+			logging.Infof("Indexer::handleAddInstanceFail Skip Recovery %v %v %v",
+				mergeStreamId, bucket, state)
+			return
+		} else {
+			idx.handleInitPrepRecovery(&MsgRecovery{mType: INDEXER_INIT_PREP_RECOVERY,
+				streamId: mergeStreamId,
+				bucket:   bucket})
+		}
+
+	default:
+		logging.Fatalf("Indexer::handleAddInstanceFail Unexpected Add Instance Fail "+
+			"Received for Stream %v Bucket %v", streamId, bucket)
+		common.CrashOnError(errors.New("Unexpected Add Instance Fail"))
+	}
+}
+
 func (idx *indexer) handleMergeStreamAck(msg Message) {
 
 	streamId := msg.(*MsgTKMergeStream).GetStreamId()
@@ -4235,31 +4281,35 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 					respErr := resp.(*MsgError).GetError()
 					count++
 
-					//If projector returns TopicMissing/GenServerClosed, AddInstance
-					//cannot succeed. This needs to be aborted so that stream lock is
-					//released and MTR can proceed to repair the Topic.
-					if respErr.cause.Error() == common.ErrorClosed.Error() ||
-						respErr.cause.Error() == projClient.ErrorTopicMissing.Error() {
-						logging.Warnf("Indexer::handleInitialBuildDone Stream %v Bucket %v "+
-							"Error from Projector %v. Aborting.", streamId, bucket, respErr.cause)
-						break retryloop
+					if count > MAX_PROJ_RETRY {
+						//if the max retry count has been exceeded, check the status of MAINT_STREAM.
+						//if MAINT_STREAM is in recovery, retry for more time before recovery finishes.
+						//At this point, the index state has already been changed in TK and Indexer maps.
+						//But it is unknown if MAINT_STREAM recovery has picked up that state change or not
+						//(depending on when it started). If the stream state is active right now, it is okay
+						//to generate ADD_FAIL message. If MAINT_STREAM recovery starts after that, it will
+						//pick up the state change.
+						mstate := idx.getStreamBucketState(common.MAINT_STREAM, bucket)
+						if mstate == STREAM_PREPARE_RECOVERY || mstate == STREAM_RECOVERY {
+							logging.Infof("Indexer::handleInitialBuildDone Stream %v Bucket %v "+
+								"Detected MAINT_STREAM in %v state. Reset retry count.", streamId, bucket, mstate)
+							count = 0
+						} else {
+							// Send message to main loop to start recovery if cannot add instances over threshold.
+							//If the projector state is not correct, this ensures projector state will get cleaned up.
+							logging.Errorf("Indexer::handleInitialBuildDone Stream %v Bucket %v "+
+								"Error from Projector %v. Start recovery after %v retries.", streamId,
+								bucket, respErr.cause, MAX_PROJ_RETRY)
 
-					} else if count > MAX_PROJ_RETRY {
-						// Start recovery if cannot add instances over threshold.  If the projector
-						// state is not correct, this ensures projector state will get cleaned up.
-						logging.Errorf("Indexer::handleInitialBuildDone Stream %v Bucket %v "+
-							"Error from Projector %v. Start recovery after %v retries.", streamId,
-							bucket, respErr.cause, MAX_PROJ_RETRY)
+							idx.internalRecvCh <- &MsgTKInitBuildDone{
+								mType:    TK_ADD_INSTANCE_FAIL,
+								streamId: streamId,
+								bucket:   bucket,
+							}
+							break retryloop
 
-						idx.internalRecvCh <- &MsgRecovery{
-							mType:    INDEXER_INIT_PREP_RECOVERY,
-							streamId: common.MAINT_STREAM,
-							bucket:   bucket,
 						}
-						break retryloop
-
 					} else {
-
 						logging.Errorf("Indexer::handleInitialBuildDone Stream %v Bucket %v "+
 							"Error from Projector %v. Retrying.", streamId, bucket, respErr.cause)
 						time.Sleep(KV_RETRY_INTERVAL * time.Millisecond)

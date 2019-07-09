@@ -186,6 +186,9 @@ func (tk *timekeeper) handleSupervisorCommands(cmd Message) {
 	case TK_INIT_BUILD_DONE_ACK:
 		tk.handleInitBuildDoneAck(cmd)
 
+	case TK_ADD_INSTANCE_FAIL:
+		tk.handleAddInstanceFail(cmd)
+
 	case TK_MERGE_STREAM_ACK:
 		tk.handleMergeStreamAck(cmd)
 
@@ -1417,6 +1420,38 @@ func (tk *timekeeper) handleInitBuildDoneAck(cmd Message) {
 		//It can be processed now.
 		tk.processPendingTS(streamId, bucket)
 
+	}
+
+	tk.supvCmdch <- &MsgSuccess{}
+}
+
+func (tk *timekeeper) handleAddInstanceFail(cmd Message) {
+
+	streamId := cmd.(*MsgTKInitBuildDone).GetStreamId()
+	bucket := cmd.(*MsgTKInitBuildDone).GetBucket()
+
+	logging.Infof("Timekeeper::handleAddInstanceFail StreamId %v Bucket %v",
+		streamId, bucket)
+
+	tk.lock.Lock()
+	defer tk.lock.Unlock()
+
+	state := tk.ss.streamBucketStatus[streamId][bucket]
+
+	//ignore build done ack for Inactive and Recovery phase. For recovery, stream
+	//will get reopen and build done will get recomputed.
+	if state == STREAM_INACTIVE || state == STREAM_PREPARE_DONE ||
+		state == STREAM_PREPARE_RECOVERY {
+		logging.Infof("Timekeeper::handleAddInstanceFail Ignore AddInstanceFail "+
+			"for Bucket: %v StreamId: %v State: %v", bucket, streamId, state)
+		tk.supvCmdch <- &MsgSuccess{}
+		return
+	}
+
+	//if AddInstance fails, reset the AddInstPending flag. Recovery will
+	//add these instances back to projector bookkeeping.
+	if streamId == common.INIT_STREAM {
+		tk.setAddInstPending(streamId, bucket, false)
 	}
 
 	tk.supvCmdch <- &MsgSuccess{}
