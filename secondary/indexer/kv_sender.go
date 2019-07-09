@@ -484,7 +484,7 @@ func (k *kvSender) restartVbuckets(streamId c.StreamId, restartTs *c.TsVbuuid,
 func (k *kvSender) addIndexForExistingBucket(streamId c.StreamId, bucket string, indexInstList []c.IndexInst,
 	respCh MsgChannel, stopCh StopChannel) {
 
-	addrs, err := k.getAllProjectorAddrs()
+	_, addrs, err := k.getAllVbucketsInCluster(bucket)
 	if err != nil {
 		logging.Errorf("KVSender::addIndexForExistingBucket %v %v Error in fetching cluster info %v",
 			streamId, bucket, err)
