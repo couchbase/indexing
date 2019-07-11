@@ -17,6 +17,7 @@
 package projector
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -58,26 +59,29 @@ type KVData struct {
 	wrkrStats []interface{}
 	heartBeat <-chan time.Time
 	uuid      uint64 // immutable
+	kvaddr    string
 }
 
 type KvdataStats struct {
-	closed      stats.BoolVal
-	hbCount     stats.Uint64Val
-	eventCount  stats.Uint64Val
-	reqCount    stats.Uint64Val
-	endCount    stats.Uint64Val
-	snapStat    stats.Average
-	upsertCount stats.Uint64Val
-	deleteCount stats.Uint64Val
-	exprCount   stats.Uint64Val
-	ainstCount  stats.Uint64Val
-	dinstCount  stats.Uint64Val
-	tsCount     stats.Uint64Val
-	mutchLen    stats.Uint64Val
-	vbseqnos    []stats.Uint64Val
+	closed        stats.BoolVal
+	hbCount       stats.Uint64Val
+	eventCount    stats.Uint64Val
+	reqCount      stats.Uint64Val
+	endCount      stats.Uint64Val
+	snapStat      stats.Average
+	upsertCount   stats.Uint64Val
+	deleteCount   stats.Uint64Val
+	exprCount     stats.Uint64Val
+	ainstCount    stats.Uint64Val
+	dinstCount    stats.Uint64Val
+	tsCount       stats.Uint64Val
+	mutchLen      stats.Uint64Val
+	vbseqnos      []stats.Uint64Val
+	kvdata        *KVData  // Handle to KVData
+	vbseqnos_copy []uint64 // Cached version of vbseqnos. Used only by stats_manager
 }
 
-func (kvstats *KvdataStats) Init(numVbuckets int) {
+func (kvstats *KvdataStats) Init(numVbuckets int, kvdata *KVData) {
 	kvstats.closed.Init()
 	kvstats.hbCount.Init()
 	kvstats.eventCount.Init()
@@ -95,6 +99,8 @@ func (kvstats *KvdataStats) Init(numVbuckets int) {
 	for i, _ := range kvstats.vbseqnos {
 		kvstats.vbseqnos[i].Init()
 	}
+	kvstats.kvdata = kvdata
+	kvstats.vbseqnos_copy = make([]uint64, numVbuckets)
 }
 
 func (kvstats *KvdataStats) IsClosed() bool {
@@ -102,7 +108,10 @@ func (kvstats *KvdataStats) IsClosed() bool {
 }
 
 func (stats *KvdataStats) String() (string, string) {
-	var stitems [15]string
+	var stitems [16]string
+	var vbseqnos string
+	var numDocsProcessed, numDocsPending uint64
+
 	stitems[0] = `"hbCount":` + strconv.FormatUint(stats.hbCount.Value(), 10)
 	stitems[1] = `"eventCount":` + strconv.FormatUint(stats.eventCount.Value(), 10)
 	stitems[2] = `"reqCount":` + strconv.FormatUint(stats.reqCount.Value(), 10)
@@ -118,13 +127,39 @@ func (stats *KvdataStats) String() (string, string) {
 	stitems[12] = `"dinstCount":` + strconv.FormatUint(stats.dinstCount.Value(), 10)
 	stitems[13] = `"tsCount":` + strconv.FormatUint(stats.tsCount.Value(), 10)
 	stitems[14] = `"mutChLen":` + strconv.FormatUint(stats.mutchLen.Value(), 10)
-	statjson := strings.Join(stitems[:], ",")
-	statsStr := fmt.Sprintf("{%v}", statjson)
 
-	var vbseqnos string
-	for _, v := range stats.vbseqnos {
-		vbseqnos += fmt.Sprintf("%v ", v.Value())
+	// A copy of vbseqnos is made so that numDocsProcessed can be consistent
+	// with the sum of logged vbseqnos. Also, it helps to compute the numDocsPending
+	// as stats.vbseqnos can move ahead of retrieved bucket seqnos (from getKVTs())
+	// at the time of computation of numDocsPending
+	for i, v := range stats.vbseqnos {
+		stats.vbseqnos_copy[i] = v.Value()
+		vbseqnos += fmt.Sprintf("%v ", stats.vbseqnos_copy[i])
+		numDocsProcessed += stats.vbseqnos_copy[i]
 	}
+
+	stitems[15] = `"numDocsProcessed":` + strconv.FormatUint(numDocsProcessed, 10)
+	statjson := strings.Join(stitems[:], ",")
+
+	cluster := stats.kvdata.config["clusterAddr"].String()
+	// Get seqnos only for the vbuckets owned by the KV on this node
+	seqnos, err := getKVTs(stats.kvdata.bucket, cluster, stats.kvdata.kvaddr)
+
+	// numDocsPending is logged only when there is no error in retrieving the bucket seqnos
+	if err == nil {
+		for i, v := range stats.vbseqnos_copy {
+			if seqnos[i] > v { // During a KV rollback, 'seqnos[i]' can become less than 'v'
+				numDocsPending += seqnos[i] - v
+			}
+		}
+		statjson = fmt.Sprintf("%v,`\"numDocsPending\":`%v", statjson, strconv.FormatUint(numDocsPending, 10))
+	} else {
+		fmsg := "KVDT[<-%v<-%v #%v] ##%v"
+		key := fmt.Sprintf(fmsg, stats.kvdata.bucket, stats.kvdata.feed.cluster, stats.kvdata.topic, stats.kvdata.opaque)
+		logging.Errorf("%v Unable to retrieve bucket sequence numbers, err: %v", key, err)
+	}
+
+	statsStr := fmt.Sprintf("{%v}", statjson)
 	return statsStr, vbseqnos
 }
 
@@ -136,6 +171,7 @@ func NewKVData(
 	engines map[uint64]*Engine,
 	endpoints map[string]c.RouterEndpoint,
 	mutch <-chan *mc.DcpEvent,
+	kvaddr string,
 	config c.Config) (*KVData, error) {
 
 	kvdata := &KVData{
@@ -148,9 +184,10 @@ func NewKVData(
 		endpoints: make(map[string]c.RouterEndpoint),
 		// 16 is enough, there can't be more than that many out-standing
 		// control calls on this feed.
-		sbch:  make(chan []interface{}, 16),
-		finch: make(chan bool),
-		stats: &KvdataStats{},
+		sbch:   make(chan []interface{}, 16),
+		finch:  make(chan bool),
+		stats:  &KvdataStats{},
+		kvaddr: kvaddr,
 	}
 
 	uuid, err := common.NewUUID()
@@ -161,7 +198,7 @@ func NewKVData(
 	kvdata.uuid = uuid.Uint64()
 
 	numVbuckets := config["maxVbuckets"].Int()
-	kvdata.stats.Init(numVbuckets)
+	kvdata.stats.Init(numVbuckets, kvdata)
 	fmsg := "KVDT[<-%v<-%v #%v]"
 	kvdata.logPrefix = fmt.Sprintf(fmsg, bucket, feed.cluster, feed.topic)
 	kvdata.syncTimeout = time.Duration(config["syncTimeout"].Int())
@@ -617,4 +654,35 @@ func (kvdata *KVData) newStats() c.Statistics {
 	}
 	stats, _ := c.NewStatistics(m)
 	return stats
+}
+
+// This method will not block for more than 5 seconds. As stats_manager
+// logger thread calls this routine periodically, it is important that
+// this routine does not block forever.
+// If there is any connection issue with memcached, the go-routine spawned
+// to get the bucket seqnos will eventually return as the connection to
+// memcached times-out
+func getKVTs(bucket, cluster, kvaddr string) ([]uint64, error) {
+	respch := make(chan []interface{})
+
+	go func() {
+		seqnos, err := BucketSeqnosLocal(cluster, "default", bucket, kvaddr)
+		respch <- []interface{}{seqnos, err}
+	}()
+
+	select {
+	case <-time.After(time.Duration(5 * time.Second)):
+		return nil, errors.New("Timeout in retrieving seqnos")
+	case resp := <-respch:
+		if resp[1] != nil {
+			return nil, resp[1].(error)
+		} else {
+			switch (resp[0]).(type) {
+			case []uint64:
+				return resp[0].([]uint64), nil
+			default:
+				return nil, errors.New("Unexpected type returned while retrieving bucket seqnos")
+			}
+		}
+	}
 }

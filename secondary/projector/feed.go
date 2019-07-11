@@ -65,6 +65,9 @@ type Feed struct {
 	// book-keeping for stale-ness
 	stale int
 
+	// Address with which bucket seqnos are retrieved from KV
+	kvaddr string
+
 	// config params
 	reqTimeout time.Duration
 	endTimeout time.Duration
@@ -1464,7 +1467,10 @@ func (feed *Feed) openFeeder(
 	kvaddr, err := feed.getLocalKVAddrs(pooln, bucketn, opaque)
 	if err != nil {
 		return nil, err
+	} else {
+		feed.kvaddr = kvaddr
 	}
+
 	kvaddrs := []string{kvaddr}
 	feeder, err = OpenBucketFeed(name, bucket, opaque, kvaddrs, dcpConfig)
 	if err != nil {
@@ -1630,7 +1636,7 @@ func (feed *Feed) startDataPath(
 	} else { // pass engines & endpoints to kvdata.
 		engs, ends := feed.engines[bucketn], feed.endpoints
 		kvdata, err = NewKVData(
-			feed, bucketn, opaque, ts, engs, ends, mutch, feed.config)
+			feed, bucketn, opaque, ts, engs, ends, mutch, feed.kvaddr, feed.config)
 	}
 	return kvdata, err
 }
