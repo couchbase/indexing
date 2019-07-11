@@ -3209,7 +3209,7 @@ func (idx *indexer) handleMTRFail(msg Message) {
 
 	// if in MTR, MTR must have stopped when recieving this message.
 	// Cleanup any lock that indexer may be holding.
-	delete(idx.streamBucketRequestStopCh[streamId], bucket)
+	idx.cleanupStreamBucketState(streamId, bucket)
 }
 
 func (idx *indexer) handleBucketNotFound(msg Message) {
