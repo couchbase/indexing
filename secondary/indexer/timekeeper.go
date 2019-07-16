@@ -64,6 +64,7 @@ type InitialBuildInfo struct {
 	buildDoneAckReceived bool
 	minMergeTs           *common.TsVbuuid //minimum merge ts for init stream
 	addInstPending       bool
+	waitForRecovery      bool
 }
 
 //timeout in milliseconds to batch the vbuckets
@@ -358,6 +359,7 @@ func (tk *timekeeper) addIndextoStream(cmd Message) {
 	indexInstList := cmd.(*MsgStreamUpdate).GetIndexList()
 	buildTs := cmd.(*MsgStreamUpdate).GetTimestamp()
 	streamId := cmd.(*MsgStreamUpdate).GetStreamId()
+	bucketInRecovery := cmd.(*MsgStreamUpdate).BucketInRecovery()
 
 	//If the index is in INITIAL state, store it in initialbuild map
 	for _, idx := range indexInstList {
@@ -375,11 +377,13 @@ func (tk *timekeeper) addIndextoStream(cmd Message) {
 				(streamId == common.INIT_STREAM && idx.State == common.INDEX_STATE_CATCHUP) {
 
 				logging.Infof("Timekeeper::addIndextoStream add BuildInfo index %v "+
-					"stream %v bucket %v state %v", idx.InstId, streamId, idx.Defn.Bucket, idx.State)
+					"stream %v bucket %v state %v waitForRecovery %v", idx.InstId, streamId,
+					idx.Defn.Bucket, idx.State, bucketInRecovery)
 
 				tk.indexBuildInfo[idx.InstId] = &InitialBuildInfo{
-					indexInst: idx,
-					buildTs:   buildTs,
+					indexInst:       idx,
+					buildTs:         buildTs,
+					waitForRecovery: bucketInRecovery,
 				}
 			}
 		}
@@ -1540,6 +1544,7 @@ func (tk *timekeeper) handleRecoveryDone(cmd Message) {
 	defer tk.lock.Unlock()
 
 	tk.setBuildTs(streamId, bucket, buildTs)
+	tk.resetWaitForRecovery(streamId, bucket)
 	tk.ss.streamBucketOpenTsMap[streamId][bucket] = activeTs
 	tk.ss.streamBucketStartTimeMap[streamId][bucket] = uint64(time.Now().UnixNano())
 
@@ -1707,6 +1712,11 @@ func (tk *timekeeper) checkInitialBuildDone(streamId common.StreamId,
 	bucket string, flushTs *common.TsVbuuid) bool {
 
 	for _, buildInfo := range tk.indexBuildInfo {
+
+		if buildInfo.waitForRecovery {
+			continue
+		}
+
 		//if index belongs to the flushed bucket and in INITIAL state
 		initBuildDone := false
 		idx := buildInfo.indexInst
@@ -3113,6 +3123,20 @@ func (tk *timekeeper) setMergeTs(streamId common.StreamId, bucket string,
 			buildInfo.minMergeTs = mergeTs.Copy()
 		}
 	}
+}
+
+func (tk *timekeeper) resetWaitForRecovery(streamId common.StreamId, bucket string) {
+
+	logging.Infof("Timekeeper::resetWaitForRecovery Stream %v Bucket %v", streamId, bucket)
+
+	for _, buildInfo := range tk.indexBuildInfo {
+		idx := buildInfo.indexInst
+		if idx.Defn.Bucket == bucket &&
+			idx.Stream == streamId {
+			buildInfo.waitForRecovery = false
+		}
+	}
+
 }
 
 func (tk *timekeeper) hasInitStateIndex(streamId common.StreamId,

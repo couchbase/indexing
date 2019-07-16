@@ -4706,6 +4706,11 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 		}
 	}
 
+	bucketInRecovery := false
+	if idx.getStreamBucketState(streamId, bucket) == STREAM_RECOVERY {
+		bucketInRecovery = true
+	}
+
 	//diable first snapshot optimization when recovering indexes as
 	//plasma cannot deal with duplicate inserts
 	cmd := &MsgStreamUpdate{mType: OPEN_STREAM,
@@ -4717,7 +4722,9 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 		respCh:             respCh,
 		stopCh:             stopCh,
 		allowMarkFirstSnap: allowMarkFirstSnap,
-		rollbackTime:       idx.bucketRollbackTimes[bucket]}
+		rollbackTime:       idx.bucketRollbackTimes[bucket],
+		bucketInRecovery:   bucketInRecovery,
+	}
 
 	//send stream update to timekeeper
 	if resp := idx.sendStreamUpdateToWorker(cmd, idx.tkCmdCh,

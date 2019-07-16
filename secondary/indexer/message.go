@@ -384,6 +384,7 @@ type MsgStreamUpdate struct {
 	rollbackTime int64
 
 	allowMarkFirstSnap bool
+	bucketInRecovery   bool
 }
 
 func (m *MsgStreamUpdate) GetMsgType() MsgType {
@@ -424,6 +425,10 @@ func (m *MsgStreamUpdate) GetRollbackTime() int64 {
 
 func (m *MsgStreamUpdate) AllowMarkFirstSnap() bool {
 	return m.allowMarkFirstSnap
+}
+
+func (m *MsgStreamUpdate) BucketInRecovery() bool {
+	return m.bucketInRecovery
 }
 
 func (m *MsgStreamUpdate) String() string {
