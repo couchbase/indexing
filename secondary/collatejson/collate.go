@@ -166,7 +166,17 @@ func (codec *Codec) Encode(text, code []byte) ([]byte, error) {
 // slice of byte. `text` is the output buffer for decoding and
 // expected to have enough capacity, atleast 3x of input `code`
 // and > MinBufferSize.
-func (codec *Codec) Decode(code, text []byte) ([]byte, error) {
+func (codec *Codec) Decode(code, text []byte) (out []byte, retErr error) {
+	defer func() {
+		if r := recover(); r != nil {
+			if strings.Contains(fmt.Sprint(r), "slice bounds out of range") {
+				retErr = ErrorOutputLen
+			} else {
+				retErr = fmt.Errorf("%v", r)
+			}
+		}
+	}()
+
 	text = text[:0]
 	if cap(text) < len(code) || cap(text) < MinBufferSize {
 		return nil, ErrorOutputLen

@@ -22,7 +22,9 @@ import (
 var docBufPool *common.BytesBufPool
 
 func init() {
-	docBufPool = common.NewByteBufferPool(maxIndexEntrySize)
+	conf := common.SystemConfig.SectionConfig("indexer.", true /*trim*/)
+	keySzCfg := getKeySizeConfig(conf)
+	docBufPool = common.NewByteBufferPool(keySzCfg.maxIndexEntrySize)
 }
 
 var fdbSnapIterPool *sync.Pool

@@ -442,31 +442,6 @@ func initGlobalSettings(oldCfg, newCfg common.Config) {
 	}
 }
 
-func initStorageSettings(newCfg common.Config) {
-
-	allowLargeKeys = newCfg["settings.allow_large_keys"].Bool()
-	if common.GetStorageMode() == common.FORESTDB {
-		allowLargeKeys = false
-	}
-
-	if allowLargeKeys {
-		maxArrayKeyLength = DEFAULT_MAX_ARRAY_KEY_SIZE
-		maxSecKeyLen = DEFAULT_MAX_SEC_KEY_LEN
-	} else {
-		maxArrayKeyLength = newCfg["settings.max_array_seckey_size"].Int()
-		maxSecKeyLen = newCfg["settings.max_seckey_size"].Int()
-	}
-	maxArrayKeyBufferLength = maxArrayKeyLength * 3
-	maxArrayIndexEntrySize = maxArrayKeyBufferLength + MAX_DOCID_LEN + 2
-	arrayEncBufPool = common.NewByteBufferPool(maxArrayIndexEntrySize + ENCODE_BUF_SAFE_PAD)
-
-	maxSecKeyBufferLen = maxSecKeyLen * 3
-	maxIndexEntrySize = maxSecKeyBufferLen + MAX_DOCID_LEN + 2
-	encBufPool = common.NewByteBufferPool(maxIndexEntrySize + ENCODE_BUF_SAFE_PAD)
-
-	ErrSecKeyTooLong = errors.New(fmt.Sprintf("Secondary key is too long (> %d)", maxSecKeyLen))
-}
-
 func validateSettings(value []byte, current common.Config, internal bool) error {
 	newConfig, err := common.NewConfig(value)
 	if err != nil {

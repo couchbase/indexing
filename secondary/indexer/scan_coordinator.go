@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -37,11 +38,9 @@ var (
 	ErrNotMyPartition     = errors.New("Not my partition")
 )
 
-var secKeyBufPool *common.BytesBufPool
+const DECODE_ERR_THRESHOLD = 100
 
-func init() {
-	secKeyBufPool = common.NewByteBufferPool(maxSecKeyBufferLen + ENCODE_BUF_SAFE_PAD)
-}
+var secKeyBufPool *common.BytesBufPool
 
 type ScanCoordinator interface {
 }
@@ -68,6 +67,8 @@ type scanCoordinator struct {
 	stats IndexerStatsHolder
 
 	indexerState atomic.Value
+
+	numDecodeErrors uint32 // Number of errors in collatejson decode.
 }
 
 // NewScanCoordinator returns an instance of scanCoordinator or err message
@@ -432,6 +433,16 @@ func (s *scanCoordinator) handleScanRequest(req *ScanRequest, w ScanResponseWrit
 				req.LogPrefix, scanPipeline.RowsReturned(), scanPipeline.RowsScanned(), waitTime, scanTime, status, req.RequestId)
 		})
 		s.updateErrStats(req, err)
+		if strings.Contains(err.Error(), "Collatejson decode error") {
+			errCount := atomic.AddUint32(&s.numDecodeErrors, 1)
+			if errCount > DECODE_ERR_THRESHOLD {
+				// Not sure if this is in-memory data corruption.
+				// It is safe to start afresh.
+				logging.Fatalf("Too many unexpected errors in scan decode. "+
+					"Error count = %v. Indexer exiting ...", errCount)
+				os.Exit(1)
+			}
+		}
 	} else {
 		status := "ok"
 		logging.LazyVerbose(func() string {

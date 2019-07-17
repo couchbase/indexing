@@ -3,11 +3,15 @@ package indexer
 import (
 	"bytes"
 	"testing"
+
+	"github.com/couchbase/indexing/secondary/common"
 )
 
 func newSKEntry(key, docid []byte) (secondaryIndexEntry, error) {
+	conf := common.SystemConfig.SectionConfig("indexer.", true /*trim*/)
+	keyConf := getKeySizeConfig(conf)
 	buf := make([]byte, 0, 4096*3)
-	return NewSecondaryIndexEntry(key, docid, false, 1, nil, buf, nil)
+	return NewSecondaryIndexEntry(key, docid, false, 1, nil, buf, nil, keyConf)
 }
 
 func TestPrimaryIndexEntry(t *testing.T) {
@@ -119,9 +123,9 @@ func TestSecondaryIndexEntryMatch(t *testing.T) {
 	e3, _ := newSKEntry([]byte(`["key1","key2","key3"]`), []byte("doc1"))
 	e4, _ := newSKEntry([]byte(`["partialmatch"]`), []byte("doc1"))
 
-	k1, _ := NewSecondaryKey([]byte(`["key1"]`), make([]byte, 100))
-	k2, _ := NewSecondaryKey([]byte(`["key1","key2"]`), make([]byte, 100))
-	k3, _ := NewSecondaryKey([]byte(`["partial"]`), make([]byte, 100))
+	k1, _ := NewSecondaryKey([]byte(`["key1"]`), make([]byte, 100), DEFAULT_MAX_SEC_KEY_LEN)
+	k2, _ := NewSecondaryKey([]byte(`["key1","key2"]`), make([]byte, 100), DEFAULT_MAX_SEC_KEY_LEN)
+	k3, _ := NewSecondaryKey([]byte(`["partial"]`), make([]byte, 100), DEFAULT_MAX_SEC_KEY_LEN)
 
 	if k1.Compare(&e1) != 0 {
 		t.Errorf("Expected match")
@@ -177,7 +181,10 @@ func TestLongDocIdEntry(t *testing.T) {
 	docid := make([]byte, 258, 300)
 	buf := make([]byte, 0, 4096)
 
-	e, err := NewSecondaryIndexEntry(key, docid, false, 2, nil, buf, nil)
+	conf := common.SystemConfig.SectionConfig("indexer.", true /*trim*/)
+	keyConf := getKeySizeConfig(conf)
+
+	e, err := NewSecondaryIndexEntry(key, docid, false, 2, nil, buf, nil, keyConf)
 	if err != nil {
 		t.Errorf("Got error %v", err)
 		return

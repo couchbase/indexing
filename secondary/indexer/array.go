@@ -73,7 +73,7 @@ func splitSecondaryArrayKey(key []byte, arrayPos int, tmpBuf []byte) ([][][]byte
 }
 
 func ArrayIndexItems(bs []byte, arrPos int, buf []byte,
-	isDistinct, checkSize bool) ([][]byte, []int, int, error) {
+	isDistinct, checkSize bool, sz keySizeConfig) ([][]byte, []int, int, error) {
 	var items [][]byte
 	var err error
 
@@ -105,14 +105,15 @@ func ArrayIndexItems(bs []byte, arrPos int, buf []byte,
 			return nil, nil, len(buf), err
 		}
 		l := len(buf)
-		if checkSize && (l-from) > maxSecKeyBufferLen {
-			logging.Errorf("Encoded array item key too long. Length of key = %v, Limit = %v", l-from, maxSecKeyBufferLen)
+		if checkSize && (l-from) > sz.maxSecKeyBufferLen {
+			logging.Errorf("Encoded array item key too long. Length of key = %v, Limit = %v", l-from, sz.maxSecKeyBufferLen)
 			return nil, nil, len(buf), ErrArrayItemKeyTooLong
 		}
-		if checkSize && l > maxArrayIndexEntrySize {
-			logging.Errorf("Encoded array key too long. Length of key = %v, Limit = %v", l, maxArrayIndexEntrySize)
+		if checkSize && l > sz.maxArrayIndexEntrySize {
+			logging.Errorf("Encoded array key too long. Length of key = %v, Limit = %v", l, sz.maxArrayIndexEntrySize)
 			return nil, nil, len(buf), ErrArrayKeyTooLong
 		}
+
 		items = append(items, buf[from:l])
 	}
 

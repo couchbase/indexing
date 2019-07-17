@@ -101,9 +101,11 @@ type plasmaSlice struct {
 	arrayExprPosition int
 	isArrayDistinct   bool
 
-	encodeBuf [][]byte
-	arrayBuf1 [][]byte
-	arrayBuf2 [][]byte
+	encodeBuf     [][]byte
+	arrayBuf1     [][]byte
+	arrayBuf2     [][]byte
+	keySzConf     []keySizeConfig
+	bufResizeFlag []int32 // Per worker; 0 buffer resize not needed >=1 resize needed
 
 	hasPersistence bool
 
@@ -494,6 +496,7 @@ loop:
 		var nmut int
 		select {
 		case icmd = <-mdb.cmdCh[workerId]:
+
 			switch icmd.op {
 			case opUpdate, opInsert:
 				start = time.Now()
@@ -532,6 +535,22 @@ loop:
 
 		}
 	}
+}
+
+func (mdb *plasmaSlice) updateSliceBuffers(workerId int) keySizeConfig {
+
+	if atomic.LoadInt32(&mdb.bufResizeFlag[workerId]) >= 1 {
+		mdb.confLock.RLock()
+		mdb.keySzConf[workerId] = getKeySizeConfig(mdb.sysconf)
+		mdb.confLock.RUnlock()
+		mdb.encodeBuf[workerId] = make([]byte, 0, mdb.keySzConf[workerId].maxIndexEntrySize)
+		if mdb.idxDefn.IsArrayIndex {
+			mdb.arrayBuf1[workerId] = make([]byte, 0, mdb.keySzConf[workerId].maxArrayIndexEntrySize)
+			mdb.arrayBuf2[workerId] = make([]byte, 0, mdb.keySzConf[workerId].maxArrayIndexEntrySize)
+		}
+		atomic.AddInt32(&mdb.bufResizeFlag[workerId], -1)
+	}
+	return mdb.keySzConf[workerId]
 }
 
 func (mdb *plasmaSlice) insert(key []byte, docid []byte, workerId int,
@@ -582,6 +601,8 @@ func (mdb *plasmaSlice) insertSecIndex(key []byte, docid []byte, workerId int, i
 	var ndel int
 	var changed bool
 
+	szConf := mdb.updateSliceBuffers(workerId)
+
 	// The docid does not exist if the doc is initialized for the first time
 	if !init {
 		if ndel, changed = mdb.deleteSecIndex(docid, key, workerId); !changed {
@@ -589,9 +610,9 @@ func (mdb *plasmaSlice) insertSecIndex(key []byte, docid []byte, workerId int, i
 		}
 	}
 
-	mdb.encodeBuf[workerId] = resizeEncodeBuf(mdb.encodeBuf[workerId], len(key), allowLargeKeys)
+	mdb.encodeBuf[workerId] = resizeEncodeBuf(mdb.encodeBuf[workerId], len(key), szConf.allowLargeKeys)
 	entry, err := NewSecondaryIndexEntry(key, docid, mdb.idxDefn.IsArrayIndex,
-		1, mdb.idxDefn.Desc, mdb.encodeBuf[workerId], meta)
+		1, mdb.idxDefn.Desc, mdb.encodeBuf[workerId], meta, szConf)
 	if err != nil {
 		logging.Errorf("plasmaSlice::insertSecIndex Slice Id %v IndexInstId %v PartitionId %v "+
 			"Skipping docid:%s (%v)", mdb.Id, mdb.idxInstId, mdb.idxPartnId, logging.TagStrUD(docid), err)
@@ -626,11 +647,12 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 	var err error
 	var oldkey []byte
 
-	mdb.arrayBuf2[workerId] = resizeArrayBuf(mdb.arrayBuf2[workerId], 3*len(key))
+	szConf := mdb.updateSliceBuffers(workerId)
+	mdb.arrayBuf2[workerId] = resizeArrayBuf(mdb.arrayBuf2[workerId], 3*len(key), szConf.allowLargeKeys)
 
-	if !allowLargeKeys && len(key) > maxArrayIndexEntrySize {
+	if !szConf.allowLargeKeys && len(key) > szConf.maxArrayIndexEntrySize {
 		logging.Errorf("plasmaSlice::insertSecArrayIndex Error indexing docid: %s in Slice: %v. Error: Encoded array key (size %v) too long (> %v). Skipped.",
-			logging.TagStrUD(docid), mdb.id, len(key), maxArrayIndexEntrySize)
+			logging.TagStrUD(docid), mdb.id, len(key), szConf.maxArrayIndexEntrySize)
 		mdb.deleteSecArrayIndex(docid, workerId)
 		return 0
 	}
@@ -669,8 +691,8 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 		}
 
 		oldEntriesBytes, oldKeyCount, newbufLen, err = ArrayIndexItems(oldkey, mdb.arrayExprPosition,
-			tmpBuf, mdb.isArrayDistinct, false)
-		mdb.arrayBuf1[workerId] = resizeArrayBuf(mdb.arrayBuf1[workerId], newbufLen)
+			tmpBuf, mdb.isArrayDistinct, false, szConf)
+		mdb.arrayBuf1[workerId] = resizeArrayBuf(mdb.arrayBuf1[workerId], newbufLen, szConf.allowLargeKeys)
 
 		if err != nil {
 			logging.Errorf("plasmaSlice::insertSecArrayIndex SliceId %v IndexInstId %v PartitionId %v Error in retrieving "+
@@ -684,8 +706,8 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 	if key != nil {
 
 		newEntriesBytes, newKeyCount, newbufLen, err = ArrayIndexItems(key, mdb.arrayExprPosition,
-			mdb.arrayBuf2[workerId], mdb.isArrayDistinct, !allowLargeKeys)
-		mdb.arrayBuf2[workerId] = resizeArrayBuf(mdb.arrayBuf2[workerId], newbufLen)
+			mdb.arrayBuf2[workerId], mdb.isArrayDistinct, !szConf.allowLargeKeys, szConf)
+		mdb.arrayBuf2[workerId] = resizeArrayBuf(mdb.arrayBuf2[workerId], newbufLen, szConf.allowLargeKeys)
 		if err != nil {
 			logging.Errorf("plasmaSlice::insertSecArrayIndex SliceId %v IndexInstId %v PartitionId %v Error in creating "+
 				"compostite new secondary keys. Skipping docid:%s Error: %v",
@@ -713,7 +735,7 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 			item := indexEntriesToBeDeleted[i]
 			if item != nil { // nil item indicates it should be ignored
 				entry, err := NewSecondaryIndexEntry(item, docid, false,
-					oldKeyCount[i], mdb.idxDefn.Desc, mdb.encodeBuf[workerId][:0], nil)
+					oldKeyCount[i], mdb.idxDefn.Desc, mdb.encodeBuf[workerId][:0], nil, szConf)
 				common.CrashOnError(err)
 				// Add back
 				mdb.main[workerId].InsertKV(entry, nil)
@@ -728,7 +750,7 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 			key := indexEntriesToBeAdded[i]
 			if key != nil { // nil item indicates it should be ignored
 				entry, err := NewSecondaryIndexEntry(key, docid, false,
-					newKeyCount[i], mdb.idxDefn.Desc, mdb.encodeBuf[workerId][:0], meta)
+					newKeyCount[i], mdb.idxDefn.Desc, mdb.encodeBuf[workerId][:0], meta, szConf)
 				common.CrashOnError(err)
 				// Delete back
 				entrySz := len(entry)
@@ -745,7 +767,7 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 			var keyToBeDeleted []byte
 			mdb.encodeBuf[workerId] = resizeEncodeBuf(mdb.encodeBuf[workerId], len(item), true)
 			if keyToBeDeleted, err = GetIndexEntryBytes3(item, docid, false, false,
-				oldKeyCount[i], mdb.idxDefn.Desc, mdb.encodeBuf[workerId], nil); err != nil {
+				oldKeyCount[i], mdb.idxDefn.Desc, mdb.encodeBuf[workerId], nil, szConf); err != nil {
 				rollbackDeletes(i - 1)
 				logging.Errorf("plasmaSlice::insertSecArrayIndex SliceId %v IndexInstId %v PartitionId %v Error forming entry "+
 					"to be added to main index. Skipping docid:%s Error: %v",
@@ -770,9 +792,9 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 	for i, item := range indexEntriesToBeAdded {
 		if item != nil { // nil item indicates it should not be added
 			var keyToBeAdded []byte
-			mdb.encodeBuf[workerId] = resizeEncodeBuf(mdb.encodeBuf[workerId], len(item), allowLargeKeys)
+			mdb.encodeBuf[workerId] = resizeEncodeBuf(mdb.encodeBuf[workerId], len(item), szConf.allowLargeKeys)
 			if keyToBeAdded, err = GetIndexEntryBytes2(item, docid, false, false,
-				newKeyCount[i], mdb.idxDefn.Desc, mdb.encodeBuf[workerId], meta); err != nil {
+				newKeyCount[i], mdb.idxDefn.Desc, mdb.encodeBuf[workerId], meta, szConf); err != nil {
 				rollbackDeletes(len(indexEntriesToBeDeleted) - 1)
 				rollbackAdds(i - 1)
 				logging.Errorf("plasmaSlice::insertSecArrayIndex SliceId %v IndexInstId %v PartitionId %v Error forming entry "+
@@ -893,6 +915,7 @@ func (mdb *plasmaSlice) deleteSecIndex(docid []byte, compareKey []byte, workerId
 	defer mdb.back[workerId].End()
 
 	backEntry, err := mdb.back[workerId].LookupKV(docid)
+
 	mdb.encodeBuf[workerId] = resizeEncodeBuf(mdb.encodeBuf[workerId], len(backEntry), true)
 	buf := mdb.encodeBuf[workerId]
 
@@ -909,7 +932,7 @@ func (mdb *plasmaSlice) deleteSecIndex(docid []byte, compareKey []byte, workerId
 		mdb.back[workerId].DeleteKV(docid)
 		mdb.idxStats.backstoreDataSize.Add(0 - int64(len(docid)+len(backEntry)))
 
-		entry := backEntry2entry(docid, backEntry, buf)
+		entry := backEntry2entry(docid, backEntry, buf, mdb.keySzConf[workerId])
 		entrySz := len(entry)
 		mdb.main[workerId].DeleteKV(entry)
 		mdb.idxStats.Timings.stKVDelete.Put(time.Since(t0))
@@ -937,6 +960,8 @@ func (mdb *plasmaSlice) deleteSecArrayIndexNoTx(docid []byte, workerId int) (nmu
 	var olditm []byte
 	var err error
 
+	szConf := mdb.updateSliceBuffers(workerId)
+
 	olditm, err = mdb.back[workerId].LookupKV(docid)
 	if err == plasma.ErrItemNotFound {
 		olditm = nil
@@ -959,7 +984,7 @@ func (mdb *plasmaSlice) deleteSecArrayIndexNoTx(docid []byte, workerId int) (nmu
 	}
 
 	indexEntriesToBeDeleted, keyCount, _, err := ArrayIndexItems(olditm, mdb.arrayExprPosition,
-		tmpBuf, mdb.isArrayDistinct, false)
+		tmpBuf, mdb.isArrayDistinct, false, szConf)
 	if err != nil {
 		// TODO: Do not crash for non-storage operation. Force delete the old entries
 		common.CrashOnError(err)
@@ -976,7 +1001,7 @@ func (mdb *plasmaSlice) deleteSecArrayIndexNoTx(docid []byte, workerId int) (nmu
 		tmpBuf = resizeEncodeBuf(mdb.encodeBuf[workerId], len(item), true)
 		// TODO: Use method that skips size check for bug MB-22183
 		if keyToBeDeleted, err = GetIndexEntryBytes3(item, docid, false, false, keyCount[i],
-			mdb.idxDefn.Desc, tmpBuf, nil); err != nil {
+			mdb.idxDefn.Desc, tmpBuf, nil, szConf); err != nil {
 			common.CrashOnError(err)
 			logging.Errorf("plasmaSlice::deleteSecArrayIndex \n\tSliceId %v IndexInstId %v PartitionId %v Error from GetIndexEntryBytes2 "+
 				"for entry to be deleted from main index %v", mdb.id, mdb.idxInstId, mdb.idxPartnId, err)
@@ -1750,6 +1775,7 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 	mdb.confLock.Lock()
 	defer mdb.confLock.Unlock()
 
+	oldCfg := mdb.sysconf
 	mdb.sysconf = cfg
 
 	updatePlasmaConfig(cfg)
@@ -1784,6 +1810,12 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 		mdb.backstore.EnableLSSPageSMO = mdb.sysconf["plasma.enableLSSPageSMO"].Bool()
 	}
 	mdb.maxRollbacks = cfg["settings.plasma.recovery.max_rollbacks"].Int()
+
+	if bufferResizeNeeded(cfg, oldCfg) {
+		for i := 0; i < len(mdb.bufResizeFlag); i++ {
+			atomic.AddInt32(&mdb.bufResizeFlag[i], 1)
+		}
+	}
 }
 
 func (mdb *plasmaSlice) String() string {
@@ -2222,10 +2254,10 @@ func entry2BackEntry(entry secondaryIndexEntry) []byte {
 }
 
 // Reformat secondary key to entry
-func backEntry2entry(docid []byte, bentry []byte, buf []byte) []byte {
+func backEntry2entry(docid []byte, bentry []byte, buf []byte, sz keySizeConfig) []byte {
 	l := len(bentry)
 	count := int(binary.LittleEndian.Uint16(bentry[l-2 : l]))
-	entry, _ := NewSecondaryIndexEntry2(bentry[:l-2], docid, false, count, nil, buf[:0], false, nil)
+	entry, _ := NewSecondaryIndexEntry2(bentry[:l-2], docid, false, count, nil, buf[:0], false, nil, sz)
 	return entry.Bytes()
 }
 
@@ -2273,6 +2305,8 @@ func (slice *plasmaSlice) setupWriters() {
 	slice.encodeBuf = make([][]byte, 0, slice.maxNumWriters)
 	slice.arrayBuf1 = make([][]byte, 0, slice.maxNumWriters)
 	slice.arrayBuf2 = make([][]byte, 0, slice.maxNumWriters)
+	slice.bufResizeFlag = make([]int32, 0, slice.maxNumWriters)
+	slice.keySzConf = make([]keySizeConfig, 0, slice.maxNumWriters)
 
 	// initialize comand handler
 	slice.cmdCh = make([]chan indexMutation, 0, slice.maxNumWriters)
@@ -2290,7 +2324,6 @@ func (slice *plasmaSlice) setupWriters() {
 	numWriter := slice.numWritersPerPartition()
 	slice.token.decrement(numWriter, true)
 	slice.startWriters(numWriter)
-
 	// start stats sampler
 	go slice.runSampler()
 }
@@ -2308,12 +2341,19 @@ func (slice *plasmaSlice) initWriters(numWriters int) {
 		slice.arrayBuf1 = slice.arrayBuf1[:numWriters]
 		slice.arrayBuf2 = slice.arrayBuf2[:numWriters]
 	}
+	slice.bufResizeFlag = slice.bufResizeFlag[:numWriters]
+	slice.keySzConf = slice.keySzConf[:numWriters]
+
 	for i := curNumWriters; i < numWriters; i++ {
-		slice.encodeBuf[i] = make([]byte, 0, maxIndexEntrySize)
+		slice.confLock.RLock()
+		keyCfg := getKeySizeConfig(slice.sysconf)
+		slice.confLock.RUnlock()
+		slice.encodeBuf[i] = make([]byte, 0, keyCfg.maxIndexEntrySize)
 		if slice.idxDefn.IsArrayIndex {
-			slice.arrayBuf1[i] = make([]byte, 0, maxArrayIndexEntrySize)
-			slice.arrayBuf2[i] = make([]byte, 0, maxArrayIndexEntrySize)
+			slice.arrayBuf1[i] = make([]byte, 0, keyCfg.maxArrayIndexEntrySize)
+			slice.arrayBuf2[i] = make([]byte, 0, keyCfg.maxArrayIndexEntrySize)
 		}
+		slice.keySzConf[i] = keyCfg
 	}
 
 	// initialize command handler
@@ -2401,6 +2441,8 @@ func (slice *plasmaSlice) freeAllWriters() {
 	slice.encodeBuf = slice.encodeBuf[:0]
 	slice.arrayBuf1 = slice.arrayBuf1[:0]
 	slice.arrayBuf2 = slice.arrayBuf2[:0]
+	slice.bufResizeFlag = slice.bufResizeFlag[:0]
+	slice.keySzConf = slice.keySzConf[:0]
 
 	slice.cmdCh = slice.cmdCh[:0]
 	slice.workerDone = slice.workerDone[:0]
