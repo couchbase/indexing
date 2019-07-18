@@ -1552,12 +1552,13 @@ func (tk *timekeeper) handleRecoveryDone(cmd Message) {
 	//as the mergeTs for Catchup indexes. As part of the MTR, Catchup state indexes
 	//get added to MAINT_STREAM.
 	if streamId == common.MAINT_STREAM {
-		if mergeTs != nil {
-			tk.setMergeTs(streamId, bucket, mergeTs)
-		} else {
-			logging.Warnf("Timekeeper::handleRecoveryDone %v %v. Received nil mergeTs. Ignored",
-				streamId, bucket)
+		if mergeTs == nil {
+			logging.Infof("Timekeeper::handleRecoveryDone %v %v. Received nil mergeTs. "+
+				"Considering it as rollback to 0", streamId, bucket)
+			numVbuckets := tk.config["numVbuckets"].Int()
+			mergeTs = common.NewTsVbuuid(bucket, numVbuckets)
 		}
+		tk.setMergeTs(streamId, bucket, mergeTs)
 	}
 
 	//Check for possiblity of build done after recovery is done.
