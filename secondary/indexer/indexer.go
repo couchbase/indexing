@@ -5357,11 +5357,17 @@ func (idx *indexer) initFromPersistedState() error {
 	initBufPools(idx.config)
 	logging.Infof("Indexer::local storage mode %v", common.GetStorageMode().String())
 
+	bootstrapStats := NewIndexerStats()
+
 	// Initialize stats objects and update stats from persistence
 	for _, inst := range idx.indexInstMap {
 		if inst.State != common.INDEX_STATE_DELETED {
 			for _, partnDefn := range inst.Pc.GetAllPartitions() {
 				idx.stats.AddPartition(inst.InstId, inst.Defn.Bucket, inst.Defn.Name,
+					inst.ReplicaId, partnDefn.GetPartitionId(), inst.Defn.IsArrayIndex)
+
+				// Since bootstrapStats does not have index stats yet, initialize index and partition stats
+				bootstrapStats.AddPartition(inst.InstId, inst.Defn.Bucket, inst.Defn.Name,
 					inst.ReplicaId, partnDefn.GetPartitionId(), inst.Defn.IsArrayIndex)
 			}
 		}
@@ -5371,7 +5377,6 @@ func (idx *indexer) initFromPersistedState() error {
 	// need to be populated with values from persistence store
 	idx.updateStatsFromPersistence()
 
-	stats := idx.stats.Clone()
 	localIndexInstMap := make(common.IndexInstMap)
 	localIndexPartnMap := make(IndexPartnMap)
 
@@ -5433,7 +5438,7 @@ func (idx *indexer) initFromPersistedState() error {
 			continue
 		}
 
-		idx.broadcastBootstrapStats(stats, inst.InstId)
+		idx.broadcastBootstrapStats(bootstrapStats, inst.InstId)
 	}
 
 	return nil
