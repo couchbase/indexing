@@ -55,6 +55,7 @@ const (
 	TK_STABILITY_TIMESTAMP
 	TK_INIT_BUILD_DONE
 	TK_INIT_BUILD_DONE_ACK
+	TK_ADD_INSTANCE_FAIL
 	TK_ENABLE_FLUSH
 	TK_DISABLE_FLUSH
 	TK_MERGE_STREAM
@@ -383,6 +384,7 @@ type MsgStreamUpdate struct {
 	rollbackTime int64
 
 	allowMarkFirstSnap bool
+	bucketInRecovery   bool
 }
 
 func (m *MsgStreamUpdate) GetMsgType() MsgType {
@@ -423,6 +425,10 @@ func (m *MsgStreamUpdate) GetRollbackTime() int64 {
 
 func (m *MsgStreamUpdate) AllowMarkFirstSnap() bool {
 	return m.allowMarkFirstSnap
+}
+
+func (m *MsgStreamUpdate) BucketInRecovery() bool {
+	return m.bucketInRecovery
 }
 
 func (m *MsgStreamUpdate) String() string {
@@ -664,6 +670,7 @@ func (m *MsgTKStabilityTS) String() string {
 
 //TK_INIT_BUILD_DONE
 //TK_INIT_BUILD_DONE_ACK
+//TK_ADD_INSTANCE_FAIL
 type MsgTKInitBuildDone struct {
 	mType    MsgType
 	streamId common.StreamId
@@ -1806,6 +1813,8 @@ func (m MsgType) String() string {
 		return "TK_INIT_BUILD_DONE"
 	case TK_INIT_BUILD_DONE_ACK:
 		return "TK_INIT_BUILD_DONE_ACK"
+	case TK_ADD_INSTANCE_FAIL:
+		return "TK_ADD_INSTANCE_FAIL"
 	case TK_ENABLE_FLUSH:
 		return "TK_ENABLE_FLUSH"
 	case TK_DISABLE_FLUSH:

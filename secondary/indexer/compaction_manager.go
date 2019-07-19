@@ -84,6 +84,12 @@ func (cd *compactionDaemon) ResetConfig(c common.Config) {
 	last_config := cd.config.Load()
 	cd.config.Store(c)
 
+	// Auto-compaction settings are unnecessary for plasma and memory optimized
+	// indexes. Ignore the auto-compaction settings for these storage modes
+	if common.GetStorageMode() != common.FORESTDB {
+		return
+	}
+
 	abort := c["abort_exceed_interval"].Bool()
 	interval := c["interval"].String()
 
