@@ -13,19 +13,20 @@ type Average struct {
 	sumsq     Int64Val
 	prevCount Int64Val
 	prevSum   Int64Val
-	prevSMA   Int64Val
+	SMA       Int64Val
 }
 
 func (av *Average) Init() {
 	av.min.Init()
 	av.min.Set(math.MaxInt64)
 	av.max.Init()
+	av.max.Set(math.MinInt64)
 	av.count.Init()
 	av.sum.Init()
 	av.sumsq.Init()
 	av.prevCount.Init()
 	av.prevSum.Init()
-	av.prevSMA.Init()
+	av.SMA.Init()
 }
 
 // Add a sample to counting average.
@@ -97,33 +98,34 @@ func (av *Average) Sd() int64 {
 	return int64(math.Sqrt(float64(av.Variance())))
 }
 
-// Compute the simple moving average value.
-// Multiple threads can call this method for the same Average object
-// E.g., Endpoint when exiting, stats_manger.go periodically
+// Compute and return moving average value
 func (av *Average) MovingAvg() int64 {
-	for {
-		count := av.count.Value()
-		prevCount := av.prevCount.Value()
-		newSum := av.sum.Value()
-		prevSum := av.prevSum.Value()
-		prevSMA := av.prevSMA.Value()
+	count := av.count.Value()
+	prevCount := av.prevCount.Value()
+	newSum := av.sum.Value()
+	prevSum := av.prevSum.Value()
+	prevSMA := av.SMA.Value()
 
-		var windowAvg int64
-		if count > prevCount {
-			windowAvg = (newSum - prevSum) / (count - prevCount)
+	if count-prevCount > 0 {
+		newAvg := (newSum - prevSum) / (count - prevCount)
+		// For the first movingAvg computation, prevCount would be zero
+		if prevCount > 0 {
+			newAvg = (prevSMA + newAvg) / 2
 		}
-		newAvg := (prevSMA + windowAvg) / 2
-		if av.prevSMA.CAS(prevSMA, newAvg) {
+
+		if av.SMA.CAS(prevSMA, newAvg) {
 			av.prevCount.Set(count)
 			av.prevSum.Set(newSum)
 			return newAvg
 		}
-		// On CAS failure attempt a retry. As of this commit, It is okay to
-		// retry as there are at max only two threads contending for the same
-		// object i.e. logger thread in stats_manger.go (once every
-		// statsLogDumpInterval seconds) and either of genServer thread in
-		// dcp_feed.go or run() thread in endpoint.go
+		// During contention, return the SMA computed by the thread
+		// that succeeded in updating the SMA value.
+		// As of this commit, there can be at max two threads contending
+		// i.e. logger thread in stats_manager.go and either of
+		// (i) genServer routine while exiting in dcp_feed.go
+		// (ii) run() routine while exiting in endpoint.go
 	}
+	return av.SMA.Value()
 }
 
 func (av *Average) MarshallJSON() string {
