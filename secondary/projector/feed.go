@@ -71,7 +71,6 @@ type Feed struct {
 	epFactory  c.RouterEndpointFactory
 	config     c.Config
 	logPrefix  string
-	stats      *FeedStats
 }
 
 // NewFeed creates a new topic feed.
@@ -116,9 +115,7 @@ func NewFeed(
 		endTimeout: time.Duration(config["feedWaitStreamEndTimeout"].Int()),
 		epFactory:  epf,
 		config:     config,
-		stats:      &FeedStats{},
 	}
-	feed.stats.Init()
 	feed.logPrefix = fmt.Sprintf("FEED[<=>%v(%v)]", topic, feed.cluster)
 
 	go feed.genServer()
@@ -752,7 +749,8 @@ func (feed *Feed) handleCommand(msg []interface{}) (status string) {
 		respch <- []interface{}{feed.getStatistics()}
 
 	case fCmdGetStats:
-		feedStats := feed.stats
+		feedStats := &FeedStats{}
+		feedStats.Init()
 		// For this feed, iterate through all buckets
 		for bucket, kvdata := range feed.kvdata {
 			bucketStats := &BucketStats{}
@@ -1432,9 +1430,6 @@ func (feed *Feed) cleanupBucket(bucketn string, enginesOk bool) {
 		kvdata.Close()
 	}
 	delete(feed.kvdata, bucketn) // :SideEffect:
-	if _, ok := feed.stats.bucketStats[bucketn]; ok {
-		delete(feed.stats.bucketStats, bucketn)
-	}
 
 	fmsg := "%v ##%x bucket %v removed ..."
 	logging.Infof(fmsg, feed.logPrefix, feed.opaque, bucketn)
