@@ -22,6 +22,11 @@ import "github.com/golang/protobuf/proto"
 import "github.com/couchbase/indexing/secondary/logging"
 import "github.com/couchbase/indexing/secondary/security"
 
+// Address of the host on which the projector process executes
+var projector_hostaddress string
+
+const MAX_CINFO_CACHES_RETRIES = 100
+
 // Projector data structure, a projector is connected to
 // one or more upstream kv-nodes. Works in tandem with
 // projector's adminport.
@@ -85,6 +90,11 @@ func NewProjector(maxvbs int, config c.Config, certFile string, keyFile string) 
 
 	p.config = config
 	p.ResetConfig(config)
+
+	// Initialize projector_address
+	if projector_hostaddress, err = p.getHostAddress(); err != nil {
+		c.CrashOnError(fmt.Errorf("Failed to get projector host address from ClusterInfoCache: %v", err))
+	}
 
 	p.logPrefix = fmt.Sprintf("PROJ[%s]", p.adminport)
 
@@ -972,4 +982,40 @@ func refreshSecurityContextOnTopology(clusterAddr string) error {
 
 	helper := c.NewRetryHelper(10, time.Second, 1, fn)
 	return helper.Run()
+}
+
+func (p *Projector) getHostAddress() (string, error) {
+	var host string
+	prefix := p.logPrefix
+	fn := func(r int, err error) error {
+		var cinfo *c.ClusterInfoCache
+		url, err := c.ClusterAuthUrl(p.clusterAddr)
+		if err == nil {
+			cinfo, err = c.NewClusterInfoCache(url, p.pooln)
+		}
+		if err != nil {
+			fmsg := "%v ClusterInfoCache(): %v\n"
+			logging.Errorf(fmsg, prefix, err)
+			return err
+		}
+		if err := cinfo.Fetch(); err != nil {
+			fmsg := "%v cinfo.Fetch(): %v\n"
+			logging.Errorf(fmsg, prefix, err)
+			return err
+		}
+
+		if host, err = cinfo.GetLocalHostAddress(); err != nil {
+			fmsg := "%v cinfo.GetLocalHostAddress(): %v\n"
+			logging.Errorf(fmsg, prefix, err)
+			return err
+		}
+		return nil
+	}
+	rh := c.NewRetryHelper(MAX_CINFO_CACHES_RETRIES, time.Second, 1, fn)
+	err := rh.Run()
+	return host, err
+}
+
+func GetHostAddress() string {
+	return projector_hostaddress
 }

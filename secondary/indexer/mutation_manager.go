@@ -11,11 +11,15 @@ package indexer
 
 import (
 	"errors"
+	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
+	"unsafe"
 
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
+	Stats "github.com/couchbase/indexing/secondary/stats"
 )
 
 //MutationManager handles messages from Indexer to manage Mutation Streams
@@ -28,6 +32,9 @@ type BucketQueueMap map[string]IndexerMutationQueue
 
 //Map from bucket name to flusher stop channel
 type BucketStopChMap map[string]StopChannel
+
+// Bucket -> map of vbucket to hostname
+type VBMap map[string]map[Vbucket]string
 
 type mutationMgr struct {
 	memUsed   int64 //memory used by queue
@@ -63,6 +70,9 @@ type mutationMgr struct {
 
 	config common.Config
 	stats  IndexerStatsHolder
+
+	vbMap         *VbMapHolder
+	numVbsPerHost map[string]int64 // Hostname -> Number of active vb's on the host across all buckets
 }
 
 //NewMutationManager creates a new Mutation Manager which listens for commands from
@@ -96,7 +106,10 @@ func NewMutationManager(supvCmdch MsgChannel, supvRespch MsgChannel,
 		config:                 config,
 		memUsed:                0,
 		maxMemory:              0,
+		vbMap:                  &VbMapHolder{},
+		numVbsPerHost:          make(map[string]int64),
 	}
+	m.vbMap.Init()
 
 	//start Mutation Manager loop which listens to commands from its supervisor
 	go m.run()
@@ -316,7 +329,6 @@ func (m *mutationMgr) handleWorkerMessage(cmd Message) {
 	switch cmd.GetMsgType() {
 
 	case STREAM_READER_STREAM_DROP_DATA,
-		STREAM_READER_STREAM_BEGIN,
 		STREAM_READER_STREAM_END,
 		STREAM_READER_ERROR,
 		STREAM_READER_CONN_ERROR,
@@ -324,6 +336,29 @@ func (m *mutationMgr) handleWorkerMessage(cmd Message) {
 		//send message to supervisor to take decision
 		logging.Tracef("MutationMgr::handleWorkerMessage Received %v from worker", cmd)
 		m.supvRespch <- cmd
+
+	case STREAM_READER_STREAM_BEGIN:
+		//send message to supervisor to take decision
+		logging.Tracef("MutationMgr::handleWorkerMessage Received %v from worker", cmd)
+		m.supvRespch <- cmd
+
+		// Initialize latency object
+		host := cmd.(*MsgStream).GetHost()
+		streamId := cmd.(*MsgStream).GetStreamId()
+		if host != nil {
+			m.lock.Lock()
+			_, streamExists := m.streamReaderMap[streamId]
+			m.lock.Unlock()
+
+			// Initialize the latency object only if the stream exists
+			if streamExists {
+				m.initLatencyObj(cmd)
+			}
+		}
+
+	case CLEANUP_PRJ_STATS:
+		streamId := cmd.(*MsgStream).GetStreamId()
+		m.cleanLatencyMap(streamId)
 
 	default:
 		logging.Fatalf("MutationMgr::handleWorkerMessage Received unhandled "+
@@ -387,7 +422,7 @@ func (m *mutationMgr) handleOpenStream(cmd Message) {
 
 	reader, errMsg := CreateMutationStreamReader(streamId, bucketQueueMap, bucketFilter,
 		cmdCh, m.mutMgrRecvCh, getNumStreamWorkers(m.config), m.stats.Get(),
-		m.config, m.indexerState, allowMarkFirsSnap)
+		m.config, m.indexerState, allowMarkFirsSnap, m.vbMap)
 
 	if reader == nil {
 		//send the error back on supv channel
@@ -813,6 +848,9 @@ func (m *mutationMgr) cleanupStream(streamId common.StreamId) {
 	delete(m.streamReaderCmdChMap, streamId)
 	delete(m.streamReaderExitChMap, streamId)
 
+	// Send a message to clean-up latency map
+	m.internalRecvCh <- &MsgStream{mType: CLEANUP_PRJ_STATS, streamId: streamId}
+
 	m.flock.Lock()
 	defer m.flock.Unlock()
 	delete(m.streamFlusherStopChMap, streamId)
@@ -1023,6 +1061,80 @@ func (m *mutationMgr) handleUpdateIndexPartnMap(cmd Message) {
 
 }
 
+func (m *mutationMgr) initLatencyObj(cmd Message) {
+	stats := m.stats.Get()
+	if stats == nil {
+		return
+	}
+
+	newPrjLatencyMap := stats.prjLatencyMap.Clone()
+	update := false
+
+	host := cmd.(*MsgStream).GetHost()
+	streamId := cmd.(*MsgStream).GetStreamId()
+	meta := cmd.(*MsgStream).GetMutationMeta()
+
+	vb := meta.vbucket
+	bucket := meta.bucket
+	vbMap := m.vbMap.Clone()
+
+	perStreamCurrHost := fmt.Sprintf("%v/%s", streamId, host)
+	perStreamBucket := fmt.Sprintf("%v/%v", streamId, bucket)
+
+	if _, ok := vbMap[perStreamBucket]; !ok {
+		vbMap[perStreamBucket] = make(map[Vbucket]string)
+	}
+
+	// Check if vb belonged to a different node before
+	if perStreamPrevHost, ok := vbMap[perStreamBucket][vb]; ok && perStreamPrevHost != perStreamCurrHost {
+		// vb belonged to a different node before
+		m.numVbsPerHost[perStreamPrevHost]--
+		if m.numVbsPerHost[perStreamPrevHost] == 0 {
+			delete(m.numVbsPerHost, perStreamPrevHost)
+			delete(newPrjLatencyMap, perStreamPrevHost)
+			update = true
+		}
+	}
+
+	if _, ok := m.numVbsPerHost[perStreamCurrHost]; !ok {
+		// Initialize latency object
+		avg := &Stats.Int64Val{}
+		avg.Init()
+		newPrjLatencyMap[perStreamCurrHost] = avg
+		m.numVbsPerHost[perStreamCurrHost] = 1
+		update = true
+	} else {
+		m.numVbsPerHost[perStreamCurrHost]++
+	}
+
+	vbMap[perStreamBucket][vb] = perStreamCurrHost
+	m.vbMap.Set(vbMap)
+
+	// Update prjLatencyMap only if there is a change
+	if update {
+		stats.prjLatencyMap.Set(newPrjLatencyMap)
+	}
+}
+
+// Cleans all latency objects corresponding to the stream
+func (m *mutationMgr) cleanLatencyMap(streamId common.StreamId) {
+	stats := m.stats.Get()
+	if stats == nil {
+		return
+	}
+
+	newPrjLatencyMap := stats.prjLatencyMap.Clone()
+
+	streamStr := fmt.Sprintf("%v", streamId)
+	for k, _ := range newPrjLatencyMap {
+		subStrs := strings.Split(k, "/")
+		if len(subStrs) > 0 && subStrs[0] == streamStr {
+			delete(newPrjLatencyMap, k)
+		}
+	}
+	stats.prjLatencyMap.Set(newPrjLatencyMap)
+}
+
 func CopyBucketQueueMap(inMap BucketQueueMap) BucketQueueMap {
 
 	outMap := make(BucketQueueMap)
@@ -1167,4 +1279,41 @@ func getNumStreamWorkers(config common.Config) int {
 		return config["stream_reader.moi.numWorkers"].Int()
 	}
 
+}
+
+type VbMapHolder struct {
+	ptr *unsafe.Pointer
+}
+
+func (v *VbMapHolder) Init() {
+	v.ptr = new(unsafe.Pointer)
+}
+
+func (v *VbMapHolder) Set(vbMap VBMap) {
+	atomic.StorePointer(v.ptr, unsafe.Pointer(&vbMap))
+}
+
+func (v *VbMapHolder) Get() VBMap {
+	if ptr := atomic.LoadPointer(v.ptr); ptr != nil {
+		return *(*VBMap)(ptr)
+	} else {
+		return make(VBMap)
+	}
+}
+
+func (v *VbMapHolder) Clone() VBMap {
+	if ptr := atomic.LoadPointer(v.ptr); ptr != nil {
+		currMap := *(*VBMap)(ptr)
+		clone := make(VBMap)
+		for k, v := range currMap {
+			vbHostMap := make(map[Vbucket]string)
+			for vb, host := range v {
+				vbHostMap[vb] = host
+			}
+			clone[k] = vbHostMap
+		}
+		return clone
+	} else {
+		return make(VBMap)
+	}
 }

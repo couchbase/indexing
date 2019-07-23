@@ -2,11 +2,13 @@
 
 package dataport
 
-import "errors"
+import (
+	"errors"
 
-import c "github.com/couchbase/indexing/secondary/common"
-import protobuf "github.com/couchbase/indexing/secondary/protobuf/data"
-import "github.com/golang/protobuf/proto"
+	c "github.com/couchbase/indexing/secondary/common"
+	protobuf "github.com/couchbase/indexing/secondary/protobuf/data"
+	"github.com/golang/protobuf/proto"
+)
 
 // ErrorTransportVersion
 var ErrorTransportVersion = errors.New("dataport.transportVersion")
@@ -39,6 +41,10 @@ func protobufEncode(payload interface{}) (data []byte, err error) {
 				}
 				if kv.Docid != nil && len(kv.Docid) > 0 {
 					pkv.Docid = kv.Docid
+				}
+				if kv.Ctime > 0 {
+					// Send moving average value of mutation processing latency in projector
+					pkv.PrjMovingAvg = proto.Int64(kv.Ctime)
 				}
 				if len(kv.Uuids) == 0 {
 					continue

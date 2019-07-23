@@ -220,6 +220,39 @@ func (h *IndexerStatsHolder) Set(s *IndexerStats) {
 	atomic.StorePointer(&h.ptr, unsafe.Pointer(s))
 }
 
+type LatencyMapHolder struct {
+	ptr *unsafe.Pointer
+}
+
+func (p *LatencyMapHolder) Init() {
+	p.ptr = new(unsafe.Pointer)
+}
+
+func (p *LatencyMapHolder) Set(prjLatencyMap map[string]interface{}) {
+	atomic.StorePointer(p.ptr, unsafe.Pointer(&prjLatencyMap))
+}
+
+func (p *LatencyMapHolder) Get() map[string]interface{} {
+	if ptr := atomic.LoadPointer(p.ptr); ptr != nil {
+		return *(*map[string]interface{})(ptr)
+	} else {
+		return make(map[string]interface{})
+	}
+}
+
+func (p *LatencyMapHolder) Clone() map[string]interface{} {
+	if ptr := atomic.LoadPointer(p.ptr); ptr != nil {
+		currMap := *(*map[string]interface{})(ptr)
+		clone := make(map[string]interface{})
+		for k, v := range currMap {
+			clone[k] = v
+		}
+		return clone
+	} else {
+		return make(map[string]interface{})
+	}
+}
+
 func (s *IndexStats) Init() {
 	s.scanDuration.Init()
 	s.scanReqDuration.Init()
@@ -452,7 +485,8 @@ type IndexerStats struct {
 	statsResponse      stats.TimingStat
 	notFoundError      stats.Int64Val
 
-	indexerState stats.Int64Val
+	indexerState  stats.Int64Val
+	prjLatencyMap *LatencyMapHolder
 }
 
 func (s *IndexerStats) Init() {
@@ -468,6 +502,8 @@ func (s *IndexerStats) Init() {
 	s.statsResponse.Init()
 	s.indexerState.Init()
 	s.notFoundError.Init()
+	s.prjLatencyMap = &LatencyMapHolder{}
+	s.prjLatencyMap.Init()
 }
 
 func (s *IndexerStats) Reset() {
@@ -638,6 +674,12 @@ func (is IndexerStats) GetStats(getPartition bool, skipEmpty bool,
 	addStat("memory_rss", getRSS())
 	addStat("memory_free", getMemFree())
 	addStat("memory_total", getMemTotal())
+
+	prjLatencyMap := is.prjLatencyMap.Get()
+	for prjAddr, prjLatency := range prjLatencyMap {
+		latency := prjLatency.(*stats.Int64Val)
+		addStat(prjAddr+"/projector_latency", latency.Value())
+	}
 
 	indexerState := common.IndexerState(is.indexerState.Value())
 	if indexerState == common.INDEXER_PREPARE_UNPAUSE {
