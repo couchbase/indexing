@@ -497,7 +497,7 @@ func TestBucketFlush(t *testing.T) {
 	}
 
 	kvutility.FlushBucket(bucketName, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
-	time.Sleep(5 * time.Second)
+	time.Sleep(80 * time.Second)
 	log.Printf("TestBucketFlush:: Flushed the bucket")
 
 	for i := 0; i < 3; i++ {
