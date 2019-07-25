@@ -158,10 +158,10 @@ type memdbSlice struct {
 	arrayExprPosition int
 	isArrayDistinct   bool
 
-	encodeBuf     [][]byte
-	arrayBuf      [][]byte
-	bufResizeFlag []int32 // Per worker, 0: buffer resize not needed, >=1: resize needed
-	keySzConf     []keySizeConfig
+	encodeBuf        [][]byte
+	arrayBuf         [][]byte
+	keySzConfChanged []int32 // Per worker, 0: key size not changed, >=1: key size changed
+	keySzConf        []keySizeConfig
 }
 
 func NewMemDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
@@ -204,7 +204,7 @@ func NewMemDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 		slice.arrayBuf = make([][]byte, slice.numWriters)
 
 	}
-	slice.bufResizeFlag = make([]int32, slice.numWriters)
+	slice.keySzConfChanged = make([]int32, slice.numWriters)
 	slice.keySzConf = make([]keySizeConfig, slice.numWriters)
 	slice.cmdCh = make([]chan indexMutation, slice.numWriters)
 
@@ -417,15 +417,21 @@ loop:
 
 func (mdb *memdbSlice) updateSliceBuffers(workerId int) keySizeConfig {
 
-	if atomic.LoadInt32(&mdb.bufResizeFlag[workerId]) >= 1 {
+	if atomic.LoadInt32(&mdb.keySzConfChanged[workerId]) >= 1 {
+
 		mdb.confLock.RLock()
 		mdb.keySzConf[workerId] = getKeySizeConfig(mdb.sysconf)
 		mdb.confLock.RUnlock()
-		mdb.encodeBuf[workerId] = make([]byte, 0, mdb.keySzConf[workerId].maxIndexEntrySize)
-		if mdb.idxDefn.IsArrayIndex {
-			mdb.arrayBuf[workerId] = make([]byte, 0, mdb.keySzConf[workerId].maxArrayIndexEntrySize)
+
+		// Reset buffers if allow_large_keys is false
+		if !mdb.keySzConf[workerId].allowLargeKeys {
+			mdb.encodeBuf[workerId] = make([]byte, 0, mdb.keySzConf[workerId].maxIndexEntrySize)
+			if mdb.idxDefn.IsArrayIndex {
+				mdb.arrayBuf[workerId] = make([]byte, 0, mdb.keySzConf[workerId].maxArrayIndexEntrySize)
+			}
 		}
-		atomic.AddInt32(&mdb.bufResizeFlag[workerId], -1)
+
+		atomic.AddInt32(&mdb.keySzConfChanged[workerId], -1)
 	}
 	return mdb.keySzConf[workerId]
 }
@@ -1390,9 +1396,9 @@ func (mdb *memdbSlice) UpdateConfig(cfg common.Config) {
 	mdb.sysconf = cfg
 	mdb.maxRollbacks = cfg["settings.moi.recovery.max_rollbacks"].Int()
 
-	if bufferResizeNeeded(cfg, oldCfg) {
-		for i := 0; i < len(mdb.bufResizeFlag); i++ {
-			atomic.AddInt32(&mdb.bufResizeFlag[i], 1)
+	if keySizeConfigUpdated(cfg, oldCfg) {
+		for i := 0; i < len(mdb.keySzConfChanged); i++ {
+			atomic.AddInt32(&mdb.keySzConfChanged[i], 1)
 		}
 	}
 }
