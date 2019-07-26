@@ -325,6 +325,7 @@ type MsgStreamInfo struct {
 	buildTs   Timestamp
 	activeTs  *common.TsVbuuid
 	pendingTs *common.TsVbuuid
+	sessionId uint64
 }
 
 func (m *MsgStreamInfo) GetMsgType() MsgType {
@@ -353,6 +354,10 @@ func (m *MsgStreamInfo) GetActiveTs() *common.TsVbuuid {
 
 func (m *MsgStreamInfo) GetPendingTs() *common.TsVbuuid {
 	return m.pendingTs
+}
+
+func (m *MsgStreamInfo) GetSessionId() uint64 {
+	return m.sessionId
 }
 
 func (m *MsgStreamInfo) String() string {
@@ -710,11 +715,12 @@ func (m *MsgTKStabilityTS) String() string {
 //TK_INIT_BUILD_DONE_ACK
 //TK_ADD_INSTANCE_FAIL
 type MsgTKInitBuildDone struct {
-	mType    MsgType
-	streamId common.StreamId
-	buildTs  Timestamp
-	bucket   string
-	mergeTs  *common.TsVbuuid
+	mType     MsgType
+	streamId  common.StreamId
+	buildTs   Timestamp
+	bucket    string
+	mergeTs   *common.TsVbuuid
+	sessionId uint64
 }
 
 func (m *MsgTKInitBuildDone) GetMsgType() MsgType {
@@ -737,6 +743,10 @@ func (m *MsgTKInitBuildDone) GetMergeTs() *common.TsVbuuid {
 	return m.mergeTs
 }
 
+func (m *MsgTKInitBuildDone) GetSessionId() uint64 {
+	return m.sessionId
+}
+
 //TK_MERGE_STREAM
 //TK_MERGE_STREAM_ACK
 type MsgTKMergeStream struct {
@@ -745,6 +755,7 @@ type MsgTKMergeStream struct {
 	bucket    string
 	mergeTs   Timestamp
 	mergeList []common.IndexInst
+	sessionId uint64
 }
 
 func (m *MsgTKMergeStream) GetMsgType() MsgType {
@@ -765,6 +776,10 @@ func (m *MsgTKMergeStream) GetMergeTS() Timestamp {
 
 func (m *MsgTKMergeStream) GetMergeList() []common.IndexInst {
 	return m.mergeList
+}
+
+func (m *MsgTKMergeStream) GetSessionId() uint64 {
+	return m.sessionId
 }
 
 //TK_ENABLE_FLUSH
@@ -1287,6 +1302,7 @@ type MsgRecovery struct {
 	retryTs   *common.TsVbuuid
 	pendingTs *common.TsVbuuid
 	requestCh StopChannel
+	sessionId uint64
 }
 
 func (m *MsgRecovery) GetMsgType() MsgType {
@@ -1329,11 +1345,16 @@ func (m *MsgRecovery) GetRequestCh() StopChannel {
 	return m.requestCh
 }
 
+func (m *MsgRecovery) GetSessionId() uint64 {
+	return m.sessionId
+}
+
 type MsgRollback struct {
 	streamId     common.StreamId
 	bucket       string
 	rollbackTs   *common.TsVbuuid
 	rollbackTime int64
+	sessionId    uint64
 }
 
 func (m *MsgRollback) GetMsgType() MsgType {
@@ -1356,11 +1377,16 @@ func (m *MsgRollback) GetRollbackTime() int64 {
 	return m.rollbackTime
 }
 
+func (m *MsgRollback) GetSessionId() uint64 {
+	return m.sessionId
+}
+
 type MsgRollbackDone struct {
 	streamId  common.StreamId
 	bucket    string
 	restartTs *common.TsVbuuid
 	err       error
+	sessionId uint64
 }
 
 func (m *MsgRollbackDone) GetMsgType() MsgType {
@@ -1381,6 +1407,10 @@ func (m *MsgRollbackDone) GetRestartTs() *common.TsVbuuid {
 
 func (m *MsgRollbackDone) GetError() error {
 	return m.err
+}
+
+func (m *MsgRollbackDone) GetSessionId() uint64 {
+	return m.sessionId
 }
 
 type MsgRepairAbort struct {
@@ -1576,6 +1606,7 @@ type MsgKVStreamRepair struct {
 	bucket    string
 	restartTs *common.TsVbuuid
 	async     bool
+	sessionId uint64
 }
 
 func (m *MsgKVStreamRepair) GetMsgType() MsgType {
@@ -1596,6 +1627,10 @@ func (m *MsgKVStreamRepair) GetRestartTs() *common.TsVbuuid {
 
 func (m *MsgKVStreamRepair) GetAsync() bool {
 	return m.async
+}
+
+func (m *MsgKVStreamRepair) GetSessionId() uint64 {
+	return m.sessionId
 }
 
 //CLUST_MGR_RESET_INDEX

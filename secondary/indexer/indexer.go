@@ -100,6 +100,7 @@ type indexer struct {
 	streamBucketRetryTs       map[common.StreamId]BucketRetryTs
 	streamBucketRequestQueue  map[common.StreamId]map[string]chan *kvRequest
 	streamBucketRequestLock   map[common.StreamId]map[string]chan *sync.Mutex
+	streamBucketSessionId     map[common.StreamId]map[string]uint64
 
 	bucketRollbackTimes map[string]int64
 
@@ -230,6 +231,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		streamBucketRetryTs:          make(map[common.StreamId]BucketRetryTs),
 		streamBucketRequestQueue:     make(map[common.StreamId]map[string]chan *kvRequest),
 		streamBucketRequestLock:      make(map[common.StreamId]map[string]chan *sync.Mutex),
+		streamBucketSessionId:        make(map[common.StreamId]map[string]uint64),
 		bucketBuildTs:                make(map[string]Timestamp),
 		buildTsLock:                  make(map[common.StreamId]map[string]*sync.Mutex),
 		bucketRollbackTimes:          make(map[string]int64),
@@ -517,6 +519,7 @@ func (idx *indexer) initFromConfig() {
 	idx.initStreamAddressMap()
 	idx.initStreamFlushMap()
 	idx.initServiceAddressMap()
+	idx.initStreamSessionIdMap()
 
 	idx.enableManager = idx.config["enableManager"].Bool()
 
@@ -2858,11 +2861,13 @@ func (idx *indexer) handleInitPrepRecovery(msg Message) {
 	rollbackTs := msg.(*MsgRecovery).GetRestartTs()
 	retryTs := msg.(*MsgRecovery).GetRetryTs()
 	requestCh := msg.(*MsgRecovery).GetRequestCh()
+	sessionId := msg.(*MsgRecovery).GetSessionId()
 
 	//if the stream is inactive(e.g. all indexes get dropped)
 	if idx.getStreamBucketState(streamId, bucket) == STREAM_INACTIVE {
-		logging.Infof("Indexer::handleInitPrepRecovery StreamId %v Bucket %v State %v. "+
-			"Skipping INIT_PREPARE and Cleaning up.", streamId, bucket, idx.getStreamBucketState(streamId, bucket))
+		logging.Infof("Indexer::handleInitPrepRecovery StreamId %v Bucket %v "+
+			"State %v.Skipping INIT_PREPARE and Cleaning up.",
+			streamId, bucket, idx.getStreamBucketState(streamId, bucket))
 		idx.cleanupStreamBucketState(streamId, bucket)
 	} else {
 
@@ -2883,7 +2888,8 @@ func (idx *indexer) handleInitPrepRecovery(msg Message) {
 		}
 
 		if !allowRequest {
-			logging.Infof("handleInitPrepRecovery: stream %v bucket %v cannot initiate another recovery while previous recovery in progress.")
+			logging.Infof("handleInitPrepRecovery: stream %v bucket %v cannot " +
+				"initiate another recovery while previous recovery in progress.")
 			return
 		}
 
@@ -2897,8 +2903,8 @@ func (idx *indexer) handleInitPrepRecovery(msg Message) {
 
 		idx.setStreamBucketState(streamId, bucket, STREAM_PREPARE_RECOVERY)
 
-		logging.Infof("Indexer::handleInitPrepRecovery StreamId %v Bucket %v %v",
-			streamId, bucket, STREAM_PREPARE_RECOVERY)
+		logging.Infof("Indexer::handleInitPrepRecovery StreamId %v Bucket %v SessionId %v",
+			streamId, bucket, STREAM_PREPARE_RECOVERY, sessionId)
 
 		//fwd the msg to timekeeper
 		idx.tkCmdCh <- msg
@@ -2952,6 +2958,8 @@ func (idx *indexer) handleInitRecovery(msg Message) {
 	logging.Infof("Indexer::handleInitRecovery StreamId %v Bucket %v %v",
 		streamId, bucket, STREAM_RECOVERY)
 
+	sessionId := idx.getNextSessionId(streamId, bucket)
+
 	//if there is a rollbackTs, process rollback
 	if ts, ok := idx.streamBucketRollbackTs[streamId][bucket]; ok && ts != nil {
 		//if there is a retryTs, use that first
@@ -2959,12 +2967,12 @@ func (idx *indexer) handleInitRecovery(msg Message) {
 			logging.Infof("Indexer::handleInitRecovery StreamId %v Bucket %v Using RetryTs %v",
 				streamId, bucket, rts)
 			idx.streamBucketRetryTs[streamId][bucket] = nil
-			idx.startBucketStream(streamId, bucket, rts, nil, nil, false, false)
+			idx.startBucketStream(streamId, bucket, rts, nil, nil, false, false, sessionId)
 		} else {
-			idx.processRollback(streamId, bucket, ts)
+			idx.processRollback(streamId, bucket, ts, sessionId)
 		}
 	} else {
-		idx.startBucketStream(streamId, bucket, restartTs, retryTs, nil, false, false)
+		idx.startBucketStream(streamId, bucket, restartTs, retryTs, nil, false, false, sessionId)
 	}
 
 }
@@ -2975,6 +2983,7 @@ func (idx *indexer) handleStorageRollbackDone(msg Message) {
 	streamId := msg.(*MsgRollbackDone).GetStreamId()
 	restartTs := msg.(*MsgRollbackDone).GetRestartTs()
 	err := msg.(*MsgRollbackDone).GetError()
+	sessionId := msg.(*MsgRollbackDone).GetSessionId()
 
 	//notify storage rollback done
 	if streamId == common.MAINT_STREAM {
@@ -2991,7 +3000,7 @@ func (idx *indexer) handleStorageRollbackDone(msg Message) {
 		common.CrashOnError(err)
 	}
 
-	idx.startBucketStream(streamId, bucket, restartTs, nil, nil, false, false)
+	idx.startBucketStream(streamId, bucket, restartTs, nil, nil, false, false, sessionId)
 	go idx.collectProgressStats(true)
 
 }
@@ -3000,9 +3009,10 @@ func (idx *indexer) handleRecoveryDone(msg Message) {
 
 	bucket := msg.(*MsgRecovery).GetBucket()
 	streamId := msg.(*MsgRecovery).GetStreamId()
+	sessionId := msg.(*MsgRecovery).GetSessionId()
 
-	logging.Infof("Indexer::handleRecoveryDone StreamId %v Bucket %v ",
-		streamId, bucket)
+	logging.Infof("Indexer::handleRecoveryDone StreamId %v Bucket %v SessionId %v",
+		streamId, bucket, sessionId)
 
 	//send the msg to timekeeper
 	idx.tkCmdCh <- msg
@@ -3014,8 +3024,9 @@ func (idx *indexer) handleRecoveryDone(msg Message) {
 	//the stream needs to be stopped for that bucket.
 	if !idx.checkBucketExistsInStream(bucket, streamId, true) {
 		if idx.getStreamBucketState(streamId, bucket) != STREAM_INACTIVE {
-			logging.Infof("Indexer::handleRecoveryDone StreamId %v Bucket %v State %v. No Index Found."+
-				"Cleaning up.", streamId, bucket, idx.getStreamBucketState(streamId, bucket))
+			logging.Infof("Indexer::handleRecoveryDone StreamId %v Bucket %v "+
+				"State %v. No Index Found. Cleaning up.", streamId, bucket,
+				idx.getStreamBucketState(streamId, bucket))
 			idx.stopBucketStream(streamId, bucket)
 
 			idx.setStreamBucketState(streamId, bucket, STREAM_INACTIVE)
@@ -3025,8 +3036,8 @@ func (idx *indexer) handleRecoveryDone(msg Message) {
 		idx.setStreamBucketState(streamId, bucket, STREAM_ACTIVE)
 	}
 
-	logging.Infof("Indexer::handleRecoveryDone StreamId %v Bucket %v %v",
-		streamId, bucket, idx.getStreamBucketState(streamId, bucket))
+	logging.Infof("Indexer::handleRecoveryDone StreamId %v Bucket %v SessionId %v %v",
+		streamId, bucket, sessionId, idx.getStreamBucketState(streamId, bucket))
 
 }
 
@@ -3036,6 +3047,7 @@ func (idx *indexer) handleKVStreamRepair(msg Message) {
 	streamId := msg.(*MsgKVStreamRepair).GetStreamId()
 	restartTs := msg.(*MsgKVStreamRepair).GetRestartTs()
 	async := msg.(*MsgKVStreamRepair).GetAsync()
+	sessionId := msg.(*MsgKVStreamRepair).GetSessionId()
 
 	is := idx.getIndexerState()
 	if is == common.INDEXER_PREPARE_UNPAUSE {
@@ -3054,9 +3066,9 @@ func (idx *indexer) handleKVStreamRepair(msg Message) {
 	//if there is already a repair in progress for this bucket stream
 	//ignore the request
 	if idx.checkStreamRequestPending(streamId, bucket) == false {
-		logging.Infof("Indexer::handleKVStreamRepair Initiate Stream Repair %v Bucket %v",
-			streamId, bucket)
-		idx.startBucketStream(streamId, bucket, restartTs, nil, nil, true, async)
+		logging.Infof("Indexer::handleKVStreamRepair Initiate Stream Repair %v Bucket %v "+
+			"StreamId %v", streamId, bucket, sessionId)
+		idx.startBucketStream(streamId, bucket, restartTs, nil, nil, true, async, sessionId)
 	} else {
 		logging.Infof("Indexer::handleKVStreamRepair Ignore Stream Repair Request for Stream "+
 			"%v Bucket %v. Request In Progress.", streamId, bucket)
@@ -3068,6 +3080,7 @@ func (idx *indexer) handleInitBuildDoneAck(msg Message) {
 
 	streamId := msg.(*MsgTKInitBuildDone).GetStreamId()
 	bucket := msg.(*MsgTKInitBuildDone).GetBucket()
+	sessionId := msg.(*MsgTKInitBuildDone).GetSessionId()
 
 	//skip processing initial build done ack for inactive or recovery streams.
 	//the streams would be restarted and then build done would get recomputed.
@@ -3081,8 +3094,8 @@ func (idx *indexer) handleInitBuildDoneAck(msg Message) {
 		return
 	}
 
-	logging.Infof("Indexer::handleInitBuildDoneAck StreamId %v Bucket %v",
-		streamId, bucket)
+	logging.Infof("Indexer::handleInitBuildDoneAck StreamId %v Bucket %v SessionId %v",
+		streamId, bucket, sessionId)
 
 	switch streamId {
 
@@ -3104,9 +3117,10 @@ func (idx *indexer) handleAddInstanceFail(msg Message) {
 
 	streamId := msg.(*MsgTKInitBuildDone).GetStreamId()
 	bucket := msg.(*MsgTKInitBuildDone).GetBucket()
+	sessionId := msg.(*MsgTKInitBuildDone).GetSessionId()
 
-	logging.Infof("Indexer::handleAddInstanceFail StreamId %v Bucket %v",
-		streamId, bucket)
+	logging.Infof("Indexer::handleAddInstanceFail StreamId %v Bucket %v SessionId %v",
+		streamId, bucket, sessionId)
 
 	switch streamId {
 
@@ -3132,8 +3146,9 @@ func (idx *indexer) handleAddInstanceFail(msg Message) {
 			return
 		} else {
 			idx.handleInitPrepRecovery(&MsgRecovery{mType: INDEXER_INIT_PREP_RECOVERY,
-				streamId: mergeStreamId,
-				bucket:   bucket})
+				streamId:  mergeStreamId,
+				bucket:    bucket,
+				sessionId: sessionId})
 		}
 
 	default:
@@ -3148,9 +3163,10 @@ func (idx *indexer) handleMergeStreamAck(msg Message) {
 	streamId := msg.(*MsgTKMergeStream).GetStreamId()
 	bucket := msg.(*MsgTKMergeStream).GetBucket()
 	mergeList := msg.(*MsgTKMergeStream).GetMergeList()
+	sessionId := msg.(*MsgTKMergeStream).GetSessionId()
 
-	logging.Infof("Indexer::handleMergeStreamAck StreamId %v Bucket %v",
-		streamId, bucket)
+	logging.Infof("Indexer::handleMergeStreamAck StreamId %v Bucket %v SessionId %v",
+		streamId, bucket, sessionId)
 
 	switch streamId {
 
@@ -3227,9 +3243,10 @@ func (idx *indexer) handleMTRFail(msg Message) {
 
 	streamId := msg.(*MsgRecovery).GetStreamId()
 	bucket := msg.(*MsgRecovery).GetBucket()
+	sessionId := msg.(*MsgRecovery).GetSessionId()
 
-	logging.Infof("Indexer::handleMTRFail StreamId %v Bucket %v",
-		streamId, bucket)
+	logging.Infof("Indexer::handleMTRFail StreamId %v Bucket %v SessionId %v",
+		streamId, bucket, sessionId)
 
 	// if in MTR, MTR must have stopped when recieving this message.
 	// Cleanup any lock that indexer may be holding.
@@ -3241,9 +3258,10 @@ func (idx *indexer) handleBucketNotFound(msg Message) {
 	streamId := msg.(*MsgRecovery).GetStreamId()
 	bucket := msg.(*MsgRecovery).GetBucket()
 	inMTR := msg.(*MsgRecovery).InMTR()
+	sessionId := msg.(*MsgRecovery).GetSessionId()
 
-	logging.Infof("Indexer::handleBucketNotFound StreamId %v Bucket %v",
-		streamId, bucket)
+	logging.Infof("Indexer::handleBucketNotFound StreamId %v Bucket %v SessionId %v",
+		streamId, bucket, sessionId)
 
 	// if in MTR, MTR must have stopped when recieving this message.
 	// Cleanup any lock that indexer may be holding.
@@ -3529,6 +3547,8 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 	numVb := idx.config["numVbuckets"].Int()
 	enableAsync := idx.config["enableAsyncOpenStream"].Bool()
 
+	sessionId := idx.getNextSessionId(buildStream, bucket)
+
 	async := enableAsync && clusterVersion(clustAddr) >= common.INDEXER_65_VERSION
 	cmd = &MsgStreamUpdate{mType: OPEN_STREAM,
 		streamId:           buildStream,
@@ -3580,11 +3600,12 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 		for {
 			if !ValidateBucket(clustAddr, bucket, bucketUUIDList) {
 				logging.Errorf("Indexer::sendStreamUpdateForBuildIndex \n\tBucket Not Found "+
-					"For Stream %v Bucket %v", buildStream, bucket)
+					"For Stream %v Bucket %v SessionId %v", buildStream, bucket, sessionId)
 				idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_BUCKET_NOT_FOUND,
-					streamId: buildStream,
-					bucket:   bucket,
-					inMTR:    true}
+					streamId:  buildStream,
+					bucket:    bucket,
+					inMTR:     true,
+					sessionId: sessionId}
 				break retryloop
 			}
 			idx.sendMsgToKVSender(cmd)
@@ -3595,7 +3616,7 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 
 				case MSG_SUCCESS_OPEN_STREAM:
 					logging.Infof("Indexer::sendStreamUpdateForBuildIndex Stream Request Success For "+
-						"Stream %v Bucket %v.", buildStream, bucket)
+						"Stream %v Bucket %v SessionId %v", buildStream, bucket, sessionId)
 
 					//once stream request is successful re-calculate the KV timestamp.
 					//This makes sure indexer doesn't use a timestamp which can never
@@ -3610,6 +3631,7 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 						bucket:    bucket,
 						activeTs:  resp.(*MsgSuccessOpenStream).GetActiveTs(),
 						pendingTs: resp.(*MsgSuccessOpenStream).GetPendingTs(),
+						sessionId: sessionId,
 					}
 					break retryloop
 
@@ -3628,13 +3650,14 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 
 					if state == STREAM_PREPARE_RECOVERY || state == STREAM_INACTIVE {
 						logging.Errorf("Indexer::sendStreamUpdateForBuildIndex Stream %v Bucket %v "+
-							"Error from Projector %v. Not Retrying. State %v", buildStream, bucket,
-							respErr.cause, state)
+							"SessionId %v. Error from Projector %v. Not Retrying. State %v", buildStream,
+							bucket, sessionId, respErr.cause, state)
 
 						idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_MTR_FAIL,
-							streamId: buildStream,
-							bucket:   bucket,
-							inMTR:    true}
+							streamId:  buildStream,
+							bucket:    bucket,
+							inMTR:     true,
+							sessionId: sessionId}
 
 						break retryloop
 
@@ -3642,20 +3665,21 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 						// Start recovery if max retries has reached. If the projector
 						// state is not correct, this ensures projector state will get cleaned up.
 						logging.Errorf("Indexer::sendStreamUpdateForBuildIndex Stream %v Bucket %v "+
-							"Error from Projector %v. Start recovery after %v retries.", buildStream,
-							bucket, respErr.cause, MAX_PROJ_RETRY)
+							"SessionId %v. Error from Projector %v. Start recovery after %v retries.",
+							buildStream, sessionId, bucket, respErr.cause, MAX_PROJ_RETRY)
 
 						idx.internalRecvCh <- &MsgRecovery{
 							mType:     INDEXER_INIT_PREP_RECOVERY,
 							streamId:  buildStream,
 							bucket:    bucket,
 							requestCh: stopCh,
+							sessionId: sessionId,
 						}
 						break retryloop
 					} else {
 						logging.Errorf("Indexer::sendStreamUpdateForBuildIndex Stream %v Bucket %v "+
-							"Error from Projector %v. Retrying %v.", buildStream, bucket,
-							respErr.cause, count)
+							"SessionId %v. Error from Projector %v. Retrying %v.", buildStream, bucket,
+							sessionId, respErr.cause, count)
 
 						time.Sleep(KV_RETRY_INTERVAL * time.Millisecond)
 					}
@@ -4163,7 +4187,10 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 		return
 	}
 
-	logging.Infof("Indexer::handleInitialBuildDone Bucket: %v Stream: %v", bucket, streamId)
+	sessionId := idx.getCurrentSessionId(streamId, bucket)
+
+	logging.Infof("Indexer::handleInitialBuildDone Bucket: %v Stream: %v SessionId: %v",
+		bucket, streamId, sessionId)
 
 	//MAINT_STREAM should already be running for this bucket,
 	//as first index gets added to MAINT_STREAM always
@@ -4286,7 +4313,7 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 		for {
 			if !ValidateBucket(clustAddr, bucket, bucketUUIDList) {
 				logging.Errorf("Indexer::handleInitialBuildDone \n\tBucket Not Found "+
-					"For Stream %v Bucket %v", streamId, bucket)
+					"For Stream %v Bucket %v SessionId %v", streamId, bucket, sessionId)
 				break retryloop
 			}
 			idx.sendMsgToKVSender(cmd)
@@ -4296,16 +4323,17 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 				switch resp.GetMsgType() {
 
 				case MSG_SUCCESS:
-					logging.Infof("Indexer::handleInitialBuildDone Success Stream %v Bucket %v ",
-						streamId, bucket)
+					logging.Infof("Indexer::handleInitialBuildDone Success Stream %v Bucket %v "+
+						"SessionId %v", streamId, bucket, sessionId)
 
 					mergeTs := resp.(*MsgStreamUpdate).GetRestartTs()
 
 					idx.internalRecvCh <- &MsgTKInitBuildDone{
-						mType:    TK_INIT_BUILD_DONE_ACK,
-						streamId: streamId,
-						bucket:   bucket,
-						mergeTs:  mergeTs}
+						mType:     TK_INIT_BUILD_DONE_ACK,
+						streamId:  streamId,
+						bucket:    bucket,
+						mergeTs:   mergeTs,
+						sessionId: sessionId}
 					break retryloop
 
 				default:
@@ -4323,26 +4351,28 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 						//pick up the state change.
 						mstate := idx.getStreamBucketState(common.MAINT_STREAM, bucket)
 						if mstate == STREAM_PREPARE_RECOVERY || mstate == STREAM_RECOVERY {
-							logging.Infof("Indexer::handleInitialBuildDone Stream %v Bucket %v "+
-								"Detected MAINT_STREAM in %v state. Reset retry count.", streamId, bucket, mstate)
+							logging.Infof("Indexer::handleInitialBuildDone Stream %v Bucket %v SessionId %v"+
+								"Detected MAINT_STREAM in %v state. Reset retry count.", streamId,
+								bucket, sessionId, mstate)
 							count = 0
 						} else {
 							// Send message to main loop to start recovery if cannot add instances over threshold.
 							//If the projector state is not correct, this ensures projector state will get cleaned up.
-							logging.Errorf("Indexer::handleInitialBuildDone Stream %v Bucket %v "+
+							logging.Errorf("Indexer::handleInitialBuildDone Stream %v Bucket %v SessionId %v"+
 								"Error from Projector %v. Start recovery after %v retries.", streamId,
-								bucket, respErr.cause, MAX_PROJ_RETRY)
+								bucket, respErr.cause, sessionId, MAX_PROJ_RETRY)
 
 							idx.internalRecvCh <- &MsgTKInitBuildDone{
-								mType:    TK_ADD_INSTANCE_FAIL,
-								streamId: streamId,
-								bucket:   bucket,
+								mType:     TK_ADD_INSTANCE_FAIL,
+								streamId:  streamId,
+								bucket:    bucket,
+								sessionId: sessionId,
 							}
 							break retryloop
 						}
 					} else {
-						logging.Errorf("Indexer::handleInitialBuildDone Stream %v Bucket %v "+
-							"Error from Projector %v. Retrying.", streamId, bucket, respErr.cause)
+						logging.Errorf("Indexer::handleInitialBuildDone Stream %v Bucket %v SessionId %v."+
+							"Error from Projector %v. Retrying.", streamId, bucket, sessionId, respErr.cause)
 						time.Sleep(KV_RETRY_INTERVAL * time.Millisecond)
 					}
 				}
@@ -4395,7 +4425,10 @@ func (idx *indexer) handleMergeInitStream(msg Message) {
 	bucket := msg.(*MsgTKMergeStream).GetBucket()
 	streamId := msg.(*MsgTKMergeStream).GetStreamId()
 
-	logging.Infof("Indexer::handleMergeInitStream Bucket: %v Stream: %v", bucket, streamId)
+	sessionId := idx.getCurrentSessionId(streamId, bucket)
+
+	logging.Infof("Indexer::handleMergeInitStream Bucket: %v Stream: %v SessionId: %v",
+		bucket, streamId, sessionId)
 
 	//get the list of indexes for this bucket in CATCHUP state
 	var indexList []common.IndexInst
@@ -4470,28 +4503,29 @@ func (idx *indexer) handleMergeInitStream(msg Message) {
 				switch resp.GetMsgType() {
 
 				case MSG_SUCCESS:
-					logging.Infof("Indexer::handleMergeInitStream Success Stream %v Bucket %v ",
-						streamId, bucket)
+					logging.Infof("Indexer::handleMergeInitStream Success Stream %v Bucket %v "+
+						"SessionId %v", streamId, bucket, sessionId)
 					idx.internalRecvCh <- &MsgTKMergeStream{
 						mType:     TK_MERGE_STREAM_ACK,
 						streamId:  streamId,
 						bucket:    bucket,
-						mergeList: indexList}
+						mergeList: indexList,
+						sessionId: sessionId}
 					break retryloop
 
 				default:
 					//log and retry for all other responses
 					respErr := resp.(*MsgError).GetError()
-					logging.Errorf("Indexer::handleMergeInitStream Stream %v Bucket %v "+
-						"Error from Projector %v. Retrying.", streamId, bucket, respErr.cause)
+					logging.Errorf("Indexer::handleMergeInitStream Stream %v Bucket %v SessionId %v"+
+						"Error from Projector %v. Retrying.", streamId, bucket, sessionId, respErr.cause)
 					time.Sleep(KV_RETRY_INTERVAL * time.Millisecond)
 				}
 			}
 		}
 	}(reqLock)
 
-	logging.Infof("Indexer::handleMergeInitStream Merge Done Bucket: %v Stream: %v",
-		bucket, streamId)
+	logging.Infof("Indexer::handleMergeInitStream Merge Done Bucket: %v Stream: %v SessionId %v",
+		bucket, streamId, sessionId)
 
 	// On a successful merge, clean-up instances in MAINT_STREAM that are in state
 	// INDEX_STATE_DELETED
@@ -4596,7 +4630,10 @@ func (idx *indexer) getIndexListForBucketAndStream(streamId common.StreamId,
 
 func (idx *indexer) stopBucketStream(streamId common.StreamId, bucket string) {
 
-	logging.Infof("Indexer::stopBucketStream Stream: %v Bucket %v", streamId, bucket)
+	sessionId := idx.getCurrentSessionId(streamId, bucket)
+
+	logging.Infof("Indexer::stopBucketStream Stream: %v Bucket %v SessionId %v",
+		streamId, bucket, sessionId)
 
 	idx.merged = idx.removePendingStreamUpdate(idx.merged, streamId, bucket)
 	idx.pruned = idx.removePendingStreamUpdate(idx.pruned, streamId, bucket)
@@ -4644,18 +4681,20 @@ func (idx *indexer) stopBucketStream(streamId common.StreamId, bucket string) {
 				switch resp.GetMsgType() {
 
 				case MSG_SUCCESS:
-					logging.Infof("Indexer::stopBucketStream Success Stream %v Bucket %v ",
-						streamId, bucket)
+					logging.Infof("Indexer::stopBucketStream Success Stream %v Bucket %v "+
+						"SessionId %v", streamId, bucket, sessionId)
 					idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_PREPARE_DONE,
-						streamId: streamId,
-						bucket:   bucket}
+						streamId:  streamId,
+						bucket:    bucket,
+						sessionId: sessionId}
 					break retryloop
 
 				default:
 					//log and retry for all other responses
 					respErr := resp.(*MsgError).GetError()
 					logging.Errorf("Indexer::stopBucketStream Stream %v Bucket %v "+
-						"Error from Projector %v. Retrying.", streamId, bucket, respErr.cause)
+						"SessionId %v. Error from Projector %v. Retrying.", streamId,
+						bucket, sessionId, respErr.cause)
 					time.Sleep(KV_RETRY_INTERVAL * time.Millisecond)
 
 				}
@@ -4666,10 +4705,10 @@ func (idx *indexer) stopBucketStream(streamId common.StreamId, bucket string) {
 
 func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 	restartTs *common.TsVbuuid, retryTs *common.TsVbuuid, allNilSnapsOnWarmup map[string]bool,
-	inRepair bool, async bool) {
+	inRepair bool, async bool, sessionId uint64) {
 
-	logging.Infof("Indexer::startBucketStream Stream: %v Bucket: %v RestartTS %v",
-		streamId, bucket, restartTs)
+	logging.Infof("Indexer::startBucketStream Stream: %v Bucket: %v SessionId %v RestartTS %v",
+		streamId, bucket, sessionId, restartTs)
 
 	idx.merged = idx.removePendingStreamUpdate(idx.merged, streamId, bucket)
 	idx.pruned = idx.removePendingStreamUpdate(idx.pruned, streamId, bucket)
@@ -4796,11 +4835,12 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 			//validate bucket before every try
 			if !ValidateBucket(clustAddr, bucket, bucketUUIDList) {
 				logging.Errorf("Indexer::startBucketStream \n\tBucket Not Found "+
-					"For Stream %v Bucket %v", streamId, bucket)
+					"For Stream %v Bucket %v SessionId %v", streamId, bucket, sessionId)
 				idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_BUCKET_NOT_FOUND,
-					streamId: streamId,
-					bucket:   bucket,
-					inMTR:    true}
+					streamId:  streamId,
+					bucket:    bucket,
+					inMTR:     true,
+					sessionId: sessionId}
 				break retryloop
 			}
 
@@ -4813,7 +4853,7 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 				case MSG_SUCCESS_OPEN_STREAM:
 
 					logging.Infof("Indexer::startBucketStream Success "+
-						"Stream %v Bucket %v", streamId, bucket)
+						"Stream %v Bucket %v SessionId %v", streamId, bucket, sessionId)
 
 					//once stream request is successful re-calculate the KV timestamp.
 					//This makes sure indexer doesn't use a timestamp which can never
@@ -4829,19 +4869,22 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 						restartTs: restartTs,
 						activeTs:  resp.(*MsgSuccessOpenStream).GetActiveTs(),
 						pendingTs: resp.(*MsgSuccessOpenStream).GetPendingTs(),
+						sessionId: sessionId,
 					}
 					break retryloop
 
 				case INDEXER_ROLLBACK:
 					logging.Infof("Indexer::startBucketStream Rollback from "+
-						"Projector For Stream %v Bucket %v", streamId, bucket)
+						"Projector For Stream %v Bucket %v SessionId %v", streamId,
+						bucket, sessionId)
 					rollbackTs := resp.(*MsgRollback).GetRollbackTs()
 					idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_INIT_PREP_RECOVERY,
 						streamId:  streamId,
 						bucket:    bucket,
 						restartTs: rollbackTs,
 						retryTs:   retryTs,
-						requestCh: stopCh}
+						requestCh: stopCh,
+						sessionId: sessionId}
 					break retryloop
 
 				default:
@@ -4852,35 +4895,37 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 					state := idx.getStreamBucketState(streamId, bucket)
 
 					if state == STREAM_PREPARE_RECOVERY || state == STREAM_INACTIVE {
-						logging.Errorf("Indexer::startBucketStream Stream %v Bucket %v "+
+						logging.Errorf("Indexer::startBucketStream Stream %v Bucket %v SessionId %v "+
 							"Error from Projector %v. Not Retrying. State %v", streamId, bucket,
-							respErr.cause, state)
+							sessionId, respErr.cause, state)
 
 						idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_MTR_FAIL,
-							streamId: streamId,
-							bucket:   bucket,
-							inMTR:    true}
+							streamId:  streamId,
+							bucket:    bucket,
+							inMTR:     true,
+							sessionId: sessionId}
 
 						break retryloop
 
 					} else if count > MAX_PROJ_RETRY {
 						// Start recovery if max retries has reached..  If the projector
 						// state is not correct, this ensures projector state will get cleaned up.
-						logging.Errorf("Indexer::startBucketStream Stream %v Bucket %v "+
+						logging.Errorf("Indexer::startBucketStream Stream %v Bucket %v SessionId %v. "+
 							"Error from Projector %v. Start recovery after %v retries.", streamId,
-							bucket, respErr.cause, MAX_PROJ_RETRY)
+							bucket, sessionId, respErr.cause, MAX_PROJ_RETRY)
 
 						idx.internalRecvCh <- &MsgRecovery{
 							mType:     INDEXER_INIT_PREP_RECOVERY,
 							streamId:  streamId,
 							bucket:    bucket,
 							requestCh: stopCh,
+							sessionId: sessionId,
 						}
 						break retryloop
 					} else {
 						logging.Errorf("Indexer::startBucketStream Stream %v Bucket %v "+
-							"Error from Projector %v. Retrying %v.", streamId, bucket,
-							respErr.cause, count)
+							"SessionId %v. Error from Projector %v. Retrying %v.", streamId, bucket,
+							sessionId, respErr.cause, count)
 						time.Sleep(KV_RETRY_INTERVAL * time.Millisecond)
 					}
 				}
@@ -4890,7 +4935,7 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 }
 
 func (idx *indexer) processRollback(streamId common.StreamId,
-	bucket string, rollbackTs *common.TsVbuuid) {
+	bucket string, rollbackTs *common.TsVbuuid, sessionId uint64) {
 
 	if streamId == common.MAINT_STREAM {
 		idx.bucketRollbackTimes[bucket] = time.Now().UnixNano()
@@ -4900,7 +4945,8 @@ func (idx *indexer) processRollback(streamId common.StreamId,
 	msg := &MsgRollback{streamId: streamId,
 		bucket:       bucket,
 		rollbackTs:   rollbackTs,
-		rollbackTime: idx.bucketRollbackTimes[bucket]}
+		rollbackTime: idx.bucketRollbackTimes[bucket],
+		sessionId:    sessionId}
 
 	if streamId == common.MAINT_STREAM {
 		idx.scanCoordCmdCh <- msg
@@ -4918,6 +4964,14 @@ func (idx *indexer) initStreamFlushMap() {
 	for i := 0; i < int(common.ALL_STREAMS); i++ {
 		idx.streamBucketFlushInProgress[common.StreamId(i)] = make(BucketFlushInProgressMap)
 		idx.streamBucketObserveFlushDone[common.StreamId(i)] = make(BucketObserveFlushDoneMap)
+	}
+}
+
+func (idx *indexer) initStreamSessionIdMap() {
+
+	for i := 0; i < int(common.ALL_STREAMS); i++ {
+		idx.streamBucketSessionId[common.StreamId(i)] = make(map[string]uint64)
+		idx.streamBucketSessionId[common.StreamId(i)] = make(map[string]uint64)
 	}
 }
 
@@ -6082,7 +6136,9 @@ func (idx *indexer) startStreams() bool {
 
 	for bucket, ts := range restartTs {
 		idx.bucketRollbackTimes[bucket] = time.Now().UnixNano()
-		idx.startBucketStream(common.MAINT_STREAM, bucket, ts, nil, allNilSnaps, false, false)
+		sessionId := idx.getNextSessionId(common.MAINT_STREAM, bucket)
+		idx.startBucketStream(common.MAINT_STREAM, bucket, ts, nil, allNilSnaps,
+			false, false, sessionId)
 		idx.setStreamBucketState(common.MAINT_STREAM, bucket, STREAM_ACTIVE)
 	}
 
@@ -6094,7 +6150,9 @@ func (idx *indexer) startStreams() bool {
 	idx.stateLock.Unlock()
 
 	for bucket, ts := range restartTs {
-		idx.startBucketStream(common.INIT_STREAM, bucket, ts, nil, allNilSnaps, false, false)
+		sessionId := idx.getNextSessionId(common.INIT_STREAM, bucket)
+		idx.startBucketStream(common.INIT_STREAM, bucket, ts, nil, allNilSnaps,
+			false, false, sessionId)
 		idx.setStreamBucketState(common.INIT_STREAM, bucket, STREAM_ACTIVE)
 	}
 
@@ -7467,5 +7525,30 @@ func (idx *indexer) initBuildTsLock(streamId common.StreamId, bucket string) {
 	}
 	if _, ok := idx.buildTsLock[streamId][bucket]; !ok {
 		idx.buildTsLock[streamId][bucket] = &sync.Mutex{}
+	}
+}
+
+//sessionId helper functions. these functions can only be called from the genserver
+//as no sync mechanism is being used.
+func (idx *indexer) getNextSessionId(streamId common.StreamId, bucket string) uint64 {
+
+	var sid uint64
+	var ok bool
+
+	if sid, ok = idx.streamBucketSessionId[streamId][bucket]; ok {
+		sid++
+	} else {
+		sid = 1 //start with 1
+	}
+	idx.streamBucketSessionId[streamId][bucket] = sid
+	return sid
+}
+
+func (idx *indexer) getCurrentSessionId(streamId common.StreamId, bucket string) uint64 {
+
+	if sid, ok := idx.streamBucketSessionId[streamId][bucket]; ok {
+		return sid
+	} else {
+		return 0
 	}
 }
