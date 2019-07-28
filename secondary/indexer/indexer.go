@@ -3324,7 +3324,8 @@ func (idx *indexer) handleBucketNotFound(msg Message) {
 }
 
 func (idx indexer) newIndexInstMsg(m common.IndexInstMap) *MsgUpdateInstMap {
-	return &MsgUpdateInstMap{indexInstMap: m, stats: idx.stats.Clone(), rollbackTimes: idx.bucketRollbackTimes}
+	return &MsgUpdateInstMap{indexInstMap: m, stats: idx.stats.Clone(),
+		rollbackTimes: idx.bucketRollbackTimes}
 }
 
 func (idx *indexer) cleanupIndexData(indexInst common.IndexInst,
@@ -3341,7 +3342,8 @@ func (idx *indexer) cleanupIndexData(indexInst common.IndexInst,
 	msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
 	msgUpdateIndexPartnMap := &MsgUpdatePartnMap{indexPartnMap: idx.indexPartnMap}
 
-	if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, msgUpdateIndexPartnMap); err != nil {
+	if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap,
+		msgUpdateIndexPartnMap); err != nil {
 		if clientCh != nil {
 			clientCh <- &MsgError{
 				err: Error{code: ERROR_INDEXER_INTERNAL_ERROR,
@@ -3381,8 +3383,9 @@ func (idx *indexer) cleanupIndex(indexInst common.IndexInst,
 		return
 	}
 
-	// If a proxy is deleted before merge has happened, we have to make sure that the real instance is updated.
-	// If a proxy is already merged to the real index inst, this function will not be called (since the proxy
+	// If a proxy is deleted before merge has happened, we have to make sure
+	// that the real instance is updated. If a proxy is already merged to the
+	// real index inst, this function will not be called (since the proxy
 	// will no longer hold real data).
 	if indexInst.RealInstId != 0 && indexInst.RealInstId != indexInst.InstId {
 		// Proxy is in CATCHUP or ACTIVe state.   This means index build is done.
@@ -3402,8 +3405,10 @@ func (idx *indexer) cleanupIndex(indexInst common.IndexInst,
 	// If INIT_STREAM is in STREAM_INACTIVE, then clean up instances in MAINT_STREAM
 	// that are in state INDEX_STATE_DELETED
 	bucket := indexInst.Defn.Bucket
-	if indexInst.Stream == common.INIT_STREAM && idx.getStreamBucketState(common.INIT_STREAM, bucket) == STREAM_INACTIVE {
-		logging.Infof("Indexer::cleanupIndex INIT_STREAM is in state STREAM_INACTIVE. Attempting clean-up of MAINT_STREAM. Bucket: %v", bucket)
+	if indexInst.Stream == common.INIT_STREAM &&
+		idx.getStreamBucketState(common.INIT_STREAM, bucket) == STREAM_INACTIVE {
+		logging.Infof("Indexer::cleanupIndex INIT_STREAM is in state STREAM_INACTIVE."+
+			" Attempting clean-up of MAINT_STREAM. Bucket: %v", bucket)
 		idx.cleanupMaintStream(bucket)
 	}
 
@@ -3412,7 +3417,10 @@ func (idx *indexer) cleanupIndex(indexInst common.IndexInst,
 	}
 }
 
-func (idx *indexer) sendStreamUpdateForIndex(indexInstList []common.IndexInst, bucket string, bucketUUID string, streamId common.StreamId) {
+func (idx *indexer) sendStreamUpdateForIndex(indexInstList []common.IndexInst,
+	bucket string, bucketUUID string, streamId common.StreamId) {
+
+	sessionId := idx.getCurrentSessionId(streamId, bucket)
 
 	respCh := make(MsgChannel)
 	stopCh := make(StopChannel)
@@ -3423,7 +3431,8 @@ func (idx *indexer) sendStreamUpdateForIndex(indexInstList []common.IndexInst, b
 		bucket:    bucket,
 		indexList: indexInstList,
 		respCh:    respCh,
-		stopCh:    stopCh}
+		stopCh:    stopCh,
+		sessionId: sessionId}
 
 	clustAddr := idx.config["clusterAddr"].String()
 	retryCount := 0
@@ -3446,14 +3455,15 @@ func (idx *indexer) sendStreamUpdateForIndex(indexInstList []common.IndexInst, b
 				switch resp.GetMsgType() {
 
 				case MSG_SUCCESS:
-					logging.Infof("Indexer::sendStreamUpdateForIndex Success Stream %v Bucket %v ",
-						streamId, bucket)
+					logging.Infof("Indexer::sendStreamUpdateForIndex Success Stream %v Bucket %v "+
+						"SessionId %v.", streamId, bucket, sessionId)
 					break retryloop
 
 				default:
 					if idx.getStreamBucketState(streamId, bucket) != STREAM_ACTIVE {
 						logging.Warnf("Indexer::sendStreamUpdateForIndex Stream %v Bucket %v "+
-							"Bucket stream not active. Aborting.", streamId, bucket)
+							"SessionId %v. Bucket stream not active. Aborting.", streamId,
+							bucket, sessionId)
 						break retryloop
 					}
 
@@ -3466,18 +3476,20 @@ func (idx *indexer) sendStreamUpdateForIndex(indexInstList []common.IndexInst, b
 					if respErr.cause.Error() == common.ErrorClosed.Error() ||
 						respErr.cause.Error() == projClient.ErrorTopicMissing.Error() {
 						logging.Warnf("Indexer::sendStreamUpdateForIndex Stream %v Bucket %v "+
-							"Error from Projector %v. Aborting.", streamId, bucket, respErr.cause)
+							"SessionId %v. Error from Projector %v. Aborting.", streamId, bucket,
+							sessionId, respErr.cause)
 						break retryloop
 
 					} else if retryCount < 10 {
 						logging.Errorf("Indexer::sendStreamUpdateForIndex Stream %v Bucket %v "+
-							"Error from Projector %v. Retrying.", streamId, bucket, respErr.cause)
+							"SessionId %v. Error from Projector %v. Retrying.", streamId, bucket,
+							sessionId, respErr.cause)
 						retryCount++
 						time.Sleep(KV_RETRY_INTERVAL * time.Millisecond)
 					} else {
 						logging.Errorf("Indexer::sendStreamUpdateForIndex Stream %v Bucket %v "+
-							"Error from Projector %v. Reach max retry count.  Stop retrying.",
-							streamId, bucket, respErr.cause)
+							"SessionId %v. Error from Projector %v. Reach max retry count. Stop retrying.",
+							streamId, bucket, sessionId, respErr.cause)
 						break retryloop
 					}
 				}
@@ -3559,7 +3571,8 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 		restartTs:          nil,
 		allowMarkFirstSnap: true,
 		rollbackTime:       idx.bucketRollbackTimes[bucket],
-		async:              async}
+		async:              async,
+		sessionId:          sessionId}
 
 	//send stream update to timekeeper
 	if resp := idx.sendStreamUpdateToWorker(cmd, idx.tkCmdCh,
@@ -3737,7 +3750,8 @@ func (idx *indexer) sendStreamUpdateForDropIndex(indexInst common.IndexInst,
 	var indexList []common.IndexInst
 	indexList = append(indexList, indexInst)
 
-	return idx.removeIndexesFromStream(indexList, indexInst.Defn.Bucket, indexInst.Defn.BucketUUID, indexInst.Stream, indexInst.State, clientCh)
+	return idx.removeIndexesFromStream(indexList, indexInst.Defn.Bucket,
+		indexInst.Defn.BucketUUID, indexInst.Stream, indexInst.State, clientCh)
 }
 
 func (idx *indexer) removeIndexesFromStream(indexList []common.IndexInst,
@@ -3779,17 +3793,20 @@ func (idx *indexer) removeIndexesFromStream(indexList []common.IndexInst,
 			continue
 		}
 
+		sessionId := idx.getCurrentSessionId(streamId, bucket)
 		if idx.checkBucketExistsInStream(bucket, streamId, false) {
 
 			cmd = &MsgStreamUpdate{mType: REMOVE_INDEX_LIST_FROM_STREAM,
 				streamId:  streamId,
 				indexList: indexList,
-				respCh:    respCh}
+				respCh:    respCh,
+				sessionId: sessionId}
 		} else {
 			cmd = &MsgStreamUpdate{mType: REMOVE_BUCKET_FROM_STREAM,
-				streamId: streamId,
-				bucket:   bucket,
-				respCh:   respCh}
+				streamId:  streamId,
+				bucket:    bucket,
+				respCh:    respCh,
+				sessionId: sessionId}
 			idx.setStreamBucketState(streamId, bucket, STREAM_INACTIVE)
 		}
 
@@ -3837,21 +3854,23 @@ func (idx *indexer) removeIndexesFromStream(indexList []common.IndexInst,
 					switch resp.GetMsgType() {
 
 					case MSG_SUCCESS:
-						logging.Infof("Indexer::removeIndexesFromStream Success Stream %v Bucket %v",
-							streamId, bucket)
+						logging.Infof("Indexer::removeIndexesFromStream Success Stream %v "+
+							"Bucket %v SessionId %v", streamId, bucket, sessionId)
 						break retryloop
 
 					default:
 						if idx.getStreamBucketState(streamId, bucket) != STREAM_ACTIVE {
 							logging.Warnf("Indexer::removeIndexesFromStream Stream %v Bucket %v "+
-								"Bucket stream not active. Aborting.", streamId, bucket)
+								"SessionId %v Bucket stream not active. Aborting.", streamId,
+								bucket, sessionId)
 							break retryloop
 						}
 
 						//log and retry for all other responses
 						respErr := resp.(*MsgError).GetError()
 						logging.Errorf("Indexer::removeIndexesFromStream - Stream %v Bucket %v"+
-							"Error from Projector %v. Retrying.", streamId, bucket, respErr.cause)
+							"SessionId %v. Error from Projector %v. Retrying.", streamId, bucket,
+							sessionId, respErr.cause)
 						time.Sleep(KV_RETRY_INTERVAL * time.Millisecond)
 
 					}
@@ -4288,7 +4307,8 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 		bucket:    bucket,
 		indexList: indexList,
 		respCh:    respCh,
-		stopCh:    stopCh}
+		stopCh:    stopCh,
+		sessionId: sessionId}
 
 	//send stream update to timekeeper
 	if resp := idx.sendStreamUpdateToWorker(cmd, idx.tkCmdCh, "Timekeeper"); resp.GetMsgType() != MSG_SUCCESS {
@@ -4462,10 +4482,11 @@ func (idx *indexer) handleMergeInitStream(msg Message) {
 	//remove bucket from INIT_STREAM
 	var cmd Message
 	cmd = &MsgStreamUpdate{mType: REMOVE_BUCKET_FROM_STREAM,
-		streamId: streamId,
-		bucket:   bucket,
-		respCh:   respCh,
-		stopCh:   stopCh,
+		streamId:  streamId,
+		bucket:    bucket,
+		respCh:    respCh,
+		stopCh:    stopCh,
+		sessionId: sessionId,
 	}
 
 	//send stream update to timekeeper
@@ -4643,10 +4664,11 @@ func (idx *indexer) stopBucketStream(streamId common.StreamId, bucket string) {
 
 	var cmd Message
 	cmd = &MsgStreamUpdate{mType: REMOVE_BUCKET_FROM_STREAM,
-		streamId: streamId,
-		bucket:   bucket,
-		respCh:   respCh,
-		stopCh:   stopCh}
+		streamId:  streamId,
+		bucket:    bucket,
+		respCh:    respCh,
+		stopCh:    stopCh,
+		sessionId: sessionId}
 
 	//send stream update to mutation manager
 	if resp := idx.sendStreamUpdateToWorker(cmd, idx.mutMgrCmdCh,
@@ -4802,7 +4824,8 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 		allowMarkFirstSnap: allowMarkFirstSnap,
 		rollbackTime:       idx.bucketRollbackTimes[bucket],
 		bucketInRecovery:   bucketInRecovery,
-		async:              async}
+		async:              async,
+		sessionId:          sessionId}
 
 	//send stream update to timekeeper
 	if resp := idx.sendStreamUpdateToWorker(cmd, idx.tkCmdCh,

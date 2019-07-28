@@ -52,6 +52,7 @@ type StreamState struct {
 	streamBucketTimerStopCh     map[common.StreamId]BucketTimerStopCh
 	streamBucketLastPersistTime map[common.StreamId]BucketLastPersistTime
 	streamBucketSkippedInMemTs  map[common.StreamId]BucketSkippedInMemTs
+	streamBucketSessionId       map[common.StreamId]BucketSessionId
 
 	streamBucketAsyncMap map[common.StreamId]BucketStreamAsyncMap
 
@@ -96,6 +97,7 @@ type BucketRepairStopCh map[string]StopChannel
 type BucketTimerStopCh map[string]StopChannel
 type BucketLastPersistTime map[string]time.Time
 type BucketSkippedInMemTs map[string]uint64
+type BucketSessionId map[string]uint64
 
 type BucketStreamAsyncMap map[string]bool
 type BucketStreamLastBeginTime map[string]uint64
@@ -157,6 +159,7 @@ func InitStreamState(config common.Config) *StreamState {
 		streamBucketKVActiveTsMap:     make(map[common.StreamId]BucketKVActiveTsMap),
 		streamBucketKVPendingTsMap:    make(map[common.StreamId]BucketKVPendingTsMap),
 		streamBucketRepairStateMap:    make(map[common.StreamId]BucketStreamRepairStateMap),
+		streamBucketSessionId:         make(map[common.StreamId]BucketSessionId),
 	}
 
 	return ss
@@ -235,6 +238,9 @@ func (ss *StreamState) initNewStream(streamId common.StreamId) {
 	bucketSkippedInMemTs := make(BucketSkippedInMemTs)
 	ss.streamBucketSkippedInMemTs[streamId] = bucketSkippedInMemTs
 
+	bucketSessionId := make(BucketSessionId)
+	ss.streamBucketSessionId[streamId] = bucketSessionId
+
 	bucketStatus := make(BucketStatus)
 	ss.streamBucketStatus[streamId] = bucketStatus
 
@@ -296,6 +302,7 @@ func (ss *StreamState) initBucketInStream(streamId common.StreamId,
 	ss.streamBucketOpenTsMap[streamId][bucket] = nil
 	ss.streamBucketStartTimeMap[streamId][bucket] = uint64(0)
 	ss.streamBucketSkippedInMemTs[streamId][bucket] = 0
+	ss.streamBucketSessionId[streamId][bucket] = 0
 	ss.streamBucketLastSnapMarker[streamId][bucket] = common.NewTsVbuuid(bucket, numVbuckets)
 	ss.streamBucketPrevVbuuidTs[streamId][bucket] = common.NewTsVbuuid(bucket, numVbuckets)
 	ss.streamBucketAsyncMap[streamId][bucket] = false
@@ -344,6 +351,7 @@ func (ss *StreamState) cleanupBucketFromStream(streamId common.StreamId,
 	delete(ss.streamBucketLastSnapMarker[streamId], bucket)
 	delete(ss.streamBucketPrevVbuuidTs[streamId], bucket)
 	delete(ss.streamBucketSkippedInMemTs[streamId], bucket)
+	delete(ss.streamBucketSessionId[streamId], bucket)
 	delete(ss.streamBucketAsyncMap[streamId], bucket)
 	delete(ss.streamBucketLastBeginTime[streamId], bucket)
 	delete(ss.streamBucketLastRepairTimeMap[streamId], bucket)
@@ -389,6 +397,7 @@ func (ss *StreamState) resetStreamState(streamId common.StreamId) {
 	delete(ss.streamBucketOpenTsMap, streamId)
 	delete(ss.streamBucketStartTimeMap, streamId)
 	delete(ss.streamBucketSkippedInMemTs, streamId)
+	delete(ss.streamBucketSessionId, streamId)
 	delete(ss.streamBucketLastSnapMarker, streamId)
 	delete(ss.streamBucketPrevVbuuidTs, streamId)
 	delete(ss.streamBucketAsyncMap, streamId)
@@ -1476,4 +1485,8 @@ func (ss *StreamState) computeRetryTs(streamId common.StreamId,
 	}
 
 	return retryTs
+}
+
+func (ss *StreamState) getSessionId(streamId common.StreamId, bucket string) uint64 {
+	return ss.streamBucketSessionId[streamId][bucket]
 }

@@ -69,7 +69,8 @@ type mutationStreamReader struct {
 func CreateMutationStreamReader(streamId common.StreamId, bucketQueueMap BucketQueueMap,
 	bucketFilter map[string]*common.TsVbuuid, supvCmdch MsgChannel, supvRespch MsgChannel,
 	numWorkers int, stats *IndexerStats, config common.Config, is common.IndexerState,
-	allowMarkFirstSnap bool, vbMap *VbMapHolder) (MutationStreamReader, Message) {
+	allowMarkFirstSnap bool, vbMap *VbMapHolder, bucketSessionId BucketSessionId) (
+	MutationStreamReader, Message) {
 
 	//start a new mutation stream
 	streamMutch := make(chan interface{}, getMutationBufferSize(config))
@@ -115,7 +116,8 @@ func CreateMutationStreamReader(streamId common.StreamId, bucketQueueMap BucketQ
 	logging.Infof("MutationStreamReader: Setting Stream Workers %v %v", r.streamId, numWorkers)
 
 	for i := 0; i < numWorkers; i++ {
-		r.streamWorkers[i] = newStreamWorker(streamId, numWorkers, i, config, r, bucketFilter, allowMarkFirstSnap, vbMap)
+		r.streamWorkers[i] = newStreamWorker(streamId, numWorkers, i, config, r,
+			bucketFilter, allowMarkFirstSnap, vbMap, bucketSessionId)
 		go r.streamWorkers[i].start()
 	}
 
@@ -138,7 +140,6 @@ func (r *mutationStreamReader) Shutdown() {
 
 	close(r.killch)
 
-	//TODO check if the order of close is important
 	for i := 0; i < r.numWorkers; i++ {
 		close(r.streamWorkers[i].workerStopCh)
 	}
@@ -294,8 +295,9 @@ func (r *mutationStreamReader) handleSupervisorCommands(cmd Message) Message {
 		r.stats.Set(req.GetStatsObject())
 
 		bucketFilter := req.GetBucketFilter()
+		bucketSessionId := req.GetBucketSessionId()
 		for i := 0; i < r.numWorkers; i++ {
-			r.streamWorkers[i].initBucketFilter(bucketFilter)
+			r.streamWorkers[i].initBucketFilter(bucketFilter, bucketSessionId)
 		}
 
 		r.stopch = make(StopChannel)
@@ -501,9 +503,10 @@ func (r *mutationStreamReader) setIndexerState(is common.IndexerState) {
 type firstSnapFlag []bool
 
 type streamWorker struct {
-	workerch     chan *protobuf.VbKeyVersions //buffered channel for each worker
-	workerStopCh StopChannel                  //stop channels of workers
-	bucketFilter map[string]*common.TsVbuuid
+	workerch        chan *protobuf.VbKeyVersions //buffered channel for each worker
+	workerStopCh    StopChannel                  //stop channels of workers
+	bucketFilter    map[string]*common.TsVbuuid
+	bucketSessionId BucketSessionId
 
 	bucketPrevSnapMap map[string]*common.TsVbuuid
 	bucketSyncDue     map[string]bool
@@ -530,7 +533,7 @@ type streamWorker struct {
 
 func newStreamWorker(streamId common.StreamId, numWorkers int, workerId int, config common.Config,
 	reader *mutationStreamReader, bucketFilter map[string]*common.TsVbuuid, allowMarkFirstSnap bool,
-	vbMap *VbMapHolder) *streamWorker {
+	vbMap *VbMapHolder, bucketSessionId BucketSessionId) *streamWorker {
 
 	w := &streamWorker{streamId: streamId,
 		workerId:          workerId,
@@ -542,13 +545,14 @@ func newStreamWorker(streamId common.StreamId, numWorkers int, workerId int, con
 		reader:            reader,
 		bucketFirstSnap:   make(map[string]firstSnapFlag),
 		vbMap:             vbMap,
+		bucketSessionId:   make(BucketSessionId),
 	}
 
 	if allowMarkFirstSnap {
 		w.markFirstSnap = getMarkFirstSnap(config)
 	}
 
-	w.initBucketFilter(bucketFilter)
+	w.initBucketFilter(bucketFilter, bucketSessionId)
 	return w
 
 }
@@ -755,7 +759,8 @@ func (w *streamWorker) handleSingleMutation(mut *MutationKeys, stopch StopChanne
 }
 
 //initBucketFilter initializes the bucket filter
-func (w *streamWorker) initBucketFilter(bucketFilter map[string]*common.TsVbuuid) {
+func (w *streamWorker) initBucketFilter(bucketFilter map[string]*common.TsVbuuid,
+	bucketSessionId BucketSessionId) {
 
 	w.lock.Lock()
 	defer w.lock.Unlock()
@@ -784,6 +789,7 @@ func (w *streamWorker) initBucketFilter(bucketFilter map[string]*common.TsVbuuid
 
 			w.bucketSyncDue[b] = false
 			w.bucketFirstSnap[b] = make(firstSnapFlag, int(q.queue.GetNumVbuckets()))
+			w.bucketSessionId[b] = bucketSessionId[b]
 
 			//reset stat for bucket
 			stats := w.reader.stats.Get()
@@ -802,6 +808,7 @@ func (w *streamWorker) initBucketFilter(bucketFilter map[string]*common.TsVbuuid
 			delete(w.bucketPrevSnapMap, b)
 			delete(w.bucketSyncDue, b)
 			delete(w.bucketFirstSnap, b)
+			delete(w.bucketSessionId, b)
 		}
 	}
 

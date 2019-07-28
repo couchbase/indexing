@@ -595,6 +595,8 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 	streamId := cmd.(*MsgRollback).GetStreamId()
 	rollbackTs := cmd.(*MsgRollback).GetRollbackTs()
 	bucket := cmd.(*MsgRollback).GetBucket()
+	sessionId := cmd.(*MsgRollback).GetSessionId()
+
 	logging.Infof("StorageMgr::handleRollback rollbackTs is %v", rollbackTs)
 
 	var respTs *common.TsVbuuid
@@ -655,8 +657,9 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 							//send error response back
 							//TODO handle the case where some of the slices fail to rollback
 							sm.supvRespch <- &MsgRollbackDone{streamId: streamId,
-								bucket: bucket,
-								err:    err}
+								bucket:    bucket,
+								err:       err,
+								sessionId: sessionId}
 							return
 						}
 
@@ -674,8 +677,9 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 							//send error response back
 							//TODO handle the case where some of the slices fail to rollback
 							sm.supvRespch <- &MsgRollbackDone{streamId: streamId,
-								bucket: bucket,
-								err:    err}
+								bucket:    bucket,
+								err:       err,
+								sessionId: sessionId}
 							return
 						}
 					}
@@ -717,7 +721,8 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 
 	sm.supvRespch <- &MsgRollbackDone{streamId: streamId,
 		bucket:    bucket,
-		restartTs: respTs}
+		restartTs: respTs,
+		sessionId: sessionId}
 
 }
 

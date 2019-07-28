@@ -372,9 +372,10 @@ func (m *MsgStreamInfo) String() string {
 
 //STREAM_READER_UPDATE_QUEUE_MAP
 type MsgUpdateBucketQueue struct {
-	bucketQueueMap BucketQueueMap
-	stats          *IndexerStats
-	bucketFilter   map[string]*common.TsVbuuid
+	bucketQueueMap  BucketQueueMap
+	stats           *IndexerStats
+	bucketFilter    map[string]*common.TsVbuuid
+	bucketSessionId BucketSessionId
 }
 
 func (m *MsgUpdateBucketQueue) GetMsgType() MsgType {
@@ -391,6 +392,10 @@ func (m *MsgUpdateBucketQueue) GetStatsObject() *IndexerStats {
 
 func (m *MsgUpdateBucketQueue) GetBucketFilter() map[string]*common.TsVbuuid {
 	return m.bucketFilter
+}
+
+func (m *MsgUpdateBucketQueue) GetBucketSessionId() BucketSessionId {
+	return m.bucketSessionId
 }
 
 func (m *MsgUpdateBucketQueue) String() string {
@@ -420,6 +425,7 @@ type MsgStreamUpdate struct {
 	restartTs    *common.TsVbuuid
 	rollbackTime int64
 	async        bool
+	sessionId    uint64
 
 	allowMarkFirstSnap bool
 	bucketInRecovery   bool
@@ -473,6 +479,10 @@ func (m *MsgStreamUpdate) GetAsync() bool {
 	return m.async
 }
 
+func (m *MsgStreamUpdate) GetSessionId() uint64 {
+	return m.sessionId
+}
+
 func (m *MsgStreamUpdate) String() string {
 
 	str := "\n\tMessage: MsgStreamUpdate"
@@ -481,8 +491,9 @@ func (m *MsgStreamUpdate) String() string {
 	str += fmt.Sprintf("\n\tBucket: %v", m.bucket)
 	str += fmt.Sprintf("\n\tBuildTS: %v", m.buildTs)
 	str += fmt.Sprintf("\n\tIndexList: %v", m.indexList)
-	str += fmt.Sprintf("\n\tRestartTs: %v", m.restartTs)
 	str += fmt.Sprintf("\n\tAsync: %v", m.async)
+	str += fmt.Sprintf("\n\tSessionId: %v", m.sessionId)
+	str += fmt.Sprintf("\n\tRestartTs: %v", m.restartTs)
 	return str
 
 }

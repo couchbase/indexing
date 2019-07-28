@@ -241,6 +241,7 @@ func (tk *timekeeper) handleStreamOpen(cmd Message) {
 	restartTs := cmd.(*MsgStreamUpdate).GetRestartTs()
 	rollbackTime := cmd.(*MsgStreamUpdate).GetRollbackTime()
 	async := cmd.(*MsgStreamUpdate).GetAsync()
+	sessionId := cmd.(*MsgStreamUpdate).GetSessionId()
 
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
@@ -264,6 +265,7 @@ func (tk *timekeeper) handleStreamOpen(cmd Message) {
 		}
 		tk.ss.setRollbackTime(bucket, rollbackTime)
 		tk.ss.streamBucketAsyncMap[streamId][bucket] = async
+		tk.ss.streamBucketSessionId[streamId][bucket] = sessionId
 		tk.addIndextoStream(cmd)
 		tk.startTimer(streamId, bucket)
 
@@ -644,29 +646,37 @@ func (tk *timekeeper) processFlushAbort(streamId common.StreamId, bucket string)
 
 	state := tk.ss.streamBucketStatus[streamId][bucket]
 
+	sessionId := tk.ss.getSessionId(streamId, bucket)
+
 	switch state {
 
 	case STREAM_ACTIVE, STREAM_RECOVERY:
 
-		logging.Infof("Timekeeper::processFlushAbort %v %v Generate InitPrepRecovery", streamId, bucket)
+		logging.Infof("Timekeeper::processFlushAbort %v %v %v Generate InitPrepRecovery",
+			streamId, bucket, sessionId)
 		tk.supvRespch <- &MsgRecovery{mType: INDEXER_INIT_PREP_RECOVERY,
-			streamId: streamId,
-			bucket:   bucket}
+			streamId:  streamId,
+			bucket:    bucket,
+			sessionId: sessionId}
 
 	case STREAM_PREPARE_RECOVERY:
 
 		//send message to stop running stream
-		logging.Infof("Timekeeper::processFlushAbort %v %v Generate PrepareRecovery", streamId, bucket)
+		logging.Infof("Timekeeper::processFlushAbort %v %v %v Generate PrepareRecovery",
+			streamId, bucket, sessionId)
 		tk.supvRespch <- &MsgRecovery{mType: INDEXER_PREPARE_RECOVERY,
-			streamId: streamId,
-			bucket:   bucket}
+			streamId:  streamId,
+			bucket:    bucket,
+			sessionId: sessionId}
 
 	case STREAM_INACTIVE:
 		logging.Errorf("Timekeeper::processFlushAbort Unexpected Flush Abort "+
-			"Received for Inactive StreamId %v bucket %v ", streamId, bucket)
+			"Received for Inactive StreamId %v bucket %v sessionId %v ",
+			streamId, bucket, sessionId)
 
 	default:
-		logging.Errorf("Timekeeper::processFlushAbort %v %v Invalid Stream State %v.", streamId, bucket, state)
+		logging.Errorf("Timekeeper::processFlushAbort %v %v Invalid Stream State %v.",
+			streamId, bucket, state)
 
 	}
 
@@ -706,10 +716,12 @@ func (tk *timekeeper) handleFlushDoneMaintStream(cmd Message) {
 		found := tk.processPendingTS(streamId, bucket)
 
 		if !found && !tk.ss.checkAnyAbortPending(streamId, bucket) {
+			sessionId := tk.ss.getSessionId(streamId, bucket)
 			//send message to stop running stream
 			tk.supvRespch <- &MsgRecovery{mType: INDEXER_PREPARE_RECOVERY,
-				streamId: streamId,
-				bucket:   bucket}
+				streamId:  streamId,
+				bucket:    bucket,
+				sessionId: sessionId}
 		}
 
 	case STREAM_INACTIVE:
@@ -812,12 +824,14 @@ func (tk *timekeeper) handleFlushDoneInitStream(cmd Message) {
 		//check if there is any pending TS for this bucket/stream.
 		//It can be processed now.
 		found := tk.processPendingTS(streamId, bucket)
+		sessionId := tk.ss.getSessionId(streamId, bucket)
 
 		if !found && !tk.ss.checkAnyAbortPending(streamId, bucket) {
 			//send message to stop running stream
 			tk.supvRespch <- &MsgRecovery{mType: INDEXER_PREPARE_RECOVERY,
-				streamId: streamId,
-				bucket:   bucket}
+				streamId:  streamId,
+				bucket:    bucket,
+				sessionId: sessionId}
 		}
 
 	default:
@@ -849,6 +863,7 @@ func (tk *timekeeper) handleFlushAbortDone(cmd Message) {
 			"Received for Active StreamId %v.", streamId)
 
 	case STREAM_PREPARE_RECOVERY:
+		sessionId := tk.ss.getSessionId(streamId, bucket)
 		bucketFlushInProgressTsMap := tk.ss.streamBucketFlushInProgressTsMap[streamId]
 		if _, ok := bucketFlushInProgressTsMap[bucket]; ok {
 			//if there is flush in progress, mark it as done
@@ -864,7 +879,7 @@ func (tk *timekeeper) handleFlushAbortDone(cmd Message) {
 			//this bucket is already gone from this stream, may be because
 			//the index were dropped. Log and ignore.
 			logging.Warnf("Timekeeper::handleFlushDone Ignore Flush Abort for Stream %v "+
-				"Bucket %v. Bucket Info Not Found", streamId, bucket)
+				"Bucket %v SessionId %v. Bucket Info Not Found", streamId, bucket, sessionId)
 			tk.supvCmdch <- &MsgSuccess{}
 			return
 		}
@@ -875,8 +890,9 @@ func (tk *timekeeper) handleFlushAbortDone(cmd Message) {
 
 		//send message to stop running stream
 		tk.supvRespch <- &MsgRecovery{mType: INDEXER_PREPARE_RECOVERY,
-			streamId: streamId,
-			bucket:   bucket}
+			streamId:  streamId,
+			bucket:    bucket,
+			sessionId: sessionId}
 
 	case STREAM_RECOVERY, STREAM_INACTIVE:
 		logging.Errorf("Timekeeper::handleFlushAbortDone Unexpected Flush Abort "+
@@ -1892,13 +1908,15 @@ func (tk *timekeeper) flushOrAbortInProgressTS(streamId common.StreamId,
 		//for the buckets where no flush is in progress, it implies
 		//there are no pending TS. So nothing needs to be done and
 		//recovery can be initiated.
+		sessionId := tk.ss.getSessionId(streamId, bucket)
 		logging.Infof("Timekeeper::flushOrAbortInProgressTS Recovery can be initiated for "+
-			"Bucket %v Stream %v", bucket, streamId)
+			"Bucket %v Stream %v SessionId %v", bucket, streamId, sessionId)
 
 		//send message to stop running stream
 		tk.supvRespch <- &MsgRecovery{mType: INDEXER_PREPARE_RECOVERY,
-			streamId: streamId,
-			bucket:   bucket}
+			streamId:  streamId,
+			bucket:    bucket,
+			sessionId: sessionId}
 
 	}
 
@@ -1948,24 +1966,28 @@ func (tk *timekeeper) checkInitialBuildDone(streamId common.StreamId,
 					//cleanup all indexes for bucket as build is done
 					for _, buildInfo := range tk.indexBuildInfo {
 						if buildInfo.indexInst.Defn.Bucket == bucket {
-							logging.Infof("Timekeeper::checkInitialBuildDone remove index %v from stream %v bucket %v",
-								buildInfo.indexInst.InstId, streamId, bucket)
+							logging.Infof("Timekeeper::checkInitialBuildDone remove "+
+								"index %v from stream %v bucket %v", buildInfo.indexInst.InstId,
+								streamId, bucket)
 							delete(tk.indexBuildInfo, buildInfo.indexInst.InstId)
 						}
 					}
 				}
 
+				sessionId := tk.ss.getSessionId(streamId, bucket)
 				logging.Infof("Timekeeper::checkInitialBuildDone Initial Build Done Index: %v "+
-					"Stream: %v Bucket: %v BuildTS: %v", idx.InstId, streamId, bucket, buildInfo.buildTs)
+					"Stream: %v Bucket: %v Session%v %v BuildTS: %v", idx.InstId, streamId,
+					sessionId, bucket, buildInfo.buildTs)
 
 				tk.setAddInstPending(streamId, bucket, true)
 
 				//generate init build done msg
 				tk.supvRespch <- &MsgTKInitBuildDone{
-					mType:    TK_INIT_BUILD_DONE,
-					streamId: streamId,
-					buildTs:  buildInfo.buildTs,
-					bucket:   bucket}
+					mType:     TK_INIT_BUILD_DONE,
+					streamId:  streamId,
+					buildTs:   buildInfo.buildTs,
+					bucket:    bucket,
+					sessionId: sessionId}
 
 				return true
 
@@ -2086,15 +2108,18 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 				//from indexer
 				tk.changeIndexStateForBucket(bucket, common.INDEX_STATE_ACTIVE)
 
+				sessionId := tk.ss.getSessionId(streamId, bucket)
+
 				logging.Infof("Timekeeper::checkInitStreamReadyToMerge Index Ready To Merge. "+
-					"Index: %v Stream: %v Bucket: %v LastFlushTS: %v", idx.InstId, streamId,
-					bucket, lastFlushedTs)
+					"Index: %v Stream: %v Bucket: %v SessionId: %v LastFlushTS: %v", idx.InstId,
+					streamId, bucket, sessionId, lastFlushedTs)
 
 				tk.supvRespch <- &MsgTKMergeStream{
-					mType:    TK_MERGE_STREAM,
-					streamId: streamId,
-					bucket:   bucket,
-					mergeTs:  ts}
+					mType:     TK_MERGE_STREAM,
+					streamId:  streamId,
+					bucket:    bucket,
+					mergeTs:   ts,
+					sessionId: sessionId}
 
 				logging.Infof("Timekeeper::checkInitStreamReadyToMerge \n\t Stream %v "+
 					"Bucket %v State Changed to INACTIVE", streamId, bucket)
@@ -2735,6 +2760,8 @@ func (tk *timekeeper) initiateRecovery(streamId common.StreamId,
 			retryTs = tk.ss.computeRetryTs(streamId, bucket, restartTs)
 		}
 
+		sessionId := tk.ss.getSessionId(streamId, bucket)
+
 		tk.stopTimer(streamId, bucket)
 		tk.ss.cleanupBucketFromStream(streamId, bucket)
 
@@ -2743,9 +2770,10 @@ func (tk *timekeeper) initiateRecovery(streamId common.StreamId,
 			streamId:  streamId,
 			bucket:    bucket,
 			restartTs: restartTs,
-			retryTs:   retryTs}
+			retryTs:   retryTs,
+			sessionId: sessionId}
 		logging.Infof("Timekeeper::initiateRecovery StreamId %v Bucket %v "+
-			"RestartTs %v", streamId, bucket, restartTs)
+			"SessionId %v RestartTs %v", streamId, bucket, sessionId, restartTs)
 	} else {
 		logging.Errorf("Timekeeper::initiateRecovery Invalid State For %v "+
 			"Stream Detected. State %v", streamId,
@@ -2870,7 +2898,9 @@ func (tk *timekeeper) repairStream(streamId common.StreamId,
 	needsRollback, canRollback := tk.ss.canRollbackNow(streamId, bucket)
 	if canRollback {
 
-		logging.Infof("Timekeeper::repairStream need rollback for %v %v. Sending Init Prepare.", streamId, bucket)
+		sessionId := tk.ss.getSessionId(streamId, bucket)
+		logging.Infof("Timekeeper::repairStream need rollback for %v %v %v. "+
+			"Sending Init Prepare.", streamId, bucket, sessionId)
 
 		// Initiate recovery.   It will reset bucket book keeping upon prepare recovery.
 		tk.supvRespch <- &MsgRecovery{
@@ -2878,6 +2908,7 @@ func (tk *timekeeper) repairStream(streamId common.StreamId,
 			streamId:  streamId,
 			bucket:    bucket,
 			restartTs: tk.ss.computeRollbackTs(streamId, bucket),
+			sessionId: sessionId,
 		}
 
 		delete(tk.ss.streamBucketRepairStopCh[streamId], bucket)
@@ -2890,9 +2921,11 @@ func (tk *timekeeper) repairStream(streamId common.StreamId,
 
 		logging.Infof("Timekeeper::repairStream need MTR for %v %v. Sending StreamRepair.", streamId, bucket)
 
+		sessionId := tk.ss.getSessionId(streamId, bucket)
 		resp := &MsgKVStreamRepair{
-			streamId: streamId,
-			bucket:   bucket,
+			streamId:  streamId,
+			bucket:    bucket,
+			sessionId: sessionId,
 		}
 
 		tk.repairStreamWithMTR(streamId, bucket, resp)
@@ -2982,6 +3015,7 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 
 		tk.lock.RLock()
 		status := tk.ss.streamBucketStatus[streamId][bucket]
+		sessionId := tk.ss.getSessionId(streamId, bucket)
 		tk.lock.RUnlock()
 
 		if status == STREAM_INACTIVE {
@@ -3012,14 +3046,15 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 
 			if ts == nil {
 				logging.Errorf("Timekeeper::sendRestartMsg Received Rollback Msg For "+
-					"%v %v. Fail to merge rollbackTs in timekeeper.  Send InitPrepRecovery right away.  RollbackTs %v",
-					streamId, bucket, rollbackTs)
+					"%v %v %v. Fail to merge rollbackTs in timekeeper. Send InitPrepRecovery "+
+					"right away. RollbackTs %v", streamId, bucket, sessionId, rollbackTs)
 
 				tk.supvRespch <- &MsgRecovery{
 					mType:     INDEXER_INIT_PREP_RECOVERY,
 					streamId:  streamId,
 					bucket:    bucket,
 					restartTs: tk.ss.computeRollbackTs(streamId, bucket),
+					sessionId: sessionId,
 				}
 
 				tk.lock.RLock()
@@ -3038,13 +3073,15 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 
 		} else {
 			logging.Errorf("Timekeeper::sendRestartMsg Received Rollback Msg For "+
-				"%v %v. RollbackTs is empty.  Send InitPrepRecovery right away.", streamId, bucket)
+				"%v %v %v. RollbackTs is empty.  Send InitPrepRecovery right away.",
+				streamId, bucket, sessionId)
 
 			tk.supvRespch <- &MsgRecovery{
 				mType:     INDEXER_INIT_PREP_RECOVERY,
 				streamId:  streamId,
 				bucket:    bucket,
 				restartTs: tk.ss.computeRollbackTs(streamId, bucket),
+				sessionId: sessionId,
 			}
 
 			tk.lock.RLock()
@@ -3068,17 +3105,21 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 			return
 		}
 
+		sessionId := tk.ss.getSessionId(streamId, bucket)
+
 		// If we need recovery, then trigger recovery right away.
 		if tk.ss.needsRollback(streamId, bucket) {
 
 			logging.Infof("Timekeeper::sendRestartMsg Received KV Repair Msg For "+
-				"Stream %v Bucket %v. Attempting Rollback.", streamId, bucket)
+				"Stream %v Bucket %v SessionId %v. Attempting Rollback.",
+				streamId, bucket, sessionId)
 
 			tk.supvRespch <- &MsgRecovery{
 				mType:     INDEXER_INIT_PREP_RECOVERY,
 				streamId:  streamId,
 				bucket:    bucket,
 				restartTs: tk.ss.computeRollbackTs(streamId, bucket),
+				sessionId: sessionId,
 			}
 
 			delete(tk.ss.streamBucketRepairStopCh[streamId], bucket)
@@ -3088,7 +3129,10 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 		logging.Infof("Timekeeper::sendRestartMsg Received KV Repair Msg For "+
 			"Stream %v Bucket %v. Attempting Stream Repair.", streamId, bucket)
 
-		tk.repairStreamWithMTR(streamId, bucket, kvresp.(*MsgKVStreamRepair))
+		repairMsg := kvresp.(*MsgKVStreamRepair)
+		repairMsg.sessionId = sessionId
+
+		tk.repairStreamWithMTR(streamId, bucket, repairMsg)
 
 	default:
 
@@ -3106,10 +3150,11 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 
 			tk.lock.Lock()
 			defer tk.lock.Unlock()
+			sessionId := tk.ss.getSessionId(streamId, bucket)
 			if status := tk.ss.streamBucketStatus[streamId][bucket]; status == STREAM_INACTIVE {
 
-				logging.Infof("Timekeeper::sendRestartMsg Found Stream %v Bucket %v In "+
-					"State %v. Skipping Bucket Not Found.", streamId, bucket, status)
+				logging.Infof("Timekeeper::sendRestartMsg Found Stream %v Bucket %v SessionId %v In "+
+					"State %v. Skipping Bucket Not Found.", streamId, bucket, sessionId, status)
 				return
 			} else {
 				delete(tk.ss.streamBucketRepairStopCh[streamId], bucket)
@@ -3117,8 +3162,9 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 			}
 
 			tk.supvRespch <- &MsgRecovery{mType: INDEXER_BUCKET_NOT_FOUND,
-				streamId: streamId,
-				bucket:   bucket}
+				streamId:  streamId,
+				bucket:    bucket,
+				sessionId: sessionId}
 		} else {
 			logging.Errorf("Timekeeper::sendRestartMsg Error Response "+
 				"from KV %v For Request %v. Retrying RestartVbucket.", kvresp, restartMsg)
