@@ -63,25 +63,23 @@ func getKeySizeConfig(cfg common.Config) keySizeConfig {
 	return keyCfg
 }
 
-// Buffer resize is needed if any of the size settings
-// is changed AND only if allow_large_keys is false
-func bufferResizeNeeded(cfg, oldCfg common.Config) bool {
-	bufResizeNeeded := false
+// Return true if any of the size related config has changed
+func keySizeConfigUpdated(cfg, oldCfg common.Config) bool {
+
 	if cfg["settings.allow_large_keys"].Bool() !=
 		oldCfg["settings.allow_large_keys"].Bool() {
-		bufResizeNeeded = true
+		return true
 	}
 
 	if cfg["settings.max_array_seckey_size"].Int() !=
 		oldCfg["settings.max_array_seckey_size"].Int() {
-		bufResizeNeeded = true
+		return true
 	}
 
 	if cfg["settings.max_seckey_size"].Int() !=
 		oldCfg["settings.max_seckey_size"].Int() {
-		bufResizeNeeded = true
+		return true
 	}
 
-	keyCfg := getKeySizeConfig(cfg)
-	return bufResizeNeeded && !keyCfg.allowLargeKeys
+	return false
 }

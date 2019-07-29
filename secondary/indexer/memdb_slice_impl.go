@@ -99,6 +99,9 @@ func byteItemCompare(a, b []byte) int {
 
 var totalMemDBItems int64 = 0
 
+var defaultKeySz int64 = (DEFAULT_MAX_SEC_KEY_LEN * 3) + MAX_DOCID_LEN + 2
+var defaultArrKeySz int64 = (DEFAULT_MAX_ARRAY_KEY_SIZE * 3) + MAX_DOCID_LEN + 2
+
 type memdbSlice struct {
 	get_bytes, insert_bytes, delete_bytes int64
 	flushedCount                          uint64
@@ -158,10 +161,15 @@ type memdbSlice struct {
 	arrayExprPosition int
 	isArrayDistinct   bool
 
-	encodeBuf     [][]byte
-	arrayBuf      [][]byte
-	bufResizeFlag []int32 // Per worker, 0: buffer resize not needed, >=1: resize needed
-	keySzConf     []keySizeConfig
+	encodeBuf        [][]byte
+	arrayBuf         [][]byte
+	keySzConf        []keySizeConfig
+	keySzConfChanged []int32 // Per worker, 0: key size not changed, >=1: key size changed
+
+	// Below are used to periodically reset/shrink slice buffers
+	lastBufferSizeCheckTime     time.Time
+	maxKeySizeInLastInterval    int64
+	maxArrKeySizeInLastInterval int64
 }
 
 func NewMemDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
@@ -204,7 +212,7 @@ func NewMemDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 		slice.arrayBuf = make([][]byte, slice.numWriters)
 
 	}
-	slice.bufResizeFlag = make([]int32, slice.numWriters)
+	slice.keySzConfChanged = make([]int32, slice.numWriters)
 	slice.keySzConf = make([]keySizeConfig, slice.numWriters)
 	slice.cmdCh = make([]chan indexMutation, slice.numWriters)
 
@@ -417,17 +425,58 @@ loop:
 
 func (mdb *memdbSlice) updateSliceBuffers(workerId int) keySizeConfig {
 
-	if atomic.LoadInt32(&mdb.bufResizeFlag[workerId]) >= 1 {
+	if atomic.LoadInt32(&mdb.keySzConfChanged[workerId]) >= 1 {
+
 		mdb.confLock.RLock()
 		mdb.keySzConf[workerId] = getKeySizeConfig(mdb.sysconf)
 		mdb.confLock.RUnlock()
-		mdb.encodeBuf[workerId] = make([]byte, 0, mdb.keySzConf[workerId].maxIndexEntrySize)
-		if mdb.idxDefn.IsArrayIndex {
-			mdb.arrayBuf[workerId] = make([]byte, 0, mdb.keySzConf[workerId].maxArrayIndexEntrySize)
+
+		// Reset buffers if allow_large_keys is false
+		if !mdb.keySzConf[workerId].allowLargeKeys {
+			mdb.encodeBuf[workerId] = make([]byte, 0, mdb.keySzConf[workerId].maxIndexEntrySize)
+			if mdb.idxDefn.IsArrayIndex {
+				mdb.arrayBuf[workerId] = make([]byte, 0, mdb.keySzConf[workerId].maxArrayIndexEntrySize)
+			}
 		}
-		atomic.AddInt32(&mdb.bufResizeFlag[workerId], -1)
+
+		atomic.AddInt32(&mdb.keySzConfChanged[workerId], -1)
 	}
 	return mdb.keySzConf[workerId]
+}
+
+func (mdb *memdbSlice) periodicSliceBuffersReset() {
+	checkInterval := time.Minute * 60
+	if time.Since(mdb.lastBufferSizeCheckTime) > checkInterval {
+
+		mdb.confLock.RLock()
+		allowLargeKeys := mdb.sysconf["settings.allow_large_keys"].Bool()
+		mdb.confLock.RUnlock()
+
+		if allowLargeKeys == true {
+			maxSz := atomic.LoadInt64(&mdb.maxKeySizeInLastInterval)
+			maxArrSz := atomic.LoadInt64(&mdb.maxArrKeySizeInLastInterval)
+
+			// account for extra bytes used in insert path
+			maxSz += MAX_KEY_EXTRABYTES_LEN
+
+			for i := range mdb.encodeBuf {
+				if maxSz > defaultKeySz && (int64(cap(mdb.encodeBuf[i]))-maxSz > 1024) {
+					// Shrink the buffer
+					mdb.encodeBuf[i] = make([]byte, 0, maxSz)
+				}
+			}
+			for i := range mdb.arrayBuf {
+				if maxArrSz > defaultArrKeySz && (int64(cap(mdb.arrayBuf[i]))-maxArrSz > 1024) {
+					// Shrink the buffer
+					mdb.arrayBuf[i] = make([]byte, 0, maxArrSz)
+				}
+			}
+		}
+
+		mdb.lastBufferSizeCheckTime = time.Now()
+		atomic.StoreInt64(&mdb.maxKeySizeInLastInterval, 0)
+		atomic.StoreInt64(&mdb.maxArrKeySizeInLastInterval, 0)
+	}
 }
 
 func (mdb *memdbSlice) insert(key []byte, docid []byte, workerId int, meta *MutationMeta) int {
@@ -506,6 +555,10 @@ func (mdb *memdbSlice) insertSecIndex(key []byte, docid []byte, workerId int, me
 		atomic.AddInt64(&mdb.insert_bytes, int64(len(docid)+len(entry)))
 	}
 
+	if int64(len(key)) > atomic.LoadInt64(&mdb.maxKeySizeInLastInterval) {
+		atomic.StoreInt64(&mdb.maxKeySizeInLastInterval, int64(len(key)))
+	}
+
 	mdb.isDirty = true
 	return 1
 }
@@ -530,6 +583,9 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 		logging.Errorf("MemDBSlice::insert Error indexing docid: %s in Slice: %v. Error in creating "+
 			"compostite new secondary keys %v. Skipped.", logging.TagStrUD(docid), mdb.id, err)
 		return mdb.deleteSecArrayIndex(docid, workerId)
+	}
+	if int64(newbufLen) > atomic.LoadInt64(&mdb.maxArrKeySizeInLastInterval) {
+		atomic.StoreInt64(&mdb.maxArrKeySizeInLastInterval, int64(newbufLen))
 	}
 
 	// Get old back index entry
@@ -625,6 +681,9 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 				addKeySizeStat(mdb.idxStats, len(entry))
 				atomic.AddInt64(&mdb.insert_bytes, int64(len(entry)))
 			}
+		}
+		if int64(len(key)) > atomic.LoadInt64(&mdb.maxKeySizeInLastInterval) {
+			atomic.StoreInt64(&mdb.maxKeySizeInLastInterval, int64(len(key)))
 		}
 	}
 
@@ -809,6 +868,9 @@ func (mdb *memdbSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 	if info.IsCommitted() {
 		logging.Infof("MemDBSlice::OpenSnapshot SliceId %v IndexInstId %v PartitionId %v Creating New "+
 			"Snapshot %v", mdb.id, mdb.idxInstId, mdb.idxPartnId, snapInfo)
+
+		// Reset buffer sizes periodically
+		mdb.periodicSliceBuffersReset()
 	}
 
 	return s, err
@@ -1390,9 +1452,9 @@ func (mdb *memdbSlice) UpdateConfig(cfg common.Config) {
 	mdb.sysconf = cfg
 	mdb.maxRollbacks = cfg["settings.moi.recovery.max_rollbacks"].Int()
 
-	if bufferResizeNeeded(cfg, oldCfg) {
-		for i := 0; i < len(mdb.bufResizeFlag); i++ {
-			atomic.AddInt32(&mdb.bufResizeFlag[i], 1)
+	if keySizeConfigUpdated(cfg, oldCfg) {
+		for i := 0; i < len(mdb.keySzConfChanged); i++ {
+			atomic.AddInt32(&mdb.keySzConfChanged[i], 1)
 		}
 	}
 }
@@ -1808,7 +1870,6 @@ func newSnapshotPath(dirpath string) string {
 
 func resizeEncodeBuf(encodeBuf []byte, keylen int, doResize bool) []byte {
 	if doResize && keylen+MAX_KEY_EXTRABYTES_LEN > cap(encodeBuf) {
-		// TODO: Shrink the buffer periodically or as needed
 		newSize := keylen + MAX_KEY_EXTRABYTES_LEN + ENCODE_BUF_SAFE_PAD
 		encodeBuf = make([]byte, 0, newSize)
 	}

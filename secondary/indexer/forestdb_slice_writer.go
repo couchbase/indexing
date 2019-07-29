@@ -263,8 +263,8 @@ type fdbSlice struct {
 	arrayExprPosition int
 	isArrayDistinct   bool
 
-	keySzConf     keySizeConfig
-	bufResizeFlag int32 //0 or 1: indicates if slice buffers need resize
+	keySzConf        keySizeConfig
+	keySzConfChanged int32 //0 or 1: indicates if key size config has changeed or not
 }
 
 func (fdb *fdbSlice) IncrRef() {
@@ -375,7 +375,7 @@ loop:
 
 func (fdb *fdbSlice) updateSliceBuffers() keySizeConfig {
 
-	if atomic.LoadInt32(&fdb.bufResizeFlag) >= 1 {
+	if atomic.LoadInt32(&fdb.keySzConfChanged) >= 1 {
 		fdb.confLock.RLock()
 		fdb.keySzConf = getKeySizeConfig(fdb.sysconf)
 		fdb.confLock.RUnlock()
@@ -383,7 +383,7 @@ func (fdb *fdbSlice) updateSliceBuffers() keySizeConfig {
 		// Hence, reset the slice buffer pools here
 		encBufPool = common.NewByteBufferPool(fdb.keySzConf.maxIndexEntrySize + ENCODE_BUF_SAFE_PAD)
 		arrayEncBufPool = common.NewByteBufferPool(fdb.keySzConf.maxArrayIndexEntrySize + ENCODE_BUF_SAFE_PAD)
-		atomic.AddInt32(&fdb.bufResizeFlag, -1)
+		atomic.AddInt32(&fdb.keySzConfChanged, -1)
 	}
 	return fdb.keySzConf
 }
@@ -1530,7 +1530,7 @@ func (fdb *fdbSlice) UpdateConfig(cfg common.Config) {
 	if bufResizeNeeded {
 		keyCfg := getKeySizeConfig(cfg)
 		if keyCfg.allowLargeKeys == false {
-			atomic.AddInt32(&fdb.bufResizeFlag, 1)
+			atomic.AddInt32(&fdb.keySzConfChanged, 1)
 		}
 	}
 }

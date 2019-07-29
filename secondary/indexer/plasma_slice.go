@@ -101,11 +101,11 @@ type plasmaSlice struct {
 	arrayExprPosition int
 	isArrayDistinct   bool
 
-	encodeBuf     [][]byte
-	arrayBuf1     [][]byte
-	arrayBuf2     [][]byte
-	keySzConf     []keySizeConfig
-	bufResizeFlag []int32 // Per worker; 0 buffer resize not needed >=1 resize needed
+	encodeBuf        [][]byte
+	arrayBuf1        [][]byte
+	arrayBuf2        [][]byte
+	keySzConf        []keySizeConfig
+	keySzConfChanged []int32 // Per worker, 0: key size not changed, >=1: key size changed
 
 	hasPersistence bool
 
@@ -142,6 +142,11 @@ type plasmaSlice struct {
 	writerLock    sync.Mutex // mutex for writer tuning
 	samplerStopCh chan bool  // stop sampler
 	token         *token     // token
+
+	// Below are used to periodically reset/shrink slice buffers
+	lastBufferSizeCheckTime     time.Time
+	maxKeySizeInLastInterval    int64
+	maxArrKeySizeInLastInterval int64
 }
 
 func newPlasmaSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
@@ -539,18 +544,65 @@ loop:
 
 func (mdb *plasmaSlice) updateSliceBuffers(workerId int) keySizeConfig {
 
-	if atomic.LoadInt32(&mdb.bufResizeFlag[workerId]) >= 1 {
+	if atomic.LoadInt32(&mdb.keySzConfChanged[workerId]) >= 1 {
+
 		mdb.confLock.RLock()
 		mdb.keySzConf[workerId] = getKeySizeConfig(mdb.sysconf)
 		mdb.confLock.RUnlock()
-		mdb.encodeBuf[workerId] = make([]byte, 0, mdb.keySzConf[workerId].maxIndexEntrySize)
-		if mdb.idxDefn.IsArrayIndex {
-			mdb.arrayBuf1[workerId] = make([]byte, 0, mdb.keySzConf[workerId].maxArrayIndexEntrySize)
-			mdb.arrayBuf2[workerId] = make([]byte, 0, mdb.keySzConf[workerId].maxArrayIndexEntrySize)
+
+		// Reset buffers if allow_large_keys is false
+		if !mdb.keySzConf[workerId].allowLargeKeys {
+			mdb.encodeBuf[workerId] = make([]byte, 0, mdb.keySzConf[workerId].maxIndexEntrySize)
+			if mdb.idxDefn.IsArrayIndex {
+				mdb.arrayBuf1[workerId] = make([]byte, 0, mdb.keySzConf[workerId].maxArrayIndexEntrySize)
+				mdb.arrayBuf2[workerId] = make([]byte, 0, mdb.keySzConf[workerId].maxArrayIndexEntrySize)
+			}
 		}
-		atomic.AddInt32(&mdb.bufResizeFlag[workerId], -1)
+
+		atomic.AddInt32(&mdb.keySzConfChanged[workerId], -1)
 	}
 	return mdb.keySzConf[workerId]
+}
+
+func (mdb *plasmaSlice) periodicSliceBuffersReset() {
+	checkInterval := time.Minute * 60
+	if time.Since(mdb.lastBufferSizeCheckTime) > checkInterval {
+
+		mdb.confLock.RLock()
+		allowLargeKeys := mdb.sysconf["settings.allow_large_keys"].Bool()
+		mdb.confLock.RUnlock()
+
+		if allowLargeKeys == true {
+			maxSz := atomic.LoadInt64(&mdb.maxKeySizeInLastInterval)
+			maxArrSz := atomic.LoadInt64(&mdb.maxArrKeySizeInLastInterval)
+
+			// account for extra bytes used in insert path
+			maxSz += MAX_KEY_EXTRABYTES_LEN
+
+			for i := range mdb.encodeBuf {
+				if maxSz > defaultKeySz && (int64(cap(mdb.encodeBuf[i]))-maxSz > 1024) {
+					// Shrink the buffer
+					mdb.encodeBuf[i] = make([]byte, 0, maxSz)
+				}
+			}
+			for i := range mdb.arrayBuf1 {
+				if maxArrSz > defaultArrKeySz && (int64(cap(mdb.arrayBuf1[i]))-maxArrSz > 1024) {
+					// Shrink the buffer
+					mdb.arrayBuf1[i] = make([]byte, 0, maxArrSz)
+				}
+			}
+			for i := range mdb.arrayBuf2 {
+				if maxArrSz > defaultArrKeySz && (int64(cap(mdb.arrayBuf2[i]))-maxArrSz > 1024) {
+					// Shrink the buffer
+					mdb.arrayBuf2[i] = make([]byte, 0, maxArrSz)
+				}
+			}
+		}
+
+		mdb.lastBufferSizeCheckTime = time.Now()
+		atomic.StoreInt64(&mdb.maxKeySizeInLastInterval, 0)
+		atomic.StoreInt64(&mdb.maxArrKeySizeInLastInterval, 0)
+	}
 }
 
 func (mdb *plasmaSlice) insert(key []byte, docid []byte, workerId int,
@@ -636,6 +688,10 @@ func (mdb *plasmaSlice) insertSecIndex(key []byte, docid []byte, workerId int, i
 		mdb.idxStats.dataSize.Add(int64(len(docid) + len(backEntry) + len(entry)))
 		addKeySizeStat(mdb.idxStats, len(entry))
 		atomic.AddInt64(&mdb.insert_bytes, int64(len(docid)+len(entry)))
+
+		if int64(len(key)) > atomic.LoadInt64(&mdb.maxKeySizeInLastInterval) {
+			atomic.StoreInt64(&mdb.maxKeySizeInLastInterval, int64(len(key)))
+		}
 	}
 
 	mdb.isDirty = true
@@ -714,6 +770,9 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 				mdb.id, mdb.idxInstId, mdb.idxPartnId, logging.TagStrUD(docid), err)
 			mdb.deleteSecArrayIndexNoTx(docid, workerId)
 			return 0
+		}
+		if int64(newbufLen) > atomic.LoadInt64(&mdb.maxArrKeySizeInLastInterval) {
+			atomic.StoreInt64(&mdb.maxArrKeySizeInLastInterval, int64(newbufLen))
 		}
 	}
 
@@ -811,6 +870,10 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 			mdb.idxStats.dataSize.Add(int64(len(keyToBeAdded)))
 			addKeySizeStat(mdb.idxStats, len(keyToBeAdded))
 			atomic.AddInt64(&mdb.insert_bytes, int64(len(keyToBeAdded)))
+
+			if int64(len(keyToBeAdded)) > atomic.LoadInt64(&mdb.maxKeySizeInLastInterval) {
+				atomic.StoreInt64(&mdb.maxKeySizeInLastInterval, int64(len(keyToBeAdded)))
+			}
 			nmut++
 		}
 	}
@@ -1112,6 +1175,8 @@ func (mdb *plasmaSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 	if info.IsCommitted() {
 		logging.Infof("plasmaSlice::OpenSnapshot SliceId %v IndexInstId %v PartitionId %v Creating New "+
 			"Snapshot %v", mdb.id, mdb.idxInstId, mdb.idxPartnId, snapInfo)
+		// Reset buffer sizes periodically
+		mdb.periodicSliceBuffersReset()
 	}
 	mdb.setCommittedCount()
 
@@ -1811,9 +1876,9 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 	}
 	mdb.maxRollbacks = cfg["settings.plasma.recovery.max_rollbacks"].Int()
 
-	if bufferResizeNeeded(cfg, oldCfg) {
-		for i := 0; i < len(mdb.bufResizeFlag); i++ {
-			atomic.AddInt32(&mdb.bufResizeFlag[i], 1)
+	if keySizeConfigUpdated(cfg, oldCfg) {
+		for i := 0; i < len(mdb.keySzConfChanged); i++ {
+			atomic.AddInt32(&mdb.keySzConfChanged[i], 1)
 		}
 	}
 }
@@ -2305,7 +2370,7 @@ func (slice *plasmaSlice) setupWriters() {
 	slice.encodeBuf = make([][]byte, 0, slice.maxNumWriters)
 	slice.arrayBuf1 = make([][]byte, 0, slice.maxNumWriters)
 	slice.arrayBuf2 = make([][]byte, 0, slice.maxNumWriters)
-	slice.bufResizeFlag = make([]int32, 0, slice.maxNumWriters)
+	slice.keySzConfChanged = make([]int32, 0, slice.maxNumWriters)
 	slice.keySzConf = make([]keySizeConfig, 0, slice.maxNumWriters)
 
 	// initialize comand handler
@@ -2341,7 +2406,7 @@ func (slice *plasmaSlice) initWriters(numWriters int) {
 		slice.arrayBuf1 = slice.arrayBuf1[:numWriters]
 		slice.arrayBuf2 = slice.arrayBuf2[:numWriters]
 	}
-	slice.bufResizeFlag = slice.bufResizeFlag[:numWriters]
+	slice.keySzConfChanged = slice.keySzConfChanged[:numWriters]
 	slice.keySzConf = slice.keySzConf[:numWriters]
 
 	for i := curNumWriters; i < numWriters; i++ {
@@ -2441,7 +2506,7 @@ func (slice *plasmaSlice) freeAllWriters() {
 	slice.encodeBuf = slice.encodeBuf[:0]
 	slice.arrayBuf1 = slice.arrayBuf1[:0]
 	slice.arrayBuf2 = slice.arrayBuf2[:0]
-	slice.bufResizeFlag = slice.bufResizeFlag[:0]
+	slice.keySzConfChanged = slice.keySzConfChanged[:0]
 	slice.keySzConf = slice.keySzConf[:0]
 
 	slice.cmdCh = slice.cmdCh[:0]
