@@ -1191,6 +1191,7 @@ type MsgRestartVbuckets struct {
 	repairVbs  []Vbucket
 	respCh     MsgChannel
 	stopCh     StopChannel
+	sessionId  uint64
 }
 
 func (m *MsgRestartVbuckets) GetMsgType() MsgType {
@@ -1223,6 +1224,10 @@ func (m *MsgRestartVbuckets) GetResponseCh() MsgChannel {
 
 func (m *MsgRestartVbuckets) GetStopChannel() StopChannel {
 	return m.stopCh
+}
+
+func (m *MsgRestartVbuckets) GetSessionId() uint64{
+	return m.sessionId
 }
 
 func (m *MsgRestartVbuckets) String() string {

@@ -62,6 +62,7 @@ type KVData struct {
 	heartBeat <-chan time.Time
 	uuid      uint64 // immutable
 	kvaddr    string
+	opaque2   uint64 //client opaque
 }
 
 type KvdataStats struct {
@@ -175,7 +176,8 @@ func NewKVData(
 	mutch <-chan *mc.DcpEvent,
 	kvaddr string,
 	config c.Config,
-	async bool) (*KVData, error) {
+	async bool,
+	opaque2 uint64) (*KVData, error) {
 
 	kvdata := &KVData{
 		feed:      feed,
@@ -187,11 +189,12 @@ func NewKVData(
 		endpoints: make(map[string]c.RouterEndpoint),
 		// 16 is enough, there can't be more than that many out-standing
 		// control calls on this feed.
-		sbch:   make(chan []interface{}, 16),
-		finch:  make(chan bool),
-		stats:  &KvdataStats{},
-		kvaddr: kvaddr,
-		async:  async,
+		sbch:    make(chan []interface{}, 16),
+		finch:   make(chan bool),
+		stats:   &KvdataStats{},
+		kvaddr:  kvaddr,
+		async:   async,
+		opaque2: opaque2,
 	}
 
 	uuid, err := common.NewUUID()
@@ -215,7 +218,7 @@ func NewKVData(
 	}
 
 	// start workers
-	kvdata.workers = kvdata.spawnWorkers(feed, bucket, config, opaque)
+	kvdata.workers = kvdata.spawnWorkers(feed, bucket, config, opaque, opaque2)
 	// Gather stats pointers from all workers
 	kvdata.updateWorkerStats()
 
@@ -615,13 +618,13 @@ func (kvdata *KVData) scatterMutation(
 }
 
 func (kvdata *KVData) spawnWorkers(
-	feed *Feed,
-	bucket string, config c.Config, opaque uint16) []*VbucketWorker {
+	feed *Feed, bucket string, config c.Config,
+	opaque uint16, opaque2 uint64) []*VbucketWorker {
 
 	nworkers := config["vbucketWorkers"].Int()
 	workers := make([]*VbucketWorker, nworkers)
 	for i := 0; i < nworkers; i++ {
-		workers[i] = NewVbucketWorker(i, feed, bucket, opaque, config)
+		workers[i] = NewVbucketWorker(i, feed, bucket, opaque, config, opaque2)
 	}
 	return workers
 }

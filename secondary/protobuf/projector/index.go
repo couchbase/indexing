@@ -174,49 +174,51 @@ func (ie *IndexEvaluator) Bucket() string {
 
 // StreamBeginData implement Evaluator{} interface.
 func (ie *IndexEvaluator) StreamBeginData(
-	vbno uint16, vbuuid, seqno uint64, hostaddr string, status byte, code byte) (data interface{}) {
+	vbno uint16, vbuuid, seqno uint64, hostaddr string,
+	status byte, code byte, opaque2 uint64) (data interface{}) {
 
 	bucket := ie.Bucket()
 	kv := c.NewKeyVersions(seqno, []byte(hostaddr), 1, 0 /*ctime*/)
 	kv.AddStreamBegin(status, code)
-	return &c.DataportKeyVersions{bucket, vbno, vbuuid, kv}
+	return &c.DataportKeyVersions{bucket, vbno, vbuuid, kv, opaque2}
 }
 
 // SyncData implement Evaluator{} interface.
 func (ie *IndexEvaluator) SyncData(
-	vbno uint16, vbuuid, seqno uint64) (data interface{}) {
+	vbno uint16, vbuuid, seqno uint64, opaque2 uint64) (data interface{}) {
 
 	bucket := ie.Bucket()
 	kv := c.NewKeyVersions(seqno, nil, 1, 0 /*ctime*/)
 	kv.AddSync()
-	return &c.DataportKeyVersions{bucket, vbno, vbuuid, kv}
+	return &c.DataportKeyVersions{bucket, vbno, vbuuid, kv, opaque2}
 }
 
 // SnapshotData implement Evaluator{} interface.
 func (ie *IndexEvaluator) SnapshotData(
-	m *mc.DcpEvent, vbno uint16, vbuuid, seqno uint64) (data interface{}) {
+	m *mc.DcpEvent, vbno uint16, vbuuid, seqno uint64,
+	opaque2 uint64) (data interface{}) {
 
 	bucket := ie.Bucket()
 	kv := c.NewKeyVersions(seqno, nil, 1, m.Ctime)
 	kv.AddSnapshot(m.SnapshotType, m.SnapstartSeq, m.SnapendSeq)
-	return &c.DataportKeyVersions{bucket, vbno, vbuuid, kv}
+	return &c.DataportKeyVersions{bucket, vbno, vbuuid, kv, opaque2}
 }
 
 // StreamEndData implement Evaluator{} interface.
 func (ie *IndexEvaluator) StreamEndData(
-	vbno uint16, vbuuid, seqno uint64) (data interface{}) {
+	vbno uint16, vbuuid, seqno uint64, opaque2 uint64) (data interface{}) {
 
 	bucket := ie.Bucket()
 	kv := c.NewKeyVersions(seqno, nil, 1, 0 /*ctime*/)
 	kv.AddStreamEnd()
-	return &c.DataportKeyVersions{bucket, vbno, vbuuid, kv}
+	return &c.DataportKeyVersions{bucket, vbno, vbuuid, kv, opaque2}
 }
 
 // TransformRoute implement Evaluator{} interface.
 func (ie *IndexEvaluator) TransformRoute(
 	vbuuid uint64, m *mc.DcpEvent, data map[string]interface{}, encodeBuf []byte,
 	docval qvalue.AnnotatedValue, context qexpr.Context, meta map[string]interface{},
-	numIndexes int) (newBuf []byte, err error) {
+	numIndexes int, opaque2 uint64) (newBuf []byte, err error) {
 
 	defer func() { // panic safe
 		if r := recover(); r != nil {
@@ -297,7 +299,7 @@ func (ie *IndexEvaluator) TransformRoute(
 					if !ok {
 						kv := c.NewKeyVersions(seqno, m.Key, numIndexes, m.Ctime)
 						kv.AddUpsert(uuid, nkey, okey, npkey)
-						dkv = &c.DataportKeyVersions{bucket, vbno, vbuuid, kv}
+						dkv = &c.DataportKeyVersions{bucket, vbno, vbuuid, kv, opaque2}
 					} else {
 						dkv.Kv.AddUpsert(uuid, nkey, okey, npkey)
 					}
@@ -312,7 +314,7 @@ func (ie *IndexEvaluator) TransformRoute(
 					if !ok {
 						kv := c.NewKeyVersions(seqno, m.Key, numIndexes, m.Ctime)
 						kv.AddUpsertDeletion(uuid, okey, npkey)
-						dkv = &c.DataportKeyVersions{bucket, vbno, vbuuid, kv}
+						dkv = &c.DataportKeyVersions{bucket, vbno, vbuuid, kv, opaque2}
 					} else {
 						dkv.Kv.AddUpsertDeletion(uuid, okey, npkey)
 					}
@@ -328,7 +330,7 @@ func (ie *IndexEvaluator) TransformRoute(
 				if !ok {
 					kv := c.NewKeyVersions(seqno, m.Key, numIndexes, m.Ctime)
 					kv.AddUpsertDeletion(uuid, okey, npkey)
-					dkv = &c.DataportKeyVersions{bucket, vbno, vbuuid, kv}
+					dkv = &c.DataportKeyVersions{bucket, vbno, vbuuid, kv, opaque2}
 				} else {
 					dkv.Kv.AddUpsertDeletion(uuid, okey, npkey)
 				}
@@ -345,7 +347,7 @@ func (ie *IndexEvaluator) TransformRoute(
 			if !ok {
 				kv := c.NewKeyVersions(seqno, m.Key, numIndexes, m.Ctime)
 				kv.AddDeletion(uuid, okey, npkey)
-				dkv = &c.DataportKeyVersions{bucket, vbno, vbuuid, kv}
+				dkv = &c.DataportKeyVersions{bucket, vbno, vbuuid, kv, opaque2}
 			} else {
 				dkv.Kv.AddDeletion(uuid, okey, npkey)
 			}

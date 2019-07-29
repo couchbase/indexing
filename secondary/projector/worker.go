@@ -51,6 +51,7 @@ type VbucketWorker struct {
 	// config params
 	logPrefix   string
 	mutChanSize int
+	opaque2     uint64 //client opaque
 
 	encodeBuf []byte
 	meta      map[string]interface{}
@@ -72,7 +73,7 @@ func (stats *WorkerStats) Init() {
 // NewVbucketWorker creates a new routine to handle this vbucket stream.
 func NewVbucketWorker(
 	id int, feed *Feed, bucket string,
-	opaque uint16, config c.Config) *VbucketWorker {
+	opaque uint16, config c.Config, opaque2 uint64) *VbucketWorker {
 
 	mutChanSize := config["mutationChanSize"].Int()
 	encodeBufSize := config["encodeBufSize"].Int()
@@ -93,6 +94,7 @@ func NewVbucketWorker(
 		finch:     make(chan bool),
 		encodeBuf: make([]byte, 0, encodeBufSize),
 		stats:     &WorkerStats{},
+		opaque2:   opaque2,
 	}
 	worker.stats.Init()
 	fmsg := "WRKR[%v<-%v<-%v #%v]"
@@ -215,7 +217,8 @@ func (worker *VbucketWorker) run(datach, sbch chan []interface{}) {
 			}
 		}
 		close(worker.finch)
-		logging.Infof("%v ##%x ... stopped\n", logPrefix, worker.opaque)
+		logging.Infof("%v ##%x ##%v ... stopped\n", logPrefix,
+			worker.opaque, worker.opaque2)
 	}()
 
 loop:
@@ -403,14 +406,15 @@ func (worker *VbucketWorker) handleEvent(m *mc.DcpEvent) *Vbucket {
 		// opens up the path
 		cluster, topic, bucket := worker.cluster, worker.topic, worker.bucket
 		config, opaque, vbuuid := worker.config, m.Opaque, m.VBuuid
-		v = NewVbucket(
-			cluster, topic, bucket, opaque, vbno, vbuuid, m.Seqno, config)
+		v = NewVbucket(cluster, topic, bucket, opaque, vbno, vbuuid,
+			m.Seqno, config, worker.opaque2)
 
 		if m.Status == mcd.SUCCESS {
 			worker.vbuckets[vbno] = v
 		}
 
-		if data := v.makeStreamBeginData(worker.engines, byte(v.mcStatus2StreamStatus(m.Status)), byte(m.Status)); data != nil {
+		if data := v.makeStreamBeginData(worker.engines,
+			byte(v.mcStatus2StreamStatus(m.Status)), byte(m.Status)); data != nil {
 			worker.broadcast2Endpoints(data)
 		} else {
 			fmsg := "%v ##%x StreamBeginData NOT PUBLISHED for vbucket %v\n"
@@ -463,7 +467,7 @@ func (worker *VbucketWorker) handleEvent(m *mc.DcpEvent) *Vbucket {
 			// therefore reduces the garbage generated.
 			newBuf, err := engine.TransformRoute(
 				v.vbuuid, m, dataForEndpoints, worker.encodeBuf, docval, context,
-				worker.meta, len(worker.engines),
+				worker.meta, len(worker.engines), worker.opaque2,
 			)
 			if err != nil {
 				logging.Errorf(fmsg, logPrefix, m.Opaque, err)

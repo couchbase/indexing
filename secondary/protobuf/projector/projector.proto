@@ -48,6 +48,7 @@ message MutationTopicRequest {
     repeated Instance    instances  = 4;
     optional FeedVersion version    = 5 [default=sherlock];
     optional bool        async      = 6;
+    optional uint64      opaque2    = 7;
 }
 
 // Response back for
@@ -75,6 +76,7 @@ message TimestampResponse {
 message RestartVbucketsRequest {
     required string   topic              = 1;
     repeated TsVbuuid restartTimestamps  = 2; // per bucket timestamps
+    optional uint64   opaque2            = 3;
 }
 
 // ShutdownVbucketsRequest will shutdown a subset of vbuckets
@@ -94,6 +96,7 @@ message AddBucketsRequest {
     // list of instances applicable for buckets.
     repeated Instance    instances     = 3;
     optional FeedVersion version   = 4 [default=sherlock];
+    optional uint64      opaque2   = 5;
 }
 
 // DelBucketsRequest will shutdown vbucket-streams

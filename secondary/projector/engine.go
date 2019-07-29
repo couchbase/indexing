@@ -36,40 +36,43 @@ func (engine *Engine) Endpoints() []string {
 
 // StreamBeginData from this engine.
 func (engine *Engine) StreamBeginData(
-	vbno uint16, vbuuid, seqno uint64, status byte, code byte) interface{} {
+	vbno uint16, vbuuid, seqno uint64, status byte,
+	code byte, opaque2 uint64) interface{} {
 
-	return engine.evaluator.StreamBeginData(vbno, vbuuid, seqno, GetHostAddress(), status, code)
+	return engine.evaluator.StreamBeginData(vbno, vbuuid, seqno, 
+	GetHostAddress(), status, code, opaque2)
 }
 
 // SyncData from this engine.
 func (engine *Engine) SyncData(
-	vbno uint16, vbuuid, seqno uint64) interface{} {
+	vbno uint16, vbuuid, seqno uint64, opaque2 uint64) interface{} {
 
-	return engine.evaluator.SyncData(vbno, vbuuid, seqno)
+	return engine.evaluator.SyncData(vbno, vbuuid, seqno, opaque2)
 }
 
 // SnapshotData from this engine.
 func (engine *Engine) SnapshotData(
-	m *mc.DcpEvent, vbno uint16, vbuuid, seqno uint64) interface{} {
+	m *mc.DcpEvent, vbno uint16, vbuuid, 
+	seqno uint64, opaque2 uint64) interface{} {
 
-	return engine.evaluator.SnapshotData(m, vbno, vbuuid, seqno)
+	return engine.evaluator.SnapshotData(m, vbno, vbuuid, seqno, opaque2)
 }
 
 // StreamEndData from this engine.
 func (engine *Engine) StreamEndData(
-	vbno uint16, vbuuid, seqno uint64) interface{} {
+	vbno uint16, vbuuid, seqno uint64, opaque2 uint64) interface{} {
 
-	return engine.evaluator.StreamEndData(vbno, vbuuid, seqno)
+	return engine.evaluator.StreamEndData(vbno, vbuuid, seqno, opaque2)
 }
 
 // TransformRoute data to endpoints.
 func (engine *Engine) TransformRoute(
 	vbuuid uint64, m *mc.DcpEvent, data map[string]interface{}, encodeBuf []byte,
 	docval qvalue.AnnotatedValue, context qexpr.Context, meta map[string]interface{},
-	numIndexes int) ([]byte, error) {
+	numIndexes int, opaque2 uint64) ([]byte, error) {
 
 	return engine.evaluator.TransformRoute(
-		vbuuid, m, data, encodeBuf, docval, context, meta, numIndexes,
+		vbuuid, m, data, encodeBuf, docval, context, meta, numIndexes, opaque2,
 	)
 }
 

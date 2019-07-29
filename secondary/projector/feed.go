@@ -842,6 +842,7 @@ func (feed *Feed) start(
 
 	feed.endpointType = req.GetEndpointType()
 	feed.version = req.GetVersion()
+	opaque2 := req.GetOpaque2()
 
 	// update engines and endpoints
 	if _, err = feed.processSubscribers(opaque, req); err != nil { // :SideEffect:
@@ -882,7 +883,8 @@ func (feed *Feed) start(
 		}
 		feed.feeders[bucketn] = feeder // :SideEffect:
 		// open data-path, if not already open.
-		kvdata, e := feed.startDataPath(bucketn, feeder, opaque, ts)
+		kvdata, e := feed.startDataPath(bucketn, feeder,
+			opaque, ts, opaque2)
 		if e != nil {
 			err = e
 			feed.cleanupBucket(bucketn, false)
@@ -952,6 +954,8 @@ func (feed *Feed) restartVbuckets(
 		return err
 	}
 
+	opaque2 := req.GetOpaque2()
+
 	for _, ts := range req.GetRestartTimestamps() {
 		pooln, bucketn := ts.GetPool(), ts.GetBucket()
 		vbnos, e := feed.getLocalVbuckets(pooln, bucketn, opaque)
@@ -995,7 +999,7 @@ func (feed *Feed) restartVbuckets(
 		}
 		feed.feeders[bucketn] = feeder // :SideEffect:
 		// open data-path, if not already open.
-		kvdata, e := feed.startDataPath(bucketn, feeder, opaque, ts)
+		kvdata, e := feed.startDataPath(bucketn, feeder, opaque, ts, opaque2)
 		if e != nil { // all feed errors are fatal, skip this bucket.
 			err = e
 			feed.cleanupBucket(bucketn, false)
@@ -1137,6 +1141,8 @@ func (feed *Feed) addBuckets(
 		return err
 	}
 
+	opaque2 := req.GetOpaque2()
+
 	for _, ts := range req.GetReqTimestamps() {
 		pooln, bucketn := ts.GetPool(), ts.GetBucket()
 		vbnos, e := feed.getLocalVbuckets(pooln, bucketn, opaque)
@@ -1172,7 +1178,7 @@ func (feed *Feed) addBuckets(
 		feed.feeders[bucketn] = feeder // :SideEffect:
 
 		// open data-path, if not already open.
-		kvdata, e := feed.startDataPath(bucketn, feeder, opaque, ts)
+		kvdata, e := feed.startDataPath(bucketn, feeder, opaque, ts, opaque2)
 		if e != nil { // all feed errors are fatal, skip this bucket.
 			err = e
 			feed.cleanupBucket(bucketn, false)
@@ -1656,7 +1662,8 @@ func (feed *Feed) getLocalVbuckets(
 func (feed *Feed) startDataPath(
 	bucketn string, feeder BucketFeeder,
 	opaque uint16,
-	ts *protobuf.TsVbuuid) (*KVData, error) {
+	ts *protobuf.TsVbuuid,
+	opaque2 uint64) (*KVData, error) {
 	var err error
 	mutch := feeder.GetChannel()
 	kvdata, ok := feed.kvdata[bucketn]
@@ -1666,7 +1673,8 @@ func (feed *Feed) startDataPath(
 	} else { // pass engines & endpoints to kvdata.
 		engs, ends := feed.engines[bucketn], feed.endpoints
 		kvdata, err = NewKVData(
-			feed, bucketn, opaque, ts, engs, ends, mutch, feed.kvaddr, feed.config, feed.async)
+			feed, bucketn, opaque, ts, engs, ends, mutch,
+			feed.kvaddr, feed.config, feed.async, opaque2)
 	}
 	return kvdata, err
 }

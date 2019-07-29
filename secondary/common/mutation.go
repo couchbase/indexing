@@ -145,11 +145,14 @@ type VbKeyVersions struct {
 	Kvs     []*KeyVersions // N number of mutations
 	Uuid    string
 	ProjVer ProjectorVersion
+	Opaque2 uint64
 }
 
 // NewVbKeyVersions return a reference to a single vbucket payload
-func NewVbKeyVersions(bucket string, vbno uint16, vbuuid uint64, maxMutations int) *VbKeyVersions {
-	vb := &VbKeyVersions{Bucket: bucket, Vbucket: vbno, Vbuuid: vbuuid, ProjVer: ProjVer_5_5_0}
+func NewVbKeyVersions(bucket string, vbno uint16,
+	vbuuid uint64, opaque2 uint64, maxMutations int) *VbKeyVersions {
+	vb := &VbKeyVersions{Bucket: bucket, Vbucket: vbno,
+		Vbuuid: vbuuid, Opaque2: opaque2, ProjVer: ProjVer_5_5_0}
 	vb.Kvs = make([]*KeyVersions, 0, maxMutations)
 	vb.Uuid = StreamID(bucket, vbno)
 	return vb
@@ -319,8 +322,9 @@ func (kv *KeyVersions) String() string {
 
 // DataportKeyVersions accepted by this endpoint.
 type DataportKeyVersions struct {
-	Bucket string
-	Vbno   uint16
-	Vbuuid uint64
-	Kv     *KeyVersions
+	Bucket  string
+	Vbno    uint16
+	Vbuuid  uint64
+	Kv      *KeyVersions
+	Opaque2 uint64
 }
