@@ -3842,8 +3842,9 @@ func (m *updator) checkServiceMap(update bool) {
 		m.excludeNode = serviceMap.ExcludeNode
 		m.storageMode = serviceMap.StorageMode
 
-		logging.Infof("updator: updating service map.  server group=%v, indexerVersion=%v nodeAddr %v clusterVersion %v excludeNode %v",
-			m.serverGroup, m.indexerVersion, m.nodeAddr, m.clusterVersion, m.excludeNode, m.storageMode)
+		logging.Infof("updator: updating service map.  server group=%v, indexerVersion=%v nodeAddr %v "+
+			"clusterVersion %v excludeNode %v storageMode %v", m.serverGroup, m.indexerVersion, m.nodeAddr,
+			m.clusterVersion, m.excludeNode, m.storageMode)
 
 		if err := m.manager.repo.BroadcastServiceMap(serviceMap); err != nil {
 			logging.Errorf("updator: fail to set service map.  Error = %v", err)

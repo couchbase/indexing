@@ -993,8 +993,8 @@ func (tk *timekeeper) handleStreamBegin(cmd Message) {
 
 	defer meta.Free()
 
-	logging.Infof("TK StreamBegin %v %v %v %v %v", streamId, meta.bucket,
-		meta.vbucket, meta.vbuuid, meta.seqno)
+	logging.Infof("TK StreamBegin %v %v %v %v %v %v", streamId, meta.bucket,
+		meta.vbucket, meta.vbuuid, meta.seqno, meta.opaque)
 
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
@@ -1017,6 +1017,16 @@ func (tk *timekeeper) handleStreamBegin(cmd Message) {
 	if c, ok := tk.ss.streamBucketIndexCountMap[streamId][meta.bucket]; !ok || c <= 0 {
 		logging.Warnf("Timekeeper::handleStreamBegin Ignore StreamBegin for StreamId %v "+
 			"Bucket %v. IndexCount %v. ", streamId, meta.bucket, c)
+		tk.supvCmdch <- &MsgSuccess{}
+		return
+	}
+
+	//if the session doesn't match, ignore
+	sessionId := tk.ss.getSessionId(streamId, meta.bucket)
+	if meta.opaque != 0 && sessionId != meta.opaque {
+		logging.Warnf("Timekeeper::handleStreamBegin Ignore StreamBegin for StreamId %v "+
+			"Bucket %v. SessionId %v. Current Session %v ", streamId, meta.bucket,
+			meta.opaque, sessionId)
 		tk.supvCmdch <- &MsgSuccess{}
 		return
 	}
@@ -1218,6 +1228,16 @@ func (tk *timekeeper) handleStreamEnd(cmd Message) {
 	if c, ok := tk.ss.streamBucketIndexCountMap[streamId][meta.bucket]; !ok || c <= 0 {
 		logging.Warnf("Timekeeper::handleStreamEnd Ignore StreamEnd for StreamId %v "+
 			"Bucket %v. IndexCount %v. ", streamId, meta.bucket, c)
+		tk.supvCmdch <- &MsgSuccess{}
+		return
+	}
+
+	//if the session doesn't match, ignore
+	sessionId := tk.ss.getSessionId(streamId, meta.bucket)
+	if meta.opaque != 0 && sessionId != meta.opaque {
+		logging.Warnf("Timekeeper::handleStreamEnd Ignore StreamEnd for StreamId %v "+
+			"Bucket %v. SessionId %v. Current Session %v ", streamId, meta.bucket,
+			meta.opaque, sessionId)
 		tk.supvCmdch <- &MsgSuccess{}
 		return
 	}

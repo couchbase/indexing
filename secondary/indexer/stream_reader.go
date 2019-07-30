@@ -566,7 +566,8 @@ func (w *streamWorker) start() {
 
 		case vb := <-w.workerch:
 			w.handleKeyVersions(vb.GetBucketname(), Vbucket(vb.GetVbucket()),
-				Vbuuid(vb.GetVbuuid()), vb.GetKvs(), common.ProjectorVersion(vb.GetProjVer()))
+				Vbuuid(vb.GetVbuuid()), vb.GetOpaque2(), vb.GetKvs(),
+				common.ProjectorVersion(vb.GetProjVer()))
 
 		case <-w.workerStopCh:
 			return
@@ -578,10 +579,10 @@ func (w *streamWorker) start() {
 }
 
 func (w *streamWorker) handleKeyVersions(bucket string, vbucket Vbucket, vbuuid Vbuuid,
-	kvs []*protobuf.KeyVersions, projVer common.ProjectorVersion) {
+	opaque uint64, kvs []*protobuf.KeyVersions, projVer common.ProjectorVersion) {
 
 	for _, kv := range kvs {
-		w.handleSingleKeyVersion(bucket, vbucket, vbuuid, kv, projVer)
+		w.handleSingleKeyVersion(bucket, vbucket, vbuuid, opaque, kv, projVer)
 		if kv.GetPrjMovingAvg() > 0 {
 			avg := w.getLatencyObj(bucket, vbucket)
 			if avg != nil {
@@ -595,7 +596,7 @@ func (w *streamWorker) handleKeyVersions(bucket string, vbucket Vbucket, vbuuid 
 //handleSingleKeyVersion processes a single mutation based on the command type
 //A mutation is put in a worker queue and control message is sent to supervisor
 func (w *streamWorker) handleSingleKeyVersion(bucket string, vbucket Vbucket, vbuuid Vbuuid,
-	kv *protobuf.KeyVersions, projVer common.ProjectorVersion) {
+	opaque uint64, kv *protobuf.KeyVersions, projVer common.ProjectorVersion) {
 
 	meta := NewMutationMeta()
 	meta.bucket = bucket
@@ -603,6 +604,7 @@ func (w *streamWorker) handleSingleKeyVersion(bucket string, vbucket Vbucket, vb
 	meta.vbuuid = vbuuid
 	meta.seqno = Seqno(kv.GetSeqno())
 	meta.projVer = projVer
+	meta.opaque = opaque
 
 	defer meta.Free()
 
@@ -845,6 +847,12 @@ func (w *streamWorker) checkAndSetBucketFilter(meta *MutationMeta) (bool, bool) 
 
 	if filter, ok := w.bucketFilter[meta.bucket]; ok {
 
+		//validate sessionId. allow opaque==0 for backward compat
+		if meta.opaque != 0 &&
+			meta.opaque != w.bucketSessionId[meta.bucket] {
+			return false, false
+		}
+
 		if uint64(meta.seqno) < filter.Snapshots[meta.vbucket][0] ||
 			uint64(meta.seqno) > filter.Snapshots[meta.vbucket][1] {
 
@@ -905,6 +913,12 @@ func (w *streamWorker) updateSnapInFilter(meta *MutationMeta,
 
 	if filter, ok := w.bucketFilter[meta.bucket]; ok {
 
+		//validate sessionId. allow opaque==0 for backward compat
+		if meta.opaque != 0 &&
+			meta.opaque != w.bucketSessionId[meta.bucket] {
+			return
+		}
+
 		//if current snapshot start from 0 and the filter doesn't have any snapshot
 		if w.markFirstSnap && snapStart == 0 && filter.Snapshots[meta.vbucket][1] == 0 {
 			w.bucketFirstSnap[meta.bucket][meta.vbucket] = true
@@ -964,6 +978,12 @@ func (w *streamWorker) updateVbuuidInFilter(meta *MutationMeta) {
 	}
 
 	if filter, ok := w.bucketFilter[meta.bucket]; ok {
+		//validate sessionId. allow opaque==0 for backward compat
+		if meta.opaque != 0 &&
+			meta.opaque != w.bucketSessionId[meta.bucket] {
+			return
+		}
+
 		filter.Vbuuids[meta.vbucket] = uint64(meta.vbuuid)
 	} else {
 		logging.Errorf("MutationStreamReader::updateVbuuidInFilter Missing"+
