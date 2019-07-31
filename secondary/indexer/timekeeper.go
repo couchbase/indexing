@@ -974,6 +974,7 @@ func (tk *timekeeper) handleStreamBegin(cmd Message) {
 		//memcached can loose vbuuid in crash/restart loop while indexer can update its
 		//HWT and generate snapshot for it. On restart of DCP stream with those vbuuids,
 		//memcached could ask to rollback to 0.
+		*/
 
 		//update the HWT of this stream and bucket with the vbuuid
 		bucketHWTMap := tk.ss.streamBucketHWTMap[streamId]
@@ -987,7 +988,6 @@ func (tk *timekeeper) handleStreamBegin(cmd Message) {
 		// in a vbucket and its stream begin arrives later than all mutations,
 		// there will be no TS with that vbuuid.
 		tk.ss.streamBucketNewTsReqdMap[streamId][meta.bucket] = true
-		*/
 
 		tk.ss.updateVbStatus(streamId, meta.bucket, []Vbucket{meta.vbucket}, VBS_STREAM_BEGIN)
 
