@@ -2848,7 +2848,7 @@ func (idx *indexer) handlePrepareRecovery(msg Message) {
 	bucket := msg.(*MsgRecovery).GetBucket()
 	sessionId := msg.(*MsgRecovery).GetSessionId()
 
-	if ok, currSid := idx.validateSessionId(streamId, bucket, sessionId); !ok {
+	if ok, currSid := idx.validateSessionId(streamId, bucket, sessionId, true); !ok {
 		logging.Infof("Indexer::handlePrepareRecovery StreamId %v Bucket %v SessionId %v. "+
 			"Skipped. Current SessionId %v.", streamId, bucket, sessionId, currSid)
 		return
@@ -2870,7 +2870,7 @@ func (idx *indexer) handleInitPrepRecovery(msg Message) {
 	requestCh := msg.(*MsgRecovery).GetRequestCh()
 	sessionId := msg.(*MsgRecovery).GetSessionId()
 
-	if ok, currSid := idx.validateSessionId(streamId, bucket, sessionId); !ok {
+	if ok, currSid := idx.validateSessionId(streamId, bucket, sessionId, true); !ok {
 		logging.Infof("Indexer::handleInitPrepRecovery StreamId %v Bucket %v SessionId %v. "+
 			"Skipped. Current SessionId %v.", streamId, bucket, sessionId, currSid)
 		return
@@ -2949,7 +2949,7 @@ func (idx *indexer) handlePrepareDone(msg Message) {
 	streamId := msg.(*MsgRecovery).GetStreamId()
 	sessionId := msg.(*MsgRecovery).GetSessionId()
 
-	if ok, currSid := idx.validateSessionId(streamId, bucket, sessionId); !ok {
+	if ok, currSid := idx.validateSessionId(streamId, bucket, sessionId, true); !ok {
 		logging.Infof("Indexer::handlePrepareDone StreamId %v Bucket %v SessionId %v. "+
 			"Skipped. Current SessionId %v.", streamId, bucket, sessionId, currSid)
 		return
@@ -2974,7 +2974,7 @@ func (idx *indexer) handleInitRecovery(msg Message) {
 	retryTs := msg.(*MsgRecovery).GetRetryTs()
 	sessionId := msg.(*MsgRecovery).GetSessionId()
 
-	if ok, currSid := idx.validateSessionId(streamId, bucket, sessionId); !ok {
+	if ok, currSid := idx.validateSessionId(streamId, bucket, sessionId, true); !ok {
 		logging.Infof("Indexer::handleInitRecovery StreamId %v Bucket %v SessionId %v. "+
 			"Skipped. Current SessionId %v.", streamId, bucket, sessionId, currSid)
 		return
@@ -3012,7 +3012,7 @@ func (idx *indexer) handleStorageRollbackDone(msg Message) {
 	err := msg.(*MsgRollbackDone).GetError()
 	sessionId := msg.(*MsgRollbackDone).GetSessionId()
 
-	if ok, currSid := idx.validateSessionId(streamId, bucket, sessionId); !ok {
+	if ok, currSid := idx.validateSessionId(streamId, bucket, sessionId, false); !ok {
 		logging.Infof("Indexer::handleStoragRollbackDone StreamId %v Bucket %v SessionId %v. "+
 			"Skipped. Current SessionId %v.", streamId, bucket, sessionId, currSid)
 		return
@@ -3044,7 +3044,7 @@ func (idx *indexer) handleRecoveryDone(msg Message) {
 	streamId := msg.(*MsgRecovery).GetStreamId()
 	sessionId := msg.(*MsgRecovery).GetSessionId()
 
-	if ok, currSid := idx.validateSessionId(streamId, bucket, sessionId); !ok {
+	if ok, currSid := idx.validateSessionId(streamId, bucket, sessionId, true); !ok {
 		logging.Infof("Indexer::handleRecoveryDone StreamId %v Bucket %v SessionId %v. "+
 			"Skipped. Current SessionId %v.", streamId, bucket, sessionId, currSid)
 		return
@@ -3088,7 +3088,7 @@ func (idx *indexer) handleKVStreamRepair(msg Message) {
 	async := msg.(*MsgKVStreamRepair).GetAsync()
 	sessionId := msg.(*MsgKVStreamRepair).GetSessionId()
 
-	if ok, currSid := idx.validateSessionId(streamId, bucket, sessionId); !ok {
+	if ok, currSid := idx.validateSessionId(streamId, bucket, sessionId, false); !ok {
 		logging.Infof("Indexer::handleKVStreamRepair StreamId %v Bucket %v SessionId %v. "+
 			"Skipped. Current SessionId %v.", streamId, bucket, sessionId, currSid)
 		return
@@ -3127,12 +3127,6 @@ func (idx *indexer) handleInitBuildDoneAck(msg Message) {
 	bucket := msg.(*MsgTKInitBuildDone).GetBucket()
 	sessionId := msg.(*MsgTKInitBuildDone).GetSessionId()
 
-	if ok, currSid := idx.validateSessionId(streamId, bucket, sessionId); !ok {
-		logging.Infof("Indexer::handleInitBuildDoneAck StreamId %v Bucket %v SessionId %v. "+
-			"Skipped. Current SessionId %v.", streamId, bucket, sessionId, currSid)
-		return
-	}
-
 	//skip processing initial build done ack for inactive or recovery streams.
 	//the streams would be restarted and then build done would get recomputed.
 	state := idx.getStreamBucketState(streamId, bucket)
@@ -3142,6 +3136,12 @@ func (idx *indexer) handleInitBuildDoneAck(msg Message) {
 		state == STREAM_RECOVERY {
 		logging.Infof("Indexer::handleInitBuildDoneAck Skip InitBuildDoneAck %v %v %v",
 			streamId, bucket, state)
+		return
+	}
+
+	if ok, currSid := idx.validateSessionId(streamId, bucket, sessionId, true); !ok {
+		logging.Infof("Indexer::handleInitBuildDoneAck StreamId %v Bucket %v SessionId %v. "+
+			"Skipped. Current SessionId %v.", streamId, bucket, sessionId, currSid)
 		return
 	}
 
@@ -3218,7 +3218,7 @@ func (idx *indexer) handleMergeStreamAck(msg Message) {
 	mergeList := msg.(*MsgTKMergeStream).GetMergeList()
 	sessionId := msg.(*MsgTKMergeStream).GetSessionId()
 
-	if ok, currSid := idx.validateSessionId(streamId, bucket, sessionId); !ok {
+	if ok, currSid := idx.validateSessionId(streamId, bucket, sessionId, false); !ok {
 		logging.Infof("Indexer::handleMergeStreamAck StreamId %v Bucket %v SessionId %v. "+
 			"Skipped. Current SessionId %v.", streamId, bucket, sessionId, currSid)
 		return
@@ -3289,7 +3289,7 @@ func (idx *indexer) handleStreamRequestDone(msg Message) {
 	bucket := msg.(*MsgStreamInfo).GetBucket()
 	sessionId := msg.(*MsgStreamInfo).GetSessionId()
 
-	if ok, currSid := idx.validateSessionId(streamId, bucket, sessionId); !ok {
+	if ok, currSid := idx.validateSessionId(streamId, bucket, sessionId, true); !ok {
 		logging.Infof("Indexer::handleStreamRequestDone StreamId %v Bucket %v SessionId %v. "+
 			"Skipped. Current SessionId %v.", streamId, bucket, sessionId, currSid)
 		return
@@ -3311,7 +3311,7 @@ func (idx *indexer) handleMTRFail(msg Message) {
 	bucket := msg.(*MsgRecovery).GetBucket()
 	sessionId := msg.(*MsgRecovery).GetSessionId()
 
-	if ok, currSid := idx.validateSessionId(streamId, bucket, sessionId); !ok {
+	if ok, currSid := idx.validateSessionId(streamId, bucket, sessionId, true); !ok {
 		logging.Infof("Indexer::handleMTRFail StreamId %v Bucket %v SessionId %v. "+
 			"Skipped. Current SessionId %v.", streamId, bucket, sessionId, currSid)
 		return
@@ -4268,7 +4268,7 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 	streamId := msg.(*MsgTKInitBuildDone).GetStreamId()
 	sessionId := msg.(*MsgTKInitBuildDone).GetSessionId()
 
-	if ok, currSid := idx.validateSessionId(streamId, bucket, sessionId); !ok {
+	if ok, currSid := idx.validateSessionId(streamId, bucket, sessionId, true); !ok {
 		logging.Infof("Indexer::handleInitialBuildDone StreamId %v Bucket %v SessionId %v. "+
 			"Skipped. Current SessionId %v.", streamId, bucket, sessionId, currSid)
 		return
@@ -4486,7 +4486,7 @@ func (idx *indexer) handleMergeStream(msg Message) {
 	streamId := msg.(*MsgTKMergeStream).GetStreamId()
 	sessionId := msg.(*MsgTKMergeStream).GetSessionId()
 
-	if ok, currSid := idx.validateSessionId(streamId, bucket, sessionId); !ok {
+	if ok, currSid := idx.validateSessionId(streamId, bucket, sessionId, true); !ok {
 		logging.Infof("Indexer::handleMergeStream StreamId %v Bucket %v SessionId %v. "+
 			"Skipped. Current SessionId %v.", streamId, bucket, sessionId, currSid)
 		return
@@ -7668,15 +7668,23 @@ func (idx *indexer) getCurrentSessionId(
 func (idx *indexer) validateSessionId(
 	streamId common.StreamId,
 	bucket string,
-	sessionId uint64) (bool, uint64) {
+	sessionId uint64,
+	assert bool) (bool, uint64) {
 
-	if currId, ok := idx.streamBucketSessionId[streamId][bucket]; ok {
-		if sessionId == currId {
-			return true, currId
-		} else {
-			return false, currId
+	valid := false
+	curr := uint64(0)
+	if cid, ok := idx.streamBucketSessionId[streamId][bucket]; ok {
+		if sessionId == cid {
+			valid = true
 		}
-	} else {
-		return false, 0
+		curr = cid
 	}
+
+	if !valid && assert && idx.config["debug.assertOnError"].Bool() {
+		common.CrashOnError(errors.New(fmt.Sprintf("sessionId validation "+
+			"failed. curr %v. have %v", curr, sessionId)))
+	}
+
+	return valid, curr
+
 }

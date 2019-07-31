@@ -2169,6 +2169,15 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.debug.assertOnError": ConfigValue{
+		false,
+		"This flag is intended for use in test/debug setups. Certain " +
+			"error conditions can be configured to cause panic to easily " +
+			"catch issues. This should be disabled for production builds",
+		false,
+		false, // mutable
+		false, // case-insensitive
+	},
 }
 
 // NewConfig from another
