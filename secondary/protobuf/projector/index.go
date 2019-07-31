@@ -218,9 +218,8 @@ func (ie *IndexEvaluator) StreamEndData(
 func (ie *IndexEvaluator) TransformRoute(
 	vbuuid uint64, m *mc.DcpEvent, data map[string]interface{}, encodeBuf []byte,
 	docval qvalue.AnnotatedValue, context qexpr.Context, meta map[string]interface{},
-	numIndexes int) ([]byte, error) {
+	numIndexes int) (newBuf []byte, err error) {
 
-	var err error
 	defer func() { // panic safe
 		if r := recover(); r != nil {
 			err = fmt.Errorf("%v", r)
@@ -232,7 +231,6 @@ func (ie *IndexEvaluator) TransformRoute(
 	}
 
 	var npkey /*new-partition*/, opkey /*old-partition*/, nkey, okey []byte
-	var newBuf []byte
 	instn := ie.instance
 
 	defn := instn.Definition
