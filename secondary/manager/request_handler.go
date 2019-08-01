@@ -132,6 +132,7 @@ type IndexStatus struct {
 	IndexName    string             `json:"indexName"`
 	ReplicaId    int                `json:"replicaId"`
 	Stale        bool               `json:"stale"`
+	LastScanTime string             `json:"lastScanTime,omitempty"`
 }
 
 type indexStatusSorter []IndexStatus
@@ -616,6 +617,15 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, bucket string
 								progress = math.Float64frombits(uint64(stat.(float64)))
 							}
 
+							lastScanTime := "NA"
+							key = fmt.Sprintf("%v:%v:last_known_scan_time", defn.Bucket, name)
+							if scanTime, ok := stats.ToMap()[key]; ok {
+								nsecs := int64(scanTime.(float64))
+								if nsecs != 0 {
+									lastScanTime = time.Unix(0, nsecs).Format(time.UnixDate)
+								}
+							}
+
 							partitionMap := make(map[string][]int)
 							for _, partnDef := range instance.Partitions {
 								partitionMap[mgmtAddr] = append(partitionMap[mgmtAddr], int(partnDef.PartId))
@@ -649,6 +659,7 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, bucket string
 								IndexName:    defn.Name,
 								ReplicaId:    int(instance.ReplicaId),
 								Stale:        stale,
+								LastScanTime: lastScanTime,
 							}
 
 							list = append(list, status)
