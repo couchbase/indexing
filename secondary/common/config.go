@@ -2178,6 +2178,15 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.debug.randomDelayInjection": ConfigValue{
+		false,
+		"This flag is intended for use in test/debug setups. Injects random " +
+			"delay in generating async messages in indexer main loop to trigger " +
+			"race conditions. This should be disabled for production builds",
+		false,
+		false, // mutable
+		false, // case-insensitive
+	},
 }
 
 // NewConfig from another

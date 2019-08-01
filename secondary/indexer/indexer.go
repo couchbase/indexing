@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"math"
+	"math/rand"
 	"net"
 	"net/http"
 	"os"
@@ -3700,6 +3701,9 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 				switch resp.GetMsgType() {
 
 				case MSG_SUCCESS_OPEN_STREAM:
+
+					idx.injectRandomDelay(10)
+
 					logging.Infof("Indexer::sendStreamUpdateForBuildIndex Stream Request Success For "+
 						"Stream %v Bucket %v SessionId %v", buildStream, bucket, sessionId)
 
@@ -4421,6 +4425,9 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 				switch resp.GetMsgType() {
 
 				case MSG_SUCCESS:
+
+					idx.injectRandomDelay(10)
+
 					logging.Infof("Indexer::handleInitialBuildDone Success Stream %v Bucket %v "+
 						"SessionId %v", streamId, bucket, sessionId)
 
@@ -4609,6 +4616,9 @@ func (idx *indexer) handleMergeInitStream(msg Message) {
 				switch resp.GetMsgType() {
 
 				case MSG_SUCCESS:
+
+					idx.injectRandomDelay(10)
+
 					logging.Infof("Indexer::handleMergeInitStream Success Stream %v Bucket %v "+
 						"SessionId %v", streamId, bucket, sessionId)
 					idx.internalRecvCh <- &MsgTKMergeStream{
@@ -4788,6 +4798,7 @@ func (idx *indexer) stopBucketStream(streamId common.StreamId, bucket string) {
 				switch resp.GetMsgType() {
 
 				case MSG_SUCCESS:
+					idx.injectRandomDelay(10)
 					logging.Infof("Indexer::stopBucketStream Success Stream %v Bucket %v "+
 						"SessionId %v", streamId, bucket, sessionId)
 					idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_PREPARE_DONE,
@@ -4959,6 +4970,8 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 				switch resp.GetMsgType() {
 
 				case MSG_SUCCESS_OPEN_STREAM:
+
+					idx.injectRandomDelay(10)
 
 					logging.Infof("Indexer::startBucketStream Success "+
 						"Stream %v Bucket %v SessionId %v", streamId, bucket, sessionId)
@@ -7687,4 +7700,12 @@ func (idx *indexer) validateSessionId(
 
 	return valid, curr
 
+}
+
+//injects random delay upto max seconds
+func (idx *indexer) injectRandomDelay(max int) {
+
+	if idx.config["debug.randomDelayInjection"].Bool() {
+		time.Sleep(time.Duration(rand.Intn(max)) * time.Second)
+	}
 }
