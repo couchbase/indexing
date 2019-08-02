@@ -167,7 +167,10 @@ func NewSecondaryIndexEntry2(key []byte, docid []byte, isArray bool,
 	}
 
 	if desc != nil {
-		buf = jsonEncoder.ReverseCollate(buf, desc)
+		buf, err = jsonEncoder.ReverseCollate(buf, desc)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	buf = append(buf, docid...)

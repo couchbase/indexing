@@ -207,7 +207,10 @@ func (s *IndexScanSource) Routine() error {
 			//copy is required, otherwise storage may get updated if storage
 			//returns pointer to original item(e.g. memdb)
 			revbuf = append(revbuf, entry...)
-			jsonEncoder.ReverseCollate(revbuf, s.p.req.IndexInst.Defn.Desc)
+			_, err = jsonEncoder.ReverseCollate(revbuf, s.p.req.IndexInst.Defn.Desc)
+			if err != nil {
+				return err
+			}
 			entry = revbuf
 		}
 

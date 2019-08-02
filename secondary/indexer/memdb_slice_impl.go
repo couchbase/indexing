@@ -610,7 +610,10 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 	//get keys in original form
 	if mdb.idxDefn.Desc != nil {
 		for _, item := range oldEntriesBytes {
-			jsonEncoder.ReverseCollate(item, mdb.idxDefn.Desc)
+			_, err = jsonEncoder.ReverseCollate(item, mdb.idxDefn.Desc)
+			// If error From ReverseCollate here, crash as old key is not expected
+			// to fail in ReverseCollate. It can indicate storage corruption
+			common.CrashOnError(err)
 		}
 
 	}
@@ -634,7 +637,10 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 	//convert to storage format
 	if mdb.idxDefn.Desc != nil {
 		for _, item := range list.Keys() {
-			jsonEncoder.ReverseCollate(item, mdb.idxDefn.Desc)
+			_, err = jsonEncoder.ReverseCollate(item, mdb.idxDefn.Desc)
+			// If error From ReverseCollate here, crash as old key is not expected
+			// to fail in ReverseCollate. It can indicate storage corruption
+			common.CrashOnError(err)
 		}
 
 	}
@@ -1659,7 +1665,10 @@ func (s *memdbSnapshot) MultiScanCount(ctx IndexReaderContext, low, high IndexKe
 				revbuf := (*revbuf)[:0]
 				//copy is required, otherwise storage may get updated
 				revbuf = append(revbuf, entry...)
-				jsonEncoder.ReverseCollate(revbuf, s.slice.idxDefn.Desc)
+				_, err = jsonEncoder.ReverseCollate(revbuf, s.slice.idxDefn.Desc)
+				if err != nil {
+					return err
+				}
 				entry = revbuf
 			}
 			if scan.ScanType == FilterRangeReq {

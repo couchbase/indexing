@@ -743,7 +743,14 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 
 		//get the key in original form
 		if mdb.idxDefn.Desc != nil {
-			jsonEncoder.ReverseCollate(oldkey, mdb.idxDefn.Desc)
+			_, err = jsonEncoder.ReverseCollate(oldkey, mdb.idxDefn.Desc)
+			if err != nil {
+				logging.Errorf("plasmaSlice::insertSecArrayIndex SliceId %v IndexInstId %v PartitionId %v. "+
+					"Error from ReverseCollate of old key. Skipping docid:%s Error: %v",
+					mdb.id, mdb.idxInstId, mdb.idxPartnId, logging.TagStrUD(docid), err)
+				mdb.deleteSecArrayIndexNoTx(docid, workerId)
+				return 0
+			}
 		}
 
 		oldEntriesBytes, oldKeyCount, newbufLen, err = ArrayIndexItems(oldkey, mdb.arrayExprPosition,
@@ -896,7 +903,18 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 
 		//convert to storage format
 		if mdb.idxDefn.Desc != nil {
-			jsonEncoder.ReverseCollate(key, mdb.idxDefn.Desc)
+			_, err = jsonEncoder.ReverseCollate(key, mdb.idxDefn.Desc)
+			if err != nil {
+				// If error From ReverseCollate here, rollback adds, rollback deletes,
+				// skip mutation, log and delete old key
+				rollbackDeletes(len(indexEntriesToBeDeleted) - 1)
+				rollbackAdds(len(indexEntriesToBeAdded) - 1)
+				logging.Errorf("plasmaSlice::insertSecArrayIndex SliceId %v IndexInstId %v PartitionId %v."+
+					"Error from ReverseCollate of new key. Skipping docid:%s Error: %v",
+					mdb.id, mdb.idxInstId, mdb.idxPartnId, logging.TagStrUD(docid), err)
+				mdb.deleteSecArrayIndexNoTx(docid, workerId)
+				return 0
+			}
 		}
 
 		if oldkey != nil {
@@ -1043,7 +1061,9 @@ func (mdb *plasmaSlice) deleteSecArrayIndexNoTx(docid []byte, workerId int) (nmu
 
 	//get the key in original form
 	if mdb.idxDefn.Desc != nil {
-		jsonEncoder.ReverseCollate(olditm, mdb.idxDefn.Desc)
+		_, err = jsonEncoder.ReverseCollate(olditm, mdb.idxDefn.Desc)
+		// If error From ReverseCollate here, crash as it is old key
+		common.CrashOnError(err)
 	}
 
 	indexEntriesToBeDeleted, keyCount, _, err := ArrayIndexItems(olditm, mdb.arrayExprPosition,
@@ -2083,7 +2103,11 @@ func (s *plasmaSnapshot) MultiScanCount(ctx IndexReaderContext, low, high IndexK
 				revbuf := (*revbuf)[:0]
 				//copy is required, otherwise storage may get updated
 				revbuf = append(revbuf, entry...)
-				jsonEncoder.ReverseCollate(revbuf, s.slice.idxDefn.Desc)
+				_, err = jsonEncoder.ReverseCollate(revbuf, s.slice.idxDefn.Desc)
+				if err != nil {
+					return err
+				}
+
 				entry = revbuf
 			}
 			if scan.ScanType == FilterRangeReq {
