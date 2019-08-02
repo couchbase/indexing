@@ -2,13 +2,24 @@ package collatejson
 
 import (
 	"errors"
+	"fmt"
+
+	"github.com/couchbase/indexing/secondary/logging"
 	n1ql "github.com/couchbase/query/value"
 )
 
 var ErrNotAnArray = errors.New("not an array")
 var ErrLenPrefixUnsupported = errors.New("arrayLenPrefix is unsupported")
 
-func (codec *Codec) ExplodeArray(code []byte, tmp []byte) ([][]byte, error) {
+func (codec *Codec) ExplodeArray(code []byte, tmp []byte) (arr [][]byte, e error) {
+
+	defer func() {
+		if r := recover(); r != nil {
+			logging.Fatalf("ExplodeArray:: recovered panic - %s \n %s", r, logging.StackTrace())
+			e = fmt.Errorf("%v", r)
+		}
+	}()
+
 	var err error
 
 	array := make([][]byte, 0)
@@ -95,7 +106,16 @@ func (codec *Codec) ExplodeArray2(code []byte, tmp, decbuf []byte, cktmp, dktmp 
 // decoded parts. Also takes an array of explode positions and
 // decode positions to determine what to explode and what to decode
 func (codec *Codec) ExplodeArray3(code []byte, tmp []byte, cktmp [][]byte,
-	dktmp n1ql.Values, explodePos, decPos []bool, explodeUpto int) ([][]byte, n1ql.Values, error) {
+	dktmp n1ql.Values, explodePos, decPos []bool, explodeUpto int) (enc [][]byte,
+	dec n1ql.Values, e error) {
+
+	defer func() {
+		if r := recover(); r != nil {
+			logging.Fatalf("ExplodeArray3:: recovered panic - %s \n %s", r, logging.StackTrace())
+			e = fmt.Errorf("%v", r)
+		}
+	}()
+
 	var err error
 	var val n1ql.Value
 	var decode bool
@@ -145,7 +165,15 @@ func (codec *Codec) ExplodeArray3(code []byte, tmp []byte, cktmp [][]byte,
 
 // Explodes an encoded array, returns all encoded parts
 // without decoding any part of the array
-func (codec *Codec) ExplodeArray4(code []byte, tmp []byte) ([][]byte, error) {
+func (codec *Codec) ExplodeArray4(code []byte, tmp []byte) (arr [][]byte, e error) {
+
+	defer func() {
+		if r := recover(); r != nil {
+			logging.Fatalf("ExplodeArray4:: recovered panic - %s \n %s", r, logging.StackTrace())
+			e = fmt.Errorf("%v", r)
+		}
+	}()
+
 	var err error
 	array := make([][]byte, 0)
 
@@ -175,7 +203,15 @@ func (codec *Codec) ExplodeArray4(code []byte, tmp []byte) ([][]byte, error) {
 	return array, err
 }
 
-func (codec *Codec) JoinArray(vals [][]byte, code []byte) ([]byte, error) {
+func (codec *Codec) JoinArray(vals [][]byte, code []byte) (arr []byte, e error) {
+
+	defer func() {
+		if r := recover(); r != nil {
+			logging.Fatalf("JoinArray:: recovered panic - %s \n %s", r, logging.StackTrace())
+			e = fmt.Errorf("%v", r)
+		}
+	}()
+
 	if codec.arrayLenPrefix {
 		return nil, ErrLenPrefixUnsupported
 	}

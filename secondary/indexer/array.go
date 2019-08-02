@@ -31,17 +31,21 @@ var (
 func splitSecondaryArrayKey(key []byte, arrayPos int, tmpBuf []byte) ([][][]byte, error) {
 	var arrayLen int
 	var arrayItem [][]byte
-	var err2 error
 
 	codec := collatejson.NewCodec(16)
 	secKeyObject, err := codec.ExplodeArray4(key, tmpBuf)
-	common.CrashOnError(err)
+	if err != nil {
+		return nil, err
+	}
 
 	hasArray := false
 	insideArr := secKeyObject[arrayPos]
-	if arrayItem, err2 = codec.ExplodeArray4(insideArr, tmpBuf); err2 == nil {
+	if arrayItem, err = codec.ExplodeArray4(insideArr, tmpBuf); err == nil {
 		arrayLen = len(arrayItem)
 		hasArray = true
+	}
+	if err != nil {
+		return nil, err
 	}
 
 	arrayIndexEntries := make([][][]byte, 0, len(secKeyObject))

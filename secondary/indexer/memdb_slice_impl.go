@@ -1681,6 +1681,9 @@ func (s *memdbSnapshot) MultiScanCount(ctx IndexReaderContext, low, high IndexKe
 					// For Count Distinct, only leading key needs to be considered for
 					// distinct comparison as N1QL supports distinct on only single key
 					entry, err = projectLeadingKey(ck, entry, buf)
+					if err != nil {
+						return err
+					}
 				}
 				if len(*previousRow) != 0 && distinctCompare(entry, *previousRow) {
 					return nil // Ignore the entry as it is same as previous entry

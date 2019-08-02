@@ -98,6 +98,9 @@ func (s *fdbSnapshot) MultiScanCount(ctx IndexReaderContext, low, high IndexKey,
 			if checkDistinct {
 				if isIndexComposite {
 					entry, err = projectLeadingKey(ck, entry, buf)
+					if err != nil {
+						return err
+					}
 				}
 				if len(*previousRow) != 0 && distinctCompare(entry, *previousRow) {
 					return nil // Ignore the entry as it is same as previous entry

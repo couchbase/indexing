@@ -2105,6 +2105,9 @@ func (s *plasmaSnapshot) MultiScanCount(ctx IndexReaderContext, low, high IndexK
 					// For Count Distinct, only leading key needs to be considered for
 					// distinct comparison as N1QL syntax supports distinct on only single key
 					entry, err = projectLeadingKey(ck, entry, buf)
+					if err != nil {
+						return err
+					}
 				}
 				if len(*previousRow) != 0 && distinctCompare(entry, *previousRow) {
 					return nil // Ignore the entry as it is same as previous entry
