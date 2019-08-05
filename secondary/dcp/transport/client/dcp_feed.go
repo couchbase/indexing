@@ -381,7 +381,6 @@ func (feed *DcpFeed) handlePacket(
 		}
 		event.Opcode = transport.DCP_STREAMEND // opcode re-write !!
 		event.Opaque = stream.AppOpaque        // opaque re-write !!
-		sendAck = true
 		delete(feed.vbstreams, vb)
 		fmsg := "%v ##%x DCP_CLOSESTREAM for vb %d\n"
 		logging.Debugf(fmsg, prefix, stream.AppOpaque, vb)
