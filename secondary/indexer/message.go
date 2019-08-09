@@ -132,6 +132,7 @@ const (
 	INDEXER_MERGE_PARTITION
 	INDEXER_CANCEL_MERGE_PARTITION
 	INDEXER_MTR_FAIL
+	INDEXER_ABORT_RECOVERY
 	INDEXER_STORAGE_WARMUP_DONE
 	INDEXER_SECURITY_CHANGE
 
@@ -325,6 +326,7 @@ type MsgStreamInfo struct {
 	buildTs   Timestamp
 	activeTs  *common.TsVbuuid
 	pendingTs *common.TsVbuuid
+	reqCh     StopChannel
 	sessionId uint64
 }
 
@@ -354,6 +356,10 @@ func (m *MsgStreamInfo) GetActiveTs() *common.TsVbuuid {
 
 func (m *MsgStreamInfo) GetPendingTs() *common.TsVbuuid {
 	return m.pendingTs
+}
+
+func (m *MsgStreamInfo) GetRequestCh() StopChannel {
+	return m.reqCh
 }
 
 func (m *MsgStreamInfo) GetSessionId() uint64 {
@@ -429,6 +435,7 @@ type MsgStreamUpdate struct {
 
 	allowMarkFirstSnap bool
 	bucketInRecovery   bool
+	abortRecovery      bool
 }
 
 func (m *MsgStreamUpdate) GetMsgType() MsgType {
@@ -481,6 +488,10 @@ func (m *MsgStreamUpdate) GetAsync() bool {
 
 func (m *MsgStreamUpdate) GetSessionId() uint64 {
 	return m.sessionId
+}
+
+func (m *MsgStreamUpdate) AbortRecovery() bool {
+	return m.abortRecovery
 }
 
 func (m *MsgStreamUpdate) String() string {
@@ -766,6 +777,7 @@ type MsgTKMergeStream struct {
 	bucket    string
 	mergeTs   Timestamp
 	mergeList []common.IndexInst
+	reqCh     StopChannel
 	sessionId uint64
 }
 
@@ -787,6 +799,10 @@ func (m *MsgTKMergeStream) GetMergeTS() Timestamp {
 
 func (m *MsgTKMergeStream) GetMergeList() []common.IndexInst {
 	return m.mergeList
+}
+
+func (m *MsgTKMergeStream) GetRequestCh() StopChannel {
+	return m.reqCh
 }
 
 func (m *MsgTKMergeStream) GetSessionId() uint64 {
@@ -1307,6 +1323,7 @@ func (m *MsgRepairEndpoints) String() string {
 //INDEXER_RECOVERY_DONE
 //INDEXER_BUCKET_NOT_FOUND
 //INDEXER_MTR_FAIL
+//INDEXER_ABORT_RECOVERY
 type MsgRecovery struct {
 	mType     MsgType
 	streamId  common.StreamId
@@ -2001,6 +2018,8 @@ func (m MsgType) String() string {
 		return "INDEXER_RECOVERY_DONE"
 	case INDEXER_BUCKET_NOT_FOUND:
 		return "INDEXER_BUCKET_NOT_FOUND"
+	case INDEXER_ABORT_RECOVERY:
+		return "INDEXER_ABORT_RECOVERY"
 	case INDEXER_ROLLBACK:
 		return "INDEXER_ROLLBACK"
 	case STORAGE_ROLLBACK_DONE:

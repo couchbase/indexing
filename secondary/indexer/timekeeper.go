@@ -7,10 +7,6 @@
 // either express or implied. See the License for the specific language governing permissions
 // and limitations under the License.
 
-//TODO Does timekeeper need to take into account all the indexes for a bucket getting dropped?
-//Right now it assumes for such a case there will be no SYNC message for that bucket, but doesn't
-//clean up its internal maps
-
 package indexer
 
 import (
@@ -223,6 +219,9 @@ func (tk *timekeeper) handleSupervisorCommands(cmd Message) {
 	case INDEXER_RESUME:
 		tk.handleIndexerResume(cmd)
 
+	case INDEXER_ABORT_RECOVERY:
+		tk.handleAbortRecovery(cmd)
+
 	default:
 		logging.Errorf("Timekeeper::handleSupvervisorCommands "+
 			"Received Unknown Command %v", cmd)
@@ -295,7 +294,7 @@ func (tk *timekeeper) handleStreamClose(cmd Message) {
 
 	//cleanup all buckets from stream
 	for bucket, _ := range tk.ss.streamBucketStatus[streamId] {
-		tk.removeBucketFromStream(streamId, bucket)
+		tk.removeBucketFromStream(streamId, bucket, false)
 	}
 
 	tk.supvCmdch <- &MsgSuccess{}
@@ -458,11 +457,12 @@ func (tk *timekeeper) handleRemoveBucketFromStream(cmd Message) {
 
 	streamId := cmd.(*MsgStreamUpdate).GetStreamId()
 	bucket := cmd.(*MsgStreamUpdate).GetBucket()
+	abort := cmd.(*MsgStreamUpdate).AbortRecovery()
 
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
 
-	tk.removeBucketFromStream(streamId, bucket)
+	tk.removeBucketFromStream(streamId, bucket, abort)
 
 	tk.supvCmdch <- &MsgSuccess{}
 }
@@ -492,7 +492,7 @@ func (tk *timekeeper) removeIndexFromStream(cmd Message) {
 }
 
 func (tk *timekeeper) removeBucketFromStream(streamId common.StreamId,
-	bucket string) {
+	bucket string, abort bool) {
 
 	status := tk.ss.streamBucketStatus[streamId][bucket]
 
@@ -510,7 +510,7 @@ func (tk *timekeeper) removeBucketFromStream(streamId common.StreamId,
 
 	//for a bucket in prepareRecovery, only change the status
 	//actual cleanup happens in initRecovery
-	if status == STREAM_PREPARE_RECOVERY {
+	if status == STREAM_PREPARE_RECOVERY && !abort {
 		tk.ss.streamBucketStatus[streamId][bucket] = STREAM_PREPARE_RECOVERY
 		tk.ss.clearAllRepairState(streamId, bucket)
 	} else {
@@ -1835,6 +1835,21 @@ func (tk *timekeeper) handleRecoveryDone(cmd Message) {
 	tk.supvCmdch <- &MsgSuccess{}
 }
 
+func (tk *timekeeper) handleAbortRecovery(cmd Message) {
+
+	logging.Infof("Timekeeper::handleAbortRecovery %v", cmd)
+
+	streamId := cmd.(*MsgRecovery).GetStreamId()
+	bucket := cmd.(*MsgRecovery).GetBucket()
+
+	tk.lock.Lock()
+	defer tk.lock.Unlock()
+
+	tk.removeBucketFromStream(streamId, bucket, true)
+
+	tk.supvCmdch <- &MsgSuccess{}
+}
+
 func (tk *timekeeper) handleConfigUpdate(cmd Message) {
 	cfgUpdate := cmd.(*MsgConfigUpdate)
 	tk.config = cfgUpdate.GetConfig()
@@ -1996,8 +2011,8 @@ func (tk *timekeeper) checkInitialBuildDone(streamId common.StreamId,
 
 				sessionId := tk.ss.getSessionId(streamId, bucket)
 				logging.Infof("Timekeeper::checkInitialBuildDone Initial Build Done Index: %v "+
-					"Stream: %v Bucket: %v Session%v %v BuildTS: %v", idx.InstId, streamId,
-					sessionId, bucket, buildInfo.buildTs)
+					"Stream: %v Bucket: %v Session: %v BuildTS: %v", idx.InstId, streamId,
+					bucket, sessionId, buildInfo.buildTs)
 
 				tk.setAddInstPending(streamId, bucket, true)
 
@@ -3671,9 +3686,12 @@ func (tk *timekeeper) handleIndexerResume(cmd Message) {
 		for b, status := range bs {
 			if status != STREAM_INACTIVE {
 				tk.ss.streamBucketFlushEnabledMap[s][b] = false
+				sessionId := tk.ss.getSessionId(s, b)
 				tk.supvRespch <- &MsgRecovery{mType: INDEXER_INIT_PREP_RECOVERY,
-					streamId: s,
-					bucket:   b}
+					streamId:  s,
+					bucket:    b,
+					sessionId: sessionId,
+				}
 			}
 		}
 	}

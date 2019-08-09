@@ -53,7 +53,7 @@ var httpMux *http.ServeMux
 type BucketIndexCountMap map[string]int
 type BucketFlushInProgressMap map[string]bool
 type BucketObserveFlushDoneMap map[string]MsgChannel
-type BucketRequestStopCh map[string]StopChannel
+type BucketCurrRequest map[string]*currRequest
 type BucketRollbackTs map[string]*common.TsVbuuid
 type BucketRetryTs map[string]*common.TsVbuuid
 
@@ -96,12 +96,12 @@ type indexer struct {
 	streamBucketFlushInProgress  map[common.StreamId]BucketFlushInProgressMap
 	streamBucketObserveFlushDone map[common.StreamId]BucketObserveFlushDoneMap
 
-	streamBucketRequestStopCh map[common.StreamId]BucketRequestStopCh
-	streamBucketRollbackTs    map[common.StreamId]BucketRollbackTs
-	streamBucketRetryTs       map[common.StreamId]BucketRetryTs
-	streamBucketRequestQueue  map[common.StreamId]map[string]chan *kvRequest
-	streamBucketRequestLock   map[common.StreamId]map[string]chan *sync.Mutex
-	streamBucketSessionId     map[common.StreamId]map[string]uint64
+	streamBucketCurrRequest  map[common.StreamId]BucketCurrRequest
+	streamBucketRollbackTs   map[common.StreamId]BucketRollbackTs
+	streamBucketRetryTs      map[common.StreamId]BucketRetryTs
+	streamBucketRequestQueue map[common.StreamId]map[string]chan *kvRequest
+	streamBucketRequestLock  map[common.StreamId]map[string]chan *sync.Mutex
+	streamBucketSessionId    map[common.StreamId]map[string]uint64
 
 	bucketRollbackTimes map[string]int64
 
@@ -193,6 +193,12 @@ type pruneSpec struct {
 	partitions []common.PartitionId
 }
 
+type currRequest struct {
+	request   Message
+	reqCh     StopChannel
+	sessionId uint64
+}
+
 func NewIndexer(config common.Config) (Indexer, Message) {
 
 	idx := &indexer{
@@ -227,7 +233,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		streamBucketStatus:           make(map[common.StreamId]BucketStatus),
 		streamBucketFlushInProgress:  make(map[common.StreamId]BucketFlushInProgressMap),
 		streamBucketObserveFlushDone: make(map[common.StreamId]BucketObserveFlushDoneMap),
-		streamBucketRequestStopCh:    make(map[common.StreamId]BucketRequestStopCh),
+		streamBucketCurrRequest:      make(map[common.StreamId]BucketCurrRequest),
 		streamBucketRollbackTs:       make(map[common.StreamId]BucketRollbackTs),
 		streamBucketRetryTs:          make(map[common.StreamId]BucketRetryTs),
 		streamBucketRequestQueue:     make(map[common.StreamId]map[string]chan *kvRequest),
@@ -1320,7 +1326,6 @@ func (idx *indexer) handleAdminMsgs(msg Message) {
 
 }
 
-//TODO handle panic, otherwise main loop will get shutdown
 func (idx *indexer) handleCreateIndex(msg Message) {
 
 	indexInst := msg.(*MsgCreateIndex).GetIndexInst()
@@ -1952,8 +1957,8 @@ func (idx *indexer) mergePartition(bucket string, streamId common.StreamId, sour
 
 			// The source and target must be on the same stream.
 			if source.Stream != target.Stream {
-				logging.Warnf("MergePartition: Source Index Instance stream %v and target index instance stream %v are not on the same.  Do not merge now.",
-					target.Stream, source.Stream)
+				logging.Warnf("MergePartition: Source Index Instance stream %v and target index instance stream %v are not on the same. "+
+				"Do not merge now.", target.Stream, source.Stream)
 				return false
 			}
 
@@ -2691,7 +2696,6 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 
 }
 
-//TODO handle panic, otherwise main loop will get shutdown
 func (idx *indexer) handleDropIndex(msg Message) {
 
 	indexInstId := msg.(*MsgDropIndex).GetIndexInstId()
@@ -2801,28 +2805,6 @@ func (idx *indexer) handleDropIndex(msg Message) {
 		return
 	}
 
-	maintState := idx.getStreamBucketState(common.MAINT_STREAM, indexInst.Defn.Bucket)
-	initState := idx.getStreamBucketState(common.INIT_STREAM, indexInst.Defn.Bucket)
-
-	if maintState == STREAM_RECOVERY ||
-		maintState == STREAM_PREPARE_RECOVERY ||
-		initState == STREAM_RECOVERY ||
-		initState == STREAM_PREPARE_RECOVERY {
-
-		logging.Errorf("Indexer::handleDropIndex Cannot Process Drop Index " +
-			"In Recovery Mode.")
-
-		if clientCh != nil {
-			clientCh <- &MsgError{
-				err: Error{code: ERROR_INDEXER_IN_RECOVERY,
-					severity: FATAL,
-					cause:    ErrIndexerInRecovery,
-					category: INDEXER}}
-
-		}
-		return
-	}
-
 	//check if there is already a drop request waiting on this bucket
 	if ok := idx.checkDuplicateDropRequest(indexInst, clientCh); ok {
 		return
@@ -2880,7 +2862,7 @@ func (idx *indexer) handleInitPrepRecovery(msg Message) {
 	//if the stream is inactive(e.g. all indexes get dropped)
 	if idx.getStreamBucketState(streamId, bucket) == STREAM_INACTIVE {
 		logging.Infof("Indexer::handleInitPrepRecovery StreamId %v Bucket %v "+
-			"State %v.Skipping INIT_PREPARE and Cleaning up.",
+			"State %v. Skipping INIT_PREPARE and Cleaning up.",
 			streamId, bucket, idx.getStreamBucketState(streamId, bucket))
 		idx.cleanupStreamBucketState(streamId, bucket)
 	} else {
@@ -2890,20 +2872,22 @@ func (idx *indexer) handleInitPrepRecovery(msg Message) {
 		// If this is a new recovery request
 		if requestCh == nil {
 			// Do not allow recovery if there is an MTR or recovery going on.
-			if idx.streamBucketRequestStopCh[streamId][bucket] != nil ||
+			if idx.streamBucketCurrRequest[streamId][bucket] != nil ||
 				idx.getStreamBucketState(streamId, bucket) != STREAM_ACTIVE {
 				allowRequest = false
 			}
 		} else {
 			// If this is a recursive request, make sure it has the same requestStopCh.
-			if idx.streamBucketRequestStopCh[streamId][bucket] != requestCh {
+			req := idx.streamBucketCurrRequest[streamId][bucket]
+			if req.reqCh != requestCh {
 				allowRequest = false
 			}
 		}
 
 		if !allowRequest {
-			logging.Infof("handleInitPrepRecovery: stream %v bucket %v cannot " +
-				"initiate another recovery while previous recovery in progress.")
+			logging.Infof("Indexer::handleInitPrepRecovery StreamId %v Bucket %v "+
+				"SessionId %v. Cannot initiate another recovery while previous "+
+				"recovery in progress.", streamId, bucket, sessionId)
 			return
 		}
 
@@ -2917,8 +2901,8 @@ func (idx *indexer) handleInitPrepRecovery(msg Message) {
 
 		idx.setStreamBucketState(streamId, bucket, STREAM_PREPARE_RECOVERY)
 
-		logging.Infof("Indexer::handleInitPrepRecovery StreamId %v Bucket %v SessionId %v",
-			streamId, bucket, STREAM_PREPARE_RECOVERY, sessionId)
+		logging.Infof("Indexer::handleInitPrepRecovery StreamId %v Bucket %v State %v "+
+			"SessionId %v", streamId, bucket, STREAM_PREPARE_RECOVERY, sessionId)
 
 		//fwd the msg to timekeeper
 		idx.tkCmdCh <- msg
@@ -2949,6 +2933,7 @@ func (idx *indexer) handlePrepareDone(msg Message) {
 	bucket := msg.(*MsgRecovery).GetBucket()
 	streamId := msg.(*MsgRecovery).GetStreamId()
 	sessionId := msg.(*MsgRecovery).GetSessionId()
+	reqCh := msg.(*MsgRecovery).GetRequestCh()
 
 	if ok, currSid := idx.validateSessionId(streamId, bucket, sessionId, true); !ok {
 		logging.Infof("Indexer::handlePrepareDone StreamId %v Bucket %v SessionId %v. "+
@@ -2959,7 +2944,15 @@ func (idx *indexer) handlePrepareDone(msg Message) {
 	logging.Infof("Indexer::handlePrepareDone StreamId %v Bucket %v",
 		streamId, bucket)
 
-	delete(idx.streamBucketRequestStopCh[streamId], bucket)
+	//if the stream is inactive(e.g. all indexes get dropped)
+	if idx.getStreamBucketState(streamId, bucket) == STREAM_INACTIVE {
+		logging.Infof("Indexer::handlePrepareDone Skip PREPARE_DONE for Inactive "+
+			"Bucket. StreamId %v Bucket %v.", streamId, bucket)
+		idx.cleanupStreamBucketState(streamId, bucket)
+		return
+	} else {
+		idx.deleteStreamBucketCurrRequest(streamId, bucket, msg, reqCh, sessionId)
+	}
 
 	//fwd the msg to timekeeper
 	idx.tkCmdCh <- msg
@@ -2978,6 +2971,20 @@ func (idx *indexer) handleInitRecovery(msg Message) {
 	if ok, currSid := idx.validateSessionId(streamId, bucket, sessionId, true); !ok {
 		logging.Infof("Indexer::handleInitRecovery StreamId %v Bucket %v SessionId %v. "+
 			"Skipped. Current SessionId %v.", streamId, bucket, sessionId, currSid)
+		return
+	}
+
+	//if a recovery is in progress and all indexes get dropped, recovery needs to be
+	//aborted in timekeeper
+	if idx.getStreamBucketState(streamId, bucket) == STREAM_INACTIVE {
+		logging.Infof("Indexer::handleInitRecovery Aborting Recovery for "+
+			"Stream: %v Bucket: %v. Bucket Inactive", streamId, bucket)
+
+		idx.tkCmdCh <- &MsgRecovery{mType: INDEXER_ABORT_RECOVERY,
+			streamId: streamId,
+			bucket:   bucket}
+		<-idx.tkCmdCh
+		idx.cleanupStreamBucketState(streamId, bucket)
 		return
 	}
 
@@ -3019,6 +3026,19 @@ func (idx *indexer) handleStorageRollbackDone(msg Message) {
 		return
 	}
 
+	//if a recovery is in progress and all indexes get dropped, recovery needs to be
+	//aborted in timekeeper
+	if idx.getStreamBucketState(streamId, bucket) == STREAM_INACTIVE {
+		logging.Infof("Indexer::handleStorageRollbackDone Aborting Recovery for "+
+			"Stream: %v Bucket: %v. Bucket Inactive", streamId, bucket)
+
+		idx.tkCmdCh <- &MsgRecovery{mType: INDEXER_ABORT_RECOVERY,
+			streamId: streamId,
+			bucket:   bucket}
+		<-idx.tkCmdCh
+		return
+	}
+
 	//notify storage rollback done
 	if streamId == common.MAINT_STREAM {
 		idx.scanCoordCmdCh <- &MsgRollback{
@@ -3044,6 +3064,7 @@ func (idx *indexer) handleRecoveryDone(msg Message) {
 	bucket := msg.(*MsgRecovery).GetBucket()
 	streamId := msg.(*MsgRecovery).GetStreamId()
 	sessionId := msg.(*MsgRecovery).GetSessionId()
+	reqCh := msg.(*MsgRecovery).GetRequestCh()
 
 	if ok, currSid := idx.validateSessionId(streamId, bucket, sessionId, true); !ok {
 		logging.Infof("Indexer::handleRecoveryDone StreamId %v Bucket %v SessionId %v. "+
@@ -3054,11 +3075,21 @@ func (idx *indexer) handleRecoveryDone(msg Message) {
 	logging.Infof("Indexer::handleRecoveryDone StreamId %v Bucket %v SessionId %v",
 		streamId, bucket, sessionId)
 
+	idx.deleteStreamBucketCurrRequest(streamId, bucket, msg, reqCh, sessionId)
+	idx.cleanupStreamBucketRecoveryState(streamId, bucket)
+
+	//during recovery, if all indexes of a bucket gets dropped,
+	//further processing is not required. Stream cleanup is done by
+	//whoever is changing stream status to INACTIVE
+	if idx.getStreamBucketState(streamId, bucket) == STREAM_INACTIVE {
+		logging.Infof("Indexer::handleRecoveryDone Skip Recovery for Stream %v"+
+			"Inactive Bucket %v", streamId, bucket)
+		return
+	}
+
 	//send the msg to timekeeper
 	idx.tkCmdCh <- msg
 	<-idx.tkCmdCh
-
-	idx.cleanupStreamBucketState(streamId, bucket)
 
 	//during recovery, if all indexes of a bucket gets dropped,
 	//the stream needs to be stopped for that bucket.
@@ -3216,8 +3247,8 @@ func (idx *indexer) handleMergeStreamAck(msg Message) {
 
 	streamId := msg.(*MsgTKMergeStream).GetStreamId()
 	bucket := msg.(*MsgTKMergeStream).GetBucket()
-	mergeList := msg.(*MsgTKMergeStream).GetMergeList()
 	sessionId := msg.(*MsgTKMergeStream).GetSessionId()
+	reqCh := msg.(*MsgTKMergeStream).GetRequestCh()
 
 	if ok, currSid := idx.validateSessionId(streamId, bucket, sessionId, false); !ok {
 		logging.Infof("Indexer::handleMergeStreamAck StreamId %v Bucket %v SessionId %v. "+
@@ -3231,50 +3262,22 @@ func (idx *indexer) handleMergeStreamAck(msg Message) {
 	switch streamId {
 
 	case common.INIT_STREAM:
-		delete(idx.streamBucketRequestStopCh[streamId], bucket)
+		idx.deleteStreamBucketCurrRequest(streamId, bucket, msg, reqCh, sessionId)
 
 		state := idx.getStreamBucketState(streamId, bucket)
 
 		//skip processing merge ack for inactive or recovery streams.
 		if state == STREAM_PREPARE_RECOVERY ||
-			state == STREAM_RECOVERY {
+			state == STREAM_RECOVERY ||
+			state == STREAM_INACTIVE {
 			logging.Infof("Indexer::handleMergeStreamAck Skip MergeStreamAck %v %v %v",
 				streamId, bucket, state)
 			return
 		}
 
-		idx.setStreamBucketState(streamId, bucket, STREAM_INACTIVE)
-
-		//enable flush for this bucket in MAINT_STREAM
-		//TODO shall this be moved to timekeeper now?
-		idx.tkCmdCh <- &MsgTKToggleFlush{mType: TK_ENABLE_FLUSH,
-			streamId: common.MAINT_STREAM,
-			bucket:   bucket}
-		<-idx.tkCmdCh
-
 		//send the ack to timekeeper
 		idx.tkCmdCh <- msg
 		<-idx.tkCmdCh
-
-		//for cbq bridge, return response after merge is done and
-		//index is ready to query
-		if !idx.enableManager {
-			if clientCh, ok := idx.bucketCreateClientChMap[bucket]; ok {
-				if clientCh != nil {
-					clientCh <- &MsgSuccess{}
-				}
-				delete(idx.bucketCreateClientChMap, bucket)
-			}
-		} else {
-			var instIdList []common.IndexInstId
-			for _, inst := range mergeList {
-				instIdList = append(instIdList, inst.InstId)
-			}
-
-			if err := idx.updateMetaInfoForIndexList(instIdList, true, true, false, false, true, false, false, false, nil); err != nil {
-				common.CrashOnError(err)
-			}
-		}
 
 	default:
 		logging.Fatalf("Indexer::handleMergeStreamAck Unexpected Merge Stream Ack "+
@@ -3289,6 +3292,7 @@ func (idx *indexer) handleStreamRequestDone(msg Message) {
 	streamId := msg.(*MsgStreamInfo).GetStreamId()
 	bucket := msg.(*MsgStreamInfo).GetBucket()
 	sessionId := msg.(*MsgStreamInfo).GetSessionId()
+	reqCh := msg.(*MsgStreamInfo).GetRequestCh()
 
 	if ok, currSid := idx.validateSessionId(streamId, bucket, sessionId, true); !ok {
 		logging.Infof("Indexer::handleStreamRequestDone StreamId %v Bucket %v SessionId %v. "+
@@ -3303,7 +3307,8 @@ func (idx *indexer) handleStreamRequestDone(msg Message) {
 	idx.tkCmdCh <- msg
 	<-idx.tkCmdCh
 
-	delete(idx.streamBucketRequestStopCh[streamId], bucket)
+	idx.deleteStreamBucketCurrRequest(streamId, bucket, msg, reqCh, sessionId)
+
 }
 
 func (idx *indexer) handleMTRFail(msg Message) {
@@ -3311,6 +3316,7 @@ func (idx *indexer) handleMTRFail(msg Message) {
 	streamId := msg.(*MsgRecovery).GetStreamId()
 	bucket := msg.(*MsgRecovery).GetBucket()
 	sessionId := msg.(*MsgRecovery).GetSessionId()
+	reqCh := msg.(*MsgRecovery).GetRequestCh()
 
 	if ok, currSid := idx.validateSessionId(streamId, bucket, sessionId, true); !ok {
 		logging.Infof("Indexer::handleMTRFail StreamId %v Bucket %v SessionId %v. "+
@@ -3321,9 +3327,9 @@ func (idx *indexer) handleMTRFail(msg Message) {
 	logging.Infof("Indexer::handleMTRFail StreamId %v Bucket %v SessionId %v",
 		streamId, bucket, sessionId)
 
-	// if in MTR, MTR must have stopped when recieving this message.
-	// Cleanup any lock that indexer may be holding.
-	idx.cleanupStreamBucketState(streamId, bucket)
+	//Cleanup any lock that indexer may be holding.
+	idx.deleteStreamBucketCurrRequest(streamId, bucket, msg, reqCh, sessionId)
+
 }
 
 func (idx *indexer) handleBucketNotFound(msg Message) {
@@ -3333,13 +3339,19 @@ func (idx *indexer) handleBucketNotFound(msg Message) {
 	inMTR := msg.(*MsgRecovery).InMTR()
 	sessionId := msg.(*MsgRecovery).GetSessionId()
 
+	if ok, currSid := idx.validateSessionId(streamId, bucket, sessionId, true); !ok {
+		logging.Infof("Indexer::handleBucketNotFound StreamId %v Bucket %v SessionId %v. "+
+			"Skipped. Current SessionId %v.", streamId, bucket, sessionId, currSid)
+		return
+	}
+
 	logging.Infof("Indexer::handleBucketNotFound StreamId %v Bucket %v SessionId %v",
 		streamId, bucket, sessionId)
 
 	// if in MTR, MTR must have stopped when recieving this message.
 	// Cleanup any lock that indexer may be holding.
 	if inMTR {
-		delete(idx.streamBucketRequestStopCh[streamId], bucket)
+		idx.cleanupStreamBucketState(streamId, bucket)
 	}
 
 	is := idx.getIndexerState()
@@ -3632,6 +3644,8 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 	numVb := idx.config["numVbuckets"].Int()
 	enableAsync := idx.config["enableAsyncOpenStream"].Bool()
 
+	idx.prepareStreamBucketForFreshStart(buildStream, bucket)
+
 	sessionId := idx.getNextSessionId(buildStream, bucket)
 
 	async := enableAsync && clusterVersion(clustAddr) >= common.INDEXER_65_VERSION
@@ -3671,10 +3685,7 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 
 	stopCh := make(StopChannel)
 
-	if _, ok := idx.streamBucketRequestStopCh[buildStream]; !ok {
-		idx.streamBucketRequestStopCh[buildStream] = make(BucketRequestStopCh)
-	}
-	idx.streamBucketRequestStopCh[buildStream][bucket] = stopCh
+	idx.setStreamBucketCurrRequest(buildStream, bucket, cmd, stopCh, sessionId)
 
 	reqLock := idx.acquireStreamRequestLock(bucket, buildStream)
 	go func(reqLock *kvRequest) {
@@ -3721,6 +3732,7 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 						activeTs:  resp.(*MsgSuccessOpenStream).GetActiveTs(),
 						pendingTs: resp.(*MsgSuccessOpenStream).GetPendingTs(),
 						sessionId: sessionId,
+						reqCh:     stopCh,
 					}
 					break retryloop
 
@@ -3746,6 +3758,7 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 							streamId:  buildStream,
 							bucket:    bucket,
 							inMTR:     true,
+							requestCh: stopCh,
 							sessionId: sessionId}
 
 						break retryloop
@@ -3876,13 +3889,16 @@ func (idx *indexer) removeIndexesFromStream(indexList []common.IndexInst,
 				streamId:  streamId,
 				indexList: indexList,
 				respCh:    respCh,
-				sessionId: sessionId}
+				sessionId: sessionId,
+			}
 		} else {
 			cmd = &MsgStreamUpdate{mType: REMOVE_BUCKET_FROM_STREAM,
-				streamId:  streamId,
-				bucket:    bucket,
-				respCh:    respCh,
-				sessionId: sessionId}
+				streamId:      streamId,
+				bucket:        bucket,
+				respCh:        respCh,
+				sessionId:     sessionId,
+				abortRecovery: true,
+			}
 			idx.setStreamBucketState(streamId, bucket, STREAM_INACTIVE)
 		}
 
@@ -4184,10 +4200,9 @@ func (idx *indexer) checkDuplicateInitialBuildRequest(bucket string,
 	//cannot start another one
 	for _, index := range idx.indexInstMap {
 
-		if ((index.State == common.INDEX_STATE_INITIAL ||
+		if (index.State == common.INDEX_STATE_INITIAL ||
 			index.State == common.INDEX_STATE_CATCHUP) &&
-			index.Defn.Bucket == bucket) ||
-			idx.checkStreamRequestPending(common.INIT_STREAM, bucket) {
+			index.Defn.Bucket == bucket {
 
 			errStr := fmt.Sprintf("Build Already In Progress. Bucket %v", bucket)
 			logging.Errorf("Indexer::checkDuplicateInitialBuildRequest %v, %v", index, bucket)
@@ -4229,9 +4244,8 @@ func (idx *indexer) checkDDLInProgress() (bool, []string) {
 	inProgressIndexNames := make([]string, 0, len(idx.indexInstMap))
 	for _, index := range idx.indexInstMap {
 
-		if (index.State == common.INDEX_STATE_INITIAL ||
-			index.State == common.INDEX_STATE_CATCHUP) ||
-			idx.checkStreamRequestPending(common.INIT_STREAM, index.Defn.Bucket) {
+		if index.State == common.INDEX_STATE_INITIAL ||
+			index.State == common.INDEX_STATE_CATCHUP {
 			ddlInProgress = true
 			inProgressIndexNames = append(inProgressIndexNames, index.Defn.Bucket+":"+index.Defn.Name)
 		}
@@ -4264,8 +4278,6 @@ func (idx *indexer) handleUpdateIndexRState(msg Message) {
 	logging.Infof("handleUpdateIndexRState: Index instance %v rstate moved to ACTIVE", instId)
 }
 
-//TODO If this function gets error before its finished, the state
-//can be inconsistent. This needs to be fixed.
 func (idx *indexer) handleInitialBuildDone(msg Message) {
 
 	bucket := msg.(*MsgTKInitBuildDone).GetBucket()
@@ -4530,8 +4542,6 @@ func (idx *indexer) handleMergeStream(msg Message) {
 	}
 }
 
-//TODO If this function gets error before its finished, the state
-//can be inconsistent. This needs to be fixed.
 func (idx *indexer) handleMergeInitStream(msg Message) {
 
 	bucket := msg.(*MsgTKMergeStream).GetBucket()
@@ -4578,6 +4588,7 @@ func (idx *indexer) handleMergeInitStream(msg Message) {
 		bucket:    bucket,
 		respCh:    respCh,
 		stopCh:    stopCh,
+		abortRecovery: true,
 		sessionId: sessionId,
 	}
 
@@ -4596,11 +4607,36 @@ func (idx *indexer) handleMergeInitStream(msg Message) {
 	//at this point, the stream is inactive in all sub-components, so the status
 	//can be set to inactive.
 	idx.setStreamBucketState(streamId, bucket, STREAM_INACTIVE)
+	idx.cleanupStreamBucketState(streamId, bucket)
 
-	if _, ok := idx.streamBucketRequestStopCh[streamId]; !ok {
-		idx.streamBucketRequestStopCh[streamId] = make(BucketRequestStopCh)
+	//enable flush for this bucket in MAINT_STREAM
+	idx.tkCmdCh <- &MsgTKToggleFlush{mType: TK_ENABLE_FLUSH,
+		streamId: common.MAINT_STREAM,
+		bucket:   bucket}
+	<-idx.tkCmdCh
+
+	//for cbq bridge, return response after merge is done and
+	//index is ready to query
+	if !idx.enableManager {
+		if clientCh, ok := idx.bucketCreateClientChMap[bucket]; ok {
+			if clientCh != nil {
+				clientCh <- &MsgSuccess{}
+			}
+			delete(idx.bucketCreateClientChMap, bucket)
+		}
+	} else {
+		var instIdList []common.IndexInstId
+		for _, inst := range indexList {
+			instIdList = append(instIdList, inst.InstId)
+		}
+
+		if err := idx.updateMetaInfoForIndexList(instIdList, true, true,
+			false, false, true, false, false, false, nil); err != nil {
+			common.CrashOnError(err)
+		}
 	}
-	idx.streamBucketRequestStopCh[streamId][bucket] = stopCh
+
+	idx.setStreamBucketCurrRequest(streamId, bucket, cmd, stopCh, sessionId)
 
 	reqLock := idx.acquireStreamRequestLock(bucket, streamId)
 	go func(reqLock *kvRequest) {
@@ -4626,7 +4662,8 @@ func (idx *indexer) handleMergeInitStream(msg Message) {
 						streamId:  streamId,
 						bucket:    bucket,
 						mergeList: indexList,
-						sessionId: sessionId}
+						sessionId: sessionId,
+						reqCh:     stopCh}
 					break retryloop
 
 				default:
@@ -4754,6 +4791,14 @@ func (idx *indexer) stopBucketStream(streamId common.StreamId, bucket string) {
 	idx.merged = idx.removePendingStreamUpdate(idx.merged, streamId, bucket)
 	idx.pruned = idx.removePendingStreamUpdate(idx.pruned, streamId, bucket)
 
+	//if the stream is inactive(e.g. all indexes get dropped)
+	if idx.getStreamBucketState(streamId, bucket) == STREAM_INACTIVE {
+		logging.Infof("Indexer::stopBucketStream StreamId %v Bucket %v State %v. "+
+			"Skip StopBucketStream.", streamId, bucket, idx.getStreamBucketState(streamId, bucket))
+		idx.cleanupStreamBucketState(streamId, bucket)
+		return
+	}
+
 	respCh := make(MsgChannel)
 	stopCh := make(StopChannel)
 
@@ -4779,10 +4824,7 @@ func (idx *indexer) stopBucketStream(streamId common.StreamId, bucket string) {
 		common.CrashOnError(respErr.cause)
 	}
 
-	if _, ok := idx.streamBucketRequestStopCh[streamId]; !ok {
-		idx.streamBucketRequestStopCh[streamId] = make(BucketRequestStopCh)
-	}
-	idx.streamBucketRequestStopCh[streamId][bucket] = stopCh
+	idx.setStreamBucketCurrRequest(streamId, bucket, cmd, stopCh, sessionId)
 
 	reqLock := idx.acquireStreamRequestLock(bucket, streamId)
 	go func(reqLock *kvRequest) {
@@ -4804,7 +4846,8 @@ func (idx *indexer) stopBucketStream(streamId common.StreamId, bucket string) {
 					idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_PREPARE_DONE,
 						streamId:  streamId,
 						bucket:    bucket,
-						sessionId: sessionId}
+						sessionId: sessionId,
+						requestCh: stopCh}
 					break retryloop
 
 				default:
@@ -4938,11 +4981,7 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 	}
 
 	idx.initBuildTsLock(streamId, bucket)
-
-	if _, ok := idx.streamBucketRequestStopCh[streamId]; !ok {
-		idx.streamBucketRequestStopCh[streamId] = make(BucketRequestStopCh)
-	}
-	idx.streamBucketRequestStopCh[streamId][bucket] = stopCh
+	idx.setStreamBucketCurrRequest(streamId, bucket, cmd, stopCh, sessionId)
 
 	reqLock := idx.acquireStreamRequestLock(bucket, streamId)
 	go func(reqLock *kvRequest) {
@@ -4991,6 +5030,7 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 						activeTs:  resp.(*MsgSuccessOpenStream).GetActiveTs(),
 						pendingTs: resp.(*MsgSuccessOpenStream).GetPendingTs(),
 						sessionId: sessionId,
+						requestCh: stopCh,
 					}
 					break retryloop
 
@@ -5024,6 +5064,7 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 							streamId:  streamId,
 							bucket:    bucket,
 							inMTR:     true,
+							requestCh: stopCh,
 							sessionId: sessionId}
 
 						break retryloop
@@ -5856,8 +5897,8 @@ func (idx *indexer) forceCleanupIndexPartition(indexInst *common.IndexInst,
 	}
 
 	if err := idx.sendMsgToClusterMgr(msg); err != nil {
-		logging.Errorf("Indexer::forceCleanupIndexPartition %v %v Got error %v in deleting metadata.  Metadata will be deleted on next indexer restart.",
-			indexInst.InstId, partnId, err)
+		logging.Errorf("Indexer::forceCleanupIndexPartition %v %v Got error %v in deleting metadata. "+
+		"Metadata will be deleted on next indexer restart.", indexInst.InstId, partnId, err)
 	}
 }
 
@@ -6375,20 +6416,6 @@ func (idx *indexer) closeAllStreams() {
 			}
 		}
 	}
-}
-
-func (idx *indexer) checkStreamRequestPending(streamId common.StreamId, bucket string) bool {
-
-	if bmap, ok := idx.streamBucketRequestStopCh[streamId]; ok {
-		if stopCh, ok := bmap[bucket]; ok {
-			if stopCh != nil {
-				logging.Errorf("Indexer::checkStreamRequestPending %v %v %v", bucket, streamId, idx.streamBucketRequestStopCh)
-				return true
-			}
-		}
-	}
-
-	return false
 }
 
 func (idx *indexer) updateMetaInfoForBucket(bucket string,
@@ -7633,13 +7660,6 @@ func (idx *indexer) setRollbackTs(streamId common.StreamId, bucket string,
 	}
 }
 
-func (idx *indexer) cleanupStreamBucketState(streamId common.StreamId, bucket string) {
-
-	delete(idx.streamBucketRequestStopCh[streamId], bucket)
-	delete(idx.streamBucketRollbackTs[streamId], bucket)
-	delete(idx.streamBucketRetryTs[streamId], bucket)
-}
-
 func (idx *indexer) initBuildTsLock(streamId common.StreamId, bucket string) {
 	if _, ok := idx.buildTsLock[streamId]; !ok {
 		idx.buildTsLock[streamId] = make(map[string]*sync.Mutex)
@@ -7708,4 +7728,120 @@ func (idx *indexer) injectRandomDelay(max int) {
 	if idx.config["debug.randomDelayInjection"].Bool() {
 		time.Sleep(time.Duration(rand.Intn(max)) * time.Second)
 	}
+}
+
+//streamBucketCurrRequest helper functions
+func (idx *indexer) setStreamBucketCurrRequest(
+	streamId common.StreamId,
+	bucket string,
+	cmd Message,
+	reqCh StopChannel,
+	sessionId uint64) {
+
+	if _, ok := idx.streamBucketCurrRequest[streamId]; !ok {
+		idx.streamBucketCurrRequest[streamId] = make(BucketCurrRequest)
+	}
+
+	idx.streamBucketCurrRequest[streamId][bucket] = &currRequest{
+		request:   cmd,
+		reqCh:     reqCh,
+		sessionId: sessionId,
+	}
+
+}
+
+//clear the currRequest
+func (idx *indexer) deleteStreamBucketCurrRequest(
+	streamId common.StreamId,
+	bucket string,
+	cmd Message,
+	reqCh StopChannel,
+	sessionId uint64) {
+
+	var req *currRequest
+	if bCurrRequest, ok := idx.streamBucketCurrRequest[streamId]; ok {
+		req = bCurrRequest[bucket]
+	}
+
+	//allow the caller to reset state if stopCh matches
+	if req.reqCh == reqCh {
+		delete(idx.streamBucketCurrRequest[streamId], bucket)
+	} else {
+		logging.Infof("Indexer::deleteStreamBucketCurrRequest Not clearing "+
+			"Curr Request %v SessionId %v. Requested %v SessionId %v. %v %v.", req.request,
+			req.sessionId, cmd, sessionId, streamId, bucket)
+	}
+}
+
+func (idx *indexer) cleanupStreamBucketCurrRequest(
+	streamId common.StreamId,
+	bucket string,
+) {
+	delete(idx.streamBucketCurrRequest[streamId], bucket)
+}
+
+func (idx *indexer) checkStreamRequestPending(
+	streamId common.StreamId,
+	bucket string) bool {
+
+	if bCurrReq, ok := idx.streamBucketCurrRequest[streamId]; ok {
+		if req, ok := bCurrReq[bucket]; ok {
+			if req != nil {
+				logging.Errorf("Indexer::checkStreamRequestPending %v %v %+v",
+					bucket, streamId, req)
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+func (idx *indexer) cleanupStreamBucketState(
+	streamId common.StreamId,
+	bucket string) {
+
+	idx.cleanupStreamBucketRecoveryState(streamId, bucket)
+	idx.cleanupStreamBucketCurrRequest(streamId, bucket)
+}
+
+func (idx *indexer) cleanupStreamBucketRecoveryState(
+	streamId common.StreamId,
+	bucket string) {
+
+	delete(idx.streamBucketRollbackTs[streamId], bucket)
+	delete(idx.streamBucketRetryTs[streamId], bucket)
+}
+
+func (idx *indexer) cleanupAllStreamBucketState(
+	streamId common.StreamId,
+	bucket string) {
+
+	idx.cleanupStreamBucketState(streamId, bucket)
+	delete(idx.streamBucketFlushInProgress[streamId], bucket)
+	delete(idx.streamBucketObserveFlushDone[streamId], bucket)
+}
+
+func (idx *indexer) prepareStreamBucketForFreshStart(
+	streamId common.StreamId,
+	bucket string) {
+
+	logging.Infof("Indexe::prepareStreamBucketForFreshStart %v %v", streamId, bucket)
+
+	//clear all state before fresh start
+	idx.cleanupAllStreamBucketState(streamId, bucket)
+
+	//clear worker state
+	cmd := &MsgStreamUpdate{mType: REMOVE_BUCKET_FROM_STREAM,
+		streamId:      streamId,
+		bucket:        bucket,
+		sessionId:     idx.getCurrentSessionId(streamId, bucket),
+		abortRecovery: true,
+	}
+
+	idx.tkCmdCh <- cmd
+	<-idx.tkCmdCh
+
+	idx.mutMgrCmdCh <- cmd
+	<-idx.mutMgrCmdCh
 }

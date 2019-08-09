@@ -555,16 +555,14 @@ func (m *mutationMgr) handleRemoveIndexListFromStream(cmd Message) {
 	m.lock.Lock()
 	defer m.lock.Unlock()
 
-	//return error if this stream is already closed
+	//ignore if this stream is already closed. This case happens 
+	//when the stream is stopped during recovery and a drop comes in
 	if _, ok := m.streamReaderMap[streamId]; !ok {
 
 		logging.Errorf("MutationMgr::handleRemoveIndexListFromStream "+
 			"Stream Already Closed %v", streamId)
 
-		m.supvCmdch <- &MsgError{
-			err: Error{code: ERROR_MUT_MGR_STREAM_ALREADY_CLOSED,
-				severity: NORMAL,
-				category: MUTATION_MANAGER}}
+		m.supvCmdch <- &MsgSuccess{}
 		return
 	}
 
@@ -626,6 +624,7 @@ func (m *mutationMgr) handleRemoveBucketFromStream(cmd Message) {
 
 	streamId := cmd.(*MsgStreamUpdate).GetStreamId()
 	bucket := cmd.(*MsgStreamUpdate).GetBucket()
+	abort := cmd.(*MsgStreamUpdate).AbortRecovery()
 
 	m.lock.Lock()
 	defer m.lock.Unlock()
@@ -633,13 +632,19 @@ func (m *mutationMgr) handleRemoveBucketFromStream(cmd Message) {
 	//return error if this stream is already closed
 	if _, ok := m.streamReaderMap[streamId]; !ok {
 
-		logging.Errorf("MutationMgr::handleRemoveIndexListFromStream "+
-			"Stream Already Closed %v", streamId)
+		if abort {
+			logging.Infof("MutationMgr::handleRemoveIndexListFromStream "+
+				"Stream Already Closed %v", streamId)
+			m.supvCmdch <- &MsgSuccess{}
+		} else {
+			logging.Errorf("MutationMgr::handleRemoveIndexListFromStream "+
+				"Stream Already Closed %v", streamId)
+			m.supvCmdch <- &MsgError{
+				err: Error{code: ERROR_MUT_MGR_STREAM_ALREADY_CLOSED,
+					severity: NORMAL,
+					category: MUTATION_MANAGER}}
+		}
 
-		m.supvCmdch <- &MsgError{
-			err: Error{code: ERROR_MUT_MGR_STREAM_ALREADY_CLOSED,
-				severity: NORMAL,
-				category: MUTATION_MANAGER}}
 		return
 	}
 

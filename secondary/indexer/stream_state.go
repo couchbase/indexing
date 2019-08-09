@@ -365,7 +365,9 @@ func (ss *StreamState) cleanupBucketFromStream(streamId common.StreamId,
 	}
 	delete(ss.streamBucketFlushDone[streamId], bucket)
 
-	ss.streamBucketStatus[streamId][bucket] = STREAM_INACTIVE
+	if bs, ok := ss.streamBucketStatus[streamId]; ok && bs != nil {
+		bs[bucket] = STREAM_INACTIVE
+	}
 
 	logging.Infof("StreamState::cleanupBucketFromStream Bucket %v Deleted from "+
 		"Stream %v", bucket, streamId)
