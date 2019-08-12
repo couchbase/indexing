@@ -529,7 +529,7 @@ func getresultsfromsender(sender datastore.Sender, isprimary bool, tctx *testCon
 			// (2) nil, false   - in case of explicit stop
 			if isprimary {
 				if entry != nil {
-					scanResults[entry.PrimaryKey] = nil
+					scanResults[entry.PrimaryKey] = make([]value.Value, 0)
 				} else {
 					break
 				}

@@ -1,13 +1,10 @@
 package functionaltests
 
 import (
-	"errors"
-	"fmt"
 	c "github.com/couchbase/indexing/secondary/common"
 	qc "github.com/couchbase/indexing/secondary/queryport/client"
 	"github.com/couchbase/indexing/secondary/tests/framework/datautility"
 	"github.com/couchbase/indexing/secondary/tests/framework/secondaryindex"
-	tv "github.com/couchbase/indexing/secondary/tests/framework/validation"
 	"log"
 	"testing"
 )
@@ -341,13 +338,5 @@ func runMultiScanDesc(scans qc.Scans, reverse, distinct bool,
 	scanResults, err := secondaryindex.Scans(indexName, bucketName, indexScanAddress, scans, reverse, distinct, projection, offset, limit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
 
-	if validateOnlyCount {
-		if len(scanResults) != len(docScanResults) {
-			msg := fmt.Sprintf("Length of expected results %v is not equal to length of scan results %v", len(docScanResults), len(scanResults))
-			FailTestIfError(errors.New(msg), "Error in scan result validation", t)
-		}
-	} else {
-		err = tv.Validate(docScanResults, scanResults)
-		FailTestIfError(err, "Error in scan result validation", t)
-	}
+	validateMultiScanResults(docScanResults, scanResults, validateOnlyCount, projection, t)
 }

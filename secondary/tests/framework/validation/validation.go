@@ -18,7 +18,11 @@ func convertExpectedResponse(exp tc.ScanResponse) tc.ScanResponseActual {
 	var newExpectedResults tc.ScanResponseActual
 	newExpectedResults = make(tc.ScanResponseActual, len(exp))
 	for i, e := range exp {
-		v := make(value.Values, 0, 1024)
+		if e == nil {
+			newExpectedResults[i] = nil
+			continue
+		}
+		v := make(value.Values, 0, len(e))
 		for _, ec := range e {
 			if ec == value.MISSING_VALUE {
 				v = append(v, value.NewMissingValue())
@@ -35,7 +39,11 @@ func convertExpectedGroupAggrResponse(exp tc.GroupAggrScanResponse) tc.GroupAggr
 	var newExpectedResults tc.GroupAggrScanResponseActual
 	newExpectedResults = make(tc.GroupAggrScanResponseActual, len(exp))
 	for i, e := range exp {
-		v := make(value.Values, 0, 1024)
+		if e == nil {
+			newExpectedResults[i] = nil
+			continue
+		}
+		v := make(value.Values, 0, len(e))
 		for _, ec := range e {
 			if ec == value.MISSING_VALUE {
 				v = append(v, value.NewMissingValue())
@@ -57,6 +65,26 @@ func ValidateOld(expectedResponse1, actualResponse1 tc.ScanResponse) error {
 func Validate(expectedResponse1 tc.ScanResponse, actualResponse tc.ScanResponseActual) error {
 	expectedResponse := convertExpectedResponse(expectedResponse1)
 	return ValidateActual(expectedResponse, actualResponse)
+}
+
+func ValidateEmptyProjection(expectedResponse tc.ScanResponse,
+	actualResponse tc.ScanResponseActual) error {
+
+	expectedResponse1 := convertExpectedResponse(expectedResponse)
+	expectedResponse2 := fixEmptyProjection(expectedResponse1)
+	return ValidateActual(expectedResponse2, actualResponse)
+}
+
+func fixEmptyProjection(exp tc.ScanResponseActual) tc.ScanResponseActual {
+	newExp := make(tc.ScanResponseActual, len(exp))
+	for i, e := range exp {
+		if exp[i] == nil {
+			newExp[i] = make([]value.Value, 0)
+		} else {
+			newExp[i] = e
+		}
+	}
+	return newExp
 }
 
 func ValidateActual(expectedResponse tc.ScanResponseActual, actualResponse tc.ScanResponseActual) error {
