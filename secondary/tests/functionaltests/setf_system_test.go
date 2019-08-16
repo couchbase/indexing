@@ -27,6 +27,7 @@ func TestBuildDeferredAnotherBuilding(t *testing.T) {
 	var bucketName = "default"
 	var index1 = "id_company"
 	var index2 = "id_age"
+	var index3 = "id_age1"
 
 	e := secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
 	FailTestIfError(e, "Error in DropAllSecondaryIndexes", t)
@@ -42,8 +43,17 @@ func TestBuildDeferredAnotherBuilding(t *testing.T) {
 	err = secondaryindex.CreateSecondaryIndexAsync(index2, bucketName, indexManagementAddress, "", []string{"age"}, false, []byte("{\"defer_build\": true}"), true, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
+	err = secondaryindex.CreateSecondaryIndexAsync(index3, bucketName, indexManagementAddress, "", []string{"age"}, false, []byte("{\"defer_build\": true}"), true, nil)
+	FailTestIfError(err, "Error in creating the index", t)
+
 	client1, _ := secondaryindex.CreateClient(indexManagementAddress, "test7client")
 	defer client1.Close()
+
+	err = secondaryindex.BuildIndex(index3, bucketName, indexManagementAddress, defaultIndexActiveTimeout)
+	if err != nil {
+		FailTestIfError(e, "Error in TestBuildDeferredAnotherBuilding", t)
+	}
+
 	defn1, _ := secondaryindex.GetDefnID(client1, bucketName, index1)
 	err = secondaryindex.BuildIndexesAsync([]uint64{defn1}, indexManagementAddress, defaultIndexActiveTimeout)
 	FailTestIfError(err, "Error from BuildIndexesAsync of index1", t)

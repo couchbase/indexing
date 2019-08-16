@@ -1472,27 +1472,27 @@ func (m *LifecycleMgr) handleBuildIndexes(content []byte, reqCtx *common.Metadat
 		msg := "Build index fails."
 
 		if len(retryList) == 1 {
-			msg += fmt.Sprint("  %v", retryList[0])
+			msg += fmt.Sprintf(" %v", retryList[0])
 		}
 
 		if len(errList) == 1 {
-			msg += fmt.Sprintf("  %v.", errList[0])
+			msg += fmt.Sprintf(" %v.", errList[0])
 		}
 
 		if len(retryList) > 1 {
-			msg += "  Some index will be retried building in the background."
+			msg += " Some index will be retried building in the background."
 		}
 
 		if len(errList) > 1 {
-			msg += "  Some index cannot be built due to errors."
+			msg += " Some index cannot be built due to errors."
 		}
 
 		if len(skipList) != 0 {
-			msg += "  Some index cannot be built since it may not exist.  Please check if the list of indexes are valid."
+			msg += " Some index cannot be built since it may not exist.  Please check if the list of indexes are valid."
 		}
 
 		if len(errList) > 1 || len(retryList) > 1 {
-			msg += "  For more details, please check index status."
+			msg += " For more details, please check index status."
 		}
 
 		return errors.New(msg)
