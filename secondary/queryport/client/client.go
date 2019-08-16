@@ -1472,8 +1472,16 @@ func (c *GsiClient) doScan(defnID uint64, requestId string, broker *RequestBroke
 	for i := 0; true; {
 		foundScanport := false
 
-		if queryports, targetDefnID, targetInstIds, rollbackTimes, partitions, numPartitions, ok := c.bridge.GetScanport(defnID, excludes, skips); ok {
-			index := c.bridge.GetIndexDefn(targetDefnID)
+		queryports, targetDefnID, targetInstIds, rollbackTimes, partitions, numPartitions, ok := c.bridge.GetScanport(defnID, excludes, skips)
+		var index *common.IndexDefn
+		if ok {
+			index = c.bridge.GetIndexDefn(targetDefnID)
+			if index == nil {
+				err = fmt.Errorf("Index definition not found")
+			}
+		}
+
+		if ok && index != nil {
 			start := time.Now()
 			count, scan_errs, partial, refresh := broker.scatter(c.makeScanClient, index, queryports, targetInstIds,
 				rollbackTimes, partitions, numPartitions, c.settings)
