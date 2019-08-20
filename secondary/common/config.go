@@ -1087,9 +1087,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.plasma.MaxPageSize": ConfigValue{
-		128 * 1024,
+		192 * 1024,
 		"Used with AutoTuneLSSCleaner; target page size limit",
-		128 * 1024,
+		192 * 1024,
 		false, // mutable
 		false, // case-insensitive
 	},
