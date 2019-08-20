@@ -26,6 +26,7 @@ var proddir, bagdir string
 // 4) list indexes: should list only new indexes
 func TestBucketDefaultDelete(t *testing.T) {
 	kvutility.DeleteBucket("default", "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+	secondaryindex.RemoveClientForBucket(kvaddress, "default")
 	time.Sleep(30 * time.Second) // Sleep after bucket create or delete
 	kvutility.CreateBucket("default", "none", "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256", "11212")
 	time.Sleep(30 * time.Second) // Sleep after bucket create or delete
@@ -464,8 +465,11 @@ func TestMultipleBuckets(t *testing.T) {
 	FailTestIfError(err, "Error in scan result validation", t)
 
 	kvutility.DeleteBucket(bucketNames[1], "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+	secondaryindex.RemoveClientForBucket(kvaddress, bucketNames[1])
 	kvutility.DeleteBucket(bucketNames[2], "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+	secondaryindex.RemoveClientForBucket(kvaddress, bucketNames[2])
 	kvutility.DeleteBucket(bucketNames[3], "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+	secondaryindex.RemoveClientForBucket(kvaddress, bucketNames[3])
 	kvutility.EditBucket(bucketNames[0], "", clusterconfig.Username, clusterconfig.Password, kvaddress, "512")
 	time.Sleep(30 * time.Second) // Sleep after bucket create or delete
 
@@ -521,6 +525,7 @@ func SkipTestSaslBucket(t *testing.T) {
 	var field = "age"
 
 	kvutility.DeleteBucket(bucketName, "sasl", clusterconfig.Username, clusterconfig.Password, kvaddress)
+	secondaryindex.RemoveClientForBucket(kvaddress, bucketName)
 	time.Sleep(30 * time.Second) // Sleep after bucket create or delete
 
 	kvutility.CreateBucket(bucketName, "sasl", "", clusterconfig.Username, clusterconfig.Password, kvaddress, "300", "11212")

@@ -3,12 +3,6 @@ package functionaltests
 import (
 	"encoding/json"
 	"fmt"
-	c "github.com/couchbase/indexing/secondary/common"
-	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
-	"github.com/couchbase/indexing/secondary/tests/framework/datautility"
-	"github.com/couchbase/indexing/secondary/tests/framework/kvutility"
-	"github.com/couchbase/indexing/secondary/tests/framework/secondaryindex"
-	tv "github.com/couchbase/indexing/secondary/tests/framework/validation"
 	"log"
 	"math/rand"
 	"os/user"
@@ -16,6 +10,13 @@ import (
 	"strconv"
 	"testing"
 	"time"
+
+	c "github.com/couchbase/indexing/secondary/common"
+	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
+	"github.com/couchbase/indexing/secondary/tests/framework/datautility"
+	"github.com/couchbase/indexing/secondary/tests/framework/kvutility"
+	"github.com/couchbase/indexing/secondary/tests/framework/secondaryindex"
+	tv "github.com/couchbase/indexing/secondary/tests/framework/validation"
 )
 
 func TestLargeDocumentSize(t *testing.T) {
@@ -189,6 +190,7 @@ func TestSameIndexNameInTwoBuckets(t *testing.T) {
 
 	kvutility.EditBucket(bucketNames[0], "", clusterconfig.Username, clusterconfig.Password, kvaddress, "512")
 	kvutility.DeleteBucket(bucketNames[1], "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+	secondaryindex.RemoveClientForBucket(kvaddress, bucketNames[1])
 	time.Sleep(30 * time.Second) // Sleep after bucket create or delete
 
 	tc.ClearMap(docs)

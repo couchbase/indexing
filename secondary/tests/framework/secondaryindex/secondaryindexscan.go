@@ -2,13 +2,14 @@ package secondaryindex
 
 import (
 	"errors"
+	"log"
+	"time"
+
 	"github.com/couchbase/indexing/secondary/collatejson"
 	c "github.com/couchbase/indexing/secondary/common"
 	qc "github.com/couchbase/indexing/secondary/queryport/client"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 	"github.com/couchbase/query/value"
-	"log"
-	"time"
 )
 
 var CheckCollation = false
@@ -87,12 +88,10 @@ func Range(indexName, bucketName, server string, low, high []interface{}, inclus
 	scanErr = nil
 	var previousSecKey value.Value
 
-	// ToDo: Create a client pool
-	client, e := CreateClient(server, "2itest")
+	client, e := GetOrCreateClient(server, "2itest")
 	if e != nil {
 		return nil, e
 	}
-	defer client.Close()
 
 	defnID, _ := GetDefnID(client, bucketName, indexName)
 	scanResults := make(tc.ScanResponseActual)
@@ -184,12 +183,11 @@ func Lookup(indexName, bucketName, server string, values []interface{},
 
 	var scanErr error
 	scanErr = nil
-	// ToDo: Create a client pool
-	client, e := CreateClient(server, "2itest")
+
+	client, e := GetOrCreateClient(server, "2itest")
 	if e != nil {
 		return nil, e
 	}
-	defer client.Close()
 
 	defnID, _ := GetDefnID(client, bucketName, indexName)
 	scanResults := make(tc.ScanResponseActual)
@@ -257,12 +255,10 @@ func ScanAll(indexName, bucketName, server string, limit int64,
 	scanErr = nil
 	var previousSecKey value.Value
 
-	// ToDo: Create a client pool
-	client, e := CreateClient(server, "2itest")
+	client, e := GetOrCreateClient(server, "2itest")
 	if e != nil {
 		return nil, e
 	}
-	defer client.Close()
 
 	defnID, _ := GetDefnID(client, bucketName, indexName)
 	scanResults := make(tc.ScanResponseActual)
@@ -334,12 +330,11 @@ func ScanAll(indexName, bucketName, server string, limit int64,
 
 func CountRange(indexName, bucketName, server string, low, high []interface{}, inclusion uint32,
 	consistency c.Consistency, vector *qc.TsConsistency) (int64, error) {
-	// ToDo: Create a client pool
-	client, e := CreateClient(server, "2itest")
+
+	client, e := GetOrCreateClient(server, "2itest")
 	if e != nil {
 		return 0, e
 	}
-	defer client.Close()
 
 	defnID, _ := GetDefnID(client, bucketName, indexName)
 	count, err := client.CountRange(defnID, "", c.SecondaryKey(low), c.SecondaryKey(high), qc.Inclusion(inclusion), consistency, vector)
@@ -352,12 +347,11 @@ func CountRange(indexName, bucketName, server string, low, high []interface{}, i
 
 func CountLookup(indexName, bucketName, server string, values []interface{},
 	consistency c.Consistency, vector *qc.TsConsistency) (int64, error) {
-	// ToDo: Create a client pool
-	client, e := CreateClient(server, "2itest")
+
+	client, e := GetOrCreateClient(server, "2itest")
 	if e != nil {
 		return 0, e
 	}
-	defer client.Close()
 
 	defnID, _ := GetDefnID(client, bucketName, indexName)
 	count, err := client.CountLookup(defnID, "", []c.SecondaryKey{values}, consistency, vector)
@@ -369,12 +363,11 @@ func CountLookup(indexName, bucketName, server string, values []interface{},
 }
 
 func RangeStatistics(indexName, bucketName, server string, low, high []interface{}, inclusion uint32) error {
-	// ToDo: Create a client pool
-	client, e := CreateClient(server, "2itest")
+
+	client, e := GetOrCreateClient(server, "2itest")
 	if e != nil {
 		return e
 	}
-	defer client.Close()
 
 	defnID, _ := GetDefnID(client, bucketName, indexName)
 	statistics, err := client.RangeStatistics(defnID, "", c.SecondaryKey(low), c.SecondaryKey(high), qc.Inclusion(inclusion))
@@ -400,12 +393,10 @@ func Scans(indexName, bucketName, server string, scans qc.Scans, reverse, distin
 	scanErr = nil
 	var previousSecKey value.Value
 
-	// ToDo: Create a client pool
-	client, e := CreateClient(server, "2itest")
+	client, e := GetOrCreateClient(server, "2itest")
 	if e != nil {
 		return nil, e
 	}
-	defer client.Close()
 
 	defnID, _ := GetDefnID(client, bucketName, indexName)
 	scanResults := make(tc.ScanResponseActual)
@@ -491,12 +482,10 @@ func MultiScanCount(indexName, bucketName, server string, scans qc.Scans, distin
 			consistency, vector)
 	}
 
-	// ToDo: Create a client pool
-	client, e := CreateClient(server, "2itest")
+	client, e := GetOrCreateClient(server, "2itest")
 	if e != nil {
 		return 0, e
 	}
-	defer client.Close()
 
 	defnID, _ := GetDefnID(client, bucketName, indexName)
 	count, err := client.MultiScanCount(defnID, "", scans, distinct, consistency, vector)
@@ -521,12 +510,10 @@ func Scan3(indexName, bucketName, server string, scans qc.Scans, reverse, distin
 	scanErr = nil
 	var previousSecKey value.Value
 
-	// ToDo: Create a client pool
-	client, e := CreateClient(server, "2itest")
+	client, e := GetOrCreateClient(server, "2itest")
 	if e != nil {
 		return nil, nil, e
 	}
-	defer client.Close()
 
 	defnID, _ := GetDefnID(client, bucketName, indexName)
 
