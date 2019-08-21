@@ -170,6 +170,11 @@ type memdbSlice struct {
 	lastBufferSizeCheckTime     time.Time
 	maxKeySizeInLastInterval    int64
 	maxArrKeySizeInLastInterval int64
+
+	//Below is used to track number of keys skipped due to errors
+	//This count is used to log message to console logs
+	//The count is reset when messages are logged to console
+	numKeysSkipped int32
 }
 
 func NewMemDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
@@ -479,6 +484,24 @@ func (mdb *memdbSlice) periodicSliceBuffersReset() {
 	}
 }
 
+func (mdb *memdbSlice) logErrorsToConsole() {
+
+	numSkipped := atomic.LoadInt32(&mdb.numKeysSkipped)
+	if numSkipped == 0 {
+		return
+	}
+
+	mdb.confLock.RLock()
+	clusterAddr := mdb.sysconf["clusterAddr"].String()
+	mdb.confLock.RUnlock()
+
+	logMsg := fmt.Sprintf("Index entries were skipped in index: %v, bucket: %v, "+
+		"IndexInstId: %v PartitionId: %v due to errors. Please check indexer logs for more details.",
+		mdb.idxDefn.Name, mdb.idxDefn.Bucket, mdb.idxInstId, mdb.idxPartnId)
+	common.Console(clusterAddr, logMsg)
+	atomic.StoreInt32(&mdb.numKeysSkipped, 0)
+}
+
 func (mdb *memdbSlice) insert(key []byte, docid []byte, workerId int, meta *MutationMeta) int {
 	var nmut int
 
@@ -527,6 +550,7 @@ func (mdb *memdbSlice) insertSecIndex(key []byte, docid []byte, workerId int, me
 	if err != nil {
 		logging.Errorf("MemDBSlice::insertSecIndex Slice Id %v IndexInstId %v PartitionId %v "+
 			"Skipping docid:%s (%v)", mdb.Id, mdb.idxInstId, mdb.idxPartnId, logging.TagStrUD(docid), err)
+		atomic.AddInt32(&mdb.numKeysSkipped, 1)
 		return mdb.deleteSecIndex(docid, workerId)
 	}
 
@@ -572,6 +596,7 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 	if !szConf.allowLargeKeys && len(keys) > szConf.maxArrayIndexEntrySize {
 		logging.Errorf("MemDBSlice::insertSecArrayIndex Error indexing docid: %s in Slice: %v. Error: Encoded array key (size %v) too long (> %v). Skipped.",
 			logging.TagStrUD(docid), mdb.id, len(keys), szConf.maxArrayIndexEntrySize)
+		atomic.AddInt32(&mdb.numKeysSkipped, 1)
 		return mdb.deleteSecArrayIndex(docid, workerId)
 	}
 
@@ -582,6 +607,7 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 	if err != nil {
 		logging.Errorf("MemDBSlice::insert Error indexing docid: %s in Slice: %v. Error in creating "+
 			"compostite new secondary keys %v. Skipped.", logging.TagStrUD(docid), mdb.id, err)
+		atomic.AddInt32(&mdb.numKeysSkipped, 1)
 		return mdb.deleteSecArrayIndex(docid, workerId)
 	}
 	if int64(newbufLen) > atomic.LoadInt64(&mdb.maxArrKeySizeInLastInterval) {
@@ -610,7 +636,10 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 	//get keys in original form
 	if mdb.idxDefn.Desc != nil {
 		for _, item := range oldEntriesBytes {
-			jsonEncoder.ReverseCollate(item, mdb.idxDefn.Desc)
+			_, err = jsonEncoder.ReverseCollate(item, mdb.idxDefn.Desc)
+			// If error From ReverseCollate here, crash as old key is not expected
+			// to fail in ReverseCollate. It can indicate storage corruption
+			common.CrashOnError(err)
 		}
 
 	}
@@ -634,7 +663,10 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 	//convert to storage format
 	if mdb.idxDefn.Desc != nil {
 		for _, item := range list.Keys() {
-			jsonEncoder.ReverseCollate(item, mdb.idxDefn.Desc)
+			_, err = jsonEncoder.ReverseCollate(item, mdb.idxDefn.Desc)
+			// If error From ReverseCollate here, crash as old key is not expected
+			// to fail in ReverseCollate. It can indicate storage corruption
+			common.CrashOnError(err)
 		}
 
 	}
@@ -648,6 +680,7 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 			if err != nil {
 				logging.Errorf("MemDBSlice::insertSecArrayIndex Slice Id %v IndexInstId %v PartitionId %v "+
 					"Skipping docid:%s (%v)", mdb.Id, mdb.idxInstId, mdb.idxPartnId, logging.TagStrUD(docid), err)
+				atomic.AddInt32(&mdb.numKeysSkipped, 1)
 				return emptyList()
 			}
 			oldSz := len(entry)
@@ -669,6 +702,7 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 			if err != nil {
 				logging.Errorf("MemDBSlice::insertSecArrayIndex Slice Id %v IndexInstId %v PartitionId %v "+
 					"Skipping docid:%s (%v)", mdb.Id, mdb.idxInstId, mdb.idxPartnId, logging.TagStrUD(docid), err)
+				atomic.AddInt32(&mdb.numKeysSkipped, 1)
 				return emptyList()
 			}
 			newNode := mdb.main[workerId].Put2(entry)
@@ -871,6 +905,9 @@ func (mdb *memdbSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 
 		// Reset buffer sizes periodically
 		mdb.periodicSliceBuffersReset()
+
+		// Check if there are errors that need to be logged to console
+		mdb.logErrorsToConsole()
 	}
 
 	return s, err
@@ -1659,7 +1696,10 @@ func (s *memdbSnapshot) MultiScanCount(ctx IndexReaderContext, low, high IndexKe
 				revbuf := (*revbuf)[:0]
 				//copy is required, otherwise storage may get updated
 				revbuf = append(revbuf, entry...)
-				jsonEncoder.ReverseCollate(revbuf, s.slice.idxDefn.Desc)
+				_, err = jsonEncoder.ReverseCollate(revbuf, s.slice.idxDefn.Desc)
+				if err != nil {
+					return err
+				}
 				entry = revbuf
 			}
 			if scan.ScanType == FilterRangeReq {
@@ -1681,6 +1721,9 @@ func (s *memdbSnapshot) MultiScanCount(ctx IndexReaderContext, low, high IndexKe
 					// For Count Distinct, only leading key needs to be considered for
 					// distinct comparison as N1QL supports distinct on only single key
 					entry, err = projectLeadingKey(ck, entry, buf)
+					if err != nil {
+						return err
+					}
 				}
 				if len(*previousRow) != 0 && distinctCompare(entry, *previousRow) {
 					return nil // Ignore the entry as it is same as previous entry

@@ -556,7 +556,10 @@ func (fdb *fdbSlice) insertSecArrayIndex(key []byte, rawKey []byte, docid []byte
 
 		//get the key in original form
 		if fdb.idxDefn.Desc != nil {
-			jsonEncoder.ReverseCollate(oldkey, fdb.idxDefn.Desc)
+			_, err = jsonEncoder.ReverseCollate(oldkey, fdb.idxDefn.Desc)
+			if err != nil {
+				fdb.checkFatalDbError(err)
+			}
 		}
 
 		if oldEntriesBytes, oldKeyCount, _, err = ArrayIndexItems(oldkey, fdb.arrayExprPosition,
@@ -570,7 +573,10 @@ func (fdb *fdbSlice) insertSecArrayIndex(key []byte, rawKey []byte, docid []byte
 
 		//get the key in original form
 		if fdb.idxDefn.Desc != nil {
-			jsonEncoder.ReverseCollate(key, fdb.idxDefn.Desc)
+			_, err = jsonEncoder.ReverseCollate(key, fdb.idxDefn.Desc)
+			if err != nil {
+				fdb.checkFatalDbError(err)
+			}
 		}
 
 		tmpBufPtr := arrayEncBufPool.Get()
@@ -687,7 +693,10 @@ func (fdb *fdbSlice) insertSecArrayIndex(key []byte, rawKey []byte, docid []byte
 
 		//convert to storage format
 		if fdb.idxDefn.Desc != nil {
-			jsonEncoder.ReverseCollate(key, fdb.idxDefn.Desc)
+			_, err = jsonEncoder.ReverseCollate(key, fdb.idxDefn.Desc)
+			if err != nil {
+				fdb.checkFatalDbError(err)
+			}
 		}
 
 		if err = fdb.back[workerId].SetKV(docid, key); err != nil {
@@ -829,7 +838,10 @@ func (fdb *fdbSlice) deleteSecArrayIndex(docid []byte, workerId int) (nmut int) 
 
 	//get the key in original form
 	if fdb.idxDefn.Desc != nil {
-		jsonEncoder.ReverseCollate(olditm, fdb.idxDefn.Desc)
+		_, err = jsonEncoder.ReverseCollate(olditm, fdb.idxDefn.Desc)
+		if err != nil {
+			fdb.checkFatalDbError(err)
+		}
 	}
 
 	indexEntriesToBeDeleted, keyCount, _, err := ArrayIndexItems(olditm, fdb.arrayExprPosition,

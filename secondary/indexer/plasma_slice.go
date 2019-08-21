@@ -147,6 +147,11 @@ type plasmaSlice struct {
 	lastBufferSizeCheckTime     time.Time
 	maxKeySizeInLastInterval    int64
 	maxArrKeySizeInLastInterval int64
+
+	//Below is used to track number of keys skipped due to errors
+	//This count is used to log message to console logs
+	//The count is reset when messages are logged to console
+	numKeysSkipped int32
 }
 
 func newPlasmaSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
@@ -605,6 +610,24 @@ func (mdb *plasmaSlice) periodicSliceBuffersReset() {
 	}
 }
 
+func (mdb *plasmaSlice) logErrorsToConsole() {
+
+	numSkipped := atomic.LoadInt32(&mdb.numKeysSkipped)
+	if numSkipped == 0 {
+		return
+	}
+
+	mdb.confLock.RLock()
+	clusterAddr := mdb.sysconf["clusterAddr"].String()
+	mdb.confLock.RUnlock()
+
+	logMsg := fmt.Sprintf("Index entries were skipped in index: %v, bucket: %v, "+
+		"IndexInstId: %v PartitionId: %v due to errors. Please check indexer logs for more details.",
+		mdb.idxDefn.Name, mdb.idxDefn.Bucket, mdb.idxInstId, mdb.idxPartnId)
+	common.Console(clusterAddr, logMsg)
+	atomic.StoreInt32(&mdb.numKeysSkipped, 0)
+}
+
 func (mdb *plasmaSlice) insert(key []byte, docid []byte, workerId int,
 	init bool, meta *MutationMeta) int {
 	var nmut int
@@ -668,6 +691,7 @@ func (mdb *plasmaSlice) insertSecIndex(key []byte, docid []byte, workerId int, i
 	if err != nil {
 		logging.Errorf("plasmaSlice::insertSecIndex Slice Id %v IndexInstId %v PartitionId %v "+
 			"Skipping docid:%s (%v)", mdb.Id, mdb.idxInstId, mdb.idxPartnId, logging.TagStrUD(docid), err)
+		atomic.AddInt32(&mdb.numKeysSkipped, 1)
 		return ndel
 	}
 
@@ -709,6 +733,7 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 	if !szConf.allowLargeKeys && len(key) > szConf.maxArrayIndexEntrySize {
 		logging.Errorf("plasmaSlice::insertSecArrayIndex Error indexing docid: %s in Slice: %v. Error: Encoded array key (size %v) too long (> %v). Skipped.",
 			logging.TagStrUD(docid), mdb.id, len(key), szConf.maxArrayIndexEntrySize)
+		atomic.AddInt32(&mdb.numKeysSkipped, 1)
 		mdb.deleteSecArrayIndex(docid, workerId)
 		return 0
 	}
@@ -743,7 +768,14 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 
 		//get the key in original form
 		if mdb.idxDefn.Desc != nil {
-			jsonEncoder.ReverseCollate(oldkey, mdb.idxDefn.Desc)
+			_, err = jsonEncoder.ReverseCollate(oldkey, mdb.idxDefn.Desc)
+			if err != nil {
+				logging.Errorf("plasmaSlice::insertSecArrayIndex SliceId %v IndexInstId %v PartitionId %v. "+
+					"Error from ReverseCollate of old key. Skipping docid:%s Error: %v",
+					mdb.id, mdb.idxInstId, mdb.idxPartnId, logging.TagStrUD(docid), err)
+				mdb.deleteSecArrayIndexNoTx(docid, workerId)
+				return 0
+			}
 		}
 
 		oldEntriesBytes, oldKeyCount, newbufLen, err = ArrayIndexItems(oldkey, mdb.arrayExprPosition,
@@ -754,6 +786,7 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 			logging.Errorf("plasmaSlice::insertSecArrayIndex SliceId %v IndexInstId %v PartitionId %v Error in retrieving "+
 				"compostite old secondary keys. Skipping docid:%s Error: %v",
 				mdb.id, mdb.idxInstId, mdb.idxPartnId, logging.TagStrUD(docid), err)
+			atomic.AddInt32(&mdb.numKeysSkipped, 1)
 			mdb.deleteSecArrayIndexNoTx(docid, workerId)
 			return 0
 		}
@@ -768,6 +801,7 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 			logging.Errorf("plasmaSlice::insertSecArrayIndex SliceId %v IndexInstId %v PartitionId %v Error in creating "+
 				"compostite new secondary keys. Skipping docid:%s Error: %v",
 				mdb.id, mdb.idxInstId, mdb.idxPartnId, logging.TagStrUD(docid), err)
+			atomic.AddInt32(&mdb.numKeysSkipped, 1)
 			mdb.deleteSecArrayIndexNoTx(docid, workerId)
 			return 0
 		}
@@ -831,6 +865,7 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 				logging.Errorf("plasmaSlice::insertSecArrayIndex SliceId %v IndexInstId %v PartitionId %v Error forming entry "+
 					"to be added to main index. Skipping docid:%s Error: %v",
 					mdb.id, mdb.idxInstId, mdb.idxPartnId, logging.TagStrUD(docid), err)
+				atomic.AddInt32(&mdb.numKeysSkipped, 1)
 				mdb.deleteSecArrayIndexNoTx(docid, workerId)
 				return 0
 			}
@@ -859,6 +894,7 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 				logging.Errorf("plasmaSlice::insertSecArrayIndex SliceId %v IndexInstId %v PartitionId %v Error forming entry "+
 					"to be added to main index. Skipping docid:%s Error: %v",
 					mdb.id, mdb.idxInstId, mdb.idxPartnId, logging.TagStrUD(docid), err)
+				atomic.AddInt32(&mdb.numKeysSkipped, 1)
 				mdb.deleteSecArrayIndexNoTx(docid, workerId)
 				return 0
 			}
@@ -896,7 +932,18 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 
 		//convert to storage format
 		if mdb.idxDefn.Desc != nil {
-			jsonEncoder.ReverseCollate(key, mdb.idxDefn.Desc)
+			_, err = jsonEncoder.ReverseCollate(key, mdb.idxDefn.Desc)
+			if err != nil {
+				// If error From ReverseCollate here, rollback adds, rollback deletes,
+				// skip mutation, log and delete old key
+				rollbackDeletes(len(indexEntriesToBeDeleted) - 1)
+				rollbackAdds(len(indexEntriesToBeAdded) - 1)
+				logging.Errorf("plasmaSlice::insertSecArrayIndex SliceId %v IndexInstId %v PartitionId %v."+
+					"Error from ReverseCollate of new key. Skipping docid:%s Error: %v",
+					mdb.id, mdb.idxInstId, mdb.idxPartnId, logging.TagStrUD(docid), err)
+				mdb.deleteSecArrayIndexNoTx(docid, workerId)
+				return 0
+			}
 		}
 
 		if oldkey != nil {
@@ -1043,7 +1090,9 @@ func (mdb *plasmaSlice) deleteSecArrayIndexNoTx(docid []byte, workerId int) (nmu
 
 	//get the key in original form
 	if mdb.idxDefn.Desc != nil {
-		jsonEncoder.ReverseCollate(olditm, mdb.idxDefn.Desc)
+		_, err = jsonEncoder.ReverseCollate(olditm, mdb.idxDefn.Desc)
+		// If error From ReverseCollate here, crash as it is old key
+		common.CrashOnError(err)
 	}
 
 	indexEntriesToBeDeleted, keyCount, _, err := ArrayIndexItems(olditm, mdb.arrayExprPosition,
@@ -1175,8 +1224,12 @@ func (mdb *plasmaSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 	if info.IsCommitted() {
 		logging.Infof("plasmaSlice::OpenSnapshot SliceId %v IndexInstId %v PartitionId %v Creating New "+
 			"Snapshot %v", mdb.id, mdb.idxInstId, mdb.idxPartnId, snapInfo)
+
 		// Reset buffer sizes periodically
 		mdb.periodicSliceBuffersReset()
+
+		// Check if there are errors that need to be logged to console
+		mdb.logErrorsToConsole()
 	}
 	mdb.setCommittedCount()
 
@@ -2083,7 +2136,11 @@ func (s *plasmaSnapshot) MultiScanCount(ctx IndexReaderContext, low, high IndexK
 				revbuf := (*revbuf)[:0]
 				//copy is required, otherwise storage may get updated
 				revbuf = append(revbuf, entry...)
-				jsonEncoder.ReverseCollate(revbuf, s.slice.idxDefn.Desc)
+				_, err = jsonEncoder.ReverseCollate(revbuf, s.slice.idxDefn.Desc)
+				if err != nil {
+					return err
+				}
+
 				entry = revbuf
 			}
 			if scan.ScanType == FilterRangeReq {
@@ -2105,6 +2162,9 @@ func (s *plasmaSnapshot) MultiScanCount(ctx IndexReaderContext, low, high IndexK
 					// For Count Distinct, only leading key needs to be considered for
 					// distinct comparison as N1QL syntax supports distinct on only single key
 					entry, err = projectLeadingKey(ck, entry, buf)
+					if err != nil {
+						return err
+					}
 				}
 				if len(*previousRow) != 0 && distinctCompare(entry, *previousRow) {
 					return nil // Ignore the entry as it is same as previous entry

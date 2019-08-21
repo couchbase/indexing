@@ -680,7 +680,10 @@ func (r *ScanRequest) fillFilterLowHigh(compFilters []CompositeElementFilter, fi
 		if joinedLow, e = r.joinKeys(lows2bytes); e != nil {
 			return e
 		}
-		lowKey = getReverseCollatedIndexKey(joinedLow, r.IndexInst.Defn.Desc[:len(lows2)])
+		lowKey, e = getReverseCollatedIndexKey(joinedLow, r.IndexInst.Defn.Desc[:len(lows2)])
+		if e != nil {
+			return e
+		}
 	} else {
 		lowKey = MinIndexKey
 	}
@@ -693,7 +696,10 @@ func (r *ScanRequest) fillFilterLowHigh(compFilters []CompositeElementFilter, fi
 		if joinedHigh, e = r.joinKeys(highs2bytes); e != nil {
 			return e
 		}
-		highKey = getReverseCollatedIndexKey(joinedHigh, r.IndexInst.Defn.Desc[:len(highs2)])
+		highKey, e = getReverseCollatedIndexKey(joinedHigh, r.IndexInst.Defn.Desc[:len(highs2)])
+		if e != nil {
+			return e
+		}
 	} else {
 		highKey = MaxIndexKey
 	}
@@ -729,7 +735,10 @@ func (r *ScanRequest) fillFilterEquals(protoScan *protobuf.Scan, filter *Filter)
 	if !r.IndexInst.Defn.HasDescending() {
 		eqReverse = equalsKey
 	} else {
-		eqReverse = jsonEncoder.ReverseCollate(equalsKey, r.IndexInst.Defn.Desc[:len(equals)])
+		eqReverse, e = jsonEncoder.ReverseCollate(equalsKey, r.IndexInst.Defn.Desc[:len(equals)])
+		if e != nil {
+			return e
+		}
 	}
 	eqKey := secondaryKey(eqReverse)
 
@@ -1724,10 +1733,13 @@ func compileN1QLExpression(expr string) (expression.Expression, error) {
 //
 /////////////////////////////////////////////////////////////////////////
 
-func getReverseCollatedIndexKey(input []byte, desc []bool) IndexKey {
-	reversed := jsonEncoder.ReverseCollate(input, desc)
+func getReverseCollatedIndexKey(input []byte, desc []bool) (IndexKey, error) {
+	reversed, err := jsonEncoder.ReverseCollate(input, desc)
+	if err != nil {
+		return nil, err
+	}
 	key := secondaryKey(reversed)
-	return &key
+	return &key, nil
 }
 
 func flipInclusion(incl Inclusion, desc []bool) Inclusion {

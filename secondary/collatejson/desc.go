@@ -1,11 +1,21 @@
 package collatejson
 
+import "fmt"
 import "strconv"
+
+import "github.com/couchbase/indexing/secondary/logging"
 
 //ReverseCollate reverses the bits in an encoded byte stream based
 // on the fields specified as desc. Calling reverse on an already
 //reversed stream gives back the original stream.
-func (codec *Codec) ReverseCollate(code []byte, desc []bool) []byte {
+func (codec *Codec) ReverseCollate(code []byte, desc []bool) (rev []byte, e error) {
+
+	defer func() {
+		if r := recover(); r != nil {
+			logging.Fatalf("ReverseCollate:: recovered panic - %s \n %s", r, logging.StackTrace())
+			e = fmt.Errorf("%v", r)
+		}
+	}()
 
 	for i, d := range desc {
 		if d {
@@ -13,7 +23,7 @@ func (codec *Codec) ReverseCollate(code []byte, desc []bool) []byte {
 			flipBits(field)
 		}
 	}
-	return code
+	return code, nil
 }
 
 //flips the bits of the given byte slice
