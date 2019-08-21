@@ -3072,12 +3072,12 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 		rollbackTs := kvresp.(*MsgRollback).GetRollbackTs()
 		if rollbackTs != nil && rollbackTs.Len() > 0 {
 
-			tk.lock.RLock()
+			tk.lock.Lock()
 			ts := rollbackTs.Union(tk.ss.streamBucketKVRollbackTsMap[streamId][bucket])
 			if ts != nil {
 				tk.ss.streamBucketKVRollbackTsMap[streamId][bucket] = ts
 			}
-			tk.lock.RUnlock()
+			tk.lock.Unlock()
 
 			if ts == nil {
 				logging.Errorf("Timekeeper::sendRestartMsg Received Rollback Msg For "+
@@ -3092,17 +3092,17 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 					sessionId: sessionId,
 				}
 
-				tk.lock.RLock()
+				tk.lock.Lock()
 				delete(tk.ss.streamBucketRepairStopCh[streamId], bucket)
-				tk.lock.RUnlock()
+				tk.lock.Unlock()
 
 				return
 			}
 
-			tk.lock.RLock()
+			tk.lock.Lock()
 			// update repair state even if there is rollback
 			tk.ss.updateRepairState(streamId, bucket, repairVbs, shutdownVbs)
-			tk.lock.RUnlock()
+			tk.lock.Unlock()
 
 			tk.repairStream(streamId, bucket)
 
@@ -3119,9 +3119,9 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 				sessionId: sessionId,
 			}
 
-			tk.lock.RLock()
+			tk.lock.Lock()
 			delete(tk.ss.streamBucketRepairStopCh[streamId], bucket)
-			tk.lock.RUnlock()
+			tk.lock.Unlock()
 		}
 
 	case KV_STREAM_REPAIR:
