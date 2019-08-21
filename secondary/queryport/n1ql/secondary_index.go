@@ -876,10 +876,10 @@ func (si *secondaryIndex) cleanupBackfillFile(requestId string, broker *qclient.
 		for _, tmpfile := range broker.GetBackfills() {
 			tmpfile.Close()
 			name := tmpfile.Name()
-			fmsg := "%v request(%v) removing backfill file %v ...\n"
+			fmsg := "%v request(%v) removing temp file %v ...\n"
 			l.Infof(fmsg, si.gsi.logPrefix, requestId, name)
 			if err := os.Remove(name); err != nil {
-				fmsg := "%v remove backfill file %v unexpected failure: %v\n"
+				fmsg := "%v remove temp file %v unexpected failure: %v\n"
 				l.Errorf(fmsg, si.gsi.logPrefix, name, err)
 			}
 			atomic.AddInt64(&si.gsi.totalbackfills, 1)
@@ -1398,15 +1398,15 @@ func makeResponsehandler(
 			waitGroup.Done()
 			atomic.AddInt64(&backfillFin, 1)
 			l.Debugf(
-				"%v %q finished backfill for %v ...\n",
+				"%v %q finished reading from temp file for %v ...\n",
 				lprefix, requestId, name)
 
 			if r := recover(); r != nil {
-				l.Errorf("%v %q Error %v during backfill", lprefix, requestId, r)
+				l.Errorf("%v %q Error %v during temp file read", lprefix, requestId, r)
 			}
 		}()
 		l.Debugf(
-			"%v %q started backfill for %v ...\n", lprefix, requestId, name)
+			"%v %q started temp file read for %v ...\n", lprefix, requestId, name)
 		for {
 			var skeys c.ScanResultEntries
 
@@ -1424,7 +1424,7 @@ func makeResponsehandler(
 			}
 			cummsize := atomic.LoadInt64(&si.gsi.backfillSize) / (1024 * 1024)
 			if cummsize > backfillLimit {
-				fmsg := "%q backfill exceeded limit %v, %v"
+				fmsg := "%v temp file size exceeded limit %v, %v"
 				err := fmt.Errorf(fmsg, requestId, backfillLimit, cummsize)
 				conn.Error(n1qlError(client, err))
 				broker.Error(err, instId, partitions)
@@ -1432,7 +1432,7 @@ func makeResponsehandler(
 			}
 
 			if err := dec.Decode(&skeys); err != nil {
-				fmsg := "%v %q decoding from backfill %v: %v\n"
+				fmsg := "%v %q decoding from temp file %v: %v\n"
 				l.Errorf(fmsg, lprefix, requestId, name, err)
 				conn.Error(n1qlError(client, err))
 				broker.Error(err, instId, partitions)
@@ -1440,13 +1440,13 @@ func makeResponsehandler(
 			}
 			pkeys := make([][]byte, 0)
 			if err := dec.Decode(&pkeys); err != nil {
-				fmsg := "%v %q decoding from backfill %v: %v\n"
+				fmsg := "%v %q decoding from temp file %v: %v\n"
 				l.Errorf(fmsg, lprefix, requestId, name, err)
 				conn.Error(n1qlError(client, err))
 				broker.Error(err, instId, partitions)
 				return
 			}
-			l.Tracef("%v backfill read %v entries\n", lprefix, skeys.GetLength())
+			l.Tracef("%v temp file read %v entries\n", lprefix, skeys.GetLength())
 			if primed == false {
 				atomic.AddInt64(&si.gsi.primedur, int64(time.Since(starttm)))
 				primed = true
@@ -1535,7 +1535,7 @@ func makeResponsehandler(
 				name = tmpfile.Name()
 			}
 			if err != nil {
-				fmsg := "%v %q creating backfill file %v : %v\n"
+				fmsg := "%v %q creating temp file %v : %v\n"
 				l.Errorf(fmsg, lprefix, requestId, name, err)
 				tmpfile = nil
 				conn.Error(n1qlError(client, err))
@@ -1543,14 +1543,14 @@ func makeResponsehandler(
 				return false
 
 			} else {
-				fmsg := "%v %v new backfill file ... %v\n"
+				fmsg := "%v %v new temp file ... %v\n"
 				l.Infof(fmsg, lprefix, requestId, name)
 				broker.AddBackfill(tmpfile)
 				// encoder
 				enc = gob.NewEncoder(tmpfile)
 				readfd, err = os.OpenFile(name, os.O_RDONLY, 0666)
 				if err != nil {
-					fmsg := "%v %v reading backfill file %v: %v\n"
+					fmsg := "%v %v reading temp file %v: %v\n"
 					l.Errorf(fmsg, lprefix, requestId, name, err)
 					conn.Error(n1qlError(client, err))
 					broker.Error(err, instId, partitions)
@@ -1567,14 +1567,14 @@ func makeResponsehandler(
 			// whether temp-file is exhausted the limit.
 			cummsize := atomic.LoadInt64(&si.gsi.backfillSize) / (1024 * 1024)
 			if cummsize > backfillLimit {
-				fmsg := "%q backfill exceeded limit %v, %v"
+				fmsg := "%q temp file size exceeded limit %v, %v"
 				err := fmt.Errorf(fmsg, requestId, backfillLimit, cummsize)
 				conn.Error(n1qlError(client, err))
 				broker.Error(err, instId, partitions)
 				return false
 			}
 
-			l.Tracef("%v backfill %v entries\n", lprefix, skeys.GetLength())
+			l.Tracef("%v temp file write %v entries\n", lprefix, skeys.GetLength())
 			if atomic.LoadInt64(&backfillFin) > 0 {
 				return false
 			}
@@ -1784,6 +1784,12 @@ func getSingletonClient(
 	defer muclient.Unlock()
 	if singletonClient == nil {
 
+		// Cleanup backfill files, if any.
+		// Here, it is safe to cleanup backfill files unconditionally as
+		// singleton GsiClient is used for requests and absence of this
+		// singleton GsiClient means this is the first request.
+		cleanupAllTmpFiles()
+
 		if strings.Contains(strings.ToLower(clusterURL), "http") ||
 			strings.Contains(strings.ToLower(clusterURL), "https") {
 			parsedUrl, err := url.Parse(clusterURL)
@@ -1879,7 +1885,7 @@ func (gsi *gsiKeyspace) logstats(logtick time.Duration) {
 					`"gsi_scan_count":%v,"gsi_scan_duration":%v,` +
 					`"gsi_throttle_duration":%v,` +
 					`"gsi_prime_duration":%v,"gsi_blocked_duration":%v,` +
-					`"gsi_totalbackfills":%v}`
+					`"gsi_total_temp_files":%v}`
 				l.Infof(
 					fmsg, gsi.logPrefix, gsi.keyspace, totalscans, scandur,
 					throttledur, primedur, blockeddur, totalbackfills)
@@ -2243,6 +2249,55 @@ func cleanupTmpFiles(olddir string) {
 
 }
 
+func getTmpSpaceDir() string {
+	conf := gIndexConfig.getConfig()
+	if conf == nil {
+		return getDefaultTmpDir()
+	}
+
+	if v, ok := conf[gConfigKeyTmpSpaceDir]; ok {
+		return v.(string)
+	} else {
+		return getDefaultTmpDir()
+	}
+}
+
+// cleanupAllTmpFiles unconditionally deletes all the backfill files.
+// So, it needs to be executed when there are no ongoing scan requests.
+//
+// cleanupAllTmpFiles uses the "known" temp space directory. So, it can
+// default to "default temp space directory" i.e. os.TempDir(). So the
+// cleanup of backfill files may be skipped if cleanup is triggered before
+// the correct tmp space directory is set in gIndexConfig.
+//
+// cleanupAllTmpFiles performs the cleanup in two phases:
+// Phase 1: Get the list of the files synchronously.
+// Phase 2: deletes the backfill files from the above list asynchronously.
+func cleanupAllTmpFiles() {
+	dirpath := getTmpSpaceDir()
+
+	files, err := ioutil.ReadDir(dirpath)
+	if err != nil {
+		l.Warnf("GSI client: Skipping cleaning of temp files due to error: %v", err)
+		return
+	}
+
+	go func() {
+		for _, file := range files {
+			fname := path.Join(dirpath, file.Name())
+			if strings.Contains(fname, "scan-backfill") ||
+				strings.Contains(fname, BACKFILLPREFIX) {
+
+				l.Infof("GSI client: Removing old temp file %v ...", fname)
+				err := os.Remove(fname)
+				if err != nil {
+					l.Errorf("GSI client: Error while removing old temp file %v: %v", fname, err)
+				}
+			}
+		}
+	}()
+}
+
 func (c *indexConfig) getConfig() map[string]interface{} {
 
 	conf := c.config.Load()
@@ -2285,6 +2340,7 @@ func (gsi *gsiKeyspace) getTmpSpaceLimit() int64 {
 	}
 
 }
+
 func getDefaultTmpDir() string {
 	file, err := ioutil.TempFile("" /*dir*/, BACKFILLPREFIX)
 	if err != nil {
