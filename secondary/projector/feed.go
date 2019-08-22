@@ -40,6 +40,7 @@ type Feed struct {
 	opaque       uint16               // opaque that created this feed.
 	endpointType string               // immutable
 	projector    *Projector
+	async        bool // immutable
 
 	// upstream
 	// reqTs, book-keeping on outstanding request posted to feeder.
@@ -88,7 +89,8 @@ type Feed struct {
 func NewFeed(
 	pooln, topic string,
 	projector *Projector,
-	config c.Config, opaque uint16) (*Feed, error) {
+	config c.Config, opaque uint16,
+	async bool) (*Feed, error) {
 
 	epf := config["routerEndpointFactory"].Value.(c.RouterEndpointFactory)
 	chsize := config["feedChanSize"].Int()
@@ -99,6 +101,7 @@ func NewFeed(
 		topic:     topic,
 		opaque:    opaque,
 		projector: projector,
+		async:     async,
 
 		// upstream
 		reqTss:  make(map[string]*protobuf.TsVbuuid),
@@ -839,6 +842,7 @@ func (feed *Feed) start(
 
 	feed.endpointType = req.GetEndpointType()
 	feed.version = req.GetVersion()
+	opaque2 := req.GetOpaque2()
 
 	// update engines and endpoints
 	if _, err = feed.processSubscribers(opaque, req); err != nil { // :SideEffect:
@@ -868,6 +872,7 @@ func (feed *Feed) start(
 		if ok {
 			ts = ts.FilterByVbuckets(c.Vbno32to16(reqTs.GetVbnos()))
 		}
+
 		reqTs = ts.Union(reqTs)
 		// open or acquire the upstream feeder object.
 		feeder, e := feed.openFeeder(opaque, pooln, bucketn)
@@ -878,7 +883,8 @@ func (feed *Feed) start(
 		}
 		feed.feeders[bucketn] = feeder // :SideEffect:
 		// open data-path, if not already open.
-		kvdata, e := feed.startDataPath(bucketn, feeder, opaque, ts)
+		kvdata, e := feed.startDataPath(bucketn, feeder,
+			opaque, ts, opaque2)
 		if e != nil {
 			err = e
 			feed.cleanupBucket(bucketn, false)
@@ -894,28 +900,38 @@ func (feed *Feed) start(
 			feed.cleanupBucket(bucketn, false)
 			continue
 		}
-		// wait for stream to start ...
-		r, f, a, e := feed.waitStreamRequests(opaque, pooln, bucketn, ts)
-		feed.rollTss[bucketn] = rollTs.Union(r) // :SideEffect:
-		feed.actTss[bucketn] = actTs.Union(a)   // :SideEffect:
-		// forget vbuckets for which a response is already received.
-		reqTs = reqTs.FilterByVbuckets(c.Vbno32to16(r.GetVbnos()))
-		reqTs = reqTs.FilterByVbuckets(c.Vbno32to16(a.GetVbnos()))
-		reqTs = reqTs.FilterByVbuckets(c.Vbno32to16(f.GetVbnos()))
-		feed.reqTss[bucketn] = reqTs // :SideEffect:
-		if e != nil {
-			err = e
-			logging.Errorf(
-				"%v ##%x stream-request (err: %v) rollback: %v; vbnos: %v\n",
-				feed.logPrefix, opaque, err,
-				feed.rollTss[bucketn].GetVbnos(),
-				feed.actTss[bucketn].GetVbnos())
+		if !feed.async {
+			// wait for stream to start ...
+			r, f, a, e := feed.waitStreamRequests(opaque, pooln, bucketn, ts)
+			feed.rollTss[bucketn] = rollTs.Union(r) // :SideEffect:
+			feed.actTss[bucketn] = actTs.Union(a)   // :SideEffect:
+			// forget vbuckets for which a response is already received.
+			reqTs = reqTs.FilterByVbuckets(c.Vbno32to16(r.GetVbnos()))
+			reqTs = reqTs.FilterByVbuckets(c.Vbno32to16(a.GetVbnos()))
+			reqTs = reqTs.FilterByVbuckets(c.Vbno32to16(f.GetVbnos()))
+			feed.reqTss[bucketn] = reqTs // :SideEffect:
+			if e != nil {
+				err = e
+				logging.Errorf(
+					"%v ##%x stream-request (err: %v) rollback: %v; vbnos: %v\n",
+					feed.logPrefix, opaque, err,
+					feed.rollTss[bucketn].GetVbnos(),
+					feed.actTss[bucketn].GetVbnos())
+			} else {
+				logging.Infof(
+					"%v ##%x stream-request (success) rollback: %v; vbnos: %v\n",
+					feed.logPrefix, opaque,
+					feed.rollTss[bucketn].GetVbnos(),
+					feed.actTss[bucketn].GetVbnos())
+			}
 		} else {
-			logging.Infof(
-				"%v ##%x stream-request (success) rollback: %v; vbnos: %v\n",
-				feed.logPrefix, opaque,
-				feed.rollTss[bucketn].GetVbnos(),
-				feed.actTss[bucketn].GetVbnos())
+			feed.reqTss[bucketn] = reqTs // :SideEffect:
+			if _, ok := feed.rollTss[bucketn]; !ok {
+				feed.rollTss[bucketn] = protobuf.NewTsVbuuid(ts.GetPool(), ts.GetBucket(), len(vbnos)) // :SideEffect:
+			}
+			if _, ok := feed.actTss[bucketn]; !ok {
+				feed.actTss[bucketn] = protobuf.NewTsVbuuid(ts.GetPool(), ts.GetBucket(), len(vbnos)) // :SideEffect:
+			}
 		}
 	}
 	return err
@@ -937,6 +953,8 @@ func (feed *Feed) restartVbuckets(
 	if err := feed.repairEndpoints(rpReq, opaque); err != nil {
 		return err
 	}
+
+	opaque2 := req.GetOpaque2()
 
 	for _, ts := range req.GetRestartTimestamps() {
 		pooln, bucketn := ts.GetPool(), ts.GetBucket()
@@ -981,7 +999,7 @@ func (feed *Feed) restartVbuckets(
 		}
 		feed.feeders[bucketn] = feeder // :SideEffect:
 		// open data-path, if not already open.
-		kvdata, e := feed.startDataPath(bucketn, feeder, opaque, ts)
+		kvdata, e := feed.startDataPath(bucketn, feeder, opaque, ts, opaque2)
 		if e != nil { // all feed errors are fatal, skip this bucket.
 			err = e
 			feed.cleanupBucket(bucketn, false)
@@ -996,28 +1014,32 @@ func (feed *Feed) restartVbuckets(
 			feed.cleanupBucket(bucketn, false)
 			continue
 		}
-		// wait stream to start ...
-		r, f, a, e := feed.waitStreamRequests(opaque, pooln, bucketn, ts)
-		feed.rollTss[bucketn] = rollTs.Union(r) // :SideEffect:
-		feed.actTss[bucketn] = actTs.Union(a)   // :SideEffect:
-		// forget vbuckets for which a response is already received.
-		reqTs = reqTs.FilterByVbuckets(c.Vbno32to16(r.GetVbnos()))
-		reqTs = reqTs.FilterByVbuckets(c.Vbno32to16(a.GetVbnos()))
-		reqTs = reqTs.FilterByVbuckets(c.Vbno32to16(f.GetVbnos()))
-		feed.reqTss[bucketn] = reqTs // :SideEffect:
-		if e != nil {
-			err = e
-			logging.Errorf(
-				"%v ##%x stream-request (err: %v) rollback: %v; vbnos: %v\n",
-				feed.logPrefix, opaque, err,
-				feed.rollTss[bucketn].GetVbnos(),
-				feed.actTss[bucketn].GetVbnos())
+		if !feed.async {
+			// wait stream to start ...
+			r, f, a, e := feed.waitStreamRequests(opaque, pooln, bucketn, ts)
+			feed.rollTss[bucketn] = rollTs.Union(r) // :SideEffect:
+			feed.actTss[bucketn] = actTs.Union(a)   // :SideEffect:
+			// forget vbuckets for which a response is already received.
+			reqTs = reqTs.FilterByVbuckets(c.Vbno32to16(r.GetVbnos()))
+			reqTs = reqTs.FilterByVbuckets(c.Vbno32to16(a.GetVbnos()))
+			reqTs = reqTs.FilterByVbuckets(c.Vbno32to16(f.GetVbnos()))
+			feed.reqTss[bucketn] = reqTs // :SideEffect:
+			if e != nil {
+				err = e
+				logging.Errorf(
+					"%v ##%x stream-request (err: %v) rollback: %v; vbnos: %v\n",
+					feed.logPrefix, opaque, err,
+					feed.rollTss[bucketn].GetVbnos(),
+					feed.actTss[bucketn].GetVbnos())
+			} else {
+				logging.Infof(
+					"%v ##%x stream-request (success) rollback: %v; vbnos: %v\n",
+					feed.logPrefix, opaque,
+					feed.rollTss[bucketn].GetVbnos(),
+					feed.actTss[bucketn].GetVbnos())
+			}
 		} else {
-			logging.Infof(
-				"%v ##%x stream-request (success) rollback: %v; vbnos: %v\n",
-				feed.logPrefix, opaque,
-				feed.rollTss[bucketn].GetVbnos(),
-				feed.actTss[bucketn].GetVbnos())
+			feed.reqTss[bucketn] = feed.reqTss[bucketn].Union(reqTs) // :SideEffect:
 		}
 	}
 	return err
@@ -1075,21 +1097,29 @@ func (feed *Feed) shutdownVbuckets(
 			//feed.cleanupBucket(bucketn, false)
 			continue
 		}
-		endTs, _, e := feed.waitStreamEnds(opaque, bucketn, ts)
-		vbnos = c.Vbno32to16(endTs.GetVbnos())
-		// forget vbnos that are shutdown
-		feed.actTss[bucketn] = actTs.FilterByVbuckets(vbnos)   // :SideEffect:
-		feed.reqTss[bucketn] = reqTs.FilterByVbuckets(vbnos)   // :SideEffect:
-		feed.rollTss[bucketn] = rollTs.FilterByVbuckets(vbnos) // :SideEffect:
-		if e != nil {
-			err = e
-			logging.Errorf(
-				"%v ##%x stream-end (err: %v) vbnos: %v\n",
-				feed.logPrefix, opaque, err, vbnos)
+		if !feed.async {
+			endTs, _, e := feed.waitStreamEnds(opaque, bucketn, ts)
+			vbnos = c.Vbno32to16(endTs.GetVbnos())
+			// forget vbnos that are shutdown
+			feed.actTss[bucketn] = actTs.FilterByVbuckets(vbnos)   // :SideEffect:
+			feed.reqTss[bucketn] = reqTs.FilterByVbuckets(vbnos)   // :SideEffect:
+			feed.rollTss[bucketn] = rollTs.FilterByVbuckets(vbnos) // :SideEffect:
+			if e != nil {
+				err = e
+				logging.Errorf(
+					"%v ##%x stream-end (err: %v) vbnos: %v\n",
+					feed.logPrefix, opaque, err, vbnos)
+			} else {
+				logging.Infof(
+					"%v ##%x stream-end (success) vbnos: %v\n",
+					feed.logPrefix, opaque, vbnos)
+			}
 		} else {
-			logging.Infof(
-				"%v ##%x stream-end (success) vbnos: %v\n",
-				feed.logPrefix, opaque, vbnos)
+			// in async mode, clear out the book keeping right away.
+			vbnos = c.Vbno32to16(ts.GetVbnos())
+			feed.actTss[bucketn] = actTs.FilterByVbuckets(vbnos)   // :SideEffect:
+			feed.reqTss[bucketn] = reqTs.FilterByVbuckets(vbnos)   // :SideEffect:
+			feed.rollTss[bucketn] = rollTs.FilterByVbuckets(vbnos) // :SideEffect:
 		}
 	}
 	return err
@@ -1110,6 +1140,8 @@ func (feed *Feed) addBuckets(
 	if _, err = feed.processSubscribers(opaque, req); err != nil { // :SideEffect:
 		return err
 	}
+
+	opaque2 := req.GetOpaque2()
 
 	for _, ts := range req.GetReqTimestamps() {
 		pooln, bucketn := ts.GetPool(), ts.GetBucket()
@@ -1146,7 +1178,7 @@ func (feed *Feed) addBuckets(
 		feed.feeders[bucketn] = feeder // :SideEffect:
 
 		// open data-path, if not already open.
-		kvdata, e := feed.startDataPath(bucketn, feeder, opaque, ts)
+		kvdata, e := feed.startDataPath(bucketn, feeder, opaque, ts, opaque2)
 		if e != nil { // all feed errors are fatal, skip this bucket.
 			err = e
 			feed.cleanupBucket(bucketn, false)
@@ -1163,28 +1195,32 @@ func (feed *Feed) addBuckets(
 			feed.cleanupBucket(bucketn, false)
 			continue
 		}
-		// wait for stream to start ...
-		r, f, a, e := feed.waitStreamRequests(opaque, pooln, bucketn, ts)
-		feed.rollTss[bucketn] = rollTs.Union(r) // :SideEffect:
-		feed.actTss[bucketn] = actTs.Union(a)   // :SideEffect
-		// forget vbucket for which a response is already received.
-		reqTs = reqTs.FilterByVbuckets(c.Vbno32to16(r.GetVbnos()))
-		reqTs = reqTs.FilterByVbuckets(c.Vbno32to16(a.GetVbnos()))
-		reqTs = reqTs.FilterByVbuckets(c.Vbno32to16(f.GetVbnos()))
-		feed.reqTss[bucketn] = reqTs // :SideEffect:
-		if e != nil {
-			err = e
-			logging.Errorf(
-				"%v ##%x stream-request (err: %v) rollback: %v; vbnos: %v\n",
-				feed.logPrefix, opaque, err,
-				feed.rollTss[bucketn].GetVbnos(),
-				feed.actTss[bucketn].GetVbnos())
+		if !feed.async {
+			// wait for stream to start ...
+			r, f, a, e := feed.waitStreamRequests(opaque, pooln, bucketn, ts)
+			feed.rollTss[bucketn] = rollTs.Union(r) // :SideEffect:
+			feed.actTss[bucketn] = actTs.Union(a)   // :SideEffect
+			// forget vbucket for which a response is already received.
+			reqTs = reqTs.FilterByVbuckets(c.Vbno32to16(r.GetVbnos()))
+			reqTs = reqTs.FilterByVbuckets(c.Vbno32to16(a.GetVbnos()))
+			reqTs = reqTs.FilterByVbuckets(c.Vbno32to16(f.GetVbnos()))
+			feed.reqTss[bucketn] = reqTs // :SideEffect:
+			if e != nil {
+				err = e
+				logging.Errorf(
+					"%v ##%x stream-request (err: %v) rollback: %v; vbnos: %v\n",
+					feed.logPrefix, opaque, err,
+					feed.rollTss[bucketn].GetVbnos(),
+					feed.actTss[bucketn].GetVbnos())
+			} else {
+				logging.Infof(
+					"%v ##%x stream-request (success) rollback: %v; vbnos: %v\n",
+					feed.logPrefix, opaque,
+					feed.rollTss[bucketn].GetVbnos(),
+					feed.actTss[bucketn].GetVbnos())
+			}
 		} else {
-			logging.Infof(
-				"%v ##%x stream-request (success) rollback: %v; vbnos: %v\n",
-				feed.logPrefix, opaque,
-				feed.rollTss[bucketn].GetVbnos(),
-				feed.actTss[bucketn].GetVbnos())
+			feed.reqTss[bucketn] = reqTs // :SideEffect:
 		}
 	}
 	return err
@@ -1626,7 +1662,8 @@ func (feed *Feed) getLocalVbuckets(
 func (feed *Feed) startDataPath(
 	bucketn string, feeder BucketFeeder,
 	opaque uint16,
-	ts *protobuf.TsVbuuid) (*KVData, error) {
+	ts *protobuf.TsVbuuid,
+	opaque2 uint64) (*KVData, error) {
 	var err error
 	mutch := feeder.GetChannel()
 	kvdata, ok := feed.kvdata[bucketn]
@@ -1636,7 +1673,8 @@ func (feed *Feed) startDataPath(
 	} else { // pass engines & endpoints to kvdata.
 		engs, ends := feed.engines[bucketn], feed.endpoints
 		kvdata, err = NewKVData(
-			feed, bucketn, opaque, ts, engs, ends, mutch, feed.kvaddr, feed.config)
+			feed, bucketn, opaque, ts, engs, ends, mutch,
+			feed.kvaddr, feed.config, feed.async, opaque2)
 	}
 	return kvdata, err
 }
@@ -1929,11 +1967,18 @@ func (feed *Feed) topicResponse() *protobuf.TopicResponse {
 			ys = append(ys, ts.Clone())
 		}
 	}
+	zs := make([]*protobuf.TsVbuuid, 0, len(feed.reqTss))
+	for _, ts := range feed.reqTss {
+		if ts != nil && !ts.IsEmpty() {
+			zs = append(zs, ts.Clone())
+		}
+	}
 	return &protobuf.TopicResponse{
 		Topic:              proto.String(feed.topic),
 		InstanceIds:        uuids,
 		ActiveTimestamps:   xs,
 		RollbackTimestamps: ys,
+		PendingTimestamps:  zs,
 	}
 }
 

@@ -76,6 +76,7 @@ const (
 	KV_SENDER_SHUTDOWN
 	KV_SENDER_GET_CURR_KV_TS
 	KV_SENDER_RESTART_VBUCKETS
+	KV_SENDER_RESTART_VBUCKETS_RESPONSE
 	KV_SENDER_REPAIR_ENDPOINTS
 	KV_STREAM_REPAIR
 	MSG_SUCCESS_OPEN_STREAM
@@ -131,6 +132,7 @@ const (
 	INDEXER_MERGE_PARTITION
 	INDEXER_CANCEL_MERGE_PARTITION
 	INDEXER_MTR_FAIL
+	INDEXER_ABORT_RECOVERY
 	INDEXER_STORAGE_WARMUP_DONE
 	INDEXER_SECURITY_CHANGE
 
@@ -214,7 +216,8 @@ func (m *MsgSuccess) GetMsgType() MsgType {
 
 //Success Message
 type MsgSuccessOpenStream struct {
-	activeTs *common.TsVbuuid
+	activeTs  *common.TsVbuuid
+	pendingTs *common.TsVbuuid
 }
 
 func (m *MsgSuccessOpenStream) GetMsgType() MsgType {
@@ -223,6 +226,10 @@ func (m *MsgSuccessOpenStream) GetMsgType() MsgType {
 
 func (m *MsgSuccessOpenStream) GetActiveTs() *common.TsVbuuid {
 	return m.activeTs
+}
+
+func (m *MsgSuccessOpenStream) GetPendingTs() *common.TsVbuuid {
+	return m.pendingTs
 }
 
 //Timestamp Message
@@ -246,6 +253,8 @@ type MsgStream struct {
 	host     []byte
 	meta     *MutationMeta
 	snapshot *MutationSnapshot
+	status   common.StreamStatus
+	errCode  byte
 }
 
 func (m *MsgStream) GetMsgType() MsgType {
@@ -268,6 +277,14 @@ func (m *MsgStream) GetSnapshot() *MutationSnapshot {
 	return m.snapshot
 }
 
+func (m *MsgStream) GetStatus() common.StreamStatus {
+	return m.status
+}
+
+func (m *MsgStream) GetErrorCode() byte {
+	return m.errCode
+}
+
 func (m *MsgStream) String() string {
 
 	str := "\n\tMessage: MsgStream"
@@ -275,6 +292,8 @@ func (m *MsgStream) String() string {
 	str += fmt.Sprintf("\n\tStreamId: %v", m.streamId)
 	str += fmt.Sprintf("\n\tMeta: %v", m.meta)
 	str += fmt.Sprintf("\n\tSnapshot: %v", m.snapshot)
+	str += fmt.Sprintf("\n\tStatus: %v", m.status)
+	str += fmt.Sprintf("\n\tErrorCode: %v", m.errCode)
 	return str
 
 }
@@ -300,12 +319,15 @@ func (m *MsgStreamError) GetError() Error {
 //STREAM_READER_CONN_ERROR
 //STREAM_REQUEST_DONE
 type MsgStreamInfo struct {
-	mType    MsgType
-	streamId common.StreamId
-	bucket   string
-	vbList   []Vbucket
-	buildTs  Timestamp
-	activeTs *common.TsVbuuid
+	mType     MsgType
+	streamId  common.StreamId
+	bucket    string
+	vbList    []Vbucket
+	buildTs   Timestamp
+	activeTs  *common.TsVbuuid
+	pendingTs *common.TsVbuuid
+	reqCh     StopChannel
+	sessionId uint64
 }
 
 func (m *MsgStreamInfo) GetMsgType() MsgType {
@@ -332,6 +354,18 @@ func (m *MsgStreamInfo) GetActiveTs() *common.TsVbuuid {
 	return m.activeTs
 }
 
+func (m *MsgStreamInfo) GetPendingTs() *common.TsVbuuid {
+	return m.pendingTs
+}
+
+func (m *MsgStreamInfo) GetRequestCh() StopChannel {
+	return m.reqCh
+}
+
+func (m *MsgStreamInfo) GetSessionId() uint64 {
+	return m.sessionId
+}
+
 func (m *MsgStreamInfo) String() string {
 
 	str := "\n\tMessage: MsgStreamInfo"
@@ -344,9 +378,10 @@ func (m *MsgStreamInfo) String() string {
 
 //STREAM_READER_UPDATE_QUEUE_MAP
 type MsgUpdateBucketQueue struct {
-	bucketQueueMap BucketQueueMap
-	stats          *IndexerStats
-	bucketFilter   map[string]*common.TsVbuuid
+	bucketQueueMap  BucketQueueMap
+	stats           *IndexerStats
+	bucketFilter    map[string]*common.TsVbuuid
+	bucketSessionId BucketSessionId
 }
 
 func (m *MsgUpdateBucketQueue) GetMsgType() MsgType {
@@ -363,6 +398,10 @@ func (m *MsgUpdateBucketQueue) GetStatsObject() *IndexerStats {
 
 func (m *MsgUpdateBucketQueue) GetBucketFilter() map[string]*common.TsVbuuid {
 	return m.bucketFilter
+}
+
+func (m *MsgUpdateBucketQueue) GetBucketSessionId() BucketSessionId {
+	return m.bucketSessionId
 }
 
 func (m *MsgUpdateBucketQueue) String() string {
@@ -391,9 +430,12 @@ type MsgStreamUpdate struct {
 	bucket       string
 	restartTs    *common.TsVbuuid
 	rollbackTime int64
+	async        bool
+	sessionId    uint64
 
 	allowMarkFirstSnap bool
 	bucketInRecovery   bool
+	abortRecovery      bool
 }
 
 func (m *MsgStreamUpdate) GetMsgType() MsgType {
@@ -440,6 +482,18 @@ func (m *MsgStreamUpdate) BucketInRecovery() bool {
 	return m.bucketInRecovery
 }
 
+func (m *MsgStreamUpdate) GetAsync() bool {
+	return m.async
+}
+
+func (m *MsgStreamUpdate) GetSessionId() uint64 {
+	return m.sessionId
+}
+
+func (m *MsgStreamUpdate) AbortRecovery() bool {
+	return m.abortRecovery
+}
+
 func (m *MsgStreamUpdate) String() string {
 
 	str := "\n\tMessage: MsgStreamUpdate"
@@ -448,6 +502,8 @@ func (m *MsgStreamUpdate) String() string {
 	str += fmt.Sprintf("\n\tBucket: %v", m.bucket)
 	str += fmt.Sprintf("\n\tBuildTS: %v", m.buildTs)
 	str += fmt.Sprintf("\n\tIndexList: %v", m.indexList)
+	str += fmt.Sprintf("\n\tAsync: %v", m.async)
+	str += fmt.Sprintf("\n\tSessionId: %v", m.sessionId)
 	str += fmt.Sprintf("\n\tRestartTs: %v", m.restartTs)
 	return str
 
@@ -681,11 +737,12 @@ func (m *MsgTKStabilityTS) String() string {
 //TK_INIT_BUILD_DONE_ACK
 //TK_ADD_INSTANCE_FAIL
 type MsgTKInitBuildDone struct {
-	mType    MsgType
-	streamId common.StreamId
-	buildTs  Timestamp
-	bucket   string
-	mergeTs  *common.TsVbuuid
+	mType     MsgType
+	streamId  common.StreamId
+	buildTs   Timestamp
+	bucket    string
+	mergeTs   *common.TsVbuuid
+	sessionId uint64
 }
 
 func (m *MsgTKInitBuildDone) GetMsgType() MsgType {
@@ -708,6 +765,10 @@ func (m *MsgTKInitBuildDone) GetMergeTs() *common.TsVbuuid {
 	return m.mergeTs
 }
 
+func (m *MsgTKInitBuildDone) GetSessionId() uint64 {
+	return m.sessionId
+}
+
 //TK_MERGE_STREAM
 //TK_MERGE_STREAM_ACK
 type MsgTKMergeStream struct {
@@ -716,6 +777,8 @@ type MsgTKMergeStream struct {
 	bucket    string
 	mergeTs   Timestamp
 	mergeList []common.IndexInst
+	reqCh     StopChannel
+	sessionId uint64
 }
 
 func (m *MsgTKMergeStream) GetMsgType() MsgType {
@@ -736,6 +799,14 @@ func (m *MsgTKMergeStream) GetMergeTS() Timestamp {
 
 func (m *MsgTKMergeStream) GetMergeList() []common.IndexInst {
 	return m.mergeList
+}
+
+func (m *MsgTKMergeStream) GetRequestCh() StopChannel {
+	return m.reqCh
+}
+
+func (m *MsgTKMergeStream) GetSessionId() uint64 {
+	return m.sessionId
 }
 
 //TK_ENABLE_FLUSH
@@ -1133,8 +1204,10 @@ type MsgRestartVbuckets struct {
 	bucket     string
 	restartTs  *common.TsVbuuid
 	connErrVbs []Vbucket
+	repairVbs  []Vbucket
 	respCh     MsgChannel
 	stopCh     StopChannel
+	sessionId  uint64
 }
 
 func (m *MsgRestartVbuckets) GetMsgType() MsgType {
@@ -1157,6 +1230,10 @@ func (m *MsgRestartVbuckets) ConnErrVbs() []Vbucket {
 	return m.connErrVbs
 }
 
+func (m *MsgRestartVbuckets) RepairVbs() []Vbucket {
+	return m.repairVbs
+}
+
 func (m *MsgRestartVbuckets) GetResponseCh() MsgChannel {
 	return m.respCh
 }
@@ -1165,11 +1242,52 @@ func (m *MsgRestartVbuckets) GetStopChannel() StopChannel {
 	return m.stopCh
 }
 
+func (m *MsgRestartVbuckets) GetSessionId() uint64{
+	return m.sessionId
+}
+
 func (m *MsgRestartVbuckets) String() string {
 	str := "\n\tMessage: MsgRestartVbuckets"
 	str += fmt.Sprintf("\n\tStreamId: %v", m.streamId)
 	str += fmt.Sprintf("\n\tBucket: %v", m.bucket)
 	str += fmt.Sprintf("\n\tRestartTS: %v", m.restartTs)
+	return str
+}
+
+//KV_SENDER_RESTART_VBUCKETS_RESPONSE
+type MsgRestartVbucketsResponse struct {
+	streamId  common.StreamId
+	bucket    string
+	activeTs  *common.TsVbuuid
+	pendingTs *common.TsVbuuid
+}
+
+func (m *MsgRestartVbucketsResponse) GetMsgType() MsgType {
+	return KV_SENDER_RESTART_VBUCKETS_RESPONSE
+}
+
+func (m *MsgRestartVbucketsResponse) GetStreamId() common.StreamId {
+	return m.streamId
+}
+
+func (m *MsgRestartVbucketsResponse) GetBucket() string {
+	return m.bucket
+}
+
+func (m *MsgRestartVbucketsResponse) GetActiveTs() *common.TsVbuuid {
+	return m.activeTs
+}
+
+func (m *MsgRestartVbucketsResponse) GetPendingTs() *common.TsVbuuid {
+	return m.pendingTs
+}
+
+func (m *MsgRestartVbucketsResponse) String() string {
+	str := "\n\tMessage: MsgRestartVbucketsResponse"
+	str += fmt.Sprintf("\n\tStreamId: %v", m.streamId)
+	str += fmt.Sprintf("\n\tBucket: %v", m.bucket)
+	str += fmt.Sprintf("\n\tActiveTS: %v", m.activeTs)
+	str += fmt.Sprintf("\n\tPendingTS: %v", m.pendingTs)
 	return str
 }
 
@@ -1205,6 +1323,7 @@ func (m *MsgRepairEndpoints) String() string {
 //INDEXER_RECOVERY_DONE
 //INDEXER_BUCKET_NOT_FOUND
 //INDEXER_MTR_FAIL
+//INDEXER_ABORT_RECOVERY
 type MsgRecovery struct {
 	mType     MsgType
 	streamId  common.StreamId
@@ -1214,6 +1333,9 @@ type MsgRecovery struct {
 	activeTs  *common.TsVbuuid
 	inMTR     bool
 	retryTs   *common.TsVbuuid
+	pendingTs *common.TsVbuuid
+	requestCh StopChannel
+	sessionId uint64
 }
 
 func (m *MsgRecovery) GetMsgType() MsgType {
@@ -1236,6 +1358,10 @@ func (m *MsgRecovery) GetActiveTs() *common.TsVbuuid {
 	return m.activeTs
 }
 
+func (m *MsgRecovery) GetPendingTs() *common.TsVbuuid {
+	return m.pendingTs
+}
+
 func (m *MsgRecovery) GetBuildTs() Timestamp {
 	return m.buildTs
 }
@@ -1248,11 +1374,20 @@ func (m *MsgRecovery) GetRetryTs() *common.TsVbuuid {
 	return m.retryTs
 }
 
+func (m *MsgRecovery) GetRequestCh() StopChannel {
+	return m.requestCh
+}
+
+func (m *MsgRecovery) GetSessionId() uint64 {
+	return m.sessionId
+}
+
 type MsgRollback struct {
 	streamId     common.StreamId
 	bucket       string
 	rollbackTs   *common.TsVbuuid
 	rollbackTime int64
+	sessionId    uint64
 }
 
 func (m *MsgRollback) GetMsgType() MsgType {
@@ -1275,11 +1410,16 @@ func (m *MsgRollback) GetRollbackTime() int64 {
 	return m.rollbackTime
 }
 
+func (m *MsgRollback) GetSessionId() uint64 {
+	return m.sessionId
+}
+
 type MsgRollbackDone struct {
 	streamId  common.StreamId
 	bucket    string
 	restartTs *common.TsVbuuid
 	err       error
+	sessionId uint64
 }
 
 func (m *MsgRollbackDone) GetMsgType() MsgType {
@@ -1300,6 +1440,10 @@ func (m *MsgRollbackDone) GetRestartTs() *common.TsVbuuid {
 
 func (m *MsgRollbackDone) GetError() error {
 	return m.err
+}
+
+func (m *MsgRollbackDone) GetSessionId() uint64 {
+	return m.sessionId
 }
 
 type MsgRepairAbort struct {
@@ -1494,6 +1638,8 @@ type MsgKVStreamRepair struct {
 	streamId  common.StreamId
 	bucket    string
 	restartTs *common.TsVbuuid
+	async     bool
+	sessionId uint64
 }
 
 func (m *MsgKVStreamRepair) GetMsgType() MsgType {
@@ -1510,6 +1656,14 @@ func (m *MsgKVStreamRepair) GetBucket() string {
 
 func (m *MsgKVStreamRepair) GetRestartTs() *common.TsVbuuid {
 	return m.restartTs
+}
+
+func (m *MsgKVStreamRepair) GetAsync() bool {
+	return m.async
+}
+
+func (m *MsgKVStreamRepair) GetSessionId() uint64 {
+	return m.sessionId
 }
 
 //CLUST_MGR_RESET_INDEX
@@ -1864,6 +2018,8 @@ func (m MsgType) String() string {
 		return "INDEXER_RECOVERY_DONE"
 	case INDEXER_BUCKET_NOT_FOUND:
 		return "INDEXER_BUCKET_NOT_FOUND"
+	case INDEXER_ABORT_RECOVERY:
+		return "INDEXER_ABORT_RECOVERY"
 	case INDEXER_ROLLBACK:
 		return "INDEXER_ROLLBACK"
 	case STORAGE_ROLLBACK_DONE:

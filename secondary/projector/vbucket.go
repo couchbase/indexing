@@ -5,6 +5,7 @@ import "fmt"
 import mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
 import c "github.com/couchbase/indexing/secondary/common"
 import "github.com/couchbase/indexing/secondary/logging"
+import mcd "github.com/couchbase/indexing/secondary/dcp/transport"
 
 // Vbucket is immutable structure defined for each vbucket.
 type Vbucket struct {
@@ -14,6 +15,7 @@ type Vbucket struct {
 	vbuuid    uint64 // immutable
 	seqno     uint64
 	logPrefix string // immutable
+	opaque2   uint64 // immutable
 	// stats
 	sshotCount    uint64
 	mutationCount uint64
@@ -23,23 +25,24 @@ type Vbucket struct {
 // NewVbucket creates a new routine to handle this vbucket stream.
 func NewVbucket(
 	cluster, topic, bucket string, opaque, vbno uint16,
-	vbuuid, startSeqno uint64, config c.Config) *Vbucket {
+	vbuuid, startSeqno uint64, config c.Config, opaque2 uint64) *Vbucket {
 
 	v := &Vbucket{
-		bucket: bucket,
-		opaque: opaque,
-		vbno:   vbno,
-		vbuuid: vbuuid,
-		seqno:  startSeqno,
+		bucket:  bucket,
+		opaque:  opaque,
+		vbno:    vbno,
+		vbuuid:  vbuuid,
+		seqno:   startSeqno,
+		opaque2: opaque2,
 	}
 	fmsg := "VBRT[<-%v<-%v<-%v #%v]"
 	v.logPrefix = fmt.Sprintf(fmsg, vbno, bucket, cluster, topic)
-	logging.Infof("%v ##%x created\n", v.logPrefix, opaque)
+	logging.Infof("%v ##%x ##%v created\n", v.logPrefix, opaque, opaque2)
 	return v
 }
 
 func (v *Vbucket) makeStreamBeginData(
-	engines map[uint64]*Engine) (data interface{}) {
+	engines map[uint64]*Engine, status byte, code byte) (data interface{}) {
 
 	defer func() {
 		if r := recover(); r != nil {
@@ -50,7 +53,8 @@ func (v *Vbucket) makeStreamBeginData(
 			fmsg := "%v ##%x StreamBeginData NOT PUBLISHED\n"
 			logging.Errorf(fmsg, v.logPrefix, v.opaque)
 		} else {
-			logging.Infof("%v ##%x StreamBegin\n", v.logPrefix, v.opaque)
+			logging.Infof("%v ##%x ##%v StreamBegin\n", v.logPrefix,
+				v.opaque, v.opaque2)
 		}
 	}()
 
@@ -59,7 +63,8 @@ func (v *Vbucket) makeStreamBeginData(
 	}
 	// using the first engine that is capable of it.
 	for _, engine := range engines {
-		data := engine.StreamBeginData(v.vbno, v.vbuuid, v.seqno)
+		data := engine.StreamBeginData(v.vbno, v.vbuuid,
+			v.seqno, status, code, v.opaque2)
 		if data != nil {
 			return data
 		}
@@ -85,7 +90,7 @@ func (v *Vbucket) makeSyncData(engines map[uint64]*Engine) (data interface{}) {
 	}
 	// using the first engine that is capable of it.
 	for _, engine := range engines {
-		data = engine.SyncData(v.vbno, v.vbuuid, v.seqno)
+		data = engine.SyncData(v.vbno, v.vbuuid, v.seqno, v.opaque2)
 		if data != nil {
 			return data
 		}
@@ -119,7 +124,7 @@ func (v *Vbucket) makeSnapshotData(
 	}
 	// using the first engine that is capable of it.
 	for _, engine := range engines {
-		data := engine.SnapshotData(m, v.vbno, v.vbuuid, v.seqno)
+		data := engine.SnapshotData(m, v.vbno, v.vbuuid, v.seqno, v.opaque2)
 		if data != nil {
 			return data
 		}
@@ -139,8 +144,8 @@ func (v *Vbucket) makeStreamEndData(
 			fmsg := "%v ##%x StreamEnd NOT PUBLISHED\n"
 			logging.Errorf(fmsg, v.logPrefix, v.opaque)
 		} else {
-			fmsg := "%v ##%x StreamEnd\n"
-			logging.Infof(fmsg, v.logPrefix, v.opaque)
+			fmsg := "%v ##%x ##%v StreamEnd\n"
+			logging.Infof(fmsg, v.logPrefix, v.opaque, v.opaque2)
 		}
 	}()
 
@@ -150,10 +155,23 @@ func (v *Vbucket) makeStreamEndData(
 
 	// using the first engine that is capable of it.
 	for _, engine := range engines {
-		data := engine.StreamEndData(v.vbno, v.vbuuid, v.seqno)
+		data := engine.StreamEndData(v.vbno, v.vbuuid, v.seqno, v.opaque2)
 		if data != nil {
 			return data
 		}
 	}
 	return nil
+}
+
+func (v *Vbucket) mcStatus2StreamStatus(s mcd.Status) c.StreamStatus {
+
+	if s == mcd.SUCCESS {
+		return c.STREAM_SUCCESS
+	}
+
+	if s == mcd.ROLLBACK {
+		return c.STREAM_ROLLBACK
+	}
+
+	return c.STREAM_FAIL
 }

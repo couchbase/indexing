@@ -14,6 +14,8 @@ enum Command {
 enum ProjectorVersion {
     V5_1_0 = 1;
     V5_1_1 = 2;
+    V5_5_1 = 3;
+    V5_6_5 = 4;
 }
 
 // A single mutation message that will framed and transported by router.
@@ -41,6 +43,7 @@ message VbKeyVersions {
     required string      bucketname = 4;
     repeated KeyVersions kvs        = 5; // list of key-versions
     optional ProjectorVersion projVer = 6; // projector version
+    optional uint64      opaque2    = 7; //client opaque
 }
 
 // mutations are broadly divided into data and control messages. The division

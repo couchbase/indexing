@@ -22,6 +22,7 @@ import (
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
 	"github.com/golang/protobuf/proto"
 	"net"
+	"sort"
 	"strings"
 	"time"
 )
@@ -153,12 +154,16 @@ func (k *kvSender) handleOpenStream(cmd Message) {
 	respCh := cmd.(*MsgStreamUpdate).GetResponseChannel()
 	stopCh := cmd.(*MsgStreamUpdate).GetStopChannel()
 	bucket := cmd.(*MsgStreamUpdate).GetBucket()
+	async := cmd.(*MsgStreamUpdate).GetAsync()
+	sessionId := cmd.(*MsgStreamUpdate).GetSessionId()
 
 	logging.LazyDebug(func() string {
-		return fmt.Sprintf("KVSender::handleOpenStream %v %v %v", streamId, bucket, cmd)
+		return fmt.Sprintf("KVSender::handleOpenStream %v %v %v",
+			streamId, bucket, cmd)
 	})
 
-	go k.openMutationStream(streamId, indexInstList, restartTs, respCh, stopCh)
+	go k.openMutationStream(streamId, indexInstList,
+		restartTs, async, sessionId, respCh, stopCh)
 
 	k.supvCmdch <- &MsgSuccess{}
 
@@ -237,17 +242,21 @@ func (k *kvSender) handleRestartVbuckets(cmd Message) {
 	respCh := cmd.(*MsgRestartVbuckets).GetResponseCh()
 	stopCh := cmd.(*MsgRestartVbuckets).GetStopChannel()
 	connErrVbs := cmd.(*MsgRestartVbuckets).ConnErrVbs()
+	repairVbs := cmd.(*MsgRestartVbuckets).RepairVbs()
+	sessionId := cmd.(*MsgRestartVbuckets).GetSessionId()
 
 	logging.LazyDebug(func() string {
-		return fmt.Sprintf("KVSender::handleRestartVbuckets %v %v %v", streamId, bucket, cmd)
+		return fmt.Sprintf("KVSender::handleRestartVbuckets %v %v %v",
+			streamId, bucket, cmd)
 	})
 
-	go k.restartVbuckets(streamId, restartTs, connErrVbs, respCh, stopCh)
+	go k.restartVbuckets(streamId, restartTs, connErrVbs, repairVbs,
+		sessionId, respCh, stopCh)
 	k.supvCmdch <- &MsgSuccess{}
 }
 
 func (k *kvSender) openMutationStream(streamId c.StreamId, indexInstList []c.IndexInst,
-	restartTs *c.TsVbuuid, respCh MsgChannel, stopCh StopChannel) {
+	restartTs *c.TsVbuuid, async bool, sessionId uint64, respCh MsgChannel, stopCh StopChannel) {
 
 	if len(indexInstList) == 0 {
 		logging.Warnf("KVSender::openMutationStream Empty IndexList. Nothing to do.")
@@ -272,7 +281,8 @@ func (k *kvSender) openMutationStream(streamId c.StreamId, indexInstList []c.Ind
 
 	numVbuckets := k.config["numVbuckets"].Int()
 	if len(vbnos) != numVbuckets {
-		logging.Warnf("KVSender::openMutationStream mismatch in number of configured vbuckets. conf %v actual %v", numVbuckets, vbnos)
+		logging.Warnf("KVSender::openMutationStream mismatch in number of configured "+
+			"vbuckets. conf %v actual %v", numVbuckets, vbnos)
 	}
 
 	restartTsList, err := k.makeRestartTsForVbs(bucket, restartTs, vbnos)
@@ -288,6 +298,7 @@ func (k *kvSender) openMutationStream(streamId c.StreamId, indexInstList []c.Ind
 
 	var rollbackTs *protobuf.TsVbuuid
 	var activeTs *protobuf.TsVbuuid
+	var pendingTs *protobuf.TsVbuuid
 	topic := getTopicForStreamId(streamId)
 
 	fn := func(r int, err error) error {
@@ -309,10 +320,11 @@ func (k *kvSender) openMutationStream(streamId c.StreamId, indexInstList []c.Ind
 				)
 
 				if ap, ret := newProjClient(addr); ret != nil {
-					logging.Errorf("KVSender::openMutationStream %v %v Error %v when creating HTTP client to %v",
-						streamId, bucket, ret, addr)
+					logging.Errorf("KVSender::openMutationStream %v %v Error %v when "+
+						" creating HTTP client to %v", streamId, bucket, ret, addr)
 					err = ret
-				} else if res, ret := k.sendMutationTopicRequest(ap, topic, restartTsList, protoInstList); ret != nil {
+				} else if res, ret := k.sendMutationTopicRequest(ap, topic, restartTsList,
+					protoInstList, async, sessionId); ret != nil {
 					//for all errors, retry
 					logging.Errorf("KVSender::openMutationStream %v %v Error Received %v from %v",
 						streamId, bucket, ret, addr)
@@ -320,6 +332,7 @@ func (k *kvSender) openMutationStream(streamId c.StreamId, indexInstList []c.Ind
 				} else {
 					activeTs = updateActiveTsFromResponse(bucket, activeTs, res)
 					rollbackTs = updateRollbackTsFromResponse(bucket, rollbackTs, res)
+					pendingTs = updatePendingTsFromResponse(bucket, pendingTs, res)
 					if rollbackTs != nil {
 						logging.Infof("KVSender::openMutationStream %v %v Projector %v Rollback Received %v",
 							streamId, bucket, addr, rollbackTs)
@@ -337,17 +350,24 @@ func (k *kvSender) openMutationStream(streamId c.StreamId, indexInstList []c.Ind
 			return err
 		} else {
 			//check if we have received activeTs for all vbuckets
-			retry := false
-			if activeTs == nil || activeTs.Len() != len(vbnos) {
-				retry = true
+			numVb := 0
+
+			if activeTs != nil {
+				numVb = activeTs.Len()
 			}
 
-			if retry {
+			// Take into account for both activeTs and pendingTs
+			if async && pendingTs != nil {
+				if ts := pendingTs.Union(activeTs); ts != nil {
+					numVb = ts.Len()
+				}
+			}
+
+			if numVb != len(vbnos) {
 				return errors.New("ErrPartialVbStart")
 			} else {
 				return nil
 			}
-
 		}
 	}
 
@@ -375,14 +395,25 @@ func (k *kvSender) openMutationStream(streamId c.StreamId, indexInstList []c.Ind
 				severity: FATAL,
 				cause:    err}}
 	} else {
-		respCh <- &MsgSuccessOpenStream{activeTs: activeTs.ToTsVbuuid(numVbuckets)}
+		resp := &MsgSuccessOpenStream{}
+
+		if activeTs != nil {
+			resp.activeTs = activeTs.ToTsVbuuid(numVbuckets)
+		}
+
+		if pendingTs != nil {
+			resp.pendingTs = pendingTs.ToTsVbuuid(numVbuckets)
+		}
+
+		respCh <- resp
 	}
 }
 
-func (k *kvSender) restartVbuckets(streamId c.StreamId, restartTs *c.TsVbuuid,
-	connErrVbs []Vbucket, respCh MsgChannel, stopCh StopChannel) {
+func (k *kvSender) restartVbuckets(streamId c.StreamId,
+	restartTs *c.TsVbuuid, connErrVbs []Vbucket, repairVbs []Vbucket,
+	sessionId uint64, respCh MsgChannel, stopCh StopChannel) {
 
-	addrs, err := k.getProjAddrsForVbuckets(restartTs.Bucket, restartTs.GetVbnos())
+	addrs, err := k.getProjAddrsForVbuckets(restartTs.Bucket, repairVbs)
 	if err != nil {
 		logging.Errorf("KVSender::restartVbuckets %v %v Error in fetching cluster info %v",
 			streamId, restartTs.Bucket, err)
@@ -400,7 +431,28 @@ func (k *kvSender) restartVbuckets(streamId c.StreamId, restartTs *c.TsVbuuid,
 	protoTs := protobuf.NewTsVbuuid(DEFAULT_POOL, restartTs.Bucket, numVbuckets)
 	protoRestartTs = protoTs.FromTsVbuuid(restartTs)
 
+	// Add any missing vbs to repairTs
+	for _, vbno := range repairVbs {
+		found := false
+		for _, vbno2 := range protoRestartTs.GetVbnos() {
+			if uint32(vbno) == vbno2 {
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			protoRestartTs.Vbnos = append(protoRestartTs.Vbnos, uint32(vbno))
+			protoRestartTs.Seqnos = append(protoRestartTs.Seqnos, 0)
+			protoRestartTs.Vbuuids = append(protoRestartTs.Vbuuids, 0)
+			protoRestartTs.Snapshots = append(protoRestartTs.Snapshots, protobuf.NewSnapshot(0, 0))
+		}
+	}
+	sort.Sort(protoRestartTs)
+
 	var rollbackTs *protobuf.TsVbuuid
+	var activeTs *protobuf.TsVbuuid
+	var pendingTs *protobuf.TsVbuuid
 	topic := getTopicForStreamId(streamId)
 	rollback := false
 	aborted := false
@@ -424,13 +476,16 @@ func (k *kvSender) restartVbuckets(streamId c.StreamId, restartTs *c.TsVbuuid,
 					logging.Errorf("KVSender::restartVbuckets %v %v Error %v when creating HTTP client to %v",
 						streamId, restartTs.Bucket, ret, addr)
 					err = ret
-				} else if res, ret := k.sendRestartVbuckets(ap, topic, connErrVbs, protoRestartTs); ret != nil {
+				} else if res, ret := k.sendRestartVbuckets(ap, topic, connErrVbs,
+					protoRestartTs, sessionId); ret != nil {
 					//retry for all errors
 					logging.Errorf("KVSender::restartVbuckets %v %v Error Received %v from %v",
 						streamId, restartTs.Bucket, ret, addr)
 					err = ret
 				} else {
 					rollbackTs = updateRollbackTsFromResponse(restartTs.Bucket, rollbackTs, res)
+					activeTs = updateActiveTsFromResponse(restartTs.Bucket, activeTs, res)
+					pendingTs = updatePendingTsFromResponse(restartTs.Bucket, pendingTs, res)
 				}
 				close(doneCh)
 			}, stopCh)
@@ -477,7 +532,20 @@ func (k *kvSender) restartVbuckets(streamId c.StreamId, restartTs *c.TsVbuuid,
 
 		}
 	} else {
-		respCh <- &MsgSuccess{}
+		resp := &MsgRestartVbucketsResponse{
+			streamId: streamId,
+			bucket:   restartTs.Bucket,
+		}
+
+		if activeTs != nil {
+			resp.activeTs = activeTs.ToTsVbuuid(numVbuckets)
+		}
+
+		if pendingTs != nil {
+			resp.pendingTs = pendingTs.ToTsVbuuid(numVbuckets)
+		}
+
+		respCh <- resp
 	}
 }
 
@@ -781,8 +849,8 @@ func (k *kvSender) closeMutationStream(streamId c.StreamId, bucket string,
 
 //send the actual MutationStreamRequest on adminport
 func (k *kvSender) sendMutationTopicRequest(ap *projClient.Client, topic string,
-	reqTimestamps *protobuf.TsVbuuid,
-	instances []*protobuf.Instance) (*protobuf.TopicResponse, error) {
+	reqTimestamps *protobuf.TsVbuuid, instances []*protobuf.Instance,
+	async bool, sessionId uint64) (*protobuf.TopicResponse, error) {
 
 	logging.Infof("KVSender::sendMutationTopicRequest Projector %v Topic %v %v \n\tInstances %v",
 		ap, topic, reqTimestamps.GetBucket(), formatInstances(instances))
@@ -792,7 +860,7 @@ func (k *kvSender) sendMutationTopicRequest(ap *projClient.Client, topic string,
 	endpointType := "dataport"
 
 	if res, err := ap.MutationTopicRequest(topic, endpointType,
-		[]*protobuf.TsVbuuid{reqTimestamps}, instances); err != nil {
+		[]*protobuf.TsVbuuid{reqTimestamps}, instances, async, sessionId); err != nil {
 		logging.Errorf("KVSender::sendMutationTopicRequest Projector %v Topic %v %v \n\tUnexpected Error %v", ap,
 			topic, reqTimestamps.GetBucket(), err)
 
@@ -811,7 +879,7 @@ func (k *kvSender) sendMutationTopicRequest(ap *projClient.Client, topic string,
 
 func (k *kvSender) sendRestartVbuckets(ap *projClient.Client,
 	topic string, connErrVbs []Vbucket,
-	restartTs *protobuf.TsVbuuid) (*protobuf.TopicResponse, error) {
+	restartTs *protobuf.TsVbuuid, sessionId uint64) (*protobuf.TopicResponse, error) {
 
 	logging.Infof("KVSender::sendRestartVbuckets Projector %v Topic %v %v", ap, topic, restartTs.GetBucket())
 	logging.LazyVerbosef("KVSender::sendRestartVbuckets RestartTs %v", restartTs.Repr)
@@ -845,14 +913,15 @@ func (k *kvSender) sendRestartVbuckets(ap *projClient.Client,
 		}
 	}
 
-	if res, err := ap.RestartVbuckets(topic, []*protobuf.TsVbuuid{restartTs}); err != nil {
+	if res, err := ap.RestartVbuckets(topic, sessionId, []*protobuf.TsVbuuid{restartTs}); err != nil {
 		logging.Errorf("KVSender::sendRestartVbuckets Unexpected Error During "+
 			"Restart Vbuckets Request for Projector %v Topic %v %v . Err %v.", ap,
 			topic, restartTs.GetBucket(), err)
 
 		return res, err
 	} else {
-		logging.Infof("KVSender::sendRestartVbuckets Success Projector %v Topic %v %v", ap, topic, restartTs.GetBucket())
+		logging.Infof("KVSender::sendRestartVbuckets Success Projector %v Topic %v %v",
+			ap, topic, restartTs.GetBucket())
 		if logging.IsEnabled(logging.Verbose) {
 			logging.Verbosef("KVSender::sendRestartVbuckets \nActiveTs %v \nRollbackTs %v",
 				debugPrintTs(res.GetActiveTimestamps(), restartTs.GetBucket()),
@@ -1026,6 +1095,23 @@ func updateRollbackTsFromResponse(bucket string,
 
 }
 
+func updatePendingTsFromResponse(bucket string,
+	pendingTs *protobuf.TsVbuuid, res *protobuf.TopicResponse) *protobuf.TsVbuuid {
+
+	pendingTsList := res.GetPendingTimestamps()
+	for _, ts := range pendingTsList {
+		if ts != nil && !ts.IsEmpty() && ts.GetBucket() == bucket {
+			if pendingTs == nil {
+				pendingTs = ts.Clone()
+			} else {
+				pendingTs = pendingTs.Union(ts)
+			}
+		}
+	}
+
+	return pendingTs
+}
+
 func updateCurrentTsFromResponse(bucket string,
 	currentTs *protobuf.TsVbuuid, res *protobuf.TimestampResponse) *protobuf.TsVbuuid {
 
@@ -1185,7 +1271,7 @@ func (k *kvSender) getAllProjectorAddrs() ([]string, error) {
 	return addrList, nil
 }
 
-func (k *kvSender) getProjAddrsForVbuckets(bucket string, vbnos []uint16) ([]string, error) {
+func (k *kvSender) getProjAddrsForVbuckets(bucket string, vbnos []Vbucket) ([]string, error) {
 
 	k.cInfoCache.Lock()
 	defer k.cInfoCache.Unlock()

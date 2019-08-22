@@ -234,7 +234,8 @@ func (resp *FailoverLogResponse) ToFailoverLog(vbnos []uint16) couchbase.Failove
 // NewMutationTopicRequest creates a new MutationTopicRequest
 // for `topic`.
 func NewMutationTopicRequest(
-	topic, endpointType string, instances []*Instance) *MutationTopicRequest {
+	topic, endpointType string, instances []*Instance,
+	async bool, opaque2 uint64) *MutationTopicRequest {
 
 	return &MutationTopicRequest{
 		Topic:         proto.String(topic),
@@ -242,6 +243,8 @@ func NewMutationTopicRequest(
 		ReqTimestamps: make([]*TsVbuuid, 0),
 		Instances:     instances,
 		Version:       FeedVersion_watson.Enum(),
+		Async:         proto.Bool(async),
+		Opaque2:       proto.Uint64(opaque2),
 	}
 }
 
@@ -413,9 +416,10 @@ func (tsResp *TimestampResponse) SetErr(err error) *TimestampResponse {
 // NewRestartVbucketsRequest creates a RestartVbucketsRequest
 // for topic, later a list of {pool,bucket,timestamp} need to
 // be added before posting the request.
-func NewRestartVbucketsRequest(topic string) *RestartVbucketsRequest {
+func NewRestartVbucketsRequest(topic string, opaque2 uint64) *RestartVbucketsRequest {
 	return &RestartVbucketsRequest{
-		Topic: proto.String(topic),
+		Topic:   proto.String(topic),
+		Opaque2: proto.Uint64(opaque2),
 	}
 }
 

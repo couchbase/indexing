@@ -48,6 +48,7 @@ type mutationMgr struct {
 	streamReaderExitChMap map[common.StreamId]DoneChannel //Channel to indicate stream reader exited
 
 	streamFlusherStopChMap map[common.StreamId]BucketStopChMap //stop channels for flusher
+	streamBucketSessionId  map[common.StreamId]BucketSessionId
 
 	mutMgrRecvCh   MsgChannel //Receive msg channel for Mutation Manager
 	internalRecvCh MsgChannel //Buffered channel to queue worker messages
@@ -97,17 +98,19 @@ func NewMutationManager(supvCmdch MsgChannel, supvRespch MsgChannel,
 		streamReaderCmdChMap:   make(map[common.StreamId]MsgChannel),
 		streamReaderExitChMap:  make(map[common.StreamId]DoneChannel),
 		streamFlusherStopChMap: make(map[common.StreamId]BucketStopChMap),
-		mutMgrRecvCh:           make(MsgChannel),
-		internalRecvCh:         make(MsgChannel, WORKER_MSG_QUEUE_LEN),
-		shutdownCh:             make(DoneChannel),
-		supvCmdch:              supvCmdch,
-		supvRespch:             supvRespch,
-		numVbuckets:            uint16(config["numVbuckets"].Int()),
-		config:                 config,
-		memUsed:                0,
-		maxMemory:              0,
-		vbMap:                  &VbMapHolder{},
-		numVbsPerHost:          make(map[string]int64),
+		streamBucketSessionId:  make(map[common.StreamId]BucketSessionId),
+
+		mutMgrRecvCh:   make(MsgChannel),
+		internalRecvCh: make(MsgChannel, WORKER_MSG_QUEUE_LEN),
+		shutdownCh:     make(DoneChannel),
+		supvCmdch:      supvCmdch,
+		supvRespch:     supvRespch,
+		numVbuckets:    uint16(config["numVbuckets"].Int()),
+		config:         config,
+		memUsed:        0,
+		maxMemory:      0,
+		vbMap:          &VbMapHolder{},
+		numVbsPerHost:  make(map[string]int64),
 	}
 	m.vbMap.Init()
 
@@ -380,6 +383,7 @@ func (m *mutationMgr) handleOpenStream(cmd Message) {
 	bucket := cmd.(*MsgStreamUpdate).GetBucket()
 	restartTs := cmd.(*MsgStreamUpdate).GetRestartTs()
 	allowMarkFirsSnap := cmd.(*MsgStreamUpdate).AllowMarkFirstSnap()
+	sessionId := cmd.(*MsgStreamUpdate).GetSessionId()
 
 	bucketFilter := make(map[string]*common.TsVbuuid)
 	bucketFilter[bucket] = restartTs
@@ -390,13 +394,14 @@ func (m *mutationMgr) handleOpenStream(cmd Message) {
 	//if this stream is already open, add to existing stream
 	if _, ok := m.streamReaderMap[streamId]; ok {
 
-		respMsg := m.addIndexListToExistingStream(streamId, indexList, bucketFilter)
+		respMsg := m.addIndexListToExistingStream(streamId, indexList, bucketFilter, sessionId)
 		m.supvCmdch <- respMsg
 		return
 	}
 
 	bucketQueueMap := make(BucketQueueMap)
 	indexQueueMap := make(IndexQueueMap)
+	bucketSessionId := make(BucketSessionId)
 
 	//create a new mutation queue for the stream reader
 	//for each bucket, a separate queue is required
@@ -405,7 +410,8 @@ func (m *mutationMgr) handleOpenStream(cmd Message) {
 		if _, ok := bucketQueueMap[i.Defn.Bucket]; !ok {
 			//init mutation queue
 			var queue MutationQueue
-			if queue = NewAtomicMutationQueue(i.Defn.Bucket, m.numVbuckets, &m.maxMemory, &m.memUsed, m.config); queue == nil {
+			if queue = NewAtomicMutationQueue(i.Defn.Bucket, m.numVbuckets,
+				&m.maxMemory, &m.memUsed, m.config); queue == nil {
 				m.supvCmdch <- &MsgError{
 					err: Error{code: ERROR_MUTATION_QUEUE_INIT,
 						severity: FATAL,
@@ -415,6 +421,7 @@ func (m *mutationMgr) handleOpenStream(cmd Message) {
 
 			bucketQueueMap[i.Defn.Bucket] = IndexerMutationQueue{
 				queue: queue}
+			bucketSessionId[i.Defn.Bucket] = sessionId
 		}
 		indexQueueMap[i.InstId] = bucketQueueMap[i.Defn.Bucket]
 	}
@@ -422,7 +429,7 @@ func (m *mutationMgr) handleOpenStream(cmd Message) {
 
 	reader, errMsg := CreateMutationStreamReader(streamId, bucketQueueMap, bucketFilter,
 		cmdCh, m.mutMgrRecvCh, getNumStreamWorkers(m.config), m.stats.Get(),
-		m.config, m.indexerState, allowMarkFirsSnap, m.vbMap)
+		m.config, m.indexerState, allowMarkFirsSnap, m.vbMap, bucketSessionId)
 
 	if reader == nil {
 		//send the error back on supv channel
@@ -434,6 +441,7 @@ func (m *mutationMgr) handleOpenStream(cmd Message) {
 		m.streamIndexQueueMap[streamId] = indexQueueMap
 		m.streamReaderCmdChMap[streamId] = cmdCh
 		m.streamReaderExitChMap[streamId] = make(DoneChannel)
+		m.streamBucketSessionId[streamId] = bucketSessionId
 
 		func() {
 			m.flock.Lock()
@@ -457,6 +465,7 @@ func (m *mutationMgr) handleAddIndexListToStream(cmd Message) {
 
 	streamId := cmd.(*MsgStreamUpdate).GetStreamId()
 	indexList := cmd.(*MsgStreamUpdate).GetIndexList()
+	sessionId := cmd.(*MsgStreamUpdate).GetSessionId()
 
 	m.lock.Lock()
 	defer m.lock.Unlock()
@@ -474,17 +483,19 @@ func (m *mutationMgr) handleAddIndexListToStream(cmd Message) {
 		return
 	}
 
-	respMsg := m.addIndexListToExistingStream(streamId, indexList, nil)
+	respMsg := m.addIndexListToExistingStream(streamId, indexList, nil, sessionId)
 	//send the message back on supv channel
 	m.supvCmdch <- respMsg
 
 }
 
 func (m *mutationMgr) addIndexListToExistingStream(streamId common.StreamId,
-	indexList []common.IndexInst, bucketFilter map[string]*common.TsVbuuid) Message {
+	indexList []common.IndexInst, bucketFilter map[string]*common.TsVbuuid,
+	sessionId uint64) Message {
 
 	bucketQueueMap := m.streamBucketQueueMap[streamId]
 	indexQueueMap := m.streamIndexQueueMap[streamId]
+	bucketSessionId := m.streamBucketSessionId[streamId]
 
 	var bucketMapDirty bool
 	for _, i := range indexList {
@@ -492,7 +503,8 @@ func (m *mutationMgr) addIndexListToExistingStream(streamId common.StreamId,
 		if _, ok := bucketQueueMap[i.Defn.Bucket]; !ok {
 			//init mutation queue
 			var queue MutationQueue
-			if queue = NewAtomicMutationQueue(i.Defn.Bucket, m.numVbuckets, &m.maxMemory, &m.memUsed, m.config); queue == nil {
+			if queue = NewAtomicMutationQueue(i.Defn.Bucket, m.numVbuckets,
+				&m.maxMemory, &m.memUsed, m.config); queue == nil {
 				return &MsgError{
 					err: Error{code: ERROR_MUTATION_QUEUE_INIT,
 						severity: FATAL,
@@ -501,6 +513,7 @@ func (m *mutationMgr) addIndexListToExistingStream(streamId common.StreamId,
 
 			bucketQueueMap[i.Defn.Bucket] = IndexerMutationQueue{
 				queue: queue}
+			bucketSessionId[i.Defn.Bucket] = sessionId
 			bucketMapDirty = true
 		}
 		indexQueueMap[i.InstId] = bucketQueueMap[i.Defn.Bucket]
@@ -508,12 +521,13 @@ func (m *mutationMgr) addIndexListToExistingStream(streamId common.StreamId,
 
 	if bucketMapDirty {
 		respMsg := m.sendMsgToStreamReader(streamId,
-			m.newUpdateBucketQueuesMsg(bucketQueueMap, bucketFilter))
+			m.newUpdateBucketQueuesMsg(bucketQueueMap, bucketFilter, bucketSessionId))
 
 		if respMsg.GetMsgType() == MSG_SUCCESS {
 			//update internal structures
 			m.streamBucketQueueMap[streamId] = bucketQueueMap
 			m.streamIndexQueueMap[streamId] = indexQueueMap
+			m.streamBucketSessionId[streamId] = bucketSessionId
 		}
 		return respMsg
 	}
@@ -522,10 +536,11 @@ func (m *mutationMgr) addIndexListToExistingStream(streamId common.StreamId,
 }
 
 func (m *mutationMgr) newUpdateBucketQueuesMsg(bucketQueueMap BucketQueueMap,
-	bucketFilter map[string]*common.TsVbuuid) *MsgUpdateBucketQueue {
+	bucketFilter map[string]*common.TsVbuuid, bucketSessionId BucketSessionId) *MsgUpdateBucketQueue {
 	return &MsgUpdateBucketQueue{bucketQueueMap: bucketQueueMap,
-		bucketFilter: bucketFilter,
-		stats:        m.stats.Get()}
+		bucketFilter:    bucketFilter,
+		stats:           m.stats.Get(),
+		bucketSessionId: bucketSessionId}
 }
 
 //handleRemoveIndexListFromStream removes a list of indexes from an
@@ -540,16 +555,14 @@ func (m *mutationMgr) handleRemoveIndexListFromStream(cmd Message) {
 	m.lock.Lock()
 	defer m.lock.Unlock()
 
-	//return error if this stream is already closed
+	//ignore if this stream is already closed. This case happens 
+	//when the stream is stopped during recovery and a drop comes in
 	if _, ok := m.streamReaderMap[streamId]; !ok {
 
 		logging.Errorf("MutationMgr::handleRemoveIndexListFromStream "+
 			"Stream Already Closed %v", streamId)
 
-		m.supvCmdch <- &MsgError{
-			err: Error{code: ERROR_MUT_MGR_STREAM_ALREADY_CLOSED,
-				severity: NORMAL,
-				category: MUTATION_MANAGER}}
+		m.supvCmdch <- &MsgSuccess{}
 		return
 	}
 
@@ -557,6 +570,7 @@ func (m *mutationMgr) handleRemoveIndexListFromStream(cmd Message) {
 
 	bucketQueueMap := m.streamBucketQueueMap[streamId]
 	indexQueueMap := m.streamIndexQueueMap[streamId]
+	bucketSessionId := m.streamBucketSessionId[streamId]
 
 	//delete the given indexes from map
 	for _, i := range indexList {
@@ -581,16 +595,19 @@ func (m *mutationMgr) handleRemoveIndexListFromStream(cmd Message) {
 			mq := bucketQueueMap[b].queue
 			mq.Destroy()
 			delete(bucketQueueMap, b)
+			delete(bucketSessionId, b)
 			bucketMapDirty = true
 		}
 	}
 
 	if bucketMapDirty {
-		respMsg := m.sendMsgToStreamReader(streamId, m.newUpdateBucketQueuesMsg(bucketQueueMap, nil))
+		respMsg := m.sendMsgToStreamReader(streamId,
+			m.newUpdateBucketQueuesMsg(bucketQueueMap, nil, bucketSessionId))
 		if respMsg.GetMsgType() == MSG_SUCCESS {
 			//update internal structures
 			m.streamBucketQueueMap[streamId] = bucketQueueMap
 			m.streamIndexQueueMap[streamId] = indexQueueMap
+			m.streamBucketSessionId[streamId] = bucketSessionId
 		}
 
 		//send the message back on supv channel
@@ -607,6 +624,7 @@ func (m *mutationMgr) handleRemoveBucketFromStream(cmd Message) {
 
 	streamId := cmd.(*MsgStreamUpdate).GetStreamId()
 	bucket := cmd.(*MsgStreamUpdate).GetBucket()
+	abort := cmd.(*MsgStreamUpdate).AbortRecovery()
 
 	m.lock.Lock()
 	defer m.lock.Unlock()
@@ -614,18 +632,25 @@ func (m *mutationMgr) handleRemoveBucketFromStream(cmd Message) {
 	//return error if this stream is already closed
 	if _, ok := m.streamReaderMap[streamId]; !ok {
 
-		logging.Errorf("MutationMgr::handleRemoveIndexListFromStream "+
-			"Stream Already Closed %v", streamId)
+		if abort {
+			logging.Infof("MutationMgr::handleRemoveIndexListFromStream "+
+				"Stream Already Closed %v", streamId)
+			m.supvCmdch <- &MsgSuccess{}
+		} else {
+			logging.Errorf("MutationMgr::handleRemoveIndexListFromStream "+
+				"Stream Already Closed %v", streamId)
+			m.supvCmdch <- &MsgError{
+				err: Error{code: ERROR_MUT_MGR_STREAM_ALREADY_CLOSED,
+					severity: NORMAL,
+					category: MUTATION_MANAGER}}
+		}
 
-		m.supvCmdch <- &MsgError{
-			err: Error{code: ERROR_MUT_MGR_STREAM_ALREADY_CLOSED,
-				severity: NORMAL,
-				category: MUTATION_MANAGER}}
 		return
 	}
 
 	bucketQueueMap := m.streamBucketQueueMap[streamId]
 	indexQueueMap := m.streamIndexQueueMap[streamId]
+	bucketSessionId := m.streamBucketSessionId[streamId]
 
 	var bucketMapDirty bool
 
@@ -644,6 +669,7 @@ func (m *mutationMgr) handleRemoveBucketFromStream(cmd Message) {
 		mq := bucketQueueMap[bucket].queue
 		mq.Destroy()
 		delete(bucketQueueMap, bucket)
+		delete(bucketSessionId, bucket)
 	}
 
 	if len(bucketQueueMap) == 0 {
@@ -654,11 +680,13 @@ func (m *mutationMgr) handleRemoveBucketFromStream(cmd Message) {
 
 		m.supvCmdch <- &MsgSuccess{}
 	} else if bucketMapDirty {
-		respMsg := m.sendMsgToStreamReader(streamId, m.newUpdateBucketQueuesMsg(bucketQueueMap, nil))
+		respMsg := m.sendMsgToStreamReader(streamId,
+			m.newUpdateBucketQueuesMsg(bucketQueueMap, nil, bucketSessionId))
 		if respMsg.GetMsgType() == MSG_SUCCESS {
 			//update internal structures
 			m.streamBucketQueueMap[streamId] = bucketQueueMap
 			m.streamIndexQueueMap[streamId] = indexQueueMap
+			m.streamBucketSessionId[streamId] = bucketSessionId
 		}
 
 		//send the message back on supv channel
@@ -1086,7 +1114,8 @@ func (m *mutationMgr) initLatencyObj(cmd Message) {
 	}
 
 	// Check if vb belonged to a different node before
-	if perStreamPrevHost, ok := vbMap[perStreamBucket][vb]; ok && perStreamPrevHost != perStreamCurrHost {
+	if perStreamPrevHost, ok := vbMap[perStreamBucket][vb]; ok &&
+		perStreamPrevHost != perStreamCurrHost {
 		// vb belonged to a different node before
 		m.numVbsPerHost[perStreamPrevHost]--
 		if m.numVbsPerHost[perStreamPrevHost] == 0 {

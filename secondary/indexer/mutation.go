@@ -24,6 +24,7 @@ type MutationMeta struct {
 	seqno     Seqno   //vbucket sequence number for this mutation
 	firstSnap bool    //belongs to first DCP snapshot
 	projVer   c.ProjectorVersion
+	opaque    uint64
 }
 
 var mutMetaPool = sync.Pool{New: newMutationMeta}
@@ -53,13 +54,14 @@ func (m *MutationMeta) Clone() *MutationMeta {
 	meta.seqno = m.seqno
 	meta.firstSnap = m.firstSnap
 	meta.projVer = m.projVer
+	meta.opaque = m.opaque
 	return meta
 }
 
 func (m *MutationMeta) Size() int64 {
 
 	size := int64(len(m.bucket))
-	size += 8 + 4 + 8 + 8 //fixed cost of members
+	size += 8 + 4 + 8 + 8 + 8 //fixed cost of members
 	return size
 
 }

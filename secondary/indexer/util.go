@@ -257,3 +257,26 @@ func GetBucketUUID(cluster, bucket string) string {
 
 	return ""
 }
+
+func clusterVersion(clusterAddr string) uint64 {
+
+	var cinfo *common.ClusterInfoCache
+	url, err := common.ClusterAuthUrl(clusterAddr)
+	if err != nil {
+		return common.INDEXER_45_VERSION
+	}
+
+	cinfo, err = common.NewClusterInfoCache(url, DEFAULT_POOL)
+	if err != nil {
+		return common.INDEXER_45_VERSION
+	}
+
+	cinfo.Lock()
+	defer cinfo.Unlock()
+
+	if err := cinfo.Fetch(); err != nil {
+		return common.INDEXER_45_VERSION
+	}
+
+	return cinfo.GetClusterVersion()
+}

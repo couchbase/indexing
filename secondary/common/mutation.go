@@ -12,6 +12,15 @@ import (
 	"fmt"
 )
 
+// Stream Response Status Code
+type StreamStatus byte
+
+const (
+	STREAM_SUCCESS StreamStatus = iota // 0
+	STREAM_FAIL
+	STREAM_ROLLBACK
+)
+
 // types of payload
 const (
 	PayloadKeyVersions byte = iota + 1
@@ -38,6 +47,7 @@ const (
 	ProjVer_5_1_0 ProjectorVersion = iota + 1
 	ProjVer_5_1_1
 	ProjVer_5_5_0
+	ProjVer_6_5_0
 )
 
 // Payload either carries `vbmap` or `vbs`.
@@ -136,11 +146,14 @@ type VbKeyVersions struct {
 	Kvs     []*KeyVersions // N number of mutations
 	Uuid    string
 	ProjVer ProjectorVersion
+	Opaque2 uint64
 }
 
 // NewVbKeyVersions return a reference to a single vbucket payload
-func NewVbKeyVersions(bucket string, vbno uint16, vbuuid uint64, maxMutations int) *VbKeyVersions {
-	vb := &VbKeyVersions{Bucket: bucket, Vbucket: vbno, Vbuuid: vbuuid, ProjVer: ProjVer_5_5_0}
+func NewVbKeyVersions(bucket string, vbno uint16,
+	vbuuid uint64, opaque2 uint64, maxMutations int) *VbKeyVersions {
+	vb := &VbKeyVersions{Bucket: bucket, Vbucket: vbno,
+		Vbuuid: vbuuid, Opaque2: opaque2, ProjVer: ProjVer_6_5_0}
 	vb.Kvs = make([]*KeyVersions, 0, maxMutations)
 	vb.Uuid = StreamID(bucket, vbno)
 	return vb
@@ -280,8 +293,8 @@ func (kv *KeyVersions) AddDropData() {
 }
 
 // AddStreamBegin add StreamBegin command for a new vbucket.
-func (kv *KeyVersions) AddStreamBegin() {
-	kv.addKey(0, StreamBegin, nil, nil, nil)
+func (kv *KeyVersions) AddStreamBegin(status byte, code byte) {
+	kv.addKey(0, StreamBegin, []byte{status, code}, nil, nil)
 }
 
 // AddStreamEnd add StreamEnd command for a vbucket shutdown.
@@ -310,8 +323,9 @@ func (kv *KeyVersions) String() string {
 
 // DataportKeyVersions accepted by this endpoint.
 type DataportKeyVersions struct {
-	Bucket string
-	Vbno   uint16
-	Vbuuid uint64
-	Kv     *KeyVersions
+	Bucket  string
+	Vbno    uint16
+	Vbuuid  uint64
+	Kv      *KeyVersions
+	Opaque2 uint64
 }

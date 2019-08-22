@@ -23,6 +23,7 @@ func (b *endpointBuffers) addKeyVersions(
 	bucket string,
 	vbno uint16,
 	vbuuid uint64,
+	opaque2 uint64,
 	kv *c.KeyVersions,
 	endpoint *RouterEndpoint) {
 
@@ -30,7 +31,8 @@ func (b *endpointBuffers) addKeyVersions(
 		uuid := c.StreamID(bucket, vbno)
 		if _, ok := b.vbs[uuid]; !ok {
 			nMuts := 16 // to avoid reallocs.
-			b.vbs[uuid] = c.NewVbKeyVersions(bucket, vbno, vbuuid, nMuts)
+			b.vbs[uuid] = c.NewVbKeyVersions(bucket, vbno,
+				vbuuid, opaque2, nMuts)
 		}
 		b.vbs[uuid].AddKeyVersions(kv)
 		// update statistics
