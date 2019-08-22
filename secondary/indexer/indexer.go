@@ -1416,27 +1416,6 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 		}
 	}
 
-	initState := idx.getStreamBucketState(common.INIT_STREAM, indexInst.Defn.Bucket)
-	maintState := idx.getStreamBucketState(common.MAINT_STREAM, indexInst.Defn.Bucket)
-
-	if initState == STREAM_RECOVERY ||
-		initState == STREAM_PREPARE_RECOVERY ||
-		maintState == STREAM_RECOVERY ||
-		maintState == STREAM_PREPARE_RECOVERY {
-		logging.Errorf("Indexer::handleCreateIndex \n\tCannot Process Create Index " +
-			"In Recovery Mode.")
-
-		if clientCh != nil {
-			clientCh <- &MsgError{
-				err: Error{code: ERROR_INDEXER_IN_RECOVERY,
-					severity: FATAL,
-					cause:    ErrIndexerInRecovery,
-					category: INDEXER}}
-
-		}
-		return
-	}
-
 	//check if this is duplicate index instance
 	if ok := idx.checkDuplicateIndex(indexInst, clientCh); !ok {
 		return
@@ -1958,7 +1937,7 @@ func (idx *indexer) mergePartition(bucket string, streamId common.StreamId, sour
 			// The source and target must be on the same stream.
 			if source.Stream != target.Stream {
 				logging.Warnf("MergePartition: Source Index Instance stream %v and target index instance stream %v are not on the same. "+
-				"Do not merge now.", target.Stream, source.Stream)
+					"Do not merge now.", target.Stream, source.Stream)
 				return false
 			}
 
@@ -2562,17 +2541,6 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 			}
 		} else {
 			logging.Infof("Indexer::handleBuildIndex Bucket %v validation successful", bucket)
-		}
-
-		if ok := idx.checkBucketInRecovery(bucket, instIdList, clientCh, errMap); ok {
-			logging.Errorf("Indexer::handleBuildIndex \n\tCannot Process Build Index "+
-				"In Recovery Mode. Bucket %v. Index In Error %v", bucket, errMap)
-			if idx.enableManager {
-				delete(bucketIndexList, bucket)
-				continue
-			} else {
-				return
-			}
 		}
 
 		//check if Initial Build is already running for this index's bucket
@@ -4584,12 +4552,12 @@ func (idx *indexer) handleMergeInitStream(msg Message) {
 	//remove bucket from INIT_STREAM
 	var cmd Message
 	cmd = &MsgStreamUpdate{mType: REMOVE_BUCKET_FROM_STREAM,
-		streamId:  streamId,
-		bucket:    bucket,
-		respCh:    respCh,
-		stopCh:    stopCh,
+		streamId:      streamId,
+		bucket:        bucket,
+		respCh:        respCh,
+		stopCh:        stopCh,
 		abortRecovery: true,
-		sessionId: sessionId,
+		sessionId:     sessionId,
 	}
 
 	//send stream update to timekeeper
@@ -5898,7 +5866,7 @@ func (idx *indexer) forceCleanupIndexPartition(indexInst *common.IndexInst,
 
 	if err := idx.sendMsgToClusterMgr(msg); err != nil {
 		logging.Errorf("Indexer::forceCleanupIndexPartition %v %v Got error %v in deleting metadata. "+
-		"Metadata will be deleted on next indexer restart.", indexInst.InstId, partnId, err)
+			"Metadata will be deleted on next indexer restart.", indexInst.InstId, partnId, err)
 	}
 }
 
