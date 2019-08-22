@@ -214,11 +214,10 @@ func (ie *IndexEvaluator) StreamEndData(
 	return &c.DataportKeyVersions{bucket, vbno, vbuuid, kv, opaque2}
 }
 
-// TransformRoute implement Evaluator{} interface.
-func (ie *IndexEvaluator) TransformRoute(
-	vbuuid uint64, m *mc.DcpEvent, data map[string]interface{}, encodeBuf []byte,
-	docval qvalue.AnnotatedValue, context qexpr.Context, meta map[string]interface{},
-	numIndexes int, opaque2 uint64) (newBuf []byte, err error) {
+func (ie *IndexEvaluator) processEvent(m *mc.DcpEvent, encodeBuf []byte,
+	docval qvalue.AnnotatedValue, context qexpr.Context,
+	meta map[string]interface{}) (npkey, opkey, nkey, okey, newBuf []byte,
+	where bool, opcode mcd.CommandCode, err error) {
 
 	defer func() { // panic safe
 		if r := recover(); r != nil {
@@ -230,13 +229,13 @@ func (ie *IndexEvaluator) TransformRoute(
 		encodeBuf = nil
 	}
 
-	var npkey /*new-partition*/, opkey /*old-partition*/, nkey, okey []byte
 	instn := ie.instance
 
 	defn := instn.Definition
 	retainDelete := m.HasXATTR() && defn.GetRetainDeletedXATTR() &&
 		(m.Opcode == mcd.DCP_DELETION || m.Opcode == mcd.DCP_EXPIRATION)
-	opcode := m.Opcode
+
+	opcode = m.Opcode
 	if retainDelete {
 		// TODO: Replace with isMetaIndex()
 		m.TreatAsJSON()
@@ -247,19 +246,19 @@ func (ie *IndexEvaluator) TransformRoute(
 
 	ie.dcpEvent2Meta(m, meta)
 	docval.SetAttachment("meta", meta)
-	where, err := ie.wherePredicate(m, docval, context, encodeBuf)
+	where, err = ie.wherePredicate(m, docval, context, encodeBuf)
 	if err != nil {
-		return nil, err
+		return npkey, opkey, nkey, okey, newBuf, where, opcode, err
 	}
 
 	if where && (len(m.Value) > 0 || retainDelete) { // project new secondary key
 		npkey, err = ie.partitionKey(m, m.Key, docval, context, encodeBuf)
 		if err != nil {
-			return nil, err
+			return npkey, opkey, nkey, okey, newBuf, where, opcode, err
 		}
 		nkey, newBuf, err = ie.evaluate(m, m.Key, docval, context, encodeBuf)
 		if err != nil {
-			return nil, err
+			return npkey, opkey, nkey, okey, newBuf, where, opcode, err
 		}
 	}
 	if len(m.OldValue) > 0 { // project old secondary key
@@ -268,15 +267,66 @@ func (ie *IndexEvaluator) TransformRoute(
 		docval.SetAttachment("meta", meta)
 		opkey, err = ie.partitionKey(m, m.Key, docval, context, encodeBuf)
 		if err != nil {
-			return nil, err
+			return npkey, opkey, nkey, okey, newBuf, where, opcode, err
 		}
 		okey, newBuf, err = ie.evaluate(m, m.Key, docval, context, encodeBuf)
 		if err != nil {
-			return nil, err
+			return npkey, opkey, nkey, okey, newBuf, where, opcode, err
 		}
 	}
 
+	return npkey, opkey, nkey, okey, newBuf, where, opcode, nil
+}
+
+// TransformRoute implement Evaluator{} interface.
+func (ie *IndexEvaluator) TransformRoute(
+	vbuuid uint64, m *mc.DcpEvent, data map[string]interface{}, encodeBuf []byte,
+	docval qvalue.AnnotatedValue, context qexpr.Context, meta map[string]interface{},
+	numIndexes int, opaque2 uint64) ([]byte, error) {
+
+	var err error
+	var npkey /*new-partition*/, opkey /*old-partition*/, nkey, okey []byte
+	var newBuf []byte
+	var where bool
+	var opcode mcd.CommandCode
+
+	forceUpsertDeletion := false
+	npkey, opkey, nkey, okey, newBuf, where, opcode, err = ie.processEvent(m,
+		encodeBuf, docval, context, meta)
+	if err != nil {
+		forceUpsertDeletion = true
+	}
+
+	err1 := ie.populateData(vbuuid, m, data, numIndexes, npkey, opkey, nkey, okey,
+		where, opcode, opaque2, forceUpsertDeletion)
+
+	if err == nil && err1 != nil {
+		err = err1
+	}
+
+	if err != nil {
+		// The decision to perform UpsertDel on error is made in this function.
+		// So, this function will record the count of Error Skip mutations.
+		ie.stats.ErrSkip.Add(1)
+		ie.stats.ErrSkipAll.Add(1)
+	}
+
+	return newBuf, err
+}
+
+func (ie *IndexEvaluator) populateData(vbuuid uint64, m *mc.DcpEvent,
+	data map[string]interface{}, numIndexes int, npkey, opkey []byte,
+	nkey, okey []byte, where bool, opcode mcd.CommandCode, opaque2 uint64,
+	forceUpsertDeletion bool) (err error) {
+
+	defer func() { // panic safe
+		if r := recover(); r != nil {
+			err = fmt.Errorf("%v", r)
+		}
+	}()
+
 	vbno, seqno := m.VBucket, m.Seqno
+	instn := ie.instance
 	uuid := instn.GetInstId()
 
 	bucket := ie.Bucket()
@@ -286,61 +336,36 @@ func (ie *IndexEvaluator) TransformRoute(
 			logging.TagUD(string(npkey)), logging.TagUD(string(nkey)))
 	})
 
-	switch opcode {
-	case mcd.DCP_MUTATION:
-		// FIXME: TODO: where clause is not used to for optimizing out messages
-		// not passing the where clause. For this we need a gaurantee that
-		// where clause will be defined only on immutable fields.
-		if where { // WHERE predicate, sent upsert only if where is true.
-			raddrs := instn.UpsertEndpoints(m, npkey, nkey, okey)
-			if len(raddrs) != 0 {
-				for _, raddr := range raddrs {
-					dkv, ok := data[raddr].(*c.DataportKeyVersions)
-					if !ok {
-						kv := c.NewKeyVersions(seqno, m.Key, numIndexes, m.Ctime)
-						kv.AddUpsert(uuid, nkey, okey, npkey)
-						dkv = &c.DataportKeyVersions{bucket, vbno, vbuuid, kv, opaque2}
-					} else {
-						dkv.Kv.AddUpsert(uuid, nkey, okey, npkey)
-					}
-					data[raddr] = dkv
-				}
+	processUpsert := func(raddrs []string) {
+		for _, raddr := range raddrs {
+			dkv, ok := data[raddr].(*c.DataportKeyVersions)
+			if !ok {
+				kv := c.NewKeyVersions(seqno, m.Key, numIndexes, m.Ctime)
+				kv.AddUpsert(uuid, nkey, okey, npkey)
+				dkv = &c.DataportKeyVersions{bucket, vbno, vbuuid, kv, opaque2}
 			} else {
-				// send upsertDeletion if cannot find an endpoint that can accept this mutation
-				// for the given feed
-				raddrs := instn.UpsertDeletionEndpoints(m, npkey, nkey, okey)
-				for _, raddr := range raddrs {
-					dkv, ok := data[raddr].(*c.DataportKeyVersions)
-					if !ok {
-						kv := c.NewKeyVersions(seqno, m.Key, numIndexes, m.Ctime)
-						kv.AddUpsertDeletion(uuid, okey, npkey)
-						dkv = &c.DataportKeyVersions{bucket, vbno, vbuuid, kv, opaque2}
-					} else {
-						dkv.Kv.AddUpsertDeletion(uuid, okey, npkey)
-					}
-					data[raddr] = dkv
-				}
+				dkv.Kv.AddUpsert(uuid, nkey, okey, npkey)
 			}
-		} else { // if WHERE is false, broadcast upsertdelete.
-			// NOTE: downstream can use upsertdelete and immutable flag
-			// to optimize out back-index lookup.
-			raddrs := instn.UpsertDeletionEndpoints(m, npkey, nkey, okey)
-			for _, raddr := range raddrs {
-				dkv, ok := data[raddr].(*c.DataportKeyVersions)
-				if !ok {
-					kv := c.NewKeyVersions(seqno, m.Key, numIndexes, m.Ctime)
-					kv.AddUpsertDeletion(uuid, okey, npkey)
-					dkv = &c.DataportKeyVersions{bucket, vbno, vbuuid, kv, opaque2}
-				} else {
-					dkv.Kv.AddUpsertDeletion(uuid, okey, npkey)
-				}
-				data[raddr] = dkv
-			}
+			data[raddr] = dkv
 		}
+	}
 
-	case mcd.DCP_DELETION, mcd.DCP_EXPIRATION:
+	processUpsertDel := func() {
+		raddrs := instn.UpsertDeletionEndpoints(m, npkey, nkey, okey)
+		for _, raddr := range raddrs {
+			dkv, ok := data[raddr].(*c.DataportKeyVersions)
+			if !ok {
+				kv := c.NewKeyVersions(seqno, m.Key, numIndexes, m.Ctime)
+				kv.AddUpsertDeletion(uuid, okey, npkey)
+				dkv = &c.DataportKeyVersions{bucket, vbno, vbuuid, kv, opaque2}
+			} else {
+				dkv.Kv.AddUpsertDeletion(uuid, okey, npkey)
+			}
+			data[raddr] = dkv
+		}
+	}
 
-		// Delete shall be broadcasted if old-key is not available.
+	processDeletion := func() {
 		raddrs := instn.DeletionEndpoints(m, opkey, okey)
 		for _, raddr := range raddrs {
 			dkv, ok := data[raddr].(*c.DataportKeyVersions)
@@ -354,7 +379,39 @@ func (ie *IndexEvaluator) TransformRoute(
 			data[raddr] = dkv
 		}
 	}
-	return newBuf, nil
+
+	if forceUpsertDeletion {
+		processUpsertDel()
+		return
+	}
+
+	switch opcode {
+	case mcd.DCP_MUTATION:
+		// FIXME: TODO: where clause is not used to for optimizing out messages
+		// not passing the where clause. For this we need a gaurantee that
+		// where clause will be defined only on immutable fields.
+		if where { // WHERE predicate, sent upsert only if where is true.
+			raddrs := instn.UpsertEndpoints(m, npkey, nkey, okey)
+			if len(raddrs) != 0 {
+				processUpsert(raddrs)
+			} else {
+				// send upsertDeletion if cannot find an endpoint that can accept this mutation
+				// for the given feed
+				processUpsertDel()
+			}
+		} else { // if WHERE is false, broadcast upsertdelete.
+			// NOTE: downstream can use upsertdelete and immutable flag
+			// to optimize out back-index lookup.
+			processUpsertDel()
+		}
+
+	case mcd.DCP_DELETION, mcd.DCP_EXPIRATION:
+
+		// Delete shall be broadcasted if old-key is not available.
+		processDeletion()
+	}
+
+	return nil
 }
 
 func (ie *IndexEvaluator) Stats() interface{} {
@@ -458,12 +515,24 @@ func (ie *IndexEvaluator) dcpEvent2Meta(m *mc.DcpEvent, meta map[string]interfac
 	meta["xattrs"] = m.ParsedXATTR
 }
 
+// GetIndexName implements Evaluator{} interface.
+func (ie *IndexEvaluator) GetIndexName() string {
+	return ie.instance.GetDefinition().GetName()
+}
+
 type IndexEvaluatorStats struct {
 	Count     stats.Int64Val
 	TotalDur  stats.Int64Val
 	PrevCount stats.Int64Val
 	PrevDur   stats.Int64Val
 	SMA       stats.Int64Val // Simple moving average
+
+	// ErrSkip represents number of mutations skipped since the
+	// last call to GetAndResetErrorSkip
+	ErrSkip stats.Int64Val
+
+	// Total number of mutations skipped since this stat object was initialized.
+	ErrSkipAll stats.Int64Val
 }
 
 func (ie *IndexEvaluatorStats) Init() {
@@ -472,6 +541,8 @@ func (ie *IndexEvaluatorStats) Init() {
 	ie.PrevCount.Init()
 	ie.PrevDur.Init()
 	ie.SMA.Init()
+	ie.ErrSkip.Init()
+	ie.ErrSkipAll.Init()
 }
 
 func (ies *IndexEvaluatorStats) add(duration time.Duration) {
@@ -498,4 +569,14 @@ func (ies *IndexEvaluatorStats) MovingAvg() int64 {
 	}
 
 	return ies.SMA.Value()
+}
+
+func (ies *IndexEvaluatorStats) GetAndResetErrorSkip() int64 {
+	val := ies.ErrSkip.Value()
+	ies.ErrSkip.Add(-val)
+	return val
+}
+
+func (ies *IndexEvaluatorStats) GetErrorSkipAll() int64 {
+	return ies.ErrSkipAll.Value()
 }

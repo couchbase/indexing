@@ -36,16 +36,16 @@ type BucketStats struct {
 	// Value -> Slice containing pointer to stats object of all workers
 	wrkrStats map[string][]interface{}
 
-	// Key -> Index instance ID
+	// Key -> <bucketname>:<indexname>
 	// Value -> Pointer to stats object for index evaluator
-	evaluatorStats map[uint64]interface{}
+	evaluatorStats map[string]interface{}
 }
 
 func (bs *BucketStats) Init() {
 	bs.dcpStats = make(map[string]interface{}, 0)
 	bs.kvstats = make(map[string]interface{}, 0)
 	bs.wrkrStats = make(map[string][]interface{}, 0)
-	bs.evaluatorStats = make(map[uint64]interface{})
+	bs.evaluatorStats = make(map[string]interface{})
 }
 
 func (bs *BucketStats) clone() *BucketStats {
@@ -329,11 +329,27 @@ func (sm *statsManager) logger() {
 						// As of this commit, only IndexEvaluatorStats are supported
 						logPrefix := fmt.Sprintf("EVAL[%v #%v] ##%x ", bucketStats.bucket, bucketStats.topic, bucketStats.opaque)
 						var evalStats string
+						var skippedStr string
+
 						for key, value := range bucketStats.evaluatorStats {
 							switch (value).(type) {
 							case *protobuf.IndexEvaluatorStats:
+								keyStr := fmt.Sprintf("%v", key)
 								avg := value.(*protobuf.IndexEvaluatorStats).MovingAvg()
-								evalStats += fmt.Sprintf("\"%v\":%v,", key, avg)
+								evalStats += fmt.Sprintf("\"%v\":%v,", keyStr+":avgLatency", avg)
+								errSkip := value.(*protobuf.IndexEvaluatorStats).GetAndResetErrorSkip()
+								errSkipAll := value.(*protobuf.IndexEvaluatorStats).GetErrorSkipAll()
+								evalStats += fmt.Sprintf("\"%v\":%v,", keyStr+":skipCount", errSkipAll)
+								if errSkip != 0 {
+									if len(skippedStr) == 0 {
+										skippedStr = fmt.Sprintf("In last %v, projector skipped "+
+											"evaluating some documents due to errors. Please see the "+
+											"projector.log for details. Skipped document counts for "+
+											"following indexes are:\n",
+											time.Duration(atomic.LoadInt64(&sm.evalStatsLogInterval)*1e9))
+									}
+									skippedStr += fmt.Sprintf("\"%v\":%v,", key, errSkip)
+								}
 							default:
 								logging.Errorf("%v Unknown type for evaluator stats", logPrefix)
 								continue
@@ -341,6 +357,16 @@ func (sm *statsManager) logger() {
 						}
 						if len(evalStats) > 0 {
 							logging.Infof("%v stats: {%v}", logPrefix, evalStats[0:len(evalStats)-1])
+						}
+						if len(skippedStr) != 0 {
+							// Some mutations were skipped by the index evaluator.
+							// Report it in the console logs.
+							skippedStr = skippedStr[0 : len(skippedStr)-1]
+							cfg := sm.config.Load()
+							clusterAddr, ok := cfg["projector.clusterAddr"]
+							if ok {
+								common.Console(clusterAddr.String(), skippedStr)
+							}
 						}
 					}
 				}

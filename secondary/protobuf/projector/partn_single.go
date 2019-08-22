@@ -64,6 +64,7 @@ func (p *SinglePartition) UpsertEndpoints(
 func (p *SinglePartition) UpsertDeletionEndpoints(
 	inst *IndexInst, m *mc.DcpEvent, oldPartKey, key, oldKey []byte) []string {
 
+	// Note: Based on available information, oldPartKey, key, oldKey can be nil.
 	return p.GetEndpoints()
 }
 

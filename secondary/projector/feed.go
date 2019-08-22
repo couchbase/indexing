@@ -776,9 +776,12 @@ func (feed *Feed) handleCommand(msg []interface{}) (status string) {
 
 			// For this bucket, get evaluator stats
 			engines := feed.engines[bucket]
-			bucketStats.evaluatorStats = make(map[uint64]interface{})
-			for uuid, engine := range engines {
-				bucketStats.evaluatorStats[uuid] = engine.GetEvaluatorStats()
+			bucketStats.evaluatorStats = make(map[string]interface{})
+			for _, engine := range engines {
+				indexname := engine.GetIndexName()
+				bucketname := engine.Bucket()
+				key := fmt.Sprintf("%v:%v", bucketname, indexname)
+				bucketStats.evaluatorStats[key] = engine.GetEvaluatorStats()
 			}
 
 			// Update feed stats for this bucket
