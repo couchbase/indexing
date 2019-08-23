@@ -83,6 +83,7 @@ const (
 
 	//ADMIN_MGR
 	ADMIN_MGR_SHUTDOWN
+	MSG_SUCCESS_DROP
 
 	//CLUSTER_MGR
 	CLUST_MGR_AGENT_SHUTDOWN
@@ -230,6 +231,19 @@ func (m *MsgSuccessOpenStream) GetActiveTs() *common.TsVbuuid {
 
 func (m *MsgSuccessOpenStream) GetPendingTs() *common.TsVbuuid {
 	return m.pendingTs
+}
+
+//Success Message
+type MsgSuccessDrop struct {
+	streamId common.StreamId
+}
+
+func (m *MsgSuccessDrop) GetMsgType() MsgType {
+	return MSG_SUCCESS_DROP
+}
+
+func (m *MsgSuccessDrop) GetStreamId() common.StreamId{
+	return m.streamId
 }
 
 //Timestamp Message
@@ -1926,7 +1940,7 @@ func (m MsgType) String() string {
 	case MSG_SUCCESS:
 		return "MSG_SUCCESS"
 	case MSG_ERROR:
-		return "MSG_SUCCESS"
+		return "MSG_ERROR"
 	case MSG_TIMESTAMP:
 		return "MSG_TIMESTAMP"
 	case STREAM_READER_STREAM_DROP_DATA:
@@ -2001,6 +2015,8 @@ func (m MsgType) String() string {
 
 	case ADMIN_MGR_SHUTDOWN:
 		return "ADMIN_MGR_SHUTDOWN"
+	case MSG_SUCCESS_DROP:
+		return "MSG_SUCCESS_DROP"
 	case CLUST_MGR_AGENT_SHUTDOWN:
 		return "CLUST_MGR_AGENT_SHUTDOWN"
 	case CBQ_BRIDGE_SHUTDOWN:
