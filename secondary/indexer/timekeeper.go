@@ -2036,11 +2036,11 @@ func (tk *timekeeper) checkInitialBuildDone(streamId common.StreamId,
 //has reached past the last flushed TS of the MAINT_STREAM for this bucket.
 //In such case, all indexes of the bucket can merged to MAINT_STREAM.
 func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
-	bucket string, flushTs *common.TsVbuuid) bool {
+	bucket string, initFlushTs *common.TsVbuuid) bool {
 
 	logging.LazyTrace(func() string {
 		return fmt.Sprintf("Timekeeper::checkInitStreamReadyToMerge \n\t Stream %v Bucket %v len(buildInfo) %v "+
-			"FlushTs %v", streamId, bucket, len(tk.indexBuildInfo), flushTs)
+			"FlushTs %v", streamId, bucket, len(tk.indexBuildInfo), initFlushTs)
 	})
 
 	if streamId != common.INIT_STREAM {
@@ -2048,12 +2048,12 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 	}
 
 	//if flushTs is not on snap boundary, merge cannot be done
-	if !flushTs.IsSnapAligned() {
+	if !initFlushTs.IsSnapAligned() {
 		hwt := tk.ss.streamBucketHWTMap[streamId][bucket]
 		logging.Infof("Timekeeper::checkInitStreamReadyToMerge FlushTs Not Snapshot "+
 			"Aligned. Continue both streams for bucket %v.", bucket)
 		logging.LazyVerbose(func() string {
-			return fmt.Sprintf("Timekeeper::checkInitStreamReadyToMerge FlushTs %v\n HWT %v", flushTs, hwt)
+			return fmt.Sprintf("Timekeeper::checkInitStreamReadyToMerge FlushTs %v\n HWT %v", initFlushTs, hwt)
 		})
 		return false
 	}
@@ -2098,35 +2098,7 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 			buildInfo.buildDoneAckReceived == true &&
 			buildInfo.minMergeTs != nil {
 
-			//if the flushTs is past the lastFlushTs of this bucket in MAINT_STREAM,
-			//this index can be merged to MAINT_STREAM. If there is a flush in progress,
-			//it is important to use that for comparison as after merge MAINT_STREAM will
-			//include merged indexes after the in progress flush finishes.
-			var lastFlushedTsVbuuid *common.TsVbuuid
-			if lts, ok := tk.ss.streamBucketFlushInProgressTsMap[common.MAINT_STREAM][bucket]; ok && lts != nil {
-				lastFlushedTsVbuuid = lts
-			} else {
-				lastFlushedTsVbuuid = tk.ss.streamBucketLastFlushedTsMap[common.MAINT_STREAM][bucket]
-			}
-
-			readyToMerge := false
-			var ts, lastFlushedTs Timestamp
-			//if no flush has happened yet, its good to merge
-			if lastFlushedTsVbuuid == nil {
-				readyToMerge = true
-			} else if flushTs == nil {
-				//if flushTs is nil for INIT_STREAM and non-nil for MAINT_STREAM
-				//merge cannot happen
-				readyToMerge = false
-			} else {
-				lastFlushedTs = getSeqTsFromTsVbuuid(lastFlushedTsVbuuid)
-				ts = getSeqTsFromTsVbuuid(flushTs)
-				minMergeTs := getSeqTsFromTsVbuuid(buildInfo.minMergeTs)
-				if ts.GreaterThanEqual(lastFlushedTs) &&
-					ts.GreaterThanEqual(minMergeTs) {
-					readyToMerge = true
-				}
-			}
+			readyToMerge, initTsSeq := tk.checkFlushTsValidForMerge(streamId, bucket, initFlushTs, buildInfo.minMergeTs)
 
 			if readyToMerge {
 
@@ -2147,13 +2119,13 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 
 				logging.Infof("Timekeeper::checkInitStreamReadyToMerge Index Ready To Merge. "+
 					"Index: %v Stream: %v Bucket: %v SessionId: %v LastFlushTS: %v", idx.InstId,
-					streamId, bucket, sessionId, lastFlushedTs)
+					streamId, bucket, sessionId, initTsSeq)
 
 				tk.supvRespch <- &MsgTKMergeStream{
 					mType:     TK_MERGE_STREAM,
 					streamId:  streamId,
 					bucket:    bucket,
-					mergeTs:   ts,
+					mergeTs:   initTsSeq,
 					sessionId: sessionId}
 
 				logging.Infof("Timekeeper::checkInitStreamReadyToMerge \n\t Stream %v "+
@@ -2162,11 +2134,58 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 				tk.ss.cleanupBucketFromStream(streamId, bucket)
 				return true
 
+			} else {
+				//check for one index is sufficient as all indexes in a bucket
+				//move together
+				return false
 			}
 		}
 	}
 
 	return false
+}
+
+func (tk *timekeeper) checkFlushTsValidForMerge(streamId common.StreamId, bucket string,
+	initFlushTs *common.TsVbuuid, minMergeTs *common.TsVbuuid) (bool, Timestamp) {
+
+	var maintFlushTs *common.TsVbuuid
+
+	//if the initFlushTs is past the lastFlushTs of this bucket in MAINT_STREAM,
+	//this index can be merged to MAINT_STREAM. If there is a flush in progress,
+	//it is important to use that for comparison as after merge MAINT_STREAM will
+	//include merged indexes after the in progress flush finishes.
+	if lts, ok := tk.ss.streamBucketFlushInProgressTsMap[common.MAINT_STREAM][bucket]; ok && lts != nil {
+		maintFlushTs = lts
+	} else {
+		maintFlushTs = tk.ss.streamBucketLastFlushedTsMap[common.MAINT_STREAM][bucket]
+	}
+
+	var maintTsSeq, initTsSeq Timestamp
+
+	//if no flush has happened yet, its good to merge
+	if maintFlushTs == nil && initFlushTs == nil {
+		return true, nil
+	}
+
+	//if initFlushTs is nil for INIT_STREAM and non-nil for MAINT_STREAM
+	//merge cannot happen
+	if maintFlushTs != nil && initFlushTs == nil {
+		return false, nil
+	}
+
+	maintTsSeq = getSeqTsFromTsVbuuid(maintFlushTs)
+	initTsSeq = getSeqTsFromTsVbuuid(initFlushTs)
+	minMergeTsSeq := getSeqTsFromTsVbuuid(minMergeTs)
+	if initTsSeq.GreaterThanEqual(maintTsSeq) &&
+		initTsSeq.GreaterThanEqual(minMergeTsSeq) {
+
+		//vbuuids need to match for index merge
+		if initFlushTs.CompareVbuuids(maintFlushTs) {
+			return true, initTsSeq
+		}
+
+	}
+	return false, nil
 }
 
 func (tk *timekeeper) checkCatchupStreamReadyToMerge(cmd Message) bool {
