@@ -107,6 +107,16 @@ type state struct {
 	rebalanceTask *service.Task
 }
 
+func NewState() state {
+	return state{
+		rev:           0,
+		servers:       nil,
+		isBalanced:    true, // Default value of isBalanced should be true
+		rebalanceID:   "",
+		rebalanceTask: nil,
+	}
+}
+
 type runParams struct {
 	ddlRunning           bool
 	ddlRunningIndexNames []string
@@ -125,12 +135,8 @@ func NewRebalanceMgr(supvCmdch MsgChannel, supvMsgch MsgChannel, config c.Config
 	mu := &sync.RWMutex{}
 
 	mgr := &ServiceMgr{
-		mu: mu,
-		state: state{
-			rev:           0,
-			rebalanceID:   "",
-			rebalanceTask: nil,
-		},
+		mu:           mu,
+		state:        NewState(),
 		supvCmdch:    supvCmdch,
 		supvMsgch:    supvMsgch,
 		moveStatusCh: make(chan error),
@@ -1662,7 +1668,7 @@ func (m *ServiceMgr) wait(rev service.Revision,
 	select {
 	case <-cancel:
 		m.removeWaiter(ch)
-		return state{}, service.ErrCanceled
+		return NewState(), service.ErrCanceled
 	case newState := <-ch:
 		return newState, nil
 	}
