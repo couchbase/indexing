@@ -592,12 +592,11 @@ func (tk *timekeeper) handleFlushDone(cmd Message) {
 	if _, ok := bucketFlushInProgressTsMap[bucket]; ok {
 		//store the last flushed TS
 		fts := bucketFlushInProgressTsMap[bucket]
-		lts := bucketLastFlushedTsMap[bucket]
 
 		bucketLastFlushedTsMap[bucket] = fts
 
 		if fts != nil {
-			tk.ss.updatePrevVbuuid(streamId, bucket, fts, lts)
+			tk.ss.updateLastMutationVbuuid(streamId, bucket, fts)
 		}
 
 		// check if each flush time is snap aligned. If so, make a copy.
@@ -3251,6 +3250,7 @@ func (tk *timekeeper) repairStreamWithMTR(streamId common.StreamId, bucket strin
 
 	//adjust for non-snap aligned ts
 	tk.ss.adjustNonSnapAlignedVbs(resp.restartTs, streamId, bucket, nil, false)
+	tk.ss.adjustVbuuids(resp.restartTs, streamId, bucket)
 
 	//reset timer for open stream
 	tk.ss.streamBucketOpenTsMap[streamId][bucket] = nil
