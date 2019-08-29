@@ -251,9 +251,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"projector.dcp.numConnections": ConfigValue{
-		4,
+		2,
 		"connect with N concurrent DCP connection with KV",
-		4,
+		2,
 		false, // mutable
 		false, // case-insensitive
 	},
