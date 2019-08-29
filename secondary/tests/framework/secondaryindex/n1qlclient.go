@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/couchbase/indexing/secondary/collatejson"
@@ -20,17 +21,66 @@ import (
 	"github.com/couchbase/query/value"
 )
 
+var n1qlClientMap map[string]datastore.Indexer
+var clientMapLock sync.RWMutex
+
+func init() {
+	n1qlClientMap = make(map[string]datastore.Indexer)
+}
+
+func GetOrCreateN1QLClient(server, bucketName string) (datastore.Indexer, error) {
+	var nc datastore.Indexer
+	var err error
+	var ok bool
+
+	clientMapLock.RLock()
+	nc, ok = n1qlClientMap[bucketName]
+	clientMapLock.RUnlock()
+
+	if !ok { // Client does not exist, so create new
+		nc, err = nclient.NewGSIIndexer(server, "default", bucketName)
+		if err != nil {
+			return nil, err
+		}
+		clientMapLock.Lock()
+		n1qlClientMap[bucketName] = nc
+		clientMapLock.Unlock()
+	}
+
+	nc.Refresh()
+	return nc, nil
+}
+
+func RemoveN1QLClientForBucket(server, bucketName string) {
+
+	var nc datastore.Indexer
+	var ok bool
+
+	clientMapLock.RLock()
+	nc, ok = n1qlClientMap[bucketName]
+	clientMapLock.RUnlock()
+
+	if !ok {
+		return
+	}
+
+	nclient.CloseGsiKeyspace(nc)
+
+	clientMapLock.Lock()
+	delete(n1qlClientMap, bucketName)
+	clientMapLock.Unlock()
+}
+
 // Creates an index and waits for it to become active
 func N1QLCreateSecondaryIndex(
 	indexName, bucketName, server, whereExpr string, indexFields []string, isPrimary bool, with []byte,
 	skipIfExists bool, indexActiveTimeoutSeconds int64) error {
 
 	log.Printf("N1QLCreateSecondaryIndex :: server = %v", server)
-	nc, err := nclient.NewGSIIndexer(server, "default", bucketName)
+	nc, err := GetOrCreateN1QLClient(server, bucketName)
 	if err != nil {
 		return err
 	}
-	defer nclient.CloseGsiKeyspace(nc)
 
 	logging.SetLogLevel(logging.Error)
 	requestId := "12345"
@@ -51,11 +101,10 @@ func N1QLCreateSecondaryIndex(
 func N1QLRange(indexName, bucketName, server string, low, high []interface{}, inclusion uint32,
 	distinct bool, limit int64, consistency c.Consistency, vector *qc.TsConsistency) (tc.ScanResponseActual, error) {
 
-	client, err := nclient.NewGSIIndexer(server, "default", bucketName)
+	client, err := GetOrCreateN1QLClient(server, bucketName)
 	if err != nil {
 		return nil, err
 	}
-	defer nclient.CloseGsiKeyspace(client)
 
 	logging.SetLogLevel(logging.Error)
 	tctx := &testContext{}
@@ -95,11 +144,10 @@ func N1QLRange(indexName, bucketName, server string, low, high []interface{}, in
 func N1QLLookup(indexName, bucketName, server string, values []interface{},
 	distinct bool, limit int64, consistency c.Consistency, vector *qc.TsConsistency) (tc.ScanResponseActual, error) {
 
-	client, err := nclient.NewGSIIndexer(server, "default", bucketName)
+	client, err := GetOrCreateN1QLClient(server, bucketName)
 	if err != nil {
 		return nil, err
 	}
-	defer nclient.CloseGsiKeyspace(client)
 
 	logging.SetLogLevel(logging.Error)
 	tctx := &testContext{}
@@ -139,11 +187,10 @@ func N1QLLookup(indexName, bucketName, server string, values []interface{},
 func N1QLScanAll(indexName, bucketName, server string, limit int64,
 	consistency c.Consistency, vector *qc.TsConsistency) (tc.ScanResponseActual, error) {
 
-	client, err := nclient.NewGSIIndexer(server, "default", bucketName)
+	client, err := GetOrCreateN1QLClient(server, bucketName)
 	if err != nil {
 		return nil, err
 	}
-	defer nclient.CloseGsiKeyspace(client)
 
 	logging.SetLogLevel(logging.Error)
 	tctx := &testContext{}
@@ -183,11 +230,10 @@ func N1QLScans(indexName, bucketName, server string, scans qc.Scans, reverse, di
 	projection *qc.IndexProjection, offset, limit int64,
 	consistency c.Consistency, vector *qc.TsConsistency) (tc.ScanResponseActual, error) {
 
-	client, err := nclient.NewGSIIndexer(server, "default", bucketName)
+	client, err := GetOrCreateN1QLClient(server, bucketName)
 	if err != nil {
 		return nil, err
 	}
-	defer nclient.CloseGsiKeyspace(client)
 
 	logging.SetLogLevel(logging.Error)
 	tctx := &testContext{}
@@ -243,11 +289,10 @@ func N1QLScans(indexName, bucketName, server string, scans qc.Scans, reverse, di
 func N1QLMultiScanCount(indexName, bucketName, server string, scans qc.Scans, distinct bool,
 	consistency c.Consistency, vector *qc.TsConsistency) (int64, error) {
 	var count int64
-	client, err := nclient.NewGSIIndexer(server, "default", bucketName)
+	client, err := GetOrCreateN1QLClient(server, bucketName)
 	if err != nil {
 		return 0, err
 	}
-	defer nclient.CloseGsiKeyspace(client)
 
 	logging.SetLogLevel(logging.Error)
 
@@ -298,11 +343,10 @@ func N1QLScan3(indexName, bucketName, server string, scans qc.Scans, reverse, di
 	projection *qc.IndexProjection, offset, limit int64, groupAggr *qc.GroupAggr,
 	consistency c.Consistency, vector *qc.TsConsistency) (tc.ScanResponseActual, tc.GroupAggrScanResponseActual, error) {
 
-	client, err := nclient.NewGSIIndexer(server, "default", bucketName)
+	client, err := GetOrCreateN1QLClient(server, bucketName)
 	if err != nil {
 		return nil, nil, err
 	}
-	defer nclient.CloseGsiKeyspace(client)
 
 	logging.SetLogLevel(logging.Error)
 
@@ -369,11 +413,10 @@ func N1QLScan3(indexName, bucketName, server string, scans qc.Scans, reverse, di
 
 func N1QLStorageStatistics(indexName, bucketName, server string) ([]map[string]interface{}, error) {
 
-	client, err := nclient.NewGSIIndexer(server, "default", bucketName)
+	client, err := GetOrCreateN1QLClient(server, bucketName)
 	if err != nil {
 		return nil, err
 	}
-	defer nclient.CloseGsiKeyspace(client)
 
 	logging.SetLogLevel(logging.Error)
 
@@ -529,7 +572,7 @@ func getresultsfromsender(sender datastore.Sender, isprimary bool, tctx *testCon
 			// (2) nil, false   - in case of explicit stop
 			if isprimary {
 				if entry != nil {
-					scanResults[entry.PrimaryKey] = nil
+					scanResults[entry.PrimaryKey] = make([]value.Value, 0)
 				} else {
 					break
 				}

@@ -2,12 +2,13 @@ package secondaryindex
 
 import (
 	"errors"
+	"log"
+	"time"
+
 	c "github.com/couchbase/indexing/secondary/common"
 	qc "github.com/couchbase/indexing/secondary/queryport/client"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 	"github.com/couchbase/query/value"
-	"log"
-	"time"
 )
 
 func ArrayIndex_Range(indexName, bucketName, server string, low, high []interface{}, inclusion uint32,
@@ -16,12 +17,10 @@ func ArrayIndex_Range(indexName, bucketName, server string, low, high []interfac
 	scanErr = nil
 	var previousSecKey value.Value
 
-	// ToDo: Create a client pool
-	client, e := CreateClient(server, "2itest")
+	client, e := GetOrCreateClient(server, "2itest")
 	if e != nil {
 		return nil, e
 	}
-	defer client.Close()
 
 	defnID, _ := GetDefnID(client, bucketName, indexName)
 	scanResults := make(tc.ArrayIndexScanResponseActual)

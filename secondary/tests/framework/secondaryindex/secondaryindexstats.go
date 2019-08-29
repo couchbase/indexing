@@ -105,9 +105,8 @@ func GetStats(serverUserName, serverPassword, hostaddress string) map[string]int
 }
 
 func ChangeIndexerSettings(configKey string, configValue interface{}, serverUserName, serverPassword, hostaddress string) error {
-	log.Printf("DBG: ChangeIndexerSettings: configKey = %v configValue = %v hostaddress = %v", configKey, configValue, hostaddress)
-	qpclient, err := CreateClient(hostaddress, "2i_settings")
-	defer qpclient.Close()
+
+	qpclient, err := GetOrCreateClient(hostaddress, "2i_settings")
 	if err != nil {
 		return err
 	}
@@ -183,11 +182,10 @@ func GetIndexHostNode(indexName, bucketName, serverUserName, serverPassword, hos
 		return "", nil
 	}
 
-	c, e := CreateClient(hostaddress, "2itest")
+	c, e := GetOrCreateClient(hostaddress, "2itest")
 	if e != nil {
 		return "", e
 	}
-	defer c.Close()
 
 	defnID, _ := GetDefnID(c, bucketName, indexName)
 

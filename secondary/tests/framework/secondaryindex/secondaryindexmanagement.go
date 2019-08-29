@@ -19,6 +19,27 @@ import (
 
 var IndexUsing = "gsi"
 
+var gsiClient *qc.GsiClient
+
+func GetOrCreateClient(server, serviceAddr string) (*qc.GsiClient, error) {
+	var err error
+	if gsiClient == nil {
+		gsiClient, err = CreateClient(server, serviceAddr)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	gsiClient.Refresh()
+	return gsiClient, nil
+}
+
+func RemoveClientForBucket(server, bucketName string) {
+	if UseClient == "n1ql" {
+		RemoveN1QLClientForBucket(server, bucketName)
+	}
+}
+
 func CreateClient(server, serviceAddr string) (*qc.GsiClient, error) {
 	config := c.SystemConfig.SectionConfig("queryport.client.", true)
 	client, err := qc.NewGsiClient(server, config)
@@ -48,12 +69,11 @@ func CreateSecondaryIndex(
 	skipIfExists bool, indexActiveTimeoutSeconds int64, client *qc.GsiClient) error {
 
 	if client == nil {
-		c, e := CreateClient(server, "2itest")
+		c, e := GetOrCreateClient(server, "2itest")
 		if e != nil {
 			return e
 		}
 		client = c
-		defer client.Close()
 	}
 
 	indexExists := IndexExistsWithClient(indexName, bucketName, server, client)
@@ -98,12 +118,11 @@ func CreateSecondaryIndex2(
 	client *qc.GsiClient) error {
 
 	if client == nil {
-		c, e := CreateClient(server, "2itest")
+		c, e := GetOrCreateClient(server, "2itest")
 		if e != nil {
 			return e
 		}
 		client = c
-		defer client.Close()
 	}
 
 	indexExists := IndexExistsWithClient(indexName, bucketName, server, client)
@@ -147,12 +166,11 @@ func CreateSecondaryIndexAsync(
 	skipIfExists bool, client *qc.GsiClient) error {
 
 	if client == nil {
-		c, e := CreateClient(server, "2itest")
+		c, e := GetOrCreateClient(server, "2itest")
 		if e != nil {
 			return e
 		}
 		client = c
-		defer client.Close()
 	}
 
 	indexExists := IndexExistsWithClient(indexName, bucketName, server, client)
@@ -183,11 +201,10 @@ func CreateSecondaryIndexAsync(
 
 // Todo: Remove this function and update functional tests to use BuildIndexes
 func BuildIndex(indexName, bucketName, server string, indexActiveTimeoutSeconds int64) error {
-	client, e := CreateClient(server, "2itest")
+	client, e := GetOrCreateClient(server, "2itest")
 	if e != nil {
 		return e
 	}
-	defer client.Close()
 
 	defnID, _ := GetDefnID(client, bucketName, indexName)
 
@@ -211,11 +228,11 @@ func BuildIndex(indexName, bucketName, server string, indexActiveTimeoutSeconds 
 }
 
 func BuildIndexes(indexNames []string, bucketName, server string, indexActiveTimeoutSeconds int64) error {
-	client, e := CreateClient(server, "2itest")
+	client, e := GetOrCreateClient(server, "2itest")
 	if e != nil {
 		return e
 	}
-	defer client.Close()
+
 	defnIds := make([]uint64, len(indexNames))
 	for i := range indexNames {
 		defnIds[i], _ = GetDefnID(client, bucketName, indexNames[i])
@@ -236,11 +253,10 @@ func BuildIndexes(indexNames []string, bucketName, server string, indexActiveTim
 }
 
 func BuildIndexesAsync(defnIds []uint64, server string, indexActiveTimeoutSeconds int64) error {
-	client, e := CreateClient(server, "2itest")
+	client, e := GetOrCreateClient(server, "2itest")
 	if e != nil {
 		return e
 	}
-	defer client.Close()
 
 	err := client.BuildIndexes(defnIds)
 	log.Printf("Build command issued for the deferred indexes %v", defnIds)
@@ -269,7 +285,7 @@ func WaitTillIndexActive(defnID uint64, client *qc.GsiClient, indexActiveTimeout
 }
 
 func WaitTillAllIndexNodesActive(server string, indexerActiveTimeoutSeconds int64) error {
-	client, e := CreateClient(server, "2itest")
+	client, e := GetOrCreateClient(server, "2itest")
 	if e != nil {
 		return e
 	}
@@ -303,11 +319,10 @@ func WaitTillAllIndexNodesActive(server string, indexerActiveTimeoutSeconds int6
 }
 
 func IndexState(indexName, bucketName, server string) (string, error) {
-	client, e := CreateClient(server, "2itest")
+	client, e := GetOrCreateClient(server, "2itest")
 	if e != nil {
 		return "", e
 	}
-	defer client.Close()
 
 	defnID, _ := GetDefnID(client, bucketName, indexName)
 	state, e := client.IndexState(defnID)
@@ -320,11 +335,10 @@ func IndexState(indexName, bucketName, server string) (string, error) {
 }
 
 func IndexExists(indexName, bucketName, server string) (bool, error) {
-	client, e := CreateClient(server, "2itest")
+	client, e := GetOrCreateClient(server, "2itest")
 	if e != nil {
 		return false, e
 	}
-	defer client.Close()
 
 	indexes, _, _, err := client.Refresh()
 	tc.HandleError(err, "Error while listing the secondary indexes")
@@ -367,11 +381,10 @@ func ListAllSecondaryIndexes(header string, client *qc.GsiClient) error {
 
 func DropSecondaryIndex(indexName, bucketName, server string) error {
 	log.Printf("Dropping the secondary index %v", indexName)
-	client, e := CreateClient(server, "2itest")
+	client, e := GetOrCreateClient(server, "2itest")
 	if e != nil {
 		return e
 	}
-	defer client.Close()
 
 	indexes, _, _, err := client.Refresh()
 	tc.HandleError(err, "Error while listing the secondary indexes")
@@ -415,11 +428,10 @@ func DropSecondaryIndexWithClient(indexName, bucketName, server string, client *
 
 func DropAllSecondaryIndexes(server string) error {
 	log.Printf("In DropAllSecondaryIndexes()")
-	client, e := CreateClient(server, "2itest")
+	client, e := GetOrCreateClient(server, "2itest")
 	if e != nil {
 		return e
 	}
-	defer client.Close()
 
 	indexes, _, _, err := client.Refresh()
 	tc.HandleError(err, "Error while listing the secondary indexes")
@@ -439,11 +451,10 @@ func DropAllSecondaryIndexes(server string) error {
 
 func DropSecondaryIndexByID(indexDefnID uint64, server string) error {
 	log.Printf("Dropping the secondary index %v", indexDefnID)
-	client, e := CreateClient(server, "2itest")
+	client, e := GetOrCreateClient(server, "2itest")
 	if e != nil {
 		return e
 	}
-	defer client.Close()
 
 	e = client.DropIndex(indexDefnID)
 	if e != nil {
@@ -455,11 +466,10 @@ func DropSecondaryIndexByID(indexDefnID uint64, server string) error {
 
 func BuildAllSecondaryIndexes(server string, indexActiveTimeoutSeconds int64) error {
 	log.Printf("In BuildAllSecondaryIndexes()")
-	client, e := CreateClient(server, "2itest")
+	client, e := GetOrCreateClient(server, "2itest")
 	if e != nil {
 		return e
 	}
-	defer client.Close()
 
 	indexes, _, _, err := client.Refresh()
 	tc.HandleError(err, "Error while listing the secondary indexes")

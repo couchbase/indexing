@@ -657,14 +657,27 @@ func runMultiScan(scans qc.Scans, reverse, distinct bool,
 	scanResults, err := secondaryindex.Scans(indexName, bucketName, indexScanAddress, scans, reverse, distinct, projection, offset, limit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
 
+	validateMultiScanResults(docScanResults, scanResults, validateOnlyCount, projection, t)
+}
+
+func validateMultiScanResults(docScanResults tc.ScanResponse,
+	scanResults tc.ScanResponseActual, validateOnlyCount bool,
+	projection *qc.IndexProjection, t *testing.T) {
+
 	if validateOnlyCount {
 		if len(scanResults) != len(docScanResults) {
 			msg := fmt.Sprintf("Length of expected results %v is not equal to length of scan results %v", len(docScanResults), len(scanResults))
 			FailTestIfError(errors.New(msg), "Error in scan result validation", t)
 		}
 	} else {
-		err = tv.Validate(docScanResults, scanResults)
-		FailTestIfError(err, "Error in scan result validation", t)
+		var err error
+		if projection != nil && len(projection.EntryKeys) == 0 {
+			err = tv.ValidateEmptyProjection(docScanResults, scanResults)
+			FailTestIfError(err, "Error in scan result validation", t)
+		} else {
+			err = tv.Validate(docScanResults, scanResults)
+			FailTestIfError(err, "Error in scan result validation", t)
+		}
 	}
 }
 
@@ -684,15 +697,7 @@ func runMultiScanWithIndex(indexName string, fields []string, scans qc.Scans,
 	scanResults, err := secondaryindex.Scans(indexName, bucketName, indexScanAddress, scans, reverse, distinct, projection, offset, limit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
 
-	if validateOnlyCount {
-		if len(scanResults) != len(docScanResults) {
-			msg := fmt.Sprintf("Length of expected results %v is not equal to length of scan results %v", len(docScanResults), len(scanResults))
-			FailTestIfError(errors.New(msg), "Error in scan result validation", t)
-		}
-	} else {
-		err = tv.Validate(docScanResults, scanResults)
-		FailTestIfError(err, "Error in scan result validation", t)
-	}
+	validateMultiScanResults(docScanResults, scanResults, validateOnlyCount, projection, t)
 }
 
 func runMultiScanCountWithIndex(indexName string, fields []string, scans qc.Scans,
@@ -724,15 +729,7 @@ func runManyMultiScanWithIndex(indexName string, fields []string, manyscans []qc
 		scanResults, err := secondaryindex.Scans(indexName, bucketName, indexScanAddress, scans, reverse, distinct, projection, offset, limit, c.SessionConsistency, nil)
 		FailTestIfError(err, "Error in scan", t)
 
-		if validateOnlyCount {
-			if len(scanResults) != len(docScanResults) {
-				msg := fmt.Sprintf("Length of expected results %v is not equal to length of scan results %v", len(docScanResults), len(scanResults))
-				FailTestIfError(errors.New(msg), "Error in scan result validation", t)
-			}
-		} else {
-			err = tv.Validate(docScanResults, scanResults)
-			FailTestIfError(err, "Error in scan result validation", t)
-		}
+		validateMultiScanResults(docScanResults, scanResults, validateOnlyCount, projection, t)
 	}
 }
 
@@ -754,15 +751,8 @@ func runManyMultiScanCountWithIndex(indexName string, fields []string, manyscans
 			msg := fmt.Sprintf("MultiScanCount not same as results from MultiScan")
 			FailTestIfError(errors.New(msg), "Error in scan result validation", t)
 		}
-		if validateOnlyCount {
-			if len(scanResults) != len(docScanResults) {
-				msg := fmt.Sprintf("Length of expected results %v is not equal to length of scan results %v", len(docScanResults), len(scanResults))
-				FailTestIfError(errors.New(msg), "Error in scan result validation", t)
-			}
-		} else {
-			err = tv.Validate(docScanResults, scanResults)
-			FailTestIfError(err, "Error in scan result validation", t)
-		}
+
+		validateMultiScanResults(docScanResults, scanResults, validateOnlyCount, projection, t)
 	}
 }
 

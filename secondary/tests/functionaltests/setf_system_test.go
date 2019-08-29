@@ -3,6 +3,14 @@ package functionaltests
 import (
 	"errors"
 	"fmt"
+	"log"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
 	c "github.com/couchbase/indexing/secondary/common"
 	qc "github.com/couchbase/indexing/secondary/queryport/client"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
@@ -12,13 +20,6 @@ import (
 	tv "github.com/couchbase/indexing/secondary/tests/framework/validation"
 	"github.com/couchbase/query/expression"
 	"github.com/couchbase/query/parser/n1ql"
-	"log"
-	"os"
-	"path/filepath"
-	"strings"
-	"sync"
-	"testing"
-	"time"
 )
 
 func TestBuildDeferredAnotherBuilding(t *testing.T) {
@@ -46,15 +47,15 @@ func TestBuildDeferredAnotherBuilding(t *testing.T) {
 	err = secondaryindex.CreateSecondaryIndexAsync(index3, bucketName, indexManagementAddress, "", []string{"age"}, false, []byte("{\"defer_build\": true}"), true, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
-	client1, _ := secondaryindex.CreateClient(indexManagementAddress, "test7client")
-	defer client1.Close()
-
 	err = secondaryindex.BuildIndex(index3, bucketName, indexManagementAddress, defaultIndexActiveTimeout)
 	if err != nil {
 		FailTestIfError(e, "Error in TestBuildDeferredAnotherBuilding", t)
 	}
 
-	defn1, _ := secondaryindex.GetDefnID(client1, bucketName, index1)
+	client, err := secondaryindex.GetOrCreateClient(indexManagementAddress, "test7client")
+	FailTestIfError(err, "Error in TestBuildDeferredAnotherBuilding while creating client", t)
+	defn1, _ := secondaryindex.GetDefnID(client, bucketName, index1)
+
 	err = secondaryindex.BuildIndexesAsync([]uint64{defn1}, indexManagementAddress, defaultIndexActiveTimeout)
 	FailTestIfError(err, "Error from BuildIndexesAsync of index1", t)
 	time.Sleep(100 * time.Millisecond)
@@ -73,8 +74,6 @@ func TestBuildDeferredAnotherBuilding(t *testing.T) {
 		}
 	}
 
-	client, _ := secondaryindex.CreateClient(indexManagementAddress, "test1client")
-	defer client.Close()
 	defnID, _ := secondaryindex.GetDefnID(client, bucketName, index1)
 	e = secondaryindex.WaitTillIndexActive(defnID, client, defaultIndexActiveTimeout)
 	if e != nil {
@@ -118,6 +117,7 @@ func TestMultipleBucketsDeferredBuild(t *testing.T) {
 	kvutility.FlushBucket(bucket1, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
 	kvutility.EditBucket(bucket1, "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256")
 	kvutility.DeleteBucket(bucket2, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+	secondaryindex.RemoveClientForBucket(kvaddress, bucket2)
 	kvutility.CreateBucket(bucket2, "sasl", "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256", "11213")
 	tc.ClearMap(docs)
 	time.Sleep(30 * time.Second)
@@ -138,8 +138,9 @@ func TestMultipleBucketsDeferredBuild(t *testing.T) {
 	err = secondaryindex.CreateSecondaryIndexAsync(index3, bucket2, indexManagementAddress, "", []string{"gender"}, false, []byte("{\"defer_build\": true}"), true, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
-	client, _ := secondaryindex.CreateClient(indexManagementAddress, "test1client")
-	defer client.Close()
+	client, err := secondaryindex.GetOrCreateClient(indexManagementAddress, "test1client")
+	FailTestIfError(err, "Error while creating client", t)
+
 	defn1, _ := secondaryindex.GetDefnID(client, bucket1, index1)
 	defn2, _ := secondaryindex.GetDefnID(client, bucket1, index2)
 	defn3, _ := secondaryindex.GetDefnID(client, bucket2, index3)
@@ -193,6 +194,7 @@ func TestMultipleBucketsDeferredBuild(t *testing.T) {
 
 	kvutility.EditBucket(bucket1, "", clusterconfig.Username, clusterconfig.Password, kvaddress, "1024")
 	kvutility.DeleteBucket(bucket2, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+	secondaryindex.RemoveClientForBucket(kvaddress, bucket2)
 	time.Sleep(5 * time.Second) // Wait for bucket delete to complete
 }
 
@@ -389,8 +391,8 @@ func TestDropDeferredIndexWhileOthersBuilding(t *testing.T) {
 	err = secondaryindex.CreateSecondaryIndexAsync(index4, bucketName, indexManagementAddress, "", []string{"isActive"}, false, []byte("{\"defer_build\": true}"), true, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
-	client, _ := secondaryindex.CreateClient(indexManagementAddress, "test2client")
-	defer client.Close()
+	client, err := secondaryindex.GetOrCreateClient(indexManagementAddress, "test2client")
+	FailTestIfError(err, "Error while creating client", t)
 	defn2, _ := secondaryindex.GetDefnID(client, bucketName, index2)
 	defn3, _ := secondaryindex.GetDefnID(client, bucketName, index3)
 	defnIds := []uint64{defn2, defn3}
@@ -463,8 +465,8 @@ func TestDropBuildingDeferredIndex(t *testing.T) {
 	err = secondaryindex.CreateSecondaryIndexAsync(index3, bucketName, indexManagementAddress, "", []string{"gender"}, false, []byte("{\"defer_build\": true}"), true, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
-	client, _ := secondaryindex.CreateClient(indexManagementAddress, "test2client")
-	defer client.Close()
+	client, err := secondaryindex.GetOrCreateClient(indexManagementAddress, "test2client")
+	FailTestIfError(err, "Error while creating client", t)
 	defn1, _ := secondaryindex.GetDefnID(client, bucketName, index1)
 	defn2, _ := secondaryindex.GetDefnID(client, bucketName, index2)
 	defnIds := []uint64{defn1, defn2}
@@ -542,8 +544,8 @@ func TestDropMultipleBuildingDeferredIndexes(t *testing.T) {
 	err = secondaryindex.CreateSecondaryIndexAsync(index4, bucketName, indexManagementAddress, "", []string{"isActive"}, false, []byte("{\"defer_build\": true}"), true, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
-	client, _ := secondaryindex.CreateClient(indexManagementAddress, "test2client")
-	defer client.Close()
+	client, err := secondaryindex.GetOrCreateClient(indexManagementAddress, "test2client")
+	FailTestIfError(err, "Error while creating client", t)
 	defn2, _ := secondaryindex.GetDefnID(client, bucketName, index2)
 	defn3, _ := secondaryindex.GetDefnID(client, bucketName, index3)
 	defnIds := []uint64{defn2, defn3}
@@ -605,8 +607,8 @@ func TestDropOneIndexSecondDeferBuilding(t *testing.T) {
 	err = secondaryindex.CreateSecondaryIndexAsync(index3, bucketName, indexManagementAddress, "", []string{"gender"}, false, []byte("{\"defer_build\": true}"), true, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
-	client, _ := secondaryindex.CreateClient(indexManagementAddress, "test2client")
-	defer client.Close()
+	client, err := secondaryindex.GetOrCreateClient(indexManagementAddress, "test2client")
+	FailTestIfError(err, "Error while creating client", t)
 	defn2, _ := secondaryindex.GetDefnID(client, bucketName, index2)
 
 	err = secondaryindex.BuildIndexes([]string{index1}, bucketName, indexManagementAddress, defaultIndexActiveTimeout)
@@ -672,8 +674,8 @@ func TestDropSecondIndexSecondDeferBuilding(t *testing.T) {
 	err = secondaryindex.CreateSecondaryIndexAsync(index3, bucketName, indexManagementAddress, "", []string{"gender"}, false, []byte("{\"defer_build\": true}"), true, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
-	client, _ := secondaryindex.CreateClient(indexManagementAddress, "test2client")
-	defer client.Close()
+	client, err := secondaryindex.GetOrCreateClient(indexManagementAddress, "test2client")
+	FailTestIfError(err, "Error while creating client", t)
 	defn2, _ := secondaryindex.GetDefnID(client, bucketName, index2)
 
 	err = secondaryindex.BuildIndexes([]string{index1}, bucketName, indexManagementAddress, defaultIndexActiveTimeout)
@@ -729,11 +731,11 @@ func TestCreateAfterDropWhileIndexBuilding(t *testing.T) {
 	log.Printf("Setting JSON docs in KV")
 	kvutility.SetKeyValues(docsToCreate, "default", "", clusterconfig.KVAddress)
 
-	client, _ := secondaryindex.CreateClient(indexManagementAddress, "test2client")
-	defer client.Close()
+	client, err := secondaryindex.GetOrCreateClient(indexManagementAddress, "test2client")
+	FailTestIfError(err, "Error while creating client", t)
 
 	// Start building first index
-	err := secondaryindex.CreateSecondaryIndexAsync(index1, bucketName, indexManagementAddress, "", []string{"company"}, false, []byte("{\"defer_build\": true}"), true, nil)
+	err = secondaryindex.CreateSecondaryIndexAsync(index1, bucketName, indexManagementAddress, "", []string{"company"}, false, []byte("{\"defer_build\": true}"), true, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	defn1, _ := secondaryindex.GetDefnID(client, bucketName, index1)
@@ -868,8 +870,8 @@ func TestDropBuildingIndex2(t *testing.T) {
 	err = secondaryindex.DropSecondaryIndex(index1, bucketName, indexManagementAddress)
 	FailTestIfError(err, "Error dropping index1", t)
 
-	client, _ := secondaryindex.CreateClient(indexManagementAddress, "test3client")
-	defer client.Close()
+	client, err := secondaryindex.GetOrCreateClient(indexManagementAddress, "test3client")
+	FailTestIfError(err, "Error while creating client", t)
 	defn2, _ := secondaryindex.GetDefnID(client, bucketName, index2)
 
 	e = secondaryindex.WaitTillIndexActive(defn2, client, defaultIndexActiveTimeout)
@@ -1030,6 +1032,7 @@ func TestCreateBucket_AnotherIndexBuilding(t *testing.T) {
 	kvutility.FlushBucket(bucket1, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
 	kvutility.EditBucket(bucket1, "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256")
 	kvutility.DeleteBucket(bucket2, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+	secondaryindex.RemoveClientForBucket(kvaddress, bucket2)
 	tc.ClearMap(docs)
 	time.Sleep(30 * time.Second)
 
@@ -1047,8 +1050,8 @@ func TestCreateBucket_AnotherIndexBuilding(t *testing.T) {
 	err = secondaryindex.CreateSecondaryIndexAsync(index2, bucket2, indexManagementAddress, "", []string{"age"}, false, nil, true, nil)
 	FailTestIfError(err, "Error in creating the index1", t)
 
-	client, _ := secondaryindex.CreateClient(indexManagementAddress, "test4client")
-	defer client.Close()
+	client, err := secondaryindex.GetOrCreateClient(indexManagementAddress, "test4client")
+	FailTestIfError(err, "Error while creating client", t)
 	defn1, _ := secondaryindex.GetDefnID(client, bucket1, index1)
 	defn2, _ := secondaryindex.GetDefnID(client, bucket2, index2)
 
@@ -1077,6 +1080,7 @@ func TestCreateBucket_AnotherIndexBuilding(t *testing.T) {
 	log.Printf("Number of docScanResults and scanResults = %v and %v", len(docScanResults), len(scanResults))
 
 	kvutility.DeleteBucket(bucket2, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+	secondaryindex.RemoveClientForBucket(kvaddress, bucket2)
 	kvutility.FlushBucket(bucket1, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
 	tc.ClearMap(docs)
 }
@@ -1096,6 +1100,7 @@ func TestDropBucket2Index_Bucket1IndexBuilding(t *testing.T) {
 	kvutility.FlushBucket(bucket1, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
 	kvutility.EditBucket(bucket1, "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256")
 	kvutility.DeleteBucket(bucket2, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+	secondaryindex.RemoveClientForBucket(kvaddress, bucket2)
 	kvutility.CreateBucket(bucket2, "sasl", "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256", "11213")
 	tc.ClearMap(docs)
 	time.Sleep(30 * time.Second)
@@ -1116,8 +1121,8 @@ func TestDropBucket2Index_Bucket1IndexBuilding(t *testing.T) {
 	err = secondaryindex.DropSecondaryIndex(index2, bucket2, indexManagementAddress)
 	FailTestIfError(err, "Error dropping index2", t)
 
-	client, _ := secondaryindex.CreateClient(indexManagementAddress, "test5client")
-	defer client.Close()
+	client, err := secondaryindex.GetOrCreateClient(indexManagementAddress, "test5client")
+	FailTestIfError(err, "Error while creating client", t)
 	defn1, _ := secondaryindex.GetDefnID(client, bucket1, index1)
 	e = secondaryindex.WaitTillIndexActive(defn1, client, defaultIndexActiveTimeout)
 	if e != nil {
@@ -1132,6 +1137,7 @@ func TestDropBucket2Index_Bucket1IndexBuilding(t *testing.T) {
 	log.Printf("Number of docScanResults and scanResults = %v and %v", len(docScanResults), len(scanResults))
 
 	kvutility.DeleteBucket(bucket2, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+	secondaryindex.RemoveClientForBucket(kvaddress, bucket2)
 	kvutility.FlushBucket(bucket1, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
 	tc.ClearMap(docs)
 }
@@ -1164,6 +1170,7 @@ func TestDeleteBucketWhileInitialIndexBuild(t *testing.T) {
 	for i := 1; i < numOfBuckets; i++ {
 		log.Printf("============== DBG: Delete bucket %v", bucketNames[i])
 		kvutility.DeleteBucket(bucketNames[i], "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+		secondaryindex.RemoveClientForBucket(kvaddress, bucketNames[i])
 		log.Printf("============== DBG: Create bucket %v", bucketNames[i])
 		kvutility.CreateBucket(bucketNames[i], "sasl", "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256", proxyPorts[i])
 		kvutility.EnableBucketFlush(bucketNames[i], "", clusterconfig.Username, clusterconfig.Password, kvaddress)
@@ -1206,6 +1213,7 @@ func TestDeleteBucketWhileInitialIndexBuild(t *testing.T) {
 	time.Sleep(2 * time.Second)
 	log.Printf("============== DBG: Deleting bucket %v", bucketNames[3])
 	kvutility.DeleteBucket(bucketNames[3], "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+	secondaryindex.RemoveClientForBucket(kvaddress, bucketNames[3])
 
 	// Scan index of first bucket
 	log.Printf("============== DBG: First bucket scan:: Scanning index %v in bucket %v", indexNames[0], bucketNames[0])
@@ -1241,8 +1249,11 @@ func TestDeleteBucketWhileInitialIndexBuild(t *testing.T) {
 
 	log.Printf("============== DBG: Deleting buckets %v %v %v", bucketNames[1], bucketNames[2], bucketNames[3])
 	kvutility.DeleteBucket(bucketNames[1], "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+	secondaryindex.RemoveClientForBucket(kvaddress, bucketNames[1])
 	kvutility.DeleteBucket(bucketNames[2], "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+	secondaryindex.RemoveClientForBucket(kvaddress, bucketNames[2])
 	kvutility.DeleteBucket(bucketNames[3], "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+	secondaryindex.RemoveClientForBucket(kvaddress, bucketNames[3])
 	kvutility.EditBucket(bucketNames[0], "", clusterconfig.Username, clusterconfig.Password, kvaddress, "512")
 	time.Sleep(30 * time.Second) // Sleep after bucket create or delete
 

@@ -408,8 +408,8 @@ func ExpectedLookupResponse_json(docs tc.KeyValues, jsonPath string, value map[s
 }
 
 // Range scan for Primary index
-func ExpectedScanResponse_RangePrimary(docs tc.KeyValues, low, high string, inclusion int64) tc.ScanResponse {
-	results := make(tc.ScanResponse)
+func ExpectedScanResponse_RangePrimary(docs tc.KeyValues, low, high string, inclusion int64) tc.ScanResponseActual {
+	results := make(tc.ScanResponseActual)
 
 	// var json map[string]interface{}
 	// var f string
@@ -421,23 +421,23 @@ func ExpectedScanResponse_RangePrimary(docs tc.KeyValues, low, high string, incl
 		case 0:
 			if field > low && field < high {
 				// results[k] = []interface{}{}
-				results[k] = nil
+				results[k] = make([]value.Value, 0)
 			}
 		case 1:
 			if field >= low && field < high {
-				results[k] = nil
+				results[k] = make([]value.Value, 0)
 			}
 		case 2:
 			if field > low && field <= high {
-				results[k] = nil
+				results[k] = make([]value.Value, 0)
 			}
 		case 3:
 			if field >= low && field <= high {
-				results[k] = nil
+				results[k] = make([]value.Value, 0)
 			}
 		default:
 			if field > low && field < high {
-				results[k] = nil
+				results[k] = make([]value.Value, 0)
 			}
 		}
 	}
@@ -700,7 +700,7 @@ func ExpectedMultiScanResponse_Primary(docs tc.KeyValues, scans qc.Scans,
 
 		for _, scan := range scans {
 			if len(scan.Filter) == 0 {
-				results[k] = nil
+				results[k] = make([]value.Value, 0)
 				continue
 			}
 
@@ -710,23 +710,23 @@ func ExpectedMultiScanResponse_Primary(docs tc.KeyValues, scans qc.Scans,
 			switch inclusion {
 			case 0:
 				if field > low && field < high {
-					results[k] = nil
+					results[k] = make([]value.Value, 0)
 				}
 			case 1:
 				if field >= low && field < high {
-					results[k] = nil
+					results[k] = make([]value.Value, 0)
 				}
 			case 2:
 				if field > low && field <= high {
-					results[k] = nil
+					results[k] = make([]value.Value, 0)
 				}
 			case 3:
 				if field >= low && field <= high {
-					results[k] = nil
+					results[k] = make([]value.Value, 0)
 				}
 			default:
 				if field > low && field < high {
-					results[k] = nil
+					results[k] = make([]value.Value, 0)
 				}
 			}
 		}

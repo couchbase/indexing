@@ -432,6 +432,7 @@ func TestIndexingOnBinaryBucketMeta(t *testing.T) {
 	FailTestIfError(err, "Error dropping "+indexName_expiration, t)
 
 	kvutility.DeleteBucket(bucket2, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+	secondaryindex.RemoveClientForBucket(kvaddress, bucket2)
 	kvutility.EditBucket(bucket1, "", clusterconfig.Username, clusterconfig.Password, kvaddress, "512")
 	time.Sleep(30 * time.Second) // Sleep after bucket create or delete
 }
@@ -482,6 +483,7 @@ func TestRetainDeleteXATTRBinaryDocs(t *testing.T) {
 	}
 
 	kvutility.DeleteBucket(bucket2, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+	secondaryindex.RemoveClientForBucket(kvaddress, bucket2)
 	kvutility.EditBucket(bucket1, "", clusterconfig.Username, clusterconfig.Password, kvaddress, "512")
 	time.Sleep(30 * time.Second) // Sleep after bucket create or delete*/
 }

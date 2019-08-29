@@ -524,7 +524,7 @@ func TestBasicPrimaryIndex(t *testing.T) {
 	docScanResults := datautility.ExpectedScanResponse_RangePrimary(docs, "User2", "User5", 3)
 	scanResults, err = secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{"User2"}, []interface{}{"User5"}, 3, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
-	err = tv.Validate(docScanResults, scanResults)
+	err = tv.ValidateActual(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation of Primary Range", t)
 
 	// Count Range on primary index
