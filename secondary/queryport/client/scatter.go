@@ -817,7 +817,7 @@ func (c *RequestBroker) scatterScan2(client []*GsiScanClient, index *common.Inde
 	// with retry execution.
 	if c.waiter != nil {
 		c.waiter()
-		logging.Debugf("RequestBroker.scatterScan2: requestId %v backfill done", c.requestId)
+		logging.Debugf("RequestBroker.scatterScan2: requestId %v done reading from temp file", c.requestId)
 	}
 
 	for i, _ := range client {
