@@ -982,16 +982,33 @@ func (fdb *fdbSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 	return s, err
 }
 
+// Obtains counts from storage to keep track of items count and the number
+// of documents present in index. We avoid updating counts here if getting store
+// infos fail. This means that the counts can be stale for a window of time, but
+// will get corrected on the next successful attempt.
 func (fdb *fdbSlice) setCommittedCount() {
 
 	t0 := time.Now()
 	mainDbInfo, err := fdb.main[0].Info()
 	if err == nil {
-		atomic.StoreUint64(&fdb.committedCount, mainDbInfo.DocCount())
+		docCount := mainDbInfo.DocCount()
+		atomic.StoreUint64(&fdb.committedCount, docCount)
+		if fdb.isPrimary {
+			fdb.idxStats.docidCount.Set(int64(docCount))
+		}
 	} else {
 		logging.Errorf("ForestDB setCommittedCount failed %v", err)
 	}
 	fdb.idxStats.Timings.stKVInfo.Put(time.Now().Sub(t0))
+
+	if !fdb.isPrimary {
+		backDbInfo, err := fdb.back[0].Info()
+		if err == nil {
+			fdb.idxStats.docidCount.Set(int64(backDbInfo.DocCount()))
+		} else {
+			logging.Errorf("ForestDB setCommittedCount failed to get backDbInfo %v", err)
+		}
+	}
 }
 
 func (fdb *fdbSlice) GetCommittedCount() uint64 {

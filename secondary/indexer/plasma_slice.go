@@ -1834,9 +1834,10 @@ func (mdb *plasmaSlice) Statistics() (StorageStatistics, error) {
 
 	var internalData []string
 
-	var numRecsMem, numRecsDisk, cacheHits, cacheMiss int64
+	var numRecsMem, numRecsDisk, cacheHits, cacheMiss, docidCount int64
 	pStats := mdb.mainstore.GetStats()
 
+	docidCount = pStats.ItemsCount
 	numRecsMem += pStats.NumRecordAllocs - pStats.NumRecordFrees
 	numRecsDisk += pStats.NumRecordSwapOut - pStats.NumRecordSwapIn
 	cacheHits += pStats.CacheHits
@@ -1848,6 +1849,7 @@ func (mdb *plasmaSlice) Statistics() (StorageStatistics, error) {
 	internalData = append(internalData, fmt.Sprintf("{\n\"MainStore\":\n%s", pStats))
 	if !mdb.isPrimary {
 		pStats := mdb.backstore.GetStats()
+		docidCount = pStats.ItemsCount
 		numRecsMem += pStats.NumRecordAllocs - pStats.NumRecordFrees
 		numRecsDisk += pStats.NumRecordSwapOut - pStats.NumRecordSwapIn
 		cacheHits += pStats.CacheHits
@@ -1869,6 +1871,7 @@ func (mdb *plasmaSlice) Statistics() (StorageStatistics, error) {
 		}
 	}
 
+	mdb.idxStats.docidCount.Set(docidCount)
 	mdb.idxStats.residentPercent.Set(common.ComputePercent(numRecsMem, numRecsDisk))
 	mdb.idxStats.cacheHitPercent.Set(common.ComputePercent(cacheHits, cacheMiss))
 	mdb.idxStats.cacheHits.Set(cacheHits)

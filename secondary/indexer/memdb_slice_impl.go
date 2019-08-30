@@ -1455,28 +1455,34 @@ func (mdb *memdbSlice) Statistics() (StorageStatistics, error) {
 	var internalData []string
 	var ntMemUsed int64
 
+	itemsCount := mdb.mainstore.ItemsCount()
+	docidCount := itemsCount
+
 	internalData = append(internalData, fmt.Sprintf("{\n\"MainStore\": %s", mdb.mainstore.DumpStats()))
 
 	if !mdb.isPrimary {
+		docidCount = 0
 		for i := 0; i < mdb.numWriters; i++ {
 			internalData = append(internalData, ",\n")
 			internalData = append(internalData, fmt.Sprintf(`"BackStore_%d": %s`, i, mdb.back[i].Stats()))
 			ntMemUsed += mdb.back[i].MemoryInUse()
+			docidCount += mdb.back[i].ItemsCount()
 		}
 	}
 	internalData = append(internalData, ",\n")
 	internalData = append(internalData, fmt.Sprintf(`"data_size": %v`, mdb.mainstore.MemoryInUse()))
 	internalData = append(internalData, ",\n")
-	internalData = append(internalData, fmt.Sprintf(`"items_count": %v`, mdb.mainstore.ItemsCount()))
+	internalData = append(internalData, fmt.Sprintf(`"items_count": %v`, itemsCount))
 	internalData = append(internalData, "\n}")
 
 	sts.InternalData = internalData
 	sts.MemUsed = mdb.mainstore.MemoryInUse() + ntMemUsed
 	sts.DiskSize = mdb.diskSize()
 
+	mdb.idxStats.docidCount.Set(docidCount)
 	// Ideally, we should also count items in backstore. But numRecsInMem is mainly used for resident % computation
 	// and for MOI it's always 100%. So an approximate number is fine as numRecsOnDisk will always be 0
-	mdb.idxStats.numRecsInMem.Set(mdb.mainstore.ItemsCount())
+	mdb.idxStats.numRecsInMem.Set(itemsCount)
 
 	return sts, nil
 }

@@ -141,6 +141,7 @@ type IndexStats struct {
 	deleteBytes               stats.Int64Val
 	dataSize                  stats.Int64Val // Sum of all data inserted into main store and back store
 	backstoreDataSize         stats.Int64Val // Sum of all data inserted into back store
+	docidCount                stats.Int64Val
 	scanBytesRead             stats.Int64Val
 	getBytes                  stats.Int64Val
 	itemsCount                stats.Int64Val
@@ -286,6 +287,7 @@ func (s *IndexStats) Init() {
 	s.deleteBytes.Init()
 	s.dataSize.Init()
 	s.backstoreDataSize.Init()
+	s.docidCount.Init()
 	s.fragPercent.Init()
 	s.scanBytesRead.Init()
 	s.getBytes.Init()
@@ -716,6 +718,10 @@ func (is IndexerStats) GetStats(getPartition bool, skipEmpty bool,
 			scanReqAllocLat = scanReqAllocDur / reqs
 		}
 
+		itemsCount := s.partnInt64Stats(func(ss *IndexStats) int64 {
+			return ss.itemsCount.Value()
+		})
+
 		addStat("total_scan_duration",
 			s.int64Stats(func(ss *IndexStats) int64 {
 				return ss.scanDuration.Value()
@@ -799,9 +805,21 @@ func (is IndexerStats) GetStats(getPartition bool, skipEmpty bool,
 
 		// partition stats
 		addStat("key_size_distribution", s.getKeySizeStats())
-		if common.GetStorageMode() == common.PLASMA && s.isArrayIndex {
-			addStat("arrkey_size_distribution", s.getArrKeySizeStats())
+
+		if s.isArrayIndex {
+			if common.GetStorageMode() == common.PLASMA {
+				addStat("arrkey_size_distribution", s.getArrKeySizeStats())
+			}
+
+			docidCount := s.partnInt64Stats(func(ss *IndexStats) int64 {
+				return ss.docidCount.Value()
+			})
+
+			// partition stats
+			addStat("docid_count", docidCount)
+			addStat("avg_array_length", computeAvgArrayLength(itemsCount, docidCount))
 		}
+
 		addStat("key_size_stats_since",
 			s.partnMaxInt64Stats(func(ss *IndexStats) int64 {
 				return ss.keySizeStatsSince.Value()
@@ -822,10 +840,7 @@ func (is IndexerStats) GetStats(getPartition bool, skipEmpty bool,
 				return ss.getBytes.Value()
 			}))
 		// partition stats
-		addStat("items_count",
-			s.partnInt64Stats(func(ss *IndexStats) int64 {
-				return ss.itemsCount.Value()
-			}))
+		addStat("items_count", itemsCount)
 		addStat("avg_ts_interval",
 			s.int64Stats(func(ss *IndexStats) int64 {
 				return ss.avgTsInterval.Value()
@@ -1161,6 +1176,14 @@ func addStatFactory(skipEmpty bool, statsMap common.Statistics) func(string, int
 	}
 }
 
+func computeAvgArrayLength(itemsCount, docidCount int64) int64 {
+	if docidCount > 0 {
+		return itemsCount / docidCount
+	}
+	// Return 0 if no items indexed
+	return 0
+}
+
 func (is IndexerStats) constructIndexerStats(skipEmpty bool, version string) common.Statistics {
 	indexerStats := make(map[string]interface{})
 	addStat := addStatFactory(skipEmpty, indexerStats)
@@ -1189,6 +1212,10 @@ func (s *IndexStats) constructIndexStats(skipEmpty bool, version string) common.
 		return ss.numRequests.Value()
 	})
 	pendingReqs := reqs - s.numCompletedRequests.Value()
+
+	itemsCount := s.partnInt64Stats(func(ss *IndexStats) int64 {
+		return ss.itemsCount.Value()
+	})
 
 	addStat("total_scan_duration",
 		s.int64Stats(func(ss *IndexStats) int64 {
@@ -1234,10 +1261,18 @@ func (s *IndexStats) constructIndexStats(skipEmpty bool, version string) common.
 			return ss.scanBytesRead.Value()
 		}))
 	// partition stats
-	addStat("items_count",
-		s.partnInt64Stats(func(ss *IndexStats) int64 {
-			return ss.itemsCount.Value()
-		}))
+	addStat("items_count", itemsCount)
+
+	if s.isArrayIndex {
+		docidCount := s.partnInt64Stats(func(ss *IndexStats) int64 {
+			return ss.docidCount.Value()
+		})
+
+		// partition stats
+		addStat("docid_count", docidCount)
+		addStat("avg_array_length", computeAvgArrayLength(itemsCount, docidCount))
+	}
+
 	// partition stats
 	addStat("resident_percent",
 		s.partnAvgInt64Stats(func(ss *IndexStats) int64 {
