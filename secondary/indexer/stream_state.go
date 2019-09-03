@@ -37,7 +37,7 @@ type StreamState struct {
 	streamBucketLastSnapMarker    map[common.StreamId]BucketLastSnapMarker
 
 	streamBucketLastSnapAlignFlushedTsMap map[common.StreamId]BucketLastFlushedTsMap
-	streamBucketPrevVbuuidTs              map[common.StreamId]BucketPrevVbuuidTs
+	streamBucketLastMutationVbuuid        map[common.StreamId]BucketLastMutationVbuuid
 
 	streamBucketRestartVbTsMap map[common.StreamId]BucketRestartVbTsMap
 
@@ -80,7 +80,7 @@ type BucketNeedsCommitMap map[string]bool
 type BucketHasBuildCompTSMap map[string]bool
 type BucketNewTsReqdMap map[string]bool
 type BucketLastSnapMarker map[string]*common.TsVbuuid
-type BucketPrevVbuuidTs map[string]*common.TsVbuuid
+type BucketLastMutationVbuuid map[string]*common.TsVbuuid
 
 type BucketTsListMap map[string]*list.List
 type BucketFlushInProgressTsMap map[string]*common.TsVbuuid
@@ -134,32 +134,32 @@ func InitStreamState(config common.Config) *StreamState {
 		streamBucketLastSnapAlignFlushedTsMap: make(map[common.StreamId]BucketLastFlushedTsMap),
 		streamBucketRestartTsMap:              make(map[common.StreamId]BucketRestartTsMap),
 
-		streamBucketOpenTsMap:         make(map[common.StreamId]BucketOpenTsMap),
-		streamBucketStartTimeMap:      make(map[common.StreamId]BucketStartTimeMap),
-		streamBucketFlushEnabledMap:   make(map[common.StreamId]BucketFlushEnabledMap),
-		streamBucketDrainEnabledMap:   make(map[common.StreamId]BucketDrainEnabledMap),
-		streamBucketFlushDone:         make(map[common.StreamId]BucketFlushDone),
-		streamBucketVbStatusMap:       make(map[common.StreamId]BucketVbStatusMap),
-		streamBucketVbRefCountMap:     make(map[common.StreamId]BucketVbRefCountMap),
-		streamBucketRestartVbTsMap:    make(map[common.StreamId]BucketRestartVbTsMap),
-		streamStatus:                  make(map[common.StreamId]StreamStatus),
-		streamBucketStatus:            make(map[common.StreamId]BucketStatus),
-		streamBucketIndexCountMap:     make(map[common.StreamId]BucketIndexCountMap),
-		streamBucketRepairStopCh:      make(map[common.StreamId]BucketRepairStopCh),
-		streamBucketTimerStopCh:       make(map[common.StreamId]BucketTimerStopCh),
-		streamBucketLastPersistTime:   make(map[common.StreamId]BucketLastPersistTime),
-		streamBucketSkippedInMemTs:    make(map[common.StreamId]BucketSkippedInMemTs),
-		streamBucketLastSnapMarker:    make(map[common.StreamId]BucketLastSnapMarker),
-		streamBucketPrevVbuuidTs:      make(map[common.StreamId]BucketPrevVbuuidTs),
-		bucketRollbackTime:            make(map[string]int64),
-		streamBucketAsyncMap:          make(map[common.StreamId]BucketStreamAsyncMap),
-		streamBucketLastBeginTime:     make(map[common.StreamId]BucketStreamLastBeginTime),
-		streamBucketLastRepairTimeMap: make(map[common.StreamId]BucketStreamLastRepairTimeMap),
-		streamBucketKVRollbackTsMap:   make(map[common.StreamId]BucketKVRollbackTsMap),
-		streamBucketKVActiveTsMap:     make(map[common.StreamId]BucketKVActiveTsMap),
-		streamBucketKVPendingTsMap:    make(map[common.StreamId]BucketKVPendingTsMap),
-		streamBucketRepairStateMap:    make(map[common.StreamId]BucketStreamRepairStateMap),
-		streamBucketSessionId:         make(map[common.StreamId]BucketSessionId),
+		streamBucketOpenTsMap:          make(map[common.StreamId]BucketOpenTsMap),
+		streamBucketStartTimeMap:       make(map[common.StreamId]BucketStartTimeMap),
+		streamBucketFlushEnabledMap:    make(map[common.StreamId]BucketFlushEnabledMap),
+		streamBucketDrainEnabledMap:    make(map[common.StreamId]BucketDrainEnabledMap),
+		streamBucketFlushDone:          make(map[common.StreamId]BucketFlushDone),
+		streamBucketVbStatusMap:        make(map[common.StreamId]BucketVbStatusMap),
+		streamBucketVbRefCountMap:      make(map[common.StreamId]BucketVbRefCountMap),
+		streamBucketRestartVbTsMap:     make(map[common.StreamId]BucketRestartVbTsMap),
+		streamStatus:                   make(map[common.StreamId]StreamStatus),
+		streamBucketStatus:             make(map[common.StreamId]BucketStatus),
+		streamBucketIndexCountMap:      make(map[common.StreamId]BucketIndexCountMap),
+		streamBucketRepairStopCh:       make(map[common.StreamId]BucketRepairStopCh),
+		streamBucketTimerStopCh:        make(map[common.StreamId]BucketTimerStopCh),
+		streamBucketLastPersistTime:    make(map[common.StreamId]BucketLastPersistTime),
+		streamBucketSkippedInMemTs:     make(map[common.StreamId]BucketSkippedInMemTs),
+		streamBucketLastSnapMarker:     make(map[common.StreamId]BucketLastSnapMarker),
+		streamBucketLastMutationVbuuid: make(map[common.StreamId]BucketLastMutationVbuuid),
+		bucketRollbackTime:             make(map[string]int64),
+		streamBucketAsyncMap:           make(map[common.StreamId]BucketStreamAsyncMap),
+		streamBucketLastBeginTime:      make(map[common.StreamId]BucketStreamLastBeginTime),
+		streamBucketLastRepairTimeMap:  make(map[common.StreamId]BucketStreamLastRepairTimeMap),
+		streamBucketKVRollbackTsMap:    make(map[common.StreamId]BucketKVRollbackTsMap),
+		streamBucketKVActiveTsMap:      make(map[common.StreamId]BucketKVActiveTsMap),
+		streamBucketKVPendingTsMap:     make(map[common.StreamId]BucketKVPendingTsMap),
+		streamBucketRepairStateMap:     make(map[common.StreamId]BucketStreamRepairStateMap),
+		streamBucketSessionId:          make(map[common.StreamId]BucketSessionId),
 	}
 
 	return ss
@@ -247,8 +247,8 @@ func (ss *StreamState) initNewStream(streamId common.StreamId) {
 	bucketLastSnapMarker := make(BucketLastSnapMarker)
 	ss.streamBucketLastSnapMarker[streamId] = bucketLastSnapMarker
 
-	bucketPrevVbuuidTs := make(BucketPrevVbuuidTs)
-	ss.streamBucketPrevVbuuidTs[streamId] = bucketPrevVbuuidTs
+	bucketLastMutationVbuuid := make(BucketLastMutationVbuuid)
+	ss.streamBucketLastMutationVbuuid[streamId] = bucketLastMutationVbuuid
 
 	bucketStreamAsyncMap := make(BucketStreamAsyncMap)
 	ss.streamBucketAsyncMap[streamId] = bucketStreamAsyncMap
@@ -304,7 +304,7 @@ func (ss *StreamState) initBucketInStream(streamId common.StreamId,
 	ss.streamBucketSkippedInMemTs[streamId][bucket] = 0
 	ss.streamBucketSessionId[streamId][bucket] = 0
 	ss.streamBucketLastSnapMarker[streamId][bucket] = common.NewTsVbuuid(bucket, numVbuckets)
-	ss.streamBucketPrevVbuuidTs[streamId][bucket] = common.NewTsVbuuid(bucket, numVbuckets)
+	ss.streamBucketLastMutationVbuuid[streamId][bucket] = common.NewTsVbuuid(bucket, numVbuckets)
 	ss.streamBucketAsyncMap[streamId][bucket] = false
 	ss.streamBucketLastBeginTime[streamId][bucket] = 0
 	ss.streamBucketLastRepairTimeMap[streamId][bucket] = NewTimestamp(numVbuckets)
@@ -349,7 +349,7 @@ func (ss *StreamState) cleanupBucketFromStream(streamId common.StreamId,
 	delete(ss.streamBucketOpenTsMap[streamId], bucket)
 	delete(ss.streamBucketStartTimeMap[streamId], bucket)
 	delete(ss.streamBucketLastSnapMarker[streamId], bucket)
-	delete(ss.streamBucketPrevVbuuidTs[streamId], bucket)
+	delete(ss.streamBucketLastMutationVbuuid[streamId], bucket)
 	delete(ss.streamBucketSkippedInMemTs[streamId], bucket)
 	delete(ss.streamBucketSessionId[streamId], bucket)
 	delete(ss.streamBucketAsyncMap[streamId], bucket)
@@ -401,7 +401,7 @@ func (ss *StreamState) resetStreamState(streamId common.StreamId) {
 	delete(ss.streamBucketSkippedInMemTs, streamId)
 	delete(ss.streamBucketSessionId, streamId)
 	delete(ss.streamBucketLastSnapMarker, streamId)
-	delete(ss.streamBucketPrevVbuuidTs, streamId)
+	delete(ss.streamBucketLastMutationVbuuid, streamId)
 	delete(ss.streamBucketAsyncMap, streamId)
 	delete(ss.streamBucketLastBeginTime, streamId)
 	delete(ss.streamBucketLastRepairTimeMap, streamId)
@@ -484,6 +484,7 @@ func (ss *StreamState) computeRollbackTs(streamId common.StreamId, bucket string
 			restartTs = common.NewTsVbuuid(bucket, numVbuckets)
 		} else {
 			ss.adjustNonSnapAlignedVbs(restartTs, streamId, bucket, nil, false)
+			ss.adjustVbuuids(restartTs, streamId, bucket)
 		}
 
 		// overlay KV rollback Ts on top of restart Ts
@@ -511,7 +512,7 @@ func (ss *StreamState) setHWTFromRestartTs(streamId common.StreamId,
 			logging.Verbosef("StreamState::setHWTFromRestartTs HWT Set For "+
 				"Bucket %v StreamId %v. TS %v.", bucket, streamId, restartTs)
 
-			ss.streamBucketPrevVbuuidTs[streamId][bucket] = restartTs.Copy()
+			ss.streamBucketLastMutationVbuuid[streamId][bucket] = restartTs.Copy()
 
 		} else {
 			logging.Warnf("StreamState::setHWTFromRestartTs RestartTs Not Found For "+
@@ -621,6 +622,7 @@ func (ss *StreamState) getRepairTsForBucket(streamId common.StreamId,
 	}
 
 	ss.adjustNonSnapAlignedVbs(repairTs, streamId, bucket, repairVbs, true)
+	ss.adjustVbuuids(repairTs, streamId, bucket)
 
 	logging.Verbosef("StreamState::getRepairTsForBucket\n\t"+
 		"Bucket %v StreamId %v repairTS %v",
@@ -1442,22 +1444,47 @@ func (ss *StreamState) disableSnapAlignForPendingTs(streamId common.StreamId, bu
 	}
 }
 
-func (ss *StreamState) updatePrevVbuuid(streamId common.StreamId, bucket string,
-	fts *common.TsVbuuid, lts *common.TsVbuuid) {
+func (ss *StreamState) updateLastMutationVbuuid(streamId common.StreamId,
+	bucket string, fts *common.TsVbuuid) {
 
-	if lts == nil {
-		ss.streamBucketPrevVbuuidTs[streamId][bucket] = fts.Copy()
+	pts := ss.streamBucketLastMutationVbuuid[streamId][bucket]
+	if pts == nil {
+		ss.streamBucketLastMutationVbuuid[streamId][bucket] = fts.Copy()
 		return
 	}
 
-	pts := ss.streamBucketPrevVbuuidTs[streamId][bucket]
-	for i, vbuuid := range pts.Vbuuids {
-		if vbuuid == 0 || fts.Vbuuids[i] != lts.Vbuuids[i] {
-			pts.Vbuuids[i] = lts.Vbuuids[i]
-			pts.Seqnos[i] = lts.Seqnos[i]
+	//LastMutationVbuuid has the vbuuid/seqno for the last valid mutation.
+	//if there is a vbuuid change without a change is seqno,
+	//it needs to be ignored
+	for i, _ := range pts.Vbuuids {
+		if fts.Seqnos[i] != pts.Seqnos[i] {
+			pts.Vbuuids[i] = fts.Vbuuids[i]
+			pts.Seqnos[i] = fts.Seqnos[i]
 		}
 
 	}
+}
+
+func (ss *StreamState) adjustVbuuids(restartTs *common.TsVbuuid,
+	streamId common.StreamId, bucket string) {
+
+	if restartTs == nil {
+		return
+	}
+
+	//use the vbuuids with last known mutation
+	if pts, ok := ss.streamBucketLastMutationVbuuid[streamId][bucket]; ok && pts != nil {
+		for i, _ := range pts.Vbuuids {
+			if restartTs.Seqnos[i] == pts.Seqnos[i] &&
+				restartTs.Vbuuids[i] != pts.Vbuuids[i] {
+				logging.Infof("StreamState::adjustVbuuids Stream %v Bucket %v Seqno %v "+
+					"From %v To %v", streamId, bucket, pts.Seqnos[i], restartTs.Vbuuids[i],
+					pts.Vbuuids[i])
+				restartTs.Vbuuids[i] = pts.Vbuuids[i]
+			}
+		}
+	}
+	return
 }
 
 //if there is a different vbuuid for the same seqno, use that to
@@ -1469,7 +1496,7 @@ func (ss *StreamState) computeRetryTs(streamId common.StreamId,
 
 	var retryTs *common.TsVbuuid
 
-	if pts, ok := ss.streamBucketPrevVbuuidTs[streamId][bucket]; ok && pts != nil {
+	if pts, ok := ss.streamBucketLastMutationVbuuid[streamId][bucket]; ok && pts != nil {
 
 		retryTs = restartTs.Copy()
 		valid := false

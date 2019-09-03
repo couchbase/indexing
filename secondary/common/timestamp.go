@@ -100,9 +100,7 @@ func (ts *TsVbuuid) CompareVbuuids(other *TsVbuuid) bool {
 		return false
 	}
 	for i, vbuuid := range ts.Vbuuids {
-		if (vbuuid != other.Vbuuids[i]) ||
-			(ts.Snapshots[i][0] != other.Snapshots[i][0]) ||
-			(ts.Snapshots[i][1] != other.Snapshots[i][1]) {
+		if vbuuid != other.Vbuuids[i] {
 			return false
 		}
 	}

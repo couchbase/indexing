@@ -115,7 +115,7 @@ type indexer struct {
 	internalRecvCh      MsgChannel //buffered channel to queue worker requests
 	adminRecvCh         MsgChannel //channel to receive admin messages
 	internalAdminRecvCh MsgChannel //internal channel to receive admin messages
-	internalAdminRespCh chan bool  //internal channel to respond admin messages
+	internalAdminRespCh MsgChannel //internal channel to respond admin messages
 	shutdownInitCh      MsgChannel //internal shutdown channel for indexer
 	shutdownCompleteCh  MsgChannel //indicate shutdown completion
 
@@ -206,7 +206,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		internalRecvCh:      make(MsgChannel, WORKER_MSG_QUEUE_LEN),
 		adminRecvCh:         make(MsgChannel, WORKER_MSG_QUEUE_LEN),
 		internalAdminRecvCh: make(MsgChannel),
-		internalAdminRespCh: make(chan bool),
+		internalAdminRespCh: make(MsgChannel),
 		shutdownInitCh:      make(MsgChannel),
 		shutdownCompleteCh:  make(MsgChannel),
 
@@ -806,8 +806,8 @@ func (idx *indexer) run() {
 
 		case msg, ok := <-idx.internalAdminRecvCh:
 			if ok {
-				idx.handleAdminMsgs(msg)
-				idx.internalAdminRespCh <- true
+				resp := idx.handleAdminMsgs(msg)
+				idx.internalAdminRespCh <- resp
 			}
 
 		case <-idx.shutdownInitCh:
@@ -837,7 +837,7 @@ func (idx *indexer) listenAdminMsgs() {
 				// internalAdminRecvCh size is 1.   So it will blocked if the previous msg is being
 				// processed.
 				idx.internalAdminRecvCh <- msg
-				<-idx.internalAdminRespCh
+				resp := <-idx.internalAdminRespCh
 
 				if waitForStream {
 					// now that indexer has processed the message.  Let's make sure that
@@ -854,8 +854,21 @@ func (idx *indexer) listenAdminMsgs() {
 							idx.waitStreamRequestLock(lock)
 						}
 
-						f(common.INIT_STREAM, bucket)
-						f(common.MAINT_STREAM, bucket)
+						//create and build don't need to be checked
+						//create don't take stream lock. build only works
+						//on a fresh stream.
+						if msg.GetMsgType() == CLUST_MGR_DROP_INDEX_DDL ||
+							msg.GetMsgType() == CLUST_MGR_PRUNE_PARTITION {
+							//check the stream used for the operation
+							if resp.GetMsgType() == MSG_SUCCESS_DROP {
+								streamId := resp.(*MsgSuccessDrop).GetStreamId()
+								if streamId == common.MAINT_STREAM ||
+									streamId == common.INIT_STREAM {
+									f(streamId, bucket)
+								}
+
+							}
+						}
 					}
 				}
 			}
@@ -1292,7 +1305,7 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 	idx.updateSliceWithConfig(newConfig)
 }
 
-func (idx *indexer) handleAdminMsgs(msg Message) {
+func (idx *indexer) handleAdminMsgs(msg Message) (resp Message) {
 
 	switch msg.GetMsgType() {
 
@@ -1300,17 +1313,18 @@ func (idx *indexer) handleAdminMsgs(msg Message) {
 		CBQ_CREATE_INDEX_DDL:
 
 		idx.handleCreateIndex(msg)
+		resp = &MsgSuccess{}
 
 	case CLUST_MGR_BUILD_INDEX_DDL:
 		idx.handleBuildIndex(msg)
+		resp = &MsgSuccess{}
 
 	case CLUST_MGR_DROP_INDEX_DDL,
 		CBQ_DROP_INDEX_DDL:
-
-		idx.handleDropIndex(msg)
+		resp = idx.handleDropIndex(msg)
 
 	case CLUST_MGR_PRUNE_PARTITION:
-		idx.handlePrunePartition(msg)
+		resp = idx.handlePrunePartition(msg)
 
 	case MSG_ERROR:
 
@@ -1323,6 +1337,8 @@ func (idx *indexer) handleAdminMsgs(msg Message) {
 		common.CrashOnError(errors.New("Unknown Msg On Admin Channel"))
 
 	}
+
+	return
 
 }
 
@@ -1414,27 +1430,6 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 			}
 			return
 		}
-	}
-
-	initState := idx.getStreamBucketState(common.INIT_STREAM, indexInst.Defn.Bucket)
-	maintState := idx.getStreamBucketState(common.MAINT_STREAM, indexInst.Defn.Bucket)
-
-	if initState == STREAM_RECOVERY ||
-		initState == STREAM_PREPARE_RECOVERY ||
-		maintState == STREAM_RECOVERY ||
-		maintState == STREAM_PREPARE_RECOVERY {
-		logging.Errorf("Indexer::handleCreateIndex \n\tCannot Process Create Index " +
-			"In Recovery Mode.")
-
-		if clientCh != nil {
-			clientCh <- &MsgError{
-				err: Error{code: ERROR_INDEXER_IN_RECOVERY,
-					severity: FATAL,
-					cause:    ErrIndexerInRecovery,
-					category: INDEXER}}
-
-		}
-		return
 	}
 
 	//check if this is duplicate index instance
@@ -1958,7 +1953,7 @@ func (idx *indexer) mergePartition(bucket string, streamId common.StreamId, sour
 			// The source and target must be on the same stream.
 			if source.Stream != target.Stream {
 				logging.Warnf("MergePartition: Source Index Instance stream %v and target index instance stream %v are not on the same. "+
-				"Do not merge now.", target.Stream, source.Stream)
+					"Do not merge now.", target.Stream, source.Stream)
 				return false
 			}
 
@@ -2131,7 +2126,7 @@ func (idx *indexer) cleanupIndexAfterMerge(inst common.IndexInst, merged map[com
 //
 // Prune Partition.
 //
-func (idx *indexer) handlePrunePartition(msg Message) {
+func (idx *indexer) handlePrunePartition(msg Message) (resp Message) {
 
 	instId := msg.(*MsgClustMgrPrunePartition).GetInstId()
 	partitions := msg.(*MsgClustMgrPrunePartition).GetPartitions()
@@ -2149,13 +2144,17 @@ func (idx *indexer) handlePrunePartition(msg Message) {
 		if ok, _ := idx.streamBucketFlushInProgress[inst.Stream][inst.Defn.Bucket]; !ok {
 			idx.prunePartitions(inst.Defn.Bucket, inst.Stream)
 		}
+		resp = &MsgSuccessDrop{streamId: inst.Stream}
 	} else {
 		logging.Warnf("PrunePartition.  Index instance %v not found. Skip", instId)
+		resp = &MsgError{}
 	}
 
 	idx.prunePartitionForIdleBuckets()
 
 	respch <- &MsgSuccess{}
+
+	return
 }
 
 //
@@ -2564,17 +2563,6 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 			logging.Infof("Indexer::handleBuildIndex Bucket %v validation successful", bucket)
 		}
 
-		if ok := idx.checkBucketInRecovery(bucket, instIdList, clientCh, errMap); ok {
-			logging.Errorf("Indexer::handleBuildIndex \n\tCannot Process Build Index "+
-				"In Recovery Mode. Bucket %v. Index In Error %v", bucket, errMap)
-			if idx.enableManager {
-				delete(bucketIndexList, bucket)
-				continue
-			} else {
-				return
-			}
-		}
-
 		//check if Initial Build is already running for this index's bucket
 		if ok := idx.checkDuplicateInitialBuildRequest(bucket, instIdList, clientCh, errMap); !ok {
 			logging.Errorf("Indexer::handleBuildIndex \n\tBuild Already In"+
@@ -2696,12 +2684,15 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 
 }
 
-func (idx *indexer) handleDropIndex(msg Message) {
+func (idx *indexer) handleDropIndex(msg Message) (resp Message) {
 
 	indexInstId := msg.(*MsgDropIndex).GetIndexInstId()
 	clientCh := msg.(*MsgDropIndex).GetResponseChannel()
 
 	logging.Infof("Indexer::handleDropIndex - IndexInstId %v", indexInstId)
+
+	//actual error is not required for admin msg handler
+	resp = &MsgError{}
 
 	var indexInst common.IndexInst
 	var ok bool
@@ -2769,7 +2760,8 @@ func (idx *indexer) handleDropIndex(msg Message) {
 		idx.cleanupIndexData(indexInst, clientCh)
 		logging.Infof("Indexer::handleDropIndex Cleanup Successful for "+
 			"Index Data %v", indexInst)
-		clientCh <- &MsgSuccess{}
+		resp = &MsgSuccess{}
+		clientCh <- resp
 		return
 	}
 
@@ -2822,6 +2814,9 @@ func (idx *indexer) handleDropIndex(msg Message) {
 	} else {
 		idx.cleanupIndex(indexInst, clientCh)
 	}
+
+	resp = &MsgSuccessDrop{streamId: streamId}
+	return
 
 }
 
@@ -4584,12 +4579,12 @@ func (idx *indexer) handleMergeInitStream(msg Message) {
 	//remove bucket from INIT_STREAM
 	var cmd Message
 	cmd = &MsgStreamUpdate{mType: REMOVE_BUCKET_FROM_STREAM,
-		streamId:  streamId,
-		bucket:    bucket,
-		respCh:    respCh,
-		stopCh:    stopCh,
+		streamId:      streamId,
+		bucket:        bucket,
+		respCh:        respCh,
+		stopCh:        stopCh,
 		abortRecovery: true,
-		sessionId: sessionId,
+		sessionId:     sessionId,
 	}
 
 	//send stream update to timekeeper
@@ -5898,7 +5893,7 @@ func (idx *indexer) forceCleanupIndexPartition(indexInst *common.IndexInst,
 
 	if err := idx.sendMsgToClusterMgr(msg); err != nil {
 		logging.Errorf("Indexer::forceCleanupIndexPartition %v %v Got error %v in deleting metadata. "+
-		"Metadata will be deleted on next indexer restart.", indexInst.InstId, partnId, err)
+			"Metadata will be deleted on next indexer restart.", indexInst.InstId, partnId, err)
 	}
 }
 

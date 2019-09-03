@@ -58,7 +58,6 @@ func TestCompareVbuuids(t *testing.T) {
 		t.Fatal("expected false")
 	}
 	ts.Vbuuids[len(ts.Vbuuids)-1]--
-	ts.Snapshots[len(ts.Snapshots)-1][0]++
 	if ts.CompareVbuuids(tsRef) == true {
 		t.Fatal("expected false")
 	}
