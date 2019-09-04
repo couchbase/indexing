@@ -157,7 +157,7 @@ func (stats *KvdataStats) String() (string, string) {
 		}
 		statjson = fmt.Sprintf("%v,`\"numDocsPending\":`%v", statjson, strconv.FormatUint(numDocsPending, 10))
 	} else {
-		fmsg := "KVDT[<-%v<-%v #%v] ##%v"
+		fmsg := "KVDT[<-%v<-%v #%v] ##%x"
 		key := fmt.Sprintf(fmsg, stats.kvdata.bucket, stats.kvdata.feed.cluster, stats.kvdata.topic, stats.kvdata.opaque)
 		logging.Errorf("%v Unable to retrieve bucket sequence numbers, err: %v", key, err)
 	}
@@ -311,7 +311,7 @@ func (kvdata *KVData) GetKVStats() map[string]interface{} {
 	if kvdata.stats.IsClosed() {
 		return nil
 	}
-	fmsg := "KVDT[<-%v<-%v #%v] ##%v"
+	fmsg := "KVDT[<-%v<-%v #%v] ##%x"
 	key := fmt.Sprintf(fmsg, kvdata.bucket, kvdata.feed.cluster, kvdata.topic, kvdata.opaque)
 	kvstat := make(map[string]interface{}, 0)
 	kvstat[key] = kvdata.stats
@@ -322,7 +322,7 @@ func (kvdata *KVData) GetWorkerStats() map[string][]interface{} {
 	if kvdata.stats.IsClosed() {
 		return nil
 	}
-	fmsg := "WRKR[<-%v<-%v #%v] ##%v"
+	fmsg := "WRKR[<-%v<-%v #%v] ##%x"
 	key := fmt.Sprintf(fmsg, kvdata.bucket, kvdata.feed.cluster, kvdata.topic, kvdata.opaque)
 	wrkrstat := make(map[string][]interface{}, 0)
 	wrkrstat[key] = kvdata.wrkrStats
@@ -650,7 +650,7 @@ func (kvdata *KVData) publishStreamEnd() {
 
 func (kvdata *KVData) logStats() {
 	stats, vbseqnos := kvdata.stats.String()
-	fmsg := "KVDT[<-%v<-%v #%v] ##%v"
+	fmsg := "KVDT[<-%v<-%v #%v] ##%x"
 	key := fmt.Sprintf(fmsg, kvdata.bucket, kvdata.feed.cluster, kvdata.topic, kvdata.opaque)
 	logging.Infof("%v stats: %v", key, stats)
 	logging.Infof("%v vbseqnos: [%v]", key, vbseqnos)

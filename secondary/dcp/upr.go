@@ -542,7 +542,7 @@ func (feed *DcpFeed) getStats() map[string]interface{} {
 				continue
 			}
 			if stats := singleFeed.dcpFeed.GetStats(); stats != nil {
-				key := fmt.Sprintf("DCPT[%v] ##%v", singleFeed.dcpFeed.Name(), singleFeed.dcpFeed.Opaque())
+				key := fmt.Sprintf("DCPT[%v] ##%x", singleFeed.dcpFeed.Name(), singleFeed.dcpFeed.Opaque())
 				dcpStats[key] = singleFeed.dcpFeed.GetStats()
 			}
 		}
