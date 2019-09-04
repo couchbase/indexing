@@ -1149,6 +1149,49 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.plasma.mainIndex.evictDirtyThreshold": ConfigValue{
+		0.8,
+		"Evict dirty page when resident ratio falls below threshold. " +
+			"For pages having been scanned, they will not be evicted even if they are dirty. " +
+			"Resident ratio falls below threshold when " +
+			"1) Eviction kicks in because there is not enough memory (DGM). " +
+			"2) Indexer restarts (resident ratio starts from 0). " +
+			"Keeping dirty page in memory helps performance when " +
+			"1) in-memory read performance " +
+			"2) hot write working set (minimize cost for split, compaction, full marshal, purger) " +
+			"For random write working set, caching dirty pages is not efficient from cost/performance " +
+			"perspective. Use this setting to identify a low watermark for in-memory use case. " +
+			"If threshold > resident ratio, it is a DGM use case.  In this case, use swapper to clean " +
+			"dirty page that is not in-use (not in hot working set). Set threshold to 0.0 to disable dirty " +
+			"page eviction. Set threshold above 1.0 to always enable dirty page eviction.",
+		0.8,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.mainIndex.evictDirtyOnPersistRatio": ConfigValue{
+		0.7,
+		"Evict dirty page on Persist when memory usage is over (quota * ratio). " +
+			"This allows write-only working set to be evicted before reaching quota. " +
+			"Note that persist interval is usually large (10 min), so it should not " +
+			"cause any performance impact even for hot wrrite-only working set.",
+		0.7,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.mainIndex.evictDirtySweepInterval": ConfigValue{
+		600,
+		"Time interval to sweep through all pages in an index (in sec)",
+		600,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.mainIndex.evictDirtyRunInterval": ConfigValue{
+		1,
+		"Minimum elapsed time between each run for swapper to sweep dirty pages (in millisecond)",
+		1,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.plasma.backIndex.maxNumPageDeltas": ConfigValue{
 		30,
 		"Maximum number of page deltas",
@@ -1188,6 +1231,34 @@ var SystemConfig = Config{
 		30,
 		"Desired LSS fragmentation percent",
 		30,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.backIndex.evictDirtyThreshold": ConfigValue{
+		0.8,
+		"See indexer.plasma.mainIndex.evictDirtyThreshold",
+		0.8,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.backIndex.evictDirtyOnPersistRatio": ConfigValue{
+		0.7,
+		"see indexer.plasma.mainIndex.evictDirtyOnPersistRatio",
+		0.7,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.backIndex.evictDirtySweepInterval": ConfigValue{
+		600,
+		"Time interval to sweep through all pages in an index (in sec)",
+		600,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.backIndex.evictDirtyRunInterval": ConfigValue{
+		1,
+		"Minimum elapsed time between each run for swapper to sweep dirty pages (in millisecond)",
+		1,
 		false, // mutable
 		false, // case-insensitive
 	},
