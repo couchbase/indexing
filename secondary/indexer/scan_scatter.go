@@ -425,12 +425,33 @@ func fastCountSingleSlice(request *ScanRequest, scan Scan, ctx IndexReaderContex
 	var cnt uint64
 	var nullCnt uint64
 
-	if scan.Incl == Low || scan.Incl == Both {
-		cnt, err = snap.Snapshot().CountTotal(ctx, stopch)
-	} else if scan.Incl == Neither {
-		nullCnt, err = snap.Snapshot().CountRange(ctx, scan.Low, scan.Low, Both, stopch)
-		if err == nil {
+	desc := false
+	if request.IndexInst.Defn.HasDescending() {
+		//fast count only works for first leading key
+		if request.IndexInst.Defn.Desc[0] {
+			desc = true
+		}
+	}
+
+	if !desc {
+		if scan.Incl == Low || scan.Incl == Both {
 			cnt, err = snap.Snapshot().CountTotal(ctx, stopch)
+		} else if scan.Incl == Neither {
+			nullCnt, err = snap.Snapshot().CountRange(ctx, scan.Low, scan.Low, Both, stopch)
+			if err == nil {
+				cnt, err = snap.Snapshot().CountTotal(ctx, stopch)
+			}
+		}
+	} else {
+		//for desc, inclusion gets flipped to High
+		if scan.Incl == High || scan.Incl == Both {
+			cnt, err = snap.Snapshot().CountTotal(ctx, stopch)
+		} else if scan.Incl == Neither {
+			//for desc, nulls collate on the higher end
+			nullCnt, err = snap.Snapshot().CountRange(ctx, scan.High, scan.High, Both, stopch)
+			if err == nil {
+				cnt, err = snap.Snapshot().CountTotal(ctx, stopch)
+			}
 		}
 	}
 
