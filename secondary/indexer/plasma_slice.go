@@ -1853,6 +1853,7 @@ func (mdb *plasmaSlice) Statistics() (StorageStatistics, error) {
 	sts.MemUsed = pStats.MemSz + pStats.MemSzIndex
 	sts.InsertBytes = pStats.BytesWritten
 	sts.GetBytes = pStats.LSSBlkReadBytes
+	checkpointFileSize := pStats.CheckpointSize
 
 	internalData = append(internalData, fmt.Sprintf("{\n\"MainStore\":\n%s", pStats))
 	if !mdb.isPrimary {
@@ -1866,17 +1867,19 @@ func (mdb *plasmaSlice) Statistics() (StorageStatistics, error) {
 		internalData = append(internalData, fmt.Sprintf(",\n\"BackStore\":\n%s", pStats))
 		sts.InsertBytes += pStats.BytesWritten
 		sts.GetBytes += pStats.LSSBlkReadBytes
+		checkpointFileSize += pStats.CheckpointSize
 	}
 
 	internalData = append(internalData, "}\n")
 
 	sts.InternalData = internalData
 	if mdb.hasPersistence {
-		_, _, sts.DiskSize = mdb.mainstore.GetLSSInfo()
+		sts.DiskSize = mdb.mainstore.GetLSSUsedSpace()
 		if !mdb.isPrimary {
-			_, _, bsDiskSz := mdb.backstore.GetLSSInfo()
+			bsDiskSz := mdb.backstore.GetLSSUsedSpace()
 			sts.DiskSize += bsDiskSz
 		}
+		sts.DiskSize += checkpointFileSize
 	}
 
 	mdb.idxStats.docidCount.Set(docidCount)
