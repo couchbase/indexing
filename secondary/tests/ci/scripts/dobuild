@@ -68,8 +68,8 @@ test $WORKSPACE/cbbuild && test $WORKSPACE/voltron || error_exit "Unable to find
 
 
 cd $WORKSPACE/goproj/src/github.com/couchbase/plasma
-echo "Switching plasma to unstable"
-git checkout unstable 1>>$WORKSPACE/make.log 2>&1 || error_exit "git checkout unstable"
+echo "Switching plasma to $BRANCH"
+git checkout $BRANCH 1>>$WORKSPACE/make.log 2>&1 || error_exit "git checkout $BRANCH"
 git pull 1>>$WORKSPACE/make.log 2>&1 || error_exit "git pull"
 current="`git rev-parse HEAD`"
 test -f ~/plasma.good || (echo $current > ~/plasma.good)
@@ -84,9 +84,6 @@ else
 fi
 
 cd $WORKSPACE/goproj/src/github.com/couchbase/nitro
-echo "Switching nitro to unstable"
-git checkout unstable 1>>$WORKSPACE/make.log 2>&1 || error_exit "git checkout unstable"
-git pull 1>>$WORKSPACE/make.log 2>&1 || error_exit "git pull"
 current="`git rev-parse HEAD`"
 test -f ~/nitro.good || (echo $current > ~/nitro.good)
 good="`cat ~/nitro.good`"
@@ -100,8 +97,8 @@ else
 fi
 
 cd $WORKSPACE/goproj/src/github.com/couchbase/indexing
-echo "Switching indexing to unstable"
-git checkout unstable 1>>$WORKSPACE/make.log 2>&1 || error_exit "git checkout unstable"
+echo "Switching indexing to $BRANCH"
+git checkout $BRANCH 1>>$WORKSPACE/make.log 2>&1 || error_exit "git checkout $BRANCH"
 git pull 1>>$WORKSPACE/make.log 2>&1 || error_exit "git pull"
 current="`git rev-parse HEAD`"
 test -f ~/indexing.good || (echo $current > ~/indexing.good)

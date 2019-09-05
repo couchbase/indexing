@@ -15,10 +15,9 @@ for i in {1..60}; do
   cd $WORKSPACE
   sleep 60
 
-  branch=unstable
-  current="`git ls-remote git://github.com/couchbase/indexing $branch | awk '{print $1}'`"
+  current="`git ls-remote git://github.com/couchbase/indexing $BRANCH | awk '{print $1}'`"
   good="`cat ~/indexing.good`"
   if [ "$current" != "$good" ]; then exit 0; fi
-  
+
 done
 

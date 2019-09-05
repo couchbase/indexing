@@ -6,7 +6,7 @@ export WORKSPACE="/opt/build"
 rm -rf ~/.ciscripts
 git clone -q git://github.com/couchbase/indexing ~/.ciscripts
 cd ~/.ciscripts
-git checkout unstable
+(source ~/.cienv && git checkout $BRANCH)
 
 while true; do
   git pull -q
