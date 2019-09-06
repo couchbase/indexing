@@ -698,7 +698,7 @@ func (w *streamWorker) handleSingleKeyVersion(bucket string, vbucket Vbucket, vb
 			msg := &MsgStream{
 				mType:    STREAM_READER_STREAM_BEGIN,
 				streamId: w.streamId,
-				host:     kv.GetDocid(), // For projector versions prior to 6.5, docid would be "nil"
+				node:     kv.GetDocid(), // For projector versions prior to 6.5, docid would be "nil"
 				meta:     meta.Clone(),
 				status:   status,
 				errCode:  code,

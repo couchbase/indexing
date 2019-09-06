@@ -174,6 +174,8 @@ const (
 
 	REPAIR_ABORT
 
+	POOL_CHANGE
+
 	INDEXER_DDL_IN_PROGRESS_RESPONSE
 )
 
@@ -269,7 +271,7 @@ func (m *MsgTimestamp) GetTimestamp() Timestamp {
 type MsgStream struct {
 	mType    MsgType
 	streamId common.StreamId
-	host     []byte
+	node     []byte
 	meta     *MutationMeta
 	snapshot *MutationSnapshot
 	status   common.StreamStatus
@@ -288,8 +290,8 @@ func (m *MsgStream) GetStreamId() common.StreamId {
 	return m.streamId
 }
 
-func (m *MsgStream) GetHost() []byte {
-	return m.host
+func (m *MsgStream) GetNode() []byte {
+	return m.node
 }
 
 func (m *MsgStream) GetSnapshot() *MutationSnapshot {
@@ -1490,6 +1492,30 @@ func (m *MsgRepairAbort) GetBucket() string {
 	return m.bucket
 }
 
+//POOL_CHANGE
+type MsgPoolChange struct {
+	mType    MsgType
+	nodes    map[string]bool
+	streamId common.StreamId
+	bucket   string
+}
+
+func (m *MsgPoolChange) GetMsgType() MsgType {
+	return m.mType
+}
+
+func (m *MsgPoolChange) GetNodes() map[string]bool {
+	return m.nodes
+}
+
+func (m *MsgPoolChange) GetStreamId() common.StreamId {
+	return m.streamId
+}
+
+func (m *MsgPoolChange) GetBucket() string {
+	return m.bucket
+}
+
 type MsgIndexSnapRequest struct {
 	ts          *common.TsVbuuid
 	cons        common.Consistency
@@ -2017,6 +2043,8 @@ func (m MsgType) String() string {
 		return "TK_GET_BUCKET_HWT"
 	case REPAIR_ABORT:
 		return "REPAIR_ABORT"
+	case POOL_CHANGE:
+		return "POOL_CHANGE"
 
 	case STORAGE_MGR_SHUTDOWN:
 		return "STORAGE_MGR_SHUTDOWN"

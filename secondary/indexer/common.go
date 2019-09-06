@@ -77,6 +77,23 @@ type Vbucket uint32
 type Vbuuid uint64
 type Seqno uint64
 
+type Vbuckets []Vbucket
+
+// Len implements sort.Interface{}.
+func (vbuckets Vbuckets) Len() int {
+	return len(vbuckets)
+}
+
+// Less implements sort.Interface{}.
+func (vbuckets Vbuckets) Less(i, j int) bool {
+	return vbuckets[i] < vbuckets[j]
+}
+
+// Swap implements sort.Interface{}
+func (vbuckets Vbuckets) Swap(i, j int) {
+	vbuckets[i], vbuckets[j] = vbuckets[j], vbuckets[i]
+}
+
 //MutationSnapshot represents snapshot information of KV
 type MutationSnapshot struct {
 	snapType uint32

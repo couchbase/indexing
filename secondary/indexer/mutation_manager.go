@@ -346,9 +346,9 @@ func (m *mutationMgr) handleWorkerMessage(cmd Message) {
 		m.supvRespch <- cmd
 
 		// Initialize latency object
-		host := cmd.(*MsgStream).GetHost()
+		node := cmd.(*MsgStream).GetNode()
 		streamId := cmd.(*MsgStream).GetStreamId()
-		if host != nil {
+		if node != nil {
 			m.lock.Lock()
 			_, streamExists := m.streamReaderMap[streamId]
 			m.lock.Unlock()
@@ -555,7 +555,7 @@ func (m *mutationMgr) handleRemoveIndexListFromStream(cmd Message) {
 	m.lock.Lock()
 	defer m.lock.Unlock()
 
-	//ignore if this stream is already closed. This case happens 
+	//ignore if this stream is already closed. This case happens
 	//when the stream is stopped during recovery and a drop comes in
 	if _, ok := m.streamReaderMap[streamId]; !ok {
 
@@ -1098,7 +1098,7 @@ func (m *mutationMgr) initLatencyObj(cmd Message) {
 	newPrjLatencyMap := stats.prjLatencyMap.Clone()
 	update := false
 
-	host := cmd.(*MsgStream).GetHost()
+	host := cmd.(*MsgStream).GetNode()
 	streamId := cmd.(*MsgStream).GetStreamId()
 	meta := cmd.(*MsgStream).GetMutationMeta()
 

@@ -68,6 +68,10 @@ type StreamState struct {
 	streamBucketLastRepairTimeMap map[common.StreamId]BucketStreamLastRepairTimeMap
 	streamBucketRepairStateMap    map[common.StreamId]BucketStreamRepairStateMap
 
+	// Maintains the mapping between vbucket to kv node UUID
+	// for each bucket, for each stream
+	streamBucketVBMap map[common.StreamId]BucketVBMap
+
 	bucketRollbackTime map[string]int64
 }
 
@@ -108,6 +112,8 @@ type BucketKVPendingTsMap map[string]*common.TsVbuuid
 type BucketStreamRepairStateMap map[string][]RepairState
 
 type BucketStatus map[string]StreamStatus
+
+type BucketVBMap map[string]map[Vbucket]string
 
 type RepairState byte
 
@@ -160,6 +166,7 @@ func InitStreamState(config common.Config) *StreamState {
 		streamBucketKVPendingTsMap:     make(map[common.StreamId]BucketKVPendingTsMap),
 		streamBucketRepairStateMap:     make(map[common.StreamId]BucketStreamRepairStateMap),
 		streamBucketSessionId:          make(map[common.StreamId]BucketSessionId),
+		streamBucketVBMap:              make(map[common.StreamId]BucketVBMap),
 	}
 
 	return ss
@@ -271,6 +278,9 @@ func (ss *StreamState) initNewStream(streamId common.StreamId) {
 	bucketStreamRepairStateMap := make(BucketStreamRepairStateMap)
 	ss.streamBucketRepairStateMap[streamId] = bucketStreamRepairStateMap
 
+	bucketVBMap := make(BucketVBMap)
+	ss.streamBucketVBMap[streamId] = bucketVBMap
+
 	ss.streamStatus[streamId] = STREAM_ACTIVE
 
 }
@@ -312,6 +322,7 @@ func (ss *StreamState) initBucketInStream(streamId common.StreamId,
 	ss.streamBucketKVActiveTsMap[streamId][bucket] = common.NewTsVbuuid(bucket, numVbuckets)
 	ss.streamBucketKVPendingTsMap[streamId][bucket] = common.NewTsVbuuid(bucket, numVbuckets)
 	ss.streamBucketRepairStateMap[streamId][bucket] = make([]RepairState, numVbuckets)
+	ss.streamBucketVBMap[streamId][bucket] = make(map[Vbucket]string)
 
 	ss.streamBucketStatus[streamId][bucket] = STREAM_ACTIVE
 
@@ -359,6 +370,7 @@ func (ss *StreamState) cleanupBucketFromStream(streamId common.StreamId,
 	delete(ss.streamBucketKVActiveTsMap[streamId], bucket)
 	delete(ss.streamBucketKVPendingTsMap[streamId], bucket)
 	delete(ss.streamBucketRepairStateMap[streamId], bucket)
+	delete(ss.streamBucketVBMap[streamId], bucket)
 
 	if donech, ok := ss.streamBucketFlushDone[streamId][bucket]; ok && donech != nil {
 		close(donech)
@@ -409,6 +421,7 @@ func (ss *StreamState) resetStreamState(streamId common.StreamId) {
 	delete(ss.streamBucketKVActiveTsMap, streamId)
 	delete(ss.streamBucketKVPendingTsMap, streamId)
 	delete(ss.streamBucketRepairStateMap, streamId)
+	delete(ss.streamBucketVBMap, streamId)
 
 	ss.streamStatus[streamId] = STREAM_INACTIVE
 
