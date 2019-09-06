@@ -904,6 +904,11 @@ func (mdb *memdbSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 
 	if s.info.MainSnap == nil {
 		err = mdb.loadSnapshot(s.info)
+		if err != nil {
+			// The caller may not force panic based on the error. So,
+			// cleanup is needed when loadSnapshot returns an error.
+			s.Close()
+		}
 	}
 
 	if info.IsCommitted() {
@@ -1285,21 +1290,27 @@ func (mdb *memdbSlice) loadSnapshot(snapInfo *memdbSnapshotInfo) (err error) {
 	concurrency := mdb.sysconf["settings.moi.recovery_threads"].Int()
 	mdb.confLock.RUnlock()
 
+	waitForShardBuild := func() {
+		if !mdb.isPrimary {
+			for wId := 0; wId < mdb.numWriters; wId++ {
+				close(partShardCh[wId])
+			}
+			wg.Wait()
+		}
+	}
+
 	var snap *memdb.Snapshot
 	snap, err = mdb.mainstore.LoadFromDisk(snapInfo.dataPath, concurrency, backIndexCallback)
 	if err == memdb.ErrCorruptSnapshot {
 		err = errStorageCorrupted
 		logging.Errorf("MemDBSlice::loadSnapshot Slice Id %v, IndexInstId %v failed to load snapshot %v error(%v).",
 			mdb.id, mdb.idxInstId, snapInfo.dataPath, err)
+		waitForShardBuild()
+		mdb.resetStores()
 		return
 	}
 
-	if !mdb.isPrimary {
-		for wId := 0; wId < mdb.numWriters; wId++ {
-			close(partShardCh[wId])
-		}
-		wg.Wait()
-	}
+	waitForShardBuild()
 
 	dur := time.Since(t0)
 	if err == nil {
@@ -1678,7 +1689,10 @@ func (s *memdbSnapshot) Close() error {
 }
 
 func (s *memdbSnapshot) Destroy() {
-	s.info.MainSnap.Close()
+	if s.info != nil && s.info.MainSnap != nil {
+		s.info.MainSnap.Close()
+	}
+
 	s.slice.idxStats.numOpenSnapshots.Add(-1)
 	defer s.slice.DecrRef()
 }
