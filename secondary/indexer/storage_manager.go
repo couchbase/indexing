@@ -680,6 +680,11 @@ func (sm *storageMgr) rollbackIndex(streamId common.StreamId, bucket string,
 	var restartTs *common.TsVbuuid
 	var err error
 
+	var markAsUsed bool
+	if rollbackTs.HasZeroSeqNum() {
+		markAsUsed = true
+	}
+
 	//for all partitions managed by this indexer
 	partnInstList := sm.getSortedPartnInst(partnMap)
 	for _, partnInst := range partnInstList {
@@ -690,7 +695,7 @@ func (sm *storageMgr) rollbackIndex(streamId common.StreamId, bucket string,
 			snapInfo := sm.findRollbackSnapshot(slice, rollbackTs)
 
 			restartTs, err = sm.rollbackToSnapshot(idxInstId, partnId,
-				slice, snapInfo)
+				slice, snapInfo, markAsUsed)
 
 			if err != nil {
 				return nil, err
@@ -746,12 +751,12 @@ func (sm *storageMgr) findRollbackSnapshot(slice Slice,
 }
 
 func (sm *storageMgr) rollbackToSnapshot(idxInstId common.IndexInstId,
-	partnId common.PartitionId, slice Slice, snapInfo SnapshotInfo) (*common.TsVbuuid, error) {
+	partnId common.PartitionId, slice Slice, snapInfo SnapshotInfo,
+	markAsUsed bool) (*common.TsVbuuid, error) {
 
 	var restartTs *common.TsVbuuid
-
 	if snapInfo != nil {
-		err := slice.Rollback(snapInfo)
+		err := slice.Rollback(snapInfo, markAsUsed)
 		if err == nil {
 			logging.Infof("StorageMgr::handleRollback Rollback Index: %v "+
 				"PartitionId: %v SliceId: %v To Snapshot %v ", idxInstId, partnId,
@@ -800,7 +805,7 @@ func (sm *storageMgr) rollbackAllToZero(streamId common.StreamId,
 
 				for _, slice := range sc.GetAllSlices() {
 					_, err := sm.rollbackToSnapshot(idxInstId, partnId,
-						slice, nil)
+						slice, nil, false)
 					if err != nil {
 						return err
 					}

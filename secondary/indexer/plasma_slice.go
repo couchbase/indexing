@@ -1463,7 +1463,7 @@ func (mdb *plasmaSlice) resetStores() {
 	mdb.idxStats.dataSize.Set(0)
 }
 
-func (mdb *plasmaSlice) Rollback(o SnapshotInfo) error {
+func (mdb *plasmaSlice) Rollback(o SnapshotInfo, markAsUsed bool) error {
 	mdb.waitPersist()
 	mdb.waitForPersistorThread()
 	qc := atomic.LoadInt64(&mdb.qCount)
@@ -1482,7 +1482,7 @@ func (mdb *plasmaSlice) Rollback(o SnapshotInfo) error {
 		mdb.readers <- readers[i]
 	}
 
-	if err == nil {
+	if err == nil && markAsUsed {
 		mdb.lastRollbackTs = o.Timestamp()
 	}
 

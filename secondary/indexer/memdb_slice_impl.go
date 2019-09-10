@@ -1101,7 +1101,7 @@ func (mdb *memdbSlice) resetStores() {
 
 //Rollback slice to given snapshot. Return error if
 //not possible
-func (mdb *memdbSlice) Rollback(info SnapshotInfo) error {
+func (mdb *memdbSlice) Rollback(info SnapshotInfo, markAsUsed bool) error {
 
 	//before rollback make sure there are no mutations
 	//in the slice buffer. Timekeeper will make sure there
@@ -1134,7 +1134,9 @@ func (mdb *memdbSlice) Rollback(info SnapshotInfo) error {
 
 	mdb.resetStores()
 
-	mdb.lastRollbackTs = info.Timestamp()
+	if markAsUsed {
+		mdb.lastRollbackTs = info.Timestamp()
+	}
 	return nil
 }
 

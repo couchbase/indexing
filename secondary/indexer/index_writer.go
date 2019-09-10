@@ -50,7 +50,7 @@ type IndexWriter interface {
 	OpenSnapshot(SnapshotInfo) (Snapshot, error)
 
 	//Rollback to given snapshot
-	Rollback(s SnapshotInfo) error
+	Rollback(s SnapshotInfo, markAsUsed bool) error
 
 	//Rollback to initial state
 	RollbackToZero() error
