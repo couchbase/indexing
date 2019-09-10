@@ -599,7 +599,8 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 
 	logging.Infof("StorageMgr::handleRollback rollbackTs is %v", rollbackTs)
 
-	var respTs *common.TsVbuuid
+	var err error
+	var restartTs *common.TsVbuuid
 
 	//for every index managed by this indexer
 	for idxInstId, partnMap := range sm.indexPartnMap {
@@ -610,81 +611,27 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 			idxInst.Stream == streamId &&
 			idxInst.State != common.INDEX_STATE_DELETED {
 
-			//for all partitions managed by this indexer
-			partnInstList := sm.getSortedPartnInst(partnMap)
-			for _, partnInst := range partnInstList {
-				partnId := partnInst.Defn.GetPartitionId()
-				sc := partnInst.Sc
+			restartTs, err = sm.rollbackIndex(streamId,
+				bucket, rollbackTs, idxInstId, partnMap, restartTs)
 
-				//rollback all slices
-				for _, slice := range sc.GetAllSlices() {
-					infos, err := slice.GetSnapshots()
-					// TODO: Proper error handling if possible
-					if err != nil {
-						panic("Unable read snapinfo -" + err.Error())
-					}
-					s := NewSnapshotInfoContainer(infos)
+			if err != nil {
+				sm.supvRespch <- &MsgRollbackDone{streamId: streamId,
+					bucket:    bucket,
+					err:       err,
+					sessionId: sessionId}
+				return
+			}
 
-					//if dcp has requested rollback to 0 for any vb, it is better to
-					//try with all available disk snapshots. The rollback could be
-					//due to vbuuid mismatch and using an older disk snapshot may work.
-					var snapInfo SnapshotInfo
-					if rollbackTs.HasZeroSeqNum() {
-						lastRollbackTs := slice.LastRollbackTs()
-						latestSnapInfo := s.GetLatest()
-
-						if latestSnapInfo == nil || lastRollbackTs == nil {
-							logging.Infof("StorageMgr::handleRollback latestSnapInfo %v lastRollbackTs %v. Use latest snapshot.", latestSnapInfo, lastRollbackTs)
-							snapInfo = latestSnapInfo
-						} else if lastRollbackTs.Equal(latestSnapInfo.Timestamp()) {
-							//discard the snapshot for which the stream request has already been made
-							s.RemoveLatest()
-							snapInfo = s.GetLatest()
-							logging.Infof("StorageMgr::handleRollback Discarding Already Used Snapshot %v. Next snapshot %v", latestSnapInfo, snapInfo)
-						}
-					} else {
-						snapInfo = s.GetOlderThanTS(rollbackTs)
-					}
-
-					if snapInfo != nil {
-						err := slice.Rollback(snapInfo)
-						if err == nil {
-							logging.Infof("StorageMgr::handleRollback Rollback Index: %v "+
-								"PartitionId: %v SliceId: %v To Snapshot %v ", idxInstId, partnId,
-								slice.Id(), snapInfo)
-							respTs = snapInfo.Timestamp()
-						} else {
-							//send error response back
-							//TODO handle the case where some of the slices fail to rollback
-							sm.supvRespch <- &MsgRollbackDone{streamId: streamId,
-								bucket:    bucket,
-								err:       err,
-								sessionId: sessionId}
-							return
-						}
-
-					} else {
-						//if there is no snapshot available, rollback to zero
-						err := slice.RollbackToZero()
-						if err == nil {
-							logging.Infof("StorageMgr::handleRollback Rollback Index: %v "+
-								"PartitionId: %v SliceId: %v To Zero ", idxInstId, partnId,
-								slice.Id())
-							//once rollback to zero has happened, set response ts to nil
-							//to represent the initial state of storage
-							respTs = nil
-						} else {
-							//send error response back
-							//TODO handle the case where some of the slices fail to rollback
-							sm.supvRespch <- &MsgRollbackDone{streamId: streamId,
-								bucket:    bucket,
-								err:       err,
-								sessionId: sessionId}
-							return
-						}
-					}
-
+			if restartTs == nil {
+				err = sm.rollbackAllToZero(streamId, bucket)
+				if err != nil {
+					sm.supvRespch <- &MsgRollbackDone{streamId: streamId,
+						bucket:    bucket,
+						err:       err,
+						sessionId: sessionId}
+					return
 				}
+				break
 			}
 		}
 	}
@@ -721,9 +668,147 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 
 	sm.supvRespch <- &MsgRollbackDone{streamId: streamId,
 		bucket:    bucket,
-		restartTs: respTs,
-		sessionId: sessionId}
+		restartTs: restartTs,
+		sessionId: sessionId,
+	}
+}
 
+func (sm *storageMgr) rollbackIndex(streamId common.StreamId, bucket string,
+	rollbackTs *common.TsVbuuid, idxInstId common.IndexInstId,
+	partnMap PartitionInstMap, minRestartTs *common.TsVbuuid) (*common.TsVbuuid, error) {
+
+	var restartTs *common.TsVbuuid
+	var err error
+
+	//for all partitions managed by this indexer
+	partnInstList := sm.getSortedPartnInst(partnMap)
+	for _, partnInst := range partnInstList {
+		partnId := partnInst.Defn.GetPartitionId()
+		sc := partnInst.Sc
+
+		for _, slice := range sc.GetAllSlices() {
+			snapInfo := sm.findRollbackSnapshot(slice, rollbackTs)
+
+			restartTs, err = sm.rollbackToSnapshot(idxInstId, partnId,
+				slice, snapInfo)
+
+			if err != nil {
+				return nil, err
+			}
+
+			if restartTs == nil {
+				return nil, nil
+			}
+
+			//if restartTs is lower than the minimum, use that
+			if !restartTs.AsRecentTs(minRestartTs) {
+				minRestartTs = restartTs
+			}
+		}
+	}
+	return minRestartTs, nil
+}
+
+func (sm *storageMgr) findRollbackSnapshot(slice Slice,
+	rollbackTs *common.TsVbuuid) SnapshotInfo {
+
+	infos, err := slice.GetSnapshots()
+	if err != nil {
+		panic("Unable read snapinfo -" + err.Error())
+	}
+	s := NewSnapshotInfoContainer(infos)
+
+	//if dcp has requested rollback to 0 for any vb, it is better to
+	//try with all available disk snapshots. The rollback could be
+	//due to vbuuid mismatch and using an older disk snapshot may work.
+	var snapInfo SnapshotInfo
+	if rollbackTs.HasZeroSeqNum() {
+		lastRollbackTs := slice.LastRollbackTs()
+		latestSnapInfo := s.GetLatest()
+
+		if latestSnapInfo == nil || lastRollbackTs == nil {
+			logging.Infof("StorageMgr::handleRollback latestSnapInfo %v "+
+				"lastRollbackTs %v. Use latest snapshot.", latestSnapInfo, lastRollbackTs)
+			snapInfo = latestSnapInfo
+		} else if lastRollbackTs.Equal(latestSnapInfo.Timestamp()) {
+			//discard the snapshot for which the stream request has already been made
+			s.RemoveLatest()
+			snapInfo = s.GetLatest()
+			logging.Infof("StorageMgr::handleRollback Discarding Already Used "+
+				"Snapshot %v. Next snapshot %v", latestSnapInfo, snapInfo)
+		}
+	} else {
+		snapInfo = s.GetOlderThanTS(rollbackTs)
+	}
+
+	return snapInfo
+
+}
+
+func (sm *storageMgr) rollbackToSnapshot(idxInstId common.IndexInstId,
+	partnId common.PartitionId, slice Slice, snapInfo SnapshotInfo) (*common.TsVbuuid, error) {
+
+	var restartTs *common.TsVbuuid
+
+	if snapInfo != nil {
+		err := slice.Rollback(snapInfo)
+		if err == nil {
+			logging.Infof("StorageMgr::handleRollback Rollback Index: %v "+
+				"PartitionId: %v SliceId: %v To Snapshot %v ", idxInstId, partnId,
+				slice.Id(), snapInfo)
+			restartTs = snapInfo.Timestamp()
+		} else {
+			//send error response back
+			return nil, err
+		}
+
+	} else {
+		//if there is no snapshot available, rollback to zero
+		err := slice.RollbackToZero()
+		if err == nil {
+			logging.Infof("StorageMgr::handleRollback Rollback Index: %v "+
+				"PartitionId: %v SliceId: %v To Zero ", idxInstId, partnId,
+				slice.Id())
+			//once rollback to zero has happened, set response ts to nil
+			//to represent the initial state of storage
+			restartTs = nil
+		} else {
+			//send error response back
+			return nil, err
+		}
+	}
+	return restartTs, nil
+}
+
+func (sm *storageMgr) rollbackAllToZero(streamId common.StreamId,
+	bucket string) error {
+
+	logging.Infof("StorageMgr::rollbackAllToZero %v %v", streamId, bucket)
+
+	for idxInstId, partnMap := range sm.indexPartnMap {
+		idxInst := sm.indexInstMap[idxInstId]
+
+		//if this bucket in stream needs to be rolled back
+		if idxInst.Defn.Bucket == bucket &&
+			idxInst.Stream == streamId &&
+			idxInst.State != common.INDEX_STATE_DELETED {
+
+			partnInstList := sm.getSortedPartnInst(partnMap)
+			for _, partnInst := range partnInstList {
+				partnId := partnInst.Defn.GetPartitionId()
+				sc := partnInst.Sc
+
+				for _, slice := range sc.GetAllSlices() {
+					_, err := sm.rollbackToSnapshot(idxInstId, partnId,
+						slice, nil)
+					if err != nil {
+						return err
+					}
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func (s *storageMgr) addNilSnapshot(idxInstId common.IndexInstId, bucket string) {
