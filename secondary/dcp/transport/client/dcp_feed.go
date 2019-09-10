@@ -1132,7 +1132,7 @@ func (stats *DcpStats) String() (string, string) {
 
 func (feed *DcpFeed) logStats() {
 	stats, latency := feed.stats.String()
-	key := fmt.Sprintf("DCPT[%v] ##%v", feed.Name(), feed.Opaque())
+	key := fmt.Sprintf("DCPT[%v] ##%x", feed.Name(), feed.Opaque())
 	logging.Infof("%v dcp latency stats %v", key, latency)
 	logging.Infof("%v stats: %v", key, stats)
 }

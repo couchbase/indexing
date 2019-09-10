@@ -327,7 +327,7 @@ func (sm *statsManager) logger() {
 					// Log eval stats for every evalStatsLogInterval
 					if logEvalStats {
 						// As of this commit, only IndexEvaluatorStats are supported
-						logPrefix := fmt.Sprintf("EVAL[%v #%v] ##%v ", bucketStats.bucket, bucketStats.topic, bucketStats.opaque)
+						logPrefix := fmt.Sprintf("EVAL[%v #%v] ##%x ", bucketStats.bucket, bucketStats.topic, bucketStats.opaque)
 						var evalStats string
 						for key, value := range bucketStats.evaluatorStats {
 							switch (value).(type) {

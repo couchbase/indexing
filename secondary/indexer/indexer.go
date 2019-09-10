@@ -6389,6 +6389,7 @@ func (idx *indexer) closeAllStreams() {
 			respCh:   respCh,
 		}
 
+		count := 0
 	retryloop:
 		for {
 			idx.sendMsgToKVSender(cmd)
@@ -6403,9 +6404,17 @@ func (idx *indexer) closeAllStreams() {
 				default:
 					//log and retry for all other responses
 					respErr := resp.(*MsgError).GetError()
-					logging.Fatalf("Indexer::closeAllStreams Stream %v "+
-						"Projector health check needed, indexer can not proceed, Error received %v. Retrying.",
-						common.StreamId(i), respErr.cause)
+					count++
+					if count > MAX_PROJ_RETRY {
+						logging.Fatalf("Indexer::closeAllStreams Stream %v "+
+							"Projector health check needed, indexer can not proceed, Error received %v. Retrying (%v).",
+							common.StreamId(i), respErr.cause, count)
+					} else {
+						logging.Warnf("Indexer::closeAllStreams Stream %v "+
+							"Projector health check needed, indexer can not proceed, Error received %v. Retrying (%v).",
+							common.StreamId(i), respErr.cause, count)
+					}
+
 					time.Sleep(KV_RETRY_INTERVAL * time.Millisecond)
 				}
 			}
