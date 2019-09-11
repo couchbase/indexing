@@ -1,7 +1,9 @@
+syntax = "proto2";
+
 // system request and administration request supported
 // by projector's admin-port.
 
-package protobuf;
+package protoProjector;
 
 import "common.proto";
 import "index.proto";

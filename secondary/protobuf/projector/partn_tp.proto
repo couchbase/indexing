@@ -1,4 +1,6 @@
-package protobuf;
+syntax = "proto2";
+
+package protoProjector;
 
 // Example TestPartition, can be used during development.
 message TestPartition {

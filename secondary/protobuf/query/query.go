@@ -1,4 +1,4 @@
-package protobuf
+package protoQuery
 
 import "errors"
 import json "github.com/couchbase/indexing/secondary/common/json"

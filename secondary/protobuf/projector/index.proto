@@ -1,9 +1,11 @@
+syntax = "proto2";
+
 // messages that describe index definition.
 // Index definition is populated from DDL. Other than `IndexState` other fields
 // of this structure are immutable once the index definition structure is
 // created.
 
-package protobuf;
+package protoProjector;
 
 import "partn_tp.proto";
 import "partn_single.proto";

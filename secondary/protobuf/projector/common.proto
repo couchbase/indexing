@@ -1,6 +1,8 @@
+syntax = "proto2";
+
 // Common set of definitions.
 
-package protobuf;
+package protoProjector;
 
 // Error message can be sent back as response or
 // encapsulated in response packets.

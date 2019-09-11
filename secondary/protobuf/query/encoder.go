@@ -1,4 +1,4 @@
-package protobuf
+package protoQuery
 
 import "github.com/couchbase/indexing/secondary/transport"
 import "net"

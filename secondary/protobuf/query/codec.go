@@ -1,6 +1,6 @@
 // Protobuf encoding scheme for payload
 
-package protobuf
+package protoQuery
 
 import "errors"
 
