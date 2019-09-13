@@ -41,6 +41,7 @@ func (p *KeyPartition) UpsertEndpoints(
 func (p *KeyPartition) UpsertDeletionEndpoints(
 	inst *IndexInst, m *mc.DcpEvent, partKey, key, oldKey []byte) []string {
 
+	// Note: Based on available information, partKey, key, oldKey can be nil.
 	return p.getAllEndpoints()
 }
 

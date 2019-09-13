@@ -48,6 +48,8 @@ func (p *TestPartition) UpsertEndpoints(
 // Full broadcast.
 func (p *TestPartition) UpsertDeletionEndpoints(
 	inst *IndexInst, m *mc.DcpEvent, oldPartKey, key, oldKey []byte) []string {
+
+	// Note: Based on available information, partKey, key, oldKey can be nil.
 	return p.Hosts(inst)
 }
 

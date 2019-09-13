@@ -32,4 +32,7 @@ type Evaluator interface {
 	) ([]byte, error)
 
 	Stats() interface{}
+
+	// Get the name of the index
+	GetIndexName() string
 }

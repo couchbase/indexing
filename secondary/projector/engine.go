@@ -80,3 +80,13 @@ func (engine *Engine) TransformRoute(
 func (engine *Engine) GetEvaluatorStats() interface{} {
 	return engine.evaluator.Stats()
 }
+
+// Get name of the index
+func (engine *Engine) GetIndexName() string {
+	return engine.evaluator.GetIndexName()
+}
+
+// Get name of the bucket
+func (engine *Engine) Bucket() string {
+	return engine.evaluator.Bucket()
+}

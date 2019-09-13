@@ -6356,7 +6356,7 @@ func (idx *indexer) makeRestartTs(streamId common.StreamId) (map[string]*common.
 						if oldTs == nil {
 							continue
 						}
-						if !ts.AsRecent(oldTs) {
+						if !ts.AsRecentTs(oldTs) {
 							restartTs[idxInst.Defn.Bucket] = ts
 						}
 					} else {

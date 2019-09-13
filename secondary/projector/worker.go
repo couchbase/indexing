@@ -448,7 +448,6 @@ func (worker *VbucketWorker) handleEvent(m *mc.DcpEvent) *Vbucket {
 		// prepare a data for each endpoint.
 		dataForEndpoints := make(map[string]interface{})
 		// for each engine distribute transformations to endpoints.
-		fmsg := "%v ##%x TransformRoute: %v\n"
 
 		var nvalue qvalue.Value
 		if m.IsJSON() {
@@ -470,7 +469,9 @@ func (worker *VbucketWorker) handleEvent(m *mc.DcpEvent) *Vbucket {
 				worker.meta, len(worker.engines), worker.opaque2,
 			)
 			if err != nil {
-				logging.Errorf(fmsg, logPrefix, m.Opaque, err)
+				fmsg := "%v ##%x TransformRoute: %v for index %v docid %s\n"
+				logging.Errorf(fmsg, logPrefix, m.Opaque, err, engine.GetIndexName(),
+					logging.TagStrUD(m.Key))
 			}
 			// TODO: Shrink the buffer periodically or as needed
 			if cap(newBuf) > cap(worker.encodeBuf) {
