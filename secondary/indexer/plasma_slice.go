@@ -292,10 +292,13 @@ func (slice *plasmaSlice) initStores() error {
 	mCfg.MaxPageLSSSegments = slice.sysconf["plasma.mainIndex.maxLSSPageSegments"].Int()
 	mCfg.LSSCleanerThreshold = slice.sysconf["plasma.mainIndex.LSSFragmentation"].Int()
 	mCfg.LSSCleanerMaxThreshold = slice.sysconf["plasma.mainIndex.maxLSSFragmentation"].Int()
-	mCfg.EvictDirtyThreshold = slice.sysconf["plasma.mainIndex.evictDirtyThreshold"].Float64()
+	mCfg.EnablePeriodicEvict = slice.sysconf["plasma.mainIndex.enablePeriodicEvict"].Bool()
+	mCfg.EvictMinThreshold = slice.sysconf["plasma.mainIndex.evictMinThreshold"].Float64()
+	mCfg.EvictMaxThreshold = slice.sysconf["plasma.mainIndex.evictMaxThreshold"].Float64()
 	mCfg.EvictDirtyOnPersistRatio = slice.sysconf["plasma.mainIndex.evictDirtyOnPersistRatio"].Float64()
-	mCfg.EvictDirtySweepInterval = time.Duration(slice.sysconf["plasma.mainIndex.evictDirtySweepInterval"].Int()) * time.Second
-	mCfg.EvictDirtyRunInterval = time.Duration(slice.sysconf["plasma.mainIndex.evictDirtyRunInterval"].Int()) * time.Millisecond
+	mCfg.EvictSweepInterval = time.Duration(slice.sysconf["plasma.mainIndex.evictSweepInterval"].Int()) * time.Second
+	mCfg.EvictRunInterval = time.Duration(slice.sysconf["plasma.mainIndex.evictRunInterval"].Int()) * time.Millisecond
+	mCfg.EvictUseMemEstimate = slice.sysconf["plasma.mainIndex.evictUseMemEstimate"].Bool()
 	mCfg.LogPrefix = fmt.Sprintf("%s/%s/Mainstore#%d:%d ", slice.idxDefn.Bucket, slice.idxDefn.Name, slice.idxInstId, slice.idxPartnId)
 
 	bCfg.MaxDeltaChainLen = slice.sysconf["plasma.backIndex.maxNumPageDeltas"].Int()
@@ -304,10 +307,13 @@ func (slice *plasmaSlice) initStores() error {
 	bCfg.MaxPageLSSSegments = slice.sysconf["plasma.backIndex.maxLSSPageSegments"].Int()
 	bCfg.LSSCleanerThreshold = slice.sysconf["plasma.backIndex.LSSFragmentation"].Int()
 	bCfg.LSSCleanerMaxThreshold = slice.sysconf["plasma.backIndex.maxLSSFragmentation"].Int()
-	bCfg.EvictDirtyThreshold = slice.sysconf["plasma.backIndex.evictDirtyThreshold"].Float64()
+	bCfg.EnablePeriodicEvict = slice.sysconf["plasma.backIndex.enablePeriodicEvict"].Bool()
+	bCfg.EvictMinThreshold = slice.sysconf["plasma.backIndex.evictMinThreshold"].Float64()
+	bCfg.EvictMaxThreshold = slice.sysconf["plasma.backIndex.evictMaxThreshold"].Float64()
 	bCfg.EvictDirtyOnPersistRatio = slice.sysconf["plasma.backIndex.evictDirtyOnPersistRatio"].Float64()
-	bCfg.EvictDirtySweepInterval = time.Duration(slice.sysconf["plasma.backIndex.evictDirtySweepInterval"].Int()) * time.Second
-	bCfg.EvictDirtyRunInterval = time.Duration(slice.sysconf["plasma.backIndex.evictDirtyRunInterval"].Int()) * time.Millisecond
+	bCfg.EvictSweepInterval = time.Duration(slice.sysconf["plasma.backIndex.evictSweepInterval"].Int()) * time.Second
+	bCfg.EvictRunInterval = time.Duration(slice.sysconf["plasma.backIndex.evictRunInterval"].Int()) * time.Millisecond
+	bCfg.EvictUseMemEstimate = slice.sysconf["plasma.backIndex.evictUseMemEstimate"].Bool()
 	bCfg.LogPrefix = fmt.Sprintf("%s/%s/Backstore#%d:%d ", slice.idxDefn.Bucket, slice.idxDefn.Name, slice.idxInstId, slice.idxPartnId)
 
 	if slice.hasPersistence {
@@ -2058,10 +2064,13 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 	mdb.mainstore.LSSCleanerThreshold = mdb.sysconf["plasma.mainIndex.LSSFragmentation"].Int()
 	mdb.mainstore.LSSCleanerMaxThreshold = mdb.sysconf["plasma.mainIndex.maxLSSFragmentation"].Int()
 	mdb.mainstore.DisableReadCaching = mdb.sysconf["plasma.disableReadCaching"].Bool()
-	mdb.mainstore.EvictDirtyThreshold = mdb.sysconf["plasma.mainIndex.evictDirtyThreshold"].Float64()
+	mdb.mainstore.EnablePeriodicEvict = mdb.sysconf["plasma.mainIndex.enablePeriodicEvict"].Bool()
+	mdb.mainstore.EvictMinThreshold = mdb.sysconf["plasma.mainIndex.evictMinThreshold"].Float64()
+	mdb.mainstore.EvictMaxThreshold = mdb.sysconf["plasma.mainIndex.evictMaxThreshold"].Float64()
 	mdb.mainstore.EvictDirtyOnPersistRatio = mdb.sysconf["plasma.mainIndex.evictDirtyOnPersistRatio"].Float64()
-	mdb.mainstore.EvictDirtySweepInterval = time.Duration(mdb.sysconf["plasma.mainIndex.evictDirtySweepInterval"].Int()) * time.Second
-	mdb.mainstore.EvictDirtyRunInterval = time.Duration(mdb.sysconf["plasma.mainIndex.evictDirtyRunInterval"].Int()) * time.Millisecond
+	mdb.mainstore.EvictSweepInterval = time.Duration(mdb.sysconf["plasma.mainIndex.evictSweepInterval"].Int()) * time.Second
+	mdb.mainstore.EvictRunInterval = time.Duration(mdb.sysconf["plasma.mainIndex.evictRunInterval"].Int()) * time.Millisecond
+	mdb.mainstore.EvictUseMemEstimate = mdb.sysconf["plasma.mainIndex.evictUseMemEstimate"].Bool()
 
 	mdb.mainstore.PurgerInterval = time.Duration(mdb.sysconf["plasma.purger.interval"].Int()) * time.Second
 	mdb.mainstore.PurgeThreshold = mdb.sysconf["plasma.purger.highThreshold"].Float64()
@@ -2077,10 +2086,13 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 		mdb.backstore.LSSCleanerThreshold = mdb.sysconf["plasma.backIndex.LSSFragmentation"].Int()
 		mdb.backstore.LSSCleanerMaxThreshold = mdb.sysconf["plasma.backIndex.maxLSSFragmentation"].Int()
 		mdb.backstore.DisableReadCaching = mdb.sysconf["plasma.disableReadCaching"].Bool()
-		mdb.backstore.EvictDirtyThreshold = mdb.sysconf["plasma.backIndex.evictDirtyThreshold"].Float64()
+		mdb.backstore.EnablePeriodicEvict = mdb.sysconf["plasma.backIndex.enablePeriodicEvict"].Bool()
+		mdb.backstore.EvictMinThreshold = mdb.sysconf["plasma.backIndex.evictMinThreshold"].Float64()
+		mdb.backstore.EvictMaxThreshold = mdb.sysconf["plasma.backIndex.evictMaxThreshold"].Float64()
 		mdb.backstore.EvictDirtyOnPersistRatio = mdb.sysconf["plasma.backIndex.evictDirtyOnPersistRatio"].Float64()
-		mdb.backstore.EvictDirtySweepInterval = time.Duration(mdb.sysconf["plasma.backIndex.evictDirtySweepInterval"].Int()) * time.Second
-		mdb.backstore.EvictDirtyRunInterval = time.Duration(mdb.sysconf["plasma.backIndex.evictDirtyRunInterval"].Int()) * time.Millisecond
+		mdb.backstore.EvictSweepInterval = time.Duration(mdb.sysconf["plasma.backIndex.evictSweepInterval"].Int()) * time.Second
+		mdb.backstore.EvictRunInterval = time.Duration(mdb.sysconf["plasma.backIndex.evictRunInterval"].Int()) * time.Millisecond
+		mdb.backstore.EvictUseMemEstimate = mdb.sysconf["plasma.backIndex.evictUseMemEstimate"].Bool()
 
 		mdb.backstore.PurgerInterval = time.Duration(mdb.sysconf["plasma.purger.interval"].Int()) * time.Second
 		mdb.backstore.PurgeThreshold = mdb.sysconf["plasma.purger.highThreshold"].Float64()

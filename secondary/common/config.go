@@ -1149,46 +1149,57 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
-	"indexer.plasma.mainIndex.evictDirtyThreshold": ConfigValue{
-		0.8,
-		"Evict dirty page when resident ratio falls below threshold. " +
-			"For pages having been scanned, they will not be evicted even if they are dirty. " +
-			"Resident ratio falls below threshold when " +
-			"1) Eviction kicks in because there is not enough memory (DGM). " +
-			"2) Indexer restarts (resident ratio starts from 0). " +
-			"Keeping dirty page in memory helps performance when " +
-			"1) in-memory read performance " +
-			"2) hot write working set (minimize cost for split, compaction, full marshal, purger) " +
-			"For random write working set, caching dirty pages is not efficient from cost/performance " +
-			"perspective. Use this setting to identify a low watermark for in-memory use case. " +
-			"If threshold > resident ratio, it is a DGM use case.  In this case, use swapper to clean " +
-			"dirty page that is not in-use (not in hot working set). Set threshold to 0.0 to disable dirty " +
-			"page eviction. Set threshold above 1.0 to always enable dirty page eviction.",
-		0.8,
+	"indexer.plasma.mainIndex.enablePeriodicEvict": ConfigValue{
+		true,
+		"Enable Periodic Eviction",
+		true,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.mainIndex.evictMinThreshold": ConfigValue{
+		0.5,
+		"Minimum memory use for periodic eviction to run. When memory use over min threshold," +
+			" eviction will not run if plasma estimates all indexes can fit into quota.",
+		0.5,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.mainIndex.evictMaxThreshold": ConfigValue{
+		0.9,
+		"Maximum memory use for periodic eviction to run.  Once reach max threshold," +
+			" periodic eviction will run regardless if it is going to run into DGM or not.",
+		0.9,
 		false, // mutable
 		false, // case-insensitive
 	},
 	"indexer.plasma.mainIndex.evictDirtyOnPersistRatio": ConfigValue{
-		0.7,
-		"Evict dirty page on Persist when memory usage is over (quota * ratio). " +
+		1.2,
+		"Evict dirty page during persistence when memory usage is over given ratio. " +
 			"This allows write-only working set to be evicted before reaching quota. " +
 			"Note that persist interval is usually large (10 min), so it should not " +
 			"cause any performance impact even for hot wrrite-only working set.",
-		0.7,
+		1.2,
 		false, // mutable
 		false, // case-insensitive
 	},
-	"indexer.plasma.mainIndex.evictDirtySweepInterval": ConfigValue{
+	"indexer.plasma.mainIndex.evictSweepInterval": ConfigValue{
 		600,
 		"Time interval to sweep through all pages in an index (in sec)",
 		600,
 		false, // mutable
 		false, // case-insensitive
 	},
-	"indexer.plasma.mainIndex.evictDirtyRunInterval": ConfigValue{
+	"indexer.plasma.mainIndex.evictRunInterval": ConfigValue{
 		1,
-		"Minimum elapsed time between each run for swapper to sweep dirty pages (in millisecond)",
+		"Minimum elapsed time between each run for swapper to sweep pages (in millisecond)",
 		1,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.mainIndex.evictUseMemEstimate": ConfigValue{
+		true,
+		"enable eviction to estimate if index memory can fit into quota",
+		true,
 		false, // mutable
 		false, // case-insensitive
 	},
@@ -1234,31 +1245,52 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
-	"indexer.plasma.backIndex.evictDirtyThreshold": ConfigValue{
-		0.8,
-		"See indexer.plasma.mainIndex.evictDirtyThreshold",
-		0.8,
+	"indexer.plasma.backIndex.enablePeriodicEvict": ConfigValue{
+		true,
+		"Enable Periodic Eviction",
+		true,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.backIndex.evictMinThreshold": ConfigValue{
+		0.5,
+		"See indexer.plasma.mainIndex.evictMinThreshold",
+		0.5,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.backIndex.evictMaxThreshold": ConfigValue{
+		0.9,
+		"See indexer.plasma.mainIndex.evictMaxThreshold",
+		0.9,
 		false, // mutable
 		false, // case-insensitive
 	},
 	"indexer.plasma.backIndex.evictDirtyOnPersistRatio": ConfigValue{
-		0.7,
+		1.2,
 		"see indexer.plasma.mainIndex.evictDirtyOnPersistRatio",
-		0.7,
+		1.2,
 		false, // mutable
 		false, // case-insensitive
 	},
-	"indexer.plasma.backIndex.evictDirtySweepInterval": ConfigValue{
+	"indexer.plasma.backIndex.evictSweepInterval": ConfigValue{
 		600,
 		"Time interval to sweep through all pages in an index (in sec)",
 		600,
 		false, // mutable
 		false, // case-insensitive
 	},
-	"indexer.plasma.backIndex.evictDirtyRunInterval": ConfigValue{
+	"indexer.plasma.backIndex.evictRunInterval": ConfigValue{
 		1,
-		"Minimum elapsed time between each run for swapper to sweep dirty pages (in millisecond)",
+		"Minimum elapsed time between each run for swapper to sweep pages (in millisecond)",
 		1,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.backIndex.evictUseMemEstimate": ConfigValue{
+		true,
+		"enable eviction to estimate if index memory can fit into quota",
+		true,
 		false, // mutable
 		false, // case-insensitive
 	},
