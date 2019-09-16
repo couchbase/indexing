@@ -1296,16 +1296,28 @@ func (mdb *plasmaSlice) doPersistSnapshot(s *plasmaSnapshot) {
 			var wg sync.WaitGroup
 			wg.Add(1)
 			go func() {
-				mdb.mainstore.CreateRecoveryPoint(s.MainSnap, meta,
+				mErr := mdb.mainstore.CreateRecoveryPoint(s.MainSnap, meta,
 					concurr, serializePersistence)
+
+				if mErr != nil {
+					logging.Infof("PlasmaSlice Slice Id %v, IndexInstId %v, PartitionId %v: Failed to create mainstore recovery point: %v",
+						mdb.id, mdb.idxInstId, mdb.idxPartnId, mErr)
+				}
+
 				tokenCh <- true
 				plasmaPersistenceMutex.Unlock()
 				wg.Done()
 			}()
 
 			if !mdb.isPrimary {
-				mdb.backstore.CreateRecoveryPoint(s.BackSnap, meta, concurr,
+				bErr := mdb.backstore.CreateRecoveryPoint(s.BackSnap, meta, concurr,
 					serializePersistence)
+
+				if bErr != nil {
+					logging.Infof("PlasmaSlice Slice Id %v, IndexInstId %v, PartitionId %v: Failed to create backstore recovery point: %v",
+						mdb.id, mdb.idxInstId, mdb.idxPartnId, bErr)
+				}
+
 				tokenCh <- true
 				plasmaPersistenceMutex.Unlock()
 			}
@@ -1315,6 +1327,10 @@ func (mdb *plasmaSlice) doPersistSnapshot(s *plasmaSnapshot) {
 			logging.Infof("PlasmaSlice Slice Id %v, IndexInstId %v, PartitionId %v Created recovery point (took %v)",
 				mdb.id, mdb.idxInstId, mdb.idxPartnId, dur)
 			mdb.idxStats.diskSnapStoreDuration.Set(int64(dur / time.Millisecond))
+
+			// In case there is an error creating one of recovery
+			// points, the successful one has to be cleaned up.
+			mdb.removeNotCommonRecoveryPoints()
 
 			// Cleanup old recovery points
 			mRPs := mdb.mainstore.GetRecoveryPoints()
@@ -1337,6 +1353,44 @@ func (mdb *plasmaSlice) doPersistSnapshot(s *plasmaSnapshot) {
 		logging.Infof("PlasmaSlice Slice Id %v, IndexInstId %v, PartitionId %v Skipping ondisk"+
 			" snapshot. A snapshot writer is in progress.", mdb.id, mdb.idxInstId, mdb.idxPartnId)
 	}
+}
+
+// Find rps that are present in only one of mainstore and
+// backstore and remove them.
+func (mdb *plasmaSlice) removeNotCommonRecoveryPoints() {
+	if !mdb.isPrimary {
+		mRPs := mdb.mainstore.GetRecoveryPoints()
+		bRPs := mdb.backstore.GetRecoveryPoints()
+
+		for _, rp := range setDifferenceRPs(mRPs, bRPs) {
+			mdb.mainstore.RemoveRecoveryPoint(rp)
+		}
+
+		for _, rp := range setDifferenceRPs(bRPs, mRPs) {
+			mdb.backstore.RemoveRecoveryPoint(rp)
+		}
+	}
+}
+
+// Find xRPs - yRPs: rps that are in xRPs, but not in yRPs.
+func setDifferenceRPs(xRPs, yRPs []*plasma.RecoveryPoint) []*plasma.RecoveryPoint {
+	var onlyInX []*plasma.RecoveryPoint
+
+	for _, xRP := range xRPs {
+		isInY := false
+		for _, yRP := range yRPs {
+			if cmpRPMeta(xRP.Meta(), yRP.Meta()) == 0 {
+				isInY = true
+				break
+			}
+		}
+
+		if !isInY {
+			onlyInX = append(onlyInX, xRP)
+		}
+	}
+
+	return onlyInX
 }
 
 func (mdb *plasmaSlice) GetSnapshots() ([]SnapshotInfo, error) {
