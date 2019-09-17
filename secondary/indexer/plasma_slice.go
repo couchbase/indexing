@@ -1915,10 +1915,6 @@ func (mdb *plasmaSlice) Statistics() (StorageStatistics, error) {
 	if !mdb.isPrimary {
 		pStats := mdb.backstore.GetStats()
 		docidCount = pStats.ItemsCount
-		numRecsMem += pStats.NumRecordAllocs - pStats.NumRecordFrees
-		numRecsDisk += pStats.NumRecordSwapOut - pStats.NumRecordSwapIn
-		cacheHits += pStats.CacheHits
-		cacheMiss += pStats.CacheMisses
 		sts.MemUsed += pStats.MemSz + pStats.MemSzIndex
 		internalData = append(internalData, fmt.Sprintf(",\n\"BackStore\":\n%s", pStats))
 		sts.InsertBytes += pStats.BytesWritten
