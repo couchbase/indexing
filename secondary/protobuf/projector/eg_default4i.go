@@ -1,4 +1,4 @@
-package protobuf
+package protoProjector
 
 import "github.com/golang/protobuf/proto"
 

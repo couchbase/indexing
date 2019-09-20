@@ -1,4 +1,4 @@
-package protobuf
+package protoProjector
 
 import "time"
 import "github.com/couchbase/indexing/secondary/logging"

@@ -1,4 +1,4 @@
-package protobuf
+package protoData
 
 import "encoding/binary"
 import c "github.com/couchbase/indexing/secondary/common"

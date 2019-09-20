@@ -1,4 +1,4 @@
-package protobuf
+package protoProjector
 
 import mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
 import "github.com/couchbase/indexing/secondary/common"

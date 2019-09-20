@@ -1,4 +1,6 @@
-package protobuf;
+syntax = "proto2";
+
+package protoProjector;
 
 message KeyPartition {
     required uint64 numPartition   = 1;

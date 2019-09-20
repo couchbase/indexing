@@ -1,4 +1,6 @@
-package protobuf;
+syntax = "proto2";
+
+package protoQuery;
 
 // Error message can be sent back as response or
 // encapsulated in response packets.

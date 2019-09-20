@@ -1,4 +1,6 @@
-package protobuf;
+syntax = "proto2";
+
+package protoData;
 
 // List of possible mutation commands.
 enum Command {
