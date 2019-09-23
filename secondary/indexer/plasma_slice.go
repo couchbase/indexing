@@ -1364,6 +1364,8 @@ func (mdb *plasmaSlice) GetSnapshots() ([]SnapshotInfo, error) {
 	if len(mRPs) > 0 {
 		minRP = mRPs[0].Meta()
 		maxRP = mRPs[len(mRPs)-1].Meta()
+	} else {
+		return nil, nil
 	}
 
 	if !mdb.isPrimary {
