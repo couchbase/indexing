@@ -249,8 +249,8 @@ loop:
 					delete(worker.vbuckets, v.vbno)
 
 				} else if m.Opaque != v.opaque {
-					fmsg := "%v ##%x mismatch with vbucket.##%x %v"
-					logging.Fatalf(fmsg, logPrefix, m.Opaque, v.opaque, m.Opcode)
+					fmsg := "%v ##%x mismatch with vbucket, vb:%v. ##%x %v"
+					logging.Fatalf(fmsg, logPrefix, m.Opaque, v.vbno, v.opaque, m.Opcode)
 					//workaround for MB-30327. this state should never happen.
 					os.Exit(1)
 				}

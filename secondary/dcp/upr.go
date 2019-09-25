@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/couchbase/indexing/secondary/dcp/transport"
 	memcached "github.com/couchbase/indexing/secondary/dcp/transport/client"
 	"github.com/couchbase/indexing/secondary/logging"
 )
@@ -80,7 +81,7 @@ func (b *Bucket) GetFailoverLogs(
 		name := NewDcpFeedName(fmt.Sprintf("getfailoverlog-%s-%v", b.Name, time.Now().UnixNano()))
 		flags := uint32(0x0)
 		singleFeed, err := serverConn.StartDcpFeed(
-			name, 0, flags, nil, opaque, config)
+			name, 0, flags, nil, opaque, nil, config)
 		if err != nil {
 			return nil, err
 		}
@@ -281,40 +282,52 @@ loop:
 	for {
 		select {
 		case msg := <-reqch:
-			cmd := msg[0].(byte)
-			switch cmd {
-			case ufCmdRequestStream:
-				vb, opaque := msg[1].(uint16), msg[2].(uint16)
-				flags, vbuuid := msg[3].(uint32), msg[4].(uint64)
-				startSeq, endSeq := msg[5].(uint64), msg[6].(uint64)
-				snapStart, snapEnd := msg[7].(uint64), msg[8].(uint64)
-				err := feed.dcpRequestStream(
-					vb, opaque, flags, vbuuid, startSeq, endSeq,
-					snapStart, snapEnd)
-				respch := msg[9].(chan []interface{})
-				respch <- []interface{}{err}
+			switch msg[0].(type) {
+			case byte:
+				cmd := msg[0].(byte)
+				switch cmd {
+				case ufCmdRequestStream:
+					vb, opaque := msg[1].(uint16), msg[2].(uint16)
+					flags, vbuuid := msg[3].(uint32), msg[4].(uint64)
+					startSeq, endSeq := msg[5].(uint64), msg[6].(uint64)
+					snapStart, snapEnd := msg[7].(uint64), msg[8].(uint64)
+					err := feed.dcpRequestStream(
+						vb, opaque, flags, vbuuid, startSeq, endSeq,
+						snapStart, snapEnd)
+					respch := msg[9].(chan []interface{})
+					respch <- []interface{}{err}
 
-			case ufCmdCloseStream:
-				vb, opaqueMSB := msg[1].(uint16), msg[2].(uint16)
-				err := feed.dcpCloseStream(vb, opaqueMSB)
-				respch := msg[3].(chan []interface{})
-				respch <- []interface{}{err}
+				case ufCmdCloseStream:
+					vb, opaqueMSB := msg[1].(uint16), msg[2].(uint16)
+					err := feed.dcpCloseStream(vb, opaqueMSB)
+					respch := msg[3].(chan []interface{})
+					respch <- []interface{}{err}
 
-			case ufCmdGetSeqnos:
-				respch := msg[1].(chan []interface{})
-				seqnos, err := feed.dcpGetSeqnos()
-				respch <- []interface{}{seqnos, err}
+				case ufCmdGetSeqnos:
+					respch := msg[1].(chan []interface{})
+					seqnos, err := feed.dcpGetSeqnos()
+					respch <- []interface{}{seqnos, err}
 
-			case ufCmdGetStats:
-				respch := msg[1].(chan []interface{})
-				dcpStats := feed.getStats()
-				respch <- []interface{}{dcpStats, nil}
+				case ufCmdGetStats:
+					respch := msg[1].(chan []interface{})
+					dcpStats := feed.getStats()
+					respch <- []interface{}{dcpStats, nil}
 
-			case ufCmdClose:
-				closeNodeFeeds()
-				respch := msg[1].(chan []interface{})
-				respch <- []interface{}{nil}
-				break loop
+				case ufCmdClose:
+					closeNodeFeeds()
+					respch := msg[1].(chan []interface{})
+					respch <- []interface{}{nil}
+					break loop
+				}
+			case transport.CommandCode:
+				cmd := msg[0].(transport.CommandCode)
+				switch cmd {
+				case transport.DCP_STREAMEND:
+					feed.cleanupVb(msg)
+				default:
+					logging.Fatalf("%v DcpFeed::genServer Should not receive a message other than DCP_STREAMEND, msg: %v", feed.logPrefix, msg)
+					break loop
+				}
 			}
 		}
 	}
@@ -356,7 +369,7 @@ func (feed *DcpFeed) connectToNodes(
 		for i := 0; i < feed.numConnections; i++ {
 			feedname := DcpFeedName(fmt.Sprintf("%v/%d", name, i))
 			singleFeed, err := serverConn.StartDcpFeed(
-				feedname, feed.sequence, flags, feed.output, opaque, config)
+				feedname, feed.sequence, flags, feed.output, opaque, feed.reqch, config)
 			if err != nil {
 				for _, singleFeed := range nodeFeeds {
 					singleFeed.dcpFeed.Close()
@@ -400,7 +413,7 @@ func (feed *DcpFeed) reConnectToNodes(
 			}
 			feedname := DcpFeedName(fmt.Sprintf("%v/%d", name, i))
 			singleFeed, err := serverConn.StartDcpFeed(
-				feedname, feed.sequence, flags, feed.output, opaque, config)
+				feedname, feed.sequence, flags, feed.output, opaque, feed.reqch, config)
 			if err != nil {
 				fmsg := "%v ##%x DcpFeed::reConnectToNodes StartDcpFeed failed for %v with err %v\n"
 				logging.Errorf(fmsg, feed.logPrefix, opaque, feedname, err)
@@ -597,6 +610,25 @@ func purgeFeed(nodeFeeds []*FeedInfo, singleFeed *FeedInfo) []*FeedInfo {
 		}
 	}
 	return nodeFeeds
+}
+
+func (feed *DcpFeed) cleanupVb(msg []interface{}) {
+	dcpFeed := msg[1].(*memcached.DcpFeed)
+	forvb := msg[2].(uint16)
+	// Delete the vb corresponding to the node feed
+	found := false
+outerloop:
+	for _, nodeFeeds := range feed.nodeFeeds {
+		for _, singleFeed := range nodeFeeds {
+			if singleFeed != nil && singleFeed.dcpFeed.Name() == dcpFeed.Name() {
+				_, found = removefromfeed(nodeFeeds, forvb)
+				break outerloop
+			}
+		}
+	}
+	if !found {
+		logging.Warnf("%v DcpFeed::genServer Could not find vb:%v for feed:%v in book-keeping", feed.logPrefix, forvb, dcpFeed.Name())
+	}
 }
 
 // failsafeOp can be used by gen-server implementors to avoid infinitely

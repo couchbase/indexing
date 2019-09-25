@@ -49,6 +49,7 @@ type DcpFeed struct {
 	vbstreams map[uint16]*DcpStream // vb->stream mapping
 	// genserver
 	reqch     chan []interface{}
+	supvch    chan []interface{}
 	finch     chan bool
 	logPrefix string
 	// stats
@@ -63,7 +64,9 @@ type DcpFeed struct {
 // NewDcpFeed creates a new DCP Feed.
 func NewDcpFeed(
 	mc *Client, name string, outch chan<- *DcpEvent,
-	opaque uint16, config map[string]interface{}) (*DcpFeed, error) {
+	opaque uint16,
+	supvch chan []interface{},
+	config map[string]interface{}) (*DcpFeed, error) {
 
 	genChanSize := config["genChanSize"].(int)
 	dataChanSize := config["dataChanSize"].(int)
@@ -73,6 +76,7 @@ func NewDcpFeed(
 		opaque:    opaque,
 		vbstreams: make(map[uint16]*DcpStream),
 		reqch:     make(chan []interface{}, genChanSize),
+		supvch:    supvch,
 		finch:     make(chan bool),
 		// TODO: would be nice to add host-addr as part of prefix.
 		logPrefix: fmt.Sprintf("DCPT[%s]", name),
@@ -349,6 +353,7 @@ func (feed *DcpFeed) handlePacket(
 		event = newDcpEvent(pkt, stream)
 		sendAck = true
 		delete(feed.vbstreams, vb)
+		feed.supvch <- []interface{}{transport.DCP_STREAMEND, feed, vb}
 		fmsg := "%v ##%x DCP_STREAMEND for vb %d\n"
 		logging.Debugf(fmsg, prefix, stream.AppOpaque, vb)
 		feed.stats.TotalStreamEnd.Add(1)
@@ -801,6 +806,7 @@ func (feed *DcpFeed) doDcpCloseStream(vbno, opaqueMSB uint16) error {
 func (feed *DcpFeed) sendStreamEnd(outch chan<- *DcpEvent) {
 	if feed.vbstreams != nil {
 		for vb, stream := range feed.vbstreams {
+			feed.supvch <- []interface{}{transport.DCP_STREAMEND, feed, vb}
 			dcpEvent := &DcpEvent{
 				VBucket: vb,
 				VBuuid:  stream.Vbuuid,
