@@ -142,8 +142,12 @@ type memdbSlice struct {
 
 	fatalDbErr error
 
+	clusterAddr string
+
+	numVbuckets    int
 	numWriters     int
 	maxRollbacks   int
+	maxDiskSnaps   int
 	hasPersistence bool
 
 	totalFlushTime  time.Duration
@@ -206,6 +210,9 @@ func NewMemDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	slice.id = sliceId
 	slice.numWriters = sysconf["numSliceWriters"].Int()
 	slice.maxRollbacks = sysconf["settings.moi.recovery.max_rollbacks"].Int()
+	slice.maxDiskSnaps = slice.maxRollbacks + 2 //make config if required
+	slice.numVbuckets = sysconf["numVbuckets"].Int()
+	slice.clusterAddr = sysconf["clusterAddr"].String()
 
 	sliceBufSize := sysconf["settings.sliceBufSize"].Uint64()
 	if sliceBufSize < uint64(slice.numWriters) {
@@ -1005,15 +1012,59 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot) {
 }
 
 func (mdb *memdbSlice) cleanupOldSnapshotFiles(keepn int) {
-	manifests := mdb.getSnapshotManifests()
-	if len(manifests) > keepn {
-		toRemove := len(manifests) - keepn
-		manifests = manifests[:toRemove]
-		for _, m := range manifests {
-			dir := filepath.Dir(m)
-			logging.Infof("MemDBSlice Removing disk snapshot %v", dir)
-			os.RemoveAll(dir)
+
+	seqTs := NewTimestamp(mdb.numVbuckets)
+
+	for i := 0; i < MAX_GETSEQS_RETRIES; i++ {
+
+		seqnos, err := common.BucketMinSeqnos(mdb.clusterAddr, "default", mdb.idxDefn.Bucket)
+		if err != nil {
+			logging.Errorf("MemDBSlice Slice Id %v, IndexInstId %v, PartitionId %v "+
+				"Error collecting cluster seqnos %v",
+				mdb.id, mdb.idxInstId, mdb.idxPartnId, err)
+			time.Sleep(time.Second)
+			continue
 		}
+
+		for i := 0; i < mdb.numVbuckets; i++ {
+			seqTs[i] = Seqno(seqnos[i])
+		}
+		break
+
+	}
+
+	infos, manifests, _ := mdb.getSnapshots()
+
+	if len(manifests) > keepn {
+
+		for i := 0; i < len(manifests)-keepn; i++ {
+
+			file := manifests[len(manifests)-i-1]
+			snapInfo := infos[len(infos)-i-1]
+			snapTsVbuuid := snapInfo.Timestamp()
+			snapTs := getSeqTsFromTsVbuuid(snapTsVbuuid)
+			if seqTs.GreaterThanEqual(snapTs) || //min cluster seqno is greater than snap ts
+				len(manifests)-i > mdb.maxDiskSnaps { //num snapshots is more than max disk snapshots
+				dir := filepath.Dir(file)
+				logging.Infof("MemDBSlice Slice Id %v, IndexInstId %v, PartitionId %v "+
+					"Removing disk snapshot %v", mdb.id, mdb.idxInstId, mdb.idxPartnId, dir)
+				os.RemoveAll(dir)
+			} else {
+				logging.Infof("MemDBSlice Slice Id %v, IndexInstId %v, PartitionId %v "+
+					"Skipped disk snapshot cleanup %v. Num snapshots %v. ",
+					mdb.id, mdb.idxInstId, mdb.idxPartnId, file, len(manifests))
+				break
+			}
+		}
+	}
+}
+
+func (mdb *memdbSlice) cleanupAllOldSnapshotFiles() {
+	manifests := mdb.getSnapshotManifests()
+	for _, m := range manifests {
+		dir := filepath.Dir(m)
+		logging.Infof("MemDBSlice Removing disk snapshot %v", dir)
+		os.RemoveAll(dir)
 	}
 }
 
@@ -1044,6 +1095,15 @@ func (mdb *memdbSlice) getSnapshotManifests() []string {
 // Returns snapshot info list in reverse sorted order
 func (mdb *memdbSlice) GetSnapshots() ([]SnapshotInfo, error) {
 	var infos []SnapshotInfo
+	var err error
+
+	infos, _, err = mdb.getSnapshots()
+	return infos, err
+}
+
+func (mdb *memdbSlice) getSnapshots() ([]SnapshotInfo, []string, error) {
+	var infos []SnapshotInfo
+	var outfiles []string
 
 	files := mdb.getSnapshotManifests()
 	for i := len(files) - 1; i >= 0; i-- {
@@ -1057,12 +1117,12 @@ func (mdb *memdbSlice) GetSnapshots() ([]SnapshotInfo, error) {
 				err = json.Unmarshal(bs, info)
 				if err == nil {
 					infos = append(infos, info)
+					outfiles = append(outfiles, f)
 				}
 			}
 		}
-
 	}
-	return infos, nil
+	return infos, outfiles, nil
 }
 
 func (mdb *memdbSlice) setCommittedCount() {
@@ -1190,9 +1250,6 @@ func (mdb *memdbSlice) loadSnapshot(snapInfo *memdbSnapshotInfo) (err error) {
 
 	var wg sync.WaitGroup
 	var backIndexCallback memdb.ItemCallback
-	mdb.confLock.RLock()
-	numVbuckets := mdb.sysconf["numVbuckets"].Int()
-	mdb.confLock.RUnlock()
 
 	partShardCh := make([]chan *memdb.ItemEntry, mdb.numWriters)
 
@@ -1219,7 +1276,7 @@ func (mdb *memdbSlice) loadSnapshot(snapInfo *memdbSnapshotInfo) (err error) {
 		}
 
 		backIndexCallback = func(e *memdb.ItemEntry) {
-			wId := vbucketFromEntryBytes(e.Item().Bytes(), numVbuckets) % mdb.numWriters
+			wId := vbucketFromEntryBytes(e.Item().Bytes(), mdb.numVbuckets) % mdb.numWriters
 			partShardCh[wId] <- e
 		}
 	}
@@ -1271,7 +1328,7 @@ func (mdb *memdbSlice) RollbackToZero() error {
 	mdb.waitPersist()
 
 	mdb.resetStores()
-	mdb.cleanupOldSnapshotFiles(0)
+	mdb.cleanupAllOldSnapshotFiles()
 
 	mdb.lastRollbackTs = nil
 

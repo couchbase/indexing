@@ -310,3 +310,44 @@ func GetSeqs(mc *memcached.Client, seqnos []uint64, buf []byte) error {
 
 	return nil
 }
+
+//Get seqnos of vbuckets in active/replica/pending state
+func GetSeqsAllVbStates(mc *memcached.Client, seqnos []uint64, buf []byte) error {
+	res := &transport.MCResponse{}
+	rq := &transport.MCRequest{
+		Opcode: transport.DCP_GET_SEQNO,
+		Opaque: 0,
+	}
+
+	mc.SetMcdConnectionDeadline()
+	defer mc.ResetMcdConnectionDeadline()
+
+	if err := mc.Transmit(rq); err != nil {
+		return err
+	}
+
+	if err := mc.ReceiveInBuf(res, buf); err != nil {
+		return err
+	}
+
+	if res.Status != transport.SUCCESS {
+		return fmt.Errorf("failed %d", res.Status)
+	}
+
+	if len(res.Body)%10 != 0 {
+		fmsg := "invalid body length %v, in get-seqnos\n"
+		err := fmt.Errorf(fmsg, len(res.Body))
+		return err
+	}
+	for i := 0; i < 1024; i++ {
+		seqnos[i] = 0
+	}
+
+	for i := 0; i < len(res.Body); i += 10 {
+		vbno := int(binary.BigEndian.Uint16(res.Body[i : i+2]))
+		seqno := binary.BigEndian.Uint64(res.Body[i+2 : i+10])
+		seqnos[vbno] = seqno
+	}
+
+	return nil
+}

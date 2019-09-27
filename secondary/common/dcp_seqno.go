@@ -65,7 +65,7 @@ func (ch *vbSeqnosRequest) Response() ([]uint64, error) {
 type vbSeqnosReader struct {
 	bucket     string
 	kvfeeds    map[string]*kvConn
-	requestCh  chan vbSeqnosRequest
+	requestCh  chan interface{}
 	seqsTiming stats.TimingStat
 }
 
@@ -73,7 +73,7 @@ func newVbSeqnosReader(bucket string, kvfeeds map[string]*kvConn) *vbSeqnosReade
 	r := &vbSeqnosReader{
 		bucket:    bucket,
 		kvfeeds:   kvfeeds,
-		requestCh: make(chan vbSeqnosRequest, seqsReqChanSize),
+		requestCh: make(chan interface{}, seqsReqChanSize),
 	}
 
 	r.seqsTiming.Init()
@@ -103,26 +103,77 @@ func (r *vbSeqnosReader) GetSeqnos() (seqs []uint64, err error) {
 // and issue single 'dcp seqno' per batch.
 func (r *vbSeqnosReader) Routine() {
 	for req := range r.requestCh {
-		l := len(r.requestCh)
-		t0 := time.Now()
-		seqnos, err := CollectSeqnos(r.kvfeeds)
-		response := &vbSeqnosResponse{
-			seqnos: seqnos,
-			err:    err,
-		}
-		r.seqsTiming.Put(time.Since(t0))
-		if err != nil {
-			dcp_buckets_seqnos.rw.Lock()
-			dcp_buckets_seqnos.errors[r.bucket] = err
-			dcp_buckets_seqnos.rw.Unlock()
-		}
-		req.Reply(response)
 
-		// Read outstanding requests that can be served by
-		// using the same response
-		for i := 0; i < l; i++ {
-			req := <-r.requestCh
-			req.Reply(response)
+		switch req.(type) {
+
+		case vbSeqnosRequest:
+			sreq := req.(vbSeqnosRequest)
+			l := len(r.requestCh)
+			t0 := time.Now()
+			seqnos, err := CollectSeqnos(r.kvfeeds)
+			response := &vbSeqnosResponse{
+				seqnos: seqnos,
+				err:    err,
+			}
+			r.seqsTiming.Put(time.Since(t0))
+			if err != nil {
+				dcp_buckets_seqnos.rw.Lock()
+				dcp_buckets_seqnos.errors[r.bucket] = err
+				dcp_buckets_seqnos.rw.Unlock()
+			}
+			sreq.Reply(response)
+
+			// Read outstanding requests that can be served by
+			// using the same response
+			for i := 0; i < l; i++ {
+				sreq := <-r.requestCh
+				switch sreq.(type) {
+
+				case vbSeqnosRequest:
+					//repond to same request type
+					req := sreq.(vbSeqnosRequest)
+					req.Reply(response)
+
+				case vbMinSeqnosRequest:
+					//anything else goes back
+					r.requestCh <- sreq
+
+				}
+			}
+
+		case vbMinSeqnosRequest:
+
+			sreq := req.(vbMinSeqnosRequest)
+			l := len(r.requestCh)
+			seqnos, err := CollectMinSeqnos(r.kvfeeds)
+			response := &vbSeqnosResponse{
+				seqnos: seqnos,
+				err:    err,
+			}
+			if err != nil {
+				dcp_buckets_seqnos.rw.Lock()
+				dcp_buckets_seqnos.errors[r.bucket] = err
+				dcp_buckets_seqnos.rw.Unlock()
+			}
+			sreq.Reply(response)
+
+			// Read outstanding requests that can be served by
+			// using the same response
+			for i := 0; i < l; i++ {
+				sreq := <-r.requestCh
+				switch sreq.(type) {
+
+				case vbMinSeqnosRequest:
+					//repond to same request type
+					req := sreq.(vbMinSeqnosRequest)
+					req.Reply(response)
+
+				case vbSeqnosRequest:
+					//anything else goes back
+					r.requestCh <- sreq
+
+				}
+			}
 		}
 	}
 
@@ -423,4 +474,148 @@ func pollForDeletedBuckets() {
 
 func SetDcpMemcachedTimeout(val uint32) {
 	memcached.SetDcpMemcachedTimeout(val)
+}
+
+//MinSeqnos Implementation
+
+type vbMinSeqnosRequest chan *vbSeqnosResponse
+
+func (ch *vbMinSeqnosRequest) Reply(response *vbSeqnosResponse) {
+	*ch <- response
+}
+
+func (ch *vbMinSeqnosRequest) Response() ([]uint64, error) {
+	response := <-*ch
+	return response.seqnos, response.err
+}
+
+// BucketMinSeqnos return list of {{vbno,seqno}..} for all vbuckets.
+// this call might fail due to,
+// - concurrent access that can preserve a deleted/failed bucket object.
+// - pollForDeletedBuckets() did not get a chance to cleanup
+//   a deleted bucket.
+// in both the cases if the call is retried it should get fixed, provided
+// a valid bucket exists.
+func BucketMinSeqnos(cluster, pooln, bucketn string) (l_seqnos []uint64, err error) {
+	// any type of error will cleanup the bucket and its kvfeeds.
+	defer func() {
+		if err != nil {
+			delDBSbucket(bucketn, true)
+		}
+	}()
+
+	var reader *vbSeqnosReader
+
+	reader, err = func() (*vbSeqnosReader, error) {
+		dcp_buckets_seqnos.rw.RLock()
+		reader, ok := dcp_buckets_seqnos.readerMap[bucketn]
+		dcp_buckets_seqnos.rw.RUnlock()
+		if !ok { // no {bucket,kvfeeds} found, create!
+			dcp_buckets_seqnos.rw.Lock()
+			defer dcp_buckets_seqnos.rw.Unlock()
+
+			// Recheck if reader is still not present since we acquired write lock
+			// after releasing the read lock.
+			if reader, ok = dcp_buckets_seqnos.readerMap[bucketn]; !ok {
+				if err = addDBSbucket(cluster, pooln, bucketn); err != nil {
+					return nil, err
+				}
+				// addDBSbucket has populated the reader
+				reader = dcp_buckets_seqnos.readerMap[bucketn]
+			}
+		}
+		return reader, nil
+	}()
+	if err != nil {
+		return nil, err
+	}
+
+	l_seqnos, err = reader.GetMinSeqnos()
+	return
+}
+
+func (r *vbSeqnosReader) GetMinSeqnos() (seqs []uint64, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = errConnClosed
+		}
+	}()
+
+	req := make(vbMinSeqnosRequest, 1)
+	r.requestCh <- req
+	seqs, err = req.Response()
+	return
+}
+
+func CollectMinSeqnos(kvfeeds map[string]*kvConn) (l_seqnos []uint64, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			// Return error as callers take care of retry.
+			logging.Errorf("%v: number of kvfeeds is %d", errCollectSeqnosPanic, len(kvfeeds))
+			l_seqnos = nil
+			err = errCollectSeqnosPanic
+		}
+	}()
+
+	var wg sync.WaitGroup
+
+	// Buffer for storing kv_seqs from each node
+	kv_seqnos_node := make([][]uint64, len(kvfeeds))
+	errors := make([]error, len(kvfeeds))
+
+	if len(kvfeeds) == 0 {
+		err = fmt.Errorf("Empty kvfeeds")
+		logging.Errorf("CollectMinSeqnos:: %v", err)
+		return nil, err
+	}
+
+	i := 0
+	for _, feed := range kvfeeds {
+		wg.Add(1)
+		go func(index int, feed *kvConn) {
+			defer wg.Done()
+			kv_seqnos_node[index] = feed.seqsbuf
+			errors[index] = couchbase.GetSeqsAllVbStates(feed.mc, kv_seqnos_node[index], feed.tmpbuf)
+		}(i, feed)
+		i++
+	}
+
+	wg.Wait()
+
+	seqnos := kv_seqnos_node[0]
+	for i, kv_seqnos := range kv_seqnos_node {
+		err := errors[i]
+		if err != nil {
+			logging.Errorf("feed.CollectMinSeqnos(): %v\n", err)
+			return nil, err
+		}
+
+		for vbno, seqno := range kv_seqnos {
+			prev := seqnos[vbno]
+			if prev > seqno {
+				seqnos[vbno] = seqno
+			}
+		}
+	}
+	// The following code is to detect rebalance or recovery !!
+	// this is not yet supported in KV, GET_SEQNOS returns all
+	// seqnos.
+	if len(seqnos) < dcp_buckets_seqnos.numVbs {
+		fmsg := "unable to get seqnos ts for all vbuckets (%v out of %v)"
+		err = fmt.Errorf(fmsg, len(seqnos), dcp_buckets_seqnos.numVbs)
+		logging.Errorf("%v\n", err)
+		return nil, err
+	}
+	// sort them
+	vbnos := make([]int, 0, dcp_buckets_seqnos.numVbs)
+	for vbno := range seqnos {
+		vbnos = append(vbnos, int(vbno))
+	}
+	sort.Ints(vbnos)
+	// gather seqnos.
+	l_seqnos = make([]uint64, 0, dcp_buckets_seqnos.numVbs)
+	for _, vbno := range vbnos {
+		l_seqnos = append(l_seqnos, seqnos[uint16(vbno)])
+	}
+	return l_seqnos, nil
 }

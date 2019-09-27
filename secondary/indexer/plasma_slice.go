@@ -85,6 +85,8 @@ type plasmaSlice struct {
 	numWriters    int
 	maxNumWriters int
 	maxRollbacks  int
+	maxDiskSnaps  int
+	numVbuckets   int
 
 	totalFlushTime  time.Duration
 	totalCommitTime time.Duration
@@ -110,6 +112,8 @@ type plasmaSlice struct {
 	hasPersistence bool
 
 	indexerStats *IndexerStats
+
+	clusterAddr string
 
 	//
 	// The following fields are used for tuning writers
@@ -184,8 +188,11 @@ func newPlasmaSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	slice.id = sliceId
 	slice.maxNumWriters = sysconf["numSliceWriters"].Int()
 	slice.hasPersistence = !sysconf["plasma.disablePersistence"].Bool()
+	slice.clusterAddr = sysconf["clusterAddr"].String()
+	slice.numVbuckets = sysconf["numVbuckets"].Int()
 
 	slice.maxRollbacks = sysconf["settings.plasma.recovery.max_rollbacks"].Int()
+	slice.maxDiskSnaps = slice.maxRollbacks + 2 //make config if required
 
 	updatePlasmaConfig(sysconf)
 	if sysconf["plasma.UseQuotaTuner"].Bool() {
@@ -625,14 +632,10 @@ func (mdb *plasmaSlice) logErrorsToConsole() {
 		return
 	}
 
-	mdb.confLock.RLock()
-	clusterAddr := mdb.sysconf["clusterAddr"].String()
-	mdb.confLock.RUnlock()
-
 	logMsg := fmt.Sprintf("Index entries were skipped in index: %v, bucket: %v, "+
 		"IndexInstId: %v PartitionId: %v due to errors. Please check indexer logs for more details.",
 		mdb.idxDefn.Name, mdb.idxDefn.Bucket, mdb.idxInstId, mdb.idxPartnId)
-	common.Console(clusterAddr, logMsg)
+	common.Console(mdb.clusterAddr, logMsg)
 	atomic.StoreInt32(&mdb.numKeysSkipped, 0)
 }
 
@@ -1256,7 +1259,8 @@ func (mdb *plasmaSlice) doPersistSnapshot(s *plasmaSnapshot) {
 		go func() {
 			defer atomic.StoreInt32(&mdb.isPersistorActive, 0)
 
-			logging.Infof("PlasmaSlice Slice Id %v, IndexInstId %v, PartitionId %v Creating recovery point ...", mdb.id, mdb.idxInstId, mdb.idxPartnId)
+			logging.Infof("PlasmaSlice Slice Id %v, IndexInstId %v, PartitionId %v "+
+				"Creating recovery point ...", mdb.id, mdb.idxInstId, mdb.idxPartnId)
 			t0 := time.Now()
 
 			snapshotStats := make(map[string]interface{})
@@ -1300,7 +1304,8 @@ func (mdb *plasmaSlice) doPersistSnapshot(s *plasmaSnapshot) {
 					concurr, serializePersistence)
 
 				if mErr != nil {
-					logging.Infof("PlasmaSlice Slice Id %v, IndexInstId %v, PartitionId %v: Failed to create mainstore recovery point: %v",
+					logging.Infof("PlasmaSlice Slice Id %v, IndexInstId %v, PartitionId %v: "+
+						"Failed to create mainstore recovery point: %v",
 						mdb.id, mdb.idxInstId, mdb.idxPartnId, mErr)
 				}
 
@@ -1314,7 +1319,8 @@ func (mdb *plasmaSlice) doPersistSnapshot(s *plasmaSnapshot) {
 					serializePersistence)
 
 				if bErr != nil {
-					logging.Infof("PlasmaSlice Slice Id %v, IndexInstId %v, PartitionId %v: Failed to create backstore recovery point: %v",
+					logging.Infof("PlasmaSlice Slice Id %v, IndexInstId %v, PartitionId %v: "+
+						"Failed to create backstore recovery point: %v",
 						mdb.id, mdb.idxInstId, mdb.idxPartnId, bErr)
 				}
 
@@ -1324,30 +1330,17 @@ func (mdb *plasmaSlice) doPersistSnapshot(s *plasmaSnapshot) {
 			wg.Wait()
 
 			dur := time.Since(t0)
-			logging.Infof("PlasmaSlice Slice Id %v, IndexInstId %v, PartitionId %v Created recovery point (took %v)",
-				mdb.id, mdb.idxInstId, mdb.idxPartnId, dur)
+			logging.Infof("PlasmaSlice Slice Id %v, IndexInstId %v, PartitionId %v "+
+				"Created recovery point (took %v)", mdb.id, mdb.idxInstId, mdb.idxPartnId, dur)
+
 			mdb.idxStats.diskSnapStoreDuration.Set(int64(dur / time.Millisecond))
 
 			// In case there is an error creating one of recovery
 			// points, the successful one has to be cleaned up.
 			mdb.removeNotCommonRecoveryPoints()
 
-			// Cleanup old recovery points
-			mRPs := mdb.mainstore.GetRecoveryPoints()
-			if len(mRPs) > mdb.maxRollbacks {
-				for i := 0; i < len(mRPs)-mdb.maxRollbacks; i++ {
-					mdb.mainstore.RemoveRecoveryPoint(mRPs[i])
-				}
-			}
+			mdb.cleanupOldRecoveryPoints()
 
-			if !mdb.isPrimary {
-				bRPs := mdb.backstore.GetRecoveryPoints()
-				if len(bRPs) > mdb.maxRollbacks {
-					for i := 0; i < len(bRPs)-mdb.maxRollbacks; i++ {
-						mdb.backstore.RemoveRecoveryPoint(bRPs[i])
-					}
-				}
-			}
 		}()
 	} else {
 		logging.Infof("PlasmaSlice Slice Id %v, IndexInstId %v, PartitionId %v Skipping ondisk"+
@@ -1391,6 +1384,90 @@ func setDifferenceRPs(xRPs, yRPs []*plasma.RecoveryPoint) []*plasma.RecoveryPoin
 	}
 
 	return onlyInX
+}
+
+func (mdb *plasmaSlice) cleanupOldRecoveryPoints() {
+
+	seqTs := NewTimestamp(mdb.numVbuckets)
+
+	for i := 0; i < MAX_GETSEQS_RETRIES; i++ {
+
+		seqnos, err := common.BucketMinSeqnos(mdb.clusterAddr, "default", mdb.idxDefn.Bucket)
+		if err != nil {
+			logging.Errorf("PlasmaSlice Slice Id %v, IndexInstId %v, PartitionId %v "+
+				"Error collecting cluster seqnos %v",
+				mdb.id, mdb.idxInstId, mdb.idxPartnId, err)
+			time.Sleep(time.Second)
+			continue
+		}
+
+		for i := 0; i < mdb.numVbuckets; i++ {
+			seqTs[i] = Seqno(seqnos[i])
+		}
+		break
+
+	}
+
+	// Cleanup old recovery points
+	mRPs := mdb.mainstore.GetRecoveryPoints()
+	if len(mRPs) > mdb.maxRollbacks {
+		for i := 0; i < len(mRPs)-mdb.maxRollbacks; i++ {
+
+			snapInfo, err := mdb.getRPSnapInfo(mRPs[i])
+			if err != nil {
+				logging.Errorf("PlasmaSlice Slice Id %v, IndexInstId %v, PartitionId %v "+
+					"Skipped recovery point cleanup. err %v",
+					mdb.id, mdb.idxInstId, mdb.idxPartnId, err)
+				continue
+			}
+			snapTsVbuuid := snapInfo.Timestamp()
+			snapTs := getSeqTsFromTsVbuuid(snapTsVbuuid)
+			if seqTs.GreaterThanEqual(snapTs) || //min cluster seqno is greater than snap ts
+				len(mRPs)-i > mdb.maxDiskSnaps { //num RPs is more than max disk snapshots
+				logging.Infof("PlasmaSlice Slice Id %v, IndexInstId %v, PartitionId %v "+
+					"Cleanup mainstore recovery point %v ", mdb.id, mdb.idxInstId,
+					mdb.idxPartnId, snapInfo)
+				mdb.mainstore.RemoveRecoveryPoint(mRPs[i])
+			} else {
+				logging.Infof("PlasmaSlice Slice Id %v, IndexInstId %v, PartitionId %v "+
+					"Skipped recovery point cleanup. num RPs %v ",
+					mdb.id, mdb.idxInstId, mdb.idxPartnId, len(mRPs))
+				break
+			}
+		}
+	}
+
+	if !mdb.isPrimary {
+		bRPs := mdb.backstore.GetRecoveryPoints()
+		if len(bRPs) > mdb.maxRollbacks {
+			for i := 0; i < len(bRPs)-mdb.maxRollbacks; i++ {
+
+				snapInfo, err := mdb.getRPSnapInfo(bRPs[i])
+				if err != nil {
+					logging.Errorf("PlasmaSlice Slice Id %v, IndexInstId %v, PartitionId %v "+
+						"Skipped recovery point cleanup. err %v",
+						mdb.id, mdb.idxInstId, mdb.idxPartnId, err)
+					continue
+				}
+				snapTsVbuuid := snapInfo.Timestamp()
+				snapTs := getSeqTsFromTsVbuuid(snapTsVbuuid)
+				snapTs[0] = Seqno(80000)
+				if seqTs.GreaterThanEqual(snapTs) || //min cluster seqno is greater than snap ts
+					len(bRPs)-i > mdb.maxDiskSnaps { //num RPs is more than max disk snapshots
+					logging.Infof("PlasmaSlice Slice Id %v, IndexInstId %v, PartitionId %v "+
+						"Cleanup backstore recovery point %v ", mdb.id, mdb.idxInstId,
+						mdb.idxPartnId, snapInfo)
+					mdb.backstore.RemoveRecoveryPoint(bRPs[i])
+				} else {
+					logging.Infof("PlasmaSlice Slice Id %v, IndexInstId %v, PartitionId %v "+
+						"Skipped recovery point cleanup. num RPs %v ",
+						mdb.id, mdb.idxInstId, mdb.idxPartnId, len(bRPs))
+					break
+				}
+
+			}
+		}
+	}
 }
 
 func (mdb *plasmaSlice) GetSnapshots() ([]SnapshotInfo, error) {
@@ -1445,30 +1522,9 @@ func (mdb *plasmaSlice) GetSnapshots() ([]SnapshotInfo, error) {
 
 	var infos []SnapshotInfo
 	for i := len(mRPs) - 1; i >= 0; i-- {
-		info := &plasmaSnapshotInfo{
-			mRP:   mRPs[i],
-			Count: mRPs[i].ItemsCount(),
-		}
-
-		var snapMeta map[string]interface{}
-		if err := json.Unmarshal(info.mRP.Meta()[8:], &snapMeta); err != nil {
-			return nil, fmt.Errorf("Unable to decode snapshot meta err %v", err)
-		}
-
-		if _, ok := snapMeta["Version"]; ok {
-			// new format
-			var err error
-			var snapInfo plasmaSnapshotInfo
-			if err = json.Unmarshal(info.mRP.Meta()[8:], &snapInfo); err != nil {
-				return nil, fmt.Errorf("Unable to decode snapshot info from meta. err %v", err)
-			}
-			info.Ts = snapInfo.Ts
-			info.IndexStats = snapInfo.IndexStats
-		} else {
-			// old format
-			if err := json.Unmarshal(info.mRP.Meta()[8:], &info.Ts); err != nil {
-				return nil, fmt.Errorf("Unable to decode snapshot meta err %v", err)
-			}
+		info, err := mdb.getRPSnapInfo(mRPs[i])
+		if err != nil {
+			return nil, err
 		}
 
 		if !mdb.isPrimary {
@@ -1479,6 +1535,37 @@ func (mdb *plasmaSlice) GetSnapshots() ([]SnapshotInfo, error) {
 	}
 
 	return infos, nil
+}
+
+func (mdb *plasmaSlice) getRPSnapInfo(rp *plasma.RecoveryPoint) (*plasmaSnapshotInfo, error) {
+
+	info := &plasmaSnapshotInfo{
+		mRP:   rp,
+		Count: rp.ItemsCount(),
+	}
+
+	var snapMeta map[string]interface{}
+	if err := json.Unmarshal(info.mRP.Meta()[8:], &snapMeta); err != nil {
+		return nil, fmt.Errorf("Unable to decode snapshot meta err %v", err)
+	}
+
+	if _, ok := snapMeta["Version"]; ok {
+		// new format
+		var err error
+		var snapInfo plasmaSnapshotInfo
+		if err = json.Unmarshal(info.mRP.Meta()[8:], &snapInfo); err != nil {
+			return nil, fmt.Errorf("Unable to decode snapshot info from meta. err %v", err)
+		}
+		info.Ts = snapInfo.Ts
+		info.IndexStats = snapInfo.IndexStats
+	} else {
+		// old format
+		if err := json.Unmarshal(info.mRP.Meta()[8:], &info.Ts); err != nil {
+			return nil, fmt.Errorf("Unable to decode snapshot meta err %v", err)
+		}
+	}
+
+	return info, nil
 }
 
 func (mdb *plasmaSlice) setCommittedCount() {
