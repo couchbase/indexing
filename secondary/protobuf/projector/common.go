@@ -179,8 +179,8 @@ func (ts *TsVbuuid) Set(
 
 // Contains with check whether `vbno` has an entry in the timestamp.
 func (ts *TsVbuuid) Contains(vbno uint16) bool {
-	for _, vbno := range ts.GetVbnos() {
-		if vbno == vbno {
+	for _, vb := range ts.GetVbnos() {
+		if vb == uint32(vbno) {
 			return true
 		}
 	}
