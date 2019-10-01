@@ -1476,9 +1476,10 @@ func (ss *StreamState) adjustVbuuids(restartTs *common.TsVbuuid,
 	if pts, ok := ss.streamBucketLastMutationVbuuid[streamId][bucket]; ok && pts != nil {
 		for i, _ := range pts.Vbuuids {
 			if restartTs.Seqnos[i] == pts.Seqnos[i] &&
+				restartTs.Seqnos[i] != 0 &&
 				restartTs.Vbuuids[i] != pts.Vbuuids[i] {
-				logging.Infof("StreamState::adjustVbuuids Stream %v Bucket %v Seqno %v "+
-					"From %v To %v", streamId, bucket, pts.Seqnos[i], restartTs.Vbuuids[i],
+				logging.Infof("StreamState::adjustVbuuids %v %v Vb %v Seqno %v "+
+					"From %v To %v", streamId, bucket, i, pts.Seqnos[i], restartTs.Vbuuids[i],
 					pts.Vbuuids[i])
 				restartTs.Vbuuids[i] = pts.Vbuuids[i]
 			}
