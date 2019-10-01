@@ -243,7 +243,7 @@ loop:
 				v := worker.handleEvent(m)
 				if v == nil {
 					fmsg := "%v ##%x nil vbucket %v for %v"
-					logging.Fatalf(fmsg, logPrefix, m.Opaque, m.VBucket, m.Opcode)
+					logging.Errorf(fmsg, logPrefix, m.Opaque, m.VBucket, m.Opcode)
 
 				} else if m.Opcode == mcd.DCP_STREAMEND {
 					delete(worker.vbuckets, v.vbno)

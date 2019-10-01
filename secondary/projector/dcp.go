@@ -99,6 +99,10 @@ func (bdcp *bucketDcp) StartVbStreams(
 			vbno, opaque, flags, vbuuid, start, end, snapStart, snapEnd)
 		if e != nil {
 			err = e
+			// In case of an error, a clean-up will be triggerred after all the
+			// streams are opened. Fail-fast is an optimization that will
+			// prevent this unnecessary opening and closing of streams
+			return err
 		}
 		// FIXME/TODO: the below sleep avoid back-to-back dispatch of
 		// StreamRequest to DCP, which seem to cause some problems.

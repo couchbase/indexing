@@ -449,6 +449,9 @@ func (feed *DcpFeed) dcpRequestStream(
 		logging.Errorf(fmsg, prefix, opaque, vb)
 		return ErrorInvalidVbucket
 	} else if len(feed.nodeFeeds[master]) == 0 {
+		fmsg := "%v ##%x len(feed.nodeFeeds[master]) is \"0\"." +
+			" Master node for vb:%d is %v\n"
+		logging.Errorf(fmsg, prefix, opaque, vb, master)
 		return ErrorInvalidVbucket
 	}
 
