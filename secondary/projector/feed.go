@@ -550,7 +550,7 @@ loop:
 				}
 				if cmd.status == mcd.ROLLBACK {
 					fmsg := "%v ##%x backch flush rollback %T: %v\n"
-					logging.Infof(fmsg, prefix, cmd, cmd.opaque, cmd.Repr())
+					logging.Infof(fmsg, prefix, cmd.opaque, cmd, cmd.Repr())
 					rollTs, ok := feed.rollTss[cmd.bucket]
 					if ok {
 						rollTs = rollTs.Append(
@@ -560,7 +560,7 @@ loop:
 
 				} else if cmd.status == mcd.SUCCESS {
 					fmsg := "%v ##%x backch flush success %T: %v\n"
-					logging.Infof(fmsg, prefix, cmd, cmd.opaque, cmd.Repr())
+					logging.Infof(fmsg, prefix, cmd.opaque, cmd, cmd.Repr())
 					actTs, ok := feed.actTss[cmd.bucket]
 					if ok {
 						actTs = actTs.Append(
@@ -1888,6 +1888,10 @@ func (feed *Feed) waitStreamEnds(
 
 	timeout := time.After(feed.endTimeout * time.Millisecond)
 	err1 := feed.waitOnFeedback(timeout, opaque, func(msg interface{}) string {
+		// The opaque value comparision is not required here as StreamEnd
+		// messages will carry the same opaque value used with StreamRequest
+		// (The opaque value of waitStreamEnds corresponds to the opaque value
+		// of the request issued by indexer)
 		if val, ok := msg.(*controlStreamEnd); ok && val.bucket == bucketn &&
 			ts.Contains(val.vbno) {
 
