@@ -1430,20 +1430,68 @@ func (o *MetadataProvider) replicaRepair(defn *c.IndexDefn, numReplica c.Counter
 	curCount, _ := numReplica.Value()
 	totalCount := int(curCount) + increment
 
-	nodes, err := o.prepareNodeList(nil, watcherMap)
+	// prepareNodeList prepares the list of all nodes in the cluster.
+	var nodes []string
+	var err error
+	nodes, err = o.prepareNodeList(nil, watcherMap)
 	if err != nil {
 		return nil, nil, err
 	}
 
+	var useNodes []string
+	useNodes, err, _ = o.getNodesParam(plan)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if len(useNodes) != 0 {
+		// Use planner to find the nodes hosting existing set of replicas
+		// Input node list "useNodes" should contain all the nodes currently
+		// hosting the existing replica, along with new nodes for replica
+		// placement. Otherwise, the operation will fail.
+		var currNodes []string
+		currNodes, err = planner.FindIndexReplicaNodes(o.clusterUrl, nodes, defn.DefnId)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		validateUseNodesList := func(useNodes, currNodes []string) error {
+			for _, currNode := range currNodes {
+				found := false
+				for _, useNode := range useNodes {
+					if strings.ToLower(currNode) == strings.ToLower(useNode) {
+						found = true
+					}
+				}
+				if !found {
+					errMsg := "Please provide the list of nodes currently hosting"
+					errMsg += " all the existing index replicas, along with the list"
+					errMsg += " of new nodes to be used for replica placement."
+					return errors.New(errMsg)
+				}
+			}
+			return nil
+		}
+
+		if err = validateUseNodesList(useNodes, currNodes); err != nil {
+			return nil, nil, err
+		}
+	} else {
+		useNodes = nodes
+	}
+
 	// Use the planner to find out where to place the replica.
 	// If planner cannot read from the given list of nodes, it will return error.
-	solution, err := planner.ExecuteReplicaRepair(o.clusterUrl, defn.DefnId, increment, nodes, false)
+	// In case of input plan has list of nodes to be used, pass the list along
+	// for planner to place the replicas on those specific nodes.
+	var solution *planner.Solution
+	solution, err = planner.ExecuteReplicaRepair(o.clusterUrl, defn.DefnId, increment, useNodes, false)
 	if err != nil {
 		return nil, nil, err
 	}
 
 	// make sure the number of indexer in the computed plan matches the number of nodes
-	if len(nodes) != len(solution.Placement) {
+	if len(useNodes) != len(solution.Placement) {
 		err := fmt.Errorf("Cluster has failed nodes, undergo network partition, or unable to determine indexer node status.")
 		return nil, nil, err
 	}
@@ -2558,6 +2606,10 @@ func (o *MetadataProvider) getNumReplica(defnId c.IndexDefnId, name string, buck
 	return &numReplica, nil
 }
 
+// When plan (with clause) mentions a specific set of nodes to be used for
+// AlterReplicaCount, all the nodes - including the new nodes and the nodes
+// hosting the exising replicas - should be specified in the input plan.
+// Move index replica also has the same expectation.
 func (o *MetadataProvider) AlterReplicaCount(action string, defnId c.IndexDefnId, plan map[string]interface{}) error {
 
 	// Support for 6.5 and onwards
@@ -2665,7 +2717,7 @@ func (o *MetadataProvider) AlterReplicaCount(action string, defnId c.IndexDefnId
 
 	if int(curCount) < count {
 		// add replica
-		if err := o.addReplica(&defn, watcherMap, *numReplica, count-int(curCount), (map[string]interface{})(nil)); err != nil {
+		if err := o.addReplica(&defn, watcherMap, *numReplica, count-int(curCount), plan); err != nil {
 			return fmt.Errorf("Fail to alter index: %v", err)
 		}
 
