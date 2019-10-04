@@ -13,8 +13,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/couchbase/indexing/secondary/logging"
 	"strings"
+
+	"github.com/couchbase/indexing/secondary/logging"
 )
 
 type IndexKey []byte
@@ -170,6 +171,14 @@ const (
 	// and make sure to return a stable data-set that is atleast as
 	// recent as the timestamp-vector.
 	QueryConsistency
+
+	// SessionConsistencyStrict indexer would query the latest timestamp with
+	// vbseqbos and vbuuids from each KV node. It will ensure that the
+	// scan result is at least as recent as the KV timestamp. In other words,
+	// this option ensures the query result is at least as recent as what
+	// the user session has observed so far. Note that this consistency option
+	// internal to indexer and not used in clients
+	SessionConsistencyStrict
 )
 
 func (cons Consistency) String() string {
@@ -180,6 +189,8 @@ func (cons Consistency) String() string {
 		return "SESSION_CONSISTENCY"
 	case QueryConsistency:
 		return "QUERY_CONSISTENCY"
+	case SessionConsistencyStrict:
+		return "SESSION_CONSISTENCY_STRICT"
 	default:
 		return "UNKNOWN_CONSISTENCY"
 	}

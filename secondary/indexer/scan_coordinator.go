@@ -613,14 +613,46 @@ func (s *scanCoordinator) handleStatsRequest(req *ScanRequest, w ScanResponseWri
 // will block wait.
 // This mechanism can be used to implement RYOW.
 func (s *scanCoordinator) getRequestedIndexSnapshot(r *ScanRequest) (snap IndexSnapshot, err error) {
+
 	snapshot, err := func() (IndexSnapshot, error) {
 		s.mu.RLock()
 		defer s.mu.RUnlock()
 
 		ss, ok := s.lastSnapshot[r.IndexInstId]
 		cons := *r.Consistency
-		if ok && ss != nil && isSnapshotConsistent(ss, cons, r.Ts) {
-			return CloneIndexSnapshot(ss), nil
+		if ok && ss != nil {
+			cfg := s.config.Load()
+			if !cfg["enable_session_consistency_strict"].Bool() || cons != common.SessionConsistency {
+				if isSnapshotConsistent(ss, cons, r.Ts) {
+					return CloneIndexSnapshot(ss), nil
+				}
+				return nil, nil
+			}
+
+			isConsistent, isAhead := isSnapshotConsistentOrAhead(ss, cons, r.Ts)
+			if !isConsistent {
+				return nil, nil
+			}
+			if !isAhead {
+				return CloneIndexSnapshot(ss), nil
+			}
+
+			// snapshot TS is ahead of Bucket TS. This indicates a possible rollback on KV
+			// that scanCoordinator is not aware of yet. Switch to SessionConsistencyStrict
+			cluster, retries := cfg["clusterAddr"].String(), cfg["settings.scan_getseqnos_retries"].Int()
+			newCons := common.SessionConsistencyStrict
+			r.Consistency = &newCons
+			r.Ts = &common.TsVbuuid{}
+			r.Ts.Seqnos, r.Ts.Vbuuids, err = bucketSeqVbuuidsWithRetry(retries, s.logPrefix,
+				cluster, r.Bucket, cfg["numVbuckets"].Int())
+			if err != nil {
+				return nil, err
+			}
+
+			if isSnapshotConsistent(ss, *r.Consistency, r.Ts) {
+				return CloneIndexSnapshot(ss), nil
+			}
+			return nil, nil
 		}
 		return nil, nil
 	}()
@@ -694,7 +726,8 @@ func isSnapshotConsistent(
 	ss IndexSnapshot, cons common.Consistency, reqTs *common.TsVbuuid) bool {
 
 	if snapTs := ss.Timestamp(); snapTs != nil {
-		if cons == common.QueryConsistency && snapTs.AsRecent(reqTs) {
+		if (cons == common.QueryConsistency || cons == common.SessionConsistencyStrict) &&
+			snapTs.AsRecent(reqTs) {
 			return true
 		} else if cons == common.SessionConsistency {
 			if ss.IsEpoch() && reqTs.IsEpoch() {
@@ -712,6 +745,31 @@ func isSnapshotConsistent(
 		}
 	}
 	return false
+}
+
+// Check whether snapshotTS is consistent with request TS
+// Also return if snapshotTS is ahead of request TS for any vb
+func isSnapshotConsistentOrAhead(ss IndexSnapshot, cons common.Consistency,
+	reqTs *common.TsVbuuid) (bool, bool) {
+
+	snapTsConsistent, snapTsAhead := false, false
+
+	if snapTs := ss.Timestamp(); snapTs != nil {
+		if ss.IsEpoch() && reqTs.IsEpoch() {
+			return true, false
+		}
+
+		snapTsConsistent, snapTsAhead = snapTs.AsRecentTs2(reqTs)
+		if snapTs.CheckCrc64(reqTs) && snapTsConsistent {
+			return true, snapTsAhead
+		}
+
+		// don't return error because client might be ahead of
+		// in receiving a rollback.
+		// return nil, ErrVbuuidMismatch
+		return false, false
+	}
+	return false, false
 }
 
 func (s *scanCoordinator) isScanAllowed(c common.Consistency, scan *ScanRequest) error {
@@ -1233,6 +1291,37 @@ func bucketSeqsWithRetry(retries int, logPrefix, cluster, bucket string, numVbs 
 				logPrefix, bucket, err, r)
 		}
 		seqnos, err = common.BucketSeqnos(cluster, "default", bucket)
+
+		if err == nil && len(seqnos) < numVbs {
+			return fmt.Errorf("Mismatch of number of vbuckets in DCP seqnos (%v).  Expected (%v).", len(seqnos), numVbs)
+		}
+
+		return err
+	}
+
+	rh := common.NewRetryHelper(retries, time.Second, 1, fn)
+	err = rh.Run()
+	return
+}
+
+func bucketSeqVbuuidsWithRetry(retries int, logPrefix, cluster,
+	bucket string, numVbs int) (seqnos, vbuuids []uint64, err error) {
+	fn := func(r int, err error) error {
+		if r > 0 {
+			logging.Errorf("%s BucketTs(%s): failed with error (%v)...Retrying (%d)",
+				logPrefix, bucket, err, r)
+		}
+
+		b, err := common.ConnectBucket(cluster, "default", bucket)
+		if err != nil {
+			return err
+		}
+		defer b.Close()
+
+		seqnos, vbuuids, err = common.BucketTs(b, numVbs)
+		if err != nil {
+			return err
+		}
 
 		if err == nil && len(seqnos) < numVbs {
 			return fmt.Errorf("Mismatch of number of vbuckets in DCP seqnos (%v).  Expected (%v).", len(seqnos), numVbs)
