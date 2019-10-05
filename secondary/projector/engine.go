@@ -39,8 +39,8 @@ func (engine *Engine) StreamBeginData(
 	vbno uint16, vbuuid, seqno uint64, status byte,
 	code byte, opaque2 uint64) interface{} {
 
-	return engine.evaluator.StreamBeginData(vbno, vbuuid, seqno, 
-	GetHostAddress(), status, code, opaque2)
+	return engine.evaluator.StreamBeginData(vbno, vbuuid, seqno,
+		GetNodeUUID(), status, code, opaque2)
 }
 
 // SyncData from this engine.
@@ -52,7 +52,7 @@ func (engine *Engine) SyncData(
 
 // SnapshotData from this engine.
 func (engine *Engine) SnapshotData(
-	m *mc.DcpEvent, vbno uint16, vbuuid, 
+	m *mc.DcpEvent, vbno uint16, vbuuid,
 	seqno uint64, opaque2 uint64) interface{} {
 
 	return engine.evaluator.SnapshotData(m, vbno, vbuuid, seqno, opaque2)

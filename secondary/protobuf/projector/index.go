@@ -174,11 +174,11 @@ func (ie *IndexEvaluator) Bucket() string {
 
 // StreamBeginData implement Evaluator{} interface.
 func (ie *IndexEvaluator) StreamBeginData(
-	vbno uint16, vbuuid, seqno uint64, hostaddr string,
+	vbno uint16, vbuuid, seqno uint64, nodeUUID string,
 	status byte, code byte, opaque2 uint64) (data interface{}) {
 
 	bucket := ie.Bucket()
-	kv := c.NewKeyVersions(seqno, []byte(hostaddr), 1, 0 /*ctime*/)
+	kv := c.NewKeyVersions(seqno, []byte(nodeUUID), 1, 0 /*ctime*/)
 	kv.AddStreamBegin(status, code)
 	return &c.DataportKeyVersions{bucket, vbno, vbuuid, kv, opaque2}
 }
