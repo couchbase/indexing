@@ -73,7 +73,7 @@ type mutationMgr struct {
 	stats  IndexerStatsHolder
 
 	vbMap         *VbMapHolder
-	numVbsPerHost map[string]int64 // Hostname -> Number of active vb's on the host across all buckets
+	numVbsPerNode map[string]int64 // NodeUUID -> Number of active vb's on the KV node across all buckets
 }
 
 //NewMutationManager creates a new Mutation Manager which listens for commands from
@@ -110,7 +110,7 @@ func NewMutationManager(supvCmdch MsgChannel, supvRespch MsgChannel,
 		memUsed:        0,
 		maxMemory:      0,
 		vbMap:          &VbMapHolder{},
-		numVbsPerHost:  make(map[string]int64),
+		numVbsPerNode:  make(map[string]int64),
 	}
 	m.vbMap.Init()
 
@@ -1098,7 +1098,7 @@ func (m *mutationMgr) initLatencyObj(cmd Message) {
 	newPrjLatencyMap := stats.prjLatencyMap.Clone()
 	update := false
 
-	host := cmd.(*MsgStream).GetNode()
+	node := cmd.(*MsgStream).GetNode()
 	streamId := cmd.(*MsgStream).GetStreamId()
 	meta := cmd.(*MsgStream).GetMutationMeta()
 
@@ -1106,7 +1106,7 @@ func (m *mutationMgr) initLatencyObj(cmd Message) {
 	bucket := meta.bucket
 	vbMap := m.vbMap.Clone()
 
-	perStreamCurrHost := fmt.Sprintf("%v/%s", streamId, host)
+	perStreamCurrNode := fmt.Sprintf("%v/%s", streamId, node)
 	perStreamBucket := fmt.Sprintf("%v/%v", streamId, bucket)
 
 	if _, ok := vbMap[perStreamBucket]; !ok {
@@ -1114,29 +1114,29 @@ func (m *mutationMgr) initLatencyObj(cmd Message) {
 	}
 
 	// Check if vb belonged to a different node before
-	if perStreamPrevHost, ok := vbMap[perStreamBucket][vb]; ok &&
-		perStreamPrevHost != perStreamCurrHost {
+	if perStreamPrevNode, ok := vbMap[perStreamBucket][vb]; ok &&
+		perStreamPrevNode != perStreamCurrNode {
 		// vb belonged to a different node before
-		m.numVbsPerHost[perStreamPrevHost]--
-		if m.numVbsPerHost[perStreamPrevHost] == 0 {
-			delete(m.numVbsPerHost, perStreamPrevHost)
-			delete(newPrjLatencyMap, perStreamPrevHost)
+		m.numVbsPerNode[perStreamPrevNode]--
+		if m.numVbsPerNode[perStreamPrevNode] == 0 {
+			delete(m.numVbsPerNode, perStreamPrevNode)
+			delete(newPrjLatencyMap, perStreamPrevNode)
 			update = true
 		}
 	}
 
-	if _, ok := m.numVbsPerHost[perStreamCurrHost]; !ok {
+	if _, ok := m.numVbsPerNode[perStreamCurrNode]; !ok {
 		// Initialize latency object
 		avg := &Stats.Int64Val{}
 		avg.Init()
-		newPrjLatencyMap[perStreamCurrHost] = avg
-		m.numVbsPerHost[perStreamCurrHost] = 1
+		newPrjLatencyMap[perStreamCurrNode] = avg
+		m.numVbsPerNode[perStreamCurrNode] = 1
 		update = true
 	} else {
-		m.numVbsPerHost[perStreamCurrHost]++
+		m.numVbsPerNode[perStreamCurrNode]++
 	}
 
-	vbMap[perStreamBucket][vb] = perStreamCurrHost
+	vbMap[perStreamBucket][vb] = perStreamCurrNode
 	m.vbMap.Set(vbMap)
 
 	// Update prjLatencyMap only if there is a change

@@ -7939,6 +7939,39 @@ func (idx *indexer) monitorKVNodes() {
 		idx.stateLock.RUnlock()
 	}
 
+	updateNodeToHostMap := func() {
+		allKVNodes := cinfo.GetAllKVNodes()
+
+		currNodeToHostMap := idx.stats.nodeToHostMap.Get()
+
+		// Check if there is any change between currNodeToHostMap, allKVNodes
+		updateRequired := false
+		if len(currNodeToHostMap) != len(allKVNodes) {
+			updateRequired = true
+		} else {
+			for _, node := range allKVNodes {
+				if hostname, ok := currNodeToHostMap[node.NodeUUID]; !ok {
+					updateRequired = true
+					break
+				} else if node.Hostname != hostname {
+					logging.Infof("Indexer::monitorKVNodes Hostname for node: %v changed from %v to %v",
+						node.NodeUUID, hostname, node.Hostname)
+					updateRequired = true
+					break
+				}
+			}
+		}
+
+		if updateRequired {
+			newNodeToHostMap := make(map[string]string)
+			for _, node := range allKVNodes {
+				newNodeToHostMap[node.NodeUUID] = node.Hostname
+			}
+
+			idx.stats.nodeToHostMap.Set(newNodeToHostMap)
+		}
+	}
+
 	// Incase a pool change notification is missed, periodically sending active
 	// list of nodes to timekeeper ensures that timekeeper's book-keeping is
 	// always updated with active KV nodes
@@ -7971,12 +8004,15 @@ func (idx *indexer) monitorKVNodes() {
 				sendKVNodes(currActiveKVNodes)
 			}
 
+			updateNodeToHostMap()
+
 		case <-ticker.C:
 			currActiveKVNodes := getActiveKVNodes()
 			idx.activeKVNodes = currActiveKVNodes
 			if len(currActiveKVNodes) > 0 {
 				sendKVNodes(currActiveKVNodes)
 			}
+			updateNodeToHostMap()
 
 		case <-idx.shutdownInitCh:
 			return
