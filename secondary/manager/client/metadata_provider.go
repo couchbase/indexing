@@ -47,6 +47,7 @@ type Settings interface {
 	NumPartition() int32
 	StorageMode() string
 	UsePlanner() bool
+	AllowPartialQuorum() bool
 }
 
 ///////////////////////////////////////////////////////
@@ -398,7 +399,7 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 // This function makes a call to create index using new protocol (vulcan).
 //
 func (o *MetadataProvider) makePrepareIndexRequest(defnId c.IndexDefnId, name string, bucket string, nodes []string,
-	partitionScheme c.PartitionScheme, numReplica int) (map[c.IndexerId]int, error) {
+	partitionScheme c.PartitionScheme, numReplica int, checkDuplicateIndex bool) (map[c.IndexerId]int, error) {
 
 	// do a preliminary check
 	watchers, err, _ := o.findWatchersWithRetry(nodes, numReplica, c.IsPartitioned(partitionScheme), false)
@@ -416,6 +417,11 @@ func (o *MetadataProvider) makePrepareIndexRequest(defnId c.IndexDefnId, name st
 		DefnId:      defnId,
 		RequesterId: o.providerId,
 		Timeout:     int64(time.Duration(3) * time.Minute),
+	}
+
+	if checkDuplicateIndex {
+		request.Bucket = bucket
+		request.Name = name
 	}
 
 	requestMsg, err := MarshallPrepareCreateRequest(request)
@@ -471,7 +477,8 @@ func (o *MetadataProvider) makePrepareIndexRequest(defnId c.IndexDefnId, name st
 
 	if accept < uint32(len(watcherMap)) {
 		errStr := "Create index or Alter replica cannot proceed due to rebalance in progress, " +
-			"another concurrent create index request, network partition, node failover, or indexer failure."
+			"another concurrent create index request, network partition, node failover, " +
+			"indexer failure, or presence of duplicate index name."
 		return watcherMap, errors.New(errStr)
 	}
 
@@ -658,11 +665,40 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn, plan map
 	// 2) This create index request has been explicity canceled
 	// 3) Indexer has timed out
 	//
-	watcherMap, err := o.makePrepareIndexRequest(idxDefn.DefnId, idxDefn.Name, idxDefn.Bucket, idxDefn.Nodes, idxDefn.PartitionScheme, int(idxDefn.NumReplica))
+	// Note: Even in case of plan having with "nodes" clause, a full quorum will be sought.
+	//       This can be disabled with the help of AllowPartialQuorum setting.
+
+	useNodes := ([]string)(nil)
+	if o.settings.AllowPartialQuorum() {
+		if len(idxDefn.Nodes) != 0 {
+			logging.Infof("As per the setting, allowing partial quorum for creation "+
+				"of the index name=%v, bucket=%v", idxDefn.Name, idxDefn.Bucket)
+		}
+		useNodes = idxDefn.Nodes
+	}
+
+	watcherMap, err := o.makePrepareIndexRequest(idxDefn.DefnId, idxDefn.Name,
+		idxDefn.Bucket, useNodes, idxDefn.PartitionScheme, int(idxDefn.NumReplica), true)
 	if err != nil {
 		o.cancelPrepareIndexRequest(idxDefn.DefnId, watcherMap)
 		logging.Errorf("Fail to create index: %v", err)
 		return err
+	}
+
+	if len(idxDefn.Nodes) != 0 {
+		// If specified, validate if all the input nodes are available.
+		// Since makePrepareIndexRequest is called with empty nodes list,
+		// it gets list of all available nodes, ignoring the input nodes
+		// list. So, explicit validation is needed.
+		valid, err := o.validateNodes(idxDefn.Nodes, watcherMap)
+		if !valid {
+			o.cancelPrepareIndexRequest(idxDefn.DefnId, watcherMap)
+			return err
+		}
+		if err != nil {
+			o.cancelPrepareIndexRequest(idxDefn.DefnId, watcherMap)
+			return err
+		}
 	}
 
 	//
@@ -730,6 +766,29 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn, plan map
 	}
 
 	return nil
+}
+
+func (o *MetadataProvider) validateNodes(nodes []string, watcherMap map[c.IndexerId]int) (bool, error) {
+	availableNodes := make(map[string]bool)
+
+	for indexerId, _ := range watcherMap {
+		watcher, err := o.findWatcherByIndexerId(indexerId)
+		if err != nil {
+			return false, err
+		}
+		availableNodes[strings.ToLower(watcher.getNodeAddr())] = true
+	}
+
+	for _, node := range nodes {
+		_, ok := availableNodes[strings.ToLower(node)]
+		if !ok {
+			fmtMsg := "Indexer node (%v) not found. The node may be failed or " +
+				"under rebalance or network partitioned from query process."
+			return false, errors.New(fmt.Sprintf(fmtMsg, node))
+		}
+	}
+
+	return true, nil
 }
 
 //
@@ -2561,7 +2620,8 @@ func (o *MetadataProvider) AlterReplicaCount(action string, defnId c.IndexDefnId
 	//
 	defn := *idxMeta.Definition
 	numPartition := idxMeta.numPartitions()
-	watcherMap, err := o.makePrepareIndexRequest(defn.DefnId, defn.Name, defn.Bucket, nil, defn.PartitionScheme, count)
+	watcherMap, err := o.makePrepareIndexRequest(defn.DefnId, defn.Name, defn.Bucket,
+		nil, defn.PartitionScheme, count, false)
 	if err != nil {
 		o.cancelPrepareIndexRequest(defn.DefnId, watcherMap)
 		return fmt.Errorf("Fail to alter index: %v", err)

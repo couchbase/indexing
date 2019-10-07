@@ -167,6 +167,8 @@ type PrepareCreateRequest struct {
 	RequesterId string        `json:"requestId,omitempty"`
 	Timeout     int64         `json:"timeout,omitempty"`
 	StartTime   int64         `json:"startTime,omitempty"`
+	Bucket      string        `json:"Bucket,omitempty"`
+	Name        string        `json:"Name,omitempty"`
 }
 
 type PrepareCreateResponse struct {

@@ -741,7 +741,7 @@ func (m *DDLServiceMgr) handleCreateCommand(needRefresh bool) {
 							logging.Warnf("DDLServiceMgr: Failed to process create index (%v, %v, %v, %v).  Error = %v.",
 								defn.Bucket, defn.Name, defn.DefnId, defn.InstId, err)
 						} else {
-							logging.Warnf("DDLServiceMgr: Index successfully created (%v, %v, %v, %v).",
+							logging.Infof("DDLServiceMgr: Index successfully created (%v, %v, %v, %v).",
 								defn.Bucket, defn.Name, defn.DefnId, defn.InstId)
 							// If the partition is not deferred, build it
 							if !defn.Deferred {
@@ -1529,6 +1529,12 @@ func (s *ddlSettings) UsePlanner() bool {
 	return true
 }
 
+// DDLServiceMgr does not trigger recoverableCreateIndex for index creation.
+// So, this setting will not be used by DDLServiceMgr.
+func (s *ddlSettings) AllowPartialQuorum() bool {
+	return false
+}
+
 func (s *ddlSettings) handleSettings(config common.Config) {
 
 	numReplica := int32(config["settings.num_replica"].Int())
@@ -1553,5 +1559,4 @@ func (s *ddlSettings) handleSettings(config common.Config) {
 			s.storageMode = storageMode
 		}()
 	}
-
 }

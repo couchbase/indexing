@@ -37,6 +37,7 @@ type ClientSettings struct {
 
 	needRefresh          bool
 	allowCJsonScanFormat uint32
+	allowPartialQuorum   uint32
 }
 
 func NewClientSettings(needRefresh bool) *ClientSettings {
@@ -174,6 +175,19 @@ func (s *ClientSettings) handleSettings(config common.Config) {
 		atomic.StoreUint32(&s.allowCJsonScanFormat, 1)
 	}
 
+	allowPartialQuorum, ok := config["indexer.allowPartialQuorum"]
+	if ok {
+		if allowPartialQuorum.Bool() {
+			atomic.StoreUint32(&s.allowPartialQuorum, 1)
+		} else {
+			atomic.StoreUint32(&s.allowPartialQuorum, 0)
+		}
+	} else {
+		// Use default config value on error
+		logging.Errorf("ClientSettings: missing allowPartialQuorum")
+		atomic.StoreUint32(&s.allowPartialQuorum, 0)
+	}
+
 	usePlanner, ok := config["queryport.client.usePlanner"]
 	if ok {
 		if usePlanner.Bool() {
@@ -249,6 +263,10 @@ func (s *ClientSettings) MaxConcurrency() uint32 {
 
 func (s *ClientSettings) AllowCJsonScanFormat() bool {
 	return atomic.LoadUint32(&s.allowCJsonScanFormat) == 1
+}
+
+func (s *ClientSettings) AllowPartialQuorum() bool {
+	return atomic.LoadUint32(&s.allowPartialQuorum) == 1
 }
 
 func (s *ClientSettings) UsePlanner() bool {
