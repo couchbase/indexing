@@ -438,13 +438,15 @@ loop:
 			break loop
 		}
 
-		if len(row)*3 > cap(*tmpBuf) {
-			(*tmpBuf) = make([]byte, len(row)*3, len(row)*3)
-		}
-
 		dataEncFmt := d.p.req.dataEncFmt
 
+		if dataEncFmt == c.DATA_ENC_JSON {
+			if len(row)*3 > cap(*tmpBuf) {
+				(*tmpBuf) = make([]byte, len(row)*3, len(row)*3)
+			}
+		}
 		t := (*tmpBuf)[:0]
+
 		if d.p.req.GroupAggr != nil {
 			if dataEncFmt == c.DATA_ENC_COLLATEJSON {
 				sk = row
