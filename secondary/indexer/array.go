@@ -35,18 +35,29 @@ func splitSecondaryArrayKey(key []byte, arrayPos int, tmpBuf []byte) ([][][]byte
 	codec := collatejson.NewCodec(16)
 	secKeyObject, err := codec.ExplodeArray4(key, tmpBuf)
 	if err != nil {
-		return nil, err
+		if err == collatejson.ErrorOutputLen {
+			newBuf1 := make([]byte, 0, len(key)*3)
+			secKeyObject, err = codec.ExplodeArray4(key, newBuf1)
+		}
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	hasArray := false
 	insideArr := secKeyObject[arrayPos]
-	if arrayItem, err = codec.ExplodeArray4(insideArr, tmpBuf); err == nil {
-		arrayLen = len(arrayItem)
-		hasArray = true
-	}
+	arrayItem, err = codec.ExplodeArray4(insideArr, tmpBuf)
 	if err != nil {
-		return nil, err
+		if err == collatejson.ErrorOutputLen {
+			newBuf2 := make([]byte, 0, len(insideArr)*3)
+			arrayItem, err = codec.ExplodeArray4(insideArr, newBuf2)
+		}
+		if err != nil {
+			return nil, err
+		}
 	}
+	arrayLen = len(arrayItem)
+	hasArray = true
 
 	arrayIndexEntries := make([][][]byte, 0, len(secKeyObject))
 
