@@ -3048,6 +3048,16 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 		//allow sufficient time for control messages to come in
 		//after projector has confirmed success
 
+		tk.lock.RLock()
+		status := tk.ss.streamBucketStatus[streamId][bucket]
+		tk.lock.RUnlock()
+
+		if status == STREAM_INACTIVE {
+			logging.Infof("Timekeeper::sendRestartMsg Found Stream %v Bucket %v In "+
+				"State %v. Skipping Restart Vbuckets Response.", streamId, bucket, status)
+			return
+		}
+
 		waitTime := tk.config["timekeeper.streamRepairWaitTime"].Int()
 		time.Sleep(time.Duration(waitTime) * time.Second)
 
