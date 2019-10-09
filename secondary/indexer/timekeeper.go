@@ -2991,6 +2991,7 @@ func (tk *timekeeper) repairStream(streamId common.StreamId,
 
 		respCh := make(MsgChannel)
 		stopCh := tk.ss.streamBucketRepairStopCh[streamId][bucket]
+		sessionId := tk.ss.getSessionId(streamId, bucket)
 
 		restartMsg := &MsgRestartVbuckets{streamId: streamId,
 			bucket:     bucket,
@@ -2998,7 +2999,8 @@ func (tk *timekeeper) repairStream(streamId common.StreamId,
 			respCh:     respCh,
 			stopCh:     stopCh,
 			connErrVbs: connErrVbs,
-			repairVbs:  repairVbs}
+			repairVbs:  repairVbs,
+			sessionId:  sessionId}
 
 		go tk.sendRestartMsg(restartMsg)
 
@@ -3050,6 +3052,7 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 
 		tk.lock.RLock()
 		status := tk.ss.streamBucketStatus[streamId][bucket]
+		currSessionId := tk.ss.getSessionId(streamId, bucket)
 		tk.lock.RUnlock()
 
 		if status == STREAM_INACTIVE {
@@ -3058,12 +3061,20 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 			return
 		}
 
-		waitTime := tk.config["timekeeper.streamRepairWaitTime"].Int()
-		time.Sleep(time.Duration(waitTime) * time.Second)
-
 		restartRespMsg := kvresp.(*MsgRestartVbucketsResponse)
 		activeTs := restartRespMsg.GetActiveTs()
 		pendingTs := restartRespMsg.GetPendingTs()
+		sessionId := restartRespMsg.GetSessionId()
+
+		if sessionId != currSessionId {
+			logging.Infof("Timekeeper::sendRestartMsg Stream %v Bucket %v Curr Session "+
+				"%v. Skipping Restart Vbuckets Response Session %v.", streamId, bucket,
+				currSessionId, sessionId)
+			return
+		}
+
+		waitTime := tk.config["timekeeper.streamRepairWaitTime"].Int()
+		time.Sleep(time.Duration(waitTime) * time.Second)
 
 		tk.lock.Lock()
 		tk.ss.streamBucketKVActiveTsMap[streamId][bucket] = activeTs
@@ -3078,12 +3089,20 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 
 		tk.lock.RLock()
 		status := tk.ss.streamBucketStatus[streamId][bucket]
-		sessionId := tk.ss.getSessionId(streamId, bucket)
+		currSessionId := tk.ss.getSessionId(streamId, bucket)
 		tk.lock.RUnlock()
 
 		if status == STREAM_INACTIVE {
 			logging.Infof("Timekeeper::sendRestartMsg Found Stream %v Bucket %v In "+
 				"State %v. Skipping Rollback.", streamId, bucket, status)
+			return
+		}
+
+		sessionId := kvresp.(*MsgRollback).GetSessionId()
+		if sessionId != currSessionId {
+			logging.Infof("Timekeeper::sendRestartMsg Stream %v Bucket %v Curr Session "+
+				"%v. Skipping Rollback Session %v.", streamId, bucket,
+				currSessionId, sessionId)
 			return
 		}
 
@@ -3117,7 +3136,7 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 					streamId:  streamId,
 					bucket:    bucket,
 					restartTs: tk.ss.computeRollbackTs(streamId, bucket),
-					sessionId: sessionId,
+					sessionId: currSessionId,
 				}
 
 				tk.lock.Lock()
@@ -3144,7 +3163,7 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 				streamId:  streamId,
 				bucket:    bucket,
 				restartTs: tk.ss.computeRollbackTs(streamId, bucket),
-				sessionId: sessionId,
+				sessionId: currSessionId,
 			}
 
 			tk.lock.Lock()
@@ -3168,7 +3187,14 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 			return
 		}
 
-		sessionId := tk.ss.getSessionId(streamId, bucket)
+		currSessionId := tk.ss.getSessionId(streamId, bucket)
+		sessionId := kvresp.(*MsgKVStreamRepair).GetSessionId()
+		if sessionId != currSessionId {
+			logging.Infof("Timekeeper::sendRestartMsg Stream %v Bucket %v Curr Session "+
+				"%v. Skipping Rollback Session %v.", streamId, bucket,
+				currSessionId, sessionId)
+			return
+		}
 
 		// If we need recovery, then trigger recovery right away.
 		if tk.ss.needsRollback(streamId, bucket) {
@@ -3182,7 +3208,7 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 				streamId:  streamId,
 				bucket:    bucket,
 				restartTs: tk.ss.computeRollbackTs(streamId, bucket),
-				sessionId: sessionId,
+				sessionId: currSessionId,
 			}
 
 			delete(tk.ss.streamBucketRepairStopCh[streamId], bucket)
@@ -3193,11 +3219,23 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 			"Stream %v Bucket %v. Attempting Stream Repair.", streamId, bucket)
 
 		repairMsg := kvresp.(*MsgKVStreamRepair)
-		repairMsg.sessionId = sessionId
+		repairMsg.sessionId = currSessionId
 
 		tk.repairStreamWithMTR(streamId, bucket, repairMsg)
 
 	default:
+
+		tk.lock.RLock()
+		currSessionId := tk.ss.getSessionId(streamId, bucket)
+		tk.lock.RUnlock()
+
+		sessionId := kvresp.(*MsgError).GetSessionId()
+		if sessionId != currSessionId {
+			logging.Infof("Timekeeper::sendRestartMsg Stream %v Bucket %v Curr Session "+
+				"%v. Skipping Error Session %v.", streamId, bucket,
+				currSessionId, sessionId)
+			return
+		}
 
 		var bucketUUIDList []string
 		for _, indexInst := range tk.indexInstMap {
@@ -3232,18 +3270,17 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 			logging.Errorf("Timekeeper::sendRestartMsg Error Response "+
 				"from KV %v For Request %v. Retrying RestartVbucket.", kvresp, restartMsg)
 
-			tk.lock.Lock()
+			tk.lock.RLock()
 			status := tk.ss.streamBucketStatus[streamId][bucket]
+			tk.lock.RUnlock()
 
 			if status == STREAM_INACTIVE {
 				logging.Infof("Timekeeper::sendRestartMsg Found Stream %v Bucket %v In "+
 					"State %v. Skipping RestartVbucket Retry.", streamId, bucket, status)
 
-				tk.lock.Unlock()
 				return
 			}
 
-			tk.lock.Unlock()
 			tk.repairStream(streamId, bucket)
 		}
 	}
