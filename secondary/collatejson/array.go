@@ -3,6 +3,7 @@ package collatejson
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/couchbase/indexing/secondary/logging"
 	n1ql "github.com/couchbase/query/value"
@@ -111,8 +112,12 @@ func (codec *Codec) ExplodeArray3(code []byte, tmp []byte, cktmp [][]byte,
 
 	defer func() {
 		if r := recover(); r != nil {
-			logging.Fatalf("ExplodeArray3:: recovered panic - %s \n %s", r, logging.StackTrace())
-			e = fmt.Errorf("%v", r)
+			if strings.Contains(fmt.Sprint(r), "slice bounds out of range") {
+				e = ErrorOutputLen
+			} else {
+				logging.Fatalf("ExplodeArray3:: recovered panic - %s \n %s", r, logging.StackTrace())
+				e = fmt.Errorf("%v", r)
+			}
 		}
 	}()
 
@@ -169,8 +174,12 @@ func (codec *Codec) ExplodeArray4(code []byte, tmp []byte) (arr [][]byte, e erro
 
 	defer func() {
 		if r := recover(); r != nil {
-			logging.Fatalf("ExplodeArray4:: recovered panic - %s \n %s", r, logging.StackTrace())
-			e = fmt.Errorf("%v", r)
+			if strings.Contains(fmt.Sprint(r), "slice bounds out of range") {
+				e = ErrorOutputLen
+			} else {
+				logging.Fatalf("ExplodeArray4:: recovered panic - %s \n %s", r, logging.StackTrace())
+				e = fmt.Errorf("%v", r)
+			}
 		}
 	}()
 

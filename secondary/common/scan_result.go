@@ -2,6 +2,7 @@ package common
 
 import (
 	"errors"
+
 	"github.com/couchbase/indexing/secondary/collatejson"
 	"github.com/couchbase/indexing/secondary/logging"
 	qvalue "github.com/couchbase/query/value"
@@ -52,8 +53,15 @@ func (k ScanResultKey) Get(buffer *[]byte) ([]qvalue.Value, error, *[]byte) {
 
 		vals, err = codec.DecodeN1QLValues(k.Skeycjson, buf)
 		if err != nil {
-			logging.Errorf("Error %v in DecodeN1QLValues", err)
-			return nil, ErrDecodeScanResult, nil
+			if err == collatejson.ErrorOutputLen {
+				buf = make([]byte, 0, len(k.Skeycjson)*3)
+				retbuf = &buf
+				vals, err = codec.DecodeN1QLValues(k.Skeycjson, buf)
+			}
+			if err != nil {
+				logging.Errorf("Error %v in DecodeN1QLValues", err)
+				return nil, ErrDecodeScanResult, nil
+			}
 		}
 
 		// In case of empty array, missing literal can appear

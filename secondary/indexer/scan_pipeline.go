@@ -221,6 +221,7 @@ func (s *IndexScanSource) Routine() error {
 			if len(entry) > cap(*buf) {
 				*buf = make([]byte, 0, len(entry)+1024)
 			}
+
 			skipRow, ck, dk, err = filterScanRow2(entry, currentScan,
 				(*buf)[:0], cktmp, dktmp, r, &cachedEntry)
 			if err != nil {
@@ -438,13 +439,15 @@ loop:
 			break loop
 		}
 
-		if len(row)*3 > cap(*tmpBuf) {
-			(*tmpBuf) = make([]byte, len(row)*3, len(row)*3)
-		}
-
 		dataEncFmt := d.p.req.dataEncFmt
 
+		if dataEncFmt == c.DATA_ENC_JSON {
+			if len(row)*3 > cap(*tmpBuf) {
+				(*tmpBuf) = make([]byte, len(row)*3, len(row)*3)
+			}
+		}
 		t := (*tmpBuf)[:0]
+
 		if d.p.req.GroupAggr != nil {
 			if dataEncFmt == c.DATA_ENC_COLLATEJSON {
 				sk = row
@@ -639,7 +642,14 @@ func filterScanRow2(key []byte, scan Scan, buf []byte, cktmp [][]byte,
 		compositekeys, decodedkeys, err = jsonEncoder.ExplodeArray3(key, buf, cktmp, dktmp,
 			r.explodePositions, r.decodePositions, r.explodeUpto)
 		if err != nil {
-			return false, nil, nil, err
+			if err == collatejson.ErrorOutputLen {
+				newBuf := make([]byte, 0, len(key)*3)
+				compositekeys, decodedkeys, err = jsonEncoder.ExplodeArray3(key, newBuf, cktmp, dktmp,
+					r.explodePositions, r.decodePositions, r.explodeUpto)
+			}
+			if err != nil {
+				return false, nil, nil, err
+			}
 		}
 	}
 
@@ -753,7 +763,14 @@ func projectKeys(compositekeys [][]byte, key, buf []byte, r *ScanRequest, cktmp 
 		compositekeys, _, err = jsonEncoder.ExplodeArray3(key, buf, cktmp, nil,
 			r.explodePositions, nil, r.explodeUpto)
 		if err != nil {
-			return nil, err
+			if err == collatejson.ErrorOutputLen {
+				newBuf := make([]byte, 0, len(key)*3)
+				compositekeys, _, err = jsonEncoder.ExplodeArray3(key, newBuf, cktmp, nil,
+					r.explodePositions, nil, r.explodeUpto)
+			}
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 
@@ -888,7 +905,14 @@ func computeGroupAggr(compositekeys [][]byte, decodedkeys value.Values, count in
 				compositekeys, decodedkeys, err = jsonEncoder.ExplodeArray3(key, buf, cktmp, dktmp,
 					p.req.explodePositions, p.req.decodePositions, p.req.explodeUpto)
 				if err != nil {
-					return err
+					if err == collatejson.ErrorOutputLen {
+						newBuf := make([]byte, 0, len(key)*3)
+						compositekeys, decodedkeys, err = jsonEncoder.ExplodeArray3(key, newBuf, cktmp, dktmp,
+							p.req.explodePositions, p.req.decodePositions, p.req.explodeUpto)
+					}
+					if err != nil {
+						return err
+					}
 				}
 				cachedEntry.Update(key, compositekeys, decodedkeys)
 			}
