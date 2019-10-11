@@ -22,8 +22,8 @@ import "github.com/golang/protobuf/proto"
 import "github.com/couchbase/indexing/secondary/logging"
 import "github.com/couchbase/indexing/secondary/security"
 
-// Address of the host on which the projector process executes
-var projector_hostaddress string
+// UUID of the node on which the projector process executes
+var nodeUUID string
 
 const MAX_CINFO_CACHES_RETRIES = 100
 
@@ -91,9 +91,9 @@ func NewProjector(maxvbs int, config c.Config, certFile string, keyFile string) 
 	p.config = config
 	p.ResetConfig(config)
 
-	// Initialize projector_address
-	if projector_hostaddress, err = p.getHostAddress(); err != nil {
-		c.CrashOnError(fmt.Errorf("Failed to get projector host address from ClusterInfoCache: %v", err))
+	// Initialize nodeUUID
+	if nodeUUID, err = p.getNodeUUID(); err != nil {
+		c.CrashOnError(fmt.Errorf("Failed to get node UUID from ClusterInfoCache: %v", err))
 	}
 
 	p.logPrefix = fmt.Sprintf("PROJ[%s]", p.adminport)
@@ -984,8 +984,8 @@ func refreshSecurityContextOnTopology(clusterAddr string) error {
 	return helper.Run()
 }
 
-func (p *Projector) getHostAddress() (string, error) {
-	var host string
+func (p *Projector) getNodeUUID() (string, error) {
+	var nodeUUID string
 	prefix := p.logPrefix
 	fn := func(r int, err error) error {
 		var cinfo *c.ClusterInfoCache
@@ -1004,8 +1004,8 @@ func (p *Projector) getHostAddress() (string, error) {
 			return err
 		}
 
-		if host, err = cinfo.GetLocalHostAddress(); err != nil {
-			fmsg := "%v cinfo.GetLocalHostAddress(): %v\n"
+		if nodeUUID = cinfo.GetLocalNodeUUID(); nodeUUID == "" {
+			fmsg := "%v cinfo.GetLocalNodeUUID(): %v\n"
 			logging.Errorf(fmsg, prefix, err)
 			return err
 		}
@@ -1013,9 +1013,9 @@ func (p *Projector) getHostAddress() (string, error) {
 	}
 	rh := c.NewRetryHelper(MAX_CINFO_CACHES_RETRIES, time.Second, 1, fn)
 	err := rh.Run()
-	return host, err
+	return nodeUUID, err
 }
 
-func GetHostAddress() string {
-	return projector_hostaddress
+func GetNodeUUID() string {
+	return nodeUUID
 }

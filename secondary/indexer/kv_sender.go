@@ -420,7 +420,9 @@ func (k *kvSender) restartVbuckets(streamId c.StreamId,
 		respCh <- &MsgError{
 			err: Error{code: ERROR_KVSENDER_STREAM_REQUEST_ERROR,
 				severity: FATAL,
-				cause:    err}}
+				cause:    err},
+			sessionId: sessionId,
+		}
 
 		return
 	}
@@ -513,7 +515,9 @@ func (k *kvSender) restartVbuckets(streamId c.StreamId,
 		nativeTs := rollbackTs.ToTsVbuuid(numVbuckets)
 
 		respCh <- &MsgRollback{streamId: streamId,
-			rollbackTs: nativeTs}
+			rollbackTs: nativeTs,
+			sessionId:  sessionId,
+		}
 	} else if err != nil {
 		//if there is a topicMissing/genServer.Closed error, a fresh
 		//MutationTopicRequest is required.
@@ -521,20 +525,24 @@ func (k *kvSender) restartVbuckets(streamId c.StreamId,
 			err.Error() == c.ErrorClosed.Error() ||
 			err.Error() == projClient.ErrorInvalidBucket.Error() {
 			respCh <- &MsgKVStreamRepair{
-				streamId: streamId,
-				bucket:   restartTs.Bucket,
+				streamId:  streamId,
+				bucket:    restartTs.Bucket,
+				sessionId: sessionId,
 			}
 		} else {
 			respCh <- &MsgError{
 				err: Error{code: ERROR_KVSENDER_STREAM_REQUEST_ERROR,
 					severity: FATAL,
-					cause:    err}}
+					cause:    err},
+				sessionId: sessionId,
+			}
 
 		}
 	} else {
 		resp := &MsgRestartVbucketsResponse{
-			streamId: streamId,
-			bucket:   restartTs.Bucket,
+			streamId:  streamId,
+			bucket:    restartTs.Bucket,
+			sessionId: sessionId,
 		}
 
 		if activeTs != nil {

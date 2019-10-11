@@ -192,7 +192,8 @@ func (m *MsgGeneral) GetMsgType() MsgType {
 
 //Error Message
 type MsgError struct {
-	err Error
+	err       Error
+	sessionId uint64
 }
 
 func (m *MsgError) GetMsgType() MsgType {
@@ -201,6 +202,10 @@ func (m *MsgError) GetMsgType() MsgType {
 
 func (m *MsgError) GetError() Error {
 	return m.err
+}
+
+func (m *MsgError) GetSessionId() uint64 {
+	return m.sessionId
 }
 
 func (m *MsgError) String() string {
@@ -242,7 +247,7 @@ func (m *MsgSuccessDrop) GetMsgType() MsgType {
 	return MSG_SUCCESS_DROP
 }
 
-func (m *MsgSuccessDrop) GetStreamId() common.StreamId{
+func (m *MsgSuccessDrop) GetStreamId() common.StreamId {
 	return m.streamId
 }
 
@@ -386,6 +391,7 @@ func (m *MsgStreamInfo) String() string {
 	str += fmt.Sprintf("\n\tType: %v", m.mType)
 	str += fmt.Sprintf("\n\tStream: %v", m.streamId)
 	str += fmt.Sprintf("\n\tBucket: %v", m.bucket)
+	str += fmt.Sprintf("\n\tSessionId: %v", m.sessionId)
 	str += fmt.Sprintf("\n\tVbList: %v", m.vbList)
 	return str
 }
@@ -1256,7 +1262,7 @@ func (m *MsgRestartVbuckets) GetStopChannel() StopChannel {
 	return m.stopCh
 }
 
-func (m *MsgRestartVbuckets) GetSessionId() uint64{
+func (m *MsgRestartVbuckets) GetSessionId() uint64 {
 	return m.sessionId
 }
 
@@ -1264,6 +1270,7 @@ func (m *MsgRestartVbuckets) String() string {
 	str := "\n\tMessage: MsgRestartVbuckets"
 	str += fmt.Sprintf("\n\tStreamId: %v", m.streamId)
 	str += fmt.Sprintf("\n\tBucket: %v", m.bucket)
+	str += fmt.Sprintf("\n\tSessionId: %v", m.sessionId)
 	str += fmt.Sprintf("\n\tRestartTS: %v", m.restartTs)
 	return str
 }
@@ -1274,6 +1281,7 @@ type MsgRestartVbucketsResponse struct {
 	bucket    string
 	activeTs  *common.TsVbuuid
 	pendingTs *common.TsVbuuid
+	sessionId uint64
 }
 
 func (m *MsgRestartVbucketsResponse) GetMsgType() MsgType {
@@ -1296,10 +1304,15 @@ func (m *MsgRestartVbucketsResponse) GetPendingTs() *common.TsVbuuid {
 	return m.pendingTs
 }
 
+func (m *MsgRestartVbucketsResponse) GetSessionId() uint64 {
+	return m.sessionId
+}
+
 func (m *MsgRestartVbucketsResponse) String() string {
 	str := "\n\tMessage: MsgRestartVbucketsResponse"
 	str += fmt.Sprintf("\n\tStreamId: %v", m.streamId)
 	str += fmt.Sprintf("\n\tBucket: %v", m.bucket)
+	str += fmt.Sprintf("\n\tSessionId: %v", m.sessionId)
 	str += fmt.Sprintf("\n\tActiveTS: %v", m.activeTs)
 	str += fmt.Sprintf("\n\tPendingTS: %v", m.pendingTs)
 	return str

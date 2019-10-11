@@ -1526,6 +1526,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.enable_session_consistency_strict": ConfigValue{
+		true,
+		"enable strict session consistency to handle rollback scenarios for consistent scans",
+		true,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.force_gc_mem_frac": ConfigValue{
 		0.1,
 		"Fraction of memory_quota left after which GC is forced " +

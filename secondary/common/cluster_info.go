@@ -664,6 +664,16 @@ func (c *ClusterInfoCache) GetLocalHostname() (string, error) {
 
 }
 
+// NodeUUID is a part of cluster info cache from 6.5.0
+func (c *ClusterInfoCache) GetLocalNodeUUID() string {
+	for _, node := range c.nodes {
+		if node.ThisNode {
+			return node.NodeUUID
+		}
+	}
+	return ""
+}
+
 func (c *ClusterInfoCache) validateCache(isIPv6 bool) bool {
 
 	if len(c.nodes) != len(c.nodesvs) {
