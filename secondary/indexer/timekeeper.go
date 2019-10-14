@@ -16,6 +16,7 @@ import (
 	"github.com/couchbase/indexing/secondary/dcp"
 	"github.com/couchbase/indexing/secondary/logging"
 	"math"
+	"sort"
 	"sync"
 	"time"
 )
@@ -161,6 +162,9 @@ func (tk *timekeeper) handleSupervisorCommands(cmd Message) {
 
 	case STREAM_READER_CONN_ERROR:
 		tk.handleStreamConnError(cmd)
+
+	case POOL_CHANGE:
+		tk.handlePoolChange(cmd)
 
 	case TK_ENABLE_FLUSH:
 		tk.handleFlushStateChange(cmd)
@@ -1036,6 +1040,9 @@ func (tk *timekeeper) handleStreamBegin(cmd Message) {
 
 	case STREAM_ACTIVE:
 
+		// Update the mapping between a vbucket to KV node UUID
+		tk.updateStreamBucketVbMap(cmd)
+
 		needRepair := false
 
 		// For bookkeeping, timekeeper needs to make sure that it will be eventually correct:
@@ -1565,6 +1572,9 @@ func (tk *timekeeper) handleStreamConnErrorInternal(streamId common.StreamId, bu
 			logging.Infof("Timekeeper::handleStreamConnError RepairStream due to ConnError. "+
 				"StreamId %v Bucket %v VbList %v", streamId, bucket, vbList)
 			go tk.repairStream(streamId, bucket)
+		} else {
+			logging.Infof("Timekeeper::handleStreamConnErr Stream repair is already in progress "+
+				"for stream: %v, bucket: %v", streamId, bucket)
 		}
 
 	case STREAM_PREPARE_RECOVERY, STREAM_PREPARE_DONE, STREAM_INACTIVE:
@@ -3852,4 +3862,52 @@ func (tk *timekeeper) setNeedsCommit(streamId common.StreamId,
 		tk.ss.streamBucketNeedsCommitMap[streamId][bucket] = false
 	}
 
+}
+
+// This method has to be called while timepeeker has aquired tk.lock
+func (tk *timekeeper) updateStreamBucketVbMap(cmd Message) {
+
+	streamId := cmd.(*MsgStream).GetStreamId()
+	meta := cmd.(*MsgStream).GetMutationMeta()
+	node := cmd.(*MsgStream).GetNode()
+	if node != nil {
+		nodeUUID := fmt.Sprintf("%s", node)
+		bucket := meta.bucket
+		tk.ss.streamBucketVBMap[streamId][bucket][meta.vbucket] = nodeUUID
+	}
+}
+
+func (tk *timekeeper) handlePoolChange(cmd Message) {
+
+	kvNodes := cmd.(*MsgPoolChange).GetNodes()
+	streamId := cmd.(*MsgPoolChange).GetStreamId()
+	bucket := cmd.(*MsgPoolChange).GetBucket()
+	tk.lock.Lock()
+	defer tk.lock.Unlock()
+
+	state := tk.ss.streamBucketStatus[streamId][bucket]
+	if state != STREAM_ACTIVE {
+		tk.supvCmdch <- &MsgSuccess{}
+		return
+	}
+
+	vbMap := tk.ss.streamBucketVBMap[streamId][bucket]
+	vbList := make(Vbuckets, 0)
+
+	for vb, nodeuuid := range vbMap {
+		if _, ok := kvNodes[nodeuuid]; !ok {
+			// Node UUID not a part of active KV nodes. Get the vb's belonging to this KV node
+			if vbState := tk.ss.streamBucketVbStatusMap[streamId][bucket][vb]; vbState == VBS_STREAM_BEGIN {
+				vbList = append(vbList, vb)
+			}
+		}
+	}
+
+	if len(vbList) > 0 {
+		sort.Sort(vbList)
+		logging.Infof("Timekeeper::handlePoolChange streamId: %v, bucket:%v, vbList: %v", streamId, bucket, vbList)
+		tk.handleStreamConnErrorInternal(streamId, bucket, vbList)
+	} else {
+		tk.supvCmdch <- &MsgSuccess{}
+	}
 }

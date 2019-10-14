@@ -254,6 +254,27 @@ func (p *LatencyMapHolder) Clone() map[string]interface{} {
 	}
 }
 
+// Contains the mapping between nodeUUID to hostname of a KV node
+type NodeToHostMapHolder struct {
+	ptr *unsafe.Pointer
+}
+
+func (n *NodeToHostMapHolder) Init() {
+	n.ptr = new(unsafe.Pointer)
+}
+
+func (n *NodeToHostMapHolder) Set(nodeToHostMap map[string]string) {
+	atomic.StorePointer(n.ptr, unsafe.Pointer(&nodeToHostMap))
+}
+
+func (n *NodeToHostMapHolder) Get() map[string]string {
+	if ptr := atomic.LoadPointer(n.ptr); ptr != nil {
+		return *(*map[string]string)(ptr)
+	} else {
+		return make(map[string]string)
+	}
+}
+
 func (s *IndexStats) Init() {
 	s.scanDuration.Init()
 	s.scanReqDuration.Init()
@@ -489,6 +510,7 @@ type IndexerStats struct {
 
 	indexerState  stats.Int64Val
 	prjLatencyMap *LatencyMapHolder
+	nodeToHostMap *NodeToHostMapHolder
 }
 
 func (s *IndexerStats) Init() {
@@ -506,6 +528,9 @@ func (s *IndexerStats) Init() {
 	s.notFoundError.Init()
 	s.prjLatencyMap = &LatencyMapHolder{}
 	s.prjLatencyMap.Init()
+
+	s.nodeToHostMap = &NodeToHostMapHolder{}
+	s.nodeToHostMap.Init()
 }
 
 func (s *IndexerStats) Reset() {
@@ -678,9 +703,19 @@ func (is IndexerStats) GetStats(getPartition bool, skipEmpty bool,
 	addStat("memory_total", getMemTotal())
 
 	prjLatencyMap := is.prjLatencyMap.Get()
+	nodeToHostMap := is.nodeToHostMap.Get()
 	for prjAddr, prjLatency := range prjLatencyMap {
 		latency := prjLatency.(*stats.Int64Val)
-		addStat(prjAddr+"/projector_latency", latency.Value())
+		// Get NodeUUID from prjAddr
+		prjAddrSplit := strings.Split(prjAddr, "/")
+		stream := prjAddrSplit[0]
+		nodeUUID := prjAddrSplit[1]
+		if hostname, ok := nodeToHostMap[nodeUUID]; ok {
+			newPrjAddr := fmt.Sprintf("%v/%v", stream, hostname)
+			addStat(newPrjAddr+"/projector_latency", latency.Value())
+		} else {
+			logging.Errorf("StatsManager: Error in book-keeping. NodeUUID: %v, not a part of nodeToHostMap", nodeUUID)
+		}
 	}
 
 	indexerState := common.IndexerState(is.indexerState.Value())

@@ -108,6 +108,8 @@ type indexer struct {
 	bucketBuildTs map[string]Timestamp
 	buildTsLock   map[common.StreamId]map[string]*sync.Mutex
 
+	activeKVNodes map[string]bool // Key -> KV node UUID
+
 	//TODO Remove this once cbq bridge support goes away
 	bucketCreateClientChMap map[string]MsgChannel
 
@@ -244,6 +246,8 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		bucketRollbackTimes:          make(map[string]int64),
 		bucketCreateClientChMap:      make(map[string]MsgChannel),
 
+		activeKVNodes: make(map[string]bool),
+
 		enableSecurityChange: make(chan bool),
 	}
 
@@ -372,6 +376,8 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		logging.Fatalf("Indexer::NewIndexer Rebalance Manager Init Error %+v", res)
 		return nil, res
 	}
+
+	go idx.monitorKVNodes()
 
 	//start the main indexer loop
 	idx.run()
@@ -1169,6 +1175,10 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 
 	case INDEXER_UPDATE_BUILD_TS:
 		idx.handleUpdateBuildTs(msg)
+
+	case POOL_CHANGE:
+		idx.tkCmdCh <- msg
+		<-idx.tkCmdCh
 
 	default:
 		logging.Fatalf("Indexer::handleWorkerMsgs Unknown Message %+v", msg)
@@ -7848,4 +7858,164 @@ func (idx *indexer) prepareStreamBucketForFreshStart(
 
 	idx.mutMgrCmdCh <- cmd
 	<-idx.mutMgrCmdCh
+}
+
+func (idx *indexer) monitorKVNodes() {
+
+	defer func() {
+		if r := recover(); r != nil {
+			logging.Errorf("Indexer::monitorKVNodes crashed: %v\n", r)
+			go idx.monitorKVNodes()
+		}
+	}()
+
+	selfRestart := func() {
+		time.Sleep(5000 * time.Millisecond)
+		go idx.monitorKVNodes()
+	}
+
+	clusterAddr := idx.config["clusterAddr"].String()
+	url, err := common.ClusterAuthUrl(clusterAddr)
+	if err != nil {
+		logging.Errorf("Indexer::monitorKVNodes, error observed while retrieving ClusterAuthUrl, err : %v", err)
+		selfRestart()
+		return
+	}
+
+	scn, err := common.NewServicesChangeNotifier(url, DEFAULT_POOL)
+	if err != nil {
+		logging.Errorf("Indexer::monitorKVNodes, error observed while initializing ServicesChangeNotifier, err: %v", err)
+		selfRestart()
+		return
+	}
+	defer scn.Close()
+
+	cinfo, err := common.NewClusterInfoCache(url, DEFAULT_POOL)
+	if err != nil {
+		logging.Errorf("Indexer::monitorKVNodes, error observed during the initilization of clusterInfoCache, err : %v", err)
+		selfRestart()
+		return
+	}
+
+	getActiveKVNodes := func() map[string]bool {
+		// Get all active KV nodes
+		activeKVNodes := cinfo.GetActiveKVNodes()
+
+		// Retrive kv node UUID's of active nodes
+		kvNodeUUIDs := make(map[string]bool)
+		for _, node := range activeKVNodes {
+			kvNodeUUIDs[node.NodeUUID] = true
+		}
+		return kvNodeUUIDs
+	}
+
+	changeInKVNodes := func(prev map[string]bool, curr map[string]bool) bool {
+		if len(prev) != len(curr) {
+			return true
+		} else {
+			for nodeuuid, _ := range curr {
+				if _, ok := prev[nodeuuid]; !ok {
+					return true
+				}
+			}
+		}
+		return false
+	}
+
+	sendKVNodes := func(kvNodeUUIDs map[string]bool) {
+		idx.stateLock.RLock()
+		for streamId, bucketStatus := range idx.streamBucketStatus {
+			for bucket, _ := range bucketStatus {
+
+				poolChangeMsg := &MsgPoolChange{
+					mType:    POOL_CHANGE,
+					nodes:    kvNodeUUIDs,
+					streamId: streamId,
+					bucket:   bucket,
+				}
+				idx.internalRecvCh <- poolChangeMsg
+			}
+		}
+		idx.stateLock.RUnlock()
+	}
+
+	updateNodeToHostMap := func() {
+		allKVNodes := cinfo.GetAllKVNodes()
+
+		currNodeToHostMap := idx.stats.nodeToHostMap.Get()
+
+		// Check if there is any change between currNodeToHostMap, allKVNodes
+		updateRequired := false
+		if len(currNodeToHostMap) != len(allKVNodes) {
+			updateRequired = true
+		} else {
+			for _, node := range allKVNodes {
+				if hostname, ok := currNodeToHostMap[node.NodeUUID]; !ok {
+					updateRequired = true
+					break
+				} else if node.Hostname != hostname {
+					logging.Infof("Indexer::monitorKVNodes Hostname for node: %v changed from %v to %v",
+						node.NodeUUID, hostname, node.Hostname)
+					updateRequired = true
+					break
+				}
+			}
+		}
+
+		if updateRequired {
+			newNodeToHostMap := make(map[string]string)
+			for _, node := range allKVNodes {
+				newNodeToHostMap[node.NodeUUID] = node.Hostname
+			}
+
+			idx.stats.nodeToHostMap.Set(newNodeToHostMap)
+		}
+	}
+
+	// Incase a pool change notification is missed, periodically sending active
+	// list of nodes to timekeeper ensures that timekeeper's book-keeping is
+	// always updated with active KV nodes
+	ticker := time.NewTicker(10 * time.Minute)
+
+	ch := scn.GetNotifyCh()
+	for {
+		select {
+		case notif, ok := <-ch:
+			if !ok {
+				selfRestart()
+				return
+			}
+
+			// Process only PoolChangeNotification as any change to
+			// ClusterMembership is reflected only in PoolChangeNotification
+			if notif.Type != common.PoolChangeNotification {
+				continue
+			}
+
+			if err := cinfo.FetchWithLock(); err != nil {
+				logging.Errorf("Indexer::monitorKVNodes, error observed while Fetching cluster info cache, err: %v", err)
+				selfRestart()
+				return
+			}
+
+			currActiveKVNodes := getActiveKVNodes()
+			if changeInKVNodes(idx.activeKVNodes, currActiveKVNodes) {
+				idx.activeKVNodes = currActiveKVNodes
+				sendKVNodes(currActiveKVNodes)
+			}
+
+			updateNodeToHostMap()
+
+		case <-ticker.C:
+			currActiveKVNodes := getActiveKVNodes()
+			idx.activeKVNodes = currActiveKVNodes
+			if len(currActiveKVNodes) > 0 {
+				sendKVNodes(currActiveKVNodes)
+			}
+			updateNodeToHostMap()
+
+		case <-idx.shutdownInitCh:
+			return
+		}
+	}
 }
