@@ -699,9 +699,8 @@ func (m *DDLServiceMgr) handleCreateCommand(needRefresh bool) {
 							newVersionList = append(newVersionList, 0)
 						}
 
-						// If the partition is not deferred, then we may need to build it.
-						// 1) If the partition is not found
-						// 2) The partition has not been build and it matches the local indexer id
+						// If the partition is not deferred, then we may need to build it
+						// if the partition has not been build and it matches the local indexer id
 						if !defn.Deferred && found && status < common.INDEX_STATE_INITIAL && indexerId2 == m.indexerId {
 							buildMap[defn.DefnId] = true
 						}
@@ -744,6 +743,10 @@ func (m *DDLServiceMgr) handleCreateCommand(needRefresh bool) {
 						} else {
 							logging.Warnf("DDLServiceMgr: Index successfully created (%v, %v, %v, %v).",
 								defn.Bucket, defn.Name, defn.DefnId, defn.InstId)
+							// If the partition is not deferred, build it
+							if !defn.Deferred {
+								buildMap[defn.DefnId] = true
+							}
 						}
 					}
 				}
