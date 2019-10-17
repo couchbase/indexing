@@ -27,8 +27,10 @@ type GroupAggrScanResponseActual []n1ql.Values // actual results
 type KeyValues map[string]interface{}
 
 type ClusterConfiguration struct {
-	KVAddress  string
-	Username   string
-	Password   string
-	IndexUsing string
+	KVAddress            string
+	Username             string
+	Password             string
+	IndexUsing           string
+	Nodes                []string
+	MultipleIndexerTests bool
 }
