@@ -1017,7 +1017,7 @@ func (fdb *fdbSlice) GetCommittedCount() uint64 {
 
 //Rollback slice to given snapshot. Return error if
 //not possible
-func (fdb *fdbSlice) Rollback(info SnapshotInfo, markAsUsed bool) error {
+func (fdb *fdbSlice) Rollback(info SnapshotInfo) error {
 
 	//before rollback make sure there are no mutations
 	//in the slice buffer. Timekeeper will make sure there
@@ -1077,10 +1077,6 @@ func (fdb *fdbSlice) Rollback(info SnapshotInfo, markAsUsed bool) error {
 
 	err = fdb.dbfile.Commit(forestdb.COMMIT_MANUAL_WAL_FLUSH)
 
-	if err == nil && markAsUsed {
-		fdb.lastRollbackTs = info.Timestamp()
-	}
-
 	return err
 }
 
@@ -1132,6 +1128,10 @@ func (fdb *fdbSlice) RollbackToZero() error {
 
 func (fdb *fdbSlice) LastRollbackTs() *common.TsVbuuid {
 	return fdb.lastRollbackTs
+}
+
+func (fdb *fdbSlice) SetLastRollbackTs(ts *common.TsVbuuid) {
+	fdb.lastRollbackTs = ts
 }
 
 //slice insert/delete methods are async. There

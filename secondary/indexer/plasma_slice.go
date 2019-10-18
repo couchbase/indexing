@@ -1612,7 +1612,7 @@ func (mdb *plasmaSlice) resetStores() {
 	mdb.idxStats.dataSize.Set(0)
 }
 
-func (mdb *plasmaSlice) Rollback(o SnapshotInfo, markAsUsed bool) error {
+func (mdb *plasmaSlice) Rollback(o SnapshotInfo) error {
 	mdb.waitPersist()
 	mdb.waitForPersistorThread()
 	qc := atomic.LoadInt64(&mdb.qCount)
@@ -1629,10 +1629,6 @@ func (mdb *plasmaSlice) Rollback(o SnapshotInfo, markAsUsed bool) error {
 	err := mdb.restore(o)
 	for i := 0; i < cap(mdb.readers); i++ {
 		mdb.readers <- readers[i]
-	}
-
-	if err == nil && markAsUsed {
-		mdb.lastRollbackTs = o.Timestamp()
 	}
 
 	return err
@@ -1731,6 +1727,10 @@ func (mdb *plasmaSlice) RollbackToZero() error {
 
 func (mdb *plasmaSlice) LastRollbackTs() *common.TsVbuuid {
 	return mdb.lastRollbackTs
+}
+
+func (mdb *plasmaSlice) SetLastRollbackTs(ts *common.TsVbuuid) {
+	mdb.lastRollbackTs = ts
 }
 
 //slice insert/delete methods are async. There

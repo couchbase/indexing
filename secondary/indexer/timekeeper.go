@@ -1040,9 +1040,6 @@ func (tk *timekeeper) handleStreamBegin(cmd Message) {
 
 	case STREAM_ACTIVE:
 
-		// Update the mapping between a vbucket to KV node UUID
-		tk.updateStreamBucketVbMap(cmd)
-
 		needRepair := false
 
 		// For bookkeeping, timekeeper needs to make sure that it will be eventually correct:
@@ -1103,6 +1100,9 @@ func (tk *timekeeper) handleStreamBegin(cmd Message) {
 
 		// If status is STREAM_SUCCESS, proceed as usual.  Pre-6.5, status is always STREAM_SUCCESS.
 		if cmd.(*MsgStream).GetStatus() == common.STREAM_SUCCESS {
+
+			// Update the mapping between a vbucket to KV node UUID
+			tk.updateStreamBucketVbMap(cmd)
 
 			// When receivng a StreamBegin, it means that the projector claims ownership
 			// of a vbucket.   Keep track of how many projectors are claiming ownership.
@@ -2443,11 +2443,20 @@ func (tk *timekeeper) sendNewStabilityTS(flushTs *common.TsVbuuid, bucket string
 		tk.ss.streamBucketFlushDone[streamId][bucket] = doneCh
 	}
 
+	hasAllSB := false
+	vbmap := tk.ss.streamBucketVBMap[streamId][bucket]
+	//if all stream begins have been seen atleast once after stream start
+	if len(vbmap) == len(flushTs.Vbuuids) {
+		hasAllSB = true
+	}
+
 	go func() {
 		tk.supvRespch <- &MsgTKStabilityTS{ts: flushTs,
 			bucket:    bucket,
 			streamId:  streamId,
-			changeVec: changeVec}
+			changeVec: changeVec,
+			hasAllSB:  hasAllSB,
+		}
 
 		if monitor_ts {
 
