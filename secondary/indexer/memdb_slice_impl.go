@@ -1048,7 +1048,8 @@ func (mdb *memdbSlice) cleanupOldSnapshotFiles(keepn int) {
 			snapInfo := infos[len(infos)-i-1]
 			snapTsVbuuid := snapInfo.Timestamp()
 			snapTs := getSeqTsFromTsVbuuid(snapTsVbuuid)
-			if seqTs.GreaterThanEqual(snapTs) || //min cluster seqno is greater than snap ts
+			if (seqTs.GreaterThanEqual(snapTs) && //min cluster seqno is greater than snap ts
+				mdb.lastRollbackTs == nil) || //last rollback was successful
 				len(manifests)-i > mdb.maxDiskSnaps { //num snapshots is more than max disk snapshots
 				dir := filepath.Dir(file)
 				logging.Infof("MemDBSlice Slice Id %v, IndexInstId %v, PartitionId %v "+

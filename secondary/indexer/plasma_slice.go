@@ -1428,7 +1428,8 @@ func (mdb *plasmaSlice) cleanupOldRecoveryPoints() {
 			}
 			snapTsVbuuid := snapInfo.Timestamp()
 			snapTs := getSeqTsFromTsVbuuid(snapTsVbuuid)
-			if seqTs.GreaterThanEqual(snapTs) || //min cluster seqno is greater than snap ts
+			if (seqTs.GreaterThanEqual(snapTs) && //min cluster seqno is greater than snap ts
+				mdb.lastRollbackTs == nil) || //last rollback was successful
 				len(mRPs)-i > mdb.maxDiskSnaps { //num RPs is more than max disk snapshots
 				logging.Infof("PlasmaSlice Slice Id %v, IndexInstId %v, PartitionId %v "+
 					"Cleanup mainstore recovery point %v ", mdb.id, mdb.idxInstId,
@@ -1457,8 +1458,8 @@ func (mdb *plasmaSlice) cleanupOldRecoveryPoints() {
 				}
 				snapTsVbuuid := snapInfo.Timestamp()
 				snapTs := getSeqTsFromTsVbuuid(snapTsVbuuid)
-				snapTs[0] = Seqno(80000)
-				if seqTs.GreaterThanEqual(snapTs) || //min cluster seqno is greater than snap ts
+				if (seqTs.GreaterThanEqual(snapTs) && //min cluster seqno is greater than snap ts
+					mdb.lastRollbackTs == nil) || //last rollback was successful
 					len(bRPs)-i > mdb.maxDiskSnaps { //num RPs is more than max disk snapshots
 					logging.Infof("PlasmaSlice Slice Id %v, IndexInstId %v, PartitionId %v "+
 						"Cleanup backstore recovery point %v ", mdb.id, mdb.idxInstId,
