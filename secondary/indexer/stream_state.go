@@ -847,6 +847,18 @@ func (ss *StreamState) needsRollback(streamId common.StreamId, bucket string) bo
 	return false
 }
 
+func (ss *StreamState) needsRollbackToZero(streamId common.StreamId, bucket string) bool {
+
+	rollbackTs := ss.streamBucketKVRollbackTsMap[streamId][bucket]
+	for i, vbuuid := range rollbackTs.Vbuuids {
+		if vbuuid != 0 && rollbackTs.Seqnos[i] == 0 {
+			return true
+		}
+	}
+
+	return false
+}
+
 func (ss *StreamState) numKVRollbackTs(streamId common.StreamId, bucket string) int {
 
 	count := 0
@@ -1025,7 +1037,13 @@ func (ss *StreamState) canRollbackNow(streamId common.StreamId, bucket string) (
 		waitTime := int64(ss.config["timekeeper.rollback.StreamBeginWaitTime"].Int()) * int64(time.Second)
 		exceedWaitTime := time.Now().UnixNano()-int64(ss.streamBucketLastBeginTime[streamId][bucket]) > waitTime
 
-		canRollback = !ss.streamBucketAsyncMap[streamId][bucket] || exceedWaitTime || numRollback == numVbuckets
+		//if any vb needs a rollback to zero, there is no need to wait
+		rollbackToZero := ss.needsRollbackToZero(streamId, bucket)
+
+		canRollback = !ss.streamBucketAsyncMap[streamId][bucket] ||
+			exceedWaitTime ||
+			numRollback == numVbuckets ||
+			rollbackToZero
 	}
 
 	if !needsRollback {

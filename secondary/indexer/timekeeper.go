@@ -3066,8 +3066,6 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 		logging.Infof("Timekeeper::sendRestartMsg Repair Aborted %v %v", streamId, bucket)
 
 	case KV_SENDER_RESTART_VBUCKETS_RESPONSE:
-		//allow sufficient time for control messages to come in
-		//after projector has confirmed success
 
 		tk.lock.RLock()
 		status := tk.ss.streamBucketStatus[streamId][bucket]
@@ -3092,8 +3090,18 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 			return
 		}
 
-		waitTime := tk.config["timekeeper.streamRepairWaitTime"].Int()
-		time.Sleep(time.Duration(waitTime) * time.Second)
+		tk.lock.RLock()
+		needsRollback := tk.ss.needsRollback(streamId, bucket)
+		tk.lock.RUnlock()
+
+		if needsRollback {
+			//if a rollback is required, proceed without waiting
+		} else {
+			//allow sufficient time for control messages to come in
+			//after projector has confirmed success
+			waitTime := tk.config["timekeeper.streamRepairWaitTime"].Int()
+			time.Sleep(time.Duration(waitTime) * time.Second)
+		}
 
 		tk.lock.Lock()
 		tk.ss.streamBucketKVActiveTsMap[streamId][bucket] = activeTs
