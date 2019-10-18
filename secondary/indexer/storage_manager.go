@@ -735,12 +735,28 @@ func (sm *storageMgr) findRollbackSnapshot(slice Slice,
 			logging.Infof("StorageMgr::handleRollback latestSnapInfo %v "+
 				"lastRollbackTs %v. Use latest snapshot.", latestSnapInfo, lastRollbackTs)
 			snapInfo = latestSnapInfo
-		} else if lastRollbackTs.Equal(latestSnapInfo.Timestamp()) {
-			//discard the snapshot for which the stream request has already been made
-			s.RemoveLatest()
-			snapInfo = s.GetLatest()
-			logging.Infof("StorageMgr::handleRollback Discarding Already Used "+
-				"Snapshot %v. Next snapshot %v", latestSnapInfo, snapInfo)
+		} else {
+			slist := s.List()
+			for i, si := range slist {
+				if lastRollbackTs.Equal(si.Timestamp()) {
+					//if there are more snapshots, use the next one
+					if len(slist) >= i+2 {
+						snapInfo = slist[i+1]
+						logging.Infof("StorageMgr::handleRollback Discarding Already Used "+
+							"Snapshot %v. Using Next snapshot %v", si, snapInfo)
+					} else {
+						logging.Infof("StorageMgr::handleRollback Unable to find a snapshot "+
+							"older than last used Snapshot %v. Use nil snapshot.", latestSnapInfo)
+						snapInfo = nil
+					}
+					break
+				} else {
+					//if lastRollbackTs is set(i.e. MTR after rollback wasn't completely successful)
+					//use only snapshots lower than lastRollbackTs
+					logging.Infof("StorageMgr::handleRollback Discarding Snapshot %v. Need older "+
+						"than last used snapshot %v.", si, lastRollbackTs)
+				}
+			}
 		}
 	} else {
 		snapInfo = s.GetOlderThanTS(rollbackTs)
