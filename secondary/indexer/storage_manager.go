@@ -694,6 +694,10 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 		bStats.numRollbacks.Add(1)
 	}
 
+	if restartTs != nil {
+		restartTs = sm.validateRestartTsVbuuid(bucket, restartTs)
+	}
+
 	sm.supvRespch <- &MsgRollbackDone{streamId: streamId,
 		bucket:    bucket,
 		restartTs: restartTs,
@@ -862,6 +866,44 @@ func (sm *storageMgr) rollbackAllToZero(streamId common.StreamId,
 		}
 	}
 	return nil
+}
+
+func (sm *storageMgr) validateRestartTsVbuuid(bucket string,
+	restartTs *common.TsVbuuid) *common.TsVbuuid {
+
+	clusterAddr := sm.config["clusterAddr"].String()
+	numVbuckets := sm.config["numVbuckets"].Int()
+
+	for i := 0; i < MAX_GETSEQS_RETRIES; i++ {
+
+		flog, err := common.BucketFailoverLog(clusterAddr, DEFAULT_POOL,
+			bucket, numVbuckets)
+
+		if err != nil {
+			logging.Errorf("StorageMgr::validateRestartTsVbuuid Bucket %v. "+
+				"Error fetching failover log %v", bucket, err)
+			time.Sleep(time.Second)
+			continue
+		} else {
+			//for each seqnum find the lowest recorded vbuuid in failover log
+			//this safeguards in cases memcached loses a vbuuid that was sent
+			//to indexer. Note that this cannot help in case memcached loses
+			//both mutation and vbuuid.
+
+			for i, seq := range restartTs.Seqnos {
+				lowest, err := flog.LowestVbuuid(i, seq)
+				if err == nil && lowest != 0 &&
+					lowest != restartTs.Vbuuids[i] {
+					logging.Infof("StorageMgr::validateRestartTsVbuuid Updating Bucket %v "+
+						"Vb %v Seqno %v Vbuuid From %v To %v. Flog %v", bucket, i, seq,
+						restartTs.Vbuuids[i], lowest, flog[i])
+					restartTs.Vbuuids[i] = lowest
+				}
+			}
+			break
+		}
+	}
+	return restartTs
 }
 
 func (s *storageMgr) addNilSnapshot(idxInstId common.IndexInstId, bucket string) {
