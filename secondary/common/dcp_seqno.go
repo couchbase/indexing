@@ -623,7 +623,7 @@ func CollectMinSeqnos(kvfeeds map[string]*kvConn) (l_seqnos []uint64, err error)
 var ErrNoEntry = errors.New("Entry not found in Failover Log")
 var ErrIncompleteLog = errors.New("Incomplete Failover Log")
 
-// FailoverLog containing vvuid and sequnce number
+// FailoverLog containing vbuuid and sequence number
 type vbFlog [][2]uint64
 type FailoverLog map[int]vbFlog
 

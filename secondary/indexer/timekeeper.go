@@ -1108,15 +1108,6 @@ func (tk *timekeeper) handleStreamBegin(cmd Message) {
 			// of a vbucket.   Keep track of how many projectors are claiming ownership.
 			tk.ss.incVbRefCount(streamId, meta.bucket, meta.vbucket)
 
-			/*NOTE - (MadHatter) Generation of new snapshot on Vbuuid change has been disabled.
-			//Consistent scans do not depend on vbuuid. If at all that logic changes,
-			//new snapshots will need to be generated at every vbuuid change.
-			//This change helps to reduce the possibility of rollback from memcached as
-			//memcached can loose vbuuid in crash/restart loop while indexer can update its
-			//HWT and generate snapshot for it. On restart of DCP stream with those vbuuids,
-			//memcached could ask to rollback to 0.
-			*/
-
 			//update the HWT of this stream and bucket with the vbuuid
 			bucketHWTMap := tk.ss.streamBucketHWTMap[streamId]
 
