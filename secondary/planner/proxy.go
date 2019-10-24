@@ -86,7 +86,7 @@ func RetrievePlanFromCluster(clusterUrl string, hosts []string) (*Plan, error) {
 		UsedReplicaIdMap: replicaMap,
 	}
 
-	err = getIndexStats(clusterUrl, plan)
+	err = getIndexStats(clusterUrl, plan, config)
 	if err != nil {
 		return nil, err
 	}
@@ -364,7 +364,7 @@ func ConvertToIndexUsage(config common.Config, defn *common.IndexDefn, localMeta
 //
 // This function retrieves the index stats.
 //
-func getIndexStats(clusterUrl string, plan *Plan) error {
+func getIndexStats(clusterUrl string, plan *Plan, config common.Config) error {
 
 	cinfo, err := clusterInfoCache(clusterUrl)
 	if err != nil {
@@ -521,6 +521,12 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 				// calibrate memory usage based on resident percent
 				// ActualMemUsage will be rewritten later
 				index.ActualMemUsage = index.ActualDataSize * index.ActualResidentPercent / 100
+				// factor in compression estimation (compression ratio defaulted to 3)
+				if index.StorageMode == common.PlasmaDB {
+					if config["indexer.plasma.useCompression"].Bool() {
+						index.ActualMemUsage = index.ActualMemUsage * 3
+					}
+				}
 				totalIndexMemUsed += index.ActualMemUsage
 			}
 
@@ -671,10 +677,41 @@ func getIndexStats(clusterUrl string, plan *Plan) error {
 				index.ActualDataSize = index.ActualDataSize * 100 / index.ActualBuildPercent
 			}
 
+			// compute the minimum memory requirement for the index
+			// 1) If index resident ratio is above 0, then compute memory required for min resident ratio (default:20%)
+			// 2) If index resident ratio is 0, then use sizing equation to estimate key size.
+			// 3) For MOI, min memory is the same as actual memory usage
+
+			minRatio := config["indexer.planner.minResidentRatio"].Float64()
+			if index.StorageMode == common.MemDB || index.StorageMode == common.MemoryOptimized {
+				minRatio = 1.0
+			}
+
+			// If index has resident memory, then compute minimum memory usage using current memory usage.
+			if !index.NoUsageInfo {
+				if index.ActualResidentPercent > 0 {
+					indexTotalMem := index.ActualMemUsage + index.ActualMemOverhead
+					ratio := float64(index.ActualResidentPercent) / 100
+					index.ActualMemMin = uint64(float64(indexTotalMem) / ratio * minRatio)
+
+				} else if index.ActualNumDocs > 0 {
+					// If index has no resident memory but it has keys, then estimate using sizing equation.
+					dataSize := index.ActualDataSize
+					if index.StorageMode == common.PlasmaDB {
+						if config["indexer.plasma.useCompression"].Bool() {
+							dataSize = dataSize * 3
+						}
+					}
+					keySize := dataSize / index.ActualNumDocs
+					index.ActualMemMin = uint64(float64((114+keySize)*index.ActualNumDocs*2) * minRatio)
+				}
+			}
+
 			indexer.ActualDataSize += index.ActualDataSize
 			indexer.ActualMemUsage += index.ActualMemUsage
 			indexer.ActualMemOverhead += index.ActualMemOverhead
 			indexer.ActualDiskUsage += index.ActualDiskUsage
+			indexer.ActualMemMin += index.ActualMemMin
 		}
 
 		// Compute the estimated cpu usage for each index.  This also computes the aggregated indexer cpu usage.

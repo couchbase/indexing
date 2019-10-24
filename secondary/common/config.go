@@ -2232,6 +2232,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.planner.minResidentRatio": ConfigValue{
+		0.2,
+		"minimum resident ratio for index.  Use for enforcing minimum memory check. Set to 0 to disable memory check.",
+		0.2,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.stream_reader.markFirstSnap": ConfigValue{
 		true,
 		"Identify mutations from first DCP snapshot. Used for back index lookup optimization.",

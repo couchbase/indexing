@@ -1,0 +1,366 @@
+{
+	"placement": [
+		{
+			"nodeId": "192.168.1.8:9000",
+			"nodeUUID": "c6fe7e12b609acc9767c7b671c908773",
+			"memUsage": 24824199,
+			"cpuUsage": 4,
+			"memOverhead": 897223840,
+			"actualDataSize": 5000,
+			"actualMemUsage": 5000,
+			"actualMemOverhead": 0,
+			"actualMemMin": 1000,
+			"indexes": [
+				{
+					"defnId": 1062966916559205703,
+					"instId": 1062966916559205703,
+					"name": "def_route_src_dst_day",
+					"bucket": "travel-sample",
+					"host": [
+						"71:42:12:3b:b1:a1:86:80"
+					],
+					"isMOI": false,
+					"avgSecKeySize": 0,
+					"avgDocKeySize": 0,
+					"avgArrSize": 0,
+					"avgArrKeySize": 0,
+					"numOfDocs": 168168,
+					"mutationRate": 34,
+					"scanRate": 0,
+					"memUsage": 21525504,
+					"cpuUsage": 1,
+					"memOverhead": 161176549,
+					"actualDataSize": 1000,
+					"actualMemUsage": 1000,
+					"actualMemOverhead": 0,
+					"actualMemMin": 200,
+					"actualKeySize": 82,
+					"definition": {
+						"defnId": 1062966916559205703,
+						"name": "def_route_src_dst_day",
+						"using": "plasma",
+						"bucket": "travel-sample",
+						"bucketUUID": "cc783f06e01edeb8fb0b7301f5a97343",
+						"secExprs": [
+							"`sourceairport`",
+							"`destinationairport`",
+							"(distinct (array (`v`.`day`) for `v` in `schedule` end))"
+						],
+						"exprType": "N1QL",
+						"partitionScheme": "SINGLE",
+						"where": "(`type` = \"route\")",
+						"deferred": true,
+						"nodes": [
+							"71:42:12:3b:b1:a1:86:80"
+						],
+						"isArrayIndex": true
+					}
+				},
+				{
+					"defnId": 11901045642896115698,
+					"instId": 11901045642896115698,
+					"name": "def_name_type",
+					"bucket": "travel-sample",
+					"host": [
+						"71:42:12:3b:b1:a1:86:80"
+					],
+					"isMOI": false,
+					"avgSecKeySize": 0,
+					"avgDocKeySize": 0,
+					"avgArrSize": 0,
+					"avgArrKeySize": 0,
+					"numOfDocs": 0,
+					"mutationRate": 34,
+					"scanRate": 0,
+					"memUsage": 0,
+					"cpuUsage": 0,
+					"memOverhead": 157286400,
+					"actualMemUsage": 1000,
+					"actualDataSize": 1000,
+					"actualMemOverhead": 0,
+					"actualMemMin": 200,
+					"actualKeySize": 0,
+					"definition": {
+						"defnId": 11901045642896115698,
+						"name": "def_name_type",
+						"using": "plasma",
+						"bucket": "travel-sample",
+						"bucketUUID": "cc783f06e01edeb8fb0b7301f5a97343",
+						"secExprs": [
+							"`name`"
+						],
+						"exprType": "N1QL",
+						"partitionScheme": "SINGLE",
+						"where": "(`_type` = \"User\")",
+						"deferred": true,
+						"nodes": [
+							"71:42:12:3b:b1:a1:86:80"
+						]
+					}
+				},
+				{
+					"defnId": 186422279778740388,
+					"instId": 186422279778740388,
+					"name": "def_icao",
+					"bucket": "travel-sample",
+					"host": [
+						"71:42:12:3b:b1:a1:86:80"
+					],
+					"isMOI": false,
+					"avgSecKeySize": 0,
+					"avgDocKeySize": 0,
+					"avgArrSize": 0,
+					"avgArrKeySize": 0,
+					"numOfDocs": 2155,
+					"mutationRate": 34,
+					"scanRate": 0,
+					"memUsage": 252135,
+					"cpuUsage": 1,
+					"memOverhead": 157804901,
+					"actualMemUsage": 1000,
+					"actualDataSize": 1000,
+					"actualMemOverhead": 0,
+					"actualMemMin": 200,
+					"actualKeySize": 71,
+					"definition": {
+						"defnId": 186422279778740388,
+						"name": "def_icao",
+						"using": "plasma",
+						"bucket": "travel-sample",
+						"bucketUUID": "cc783f06e01edeb8fb0b7301f5a97343",
+						"secExprs": [
+							"`icao`"
+						],
+						"exprType": "N1QL",
+						"partitionScheme": "SINGLE",
+						"deferred": true,
+						"nodes": [
+							"71:42:12:3b:b1:a1:86:80"
+						]
+					}
+				},
+				{
+					"defnId": 12569795883549894572,
+					"instId": 12569795883549894572,
+					"name": "def_airportname",
+					"bucket": "travel-sample",
+					"host": [
+						"71:42:12:3b:b1:a1:86:80"
+					],
+					"isMOI": false,
+					"avgSecKeySize": 0,
+					"avgDocKeySize": 0,
+					"avgArrSize": 0,
+					"avgArrKeySize": 0,
+					"numOfDocs": 1968,
+					"mutationRate": 34,
+					"scanRate": 0,
+					"memUsage": 259776,
+					"cpuUsage": 1,
+					"memOverhead": 157907371,
+					"actualMemUsage": 1000,
+					"actualDataSize": 1000,
+					"actualMemOverhead": 0,
+					"actualMemMin": 200,
+					"actualKeySize": 86,
+					"definition": {
+						"defnId": 12569795883549894572,
+						"name": "def_airportname",
+						"using": "plasma",
+						"bucket": "travel-sample",
+						"bucketUUID": "cc783f06e01edeb8fb0b7301f5a97343",
+						"secExprs": [
+							"`airportname`"
+						],
+						"exprType": "N1QL",
+						"partitionScheme": "SINGLE",
+						"deferred": true,
+						"nodes": [
+							"71:42:12:3b:b1:a1:86:80"
+						]
+					}
+				},
+				{
+					"defnId": 15735174331105410569,
+					"instId": 15735174331105410569,
+					"name": "def_sourceairport",
+					"bucket": "travel-sample",
+					"host": [
+						"71:42:12:3b:b1:a1:86:80"
+					],
+					"isMOI": false,
+					"avgSecKeySize": 0,
+					"avgDocKeySize": 0,
+					"avgArrSize": 0,
+					"avgArrKeySize": 0,
+					"numOfDocs": 24024,
+					"mutationRate": 34,
+					"scanRate": 0,
+					"memUsage": 2786784,
+					"cpuUsage": 1,
+					"memOverhead": 158191019,
+					"actualMemUsage": 1000,
+					"actualDataSize": 1000,
+					"actualMemOverhead": 0,
+					"actualMemMin": 200,
+					"actualKeySize": 70,
+					"definition": {
+						"defnId": 15735174331105410569,
+						"name": "def_sourceairport",
+						"using": "plasma",
+						"bucket": "travel-sample",
+						"bucketUUID": "cc783f06e01edeb8fb0b7301f5a97343",
+						"secExprs": [
+							"`sourceairport`"
+						],
+						"exprType": "N1QL",
+						"partitionScheme": "SINGLE",
+						"deferred": true,
+						"nodes": [
+							"71:42:12:3b:b1:a1:86:80"
+						]
+					}
+				}
+			]
+		},
+		{
+			"nodeId": "127.0.0.1:9001",
+			"nodeUUID": "f18c1f3d3c1fabf2a63b51d06f536bf9",
+			"memUsage": 15038429,
+			"cpuUsage": 5,
+			"memOverhead": 897523441,
+			"actualMemUsage": 3000,
+			"actualDataSize": 3000,
+			"actualMemOverhead": 0, 
+			"actualMemMin": 600,
+			"indexes": [
+				{
+					"defnId": 4650686066397790614,
+					"instId": 4650686066397790614,
+					"name": "def_city",
+					"bucket": "travel-sample",
+					"host": [
+						"38:10:33:9b:da:e4:3d:d8"
+					],
+					"isMOI": false,
+					"avgSecKeySize": 0,
+					"avgDocKeySize": 0,
+					"avgArrSize": 0,
+					"avgArrKeySize": 0,
+					"numOfDocs": 7380,
+					"mutationRate": 34,
+					"scanRate": 0,
+					"memUsage": 915120,
+					"cpuUsage": 1,
+					"memOverhead": 157954930,
+					"actualMemUsage": 1000,
+					"actualDataSize": 1000,
+					"actualMemOverhead": 0,
+					"actualMemMin": 200,
+					"actualKeySize": 78,
+					"definition": {
+						"defnId": 4650686066397790614,
+						"name": "def_city",
+						"using": "plasma",
+						"bucket": "travel-sample",
+						"bucketUUID": "cc783f06e01edeb8fb0b7301f5a97343",
+						"secExprs": [
+							"`city`"
+						],
+						"exprType": "N1QL",
+						"partitionScheme": "SINGLE",
+						"deferred": true,
+						"nodes": [
+							"38:10:33:9b:da:e4:3d:d8"
+						]
+					}
+				},
+				{
+					"defnId": 13216289592837031732,
+					"instId": 13216289592837031732,
+					"name": "def_type",
+					"bucket": "travel-sample",
+					"host": [
+						"38:10:33:9b:da:e4:3d:d8"
+					],
+					"isMOI": false,
+					"avgSecKeySize": 0,
+					"avgDocKeySize": 0,
+					"avgArrSize": 0,
+					"avgArrKeySize": 0,
+					"numOfDocs": 31591,
+					"mutationRate": 34,
+					"scanRate": 0,
+					"memUsage": 3759329,
+					"cpuUsage": 1,
+					"memOverhead": 158362021,
+					"actualMemUsage": 1000,
+					"actualDataSize": 1000,
+					"actualMemOverhead": 0,
+					"actualMemMin": 200,
+					"actualKeySize": 73,
+					"definition": {
+						"defnId": 13216289592837031732,
+						"name": "def_type",
+						"using": "plasma",
+						"bucket": "travel-sample",
+						"bucketUUID": "cc783f06e01edeb8fb0b7301f5a97343",
+						"secExprs": [
+							"`type`"
+						],
+						"exprType": "N1QL",
+						"partitionScheme": "SINGLE",
+						"deferred": true,
+						"nodes": [
+							"38:10:33:9b:da:e4:3d:d8"
+						]
+					}
+				},
+				{
+					"defnId": 14464743935726680040,
+					"instId": 14464743935726680040,
+					"name": "def_schedule_utc",
+					"bucket": "travel-sample",
+					"host": [
+						"38:10:33:9b:da:e4:3d:d8"
+					],
+					"isMOI": false,
+					"avgSecKeySize": 0,
+					"avgDocKeySize": 0,
+					"avgArrSize": 0,
+					"avgArrKeySize": 0,
+					"numOfDocs": 24024,
+					"mutationRate": 34,
+					"scanRate": 0,
+					"memUsage": 8240232,
+					"cpuUsage": 1,
+					"memOverhead": 160569098,
+					"actualMemUsage": 1000,
+					"actualDataSize": 1000,
+					"actualMemOverhead": 0,
+					"actualMemMin": 200,
+					"actualKeySize": 297,
+					"definition": {
+						"defnId": 14464743935726680040,
+						"name": "def_schedule_utc",
+						"using": "plasma",
+						"bucket": "travel-sample",
+						"bucketUUID": "cc783f06e01edeb8fb0b7301f5a97343",
+						"secExprs": [
+							"array (`s`.`utc`) for `s` in `schedule` end"
+						],
+						"exprType": "N1QL",
+						"partitionScheme": "SINGLE",
+						"deferred": true,
+						"nodes": [
+							"38:10:33:9b:da:e4:3d:d8"
+						]
+					}
+				}
+			]
+		}
+	],
+	"memQuota": 600,
+	"cpuQuota": 8,
+	"isLive": true
+}
