@@ -2021,9 +2021,13 @@ func (mdb *plasmaSlice) Statistics() (StorageStatistics, error) {
 	sts.InternalData = internalData
 	if mdb.hasPersistence {
 		sts.DiskSize = mdb.mainstore.GetLSSUsedSpace()
+		_, sts.DataSize, sts.LogSpace = mdb.mainstore.GetLSSInfo()
 		if !mdb.isPrimary {
 			bsDiskSz := mdb.backstore.GetLSSUsedSpace()
 			sts.DiskSize += bsDiskSz
+			_, bsDataSize, bsLogSpace := mdb.backstore.GetLSSInfo()
+			sts.DataSize += bsDataSize
+			sts.LogSpace += bsLogSpace
 		}
 		sts.DiskSize += checkpointFileSize
 	}
