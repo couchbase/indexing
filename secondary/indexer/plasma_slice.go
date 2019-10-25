@@ -1428,7 +1428,8 @@ func (mdb *plasmaSlice) cleanupOldRecoveryPoints() {
 			}
 			snapTsVbuuid := snapInfo.Timestamp()
 			snapTs := getSeqTsFromTsVbuuid(snapTsVbuuid)
-			if seqTs.GreaterThanEqual(snapTs) || //min cluster seqno is greater than snap ts
+			if (seqTs.GreaterThanEqual(snapTs) && //min cluster seqno is greater than snap ts
+				mdb.lastRollbackTs == nil) || //last rollback was successful
 				len(mRPs)-i > mdb.maxDiskSnaps { //num RPs is more than max disk snapshots
 				logging.Infof("PlasmaSlice Slice Id %v, IndexInstId %v, PartitionId %v "+
 					"Cleanup mainstore recovery point %v ", mdb.id, mdb.idxInstId,
@@ -1457,8 +1458,8 @@ func (mdb *plasmaSlice) cleanupOldRecoveryPoints() {
 				}
 				snapTsVbuuid := snapInfo.Timestamp()
 				snapTs := getSeqTsFromTsVbuuid(snapTsVbuuid)
-				snapTs[0] = Seqno(80000)
-				if seqTs.GreaterThanEqual(snapTs) || //min cluster seqno is greater than snap ts
+				if (seqTs.GreaterThanEqual(snapTs) && //min cluster seqno is greater than snap ts
+					mdb.lastRollbackTs == nil) || //last rollback was successful
 					len(bRPs)-i > mdb.maxDiskSnaps { //num RPs is more than max disk snapshots
 					logging.Infof("PlasmaSlice Slice Id %v, IndexInstId %v, PartitionId %v "+
 						"Cleanup backstore recovery point %v ", mdb.id, mdb.idxInstId,
@@ -1612,7 +1613,7 @@ func (mdb *plasmaSlice) resetStores() {
 	mdb.idxStats.dataSize.Set(0)
 }
 
-func (mdb *plasmaSlice) Rollback(o SnapshotInfo, markAsUsed bool) error {
+func (mdb *plasmaSlice) Rollback(o SnapshotInfo) error {
 	mdb.waitPersist()
 	mdb.waitForPersistorThread()
 	qc := atomic.LoadInt64(&mdb.qCount)
@@ -1629,10 +1630,6 @@ func (mdb *plasmaSlice) Rollback(o SnapshotInfo, markAsUsed bool) error {
 	err := mdb.restore(o)
 	for i := 0; i < cap(mdb.readers); i++ {
 		mdb.readers <- readers[i]
-	}
-
-	if err == nil && markAsUsed {
-		mdb.lastRollbackTs = o.Timestamp()
 	}
 
 	return err
@@ -1731,6 +1728,10 @@ func (mdb *plasmaSlice) RollbackToZero() error {
 
 func (mdb *plasmaSlice) LastRollbackTs() *common.TsVbuuid {
 	return mdb.lastRollbackTs
+}
+
+func (mdb *plasmaSlice) SetLastRollbackTs(ts *common.TsVbuuid) {
+	mdb.lastRollbackTs = ts
 }
 
 //slice insert/delete methods are async. There

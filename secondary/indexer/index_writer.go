@@ -50,13 +50,15 @@ type IndexWriter interface {
 	OpenSnapshot(SnapshotInfo) (Snapshot, error)
 
 	//Rollback to given snapshot
-	Rollback(s SnapshotInfo, markAsUsed bool) error
+	Rollback(s SnapshotInfo) error
 
 	//Rollback to initial state
 	RollbackToZero() error
 
 	//Return TS for last rollback operation
 	LastRollbackTs() *common.TsVbuuid
+
+	SetLastRollbackTs(ts *common.TsVbuuid)
 
 	// Statistics used for compaction trigger
 	Statistics() (StorageStatistics, error)

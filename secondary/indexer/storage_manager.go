@@ -221,6 +221,7 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 	tsVbuuid := msgFlushDone.GetTS()
 	streamId := msgFlushDone.GetStreamId()
 	flushWasAborted := msgFlushDone.GetAborted()
+	hasAllSB := msgFlushDone.HasAllSB()
 
 	numVbuckets := s.config["numVbuckets"].Int()
 	snapType := tsVbuuid.GetSnapType()
@@ -236,7 +237,8 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 		indexInstMap := common.CopyIndexInstMap(s.indexInstMap)
 		indexPartnMap := CopyIndexPartnMap(s.indexPartnMap)
 
-		go s.flushDone(streamId, bucket, indexInstMap, indexPartnMap, tsVbuuid, flushWasAborted)
+		go s.flushDone(streamId, bucket, indexInstMap, indexPartnMap,
+			tsVbuuid, flushWasAborted, hasAllSB)
 
 		return
 	}
@@ -251,14 +253,14 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 	stats := s.stats.Get()
 
 	go s.createSnapshotWorker(streamId, bucket, tsVbuuid, indexSnapMap,
-		numVbuckets, indexInstMap, indexPartnMap, stats, flushWasAborted)
+		numVbuckets, indexInstMap, indexPartnMap, stats, flushWasAborted, hasAllSB)
 
 }
 
 func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, bucket string,
 	tsVbuuid *common.TsVbuuid, indexSnapMap IndexSnapMap, numVbuckets int,
 	indexInstMap common.IndexInstMap, indexPartnMap IndexPartnMap, stats *IndexerStats,
-	flushWasAborted bool) {
+	flushWasAborted bool, hasAllSB bool) {
 
 	defer destroyIndexSnapMap(indexSnapMap)
 
@@ -311,6 +313,13 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, bucket strin
 						if flushWasAborted {
 							slice.IsDirty()
 							return
+						}
+
+						//if TK has seen all Stream Begins after stream restart,
+						//the MTR after rollback can be considered successful.
+						//All snapshots become eligible to retry for next rollback.
+						if hasAllSB {
+							slice.SetLastRollbackTs(nil)
 						}
 
 						var latestSnapshot Snapshot
@@ -439,8 +448,9 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, bucket strin
 
 }
 
-func (s *storageMgr) flushDone(streamId common.StreamId, bucket string, indexInstMap common.IndexInstMap, indexPartnMap IndexPartnMap,
-	tsVbuuid *common.TsVbuuid, flushWasAborted bool) {
+func (s *storageMgr) flushDone(streamId common.StreamId, bucket string,
+	indexInstMap common.IndexInstMap, indexPartnMap IndexPartnMap,
+	tsVbuuid *common.TsVbuuid, flushWasAborted bool, hasAllSB bool) {
 
 	isInitial := func() bool {
 		if streamId == common.INIT_STREAM {
@@ -495,6 +505,24 @@ func (s *storageMgr) flushDone(streamId common.StreamId, bucket string, indexIns
 
 			wg.Wait()
 			s.lastFlushDone = time.Now().UnixNano()
+		}
+	}
+
+	//if TK has seen all Stream Begins after stream restart,
+	//the MTR after rollback can be considered successful.
+	//All snapshots become eligible to retry for next rollback.
+	if hasAllSB {
+		for idxInstId, partnMap := range indexPartnMap {
+			idxInst := indexInstMap[idxInstId]
+			if idxInst.Defn.Bucket == bucket &&
+				idxInst.Stream == streamId &&
+				idxInst.State != common.INDEX_STATE_DELETED {
+				for _, partnInst := range partnMap {
+					for _, slice := range partnInst.Sc.GetAllSlices() {
+						slice.SetLastRollbackTs(nil)
+					}
+				}
+			}
 		}
 	}
 
@@ -666,6 +694,10 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 		bStats.numRollbacks.Add(1)
 	}
 
+	if restartTs != nil {
+		restartTs = sm.validateRestartTsVbuuid(bucket, restartTs)
+	}
+
 	sm.supvRespch <- &MsgRollbackDone{streamId: streamId,
 		bucket:    bucket,
 		restartTs: restartTs,
@@ -735,12 +767,28 @@ func (sm *storageMgr) findRollbackSnapshot(slice Slice,
 			logging.Infof("StorageMgr::handleRollback latestSnapInfo %v "+
 				"lastRollbackTs %v. Use latest snapshot.", latestSnapInfo, lastRollbackTs)
 			snapInfo = latestSnapInfo
-		} else if lastRollbackTs.Equal(latestSnapInfo.Timestamp()) {
-			//discard the snapshot for which the stream request has already been made
-			s.RemoveLatest()
-			snapInfo = s.GetLatest()
-			logging.Infof("StorageMgr::handleRollback Discarding Already Used "+
-				"Snapshot %v. Next snapshot %v", latestSnapInfo, snapInfo)
+		} else {
+			slist := s.List()
+			for i, si := range slist {
+				if lastRollbackTs.Equal(si.Timestamp()) {
+					//if there are more snapshots, use the next one
+					if len(slist) >= i+2 {
+						snapInfo = slist[i+1]
+						logging.Infof("StorageMgr::handleRollback Discarding Already Used "+
+							"Snapshot %v. Using Next snapshot %v", si, snapInfo)
+					} else {
+						logging.Infof("StorageMgr::handleRollback Unable to find a snapshot "+
+							"older than last used Snapshot %v. Use nil snapshot.", latestSnapInfo)
+						snapInfo = nil
+					}
+					break
+				} else {
+					//if lastRollbackTs is set(i.e. MTR after rollback wasn't completely successful)
+					//use only snapshots lower than lastRollbackTs
+					logging.Infof("StorageMgr::handleRollback Discarding Snapshot %v. Need older "+
+						"than last used snapshot %v.", si, lastRollbackTs)
+				}
+			}
 		}
 	} else {
 		snapInfo = s.GetOlderThanTS(rollbackTs)
@@ -756,12 +804,15 @@ func (sm *storageMgr) rollbackToSnapshot(idxInstId common.IndexInstId,
 
 	var restartTs *common.TsVbuuid
 	if snapInfo != nil {
-		err := slice.Rollback(snapInfo, markAsUsed)
+		err := slice.Rollback(snapInfo)
 		if err == nil {
 			logging.Infof("StorageMgr::handleRollback Rollback Index: %v "+
 				"PartitionId: %v SliceId: %v To Snapshot %v ", idxInstId, partnId,
 				slice.Id(), snapInfo)
 			restartTs = snapInfo.Timestamp()
+			if markAsUsed {
+				slice.SetLastRollbackTs(restartTs)
+			}
 		} else {
 			//send error response back
 			return nil, err
@@ -777,6 +828,7 @@ func (sm *storageMgr) rollbackToSnapshot(idxInstId common.IndexInstId,
 			//once rollback to zero has happened, set response ts to nil
 			//to represent the initial state of storage
 			restartTs = nil
+			slice.SetLastRollbackTs(nil)
 		} else {
 			//send error response back
 			return nil, err
@@ -814,6 +866,44 @@ func (sm *storageMgr) rollbackAllToZero(streamId common.StreamId,
 		}
 	}
 	return nil
+}
+
+func (sm *storageMgr) validateRestartTsVbuuid(bucket string,
+	restartTs *common.TsVbuuid) *common.TsVbuuid {
+
+	clusterAddr := sm.config["clusterAddr"].String()
+	numVbuckets := sm.config["numVbuckets"].Int()
+
+	for i := 0; i < MAX_GETSEQS_RETRIES; i++ {
+
+		flog, err := common.BucketFailoverLog(clusterAddr, DEFAULT_POOL,
+			bucket, numVbuckets)
+
+		if err != nil {
+			logging.Errorf("StorageMgr::validateRestartTsVbuuid Bucket %v. "+
+				"Error fetching failover log %v", bucket, err)
+			time.Sleep(time.Second)
+			continue
+		} else {
+			//for each seqnum find the lowest recorded vbuuid in failover log
+			//this safeguards in cases memcached loses a vbuuid that was sent
+			//to indexer. Note that this cannot help in case memcached loses
+			//both mutation and vbuuid.
+
+			for i, seq := range restartTs.Seqnos {
+				lowest, err := flog.LowestVbuuid(i, seq)
+				if err == nil && lowest != 0 &&
+					lowest != restartTs.Vbuuids[i] {
+					logging.Infof("StorageMgr::validateRestartTsVbuuid Updating Bucket %v "+
+						"Vb %v Seqno %v Vbuuid From %v To %v. Flog %v", bucket, i, seq,
+						restartTs.Vbuuids[i], lowest, flog[i])
+					restartTs.Vbuuids[i] = lowest
+				}
+			}
+			break
+		}
+	}
+	return restartTs
 }
 
 func (s *storageMgr) addNilSnapshot(idxInstId common.IndexInstId, bucket string) {

@@ -466,6 +466,29 @@ func (m *LifecycleMgr) handlePrepareCreateIndex(content []byte) ([]byte, error) 
 			return client.MarshallPrepareCreateResponse(response)
 		}
 
+		if prepareCreateIndex.Name != "" && prepareCreateIndex.Bucket != "" {
+			// Check for duplicate index name only if name and bucket name
+			// are specified in the request
+			existDefn, err := m.repo.GetIndexDefnByName(prepareCreateIndex.Bucket,
+				prepareCreateIndex.Name)
+			if err != nil {
+				logging.Infof("LifecycleMgr.handlePrepareCreateIndex() : Reject "+
+					"%v because of error (%v) in GetIndexDefnByName", prepareCreateIndex.DefnId, err)
+
+				response := &client.PrepareCreateResponse{Accept: false}
+				return client.MarshallPrepareCreateResponse(response)
+			}
+
+			if existDefn != nil {
+				logging.Infof("LifecycleMgr.handlePrepareCreateIndex() : Reject "+
+					"%v because of duplicate index name with existing defnId %v",
+					prepareCreateIndex.DefnId, existDefn.DefnId)
+
+				response := &client.PrepareCreateResponse{Accept: false}
+				return client.MarshallPrepareCreateResponse(response)
+			}
+		}
+
 		m.prepareLock = prepareCreateIndex
 		m.prepareLock.StartTime = time.Now().UnixNano()
 

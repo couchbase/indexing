@@ -619,3 +619,102 @@ func CollectMinSeqnos(kvfeeds map[string]*kvConn) (l_seqnos []uint64, err error)
 	}
 	return l_seqnos, nil
 }
+
+var ErrNoEntry = errors.New("Entry not found in Failover Log")
+var ErrIncompleteLog = errors.New("Incomplete Failover Log")
+
+// FailoverLog containing vbuuid and sequence number
+type vbFlog [][2]uint64
+type FailoverLog map[int]vbFlog
+
+// Latest will return the recent vbuuid and its high-seqno.
+func (flog FailoverLog) Latest(vb int) (vbuuid, seqno uint64, err error) {
+	if flog != nil {
+		if fl, ok := flog[vb]; ok {
+			latest := fl[0]
+			return latest[0], latest[1], nil
+		}
+	}
+	return vbuuid, seqno, ErrNoEntry
+}
+
+// LowestVbuuid would return the lowest vbuuid for a given seqno
+// if the entry is found
+func (flog FailoverLog) LowestVbuuid(vb int, seqno uint64) (vbuuid uint64, err error) {
+	if flog != nil {
+		if fl, ok := flog[vb]; ok {
+			for _, f := range fl {
+				if f[1] == seqno {
+					vbuuid = f[0]
+				}
+			}
+		}
+	}
+	if vbuuid != 0 {
+		return
+	}
+	return vbuuid, ErrNoEntry
+}
+
+func BucketFailoverLog(cluster, pooln, bucketn string, numVb int) (fl FailoverLog, ret error) {
+
+	//panic safe
+	defer func() {
+		if r := recover(); r != nil {
+			ret = fmt.Errorf("%v", r)
+			logging.Errorf("BucketFailoverLog panic error: %v", ret)
+		}
+	}()
+
+	logging.Infof("BucketFailoverLog %v", bucketn)
+
+	bucket, err := ConnectBucket(cluster, pooln, bucketn)
+	if err != nil {
+		logging.Errorf("BucketFailoverLog Error: %v", err)
+		ret = err
+		return
+	}
+	defer bucket.Close()
+
+	vbnos := listOfVbnos(numVb)
+	dcpConfig := map[string]interface{}{
+		"genChanSize":    10000,
+		"dataChanSize":   10000,
+		"numConnections": 1,
+	}
+
+	failoverLog := make(FailoverLog)
+	flogs, err := bucket.GetFailoverLogs(0 /*opaque*/, vbnos, dcpConfig)
+
+	if err == nil {
+		if len(flogs) != numVb {
+			ret = ErrIncompleteLog
+			return
+		}
+		for vbno, flog := range flogs {
+			vbflog := make(vbFlog, len(flog))
+			for i, x := range flog {
+				vbflog[i][0] = x[0]
+				vbflog[i][1] = x[1]
+			}
+			failoverLog[int(vbno)] = vbflog
+		}
+	} else {
+		logging.Errorf("BucketFailoverLog Error: %v", err)
+		ret = err
+		return
+	}
+	logging.Infof("BucketFailoverLog returns %v ", failoverLog)
+
+	fl = failoverLog
+	return
+}
+
+func listOfVbnos(maxVbno int) []uint16 {
+	// list of vbuckets
+	vbnos := make([]uint16, 0, maxVbno)
+	for i := 0; i < maxVbno; i++ {
+		vbnos = append(vbnos, uint16(i))
+	}
+	return vbnos
+}

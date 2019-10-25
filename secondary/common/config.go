@@ -676,6 +676,16 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.allowPartialQuorum": ConfigValue{
+		false,
+		"This boolean flag, when set, allows index creation with partial quorum. " +
+			"This will be allowed only when \"with nodes\" is specified during " +
+			"index creation. By default, this flag is false and will require full " +
+			"quorum i.e. all indexer nodes in the cluster should allow index creation.",
+		false,
+		false, // mutable
+		false, // case-insensitive
+	},
 	// projector's adminport client, can be used by indexer.
 	"indexer.projectorclient.retryInterval": ConfigValue{
 		16,

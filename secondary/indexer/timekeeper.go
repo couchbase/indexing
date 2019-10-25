@@ -1040,9 +1040,6 @@ func (tk *timekeeper) handleStreamBegin(cmd Message) {
 
 	case STREAM_ACTIVE:
 
-		// Update the mapping between a vbucket to KV node UUID
-		tk.updateStreamBucketVbMap(cmd)
-
 		needRepair := false
 
 		// For bookkeeping, timekeeper needs to make sure that it will be eventually correct:
@@ -1104,18 +1101,12 @@ func (tk *timekeeper) handleStreamBegin(cmd Message) {
 		// If status is STREAM_SUCCESS, proceed as usual.  Pre-6.5, status is always STREAM_SUCCESS.
 		if cmd.(*MsgStream).GetStatus() == common.STREAM_SUCCESS {
 
+			// Update the mapping between a vbucket to KV node UUID
+			tk.updateStreamBucketVbMap(cmd)
+
 			// When receivng a StreamBegin, it means that the projector claims ownership
 			// of a vbucket.   Keep track of how many projectors are claiming ownership.
 			tk.ss.incVbRefCount(streamId, meta.bucket, meta.vbucket)
-
-			/*NOTE - (MadHatter) Generation of new snapshot on Vbuuid change has been disabled.
-			//Consistent scans do not depend on vbuuid. If at all that logic changes,
-			//new snapshots will need to be generated at every vbuuid change.
-			//This change helps to reduce the possibility of rollback from memcached as
-			//memcached can loose vbuuid in crash/restart loop while indexer can update its
-			//HWT and generate snapshot for it. On restart of DCP stream with those vbuuids,
-			//memcached could ask to rollback to 0.
-			*/
 
 			//update the HWT of this stream and bucket with the vbuuid
 			bucketHWTMap := tk.ss.streamBucketHWTMap[streamId]
@@ -2443,11 +2434,20 @@ func (tk *timekeeper) sendNewStabilityTS(flushTs *common.TsVbuuid, bucket string
 		tk.ss.streamBucketFlushDone[streamId][bucket] = doneCh
 	}
 
+	hasAllSB := false
+	vbmap := tk.ss.streamBucketVBMap[streamId][bucket]
+	//if all stream begins have been seen atleast once after stream start
+	if len(vbmap) == len(flushTs.Vbuuids) {
+		hasAllSB = true
+	}
+
 	go func() {
 		tk.supvRespch <- &MsgTKStabilityTS{ts: flushTs,
 			bucket:    bucket,
 			streamId:  streamId,
-			changeVec: changeVec}
+			changeVec: changeVec,
+			hasAllSB:  hasAllSB,
+		}
 
 		if monitor_ts {
 
@@ -3057,8 +3057,6 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 		logging.Infof("Timekeeper::sendRestartMsg Repair Aborted %v %v", streamId, bucket)
 
 	case KV_SENDER_RESTART_VBUCKETS_RESPONSE:
-		//allow sufficient time for control messages to come in
-		//after projector has confirmed success
 
 		tk.lock.RLock()
 		status := tk.ss.streamBucketStatus[streamId][bucket]
@@ -3083,8 +3081,18 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 			return
 		}
 
-		waitTime := tk.config["timekeeper.streamRepairWaitTime"].Int()
-		time.Sleep(time.Duration(waitTime) * time.Second)
+		tk.lock.RLock()
+		needsRollback := tk.ss.needsRollback(streamId, bucket)
+		tk.lock.RUnlock()
+
+		if needsRollback {
+			//if a rollback is required, proceed without waiting
+		} else {
+			//allow sufficient time for control messages to come in
+			//after projector has confirmed success
+			waitTime := tk.config["timekeeper.streamRepairWaitTime"].Int()
+			time.Sleep(time.Duration(waitTime) * time.Second)
+		}
 
 		tk.lock.Lock()
 		tk.ss.streamBucketKVActiveTsMap[streamId][bucket] = activeTs
