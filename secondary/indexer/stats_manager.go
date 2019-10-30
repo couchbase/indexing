@@ -759,6 +759,10 @@ func (is IndexerStats) GetStats(getPartition bool, skipEmpty bool,
 			return ss.itemsCount.Value()
 		})
 
+		rawDataSize := s.partnInt64Stats(func(ss *IndexStats) int64 {
+			return ss.rawDataSize.Value()
+		})
+
 		addStat("total_scan_duration",
 			s.int64Stats(func(ss *IndexStats) int64 {
 				return ss.scanDuration.Value()
@@ -828,6 +832,7 @@ func (is IndexerStats) GetStats(getPartition bool, skipEmpty bool,
 			s.partnInt64Stats(func(ss *IndexStats) int64 {
 				return ss.deleteBytes.Value()
 			}))
+
 		// partition stats
 		addStat("data_size",
 			s.partnInt64Stats(func(ss *IndexStats) int64 {
@@ -836,7 +841,7 @@ func (is IndexerStats) GetStats(getPartition bool, skipEmpty bool,
 		// partition stats
 		addStat("raw_data_size",
 			s.partnInt64Stats(func(ss *IndexStats) int64 {
-				return ss.rawDataSize.Value()
+				return rawDataSize
 			}))
 
 		// partition stats
@@ -844,6 +849,8 @@ func (is IndexerStats) GetStats(getPartition bool, skipEmpty bool,
 			s.partnInt64Stats(func(ss *IndexStats) int64 {
 				return ss.backstoreRawDataSize.Value()
 			}))
+
+		addStat("avg_item_size", computeAvgItemSize(rawDataSize, itemsCount))
 
 		// partition stats
 		addStat("key_size_distribution", s.getKeySizeStats())
@@ -1206,6 +1213,14 @@ func (is IndexerStats) GetVersionedStats(t *target) (common.Statistics, bool) {
 	return statsMap, found
 }
 
+func computeAvgItemSize(raw_data_size, items_count int64) int64 {
+	if items_count > 0 {
+		return raw_data_size / items_count
+	}
+	// Return 0 if no items indexed
+	return 0
+}
+
 func addStatFactory(skipEmpty bool, statsMap common.Statistics) func(string, interface{}) {
 	return func(k string, v interface{}) {
 		if !skipEmpty {
@@ -1259,6 +1274,10 @@ func (s *IndexStats) constructIndexStats(skipEmpty bool, version string) common.
 		return ss.itemsCount.Value()
 	})
 
+	rawDataSize := s.partnInt64Stats(func(ss *IndexStats) int64 {
+		return ss.rawDataSize.Value()
+	})
+
 	addStat("total_scan_duration",
 		s.int64Stats(func(ss *IndexStats) int64 {
 			return ss.scanDuration.Value()
@@ -1296,12 +1315,14 @@ func (s *IndexStats) constructIndexStats(skipEmpty bool, version string) common.
 	// partition stats
 	addStat("raw_data_size",
 		s.partnInt64Stats(func(ss *IndexStats) int64 {
-			return ss.rawDataSize.Value()
+			return rawDataSize
 		}))
 	addStat("backstore_raw_data_size",
 		s.partnInt64Stats(func(ss *IndexStats) int64 {
 			return ss.backstoreRawDataSize.Value()
 		}))
+
+	addStat("avg_item_size", computeAvgItemSize(rawDataSize, itemsCount))
 	// partition stats
 	addStat("frag_percent",
 		s.partnAvgInt64Stats(func(ss *IndexStats) int64 {
