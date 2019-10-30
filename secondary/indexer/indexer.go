@@ -7901,6 +7901,12 @@ func (idx *indexer) monitorKVNodes() {
 	}
 
 	getActiveKVNodes := func() map[string]bool {
+
+		if err := cinfo.FetchWithLock(); err != nil {
+			logging.Errorf("Indexer::monitorKVNodes, error observed while Fetching cluster info cache, err: %v", err)
+			return nil
+		}
+
 		// Get all active KV nodes
 		activeKVNodes := cinfo.GetActiveKVNodes()
 
@@ -7975,6 +7981,14 @@ func (idx *indexer) monitorKVNodes() {
 		}
 	}
 
+	// Force update the nodeToHostMap for the first time
+	if err := cinfo.FetchWithLock(); err != nil {
+		logging.Errorf("Indexer::monitorKVNodes, error observed while Fetching cluster info cache, err: %v", err)
+		selfRestart()
+		return
+	}
+	updateNodeToHostMap()
+
 	// Incase a pool change notification is missed, periodically sending active
 	// list of nodes to timekeeper ensures that timekeeper's book-keeping is
 	// always updated with active KV nodes
@@ -7995,13 +8009,12 @@ func (idx *indexer) monitorKVNodes() {
 				continue
 			}
 
-			if err := cinfo.FetchWithLock(); err != nil {
-				logging.Errorf("Indexer::monitorKVNodes, error observed while Fetching cluster info cache, err: %v", err)
+			currActiveKVNodes := getActiveKVNodes()
+			if currActiveKVNodes == nil {
 				selfRestart()
 				return
 			}
 
-			currActiveKVNodes := getActiveKVNodes()
 			if changeInKVNodes(idx.activeKVNodes, currActiveKVNodes) {
 				idx.activeKVNodes = currActiveKVNodes
 				sendKVNodes(currActiveKVNodes)
@@ -8011,6 +8024,11 @@ func (idx *indexer) monitorKVNodes() {
 
 		case <-ticker.C:
 			currActiveKVNodes := getActiveKVNodes()
+			if currActiveKVNodes == nil {
+				selfRestart()
+				return
+			}
+
 			idx.activeKVNodes = currActiveKVNodes
 			if len(currActiveKVNodes) > 0 {
 				sendKVNodes(currActiveKVNodes)
