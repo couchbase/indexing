@@ -139,8 +139,9 @@ type IndexStats struct {
 	completionProgress        stats.Int64Val
 	numDocsQueued             stats.Int64Val
 	deleteBytes               stats.Int64Val
-	dataSize                  stats.Int64Val // Sum of all data inserted into main store and back store
-	backstoreDataSize         stats.Int64Val // Sum of all data inserted into back store
+	dataSize                  stats.Int64Val
+	rawDataSize               stats.Int64Val // Sum of all data inserted into main store and back store
+	backstoreRawDataSize      stats.Int64Val // Sum of all data inserted into back store
 	docidCount                stats.Int64Val
 	scanBytesRead             stats.Int64Val
 	getBytes                  stats.Int64Val
@@ -307,7 +308,8 @@ func (s *IndexStats) Init() {
 	s.numDocsQueued.Init()
 	s.deleteBytes.Init()
 	s.dataSize.Init()
-	s.backstoreDataSize.Init()
+	s.rawDataSize.Init()
+	s.backstoreRawDataSize.Init()
 	s.docidCount.Init()
 	s.fragPercent.Init()
 	s.scanBytesRead.Init()
@@ -827,15 +829,15 @@ func (is IndexerStats) GetStats(getPartition bool, skipEmpty bool,
 				return ss.deleteBytes.Value()
 			}))
 		// partition stats
-		addStat("data_size",
+		addStat("raw_data_size",
 			s.partnInt64Stats(func(ss *IndexStats) int64 {
-				return ss.dataSize.Value()
+				return ss.rawDataSize.Value()
 			}))
 
 		// partition stats
-		addStat("backstore_data_size",
+		addStat("backstore_raw_data_size",
 			s.partnInt64Stats(func(ss *IndexStats) int64 {
-				return ss.backstoreDataSize.Value()
+				return ss.backstoreRawDataSize.Value()
 			}))
 
 		// partition stats
@@ -1282,9 +1284,13 @@ func (s *IndexStats) constructIndexStats(skipEmpty bool, version string) common.
 			return ss.numDocsQueued.Value()
 		}))
 	// partition stats
-	addStat("data_size",
+	addStat("raw_data_size",
 		s.partnInt64Stats(func(ss *IndexStats) int64 {
-			return ss.dataSize.Value()
+			return ss.rawDataSize.Value()
+		}))
+	addStat("backstore_raw_data_size",
+		s.partnInt64Stats(func(ss *IndexStats) int64 {
+			return ss.backstoreRawDataSize.Value()
 		}))
 	// partition stats
 	addStat("frag_percent",
