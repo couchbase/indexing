@@ -1095,6 +1095,7 @@ func (s *storageMgr) handleStats(cmd Message) {
 		// TODO(sarath): Investigate the reason for inconsistent stats map
 		// This nil check is a workaround to avoid indexer crashes for now.
 		if idxStats != nil {
+			idxStats.dataSize.Set(st.Stats.DataSize)
 			idxStats.diskSize.Set(st.Stats.DiskSize)
 			idxStats.memUsed.Set(st.Stats.MemUsed)
 			if common.GetStorageMode() != common.MOI {

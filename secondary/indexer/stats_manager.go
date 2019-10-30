@@ -829,6 +829,11 @@ func (is IndexerStats) GetStats(getPartition bool, skipEmpty bool,
 				return ss.deleteBytes.Value()
 			}))
 		// partition stats
+		addStat("data_size",
+			s.partnInt64Stats(func(ss *IndexStats) int64 {
+				return ss.dataSize.Value()
+			}))
+		// partition stats
 		addStat("raw_data_size",
 			s.partnInt64Stats(func(ss *IndexStats) int64 {
 				return ss.rawDataSize.Value()
@@ -1282,6 +1287,11 @@ func (s *IndexStats) constructIndexStats(skipEmpty bool, version string) common.
 	addStat("num_docs_queued",
 		s.int64Stats(func(ss *IndexStats) int64 {
 			return ss.numDocsQueued.Value()
+		}))
+	// partition stats
+	addStat("data_size",
+		s.partnInt64Stats(func(ss *IndexStats) int64 {
+			return ss.dataSize.Value()
 		}))
 	// partition stats
 	addStat("raw_data_size",
