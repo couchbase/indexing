@@ -1053,7 +1053,8 @@ func (mdb *memdbSlice) cleanupOldSnapshotFiles(keepn int) {
 				len(manifests)-i > mdb.maxDiskSnaps { //num snapshots is more than max disk snapshots
 				dir := filepath.Dir(file)
 				logging.Infof("MemDBSlice Slice Id %v, IndexInstId %v, PartitionId %v "+
-					"Removing disk snapshot %v", mdb.id, mdb.idxInstId, mdb.idxPartnId, dir)
+					"Removing disk snapshot %v. Num snapshots %v.", mdb.id, mdb.idxInstId,
+					mdb.idxPartnId, dir, len(manifests)-i)
 				os.RemoveAll(dir)
 			} else {
 				logging.Infof("MemDBSlice Slice Id %v, IndexInstId %v, PartitionId %v "+

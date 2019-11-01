@@ -1432,8 +1432,8 @@ func (mdb *plasmaSlice) cleanupOldRecoveryPoints() {
 				mdb.lastRollbackTs == nil) || //last rollback was successful
 				len(mRPs)-i > mdb.maxDiskSnaps { //num RPs is more than max disk snapshots
 				logging.Infof("PlasmaSlice Slice Id %v, IndexInstId %v, PartitionId %v "+
-					"Cleanup mainstore recovery point %v ", mdb.id, mdb.idxInstId,
-					mdb.idxPartnId, snapInfo)
+					"Cleanup mainstore recovery point %v. num RPs %v.", mdb.id, mdb.idxInstId,
+					mdb.idxPartnId, snapInfo, len(mRPs)-i)
 				mdb.mainstore.RemoveRecoveryPoint(mRPs[i])
 			} else {
 				logging.Infof("PlasmaSlice Slice Id %v, IndexInstId %v, PartitionId %v "+
@@ -1462,8 +1462,8 @@ func (mdb *plasmaSlice) cleanupOldRecoveryPoints() {
 					mdb.lastRollbackTs == nil) || //last rollback was successful
 					len(bRPs)-i > mdb.maxDiskSnaps { //num RPs is more than max disk snapshots
 					logging.Infof("PlasmaSlice Slice Id %v, IndexInstId %v, PartitionId %v "+
-						"Cleanup backstore recovery point %v ", mdb.id, mdb.idxInstId,
-						mdb.idxPartnId, snapInfo)
+						"Cleanup backstore recovery point %v. num RPs %v.", mdb.id, mdb.idxInstId,
+						mdb.idxPartnId, snapInfo, len(bRPs)-i)
 					mdb.backstore.RemoveRecoveryPoint(bRPs[i])
 				} else {
 					logging.Infof("PlasmaSlice Slice Id %v, IndexInstId %v, PartitionId %v "+
