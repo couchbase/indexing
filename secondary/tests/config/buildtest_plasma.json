@@ -2,5 +2,12 @@
    "KVAddress": "127.0.0.1:9000",
    "Username": "Administrator",
    "Password": "asdasd",
-   "IndexUsing": "plasma"
+   "IndexUsing": "plasma",
+   "Nodes": [
+      "127.0.0.1:9000",
+      "127.0.0.1:9001",
+      "127.0.0.1:9002",
+      "127.0.0.1:9003"
+   ],
+   "MultipleIndexerTests":true
 }

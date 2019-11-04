@@ -679,7 +679,7 @@ func (mdb *plasmaSlice) insertPrimaryIndex(key []byte, docid []byte, workerId in
 		mdb.main[workerId].InsertKV(entry, nil)
 		mdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
 		atomic.AddInt64(&mdb.insert_bytes, int64(len(entry)))
-		mdb.idxStats.dataSize.Add(int64(len(entry)))
+		mdb.idxStats.rawDataSize.Add(int64(len(entry)))
 		mdb.isDirty = true
 		return 1
 	}
@@ -724,9 +724,9 @@ func (mdb *plasmaSlice) insertSecIndex(key []byte, docid []byte, workerId int, i
 		mdb.back[workerId].InsertKV(docid, backEntry)
 		mdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
 
-		mdb.idxStats.backstoreDataSize.Add(int64(len(docid) + len(backEntry)))
-		// dataSize is the sum of all data inserted into main store and back store
-		mdb.idxStats.dataSize.Add(int64(len(docid) + len(backEntry) + len(entry)))
+		mdb.idxStats.backstoreRawDataSize.Add(int64(len(docid) + len(backEntry)))
+		// rawDataSize is the sum of all data inserted into main store and back store
+		mdb.idxStats.rawDataSize.Add(int64(len(docid) + len(backEntry) + len(entry)))
 		addKeySizeStat(mdb.idxStats, len(entry))
 		atomic.AddInt64(&mdb.insert_bytes, int64(len(docid)+len(entry)))
 
@@ -849,7 +849,7 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 				common.CrashOnError(err)
 				// Add back
 				mdb.main[workerId].InsertKV(entry, nil)
-				mdb.idxStats.dataSize.Add(int64(len(entry)))
+				mdb.idxStats.rawDataSize.Add(int64(len(entry)))
 				addKeySizeStat(mdb.idxStats, len(entry))
 			}
 		}
@@ -865,7 +865,7 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 				// Delete back
 				entrySz := len(entry)
 				mdb.main[workerId].DeleteKV(entry)
-				mdb.idxStats.dataSize.Add(0 - int64(entrySz))
+				mdb.idxStats.rawDataSize.Add(0 - int64(entrySz))
 				subtractKeySizeStat(mdb.idxStats, entrySz)
 			}
 		}
@@ -892,7 +892,7 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 			mdb.main[workerId].DeleteKV(keyToBeDeleted)
 			mdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
 
-			mdb.idxStats.dataSize.Add(0 - int64(keyDelSz))
+			mdb.idxStats.rawDataSize.Add(0 - int64(keyDelSz))
 			subtractKeySizeStat(mdb.idxStats, keyDelSz)
 			atomic.AddInt64(&mdb.delete_bytes, int64(keyDelSz))
 			nmut++
@@ -920,7 +920,7 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 			mdb.main[workerId].InsertKV(keyToBeAdded, nil)
 			mdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
 
-			mdb.idxStats.dataSize.Add(int64(len(keyToBeAdded)))
+			mdb.idxStats.rawDataSize.Add(int64(len(keyToBeAdded)))
 			addKeySizeStat(mdb.idxStats, len(keyToBeAdded))
 			atomic.AddInt64(&mdb.insert_bytes, int64(len(keyToBeAdded)))
 
@@ -940,8 +940,8 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 			mdb.back[workerId].DeleteKV(docid)
 			mdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
 
-			mdb.idxStats.backstoreDataSize.Add(0 - int64(len(docid)+oldSz))
-			mdb.idxStats.dataSize.Add(0 - int64(len(docid)+oldSz))
+			mdb.idxStats.backstoreRawDataSize.Add(0 - int64(len(docid)+oldSz))
+			mdb.idxStats.rawDataSize.Add(0 - int64(len(docid)+oldSz))
 			subtractArrayKeySizeStat(mdb.idxStats, oldSz)
 			atomic.AddInt64(&mdb.delete_bytes, int64(len(docid)))
 		}
@@ -969,8 +969,8 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 			mdb.back[workerId].DeleteKV(docid)
 			mdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
 
-			mdb.idxStats.backstoreDataSize.Add(0 - int64(len(docid)+oldSz))
-			mdb.idxStats.dataSize.Add(0 - int64(len(docid)+oldSz))
+			mdb.idxStats.backstoreRawDataSize.Add(0 - int64(len(docid)+oldSz))
+			mdb.idxStats.rawDataSize.Add(0 - int64(len(docid)+oldSz))
 			subtractArrayKeySizeStat(mdb.idxStats, oldSz)
 			atomic.AddInt64(&mdb.delete_bytes, int64(len(docid)))
 		}
@@ -979,8 +979,8 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 		mdb.back[workerId].InsertKV(docid, key)
 		mdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
 
-		mdb.idxStats.backstoreDataSize.Add(int64(len(docid) + len(key)))
-		mdb.idxStats.dataSize.Add(int64(len(docid) + len(key)))
+		mdb.idxStats.backstoreRawDataSize.Add(int64(len(docid) + len(key)))
+		mdb.idxStats.rawDataSize.Add(int64(len(docid) + len(key)))
 		addArrayKeySizeStat(mdb.idxStats, len(key))
 		atomic.AddInt64(&mdb.insert_bytes, int64(len(docid)+len(key)))
 	}
@@ -1025,7 +1025,7 @@ func (mdb *plasmaSlice) deletePrimaryIndex(docid []byte, workerId int) (nmut int
 		mdb.main[workerId].DeleteKV(itm)
 		mdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
 
-		mdb.idxStats.dataSize.Add(0 - int64(len(entry.Bytes())))
+		mdb.idxStats.rawDataSize.Add(0 - int64(len(entry.Bytes())))
 		atomic.AddInt64(&mdb.delete_bytes, int64(len(entry.Bytes())))
 
 		mdb.isDirty = true
@@ -1057,14 +1057,14 @@ func (mdb *plasmaSlice) deleteSecIndex(docid []byte, compareKey []byte, workerId
 		mdb.main[workerId].Begin()
 		defer mdb.main[workerId].End()
 		mdb.back[workerId].DeleteKV(docid)
-		mdb.idxStats.backstoreDataSize.Add(0 - int64(len(docid)+len(backEntry)))
+		mdb.idxStats.backstoreRawDataSize.Add(0 - int64(len(docid)+len(backEntry)))
 
 		entry := backEntry2entry(docid, backEntry, buf, mdb.keySzConf[workerId])
 		entrySz := len(entry)
 		mdb.main[workerId].DeleteKV(entry)
 		mdb.idxStats.Timings.stKVDelete.Put(time.Since(t0))
 
-		mdb.idxStats.dataSize.Add(0 - int64(len(docid)+len(backEntry)+entrySz))
+		mdb.idxStats.rawDataSize.Add(0 - int64(len(docid)+len(backEntry)+entrySz))
 		subtractKeySizeStat(mdb.idxStats, entrySz)
 	}
 
@@ -1141,7 +1141,7 @@ func (mdb *plasmaSlice) deleteSecArrayIndexNoTx(docid []byte, workerId int) (nmu
 		mdb.main[workerId].DeleteKV(keyToBeDeleted)
 		mdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
 
-		mdb.idxStats.dataSize.Add(0 - int64(keyDelSz))
+		mdb.idxStats.rawDataSize.Add(0 - int64(keyDelSz))
 		subtractKeySizeStat(mdb.idxStats, keyDelSz)
 		atomic.AddInt64(&mdb.delete_bytes, int64(keyDelSz))
 	}
@@ -1152,8 +1152,8 @@ func (mdb *plasmaSlice) deleteSecArrayIndexNoTx(docid []byte, workerId int) (nmu
 	mdb.back[workerId].DeleteKV(docid)
 	mdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
 
-	mdb.idxStats.backstoreDataSize.Add(0 - int64(len(docid)+oldSz))
-	mdb.idxStats.dataSize.Add(0 - int64(len(docid)+oldSz))
+	mdb.idxStats.backstoreRawDataSize.Add(0 - int64(len(docid)+oldSz))
+	mdb.idxStats.rawDataSize.Add(0 - int64(len(docid)+oldSz))
 	subtractArrayKeySizeStat(mdb.idxStats, oldSz)
 	atomic.AddInt64(&mdb.delete_bytes, int64(len(docid)))
 
@@ -1273,8 +1273,8 @@ func (mdb *plasmaSlice) doPersistSnapshot(s *plasmaSnapshot) {
 			snapshotStats[SNAP_STATS_KEY_SIZES] = getKeySizesStats(mdb.idxStats)
 			snapshotStats[SNAP_STATS_ARRKEY_SIZES] = getArrayKeySizesStats(mdb.idxStats)
 			snapshotStats[SNAP_STATS_KEY_SIZES_SINCE] = mdb.idxStats.keySizeStatsSince.Value()
-			snapshotStats[SNAP_STATS_DATA_SIZE] = mdb.idxStats.dataSize.Value()
-			snapshotStats[SNAP_STATS_BACKSTORE_DATA_SIZE] = mdb.idxStats.backstoreDataSize.Value()
+			snapshotStats[SNAP_STATS_RAW_DATA_SIZE] = mdb.idxStats.rawDataSize.Value()
+			snapshotStats[SNAP_STATS_BACKSTORE_RAW_DATA_SIZE] = mdb.idxStats.backstoreRawDataSize.Value()
 			s.info.IndexStats = snapshotStats
 			s.info.Version = SNAPSHOT_META_VERSION_PLASMA_1
 			s.info.InstId = mdb.idxInstId
@@ -1432,8 +1432,8 @@ func (mdb *plasmaSlice) cleanupOldRecoveryPoints() {
 				mdb.lastRollbackTs == nil) || //last rollback was successful
 				len(mRPs)-i > mdb.maxDiskSnaps { //num RPs is more than max disk snapshots
 				logging.Infof("PlasmaSlice Slice Id %v, IndexInstId %v, PartitionId %v "+
-					"Cleanup mainstore recovery point %v ", mdb.id, mdb.idxInstId,
-					mdb.idxPartnId, snapInfo)
+					"Cleanup mainstore recovery point %v. num RPs %v.", mdb.id, mdb.idxInstId,
+					mdb.idxPartnId, snapInfo, len(mRPs)-i)
 				mdb.mainstore.RemoveRecoveryPoint(mRPs[i])
 			} else {
 				logging.Infof("PlasmaSlice Slice Id %v, IndexInstId %v, PartitionId %v "+
@@ -1462,8 +1462,8 @@ func (mdb *plasmaSlice) cleanupOldRecoveryPoints() {
 					mdb.lastRollbackTs == nil) || //last rollback was successful
 					len(bRPs)-i > mdb.maxDiskSnaps { //num RPs is more than max disk snapshots
 					logging.Infof("PlasmaSlice Slice Id %v, IndexInstId %v, PartitionId %v "+
-						"Cleanup backstore recovery point %v ", mdb.id, mdb.idxInstId,
-						mdb.idxPartnId, snapInfo)
+						"Cleanup backstore recovery point %v. num RPs %v.", mdb.id, mdb.idxInstId,
+						mdb.idxPartnId, snapInfo, len(bRPs)-i)
 					mdb.backstore.RemoveRecoveryPoint(bRPs[i])
 				} else {
 					logging.Infof("PlasmaSlice Slice Id %v, IndexInstId %v, PartitionId %v "+
@@ -1609,8 +1609,8 @@ func (mdb *plasmaSlice) resetStores() {
 	resetArrKeySizeStats(mdb.idxStats)
 	// Slice is rolling back to zero, but there is no need to update keySizeStatsSince
 
-	mdb.idxStats.backstoreDataSize.Set(0)
-	mdb.idxStats.dataSize.Set(0)
+	mdb.idxStats.backstoreRawDataSize.Set(0)
+	mdb.idxStats.rawDataSize.Set(0)
 }
 
 func (mdb *plasmaSlice) Rollback(o SnapshotInfo) error {
@@ -1702,8 +1702,8 @@ func (mdb *plasmaSlice) updateStatsFromSnapshotMeta(o SnapshotInfo) {
 			mdb.idxStats.numArrayKeySizeGt100K.Set(safeGetInt64(arrkeySizes[5]))
 		}
 
-		mdb.idxStats.dataSize.Set(safeGetInt64(stats[SNAP_STATS_DATA_SIZE]))
-		mdb.idxStats.backstoreDataSize.Set(safeGetInt64(stats[SNAP_STATS_BACKSTORE_DATA_SIZE]))
+		mdb.idxStats.rawDataSize.Set(safeGetInt64(stats[SNAP_STATS_RAW_DATA_SIZE]))
+		mdb.idxStats.backstoreRawDataSize.Set(safeGetInt64(stats[SNAP_STATS_BACKSTORE_RAW_DATA_SIZE]))
 
 		mdb.idxStats.keySizeStatsSince.Set(safeGetInt64(stats[SNAP_STATS_KEY_SIZES_SINCE]))
 	} else {
@@ -2021,9 +2021,13 @@ func (mdb *plasmaSlice) Statistics() (StorageStatistics, error) {
 	sts.InternalData = internalData
 	if mdb.hasPersistence {
 		sts.DiskSize = mdb.mainstore.GetLSSUsedSpace()
+		_, sts.DataSize, sts.LogSpace = mdb.mainstore.GetLSSInfo()
 		if !mdb.isPrimary {
 			bsDiskSz := mdb.backstore.GetLSSUsedSpace()
 			sts.DiskSize += bsDiskSz
+			_, bsDataSize, bsLogSpace := mdb.backstore.GetLSSInfo()
+			sts.DataSize += bsDataSize
+			sts.LogSpace += bsLogSpace
 		}
 		sts.DiskSize += checkpointFileSize
 	}

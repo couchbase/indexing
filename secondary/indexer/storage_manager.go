@@ -1095,10 +1095,15 @@ func (s *storageMgr) handleStats(cmd Message) {
 		// TODO(sarath): Investigate the reason for inconsistent stats map
 		// This nil check is a workaround to avoid indexer crashes for now.
 		if idxStats != nil {
+			idxStats.dataSize.Set(st.Stats.DataSize)
 			idxStats.diskSize.Set(st.Stats.DiskSize)
 			idxStats.memUsed.Set(st.Stats.MemUsed)
 			if common.GetStorageMode() != common.MOI {
-				idxStats.fragPercent.Set(int64(st.GetFragmentation()))
+				if common.GetStorageMode() == common.PLASMA {
+					idxStats.fragPercent.Set(int64(st.getPlasmaFragmentation()))
+				} else {
+					idxStats.fragPercent.Set(int64(st.GetFragmentation()))
+				}
 			}
 
 			idxStats.getBytes.Set(st.Stats.GetBytes)
@@ -1150,7 +1155,7 @@ func (s *storageMgr) getIndexStorageStats() []IndexStorageStats {
 
 		for _, partnInst := range partnMap {
 			var internalData []string
-			var memUsed, diskSz, extraSnapDataSize int64
+			var dataSz, logSpace, diskSz, memUsed, extraSnapDataSize int64
 			var getBytes, insertBytes, deleteBytes int64
 			var nslices int64
 			var needUpgrade = false
@@ -1163,7 +1168,9 @@ func (s *storageMgr) getIndexStorageStats() []IndexStorageStats {
 					break
 				}
 
+				dataSz += sts.DataSize
 				memUsed += sts.MemUsed
+				logSpace += sts.LogSpace
 				diskSz += sts.DiskSize
 				getBytes += sts.GetBytes
 				insertBytes += sts.InsertBytes
@@ -1181,8 +1188,10 @@ func (s *storageMgr) getIndexStorageStats() []IndexStorageStats {
 					Name:    inst.Defn.Name,
 					Bucket:  inst.Defn.Bucket,
 					Stats: StorageStatistics{
-						MemUsed:           memUsed,
+						DataSize:          dataSz,
+						LogSpace:          logSpace,
 						DiskSize:          diskSz,
+						MemUsed:           memUsed,
 						GetBytes:          getBytes,
 						InsertBytes:       insertBytes,
 						DeleteBytes:       deleteBytes,
@@ -1638,4 +1647,19 @@ func destroyIndexSnapMap(ism IndexSnapMap) {
 		DestroyIndexSnapshot(v)
 	}
 
+}
+
+func (s IndexStorageStats) getPlasmaFragmentation() float64 {
+	var fragPercent float64
+
+	var wastedSpace int64
+	if s.Stats.DataSize != 0 && s.Stats.LogSpace > s.Stats.DataSize {
+		wastedSpace = s.Stats.LogSpace - s.Stats.DataSize
+	}
+
+	if s.Stats.LogSpace > 0 {
+		fragPercent = float64(wastedSpace) * 100 / float64(s.Stats.LogSpace)
+	}
+
+	return fragPercent
 }

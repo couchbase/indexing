@@ -10,6 +10,7 @@
 package functionaltests
 
 import (
+	"fmt"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/planner"
 	"log"
@@ -100,6 +101,7 @@ func TestPlanner(t *testing.T) {
 	initialPlacementTest(t)
 	incrPlacementTest(t)
 	rebalanceTest(t)
+	minMemoryTest(t)
 }
 
 //
@@ -230,4 +232,141 @@ func rebalanceTest(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+}
+
+func minMemoryTest(t *testing.T) {
+
+	func() {
+		log.Printf("-------------------------------------------")
+		log.Printf("Minimum memory test 1: min memory = 0")
+
+		plan, err := planner.ReadPlan("../testdata/planner/plan/min-memory-plan.json")
+		FailTestIfError(err, "Fail to read plan", t)
+		if len(plan.Placement) != 2 {
+			t.Fatal("plan does not have 2 indexer nodes")
+		}
+
+		// set min memory to 0 for disabling resource check
+		for _, indexer := range plan.Placement {
+			indexer.ActualMemMin = 0
+			for _, index := range indexer.Indexes {
+				index.ActualMemMin = 0
+			}
+		}
+
+		config := planner.DefaultRunConfig()
+		config.UseLive = true
+		config.Resize = false
+
+		s := planner.NewSimulator()
+		p, _, err := s.RunSingleTest(config, planner.CommandRebalance, nil, plan, nil)
+		FailTestIfError(err, "Error in planner test", t)
+
+		// check if the indexers have equal number of indexes
+		if len(p.Result.Placement[0].Indexes) != len(p.Result.Placement[1].Indexes) {
+			t.Fatal("rebalance does not spread indexes equally")
+		}
+	}()
+
+	func() {
+		log.Printf("-------------------------------------------")
+		log.Printf("Minimum memory test 2: min memory > quota")
+
+		plan, err := planner.ReadPlan("../testdata/planner/plan/min-memory-plan.json")
+		FailTestIfError(err, "Fail to read plan", t)
+		memQuota := plan.MemQuota
+
+		config := planner.DefaultRunConfig()
+		config.UseLive = true
+		config.Resize = false
+
+		s := planner.NewSimulator()
+		p, _, err := s.RunSingleTest(config, planner.CommandRebalance, nil, plan, nil)
+		FailTestIfError(err, "Error in planner test", t)
+
+		// check if index violates memory constraint
+		for _, indexer := range p.Result.Placement {
+			minMemory := uint64(0)
+			for _, index := range indexer.Indexes {
+				minMemory += index.ActualMemMin
+			}
+			if minMemory > memQuota {
+				t.Fatal("min memory is over memory quota")
+			}
+		}
+	}()
+
+	func() {
+		log.Printf("-------------------------------------------")
+		log.Printf("Minimum memory test 3: min memory < quota")
+
+		plan, err := planner.ReadPlan("../testdata/planner/plan/min-memory-plan.json")
+		FailTestIfError(err, "Fail to read plan", t)
+		if len(plan.Placement) != 2 {
+			t.Fatal("plan does not have 2 indexer nodes")
+		}
+		plan.MemQuota = 800
+
+		config := planner.DefaultRunConfig()
+		config.UseLive = true
+		config.Resize = false
+
+		s := planner.NewSimulator()
+		p, _, err := s.RunSingleTest(config, planner.CommandRebalance, nil, plan, nil)
+		FailTestIfError(err, "Error in planner test", t)
+
+		// check if the indexers have equal number of indexes
+		if len(p.Result.Placement[0].Indexes) != len(p.Result.Placement[1].Indexes) {
+			t.Fatal("rebalance does not spread indexes equally")
+		}
+	}()
+
+	func() {
+		log.Printf("-------------------------------------------")
+		log.Printf("Minimum memory test 4: replica repair with min memory > quota")
+
+		plan, err := planner.ReadPlan("../testdata/planner/plan/min-memory-replica-plan.json")
+		FailTestIfError(err, "Fail to read plan", t)
+
+		config := planner.DefaultRunConfig()
+		config.UseLive = true
+		config.Resize = false
+
+		s := planner.NewSimulator()
+		p, _, err := s.RunSingleTest(config, planner.CommandRebalance, nil, plan, nil)
+		FailTestIfError(err, "Error in planner test", t)
+
+		// check the total number of indexes
+		for _, indexer := range p.Result.Placement {
+			if len(indexer.Indexes) != 1 {
+				t.Fatal("There is more than 1 index per node")
+			}
+		}
+	}()
+
+	func() {
+		log.Printf("-------------------------------------------")
+		log.Printf("Minimum memory test 5: replica repair with min memory < quota")
+
+		plan, err := planner.ReadPlan("../testdata/planner/plan/min-memory-replica-plan.json")
+		FailTestIfError(err, "Fail to read plan", t)
+		plan.MemQuota = 800
+
+		config := planner.DefaultRunConfig()
+		config.UseLive = true
+		config.Resize = false
+
+		s := planner.NewSimulator()
+		p, _, err := s.RunSingleTest(config, planner.CommandRebalance, nil, plan, nil)
+		FailTestIfError(err, "Error in planner test", t)
+
+		// check the total number of indexes
+		total := 0
+		for _, indexer := range p.Result.Placement {
+			total += len(indexer.Indexes)
+		}
+		if total != 4 {
+			t.Fatal(fmt.Sprintf("Replica is not repaired. num replica = %v", total))
+		}
+	}()
 }
