@@ -210,7 +210,7 @@ func NewMemDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	slice.id = sliceId
 	slice.numWriters = sysconf["numSliceWriters"].Int()
 	slice.maxRollbacks = sysconf["settings.moi.recovery.max_rollbacks"].Int()
-	slice.maxDiskSnaps = slice.maxRollbacks + 2 //make config if required
+	slice.maxDiskSnaps = sysconf["recovery.max_disksnaps"].Int()
 	slice.numVbuckets = sysconf["numVbuckets"].Int()
 	slice.clusterAddr = sysconf["clusterAddr"].String()
 
@@ -1567,6 +1567,7 @@ func (mdb *memdbSlice) UpdateConfig(cfg common.Config) {
 	oldCfg := mdb.sysconf
 	mdb.sysconf = cfg
 	mdb.maxRollbacks = cfg["settings.moi.recovery.max_rollbacks"].Int()
+	mdb.maxDiskSnaps = cfg["recovery.max_disksnaps"].Int()
 
 	if keySizeConfigUpdated(cfg, oldCfg) {
 		for i := 0; i < len(mdb.keySzConfChanged); i++ {

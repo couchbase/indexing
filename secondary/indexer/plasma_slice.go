@@ -192,7 +192,7 @@ func newPlasmaSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	slice.numVbuckets = sysconf["numVbuckets"].Int()
 
 	slice.maxRollbacks = sysconf["settings.plasma.recovery.max_rollbacks"].Int()
-	slice.maxDiskSnaps = slice.maxRollbacks + 2 //make config if required
+	slice.maxDiskSnaps = sysconf["recovery.max_disksnaps"].Int()
 
 	updatePlasmaConfig(sysconf)
 	if sysconf["plasma.UseQuotaTuner"].Bool() {
@@ -2106,6 +2106,7 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 		mdb.backstore.EnableLSSPageSMO = mdb.sysconf["plasma.enableLSSPageSMO"].Bool()
 	}
 	mdb.maxRollbacks = cfg["settings.plasma.recovery.max_rollbacks"].Int()
+	mdb.maxDiskSnaps = cfg["recovery.max_disksnaps"].Int()
 
 	if keySizeConfigUpdated(cfg, oldCfg) {
 		for i := 0; i < len(mdb.keySzConfChanged); i++ {
