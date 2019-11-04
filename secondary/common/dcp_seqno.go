@@ -592,7 +592,11 @@ func CollectMinSeqnos(kvfeeds map[string]*kvConn) (l_seqnos []uint64, err error)
 
 		for vbno, seqno := range kv_seqnos {
 			prev := seqnos[vbno]
-			if prev > seqno {
+			//in case of no replica, seqnum is 0
+			if prev == 0 {
+				seqnos[vbno] = seqno
+			} else if prev > seqno &&
+				seqno != 0 {
 				seqnos[vbno] = seqno
 			}
 		}

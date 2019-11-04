@@ -1437,8 +1437,8 @@ func (mdb *plasmaSlice) cleanupOldRecoveryPoints() {
 				mdb.mainstore.RemoveRecoveryPoint(mRPs[i])
 			} else {
 				logging.Infof("PlasmaSlice Slice Id %v, IndexInstId %v, PartitionId %v "+
-					"Skipped recovery point cleanup. num RPs %v ",
-					mdb.id, mdb.idxInstId, mdb.idxPartnId, len(mRPs))
+					"Skipped mainstore recovery point cleanup. num RPs %v ",
+					mdb.id, mdb.idxInstId, mdb.idxPartnId, len(mRPs)-i)
 				break
 			}
 		}
@@ -1467,8 +1467,8 @@ func (mdb *plasmaSlice) cleanupOldRecoveryPoints() {
 					mdb.backstore.RemoveRecoveryPoint(bRPs[i])
 				} else {
 					logging.Infof("PlasmaSlice Slice Id %v, IndexInstId %v, PartitionId %v "+
-						"Skipped recovery point cleanup. num RPs %v ",
-						mdb.id, mdb.idxInstId, mdb.idxPartnId, len(bRPs))
+						"Skipped backstore recovery point cleanup. num RPs %v ",
+						mdb.id, mdb.idxInstId, mdb.idxPartnId, len(bRPs)-i)
 					break
 				}
 

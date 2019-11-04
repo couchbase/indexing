@@ -1059,7 +1059,7 @@ func (mdb *memdbSlice) cleanupOldSnapshotFiles(keepn int) {
 			} else {
 				logging.Infof("MemDBSlice Slice Id %v, IndexInstId %v, PartitionId %v "+
 					"Skipped disk snapshot cleanup %v. Num snapshots %v. ",
-					mdb.id, mdb.idxInstId, mdb.idxPartnId, file, len(manifests))
+					mdb.id, mdb.idxInstId, mdb.idxPartnId, file, len(manifests)-i)
 				break
 			}
 		}
