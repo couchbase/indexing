@@ -666,7 +666,7 @@ func BucketFailoverLog(cluster, pooln, bucketn string, numVb int) (fl FailoverLo
 	defer func() {
 		if r := recover(); r != nil {
 			ret = fmt.Errorf("%v", r)
-			logging.Errorf("BucketFailoverLog panic error: %v", ret)
+			logging.Warnf("BucketFailoverLog failed : %v", ret)
 		}
 	}()
 
@@ -674,7 +674,7 @@ func BucketFailoverLog(cluster, pooln, bucketn string, numVb int) (fl FailoverLo
 
 	bucket, err := ConnectBucket(cluster, pooln, bucketn)
 	if err != nil {
-		logging.Errorf("BucketFailoverLog Error: %v", err)
+		logging.Warnf("BucketFailoverLog failed : %v", err)
 		ret = err
 		return
 	}
@@ -704,7 +704,7 @@ func BucketFailoverLog(cluster, pooln, bucketn string, numVb int) (fl FailoverLo
 			failoverLog[int(vbno)] = vbflog
 		}
 	} else {
-		logging.Errorf("BucketFailoverLog Error: %v", err)
+		logging.Warnf("BucketFailoverLog failed: %v", err)
 		ret = err
 		return
 	}

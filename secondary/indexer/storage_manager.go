@@ -880,8 +880,8 @@ func (sm *storageMgr) validateRestartTsVbuuid(bucket string,
 			bucket, numVbuckets)
 
 		if err != nil {
-			logging.Errorf("StorageMgr::validateRestartTsVbuuid Bucket %v. "+
-				"Error fetching failover log %v", bucket, err)
+			logging.Warnf("StorageMgr::validateRestartTsVbuuid Bucket %v. "+
+				"Error fetching failover log %v. Retrying(%v).", bucket, err, i+1)
 			time.Sleep(time.Second)
 			continue
 		} else {
