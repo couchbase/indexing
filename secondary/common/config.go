@@ -2314,6 +2314,15 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.recovery.max_disksnaps": ConfigValue{
+		4,
+		"Maximum number of disk snapshots for recovery. If KV replica is behind active, " +
+			"indexer would retain upto max_disksnaps for better safety against failover." +
+			"This setting must be greater than or equal to max_rollbacks.",
+		4,
+		false, // mutable
+		false, // case-insensitive
+	},
 }
 
 // NewConfig from another

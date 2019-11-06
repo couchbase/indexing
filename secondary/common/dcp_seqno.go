@@ -592,7 +592,11 @@ func CollectMinSeqnos(kvfeeds map[string]*kvConn) (l_seqnos []uint64, err error)
 
 		for vbno, seqno := range kv_seqnos {
 			prev := seqnos[vbno]
-			if prev > seqno {
+			//in case of no replica, seqnum is 0
+			if prev == 0 {
+				seqnos[vbno] = seqno
+			} else if prev > seqno &&
+				seqno != 0 {
 				seqnos[vbno] = seqno
 			}
 		}
@@ -662,7 +666,7 @@ func BucketFailoverLog(cluster, pooln, bucketn string, numVb int) (fl FailoverLo
 	defer func() {
 		if r := recover(); r != nil {
 			ret = fmt.Errorf("%v", r)
-			logging.Errorf("BucketFailoverLog panic error: %v", ret)
+			logging.Warnf("BucketFailoverLog failed : %v", ret)
 		}
 	}()
 
@@ -670,7 +674,7 @@ func BucketFailoverLog(cluster, pooln, bucketn string, numVb int) (fl FailoverLo
 
 	bucket, err := ConnectBucket(cluster, pooln, bucketn)
 	if err != nil {
-		logging.Errorf("BucketFailoverLog Error: %v", err)
+		logging.Warnf("BucketFailoverLog failed : %v", err)
 		ret = err
 		return
 	}
@@ -700,7 +704,7 @@ func BucketFailoverLog(cluster, pooln, bucketn string, numVb int) (fl FailoverLo
 			failoverLog[int(vbno)] = vbflog
 		}
 	} else {
-		logging.Errorf("BucketFailoverLog Error: %v", err)
+		logging.Warnf("BucketFailoverLog failed: %v", err)
 		ret = err
 		return
 	}
