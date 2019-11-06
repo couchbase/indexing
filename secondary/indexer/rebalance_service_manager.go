@@ -2691,6 +2691,9 @@ func (m *ServiceMgr) genTransferToken(indexInst *c.IndexInst, sourceId string, d
 	}
 
 	partitions, versions := tt.IndexInst.Pc.GetAllPartitionIds()
+	for i := 0; i < len(versions); i++ {
+		versions[i] = versions[i] + 1
+	}
 	tt.IndexInst.Defn.InstVersion = tt.IndexInst.Version + 1
 	tt.IndexInst.Defn.ReplicaId = tt.IndexInst.ReplicaId
 	tt.IndexInst.Defn.NumPartitions = uint32(tt.IndexInst.Pc.GetNumPartitions())
