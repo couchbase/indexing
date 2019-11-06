@@ -2006,6 +2006,7 @@ func (mdb *plasmaSlice) Statistics() (StorageStatistics, error) {
 	var internalData []string
 
 	var numRecsMem, numRecsDisk, cacheHits, cacheMiss, docidCount int64
+	var msCompressionRatio, bsCompressionRatio float64
 	pStats := mdb.mainstore.GetStats()
 
 	docidCount = pStats.ItemsCount
@@ -2017,6 +2018,7 @@ func (mdb *plasmaSlice) Statistics() (StorageStatistics, error) {
 	sts.InsertBytes = pStats.BytesWritten
 	sts.GetBytes = pStats.LSSBlkReadBytes
 	checkpointFileSize := pStats.CheckpointSize
+	msCompressionRatio = getCompressionRatio(pStats)
 
 	internalData = append(internalData, fmt.Sprintf("{\n\"MainStore\":\n%s", pStats))
 	if !mdb.isPrimary {
@@ -2027,6 +2029,7 @@ func (mdb *plasmaSlice) Statistics() (StorageStatistics, error) {
 		sts.InsertBytes += pStats.BytesWritten
 		sts.GetBytes += pStats.LSSBlkReadBytes
 		checkpointFileSize += pStats.CheckpointSize
+		bsCompressionRatio = getCompressionRatio(pStats)
 	}
 
 	internalData = append(internalData, "}\n")
@@ -2035,11 +2038,12 @@ func (mdb *plasmaSlice) Statistics() (StorageStatistics, error) {
 	if mdb.hasPersistence {
 		sts.DiskSize = mdb.mainstore.GetLSSUsedSpace()
 		_, sts.DataSize, sts.LogSpace = mdb.mainstore.GetLSSInfo()
+		sts.DataSize = (int64)((float64)(sts.DataSize) * msCompressionRatio)
 		if !mdb.isPrimary {
 			bsDiskSz := mdb.backstore.GetLSSUsedSpace()
 			sts.DiskSize += bsDiskSz
 			_, bsDataSize, bsLogSpace := mdb.backstore.GetLSSInfo()
-			sts.DataSize += bsDataSize
+			sts.DataSize += (int64)((float64)(bsDataSize) * bsCompressionRatio)
 			sts.LogSpace += bsLogSpace
 		}
 		sts.DiskSize += checkpointFileSize
@@ -3290,4 +3294,13 @@ func deleteFreeWriters(instId common.IndexInstId) {
 	freeWriters.mutex.Lock()
 	defer freeWriters.mutex.Unlock()
 	delete(freeWriters.tokens, instId)
+}
+
+func getCompressionRatio(pStats plasma.Stats) float64 {
+	marshalledData := (float64)(pStats.PageBytesMarshalled)
+	compressedData := (float64)(pStats.PageBytesCompressed)
+	if compressedData > 0 {
+		return (marshalledData / compressedData)
+	}
+	return 1
 }
