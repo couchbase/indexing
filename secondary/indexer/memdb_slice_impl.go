@@ -1157,6 +1157,12 @@ func (mdb *memdbSlice) resetStores() {
 	prev := atomic.LoadUint64(&mdb.committedCount)
 	atomic.AddInt64(&totalMemDBItems, -int64(prev))
 	mdb.committedCount = 0
+
+	mdb.resetStats()
+}
+
+func (mdb *memdbSlice) resetStats() {
+
 	mdb.idxStats.itemsCount.Set(0)
 
 	resetKeySizeStats(mdb.idxStats)
@@ -1164,6 +1170,12 @@ func (mdb *memdbSlice) resetStores() {
 
 	mdb.idxStats.backstoreRawDataSize.Set(0)
 	mdb.idxStats.rawDataSize.Set(0)
+
+	mdb.idxStats.lastDiskBytes.Set(0)
+	mdb.idxStats.lastNumItemsFlushed.Set(0)
+	mdb.idxStats.lastNumDocsIndexed.Set(0)
+	mdb.idxStats.lastNumFlushQueued.Set(0)
+	mdb.idxStats.lastMutateGatherTime.Set(0)
 }
 
 //Rollback slice to given snapshot. Return error if

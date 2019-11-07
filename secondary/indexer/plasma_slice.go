@@ -1603,6 +1603,12 @@ func (mdb *plasmaSlice) resetStores() {
 	mdb.initStores()
 	mdb.startWriters(numWriters)
 	mdb.setCommittedCount()
+
+	mdb.resetStats()
+}
+
+func (mdb *plasmaSlice) resetStats() {
+
 	mdb.idxStats.itemsCount.Set(0)
 
 	resetKeySizeStats(mdb.idxStats)
@@ -1611,6 +1617,13 @@ func (mdb *plasmaSlice) resetStores() {
 
 	mdb.idxStats.backstoreRawDataSize.Set(0)
 	mdb.idxStats.rawDataSize.Set(0)
+
+	mdb.idxStats.lastDiskBytes.Set(0)
+	mdb.idxStats.lastNumItemsFlushed.Set(0)
+	mdb.idxStats.lastNumDocsIndexed.Set(0)
+	mdb.idxStats.lastNumFlushQueued.Set(0)
+	mdb.idxStats.lastMutateGatherTime.Set(0)
+
 }
 
 func (mdb *plasmaSlice) Rollback(o SnapshotInfo) error {
