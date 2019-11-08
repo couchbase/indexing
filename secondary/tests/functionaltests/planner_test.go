@@ -11,11 +11,13 @@ package functionaltests
 
 import (
 	"fmt"
+	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/planner"
 	"log"
 	"math"
 	"testing"
+	"time"
 )
 
 //////////////////////////////////////////////////////////////
@@ -368,5 +370,137 @@ func minMemoryTest(t *testing.T) {
 		if total != 4 {
 			t.Fatal(fmt.Sprintf("Replica is not repaired. num replica = %v", total))
 		}
+	}()
+
+	func() {
+		log.Printf("-------------------------------------------")
+		log.Printf("Minimum memory test 6: rebalance with min memory > quota")
+
+		plan, err := planner.ReadPlan("../testdata/planner/plan/min-memory-plan.json")
+		FailTestIfError(err, "Fail to read plan", t)
+		plan.MemQuota = 10
+		count1 := len(plan.Placement[0].Indexes)
+		count2 := len(plan.Placement[1].Indexes)
+
+		config := planner.DefaultRunConfig()
+		config.UseLive = true
+		config.Resize = false
+
+		s := planner.NewSimulator()
+		p, _, err := s.RunSingleTest(config, planner.CommandRebalance, nil, plan, nil)
+		FailTestIfError(err, "Error in planner test", t)
+
+		if count1 != len(p.Result.Placement[0].Indexes) {
+			t.Fatal(fmt.Sprintf("Index count for indexer1 has changed %v != %v", count1, len(p.Result.Placement[0].Indexes)))
+		}
+
+		if count2 != len(p.Result.Placement[1].Indexes) {
+			t.Fatal(fmt.Sprintf("Index count for indexer2 has changed %v != %v", count2, len(p.Result.Placement[1].Indexes)))
+		}
+	}()
+
+	func() {
+		log.Printf("-------------------------------------------")
+		log.Printf("Minimum memory test 7: rebalance-out with min memory > quota")
+
+		plan, err := planner.ReadPlan("../testdata/planner/plan/min-memory-plan.json")
+		FailTestIfError(err, "Fail to read plan", t)
+		plan.MemQuota = 10
+		plan.Placement[0].MarkDeleted()
+
+		count1 := 0
+		for _, indexer := range plan.Placement {
+			count1 += len(indexer.Indexes)
+		}
+
+		config := planner.DefaultRunConfig()
+		config.UseLive = true
+		config.Resize = false
+
+		s := planner.NewSimulator()
+		p, _, err := s.RunSingleTest(config, planner.CommandRebalance, nil, plan, nil)
+		FailTestIfError(err, "Error in planner test", t)
+
+		if len(p.Result.Placement) != 1 {
+			t.Fatal("There is more than 1 node after rebalance-out")
+		}
+
+		count2 := 0
+		for _, indexer := range p.Result.Placement {
+			count2 += len(indexer.Indexes)
+		}
+
+		if count1 != count2 {
+			t.Fatal(fmt.Sprintf("Indexes are dropped after rebalance-out %v != %v", count1, count2))
+		}
+	}()
+
+	func() {
+		log.Printf("-------------------------------------------")
+		log.Printf("Minimum memory test 8: plan with min memory > quota")
+
+		plan, err := planner.ReadPlan("../testdata/planner/plan/min-memory-plan.json")
+		FailTestIfError(err, "Fail to read plan", t)
+		plan.MemQuota = 10
+
+		config := planner.DefaultRunConfig()
+		config.UseLive = true
+		config.Resize = false
+
+		var spec planner.IndexSpec
+		spec.DefnId = common.IndexDefnId(time.Now().UnixNano())
+		spec.Name = "test8"
+		spec.Bucket = "test8"
+		spec.IsPrimary = false
+		spec.SecExprs = []string{"test8"}
+		spec.WhereExpr = ""
+		spec.Deferred = false
+		spec.Immutable = false
+		spec.IsArrayIndex = false
+		spec.Desc = []bool{false}
+		spec.NumPartition = 1
+		spec.PartitionScheme = string(common.SINGLE)
+		spec.HashScheme = uint64(common.CRC32)
+		spec.PartitionKeys = []string(nil)
+		spec.Replica = 1
+		spec.RetainDeletedXATTR = false
+		spec.ExprType = string(common.N1QL)
+		spec.Using = string(common.PlasmaDB)
+
+		s := planner.NewSimulator()
+		p, _, err := s.RunSingleTest(config, planner.CommandPlan, nil, plan, []*planner.IndexSpec{&spec})
+		FailTestIfError(err, "Error in planner test", t)
+
+		found := false
+		for _, indexer := range p.Result.Placement {
+			for _, index := range indexer.Indexes {
+				if index.DefnId == spec.DefnId {
+					found = true
+					break
+				}
+			}
+		}
+
+		if !found {
+			t.Fatal("Fail to find index after placement")
+		}
+	}()
+
+	func() {
+		log.Printf("-------------------------------------------")
+		log.Printf("Minimum memory test 9: single node rebalance with min memory > quota")
+
+		plan, err := planner.ReadPlan("../testdata/planner/plan/min-memory-plan.json")
+		FailTestIfError(err, "Fail to read plan", t)
+		plan.MemQuota = 10
+		plan.Placement = plan.Placement[0:1]
+
+		config := planner.DefaultRunConfig()
+		config.UseLive = true
+		config.Resize = false
+
+		s := planner.NewSimulator()
+		_, _, err = s.RunSingleTest(config, planner.CommandRebalance, nil, plan, nil)
+		FailTestIfError(err, "Error in planner test", t)
 	}()
 }

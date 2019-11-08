@@ -558,14 +558,27 @@ func (p *SAPlanner) Plan(command CommandType, solution *Solution) (*Solution, er
 			solution.removeIndexes(optionals)
 		}
 
-		// After 6 tries, disable resource constraint check if there are deleted nodes
-		if i > 6 && solution.numDeletedNode != 0 {
-			solution.enforceConstraint = false
+		// After 6 tries, disable resource constraint check needed
+		if i == 5 && solution.enforceConstraint {
+			// can relax constraint if there is deleted node or it is not rebalancing
+			solution.enforceConstraint = !(solution.numDeletedNode > 0 || solution.command == CommandPlan || solution.command == CommandRepair)
+			if !solution.enforceConstraint {
+				logging.Warnf("Unable to find a solution with rersource costraint.  Relax resource constraint check.")
+			}
 		}
 
 		// If cannot find a solution after 9 tries and there are deleted nodes, then disable exclude flag.
-		if i > 9 && solution.numDeletedNode != 0 {
+		if i == 9 && solution.numDeletedNode != 0 {
 			solution.enableExclude = false
+		}
+	}
+
+	// Ignore error for rebalancing error when there is no deleted node
+	if err != nil && (solution.command == CommandRebalance || solution.command == CommandSwap) {
+		if solution.numDeletedNode == 0 {
+			err = nil
+			p.Result = solution
+			result = solution
 		}
 	}
 
@@ -4243,6 +4256,7 @@ func (o *IndexUsage) GetResidentRatio(useLive bool) float64 {
 	var ratio float64
 	if useLive {
 		ratio = float64(o.ActualResidentPercent)
+		return ratio
 	} else {
 		ratio = o.ResidentRatio
 	}
