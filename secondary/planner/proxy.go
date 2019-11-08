@@ -503,9 +503,8 @@ func getIndexStats(clusterUrl string, plan *Plan, config common.Config) error {
 				index.ActualResidentPercent = uint64(residentPercent.(float64))
 			}
 
-			// data_size is the total key size of index, excluding back index overhead.
-			// Therefore data_size is typically smaller than index sizing equation which
-			// includes overhead for back-index.
+			// data_size is the total key size of index, including back index.
+			// data_size for MOI is 0.
 			key = fmt.Sprintf("%v:%v:data_size", index.Bucket, indexName)
 			if dataSize, ok := statsMap[key]; ok {
 				index.ActualDataSize = uint64(dataSize.(float64))
@@ -702,8 +701,7 @@ func getIndexStats(clusterUrl string, plan *Plan, config common.Config) error {
 							dataSize = dataSize * 3
 						}
 					}
-					keySize := dataSize / index.ActualNumDocs
-					index.ActualMemMin = uint64(float64((114+keySize)*index.ActualNumDocs*2) * minRatio)
+					index.ActualMemMin = uint64(float64(dataSize) * minRatio)
 				}
 			}
 

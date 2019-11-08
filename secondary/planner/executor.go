@@ -378,6 +378,25 @@ func verifyDuplicateIndex(plan *Plan, indexSpecs []*IndexSpec) error {
 	return nil
 }
 
+func FindIndexReplicaNodes(clusterUrl string, nodes []string, defnId common.IndexDefnId) ([]string, error) {
+
+	plan, err := RetrievePlanFromCluster(clusterUrl, nodes)
+	if err != nil {
+		return nil, fmt.Errorf("Unable to read index layout from cluster %v. err = %s", clusterUrl, err)
+	}
+
+	replicaNodes := make([]string, 0, len(plan.Placement))
+	for _, indexer := range plan.Placement {
+		for _, index := range indexer.Indexes {
+			if index.DefnId == defnId {
+				replicaNodes = append(replicaNodes, indexer.NodeId)
+			}
+		}
+	}
+
+	return replicaNodes, nil
+}
+
 func ExecuteReplicaRepair(clusterUrl string, defnId common.IndexDefnId, increment int, nodes []string, override bool) (*Solution, error) {
 
 	plan, err := RetrievePlanFromCluster(clusterUrl, nodes)
