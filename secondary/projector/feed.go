@@ -1118,11 +1118,10 @@ func (feed *Feed) shutdownVbuckets(
 					feed.logPrefix, opaque, vbnos)
 			}
 		} else {
-			// in async mode, clear out the book keeping right away.
-			vbnos = c.Vbno32to16(ts.GetVbnos())
-			feed.actTss[bucketn] = actTs.FilterByVbuckets(vbnos)   // :SideEffect:
-			feed.reqTss[bucketn] = reqTs.FilterByVbuckets(vbnos)   // :SideEffect:
-			feed.rollTss[bucketn] = rollTs.FilterByVbuckets(vbnos) // :SideEffect:
+			// in async mode, do not clear out the book keeping.
+			// let stream end clear the book keeping. This ensures
+			// another stream request cannot be made for a vb while
+			// its close stream request is in progress.
 		}
 	}
 	return err
