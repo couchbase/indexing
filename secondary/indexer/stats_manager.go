@@ -715,8 +715,6 @@ func (is IndexerStats) GetStats(getPartition bool, skipEmpty bool,
 		if hostname, ok := nodeToHostMap[nodeUUID]; ok {
 			newPrjAddr := fmt.Sprintf("%v/%v", stream, hostname)
 			addStat(newPrjAddr+"/projector_latency", latency.Value())
-		} else {
-			logging.Errorf("StatsManager: Error in book-keeping. NodeUUID: %v, not a part of nodeToHostMap", nodeUUID)
 		}
 	}
 
