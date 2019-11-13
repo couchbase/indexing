@@ -858,9 +858,9 @@ var SystemConfig = Config{
 	},
 
 	"indexer.stats_cache_timeout": ConfigValue{
-		uint64(5000),
+		uint64(3000),
 		"Stats cache ttl in millis",
-		uint64(5000),
+		uint64(3000),
 		true,  // immutable
 		false, // case-insensitive
 	},
