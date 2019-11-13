@@ -140,6 +140,8 @@ type IndexStats struct {
 	numDocsQueued             stats.Int64Val
 	deleteBytes               stats.Int64Val
 	dataSize                  stats.Int64Val
+	dataSizeOnDisk            stats.Int64Val
+	logSpaceOnDisk            stats.Int64Val
 	rawDataSize               stats.Int64Val // Sum of all data inserted into main store and back store
 	backstoreRawDataSize      stats.Int64Val // Sum of all data inserted into back store
 	docidCount                stats.Int64Val
@@ -308,6 +310,8 @@ func (s *IndexStats) Init() {
 	s.numDocsQueued.Init()
 	s.deleteBytes.Init()
 	s.dataSize.Init()
+	s.dataSizeOnDisk.Init()
+	s.logSpaceOnDisk.Init()
 	s.rawDataSize.Init()
 	s.backstoreRawDataSize.Init()
 	s.docidCount.Init()
@@ -836,6 +840,17 @@ func (is IndexerStats) GetStats(getPartition bool, skipEmpty bool,
 			s.partnInt64Stats(func(ss *IndexStats) int64 {
 				return ss.dataSize.Value()
 			}))
+
+		// partition stats
+		addStat("data_size_on_disk",
+			s.partnInt64Stats(func(ss *IndexStats) int64 {
+				return ss.dataSizeOnDisk.Value()
+			}))
+		addStat("log_space_on_disk",
+			s.partnInt64Stats(func(ss *IndexStats) int64 {
+				return ss.logSpaceOnDisk.Value()
+			}))
+
 		// partition stats
 		addStat("raw_data_size",
 			s.partnInt64Stats(func(ss *IndexStats) int64 {
