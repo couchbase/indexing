@@ -574,7 +574,9 @@ func (c *Client) GetPool(name string) (p Pool, err error) {
 		return p, errors.New("No pool named " + name)
 	}
 
-	err = c.parseURLResponse(poolURI, &p)
+	if err = c.parseURLResponse(poolURI, &p); err != nil {
+		return
+	}
 
 	p.client = *c
 

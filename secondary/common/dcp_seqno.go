@@ -99,6 +99,17 @@ func (r *vbSeqnosReader) GetSeqnos() (seqs []uint64, err error) {
 	return
 }
 
+func (r *vbSeqnosReader) enqueueRequest(req interface{}) () {
+	defer func() {
+		if r := recover(); r != nil {
+			//if requestCh is closed, reader has closed already
+		}
+	}()
+
+	r.requestCh <- req
+	return
+}
+
 // This routine is responsible for computing request batches on the fly
 // and issue single 'dcp seqno' per batch.
 func (r *vbSeqnosReader) Routine() {
@@ -136,7 +147,7 @@ func (r *vbSeqnosReader) Routine() {
 
 				case vbMinSeqnosRequest:
 					//anything else goes back
-					r.requestCh <- sreq
+					r.enqueueRequest(sreq)
 
 				}
 			}
@@ -170,7 +181,7 @@ func (r *vbSeqnosReader) Routine() {
 
 				case vbSeqnosRequest:
 					//anything else goes back
-					r.requestCh <- sreq
+					r.enqueueRequest(sreq)
 
 				}
 			}

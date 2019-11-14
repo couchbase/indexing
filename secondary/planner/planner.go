@@ -5057,6 +5057,7 @@ func (p *RandomPlacement) findLeastUsedAndPopulatedTargetNode(s *Solution, sourc
 	indexers := make([]*IndexerNode, 0, len(s.Placement))
 	loads := make([]int64, 0, len(s.Placement))
 	total := int64(0)
+	violateHA := !s.constraint.SatisfyServerGroupConstraint(s, source, exclude.ServerGroup)
 
 	for _, indexer := range s.Placement {
 		if indexer.ExcludeIn(s) {
@@ -5073,7 +5074,10 @@ func (p *RandomPlacement) findLeastUsedAndPopulatedTargetNode(s *Solution, sourc
 
 		if s.constraint.CanAddIndex(s, indexer, source) == NoViolation {
 			memPerIndex := int64(indexer.computeFreeMemPerEmptyIndex(s, max, 1))
-			if memPerIndex > 0 && (exclude.isDelete || memPerIndex > currentMemPerIndex) {
+			// If current solution has ServerGroupViolation AND moving the index to
+			// the target indexer node is resolving that ServerGroupViolation, then
+			// allow the index movement by ignoring free-memory-per-empty-index check.
+			if memPerIndex > 0 && (exclude.isDelete || memPerIndex > currentMemPerIndex || violateHA) {
 				loads = append(loads, memPerIndex)
 				indexers = append(indexers, indexer)
 				total += memPerIndex
