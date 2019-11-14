@@ -266,6 +266,7 @@ func (slice *plasmaSlice) initStores() error {
 	cfg.Compression = slice.sysconf["plasma.compression"].String()
 	cfg.MaxPageSize = slice.sysconf["plasma.MaxPageSize"].Int()
 	cfg.AutoLSSCleaning = !slice.sysconf["settings.compaction.plasma.manual"].Bool()
+	cfg.EnforceKeyRange = slice.sysconf["plasma.enforceKeyRange"].Bool()
 
 	if slice.numPartitions != 1 {
 		cfg.LSSCleanerConcurrency = 1
@@ -2080,6 +2081,7 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 	updatePlasmaConfig(cfg)
 	mdb.mainstore.AutoTuneLSSCleaning = cfg["plasma.AutoTuneLSSCleaner"].Bool()
 	mdb.mainstore.MaxPageSize = cfg["plasma.MaxPageSize"].Int()
+	mdb.mainstore.EnforceKeyRange = cfg["plasma.enforceKeyRange"].Bool()
 
 	mdb.mainstore.CheckpointInterval = time.Second * time.Duration(cfg["plasma.checkpointInterval"].Int())
 	mdb.mainstore.MaxPageLSSSegments = mdb.sysconf["plasma.mainIndex.maxLSSPageSegments"].Int()
@@ -2103,6 +2105,7 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 	if !mdb.isPrimary {
 		mdb.backstore.AutoTuneLSSCleaning = cfg["plasma.AutoTuneLSSCleaner"].Bool()
 		mdb.backstore.MaxPageSize = cfg["plasma.MaxPageSize"].Int()
+		mdb.backstore.EnforceKeyRange = cfg["plasma.enforceKeyRange"].Bool()
 		mdb.backstore.CheckpointInterval = mdb.mainstore.CheckpointInterval
 		mdb.backstore.MaxPageLSSSegments = mdb.sysconf["plasma.backIndex.maxLSSPageSegments"].Int()
 		mdb.backstore.LSSCleanerThreshold = mdb.sysconf["plasma.backIndex.LSSFragmentation"].Int()
