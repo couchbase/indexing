@@ -266,6 +266,7 @@ func (slice *plasmaSlice) initStores() error {
 	cfg.Compression = slice.sysconf["plasma.compression"].String()
 	cfg.MaxPageSize = slice.sysconf["plasma.MaxPageSize"].Int()
 	cfg.AutoLSSCleaning = !slice.sysconf["settings.compaction.plasma.manual"].Bool()
+	cfg.EnforceKeyRange = slice.sysconf["plasma.enforceKeyRange"].Bool()
 
 	if slice.numPartitions != 1 {
 		cfg.LSSCleanerConcurrency = 1
@@ -2037,12 +2038,13 @@ func (mdb *plasmaSlice) Statistics() (StorageStatistics, error) {
 	sts.InternalData = internalData
 	if mdb.hasPersistence {
 		sts.DiskSize = mdb.mainstore.GetLSSUsedSpace()
-		_, sts.DataSize, sts.LogSpace = mdb.mainstore.GetLSSInfo()
-		sts.DataSize = (int64)((float64)(sts.DataSize) * msCompressionRatio)
+		_, sts.DataSizeOnDisk, sts.LogSpace = mdb.mainstore.GetLSSInfo()
+		sts.DataSize = (int64)((float64)(sts.DataSizeOnDisk) * msCompressionRatio)
 		if !mdb.isPrimary {
 			bsDiskSz := mdb.backstore.GetLSSUsedSpace()
 			sts.DiskSize += bsDiskSz
 			_, bsDataSize, bsLogSpace := mdb.backstore.GetLSSInfo()
+			sts.DataSizeOnDisk += bsDataSize
 			sts.DataSize += (int64)((float64)(bsDataSize) * bsCompressionRatio)
 			sts.LogSpace += bsLogSpace
 		}
@@ -2080,6 +2082,7 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 	updatePlasmaConfig(cfg)
 	mdb.mainstore.AutoTuneLSSCleaning = cfg["plasma.AutoTuneLSSCleaner"].Bool()
 	mdb.mainstore.MaxPageSize = cfg["plasma.MaxPageSize"].Int()
+	mdb.mainstore.EnforceKeyRange = cfg["plasma.enforceKeyRange"].Bool()
 
 	mdb.mainstore.CheckpointInterval = time.Second * time.Duration(cfg["plasma.checkpointInterval"].Int())
 	mdb.mainstore.MaxPageLSSSegments = mdb.sysconf["plasma.mainIndex.maxLSSPageSegments"].Int()
@@ -2103,6 +2106,7 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 	if !mdb.isPrimary {
 		mdb.backstore.AutoTuneLSSCleaning = cfg["plasma.AutoTuneLSSCleaner"].Bool()
 		mdb.backstore.MaxPageSize = cfg["plasma.MaxPageSize"].Int()
+		mdb.backstore.EnforceKeyRange = cfg["plasma.enforceKeyRange"].Bool()
 		mdb.backstore.CheckpointInterval = mdb.mainstore.CheckpointInterval
 		mdb.backstore.MaxPageLSSSegments = mdb.sysconf["plasma.backIndex.maxLSSPageSegments"].Int()
 		mdb.backstore.LSSCleanerThreshold = mdb.sysconf["plasma.backIndex.LSSFragmentation"].Int()

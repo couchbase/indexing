@@ -1019,6 +1019,13 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
+	"indexer.plasma.enforceKeyRange": ConfigValue{
+		true,
+		"Enforce key range check when a page is mutated or compacted",
+		true,
+		false,
+		false,
+	},
 	"indexer.plasma.flushBufferSize": ConfigValue{
 		1024 * 1024,
 		"Flush buffer size",

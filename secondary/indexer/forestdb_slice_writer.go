@@ -1498,11 +1498,13 @@ func (fdb *fdbSlice) Statistics() (StorageStatistics, error) {
 
 	fdb.statFdLock.Lock()
 	sts.DataSize = int64(fdb.statFd.EstimateSpaceUsed()) + extraSnapDataSize
+	sts.DataSizeOnDisk = sts.DataSize
 	sts.MemUsed = 0 // as of now this stat is unsupported for FDB, until we figure out a way to calculate it accurately
 	sts.NeedUpgrade = fdb.fileVersion < forestdb.FdbV2FileVersion
 	fdb.statFdLock.Unlock()
 
 	sts.DiskSize = sz
+	sts.LogSpace = sts.DiskSize
 	sts.ExtraSnapDataSize = extraSnapDataSize
 
 	sts.GetBytes = atomic.LoadInt64(&fdb.get_bytes)
@@ -1521,6 +1523,8 @@ func (fdb *fdbSlice) Statistics() (StorageStatistics, error) {
 		sts.InternalData = internalData
 	}
 
+	// Incase of fdb, set rawDataSize to DataSize
+	fdb.idxStats.rawDataSize.Set(sts.DataSize)
 	return sts, nil
 }
 

@@ -1096,6 +1096,8 @@ func (s *storageMgr) handleStats(cmd Message) {
 		// This nil check is a workaround to avoid indexer crashes for now.
 		if idxStats != nil {
 			idxStats.dataSize.Set(st.Stats.DataSize)
+			idxStats.dataSizeOnDisk.Set(st.Stats.DataSizeOnDisk)
+			idxStats.logSpaceOnDisk.Set(st.Stats.LogSpace)
 			idxStats.diskSize.Set(st.Stats.DiskSize)
 			idxStats.memUsed.Set(st.Stats.MemUsed)
 			if common.GetStorageMode() != common.MOI {
@@ -1155,7 +1157,7 @@ func (s *storageMgr) getIndexStorageStats() []IndexStorageStats {
 
 		for _, partnInst := range partnMap {
 			var internalData []string
-			var dataSz, logSpace, diskSz, memUsed, extraSnapDataSize int64
+			var dataSz, dataSzOnDisk, logSpace, diskSz, memUsed, extraSnapDataSize int64
 			var getBytes, insertBytes, deleteBytes int64
 			var nslices int64
 			var needUpgrade = false
@@ -1169,6 +1171,7 @@ func (s *storageMgr) getIndexStorageStats() []IndexStorageStats {
 				}
 
 				dataSz += sts.DataSize
+				dataSzOnDisk += sts.DataSizeOnDisk
 				memUsed += sts.MemUsed
 				logSpace += sts.LogSpace
 				diskSz += sts.DiskSize
@@ -1189,6 +1192,7 @@ func (s *storageMgr) getIndexStorageStats() []IndexStorageStats {
 					Bucket:  inst.Defn.Bucket,
 					Stats: StorageStatistics{
 						DataSize:          dataSz,
+						DataSizeOnDisk:    dataSzOnDisk,
 						LogSpace:          logSpace,
 						DiskSize:          diskSz,
 						MemUsed:           memUsed,
@@ -1653,8 +1657,8 @@ func (s IndexStorageStats) getPlasmaFragmentation() float64 {
 	var fragPercent float64
 
 	var wastedSpace int64
-	if s.Stats.DataSize != 0 && s.Stats.LogSpace > s.Stats.DataSize {
-		wastedSpace = s.Stats.LogSpace - s.Stats.DataSize
+	if s.Stats.DataSizeOnDisk != 0 && s.Stats.LogSpace > s.Stats.DataSizeOnDisk {
+		wastedSpace = s.Stats.LogSpace - s.Stats.DataSizeOnDisk
 	}
 
 	if s.Stats.LogSpace > 0 {

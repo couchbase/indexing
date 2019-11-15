@@ -14,19 +14,19 @@ import (
 	"time"
 )
 
-// In case of plasma, fragementation is calculated based on DataSize
-// and LogSpace stat
-// a. DataSize is lss_data_size
+// Fragementation is calculated based on DataSizeOnDisk and LogSpace stat
+// a. DataSize is uncompressed lss_data_size i.e. it is lss_data_size * compression_ratio
+// b. DataSizeOnDisk is lss_data_size
 // b. LogSpace is the size of the fraction of the log that will be
 //    considered during next iteration of cleaning
 // c. DiskSize is lss_used_space + size of Checkpoint info. lss_used_space
 //    is the size of the log on disk (It can include garbaged data marked
 //    by log cleaner)
 //
-// In case of forestDB, fragmentation is calculated based on DataSize and
-// DiskSize stat
+// In case of forestDB, DataSizeOnDisk is same as DataSize, LogSpace is same as DiskSize
 type StorageStatistics struct {
 	DataSize          int64
+	DataSizeOnDisk    int64
 	LogSpace          int64
 	DiskSize          int64
 	MemUsed           int64
