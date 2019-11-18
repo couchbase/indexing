@@ -6,6 +6,7 @@ import (
 	"math"
 	"net"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -20,6 +21,7 @@ var (
 	ErrInvalidService      = errors.New("Invalid service")
 	ErrNodeNotBucketMember = errors.New("Node is not a member of bucket")
 	ErrValidationFailed    = errors.New("ClusterInfo Validation Failed")
+	ErrInvalidVersion      = errors.New("Invalid couchbase-server version")
 )
 
 var ServiceAddrMap map[string]string
@@ -712,6 +714,47 @@ func (c *ClusterInfoCache) GetLocalNodeUUID() string {
 		}
 	}
 	return ""
+}
+
+func (c *ClusterInfoCache) GetServerVersion(nid NodeId) (int, error) {
+	if int(nid) >= len(c.nodes) {
+		return 0, ErrInvalidNodeId
+	}
+
+	// Couchbase-server version will be of the form
+	// <major>.<minor>.<maint_release>-<build_number>-<community/enterprise>
+	// E.g. 6.5.0-0000-enterprise, 6.0.3-2855-enterprise etc.
+	versionStr := strings.Split(c.nodes[nid].Version, ".")
+	if len(versionStr) < 3 {
+		return 0, ErrInvalidVersion
+	}
+
+	var version, minorVersion int
+	var err error
+	if version, err = strconv.Atoi(versionStr[0]); err != nil {
+		return 0, ErrInvalidVersion
+	}
+	if minorVersion, err = strconv.Atoi(versionStr[1]); err != nil {
+		return 0, ErrInvalidVersion
+	}
+
+	if version < 5 {
+		return INDEXER_45_VERSION, nil
+	}
+	if version == 5 {
+		if minorVersion < 5 {
+			return INDEXER_50_VERSION, nil
+		}
+		if minorVersion >= 5 {
+			return INDEXER_55_VERSION, nil
+		}
+	}
+	if version == 6 {
+		if minorVersion >= 5 {
+			return INDEXER_65_VERSION, nil
+		}
+	}
+	return INDEXER_55_VERSION, nil
 }
 
 func (c *ClusterInfoCache) validateCache(isIPv6 bool) bool {

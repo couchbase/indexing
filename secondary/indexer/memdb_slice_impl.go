@@ -1561,6 +1561,7 @@ func (mdb *memdbSlice) Statistics() (StorageStatistics, error) {
 	internalData = append(internalData, "\n}")
 
 	sts.InternalData = internalData
+	sts.DataSize = mdb.mainstore.MemoryInUse()
 	sts.MemUsed = mdb.mainstore.MemoryInUse() + ntMemUsed
 	sts.DiskSize = mdb.diskSize()
 

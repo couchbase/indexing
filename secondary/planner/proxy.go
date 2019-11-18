@@ -446,6 +446,11 @@ func getIndexStats(clusterUrl string, plan *Plan, config common.Config) error {
 				elapsed = uint64(duration.Seconds())
 			}
 		}
+		var indexerVersion int
+		if indexerVersion, err = cinfo.GetServerVersion(nid); err != nil {
+			logging.Errorf("Planner::getIndexStats: Error from reading indexer version for node %v. Error = %v", nodeId, err)
+			return err
+		}
 
 		// cpu core in host.   This is the actual num of cpu core, not cpu quota.
 		/*
@@ -508,6 +513,17 @@ func getIndexStats(clusterUrl string, plan *Plan, config common.Config) error {
 			key = fmt.Sprintf("%v:%v:data_size", index.Bucket, indexName)
 			if dataSize, ok := statsMap[key]; ok {
 				index.ActualDataSize = uint64(dataSize.(float64))
+				// From 6.5, data_size stat contains uncompressed data size for plasma
+				// So, no need to consider the compressed version of data so that other
+				// parameters like ActualKeySize, AvgDocKeySize, AvgSecKeySize does not break
+				if indexerVersion >= common.INDEXER_65_VERSION {
+					if index.StorageMode == common.PlasmaDB {
+						if config["indexer.plasma.useCompression"].Bool() {
+							// factor in compression estimation (compression ratio defaulted to 3)
+							index.ActualDataSize = index.ActualDataSize / 3
+						}
+					}
+				}
 			}
 
 			// memory usage per index
