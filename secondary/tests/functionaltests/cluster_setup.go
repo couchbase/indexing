@@ -87,3 +87,24 @@ func validateServers(nodes []string) error {
 
 	return cluster.ValidateServers(serverAddr, username, password, nodes)
 }
+
+// A 4 node cluster should have index services on Nodes[1], Nodes[2], Nodes[3]
+func is4NodeCluster() bool {
+	status := getClusterStatus()
+	if isNodeIndex(status, clusterconfig.Nodes[1]) && isNodeIndex(status, clusterconfig.Nodes[2]) && isNodeIndex(status, clusterconfig.Nodes[3]) {
+		return true
+	}
+	return false
+}
+
+// A 4 node cluster will have index services on Nodes[1], Nodes[2], Nodes[3]
+func init4NodeCluster(t *testing.T) {
+
+	resetCluster(t)
+	addNode(clusterconfig.Nodes[2], "index", t)
+	addNode(clusterconfig.Nodes[3], "index", t)
+
+	if !is4NodeCluster() {
+		t.Fatalf("Unable to initialize 4 node cluster. Cluster status: %v", getClusterStatus())
+	}
+}
