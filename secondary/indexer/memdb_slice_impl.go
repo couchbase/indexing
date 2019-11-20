@@ -765,14 +765,16 @@ func (mdb *memdbSlice) deletePrimaryIndex(docid []byte, workerId int) (nmut int)
 	// Delete from main index
 	t0 := time.Now()
 	itm := entry.Bytes()
-	mdb.main[workerId].Delete(itm)
-	mdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
+	if success := mdb.main[workerId].Delete(itm); success {
+		mdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
 
-	mdb.idxStats.rawDataSize.Add(0 - int64(len(entry.Bytes())))
-	atomic.AddInt64(&mdb.delete_bytes, int64(len(entry.Bytes())))
+		mdb.idxStats.rawDataSize.Add(0 - int64(len(entry.Bytes())))
+		atomic.AddInt64(&mdb.delete_bytes, int64(len(entry.Bytes())))
+	}
 	mdb.isDirty = true
+	// returning '1' irrespective of delete being successful or not is to preserve
+	// the behaviour of numItemsFlushed
 	return 1
-
 }
 
 func (mdb *memdbSlice) deleteSecIndex(docid []byte, workerId int) int {
