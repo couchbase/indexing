@@ -109,8 +109,8 @@ type gsiKeyspace struct {
 // will return an error when,
 // - GSI cluster is not available.
 // - network partitions / errors.
-func NewGSIIndexer(
-	clusterURL, namespace, keyspace string) (datastore.Indexer, errors.Error) {
+func NewGSIIndexer(clusterURL, namespace, keyspace string,
+	securityconf *datastore.ConnectionSecurityConfig) (datastore.Indexer, errors.Error) {
 
 	l.SetLogLevel(l.Info)
 
@@ -132,7 +132,7 @@ func NewGSIIndexer(
 		return nil, errors.NewError(err, "GSI config instantiation failed")
 	}
 	qconf := conf.SectionConfig("queryport.client.", true /*trim*/)
-	client, err := getSingletonClient(clusterURL, conf)
+	client, err := getSingletonClient(clusterURL, conf, securityconf)
 	if err != nil {
 		l.Errorf("%v GSI instantiation failed: %v", gsi.logPrefix, err)
 		return nil, errors.NewError(err, "GSI client instantiation failed")
@@ -1777,8 +1777,8 @@ func guard2Vbuuid(guard string) uint64 {
 var muclient sync.Mutex
 var singletonClient *qclient.GsiClient
 
-func getSingletonClient(
-	clusterURL string, conf c.Config) (*qclient.GsiClient, error) {
+func getSingletonClient(clusterURL string, conf c.Config,
+	securityconf *datastore.ConnectionSecurityConfig) (*qclient.GsiClient, error) {
 
 	muclient.Lock()
 	defer muclient.Unlock()
@@ -1800,6 +1800,12 @@ func getSingletonClient(
 		}
 
 		l.Infof("creating GsiClient for %v", clusterURL)
+
+		if securityconf != nil {
+			security.Refresh(securityconf.TLSConfig, securityconf.ClusterEncryptionConfig,
+				securityconf.CertFile, securityconf.KeyFile)
+		}
+
 		qconf := conf.SectionConfig("queryport.client.", true /*trim*/)
 		encryptLocalHost := conf["security.encryption.encryptLocalhost"].Bool()
 		client, err := qclient.NewGsiClientWithSettings(clusterURL, qconf, true, encryptLocalHost)
