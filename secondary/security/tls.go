@@ -14,14 +14,15 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
-	"github.com/couchbase/cbauth"
-	"github.com/couchbase/indexing/secondary/logging"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/couchbase/cbauth"
+	"github.com/couchbase/indexing/secondary/logging"
 )
 
 /////////////////////////////////////////////
@@ -78,16 +79,9 @@ func setupClientTLSConfig(host string) (*tls.Config, error) {
 //
 // Set up a TLS client connection.  This function does not close conn upon error.
 //
-func makeTLSConn(conn net.Conn) (net.Conn, error) {
-
-	host := conn.RemoteAddr().String()
+func makeTLSConn(conn net.Conn, hostname, port string) (net.Conn, error) {
 
 	// Setup TLS Config
-	hostname, _, err := net.SplitHostPort(host)
-	if err != nil {
-		return nil, fmt.Errorf("Fail to retrieve host name from %v", host)
-	}
-
 	tlsConfig, err := setupClientTLSConfig(hostname)
 	if err != nil {
 		return nil, err
@@ -117,10 +111,10 @@ func makeTLSConn(conn net.Conn) (net.Conn, error) {
 
 		err = <-errChannel
 		if err != nil {
-			return nil, fmt.Errorf("TLS handshake failed when connecting to %v, err=%v\n", host, err)
+			return nil, fmt.Errorf("TLS handshake failed when connecting to %v, err=%v\n", hostname, err)
 		}
 
-		logging.Infof("TLS connection created for %v", conn.RemoteAddr().String())
+		logging.Infof("TLS connection created for %v", net.JoinHostPort(hostname, port))
 		return tlsConn, nil
 	}
 
@@ -142,15 +136,10 @@ func makeTCPConn(addr string) (net.Conn, error) {
 
 // Secure a TCP connection.   This function will not convert conn to a SSL port.
 // So if encryption is required, conn.RemoteAddr must already be using a SSL port.
-func SecureConn(conn net.Conn) (net.Conn, error) {
+func SecureConn(conn net.Conn, hostname, port string) (net.Conn, error) {
 
-	host, port, err := net.SplitHostPort(conn.RemoteAddr().String())
-	if err != nil {
-		return nil, err
-	}
-
-	if EncryptionRequired(host, port) {
-		return makeTLSConn(conn)
+	if EncryptionRequired(hostname, port) {
+		return makeTLSConn(conn, hostname, port)
 	}
 
 	return conn, nil
@@ -163,7 +152,7 @@ func SecureConn(conn net.Conn) (net.Conn, error) {
 //
 func MakeConn(addr string) (net.Conn, error) {
 
-	addr, err := EncryptPortFromAddr(addr)
+	addr, hostname, port, err := EncryptPortFromAddr(addr)
 	if err != nil {
 		return nil, err
 	}
@@ -173,7 +162,7 @@ func MakeConn(addr string) (net.Conn, error) {
 		return nil, err
 	}
 
-	conn2, err2 := SecureConn(conn)
+	conn2, err2 := SecureConn(conn, hostname, port)
 	if err2 != nil {
 		conn.Close()
 		return nil, err2
@@ -189,7 +178,7 @@ func MakeConn(addr string) (net.Conn, error) {
 //
 func MakeTCPConn(addr string) (*net.TCPConn, error) {
 
-	addr, err := EncryptPortFromAddr(addr)
+	addr, _, _, err := EncryptPortFromAddr(addr)
 	if err != nil {
 		return nil, err
 	}
@@ -289,7 +278,7 @@ func MakeTLSListener(tcpListener net.Listener) (net.Listener, error) {
 //
 func MakeAndSecureTCPListener(addr string) (net.Listener, error) {
 
-	addr, err := EncryptPortFromAddr(addr)
+	addr, _, _, err := EncryptPortFromAddr(addr)
 	if err != nil {
 		return nil, err
 	}
@@ -345,7 +334,7 @@ func SecureListener(listener net.Listener) (net.Listener, error) {
 //
 func MakeListener(addr string) (net.Listener, error) {
 
-	addr, err := EncryptPortFromAddr(addr)
+	addr, _, _, err := EncryptPortFromAddr(addr)
 	if err != nil {
 		return nil, err
 	}
@@ -382,7 +371,7 @@ func GetURL(u string) (*url.URL, error) {
 		return nil, err
 	}
 
-	parsedUrl.Host, err = EncryptPortFromAddr(parsedUrl.Host)
+	parsedUrl.Host, _, _, err = EncryptPortFromAddr(parsedUrl.Host)
 	if err != nil {
 		return nil, err
 	}
@@ -714,7 +703,7 @@ func SecureServer(server *http.Server) error {
 //
 func MakeHTTPServer(addr string) (*http.Server, error) {
 
-	addr, err := EncryptPortFromAddr(addr)
+	addr, _, _, err := EncryptPortFromAddr(addr)
 	if err != nil {
 		return nil, err
 	}

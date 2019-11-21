@@ -12,13 +12,14 @@ package security
 import (
 	"crypto/tls"
 	"fmt"
-	"github.com/couchbase/cbauth"
-	"github.com/couchbase/indexing/secondary/logging"
 	"io/ioutil"
 	"net"
 	"sync"
 	"sync/atomic"
 	"unsafe"
+
+	"github.com/couchbase/cbauth"
+	"github.com/couchbase/indexing/secondary/logging"
 )
 
 //////////////////////////////////////////////////////
@@ -447,15 +448,15 @@ func GetEncryptPorts() map[string]bool {
 	return *(*map[string]bool)(atomic.LoadPointer(&pSecurityContext.encryptPorts))
 }
 
-func EncryptPortFromAddr(addr string) (string, error) {
+func EncryptPortFromAddr(addr string) (string, string, string, error) {
 
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
-		return addr, err
+		return addr, "", "", err
 	}
 
 	port = EncryptPort(host, port)
-	return net.JoinHostPort(host, port), nil
+	return net.JoinHostPort(host, port), host, port, nil
 }
 
 func EncryptPort(host string, port string) string {
