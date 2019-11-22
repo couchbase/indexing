@@ -431,17 +431,12 @@ func (r *mutationStreamReader) maybeSendSync(fastpath bool) bool {
 					prevSnap[bucket].Seqnos[vb] = r.streamWorkers[i].bucketPrevSnapMap[bucket].Seqnos[vb]
 					prevSnap[bucket].Vbuuids[vb] = r.streamWorkers[i].bucketPrevSnapMap[bucket].Vbuuids[vb]
 					prevSnap[bucket].Snapshots[vb] = r.streamWorkers[i].bucketPrevSnapMap[bucket].Snapshots[vb]
-
-					if !hwt[bucket].DisableAlign {
-						hwt[bucket].DisableAlign = r.streamWorkers[i].bucketFilter[bucket].DisableAlign
-					}
 				} else {
 					break
 				}
 				loopCnt++
 			}
 			r.streamWorkers[i].bucketSyncDue[bucket] = false
-			r.streamWorkers[i].bucketFilter[bucket].DisableAlign = false
 			r.streamWorkers[i].lock.Unlock()
 		}
 		if needSync {
@@ -943,17 +938,10 @@ func (w *streamWorker) updateSnapInFilter(meta *MutationMeta,
 
 			if prevSnap.Snapshots[meta.vbucket][1] != filter.Seqnos[meta.vbucket] {
 				logging.Warnf("MutationStreamReader::updateSnapInFilter "+
-					"Bucket %v Stream %v vb %v Partial Snapshot %v-%v Seqno %v vbuuid %v."+
-					"Next Snapshot %v-%v.", meta.bucket,
+					"Bucket %v Stream %v vb %v Partial Snapshot %v-%v Seqno %v vbuuid %v", meta.bucket,
 					w.streamId, meta.vbucket, prevSnap.Snapshots[meta.vbucket][0],
 					prevSnap.Snapshots[meta.vbucket][1], filter.Seqnos[meta.vbucket],
-					prevSnap.Vbuuids[meta.vbucket], filter.Snapshots[meta.vbucket][0],
-					filter.Snapshots[meta.vbucket][1])
-
-				//subsequent complete snapshots can overwrite the partial snapshot
-				//information. Store it separately for sync message.
-				filter.DisableAlign = true
-
+					prevSnap.Vbuuids[meta.vbucket])
 			}
 
 			filter.Snapshots[meta.vbucket][0] = snapStart
