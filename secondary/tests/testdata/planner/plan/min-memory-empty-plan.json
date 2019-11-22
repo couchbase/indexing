@@ -1,0 +1,59 @@
+{
+	"placement": [
+		{
+			"nodeId": "192.168.1.8:9000",
+			"nodeUUID": "c6fe7e12b609acc9767c7b671c908773",
+                        "storageMode":"plasma",
+			"memUsage": 0,
+			"cpuUsage": 0,
+			"memOverhead": 0,
+			"actualDataSize": 0,
+			"actualMemUsage": 0,
+			"actualMemOverhead": 0,
+			"actualMemMin": 0,
+			"indexes": []
+		},
+		{
+			"nodeId": "127.0.0.1:9001",
+			"nodeUUID": "f18c1f3d3c1fabf2a63b51d06f536bf9",
+                        "storageMode":"plasma",
+			"memUsage": 0,
+			"cpuUsage": 0,
+			"memOverhead": 0,
+			"actualMemUsage": 0,
+			"actualDataSize": 0,
+			"actualMemOverhead": 0, 
+			"actualMemMin": 0,
+			"indexes": []
+		},
+		{
+			"nodeId": "127.0.0.1:9002",
+			"nodeUUID": "f28c1f3d3c1fabf2a63b51d06f536bf9",
+                        "storageMode":"plasma",
+			"memUsage": 0,
+			"cpuUsage": 0,
+			"memOverhead": 0,
+			"actualMemUsage": 0,
+			"actualDataSize": 0,
+			"actualMemOverhead": 0, 
+			"actualMemMin": 0,
+			"indexes": []
+               },
+	       {
+			"nodeId": "127.0.0.1:9003",
+			"nodeUUID": "f38c1f3d3c1fabf2a63b51d06f536bf9",
+                        "storageMode":"plasma",
+			"memUsage": 0,
+			"cpuUsage": 0,
+			"memOverhead": 0,
+			"actualMemUsage": 0,
+			"actualDataSize": 0,
+			"actualMemOverhead": 0, 
+			"actualMemMin": 0,
+			"indexes": []
+               }
+	],
+	"memQuota": 512000000,
+	"cpuQuota": 8,
+	"isLive": true
+}
