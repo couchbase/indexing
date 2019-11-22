@@ -1247,7 +1247,12 @@ func (ss *StreamState) updateHWT(streamId common.StreamId,
 		}
 	}
 
-	if partialSnap {
+	if hwt.DisableAlign {
+		logging.Warnf("StreamState::updateHWT Received Partial Snapshot Message in HWT "+
+			"StreamId %v Bucket %v", streamId, bucket)
+	}
+
+	if partialSnap || hwt.DisableAlign {
 		ss.disableSnapAlignForPendingTs(streamId, bucket)
 	}
 

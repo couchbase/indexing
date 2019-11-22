@@ -503,4 +503,56 @@ func minMemoryTest(t *testing.T) {
 		_, _, err = s.RunSingleTest(config, planner.CommandRebalance, nil, plan, nil)
 		FailTestIfError(err, "Error in planner test", t)
 	}()
+
+	func() {
+		log.Printf("-------------------------------------------")
+		log.Printf("Minimum memory test 10: plan with partitioned index on empty cluster")
+
+		plan, err := planner.ReadPlan("../testdata/planner/plan/min-memory-empty-plan.json")
+		FailTestIfError(err, "Fail to read plan", t)
+		plan.MemQuota = 512000000
+
+		config := planner.DefaultRunConfig()
+		config.UseLive = true
+		config.Resize = false
+
+		var spec planner.IndexSpec
+		spec.DefnId = common.IndexDefnId(time.Now().UnixNano())
+		spec.Name = "test10"
+		spec.Bucket = "test10"
+		spec.IsPrimary = false
+		spec.SecExprs = []string{"test10"}
+		spec.WhereExpr = ""
+		spec.Deferred = false
+		spec.Immutable = false
+		spec.IsArrayIndex = false
+		spec.Desc = []bool{false}
+		spec.NumPartition = 4
+		spec.PartitionScheme = string(common.HASH)
+		spec.HashScheme = uint64(common.CRC32)
+		spec.PartitionKeys = []string{"test10"}
+		spec.Replica = 1
+		spec.RetainDeletedXATTR = false
+		spec.ExprType = string(common.N1QL)
+		spec.Using = string(common.PlasmaDB)
+
+		s := planner.NewSimulator()
+		p, _, err := s.RunSingleTest(config, planner.CommandPlan, nil, plan, []*planner.IndexSpec{&spec})
+		FailTestIfError(err, "Error in planner test", t)
+
+		success := true
+		for _, indexer := range p.Result.Placement {
+			if len(indexer.Indexes) != 1 {
+				success = false
+				p.Print()
+				break
+			}
+		}
+
+		if !success {
+			t.Fatal("fail to evently distribute index across noodes")
+			return
+		}
+
+	}()
 }

@@ -852,10 +852,7 @@ func (is IndexerStats) GetStats(getPartition bool, skipEmpty bool,
 			}))
 
 		// partition stats
-		addStat("raw_data_size",
-			s.partnInt64Stats(func(ss *IndexStats) int64 {
-				return rawDataSize
-			}))
+		addStat("raw_data_size", rawDataSize)
 
 		// partition stats
 		addStat("backstore_raw_data_size",

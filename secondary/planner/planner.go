@@ -4237,7 +4237,7 @@ func (o *IndexUsage) GetDrainRate(useLive bool) uint64 {
 func (o *IndexUsage) GetMemMin(useLive bool) uint64 {
 
 	if o.NoUsageInfo {
-		return 0
+		return o.EstimatedMemUsage
 	}
 
 	if useLive {
