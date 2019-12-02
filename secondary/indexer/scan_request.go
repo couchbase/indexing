@@ -1714,19 +1714,42 @@ func (r *ScanRequest) hasAllEqualFiltersUpto(keyPos int) bool {
 	return true
 }
 
-//Returns true if all filters for the given keyPos(index field) are equal
-//and atleast one equal filter exists
+// Returns true if all filters for the given keyPos(index field) are equal
+// and atleast one equal filter exists.
+//
+// (1) "nil" value for high or low means the filter is unbounded on one end
+//     or the both ends. So, it cannot be an equality filter.
+// (2) If Low == High AND
+//     (2.1) If Inclusion is Low or High, then the filter is contradictory.
+//     (2.2) If Inclusion is Neither, then everything will be filtered out,
+//           which is an unexpected behavior.
+// (3) If there are multiple filters, and at least one filter has less number
+//     of composite filters as compared to the input keyPos, then for that
+//     filter the equality is unknown and hence return false.
+// So, for these cases, hasAllEqualFilters returns false.
 func (r *ScanRequest) hasAllEqualFilters(keyPos int) bool {
 
 	found := false
 	for _, scan := range r.Scans {
 		for _, filter := range scan.Filters {
 			if len(filter.CompositeFilters) > keyPos {
-				if !bytes.Equal(filter.CompositeFilters[keyPos].Low.Bytes(), filter.CompositeFilters[keyPos].High.Bytes()) {
+				lowBytes := filter.CompositeFilters[keyPos].Low.Bytes()
+				highBytes := filter.CompositeFilters[keyPos].High.Bytes()
+				if lowBytes == nil || highBytes == nil {
+					return false
+				}
+
+				if !bytes.Equal(lowBytes, highBytes) {
 					return false
 				} else {
+					if filter.CompositeFilters[keyPos].Inclusion != Both {
+						return false
+					}
+
 					found = true
 				}
+			} else {
+				return false
 			}
 		}
 	}
