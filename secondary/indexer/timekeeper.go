@@ -2005,11 +2005,11 @@ func (tk *timekeeper) checkInitialBuildDone(streamId common.StreamId,
 			}
 
 			if initBuildDone {
-				//change all indexes of this bucket to Catchup state if the flush
-				//is for INIT_STREAM
-				if streamId == common.INIT_STREAM {
-					tk.changeIndexStateForBucket(bucket, common.INDEX_STATE_CATCHUP)
-				} else {
+
+				//if MAINT_STREAM doesn't exist for the bucket, no catchup is required
+				status := tk.ss.streamBucketStatus[common.MAINT_STREAM][bucket]
+				if status == STREAM_INACTIVE {
+
 					//cleanup all indexes for bucket as build is done
 					for _, buildInfo := range tk.indexBuildInfo {
 						if buildInfo.indexInst.Defn.Bucket == bucket {
@@ -2019,6 +2019,21 @@ func (tk *timekeeper) checkInitialBuildDone(streamId common.StreamId,
 							delete(tk.indexBuildInfo, buildInfo.indexInst.InstId)
 						}
 					}
+
+					//stop further stream processing as indexes will move to MAINT_STREAM
+					logging.Infof("Timekeeper::checkInitialBuildDone Stream %v "+
+						"Bucket %v State Changed to INACTIVE", streamId, bucket)
+
+					//TODO Collections is it safe to stop mutation processing without clearing
+					//the mutation queue. This can potentially block the stream
+					//reader if the mutation queue gets full.
+					tk.stopTimer(streamId, bucket)
+					tk.ss.cleanupBucketFromStream(streamId, bucket)
+
+				} else {
+					//change all indexes of this bucket to Catchup state
+					tk.changeIndexStateForBucket(bucket, common.INDEX_STATE_CATCHUP)
+					tk.setAddInstPending(streamId, bucket, true)
 				}
 
 				sessionId := tk.ss.getSessionId(streamId, bucket)
@@ -2026,18 +2041,16 @@ func (tk *timekeeper) checkInitialBuildDone(streamId common.StreamId,
 					"Stream: %v Bucket: %v Session: %v BuildTS: %v", idx.InstId, streamId,
 					bucket, sessionId, buildInfo.buildTs)
 
-				tk.setAddInstPending(streamId, bucket, true)
-
 				//generate init build done msg
 				tk.supvRespch <- &MsgTKInitBuildDone{
 					mType:     TK_INIT_BUILD_DONE,
 					streamId:  streamId,
 					buildTs:   buildInfo.buildTs,
 					bucket:    bucket,
+					flushTs:   flushTs,
 					sessionId: sessionId}
 
 				return true
-
 			}
 		}
 	}

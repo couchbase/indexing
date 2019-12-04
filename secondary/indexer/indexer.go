@@ -103,6 +103,8 @@ type indexer struct {
 	streamBucketRequestLock  map[common.StreamId]map[string]chan *sync.Mutex
 	streamBucketSessionId    map[common.StreamId]map[string]uint64
 
+	streamBucketPendBuildDone map[common.StreamId]map[string]*buildDoneSpec
+
 	bucketRollbackTimes map[string]int64
 
 	bucketBuildTs map[string]Timestamp
@@ -203,6 +205,11 @@ type currRequest struct {
 	sessionId uint64
 }
 
+type buildDoneSpec struct {
+	sessionId uint64
+	flushTs   *common.TsVbuuid
+}
+
 func NewIndexer(config common.Config) (Indexer, Message) {
 
 	idx := &indexer{
@@ -243,6 +250,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		streamBucketRequestQueue:     make(map[common.StreamId]map[string]chan *kvRequest),
 		streamBucketRequestLock:      make(map[common.StreamId]map[string]chan *sync.Mutex),
 		streamBucketSessionId:        make(map[common.StreamId]map[string]uint64),
+		streamBucketPendBuildDone:    make(map[common.StreamId]map[string]*buildDoneSpec),
 		bucketBuildTs:                make(map[string]Timestamp),
 		buildTsLock:                  make(map[common.StreamId]map[string]*sync.Mutex),
 		bucketRollbackTimes:          make(map[string]int64),
@@ -540,6 +548,7 @@ func (idx *indexer) initFromConfig() {
 	idx.initStreamFlushMap()
 	idx.initServiceAddressMap()
 	idx.initStreamSessionIdMap()
+	idx.initStreamPendBuildDone()
 
 	idx.enableManager = idx.config["enableManager"].Bool()
 
@@ -1189,6 +1198,9 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 	case POOL_CHANGE:
 		idx.tkCmdCh <- msg
 		<-idx.tkCmdCh
+
+	case TK_INIT_BUILD_DONE_NO_CATCHUP_ACK:
+		idx.handleBuildDoneNoCatchupAck(msg)
 
 	default:
 		logging.Fatalf("Indexer::handleWorkerMsgs Unknown Message %+v", msg)
@@ -2627,14 +2639,8 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 			continue
 		}
 
-		//if there is already an index for this bucket in MAINT_STREAM,
-		//add this index to INIT_STREAM
-		var buildStream common.StreamId
-		if idx.checkBucketExistsInStream(bucket, common.MAINT_STREAM, false) {
-			buildStream = common.INIT_STREAM
-		} else {
-			buildStream = common.MAINT_STREAM
-		}
+		//all indexes get built using INIT_STREAM
+		var buildStream common.StreamId = common.INIT_STREAM
 
 		idx.bulkUpdateStream(instIdList, buildStream)
 
@@ -2804,18 +2810,6 @@ func (idx *indexer) handleDropIndex(msg Message) (resp Message) {
 				cause:    err,
 				category: INDEXER}}
 		common.CrashOnError(err)
-	}
-
-	//if this is the last index for the bucket in MaintStream and the bucket exists
-	//in InitStream, don't cleanup bucket from stream. It is needed for merge to
-	//happen.
-	if indexInst.Stream == common.MAINT_STREAM &&
-		!idx.checkBucketExistsInStream(indexInst.Defn.Bucket, common.MAINT_STREAM, false) &&
-		idx.checkBucketExistsInStream(indexInst.Defn.Bucket, common.INIT_STREAM, false) {
-		logging.Infof("Indexer::handleDropIndex Pre-Catchup Index Found for %v "+
-			"%v. Stream Cleanup Skipped.", indexInst.Stream, indexInst.Defn.Bucket)
-		clientCh <- &MsgSuccess{}
-		return
 	}
 
 	//check if there is already a drop request waiting on this bucket
@@ -3009,7 +3003,7 @@ func (idx *indexer) handleInitRecovery(msg Message) {
 	logging.Infof("Indexer::handleInitRecovery StreamId %v Bucket %v %v",
 		streamId, bucket, STREAM_RECOVERY)
 
-	sessionId = idx.getNextSessionId(streamId, bucket)
+	sessionId = idx.genNextSessionId(streamId, bucket)
 
 	//if there is a rollbackTs, process rollback
 	if ts, ok := idx.streamBucketRollbackTs[streamId][bucket]; ok && ts != nil {
@@ -3098,8 +3092,9 @@ func (idx *indexer) handleRecoveryDone(msg Message) {
 	//further processing is not required. Stream cleanup is done by
 	//whoever is changing stream status to INACTIVE
 	if idx.getStreamBucketState(streamId, bucket) == STREAM_INACTIVE {
-		logging.Infof("Indexer::handleRecoveryDone Skip Recovery for Stream %v"+
+		logging.Infof("Indexer::handleRecoveryDone Skip Recovery for Stream %v. "+
 			"Inactive Bucket %v", streamId, bucket)
+		idx.processPendingBuildDone(streamId, bucket, sessionId)
 		return
 	}
 
@@ -3107,6 +3102,7 @@ func (idx *indexer) handleRecoveryDone(msg Message) {
 	idx.tkCmdCh <- msg
 	<-idx.tkCmdCh
 
+	//TODO Collections is this check required?
 	//during recovery, if all indexes of a bucket gets dropped,
 	//the stream needs to be stopped for that bucket.
 	if !idx.checkBucketExistsInStream(bucket, streamId, true) {
@@ -3117,10 +3113,12 @@ func (idx *indexer) handleRecoveryDone(msg Message) {
 			idx.stopBucketStream(streamId, bucket)
 
 			idx.setStreamBucketState(streamId, bucket, STREAM_INACTIVE)
+			idx.processPendingBuildDone(streamId, bucket, sessionId)
 		}
 	} else {
 		//change status to Active
 		idx.setStreamBucketState(streamId, bucket, STREAM_ACTIVE)
+		idx.processPendingBuildDone(streamId, bucket, sessionId)
 	}
 
 	logging.Infof("Indexer::handleRecoveryDone StreamId %v Bucket %v SessionId %v %v",
@@ -3348,6 +3346,12 @@ func (idx *indexer) handleMTRFail(msg Message) {
 	//Cleanup any lock that indexer may be holding.
 	idx.deleteStreamBucketCurrRequest(streamId, bucket, msg, reqCh, sessionId)
 
+	//check for any pending build done
+	if idx.getStreamBucketState(streamId, bucket) == STREAM_INACTIVE {
+		idx.processPendingBuildDone(streamId, bucket, sessionId)
+		return
+	}
+
 }
 
 func (idx *indexer) handleBucketNotFound(msg Message) {
@@ -3505,16 +3509,6 @@ func (idx *indexer) cleanupIndex(indexInst common.IndexInst,
 		}
 	}
 
-	// If INIT_STREAM is in STREAM_INACTIVE, then clean up instances in MAINT_STREAM
-	// that are in state INDEX_STATE_DELETED
-	bucket := indexInst.Defn.Bucket
-	if indexInst.Stream == common.INIT_STREAM &&
-		idx.getStreamBucketState(common.INIT_STREAM, bucket) == STREAM_INACTIVE {
-		logging.Infof("Indexer::cleanupIndex INIT_STREAM is in state STREAM_INACTIVE."+
-			" Attempting clean-up of MAINT_STREAM. Bucket: %v", bucket)
-		idx.cleanupMaintStream(bucket)
-	}
-
 	if clientCh != nil {
 		clientCh <- &MsgSuccess{}
 	}
@@ -3663,7 +3657,7 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 
 	idx.prepareStreamBucketForFreshStart(buildStream, bucket)
 
-	sessionId := idx.getNextSessionId(buildStream, bucket)
+	sessionId := idx.genNextSessionId(buildStream, bucket)
 
 	async := enableAsync && idx.clusterInfoClient.ClusterVersion() >= common.INDEXER_65_VERSION
 	cmd = &MsgStreamUpdate{mType: OPEN_STREAM,
@@ -4299,6 +4293,7 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 	bucket := msg.(*MsgTKInitBuildDone).GetBucket()
 	streamId := msg.(*MsgTKInitBuildDone).GetStreamId()
 	sessionId := msg.(*MsgTKInitBuildDone).GetSessionId()
+	flushTs := msg.(*MsgTKInitBuildDone).GetFlushTs()
 
 	if ok, currSid := idx.validateSessionId(streamId, bucket, sessionId, true); !ok {
 		logging.Infof("Indexer::handleInitialBuildDone StreamId %v Bucket %v SessionId %v. "+
@@ -4321,13 +4316,77 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 	logging.Infof("Indexer::handleInitialBuildDone Bucket: %v Stream: %v SessionId: %v",
 		bucket, streamId, sessionId)
 
-	//MAINT_STREAM should already be running for this bucket,
-	//as first index gets added to MAINT_STREAM always
-	if idx.checkBucketExistsInStream(bucket, common.MAINT_STREAM, true) == false {
-		logging.Fatalf("Indexer::handleInitialBuildDone MAINT_STREAM not enabled for Bucket: %v. "+
-			"Cannot Process Initial Build Done.", bucket)
-		common.CrashOnError(ErrMaintStreamMissingBucket)
+	mState := idx.getStreamBucketState(common.MAINT_STREAM, bucket)
+
+	//if MAINT_STREAM is not running, it needs to be started
+	if mState == STREAM_INACTIVE {
+		idx.processBuildDoneNoCatchup(streamId, bucket, sessionId, flushTs)
+	} else if mState == STREAM_PREPARE_RECOVERY ||
+		mState == STREAM_RECOVERY {
+		//if MAINT_STREAM stream is in recovery, it cannot be determined if
+		//the stream will be active again or not (e.g. all indexes get dropped).
+		//add the state to pending build done and process it later
+		idx.processBuildDoneInRecovery(streamId, bucket, sessionId, flushTs)
+	} else {
+		idx.processBuildDoneCatchup(streamId, bucket, sessionId)
 	}
+
+}
+
+func (idx *indexer) processBuildDoneInRecovery(streamId common.StreamId,
+	bucket string, sessionId uint64, flushTs *common.TsVbuuid) {
+
+	logging.Infof("Indexer::processBuildDoneInRecovery %v %v %v", streamId, bucket,
+		sessionId)
+
+	//save the buildDone information for processing once the recovery finishes
+	spec := &buildDoneSpec{
+		sessionId: sessionId,
+		flushTs:   flushTs,
+	}
+	idx.streamBucketPendBuildDone[streamId][bucket] = spec
+
+}
+
+func (idx *indexer) processPendingBuildDone(streamId common.StreamId,
+	bucket string, sessionId uint64) {
+
+	//pending build check is only to be done for MAINT_STREAM
+	if streamId != common.MAINT_STREAM {
+		return
+	}
+
+	logging.Infof("Indexer::processPendingBuildDone %v %v", streamId, bucket)
+
+	if spec, ok := idx.streamBucketPendBuildDone[common.INIT_STREAM][bucket]; ok && spec != nil {
+
+		mState := idx.getStreamBucketState(common.MAINT_STREAM, bucket)
+
+		//if MAINT_STREAM is not running, it needs to be started
+		if mState == STREAM_INACTIVE {
+			idx.processBuildDoneNoCatchup(streamId, bucket, sessionId, spec.flushTs)
+			delete(idx.streamBucketPendBuildDone[streamId], bucket)
+		} else if mState == STREAM_PREPARE_RECOVERY ||
+			mState == STREAM_RECOVERY {
+			//TODO Collections is this case possible as this function gets called on recovery done?
+			logging.Infof("Indexer::processPendingBuildDone %v %v. Maint Stream In %v state. "+
+				"Wait for next recovery done to trigger pending build done.", streamId, bucket, mState)
+		} else {
+			idx.processBuildDoneCatchup(streamId, bucket, sessionId)
+			delete(idx.streamBucketPendBuildDone[streamId], bucket)
+		}
+
+	} else {
+		logging.Infof("Indexer::processPendingBuildDone %v %v. No pending build done spec found.",
+			streamId, bucket)
+	}
+
+}
+
+func (idx *indexer) processBuildDoneCatchup(streamId common.StreamId, bucket string, sessionId uint64) {
+
+	logging.Infof("Indexer::processBuildDoneCatchup %v %v %v", streamId, bucket,
+		sessionId)
 
 	//get the list of indexes for this bucket and stream in INITIAL state
 	var indexList []common.IndexInst
@@ -4336,12 +4395,8 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 	for _, index := range idx.indexInstMap {
 		if index.Defn.Bucket == bucket && index.Stream == streamId &&
 			index.State == common.INDEX_STATE_INITIAL {
-			//index in INIT_STREAM move to Catchup state
-			if streamId == common.INIT_STREAM {
-				index.State = common.INDEX_STATE_CATCHUP
-			} else {
-				index.State = common.INDEX_STATE_ACTIVE
-			}
+			index.State = common.INDEX_STATE_CATCHUP
+
 			indexList = append(indexList, index)
 			instIdList = append(instIdList, index.InstId)
 			bucketUUIDList = append(bucketUUIDList, index.Defn.BucketUUID)
@@ -4349,7 +4404,7 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 	}
 
 	if len(instIdList) == 0 {
-		logging.Infof("Indexer::handleInitialBuildDone Empty IndexList %v %v. Nothing to do.",
+		logging.Infof("Indexer::processBuildDoneCatchup Empty IndexList %v %v. Nothing to do.",
 			streamId, bucket)
 		return
 	}
@@ -4366,7 +4421,7 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 		common.CrashOnError(err)
 	}
 
-	//if index is already in MAINT_STREAM, nothing more needs to be done
+	//update index state in metadata
 	if err := idx.updateMetaInfoForIndexList(instIdList, true, true, false, false, true, false, false, false, nil); err != nil {
 		common.CrashOnError(err)
 	}
@@ -4374,20 +4429,6 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 	// collect progress stats after initial is done or transition to catchup phase. This must be done
 	// after updating metaInfo.
 	idx.sendProgressStats()
-
-	if streamId == common.MAINT_STREAM {
-
-		//for cbq bridge, return response as index is ready to query
-		if !idx.enableManager {
-			if clientCh, ok := idx.bucketCreateClientChMap[bucket]; ok {
-				if clientCh != nil {
-					clientCh <- &MsgSuccess{}
-				}
-				delete(idx.bucketCreateClientChMap, bucket)
-			}
-		}
-		return
-	}
 
 	// If index is a proxy, add the real index instance to the list.  This will
 	// also update the partition list of the real index instance in projector.
@@ -4400,18 +4441,18 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 				indexList = append(indexList, realInst)
 			} else {
 				err := fmt.Errorf("Fail to find real index instance %v", index.RealInstId)
-				logging.Errorf("Indexer::handleInitialBuildDone. %v", err)
+				logging.Errorf("Indexer::processBuildDoneCatchup %v", err)
 				common.CrashOnError(err)
 			}
 		}
 	}
 
-	//Add index to MAINT_STREAM in Catchup State,
-	//so mutations for this index are already in queue to
-	//allow convergence with INIT_STREAM.
 	respCh := make(MsgChannel)
 	stopCh := make(StopChannel)
 
+	//Add index to MAINT_STREAM in Catchup State,
+	//so mutations for this index are already in queue to
+	//allow convergence with INIT_STREAM.
 	cmd := &MsgStreamUpdate{mType: ADD_INDEX_LIST_TO_STREAM,
 		streamId:  common.MAINT_STREAM,
 		bucket:    bucket,
@@ -4440,7 +4481,7 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 	retryloop:
 		for {
 			if !idx.clusterInfoClient.ValidateBucket(bucket, bucketUUIDList) {
-				logging.Errorf("Indexer::handleInitialBuildDone \n\tBucket Not Found "+
+				logging.Errorf("Indexer::processBuildDoneCatchup Bucket Not Found "+
 					"For Stream %v Bucket %v SessionId %v", streamId, bucket, sessionId)
 				break retryloop
 			}
@@ -4454,7 +4495,7 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 
 					idx.injectRandomDelay(10)
 
-					logging.Infof("Indexer::handleInitialBuildDone Success Stream %v Bucket %v "+
+					logging.Infof("Indexer::processBuildDoneCatchup Success Stream %v Bucket %v "+
 						"SessionId %v", streamId, bucket, sessionId)
 
 					mergeTs := resp.(*MsgStreamUpdate).GetRestartTs()
@@ -4482,14 +4523,14 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 						//pick up the state change.
 						mstate := idx.getStreamBucketState(common.MAINT_STREAM, bucket)
 						if mstate == STREAM_PREPARE_RECOVERY || mstate == STREAM_RECOVERY {
-							logging.Infof("Indexer::handleInitialBuildDone Stream %v Bucket %v SessionId %v"+
+							logging.Infof("Indexer::processBuildDoneCatchup Stream %v Bucket %v SessionId %v"+
 								"Detected MAINT_STREAM in %v state. Reset retry count.", streamId,
 								bucket, sessionId, mstate)
 							count = 0
 						} else {
 							// Send message to main loop to start recovery if cannot add instances over threshold.
 							//If the projector state is not correct, this ensures projector state will get cleaned up.
-							logging.Errorf("Indexer::handleInitialBuildDone Stream %v Bucket %v SessionId %v"+
+							logging.Errorf("Indexer::processBuildDoneCatchup Stream %v Bucket %v SessionId %v"+
 								"Error from Projector %v. Start recovery after %v retries.", streamId,
 								bucket, respErr.cause, sessionId, MAX_PROJ_RETRY)
 
@@ -4502,7 +4543,7 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 							break retryloop
 						}
 					} else {
-						logging.Errorf("Indexer::handleInitialBuildDone Stream %v Bucket %v SessionId %v."+
+						logging.Errorf("Indexer::processBuildDoneCatchup Stream %v Bucket %v SessionId %v."+
 							"Error from Projector %v. Retrying.", streamId, bucket, sessionId, respErr.cause)
 						time.Sleep(KV_RETRY_INTERVAL * time.Millisecond)
 					}
@@ -4511,6 +4552,157 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 		}
 	}(reqLock)
 
+}
+
+func (idx *indexer) processBuildDoneNoCatchup(streamId common.StreamId,
+	bucket string, sessionId uint64, flushTs *common.TsVbuuid) {
+
+	logging.Infof("Indexer::processBuildDoneCatchup %v %v %v", streamId, bucket,
+		sessionId)
+
+	//get the list of indexes for this bucket and stream in INITIAL state
+	var indexList []common.IndexInst
+	var instIdList []common.IndexInstId
+	var bucketUUIDList []string
+	for _, index := range idx.indexInstMap {
+		if index.Defn.Bucket == bucket && index.Stream == streamId &&
+			index.State == common.INDEX_STATE_INITIAL {
+			index.State = common.INDEX_STATE_ACTIVE
+			index.Stream = common.MAINT_STREAM
+		}
+		indexList = append(indexList, index)
+		instIdList = append(instIdList, index.InstId)
+		bucketUUIDList = append(bucketUUIDList, index.Defn.BucketUUID)
+	}
+
+	if len(instIdList) == 0 {
+		logging.Infof("Indexer::processBuildDoneNoCatchup Empty IndexList %v %v. Nothing to do.",
+			streamId, bucket)
+		return
+	}
+
+	//update the IndexInstMap
+	for _, index := range indexList {
+		idx.indexInstMap[index.InstId] = index
+	}
+
+	//send updated maps to all workers
+	msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
+
+	if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, nil); err != nil {
+		common.CrashOnError(err)
+	}
+
+	//update index state in metadata
+	if err := idx.updateMetaInfoForIndexList(instIdList, true, true, false, false, true, false, false, false, nil); err != nil {
+		common.CrashOnError(err)
+	}
+
+	// collect progress stats after initial is done or transition to catchup phase. This must be done
+	// after updating metaInfo.
+	idx.sendProgressStats()
+
+	respCh := make(MsgChannel)
+	stopCh := make(StopChannel)
+
+	cmd := &MsgStreamUpdate{mType: REMOVE_BUCKET_FROM_STREAM,
+		streamId:      streamId,
+		bucket:        bucket,
+		respCh:        respCh,
+		stopCh:        stopCh,
+		abortRecovery: true,
+		sessionId:     sessionId,
+	}
+
+	//send stream update to timekeeper
+	if resp := idx.sendStreamUpdateToWorker(cmd, idx.tkCmdCh, "Timekeeper"); resp.GetMsgType() != MSG_SUCCESS {
+		respErr := resp.(*MsgError).GetError()
+		common.CrashOnError(respErr.cause)
+	}
+
+	//send stream update to mutation manager
+	if resp := idx.sendStreamUpdateToWorker(cmd, idx.mutMgrCmdCh, "MutationMgr"); resp.GetMsgType() != MSG_SUCCESS {
+		respErr := resp.(*MsgError).GetError()
+		common.CrashOnError(respErr.cause)
+	}
+
+	//at this point, the stream is inactive in all sub-components, so the status
+	//can be set to inactive.
+	idx.setStreamBucketState(streamId, bucket, STREAM_INACTIVE)
+	idx.cleanupStreamBucketState(streamId, bucket)
+
+	clustAddr := idx.config["clusterAddr"].String()
+
+	reqLock := idx.acquireStreamRequestLock(bucket, streamId)
+	go func(reqLock *kvRequest) {
+		defer idx.releaseStreamRequestLock(reqLock)
+		idx.waitStreamRequestLock(reqLock)
+		count := 0
+	retryloop:
+		for {
+			if !ValidateBucket(clustAddr, bucket, bucketUUIDList) {
+				logging.Errorf("Indexer::processBuildDoneNoCatchup Bucket Not Found "+
+					"For Stream %v Bucket %v SessionId %v", streamId, bucket, sessionId)
+				break retryloop
+			}
+			idx.sendMsgToKVSender(cmd)
+
+			if resp, ok := <-respCh; ok {
+
+				switch resp.GetMsgType() {
+
+				case MSG_SUCCESS:
+
+					idx.injectRandomDelay(10)
+
+					logging.Infof("Indexer::processBuildDoneNoCatchup Success Stream %v Bucket %v "+
+						"SessionId %v", streamId, bucket, sessionId)
+
+					idx.internalRecvCh <- &MsgTKInitBuildDone{
+						mType:     TK_INIT_BUILD_DONE_NO_CATCHUP_ACK,
+						streamId:  streamId,
+						bucket:    bucket,
+						flushTs:   flushTs,
+						sessionId: sessionId}
+					break retryloop
+
+				default:
+					//log and retry for all other responses
+					respErr := resp.(*MsgError).GetError()
+					count++
+
+					logging.Errorf("Indexer::processBuildDoneNoCatchup Stream %v Bucket %v SessionId %v."+
+						"Error from Projector %v. Retrying %v.", streamId, bucket, sessionId, respErr.cause, count)
+					time.Sleep(KV_RETRY_INTERVAL * time.Millisecond)
+				}
+			}
+		}
+	}(reqLock)
+
+}
+
+func (idx *indexer) handleBuildDoneNoCatchupAck(msg Message) {
+
+	streamId := msg.(*MsgTKInitBuildDone).GetStreamId()
+	bucket := msg.(*MsgTKInitBuildDone).GetBucket()
+	flushTs := msg.(*MsgTKInitBuildDone).GetFlushTs()
+
+	state := idx.getStreamBucketState(streamId, bucket)
+	if state != STREAM_INACTIVE {
+		logging.Fatalf("Indexer::handleBuildDoneNoCatchupAck Unexpected Stream State %v %v %v",
+			streamId, bucket, state)
+		common.CrashOnError(ErrInconsistentState)
+		return
+	}
+
+	logging.Infof("Indexer::handleBuildDoneNoCatchupAck %v %v", streamId, bucket)
+
+	newStream := common.MAINT_STREAM
+	idx.prepareStreamBucketForFreshStart(newStream, bucket)
+	sessionId := idx.genNextSessionId(newStream, bucket)
+
+	idx.setStreamBucketState(newStream, bucket, STREAM_ACTIVE)
+	idx.startBucketStream(newStream, bucket, flushTs, nil, nil, false, false, sessionId)
 }
 
 func (idx *indexer) handleMergeStream(msg Message) {
@@ -4539,7 +4731,7 @@ func (idx *indexer) handleMergeStream(msg Message) {
 	//MAINT_STREAM should already be running for this bucket,
 	//as first index gets added to MAINT_STREAM always
 	if idx.checkBucketExistsInStream(bucket, common.MAINT_STREAM, true) == false {
-		logging.Fatalf("Indexer::handleMergeStream \n\tMAINT_STREAM not enabled for Bucket: %v ."+
+		logging.Fatalf("Indexer::handleMergeStream MAINT_STREAM not enabled for Bucket: %v ."+
 			"Cannot Process Merge Stream", bucket)
 		common.CrashOnError(ErrMaintStreamMissingBucket)
 	}
@@ -4694,9 +4886,6 @@ func (idx *indexer) handleMergeInitStream(msg Message) {
 	logging.Infof("Indexer::handleMergeInitStream Merge Done Bucket: %v Stream: %v SessionId %v",
 		bucket, streamId, sessionId)
 
-	// On a successful merge, clean-up instances in MAINT_STREAM that are in state
-	// INDEX_STATE_DELETED
-	idx.cleanupMaintStream(bucket)
 }
 
 // cleanupMaintStream cleanes up all the instances in MAINT_STREAM which are in state
@@ -4899,8 +5088,7 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 
 			if indexInst.Defn.Bucket == bucket {
 				switch indexInst.State {
-				case common.INDEX_STATE_ACTIVE,
-					common.INDEX_STATE_INITIAL:
+				case common.INDEX_STATE_ACTIVE:
 					if indexInst.Stream == streamId {
 						indexList = append(indexList, indexInst)
 						bucketUUIDList = append(bucketUUIDList, indexInst.Defn.BucketUUID)
@@ -4927,7 +5115,7 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 		}
 
 	default:
-		logging.Fatalf("Indexer::startBucketStream \n\t Unsupported StreamId %v", streamId)
+		logging.Fatalf("Indexer::startBucketStream Unsupported StreamId %v", streamId)
 		common.CrashOnError(ErrInvalidStream)
 
 	}
@@ -4936,6 +5124,7 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 		logging.Infof("Indexer::startBucketStream Nothing to Start. Stream: %v Bucket: %v",
 			streamId, bucket)
 		idx.setStreamBucketState(streamId, bucket, STREAM_INACTIVE)
+		//TODO Collections add safety check if pendBuildDone exists
 		return
 	}
 
@@ -5006,7 +5195,7 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 		for {
 			//validate bucket before every try
 			if !idx.clusterInfoClient.ValidateBucket(bucket, bucketUUIDList) {
-				logging.Errorf("Indexer::startBucketStream \n\tBucket Not Found "+
+				logging.Errorf("Indexer::startBucketStream Bucket Not Found "+
 					"For Stream %v Bucket %v SessionId %v", streamId, bucket, sessionId)
 				idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_BUCKET_NOT_FOUND,
 					streamId:  streamId,
@@ -5147,7 +5336,13 @@ func (idx *indexer) initStreamSessionIdMap() {
 
 	for i := 0; i < int(common.ALL_STREAMS); i++ {
 		idx.streamBucketSessionId[common.StreamId(i)] = make(map[string]uint64)
-		idx.streamBucketSessionId[common.StreamId(i)] = make(map[string]uint64)
+	}
+}
+
+func (idx *indexer) initStreamPendBuildDone() {
+
+	for i := 0; i < int(common.ALL_STREAMS); i++ {
+		idx.streamBucketPendBuildDone[common.StreamId(i)] = make(map[string]*buildDoneSpec)
 	}
 }
 
@@ -5577,7 +5772,7 @@ func (idx *indexer) handleUpdateBuildTs(msg Message) {
 			idx.tkCmdCh <- msg
 			<-idx.tkCmdCh
 		} else {
-			logging.Infof("Indexer::handleUpdateBuildTs Skiping updateBuildTs message to "+
+			logging.Infof("Indexer::handleUpdateBuildTs Skipping updateBuildTs message to "+
 				"timekeeper as stream: %v is in state: %v for bucket: %v", streamId, streamState, bucket)
 		}
 	}
@@ -6201,7 +6396,7 @@ func (idx *indexer) validateIndexInstMap() {
 		}
 	}
 
-	idx.checkMissingMaintBucket()
+	idx.checkMaintStreamIndexBuild()
 
 }
 
@@ -6236,6 +6431,31 @@ func (idx *indexer) forceCleanupPartitionData(inst *common.IndexInst, partitionI
 	storage_dir := idx.config["storage_dir"].String()
 	path := filepath.Join(storage_dir, IndexPath(inst, partitionId, sliceId))
 	return os.RemoveAll(path)
+}
+
+//On warmup, if an index is found in MAINT_STREAM and state INITIAL
+//it needs to be moved to INIT_STREAM. Post 6.5, initial build of
+//an index never happens using MAINT_STREAM. During upgrade, it is
+//possible for such an index to exist.
+func (idx *indexer) checkMaintStreamIndexBuild() {
+
+	var updatedList []common.IndexInstId
+	for _, index := range idx.indexInstMap {
+		if index.Stream == common.MAINT_STREAM &&
+			index.State == common.INDEX_STATE_INITIAL {
+			index.Stream = common.INIT_STREAM
+			idx.indexInstMap[index.InstId] = index
+			updatedList = append(updatedList, index.InstId)
+		}
+	}
+
+	if idx.enableManager {
+		if err := idx.updateMetaInfoForIndexList(updatedList,
+			true, true, false, false, true, false, false, false, nil); err != nil {
+			common.CrashOnError(err)
+		}
+	}
+
 }
 
 //On recovery, deleted indexes are ignored. There can be
@@ -6315,7 +6535,7 @@ func (idx *indexer) startStreams() bool {
 
 	for bucket, ts := range restartTs {
 		idx.bucketRollbackTimes[bucket] = time.Now().UnixNano()
-		sessionId := idx.getNextSessionId(common.MAINT_STREAM, bucket)
+		sessionId := idx.genNextSessionId(common.MAINT_STREAM, bucket)
 		idx.startBucketStream(common.MAINT_STREAM, bucket, ts, nil, allNilSnaps,
 			false, false, sessionId)
 		idx.setStreamBucketState(common.MAINT_STREAM, bucket, STREAM_ACTIVE)
@@ -6329,7 +6549,7 @@ func (idx *indexer) startStreams() bool {
 	idx.stateLock.Unlock()
 
 	for bucket, ts := range restartTs {
-		sessionId := idx.getNextSessionId(common.INIT_STREAM, bucket)
+		sessionId := idx.genNextSessionId(common.INIT_STREAM, bucket)
 		idx.startBucketStream(common.INIT_STREAM, bucket, ts, nil, allNilSnaps,
 			false, false, sessionId)
 		idx.setStreamBucketState(common.INIT_STREAM, bucket, STREAM_ACTIVE)
@@ -7700,7 +7920,7 @@ func (idx *indexer) initBuildTsLock(streamId common.StreamId, bucket string) {
 
 //sessionId helper functions. these functions can only be called from the genserver
 //as no sync mechanism is being used.
-func (idx *indexer) getNextSessionId(
+func (idx *indexer) genNextSessionId(
 	streamId common.StreamId,
 	bucket string) uint64 {
 
@@ -7849,13 +8069,14 @@ func (idx *indexer) cleanupAllStreamBucketState(
 	idx.cleanupStreamBucketState(streamId, bucket)
 	delete(idx.streamBucketFlushInProgress[streamId], bucket)
 	delete(idx.streamBucketObserveFlushDone[streamId], bucket)
+	delete(idx.streamBucketPendBuildDone[streamId], bucket)
 }
 
 func (idx *indexer) prepareStreamBucketForFreshStart(
 	streamId common.StreamId,
 	bucket string) {
 
-	logging.Infof("Indexe::prepareStreamBucketForFreshStart %v %v", streamId, bucket)
+	logging.Infof("Indexer::prepareStreamBucketForFreshStart %v %v", streamId, bucket)
 
 	//clear all state before fresh start
 	idx.cleanupAllStreamBucketState(streamId, bucket)

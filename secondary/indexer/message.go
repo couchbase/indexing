@@ -55,6 +55,7 @@ const (
 	TK_STABILITY_TIMESTAMP
 	TK_INIT_BUILD_DONE
 	TK_INIT_BUILD_DONE_ACK
+	TK_INIT_BUILD_DONE_NO_CATCHUP_ACK
 	TK_ADD_INSTANCE_FAIL
 	TK_ENABLE_FLUSH
 	TK_DISABLE_FLUSH
@@ -768,42 +769,6 @@ func (m *MsgTKStabilityTS) String() string {
 	str += fmt.Sprintf("\n\tTS: %v", m.ts)
 	return str
 
-}
-
-//TK_INIT_BUILD_DONE
-//TK_INIT_BUILD_DONE_ACK
-//TK_ADD_INSTANCE_FAIL
-type MsgTKInitBuildDone struct {
-	mType     MsgType
-	streamId  common.StreamId
-	buildTs   Timestamp
-	bucket    string
-	mergeTs   *common.TsVbuuid
-	sessionId uint64
-}
-
-func (m *MsgTKInitBuildDone) GetMsgType() MsgType {
-	return m.mType
-}
-
-func (m *MsgTKInitBuildDone) GetBucket() string {
-	return m.bucket
-}
-
-func (m *MsgTKInitBuildDone) GetTimestamp() Timestamp {
-	return m.buildTs
-}
-
-func (m *MsgTKInitBuildDone) GetStreamId() common.StreamId {
-	return m.streamId
-}
-
-func (m *MsgTKInitBuildDone) GetMergeTs() *common.TsVbuuid {
-	return m.mergeTs
-}
-
-func (m *MsgTKInitBuildDone) GetSessionId() uint64 {
-	return m.sessionId
 }
 
 //TK_MERGE_STREAM
@@ -1537,6 +1502,48 @@ func (m *MsgPoolChange) GetBucket() string {
 	return m.bucket
 }
 
+//TK_INIT_BUILD_DONE
+//TK_INIT_BUILD_DONE_ACK
+//TK_INIT_BUILD_DONE_NO_CATCHUP_ACK
+//TK_ADD_INSTANCE_FAIL
+type MsgTKInitBuildDone struct {
+	mType     MsgType
+	streamId  common.StreamId
+	buildTs   Timestamp
+	bucket    string
+	mergeTs   *common.TsVbuuid
+	flushTs   *common.TsVbuuid
+	sessionId uint64
+}
+
+func (m *MsgTKInitBuildDone) GetMsgType() MsgType {
+	return m.mType
+}
+
+func (m *MsgTKInitBuildDone) GetBucket() string {
+	return m.bucket
+}
+
+func (m *MsgTKInitBuildDone) GetTimestamp() Timestamp {
+	return m.buildTs
+}
+
+func (m *MsgTKInitBuildDone) GetStreamId() common.StreamId {
+	return m.streamId
+}
+
+func (m *MsgTKInitBuildDone) GetMergeTs() *common.TsVbuuid {
+	return m.mergeTs
+}
+
+func (m *MsgTKInitBuildDone) GetFlushTs() *common.TsVbuuid {
+	return m.flushTs
+}
+
+func (m *MsgTKInitBuildDone) GetSessionId() uint64 {
+	return m.sessionId
+}
+
 type MsgIndexSnapRequest struct {
 	ts          *common.TsVbuuid
 	cons        common.Consistency
@@ -2050,6 +2057,8 @@ func (m MsgType) String() string {
 		return "TK_INIT_BUILD_DONE"
 	case TK_INIT_BUILD_DONE_ACK:
 		return "TK_INIT_BUILD_DONE_ACK"
+	case TK_INIT_BUILD_DONE_NO_CATCHUP_ACK:
+		return "TK_INIT_BUILD_DONE_NO_CATCHUP_ACK"
 	case TK_ADD_INSTANCE_FAIL:
 		return "TK_ADD_INSTANCE_FAIL"
 	case TK_ENABLE_FLUSH:
