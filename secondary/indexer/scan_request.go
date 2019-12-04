@@ -1698,10 +1698,10 @@ func (r *ScanRequest) canUseFastCountNoWhere() bool {
 
 func checkEqualFilter(fl *protobuf.CompositeElementFilter) bool {
 
-	if !bytes.Equal(fl.Low, fl.High) && Inclusion(fl.GetInclusion()) != Both {
-		return false
+	if (fl.Low != nil && fl.High != nil && bytes.Equal(fl.Low, fl.High)) && Inclusion(fl.GetInclusion()) == Both {
+		return true
 	}
-	return true
+	return false
 
 }
 
