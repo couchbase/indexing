@@ -1638,6 +1638,106 @@ func TestGroupAggr_FirstValidAggrOnly(t *testing.T) {
 	filter1[0] = &qc.CompositeElementFilter{Low: "F", High: "P", Inclusion: qc.Inclusion(uint32(3))}
 	scans[0] = &qc.Scan{Filter: filter1}
 	executeGroupAggrTest2(scans, ga, proj, n1qlEquivalent, i2, t)
+
+	MinAggrOptimizationTests(t)
+}
+
+func MinAggrOptimizationTests(t *testing.T) {
+	setup := func() {
+		makeDocs := func() {
+			docs := make(tc.KeyValues)
+			doc1 := make(map[string]interface{})
+			doc1["a"] = "aa"
+			doc1["b"] = "ba"
+			doc1["c"] = 10
+			docs["doc1"] = doc1
+
+			doc2 := make(map[string]interface{})
+			doc2["a"] = "aa"
+			doc2["b"] = "bb"
+			doc2["c"] = 5
+			docs["doc2"] = doc2
+			kvutility.SetKeyValues(docs, "default", "", clusterconfig.KVAddress)
+		}
+		makeDocs()
+
+		err := secondaryindex.CreateSecondaryIndex("indexMinAggr", "default",
+			indexManagementAddress, "", []string{"a", "b", "c"}, false, nil,
+			true, defaultIndexActiveTimeout, nil)
+		FailTestIfError(err, "Error in creating the index", t)
+	}
+
+	test1 := func() {
+		log.Printf("=== Equality filter check: Equality for a, nil filter for b - inclusion 0, no filter for c ===")
+		n1qlEquivalent := "SELECT MIN(c) AS a FROM default USE INDEX(`#primary`) " +
+			" WHERE a = \"aa\" "
+		a1 := &qc.Aggregate{AggrFunc: c.AGG_MIN, EntryKeyId: 4, KeyPos: 2}
+		aggregates := []*qc.Aggregate{a1}
+		ga := &qc.GroupAggr{
+			Group:              nil,
+			Aggrs:              aggregates,
+			DependsOnIndexKeys: []int32{2},
+			IndexKeyNames:      []string{"(`default`.`a`)", "(`default`.`b`)", "(`default`.`c`)", "(meta(`default`).`id`)"},
+		}
+
+		proj := &qc.IndexProjection{EntryKeys: []int64{4}}
+		scans := make(qc.Scans, 1)
+		filter1 := make([]*qc.CompositeElementFilter, 2)
+		filter1[0] = &qc.CompositeElementFilter{Low: "aa", High: "aa", Inclusion: qc.Inclusion(uint32(3))}
+		filter1[1] = &qc.CompositeElementFilter{Low: c.MinUnbounded, High: c.MaxUnbounded, Inclusion: qc.Inclusion(uint32(0))}
+		scans[0] = &qc.Scan{Filter: filter1}
+		executeGroupAggrTest2(scans, ga, proj, n1qlEquivalent, "indexMinAggr", t)
+	}
+
+	test2 := func() {
+		log.Printf("=== Equality filter check: Equality for a, nil filter for b - inclusion 3, no filter for c ===")
+		n1qlEquivalent := "SELECT MIN(c) AS a FROM default USE INDEX(`#primary`) " +
+			" WHERE a = \"aa\" "
+		a1 := &qc.Aggregate{AggrFunc: c.AGG_MIN, EntryKeyId: 4, KeyPos: 2}
+		aggregates := []*qc.Aggregate{a1}
+		ga := &qc.GroupAggr{
+			Group:              nil,
+			Aggrs:              aggregates,
+			DependsOnIndexKeys: []int32{2},
+			IndexKeyNames:      []string{"(`default`.`a`)", "(`default`.`b`)", "(`default`.`c`)", "(meta(`default`).`id`)"},
+		}
+
+		proj := &qc.IndexProjection{EntryKeys: []int64{4}}
+		scans := make(qc.Scans, 1)
+		filter1 := make([]*qc.CompositeElementFilter, 2)
+		filter1[0] = &qc.CompositeElementFilter{Low: "aa", High: "aa", Inclusion: qc.Inclusion(uint32(3))}
+		filter1[1] = &qc.CompositeElementFilter{Low: c.MinUnbounded, High: c.MaxUnbounded, Inclusion: qc.Inclusion(uint32(3))}
+		scans[0] = &qc.Scan{Filter: filter1}
+		executeGroupAggrTest2(scans, ga, proj, n1qlEquivalent, "indexMinAggr", t)
+	}
+
+	test3 := func() {
+		log.Printf("=== Equality filter check: Equality for a, nil filter for b - inclusion 3, nil filter for c ===")
+		n1qlEquivalent := "SELECT MIN(c) AS a FROM default USE INDEX(`#primary`) " +
+			" WHERE a = \"aa\" "
+		a1 := &qc.Aggregate{AggrFunc: c.AGG_MIN, EntryKeyId: 4, KeyPos: 2}
+		aggregates := []*qc.Aggregate{a1}
+		ga := &qc.GroupAggr{
+			Group:              nil,
+			Aggrs:              aggregates,
+			DependsOnIndexKeys: []int32{2},
+			IndexKeyNames:      []string{"(`default`.`a`)", "(`default`.`b`)", "(`default`.`c`)", "(meta(`default`).`id`)"},
+		}
+
+		proj := &qc.IndexProjection{EntryKeys: []int64{4}}
+		scans := make(qc.Scans, 1)
+		filter1 := make([]*qc.CompositeElementFilter, 2)
+		filter1[0] = &qc.CompositeElementFilter{Low: "aa", High: "aa", Inclusion: qc.Inclusion(uint32(3))}
+		filter1[1] = &qc.CompositeElementFilter{Low: c.MinUnbounded, High: c.MaxUnbounded, Inclusion: qc.Inclusion(uint32(3))}
+		filter1[1] = &qc.CompositeElementFilter{Low: c.MinUnbounded, High: c.MaxUnbounded, Inclusion: qc.Inclusion(uint32(0))}
+		scans[0] = &qc.Scan{Filter: filter1}
+		executeGroupAggrTest2(scans, ga, proj, n1qlEquivalent, "indexMinAggr", t)
+	}
+
+	setup()
+	test1()
+	test2()
+	test3()
 }
 
 func TestGroupAggrPrimary(t *testing.T) {
