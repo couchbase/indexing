@@ -3,6 +3,7 @@ package functionaltests
 import (
 	"errors"
 	"fmt"
+
 	c "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/queryport/n1ql"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
@@ -12,6 +13,7 @@ import (
 	qerrors "github.com/couchbase/query/errors"
 	qexpr "github.com/couchbase/query/expression"
 	qparser "github.com/couchbase/query/expression/parser"
+
 	//"github.com/couchbase/query/value"
 	"io/ioutil"
 	"log"
@@ -48,7 +50,7 @@ func TestBufferedScan_BackfillDisabled(t *testing.T) {
 		FailTestIfError(err, "TestBufferedScan_BackfillDisabled failed in getting ClusterAuthUrl", t)
 	}
 
-	n1qlclient, err := n1ql.NewGSIIndexer(cluster, "default" /*namespace*/, "default")
+	n1qlclient, err := n1ql.NewGSIIndexer(cluster, "default" /*namespace*/, "default", nil)
 	if err != nil {
 		FailTestIfError(err, "TestBufferedScan_BackfillDisabled failed in creating n1ql client", t)
 	}
@@ -180,7 +182,7 @@ func TestBufferedScan_BackfillEnabled(t *testing.T) {
 		FailTestIfError(err, "TestBufferedScan_BackfillEnabled failed in getting ClusterAuthUrl", t)
 	}
 
-	n1qlclient, err := n1ql.NewGSIIndexer(cluster, "default" /*namespace*/, "default")
+	n1qlclient, err := n1ql.NewGSIIndexer(cluster, "default" /*namespace*/, "default", nil)
 	if err != nil {
 		FailTestIfError(err, "TestBufferedScan_BackfillEnabled failed in creating n1ql client", t)
 	}
