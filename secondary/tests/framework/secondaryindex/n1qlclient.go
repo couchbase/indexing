@@ -38,7 +38,7 @@ func GetOrCreateN1QLClient(server, bucketName string) (datastore.Indexer, error)
 	clientMapLock.RUnlock()
 
 	if !ok { // Client does not exist, so create new
-		nc, err = nclient.NewGSIIndexer(server, "default", bucketName)
+		nc, err = nclient.NewGSIIndexer(server, "default", bucketName, nil)
 		if err != nil {
 			return nil, err
 		}
