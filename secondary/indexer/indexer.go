@@ -30,7 +30,7 @@ import (
 	"time"
 
 	"github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/fdb"
+	forestdb "github.com/couchbase/indexing/secondary/fdb"
 	"github.com/couchbase/indexing/secondary/logging"
 	mc "github.com/couchbase/indexing/secondary/manager/common"
 	"github.com/couchbase/indexing/secondary/memdb"
@@ -3141,10 +3141,12 @@ func (idx *indexer) handleKVStreamRepair(msg Message) {
 		return
 	}
 
-	//repair is not required for inactive bucket streams
-	if idx.getStreamBucketState(streamId, bucket) == STREAM_INACTIVE {
-		logging.Infof("Indexer::handleKVStreamRepair Skip Stream Repair %v Inactive Bucket %v",
-			streamId, bucket)
+	//repair is not required for inactive/prepare recovery bucket streams
+	state := idx.getStreamBucketState(streamId, bucket)
+	if state == STREAM_INACTIVE ||
+		state == STREAM_PREPARE_RECOVERY {
+		logging.Infof("Indexer::handleKVStreamRepair Skip KVStreamRepair %v %v %v",
+			streamId, bucket, state)
 		return
 	}
 

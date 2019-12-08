@@ -12,13 +12,14 @@ package indexer
 import (
 	"errors"
 	"fmt"
-	"github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/dcp"
-	"github.com/couchbase/indexing/secondary/logging"
 	"math"
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/couchbase/indexing/secondary/common"
+	couchbase "github.com/couchbase/indexing/secondary/dcp"
+	"github.com/couchbase/indexing/secondary/logging"
 )
 
 const (
@@ -2950,7 +2951,7 @@ func (tk *timekeeper) repairStream(streamId common.StreamId,
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
 
-	if status := tk.ss.streamBucketStatus[streamId][bucket]; status == STREAM_INACTIVE {
+	if status := tk.ss.streamBucketStatus[streamId][bucket]; status != STREAM_ACTIVE {
 
 		logging.Infof("Timekeeper::repairStream Found Stream %v Bucket %v In "+
 			"State %v. Skipping Repair.", streamId, bucket, status)
@@ -3063,7 +3064,9 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 		currSessionId := tk.ss.getSessionId(streamId, bucket)
 		tk.lock.RUnlock()
 
-		if status == STREAM_INACTIVE {
+		//response can be skipped for inactive stream or under recovery stream(stream
+		//will be restarted as part of recovery)
+		if status != STREAM_ACTIVE {
 			logging.Infof("Timekeeper::sendRestartMsg Found Stream %v Bucket %v In "+
 				"State %v. Skipping Restart Vbuckets Response.", streamId, bucket, status)
 			return
@@ -3110,7 +3113,9 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 		currSessionId := tk.ss.getSessionId(streamId, bucket)
 		tk.lock.RUnlock()
 
-		if status == STREAM_INACTIVE {
+		//response can be skipped for inactive stream or under recovery stream(stream
+		//will be restarted as part of recovery)
+		if status != STREAM_ACTIVE {
 			logging.Infof("Timekeeper::sendRestartMsg Found Stream %v Bucket %v In "+
 				"State %v. Skipping Rollback.", streamId, bucket, status)
 			return
@@ -3198,7 +3203,9 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 		tk.lock.Lock()
 		defer tk.lock.Unlock()
 
-		if status := tk.ss.streamBucketStatus[streamId][bucket]; status == STREAM_INACTIVE {
+		//response can be skipped for inactive stream or under recovery stream(stream
+		//will be restarted as part of recovery)
+		if status := tk.ss.streamBucketStatus[streamId][bucket]; status != STREAM_ACTIVE {
 
 			logging.Infof("Timekeeper::sendRestartMsg Found Stream %v Bucket %v In "+
 				"State %v. Skipping Stream Repair.", streamId, bucket, status)
@@ -3292,10 +3299,11 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 			status := tk.ss.streamBucketStatus[streamId][bucket]
 			tk.lock.RUnlock()
 
-			if status == STREAM_INACTIVE {
+			//response can be skipped for inactive stream or under recovery stream(stream
+			//will be restarted as part of recovery)
+			if status != STREAM_ACTIVE {
 				logging.Infof("Timekeeper::sendRestartMsg Found Stream %v Bucket %v In "+
 					"State %v. Skipping RestartVbucket Retry.", streamId, bucket, status)
-
 				return
 			}
 
