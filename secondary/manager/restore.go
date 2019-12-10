@@ -256,8 +256,14 @@ func (m *RestoreContext) findIndexToRestore() error {
 								"Skip restoring index (%v, %v, %v, %v).", index.Bucket, index.Name, index.PartnId, index.Instance.ReplicaId)
 							continue
 						}
-					}
 
+						// Check if there are enough number of indexer nodes to replica repair
+						if numReplica >= len(m.current.Placement) {
+							logging.Infof("RestoreContext:  There aren't enough number of indexer nodes to place the replica. "+
+								"Skip restoring index (%v, %v, %v, %v).", index.Bucket, index.Name, index.PartnId, index.Instance.ReplicaId)
+							continue
+						}
+					}
 				} else {
 					// There is another index with the same name or bucket but different definition.  Re-name the index to restore.
 					if _, ok := defnId2NameMap[index.DefnId]; !ok {
