@@ -3051,6 +3051,29 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 		return
 	}
 
+	validateStreamStatusAndSessionId := func(streamId common.StreamId,
+		bucket string, sessionId uint64, logMsg string) bool {
+
+		status := tk.ss.streamBucketStatus[streamId][bucket]
+
+		//response can be skipped for inactive stream or under recovery stream(stream
+		//will be restarted as part of recovery)
+		if status != STREAM_ACTIVE {
+			logging.Infof("Timekeeper::sendRestartMsg Found Stream %v Bucket %v In "+
+				"State %v. Skipping %v.", streamId, bucket, status, logMsg)
+			return false
+		}
+
+		currSessionId := tk.ss.getSessionId(streamId, bucket)
+		if sessionId != currSessionId {
+			logging.Infof("Timekeeper::sendRestartMsg Stream %v Bucket %v Curr Session "+
+				"%v. Skipping %v Session %v.", streamId, bucket,
+				currSessionId, logMsg, sessionId)
+			return false
+		}
+		return true
+	}
+
 	switch kvresp.GetMsgType() {
 
 	case REPAIR_ABORT:
@@ -3059,34 +3082,29 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 
 	case KV_SENDER_RESTART_VBUCKETS_RESPONSE:
 
-		tk.lock.RLock()
-		status := tk.ss.streamBucketStatus[streamId][bucket]
-		currSessionId := tk.ss.getSessionId(streamId, bucket)
-		tk.lock.RUnlock()
-
-		//response can be skipped for inactive stream or under recovery stream(stream
-		//will be restarted as part of recovery)
-		if status != STREAM_ACTIVE {
-			logging.Infof("Timekeeper::sendRestartMsg Found Stream %v Bucket %v In "+
-				"State %v. Skipping Restart Vbuckets Response.", streamId, bucket, status)
-			return
-		}
+		needsRollback := false
 
 		restartRespMsg := kvresp.(*MsgRestartVbucketsResponse)
 		activeTs := restartRespMsg.GetActiveTs()
 		pendingTs := restartRespMsg.GetPendingTs()
 		sessionId := restartRespMsg.GetSessionId()
 
-		if sessionId != currSessionId {
-			logging.Infof("Timekeeper::sendRestartMsg Stream %v Bucket %v Curr Session "+
-				"%v. Skipping Restart Vbuckets Response Session %v.", streamId, bucket,
-				currSessionId, sessionId)
+		abort := func() bool {
+			tk.lock.RLock()
+			defer tk.lock.RUnlock()
+
+			if !validateStreamStatusAndSessionId(streamId, bucket,
+				sessionId, "Restart Vbuckets Response") {
+				return true
+			} else {
+				needsRollback = tk.ss.needsRollback(streamId, bucket)
+			}
+			return false
+		}()
+
+		if abort {
 			return
 		}
-
-		tk.lock.RLock()
-		needsRollback := tk.ss.needsRollback(streamId, bucket)
-		tk.lock.RUnlock()
 
 		if needsRollback {
 			//if a rollback is required, proceed without waiting
@@ -3097,62 +3115,86 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 			time.Sleep(time.Duration(waitTime) * time.Second)
 		}
 
-		tk.lock.Lock()
-		tk.ss.streamBucketKVActiveTsMap[streamId][bucket] = activeTs
-		tk.ss.streamBucketKVPendingTsMap[streamId][bucket] = pendingTs
-		tk.ss.updateRepairState(streamId, bucket, repairVbs, shutdownVbs)
-		tk.lock.Unlock()
+		abort = func() bool {
+
+			tk.lock.Lock()
+			defer tk.lock.Unlock()
+
+			if !validateStreamStatusAndSessionId(streamId, bucket, sessionId, "Rollback") {
+				return true
+			}
+
+			tk.ss.streamBucketKVActiveTsMap[streamId][bucket] = activeTs
+			tk.ss.streamBucketKVPendingTsMap[streamId][bucket] = pendingTs
+			tk.ss.updateRepairState(streamId, bucket, repairVbs, shutdownVbs)
+			return false
+
+		}()
+
+		if abort {
+			return
+		}
 
 		//check for more vbuckets in repair state
 		tk.repairStream(streamId, bucket)
 
 	case INDEXER_ROLLBACK:
 
-		tk.lock.RLock()
-		status := tk.ss.streamBucketStatus[streamId][bucket]
-		currSessionId := tk.ss.getSessionId(streamId, bucket)
-		tk.lock.RUnlock()
-
-		//response can be skipped for inactive stream or under recovery stream(stream
-		//will be restarted as part of recovery)
-		if status != STREAM_ACTIVE {
-			logging.Infof("Timekeeper::sendRestartMsg Found Stream %v Bucket %v In "+
-				"State %v. Skipping Rollback.", streamId, bucket, status)
-			return
-		}
-
-		sessionId := kvresp.(*MsgRollback).GetSessionId()
-		if sessionId != currSessionId {
-			logging.Infof("Timekeeper::sendRestartMsg Stream %v Bucket %v Curr Session "+
-				"%v. Skipping Rollback Session %v.", streamId, bucket,
-				currSessionId, sessionId)
-			return
-		}
-
-		//if rollback msg, call initPrepareRecovery
-		logging.Infof("Timekeeper::sendRestartMsg Received Rollback Msg For "+
-			"%v %v. Update RollbackTs.", streamId, bucket)
-
-		// There is rollback while repairing stream.  RollbackTs could be coming from
-		// 1) Unrelated to the vb under repair
-		// 2) Due to vb under repair
-		// In either case, indexer expects getting StreamBegin even if vb is rolled back.  This will
-		// set the Vb back to STREAM_BEGIN status.  Once all vb are in STREAM_BEGIN status, repairStream
-		// will trigger recovery.
-		rollbackTs := kvresp.(*MsgRollback).GetRollbackTs()
-		if rollbackTs != nil && rollbackTs.Len() > 0 {
+		contRepair := false
+		func() {
 
 			tk.lock.Lock()
-			ts := rollbackTs.Union(tk.ss.streamBucketKVRollbackTsMap[streamId][bucket])
-			if ts != nil {
-				tk.ss.streamBucketKVRollbackTsMap[streamId][bucket] = ts
-			}
-			tk.lock.Unlock()
+			defer tk.lock.Unlock()
 
-			if ts == nil {
+			sessionId := kvresp.(*MsgRollback).GetSessionId()
+
+			if !validateStreamStatusAndSessionId(streamId, bucket, sessionId, "Rollback") {
+				return
+			}
+
+			//if rollback msg, call initPrepareRecovery
+			logging.Infof("Timekeeper::sendRestartMsg Received Rollback Msg For "+
+				"%v %v. Update RollbackTs.", streamId, bucket)
+
+			currSessionId := tk.ss.getSessionId(streamId, bucket)
+
+			// There is rollback while repairing stream.  RollbackTs could be coming from
+			// 1) Unrelated to the vb under repair
+			// 2) Due to vb under repair
+			// In either case, indexer expects getting StreamBegin even if vb is rolled back.  This will
+			// set the Vb back to STREAM_BEGIN status.  Once all vb are in STREAM_BEGIN status, repairStream
+			// will trigger recovery.
+			rollbackTs := kvresp.(*MsgRollback).GetRollbackTs()
+			if rollbackTs != nil && rollbackTs.Len() > 0 {
+
+				ts := rollbackTs.Union(tk.ss.streamBucketKVRollbackTsMap[streamId][bucket])
+				if ts != nil {
+					tk.ss.streamBucketKVRollbackTsMap[streamId][bucket] = ts
+				}
+
+				if ts == nil {
+					logging.Errorf("Timekeeper::sendRestartMsg Received Rollback Msg For "+
+						"%v %v %v. Fail to merge rollbackTs in timekeeper. Send InitPrepRecovery "+
+						"right away. RollbackTs %v", streamId, bucket, sessionId, rollbackTs)
+
+					tk.supvRespch <- &MsgRecovery{
+						mType:     INDEXER_INIT_PREP_RECOVERY,
+						streamId:  streamId,
+						bucket:    bucket,
+						restartTs: tk.ss.computeRollbackTs(streamId, bucket),
+						sessionId: currSessionId,
+					}
+					delete(tk.ss.streamBucketRepairStopCh[streamId], bucket)
+					return
+				}
+				// update repair state even if there is rollback
+				tk.ss.updateRepairState(streamId, bucket, repairVbs, shutdownVbs)
+				contRepair = true
+
+			} else {
 				logging.Errorf("Timekeeper::sendRestartMsg Received Rollback Msg For "+
-					"%v %v %v. Fail to merge rollbackTs in timekeeper. Send InitPrepRecovery "+
-					"right away. RollbackTs %v", streamId, bucket, sessionId, rollbackTs)
+					"%v %v %v. RollbackTs is empty.  Send InitPrepRecovery right away.",
+					streamId, bucket, sessionId)
 
 				tk.supvRespch <- &MsgRecovery{
 					mType:     INDEXER_INIT_PREP_RECOVERY,
@@ -3162,36 +3204,12 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 					sessionId: currSessionId,
 				}
 
-				tk.lock.Lock()
 				delete(tk.ss.streamBucketRepairStopCh[streamId], bucket)
-				tk.lock.Unlock()
-
-				return
 			}
+		}()
 
-			tk.lock.Lock()
-			// update repair state even if there is rollback
-			tk.ss.updateRepairState(streamId, bucket, repairVbs, shutdownVbs)
-			tk.lock.Unlock()
-
+		if contRepair {
 			tk.repairStream(streamId, bucket)
-
-		} else {
-			logging.Errorf("Timekeeper::sendRestartMsg Received Rollback Msg For "+
-				"%v %v %v. RollbackTs is empty.  Send InitPrepRecovery right away.",
-				streamId, bucket, sessionId)
-
-			tk.supvRespch <- &MsgRecovery{
-				mType:     INDEXER_INIT_PREP_RECOVERY,
-				streamId:  streamId,
-				bucket:    bucket,
-				restartTs: tk.ss.computeRollbackTs(streamId, bucket),
-				sessionId: currSessionId,
-			}
-
-			tk.lock.Lock()
-			delete(tk.ss.streamBucketRepairStopCh[streamId], bucket)
-			tk.lock.Unlock()
 		}
 
 	case KV_STREAM_REPAIR:
@@ -3203,23 +3221,13 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 		tk.lock.Lock()
 		defer tk.lock.Unlock()
 
-		//response can be skipped for inactive stream or under recovery stream(stream
-		//will be restarted as part of recovery)
-		if status := tk.ss.streamBucketStatus[streamId][bucket]; status != STREAM_ACTIVE {
+		sessionId := kvresp.(*MsgKVStreamRepair).GetSessionId()
 
-			logging.Infof("Timekeeper::sendRestartMsg Found Stream %v Bucket %v In "+
-				"State %v. Skipping Stream Repair.", streamId, bucket, status)
+		if !validateStreamStatusAndSessionId(streamId, bucket, sessionId, "Stream Repair") {
 			return
 		}
 
 		currSessionId := tk.ss.getSessionId(streamId, bucket)
-		sessionId := kvresp.(*MsgKVStreamRepair).GetSessionId()
-		if sessionId != currSessionId {
-			logging.Infof("Timekeeper::sendRestartMsg Stream %v Bucket %v Curr Session "+
-				"%v. Skipping Rollback Session %v.", streamId, bucket,
-				currSessionId, sessionId)
-			return
-		}
 
 		// If we need recovery, then trigger recovery right away.
 		if tk.ss.needsRollback(streamId, bucket) {
@@ -3248,17 +3256,21 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 
 		tk.repairStreamWithMTR(streamId, bucket, repairMsg)
 
-	default:
-
-		tk.lock.RLock()
-		currSessionId := tk.ss.getSessionId(streamId, bucket)
-		tk.lock.RUnlock()
+	default: //MSG_ERROR
 
 		sessionId := kvresp.(*MsgError).GetSessionId()
-		if sessionId != currSessionId {
-			logging.Infof("Timekeeper::sendRestartMsg Stream %v Bucket %v Curr Session "+
-				"%v. Skipping Error Session %v.", streamId, bucket,
-				currSessionId, sessionId)
+
+		abort := func() bool {
+			tk.lock.RLock()
+			defer tk.lock.RUnlock()
+
+			if !validateStreamStatusAndSessionId(streamId, bucket, sessionId, "Error") {
+				return true
+			}
+			return false
+		}()
+
+		if abort {
 			return
 		}
 
@@ -3276,36 +3288,22 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 
 			tk.lock.Lock()
 			defer tk.lock.Unlock()
-			sessionId := tk.ss.getSessionId(streamId, bucket)
-			if status := tk.ss.streamBucketStatus[streamId][bucket]; status == STREAM_INACTIVE {
 
-				logging.Infof("Timekeeper::sendRestartMsg Found Stream %v Bucket %v SessionId %v In "+
-					"State %v. Skipping Bucket Not Found.", streamId, bucket, sessionId, status)
+			if !validateStreamStatusAndSessionId(streamId, bucket, sessionId, "Bucket Not Found") {
 				return
-			} else {
-				delete(tk.ss.streamBucketRepairStopCh[streamId], bucket)
-				tk.ss.streamBucketStatus[streamId][bucket] = STREAM_INACTIVE
 			}
+
+			currSessionId := tk.ss.getSessionId(streamId, bucket)
+			delete(tk.ss.streamBucketRepairStopCh[streamId], bucket)
+			tk.ss.streamBucketStatus[streamId][bucket] = STREAM_INACTIVE
 
 			tk.supvRespch <- &MsgRecovery{mType: INDEXER_BUCKET_NOT_FOUND,
 				streamId:  streamId,
 				bucket:    bucket,
-				sessionId: sessionId}
+				sessionId: currSessionId}
 		} else {
 			logging.Errorf("Timekeeper::sendRestartMsg Error Response "+
 				"from KV %v For Request %v. Retrying RestartVbucket.", kvresp, restartMsg)
-
-			tk.lock.RLock()
-			status := tk.ss.streamBucketStatus[streamId][bucket]
-			tk.lock.RUnlock()
-
-			//response can be skipped for inactive stream or under recovery stream(stream
-			//will be restarted as part of recovery)
-			if status != STREAM_ACTIVE {
-				logging.Infof("Timekeeper::sendRestartMsg Found Stream %v Bucket %v In "+
-					"State %v. Skipping RestartVbucket Retry.", streamId, bucket, status)
-				return
-			}
 
 			tk.repairStream(streamId, bucket)
 		}
