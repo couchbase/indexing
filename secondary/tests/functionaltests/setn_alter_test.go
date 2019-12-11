@@ -18,7 +18,7 @@ func TestAlterIndexIncrReplica(t *testing.T) {
 	}
 
 	log.Printf("In TestAlterIndexIncrReplica()")
-	log.Printf("This test create an index with one replica and then increments replica count to 2")
+	log.Printf("This test creates an index with one replica and then increments replica count to 2")
 
 	if err := validateServers(clusterconfig.Nodes); err != nil {
 		t.Fatalf("Error while validating cluster, err: %v", err)
@@ -27,6 +27,12 @@ func TestAlterIndexIncrReplica(t *testing.T) {
 	if !is4NodeCluster() {
 		init4NodeCluster(t)
 	}
+
+	// Drop all seconday indexes so that the test can be validated
+	// by comparing the scan related stats
+	e := secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+	FailTestIfError(e, "Error in DropAllSecondaryIndexes", t)
+	time.Sleep(10 * time.Second)
 
 	var bucketName = "default"
 	indexName := "idx_1"
@@ -52,6 +58,53 @@ func TestAlterIndexIncrReplica(t *testing.T) {
 	waitForIndexActive(bucketName, indexName+" (replica 2)", t)
 
 	scanIndexReplicas(indexName, bucketName, []int{0, 1, 2}, num_scans, num_docs, t)
+}
+
+func TestAlterIndexDecrReplica(t *testing.T) {
+	if !clusterconfig.MultipleIndexerTests || len(clusterconfig.Nodes) < 4 {
+		return
+	}
+
+	log.Printf("In TestAlterIndexDecrReplica()")
+	log.Printf("This test creates an index with two replicas and then decrements replica count to 1")
+
+	if err := validateServers(clusterconfig.Nodes); err != nil {
+		t.Fatalf("Error while validating cluster, err: %v", err)
+	}
+
+	if !is4NodeCluster() {
+		init4NodeCluster(t)
+	}
+
+	// Drop all seconday indexes so that the test can be validated
+	// by comparing the scan related stats
+	e := secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+	FailTestIfError(e, "Error in DropAllSecondaryIndexes", t)
+	time.Sleep(10 * time.Second)
+
+	var bucketName = "default"
+	indexName := "idx_2"
+	num_docs := 100
+	num_scans := 100
+
+	// Create index on age
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{"age"}, false, []byte("{\"num_replica\":2}"), true, defaultIndexActiveTimeout, nil)
+	FailTestIfError(err, "Error in creating the index", t)
+
+	// Decrement the replica count
+	n1qlstatement := "alter index `" + bucketName + "`." + indexName + " with {\"action\":\"replica_count\", \"num_replica\":1}"
+	log.Printf("Executing alter index command: %v", n1qlstatement)
+	_, err = tc.ExecuteN1QLStatement(kvaddress, clusterconfig.Username, clusterconfig.Password, bucketName, n1qlstatement, false, nil)
+	FailTestIfError(err, "Error in creating primary index", t)
+	// Wait for the index to get dropped
+	time.Sleep(10 * time.Second)
+
+	// Check if index exists after altering
+	if checkIfReplicaExists(indexName, bucketName, 2) {
+		t.Fatalf("Replica: 2 is expected to be dropped. But it still exists")
+	}
+
+	scanIndexReplicas(indexName, bucketName, []int{0, 1}, num_scans, num_docs, t)
 }
 
 // Make sure that we reset cluster at the end of all the tests in this file
@@ -95,12 +148,13 @@ func waitForIndexActive(bucket, index string, t *testing.T) {
 // Helper function that can be used to verify whether an index is dropped or not
 // for alter index decrement replica count, alter index drop
 func checkIfReplicaExists(index, bucket string, replicaId int) bool {
+	indexName := fmt.Sprintf("%v (replica %v)", index, replicaId)
 	status, err := secondaryindex.GetIndexStatus(clusterconfig.Username, clusterconfig.Password, kvaddress)
 	if status != nil && err == nil {
 		indexes := status["indexes"].([]interface{})
 		for _, indexEntry := range indexes {
 			entry := indexEntry.(map[string]interface{})
-			if index == entry["index"].(string) {
+			if indexName == entry["index"].(string) {
 				if bucket == entry["bucket"].(string) {
 					return true
 				}
