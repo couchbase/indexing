@@ -52,7 +52,7 @@ func TestAlterIndexIncrReplica(t *testing.T) {
 	n1qlstatement := "alter index `" + bucketName + "`." + indexName + " with {\"action\":\"replica_count\", \"num_replica\":2}"
 	log.Printf("Executing alter index command: %v", n1qlstatement)
 	_, err = tc.ExecuteN1QLStatement(kvaddress, clusterconfig.Username, clusterconfig.Password, bucketName, n1qlstatement, false, nil)
-	FailTestIfError(err, "Error in creating primary index", t)
+	FailTestIfError(err, "Error in executing n1ql statement", t)
 
 	// Wait for alter index to finish execution
 	waitForIndexActive(bucketName, indexName+" (replica 2)", t)
@@ -95,7 +95,7 @@ func TestAlterIndexDecrReplica(t *testing.T) {
 	n1qlstatement := "alter index `" + bucketName + "`." + indexName + " with {\"action\":\"replica_count\", \"num_replica\":1}"
 	log.Printf("Executing alter index command: %v", n1qlstatement)
 	_, err = tc.ExecuteN1QLStatement(kvaddress, clusterconfig.Username, clusterconfig.Password, bucketName, n1qlstatement, false, nil)
-	FailTestIfError(err, "Error in creating primary index", t)
+	FailTestIfError(err, "Error in executing n1ql statement", t)
 	// Wait for the index to get dropped
 	time.Sleep(10 * time.Second)
 
@@ -105,6 +105,53 @@ func TestAlterIndexDecrReplica(t *testing.T) {
 	}
 
 	scanIndexReplicas(indexName, bucketName, []int{0, 1}, num_scans, num_docs, t)
+}
+
+func TestAlterIndexDropReplica(t *testing.T) {
+	if !clusterconfig.MultipleIndexerTests || len(clusterconfig.Nodes) < 4 {
+		return
+	}
+
+	log.Printf("In TestAlterIndexDropReplica()")
+	log.Printf("This test creates an index with two replicas and then drops one replica from cluster")
+
+	if err := validateServers(clusterconfig.Nodes); err != nil {
+		t.Fatalf("Error while validating cluster, err: %v", err)
+	}
+
+	if !is4NodeCluster() {
+		init4NodeCluster(t)
+	}
+
+	// Drop all seconday indexes so that the test can be validated
+	// by comparing the scan related stats
+	e := secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+	FailTestIfError(e, "Error in DropAllSecondaryIndexes", t)
+	time.Sleep(10 * time.Second)
+
+	var bucketName = "default"
+	indexName := "idx_3"
+	num_docs := 100
+	num_scans := 100
+
+	// Create index on age
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{"age"}, false, []byte("{\"num_replica\":2}"), true, defaultIndexActiveTimeout, nil)
+	FailTestIfError(err, "Error in creating the index", t)
+
+	// Drop the index 'idx_3'
+	n1qlstatement := "alter index `" + bucketName + "`." + indexName + " with {\"action\":\"drop_replica\", \"replicaId\":0}"
+	log.Printf("Executing alter index command: %v", n1qlstatement)
+	_, err = tc.ExecuteN1QLStatement(kvaddress, clusterconfig.Username, clusterconfig.Password, bucketName, n1qlstatement, false, nil)
+	FailTestIfError(err, "Error in executing n1ql statement", t)
+	// Wait for the index to get dropped
+	time.Sleep(3 * time.Second)
+
+	// Check if index exists after altering
+	if checkIfReplicaExists(indexName, bucketName, 0) {
+		t.Fatalf("Replica: 0 is expected to be dropped. But it still exists")
+	}
+
+	scanIndexReplicas(indexName, bucketName, []int{1, 2}, num_scans, num_docs, t)
 }
 
 // Make sure that we reset cluster at the end of all the tests in this file
