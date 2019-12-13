@@ -3655,11 +3655,14 @@ func (o *MetadataProvider) findNextAvailWatcher(excludes []*watcher, checkServer
 				found = true
 			} else if checkServerGroup && watcher.getServerGroup() == exclude.getServerGroup() {
 				found = true
-			} else if watcher.serviceMap.ExcludeNode == "in" ||
-				watcher.serviceMap.ExcludeNode == "inout" {
-				found = true
 			}
 		}
+
+		if watcher.serviceMap.ExcludeNode == "in" ||
+			watcher.serviceMap.ExcludeNode == "inout" {
+			found = true
+		}
+
 		if !found {
 			count := o.repo.getValidDefnCount(watcher.getIndexerId())
 			if count <= minCount {
