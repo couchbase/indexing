@@ -205,7 +205,7 @@ func LogPerfStat(apiName string, elapsed time.Duration) {
 }
 
 func ExecuteN1QLStatement(clusterAddr, username, password, bucketName,
-	statement string, disableAggrPushdown bool, consistency gocb.ConsistencyMode) ([]interface{}, error) {
+	statement string, disableAggrPushdown bool, consistency interface{}) ([]interface{}, error) {
 
 	clusterAddr = "http://" + clusterAddr
 	cluster, err := gocb.Connect(clusterAddr)
@@ -225,7 +225,9 @@ func ExecuteN1QLStatement(clusterAddr, username, password, bucketName,
 	}
 
 	query := gocb.NewN1qlQuery(statement)
-	query.Consistency(consistency)
+	if consistency != nil {
+		query.Consistency((consistency).(gocb.ConsistencyMode))
+	}
 
 	if disableAggrPushdown {
 		query.Custom("n1ql_feat_ctrl", "1")

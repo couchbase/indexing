@@ -262,8 +262,9 @@ func ResetCluster(serverAddr, username, password string, dropNodes []string, kee
 	if err := waitForRebalanceFinish(serverAddr, username, password); err != nil {
 		return fmt.Errorf("Error in resetCluster, err: %v", err)
 	}
-
-	time.Sleep(3 * time.Second)
+	// Sleep for 10 seconds between rebalance so that couchbase-server gets sufficent
+	// time to go down and come back online
+	time.Sleep(10 * time.Second)
 
 	for node, role := range keepNodes {
 		if err := AddNode(serverAddr, username, password, node, role); err != nil {

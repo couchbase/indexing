@@ -201,6 +201,35 @@ func GetIndexHostNode(indexName, bucketName, serverUserName, serverPassword, hos
 	return "", errors.New("Index not found in /indexStatus")
 }
 
+func GetIndexStatus(serverUserName, serverPassword, hostaddress string) (map[string]interface{}, error) {
+	client := &http.Client{}
+	address := "http://" + hostaddress + "/indexStatus"
+
+	req, _ := http.NewRequest("GET", address, nil)
+	req.SetBasicAuth(serverUserName, serverPassword)
+	req.Header.Add("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
+	resp, err := client.Do(req)
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
+		log.Printf(address)
+		log.Printf("%v", req)
+		log.Printf("%v", resp)
+		log.Printf("Get indexStatus failed")
+	}
+	// todo : error out if response is error
+	tc.HandleError(err, "Get Stats")
+	defer resp.Body.Close()
+
+	response := make(map[string]interface{})
+	body, _ := ioutil.ReadAll(resp.Body)
+	err = json.Unmarshal(body, &response)
+
+	if err != nil {
+		tc.HandleError(err, "Get IndexStatus :: Unmarshal of response body")
+		return nil, nil
+	}
+	return response, nil
+}
+
 func GetIndexHttpPort(indexHostAddress, serverUserName, serverPassword, hostaddress string) string {
 	client := &http.Client{}
 	address := "http://" + hostaddress + "/pools/default/nodeServices"
