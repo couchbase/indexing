@@ -595,6 +595,7 @@ func (c *RequestBroker) scatter(clientMaker scanClientMaker, index *common.Index
 		return count, err, partial, false
 	}
 
+	// TODO (Collections): Update below error msg with collection and scope name when available in IndexDefn
 	e := fmt.Errorf("Intenral error: Fail to process request for index %v:%v.  Unknown request handler.", index.Bucket, index.Name)
 	return 0, c.makeErrorMap(targetInstId, partition, e), false, false
 }

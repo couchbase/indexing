@@ -53,9 +53,12 @@ const INDEXER_45_VERSION = 1
 const INDEXER_50_VERSION = 2
 const INDEXER_55_VERSION = 3
 const INDEXER_65_VERSION = 4
+const INDEXER_70_VERSION = 5
 const INDEXER_CUR_VERSION = INDEXER_65_VERSION
 
 const DEFAULT_POOL = "default"
+const DEFAULT_SCOPE = "_default"
+const DEFAULT_COLLECTION = "_default"
 
 const NON_PARTITION_ID = PartitionId(0)
 

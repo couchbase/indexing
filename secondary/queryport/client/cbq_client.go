@@ -133,7 +133,7 @@ func (b *cbqClient) Nodes() ([]*IndexerService, error) {
 
 // CreateIndex implement BridgeAccessor{} interface.
 func (b *cbqClient) CreateIndex(
-	name, bucket, using, exprType, whereExpr string,
+	name, bucket, scope, collection, using, exprType, whereExpr string,
 	secExprs []string, desc []bool, isPrimary bool,
 	scheme common.PartitionScheme, partitionKeys []string,
 	with []byte) (defnID uint64, err error) {

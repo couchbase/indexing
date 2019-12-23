@@ -87,10 +87,13 @@ type gsiKeyspace struct {
 	backfillSize   int64
 	totalbackfills int64
 
-	rw             sync.RWMutex
-	clusterURL     string
-	namespace      string // aka pool
-	keyspace       string // aka bucket
+	rw         sync.RWMutex
+	clusterURL string
+	namespace  string // pool
+	bucket     string
+	scope      string
+	keyspace   string // collection name when keyspace maps to collection
+
 	gsiClient      *qclient.GsiClient
 	config         c.Config
 	indexes        map[uint64]datastore.Index // defnID -> index
@@ -112,19 +115,35 @@ type gsiKeyspace struct {
 func NewGSIIndexer(clusterURL, namespace, keyspace string,
 	securityconf *datastore.ConnectionSecurityConfig) (datastore.Indexer, errors.Error) {
 
+	//TODO (Collections): This method can be blocked after integration
+	// with query service to disallow creation of bucket level keyspace
+
+	// passing keyspace as bucket name from old to new API
+	return NewGSIIndexer2(clusterURL, namespace, keyspace, c.DEFAULT_SCOPE, c.DEFAULT_COLLECTION, securityconf)
+}
+
+// During cluster version < 7.0 (mixed mode), scope and keyspace
+// are expected to be only _default as non-default collections cannot be
+// created during mixed mode.
+func NewGSIIndexer2(clusterURL, namespace, bucket, scope, keyspace string,
+	securityconf *datastore.ConnectionSecurityConfig) (datastore.Indexer, errors.Error) {
+
 	l.SetLogLevel(l.Info)
 
 	gsi := &gsiKeyspace{
 		clusterURL:        clusterURL,
 		namespace:         namespace,
+		bucket:            bucket,
+		scope:             scope,
 		keyspace:          keyspace,
 		indexes:           make(map[uint64]datastore.Index), // defnID -> index
 		primaryIndexes:    make(map[uint64]datastore.PrimaryIndex),
 		logstatsStopCh:    make(chan bool),
 		backfillMonStopCh: make(chan bool),
 	}
+
 	tm := time.Now().UnixNano()
-	gsi.logPrefix = fmt.Sprintf("GSIC[%s/%s-%v]", namespace, keyspace, tm)
+	gsi.logPrefix = fmt.Sprintf("GSIC[%s/%s-%s-%s-%v]", namespace, bucket, scope, keyspace, tm)
 
 	// get the singleton-client
 	conf, err := c.GetSettingsConfig(c.SystemConfig)
@@ -163,6 +182,14 @@ func (gsi *gsiKeyspace) SetConnectionSecurityConfig(conf *datastore.ConnectionSe
 // Id of the keyspace to which this indexer belongs
 func (gsi *gsiKeyspace) KeyspaceId() string {
 	return gsi.keyspace
+}
+
+func (gsi *gsiKeyspace) BucketId() string {
+	return gsi.bucket
+}
+
+func (gsi *gsiKeyspace) ScopeId() string {
+	return gsi.scope
 }
 
 // Name implements datastore.Indexer{} interface.
@@ -323,9 +350,11 @@ func (gsi *gsiKeyspace) CreatePrimaryIndex3(
 		}
 	}
 
-	defnID, err := gsi.gsiClient.CreateIndex3(
+	defnID, err := gsi.gsiClient.CreateIndex4(
 		name,
-		gsi.keyspace, /*bucket-name*/
+		gsi.bucket,   /*bucket-name*/
+		gsi.scope,    /*scope-name*/
+		gsi.keyspace, /*collection-name*/
 		"GSI",        /*using*/
 		"N1QL",       /*exprType*/
 		"",           /*whereStr*/
@@ -381,9 +410,9 @@ func (gsi *gsiKeyspace) CreateIndex(
 	}
 	defnID, err := gsi.gsiClient.CreateIndex(
 		name,
-		gsi.keyspace, /*bucket-name*/
-		"GSI",        /*using*/
-		"N1QL",       /*exprType*/
+		gsi.bucket, /*bucket-name*/
+		"GSI",      /*using*/
+		"N1QL",     /*exprType*/
 		partnStr, whereStr, secStrs,
 		false, /*isPrimary*/
 		withJSON)
@@ -448,9 +477,11 @@ func (gsi *gsiKeyspace) CreateIndex3(
 		}
 	}
 
-	defnID, err := gsi.gsiClient.CreateIndex3(
+	defnID, err := gsi.gsiClient.CreateIndex4(
 		name,
-		gsi.keyspace, /*bucket-name*/
+		gsi.bucket,   /*bucket-name*/
+		gsi.scope,    /*scope-name*/
+		gsi.keyspace, /*collection-name*/
 		"GSI",        /*using*/
 		"N1QL",       /*exprType*/
 		whereStr,
@@ -512,7 +543,10 @@ func (gsi *gsiKeyspace) Refresh() errors.Error {
 
 		si_s := make([]*secondaryIndex, 0, len(indexes))
 		for _, index := range indexes {
-			if index.Definition.Bucket != gsi.keyspace {
+
+			//TODO (Collections): Enhance the below check to include scope and
+			// collection name after index Definition is collection aware
+			if index.Definition.Bucket != gsi.bucket {
 				continue
 			}
 			si, err := newSecondaryIndexFromMetaData(gsi, clusterVersion, index)
@@ -602,7 +636,13 @@ func (gsi *gsiKeyspace) delIndex(id string) {
 func (gsi *gsiKeyspace) getIndexFromVersion(index *secondaryIndex,
 	clusterVersion uint64) datastore.Index {
 
-	if clusterVersion >= c.INDEXER_65_VERSION {
+	if clusterVersion >= c.INDEXER_70_VERSION {
+		si2 := &secondaryIndex2{secondaryIndex: *index}
+		si3 := &secondaryIndex3{secondaryIndex2: *si2}
+		si4 := &secondaryIndex4{secondaryIndex3: *si3}
+		si5 := datastore.Index(&secondaryIndex5{secondaryIndex4: *si4})
+		return si5
+	} else if clusterVersion >= c.INDEXER_65_VERSION {
 		si2 := &secondaryIndex2{secondaryIndex: *index}
 		si3 := &secondaryIndex3{secondaryIndex2: *si2}
 		si4 := datastore.Index(&secondaryIndex4{secondaryIndex3: *si3})
@@ -622,7 +662,13 @@ func (gsi *gsiKeyspace) getIndexFromVersion(index *secondaryIndex,
 func (gsi *gsiKeyspace) getPrimaryIndexFromVersion(index *secondaryIndex,
 	clusterVersion uint64) datastore.PrimaryIndex {
 
-	if clusterVersion >= c.INDEXER_65_VERSION {
+	if clusterVersion >= c.INDEXER_70_VERSION {
+		si2 := &secondaryIndex2{secondaryIndex: *index}
+		si3 := &secondaryIndex3{secondaryIndex2: *si2}
+		si4 := &secondaryIndex4{secondaryIndex3: *si3}
+		si5 := datastore.PrimaryIndex(&secondaryIndex5{secondaryIndex4: *si4})
+		return si5
+	} else if clusterVersion >= c.INDEXER_65_VERSION {
 		si2 := &secondaryIndex2{secondaryIndex: *index}
 		si3 := &secondaryIndex3{secondaryIndex2: *si2}
 		si4 := datastore.PrimaryIndex(&secondaryIndex4{secondaryIndex3: *si3})
@@ -744,7 +790,7 @@ func newSecondaryIndexFromMetaData(
 
 // KeyspaceId implement Index{} interface.
 func (si *secondaryIndex) KeyspaceId() string {
-	return si.bucketn
+	return si.gsi.KeyspaceId()
 }
 
 // Indexer implement Index{} interface.
@@ -1302,6 +1348,27 @@ func (si *secondaryIndex4) StorageStatistics(requestid string) ([]map[datastore.
 
 //-------------------------------------
 // datastore API4 implementation end
+//-------------------------------------
+
+//-------------------------------------
+// datastore Index5 implementation
+//-------------------------------------
+
+// Implements Index5 interface
+type secondaryIndex5 struct {
+	secondaryIndex4
+}
+
+func (si *secondaryIndex5) BucketId() string {
+	return si.gsi.bucket
+}
+
+func (si *secondaryIndex5) ScopeId() string {
+	return si.gsi.scope
+}
+
+//-------------------------------------
+// datastore Index5 implementation end
 //-------------------------------------
 
 //-------------------------------------
@@ -1893,7 +1960,7 @@ func (gsi *gsiKeyspace) logstats(logtick time.Duration) {
 					`"gsi_prime_duration":%v,"gsi_blocked_duration":%v,` +
 					`"gsi_total_temp_files":%v}`
 				l.Infof(
-					fmsg, gsi.logPrefix, gsi.keyspace, totalscans, scandur,
+					fmsg, gsi.logPrefix, gsi.bucket, totalscans, scandur,
 					throttledur, primedur, blockeddur, totalbackfills)
 			}
 			sofar = totalscans
