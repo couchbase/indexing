@@ -1576,9 +1576,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.enable_session_consistency_strict": ConfigValue{
-		true,
+		false,
 		"enable strict session consistency to handle rollback scenarios for consistent scans",
-		true,
+		false,
 		false, // mutable
 		false, // case-insensitive
 	},
