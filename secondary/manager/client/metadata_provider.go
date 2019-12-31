@@ -372,18 +372,27 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 	plan map[string]interface{}) (c.IndexDefnId, error, bool) {
 
 	// FindIndexByName will only return valid index
-	if o.findIndexByName(name, bucket) != nil {
+	if o.findIndexByName(name, bucket, scope, collection) != nil {
 		return c.IndexDefnId(0), errors.New(fmt.Sprintf("Index %s already exists.", name)), false
 	}
 
 	// Create index definition
-	idxDefn, err, retry := o.PrepareIndexDefn(name, bucket, using, exprType, whereExpr, secExprs, desc,
-		isPrimary, scheme, partitionKeys, plan)
+	idxDefn, err, retry := o.PrepareIndexDefn(name, bucket, scope, collection,
+		using, exprType, whereExpr, secExprs, desc, isPrimary, scheme,
+		partitionKeys, plan)
 	if err != nil {
 		return c.IndexDefnId(0), err, retry
 	}
 
 	clusterVersion := o.GetClusterVersion()
+	if clusterVersion < c.INDEXER_70_VERSION {
+		if collection != c.DEFAULT_COLLECTION || scope != c.DEFAULT_SCOPE {
+			err := errors.New("Fails to create index.  Creation of an index on non-default collection" +
+				"is enabled only after cluster is fully upgraded and there is no failed node.")
+			return c.IndexDefnId(0), err, false
+		}
+	}
+
 	if clusterVersion < c.INDEXER_55_VERSION || (!o.settings.UsePlanner() && !c.IsPartitioned(idxDefn.PartitionScheme)) {
 		if err := o.createIndex(idxDefn, plan); err != nil {
 			return c.IndexDefnId(0), err, false
@@ -400,8 +409,9 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 //
 // This function makes a call to create index using new protocol (vulcan).
 //
-func (o *MetadataProvider) makePrepareIndexRequest(defnId c.IndexDefnId, name string, bucket string, nodes []string,
-	partitionScheme c.PartitionScheme, numReplica int, checkDuplicateIndex bool) (map[c.IndexerId]int, error) {
+func (o *MetadataProvider) makePrepareIndexRequest(defnId c.IndexDefnId, name string,
+	bucket, scope, collection string, nodes []string, partitionScheme c.PartitionScheme,
+	numReplica int, checkDuplicateIndex bool) (map[c.IndexerId]int, error) {
 
 	// do a preliminary check
 	watchers, err, _ := o.findWatchersWithRetry(nodes, numReplica, c.IsPartitioned(partitionScheme), false)
@@ -424,6 +434,8 @@ func (o *MetadataProvider) makePrepareIndexRequest(defnId c.IndexDefnId, name st
 	if checkDuplicateIndex {
 		request.Bucket = bucket
 		request.Name = name
+		request.Scope = scope
+		request.Collection = collection
 	}
 
 	requestMsg, err := MarshallPrepareCreateRequest(request)
@@ -680,7 +692,8 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn, plan map
 	}
 
 	watcherMap, err := o.makePrepareIndexRequest(idxDefn.DefnId, idxDefn.Name,
-		idxDefn.Bucket, useNodes, idxDefn.PartitionScheme, int(idxDefn.NumReplica), true)
+		idxDefn.Bucket, idxDefn.Scope, idxDefn.Collection, useNodes,
+		idxDefn.PartitionScheme, int(idxDefn.NumReplica), true)
 	if err != nil {
 		o.cancelPrepareIndexRequest(idxDefn.DefnId, watcherMap)
 		logging.Errorf("Fail to create index: %v", err)
@@ -1079,7 +1092,7 @@ func (o *MetadataProvider) SendCreateIndexRequest(indexerId c.IndexerId, idxDefn
 // Create Index Defnition from DDL
 //
 func (o *MetadataProvider) PrepareIndexDefn(
-	name, bucket, using, exprType, whereExpr string,
+	name, bucket, scope, collection, using, exprType, whereExpr string,
 	secExprs []string, desc []bool, isPrimary bool,
 	partitionScheme c.PartitionScheme, partitionKeys []string,
 	plan map[string]interface{}) (*c.IndexDefn, error, bool) {
@@ -1310,6 +1323,8 @@ func (o *MetadataProvider) PrepareIndexDefn(
 		DocKeySize:         docKeySize,
 		ArrSize:            arrSize,
 		ResidentRatio:      residentRatio,
+		Scope:              scope,
+		Collection:         collection,
 	}
 
 	idxDefn.NumReplica2.Initialize(idxDefn.NumReplica)
@@ -2538,13 +2553,16 @@ func (o *MetadataProvider) UpdateServiceAddrForIndexer(id c.IndexerId, adminport
 	return watcher.updateServiceMap(adminport)
 }
 
-func (o *MetadataProvider) findIndexByName(name string, bucket string) *IndexMetadata {
+func (o *MetadataProvider) findIndexByName(name, bucket, scope, collection string) *IndexMetadata {
 	o.mutex.Lock()
 	defer o.mutex.Unlock()
 
 	indices, _ := o.repo.listDefnWithValidInstNoLock()
 	for _, meta := range indices {
-		if meta.Definition.Name == name && meta.Definition.Bucket == bucket {
+		if meta.Definition.Name == name &&
+			meta.Definition.Bucket == bucket &&
+			meta.Definition.Scope == scope &&
+			meta.Definition.Collection == collection {
 			// will not hold lock on metadataRepo
 			if o.isValidIndexFromActiveIndexerNoLock(meta) {
 				return meta
@@ -2594,7 +2612,8 @@ func (o *MetadataProvider) getNodesInHealthyCluster() ([]string, error) {
 // The caller must acquire locks on indexer before calling this method. This ensures that there is
 // no concurrent create/alter index running in parallel.
 //
-func (o *MetadataProvider) getNumReplica(defnId c.IndexDefnId, name string, bucket string, watcherMap map[c.IndexerId]int) (*c.Counter, error) {
+func (o *MetadataProvider) getNumReplica(defnId c.IndexDefnId, name, bucket, scope, collection string,
+	watcherMap map[c.IndexerId]int) (*c.Counter, error) {
 
 	// Get num replica from each watcher/indexer.  Each indexer will lookup numReplica
 	// 1) create token
@@ -2622,7 +2641,7 @@ func (o *MetadataProvider) getNumReplica(defnId c.IndexDefnId, name string, buck
 	}
 
 	if !numReplica.IsValid() {
-		return nil, fmt.Errorf("Cannot determine number of replica for index (%v, %v)", name, bucket)
+		return nil, fmt.Errorf("Cannot determine number of replica for index (%v, %v, %v, %v)", name, bucket, scope, collection)
 	}
 
 	return &numReplica, nil
@@ -2695,7 +2714,7 @@ func (o *MetadataProvider) AlterReplicaCount(action string, defnId c.IndexDefnId
 	defn := *idxMeta.Definition
 	numPartition := idxMeta.numPartitions()
 	watcherMap, err := o.makePrepareIndexRequest(defn.DefnId, defn.Name, defn.Bucket,
-		nil, defn.PartitionScheme, count, false)
+		defn.Scope, defn.Collection, nil, defn.PartitionScheme, count, false)
 	if err != nil {
 		o.cancelPrepareIndexRequest(defn.DefnId, watcherMap)
 		return fmt.Errorf("Fail to alter index: %v", err)
@@ -2714,7 +2733,7 @@ func (o *MetadataProvider) AlterReplicaCount(action string, defnId c.IndexDefnId
 	}
 
 	// Fetch the numReplica
-	numReplica, err := o.getNumReplica(defn.DefnId, defn.Name, defn.Bucket, watcherMap)
+	numReplica, err := o.getNumReplica(defn.DefnId, defn.Name, defn.Bucket, defn.Scope, defn.Collection, watcherMap)
 	if err != nil {
 		o.cancelPrepareIndexRequest(defn.DefnId, watcherMap)
 		return fmt.Errorf("Fail to alter index: %v", err)
@@ -4046,6 +4065,7 @@ func (r *metadataRepo) cleanupOrphanDefnNoLock(indexerId c.IndexerId, bucket str
 
 	for defnId, _ := range r.topology[indexerId] {
 		if defn, ok := r.definitions[defnId]; ok {
+			// TODO: Need to make this function collection aware.
 			if len(bucket) == 0 || defn.Bucket == bucket {
 
 				if len(r.instances[defnId]) == 0 {
@@ -4396,6 +4416,7 @@ func (r *metadataRepo) resolveIndexStats(indexerId c.IndexerId, stats c.Statisti
 	for _, meta := range r.indices {
 		for _, inst := range meta.Instances {
 			name := c.FormatIndexInstDisplayName(meta.Definition.Name, int(inst.ReplicaId))
+			// TODO: Introduce collection specific info in prefix.
 			prefix := fmt.Sprintf("%s:%s:", meta.Definition.Bucket, name)
 
 			for statName, statVal := range stats {
