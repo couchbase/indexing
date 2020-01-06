@@ -39,12 +39,15 @@ message TsVbFull {
 // logical clock for a subset of vbuckets along with branch-id and snapshot
 // information.
 message TsVbuuid {
-    required string   pool      = 1; // pool name
-    required string   bucket    = 2; // bucket name
-    repeated uint32   vbnos     = 3; // subset of vbucket numbers
-    repeated uint64   seqnos    = 4; // corresponding seqno. for each vbucket
-    repeated uint64   vbuuids   = 5; // corresponding vbuuid for each vbucket
-    repeated Snapshot snapshots = 6; // list of snapshot {start, end}
+    required string   pool          = 1; // pool name
+    required string   bucket        = 2; // bucket name
+    repeated uint32   vbnos         = 3; // subset of vbucket numbers
+    repeated uint64   seqnos        = 4; // corresponding seqno. for each vbucket
+    repeated uint64   vbuuids       = 5; // corresponding vbuuid for each vbucket
+    repeated Snapshot snapshots     = 6; // list of snapshot {start, end}
+    repeated string   manifestUIDs  = 7; // corresponding manifest UID for each vbucket
+    optional string   scopeID       = 8; // Scope from which mutations will be streamed
+    repeated string   collectionIDs = 9; // Collections from which mutations will be streamed
 }
 
 // failover log for a vbucket.

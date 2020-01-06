@@ -10,6 +10,10 @@ import "github.com/golang/protobuf/proto"
 
 var ErrorInvalidVbmap = errors.New("protobuf.errorInvalidVbmap")
 
+// Return this error when the 1:1 mapping between bucket to keyspaceId
+// is invalid in the request/response
+var ErrorInvalidKeyspaceIdMap = errors.New("protobuf.invalidKeyspaceIdMap")
+
 //************
 //VbmapRequest
 //************
@@ -309,6 +313,18 @@ func (req *MutationTopicRequest) Decode(data []byte) (err error) {
 	return proto.Unmarshal(data, req)
 }
 
+// Validates the bucket to keyspaceId mapping in the request and return
+// true in case the request is valid
+func (req *MutationTopicRequest) Validate() bool {
+	return validateMapping(req.GetReqTimestamps(), req.GetKeyspaceIds())
+}
+
+// Returns the mapping between bucket to KeyspaceId
+// Returns ErrorInvalidKeyspaceIdMap for an invalid request
+func (req *MutationTopicRequest) GetKeyspaceIdMap() (map[string]string, error) {
+	return getKeyspaceIdMap(req.GetReqTimestamps(), req.GetKeyspaceIds())
+}
+
 // *************
 // TopicResponse
 // *************
@@ -366,6 +382,18 @@ func (resp *TopicResponse) SetErr(err error) *TopicResponse {
 	return resp
 }
 
+// Validates the bucket to keyspaceId mapping in the response and returns
+// true in case the response is valid
+func (req *TopicResponse) Validate() bool {
+	return validateMapping(req.GetActiveTimestamps(), req.GetKeyspaceIds())
+}
+
+// Returns the mapping between bucket to KeyspaceId
+// Returns ErrorInvalidKeyspaceIdMap for an invalid response
+func (req *TopicResponse) GetKeyspaceIdMap() (map[string]string, error) {
+	return getKeyspaceIdMap(req.GetActiveTimestamps(), req.GetKeyspaceIds())
+}
+
 // *****************
 // TimestampResponse
 // *****************
@@ -407,6 +435,18 @@ func (tsResp *TimestampResponse) AddCurrentTimestamp(
 func (tsResp *TimestampResponse) SetErr(err error) *TimestampResponse {
 	tsResp.Err = NewError(err)
 	return tsResp
+}
+
+// Validates the bucket to keyspaceId mapping in the response and returns
+// true in case the response is valid
+func (req *TimestampResponse) Validate() bool {
+	return validateMapping(req.GetCurrentTimestamps(), req.GetKeyspaceIds())
+}
+
+// Returns the mapping between bucket to KeyspaceId
+// Returns ErrorInvalidKeyspaceIdMap for an invalid response
+func (req *TimestampResponse) GetKeyspaceIdMap() (map[string]string, error) {
+	return getKeyspaceIdMap(req.GetCurrentTimestamps(), req.GetKeyspaceIds())
 }
 
 // **********************
@@ -464,6 +504,18 @@ func (req *RestartVbucketsRequest) Append(
 
 	req.RestartTimestamps = append(req.RestartTimestamps, restartTs)
 	return req
+}
+
+// Validates the bucket to keyspaceId mapping in the request and returns
+// true in case the request is valid
+func (req *RestartVbucketsRequest) Validate() bool {
+	return validateMapping(req.GetRestartTimestamps(), req.GetKeyspaceIds())
+}
+
+// Returns the mapping between bucket to KeyspaceId
+// Returns ErrorInvalidKeyspaceIdMap for an invalid request
+func (req *RestartVbucketsRequest) GetKeyspaceIdMap() (map[string]string, error) {
+	return getKeyspaceIdMap(req.GetRestartTimestamps(), req.GetKeyspaceIds())
 }
 
 // RestartTimestampFor will get the requested vbucket-stream
@@ -532,6 +584,18 @@ func (req *ShutdownVbucketsRequest) AddStreams(
 	req.ShutdownTimestamps = append(
 		req.ShutdownTimestamps, shutdownTs.FromTsVbuuid(ts))
 	return req
+}
+
+// Validates the bucket to keyspaceId mapping in the request and returns
+// true in case the request is valid
+func (req *ShutdownVbucketsRequest) Validate() bool {
+	return validateMapping(req.GetShutdownTimestamps(), req.GetKeyspaceIds())
+}
+
+// Returns the mapping between bucket to KeyspaceId
+// Returns ErrorInvalidKeyspaceIdMap for an invalid request
+func (req *ShutdownVbucketsRequest) GetKeyspaceIdMap() (map[string]string, error) {
+	return getKeyspaceIdMap(req.GetShutdownTimestamps(), req.GetKeyspaceIds())
 }
 
 // ShutdownTimestampFor will get the requested vbucket-stream
@@ -606,6 +670,18 @@ func (req *AddBucketsRequest) GetRouters() (map[uint64]c.Router, error) {
 	return getRouters(req.GetInstances())
 }
 
+// Validates the bucket to keyspaceId mapping in the request and returns
+// true in case the request is valid
+func (req *AddBucketsRequest) Validate() bool {
+	return validateMapping(req.GetReqTimestamps(), req.GetKeyspaceIds())
+}
+
+// Returns the mapping between bucket to KeyspaceId
+// Returns ErrorInvalidKeyspaceIdMap for an invalid request
+func (req *AddBucketsRequest) GetKeyspaceIdMap() (map[string]string, error) {
+	return getKeyspaceIdMap(req.GetReqTimestamps(), req.GetKeyspaceIds())
+}
+
 // *****************
 // DelBucketsRequest
 // *****************
@@ -639,6 +715,41 @@ func (req *DelBucketsRequest) Encode() (data []byte, err error) {
 // Decode implement MessageMarshaller{} interface
 func (req *DelBucketsRequest) Decode(data []byte) (err error) {
 	return proto.Unmarshal(data, req)
+}
+
+// Validates the bucket to keyspaceId mapping in the request and return
+// true value if the request is valid
+func (req *DelBucketsRequest) Validate() bool {
+	_, err := req.GetKeyspaceIdMap()
+	if err != nil {
+		return false
+	}
+	return true
+}
+
+// Returns the mapping between bucket to KeyspaceId
+// Returns ErrorInvalidKeyspaceIdMap for an invalid request
+func (req *DelBucketsRequest) GetKeyspaceIdMap() (map[string]string, error) {
+	buckets := req.GetBuckets()
+	keyspaceIds := req.GetKeyspaceIds()
+	keyspaceMap := make(map[string]string)
+	if keyspaceIds != nil {
+		if len(buckets) != len(keyspaceIds) {
+			return nil, ErrorInvalidKeyspaceIdMap
+		}
+		for i, bucket := range buckets {
+			if _, ok := keyspaceMap[bucket]; !ok {
+				keyspaceMap[bucket] = keyspaceIds[i]
+			} else {
+				return nil, ErrorInvalidKeyspaceIdMap
+			}
+		}
+	} else {
+		for _, bucket := range buckets {
+			keyspaceMap[bucket] = bucket
+		}
+	}
+	return keyspaceMap, nil
 }
 
 // *******************
@@ -685,6 +796,45 @@ func (req *AddInstancesRequest) GetEvaluators() (map[uint64]c.Evaluator, error) 
 // GetRouters impelement Subscriber{} interface
 func (req *AddInstancesRequest) GetRouters() (map[uint64]c.Router, error) {
 	return getRouters(req.GetInstances())
+}
+
+// All instances should belong to the same bucket as there is a 1:1
+// relation ship between bucket to keyspaceId
+func (req *AddInstancesRequest) Validate() bool {
+	if _, err := req.GetKeyspaceIdMap(); err != nil {
+		return false
+	}
+	return true
+}
+
+// If the request contains keyspaceIds, then all the instances should belong
+// to the same bucket due to 1:1 mapping between bucket and keyspaceId
+// Returns ErrorInvalidKeyspaceIdMap for an invalid request
+func (req *AddInstancesRequest) GetKeyspaceIdMap() (map[string]string, error) {
+	keyspaceId := req.GetKeyspaceId()
+	keyspaceMap := make(map[string]string)
+	instances := req.GetInstances()
+	if len(instances) == 0 {
+		return nil, ErrorInvalidKeyspaceIdMap
+	}
+
+	if keyspaceId != "" {
+		bucket := instances[0].GetBucket()
+		for _, inst := range instances {
+			if bucket != inst.GetBucket() {
+				return nil, ErrorInvalidKeyspaceIdMap
+			}
+		}
+		keyspaceMap[bucket] = keyspaceId
+	} else {
+		for _, inst := range instances {
+			bucket := inst.GetBucket()
+			if _, ok := keyspaceMap[bucket]; !ok {
+				keyspaceMap[bucket] = bucket
+			}
+		}
+	}
+	return keyspaceMap, nil
 }
 
 // *******************
@@ -819,6 +969,48 @@ func getRouters(instances []*Instance) (map[uint64]c.Router, error) {
 		}
 	}
 	return routers, nil
+}
+
+// If keyspaceIds is not nil, then there should be a 1:1 mapping
+// between bucket and keyspaceId in the request. The bucket name is
+// deduced from the timestamps in the request.
+// E.g., for MutationTopicRequest, reqTimestamps[i].Bucket maps to
+// keyspaceIds[i]
+// Returns true if the request is valid
+func validateMapping(reqTs []*TsVbuuid, keyspaceIds []string) bool {
+	_, err := getKeyspaceIdMap(reqTs, keyspaceIds)
+	if err != nil {
+		return false
+	}
+	return true
+}
+
+// Returns the mapping between bucket to keyspaceId
+// If the request is invalid, returns nil value and ErrorInvalidKeyspaceIdMap
+// For a valid request, returns mapping between bucket name to keyspaceId
+// (keyspaceId would default to bucket name if keyspaceIds is nil. KeyspaceIds
+// can have nil value for requests originating from indexers with version <v7.0)
+func getKeyspaceIdMap(reqTs []*TsVbuuid, keyspaceIds []string) (map[string]string, error) {
+	keyspaceMap := make(map[string]string)
+	if keyspaceIds != nil {
+		if len(reqTs) != len(keyspaceIds) {
+			return nil, ErrorInvalidKeyspaceIdMap
+		}
+		for i, ts := range reqTs {
+			bucket := ts.GetBucket()
+			if _, ok := keyspaceMap[bucket]; !ok {
+				keyspaceMap[bucket] = keyspaceIds[i]
+			} else {
+				return nil, ErrorInvalidKeyspaceIdMap
+			}
+		}
+	} else {
+		for _, ts := range reqTs {
+			bucket := ts.GetBucket()
+			keyspaceMap[bucket] = bucket
+		}
+	}
+	return keyspaceMap, nil
 }
 
 // GetUuid will get unique-id for this instance.
