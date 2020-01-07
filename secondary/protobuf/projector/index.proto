@@ -56,7 +56,7 @@ enum  PartitionScheme {
     RANGE = 5;
 }
 
-// Type of Hash scheme for partitioned index 
+// Type of Hash scheme for partitioned index
 enum  HashScheme {
     CRC32 = 0;
 }
@@ -87,5 +87,11 @@ message IndexDefn {
     optional string          whereExpression = 10; // where predicate
     repeated string          partnExpressions  = 11; // use expressions to evaluate doc
     optional bool            retainDeletedXATTR = 12; // index XATTRs of deleted docs
-    optional HashScheme      hashScheme = 13; // hash scheme for partitioned index 
+    optional HashScheme      hashScheme = 13; // hash scheme for partitioned index
+
+    // Collection specific
+    optional string          scope        = 14; // Name of the scope on which index is defined
+    optional string          scopeID      = 15; // ID  of the scope (base-16 string) on which index is defined
+    optional string          collection   = 16; // Name of the collection on which index is defined
+    optional string          collectionID = 17; // ID  of the collection (base-16 string) on which index is defined
 }
