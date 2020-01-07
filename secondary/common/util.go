@@ -608,8 +608,25 @@ func IndexStatement(def IndexDefn, numPartitions int, numReplica int, printNodes
 	where := " WHERE %s"
 	partition := " PARTITION BY hash(%s)"
 
+	getPartnStmt := func() string {
+		if len(def.PartitionKeys) > 0 {
+			exprs := ""
+			for _, exp := range def.PartitionKeys {
+				if exprs != "" {
+					exprs += ","
+				}
+				exprs += exp
+			}
+			return fmt.Sprintf(partition, exprs)
+		}
+		return ""
+	}
+
 	if def.IsPrimary {
 		stmt = fmt.Sprintf(primCreate, def.Name, def.Bucket)
+
+		stmt += getPartnStmt()
+
 	} else {
 		exprs := ""
 		for i, exp := range def.SecExprs {
@@ -622,17 +639,7 @@ func IndexStatement(def IndexDefn, numPartitions int, numReplica int, printNodes
 			}
 		}
 		stmt = fmt.Sprintf(secCreate, def.Name, def.Bucket, exprs)
-
-		if len(def.PartitionKeys) != 0 {
-			exprs := ""
-			for _, exp := range def.PartitionKeys {
-				if exprs != "" {
-					exprs += ","
-				}
-				exprs += exp
-			}
-			stmt += fmt.Sprintf(partition, exprs)
-		}
+		stmt += getPartnStmt()
 
 		if def.WhereExpr != "" {
 			stmt += fmt.Sprintf(where, def.WhereExpr)
