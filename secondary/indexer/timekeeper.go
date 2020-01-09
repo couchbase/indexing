@@ -16,12 +16,13 @@ package indexer
 import (
 	"errors"
 	"fmt"
-	"github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/dcp"
-	"github.com/couchbase/indexing/secondary/logging"
 	"math"
 	"sync"
 	"time"
+
+	"github.com/couchbase/indexing/secondary/common"
+	couchbase "github.com/couchbase/indexing/secondary/dcp"
+	"github.com/couchbase/indexing/secondary/logging"
 )
 
 const (
@@ -529,6 +530,10 @@ func (tk *timekeeper) handleFlushDone(cmd Message) {
 		//store the last flushed TS
 		fts := bucketFlushInProgressTsMap[bucket]
 		bucketLastFlushedTsMap[bucket] = fts
+
+		if fts != nil {
+			tk.ss.updateLastMutationVbuuid(streamId, bucket, fts)
+		}
 
 		// check if each flush time is snap aligned. If so, make a copy.
 		if fts != nil && fts.IsSnapAligned() {
@@ -2607,6 +2612,7 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 
 		//adjust for non-snap aligned ts
 		tk.ss.adjustNonSnapAlignedVbs(resp.restartTs, streamId, bucket, nil, false)
+		tk.ss.adjustVbuuids(resp.restartTs, streamId, bucket)
 
 		delete(tk.ss.streamBucketRepairStopCh[streamId], bucket)
 

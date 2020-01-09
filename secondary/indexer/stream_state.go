@@ -12,9 +12,10 @@ package indexer
 import (
 	"container/list"
 	"fmt"
+	"time"
+
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
-	"time"
 )
 
 type StreamState struct {
@@ -37,6 +38,7 @@ type StreamState struct {
 	streamBucketLastSnapMarker    map[common.StreamId]BucketLastSnapMarker
 
 	streamBucketLastSnapAlignFlushedTsMap map[common.StreamId]BucketLastFlushedTsMap
+	streamBucketLastMutationVbuuid        map[common.StreamId]BucketLastMutationVbuuid
 
 	streamBucketRestartVbErrMap   map[common.StreamId]BucketRestartVbErrMap
 	streamBucketRestartVbTsMap    map[common.StreamId]BucketRestartVbTsMap
@@ -65,6 +67,7 @@ type BucketNeedsCommitMap map[string]bool
 type BucketHasBuildCompTSMap map[string]bool
 type BucketNewTsReqdMap map[string]bool
 type BucketLastSnapMarker map[string]*common.TsVbuuid
+type BucketLastMutationVbuuid map[string]*common.TsVbuuid
 
 type BucketTsListMap map[string]*list.List
 type BucketFlushInProgressTsMap map[string]*common.TsVbuuid
@@ -116,6 +119,7 @@ func InitStreamState(config common.Config) *StreamState {
 		streamBucketLastPersistTime:           make(map[common.StreamId]BucketLastPersistTime),
 		streamBucketSkippedInMemTs:            make(map[common.StreamId]BucketSkippedInMemTs),
 		streamBucketLastSnapMarker:            make(map[common.StreamId]BucketLastSnapMarker),
+		streamBucketLastMutationVbuuid:        make(map[common.StreamId]BucketLastMutationVbuuid),
 		bucketRollbackTime:                    make(map[string]int64),
 	}
 
@@ -204,6 +208,9 @@ func (ss *StreamState) initNewStream(streamId common.StreamId) {
 	bucketLastSnapMarker := make(BucketLastSnapMarker)
 	ss.streamBucketLastSnapMarker[streamId] = bucketLastSnapMarker
 
+	bucketLastMutationVbuuid := make(BucketLastMutationVbuuid)
+	ss.streamBucketLastMutationVbuuid[streamId] = bucketLastMutationVbuuid
+
 	ss.streamStatus[streamId] = STREAM_ACTIVE
 
 }
@@ -237,6 +244,7 @@ func (ss *StreamState) initBucketInStream(streamId common.StreamId,
 	ss.streamBucketStartTimeMap[streamId][bucket] = uint64(0)
 	ss.streamBucketSkippedInMemTs[streamId][bucket] = 0
 	ss.streamBucketLastSnapMarker[streamId][bucket] = common.NewTsVbuuid(bucket, numVbuckets)
+	ss.streamBucketLastMutationVbuuid[streamId][bucket] = common.NewTsVbuuid(bucket, numVbuckets)
 
 	ss.streamBucketStatus[streamId][bucket] = STREAM_ACTIVE
 
@@ -276,6 +284,7 @@ func (ss *StreamState) cleanupBucketFromStream(streamId common.StreamId,
 	delete(ss.streamBucketOpenTsMap[streamId], bucket)
 	delete(ss.streamBucketStartTimeMap[streamId], bucket)
 	delete(ss.streamBucketLastSnapMarker[streamId], bucket)
+	delete(ss.streamBucketLastMutationVbuuid[streamId], bucket)
 	delete(ss.streamBucketSkippedInMemTs[streamId], bucket)
 
 	ss.streamBucketStatus[streamId][bucket] = STREAM_INACTIVE
@@ -312,6 +321,7 @@ func (ss *StreamState) resetStreamState(streamId common.StreamId) {
 	delete(ss.streamBucketStartTimeMap, streamId)
 	delete(ss.streamBucketSkippedInMemTs, streamId)
 	delete(ss.streamBucketLastSnapMarker, streamId)
+	delete(ss.streamBucketLastMutationVbuuid, streamId)
 
 	ss.streamStatus[streamId] = STREAM_INACTIVE
 
@@ -408,6 +418,8 @@ func (ss *StreamState) setHWTFromRestartTs(streamId common.StreamId,
 			ss.streamBucketLastFlushedTsMap[streamId][bucket] = restartTs.Copy()
 			logging.Verbosef("StreamState::setHWTFromRestartTs HWT Set For "+
 				"Bucket %v StreamId %v. TS %v.", bucket, streamId, restartTs)
+
+			ss.streamBucketLastMutationVbuuid[streamId][bucket] = restartTs.Copy()
 
 		} else {
 			logging.Warnf("StreamState::setHWTFromRestartTs RestartTs Not Found For "+
@@ -528,6 +540,7 @@ func (ss *StreamState) getRepairTsForBucket(streamId common.StreamId,
 	}
 
 	ss.adjustNonSnapAlignedVbs(repairTs, streamId, bucket, repairVbs, true)
+	ss.adjustVbuuids(repairTs, streamId, bucket)
 
 	logging.Verbosef("StreamState::getRepairTsForBucket\n\t"+
 		"Bucket %v StreamId %v repairTS %v",
@@ -985,4 +998,48 @@ func (ss *StreamState) disableSnapAlignForPendingTs(streamId common.StreamId, bu
 		logging.Infof("StreamState::disableSnapAlignForPendingTs Stream %v Bucket %v Disabled Snap Align for %v TS", streamId, bucket, disableCount)
 
 	}
+}
+
+func (ss *StreamState) updateLastMutationVbuuid(streamId common.StreamId,
+	bucket string, fts *common.TsVbuuid) {
+
+	pts := ss.streamBucketLastMutationVbuuid[streamId][bucket]
+	if pts == nil {
+		ss.streamBucketLastMutationVbuuid[streamId][bucket] = fts.Copy()
+		return
+	}
+
+	//LastMutationVbuuid has the vbuuid/seqno for the last valid mutation.
+	//if there is a vbuuid change without a change is seqno,
+	//it needs to be ignored
+	for i, _ := range pts.Vbuuids {
+		if fts.Seqnos[i] != pts.Seqnos[i] {
+			pts.Vbuuids[i] = fts.Vbuuids[i]
+			pts.Seqnos[i] = fts.Seqnos[i]
+		}
+
+	}
+}
+
+func (ss *StreamState) adjustVbuuids(restartTs *common.TsVbuuid,
+	streamId common.StreamId, bucket string) {
+
+	if restartTs == nil {
+		return
+	}
+
+	//use the vbuuids with last known mutation
+	if pts, ok := ss.streamBucketLastMutationVbuuid[streamId][bucket]; ok && pts != nil {
+		for i, _ := range pts.Vbuuids {
+			if restartTs.Seqnos[i] == pts.Seqnos[i] &&
+				restartTs.Seqnos[i] != 0 &&
+				restartTs.Vbuuids[i] != pts.Vbuuids[i] {
+				logging.Infof("StreamState::adjustVbuuids %v %v Vb %v Seqno %v "+
+					"From %v To %v", streamId, bucket, i, pts.Seqnos[i], restartTs.Vbuuids[i],
+					pts.Vbuuids[i])
+				restartTs.Vbuuids[i] = pts.Vbuuids[i]
+			}
+		}
+	}
+	return
 }
