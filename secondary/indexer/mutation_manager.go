@@ -828,13 +828,14 @@ func (m *mutationMgr) handlePersistMutationQueue(cmd Message) {
 	streamId := cmd.(*MsgMutMgrFlushMutationQueue).GetStreamId()
 	ts := cmd.(*MsgMutMgrFlushMutationQueue).GetTimestamp()
 	changeVec := cmd.(*MsgMutMgrFlushMutationQueue).GetChangeVector()
+	hasAllSB := cmd.(*MsgMutMgrFlushMutationQueue).HasAllSB()
 
 	m.lock.Lock()
 	defer m.lock.Unlock()
 
 	q := m.streamBucketQueueMap[streamId][bucket]
 	stats := m.stats.Get()
-	go m.persistMutationQueue(q, streamId, bucket, ts, changeVec, stats)
+	go m.persistMutationQueue(q, streamId, bucket, ts, changeVec, stats, hasAllSB)
 	m.supvCmdch <- &MsgSuccess{}
 
 }
@@ -842,7 +843,7 @@ func (m *mutationMgr) handlePersistMutationQueue(cmd Message) {
 //persistMutationQueue implements the actual persist for the queue
 func (m *mutationMgr) persistMutationQueue(q IndexerMutationQueue,
 	streamId common.StreamId, bucket string, ts *common.TsVbuuid,
-	changeVec []bool, stats *IndexerStats) {
+	changeVec []bool, stats *IndexerStats, hasAllSB bool) {
 
 	m.flock.Lock()
 	defer m.flock.Unlock()
@@ -877,7 +878,8 @@ func (m *mutationMgr) persistMutationQueue(q IndexerMutationQueue,
 			m.supvRespch <- &MsgMutMgrFlushDone{mType: MUT_MGR_FLUSH_DONE,
 				streamId: streamId,
 				bucket:   bucket,
-				ts:       ts}
+				ts:       ts,
+				hasAllSB: hasAllSB}
 		} else {
 			m.supvRespch <- &MsgMutMgrFlushDone{mType: MUT_MGR_FLUSH_DONE,
 				streamId: streamId,

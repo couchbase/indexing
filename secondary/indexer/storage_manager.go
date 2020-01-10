@@ -14,14 +14,15 @@ import (
 	"encoding/gob"
 	"errors"
 	"fmt"
-	"github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/fdb"
-	"github.com/couchbase/indexing/secondary/logging"
 	"math"
 	"os"
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/couchbase/indexing/secondary/common"
+	forestdb "github.com/couchbase/indexing/secondary/fdb"
+	"github.com/couchbase/indexing/secondary/logging"
 )
 
 var (
@@ -218,6 +219,7 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 	tsVbuuid := msgFlushDone.GetTS()
 	streamId := msgFlushDone.GetStreamId()
 	flushWasAborted := msgFlushDone.GetAborted()
+	hasAllSB := msgFlushDone.HasAllSB()
 
 	numVbuckets := s.config["numVbuckets"].Int()
 	snapType := tsVbuuid.GetSnapType()
@@ -233,7 +235,8 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 		indexInstMap := common.CopyIndexInstMap(s.indexInstMap)
 		indexPartnMap := CopyIndexPartnMap(s.indexPartnMap)
 
-		go s.flushDone(streamId, bucket, indexInstMap, indexPartnMap, tsVbuuid, flushWasAborted)
+		go s.flushDone(streamId, bucket, indexInstMap, indexPartnMap,
+			tsVbuuid, flushWasAborted, hasAllSB)
 
 		return
 	}
@@ -248,14 +251,14 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 	stats := s.stats.Get()
 
 	go s.createSnapshotWorker(streamId, bucket, tsVbuuid, indexSnapMap,
-		numVbuckets, indexInstMap, indexPartnMap, stats, flushWasAborted)
+		numVbuckets, indexInstMap, indexPartnMap, stats, flushWasAborted, hasAllSB)
 
 }
 
 func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, bucket string,
 	tsVbuuid *common.TsVbuuid, indexSnapMap IndexSnapMap, numVbuckets int,
 	indexInstMap common.IndexInstMap, indexPartnMap IndexPartnMap, stats *IndexerStats,
-	flushWasAborted bool) {
+	flushWasAborted bool, hasAllSB bool) {
 
 	defer destroyIndexSnapMap(indexSnapMap)
 
@@ -308,6 +311,13 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, bucket strin
 						if flushWasAborted {
 							slice.IsDirty()
 							return
+						}
+
+						//if TK has seen all Stream Begins after stream restart,
+						//the MTR after rollback can be considered successful.
+						//All snapshots become eligible to retry for next rollback.
+						if hasAllSB {
+							slice.SetLastRollbackTs(nil)
 						}
 
 						var latestSnapshot Snapshot
@@ -436,8 +446,9 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, bucket strin
 
 }
 
-func (s *storageMgr) flushDone(streamId common.StreamId, bucket string, indexInstMap common.IndexInstMap, indexPartnMap IndexPartnMap,
-	tsVbuuid *common.TsVbuuid, flushWasAborted bool) {
+func (s *storageMgr) flushDone(streamId common.StreamId, bucket string,
+	indexInstMap common.IndexInstMap, indexPartnMap IndexPartnMap,
+	tsVbuuid *common.TsVbuuid, flushWasAborted bool, hasAllSB bool) {
 
 	isInitial := func() bool {
 		if streamId == common.INIT_STREAM {
@@ -492,6 +503,24 @@ func (s *storageMgr) flushDone(streamId common.StreamId, bucket string, indexIns
 
 			wg.Wait()
 			s.lastFlushDone = time.Now().UnixNano()
+		}
+	}
+
+	//if TK has seen all Stream Begins after stream restart,
+	//the MTR after rollback can be considered successful.
+	//All snapshots become eligible to retry for next rollback.
+	if hasAllSB {
+		for idxInstId, partnMap := range indexPartnMap {
+			idxInst := indexInstMap[idxInstId]
+			if idxInst.Defn.Bucket == bucket &&
+				idxInst.Stream == streamId &&
+				idxInst.State != common.INDEX_STATE_DELETED {
+				for _, partnInst := range partnMap {
+					for _, slice := range partnInst.Sc.GetAllSlices() {
+						slice.SetLastRollbackTs(nil)
+					}
+				}
+			}
 		}
 	}
 
@@ -592,6 +621,11 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 	bucket := cmd.(*MsgRollback).GetBucket()
 	logging.Infof("StorageMgr::handleRollback rollbackTs is %v", rollbackTs)
 
+	var markAsUsed bool
+	if rollbackTs.HasZeroSeqNum() {
+		markAsUsed = true
+	}
+
 	var respTs *common.TsVbuuid
 
 	//for every index managed by this indexer
@@ -646,6 +680,9 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 								"PartitionId: %v SliceId: %v To Snapshot %v ", idxInstId, partnId,
 								slice.Id(), snapInfo)
 							respTs = snapInfo.Timestamp()
+							if markAsUsed {
+								slice.SetLastRollbackTs(respTs)
+							}
 						} else {
 							//send error response back
 							//TODO handle the case where some of the slices fail to rollback
@@ -666,6 +703,7 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 							//once rollback to zero has happened, set response ts to nil
 							//to represent the initial state of storage
 							respTs = nil
+							slice.SetLastRollbackTs(nil)
 						} else {
 							//send error response back
 							//TODO handle the case where some of the slices fail to rollback

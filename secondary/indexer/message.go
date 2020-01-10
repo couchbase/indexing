@@ -12,8 +12,9 @@ package indexer
 
 import (
 	"fmt"
-	"github.com/couchbase/indexing/secondary/common"
 	"time"
+
+	"github.com/couchbase/indexing/secondary/common"
 )
 
 type MsgType int16
@@ -433,6 +434,7 @@ type MsgMutMgrFlushMutationQueue struct {
 	streamId  common.StreamId
 	ts        *common.TsVbuuid
 	changeVec []bool
+	hasAllSB  bool
 }
 
 func (m *MsgMutMgrFlushMutationQueue) GetMsgType() MsgType {
@@ -453,6 +455,10 @@ func (m *MsgMutMgrFlushMutationQueue) GetTimestamp() *common.TsVbuuid {
 
 func (m *MsgMutMgrFlushMutationQueue) GetChangeVector() []bool {
 	return m.changeVec
+}
+
+func (m *MsgMutMgrFlushMutationQueue) HasAllSB() bool {
+	return m.hasAllSB
 }
 
 func (m *MsgMutMgrFlushMutationQueue) String() string {
@@ -544,6 +550,7 @@ type MsgMutMgrFlushDone struct {
 	streamId common.StreamId
 	bucket   string
 	aborted  bool
+	hasAllSB bool
 }
 
 func (m *MsgMutMgrFlushDone) GetMsgType() MsgType {
@@ -566,6 +573,10 @@ func (m *MsgMutMgrFlushDone) GetAborted() bool {
 	return m.aborted
 }
 
+func (m *MsgMutMgrFlushDone) HasAllSB() bool {
+	return m.hasAllSB
+}
+
 func (m *MsgMutMgrFlushDone) String() string {
 
 	str := "\n\tMessage: MsgMutMgrFlushDone"
@@ -583,6 +594,7 @@ type MsgTKStabilityTS struct {
 	streamId  common.StreamId
 	bucket    string
 	changeVec []bool
+	hasAllSB  bool
 }
 
 func (m *MsgTKStabilityTS) GetMsgType() MsgType {
@@ -603,6 +615,10 @@ func (m *MsgTKStabilityTS) GetTimestamp() *common.TsVbuuid {
 
 func (m *MsgTKStabilityTS) GetChangeVector() []bool {
 	return m.changeVec
+}
+
+func (m *MsgTKStabilityTS) HasAllSB() bool {
+	return m.hasAllSB
 }
 
 func (m *MsgTKStabilityTS) String() string {

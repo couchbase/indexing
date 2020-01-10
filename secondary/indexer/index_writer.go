@@ -10,8 +10,9 @@
 package indexer
 
 import (
-	"github.com/couchbase/indexing/secondary/common"
 	"time"
+
+	"github.com/couchbase/indexing/secondary/common"
 )
 
 type StorageStatistics struct {
@@ -57,6 +58,8 @@ type IndexWriter interface {
 
 	//Return TS for last rollback operation
 	LastRollbackTs() *common.TsVbuuid
+
+	SetLastRollbackTs(ts *common.TsVbuuid)
 
 	// Statistics used for compaction trigger
 	Statistics() (StorageStatistics, error)

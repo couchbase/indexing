@@ -944,7 +944,6 @@ func (mdb *memdbSlice) Rollback(info SnapshotInfo) error {
 
 	mdb.resetStores()
 
-	mdb.lastRollbackTs = info.Timestamp()
 	return nil
 }
 
@@ -1058,6 +1057,10 @@ func (mdb *memdbSlice) RollbackToZero() error {
 
 func (mdb *memdbSlice) LastRollbackTs() *common.TsVbuuid {
 	return mdb.lastRollbackTs
+}
+
+func (mdb *memdbSlice) SetLastRollbackTs(ts *common.TsVbuuid) {
+	mdb.lastRollbackTs = ts
 }
 
 //slice insert/delete methods are async. There

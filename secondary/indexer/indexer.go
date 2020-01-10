@@ -31,7 +31,7 @@ import (
 
 	"github.com/couchbase/cbauth"
 	"github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/fdb"
+	forestdb "github.com/couchbase/indexing/secondary/fdb"
 	"github.com/couchbase/indexing/secondary/logging"
 	mc "github.com/couchbase/indexing/secondary/manager/common"
 	"github.com/couchbase/indexing/secondary/memdb"
@@ -770,6 +770,7 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		bucket := msg.(*MsgTKStabilityTS).GetBucket()
 		streamId := msg.(*MsgTKStabilityTS).GetStreamId()
 		changeVec := msg.(*MsgTKStabilityTS).GetChangeVector()
+		hasAllSB := msg.(*MsgTKStabilityTS).HasAllSB()
 
 		if idx.getStreamBucketState(streamId, bucket) == STREAM_INACTIVE {
 			logging.Warnf("Indexer: Skipped PersistTs for %v %v. "+
@@ -783,7 +784,8 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 			idx.storageMgrCmdCh <- &MsgMutMgrFlushDone{mType: MUT_MGR_FLUSH_DONE,
 				streamId: streamId,
 				bucket:   bucket,
-				ts:       ts}
+				ts:       ts,
+				hasAllSB: hasAllSB}
 			<-idx.storageMgrCmdCh
 		} else {
 			idx.mutMgrCmdCh <- &MsgMutMgrFlushMutationQueue{
@@ -791,7 +793,8 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 				bucket:    bucket,
 				ts:        ts,
 				streamId:  streamId,
-				changeVec: changeVec}
+				changeVec: changeVec,
+				hasAllSB:  hasAllSB}
 
 			<-idx.mutMgrCmdCh
 		}

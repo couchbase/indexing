@@ -1229,10 +1229,6 @@ func (mdb *plasmaSlice) Rollback(o SnapshotInfo) error {
 		mdb.readers <- readers[i]
 	}
 
-	if err == nil {
-		mdb.lastRollbackTs = o.Timestamp()
-	}
-
 	return err
 }
 
@@ -1285,6 +1281,10 @@ func (mdb *plasmaSlice) RollbackToZero() error {
 
 func (mdb *plasmaSlice) LastRollbackTs() *common.TsVbuuid {
 	return mdb.lastRollbackTs
+}
+
+func (mdb *plasmaSlice) SetLastRollbackTs(ts *common.TsVbuuid) {
+	mdb.lastRollbackTs = ts
 }
 
 //slice insert/delete methods are async. There

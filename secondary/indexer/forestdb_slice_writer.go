@@ -24,7 +24,7 @@ import (
 
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/common/queryutil"
-	"github.com/couchbase/indexing/secondary/fdb"
+	forestdb "github.com/couchbase/indexing/secondary/fdb"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/natsort"
 )
@@ -1027,10 +1027,6 @@ func (fdb *fdbSlice) Rollback(info SnapshotInfo) error {
 
 	err = fdb.dbfile.Commit(forestdb.COMMIT_MANUAL_WAL_FLUSH)
 
-	if err == nil {
-		fdb.lastRollbackTs = info.Timestamp()
-	}
-
 	return err
 }
 
@@ -1082,6 +1078,10 @@ func (fdb *fdbSlice) RollbackToZero() error {
 
 func (fdb *fdbSlice) LastRollbackTs() *common.TsVbuuid {
 	return fdb.lastRollbackTs
+}
+
+func (fdb *fdbSlice) SetLastRollbackTs(ts *common.TsVbuuid) {
+	fdb.lastRollbackTs = ts
 }
 
 //slice insert/delete methods are async. There

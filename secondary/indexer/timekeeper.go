@@ -942,6 +942,9 @@ func (tk *timekeeper) handleStreamBegin(cmd Message) {
 
 	case STREAM_ACTIVE:
 
+		// Record the stream begin (will get reset on recovery)
+		tk.updateStreamBucketSBStatus(cmd)
+
 		// When receivng a StreamBegin, it means that the projector claims ownership
 		// of a vbucket.   Keep track of how many projectors are claiming ownership.
 		tk.ss.incVbRefCount(streamId, meta.bucket, meta.vbucket)
@@ -2072,11 +2075,20 @@ func (tk *timekeeper) sendNewStabilityTS(flushTs *common.TsVbuuid, bucket string
 
 	monitor_ts := tk.config["timekeeper.monitor_flush"].Bool()
 
+	hasAllSB := false
+	vbmap := tk.ss.streamBucketSBStatus[streamId][bucket]
+	//if all stream begins have been seen atleast once after stream start
+	if len(vbmap) == len(flushTs.Vbuuids) {
+		hasAllSB = true
+	}
+
 	go func() {
 		tk.supvRespch <- &MsgTKStabilityTS{ts: flushTs,
 			bucket:    bucket,
 			streamId:  streamId,
-			changeVec: changeVec}
+			changeVec: changeVec,
+			hasAllSB:  hasAllSB,
+		}
 
 		if monitor_ts {
 
@@ -3185,4 +3197,12 @@ func (tk *timekeeper) setNeedsCommit(streamId common.StreamId,
 		tk.ss.streamBucketNeedsCommitMap[streamId][bucket] = false
 	}
 
+}
+
+func (tk *timekeeper) updateStreamBucketSBStatus(cmd Message) {
+
+	streamId := cmd.(*MsgStream).GetStreamId()
+	meta := cmd.(*MsgStream).GetMutationMeta()
+
+	tk.ss.streamBucketSBStatus[streamId][meta.bucket][meta.vbucket] = true
 }
