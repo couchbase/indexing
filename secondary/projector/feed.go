@@ -54,7 +54,7 @@ type Feed struct {
 	// vbucket entry is moved here.
 	rollTss map[string]*protobuf.TsVbuuid // bucket -> TsVbuuid
 
-	feeders map[string]BucketFeeder // bucket -> BucketFeeder{}
+	feeders map[string]BucketFeeder // keyspaceId -> BucketFeeder{}
 	// downstream
 	kvdata    map[string]*KVData            // bucket -> kvdata
 	engines   map[string]map[uint64]*Engine // bucket -> uuid -> engine
@@ -890,13 +890,13 @@ func (feed *Feed) start(
 
 		reqTs = ts.Union(reqTs)
 		// open or acquire the upstream feeder object.
-		feeder, e := feed.openFeeder(opaque, pooln, bucketn)
+		feeder, e := feed.openFeeder(opaque, pooln, bucketn, keyspaceId)
 		if e != nil {
 			err = e
 			feed.cleanupKeyspace(keyspaceId, false)
 			continue
 		}
-		feed.feeders[bucketn] = feeder // :SideEffect:
+		feed.feeders[keyspaceId] = feeder // :SideEffect:
 		// open data-path, if not already open.
 		kvdata, e := feed.startDataPath(bucketn, feeder,
 			opaque, ts, opaque2)
@@ -1016,13 +1016,13 @@ func (feed *Feed) restartVbuckets(
 		reqTs = ts.Union(reqTs)
 
 		// open or acquire the upstream feeder object.
-		feeder, e := feed.openFeeder(opaque, pooln, bucketn)
+		feeder, e := feed.openFeeder(opaque, pooln, bucketn, keyspaceId)
 		if e != nil {
 			err = e
 			feed.cleanupKeyspace(keyspaceId, false)
 			continue
 		}
-		feed.feeders[bucketn] = feeder // :SideEffect:
+		feed.feeders[keyspaceId] = feeder // :SideEffect:
 		// open data-path, if not already open.
 		kvdata, e := feed.startDataPath(bucketn, feeder, opaque, ts, opaque2)
 		if e != nil { // all feed errors are fatal, skip this bucket.
@@ -1083,9 +1083,8 @@ func (feed *Feed) shutdownVbuckets(
 	req *protobuf.ShutdownVbucketsRequest, opaque uint16) (err error) {
 
 	// TODO: Once the data path is made keyspaceID aware, update this code
-	// to get keyspaceId from keyspaceIdMap and refer all book-keeping with
-	// keyspaceId
-	_, err = req.GetKeyspaceIdMap()
+	// to refer all book-keeping with keyspaceId
+	keyspaceIdMap, err := req.GetKeyspaceIdMap()
 	if err != nil {
 		return err
 	}
@@ -1093,6 +1092,8 @@ func (feed *Feed) shutdownVbuckets(
 	// iterate request-timestamp for each bucket.
 	for _, ts := range req.GetShutdownTimestamps() {
 		pooln, bucketn := ts.GetPool(), ts.GetBucket()
+		keyspaceId := keyspaceIdMap[bucketn]
+
 		vbnos, e := feed.getLocalVbuckets(pooln, bucketn, opaque)
 		if e != nil {
 			err = e
@@ -1116,10 +1117,10 @@ func (feed *Feed) shutdownVbuckets(
 		if ok1 && actTs != nil {
 			ts = ts.SelectByVbuckets(c.Vbno32to16(actTs.GetVbnos()))
 		}
-		feeder, ok := feed.feeders[bucketn]
+		feeder, ok := feed.feeders[keyspaceId]
 		if !ok {
 			fmsg := "%v ##%x shutdownVbuckets() invalid-feeder %v\n"
-			logging.Errorf(fmsg, feed.logPrefix, opaque, bucketn)
+			logging.Errorf(fmsg, feed.logPrefix, opaque, keyspaceId)
 			err = projC.ErrorInvalidBucket
 			continue
 		}
@@ -1214,13 +1215,13 @@ func (feed *Feed) addBuckets(
 		}
 		reqTs = ts.Union(ts)
 		// open or acquire the upstream feeder object.
-		feeder, e := feed.openFeeder(opaque, pooln, bucketn)
+		feeder, e := feed.openFeeder(opaque, pooln, bucketn, keyspaceId)
 		if e != nil {
 			err = e
 			feed.cleanupKeyspace(keyspaceId, false)
 			continue
 		}
-		feed.feeders[bucketn] = feeder // :SideEffect:
+		feed.feeders[keyspaceId] = feeder // :SideEffect:
 
 		// open data-path, if not already open.
 		kvdata, e := feed.startDataPath(bucketn, feeder, opaque, ts, opaque2)
@@ -1543,9 +1544,9 @@ func (feed *Feed) cleanupKeyspace(keyspaceId string, enginesOk bool) {
 }
 
 func (feed *Feed) openFeeder(
-	opaque uint16, pooln, bucketn string) (BucketFeeder, error) {
+	opaque uint16, pooln, bucketn, keyspaceId string) (BucketFeeder, error) {
 
-	feeder, ok := feed.feeders[bucketn]
+	feeder, ok := feed.feeders[keyspaceId]
 	if ok {
 		return feeder, nil
 	}
@@ -1560,7 +1561,7 @@ func (feed *Feed) openFeeder(
 		logging.Errorf(fmsg, feed.logPrefix, opaque, err)
 		return nil, err
 	}
-	name := newDCPConnectionName(bucket.Name, feed.topic, uuid.Uint64())
+	name := newDCPConnectionName(keyspaceId, feed.topic, uuid.Uint64())
 	dcpConfig := map[string]interface{}{
 		"genChanSize":    feed.config["dcp.genChanSize"].Int(),
 		"dataChanSize":   feed.config["dcp.dataChanSize"].Int(),
@@ -1579,7 +1580,7 @@ func (feed *Feed) openFeeder(
 	feeder, err = OpenBucketFeed(name, bucket, opaque, kvaddrs, dcpConfig)
 	if err != nil {
 		fmsg := "%v ##%x OpenBucketFeed(%q): %v"
-		logging.Errorf(fmsg, feed.logPrefix, opaque, bucketn, err)
+		logging.Errorf(fmsg, feed.logPrefix, opaque, keyspaceId, err)
 		return nil, projC.ErrorFeeder
 	}
 	return feeder, nil
@@ -2060,8 +2061,8 @@ func (feed *Feed) topicResponse() *protobuf.TopicResponse {
 // generate a unique opaque identifier.
 // NOTE: be careful while changing the DCP name, it might affect other
 // parts of the system. ref: https://issues.couchbase.com/browse/MB-14300
-func newDCPConnectionName(bucketn, topic string, uuid uint64) couchbase.DcpFeedName {
-	return couchbase.NewDcpFeedName(fmt.Sprintf("proj-%s-%s-%v", bucketn, topic, uuid))
+func newDCPConnectionName(keyspaceId, topic string, uuid uint64) couchbase.DcpFeedName {
+	return couchbase.NewDcpFeedName(fmt.Sprintf("proj-%s-%s-%v", keyspaceId, topic, uuid))
 }
 
 //---- endpoint watcher
