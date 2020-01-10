@@ -509,7 +509,7 @@ loop:
 				// 2. Due to a slow memcached, the streamreq message for one vb timesout
 				// 3. DCPP sends stream begin messages for successful DCP_STREAMREQ
 				//    messages and kvdata puts them in feed.backch
-				// 4. Due to the timeout error while starting dcp streams, feed.cleanupBucket()
+				// 4. Due to the timeout error while starting dcp streams, feed.cleanupKeyspace()
 				//    is invoked
 				// 5. This would clean-up the KVData instance and indexer sends MTR again
 				// 6. In this MTR, the stream begin messages from earlier MTR would not be
@@ -575,11 +575,11 @@ loop:
 
 			} else if cmd, ok := msg[0].(*controlStreamEnd); ok {
 				// This check is required to avoid race in the following scenario:
-				// 1. When feed.cleanUpBucket() is triggerred, it invokes feeder.closeFeed()
+				// 1. When feed.cleanupKeyspace() is triggerred, it invokes feeder.closeFeed()
 				// 2. feeder.CloseFeed() would publish STREAMEND messages
 				// 3. If kvdata reads the STREAMEND messages before closing, it would publish
 				//    the STREAMEND messages to feed.backch
-				// 4. After feed.cleanupBucket() exits, feed processes messages on reqch and backch
+				// 4. After feed.cleanupKeyspace() exits, feed processes messages on reqch and backch
 				// 5. If an fCmdStart from indexer arrives on feed's reqch and it is processed before
 				//    messages on backch, then at the time STREAMEND messages from backch are processed
 				//    the book-keeping for vbuckets goes out of sync with KV engine
@@ -620,10 +620,10 @@ loop:
 
 			} else if cmd, ok := msg[0].(*controlFinKVData); ok {
 				// This check is required to avoid race in the following scenario:
-				// 1. When feed.cleanUpBucket() is triggerred, it invokes kvdata.Close()
+				// 1. When feed.cleanupKeyspace() is triggerred, it invokes kvdata.Close()
 				// 2. kvdata.Close() will stop the genServer() and posts response back to feed.
 				//    The defer() block execution in kvdata's genServer() is yet to happen
-				// 3. feed.cleanupBucket() will go-ahead delete the kvdata entry for the bucket
+				// 3. feed.cleanupKeyspace() will go-ahead delete the kvdata entry for the bucket
 				// 4. feed now waits on reqch and backch for messages
 				// 5. fCmdStart from indexer arrives on feed and feed initializes kvdata for the bucket
 				// 6. The defer() block from kvdata that got closed starts it's execution and it posts
@@ -657,7 +657,9 @@ loop:
 				}
 				fmsg = "%v ##%x self deleting bucket\n"
 				logging.Infof(fmsg, prefix, feed.opaque)
-				feed.cleanupBucket(cmd.bucket, false)
+				// TODO: Change cmd.bucket to corresponding keyspace once datapath
+				// is made keyspace aware
+				feed.cleanupKeyspace(cmd.bucket, false)
 
 			} else {
 				fmsg := "%v ##%x backch flush %T: %v\n"
@@ -839,7 +841,9 @@ func (feed *Feed) handleCommand(msg []interface{}) (status string) {
 // - return ErrorFeeder if upstream connection has failures.
 // - return ErrorNotMyVbucket due to rebalances and failures.
 // - return ErrorStreamRequest if StreamRequest failed for some reason
-// - return ErrorResponseTimeout if feedback is not completed within timeout.
+// - return ErrorResponseTimeout if feedback is not completed within timeout
+// - return ErrorInvalidKeyspaceIdMap if 1:1 mapping between bucket to keyspaceId
+//   is invalid
 func (feed *Feed) start(
 	req *protobuf.MutationTopicRequest, opaque uint16) (err error) {
 
@@ -847,16 +851,24 @@ func (feed *Feed) start(
 	feed.version = req.GetVersion()
 	opaque2 := req.GetOpaque2()
 
+	keyspaceIdMap, err := req.GetKeyspaceIdMap()
+	if err != nil {
+		return err
+	}
+
 	// update engines and endpoints
 	if _, err = feed.processSubscribers(opaque, req); err != nil { // :SideEffect:
 		return err
 	}
 	for _, ts := range req.GetReqTimestamps() {
 		pooln, bucketn := ts.GetPool(), ts.GetBucket()
+		// TODO: Once the datapath is made keyspace aware, change all book-keeping
+		// to refer with keyspaceId rather than with bucket
+		keyspaceId := keyspaceIdMap[bucketn]
 		vbnos, e := feed.getLocalVbuckets(pooln, bucketn, opaque)
 		if e != nil {
 			err = e
-			feed.cleanupBucket(bucketn, false)
+			feed.cleanupKeyspace(keyspaceId, false)
 			continue
 		}
 		ts := ts.SelectByVbuckets(vbnos) // take only local vbuckets
@@ -881,7 +893,7 @@ func (feed *Feed) start(
 		feeder, e := feed.openFeeder(opaque, pooln, bucketn)
 		if e != nil {
 			err = e
-			feed.cleanupBucket(bucketn, false)
+			feed.cleanupKeyspace(keyspaceId, false)
 			continue
 		}
 		feed.feeders[bucketn] = feeder // :SideEffect:
@@ -890,7 +902,7 @@ func (feed *Feed) start(
 			opaque, ts, opaque2)
 		if e != nil {
 			err = e
-			feed.cleanupBucket(bucketn, false)
+			feed.cleanupKeyspace(keyspaceId, false)
 			continue
 		}
 		engines, _ := feed.engines[bucketn]
@@ -900,7 +912,7 @@ func (feed *Feed) start(
 		e = feed.bucketFeed(opaque, false, true, ts, feeder)
 		if e != nil { // all feed errors are fatal, skip this bucket.
 			err = e
-			feed.cleanupBucket(bucketn, false)
+			feed.cleanupKeyspace(keyspaceId, false)
 			continue
 		}
 		if !feed.async {
@@ -946,9 +958,16 @@ func (feed *Feed) start(
 // - return ErrorFeeder if upstream connection has failures.
 // - return ErrorNotMyVbucket due to rebalances and failures.
 // - return ErrorStreamRequest if StreamRequest failed for some reason
-// - return ErrorResponseTimeout if feedback is not completed within timeout.
+// - return ErrorResponseTimeout if feedback is not completed within timeout
+// - return ErrorInvalidKeyspaceIdMap if 1:1 mapping between bucket to keyspaceId
+//   is invalid
 func (feed *Feed) restartVbuckets(
 	req *protobuf.RestartVbucketsRequest, opaque uint16) (err error) {
+
+	keyspaceIdMap, err := req.GetKeyspaceIdMap()
+	if err != nil {
+		return err
+	}
 
 	// FIXME: restart-vbuckets implies a repair Endpoint.
 	raddrs := feed.endpointRaddrs()
@@ -961,10 +980,13 @@ func (feed *Feed) restartVbuckets(
 
 	for _, ts := range req.GetRestartTimestamps() {
 		pooln, bucketn := ts.GetPool(), ts.GetBucket()
+		// TODO: Once the datapath is made keyspace aware, change all book-keeping
+		// to refer with keyspaceId rather than with bucket
+		keyspaceId := keyspaceIdMap[bucketn]
 		vbnos, e := feed.getLocalVbuckets(pooln, bucketn, opaque)
 		if e != nil {
 			err = e
-			feed.cleanupBucket(bucketn, false)
+			feed.cleanupKeyspace(keyspaceId, false)
 			continue
 		}
 		ts := ts.SelectByVbuckets(vbnos)
@@ -997,7 +1019,7 @@ func (feed *Feed) restartVbuckets(
 		feeder, e := feed.openFeeder(opaque, pooln, bucketn)
 		if e != nil {
 			err = e
-			feed.cleanupBucket(bucketn, false)
+			feed.cleanupKeyspace(keyspaceId, false)
 			continue
 		}
 		feed.feeders[bucketn] = feeder // :SideEffect:
@@ -1005,7 +1027,7 @@ func (feed *Feed) restartVbuckets(
 		kvdata, e := feed.startDataPath(bucketn, feeder, opaque, ts, opaque2)
 		if e != nil { // all feed errors are fatal, skip this bucket.
 			err = e
-			feed.cleanupBucket(bucketn, false)
+			feed.cleanupKeyspace(keyspaceId, false)
 			continue
 		}
 
@@ -1014,7 +1036,7 @@ func (feed *Feed) restartVbuckets(
 		e = feed.bucketFeed(opaque, false, true, ts, feeder)
 		if e != nil { // all feed errors are fatal, skip this bucket.
 			err = e
-			feed.cleanupBucket(bucketn, false)
+			feed.cleanupKeyspace(keyspaceId, false)
 			continue
 		}
 		if !feed.async {
@@ -1054,9 +1076,19 @@ func (feed *Feed) restartVbuckets(
 // - return ErrorFeeder if upstream connection has failures.
 // - return ErrorNotMyVbucket due to rebalances and failures.
 // - return ErrorStreamEnd if StreamEnd failed for some reason
-// - return ErrorResponseTimeout if feedback is not completed within timeout.
+// - return ErrorResponseTimeout if feedback is not completed within timeout
+// - return ErrorInvalidKeyspaceIdMap if 1:1 mapping between bucket to keyspaceId
+//   is invalid
 func (feed *Feed) shutdownVbuckets(
 	req *protobuf.ShutdownVbucketsRequest, opaque uint16) (err error) {
+
+	// TODO: Once the data path is made keyspaceID aware, update this code
+	// to get keyspaceId from keyspaceIdMap and refer all book-keeping with
+	// keyspaceId
+	_, err = req.GetKeyspaceIdMap()
+	if err != nil {
+		return err
+	}
 
 	// iterate request-timestamp for each bucket.
 	for _, ts := range req.GetShutdownTimestamps() {
@@ -1066,7 +1098,7 @@ func (feed *Feed) shutdownVbuckets(
 			err = e
 			//FIXME: in case of shutdown we are not cleaning the bucket !
 			//wait for the code to settle-down and remove this.
-			//feed.cleanupBucket(bucketn, false)
+			//feed.cleanupKeyspace(bucketn, false)
 			continue
 		}
 		ts := ts.SelectByVbuckets(vbnos)
@@ -1097,7 +1129,7 @@ func (feed *Feed) shutdownVbuckets(
 			err = e
 			//FIXME: in case of shutdown we are not cleaning the bucket !
 			//wait for the code to settle-down and remove this.
-			//feed.cleanupBucket(bucketn, false)
+			//feed.cleanupKeyspace(bucketn, false)
 			continue
 		}
 		if !feed.async {
@@ -1134,9 +1166,16 @@ func (feed *Feed) shutdownVbuckets(
 // - return ErrorFeeder if upstream connection has failures.
 // - return ErrorNotMyVbucket due to rebalances and failures.
 // - return ErrorStreamRequest if StreamRequest failed for some reason
-// - return ErrorResponseTimeout if feedback is not completed within timeout.
+// - return ErrorResponseTimeout if feedback is not completed within timeout
+// - return ErrorInvalidKeyspaceIdMap if 1:1 mapping between bucket to keyspaceId
+//   is invalid
 func (feed *Feed) addBuckets(
 	req *protobuf.AddBucketsRequest, opaque uint16) (err error) {
+
+	keyspaceIdMap, err := req.GetKeyspaceIdMap()
+	if err != nil {
+		return err
+	}
 
 	// update engines and endpoints
 	if _, err = feed.processSubscribers(opaque, req); err != nil { // :SideEffect:
@@ -1147,10 +1186,14 @@ func (feed *Feed) addBuckets(
 
 	for _, ts := range req.GetReqTimestamps() {
 		pooln, bucketn := ts.GetPool(), ts.GetBucket()
+		// TODO: Once the datapath is made keyspace aware, change all book-keeping
+		// to refer with keyspace rather than with bucket
+		keyspaceId := keyspaceIdMap[bucketn]
+
 		vbnos, e := feed.getLocalVbuckets(pooln, bucketn, opaque)
 		if e != nil {
 			err = e
-			feed.cleanupBucket(bucketn, false)
+			feed.cleanupKeyspace(keyspaceId, false)
 			continue
 		}
 		ts := ts.SelectByVbuckets(vbnos)
@@ -1174,7 +1217,7 @@ func (feed *Feed) addBuckets(
 		feeder, e := feed.openFeeder(opaque, pooln, bucketn)
 		if e != nil {
 			err = e
-			feed.cleanupBucket(bucketn, false)
+			feed.cleanupKeyspace(keyspaceId, false)
 			continue
 		}
 		feed.feeders[bucketn] = feeder // :SideEffect:
@@ -1183,7 +1226,7 @@ func (feed *Feed) addBuckets(
 		kvdata, e := feed.startDataPath(bucketn, feeder, opaque, ts, opaque2)
 		if e != nil { // all feed errors are fatal, skip this bucket.
 			err = e
-			feed.cleanupBucket(bucketn, false)
+			feed.cleanupKeyspace(keyspaceId, false)
 			continue
 		}
 
@@ -1194,7 +1237,7 @@ func (feed *Feed) addBuckets(
 		e = feed.bucketFeed(opaque, false, true, ts, feeder)
 		if e != nil { // all feed errors are fatal, skip this bucket.
 			err = e
-			feed.cleanupBucket(bucketn, false)
+			feed.cleanupKeyspace(keyspaceId, false)
 			continue
 		}
 		if !feed.async {
@@ -1230,20 +1273,40 @@ func (feed *Feed) addBuckets(
 
 // upstreams are closed for buckets, data-path is closed for downstream,
 // vbucket-routines exits on StreamEnd
+// - return ErrorInvalidKeyspaceIdMap if 1:1 mapping between bucket to keyspaceId
+//   is invalid
 func (feed *Feed) delBuckets(
 	req *protobuf.DelBucketsRequest, opaque uint16) error {
 
+	keyspaceIdMap, err := req.GetKeyspaceIdMap()
+	if err != nil {
+		return err
+	}
+
 	for _, bucketn := range req.GetBuckets() {
-		feed.cleanupBucket(bucketn, true)
+		// TODO: Once the datapath is made keyspace aware, change all book-keeping
+		// to refer with keyspace rather than with bucket
+		keyspaceId := keyspaceIdMap[bucketn]
+		feed.cleanupKeyspace(keyspaceId, true)
 	}
 	return nil
 }
 
 // only data-path shall be updated.
 // - return ErrorInconsistentFeed for malformed feed request
+// - return ErrorInvalidKeyspaceIdMap if 1:1 mapping between bucket to keyspaceId
+//   is invalid
 func (feed *Feed) addInstances(
 	req *protobuf.AddInstancesRequest,
 	opaque uint16) (*protobuf.TimestampResponse, error) {
+
+	// TODO: Once the data path is made keyspaceID aware, update this code
+	// to get keyspaceId from bucket and refer all book-keeping with keyspaceId
+	// Also, add keyspaceId to response
+	_, err := req.GetKeyspaceIdMap()
+	if err != nil {
+		return nil, err
+	}
 
 	tsResp := &protobuf.TimestampResponse{
 		Topic:             proto.String(feed.topic),
@@ -1438,16 +1501,16 @@ func (feed *Feed) shutdown(opaque uint16) error {
 	return nil
 }
 
-// shutdown upstream, data-path and remove data-structure for this bucket.
-func (feed *Feed) cleanupBucket(bucketn string, enginesOk bool) {
+// shutdown upstream, data-path and remove data-structure for this keyspace.
+func (feed *Feed) cleanupKeyspace(keyspaceId string, enginesOk bool) {
 	if enginesOk {
-		delete(feed.engines, bucketn) // :SideEffect:
+		delete(feed.engines, keyspaceId) // :SideEffect:
 	}
-	delete(feed.reqTss, bucketn)  // :SideEffect:
-	delete(feed.actTss, bucketn)  // :SideEffect:
-	delete(feed.rollTss, bucketn) // :SideEffect:
+	delete(feed.reqTss, keyspaceId)  // :SideEffect:
+	delete(feed.actTss, keyspaceId)  // :SideEffect:
+	delete(feed.rollTss, keyspaceId) // :SideEffect:
 	// close upstream
-	feeder, ok := feed.feeders[bucketn]
+	feeder, ok := feed.feeders[keyspaceId]
 	if ok {
 		// drain the .C channel until it gets closed or if this feed
 		// happends to get closed.
@@ -1458,8 +1521,8 @@ func (feed *Feed) cleanupBucket(bucketn string, enginesOk bool) {
 					if ok == false {
 						return
 					} else if m.Opcode == mcd.DCP_STREAMREQ {
-						fmsg := "%v ##%x DCP_STREAMREQ for vb:%d, bucket: '%v' is drained in clean-up path"
-						logging.Errorf(fmsg, feed.logPrefix, m.Opaque, m.VBucket, bucketn)
+						fmsg := "%v ##%x DCP_STREAMREQ for vb:%d, keyspaceId: '%v' is drained in clean-up path"
+						logging.Errorf(fmsg, feed.logPrefix, m.Opaque, m.VBucket, keyspaceId)
 					}
 				case <-finch:
 					return
@@ -1468,15 +1531,15 @@ func (feed *Feed) cleanupBucket(bucketn string, enginesOk bool) {
 		}(feeder.GetChannel(), feed.finch)
 		feeder.CloseFeed()
 	}
-	delete(feed.feeders, bucketn) // :SideEffect:
+	delete(feed.feeders, keyspaceId) // :SideEffect:
 	// cleanup data structures.
-	if kvdata, ok := feed.kvdata[bucketn]; ok {
+	if kvdata, ok := feed.kvdata[keyspaceId]; ok {
 		kvdata.Close()
 	}
-	delete(feed.kvdata, bucketn) // :SideEffect:
+	delete(feed.kvdata, keyspaceId) // :SideEffect:
 
-	fmsg := "%v ##%x bucket %v removed ..."
-	logging.Infof(fmsg, feed.logPrefix, feed.opaque, bucketn)
+	fmsg := "%v ##%x keyspace %v removed ..."
+	logging.Infof(fmsg, feed.logPrefix, feed.opaque, keyspaceId)
 }
 
 func (feed *Feed) openFeeder(
@@ -1959,6 +2022,7 @@ loop:
 }
 
 // compose topic-response for caller
+// TODO: Add keyspaceId's to topicResponse
 func (feed *Feed) topicResponse() *protobuf.TopicResponse {
 	uuids := make([]uint64, 0)
 	for _, engines := range feed.engines {
