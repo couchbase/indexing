@@ -308,6 +308,15 @@ var SystemConfig = Config{
 		true,  // immutable
 		false, // case-insensitive
 	},
+	"projector.adminport.readHeaderTimeout": ConfigValue{
+		5 * 1000,
+		"timeout in milliseconds, is http server's read header timeout, " +
+			"also refer to projector.dataport.harakiriTimeout, " +
+			"projector.adminport.readTimeout and indexer.dataport.tcpReadDeadline",
+		5 * 1000,
+		true,  // immutable
+		false, // case-insensitive
+	},
 	"projector.adminport.writeTimeout": ConfigValue{
 		0,
 		"timeout in milliseconds, is http server's write timeout",

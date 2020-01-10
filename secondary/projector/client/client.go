@@ -70,7 +70,8 @@ import (
 
 	"github.com/couchbase/indexing/secondary/logging"
 
-	ap "github.com/couchbase/indexing/secondary/adminport"
+	apclient "github.com/couchbase/indexing/secondary/adminport/client"
+	apcommon "github.com/couchbase/indexing/secondary/adminport/common"
 
 	c "github.com/couchbase/indexing/secondary/common"
 
@@ -134,7 +135,7 @@ var ErrorResponseTimeout = errors.New("feed.responseTimeout")
 // issues request and get back response.
 type Client struct {
 	adminport string
-	ap        ap.Client
+	ap        apcommon.Client
 	// config
 	maxVbuckets   int
 	retryInterval int
@@ -152,7 +153,7 @@ func NewClient(adminport string, maxvbs int, config c.Config) (*Client, error) {
 	expBackoff := config["exponentialBackoff"].Int()
 
 	urlPrefix := config["urlPrefix"].String()
-	ap, err := ap.NewHTTPClient(adminport, urlPrefix)
+	ap, err := apclient.NewHTTPClient(adminport, urlPrefix)
 	if err != nil {
 		return nil, err
 	}

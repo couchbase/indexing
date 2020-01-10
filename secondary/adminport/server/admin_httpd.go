@@ -24,7 +24,7 @@
 //      server.Stop()
 // }
 
-package adminport
+package server
 
 import "fmt"
 import "expvar"
@@ -39,6 +39,7 @@ import "time"
 import "github.com/couchbase/indexing/secondary/security"
 import "github.com/couchbase/indexing/secondary/logging"
 import c "github.com/couchbase/indexing/secondary/common"
+import apcommon "github.com/couchbase/indexing/secondary/adminport/common"
 
 // httpServer is a concrete type implementing adminport Server
 // interface.
@@ -47,9 +48,9 @@ type httpServer struct {
 	lis      net.Listener // TCP listener
 	mux      *http.ServeMux
 	srv      *http.Server // http server
-	messages map[string]MessageMarshaller
+	messages map[string]apcommon.MessageMarshaller
 	conns    []net.Conn
-	reqch    chan<- Request // request channel back to application
+	reqch    chan<- apcommon.Request // request channel back to application
 
 	// config params
 	name      string // human readable name for this server
@@ -57,6 +58,7 @@ type httpServer struct {
 	urlPrefix string // URL path prefix for adminport
 	rtimeout  time.Duration
 	wtimeout  time.Duration
+	rhtimeout time.Duration
 	maxHdrlen int
 
 	// local
@@ -68,9 +70,9 @@ type httpServer struct {
 
 // NewHTTPServer creates an instance of admin-server.
 // Start() will actually start the server.
-func NewHTTPServer(config c.Config, reqch chan<- Request) (Server, error) {
+func NewHTTPServer(config c.Config, reqch chan<- apcommon.Request) (apcommon.Server, error) {
 	s := &httpServer{
-		messages:      make(map[string]MessageMarshaller),
+		messages:      make(map[string]apcommon.MessageMarshaller),
 		conns:         make([]net.Conn, 0),
 		reqch:         reqch,
 		statsInBytes:  0.0,
@@ -82,6 +84,8 @@ func NewHTTPServer(config c.Config, reqch chan<- Request) (Server, error) {
 		urlPrefix: config["urlPrefix"].String(),
 		rtimeout:  time.Duration(config["readTimeout"].Int()),
 		wtimeout:  time.Duration(config["writeTimeout"].Int()),
+		rhtimeout: time.Duration(config["readHeaderTimeout"].Int()),
+
 		maxHdrlen: config["maxHeaderBytes"].Int(),
 	}
 	s.logPrefix = fmt.Sprintf("%s[%s]", s.name, s.laddr)
@@ -90,12 +94,13 @@ func NewHTTPServer(config c.Config, reqch chan<- Request) (Server, error) {
 	s.mux.HandleFunc(s.urlPrefix, s.systemHandler)
 	s.mux.HandleFunc("/debug/vars", s.expvarHandler)
 	s.srv = &http.Server{
-		Addr:           s.laddr,
-		Handler:        s.mux,
-		ConnState:      s.connState,
-		ReadTimeout:    s.rtimeout * time.Millisecond,
-		WriteTimeout:   s.wtimeout * time.Millisecond,
-		MaxHeaderBytes: s.maxHdrlen,
+		Addr:              s.laddr,
+		Handler:           s.mux,
+		ConnState:         s.connState,
+		ReadTimeout:       s.rtimeout * time.Millisecond,
+		WriteTimeout:      s.wtimeout * time.Millisecond,
+		ReadHeaderTimeout: s.rhtimeout * time.Millisecond,
+		MaxHeaderBytes:    s.maxHdrlen,
 	}
 
 	if err := security.SecureServer(s.srv); err != nil {
@@ -118,13 +123,13 @@ func validateAuth(w http.ResponseWriter, r *http.Request) bool {
 }
 
 // Register is part of Server interface.
-func (s *httpServer) Register(msg MessageMarshaller) (err error) {
+func (s *httpServer) Register(msg apcommon.MessageMarshaller) (err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if s.lis != nil {
 		logging.Errorf("%v can't register, server already started\n", s.logPrefix)
-		return ErrorRegisteringRequest
+		return apcommon.ErrorRegisteringRequest
 	}
 	key := fmt.Sprintf("%v%v", s.urlPrefix, msg.Name())
 	s.messages[key] = msg
@@ -142,7 +147,7 @@ func (s *httpServer) RegisterHTTPHandler(
 
 	if s.lis != nil {
 		logging.Errorf("%v can't register, server already started\n", s.logPrefix)
-		return ErrorRegisteringRequest
+		return apcommon.ErrorRegisteringRequest
 	}
 
 	switch handl := handler.(type) {
@@ -158,18 +163,18 @@ func (s *httpServer) RegisterHTTPHandler(
 }
 
 // Unregister is part of Server interface.
-func (s *httpServer) Unregister(msg MessageMarshaller) (err error) {
+func (s *httpServer) Unregister(msg apcommon.MessageMarshaller) (err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if s.lis != nil {
 		logging.Errorf("%v can't unregister, server already started\n", s.logPrefix)
-		return ErrorRegisteringRequest
+		return apcommon.ErrorRegisteringRequest
 	}
 	name := msg.Name()
 	if _, ok := s.messages[name]; !ok {
 		logging.Errorf("%v message %q hasn't been registered\n", s.logPrefix, name)
-		return ErrorMessageUnknown
+		return apcommon.ErrorMessageUnknown
 	}
 	delete(s.messages, name)
 	logging.Infof("%s unregistered %s\n", s.logPrefix, s.getURL(msg))
@@ -199,7 +204,7 @@ func (s *httpServer) Start() (err error) {
 
 	if s.lis != nil {
 		logging.Errorf("%v already started ...\n", s.logPrefix)
-		return ErrorServerStarted
+		return apcommon.ErrorServerStarted
 	}
 
 	if s.lis, err = security.MakeListener(s.srv.Addr); err != nil {
@@ -285,22 +290,22 @@ func (s *httpServer) systemHandler(w http.ResponseWriter, r *http.Request) {
 	// get request message type.
 	msg, ok := s.messages[r.URL.Path]
 	if !ok {
-		err = ErrorPathNotFound
+		err = apcommon.ErrorPathNotFound
 		http.Error(w, "path not found", http.StatusNotFound)
 		return
 	}
 	// read request
 	dataIn = make([]byte, r.ContentLength)
 	if err := requestRead(r.Body, dataIn); err != nil {
-		err = fmt.Errorf("%v, %v", ErrorRequest, err)
+		err = fmt.Errorf("%v, %v", apcommon.ErrorRequest, err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	// Get an instance of request type and decode request into that.
 	typeOfMsg := reflect.ValueOf(msg).Elem().Type()
-	msg = reflect.New(typeOfMsg).Interface().(MessageMarshaller)
+	msg = reflect.New(typeOfMsg).Interface().(apcommon.MessageMarshaller)
 	if err = msg.Decode(dataIn); err != nil {
-		err = fmt.Errorf("%v, %v", ErrorDecodeRequest, err)
+		err = fmt.Errorf("%v, %v", apcommon.ErrorDecodeRequest, err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -311,19 +316,19 @@ func (s *httpServer) systemHandler(w http.ResponseWriter, r *http.Request) {
 	val := <-waitch
 
 	switch v := (val).(type) {
-	case MessageMarshaller:
+	case apcommon.MessageMarshaller:
 		if dataOut, err = v.Encode(); err == nil {
 			header := w.Header()
 			header["Content-Type"] = []string{v.ContentType()}
 			w.Write(dataOut)
 
 		} else {
-			err = fmt.Errorf("%v, %v", ErrorEncodeResponse, err)
+			err = fmt.Errorf("%v, %v", apcommon.ErrorEncodeResponse, err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
 
 	case error:
-		err = fmt.Errorf("%v, %v", ErrorInternal, v)
+		err = fmt.Errorf("%v, %v", apcommon.ErrorInternal, v)
 		http.Error(w, v.Error(), http.StatusInternalServerError)
 	}
 }
@@ -364,7 +369,7 @@ func (s *httpServer) connState(conn net.Conn, state http.ConnState) {
 	}
 }
 
-func (s *httpServer) getURL(msg MessageMarshaller) string {
+func (s *httpServer) getURL(msg apcommon.MessageMarshaller) string {
 	return s.urlPrefix + msg.Name()
 }
 
@@ -389,17 +394,17 @@ func requestRead(r io.Reader, data []byte) (err error) {
 // concrete type implementing Request interface
 type httpAdminRequest struct {
 	srv    *httpServer
-	msg    MessageMarshaller
+	msg    apcommon.MessageMarshaller
 	waitch chan interface{}
 }
 
 // GetMessage is part of Request interface.
-func (r *httpAdminRequest) GetMessage() MessageMarshaller {
+func (r *httpAdminRequest) GetMessage() apcommon.MessageMarshaller {
 	return r.msg
 }
 
 // Send is part of Request interface.
-func (r *httpAdminRequest) Send(msg MessageMarshaller) error {
+func (r *httpAdminRequest) Send(msg apcommon.MessageMarshaller) error {
 	r.waitch <- msg
 	close(r.waitch)
 	return nil

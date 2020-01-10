@@ -3,7 +3,7 @@
 // request/response protocol, by default used http for transport and protobuf,
 // JSON for payload. Admin port can typically be used for collecting
 // statistics, administering and managing cluster.
-package adminport
+package common
 
 import "errors"
 import c "github.com/couchbase/indexing/secondary/common"

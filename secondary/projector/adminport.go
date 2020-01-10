@@ -3,7 +3,7 @@ package projector
 import "os"
 import "time"
 
-import ap "github.com/couchbase/indexing/secondary/adminport"
+import apcommon "github.com/couchbase/indexing/secondary/adminport/common"
 import c "github.com/couchbase/indexing/secondary/common"
 import protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
 import "github.com/couchbase/indexing/secondary/logging"
@@ -25,7 +25,7 @@ var reqStats = c.Statistics{}
 var angioToken = uint16(1)
 
 // admin-port entry point, once started never shutsdown.
-func (p *Projector) mainAdminPort(reqch chan ap.Request) {
+func (p *Projector) mainAdminPort(reqch chan apcommon.Request) {
 	p.admind.Register(reqVbmap)
 	p.admind.Register(reqFailoverLog)
 	p.admind.Register(reqMutationFeed)
@@ -87,8 +87,8 @@ loop:
 }
 
 // re-entrant / concurrent request handler.
-func (p *Projector) handleRequest(req ap.Request, opaque uint16) {
-	var response ap.MessageMarshaller
+func (p *Projector) handleRequest(req apcommon.Request, opaque uint16) {
+	var response apcommon.MessageMarshaller
 	var err error
 
 	msg := req.GetMessage()

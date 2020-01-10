@@ -9,13 +9,14 @@
 //     client.Request(stats, stats)
 // }
 
-package adminport
+package client
 
 import "bytes"
 import "io/ioutil"
 import "net/http"
 import "strings"
 import "github.com/couchbase/indexing/secondary/security"
+import apcommon "github.com/couchbase/indexing/secondary/adminport/common"
 
 // httpClient is a concrete type implementing Client interface.
 type httpClient struct {
@@ -25,7 +26,7 @@ type httpClient struct {
 }
 
 // NewHTTPClient returns a new instance of Client over HTTP.
-func NewHTTPClient(listenAddr, urlPrefix string) (Client, error) {
+func NewHTTPClient(listenAddr, urlPrefix string) (apcommon.Client, error) {
 	if !strings.HasPrefix(listenAddr, "http://") {
 		listenAddr = "http://" + listenAddr
 	}
@@ -43,7 +44,7 @@ func NewHTTPClient(listenAddr, urlPrefix string) (Client, error) {
 }
 
 // Request is part of `Client` interface
-func (c *httpClient) Request(msg, resp MessageMarshaller) (err error) {
+func (c *httpClient) Request(msg, resp apcommon.MessageMarshaller) (err error) {
 	return doResponse(func() (*http.Response, error) {
 		// marshall message
 		body, err := msg.Encode()
@@ -70,7 +71,7 @@ func (c *httpClient) Request(msg, resp MessageMarshaller) (err error) {
 	}, resp)
 }
 
-func doResponse(postRequest func() (*http.Response, error), resp MessageMarshaller) error {
+func doResponse(postRequest func() (*http.Response, error), resp apcommon.MessageMarshaller) error {
 	htresp, err := postRequest() // get response back from server
 	if err != nil {
 		return err
