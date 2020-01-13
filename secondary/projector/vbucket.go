@@ -9,13 +9,14 @@ import mcd "github.com/couchbase/indexing/secondary/dcp/transport"
 
 // Vbucket is immutable structure defined for each vbucket.
 type Vbucket struct {
-	bucket    string // immutable
-	opaque    uint16 // immutable
-	vbno      uint16 // immutable
-	vbuuid    uint64 // immutable
-	seqno     uint64
-	logPrefix string // immutable
-	opaque2   uint64 // immutable
+	bucket     string // immutable
+	keyspaceId string // immutable
+	opaque     uint16 // immutable
+	vbno       uint16 // immutable
+	vbuuid     uint64 // immutable
+	seqno      uint64
+	logPrefix  string // immutable
+	opaque2    uint64 // immutable
 	// stats
 	sshotCount    uint64
 	mutationCount uint64
@@ -24,19 +25,20 @@ type Vbucket struct {
 
 // NewVbucket creates a new routine to handle this vbucket stream.
 func NewVbucket(
-	cluster, topic, bucket string, opaque, vbno uint16,
+	cluster, topic, bucket, keyspaceId string, opaque, vbno uint16,
 	vbuuid, startSeqno uint64, config c.Config, opaque2 uint64) *Vbucket {
 
 	v := &Vbucket{
-		bucket:  bucket,
-		opaque:  opaque,
-		vbno:    vbno,
-		vbuuid:  vbuuid,
-		seqno:   startSeqno,
-		opaque2: opaque2,
+		bucket:     bucket,
+		keyspaceId: keyspaceId,
+		opaque:     opaque,
+		vbno:       vbno,
+		vbuuid:     vbuuid,
+		seqno:      startSeqno,
+		opaque2:    opaque2,
 	}
 	fmsg := "VBRT[<-%v<-%v<-%v #%v]"
-	v.logPrefix = fmt.Sprintf(fmsg, vbno, bucket, cluster, topic)
+	v.logPrefix = fmt.Sprintf(fmsg, vbno, keyspaceId, cluster, topic)
 	logging.Infof("%v ##%x ##%v created\n", v.logPrefix, opaque, opaque2)
 	return v
 }

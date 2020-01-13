@@ -33,14 +33,15 @@ import "os"
 
 // VbucketWorker is immutable structure defined for each vbucket.
 type VbucketWorker struct {
-	id       int
-	feed     *Feed
-	cluster  string
-	topic    string
-	bucket   string
-	opaque   uint16
-	config   c.Config
-	vbuckets map[uint16]*Vbucket
+	id         int
+	feed       *Feed
+	cluster    string
+	topic      string
+	bucket     string
+	keyspaceId string
+	opaque     uint16
+	config     c.Config
+	vbuckets   map[uint16]*Vbucket
 	// evaluators and subscribers
 	engines   map[uint64]*Engine
 	endpoints map[string]c.RouterEndpoint
@@ -72,33 +73,34 @@ func (stats *WorkerStats) Init() {
 
 // NewVbucketWorker creates a new routine to handle this vbucket stream.
 func NewVbucketWorker(
-	id int, feed *Feed, bucket string,
+	id int, feed *Feed, bucket, keyspaceId string,
 	opaque uint16, config c.Config, opaque2 uint64) *VbucketWorker {
 
 	mutChanSize := config["mutationChanSize"].Int()
 	encodeBufSize := config["encodeBufSize"].Int()
 
 	worker := &VbucketWorker{
-		id:        id,
-		feed:      feed,
-		cluster:   feed.cluster,
-		topic:     feed.topic,
-		bucket:    bucket,
-		opaque:    opaque,
-		config:    config,
-		vbuckets:  make(map[uint16]*Vbucket),
-		engines:   make(map[uint64]*Engine),
-		endpoints: make(map[string]c.RouterEndpoint),
-		sbch:      make(chan []interface{}, mutChanSize),
-		datach:    make(chan []interface{}, mutChanSize),
-		finch:     make(chan bool),
-		encodeBuf: make([]byte, 0, encodeBufSize),
-		stats:     &WorkerStats{},
-		opaque2:   opaque2,
+		id:         id,
+		feed:       feed,
+		cluster:    feed.cluster,
+		topic:      feed.topic,
+		bucket:     bucket,
+		keyspaceId: keyspaceId,
+		opaque:     opaque,
+		config:     config,
+		vbuckets:   make(map[uint16]*Vbucket),
+		engines:    make(map[uint64]*Engine),
+		endpoints:  make(map[string]c.RouterEndpoint),
+		sbch:       make(chan []interface{}, mutChanSize),
+		datach:     make(chan []interface{}, mutChanSize),
+		finch:      make(chan bool),
+		encodeBuf:  make([]byte, 0, encodeBufSize),
+		stats:      &WorkerStats{},
+		opaque2:    opaque2,
 	}
 	worker.stats.Init()
 	fmsg := "WRKR[%v<-%v<-%v #%v]"
-	worker.logPrefix = fmt.Sprintf(fmsg, id, bucket, feed.cluster, feed.topic)
+	worker.logPrefix = fmt.Sprintf(fmsg, id, keyspaceId, feed.cluster, feed.topic)
 	worker.mutChanSize = mutChanSize
 	worker.meta = make(map[string]interface{}, 9)
 	go worker.run(worker.datach, worker.sbch)
@@ -405,8 +407,9 @@ func (worker *VbucketWorker) handleEvent(m *mc.DcpEvent) *Vbucket {
 		}
 		// opens up the path
 		cluster, topic, bucket := worker.cluster, worker.topic, worker.bucket
+		keyspaceId := worker.keyspaceId
 		config, opaque, vbuuid := worker.config, m.Opaque, m.VBuuid
-		v = NewVbucket(cluster, topic, bucket, opaque, vbno, vbuuid,
+		v = NewVbucket(cluster, topic, bucket, keyspaceId, opaque, vbno, vbuuid,
 			m.Seqno, config, worker.opaque2)
 
 		if m.Status == mcd.SUCCESS {
@@ -460,7 +463,7 @@ func (worker *VbucketWorker) handleEvent(m *mc.DcpEvent) *Vbucket {
 		docval := qvalue.NewAnnotatedValue(nvalue)
 		for _, engine := range worker.engines {
 			// Slices in KeyVersions struct are updated for all the indexes
-			// belonging to this bucket. Hence, pre-allocate the memory for
+			// belonging to this keyspace. Hence, pre-allocate the memory for
 			// slices with number of indexes instead of expanding the slice
 			// due to lack of size. This helps to reduce the re-allocs and
 			// therefore reduces the garbage generated.
