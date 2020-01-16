@@ -12,6 +12,7 @@ package client
 import (
 	"encoding/json"
 	"fmt"
+
 	"github.com/couchbase/gometa/common"
 	c "github.com/couchbase/indexing/secondary/common"
 	logging "github.com/couchbase/indexing/secondary/logging"
@@ -51,6 +52,7 @@ const (
 	OPCODE_UPDATE_REPLICA_COUNT                     = OPCODE_DROP_INSTANCE + 1
 	OPCODE_GET_REPLICA_COUNT                        = OPCODE_UPDATE_REPLICA_COUNT + 1
 	OPCODE_CHECK_TOKEN_EXIST                        = OPCODE_GET_REPLICA_COUNT + 1
+	OPCODE_RESET_INDEX_ON_ROLLBACK                  = OPCODE_CHECK_TOKEN_EXIST + 1
 )
 
 func Op2String(op common.OpCode) string {
@@ -111,6 +113,8 @@ func Op2String(op common.OpCode) string {
 		return "OPCODE_GET_REPLICA_COUNT"
 	case OPCODE_CHECK_TOKEN_EXIST:
 		return "OPCODE_CHECK_TOKEN_EXIST"
+	case OPCODE_RESET_INDEX_ON_ROLLBACK:
+		return "OPCODE_RESET_INDEX_ON_ROLLBACK"
 	}
 	return fmt.Sprintf("%v", op)
 }

@@ -178,6 +178,9 @@ type indexer struct {
 	clusterInfoClient *common.ClusterInfoClient
 
 	testServRunning bool
+
+	bucketResetList                map[string]resetList
+	bucketObserveFlushDoneForReset map[string]MsgChannel
 }
 
 type kvRequest struct {
@@ -209,6 +212,8 @@ type buildDoneSpec struct {
 	sessionId uint64
 	flushTs   *common.TsVbuuid
 }
+
+type resetList []common.IndexInstId
 
 func NewIndexer(config common.Config) (Indexer, Message) {
 
@@ -259,6 +264,9 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		activeKVNodes: make(map[string]bool),
 
 		enableSecurityChange: make(chan bool),
+
+		bucketResetList:                make(map[string]resetList),
+		bucketObserveFlushDoneForReset: make(map[string]MsgChannel),
 	}
 
 	logging.Infof("Indexer::NewIndexer Status Warmup")
@@ -1201,6 +1209,9 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 
 	case TK_INIT_BUILD_DONE_NO_CATCHUP_ACK:
 		idx.handleBuildDoneNoCatchupAck(msg)
+
+	case INDEXER_RESET_INDEX_DONE:
+		idx.handleResetIndexDone(msg)
 
 	default:
 		logging.Fatalf("Indexer::handleWorkerMsgs Unknown Message %+v", msg)
@@ -2563,7 +2574,6 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 	bucketIndexList := idx.groupIndexListByBucket(instIdList)
 	errMap := make(map[common.IndexInstId]error)
 
-	initialBuildReqd := true
 	for bucket, instIdList := range bucketIndexList {
 
 		instIdList, ok := idx.checkValidIndexInst(bucket, instIdList, clientCh, errMap)
@@ -2641,18 +2651,11 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 
 		//all indexes get built using INIT_STREAM
 		var buildStream common.StreamId = common.INIT_STREAM
-
 		idx.bulkUpdateStream(instIdList, buildStream)
 
-		//if initial build TS is zero and index belongs to MAINT_STREAM
-		//initial build is not required.
-		var buildState common.IndexState
-		if buildTs.IsZeroTs() && buildStream == common.MAINT_STREAM {
-			initialBuildReqd = false
-		}
 		//always set state to Initial, once stream request/build is done,
 		//this will get changed to active
-		buildState = common.INDEX_STATE_INITIAL
+		var buildState common.IndexState = common.INDEX_STATE_INITIAL
 
 		idx.bulkUpdateState(instIdList, buildState)
 		idx.bulkUpdateRState(instIdList, msg.(*MsgBuildIndex).GetRequestCtx())
@@ -2676,12 +2679,6 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 		//send Stream Update to workers
 		idx.sendStreamUpdateForBuildIndex(instIdList, buildStream, bucket, buildTs, clientCh)
 
-		idx.stateLock.Lock()
-		if _, ok := idx.streamBucketStatus[buildStream]; !ok {
-			idx.streamBucketStatus[buildStream] = make(BucketStatus)
-		}
-		idx.stateLock.Unlock()
-
 		idx.setStreamBucketState(buildStream, bucket, STREAM_ACTIVE)
 
 		//store updated state and streamId in meta store
@@ -2691,14 +2688,7 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 				common.CrashOnError(err)
 			}
 		} else {
-
-			//if initial build is not being done, send success response,
-			//otherwise success response will be sent when initial build gets done
-			if !initialBuildReqd {
-				clientCh <- &MsgSuccess{}
-			} else {
-				idx.bucketCreateClientChMap[bucket] = clientCh
-			}
+			idx.bucketCreateClientChMap[bucket] = clientCh
 			return
 		}
 	}
@@ -3046,6 +3036,8 @@ func (idx *indexer) handleStorageRollbackDone(msg Message) {
 			streamId: streamId,
 			bucket:   bucket}
 		<-idx.tkCmdCh
+		//any pending build done needs to be processed
+		idx.processPendingBuildDone(streamId, bucket, sessionId)
 		return
 	}
 
@@ -3064,8 +3056,226 @@ func (idx *indexer) handleStorageRollbackDone(msg Message) {
 		common.CrashOnError(err)
 	}
 
+	//if index in MAINT_STREAM rollback to 0, reset state to created and
+	//schedule the build again
+	if restartTs == nil && streamId == common.MAINT_STREAM {
+		idx.resetIndexesOnRollback(streamId, bucket, sessionId)
+		return
+	}
+
 	idx.startBucketStream(streamId, bucket, restartTs, nil, nil, false, false, sessionId)
 	go idx.collectProgressStats(true)
+
+}
+
+func (idx *indexer) resetIndexesOnRollback(streamId common.StreamId,
+	bucket string, sessionId uint64) {
+
+	logging.Infof("Indexer::resetIndexesOnRollback %v %v %v", streamId, bucket, sessionId)
+
+	if streamId != common.MAINT_STREAM {
+		logging.Warnf("Indexer::resetIndexesOnRollback Invalid call %v", streamId)
+		return
+	}
+
+	//get the list of instances to be reset(all indexes in the bucket in MAINT_STREAM)
+	var rList resetList
+	for instId, index := range idx.indexInstMap {
+
+		if index.Stream == streamId &&
+			index.Defn.Bucket == bucket &&
+			index.State != common.INDEX_STATE_DELETED {
+			logging.Infof("Indexer::resetIndexesOnRollback %v %v Adding %v to reset list",
+				streamId, bucket, instId)
+			rList = append(rList, instId)
+		}
+	}
+
+	//for any partitioned index, if there is any instance
+	//in INIT_STREAM, it needs to be reset as well
+	var pList resetList
+	for _, instId := range rList {
+		index := idx.indexInstMap[instId]
+		if common.IsPartitioned(index.Defn.PartitionScheme) {
+			for pinstId, pindex := range idx.indexInstMap {
+				if pindex.RealInstId == index.InstId &&
+					pindex.Stream == common.INIT_STREAM {
+					logging.Infof("Indexer::resetIndexesOnRollback %v %v Adding %v to "+
+						"reset list. Found partitioned index in state %v.",
+						pindex.Stream, bucket, pinstId, pindex.State)
+					rList = append(rList, pinstId)
+					pList = append(pList, pinstId)
+				}
+			}
+		}
+	}
+
+	if len(pList) != 0 {
+		//if a flush is in progress
+		if ok, _ := idx.streamBucketFlushInProgress[common.INIT_STREAM][bucket]; ok {
+			notifyCh := make(MsgChannel)
+			idx.bucketObserveFlushDoneForReset[bucket] = notifyCh
+			idx.bucketResetList[bucket] = rList
+			go idx.processResetAfterFlushDone(bucket, sessionId, notifyCh)
+			return
+		}
+	}
+
+	if rList != nil {
+		idx.doResetIndexesOnRollback(bucket, sessionId, rList)
+	}
+
+}
+
+func (idx *indexer) processResetAfterFlushDone(bucket string, sessionId uint64, notifyCh MsgChannel) {
+
+	logging.Infof("Indexer::processResetAfterFlushDone %v %v %v", common.MAINT_STREAM,
+		bucket, sessionId)
+
+	select {
+	case <-notifyCh:
+		idx.doResetIndexesOnRollback(bucket, sessionId, idx.bucketResetList[bucket])
+		idx.bucketResetList[bucket] = nil
+	}
+
+	idx.bucketObserveFlushDoneForReset[bucket] = nil
+
+	//indicate done
+	close(notifyCh)
+}
+
+func (idx *indexer) doResetIndexesOnRollback(bucket string,
+	sessionId uint64, resetList resetList) {
+
+	logging.Infof("Indexer:doResetIndexesOnRollback %v %v %v ResetList %v",
+		common.MAINT_STREAM, bucket, sessionId, resetList)
+
+	if len(resetList) == 0 {
+		logging.Infof("Indexer::doResetIndexesOnRollback %v %v %v Empty Reset List.",
+			common.MAINT_STREAM, bucket, sessionId)
+		return
+	}
+
+	var wg sync.WaitGroup
+	for _, instId := range resetList {
+
+		if index, ok := idx.indexInstMap[instId]; ok {
+
+			if index.State != common.INDEX_STATE_DELETED {
+				idx.resetSingleIndexOnRollback(&index, &wg)
+				idx.indexInstMap[instId] = index
+			} else {
+				logging.Infof("Indexer::doResetIndexesOnRollback Index %v in %v state. Skipping.", instId, index.State)
+			}
+		} else {
+			logging.Infof("Indexer::doResetIndexesOnRollback Index %v not found. Possibly deleted. Skipping.", instId)
+		}
+	}
+
+	//send updated maps to all workers
+	msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
+
+	if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, nil); err != nil {
+		common.CrashOnError(err)
+	}
+
+	go idx.waitForIndexReset(bucket, sessionId, &wg)
+}
+
+func (idx *indexer) resetSingleIndexOnRollback(inst *common.IndexInst,
+	wg *sync.WaitGroup) {
+
+	logging.Infof("Indexer::resetSingleIndexOnRollback Reset index %v %v",
+		inst.Defn.Bucket, inst.Defn.Name)
+
+	// update metadata
+	respch := make(chan error)
+	msg := &MsgClustMgrResetIndexOnRollback{
+		inst:   *inst,
+		respch: respch,
+	}
+
+	if err := idx.sendMsgToClusterMgr(msg); err != nil {
+		common.CrashOnError(err)
+	}
+
+	// update index instance
+	inst.State = common.INDEX_STATE_CREATED
+	inst.Stream = common.NIL_STREAM
+	inst.Error = ""
+
+	if wg == nil {
+		// The metadata commit is done asynchronously to avoid deadlock.
+		// If metadata update fails, indexer will restart so it can restore
+		//to a consistent state.
+		//TODO avoid a crash/restart loop
+		err := <-respch
+		if err != nil {
+			common.CrashOnError(err)
+		}
+		return
+	} else {
+
+		wg.Add(1)
+		go func() {
+
+			defer wg.Done()
+			// The metadata commit is done asynchronously to avoid deadlock.
+			// If metadata update fails, indexer will restart so it can restore
+			//to a consistent state.
+			//TODO avoid a crash/restart loop
+			err := <-respch
+			if err != nil {
+				common.CrashOnError(err)
+			}
+
+			logging.Infof("Indexer::resetSingleIndexOnRollback Reset done %v %v",
+				inst.Defn.Bucket, inst.Defn.Name)
+
+		}()
+	}
+}
+
+func (idx *indexer) waitForIndexReset(bucket string, sessionId uint64, wg *sync.WaitGroup) {
+
+	//wait for all the metadata to be updated
+	wg.Wait()
+
+	idx.internalRecvCh <- &MsgResetIndexDone{
+		streamId:  common.MAINT_STREAM,
+		bucket:    bucket,
+		sessionId: sessionId,
+	}
+}
+
+func (idx *indexer) handleResetIndexDone(msg Message) {
+
+	streamId := msg.(*MsgResetIndexDone).GetStreamId()
+	bucket := msg.(*MsgResetIndexDone).GetBucket()
+	sessionId := msg.(*MsgResetIndexDone).GetSessionId()
+
+	if ok, currSid := idx.validateSessionId(streamId, bucket, sessionId, true); !ok {
+		logging.Warnf("Indexer::handleResetIndexDone StreamId %v Bucket %v SessionId %v. "+
+			"Current SessionId %v.", streamId, bucket, sessionId, currSid)
+	}
+
+	logging.Infof("Indexer::handleResetIndexDone %v %v %v",
+		streamId, bucket, sessionId)
+
+	//sanity check, at this point there should be no active index in the stream
+	if idx.checkBucketExistsInStream(bucket, streamId, false) {
+		logging.Fatalf("Indexer::handleResetIndexDone %v %v Unexpected active index(es).",
+			streamId, bucket)
+		common.CrashOnError(ErrInconsistentState)
+	}
+
+	idx.setStreamBucketState(streamId, bucket, STREAM_INACTIVE)
+
+	//TODO check if it is possible for deleted state indexes to
+	//be in the stream, if so handle the case
+
+	//process any pending build done.
+	idx.processPendingBuildDone(streamId, bucket, sessionId)
 
 }
 
@@ -3102,7 +3312,8 @@ func (idx *indexer) handleRecoveryDone(msg Message) {
 	idx.tkCmdCh <- msg
 	<-idx.tkCmdCh
 
-	//TODO Collections is this check required?
+	//TODO Collections is this check required as indexes can be dropped during recovery?
+	//if only a deleted index remains in the stream, how will pendBuild work
 	//during recovery, if all indexes of a bucket gets dropped,
 	//the stream needs to be stopped for that bucket.
 	if !idx.checkBucketExistsInStream(bucket, streamId, true) {
@@ -4557,7 +4768,7 @@ func (idx *indexer) processBuildDoneCatchup(streamId common.StreamId, bucket str
 func (idx *indexer) processBuildDoneNoCatchup(streamId common.StreamId,
 	bucket string, sessionId uint64, flushTs *common.TsVbuuid) {
 
-	logging.Infof("Indexer::processBuildDoneCatchup %v %v %v", streamId, bucket,
+	logging.Infof("Indexer::processBuildDoneNoCatchup %v %v %v", streamId, bucket,
 		sessionId)
 
 	//get the list of indexes for this bucket and stream in INITIAL state
@@ -4567,12 +4778,15 @@ func (idx *indexer) processBuildDoneNoCatchup(streamId common.StreamId,
 	for _, index := range idx.indexInstMap {
 		if index.Defn.Bucket == bucket && index.Stream == streamId &&
 			index.State == common.INDEX_STATE_INITIAL {
+
 			index.State = common.INDEX_STATE_ACTIVE
 			index.Stream = common.MAINT_STREAM
+
+			indexList = append(indexList, index)
+			instIdList = append(instIdList, index.InstId)
+			bucketUUIDList = append(bucketUUIDList, index.Defn.BucketUUID)
+
 		}
-		indexList = append(indexList, index)
-		instIdList = append(instIdList, index.InstId)
-		bucketUUIDList = append(bucketUUIDList, index.Defn.BucketUUID)
 	}
 
 	if len(instIdList) == 0 {
@@ -5154,8 +5368,6 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 		async = enableAsync && idx.clusterInfoClient.ClusterVersion() >= common.INDEXER_65_VERSION
 	}
 
-	//diable first snapshot optimization when recovering indexes as
-	//plasma cannot deal with duplicate inserts
 	cmd := &MsgStreamUpdate{mType: OPEN_STREAM,
 		streamId:           streamId,
 		bucket:             bucket,
@@ -5360,6 +5572,16 @@ func (idx *indexer) notifyFlushObserver(msg Message) {
 			<-notifyCh
 		}
 	}
+
+	if streamId == common.INIT_STREAM {
+		if notifyCh, ok := idx.bucketObserveFlushDoneForReset[bucket]; ok {
+			if notifyCh != nil {
+				notifyCh <- msg
+				//wait for a sync response that reset is done.
+				<-notifyCh
+			}
+		}
+	}
 	return
 }
 
@@ -5451,6 +5673,7 @@ func (idx *indexer) bootstrap1(snapshotNotifych chan IndexSnapshot) error {
 		//Recover indexes from local metadata.
 		err := idx.initFromPersistedState()
 		if err != nil {
+			//sending error will cause indexer to restart
 			idx.internalRecvCh <- &MsgStorageWarmupDone{err: err, needsRestart: needsRestart}
 			return
 		}
@@ -5459,6 +5682,60 @@ func (idx *indexer) bootstrap1(snapshotNotifych chan IndexSnapshot) error {
 	}()
 
 	return nil
+
+}
+
+//if any index in MAINT_STREAM has nil snapshot, it needs
+//to be reset. The index was able to clear its snapshot
+//on rollback but couldn't reset the metadata before crash.
+//index disk snapshot is created for every index before
+//moving to active state.
+func (idx *indexer) findAndResetEmptySnapshotIndex() {
+
+	for instId, index := range idx.indexInstMap {
+
+		if index.Stream == common.MAINT_STREAM &&
+			index.State != common.INDEX_STATE_DELETED {
+
+			//ignore proxy instances as rebalancer will clean those up
+			if common.IsPartitioned(index.Defn.PartitionScheme) && index.RealInstId != 0 {
+				continue
+			}
+
+			anyPartnNonNil := false
+			anyPartnNil := false
+			if partnMap, ok := idx.indexPartnMap[instId]; ok {
+
+				for _, partnInst := range partnMap {
+
+					sc := partnInst.Sc
+
+					//there is only one slice for now
+					slice := sc.GetSliceById(0)
+
+					infos, err := slice.GetSnapshots()
+					// TODO: Proper error handling if possible
+					if err != nil {
+						panic("Unable read snapinfo -" + err.Error())
+					}
+
+					s := NewSnapshotInfoContainer(infos)
+					latestSnapInfo := s.GetLatest()
+					if latestSnapInfo != nil {
+						anyPartnNonNil = true
+					} else {
+						anyPartnNil = true
+					}
+				}
+			}
+
+			//if all partns are nil
+			if anyPartnNil && !anyPartnNonNil {
+				idx.resetSingleIndexOnRollback(&index, nil)
+				idx.indexInstMap[instId] = index
+			}
+		}
+	}
 
 }
 
@@ -5549,6 +5826,10 @@ func (idx *indexer) handleStorageWarmupDone(msg Message) {
 		logging.Infof("Restarting indexer after storage upgrade")
 		idx.stats.needsRestart.Set(true)
 	}
+
+	//any index with nil snapshot should be moved to INIT_STREAM
+	//TODO optimize for case where bucket has 0 documents
+	idx.findAndResetEmptySnapshotIndex()
 
 	//send updated maps
 	msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
@@ -5888,7 +6169,7 @@ func (idx *indexer) initFromPersistedState() error {
 			idx.forceCleanupIndexPartition(&inst, failedPartnId, failedPartnInstance)
 			logging.Infof("Indexer::initFromPersistedState Done cleanup for %v", failedPartnInstance)
 
-			logMsg = "Cleaup done for index %v, partition id %v."
+			logMsg = "Cleanup done for index %v, partition id %v."
 			common.Console(idx.config["clusterAddr"].String(), logMsg, inst.Defn.Name, failedPartnId)
 		}
 
@@ -6299,7 +6580,7 @@ func (idx *indexer) upgradeSingleIndex(inst *common.IndexInst, storageMode commo
 	}
 
 	// update metadata
-	msg := &MsgClustMgrResetIndex{
+	msg := &MsgClustMgrResetIndexOnUpgrade{
 		inst: *inst,
 	}
 	idx.sendMsgToClusterMgr(msg)
@@ -6529,9 +6810,7 @@ func (idx *indexer) startStreams() bool {
 	//Start MAINT_STREAM
 	restartTs, allNilSnaps := idx.makeRestartTs(common.MAINT_STREAM)
 
-	idx.stateLock.Lock()
-	idx.streamBucketStatus[common.MAINT_STREAM] = make(BucketStatus)
-	idx.stateLock.Unlock()
+	idx.initStreamBucketState(common.MAINT_STREAM)
 
 	for bucket, ts := range restartTs {
 		idx.bucketRollbackTimes[bucket] = time.Now().UnixNano()
@@ -6544,9 +6823,7 @@ func (idx *indexer) startStreams() bool {
 	//Start INIT_STREAM
 	restartTs, allNilSnaps = idx.makeRestartTs(common.INIT_STREAM)
 
-	idx.stateLock.Lock()
-	idx.streamBucketStatus[common.INIT_STREAM] = make(BucketStatus)
-	idx.stateLock.Unlock()
+	idx.initStreamBucketState(common.INIT_STREAM)
 
 	for bucket, ts := range restartTs {
 		sessionId := idx.genNextSessionId(common.INIT_STREAM, bucket)
@@ -7317,6 +7594,17 @@ func (idx *indexer) updateSliceWithConfig(config common.Config) {
 
 }
 
+func (idx *indexer) initStreamBucketState(streamId common.StreamId) {
+
+	idx.stateLock.Lock()
+	defer idx.stateLock.Unlock()
+
+	if _, ok := idx.streamBucketStatus[streamId]; !ok {
+		idx.streamBucketStatus[streamId] = make(BucketStatus)
+	}
+
+}
+
 func (idx *indexer) getStreamBucketState(streamId common.StreamId, bucket string) StreamStatus {
 
 	idx.stateLock.RLock()
@@ -8080,6 +8368,8 @@ func (idx *indexer) prepareStreamBucketForFreshStart(
 
 	//clear all state before fresh start
 	idx.cleanupAllStreamBucketState(streamId, bucket)
+
+	idx.initStreamBucketState(streamId)
 
 	//clear worker state
 	cmd := &MsgStreamUpdate{mType: REMOVE_BUCKET_FROM_STREAM,

@@ -2006,6 +2006,8 @@ func (tk *timekeeper) checkInitialBuildDone(streamId common.StreamId,
 
 			if initBuildDone {
 
+				sessionId := tk.ss.getSessionId(streamId, bucket)
+
 				//if MAINT_STREAM doesn't exist for the bucket, no catchup is required
 				status := tk.ss.streamBucketStatus[common.MAINT_STREAM][bucket]
 				if status == STREAM_INACTIVE {
@@ -2036,7 +2038,6 @@ func (tk *timekeeper) checkInitialBuildDone(streamId common.StreamId,
 					tk.setAddInstPending(streamId, bucket, true)
 				}
 
-				sessionId := tk.ss.getSessionId(streamId, bucket)
 				logging.Infof("Timekeeper::checkInitialBuildDone Initial Build Done Index: %v "+
 					"Stream: %v Bucket: %v Session: %v BuildTS: %v", idx.InstId, streamId,
 					bucket, sessionId, buildInfo.buildTs)

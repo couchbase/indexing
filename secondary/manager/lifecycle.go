@@ -232,6 +232,7 @@ func (m *LifecycleMgr) OnNewRequest(fid string, request protocol.RequestMsg) {
 				op == client.OPCODE_CLEANUP_INDEX ||
 				op == client.OPCODE_CLEANUP_PARTITION ||
 				op == client.OPCODE_RESET_INDEX ||
+				op == client.OPCODE_RESET_INDEX_ON_ROLLBACK ||
 				op == client.OPCODE_BROADCAST_STATS {
 				m.bootstraps <- req
 				return
@@ -388,6 +389,8 @@ func (m *LifecycleMgr) dispatchRequest(request *requestHolder, factory *message.
 		m.handleNotifyStats(content)
 	case client.OPCODE_RESET_INDEX:
 		err = m.handleResetIndex(content)
+	case client.OPCODE_RESET_INDEX_ON_ROLLBACK:
+		err = m.handleResetIndexOnRollback(content)
 	case client.OPCODE_CONFIG_UPDATE:
 		err = m.handleConfigUpdate(content)
 	case client.OPCODE_DROP_OR_PRUNE_INSTANCE:
@@ -2242,6 +2245,65 @@ func (m *LifecycleMgr) handleResetIndex(content []byte) error {
 }
 
 //-----------------------------------------------------------
+// Reset Index (for rollback)
+//-----------------------------------------------------------
+
+func (m *LifecycleMgr) handleResetIndexOnRollback(content []byte) error {
+
+	inst, err := common.UnmarshallIndexInst(content)
+	if err != nil {
+		logging.Errorf("LifecycleMgr.handleResetIndexOnRollback() : Unable to unmarshall index instance. Reason = %v", err)
+		return err
+	}
+
+	logging.Infof("LifecycleMgr.handleResetIndexOnRollback() : Reset Index %v", inst.InstId)
+
+	defn := &inst.Defn
+
+	//
+	// Restore index instance (as if index is created again)
+	//
+
+	topology, err := m.repo.CloneTopologyByBucket(defn.Bucket)
+	if err != nil {
+		logging.Errorf("LifecycleMgr.handleResetIndexOnRollback() : Fails to reset index (%v, %v). Reason = %v", defn.Bucket, defn.Name, err)
+		return err
+	}
+
+	rinst, err := m.FindLocalIndexInst(defn.Bucket, defn.DefnId, inst.InstId)
+	if err != nil {
+		logging.Errorf("LifecycleMgr.handleResetIndexOnRollback() : Fails to reset index (%v, %v). Reason = %v", defn.Bucket, defn.Name, err)
+		return err
+	}
+
+	if rinst == nil {
+		logging.Errorf("LifecycleMgr.handleResetIndexOnRollback() : Fails to reset index (%v, %v). Index instance does not exist.", defn.Bucket, defn.Name)
+		return nil
+	}
+
+	//reset only for active state index. If index gets deleted, it doesn't need to be reset.
+	if common.IndexState(rinst.State) == common.INDEX_STATE_ACTIVE {
+		topology.UpdateScheduledFlagForIndexInst(defn.DefnId, inst.InstId, true)
+
+		topology.UpdateStateForIndexInst(defn.DefnId, inst.InstId, common.INDEX_STATE_READY)
+		topology.SetErrorForIndexInst(defn.DefnId, inst.InstId, "")
+		topology.UpdateStreamForIndexInst(defn.DefnId, inst.InstId, common.NIL_STREAM)
+
+		if err := m.repo.SetTopologyByBucket(defn.Bucket, topology); err != nil {
+			// Topology update is in place.  If there is any error, SetTopologyByBucket will purge the cache copy.
+			logging.Errorf("LifecycleMgr.handleResetIndexOnRollback() : index instance (%v, %v) update fails. Reason = %v", defn.Bucket, defn.Name, err)
+			return err
+		}
+
+		//notify builder
+		m.builder.notifych <- defn
+
+	}
+
+	return nil
+}
+
+//-----------------------------------------------------------
 // Indexer Config update
 //-----------------------------------------------------------
 
@@ -3643,6 +3705,21 @@ func (s *builder) run() {
 	// wait for indexer bootstrap to complete before recover
 	s.recover()
 
+	// Sleep before checking for index to build.  When a recovered node starts up, it needs to wait until
+	// the rebalancing token is saved.  This is to avoid the bulider to get ahead of the rebalancer.
+	// Otherwise, rebalancer could fail if builder has issued an index build ahead of the rebalancer.
+	func() {
+		timer := time.NewTimer(time.Second * 120)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-s.manager.killch:
+			s.commandListener.Close()
+			logging.Infof("builder: go-routine terminates.")
+			return
+		}
+	}()
+
 	// check if there is any pending index build every second
 	ticker := time.NewTicker(time.Millisecond * 200)
 	defer ticker.Stop()
@@ -3654,19 +3731,24 @@ func (s *builder) run() {
 			s.addPending(defn.Bucket, uint64(defn.DefnId))
 
 		case <-ticker.C:
-			s.processBuildToken(false)
+			processed := s.processBuildToken(false)
 
-			// Sleep before checking for index to build.  When a recovered node starts up, it needs to wait until
-			// the rebalancing token is saved.  This is to avoid the bulider to get ahead of the rebalancer.
-			// Otherwise, rebalancer could fail if builder has issued an index build ahead of the rebalancer.
-			timer := time.NewTimer(time.Second * 120)
-			defer timer.Stop()
-			select {
-			case <-timer.C:
-			case <-s.manager.killch:
-				s.commandListener.Close()
-				logging.Infof("builder: go-routine terminates.")
-				return
+			//when building from build tokens, sleep for 30 seconds,
+			//to avoid racing ahead of build index command coming
+			//from the client. If multiple defer indexes are being
+			//built using single Build Index, user can see duplicate
+			//build error if builder initiates few requests.
+			if processed {
+
+				timer := time.NewTimer(time.Second * 30)
+				defer timer.Stop()
+				select {
+				case <-timer.C:
+				case <-s.manager.killch:
+					s.commandListener.Close()
+					logging.Infof("builder: go-routine terminates.")
+					return
+				}
 			}
 
 			buildList, quota := s.getBuildList()
@@ -3880,11 +3962,12 @@ func (s *builder) getQuota() (int32, map[string]bool) {
 	return quota, skipList
 }
 
-func (s *builder) processBuildToken(bootstrap bool) {
+func (s *builder) processBuildToken(bootstrap bool) bool {
 
 	entries := s.commandListener.GetNewBuildTokens()
 	retryList := make(map[string]*mc.BuildCommandToken)
 
+	processed := false
 	for entry, command := range entries {
 
 		defn, err := s.manager.repo.GetIndexDefnById(command.DefnId)
@@ -3914,6 +3997,7 @@ func (s *builder) processBuildToken(bootstrap bool) {
 
 				if s.addPending(defn.Bucket, uint64(defn.DefnId)) {
 					logging.Infof("builder: Schedule index build for (%v, %v).", defn.Bucket, defn.Name)
+					processed = true
 				}
 			}
 		}
@@ -3922,6 +4006,8 @@ func (s *builder) processBuildToken(bootstrap bool) {
 	for path, token := range retryList {
 		s.commandListener.AddNewBuildToken(path, token)
 	}
+
+	return processed
 }
 
 func (s *builder) recover() {

@@ -13,16 +13,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/logging"
-	mc "github.com/couchbase/indexing/secondary/manager/common"
-	"github.com/couchbase/indexing/secondary/security"
 	"net"
 	"net/http"
 	"runtime"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
+	mc "github.com/couchbase/indexing/secondary/manager/common"
+	"github.com/couchbase/indexing/secondary/security"
 )
 
 // ClusterInfoClient gets initialized in RetrievePlanFromCluster
@@ -349,6 +350,13 @@ func ConvertToIndexUsage(config common.Config, defn *common.IndexDefn, localMeta
 				pendingBuild, err := mc.BuildCommandTokenExist(defn.DefnId)
 				if err != nil {
 					return nil, err
+				}
+
+				//index can be scheduled without a build token for cases like
+				//rollback to 0 or flush
+				if inst.Scheduled {
+					logging.Infof("Planner::ConvertToIndexUsage Set pendingBuild for inst %v", inst.InstId)
+					pendingBuild = true
 				}
 				index.pendingBuild = pendingBuild
 

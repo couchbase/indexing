@@ -93,7 +93,8 @@ const (
 	CLUST_MGR_BUILD_INDEX_DDL_RESPONSE
 	CLUST_MGR_DROP_INDEX_DDL
 	CLUST_MGR_UPDATE_TOPOLOGY_FOR_INDEX
-	CLUST_MGR_RESET_INDEX
+	CLUST_MGR_RESET_INDEX_ON_UPGRADE
+	CLUST_MGR_RESET_INDEX_ON_ROLLBACK
 	CLUST_MGR_GET_GLOBAL_TOPOLOGY
 	CLUST_MGR_GET_LOCAL
 	CLUST_MGR_SET_LOCAL
@@ -137,6 +138,7 @@ const (
 	INDEXER_ABORT_RECOVERY
 	INDEXER_STORAGE_WARMUP_DONE
 	INDEXER_SECURITY_CHANGE
+	INDEXER_RESET_INDEX_DONE
 
 	//SCAN COORDINATOR
 	SCAN_COORD_SHUTDOWN
@@ -1747,17 +1749,58 @@ func (m *MsgKVStreamRepair) GetSessionId() uint64 {
 	return m.sessionId
 }
 
-//CLUST_MGR_RESET_INDEX
-type MsgClustMgrResetIndex struct {
+//CLUST_MGR_RESET_INDEX_ON_UPGRADE
+type MsgClustMgrResetIndexOnUpgrade struct {
 	inst common.IndexInst
 }
 
-func (m *MsgClustMgrResetIndex) GetMsgType() MsgType {
-	return CLUST_MGR_RESET_INDEX
+func (m *MsgClustMgrResetIndexOnUpgrade) GetMsgType() MsgType {
+	return CLUST_MGR_RESET_INDEX_ON_UPGRADE
 }
 
-func (m *MsgClustMgrResetIndex) GetIndex() common.IndexInst {
+func (m *MsgClustMgrResetIndexOnUpgrade) GetIndex() common.IndexInst {
 	return m.inst
+}
+
+//CLUST_MGR_RESET_INDEX_ON_ROLLBACK
+type MsgClustMgrResetIndexOnRollback struct {
+	inst   common.IndexInst
+	respch chan error
+}
+
+func (m *MsgClustMgrResetIndexOnRollback) GetMsgType() MsgType {
+	return CLUST_MGR_RESET_INDEX_ON_ROLLBACK
+}
+
+func (m *MsgClustMgrResetIndexOnRollback) GetIndex() common.IndexInst {
+	return m.inst
+}
+
+func (m *MsgClustMgrResetIndexOnRollback) GetRespch() chan error {
+	return m.respch
+}
+
+//INDEXER_RESET_INDEX_DONE
+type MsgResetIndexDone struct {
+	streamId  common.StreamId
+	bucket    string
+	sessionId uint64
+}
+
+func (m *MsgResetIndexDone) GetMsgType() MsgType {
+	return INDEXER_RESET_INDEX_DONE
+}
+
+func (m *MsgResetIndexDone) GetStreamId() common.StreamId {
+	return m.streamId
+}
+
+func (m *MsgResetIndexDone) GetBucket() string {
+	return m.bucket
+}
+
+func (m *MsgResetIndexDone) GetSessionId() uint64 {
+	return m.sessionId
 }
 
 //CLUST_MGR_UPDATE_TOPOLOGY_FOR_INDEX
@@ -2204,6 +2247,10 @@ func (m MsgType) String() string {
 		return "CLUST_MGR_MERGE_PARTITION"
 	case CLUST_MGR_PRUNE_PARTITION:
 		return "CLUST_MGR_PRUNE_PARTITION"
+	case CLUST_MGR_RESET_INDEX_ON_UPGRADE:
+		return "CLUST_MGR_RESET_INDEX_ON_UPGRADE"
+	case CLUST_MGR_RESET_INDEX_ON_ROLLBACK:
+		return "CLUST_MGR_RESET_INDEX_ON_ROLLBACK"
 
 	case CBQ_CREATE_INDEX_DDL:
 		return "CBQ_CREATE_INDEX_DDL"

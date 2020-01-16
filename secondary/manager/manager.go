@@ -603,6 +603,18 @@ func (m *IndexManager) ResetIndex(index common.IndexInst) error {
 	return m.requestServer.MakeRequest(client.OPCODE_RESET_INDEX, fmt.Sprintf("%v", index.InstId), content)
 }
 
+func (m *IndexManager) ResetIndexOnRollback(index common.IndexInst) error {
+
+	index.Pc = nil
+	content, err := common.MarshallIndexInst(&index)
+	if err != nil {
+		return err
+	}
+
+	logging.Debugf("IndexManager.ResetIndexOnRollback(): making request for Index reset")
+	return m.requestServer.MakeRequest(client.OPCODE_RESET_INDEX_ON_ROLLBACK, fmt.Sprintf("%v", index.InstId), content)
+}
+
 func (m *IndexManager) DeleteIndexForBucket(bucket string, streamId common.StreamId) error {
 
 	logging.Debugf("IndexManager.DeleteIndexForBucket(): making request for deleting index for bucket")
