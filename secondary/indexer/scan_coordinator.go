@@ -648,6 +648,7 @@ func (s *scanCoordinator) getRequestedIndexSnapshot(r *ScanRequest) (snap IndexS
 			if err != nil {
 				return nil, err
 			}
+			r.Ts.Bucket = r.Bucket
 
 			if isSnapshotConsistent(ss, *r.Consistency, r.Ts) {
 				return CloneIndexSnapshot(ss), nil
