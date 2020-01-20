@@ -57,6 +57,8 @@ func TestAlterIndexIncrReplica(t *testing.T) {
 	// Wait for alter index to finish execution
 	waitForIndexActive(bucketName, indexName+" (replica 2)", t)
 
+	waitForStatsUpdate()
+
 	scanIndexReplicas(indexName, bucketName, []int{0, 1, 2}, num_scans, num_docs, 1, t)
 }
 
@@ -104,6 +106,8 @@ func TestAlterIndexDecrReplica(t *testing.T) {
 		t.Fatalf("Replica: 2 is expected to be dropped. But it still exists")
 	}
 
+	waitForStatsUpdate()
+
 	scanIndexReplicas(indexName, bucketName, []int{0, 1}, num_scans, num_docs, 1, t)
 }
 
@@ -150,6 +154,8 @@ func TestAlterIndexDropReplica(t *testing.T) {
 	if checkIfReplicaExists(indexName, bucketName, 0) {
 		t.Fatalf("Replica: 0 is expected to be dropped. But it still exists")
 	}
+
+	waitForStatsUpdate()
 
 	scanIndexReplicas(indexName, bucketName, []int{1, 2}, num_scans, num_docs, 1, t)
 }
@@ -212,6 +218,19 @@ func checkIfReplicaExists(index, bucket string, replicaId int) bool {
 		log.Printf("checkIfReplicaExists:: Error while retrieving GetIndexStatus, err: %v", err)
 	}
 	return false
+}
+
+// Indexer life cycle manager broadcasts stats every 5 seconds
+// After the index is built, there exists a possibility
+// that GSI/N1QL client has received stats from some indexer nodes but yet
+// to received from some another indexer nodes. In such a case, only the index
+// for which stats have been received will be picked up for scan and the
+// test fails with zero scan requests for other replicas.
+//
+// To avoid such a failure, sleep for 5 seconds after the index is built
+// so that the client has updated stats from all indexer nodes
+func waitForStatsUpdate() {
+	time.Sleep(5 * time.Second)
 }
 
 // scanIndexReplicas scan's the index and validates if all the replica's of the index are retruning
