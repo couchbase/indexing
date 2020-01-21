@@ -69,6 +69,9 @@ type Feed struct {
 	// Address with which bucket seqnos are retrieved from KV
 	kvaddr string
 
+	// Collections
+	collectionsAware bool
+
 	// config params
 	reqTimeout time.Duration
 	endTimeout time.Duration
@@ -856,6 +859,10 @@ func (feed *Feed) start(
 		return err
 	}
 
+	if feed.version >= protobuf.FeedVersion_cheshireCat {
+		feed.collectionsAware = true
+	}
+
 	// update engines and endpoints
 	if _, err = feed.processSubscribers(opaque, req); err != nil { // :SideEffect:
 		return err
@@ -1563,11 +1570,12 @@ func (feed *Feed) openFeeder(
 	}
 	name := newDCPConnectionName(keyspaceId, feed.topic, uuid.Uint64())
 	dcpConfig := map[string]interface{}{
-		"genChanSize":    feed.config["dcp.genChanSize"].Int(),
-		"dataChanSize":   feed.config["dcp.dataChanSize"].Int(),
-		"numConnections": feed.config["dcp.numConnections"].Int(),
-		"latencyTick":    feed.config["dcp.latencyTick"].Int(),
-		"activeVbOnly":   feed.config["dcp.activeVbOnly"].Bool(),
+		"genChanSize":      feed.config["dcp.genChanSize"].Int(),
+		"dataChanSize":     feed.config["dcp.dataChanSize"].Int(),
+		"numConnections":   feed.config["dcp.numConnections"].Int(),
+		"latencyTick":      feed.config["dcp.latencyTick"].Int(),
+		"activeVbOnly":     feed.config["dcp.activeVbOnly"].Bool(),
+		"collectionsAware": feed.collectionsAware,
 	}
 	kvaddr, err := feed.getLocalKVAddrs(pooln, bucketn, opaque)
 	if err != nil {

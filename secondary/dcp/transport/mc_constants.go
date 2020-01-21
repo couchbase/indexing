@@ -41,6 +41,7 @@ const (
 	FLUSHQ     = CommandCode(0x18)
 	APPENDQ    = CommandCode(0x19)
 	PREPENDQ   = CommandCode(0x1a)
+	HELO       = CommandCode(0x1f)
 	RGET       = CommandCode(0x30)
 	RSET       = CommandCode(0x31)
 	RSETQ      = CommandCode(0x32)
@@ -88,6 +89,8 @@ const (
 
 	OBSERVE = CommandCode(0x92)
 )
+
+const FEATURE_COLLECTIONS byte = 0x12
 
 // Status field for memcached response.
 type Status uint16
