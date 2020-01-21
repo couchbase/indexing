@@ -533,7 +533,8 @@ func (c *GsiClient) CreateIndex3(
 	scheme common.PartitionScheme, partitionKeys []string,
 	with []byte) (defnID uint64, err error) {
 
-	return c.CreateIndex4(name, bucket, "", "", using, exprType, whereExpr,
+	return c.CreateIndex4(name, bucket, common.DEFAULT_SCOPE,
+		common.DEFAULT_COLLECTION, using, exprType, whereExpr,
 		secExprs, desc, isPrimary, scheme, partitionKeys, with)
 }
 
