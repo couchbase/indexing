@@ -294,11 +294,11 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"projector.adminport.readTimeout": ConfigValue{
-		0,
+		30 * 1000,
 		"timeout in milliseconds, is http server's read timeout, " +
 			"also refer to projector.dataport.harakiriTimeout and " +
 			"indexer.dataport.tcpReadDeadline",
-		0,
+		30 * 1000,
 		true,  // immutable
 		false, // case-insensitive
 	},
@@ -1667,9 +1667,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.http.readTimeout": ConfigValue{
-		1200,
+		30,
 		"timeout in seconds, is indexer http server's read timeout",
-		1200,
+		30,
 		false, // mutable
 		false, // case-insensitive
 	},

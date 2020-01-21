@@ -179,7 +179,7 @@ type BridgeAccessor interface {
 	// with
 	//      JSON marshalled description about index deployment (and more...).
 	CreateIndex(
-		name, bucket, using, exprType, whereExpr string,
+		name, bucket, scope, collection, using, exprType, whereExpr string,
 		secExprs []string, desc []bool, isPrimary bool,
 		scheme common.PartitionScheme, partitionKeys []string,
 		with []byte) (defnID uint64, err error)
@@ -527,9 +527,19 @@ func (c *GsiClient) CreateIndex(
 		whereExpr, secExprs, nil, isPrimary, common.SINGLE, nil, with)
 }
 
-// CreateIndex implements BridgeAccessor{} interface.
 func (c *GsiClient) CreateIndex3(
 	name, bucket, using, exprType, whereExpr string,
+	secExprs []string, desc []bool, isPrimary bool,
+	scheme common.PartitionScheme, partitionKeys []string,
+	with []byte) (defnID uint64, err error) {
+
+	return c.CreateIndex4(name, bucket, "", "", using, exprType, whereExpr,
+		secExprs, desc, isPrimary, scheme, partitionKeys, with)
+}
+
+// scope and collection parameters are ignored as of now.
+func (c *GsiClient) CreateIndex4(
+	name, bucket, scope, collection, using, exprType, whereExpr string,
 	secExprs []string, desc []bool, isPrimary bool,
 	scheme common.PartitionScheme, partitionKeys []string,
 	with []byte) (defnID uint64, err error) {
@@ -544,13 +554,13 @@ func (c *GsiClient) CreateIndex3(
 	}
 	begin := time.Now()
 	defnID, err = c.bridge.CreateIndex(
-		name, bucket, using, exprType, whereExpr,
+		name, bucket, scope, collection, using, exprType, whereExpr,
 		secExprs, desc, isPrimary, scheme, partitionKeys, with)
-	fmsg := "CreateIndex %v %v/%v using:%v exprType:%v " +
+	fmsg := "CreateIndex %v %v %v %v/%v using:%v exprType:%v " +
 		"whereExpr:%v secExprs:%v desc:%v isPrimary:%v scheme:%v " +
 		" partitionKeys:%v with:%v - elapsed(%v) err(%v)"
 	logging.Infof(
-		fmsg, defnID, bucket, name, using, exprType, logging.TagUD(whereExpr),
+		fmsg, defnID, bucket, scope, collection, name, using, exprType, logging.TagUD(whereExpr),
 		logging.TagUD(secExprs), desc, isPrimary, scheme, logging.TagUD(partitionKeys), string(with), time.Since(begin), err)
 	return defnID, err
 }
@@ -1563,6 +1573,8 @@ func (c *GsiClient) isTimeit(errMap map[common.PartitionId]map[uint64]error) boo
 	return true
 }
 
+// TODO (Collections): Not used in 4.5 onwards. Changes to below method
+// will be taken care of as part of scan consistency task for collections
 func (c *GsiClient) getConsistency(
 	qc *GsiScanClient, cons common.Consistency,
 	vector *TsConsistency, bucket string) (*TsConsistency, error) {

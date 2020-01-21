@@ -840,3 +840,45 @@ func (instance *Instance) GetBucket() (bucket string) {
 	}
 	return
 }
+
+// GetScope will get the name of the scope in which instance is defined
+func (instance *Instance) GetScope() (scope string) {
+	if val := instance.GetIndexInstance(); val != nil {
+		return val.GetDefinition().GetScope()
+	} else {
+		// TODO: should we panic
+	}
+	return
+}
+
+// GetScopeID will get the ID of the scope (base-16 string) in which
+// instance is defined
+func (instance *Instance) GetScopeID() (scopeID string) {
+	if val := instance.GetIndexInstance(); val != nil {
+		return val.GetDefinition().GetScopeID()
+	} else {
+		// TODO: should we panic
+	}
+	return
+}
+
+// GetCollection will get the name of the collection in which instance is defined
+func (instance *Instance) GetCollection() (collection string) {
+	if val := instance.GetIndexInstance(); val != nil {
+		return val.GetDefinition().GetCollection()
+	} else {
+		// TODO: should we panic
+	}
+	return
+}
+
+// GetCollectionID will get the ID of the collection (base-16 string) in which
+// instance is defined
+func (instance *Instance) GetCollectionID() (collectionID string) {
+	if val := instance.GetIndexInstance(); val != nil {
+		return val.GetDefinition().GetCollectionID()
+	} else {
+		// TODO: should we panic
+	}
+	return
+}

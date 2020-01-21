@@ -13,6 +13,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
+	"math/rand"
+	"net"
+	"reflect"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
 	"github.com/couchbase/gometa/common"
 	gometaL "github.com/couchbase/gometa/log"
 	"github.com/couchbase/gometa/message"
@@ -24,15 +34,6 @@ import (
 	"github.com/couchbase/indexing/secondary/planner"
 	"github.com/couchbase/query/expression"
 	"github.com/couchbase/query/expression/parser"
-	"math"
-	"math/rand"
-	"net"
-	"reflect"
-	"strconv"
-	"strings"
-	"sync"
-	"sync/atomic"
-	"time"
 )
 
 // TODO:
@@ -363,8 +364,9 @@ func (o *MetadataProvider) CheckIndexerStatusNoLock() []IndexerStatus {
 	return status
 }
 
+// scope, collection params are ignored for now
 func (o *MetadataProvider) CreateIndexWithPlan(
-	name, bucket, using, exprType, whereExpr string,
+	name, bucket, scope, collection, using, exprType, whereExpr string,
 	secExprs []string, desc []bool, isPrimary bool,
 	scheme c.PartitionScheme, partitionKeys []string,
 	plan map[string]interface{}) (c.IndexDefnId, error, bool) {

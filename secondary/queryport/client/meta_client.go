@@ -209,7 +209,7 @@ func (b *metadataClient) GetIndexReplica(defnId uint64) []*mclient.InstanceDefn 
 
 // CreateIndex implements BridgeAccessor{} interface.
 func (b *metadataClient) CreateIndex(
-	indexName, bucket, using, exprType, whereExpr string,
+	indexName, bucket, scope, collection, using, exprType, whereExpr string,
 	secExprs []string, desc []bool, isPrimary bool,
 	scheme common.PartitionScheme, partitionKeys []string,
 	planJSON []byte) (uint64, error) {
@@ -225,7 +225,7 @@ func (b *metadataClient) CreateIndex(
 	refreshCnt := 0
 RETRY:
 	defnID, err, needRefresh := b.mdClient.CreateIndexWithPlan(
-		indexName, bucket, using, exprType, whereExpr,
+		indexName, bucket, scope, collection, using, exprType, whereExpr,
 		secExprs, desc, isPrimary, scheme, partitionKeys, plan)
 
 	if needRefresh && refreshCnt == 0 {
@@ -538,6 +538,8 @@ func (b *metadataClient) computeEquivalents(topo map[common.IndexerId][]*mclient
 }
 
 // compare whether two index are equivalent.
+// TODO (Collections): Change this method to include scope & collection to
+// decide equivalence once Index Definition incorporates collection
 func (b *metadataClient) equivalentIndex(
 	index1, index2 *mclient.IndexMetadata) bool {
 	d1, d2 := index1.Definition, index2.Definition

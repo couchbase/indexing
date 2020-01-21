@@ -1259,7 +1259,7 @@ func (feed *Feed) addInstances(
 
 	// post to kv data-path for buckets from new subscribers
 	// do not touch the kv data-path for buckets that are not part of addInstances
-	for _, bucketn := range buckets {
+	for bucketn, _ := range buckets {
 		engines := feed.engines[bucketn]
 		if kvdata, ok := feed.kvdata[bucketn]; ok {
 			curSeqnos, err := kvdata.AddEngines(opaque, engines, feed.endpoints)
@@ -1685,7 +1685,7 @@ func (feed *Feed) startDataPath(
 }
 
 // - return ErrorInconsistentFeed for malformed feed request
-func (feed *Feed) processSubscribers(opaque uint16, req Subscriber) ([]string, error) {
+func (feed *Feed) processSubscribers(opaque uint16, req Subscriber) (map[string]bool, error) {
 	evaluators, routers, err := feed.subscribers(opaque, req)
 	if err != nil {
 		return nil, err
@@ -1696,10 +1696,12 @@ func (feed *Feed) processSubscribers(opaque uint16, req Subscriber) ([]string, e
 		return nil, err
 	}
 	// update feed engines.
-	buckets := make([]string, 0, len(evaluators))
+	buckets := make(map[string]bool, 0)
 	for uuid, evaluator := range evaluators {
 		bucketn := evaluator.Bucket()
-		buckets = append(buckets, bucketn)
+		if _, ok := buckets[bucketn]; !ok {
+			buckets[bucketn] = true
+		}
 		m, ok := feed.engines[bucketn]
 		if !ok {
 			m = make(map[uint64]*Engine)
