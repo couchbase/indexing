@@ -169,6 +169,8 @@ type PrepareCreateRequest struct {
 	StartTime   int64         `json:"startTime,omitempty"`
 	Bucket      string        `json:"Bucket,omitempty"`
 	Name        string        `json:"Name,omitempty"`
+	Scope       string        `json:"Scope,omitempty"`
+	Collection  string        `json:"Collection,omitempty"`
 }
 
 type PrepareCreateResponse struct {

@@ -11,6 +11,7 @@ import "index.proto";
 enum FeedVersion {
     sherlock         = 1;
     watson           = 2;
+    cheshireCat      = 3;
 }
 
 // Requested by Coordinator/indexer to learn vbuckets
@@ -42,15 +43,23 @@ message FailoverLogResponse {
 
 // Requested by Coordinator or indexer to start a
 // new mutation topic. Respond back with TopicResponse.
+//
+// From Cheshite-Cat (v7.0), the requests additionally accepts keyspaceIds
+// as input. KeyspaceId will be used to maintain book-keeping at projector
+//
+// If keyspaceId is not nil, there should be a 1:1 mapping between a bucket
+//  and keyspaceId in the request (The bucket name is deduced from reqTimestamps)
+// (reqTimestamps[i].Bucket maps to keyspaceIds[i])
 message MutationTopicRequest {
     required string   topic         = 1;
     required string   endpointType  = 2; // settings to RouterEndpointFactory
     repeated TsVbuuid reqTimestamps = 3; // list of timestamps, per bucket
     // initial list of instances applicable for this topic
-    repeated Instance    instances  = 4;
-    optional FeedVersion version    = 5 [default=sherlock];
-    optional bool        async      = 6;
-    optional uint64      opaque2    = 7;
+    repeated Instance    instances    = 4;
+    optional FeedVersion version      = 5 [default=sherlock];
+    optional bool        async        = 6;
+    optional uint64      opaque2      = 7;
+    repeated string      keyspaceIds  = 8;
 }
 
 // Response back for
@@ -62,6 +71,7 @@ message TopicResponse {
     repeated TsVbuuid rollbackTimestamps = 4; // sort order
     optional Error    err                = 5;
     repeated TsVbuuid pendingTimestamps  = 6; // requested timestamp yet being active
+    repeated string   keyspaceIds        = 7;
 }
 
 // Response back for
@@ -70,6 +80,7 @@ message TimestampResponse {
     required string   topic             = 1;
     repeated TsVbuuid currentTimestamps = 2;
     optional Error    err               = 3;
+    repeated string   keyspaceIds       = 4;
 }
 
 // RestartVbucketsRequest will restart a subset
@@ -79,6 +90,7 @@ message RestartVbucketsRequest {
     required string   topic              = 1;
     repeated TsVbuuid restartTimestamps  = 2; // per bucket timestamps
     optional uint64   opaque2            = 3;
+    repeated string   keyspaceIds        = 4;
 }
 
 // ShutdownVbucketsRequest will shutdown a subset of vbuckets
@@ -86,6 +98,7 @@ message RestartVbucketsRequest {
 message ShutdownVbucketsRequest {
     required string   topic              = 1;
     repeated TsVbuuid shutdownTimestamps = 2; // per bucket timestamps
+    repeated string   keyspaceIds        = 3;
 }
 
 // AddBucketsRequest will start vbucket-streams
@@ -97,31 +110,35 @@ message AddBucketsRequest {
     repeated TsVbuuid reqTimestamps = 2; // per bucket timestamps
     // list of instances applicable for buckets.
     repeated Instance    instances     = 3;
-    optional FeedVersion version   = 4 [default=sherlock];
-    optional uint64      opaque2   = 5;
+    optional FeedVersion version       = 4 [default=sherlock];
+    optional uint64      opaque2       = 5;
+    repeated string      keyspaceIds   = 6;
 }
 
 // DelBucketsRequest will shutdown vbucket-streams
 // for specified buckets and remove the buckets from topic.
 // Respond back with TopicResponse
 message DelBucketsRequest {
-    required string topic   = 1;
-    repeated string buckets = 2;
+    required string   topic       = 1;
+    repeated string   buckets     = 2;
+    repeated string   keyspaceIds = 3;
 }
 
 // AddInstancesRequest to add index-instances to a topic.
 // Respond back with TimestampResponse
 message AddInstancesRequest {
-    required string      topic     = 1;
-    repeated Instance    instances = 2; // instances to be added to this topic
-    optional FeedVersion version   = 3 [default=sherlock];
+    required string      topic      = 1;
+    repeated Instance    instances  = 2; // instances to be added to this topic
+    optional FeedVersion version    = 3 [default=sherlock];
+    optional string      keyspaceId = 4;
 }
 
-// DelInstancesRequest to add index-instances to a topic.
+// DelInstancesRequest to delete index-instances from a topic.
 // Respond back with TopicResponse
 message DelInstancesRequest {
     required string topic       = 1;
     repeated uint64 instanceIds = 2; // instances to be deleted from this topic
+    optional string keyspaceId  = 3;
 }
 
 // Requested by indexer / coordinator to inform router to re-connect with

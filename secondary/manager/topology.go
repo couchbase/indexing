@@ -22,12 +22,16 @@ type GlobalTopology struct {
 	TopologyKeys []string `json:"topologyKeys,omitempty"`
 }
 
+// TODO: Need to add Collection specific information in IndexTopology
+// This has dependency on Lifecycle Manager
 type IndexTopology struct {
 	Version     uint64                  `json:"version,omitempty"`
 	Bucket      string                  `json:"bucket,omitempty"`
 	Definitions []IndexDefnDistribution `json:"definitions,omitempty"`
 }
 
+// TODO: Need to add Collection specific information in IndexDefnDistribution
+// This has dependency on Lifecycle Manager
 type IndexDefnDistribution struct {
 	Bucket    string                  `json:"bucket,omitempty"`
 	Name      string                  `json:"name,omitempty"`

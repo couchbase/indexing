@@ -222,6 +222,10 @@ type IndexDefn struct {
 	RetainDeletedXATTR bool       `json:"retainDeletedXATTR,omitempty"`
 	HashScheme         HashScheme `json:"hashScheme,omitempty"`
 	NumReplica2        Counter    `json:"NumReplica2,omitempty"`
+	Scope              string     `json:"Scope,omitempty"`
+	Collection         string     `json:"Collection,omitempty"`
+	ScopeId            string     `json:"ScopeId,omitempty"`
+	CollectionId       string     `json:"CollectionId,omitempty"`
 
 	// Sizing info
 	NumDoc        uint64  `json:"numDoc,omitempty"`
