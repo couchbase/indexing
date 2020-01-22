@@ -40,7 +40,8 @@ func TestRestartNilSnapshot(t *testing.T) {
 	// Restart indexer process and wait for some time.
 	log.Printf("Restarting indexer process ...")
 	tc.KillIndexer()
-	time.Sleep(20 * time.Second)
+	time.Sleep(200 * time.Second)
+
 	docScanResults := datautility.ExpectedScanResponse_string(docs, "eyeColor", "b", "c", 3)
 	scanResults, err1 := secondaryindex.Range("index_eyeColor", "default", indexScanAddress, []interface{}{"b"}, []interface{}{"c"}, 3, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err1, "Error in scan", t)
