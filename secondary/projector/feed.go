@@ -2028,7 +2028,6 @@ loop:
 }
 
 // compose topic-response for caller
-// TODO: Add keyspaceId's to topicResponse
 func (feed *Feed) topicResponse() *protobuf.TopicResponse {
 	uuids := make([]uint64, 0)
 	for _, engines := range feed.engines {
@@ -2037,9 +2036,11 @@ func (feed *Feed) topicResponse() *protobuf.TopicResponse {
 		}
 	}
 	xs := make([]*protobuf.TsVbuuid, 0, len(feed.actTss))
-	for _, ts := range feed.actTss {
+	keyspaceIds := make([]string, 0)
+	for keyspaceId, ts := range feed.actTss {
 		if ts != nil {
 			xs = append(xs, ts.Clone())
+			keyspaceIds = append(keyspaceIds, keyspaceId)
 		}
 	}
 	ys := make([]*protobuf.TsVbuuid, 0, len(feed.rollTss))
@@ -2060,6 +2061,7 @@ func (feed *Feed) topicResponse() *protobuf.TopicResponse {
 		ActiveTimestamps:   xs,
 		RollbackTimestamps: ys,
 		PendingTimestamps:  zs,
+		KeyspaceIds:        keyspaceIds,
 	}
 }
 
