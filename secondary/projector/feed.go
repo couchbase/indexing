@@ -1345,13 +1345,11 @@ func (feed *Feed) addInstances(
 func (feed *Feed) delInstances(
 	req *protobuf.DelInstancesRequest, opaque uint16) error {
 
-	// TODO: Update this logic to get the instances beloning to this
-	// keyspaceId and then process instance ID's
-
 	instanceIds := req.GetInstanceIds()
-	bucknIds := make(map[string][]uint64)           // bucket -> []instance
-	fengines := make(map[string]map[uint64]*Engine) // bucket-> uuid-> instance
-	for bucketn, engines := range feed.engines {
+	keyspaceInsts := make(map[string][]uint64)      // keyspaceId -> []instance
+	fengines := make(map[string]map[uint64]*Engine) // keyspaceId-> uuid-> instance
+
+	filterEngines := func(keyspaceId string, engines map[uint64]*Engine) {
 		uuids := make([]uint64, 0)
 		m := make(map[uint64]*Engine)
 		for uuid, engine := range engines {
@@ -1361,21 +1359,37 @@ func (feed *Feed) delInstances(
 				m[uuid] = engine
 			}
 		}
-		bucknIds[bucketn] = uuids
-		fengines[bucketn] = m
+		keyspaceInsts[keyspaceId] = uuids
+		fengines[keyspaceId] = m
 	}
+
+	reqKeyspaceId := req.GetKeyspaceId()
+	if reqKeyspaceId == "" { // Iterate though all keyspaces of the feed as reqKeyspaceId is empty
+		for keyspaceId, engines := range feed.engines {
+			filterEngines(keyspaceId, engines)
+		}
+	} else {
+		if engines, ok := feed.engines[reqKeyspaceId]; ok {
+			filterEngines(reqKeyspaceId, engines)
+		}
+	}
+
 	var err error
 	// posted post to kv data-path.
-	for bucketn, uuids := range bucknIds {
-		if _, ok := feed.kvdata[bucketn]; ok {
-			feed.kvdata[bucketn].DeleteEngines(opaque, uuids)
+	for keyspaceId, uuids := range keyspaceInsts {
+		if _, ok := feed.kvdata[keyspaceId]; ok {
+			feed.kvdata[keyspaceId].DeleteEngines(opaque, uuids)
 		} else {
-			fmsg := "%v ##%x delInstances() invalid-bucket %q"
-			logging.Errorf(fmsg, feed.logPrefix, opaque, bucketn)
+			fmsg := "%v ##%x delInstances() invalid-keyspace %q"
+			logging.Errorf(fmsg, feed.logPrefix, opaque, keyspaceId)
 			err = projC.ErrorInvalidBucket
 		}
 	}
-	feed.engines = fengines // :SideEffect:
+	if reqKeyspaceId == "" { // Update filtered engines across all keyspaces
+		feed.engines = fengines // :SideEffect:
+	} else { // Update filtered engines only for the keyspace specified in request
+		feed.engines[reqKeyspaceId] = fengines[reqKeyspaceId] // :SideEffect:
+	}
 	return err
 }
 
