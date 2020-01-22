@@ -57,7 +57,7 @@ type Feed struct {
 	feeders map[string]BucketFeeder // keyspaceId -> BucketFeeder{}
 	// downstream
 	kvdata    map[string]*KVData            // bucket -> kvdata
-	engines   map[string]map[uint64]*Engine // bucket -> uuid -> engine
+	engines   map[string]map[uint64]*Engine // keyspaceId -> uuid -> engine
 	endpoints map[string]c.RouterEndpoint
 	// genServer channel
 	reqch  chan []interface{}
@@ -864,7 +864,7 @@ func (feed *Feed) start(
 	}
 
 	// update engines and endpoints
-	if _, err = feed.processSubscribers(opaque, req); err != nil { // :SideEffect:
+	if _, err = feed.processSubscribers(opaque, req, keyspaceIdMap); err != nil { // :SideEffect:
 		return err
 	}
 	for _, ts := range req.GetReqTimestamps() {
@@ -1186,7 +1186,7 @@ func (feed *Feed) addBuckets(
 	}
 
 	// update engines and endpoints
-	if _, err = feed.processSubscribers(opaque, req); err != nil { // :SideEffect:
+	if _, err = feed.processSubscribers(opaque, req, keyspaceIdMap); err != nil { // :SideEffect:
 		return err
 	}
 
@@ -1309,9 +1309,8 @@ func (feed *Feed) addInstances(
 	opaque uint16) (*protobuf.TimestampResponse, error) {
 
 	// TODO: Once the data path is made keyspaceID aware, update this code
-	// to get keyspaceId from bucket and refer all book-keeping with keyspaceId
-	// Also, add keyspaceId to response
-	_, err := req.GetKeyspaceIdMap()
+	// to refer all book-keeping with keyspaceId
+	keyspaceIdMap, err := req.GetKeyspaceIdMap()
 	if err != nil {
 		return nil, err
 	}
@@ -1319,11 +1318,12 @@ func (feed *Feed) addInstances(
 	tsResp := &protobuf.TimestampResponse{
 		Topic:             proto.String(feed.topic),
 		CurrentTimestamps: make([]*protobuf.TsVbuuid, 0, 4),
+		KeyspaceIds:       make([]string, 0),
 	}
 	errResp := &protobuf.TimestampResponse{Topic: proto.String(feed.topic)}
 
 	// update engines and endpoints
-	buckets, err := feed.processSubscribers(opaque, req) // :SideEffect:
+	buckets, err := feed.processSubscribers(opaque, req, keyspaceIdMap) // :SideEffect:
 	if err != nil {
 		return errResp, err
 	}
@@ -1331,17 +1331,22 @@ func (feed *Feed) addInstances(
 	// post to kv data-path for buckets from new subscribers
 	// do not touch the kv data-path for buckets that are not part of addInstances
 	for bucketn, _ := range buckets {
-		engines := feed.engines[bucketn]
+		keyspaceId := keyspaceIdMap[bucketn]
+		engines := feed.engines[keyspaceId]
+
+		// TODO: Once the datapath is made keyspace aware, move this kvdata reference
+		// to refer with keyspaceId instead of bucket
 		if kvdata, ok := feed.kvdata[bucketn]; ok {
 			curSeqnos, err := kvdata.AddEngines(opaque, engines, feed.endpoints)
 			if err != nil {
 				return errResp, err
 			}
 			tsResp = tsResp.AddCurrentTimestamp(feed.pooln, bucketn, curSeqnos)
+			tsResp.AddKeyspaceId(keyspaceId)
 
 		} else {
-			fmsg := "%v ##%x addInstances() invalid-bucket %q\n"
-			logging.Errorf(fmsg, feed.logPrefix, opaque, bucketn)
+			fmsg := "%v ##%x addInstances() invalid-keyspace %q\n"
+			logging.Errorf(fmsg, feed.logPrefix, opaque, keyspaceIdMap[bucketn])
 			err = projC.ErrorInvalidBucket
 		}
 	}
@@ -1757,7 +1762,7 @@ func (feed *Feed) startDataPath(
 }
 
 // - return ErrorInconsistentFeed for malformed feed request
-func (feed *Feed) processSubscribers(opaque uint16, req Subscriber) (map[string]bool, error) {
+func (feed *Feed) processSubscribers(opaque uint16, req Subscriber, keyspaceIdMap map[string]string) (map[string]bool, error) {
 	evaluators, routers, err := feed.subscribers(opaque, req)
 	if err != nil {
 		return nil, err
@@ -1771,16 +1776,20 @@ func (feed *Feed) processSubscribers(opaque uint16, req Subscriber) (map[string]
 	buckets := make(map[string]bool, 0)
 	for uuid, evaluator := range evaluators {
 		bucketn := evaluator.Bucket()
+		// Get the bucket to keyspaceId mapping
+		keyspaceId := keyspaceIdMap[bucketn]
+
 		if _, ok := buckets[bucketn]; !ok {
 			buckets[bucketn] = true
 		}
-		m, ok := feed.engines[bucketn]
+
+		m, ok := feed.engines[keyspaceId]
 		if !ok {
 			m = make(map[uint64]*Engine)
 		}
 		engine := NewEngine(uuid, evaluator, routers[uuid])
 		m[uuid] = engine
-		feed.engines[bucketn] = m // :SideEffect:
+		feed.engines[keyspaceId] = m // :SideEffect:
 	}
 	return buckets, nil
 }
