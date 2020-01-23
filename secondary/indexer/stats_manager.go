@@ -102,7 +102,8 @@ func (it *IndexTimingStats) Init() {
 }
 
 type IndexStats struct {
-	name, bucket string
+	name, scope, collection, bucket string
+
 	replicaId    int
 	isArrayIndex bool
 
@@ -544,11 +545,11 @@ func (s *IndexerStats) Reset() {
 	*s = IndexerStats{}
 	s.Init()
 	for k, v := range old.indexes {
-		s.AddIndex(k, v.bucket, v.name, v.replicaId, v.isArrayIndex)
+		s.AddIndex(k, v.bucket, v.scope, v.collection, v.name, v.replicaId, v.isArrayIndex)
 	}
 }
 
-func (s *IndexerStats) AddIndex(id common.IndexInstId, bucket string, name string,
+func (s *IndexerStats) AddIndex(id common.IndexInstId, bucket, scope, collection, name string,
 	replicaId int, isArrIndex bool) {
 
 	b, ok := s.buckets[bucket]
@@ -559,8 +560,14 @@ func (s *IndexerStats) AddIndex(id common.IndexInstId, bucket string, name strin
 	}
 
 	if _, ok := s.indexes[id]; !ok {
-		idxStats := &IndexStats{name: name, bucket: bucket,
-			replicaId: replicaId, isArrayIndex: isArrIndex}
+		idxStats := &IndexStats{
+			name:         name,
+			bucket:       bucket,
+			scope:        scope,
+			collection:   collection,
+			replicaId:    replicaId,
+			isArrayIndex: isArrIndex,
+		}
 		idxStats.Init()
 		s.indexes[id] = idxStats
 
@@ -568,11 +575,11 @@ func (s *IndexerStats) AddIndex(id common.IndexInstId, bucket string, name strin
 	}
 }
 
-func (s *IndexerStats) AddPartition(id common.IndexInstId, bucket string, name string,
-	replicaId int, partitionId common.PartitionId, isArrIndex bool) {
+func (s *IndexerStats) AddPartition(id common.IndexInstId, bucket, scope string,
+	collection, name string, replicaId int, partitionId common.PartitionId, isArrIndex bool) {
 
 	if _, ok := s.indexes[id]; !ok {
-		s.AddIndex(id, bucket, name, replicaId, isArrIndex)
+		s.AddIndex(id, bucket, scope, collection, name, replicaId, isArrIndex)
 	}
 
 	s.indexes[id].addPartition(partitionId)
@@ -1159,8 +1166,9 @@ func (is IndexerStats) GetStats(getPartition bool, skipEmpty bool,
 
 	for k, s := range is.indexes {
 
-		name := common.FormatIndexInstDisplayName(s.name, s.replicaId)
-		prefix = fmt.Sprintf("%s:%s:", s.bucket, name)
+		prefix = common.GetStatsPrefix(s.bucket, s.scope, s.collection, s.name,
+			s.replicaId, 0, false)
+		// prefix = fmt.Sprintf("%s:%s:", s.bucket, name)
 		instId = fmt.Sprintf("%v:", k)
 
 		addIndexStats(s)
@@ -1168,8 +1176,9 @@ func (is IndexerStats) GetStats(getPartition bool, skipEmpty bool,
 		if getPartition {
 
 			for partnId, ps := range s.partitions {
-				name := common.FormatIndexPartnDisplayName(s.name, s.replicaId, int(partnId), true)
-				prefix = fmt.Sprintf("%s:%s:", s.bucket, name)
+				prefix = common.GetStatsPrefix(s.bucket, s.scope, s.collection,
+					s.name, s.replicaId, int(partnId), true)
+				// prefix = fmt.Sprintf("%s:%s:", s.bucket, name)
 				addIndexStats(ps)
 			}
 		}

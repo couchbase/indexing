@@ -175,3 +175,24 @@ func valueString(prefix string, val interface{}) string {
 		return fmt.Sprintf("%v : %v", prefix, val)
 	}
 }
+
+func GetStatsPrefix(bucket, scope, collection, index string, replicaId, partnId int, isPartn bool) string {
+	var name string
+	if isPartn {
+		name = FormatIndexPartnDisplayName(index, replicaId, partnId, isPartn)
+	} else {
+		name = FormatIndexInstDisplayName(index, replicaId)
+	}
+
+	var strs []string
+	if scope == DEFAULT_SCOPE && collection == DEFAULT_COLLECTION {
+		strs = []string{bucket, name, ""}
+	} else if scope == "" && collection == "" {
+		// TODO: Eventually, we need to remove this hack.
+		strs = []string{bucket, name, ""}
+	} else {
+		strs = []string{bucket, scope, collection, name, ""}
+	}
+
+	return strings.Join(strs, ":")
+}
