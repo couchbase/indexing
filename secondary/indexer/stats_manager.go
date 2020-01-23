@@ -10,6 +10,7 @@
 package indexer
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -671,15 +672,14 @@ func (s *IndexStats) getArrKeySizeStats() map[string]interface{} {
 	return keySizeStats
 }
 
-func (is IndexerStats) GetStats(getPartition bool, skipEmpty bool,
-	essential bool) common.Statistics {
+func (is IndexerStats) GetStats(spec *statsSpec) common.Statistics {
 
 	var prefix string
 	var instId string
 
 	statsMap := make(map[string]interface{})
 	addStat := func(k string, v interface{}) {
-		if !skipEmpty {
+		if !spec.skipEmpty {
 			statsMap[fmt.Sprintf("%s%s", prefix, k)] = v
 		} else if n, ok := v.(int64); ok && n != 0 {
 			statsMap[fmt.Sprintf("%s%s", prefix, k)] = v
@@ -688,7 +688,7 @@ func (is IndexerStats) GetStats(getPartition bool, skipEmpty bool,
 		}
 	}
 	addStatByInstId := func(k string, v interface{}) {
-		if !skipEmpty {
+		if !spec.skipEmpty {
 			statsMap[fmt.Sprintf("%s%s", instId, k)] = v
 		} else if n, ok := v.(int64); ok && n != 0 {
 			statsMap[fmt.Sprintf("%s%s", instId, k)] = v
@@ -1046,7 +1046,7 @@ func (is IndexerStats) GetStats(getPartition bool, skipEmpty bool,
 				return ss.numRecsOnDisk.Value()
 			}))
 
-		if !essential {
+		if !spec.essential {
 
 			// Timing stats.  If timing stat is partitioned, the final value
 			// is aggreated across the partitions (sum, count, sumOfSq).
@@ -1164,16 +1164,24 @@ func (is IndexerStats) GetStats(getPartition bool, skipEmpty bool,
 		}
 	}
 
-	for k, s := range is.indexes {
+	addStatsForIndexInst := func(inst common.IndexInstId, s *IndexStats) {
+		var ok bool
+
+		if s == nil {
+			if s, ok = is.indexes[inst]; !ok {
+				logging.Errorf("Error in GetStats: stats for instId %v not found", inst)
+				return
+			}
+		}
 
 		prefix = common.GetStatsPrefix(s.bucket, s.scope, s.collection, s.name,
 			s.replicaId, 0, false)
 		// prefix = fmt.Sprintf("%s:%s:", s.bucket, name)
-		instId = fmt.Sprintf("%v:", k)
+		instId = fmt.Sprintf("%v:", inst)
 
 		addIndexStats(s)
 
-		if getPartition {
+		if spec.partition {
 
 			for partnId, ps := range s.partitions {
 				prefix = common.GetStatsPrefix(s.bucket, s.scope, s.collection,
@@ -1181,6 +1189,21 @@ func (is IndexerStats) GetStats(getPartition bool, skipEmpty bool,
 				// prefix = fmt.Sprintf("%s:%s:", s.bucket, name)
 				addIndexStats(ps)
 			}
+		}
+	}
+
+	var instances []common.IndexInstId
+	if spec.indexSpec != nil {
+		instances = spec.indexSpec.GetInstances()
+	}
+
+	if instances == nil {
+		for k, s := range is.indexes {
+			addStatsForIndexInst(k, s)
+		}
+	} else {
+		for _, inst := range instances {
+			addStatsForIndexInst(inst, nil)
 		}
 	}
 
@@ -1416,11 +1439,10 @@ func (s *IndexStats) constructIndexStats(skipEmpty bool, version string) common.
 	return indexStats
 }
 
-func (is IndexerStats) MarshalJSON(partition bool, pretty bool,
-	skipEmpty bool, essential bool) ([]byte, error) {
-	stats := is.GetStats(partition, skipEmpty, essential)
+func (is IndexerStats) MarshalJSON(spec *statsSpec) ([]byte, error) {
+	stats := is.GetStats(spec)
 
-	if !pretty {
+	if !spec.pretty {
 		return json.Marshal(stats)
 	} else {
 		return json.MarshalIndent(stats, "", "   ")
@@ -1456,6 +1478,25 @@ func NewIndexerStats() *IndexerStats {
 	s := &IndexerStats{}
 	s.Init()
 	return s
+}
+
+type statsSpec struct {
+	indexSpec *common.StatsIndexSpec
+	partition bool
+	pretty    bool
+	skipEmpty bool
+	essential bool
+}
+
+func NewStatsSpec(partition, pretty, skipEmpty, essential bool, indexSpec *common.StatsIndexSpec) *statsSpec {
+
+	return &statsSpec{
+		partition: partition,
+		pretty:    pretty,
+		skipEmpty: skipEmpty,
+		essential: essential,
+		indexSpec: indexSpec,
+	}
 }
 
 type statsManager struct {
@@ -1579,6 +1620,29 @@ func (s *statsManager) handleStatsReq(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("skipEmpty") == "true" {
 			skipEmpty = true
 		}
+
+		var indexSpec *common.StatsIndexSpec
+		if r.ContentLength != 0 || r.Body != nil {
+
+			// In case of error in reading the request body, return stats for all indexes
+			indexSpecError := false
+			buf := new(bytes.Buffer)
+			if _, err := buf.ReadFrom(r.Body); err != nil {
+				logging.Errorf("handleStatsReq: unable to read request body, err %v", err)
+				indexSpecError = true
+			}
+
+			if !indexSpecError && buf.Len() != 0 {
+				indexSpec = &common.StatsIndexSpec{}
+				if err := commonjson.Unmarshal(buf.Bytes(), indexSpec); err != nil {
+					logging.Errorf("handleStatsReq: unable to unmarshall request body. Buf = %s, err %v",
+						logging.TagStrUD(buf), err)
+					indexSpec = nil
+				}
+			}
+		}
+
+		spec := NewStatsSpec(partition, pretty, skipEmpty, false, indexSpec)
 		stats := s.stats.Get()
 
 		t0 := time.Now()
@@ -1587,7 +1651,7 @@ func (s *statsManager) handleStatsReq(w http.ResponseWriter, r *http.Request) {
 		if common.IndexerState(stats.indexerState.Value()) != common.INDEXER_BOOTSTRAP && sync == true {
 			s.tryUpdateStats(sync)
 		}
-		bytes, _ := stats.MarshalJSON(partition, pretty, skipEmpty, false)
+		bytes, _ := stats.MarshalJSON(spec)
 		w.WriteHeader(200)
 		w.Write(bytes)
 		stats.statsResponse.Put(time.Since(t0))
@@ -1825,7 +1889,8 @@ func (s *statsManager) runStatsDumpLogger() {
 			if logging.IsEnabled(logging.Verbose) {
 				essential = false
 			}
-			bytes, _ := stats.MarshalJSON(false, false, false, essential)
+			spec := NewStatsSpec(false, false, false, essential, nil)
+			bytes, _ := stats.MarshalJSON(spec)
 			var storageStats string
 			if skipStorage > 15 { //log storage stats every 15mins
 				if common.GetStorageMode() != common.FORESTDB {

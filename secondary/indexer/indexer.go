@@ -5771,7 +5771,8 @@ func (idx *indexer) broadcastBootstrapStats(stats *IndexerStats,
 	idxStats.numDocsQueued.Set(math.MaxInt64)
 	idxStats.lastRollbackTime.Set(time.Now().UnixNano())
 	idxStats.progressStatTime.Set(time.Now().UnixNano())
-	notifyStats := stats.GetStats(false, false, false)
+	spec := NewStatsSpec(false, false, false, false, nil)
+	notifyStats := stats.GetStats(spec)
 	idx.internalRecvCh <- &MsgStatsRequest{
 		mType: INDEX_STATS_BROADCAST,
 		stats: notifyStats,

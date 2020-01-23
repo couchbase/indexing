@@ -196,3 +196,15 @@ func GetStatsPrefix(bucket, scope, collection, index string, replicaId, partnId 
 
 	return strings.Join(strs, ":")
 }
+
+type StatsIndexSpec struct {
+	Instances []IndexInstId `json:"instances,omitempty"`
+}
+
+func (spec *StatsIndexSpec) GetInstances() []IndexInstId {
+	if spec == nil {
+		return nil
+	}
+
+	return spec.Instances
+}
