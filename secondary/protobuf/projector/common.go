@@ -1,12 +1,14 @@
 package protoProjector
 
-import "sort"
-import "errors"
-import "fmt"
+import (
+	"errors"
+	"fmt"
+	"sort"
 
-import c "github.com/couchbase/indexing/secondary/common"
-import "github.com/couchbase/indexing/secondary/dcp"
-import "github.com/golang/protobuf/proto"
+	c "github.com/couchbase/indexing/secondary/common"
+	couchbase "github.com/couchbase/indexing/secondary/dcp"
+	"github.com/golang/protobuf/proto"
+)
 
 // *****
 // Error

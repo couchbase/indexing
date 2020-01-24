@@ -12,9 +12,10 @@ package indexer
 import (
 	"container/list"
 	"fmt"
+	"time"
+
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
-	"time"
 )
 
 type StreamState struct {
@@ -289,6 +290,7 @@ func (ss *StreamState) initBucketInStream(streamId common.StreamId,
 	bucket string) {
 
 	numVbuckets := ss.config["numVbuckets"].Int()
+	//TODO pass scope/collection
 	ss.streamBucketHWTMap[streamId][bucket] = common.NewTsVbuuid(bucket, numVbuckets)
 	ss.streamBucketNeedsCommitMap[streamId][bucket] = false
 	ss.streamBucketHasBuildCompTSMap[streamId][bucket] = false

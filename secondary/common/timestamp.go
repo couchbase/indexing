@@ -3,10 +3,13 @@
 
 package common
 
-import "github.com/couchbase/indexing/secondary/logging"
-import "bytes"
-import "fmt"
-import "sync"
+import (
+	"bytes"
+	"fmt"
+	"sync"
+
+	"github.com/couchbase/indexing/secondary/logging"
+)
 
 // TsVb is logical clock for a subset of vbuckets.
 type TsVb struct {
@@ -25,8 +28,11 @@ type TsVbFull struct {
 // and last seen snapshot.
 type TsVbuuid struct {
 	Bucket       string
+	ScopeId      string
+	CollectionId string
 	Seqnos       []uint64
 	Vbuuids      []uint64
+	ManifestUIDs []string
 	Crc64        uint64
 	Snapshots    [][2]uint64
 	SnapType     IndexSnapType
@@ -39,10 +45,11 @@ type TsVbuuid struct {
 // `numVbuckets` is same as `maxVbuckets`.
 func NewTsVbuuid(bucket string, numVbuckets int) *TsVbuuid {
 	return &TsVbuuid{
-		Bucket:    bucket,
-		Seqnos:    make([]uint64, numVbuckets),
-		Vbuuids:   make([]uint64, numVbuckets),
-		Snapshots: make([][2]uint64, numVbuckets),
+		Bucket:       bucket,
+		Seqnos:       make([]uint64, numVbuckets),
+		Vbuuids:      make([]uint64, numVbuckets),
+		ManifestUIDs: make([]string, numVbuckets),
+		Snapshots:    make([][2]uint64, numVbuckets),
 	}
 }
 
@@ -57,10 +64,11 @@ func NewTsVbuuid2(bucket string, seqnos, vbuuids []uint64) *TsVbuuid {
 
 func newTsVbuuid() interface{} {
 	return &TsVbuuid{
-		Bucket:    "",
-		Seqnos:    make([]uint64, NUM_VBUCKETS),
-		Vbuuids:   make([]uint64, NUM_VBUCKETS),
-		Snapshots: make([][2]uint64, NUM_VBUCKETS),
+		Bucket:       "",
+		Seqnos:       make([]uint64, NUM_VBUCKETS),
+		Vbuuids:      make([]uint64, NUM_VBUCKETS),
+		ManifestUIDs: make([]string, NUM_VBUCKETS),
+		Snapshots:    make([][2]uint64, NUM_VBUCKETS),
 	}
 }
 
@@ -77,11 +85,14 @@ func NewTsVbuuidCached(bucket string, numVbuckets int) *TsVbuuid {
 	for i, _ := range ts.Vbuuids {
 		ts.Seqnos[i] = 0
 		ts.Vbuuids[i] = 0
+		ts.ManifestUIDs[i] = ""
 		ts.Snapshots[i][0] = 0
 		ts.Snapshots[i][1] = 0
 		ts.Crc64 = 0
 	}
 	ts.Bucket = bucket
+	ts.ScopeId = ""
+	ts.CollectionId = ""
 	return ts
 }
 
@@ -144,6 +155,7 @@ func (ts *TsVbuuid) CheckCrc64(other *TsVbuuid) bool {
 	if ts.Bucket != other.Bucket {
 		return false
 	}
+
 	return ts.Crc64 == 0 || other.Crc64 == 0 || ts.Crc64 == other.Crc64
 }
 
@@ -156,6 +168,7 @@ func (ts *TsVbuuid) AsRecent(other *TsVbuuid) bool {
 	if ts.Bucket != other.Bucket {
 		return false
 	}
+
 	if len(ts.Vbuuids) > len(other.Vbuuids) {
 		return false
 	}
@@ -195,6 +208,7 @@ func (ts *TsVbuuid) Union(other *TsVbuuid) *TsVbuuid {
 		if ts.Vbuuids[i] != 0 && result.Vbuuids[i] == 0 {
 			result.Seqnos[i] = ts.Seqnos[i]
 			result.Vbuuids[i] = ts.Vbuuids[i]
+			result.ManifestUIDs[i] = ts.ManifestUIDs[i]
 			result.Snapshots[i][0] = ts.Snapshots[i][0]
 			result.Snapshots[i][1] = ts.Snapshots[i][1]
 		}
@@ -276,22 +290,29 @@ func (ts *TsVbuuid) Copy() *TsVbuuid {
 	newTs := NewTsVbuuid(ts.Bucket, len(ts.Seqnos))
 	copy(newTs.Seqnos, ts.Seqnos)
 	copy(newTs.Vbuuids, ts.Vbuuids)
+	copy(newTs.ManifestUIDs, ts.ManifestUIDs)
 	copy(newTs.Snapshots, ts.Snapshots)
 	newTs.SnapType = ts.SnapType
 	newTs.LargeSnap = ts.LargeSnap
 	newTs.SnapAligned = ts.SnapAligned
 	newTs.Crc64 = ts.Crc64
+
+	newTs.ScopeId = ts.ScopeId
+	newTs.CollectionId = ts.CollectionId
 	return newTs
 }
 
 func (ts *TsVbuuid) CopyFrom(src *TsVbuuid) {
 	copy(ts.Seqnos, src.Seqnos)
 	copy(ts.Vbuuids, src.Vbuuids)
+	copy(ts.ManifestUIDs, src.ManifestUIDs)
 	copy(ts.Snapshots, src.Snapshots)
 	ts.SnapType = src.SnapType
 	ts.LargeSnap = src.LargeSnap
 	ts.SnapAligned = src.SnapAligned
 	ts.Crc64 = src.Crc64
+	ts.ScopeId = src.ScopeId
+	ts.CollectionId = src.CollectionId
 }
 
 // Equal returns whether `ts` and `other` compare equal.
@@ -387,7 +408,14 @@ func (ts *TsVbuuid) Clone() *TsVbuuid {
 		other.Snapshots[i][0] = sn[0]
 		other.Snapshots[i][1] = sn[1]
 	}
+
+	for i, m := range ts.ManifestUIDs {
+		other.ManifestUIDs[i] = m
+	}
+
 	other.Crc64 = ts.Crc64
+	other.ScopeId = ts.ScopeId
+	other.CollectionId = ts.CollectionId
 
 	return other
 }
@@ -396,14 +424,15 @@ func (ts *TsVbuuid) Clone() *TsVbuuid {
 func (ts *TsVbuuid) String() string {
 	var buf bytes.Buffer
 	vbnos := ts.GetVbnos()
-	fmsg := "bucket: %v, vbuckets: %v Crc64: %v snapType %v -\n"
-	buf.WriteString(fmt.Sprintf(fmsg, ts.Bucket, len(vbnos), ts.Crc64, ts.SnapType))
-	fmsg = "    {vbno, vbuuid, seqno, snapshot-start, snapshot-end}\n"
+	fmsg := "bucket: %v, scopeId: %v, collectionId: %v, vbuckets: %v Crc64: %v snapType %v -\n"
+	buf.WriteString(fmt.Sprintf(fmsg, ts.Bucket, ts.ScopeId, ts.CollectionId,
+		len(vbnos), ts.Crc64, ts.SnapType))
+	fmsg = "    {vbno, vbuuid, manifest, seqno, snapshot-start, snapshot-end}\n"
 	buf.WriteString(fmt.Sprintf(fmsg))
 	for _, v := range vbnos {
 		start, end := ts.Snapshots[v][0], ts.Snapshots[v][1]
-		buf.WriteString(fmt.Sprintf("    {%5d %16x %10d %10d %10d}\n",
-			v, ts.Vbuuids[v], ts.Seqnos[v], start, end))
+		buf.WriteString(fmt.Sprintf("    {%5d %16x %v %10d %10d %10d}\n",
+			v, ts.Vbuuids[v], []byte(ts.ManifestUIDs[v]), ts.Seqnos[v], start, end))
 	}
 	return buf.String()
 }
@@ -435,11 +464,12 @@ func (ts *TsVbuuid) Diff(other *TsVbuuid) string {
 
 	for i := range ts.Seqnos {
 		if ts.Seqnos[i] != other.Seqnos[i] || ts.Vbuuids[i] != other.Vbuuids[i] ||
-			ts.Snapshots[i][0] != other.Snapshots[i][0] || ts.Snapshots[i][1] != other.Snapshots[i][1] {
-			buf.WriteString(fmt.Sprintf("This timestamp: bucket %s, vb = %d, vbuuid = %d, seqno = %d, snapshot[0] = %d, snapshot[1] = %d\n",
-				ts.Bucket, i, ts.Vbuuids[i], ts.Seqnos[i], ts.Snapshots[0], ts.Snapshots[1]))
-			buf.WriteString(fmt.Sprintf("Other timestamp: bucket %s, vb = %d, vbuuid = %d, seqno = %d, snapshot[0] = %d, snapshot[1] = %d\n",
-				other.Bucket, i, other.Vbuuids[i], other.Seqnos[i], other.Snapshots[0], other.Snapshots[1]))
+			ts.Snapshots[i][0] != other.Snapshots[i][0] || ts.Snapshots[i][1] != other.Snapshots[i][1] ||
+			ts.ManifestUIDs[i] != other.ManifestUIDs[i] {
+			buf.WriteString(fmt.Sprintf("This timestamp: bucket %s, vb = %d, vbuuid = %d, manifestuid = %v, seqno = %d, snapshot[0] = %d, snapshot[1] = %d\n",
+				ts.Bucket, i, ts.Vbuuids[i], ts.ManifestUIDs[i], ts.Seqnos[i], ts.Snapshots[0], ts.Snapshots[1]))
+			buf.WriteString(fmt.Sprintf("Other timestamp: bucket %s, vb = %d, vbuuid = %d, manifestuid = %v,  seqno = %d, snapshot[0] = %d, snapshot[1] = %d\n",
+				other.Bucket, i, other.Vbuuids[i], other.ManifestUIDs[i], other.Seqnos[i], other.Snapshots[0], other.Snapshots[1]))
 		}
 	}
 
