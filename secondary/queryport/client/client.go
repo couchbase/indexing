@@ -553,6 +553,8 @@ func (c *GsiClient) CreateIndex4(
 	if c.bridge == nil {
 		return defnID, ErrorClientUninitialized
 	}
+
+	logging.Infof("CreateIndex %v %v %v %v ...", bucket, scope, collection, name)
 	begin := time.Now()
 	defnID, err = c.bridge.CreateIndex(
 		name, bucket, scope, collection, using, exprType, whereExpr,
@@ -571,6 +573,8 @@ func (c *GsiClient) BuildIndexes(defnIDs []uint64) error {
 	if c.bridge == nil {
 		return ErrorClientUninitialized
 	}
+
+	logging.Infof("BuildIndexes %v ...", defnIDs)
 	begin := time.Now()
 	err := c.bridge.BuildIndexes(defnIDs)
 	fmsg := "BuildIndexes %v - elapsed(%v), err(%v)"
@@ -583,6 +587,8 @@ func (c *GsiClient) MoveIndex(defnID uint64, with map[string]interface{}) error 
 	if c.bridge == nil {
 		return ErrorClientUninitialized
 	}
+
+	logging.Infof("MoveIndex %v ...", defnID)
 	begin := time.Now()
 	err := c.bridge.MoveIndex(defnID, with)
 	fmsg := "MoveIndex %v - elapsed(%v), err(%v)"
@@ -595,6 +601,8 @@ func (c *GsiClient) AlterReplicaCount(action string, defnID uint64, with map[str
 	if c.bridge == nil {
 		return ErrorClientUninitialized
 	}
+
+	logging.Infof("AlterReplicaCount %v %v ...", defnID, action)
 	begin := time.Now()
 	err := c.bridge.AlterReplicaCount(action, defnID, with)
 	fmsg := "AlterReplicaCount %v - elapsed(%v), err(%v)"
@@ -607,6 +615,8 @@ func (c *GsiClient) DropIndex(defnID uint64) error {
 	if c.bridge == nil {
 		return ErrorClientUninitialized
 	}
+
+	logging.Infof("DropIndex %v ...", defnID)
 	begin := time.Now()
 	err := c.bridge.DropIndex(defnID)
 	fmsg := "DropIndex %v - elapsed(%v), err(%v)"
