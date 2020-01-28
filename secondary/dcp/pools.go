@@ -677,3 +677,18 @@ func (b *Bucket) GetDcpConn(name DcpFeedName, host string) (*memcached.Client, e
 
 	return nil, fmt.Errorf("no pool found")
 }
+
+func (b *Bucket) GetMcConn(host string) (*memcached.Client, error) {
+	for _, sconn := range b.getConnPools() {
+		if sconn.host == host {
+			// Get connection without doing DCP_OPEN
+			mc, err := sconn.Get()
+			if err != nil {
+				return nil, err
+			}
+			return mc, nil
+		}
+	}
+
+	return nil, fmt.Errorf("no pool found")
+}

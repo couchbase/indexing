@@ -99,7 +99,7 @@ func (r *vbSeqnosReader) GetSeqnos() (seqs []uint64, err error) {
 	return
 }
 
-func (r *vbSeqnosReader) enqueueRequest(req interface{}) () {
+func (r *vbSeqnosReader) enqueueRequest(req interface{}) {
 	defer func() {
 		if r := recover(); r != nil {
 			//if requestCh is closed, reader has closed already
@@ -261,8 +261,7 @@ func addDBSbucket(cluster, pooln, bucketn string) (err error) {
 			logging.Errorf("NewUUID() failed: %v\n", err)
 			return err
 		}
-		fname := couchbase.NewDcpFeedName("getseqnos-" + name)
-		conn, err = bucket.GetDcpConn(fname, kvaddr)
+		conn, err = bucket.GetMcConn(kvaddr)
 		if err != nil {
 			logging.Errorf("StartDcpFeedOver(): %v\n", err)
 			return err
