@@ -2163,8 +2163,10 @@ func (tk *timekeeper) checkFlushTsValidForMerge(streamId common.StreamId, bucket
 
 	var maintTsSeq, initTsSeq Timestamp
 
-	//if no flush has happened yet, its good to merge
-	if maintFlushTs == nil && initFlushTs == nil {
+	//if no flush has happened yet from MAINT_STREAM, its good to merge
+	//this can happen if MAINT_STREAM gets a rollback to 0 and is yet to
+	//start flushing, while INIT_STREAM is done flushing till buildTs
+	if maintFlushTs == nil {
 		return true, nil
 	}
 

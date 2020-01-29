@@ -27,12 +27,14 @@ var options struct {
 	projector     bool // start projector, useful in debug mode.
 	debug         bool
 	trace         bool
+	certFile      string
+	keyFile       string
 }
 
 func argParse() []string {
 	buckets := "default"
 	endpoints := "localhost:9020"
-	coordEndpoint := "localhost:9021"
+	coordEndpoint := "localhost:9000"
 
 	flag.StringVar(&buckets, "buckets", buckets,
 		"buckets to connect")
@@ -52,7 +54,10 @@ func argParse() []string {
 		"run in debug mode")
 	flag.BoolVar(&options.trace, "trace", false,
 		"run in trace mode")
-
+	flag.StringVar(&options.certFile, "certFile", "",
+		"certFile for N2N encryption")
+	flag.StringVar(&options.keyFile, "keyFile", "",
+		"keyFile file for N2N encryption")
 	flag.Parse()
 
 	options.buckets = strings.Split(buckets, ",")
@@ -110,14 +115,26 @@ func main() {
 			config.SetValue("projector.adminport.listenAddr", adminport)
 			epfactory := NewEndpointFactory(cluster, maxvbs)
 			config.SetValue("projector.routerEndpointFactory", epfactory)
-			projector.NewProjector(maxvbs, config) // start projector daemon
+			projector.NewProjector(maxvbs, config, options.certFile, options.keyFile) // start projector daemon
 		}
 
 		// projector-client
 		cconfig := c.SystemConfig.SectionConfig("indexer.projectorclient.", true)
-		projectors[cluster] = projc.NewClient(adminport, maxvbs, cconfig)
+		projClient, err := projc.NewClient(adminport, maxvbs, cconfig)
+		if err != nil {
+			log.Fatalf("Could not open projector client for admin port: %v", adminport)
+		} else {
+			projectors[cluster] = projClient
+		}
 	}
 
+	backFillStream()
+
+	time.Sleep(1000 * time.Second)
+	//<-make(chan bool) // wait for ever
+}
+
+func backFillStream() {
 	// index instances for specified buckets.
 	instances := protobuf.ScaleDefault4i(
 		options.buckets, options.endpoints, options.coordEndpoint)
@@ -128,15 +145,13 @@ func main() {
 			// start backfill stream on each projector
 			_, err := client.InitialTopicRequest(
 				"backfill" /*topic*/, "default", /*pooln*/
-				"dataport" /*endpointType*/, instances)
+				"dataport" /*endpointType*/, instances,
+				true /*async */, 0 /*opaque2*/)
 			if err != nil {
 				log.Fatal(err)
 			}
 		}(client)
 	}
-
-	time.Sleep(1000 * time.Second)
-	//<-make(chan bool) // wait for ever
 }
 
 func getProjectorAdminport(cluster, pooln string) string {

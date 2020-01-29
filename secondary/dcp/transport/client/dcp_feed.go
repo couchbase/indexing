@@ -39,6 +39,9 @@ var ErrorConnection = errors.New("dcp.connection")
 // ErrorInvalidFeed
 var ErrorInvalidFeed = errors.New("dcp.invalidFeed")
 
+// ErrorEnableCollections
+var ErrorEnableCollections = errors.New("dcp.EnableCollections")
+
 // DcpFeed represents an DCP feed. A feed contains a connection to a single
 // host and multiple vBuckets
 type DcpFeed struct {
@@ -52,6 +55,8 @@ type DcpFeed struct {
 	supvch    chan []interface{}
 	finch     chan bool
 	logPrefix string
+	// Collections
+	collectionsAware bool
 	// stats
 	toAckBytes         uint32    // bytes client has read
 	maxAckBytes        uint32    // Max buffer control ack bytes
@@ -87,6 +92,11 @@ func NewDcpFeed(
 	feed.conn = mc
 	rcvch := make(chan []interface{}, dataChanSize)
 	feed.lastAckTime = time.Now()
+
+	if _, ok := config["collectionsAware"]; ok {
+		feed.collectionsAware = config["collectionsAware"].(bool)
+	}
+
 	go feed.genServer(opaque, feed.reqch, feed.finch, rcvch, config)
 	go feed.doReceive(rcvch, feed.finch, mc)
 	logging.Infof("%v ##%x feed started ...", feed.logPrefix, opaque)
@@ -616,6 +626,12 @@ func (feed *DcpFeed) doDcpOpen(
 		return ErrorConnection
 	}
 
+	if feed.collectionsAware {
+		if err := feed.enableCollections(rcvch); err != nil {
+			return err
+		}
+	}
+
 	// send a DCP control message to set the window size for
 	// this connection
 	if bufsize > 0 {
@@ -799,6 +815,47 @@ func (feed *DcpFeed) doDcpCloseStream(vbno, opaqueMSB uint16) error {
 	}
 
 	feed.stats.LastMsgSend.Set(time.Now().UnixNano())
+	return nil
+}
+
+func (feed *DcpFeed) enableCollections(rcvch chan []interface{}) error {
+	prefix := feed.logPrefix
+	opaque := feed.opaque
+
+	rq := &transport.MCRequest{
+		Opcode: transport.HELO,
+		Key:    []byte(feed.name),
+		Body:   []byte{0x00, transport.FEATURE_COLLECTIONS},
+	}
+	if err := feed.conn.Transmit(rq); err != nil {
+		fmsg := "%v ##%x doDcpOpen.Transmit DCP_HELO (feature_collections): %v"
+		logging.Errorf(fmsg, prefix, opaque, err)
+		return err
+	}
+	feed.stats.LastMsgSend.Set(time.Now().UnixNano())
+	logging.Infof("%v ##%x sending DCP_HELO (feature_collections)", prefix, opaque)
+	msg, ok := <-rcvch
+	if !ok {
+		fmsg := "%v ##%x doDcpOpen.rcvch (feature_collections) closed"
+		logging.Errorf(fmsg, prefix, opaque)
+		return ErrorConnection
+	}
+	feed.stats.LastMsgRecv.Set(time.Now().UnixNano())
+
+	pkt := msg[0].(*transport.MCRequest)
+	opcode, body := pkt.Opcode, pkt.Body
+	if opcode != transport.HELO {
+		fmsg := "%v ##%x DCP_HELO (feature_collections) opcode = %v. Expecting opcode = 0x1f"
+		logging.Errorf(fmsg, prefix, opaque, opcode)
+		return ErrorEnableCollections
+	} else if (len(body) != 2) || (body[0] != 0x00 && body[1] != transport.FEATURE_COLLECTIONS) {
+		fmsg := "%v ##%x DCP_HELO (feature_collections) body = %v. Expecting body = 0x0012"
+		logging.Errorf(fmsg, prefix, opaque, opcode)
+		return ErrorEnableCollections
+	}
+
+	fmsg := "%v ##%x received response for DCP_HELO (feature_collections)"
+	logging.Infof(fmsg, prefix, opaque)
 	return nil
 }
 
