@@ -571,6 +571,23 @@ func (feed *DcpFeed) doDcpOpen(
 	opaque uint16,
 	rcvch chan []interface{}) error {
 
+	// Enable read deadline at function exit
+	// As this method is called only once (i.e. at the start of DCP feed),
+	// it is ok to set the value of readDeadline to "1" and not reset it later
+	defer func() {
+		atomic.StoreInt32(&feed.enableReadDeadline, 1)
+		feed.conn.SetMcdMutationReadDeadline()
+	}()
+
+	feed.conn.SetMcdConnectionDeadline()
+	defer feed.conn.ResetMcdConnectionDeadline()
+
+	if feed.collectionsAware {
+		if err := feed.enableCollections(rcvch); err != nil {
+			return err
+		}
+	}
+
 	rq := &transport.MCRequest{
 		Opcode: transport.DCP_OPEN,
 		Key:    []byte(name),
@@ -582,17 +599,6 @@ func (feed *DcpFeed) doDcpOpen(
 	binary.BigEndian.PutUint32(rq.Extras[4:], flags) // we are consumer
 
 	prefix := feed.logPrefix
-
-	// Enable read deadline at function exit
-	// As this method is called only once (i.e. at the start of DCP feed),
-	// it is ok to set the value of readDeadline to "1" and not reset it later
-	defer func() {
-		atomic.StoreInt32(&feed.enableReadDeadline, 1)
-		feed.conn.SetMcdMutationReadDeadline()
-	}()
-
-	feed.conn.SetMcdConnectionDeadline()
-	defer feed.conn.ResetMcdConnectionDeadline()
 
 	if err := feed.conn.Transmit(rq); err != nil {
 		return err
@@ -624,12 +630,6 @@ func (feed *DcpFeed) doDcpOpen(
 		fmsg := "%v ##%x doDcpOpen response status %v"
 		logging.Errorf(fmsg, prefix, opaque, req.Status)
 		return ErrorConnection
-	}
-
-	if feed.collectionsAware {
-		if err := feed.enableCollections(rcvch); err != nil {
-			return err
-		}
 	}
 
 	// send a DCP control message to set the window size for
