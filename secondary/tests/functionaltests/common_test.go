@@ -30,6 +30,7 @@ var dataFilePath, mutationFilePath string
 var defaultIndexActiveTimeout int64 = 600 // 10 mins to wait for index to become active
 var skipsetup bool
 var indexerLogLevel string
+var bucketOpWaitDur = time.Duration(15)
 
 func init() {
 	log.Printf("In init()")
@@ -86,7 +87,6 @@ func init() {
 
 	secondaryindex.CheckCollation = true
 
-	time.Sleep(5 * time.Second)
 	// Working with Users10k and Users_mut dataset.
 	u, _ := user.Current()
 	dataFilePath = filepath.Join(u.HomeDir, "testdata/Users10k.txt.gz")
@@ -103,7 +103,6 @@ func init() {
 		log.Printf("Emptying the default bucket")
 		kvutility.EnableBucketFlush("default", "", clusterconfig.Username, clusterconfig.Password, kvaddress)
 		kvutility.FlushBucket("default", "", clusterconfig.Username, clusterconfig.Password, kvaddress)
-		time.Sleep(5 * time.Second)
 
 		log.Printf("Create Index On the empty default Bucket()")
 		var indexName = "index_eyeColor"

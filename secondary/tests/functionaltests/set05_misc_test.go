@@ -27,9 +27,9 @@ var proddir, bagdir string
 func TestBucketDefaultDelete(t *testing.T) {
 	kvutility.DeleteBucket("default", "", clusterconfig.Username, clusterconfig.Password, kvaddress)
 	secondaryindex.RemoveClientForBucket(kvaddress, "default")
-	time.Sleep(30 * time.Second) // Sleep after bucket create or delete
+	time.Sleep(bucketOpWaitDur * time.Second) // Sleep after bucket create or delete
 	kvutility.CreateBucket("default", "none", "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256", "11212")
-	time.Sleep(30 * time.Second) // Sleep after bucket create or delete
+	time.Sleep(bucketOpWaitDur * time.Second) // Sleep after bucket create or delete
 
 	tc.ClearMap(docs)
 	tc.ClearMap(mut_docs)
@@ -425,7 +425,7 @@ func TestMultipleBuckets(t *testing.T) {
 	for i := 1; i < numOfBuckets; i++ {
 		kvutility.CreateBucket(bucketNames[i], "sasl", "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256", proxyPorts[i])
 	}
-	time.Sleep(30 * time.Second)
+	time.Sleep(bucketOpWaitDur * time.Second)
 
 	log.Printf("Generating docs and Populating all the buckets")
 	for i := 0; i < numOfBuckets; i++ {
@@ -471,7 +471,7 @@ func TestMultipleBuckets(t *testing.T) {
 	kvutility.DeleteBucket(bucketNames[3], "", clusterconfig.Username, clusterconfig.Password, kvaddress)
 	secondaryindex.RemoveClientForBucket(kvaddress, bucketNames[3])
 	kvutility.EditBucket(bucketNames[0], "", clusterconfig.Username, clusterconfig.Password, kvaddress, "512")
-	time.Sleep(30 * time.Second) // Sleep after bucket create or delete
+	time.Sleep(bucketOpWaitDur * time.Second) // Sleep after bucket create or delete
 
 	tc.ClearMap(docs)
 	UpdateKVDocs(bucketDocs[0], docs)
@@ -501,7 +501,6 @@ func TestBucketFlush(t *testing.T) {
 	}
 
 	kvutility.FlushBucket(bucketName, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
-	time.Sleep(5 * time.Second)
 	log.Printf("TestBucketFlush:: Flushed the bucket")
 
 	for i := 0; i < 3; i++ {
@@ -526,10 +525,10 @@ func SkipTestSaslBucket(t *testing.T) {
 
 	kvutility.DeleteBucket(bucketName, "sasl", clusterconfig.Username, clusterconfig.Password, kvaddress)
 	secondaryindex.RemoveClientForBucket(kvaddress, bucketName)
-	time.Sleep(30 * time.Second) // Sleep after bucket create or delete
+	time.Sleep(bucketOpWaitDur * time.Second) // Sleep after bucket create or delete
 
 	kvutility.CreateBucket(bucketName, "sasl", "", clusterconfig.Username, clusterconfig.Password, kvaddress, "300", "11212")
-	time.Sleep(30 * time.Second) // Sleep after bucket create or delete
+	time.Sleep(bucketOpWaitDur * time.Second) // Sleep after bucket create or delete
 	kvdocs := generateDocs(1000, "users.prod")
 	kvutility.SetKeyValues(kvdocs, bucketName, bucketPassword, clusterconfig.KVAddress)
 	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{field}, false, nil, true, defaultIndexActiveTimeout, nil)

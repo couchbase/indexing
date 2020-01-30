@@ -40,7 +40,7 @@ func TestRestartNilSnapshot(t *testing.T) {
 	// Restart indexer process and wait for some time.
 	log.Printf("Restarting indexer process ...")
 	tc.KillIndexer()
-	time.Sleep(10 * time.Second)
+	time.Sleep(20 * time.Second)
 	docScanResults := datautility.ExpectedScanResponse_string(docs, "eyeColor", "b", "c", 3)
 	scanResults, err1 := secondaryindex.Range("index_eyeColor", "default", indexScanAddress, []interface{}{"b"}, []interface{}{"c"}, 3, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err1, "Error in scan", t)
@@ -375,7 +375,7 @@ func TestIndexingOnBinaryBucketMeta(t *testing.T) {
 	numDocs := 10
 	kvutility.EditBucket(bucket1, "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256")
 	kvutility.CreateBucket(bucket2, "sasl", "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256", "")
-	time.Sleep(30 * time.Second)
+	time.Sleep(bucketOpWaitDur * time.Second)
 
 	docs := GenerateBinaryDocs(numDocs, bucket2, "", clusterconfig.KVAddress, clusterconfig.Username, clusterconfig.Password)
 
@@ -434,7 +434,7 @@ func TestIndexingOnBinaryBucketMeta(t *testing.T) {
 	kvutility.DeleteBucket(bucket2, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
 	secondaryindex.RemoveClientForBucket(kvaddress, bucket2)
 	kvutility.EditBucket(bucket1, "", clusterconfig.Username, clusterconfig.Password, kvaddress, "512")
-	time.Sleep(30 * time.Second) // Sleep after bucket create or delete
+	time.Sleep(bucketOpWaitDur * time.Second) // Sleep after bucket create or delete
 }
 
 func TestRetainDeleteXATTRBinaryDocs(t *testing.T) {
@@ -450,7 +450,7 @@ func TestRetainDeleteXATTRBinaryDocs(t *testing.T) {
 	numDocs := 10
 	kvutility.EditBucket(bucket1, "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256")
 	kvutility.CreateBucket(bucket2, "sasl", "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256", "")
-	time.Sleep(30 * time.Second)
+	time.Sleep(bucketOpWaitDur * time.Second)
 
 	docs := GenerateBinaryDocsWithXATTRS(numDocs, bucket2, "", "http://"+kvaddress, clusterconfig.Username, clusterconfig.Password)
 
@@ -485,5 +485,5 @@ func TestRetainDeleteXATTRBinaryDocs(t *testing.T) {
 	kvutility.DeleteBucket(bucket2, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
 	secondaryindex.RemoveClientForBucket(kvaddress, bucket2)
 	kvutility.EditBucket(bucket1, "", clusterconfig.Username, clusterconfig.Password, kvaddress, "512")
-	time.Sleep(30 * time.Second) // Sleep after bucket create or delete*/
+	time.Sleep(bucketOpWaitDur * time.Second) // Sleep after bucket create or delete*/
 }

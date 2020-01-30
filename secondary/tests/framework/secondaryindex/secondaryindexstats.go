@@ -167,7 +167,6 @@ func ChangeIndexerSettings(configKey string, configValue interface{}, serverUser
 		return err
 	}
 	nodes, err := qpclient.Nodes()
-	log.Printf("DBG: ChangeIndexerSettings: nodes = %v", nodes)
 	if err != nil {
 		return err
 	}
@@ -179,11 +178,10 @@ func ChangeIndexerSettings(configKey string, configValue interface{}, serverUser
 	}
 
 	host, sport, _ := net.SplitHostPort(adminurl)
-	log.Printf("DBG: ChangeIndexerSettings: adminurl = %v host %v sport %v", adminurl, host, sport)
 	iport, _ := strconv.Atoi(sport)
 
 	if host == "" || iport == 0 {
-		log.Printf("DBG: ChangeIndexerSettings: Host %v Port %v Nodes %+v", host, iport, nodes)
+		log.Printf("ChangeIndexerSettings: Host %v Port %v Nodes %+v", host, iport, nodes)
 	}
 
 	client := http.Client{}

@@ -192,7 +192,7 @@ func FlushBucket(bucketName, bucketPassword, serverUserName, serverPassword, hos
 	}
 	// todo : error out if response is error
 	tc.HandleError(err, "Flush Bucket "+address)
-	time.Sleep(60 * time.Second)
+	time.Sleep(30 * time.Second)
 	log.Printf("Flushed the bucket %v", bucketName)
 }
 

@@ -3,13 +3,14 @@ package functionaltests
 import (
 	"errors"
 	"fmt"
-	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
-	kv "github.com/couchbase/indexing/secondary/tests/framework/kvutility"
-	"github.com/couchbase/indexing/secondary/tests/framework/secondaryindex"
 	"log"
 	"path/filepath"
 	"testing"
 	"time"
+
+	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
+	kv "github.com/couchbase/indexing/secondary/tests/framework/kvutility"
+	"github.com/couchbase/indexing/secondary/tests/framework/secondaryindex"
 )
 
 // =====================================================
@@ -76,7 +77,6 @@ func TestStat_ItemsCount(t *testing.T) {
 	kv.EnableBucketFlush("default", "", clusterconfig.Username, clusterconfig.Password, kvaddress)
 	kv.FlushBucket("default", "", clusterconfig.Username, clusterconfig.Password, kvaddress)
 	tc.ClearMap(docs)
-	time.Sleep(5 * time.Second)
 
 	log.Printf("Generating JSON docs")
 	docs = GenerateJsons(10000, seed, filepath.Join(proddir, "test.prod"), bagdir)
@@ -93,7 +93,7 @@ func TestStat_ItemsCount(t *testing.T) {
 	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{indexField}, false, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
-	time.Sleep(10 * time.Second)
+	time.Sleep(5 * time.Second)
 
 	prefix := bucketName + ":" + indexName
 	stats := secondaryindex.GetIndexStats(indexName, bucketName, clusterconfig.Username, clusterconfig.Password, kvaddress)
@@ -145,7 +145,6 @@ func SkipTestCompactionDiskMinSize(t *testing.T) {
 	kv.EnableBucketFlush("default", "", clusterconfig.Username, clusterconfig.Password, kvaddress)
 	kv.FlushBucket("default", "", clusterconfig.Username, clusterconfig.Password, kvaddress)
 	tc.ClearMap(docs)
-	time.Sleep(5 * time.Second)
 
 	log.Printf("Generating JSON docs")
 	docs = GenerateJsons(10000, seed, filepath.Join(proddir, "test.prod"), bagdir)
@@ -201,7 +200,6 @@ func compactionFragmentationTest(fragmentationValue float64, updateFragmentation
 	kv.EnableBucketFlush("default", "", clusterconfig.Username, clusterconfig.Password, kvaddress)
 	kv.FlushBucket("default", "", clusterconfig.Username, clusterconfig.Password, kvaddress)
 	tc.ClearMap(docs)
-	time.Sleep(5 * time.Second)
 
 	log.Printf("Generating JSON docs")
 	docs = GenerateJsons(10000, seed, filepath.Join(proddir, "test.prod"), bagdir)

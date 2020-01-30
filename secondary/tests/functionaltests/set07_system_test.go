@@ -120,7 +120,7 @@ func TestMultipleBucketsDeferredBuild(t *testing.T) {
 	secondaryindex.RemoveClientForBucket(kvaddress, bucket2)
 	kvutility.CreateBucket(bucket2, "sasl", "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256", "11213")
 	tc.ClearMap(docs)
-	time.Sleep(30 * time.Second)
+	time.Sleep(bucketOpWaitDur * time.Second)
 
 	log.Printf("Setting JSON docs in KV")
 	bucket1docs := generateDocs(50000, "users.prod")
@@ -147,7 +147,6 @@ func TestMultipleBucketsDeferredBuild(t *testing.T) {
 
 	err = secondaryindex.BuildIndexesAsync([]uint64{defn1}, indexManagementAddress, defaultIndexActiveTimeout)
 	FailTestIfError(err, "Error from BuildIndexesAsync of index1", t)
-	//time.Sleep(1 * time.Second)
 
 	err = secondaryindex.BuildIndexesAsync([]uint64{defn2, defn3}, indexManagementAddress, defaultIndexActiveTimeout)
 	//FailTestIfNoError(err, "Error from BuildIndexesAsync", t)
@@ -1034,7 +1033,7 @@ func TestCreateBucket_AnotherIndexBuilding(t *testing.T) {
 	kvutility.DeleteBucket(bucket2, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
 	secondaryindex.RemoveClientForBucket(kvaddress, bucket2)
 	tc.ClearMap(docs)
-	time.Sleep(30 * time.Second)
+	time.Sleep(bucketOpWaitDur * time.Second)
 
 	log.Printf("Setting JSON docs in KV")
 	bucket1docs := generateDocs(200000, "test.prod")
@@ -1045,7 +1044,7 @@ func TestCreateBucket_AnotherIndexBuilding(t *testing.T) {
 	FailTestIfError(err, "Error in creating the index1", t)
 
 	kvutility.CreateBucket(bucket2, "sasl", "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256", "11213")
-	time.Sleep(10 * time.Second)
+	time.Sleep(bucketOpWaitDur * time.Second)
 	kvutility.SetKeyValues(bucket2docs, bucket2, "", clusterconfig.KVAddress)
 	err = secondaryindex.CreateSecondaryIndexAsync(index2, bucket2, indexManagementAddress, "", []string{"age"}, false, nil, true, nil)
 	FailTestIfError(err, "Error in creating the index1", t)
@@ -1103,7 +1102,7 @@ func TestDropBucket2Index_Bucket1IndexBuilding(t *testing.T) {
 	secondaryindex.RemoveClientForBucket(kvaddress, bucket2)
 	kvutility.CreateBucket(bucket2, "sasl", "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256", "11213")
 	tc.ClearMap(docs)
-	time.Sleep(30 * time.Second)
+	time.Sleep(bucketOpWaitDur * time.Second)
 
 	log.Printf("Setting JSON docs in KV")
 	bucket1docs := generateDocs(100000, "test.prod")
@@ -1174,10 +1173,9 @@ func TestDeleteBucketWhileInitialIndexBuild(t *testing.T) {
 		log.Printf("============== DBG: Create bucket %v", bucketNames[i])
 		kvutility.CreateBucket(bucketNames[i], "sasl", "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256", proxyPorts[i])
 		kvutility.EnableBucketFlush(bucketNames[i], "", clusterconfig.Username, clusterconfig.Password, kvaddress)
-		time.Sleep(1 * time.Second)
 		kvutility.FlushBucket(bucketNames[i], "", clusterconfig.Username, clusterconfig.Password, kvaddress)
 	}
-	time.Sleep(30 * time.Second)
+	time.Sleep(bucketOpWaitDur * time.Second)
 
 	log.Printf("Generating docs and Populating all the buckets")
 	j := 0
@@ -1255,7 +1253,7 @@ func TestDeleteBucketWhileInitialIndexBuild(t *testing.T) {
 	kvutility.DeleteBucket(bucketNames[3], "", clusterconfig.Username, clusterconfig.Password, kvaddress)
 	secondaryindex.RemoveClientForBucket(kvaddress, bucketNames[3])
 	kvutility.EditBucket(bucketNames[0], "", clusterconfig.Username, clusterconfig.Password, kvaddress, "512")
-	time.Sleep(30 * time.Second) // Sleep after bucket create or delete
+	time.Sleep(bucketOpWaitDur * time.Second) // Sleep after bucket create or delete
 
 	tc.ClearMap(docs)
 	UpdateKVDocs(bucketDocs[0], docs)
