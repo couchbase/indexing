@@ -103,7 +103,7 @@ GoInstall (TARGET indexer PACKAGE github.com/couchbase/indexing/secondary/cmd/in
   GOTAGS "${TAGS}"
   LDFLAGS "${LDFLAGS}"
   INSTALL_PATH bin OUTPUT indexer
-  GOVERSION 1.7.6)
+  GOVERSION 1.13.7)
 
 ADD_DEPENDENCIES(indexer sigar forestdb platform)
 ADD_DEPENDENCIES(indexer proto-generated)
@@ -115,7 +115,7 @@ GoInstall (TARGET projector PACKAGE github.com/couchbase/indexing/secondary/cmd/
   GOTAGS "${TAGS}"
   LDFLAGS "${LDFLAGS}"
   INSTALL_PATH bin
-  GOVERSION 1.11.6)
+  GOVERSION 1.13.7)
 
 ADD_DEPENDENCIES(projector proto-generated)
 
