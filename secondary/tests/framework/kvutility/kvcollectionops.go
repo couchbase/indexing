@@ -9,9 +9,59 @@ import (
 	"net/url"
 	"strings"
 
+	common "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/common/collections"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 )
+
+func SetKeyValuesForCollection(keyValues tc.KeyValues, bucketName, collectionID, password, hostaddress string) {
+	url := "http://" + bucketName + ":" + password + "@" + hostaddress
+
+	b, err := common.ConnectBucket(url, "default", bucketName)
+	tc.HandleError(err, "bucket")
+
+	for key, value := range keyValues {
+		// The vb mapping for a key is independent of collections.
+		// Pass key and collectionID separately for correct vb:key mapping
+		err = b.SetC(key, collectionID, 0, value)
+		tc.HandleError(err, "set")
+	}
+	b.Close()
+}
+
+func GetFromCollection(key string, rv interface{}, bucketName, collectionID, password, hostaddress string) {
+	url := "http://" + bucketName + ":" + password + "@" + hostaddress
+
+	b, err := common.ConnectBucket(url, "default", bucketName)
+	tc.HandleError(err, "bucket")
+
+	err = b.GetC(key, collectionID, &rv)
+	tc.HandleError(err, "get")
+}
+
+func DeleteFromCollection(key string, bucketName, collectionID, password, hostaddress string) {
+	url := "http://" + bucketName + ":" + password + "@" + hostaddress
+
+	b, err := common.ConnectBucket(url, "default", bucketName)
+	tc.HandleError(err, "bucket")
+
+	err = b.DeleteC(key, collectionID)
+	tc.HandleError(err, "delete")
+	b.Close()
+}
+
+func DeleteKeysFromCollection(keyValues tc.KeyValues, bucketName, collectionID, password, hostaddress string) {
+	url := "http://" + bucketName + ":" + password + "@" + hostaddress
+
+	b, err := common.ConnectBucket(url, "default", bucketName)
+	tc.HandleError(err, "bucket")
+
+	for key, _ := range keyValues {
+		err = b.DeleteC(key, collectionID)
+		tc.HandleError(err, "delete")
+	}
+	b.Close()
+}
 
 func GetManifest(bucketName string, serverUserName, serverPassword, hostaddress string) *collections.CollectionManifest {
 	client := &http.Client{}
