@@ -18,13 +18,15 @@ import (
 
 //MutationMeta represents meta information for a KV Mutation
 type MutationMeta struct {
-	bucket    string  //bucket for the mutation
-	vbucket   Vbucket //vbucket
-	vbuuid    Vbuuid  //uuid for vbucket
-	seqno     Seqno   //vbucket sequence number for this mutation
-	firstSnap bool    //belongs to first DCP snapshot
-	projVer   c.ProjectorVersion
-	opaque    uint64
+	bucket     string //bucket for the mutation
+	scope      string
+	collection string
+	vbucket    Vbucket //vbucket
+	vbuuid     Vbuuid  //uuid for vbucket
+	seqno      Seqno   //vbucket sequence number for this mutation
+	firstSnap  bool    //belongs to first DCP snapshot
+	projVer    c.ProjectorVersion
+	opaque     uint64
 }
 
 var mutMetaPool = sync.Pool{New: newMutationMeta}
@@ -49,6 +51,8 @@ func (m *MutationMeta) SetVBId(vbid int) {
 func (m *MutationMeta) Clone() *MutationMeta {
 	meta := NewMutationMeta()
 	meta.bucket = m.bucket
+	meta.scope = m.scope
+	meta.collection = m.collection
 	meta.vbucket = m.vbucket
 	meta.vbuuid = m.vbuuid
 	meta.seqno = m.seqno
@@ -61,6 +65,8 @@ func (m *MutationMeta) Clone() *MutationMeta {
 func (m *MutationMeta) Size() int64 {
 
 	size := int64(len(m.bucket))
+	size += int64(len(m.scope))
+	size += int64(len(m.collection))
 	size += 8 + 4 + 8 + 8 + 8 //fixed cost of members
 	return size
 
@@ -75,6 +81,8 @@ func (m *MutationMeta) Free() {
 func (m MutationMeta) String() string {
 
 	str := fmt.Sprintf("Bucket: %v ", m.bucket)
+	str += fmt.Sprintf("Scope: %v ", m.scope)
+	str += fmt.Sprintf("Collection: %v ", m.collection)
 	str += fmt.Sprintf("Vbucket: %v ", m.vbucket)
 	str += fmt.Sprintf("Vbuuid: %v ", m.vbuuid)
 	str += fmt.Sprintf("Seqno: %v ", m.seqno)
