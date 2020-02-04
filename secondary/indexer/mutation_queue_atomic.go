@@ -81,11 +81,11 @@ type atomicMutationQueue struct {
 	numVbuckets uint16 //num vbuckets for the queue
 	isDestroyed bool
 
-	bucket string
+	keyspaceId string
 }
 
 //NewAtomicMutationQueue allocates a new Atomic Mutation Queue and initializes it
-func NewAtomicMutationQueue(bucket string, numVbuckets uint16, maxMemory *int64,
+func NewAtomicMutationQueue(keyspaceId string, numVbuckets uint16, maxMemory *int64,
 	memUsed *int64, config common.Config) *atomicMutationQueue {
 
 	q := &atomicMutationQueue{head: make([]unsafe.Pointer, numVbuckets),
@@ -100,7 +100,7 @@ func NewAtomicMutationQueue(bucket string, numVbuckets uint16, maxMemory *int64,
 		dequeuePollInterval: config["mutation_queue.dequeuePollInterval"].Uint64(),
 		resultChanSize:      config["mutation_queue.resultChanSize"].Uint64(),
 		minQueueLen:         config["settings.minVbQueueLength"].Uint64(),
-		bucket:              bucket,
+		keyspaceId:          keyspaceId,
 	}
 
 	var x uint16
@@ -194,8 +194,8 @@ func (q *atomicMutationQueue) dequeueUptoSeqno(vbucket Vbucket, seqno Seqno,
 		if totalWait > 30000 {
 			if totalWait%5000 == 0 {
 				logging.Warnf("Indexer::MutationQueue Dequeue Waiting For "+
-					"Seqno %v Bucket %v Vbucket %v for %v ms. Last Dequeue %v.", seqno,
-					q.bucket, vbucket, totalWait, dequeueSeq)
+					"Seqno %v KeyspaceId %v Vbucket %v for %v ms. Last Dequeue %v.", seqno,
+					q.keyspaceId, vbucket, totalWait, dequeueSeq)
 			}
 		}
 		for atomic.LoadPointer(&q.head[vbucket]) !=
@@ -216,8 +216,8 @@ func (q *atomicMutationQueue) dequeueUptoSeqno(vbucket Vbucket, seqno Seqno,
 				datach <- m
 			} else {
 				logging.Warnf("Indexer::MutationQueue Dequeue Aborted For "+
-					"Seqno %v Bucket %v Vbucket %v. Last Dequeue %v Head Seqno %v.", seqno,
-					q.bucket, vbucket, dequeueSeq, m.meta.seqno)
+					"Seqno %v KeyspaceId %v Vbucket %v. Last Dequeue %v Head Seqno %v.", seqno,
+					q.keyspaceId, vbucket, dequeueSeq, m.meta.seqno)
 				close(errch)
 				return
 			}
@@ -349,12 +349,12 @@ func (q *atomicMutationQueue) allocNode(vbucket Vbucket, appch StopChannel) *nod
 			}
 			if totalWait > 300000 { // 5mins
 				logging.Warnf("Indexer::MutationQueue Max Wait Period for Node "+
-					"Alloc Expired %v. Forcing Alloc. Bucket %v Vbucket %v", totalWait, q.bucket, vbucket)
+					"Alloc Expired %v. Forcing Alloc. KeyspaceId %v Vbucket %v", totalWait, q.keyspaceId, vbucket)
 				return &node{}
 			} else if totalWait > 5000 {
 				if totalWait%3000 == 0 {
 					logging.Warnf("Indexer::MutationQueue Waiting for Node "+
-						"Alloc for %v Milliseconds Bucket %v Vbucket %v", totalWait, q.bucket, vbucket)
+						"Alloc for %v Milliseconds KeyspaceId %v Vbucket %v", totalWait, q.keyspaceId, vbucket)
 				}
 			}
 
