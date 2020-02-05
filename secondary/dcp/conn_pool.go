@@ -3,6 +3,7 @@ package couchbase
 import (
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"encoding/binary"
@@ -353,27 +354,37 @@ func GetSeqsAllVbStates(mc *memcached.Client, seqnos []uint64, buf []byte) error
 }
 
 func GetCollectionSeqs(mc *memcached.Client, seqnos []uint64, buf []byte,
-	collectionId uint32) error {
+	collectionId string) error {
 
+	//TODO (Collections): possibly better method of converting hex string to bytes directly
+	cid, err := strconv.ParseUint(collectionId, 16, 32)
+	if err != nil {
+		return err
+	}
 	extras := make([]byte, 8)
-	binary.BigEndian.PutUint32(extras[0:4], 1)           // Only active vbuckets
-	binary.BigEndian.PutUint32(extras[4:], collectionId) // encode collectionId
+	binary.BigEndian.PutUint32(extras[0:4], 1)          // Only active vbuckets
+	binary.BigEndian.PutUint32(extras[4:], uint32(cid)) // encode collectionId
 
-	return GetCollectionSeqsWithExtras(mc, seqnos, buf, collectionId, extras)
+	return GetSeqsWithExtras(mc, seqnos, buf, extras)
 }
 
 func GetCollectionSeqsAllVbStates(mc *memcached.Client, seqnos []uint64, buf []byte,
-	collectionId uint32) error {
+	collectionId string) error {
+
+	cid, err := strconv.ParseUint(collectionId, 16, 32)
+	if err != nil {
+		return err
+	}
 
 	extras := make([]byte, 8)
-	binary.BigEndian.PutUint32(extras[0:4], 0)           // All vb states
-	binary.BigEndian.PutUint32(extras[4:], collectionId) // encode collectionId
+	binary.BigEndian.PutUint32(extras[0:4], 0)          // All vb states
+	binary.BigEndian.PutUint32(extras[4:], uint32(cid)) // encode collectionId
 
-	return GetCollectionSeqsWithExtras(mc, seqnos, buf, collectionId, extras)
+	return GetSeqsWithExtras(mc, seqnos, buf, extras)
 }
 
-func GetCollectionSeqsWithExtras(mc *memcached.Client, seqnos []uint64, buf []byte,
-	collectionId uint32, extras []byte) error {
+func GetSeqsWithExtras(mc *memcached.Client, seqnos []uint64, buf []byte,
+	extras []byte) error {
 
 	res := &transport.MCResponse{}
 	rq := &transport.MCRequest{
