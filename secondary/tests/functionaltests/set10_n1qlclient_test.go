@@ -33,7 +33,6 @@ func TestBufferedScan_BackfillDisabled(t *testing.T) {
 	e := secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
 	FailTestIfError(e, "Error in DropAllSecondaryIndexes", t)
 	kvutility.FlushBucket(bucketName, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
-	time.Sleep(5 * time.Second)
 
 	kvdocs := generateDocs(50000, "users.prod")
 	kvutility.SetKeyValues(kvdocs, bucketName, "", clusterconfig.KVAddress)

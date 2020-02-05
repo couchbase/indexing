@@ -163,7 +163,7 @@ func TestSameIndexNameInTwoBuckets(t *testing.T) {
 	for i := 1; i < numOfBuckets; i++ {
 		kvutility.CreateBucket(bucketNames[i], "sasl", "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256", proxyPorts[i])
 	}
-	time.Sleep(30 * time.Second)
+	time.Sleep(bucketOpWaitDur * time.Second)
 
 	log.Printf("Generating docs and Populating all the buckets")
 	for i := 0; i < numOfBuckets; i++ {
@@ -191,7 +191,7 @@ func TestSameIndexNameInTwoBuckets(t *testing.T) {
 	kvutility.EditBucket(bucketNames[0], "", clusterconfig.Username, clusterconfig.Password, kvaddress, "512")
 	kvutility.DeleteBucket(bucketNames[1], "", clusterconfig.Username, clusterconfig.Password, kvaddress)
 	secondaryindex.RemoveClientForBucket(kvaddress, bucketNames[1])
-	time.Sleep(30 * time.Second) // Sleep after bucket create or delete
+	time.Sleep(bucketOpWaitDur * time.Second) // Sleep after bucket create or delete
 
 	tc.ClearMap(docs)
 	UpdateKVDocs(bucketDocs[0], docs)
@@ -260,7 +260,6 @@ func TestVeryLargeIndexKey(t *testing.T) {
 	tc.ClearMap(docs)
 	kvutility.FlushBucket("default", "", clusterconfig.Username,
 		clusterconfig.Password, clusterconfig.KVAddress)
-	time.Sleep(5 * time.Second)
 
 	log.Printf("TestVeryLargeIndexKey:: Flushed the bucket")
 
@@ -313,7 +312,6 @@ func TestVeryLargeIndexKey(t *testing.T) {
 
 	kvutility.FlushBucket("default", "", clusterconfig.Username,
 		clusterconfig.Password, clusterconfig.KVAddress)
-	time.Sleep(5 * time.Second)
 }
 
 // Index key size = c.TEMP_BUF_SIZE +/- delta
@@ -335,7 +333,6 @@ func TestTempBufScanResult(t *testing.T) {
 	tc.ClearMap(docs)
 	kvutility.FlushBucket("default", "", clusterconfig.Username,
 		clusterconfig.Password, clusterconfig.KVAddress)
-	time.Sleep(5 * time.Second)
 
 	log.Printf("TestTempBufScanResult:: Flushed the bucket")
 
@@ -439,7 +436,6 @@ func TestTempBufScanResult(t *testing.T) {
 
 	kvutility.FlushBucket("default", "", clusterconfig.Username,
 		clusterconfig.Password, clusterconfig.KVAddress)
-	time.Sleep(5 * time.Second)
 }
 
 func recalcStrlen(strlen int, deltaPercent float64) int {

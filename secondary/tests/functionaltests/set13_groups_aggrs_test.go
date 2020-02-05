@@ -7,10 +7,11 @@ import (
 	"gopkg.in/couchbase/gocb.v1"
 
 	//"github.com/couchbase/indexing/secondary/tests/framework/datautility"
-	"github.com/couchbase/query/value"
 	"log"
 	"testing"
 	"time"
+
+	"github.com/couchbase/query/value"
 
 	"github.com/couchbase/indexing/secondary/tests/framework/kvutility"
 	"github.com/couchbase/indexing/secondary/tests/framework/secondaryindex"
@@ -31,7 +32,6 @@ func TestGroupAggrSetup(t *testing.T) {
 	log.Printf("Emptying the default bucket")
 	kvutility.EnableBucketFlush("default", "", clusterconfig.Username, clusterconfig.Password, kvaddress)
 	kvutility.FlushBucket("default", "", clusterconfig.Username, clusterconfig.Password, kvaddress)
-	time.Sleep(5 * time.Second)
 
 	secondaryindex.DropSecondaryIndex(index, bucket, indexManagementAddress)
 

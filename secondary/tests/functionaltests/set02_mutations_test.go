@@ -1,15 +1,16 @@
 package functionaltests
 
 import (
+	"log"
+	"testing"
+	"time"
+
 	c "github.com/couchbase/indexing/secondary/common"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 	"github.com/couchbase/indexing/secondary/tests/framework/datautility"
 	kv "github.com/couchbase/indexing/secondary/tests/framework/kvutility"
 	"github.com/couchbase/indexing/secondary/tests/framework/secondaryindex"
 	tv "github.com/couchbase/indexing/secondary/tests/framework/validation"
-	"log"
-	"testing"
-	"time"
 )
 
 func CreateDocs(num int) {
@@ -102,7 +103,7 @@ func TestRestartIndexer(t *testing.T) {
 	log.Printf("In TestRestartIndexer()")
 
 	tc.KillIndexer()
-	time.Sleep(30 * time.Second)
+	time.Sleep(20 * time.Second)
 
 	var indexName = "index_age"
 	var bucketName = "default"
@@ -148,7 +149,7 @@ func TestRestartProjector(t *testing.T) {
 	log.Printf("In TestRestartProjector()")
 
 	tc.KillProjector()
-	time.Sleep(30 * time.Second)
+	time.Sleep(20 * time.Second)
 
 	var indexName = "index_age"
 	var bucketName = "default"

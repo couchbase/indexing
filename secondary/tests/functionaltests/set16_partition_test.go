@@ -84,8 +84,10 @@ func TestPartitionDistributionWithReplica(t *testing.T) {
 		}
 	}
 
+	waitForStatsUpdate()
+
 	// Scan the partitioned index and its replica
-	scanIndexReplicas(indexName, bucketName, []int{0, 1}, num_scans, num_docs, t)
+	scanIndexReplicas(indexName, bucketName, []int{0, 1}, num_scans, num_docs, num_partition, t)
 }
 
 func getPartnDist(index, bucket string) map[string]map[int]bool {

@@ -84,7 +84,7 @@ func GetIndexStats(indexName, bucketName, serverUserName, serverPassword, hostad
 		stats := GetStatsForIndexerHttpAddress(indexNode, serverUserName, serverPassword)
 		for statKey := range stats {
 			if strings.Contains(statKey, bucketName+":"+indexName) {
-				indexStats[statKey] = stats[statKey]
+				accumulate(indexStats, stats, statKey)
 			}
 		}
 	}
@@ -98,10 +98,66 @@ func GetStats(serverUserName, serverPassword, hostaddress string) map[string]int
 	for _, indexNode := range indexNodes {
 		stats := GetStatsForIndexerHttpAddress(indexNode, serverUserName, serverPassword)
 		for statKey := range stats {
+			accumulate(indexStats, stats, statKey)
+		}
+	}
+	return indexStats
+}
+
+func GetPerPartnStatsForIndexerHttpAddress(indexerHttpAddr, serverUserName, serverPassword string) map[string]interface{} {
+	client := &http.Client{}
+	address := "http://" + indexerHttpAddr + "/stats?partition=true"
+
+	req, _ := http.NewRequest("GET", address, nil)
+	req.SetBasicAuth(serverUserName, serverPassword)
+	req.Header.Add("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
+	resp, err := client.Do(req)
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
+		log.Printf(address)
+		log.Printf("%v", req)
+		log.Printf("%v", resp)
+		log.Printf("Get stats failed\n")
+	}
+	// todo : error out if response is error
+	tc.HandleError(err, "Get Stats")
+	defer resp.Body.Close()
+
+	response := make(map[string]interface{})
+	body, _ := ioutil.ReadAll(resp.Body)
+	err = json.Unmarshal(body, &response)
+	if err != nil {
+		tc.HandleError(err, "Get Bucket :: Unmarshal of response body")
+	}
+
+	return response
+}
+
+func GetPerPartnStats(serverUserName, serverPassword, hostaddress string) map[string]interface{} {
+	indexNodes, _ := GetIndexerNodesHttpAddresses(hostaddress)
+	indexStats := make(map[string]interface{})
+
+	for _, indexNode := range indexNodes {
+		stats := GetPerPartnStatsForIndexerHttpAddress(indexNode, serverUserName, serverPassword)
+		for statKey := range stats {
 			indexStats[statKey] = stats[statKey]
 		}
 	}
 	return indexStats
+}
+
+// Accumulate all stats of type float64 for partitioned indexes
+func accumulate(indexStats, stats map[string]interface{}, statKey string) {
+	if val, ok := indexStats[statKey]; ok {
+		switch val.(type) {
+		case float64:
+			value := val.(float64)
+			value += stats[statKey].(float64)
+			indexStats[statKey] = value
+			return
+		}
+	}
+	indexStats[statKey] = stats[statKey]
 }
 
 func ChangeIndexerSettings(configKey string, configValue interface{}, serverUserName, serverPassword, hostaddress string) error {
@@ -111,7 +167,6 @@ func ChangeIndexerSettings(configKey string, configValue interface{}, serverUser
 		return err
 	}
 	nodes, err := qpclient.Nodes()
-	log.Printf("DBG: ChangeIndexerSettings: nodes = %v", nodes)
 	if err != nil {
 		return err
 	}
@@ -123,11 +178,10 @@ func ChangeIndexerSettings(configKey string, configValue interface{}, serverUser
 	}
 
 	host, sport, _ := net.SplitHostPort(adminurl)
-	log.Printf("DBG: ChangeIndexerSettings: adminurl = %v host %v sport %v", adminurl, host, sport)
 	iport, _ := strconv.Atoi(sport)
 
 	if host == "" || iport == 0 {
-		log.Printf("DBG: ChangeIndexerSettings: Host %v Port %v Nodes %+v", host, iport, nodes)
+		log.Printf("ChangeIndexerSettings: Host %v Port %v Nodes %+v", host, iport, nodes)
 	}
 
 	client := http.Client{}

@@ -3,6 +3,10 @@ package functionaltests
 import (
 	"errors"
 	"fmt"
+	"log"
+	"strconv"
+	"testing"
+
 	c "github.com/couchbase/indexing/secondary/common"
 	qc "github.com/couchbase/indexing/secondary/queryport/client"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
@@ -10,10 +14,6 @@ import (
 	"github.com/couchbase/indexing/secondary/tests/framework/kvutility"
 	"github.com/couchbase/indexing/secondary/tests/framework/secondaryindex"
 	tv "github.com/couchbase/indexing/secondary/tests/framework/validation"
-	"log"
-	"strconv"
-	"testing"
-	"time"
 )
 
 var offset int64
@@ -28,7 +28,6 @@ func TestMultiScanSetup(t *testing.T) {
 	log.Printf("Emptying the default bucket")
 	kvutility.EnableBucketFlush("default", "", clusterconfig.Username, clusterconfig.Password, kvaddress)
 	kvutility.FlushBucket("default", "", clusterconfig.Username, clusterconfig.Password, kvaddress)
-	time.Sleep(5 * time.Second)
 
 	// Populate the bucket now
 	log.Printf("Populating the default bucket")

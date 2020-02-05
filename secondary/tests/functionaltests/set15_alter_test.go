@@ -57,7 +57,9 @@ func TestAlterIndexIncrReplica(t *testing.T) {
 	// Wait for alter index to finish execution
 	waitForIndexActive(bucketName, indexName+" (replica 2)", t)
 
-	scanIndexReplicas(indexName, bucketName, []int{0, 1, 2}, num_scans, num_docs, t)
+	waitForStatsUpdate()
+
+	scanIndexReplicas(indexName, bucketName, []int{0, 1, 2}, num_scans, num_docs, 1, t)
 }
 
 func TestAlterIndexDecrReplica(t *testing.T) {
@@ -104,7 +106,9 @@ func TestAlterIndexDecrReplica(t *testing.T) {
 		t.Fatalf("Replica: 2 is expected to be dropped. But it still exists")
 	}
 
-	scanIndexReplicas(indexName, bucketName, []int{0, 1}, num_scans, num_docs, t)
+	waitForStatsUpdate()
+
+	scanIndexReplicas(indexName, bucketName, []int{0, 1}, num_scans, num_docs, 1, t)
 }
 
 func TestAlterIndexDropReplica(t *testing.T) {
@@ -151,7 +155,9 @@ func TestAlterIndexDropReplica(t *testing.T) {
 		t.Fatalf("Replica: 0 is expected to be dropped. But it still exists")
 	}
 
-	scanIndexReplicas(indexName, bucketName, []int{1, 2}, num_scans, num_docs, t)
+	waitForStatsUpdate()
+
+	scanIndexReplicas(indexName, bucketName, []int{1, 2}, num_scans, num_docs, 1, t)
 }
 
 // Make sure that we reset cluster at the end of all the tests in this file
@@ -214,9 +220,22 @@ func checkIfReplicaExists(index, bucket string, replicaId int) bool {
 	return false
 }
 
+// Indexer life cycle manager broadcasts stats every 5 seconds
+// After the index is built, there exists a possibility
+// that GSI/N1QL client has received stats from some indexer nodes but yet
+// to received from some another indexer nodes. In such a case, only the index
+// for which stats have been received will be picked up for scan and the
+// test fails with zero scan requests for other replicas.
+//
+// To avoid such a failure, sleep for 5 seconds after the index is built
+// so that the client has updated stats from all indexer nodes
+func waitForStatsUpdate() {
+	time.Sleep(5 * time.Second)
+}
+
 // scanIndexReplicas scan's the index and validates if all the replica's of the index are retruning
 // valid results
-func scanIndexReplicas(index, bucket string, replicaIds []int, numScans, numDocs int, t *testing.T) {
+func scanIndexReplicas(index, bucket string, replicaIds []int, numScans, numDocs, numPartitions int, t *testing.T) {
 	// Scan the index num_scans times
 	for i := 0; i < numScans; i++ {
 		scanResults, err := secondaryindex.ScanAll(index, bucket, indexScanAddress, defaultlimit, c.SessionConsistency, nil)
@@ -226,7 +245,8 @@ func scanIndexReplicas(index, bucket string, replicaIds []int, numScans, numDocs
 		}
 	}
 
-	stats := secondaryindex.GetStats(clusterconfig.Username, clusterconfig.Password, kvaddress)
+	// Get parititioned stats for the index from all nodes
+	stats := secondaryindex.GetPerPartnStats(clusterconfig.Username, clusterconfig.Password, kvaddress)
 
 	// construct corresponding replica strings's from replicaIds
 	replicas := make([]string, len(replicaIds))
@@ -238,15 +258,30 @@ func scanIndexReplicas(index, bucket string, replicaIds []int, numScans, numDocs
 		}
 	}
 
-	// For each index, get num_requests, num_scan_errors, num_scan_timeouts
-	num_requests := make([]float64, len(replicas))
+	// For a non-parititioned index, numPartitions is `1` and partnID is `0`
+	// For a partitioned index, partnId ranges from `1` to numPartitions
+	startPartn := 0
+	endPartn := 1
+	if numPartitions > 1 {
+		startPartn = 1
+		endPartn = numPartitions + 1
+	}
+
+	// For each index, get num_requests (per partition), num_scan_errors, num_scan_timeouts
+	num_requests := make([][]float64, len(replicas))
+	for i := 0; i < len(replicas); i++ {
+		num_requests[i] = make([]float64, endPartn)
+	}
 	num_scan_errors := 0.0
 	num_scan_timeouts := 0.0
 
 	for i := 0; i < len(replicas); i++ {
-		num_requests[i] = stats[bucket+":"+index+replicas[i]+":num_requests"].(float64)
-		num_scan_errors += stats[bucket+":"+index+replicas[i]+":num_scan_errors"].(float64)
-		num_scan_timeouts += stats[bucket+":"+index+replicas[i]+":num_scan_timeouts"].(float64)
+		for j := startPartn; j < endPartn; j++ {
+			indexName := fmt.Sprintf("%s:%s %v%s", bucket, index, j, replicas[i])
+			num_requests[i][j] = stats[indexName+":num_requests"].(float64)
+			num_scan_errors += stats[indexName+":num_scan_errors"].(float64)
+			num_scan_timeouts += stats[indexName+":num_scan_timeouts"].(float64)
+		}
 	}
 
 	if num_scan_errors > 0 {
@@ -257,14 +292,18 @@ func scanIndexReplicas(index, bucket string, replicaIds []int, numScans, numDocs
 		t.Fatalf("Expected '0' scan timeouts. Found: %v scan timeouts", num_scan_errors)
 	}
 
-	total_scan_requests := 0.0
-	for i := 0; i < len(replicas); i++ {
-		if num_requests[i] == 0 {
-			t.Fatalf("Zero scan requests seen for index: %v", index+replicas[i])
+	// For each partition (across all replicas), total_scan_requests should match numScans
+	for j := startPartn; j < endPartn; j++ {
+		total_scan_requests := 0.0
+		for i := 0; i < len(replicas); i++ {
+			if num_requests[i][j] == 0 {
+				t.Fatalf("Zero scan requests seen for index: %v, partnId: %v", index+replicas[i], j)
+			}
+			total_scan_requests += num_requests[i][j]
 		}
-		total_scan_requests += num_requests[i]
-	}
-	if total_scan_requests != (float64)(numScans) {
-		t.Fatalf("Total scan requests for all indexes does not match the total scans. Expected: %v, actual: %v", numScans, total_scan_requests)
+
+		if total_scan_requests != (float64)(numScans) {
+			t.Fatalf("Total scan requests for all partitions does not match the total scans. Expected: %v, actual: %v, partitionID: %v", numScans, total_scan_requests, j)
+		}
 	}
 }
