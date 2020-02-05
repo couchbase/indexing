@@ -6,6 +6,7 @@ package memcached
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -159,12 +160,15 @@ func (feed *DcpFeed) DcpGetSeqnos() (map[uint16]uint64, error) {
 
 // DcpRequestStream for a single vbucket.
 func (feed *DcpFeed) DcpRequestStream(vbno, opaqueMSB uint16, flags uint32,
-	vuuid, startSequence, endSequence, snapStart, snapEnd uint64) error {
+	vuuid, startSequence, endSequence, snapStart, snapEnd uint64,
+	manifestUID, scopeId string, collectionIds []string) error {
 
 	respch := make(chan []interface{}, 1)
 	cmd := []interface{}{
 		dfCmdRequestStream, vbno, opaqueMSB, flags, vuuid,
-		startSequence, endSequence, snapStart, snapEnd, respch}
+		startSequence, endSequence, snapStart, snapEnd,
+		manifestUID, scopeId, collectionIds,
+		respch}
 	resp, err := failsafeOp(feed.reqch, respch, cmd, feed.finch)
 	return opError(err, resp, 0)
 }
@@ -267,10 +271,17 @@ loop:
 				flags, vuuid := msg[3].(uint32), msg[4].(uint64)
 				startSequence, endSequence := msg[5].(uint64), msg[6].(uint64)
 				snapStart, snapEnd := msg[7].(uint64), msg[8].(uint64)
-				respch := msg[9].(chan []interface{})
+
+				manifestUID := msg[9].(string)
+				scopeId := msg[10].(string)
+				collectionIds := msg[11].([]string)
+
 				err := feed.doDcpRequestStream(
 					vbno, opaqueMSB, flags, vuuid,
-					startSequence, endSequence, snapStart, snapEnd)
+					startSequence, endSequence, snapStart, snapEnd,
+					manifestUID, scopeId, collectionIds)
+
+				respch := msg[12].(chan []interface{})
 				respch <- []interface{}{err}
 
 			case dfCmdCloseStream:
@@ -747,7 +758,8 @@ func (feed *DcpFeed) doDcpOpen(
 
 func (feed *DcpFeed) doDcpRequestStream(
 	vbno, opaqueMSB uint16, flags uint32,
-	vuuid, startSequence, endSequence, snapStart, snapEnd uint64) error {
+	vuuid, startSequence, endSequence, snapStart, snapEnd uint64,
+	manifestUID, scopeId string, collectionIds []string) error {
 
 	rq := &transport.MCRequest{
 		Opcode:  transport.DCP_STREAMREQ,
@@ -765,6 +777,24 @@ func (feed *DcpFeed) doDcpRequestStream(
 
 	prefix := feed.logPrefix
 
+	requestValue := &StreamRequestValue{}
+
+	if feed.collectionsAware {
+		if scopeId != "" || len(collectionIds) > 0 {
+			requestValue.ManifestUID = manifestUID
+			requestValue.ScopeID = scopeId
+			requestValue.CollectionIDs = collectionIds
+
+			body, _ := json.Marshal(requestValue)
+			rq.Body = body
+		} else {
+			// ScopeId being empty and no collectionId specified will
+			// open the stream for entire bucket. For such a
+			// scenario, it is not required to specify anything
+			// in request body
+		}
+	}
+
 	// Here, timeout can occur due to slow memcached. The error handling
 	// in the projector feed takes care of cleanning up of the connections.
 	// After closing connections, pressure on memcached may get eased, and
@@ -779,11 +809,12 @@ func (feed *DcpFeed) doDcpRequestStream(
 	}
 	feed.stats.LastMsgSend.Set(time.Now().UnixNano())
 	stream := &DcpStream{
-		AppOpaque: opaqueMSB,
-		Vbucket:   vbno,
-		Vbuuid:    vuuid,
-		StartSeq:  startSequence,
-		EndSeq:    endSequence,
+		AppOpaque:    opaqueMSB,
+		Vbucket:      vbno,
+		Vbuuid:       vuuid,
+		StartSeq:     startSequence,
+		EndSeq:       endSequence,
+		RequestValue: requestValue,
 	}
 	feed.vbstreams[vbno] = stream
 	return nil
@@ -907,7 +938,15 @@ func (feed *DcpFeed) handleStreamRequest(
 		stream.connected = true
 		fmsg := "%v ##%x STREAMREQ(%d) successful\n"
 		logging.Debugf(fmsg, prefix, stream.AppOpaque, vb)
-
+	case (res.Status == transport.UNKNOWN_COLLECTION) ||
+		(res.Status == transport.MANIFEST_AHEAD) ||
+		(res.Status == transport.UNKNOWN_SCOPE) ||
+		(res.Status == transport.EINVAL): // EINVAL can be returned when the StreamRequestValue is invalid
+		event.Status = res.Status
+		event.VBucket = vb
+		fmsg := "%v ##%x STREAMREQ(%v) with status: %v, stream request value: %+v\n"
+		logging.Errorf(fmsg, prefix, stream.AppOpaque, vb, res.Status, stream.RequestValue)
+		delete(feed.vbstreams, vb)
 	default:
 		event.Status = res.Status
 		event.VBucket = vb
@@ -968,19 +1007,27 @@ func vbOpaque(opq32 uint32) uint16 {
 	return uint16(opq32 & 0xFFFF)
 }
 
+type StreamRequestValue struct {
+	ManifestUID   string   `json:"uid,omitempty"`
+	CollectionIDs []string `json:"collections,omitempty"`
+	ScopeID       string   `json:"scope,omitempty"`
+	StreamID      string   `json:"sid,omitempty"`
+}
+
 // DcpStream is per stream data structure over an DCP Connection.
 type DcpStream struct {
-	AppOpaque   uint16
-	CloseOpaque uint16
-	Vbucket     uint16 // Vbucket id
-	Vbuuid      uint64 // vbucket uuid
-	Seqno       uint64
-	StartSeq    uint64 // start sequence number
-	EndSeq      uint64 // end sequence number
-	Snapstart   uint64
-	Snapend     uint64
-	LastSeen    int64 // UnixNano value of last seen
-	connected   bool
+	AppOpaque    uint16
+	CloseOpaque  uint16
+	Vbucket      uint16 // Vbucket id
+	Vbuuid       uint64 // vbucket uuid
+	Seqno        uint64
+	StartSeq     uint64 // start sequence number
+	EndSeq       uint64 // end sequence number
+	Snapstart    uint64
+	Snapend      uint64
+	LastSeen     int64 // UnixNano value of last seen
+	connected    bool
+	RequestValue *StreamRequestValue
 }
 
 // DcpEvent memcached events for DCP streams.
