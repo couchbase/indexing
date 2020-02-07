@@ -1207,9 +1207,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.plasma.mainIndex.evictRunInterval": ConfigValue{
-		1,
+		100,
 		"Minimum elapsed time between each run for swapper to sweep pages (in millisecond)",
-		1,
+		100,
 		false, // mutable
 		false, // case-insensitive
 	},
@@ -1298,9 +1298,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.plasma.backIndex.evictRunInterval": ConfigValue{
-		1,
+		100,
 		"Minimum elapsed time between each run for swapper to sweep pages (in millisecond)",
-		1,
+		100,
 		false, // mutable
 		false, // case-insensitive
 	},
