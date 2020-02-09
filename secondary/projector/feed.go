@@ -1511,6 +1511,12 @@ func (feed *Feed) shutdown(opaque uint16) error {
 	}
 	// cleanup
 	close(feed.finch)
+
+	// Update projector stats to remove the stats belonging to this feed
+	// As finch is closed, GetStats() would return nil value and UpdateStats()
+	// would delete the feed related stats from feed stats
+	feed.projector.UpdateStats(feed.topic, feed)
+
 	logging.Infof("%v ##%x feed ... stopped\n", feed.logPrefix, feed.opaque)
 	return nil
 }

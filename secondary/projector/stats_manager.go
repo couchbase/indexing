@@ -258,7 +258,7 @@ func (sm *statsManager) logger() {
 			for _, feedStats := range ps.feedStats {
 				// For each bucket
 				for _, bucketStats := range feedStats.bucketStats {
-
+					kvdataClosed := false
 					if logStats {
 						for key, value := range bucketStats.dcpStats {
 							switch value.(type) {
@@ -285,6 +285,7 @@ func (sm *statsManager) logger() {
 									stats, _ := val.String()
 									logging.Infof("%v stats: %v", key, stats)
 								} else {
+									kvdataClosed = true
 									logging.Tracef("%v closed", key)
 								}
 							default:
@@ -297,7 +298,10 @@ func (sm *statsManager) logger() {
 							// Get the type of any worker
 							switch (value[0]).(type) {
 							case *WorkerStats:
-								logging.Infof("%v stats: %v", key, Accmulate(value))
+								val := (value[0]).(*WorkerStats)
+								if !val.IsClosed() {
+									logging.Infof("%v stats: %v", key, Accmulate(value))
+								}
 							default:
 								logging.Errorf("Unknown worker stats type for %v", key)
 								continue
@@ -325,7 +329,7 @@ func (sm *statsManager) logger() {
 					}
 
 					// Log eval stats for every evalStatsLogInterval
-					if logEvalStats {
+					if logEvalStats && !kvdataClosed {
 						// As of this commit, only IndexEvaluatorStats are supported
 						logPrefix := fmt.Sprintf("EVAL[%v #%v] ##%x ", bucketStats.bucket, bucketStats.topic, bucketStats.opaque)
 						var evalStats string
