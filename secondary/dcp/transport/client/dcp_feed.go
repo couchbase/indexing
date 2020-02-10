@@ -422,6 +422,15 @@ func (feed *DcpFeed) handlePacket(
 		fmsg := "%v ##%x opcode DCP_ADDSTREAM not implemented\n"
 		logging.Fatalf(fmsg, prefix, stream.AppOpaque)
 
+	case transport.DCP_SYSTEM_EVENT:
+		// TODO (Collections): Add stats for DCP system events
+		event = newDcpEvent(pkt, stream)
+		stream.Seqno = event.Seqno
+		feed.handleSystemEvent(pkt, event, stream)
+		sendAck = true
+		fmsg := "%v ##%x DCP_SYSTEM_EVENT for vb %d, eventType: %v, manifestUID: %s, scopeId: %s, collectionId: %x\n"
+		logging.Debugf(fmsg, prefix, stream.AppOpaque, vb, event.EventType, event.ManifestUID, event.ScopeID, event.CollectionID)
+
 	default:
 		fmsg := "%v opcode %v not known for vbucket %d\n"
 		logging.Warnf(fmsg, prefix, pkt.Opcode, vb)
@@ -432,6 +441,43 @@ func (feed *DcpFeed) handlePacket(
 	}
 	feed.sendBufferAck(sendAck, uint32(bytes))
 	return "ok"
+}
+
+func (feed *DcpFeed) handleSystemEvent(pkt *transport.MCRequest, dcpEvent *DcpEvent, stream *DcpStream) {
+	extras := pkt.Extras
+	dcpEvent.Seqno = binary.BigEndian.Uint64(extras[0:8])
+	dcpEvent.ManifestUID = make([]byte, 8) // 8 byte Manifest UID
+	copy(dcpEvent.ManifestUID, pkt.Body[0:8])
+
+	systemEventType := transport.CollectionEvent(binary.BigEndian.Uint32(extras[8:12]))
+	dcpEvent.EventType = systemEventType
+	version := uint8(extras[12])
+
+	switch systemEventType {
+
+	case transport.COLLECTION_CREATE:
+		dcpEvent.ScopeID = make([]byte, 4) // 4 byte ScopeID
+		copy(dcpEvent.ScopeID, pkt.Body[8:12])
+		dcpEvent.CollectionID = binary.BigEndian.Uint32(pkt.Body[12:16])
+		if version == 1 { // Capture max ttl value of the collection if version is "1"
+			dcpEvent.MaxTTL = binary.BigEndian.Uint32(pkt.Body[16:20])
+		}
+
+	case transport.COLLECTION_DROP, transport.COLLECTION_FLUSH:
+		dcpEvent.ScopeID = make([]byte, 4) // 4 byte ScopeID
+		copy(dcpEvent.ScopeID, pkt.Body[8:12])
+		dcpEvent.CollectionID = binary.BigEndian.Uint32(pkt.Body[12:16])
+
+	case transport.SCOPE_CREATE, transport.SCOPE_DROP:
+		dcpEvent.ScopeID = make([]byte, 4) // 4 byte ScopeID
+		copy(dcpEvent.ScopeID, pkt.Body[8:12])
+
+	case transport.COLLECTION_CHANGED:
+		dcpEvent.CollectionID = binary.BigEndian.Uint32(pkt.Body[8:12])
+
+	default:
+		logging.Fatalf("%v ##%x Unknown system event type: %v", feed.logPrefix, stream.AppOpaque, systemEventType)
+	}
 }
 
 func (feed *DcpFeed) doDcpGetFailoverLog(
@@ -1053,6 +1099,15 @@ type DcpEvent struct {
 	SnapstartSeq uint64 // start sequence number of this snapshot
 	SnapendSeq   uint64 // End sequence number of the snapshot
 	SnapshotType uint32 // 0: disk 1: memory
+	// Collection
+	ManifestUID  []byte // For DCP_SYSTEM_EVENT
+	ScopeID      []byte // For DCP_SYSTEM_EVENT
+	CollectionID uint32 // For DCP_SYSTEM_EVENT, Mutations
+
+	EventType transport.CollectionEvent // For DCP_SYSTEM_EVENT type
+	// For DCP_SYSTEM_EVENT, MaxTTL is maximum ttl value of the collection
+	// As of v7.0, this value is not propagated down-stream (i.e. to indexer)
+	MaxTTL uint32
 	// failoverlog
 	FailoverLog *FailoverLog // Failover log containing vvuid and sequnce number
 	Error       error        // Error value in case of a failure

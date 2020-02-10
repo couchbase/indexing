@@ -134,6 +134,38 @@ func (v *Vbucket) makeSnapshotData(
 	return nil
 }
 
+var seFormat = "%v ##%x received system event %v %v %v (type %v)\n"
+
+func (v *Vbucket) makeSystemEventData(m *mc.DcpEvent, engines map[uint64]*Engine) (data interface{}) {
+	defer func() {
+		if r := recover(); r != nil {
+			fmsg := "%v ##%x system event crashed: %v\n"
+			logging.Fatalf(fmsg, v.logPrefix, v.opaque, r)
+			logging.Errorf("%s", logging.StackTrace())
+
+		} else if data == nil {
+			fmsg := "%v ##%x SystemEvent NOT PUBLISHED\n"
+			logging.Errorf(fmsg, v.logPrefix, m.Opaque)
+
+		} else {
+			manifestUID, scopeID, collectionID, eventType := m.ManifestUID, m.ScopeID, m.CollectionID, m.EventType
+			logging.Debugf(seFormat, v.logPrefix, m.Opaque, manifestUID, scopeID, collectionID, eventType)
+		}
+	}()
+
+	if len(engines) == 0 {
+		return nil
+	}
+	// using the first engine that is capable of it.
+	for _, engine := range engines {
+		data := engine.SystemEventData(m, v.vbno, v.vbuuid, v.seqno, v.opaque2)
+		if data != nil {
+			return data
+		}
+	}
+	return nil
+}
+
 func (v *Vbucket) makeStreamEndData(
 	engines map[uint64]*Engine) (data interface{}) {
 
