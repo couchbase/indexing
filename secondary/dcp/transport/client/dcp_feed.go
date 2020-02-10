@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/couchbase/indexing/secondary/common/collections"
 	"io"
 	"strconv"
 	"strings"
@@ -855,12 +856,13 @@ func (feed *DcpFeed) doDcpRequestStream(
 	}
 	feed.stats.LastMsgSend.Set(time.Now().UnixNano())
 	stream := &DcpStream{
-		AppOpaque:    opaqueMSB,
-		Vbucket:      vbno,
-		Vbuuid:       vuuid,
-		StartSeq:     startSequence,
-		EndSeq:       endSequence,
-		RequestValue: requestValue,
+		AppOpaque:        opaqueMSB,
+		Vbucket:          vbno,
+		Vbuuid:           vuuid,
+		StartSeq:         startSequence,
+		EndSeq:           endSequence,
+		CollectionsAware: feed.collectionsAware,
+		RequestValue:     requestValue,
 	}
 	feed.vbstreams[vbno] = stream
 	return nil
@@ -1062,18 +1064,19 @@ type StreamRequestValue struct {
 
 // DcpStream is per stream data structure over an DCP Connection.
 type DcpStream struct {
-	AppOpaque    uint16
-	CloseOpaque  uint16
-	Vbucket      uint16 // Vbucket id
-	Vbuuid       uint64 // vbucket uuid
-	Seqno        uint64
-	StartSeq     uint64 // start sequence number
-	EndSeq       uint64 // end sequence number
-	Snapstart    uint64
-	Snapend      uint64
-	LastSeen     int64 // UnixNano value of last seen
-	connected    bool
-	RequestValue *StreamRequestValue
+	AppOpaque        uint16
+	CloseOpaque      uint16
+	Vbucket          uint16 // Vbucket id
+	Vbuuid           uint64 // vbucket uuid
+	Seqno            uint64
+	StartSeq         uint64 // start sequence number
+	EndSeq           uint64 // end sequence number
+	Snapstart        uint64
+	Snapend          uint64
+	LastSeen         int64 // UnixNano value of last seen
+	connected        bool
+	CollectionsAware bool
+	RequestValue     *StreamRequestValue
 }
 
 // DcpEvent memcached events for DCP streams.
@@ -1136,8 +1139,19 @@ func newDcpEvent(rq *transport.MCRequest, stream *DcpStream) (event *DcpEvent) {
 		VBuuid:   stream.Vbuuid,
 		Ctime:    time.Now().UnixNano(),
 	}
-	event.Key = make([]byte, len(rq.Key))
-	copy(event.Key, rq.Key)
+
+	mutKey := rq.Key
+	// For a collection aware stream, dcp mutation, deletion, expiration
+	// messages will carry collectionId as a part of docid (i.e. mutation key).
+	// Extract collection id from mutation key using LEB128 decode method
+	if stream.CollectionsAware {
+		switch event.Opcode {
+		case transport.DCP_MUTATION, transport.DCP_DELETION, transport.DCP_EXPIRATION:
+			mutKey, event.CollectionID = collections.LEB128Dec(rq.Key)
+		}
+	}
+	event.Key = make([]byte, len(mutKey))
+	copy(event.Key, mutKey)
 
 	// 16 LSBits are used by client library to encode vbucket number.
 	// 16 MSBits are left for application to multiplex on opaque value.
