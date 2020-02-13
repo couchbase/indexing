@@ -11,6 +11,7 @@ import "io/ioutil"
 import "io"
 import "log"
 import "fmt"
+import "errors"
 
 import sifw "github.com/couchbase/indexing/secondary/tests/framework/secondaryindex"
 import du "github.com/couchbase/indexing/secondary/tests/framework/datautility"
@@ -18,6 +19,9 @@ import tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 
 import tv "github.com/couchbase/indexing/secondary/tests/framework/validation"
 import "github.com/couchbase/indexing/secondary/tests/framework/kvutility"
+
+import "github.com/couchbase/indexing/secondary/common"
+import commonjson "github.com/couchbase/indexing/secondary/common/json"
 
 func TestRestfulAPI(t *testing.T) {
 	log.Printf("In TestRestfulAPI()")
@@ -94,6 +98,180 @@ func TestRestfulAPI(t *testing.T) {
 	err = restful_stats(indexes)
 	FailTestIfError(err, "Error in restful_stats", t)
 	log.Println()
+}
+
+func TestStatIndexInstFilter(t *testing.T) {
+
+	var err error
+	// Create 2 indexes
+	log.Println("CREATE INDEX: statIdx1")
+	dst := restful_clonebody(reqcreate)
+	dst["name"] = "statIdx1"
+	_, err = postCreate(dst)
+	FailTestIfError(err, "Error in TestStatIndexInstFilter CREATE INDEX: statIdx1", t)
+
+	log.Println("CREATE INDEX: statIdx2")
+	dst = restful_clonebody(reqcreate)
+	dst["name"] = "statIdx2"
+	_, err = postCreate(dst)
+	FailTestIfError(err, "Error in TestStatIndexInstFilter CREATE INDEX: statIdx2", t)
+
+	// Get Index InstIds using getIndexStatus
+	var instId common.IndexInstId
+	instId, err = getInstId(reqcreate["bucket"].(string), "statIdx2")
+	log.Printf("Instance Id for statIdx2 is %v, %T", instId, instId)
+	FailTestIfError(err, "Error in TestStatIndexInstFilter getInstId", t)
+
+	// Get stats for statIdx2
+	var result map[string]interface{}
+	result, err = getStatsForIndexInstances([]common.IndexInstId{instId})
+	FailTestIfError(err, "Error in TestStatIndexInstFilter getStatsForIndexInstances", t)
+
+	// Verify stats with index inst filter
+	includePrefix := common.GetStatsPrefix(reqcreate["bucket"].(string), "_default", "_default", "statIdx2", 0, 0, false)
+	excludePrefix := common.GetStatsPrefix(reqcreate["bucket"].(string), "_default", "_default", "statIdx1", 0, 0, false)
+	ok := verifyStatsWithIndexInstFilter([]string{includePrefix}, []string{excludePrefix}, result)
+
+	if !ok {
+		msg := fmt.Sprintf("Stats verification for index inst filter failed include = %v, " +
+			"exclude = %v, stats = %v", includePrefix, excludePrefix, result)
+		err = errors.New(msg)
+		FailTestIfError(err, "Error in TestStatIndexInstFilter verifyStatsWithIndexInstFilter", t)
+	}
+}
+
+func verifyStatsWithIndexInstFilter(include, exclude []string, stats map[string]interface{}) bool {
+	// Verify a couple of indexer stats
+	var ok bool
+	if _, ok = stats["memory_rss"]; !ok {
+		log.Printf("Error: Indexer stat memory_rss not found")
+		return false
+	}
+
+	if _, ok = stats["indexer_state"]; !ok {
+		log.Printf("Error: Indexer stat indexer_state not found")
+		return false
+	}
+
+	// Verify a few include stats
+	var statsToVerify [4]string = [4]string{"num_docs_pending", "avg_scan_latency", "data_size", "frag_percent"}
+
+	var stat, incl string
+	for _, incl = range include {
+		for _, stat = range statsToVerify {
+			if _, ok = stats[fmt.Sprintf("%s%s", incl, stat)]; !ok {
+				log.Printf("Error: Include stat %v not found", fmt.Sprintf("%s%s", incl, stat))
+				return false
+			}
+		}
+	}
+
+	// Verify exclude
+	for k, _ := range stats {
+		for _, e := range exclude {
+			if strings.HasPrefix(k, e) {
+				log.Printf("Error: Exclude stat found %v", k)
+				return false
+			}
+		}
+	}
+
+	return true
+}
+
+func getStatsForIndexInstances(instIds []common.IndexInstId) (map[string]interface{}, error) {
+	url, err := makeurl("/stats")
+	if err != nil {
+		return nil, err
+	}
+
+	spec := &common.StatsIndexSpec{
+		Instances: instIds,
+	}
+
+	var buf []byte
+	buf, err = commonjson.Marshal(spec)
+	if err != nil {
+		return nil, err
+	}
+
+	var resp *http.Response
+	resp, err = http.Post(url, "application/json", bytes.NewBuffer(buf))
+	if err != nil {
+		return nil, err
+	}
+
+	var respbody []byte
+	result := make(map[string]interface{})
+	respbody, err = ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	err = commonjson.Unmarshal(respbody, &result)
+	if err != nil {
+		return nil, err
+	}
+
+	return result, nil
+}
+
+func getInstId(bucket, name string) (common.IndexInstId, error) {
+	url, err := makeurl("/getIndexStatus?getAll=true")
+	if err != nil {
+		return common.IndexInstId(0), err
+	}
+
+	var resp *http.Response
+	resp, err = http.Get(url)
+	if err != nil {
+		return common.IndexInstId(0), err
+	}
+
+	var respbody []byte
+	respbody, err = ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return common.IndexInstId(0), err
+	}
+
+	var st tc.IndexStatusResponse
+	err = commonjson.Unmarshal(respbody, &st)
+	if err != nil {
+		return common.IndexInstId(0), err
+	}
+
+	for _, idx := range st.Status {
+		if idx.Name == name && idx.Bucket == bucket {
+			return idx.InstId, nil
+		}
+	}
+
+	return common.IndexInstId(0), errors.New("Index not found in getIndexStatus")
+}
+
+func postCreate(dst map[string]interface{}) (string, error) {
+	url, err := makeurl("/internal/indexes?create=true")
+	if err != nil {
+		return "", err
+	}
+	data, _ := json.Marshal(dst)
+	resp, err := http.Post(url, "application/json", bytes.NewBuffer(data))
+	if err != nil {
+		return "", err
+	}
+	log.Printf("status : %v\n", resp.Status)
+	if restful_checkstatus(resp.Status) == true {
+		return "", fmt.Errorf("TestStatIndexInstFilter() status: %v", resp.Status)
+	}
+
+	var result map[string]interface{}
+	respbody, _ := ioutil.ReadAll(resp.Body)
+	err = json.Unmarshal(respbody, &result)
+	log.Println(string(respbody), err)
+	if err != nil {
+		return "", err
+	}
+	return result["id"].(string), nil
 }
 
 func makeurl(path string) (string, error) {
@@ -259,30 +437,7 @@ func restful_badcreates() error {
 func restful_create_andbuild() ([]string, error) {
 	ids := make([]string, 0)
 
-	post := func(dst map[string]interface{}) (string, error) {
-		url, err := makeurl("/internal/indexes?create=true")
-		if err != nil {
-			return "", err
-		}
-		data, _ := json.Marshal(dst)
-		resp, err := http.Post(url, "application/json", bytes.NewBuffer(data))
-		if err != nil {
-			return "", err
-		}
-		log.Printf("status : %v\n", resp.Status)
-		if restful_checkstatus(resp.Status) == true {
-			return "", fmt.Errorf("restful_getall() status: %v", resp.Status)
-		}
-
-		var result map[string]interface{}
-		respbody, _ := ioutil.ReadAll(resp.Body)
-		err = json.Unmarshal(respbody, &result)
-		log.Println(string(respbody), err)
-		if err != nil {
-			return "", err
-		}
-		return result["id"].(string), nil
-	}
+	post := postCreate
 
 	log.Println("CREATE INDEX: idx1")
 	dst := restful_clonebody(reqcreate)

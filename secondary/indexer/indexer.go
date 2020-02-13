@@ -1484,8 +1484,9 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 
 	partitions := indexInst.Pc.GetAllPartitions()
 	for _, partnDefn := range partitions {
-		idx.stats.AddPartition(indexInst.InstId, indexInst.Defn.Bucket, indexInst.Defn.Name,
-			indexInst.ReplicaId, partnDefn.GetPartitionId(), indexInst.Defn.IsArrayIndex)
+		idx.stats.AddPartition(indexInst.InstId, indexInst.Defn.Bucket, indexInst.Defn.Scope,
+			indexInst.Defn.Collection, indexInst.Defn.Name, indexInst.ReplicaId,
+			partnDefn.GetPartitionId(), indexInst.Defn.IsArrayIndex)
 	}
 
 	//allocate partition/slice
@@ -5651,12 +5652,14 @@ func (idx *indexer) initFromPersistedState() error {
 	for _, inst := range idx.indexInstMap {
 		if inst.State != common.INDEX_STATE_DELETED {
 			for _, partnDefn := range inst.Pc.GetAllPartitions() {
-				idx.stats.AddPartition(inst.InstId, inst.Defn.Bucket, inst.Defn.Name,
-					inst.ReplicaId, partnDefn.GetPartitionId(), inst.Defn.IsArrayIndex)
+				idx.stats.AddPartition(inst.InstId, inst.Defn.Bucket, inst.Defn.Scope,
+					inst.Defn.Collection, inst.Defn.Name, inst.ReplicaId, partnDefn.GetPartitionId(),
+					inst.Defn.IsArrayIndex)
 
 				// Since bootstrapStats does not have index stats yet, initialize index and partition stats
-				bootstrapStats.AddPartition(inst.InstId, inst.Defn.Bucket, inst.Defn.Name,
-					inst.ReplicaId, partnDefn.GetPartitionId(), inst.Defn.IsArrayIndex)
+				bootstrapStats.AddPartition(inst.InstId, inst.Defn.Bucket, inst.Defn.Scope,
+					inst.Defn.Collection, inst.Defn.Name, inst.ReplicaId, partnDefn.GetPartitionId(),
+					inst.Defn.IsArrayIndex)
 			}
 		}
 	}
@@ -5768,7 +5771,8 @@ func (idx *indexer) broadcastBootstrapStats(stats *IndexerStats,
 	idxStats.numDocsQueued.Set(math.MaxInt64)
 	idxStats.lastRollbackTime.Set(time.Now().UnixNano())
 	idxStats.progressStatTime.Set(time.Now().UnixNano())
-	notifyStats := stats.GetStats(false, false, false)
+	spec := NewStatsSpec(false, false, false, false, nil)
+	notifyStats := stats.GetStats(spec)
 	idx.internalRecvCh <- &MsgStatsRequest{
 		mType: INDEX_STATS_BROADCAST,
 		stats: notifyStats,

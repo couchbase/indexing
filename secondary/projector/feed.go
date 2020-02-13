@@ -46,18 +46,18 @@ type Feed struct {
 	// reqTs, book-keeping on outstanding request posted to feeder.
 	// vbucket entry from this timestamp is deleted only when a SUCCESS,
 	// ROLLBACK or ERROR response is received from feeder.
-	reqTss map[string]*protobuf.TsVbuuid // bucket -> TsVbuuid
+	reqTss map[string]*protobuf.TsVbuuid // keyspaceId -> TsVbuuid
 	// actTs, once StreamBegin SUCCESS response is got back from DCP,
 	// vbucket entry is moved here.
-	actTss map[string]*protobuf.TsVbuuid // bucket -> TsVbuuid
+	actTss map[string]*protobuf.TsVbuuid // keyspaceId -> TsVbuuid
 	// rollTs, when StreamBegin ROLLBACK response is got back from DCP,
 	// vbucket entry is moved here.
-	rollTss map[string]*protobuf.TsVbuuid // bucket -> TsVbuuid
+	rollTss map[string]*protobuf.TsVbuuid // keyspaceId -> TsVbuuid
 
 	feeders map[string]BucketFeeder // keyspaceId -> BucketFeeder{}
 	// downstream
-	kvdata    map[string]*KVData            // bucket -> kvdata
-	engines   map[string]map[uint64]*Engine // bucket -> uuid -> engine
+	kvdata    map[string]*KVData            // keyspaceId -> kvdata
+	engines   map[string]map[uint64]*Engine // keyspaceId -> uuid -> engine
 	endpoints map[string]c.RouterEndpoint
 	// genServer channel
 	reqch  chan []interface{}
@@ -375,32 +375,32 @@ func (feed *Feed) Ping() error {
 }
 
 type controlStreamRequest struct {
-	bucket string
-	opaque uint16
-	status mcd.Status
-	vbno   uint16
-	vbuuid uint64
-	seqno  uint64 // also doubles as rollback-seqno
-	uuid   uint64 // UUID of the kvdata that initiated this mesasge transfer
+	keyspaceId string
+	opaque     uint16
+	status     mcd.Status
+	vbno       uint16
+	vbuuid     uint64
+	seqno      uint64 // also doubles as rollback-seqno
+	uuid       uint64 // UUID of the kvdata that initiated this mesasge transfer
 }
 
 func (v *controlStreamRequest) Repr() string {
 	return fmt.Sprintf("{controlStreamRequest, %v, %s, %d, %x, %d, ##%x, %v}",
-		v.status, v.bucket, v.vbno, v.vbuuid, v.seqno, v.opaque, v.uuid)
+		v.status, v.keyspaceId, v.vbno, v.vbuuid, v.seqno, v.opaque, v.uuid)
 }
 
 // PostStreamRequest feedback from data-path.
 // Asynchronous call.
-func (feed *Feed) PostStreamRequest(bucket string, m *mc.DcpEvent, kvdataUUID uint64) {
+func (feed *Feed) PostStreamRequest(keyspaceId string, m *mc.DcpEvent, kvdataUUID uint64) {
 	var respch chan []interface{}
 	cmd := &controlStreamRequest{
-		bucket: bucket,
-		opaque: m.Opaque,
-		status: m.Status,
-		vbno:   m.VBucket,
-		vbuuid: m.VBuuid,
-		seqno:  m.Seqno, // can also be roll-back seqno, based on status
-		uuid:   kvdataUUID,
+		keyspaceId: keyspaceId,
+		opaque:     m.Opaque,
+		status:     m.Status,
+		vbno:       m.VBucket,
+		vbuuid:     m.VBuuid,
+		seqno:      m.Seqno, // can also be roll-back seqno, based on status
+		uuid:       kvdataUUID,
 	}
 	fmsg := "%v ##%x backch %T %v\n"
 	logging.Infof(fmsg, feed.logPrefix, m.Opaque, cmd, cmd.Repr())
@@ -414,28 +414,28 @@ func (feed *Feed) PostStreamRequest(bucket string, m *mc.DcpEvent, kvdataUUID ui
 }
 
 type controlStreamEnd struct {
-	bucket string
-	opaque uint16
-	status mcd.Status
-	vbno   uint16
-	uuid   uint64 // UUID of the kvdata that initiated this mesasge transfer
+	keyspaceId string
+	opaque     uint16
+	status     mcd.Status
+	vbno       uint16
+	uuid       uint64 // UUID of the kvdata that initiated this mesasge transfer
 }
 
 func (v *controlStreamEnd) Repr() string {
 	return fmt.Sprintf("{controlStreamEnd, %v, %s, %d, ##%x, %v}",
-		v.status, v.bucket, v.vbno, v.opaque, v.uuid)
+		v.status, v.keyspaceId, v.vbno, v.opaque, v.uuid)
 }
 
 // PostStreamEnd feedback from data-path.
 // Asynchronous call.
-func (feed *Feed) PostStreamEnd(bucket string, m *mc.DcpEvent, kvdataUUID uint64) {
+func (feed *Feed) PostStreamEnd(keyspaceId string, m *mc.DcpEvent, kvdataUUID uint64) {
 	var respch chan []interface{}
 	cmd := &controlStreamEnd{
-		bucket: bucket,
-		opaque: m.Opaque,
-		status: m.Status,
-		vbno:   m.VBucket,
-		uuid:   kvdataUUID,
+		keyspaceId: keyspaceId,
+		opaque:     m.Opaque,
+		status:     m.Status,
+		vbno:       m.VBucket,
+		uuid:       kvdataUUID,
 	}
 	fmsg := "%v ##%x backch %T %v\n"
 	logging.Infof(fmsg, feed.logPrefix, m.Opaque, cmd, cmd.Repr())
@@ -449,19 +449,19 @@ func (feed *Feed) PostStreamEnd(bucket string, m *mc.DcpEvent, kvdataUUID uint64
 }
 
 type controlFinKVData struct {
-	bucket string
-	uuid   uint64 // UUID of the kvdata that initiated this mesasge transfer
+	keyspaceId string
+	uuid       uint64 // UUID of the kvdata that initiated this mesasge transfer
 }
 
 func (v *controlFinKVData) Repr() string {
-	return fmt.Sprintf("{controlFinKVData, %s, %v}", v.bucket, v.uuid)
+	return fmt.Sprintf("{controlFinKVData, %s, %v}", v.keyspaceId, v.uuid)
 }
 
 // PostFinKVdata feedback from data-path.
 // Asynchronous call.
-func (feed *Feed) PostFinKVdata(bucket string, kvdataUUID uint64) {
+func (feed *Feed) PostFinKVdata(keyspaceId string, kvdataUUID uint64) {
 	var respch chan []interface{}
-	cmd := &controlFinKVData{bucket: bucket, uuid: kvdataUUID}
+	cmd := &controlFinKVData{keyspaceId: keyspaceId, uuid: kvdataUUID}
 	fmsg := "%v backch %T %v\n"
 	logging.Infof(fmsg, feed.logPrefix, cmd, cmd.Repr())
 	err := c.FailsafeOpNoblock(feed.backch, []interface{}{cmd}, feed.finch)
@@ -522,21 +522,22 @@ loop:
 				// As uuid's would be different for different instances of kvdata, we compare the
 				// uuid's before actually trying to process the STREAM_BEGIN messages. If there is
 				// a mismatch, we ignore the message
-				if kvdata, ok := feed.kvdata[cmd.bucket]; ok {
+
+				if kvdata, ok := feed.kvdata[cmd.keyspaceId]; ok {
 					if cmd.uuid != kvdata.uuid {
-						logging.Infof("%v The kvdata instance: %v for bucket: '%v' is already cleaned up."+
+						logging.Infof("%v The kvdata instance: %v for keyspace: '%v' is already cleaned up."+
 							" Current kvdata instance is: %v. Ignoring controlStreamRequest for vb:%v",
-							feed.logPrefix, cmd.uuid, cmd.bucket, kvdata.uuid, cmd.vbno)
+							feed.logPrefix, cmd.uuid, cmd.keyspaceId, kvdata.uuid, cmd.vbno)
 						continue
 					}
 				} else { // KVData instance does not exist. Ignore the message
-					logging.Infof("%v The kvdata instance for bucket: '%v' does not exist."+
-						" Ignoring controlStreamRequest for vb:%v", feed.logPrefix, cmd.bucket, cmd.vbno)
+					logging.Infof("%v The kvdata instance for keyspace: '%v' does not exist."+
+						" Ignoring controlStreamRequest for vb:%v", feed.logPrefix, cmd.keyspaceId, cmd.vbno)
 					continue
 				}
 
 				var reqTs *protobuf.TsVbuuid
-				if reqTs, ok = feed.reqTss[cmd.bucket]; !ok {
+				if reqTs, ok = feed.reqTss[cmd.keyspaceId]; !ok {
 					fmsg := "%v ##%x ignoring backch message %T: %v\n"
 					logging.Warnf(fmsg, prefix, cmd.opaque, cmd, cmd.Repr())
 					continue
@@ -549,26 +550,26 @@ loop:
 				}
 				if ok && reqTs != nil {
 					reqTs = reqTs.FilterByVbuckets([]uint16{cmd.vbno})
-					feed.reqTss[cmd.bucket] = reqTs
+					feed.reqTss[cmd.keyspaceId] = reqTs
 				}
 				if cmd.status == mcd.ROLLBACK {
 					fmsg := "%v ##%x backch flush rollback %T: %v\n"
 					logging.Infof(fmsg, prefix, cmd.opaque, cmd, cmd.Repr())
-					rollTs, ok := feed.rollTss[cmd.bucket]
+					rollTs, ok := feed.rollTss[cmd.keyspaceId]
 					if ok {
 						rollTs = rollTs.Append(
 							cmd.vbno, cmd.seqno, cmd.vbuuid, sStart, sEnd)
-						feed.rollTss[cmd.bucket] = rollTs
+						feed.rollTss[cmd.keyspaceId] = rollTs
 					}
 
 				} else if cmd.status == mcd.SUCCESS {
 					fmsg := "%v ##%x backch flush success %T: %v\n"
 					logging.Infof(fmsg, prefix, cmd.opaque, cmd, cmd.Repr())
-					actTs, ok := feed.actTss[cmd.bucket]
+					actTs, ok := feed.actTss[cmd.keyspaceId]
 					if ok {
 						actTs = actTs.Append(
 							cmd.vbno, seqno, cmd.vbuuid, sStart, sEnd)
-						feed.actTss[cmd.bucket] = actTs
+						feed.actTss[cmd.keyspaceId] = actTs
 					}
 
 				} else {
@@ -590,35 +591,35 @@ loop:
 				// As uuid's would be different for different instances of kvdata, we compare the
 				// uuid's before actually trying to process the STREAM_END messages. If there is
 				// a mismatch, we ignore the message
-				if kvdata, ok := feed.kvdata[cmd.bucket]; ok {
+				if kvdata, ok := feed.kvdata[cmd.keyspaceId]; ok {
 					if cmd.uuid != kvdata.uuid {
-						logging.Warnf("%v The kvdata instance: %v for bucket: '%v' is already cleaned up."+
+						logging.Warnf("%v The kvdata instance: %v for keyspace: '%v' is already cleaned up."+
 							" Current kvdata instance is: %v. Ignoring controlStreamEnd for vb:%v",
-							feed.logPrefix, cmd.uuid, cmd.bucket, kvdata.uuid, cmd.vbno)
+							feed.logPrefix, cmd.uuid, cmd.keyspaceId, kvdata.uuid, cmd.vbno)
 						continue
 					}
 				} else { // KVData instance does not exist. Ignore the message
-					logging.Infof("%v The kvdata instance for bucket: '%v' does not exist."+
-						" Ignoring controlStreamEnd for vb:%v", feed.logPrefix, cmd.bucket, cmd.vbno)
+					logging.Infof("%v The kvdata instance for keyspace: '%v' does not exist."+
+						" Ignoring controlStreamEnd for vb:%v", feed.logPrefix, cmd.keyspaceId, cmd.vbno)
 					continue
 				}
 
 				fmsg := "%v ##%x backch flush %T: %v\n"
 				logging.Infof(fmsg, prefix, cmd.opaque, cmd, cmd.Repr())
-				reqTs, ok := feed.reqTss[cmd.bucket]
+				reqTs, ok := feed.reqTss[cmd.keyspaceId]
 				if ok {
 					reqTs = reqTs.FilterByVbuckets([]uint16{cmd.vbno})
-					feed.reqTss[cmd.bucket] = reqTs
+					feed.reqTss[cmd.keyspaceId] = reqTs
 				}
-				actTs, ok := feed.actTss[cmd.bucket]
+				actTs, ok := feed.actTss[cmd.keyspaceId]
 				if ok {
 					actTs = actTs.FilterByVbuckets([]uint16{cmd.vbno})
-					feed.actTss[cmd.bucket] = actTs
+					feed.actTss[cmd.keyspaceId] = actTs
 				}
-				rollTs, ok := feed.rollTss[cmd.bucket]
+				rollTs, ok := feed.rollTss[cmd.keyspaceId]
 				if ok {
 					rollTs = rollTs.FilterByVbuckets([]uint16{cmd.vbno})
-					feed.rollTss[cmd.bucket] = rollTs
+					feed.rollTss[cmd.keyspaceId] = rollTs
 				}
 
 			} else if cmd, ok := msg[0].(*controlFinKVData); ok {
@@ -636,33 +637,31 @@ loop:
 				// As uuid's would be different for different instances of kvdata, we compare the
 				// uuid's before actually trying to process the controlFinKVData message. If there is
 				// a mismatch, we ignore the message
-				if kvdata, ok := feed.kvdata[cmd.bucket]; ok {
+				if kvdata, ok := feed.kvdata[cmd.keyspaceId]; ok {
 					if cmd.uuid != kvdata.uuid {
-						logging.Warnf("%v The kvdata instance: %v for bucket: '%v' is already cleaned up."+
+						logging.Warnf("%v The kvdata instance: %v for keyspace: '%v' is already cleaned up."+
 							" Current kvdata instance is: %v. Ignoring controlFinKVData",
-							feed.logPrefix, cmd.uuid, cmd.bucket, kvdata.uuid)
+							feed.logPrefix, cmd.uuid, cmd.keyspaceId, kvdata.uuid)
 						continue
 					}
 				} else { // KVData instance does not exist. Ignore the message
-					logging.Infof("%v The kvdata instance for bucket %v does not exist."+
-						" Ignoring controlFinKVData message", feed.logPrefix, cmd.bucket)
+					logging.Infof("%v The kvdata instance for keyspace: %v does not exist."+
+						" Ignoring controlFinKVData message", feed.logPrefix, cmd.keyspaceId)
 					continue
 				}
 
 				fmsg := "%v ##%x backch flush %T -- %v\n"
 				logging.Infof(fmsg, prefix, feed.opaque, cmd, cmd.Repr())
-				_, ok := feed.actTss[cmd.bucket]
+				_, ok := feed.actTss[cmd.keyspaceId]
 				if ok == false {
 					// Note: bucket could have gone because of a downstream
 					// delBucket() request.
-					fmsg := "%v ##%x FinKVData can't find bucket %q\n"
-					logging.Warnf(fmsg, prefix, feed.opaque, cmd.bucket)
+					fmsg := "%v ##%x FinKVData can't find keyspace %q\n"
+					logging.Warnf(fmsg, prefix, feed.opaque, cmd.keyspaceId)
 				}
-				fmsg = "%v ##%x self deleting bucket\n"
+				fmsg = "%v ##%x self deleting keyspace\n"
 				logging.Infof(fmsg, prefix, feed.opaque)
-				// TODO: Change cmd.bucket to corresponding keyspace once datapath
-				// is made keyspace aware
-				feed.cleanupKeyspace(cmd.bucket, false)
+				feed.cleanupKeyspace(cmd.keyspaceId, false)
 
 			} else {
 				fmsg := "%v ##%x backch flush %T: %v\n"
@@ -716,7 +715,7 @@ func (feed *Feed) handleCommand(msg []interface{}) (status string) {
 		err := feed.delBuckets(req, opaque)
 		if len(feed.kvdata) == 0 {
 			status = "exit"
-			fmsg := "%v no more buckets left, closing the feed ..."
+			fmsg := "%v no more keyspaces left, closing the feed ..."
 			logging.Warnf(fmsg, feed.logPrefix)
 			feed.shutdown(feed.opaque)
 		}
@@ -864,14 +863,13 @@ func (feed *Feed) start(
 	}
 
 	// update engines and endpoints
-	if _, err = feed.processSubscribers(opaque, req); err != nil { // :SideEffect:
+	if _, err = feed.processSubscribers(opaque, req, keyspaceIdMap); err != nil { // :SideEffect:
 		return err
 	}
 	for _, ts := range req.GetReqTimestamps() {
 		pooln, bucketn := ts.GetPool(), ts.GetBucket()
-		// TODO: Once the datapath is made keyspace aware, change all book-keeping
-		// to refer with keyspaceId rather than with bucket
 		keyspaceId := keyspaceIdMap[bucketn]
+
 		vbnos, e := feed.getLocalVbuckets(pooln, bucketn, opaque)
 		if e != nil {
 			err = e
@@ -880,15 +878,15 @@ func (feed *Feed) start(
 		}
 		ts := ts.SelectByVbuckets(vbnos) // take only local vbuckets
 
-		actTs, ok := feed.actTss[bucketn]
+		actTs, ok := feed.actTss[keyspaceId]
 		if ok { // don't re-request for already active vbuckets
 			ts = ts.FilterByVbuckets(c.Vbno32to16(actTs.GetVbnos()))
 		}
-		rollTs, ok := feed.rollTss[bucketn]
+		rollTs, ok := feed.rollTss[keyspaceId]
 		if ok { // forget previous rollback for the current set of vbuckets
 			rollTs = rollTs.FilterByVbuckets(c.Vbno32to16(ts.GetVbnos()))
 		}
-		reqTs, ok := feed.reqTss[bucketn]
+		reqTs, ok := feed.reqTss[keyspaceId]
 		// book-keeping of out-standing request, vbuckets that have
 		// out-standing request will be ignored.
 		if ok {
@@ -905,16 +903,16 @@ func (feed *Feed) start(
 		}
 		feed.feeders[keyspaceId] = feeder // :SideEffect:
 		// open data-path, if not already open.
-		kvdata, e := feed.startDataPath(bucketn, feeder,
+		kvdata, e := feed.startDataPath(bucketn, keyspaceId, feeder,
 			opaque, ts, opaque2)
 		if e != nil {
 			err = e
 			feed.cleanupKeyspace(keyspaceId, false)
 			continue
 		}
-		engines, _ := feed.engines[bucketn]
+		engines, _ := feed.engines[keyspaceId]
 		kvdata.AddEngines(opaque, engines, feed.endpoints)
-		feed.kvdata[bucketn] = kvdata // :SideEffect:
+		feed.kvdata[keyspaceId] = kvdata // :SideEffect:
 		// start upstream, after filtering out vbuckets.
 		e = feed.bucketFeed(opaque, false, true, ts, feeder)
 		if e != nil { // all feed errors are fatal, skip this bucket.
@@ -924,35 +922,35 @@ func (feed *Feed) start(
 		}
 		if !feed.async {
 			// wait for stream to start ...
-			r, f, a, e := feed.waitStreamRequests(opaque, pooln, bucketn, ts)
-			feed.rollTss[bucketn] = rollTs.Union(r) // :SideEffect:
-			feed.actTss[bucketn] = actTs.Union(a)   // :SideEffect:
+			r, f, a, e := feed.waitStreamRequests(opaque, pooln, keyspaceId, ts)
+			feed.rollTss[keyspaceId] = rollTs.Union(r) // :SideEffect:
+			feed.actTss[keyspaceId] = actTs.Union(a)   // :SideEffect:
 			// forget vbuckets for which a response is already received.
 			reqTs = reqTs.FilterByVbuckets(c.Vbno32to16(r.GetVbnos()))
 			reqTs = reqTs.FilterByVbuckets(c.Vbno32to16(a.GetVbnos()))
 			reqTs = reqTs.FilterByVbuckets(c.Vbno32to16(f.GetVbnos()))
-			feed.reqTss[bucketn] = reqTs // :SideEffect:
+			feed.reqTss[keyspaceId] = reqTs // :SideEffect:
 			if e != nil {
 				err = e
 				logging.Errorf(
 					"%v ##%x stream-request (err: %v) rollback: %v; vbnos: %v\n",
 					feed.logPrefix, opaque, err,
-					feed.rollTss[bucketn].GetVbnos(),
-					feed.actTss[bucketn].GetVbnos())
+					feed.rollTss[keyspaceId].GetVbnos(),
+					feed.actTss[keyspaceId].GetVbnos())
 			} else {
 				logging.Infof(
 					"%v ##%x stream-request (success) rollback: %v; vbnos: %v\n",
 					feed.logPrefix, opaque,
-					feed.rollTss[bucketn].GetVbnos(),
-					feed.actTss[bucketn].GetVbnos())
+					feed.rollTss[keyspaceId].GetVbnos(),
+					feed.actTss[keyspaceId].GetVbnos())
 			}
 		} else {
-			feed.reqTss[bucketn] = reqTs // :SideEffect:
-			if _, ok := feed.rollTss[bucketn]; !ok {
-				feed.rollTss[bucketn] = protobuf.NewTsVbuuid(ts.GetPool(), ts.GetBucket(), len(vbnos)) // :SideEffect:
+			feed.reqTss[keyspaceId] = reqTs // :SideEffect:
+			if _, ok := feed.rollTss[keyspaceId]; !ok {
+				feed.rollTss[keyspaceId] = protobuf.NewTsVbuuid(ts.GetPool(), ts.GetBucket(), len(vbnos)) // :SideEffect:
 			}
-			if _, ok := feed.actTss[bucketn]; !ok {
-				feed.actTss[bucketn] = protobuf.NewTsVbuuid(ts.GetPool(), ts.GetBucket(), len(vbnos)) // :SideEffect:
+			if _, ok := feed.actTss[keyspaceId]; !ok {
+				feed.actTss[keyspaceId] = protobuf.NewTsVbuuid(ts.GetPool(), ts.GetBucket(), len(vbnos)) // :SideEffect:
 			}
 		}
 	}
@@ -987,9 +985,8 @@ func (feed *Feed) restartVbuckets(
 
 	for _, ts := range req.GetRestartTimestamps() {
 		pooln, bucketn := ts.GetPool(), ts.GetBucket()
-		// TODO: Once the datapath is made keyspace aware, change all book-keeping
-		// to refer with keyspaceId rather than with bucket
 		keyspaceId := keyspaceIdMap[bucketn]
+
 		vbnos, e := feed.getLocalVbuckets(pooln, bucketn, opaque)
 		if e != nil {
 			err = e
@@ -998,14 +995,14 @@ func (feed *Feed) restartVbuckets(
 		}
 		ts := ts.SelectByVbuckets(vbnos)
 
-		actTs, ok1 := feed.actTss[bucketn]
-		rollTs, ok2 := feed.rollTss[bucketn]
-		reqTs, ok3 := feed.reqTss[bucketn]
-		engines, ok4 := feed.engines[bucketn]
+		actTs, ok1 := feed.actTss[keyspaceId]
+		rollTs, ok2 := feed.rollTss[keyspaceId]
+		reqTs, ok3 := feed.reqTss[keyspaceId]
+		engines, ok4 := feed.engines[keyspaceId]
 
 		if !ok1 || !ok2 || !ok3 || !ok4 || len(engines) == 0 {
-			fmsg := "%v ##%x restartVbuckets() invalid-bucket %v\n"
-			logging.Errorf(fmsg, feed.logPrefix, opaque, bucketn)
+			fmsg := "%v ##%x restartVbuckets() invalid-keyspace %v\n"
+			logging.Errorf(fmsg, feed.logPrefix, opaque, keyspaceId)
 			err = projC.ErrorInvalidBucket
 			continue
 		}
@@ -1031,14 +1028,14 @@ func (feed *Feed) restartVbuckets(
 		}
 		feed.feeders[keyspaceId] = feeder // :SideEffect:
 		// open data-path, if not already open.
-		kvdata, e := feed.startDataPath(bucketn, feeder, opaque, ts, opaque2)
+		kvdata, e := feed.startDataPath(bucketn, keyspaceId, feeder, opaque, ts, opaque2)
 		if e != nil { // all feed errors are fatal, skip this bucket.
 			err = e
 			feed.cleanupKeyspace(keyspaceId, false)
 			continue
 		}
 
-		feed.kvdata[bucketn] = kvdata // :SideEffect:
+		feed.kvdata[keyspaceId] = kvdata // :SideEffect:
 		// (re)start the upstream, after filtering out remote vbuckets.
 		e = feed.bucketFeed(opaque, false, true, ts, feeder)
 		if e != nil { // all feed errors are fatal, skip this bucket.
@@ -1048,30 +1045,30 @@ func (feed *Feed) restartVbuckets(
 		}
 		if !feed.async {
 			// wait stream to start ...
-			r, f, a, e := feed.waitStreamRequests(opaque, pooln, bucketn, ts)
-			feed.rollTss[bucketn] = rollTs.Union(r) // :SideEffect:
-			feed.actTss[bucketn] = actTs.Union(a)   // :SideEffect:
+			r, f, a, e := feed.waitStreamRequests(opaque, pooln, keyspaceId, ts)
+			feed.rollTss[keyspaceId] = rollTs.Union(r) // :SideEffect:
+			feed.actTss[keyspaceId] = actTs.Union(a)   // :SideEffect:
 			// forget vbuckets for which a response is already received.
 			reqTs = reqTs.FilterByVbuckets(c.Vbno32to16(r.GetVbnos()))
 			reqTs = reqTs.FilterByVbuckets(c.Vbno32to16(a.GetVbnos()))
 			reqTs = reqTs.FilterByVbuckets(c.Vbno32to16(f.GetVbnos()))
-			feed.reqTss[bucketn] = reqTs // :SideEffect:
+			feed.reqTss[keyspaceId] = reqTs // :SideEffect:
 			if e != nil {
 				err = e
 				logging.Errorf(
 					"%v ##%x stream-request (err: %v) rollback: %v; vbnos: %v\n",
 					feed.logPrefix, opaque, err,
-					feed.rollTss[bucketn].GetVbnos(),
-					feed.actTss[bucketn].GetVbnos())
+					feed.rollTss[keyspaceId].GetVbnos(),
+					feed.actTss[keyspaceId].GetVbnos())
 			} else {
 				logging.Infof(
 					"%v ##%x stream-request (success) rollback: %v; vbnos: %v\n",
 					feed.logPrefix, opaque,
-					feed.rollTss[bucketn].GetVbnos(),
-					feed.actTss[bucketn].GetVbnos())
+					feed.rollTss[keyspaceId].GetVbnos(),
+					feed.actTss[keyspaceId].GetVbnos())
 			}
 		} else {
-			feed.reqTss[bucketn] = feed.reqTss[bucketn].Union(reqTs) // :SideEffect:
+			feed.reqTss[keyspaceId] = feed.reqTss[keyspaceId].Union(reqTs) // :SideEffect:
 		}
 	}
 	return err
@@ -1089,8 +1086,6 @@ func (feed *Feed) restartVbuckets(
 func (feed *Feed) shutdownVbuckets(
 	req *protobuf.ShutdownVbucketsRequest, opaque uint16) (err error) {
 
-	// TODO: Once the data path is made keyspaceID aware, update this code
-	// to refer all book-keeping with keyspaceId
 	keyspaceIdMap, err := req.GetKeyspaceIdMap()
 	if err != nil {
 		return err
@@ -1106,14 +1101,14 @@ func (feed *Feed) shutdownVbuckets(
 			err = e
 			//FIXME: in case of shutdown we are not cleaning the bucket !
 			//wait for the code to settle-down and remove this.
-			//feed.cleanupKeyspace(bucketn, false)
+			//feed.cleanupKeyspace(keyspaceId, false)
 			continue
 		}
 		ts := ts.SelectByVbuckets(vbnos)
 
-		actTs, ok1 := feed.actTss[bucketn]
-		rollTs, ok2 := feed.rollTss[bucketn]
-		reqTs, ok3 := feed.reqTss[bucketn]
+		actTs, ok1 := feed.actTss[keyspaceId]
+		rollTs, ok2 := feed.rollTss[keyspaceId]
+		reqTs, ok3 := feed.reqTss[keyspaceId]
 		if !ok1 || !ok2 || !ok3 {
 			fmsg := "%v ##%x shutdownVbuckets() invalid-bucket %v\n"
 			logging.Errorf(fmsg, feed.logPrefix, opaque, bucketn)
@@ -1137,16 +1132,16 @@ func (feed *Feed) shutdownVbuckets(
 			err = e
 			//FIXME: in case of shutdown we are not cleaning the bucket !
 			//wait for the code to settle-down and remove this.
-			//feed.cleanupKeyspace(bucketn, false)
+			//feed.cleanupKeyspace(keyspaceId, false)
 			continue
 		}
 		if !feed.async {
-			endTs, _, e := feed.waitStreamEnds(opaque, bucketn, ts)
+			endTs, _, e := feed.waitStreamEnds(opaque, keyspaceId, ts)
 			vbnos = c.Vbno32to16(endTs.GetVbnos())
 			// forget vbnos that are shutdown
-			feed.actTss[bucketn] = actTs.FilterByVbuckets(vbnos)   // :SideEffect:
-			feed.reqTss[bucketn] = reqTs.FilterByVbuckets(vbnos)   // :SideEffect:
-			feed.rollTss[bucketn] = rollTs.FilterByVbuckets(vbnos) // :SideEffect:
+			feed.actTss[keyspaceId] = actTs.FilterByVbuckets(vbnos)   // :SideEffect:
+			feed.reqTss[keyspaceId] = reqTs.FilterByVbuckets(vbnos)   // :SideEffect:
+			feed.rollTss[keyspaceId] = rollTs.FilterByVbuckets(vbnos) // :SideEffect:
 			if e != nil {
 				err = e
 				logging.Errorf(
@@ -1186,7 +1181,7 @@ func (feed *Feed) addBuckets(
 	}
 
 	// update engines and endpoints
-	if _, err = feed.processSubscribers(opaque, req); err != nil { // :SideEffect:
+	if _, err = feed.processSubscribers(opaque, req, keyspaceIdMap); err != nil { // :SideEffect:
 		return err
 	}
 
@@ -1194,8 +1189,6 @@ func (feed *Feed) addBuckets(
 
 	for _, ts := range req.GetReqTimestamps() {
 		pooln, bucketn := ts.GetPool(), ts.GetBucket()
-		// TODO: Once the datapath is made keyspace aware, change all book-keeping
-		// to refer with keyspace rather than with bucket
 		keyspaceId := keyspaceIdMap[bucketn]
 
 		vbnos, e := feed.getLocalVbuckets(pooln, bucketn, opaque)
@@ -1206,15 +1199,15 @@ func (feed *Feed) addBuckets(
 		}
 		ts := ts.SelectByVbuckets(vbnos)
 
-		actTs, ok := feed.actTss[bucketn]
+		actTs, ok := feed.actTss[keyspaceId]
 		if ok { // don't re-request for already active vbuckets
 			ts.FilterByVbuckets(c.Vbno32to16(actTs.GetVbnos()))
 		}
-		rollTs, ok := feed.rollTss[bucketn]
+		rollTs, ok := feed.rollTss[keyspaceId]
 		if ok { // foget previous rollback for the current set of buckets
 			rollTs = rollTs.FilterByVbuckets(c.Vbno32to16(ts.GetVbnos()))
 		}
-		reqTs, ok := feed.reqTss[bucketn]
+		reqTs, ok := feed.reqTss[keyspaceId]
 		// book-keeping of out-standing request, vbuckets that have
 		// out-standing request will be ignored.
 		if ok {
@@ -1231,16 +1224,16 @@ func (feed *Feed) addBuckets(
 		feed.feeders[keyspaceId] = feeder // :SideEffect:
 
 		// open data-path, if not already open.
-		kvdata, e := feed.startDataPath(bucketn, feeder, opaque, ts, opaque2)
+		kvdata, e := feed.startDataPath(bucketn, keyspaceId, feeder, opaque, ts, opaque2)
 		if e != nil { // all feed errors are fatal, skip this bucket.
 			err = e
 			feed.cleanupKeyspace(keyspaceId, false)
 			continue
 		}
 
-		engines, _ := feed.engines[bucketn]
+		engines, _ := feed.engines[keyspaceId]
 		kvdata.AddEngines(opaque, engines, feed.endpoints)
-		feed.kvdata[bucketn] = kvdata // :SideEffect:
+		feed.kvdata[keyspaceId] = kvdata // :SideEffect:
 		// start upstream
 		e = feed.bucketFeed(opaque, false, true, ts, feeder)
 		if e != nil { // all feed errors are fatal, skip this bucket.
@@ -1250,30 +1243,30 @@ func (feed *Feed) addBuckets(
 		}
 		if !feed.async {
 			// wait for stream to start ...
-			r, f, a, e := feed.waitStreamRequests(opaque, pooln, bucketn, ts)
-			feed.rollTss[bucketn] = rollTs.Union(r) // :SideEffect:
-			feed.actTss[bucketn] = actTs.Union(a)   // :SideEffect
+			r, f, a, e := feed.waitStreamRequests(opaque, pooln, keyspaceId, ts)
+			feed.rollTss[keyspaceId] = rollTs.Union(r) // :SideEffect:
+			feed.actTss[keyspaceId] = actTs.Union(a)   // :SideEffect
 			// forget vbucket for which a response is already received.
 			reqTs = reqTs.FilterByVbuckets(c.Vbno32to16(r.GetVbnos()))
 			reqTs = reqTs.FilterByVbuckets(c.Vbno32to16(a.GetVbnos()))
 			reqTs = reqTs.FilterByVbuckets(c.Vbno32to16(f.GetVbnos()))
-			feed.reqTss[bucketn] = reqTs // :SideEffect:
+			feed.reqTss[keyspaceId] = reqTs // :SideEffect:
 			if e != nil {
 				err = e
 				logging.Errorf(
 					"%v ##%x stream-request (err: %v) rollback: %v; vbnos: %v\n",
 					feed.logPrefix, opaque, err,
-					feed.rollTss[bucketn].GetVbnos(),
-					feed.actTss[bucketn].GetVbnos())
+					feed.rollTss[keyspaceId].GetVbnos(),
+					feed.actTss[keyspaceId].GetVbnos())
 			} else {
 				logging.Infof(
 					"%v ##%x stream-request (success) rollback: %v; vbnos: %v\n",
 					feed.logPrefix, opaque,
-					feed.rollTss[bucketn].GetVbnos(),
-					feed.actTss[bucketn].GetVbnos())
+					feed.rollTss[keyspaceId].GetVbnos(),
+					feed.actTss[keyspaceId].GetVbnos())
 			}
 		} else {
-			feed.reqTss[bucketn] = reqTs // :SideEffect:
+			feed.reqTss[keyspaceId] = reqTs // :SideEffect:
 		}
 	}
 	return err
@@ -1291,10 +1284,7 @@ func (feed *Feed) delBuckets(
 		return err
 	}
 
-	for _, bucketn := range req.GetBuckets() {
-		// TODO: Once the datapath is made keyspace aware, change all book-keeping
-		// to refer with keyspace rather than with bucket
-		keyspaceId := keyspaceIdMap[bucketn]
+	for _, keyspaceId := range keyspaceIdMap {
 		feed.cleanupKeyspace(keyspaceId, true)
 	}
 	return nil
@@ -1308,10 +1298,7 @@ func (feed *Feed) addInstances(
 	req *protobuf.AddInstancesRequest,
 	opaque uint16) (*protobuf.TimestampResponse, error) {
 
-	// TODO: Once the data path is made keyspaceID aware, update this code
-	// to get keyspaceId from bucket and refer all book-keeping with keyspaceId
-	// Also, add keyspaceId to response
-	_, err := req.GetKeyspaceIdMap()
+	keyspaceIdMap, err := req.GetKeyspaceIdMap()
 	if err != nil {
 		return nil, err
 	}
@@ -1319,11 +1306,11 @@ func (feed *Feed) addInstances(
 	tsResp := &protobuf.TimestampResponse{
 		Topic:             proto.String(feed.topic),
 		CurrentTimestamps: make([]*protobuf.TsVbuuid, 0, 4),
+		KeyspaceIds:       make([]string, 0),
 	}
 	errResp := &protobuf.TimestampResponse{Topic: proto.String(feed.topic)}
 
-	// update engines and endpoints
-	buckets, err := feed.processSubscribers(opaque, req) // :SideEffect:
+	buckets, err := feed.processSubscribers(opaque, req, keyspaceIdMap) // :SideEffect:
 	if err != nil {
 		return errResp, err
 	}
@@ -1331,17 +1318,20 @@ func (feed *Feed) addInstances(
 	// post to kv data-path for buckets from new subscribers
 	// do not touch the kv data-path for buckets that are not part of addInstances
 	for bucketn, _ := range buckets {
-		engines := feed.engines[bucketn]
-		if kvdata, ok := feed.kvdata[bucketn]; ok {
+		keyspaceId := keyspaceIdMap[bucketn]
+		engines := feed.engines[keyspaceId]
+
+		if kvdata, ok := feed.kvdata[keyspaceId]; ok {
 			curSeqnos, err := kvdata.AddEngines(opaque, engines, feed.endpoints)
 			if err != nil {
 				return errResp, err
 			}
 			tsResp = tsResp.AddCurrentTimestamp(feed.pooln, bucketn, curSeqnos)
+			tsResp.AddKeyspaceId(keyspaceId)
 
 		} else {
-			fmsg := "%v ##%x addInstances() invalid-bucket %q\n"
-			logging.Errorf(fmsg, feed.logPrefix, opaque, bucketn)
+			fmsg := "%v ##%x addInstances() invalid-keyspace %q\n"
+			logging.Errorf(fmsg, feed.logPrefix, opaque, keyspaceIdMap[bucketn])
 			err = projC.ErrorInvalidBucket
 		}
 	}
@@ -1355,11 +1345,11 @@ func (feed *Feed) addInstances(
 func (feed *Feed) delInstances(
 	req *protobuf.DelInstancesRequest, opaque uint16) error {
 
-	// reconstruct instance uuids bucket-wise.
 	instanceIds := req.GetInstanceIds()
-	bucknIds := make(map[string][]uint64)           // bucket -> []instance
-	fengines := make(map[string]map[uint64]*Engine) // bucket-> uuid-> instance
-	for bucketn, engines := range feed.engines {
+	keyspaceInsts := make(map[string][]uint64)      // keyspaceId -> []instance
+	fengines := make(map[string]map[uint64]*Engine) // keyspaceId-> uuid-> instance
+
+	filterEngines := func(keyspaceId string, engines map[uint64]*Engine) {
 		uuids := make([]uint64, 0)
 		m := make(map[uint64]*Engine)
 		for uuid, engine := range engines {
@@ -1369,21 +1359,37 @@ func (feed *Feed) delInstances(
 				m[uuid] = engine
 			}
 		}
-		bucknIds[bucketn] = uuids
-		fengines[bucketn] = m
+		keyspaceInsts[keyspaceId] = uuids
+		fengines[keyspaceId] = m
 	}
+
+	reqKeyspaceId := req.GetKeyspaceId()
+	if reqKeyspaceId == "" { // Iterate though all keyspaces of the feed as reqKeyspaceId is empty
+		for keyspaceId, engines := range feed.engines {
+			filterEngines(keyspaceId, engines)
+		}
+	} else {
+		if engines, ok := feed.engines[reqKeyspaceId]; ok {
+			filterEngines(reqKeyspaceId, engines)
+		}
+	}
+
 	var err error
 	// posted post to kv data-path.
-	for bucketn, uuids := range bucknIds {
-		if _, ok := feed.kvdata[bucketn]; ok {
-			feed.kvdata[bucketn].DeleteEngines(opaque, uuids)
+	for keyspaceId, uuids := range keyspaceInsts {
+		if _, ok := feed.kvdata[keyspaceId]; ok {
+			feed.kvdata[keyspaceId].DeleteEngines(opaque, uuids)
 		} else {
-			fmsg := "%v ##%x delInstances() invalid-bucket %q"
-			logging.Errorf(fmsg, feed.logPrefix, opaque, bucketn)
+			fmsg := "%v ##%x delInstances() invalid-keyspace %q"
+			logging.Errorf(fmsg, feed.logPrefix, opaque, keyspaceId)
 			err = projC.ErrorInvalidBucket
 		}
 	}
-	feed.engines = fengines // :SideEffect:
+	if reqKeyspaceId == "" { // Update filtered engines across all keyspaces
+		feed.engines = fengines // :SideEffect:
+	} else { // Update filtered engines only for the keyspace specified in request
+		feed.engines[reqKeyspaceId] = fengines[reqKeyspaceId] // :SideEffect:
+	}
 	return err
 }
 
@@ -1424,9 +1430,9 @@ func (feed *Feed) repairEndpoints(
 	}
 
 	// posted to each kv data-path
-	for bucketn, kvdata := range feed.kvdata {
+	for keyspaceId, kvdata := range feed.kvdata {
 		// though only endpoints have been updated
-		kvdata.AddEngines(opaque, feed.engines[bucketn], feed.endpoints)
+		kvdata.AddEngines(opaque, feed.engines[keyspaceId], feed.endpoints)
 	}
 	//return nil
 	return err
@@ -1450,8 +1456,8 @@ func (feed *Feed) getStatistics() c.Statistics {
 	stats, _ := c.NewStatistics(nil)
 	stats.Set("topic", feed.topic)
 	stats.Set("engines", feed.engineNames())
-	for bucketn, kvdata := range feed.kvdata {
-		stats.Set("bucket-"+bucketn, kvdata.GetStatistics())
+	for keyspaceId, kvdata := range feed.kvdata {
+		stats.Set("keyspace-"+keyspaceId, kvdata.GetStatistics())
 	}
 	endStats, _ := c.NewStatistics(nil)
 	for raddr, endpoint := range feed.endpoints {
@@ -1495,9 +1501,9 @@ func (feed *Feed) shutdown(opaque uint16) error {
 		func() { defer recovery(); feeder.CloseFeed() }()
 	}
 	// close data-path
-	for bucketn, kvdata := range feed.kvdata {
+	for keyspaceId, kvdata := range feed.kvdata {
 		func() { defer recovery(); kvdata.Close() }()
-		delete(feed.kvdata, bucketn) // :SideEffect:
+		delete(feed.kvdata, keyspaceId) // :SideEffect:
 	}
 	// close downstream
 	for _, endpoint := range feed.endpoints {
@@ -1737,27 +1743,28 @@ func (feed *Feed) getLocalVbuckets(
 
 // start data-path each kvaddr
 func (feed *Feed) startDataPath(
-	bucketn string, feeder BucketFeeder,
+	bucketn, keyspaceId string,
+	feeder BucketFeeder,
 	opaque uint16,
 	ts *protobuf.TsVbuuid,
 	opaque2 uint64) (*KVData, error) {
 	var err error
 	mutch := feeder.GetChannel()
-	kvdata, ok := feed.kvdata[bucketn]
+	kvdata, ok := feed.kvdata[keyspaceId]
 	if ok {
 		kvdata.UpdateTs(opaque, ts)
 
 	} else { // pass engines & endpoints to kvdata.
-		engs, ends := feed.engines[bucketn], feed.endpoints
+		engs, ends := feed.engines[keyspaceId], feed.endpoints
 		kvdata, err = NewKVData(
-			feed, bucketn, opaque, ts, engs, ends, mutch,
+			feed, bucketn, keyspaceId, opaque, ts, engs, ends, mutch,
 			feed.kvaddr, feed.config, feed.async, opaque2)
 	}
 	return kvdata, err
 }
 
 // - return ErrorInconsistentFeed for malformed feed request
-func (feed *Feed) processSubscribers(opaque uint16, req Subscriber) (map[string]bool, error) {
+func (feed *Feed) processSubscribers(opaque uint16, req Subscriber, keyspaceIdMap map[string]string) (map[string]bool, error) {
 	evaluators, routers, err := feed.subscribers(opaque, req)
 	if err != nil {
 		return nil, err
@@ -1771,16 +1778,20 @@ func (feed *Feed) processSubscribers(opaque uint16, req Subscriber) (map[string]
 	buckets := make(map[string]bool, 0)
 	for uuid, evaluator := range evaluators {
 		bucketn := evaluator.Bucket()
+		// Get the bucket to keyspaceId mapping
+		keyspaceId := keyspaceIdMap[bucketn]
+
 		if _, ok := buckets[bucketn]; !ok {
 			buckets[bucketn] = true
 		}
-		m, ok := feed.engines[bucketn]
+
+		m, ok := feed.engines[keyspaceId]
 		if !ok {
 			m = make(map[uint64]*Engine)
 		}
 		engine := NewEngine(uuid, evaluator, routers[uuid])
 		m[uuid] = engine
-		feed.engines[bucketn] = m // :SideEffect:
+		feed.engines[keyspaceId] = m // :SideEffect:
 	}
 	return buckets, nil
 }
@@ -1905,7 +1916,7 @@ func (feed *Feed) endpointRaddrs() []string {
 // - return ErrorStreamEnd for failed stream-end request.
 func (feed *Feed) waitStreamRequests(
 	opaque uint16,
-	pooln, bucketn string,
+	pooln, keyspaceId string,
 	ts *protobuf.TsVbuuid) (rollTs, failTs, actTs *protobuf.TsVbuuid, err error) {
 
 	vbnos := c.Vbno32to16(ts.GetVbnos())
@@ -1918,7 +1929,7 @@ func (feed *Feed) waitStreamRequests(
 
 	timeout := time.After(feed.reqTimeout * time.Millisecond)
 	err1 := feed.waitOnFeedback(timeout, opaque, func(msg interface{}) string {
-		if val, ok := msg.(*controlStreamRequest); ok && val.bucket == bucketn &&
+		if val, ok := msg.(*controlStreamRequest); ok && val.keyspaceId == keyspaceId &&
 			val.opaque == opaque && ts.Contains(val.vbno) {
 
 			if val.status == mcd.SUCCESS {
@@ -1952,7 +1963,7 @@ func (feed *Feed) waitStreamRequests(
 // - return ErrorStreamEnd for failed stream-end request.
 func (feed *Feed) waitStreamEnds(
 	opaque uint16,
-	bucketn string,
+	keyspaceId string,
 	ts *protobuf.TsVbuuid) (endTs, failTs *protobuf.TsVbuuid, err error) {
 
 	vbnos := c.Vbno32to16(ts.GetVbnos())
@@ -1968,7 +1979,7 @@ func (feed *Feed) waitStreamEnds(
 		// messages will carry the same opaque value used with StreamRequest
 		// (The opaque value of waitStreamEnds corresponds to the opaque value
 		// of the request issued by indexer)
-		if val, ok := msg.(*controlStreamEnd); ok && val.bucket == bucketn &&
+		if val, ok := msg.(*controlStreamEnd); ok && val.keyspaceId == keyspaceId &&
 			ts.Contains(val.vbno) {
 
 			if val.status == mcd.SUCCESS {
@@ -2031,7 +2042,6 @@ loop:
 }
 
 // compose topic-response for caller
-// TODO: Add keyspaceId's to topicResponse
 func (feed *Feed) topicResponse() *protobuf.TopicResponse {
 	uuids := make([]uint64, 0)
 	for _, engines := range feed.engines {
@@ -2040,9 +2050,11 @@ func (feed *Feed) topicResponse() *protobuf.TopicResponse {
 		}
 	}
 	xs := make([]*protobuf.TsVbuuid, 0, len(feed.actTss))
-	for _, ts := range feed.actTss {
+	keyspaceIds := make([]string, 0)
+	for keyspaceId, ts := range feed.actTss {
 		if ts != nil {
 			xs = append(xs, ts.Clone())
+			keyspaceIds = append(keyspaceIds, keyspaceId)
 		}
 	}
 	ys := make([]*protobuf.TsVbuuid, 0, len(feed.rollTss))
@@ -2063,6 +2075,7 @@ func (feed *Feed) topicResponse() *protobuf.TopicResponse {
 		ActiveTimestamps:   xs,
 		RollbackTimestamps: ys,
 		PendingTimestamps:  zs,
+		KeyspaceIds:        keyspaceIds,
 	}
 }
 

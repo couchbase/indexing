@@ -39,13 +39,14 @@ import (
 // KVData captures an instance of data-path for single kv-node
 // from upstream connection.
 type KVData struct {
-	feed    *Feed
-	topic   string // immutable
-	bucket  string // immutable
-	opaque  uint16
-	workers []*VbucketWorker
-	config  c.Config
-	async   bool
+	feed       *Feed
+	topic      string // immutable
+	bucket     string // immutable
+	keyspaceId string // immutable
+	opaque     uint16
+	workers    []*VbucketWorker
+	config     c.Config
+	async      bool
 
 	// evaluators and subscribers
 	engines   map[uint64]*Engine
@@ -168,7 +169,8 @@ func (stats *KvdataStats) String() (string, string) {
 
 // NewKVData create a new data-path instance.
 func NewKVData(
-	feed *Feed, bucket string,
+	feed *Feed,
+	bucket, keyspaceId string,
 	opaque uint16,
 	reqTs *protobuf.TsVbuuid,
 	engines map[uint64]*Engine,
@@ -180,13 +182,14 @@ func NewKVData(
 	opaque2 uint64) (*KVData, error) {
 
 	kvdata := &KVData{
-		feed:      feed,
-		opaque:    opaque,
-		topic:     feed.topic,
-		bucket:    bucket,
-		config:    config,
-		engines:   make(map[uint64]*Engine),
-		endpoints: make(map[string]c.RouterEndpoint),
+		feed:       feed,
+		opaque:     opaque,
+		topic:      feed.topic,
+		bucket:     bucket,
+		keyspaceId: keyspaceId,
+		config:     config,
+		engines:    make(map[uint64]*Engine),
+		endpoints:  make(map[string]c.RouterEndpoint),
 		// 16 is enough, there can't be more than that many out-standing
 		// control calls on this feed.
 		sbch:    make(chan []interface{}, 16),
@@ -207,7 +210,7 @@ func NewKVData(
 	numVbuckets := config["maxVbuckets"].Int()
 	kvdata.stats.Init(numVbuckets, kvdata)
 	fmsg := "KVDT[<-%v<-%v #%v]"
-	kvdata.logPrefix = fmt.Sprintf(fmsg, bucket, feed.cluster, feed.topic)
+	kvdata.logPrefix = fmt.Sprintf(fmsg, keyspaceId, feed.cluster, feed.topic)
 	kvdata.syncTimeout = time.Duration(config["syncTimeout"].Int())
 	kvdata.syncTimeout *= time.Millisecond
 	for uuid, engine := range engines {
@@ -218,7 +221,7 @@ func NewKVData(
 	}
 
 	// start workers
-	kvdata.workers = kvdata.spawnWorkers(feed, bucket, config, opaque, opaque2)
+	kvdata.workers = kvdata.spawnWorkers(feed, bucket, keyspaceId, config, opaque, opaque2)
 	// Gather stats pointers from all workers
 	kvdata.updateWorkerStats()
 
@@ -312,7 +315,7 @@ func (kvdata *KVData) GetKVStats() map[string]interface{} {
 		return nil
 	}
 	fmsg := "KVDT[<-%v<-%v #%v] ##%x"
-	key := fmt.Sprintf(fmsg, kvdata.bucket, kvdata.feed.cluster, kvdata.topic, kvdata.opaque)
+	key := fmt.Sprintf(fmsg, kvdata.keyspaceId, kvdata.feed.cluster, kvdata.topic, kvdata.opaque)
 	kvstat := make(map[string]interface{}, 0)
 	kvstat[key] = kvdata.stats
 	return kvstat
@@ -323,7 +326,7 @@ func (kvdata *KVData) GetWorkerStats() map[string][]interface{} {
 		return nil
 	}
 	fmsg := "WRKR[<-%v<-%v #%v] ##%x"
-	key := fmt.Sprintf(fmsg, kvdata.bucket, kvdata.feed.cluster, kvdata.topic, kvdata.opaque)
+	key := fmt.Sprintf(fmsg, kvdata.keyspaceId, kvdata.feed.cluster, kvdata.topic, kvdata.opaque)
 	wrkrstat := make(map[string][]interface{}, 0)
 	wrkrstat[key] = kvdata.wrkrStats
 	return wrkrstat
@@ -352,7 +355,7 @@ func (kvdata *KVData) runScatter(
 			worker.Close()
 		}
 		kvdata.workers = nil
-		kvdata.feed.PostFinKVdata(kvdata.bucket, kvdata.uuid)
+		kvdata.feed.PostFinKVdata(kvdata.keyspaceId, kvdata.uuid)
 		close(kvdata.finch)
 		//Update closed in stats object and log the stats before exiting
 		kvdata.stats.closed.Set(true)
@@ -570,7 +573,7 @@ func (kvdata *KVData) scatterMutation(
 			seqno = m.Seqno
 		}
 		kvdata.stats.reqCount.Add(1)
-		kvdata.feed.PostStreamRequest(kvdata.bucket, m, kvdata.uuid)
+		kvdata.feed.PostStreamRequest(kvdata.keyspaceId, m, kvdata.uuid)
 
 	case mcd.DCP_STREAMEND:
 		if m.Status != mcd.SUCCESS {
@@ -587,7 +590,7 @@ func (kvdata *KVData) scatterMutation(
 			}
 		}
 		kvdata.stats.endCount.Add(1)
-		kvdata.feed.PostStreamEnd(kvdata.bucket, m, kvdata.uuid)
+		kvdata.feed.PostStreamEnd(kvdata.keyspaceId, m, kvdata.uuid)
 
 	case mcd.DCP_SNAPSHOT:
 		if worker.Event(m) != nil {
@@ -618,13 +621,13 @@ func (kvdata *KVData) scatterMutation(
 }
 
 func (kvdata *KVData) spawnWorkers(
-	feed *Feed, bucket string, config c.Config,
+	feed *Feed, bucket, keyspaceId string, config c.Config,
 	opaque uint16, opaque2 uint64) []*VbucketWorker {
 
 	nworkers := config["vbucketWorkers"].Int()
 	workers := make([]*VbucketWorker, nworkers)
 	for i := 0; i < nworkers; i++ {
-		workers[i] = NewVbucketWorker(i, feed, bucket, opaque, config, opaque2)
+		workers[i] = NewVbucketWorker(i, feed, bucket, keyspaceId, opaque, config, opaque2)
 	}
 	return workers
 }
@@ -643,7 +646,7 @@ func (kvdata *KVData) publishStreamEnd() {
 				VBucket: v.vbno,
 				Opaque:  v.opaque,
 			}
-			kvdata.feed.PostStreamEnd(kvdata.bucket, m, kvdata.uuid)
+			kvdata.feed.PostStreamEnd(kvdata.keyspaceId, m, kvdata.uuid)
 		}
 	}
 }
@@ -651,7 +654,7 @@ func (kvdata *KVData) publishStreamEnd() {
 func (kvdata *KVData) logStats() {
 	stats, vbseqnos := kvdata.stats.String()
 	fmsg := "KVDT[<-%v<-%v #%v] ##%x"
-	key := fmt.Sprintf(fmsg, kvdata.bucket, kvdata.feed.cluster, kvdata.topic, kvdata.opaque)
+	key := fmt.Sprintf(fmsg, kvdata.keyspaceId, kvdata.feed.cluster, kvdata.topic, kvdata.opaque)
 	logging.Infof("%v stats: %v", key, stats)
 	logging.Infof("%v vbseqnos: [%v]", key, vbseqnos)
 }

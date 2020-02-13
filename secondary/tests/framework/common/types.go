@@ -1,6 +1,7 @@
 package common
 
 import n1ql "github.com/couchbase/query/value"
+import "github.com/couchbase/indexing/secondary/common"
 
 // A map that holds response results from 2i Scan APIs as well as from JSON document scan
 // Key = Primary key of scan response
@@ -33,4 +34,37 @@ type ClusterConfiguration struct {
 	IndexUsing           string
 	Nodes                []string
 	MultipleIndexerTests bool
+}
+
+// IndexStatus type is same type returned by /getIndexStatus REST call.
+type IndexStatus struct {
+	DefnId       common.IndexDefnId `json:"defnId,omitempty"`
+	InstId       common.IndexInstId `json:"instId,omitempty"`
+	Name         string             `json:"name,omitempty"`
+	Bucket       string             `json:"bucket,omitempty"`
+	IsPrimary    bool               `json:"isPrimary,omitempty"`
+	SecExprs     []string           `json:"secExprs,omitempty"`
+	WhereExpr    string             `json:"where,omitempty"`
+	IndexType    string             `json:"indexType,omitempty"`
+	Status       string             `json:"status,omitempty"`
+	Definition   string             `json:"definition"`
+	Hosts        []string           `json:"hosts,omitempty"`
+	Error        string             `json:"error,omitempty"`
+	Completion   int                `json:"completion"`
+	Progress     float64            `json:"progress"`
+	Scheduled    bool               `json:"scheduled"`
+	Partitioned  bool               `json:"partitioned"`
+	NumPartition int                `json:"numPartition"`
+	PartitionMap map[string][]int   `json:"partitionMap"`
+	NodeUUID     string             `json:"nodeUUID,omitempty"`
+	NumReplica   int                `json:"numReplica"`
+	IndexName    string             `json:"indexName"`
+	ReplicaId    int                `json:"replicaId"`
+	Stale        bool               `json:"stale"`
+	LastScanTime string             `json:"lastScanTime,omitempty"`
+}
+
+type IndexStatusResponse struct {
+	Code   string        `json:"code"`
+	Status []IndexStatus `json:"status"`
 }

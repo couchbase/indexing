@@ -337,7 +337,8 @@ func (c *clustMgrAgent) handleStatsInternal() {
 
 	stats := c.stats.Get()
 	if stats != nil {
-		c.mgr.NotifyStats(stats.GetStats(false, false, false))
+		spec := NewStatsSpec(false, false, false, false, nil)
+		c.mgr.NotifyStats(stats.GetStats(spec))
 	}
 }
 

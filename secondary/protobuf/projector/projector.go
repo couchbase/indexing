@@ -439,14 +439,22 @@ func (tsResp *TimestampResponse) SetErr(err error) *TimestampResponse {
 
 // Validates the bucket to keyspaceId mapping in the response and returns
 // true in case the response is valid
-func (req *TimestampResponse) Validate() bool {
-	return validateMapping(req.GetCurrentTimestamps(), req.GetKeyspaceIds())
+func (tsResp *TimestampResponse) Validate() bool {
+	return validateMapping(tsResp.GetCurrentTimestamps(), tsResp.GetKeyspaceIds())
 }
 
 // Returns the mapping between bucket to KeyspaceId
 // Returns ErrorInvalidKeyspaceIdMap for an invalid response
-func (req *TimestampResponse) GetKeyspaceIdMap() (map[string]string, error) {
-	return getKeyspaceIdMap(req.GetCurrentTimestamps(), req.GetKeyspaceIds())
+func (tsResp *TimestampResponse) GetKeyspaceIdMap() (map[string]string, error) {
+	return getKeyspaceIdMap(tsResp.GetCurrentTimestamps(), tsResp.GetKeyspaceIds())
+}
+
+// AddKeyspaceId will append keyspaceId to the slice of keyspaceIds
+func (tsResp *TimestampResponse) AddKeyspaceId(keyspaceId string) {
+	if tsResp.KeyspaceIds == nil {
+		tsResp.KeyspaceIds = make([]string, 0)
+	}
+	tsResp.KeyspaceIds = append(tsResp.KeyspaceIds, keyspaceId)
 }
 
 // **********************
