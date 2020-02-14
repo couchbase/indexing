@@ -371,6 +371,15 @@ func (idx *IndexDefn) IndexOnCollection() bool {
 	}
 
 	return true
+
+func (idx *IndexDefn) KeyspaceId(streamId StreamId) string {
+
+	if streamId == INIT_STREAM {
+		return strings.Join([]string{idx.Bucket, idx.Scope, idx.Collection}, ":")
+	} else {
+		return idx.Bucket
+	}
+
 }
 
 func (idx IndexInst) IsProxy() bool {

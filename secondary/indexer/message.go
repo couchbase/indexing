@@ -402,37 +402,37 @@ func (m *MsgStreamInfo) String() string {
 }
 
 //STREAM_READER_UPDATE_QUEUE_MAP
-type MsgUpdateBucketQueue struct {
-	bucketQueueMap  BucketQueueMap
-	stats           *IndexerStats
-	bucketFilter    map[string]*common.TsVbuuid
-	bucketSessionId BucketSessionId
+type MsgUpdateKeyspaceIdQueue struct {
+	keyspaceIdQueueMap  KeyspaceIdQueueMap
+	stats               *IndexerStats
+	keyspaceIdFilter    map[string]*common.TsVbuuid
+	keyspaceIdSessionId KeyspaceIdSessionId
 }
 
-func (m *MsgUpdateBucketQueue) GetMsgType() MsgType {
+func (m *MsgUpdateKeyspaceIdQueue) GetMsgType() MsgType {
 	return STREAM_READER_UPDATE_QUEUE_MAP
 }
 
-func (m *MsgUpdateBucketQueue) GetBucketQueueMap() BucketQueueMap {
-	return m.bucketQueueMap
+func (m *MsgUpdateKeyspaceIdQueue) GetKeyspaceIdQueueMap() KeyspaceIdQueueMap {
+	return m.keyspaceIdQueueMap
 }
 
-func (m *MsgUpdateBucketQueue) GetStatsObject() *IndexerStats {
+func (m *MsgUpdateKeyspaceIdQueue) GetStatsObject() *IndexerStats {
 	return m.stats
 }
 
-func (m *MsgUpdateBucketQueue) GetBucketFilter() map[string]*common.TsVbuuid {
-	return m.bucketFilter
+func (m *MsgUpdateKeyspaceIdQueue) GetKeyspaceIdFilter() map[string]*common.TsVbuuid {
+	return m.keyspaceIdFilter
 }
 
-func (m *MsgUpdateBucketQueue) GetBucketSessionId() BucketSessionId {
-	return m.bucketSessionId
+func (m *MsgUpdateKeyspaceIdQueue) GetKeyspaceIdSessionId() KeyspaceIdSessionId {
+	return m.keyspaceIdSessionId
 }
 
-func (m *MsgUpdateBucketQueue) String() string {
+func (m *MsgUpdateKeyspaceIdQueue) String() string {
 
-	str := "\n\tMessage: MsgUpdateBucketQueue"
-	str += fmt.Sprintf("\n\tBucketQueueMap: %v", m.bucketQueueMap)
+	str := "\n\tMessage: MsgUpdateKeyspaceIdQueue"
+	str += fmt.Sprintf("\n\tKeyspaceIdQueueMap: %v", m.keyspaceIdQueueMap)
 	return str
 
 }

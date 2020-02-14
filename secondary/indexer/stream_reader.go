@@ -66,7 +66,7 @@ type mutationStreamReader struct {
 //CreateMutationStreamReader creates a new mutation stream and starts
 //a reader to listen and process the mutations.
 //In case returned MutationStreamReader is nil, Message will have the error msg.
-func CreateMutationStreamReader(streamId common.StreamId, bucketQueueMap BucketQueueMap,
+func CreateMutationStreamReader(streamId common.StreamId, bucketQueueMap KeyspaceIdQueueMap,
 	bucketFilter map[string]*common.TsVbuuid, supvCmdch MsgChannel, supvRespch MsgChannel,
 	numWorkers int, stats *IndexerStats, config common.Config, is common.IndexerState,
 	allowMarkFirstSnap bool, vbMap *VbMapHolder, bucketSessionId BucketSessionId) (
@@ -102,7 +102,7 @@ func CreateMutationStreamReader(streamId common.StreamId, bucketQueueMap BucketQ
 		supvCmdch:         supvCmdch,
 		supvRespch:        supvRespch,
 		syncStopCh:        make(StopChannel),
-		bucketQueueMap:    CopyBucketQueueMap(bucketQueueMap),
+		bucketQueueMap:    CopyKeyspaceIdQueueMap(bucketQueueMap),
 		killch:            make(chan bool),
 		syncBatchInterval: getSyncBatchInterval(config),
 		stopch:            make(StopChannel),
@@ -289,13 +289,13 @@ func (r *mutationStreamReader) handleSupervisorCommands(cmd Message) Message {
 		defer r.queueMapLock.Unlock()
 
 		//copy and store new bucketQueueMap
-		req := cmd.(*MsgUpdateBucketQueue)
-		bucketQueueMap := req.GetBucketQueueMap()
-		r.bucketQueueMap = CopyBucketQueueMap(bucketQueueMap)
+		req := cmd.(*MsgUpdateKeyspaceIdQueue)
+		bucketQueueMap := req.GetKeyspaceIdQueueMap()
+		r.bucketQueueMap = CopyKeyspaceIdQueueMap(bucketQueueMap)
 		r.stats.Set(req.GetStatsObject())
 
-		bucketFilter := req.GetBucketFilter()
-		bucketSessionId := req.GetBucketSessionId()
+		bucketFilter := req.GetKeyspaceIdFilter()
+		bucketSessionId := BucketSessionId(req.GetKeyspaceIdSessionId())
 		for i := 0; i < r.numWorkers; i++ {
 			r.streamWorkers[i].initBucketFilter(bucketFilter, bucketSessionId)
 		}
