@@ -285,7 +285,7 @@ func MakeAndSecureTCPListener(addr string) (net.Listener, error) {
 		return nil, err
 	}
 
-	tcpListener, err := makeTCPListener(addr)
+	tcpListener, err := MakeProtocolAwareTCPListener(addr)
 	if err != nil {
 		return nil, err
 	}
@@ -318,6 +318,27 @@ func makeTCPListener(addr string) (net.Listener, error) {
 }
 
 //
+// Set up a TCP listener.
+// If the cluster setting dictates ipv6, then listener will bind only on
+// ipv6 addresses. Similarly if the cluster setting dictates ipv4, then
+// the listener will bind only on ipv4 addresses.
+//
+func MakeProtocolAwareTCPListener(addr string) (net.Listener, error) {
+
+	protocol := "tcp4"
+	if IsIpv6() {
+		protocol = "tcp6"
+	}
+
+	tcpListener, err := net.Listen(protocol, addr)
+	if err != nil {
+		return nil, err
+	}
+
+	return tcpListener, nil
+}
+
+//
 // Secure a TCP listener.  If encryption is requird, listener must already
 // setup with SSL port.
 //
@@ -341,7 +362,7 @@ func MakeListener(addr string) (net.Listener, error) {
 		return nil, err
 	}
 
-	listener, err := makeTCPListener(addr)
+	listener, err := MakeProtocolAwareTCPListener(addr)
 	if err != nil {
 		return nil, err
 	}
@@ -725,4 +746,18 @@ func MakeHTTPServer(addr string) (*http.Server, error) {
 	}
 
 	return server, nil
+}
+
+//
+// Cluster wide ipv6 setting.
+//
+
+var _isIpv6 bool
+
+func SetIpv6(isIpv6 bool) {
+	_isIpv6 = isIpv6
+}
+
+func IsIpv6() bool {
+	return _isIpv6
 }

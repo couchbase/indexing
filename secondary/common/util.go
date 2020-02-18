@@ -36,8 +36,6 @@ const (
 
 var ErrInvalidIndexName = fmt.Errorf("Invalid index name")
 
-var _isIpv6 bool
-
 // ExcludeStrings will exclude strings in `excludes` from `strs`. preserves the
 // order of `strs` in the result.
 func ExcludeStrings(strs []string, excludes []string) []string {
@@ -1005,11 +1003,11 @@ func ComputePercent(a, b int64) int64 {
 }
 
 func SetIpv6(isIpv6 bool) {
-	_isIpv6 = isIpv6
+	security.SetIpv6(isIpv6)
 }
 
 func IsIpv6() bool {
-	return _isIpv6
+	return security.IsIpv6()
 }
 
 func validateAuth(w http.ResponseWriter, r *http.Request) bool {
