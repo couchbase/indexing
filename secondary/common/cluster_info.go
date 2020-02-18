@@ -355,8 +355,12 @@ func (c *ClusterInfoCache) GetClusterVersion() uint64 {
 		if c.minorVersion >= 5 {
 			return INDEXER_65_VERSION
 		}
+		return INDEXER_55_VERSION // For 6.0, return 5.5 as indexer version
 	}
-	return INDEXER_55_VERSION
+	if c.version == 7 {
+		return INDEXER_70_VERSION
+	}
+	return INDEXER_CUR_VERSION
 }
 
 func (c *ClusterInfoCache) GetServerGroup(nid NodeId) string {

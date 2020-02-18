@@ -96,19 +96,22 @@ const FEATURE_COLLECTIONS byte = 0x12
 type Status uint16
 
 const (
-	SUCCESS         = Status(0x00)
-	KEY_ENOENT      = Status(0x01)
-	KEY_EEXISTS     = Status(0x02)
-	E2BIG           = Status(0x03)
-	EINVAL          = Status(0x04)
-	NOT_STORED      = Status(0x05)
-	DELTA_BADVAL    = Status(0x06)
-	NOT_MY_VBUCKET  = Status(0x07)
-	ERANGE          = Status(0x22)
-	ROLLBACK        = Status(0x23)
-	UNKNOWN_COMMAND = Status(0x81)
-	ENOMEM          = Status(0x82)
-	TMPFAIL         = Status(0x86)
+	SUCCESS            = Status(0x00)
+	KEY_ENOENT         = Status(0x01)
+	KEY_EEXISTS        = Status(0x02)
+	E2BIG              = Status(0x03)
+	EINVAL             = Status(0x04)
+	NOT_STORED         = Status(0x05)
+	DELTA_BADVAL       = Status(0x06)
+	NOT_MY_VBUCKET     = Status(0x07)
+	ERANGE             = Status(0x22)
+	ROLLBACK           = Status(0x23)
+	UNKNOWN_COMMAND    = Status(0x81)
+	ENOMEM             = Status(0x82)
+	TMPFAIL            = Status(0x86)
+	UNKNOWN_COLLECTION = Status(0x88)
+	MANIFEST_AHEAD     = Status(0x8b)
+	UNKNOWN_SCOPE      = Status(0x8c)
 )
 
 // MCItem is an internal representation of an item.
@@ -213,7 +216,9 @@ func init() {
 	StatusNames[ROLLBACK] = "ROLLBACK"
 	StatusNames[ENOMEM] = "ENOMEM"
 	StatusNames[TMPFAIL] = "TMPFAIL"
-
+	StatusNames[UNKNOWN_COLLECTION] = "UNKNOWN_COLLECTION"
+	StatusNames[MANIFEST_AHEAD] = "MANIFEST_AHEAD"
+	StatusNames[UNKNOWN_SCOPE] = "UNKNOWN_SCOPE"
 }
 
 // String an op code.

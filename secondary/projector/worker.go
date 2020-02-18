@@ -60,6 +60,7 @@ type VbucketWorker struct {
 }
 
 type WorkerStats struct {
+	closed    stats.BoolVal
 	datachLen stats.Uint64Val
 
 	// Number of mutations consumed from this worker
@@ -67,8 +68,13 @@ type WorkerStats struct {
 }
 
 func (stats *WorkerStats) Init() {
+	stats.closed.Init()
 	stats.datachLen.Init()
 	stats.outgoingMut.Init()
+}
+
+func (stats *WorkerStats) IsClosed() bool {
+	return stats.closed.Value()
 }
 
 // NewVbucketWorker creates a new routine to handle this vbucket stream.
@@ -219,6 +225,7 @@ func (worker *VbucketWorker) run(datach, sbch chan []interface{}) {
 			}
 		}
 		close(worker.finch)
+		worker.stats.closed.Set(true)
 		logging.Infof("%v ##%x ##%v ... stopped\n", logPrefix,
 			worker.opaque, worker.opaque2)
 	}()

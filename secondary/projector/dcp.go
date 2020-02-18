@@ -88,6 +88,10 @@ func (bdcp *bucketDcp) StartVbStreams(
 	if bdcp.bucket != nil {
 		bdcp.bucket.Refresh()
 	}
+	scopeId := reqTs.GetScopeID()
+	collectionIds := reqTs.GetCollectionIDs()
+	manifestUIDs := reqTs.GetManifestUIDs()
+
 	vbnos := c.Vbno32to16(reqTs.GetVbnos())
 	vbuuids, seqnos := reqTs.GetVbuuids(), reqTs.GetSeqnos()
 	for i, vbno := range vbnos {
@@ -95,8 +99,15 @@ func (bdcp *bucketDcp) StartVbStreams(
 		flags, vbuuid := uint32(0), vbuuids[i]
 		start, end := seqnos[i], uint64(0xFFFFFFFFFFFFFFFF)
 		snapStart, snapEnd := snapshots[i].GetStart(), snapshots[i].GetEnd()
+
+		mid := ""
+		if manifestUIDs != nil {
+			mid = manifestUIDs[i]
+		}
+
 		e := bdcp.dcpFeed.DcpRequestStream(
-			vbno, opaque, flags, vbuuid, start, end, snapStart, snapEnd)
+			vbno, opaque, flags, vbuuid, start, end, snapStart, snapEnd,
+			mid, scopeId, collectionIds)
 		if e != nil {
 			err = e
 			// In case of an error, a clean-up will be triggerred after all the
