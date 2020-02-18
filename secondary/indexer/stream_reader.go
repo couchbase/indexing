@@ -44,7 +44,7 @@ type mutationStreamReader struct {
 
 	syncStopCh StopChannel
 
-	bucketQueueMap BucketQueueMap //indexId to mutation queue map
+	keyspaceIdQueueMap KeyspaceIdQueueMap //keyspaceId to mutation queue map
 
 	killch chan bool // kill chan for the main loop
 
@@ -66,10 +66,10 @@ type mutationStreamReader struct {
 //CreateMutationStreamReader creates a new mutation stream and starts
 //a reader to listen and process the mutations.
 //In case returned MutationStreamReader is nil, Message will have the error msg.
-func CreateMutationStreamReader(streamId common.StreamId, bucketQueueMap KeyspaceIdQueueMap,
-	bucketFilter map[string]*common.TsVbuuid, supvCmdch MsgChannel, supvRespch MsgChannel,
+func CreateMutationStreamReader(streamId common.StreamId, keyspaceIdQueueMap KeyspaceIdQueueMap,
+	keyspaceIdFilter map[string]*common.TsVbuuid, supvCmdch MsgChannel, supvRespch MsgChannel,
 	numWorkers int, stats *IndexerStats, config common.Config, is common.IndexerState,
-	allowMarkFirstSnap bool, vbMap *VbMapHolder, bucketSessionId BucketSessionId) (
+	allowMarkFirstSnap bool, vbMap *VbMapHolder, keyspaceIdSessionId KeyspaceIdSessionId) (
 	MutationStreamReader, Message) {
 
 	//start a new mutation stream
@@ -97,18 +97,18 @@ func CreateMutationStreamReader(streamId common.StreamId, bucketQueueMap Keyspac
 
 	//init the reader
 	r := &mutationStreamReader{streamId: streamId,
-		stream:            stream,
-		streamMutch:       streamMutch,
-		supvCmdch:         supvCmdch,
-		supvRespch:        supvRespch,
-		syncStopCh:        make(StopChannel),
-		bucketQueueMap:    CopyKeyspaceIdQueueMap(bucketQueueMap),
-		killch:            make(chan bool),
-		syncBatchInterval: getSyncBatchInterval(config),
-		stopch:            make(StopChannel),
-		streamWorkers:     make([]*streamWorker, numWorkers),
-		numWorkers:        numWorkers,
-		config:            config,
+		stream:             stream,
+		streamMutch:        streamMutch,
+		supvCmdch:          supvCmdch,
+		supvRespch:         supvRespch,
+		syncStopCh:         make(StopChannel),
+		keyspaceIdQueueMap: CopyKeyspaceIdQueueMap(keyspaceIdQueueMap),
+		killch:             make(chan bool),
+		syncBatchInterval:  getSyncBatchInterval(config),
+		stopch:             make(StopChannel),
+		streamWorkers:      make([]*streamWorker, numWorkers),
+		numWorkers:         numWorkers,
+		config:             config,
 	}
 
 	r.stats.Set(stats)
@@ -117,7 +117,7 @@ func CreateMutationStreamReader(streamId common.StreamId, bucketQueueMap Keyspac
 
 	for i := 0; i < numWorkers; i++ {
 		r.streamWorkers[i] = newStreamWorker(streamId, numWorkers, i, config, r,
-			bucketFilter, allowMarkFirstSnap, vbMap, bucketSessionId)
+			keyspaceIdFilter, allowMarkFirstSnap, vbMap, keyspaceIdSessionId)
 		go r.streamWorkers[i].start()
 	}
 
@@ -242,14 +242,14 @@ func (r *mutationStreamReader) handleStreamInfoMsg(msg interface{}) {
 		logging.Infof("MutationStreamReader::handleStreamInfoMsg \n\tReceived ConnectionError "+
 			"from Client for Stream %v %v.", r.streamId, msg.(dataport.ConnectionError))
 
-		//send a separate message for each bucket. If the ConnError is with empty vblist,
+		//send a separate message for each keyspaceId. If the ConnError is with empty vblist,
 		//the message is ignored.
 		connErr := msg.(dataport.ConnectionError)
 		if len(connErr) != 0 {
-			for bucket, vbList := range connErr {
+			for keyspaceId, vbList := range connErr {
 				supvMsg = &MsgStreamInfo{mType: STREAM_READER_CONN_ERROR,
 					streamId: r.streamId,
-					bucket:   bucket,
+					bucket:   keyspaceId,
 					vbList:   copyVbList(vbList),
 				}
 				r.supvRespch <- supvMsg
@@ -288,16 +288,16 @@ func (r *mutationStreamReader) handleSupervisorCommands(cmd Message) Message {
 		r.queueMapLock.Lock()
 		defer r.queueMapLock.Unlock()
 
-		//copy and store new bucketQueueMap
+		//copy and store new keyspaceIdQueueMap
 		req := cmd.(*MsgUpdateKeyspaceIdQueue)
-		bucketQueueMap := req.GetKeyspaceIdQueueMap()
-		r.bucketQueueMap = CopyKeyspaceIdQueueMap(bucketQueueMap)
+		keyspaceIdQueueMap := req.GetKeyspaceIdQueueMap()
+		r.keyspaceIdQueueMap = CopyKeyspaceIdQueueMap(keyspaceIdQueueMap)
 		r.stats.Set(req.GetStatsObject())
 
-		bucketFilter := req.GetKeyspaceIdFilter()
-		bucketSessionId := BucketSessionId(req.GetKeyspaceIdSessionId())
+		keyspaceIdFilter := req.GetKeyspaceIdFilter()
+		keyspaceIdSessionId := req.GetKeyspaceIdSessionId()
 		for i := 0; i < r.numWorkers; i++ {
-			r.streamWorkers[i].initBucketFilter(bucketFilter, bucketSessionId)
+			r.streamWorkers[i].initKeyspaceIdFilter(keyspaceIdFilter, keyspaceIdSessionId)
 		}
 
 		r.stopch = make(StopChannel)
@@ -404,55 +404,55 @@ func (r *mutationStreamReader) maybeSendSync(fastpath bool) bool {
 	sent := false
 
 	r.queueMapLock.RLock()
-	for bucket, _ := range r.bucketQueueMap {
-		hwt[bucket] = common.NewTsVbuuidCached(bucket, numVbuckets)
-		prevSnap[bucket] = common.NewTsVbuuidCached(bucket, numVbuckets)
+	for keyspaceId, _ := range r.keyspaceIdQueueMap {
+		hwt[keyspaceId] = common.NewTsVbuuidCached(keyspaceId, numVbuckets)
+		prevSnap[keyspaceId] = common.NewTsVbuuidCached(keyspaceId, numVbuckets)
 	}
 
 	nWrkr := r.numWorkers
-	for bucket, _ := range hwt {
+	for keyspaceId, _ := range hwt {
 		needSync := false
 		sessionId := uint64(0)
 		for i := 0; i < nWrkr; i++ {
 
 			r.streamWorkers[i].lock.Lock()
 
-			if r.streamWorkers[i].bucketSyncDue[bucket] {
+			if r.streamWorkers[i].keyspaceIdSyncDue[keyspaceId] {
 				needSync = true
 			}
 			//all workers have same sessionId, it is ok to overwrite
-			sessionId = r.streamWorkers[i].bucketSessionId[bucket]
+			sessionId = r.streamWorkers[i].keyspaceIdSessionId[keyspaceId]
 
 			loopCnt := 0
 			vb := 0
 			for {
 				vb = loopCnt*nWrkr + i
 				if vb < numVbuckets {
-					hwt[bucket].Seqnos[vb] = r.streamWorkers[i].bucketFilter[bucket].Seqnos[vb]
-					hwt[bucket].Vbuuids[vb] = r.streamWorkers[i].bucketFilter[bucket].Vbuuids[vb]
-					hwt[bucket].Snapshots[vb] = r.streamWorkers[i].bucketFilter[bucket].Snapshots[vb]
-					prevSnap[bucket].Seqnos[vb] = r.streamWorkers[i].bucketPrevSnapMap[bucket].Seqnos[vb]
-					prevSnap[bucket].Vbuuids[vb] = r.streamWorkers[i].bucketPrevSnapMap[bucket].Vbuuids[vb]
-					prevSnap[bucket].Snapshots[vb] = r.streamWorkers[i].bucketPrevSnapMap[bucket].Snapshots[vb]
+					hwt[keyspaceId].Seqnos[vb] = r.streamWorkers[i].keyspaceIdFilter[keyspaceId].Seqnos[vb]
+					hwt[keyspaceId].Vbuuids[vb] = r.streamWorkers[i].keyspaceIdFilter[keyspaceId].Vbuuids[vb]
+					hwt[keyspaceId].Snapshots[vb] = r.streamWorkers[i].keyspaceIdFilter[keyspaceId].Snapshots[vb]
+					prevSnap[keyspaceId].Seqnos[vb] = r.streamWorkers[i].keyspaceIdPrevSnapMap[keyspaceId].Seqnos[vb]
+					prevSnap[keyspaceId].Vbuuids[vb] = r.streamWorkers[i].keyspaceIdPrevSnapMap[keyspaceId].Vbuuids[vb]
+					prevSnap[keyspaceId].Snapshots[vb] = r.streamWorkers[i].keyspaceIdPrevSnapMap[keyspaceId].Snapshots[vb]
 
-					if !hwt[bucket].DisableAlign {
-						hwt[bucket].DisableAlign = r.streamWorkers[i].bucketFilter[bucket].DisableAlign
+					if !hwt[keyspaceId].DisableAlign {
+						hwt[keyspaceId].DisableAlign = r.streamWorkers[i].keyspaceIdFilter[keyspaceId].DisableAlign
 					}
 				} else {
 					break
 				}
 				loopCnt++
 			}
-			r.streamWorkers[i].bucketSyncDue[bucket] = false
-			r.streamWorkers[i].bucketFilter[bucket].DisableAlign = false
+			r.streamWorkers[i].keyspaceIdSyncDue[keyspaceId] = false
+			r.streamWorkers[i].keyspaceIdFilter[keyspaceId].DisableAlign = false
 			r.streamWorkers[i].lock.Unlock()
 		}
 		if needSync {
 			r.supvRespch <- &MsgBucketHWT{mType: STREAM_READER_HWT,
 				streamId:  r.streamId,
-				bucket:    bucket,
-				ts:        hwt[bucket],
-				prevSnap:  prevSnap[bucket],
+				bucket:    keyspaceId,
+				ts:        hwt[keyspaceId],
+				prevSnap:  prevSnap[keyspaceId],
 				sessionId: sessionId,
 			}
 			sent = true
@@ -470,10 +470,10 @@ func (r *mutationStreamReader) checkAnySyncDue() bool {
 	syncDue := false
 	r.queueMapLock.RLock()
 loop:
-	for bucket, _ := range r.bucketQueueMap {
+	for keyspaceId, _ := range r.keyspaceIdQueueMap {
 		for i := 0; i < r.numWorkers; i++ {
 			r.streamWorkers[i].lock.Lock()
-			if r.streamWorkers[i].bucketSyncDue[bucket] {
+			if r.streamWorkers[i].keyspaceIdSyncDue[keyspaceId] {
 				syncDue = true
 			}
 			r.streamWorkers[i].lock.Unlock()
@@ -513,13 +513,13 @@ func (r *mutationStreamReader) setIndexerState(is common.IndexerState) {
 type firstSnapFlag []bool
 
 type streamWorker struct {
-	workerch        chan *protobuf.VbKeyVersions //buffered channel for each worker
-	workerStopCh    StopChannel                  //stop channels of workers
-	bucketFilter    map[string]*common.TsVbuuid
-	bucketSessionId BucketSessionId
+	workerch            chan *protobuf.VbKeyVersions //buffered channel for each worker
+	workerStopCh        StopChannel                  //stop channels of workers
+	keyspaceIdFilter    map[string]*common.TsVbuuid
+	keyspaceIdSessionId KeyspaceIdSessionId
 
-	bucketPrevSnapMap map[string]*common.TsVbuuid
-	bucketSyncDue     map[string]bool
+	keyspaceIdPrevSnapMap map[string]*common.TsVbuuid
+	keyspaceIdSyncDue     map[string]bool
 
 	lock sync.RWMutex
 
@@ -535,34 +535,34 @@ type streamWorker struct {
 
 	reader *mutationStreamReader
 
-	markFirstSnap   bool
-	bucketFirstSnap map[string]firstSnapFlag
+	markFirstSnap       bool
+	keyspaceIdFirstSnap map[string]firstSnapFlag
 
 	vbMap *VbMapHolder
 }
 
 func newStreamWorker(streamId common.StreamId, numWorkers int, workerId int, config common.Config,
-	reader *mutationStreamReader, bucketFilter map[string]*common.TsVbuuid, allowMarkFirstSnap bool,
-	vbMap *VbMapHolder, bucketSessionId BucketSessionId) *streamWorker {
+	reader *mutationStreamReader, keyspaceIdFilter map[string]*common.TsVbuuid, allowMarkFirstSnap bool,
+	vbMap *VbMapHolder, keyspaceIdSessionId KeyspaceIdSessionId) *streamWorker {
 
 	w := &streamWorker{streamId: streamId,
-		workerId:          workerId,
-		workerch:          make(chan *protobuf.VbKeyVersions, getWorkerBufferSize(config)/uint64(numWorkers)),
-		workerStopCh:      make(StopChannel),
-		bucketFilter:      make(map[string]*common.TsVbuuid),
-		bucketPrevSnapMap: make(map[string]*common.TsVbuuid),
-		bucketSyncDue:     make(map[string]bool),
-		reader:            reader,
-		bucketFirstSnap:   make(map[string]firstSnapFlag),
-		vbMap:             vbMap,
-		bucketSessionId:   make(BucketSessionId),
+		workerId:              workerId,
+		workerch:              make(chan *protobuf.VbKeyVersions, getWorkerBufferSize(config)/uint64(numWorkers)),
+		workerStopCh:          make(StopChannel),
+		keyspaceIdFilter:      make(map[string]*common.TsVbuuid),
+		keyspaceIdPrevSnapMap: make(map[string]*common.TsVbuuid),
+		keyspaceIdSyncDue:     make(map[string]bool),
+		reader:                reader,
+		keyspaceIdFirstSnap:   make(map[string]firstSnapFlag),
+		vbMap:                 vbMap,
+		keyspaceIdSessionId:   make(KeyspaceIdSessionId),
 	}
 
 	if allowMarkFirstSnap {
 		w.markFirstSnap = getMarkFirstSnap(config)
 	}
 
-	w.initBucketFilter(bucketFilter, bucketSessionId)
+	w.initKeyspaceIdFilter(keyspaceIdFilter, keyspaceIdSessionId)
 	return w
 
 }
@@ -588,15 +588,13 @@ func (w *streamWorker) start() {
 
 }
 
-// TODO (Collections): Change MutationMeta to incorporate keyspaceId and update the
-// below code tree to work with keyspaceId
-func (w *streamWorker) handleKeyVersions(bucket string, vbucket Vbucket, vbuuid Vbuuid,
+func (w *streamWorker) handleKeyVersions(keyspaceId string, vbucket Vbucket, vbuuid Vbuuid,
 	opaque uint64, kvs []*protobuf.KeyVersions, projVer common.ProjectorVersion) {
 
 	for _, kv := range kvs {
-		w.handleSingleKeyVersion(bucket, vbucket, vbuuid, opaque, kv, projVer)
+		w.handleSingleKeyVersion(keyspaceId, vbucket, vbuuid, opaque, kv, projVer)
 		if kv.GetPrjMovingAvg() > 0 {
-			avg := w.getLatencyObj(bucket, vbucket)
+			avg := w.getLatencyObj(keyspaceId, vbucket)
 			if avg != nil {
 				avg.Set(kv.GetPrjMovingAvg())
 			}
@@ -607,11 +605,11 @@ func (w *streamWorker) handleKeyVersions(bucket string, vbucket Vbucket, vbuuid 
 
 //handleSingleKeyVersion processes a single mutation based on the command type
 //A mutation is put in a worker queue and control message is sent to supervisor
-func (w *streamWorker) handleSingleKeyVersion(bucket string, vbucket Vbucket, vbuuid Vbuuid,
+func (w *streamWorker) handleSingleKeyVersion(keyspaceId string, vbucket Vbucket, vbuuid Vbuuid,
 	opaque uint64, kv *protobuf.KeyVersions, projVer common.ProjectorVersion) {
 
 	meta := NewMutationMeta()
-	meta.bucket = bucket
+	meta.keyspaceId = keyspaceId
 	meta.vbucket = vbucket
 	meta.vbuuid = vbuuid
 	meta.seqno = Seqno(kv.GetSeqno())
@@ -642,9 +640,9 @@ func (w *streamWorker) handleSingleKeyVersion(bucket string, vbucket Vbucket, vb
 			//filter needs to be evaluated and set only once.
 			if w.evalFilter {
 				w.evalFilter = false
-				//check the bucket filter to see if this mutation can be processed
+				//check the keyspaceId filter to see if this mutation can be processed
 				//valid mutation will increment seqno of the filter
-				w.skipMutation, meta.firstSnap = w.checkAndSetBucketFilter(meta)
+				w.skipMutation, meta.firstSnap = w.checkAndSetKeyspaceIdFilter(meta)
 			}
 
 			if w.skipMutation {
@@ -756,54 +754,55 @@ func (w *streamWorker) handleSingleMutation(mut *MutationKeys, stopch StopChanne
 	defer w.reader.queueMapLock.RUnlock()
 
 	//based on the index, enqueue the mutation in the right queue
-	if q, ok := w.reader.bucketQueueMap[mut.meta.bucket]; ok {
+	if q, ok := w.reader.keyspaceIdQueueMap[mut.meta.keyspaceId]; ok {
 		q.queue.Enqueue(mut, mut.meta.vbucket, stopch)
 
 		stats := w.reader.stats.Get()
-		if rstats, ok := stats.buckets[mut.meta.bucket]; ok {
+		//TODO Collections stats should work with keyspaceId
+		if rstats, ok := stats.buckets[mut.meta.keyspaceId]; ok {
 			rstats.mutationQueueSize.Add(1)
 			rstats.numMutationsQueued.Add(1)
 		}
 
 	} else {
 		logging.Warnf("MutationStreamReader::handleSingleMutation got mutation for "+
-			"unknown bucket. Skipped  %v", logging.TagUD(mut))
+			"unknown keyspaceId:. Skipped  %v", logging.TagUD(mut))
 	}
 
 }
 
-//initBucketFilter initializes the bucket filter
-func (w *streamWorker) initBucketFilter(bucketFilter map[string]*common.TsVbuuid,
-	bucketSessionId BucketSessionId) {
+//initKeyspaceIdFilter initializes the keyspaceId filter
+func (w *streamWorker) initKeyspaceIdFilter(keyspaceIdFilter map[string]*common.TsVbuuid,
+	keyspaceIdSessionId KeyspaceIdSessionId) {
 
 	w.lock.Lock()
 	defer w.lock.Unlock()
 
-	//allocate a new filter for the buckets which don't
+	//allocate a new filter for the keyspaceIds which don't
 	//have a filter yet
-	for b, q := range w.reader.bucketQueueMap {
-		if _, ok := w.bucketFilter[b]; !ok {
-			logging.Debugf("MutationStreamReader::initBucketFilter Added new filter "+
-				"for Bucket %v Stream %v", b, w.streamId)
+	for b, q := range w.reader.keyspaceIdQueueMap {
+		if _, ok := w.keyspaceIdFilter[b]; !ok {
+			logging.Debugf("MutationStreamReader::initKeyspaceIdFilter Added new filter "+
+				"for KeyspaceId %v Stream %v", b, w.streamId)
 
 			//if there is non-nil filter, use that. otherwise use a zero filter.
-			if filter, ok := bucketFilter[b]; ok && filter != nil {
-				w.bucketFilter[b] = filter.Copy()
-				w.bucketPrevSnapMap[b] = filter.Copy()
+			if filter, ok := keyspaceIdFilter[b]; ok && filter != nil {
+				w.keyspaceIdFilter[b] = filter.Copy()
+				w.keyspaceIdPrevSnapMap[b] = filter.Copy()
 				//reset vbuuids to 0 in filter. mutations for a vbucket are
 				//only processed after streambegin is received, which will set
 				//the vbuuid again.
 				for i := 0; i < len(filter.Vbuuids); i++ {
-					w.bucketFilter[b].Vbuuids[i] = 0
+					w.keyspaceIdFilter[b].Vbuuids[i] = 0
 				}
 			} else {
-				w.bucketFilter[b] = common.NewTsVbuuid(b, int(q.queue.GetNumVbuckets()))
-				w.bucketPrevSnapMap[b] = common.NewTsVbuuid(b, int(q.queue.GetNumVbuckets()))
+				w.keyspaceIdFilter[b] = common.NewTsVbuuid(b, int(q.queue.GetNumVbuckets()))
+				w.keyspaceIdPrevSnapMap[b] = common.NewTsVbuuid(b, int(q.queue.GetNumVbuckets()))
 			}
 
-			w.bucketSyncDue[b] = false
-			w.bucketFirstSnap[b] = make(firstSnapFlag, int(q.queue.GetNumVbuckets()))
-			w.bucketSessionId[b] = bucketSessionId[b]
+			w.keyspaceIdSyncDue[b] = false
+			w.keyspaceIdFirstSnap[b] = make(firstSnapFlag, int(q.queue.GetNumVbuckets()))
+			w.keyspaceIdSessionId[b] = keyspaceIdSessionId[b]
 
 			//reset stat for bucket
 			stats := w.reader.stats.Get()
@@ -813,55 +812,55 @@ func (w *streamWorker) initBucketFilter(bucketFilter map[string]*common.TsVbuuid
 		}
 	}
 
-	//remove the bucket filters for which bucket doesn't exist anymore
-	for b, _ := range w.bucketFilter {
-		if _, ok := w.reader.bucketQueueMap[b]; !ok {
-			logging.Debugf("MutationStreamReader::initBucketFilter Deleted filter "+
-				"for Bucket %v Stream %v", b, w.streamId)
-			delete(w.bucketFilter, b)
-			delete(w.bucketPrevSnapMap, b)
-			delete(w.bucketSyncDue, b)
-			delete(w.bucketFirstSnap, b)
-			delete(w.bucketSessionId, b)
+	//remove the keyspaceId filters for which keyspace doesn't exist anymore
+	for b, _ := range w.keyspaceIdFilter {
+		if _, ok := w.reader.keyspaceIdQueueMap[b]; !ok {
+			logging.Debugf("MutationStreamReader::initKeyspaceIdFilter Deleted filter "+
+				"for KeyspaceId %v Stream %v", b, w.streamId)
+			delete(w.keyspaceIdFilter, b)
+			delete(w.keyspaceIdPrevSnapMap, b)
+			delete(w.keyspaceIdSyncDue, b)
+			delete(w.keyspaceIdFirstSnap, b)
+			delete(w.keyspaceIdSessionId, b)
 		}
 	}
 
 }
 
-//setBucketFilter sets the bucket filter based on seqno/vbuuid of mutation.
+//setKeyspaceIdFilter sets the keyspaceId filter based on seqno/vbuuid of mutation.
 //filter is set when stream begin is received.
-func (w *streamWorker) setBucketFilter(meta *MutationMeta) {
+func (w *streamWorker) setKeyspaceIdFilter(meta *MutationMeta) {
 
 	w.lock.Lock()
 	defer w.lock.Unlock()
 
-	if filter, ok := w.bucketFilter[meta.bucket]; ok {
+	if filter, ok := w.keyspaceIdFilter[meta.keyspaceId]; ok {
 		filter.Seqnos[meta.vbucket] = uint64(meta.seqno)
 		filter.Vbuuids[meta.vbucket] = uint64(meta.vbuuid)
-		logging.Tracef("MutationStreamReader::setBucketFilter Vbucket %v "+
-			"Seqno %v Bucket %v Stream %v", meta.vbucket, meta.seqno, meta.bucket, w.streamId)
+		logging.Tracef("MutationStreamReader::setKeyspaceIdFilter Vbucket %v "+
+			"Seqno %v KeyspaceId %v Stream %v", meta.vbucket, meta.seqno, meta.keyspaceId, w.streamId)
 	} else {
-		logging.Errorf("MutationStreamReader::setBucketFilter Missing bucket "+
-			"%v in Filter for Stream %v", meta.bucket, w.streamId)
+		logging.Errorf("MutationStreamReader::setKeyspaceIdFilter Missing keyspaceId "+
+			"%v in Filter for Stream %v", meta.keyspaceId, w.streamId)
 	}
 
 }
 
-//checkAndSetBucketFilter checks if mutation can be processed
+//checkAndSetKeyspaceIdFilter checks if mutation can be processed
 //based on the current filter. Filter is also updated with new
 //seqno/vbuuid if mutations can be processed.
 //Returns {skip, firstSnap} to indicate if mutations needs to be "skipped" and
 //if it belongs for first DCP snapshot.
-func (w *streamWorker) checkAndSetBucketFilter(meta *MutationMeta) (bool, bool) {
+func (w *streamWorker) checkAndSetKeyspaceIdFilter(meta *MutationMeta) (bool, bool) {
 
 	w.lock.Lock()
 	defer w.lock.Unlock()
 
-	if filter, ok := w.bucketFilter[meta.bucket]; ok {
+	if filter, ok := w.keyspaceIdFilter[meta.keyspaceId]; ok {
 
 		//validate sessionId. allow opaque==0 for backward compat
 		if meta.opaque != 0 &&
-			meta.opaque != w.bucketSessionId[meta.bucket] {
+			meta.opaque != w.keyspaceIdSessionId[meta.keyspaceId] {
 			//skip the mutation
 			return true, false
 		}
@@ -869,45 +868,45 @@ func (w *streamWorker) checkAndSetBucketFilter(meta *MutationMeta) (bool, bool) 
 		if uint64(meta.seqno) < filter.Snapshots[meta.vbucket][0] ||
 			uint64(meta.seqno) > filter.Snapshots[meta.vbucket][1] {
 
-			logging.Debugf("MutationStreamReader::checkAndSetBucketFilter Out-of-bound Seqno. "+
+			logging.Debugf("MutationStreamReader::checkAndSetKeyspaceIdFilter Out-of-bound Seqno. "+
 				"Snapshot %v-%v for vb %v %v %v. New seqno %v vbuuid %v.  Current Seqno %v vbuuid %v",
 				filter.Snapshots[meta.vbucket][0], filter.Snapshots[meta.vbucket][1],
-				meta.vbucket, meta.bucket, w.streamId,
+				meta.vbucket, meta.keyspaceId, w.streamId,
 				uint64(meta.seqno), uint64(meta.vbuuid),
 				filter.Seqnos[meta.vbucket], filter.Vbuuids[meta.vbucket])
 
-			w.bucketFirstSnap[meta.bucket][meta.vbucket] = false //for safety
+			w.keyspaceIdFirstSnap[meta.keyspaceId][meta.vbucket] = false //for safety
 		}
 
 		//the filter only checks if seqno of incoming mutation is greater than
 		//the existing filter. Also there should be a valid StreamBegin(vbuuid)
 		//for the vbucket. The vbuuid check is only to ensure that after stream
-		//restart for a bucket, mutations get processed only after StreamBegin.
+		//restart for a keyspace, mutations get processed only after StreamBegin.
 		//There can be residual mutations in projector endpoint queue after
-		//a bucket gets deleted from stream in case of multiple buckets.
+		//a keyspace gets deleted from stream in case of multiple keyspaceIds.
 		//The vbuuid doesn't get reset after StreamEnd/StreamBegin. The
 		//filter can be extended for that check if required.
 		if uint64(meta.seqno) > filter.Seqnos[meta.vbucket] &&
 			filter.Vbuuids[meta.vbucket] != 0 {
 			filter.Seqnos[meta.vbucket] = uint64(meta.seqno)
 			filter.Vbuuids[meta.vbucket] = uint64(meta.vbuuid)
-			w.bucketSyncDue[meta.bucket] = true
-			return false, w.bucketFirstSnap[meta.bucket][meta.vbucket]
+			w.keyspaceIdSyncDue[meta.keyspaceId] = true
+			return false, w.keyspaceIdFirstSnap[meta.keyspaceId][meta.vbucket]
 		} else {
-			logging.Tracef("MutationStreamReader::checkAndSetBucketFilter Skipped "+
-				"Mutation %v for Bucket %v Stream %v. Current Filter %v", meta,
-				meta.bucket, w.streamId, filter.Seqnos[meta.vbucket])
+			logging.Tracef("MutationStreamReader::checkAndSetKeyspaceIdFilter Skipped "+
+				"Mutation %v for KeyspaceId %v Stream %v. Current Filter %v", meta,
+				meta.keyspaceId, w.streamId, filter.Seqnos[meta.vbucket])
 			return true, false
 		}
 
 	} else {
-		logging.Debugf("MutationStreamReader::checkAndSetBucketFilter Missing"+
-			"bucket %v in Filter for Stream %v", meta.bucket, w.streamId)
+		logging.Debugf("MutationStreamReader::checkAndSetKeyspaceIdFilter Missing"+
+			"keyspaceId %v in Filter for Stream %v", meta.keyspaceId, w.streamId)
 		return true, false
 	}
 }
 
-//updates snapshot information in bucket filter
+//updates snapshot information in keyspaceId filter
 func (w *streamWorker) updateSnapInFilter(meta *MutationMeta,
 	snapStart uint64, snapEnd uint64) {
 
@@ -916,34 +915,34 @@ func (w *streamWorker) updateSnapInFilter(meta *MutationMeta,
 
 	if snapEnd < snapStart {
 		logging.Errorf("MutationStreamReader::updateSnapInFilter Bad Snapshot Received "+
-			"for %v %v %v %v-%v", meta.bucket, meta.vbucket, w.streamId, snapStart, snapEnd)
+			"for %v %v %v %v-%v", meta.keyspaceId, meta.vbucket, w.streamId, snapStart, snapEnd)
 	}
 
 	if snapEnd-snapStart > 50000 {
 		logging.Infof("MutationStreamReader::updateSnapInFilter Huge Snapshot Received "+
-			"for %v %v %v %v-%v", meta.bucket, meta.vbucket, w.streamId, snapStart, snapEnd)
+			"for %v %v %v %v-%v", meta.keyspaceId, meta.vbucket, w.streamId, snapStart, snapEnd)
 	}
 
-	if filter, ok := w.bucketFilter[meta.bucket]; ok {
+	if filter, ok := w.keyspaceIdFilter[meta.keyspaceId]; ok {
 
 		//validate sessionId. allow opaque==0 for backward compat
 		if meta.opaque != 0 &&
-			meta.opaque != w.bucketSessionId[meta.bucket] {
+			meta.opaque != w.keyspaceIdSessionId[meta.keyspaceId] {
 			return
 		}
 
 		//if current snapshot start from 0 and the filter doesn't have any snapshot
 		if w.markFirstSnap && snapStart == 0 && filter.Snapshots[meta.vbucket][1] == 0 {
-			w.bucketFirstSnap[meta.bucket][meta.vbucket] = true
+			w.keyspaceIdFirstSnap[meta.keyspaceId][meta.vbucket] = true
 		} else {
-			w.bucketFirstSnap[meta.bucket][meta.vbucket] = false
+			w.keyspaceIdFirstSnap[meta.keyspaceId][meta.vbucket] = false
 		}
 
 		if snapEnd > filter.Snapshots[meta.vbucket][1] &&
 			filter.Vbuuids[meta.vbucket] != 0 {
 
 			//store the existing snap marker in prevSnap map
-			prevSnap := w.bucketPrevSnapMap[meta.bucket]
+			prevSnap := w.keyspaceIdPrevSnapMap[meta.keyspaceId]
 			prevSnap.Snapshots[meta.vbucket][0] = filter.Snapshots[meta.vbucket][0]
 			prevSnap.Snapshots[meta.vbucket][1] = filter.Snapshots[meta.vbucket][1]
 			prevSnap.Vbuuids[meta.vbucket] = filter.Vbuuids[meta.vbucket]
@@ -951,8 +950,8 @@ func (w *streamWorker) updateSnapInFilter(meta *MutationMeta,
 
 			if prevSnap.Snapshots[meta.vbucket][1] != filter.Seqnos[meta.vbucket] {
 				logging.Warnf("MutationStreamReader::updateSnapInFilter "+
-					"Bucket %v Stream %v vb %v Partial Snapshot %v-%v Seqno %v vbuuid %v."+
-					"Next Snapshot %v-%v.", meta.bucket,
+					"KeyspaceId %v Stream %v vb %v Partial Snapshot %v-%v Seqno %v vbuuid %v."+
+					"Next Snapshot %v-%v.", meta.keyspaceId,
 					w.streamId, meta.vbucket, prevSnap.Snapshots[meta.vbucket][0],
 					prevSnap.Snapshots[meta.vbucket][1], filter.Seqnos[meta.vbucket],
 					prevSnap.Vbuuids[meta.vbucket], filter.Snapshots[meta.vbucket][0],
@@ -968,24 +967,24 @@ func (w *streamWorker) updateSnapInFilter(meta *MutationMeta,
 			filter.Snapshots[meta.vbucket][1] = snapEnd
 
 			logging.Debugf("MutationStreamReader::updateSnapInFilter "+
-				"bucket %v Stream %v vb %v Snapshot %v-%v Prev Snapshot %v-%v Prev Snapshot vbuuid %v",
-				meta.bucket, w.streamId, meta.vbucket, snapStart, snapEnd, prevSnap.Snapshots[meta.vbucket][0],
+				"keyspaceId %v Stream %v vb %v Snapshot %v-%v Prev Snapshot %v-%v Prev Snapshot vbuuid %v",
+				meta.keyspaceId, w.streamId, meta.vbucket, snapStart, snapEnd, prevSnap.Snapshots[meta.vbucket][0],
 				prevSnap.Snapshots[meta.vbucket][1], prevSnap.Vbuuids[meta.vbucket])
 
 		} else {
 			logging.Warnf("MutationStreamReader::updateSnapInFilter Skipped "+
 				"Snapshot %v-%v for vb %v %v %v. Current Filter %v vbuuid %v", snapStart,
-				snapEnd, meta.vbucket, meta.bucket, w.streamId,
+				snapEnd, meta.vbucket, meta.keyspaceId, w.streamId,
 				filter.Snapshots[meta.vbucket][1], filter.Vbuuids[meta.vbucket])
 		}
 	} else {
 		logging.Debugf("MutationStreamReader::updateSnapInFilter Missing"+
-			"bucket %v in Filter for Stream %v", meta.bucket, w.streamId)
+			"keyspaceId %v in Filter for Stream %v", meta.keyspaceId, w.streamId)
 	}
 
 }
 
-//updates vbuuid information in bucket filter
+//updates vbuuid information in keyspaceId filter
 func (w *streamWorker) updateVbuuidInFilter(meta *MutationMeta) {
 
 	w.lock.Lock()
@@ -993,32 +992,32 @@ func (w *streamWorker) updateVbuuidInFilter(meta *MutationMeta) {
 
 	if meta.vbuuid == 0 {
 		logging.Fatalf("MutationStreamReader::updateVbuuidInFilter Received vbuuid %v "+
-			"bucket %v vb %v Stream %v. This vbucket will not be processed!!!", meta.vbuuid,
-			meta.bucket, meta.vbucket, w.streamId)
+			"keyspaceId %v vb %v Stream %v. This vbucket will not be processed!!!", meta.vbuuid,
+			meta.keyspaceId, meta.vbucket, w.streamId)
 	}
 
-	if filter, ok := w.bucketFilter[meta.bucket]; ok {
+	if filter, ok := w.keyspaceIdFilter[meta.keyspaceId]; ok {
 		//validate sessionId. allow opaque==0 for backward compat
 		if meta.opaque != 0 &&
-			meta.opaque != w.bucketSessionId[meta.bucket] {
+			meta.opaque != w.keyspaceIdSessionId[meta.keyspaceId] {
 			return
 		}
 
 		filter.Vbuuids[meta.vbucket] = uint64(meta.vbuuid)
 	} else {
 		logging.Errorf("MutationStreamReader::updateVbuuidInFilter Missing"+
-			"bucket %v vb %v vbuuid %v in Filter for Stream %v", meta.bucket,
+			"keyspaceId %v vb %v vbuuid %v in Filter for Stream %v", meta.keyspaceId,
 			meta.vbucket, meta.vbuuid, w.streamId)
 	}
 
 }
 
-func (w *streamWorker) getLatencyObj(bucket string, vbucket Vbucket) *Stats.Int64Val {
-	perStreamBucket := fmt.Sprintf("%v/%v", w.streamId, bucket)
+func (w *streamWorker) getLatencyObj(keyspaceId string, vbucket Vbucket) *Stats.Int64Val {
+	perStreamKeyspaceId := fmt.Sprintf("%v/%v", w.streamId, keyspaceId)
 
 	vbMap := w.vbMap.Get()
 	if vbMap != nil {
-		if vbToHostMap, ok := vbMap[perStreamBucket]; ok && vbToHostMap != nil {
+		if vbToHostMap, ok := vbMap[perStreamKeyspaceId]; ok && vbToHostMap != nil {
 			if host, ok := vbToHostMap[vbucket]; ok {
 				stats := w.reader.stats.Get()
 				latencyMap := stats.prjLatencyMap.Get()

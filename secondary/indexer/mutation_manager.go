@@ -37,7 +37,7 @@ type BucketQueueMap map[string]IndexerMutationQueue
 //Map from keyspaceId to flusher stop channel
 type KeyspaceIdStopChMap map[string]StopChannel
 
-// Bucket -> map of vbucket to hostname
+// KeyspaceId -> map of vbucket to hostname
 type VBMap map[string]map[Vbucket]string
 
 type mutationMgr struct {
@@ -77,7 +77,7 @@ type mutationMgr struct {
 	stats  IndexerStatsHolder
 
 	vbMap         *VbMapHolder
-	numVbsPerNode map[string]int64 // NodeUUID -> Number of active vb's on the KV node across all buckets
+	numVbsPerNode map[string]int64 // NodeUUID -> Number of active vb's on the KV node across all keyspaceIds
 }
 
 //NewMutationManager creates a new Mutation Manager which listens for commands from
@@ -433,7 +433,7 @@ func (m *mutationMgr) handleOpenStream(cmd Message) {
 
 	reader, errMsg := CreateMutationStreamReader(streamId, keyspaceIdQueueMap, keyspaceIdFilter,
 		cmdCh, m.mutMgrRecvCh, getNumStreamWorkers(m.config), m.stats.Get(),
-		m.config, m.indexerState, allowMarkFirsSnap, m.vbMap, BucketSessionId(keyspaceIdSessionId))
+		m.config, m.indexerState, allowMarkFirsSnap, m.vbMap, keyspaceIdSessionId)
 
 	if reader == nil {
 		//send the error back on supv channel
@@ -583,12 +583,12 @@ func (m *mutationMgr) handleRemoveIndexListFromStream(cmd Message) {
 	}
 
 	var keyspaceIdMapDirty bool
-	//if all indexes for a bucket have been removed, drop the mutation queue
+	//if all indexes for a keyspaceId have been removed, drop the mutation queue
 	for b, bq := range keyspaceIdQueueMap {
 		dropKeyspaceId := true
 		for _, iq := range indexQueueMap {
 			//bad check: if the queues match, it is still being used
-			//better way is to check with bucket
+			//better way is to check with keyspaceId
 			if bq == iq {
 				dropKeyspaceId = false
 				break
@@ -659,7 +659,7 @@ func (m *mutationMgr) handleRemoveBucketFromStream(cmd Message) {
 
 	var keyspaceIdMapDirty bool
 
-	//delete all indexes for given bucket from map
+	//delete all indexes for given keyspaceId from map
 	for _, inst := range m.indexInstMap {
 		if inst.Defn.KeyspaceId(streamId) == keyspaceId {
 			keyspaceIdMapDirty = true
@@ -799,8 +799,8 @@ func (m *mutationMgr) shutdown() Message {
 		defer m.flock.Unlock()
 
 		//send stop signal to all flushers
-		for _, bucketStopChMap := range m.streamFlusherStopChMap {
-			for _, stopch := range bucketStopChMap {
+		for _, keyspaceIdStopChMap := range m.streamFlusherStopChMap {
+			for _, stopch := range keyspaceIdStopChMap {
 				close(stopch)
 			}
 		}
@@ -1138,18 +1138,18 @@ func (m *mutationMgr) initLatencyObj(cmd Message) {
 	meta := cmd.(*MsgStream).GetMutationMeta()
 
 	vb := meta.vbucket
-	bucket := meta.bucket
+	keyspaceId := meta.keyspaceId
 	vbMap := m.vbMap.Clone()
 
 	perStreamCurrNode := fmt.Sprintf("%v/%s", streamId, node)
-	perStreamBucket := fmt.Sprintf("%v/%v", streamId, bucket)
+	perStreamKeyspaceId := fmt.Sprintf("%v/%v", streamId, keyspaceId)
 
-	if _, ok := vbMap[perStreamBucket]; !ok {
-		vbMap[perStreamBucket] = make(map[Vbucket]string)
+	if _, ok := vbMap[perStreamKeyspaceId]; !ok {
+		vbMap[perStreamKeyspaceId] = make(map[Vbucket]string)
 	}
 
 	// Check if vb belonged to a different node before
-	if perStreamPrevNode, ok := vbMap[perStreamBucket][vb]; ok &&
+	if perStreamPrevNode, ok := vbMap[perStreamKeyspaceId][vb]; ok &&
 		perStreamPrevNode != perStreamCurrNode {
 		// vb belonged to a different node before
 		m.numVbsPerNode[perStreamPrevNode]--
@@ -1171,7 +1171,7 @@ func (m *mutationMgr) initLatencyObj(cmd Message) {
 		m.numVbsPerNode[perStreamCurrNode]++
 	}
 
-	vbMap[perStreamBucket][vb] = perStreamCurrNode
+	vbMap[perStreamKeyspaceId][vb] = perStreamCurrNode
 	m.vbMap.Set(vbMap)
 
 	// Update prjLatencyMap only if there is a change
@@ -1288,9 +1288,9 @@ func (m *mutationMgr) handleSecurityChange(cmd Message) {
 	m.supvCmdch <- msg
 }
 
-func CopyKeyspaceIdQueueMap(inMap KeyspaceIdQueueMap) BucketQueueMap {
+func CopyKeyspaceIdQueueMap(inMap KeyspaceIdQueueMap) KeyspaceIdQueueMap {
 
-	outMap := make(BucketQueueMap)
+	outMap := make(KeyspaceIdQueueMap)
 	for k, v := range inMap {
 		outMap[k] = v
 	}

@@ -371,6 +371,7 @@ func (idx *IndexDefn) IndexOnCollection() bool {
 	}
 
 	return true
+}
 
 func (idx *IndexDefn) KeyspaceId(streamId StreamId) string {
 

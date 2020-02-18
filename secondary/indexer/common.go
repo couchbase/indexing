@@ -11,6 +11,8 @@ package indexer
 
 import (
 	"fmt"
+	"strings"
+
 	"github.com/couchbase/indexing/secondary/common"
 )
 
@@ -202,3 +204,22 @@ const (
 )
 
 var gEncodeCompatMode EncodeCompatMode
+
+func SplitKeyspaceId(keyspaceId string, streamId common.StreamId) (string, string, string) {
+
+	var ret []string
+	if streamId == common.INIT_STREAM {
+		ret = strings.Split(keyspaceId, ":")
+	} else {
+		ret = []string{keyspaceId}
+	}
+
+	if len(ret) == 3 {
+		return ret[0], ret[1], ret[2]
+	} else if len(ret) == 1 {
+		return ret[0], "", ""
+	} else {
+		return "", "", ""
+	}
+
+}
