@@ -21,100 +21,100 @@ import (
 type StreamState struct {
 	config common.Config
 
-	streamStatus              map[common.StreamId]StreamStatus
-	streamBucketStatus        map[common.StreamId]BucketStatus
-	streamBucketVbStatusMap   map[common.StreamId]BucketVbStatusMap
-	streamBucketVbRefCountMap map[common.StreamId]BucketVbRefCountMap
+	streamStatus                  map[common.StreamId]StreamStatus
+	streamKeyspaceIdStatus        map[common.StreamId]KeyspaceIdStatus
+	streamKeyspaceIdVbStatusMap   map[common.StreamId]KeyspaceIdVbStatusMap
+	streamKeyspaceIdVbRefCountMap map[common.StreamId]KeyspaceIdVbRefCountMap
 
-	streamBucketHWTMap            map[common.StreamId]BucketHWTMap
-	streamBucketNeedsCommitMap    map[common.StreamId]BucketNeedsCommitMap
-	streamBucketHasBuildCompTSMap map[common.StreamId]BucketHasBuildCompTSMap
-	streamBucketNewTsReqdMap      map[common.StreamId]BucketNewTsReqdMap
-	streamBucketTsListMap         map[common.StreamId]BucketTsListMap
-	streamBucketLastFlushedTsMap  map[common.StreamId]BucketLastFlushedTsMap
-	streamBucketRestartTsMap      map[common.StreamId]BucketRestartTsMap
-	streamBucketOpenTsMap         map[common.StreamId]BucketOpenTsMap
-	streamBucketStartTimeMap      map[common.StreamId]BucketStartTimeMap
-	streamBucketLastSnapMarker    map[common.StreamId]BucketLastSnapMarker
+	streamKeyspaceIdHWTMap            map[common.StreamId]KeyspaceIdHWTMap
+	streamKeyspaceIdNeedsCommitMap    map[common.StreamId]KeyspaceIdNeedsCommitMap
+	streamKeyspaceIdHasBuildCompTSMap map[common.StreamId]KeyspaceIdHasBuildCompTSMap
+	streamKeyspaceIdNewTsReqdMap      map[common.StreamId]KeyspaceIdNewTsReqdMap
+	streamKeyspaceIdTsListMap         map[common.StreamId]KeyspaceIdTsListMap
+	streamKeyspaceIdLastFlushedTsMap  map[common.StreamId]KeyspaceIdLastFlushedTsMap
+	streamKeyspaceIdRestartTsMap      map[common.StreamId]KeyspaceIdRestartTsMap
+	streamKeyspaceIdOpenTsMap         map[common.StreamId]KeyspaceIdOpenTsMap
+	streamKeyspaceIdStartTimeMap      map[common.StreamId]KeyspaceIdStartTimeMap
+	streamKeyspaceIdLastSnapMarker    map[common.StreamId]KeyspaceIdLastSnapMarker
 
-	streamBucketLastSnapAlignFlushedTsMap map[common.StreamId]BucketLastFlushedTsMap
-	streamBucketLastMutationVbuuid        map[common.StreamId]BucketLastMutationVbuuid
+	streamKeyspaceIdLastSnapAlignFlushedTsMap map[common.StreamId]KeyspaceIdLastFlushedTsMap
+	streamKeyspaceIdLastMutationVbuuid        map[common.StreamId]KeyspaceIdLastMutationVbuuid
 
-	streamBucketRestartVbTsMap map[common.StreamId]BucketRestartVbTsMap
+	streamKeyspaceIdRestartVbTsMap map[common.StreamId]KeyspaceIdRestartVbTsMap
 
-	streamBucketFlushInProgressTsMap map[common.StreamId]BucketFlushInProgressTsMap
-	streamBucketAbortInProgressMap   map[common.StreamId]BucketAbortInProgressMap
-	streamBucketFlushEnabledMap      map[common.StreamId]BucketFlushEnabledMap
-	streamBucketDrainEnabledMap      map[common.StreamId]BucketDrainEnabledMap
-	streamBucketFlushDone            map[common.StreamId]BucketFlushDone
+	streamKeyspaceIdFlushInProgressTsMap map[common.StreamId]KeyspaceIdFlushInProgressTsMap
+	streamKeyspaceIdAbortInProgressMap   map[common.StreamId]KeyspaceIdAbortInProgressMap
+	streamKeyspaceIdFlushEnabledMap      map[common.StreamId]KeyspaceIdFlushEnabledMap
+	streamKeyspaceIdDrainEnabledMap      map[common.StreamId]KeyspaceIdDrainEnabledMap
+	streamKeyspaceIdFlushDone            map[common.StreamId]KeyspaceIdFlushDone
 
-	streamBucketIndexCountMap   map[common.StreamId]BucketIndexCountMap
-	streamBucketRepairStopCh    map[common.StreamId]BucketRepairStopCh
-	streamBucketTimerStopCh     map[common.StreamId]BucketTimerStopCh
-	streamBucketLastPersistTime map[common.StreamId]BucketLastPersistTime
-	streamBucketSkippedInMemTs  map[common.StreamId]BucketSkippedInMemTs
-	streamBucketSessionId       map[common.StreamId]BucketSessionId
+	streamKeyspaceIdIndexCountMap   map[common.StreamId]KeyspaceIdIndexCountMap
+	streamKeyspaceIdRepairStopCh    map[common.StreamId]KeyspaceIdRepairStopCh
+	streamKeyspaceIdTimerStopCh     map[common.StreamId]KeyspaceIdTimerStopCh
+	streamKeyspaceIdLastPersistTime map[common.StreamId]KeyspaceIdLastPersistTime
+	streamKeyspaceIdSkippedInMemTs  map[common.StreamId]KeyspaceIdSkippedInMemTs
+	streamKeyspaceIdSessionId       map[common.StreamId]KeyspaceIdSessionId
 
-	streamBucketAsyncMap map[common.StreamId]BucketStreamAsyncMap
+	streamKeyspaceIdAsyncMap map[common.StreamId]KeyspaceIdStreamAsyncMap
 
-	streamBucketKVRollbackTsMap map[common.StreamId]BucketKVRollbackTsMap
-	streamBucketKVActiveTsMap   map[common.StreamId]BucketKVActiveTsMap
-	streamBucketKVPendingTsMap  map[common.StreamId]BucketKVPendingTsMap
+	streamKeyspaceIdKVRollbackTsMap map[common.StreamId]KeyspaceIdKVRollbackTsMap
+	streamKeyspaceIdKVActiveTsMap   map[common.StreamId]KeyspaceIdKVActiveTsMap
+	streamKeyspaceIdKVPendingTsMap  map[common.StreamId]KeyspaceIdKVPendingTsMap
 
 	// state for managing vb repair
 	// 1) When a vb needs a repair, RepairTime is updated.
 	// 2) A repair action is performed.  Once the action is completed, RepairState is updated.
 	// 3) If RepairTime exceeds waitTime (action not effective), escalate to the next action by updating repairTime.
-	streamBucketLastBeginTime     map[common.StreamId]BucketStreamLastBeginTime
-	streamBucketLastRepairTimeMap map[common.StreamId]BucketStreamLastRepairTimeMap
-	streamBucketRepairStateMap    map[common.StreamId]BucketStreamRepairStateMap
+	streamKeyspaceIdLastBeginTime     map[common.StreamId]KeyspaceIdStreamLastBeginTime
+	streamKeyspaceIdLastRepairTimeMap map[common.StreamId]KeyspaceIdStreamLastRepairTimeMap
+	streamKeyspaceIdRepairStateMap    map[common.StreamId]KeyspaceIdStreamRepairStateMap
 
 	// Maintains the mapping between vbucket to kv node UUID
-	// for each bucket, for each stream
-	streamBucketVBMap map[common.StreamId]BucketVBMap
+	// for each keyspaceId, for each stream
+	streamKeyspaceIdVBMap map[common.StreamId]KeyspaceIdVBMap
 
-	bucketRollbackTime map[string]int64
+	keyspaceIdRollbackTime map[string]int64
 }
 
-type BucketHWTMap map[string]*common.TsVbuuid
-type BucketLastFlushedTsMap map[string]*common.TsVbuuid
-type BucketRestartTsMap map[string]*common.TsVbuuid
-type BucketOpenTsMap map[string]*common.TsVbuuid
-type BucketStartTimeMap map[string]uint64
-type BucketNeedsCommitMap map[string]bool
-type BucketHasBuildCompTSMap map[string]bool
-type BucketNewTsReqdMap map[string]bool
-type BucketLastSnapMarker map[string]*common.TsVbuuid
-type BucketLastMutationVbuuid map[string]*common.TsVbuuid
+type KeyspaceIdHWTMap map[string]*common.TsVbuuid
+type KeyspaceIdLastFlushedTsMap map[string]*common.TsVbuuid
+type KeyspaceIdRestartTsMap map[string]*common.TsVbuuid
+type KeyspaceIdOpenTsMap map[string]*common.TsVbuuid
+type KeyspaceIdStartTimeMap map[string]uint64
+type KeyspaceIdNeedsCommitMap map[string]bool
+type KeyspaceIdHasBuildCompTSMap map[string]bool
+type KeyspaceIdNewTsReqdMap map[string]bool
+type KeyspaceIdLastSnapMarker map[string]*common.TsVbuuid
+type KeyspaceIdLastMutationVbuuid map[string]*common.TsVbuuid
 
-type BucketTsListMap map[string]*list.List
-type BucketFlushInProgressTsMap map[string]*common.TsVbuuid
-type BucketAbortInProgressMap map[string]bool
-type BucketFlushEnabledMap map[string]bool
-type BucketDrainEnabledMap map[string]bool
-type BucketFlushDone map[string]DoneChannel
+type KeyspaceIdTsListMap map[string]*list.List
+type KeyspaceIdFlushInProgressTsMap map[string]*common.TsVbuuid
+type KeyspaceIdAbortInProgressMap map[string]bool
+type KeyspaceIdFlushEnabledMap map[string]bool
+type KeyspaceIdDrainEnabledMap map[string]bool
+type KeyspaceIdFlushDone map[string]DoneChannel
 
-type BucketRestartVbTsMap map[string]*common.TsVbuuid
+type KeyspaceIdRestartVbTsMap map[string]*common.TsVbuuid
 
-type BucketVbStatusMap map[string]Timestamp
-type BucketVbRefCountMap map[string]Timestamp
-type BucketRepairStopCh map[string]StopChannel
-type BucketTimerStopCh map[string]StopChannel
-type BucketLastPersistTime map[string]time.Time
-type BucketSkippedInMemTs map[string]uint64
-type BucketSessionId map[string]uint64
+type KeyspaceIdVbStatusMap map[string]Timestamp
+type KeyspaceIdVbRefCountMap map[string]Timestamp
+type KeyspaceIdRepairStopCh map[string]StopChannel
+type KeyspaceIdTimerStopCh map[string]StopChannel
+type KeyspaceIdLastPersistTime map[string]time.Time
+type KeyspaceIdSkippedInMemTs map[string]uint64
+type KeyspaceIdSessionId map[string]uint64
 
-type BucketStreamAsyncMap map[string]bool
-type BucketStreamLastBeginTime map[string]uint64
-type BucketStreamLastRepairTimeMap map[string]Timestamp
-type BucketKVRollbackTsMap map[string]*common.TsVbuuid
-type BucketKVActiveTsMap map[string]*common.TsVbuuid
-type BucketKVPendingTsMap map[string]*common.TsVbuuid
-type BucketStreamRepairStateMap map[string][]RepairState
+type KeyspaceIdStreamAsyncMap map[string]bool
+type KeyspaceIdStreamLastBeginTime map[string]uint64
+type KeyspaceIdStreamLastRepairTimeMap map[string]Timestamp
+type KeyspaceIdKVRollbackTsMap map[string]*common.TsVbuuid
+type KeyspaceIdKVActiveTsMap map[string]*common.TsVbuuid
+type KeyspaceIdKVPendingTsMap map[string]*common.TsVbuuid
+type KeyspaceIdStreamRepairStateMap map[string][]RepairState
 
-type BucketStatus map[string]StreamStatus
+type KeyspaceIdStatus map[string]StreamStatus
 
-type BucketVBMap map[string]map[Vbucket]string
+type KeyspaceIdVBMap map[string]map[Vbucket]string
 
 type RepairState byte
 
@@ -129,45 +129,45 @@ const (
 func InitStreamState(config common.Config) *StreamState {
 
 	ss := &StreamState{
-		config:                                config,
-		streamBucketHWTMap:                    make(map[common.StreamId]BucketHWTMap),
-		streamBucketNeedsCommitMap:            make(map[common.StreamId]BucketNeedsCommitMap),
-		streamBucketHasBuildCompTSMap:         make(map[common.StreamId]BucketHasBuildCompTSMap),
-		streamBucketNewTsReqdMap:              make(map[common.StreamId]BucketNewTsReqdMap),
-		streamBucketTsListMap:                 make(map[common.StreamId]BucketTsListMap),
-		streamBucketFlushInProgressTsMap:      make(map[common.StreamId]BucketFlushInProgressTsMap),
-		streamBucketAbortInProgressMap:        make(map[common.StreamId]BucketAbortInProgressMap),
-		streamBucketLastFlushedTsMap:          make(map[common.StreamId]BucketLastFlushedTsMap),
-		streamBucketLastSnapAlignFlushedTsMap: make(map[common.StreamId]BucketLastFlushedTsMap),
-		streamBucketRestartTsMap:              make(map[common.StreamId]BucketRestartTsMap),
+		config:                                    config,
+		streamKeyspaceIdHWTMap:                    make(map[common.StreamId]KeyspaceIdHWTMap),
+		streamKeyspaceIdNeedsCommitMap:            make(map[common.StreamId]KeyspaceIdNeedsCommitMap),
+		streamKeyspaceIdHasBuildCompTSMap:         make(map[common.StreamId]KeyspaceIdHasBuildCompTSMap),
+		streamKeyspaceIdNewTsReqdMap:              make(map[common.StreamId]KeyspaceIdNewTsReqdMap),
+		streamKeyspaceIdTsListMap:                 make(map[common.StreamId]KeyspaceIdTsListMap),
+		streamKeyspaceIdFlushInProgressTsMap:      make(map[common.StreamId]KeyspaceIdFlushInProgressTsMap),
+		streamKeyspaceIdAbortInProgressMap:        make(map[common.StreamId]KeyspaceIdAbortInProgressMap),
+		streamKeyspaceIdLastFlushedTsMap:          make(map[common.StreamId]KeyspaceIdLastFlushedTsMap),
+		streamKeyspaceIdLastSnapAlignFlushedTsMap: make(map[common.StreamId]KeyspaceIdLastFlushedTsMap),
+		streamKeyspaceIdRestartTsMap:              make(map[common.StreamId]KeyspaceIdRestartTsMap),
 
-		streamBucketOpenTsMap:          make(map[common.StreamId]BucketOpenTsMap),
-		streamBucketStartTimeMap:       make(map[common.StreamId]BucketStartTimeMap),
-		streamBucketFlushEnabledMap:    make(map[common.StreamId]BucketFlushEnabledMap),
-		streamBucketDrainEnabledMap:    make(map[common.StreamId]BucketDrainEnabledMap),
-		streamBucketFlushDone:          make(map[common.StreamId]BucketFlushDone),
-		streamBucketVbStatusMap:        make(map[common.StreamId]BucketVbStatusMap),
-		streamBucketVbRefCountMap:      make(map[common.StreamId]BucketVbRefCountMap),
-		streamBucketRestartVbTsMap:     make(map[common.StreamId]BucketRestartVbTsMap),
-		streamStatus:                   make(map[common.StreamId]StreamStatus),
-		streamBucketStatus:             make(map[common.StreamId]BucketStatus),
-		streamBucketIndexCountMap:      make(map[common.StreamId]BucketIndexCountMap),
-		streamBucketRepairStopCh:       make(map[common.StreamId]BucketRepairStopCh),
-		streamBucketTimerStopCh:        make(map[common.StreamId]BucketTimerStopCh),
-		streamBucketLastPersistTime:    make(map[common.StreamId]BucketLastPersistTime),
-		streamBucketSkippedInMemTs:     make(map[common.StreamId]BucketSkippedInMemTs),
-		streamBucketLastSnapMarker:     make(map[common.StreamId]BucketLastSnapMarker),
-		streamBucketLastMutationVbuuid: make(map[common.StreamId]BucketLastMutationVbuuid),
-		bucketRollbackTime:             make(map[string]int64),
-		streamBucketAsyncMap:           make(map[common.StreamId]BucketStreamAsyncMap),
-		streamBucketLastBeginTime:      make(map[common.StreamId]BucketStreamLastBeginTime),
-		streamBucketLastRepairTimeMap:  make(map[common.StreamId]BucketStreamLastRepairTimeMap),
-		streamBucketKVRollbackTsMap:    make(map[common.StreamId]BucketKVRollbackTsMap),
-		streamBucketKVActiveTsMap:      make(map[common.StreamId]BucketKVActiveTsMap),
-		streamBucketKVPendingTsMap:     make(map[common.StreamId]BucketKVPendingTsMap),
-		streamBucketRepairStateMap:     make(map[common.StreamId]BucketStreamRepairStateMap),
-		streamBucketSessionId:          make(map[common.StreamId]BucketSessionId),
-		streamBucketVBMap:              make(map[common.StreamId]BucketVBMap),
+		streamKeyspaceIdOpenTsMap:          make(map[common.StreamId]KeyspaceIdOpenTsMap),
+		streamKeyspaceIdStartTimeMap:       make(map[common.StreamId]KeyspaceIdStartTimeMap),
+		streamKeyspaceIdFlushEnabledMap:    make(map[common.StreamId]KeyspaceIdFlushEnabledMap),
+		streamKeyspaceIdDrainEnabledMap:    make(map[common.StreamId]KeyspaceIdDrainEnabledMap),
+		streamKeyspaceIdFlushDone:          make(map[common.StreamId]KeyspaceIdFlushDone),
+		streamKeyspaceIdVbStatusMap:        make(map[common.StreamId]KeyspaceIdVbStatusMap),
+		streamKeyspaceIdVbRefCountMap:      make(map[common.StreamId]KeyspaceIdVbRefCountMap),
+		streamKeyspaceIdRestartVbTsMap:     make(map[common.StreamId]KeyspaceIdRestartVbTsMap),
+		streamStatus:                       make(map[common.StreamId]StreamStatus),
+		streamKeyspaceIdStatus:             make(map[common.StreamId]KeyspaceIdStatus),
+		streamKeyspaceIdIndexCountMap:      make(map[common.StreamId]KeyspaceIdIndexCountMap),
+		streamKeyspaceIdRepairStopCh:       make(map[common.StreamId]KeyspaceIdRepairStopCh),
+		streamKeyspaceIdTimerStopCh:        make(map[common.StreamId]KeyspaceIdTimerStopCh),
+		streamKeyspaceIdLastPersistTime:    make(map[common.StreamId]KeyspaceIdLastPersistTime),
+		streamKeyspaceIdSkippedInMemTs:     make(map[common.StreamId]KeyspaceIdSkippedInMemTs),
+		streamKeyspaceIdLastSnapMarker:     make(map[common.StreamId]KeyspaceIdLastSnapMarker),
+		streamKeyspaceIdLastMutationVbuuid: make(map[common.StreamId]KeyspaceIdLastMutationVbuuid),
+		keyspaceIdRollbackTime:             make(map[string]int64),
+		streamKeyspaceIdAsyncMap:           make(map[common.StreamId]KeyspaceIdStreamAsyncMap),
+		streamKeyspaceIdLastBeginTime:      make(map[common.StreamId]KeyspaceIdStreamLastBeginTime),
+		streamKeyspaceIdLastRepairTimeMap:  make(map[common.StreamId]KeyspaceIdStreamLastRepairTimeMap),
+		streamKeyspaceIdKVRollbackTsMap:    make(map[common.StreamId]KeyspaceIdKVRollbackTsMap),
+		streamKeyspaceIdKVActiveTsMap:      make(map[common.StreamId]KeyspaceIdKVActiveTsMap),
+		streamKeyspaceIdKVPendingTsMap:     make(map[common.StreamId]KeyspaceIdKVPendingTsMap),
+		streamKeyspaceIdRepairStateMap:     make(map[common.StreamId]KeyspaceIdStreamRepairStateMap),
+		streamKeyspaceIdSessionId:          make(map[common.StreamId]KeyspaceIdSessionId),
+		streamKeyspaceIdVBMap:              make(map[common.StreamId]KeyspaceIdVBMap),
 	}
 
 	return ss
@@ -177,381 +177,380 @@ func InitStreamState(config common.Config) *StreamState {
 func (ss *StreamState) initNewStream(streamId common.StreamId) {
 
 	//init all internal maps for this stream
-	bucketHWTMap := make(BucketHWTMap)
-	ss.streamBucketHWTMap[streamId] = bucketHWTMap
+	keyspaceIdHWTMap := make(KeyspaceIdHWTMap)
+	ss.streamKeyspaceIdHWTMap[streamId] = keyspaceIdHWTMap
 
-	bucketNeedsCommitMap := make(BucketNeedsCommitMap)
-	ss.streamBucketNeedsCommitMap[streamId] = bucketNeedsCommitMap
+	keyspaceIdNeedsCommitMap := make(KeyspaceIdNeedsCommitMap)
+	ss.streamKeyspaceIdNeedsCommitMap[streamId] = keyspaceIdNeedsCommitMap
 
-	bucketHasBuildCompTSMap := make(BucketHasBuildCompTSMap)
-	ss.streamBucketHasBuildCompTSMap[streamId] = bucketHasBuildCompTSMap
+	keyspaceIdHasBuildCompTSMap := make(KeyspaceIdHasBuildCompTSMap)
+	ss.streamKeyspaceIdHasBuildCompTSMap[streamId] = keyspaceIdHasBuildCompTSMap
 
-	bucketNewTsReqdMap := make(BucketNewTsReqdMap)
-	ss.streamBucketNewTsReqdMap[streamId] = bucketNewTsReqdMap
+	keyspaceIdNewTsReqdMap := make(KeyspaceIdNewTsReqdMap)
+	ss.streamKeyspaceIdNewTsReqdMap[streamId] = keyspaceIdNewTsReqdMap
 
-	bucketRestartTsMap := make(BucketRestartTsMap)
-	ss.streamBucketRestartTsMap[streamId] = bucketRestartTsMap
+	keyspaceIdRestartTsMap := make(KeyspaceIdRestartTsMap)
+	ss.streamKeyspaceIdRestartTsMap[streamId] = keyspaceIdRestartTsMap
 
-	bucketOpenTsMap := make(BucketOpenTsMap)
-	ss.streamBucketOpenTsMap[streamId] = bucketOpenTsMap
+	keyspaceIdOpenTsMap := make(KeyspaceIdOpenTsMap)
+	ss.streamKeyspaceIdOpenTsMap[streamId] = keyspaceIdOpenTsMap
 
-	bucketStartTimeMap := make(BucketStartTimeMap)
-	ss.streamBucketStartTimeMap[streamId] = bucketStartTimeMap
+	keyspaceIdStartTimeMap := make(KeyspaceIdStartTimeMap)
+	ss.streamKeyspaceIdStartTimeMap[streamId] = keyspaceIdStartTimeMap
 
-	bucketTsListMap := make(BucketTsListMap)
-	ss.streamBucketTsListMap[streamId] = bucketTsListMap
+	keyspaceIdTsListMap := make(KeyspaceIdTsListMap)
+	ss.streamKeyspaceIdTsListMap[streamId] = keyspaceIdTsListMap
 
-	bucketFlushInProgressTsMap := make(BucketFlushInProgressTsMap)
-	ss.streamBucketFlushInProgressTsMap[streamId] = bucketFlushInProgressTsMap
+	keyspaceIdFlushInProgressTsMap := make(KeyspaceIdFlushInProgressTsMap)
+	ss.streamKeyspaceIdFlushInProgressTsMap[streamId] = keyspaceIdFlushInProgressTsMap
 
-	bucketAbortInProgressMap := make(BucketAbortInProgressMap)
-	ss.streamBucketAbortInProgressMap[streamId] = bucketAbortInProgressMap
+	keyspaceIdAbortInProgressMap := make(KeyspaceIdAbortInProgressMap)
+	ss.streamKeyspaceIdAbortInProgressMap[streamId] = keyspaceIdAbortInProgressMap
 
-	bucketLastFlushedTsMap := make(BucketLastFlushedTsMap)
-	ss.streamBucketLastFlushedTsMap[streamId] = bucketLastFlushedTsMap
+	keyspaceIdLastFlushedTsMap := make(KeyspaceIdLastFlushedTsMap)
+	ss.streamKeyspaceIdLastFlushedTsMap[streamId] = keyspaceIdLastFlushedTsMap
 
-	bucketLastSnapAlignFlushedTsMap := make(BucketLastFlushedTsMap)
-	ss.streamBucketLastSnapAlignFlushedTsMap[streamId] = bucketLastSnapAlignFlushedTsMap
+	keyspaceIdLastSnapAlignFlushedTsMap := make(KeyspaceIdLastFlushedTsMap)
+	ss.streamKeyspaceIdLastSnapAlignFlushedTsMap[streamId] = keyspaceIdLastSnapAlignFlushedTsMap
 
-	bucketFlushEnabledMap := make(BucketFlushEnabledMap)
-	ss.streamBucketFlushEnabledMap[streamId] = bucketFlushEnabledMap
+	keyspaceIdFlushEnabledMap := make(KeyspaceIdFlushEnabledMap)
+	ss.streamKeyspaceIdFlushEnabledMap[streamId] = keyspaceIdFlushEnabledMap
 
-	bucketDrainEnabledMap := make(BucketDrainEnabledMap)
-	ss.streamBucketDrainEnabledMap[streamId] = bucketDrainEnabledMap
+	keyspaceIdDrainEnabledMap := make(KeyspaceIdDrainEnabledMap)
+	ss.streamKeyspaceIdDrainEnabledMap[streamId] = keyspaceIdDrainEnabledMap
 
-	bucketFlushDone := make(BucketFlushDone)
-	ss.streamBucketFlushDone[streamId] = bucketFlushDone
+	keyspaceIdFlushDone := make(KeyspaceIdFlushDone)
+	ss.streamKeyspaceIdFlushDone[streamId] = keyspaceIdFlushDone
 
-	bucketVbStatusMap := make(BucketVbStatusMap)
-	ss.streamBucketVbStatusMap[streamId] = bucketVbStatusMap
+	keyspaceIdVbStatusMap := make(KeyspaceIdVbStatusMap)
+	ss.streamKeyspaceIdVbStatusMap[streamId] = keyspaceIdVbStatusMap
 
-	bucketVbRefCountMap := make(BucketVbRefCountMap)
-	ss.streamBucketVbRefCountMap[streamId] = bucketVbRefCountMap
+	keyspaceIdVbRefCountMap := make(KeyspaceIdVbRefCountMap)
+	ss.streamKeyspaceIdVbRefCountMap[streamId] = keyspaceIdVbRefCountMap
 
-	bucketRestartVbTsMap := make(BucketRestartVbTsMap)
-	ss.streamBucketRestartVbTsMap[streamId] = bucketRestartVbTsMap
+	keyspaceIdRestartVbTsMap := make(KeyspaceIdRestartVbTsMap)
+	ss.streamKeyspaceIdRestartVbTsMap[streamId] = keyspaceIdRestartVbTsMap
 
-	bucketIndexCountMap := make(BucketIndexCountMap)
-	ss.streamBucketIndexCountMap[streamId] = bucketIndexCountMap
+	keyspaceIdIndexCountMap := make(KeyspaceIdIndexCountMap)
+	ss.streamKeyspaceIdIndexCountMap[streamId] = keyspaceIdIndexCountMap
 
-	bucketRepairStopChMap := make(BucketRepairStopCh)
-	ss.streamBucketRepairStopCh[streamId] = bucketRepairStopChMap
+	keyspaceIdRepairStopChMap := make(KeyspaceIdRepairStopCh)
+	ss.streamKeyspaceIdRepairStopCh[streamId] = keyspaceIdRepairStopChMap
 
-	bucketTimerStopChMap := make(BucketTimerStopCh)
-	ss.streamBucketTimerStopCh[streamId] = bucketTimerStopChMap
+	keyspaceIdTimerStopChMap := make(KeyspaceIdTimerStopCh)
+	ss.streamKeyspaceIdTimerStopCh[streamId] = keyspaceIdTimerStopChMap
 
-	bucketLastPersistTime := make(BucketLastPersistTime)
-	ss.streamBucketLastPersistTime[streamId] = bucketLastPersistTime
+	keyspaceIdLastPersistTime := make(KeyspaceIdLastPersistTime)
+	ss.streamKeyspaceIdLastPersistTime[streamId] = keyspaceIdLastPersistTime
 
-	bucketSkippedInMemTs := make(BucketSkippedInMemTs)
-	ss.streamBucketSkippedInMemTs[streamId] = bucketSkippedInMemTs
+	keyspaceIdSkippedInMemTs := make(KeyspaceIdSkippedInMemTs)
+	ss.streamKeyspaceIdSkippedInMemTs[streamId] = keyspaceIdSkippedInMemTs
 
-	bucketSessionId := make(BucketSessionId)
-	ss.streamBucketSessionId[streamId] = bucketSessionId
+	keyspaceIdSessionId := make(KeyspaceIdSessionId)
+	ss.streamKeyspaceIdSessionId[streamId] = keyspaceIdSessionId
 
-	bucketStatus := make(BucketStatus)
-	ss.streamBucketStatus[streamId] = bucketStatus
+	keyspaceIdStatus := make(KeyspaceIdStatus)
+	ss.streamKeyspaceIdStatus[streamId] = keyspaceIdStatus
 
-	bucketLastSnapMarker := make(BucketLastSnapMarker)
-	ss.streamBucketLastSnapMarker[streamId] = bucketLastSnapMarker
+	keyspaceIdLastSnapMarker := make(KeyspaceIdLastSnapMarker)
+	ss.streamKeyspaceIdLastSnapMarker[streamId] = keyspaceIdLastSnapMarker
 
-	bucketLastMutationVbuuid := make(BucketLastMutationVbuuid)
-	ss.streamBucketLastMutationVbuuid[streamId] = bucketLastMutationVbuuid
+	keyspaceIdLastMutationVbuuid := make(KeyspaceIdLastMutationVbuuid)
+	ss.streamKeyspaceIdLastMutationVbuuid[streamId] = keyspaceIdLastMutationVbuuid
 
-	bucketStreamAsyncMap := make(BucketStreamAsyncMap)
-	ss.streamBucketAsyncMap[streamId] = bucketStreamAsyncMap
+	keyspaceIdStreamAsyncMap := make(KeyspaceIdStreamAsyncMap)
+	ss.streamKeyspaceIdAsyncMap[streamId] = keyspaceIdStreamAsyncMap
 
-	bucketStreamLastBeginTime := make(BucketStreamLastBeginTime)
-	ss.streamBucketLastBeginTime[streamId] = bucketStreamLastBeginTime
+	keyspaceIdStreamLastBeginTime := make(KeyspaceIdStreamLastBeginTime)
+	ss.streamKeyspaceIdLastBeginTime[streamId] = keyspaceIdStreamLastBeginTime
 
-	bucketStreamLastRepairTimeMap := make(BucketStreamLastRepairTimeMap)
-	ss.streamBucketLastRepairTimeMap[streamId] = bucketStreamLastRepairTimeMap
+	keyspaceIdStreamLastRepairTimeMap := make(KeyspaceIdStreamLastRepairTimeMap)
+	ss.streamKeyspaceIdLastRepairTimeMap[streamId] = keyspaceIdStreamLastRepairTimeMap
 
-	bucketKVRollbackTsMap := make(BucketKVRollbackTsMap)
-	ss.streamBucketKVRollbackTsMap[streamId] = bucketKVRollbackTsMap
+	keyspaceIdKVRollbackTsMap := make(KeyspaceIdKVRollbackTsMap)
+	ss.streamKeyspaceIdKVRollbackTsMap[streamId] = keyspaceIdKVRollbackTsMap
 
-	bucketKVActiveTsMap := make(BucketKVActiveTsMap)
-	ss.streamBucketKVActiveTsMap[streamId] = bucketKVActiveTsMap
+	keyspaceIdKVActiveTsMap := make(KeyspaceIdKVActiveTsMap)
+	ss.streamKeyspaceIdKVActiveTsMap[streamId] = keyspaceIdKVActiveTsMap
 
-	bucketKVPendingTsMap := make(BucketKVPendingTsMap)
-	ss.streamBucketKVPendingTsMap[streamId] = bucketKVPendingTsMap
+	keyspaceIdKVPendingTsMap := make(KeyspaceIdKVPendingTsMap)
+	ss.streamKeyspaceIdKVPendingTsMap[streamId] = keyspaceIdKVPendingTsMap
 
-	bucketStreamRepairStateMap := make(BucketStreamRepairStateMap)
-	ss.streamBucketRepairStateMap[streamId] = bucketStreamRepairStateMap
+	keyspaceIdStreamRepairStateMap := make(KeyspaceIdStreamRepairStateMap)
+	ss.streamKeyspaceIdRepairStateMap[streamId] = keyspaceIdStreamRepairStateMap
 
-	bucketVBMap := make(BucketVBMap)
-	ss.streamBucketVBMap[streamId] = bucketVBMap
+	keyspaceIdVBMap := make(KeyspaceIdVBMap)
+	ss.streamKeyspaceIdVBMap[streamId] = keyspaceIdVBMap
 
 	ss.streamStatus[streamId] = STREAM_ACTIVE
 
 }
 
-func (ss *StreamState) initBucketInStream(streamId common.StreamId,
-	bucket string) {
+func (ss *StreamState) initKeyspaceIdInStream(streamId common.StreamId,
+	keyspaceId string) {
 
 	numVbuckets := ss.config["numVbuckets"].Int()
-	//TODO pass scope/collection
-	ss.streamBucketHWTMap[streamId][bucket] = common.NewTsVbuuid(bucket, numVbuckets)
-	ss.streamBucketNeedsCommitMap[streamId][bucket] = false
-	ss.streamBucketHasBuildCompTSMap[streamId][bucket] = false
-	ss.streamBucketNewTsReqdMap[streamId][bucket] = false
-	ss.streamBucketFlushInProgressTsMap[streamId][bucket] = nil
-	ss.streamBucketAbortInProgressMap[streamId][bucket] = false
-	ss.streamBucketTsListMap[streamId][bucket] = list.New()
-	ss.streamBucketLastFlushedTsMap[streamId][bucket] = nil
-	ss.streamBucketLastSnapAlignFlushedTsMap[streamId][bucket] = nil
-	ss.streamBucketFlushEnabledMap[streamId][bucket] = true
-	ss.streamBucketDrainEnabledMap[streamId][bucket] = true
-	ss.streamBucketFlushDone[streamId][bucket] = nil
-	ss.streamBucketVbStatusMap[streamId][bucket] = NewTimestamp(numVbuckets)
-	ss.streamBucketVbRefCountMap[streamId][bucket] = NewTimestamp(numVbuckets)
-	ss.streamBucketRestartVbTsMap[streamId][bucket] = nil
-	ss.streamBucketIndexCountMap[streamId][bucket] = 0
-	ss.streamBucketRepairStopCh[streamId][bucket] = nil
-	ss.streamBucketTimerStopCh[streamId][bucket] = make(StopChannel)
-	ss.streamBucketLastPersistTime[streamId][bucket] = time.Now()
-	ss.streamBucketRestartTsMap[streamId][bucket] = nil
-	ss.streamBucketOpenTsMap[streamId][bucket] = nil
-	ss.streamBucketStartTimeMap[streamId][bucket] = uint64(0)
-	ss.streamBucketSkippedInMemTs[streamId][bucket] = 0
-	ss.streamBucketSessionId[streamId][bucket] = 0
-	ss.streamBucketLastSnapMarker[streamId][bucket] = common.NewTsVbuuid(bucket, numVbuckets)
-	ss.streamBucketLastMutationVbuuid[streamId][bucket] = common.NewTsVbuuid(bucket, numVbuckets)
-	ss.streamBucketAsyncMap[streamId][bucket] = false
-	ss.streamBucketLastBeginTime[streamId][bucket] = 0
-	ss.streamBucketLastRepairTimeMap[streamId][bucket] = NewTimestamp(numVbuckets)
-	ss.streamBucketKVRollbackTsMap[streamId][bucket] = common.NewTsVbuuid(bucket, numVbuckets)
-	ss.streamBucketKVActiveTsMap[streamId][bucket] = common.NewTsVbuuid(bucket, numVbuckets)
-	ss.streamBucketKVPendingTsMap[streamId][bucket] = common.NewTsVbuuid(bucket, numVbuckets)
-	ss.streamBucketRepairStateMap[streamId][bucket] = make([]RepairState, numVbuckets)
-	ss.streamBucketVBMap[streamId][bucket] = make(map[Vbucket]string)
+	ss.streamKeyspaceIdHWTMap[streamId][keyspaceId] = common.NewTsVbuuid(keyspaceId, numVbuckets)
+	ss.streamKeyspaceIdNeedsCommitMap[streamId][keyspaceId] = false
+	ss.streamKeyspaceIdHasBuildCompTSMap[streamId][keyspaceId] = false
+	ss.streamKeyspaceIdNewTsReqdMap[streamId][keyspaceId] = false
+	ss.streamKeyspaceIdFlushInProgressTsMap[streamId][keyspaceId] = nil
+	ss.streamKeyspaceIdAbortInProgressMap[streamId][keyspaceId] = false
+	ss.streamKeyspaceIdTsListMap[streamId][keyspaceId] = list.New()
+	ss.streamKeyspaceIdLastFlushedTsMap[streamId][keyspaceId] = nil
+	ss.streamKeyspaceIdLastSnapAlignFlushedTsMap[streamId][keyspaceId] = nil
+	ss.streamKeyspaceIdFlushEnabledMap[streamId][keyspaceId] = true
+	ss.streamKeyspaceIdDrainEnabledMap[streamId][keyspaceId] = true
+	ss.streamKeyspaceIdFlushDone[streamId][keyspaceId] = nil
+	ss.streamKeyspaceIdVbStatusMap[streamId][keyspaceId] = NewTimestamp(numVbuckets)
+	ss.streamKeyspaceIdVbRefCountMap[streamId][keyspaceId] = NewTimestamp(numVbuckets)
+	ss.streamKeyspaceIdRestartVbTsMap[streamId][keyspaceId] = nil
+	ss.streamKeyspaceIdIndexCountMap[streamId][keyspaceId] = 0
+	ss.streamKeyspaceIdRepairStopCh[streamId][keyspaceId] = nil
+	ss.streamKeyspaceIdTimerStopCh[streamId][keyspaceId] = make(StopChannel)
+	ss.streamKeyspaceIdLastPersistTime[streamId][keyspaceId] = time.Now()
+	ss.streamKeyspaceIdRestartTsMap[streamId][keyspaceId] = nil
+	ss.streamKeyspaceIdOpenTsMap[streamId][keyspaceId] = nil
+	ss.streamKeyspaceIdStartTimeMap[streamId][keyspaceId] = uint64(0)
+	ss.streamKeyspaceIdSkippedInMemTs[streamId][keyspaceId] = 0
+	ss.streamKeyspaceIdSessionId[streamId][keyspaceId] = 0
+	ss.streamKeyspaceIdLastSnapMarker[streamId][keyspaceId] = common.NewTsVbuuid(keyspaceId, numVbuckets)
+	ss.streamKeyspaceIdLastMutationVbuuid[streamId][keyspaceId] = common.NewTsVbuuid(keyspaceId, numVbuckets)
+	ss.streamKeyspaceIdAsyncMap[streamId][keyspaceId] = false
+	ss.streamKeyspaceIdLastBeginTime[streamId][keyspaceId] = 0
+	ss.streamKeyspaceIdLastRepairTimeMap[streamId][keyspaceId] = NewTimestamp(numVbuckets)
+	ss.streamKeyspaceIdKVRollbackTsMap[streamId][keyspaceId] = common.NewTsVbuuid(keyspaceId, numVbuckets)
+	ss.streamKeyspaceIdKVActiveTsMap[streamId][keyspaceId] = common.NewTsVbuuid(keyspaceId, numVbuckets)
+	ss.streamKeyspaceIdKVPendingTsMap[streamId][keyspaceId] = common.NewTsVbuuid(keyspaceId, numVbuckets)
+	ss.streamKeyspaceIdRepairStateMap[streamId][keyspaceId] = make([]RepairState, numVbuckets)
+	ss.streamKeyspaceIdVBMap[streamId][keyspaceId] = make(map[Vbucket]string)
 
-	ss.streamBucketStatus[streamId][bucket] = STREAM_ACTIVE
+	ss.streamKeyspaceIdStatus[streamId][keyspaceId] = STREAM_ACTIVE
 
-	logging.Infof("StreamState::initBucketInStream New Bucket %v Added for "+
-		"Stream %v", bucket, streamId)
+	logging.Infof("StreamState::initKeyspaceIdInStream New KeyspaceId %v Added for "+
+		"Stream %v", keyspaceId, streamId)
 }
 
-func (ss *StreamState) cleanupBucketFromStream(streamId common.StreamId,
-	bucket string) {
+func (ss *StreamState) cleanupKeyspaceIdFromStream(streamId common.StreamId,
+	keyspaceId string) {
 
-	//if there is any ongoing repair for this bucket, abort that
-	if stopCh, ok := ss.streamBucketRepairStopCh[streamId][bucket]; ok && stopCh != nil {
+	//if there is any ongoing repair for this keyspaceId, abort that
+	if stopCh, ok := ss.streamKeyspaceIdRepairStopCh[streamId][keyspaceId]; ok && stopCh != nil {
 		close(stopCh)
 	}
 
-	delete(ss.streamBucketHWTMap[streamId], bucket)
-	delete(ss.streamBucketNeedsCommitMap[streamId], bucket)
-	delete(ss.streamBucketHasBuildCompTSMap[streamId], bucket)
-	delete(ss.streamBucketNewTsReqdMap[streamId], bucket)
-	delete(ss.streamBucketTsListMap[streamId], bucket)
-	delete(ss.streamBucketFlushInProgressTsMap[streamId], bucket)
-	delete(ss.streamBucketAbortInProgressMap[streamId], bucket)
-	delete(ss.streamBucketLastFlushedTsMap[streamId], bucket)
-	delete(ss.streamBucketLastSnapAlignFlushedTsMap[streamId], bucket)
-	delete(ss.streamBucketFlushEnabledMap[streamId], bucket)
-	delete(ss.streamBucketDrainEnabledMap[streamId], bucket)
-	delete(ss.streamBucketVbStatusMap[streamId], bucket)
-	delete(ss.streamBucketVbRefCountMap[streamId], bucket)
-	delete(ss.streamBucketRestartVbTsMap[streamId], bucket)
-	delete(ss.streamBucketIndexCountMap[streamId], bucket)
-	delete(ss.streamBucketRepairStopCh[streamId], bucket)
-	delete(ss.streamBucketTimerStopCh[streamId], bucket)
-	delete(ss.streamBucketLastPersistTime[streamId], bucket)
-	delete(ss.streamBucketRestartTsMap[streamId], bucket)
-	delete(ss.streamBucketOpenTsMap[streamId], bucket)
-	delete(ss.streamBucketStartTimeMap[streamId], bucket)
-	delete(ss.streamBucketLastSnapMarker[streamId], bucket)
-	delete(ss.streamBucketLastMutationVbuuid[streamId], bucket)
-	delete(ss.streamBucketSkippedInMemTs[streamId], bucket)
-	delete(ss.streamBucketSessionId[streamId], bucket)
-	delete(ss.streamBucketAsyncMap[streamId], bucket)
-	delete(ss.streamBucketLastBeginTime[streamId], bucket)
-	delete(ss.streamBucketLastRepairTimeMap[streamId], bucket)
-	delete(ss.streamBucketKVRollbackTsMap[streamId], bucket)
-	delete(ss.streamBucketKVActiveTsMap[streamId], bucket)
-	delete(ss.streamBucketKVPendingTsMap[streamId], bucket)
-	delete(ss.streamBucketRepairStateMap[streamId], bucket)
-	delete(ss.streamBucketVBMap[streamId], bucket)
+	delete(ss.streamKeyspaceIdHWTMap[streamId], keyspaceId)
+	delete(ss.streamKeyspaceIdNeedsCommitMap[streamId], keyspaceId)
+	delete(ss.streamKeyspaceIdHasBuildCompTSMap[streamId], keyspaceId)
+	delete(ss.streamKeyspaceIdNewTsReqdMap[streamId], keyspaceId)
+	delete(ss.streamKeyspaceIdTsListMap[streamId], keyspaceId)
+	delete(ss.streamKeyspaceIdFlushInProgressTsMap[streamId], keyspaceId)
+	delete(ss.streamKeyspaceIdAbortInProgressMap[streamId], keyspaceId)
+	delete(ss.streamKeyspaceIdLastFlushedTsMap[streamId], keyspaceId)
+	delete(ss.streamKeyspaceIdLastSnapAlignFlushedTsMap[streamId], keyspaceId)
+	delete(ss.streamKeyspaceIdFlushEnabledMap[streamId], keyspaceId)
+	delete(ss.streamKeyspaceIdDrainEnabledMap[streamId], keyspaceId)
+	delete(ss.streamKeyspaceIdVbStatusMap[streamId], keyspaceId)
+	delete(ss.streamKeyspaceIdVbRefCountMap[streamId], keyspaceId)
+	delete(ss.streamKeyspaceIdRestartVbTsMap[streamId], keyspaceId)
+	delete(ss.streamKeyspaceIdIndexCountMap[streamId], keyspaceId)
+	delete(ss.streamKeyspaceIdRepairStopCh[streamId], keyspaceId)
+	delete(ss.streamKeyspaceIdTimerStopCh[streamId], keyspaceId)
+	delete(ss.streamKeyspaceIdLastPersistTime[streamId], keyspaceId)
+	delete(ss.streamKeyspaceIdRestartTsMap[streamId], keyspaceId)
+	delete(ss.streamKeyspaceIdOpenTsMap[streamId], keyspaceId)
+	delete(ss.streamKeyspaceIdStartTimeMap[streamId], keyspaceId)
+	delete(ss.streamKeyspaceIdLastSnapMarker[streamId], keyspaceId)
+	delete(ss.streamKeyspaceIdLastMutationVbuuid[streamId], keyspaceId)
+	delete(ss.streamKeyspaceIdSkippedInMemTs[streamId], keyspaceId)
+	delete(ss.streamKeyspaceIdSessionId[streamId], keyspaceId)
+	delete(ss.streamKeyspaceIdAsyncMap[streamId], keyspaceId)
+	delete(ss.streamKeyspaceIdLastBeginTime[streamId], keyspaceId)
+	delete(ss.streamKeyspaceIdLastRepairTimeMap[streamId], keyspaceId)
+	delete(ss.streamKeyspaceIdKVRollbackTsMap[streamId], keyspaceId)
+	delete(ss.streamKeyspaceIdKVActiveTsMap[streamId], keyspaceId)
+	delete(ss.streamKeyspaceIdKVPendingTsMap[streamId], keyspaceId)
+	delete(ss.streamKeyspaceIdRepairStateMap[streamId], keyspaceId)
+	delete(ss.streamKeyspaceIdVBMap[streamId], keyspaceId)
 
-	if donech, ok := ss.streamBucketFlushDone[streamId][bucket]; ok && donech != nil {
+	if donech, ok := ss.streamKeyspaceIdFlushDone[streamId][keyspaceId]; ok && donech != nil {
 		close(donech)
 	}
-	delete(ss.streamBucketFlushDone[streamId], bucket)
+	delete(ss.streamKeyspaceIdFlushDone[streamId], keyspaceId)
 
-	if bs, ok := ss.streamBucketStatus[streamId]; ok && bs != nil {
-		bs[bucket] = STREAM_INACTIVE
+	if bs, ok := ss.streamKeyspaceIdStatus[streamId]; ok && bs != nil {
+		bs[keyspaceId] = STREAM_INACTIVE
 	}
 
-	logging.Infof("StreamState::cleanupBucketFromStream Bucket %v Deleted from "+
-		"Stream %v", bucket, streamId)
+	logging.Infof("StreamState::cleanupKeyspaceIdFromStream KeyspaceId %v Deleted from "+
+		"Stream %v", keyspaceId, streamId)
 
 }
 
 func (ss *StreamState) resetStreamState(streamId common.StreamId) {
 
 	//delete this stream from internal maps
-	delete(ss.streamBucketHWTMap, streamId)
-	delete(ss.streamBucketNeedsCommitMap, streamId)
-	delete(ss.streamBucketHasBuildCompTSMap, streamId)
-	delete(ss.streamBucketNewTsReqdMap, streamId)
-	delete(ss.streamBucketTsListMap, streamId)
-	delete(ss.streamBucketFlushInProgressTsMap, streamId)
-	delete(ss.streamBucketAbortInProgressMap, streamId)
-	delete(ss.streamBucketLastFlushedTsMap, streamId)
-	delete(ss.streamBucketLastSnapAlignFlushedTsMap, streamId)
-	delete(ss.streamBucketFlushEnabledMap, streamId)
-	delete(ss.streamBucketDrainEnabledMap, streamId)
-	delete(ss.streamBucketFlushDone, streamId)
-	delete(ss.streamBucketVbStatusMap, streamId)
-	delete(ss.streamBucketVbRefCountMap, streamId)
-	delete(ss.streamBucketRestartVbTsMap, streamId)
-	delete(ss.streamBucketIndexCountMap, streamId)
-	delete(ss.streamBucketLastPersistTime, streamId)
-	delete(ss.streamBucketStatus, streamId)
-	delete(ss.streamBucketRestartTsMap, streamId)
-	delete(ss.streamBucketOpenTsMap, streamId)
-	delete(ss.streamBucketStartTimeMap, streamId)
-	delete(ss.streamBucketSkippedInMemTs, streamId)
-	delete(ss.streamBucketSessionId, streamId)
-	delete(ss.streamBucketLastSnapMarker, streamId)
-	delete(ss.streamBucketLastMutationVbuuid, streamId)
-	delete(ss.streamBucketAsyncMap, streamId)
-	delete(ss.streamBucketLastBeginTime, streamId)
-	delete(ss.streamBucketLastRepairTimeMap, streamId)
-	delete(ss.streamBucketKVRollbackTsMap, streamId)
-	delete(ss.streamBucketKVActiveTsMap, streamId)
-	delete(ss.streamBucketKVPendingTsMap, streamId)
-	delete(ss.streamBucketRepairStateMap, streamId)
-	delete(ss.streamBucketVBMap, streamId)
+	delete(ss.streamKeyspaceIdHWTMap, streamId)
+	delete(ss.streamKeyspaceIdNeedsCommitMap, streamId)
+	delete(ss.streamKeyspaceIdHasBuildCompTSMap, streamId)
+	delete(ss.streamKeyspaceIdNewTsReqdMap, streamId)
+	delete(ss.streamKeyspaceIdTsListMap, streamId)
+	delete(ss.streamKeyspaceIdFlushInProgressTsMap, streamId)
+	delete(ss.streamKeyspaceIdAbortInProgressMap, streamId)
+	delete(ss.streamKeyspaceIdLastFlushedTsMap, streamId)
+	delete(ss.streamKeyspaceIdLastSnapAlignFlushedTsMap, streamId)
+	delete(ss.streamKeyspaceIdFlushEnabledMap, streamId)
+	delete(ss.streamKeyspaceIdDrainEnabledMap, streamId)
+	delete(ss.streamKeyspaceIdFlushDone, streamId)
+	delete(ss.streamKeyspaceIdVbStatusMap, streamId)
+	delete(ss.streamKeyspaceIdVbRefCountMap, streamId)
+	delete(ss.streamKeyspaceIdRestartVbTsMap, streamId)
+	delete(ss.streamKeyspaceIdIndexCountMap, streamId)
+	delete(ss.streamKeyspaceIdLastPersistTime, streamId)
+	delete(ss.streamKeyspaceIdStatus, streamId)
+	delete(ss.streamKeyspaceIdRestartTsMap, streamId)
+	delete(ss.streamKeyspaceIdOpenTsMap, streamId)
+	delete(ss.streamKeyspaceIdStartTimeMap, streamId)
+	delete(ss.streamKeyspaceIdSkippedInMemTs, streamId)
+	delete(ss.streamKeyspaceIdSessionId, streamId)
+	delete(ss.streamKeyspaceIdLastSnapMarker, streamId)
+	delete(ss.streamKeyspaceIdLastMutationVbuuid, streamId)
+	delete(ss.streamKeyspaceIdAsyncMap, streamId)
+	delete(ss.streamKeyspaceIdLastBeginTime, streamId)
+	delete(ss.streamKeyspaceIdLastRepairTimeMap, streamId)
+	delete(ss.streamKeyspaceIdKVRollbackTsMap, streamId)
+	delete(ss.streamKeyspaceIdKVActiveTsMap, streamId)
+	delete(ss.streamKeyspaceIdKVPendingTsMap, streamId)
+	delete(ss.streamKeyspaceIdRepairStateMap, streamId)
+	delete(ss.streamKeyspaceIdVBMap, streamId)
 
 	ss.streamStatus[streamId] = STREAM_INACTIVE
 
 	logging.Infof("StreamState::resetStreamState Reset Stream %v State", streamId)
 }
 
-func (ss *StreamState) getVbStatus(streamId common.StreamId, bucket string, vb Vbucket) VbStatus {
+func (ss *StreamState) getVbStatus(streamId common.StreamId, keyspaceId string, vb Vbucket) VbStatus {
 
-	return VbStatus(ss.streamBucketVbStatusMap[streamId][bucket][vb])
+	return VbStatus(ss.streamKeyspaceIdVbStatusMap[streamId][keyspaceId][vb])
 }
 
-func (ss *StreamState) updateVbStatus(streamId common.StreamId, bucket string,
+func (ss *StreamState) updateVbStatus(streamId common.StreamId, keyspaceId string,
 	vbList []Vbucket, status VbStatus) {
 
 	for _, vb := range vbList {
-		vbs := ss.streamBucketVbStatusMap[streamId][bucket]
+		vbs := ss.streamKeyspaceIdVbStatusMap[streamId][keyspaceId]
 		vbs[vb] = Seqno(status)
 	}
 
 }
 
-func (ss *StreamState) setRollbackTime(bucket string, rollbackTime int64) {
+func (ss *StreamState) setRollbackTime(keyspaceId string, rollbackTime int64) {
 	if rollbackTime != 0 {
-		ss.bucketRollbackTime[bucket] = rollbackTime
+		ss.keyspaceIdRollbackTime[keyspaceId] = rollbackTime
 	}
 }
 
-func (ss *StreamState) getVbRefCount(streamId common.StreamId, bucket string, vb Vbucket) int {
+func (ss *StreamState) getVbRefCount(streamId common.StreamId, keyspaceId string, vb Vbucket) int {
 
-	return int(ss.streamBucketVbRefCountMap[streamId][bucket][vb])
+	return int(ss.streamKeyspaceIdVbRefCountMap[streamId][keyspaceId][vb])
 }
 
-func (ss *StreamState) clearVbRefCount(streamId common.StreamId, bucket string, vb Vbucket) {
+func (ss *StreamState) clearVbRefCount(streamId common.StreamId, keyspaceId string, vb Vbucket) {
 
-	ss.streamBucketVbRefCountMap[streamId][bucket][vb] = Seqno(0)
+	ss.streamKeyspaceIdVbRefCountMap[streamId][keyspaceId][vb] = Seqno(0)
 }
 
-func (ss *StreamState) incVbRefCount(streamId common.StreamId, bucket string, vb Vbucket) {
+func (ss *StreamState) incVbRefCount(streamId common.StreamId, keyspaceId string, vb Vbucket) {
 
-	vbs := ss.streamBucketVbRefCountMap[streamId][bucket]
+	vbs := ss.streamKeyspaceIdVbRefCountMap[streamId][keyspaceId]
 	vbs[vb] = Seqno(int(vbs[vb]) + 1)
 }
 
-func (ss *StreamState) decVbRefCount(streamId common.StreamId, bucket string, vb Vbucket) {
+func (ss *StreamState) decVbRefCount(streamId common.StreamId, keyspaceId string, vb Vbucket) {
 
-	vbs := ss.streamBucketVbRefCountMap[streamId][bucket]
+	vbs := ss.streamKeyspaceIdVbRefCountMap[streamId][keyspaceId]
 	vbs[vb] = Seqno(int(vbs[vb]) - 1)
 }
 
-//computes the restart Ts for the given bucket and stream
+//computes the restart Ts for the given keyspaceId and stream
 func (ss *StreamState) computeRestartTs(streamId common.StreamId,
-	bucket string) *common.TsVbuuid {
+	keyspaceId string) *common.TsVbuuid {
 
 	var restartTs *common.TsVbuuid
 
-	if fts, ok := ss.streamBucketLastFlushedTsMap[streamId][bucket]; ok && fts != nil {
-		restartTs = ss.streamBucketLastFlushedTsMap[streamId][bucket].Copy()
-	} else if ts, ok := ss.streamBucketRestartTsMap[streamId][bucket]; ok && ts != nil {
+	if fts, ok := ss.streamKeyspaceIdLastFlushedTsMap[streamId][keyspaceId]; ok && fts != nil {
+		restartTs = ss.streamKeyspaceIdLastFlushedTsMap[streamId][keyspaceId].Copy()
+	} else if ts, ok := ss.streamKeyspaceIdRestartTsMap[streamId][keyspaceId]; ok && ts != nil {
 		//if no flush has been done yet, use restart TS
-		restartTs = ss.streamBucketRestartTsMap[streamId][bucket].Copy()
+		restartTs = ss.streamKeyspaceIdRestartTsMap[streamId][keyspaceId].Copy()
 	}
 	return restartTs
 }
 
-//computes the rollback Ts for the given bucket and stream
-func (ss *StreamState) computeRollbackTs(streamId common.StreamId, bucket string) *common.TsVbuuid {
+//computes the rollback Ts for the given keyspaceId and stream
+func (ss *StreamState) computeRollbackTs(streamId common.StreamId, keyspaceId string) *common.TsVbuuid {
 
-	if rollTs, ok := ss.streamBucketKVRollbackTsMap[streamId][bucket]; ok && rollTs.Len() > 0 {
+	if rollTs, ok := ss.streamKeyspaceIdKVRollbackTsMap[streamId][keyspaceId]; ok && rollTs.Len() > 0 {
 		// Get restart Ts
-		restartTs := ss.computeRestartTs(streamId, bucket)
+		restartTs := ss.computeRestartTs(streamId, keyspaceId)
 		if restartTs == nil {
 			numVbuckets := ss.config["numVbuckets"].Int()
-			restartTs = common.NewTsVbuuid(bucket, numVbuckets)
+			restartTs = common.NewTsVbuuid(keyspaceId, numVbuckets)
 		} else {
-			ss.adjustNonSnapAlignedVbs(restartTs, streamId, bucket, nil, false)
-			ss.adjustVbuuids(restartTs, streamId, bucket)
+			ss.adjustNonSnapAlignedVbs(restartTs, streamId, keyspaceId, nil, false)
+			ss.adjustVbuuids(restartTs, streamId, keyspaceId)
 		}
 
 		// overlay KV rollback Ts on top of restart Ts
-		return restartTs.Union(ss.streamBucketKVRollbackTsMap[streamId][bucket])
+		return restartTs.Union(ss.streamKeyspaceIdKVRollbackTsMap[streamId][keyspaceId])
 	}
 
 	return nil
 }
 
 func (ss *StreamState) setHWTFromRestartTs(streamId common.StreamId,
-	bucket string) {
+	keyspaceId string) {
 
 	logging.Debugf("StreamState::setHWTFromRestartTs Stream %v "+
-		"Bucket %v", streamId, bucket)
+		"KeyspaceId %v", streamId, keyspaceId)
 
-	if bucketRestartTs, ok := ss.streamBucketRestartTsMap[streamId]; ok {
+	if keyspaceIdRestartTs, ok := ss.streamKeyspaceIdRestartTsMap[streamId]; ok {
 
-		if restartTs, ok := bucketRestartTs[bucket]; ok && restartTs != nil {
+		if restartTs, ok := keyspaceIdRestartTs[keyspaceId]; ok && restartTs != nil {
 
 			//update HWT
-			ss.streamBucketHWTMap[streamId][bucket] = restartTs.Copy()
+			ss.streamKeyspaceIdHWTMap[streamId][keyspaceId] = restartTs.Copy()
 
 			//update Last Flushed Ts
-			ss.streamBucketLastFlushedTsMap[streamId][bucket] = restartTs.Copy()
+			ss.streamKeyspaceIdLastFlushedTsMap[streamId][keyspaceId] = restartTs.Copy()
 			logging.Verbosef("StreamState::setHWTFromRestartTs HWT Set For "+
-				"Bucket %v StreamId %v. TS %v.", bucket, streamId, restartTs)
+				"KeyspaceId %v StreamId %v. TS %v.", keyspaceId, streamId, restartTs)
 
-			ss.streamBucketLastMutationVbuuid[streamId][bucket] = restartTs.Copy()
+			ss.streamKeyspaceIdLastMutationVbuuid[streamId][keyspaceId] = restartTs.Copy()
 
 		} else {
 			logging.Warnf("StreamState::setHWTFromRestartTs RestartTs Not Found For "+
-				"Bucket %v StreamId %v. No Value Set.", bucket, streamId)
+				"KeyspaceId %v StreamId %v. No Value Set.", keyspaceId, streamId)
 		}
 	}
 }
 
 func (ss *StreamState) updateRepairState(streamId common.StreamId,
-	bucket string, repairVbs []Vbucket, shutdownVbs []Vbucket) {
+	keyspaceId string, repairVbs []Vbucket, shutdownVbs []Vbucket) {
 
 	for _, vbno := range repairVbs {
-		if ss.streamBucketVbStatusMap[streamId][bucket][vbno] == VBS_STREAM_END &&
-			ss.streamBucketRepairStateMap[streamId][bucket][int(vbno)] == REPAIR_NONE {
-			logging.Infof("StreamState::set repair state to RESTART_VB for %v bucket %v vb %v", streamId, bucket, vbno)
-			ss.streamBucketRepairStateMap[streamId][bucket][int(vbno)] = REPAIR_RESTART_VB
+		if ss.streamKeyspaceIdVbStatusMap[streamId][keyspaceId][vbno] == VBS_STREAM_END &&
+			ss.streamKeyspaceIdRepairStateMap[streamId][keyspaceId][int(vbno)] == REPAIR_NONE {
+			logging.Infof("StreamState::set repair state to RESTART_VB for %v keyspaceId %v vb %v", streamId, keyspaceId, vbno)
+			ss.streamKeyspaceIdRepairStateMap[streamId][keyspaceId][int(vbno)] = REPAIR_RESTART_VB
 		}
 	}
 
 	for _, vbno := range shutdownVbs {
-		if ss.streamBucketVbStatusMap[streamId][bucket][vbno] == VBS_CONN_ERROR &&
-			ss.streamBucketRepairStateMap[streamId][bucket][int(vbno)] == REPAIR_RESTART_VB {
-			logging.Infof("StreamState::set repair state to SHUTDOWN_VB for %v bucket %v vb %v", streamId, bucket, vbno)
-			ss.streamBucketRepairStateMap[streamId][bucket][int(vbno)] = REPAIR_SHUTDOWN_VB
+		if ss.streamKeyspaceIdVbStatusMap[streamId][keyspaceId][vbno] == VBS_CONN_ERROR &&
+			ss.streamKeyspaceIdRepairStateMap[streamId][keyspaceId][int(vbno)] == REPAIR_RESTART_VB {
+			logging.Infof("StreamState::set repair state to SHUTDOWN_VB for %v keyspaceId %v vb %v", streamId, keyspaceId, vbno)
+			ss.streamKeyspaceIdRepairStateMap[streamId][keyspaceId][int(vbno)] = REPAIR_SHUTDOWN_VB
 		}
 	}
 }
@@ -561,35 +560,36 @@ func (ss *StreamState) updateRepairState(streamId common.StreamId,
 // 1) All vb are in StreamBegin state
 // 2) All vb have ref count == 1
 // 3) There is no error in stream repair
-func (ss *StreamState) getRepairTsForBucket(streamId common.StreamId,
-	bucket string) (*common.TsVbuuid, bool, []Vbucket, []Vbucket) {
+func (ss *StreamState) getRepairTsForKeyspaceId(streamId common.StreamId,
+	keyspaceId string) (*common.TsVbuuid, bool, []Vbucket, []Vbucket) {
 
 	anythingToRepair := false
 
 	numVbuckets := ss.config["numVbuckets"].Int()
-	repairTs := common.NewTsVbuuid(bucket, numVbuckets)
+	repairTs := common.NewTsVbuuid(keyspaceId, numVbuckets)
+
 	var shutdownVbs []Vbucket = nil
 	var repairVbs []Vbucket = nil
 	var count = 0
 
-	hwtTs := ss.streamBucketHWTMap[streamId][bucket]
+	hwtTs := ss.streamKeyspaceIdHWTMap[streamId][keyspaceId]
 
 	// First step: Find out if any StreamEnd needs to be escalated to ConnErr.
 	// If so, add it to ShutdownVbs (for shutdown/restart).
-	for i, s := range ss.streamBucketVbStatusMap[streamId][bucket] {
+	for i, s := range ss.streamKeyspaceIdVbStatusMap[streamId][keyspaceId] {
 		if s == VBS_STREAM_END &&
-			ss.canShutdownOnRetry(streamId, bucket, Vbucket(i)) {
+			ss.canShutdownOnRetry(streamId, keyspaceId, Vbucket(i)) {
 
-			logging.Infof("StreamState::getRepairTsForBucket\n\t"+
-				"Bucket %v StreamId %v Vbucket %v exceeds repair wait time. Convert to CONN_ERROR.",
-				bucket, streamId, i)
+			logging.Infof("StreamState::getRepairTsForKeyspaceId\n\t"+
+				"KeyspaceId %v StreamId %v Vbucket %v exceeds repair wait time. Convert to CONN_ERROR.",
+				keyspaceId, streamId, i)
 
-			ss.makeConnectionError(streamId, bucket, Vbucket(i))
+			ss.makeConnectionError(streamId, keyspaceId, Vbucket(i))
 		}
 	}
 
 	// Second step : Repair any StreamEnd, ConnError on any vb.
-	for i, s := range ss.streamBucketVbStatusMap[streamId][bucket] {
+	for i, s := range ss.streamKeyspaceIdVbStatusMap[streamId][keyspaceId] {
 		if s == VBS_STREAM_END || s == VBS_CONN_ERROR {
 
 			count++
@@ -597,10 +597,10 @@ func (ss *StreamState) getRepairTsForBucket(streamId common.StreamId,
 			repairVbs = ss.addRepairTs(repairTs, hwtTs, Vbucket(i), repairVbs)
 
 			if s == VBS_CONN_ERROR &&
-				ss.streamBucketRepairStateMap[streamId][bucket][i] < REPAIR_SHUTDOWN_VB {
-				logging.Infof("StreamState::getRepairTsForBucket\n\t"+
-					"Bucket %v StreamId %v Vbucket %v. Shutdown/Restart Vb.",
-					bucket, streamId, i)
+				ss.streamKeyspaceIdRepairStateMap[streamId][keyspaceId][i] < REPAIR_SHUTDOWN_VB {
+				logging.Infof("StreamState::getRepairTsForKeyspaceId\n\t"+
+					"KeyspaceId %v StreamId %v Vbucket %v. Shutdown/Restart Vb.",
+					keyspaceId, streamId, i)
 
 				shutdownVbs = append(shutdownVbs, Vbucket(i))
 			}
@@ -612,16 +612,16 @@ func (ss *StreamState) getRepairTsForBucket(streamId common.StreamId,
 	// to connection error).  Make the vb as ConnErr and continue to repair.
 	// Note: Do not check for VBS_INIT.  RepairMissingStreamBegin will ensure that
 	// indexer is getting all StreamBegin.
-	if !anythingToRepair && !ss.needsRollback(streamId, bucket) {
-		for i, s := range ss.streamBucketVbStatusMap[streamId][bucket] {
-			refCount := ss.streamBucketVbRefCountMap[streamId][bucket][i]
+	if !anythingToRepair && !ss.needsRollback(streamId, keyspaceId) {
+		for i, s := range ss.streamKeyspaceIdVbStatusMap[streamId][keyspaceId] {
+			refCount := ss.streamKeyspaceIdVbRefCountMap[streamId][keyspaceId][i]
 			if refCount != 1 && s != VBS_INIT {
-				logging.Infof("StreamState::getRepairTsForBucket\n\t"+
-					"Bucket %v StreamId %v Vbucket %v have ref count (%v != 1). Convert to CONN_ERROR.",
-					bucket, streamId, i, refCount)
+				logging.Infof("StreamState::getRepairTsForKeyspaceId\n\t"+
+					"KeyspaceId %v StreamId %v Vbucket %v have ref count (%v != 1). Convert to CONN_ERROR.",
+					keyspaceId, streamId, i, refCount)
 				// Make it a ConnErr such that subsequent retry will
 				// force a shutdown/restart sequence.
-				ss.makeConnectionError(streamId, bucket, Vbucket(i))
+				ss.makeConnectionError(streamId, keyspaceId, Vbucket(i))
 				repairVbs = ss.addRepairTs(repairTs, hwtTs, Vbucket(i), repairVbs)
 				count++
 				shutdownVbs = append(shutdownVbs, Vbucket(i))
@@ -631,41 +631,41 @@ func (ss *StreamState) getRepairTsForBucket(streamId common.StreamId,
 	}
 
 	if !anythingToRepair {
-		ss.streamBucketRestartVbTsMap[streamId][bucket] = nil
+		ss.streamKeyspaceIdRestartVbTsMap[streamId][keyspaceId] = nil
 	} else {
-		ss.streamBucketRestartVbTsMap[streamId][bucket] = repairTs.Copy()
+		ss.streamKeyspaceIdRestartVbTsMap[streamId][keyspaceId] = repairTs.Copy()
 	}
 
-	ss.adjustNonSnapAlignedVbs(repairTs, streamId, bucket, repairVbs, true)
-	ss.adjustVbuuids(repairTs, streamId, bucket)
+	ss.adjustNonSnapAlignedVbs(repairTs, streamId, keyspaceId, repairVbs, true)
+	ss.adjustVbuuids(repairTs, streamId, keyspaceId)
 
-	logging.Verbosef("StreamState::getRepairTsForBucket\n\t"+
-		"Bucket %v StreamId %v repairTS %v",
-		bucket, streamId, repairTs)
+	logging.Verbosef("StreamState::getRepairTsForKeyspaceId\n\t"+
+		"KeyspaceId %v StreamId %v repairTS %v",
+		keyspaceId, streamId, repairTs)
 
 	return repairTs, anythingToRepair, shutdownVbs, repairVbs
 }
 
-func (ss *StreamState) canShutdownOnRetry(streamId common.StreamId, bucket string, vbno Vbucket) bool {
+func (ss *StreamState) canShutdownOnRetry(streamId common.StreamId, keyspaceId string, vbno Vbucket) bool {
 
-	if status := ss.streamBucketVbStatusMap[streamId][bucket][int(vbno)]; status != VBS_STREAM_END {
+	if status := ss.streamKeyspaceIdVbStatusMap[streamId][keyspaceId][int(vbno)]; status != VBS_STREAM_END {
 		return false
 	}
 
-	if ss.streamBucketRepairStateMap[streamId][bucket][int(vbno)] != REPAIR_RESTART_VB {
+	if ss.streamKeyspaceIdRepairStateMap[streamId][keyspaceId][int(vbno)] != REPAIR_RESTART_VB {
 		return false
 	}
 
 	waitTime := int64(ss.config["timekeeper.escalate.StreamBeginWaitTime"].Int()) * int64(time.Second)
 
-	if _, pendingVbuuid := ss.getKVPendingTs(streamId, bucket, vbno); pendingVbuuid != 0 {
+	if _, pendingVbuuid := ss.getKVPendingTs(streamId, keyspaceId, vbno); pendingVbuuid != 0 {
 		// acknowledged by projector but not yet active
 		waitTime = waitTime * 2
 	}
 
 	if waitTime > 0 {
-		exceedBeginTime := time.Now().UnixNano()-int64(ss.streamBucketLastBeginTime[streamId][bucket]) > waitTime
-		exceedRepairTime := time.Now().UnixNano()-int64(ss.streamBucketLastRepairTimeMap[streamId][bucket][vbno]) > waitTime
+		exceedBeginTime := time.Now().UnixNano()-int64(ss.streamKeyspaceIdLastBeginTime[streamId][keyspaceId]) > waitTime
+		exceedRepairTime := time.Now().UnixNano()-int64(ss.streamKeyspaceIdLastRepairTimeMap[streamId][keyspaceId][vbno]) > waitTime
 
 		return exceedBeginTime && exceedRepairTime
 	}
@@ -673,11 +673,11 @@ func (ss *StreamState) canShutdownOnRetry(streamId common.StreamId, bucket strin
 	return false
 }
 
-func (ss *StreamState) startMTROnRetry(streamId common.StreamId, bucket string) bool {
+func (ss *StreamState) startMTROnRetry(streamId common.StreamId, keyspaceId string) bool {
 
 	startMTR := false
 
-	for vbno, status := range ss.streamBucketVbStatusMap[streamId][bucket] {
+	for vbno, status := range ss.streamKeyspaceIdVbStatusMap[streamId][keyspaceId] {
 
 		if status == VBS_STREAM_END {
 			return false
@@ -687,20 +687,20 @@ func (ss *StreamState) startMTROnRetry(streamId common.StreamId, bucket string) 
 			continue
 		}
 
-		if ss.streamBucketRepairStateMap[streamId][bucket][vbno] != REPAIR_SHUTDOWN_VB {
+		if ss.streamKeyspaceIdRepairStateMap[streamId][keyspaceId][vbno] != REPAIR_SHUTDOWN_VB {
 			continue
 		}
 
 		waitTime := int64(ss.config["timekeeper.escalate.StreamBeginWaitTime"].Int()) * int64(time.Second)
 
-		if _, pendingVbuuid := ss.getKVPendingTs(streamId, bucket, Vbucket(vbno)); pendingVbuuid != 0 {
+		if _, pendingVbuuid := ss.getKVPendingTs(streamId, keyspaceId, Vbucket(vbno)); pendingVbuuid != 0 {
 			// acknowledged by projector but not yet active
 			waitTime = waitTime * 2
 		}
 
 		if waitTime > 0 {
-			exceedBeginTime := time.Now().UnixNano()-int64(ss.streamBucketLastBeginTime[streamId][bucket]) > waitTime
-			exceedRepairTime := time.Now().UnixNano()-int64(ss.streamBucketLastRepairTimeMap[streamId][bucket][vbno]) > waitTime
+			exceedBeginTime := time.Now().UnixNano()-int64(ss.streamKeyspaceIdLastBeginTime[streamId][keyspaceId]) > waitTime
+			exceedRepairTime := time.Now().UnixNano()-int64(ss.streamKeyspaceIdLastRepairTimeMap[streamId][keyspaceId][vbno]) > waitTime
 
 			if exceedBeginTime && exceedRepairTime {
 				startMTR = true
@@ -711,7 +711,7 @@ func (ss *StreamState) startMTROnRetry(streamId common.StreamId, bucket string) 
 	return startMTR
 }
 
-func (ss *StreamState) startRecoveryOnRetry(streamId common.StreamId, bucket string) bool {
+func (ss *StreamState) startRecoveryOnRetry(streamId common.StreamId, keyspaceId string) bool {
 
 	//FIXME: Currently, timekeeper can hang on initial index build if
 	// 1) it is the first index
@@ -728,7 +728,7 @@ func (ss *StreamState) startRecoveryOnRetry(streamId common.StreamId, bucket str
 
 	startRecovery := false
 
-	for vbno, status := range ss.streamBucketVbStatusMap[streamId][bucket] {
+	for vbno, status := range ss.streamKeyspaceIdVbStatusMap[streamId][keyspaceId] {
 
 		if status == VBS_STREAM_END {
 			return false
@@ -738,20 +738,20 @@ func (ss *StreamState) startRecoveryOnRetry(streamId common.StreamId, bucket str
 			continue
 		}
 
-		if ss.streamBucketRepairStateMap[streamId][bucket][vbno] != REPAIR_MTR {
+		if ss.streamKeyspaceIdRepairStateMap[streamId][keyspaceId][vbno] != REPAIR_MTR {
 			continue
 		}
 
 		waitTime := int64(ss.config["timekeeper.escalate.StreamBeginWaitTime"].Int()) * int64(time.Second)
 
-		if _, pendingVbuuid := ss.getKVPendingTs(streamId, bucket, Vbucket(vbno)); pendingVbuuid != 0 {
+		if _, pendingVbuuid := ss.getKVPendingTs(streamId, keyspaceId, Vbucket(vbno)); pendingVbuuid != 0 {
 			// acknowledged by projector but not yet active
 			waitTime = waitTime * 2
 		}
 
 		if waitTime > 0 {
-			exceedBeginTime := time.Now().UnixNano()-int64(ss.streamBucketLastBeginTime[streamId][bucket]) > waitTime
-			exceedRepairTime := time.Now().UnixNano()-int64(ss.streamBucketLastRepairTimeMap[streamId][bucket][vbno]) > waitTime
+			exceedBeginTime := time.Now().UnixNano()-int64(ss.streamKeyspaceIdLastBeginTime[streamId][keyspaceId]) > waitTime
+			exceedRepairTime := time.Now().UnixNano()-int64(ss.streamKeyspaceIdLastRepairTimeMap[streamId][keyspaceId][vbno]) > waitTime
 
 			if exceedBeginTime && exceedRepairTime {
 				startRecovery = true
@@ -762,9 +762,9 @@ func (ss *StreamState) startRecoveryOnRetry(streamId common.StreamId, bucket str
 	return startRecovery
 }
 
-func (ss *StreamState) hasConnectionError(streamId common.StreamId, bucket string) bool {
+func (ss *StreamState) hasConnectionError(streamId common.StreamId, keyspaceId string) bool {
 
-	for _, s := range ss.streamBucketVbStatusMap[streamId][bucket] {
+	for _, s := range ss.streamKeyspaceIdVbStatusMap[streamId][keyspaceId] {
 		if s == VBS_CONN_ERROR {
 			return true
 		}
@@ -776,20 +776,20 @@ func (ss *StreamState) hasConnectionError(streamId common.StreamId, bucket strin
 // When making a vb to have connection error, the ref count must also set to 0.  No counting
 // will start until it gets its first StreamBegin message.
 //
-func (ss *StreamState) makeConnectionError(streamId common.StreamId, bucket string, vbno Vbucket) {
+func (ss *StreamState) makeConnectionError(streamId common.StreamId, keyspaceId string, vbno Vbucket) {
 
-	ss.streamBucketVbStatusMap[streamId][bucket][vbno] = VBS_CONN_ERROR
-	ss.clearVbRefCount(streamId, bucket, vbno)
+	ss.streamKeyspaceIdVbStatusMap[streamId][keyspaceId][vbno] = VBS_CONN_ERROR
+	ss.clearVbRefCount(streamId, keyspaceId, vbno)
 
 	// clear rollbackTs and failTs for this vbucket
-	ss.clearKVActiveTs(streamId, bucket, vbno)
-	ss.clearKVPendingTs(streamId, bucket, vbno)
-	ss.clearKVRollbackTs(streamId, bucket, vbno)
+	ss.clearKVActiveTs(streamId, keyspaceId, vbno)
+	ss.clearKVPendingTs(streamId, keyspaceId, vbno)
+	ss.clearKVRollbackTs(streamId, keyspaceId, vbno)
 
-	ss.streamBucketRepairStateMap[streamId][bucket][vbno] = REPAIR_RESTART_VB
-	ss.setLastRepairTime(streamId, bucket, vbno)
+	ss.streamKeyspaceIdRepairStateMap[streamId][keyspaceId][vbno] = REPAIR_RESTART_VB
+	ss.setLastRepairTime(streamId, keyspaceId, vbno)
 
-	logging.Infof("StreamState::connection error - set repair state to RESTART_VB for %v bucket %v vb %v", streamId, bucket, vbno)
+	logging.Infof("StreamState::connection error - set repair state to RESTART_VB for %v keyspaceId %v vb %v", streamId, keyspaceId, vbno)
 }
 
 func (ss *StreamState) addRepairTs(repairTs *common.TsVbuuid, hwtTs *common.TsVbuuid, vbno Vbucket, repairSeqno []Vbucket) []Vbucket {
@@ -802,13 +802,13 @@ func (ss *StreamState) addRepairTs(repairTs *common.TsVbuuid, hwtTs *common.TsVb
 	return append(repairSeqno, vbno)
 }
 
-func (ss *StreamState) addKVRollbackTs(streamId common.StreamId, bucket string, vbno Vbucket, seqno uint64, vbuuid uint64) {
+func (ss *StreamState) addKVRollbackTs(streamId common.StreamId, keyspaceId string, vbno Vbucket, seqno uint64, vbuuid uint64) {
 
-	rollbackTs := ss.streamBucketKVRollbackTsMap[streamId][bucket]
+	rollbackTs := ss.streamKeyspaceIdKVRollbackTsMap[streamId][keyspaceId]
 	if rollbackTs == nil {
 		numVbuckets := ss.config["numVbuckets"].Int()
-		rollbackTs = common.NewTsVbuuid(bucket, numVbuckets)
-		ss.streamBucketKVRollbackTsMap[streamId][bucket] = rollbackTs
+		rollbackTs = common.NewTsVbuuid(keyspaceId, numVbuckets)
+		ss.streamKeyspaceIdKVRollbackTsMap[streamId][keyspaceId] = rollbackTs
 	}
 
 	rollbackTs.Seqnos[vbno] = seqno
@@ -817,9 +817,9 @@ func (ss *StreamState) addKVRollbackTs(streamId common.StreamId, bucket string, 
 	rollbackTs.Snapshots[vbno][1] = 0
 }
 
-func (ss *StreamState) clearKVRollbackTs(streamId common.StreamId, bucket string, vbno Vbucket) {
+func (ss *StreamState) clearKVRollbackTs(streamId common.StreamId, keyspaceId string, vbno Vbucket) {
 
-	rollbackTs := ss.streamBucketKVRollbackTsMap[streamId][bucket]
+	rollbackTs := ss.streamKeyspaceIdKVRollbackTsMap[streamId][keyspaceId]
 	if rollbackTs != nil {
 		rollbackTs.Seqnos[vbno] = 0
 		rollbackTs.Vbuuids[vbno] = 0
@@ -828,18 +828,18 @@ func (ss *StreamState) clearKVRollbackTs(streamId common.StreamId, bucket string
 	}
 }
 
-func (ss *StreamState) getKVRollbackTs(streamId common.StreamId, bucket string, vbno Vbucket) (uint64, uint64) {
+func (ss *StreamState) getKVRollbackTs(streamId common.StreamId, keyspaceId string, vbno Vbucket) (uint64, uint64) {
 
-	rollbackTs := ss.streamBucketKVRollbackTsMap[streamId][bucket]
+	rollbackTs := ss.streamKeyspaceIdKVRollbackTsMap[streamId][keyspaceId]
 	if rollbackTs == nil {
 		return 0, 0
 	}
 	return rollbackTs.Seqnos[vbno], rollbackTs.Vbuuids[vbno]
 }
 
-func (ss *StreamState) needsRollback(streamId common.StreamId, bucket string) bool {
+func (ss *StreamState) needsRollback(streamId common.StreamId, keyspaceId string) bool {
 
-	rollbackTs := ss.streamBucketKVRollbackTsMap[streamId][bucket]
+	rollbackTs := ss.streamKeyspaceIdKVRollbackTsMap[streamId][keyspaceId]
 	for _, vbuuid := range rollbackTs.Vbuuids {
 		if vbuuid != 0 {
 			return true
@@ -849,9 +849,9 @@ func (ss *StreamState) needsRollback(streamId common.StreamId, bucket string) bo
 	return false
 }
 
-func (ss *StreamState) needsRollbackToZero(streamId common.StreamId, bucket string) bool {
+func (ss *StreamState) needsRollbackToZero(streamId common.StreamId, keyspaceId string) bool {
 
-	rollbackTs := ss.streamBucketKVRollbackTsMap[streamId][bucket]
+	rollbackTs := ss.streamKeyspaceIdKVRollbackTsMap[streamId][keyspaceId]
 	for i, vbuuid := range rollbackTs.Vbuuids {
 		if vbuuid != 0 && rollbackTs.Seqnos[i] == 0 {
 			return true
@@ -861,10 +861,10 @@ func (ss *StreamState) needsRollbackToZero(streamId common.StreamId, bucket stri
 	return false
 }
 
-func (ss *StreamState) numKVRollbackTs(streamId common.StreamId, bucket string) int {
+func (ss *StreamState) numKVRollbackTs(streamId common.StreamId, keyspaceId string) int {
 
 	count := 0
-	rollbackTs := ss.streamBucketKVRollbackTsMap[streamId][bucket]
+	rollbackTs := ss.streamKeyspaceIdKVRollbackTsMap[streamId][keyspaceId]
 	for _, vbuuid := range rollbackTs.Vbuuids {
 		if vbuuid != 0 {
 			count++
@@ -874,13 +874,13 @@ func (ss *StreamState) numKVRollbackTs(streamId common.StreamId, bucket string) 
 	return count
 }
 
-func (ss *StreamState) addKVActiveTs(streamId common.StreamId, bucket string, vbno Vbucket, seqno uint64, vbuuid uint64) {
+func (ss *StreamState) addKVActiveTs(streamId common.StreamId, keyspaceId string, vbno Vbucket, seqno uint64, vbuuid uint64) {
 
-	activeTs := ss.streamBucketKVActiveTsMap[streamId][bucket]
+	activeTs := ss.streamKeyspaceIdKVActiveTsMap[streamId][keyspaceId]
 	if activeTs == nil {
 		numVbuckets := ss.config["numVbuckets"].Int()
-		activeTs = common.NewTsVbuuid(bucket, numVbuckets)
-		ss.streamBucketKVActiveTsMap[streamId][bucket] = activeTs
+		activeTs = common.NewTsVbuuid(keyspaceId, numVbuckets)
+		ss.streamKeyspaceIdKVActiveTsMap[streamId][keyspaceId] = activeTs
 	}
 
 	activeTs.Seqnos[vbno] = seqno
@@ -889,9 +889,9 @@ func (ss *StreamState) addKVActiveTs(streamId common.StreamId, bucket string, vb
 	activeTs.Snapshots[vbno][1] = 0
 }
 
-func (ss *StreamState) clearKVActiveTs(streamId common.StreamId, bucket string, vbno Vbucket) {
+func (ss *StreamState) clearKVActiveTs(streamId common.StreamId, keyspaceId string, vbno Vbucket) {
 
-	activeTs := ss.streamBucketKVActiveTsMap[streamId][bucket]
+	activeTs := ss.streamKeyspaceIdKVActiveTsMap[streamId][keyspaceId]
 	if activeTs != nil {
 		activeTs.Seqnos[vbno] = 0
 		activeTs.Vbuuids[vbno] = 0
@@ -900,9 +900,9 @@ func (ss *StreamState) clearKVActiveTs(streamId common.StreamId, bucket string, 
 	}
 }
 
-func (ss *StreamState) getKVActiveTs(streamId common.StreamId, bucket string, vbno Vbucket) (uint64, uint64) {
+func (ss *StreamState) getKVActiveTs(streamId common.StreamId, keyspaceId string, vbno Vbucket) (uint64, uint64) {
 
-	activeTs := ss.streamBucketKVActiveTsMap[streamId][bucket]
+	activeTs := ss.streamKeyspaceIdKVActiveTsMap[streamId][keyspaceId]
 	if activeTs == nil {
 		return 0, 0
 	}
@@ -910,13 +910,13 @@ func (ss *StreamState) getKVActiveTs(streamId common.StreamId, bucket string, vb
 	return activeTs.Seqnos[vbno], activeTs.Vbuuids[vbno]
 }
 
-func (ss *StreamState) addKVPendingTs(streamId common.StreamId, bucket string, vbno Vbucket, seqno uint64, vbuuid uint64) {
+func (ss *StreamState) addKVPendingTs(streamId common.StreamId, keyspaceId string, vbno Vbucket, seqno uint64, vbuuid uint64) {
 
-	pendingTs := ss.streamBucketKVPendingTsMap[streamId][bucket]
+	pendingTs := ss.streamKeyspaceIdKVPendingTsMap[streamId][keyspaceId]
 	if pendingTs == nil {
 		numVbuckets := ss.config["numVbuckets"].Int()
-		pendingTs = common.NewTsVbuuid(bucket, numVbuckets)
-		ss.streamBucketKVPendingTsMap[streamId][bucket] = pendingTs
+		pendingTs = common.NewTsVbuuid(keyspaceId, numVbuckets)
+		ss.streamKeyspaceIdKVPendingTsMap[streamId][keyspaceId] = pendingTs
 	}
 
 	pendingTs.Seqnos[vbno] = seqno
@@ -925,9 +925,9 @@ func (ss *StreamState) addKVPendingTs(streamId common.StreamId, bucket string, v
 	pendingTs.Snapshots[vbno][1] = 0
 }
 
-func (ss *StreamState) clearKVPendingTs(streamId common.StreamId, bucket string, vbno Vbucket) {
+func (ss *StreamState) clearKVPendingTs(streamId common.StreamId, keyspaceId string, vbno Vbucket) {
 
-	pendingTs := ss.streamBucketKVPendingTsMap[streamId][bucket]
+	pendingTs := ss.streamKeyspaceIdKVPendingTsMap[streamId][keyspaceId]
 	if pendingTs != nil {
 		pendingTs.Seqnos[vbno] = 0
 		pendingTs.Vbuuids[vbno] = 0
@@ -936,9 +936,9 @@ func (ss *StreamState) clearKVPendingTs(streamId common.StreamId, bucket string,
 	}
 }
 
-func (ss *StreamState) getKVPendingTs(streamId common.StreamId, bucket string, vbno Vbucket) (uint64, uint64) {
+func (ss *StreamState) getKVPendingTs(streamId common.StreamId, keyspaceId string, vbno Vbucket) (uint64, uint64) {
 
-	pendingTs := ss.streamBucketKVPendingTsMap[streamId][bucket]
+	pendingTs := ss.streamKeyspaceIdKVPendingTsMap[streamId][keyspaceId]
 	if pendingTs == nil {
 		return 0, 0
 	}
@@ -946,63 +946,63 @@ func (ss *StreamState) getKVPendingTs(streamId common.StreamId, bucket string, v
 	return pendingTs.Seqnos[vbno], pendingTs.Vbuuids[vbno]
 }
 
-func (ss *StreamState) setLastRepairTime(streamId common.StreamId, bucket string, vbno Vbucket) {
+func (ss *StreamState) setLastRepairTime(streamId common.StreamId, keyspaceId string, vbno Vbucket) {
 
-	repairTimeMap := ss.streamBucketLastRepairTimeMap[streamId][bucket]
+	repairTimeMap := ss.streamKeyspaceIdLastRepairTimeMap[streamId][keyspaceId]
 	if repairTimeMap == nil {
 		numVbuckets := ss.config["numVbuckets"].Int()
 		repairTimeMap = NewTimestamp(numVbuckets)
-		ss.streamBucketLastRepairTimeMap[streamId][bucket] = repairTimeMap
+		ss.streamKeyspaceIdLastRepairTimeMap[streamId][keyspaceId] = repairTimeMap
 	}
 	repairTimeMap[vbno] = Seqno(time.Now().UnixNano())
 }
 
-func (ss *StreamState) getLastRepairTime(streamId common.StreamId, bucket string, vbno Vbucket) int64 {
+func (ss *StreamState) getLastRepairTime(streamId common.StreamId, keyspaceId string, vbno Vbucket) int64 {
 
-	repairTimeMap := ss.streamBucketLastRepairTimeMap[streamId][bucket]
+	repairTimeMap := ss.streamKeyspaceIdLastRepairTimeMap[streamId][keyspaceId]
 	if repairTimeMap == nil {
 		return 0
 	}
 	return int64(repairTimeMap[vbno])
 }
 
-func (ss *StreamState) clearLastRepairTime(streamId common.StreamId, bucket string, vbno Vbucket) {
+func (ss *StreamState) clearLastRepairTime(streamId common.StreamId, keyspaceId string, vbno Vbucket) {
 
-	repairTimeMap := ss.streamBucketLastRepairTimeMap[streamId][bucket]
+	repairTimeMap := ss.streamKeyspaceIdLastRepairTimeMap[streamId][keyspaceId]
 	if repairTimeMap != nil {
 		repairTimeMap[vbno] = Seqno(0)
 	}
 }
 
-func (ss *StreamState) resetAllLastRepairTime(streamId common.StreamId, bucket string) {
+func (ss *StreamState) resetAllLastRepairTime(streamId common.StreamId, keyspaceId string) {
 
 	now := Seqno(time.Now().UnixNano())
-	for i, t := range ss.streamBucketLastRepairTimeMap[streamId][bucket] {
+	for i, t := range ss.streamKeyspaceIdLastRepairTimeMap[streamId][keyspaceId] {
 		if t != 0 {
-			ss.streamBucketLastRepairTimeMap[streamId][bucket][i] = now
+			ss.streamKeyspaceIdLastRepairTimeMap[streamId][keyspaceId][i] = now
 		}
 	}
 }
 
-func (ss *StreamState) clearRepairState(streamId common.StreamId, bucket string, vbno Vbucket) {
+func (ss *StreamState) clearRepairState(streamId common.StreamId, keyspaceId string, vbno Vbucket) {
 
-	state := ss.streamBucketRepairStateMap[streamId][bucket]
+	state := ss.streamKeyspaceIdRepairStateMap[streamId][keyspaceId]
 	if state != nil {
-		ss.streamBucketRepairStateMap[streamId][bucket][vbno] = REPAIR_NONE
+		ss.streamKeyspaceIdRepairStateMap[streamId][keyspaceId][vbno] = REPAIR_NONE
 	}
 }
 
-func (ss *StreamState) clearAllRepairState(streamId common.StreamId, bucket string) {
+func (ss *StreamState) clearAllRepairState(streamId common.StreamId, keyspaceId string) {
 
-	logging.Infof("StreamState::clear all repair state for %v bucket %v", streamId, bucket)
+	logging.Infof("StreamState::clear all repair state for %v keyspaceId %v", streamId, keyspaceId)
 
 	numVbuckets := ss.config["numVbuckets"].Int()
-	ss.streamBucketRepairStateMap[streamId][bucket] = make([]RepairState, numVbuckets)
-	ss.streamBucketLastBeginTime[streamId][bucket] = 0
-	ss.streamBucketLastRepairTimeMap[streamId][bucket] = NewTimestamp(numVbuckets)
-	ss.streamBucketKVActiveTsMap[streamId][bucket] = common.NewTsVbuuid(bucket, numVbuckets)
-	ss.streamBucketKVPendingTsMap[streamId][bucket] = common.NewTsVbuuid(bucket, numVbuckets)
-	ss.streamBucketKVRollbackTsMap[streamId][bucket] = common.NewTsVbuuid(bucket, numVbuckets)
+	ss.streamKeyspaceIdRepairStateMap[streamId][keyspaceId] = make([]RepairState, numVbuckets)
+	ss.streamKeyspaceIdLastBeginTime[streamId][keyspaceId] = 0
+	ss.streamKeyspaceIdLastRepairTimeMap[streamId][keyspaceId] = NewTimestamp(numVbuckets)
+	ss.streamKeyspaceIdKVActiveTsMap[streamId][keyspaceId] = common.NewTsVbuuid(keyspaceId, numVbuckets)
+	ss.streamKeyspaceIdKVPendingTsMap[streamId][keyspaceId] = common.NewTsVbuuid(keyspaceId, numVbuckets)
+	ss.streamKeyspaceIdKVRollbackTsMap[streamId][keyspaceId] = common.NewTsVbuuid(keyspaceId, numVbuckets)
 }
 
 //
@@ -1010,10 +1010,10 @@ func (ss *StreamState) clearAllRepairState(streamId common.StreamId, bucket stri
 // If indexer has seen StreamBegin for a vb, but the vb has later received
 // StreamEnd or ConnErr, this function will still return false.
 //
-func (ss *StreamState) seenAllVbs(streamId common.StreamId, bucket string) bool {
+func (ss *StreamState) seenAllVbs(streamId common.StreamId, keyspaceId string) bool {
 
 	numVbuckets := ss.config["numVbuckets"].Int()
-	vbs := ss.streamBucketVbStatusMap[streamId][bucket]
+	vbs := ss.streamKeyspaceIdVbStatusMap[streamId][keyspaceId]
 
 	for i := 0; i < numVbuckets; i++ {
 		status := vbs[i]
@@ -1025,31 +1025,31 @@ func (ss *StreamState) seenAllVbs(streamId common.StreamId, bucket string) bool 
 	return true
 }
 
-func (ss *StreamState) canRollbackNow(streamId common.StreamId, bucket string) (bool, bool) {
+func (ss *StreamState) canRollbackNow(streamId common.StreamId, keyspaceId string) (bool, bool) {
 
 	canRollback := false
 	needsRollback := false
 
-	if ss.needsRollback(streamId, bucket) {
+	if ss.needsRollback(streamId, keyspaceId) {
 		needsRollback = true
 
-		numRollback := ss.numKVRollbackTs(streamId, bucket)
+		numRollback := ss.numKVRollbackTs(streamId, keyspaceId)
 		numVbuckets := ss.config["numVbuckets"].Int()
 
 		waitTime := int64(ss.config["timekeeper.rollback.StreamBeginWaitTime"].Int()) * int64(time.Second)
-		exceedWaitTime := time.Now().UnixNano()-int64(ss.streamBucketLastBeginTime[streamId][bucket]) > waitTime
+		exceedWaitTime := time.Now().UnixNano()-int64(ss.streamKeyspaceIdLastBeginTime[streamId][keyspaceId]) > waitTime
 
 		//if any vb needs a rollback to zero, there is no need to wait
-		rollbackToZero := ss.needsRollbackToZero(streamId, bucket)
+		rollbackToZero := ss.needsRollbackToZero(streamId, keyspaceId)
 
-		canRollback = !ss.streamBucketAsyncMap[streamId][bucket] ||
+		canRollback = !ss.streamKeyspaceIdAsyncMap[streamId][keyspaceId] ||
 			exceedWaitTime ||
 			numRollback == numVbuckets ||
 			rollbackToZero
 	}
 
 	if !needsRollback {
-		needsRollback = ss.startRecoveryOnRetry(streamId, bucket)
+		needsRollback = ss.startRecoveryOnRetry(streamId, keyspaceId)
 		canRollback = needsRollback
 	}
 
@@ -1062,7 +1062,7 @@ func (ss *StreamState) canRollbackNow(streamId common.StreamId, bucket string) (
 //use lastFlushTs or restartTs.
 //
 func (ss *StreamState) adjustNonSnapAlignedVbs(repairTs *common.TsVbuuid,
-	streamId common.StreamId, bucket string, repairVbs []Vbucket, forStreamRepair bool) {
+	streamId common.StreamId, keyspaceId string, repairVbs []Vbucket, forStreamRepair bool) {
 
 	// The caller either provide a vector of vb to repair, or this function will
 	// look for any vb in the repairTS that has a non-zero vbuuid.
@@ -1073,8 +1073,8 @@ func (ss *StreamState) adjustNonSnapAlignedVbs(repairTs *common.TsVbuuid,
 	}
 
 	logging.Infof("StreamState::adjustNonSnapAlignedVbs\n\t"+
-		"Bucket %v StreamId %v Vbuckets %v.",
-		bucket, streamId, repairVbs)
+		"KeyspaceId %v StreamId %v Vbuckets %v.",
+		keyspaceId, streamId, repairVbs)
 
 	for _, vbno := range repairVbs {
 
@@ -1083,7 +1083,7 @@ func (ss *StreamState) adjustNonSnapAlignedVbs(repairTs *common.TsVbuuid,
 			repairTs.Vbuuids[vbno] == 0 {
 
 			// First, use the last flush TS seqno if avaliable
-			if fts, ok := ss.streamBucketLastFlushedTsMap[streamId][bucket]; ok && fts != nil {
+			if fts, ok := ss.streamKeyspaceIdLastFlushedTsMap[streamId][keyspaceId]; ok && fts != nil {
 				repairTs.Snapshots[vbno][0] = fts.Snapshots[vbno][0]
 				repairTs.Snapshots[vbno][1] = fts.Snapshots[vbno][1]
 				repairTs.Seqnos[vbno] = fts.Seqnos[vbno]
@@ -1094,7 +1094,7 @@ func (ss *StreamState) adjustNonSnapAlignedVbs(repairTs *common.TsVbuuid,
 			if !(repairTs.Seqnos[vbno] >= repairTs.Snapshots[vbno][0] &&
 				repairTs.Seqnos[vbno] <= repairTs.Snapshots[vbno][1]) ||
 				repairTs.Vbuuids[vbno] == 0 {
-				if fts, ok := ss.streamBucketLastSnapAlignFlushedTsMap[streamId][bucket]; ok && fts != nil {
+				if fts, ok := ss.streamKeyspaceIdLastSnapAlignFlushedTsMap[streamId][keyspaceId]; ok && fts != nil {
 					repairTs.Snapshots[vbno][0] = fts.Snapshots[vbno][0]
 					repairTs.Snapshots[vbno][1] = fts.Snapshots[vbno][1]
 					repairTs.Seqnos[vbno] = fts.Seqnos[vbno]
@@ -1106,7 +1106,7 @@ func (ss *StreamState) adjustNonSnapAlignedVbs(repairTs *common.TsVbuuid,
 			if !(repairTs.Seqnos[vbno] >= repairTs.Snapshots[vbno][0] &&
 				repairTs.Seqnos[vbno] <= repairTs.Snapshots[vbno][1]) ||
 				repairTs.Vbuuids[vbno] == 0 {
-				if rts, ok := ss.streamBucketOpenTsMap[streamId][bucket]; ok && rts != nil {
+				if rts, ok := ss.streamKeyspaceIdOpenTsMap[streamId][keyspaceId]; ok && rts != nil {
 					repairTs.Snapshots[vbno][0] = rts.Snapshots[vbno][0]
 					repairTs.Snapshots[vbno][1] = rts.Snapshots[vbno][1]
 					repairTs.Seqnos[vbno] = rts.Seqnos[vbno]
@@ -1118,7 +1118,7 @@ func (ss *StreamState) adjustNonSnapAlignedVbs(repairTs *common.TsVbuuid,
 			if !(repairTs.Seqnos[vbno] >= repairTs.Snapshots[vbno][0] &&
 				repairTs.Seqnos[vbno] <= repairTs.Snapshots[vbno][1]) ||
 				repairTs.Vbuuids[vbno] == 0 {
-				if rts, ok := ss.streamBucketRestartTsMap[streamId][bucket]; ok && rts != nil {
+				if rts, ok := ss.streamKeyspaceIdRestartTsMap[streamId][keyspaceId]; ok && rts != nil {
 					//if no flush has been done yet, use restart TS
 					repairTs.Snapshots[vbno][0] = rts.Snapshots[vbno][0]
 					repairTs.Snapshots[vbno][1] = rts.Snapshots[vbno][1]
@@ -1142,10 +1142,10 @@ func (ss *StreamState) adjustNonSnapAlignedVbs(repairTs *common.TsVbuuid,
 }
 
 func (ss *StreamState) checkAllStreamBeginsReceived(streamId common.StreamId,
-	bucket string) bool {
+	keyspaceId string) bool {
 
-	if bucketVbStatusMap, ok := ss.streamBucketVbStatusMap[streamId]; ok {
-		if vbs, ok := bucketVbStatusMap[bucket]; ok {
+	if keyspaceIdVbStatusMap, ok := ss.streamKeyspaceIdVbStatusMap[streamId]; ok {
+		if vbs, ok := keyspaceIdVbStatusMap[keyspaceId]; ok {
 			for _, v := range vbs {
 				if v != VBS_STREAM_BEGIN {
 					return false
@@ -1163,9 +1163,9 @@ func (ss *StreamState) checkAllStreamBeginsReceived(streamId common.StreamId,
 //checks snapshot markers have been received for all vbuckets where
 //the buildTs is non-nil.
 func (ss *StreamState) checkAllSnapMarkersReceived(streamId common.StreamId,
-	bucket string, buildTs Timestamp) bool {
+	keyspaceId string, buildTs Timestamp) bool {
 
-	ts := ss.streamBucketHWTMap[streamId][bucket]
+	ts := ss.streamKeyspaceIdHWTMap[streamId][keyspaceId]
 
 	//all snapshot markers should be present, except if buildTs has 0
 	//seqnum for the vbucket
@@ -1177,50 +1177,50 @@ func (ss *StreamState) checkAllSnapMarkersReceived(streamId common.StreamId,
 	return true
 }
 
-//checks if the given bucket in this stream has any flush in progress
+//checks if the given keyspaceId in this stream has any flush in progress
 func (ss *StreamState) checkAnyFlushPending(streamId common.StreamId,
-	bucket string) bool {
+	keyspaceId string) bool {
 
-	bucketFlushInProgressTsMap := ss.streamBucketFlushInProgressTsMap[streamId]
+	keyspaceIdFlushInProgressTsMap := ss.streamKeyspaceIdFlushInProgressTsMap[streamId]
 
 	//check if there is any flush in progress. No flush in progress implies
 	//there is no flush pending as well bcoz every flush done triggers
 	//the next flush.
-	if ts := bucketFlushInProgressTsMap[bucket]; ts != nil {
+	if ts := keyspaceIdFlushInProgressTsMap[keyspaceId]; ts != nil {
 		return true
 	}
 	return false
 }
 
-//checks if none of the buckets in this stream has any flush abort in progress
+//checks if none of the keyspaceIds in this stream has any flush abort in progress
 func (ss *StreamState) checkAnyAbortPending(streamId common.StreamId,
-	bucket string) bool {
+	keyspaceId string) bool {
 
-	bucketAbortInProgressMap := ss.streamBucketAbortInProgressMap[streamId]
+	keyspaceIdAbortInProgressMap := ss.streamKeyspaceIdAbortInProgressMap[streamId]
 
-	if running := bucketAbortInProgressMap[bucket]; running {
+	if running := keyspaceIdAbortInProgressMap[keyspaceId]; running {
 		return true
 	}
 	return false
 }
 
-//updateHWT will update the HW Timestamp for a bucket in the stream
+//updateHWT will update the HW Timestamp for a keyspaceId in the stream
 //based on the Sync message received.
 func (ss *StreamState) updateHWT(streamId common.StreamId,
-	bucket string, hwt *common.TsVbuuid, prevSnap *common.TsVbuuid) {
+	keyspaceId string, hwt *common.TsVbuuid, prevSnap *common.TsVbuuid) {
 
-	ts := ss.streamBucketHWTMap[streamId][bucket]
+	ts := ss.streamKeyspaceIdHWTMap[streamId][keyspaceId]
 	partialSnap := false
 
 	for i, seq := range hwt.Seqnos {
 		//if seqno has incremented, update it
 		if seq > ts.Seqnos[i] {
 			ts.Seqnos[i] = seq
-			ss.streamBucketNewTsReqdMap[streamId][bucket] = true
+			ss.streamKeyspaceIdNewTsReqdMap[streamId][keyspaceId] = true
 		}
 		//if snapEnd is greater than current hwt snapEnd
 		if hwt.Snapshots[i][1] > ts.Snapshots[i][1] {
-			lastSnap := ss.streamBucketLastSnapMarker[streamId][bucket]
+			lastSnap := ss.streamKeyspaceIdLastSnapMarker[streamId][keyspaceId]
 			//store the prev snap marker in the lastSnapMarker map
 			lastSnap.Snapshots[i][0] = prevSnap.Snapshots[i][0]
 			lastSnap.Snapshots[i][1] = prevSnap.Snapshots[i][1]
@@ -1231,11 +1231,11 @@ func (ss *StreamState) updateHWT(streamId common.StreamId,
 			ts.Snapshots[i][0] = hwt.Snapshots[i][0]
 			ts.Snapshots[i][1] = hwt.Snapshots[i][1]
 			//	ts.Vbuuids[i] = hwt.Vbuuids[i]
-			ss.streamBucketNewTsReqdMap[streamId][bucket] = true
+			ss.streamKeyspaceIdNewTsReqdMap[streamId][keyspaceId] = true
 			if prevSnap.Seqnos[i] != prevSnap.Snapshots[i][1] {
 				logging.Warnf("StreamState::updateHWT Received Partial Last Snapshot in HWT "+
-					"Bucket %v StreamId %v vbucket %v Snapshot %v-%v Seqno %v Vbuuid %v lastSnap %v-%v lastSnapSeqno %v",
-					bucket, streamId, i, hwt.Snapshots[i][0], hwt.Snapshots[i][1], hwt.Seqnos[i], ts.Vbuuids[i],
+					"KeyspaceId %v StreamId %v vbucket %v Snapshot %v-%v Seqno %v Vbuuid %v lastSnap %v-%v lastSnapSeqno %v",
+					keyspaceId, streamId, i, hwt.Snapshots[i][0], hwt.Snapshots[i][1], hwt.Seqnos[i], ts.Vbuuids[i],
 					prevSnap.Snapshots[i][0], prevSnap.Snapshots[i][1], prevSnap.Seqnos[i])
 				partialSnap = true
 
@@ -1244,18 +1244,18 @@ func (ss *StreamState) updateHWT(streamId common.StreamId,
 		} else if hwt.Snapshots[i][1] < ts.Snapshots[i][1] {
 			// Catch any out of order Snapshot.   StreamReader should make sure that Snapshot is monotonic increasing
 			logging.Debugf("StreamState::updateHWT.  Recieved a snapshot marker older than current hwt snapshot. "+
-				"Bucket %v StreamId %v vbucket %v Current Snapshot %v-%v New Snapshot %v-%v",
-				bucket, streamId, i, ts.Snapshots[i][0], ts.Snapshots[i][1], hwt.Snapshots[i][0], hwt.Snapshots[i][1])
+				"KeyspaceId %v StreamId %v vbucket %v Current Snapshot %v-%v New Snapshot %v-%v",
+				keyspaceId, streamId, i, ts.Snapshots[i][0], ts.Snapshots[i][1], hwt.Snapshots[i][0], hwt.Snapshots[i][1])
 		}
 	}
 
 	if hwt.DisableAlign {
 		logging.Warnf("StreamState::updateHWT Received Partial Snapshot Message in HWT "+
-			"StreamId %v Bucket %v", streamId, bucket)
+			"StreamId %v KeyspaceId %v", streamId, keyspaceId)
 	}
 
 	if partialSnap || hwt.DisableAlign {
-		ss.disableSnapAlignForPendingTs(streamId, bucket)
+		ss.disableSnapAlignForPendingTs(streamId, keyspaceId)
 	}
 
 	logging.LazyTrace(func() string {
@@ -1263,32 +1263,32 @@ func (ss *StreamState) updateHWT(streamId common.StreamId,
 	})
 }
 
-func (ss *StreamState) checkNewTSDue(streamId common.StreamId, bucket string) bool {
-	newTsReqd := ss.streamBucketNewTsReqdMap[streamId][bucket]
+func (ss *StreamState) checkNewTSDue(streamId common.StreamId, keyspaceId string) bool {
+	newTsReqd := ss.streamKeyspaceIdNewTsReqdMap[streamId][keyspaceId]
 	return newTsReqd
 }
 
-func (ss *StreamState) checkCommitOverdue(streamId common.StreamId, bucket string) bool {
+func (ss *StreamState) checkCommitOverdue(streamId common.StreamId, keyspaceId string) bool {
 
 	snapPersistInterval := ss.getPersistInterval()
 	persistDuration := time.Duration(snapPersistInterval) * time.Millisecond
 
-	lastPersistTime := ss.streamBucketLastPersistTime[streamId][bucket]
+	lastPersistTime := ss.streamKeyspaceIdLastPersistTime[streamId][keyspaceId]
 
 	if time.Since(lastPersistTime) > persistDuration {
 
-		bucketFlushInProgressTsMap := ss.streamBucketFlushInProgressTsMap[streamId]
-		bucketTsListMap := ss.streamBucketTsListMap[streamId]
-		bucketFlushEnabledMap := ss.streamBucketFlushEnabledMap[streamId]
-		bucketNeedsCommit := ss.streamBucketNeedsCommitMap[streamId]
+		keyspaceIdFlushInProgressTsMap := ss.streamKeyspaceIdFlushInProgressTsMap[streamId]
+		keyspaceIdTsListMap := ss.streamKeyspaceIdTsListMap[streamId]
+		keyspaceIdFlushEnabledMap := ss.streamKeyspaceIdFlushEnabledMap[streamId]
+		keyspaceIdNeedsCommit := ss.streamKeyspaceIdNeedsCommitMap[streamId]
 
-		//if there is no flush already in progress for this bucket
+		//if there is no flush already in progress for this keyspaceId
 		//no pending TS in list and flush is not disabled
-		tsList := bucketTsListMap[bucket]
-		if bucketFlushInProgressTsMap[bucket] == nil &&
-			bucketFlushEnabledMap[bucket] == true &&
+		tsList := keyspaceIdTsListMap[keyspaceId]
+		if keyspaceIdFlushInProgressTsMap[keyspaceId] == nil &&
+			keyspaceIdFlushEnabledMap[keyspaceId] == true &&
 			tsList.Len() == 0 &&
-			bucketNeedsCommit[bucket] == true {
+			keyspaceIdNeedsCommit[keyspaceId] == true {
 			return true
 		}
 	}
@@ -1298,17 +1298,17 @@ func (ss *StreamState) checkCommitOverdue(streamId common.StreamId, bucket strin
 
 //gets the stability timestamp based on the current HWT
 func (ss *StreamState) getNextStabilityTS(streamId common.StreamId,
-	bucket string) *common.TsVbuuid {
+	keyspaceId string) *common.TsVbuuid {
 
 	//generate new stability timestamp
-	tsVbuuid := ss.streamBucketHWTMap[streamId][bucket].Copy()
+	tsVbuuid := ss.streamKeyspaceIdHWTMap[streamId][keyspaceId].Copy()
 
 	tsVbuuid.SetSnapType(common.NO_SNAP)
 
-	ss.alignSnapBoundary(streamId, bucket, tsVbuuid)
+	ss.alignSnapBoundary(streamId, keyspaceId, tsVbuuid)
 
 	//reset state for next TS
-	ss.streamBucketNewTsReqdMap[streamId][bucket] = false
+	ss.streamKeyspaceIdNewTsReqdMap[streamId][keyspaceId] = false
 
 	if tsVbuuid.CheckSnapAligned() {
 		tsVbuuid.SetSnapAligned(true)
@@ -1320,10 +1320,10 @@ func (ss *StreamState) getNextStabilityTS(streamId common.StreamId,
 //align the snap boundary of TS if the seqno of the TS falls within the range of
 //last snap marker
 func (ss *StreamState) alignSnapBoundary(streamId common.StreamId,
-	bucket string, ts *common.TsVbuuid) {
+	keyspaceId string, ts *common.TsVbuuid) {
 
 	smallSnap := ss.config["settings.smallSnapshotThreshold"].Uint64()
-	lastSnap := ss.streamBucketLastSnapMarker[streamId][bucket]
+	lastSnap := ss.streamKeyspaceIdLastSnapMarker[streamId][keyspaceId]
 
 	for i, s := range ts.Snapshots {
 		//if seqno is not between snap boundary
@@ -1337,8 +1337,8 @@ func (ss *StreamState) alignSnapBoundary(streamId common.StreamId,
 				ts.Vbuuids[i] = lastSnap.Vbuuids[i]
 			} else {
 				logging.Warnf("StreamState::alignSnapBoundary Received New Snapshot While Processing Incomplete "+
-					"Snapshot. Bucket %v StreamId %v vbucket %v Snapshot %v-%v Seqno %v Vbuuid %v lastSnap %v-%v",
-					bucket, streamId, i, ts.Snapshots[i][0], ts.Snapshots[i][1], ts.Seqnos[i], ts.Vbuuids[i],
+					"Snapshot. KeyspaceId %v StreamId %v vbucket %v Snapshot %v-%v Seqno %v Vbuuid %v lastSnap %v-%v",
+					keyspaceId, streamId, i, ts.Snapshots[i][0], ts.Snapshots[i][1], ts.Seqnos[i], ts.Vbuuids[i],
 					lastSnap.Snapshots[i][0], lastSnap.Snapshots[i][1])
 			}
 
@@ -1357,8 +1357,8 @@ func (ss *StreamState) alignSnapBoundary(streamId common.StreamId,
 			}
 			if lastSnap.Seqnos[i] != lastSnap.Snapshots[i][1] {
 				logging.Warnf("StreamState::alignSnapBoundary Received Partial Last Snapshot in HWT "+
-					"Bucket %v StreamId %v vbucket %v Snapshot %v-%v Seqno %v Vbuuid %v lastSnap %v-%v lastSnapSeqno %v",
-					bucket, streamId, i, ts.Snapshots[i][0], ts.Snapshots[i][1], ts.Seqnos[i], ts.Vbuuids[i],
+					"KeyspaceId %v StreamId %v vbucket %v Snapshot %v-%v Seqno %v Vbuuid %v lastSnap %v-%v lastSnapSeqno %v",
+					keyspaceId, streamId, i, ts.Snapshots[i][0], ts.Snapshots[i][1], ts.Seqnos[i], ts.Vbuuids[i],
 					lastSnap.Snapshots[i][0], lastSnap.Snapshots[i][1], lastSnap.Seqnos[i])
 			}
 
@@ -1366,8 +1366,8 @@ func (ss *StreamState) alignSnapBoundary(streamId common.StreamId,
 
 		if !(ts.Seqnos[i] >= ts.Snapshots[i][0] && ts.Seqnos[i] <= ts.Snapshots[i][1]) {
 			logging.Warnf("StreamState::alignSnapBoundary.  TS falls out of snapshot boundary. "+
-				"Bucket %v StreamId %v vbucket %v Snapshot %v-%v Seqno %v Vbuuid %v lastSnap %v-%v",
-				bucket, streamId, i, ts.Snapshots[i][0], ts.Snapshots[i][1], ts.Seqnos[i], ts.Vbuuids[i],
+				"KeyspaceId %v StreamId %v vbucket %v Snapshot %v-%v Seqno %v Vbuuid %v lastSnap %v-%v",
+				keyspaceId, streamId, i, ts.Snapshots[i][0], ts.Snapshots[i][1], ts.Seqnos[i], ts.Vbuuids[i],
 				lastSnap.Snapshots[i][0], lastSnap.Snapshots[i][1])
 		}
 	}
@@ -1387,17 +1387,17 @@ func (ss *StreamState) checkLargeSnapshot(ts *common.TsVbuuid) {
 }
 
 func (ss *StreamState) canFlushNewTS(streamId common.StreamId,
-	bucket string) bool {
+	keyspaceId string) bool {
 
-	bucketFlushInProgressTsMap := ss.streamBucketFlushInProgressTsMap[streamId]
-	bucketTsListMap := ss.streamBucketTsListMap[streamId]
-	bucketFlushEnabledMap := ss.streamBucketFlushEnabledMap[streamId]
+	keyspaceIdFlushInProgressTsMap := ss.streamKeyspaceIdFlushInProgressTsMap[streamId]
+	keyspaceIdTsListMap := ss.streamKeyspaceIdTsListMap[streamId]
+	keyspaceIdFlushEnabledMap := ss.streamKeyspaceIdFlushEnabledMap[streamId]
 
-	//if there is no flush already in progress for this bucket
+	//if there is no flush already in progress for this keyspaceId
 	//no pending TS in list and flush is not disabled, send new TS
-	tsList := bucketTsListMap[bucket]
-	if bucketFlushInProgressTsMap[bucket] == nil &&
-		bucketFlushEnabledMap[bucket] == true &&
+	tsList := keyspaceIdTsListMap[keyspaceId]
+	if keyspaceIdFlushInProgressTsMap[keyspaceId] == nil &&
+		keyspaceIdFlushEnabledMap[keyspaceId] == true &&
 		tsList.Len() == 0 {
 		return true
 	}
@@ -1408,14 +1408,14 @@ func (ss *StreamState) canFlushNewTS(streamId common.StreamId,
 
 //computes which vbuckets have mutations compared to last flush
 func (ss *StreamState) computeTsChangeVec(streamId common.StreamId,
-	bucket string, ts *common.TsVbuuid) ([]bool, bool) {
+	keyspaceId string, ts *common.TsVbuuid) ([]bool, bool) {
 
 	numVbuckets := len(ts.Snapshots)
 	changeVec := make([]bool, numVbuckets)
 	noChange := true
 
 	//if there is a lastFlushedTs, compare with that
-	if lts, ok := ss.streamBucketLastFlushedTsMap[streamId][bucket]; ok && lts != nil {
+	if lts, ok := ss.streamKeyspaceIdLastFlushedTsMap[streamId][keyspaceId]; ok && lts != nil {
 
 		for i, s := range ts.Seqnos {
 			//if currentTs has seqno greater than last flushed
@@ -1467,9 +1467,9 @@ func (ss *StreamState) getPersistInterval() uint64 {
 
 }
 
-func (ss *StreamState) disableSnapAlignForPendingTs(streamId common.StreamId, bucket string) {
+func (ss *StreamState) disableSnapAlignForPendingTs(streamId common.StreamId, keyspaceId string) {
 
-	tsList := ss.streamBucketTsListMap[streamId][bucket]
+	tsList := ss.streamKeyspaceIdTsListMap[streamId][keyspaceId]
 	disableCount := 0
 	for e := tsList.Front(); e != nil; e = e.Next() {
 		ts := e.Value.(*common.TsVbuuid)
@@ -1477,17 +1477,17 @@ func (ss *StreamState) disableSnapAlignForPendingTs(streamId common.StreamId, bu
 		disableCount++
 	}
 	if disableCount > 0 {
-		logging.Infof("StreamState::disableSnapAlignForPendingTs Stream %v Bucket %v Disabled Snap Align for %v TS", streamId, bucket, disableCount)
+		logging.Infof("StreamState::disableSnapAlignForPendingTs Stream %v KeyspaceId %v Disabled Snap Align for %v TS", streamId, keyspaceId, disableCount)
 
 	}
 }
 
 func (ss *StreamState) updateLastMutationVbuuid(streamId common.StreamId,
-	bucket string, fts *common.TsVbuuid) {
+	keyspaceId string, fts *common.TsVbuuid) {
 
-	pts := ss.streamBucketLastMutationVbuuid[streamId][bucket]
+	pts := ss.streamKeyspaceIdLastMutationVbuuid[streamId][keyspaceId]
 	if pts == nil {
-		ss.streamBucketLastMutationVbuuid[streamId][bucket] = fts.Copy()
+		ss.streamKeyspaceIdLastMutationVbuuid[streamId][keyspaceId] = fts.Copy()
 		return
 	}
 
@@ -1504,20 +1504,20 @@ func (ss *StreamState) updateLastMutationVbuuid(streamId common.StreamId,
 }
 
 func (ss *StreamState) adjustVbuuids(restartTs *common.TsVbuuid,
-	streamId common.StreamId, bucket string) {
+	streamId common.StreamId, keyspaceId string) {
 
 	if restartTs == nil {
 		return
 	}
 
 	//use the vbuuids with last known mutation
-	if pts, ok := ss.streamBucketLastMutationVbuuid[streamId][bucket]; ok && pts != nil {
+	if pts, ok := ss.streamKeyspaceIdLastMutationVbuuid[streamId][keyspaceId]; ok && pts != nil {
 		for i, _ := range pts.Vbuuids {
 			if restartTs.Seqnos[i] == pts.Seqnos[i] &&
 				restartTs.Seqnos[i] != 0 &&
 				restartTs.Vbuuids[i] != pts.Vbuuids[i] {
 				logging.Infof("StreamState::adjustVbuuids %v %v Vb %v Seqno %v "+
-					"From %v To %v", streamId, bucket, i, pts.Seqnos[i], restartTs.Vbuuids[i],
+					"From %v To %v", streamId, keyspaceId, i, pts.Seqnos[i], restartTs.Vbuuids[i],
 					pts.Vbuuids[i])
 				restartTs.Vbuuids[i] = pts.Vbuuids[i]
 			}
@@ -1531,11 +1531,11 @@ func (ss *StreamState) adjustVbuuids(restartTs *common.TsVbuuid,
 //happen if a node fails over and we have more recent vbuuid than
 //kv replica
 func (ss *StreamState) computeRetryTs(streamId common.StreamId,
-	bucket string, restartTs *common.TsVbuuid) *common.TsVbuuid {
+	keyspaceId string, restartTs *common.TsVbuuid) *common.TsVbuuid {
 
 	var retryTs *common.TsVbuuid
 
-	if pts, ok := ss.streamBucketLastMutationVbuuid[streamId][bucket]; ok && pts != nil {
+	if pts, ok := ss.streamKeyspaceIdLastMutationVbuuid[streamId][keyspaceId]; ok && pts != nil {
 
 		retryTs = restartTs.Copy()
 		valid := false
@@ -1555,6 +1555,6 @@ func (ss *StreamState) computeRetryTs(streamId common.StreamId,
 	return retryTs
 }
 
-func (ss *StreamState) getSessionId(streamId common.StreamId, bucket string) uint64 {
-	return ss.streamBucketSessionId[streamId][bucket]
+func (ss *StreamState) getSessionId(streamId common.StreamId, keyspaceId string) uint64 {
+	return ss.streamKeyspaceIdSessionId[streamId][keyspaceId]
 }

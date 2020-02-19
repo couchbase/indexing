@@ -50,6 +50,7 @@ var StreamTopicName map[common.StreamId]string
 var ServiceAddrMap map[string]string
 var httpMux *http.ServeMux
 
+type KeyspaceIdIndexCountMap map[string]int
 type BucketIndexCountMap map[string]int
 type BucketFlushInProgressMap map[string]bool
 type BucketObserveFlushDoneMap map[string]MsgChannel

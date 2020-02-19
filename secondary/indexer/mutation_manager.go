@@ -30,8 +30,6 @@ type MutationManager interface {
 //Map from keyspaceId to mutation queue
 type KeyspaceIdQueueMap map[string]IndexerMutationQueue
 
-//TODO remove this once stream state gets updated
-type KeyspaceIdSessionId map[string]uint64
 type BucketQueueMap map[string]IndexerMutationQueue
 
 //Map from keyspaceId to flusher stop channel
