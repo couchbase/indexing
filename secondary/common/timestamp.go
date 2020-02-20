@@ -46,6 +46,15 @@ func NewTsVbuuid(bucket string, numVbuckets int) *TsVbuuid {
 	}
 }
 
+// NewTsVbuuid returns reference to new instance of TsVbuuid.
+func NewTsVbuuid2(bucket string, seqnos, vbuuids []uint64) *TsVbuuid {
+	return &TsVbuuid{
+		Bucket:  bucket,
+		Seqnos:  seqnos,
+		Vbuuids: vbuuids,
+	}
+}
+
 func newTsVbuuid() interface{} {
 	return &TsVbuuid{
 		Bucket:    "",
@@ -212,32 +221,6 @@ func (ts *TsVbuuid) AsRecentTs(other *TsVbuuid) bool {
 		}
 	}
 	return true
-}
-
-// Same as AsRecentTs but also return if any
-// vb seqno in ts > vb seqno in other
-func (ts *TsVbuuid) AsRecentTs2(other *TsVbuuid) (bool, bool) {
-
-	isAnyTsVbAhead := false
-
-	if ts == nil || other == nil {
-		return false, isAnyTsVbAhead
-	}
-	if ts.Bucket != other.Bucket {
-		return false, isAnyTsVbAhead
-	}
-	if len(ts.Seqnos) > len(other.Seqnos) {
-		return false, isAnyTsVbAhead
-	}
-	for i, seqno := range ts.Seqnos {
-		if seqno < other.Seqnos[i] {
-			return false, isAnyTsVbAhead
-		}
-		if seqno > other.Seqnos[i] {
-			isAnyTsVbAhead = true
-		}
-	}
-	return true, isAnyTsVbAhead
 }
 
 // Len return number of entries in the timestamp.
