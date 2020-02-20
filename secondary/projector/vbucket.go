@@ -44,7 +44,7 @@ func NewVbucket(
 }
 
 func (v *Vbucket) makeStreamBeginData(
-	engines map[uint64]*Engine, status byte, code byte) (data interface{}) {
+	engines map[uint32]map[uint64]*Engine, status byte, code byte) (data interface{}) {
 
 	defer func() {
 		if r := recover(); r != nil {
@@ -64,17 +64,19 @@ func (v *Vbucket) makeStreamBeginData(
 		return nil
 	}
 	// using the first engine that is capable of it.
-	for _, engine := range engines {
-		data := engine.StreamBeginData(v.vbno, v.vbuuid,
-			v.seqno, status, code, v.opaque2)
-		if data != nil {
-			return data
+	for _, enginesPerColl := range engines {
+		for _, engine := range enginesPerColl {
+			data := engine.StreamBeginData(v.vbno, v.vbuuid,
+				v.seqno, status, code, v.opaque2)
+			if data != nil {
+				return data
+			}
 		}
 	}
 	return nil
 }
 
-func (v *Vbucket) makeSyncData(engines map[uint64]*Engine) (data interface{}) {
+func (v *Vbucket) makeSyncData(engines map[uint32]map[uint64]*Engine) (data interface{}) {
 	defer func() {
 		if r := recover(); r != nil {
 			fmsg := "%v ##%x sync crashed: %v\n"
@@ -91,10 +93,12 @@ func (v *Vbucket) makeSyncData(engines map[uint64]*Engine) (data interface{}) {
 		return
 	}
 	// using the first engine that is capable of it.
-	for _, engine := range engines {
-		data = engine.SyncData(v.vbno, v.vbuuid, v.seqno, v.opaque2)
-		if data != nil {
-			return data
+	for _, enginesPerColl := range engines {
+		for _, engine := range enginesPerColl {
+			data = engine.SyncData(v.vbno, v.vbuuid, v.seqno, v.opaque2)
+			if data != nil {
+				return data
+			}
 		}
 	}
 	return
@@ -103,7 +107,7 @@ func (v *Vbucket) makeSyncData(engines map[uint64]*Engine) (data interface{}) {
 var ssFormat = "%v ##%x received snapshot %v %v (type %x)\n"
 
 func (v *Vbucket) makeSnapshotData(
-	m *mc.DcpEvent, engines map[uint64]*Engine) (data interface{}) {
+	m *mc.DcpEvent, engines map[uint32]map[uint64]*Engine) (data interface{}) {
 
 	defer func() {
 		if r := recover(); r != nil {
@@ -125,10 +129,12 @@ func (v *Vbucket) makeSnapshotData(
 		return nil
 	}
 	// using the first engine that is capable of it.
-	for _, engine := range engines {
-		data := engine.SnapshotData(m, v.vbno, v.vbuuid, v.seqno, v.opaque2)
-		if data != nil {
-			return data
+	for _, enginesPerColl := range engines {
+		for _, engine := range enginesPerColl {
+			data := engine.SnapshotData(m, v.vbno, v.vbuuid, v.seqno, v.opaque2)
+			if data != nil {
+				return data
+			}
 		}
 	}
 	return nil
@@ -136,7 +142,7 @@ func (v *Vbucket) makeSnapshotData(
 
 var seFormat = "%v ##%x received system event %v %v %v (type %v)\n"
 
-func (v *Vbucket) makeSystemEventData(m *mc.DcpEvent, engines map[uint64]*Engine) (data interface{}) {
+func (v *Vbucket) makeSystemEventData(m *mc.DcpEvent, engines map[uint32]map[uint64]*Engine) (data interface{}) {
 	defer func() {
 		if r := recover(); r != nil {
 			fmsg := "%v ##%x system event crashed: %v\n"
@@ -157,17 +163,53 @@ func (v *Vbucket) makeSystemEventData(m *mc.DcpEvent, engines map[uint64]*Engine
 		return nil
 	}
 	// using the first engine that is capable of it.
-	for _, engine := range engines {
-		data := engine.SystemEventData(m, v.vbno, v.vbuuid, v.seqno, v.opaque2)
-		if data != nil {
-			return data
+	for _, enginesPerColl := range engines {
+		for _, engine := range enginesPerColl {
+			data := engine.SystemEventData(m, v.vbno, v.vbuuid, v.seqno, v.opaque2)
+			if data != nil {
+				return data
+			}
+		}
+	}
+	return nil
+}
+
+var usFormat = "%v ##%x UpdateSeqno %v %v\n"
+
+func (v *Vbucket) makeUpdateSeqnoData(m *mc.DcpEvent, engines map[uint32]map[uint64]*Engine) (data interface{}) {
+	defer func() {
+		if r := recover(); r != nil {
+			fmsg := "%v ##%x UpdateSeqno crashed: %v\n"
+			logging.Fatalf(fmsg, v.logPrefix, v.opaque, r)
+			logging.Errorf("%s", logging.StackTrace())
+
+		} else if data == nil {
+			fmsg := "%v ##%x UpdateSeqno NOT PUBLISHED\n"
+			logging.Errorf(fmsg, v.logPrefix, m.Opaque)
+
+		} else {
+			seqno, collectionID := m.Seqno, m.CollectionID
+			logging.Debugf(seFormat, v.logPrefix, m.Opaque, seqno, collectionID)
+		}
+	}()
+
+	if len(engines) == 0 {
+		return nil
+	}
+	// using the first engine that is capable of it.
+	for _, enginesPerColl := range engines {
+		for _, engine := range enginesPerColl {
+			data := engine.UpdateSeqnoData(m, v.vbno, v.vbuuid, v.seqno, v.opaque2)
+			if data != nil {
+				return data
+			}
 		}
 	}
 	return nil
 }
 
 func (v *Vbucket) makeStreamEndData(
-	engines map[uint64]*Engine) (data interface{}) {
+	engines map[uint32]map[uint64]*Engine) (data interface{}) {
 
 	defer func() {
 		if r := recover(); r != nil {
@@ -188,10 +230,12 @@ func (v *Vbucket) makeStreamEndData(
 	}
 
 	// using the first engine that is capable of it.
-	for _, engine := range engines {
-		data := engine.StreamEndData(v.vbno, v.vbuuid, v.seqno, v.opaque2)
-		if data != nil {
-			return data
+	for _, enginesPerColl := range engines {
+		for _, engine := range enginesPerColl {
+			data := engine.StreamEndData(v.vbno, v.vbuuid, v.seqno, v.opaque2)
+			if data != nil {
+				return data
+			}
 		}
 	}
 	return nil

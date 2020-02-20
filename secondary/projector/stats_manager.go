@@ -402,12 +402,13 @@ func (sm *statsManager) logger() {
 }
 
 func Accmulate(wrkr []interface{}) string {
-	var dataChLen, outgoingMut uint64
+	var dataChLen, outgoingMut, updateSeqno uint64
 	for _, stats := range wrkr {
 		wrkrStat := stats.(*WorkerStats)
 		dataChLen += wrkrStat.datachLen.Value()
 		outgoingMut += wrkrStat.outgoingMut.Value()
+		updateSeqno += wrkrStat.updateSeqno.Value()
 	}
 	return fmt.Sprintf(
-		"{\"datachLen\":%v,\"outgoingMut\":%v}", dataChLen, outgoingMut)
+		"{\"datachLen\":%v,\"outgoingMut\":%v,\"updateSeqno\":%v}", dataChLen, outgoingMut, updateSeqno)
 }

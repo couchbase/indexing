@@ -1,16 +1,19 @@
 package projector
 
-import "fmt"
-import "time"
+import (
+	"fmt"
+	"strconv"
+	"time"
 
-import "github.com/couchbase/indexing/secondary/logging"
-import couchbase "github.com/couchbase/indexing/secondary/dcp"
-import mcd "github.com/couchbase/indexing/secondary/dcp/transport"
-import mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
-import c "github.com/couchbase/indexing/secondary/common"
-import protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
-import projC "github.com/couchbase/indexing/secondary/projector/client"
-import "github.com/golang/protobuf/proto"
+	c "github.com/couchbase/indexing/secondary/common"
+	couchbase "github.com/couchbase/indexing/secondary/dcp"
+	mcd "github.com/couchbase/indexing/secondary/dcp/transport"
+	mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
+	"github.com/couchbase/indexing/secondary/logging"
+	projC "github.com/couchbase/indexing/secondary/projector/client"
+	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
+	"github.com/golang/protobuf/proto"
+)
 
 // NOTE1:
 // https://github.com/couchbase/indexing/commit/
@@ -1347,19 +1350,23 @@ func (feed *Feed) delInstances(
 
 	instanceIds := req.GetInstanceIds()
 	keyspaceInsts := make(map[string][]uint64)      // keyspaceId -> []instance
+	collectionIds := make(map[string][]uint32)      // keyspaceId -> []collectionId
 	fengines := make(map[string]map[uint64]*Engine) // keyspaceId-> uuid-> instance
 
 	filterEngines := func(keyspaceId string, engines map[uint64]*Engine) {
 		uuids := make([]uint64, 0)
 		m := make(map[uint64]*Engine)
+		cids := make([]uint32, 0)
 		for uuid, engine := range engines {
 			if c.HasUint64(uuid, instanceIds) {
 				uuids = append(uuids, uuid)
+				cids = append(cids, getCidAsUint32(engine.GetCollectionID()))
 			} else {
 				m[uuid] = engine
 			}
 		}
 		keyspaceInsts[keyspaceId] = uuids
+		collectionIds[keyspaceId] = cids
 		fengines[keyspaceId] = m
 	}
 
@@ -1378,7 +1385,7 @@ func (feed *Feed) delInstances(
 	// posted post to kv data-path.
 	for keyspaceId, uuids := range keyspaceInsts {
 		if _, ok := feed.kvdata[keyspaceId]; ok {
-			feed.kvdata[keyspaceId].DeleteEngines(opaque, uuids)
+			feed.kvdata[keyspaceId].DeleteEngines(opaque, uuids, collectionIds[keyspaceId])
 		} else {
 			fmsg := "%v ##%x delInstances() invalid-keyspace %q"
 			logging.Errorf(fmsg, feed.logPrefix, opaque, keyspaceId)
@@ -2130,6 +2137,21 @@ func (feed *Feed) connectBucket(
 		return nil, projC.ErrorDCPBucket
 	}
 	return bucket, nil
+}
+
+func getCidAsUint32(collId string) uint32 {
+	if collId == "" {
+		return 0
+	}
+	cid, err := strconv.ParseUint(collId, 16, 32)
+	if err != nil {
+		// Since collectionID is read from cluster info cache, it
+		// is always expected to be a hexadecimal string.
+		// If it is not hexadecimal string, then crash on error
+		logging.Fatalf("Error while decoding collectionID: %s, err: %v", collId, err)
+		c.CrashOnError(err)
+	}
+	return (uint32)(cid)
 }
 
 // FeedConfigParams return the list of configuration params

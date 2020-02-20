@@ -263,9 +263,9 @@ func (kvdata *KVData) AddEngines(
 }
 
 // DeleteEngines synchronous call.
-func (kvdata *KVData) DeleteEngines(opaque uint16, engineKeys []uint64) error {
+func (kvdata *KVData) DeleteEngines(opaque uint16, engineKeys []uint64, collectionIds []uint32) error {
 	respch := make(chan []interface{}, 1)
-	cmd := []interface{}{kvCmdDelEngines, opaque, engineKeys, respch}
+	cmd := []interface{}{kvCmdDelEngines, opaque, engineKeys, collectionIds, respch}
 	_, err := c.FailsafeOp(kvdata.sbch, respch, cmd, kvdata.finch)
 	return err
 }
@@ -456,9 +456,10 @@ func (kvdata *KVData) handleCommand(msg []interface{}, ts *protobuf.TsVbuuid) bo
 	case kvCmdDelEngines:
 		opaque := msg[1].(uint16)
 		engineKeys := msg[2].([]uint64)
-		respch := msg[3].(chan []interface{})
+		collectionIds := msg[3].([]uint32)
+		respch := msg[4].(chan []interface{})
 		for _, worker := range kvdata.workers {
-			err := worker.DeleteEngines(opaque, engineKeys)
+			err := worker.DeleteEngines(opaque, engineKeys, collectionIds)
 			if err != nil {
 				panic(err)
 			}
