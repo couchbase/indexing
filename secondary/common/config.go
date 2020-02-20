@@ -1618,9 +1618,16 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.enable_session_consistency_strict": ConfigValue{
-		false,
+		true,
 		"enable strict session consistency to handle rollback scenarios for consistent scans",
-		false,
+		true,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.strict_consistency_check_threshold": ConfigValue{
+		5000,
+		"Criterion to determine if there is significant KV rollback based on which strict consistency is turned on",
+		5000,
 		false, // mutable
 		false, // case-insensitive
 	},

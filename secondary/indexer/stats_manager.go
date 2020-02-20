@@ -133,6 +133,7 @@ type IndexStats struct {
 	numRowsScannedAggr        stats.Int64Val
 	scanCacheHitAggr          stats.Int64Val
 	numRowsScanned            stats.Int64Val
+	numStrictConsReqs         stats.Int64Val
 	diskSize                  stats.Int64Val
 	memUsed                   stats.Int64Val
 	buildProgress             stats.Int64Val
@@ -303,6 +304,7 @@ func (s *IndexStats) Init() {
 	s.numRowsScannedAggr.Init()
 	s.scanCacheHitAggr.Init()
 	s.numRowsScanned.Init()
+	s.numStrictConsReqs.Init()
 	s.diskSize.Init()
 	s.memUsed.Init()
 	s.buildProgress.Init()
@@ -811,6 +813,9 @@ func (is IndexerStats) GetStats(getPartition bool, skipEmpty bool,
 			s.partnInt64Stats(func(ss *IndexStats) int64 {
 				return ss.numRowsScanned.Value()
 			}))
+
+		addStat("num_strict_cons_scans", s.numStrictConsReqs.Value())
+
 		// partition stats
 		addStat("disk_size",
 			s.partnInt64Stats(func(ss *IndexStats) int64 {
