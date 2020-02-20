@@ -98,7 +98,7 @@ func (stats *EndpointStats) String() string {
 	stitems[0] = `"mutCount":` + strconv.FormatUint(stats.mutCount.Value(), 10)
 	stitems[1] = `"upsertCount":` + strconv.FormatUint(stats.upsertCount.Value(), 10)
 	stitems[2] = `"deleteCount":` + strconv.FormatUint(stats.deleteCount.Value(), 10)
-	stitems[3] = `"upsdelCount":` + strconv.FormatUint(stats.upsertCount.Value(), 10)
+	stitems[3] = `"upsdelCount":` + strconv.FormatUint(stats.upsdelCount.Value(), 10)
 	stitems[4] = `"syncCount":` + strconv.FormatUint(stats.syncCount.Value(), 10)
 	stitems[5] = `"beginCount":` + strconv.FormatUint(stats.beginCount.Value(), 10)
 	stitems[6] = `"endCount":` + strconv.FormatUint(stats.endCount.Value(), 10)
