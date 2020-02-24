@@ -2618,7 +2618,7 @@ func (m *ServiceMgr) generateTransferTokenForMoveIndex(req *manager.IndexRequest
 				}
 
 				currInst = append(currInst, instList)
-				currNodeUUID = append(currNodeUUID, localMeta.IndexerId)
+				currNodeUUID = append(currNodeUUID, localMeta.NodeUUID)
 			}
 		}
 	}
