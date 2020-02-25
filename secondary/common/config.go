@@ -1220,6 +1220,27 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.plasma.mainIndex.enablePageBloomFilter": ConfigValue{
+		false,
+		"Enable maintenance and use of bloom filter for lookup of swapped out items",
+		false,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.mainIndex.bloomFilterFalsePositiveRate": ConfigValue{
+		0.15,
+		"The target false positive rate for bloom filter. A smaller fpRate will make bloom filters consume more memory.",
+		0.15,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.mainIndex.bloomFilterExpectedMaxItems": ConfigValue{
+		uint64(220),
+		"The maximum number of items we expect to insert into each bloom filter. This is based on MaxPageItems and MaxDeltaChainLen.",
+		uint64(220),
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.plasma.backIndex.maxNumPageDeltas": ConfigValue{
 		30,
 		"Maximum number of page deltas",
@@ -1308,6 +1329,27 @@ var SystemConfig = Config{
 		true,
 		"enable eviction to estimate if index memory can fit into quota",
 		true,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.backIndex.enablePageBloomFilter": ConfigValue{
+		false,
+		"Enable maintenance and use of bloom filter for lookup of swapped out items",
+		false,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.backIndex.bloomFilterFalsePositiveRate": ConfigValue{
+		0.15,
+		"The target false positive rate for bloom filter. A smaller fpRate will make bloom filters consume more memory.",
+		0.15,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.backIndex.bloomFilterExpectedMaxItems": ConfigValue{
+		uint64(220),
+		"The maximum number of items we expect to insert into each bloom filter. This is based on MaxPageItems and MaxDeltaChainLen.",
+		uint64(220),
 		false, // mutable
 		false, // case-insensitive
 	},
