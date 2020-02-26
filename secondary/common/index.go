@@ -295,6 +295,10 @@ func (idx IndexDefn) Clone() *IndexDefn {
 		Using:              idx.Using,
 		Bucket:             idx.Bucket,
 		BucketUUID:         idx.BucketUUID,
+		Scope:              idx.Scope,
+		ScopeId:            idx.ScopeId,
+		Collection:         idx.Collection,
+		CollectionId:       idx.CollectionId,
 		IsPrimary:          idx.IsPrimary,
 		SecExprs:           idx.SecExprs,
 		Desc:               idx.Desc,
@@ -338,6 +342,19 @@ func (idx *IndexDefn) GetNumReplica() int {
 	}
 
 	return int(numReplica)
+}
+
+// This function will set the default scope and collection name if empty.
+// This function can be used for handling upgrade of objects creaed in
+// pre-collection era.
+func (idx *IndexDefn) SetCollectionDefaults() {
+	if idx.Scope == "" {
+		idx.Scope = DEFAULT_SCOPE
+	}
+
+	if idx.Collection == "" {
+		idx.Collection = DEFAULT_COLLECTION
+	}
 }
 
 func (idx IndexInst) IsProxy() bool {
