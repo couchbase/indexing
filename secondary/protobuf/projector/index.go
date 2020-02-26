@@ -1,6 +1,7 @@
 package protoProjector
 
 import (
+	"encoding/binary"
 	"fmt"
 	"time"
 
@@ -201,6 +202,19 @@ func (ie *IndexEvaluator) SnapshotData(
 	bucket := ie.Bucket()
 	kv := c.NewKeyVersions(seqno, nil, 1, m.Ctime)
 	kv.AddSnapshot(m.SnapshotType, m.SnapstartSeq, m.SnapendSeq)
+	return &c.DataportKeyVersions{bucket, vbno, vbuuid, kv, opaque2}
+}
+
+// SystemEventData implement Evaluator{} interface.
+func (ie *IndexEvaluator) SystemEventData(
+	m *mc.DcpEvent, vbno uint16, vbuuid, seqno uint64,
+	opaque2 uint64) (data interface{}) {
+
+	bucket := ie.Bucket()
+	kv := c.NewKeyVersions(seqno, nil, 1, m.Ctime)
+	cid := make([]byte, 4) // 4 bytes for collection ID
+	binary.BigEndian.PutUint32(cid, m.CollectionID)
+	kv.AddSystemEvent(m.EventType, m.ManifestUID, m.ScopeID, cid)
 	return &c.DataportKeyVersions{bucket, vbno, vbuuid, kv, opaque2}
 }
 

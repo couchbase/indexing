@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"github.com/couchbase/indexing/secondary/dcp/transport"
 )
 
 // Stream Response Status Code
@@ -38,6 +39,13 @@ const (
 	StreamBegin                    // control command
 	StreamEnd                      // control command
 	Snapshot                       // control command
+
+	CollectionCreate  // control command
+	CollectionDrop    // control command
+	CollectionFlush   // control command
+	ScopeCreate       // control command
+	ScopeDrop         // control command
+	CollectionChanged // control command
 )
 
 type ProjectorVersion byte
@@ -310,6 +318,27 @@ func (kv *KeyVersions) AddSnapshot(typ uint32, start, end uint64) {
 	binary.BigEndian.PutUint64(key[:8], start)
 	binary.BigEndian.PutUint64(okey[:8], end)
 	kv.addKey(uint64(typ), Snapshot, key[:8], okey[:8], nil)
+}
+
+// In case of collection system events: key, oldKey, partnKey are mis-interpreted to
+// represent manifestUID, scopeID, collectionID
+func (kv *KeyVersions) AddSystemEvent(eventType transport.CollectionEvent,
+	manifestUID, scopeID, collectionID []byte) {
+
+	switch eventType {
+	case transport.COLLECTION_CREATE:
+		kv.addKey(0, CollectionCreate, manifestUID, scopeID, collectionID)
+	case transport.COLLECTION_DROP:
+		kv.addKey(0, CollectionDrop, manifestUID, scopeID, collectionID)
+	case transport.COLLECTION_FLUSH:
+		kv.addKey(0, CollectionFlush, manifestUID, scopeID, collectionID)
+	case transport.SCOPE_CREATE:
+		kv.addKey(0, ScopeCreate, manifestUID, scopeID, nil)
+	case transport.SCOPE_DROP:
+		kv.addKey(0, ScopeDrop, manifestUID, scopeID, nil)
+	case transport.COLLECTION_CHANGED:
+		kv.addKey(0, CollectionChanged, manifestUID, scopeID, collectionID)
+	}
 }
 
 func (kv *KeyVersions) String() string {

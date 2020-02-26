@@ -616,6 +616,15 @@ func (kvdata *KVData) scatterMutation(
 		case mcd.DCP_EXPIRATION:
 			kvdata.stats.exprCount.Add(1)
 		}
+
+	case mcd.DCP_SYSTEM_EVENT: // Propagate system events to workers
+		// TODO (Collections): Add stats for DCP_SYSTEM_EVENTS?
+		fmsg := "%v ##%x SystemEvent: %v\n"
+		logging.Tracef(fmsg, kvdata.logPrefix, m.Opaque, m)
+		seqno = m.Seqno
+		if err := worker.Event(m); err != nil {
+			panic(err)
+		}
 	}
 	return
 }

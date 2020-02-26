@@ -504,6 +504,19 @@ func (worker *VbucketWorker) handleEvent(m *mc.DcpEvent) *Vbucket {
 			}
 		}
 
+	case mcd.DCP_SYSTEM_EVENT:
+		if !vbok {
+			fmsg := "%v ##%x vbucket %v not started. Received system event\n"
+			logging.Errorf(fmsg, logPrefix, m.Opaque, vbno)
+			return v
+		}
+		if data := v.makeSystemEventData(m, worker.engines); data != nil {
+			worker.broadcast2Endpoints(data)
+		} else {
+			fmsg := "%v ##%x SYSTEM_EVENT: %v NOT PUBLISHED for vbucket %v\n"
+			logging.Errorf(fmsg, logPrefix, m.Opaque, m, vbno)
+		}
+
 	case mcd.DCP_STREAMEND:
 		if vbok {
 			if data := v.makeStreamEndData(worker.engines); data != nil {

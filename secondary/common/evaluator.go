@@ -20,6 +20,9 @@ type Evaluator interface {
 	// SnapshotData is generated for downstream.
 	SnapshotData(m *mc.DcpEvent, vbno uint16, vbuuid, seqno, opaque2 uint64) interface{}
 
+	// SystemEventData is generated for downstream.
+	SystemEventData(m *mc.DcpEvent, vbno uint16, vbuuid, seqno, opaque2 uint64) interface{}
+
 	// StreamEnd is generated for downstream.
 	StreamEndData(vbno uint16, vbuuid, seqno, opaque2 uint64) (data interface{})
 
