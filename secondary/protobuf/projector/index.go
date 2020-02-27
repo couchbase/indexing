@@ -251,11 +251,12 @@ func (ie *IndexEvaluator) processEvent(m *mc.DcpEvent, encodeBuf []byte,
 		return npkey, opkey, nkey, okey, newBuf, where, opcode, err
 	}
 
+	npkey, err = ie.partitionKey(m, m.Key, docval, context, encodeBuf)
+	if err != nil {
+		return npkey, opkey, nkey, okey, newBuf, where, opcode, err
+	}
+
 	if where && (len(m.Value) > 0 || retainDelete) { // project new secondary key
-		npkey, err = ie.partitionKey(m, m.Key, docval, context, encodeBuf)
-		if err != nil {
-			return npkey, opkey, nkey, okey, newBuf, where, opcode, err
-		}
 		nkey, newBuf, err = ie.evaluate(m, m.Key, docval, context, encodeBuf)
 		if err != nil {
 			return npkey, opkey, nkey, okey, newBuf, where, opcode, err

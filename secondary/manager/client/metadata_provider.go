@@ -1188,7 +1188,7 @@ func (o *MetadataProvider) PrepareIndexDefn(
 			return nil, err, retry
 		}
 
-		immutable, err, retry = o.getImmutableParam(partitionScheme, plan)
+		immutable, err, retry = o.getImmutableParam(partitionScheme, plan, whereExpr)
 		if err != nil {
 			return nil, err, retry
 		}
@@ -1674,27 +1674,13 @@ func (o *MetadataProvider) getNodesParam(plan map[string]interface{}) ([]string,
 	return nodes, nil, true
 }
 
-func (o *MetadataProvider) getImmutableParam(partitionScheme c.PartitionScheme, plan map[string]interface{}) (bool, error, bool) {
+func (o *MetadataProvider) getImmutableParam(partitionScheme c.PartitionScheme,
+	plan map[string]interface{}, whereExpr string) (bool, error, bool) {
 
-	// for partitioned index, by default, it is immutable, regardless it is a full index or partial index
+	// for partitioned index, by default, it is immutable, unless it is a partial index
 	immutable := c.IsPartitioned(partitionScheme)
-
-	immutable2, ok := plan["immutable"].(bool)
-	if !ok {
-		immutable_str, ok := plan["immutable"].(string)
-		if ok {
-			var err error
-			immutable2, err = strconv.ParseBool(immutable_str)
-			if err != nil {
-				return false, errors.New("Fails to create index.  Parameter Immutable must be a boolean value of (true or false)."), false
-			}
-			immutable = immutable2
-
-		} else if _, ok := plan["immutable"]; ok {
-			return false, errors.New("Fails to create index.  Parameter immutable must be a boolean value of (true or false)."), false
-		}
-	} else {
-		immutable = immutable2
+	if len(whereExpr) > 0 {
+		immutable = false
 	}
 
 	return immutable, nil, false
