@@ -241,11 +241,12 @@ func (ie *IndexEvaluator) TransformRoute(
 		return nil, err
 	}
 
+	npkey, err = ie.partitionKey(m, m.Key, docval, context, encodeBuf)
+	if err != nil {
+		return nil, err
+	}
+
 	if where && (len(m.Value) > 0 || retainDelete) { // project new secondary key
-		npkey, err = ie.partitionKey(m, m.Key, docval, context, encodeBuf)
-		if err != nil {
-			return nil, err
-		}
 		nkey, newBuf, err = ie.evaluate(m, m.Key, docval, context, encodeBuf)
 		if err != nil {
 			return nil, err
