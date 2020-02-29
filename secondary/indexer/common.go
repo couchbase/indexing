@@ -205,14 +205,10 @@ const (
 
 var gEncodeCompatMode EncodeCompatMode
 
-func SplitKeyspaceId(keyspaceId string, streamId common.StreamId) (string, string, string) {
+func SplitKeyspaceId(keyspaceId string) (string, string, string) {
 
 	var ret []string
-	if streamId == common.INIT_STREAM {
-		ret = strings.Split(keyspaceId, ":")
-	} else {
-		ret = []string{keyspaceId}
-	}
+	ret = strings.Split(keyspaceId, ":")
 
 	if len(ret) == 3 {
 		return ret[0], ret[1], ret[2]

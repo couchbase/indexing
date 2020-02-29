@@ -375,6 +375,12 @@ func (idx *IndexDefn) IndexOnCollection() bool {
 
 func (idx *IndexDefn) KeyspaceId(streamId StreamId) string {
 
+	//index created pre CC will have empty scope/collection
+	//during mixed mode, defn will have default scope/collection
+	if idx.Scope == "" && idx.Collection == "" {
+		return idx.Bucket
+	}
+
 	if streamId == INIT_STREAM {
 		return strings.Join([]string{idx.Bucket, idx.Scope, idx.Collection}, ":")
 	} else {
