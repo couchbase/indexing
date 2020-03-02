@@ -655,6 +655,8 @@ func (m *DDLServiceMgr) handleCreateCommand(needRefresh bool) {
 					var newPartitionList []common.PartitionId
 					var newVersionList []int
 
+					defn.SetCollectionDefaults()
+
 					// If there is a drop token, then do not process the create token.
 					exist, err := mc.DropInstanceCommandTokenExist(token.DefnId, defn.InstId)
 					if err != nil {
@@ -727,6 +729,8 @@ func (m *DDLServiceMgr) handleCreateCommand(needRefresh bool) {
 						defn.BucketUUID = token.BucketUUID
 						defn.Partitions = newPartitionList
 						defn.Versions = newVersionList
+						defn.ScopeId = token.ScopeId
+						defn.CollectionId = token.CollectionId
 
 						// Before a create token is posted, at least one indexer has tried to create the index to validate
 						// all invariant conditions (e.g. enterprise version).   These invariant conditions are applicable
@@ -738,11 +742,11 @@ func (m *DDLServiceMgr) handleCreateCommand(needRefresh bool) {
 						// 2) metadata is corrupted.   We cannot detect this, but we will know since the indexer would be
 						//    in a bad state.
 						if err := provider.SendCreateIndexRequest(m.indexerId, &defn, false); err != nil {
-							logging.Warnf("DDLServiceMgr: Failed to process create index (%v, %v, %v, %v).  Error = %v.",
-								defn.Bucket, defn.Name, defn.DefnId, defn.InstId, err)
+							logging.Warnf("DDLServiceMgr: Failed to process create index (%v, %v, %v, %v, %v, %v).  Error = %v.",
+								defn.Bucket, defn.Scope, defn.Collection, defn.Name, defn.DefnId, defn.InstId, err)
 						} else {
-							logging.Infof("DDLServiceMgr: Index successfully created (%v, %v, %v, %v).",
-								defn.Bucket, defn.Name, defn.DefnId, defn.InstId)
+							logging.Infof("DDLServiceMgr: Index successfully created (%v, %v, %v, %v, %v, %v).",
+								defn.Bucket, defn.Scope, defn.Collection, defn.Name, defn.DefnId, defn.InstId)
 							// If the partition is not deferred, build it
 							if !defn.Deferred {
 								buildMap[defn.DefnId] = true
@@ -989,8 +993,9 @@ func (m *DDLServiceMgr) handleClusterStorageMode(httpAddrMap map[string]string) 
 
 			// If this is not a valid index type, then return.
 			if !common.IsValidIndexType(inst.StorageMode) {
-				logging.Errorf("DDLServiceMgr: unable to change storage mode to %v after rebalance.  Invalid storage type for index %v (%v, %v)",
-					inst.StorageMode, index.Definition.Name, index.Definition.Bucket)
+				logging.Errorf("DDLServiceMgr: unable to change storage mode to %v after rebalance.  Invalid storage type for index %v (%v, %v, %v, %v)",
+					inst.StorageMode, index.Definition.Name, index.Definition.Bucket, index.Definition.Scope,
+					index.Definition.Collection)
 				return
 			}
 

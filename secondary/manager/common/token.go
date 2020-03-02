@@ -64,10 +64,12 @@ type CreateCommandTokenList struct {
 }
 
 type CreateCommandToken struct {
-	DefnId      c.IndexDefnId
-	BucketUUID  string
-	Definitions map[c.IndexerId][]c.IndexDefn
-	RequestId   uint64
+	DefnId       c.IndexDefnId
+	BucketUUID   string
+	ScopeId      string
+	CollectionId string
+	Definitions  map[c.IndexerId][]c.IndexDefn
+	RequestId    uint64
 }
 
 type DeleteCommandTokenList struct {
