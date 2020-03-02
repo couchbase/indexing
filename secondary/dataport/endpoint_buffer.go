@@ -20,7 +20,7 @@ func newEndpointBuffers(raddr string) *endpointBuffers {
 
 // addKeyVersions, add a mutation's keyversions to buffer.
 func (b *endpointBuffers) addKeyVersions(
-	bucket string,
+	keyspaceId string,
 	vbno uint16,
 	vbuuid uint64,
 	opaque2 uint64,
@@ -28,10 +28,10 @@ func (b *endpointBuffers) addKeyVersions(
 	endpoint *RouterEndpoint) {
 
 	if kv != nil && kv.Length() > 0 {
-		uuid := c.StreamID(bucket, vbno)
+		uuid := c.StreamID(keyspaceId, vbno)
 		if _, ok := b.vbs[uuid]; !ok {
 			nMuts := 16 // to avoid reallocs.
-			b.vbs[uuid] = c.NewVbKeyVersions(bucket, vbno,
+			b.vbs[uuid] = c.NewVbKeyVersions(keyspaceId, vbno,
 				vbuuid, opaque2, nMuts)
 		}
 		b.vbs[uuid].AddKeyVersions(kv)
@@ -52,6 +52,7 @@ func (b *endpointBuffers) addKeyVersions(
 				endpoint.stats.endCount.Add(1)
 			case c.Snapshot:
 				endpoint.stats.snapCount.Add(1)
+				// TODO (Collections): Add collection event specific stats
 			}
 		}
 		endpoint.stats.mutCount.Add(1)

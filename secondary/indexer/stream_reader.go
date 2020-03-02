@@ -575,7 +575,7 @@ func (w *streamWorker) start() {
 		select {
 
 		case vb := <-w.workerch:
-			w.handleKeyVersions(vb.GetBucketname(), Vbucket(vb.GetVbucket()),
+			w.handleKeyVersions(vb.GetKeyspaceId(), Vbucket(vb.GetVbucket()),
 				Vbuuid(vb.GetVbuuid()), vb.GetOpaque2(), vb.GetKvs(),
 				common.ProjectorVersion(vb.GetProjVer()))
 
@@ -588,6 +588,8 @@ func (w *streamWorker) start() {
 
 }
 
+// TODO (Collections): Change MutationMeta to incorporate keyspaceId and update the
+// below code tree to work with keyspaceId
 func (w *streamWorker) handleKeyVersions(bucket string, vbucket Vbucket, vbuuid Vbuuid,
 	opaque uint64, kvs []*protobuf.KeyVersions, projVer common.ProjectorVersion) {
 

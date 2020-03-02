@@ -87,22 +87,22 @@ var ErrorDuplicateClient = errors.New("dataport.duplicateClient")
 var ErrorWorkerKilled = errors.New("dataport.workerKilled")
 
 type activeVb struct {
-	raddr  string // remote connection carrying this vbucket.
-	bucket string
-	vbno   uint16
-	kvers  uint64
-	seqno  uint64
+	raddr      string // remote connection carrying this vbucket.
+	keyspaceId string
+	vbno       uint16
+	kvers      uint64
+	seqno      uint64
 }
 
 type keeper map[string]*activeVb
 
 func (avb *activeVb) id() string {
-	return fmt.Sprintf("%v#%v#%v", avb.raddr, avb.bucket, avb.vbno)
+	return fmt.Sprintf("%v#%v#%v", avb.raddr, avb.keyspaceId, avb.vbno)
 }
 
-func (hostUuids keeper) isActive(bucket string, vbno uint16) bool {
+func (hostUuids keeper) isActive(keyspaceId string, vbno uint16) bool {
 	for _, avb := range hostUuids {
-		if avb.bucket == bucket && avb.vbno == vbno {
+		if avb.keyspaceId == keyspaceId && avb.vbno == vbno {
 			return true
 		}
 	}
@@ -185,7 +185,7 @@ func NewServer(
 
 func (s *Server) addUuids(started, hostUuids keeper) keeper {
 	for x, newvb := range started {
-		if hostUuids.isActive(newvb.bucket, newvb.vbno) {
+		if hostUuids.isActive(newvb.keyspaceId, newvb.vbno) {
 			logging.Errorf("%v duplicate vbucket %v\n", s.logPrefix, newvb.id())
 		}
 		hostUuids[x] = newvb
@@ -250,8 +250,8 @@ func (s *Server) genServer(reqch, datach chan []interface{}) {
 		prune_off := 0
 		for i := 0; i < len(vbs); i++ { //for each vbucket
 			vb := vbs[i]
-			bucket, vbno := vb.GetBucketname(), uint16(vb.GetVbucket())
-			id := (&activeVb{raddr: msg.raddr, bucket: bucket, vbno: vbno}).id()
+			keyspaceId, vbno := vb.GetKeyspaceId(), uint16(vb.GetVbucket())
+			id := (&activeVb{raddr: msg.raddr, keyspaceId: keyspaceId, vbno: vbno}).id()
 			kvs := vb.GetKvs() // mutations for each vbucket
 
 			// filter mutations for vbucket that is not from the same
@@ -269,12 +269,12 @@ func (s *Server) genServer(reqch, datach chan []interface{}) {
 				}
 				switch byte(kv.GetCommands()[0]) {
 				case c.StreamBegin: // new vbucket stream(s) have started
-					avb = &activeVb{raddr: msg.raddr, bucket: bucket, vbno: vbno}
+					avb = &activeVb{raddr: msg.raddr, keyspaceId: keyspaceId, vbno: vbno}
 					hostUuids = s.addUuids(keeper{id: avb}, hostUuids)
 					avbok, vbok = true, true
 
 				case c.StreamEnd: // vbucket stream(s) have finished
-					avb = &activeVb{raddr: msg.raddr, bucket: bucket, vbno: vbno}
+					avb = &activeVb{raddr: msg.raddr, keyspaceId: keyspaceId, vbno: vbno}
 					if _, ok := hostUuids[id]; ok {
 						hostUuids = s.delUuids(keeper{id: avb}, hostUuids)
 						vbok = true
@@ -297,7 +297,7 @@ func (s *Server) genServer(reqch, datach chan []interface{}) {
 				fmsg := "%v mutations filtered for %v\n"
 				logging.Warnf(fmsg, s.logPrefix, id)
 			}
-			logging.Tracef("%v {%v, %v}\n", s.logPrefix, bucket, vbno)
+			logging.Tracef("%v {%v, %v}\n", s.logPrefix, keyspaceId, vbno)
 		}
 		vbs = vbs[:prune_off]
 		return vbs
@@ -364,9 +364,9 @@ loop:
 			switch msg.cmd {
 			case serverCmdVbmap:
 				vbmap := msg.args[0].(*protobuf.VbConnectionMap)
-				b, raddr := vbmap.GetBucket(), msg.raddr
+				keyspaceId, raddr := vbmap.GetKeyspaceId(), msg.raddr
 				for _, vbno := range vbmap.GetVbuckets() {
-					avb := &activeVb{raddr: raddr, bucket: b, vbno: uint16(vbno)}
+					avb := &activeVb{raddr: raddr, keyspaceId: keyspaceId, vbno: uint16(vbno)}
 					hostUuids[avb.id()] = avb
 				}
 				s.startWorker(msg.raddr)
@@ -525,26 +525,26 @@ func (s *Server) jumboErrorHandler(
 }
 
 func (s *Server) logStats(hostUuids keeper) {
-	bucketkvs := make(map[string][]uint64)    // bucket -> []count
-	bucketseqnos := make(map[string][]uint64) // bucket -> []seqno
+	keyspaceIdkvs := make(map[string][]uint64)    // keyspaceId -> []count
+	keyspaceIdseqnos := make(map[string][]uint64) // keyspaceId -> []seqno
 	for _, avb := range hostUuids {
-		counts, ok := bucketkvs[avb.bucket]
-		seqnos, ok := bucketseqnos[avb.bucket]
+		counts, ok := keyspaceIdkvs[avb.keyspaceId]
+		seqnos, ok := keyspaceIdseqnos[avb.keyspaceId]
 		if !ok {
 			counts = make([]uint64, s.maxVbuckets)
 			seqnos = make([]uint64, s.maxVbuckets)
 		}
 		counts[avb.vbno] = avb.kvers
 		seqnos[avb.vbno] = avb.seqno
-		bucketkvs[avb.bucket] = counts
-		bucketseqnos[avb.bucket] = seqnos
+		keyspaceIdkvs[avb.keyspaceId] = counts
+		keyspaceIdseqnos[avb.keyspaceId] = seqnos
 	}
-	for bucket, counts := range bucketkvs {
-		seqnos := bucketseqnos[bucket]
-		fmsg := "%v bucket total received key-versions: %v\n"
+	for keyspaceId, counts := range keyspaceIdkvs {
+		seqnos := keyspaceIdseqnos[keyspaceId]
+		fmsg := "%v keyspaceId: %v total received key-versions: %v\n"
 		logging.Infof(fmsg, s.logPrefix, counts)
-		fmsg = "%v bucket latest sequence numbers: %v\n"
-		logging.Infof(fmsg, s.logPrefix, seqnos)
+		fmsg = "%v keyspaceId: %v latest sequence numbers: %v\n"
+		logging.Infof(fmsg, s.logPrefix, keyspaceId, seqnos)
 	}
 }
 
@@ -719,14 +719,14 @@ func vbucketSchedule(vb *protobuf.VbKeyVersions) (s, e *protobuf.KeyVersions) {
 }
 
 // ConnectionError to application
-type ConnectionError map[string][]uint16 // bucket -> []vbuckets
+type ConnectionError map[string][]uint16 // keyspaceId -> []vbuckets
 
 // NewConnectionError makes a new connection-error map.
 func NewConnectionError() ConnectionError {
 	return make(ConnectionError)
 }
 
-// Append {buckets,vbuckets} for connection error.
+// Append {keyspaceIds,vbuckets} for connection error.
 func (ce ConnectionError) Append(hostUuids keeper, raddr string) keeper {
 	finished := make(keeper)
 	for uuid, avb := range hostUuids {
@@ -734,12 +734,12 @@ func (ce ConnectionError) Append(hostUuids keeper, raddr string) keeper {
 			continue
 		}
 		finished[uuid] = avb
-		vbs, ok := ce[avb.bucket]
+		vbs, ok := ce[avb.keyspaceId]
 		if !ok {
 			vbs = make([]uint16, 0, 4)
 		}
 		vbs = append(vbs, avb.vbno)
-		ce[avb.bucket] = vbs
+		ce[avb.keyspaceId] = vbs
 	}
 	return finished
 }

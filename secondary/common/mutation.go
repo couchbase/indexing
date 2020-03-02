@@ -58,6 +58,7 @@ const (
 	ProjVer_5_1_1
 	ProjVer_5_5_0
 	ProjVer_6_5_0
+	ProjVer_7_0_0
 )
 
 // Payload either carries `vbmap` or `vbs`.
@@ -68,8 +69,8 @@ type Payload struct {
 }
 
 // StreamID is unique id for a vbucket across buckets.
-func StreamID(bucket string, vbno uint16) string {
-	return bucket + fmt.Sprintf("#%v", vbno)
+func StreamID(keyspaceId string, vbno uint16) string {
+	return keyspaceId + fmt.Sprintf("#%v", vbno)
 }
 
 // NewStreamPayload returns a reference to payload, `nVb` provides the maximum
@@ -100,14 +101,14 @@ func (p *Payload) AddVbKeyVersions(vb *VbKeyVersions) (err error) {
 }
 
 // SetVbmap set vbmap as payload.
-func (p *Payload) SetVbmap(bucket string, vbnos []uint16, vbuuids []uint64) error {
+func (p *Payload) SetVbmap(keyspaceId string, vbnos []uint16, vbuuids []uint64) error {
 	if p.Payltyp != PayloadVbmap {
 		return ErrorUnexpectedPayload
 	}
 	p.Vbmap = &VbConnectionMap{
-		Bucket:   bucket,
-		Vbuckets: vbnos,
-		Vbuuids:  vbuuids,
+		KeyspaceId: keyspaceId,
+		Vbuckets:   vbnos,
+		Vbuuids:    vbuuids,
 	}
 	return nil
 }
@@ -115,14 +116,14 @@ func (p *Payload) SetVbmap(bucket string, vbnos []uint16, vbuuids []uint64) erro
 // VbConnectionMap specifies list of vbuckets and current vbuuids for each
 // vbucket.
 type VbConnectionMap struct {
-	Bucket   string
-	Vbuckets []uint16
-	Vbuuids  []uint64
+	KeyspaceId string
+	Vbuckets   []uint16
+	Vbuuids    []uint64
 }
 
 // Equal compares to VbConnectionMap objects.
 func (vbmap *VbConnectionMap) Equal(other *VbConnectionMap) bool {
-	if vbmap.Bucket != other.Bucket {
+	if vbmap.KeyspaceId != other.KeyspaceId {
 		return false
 	}
 	if len(vbmap.Vbuckets) != len(other.Vbuckets) ||
@@ -150,22 +151,22 @@ func (vbmap *VbConnectionMap) GetVbuuid(vbno uint16) (uint64, error) {
 
 // VbKeyVersions carries per vbucket key-versions for one or more mutations.
 type VbKeyVersions struct {
-	Bucket  string
-	Vbucket uint16         // vbucket number
-	Vbuuid  uint64         // unique id to detect branch history
-	Kvs     []*KeyVersions // N number of mutations
-	Uuid    string
-	ProjVer ProjectorVersion
-	Opaque2 uint64
+	KeyspaceId string
+	Vbucket    uint16         // vbucket number
+	Vbuuid     uint64         // unique id to detect branch history
+	Kvs        []*KeyVersions // N number of mutations
+	Uuid       string
+	ProjVer    ProjectorVersion
+	Opaque2    uint64
 }
 
 // NewVbKeyVersions return a reference to a single vbucket payload
-func NewVbKeyVersions(bucket string, vbno uint16,
+func NewVbKeyVersions(keyspaceId string, vbno uint16,
 	vbuuid uint64, opaque2 uint64, maxMutations int) *VbKeyVersions {
-	vb := &VbKeyVersions{Bucket: bucket, Vbucket: vbno,
-		Vbuuid: vbuuid, Opaque2: opaque2, ProjVer: ProjVer_6_5_0}
+	vb := &VbKeyVersions{KeyspaceId: keyspaceId, Vbucket: vbno,
+		Vbuuid: vbuuid, Opaque2: opaque2, ProjVer: ProjVer_7_0_0}
 	vb.Kvs = make([]*KeyVersions, 0, maxMutations)
-	vb.Uuid = StreamID(bucket, vbno)
+	vb.Uuid = StreamID(keyspaceId, vbno)
 	return vb
 }
 
@@ -359,9 +360,9 @@ func (kv *KeyVersions) String() string {
 
 // DataportKeyVersions accepted by this endpoint.
 type DataportKeyVersions struct {
-	Bucket  string
-	Vbno    uint16
-	Vbuuid  uint64
-	Kv      *KeyVersions
-	Opaque2 uint64
+	KeyspaceId string
+	Vbno       uint16
+	Vbuuid     uint64
+	Kv         *KeyVersions
+	Opaque2    uint64
 }

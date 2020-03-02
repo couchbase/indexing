@@ -298,7 +298,7 @@ loop:
 
 				kv := data.Kv
 				buffers.addKeyVersions(
-					data.Bucket, data.Vbno, data.Vbuuid,
+					data.KeyspaceId, data.Vbno, data.Vbuuid,
 					data.Opaque2, kv, endpoint)
 				logging.Tracef("%v added %v keyversions <%v:%v:%v> to %q\n",
 					endpoint.logPrefix, kv.Length(), data.Vbno, kv.Seqno,
