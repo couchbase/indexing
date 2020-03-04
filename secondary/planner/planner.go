@@ -4467,6 +4467,20 @@ func (o *IndexUsage) IsNew() bool {
 	return o.initialNode == nil
 }
 
+func (o *IndexUsage) IndexOnCollection() bool {
+	// Empty scope OR collection name is not expected. Assume that the index
+	// definition is not upgraded yet.
+	if o.Scope == "" || o.Collection == "" {
+		return false
+	}
+
+	if o.Scope == common.DEFAULT_SCOPE && o.Collection == common.DEFAULT_COLLECTION {
+		return false
+	}
+
+	return true
+}
+
 //////////////////////////////////////////////////////////////
 // UsageBasedCostMethod
 //////////////////////////////////////////////////////////////

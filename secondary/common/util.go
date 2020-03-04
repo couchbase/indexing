@@ -604,7 +604,9 @@ func SetNumCPUs(percent int) int {
 func IndexStatement(def IndexDefn, numPartitions int, numReplica int, printNodes bool) string {
 	var stmt string
 	primCreate := "CREATE PRIMARY INDEX `%s` ON `%s`"
+	primCreateCollection := "CREATE PRIMARY INDEX `%s` ON `%s`.`%s`.`%s`"
 	secCreate := "CREATE INDEX `%s` ON `%s`(%s)"
+	secCreateCollection := "CREATE INDEX `%s` ON `%s`.`%s`.`%s`(%s)"
 	where := " WHERE %s"
 	partition := " PARTITION BY hash(%s)"
 
@@ -623,7 +625,11 @@ func IndexStatement(def IndexDefn, numPartitions int, numReplica int, printNodes
 	}
 
 	if def.IsPrimary {
-		stmt = fmt.Sprintf(primCreate, def.Name, def.Bucket)
+		if def.IndexOnCollection() {
+			stmt = fmt.Sprintf(primCreateCollection, def.Name, def.Bucket, def.Scope, def.Collection)
+		} else {
+			stmt = fmt.Sprintf(primCreate, def.Name, def.Bucket)
+		}
 
 		stmt += getPartnStmt()
 
@@ -638,7 +644,13 @@ func IndexStatement(def IndexDefn, numPartitions int, numReplica int, printNodes
 				exprs += " DESC"
 			}
 		}
-		stmt = fmt.Sprintf(secCreate, def.Name, def.Bucket, exprs)
+
+		if def.IndexOnCollection() {
+			stmt = fmt.Sprintf(secCreateCollection, def.Name, def.Bucket, def.Scope, def.Collection, exprs)
+		} else {
+			stmt = fmt.Sprintf(secCreate, def.Name, def.Bucket, exprs)
+		}
+
 		stmt += getPartnStmt()
 
 		if def.WhereExpr != "" {
