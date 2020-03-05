@@ -405,7 +405,7 @@ func Accmulate(wrkr []interface{}) string {
 	var dataChLen, outgoingMut, updateSeqno uint64
 	for _, stats := range wrkr {
 		wrkrStat := stats.(*WorkerStats)
-		dataChLen += wrkrStat.datachLen.Value()
+		dataChLen += (uint64)(len(wrkrStat.datach))
 		outgoingMut += wrkrStat.outgoingMut.Value()
 		updateSeqno += wrkrStat.updateSeqno.Value()
 	}

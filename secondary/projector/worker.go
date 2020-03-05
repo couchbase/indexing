@@ -61,7 +61,7 @@ type VbucketWorker struct {
 
 type WorkerStats struct {
 	closed      stats.BoolVal
-	datachLen   stats.Uint64Val
+	datach      chan []interface{}
 	outgoingMut stats.Uint64Val // Number of mutations consumed from this worker
 	updateSeqno stats.Uint64Val // Number of updateSeqno messages sent by this worker
 
@@ -69,7 +69,6 @@ type WorkerStats struct {
 
 func (stats *WorkerStats) Init() {
 	stats.closed.Init()
-	stats.datachLen.Init()
 	stats.outgoingMut.Init()
 	stats.updateSeqno.Init()
 }
@@ -106,6 +105,7 @@ func NewVbucketWorker(
 		opaque2:    opaque2,
 	}
 	worker.stats.Init()
+	worker.stats.datach = worker.datach
 	fmsg := "WRKR[%v<-%v<-%v #%v]"
 	worker.logPrefix = fmt.Sprintf(fmsg, id, keyspaceId, feed.cluster, feed.topic)
 	worker.mutChanSize = mutChanSize
@@ -244,7 +244,6 @@ loop:
 
 		select {
 		case msg := <-datach:
-			worker.stats.datachLen.Set(uint64(len(datach)))
 			cmd := msg[0].(byte)
 			switch cmd {
 			case vwCmdEvent:

@@ -79,7 +79,7 @@ type KvdataStats struct {
 	ainstCount    stats.Uint64Val
 	dinstCount    stats.Uint64Val
 	tsCount       stats.Uint64Val
-	mutchLen      stats.Uint64Val
+	mutch         <-chan *mc.DcpEvent
 	vbseqnos      []stats.Uint64Val
 	kvdata        *KVData  // Handle to KVData
 	vbseqnos_copy []uint64 // Cached version of vbseqnos. Used only by stats_manager
@@ -98,7 +98,6 @@ func (kvstats *KvdataStats) Init(numVbuckets int, kvdata *KVData) {
 	kvstats.ainstCount.Init()
 	kvstats.dinstCount.Init()
 	kvstats.tsCount.Init()
-	kvstats.mutchLen.Init()
 	kvstats.vbseqnos = make([]stats.Uint64Val, numVbuckets)
 	for i, _ := range kvstats.vbseqnos {
 		kvstats.vbseqnos[i].Init()
@@ -130,7 +129,7 @@ func (stats *KvdataStats) String() (string, string) {
 	stitems[11] = `"ainstCount":` + strconv.FormatUint(stats.ainstCount.Value(), 10)
 	stitems[12] = `"dinstCount":` + strconv.FormatUint(stats.dinstCount.Value(), 10)
 	stitems[13] = `"tsCount":` + strconv.FormatUint(stats.tsCount.Value(), 10)
-	stitems[14] = `"mutChLen":` + strconv.FormatUint(stats.mutchLen.Value(), 10)
+	stitems[14] = `"mutChLen":` + strconv.FormatUint((uint64)(len(stats.mutch)), 10)
 
 	// A copy of vbseqnos is made so that numDocsProcessed can be consistent
 	// with the sum of logged vbseqnos. Also, it helps to compute the numDocsPending
@@ -208,7 +207,10 @@ func NewKVData(
 	kvdata.uuid = uuid.Uint64()
 
 	numVbuckets := config["maxVbuckets"].Int()
+
 	kvdata.stats.Init(numVbuckets, kvdata)
+	kvdata.stats.mutch = mutch
+
 	fmsg := "KVDT[<-%v<-%v #%v]"
 	kvdata.logPrefix = fmt.Sprintf(fmsg, keyspaceId, feed.cluster, feed.topic)
 	kvdata.syncTimeout = time.Duration(config["syncTimeout"].Int())
@@ -384,7 +386,6 @@ loop:
 				break loop
 			}
 			kvdata.stats.eventCount.Add(1)
-			kvdata.stats.mutchLen.Set(uint64(len(mutch)))
 			seqno, _ := kvdata.scatterMutation(m, ts)
 			kvdata.stats.vbseqnos[m.VBucket].Set(uint64(seqno))
 
