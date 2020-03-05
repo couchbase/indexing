@@ -59,8 +59,8 @@ type VbucketWorker struct {
 }
 
 type WorkerStats struct {
-	closed    stats.BoolVal
-	datachLen stats.Uint64Val
+	closed stats.BoolVal
+	datach chan []interface{}
 
 	// Number of mutations consumed from this worker
 	outgoingMut stats.Uint64Val
@@ -68,7 +68,6 @@ type WorkerStats struct {
 
 func (stats *WorkerStats) Init() {
 	stats.closed.Init()
-	stats.datachLen.Init()
 	stats.outgoingMut.Init()
 }
 
@@ -103,6 +102,7 @@ func NewVbucketWorker(
 		opaque2:   opaque2,
 	}
 	worker.stats.Init()
+	worker.stats.datach = worker.datach
 	fmsg := "WRKR[%v<-%v<-%v #%v]"
 	worker.logPrefix = fmt.Sprintf(fmsg, id, bucket, feed.cluster, feed.topic)
 	worker.mutChanSize = mutChanSize
@@ -241,7 +241,6 @@ loop:
 
 		select {
 		case msg := <-datach:
-			worker.stats.datachLen.Set(uint64(len(datach)))
 			cmd := msg[0].(byte)
 			switch cmd {
 			case vwCmdEvent:

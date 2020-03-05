@@ -82,10 +82,13 @@ func NewDcpFeed(
 		logPrefix: fmt.Sprintf("DCPT[%s]", name),
 		stats:     &DcpStats{},
 	}
-	feed.stats.Init()
+
 	mc.Hijack()
 	feed.conn = mc
 	rcvch := make(chan []interface{}, dataChanSize)
+
+	feed.stats.Init()
+	feed.stats.rcvch = rcvch
 	feed.lastAckTime = time.Now()
 	go feed.genServer(opaque, feed.reqch, feed.finch, rcvch, config)
 	go feed.doReceive(rcvch, feed.finch, mc)
@@ -1073,7 +1076,7 @@ type DcpStats struct {
 	LastMsgSend  stats.Int64Val
 	LastMsgRecv  stats.Int64Val
 
-	RcvchLen   stats.Uint64Val
+	rcvch      chan []interface{}
 	Dcplatency stats.Average
 	// This stat help to determine the drain rate of dcp feed
 	IncomingMsg stats.Uint64Val
@@ -1095,7 +1098,6 @@ func (dcpStats *DcpStats) Init() {
 	dcpStats.LastNoopRecv.Init()
 	dcpStats.LastMsgSend.Init()
 	dcpStats.LastMsgRecv.Init()
-	dcpStats.RcvchLen.Init()
 	dcpStats.Dcplatency.Init()
 	dcpStats.IncomingMsg.Init()
 }
@@ -1127,7 +1129,7 @@ func (stats *DcpStats) String() (string, string) {
 	stitems[10] = `"lastNoopRecv":` + getTimeDur(stats.LastNoopRecv.Value()).String()
 	stitems[11] = `"lastMsgSend":` + getTimeDur(stats.LastMsgSend.Value()).String()
 	stitems[12] = `"lastMsgRecv":` + getTimeDur(stats.LastMsgRecv.Value()).String()
-	stitems[13] = `"rcvchLen":` + strconv.FormatUint(stats.RcvchLen.Value(), 10)
+	stitems[13] = `"rcvchLen":` + strconv.FormatUint((uint64)(len(stats.rcvch)), 10)
 	stitems[14] = `"incomingMsg":` + strconv.FormatUint(stats.IncomingMsg.Value(), 10)
 	statjson := strings.Join(stitems[:], ",")
 
