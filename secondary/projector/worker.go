@@ -43,7 +43,7 @@ type VbucketWorker struct {
 	config     c.Config
 	vbuckets   map[uint16]*Vbucket
 	// evaluators and subscribers
-	engines   map[uint64]*Engine
+	engines   map[uint32]map[uint64]*Engine // CollectionId -> instanceId -> engine
 	endpoints map[string]c.RouterEndpoint
 	// server channels
 	sbch   chan []interface{}
@@ -60,17 +60,17 @@ type VbucketWorker struct {
 }
 
 type WorkerStats struct {
-	closed    stats.BoolVal
-	datachLen stats.Uint64Val
+	closed      stats.BoolVal
+	datach      chan []interface{}
+	outgoingMut stats.Uint64Val // Number of mutations consumed from this worker
+	updateSeqno stats.Uint64Val // Number of updateSeqno messages sent by this worker
 
-	// Number of mutations consumed from this worker
-	outgoingMut stats.Uint64Val
 }
 
 func (stats *WorkerStats) Init() {
 	stats.closed.Init()
-	stats.datachLen.Init()
 	stats.outgoingMut.Init()
+	stats.updateSeqno.Init()
 }
 
 func (stats *WorkerStats) IsClosed() bool {
@@ -95,7 +95,7 @@ func NewVbucketWorker(
 		opaque:     opaque,
 		config:     config,
 		vbuckets:   make(map[uint16]*Vbucket),
-		engines:    make(map[uint64]*Engine),
+		engines:    make(map[uint32]map[uint64]*Engine),
 		endpoints:  make(map[string]c.RouterEndpoint),
 		sbch:       make(chan []interface{}, mutChanSize),
 		datach:     make(chan []interface{}, mutChanSize),
@@ -105,6 +105,7 @@ func NewVbucketWorker(
 		opaque2:    opaque2,
 	}
 	worker.stats.Init()
+	worker.stats.datach = worker.datach
 	fmsg := "WRKR[%v<-%v<-%v #%v]"
 	worker.logPrefix = fmt.Sprintf(fmsg, id, keyspaceId, feed.cluster, feed.topic)
 	worker.mutChanSize = mutChanSize
@@ -168,10 +169,10 @@ func (worker *VbucketWorker) AddEngines(
 // DeleteEngines delete engines and update endpoints
 // synchronous call.
 func (worker *VbucketWorker) DeleteEngines(
-	opaque uint16, engines []uint64) error {
+	opaque uint16, engines []uint64, collectionIds []uint32) error {
 
 	respch := make(chan []interface{}, 1)
-	cmd := []interface{}{vwCmdDelEngines, opaque, engines, respch}
+	cmd := []interface{}{vwCmdDelEngines, opaque, engines, collectionIds, respch}
 	_, err := c.FailsafeOp(worker.sbch, respch, cmd, worker.finch)
 	return err
 }
@@ -243,7 +244,6 @@ loop:
 
 		select {
 		case msg := <-datach:
-			worker.stats.datachLen.Set(uint64(len(datach)))
 			cmd := msg[0].(byte)
 			switch cmd {
 			case vwCmdEvent:
@@ -298,12 +298,21 @@ func (worker *VbucketWorker) handleCommand(msg []interface{}) bool {
 		respch <- []interface{}{vbuckets}
 
 	case vwCmdAddEngines:
-		worker.engines = make(map[uint64]*Engine)
+		// TODO (Collections): With 10,000 indexes in place, it is
+		// probably not a good idea to have a new map for each
+		// add engines request (especially for MAINT_STREAM).
+		// However, for MB-33849, it might be a good idea to
+		// initialize a new map. Need to evaluate the impact of this change
+		worker.engines = make(map[uint32]map[uint64]*Engine)
 		opaque := msg[1].(uint16)
 		if msg[2] != nil {
 			fmsg := "%v ##%x AddEngine %v\n"
 			for uuid, engine := range msg[2].(map[uint64]*Engine) {
-				worker.engines[uuid] = engine
+				cid := getCidAsUint32(engine.GetCollectionID())
+				if _, ok := worker.engines[cid]; !ok {
+					worker.engines[cid] = make(map[uint64]*Engine)
+				}
+				worker.engines[cid][uuid] = engine
 				logging.Tracef(fmsg, worker.logPrefix, opaque, uuid)
 			}
 			worker.printCtrl(worker.engines)
@@ -325,14 +334,20 @@ func (worker *VbucketWorker) handleCommand(msg []interface{}) bool {
 		fmsg := "%v ##%x vwCmdDeleteEngines\n"
 		logging.Tracef(fmsg, worker.logPrefix, opaque)
 		engineKeys := msg[2].([]uint64)
+		collectionIds := msg[3].([]uint32)
 		fmsg = "%v ##%x DelEngine %v\n"
-		for _, uuid := range engineKeys {
-			delete(worker.engines, uuid)
+		for i, uuid := range engineKeys {
+			cid := collectionIds[i]
+			delete(worker.engines[cid], uuid)
+			if len(worker.engines[cid]) == 0 {
+				delete(worker.engines, cid)
+			}
 			logging.Tracef(fmsg, worker.logPrefix, opaque, uuid)
 		}
+
 		fmsg = "%v ##%x deleted engines %v\n"
 		logging.Tracef(fmsg, worker.logPrefix, opaque, engineKeys)
-		respch := msg[3].(chan []interface{})
+		respch := msg[4].(chan []interface{})
 		respch <- []interface{}{nil}
 
 	case vwCmdGetStats:
@@ -367,16 +382,18 @@ func (worker *VbucketWorker) updateEndpoints(
 	eps map[string]c.RouterEndpoint) map[string]c.RouterEndpoint {
 
 	endpoints := make(map[string]c.RouterEndpoint)
-	for _, engine := range worker.engines {
-		for _, raddr := range engine.Endpoints() {
-			if _, ok := eps[raddr]; !ok {
-				fmsg := "%v ##%x endpoint %v not found\n"
-				logging.Errorf(fmsg, worker.logPrefix, opaque, raddr)
-				continue
+	for _, enginesPerColl := range worker.engines {
+		for _, engine := range enginesPerColl {
+			for _, raddr := range engine.Endpoints() {
+				if _, ok := eps[raddr]; !ok {
+					fmsg := "%v ##%x endpoint %v not found\n"
+					logging.Errorf(fmsg, worker.logPrefix, opaque, raddr)
+					continue
+				}
+				fmsg := "%v ##%x UpdateEndpoint %v\n"
+				logging.Tracef(fmsg, worker.logPrefix, opaque, raddr)
+				endpoints[raddr] = eps[raddr]
 			}
-			fmsg := "%v ##%x UpdateEndpoint %v\n"
-			logging.Tracef(fmsg, worker.logPrefix, opaque, raddr)
-			endpoints[raddr] = eps[raddr]
 		}
 	}
 	return endpoints
@@ -455,52 +472,72 @@ func (worker *VbucketWorker) handleEvent(m *mc.DcpEvent) *Vbucket {
 		}
 		v.mutationCount++
 		v.seqno = m.Seqno // sequence number gets updated only here
-		// prepare a data for each endpoint.
-		dataForEndpoints := make(map[string]interface{})
-		// for each engine distribute transformations to endpoints.
 
-		var nvalue qvalue.Value
-		if m.IsJSON() {
-			nvalue = qvalue.NewParsedValueWithOptions(m.Value, true, true)
-		} else {
-			nvalue = qvalue.NewBinaryValue(m.Value)
-		}
+		processMutation := func(engines map[uint64]*Engine) {
+			// prepare a data for each endpoint.
+			dataForEndpoints := make(map[string]interface{})
+			// for each engine distribute transformations to endpoints.
 
-		context := qexpr.NewIndexContext()
-		docval := qvalue.NewAnnotatedValue(nvalue)
-		for _, engine := range worker.engines {
-			// Slices in KeyVersions struct are updated for all the indexes
-			// belonging to this keyspace. Hence, pre-allocate the memory for
-			// slices with number of indexes instead of expanding the slice
-			// due to lack of size. This helps to reduce the re-allocs and
-			// therefore reduces the garbage generated.
-			newBuf, err := engine.TransformRoute(
-				v.vbuuid, m, dataForEndpoints, worker.encodeBuf, docval, context,
-				worker.meta, len(worker.engines), worker.opaque2,
-			)
-			if err != nil {
-				fmsg := "%v ##%x TransformRoute: %v for index %v docid %s\n"
-				logging.Errorf(fmsg, logPrefix, m.Opaque, err, engine.GetIndexName(),
-					logging.TagStrUD(m.Key))
+			var nvalue qvalue.Value
+			if m.IsJSON() {
+				nvalue = qvalue.NewParsedValueWithOptions(m.Value, true, true)
+			} else {
+				nvalue = qvalue.NewBinaryValue(m.Value)
 			}
-			// TODO: Shrink the buffer periodically or as needed
-			if cap(newBuf) > cap(worker.encodeBuf) {
-				worker.encodeBuf = newBuf[:0]
-			}
-		}
-		// send data to corresponding endpoint.
-		for raddr, data := range dataForEndpoints {
-			if endpoint, ok := worker.endpoints[raddr]; ok {
-				// FIXME: without the coordinator doing shared topic
-				// management, we will allow the feed to block.
-				// Otherwise, send might fail due to ErrorChannelFull
-				// or ErrorClosed
-				if err := endpoint.Send(data); err != nil {
-					fmsg := "%v ##%x endpoint(%q).Send() failed: %v"
-					logging.Debugf(fmsg, logPrefix, worker.opaque, raddr, err)
-					endpoint.Close()
-					delete(worker.endpoints, raddr)
+
+			context := qexpr.NewIndexContext()
+			docval := qvalue.NewAnnotatedValue(nvalue)
+			for _, engine := range engines {
+				// Slices in KeyVersions struct are updated for all the indexes
+				// belonging to this keyspace. Hence, pre-allocate the memory for
+				// slices with number of indexes instead of expanding the slice
+				// due to lack of size. This helps to reduce the re-allocs and
+				// therefore reduces the garbage generated.
+				newBuf, err := engine.TransformRoute(
+					v.vbuuid, m, dataForEndpoints, worker.encodeBuf, docval, context,
+					worker.meta, len(worker.engines), worker.opaque2,
+				)
+				if err != nil {
+					fmsg := "%v ##%x TransformRoute: %v for index %v docid %s\n"
+					logging.Errorf(fmsg, logPrefix, m.Opaque, err, engine.GetIndexName(),
+						logging.TagStrUD(m.Key))
 				}
+				// TODO: Shrink the buffer periodically or as needed
+				if cap(newBuf) > cap(worker.encodeBuf) {
+					worker.encodeBuf = newBuf[:0]
+				}
+			}
+			// send data to corresponding endpoint.
+			for raddr, data := range dataForEndpoints {
+				if endpoint, ok := worker.endpoints[raddr]; ok {
+					// FIXME: without the coordinator doing shared topic
+					// management, we will allow the feed to block.
+					// Otherwise, send might fail due to ErrorChannelFull
+					// or ErrorClosed
+					if err := endpoint.Send(data); err != nil {
+						fmsg := "%v ##%x endpoint(%q).Send() failed: %v"
+						logging.Debugf(fmsg, logPrefix, worker.opaque, raddr, err)
+						endpoint.Close()
+						delete(worker.endpoints, raddr)
+					}
+				}
+			}
+		}
+
+		// If the mutation belongs to a collection other than the
+		// ones that are being processed at worker, send UpdateSeqno
+		// message to indexer
+		// The else case should get executed only incase of MAINT_STREAM
+		if engines, ok := worker.engines[m.CollectionID]; ok {
+			processMutation(engines)
+		} else {
+			// Generate updateSeqno message and propagate it to indexer
+			worker.stats.updateSeqno.Add(1)
+			if data := v.makeUpdateSeqnoData(m, worker.engines); data != nil {
+				worker.broadcast2Endpoints(data)
+			} else {
+				fmsg := "%v ##%x SYSTEM_EVENT: %v NOT PUBLISHED for vbucket %v\n"
+				logging.Errorf(fmsg, logPrefix, m.Opaque, m, vbno)
 			}
 		}
 
@@ -554,10 +591,12 @@ func (worker *VbucketWorker) printCtrl(v interface{}) {
 			fmsg := "%v ##%x knows endpoint %v\n"
 			logging.Tracef(fmsg, worker.logPrefix, worker.opaque, raddr)
 		}
-	case map[uint64]*Engine:
-		for uuid := range val {
-			fmsg := "%v ##%x knows engine %v\n"
-			logging.Tracef(fmsg, worker.logPrefix, worker.opaque, uuid)
+	case map[uint32]map[uint64]*Engine:
+		for cid := range val {
+			for uuid := range val[cid] {
+				fmsg := "%v ##%x cid %v knows engine %v\n"
+				logging.Tracef(fmsg, worker.logPrefix, worker.opaque, cid, uuid)
+			}
 		}
 	}
 }

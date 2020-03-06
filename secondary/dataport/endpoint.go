@@ -71,7 +71,7 @@ type EndpointStats struct {
 	snapCount   stats.Uint64Val
 	flushCount  stats.Uint64Val
 	prjLatency  stats.Average
-	endpChLen   stats.Uint64Val
+	endpCh      chan []interface{}
 }
 
 func (stats *EndpointStats) Init() {
@@ -86,7 +86,6 @@ func (stats *EndpointStats) Init() {
 	stats.snapCount.Init()
 	stats.flushCount.Init()
 	stats.prjLatency.Init()
-	stats.endpChLen.Init()
 }
 
 func (stats *EndpointStats) IsClosed() bool {
@@ -108,7 +107,7 @@ func (stats *EndpointStats) String() string {
 	stitems[10] = `"latency.max":` + strconv.FormatInt(stats.prjLatency.Max(), 10)
 	stitems[11] = `"latency.avg":` + strconv.FormatInt(stats.prjLatency.Mean(), 10)
 	stitems[12] = `"latency.movingAvg":` + strconv.FormatInt(stats.prjLatency.MovingAvg(), 10)
-	stitems[13] = `"endpChLen":` + strconv.FormatUint(stats.endpChLen.Value(), 10)
+	stitems[13] = `"endpChLen":` + strconv.FormatUint((uint64)(len(stats.endpCh)), 10)
 	statjson := strings.Join(stitems[:], ",")
 	return fmt.Sprintf("{%v}", statjson)
 }
@@ -137,9 +136,11 @@ func NewRouterEndpoint(
 		harakiriTm: time.Duration(config["harakiriTimeout"].Int()),
 		stats:      &EndpointStats{},
 	}
-	endpoint.stats.Init()
 	endpoint.ch = make(chan []interface{}, endpoint.keyChSize)
 	endpoint.conn = conn
+
+	endpoint.stats.Init()
+	endpoint.stats.endpCh = endpoint.ch
 	// TODO: add configuration params for transport flags.
 	flags := transport.TransportFlag(0).SetProtobuf()
 	maxPayload := config["maxPayload"].Int()
@@ -284,7 +285,6 @@ loop:
 	for {
 		select {
 		case msg := <-ch:
-			endpoint.stats.endpChLen.Set(uint64(len(ch)))
 			switch msg[0].(byte) {
 			case endpCmdPing:
 				respch := msg[1].(chan []interface{})

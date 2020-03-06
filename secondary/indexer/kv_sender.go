@@ -313,8 +313,8 @@ func (k *kvSender) openMutationStream(streamId c.StreamId, indexInstList []c.Ind
 				_ = k.monitor.AddOperation(
 					c.NewOperation(timeout, doneCh, func(elapsed time.Duration) {
 						msg := "Slow/Hung Operation: KVSender::sendMutationTopicRequest"
-						msg += " did not respond for %v for projector %v topic %v"
-						logging.Warnf(msg, elapsed, addr, topic)
+						msg += " did not respond for %v for projector %v topic %v bucket %v"
+						logging.Warnf(msg, elapsed, addr, topic, bucket)
 					},
 					),
 				)
@@ -468,8 +468,8 @@ func (k *kvSender) restartVbuckets(streamId c.StreamId,
 				_ = k.monitor.AddOperation(
 					c.NewOperation(timeout, doneCh, func(elapsed time.Duration) {
 						msg := "Slow/Hung Operation: KVSender::sendRestartVbuckets"
-						msg += " did not respond for %v for projector %v topic %v"
-						logging.Warnf(msg, elapsed, addr, topic)
+						msg += " did not respond for %v for projector %v topic %v bucket %v"
+						logging.Warnf(msg, elapsed, addr, topic, restartTs.Bucket)
 					},
 					),
 				)
@@ -586,8 +586,8 @@ func (k *kvSender) addIndexForExistingBucket(streamId c.StreamId, bucket string,
 				_ = k.monitor.AddOperation(
 					c.NewOperation(timeout, doneCh, func(elapsed time.Duration) {
 						msg := "Slow/Hung Operation: KVSender::sendAddInstancesRequest"
-						msg += " did not respond for %v for projector %v topic %v"
-						logging.Warnf(msg, elapsed, addr, topic)
+						msg += " did not respond for %v for projector %v topic %v bucket %v"
+						logging.Warnf(msg, elapsed, addr, topic, bucket)
 					},
 					),
 				)
@@ -670,8 +670,8 @@ func (k *kvSender) deleteIndexesFromStream(streamId c.StreamId, indexInstList []
 				_ = k.monitor.AddOperation(
 					c.NewOperation(timeout, doneCh, func(elapsed time.Duration) {
 						msg := "Slow/Hung Operation: KVSender::sendDelInstancesRequest"
-						msg += " did not respond for %v for projector %v topic %v"
-						logging.Warnf(msg, elapsed, addr, topic)
+						msg += " did not respond for %v for projector %v topic %v bucket %v"
+						logging.Warnf(msg, elapsed, addr, topic, indexInstList[0].Defn.Bucket)
 					},
 					),
 				)
@@ -741,8 +741,8 @@ func (k *kvSender) deleteBucketsFromStream(streamId c.StreamId, buckets []string
 				_ = k.monitor.AddOperation(
 					c.NewOperation(timeout, doneCh, func(elapsed time.Duration) {
 						msg := "Slow/Hung Operation: KVSender::sendDelBucketsRequest"
-						msg += " did not respond for %v for projector %v topic %v"
-						logging.Warnf(msg, elapsed, addr, topic)
+						msg += " did not respond for %v for projector %v topic %v buckets %v"
+						logging.Warnf(msg, elapsed, addr, topic, buckets)
 					},
 					),
 				)
@@ -811,8 +811,8 @@ func (k *kvSender) closeMutationStream(streamId c.StreamId, bucket string,
 				_ = k.monitor.AddOperation(
 					c.NewOperation(timeout, doneCh, func(elapsed time.Duration) {
 						msg := "Slow/Hung Operation: KVSender::sendShutdownTopic"
-						msg += " did not respond for %v for projector %v topic %v"
-						logging.Warnf(msg, elapsed, addr, topic)
+						msg += " did not respond for %v for projector %v topic %v bucket %v"
+						logging.Warnf(msg, elapsed, addr, topic, bucket)
 					},
 					),
 				)

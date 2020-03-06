@@ -629,7 +629,9 @@ func (s *scanCoordinator) getRequestedIndexSnapshot(r *ScanRequest) (snap IndexS
 				return nil, nil
 			}
 
-			isConsistent, isAhead := isSnapshotConsistentOrAhead(ss, cons, r.Ts)
+			strict_chk_threshold := cfg["strict_consistency_check_threshold"].Int()
+			isConsistent, isAhead := isSnapshotConsistentOrAhead(ss, r.Ts, cons, strict_chk_threshold)
+
 			if !isConsistent {
 				return nil, nil
 			}
@@ -637,22 +639,27 @@ func (s *scanCoordinator) getRequestedIndexSnapshot(r *ScanRequest) (snap IndexS
 				return CloneIndexSnapshot(ss), nil
 			}
 
-			// snapshot TS is ahead of Bucket TS. This indicates a possible rollback on KV
-			// that scanCoordinator is not aware of yet. Switch to SessionConsistencyStrict
+			// snapshot TS is way ahead of Bucket TS. This indicates a possible data loss in KV
+			// and indexer has not processed the rollback yet. Switch to SessionConsistencyStrict
 			cluster, retries := cfg["clusterAddr"].String(), cfg["settings.scan_getseqnos_retries"].Int()
 			newCons := common.SessionConsistencyStrict
 			r.Consistency = &newCons
-			r.Ts = &common.TsVbuuid{}
-			r.Ts.Seqnos, r.Ts.Vbuuids, err = bucketSeqVbuuidsWithRetry(retries, s.logPrefix,
-				cluster, r.Bucket, cfg["numVbuckets"].Int())
-			if err != nil {
-				return nil, err
+
+			if r.Stats != nil {
+				r.Stats.numStrictConsReqs.Add(1)
 			}
-			r.Ts.Bucket = r.Bucket
+
+			seqnos, vbuuids, e := bucketSeqVbuuidsWithRetry(retries, s.logPrefix,
+				cluster, r.Bucket, cfg["numVbuckets"].Int())
+			if e != nil {
+				return nil, e
+			}
+			r.Ts = common.NewTsVbuuid2(r.Bucket, seqnos, vbuuids)
 
 			if isSnapshotConsistent(ss, *r.Consistency, r.Ts) {
 				return CloneIndexSnapshot(ss), nil
 			}
+
 			return nil, nil
 		}
 		return nil, nil
@@ -750,8 +757,8 @@ func isSnapshotConsistent(
 
 // Check whether snapshotTS is consistent with request TS
 // Also return if snapshotTS is ahead of request TS for any vb
-func isSnapshotConsistentOrAhead(ss IndexSnapshot, cons common.Consistency,
-	reqTs *common.TsVbuuid) (bool, bool) {
+func isSnapshotConsistentOrAhead(ss IndexSnapshot, reqTs *common.TsVbuuid,
+	cons common.Consistency, strict_chk_threshold int) (bool, bool) {
 
 	snapTsConsistent, snapTsAhead := false, false
 
@@ -760,7 +767,7 @@ func isSnapshotConsistentOrAhead(ss IndexSnapshot, cons common.Consistency,
 			return true, false
 		}
 
-		snapTsConsistent, snapTsAhead = snapTs.AsRecentTs2(reqTs)
+		snapTsConsistent, snapTsAhead = isSnapTsConsistentOrAhead(snapTs, reqTs, strict_chk_threshold)
 		if snapTs.CheckCrc64(reqTs) && snapTsConsistent {
 			return true, snapTsAhead
 		}
@@ -771,6 +778,42 @@ func isSnapshotConsistentOrAhead(ss IndexSnapshot, cons common.Consistency,
 		return false, false
 	}
 	return false, false
+}
+
+// First return param: true if snapTs is as recent as reqTs
+// Second return param: true if snapTs is signifantly ahead of reqTs
+func isSnapTsConsistentOrAhead(snapTs, reqTs *common.TsVbuuid, strict_chk_threshold int) (bool, bool) {
+
+	isSnapAhead := false
+
+	lag := uint64(0) // Number by which KV Timestamp is behind snapshot Timestamp
+	if snapTs == nil || reqTs == nil {
+		return false, isSnapAhead
+	}
+	if snapTs.Bucket != reqTs.Bucket {
+		return false, isSnapAhead
+	}
+	if len(snapTs.Seqnos) > len(reqTs.Seqnos) {
+		return false, isSnapAhead
+	}
+	for i, seqno := range snapTs.Seqnos {
+		if seqno < reqTs.Seqnos[i] {
+			return false, isSnapAhead
+		}
+
+		if seqno > reqTs.Seqnos[i] {
+			lag += (seqno - reqTs.Seqnos[i])
+		}
+	}
+
+	if lag > uint64(strict_chk_threshold) {
+		// snapTs is significantly ahead of reqTS, this indicates that
+		// there is a possible KV data loss. Switch to slow path that checks
+		// for vbuuids along with vbseqnos so that stale results will not be returned
+		isSnapAhead = true
+	}
+
+	return true, isSnapAhead
 }
 
 func (s *scanCoordinator) isScanAllowed(c common.Consistency, scan *ScanRequest) error {

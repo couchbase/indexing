@@ -218,6 +218,21 @@ func (ie *IndexEvaluator) SystemEventData(
 	return &c.DataportKeyVersions{bucket, vbno, vbuuid, kv, opaque2}
 }
 
+// UpdateSeqnoData implement Evaluator{} interface.
+// DocID is misinterpreted for collectionID for this message
+func (ie *IndexEvaluator) UpdateSeqnoData(
+	m *mc.DcpEvent, vbno uint16, vbuuid, seqno uint64,
+	opaque2 uint64) (data interface{}) {
+
+	// TODO (Collections): Replace this GetBucket() call with GetKeyspaceID call
+	// as DataportKeyVersions should send keyspaceId with collections rather than
+	// bucket name
+	bucket := ie.Bucket()
+	kv := c.NewKeyVersions(seqno, nil, 1, 0)
+	kv.AddUpdateSeqno()
+	return &c.DataportKeyVersions{bucket, vbno, vbuuid, kv, opaque2}
+}
+
 // StreamEndData implement Evaluator{} interface.
 func (ie *IndexEvaluator) StreamEndData(
 	vbno uint16, vbuuid, seqno uint64, opaque2 uint64) (data interface{}) {
@@ -532,6 +547,10 @@ func (ie *IndexEvaluator) dcpEvent2Meta(m *mc.DcpEvent, meta map[string]interfac
 // GetIndexName implements Evaluator{} interface.
 func (ie *IndexEvaluator) GetIndexName() string {
 	return ie.instance.GetDefinition().GetName()
+}
+
+func (ie *IndexEvaluator) GetCollectionID() string {
+	return ie.instance.GetDefinition().GetCollectionID()
 }
 
 type IndexEvaluatorStats struct {

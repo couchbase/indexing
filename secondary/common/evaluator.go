@@ -23,6 +23,9 @@ type Evaluator interface {
 	// SystemEventData is generated for downstream.
 	SystemEventData(m *mc.DcpEvent, vbno uint16, vbuuid, seqno, opaque2 uint64) interface{}
 
+	// UpdateSeqnoData is generated for downstream.
+	UpdateSeqnoData(m *mc.DcpEvent, vbno uint16, vbuuid, seqno, opaque2 uint64) interface{}
+
 	// StreamEnd is generated for downstream.
 	StreamEndData(vbno uint16, vbuuid, seqno, opaque2 uint64) (data interface{})
 
@@ -38,4 +41,7 @@ type Evaluator interface {
 
 	// Get the name of the index
 	GetIndexName() string
+
+	// Get ID of the collection to which this engine belongs
+	GetCollectionID() string
 }
