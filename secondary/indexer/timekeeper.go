@@ -535,27 +535,38 @@ func (tk *timekeeper) handleSync(cmd Message) {
 	bucket := cmd.(*MsgBucketHWT).GetBucket()
 	hwt := cmd.(*MsgBucketHWT).GetHWT()
 	prevSnap := cmd.(*MsgBucketHWT).GetPrevSnap()
+	sessionId := cmd.(*MsgBucketHWT).GetSessionId()
 
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
 
 	//check if bucket is active in stream
 	if tk.checkBucketActiveInStream(streamId, bucket) == false {
-		logging.Tracef("Timekeeper::handleSync \n\tReceived Sync for "+
+		logging.Tracef("Timekeeper::handleSync Received Sync for "+
 			"Inactive Bucket %v Stream %v. Ignored.", bucket, streamId)
 		return
 	}
 
 	//if there are no indexes for this bucket and stream, ignore
 	if c, ok := tk.ss.streamBucketIndexCountMap[streamId][bucket]; !ok || c <= 0 {
-		logging.Tracef("Timekeeper::handleSync \n\tIgnore Sync for StreamId %v "+
+		logging.Tracef("Timekeeper::handleSync Ignore Sync for StreamId %v "+
 			"Bucket %v. IndexCount %v. ", streamId, bucket, c)
 		tk.supvCmdch <- &MsgSuccess{}
 		return
 	}
 
+	//if the session doesn't match, ignore
+	currSessionId := tk.ss.getSessionId(streamId, bucket)
+	if sessionId != 0 && sessionId != currSessionId {
+		logging.Warnf("Timekeeper::handleSync Ignore Sync for StreamId %v "+
+			"Bucket %v. SessionId %v. Current Session %v ", streamId, bucket,
+			sessionId, currSessionId)
+		tk.supvCmdch <- &MsgSuccess{}
+		return
+	}
+
 	if _, ok := tk.ss.streamBucketHWTMap[streamId][bucket]; !ok {
-		logging.Debugf("Timekeeper::handleSync \n\tIgnoring Sync Marker "+
+		logging.Debugf("Timekeeper::handleSync Ignoring Sync Marker "+
 			"for StreamId %v Bucket %v. Bucket Not Found.", streamId, bucket)
 		tk.supvCmdch <- &MsgSuccess{}
 		return

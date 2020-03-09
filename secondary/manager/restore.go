@@ -464,9 +464,11 @@ func (m *RestoreContext) buildIndexHostMapping(solution *planner.Solution) map[s
 	for _, indexes := range m.idxToRestore {
 		for _, index := range indexes {
 			if index.Instance != nil {
-				if indexer := solution.FindIndexerWithReplica(index.Name, index.Bucket, index.PartnId, index.Instance.ReplicaId); indexer != nil {
-					logging.Infof("RestoreContext:  Restoring index (%v, %v, %v, %v) at indexer %v",
-						index.Bucket, index.Name, index.PartnId, index.Instance.ReplicaId, indexer.NodeId)
+				if indexer := solution.FindIndexerWithReplica(index.Name, index.Bucket, index.Scope, index.Collection,
+					index.PartnId, index.Instance.ReplicaId); indexer != nil {
+
+					logging.Infof("RestoreContext:  Restoring index (%v, %v, %v, %v, %v, %v) at indexer %v",
+						index.Bucket, index.Scope, index.Collection, index.Name, index.PartnId, index.Instance.ReplicaId, indexer.NodeId)
 
 					defns := result[indexer.RestUrl]
 					found := false

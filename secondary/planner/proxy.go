@@ -28,6 +28,8 @@ import (
 // Concrete Type/Struct
 //////////////////////////////////////////////////////////////
 
+// TODO: Index Topology related changes (if any)
+
 type LocalIndexMetadata struct {
 	IndexerId        string             `json:"indexerId,omitempty"`
 	NodeUUID         string             `json:"nodeUUID,omitempty"`
@@ -245,6 +247,8 @@ func ConvertToIndexUsages(config common.Config, localMeta *LocalIndexMetadata, n
 	for i := 0; i < len(localMeta.IndexDefinitions); i++ {
 
 		defn := &localMeta.IndexDefinitions[i]
+		defn.SetCollectionDefaults()
+
 		indexes, err := ConvertToIndexUsage(config, defn, localMeta)
 		if err != nil {
 			return nil, err
@@ -314,7 +318,7 @@ func ConvertToIndexUsage(config common.Config, defn *common.IndexDefn, localMeta
 				numVbuckets := config["indexer.numVbuckets"].Int()
 				pc := common.NewKeyPartitionContainer(numVbuckets, int(inst.NumPartitions), defn.PartitionScheme, defn.HashScheme)
 
-				// Is the index being deleted by user?   Thsi will read the delete token from metakv.  If untable read from metakv,
+				// Is the index being deleted by user?   This will read the delete token from metakv.  If untable read from metakv,
 				// pendingDelete is false (cannot assert index is to-be-delete).
 				pendingDelete, err := mc.DeleteCommandTokenExist(defn.DefnId)
 				if err != nil {
@@ -350,8 +354,9 @@ func ConvertToIndexUsage(config common.Config, defn *common.IndexDefn, localMeta
 					Pc:        pc,
 				}
 
-				logging.Debugf("Create Index usage %v %v %v %v %v",
-					index.Name, index.Bucket, index.Instance.InstId, index.PartnId, index.Instance.ReplicaId)
+				logging.Debugf("Create Index usage %v %v %v %v %v %v %v",
+					index.Name, index.Bucket, index.Scope, index.Collection,
+					index.Instance.InstId, index.PartnId, index.Instance.ReplicaId)
 
 				result = append(result, index)
 			}
@@ -476,42 +481,24 @@ func getIndexStats(clusterUrl string, plan *Plan, config common.Config) error {
 				DiskUsage   uint64 `json:"diskUsage,omitempty"`
 			*/
 
-			var key string
-			var key1 string
-
-			var indexName string
-			var indexName1 string
-
-			if clusterVersion >= common.INDEXER_55_VERSION {
-				indexName = index.GetStatsName()
-				indexName1 = index.GetInstStatsName()
-			} else {
-				indexName = index.GetInstStatsName()
-				indexName1 = index.GetInstStatsName()
-			}
-
 			// items_count captures number of key per index
-			key = fmt.Sprintf("%v:%v:items_count", index.Bucket, indexName)
-			if itemsCount, ok := statsMap[key]; ok {
+			if itemsCount, ok := GetIndexStat(index, "items_count", statsMap, true, clusterVersion); ok {
 				index.ActualNumDocs = uint64(itemsCount.(float64))
 			}
 
 			// build completion
-			key = fmt.Sprintf("%v:%v:build_progress", index.Bucket, indexName1)
-			if buildProgress, ok := statsMap[key]; ok {
+			if buildProgress, ok := GetIndexStat(index, "build_progress", statsMap, false, clusterVersion); ok {
 				index.ActualBuildPercent = uint64(buildProgress.(float64))
 			}
 
 			// resident ratio
-			key = fmt.Sprintf("%v:%v:resident_percent", index.Bucket, indexName)
-			if residentPercent, ok := statsMap[key]; ok {
+			if residentPercent, ok := GetIndexStat(index, "resident_percent", statsMap, true, clusterVersion); ok {
 				index.ActualResidentPercent = uint64(residentPercent.(float64))
 			}
 
 			// data_size is the total key size of index, including back index.
 			// data_size for MOI is 0.
-			key = fmt.Sprintf("%v:%v:data_size", index.Bucket, indexName)
-			if dataSize, ok := statsMap[key]; ok {
+			if dataSize, ok := GetIndexStat(index, "data_size", statsMap, true, clusterVersion); ok {
 				index.ActualDataSize = uint64(dataSize.(float64))
 				// From 6.5, data_size stat contains uncompressed data size for plasma
 				// So, no need to consider the compressed version of data so that other
@@ -527,8 +514,7 @@ func getIndexStats(clusterUrl string, plan *Plan, config common.Config) error {
 			}
 
 			// memory usage per index
-			key = fmt.Sprintf("%v:%v:memory_used", index.Bucket, indexName)
-			if memUsed, ok := statsMap[key]; ok {
+			if memUsed, ok := GetIndexStat(index, "memory_used", statsMap, true, clusterVersion); ok {
 				index.ActualMemStats = uint64(memUsed.(float64))
 				index.ActualMemUsage = index.ActualMemStats
 				totalIndexMemUsed += index.ActualMemUsage
@@ -546,8 +532,7 @@ func getIndexStats(clusterUrl string, plan *Plan, config common.Config) error {
 			}
 
 			// disk usage per index
-			key = fmt.Sprintf("%v:%v:avg_disk_bps", index.Bucket, indexName)
-			if diskUsed, ok := statsMap[key]; ok {
+			if diskUsed, ok := GetIndexStat(index, "avg_disk_bps", statsMap, true, clusterVersion); ok {
 				index.ActualDiskUsage = uint64(diskUsed.(float64))
 			}
 
@@ -555,8 +540,7 @@ func getIndexStats(clusterUrl string, plan *Plan, config common.Config) error {
 			// the key size, it divides index data_size by items_count.  This
 			// contains sec key size + doc key size + main index overhead (74 bytes).
 			// Subtract 74 bytes to get sec key size.
-			key = fmt.Sprintf("%v:%v:avg_sec_key_size", index.Bucket, indexName)
-			if avgSecKeySize, ok := statsMap[key]; ok {
+			if avgSecKeySize, ok := GetIndexStat(index, "avg_sec_key_size", statsMap, true, clusterVersion); ok {
 				index.AvgSecKeySize = uint64(avgSecKeySize.(float64))
 			} else if !index.IsPrimary {
 				// Aproximate AvgSecKeySize.   AvgSecKeySize includes both
@@ -567,8 +551,7 @@ func getIndexStats(clusterUrl string, plan *Plan, config common.Config) error {
 			}
 
 			// These stats are currently unavailable in 4.5.
-			key = fmt.Sprintf("%v:%v:avg_doc_key_size", index.Bucket, indexName)
-			if avgDocKeySize, ok := statsMap[key]; ok {
+			if avgDocKeySize, ok := GetIndexStat(index, "avg_doc_key_size", statsMap, true, clusterVersion); ok {
 				index.AvgDocKeySize = uint64(avgDocKeySize.(float64))
 			} else if index.IsPrimary {
 				// Aproximate AvgDocKeySize.  Subtract 74 bytes for main
@@ -579,34 +562,29 @@ func getIndexStats(clusterUrl string, plan *Plan, config common.Config) error {
 			}
 
 			// These stats are currently unavailable in 4.5.
-			key = fmt.Sprintf("%v:%v:avg_arr_size", index.Bucket, indexName)
-			if avgArrSize, ok := statsMap[key]; ok {
+			if avgArrSize, ok := GetIndexStat(index, "avg_arr_size", statsMap, true, clusterVersion); ok {
 				index.AvgArrSize = uint64(avgArrSize.(float64))
 			}
 
 			// These stats are currently unavailable in 4.5.
-			key = fmt.Sprintf("%v:%v:avg_arr_key_size", index.Bucket, indexName)
-			if avgArrKeySize, ok := statsMap[key]; ok {
+			if avgArrKeySize, ok := GetIndexStat(index, "avg_arr_key_size", statsMap, true, clusterVersion); ok {
 				index.AvgArrKeySize = uint64(avgArrKeySize.(float64))
 			}
 
 			// avg_drain_rate computes the actual number of rows persisted to storage.
 			// This does not include incoming rows that are filtered out by back-index.
 			// These stats are currently unavailable in 4.5.
-			key = fmt.Sprintf("%v:%v:avg_drain_rate", index.Bucket, indexName)
-			if avgDrainRate, ok := statsMap[key]; ok {
+			if avgDrainRate, ok := GetIndexStat(index, "avg_drain_rate", statsMap, true, clusterVersion); ok {
 				index.DrainRate = uint64(avgDrainRate.(float64))
 			}
 
 			// avg_mutation_rate computes the incoming number of docs.
 			// This does not include the individual element in an array index.
 			// These stats are currently unavailable in 4.5.
-			key = fmt.Sprintf("%v:%v:avg_mutation_rate", index.Bucket, indexName)
-			if avgMutationRate, ok := statsMap[key]; ok {
+			if avgMutationRate, ok := GetIndexStat(index, "avg_mutation_rate", statsMap, true, clusterVersion); ok {
 				index.MutationRate = uint64(avgMutationRate.(float64))
 			} else {
-				key = fmt.Sprintf("%v:%v:num_flush_queued", index.Bucket, indexName)
-				if flushQueuedStat, ok := statsMap[key]; ok {
+				if flushQueuedStat, ok := GetIndexStat(index, "num_flush_queued", statsMap, true, clusterVersion); ok {
 					flushQueued := uint64(flushQueuedStat.(float64))
 
 					if flushQueued != 0 {
@@ -629,17 +607,14 @@ func getIndexStats(clusterUrl string, plan *Plan, config common.Config) error {
 			}
 
 			// These stats are currently unavailable in 4.5.
-			key = fmt.Sprintf("%v:%v:avg_scan_rate", index.Bucket, indexName)
-			key1 = fmt.Sprintf("%v:%v:avg_scan_rate", index.Bucket, indexName1)
-			if avgScanRate, ok := statsMap[key]; ok {
+			if avgScanRate, ok := GetIndexStat(index, "avg_scan_rate", statsMap, true, clusterVersion); ok {
 				index.ScanRate = uint64(avgScanRate.(float64))
 				totalScan += index.ScanRate
-			} else if avgScanRate, ok := statsMap[key1]; ok {
+			} else if avgScanRate, ok := GetIndexStat(index, "avg_scan_rate", statsMap, false, clusterVersion); ok {
 				index.ScanRate = uint64(avgScanRate.(float64))
 				totalScan += index.ScanRate
 			} else {
-				key = fmt.Sprintf("%v:%v:num_rows_returned", index.Bucket, indexName)
-				if rowReturnedStat, ok := statsMap[key]; ok {
+				if rowReturnedStat, ok := GetIndexStat(index, "num_rows_returned", statsMap, true, clusterVersion); ok {
 					rowReturned := uint64(rowReturnedStat.(float64))
 
 					if rowReturned != 0 {
@@ -1161,8 +1136,9 @@ func cleanseIndexLayout(indexers []*IndexerNode) {
 			// ignore any index with RState being pending.
 			// **For pre-spock backup, RState of an instance is ACTIVE (0).
 			if index.Instance.RState != common.REBAL_ACTIVE {
-				logging.Infof("Planner: Skip index (%v, %v, %v, %v) that is not RState ACTIVE (%v)",
-					index.Bucket, index.Name, index.InstId, index.PartnId, index.Instance.RState)
+				logging.Infof("Planner: Skip index (%v, %v, %v, %v, %v, %v) that is not RState ACTIVE (%v)",
+					index.Bucket, index.Scope, index.Collection, index.Name, index.InstId, index.PartnId,
+					index.Instance.RState)
 				continue
 			}
 
@@ -1170,8 +1146,9 @@ func cleanseIndexLayout(indexers []*IndexerNode) {
 			// **For pre-spock backup, inst version is always 0. In fact, there should not be another instance (max == inst).
 			max := findMaxVersionInst(indexers, index.DefnId, index.PartnId, index.InstId)
 			if max != index {
-				logging.Infof("Planner:  Skip index (%v, %v, %v, %v) with lower version number %v.",
-					index.Bucket, index.Name, index.InstId, index.PartnId, index.Instance.Version)
+				logging.Infof("Planner:  Skip index (%v, %v, %v, %v, %v, %v) with lower version number %v.",
+					index.Bucket, index.Scope, index.Collection, index.Name, index.InstId, index.PartnId,
+					index.Instance.Version)
 				continue
 			}
 
@@ -1324,6 +1301,8 @@ func processCreateToken(clusterUrl string, indexers []*IndexerNode, config commo
 
 			for indexerId, definitions := range token.Definitions {
 				for _, defn := range definitions {
+					defn.SetCollectionDefaults()
+
 					for _, partition := range defn.Partitions {
 						if !findPartition(defn.InstId, partition) {
 							if addIndex(indexerId, makeIndexUsage(&defn, partition)) {
@@ -1407,7 +1386,8 @@ func processDeleteToken(clusterUrl string, indexers []*IndexerNode, config commo
 					if index.DefnId != token.DefnId {
 						indexes = append(indexes, index)
 					} else {
-						logging.Infof("Planner: Remove index (%v, %v) due to delete token.", index.GetDisplayName(), index.Bucket)
+						logging.Infof("Planner: Remove index (%v, %v, %v, %v) due to delete token.",
+							index.GetDisplayName(), index.Bucket, index.Scope, index.Collection)
 					}
 				}
 				indexer.Indexes = indexes
@@ -1491,7 +1471,8 @@ func processDropInstanceToken(clusterUrl string, indexers []*IndexerNode, config
 						indexes = append(indexes, index)
 					} else {
 						found = true
-						logging.Infof("Planner: Remove index (%v, %v) due to drop instance token.", index.GetDisplayName(), index.Bucket)
+						logging.Infof("Planner: Remove index (%v, %v, %v, %v) due to drop instance token.",
+							index.GetDisplayName(), index.Bucket, index.Scope, index.Collection)
 					}
 				}
 				indexer.Indexes = indexes

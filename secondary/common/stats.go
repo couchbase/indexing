@@ -197,6 +197,12 @@ func GetStatsPrefix(bucket, scope, collection, index string, replicaId, partnId 
 	return strings.Join(strs, ":")
 }
 
+// Note that the input prefix passed to this function should be exactly
+// the same as return value of GetStatsPrefix()
+func GetIndexStatKey(prefix, stat string) string {
+	return strings.Join([]string{prefix, stat}, "")
+}
+
 type StatsIndexSpec struct {
 	Instances []IndexInstId `json:"instances,omitempty"`
 }

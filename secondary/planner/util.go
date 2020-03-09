@@ -578,6 +578,8 @@ func makeIndexUsageFromDefn(defn *common.IndexDefn, instId common.IndexInstId, p
 		PartnId:       partnId,
 		Name:          defn.Name,
 		Bucket:        defn.Bucket,
+		Scope:         defn.Scope,
+		Collection:    defn.Collection,
 		IsPrimary:     defn.IsPrimary,
 		StorageMode:   common.IndexTypeToStorageMode(defn.Using).String(),
 		NumOfDocs:     defn.NumDoc / numPartition,
@@ -599,4 +601,36 @@ func makeIndexUsageFromDefn(defn *common.IndexDefn, instId common.IndexInstId, p
 	}
 
 	return index
+}
+
+//
+// GetIndexStat function relies on the format of the stat returned by the
+// indexer. If the indexer stats format changes, this function will hide
+// the stats format details from the consumer of the stats.
+//
+func GetIndexStat(index *IndexUsage, stat string, stats map[string]interface{},
+	isPartn bool, clusterVersion uint64) (interface{}, bool) {
+
+	var prefix string
+	if isPartn {
+		if index.partnStatPrefix == "" {
+			if clusterVersion >= common.INDEXER_55_VERSION {
+				prefix = index.GetPartnStatsPrefix()
+			} else {
+				prefix = index.GetInstStatsPrefix()
+			}
+			index.partnStatPrefix = prefix
+		}
+		prefix = index.partnStatPrefix
+	} else {
+		if index.instStatPrefix == "" {
+			prefix = index.GetInstStatsPrefix()
+			index.instStatPrefix = prefix
+		}
+		prefix = index.instStatPrefix
+	}
+
+	key := common.GetIndexStatKey(prefix, stat)
+	val, ok := stats[key]
+	return val, ok
 }

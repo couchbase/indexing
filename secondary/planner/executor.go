@@ -96,6 +96,8 @@ type IndexSpec struct {
 	// definition
 	Name               string             `json:"name,omitempty"`
 	Bucket             string             `json:"bucket,omitempty"`
+	Scope              string             `json:"scope,omitempty"`
+	Collection         string             `json:"collection,omitempty"`
 	DefnId             common.IndexDefnId `json:"defnId,omitempty"`
 	IsPrimary          bool               `json:"isPrimary,omitempty"`
 	SecExprs           []string           `json:"secExprs,omitempty"`
@@ -368,8 +370,12 @@ func verifyDuplicateIndex(plan *Plan, indexSpecs []*IndexSpec) error {
 	for _, spec := range indexSpecs {
 		for _, indexer := range plan.Placement {
 			for _, index := range indexer.Indexes {
-				if index.Name == spec.Name && index.Bucket == spec.Bucket {
-					return errors.New(fmt.Sprintf("Index already exist.  Fail to create %v in bucket %v", spec.Name, spec.Bucket))
+				if index.Name == spec.Name && index.Bucket == spec.Bucket &&
+					index.Scope == spec.Scope && index.Collection == spec.Collection {
+
+					errMsg := fmt.Sprintf("Index already exist.  Fail to create %v in bucket %v, scope %v, collection %v",
+						spec.Name, spec.Bucket, spec.Scope, spec.Collection)
+					return errors.New(errMsg)
 				}
 			}
 		}
@@ -873,6 +879,8 @@ func replicaDrop(config *RunConfig, plan *Plan, defnId common.IndexDefnId, numPa
 //   [ WITH { "nodes": [ "node_name" ], "defer_build":true|false } ];
 // BUILD INDEX ON named_keyspace_ref(index_name[,index_name]*) USING GSI;
 //
+
+// TODO: This needs to be done based on n1ql syntax for collection.
 func CreateIndexDDL(solution *Solution) string {
 
 	if solution == nil {
@@ -1363,6 +1371,8 @@ func indexUsageFromSpec(sizing SizingMethod, spec *IndexSpec) ([]*IndexUsage, er
 			index.PartnId = common.PartitionId(startPartnId + j)
 			index.Name = spec.Name
 			index.Bucket = spec.Bucket
+			index.Scope = spec.Scope
+			index.Collection = spec.Collection
 			index.StorageMode = spec.Using
 			index.IsPrimary = spec.IsPrimary
 
@@ -1380,6 +1390,8 @@ func indexUsageFromSpec(sizing SizingMethod, spec *IndexSpec) ([]*IndexUsage, er
 			index.Instance.Defn.DefnId = defnId
 			index.Instance.Defn.Name = index.Name
 			index.Instance.Defn.Bucket = spec.Bucket
+			index.Instance.Defn.Scope = spec.Scope
+			index.Instance.Defn.Collection = spec.Collection
 			index.Instance.Defn.IsPrimary = spec.IsPrimary
 			index.Instance.Defn.SecExprs = spec.SecExprs
 			index.Instance.Defn.WhereExpr = spec.WhereExpr

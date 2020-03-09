@@ -1199,11 +1199,12 @@ func (m *MsgDropIndex) GetString() string {
 //TK_GET_BUCKET_HWT
 //STREAM_READER_HWT
 type MsgBucketHWT struct {
-	mType    MsgType
-	streamId common.StreamId
-	bucket   string
-	ts       *common.TsVbuuid
-	prevSnap *common.TsVbuuid
+	mType     MsgType
+	streamId  common.StreamId
+	bucket    string
+	ts        *common.TsVbuuid
+	prevSnap  *common.TsVbuuid
+	sessionId uint64
 }
 
 func (m *MsgBucketHWT) GetMsgType() MsgType {
@@ -1226,11 +1227,16 @@ func (m *MsgBucketHWT) GetPrevSnap() *common.TsVbuuid {
 	return m.prevSnap
 }
 
+func (m *MsgBucketHWT) GetSessionId() uint64 {
+	return m.sessionId
+}
+
 func (m *MsgBucketHWT) String() string {
 
-	str := "\n\tMessage: MsgBucketHWT"
-	str += fmt.Sprintf("\n\tStreamId: %v", m.streamId)
-	str += fmt.Sprintf("\n\tBucket: %v", m.bucket)
+	str := "\n\tMessage: MsgBucketHWT "
+	str += fmt.Sprintf("StreamId: %v ", m.streamId)
+	str += fmt.Sprintf("Bucket: %v ", m.bucket)
+	str += fmt.Sprintf("SessionId: %v ", m.sessionId)
 	return str
 
 }

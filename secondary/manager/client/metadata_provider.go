@@ -1338,6 +1338,8 @@ func (o *MetadataProvider) prepareIndexSpec(defn *c.IndexDefn) *planner.IndexSpe
 	spec.DefnId = defn.DefnId
 	spec.Name = defn.Name
 	spec.Bucket = defn.Bucket
+	spec.Scope = defn.Scope
+	spec.Collection = defn.Collection
 	spec.IsPrimary = defn.IsPrimary
 	spec.SecExprs = defn.SecExprs
 	spec.WhereExpr = defn.WhereExpr

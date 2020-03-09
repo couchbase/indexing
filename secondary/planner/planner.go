@@ -195,12 +195,14 @@ type IndexerNode struct {
 
 type IndexUsage struct {
 	// input: index identification
-	DefnId  common.IndexDefnId `json:"defnId"`
-	InstId  common.IndexInstId `json:"instId"`
-	PartnId common.PartitionId `json:"partnId"`
-	Name    string             `json:"name"`
-	Bucket  string             `json:"bucket"`
-	Hosts   []string           `json:"host"`
+	DefnId     common.IndexDefnId `json:"defnId"`
+	InstId     common.IndexInstId `json:"instId"`
+	PartnId    common.PartitionId `json:"partnId"`
+	Name       string             `json:"name"`
+	Bucket     string             `json:"bucket"`
+	Scope      string             `json:"scope"`
+	Collection string             `json:"collection"`
+	Hosts      []string           `json:"host"`
 
 	// input: index sizing
 	IsPrimary     bool    `json:"isPrimary,omitempty"`
@@ -256,6 +258,10 @@ type IndexUsage struct {
 
 	// mutable: hint for placement / constraint
 	suppressEquivIdxCheck bool
+
+	// Miscellaneous fields
+	partnStatPrefix string
+	instStatPrefix  string
 }
 
 type Solution struct {
@@ -306,12 +312,14 @@ type Violations struct {
 }
 
 type Violation struct {
-	Name     string
-	Bucket   string
-	NodeId   string
-	CpuUsage float64
-	MemUsage uint64
-	Details  []string
+	Name       string
+	Bucket     string
+	Scope      string
+	Collection string
+	NodeId     string
+	CpuUsage   float64
+	MemUsage   uint64
+	Details    []string
 }
 
 //////////////////////////////////////////////////////////////
@@ -1158,8 +1166,8 @@ func (p *SAPlanner) dropReplicaIfNecessary(s *Solution) {
 			if !found {
 				keepCandidates = append(keepCandidates, index)
 			} else {
-				logging.Warnf("There is more replia than available nodes.  Will not move index replica (%v,%v) from ejected node %v",
-					index.Bucket, index.Name, indexer.NodeId)
+				logging.Warnf("There is more replia than available nodes.  Will not move index replica (%v,%v,%v,%v) from ejected node %v",
+					index.Bucket, index.Scope, index.Collection, index.Name, indexer.NodeId)
 
 				c := []*IndexUsage{index}
 				p.placement.RemoveEligibleIndex(c)
@@ -1192,8 +1200,8 @@ func (p *SAPlanner) suppressEqivIndexIfNecessary(s *Solution) {
 				// one another).
 				count := s.findNumEquivalentIndex(index)
 				if count > numLiveNode {
-					logging.Warnf("There are more equivalent index than available nodes.  Allow equivalent index of (%v, %v) to be replaced on same node.",
-						index.Bucket, index.Name)
+					logging.Warnf("There are more equivalent index than available nodes.  Allow equivalent index of (%v, %v, %v, %v) to be replaced on same node.",
+						index.Bucket, index.Scope, index.Collection, index.Name)
 					index.suppressEquivIdxCheck = true
 
 					if index.Instance != nil {
@@ -1281,7 +1289,8 @@ func (p *SAPlanner) addReplicaIfNecessary(s *Solution) {
 							clonedCandidates = append(clonedCandidates, cloned)
 							numReplica++
 
-							logging.Infof("Rebuilding lost replica for (%v,%v,%v)", index.Bucket, index.Name, replicaId)
+							logging.Infof("Rebuilding lost replica for (%v,%v,%v,%v,%v)",
+								index.Bucket, index.Scope, index.Collection, index.Name, replicaId)
 						}
 					}
 				}
@@ -1359,7 +1368,9 @@ func (p *SAPlanner) addPartitionIfNecessary(s *Solution) {
 					s.addIndex(indexer, cloned, false)
 					allCloned = append(allCloned, cloned)
 
-					logging.Infof("Rebuilding lost partition for (%v,%v,%v,%v)", cloned.Bucket, cloned.Name, cloned.Instance.ReplicaId, cloned.PartnId)
+					logging.Infof("Rebuilding lost partition for (%v,%v,%v,%v,%v,%v)",
+						cloned.Bucket, cloned.Scope, cloned.Collection, cloned.Name,
+						cloned.Instance.ReplicaId, cloned.PartnId)
 				}
 			}
 		}
@@ -1798,8 +1809,8 @@ func (s *Solution) PrintLayout() {
 
 		for _, index := range indexer.Indexes {
 			logging.Infof("\t\t------------------------------------------------------------------------------------------------------------------")
-			logging.Infof("\t\tIndex name:%v, bucket:%v, defnId:%v, instId:%v, Partition: %v, new/moved:%v",
-				index.GetDisplayName(), index.Bucket, index.DefnId, index.InstId, index.PartnId,
+			logging.Infof("\t\tIndex name:%v, bucket:%v, scope:%v, collection:%v, defnId:%v, instId:%v, Partition: %v, new/moved:%v",
+				index.GetDisplayName(), index.Bucket, index.Scope, index.Collection, index.DefnId, index.InstId, index.PartnId,
 				index.initialNode == nil || index.initialNode.NodeId != indexer.NodeId)
 			logging.Infof("\t\tIndex total memory:%v (%s), mem:%v (%s), overhead:%v (%s), min:%v (%s), data:%v (%s) cpu:%.4f io:%v (%s) scan:%v drain:%v",
 				index.GetMemTotal(s.UseLiveData()), formatMemoryStr(uint64(index.GetMemTotal(s.UseLiveData()))),
@@ -2132,7 +2143,7 @@ func (s *Solution) findMissingReplica(u *IndexUsage) map[int]common.IndexInstId 
 			// check replica for each partition (including self)
 			if index.IsReplica(u) {
 				if index.Instance == nil {
-					logging.Warnf("Cannot determinte replicaId for index (%v,%v)", index.Name, index.Bucket)
+					logging.Warnf("Cannot determinte replicaId for index (%v,%v,%v,%v)", index.Name, index.Bucket, index.Scope, index.Collection)
 					return (map[int]common.IndexInstId)(nil)
 				}
 				found[index.Instance.ReplicaId] = index.InstId
@@ -2141,7 +2152,7 @@ func (s *Solution) findMissingReplica(u *IndexUsage) map[int]common.IndexInstId 
 			// check instance/replica for the index definition (including self)
 			if index.IsSameIndex(u) {
 				if index.Instance == nil {
-					logging.Warnf("Cannot determinte replicaId for index (%v,%v)", index.Name, index.Bucket)
+					logging.Warnf("Cannot determinte replicaId for index (%v,%v,%v,%v)", index.Name, index.Bucket, index.Scope, index.Collection)
 					return (map[int]common.IndexInstId)(nil)
 				}
 				instances[index.InstId] = index.Instance.ReplicaId
@@ -2553,12 +2564,15 @@ func (s *Solution) hasReplica(indexer *IndexerNode, target *IndexUsage) bool {
 //
 // Find the indexer node that contains the replica
 //
-func (s *Solution) FindIndexerWithReplica(name string, bucket string, partnId common.PartitionId, replicaId int) *IndexerNode {
+func (s *Solution) FindIndexerWithReplica(name, bucket, scope, collection string,
+	partnId common.PartitionId, replicaId int) *IndexerNode {
 
 	for _, indexer := range s.Placement {
 		for _, index := range indexer.Indexes {
 			if index.Name == name &&
 				index.Bucket == bucket &&
+				index.Scope == scope &&
+				index.Collection == collection &&
 				index.PartnId == partnId &&
 				index.Instance != nil &&
 				index.Instance.ReplicaId == replicaId {
@@ -3119,12 +3133,14 @@ func (c *IndexerConstraint) GetViolations(s *Solution, eligibles map[*IndexUsage
 					}
 
 					violation := &Violation{
-						Name:     index.GetDisplayName(),
-						Bucket:   index.Bucket,
-						NodeId:   indexer.NodeId,
-						MemUsage: index.GetMemMin(s.UseLiveData()),
-						CpuUsage: index.GetCpuUsage(s.UseLiveData()),
-						Details:  nil}
+						Name:       index.GetDisplayName(),
+						Bucket:     index.Bucket,
+						Scope:      index.Scope,
+						Collection: index.Collection,
+						NodeId:     indexer.NodeId,
+						MemUsage:   index.GetMemMin(s.UseLiveData()),
+						CpuUsage:   index.GetCpuUsage(s.UseLiveData()),
+						Details:    nil}
 
 					// If this indexer node has a placeable index, then check if the
 					// index can be moved to other nodes.
@@ -4101,13 +4117,16 @@ func (o *IndexUsage) String() string {
 //
 // This function creates a new index usage
 //
-func newIndexUsage(defnId common.IndexDefnId, instId common.IndexInstId, partnId common.PartitionId, name string, bucket string) *IndexUsage {
+func newIndexUsage(defnId common.IndexDefnId, instId common.IndexInstId, partnId common.PartitionId,
+	name, bucket, scope, collection string) *IndexUsage {
 
 	return &IndexUsage{DefnId: defnId,
-		InstId:  instId,
-		PartnId: partnId,
-		Name:    name,
-		Bucket:  bucket,
+		InstId:     instId,
+		PartnId:    partnId,
+		Name:       name,
+		Bucket:     bucket,
+		Scope:      scope,
+		Collection: collection,
 	}
 }
 
@@ -4354,6 +4373,25 @@ func (o *IndexUsage) GetInstStatsName() string {
 	}
 
 	return common.FormatIndexInstDisplayName(o.Instance.Defn.Name, o.Instance.ReplicaId)
+}
+
+func (o *IndexUsage) GetPartnStatsPrefix() string {
+	if o.Instance == nil {
+		return common.GetStatsPrefix(o.Bucket, o.Scope, o.Collection, o.Name, 0, 0, false)
+	}
+
+	return common.GetStatsPrefix(o.Instance.Defn.Bucket, o.Instance.Defn.Scope,
+		o.Instance.Defn.Collection, o.Instance.Defn.Name, o.Instance.ReplicaId,
+		int(o.PartnId), true)
+}
+
+func (o *IndexUsage) GetInstStatsPrefix() string {
+	if o.Instance == nil {
+		return common.GetStatsPrefix(o.Bucket, o.Scope, o.Collection, o.Name, 0, 0, false)
+	}
+
+	return common.GetStatsPrefix(o.Instance.Defn.Bucket, o.Instance.Defn.Scope,
+		o.Instance.Defn.Collection, o.Instance.Defn.Name, 0, 0, false)
 }
 
 func (o *IndexUsage) GetPartitionName() string {
@@ -4856,17 +4894,17 @@ func (p *RandomPlacement) Validate(s *Solution) error {
 
 			if numReplica > s.findNumLiveNode() {
 				if s.UseLiveData() {
-					logging.Warnf("Index has more replica than indexer nodes. Index=%v Bucket=%v",
-						index.GetDisplayName(), index.Bucket)
+					logging.Warnf("Index has more replica than indexer nodes. Index=%v Bucket=%v Scope=%v Collection=%v",
+						index.GetDisplayName(), index.Bucket, index.Scope, index.Collection)
 				} else {
-					return errors.New(fmt.Sprintf("Index has more replica than indexer nodes. Index=%v Bucket=%v",
-						index.GetDisplayName(), index.Bucket))
+					return errors.New(fmt.Sprintf("Index has more replica than indexer nodes. Index=%v Bucket=%v Scope=%v Collection=%v",
+						index.GetDisplayName(), index.Bucket, index.Scope, index.Collection))
 				}
 			}
 
 			if s.numServerGroup > 1 && numReplica > s.numServerGroup {
-				logging.Warnf("Index has more replica than server group. Index=%v Bucket=%v",
-					index.GetDisplayName(), index.Bucket)
+				logging.Warnf("Index has more replica than server group. Index=%v Bucket=%v Scope=%v Collection=%v",
+					index.GetDisplayName(), index.Bucket, index.Scope, index.Collection)
 			}
 		}
 	}
@@ -4886,8 +4924,8 @@ func (p *RandomPlacement) Validate(s *Solution) error {
 
 		//if index.GetMemTotal(s.UseLiveData()) > memQuota || index.GetCpuUsage(s.UseLiveData()) > cpuQuota {
 		if index.GetMemMin(s.UseLiveData()) > memQuota {
-			return errors.New(fmt.Sprintf("Index exceeding quota. Index=%v Bucket=%v Memory=%v Cpu=%.4f MemoryQuota=%v CpuQuota=%v",
-				index.GetDisplayName(), index.Bucket, index.GetMemMin(s.UseLiveData()), index.GetCpuUsage(s.UseLiveData()), s.getConstraintMethod().GetMemQuota(),
+			return errors.New(fmt.Sprintf("Index exceeding quota. Index=%v Bucket=%v Scope=%v Collection=%v Memory=%v Cpu=%.4f MemoryQuota=%v CpuQuota=%v",
+				index.GetDisplayName(), index.Bucket, index.Scope, index.Collection, index.GetMemMin(s.UseLiveData()), index.GetCpuUsage(s.UseLiveData()), s.getConstraintMethod().GetMemQuota(),
 				s.getConstraintMethod().GetCpuQuota()))
 		}
 
@@ -4912,8 +4950,8 @@ func (p *RandomPlacement) Validate(s *Solution) error {
 			}
 
 			if !found {
-				return errors.New(fmt.Sprintf("Cannot find an indexer with enough free memory or cpu for index. Index=%v Bucket=%v",
-					index.GetDisplayName(), index.Bucket))
+				return errors.New(fmt.Sprintf("Cannot find an indexer with enough free memory or cpu for index. Index=%v Bucket=%v Scope=%v Collection=%v",
+					index.GetDisplayName(), index.Bucket, index.Scope, index.Collection))
 			}
 		}
 	}
@@ -5292,8 +5330,8 @@ func (p *RandomPlacement) randomMoveByLoad(s *Solution, checkConstraint bool) (b
 			p.randomMoveDur += time.Now().Sub(now).Nanoseconds()
 			p.randomMoveCnt++
 
-			logging.Tracef("Planner::move1: source %v index '%v' (%v) target %v checkConstraint %v force %v",
-				source.NodeId, index.GetDisplayName(), index.Bucket, target.NodeId, checkConstraint, force)
+			logging.Tracef("Planner::move1: source %v index '%v' (%v,%v,%v) target %v checkConstraint %v force %v",
+				source.NodeId, index.GetDisplayName(), index.Bucket, index.Scope, index.Collection, target.NodeId, checkConstraint, force)
 			return true, false, force
 
 		} else {
@@ -5614,9 +5652,9 @@ func (p *RandomPlacement) randomSwap(s *Solution, sources []*IndexerNode, target
 		targetViolation := s.constraint.CanSwapIndex(s, source, targetIndex, sourceIndex)
 
 		if !checkConstraint || (sourceViolation == NoViolation && targetViolation == NoViolation) {
-			logging.Tracef("Planner::swap: source %v source index '%v' (%v) target %v target index '%v' (%v) checkConstraint %v",
-				source.NodeId, sourceIndex.GetDisplayName(), sourceIndex.Bucket,
-				target.NodeId, targetIndex.GetDisplayName(), targetIndex.Bucket, checkConstraint)
+			logging.Tracef("Planner::swap: source %v source index '%v' (%v,%v,%v) target %v target index '%v' (%v,%v,%v) checkConstraint %v",
+				source.NodeId, sourceIndex.GetDisplayName(), sourceIndex.Bucket, sourceIndex.Scope, sourceIndex.Collection,
+				target.NodeId, targetIndex.GetDisplayName(), targetIndex.Bucket, targetIndex.Scope, targetIndex.Collection, checkConstraint)
 			s.moveIndex(source, sourceIndex, target, checkConstraint)
 			s.moveIndex(target, targetIndex, source, checkConstraint)
 			return true
@@ -5702,9 +5740,9 @@ func (p *RandomPlacement) exhaustiveSwap(s *Solution, sources []*IndexerNode, ta
 							source.NodeId, target.NodeId)
 
 						if !checkConstraint || (targetViolation == NoViolation && sourceViolation == NoViolation) {
-							logging.Tracef("Planner::exhaustive swap: source %v source index '%v' (%v) target %v target index '%v' (%v) checkConstraint %v",
-								source.NodeId, sourceIndex.GetDisplayName(), sourceIndex.Bucket,
-								target.NodeId, targetIndex.GetDisplayName(), targetIndex.Bucket, checkConstraint)
+							logging.Tracef("Planner::exhaustive swap: source %v source index '%v' (%v,%v,%v) target %v target index '%v' (%v,%v,%v) checkConstraint %v",
+								source.NodeId, sourceIndex.GetDisplayName(), sourceIndex.Bucket, sourceIndex.Scope, sourceIndex.Collection,
+								target.NodeId, targetIndex.GetDisplayName(), targetIndex.Bucket, targetIndex.Scope, targetIndex.Collection, checkConstraint)
 							s.moveIndex(source, sourceIndex, target, checkConstraint)
 							s.moveIndex(target, targetIndex, source, checkConstraint)
 							return true
@@ -5749,8 +5787,8 @@ func (p *RandomPlacement) exhaustiveMove(s *Solution, sources []*IndexerNode, ta
 					force := source.isDelete || !s.constraint.SatisfyIndexHAConstraint(s, source, sourceIndex, p.GetEligibleIndexes())
 					s.moveIndex(source, sourceIndex, target, false)
 
-					logging.Tracef("Planner::exhaustive move: source %v index '%v' (%v) target %v checkConstraint %v force %v",
-						source.NodeId, sourceIndex.GetDisplayName(), sourceIndex.Bucket, target.NodeId, checkConstraint, force)
+					logging.Tracef("Planner::exhaustive move: source %v index '%v' (%v,%v,%v) target %v checkConstraint %v force %v",
+						source.NodeId, sourceIndex.GetDisplayName(), sourceIndex.Bucket, sourceIndex.Scope, sourceIndex.Collection, target.NodeId, checkConstraint, force)
 					return true, force
 				}
 				continue
@@ -5775,8 +5813,8 @@ func (p *RandomPlacement) exhaustiveMove(s *Solution, sources []*IndexerNode, ta
 					force := source.isDelete || !s.constraint.SatisfyIndexHAConstraint(s, source, sourceIndex, p.GetEligibleIndexes())
 					s.moveIndex(source, sourceIndex, target, checkConstraint)
 
-					logging.Tracef("Planner::exhaustive move2: source %v index '%v' (%v) target %v checkConstraint %v force %v",
-						source.NodeId, sourceIndex.GetDisplayName(), sourceIndex.Bucket, target.NodeId, checkConstraint, force)
+					logging.Tracef("Planner::exhaustive move2: source %v index '%v' (%v,%v,%v) target %v checkConstraint %v force %v",
+						source.NodeId, sourceIndex.GetDisplayName(), sourceIndex.Bucket, sourceIndex.Scope, sourceIndex.Collection, target.NodeId, checkConstraint, force)
 					return true, force
 
 				} else {
@@ -6197,8 +6235,8 @@ func (v *Violations) Error() string {
 	err += fmt.Sprintf("CpuQuota: %v\n", v.CpuQuota)
 
 	for _, violation := range v.Violations {
-		err += fmt.Sprintf("--- Violations for index <%v, %v> (mem %v, cpu %v) at node %v \n",
-			violation.Name, violation.Bucket, formatMemoryStr(violation.MemUsage), violation.CpuUsage, violation.NodeId)
+		err += fmt.Sprintf("--- Violations for index <%v, %v, %v, %v> (mem %v, cpu %v) at node %v \n",
+			violation.Name, violation.Bucket, violation.Scope, violation.Collection, formatMemoryStr(violation.MemUsage), violation.CpuUsage, violation.NodeId)
 
 		for _, detail := range violation.Details {
 			err += fmt.Sprintf("\t%v\n", detail)

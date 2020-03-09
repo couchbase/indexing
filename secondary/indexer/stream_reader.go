@@ -412,6 +412,7 @@ func (r *mutationStreamReader) maybeSendSync(fastpath bool) bool {
 	nWrkr := r.numWorkers
 	for bucket, _ := range hwt {
 		needSync := false
+		sessionId := uint64(0)
 		for i := 0; i < nWrkr; i++ {
 
 			r.streamWorkers[i].lock.Lock()
@@ -419,6 +420,8 @@ func (r *mutationStreamReader) maybeSendSync(fastpath bool) bool {
 			if r.streamWorkers[i].bucketSyncDue[bucket] {
 				needSync = true
 			}
+			//all workers have same sessionId, it is ok to overwrite
+			sessionId = r.streamWorkers[i].bucketSessionId[bucket]
 
 			loopCnt := 0
 			vb := 0
@@ -446,10 +449,12 @@ func (r *mutationStreamReader) maybeSendSync(fastpath bool) bool {
 		}
 		if needSync {
 			r.supvRespch <- &MsgBucketHWT{mType: STREAM_READER_HWT,
-				streamId: r.streamId,
-				bucket:   bucket,
-				ts:       hwt[bucket],
-				prevSnap: prevSnap[bucket]}
+				streamId:  r.streamId,
+				bucket:    bucket,
+				ts:        hwt[bucket],
+				prevSnap:  prevSnap[bucket],
+				sessionId: sessionId,
+			}
 			sent = true
 		}
 	}
@@ -855,7 +860,8 @@ func (w *streamWorker) checkAndSetBucketFilter(meta *MutationMeta) (bool, bool) 
 		//validate sessionId. allow opaque==0 for backward compat
 		if meta.opaque != 0 &&
 			meta.opaque != w.bucketSessionId[meta.bucket] {
-			return false, false
+			//skip the mutation
+			return true, false
 		}
 
 		if uint64(meta.seqno) < filter.Snapshots[meta.vbucket][0] ||
