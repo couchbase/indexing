@@ -26,6 +26,9 @@ type Evaluator interface {
 	// UpdateSeqnoData is generated for downstream.
 	UpdateSeqnoData(m *mc.DcpEvent, vbno uint16, vbuuid, seqno, opaque2 uint64) interface{}
 
+	// SeqnoAdvancedData is generated for downstream.
+	SeqnoAdvancedData(m *mc.DcpEvent, vbno uint16, vbuuid, seqno, opaque2 uint64) interface{}
+
 	// StreamEnd is generated for downstream.
 	StreamEndData(vbno uint16, vbuuid, seqno, opaque2 uint64) (data interface{})
 

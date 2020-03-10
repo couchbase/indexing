@@ -74,6 +74,14 @@ func (engine *Engine) UpdateSeqnoData(
 	return engine.evaluator.UpdateSeqnoData(m, vbno, vbuuid, seqno, opaque2)
 }
 
+// SeqnoAdvancedData from this engine.
+func (engine *Engine) SeqnoAdvancedData(
+	m *mc.DcpEvent, vbno uint16, vbuuid,
+	seqno uint64, opaque2 uint64) interface{} {
+
+	return engine.evaluator.SeqnoAdvancedData(m, vbno, vbuuid, seqno, opaque2)
+}
+
 // StreamEndData from this engine.
 func (engine *Engine) StreamEndData(
 	vbno uint16, vbuuid, seqno uint64, opaque2 uint64) interface{} {

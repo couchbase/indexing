@@ -32,6 +32,9 @@ const dcpJSON = uint8(0x1)
 const dcpXATTR = uint8(0x4)
 const bufferAckPeriod = 20
 
+// Length of extras when DCP seqno message is received
+const dcpSeqnoAdvExtrasLen = 8
+
 // error codes
 var ErrorInvalidLog = errors.New("couchbase.errorInvalidLog")
 
@@ -435,6 +438,15 @@ func (feed *DcpFeed) handlePacket(
 		fmsg := "%v ##%x DCP_SYSTEM_EVENT for vb %d, eventType: %v, manifestUID: %s, scopeId: %s, collectionId: %x\n"
 		logging.Debugf(fmsg, prefix, stream.AppOpaque, vb, event.EventType, event.ManifestUID, event.ScopeID, event.CollectionID)
 
+	case transport.DCP_SEQNO_ADVANCED:
+		event = newDcpEvent(pkt, stream)
+
+		if len(pkt.Extras) == dcpSeqnoAdvExtrasLen {
+			event.Seqno = binary.BigEndian.Uint64(pkt.Extras)
+		} else {
+			fmsg := "%v ##%x DCP_SEQNO_ADVANCED for vb %d. Expected extras len: %v, received: %v\n"
+			logging.Fatalf(fmsg, prefix, stream.AppOpaque, vb, dcpSeqnoAdvExtrasLen, len(pkt.Extras))
+		}
 	default:
 		fmsg := "%v opcode %v not known for vbucket %d\n"
 		logging.Warnf(fmsg, prefix, pkt.Opcode, vb)

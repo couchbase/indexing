@@ -230,7 +230,6 @@ func (ie *IndexEvaluator) SystemEventData(
 }
 
 // UpdateSeqnoData implement Evaluator{} interface.
-// DocID is misinterpreted for collectionID for this message
 func (ie *IndexEvaluator) UpdateSeqnoData(
 	m *mc.DcpEvent, vbno uint16, vbuuid, seqno uint64,
 	opaque2 uint64) (data interface{}) {
@@ -238,6 +237,17 @@ func (ie *IndexEvaluator) UpdateSeqnoData(
 	keyspaceId := ie.GetKeyspaceId()
 	kv := c.NewKeyVersions(seqno, nil, 1, 0)
 	kv.AddUpdateSeqno()
+	return &c.DataportKeyVersions{keyspaceId, vbno, vbuuid, kv, opaque2}
+}
+
+// SeqnoAdvancedData implement Evaluator{} interface.
+func (ie *IndexEvaluator) SeqnoAdvancedData(
+	m *mc.DcpEvent, vbno uint16, vbuuid, seqno uint64,
+	opaque2 uint64) (data interface{}) {
+
+	keyspaceId := ie.GetKeyspaceId()
+	kv := c.NewKeyVersions(seqno, nil, 1, 0)
+	kv.AddSeqnoAdvanced()
 	return &c.DataportKeyVersions{keyspaceId, vbno, vbuuid, kv, opaque2}
 }
 

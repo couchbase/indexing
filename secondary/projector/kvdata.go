@@ -627,6 +627,16 @@ func (kvdata *KVData) scatterMutation(
 		if err := worker.Event(m); err != nil {
 			panic(err)
 		}
+
+	case mcd.DCP_SEQNO_ADVANCED: // Propagate SeqnoAdvancedEvent to workers
+		// TODO (Collections): Add stats for DCP_SEQNO_ADVANCED
+		fmsg := "%v ##%x SeqnoAdvanced event: %v\n"
+		logging.Tracef(fmsg, kvdata.logPrefix, m.Opaque, m)
+		seqno = m.Seqno
+		if err := worker.Event(m); err != nil {
+			panic(err)
+		}
+
 	}
 	return
 }
