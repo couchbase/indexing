@@ -1,17 +1,15 @@
 // worker concurrency model:
 //
 //                           NewVbucketWorker()
-//                                   |
-//                                   |               *---> endpoint
-//                                (spawn)            |
-//                                   |               *---> endpoint
-//             Event() --*           |               |
-//                       |--------> run -------------*---> endpoint
-//        AddEngines() --*
-//                       |
-//       ResetConfig() --*
-//                       |
-//     DeleteEngines() --*
+//                                   |_________________
+//                                   |                 |
+//                                (spawn)           (spawn)
+//                                   |                 |        *---> endpoint
+//        AddEngines() --*           |                 |        |
+//                       |--------> genServer     *-> run ------*---> endpoint
+//       ResetConfig() --*                        |             |
+//                       |                        |             *---> endpoint
+//     DeleteEngines() --*                      Event()
 //                       |
 //     GetStatistics() --*
 //                       |
@@ -22,6 +20,7 @@ package projector
 import (
 	"fmt"
 	"strconv"
+	"sync"
 
 	qexpr "github.com/couchbase/query/expression"
 	qvalue "github.com/couchbase/query/value"
@@ -31,6 +30,7 @@ import (
 	mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
 
 	"os"
+	"sync/atomic"
 
 	c "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
@@ -47,14 +47,19 @@ type VbucketWorker struct {
 	keyspaceId string
 	opaque     uint16
 	config     c.Config
-	vbuckets   map[uint16]*Vbucket
+	vbuckets   *VbucketMapHolder
 	// evaluators and subscribers
-	engines   map[uint32]map[uint64]*Engine // CollectionId -> instanceId -> engine
-	endpoints map[string]c.RouterEndpoint
+	engines   *CollectionsEngineMapHolder // CollectionId -> instanceId -> engine
+	endpoints *EndpointMapHolder          // Endpoint address -> RouterEndpoint
+
+	mutex sync.Mutex // Mutex protecting the endpoint updates from genServer() and run() routines
 	// server channels
 	sbch   chan []interface{}
 	datach chan []interface{}
-	finch  chan bool
+
+	genServerStopCh chan bool
+	genServerFinCh  chan bool
+	runFinCh        chan bool
 	// config params
 	logPrefix   string
 	mutChanSize int
@@ -92,23 +97,25 @@ func NewVbucketWorker(
 	encodeBufSize := config["encodeBufSize"].Int()
 
 	worker := &VbucketWorker{
-		id:         id,
-		feed:       feed,
-		cluster:    feed.cluster,
-		topic:      feed.topic,
-		bucket:     bucket,
-		keyspaceId: keyspaceId,
-		opaque:     opaque,
-		config:     config,
-		vbuckets:   make(map[uint16]*Vbucket),
-		engines:    make(map[uint32]map[uint64]*Engine),
-		endpoints:  make(map[string]c.RouterEndpoint),
-		sbch:       make(chan []interface{}, mutChanSize),
-		datach:     make(chan []interface{}, mutChanSize),
-		finch:      make(chan bool),
-		encodeBuf:  make([]byte, 0, encodeBufSize),
-		stats:      &WorkerStats{},
-		opaque2:    opaque2,
+		id:              id,
+		feed:            feed,
+		cluster:         feed.cluster,
+		topic:           feed.topic,
+		bucket:          bucket,
+		keyspaceId:      keyspaceId,
+		opaque:          opaque,
+		config:          config,
+		vbuckets:        &VbucketMapHolder{},
+		engines:         &CollectionsEngineMapHolder{},
+		endpoints:       &EndpointMapHolder{},
+		sbch:            make(chan []interface{}, mutChanSize),
+		datach:          make(chan []interface{}, mutChanSize),
+		genServerStopCh: make(chan bool),
+		genServerFinCh:  make(chan bool),
+		runFinCh:        make(chan bool),
+		encodeBuf:       make([]byte, 0, encodeBufSize),
+		stats:           &WorkerStats{},
+		opaque2:         opaque2,
 	}
 	worker.stats.Init()
 	worker.stats.datach = worker.datach
@@ -116,7 +123,9 @@ func NewVbucketWorker(
 	fmsg := "WRKR[%v<-%v<-%v #%v]"
 	worker.logPrefix = fmt.Sprintf(fmsg, id, keyspaceId, feed.cluster, feed.topic)
 	worker.mutChanSize = mutChanSize
-	go worker.run(worker.datach, worker.sbch)
+
+	go worker.genServer(worker.sbch)
+	go worker.run(worker.datach)
 	return worker
 }
 
@@ -135,26 +144,26 @@ const (
 // Event will post an DcpEvent, asychronous call.
 func (worker *VbucketWorker) Event(m *mc.DcpEvent) error {
 	cmd := []interface{}{vwCmdEvent, m}
-	return c.FailsafeOpAsync(worker.datach, cmd, worker.finch)
+	return c.FailsafeOpAsync(worker.datach, cmd, worker.genServerStopCh)
 }
 
 // SyncPulse will trigger worker to generate a sync pulse for all its
 // vbuckets, asychronous call.
 func (worker *VbucketWorker) SyncPulse() error {
 	cmd := []interface{}{vwCmdSyncPulse}
-	return c.FailsafeOpAsync(worker.datach, cmd, worker.finch)
+	return c.FailsafeOpAsync(worker.datach, cmd, worker.genServerStopCh)
 }
 
 // GetVbuckets will return the list of active vbuckets managed by this
 // workers.
-func (worker *VbucketWorker) GetVbuckets() ([]*Vbucket, error) {
+func (worker *VbucketWorker) GetVbuckets() (map[uint16]*Vbucket, error) {
 	respch := make(chan []interface{}, 1)
 	cmd := []interface{}{vwCmdGetVbuckets, respch}
-	resp, err := c.FailsafeOp(worker.sbch, respch, cmd, worker.finch)
+	resp, err := c.FailsafeOp(worker.sbch, respch, cmd, worker.genServerStopCh)
 	if err != nil {
 		return nil, err
 	}
-	return resp[0].([]*Vbucket), nil
+	return resp[0].(map[uint16]*Vbucket), nil
 }
 
 // AddEngines update active set of engines and endpoints, synchronous call.
@@ -165,7 +174,7 @@ func (worker *VbucketWorker) AddEngines(
 
 	respch := make(chan []interface{}, 1)
 	cmd := []interface{}{vwCmdAddEngines, opaque, engines, endpoints, respch}
-	resp, err := c.FailsafeOp(worker.sbch, respch, cmd, worker.finch)
+	resp, err := c.FailsafeOp(worker.sbch, respch, cmd, worker.genServerStopCh)
 	if err != nil {
 		return nil, err
 	}
@@ -179,7 +188,7 @@ func (worker *VbucketWorker) DeleteEngines(
 
 	respch := make(chan []interface{}, 1)
 	cmd := []interface{}{vwCmdDelEngines, opaque, engines, collectionIds, respch}
-	_, err := c.FailsafeOp(worker.sbch, respch, cmd, worker.finch)
+	_, err := c.FailsafeOp(worker.sbch, respch, cmd, worker.genServerStopCh)
 	return err
 }
 
@@ -187,7 +196,7 @@ func (worker *VbucketWorker) DeleteEngines(
 func (worker *VbucketWorker) ResetConfig(config c.Config) error {
 	respch := make(chan []interface{}, 1)
 	cmd := []interface{}{vwCmdResetConfig, config, respch}
-	_, err := c.FailsafeOp(worker.sbch, respch, cmd, worker.finch)
+	_, err := c.FailsafeOp(worker.sbch, respch, cmd, worker.genServerStopCh)
 	return err
 }
 
@@ -195,7 +204,7 @@ func (worker *VbucketWorker) ResetConfig(config c.Config) error {
 func (worker *VbucketWorker) GetStatistics() (map[string]interface{}, error) {
 	respch := make(chan []interface{}, 1)
 	cmd := []interface{}{vwCmdGetStats, respch}
-	resp, err := c.FailsafeOp(worker.sbch, respch, cmd, worker.finch)
+	resp, err := c.FailsafeOp(worker.sbch, respch, cmd, worker.genServerStopCh)
 	if err != nil {
 		return nil, err
 	}
@@ -206,15 +215,15 @@ func (worker *VbucketWorker) GetStatistics() (map[string]interface{}, error) {
 func (worker *VbucketWorker) Close() error {
 	respch := make(chan []interface{}, 1)
 	cmd := []interface{}{vwCmdClose, respch}
-	_, err := c.FailsafeOp(worker.sbch, respch, cmd, worker.finch)
+	_, err := c.FailsafeOp(worker.sbch, respch, cmd, worker.genServerStopCh)
 	return err
 }
 
 // routine handles data path for a single worker handling one
 // or more vbuckets.
-func (worker *VbucketWorker) run(datach, sbch chan []interface{}) {
+func (worker *VbucketWorker) run(datach chan []interface{}) {
 	logPrefix := worker.logPrefix
-	logging.Infof("%v started ...", logPrefix)
+	logging.Infof("%v run() started ...", logPrefix)
 
 	defer func() { // panic safe
 		if r := recover(); r != nil {
@@ -222,32 +231,27 @@ func (worker *VbucketWorker) run(datach, sbch chan []interface{}) {
 			logging.Fatalf(fmsg, logPrefix, worker.opaque, r)
 			logging.Errorf("%v", logging.StackTrace())
 		}
+		engines := worker.engines.Get()
+		vbuckets := worker.vbuckets.Get()
 		// call out a STREAM-END for active vbuckets.
-		for _, v := range worker.vbuckets {
-			if data := v.makeStreamEndData(worker.engines); data != nil {
+		for _, v := range vbuckets {
+			if data := v.makeStreamEndData(engines); data != nil {
 				worker.broadcast2Endpoints(data)
 			} else {
 				fmsg := "%v ##%x StreamEnd NOT PUBLISHED vb %v\n"
 				logging.Errorf(fmsg, logPrefix, worker.opaque, v.vbno)
 			}
 		}
-		close(worker.finch)
+		// In case run() exits first, close genServerFinCh to terminate
+		// genServer()
+		close(worker.genServerFinCh)
 		worker.stats.closed.Set(true)
-		logging.Infof("%v ##%x ##%v ... stopped\n", logPrefix,
+		logging.Infof("%v ##%x ##%v run()... stopped\n", logPrefix,
 			worker.opaque, worker.opaque2)
 	}()
 
 loop:
 	for {
-		// Prioritize control channel over other channels
-		select {
-		case msg := <-sbch:
-			if breakloop := worker.handleCommand(msg); breakloop {
-				break loop
-			}
-		default:
-		}
-
 		select {
 		case msg := <-datach:
 			cmd := msg[0].(byte)
@@ -260,9 +264,6 @@ loop:
 					fmsg := "%v ##%x nil vbucket %v for %v"
 					logging.Errorf(fmsg, logPrefix, m.Opaque, m.VBucket, m.Opcode)
 
-				} else if m.Opcode == mcd.DCP_STREAMEND {
-					delete(worker.vbuckets, v.vbno)
-
 				} else if m.Opaque != v.opaque {
 					fmsg := "%v ##%x mismatch with vbucket, vb:%v. ##%x %v"
 					logging.Fatalf(fmsg, logPrefix, m.Opaque, v.vbno, v.opaque, m.Opcode)
@@ -271,9 +272,12 @@ loop:
 				}
 
 			case vwCmdSyncPulse:
-				for _, v := range worker.vbuckets {
-					if data := v.makeSyncData(worker.engines); data != nil {
-						v.syncCount++
+				engines := worker.engines.Get()
+				vbuckets := worker.vbuckets.Get()
+
+				for _, v := range vbuckets {
+					if data := v.makeSyncData(engines); data != nil {
+						atomic.AddUint64(&v.syncCount, 1)
 						fmsg := "%v ##%x sync count %v\n"
 						logging.Tracef(fmsg, v.logPrefix, v.opaque, v.syncCount)
 						worker.broadcast2Endpoints(data)
@@ -284,10 +288,41 @@ loop:
 					}
 				}
 			}
+		case <-worker.runFinCh:
+			break loop
+		}
+	}
+}
+
+func (worker *VbucketWorker) genServer(sbch chan []interface{}) {
+	logPrefix := worker.logPrefix
+	logging.Infof("%v genServer() started ...", logPrefix)
+
+	defer func() { // panic safe
+		if r := recover(); r != nil {
+			fmsg := "%v ##%x genServer() crashed: %v\n"
+			logging.Fatalf(fmsg, logPrefix, worker.opaque, r)
+			logging.Errorf("%v", logging.StackTrace())
+		}
+
+		// Close genServerStopCh so that all new incoming messages
+		// will return
+		close(worker.genServerStopCh)
+		close(worker.runFinCh)
+		logging.Infof("%v ##%x ##%v genServer()... stopped\n", logPrefix,
+			worker.opaque, worker.opaque2)
+	}()
+
+loop:
+	for {
+		select {
 		case msg := <-sbch:
 			if breakloop := worker.handleCommand(msg); breakloop {
 				break loop
 			}
+
+		case <-worker.genServerFinCh:
+			break loop
 		}
 	}
 }
@@ -296,41 +331,42 @@ func (worker *VbucketWorker) handleCommand(msg []interface{}) bool {
 	cmd := msg[0].(byte)
 	switch cmd {
 	case vwCmdGetVbuckets:
-		vbuckets := make([]*Vbucket, 0, len(worker.vbuckets))
-		for _, v := range worker.vbuckets {
-			vbuckets = append(vbuckets, v)
-		}
+
+		vbuckets := CloneVbucketMap(worker.vbuckets.Get())
 		respch := msg[1].(chan []interface{})
 		respch <- []interface{}{vbuckets}
 
 	case vwCmdAddEngines:
-		// TODO (Collections): With 10,000 indexes in place, it is
-		// probably not a good idea to have a new map for each
-		// add engines request (especially for MAINT_STREAM).
-		// However, for MB-33849, it might be a good idea to
-		// initialize a new map. Need to evaluate the impact of this change
-		worker.engines = make(map[uint32]map[uint64]*Engine)
+		engines := make(map[uint32]EngineMap)
 		opaque := msg[1].(uint16)
 		if msg[2] != nil {
 			fmsg := "%v ##%x AddEngine %v\n"
 			for uuid, engine := range msg[2].(map[uint64]*Engine) {
 				cid := getCidAsUint32(engine.GetCollectionID())
-				if _, ok := worker.engines[cid]; !ok {
-					worker.engines[cid] = make(map[uint64]*Engine)
+				if _, ok := engines[cid]; !ok {
+					engines[cid] = make(EngineMap)
 				}
-				worker.engines[cid][uuid] = engine
+				engines[cid][uuid] = engine
 				logging.Tracef(fmsg, worker.logPrefix, opaque, uuid)
 			}
-			worker.printCtrl(worker.engines)
+			worker.engines.Set(engines)
+			worker.printCtrl(worker.engines.Get())
 		}
 		if msg[3] != nil {
-			endpoints := msg[3].(map[string]c.RouterEndpoint)
-			worker.endpoints = worker.updateEndpoints(opaque, endpoints)
-			worker.printCtrl(worker.endpoints)
+			func() {
+				worker.mutex.Lock()
+				defer worker.mutex.Unlock()
+
+				endpoints := msg[3].(map[string]c.RouterEndpoint)
+				eps := worker.updateEndpoints(opaque, endpoints)
+				worker.endpoints.Set(eps)
+			}()
+			worker.printCtrl(worker.endpoints.Get())
 		}
 		cseqnos := make(map[uint16]uint64)
-		for _, v := range worker.vbuckets {
-			cseqnos[v.vbno] = v.seqno
+		vbuckets := worker.vbuckets.Get()
+		for _, v := range vbuckets {
+			cseqnos[v.vbno] = atomic.LoadUint64(&v.seqno)
 		}
 		respch := msg[4].(chan []interface{})
 		respch <- []interface{}{cseqnos}
@@ -342,14 +378,16 @@ func (worker *VbucketWorker) handleCommand(msg []interface{}) bool {
 		engineKeys := msg[2].([]uint64)
 		collectionIds := msg[3].([]uint32)
 		fmsg = "%v ##%x DelEngine %v\n"
+		engines := CloneEngines(worker.engines.Get())
 		for i, uuid := range engineKeys {
 			cid := collectionIds[i]
-			delete(worker.engines[cid], uuid)
-			if len(worker.engines[cid]) == 0 {
-				delete(worker.engines, cid)
+			delete(engines[cid], uuid)
+			if len(engines[cid]) == 0 {
+				delete(engines, cid)
 			}
 			logging.Tracef(fmsg, worker.logPrefix, opaque, uuid)
 		}
+		worker.engines.Set(engines)
 
 		fmsg = "%v ##%x deleted engines %v\n"
 		logging.Tracef(fmsg, worker.logPrefix, opaque, engineKeys)
@@ -359,11 +397,12 @@ func (worker *VbucketWorker) handleCommand(msg []interface{}) bool {
 	case vwCmdGetStats:
 		logging.Tracef("%v vwCmdStatistics\n", worker.logPrefix)
 		stats := make(map[string]interface{})
-		for vbno, v := range worker.vbuckets {
+		vbuckets := worker.vbuckets.Get()
+		for vbno, v := range vbuckets {
 			stats[strconv.Itoa(int(vbno))] = map[string]interface{}{
-				"syncs":     float64(v.syncCount),
-				"snapshots": float64(v.sshotCount),
-				"mutations": float64(v.mutationCount),
+				"syncs":     float64(atomic.LoadUint64(&v.syncCount)),
+				"snapshots": float64(atomic.LoadUint64(&v.sshotCount)),
+				"mutations": float64(atomic.LoadUint64(&v.mutationCount)),
 			}
 		}
 		respch := msg[1].(chan []interface{})
@@ -387,8 +426,9 @@ func (worker *VbucketWorker) updateEndpoints(
 	opaque uint16,
 	eps map[string]c.RouterEndpoint) map[string]c.RouterEndpoint {
 
+	engines := worker.engines.Get()
 	endpoints := make(map[string]c.RouterEndpoint)
-	for _, enginesPerColl := range worker.engines {
+	for _, enginesPerColl := range engines {
 		for _, engine := range enginesPerColl {
 			for _, raddr := range engine.Endpoints() {
 				if _, ok := eps[raddr]; !ok {
@@ -416,9 +456,11 @@ func (worker *VbucketWorker) handleEvent(m *mc.DcpEvent) *Vbucket {
 		}
 	}()
 
+	vbuckets := worker.vbuckets.Get()
 	vbno := m.VBucket
-	v, vbok := worker.vbuckets[vbno]
+	v, vbok := vbuckets[vbno]
 	logPrefix := worker.logPrefix
+	allEngines := worker.engines.Get()
 
 	logging.LazyTrace(func() string {
 		return fmt.Sprintf(traceMutFormat, logPrefix, m.Opaque, m.Seqno, m.Opcode, logging.TagUD(m.Key))
@@ -443,10 +485,12 @@ func (worker *VbucketWorker) handleEvent(m *mc.DcpEvent) *Vbucket {
 			m.Seqno, config, worker.opaque2, worker.osoSnapshot)
 
 		if m.Status == mcd.SUCCESS {
-			worker.vbuckets[vbno] = v
+			vbs := CloneVbucketMap(vbuckets)
+			vbs[vbno] = v
+			worker.vbuckets.Set(vbs)
 		}
 
-		if data := v.makeStreamBeginData(worker.engines,
+		if data := v.makeStreamBeginData(allEngines,
 			byte(v.mcStatus2StreamStatus(m.Status)), byte(m.Status)); data != nil {
 			worker.broadcast2Endpoints(data)
 		} else {
@@ -461,9 +505,9 @@ func (worker *VbucketWorker) handleEvent(m *mc.DcpEvent) *Vbucket {
 			logging.Errorf(fmsg, logPrefix, m.Opaque, vbno)
 			return v
 		}
-		if data := v.makeSnapshotData(m, worker.engines); data != nil {
+		if data := v.makeSnapshotData(m, allEngines); data != nil {
 			worker.broadcast2Endpoints(data)
-			v.sshotCount++
+			atomic.AddUint64(&v.sshotCount, 1)
 		} else {
 			fmsg := "%v ##%x Snapshot NOT PUBLISHED for vbucket %v\n"
 			logging.Errorf(fmsg, logPrefix, m.Opaque, vbno)
@@ -476,10 +520,10 @@ func (worker *VbucketWorker) handleEvent(m *mc.DcpEvent) *Vbucket {
 			logging.Errorf(fmsg, logPrefix, m.Opaque, m.VBucket)
 			return v
 		}
-		v.mutationCount++
-		v.seqno = m.Seqno // sequence number gets updated only here
+		atomic.AddUint64(&v.mutationCount, 1)
+		atomic.StoreUint64(&v.seqno, m.Seqno)
 
-		processMutation := func(engines map[uint64]*Engine) {
+		processMutation := func(collEngines EngineMap) {
 			// prepare a data for each endpoint.
 			dataForEndpoints := make(map[string]interface{})
 			// for each engine distribute transformations to endpoints.
@@ -493,7 +537,7 @@ func (worker *VbucketWorker) handleEvent(m *mc.DcpEvent) *Vbucket {
 
 			context := qexpr.NewIndexContext()
 			docval := qvalue.NewAnnotatedValue(nvalue)
-			for _, engine := range engines {
+			for _, engine := range collEngines {
 				// Slices in KeyVersions struct are updated for all the indexes
 				// belonging to this keyspace. Hence, pre-allocate the memory for
 				// slices with number of indexes instead of expanding the slice
@@ -501,7 +545,7 @@ func (worker *VbucketWorker) handleEvent(m *mc.DcpEvent) *Vbucket {
 				// therefore reduces the garbage generated.
 				newBuf, err := engine.TransformRoute(
 					v.vbuuid, m, dataForEndpoints, worker.encodeBuf, docval, context,
-					len(engines), worker.opaque2, worker.osoSnapshot,
+					len(collEngines), worker.opaque2, worker.osoSnapshot,
 				)
 				if err != nil {
 					fmsg := "%v ##%x TransformRoute: %v for index %v docid %s\n"
@@ -513,9 +557,10 @@ func (worker *VbucketWorker) handleEvent(m *mc.DcpEvent) *Vbucket {
 					worker.encodeBuf = newBuf[:0]
 				}
 			}
+			endpoints := worker.endpoints.Get()
 			// send data to corresponding endpoint.
 			for raddr, data := range dataForEndpoints {
-				if endpoint, ok := worker.endpoints[raddr]; ok {
+				if endpoint, ok := endpoints[raddr]; ok {
 					// FIXME: without the coordinator doing shared topic
 					// management, we will allow the feed to block.
 					// Otherwise, send might fail due to ErrorChannelFull
@@ -523,23 +568,33 @@ func (worker *VbucketWorker) handleEvent(m *mc.DcpEvent) *Vbucket {
 					if err := endpoint.Send(data); err != nil {
 						fmsg := "%v ##%x endpoint(%q).Send() failed: %v"
 						logging.Debugf(fmsg, logPrefix, worker.opaque, raddr, err)
-						endpoint.Close()
-						delete(worker.endpoints, raddr)
+						func() {
+							worker.mutex.Lock()
+							defer worker.mutex.Unlock()
+
+							endpoint.Close()
+							eps := CloneEndpoints(worker.endpoints.Get())
+							if _, ok := eps[raddr]; ok {
+								delete(eps, raddr)
+								worker.endpoints.Set(eps)
+							}
+						}()
 					}
 				}
 			}
+
 		}
 
 		// If the mutation belongs to a collection other than the
 		// ones that are being processed at worker, send UpdateSeqno
 		// message to indexer
 		// The else case should get executed only incase of MAINT_STREAM
-		if engines, ok := worker.engines[m.CollectionID]; ok {
-			processMutation(engines)
+		if collEngines, ok := allEngines[m.CollectionID]; ok {
+			processMutation(collEngines)
 		} else {
 			// Generate updateSeqno message and propagate it to indexer
 			worker.stats.updateSeqno.Add(1)
-			if data := v.makeUpdateSeqnoData(m, worker.engines); data != nil {
+			if data := v.makeUpdateSeqnoData(m, allEngines); data != nil {
 				worker.broadcast2Endpoints(data)
 			} else {
 				fmsg := "%v ##%x SYSTEM_EVENT: %v NOT PUBLISHED for vbucket %v\n"
@@ -553,8 +608,8 @@ func (worker *VbucketWorker) handleEvent(m *mc.DcpEvent) *Vbucket {
 			logging.Errorf(fmsg, logPrefix, m.Opaque, vbno)
 			return v
 		}
-		v.seqno = m.Seqno // update seqno for system event
-		if data := v.makeSystemEventData(m, worker.engines); data != nil {
+		atomic.StoreUint64(&v.seqno, m.Seqno) // update seqno for system event
+		if data := v.makeSystemEventData(m, allEngines); data != nil {
 			worker.broadcast2Endpoints(data)
 		} else {
 			fmsg := "%v ##%x SYSTEM_EVENT: %v NOT PUBLISHED for vbucket %v\n"
@@ -567,8 +622,8 @@ func (worker *VbucketWorker) handleEvent(m *mc.DcpEvent) *Vbucket {
 			logging.Errorf(fmsg, logPrefix, m.Opaque, vbno)
 			return v
 		}
-		v.seqno = m.Seqno // update seqno for seqno advanced
-		if data := v.makeSeqnoAdvancedEvent(m, worker.engines); data != nil {
+		atomic.StoreUint64(&v.seqno, m.Seqno) // update seqno for seqno advanced
+		if data := v.makeSeqnoAdvancedEvent(m, allEngines); data != nil {
 			worker.broadcast2Endpoints(data)
 		} else {
 			fmsg := "%v ##%x SEQNO_ADVANCED: %v NOT PUBLISHED for vbucket %v\n"
@@ -581,7 +636,7 @@ func (worker *VbucketWorker) handleEvent(m *mc.DcpEvent) *Vbucket {
 			logging.Errorf(fmsg, logPrefix, m.Opaque, vbno)
 			return v
 		}
-		if data := v.makeOSOSnapshotEvent(m, worker.engines); data != nil {
+		if data := v.makeOSOSnapshotEvent(m, allEngines); data != nil {
 			worker.broadcast2Endpoints(data)
 		} else {
 			fmsg := "%v ##%x OSO_SNAPSHOT: %v NOT PUBLISHED for vbucket %v\n"
@@ -589,22 +644,29 @@ func (worker *VbucketWorker) handleEvent(m *mc.DcpEvent) *Vbucket {
 		}
 
 	case mcd.DCP_STREAMEND:
-		if vbok {
-			if data := v.makeStreamEndData(worker.engines); data != nil {
-				worker.broadcast2Endpoints(data)
-			} else {
-				fmsg := "%v ##%x StreamEnd NOT PUBLISHED vb %v\n"
-				logging.Errorf(fmsg, logPrefix, worker.opaque, v.vbno)
-			}
-			delete(worker.vbuckets, vbno)
+		if !vbok {
+			fmsg := "%v ##%x vbucket %v not started. Received StreamEnd\n"
+			logging.Errorf(fmsg, logPrefix, m.Opaque, vbno)
+			return v
 		}
+		if data := v.makeStreamEndData(allEngines); data != nil {
+			worker.broadcast2Endpoints(data)
+		} else {
+			fmsg := "%v ##%x StreamEnd NOT PUBLISHED vb %v\n"
+			logging.Errorf(fmsg, logPrefix, worker.opaque, v.vbno)
+		}
+		vbs := CloneVbucketMap(worker.vbuckets.Get())
+		delete(vbs, vbno)
+		worker.vbuckets.Set(vbs)
 	}
 	return v
 }
 
 // send to all endpoints.
 func (worker *VbucketWorker) broadcast2Endpoints(data interface{}) {
-	for raddr, endpoint := range worker.endpoints {
+	endpoints := worker.endpoints.Get()
+
+	for raddr, endpoint := range endpoints {
 		// FIXME: without the coordinator doing shared topic
 		// management, we will allow the feed to block.
 		// Otherwise, send might fail due to ErrorChannelFull
@@ -612,8 +674,18 @@ func (worker *VbucketWorker) broadcast2Endpoints(data interface{}) {
 		if err := endpoint.Send(data); err != nil {
 			fmsg := "%v ##%x endpoint(%q).Send() failed: %v"
 			logging.Debugf(fmsg, worker.logPrefix, worker.opaque, raddr, err)
-			endpoint.Close()
-			delete(worker.endpoints, raddr)
+
+			func() {
+				worker.mutex.Lock()
+				defer worker.mutex.Unlock()
+
+				endpoint.Close()
+				eps := CloneEndpoints(worker.endpoints.Get())
+				if _, ok := eps[raddr]; ok {
+					delete(eps, raddr)
+					worker.endpoints.Set(eps)
+				}
+			}()
 		}
 	}
 }
@@ -625,7 +697,7 @@ func (worker *VbucketWorker) printCtrl(v interface{}) {
 			fmsg := "%v ##%x knows endpoint %v\n"
 			logging.Tracef(fmsg, worker.logPrefix, worker.opaque, raddr)
 		}
-	case map[uint32]map[uint64]*Engine:
+	case map[uint32]EngineMap:
 		for cid := range val {
 			for uuid := range val[cid] {
 				fmsg := "%v ##%x cid %v knows engine %v\n"
