@@ -327,6 +327,9 @@ func ConvertToIndexUsage(config common.Config, defn *common.IndexDefn, localMeta
 				// create an index usage object
 				index := makeIndexUsageFromDefn(defn, common.IndexInstId(inst.InstId), common.PartitionId(partn.PartId), uint64(inst.NumPartitions))
 
+				// Copy the index state from the instance to IndexUsage.
+				index.state = state
+
 				// index is pinned to a node
 				if len(defn.Nodes) != 0 {
 					index.Hosts = defn.Nodes

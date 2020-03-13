@@ -81,6 +81,11 @@ const (
 	ExcludeNodeViolation               = "ExcludeNodeViolation"
 )
 
+const (
+	EMPTY_INDEX_DATASIZE = 8
+	EMPTY_INDEX_MEMUSAGE = 8
+)
+
 //////////////////////////////////////////////////////////////
 // Interface
 //////////////////////////////////////////////////////////////
@@ -256,6 +261,9 @@ type IndexUsage struct {
 
 	// mutable: hint for placement / constraint
 	suppressEquivIdxCheck bool
+
+	// Copy of the index state from the corresponding index instance.
+	state common.IndexState
 }
 
 type Solution struct {
@@ -2719,6 +2727,14 @@ func (s *Solution) generateReplicaMap() {
 // 1) Using ConstraintMethod, indexes/Partitions will more likely to move to indexers with more free memory
 // 2) Using CostMethod, partitions will likely to spread out to minimize memory variation
 //
+// Empty Index:
+// When an index is empty, it can have DataSize and MemUsage as zero (Actual or otherwise). Note that
+// this can heppen with MOI index created on a bucket which never had any mutations). For such indexes,
+// the index state will be ACTIVE. So, there is no need to estimate the size of such indexes.
+// But the planner cannot work with zero sized indexes. And the above mentioned strategy (i.e. index will
+// take up the remaining free memory of all indexers) will not work - as it misrepresent the actual
+// size of the index. So, size of the empty index will be estimated to some small constant value.
+//
 // Caveats:
 // 1) When placing the new index onto a cluster with existing NoUsageInfo (deferred) index, the existing
 //    index will also need to be sized.   The existing index is assumed to have the similar size as
@@ -2737,13 +2753,19 @@ func (s *Solution) runSizeEstimation(placement PlacementMethod) {
 
 			for _, index := range indexer.Indexes {
 				if index.NoUsageInfo {
-					if index.Instance != nil && index.Instance.Pc != nil && common.IsPartitioned(index.Instance.Defn.PartitionScheme) {
-						index.EstimatedMemUsage = estimatedIndexSize / uint64(index.Instance.Pc.GetNumPartitions())
-						index.EstimatedDataSize = index.EstimatedMemUsage
+					if index.state == common.INDEX_STATE_ACTIVE {
+						index.EstimatedDataSize = EMPTY_INDEX_DATASIZE
+						index.EstimatedMemUsage = EMPTY_INDEX_MEMUSAGE
 					} else {
-						index.EstimatedMemUsage = estimatedIndexSize
-						index.EstimatedDataSize = index.EstimatedMemUsage
+						if index.Instance != nil && index.Instance.Pc != nil && common.IsPartitioned(index.Instance.Defn.PartitionScheme) {
+							index.EstimatedMemUsage = estimatedIndexSize / uint64(index.Instance.Pc.GetNumPartitions())
+							index.EstimatedDataSize = index.EstimatedMemUsage
+						} else {
+							index.EstimatedMemUsage = estimatedIndexSize
+							index.EstimatedDataSize = index.EstimatedMemUsage
+						}
 					}
+
 					indexer.AddMemUsageOverhead(s, index.EstimatedMemUsage, 0, index.EstimatedMemUsage)
 					indexer.AddDataSize(s, index.EstimatedDataSize)
 				}
