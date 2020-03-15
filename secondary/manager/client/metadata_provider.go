@@ -4403,9 +4403,9 @@ func (r *metadataRepo) resolveIndexStats(indexerId c.IndexerId, stats c.Statisti
 	// if the index is being rebalanced, this will only look at the active instance with the highest instance version.
 	for _, meta := range r.indices {
 		for _, inst := range meta.Instances {
-			name := c.FormatIndexInstDisplayName(meta.Definition.Name, int(inst.ReplicaId))
-			// TODO: Introduce collection specific info in prefix.
-			prefix := fmt.Sprintf("%s:%s:", meta.Definition.Bucket, name)
+
+			prefix := c.GetStatsPrefix(meta.Definition.Bucket, meta.Definition.Scope,
+				meta.Definition.Collection, meta.Definition.Name, int(inst.ReplicaId), 0, false)
 
 			for statName, statVal := range stats {
 				if strings.HasPrefix(statName, prefix) {
