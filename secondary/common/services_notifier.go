@@ -166,6 +166,8 @@ func NewServicesChangeNotifier(clusterUrl, pool string) (*ServicesChangeNotifier
 		singletonServicesContainer.notifiers[id] = instance
 		go instance.RunPoolObserver()
 		go instance.RunServicesObserver()
+		// TODO (Collections): Add a go-routine to observe streaming endpoint for collections
+		// manifest. As of this patch, waiting for ns_server to provide the endpoint
 	}
 
 	notifier := singletonServicesContainer.notifiers[id]

@@ -1,32 +1,35 @@
 package common
 
-import "errors"
-import "expvar"
-import "fmt"
-import "io"
-import "io/ioutil"
-import "path/filepath"
-import "net"
-import "net/url"
-import "os"
-import "strconv"
-import "strings"
-import "net/http"
-import "net/http/pprof"
-import "runtime"
-import "hash/crc64"
-import "reflect"
-import "unsafe"
-import "regexp"
-import "time"
-import "math/big"
+import (
+	"errors"
+	"expvar"
+	"fmt"
+	"github.com/couchbase/indexing/secondary/common/collections"
+	"hash/crc64"
+	"io"
+	"io/ioutil"
+	"math/big"
+	"net"
+	"net/http"
+	"net/http/pprof"
+	"net/url"
+	"os"
+	"path/filepath"
+	"reflect"
+	"regexp"
+	"runtime"
+	"strconv"
+	"strings"
+	"time"
+	"unsafe"
 
-import "github.com/couchbase/cbauth"
-import "github.com/couchbase/cbauth/cbauthimpl"
-import "github.com/couchbase/indexing/secondary/dcp"
-import "github.com/couchbase/indexing/secondary/dcp/transport/client"
-import "github.com/couchbase/indexing/secondary/logging"
-import "github.com/couchbase/indexing/secondary/security"
+	"github.com/couchbase/cbauth"
+	"github.com/couchbase/cbauth/cbauthimpl"
+	"github.com/couchbase/indexing/secondary/dcp"
+	"github.com/couchbase/indexing/secondary/dcp/transport/client"
+	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/security"
+)
 
 const IndexNamePattern = "^[A-Za-z0-9#_-]+$"
 
@@ -764,6 +767,83 @@ func GetBucketUUID(cluster, bucket string) (string, error) {
 	}
 
 	return cinfo.GetBucketUUID(bucket), nil
+}
+
+//
+// This method will fetch the collectionID.  If this method returns an error,
+// then it means that the node is not able to connect in order to fetch
+// the collectionID
+func GetCollectionID(cluster, bucket, scope, collection string) (string, error) {
+	url, err := ClusterAuthUrl(cluster)
+	if err != nil {
+		return collections.COLLECTION_ID_NIL, err
+	}
+
+	cinfo, err := NewClusterInfoCache(url, "default")
+	if err != nil {
+		return collections.COLLECTION_ID_NIL, err
+	}
+
+	cinfo.Lock()
+	defer cinfo.Unlock()
+
+	if err := cinfo.Fetch(); err != nil {
+		return collections.COLLECTION_ID_NIL, err
+	}
+
+	return cinfo.GetCollectionID(bucket, scope, collection), nil
+}
+
+//
+// This method will fetch the scopeID.  If this method returns an error,
+// then it means that the node is not able to connect in order to fetch
+//
+func GetScopeID(cluster, bucket, scope string) (string, error) {
+	url, err := ClusterAuthUrl(cluster)
+	if err != nil {
+		return collections.SCOPE_ID_NIL, err
+	}
+
+	cinfo, err := NewClusterInfoCache(url, "default")
+	if err != nil {
+		return collections.SCOPE_ID_NIL, err
+	}
+
+	cinfo.Lock()
+	defer cinfo.Unlock()
+
+	if err := cinfo.Fetch(); err != nil {
+		return collections.SCOPE_ID_NIL, err
+	}
+
+	return cinfo.GetScopeID(bucket, scope), nil
+}
+
+//
+// This method will fetch the scope and collection ID.  If this method
+// returns an error, then it means that the node is not able to connect
+// in order to fetch
+//
+func GetScopeAndCollectionID(cluster, bucket, scope, collection string) (string, string, error) {
+	url, err := ClusterAuthUrl(cluster)
+	if err != nil {
+		return collections.SCOPE_ID_NIL, collections.COLLECTION_ID_NIL, err
+	}
+
+	cinfo, err := NewClusterInfoCache(url, "default")
+	if err != nil {
+		return collections.SCOPE_ID_NIL, collections.COLLECTION_ID_NIL, err
+	}
+
+	cinfo.Lock()
+	defer cinfo.Unlock()
+
+	if err := cinfo.Fetch(); err != nil {
+		return collections.SCOPE_ID_NIL, collections.COLLECTION_ID_NIL, err
+	}
+
+	sid, cid := cinfo.GetScopeAndCollectionID(bucket, scope, collection)
+	return sid, cid, nil
 }
 
 func FileSize(name string) (int64, error) {

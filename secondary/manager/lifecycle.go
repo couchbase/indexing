@@ -3116,6 +3116,67 @@ RETRY:
 	return uuid, nil
 }
 
+// This function returns an error if it cannot connect for fetching manifest info.
+// It returns COLLECTION_ID_NIL (err == nil) if collection does not exist.
+//
+func (m *LifecycleMgr) getCollectionID(bucket, scope, collection string) (string, error) {
+	count := 0
+RETRY:
+	colldId, err := common.GetCollectionID(m.clusterURL, bucket, scope, collection)
+	if err != nil && count < 5 {
+		count++
+		time.Sleep(time.Duration(100) * time.Millisecond)
+		goto RETRY
+	}
+
+	if err != nil {
+		return "", err
+	}
+
+	return colldId, nil
+}
+
+// This function returns an error if it cannot connect for fetching manifest info.
+// It returns SCOPE_ID_NIL (err == nil) if scope does not exist.
+//
+func (m *LifecycleMgr) getScopeID(bucket, scope string) (string, error) {
+	count := 0
+RETRY:
+	scopeId, err := common.GetScopeID(m.clusterURL, bucket, scope)
+	if err != nil && count < 5 {
+		count++
+		time.Sleep(time.Duration(100) * time.Millisecond)
+		goto RETRY
+	}
+
+	if err != nil {
+		return "", err
+	}
+
+	return scopeId, nil
+}
+
+// This function returns an error if it cannot connect for fetching manifest info.
+// It returns SCOPE_ID_NIL, COLLECTION_ID_NIL (err == nil) if scope, collection does
+// not exist.
+//
+func (m *LifecycleMgr) getScopeAndCollectionID(bucket, scope, collection string) (string, string, error) {
+	count := 0
+RETRY:
+	scopeId, colldId, err := common.GetScopeAndCollectionID(m.clusterURL, bucket, scope, collection)
+	if err != nil && count < 5 {
+		count++
+		time.Sleep(time.Duration(100) * time.Millisecond)
+		goto RETRY
+	}
+
+	if err != nil {
+		return "", "", err
+	}
+
+	return scopeId, colldId, nil
+}
+
 // This function ensures:
 // 1) Bucket exists
 // 2) Existing Index Definition matches the UUID of exixisting bucket
