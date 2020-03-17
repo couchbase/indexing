@@ -298,7 +298,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	}
 
 	//Start KV Sender
-	idx.kvSender, res = NewKVSender(idx.kvSenderCmdCh, idx.wrkrRecvCh, idx.config)
+	idx.kvSender, res = NewKVSender(idx.kvSenderCmdCh, idx.wrkrRecvCh, idx.config, idx.clusterInfoClient)
 	if res.GetMsgType() != MSG_SUCCESS {
 		logging.Fatalf("Indexer::NewIndexer KVSender Init Error %+v", res)
 		return nil, res
