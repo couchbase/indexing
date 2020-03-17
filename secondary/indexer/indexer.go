@@ -173,6 +173,8 @@ type indexer struct {
 
 	enableSecurityChange chan bool
 
+	clusterInfoClient *common.ClusterInfoClient
+
 	testServRunning bool
 }
 
@@ -282,6 +284,11 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	idx.initFromConfig()
 
 	logging.Infof("Indexer::NewIndexer Starting with Vbuckets %v", idx.config["numVbuckets"].Int())
+
+	idx.clusterInfoClient, err = common.NewClusterInfoClient(idx.config["clusterAddr"].String(), DEFAULT_POOL, idx.config)
+	if err != nil {
+		common.CrashOnError(err)
+	}
 
 	//Start Mutation Manager
 	idx.mutMgr, res = NewMutationManager(idx.mutMgrCmdCh, idx.wrkrRecvCh, idx.config)
@@ -1384,7 +1391,7 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 		return
 	}
 
-	if !ValidateBucket(idx.config["clusterAddr"].String(), indexInst.Defn.Bucket, []string{indexInst.Defn.BucketUUID}) {
+	if !idx.clusterInfoClient.ValidateBucket(indexInst.Defn.Bucket, []string{indexInst.Defn.BucketUUID}) {
 		logging.Errorf("Indexer::handleCreateIndex \n\t Bucket %v Not Found")
 
 		if clientCh != nil {
@@ -1398,7 +1405,7 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 		return
 	}
 
-	ephemeral, err := IsEphemeral(idx.config["clusterAddr"].String(), indexInst.Defn.Bucket)
+	ephemeral, err := idx.clusterInfoClient.IsEphemeral(indexInst.Defn.Bucket)
 	if err != nil {
 		errStr := fmt.Sprintf("Cannot Query Bucket Type of %v", indexInst.Defn.Bucket)
 		logging.Errorf(errStr)
@@ -3529,7 +3536,6 @@ func (idx *indexer) sendStreamUpdateForIndex(indexInstList []common.IndexInst,
 		stopCh:    stopCh,
 		sessionId: sessionId}
 
-	clustAddr := idx.config["clusterAddr"].String()
 	retryCount := 0
 
 	reqLock := idx.acquireStreamRequestLock(bucket, streamId)
@@ -3538,7 +3544,7 @@ func (idx *indexer) sendStreamUpdateForIndex(indexInstList []common.IndexInst,
 		idx.waitStreamRequestLock(reqLock)
 	retryloop:
 		for {
-			if !ValidateBucket(clustAddr, bucket, []string{bucketUUID}) {
+			if !idx.clusterInfoClient.ValidateBucket(bucket, []string{bucketUUID}) {
 				logging.Errorf("Indexer::sendStreamUpdateForIndex \n\tBucket Not Found "+
 					"For Stream %v Bucket %v", streamId, bucket)
 				break retryloop
@@ -3658,7 +3664,7 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 
 	sessionId := idx.getNextSessionId(buildStream, bucket)
 
-	async := enableAsync && clusterVersion(clustAddr) >= common.INDEXER_65_VERSION
+	async := enableAsync && idx.clusterInfoClient.ClusterVersion() >= common.INDEXER_65_VERSION
 	cmd = &MsgStreamUpdate{mType: OPEN_STREAM,
 		streamId:           buildStream,
 		bucket:             bucket,
@@ -3705,7 +3711,7 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 
 	retryloop:
 		for {
-			if !ValidateBucket(clustAddr, bucket, bucketUUIDList) {
+			if !idx.clusterInfoClient.ValidateBucket(bucket, bucketUUIDList) {
 				logging.Errorf("Indexer::sendStreamUpdateForBuildIndex \n\tBucket Not Found "+
 					"For Stream %v Bucket %v SessionId %v", buildStream, bucket, sessionId)
 				idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_BUCKET_NOT_FOUND,
@@ -3931,7 +3937,6 @@ func (idx *indexer) removeIndexesFromStream(indexList []common.IndexInst,
 			respErr := resp.(*MsgError).GetError()
 			common.CrashOnError(respErr.cause)
 		}
-		clustAddr := idx.config["clusterAddr"].String()
 
 		reqLock := idx.acquireStreamRequestLock(bucket, streamId)
 		go func(reqLock *kvRequest) {
@@ -3940,7 +3945,7 @@ func (idx *indexer) removeIndexesFromStream(indexList []common.IndexInst,
 		retryloop:
 			for {
 
-				if !ValidateBucket(clustAddr, bucket, []string{bucketUUID}) {
+				if !idx.clusterInfoClient.ValidateBucket(bucket, []string{bucketUUID}) {
 					logging.Errorf("Indexer::removeIndexesFromStream \n\tBucket Not Found "+
 						"For Stream %v Bucket %v", streamId, bucket)
 					idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_BUCKET_NOT_FOUND,
@@ -4006,7 +4011,7 @@ func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 			indexInst.InstId, partnInst)
 
 		//add a single slice per partition for now
-		if slice, err := NewSlice(SliceId(0), &indexInst, &partnInst, idx.config, idx.stats); err == nil {
+		if slice, err := NewSlice(SliceId(0), &indexInst, &partnInst, idx.config, idx.stats, idx.clusterInfoClient); err == nil {
 			partnInst.Sc.AddSlice(0, slice)
 			logging.Infof("Indexer::initPartnInstance Initialized Slice: \n\t Index: %v Slice: %v",
 				indexInst.InstId, slice)
@@ -4426,8 +4431,6 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 		common.CrashOnError(respErr.cause)
 	}
 
-	clustAddr := idx.config["clusterAddr"].String()
-
 	reqLock := idx.acquireStreamRequestLock(bucket, streamId)
 	go func(reqLock *kvRequest) {
 		defer idx.releaseStreamRequestLock(reqLock)
@@ -4435,7 +4438,7 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 		count := 0
 	retryloop:
 		for {
-			if !ValidateBucket(clustAddr, bucket, bucketUUIDList) {
+			if !idx.clusterInfoClient.ValidateBucket(bucket, bucketUUIDList) {
 				logging.Errorf("Indexer::handleInitialBuildDone \n\tBucket Not Found "+
 					"For Stream %v Bucket %v SessionId %v", streamId, bucket, sessionId)
 				break retryloop
@@ -4958,7 +4961,7 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 	enableAsync := idx.config["enableAsyncOpenStream"].Bool()
 
 	if !inRepair {
-		async = enableAsync && clusterVersion(clustAddr) >= common.INDEXER_65_VERSION
+		async = enableAsync && idx.clusterInfoClient.ClusterVersion() >= common.INDEXER_65_VERSION
 	}
 
 	//diable first snapshot optimization when recovering indexes as
@@ -5001,7 +5004,7 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 	retryloop:
 		for {
 			//validate bucket before every try
-			if !ValidateBucket(clustAddr, bucket, bucketUUIDList) {
+			if !idx.clusterInfoClient.ValidateBucket(bucket, bucketUUIDList) {
 				logging.Errorf("Indexer::startBucketStream \n\tBucket Not Found "+
 					"For Stream %v Bucket %v SessionId %v", streamId, bucket, sessionId)
 				idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_BUCKET_NOT_FOUND,
@@ -6170,7 +6173,7 @@ func (idx *indexer) validateIndexInstMap() {
 		if _, ok := bucketUUIDMap[bucketUUID]; !ok {
 
 			bucket := index.Defn.Bucket
-			bucketUUIDValid := ValidateBucket(idx.config["clusterAddr"].String(), bucket, []string{index.Defn.BucketUUID})
+			bucketUUIDValid := idx.clusterInfoClient.ValidateBucket(bucket, []string{index.Defn.BucketUUID})
 			bucketUUIDMap[bucketUUID] = bucketUUIDValid
 
 			if _, ok := bucketValid[bucket]; ok {
@@ -6811,7 +6814,11 @@ func (idx *indexer) checkBucketExists(bucket string,
 	newList := make([]common.IndexInstId, len(instIdList))
 	count := 0
 
-	currUUID := GetBucketUUID(idx.config["clusterAddr"].String(), bucket)
+	currUUID, err := idx.clusterInfoClient.GetBucketUUID(bucket)
+	if err != nil {
+		logging.Fatalf("Indexer::checkBucketExists Error Fetching Bucket Info: %v for bucket: %v, currUUID: %v", err, bucket, currUUID)
+	}
+
 	for _, instId := range instIdList {
 		indexInst := idx.indexInstMap[instId]
 		if indexInst.Defn.Bucket != bucket || indexInst.Defn.BucketUUID != currUUID {
@@ -6863,7 +6870,7 @@ func (idx *indexer) memoryUsedStorage() int64 {
 }
 
 func NewSlice(id SliceId, indInst *common.IndexInst, partnInst *PartitionInst,
-	conf common.Config, stats *IndexerStats) (slice Slice, err error) {
+	conf common.Config, stats *IndexerStats, cic *common.ClusterInfoClient) (slice Slice, err error) {
 	// Default storage is forestdb
 	storage_dir := conf["storage_dir"].String()
 	os.Mkdir(storage_dir, 0755)
@@ -6872,9 +6879,9 @@ func NewSlice(id SliceId, indInst *common.IndexInst, partnInst *PartitionInst,
 	}
 	path := filepath.Join(storage_dir, IndexPath(indInst, partnInst.Defn.GetPartitionId(), id))
 
-	ephemeral, err := IsEphemeral(conf["clusterAddr"].String(), indInst.Defn.Bucket)
+	ephemeral, err := cic.IsEphemeral(indInst.Defn.Bucket)
 	if err != nil {
-		logging.Errorf("Indexer::NewSlice Failed to check bucket type ephemeral: %v\n", err)
+		logging.Errorf("Indexer::initPartnInstance Failed to check bucket type ephemeral: %v\n", err)
 		return nil, err
 	}
 
