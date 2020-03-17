@@ -251,9 +251,9 @@ func (c *Client) sendVbmap(
 	vbmaps := make(map[int]*common.VbConnectionMap)
 	for i := range c.conn2Vbs {
 		vbmaps[i] = &common.VbConnectionMap{
-			Bucket:   vbmap.Bucket,
-			Vbuckets: make([]uint16, 0, len(vbmap.Vbuckets)),
-			Vbuuids:  make([]uint64, 0, len(vbmap.Vbuuids)),
+			KeyspaceId: vbmap.KeyspaceId,
+			Vbuckets:   make([]uint16, 0, len(vbmap.Vbuckets)),
+			Vbuuids:    make([]uint64, 0, len(vbmap.Vbuuids)),
 		}
 	}
 	var idx int
@@ -261,7 +261,7 @@ func (c *Client) sendVbmap(
 	// connection channels.
 	idxMap := make(map[int][]uint16)
 	for i, vbno := range vbmap.Vbuckets {
-		uuid := common.StreamID(vbmap.Bucket, vbno)
+		uuid := common.StreamID(vbmap.KeyspaceId, vbno)
 		vbChans[uuid], idx = c.addVbucket(uuid)
 		vbmaps[idx].Vbuckets = append(vbmaps[idx].Vbuckets, vbno)
 		vbmaps[idx].Vbuuids = append(vbmaps[idx].Vbuuids, vbmap.Vbuuids[i])
@@ -272,7 +272,7 @@ func (c *Client) sendVbmap(
 	for idx, vbnos := range idxMap {
 		logging.Tracef(
 			"%v mapped vbucket {%v,%v} on conn%v\n",
-			c.logPrefixes[idx], vbmap.Bucket, vbnos, idx)
+			c.logPrefixes[idx], vbmap.KeyspaceId, vbnos, idx)
 	}
 
 	// send the new vbmap to the other end, for each connection.
@@ -303,7 +303,7 @@ func (c *Client) sendKeyVersions(
 			vbChans[vb.Uuid], idx = c.addVbucket(vb.Uuid)
 			logging.Tracef(
 				"%v mapped vbucket {%v,%v}\n",
-				c.logPrefixes[idx], vb.Bucket, vb.Vbucket)
+				c.logPrefixes[idx], vb.KeyspaceId, vb.Vbucket)
 		}
 
 		if vb.Kvs[l-1].Commands[0] == common.StreamEnd { // last mutation
@@ -314,7 +314,7 @@ func (c *Client) sendKeyVersions(
 		case vbChans[vb.Uuid] <- vb:
 			if fin {
 				logging.Tracef(
-					"%v {%v,%v} ended\n", c.logPrefix, vb.Bucket, vb.Vbucket)
+					"%v {%v,%v} ended\n", c.logPrefix, vb.KeyspaceId, vb.Vbucket)
 				c.delVbucket(vb.Uuid)
 				delete(vbChans, vb.Uuid)
 			}

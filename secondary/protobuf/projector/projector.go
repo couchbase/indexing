@@ -285,7 +285,11 @@ func (req *MutationTopicRequest) Append(reqTs *TsVbuuid) *MutationTopicRequest {
 
 // GetEvaluators impelement Subscriber{} interface
 func (req *MutationTopicRequest) GetEvaluators() (map[uint64]c.Evaluator, error) {
-	return getEvaluators(req.GetInstances(), req.GetVersion())
+	keyspaceIdMap, err := req.GetKeyspaceIdMap()
+	if err != nil {
+		return nil, err
+	}
+	return getEvaluators(req.GetInstances(), req.GetVersion(), keyspaceIdMap)
 }
 
 // GetRouters impelement Subscriber{} interface
@@ -670,7 +674,11 @@ func (req *AddBucketsRequest) Decode(data []byte) (err error) {
 
 // GetEvaluators impelement Subscriber{} interface
 func (req *AddBucketsRequest) GetEvaluators() (map[uint64]c.Evaluator, error) {
-	return getEvaluators(req.GetInstances(), req.GetVersion())
+	keyspaceIdMap, err := req.GetKeyspaceIdMap()
+	if err != nil {
+		return nil, err
+	}
+	return getEvaluators(req.GetInstances(), req.GetVersion(), keyspaceIdMap)
 }
 
 // GetRouters impelement Subscriber{} interface
@@ -798,7 +806,11 @@ func (req *AddInstancesRequest) Decode(data []byte) (err error) {
 
 // GetEvaluators impelement Subscriber{} interface
 func (req *AddInstancesRequest) GetEvaluators() (map[uint64]c.Evaluator, error) {
-	return getEvaluators(req.GetInstances(), req.GetVersion())
+	keyspaceIdMap, err := req.GetKeyspaceIdMap()
+	if err != nil {
+		return nil, err
+	}
+	return getEvaluators(req.GetInstances(), req.GetVersion(), keyspaceIdMap)
 }
 
 // GetRouters impelement Subscriber{} interface
@@ -947,13 +959,14 @@ func (req *ShutdownTopicRequest) Decode(data []byte) (err error) {
 
 // TODO: add other types of engines
 func getEvaluators(instances []*Instance,
-	version FeedVersion) (map[uint64]c.Evaluator, error) {
+	version FeedVersion, keyspaceIdMap map[string]string) (map[uint64]c.Evaluator, error) {
 
 	engines := make(map[uint64]c.Evaluator)
 	for _, instance := range instances {
 		uuid := instance.GetUuid()
 		if val := instance.GetIndexInstance(); val != nil {
-			ie, err := NewIndexEvaluator(val, version)
+			bucket := instance.GetBucket()
+			ie, err := NewIndexEvaluator(val, version, keyspaceIdMap[bucket])
 			if err != nil {
 				return nil, err
 			}

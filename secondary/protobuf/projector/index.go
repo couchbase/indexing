@@ -102,23 +102,30 @@ func (instance *IndexInst) GetPartitionObject() Partition {
 // IndexEvaluator implements `Evaluator` interface for protobuf
 // definition of an index instance.
 type IndexEvaluator struct {
-	skExprs  []interface{} // compiled expression
-	pkExprs  []interface{} // compiled expression
-	whExpr   interface{}   // compiled expression
-	instance *IndexInst
-	version  FeedVersion
-	xattrs   []string
-	stats    *IndexEvaluatorStats
+	keyspaceId string
+	skExprs    []interface{} // compiled expression
+	pkExprs    []interface{} // compiled expression
+	whExpr     interface{}   // compiled expression
+	instance   *IndexInst
+	version    FeedVersion
+	xattrs     []string
+	stats      *IndexEvaluatorStats
 }
 
 // NewIndexEvaluator returns a reference to a new instance
 // of IndexEvaluator.
-func NewIndexEvaluator(instance *IndexInst,
-	version FeedVersion) (*IndexEvaluator, error) {
+func NewIndexEvaluator(
+	instance *IndexInst,
+	version FeedVersion,
+	keyspaceId string) (*IndexEvaluator, error) {
 
 	var err error
 
-	ie := &IndexEvaluator{instance: instance, version: version}
+	ie := &IndexEvaluator{
+		keyspaceId: keyspaceId,
+		instance:   instance,
+		version:    version,
+	}
 
 	// compile expressions once and reuse it many times.
 	defn := ie.instance.GetDefinition()
@@ -173,25 +180,29 @@ func (ie *IndexEvaluator) Bucket() string {
 	return ie.instance.GetDefinition().GetBucket()
 }
 
+func (ie *IndexEvaluator) GetKeyspaceId() string {
+	return ie.keyspaceId
+}
+
 // StreamBeginData implement Evaluator{} interface.
 func (ie *IndexEvaluator) StreamBeginData(
 	vbno uint16, vbuuid, seqno uint64, nodeUUID string,
 	status byte, code byte, opaque2 uint64) (data interface{}) {
 
-	bucket := ie.Bucket()
+	keyspaceId := ie.GetKeyspaceId()
 	kv := c.NewKeyVersions(seqno, []byte(nodeUUID), 1, 0 /*ctime*/)
 	kv.AddStreamBegin(status, code)
-	return &c.DataportKeyVersions{bucket, vbno, vbuuid, kv, opaque2}
+	return &c.DataportKeyVersions{keyspaceId, vbno, vbuuid, kv, opaque2}
 }
 
 // SyncData implement Evaluator{} interface.
 func (ie *IndexEvaluator) SyncData(
 	vbno uint16, vbuuid, seqno uint64, opaque2 uint64) (data interface{}) {
 
-	bucket := ie.Bucket()
+	keyspaceId := ie.GetKeyspaceId()
 	kv := c.NewKeyVersions(seqno, nil, 1, 0 /*ctime*/)
 	kv.AddSync()
-	return &c.DataportKeyVersions{bucket, vbno, vbuuid, kv, opaque2}
+	return &c.DataportKeyVersions{keyspaceId, vbno, vbuuid, kv, opaque2}
 }
 
 // SnapshotData implement Evaluator{} interface.
@@ -199,10 +210,10 @@ func (ie *IndexEvaluator) SnapshotData(
 	m *mc.DcpEvent, vbno uint16, vbuuid, seqno uint64,
 	opaque2 uint64) (data interface{}) {
 
-	bucket := ie.Bucket()
+	keyspaceId := ie.GetKeyspaceId()
 	kv := c.NewKeyVersions(seqno, nil, 1, m.Ctime)
 	kv.AddSnapshot(m.SnapshotType, m.SnapstartSeq, m.SnapendSeq)
-	return &c.DataportKeyVersions{bucket, vbno, vbuuid, kv, opaque2}
+	return &c.DataportKeyVersions{keyspaceId, vbno, vbuuid, kv, opaque2}
 }
 
 // SystemEventData implement Evaluator{} interface.
@@ -210,12 +221,12 @@ func (ie *IndexEvaluator) SystemEventData(
 	m *mc.DcpEvent, vbno uint16, vbuuid, seqno uint64,
 	opaque2 uint64) (data interface{}) {
 
-	bucket := ie.Bucket()
+	keyspaceId := ie.GetKeyspaceId()
 	kv := c.NewKeyVersions(seqno, nil, 1, m.Ctime)
 	cid := make([]byte, 4) // 4 bytes for collection ID
 	binary.BigEndian.PutUint32(cid, m.CollectionID)
 	kv.AddSystemEvent(m.EventType, m.ManifestUID, m.ScopeID, cid)
-	return &c.DataportKeyVersions{bucket, vbno, vbuuid, kv, opaque2}
+	return &c.DataportKeyVersions{keyspaceId, vbno, vbuuid, kv, opaque2}
 }
 
 // UpdateSeqnoData implement Evaluator{} interface.
@@ -224,23 +235,20 @@ func (ie *IndexEvaluator) UpdateSeqnoData(
 	m *mc.DcpEvent, vbno uint16, vbuuid, seqno uint64,
 	opaque2 uint64) (data interface{}) {
 
-	// TODO (Collections): Replace this GetBucket() call with GetKeyspaceID call
-	// as DataportKeyVersions should send keyspaceId with collections rather than
-	// bucket name
-	bucket := ie.Bucket()
+	keyspaceId := ie.GetKeyspaceId()
 	kv := c.NewKeyVersions(seqno, nil, 1, 0)
 	kv.AddUpdateSeqno()
-	return &c.DataportKeyVersions{bucket, vbno, vbuuid, kv, opaque2}
+	return &c.DataportKeyVersions{keyspaceId, vbno, vbuuid, kv, opaque2}
 }
 
 // StreamEndData implement Evaluator{} interface.
 func (ie *IndexEvaluator) StreamEndData(
 	vbno uint16, vbuuid, seqno uint64, opaque2 uint64) (data interface{}) {
 
-	bucket := ie.Bucket()
+	keyspaceId := ie.GetKeyspaceId()
 	kv := c.NewKeyVersions(seqno, nil, 1, 0 /*ctime*/)
 	kv.AddStreamEnd()
-	return &c.DataportKeyVersions{bucket, vbno, vbuuid, kv, opaque2}
+	return &c.DataportKeyVersions{keyspaceId, vbno, vbuuid, kv, opaque2}
 }
 
 func (ie *IndexEvaluator) processEvent(m *mc.DcpEvent, encodeBuf []byte,
@@ -358,7 +366,7 @@ func (ie *IndexEvaluator) populateData(vbuuid uint64, m *mc.DcpEvent,
 	instn := ie.instance
 	uuid := instn.GetInstId()
 
-	bucket := ie.Bucket()
+	keyspaceId := ie.GetKeyspaceId()
 
 	logging.LazyTrace(func() string {
 		return fmt.Sprintf("inst: %v where: %v (pkey: %v) key: %v\n", uuid, where,
@@ -371,7 +379,7 @@ func (ie *IndexEvaluator) populateData(vbuuid uint64, m *mc.DcpEvent,
 			if !ok {
 				kv := c.NewKeyVersions(seqno, m.Key, numIndexes, m.Ctime)
 				kv.AddUpsert(uuid, nkey, okey, npkey)
-				dkv = &c.DataportKeyVersions{bucket, vbno, vbuuid, kv, opaque2}
+				dkv = &c.DataportKeyVersions{keyspaceId, vbno, vbuuid, kv, opaque2}
 			} else {
 				dkv.Kv.AddUpsert(uuid, nkey, okey, npkey)
 			}
@@ -386,7 +394,7 @@ func (ie *IndexEvaluator) populateData(vbuuid uint64, m *mc.DcpEvent,
 			if !ok {
 				kv := c.NewKeyVersions(seqno, m.Key, numIndexes, m.Ctime)
 				kv.AddUpsertDeletion(uuid, okey, npkey)
-				dkv = &c.DataportKeyVersions{bucket, vbno, vbuuid, kv, opaque2}
+				dkv = &c.DataportKeyVersions{keyspaceId, vbno, vbuuid, kv, opaque2}
 			} else {
 				dkv.Kv.AddUpsertDeletion(uuid, okey, npkey)
 			}
@@ -401,7 +409,7 @@ func (ie *IndexEvaluator) populateData(vbuuid uint64, m *mc.DcpEvent,
 			if !ok {
 				kv := c.NewKeyVersions(seqno, m.Key, numIndexes, m.Ctime)
 				kv.AddDeletion(uuid, okey, npkey)
-				dkv = &c.DataportKeyVersions{bucket, vbno, vbuuid, kv, opaque2}
+				dkv = &c.DataportKeyVersions{keyspaceId, vbno, vbuuid, kv, opaque2}
 			} else {
 				dkv.Kv.AddDeletion(uuid, okey, npkey)
 			}

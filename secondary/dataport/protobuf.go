@@ -29,7 +29,7 @@ func protobufEncode(payload interface{}) (data []byte, err error) {
 		pl.Vbkeys = make([]*protobuf.VbKeyVersions, 0, len(val))
 		for _, vb := range val { // for each VbKeyVersions
 			pvb := &protobuf.VbKeyVersions{
-				Bucketname: proto.String(vb.Bucket),
+				KeyspaceId: proto.String(vb.KeyspaceId),
 				Vbucket:    proto.Uint32(uint32(vb.Vbucket)),
 				Vbuuid:     proto.Uint64(vb.Vbuuid),
 				ProjVer:    protobuf.ProjectorVersion(int32(vb.ProjVer)).Enum(),
@@ -70,9 +70,9 @@ func protobufEncode(payload interface{}) (data []byte, err error) {
 
 	case *c.VbConnectionMap:
 		pl.Vbmap = &protobuf.VbConnectionMap{
-			Bucket:   proto.String(val.Bucket),
-			Vbuuids:  val.Vbuuids,
-			Vbuckets: c.Vbno16to32(val.Vbuckets),
+			KeyspaceId: proto.String(val.KeyspaceId),
+			Vbuuids:    val.Vbuuids,
+			Vbuckets:   c.Vbno16to32(val.Vbuckets),
 		}
 	}
 
@@ -107,9 +107,9 @@ func protobufDecode(data []byte) (value interface{}, err error) {
 
 func protobuf2Vbmap(vbmap *protobuf.VbConnectionMap) *c.VbConnectionMap {
 	return &c.VbConnectionMap{
-		Bucket:   vbmap.GetBucket(),
-		Vbuckets: c.Vbno32to16(vbmap.GetVbuckets()),
-		Vbuuids:  vbmap.GetVbuuids(),
+		KeyspaceId: vbmap.GetKeyspaceId(),
+		Vbuckets:   c.Vbno32to16(vbmap.GetVbuckets()),
+		Vbuuids:    vbmap.GetVbuuids(),
 	}
 }
 
@@ -150,10 +150,10 @@ func protobuf2VbKeyVersions(protovbs []*protobuf.VbKeyVersions) []*c.VbKeyVersio
 	vbs := make([]*c.VbKeyVersions, 0, len(protovbs))
 	for _, protovb := range protovbs {
 		vb := &c.VbKeyVersions{
-			Bucket:  protovb.GetBucketname(),
-			Vbucket: uint16(protovb.GetVbucket()),
-			Vbuuid:  protovb.GetVbuuid(),
-			Kvs:     protobuf2KeyVersions(protovb.GetKvs()),
+			KeyspaceId: protovb.GetKeyspaceId(),
+			Vbucket:    uint16(protovb.GetVbucket()),
+			Vbuuid:     protovb.GetVbuuid(),
+			Kvs:        protobuf2KeyVersions(protovb.GetKvs()),
 		}
 		vbs = append(vbs, vb)
 	}

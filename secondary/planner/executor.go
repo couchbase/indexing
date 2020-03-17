@@ -880,7 +880,6 @@ func replicaDrop(config *RunConfig, plan *Plan, defnId common.IndexDefnId, numPa
 // BUILD INDEX ON named_keyspace_ref(index_name[,index_name]*) USING GSI;
 //
 
-// TODO: This needs to be done based on n1ql syntax for collection.
 func CreateIndexDDL(solution *Solution) string {
 
 	if solution == nil {
@@ -890,13 +889,33 @@ func CreateIndexDDL(solution *Solution) string {
 	replicas := make(map[common.IndexDefnId][]*IndexerNode)
 	newIndexDefns := make(map[common.IndexDefnId]*IndexUsage)
 	buckets := make(map[string][]*IndexUsage)
+	collections := make(map[string]map[string]map[string][]*IndexUsage)
 
 	for _, indexer := range solution.Placement {
 		for _, index := range indexer.Indexes {
 			if index.initialNode == nil && index.Instance != nil {
 				if _, ok := newIndexDefns[index.DefnId]; !ok {
 					newIndexDefns[index.DefnId] = index
-					buckets[index.Bucket] = append(buckets[index.Bucket], index)
+					if index.IndexOnCollection() {
+						bucket := index.Bucket
+						scope := index.Scope
+						collection := index.Collection
+						if _, ok := collections[bucket]; !ok {
+							collections[bucket] = make(map[string]map[string][]*IndexUsage)
+						}
+
+						if _, ok := collections[bucket][scope]; !ok {
+							collections[bucket][scope] = make(map[string][]*IndexUsage)
+						}
+
+						if _, ok := collections[bucket][scope][collection]; !ok {
+							collections[bucket][scope][collection] = make([]*IndexUsage, 0)
+						}
+
+						collections[bucket][scope][collection] = append(collections[bucket][scope][collection], index)
+					} else {
+						buckets[index.Bucket] = append(buckets[index.Bucket], index)
+					}
 				}
 				replicas[index.DefnId] = append(replicas[index.DefnId], indexer)
 			}
@@ -920,9 +939,12 @@ func CreateIndexDDL(solution *Solution) string {
 		stmts += stmt
 	}
 
+	buildStmt := "BUILD INDEX ON `%v`("
+	buildStmtCollection := "BUILD INDEX ON `%v`.`%v`.`%v`("
+
 	// build index
 	for bucket, indexes := range buckets {
-		stmt := fmt.Sprintf("BUILD INDEX ON `%v`(", bucket)
+		stmt := fmt.Sprintf(buildStmt, bucket)
 		for i := 0; i < len(indexes); i++ {
 			stmt += "`" + indexes[i].Instance.Defn.Name + "`"
 			if i < len(indexes)-1 {
@@ -932,6 +954,23 @@ func CreateIndexDDL(solution *Solution) string {
 		stmt += ");\n"
 
 		stmts += stmt
+	}
+
+	for bucket, scopes := range collections {
+		for scope, colls := range scopes {
+			for collection, indexes := range colls {
+				stmt := fmt.Sprintf(buildStmtCollection, bucket, scope, collection)
+				for i := 0; i < len(indexes); i++ {
+					stmt += "`" + indexes[i].Instance.Defn.Name + "`"
+					if i < len(indexes)-1 {
+						stmt += ","
+					}
+				}
+				stmt += ");\n"
+
+				stmts += stmt
+			}
+		}
 	}
 	stmts += "\n"
 

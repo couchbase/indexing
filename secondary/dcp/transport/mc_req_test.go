@@ -302,26 +302,6 @@ func TestReceiveRequestBadMagic(t *testing.T) {
 	}
 }
 
-func TestReceiveRequestLongBody(t *testing.T) {
-	req := MCRequest{
-		Opcode:  SET,
-		Cas:     0,
-		Opaque:  7242,
-		VBucket: 824,
-		Extras:  []byte{1},
-		Key:     []byte("somekey"),
-		Body:    make([]byte, MaxBodyLen+5),
-	}
-
-	data := req.Bytes()
-
-	req2 := MCRequest{}
-	_, err := req2.Receive(bytes.NewReader(data), nil)
-	if err == nil {
-		t.Fatalf("Expected error, got %#v", req2)
-	}
-}
-
 func BenchmarkReceiveRequest(b *testing.B) {
 	req := MCRequest{
 		Opcode:  SET,

@@ -11,6 +11,7 @@ import "github.com/couchbase/indexing/secondary/logging"
 import c "github.com/couchbase/indexing/secondary/common"
 import protobuf "github.com/couchbase/indexing/secondary/protobuf/data"
 
+// TODO (Collections): Add support for new messages
 var commandNames = map[byte]string{
 	c.Upsert:         "Upsert",
 	c.Deletion:       "Deletion",
@@ -49,6 +50,7 @@ func Application(
 		return
 	}
 
+	// TODO (Collections): Make this object keyspaceIdWise instead of bucket wise
 	// bucket -> Command -> #count(int)
 	bucketWise := make(map[string]map[byte]int)
 	// instance-uuid -> key -> #count(int)
@@ -108,8 +110,8 @@ func processMutations(
 
 	mutations := 0
 	for _, vb := range vbs {
-		bucket, kvs := vb.GetBucketname(), vb.GetKvs()
-		commandWise, ok := bucketWise[bucket]
+		keyspaceId, kvs := vb.GetKeyspaceId(), vb.GetKvs()
+		commandWise, ok := bucketWise[keyspaceId]
 		if !ok {
 			commandWise = make(map[byte]int)
 		}
@@ -140,7 +142,7 @@ func processMutations(
 				//keys[uuid] = m
 			}
 		}
-		bucketWise[bucket] = commandWise
+		bucketWise[keyspaceId] = commandWise
 	}
 	return mutations
 }

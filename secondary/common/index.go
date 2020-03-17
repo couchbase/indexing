@@ -357,6 +357,20 @@ func (idx *IndexDefn) SetCollectionDefaults() {
 	}
 }
 
+func (idx *IndexDefn) IndexOnCollection() bool {
+	// Empty scope OR collection name is not expected. Assume that the index
+	// definition is not upgraded yet.
+	if idx.Scope == "" || idx.Collection == "" {
+		return false
+	}
+
+	if idx.Scope == DEFAULT_SCOPE && idx.Collection == DEFAULT_COLLECTION {
+		return false
+	}
+
+	return true
+}
+
 func (idx IndexInst) IsProxy() bool {
 	return idx.RealInstId != 0
 }
