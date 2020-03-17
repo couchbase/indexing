@@ -6815,11 +6815,14 @@ func (idx *indexer) checkBucketExists(bucket string,
 	newList := make([]common.IndexInstId, len(instIdList))
 	count := 0
 
-	currUUID := GetBucketUUID(idx.config["clusterAddr"].String(), bucket)
+	currUUID, err := common.GetBucketUUID(idx.config["clusterAddr"].String(), bucket)
+	if err != nil {
+		logging.Fatalf("Indexer::checkBucketExists Error Fetching Bucket Info: %v for bucket: %v, currUUID: %v", err, bucket, currUUID)
+	}
+
 	for _, instId := range instIdList {
 		indexInst := idx.indexInstMap[instId]
-		if indexInst.Defn.Bucket != bucket || indexInst.Defn.BucketUUID != currUUID {
-
+		if indexInst.Defn.Bucket != bucket || indexInst.Defn.BucketUUID != currUUID || err != nil {
 			if idx.enableManager {
 				errStr := fmt.Sprintf("Unknown Bucket %v In Build Request", bucket)
 				idx.updateError(instId, errStr)
