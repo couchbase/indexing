@@ -495,7 +495,7 @@ func (worker *VbucketWorker) handleEvent(m *mc.DcpEvent) *Vbucket {
 				// therefore reduces the garbage generated.
 				newBuf, err := engine.TransformRoute(
 					v.vbuuid, m, dataForEndpoints, worker.encodeBuf, docval, context,
-					worker.meta, len(worker.engines), worker.opaque2,
+					worker.meta, len(engines), worker.opaque2,
 				)
 				if err != nil {
 					fmsg := "%v ##%x TransformRoute: %v for index %v docid %s\n"
