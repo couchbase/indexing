@@ -264,6 +264,7 @@ func TestVeryLargeIndexKey(t *testing.T) {
 	log.Printf("TestVeryLargeIndexKey:: Flushed the bucket")
 
 	expResponse := make(tc.ScanResponse)
+	expResponse2 := make(tc.ScanResponse)
 
 	key := "VeryLargeIndexKey1"
 	doc := make(map[string]interface{})
@@ -279,6 +280,9 @@ func TestVeryLargeIndexKey(t *testing.T) {
 
 	expResponse[key] = make([]interface{}, 1)
 	expResponse[key][0] = v1
+	expResponse2[key] = make([]interface{}, 2)
+	expResponse2[key][0] = v1
+	expResponse2[key][1] = v2
 
 	key1 := "VeryLargeIndexKey2"
 	val = make(map[string]interface{})
@@ -293,6 +297,9 @@ func TestVeryLargeIndexKey(t *testing.T) {
 
 	expResponse[key1] = make([]interface{}, 1)
 	expResponse[key1][0] = v1
+	expResponse2[key1] = make([]interface{}, 2)
+	expResponse2[key1][0] = v1
+	expResponse2[key1][1] = v2
 
 	log.Printf("clusterconfig.KVAddress = %v", clusterconfig.KVAddress)
 	kvutility.SetKeyValues(doc, "default", "", clusterconfig.KVAddress)
@@ -305,6 +312,15 @@ func TestVeryLargeIndexKey(t *testing.T) {
 		defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan 1: ", t)
 	err = tv.Validate(expResponse, scanResults)
+	FailTestIfError(err, "Error in scan 1:  result validation", t)
+
+	err = secondaryindex.CreateSecondaryIndex("i2", "default", indexManagementAddress, "",
+		[]string{"v", "v.a"}, false, nil, true, defaultIndexActiveTimeout, nil)
+	FailTestIfError(err, "Error in creating the index", t)
+
+	scanResults, err = secondaryindex.ScanAll("i2", "default", indexScanAddress,
+		defaultlimit, c.SessionConsistency, nil)
+	err = tv.Validate(expResponse2, scanResults)
 	FailTestIfError(err, "Error in scan 1:  result validation", t)
 
 	e = secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
