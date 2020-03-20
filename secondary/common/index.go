@@ -495,6 +495,28 @@ func CopyIndexInstMap(inMap IndexInstMap) IndexInstMap {
 	return outMap
 }
 
+// Create a copy of IndexInstMap by fixing Immutable flag
+// in each instance's IndexDefn
+func CopyIndexInstMap2(inMap IndexInstMap) IndexInstMap {
+
+	outMap := make(IndexInstMap)
+	for k, v := range inMap {
+		vv := v
+		vv.Pc = v.Pc.Clone()
+		vv.Defn.Immutable = GetImmutableFlag(v.Defn)
+		outMap[k] = vv
+	}
+	return outMap
+}
+
+func GetImmutableFlag(defn IndexDefn) bool {
+	immutable := IsPartitioned(defn.PartitionScheme)
+	if len(defn.WhereExpr) > 0 {
+		immutable = false
+	}
+	return immutable
+}
+
 func MarshallIndexDefn(defn *IndexDefn) ([]byte, error) {
 
 	buf, err := json.Marshal(&defn)

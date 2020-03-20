@@ -47,7 +47,8 @@ const (
 	ScopeDrop         // control command
 	CollectionChanged // control command
 
-	UpdateSeqno // control command
+	UpdateSeqno   // control command
+	SeqnoAdvanced // control command
 )
 
 type ProjectorVersion byte
@@ -347,6 +348,11 @@ func (kv *KeyVersions) AddSystemEvent(eventType transport.CollectionEvent,
 // AddUpdateSeqno add UpdateSeqno command
 func (kv *KeyVersions) AddUpdateSeqno() {
 	kv.addKey(0, UpdateSeqno, nil, nil, nil)
+}
+
+// AddSeqnoAdvanced adds SeqnoAdvanced command
+func (kv *KeyVersions) AddSeqnoAdvanced() {
+	kv.addKey(0, SeqnoAdvanced, nil, nil, nil)
 }
 
 func (kv *KeyVersions) String() string {

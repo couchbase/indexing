@@ -11,9 +11,10 @@ package indexer
 
 import (
 	"fmt"
+	"sync"
+
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
-	"sync"
 )
 
 //Flusher is the only component which does read/dequeue from a MutationQueue.
@@ -386,7 +387,6 @@ func (f *flusher) flush(mutk *MutationKeys, streamId common.StreamId) {
 			processedUpserts = append(processedUpserts, mut.uuid)
 
 			f.processUpsert(mut, mutk.docid, mutk.meta)
-			f.processDeletionAfterUpsert(mut, mutk.docid, mutk.meta, immutable)
 
 		case common.Deletion:
 			f.processDelete(mut, mutk.docid, mutk.meta)
@@ -410,7 +410,7 @@ func (f *flusher) flush(mutk *MutationKeys, streamId common.StreamId) {
 			if skipUpsertDeletion {
 				continue
 			} else {
-				f.processDelete(mut, mutk.docid, mutk.meta)
+				f.processUpsertDelete(mut, mutk.docid, mutk.meta)
 			}
 
 		default:
@@ -474,31 +474,29 @@ func (f *flusher) processDelete(mut *Mutation, docid []byte, meta *MutationMeta)
 	}
 }
 
-func (f *flusher) processDeletionAfterUpsert(mut *Mutation, docid []byte, meta *MutationMeta, immutable bool) {
-
-	if immutable {
-		return
-	}
+func (f *flusher) processUpsertDelete(mut *Mutation, docid []byte, meta *MutationMeta) {
 
 	idxInst, _ := f.indexInstMap[mut.uuid]
-	partnId := idxInst.Pc.GetPartitionIdByPartitionKey(mut.partnkey)
+	if !common.IsPartitioned(idxInst.Defn.PartitionScheme) || len(mut.partnkey) == 0 {
+		// Delete from all partitions if partition key is empty or it is a non partitioned index
+		f.processDelete(mut, docid, meta)
+		return
+	}
 
 	var partnInstMap PartitionInstMap
 	var ok bool
 	if partnInstMap, ok = f.indexPartnMap[mut.uuid]; !ok {
 		logging.Errorf("Flusher:processDelete Missing Partition Instance Map"+
-			"for IndexInstId: %v. Skipped Mutation Key: %v", mut.uuid, mut.key)
+			"for IndexInstId: %v. Skipped Mutation Key: %v", mut.uuid, logging.TagUD(mut.key))
 		return
 	}
 
-	for id, partnInst := range partnInstMap {
-		// perform upsert deletion on "other" partitions
-		if id != partnId {
-			slice := partnInst.Sc.GetSliceByIndexKey(common.IndexKey(mut.key))
-			if err := slice.Delete(docid, meta); err != nil {
-				logging.Errorf("Flusher::processDelete Error Deleting DocId: %v "+
-					"from Slice: %v", docid, slice.Id())
-			}
+	partnId := idxInst.Pc.GetPartitionIdByPartitionKey(mut.partnkey)
+	if partnInst, ok := partnInstMap[partnId]; ok {
+		slice := partnInst.Sc.GetSliceByIndexKey(common.IndexKey(mut.key))
+		if err := slice.Delete(docid, meta); err != nil {
+			logging.Errorf("Flusher::processDelete Error Deleting DocId: %v "+
+				"from Slice: %v", logging.TagStrUD(docid), slice.Id())
 		}
 	}
 }

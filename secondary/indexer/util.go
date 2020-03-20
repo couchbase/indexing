@@ -228,36 +228,6 @@ func FlipBits(code []byte) {
 	return
 }
 
-func GetBucketUUID(cluster, bucket string) string {
-
-	var cinfo *common.ClusterInfoCache
-	url, err := common.ClusterAuthUrl(cluster)
-	if err == nil {
-		cinfo, err = common.NewClusterInfoCache(url, DEFAULT_POOL)
-	}
-	if err != nil {
-		logging.Fatalf("Indexer::Fail to init ClusterInfoCache : %v", err)
-		common.CrashOnError(err)
-	}
-
-	cinfo.Lock()
-	defer cinfo.Unlock()
-
-	if err := cinfo.Fetch(); err != nil {
-		logging.Errorf("Indexer::Fail to init ClusterInfoCache : %v", err)
-		common.CrashOnError(err)
-	}
-
-	if nids, err := cinfo.GetNodesByBucket(bucket); err == nil && len(nids) != 0 {
-		// verify UUID
-		return cinfo.GetBucketUUID(bucket)
-	} else {
-		logging.Fatalf("Indexer::Error Fetching Bucket Info: %v Nids: %v", err, nids)
-	}
-
-	return ""
-}
-
 func clusterVersion(clusterAddr string) uint64 {
 
 	var cinfo *common.ClusterInfoCache

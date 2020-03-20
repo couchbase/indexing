@@ -554,6 +554,19 @@ func (worker *VbucketWorker) handleEvent(m *mc.DcpEvent) *Vbucket {
 			logging.Errorf(fmsg, logPrefix, m.Opaque, m, vbno)
 		}
 
+	case mcd.DCP_SEQNO_ADVANCED:
+		if !vbok {
+			fmsg := "%v ##%x vbucket %v not started. Received SeqnoAdvanced event\n"
+			logging.Errorf(fmsg, logPrefix, m.Opaque, vbno)
+			return v
+		}
+		if data := v.makeSeqnoAdvancedEvent(m, worker.engines); data != nil {
+			worker.broadcast2Endpoints(data)
+		} else {
+			fmsg := "%v ##%x SEQNO_ADVANCED: %v NOT PUBLISHED for vbucket %v\n"
+			logging.Errorf(fmsg, logPrefix, m.Opaque, m, vbno)
+		}
+
 	case mcd.DCP_STREAMEND:
 		if vbok {
 			if data := v.makeStreamEndData(worker.engines); data != nil {

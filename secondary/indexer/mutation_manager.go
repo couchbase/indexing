@@ -1070,7 +1070,7 @@ func (m *mutationMgr) handleUpdateIndexInstMap(cmd Message) {
 
 	req := cmd.(*MsgUpdateInstMap)
 	indexInstMap := req.GetIndexInstMap()
-	m.indexInstMap = common.CopyIndexInstMap(indexInstMap)
+	m.indexInstMap = common.CopyIndexInstMap2(indexInstMap)
 	m.stats.Set(req.GetStatsObject())
 	m.supvCmdch <- &MsgSuccess{}
 

@@ -3,6 +3,11 @@ package functionaltests
 import (
 	"errors"
 	"fmt"
+	"log"
+	"strconv"
+	"testing"
+	"time"
+
 	c "github.com/couchbase/indexing/secondary/common"
 	qc "github.com/couchbase/indexing/secondary/queryport/client"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
@@ -10,10 +15,6 @@ import (
 	"github.com/couchbase/indexing/secondary/tests/framework/kvutility"
 	"github.com/couchbase/indexing/secondary/tests/framework/secondaryindex"
 	tv "github.com/couchbase/indexing/secondary/tests/framework/validation"
-	"log"
-	"strconv"
-	"testing"
-	"time"
 )
 
 // Test for single index field of data type float64
