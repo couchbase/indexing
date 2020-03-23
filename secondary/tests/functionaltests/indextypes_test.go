@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"gopkg.in/couchbase/gocb.v1"
+
 	c "github.com/couchbase/indexing/secondary/common"
 	qc "github.com/couchbase/indexing/secondary/queryport/client"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
@@ -1067,4 +1069,123 @@ func TestNumbers_Int64_Float64(t *testing.T) {
 		_, err = secondaryindex.Scans(index1, bucketName, indexScanAddress, scans, false, false, nil, 0, defaultlimit, c.SessionConsistency, nil)
 		FailTestIfError(err, "Error in scan", t)
 	*/
+}
+
+func TestPartitionedPartialIndex(t *testing.T) {
+
+	if clusterconfig.IndexUsing == "forestdb" {
+		log.Printf("Not running TestPartitionedPartialIndex for forestdb as" +
+			" partition indexes are not supported with forestdb storage mode")
+		return
+	}
+
+	var bucketName = "default"
+	idx1, idx2, idx3, idx4 := "idx_regular", "idx_partial", "idx_partitioned", "idx_partitioned_partial"
+	field_name, field_age := "partn_name", "partn_age"
+
+	docids := make(map[string]bool, 0)
+	count := 100
+	docsToUpload := make(tc.KeyValues)
+	for i := 0; i < count; i++ {
+		key := "key_partn_partial_" + strconv.Itoa(i)
+		docids[key] = true
+		json := make(map[string]interface{})
+		json[field_name] = "username" + strconv.Itoa(i)
+		json[field_age] = i
+		docsToUpload[key] = json
+	}
+	kvutility.SetKeyValues(docsToUpload, bucketName, "", clusterconfig.KVAddress)
+
+	mutateDoc := func(docid int, nameVal string, ageVal int) {
+		muts := make(tc.KeyValues)
+		key := "key_partn_partial_" + strconv.Itoa(docid)
+		json := make(map[string]interface{})
+		json[field_name] = nameVal
+		json[field_age] = ageVal
+		muts[key] = json
+		docsToUpload[key] = json
+		kvutility.SetKeyValues(muts, bucketName, "", clusterconfig.KVAddress)
+	}
+
+	deleteDoc := func(docid int) {
+		key := "key_partn_partial_" + strconv.Itoa(docid)
+		kvutility.Delete(key, bucketName, "", clusterconfig.KVAddress)
+		delete(docsToUpload, key)
+		delete(docids, key)
+	}
+
+	scanAllAndVerify := func(indexName string, expectedCount int) {
+		scanResults, err := secondaryindex.ScanAll(indexName, bucketName, indexScanAddress, defaultlimit, c.SessionConsistency, nil)
+		FailTestIfError(err, "Error in ScanAll of TestPartitionedPartialIndex", t)
+		if len(scanResults) != expectedCount {
+			e := errors.New(fmt.Sprintf("Expected scanAll for index %v count %d "+
+				"does not match actual scanAll count %d: ", indexName, expectedCount, len(scanResults)))
+			FailTestIfError(e, "Error in TestPartitionedPartialIndex", t)
+		}
+	}
+
+	createIndex := func(n1qlstatement string) {
+		log.Printf("Executing create index command: %v", n1qlstatement)
+		_, err := tc.ExecuteN1QLStatement(kvaddress, clusterconfig.Username, clusterconfig.Password, bucketName, n1qlstatement, false, gocb.NotBounded)
+		FailTestIfError(err, fmt.Sprintf("Error in executing n1ql statement %v", n1qlstatement), t)
+	}
+
+	// TEST 1: Regular index: inserts, updates, deletes (immutable flag from user true and false cannot be tested as it is disabled)
+	n1qlstatement := fmt.Sprintf("CREATE INDEX `%v` ON `%v`(%v)", idx1, bucketName, field_name)
+	createIndex(n1qlstatement)
+	scanAllAndVerify(idx1, count)
+	err := secondaryindex.DropSecondaryIndex(idx1, bucketName, indexManagementAddress)
+	FailTestIfError(err, "Error dropping index idx1", t)
+
+	// TEST 2: Partial index: inserts, updates, deletes. where clause evaluating to true and false
+	// (immutable flag from user true and false cannot be tested as it is disabled)
+	n1qlstatement = fmt.Sprintf("CREATE INDEX `%v` ON `%v`(%v) WHERE %v >= 0", idx2, bucketName, field_name, field_age)
+	createIndex(n1qlstatement)
+
+	scanAllAndVerify(idx2, count)
+
+	mutateDoc(0, "username"+strconv.Itoa(0)+"_00", 0)
+	scanAllAndVerify(idx2, count)
+
+	mutateDoc(1, "username"+strconv.Itoa(1)+"_01", -5) // WHERE clause evaluates to false
+	scanAllAndVerify(idx2, count-1)
+
+	err = secondaryindex.DropSecondaryIndex(idx2, bucketName, indexManagementAddress)
+	FailTestIfError(err, "Error dropping index idx2", t)
+	kvutility.SetKeyValues(docsToUpload, "default", "", clusterconfig.KVAddress)
+
+	// TEST 3: Partitioned index: inserts, updates, deletes
+	// (immutable flag from user true and false cannot be tested as it is disabled)
+	n1qlstatement = fmt.Sprintf("CREATE INDEX `%v` ON `%v`(%v) PARTITION BY HASH(meta().id) ", idx3, bucketName, field_name)
+	createIndex(n1qlstatement)
+	scanAllAndVerify(idx3, count)
+
+	mutateDoc(1, "username"+strconv.Itoa(1)+"_01", 1)
+	scanAllAndVerify(idx3, count)
+
+	err = secondaryindex.DropSecondaryIndex(idx3, bucketName, indexManagementAddress)
+	FailTestIfError(err, "Error dropping index idx3", t)
+	kvutility.SetKeyValues(docsToUpload, "default", "", clusterconfig.KVAddress)
+
+	// TEST 4: Partitioned + Partial index: inserts, updates, deletes. where clause evaluating to true and false
+	// (immutable flag from user true and false cannot be tested as it is disabled)
+	n1qlstatement = fmt.Sprintf("CREATE INDEX `%v` ON `%v`(%v) PARTITION BY HASH(meta().id) "+
+		"WHERE %v >= 0", idx4, bucketName, field_name, field_age)
+	createIndex(n1qlstatement)
+	scanAllAndVerify(idx4, count)
+
+	mutateDoc(1, "username"+strconv.Itoa(1)+"_01", 1)
+	scanAllAndVerify(idx4, count)
+
+	mutateDoc(0, "username"+strconv.Itoa(0)+"_00", -5) // WHERE clause evaluates to false
+	scanAllAndVerify(idx4, count-1)
+
+	deleteDoc(10)
+	scanAllAndVerify(idx4, count-2)
+
+	err = secondaryindex.DropSecondaryIndex(idx4, bucketName, indexManagementAddress)
+	FailTestIfError(err, "Error dropping index idx4", t)
+	for key, _ := range docids {
+		kvutility.Delete(key, bucketName, "", clusterconfig.KVAddress)
+	}
 }
