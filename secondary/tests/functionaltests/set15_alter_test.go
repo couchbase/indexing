@@ -98,11 +98,9 @@ func TestAlterIndexDecrReplica(t *testing.T) {
 	log.Printf("Executing alter index command: %v", n1qlstatement)
 	_, err = tc.ExecuteN1QLStatement(kvaddress, clusterconfig.Username, clusterconfig.Password, bucketName, n1qlstatement, false, nil)
 	FailTestIfError(err, "Error in executing n1ql statement", t)
-	// Wait for the index to get dropped
-	time.Sleep(10 * time.Second)
 
-	// Check if index exists after altering
-	if checkIfReplicaExists(indexName, bucketName, 2) {
+	// Wait for the replica index to get dropped
+	if waitForReplicaDrop(indexName, bucketName, 2) {
 		t.Fatalf("Replica: 2 is expected to be dropped. But it still exists")
 	}
 
@@ -147,11 +145,9 @@ func TestAlterIndexDropReplica(t *testing.T) {
 	log.Printf("Executing alter index command: %v", n1qlstatement)
 	_, err = tc.ExecuteN1QLStatement(kvaddress, clusterconfig.Username, clusterconfig.Password, bucketName, n1qlstatement, false, nil)
 	FailTestIfError(err, "Error in executing n1ql statement", t)
-	// Wait for the index to get dropped
-	time.Sleep(3 * time.Second)
 
-	// Check if index exists after altering
-	if checkIfReplicaExists(indexName, bucketName, 0) {
+	// Wait for the replica to get dropped
+	if waitForReplicaDrop(indexName, bucketName, 0) {
 		t.Fatalf("Replica: 0 is expected to be dropped. But it still exists")
 	}
 
@@ -200,22 +196,38 @@ func waitForIndexActive(bucket, index string, t *testing.T) {
 
 // Helper function that can be used to verify whether an index is dropped or not
 // for alter index decrement replica count, alter index drop
-func checkIfReplicaExists(index, bucket string, replicaId int) bool {
-	indexName := fmt.Sprintf("%v (replica %v)", index, replicaId)
-	status, err := secondaryindex.GetIndexStatus(clusterconfig.Username, clusterconfig.Password, kvaddress)
-	if status != nil && err == nil {
-		indexes := status["indexes"].([]interface{})
-		for _, indexEntry := range indexes {
-			entry := indexEntry.(map[string]interface{})
-			if indexName == entry["index"].(string) {
-				if bucket == entry["bucket"].(string) {
-					return true
-				}
-			}
-		}
+func waitForReplicaDrop(index, bucket string, replicaId int) bool {
+	ticker := time.NewTicker(5 * time.Second)
+	indexName := index
+	if replicaId != 0 {
+		indexName = fmt.Sprintf("%v (replica %v)", index, replicaId)
 	}
-	if err != nil {
-		log.Printf("checkIfReplicaExists:: Error while retrieving GetIndexStatus, err: %v", err)
+	// Wait for 2 minutes max for the replica to get dropped
+	for {
+		select {
+		case <-ticker.C:
+			status, err := secondaryindex.GetIndexStatus(clusterconfig.Username, clusterconfig.Password, kvaddress)
+			if status != nil && err == nil {
+				indexes := status["indexes"].([]interface{})
+				for _, indexEntry := range indexes {
+					entry := indexEntry.(map[string]interface{})
+					if indexName == entry["index"].(string) {
+						if bucket == entry["bucket"].(string) {
+							continue
+						}
+					}
+				}
+				return false
+			}
+			if err != nil {
+				log.Printf("waitForReplicaDrop:: Error while retrieving GetIndexStatus, err: %v", err)
+				return true
+			}
+
+		case <-time.After(2 * time.Minute):
+			log.Printf("waitForReplicaDrop:: Index replica %v exists even after 2 minutes", indexName)
+			return true
+		}
 	}
 	return false
 }
@@ -284,11 +296,16 @@ func scanIndexReplicas(index, bucket string, replicaIds []int, numScans, numDocs
 		}
 	}
 
+	logStats := func() {
+		log.Printf("ScanAllReplicas: Indexer stats are: %v", stats)
+	}
 	if num_scan_errors > 0 {
+		logStats()
 		t.Fatalf("Expected '0' scan errors. Found: %v scan errors", num_scan_errors)
 	}
 
 	if num_scan_timeouts > 0 {
+		logStats()
 		t.Fatalf("Expected '0' scan timeouts. Found: %v scan timeouts", num_scan_errors)
 	}
 
@@ -297,12 +314,14 @@ func scanIndexReplicas(index, bucket string, replicaIds []int, numScans, numDocs
 		total_scan_requests := 0.0
 		for i := 0; i < len(replicas); i++ {
 			if num_requests[i][j] == 0 {
+				logStats()
 				t.Fatalf("Zero scan requests seen for index: %v, partnId: %v", index+replicas[i], j)
 			}
 			total_scan_requests += num_requests[i][j]
 		}
 
 		if total_scan_requests != (float64)(numScans) {
+			logStats()
 			t.Fatalf("Total scan requests for all partitions does not match the total scans. Expected: %v, actual: %v, partitionID: %v", numScans, total_scan_requests, j)
 		}
 	}
