@@ -16,15 +16,16 @@ package indexer
 import (
 	"errors"
 	"fmt"
+	"net"
+	"sort"
+	"strings"
+	"time"
+
 	c "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	projClient "github.com/couchbase/indexing/secondary/projector/client"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
 	"github.com/golang/protobuf/proto"
-	"net"
-	"sort"
-	"strings"
-	"time"
 )
 
 const (
@@ -122,7 +123,7 @@ func (k *kvSender) handleSupvervisorCommands(cmd Message) {
 		k.handleRemoveIndexListFromStream(cmd)
 
 	case REMOVE_BUCKET_FROM_STREAM:
-		k.handleRemoveBucketFromStream(cmd)
+		k.handleRemoveKeyspaceFromStream(cmd)
 
 	case CLOSE_STREAM:
 		k.handleCloseStream(cmd)
@@ -147,16 +148,16 @@ func (k *kvSender) handleOpenStream(cmd Message) {
 	restartTs := cmd.(*MsgStreamUpdate).GetRestartTs()
 	respCh := cmd.(*MsgStreamUpdate).GetResponseChannel()
 	stopCh := cmd.(*MsgStreamUpdate).GetStopChannel()
-	bucket := cmd.(*MsgStreamUpdate).GetBucket()
+	keyspaceId := cmd.(*MsgStreamUpdate).GetBucket()
 	async := cmd.(*MsgStreamUpdate).GetAsync()
 	sessionId := cmd.(*MsgStreamUpdate).GetSessionId()
 
 	logging.LazyDebug(func() string {
 		return fmt.Sprintf("KVSender::handleOpenStream %v %v %v",
-			streamId, bucket, cmd)
+			streamId, keyspaceId, cmd)
 	})
 
-	go k.openMutationStream(streamId, indexInstList,
+	go k.openMutationStream(streamId, keyspaceId, indexInstList,
 		restartTs, async, sessionId, respCh, stopCh)
 
 	k.supvCmdch <- &MsgSuccess{}
@@ -166,16 +167,16 @@ func (k *kvSender) handleOpenStream(cmd Message) {
 func (k *kvSender) handleAddIndexListToStream(cmd Message) {
 
 	streamId := cmd.(*MsgStreamUpdate).GetStreamId()
-	bucket := cmd.(*MsgStreamUpdate).GetBucket()
+	keyspaceId := cmd.(*MsgStreamUpdate).GetBucket()
 	addIndexList := cmd.(*MsgStreamUpdate).GetIndexList()
 	respCh := cmd.(*MsgStreamUpdate).GetResponseChannel()
 	stopCh := cmd.(*MsgStreamUpdate).GetStopChannel()
 
 	logging.LazyDebug(func() string {
-		return fmt.Sprintf("KVSender::handleAddIndexListToStream %v %v %v", streamId, bucket, cmd)
+		return fmt.Sprintf("KVSender::handleAddIndexListToStream %v %v %v", streamId, keyspaceId, cmd)
 	})
 
-	go k.addIndexForExistingBucket(streamId, bucket, addIndexList, respCh, stopCh)
+	go k.addIndexForExistingKeyspace(streamId, keyspaceId, addIndexList, respCh, stopCh)
 
 	k.supvCmdch <- &MsgSuccess{}
 }
@@ -187,27 +188,28 @@ func (k *kvSender) handleRemoveIndexListFromStream(cmd Message) {
 	})
 
 	streamId := cmd.(*MsgStreamUpdate).GetStreamId()
+	keyspaceId := cmd.(*MsgStreamUpdate).GetBucket()
 	delIndexList := cmd.(*MsgStreamUpdate).GetIndexList()
 	respCh := cmd.(*MsgStreamUpdate).GetResponseChannel()
 	stopCh := cmd.(*MsgStreamUpdate).GetStopChannel()
 
-	go k.deleteIndexesFromStream(streamId, delIndexList, respCh, stopCh)
+	go k.deleteIndexesFromStream(streamId, keyspaceId, delIndexList, respCh, stopCh)
 
 	k.supvCmdch <- &MsgSuccess{}
 }
 
-func (k *kvSender) handleRemoveBucketFromStream(cmd Message) {
+func (k *kvSender) handleRemoveKeyspaceFromStream(cmd Message) {
 
 	streamId := cmd.(*MsgStreamUpdate).GetStreamId()
-	bucket := cmd.(*MsgStreamUpdate).GetBucket()
+	keyspaceId := cmd.(*MsgStreamUpdate).GetBucket()
 	respCh := cmd.(*MsgStreamUpdate).GetResponseChannel()
 	stopCh := cmd.(*MsgStreamUpdate).GetStopChannel()
 
 	logging.LazyDebug(func() string {
-		return fmt.Sprintf("KVSender::handleRemoveBucketFromStream %v %v %v", streamId, bucket, cmd)
+		return fmt.Sprintf("KVSender::handleRemoveKeyspaceFromStream %v %v %v", streamId, keyspaceId, cmd)
 	})
 
-	go k.deleteBucketsFromStream(streamId, []string{bucket}, respCh, stopCh)
+	go k.deleteKeyspacesFromStream(streamId, []string{keyspaceId}, respCh, stopCh)
 
 	k.supvCmdch <- &MsgSuccess{}
 }
@@ -215,15 +217,15 @@ func (k *kvSender) handleRemoveBucketFromStream(cmd Message) {
 func (k *kvSender) handleCloseStream(cmd Message) {
 
 	streamId := cmd.(*MsgStreamUpdate).GetStreamId()
-	bucket := cmd.(*MsgStreamUpdate).GetBucket()
+	keyspaceId := cmd.(*MsgStreamUpdate).GetBucket()
 	respCh := cmd.(*MsgStreamUpdate).GetResponseChannel()
 	stopCh := cmd.(*MsgStreamUpdate).GetStopChannel()
 
 	logging.LazyDebug(func() string {
-		return fmt.Sprintf("KVSender::handleCloseStream %v %v %v", streamId, bucket, cmd)
+		return fmt.Sprintf("KVSender::handleCloseStream %v %v %v", streamId, keyspaceId, cmd)
 	})
 
-	go k.closeMutationStream(streamId, bucket, respCh, stopCh)
+	go k.closeMutationStream(streamId, keyspaceId, respCh, stopCh)
 
 	k.supvCmdch <- &MsgSuccess{}
 }
@@ -231,7 +233,7 @@ func (k *kvSender) handleCloseStream(cmd Message) {
 func (k *kvSender) handleRestartVbuckets(cmd Message) {
 
 	streamId := cmd.(*MsgRestartVbuckets).GetStreamId()
-	bucket := cmd.(*MsgRestartVbuckets).GetBucket()
+	keyspaceId := cmd.(*MsgRestartVbuckets).GetBucket()
 	restartTs := cmd.(*MsgRestartVbuckets).GetRestartTs()
 	respCh := cmd.(*MsgRestartVbuckets).GetResponseCh()
 	stopCh := cmd.(*MsgRestartVbuckets).GetStopChannel()
@@ -244,12 +246,12 @@ func (k *kvSender) handleRestartVbuckets(cmd Message) {
 			streamId, bucket, cmd)
 	})
 
-	go k.restartVbuckets(streamId, restartTs, connErrVbs, repairVbs,
+	go k.restartVbuckets(streamId, keyspaceId, restartTs, connErrVbs, repairVbs,
 		sessionId, respCh, stopCh)
 	k.supvCmdch <- &MsgSuccess{}
 }
 
-func (k *kvSender) openMutationStream(streamId c.StreamId, indexInstList []c.IndexInst,
+func (k *kvSender) openMutationStream(streamId c.StreamId, keyspaceId string, indexInstList []c.IndexInst,
 	restartTs *c.TsVbuuid, async bool, sessionId uint64, respCh MsgChannel, stopCh StopChannel) {
 
 	if len(indexInstList) == 0 {
@@ -258,8 +260,9 @@ func (k *kvSender) openMutationStream(streamId c.StreamId, indexInstList []c.Ind
 		return
 	}
 
-	protoInstList := convertIndexListToProto(k.config, k.cInfoClient, indexInstList, streamId)
-	bucket := indexInstList[0].Defn.Bucket
+	protoInstList := convertIndexListToProto(k.config, k.cInfoCache, indexInstList, streamId)
+
+	bucket, _, collection := SplitKeyspaceId(keyspaceId)
 
 	//use any bucket as list of vbs remain the same for all buckets
 	vbnos, addrs, err := k.getAllVbucketsInCluster(bucket)
