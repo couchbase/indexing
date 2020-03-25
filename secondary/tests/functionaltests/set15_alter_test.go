@@ -206,21 +206,14 @@ func waitForReplicaDrop(index, bucket string, replicaId int) bool {
 	for {
 		select {
 		case <-ticker.C:
-			status, err := secondaryindex.GetIndexStatus(clusterconfig.Username, clusterconfig.Password, kvaddress)
-			if status != nil && err == nil {
-				indexes := status["indexes"].([]interface{})
-				for _, indexEntry := range indexes {
-					entry := indexEntry.(map[string]interface{})
-					if indexName == entry["index"].(string) {
-						if bucket == entry["bucket"].(string) {
-							continue
-						}
-					}
+			stats := secondaryindex.GetIndexStats(indexName, bucket, clusterconfig.Username, clusterconfig.Password, kvaddress)
+			if stats != nil {
+				if _, ok := stats[bucket+":"+indexName+":items_count"]; ok {
+					continue
 				}
 				return false
-			}
-			if err != nil {
-				log.Printf("waitForReplicaDrop:: Error while retrieving GetIndexStatus, err: %v", err)
+			} else {
+				log.Printf("waitForReplicaDrop:: Unable to retrieve index stats for index: %v", indexName)
 				return true
 			}
 
