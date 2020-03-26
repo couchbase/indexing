@@ -2,6 +2,7 @@ package collections
 
 const COLLECTION_ID_NIL = ""
 const SCOPE_ID_NIL = ""
+const MANIFEST_UID_NIL = ""
 
 type CollectionManifest struct {
 	UID    string            `json:"uid"`

@@ -457,6 +457,7 @@ type MsgStreamUpdate struct {
 	rollbackTime int64
 	async        bool
 	sessionId    uint64
+	collectionId string
 
 	allowMarkFirstSnap bool
 	bucketInRecovery   bool
@@ -519,6 +520,10 @@ func (m *MsgStreamUpdate) AbortRecovery() bool {
 	return m.abortRecovery
 }
 
+func (m *MsgStreamUpdate) GetCollectionId() string {
+	return m.collectionId
+}
+
 func (m *MsgStreamUpdate) String() string {
 
 	str := "\n\tMessage: MsgStreamUpdate"
@@ -529,6 +534,7 @@ func (m *MsgStreamUpdate) String() string {
 	str += fmt.Sprintf("\n\tIndexList: %v", m.indexList)
 	str += fmt.Sprintf("\n\tAsync: %v", m.async)
 	str += fmt.Sprintf("\n\tSessionId: %v", m.sessionId)
+	str += fmt.Sprintf("\n\tCollectionId: %v", m.collectionId)
 	str += fmt.Sprintf("\n\tRestartTs: %v", m.restartTs)
 	return str
 
@@ -1210,14 +1216,15 @@ func (m *MsgBucketHWT) String() string {
 
 //KV_SENDER_RESTART_VBUCKETS
 type MsgRestartVbuckets struct {
-	streamId   common.StreamId
-	bucket     string
-	restartTs  *common.TsVbuuid
-	connErrVbs []Vbucket
-	repairVbs  []Vbucket
-	respCh     MsgChannel
-	stopCh     StopChannel
-	sessionId  uint64
+	streamId     common.StreamId
+	bucket       string
+	restartTs    *common.TsVbuuid
+	connErrVbs   []Vbucket
+	repairVbs    []Vbucket
+	respCh       MsgChannel
+	stopCh       StopChannel
+	sessionId    uint64
+	collectionId string
 }
 
 func (m *MsgRestartVbuckets) GetMsgType() MsgType {
@@ -1256,11 +1263,16 @@ func (m *MsgRestartVbuckets) GetSessionId() uint64 {
 	return m.sessionId
 }
 
+func (m *MsgRestartVbuckets) GetCollectionId() string {
+	return m.collectionId
+}
+
 func (m *MsgRestartVbuckets) String() string {
 	str := "\n\tMessage: MsgRestartVbuckets"
 	str += fmt.Sprintf("\n\tStreamId: %v", m.streamId)
 	str += fmt.Sprintf("\n\tBucket: %v", m.bucket)
 	str += fmt.Sprintf("\n\tSessionId: %v", m.sessionId)
+	str += fmt.Sprintf("\n\tCollectionId: %v", m.collectionId)
 	str += fmt.Sprintf("\n\tRestartTS: %v", m.restartTs)
 	return str
 }
