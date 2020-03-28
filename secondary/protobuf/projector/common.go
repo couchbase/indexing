@@ -92,12 +92,13 @@ func NewTsVbFull(pool, bucket string, seqnos []uint64) *TsVbFull {
 
 func NewTsVbuuid(pool, bucket string, maxvb int) *TsVbuuid {
 	return &TsVbuuid{
-		Pool:      proto.String(pool),
-		Bucket:    proto.String(bucket),
-		Vbnos:     make([]uint32, 0, maxvb),
-		Seqnos:    make([]uint64, 0, maxvb),
-		Vbuuids:   make([]uint64, 0, maxvb),
-		Snapshots: make([]*Snapshot, 0, maxvb),
+		Pool:         proto.String(pool),
+		Bucket:       proto.String(bucket),
+		Vbnos:        make([]uint32, 0, maxvb),
+		Seqnos:       make([]uint64, 0, maxvb),
+		Vbuuids:      make([]uint64, 0, maxvb),
+		Snapshots:    make([]*Snapshot, 0, maxvb),
+		ManifestUIDs: make([]string, 0, maxvb),
 	}
 }
 
@@ -108,7 +109,7 @@ func (ts *TsVbuuid) IsEmpty() bool {
 
 // Append a vbucket detail to TsVbuuid.
 func (ts *TsVbuuid) Append(
-	vbno uint16, seqno, vbuuid, start, end uint64) *TsVbuuid {
+	vbno uint16, seqno, vbuuid, start, end uint64, manifest string) *TsVbuuid {
 
 	if ts == nil {
 		return ts
@@ -118,6 +119,7 @@ func (ts *TsVbuuid) Append(
 	ts.Seqnos = append(ts.Seqnos, seqno)
 	ts.Vbuuids = append(ts.Vbuuids, vbuuid)
 	ts.Snapshots = append(ts.Snapshots, snapshot)
+	ts.ManifestUIDs = append(ts.ManifestUIDs, manifest)
 	sort.Sort(ts)
 	return ts
 }
@@ -128,39 +130,43 @@ func (ts *TsVbuuid) Clone() *TsVbuuid {
 	seqnos := ts.GetSeqnos()
 	vbuuids := ts.GetVbuuids()
 	snapshots := ts.GetSnapshots()
+	manifests := ts.GetManifestUIDs()
 	newts := NewTsVbuuid(ts.GetPool(), ts.GetBucket(), len(vbnos))
 	for i, vbno := range vbnos {
 		newts.Vbnos = append(newts.Vbnos, vbno)
 		newts.Seqnos = append(newts.Seqnos, seqnos[i])
 		newts.Vbuuids = append(newts.Vbuuids, vbuuids[i])
 		newts.Snapshots = append(newts.Snapshots, snapshots[i])
+		newts.ManifestUIDs = append(newts.ManifestUIDs, manifests[i])
 	}
 	return newts
 }
 
 // Get entry details like seqno, vbuuid, snapshot for `vbno`.
 func (ts *TsVbuuid) Get(
-	vbno uint16) (seqno, vbuuid, sStart, sEnd uint64, err error) {
+	vbno uint16) (seqno, vbuuid, sStart, sEnd uint64, manifest string, err error) {
 
 	if ts == nil {
-		return seqno, vbuuid, sStart, sEnd, errors.New("timestamp empty")
+		return seqno, vbuuid, sStart, sEnd, manifest, errors.New("timestamp empty")
 	}
 
 	seqnos, vbuuids := ts.GetSeqnos(), ts.GetVbuuids()
 	snapshots := ts.GetSnapshots()
+	manifests := ts.GetManifestUIDs()
 	for i, x := range ts.GetVbnos() {
 		if x == uint32(vbno) {
 			seqno, vbuuid, snapshot := seqnos[i], vbuuids[i], snapshots[i]
 			sStart, sEnd = snapshot.GetStart(), snapshot.GetEnd()
-			return seqno, vbuuid, sStart, sEnd, nil
+			manifest := manifests[i]
+			return seqno, vbuuid, sStart, sEnd, manifest, nil
 		}
 	}
-	return seqno, vbuuid, sStart, sEnd, errors.New("Not Found")
+	return seqno, vbuuid, sStart, sEnd, manifest, errors.New("Not Found")
 }
 
 // Set entry details like seqno, vbuuid, snapshot for `vbno`.
 func (ts *TsVbuuid) Set(
-	vbno uint16, seqno, vbuuid, sStart, sEnd uint64) (err error) {
+	vbno uint16, seqno, vbuuid, sStart, sEnd uint64, manifest string) (err error) {
 
 	if ts == nil {
 		return errors.New("bucket-timestamp empty")
@@ -169,10 +175,11 @@ func (ts *TsVbuuid) Set(
 	snapshot := NewSnapshot(sStart, sEnd)
 	seqnos, vbuuids := ts.GetSeqnos(), ts.GetVbuuids()
 	snapshots := ts.GetSnapshots()
+	manifests := ts.GetManifestUIDs()
 	for i, x := range ts.GetVbnos() {
 		if x == uint32(vbno) {
-			seqnos[i], vbuuids[i], snapshots[i] = seqno, vbuuid, snapshot
-			ts.Seqnos, ts.Vbuuids, ts.Snapshots = seqnos, vbuuids, snapshots
+			seqnos[i], vbuuids[i], snapshots[i], manifests[i] = seqno, vbuuid, snapshot, manifest
+			ts.Seqnos, ts.Vbuuids, ts.Snapshots, ts.ManifestUIDs = seqnos, vbuuids, snapshots, manifests
 			return nil
 		}
 	}
@@ -199,6 +206,7 @@ func (ts *TsVbuuid) FromTsVbuuid(nativeTs *c.TsVbuuid) *TsVbuuid {
 		ts.Vbnos = append(ts.Vbnos, uint32(vbno))
 		ts.Seqnos = append(ts.Seqnos, nativeTs.Seqnos[vbno])
 		ts.Vbuuids = append(ts.Vbuuids, nativeTs.Vbuuids[vbno])
+		ts.ManifestUIDs = append(ts.ManifestUIDs, nativeTs.ManifestUIDs[vbno])
 	}
 	return ts
 }
@@ -207,10 +215,12 @@ func (ts *TsVbuuid) FromTsVbuuid(nativeTs *c.TsVbuuid) *TsVbuuid {
 // later requires the full set of timestamp.
 func (ts *TsVbuuid) ToTsVbuuid(maxVbuckets int) *c.TsVbuuid {
 	nativeTs := c.NewTsVbuuid(ts.GetBucket(), maxVbuckets)
-	seqnos, vbuuids, ss := ts.GetSeqnos(), ts.GetVbuuids(), ts.GetSnapshots()
+	seqnos, vbuuids, ss, manifests := ts.GetSeqnos(), ts.GetVbuuids(),
+		ts.GetSnapshots(), ts.GetManifestUIDs()
 	for i, vbno := range ts.GetVbnos() {
 		nativeTs.Seqnos[vbno] = seqnos[i]
 		nativeTs.Vbuuids[vbno] = vbuuids[i]
+		nativeTs.ManifestUIDs[vbno] = manifests[i]
 		nativeTs.Snapshots[vbno] = [2]uint64{ss[i].GetStart(), ss[i].GetEnd()}
 	}
 	return nativeTs
@@ -233,6 +243,7 @@ func (ts *TsVbuuid) Union(other *TsVbuuid) *TsVbuuid {
 	newts.Vbnos = append(newts.Vbnos, other.Vbnos...)
 	newts.Seqnos = append(newts.Seqnos, other.Seqnos...)
 	newts.Vbuuids = append(newts.Vbuuids, other.Vbuuids...)
+	newts.ManifestUIDs = append(newts.ManifestUIDs, other.ManifestUIDs...)
 	newts.Snapshots = append(newts.Snapshots, other.Snapshots...)
 
 	cache := make(map[uint32]bool)
@@ -248,6 +259,7 @@ func (ts *TsVbuuid) Union(other *TsVbuuid) *TsVbuuid {
 		newts.Vbnos = append(newts.Vbnos, vbno)
 		newts.Seqnos = append(newts.Seqnos, ts.Seqnos[i])
 		newts.Vbuuids = append(newts.Vbuuids, ts.Vbuuids[i])
+		newts.ManifestUIDs = append(newts.ManifestUIDs, ts.ManifestUIDs[i])
 		newts.Snapshots = append(newts.Snapshots, ts.Snapshots[i])
 	}
 	sort.Sort(newts)
@@ -278,6 +290,7 @@ func (ts *TsVbuuid) SelectByVbuckets(vbuckets []uint16) *TsVbuuid {
 			newts.Vbuuids = append(newts.Vbuuids, ts.Vbuuids[i])
 			newts.Seqnos = append(newts.Seqnos, ts.Seqnos[i])
 			newts.Snapshots = append(newts.Snapshots, ts.Snapshots[i])
+			newts.ManifestUIDs = append(newts.ManifestUIDs, ts.ManifestUIDs[i])
 		}
 	}
 	return newts
@@ -308,6 +321,7 @@ func (ts *TsVbuuid) FilterByVbuckets(vbuckets []uint16) *TsVbuuid {
 		newts.Seqnos = append(newts.Seqnos, ts.Seqnos[i])
 		newts.Vbuuids = append(newts.Vbuuids, ts.Vbuuids[i])
 		newts.Snapshots = append(newts.Snapshots, ts.Snapshots[i])
+		newts.ManifestUIDs = append(newts.ManifestUIDs, ts.ManifestUIDs[i])
 	}
 	return newts
 }
@@ -335,7 +349,7 @@ func (ts *TsVbuuid) ComputeFailoverTs(flogs couchbase.FailoverLog) *TsVbuuid {
 	for vbno, flog := range flogs {
 		x := flog[len(flog)-1]
 		vbuuid, seqno := x[0], x[1]
-		failoverTs.Append(vbno, seqno, vbuuid, seqno, seqno)
+		failoverTs.Append(vbno, seqno, vbuuid, seqno, seqno, "")
 	}
 	return failoverTs
 }
@@ -344,7 +358,7 @@ func (ts *TsVbuuid) ComputeFailoverTs(flogs couchbase.FailoverLog) *TsVbuuid {
 func (ts *TsVbuuid) InitialRestartTs(flogs couchbase.FailoverLog) *TsVbuuid {
 	for vbno, flog := range flogs {
 		vbuuid, _, _ := flog.Latest()
-		ts.Append(vbno, 0, vbuuid, 0, 0)
+		ts.Append(vbno, 0, vbuuid, 0, 0, "")
 	}
 	return ts
 }
@@ -358,7 +372,7 @@ func (ts *TsVbuuid) ComputeRestartTs(flogs couchbase.FailoverLog) *TsVbuuid {
 		vbuuid, _, _ := flog.Latest()
 		s := ts.Snapshots[i]
 		start, end := s.GetStart(), s.GetEnd()
-		restartTs.Append(vbno, start, vbuuid, start, end)
+		restartTs.Append(vbno, start, vbuuid, start, end, "")
 		i++
 	}
 	return restartTs
@@ -380,11 +394,12 @@ func (ts *TsVbuuid) Repr() string {
 		ts.GetBucket(), len(vbnos))
 	seqnos, vbuuids := ts.GetSeqnos(), ts.GetVbuuids()
 	snapshots := ts.GetSnapshots()
-	s += fmt.Sprintf("    {vbno, vbuuid, seqno, snapshot-start, snapshot-end}\n")
+	manifests := ts.GetManifestUIDs()
+	s += fmt.Sprintf("    {vbno, vbuuid, manifest, seqno, snapshot-start, snapshot-end}\n")
 	for i := 0; i < len(vbnos); i++ {
 		start, end := snapshots[i].GetStart(), snapshots[i].GetEnd()
-		s += fmt.Sprintf("    {%5d %16x %10d %10d %10d}\n",
-			vbnos[i], vbuuids[i], seqnos[i], start, end)
+		s += fmt.Sprintf("    {%5d %16x %s %10d %10d %10d}\n",
+			vbnos[i], vbuuids[i], manifests[i], seqnos[i], start, end)
 	}
 	return s
 }
@@ -404,4 +419,5 @@ func (ts *TsVbuuid) Swap(i, j int) {
 	ts.Seqnos[i], ts.Seqnos[j] = ts.Seqnos[j], ts.Seqnos[i]
 	ts.Vbuuids[i], ts.Vbuuids[j] = ts.Vbuuids[j], ts.Vbuuids[i]
 	ts.Snapshots[i], ts.Snapshots[j] = ts.Snapshots[j], ts.Snapshots[i]
+	ts.ManifestUIDs[i], ts.ManifestUIDs[j] = ts.ManifestUIDs[j], ts.ManifestUIDs[i]
 }

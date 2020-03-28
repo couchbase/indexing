@@ -546,7 +546,7 @@ loop:
 					continue
 				}
 
-				seqno, _, sStart, sEnd, err := reqTs.Get(cmd.vbno)
+				seqno, _, sStart, sEnd, _, err := reqTs.Get(cmd.vbno)
 				if err != nil {
 					fmsg := "%v ##%x backch flush %v: %v\n"
 					logging.Errorf(fmsg, prefix, cmd.opaque, cmd, err)
@@ -561,7 +561,7 @@ loop:
 					rollTs, ok := feed.rollTss[cmd.keyspaceId]
 					if ok {
 						rollTs = rollTs.Append(
-							cmd.vbno, cmd.seqno, cmd.vbuuid, sStart, sEnd)
+							cmd.vbno, cmd.seqno, cmd.vbuuid, sStart, sEnd, "")
 						feed.rollTss[cmd.keyspaceId] = rollTs
 					}
 
@@ -571,7 +571,7 @@ loop:
 					actTs, ok := feed.actTss[cmd.keyspaceId]
 					if ok {
 						actTs = actTs.Append(
-							cmd.vbno, seqno, cmd.vbuuid, sStart, sEnd)
+							cmd.vbno, seqno, cmd.vbuuid, sStart, sEnd, "")
 						feed.actTss[cmd.keyspaceId] = actTs
 					}
 
@@ -1940,14 +1940,14 @@ func (feed *Feed) waitStreamRequests(
 			val.opaque == opaque && ts.Contains(val.vbno) {
 
 			if val.status == mcd.SUCCESS {
-				actTs.Append(val.vbno, val.seqno, val.vbuuid, 0, 0)
+				actTs.Append(val.vbno, val.seqno, val.vbuuid, 0, 0, "")
 			} else if val.status == mcd.ROLLBACK {
-				rollTs.Append(val.vbno, val.seqno, val.vbuuid, 0, 0)
+				rollTs.Append(val.vbno, val.seqno, val.vbuuid, 0, 0, "")
 			} else if val.status == mcd.NOT_MY_VBUCKET {
-				failTs.Append(val.vbno, val.seqno, val.vbuuid, 0, 0)
+				failTs.Append(val.vbno, val.seqno, val.vbuuid, 0, 0, "")
 				err = projC.ErrorNotMyVbucket
 			} else {
-				failTs.Append(val.vbno, val.seqno, val.vbuuid, 0, 0)
+				failTs.Append(val.vbno, val.seqno, val.vbuuid, 0, 0, "")
 				err = projC.ErrorStreamRequest
 			}
 			vbnos = c.RemoveUint16(val.vbno, vbnos)
@@ -1990,12 +1990,12 @@ func (feed *Feed) waitStreamEnds(
 			ts.Contains(val.vbno) {
 
 			if val.status == mcd.SUCCESS {
-				endTs.Append(val.vbno, 0 /*seqno*/, 0 /*vbuuid*/, 0, 0)
+				endTs.Append(val.vbno, 0 /*seqno*/, 0 /*vbuuid*/, 0, 0, "")
 			} else if val.status == mcd.NOT_MY_VBUCKET {
-				failTs.Append(val.vbno, 0 /*seqno*/, 0 /*vbuuid*/, 0, 0)
+				failTs.Append(val.vbno, 0 /*seqno*/, 0 /*vbuuid*/, 0, 0, "")
 				err = projC.ErrorNotMyVbucket
 			} else {
-				failTs.Append(val.vbno, 0 /*seqno*/, 0 /*vbuuid*/, 0, 0)
+				failTs.Append(val.vbno, 0 /*seqno*/, 0 /*vbuuid*/, 0, 0, "")
 				err = projC.ErrorStreamEnd
 			}
 			vbnos = c.RemoveUint16(val.vbno, vbnos)
