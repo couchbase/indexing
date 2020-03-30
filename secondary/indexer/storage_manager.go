@@ -217,7 +217,7 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 
 	msgFlushDone := cmd.(*MsgMutMgrFlushDone)
 
-	bucket := msgFlushDone.GetBucket()
+	keyspaceId := msgFlushDone.GetBucket()
 	tsVbuuid := msgFlushDone.GetTS()
 	streamId := msgFlushDone.GetStreamId()
 	flushWasAborted := msgFlushDone.GetAborted()
@@ -229,7 +229,7 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 
 	if snapType == common.NO_SNAP {
 		logging.Debugf("StorageMgr::handleCreateSnapshot Skip Snapshot For %v "+
-			"%v SnapType %v", streamId, bucket, snapType)
+			"%v SnapType %v", streamId, keyspaceId, snapType)
 
 		s.muSnap.Lock()
 		defer s.muSnap.Unlock()
@@ -237,7 +237,7 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 		indexInstMap := common.CopyIndexInstMap(s.indexInstMap)
 		indexPartnMap := CopyIndexPartnMap(s.indexPartnMap)
 
-		go s.flushDone(streamId, bucket, indexInstMap, indexPartnMap,
+		go s.flushDone(streamId, keyspaceId, indexInstMap, indexPartnMap,
 			tsVbuuid, flushWasAborted, hasAllSB)
 
 		return
@@ -247,17 +247,18 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 	defer s.muSnap.Unlock()
 
 	//pass copy of maps to worker
+	//TODO Collections create a filtered copy of maps based on keyspace
 	indexSnapMap := copyIndexSnapMap(s.indexSnapMap)
 	indexInstMap := common.CopyIndexInstMap(s.indexInstMap)
 	indexPartnMap := CopyIndexPartnMap(s.indexPartnMap)
 	stats := s.stats.Get()
 
-	go s.createSnapshotWorker(streamId, bucket, tsVbuuid, indexSnapMap,
+	go s.createSnapshotWorker(streamId, keyspaceId, tsVbuuid, indexSnapMap,
 		numVbuckets, indexInstMap, indexPartnMap, stats, flushWasAborted, hasAllSB)
 
 }
 
-func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, bucket string,
+func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, keyspaceId string,
 	tsVbuuid *common.TsVbuuid, indexSnapMap IndexSnapMap, numVbuckets int,
 	indexInstMap common.IndexInstMap, indexPartnMap IndexPartnMap, stats *IndexerStats,
 	flushWasAborted bool, hasAllSB bool) {
@@ -284,8 +285,8 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, bucket strin
 			idxInst := indexInstMap[idxInstId]
 			idxStats := stats.indexes[idxInst.InstId]
 			lastIndexSnap := indexSnapMap[idxInstId]
-			//if index belongs to the flushed bucket and stream
-			if idxInst.Defn.Bucket == bucket &&
+			//if index belongs to the flushed keyspaceId and stream
+			if idxInst.Defn.KeyspaceId(idxInst.Stream) == keyspaceId &&
 				idxInst.Stream == streamId &&
 				idxInst.State != common.INDEX_STATE_DELETED {
 
@@ -442,13 +443,13 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, bucket strin
 
 	s.supvRespch <- &MsgMutMgrFlushDone{mType: STORAGE_SNAP_DONE,
 		streamId: streamId,
-		bucket:   bucket,
+		bucket:   keyspaceId,
 		ts:       tsVbuuid,
 		aborted:  flushWasAborted}
 
 }
 
-func (s *storageMgr) flushDone(streamId common.StreamId, bucket string,
+func (s *storageMgr) flushDone(streamId common.StreamId, keyspaceId string,
 	indexInstMap common.IndexInstMap, indexPartnMap IndexPartnMap,
 	tsVbuuid *common.TsVbuuid, flushWasAborted bool, hasAllSB bool) {
 
@@ -459,7 +460,7 @@ func (s *storageMgr) flushDone(streamId common.StreamId, bucket string,
 
 		for _, inst := range indexInstMap {
 			if inst.Stream == streamId &&
-				inst.Defn.Bucket == bucket &&
+				inst.Defn.KeyspaceId(inst.Stream) == keyspaceId &&
 				(inst.State == common.INDEX_STATE_INITIAL || inst.State == common.INDEX_STATE_CATCHUP) {
 				return true
 			}
@@ -490,7 +491,7 @@ func (s *storageMgr) flushDone(streamId common.StreamId, bucket string,
 					defer wg.Done()
 
 					idxInst := indexInstMap[idxInstId]
-					if idxInst.Defn.Bucket == bucket &&
+					if idxInst.Defn.KeyspaceId(idxInst.Stream) == keyspaceId &&
 						idxInst.Stream == streamId &&
 						idxInst.State != common.INDEX_STATE_DELETED {
 
@@ -514,7 +515,7 @@ func (s *storageMgr) flushDone(streamId common.StreamId, bucket string,
 	if hasAllSB {
 		for idxInstId, partnMap := range indexPartnMap {
 			idxInst := indexInstMap[idxInstId]
-			if idxInst.Defn.Bucket == bucket &&
+			if idxInst.Defn.KeyspaceId(idxInst.Stream) == keyspaceId &&
 				idxInst.Stream == streamId &&
 				idxInst.State != common.INDEX_STATE_DELETED {
 				for _, partnInst := range partnMap {
@@ -529,7 +530,7 @@ func (s *storageMgr) flushDone(streamId common.StreamId, bucket string,
 	s.supvRespch <- &MsgMutMgrFlushDone{
 		mType:    STORAGE_SNAP_DONE,
 		streamId: streamId,
-		bucket:   bucket,
+		bucket:   keyspaceId,
 		ts:       tsVbuuid,
 		aborted:  flushWasAborted}
 }
@@ -622,7 +623,7 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 
 	streamId := cmd.(*MsgRollback).GetStreamId()
 	rollbackTs := cmd.(*MsgRollback).GetRollbackTs()
-	bucket := cmd.(*MsgRollback).GetBucket()
+	keyspaceId := cmd.(*MsgRollback).GetBucket()
 	sessionId := cmd.(*MsgRollback).GetSessionId()
 
 	logging.Infof("StorageMgr::handleRollback rollbackTs is %v", rollbackTs)
@@ -634,27 +635,27 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 	for idxInstId, partnMap := range sm.indexPartnMap {
 		idxInst := sm.indexInstMap[idxInstId]
 
-		//if this bucket in stream needs to be rolled back
-		if idxInst.Defn.Bucket == bucket &&
+		//if this keyspace in stream needs to be rolled back
+		if idxInst.Defn.KeyspaceId(idxInst.Stream) == keyspaceId &&
 			idxInst.Stream == streamId &&
 			idxInst.State != common.INDEX_STATE_DELETED {
 
 			restartTs, err = sm.rollbackIndex(streamId,
-				bucket, rollbackTs, idxInstId, partnMap, restartTs)
+				keyspaceId, rollbackTs, idxInstId, partnMap, restartTs)
 
 			if err != nil {
 				sm.supvRespch <- &MsgRollbackDone{streamId: streamId,
-					bucket:    bucket,
+					bucket:    keyspaceId,
 					err:       err,
 					sessionId: sessionId}
 				return
 			}
 
 			if restartTs == nil {
-				err = sm.rollbackAllToZero(streamId, bucket)
+				err = sm.rollbackAllToZero(streamId, keyspaceId)
 				if err != nil {
 					sm.supvRespch <- &MsgRollbackDone{streamId: streamId,
-						bucket:    bucket,
+						bucket:    keyspaceId,
 						err:       err,
 						sessionId: sessionId}
 					return
@@ -667,13 +668,13 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 	go func() {
 		sm.muSnap.Lock()
 		defer sm.muSnap.Unlock()
-		// Notify all scan waiters for indexes in this bucket
+		// Notify all scan waiters for indexes in this keyspaceId
 		// and stream with error
 		stats := sm.stats.Get()
 		for idxInstId, waiters := range sm.waitersMap {
 			idxInst := sm.indexInstMap[idxInstId]
 			idxStats := stats.indexes[idxInst.InstId]
-			if idxInst.Defn.Bucket == bucket &&
+			if idxInst.Defn.KeyspaceId(idxInst.Stream) == keyspaceId &&
 				idxInst.Stream == streamId {
 				for _, w := range waiters {
 					w.Error(ErrIndexRollback)
@@ -687,25 +688,26 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 		}
 	}()
 
-	sm.updateIndexSnapMap(sm.indexPartnMap, streamId, bucket)
+	sm.updateIndexSnapMap(sm.indexPartnMap, streamId, keyspaceId)
 
+	bucket, _, _ := SplitKeyspaceId(keyspaceId)
 	stats := sm.stats.Get()
 	if bStats, ok := stats.buckets[bucket]; ok {
 		bStats.numRollbacks.Add(1)
 	}
 
 	if restartTs != nil {
-		restartTs = sm.validateRestartTsVbuuid(bucket, restartTs)
+		restartTs = sm.validateRestartTsVbuuid(keyspaceId, restartTs)
 	}
 
 	sm.supvRespch <- &MsgRollbackDone{streamId: streamId,
-		bucket:    bucket,
+		bucket:    keyspaceId,
 		restartTs: restartTs,
 		sessionId: sessionId,
 	}
 }
 
-func (sm *storageMgr) rollbackIndex(streamId common.StreamId, bucket string,
+func (sm *storageMgr) rollbackIndex(streamId common.StreamId, keyspaceId string,
 	rollbackTs *common.TsVbuuid, idxInstId common.IndexInstId,
 	partnMap PartitionInstMap, minRestartTs *common.TsVbuuid) (*common.TsVbuuid, error) {
 
@@ -838,15 +840,15 @@ func (sm *storageMgr) rollbackToSnapshot(idxInstId common.IndexInstId,
 }
 
 func (sm *storageMgr) rollbackAllToZero(streamId common.StreamId,
-	bucket string) error {
+	keyspaceId string) error {
 
-	logging.Infof("StorageMgr::rollbackAllToZero %v %v", streamId, bucket)
+	logging.Infof("StorageMgr::rollbackAllToZero %v %v", streamId, keyspaceId)
 
 	for idxInstId, partnMap := range sm.indexPartnMap {
 		idxInst := sm.indexInstMap[idxInstId]
 
-		//if this bucket in stream needs to be rolled back
-		if idxInst.Defn.Bucket == bucket &&
+		//if this keyspace in stream needs to be rolled back
+		if idxInst.Defn.KeyspaceId(idxInst.Stream) == keyspaceId &&
 			idxInst.Stream == streamId &&
 			idxInst.State != common.INDEX_STATE_DELETED {
 
@@ -868,11 +870,13 @@ func (sm *storageMgr) rollbackAllToZero(streamId common.StreamId,
 	return nil
 }
 
-func (sm *storageMgr) validateRestartTsVbuuid(bucket string,
+func (sm *storageMgr) validateRestartTsVbuuid(keyspaceId string,
 	restartTs *common.TsVbuuid) *common.TsVbuuid {
 
 	clusterAddr := sm.config["clusterAddr"].String()
 	numVbuckets := sm.config["numVbuckets"].Int()
+
+	bucket, _, _ := SplitKeyspaceId(keyspaceId)
 
 	for i := 0; i < MAX_GETSEQS_RETRIES; i++ {
 
@@ -1550,27 +1554,27 @@ func (s *storageMgr) openSnapshot(idxInstId common.IndexInstId, partnInst Partit
 // FIXME: Current implementation makes major assumption that
 // single slice is supported.
 func (s *storageMgr) updateIndexSnapMap(indexPartnMap IndexPartnMap,
-	streamId common.StreamId, bucket string) {
+	streamId common.StreamId, keyspaceId string) {
 
 	s.muSnap.Lock()
 	defer s.muSnap.Unlock()
 
 	for idxInstId, partnMap := range indexPartnMap {
 		idxInst := s.indexInstMap[idxInstId]
-		s.updateIndexSnapMapForIndex(idxInstId, idxInst, partnMap, streamId, bucket)
+		s.updateIndexSnapMapForIndex(idxInstId, idxInst, partnMap, streamId, keyspaceId)
 	}
 }
 
 // Caller of updateIndexSnapMapForIndex should ensure
 // locking and subsequent unlocking of muSnap
 func (s *storageMgr) updateIndexSnapMapForIndex(idxInstId common.IndexInstId, idxInst common.IndexInst,
-	partnMap PartitionInstMap, streamId common.StreamId, bucket string) {
+	partnMap PartitionInstMap, streamId common.StreamId, keyspaceId string) {
 
 	needRestart := false
-	//if bucket and stream have been provided
-	if bucket != "" && streamId != common.ALL_STREAMS {
-		//skip the index if either bucket or stream don't match
-		if idxInst.Defn.Bucket != bucket || idxInst.Stream != streamId {
+	//if keyspace and stream have been provided
+	if keyspaceId != "" && streamId != common.ALL_STREAMS {
+		//skip the index if either keyspaceId or stream don't match
+		if idxInst.Defn.KeyspaceId(idxInst.Stream) != keyspaceId || idxInst.Stream != streamId {
 			return
 		}
 		//skip deleted indexes
@@ -1602,6 +1606,7 @@ func (s *storageMgr) updateIndexSnapMapForIndex(idxInstId common.IndexInstId, id
 		}
 	}
 
+	bucket, _, _ := SplitKeyspaceId(keyspaceId)
 	if len(partnSnapMap) != 0 {
 		is := &indexSnapshot{
 			instId: idxInstId,
@@ -1626,10 +1631,10 @@ func (s *storageMgr) handleUpdateIndexSnapMapForIndex(cmd Message) {
 	idxInst := req.GetInst()
 	partnMap := req.GetPartnMap()
 	streamId := req.GetStreamId()
-	bucket := req.GetBucket()
+	keyspaceId := req.GetBucket()
 
 	s.muSnap.Lock()
-	s.updateIndexSnapMapForIndex(idxInstId, idxInst, partnMap, streamId, bucket)
+	s.updateIndexSnapMapForIndex(idxInstId, idxInst, partnMap, streamId, keyspaceId)
 	s.muSnap.Unlock()
 
 	s.supvCmdch <- &MsgSuccess{}
