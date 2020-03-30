@@ -733,6 +733,36 @@ func (w *streamWorker) handleSingleKeyVersion(keyspaceId string, vbucket Vbucket
 				w.updateSnapInFilter(meta, w.snapStart, w.snapEnd)
 			}
 
+		case common.UpdateSeqno, common.SeqnoAdvanced:
+
+			//TODO Collections remove these logs after integration testing
+			if byte(cmd) == common.UpdateSeqno && w.streamId == common.INIT_STREAM {
+
+				logging.Fatalf("MutationStreamReader::handleSingleKeyVersion %v %v Unexpected UpdateSeqno "+
+					"%v %v", w.streamId, keyspaceId, meta, kv.GetDocid())
+			}
+
+			if byte(cmd) == common.SeqnoAdvanced && w.streamId == common.MAINT_STREAM {
+
+				logging.Fatalf("MutationStreamReader::handleSingleKeyVersion %v %v Unexpected SeqnoAdvanced "+
+					"%v %v", w.streamId, keyspaceId, meta, kv.GetDocid())
+			}
+
+			skipMutation, _ := w.checkAndSetKeyspaceIdFilter(meta)
+
+			//allocate an empty mutation for flusher
+			//TODO Collections can be done only for snapshot boundary
+			if !skipMutation {
+				mutk = NewMutationKeys()
+				mutk.meta = meta.Clone()
+				mutk.docid = kv.GetDocid()
+				mutk.mut = mutk.mut[:0]
+
+				mut := NewMutation()
+				mut.command = byte(cmd)
+				mutk.mut = append(mutk.mut, mut)
+			}
+
 		}
 	}
 
