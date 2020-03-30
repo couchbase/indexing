@@ -164,6 +164,9 @@ func (tk *timekeeper) handleSupervisorCommands(cmd Message) {
 	case STREAM_READER_CONN_ERROR:
 		tk.handleStreamConnError(cmd)
 
+	case STREAM_READER_SYSTEM_EVENT:
+		tk.handleDcpSystemEvent(cmd)
+
 	case POOL_CHANGE:
 		tk.handlePoolChange(cmd)
 
@@ -1588,6 +1591,76 @@ func (tk *timekeeper) handleStreamConnErrorInternal(streamId common.StreamId, ke
 	default:
 		logging.Errorf("Timekeeper::handleStreamConnError Invalid Stream State "+
 			"StreamId %v KeyspaceId %v State %v", streamId, keyspaceId, state)
+	}
+
+	tk.supvCmdch <- &MsgSuccess{}
+
+}
+
+func (tk *timekeeper) handleDcpSystemEvent(cmd Message) {
+
+	streamId := cmd.(*MsgStream).GetStreamId()
+	meta := cmd.(*MsgStream).GetMutationMeta()
+	eventType := cmd.(*MsgStream).GetEventType()
+	manifestuid := cmd.(*MsgStream).GetManifestUID()
+
+	defer meta.Free()
+
+	logging.Infof("TK SystemEvent %v %v %v %v %v %v %v %v", streamId, meta.keyspaceId,
+		meta.vbucket, meta.vbuuid, meta.seqno, meta.opaque, eventType, manifestuid)
+
+	tk.lock.Lock()
+	defer tk.lock.Unlock()
+
+	if tk.indexerState == INDEXER_PREPARE_UNPAUSE {
+		logging.Warnf("Timekeeper::handleDcpSystemEvent Received SystemEvent In "+
+			"Prepare Unpause State. KeyspaceId %v Stream %v. Ignored.", meta.keyspaceId, streamId)
+		tk.supvCmdch <- &MsgSuccess{}
+		return
+	}
+
+	//check if keyspace is active in stream
+	if tk.checkKeyspaceActiveInStream(streamId, meta.keyspaceId) == false {
+		logging.Warnf("Timekeeper::handleDcpSystemEvent Received SystemEvent for "+
+			"Inactive KeyspaceId %v Stream %v. Ignored.", meta.keyspaceId, streamId)
+		return
+	}
+
+	//if there are no indexes for this keyspace and stream, ignore
+	if c, ok := tk.ss.streamKeyspaceIdIndexCountMap[streamId][meta.keyspaceId]; !ok || c <= 0 {
+		logging.Warnf("Timekeeper::handleDcpSystemEvent Ignore SystemEvent for StreamId %v "+
+			"KeyspaceId %v. IndexCount %v. ", streamId, meta.keyspaceId, c)
+		tk.supvCmdch <- &MsgSuccess{}
+		return
+	}
+
+	//if the session doesn't match, ignore
+	sessionId := tk.ss.getSessionId(streamId, meta.keyspaceId)
+	if meta.opaque != 0 && sessionId != meta.opaque {
+		logging.Warnf("Timekeeper::handleDcpSystemEvent Ignore SystemEvent for StreamId %v "+
+			"KeyspaceId %v. SessionId %v. Current Session %v ", streamId, meta.keyspaceId,
+			meta.opaque, sessionId)
+		tk.supvCmdch <- &MsgSuccess{}
+		return
+	}
+
+	state := tk.ss.streamKeyspaceIdStatus[streamId][meta.keyspaceId]
+
+	switch state {
+
+	case STREAM_ACTIVE:
+		//update the HWT of this stream and keyspaceId with the manifestuid
+		keyspaceIdHWTMap := tk.ss.streamKeyspaceIdHWTMap[streamId]
+		ts := keyspaceIdHWTMap[meta.keyspaceId]
+		ts.ManifestUIDs[meta.vbucket] = manifestuid
+
+	case STREAM_PREPARE_RECOVERY, STREAM_PREPARE_DONE, STREAM_INACTIVE:
+		logging.Verbosef("Timekeeper::handleDcpSystemEvent Ignore SystemEvent "+
+			"for StreamId %v KeyspaceId %v State %v", streamId, meta.keyspaceId, state)
+
+	default:
+		logging.Errorf("Timekeeper::handleDcpSystemEvent Invalid Stream State "+
+			"StreamId %v KeyspaceId %v State %v", streamId, meta.keyspaceId, state)
 	}
 
 	tk.supvCmdch <- &MsgSuccess{}

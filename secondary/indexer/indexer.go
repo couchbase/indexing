@@ -960,18 +960,12 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 
 	switch msg.GetMsgType() {
 
-	case STREAM_READER_HWT:
-		//fwd the message to timekeeper
-		idx.tkCmdCh <- msg
-		<-idx.tkCmdCh
-
-	case STREAM_READER_STREAM_BEGIN:
-
-		//fwd the message to timekeeper
-		idx.tkCmdCh <- msg
-		<-idx.tkCmdCh
-
-	case STREAM_READER_STREAM_END:
+	case STREAM_READER_HWT,
+		STREAM_READER_STREAM_BEGIN,
+		STREAM_READER_STREAM_END,
+		STREAM_READER_SNAPSHOT_MARKER,
+		STREAM_READER_CONN_ERROR,
+		STREAM_READER_SYSTEM_EVENT:
 
 		//fwd the message to timekeeper
 		idx.tkCmdCh <- msg
@@ -981,17 +975,6 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 
 		logging.Warnf("Indexer::handleWorkerMsgs Received Drop Data "+
 			"From Mutation Mgr %v. Ignored.", msg)
-
-	case STREAM_READER_SNAPSHOT_MARKER:
-		//fwd the message to timekeeper
-		idx.tkCmdCh <- msg
-		<-idx.tkCmdCh
-
-	case STREAM_READER_CONN_ERROR:
-
-		//fwd the message to timekeeper
-		idx.tkCmdCh <- msg
-		<-idx.tkCmdCh
 
 	case TK_STABILITY_TIMESTAMP:
 		//send TS to Mutation Manager

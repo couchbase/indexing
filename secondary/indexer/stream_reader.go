@@ -763,6 +763,13 @@ func (w *streamWorker) handleSingleKeyVersion(keyspaceId string, vbucket Vbucket
 				mutk.mut = append(mutk.mut, mut)
 			}
 
+		case common.CollectionCreate, common.CollectionDrop,
+			common.CollectionFlush, common.CollectionChanged,
+			common.ScopeCreate, common.ScopeDrop:
+
+			manifestuid := string(kv.GetKeys()[i])
+			w.processDcpSystemEvent(meta, byte(cmd), manifestuid)
+
 		}
 	}
 
@@ -1039,6 +1046,20 @@ func (w *streamWorker) updateVbuuidInFilter(meta *MutationMeta) {
 			"keyspaceId %v vb %v vbuuid %v in Filter for Stream %v", meta.keyspaceId,
 			meta.vbucket, meta.vbuuid, w.streamId)
 	}
+
+}
+
+func (w *streamWorker) processDcpSystemEvent(meta *MutationMeta, eventType byte, manifestuid string) {
+
+	//send message to supervisor to take decision
+	msg := &MsgStream{
+		mType:       STREAM_READER_SYSTEM_EVENT,
+		streamId:    w.streamId,
+		meta:        meta.Clone(),
+		eventType:   eventType,
+		manifestuid: manifestuid,
+	}
+	w.reader.supvRespch <- msg
 
 }
 

@@ -39,6 +39,7 @@ const (
 	STREAM_READER_SHUTDOWN
 	STREAM_READER_CONN_ERROR
 	STREAM_READER_HWT
+	STREAM_READER_SYSTEM_EVENT
 
 	//MUTATION_MANAGER
 	MUT_MGR_PERSIST_MUTATION_QUEUE
@@ -272,13 +273,15 @@ func (m *MsgTimestamp) GetTimestamp() Timestamp {
 
 //Stream Reader Message
 type MsgStream struct {
-	mType    MsgType
-	streamId common.StreamId
-	node     []byte
-	meta     *MutationMeta
-	snapshot *MutationSnapshot
-	status   common.StreamStatus
-	errCode  byte
+	mType       MsgType
+	streamId    common.StreamId
+	node        []byte
+	meta        *MutationMeta
+	snapshot    *MutationSnapshot
+	status      common.StreamStatus
+	errCode     byte
+	eventType   byte
+	manifestuid string
 }
 
 func (m *MsgStream) GetMsgType() MsgType {
@@ -307,6 +310,14 @@ func (m *MsgStream) GetStatus() common.StreamStatus {
 
 func (m *MsgStream) GetErrorCode() byte {
 	return m.errCode
+}
+
+func (m *MsgStream) GetEventType() byte {
+	return m.eventType
+}
+
+func (m *MsgStream) GetManifestUID() string {
+	return m.manifestuid
 }
 
 func (m *MsgStream) String() string {
@@ -2085,6 +2096,8 @@ func (m MsgType) String() string {
 		return "STREAM_READER_CONN_ERROR"
 	case STREAM_READER_HWT:
 		return "STREAM_READER_HWT"
+	case STREAM_READER_SYSTEM_EVENT:
+		return "STREAM_READER_SYSTEM_EVENT"
 
 	case MUT_MGR_PERSIST_MUTATION_QUEUE:
 		return "MUT_MGR_PERSIST_MUTATION_QUEUE"
