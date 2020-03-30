@@ -141,6 +141,11 @@ func (c *ClusterInfoCache) SetServicePorts(portMap map[string]string) {
 
 }
 
+// TODO: In many places (e.g. lifecycle manager), cluster info cache
+// refresh is required only for one bucket. It is sub-optimal to update
+// the cluster info for all the buckets. Add a new method
+// (E.g., FetchForBucket) which will update the cluster info cache
+// only for that bucket.
 func (c *ClusterInfoCache) Fetch() error {
 
 	fn := func(r int, err error) error {
@@ -500,6 +505,31 @@ func (c *ClusterInfoCache) GetBucketUUID(bucket string) (uuid string) {
 
 	// no nodes recognize this bucket
 	return BUCKET_UUID_NIL
+}
+
+// Note: Currently, ns_server does not provide any streaming rest endpoint for
+// observing collections manifest. So, serviceChangeNotifier will not refresh
+// the clusterInfoCache incase of a change in collection manifest. This might
+// result in stale manifest with cluster info cache.
+//
+// Till the time, ns_server provides a streaming rest endpoint, it is advisable
+// to manually refresh the cluster info cache before retrieving the collectionID
+// i.e. use common.GetCollectionID() instead of directly calling cinfo.GetCollectionID()
+//
+// As of this patch, only IndexManager calls cluster info cache without any manual
+// refresh as IndexManager is built on top of clusterInfoClient
+func (c *ClusterInfoCache) GetCollectionID(bucket, scope, collection string) string {
+	return c.pool.GetCollectionID(bucket, scope, collection)
+}
+
+// See the comment for clusterInfoCache.GetCollectionID
+func (c *ClusterInfoCache) GetScopeID(bucket, scope string) string {
+	return c.pool.GetScopeID(bucket, scope)
+}
+
+// See the comment for clusterInfoCache.GetCollectionID
+func (c *ClusterInfoCache) GetScopeAndCollectionID(bucket, scope, collection string) (string, string) {
+	return c.pool.GetScopeAndCollectionID(bucket, scope, collection)
 }
 
 func (c *ClusterInfoCache) IsEphemeral(bucket string) (bool, error) {

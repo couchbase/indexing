@@ -455,7 +455,7 @@ func (gsi *gsiKeyspace) CreateIndex3(
 	for i, key := range rangeKey {
 		s := expression.NewStringer().Visit(key.Expr)
 		secStrs[i] = s
-		desc[i] = key.Desc
+		desc[i] = key.HasAttribute(datastore.IK_DESC)
 	}
 
 	// with
@@ -1081,8 +1081,14 @@ func (si *secondaryIndex2) RangeKey2() datastore.IndexKeys {
 		for i, exprS := range si.secExprs {
 			idxkey := &datastore.IndexKey{
 				Expr: exprS,
-				Desc: si.desc != nil && si.desc[i],
 			}
+
+			attr := datastore.IK_NONE
+			if si.desc != nil && si.desc[i] {
+				attr |= datastore.IK_DESC
+			}
+			idxkey.SetAttribute(attr, true)
+
 			idxkeys = append(idxkeys, idxkey)
 		}
 		return idxkeys

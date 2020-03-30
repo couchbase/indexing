@@ -11,7 +11,6 @@ import "github.com/couchbase/indexing/secondary/logging"
 import c "github.com/couchbase/indexing/secondary/common"
 import protobuf "github.com/couchbase/indexing/secondary/protobuf/data"
 
-// TODO (Collections): Add support for new messages
 var commandNames = map[byte]string{
 	c.Upsert:         "Upsert",
 	c.Deletion:       "Deletion",
@@ -21,6 +20,16 @@ var commandNames = map[byte]string{
 	c.StreamBegin:    "StreamBegin",
 	c.StreamEnd:      "StreamEnd",
 	c.Snapshot:       "Snapshot",
+
+	c.CollectionCreate:  "CollectionCreate",
+	c.CollectionDrop:    "CollectionDrop",
+	c.CollectionFlush:   "CollectionFlush",
+	c.ScopeCreate:       "ScopeCreate",
+	c.ScopeDrop:         "ScopeDrop",
+	c.CollectionChanged: "CollectionChanged",
+
+	c.UpdateSeqno:   "UpdateSeqno",
+	c.SeqnoAdvanced: "UpdateSeqnoAdvanced",
 }
 
 // Application starts a new dataport application to receive mutations from the
@@ -50,9 +59,8 @@ func Application(
 		return
 	}
 
-	// TODO (Collections): Make this object keyspaceIdWise instead of bucket wise
-	// bucket -> Command -> #count(int)
-	bucketWise := make(map[string]map[byte]int)
+	// keyspaceId -> Command -> #count(int)
+	keyspaceIdWise := make(map[string]map[byte]int)
 	// instance-uuid -> key -> #count(int)
 	keys := make(map[uint64]map[string]int)
 	mutations, messages := 0, 0
@@ -76,7 +84,7 @@ loop:
 
 			vbs, ok := msg.([]*protobuf.VbKeyVersions)
 			if ok {
-				mutations += processMutations(vbs, bucketWise, keys)
+				mutations += processMutations(vbs, keyspaceIdWise, keys)
 			} else {
 				messages++
 			}
@@ -88,10 +96,10 @@ loop:
 			break loop
 
 		case <-printTm:
-			for _, bucket := range sortedBuckets(bucketWise) {
-				commandWise := bucketWise[bucket]
+			for _, keyspaceId := range sortedKeyspaceIds(keyspaceIdWise) {
+				commandWise := keyspaceIdWise[keyspaceId]
 				logging.Infof("%v %v, %v\n",
-					logPrefix, bucket, sprintCommandCount(commandWise))
+					logPrefix, keyspaceId, sprintCommandCount(commandWise))
 			}
 			for id := uint64(0); id < 100; id++ {
 				if ks, ok := keys[id]; ok {
@@ -105,13 +113,13 @@ loop:
 
 func processMutations(
 	vbs []*protobuf.VbKeyVersions,
-	bucketWise map[string]map[byte]int,
+	keyspaceIdWise map[string]map[byte]int,
 	keys map[uint64]map[string]int) int {
 
 	mutations := 0
 	for _, vb := range vbs {
 		keyspaceId, kvs := vb.GetKeyspaceId(), vb.GetKvs()
-		commandWise, ok := bucketWise[keyspaceId]
+		commandWise, ok := keyspaceIdWise[keyspaceId]
 		if !ok {
 			commandWise = make(map[byte]int)
 		}
@@ -142,7 +150,7 @@ func processMutations(
 				//keys[uuid] = m
 			}
 		}
-		bucketWise[keyspaceId] = commandWise
+		keyspaceIdWise[keyspaceId] = commandWise
 	}
 	return mutations
 }
@@ -167,11 +175,11 @@ func sprintCommandCount(commandWise map[byte]int) string {
 	return strings.TrimRight(line, " ")
 }
 
-func sortedBuckets(bucketWise map[string]map[byte]int) []string {
-	buckets := make([]string, 0, len(bucketWise))
-	for bucket := range bucketWise {
-		buckets = append(buckets, bucket)
+func sortedKeyspaceIds(keyspaceIdWise map[string]map[byte]int) []string {
+	keyspaceIds := make([]string, 0, len(keyspaceIdWise))
+	for keyspaceId := range keyspaceIdWise {
+		keyspaceIds = append(keyspaceIds, keyspaceId)
 	}
-	sort.Sort(sort.StringSlice(buckets))
-	return buckets
+	sort.Sort(sort.StringSlice(keyspaceIds))
+	return keyspaceIds
 }

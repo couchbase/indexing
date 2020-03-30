@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 	"unsafe"
 
+	"github.com/couchbase/indexing/secondary/common/collections"
 	"github.com/couchbase/indexing/secondary/dcp/transport/client"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/security"
@@ -84,6 +85,9 @@ type Node struct {
 type Pool struct {
 	BucketMap map[string]Bucket
 	Nodes     []Node
+
+	// Bucket -> Collections manifest for the bucket
+	Manifest map[string]*collections.CollectionManifest
 
 	BucketURL       map[string]string `json:"buckets"`
 	ServerGroupsUri string            `json:"serverGroupsUri"`
@@ -528,6 +532,7 @@ func (b *Bucket) init(nb *Bucket) {
 
 func (p *Pool) refresh() (err error) {
 	p.BucketMap = make(map[string]Bucket)
+	p.Manifest = make(map[string]*collections.CollectionManifest)
 
 loop:
 	buckets := []Bucket{}
@@ -550,6 +555,20 @@ loop:
 		b.pool = p
 		b.init(nb)
 		p.BucketMap[b.Name] = b
+
+		// For each bucket, update collection manifest
+		manifest := &collections.CollectionManifest{}
+		err = p.client.parseURLResponse("pools/default/buckets/"+b.Name+"/collections", manifest)
+		if err != nil {
+			// bucket list is out of sync with cluster bucket list
+			// bucket might have got deleted.
+			if strings.Contains(err.Error(), "HTTP error 404") {
+				logging.Warnf("cluster_info: Out of sync for bucket %s. Retrying..", b.Name)
+				goto loop
+			}
+			return err
+		}
+		p.Manifest[b.Name] = manifest
 	}
 	return nil
 }
@@ -630,6 +649,27 @@ func (p *Pool) GetBucket(name string) (*Bucket, error) {
 	}
 	runtime.SetFinalizer(&rv, bucketFinalizer)
 	return &rv, nil
+}
+
+func (p *Pool) GetCollectionID(bucket, scope, collection string) string {
+	if manifest, ok := p.Manifest[bucket]; ok {
+		return manifest.GetCollectionID(scope, collection)
+	}
+	return collections.COLLECTION_ID_NIL
+}
+
+func (p *Pool) GetScopeID(bucket, scope string) string {
+	if manifest, ok := p.Manifest[bucket]; ok {
+		return manifest.GetScopeID(scope)
+	}
+	return collections.SCOPE_ID_NIL
+}
+
+func (p *Pool) GetScopeAndCollectionID(bucket, scope, collection string) (string, string) {
+	if manifest, ok := p.Manifest[bucket]; ok {
+		return manifest.GetScopeAndCollectionID(scope, collection)
+	}
+	return collections.SCOPE_ID_NIL, collections.COLLECTION_ID_NIL
 }
 
 // GetPool gets the pool to which this bucket belongs.

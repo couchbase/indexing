@@ -735,6 +735,10 @@ func (m *IndexManager) getBucketForCleanup() ([]string, error) {
 		// Get bucket UUID. Bucket uuid is BUCKET_UUID_NIL for non-existent bucket.
 		currentUUID := cinfo.GetBucketUUID(bucket)
 
+		// Note: Do not call cinfo.GetCollectionID() to retrieve collectionID as it
+		// can result in stale results. Use common.GetCollectionID() till the time
+		// ns_server provices streaming rest endpoint for streaming collection manifest
+
 		topology, err := m.repo.GetTopologyByBucket(bucket)
 		if err == nil && topology != nil {
 

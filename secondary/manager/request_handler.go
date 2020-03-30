@@ -604,9 +604,11 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, bucket string
 							}
 
 							name := common.FormatIndexInstDisplayName(defn.Name, int(instance.ReplicaId))
+							prefix := common.GetStatsPrefix(defn.Bucket, defn.Scope, defn.Collection,
+								defn.Name, int(instance.ReplicaId), 0, false)
 
 							completion := int(0)
-							key := fmt.Sprintf("%v:%v:build_progress", defn.Bucket, name)
+							key := common.GetIndexStatKey(prefix, "build_progress")
 							if progress, ok := stats.ToMap()[key]; ok {
 								completion = int(progress.(float64))
 							}
@@ -618,7 +620,7 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, bucket string
 							}
 
 							lastScanTime := "NA"
-							key = fmt.Sprintf("%v:%v:last_known_scan_time", defn.Bucket, name)
+							key = common.GetIndexStatKey(prefix, "last_known_scan_time")
 							if scanTime, ok := stats.ToMap()[key]; ok {
 								nsecs := int64(scanTime.(float64))
 								if nsecs != 0 {
