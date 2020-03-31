@@ -14,16 +14,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/rpc"
+	"strconv"
+	"strings"
+	"sync"
+
 	"github.com/couchbase/gometa/protocol"
 	repo "github.com/couchbase/gometa/repository"
 	gometa "github.com/couchbase/gometa/server"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager/client"
-	"net/rpc"
-	"strconv"
-	"strings"
-	"sync"
 )
 
 type MetadataRepo struct {
@@ -1105,7 +1106,7 @@ func (m *MetadataRepo) addIndexToTopology(defn *common.IndexDefn, instId common.
 		rState = uint32(common.REBAL_PENDING)
 	}
 
-	topology.AddIndexDefinition(defn.Bucket, defn.Name, uint64(defn.DefnId),
+	topology.AddIndexDefinition(defn.Bucket, defn.Scope, defn.Collection, defn.Name, uint64(defn.DefnId),
 		uint64(instId), uint32(common.INDEX_STATE_CREATED), string(indexerId),
 		uint64(defn.InstVersion), rState, uint64(replicaId), partitions, versions,
 		numPartitions, scheduled, string(defn.Using), uint64(realInstId))
@@ -1153,7 +1154,7 @@ func (m *MetadataRepo) addInstanceToTopology(defn *common.IndexDefn, instId comm
 	}
 
 	if topology.FindIndexDefinitionById(defn.DefnId) == nil {
-		topology.AddIndexDefinition(defn.Bucket, defn.Name, uint64(defn.DefnId),
+		topology.AddIndexDefinition(defn.Bucket, defn.Scope, defn.Collection, defn.Name, uint64(defn.DefnId),
 			uint64(instId), uint32(common.INDEX_STATE_CREATED), string(indexerId),
 			uint64(defn.InstVersion), rState, uint64(replicaId), partitions, versions,
 			numPartitions, scheduled, string(defn.Using), uint64(realInstId))

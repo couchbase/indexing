@@ -2301,7 +2301,8 @@ func (m *ServiceMgr) handleMoveIndex(w http.ResponseWriter, r *http.Request) {
 		for _, localMeta := range topology.Metadata {
 			bTopology := findTopologyByBucket(localMeta.IndexTopologies, bucket)
 			if bTopology != nil {
-				defn = bTopology.FindIndexDefinition(bucket, index)
+				// TODO (Collections): Pass scope & collection name to below method
+				defn = bTopology.FindIndexDefinition(bucket, c.DEFAULT_SCOPE, c.DEFAULT_COLLECTION, index)
 			}
 			if defn != nil {
 				break
