@@ -445,6 +445,9 @@ func (m *LifecycleMgr) handlePrepareCreateIndex(content []byte) ([]byte, error) 
 		return nil, err
 	}
 
+	prepareCreateIndex.Scope, prepareCreateIndex.Collection = common.GetCollectionDefaults(prepareCreateIndex.Scope,
+		prepareCreateIndex.Collection)
+
 	if prepareCreateIndex.Op == client.PREPARE {
 		if m.prepareLock != nil {
 			if m.prepareLock.RequesterId != prepareCreateIndex.RequesterId ||
@@ -469,8 +472,8 @@ func (m *LifecycleMgr) handlePrepareCreateIndex(content []byte) ([]byte, error) 
 		if prepareCreateIndex.Name != "" && prepareCreateIndex.Bucket != "" {
 			// Check for duplicate index name only if name and bucket name
 			// are specified in the request
-			existDefn, err := m.repo.GetIndexDefnByName(prepareCreateIndex.Bucket,
-				prepareCreateIndex.Name)
+			existDefn, err := m.repo.GetIndexDefnByName(prepareCreateIndex.Bucket, prepareCreateIndex.Scope,
+				prepareCreateIndex.Collection, prepareCreateIndex.Name)
 			if err != nil {
 				logging.Infof("LifecycleMgr.handlePrepareCreateIndex() : Reject "+
 					"%v because of error (%v) in GetIndexDefnByName", prepareCreateIndex.DefnId, err)
@@ -1324,7 +1327,7 @@ func (m *LifecycleMgr) setPartition(defn *common.IndexDefn) ([]common.PartitionI
 
 func (m *LifecycleMgr) verifyDuplicateInstance(defn *common.IndexDefn, reqCtx *common.MetadataRequestContext) error {
 
-	existDefn, err := m.repo.GetIndexDefnByName(defn.Bucket, defn.Name)
+	existDefn, err := m.repo.GetIndexDefnByName(defn.Bucket, defn.Scope, defn.Collection, defn.Name)
 	if err != nil {
 		logging.Errorf("LifecycleMgr.CreateIndexInstance() : createIndex fails. Reason = %v", err)
 		return err
@@ -1358,7 +1361,7 @@ func (m *LifecycleMgr) verifyDuplicateInstance(defn *common.IndexDefn, reqCtx *c
 
 func (m *LifecycleMgr) verifyDuplicateDefn(defn *common.IndexDefn, reqCtx *common.MetadataRequestContext) (*common.IndexDefn, error) {
 
-	existDefn, err := m.repo.GetIndexDefnByName(defn.Bucket, defn.Name)
+	existDefn, err := m.repo.GetIndexDefnByName(defn.Bucket, defn.Scope, defn.Collection, defn.Name)
 	if err != nil {
 		logging.Errorf("LifecycleMgr.verifyDuplicateDefn() : createIndex fails. Reason = %v", err)
 		return nil, err
@@ -2328,7 +2331,7 @@ func (m *LifecycleMgr) verifyOverlapPartition(defn *common.IndexDefn, reqCtx *co
 			return err
 		}
 
-		existDefn, err := m.repo.GetIndexDefnByName(defn.Bucket, defn.Name)
+		existDefn, err := m.repo.GetIndexDefnByName(defn.Bucket, defn.Scope, defn.Collection, defn.Name)
 		if err != nil {
 			logging.Errorf("LifecycleMgr.CreateIndexInstance() : createIndex fails. Reason = %v", err)
 			return err

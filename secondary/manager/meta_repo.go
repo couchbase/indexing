@@ -269,13 +269,14 @@ func (c *MetadataRepo) GetIndexDefnById(id common.IndexDefnId) (*common.IndexDef
 	return defn, nil
 }
 
-func (c *MetadataRepo) GetIndexDefnByName(bucket string, name string) (*common.IndexDefn, error) {
+func (c *MetadataRepo) GetIndexDefnByName(bucket, scope, collection, name string) (*common.IndexDefn, error) {
 
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
 	for _, defn := range c.defnCache {
-		if defn.Name == name && defn.Bucket == bucket {
+		if defn.Name == name && defn.Bucket == bucket &&
+			defn.Scope == scope && defn.Collection == collection {
 			return defn, nil
 		}
 	}
