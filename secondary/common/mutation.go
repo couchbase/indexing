@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+
 	"github.com/couchbase/indexing/secondary/dcp/transport"
 )
 
@@ -49,6 +50,8 @@ const (
 
 	UpdateSeqno   // control command
 	SeqnoAdvanced // control command
+
+	Filler // filler command for flusher(only used internally by indexer)
 )
 
 type ProjectorVersion byte

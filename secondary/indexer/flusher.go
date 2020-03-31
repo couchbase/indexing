@@ -349,9 +349,7 @@ func (f *flusher) flush(mutk *MutationKeys, streamId common.StreamId) {
 	var processedUpserts []common.IndexInstId
 	for _, mut := range mutk.mut {
 
-		if mut.command == common.UpdateSeqno ||
-			mut.command == common.SeqnoAdvanced {
-			//UpdateSeqno and SeqnoAdvance do not carry actual mutation
+		if mut.command == common.Filler {
 			continue
 		}
 

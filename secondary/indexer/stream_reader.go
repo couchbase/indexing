@@ -626,6 +626,18 @@ func (w *streamWorker) handleSingleKeyVersion(keyspaceId string, vbucket Vbucket
 		return fmt.Sprintf("MutationStreamReader::handleSingleKeyVersion received KeyVersions %v", logging.TagUD(kv))
 	})
 
+	allocateFillerMutation := func(meta *MutationMeta, docid []byte) *MutationKeys {
+		mutk = NewMutationKeys()
+		mutk.meta = meta.Clone()
+		mutk.docid = docid
+		mutk.mut = mutk.mut[:0]
+
+		mut := NewMutation()
+		mut.command = common.Filler
+		mutk.mut = append(mutk.mut, mut)
+		return mutk
+	}
+
 	state := w.reader.getIndexerState()
 
 	for i, cmd := range kv.GetCommands() {
@@ -753,14 +765,7 @@ func (w *streamWorker) handleSingleKeyVersion(keyspaceId string, vbucket Vbucket
 			//allocate an empty mutation for flusher
 			//TODO Collections can be done only for snapshot boundary
 			if !skipMutation {
-				mutk = NewMutationKeys()
-				mutk.meta = meta.Clone()
-				mutk.docid = kv.GetDocid()
-				mutk.mut = mutk.mut[:0]
-
-				mut := NewMutation()
-				mut.command = byte(cmd)
-				mutk.mut = append(mutk.mut, mut)
+				mutk = allocateFillerMutation(meta, kv.GetDocid())
 			}
 
 		case common.CollectionCreate, common.CollectionDrop,
@@ -770,6 +775,13 @@ func (w *streamWorker) handleSingleKeyVersion(keyspaceId string, vbucket Vbucket
 			manifestuid := string(kv.GetKeys()[i])
 			w.processDcpSystemEvent(meta, byte(cmd), manifestuid)
 
+			skipMutation, _ := w.checkAndSetKeyspaceIdFilter(meta)
+
+			//allocate a filler mutation for flusher
+			//TODO can be done only for snapshot boundary
+			if !skipMutation {
+				mutk = allocateFillerMutation(meta, kv.GetDocid())
+			}
 		}
 	}
 
