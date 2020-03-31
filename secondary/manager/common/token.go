@@ -13,13 +13,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/couchbase/cbauth/metakv"
-	c "github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/logging"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/couchbase/cbauth/metakv"
+	c "github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 )
 
 /////////////////////////////////////////////////////////////////////////
@@ -131,13 +132,16 @@ type CommandListener struct {
 //
 // Generate a token to metakv for recovery purpose
 //
-func PostCreateCommandToken(defnId c.IndexDefnId, bucketUUID string, requestId uint64, defns map[c.IndexerId][]c.IndexDefn) error {
+func PostCreateCommandToken(defnId c.IndexDefnId, bucketUUID, scopeId, collectionId string,
+	requestId uint64, defns map[c.IndexerId][]c.IndexDefn) error {
 
 	commandToken := &CreateCommandToken{
-		DefnId:      defnId,
-		BucketUUID:  bucketUUID,
-		Definitions: defns,
-		RequestId:   requestId,
+		DefnId:       defnId,
+		BucketUUID:   bucketUUID,
+		ScopeId:      scopeId,
+		CollectionId: collectionId,
+		Definitions:  defns,
+		RequestId:    requestId,
 	}
 
 	var id string

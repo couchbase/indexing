@@ -25,6 +25,7 @@ import (
 	"github.com/couchbase/gometa/message"
 	"github.com/couchbase/gometa/protocol"
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/common/collections"
 	fdb "github.com/couchbase/indexing/secondary/fdb"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager/client"
@@ -564,11 +565,11 @@ func (m *LifecycleMgr) handleCommitCreateIndex(commitCreateIndex *client.CommitC
 	definitions := commitCreateIndex.Definitions
 	m.prepareLock = nil
 
-	commit, bucketUUID, err := m.processCommitToken(defnId, definitions)
+	commit, bucketUUID, scopeId, collectionId, err := m.processCommitToken(defnId, definitions)
 	if commit {
 		// If fails to post the command token, the return failure.  If none of the indexer can post the command token,
 		// the command token will be malformed and it will get cleaned up by DDLServiceMgr upon rebalancing.
-		if err1 := mc.PostCreateCommandToken(defnId, bucketUUID, 0, definitions); err1 != nil {
+		if err1 := mc.PostCreateCommandToken(defnId, bucketUUID, scopeId, collectionId, 0, definitions); err1 != nil {
 			logging.Infof("LifecycleMgr.handleCommitCreateIndex() : Reject %v because fail to post token", commitCreateIndex.DefnId)
 
 			if err == nil {
@@ -617,11 +618,12 @@ func (m *LifecycleMgr) handleRebalanceRunning(content []byte) error {
 //
 // Process commit token
 //
-func (m *LifecycleMgr) processCommitToken(defnId common.IndexDefnId, layout map[common.IndexerId][]common.IndexDefn) (bool, string, error) {
+func (m *LifecycleMgr) processCommitToken(defnId common.IndexDefnId,
+	layout map[common.IndexerId][]common.IndexDefn) (bool, string, string, string, error) {
 
 	indexerId, err := m.repo.GetLocalIndexerId()
 	if err != nil {
-		return false, "", fmt.Errorf("Create Index fails.  Internal Error: %v", err)
+		return false, "", "", "", fmt.Errorf("Create Index fails.  Internal Error: %v", err)
 	}
 
 	if definitions, ok := layout[indexerId]; ok && len(definitions) > 0 {
@@ -636,7 +638,7 @@ func (m *LifecycleMgr) processCommitToken(defnId common.IndexDefnId, layout map[
 			// If there is error, the defintion will not be created.
 			// But if it is recoverable error, then we still want to create the commit token.
 			logging.Errorf("LifecycleMgr.processCommitToken() : build index fails.  Reason = %v", err)
-			return m.canRetryCreateError(err), "", err
+			return m.canRetryCreateError(err), "", "", "", err
 		}
 
 		if !definitions[0].Deferred && len(definitions) == 1 {
@@ -646,14 +648,14 @@ func (m *LifecycleMgr) processCommitToken(defnId common.IndexDefnId, layout map[
 			if len(retryList) != 0 {
 				// It is a recoverable error.  Create commit token and return error.
 				logging.Errorf("LifecycleMgr.processCommitToken() : build index fails.  Reason = %v", retryList[0])
-				return true, "", retryList[0]
+				return true, "", "", "", retryList[0]
 			}
 
 			if len(errList) != 0 {
 				// It is not a recoverable error.  Do not create commit token and return error.
 				logging.Errorf("LifecycleMgr.processCommitToken() : build index fails.  Reason = %v", errList[0])
 				m.DeleteIndex(defnId, true, false, reqCtx)
-				return false, "", errList[0]
+				return false, "", "", "", errList[0]
 			}
 
 			if len(skipList) != 0 {
@@ -663,11 +665,11 @@ func (m *LifecycleMgr) processCommitToken(defnId common.IndexDefnId, layout map[
 		}
 
 		// create commit token
-		return true, defn.BucketUUID, nil
+		return true, defn.BucketUUID, defn.ScopeId, defn.CollectionId, nil
 	}
 
 	// these definitions are not for my indexer, do not create commit token.
-	return false, "", nil
+	return false, "", "", "", nil
 }
 
 //-----------------------------------------------------------
@@ -711,11 +713,11 @@ func (m *LifecycleMgr) handleCommitAddReplica(commitRequest *client.CommitCreate
 	requestId := commitRequest.RequestId
 	m.prepareLock = nil
 
-	commit, numReplica, bucketUUID, err := m.processAddReplicaCommitToken(defnId, definitions)
+	commit, numReplica, bucketUUID, scopeId, collectionId, err := m.processAddReplicaCommitToken(defnId, definitions)
 	if commit {
 		// If fails to post the command token, the return failure.  If none of the indexer can post the command token,
 		// the command token will be malformed and it will get cleaned up by DDLServiceMgr upon rebalancing.
-		if err1 := mc.PostCreateCommandToken(defnId, bucketUUID, requestId, definitions); err1 != nil {
+		if err1 := mc.PostCreateCommandToken(defnId, bucketUUID, scopeId, collectionId, requestId, definitions); err1 != nil {
 			logging.Infof("LifecycleMgr.handleCommitAddReplica() : Reject %v because fail to post token", commitRequest.DefnId)
 
 			if err == nil {
@@ -753,11 +755,11 @@ func (m *LifecycleMgr) handleCommitAddReplica(commitRequest *client.CommitCreate
 // Process commit token for add replica index
 //
 func (m *LifecycleMgr) processAddReplicaCommitToken(defnId common.IndexDefnId, layout map[common.IndexerId][]common.IndexDefn) (bool,
-	*common.Counter, string, error) {
+	*common.Counter, string, string, string, error) {
 
 	indexerId, err := m.repo.GetLocalIndexerId()
 	if err != nil {
-		return false, nil, "", fmt.Errorf("Alter Index fails.  Internal Error: %v", err)
+		return false, nil, "", "", "", fmt.Errorf("Alter Index fails.  Internal Error: %v", err)
 	}
 
 	if definitions, ok := layout[indexerId]; ok && len(definitions) > 0 {
@@ -765,15 +767,19 @@ func (m *LifecycleMgr) processAddReplicaCommitToken(defnId common.IndexDefnId, l
 		// Get the bucket UUID. This is needed for creating commit token.
 		defn := definitions[0]
 		if err := m.setBucketUUID(&defn); err != nil {
-			return false, nil, "", err
+			return false, nil, "", "", "", err
+		}
+
+		if err := m.setScopeIdAndCollectionId(&defn); err != nil {
+			return false, nil, "", "", "", err
 		}
 
 		// create commit token
-		return true, &defn.NumReplica2, defn.BucketUUID, nil
+		return true, &defn.NumReplica2, defn.BucketUUID, defn.ScopeId, defn.CollectionId, nil
 	}
 
 	// these definitions are not for my indexer, do not create commit token.
-	return false, nil, "", nil
+	return false, nil, "", "", "", nil
 }
 
 //
@@ -1062,6 +1068,10 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scheduled bool,
 		return err
 	}
 
+	if err := m.setScopeIdAndCollectionId(defn); err != nil {
+		return err
+	}
+
 	if err := m.setStorageMode(defn); err != nil {
 		return err
 	}
@@ -1199,7 +1209,7 @@ func (m *LifecycleMgr) setBucketUUID(defn *common.IndexDefn) error {
 	//
 	// Lifecycle manager is a singleton that ensures all metadata operation is serialized.  Therefore, a
 	// call to verifyBucket() here  will also make sure that all existing indexes belong to the same bucket UUID.
-	// To esnure verifyBucket can succeed, indexes from stale bucket must be cleaned up (eventually).
+	// To ensure verifyBucket can succeed, indexes from stale bucket must be cleaned up (eventually).
 	//
 	bucketUUID, err := m.verifyBucket(defn.Bucket)
 	if err != nil || bucketUUID == common.BUCKET_UUID_NIL {
@@ -1211,10 +1221,44 @@ func (m *LifecycleMgr) setBucketUUID(defn *common.IndexDefn) error {
 	}
 
 	if len(defn.BucketUUID) != 0 && defn.BucketUUID != bucketUUID {
-		return fmt.Errorf("Bucket UUID has changed.  Bucket may have been dropped and recreatd.")
+		return fmt.Errorf("Bucket UUID has changed. Bucket may have been dropped and recreated.")
 	}
 
 	defn.BucketUUID = bucketUUID
+	return nil
+}
+
+// TODO (Collections): Should verifyScopeAndCollection be done?
+func (m *LifecycleMgr) setScopeIdAndCollectionId(defn *common.IndexDefn) error {
+
+	scopeId, err := m.getScopeID(defn.Bucket, defn.Scope)
+	if err != nil || scopeId == collections.SCOPE_ID_NIL {
+		if err == nil {
+			err = errors.New("Scope not found")
+		}
+		return fmt.Errorf("Error encountered while retrieving ScopeID. Bucket = %v Scope = %v"+
+			". Please retry the operation at a later time (err=%v).", defn.Bucket, defn.Scope, err)
+	}
+
+	collectionID, err := m.getCollectionID(defn.Bucket, defn.Scope, defn.Collection)
+	if err != nil || collectionID == collections.COLLECTION_ID_NIL {
+		if err == nil {
+			err = errors.New("Collection not found")
+		}
+		return fmt.Errorf("Error encountered while retrieving CollectionID. Bucket = %v Scope = %v Collection = %v"+
+			" Please retry the operation at a later time (err=%v).", defn.Bucket, defn.Scope, defn.Collection, err)
+	}
+
+	if len(defn.ScopeId) != 0 && defn.ScopeId != scopeId {
+		return fmt.Errorf("ScopeId has changed. Scope may have been dropped and recreated.")
+	}
+
+	if len(defn.CollectionId) != 0 && defn.CollectionId != collectionID {
+		return fmt.Errorf("CollectionId has changed. Collection may have been dropped and recreated.")
+	}
+
+	defn.ScopeId = scopeId
+	defn.CollectionId = collectionID
 	return nil
 }
 
@@ -2190,6 +2234,10 @@ func (m *LifecycleMgr) CreateIndexInstance(defn *common.IndexDefn, scheduled boo
 	}
 
 	if err := m.setBucketUUID(defn); err != nil {
+		return err
+	}
+
+	if err := m.setScopeIdAndCollectionId(defn); err != nil {
 		return err
 	}
 
@@ -3182,7 +3230,7 @@ RETRY:
 
 // This function ensures:
 // 1) Bucket exists
-// 2) Existing Index Definition matches the UUID of exixisting bucket
+// 2) Existing Index Definition matches the UUID of existing bucket
 // 3) If bucket does not exist AND there is no existing definition, this returns common.BUCKET_UUID_NIL
 //
 func (m *LifecycleMgr) verifyBucket(bucket string) (string, error) {
@@ -3226,6 +3274,60 @@ func (m *LifecycleMgr) verifyBucket(bucket string) (string, error) {
 	// topology is either nil or all index defn matches bucket UUID
 	// if topology is nil, then currentUUID == common.BUCKET_UUID_NIL
 	return currentUUID, nil
+}
+
+// This function ensures:
+// 1) Scope and Collection exist
+// 2) Existing Index Definition matches the UUID of existing Scope and Collection
+// 3) If scope does not exist AND there is no existing definition in scope, this returns SCOPE_ID_NIL
+// 4) If collection does not exist AND there is no existing definition in collection, this returns COLLECTION_ID_NIL
+//
+func (m *LifecycleMgr) verifyScopeAndCollection(bucket, scope, collection string) (string, string, error) {
+
+	scopeID, collectionID, err := m.getScopeAndCollectionID(bucket, scope, collection)
+	if err != nil {
+		return collections.SCOPE_ID_NIL, collections.COLLECTION_ID_NIL, err
+	}
+
+	topology, err := m.repo.GetTopologyByBucket(bucket)
+	if err != nil {
+		return collections.SCOPE_ID_NIL, collections.COLLECTION_ID_NIL, err
+	}
+
+	if topology != nil {
+		for _, defnRef := range topology.Definitions {
+			if defnRef.Scope == scope && defnRef.Collection == collection {
+				valid := false
+				insts := topology.GetIndexInstancesByDefn(common.IndexDefnId(defnRef.DefnId))
+				for _, inst := range insts {
+					state, _ := topology.GetStatusByInst(common.IndexDefnId(defnRef.DefnId), common.IndexInstId(inst.InstId))
+					if state != common.INDEX_STATE_DELETED {
+						valid = true
+						break
+					}
+				}
+
+				if valid {
+					if defn, err := m.repo.GetIndexDefnById(common.IndexDefnId(defnRef.DefnId)); err == nil && defn != nil {
+						if defn.ScopeId != scopeID {
+							return collections.SCOPE_ID_NIL, collections.COLLECTION_ID_NIL,
+								errors.New(fmt.Sprintf("Scope does not exist or temporarily unavailable for creating new index."+
+									"Bucket = %v Scope = %v. Please retry the operation at a later time.",
+									bucket, scope))
+						}
+						if defn.CollectionId != collectionID {
+							return collections.SCOPE_ID_NIL, collections.COLLECTION_ID_NIL,
+								errors.New(fmt.Sprintf("Collection does not exist or temporarily unavailable for creating new index."+
+									"Bucket = %v Scope = %v Collection = %v. Please retry the operation at a later time.",
+									bucket, scope, collection))
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return scopeID, collectionID, nil
 }
 
 //////////////////////////////////////////////////////////////
