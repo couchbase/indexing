@@ -280,8 +280,8 @@ func (m *mutationMgr) handleSupervisorCommands(cmd Message) {
 	case REMOVE_INDEX_LIST_FROM_STREAM:
 		m.handleRemoveIndexListFromStream(cmd)
 
-	case REMOVE_BUCKET_FROM_STREAM:
-		m.handleRemoveBucketFromStream(cmd)
+	case REMOVE_KEYSPACE_FROM_STREAM:
+		m.handleRemoveKeyspaceFromStream(cmd)
 
 	case CLOSE_STREAM:
 		m.handleCloseStream(cmd)
@@ -383,7 +383,7 @@ func (m *mutationMgr) handleOpenStream(cmd Message) {
 
 	streamId := cmd.(*MsgStreamUpdate).GetStreamId()
 	indexList := cmd.(*MsgStreamUpdate).GetIndexList()
-	keyspaceId := cmd.(*MsgStreamUpdate).GetBucket()
+	keyspaceId := cmd.(*MsgStreamUpdate).GetKeyspaceId()
 	restartTs := cmd.(*MsgStreamUpdate).GetRestartTs()
 	allowMarkFirsSnap := cmd.(*MsgStreamUpdate).AllowMarkFirstSnap()
 	sessionId := cmd.(*MsgStreamUpdate).GetSessionId()
@@ -469,7 +469,7 @@ func (m *mutationMgr) handleAddIndexListToStream(cmd Message) {
 	streamId := cmd.(*MsgStreamUpdate).GetStreamId()
 	indexList := cmd.(*MsgStreamUpdate).GetIndexList()
 	sessionId := cmd.(*MsgStreamUpdate).GetSessionId()
-	keyspaceId := cmd.(*MsgStreamUpdate).GetBucket()
+	keyspaceId := cmd.(*MsgStreamUpdate).GetKeyspaceId()
 
 	m.lock.Lock()
 	defer m.lock.Unlock()
@@ -622,12 +622,12 @@ func (m *mutationMgr) handleRemoveIndexListFromStream(cmd Message) {
 
 }
 
-func (m *mutationMgr) handleRemoveBucketFromStream(cmd Message) {
+func (m *mutationMgr) handleRemoveKeyspaceFromStream(cmd Message) {
 
-	logging.Infof("MutationMgr::handleRemoveBucketFromStream %v", cmd)
+	logging.Infof("MutationMgr::handleRemoveKeyspaceFromStream %v", cmd)
 
 	streamId := cmd.(*MsgStreamUpdate).GetStreamId()
-	keyspaceId := cmd.(*MsgStreamUpdate).GetBucket()
+	keyspaceId := cmd.(*MsgStreamUpdate).GetKeyspaceId()
 	abort := cmd.(*MsgStreamUpdate).AbortRecovery()
 
 	m.lock.Lock()
@@ -637,11 +637,11 @@ func (m *mutationMgr) handleRemoveBucketFromStream(cmd Message) {
 	if _, ok := m.streamReaderMap[streamId]; !ok {
 
 		if abort {
-			logging.Infof("MutationMgr::handleRemoveBucketFromStream "+
+			logging.Infof("MutationMgr::handleRemoveKeyspaceFromStream "+
 				"Stream Already Closed %v", streamId)
 			m.supvCmdch <- &MsgSuccess{}
 		} else {
-			logging.Errorf("MutationMgr::handleRemoveBucketFromStream "+
+			logging.Errorf("MutationMgr::handleRemoveKeyspaceFromStream "+
 				"Stream Already Closed %v", streamId)
 			m.supvCmdch <- &MsgError{
 				err: Error{code: ERROR_MUT_MGR_STREAM_ALREADY_CLOSED,
@@ -897,7 +897,7 @@ func (m *mutationMgr) handlePersistMutationQueue(cmd Message) {
 
 	logging.Tracef("MutationMgr::handlePersistMutationQueue %v", cmd)
 
-	keyspaceId := cmd.(*MsgMutMgrFlushMutationQueue).GetBucket()
+	keyspaceId := cmd.(*MsgMutMgrFlushMutationQueue).GetKeyspaceId()
 	streamId := cmd.(*MsgMutMgrFlushMutationQueue).GetStreamId()
 	ts := cmd.(*MsgMutMgrFlushMutationQueue).GetTimestamp()
 	changeVec := cmd.(*MsgMutMgrFlushMutationQueue).GetChangeVector()
@@ -949,16 +949,16 @@ func (m *mutationMgr) persistMutationQueue(q IndexerMutationQueue,
 		//send the response to supervisor
 		if msg.GetMsgType() == MSG_SUCCESS {
 			m.supvRespch <- &MsgMutMgrFlushDone{mType: MUT_MGR_FLUSH_DONE,
-				streamId: streamId,
-				bucket:   keyspaceId,
-				ts:       ts,
-				hasAllSB: hasAllSB}
+				streamId:   streamId,
+				keyspaceId: keyspaceId,
+				ts:         ts,
+				hasAllSB:   hasAllSB}
 		} else {
 			m.supvRespch <- &MsgMutMgrFlushDone{mType: MUT_MGR_FLUSH_DONE,
-				streamId: streamId,
-				bucket:   keyspaceId,
-				ts:       ts,
-				aborted:  true}
+				streamId:   streamId,
+				keyspaceId: keyspaceId,
+				ts:         ts,
+				aborted:    true}
 		}
 	}(m.config)
 
@@ -972,7 +972,7 @@ func (m *mutationMgr) handleDrainMutationQueue(cmd Message) {
 
 	logging.Tracef("MutationMgr::handleDrainMutationQueue %v", cmd)
 
-	keyspaceId := cmd.(*MsgMutMgrFlushMutationQueue).GetBucket()
+	keyspaceId := cmd.(*MsgMutMgrFlushMutationQueue).GetKeyspaceId()
 	streamId := cmd.(*MsgMutMgrFlushMutationQueue).GetStreamId()
 	ts := cmd.(*MsgMutMgrFlushMutationQueue).GetTimestamp()
 	changeVec := cmd.(*MsgMutMgrFlushMutationQueue).GetChangeVector()
@@ -1027,7 +1027,7 @@ func (m *mutationMgr) handleAbortPersist(cmd Message) {
 
 	logging.Infof("MutationMgr::handleAbortPersist %v", cmd)
 
-	keyspaceId := cmd.(*MsgMutMgrFlushMutationQueue).GetBucket()
+	keyspaceId := cmd.(*MsgMutMgrFlushMutationQueue).GetKeyspaceId()
 	streamId := cmd.(*MsgMutMgrFlushMutationQueue).GetStreamId()
 
 	go func() {
@@ -1043,8 +1043,8 @@ func (m *mutationMgr) handleAbortPersist(cmd Message) {
 			}
 		}
 		m.supvRespch <- &MsgMutMgrFlushDone{mType: MUT_MGR_ABORT_DONE,
-			bucket:   keyspaceId,
-			streamId: streamId}
+			keyspaceId: keyspaceId,
+			streamId:   streamId}
 	}()
 
 	m.supvCmdch <- &MsgSuccess{}
@@ -1057,7 +1057,7 @@ func (m *mutationMgr) handleGetMutationQueueHWT(cmd Message) {
 
 	logging.Tracef("MutationMgr::handleGetMutationQueueHWT %v", cmd)
 
-	keyspaceId := cmd.(*MsgMutMgrGetTimestamp).GetBucket()
+	keyspaceId := cmd.(*MsgMutMgrGetTimestamp).GetKeyspaceId()
 	streamId := cmd.(*MsgMutMgrGetTimestamp).GetStreamId()
 
 	m.lock.Lock()
@@ -1077,7 +1077,7 @@ func (m *mutationMgr) handleGetMutationQueueHWT(cmd Message) {
 func (m *mutationMgr) handleGetMutationQueueLWT(cmd Message) {
 
 	logging.Tracef("MutationMgr::handleGetMutationQueueLWT %v", cmd)
-	keyspaceId := cmd.(*MsgMutMgrGetTimestamp).GetBucket()
+	keyspaceId := cmd.(*MsgMutMgrGetTimestamp).GetKeyspaceId()
 	streamId := cmd.(*MsgMutMgrGetTimestamp).GetStreamId()
 
 	m.lock.Lock()

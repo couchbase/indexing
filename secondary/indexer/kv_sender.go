@@ -123,7 +123,7 @@ func (k *kvSender) handleSupvervisorCommands(cmd Message) {
 	case REMOVE_INDEX_LIST_FROM_STREAM:
 		k.handleRemoveIndexListFromStream(cmd)
 
-	case REMOVE_BUCKET_FROM_STREAM:
+	case REMOVE_KEYSPACE_FROM_STREAM:
 		k.handleRemoveKeyspaceFromStream(cmd)
 
 	case CLOSE_STREAM:
@@ -149,7 +149,7 @@ func (k *kvSender) handleOpenStream(cmd Message) {
 	restartTs := cmd.(*MsgStreamUpdate).GetRestartTs()
 	respCh := cmd.(*MsgStreamUpdate).GetResponseChannel()
 	stopCh := cmd.(*MsgStreamUpdate).GetStopChannel()
-	keyspaceId := cmd.(*MsgStreamUpdate).GetBucket()
+	keyspaceId := cmd.(*MsgStreamUpdate).GetKeyspaceId()
 	collectionId := cmd.(*MsgStreamUpdate).GetCollectionId()
 	async := cmd.(*MsgStreamUpdate).GetAsync()
 	sessionId := cmd.(*MsgStreamUpdate).GetSessionId()
@@ -169,7 +169,7 @@ func (k *kvSender) handleOpenStream(cmd Message) {
 func (k *kvSender) handleAddIndexListToStream(cmd Message) {
 
 	streamId := cmd.(*MsgStreamUpdate).GetStreamId()
-	keyspaceId := cmd.(*MsgStreamUpdate).GetBucket()
+	keyspaceId := cmd.(*MsgStreamUpdate).GetKeyspaceId()
 	addIndexList := cmd.(*MsgStreamUpdate).GetIndexList()
 	respCh := cmd.(*MsgStreamUpdate).GetResponseChannel()
 	stopCh := cmd.(*MsgStreamUpdate).GetStopChannel()
@@ -192,7 +192,7 @@ func (k *kvSender) handleRemoveIndexListFromStream(cmd Message) {
 	})
 
 	streamId := cmd.(*MsgStreamUpdate).GetStreamId()
-	keyspaceId := cmd.(*MsgStreamUpdate).GetBucket()
+	keyspaceId := cmd.(*MsgStreamUpdate).GetKeyspaceId()
 	delIndexList := cmd.(*MsgStreamUpdate).GetIndexList()
 	respCh := cmd.(*MsgStreamUpdate).GetResponseChannel()
 	stopCh := cmd.(*MsgStreamUpdate).GetStopChannel()
@@ -206,7 +206,7 @@ func (k *kvSender) handleRemoveIndexListFromStream(cmd Message) {
 func (k *kvSender) handleRemoveKeyspaceFromStream(cmd Message) {
 
 	streamId := cmd.(*MsgStreamUpdate).GetStreamId()
-	keyspaceId := cmd.(*MsgStreamUpdate).GetBucket()
+	keyspaceId := cmd.(*MsgStreamUpdate).GetKeyspaceId()
 	respCh := cmd.(*MsgStreamUpdate).GetResponseChannel()
 	stopCh := cmd.(*MsgStreamUpdate).GetStopChannel()
 
@@ -223,7 +223,7 @@ func (k *kvSender) handleRemoveKeyspaceFromStream(cmd Message) {
 func (k *kvSender) handleCloseStream(cmd Message) {
 
 	streamId := cmd.(*MsgStreamUpdate).GetStreamId()
-	keyspaceId := cmd.(*MsgStreamUpdate).GetBucket()
+	keyspaceId := cmd.(*MsgStreamUpdate).GetKeyspaceId()
 	respCh := cmd.(*MsgStreamUpdate).GetResponseChannel()
 	stopCh := cmd.(*MsgStreamUpdate).GetStopChannel()
 
@@ -239,7 +239,7 @@ func (k *kvSender) handleCloseStream(cmd Message) {
 func (k *kvSender) handleRestartVbuckets(cmd Message) {
 
 	streamId := cmd.(*MsgRestartVbuckets).GetStreamId()
-	keyspaceId := cmd.(*MsgRestartVbuckets).GetBucket()
+	keyspaceId := cmd.(*MsgRestartVbuckets).GetKeyspaceId()
 	collectionId := cmd.(*MsgRestartVbuckets).GetCollectionId()
 	restartTs := cmd.(*MsgRestartVbuckets).GetRestartTs()
 	respCh := cmd.(*MsgRestartVbuckets).GetResponseCh()
@@ -391,7 +391,7 @@ func (k *kvSender) openMutationStream(streamId c.StreamId, keyspaceId string,
 		}
 
 		respCh <- &MsgRollback{streamId: streamId,
-			bucket:     keyspaceId,
+			keyspaceId: keyspaceId,
 			rollbackTs: nativeTs}
 	} else if err != nil {
 		logging.Errorf("KVSender::openMutationStream %v %v Error from Projector %v",
@@ -517,7 +517,7 @@ func (k *kvSender) restartVbuckets(streamId c.StreamId, keyspaceId string,
 
 	if aborted {
 		respCh <- &MsgRepairAbort{streamId: streamId,
-			bucket: keyspaceId}
+			keyspaceId: keyspaceId}
 	} else if rollback {
 		//if any of the requested vb is in rollback ts, send rollback
 		//msg to caller
@@ -535,9 +535,9 @@ func (k *kvSender) restartVbuckets(streamId c.StreamId, keyspaceId string,
 			err.Error() == c.ErrorClosed.Error() ||
 			err.Error() == projClient.ErrorInvalidBucket.Error() {
 			respCh <- &MsgKVStreamRepair{
-				streamId:  streamId,
-				bucket:    keyspaceId,
-				sessionId: sessionId,
+				streamId:   streamId,
+				keyspaceId: keyspaceId,
+				sessionId:  sessionId,
 			}
 		} else {
 			respCh <- &MsgError{
@@ -550,9 +550,9 @@ func (k *kvSender) restartVbuckets(streamId c.StreamId, keyspaceId string,
 		}
 	} else {
 		resp := &MsgRestartVbucketsResponse{
-			streamId:  streamId,
-			bucket:    keyspaceId,
-			sessionId: sessionId,
+			streamId:   streamId,
+			keyspaceId: keyspaceId,
+			sessionId:  sessionId,
 		}
 
 		if activeTs != nil {
@@ -644,9 +644,9 @@ func (k *kvSender) addIndexForExistingKeyspace(streamId c.StreamId, keyspaceId s
 	nativeTs := currentTs.ToTsVbuuid(numVbuckets)
 
 	respCh <- &MsgStreamUpdate{mType: MSG_SUCCESS,
-		streamId:  streamId,
-		bucket:    keyspaceId,
-		restartTs: nativeTs}
+		streamId:   streamId,
+		keyspaceId: keyspaceId,
+		restartTs:  nativeTs}
 }
 
 func (k *kvSender) deleteIndexesFromStream(streamId c.StreamId, keyspaceId string,

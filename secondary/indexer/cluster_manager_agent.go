@@ -738,7 +738,7 @@ func (meta *metaNotifier) OnIndexDelete(instId common.IndexInstId,
 	meta.adminCh <- &MsgDropIndex{mType: CLUST_MGR_DROP_INDEX_DDL,
 		indexInstId: instId,
 		respCh:      respCh,
-		bucket:      bucket,
+		keyspaceId:  bucket,
 		reqCtx:      reqCtx}
 
 	//wait for response

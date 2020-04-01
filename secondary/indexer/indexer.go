@@ -921,7 +921,8 @@ func (idx *indexer) getBucketForAdminMsg(msg Message) []string {
 
 	case CLUST_MGR_DROP_INDEX_DDL, CBQ_DROP_INDEX_DDL:
 		dropMsg := msg.(*MsgDropIndex)
-		return []string{dropMsg.GetBucket()}
+		//TODO Collections verify this
+		return []string{dropMsg.GetKeyspaceId()}
 
 	default:
 		return nil
@@ -979,7 +980,7 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 	case TK_STABILITY_TIMESTAMP:
 		//send TS to Mutation Manager
 		ts := msg.(*MsgTKStabilityTS).GetTimestamp()
-		keyspaceId := msg.(*MsgTKStabilityTS).GetBucket()
+		keyspaceId := msg.(*MsgTKStabilityTS).GetKeyspaceId()
 		streamId := msg.(*MsgTKStabilityTS).GetStreamId()
 		changeVec := msg.(*MsgTKStabilityTS).GetChangeVector()
 		hasAllSB := msg.(*MsgTKStabilityTS).HasAllSB()
@@ -994,19 +995,19 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 
 		if ts.GetSnapType() == common.FORCE_COMMIT {
 			idx.storageMgrCmdCh <- &MsgMutMgrFlushDone{mType: MUT_MGR_FLUSH_DONE,
-				streamId: streamId,
-				bucket:   keyspaceId,
-				ts:       ts,
-				hasAllSB: hasAllSB}
+				streamId:   streamId,
+				keyspaceId: keyspaceId,
+				ts:         ts,
+				hasAllSB:   hasAllSB}
 			<-idx.storageMgrCmdCh
 		} else {
 			idx.mutMgrCmdCh <- &MsgMutMgrFlushMutationQueue{
-				mType:     MUT_MGR_PERSIST_MUTATION_QUEUE,
-				bucket:    keyspaceId,
-				ts:        ts,
-				streamId:  streamId,
-				changeVec: changeVec,
-				hasAllSB:  hasAllSB}
+				mType:      MUT_MGR_PERSIST_MUTATION_QUEUE,
+				keyspaceId: keyspaceId,
+				ts:         ts,
+				streamId:   streamId,
+				changeVec:  changeVec,
+				hasAllSB:   hasAllSB}
 
 			<-idx.mutMgrCmdCh
 		}
@@ -1028,7 +1029,7 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 
 	case STORAGE_SNAP_DONE:
 
-		keyspaceId := msg.(*MsgMutMgrFlushDone).GetBucket()
+		keyspaceId := msg.(*MsgMutMgrFlushDone).GetKeyspaceId()
 		streamId := msg.(*MsgMutMgrFlushDone).GetStreamId()
 
 		// consolidate partitions now
@@ -2812,7 +2813,7 @@ func (idx *indexer) handleDropIndex(msg Message) (resp Message) {
 func (idx *indexer) handlePrepareRecovery(msg Message) {
 
 	streamId := msg.(*MsgRecovery).GetStreamId()
-	keyspaceId := msg.(*MsgRecovery).GetBucket()
+	keyspaceId := msg.(*MsgRecovery).GetKeyspaceId()
 	sessionId := msg.(*MsgRecovery).GetSessionId()
 
 	if ok, currSid := idx.validateSessionId(streamId, keyspaceId, sessionId, true); !ok {
@@ -2830,7 +2831,7 @@ func (idx *indexer) handlePrepareRecovery(msg Message) {
 
 func (idx *indexer) handleInitPrepRecovery(msg Message) {
 
-	keyspaceId := msg.(*MsgRecovery).GetBucket()
+	keyspaceId := msg.(*MsgRecovery).GetKeyspaceId()
 	streamId := msg.(*MsgRecovery).GetStreamId()
 	rollbackTs := msg.(*MsgRecovery).GetRestartTs()
 	retryTs := msg.(*MsgRecovery).GetRetryTs()
@@ -2914,7 +2915,7 @@ func (idx *indexer) handleUnpause(msg Message) {
 
 func (idx *indexer) handlePrepareDone(msg Message) {
 
-	keyspaceId := msg.(*MsgRecovery).GetBucket()
+	keyspaceId := msg.(*MsgRecovery).GetKeyspaceId()
 	streamId := msg.(*MsgRecovery).GetStreamId()
 	sessionId := msg.(*MsgRecovery).GetSessionId()
 	reqCh := msg.(*MsgRecovery).GetRequestCh()
@@ -2947,7 +2948,7 @@ func (idx *indexer) handlePrepareDone(msg Message) {
 func (idx *indexer) handleInitRecovery(msg Message) {
 
 	streamId := msg.(*MsgRecovery).GetStreamId()
-	keyspaceId := msg.(*MsgRecovery).GetBucket()
+	keyspaceId := msg.(*MsgRecovery).GetKeyspaceId()
 	restartTs := msg.(*MsgRecovery).GetRestartTs()
 	retryTs := msg.(*MsgRecovery).GetRetryTs()
 	sessionId := msg.(*MsgRecovery).GetSessionId()
@@ -2965,8 +2966,8 @@ func (idx *indexer) handleInitRecovery(msg Message) {
 			"Stream: %v KeyspaceId: %v. KeyspaceId Inactive", streamId, keyspaceId)
 
 		idx.tkCmdCh <- &MsgRecovery{mType: INDEXER_ABORT_RECOVERY,
-			streamId: streamId,
-			bucket:   keyspaceId}
+			streamId:   streamId,
+			keyspaceId: keyspaceId}
 		<-idx.tkCmdCh
 		idx.cleanupStreamKeyspaceIdState(streamId, keyspaceId)
 		return
@@ -2998,7 +2999,7 @@ func (idx *indexer) handleInitRecovery(msg Message) {
 
 func (idx *indexer) handleStorageRollbackDone(msg Message) {
 
-	keyspaceId := msg.(*MsgRollbackDone).GetBucket()
+	keyspaceId := msg.(*MsgRollbackDone).GetKeyspaceId()
 	streamId := msg.(*MsgRollbackDone).GetStreamId()
 	restartTs := msg.(*MsgRollbackDone).GetRestartTs()
 	err := msg.(*MsgRollbackDone).GetError()
@@ -3017,8 +3018,8 @@ func (idx *indexer) handleStorageRollbackDone(msg Message) {
 			"Stream: %v KeyspaceId: %v. KeyspaceId Inactive", streamId, keyspaceId)
 
 		idx.tkCmdCh <- &MsgRecovery{mType: INDEXER_ABORT_RECOVERY,
-			streamId: streamId,
-			bucket:   keyspaceId}
+			streamId:   streamId,
+			keyspaceId: keyspaceId}
 		<-idx.tkCmdCh
 		//any pending build done needs to be processed
 		idx.processPendingBuildDone(streamId, keyspaceId, sessionId)
@@ -3029,7 +3030,7 @@ func (idx *indexer) handleStorageRollbackDone(msg Message) {
 	if streamId == common.MAINT_STREAM {
 		idx.scanCoordCmdCh <- &MsgRollback{
 			streamId:     streamId,
-			bucket:       keyspaceId,
+			keyspaceId:   keyspaceId,
 			rollbackTime: 0,
 		}
 		<-idx.scanCoordCmdCh
@@ -3226,16 +3227,16 @@ func (idx *indexer) waitForIndexReset(keyspaceId string, sessionId uint64, wg *s
 	wg.Wait()
 
 	idx.internalRecvCh <- &MsgResetIndexDone{
-		streamId:  common.MAINT_STREAM,
-		bucket:    keyspaceId,
-		sessionId: sessionId,
+		streamId:   common.MAINT_STREAM,
+		keyspaceId: keyspaceId,
+		sessionId:  sessionId,
 	}
 }
 
 func (idx *indexer) handleResetIndexDone(msg Message) {
 
 	streamId := msg.(*MsgResetIndexDone).GetStreamId()
-	keyspaceId := msg.(*MsgResetIndexDone).GetBucket()
+	keyspaceId := msg.(*MsgResetIndexDone).GetKeyspaceId()
 	sessionId := msg.(*MsgResetIndexDone).GetSessionId()
 
 	if ok, currSid := idx.validateSessionId(streamId, keyspaceId, sessionId, true); !ok {
@@ -3265,7 +3266,7 @@ func (idx *indexer) handleResetIndexDone(msg Message) {
 
 func (idx *indexer) handleRecoveryDone(msg Message) {
 
-	keyspaceId := msg.(*MsgRecovery).GetBucket()
+	keyspaceId := msg.(*MsgRecovery).GetKeyspaceId()
 	streamId := msg.(*MsgRecovery).GetStreamId()
 	sessionId := msg.(*MsgRecovery).GetSessionId()
 	reqCh := msg.(*MsgRecovery).GetRequestCh()
@@ -3323,7 +3324,7 @@ func (idx *indexer) handleRecoveryDone(msg Message) {
 
 func (idx *indexer) handleKVStreamRepair(msg Message) {
 
-	keyspaceId := msg.(*MsgKVStreamRepair).GetBucket()
+	keyspaceId := msg.(*MsgKVStreamRepair).GetKeyspaceId()
 	streamId := msg.(*MsgKVStreamRepair).GetStreamId()
 	restartTs := msg.(*MsgKVStreamRepair).GetRestartTs()
 	async := msg.(*MsgKVStreamRepair).GetAsync()
@@ -3367,7 +3368,7 @@ func (idx *indexer) handleKVStreamRepair(msg Message) {
 func (idx *indexer) handleInitBuildDoneAck(msg Message) {
 
 	streamId := msg.(*MsgTKInitBuildDone).GetStreamId()
-	keyspaceId := msg.(*MsgTKInitBuildDone).GetBucket()
+	keyspaceId := msg.(*MsgTKInitBuildDone).GetKeyspaceId()
 	sessionId := msg.(*MsgTKInitBuildDone).GetSessionId()
 
 	//skip processing initial build done ack for inactive or recovery streams.
@@ -3410,7 +3411,7 @@ func (idx *indexer) handleInitBuildDoneAck(msg Message) {
 func (idx *indexer) handleAddInstanceFail(msg Message) {
 
 	streamId := msg.(*MsgTKInitBuildDone).GetStreamId()
-	keyspaceId := msg.(*MsgTKInitBuildDone).GetBucket()
+	keyspaceId := msg.(*MsgTKInitBuildDone).GetKeyspaceId()
 	sessionId := msg.(*MsgTKInitBuildDone).GetSessionId()
 
 	logging.Infof("Indexer::handleAddInstanceFail StreamId %v KeyspaceId %v SessionId %v",
@@ -3442,9 +3443,9 @@ func (idx *indexer) handleAddInstanceFail(msg Message) {
 			//use the current sessionId for MAINT_STREAM
 			maintSessionId := idx.getCurrentSessionId(mergeStreamId, keyspaceId)
 			idx.handleInitPrepRecovery(&MsgRecovery{mType: INDEXER_INIT_PREP_RECOVERY,
-				streamId:  mergeStreamId,
-				bucket:    keyspaceId,
-				sessionId: maintSessionId})
+				streamId:   mergeStreamId,
+				keyspaceId: keyspaceId,
+				sessionId:  maintSessionId})
 		}
 
 	default:
@@ -3457,7 +3458,7 @@ func (idx *indexer) handleAddInstanceFail(msg Message) {
 func (idx *indexer) handleMergeStreamAck(msg Message) {
 
 	streamId := msg.(*MsgTKMergeStream).GetStreamId()
-	keyspaceId := msg.(*MsgTKMergeStream).GetBucket()
+	keyspaceId := msg.(*MsgTKMergeStream).GetKeyspaceId()
 	sessionId := msg.(*MsgTKMergeStream).GetSessionId()
 	reqCh := msg.(*MsgTKMergeStream).GetRequestCh()
 
@@ -3501,7 +3502,7 @@ func (idx *indexer) handleMergeStreamAck(msg Message) {
 func (idx *indexer) handleStreamRequestDone(msg Message) {
 
 	streamId := msg.(*MsgStreamInfo).GetStreamId()
-	keyspaceId := msg.(*MsgStreamInfo).GetBucket()
+	keyspaceId := msg.(*MsgStreamInfo).GetKeyspaceId()
 	sessionId := msg.(*MsgStreamInfo).GetSessionId()
 	reqCh := msg.(*MsgStreamInfo).GetRequestCh()
 
@@ -3525,7 +3526,7 @@ func (idx *indexer) handleStreamRequestDone(msg Message) {
 func (idx *indexer) handleMTRFail(msg Message) {
 
 	streamId := msg.(*MsgRecovery).GetStreamId()
-	keyspaceId := msg.(*MsgRecovery).GetBucket()
+	keyspaceId := msg.(*MsgRecovery).GetKeyspaceId()
 	sessionId := msg.(*MsgRecovery).GetSessionId()
 	reqCh := msg.(*MsgRecovery).GetRequestCh()
 
@@ -3552,7 +3553,7 @@ func (idx *indexer) handleMTRFail(msg Message) {
 func (idx *indexer) handleKeyspaceIdNotFound(msg Message) {
 
 	streamId := msg.(*MsgRecovery).GetStreamId()
-	keyspaceId := msg.(*MsgRecovery).GetBucket()
+	keyspaceId := msg.(*MsgRecovery).GetKeyspaceId()
 	inMTR := msg.(*MsgRecovery).InMTR()
 	sessionId := msg.(*MsgRecovery).GetSessionId()
 
@@ -3718,13 +3719,13 @@ func (idx *indexer) sendStreamUpdateForIndex(indexInstList []common.IndexInst,
 	stopCh := make(StopChannel)
 
 	cmd := &MsgStreamUpdate{
-		mType:     ADD_INDEX_LIST_TO_STREAM,
-		streamId:  streamId,
-		bucket:    keyspaceId,
-		indexList: indexInstList,
-		respCh:    respCh,
-		stopCh:    stopCh,
-		sessionId: sessionId}
+		mType:      ADD_INDEX_LIST_TO_STREAM,
+		streamId:   streamId,
+		keyspaceId: keyspaceId,
+		indexList:  indexInstList,
+		respCh:     respCh,
+		stopCh:     stopCh,
+		sessionId:  sessionId}
 
 	retryCount := 0
 
@@ -3861,7 +3862,7 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 	async := enableAsync && idx.clusterInfoClient.ClusterVersion() >= common.INDEXER_65_VERSION
 	cmd = &MsgStreamUpdate{mType: OPEN_STREAM,
 		streamId:           buildStream,
-		bucket:             keyspaceId,
+		keyspaceId:         keyspaceId,
 		indexList:          indexList,
 		buildTs:            buildTs,
 		respCh:             respCh,
@@ -3911,10 +3912,10 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 				logging.Errorf("Indexer::sendStreamUpdateForBuildIndex Bucket Not Found "+
 					"For Stream %v KeyspaceId %v SessionId %v", buildStream, keyspaceId, sessionId)
 				idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_BUCKET_NOT_FOUND,
-					streamId:  buildStream,
-					bucket:    keyspaceId,
-					inMTR:     true,
-					sessionId: sessionId}
+					streamId:   buildStream,
+					keyspaceId: keyspaceId,
+					inMTR:      true,
+					sessionId:  sessionId}
 				break retryloop
 			}
 			idx.sendMsgToKVSender(cmd)
@@ -3939,12 +3940,12 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 					go idx.computeKeyspaceBuildTsAsync(clustAddr, keyspaceId, collId, numVb, buildStream)
 
 					idx.internalRecvCh <- &MsgStreamInfo{mType: STREAM_REQUEST_DONE,
-						streamId:  buildStream,
-						bucket:    keyspaceId,
-						activeTs:  resp.(*MsgSuccessOpenStream).GetActiveTs(),
-						pendingTs: resp.(*MsgSuccessOpenStream).GetPendingTs(),
-						sessionId: sessionId,
-						reqCh:     stopCh,
+						streamId:   buildStream,
+						keyspaceId: keyspaceId,
+						activeTs:   resp.(*MsgSuccessOpenStream).GetActiveTs(),
+						pendingTs:  resp.(*MsgSuccessOpenStream).GetPendingTs(),
+						sessionId:  sessionId,
+						reqCh:      stopCh,
 					}
 					break retryloop
 
@@ -3967,11 +3968,11 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 							keyspaceId, sessionId, respErr.cause, state)
 
 						idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_MTR_FAIL,
-							streamId:  buildStream,
-							bucket:    keyspaceId,
-							inMTR:     true,
-							requestCh: stopCh,
-							sessionId: sessionId}
+							streamId:   buildStream,
+							keyspaceId: keyspaceId,
+							inMTR:      true,
+							requestCh:  stopCh,
+							sessionId:  sessionId}
 
 						break retryloop
 
@@ -3983,11 +3984,11 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 							buildStream, sessionId, keyspaceId, respErr.cause, MAX_PROJ_RETRY)
 
 						idx.internalRecvCh <- &MsgRecovery{
-							mType:     INDEXER_INIT_PREP_RECOVERY,
-							streamId:  buildStream,
-							bucket:    keyspaceId,
-							requestCh: stopCh,
-							sessionId: sessionId,
+							mType:      INDEXER_INIT_PREP_RECOVERY,
+							streamId:   buildStream,
+							keyspaceId: keyspaceId,
+							requestCh:  stopCh,
+							sessionId:  sessionId,
 						}
 						break retryloop
 					} else {
@@ -4104,9 +4105,9 @@ func (idx *indexer) removeIndexesFromStream(indexList []common.IndexInst,
 				sessionId: sessionId,
 			}
 		} else {
-			cmd = &MsgStreamUpdate{mType: REMOVE_BUCKET_FROM_STREAM,
+			cmd = &MsgStreamUpdate{mType: REMOVE_KEYSPACE_FROM_STREAM,
 				streamId:      streamId,
-				bucket:        keyspaceId,
+				keyspaceId:    keyspaceId,
 				respCh:        respCh,
 				sessionId:     sessionId,
 				abortRecovery: true,
@@ -4147,9 +4148,9 @@ func (idx *indexer) removeIndexesFromStream(indexList []common.IndexInst,
 					logging.Errorf("Indexer::removeIndexesFromStream Bucket Not Found "+
 						"For Stream %v Bucket %v", streamId, bucket)
 					idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_BUCKET_NOT_FOUND,
-						streamId:  streamId,
-						bucket:    keyspaceId,
-						sessionId: sessionId}
+						streamId:   streamId,
+						keyspaceId: keyspaceId,
+						sessionId:  sessionId}
 					break retryloop
 				}
 
@@ -4493,7 +4494,7 @@ func (idx *indexer) handleUpdateIndexRState(msg Message) {
 
 func (idx *indexer) handleInitialBuildDone(msg Message) {
 
-	keyspaceId := msg.(*MsgTKInitBuildDone).GetBucket()
+	keyspaceId := msg.(*MsgTKInitBuildDone).GetKeyspaceId()
 	streamId := msg.(*MsgTKInitBuildDone).GetStreamId()
 	sessionId := msg.(*MsgTKInitBuildDone).GetSessionId()
 	flushTs := msg.(*MsgTKInitBuildDone).GetFlushTs()
@@ -4657,12 +4658,12 @@ func (idx *indexer) processBuildDoneCatchup(streamId common.StreamId, keyspaceId
 	//so mutations for this index are already in queue to
 	//allow convergence with INIT_STREAM.
 	cmd := &MsgStreamUpdate{mType: ADD_INDEX_LIST_TO_STREAM,
-		streamId:  common.MAINT_STREAM,
-		bucket:    keyspaceId,
-		indexList: indexList,
-		respCh:    respCh,
-		stopCh:    stopCh,
-		sessionId: sessionId}
+		streamId:   common.MAINT_STREAM,
+		keyspaceId: keyspaceId,
+		indexList:  indexList,
+		respCh:     respCh,
+		stopCh:     stopCh,
+		sessionId:  sessionId}
 
 	//send stream update to timekeeper
 	if resp := idx.sendStreamUpdateToWorker(cmd, idx.tkCmdCh, "Timekeeper"); resp.GetMsgType() != MSG_SUCCESS {
@@ -4708,11 +4709,11 @@ func (idx *indexer) processBuildDoneCatchup(streamId common.StreamId, keyspaceId
 					mergeTs := resp.(*MsgStreamUpdate).GetRestartTs()
 
 					idx.internalRecvCh <- &MsgTKInitBuildDone{
-						mType:     TK_INIT_BUILD_DONE_ACK,
-						streamId:  streamId,
-						bucket:    keyspaceId,
-						mergeTs:   mergeTs,
-						sessionId: sessionId}
+						mType:      TK_INIT_BUILD_DONE_ACK,
+						streamId:   streamId,
+						keyspaceId: keyspaceId,
+						mergeTs:    mergeTs,
+						sessionId:  sessionId}
 					break retryloop
 
 				default:
@@ -4742,10 +4743,10 @@ func (idx *indexer) processBuildDoneCatchup(streamId common.StreamId, keyspaceId
 								keyspaceId, respErr.cause, sessionId, MAX_PROJ_RETRY)
 
 							idx.internalRecvCh <- &MsgTKInitBuildDone{
-								mType:     TK_ADD_INSTANCE_FAIL,
-								streamId:  streamId,
-								bucket:    keyspaceId,
-								sessionId: sessionId,
+								mType:      TK_ADD_INSTANCE_FAIL,
+								streamId:   streamId,
+								keyspaceId: keyspaceId,
+								sessionId:  sessionId,
 							}
 							break retryloop
 						}
@@ -4815,9 +4816,9 @@ func (idx *indexer) processBuildDoneNoCatchup(streamId common.StreamId,
 	respCh := make(MsgChannel)
 	stopCh := make(StopChannel)
 
-	cmd := &MsgStreamUpdate{mType: REMOVE_BUCKET_FROM_STREAM,
+	cmd := &MsgStreamUpdate{mType: REMOVE_KEYSPACE_FROM_STREAM,
 		streamId:      streamId,
-		bucket:        keyspaceId,
+		keyspaceId:    keyspaceId,
 		respCh:        respCh,
 		stopCh:        stopCh,
 		abortRecovery: true,
@@ -4870,11 +4871,11 @@ func (idx *indexer) processBuildDoneNoCatchup(streamId common.StreamId,
 						"SessionId %v", streamId, keyspaceId, sessionId)
 
 					idx.internalRecvCh <- &MsgTKInitBuildDone{
-						mType:     TK_INIT_BUILD_DONE_NO_CATCHUP_ACK,
-						streamId:  streamId,
-						bucket:    keyspaceId,
-						flushTs:   flushTs,
-						sessionId: sessionId}
+						mType:      TK_INIT_BUILD_DONE_NO_CATCHUP_ACK,
+						streamId:   streamId,
+						keyspaceId: keyspaceId,
+						flushTs:    flushTs,
+						sessionId:  sessionId}
 					break retryloop
 
 				default:
@@ -4895,7 +4896,7 @@ func (idx *indexer) processBuildDoneNoCatchup(streamId common.StreamId,
 func (idx *indexer) handleBuildDoneNoCatchupAck(msg Message) {
 
 	streamId := msg.(*MsgTKInitBuildDone).GetStreamId()
-	keyspaceId := msg.(*MsgTKInitBuildDone).GetBucket()
+	keyspaceId := msg.(*MsgTKInitBuildDone).GetKeyspaceId()
 	flushTs := msg.(*MsgTKInitBuildDone).GetFlushTs()
 
 	state := idx.getStreamKeyspaceIdState(streamId, keyspaceId)
@@ -4918,7 +4919,7 @@ func (idx *indexer) handleBuildDoneNoCatchupAck(msg Message) {
 
 func (idx *indexer) handleMergeStream(msg Message) {
 
-	keyspaceId := msg.(*MsgTKMergeStream).GetBucket()
+	keyspaceId := msg.(*MsgTKMergeStream).GetKeyspaceId()
 	streamId := msg.(*MsgTKMergeStream).GetStreamId()
 	sessionId := msg.(*MsgTKMergeStream).GetSessionId()
 
@@ -4961,7 +4962,7 @@ func (idx *indexer) handleMergeStream(msg Message) {
 
 func (idx *indexer) handleMergeInitStream(msg Message) {
 
-	keyspaceId := msg.(*MsgTKMergeStream).GetBucket()
+	keyspaceId := msg.(*MsgTKMergeStream).GetKeyspaceId()
 	streamId := msg.(*MsgTKMergeStream).GetStreamId()
 
 	sessionId := idx.getCurrentSessionId(streamId, keyspaceId)
@@ -5000,9 +5001,9 @@ func (idx *indexer) handleMergeInitStream(msg Message) {
 
 	//remove keyspaceId from INIT_STREAM
 	var cmd Message
-	cmd = &MsgStreamUpdate{mType: REMOVE_BUCKET_FROM_STREAM,
+	cmd = &MsgStreamUpdate{mType: REMOVE_KEYSPACE_FROM_STREAM,
 		streamId:      streamId,
-		bucket:        keyspaceId,
+		keyspaceId:    keyspaceId,
 		respCh:        respCh,
 		stopCh:        stopCh,
 		abortRecovery: true,
@@ -5028,8 +5029,8 @@ func (idx *indexer) handleMergeInitStream(msg Message) {
 
 	//enable flush for this keyspaceId in MAINT_STREAM
 	idx.tkCmdCh <- &MsgTKToggleFlush{mType: TK_ENABLE_FLUSH,
-		streamId: common.MAINT_STREAM,
-		bucket:   keyspaceId}
+		streamId:   common.MAINT_STREAM,
+		keyspaceId: keyspaceId}
 	<-idx.tkCmdCh
 
 	//for cbq bridge, return response after merge is done and
@@ -5075,12 +5076,12 @@ func (idx *indexer) handleMergeInitStream(msg Message) {
 					logging.Infof("Indexer::handleMergeInitStream Success Stream %v KeyspaceId %v "+
 						"SessionId %v", streamId, keyspaceId, sessionId)
 					idx.internalRecvCh <- &MsgTKMergeStream{
-						mType:     TK_MERGE_STREAM_ACK,
-						streamId:  streamId,
-						bucket:    keyspaceId,
-						mergeList: indexList,
-						sessionId: sessionId,
-						reqCh:     stopCh}
+						mType:      TK_MERGE_STREAM_ACK,
+						streamId:   streamId,
+						keyspaceId: keyspaceId,
+						mergeList:  indexList,
+						sessionId:  sessionId,
+						reqCh:      stopCh}
 					break retryloop
 
 				default:
@@ -5217,12 +5218,12 @@ func (idx *indexer) stopKeyspaceIdStream(streamId common.StreamId, keyspaceId st
 	stopCh := make(StopChannel)
 
 	var cmd Message
-	cmd = &MsgStreamUpdate{mType: REMOVE_BUCKET_FROM_STREAM,
-		streamId:  streamId,
-		bucket:    keyspaceId,
-		respCh:    respCh,
-		stopCh:    stopCh,
-		sessionId: sessionId}
+	cmd = &MsgStreamUpdate{mType: REMOVE_KEYSPACE_FROM_STREAM,
+		streamId:   streamId,
+		keyspaceId: keyspaceId,
+		respCh:     respCh,
+		stopCh:     stopCh,
+		sessionId:  sessionId}
 
 	//send stream update to mutation manager
 	if resp := idx.sendStreamUpdateToWorker(cmd, idx.mutMgrCmdCh,
@@ -5258,10 +5259,10 @@ func (idx *indexer) stopKeyspaceIdStream(streamId common.StreamId, keyspaceId st
 					logging.Infof("Indexer::stopKeyspaceIdStream Success Stream %v KeyspaceId %v "+
 						"SessionId %v", streamId, keyspaceId, sessionId)
 					idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_PREPARE_DONE,
-						streamId:  streamId,
-						bucket:    keyspaceId,
-						sessionId: sessionId,
-						requestCh: stopCh}
+						streamId:   streamId,
+						keyspaceId: keyspaceId,
+						sessionId:  sessionId,
+						requestCh:  stopCh}
 					break retryloop
 
 				default:
@@ -5354,9 +5355,9 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 		}
 	}
 
-	keyspaceIdInRecovery := false
+	keyspaceInRecovery := false
 	if idx.getStreamKeyspaceIdState(streamId, keyspaceId) == STREAM_RECOVERY {
-		keyspaceIdInRecovery = true
+		keyspaceInRecovery = true
 	}
 
 	clustAddr := idx.config["clusterAddr"].String()
@@ -5369,14 +5370,14 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 
 	cmd := &MsgStreamUpdate{mType: OPEN_STREAM,
 		streamId:           streamId,
-		bucket:             keyspaceId,
+		keyspaceId:         keyspaceId,
 		indexList:          indexList,
 		restartTs:          restartTs,
 		respCh:             respCh,
 		stopCh:             stopCh,
 		allowMarkFirstSnap: allowMarkFirstSnap,
 		rollbackTime:       idx.keyspaceIdRollbackTimes[keyspaceId],
-		bucketInRecovery:   keyspaceIdInRecovery,
+		keyspaceInRecovery: keyspaceInRecovery,
 		async:              async,
 		sessionId:          sessionId}
 
@@ -5411,10 +5412,10 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 				logging.Errorf("Indexer::startKeyspaceIdStream Bucket Not Found "+
 					"For Stream %v KeyspaceId %v SessionId %v", streamId, keyspaceId, sessionId)
 				idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_BUCKET_NOT_FOUND,
-					streamId:  streamId,
-					bucket:    keyspaceId,
-					inMTR:     true,
-					sessionId: sessionId}
+					streamId:   streamId,
+					keyspaceId: keyspaceId,
+					inMTR:      true,
+					sessionId:  sessionId}
 				break retryloop
 			}
 
@@ -5442,13 +5443,13 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 					}
 
 					idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_RECOVERY_DONE,
-						streamId:  streamId,
-						bucket:    keyspaceId,
-						restartTs: restartTs,
-						activeTs:  resp.(*MsgSuccessOpenStream).GetActiveTs(),
-						pendingTs: resp.(*MsgSuccessOpenStream).GetPendingTs(),
-						sessionId: sessionId,
-						requestCh: stopCh,
+						streamId:   streamId,
+						keyspaceId: keyspaceId,
+						restartTs:  restartTs,
+						activeTs:   resp.(*MsgSuccessOpenStream).GetActiveTs(),
+						pendingTs:  resp.(*MsgSuccessOpenStream).GetPendingTs(),
+						sessionId:  sessionId,
+						requestCh:  stopCh,
 					}
 					break retryloop
 
@@ -5458,12 +5459,12 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 						keyspaceId, sessionId)
 					rollbackTs := resp.(*MsgRollback).GetRollbackTs()
 					idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_INIT_PREP_RECOVERY,
-						streamId:  streamId,
-						bucket:    keyspaceId,
-						restartTs: rollbackTs,
-						retryTs:   retryTs,
-						requestCh: stopCh,
-						sessionId: sessionId}
+						streamId:   streamId,
+						keyspaceId: keyspaceId,
+						restartTs:  rollbackTs,
+						retryTs:    retryTs,
+						requestCh:  stopCh,
+						sessionId:  sessionId}
 					break retryloop
 
 				default:
@@ -5479,11 +5480,11 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 							sessionId, respErr.cause, state)
 
 						idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_MTR_FAIL,
-							streamId:  streamId,
-							bucket:    keyspaceId,
-							inMTR:     true,
-							requestCh: stopCh,
-							sessionId: sessionId}
+							streamId:   streamId,
+							keyspaceId: keyspaceId,
+							inMTR:      true,
+							requestCh:  stopCh,
+							sessionId:  sessionId}
 
 						break retryloop
 
@@ -5495,11 +5496,11 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 							keyspaceId, sessionId, respErr.cause, MAX_PROJ_RETRY)
 
 						idx.internalRecvCh <- &MsgRecovery{
-							mType:     INDEXER_INIT_PREP_RECOVERY,
-							streamId:  streamId,
-							bucket:    keyspaceId,
-							requestCh: stopCh,
-							sessionId: sessionId,
+							mType:      INDEXER_INIT_PREP_RECOVERY,
+							streamId:   streamId,
+							keyspaceId: keyspaceId,
+							requestCh:  stopCh,
+							sessionId:  sessionId,
 						}
 						break retryloop
 					} else {
@@ -5523,7 +5524,7 @@ func (idx *indexer) processRollback(streamId common.StreamId,
 
 	//send to storage manager to rollback
 	msg := &MsgRollback{streamId: streamId,
-		bucket:       keyspaceId,
+		keyspaceId:   keyspaceId,
 		rollbackTs:   rollbackTs,
 		rollbackTime: idx.keyspaceIdRollbackTimes[keyspaceId],
 		sessionId:    sessionId}
@@ -5564,7 +5565,7 @@ func (idx *indexer) initStreamPendBuildDone() {
 func (idx *indexer) notifyFlushObserver(msg Message) {
 
 	//if there is any observer for flush, notify
-	keyspaceId := msg.(*MsgMutMgrFlushDone).GetBucket()
+	keyspaceId := msg.(*MsgMutMgrFlushDone).GetKeyspaceId()
 	streamId := msg.(*MsgMutMgrFlushDone).GetStreamId()
 
 	if notifyCh, ok := idx.streamKeyspaceIdObserveFlushDone[streamId][keyspaceId]; ok {
@@ -6043,7 +6044,7 @@ func (idx *indexer) handleUpdateMapToWorker(msg Message) {
 }
 
 func (idx *indexer) handleUpdateBuildTs(msg Message) {
-	keyspaceId := msg.(*MsgStreamUpdate).GetBucket()
+	keyspaceId := msg.(*MsgStreamUpdate).GetKeyspaceId()
 	buildTs := msg.(*MsgStreamUpdate).GetTimestamp()
 	streamId := msg.(*MsgStreamUpdate).GetStreamId()
 
@@ -6198,11 +6199,11 @@ func (idx *indexer) initFromPersistedState() error {
 		}
 
 		idx.internalRecvCh <- &MsgUpdateSnapMap{
-			idxInstId: inst.InstId,
-			idxInst:   inst,
-			partnMap:  partnInstMap,
-			streamId:  common.ALL_STREAMS,
-			bucket:    "",
+			idxInstId:  inst.InstId,
+			idxInst:    inst,
+			partnMap:   partnInstMap,
+			streamId:   common.ALL_STREAMS,
+			keyspaceId: "",
 		}
 
 		//update index maps in scan coordinator
@@ -7546,10 +7547,10 @@ func (idx *indexer) computeKeyspaceBuildTsAsync(clusterAddr string,
 			"collId: %v err: %v", streamId, keyspaceId, collId, err)
 	} else {
 		msgBuildTs := &MsgStreamUpdate{
-			mType:    INDEXER_UPDATE_BUILD_TS,
-			streamId: streamId,
-			bucket:   keyspaceId,
-			buildTs:  buildTs,
+			mType:      INDEXER_UPDATE_BUILD_TS,
+			streamId:   streamId,
+			keyspaceId: keyspaceId,
+			buildTs:    buildTs,
 		}
 		// Send a message to indexer to update the buildTs.
 		// Indexer would forward this message to timekeeper
@@ -8385,9 +8386,9 @@ func (idx *indexer) prepareStreamKeyspaceIdForFreshStart(
 	idx.initStreamKeyspaceIdState(streamId)
 
 	//clear worker state
-	cmd := &MsgStreamUpdate{mType: REMOVE_BUCKET_FROM_STREAM,
+	cmd := &MsgStreamUpdate{mType: REMOVE_KEYSPACE_FROM_STREAM,
 		streamId:      streamId,
-		bucket:        keyspaceId,
+		keyspaceId:    keyspaceId,
 		sessionId:     idx.getCurrentSessionId(streamId, keyspaceId),
 		abortRecovery: true,
 	}
@@ -8473,10 +8474,10 @@ func (idx *indexer) monitorKVNodes() {
 			for keyspaceId, _ := range keyspaceIdStatus {
 
 				poolChangeMsg := &MsgPoolChange{
-					mType:    POOL_CHANGE,
-					nodes:    kvNodeUUIDs,
-					streamId: streamId,
-					bucket:   keyspaceId,
+					mType:      POOL_CHANGE,
+					nodes:      kvNodeUUIDs,
+					streamId:   streamId,
+					keyspaceId: keyspaceId,
 				}
 				idx.internalRecvCh <- poolChangeMsg
 			}

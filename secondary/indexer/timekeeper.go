@@ -143,8 +143,8 @@ func (tk *timekeeper) handleSupervisorCommands(cmd Message) {
 	case REMOVE_INDEX_LIST_FROM_STREAM:
 		tk.handleRemoveIndexFromStream(cmd)
 
-	case REMOVE_BUCKET_FROM_STREAM:
-		tk.handleRemoveKeyspaceIdFromStream(cmd)
+	case REMOVE_KEYSPACE_FROM_STREAM:
+		tk.handleRemoveKeyspaceFromStream(cmd)
 
 	case CLOSE_STREAM:
 		tk.handleStreamClose(cmd)
@@ -182,8 +182,8 @@ func (tk *timekeeper) handleSupervisorCommands(cmd Message) {
 	case MUT_MGR_ABORT_DONE:
 		tk.handleFlushAbortDone(cmd)
 
-	case TK_GET_BUCKET_HWT:
-		tk.handleGetKeyspaceIdHWT(cmd)
+	case TK_GET_KEYSPACE_HWT:
+		tk.handleGetKeyspaceHWT(cmd)
 
 	case INDEXER_INIT_PREP_RECOVERY:
 		tk.handleInitPrepRecovery(cmd)
@@ -244,7 +244,7 @@ func (tk *timekeeper) handleStreamOpen(cmd Message) {
 	logging.Debugf("Timekeeper::handleStreamOpen %v", cmd)
 
 	streamId := cmd.(*MsgStreamUpdate).GetStreamId()
-	keyspaceId := cmd.(*MsgStreamUpdate).GetBucket()
+	keyspaceId := cmd.(*MsgStreamUpdate).GetKeyspaceId()
 	restartTs := cmd.(*MsgStreamUpdate).GetRestartTs()
 	rollbackTime := cmd.(*MsgStreamUpdate).GetRollbackTime()
 	async := cmd.(*MsgStreamUpdate).GetAsync()
@@ -310,7 +310,7 @@ func (tk *timekeeper) handleStreamClose(cmd Message) {
 
 func (tk *timekeeper) handleInitPrepRecovery(msg Message) {
 
-	keyspaceId := msg.(*MsgRecovery).GetBucket()
+	keyspaceId := msg.(*MsgRecovery).GetKeyspaceId()
 	streamId := msg.(*MsgRecovery).GetStreamId()
 
 	logging.Infof("Timekeeper::handleInitPrepRecovery %v %v",
@@ -330,7 +330,7 @@ func (tk *timekeeper) handlePrepareDone(cmd Message) {
 	logging.Infof("Timekeeper::handlePrepareDone %v", cmd)
 
 	streamId := cmd.(*MsgRecovery).GetStreamId()
-	keyspaceId := cmd.(*MsgRecovery).GetBucket()
+	keyspaceId := cmd.(*MsgRecovery).GetKeyspaceId()
 
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
@@ -373,7 +373,7 @@ func (tk *timekeeper) addIndextoStream(cmd Message) {
 	indexInstList := cmd.(*MsgStreamUpdate).GetIndexList()
 	buildTs := cmd.(*MsgStreamUpdate).GetTimestamp()
 	streamId := cmd.(*MsgStreamUpdate).GetStreamId()
-	keyspaceInRecovery := cmd.(*MsgStreamUpdate).BucketInRecovery()
+	keyspaceInRecovery := cmd.(*MsgStreamUpdate).KeyspaceInRecovery()
 
 	//If the index is in INITIAL state, store it in initialbuild map
 	for _, idx := range indexInstList {
@@ -412,7 +412,7 @@ func (tk *timekeeper) handleUpdateBuildTs(cmd Message) {
 	defer tk.lock.Unlock()
 
 	streamId := cmd.(*MsgStreamUpdate).GetStreamId()
-	keyspaceId := cmd.(*MsgStreamUpdate).GetBucket()
+	keyspaceId := cmd.(*MsgStreamUpdate).GetKeyspaceId()
 	state := tk.ss.streamKeyspaceIdStatus[streamId][keyspaceId]
 
 	// Ignore UPDATE_BUILD_TS msg for inactive and recovery phase. For recovery,
@@ -442,7 +442,7 @@ func (tk *timekeeper) handleUpdateBuildTs(cmd Message) {
 func (tk *timekeeper) updateBuildTs(cmd Message) {
 	buildTs := cmd.(*MsgStreamUpdate).GetTimestamp()
 	streamId := cmd.(*MsgStreamUpdate).GetStreamId()
-	keyspaceId := cmd.(*MsgStreamUpdate).GetBucket()
+	keyspaceId := cmd.(*MsgStreamUpdate).GetKeyspaceId()
 
 	tk.setBuildTs(streamId, keyspaceId, buildTs)
 }
@@ -459,12 +459,12 @@ func (tk *timekeeper) handleRemoveIndexFromStream(cmd Message) {
 	tk.supvCmdch <- &MsgSuccess{}
 }
 
-func (tk *timekeeper) handleRemoveKeyspaceIdFromStream(cmd Message) {
+func (tk *timekeeper) handleRemoveKeyspaceFromStream(cmd Message) {
 
-	logging.Infof("Timekeeper::handleRemoveKeyspaceIdFromStream %v", cmd)
+	logging.Infof("Timekeeper::handleRemoveKeyspaceFromStream %v", cmd)
 
 	streamId := cmd.(*MsgStreamUpdate).GetStreamId()
-	keyspaceId := cmd.(*MsgStreamUpdate).GetBucket()
+	keyspaceId := cmd.(*MsgStreamUpdate).GetKeyspaceId()
 	abort := cmd.(*MsgStreamUpdate).AbortRecovery()
 
 	tk.lock.Lock()
@@ -535,11 +535,11 @@ func (tk *timekeeper) handleSync(cmd Message) {
 		return fmt.Sprintf("Timekeeper::handleSync %v", cmd)
 	})
 
-	streamId := cmd.(*MsgBucketHWT).GetStreamId()
-	keyspaceId := cmd.(*MsgBucketHWT).GetBucket()
-	hwt := cmd.(*MsgBucketHWT).GetHWT()
-	prevSnap := cmd.(*MsgBucketHWT).GetPrevSnap()
-	sessionId := cmd.(*MsgBucketHWT).GetSessionId()
+	streamId := cmd.(*MsgKeyspaceHWT).GetStreamId()
+	keyspaceId := cmd.(*MsgKeyspaceHWT).GetKeyspaceId()
+	hwt := cmd.(*MsgKeyspaceHWT).GetHWT()
+	prevSnap := cmd.(*MsgKeyspaceHWT).GetPrevSnap()
+	sessionId := cmd.(*MsgKeyspaceHWT).GetSessionId()
 
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
@@ -588,7 +588,7 @@ func (tk *timekeeper) handleSync(cmd Message) {
 func (tk *timekeeper) handleFlushDone(cmd Message) {
 
 	streamId := cmd.(*MsgMutMgrFlushDone).GetStreamId()
-	keyspaceId := cmd.(*MsgMutMgrFlushDone).GetBucket()
+	keyspaceId := cmd.(*MsgMutMgrFlushDone).GetKeyspaceId()
 	flushWasAborted := cmd.(*MsgMutMgrFlushDone).GetAborted()
 
 	tk.lock.Lock()
@@ -674,9 +674,9 @@ func (tk *timekeeper) processFlushAbort(streamId common.StreamId, keyspaceId str
 		logging.Infof("Timekeeper::processFlushAbort %v %v %v Generate InitPrepRecovery",
 			streamId, keyspaceId, sessionId)
 		tk.supvRespch <- &MsgRecovery{mType: INDEXER_INIT_PREP_RECOVERY,
-			streamId:  streamId,
-			bucket:    keyspaceId,
-			sessionId: sessionId}
+			streamId:   streamId,
+			keyspaceId: keyspaceId,
+			sessionId:  sessionId}
 
 	case STREAM_PREPARE_RECOVERY:
 
@@ -684,9 +684,9 @@ func (tk *timekeeper) processFlushAbort(streamId common.StreamId, keyspaceId str
 		logging.Infof("Timekeeper::processFlushAbort %v %v %v Generate PrepareRecovery",
 			streamId, keyspaceId, sessionId)
 		tk.supvRespch <- &MsgRecovery{mType: INDEXER_PREPARE_RECOVERY,
-			streamId:  streamId,
-			bucket:    keyspaceId,
-			sessionId: sessionId}
+			streamId:   streamId,
+			keyspaceId: keyspaceId,
+			sessionId:  sessionId}
 
 	case STREAM_INACTIVE:
 		logging.Errorf("Timekeeper::processFlushAbort Unexpected Flush Abort "+
@@ -709,7 +709,7 @@ func (tk *timekeeper) handleFlushDoneMaintStream(cmd Message) {
 	})
 
 	streamId := cmd.(*MsgMutMgrFlushDone).GetStreamId()
-	keyspaceId := cmd.(*MsgMutMgrFlushDone).GetBucket()
+	keyspaceId := cmd.(*MsgMutMgrFlushDone).GetKeyspaceId()
 
 	state := tk.ss.streamKeyspaceIdStatus[streamId][keyspaceId]
 
@@ -738,9 +738,9 @@ func (tk *timekeeper) handleFlushDoneMaintStream(cmd Message) {
 			sessionId := tk.ss.getSessionId(streamId, keyspaceId)
 			//send message to stop running stream
 			tk.supvRespch <- &MsgRecovery{mType: INDEXER_PREPARE_RECOVERY,
-				streamId:  streamId,
-				bucket:    keyspaceId,
-				sessionId: sessionId}
+				streamId:   streamId,
+				keyspaceId: keyspaceId,
+				sessionId:  sessionId}
 		}
 
 	case STREAM_INACTIVE:
@@ -760,7 +760,7 @@ func (tk *timekeeper) handleFlushDoneCatchupStream(cmd Message) {
 	logging.Tracef("Timekeeper::handleFlushDoneCatchupStream %v", cmd)
 
 	streamId := cmd.(*MsgMutMgrFlushDone).GetStreamId()
-	keyspaceId := cmd.(*MsgMutMgrFlushDone).GetBucket()
+	keyspaceId := cmd.(*MsgMutMgrFlushDone).GetKeyspaceId()
 
 	state := tk.ss.streamKeyspaceIdStatus[streamId][keyspaceId]
 
@@ -808,7 +808,7 @@ func (tk *timekeeper) handleFlushDoneInitStream(cmd Message) {
 	})
 
 	streamId := cmd.(*MsgMutMgrFlushDone).GetStreamId()
-	keyspaceId := cmd.(*MsgMutMgrFlushDone).GetBucket()
+	keyspaceId := cmd.(*MsgMutMgrFlushDone).GetKeyspaceId()
 
 	state := tk.ss.streamKeyspaceIdStatus[streamId][keyspaceId]
 
@@ -848,9 +848,9 @@ func (tk *timekeeper) handleFlushDoneInitStream(cmd Message) {
 		if !found && !tk.ss.checkAnyAbortPending(streamId, keyspaceId) {
 			//send message to stop running stream
 			tk.supvRespch <- &MsgRecovery{mType: INDEXER_PREPARE_RECOVERY,
-				streamId:  streamId,
-				bucket:    keyspaceId,
-				sessionId: sessionId}
+				streamId:   streamId,
+				keyspaceId: keyspaceId,
+				sessionId:  sessionId}
 		}
 
 	default:
@@ -868,7 +868,7 @@ func (tk *timekeeper) handleFlushAbortDone(cmd Message) {
 	logging.Tracef("Timekeeper::handleFlushAbortDone %v", cmd)
 
 	streamId := cmd.(*MsgMutMgrFlushDone).GetStreamId()
-	keyspaceId := cmd.(*MsgMutMgrFlushDone).GetBucket()
+	keyspaceId := cmd.(*MsgMutMgrFlushDone).GetKeyspaceId()
 
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
@@ -909,9 +909,9 @@ func (tk *timekeeper) handleFlushAbortDone(cmd Message) {
 
 		//send message to stop running stream
 		tk.supvRespch <- &MsgRecovery{mType: INDEXER_PREPARE_RECOVERY,
-			streamId:  streamId,
-			bucket:    keyspaceId,
-			sessionId: sessionId}
+			streamId:   streamId,
+			keyspaceId: keyspaceId,
+			sessionId:  sessionId}
 
 	case STREAM_RECOVERY, STREAM_INACTIVE:
 		logging.Errorf("Timekeeper::handleFlushAbortDone Unexpected Flush Abort "+
@@ -930,7 +930,7 @@ func (tk *timekeeper) handleFlushStateChange(cmd Message) {
 
 	t := cmd.(*MsgTKToggleFlush).GetMsgType()
 	streamId := cmd.(*MsgTKToggleFlush).GetStreamId()
-	keyspaceId := cmd.(*MsgTKToggleFlush).GetBucket()
+	keyspaceId := cmd.(*MsgTKToggleFlush).GetKeyspaceId()
 
 	logging.Infof("Timekeeper::handleFlushStateChange Received Flush State Change "+
 		"for KeyspaceId: %v StreamId: %v Type: %v", keyspaceId, streamId, t)
@@ -982,18 +982,18 @@ func (tk *timekeeper) handleFlushStateChange(cmd Message) {
 	tk.supvCmdch <- &MsgSuccess{}
 }
 
-func (tk *timekeeper) handleGetKeyspaceIdHWT(cmd Message) {
+func (tk *timekeeper) handleGetKeyspaceHWT(cmd Message) {
 
-	logging.Debugf("Timekeeper::handleGetKeyspaceIdHWT %v", cmd)
+	logging.Debugf("Timekeeper::handleGetKeyspaceHWT %v", cmd)
 
-	streamId := cmd.(*MsgBucketHWT).GetStreamId()
-	keyspaceId := cmd.(*MsgBucketHWT).GetBucket()
+	streamId := cmd.(*MsgKeyspaceHWT).GetStreamId()
+	keyspaceId := cmd.(*MsgKeyspaceHWT).GetKeyspaceId()
 
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
 
 	//set the return ts to nil
-	msg := cmd.(*MsgBucketHWT)
+	msg := cmd.(*MsgKeyspaceHWT)
 	msg.ts = nil
 
 	if keyspaceIdHWTMap, ok := tk.ss.streamKeyspaceIdHWTMap[streamId]; ok {
@@ -1321,7 +1321,7 @@ func (tk *timekeeper) handleStreamConnError(cmd Message) {
 	logging.Debugf("Timekeeper::handleStreamConnError %v", cmd)
 
 	streamId := cmd.(*MsgStreamInfo).GetStreamId()
-	keyspaceId := cmd.(*MsgStreamInfo).GetBucket()
+	keyspaceId := cmd.(*MsgStreamInfo).GetKeyspaceId()
 	vbList := cmd.(*MsgStreamInfo).GetVbList()
 
 	logging.Infof("TK ConnError %v %v %v", streamId, keyspaceId, vbList)
@@ -1670,7 +1670,7 @@ func (tk *timekeeper) handleDcpSystemEvent(cmd Message) {
 func (tk *timekeeper) handleInitBuildDoneAck(cmd Message) {
 
 	streamId := cmd.(*MsgTKInitBuildDone).GetStreamId()
-	keyspaceId := cmd.(*MsgTKInitBuildDone).GetBucket()
+	keyspaceId := cmd.(*MsgTKInitBuildDone).GetKeyspaceId()
 	mergeTs := cmd.(*MsgTKInitBuildDone).GetMergeTs()
 
 	logging.Infof("Timekeeper::handleInitBuildDoneAck StreamId %v KeyspaceId %v",
@@ -1730,7 +1730,7 @@ func (tk *timekeeper) handleInitBuildDoneAck(cmd Message) {
 func (tk *timekeeper) handleAddInstanceFail(cmd Message) {
 
 	streamId := cmd.(*MsgTKInitBuildDone).GetStreamId()
-	keyspaceId := cmd.(*MsgTKInitBuildDone).GetBucket()
+	keyspaceId := cmd.(*MsgTKInitBuildDone).GetKeyspaceId()
 
 	logging.Infof("Timekeeper::handleAddInstanceFail StreamId %v KeyspaceId %v",
 		streamId, keyspaceId)
@@ -1762,7 +1762,7 @@ func (tk *timekeeper) handleAddInstanceFail(cmd Message) {
 func (tk *timekeeper) handleMergeStreamAck(cmd Message) {
 
 	streamId := cmd.(*MsgTKMergeStream).GetStreamId()
-	keyspaceId := cmd.(*MsgTKMergeStream).GetBucket()
+	keyspaceId := cmd.(*MsgTKMergeStream).GetKeyspaceId()
 
 	logging.Infof("Timekeeper::handleMergeStreamAck StreamId %v KeyspaceId %v",
 		streamId, keyspaceId)
@@ -1773,7 +1773,7 @@ func (tk *timekeeper) handleMergeStreamAck(cmd Message) {
 func (tk *timekeeper) handleStreamRequestDone(cmd Message) {
 
 	streamId := cmd.(*MsgStreamInfo).GetStreamId()
-	keyspaceId := cmd.(*MsgStreamInfo).GetBucket()
+	keyspaceId := cmd.(*MsgStreamInfo).GetKeyspaceId()
 	activeTs := cmd.(*MsgStreamInfo).GetActiveTs()
 	pendingTs := cmd.(*MsgStreamInfo).GetPendingTs()
 
@@ -1841,7 +1841,7 @@ func (tk *timekeeper) handleStreamRequestDone(cmd Message) {
 func (tk *timekeeper) handleRecoveryDone(cmd Message) {
 
 	streamId := cmd.(*MsgRecovery).GetStreamId()
-	keyspaceId := cmd.(*MsgRecovery).GetBucket()
+	keyspaceId := cmd.(*MsgRecovery).GetKeyspaceId()
 	mergeTs := cmd.(*MsgRecovery).GetRestartTs()
 	activeTs := cmd.(*MsgRecovery).GetActiveTs()
 	pendingTs := cmd.(*MsgRecovery).GetPendingTs()
@@ -1926,7 +1926,7 @@ func (tk *timekeeper) handleAbortRecovery(cmd Message) {
 	logging.Infof("Timekeeper::handleAbortRecovery %v", cmd)
 
 	streamId := cmd.(*MsgRecovery).GetStreamId()
-	keyspaceId := cmd.(*MsgRecovery).GetBucket()
+	keyspaceId := cmd.(*MsgRecovery).GetKeyspaceId()
 
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
@@ -2009,8 +2009,8 @@ func (tk *timekeeper) flushOrAbortInProgressTS(streamId common.StreamId,
 				"before recovery for keyspaceId %v streamId %v", ts, keyspaceId, streamId)
 
 			tk.supvRespch <- &MsgMutMgrFlushMutationQueue{mType: MUT_MGR_ABORT_PERSIST,
-				bucket:   keyspaceId,
-				streamId: streamId}
+				keyspaceId: keyspaceId,
+				streamId:   streamId}
 
 			keyspaceIdAbortInProgressMap := tk.ss.streamKeyspaceIdAbortInProgressMap[streamId]
 			keyspaceIdAbortInProgressMap[keyspaceId] = true
@@ -2035,9 +2035,9 @@ func (tk *timekeeper) flushOrAbortInProgressTS(streamId common.StreamId,
 
 		//send message to stop running stream
 		tk.supvRespch <- &MsgRecovery{mType: INDEXER_PREPARE_RECOVERY,
-			streamId:  streamId,
-			bucket:    keyspaceId,
-			sessionId: sessionId}
+			streamId:   streamId,
+			keyspaceId: keyspaceId,
+			sessionId:  sessionId}
 
 	}
 
@@ -2119,12 +2119,12 @@ func (tk *timekeeper) checkInitialBuildDone(streamId common.StreamId,
 
 				//generate init build done msg
 				tk.supvRespch <- &MsgTKInitBuildDone{
-					mType:     TK_INIT_BUILD_DONE,
-					streamId:  streamId,
-					buildTs:   buildInfo.buildTs,
-					bucket:    keyspaceId,
-					flushTs:   flushTs,
-					sessionId: sessionId}
+					mType:      TK_INIT_BUILD_DONE,
+					streamId:   streamId,
+					buildTs:    buildInfo.buildTs,
+					keyspaceId: keyspaceId,
+					flushTs:    flushTs,
+					sessionId:  sessionId}
 
 				return true
 			}
@@ -2223,11 +2223,11 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 					streamId, keyspaceId, sessionId, initTsSeq)
 
 				tk.supvRespch <- &MsgTKMergeStream{
-					mType:     TK_MERGE_STREAM,
-					streamId:  streamId,
-					bucket:    keyspaceId,
-					mergeTs:   initTsSeq,
-					sessionId: sessionId}
+					mType:      TK_MERGE_STREAM,
+					streamId:   streamId,
+					keyspaceId: keyspaceId,
+					mergeTs:    initTsSeq,
+					sessionId:  sessionId}
 
 				logging.Infof("Timekeeper::checkInitStreamReadyToMerge \n\t Stream %v "+
 					"KeyspaceId %v State Changed to INACTIVE", streamId, keyspaceId)
@@ -2294,7 +2294,7 @@ func (tk *timekeeper) checkFlushTsValidForMerge(streamId common.StreamId, keyspa
 func (tk *timekeeper) checkCatchupStreamReadyToMerge(cmd Message) bool {
 
 	streamId := cmd.(*MsgMutMgrFlushDone).GetStreamId()
-	keyspaceId := cmd.(*MsgMutMgrFlushDone).GetBucket()
+	keyspaceId := cmd.(*MsgMutMgrFlushDone).GetKeyspaceId()
 
 	if streamId == common.CATCHUP_STREAM {
 
@@ -2325,8 +2325,8 @@ func (tk *timekeeper) checkCatchupStreamReadyToMerge(cmd Message) bool {
 				"Stream: %v KeyspaceId: %v ", streamId, keyspaceId)
 
 			tk.supvRespch <- &MsgTKMergeStream{
-				streamId: streamId,
-				bucket:   keyspaceId}
+				streamId:   streamId,
+				keyspaceId: keyspaceId}
 
 			tk.supvCmdch <- &MsgSuccess{}
 			return true
@@ -2546,10 +2546,10 @@ func (tk *timekeeper) sendNewStabilityTS(flushTs *common.TsVbuuid, keyspaceId st
 
 	go func() {
 		tk.supvRespch <- &MsgTKStabilityTS{ts: flushTs,
-			bucket:    keyspaceId,
-			streamId:  streamId,
-			changeVec: changeVec,
-			hasAllSB:  hasAllSB,
+			keyspaceId: keyspaceId,
+			streamId:   streamId,
+			changeVec:  changeVec,
+			hasAllSB:   hasAllSB,
 		}
 
 		if monitor_ts {
@@ -2933,11 +2933,11 @@ func (tk *timekeeper) initiateRecovery(streamId common.StreamId,
 
 		//send message for recovery
 		tk.supvRespch <- &MsgRecovery{mType: INDEXER_INITIATE_RECOVERY,
-			streamId:  streamId,
-			bucket:    keyspaceId,
-			restartTs: restartTs,
-			retryTs:   retryTs,
-			sessionId: sessionId}
+			streamId:   streamId,
+			keyspaceId: keyspaceId,
+			restartTs:  restartTs,
+			retryTs:    retryTs,
+			sessionId:  sessionId}
 		logging.Infof("Timekeeper::initiateRecovery StreamId %v KeyspaceId %v "+
 			"SessionId %v RestartTs %v", streamId, keyspaceId, sessionId, restartTs)
 	} else {
@@ -3070,11 +3070,11 @@ func (tk *timekeeper) repairStream(streamId common.StreamId,
 
 		// Initiate recovery.   It will reset keyspaceId book keeping upon prepare recovery.
 		tk.supvRespch <- &MsgRecovery{
-			mType:     INDEXER_INIT_PREP_RECOVERY,
-			streamId:  streamId,
-			bucket:    keyspaceId,
-			restartTs: tk.ss.computeRollbackTs(streamId, keyspaceId),
-			sessionId: sessionId,
+			mType:      INDEXER_INIT_PREP_RECOVERY,
+			streamId:   streamId,
+			keyspaceId: keyspaceId,
+			restartTs:  tk.ss.computeRollbackTs(streamId, keyspaceId),
+			sessionId:  sessionId,
 		}
 
 		delete(tk.ss.streamKeyspaceIdRepairStopCh[streamId], keyspaceId)
@@ -3089,9 +3089,9 @@ func (tk *timekeeper) repairStream(streamId common.StreamId,
 
 		sessionId := tk.ss.getSessionId(streamId, keyspaceId)
 		resp := &MsgKVStreamRepair{
-			streamId:  streamId,
-			bucket:    keyspaceId,
-			sessionId: sessionId,
+			streamId:   streamId,
+			keyspaceId: keyspaceId,
+			sessionId:  sessionId,
 		}
 
 		tk.repairStreamWithMTR(streamId, keyspaceId, resp)
@@ -3107,7 +3107,7 @@ func (tk *timekeeper) repairStream(streamId common.StreamId,
 		sessionId := tk.ss.getSessionId(streamId, keyspaceId)
 
 		restartMsg := &MsgRestartVbuckets{streamId: streamId,
-			bucket:     keyspaceId,
+			keyspaceId: keyspaceId,
 			restartTs:  repairTs,
 			respCh:     respCh,
 			stopCh:     stopCh,
@@ -3139,7 +3139,7 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 	kvresp := <-restartMsg.(*MsgRestartVbuckets).GetResponseCh()
 
 	streamId := restartMsg.(*MsgRestartVbuckets).GetStreamId()
-	keyspaceId := restartMsg.(*MsgRestartVbuckets).GetBucket()
+	keyspaceId := restartMsg.(*MsgRestartVbuckets).GetKeyspaceId()
 	repairVbs := restartMsg.(*MsgRestartVbuckets).RepairVbs()
 	shutdownVbs := restartMsg.(*MsgRestartVbuckets).ConnErrVbs()
 
@@ -3280,11 +3280,11 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 						"right away. RollbackTs %v", streamId, keyspaceId, sessionId, rollbackTs)
 
 					tk.supvRespch <- &MsgRecovery{
-						mType:     INDEXER_INIT_PREP_RECOVERY,
-						streamId:  streamId,
-						bucket:    keyspaceId,
-						restartTs: tk.ss.computeRollbackTs(streamId, keyspaceId),
-						sessionId: currSessionId,
+						mType:      INDEXER_INIT_PREP_RECOVERY,
+						streamId:   streamId,
+						keyspaceId: keyspaceId,
+						restartTs:  tk.ss.computeRollbackTs(streamId, keyspaceId),
+						sessionId:  currSessionId,
 					}
 					delete(tk.ss.streamKeyspaceIdRepairStopCh[streamId], keyspaceId)
 					return
@@ -3299,11 +3299,11 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 					streamId, keyspaceId, sessionId)
 
 				tk.supvRespch <- &MsgRecovery{
-					mType:     INDEXER_INIT_PREP_RECOVERY,
-					streamId:  streamId,
-					bucket:    keyspaceId,
-					restartTs: tk.ss.computeRollbackTs(streamId, keyspaceId),
-					sessionId: currSessionId,
+					mType:      INDEXER_INIT_PREP_RECOVERY,
+					streamId:   streamId,
+					keyspaceId: keyspaceId,
+					restartTs:  tk.ss.computeRollbackTs(streamId, keyspaceId),
+					sessionId:  currSessionId,
 				}
 
 				delete(tk.ss.streamKeyspaceIdRepairStopCh[streamId], keyspaceId)
@@ -3339,11 +3339,11 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 				streamId, keyspaceId, sessionId)
 
 			tk.supvRespch <- &MsgRecovery{
-				mType:     INDEXER_INIT_PREP_RECOVERY,
-				streamId:  streamId,
-				bucket:    keyspaceId,
-				restartTs: tk.ss.computeRollbackTs(streamId, keyspaceId),
-				sessionId: currSessionId,
+				mType:      INDEXER_INIT_PREP_RECOVERY,
+				streamId:   streamId,
+				keyspaceId: keyspaceId,
+				restartTs:  tk.ss.computeRollbackTs(streamId, keyspaceId),
+				sessionId:  currSessionId,
 			}
 
 			delete(tk.ss.streamKeyspaceIdRepairStopCh[streamId], keyspaceId)
@@ -3401,9 +3401,9 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 			tk.ss.streamKeyspaceIdStatus[streamId][keyspaceId] = STREAM_INACTIVE
 
 			tk.supvRespch <- &MsgRecovery{mType: INDEXER_BUCKET_NOT_FOUND,
-				streamId:  streamId,
-				bucket:    keyspaceId,
-				sessionId: currSessionId}
+				streamId:   streamId,
+				keyspaceId: keyspaceId,
+				sessionId:  currSessionId}
 		} else {
 			logging.Errorf("Timekeeper::sendRestartMsg Error Response "+
 				"from KV %v For Request %v. Retrying RestartVbucket.", kvresp, restartMsg)
@@ -3882,9 +3882,9 @@ func (tk *timekeeper) handleIndexerResume(cmd Message) {
 				tk.ss.streamKeyspaceIdFlushEnabledMap[s][b] = false
 				sessionId := tk.ss.getSessionId(s, b)
 				tk.supvRespch <- &MsgRecovery{mType: INDEXER_INIT_PREP_RECOVERY,
-					streamId:  s,
-					bucket:    b,
-					sessionId: sessionId,
+					streamId:   s,
+					keyspaceId: b,
+					sessionId:  sessionId,
 				}
 			}
 		}
@@ -3999,7 +3999,7 @@ func (tk *timekeeper) handlePoolChange(cmd Message) {
 
 	kvNodes := cmd.(*MsgPoolChange).GetNodes()
 	streamId := cmd.(*MsgPoolChange).GetStreamId()
-	keyspaceId := cmd.(*MsgPoolChange).GetBucket()
+	keyspaceId := cmd.(*MsgPoolChange).GetKeyspaceId()
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
 

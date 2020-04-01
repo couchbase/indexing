@@ -217,7 +217,7 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 
 	msgFlushDone := cmd.(*MsgMutMgrFlushDone)
 
-	keyspaceId := msgFlushDone.GetBucket()
+	keyspaceId := msgFlushDone.GetKeyspaceId()
 	tsVbuuid := msgFlushDone.GetTS()
 	streamId := msgFlushDone.GetStreamId()
 	flushWasAborted := msgFlushDone.GetAborted()
@@ -442,10 +442,10 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, keyspaceId s
 	s.lastFlushDone = time.Now().UnixNano()
 
 	s.supvRespch <- &MsgMutMgrFlushDone{mType: STORAGE_SNAP_DONE,
-		streamId: streamId,
-		bucket:   keyspaceId,
-		ts:       tsVbuuid,
-		aborted:  flushWasAborted}
+		streamId:   streamId,
+		keyspaceId: keyspaceId,
+		ts:         tsVbuuid,
+		aborted:    flushWasAborted}
 
 }
 
@@ -528,11 +528,11 @@ func (s *storageMgr) flushDone(streamId common.StreamId, keyspaceId string,
 	}
 
 	s.supvRespch <- &MsgMutMgrFlushDone{
-		mType:    STORAGE_SNAP_DONE,
-		streamId: streamId,
-		bucket:   keyspaceId,
-		ts:       tsVbuuid,
-		aborted:  flushWasAborted}
+		mType:      STORAGE_SNAP_DONE,
+		streamId:   streamId,
+		keyspaceId: keyspaceId,
+		ts:         tsVbuuid,
+		aborted:    flushWasAborted}
 }
 
 func (s *storageMgr) updateSnapIntervalStat(idxStats *IndexStats) {
@@ -623,7 +623,7 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 
 	streamId := cmd.(*MsgRollback).GetStreamId()
 	rollbackTs := cmd.(*MsgRollback).GetRollbackTs()
-	keyspaceId := cmd.(*MsgRollback).GetBucket()
+	keyspaceId := cmd.(*MsgRollback).GetKeyspaceId()
 	sessionId := cmd.(*MsgRollback).GetSessionId()
 
 	logging.Infof("StorageMgr::handleRollback rollbackTs is %v", rollbackTs)
@@ -645,9 +645,9 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 
 			if err != nil {
 				sm.supvRespch <- &MsgRollbackDone{streamId: streamId,
-					bucket:    keyspaceId,
-					err:       err,
-					sessionId: sessionId}
+					keyspaceId: keyspaceId,
+					err:        err,
+					sessionId:  sessionId}
 				return
 			}
 
@@ -655,9 +655,9 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 				err = sm.rollbackAllToZero(streamId, keyspaceId)
 				if err != nil {
 					sm.supvRespch <- &MsgRollbackDone{streamId: streamId,
-						bucket:    keyspaceId,
-						err:       err,
-						sessionId: sessionId}
+						keyspaceId: keyspaceId,
+						err:        err,
+						sessionId:  sessionId}
 					return
 				}
 				break
@@ -701,9 +701,9 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 	}
 
 	sm.supvRespch <- &MsgRollbackDone{streamId: streamId,
-		bucket:    keyspaceId,
-		restartTs: restartTs,
-		sessionId: sessionId,
+		keyspaceId: keyspaceId,
+		restartTs:  restartTs,
+		sessionId:  sessionId,
 	}
 }
 
@@ -1631,7 +1631,7 @@ func (s *storageMgr) handleUpdateIndexSnapMapForIndex(cmd Message) {
 	idxInst := req.GetInst()
 	partnMap := req.GetPartnMap()
 	streamId := req.GetStreamId()
-	keyspaceId := req.GetBucket()
+	keyspaceId := req.GetKeyspaceId()
 
 	s.muSnap.Lock()
 	s.updateIndexSnapMapForIndex(idxInstId, idxInst, partnMap, streamId, keyspaceId)

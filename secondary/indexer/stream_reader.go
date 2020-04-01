@@ -248,17 +248,17 @@ func (r *mutationStreamReader) handleStreamInfoMsg(msg interface{}) {
 		if len(connErr) != 0 {
 			for keyspaceId, vbList := range connErr {
 				supvMsg = &MsgStreamInfo{mType: STREAM_READER_CONN_ERROR,
-					streamId: r.streamId,
-					bucket:   keyspaceId,
-					vbList:   copyVbList(vbList),
+					streamId:   r.streamId,
+					keyspaceId: keyspaceId,
+					vbList:     copyVbList(vbList),
 				}
 				r.supvRespch <- supvMsg
 			}
 		} else {
 			supvMsg = &MsgStreamInfo{mType: STREAM_READER_CONN_ERROR,
-				streamId: r.streamId,
-				bucket:   "",
-				vbList:   []Vbucket(nil),
+				streamId:   r.streamId,
+				keyspaceId: "",
+				vbList:     []Vbucket(nil),
 			}
 			r.supvRespch <- supvMsg
 		}
@@ -448,12 +448,12 @@ func (r *mutationStreamReader) maybeSendSync(fastpath bool) bool {
 			r.streamWorkers[i].lock.Unlock()
 		}
 		if needSync {
-			r.supvRespch <- &MsgBucketHWT{mType: STREAM_READER_HWT,
-				streamId:  r.streamId,
-				bucket:    keyspaceId,
-				ts:        hwt[keyspaceId],
-				prevSnap:  prevSnap[keyspaceId],
-				sessionId: sessionId,
+			r.supvRespch <- &MsgKeyspaceHWT{mType: STREAM_READER_HWT,
+				streamId:   r.streamId,
+				keyspaceId: keyspaceId,
+				ts:         hwt[keyspaceId],
+				prevSnap:   prevSnap[keyspaceId],
+				sessionId:  sessionId,
 			}
 			sent = true
 		}
