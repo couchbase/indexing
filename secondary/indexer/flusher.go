@@ -346,7 +346,7 @@ func (f *flusher) flush(mutk *MutationKeys, streamId common.StreamId) {
 		return fmt.Sprintf("Flusher::flush Flushing Stream %v Mutations %v", streamId, logging.TagUD(mutk))
 	})
 
-	var processedUpserts []common.IndexInstId
+	processedUpserts := make(map[common.IndexInstId]bool)
 	for _, mut := range mutk.mut {
 
 		if mut.command == common.Filler {
@@ -388,7 +388,7 @@ func (f *flusher) flush(mutk *MutationKeys, streamId common.StreamId) {
 		switch mut.command {
 
 		case common.Upsert:
-			processedUpserts = append(processedUpserts, mut.uuid)
+			processedUpserts[mut.uuid] = true
 
 			f.processUpsert(mut, mutk.docid, mutk.meta)
 
@@ -405,10 +405,8 @@ func (f *flusher) flush(mutk *MutationKeys, streamId common.StreamId) {
 			var skipUpsertDeletion bool
 			//if Upsert has been processed for this IndexInstId,
 			//skip processing UpsertDeletion
-			for _, id := range processedUpserts {
-				if id == mut.uuid {
-					skipUpsertDeletion = true
-				}
+			if _, ok := processedUpserts[mut.uuid]; ok {
+				skipUpsertDeletion = true
 			}
 
 			if skipUpsertDeletion {
