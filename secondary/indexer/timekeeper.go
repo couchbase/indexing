@@ -57,12 +57,13 @@ type timekeeper struct {
 }
 
 type InitialBuildInfo struct {
-	indexInst            common.IndexInst
-	buildTs              Timestamp
-	buildDoneAckReceived bool
-	minMergeTs           *common.TsVbuuid //minimum merge ts for init stream
-	addInstPending       bool
-	waitForRecovery      bool
+	indexInst             common.IndexInst
+	buildTs               Timestamp
+	buildDoneAckReceived  bool
+	minMergeTs            *common.TsVbuuid //minimum merge ts for init stream
+	addInstPending        bool
+	waitForRecovery       bool
+	flushedUptoMinMergeTs bool //indicates flushTs is past minMergeTs
 }
 
 //timeout in milliseconds to batch the vbuckets
@@ -249,6 +250,7 @@ func (tk *timekeeper) handleStreamOpen(cmd Message) {
 	rollbackTime := cmd.(*MsgStreamUpdate).GetRollbackTime()
 	async := cmd.(*MsgStreamUpdate).GetAsync()
 	sessionId := cmd.(*MsgStreamUpdate).GetSessionId()
+	collectionId := cmd.(*MsgStreamUpdate).GetCollectionId()
 
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
@@ -273,6 +275,7 @@ func (tk *timekeeper) handleStreamOpen(cmd Message) {
 		tk.ss.setRollbackTime(keyspaceId, rollbackTime)
 		tk.ss.streamKeyspaceIdAsyncMap[streamId][keyspaceId] = async
 		tk.ss.streamKeyspaceIdSessionId[streamId][keyspaceId] = sessionId
+		tk.ss.streamKeyspaceIdCollectionId[streamId][keyspaceId] = collectionId
 		tk.addIndextoStream(cmd)
 		tk.startTimer(streamId, keyspaceId)
 
@@ -2263,11 +2266,9 @@ func (tk *timekeeper) checkFlushTsValidForMerge(streamId common.StreamId, keyspa
 
 	var maintTsSeq, initTsSeq Timestamp
 
-	//if no flush has happened yet from MAINT_STREAM, its good to merge
-	//this can happen if MAINT_STREAM gets a rollback to 0 and is yet to
-	//start flushing, while INIT_STREAM is done flushing till buildTs
+	//if no flush has happened from MAINT_STREAM, merge cannot happen
 	if maintFlushTs == nil {
-		return true, nil
+		return false, nil
 	}
 
 	//if initFlushTs is nil for INIT_STREAM and non-nil for MAINT_STREAM
@@ -2276,17 +2277,54 @@ func (tk *timekeeper) checkFlushTsValidForMerge(streamId common.StreamId, keyspa
 		return false, nil
 	}
 
-	maintTsSeq = getSeqTsFromTsVbuuid(maintFlushTs)
 	initTsSeq = getSeqTsFromTsVbuuid(initFlushTs)
 	minMergeTsSeq := getSeqTsFromTsVbuuid(minMergeTs)
-	if initTsSeq.GreaterThanEqual(maintTsSeq) &&
-		initTsSeq.GreaterThanEqual(minMergeTsSeq) {
-
-		//vbuuids need to match for index merge
-		if initFlushTs.CompareVbuuids(maintFlushTs) {
-			return true, initTsSeq
+	//if INIT_STREAM has not caught upto minMergeTs
+	flushedPastMinMergeTs := tk.ss.streamKeyspaceIdPastMinMergeTs[streamId][keyspaceId]
+	if !flushedPastMinMergeTs {
+		//check and set the flag
+		if initTsSeq.GreaterThanEqual(minMergeTsSeq) {
+			tk.ss.streamKeyspaceIdPastMinMergeTs[streamId][keyspaceId] = true
+		} else {
+			return false, nil
 		}
+	}
 
+	//vbuuids need to match for index merge
+	if !initFlushTs.CompareVbuuids(maintFlushTs) {
+		return false, nil
+	}
+
+	maintTsSeq = getSeqTsFromTsVbuuid(maintFlushTs)
+	if initTsSeq.GreaterThanEqual(maintTsSeq) {
+		return true, initTsSeq
+	} else {
+		//if this stream is on a collection
+		cid := tk.ss.streamKeyspaceIdCollectionId[streamId][keyspaceId]
+		if cid != "" {
+
+			cluster := tk.config["clusterAddr"].String()
+			bucket, _, _ := SplitKeyspaceId(keyspaceId)
+
+			//TODO Collections compute the seqnos asynchronously
+			currBTs, err := common.BucketSeqnos(cluster, "default", bucket)
+			if err != nil {
+				logging.Infof("Timekeeper::checkFlushTsValidForMerge BucketSeqnos err %v. Skipping stream merge.", err)
+				return false, nil
+			}
+
+			currCTs, err := common.CollectionSeqnos(cluster, "default", bucket, cid)
+			if err != nil {
+				logging.Infof("Timekeeper::checkFlushTsValidForMerge CollectionSeqnos err %v. Skipping stream merge.", err)
+				return false, nil
+			}
+
+			bucketTsSeq := Timestamp(currBTs)
+			if initTsSeq.GreaterThanEqual(Timestamp(currCTs)) &&
+				bucketTsSeq.GreaterThanEqual(maintTsSeq) {
+				return true, initTsSeq
+			}
+		}
 	}
 	return false, nil
 }
@@ -2895,7 +2933,7 @@ func getStabilityTSFromTsVbuuid(tsVbuuid *common.TsVbuuid) Timestamp {
 	numVbuckets := len(tsVbuuid.Snapshots)
 	ts := NewTimestamp(numVbuckets)
 	for i, s := range tsVbuuid.Snapshots {
-		ts[i] = Seqno(s[1]) //high seq num in snapshot marker
+		ts[i] = s[1] //high seq num in snapshot marker
 	}
 	return ts
 }
@@ -2905,7 +2943,7 @@ func getSeqTsFromTsVbuuid(tsVbuuid *common.TsVbuuid) Timestamp {
 	numVbuckets := len(tsVbuuid.Snapshots)
 	ts := NewTimestamp(numVbuckets)
 	for i, s := range tsVbuuid.Seqnos {
-		ts[i] = Seqno(s)
+		ts[i] = s
 	}
 	return ts
 }

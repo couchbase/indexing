@@ -21,7 +21,7 @@ type MutationMeta struct {
 	keyspaceId string  //keyspaceId for the mutation
 	vbucket    Vbucket //vbucket
 	vbuuid     Vbuuid  //uuid for vbucket
-	seqno      Seqno   //vbucket sequence number for this mutation
+	seqno      uint64  //vbucket sequence number for this mutation
 	firstSnap  bool    //belongs to first DCP snapshot
 	projVer    c.ProjectorVersion
 	opaque     uint64

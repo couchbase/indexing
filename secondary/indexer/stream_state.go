@@ -54,6 +54,8 @@ type StreamState struct {
 	streamKeyspaceIdLastPersistTime map[common.StreamId]KeyspaceIdLastPersistTime
 	streamKeyspaceIdSkippedInMemTs  map[common.StreamId]KeyspaceIdSkippedInMemTs
 	streamKeyspaceIdSessionId       map[common.StreamId]KeyspaceIdSessionId
+	streamKeyspaceIdCollectionId    map[common.StreamId]KeyspaceIdCollectionId
+	streamKeyspaceIdPastMinMergeTs  map[common.StreamId]KeyspaceIdPastMinMergeTs
 
 	streamKeyspaceIdAsyncMap map[common.StreamId]KeyspaceIdStreamAsyncMap
 
@@ -103,6 +105,8 @@ type KeyspaceIdTimerStopCh map[string]StopChannel
 type KeyspaceIdLastPersistTime map[string]time.Time
 type KeyspaceIdSkippedInMemTs map[string]uint64
 type KeyspaceIdSessionId map[string]uint64
+type KeyspaceIdCollectionId map[string]string
+type KeyspaceIdPastMinMergeTs map[string]bool
 
 type KeyspaceIdStreamAsyncMap map[string]bool
 type KeyspaceIdStreamLastBeginTime map[string]uint64
@@ -167,6 +171,8 @@ func InitStreamState(config common.Config) *StreamState {
 		streamKeyspaceIdKVPendingTsMap:     make(map[common.StreamId]KeyspaceIdKVPendingTsMap),
 		streamKeyspaceIdRepairStateMap:     make(map[common.StreamId]KeyspaceIdStreamRepairStateMap),
 		streamKeyspaceIdSessionId:          make(map[common.StreamId]KeyspaceIdSessionId),
+		streamKeyspaceIdCollectionId:       make(map[common.StreamId]KeyspaceIdCollectionId),
+		streamKeyspaceIdPastMinMergeTs:     make(map[common.StreamId]KeyspaceIdPastMinMergeTs),
 		streamKeyspaceIdVBMap:              make(map[common.StreamId]KeyspaceIdVBMap),
 	}
 
@@ -249,6 +255,12 @@ func (ss *StreamState) initNewStream(streamId common.StreamId) {
 	keyspaceIdSessionId := make(KeyspaceIdSessionId)
 	ss.streamKeyspaceIdSessionId[streamId] = keyspaceIdSessionId
 
+	keyspaceIdCollectionId := make(KeyspaceIdCollectionId)
+	ss.streamKeyspaceIdCollectionId[streamId] = keyspaceIdCollectionId
+
+	keyspaceIdPastMinMergeTs := make(KeyspaceIdPastMinMergeTs)
+	ss.streamKeyspaceIdPastMinMergeTs[streamId] = keyspaceIdPastMinMergeTs
+
 	keyspaceIdStatus := make(KeyspaceIdStatus)
 	ss.streamKeyspaceIdStatus[streamId] = keyspaceIdStatus
 
@@ -314,6 +326,8 @@ func (ss *StreamState) initKeyspaceIdInStream(streamId common.StreamId,
 	ss.streamKeyspaceIdStartTimeMap[streamId][keyspaceId] = uint64(0)
 	ss.streamKeyspaceIdSkippedInMemTs[streamId][keyspaceId] = 0
 	ss.streamKeyspaceIdSessionId[streamId][keyspaceId] = 0
+	ss.streamKeyspaceIdCollectionId[streamId][keyspaceId] = ""
+	ss.streamKeyspaceIdPastMinMergeTs[streamId][keyspaceId] = false
 	ss.streamKeyspaceIdLastSnapMarker[streamId][keyspaceId] = common.NewTsVbuuid(keyspaceId, numVbuckets)
 	ss.streamKeyspaceIdLastMutationVbuuid[streamId][keyspaceId] = common.NewTsVbuuid(keyspaceId, numVbuckets)
 	ss.streamKeyspaceIdAsyncMap[streamId][keyspaceId] = false
@@ -364,6 +378,8 @@ func (ss *StreamState) cleanupKeyspaceIdFromStream(streamId common.StreamId,
 	delete(ss.streamKeyspaceIdLastMutationVbuuid[streamId], keyspaceId)
 	delete(ss.streamKeyspaceIdSkippedInMemTs[streamId], keyspaceId)
 	delete(ss.streamKeyspaceIdSessionId[streamId], keyspaceId)
+	delete(ss.streamKeyspaceIdCollectionId[streamId], keyspaceId)
+	delete(ss.streamKeyspaceIdPastMinMergeTs[streamId], keyspaceId)
 	delete(ss.streamKeyspaceIdAsyncMap[streamId], keyspaceId)
 	delete(ss.streamKeyspaceIdLastBeginTime[streamId], keyspaceId)
 	delete(ss.streamKeyspaceIdLastRepairTimeMap[streamId], keyspaceId)
@@ -413,6 +429,8 @@ func (ss *StreamState) resetStreamState(streamId common.StreamId) {
 	delete(ss.streamKeyspaceIdStartTimeMap, streamId)
 	delete(ss.streamKeyspaceIdSkippedInMemTs, streamId)
 	delete(ss.streamKeyspaceIdSessionId, streamId)
+	delete(ss.streamKeyspaceIdCollectionId, streamId)
+	delete(ss.streamKeyspaceIdPastMinMergeTs, streamId)
 	delete(ss.streamKeyspaceIdLastSnapMarker, streamId)
 	delete(ss.streamKeyspaceIdLastMutationVbuuid, streamId)
 	delete(ss.streamKeyspaceIdAsyncMap, streamId)
@@ -439,7 +457,7 @@ func (ss *StreamState) updateVbStatus(streamId common.StreamId, keyspaceId strin
 
 	for _, vb := range vbList {
 		vbs := ss.streamKeyspaceIdVbStatusMap[streamId][keyspaceId]
-		vbs[vb] = Seqno(status)
+		vbs[vb] = uint64(status)
 	}
 
 }
@@ -457,19 +475,19 @@ func (ss *StreamState) getVbRefCount(streamId common.StreamId, keyspaceId string
 
 func (ss *StreamState) clearVbRefCount(streamId common.StreamId, keyspaceId string, vb Vbucket) {
 
-	ss.streamKeyspaceIdVbRefCountMap[streamId][keyspaceId][vb] = Seqno(0)
+	ss.streamKeyspaceIdVbRefCountMap[streamId][keyspaceId][vb] = 0
 }
 
 func (ss *StreamState) incVbRefCount(streamId common.StreamId, keyspaceId string, vb Vbucket) {
 
 	vbs := ss.streamKeyspaceIdVbRefCountMap[streamId][keyspaceId]
-	vbs[vb] = Seqno(int(vbs[vb]) + 1)
+	vbs[vb] = vbs[vb] + 1
 }
 
 func (ss *StreamState) decVbRefCount(streamId common.StreamId, keyspaceId string, vb Vbucket) {
 
 	vbs := ss.streamKeyspaceIdVbRefCountMap[streamId][keyspaceId]
-	vbs[vb] = Seqno(int(vbs[vb]) - 1)
+	vbs[vb] = vbs[vb] - 1
 }
 
 //computes the restart Ts for the given keyspaceId and stream
@@ -954,7 +972,7 @@ func (ss *StreamState) setLastRepairTime(streamId common.StreamId, keyspaceId st
 		repairTimeMap = NewTimestamp(numVbuckets)
 		ss.streamKeyspaceIdLastRepairTimeMap[streamId][keyspaceId] = repairTimeMap
 	}
-	repairTimeMap[vbno] = Seqno(time.Now().UnixNano())
+	repairTimeMap[vbno] = uint64(time.Now().UnixNano())
 }
 
 func (ss *StreamState) getLastRepairTime(streamId common.StreamId, keyspaceId string, vbno Vbucket) int64 {
@@ -970,16 +988,16 @@ func (ss *StreamState) clearLastRepairTime(streamId common.StreamId, keyspaceId 
 
 	repairTimeMap := ss.streamKeyspaceIdLastRepairTimeMap[streamId][keyspaceId]
 	if repairTimeMap != nil {
-		repairTimeMap[vbno] = Seqno(0)
+		repairTimeMap[vbno] = 0
 	}
 }
 
 func (ss *StreamState) resetAllLastRepairTime(streamId common.StreamId, keyspaceId string) {
 
-	now := Seqno(time.Now().UnixNano())
+	now := time.Now().UnixNano()
 	for i, t := range ss.streamKeyspaceIdLastRepairTimeMap[streamId][keyspaceId] {
 		if t != 0 {
-			ss.streamKeyspaceIdLastRepairTimeMap[streamId][keyspaceId][i] = now
+			ss.streamKeyspaceIdLastRepairTimeMap[streamId][keyspaceId][i] = uint64(now)
 		}
 	}
 }

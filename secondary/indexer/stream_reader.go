@@ -612,7 +612,7 @@ func (w *streamWorker) handleSingleKeyVersion(keyspaceId string, vbucket Vbucket
 	meta.keyspaceId = keyspaceId
 	meta.vbucket = vbucket
 	meta.vbuuid = vbuuid
-	meta.seqno = Seqno(kv.GetSeqno())
+	meta.seqno = kv.GetSeqno()
 	meta.projVer = projVer
 	meta.opaque = opaque
 

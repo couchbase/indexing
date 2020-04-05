@@ -158,7 +158,7 @@ func (s IndexStorageStats) GetInternalData() []string {
 	return s.Stats.InternalData
 }
 
-type VbStatus Seqno
+type VbStatus uint64
 
 const (
 	VBS_INIT = iota

@@ -283,7 +283,7 @@ func (f *flusher) flushSingleVbucket(q MutationQueue, streamId common.StreamId,
 //flushSingleVbucket is the actual implementation which flushes the given queue
 //for a single vbucket till the given seqno or till the stop signal(whichever is earlier)
 func (f *flusher) flushSingleVbucketUptoSeqno(q MutationQueue, streamId common.StreamId,
-	keyspaceId string, vbucket Vbucket, seqno Seqno, persist bool, stopch StopChannel,
+	keyspaceId string, vbucket Vbucket, seqno uint64, persist bool, stopch StopChannel,
 	workerMsgCh MsgChannel, wg *sync.WaitGroup) {
 
 	defer wg.Done()

@@ -1421,7 +1421,7 @@ func (mdb *plasmaSlice) cleanupOldRecoveryPoints() {
 		}
 
 		for i := 0; i < mdb.numVbuckets; i++ {
-			seqTs[i] = Seqno(seqnos[i])
+			seqTs[i] = seqnos[i]
 		}
 		break
 

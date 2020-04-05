@@ -31,7 +31,7 @@ type MutationQueue interface {
 	//dequeue a vbucket's mutation and keep sending on a channel until stop signal
 	Dequeue(vbucket Vbucket) (<-chan *MutationKeys, chan<- bool, error)
 	//dequeue a vbucket's mutation upto seqno(wait if not available)
-	DequeueUptoSeqno(vbucket Vbucket, seqno Seqno) (<-chan *MutationKeys, chan bool, error)
+	DequeueUptoSeqno(vbucket Vbucket, seqno uint64) (<-chan *MutationKeys, chan bool, error)
 	//dequeue single element for a vbucket and return
 	DequeueSingleElement(vbucket Vbucket) *MutationKeys
 
@@ -171,7 +171,7 @@ func (q *atomicMutationQueue) Enqueue(mutation *MutationKeys,
 //the one specified as argument. This allow for multiple mutations with same
 //seqno (e.g. in case of multiple indexes)
 //It closes the mutation channel to indicate its done.
-func (q *atomicMutationQueue) DequeueUptoSeqno(vbucket Vbucket, seqno Seqno) (
+func (q *atomicMutationQueue) DequeueUptoSeqno(vbucket Vbucket, seqno uint64) (
 	<-chan *MutationKeys, chan bool, error) {
 
 	datach := make(chan *MutationKeys, q.resultChanSize)
@@ -183,10 +183,10 @@ func (q *atomicMutationQueue) DequeueUptoSeqno(vbucket Vbucket, seqno Seqno) (
 
 }
 
-func (q *atomicMutationQueue) dequeueUptoSeqno(vbucket Vbucket, seqno Seqno,
+func (q *atomicMutationQueue) dequeueUptoSeqno(vbucket Vbucket, seqno uint64,
 	datach chan *MutationKeys, errch chan bool) {
 
-	var dequeueSeq Seqno
+	var dequeueSeq uint64
 	var totalWait int
 
 	for {

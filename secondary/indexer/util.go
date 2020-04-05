@@ -159,7 +159,7 @@ func GetCurrentKVTs(cluster, pooln, bucketn, collId string, numVbs int) (Timesta
 
 	ts := NewTimestamp(numVbs)
 	for i := 0; i < numVbs; i++ {
-		ts[i] = Seqno(seqnos[i])
+		ts[i] = seqnos[i]
 	}
 
 	elapsed := time.Since(start)
