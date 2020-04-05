@@ -209,6 +209,18 @@ func (b *Bucket) replaceConnPools(with []*connectionPool) {
 }
 
 func (b Bucket) getConnPool(i int) *connectionPool {
+
+	defer func() {
+		if r := recover(); r != nil {
+			logging.Errorf("bucket(%v) getConnPool crashed: %v\n", b.Name, r)
+			logging.Errorf("%s", logging.StackTrace())
+		}
+	}()
+
+	if i < 0 {
+		return nil
+	}
+
 	p := b.getConnPools()
 	if len(p) > i {
 		return p[i]
@@ -217,6 +229,18 @@ func (b Bucket) getConnPool(i int) *connectionPool {
 }
 
 func (b Bucket) getMasterNode(i int) string {
+
+	defer func() {
+		if r := recover(); r != nil {
+			logging.Errorf("bucket(%v) getMasterNode crashed: %v\n", b.Name, r)
+			logging.Errorf("%s", logging.StackTrace())
+		}
+	}()
+
+	if i < 0 {
+		return ""
+	}
+
 	p := b.getConnPools()
 	if len(p) > i && p[i] != nil {
 		return p[i].host
