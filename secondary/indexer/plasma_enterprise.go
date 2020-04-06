@@ -18,11 +18,11 @@ import (
 
 var errStorageCorrupted = fmt.Errorf("Storage corrupted and unrecoverable")
 
-func NewPlasmaSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
+func NewPlasmaSlice(storage_dir string, path string, sliceId SliceId, idxDefn common.IndexDefn,
 	idxInstId common.IndexInstId, partitionId common.PartitionId,
 	isPrimary bool, numPartitions int,
 	sysconf common.Config, idxStats *IndexStats, indexerStats *IndexerStats) (*plasmaSlice, error) {
-	return newPlasmaSlice(path, sliceId,
+	return newPlasmaSlice(storage_dir, path, sliceId,
 		idxDefn, idxInstId, partitionId, isPrimary, numPartitions,
 		sysconf, idxStats, indexerStats)
 }

@@ -46,8 +46,9 @@ type plasmaSlice struct {
 	committedCount                        uint64
 	qCount                                int64
 
-	path string
-	id   SliceId
+	path       string
+	storageDir string
+	id         SliceId
 
 	refCount int
 	lock     sync.RWMutex
@@ -158,7 +159,7 @@ type plasmaSlice struct {
 	numKeysSkipped int32
 }
 
-func newPlasmaSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
+func newPlasmaSlice(storage_dir string, path string, sliceId SliceId, idxDefn common.IndexDefn,
 	idxInstId common.IndexInstId, partitionId common.PartitionId,
 	isPrimary bool, numPartitions int,
 	sysconf common.Config, idxStats *IndexStats, indexerStats *IndexerStats) (*plasmaSlice, error) {
@@ -181,6 +182,7 @@ func newPlasmaSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	slice.committedCount = 0
 	slice.sysconf = sysconf
 	slice.path = path
+	slice.storageDir = storage_dir
 	slice.idxInstId = idxInstId
 	slice.idxDefnId = idxDefn.DefnId
 	slice.idxPartnId = partitionId
@@ -267,6 +269,7 @@ func (slice *plasmaSlice) initStores() error {
 	cfg.MaxPageSize = slice.sysconf["plasma.MaxPageSize"].Int()
 	cfg.AutoLSSCleaning = !slice.sysconf["settings.compaction.plasma.manual"].Bool()
 	cfg.EnforceKeyRange = slice.sysconf["plasma.enforceKeyRange"].Bool()
+	cfg.StorageDir = slice.storageDir
 
 	if slice.numPartitions != 1 {
 		cfg.LSSCleanerConcurrency = 1
