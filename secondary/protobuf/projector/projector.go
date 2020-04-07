@@ -249,7 +249,7 @@ func NewMutationTopicRequest(
 		EndpointType:  proto.String(endpointType),
 		ReqTimestamps: make([]*TsVbuuid, 0),
 		Instances:     instances,
-		Version:       FeedVersion_watson.Enum(),
+		Version:       FeedVersion_cheshireCat.Enum(),
 		Async:         proto.Bool(async),
 		Opaque2:       proto.Uint64(opaque2),
 	}
@@ -638,7 +638,7 @@ func NewAddBucketsRequest(
 		Topic:         proto.String(topic),
 		ReqTimestamps: make([]*TsVbuuid, 0),
 		Instances:     instances,
-		Version:       FeedVersion_watson.Enum(),
+		Version:       FeedVersion_cheshireCat.Enum(),
 	}
 }
 
@@ -784,7 +784,7 @@ func NewAddInstancesRequest(
 	return &AddInstancesRequest{
 		Topic:     proto.String(topic),
 		Instances: instances,
-		Version:   FeedVersion_watson.Enum(),
+		Version:   FeedVersion_cheshireCat.Enum(),
 	}
 }
 

@@ -376,13 +376,18 @@ func (idx *IndexDefn) IndexOnCollection() bool {
 func (idx *IndexDefn) KeyspaceId(streamId StreamId) string {
 
 	//index created pre CC will have empty scope/collection
-	//during mixed mode, defn will have default scope/collection
 	if idx.Scope == "" && idx.Collection == "" {
 		return idx.Bucket
 	}
 
 	if streamId == INIT_STREAM {
-		return strings.Join([]string{idx.Bucket, idx.Scope, idx.Collection}, ":")
+		//for default scope/collection, always use bucket as keyspaceId for
+		//backward compatibility
+		if idx.Scope == DEFAULT_SCOPE && idx.Collection == DEFAULT_COLLECTION {
+			return idx.Bucket
+		} else {
+			return strings.Join([]string{idx.Bucket, idx.Scope, idx.Collection}, ":")
+		}
 	} else {
 		return idx.Bucket
 	}

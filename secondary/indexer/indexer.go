@@ -102,6 +102,7 @@ type indexer struct {
 	streamKeyspaceIdRequestQueue map[common.StreamId]map[string]chan *kvRequest
 	streamKeyspaceIdRequestLock  map[common.StreamId]map[string]chan *sync.Mutex
 	streamKeyspaceIdSessionId    map[common.StreamId]map[string]uint64
+	streamKeyspaceIdCollectionId map[common.StreamId]map[string]string
 
 	streamKeyspaceIdPendBuildDone map[common.StreamId]map[string]*buildDoneSpec
 
@@ -255,6 +256,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		streamKeyspaceIdRequestQueue:     make(map[common.StreamId]map[string]chan *kvRequest),
 		streamKeyspaceIdRequestLock:      make(map[common.StreamId]map[string]chan *sync.Mutex),
 		streamKeyspaceIdSessionId:        make(map[common.StreamId]map[string]uint64),
+		streamKeyspaceIdCollectionId:     make(map[common.StreamId]map[string]string),
 		streamKeyspaceIdPendBuildDone:    make(map[common.StreamId]map[string]*buildDoneSpec),
 		keyspaceIdBuildTs:                make(map[string]Timestamp),
 		buildTsLock:                      make(map[common.StreamId]map[string]*sync.Mutex),
@@ -557,6 +559,7 @@ func (idx *indexer) initFromConfig() {
 	idx.initServiceAddressMap()
 	idx.initStreamSessionIdMap()
 	idx.initStreamPendBuildDone()
+	idx.initStreamCollectionIdMap()
 
 	idx.enableManager = idx.config["enableManager"].Bool()
 
@@ -2555,18 +2558,18 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 
 	}
 
-	bucketIndexList := idx.groupIndexListByBucket(instIdList)
+	keyspaceIdIndexList := idx.groupIndexListByKeyspaceId(instIdList)
 	errMap := make(map[common.IndexInstId]error)
 
-	for bucket, instIdList := range bucketIndexList {
+	for keyspaceId, instIdList := range keyspaceIdIndexList {
 
-		instIdList, ok := idx.checkValidIndexInst(bucket, instIdList, clientCh, errMap)
+		instIdList, ok := idx.checkValidIndexInst(keyspaceId, instIdList, clientCh, errMap)
 		if !ok {
-			logging.Errorf("Indexer::handleBuildIndex \n\tInvalid Index List "+
-				"Bucket %v. Index in error %v.", bucket, errMap)
+			logging.Errorf("Indexer::handleBuildIndex Invalid Index List "+
+				"KeyspaceId %v. Index in error %v.", keyspaceId, errMap)
 			if idx.enableManager {
 				if len(instIdList) == 0 {
-					delete(bucketIndexList, bucket)
+					delete(keyspaceIdIndexList, keyspaceId)
 					continue
 				}
 			} else {
@@ -2574,38 +2577,24 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 			}
 		}
 
-		instIdList, ok = idx.checkBucketExists(bucket, instIdList, clientCh, errMap)
-		if !ok {
-			logging.Errorf("Indexer::handleBuildIndex \n\tCannot Process Build Index."+
-				"Unknown Bucket %v.", bucket)
+		//check if Initial Build is already running for this index's keyspace
+		if ok := idx.checkDuplicateInitialBuildRequest(keyspaceId, instIdList, clientCh, errMap); !ok {
+			logging.Errorf("Indexer::handleBuildIndex Build Already In"+
+				"Progress. KeyspaceId %v. Index in error %v", keyspaceId, errMap)
 			if idx.enableManager {
-				if len(instIdList) == 0 {
-					delete(bucketIndexList, bucket)
-					continue
-				}
-			} else {
-				return
-			}
-		} else {
-			logging.Infof("Indexer::handleBuildIndex Bucket %v validation successful", bucket)
-		}
-
-		//check if Initial Build is already running for this index's bucket
-		if ok := idx.checkDuplicateInitialBuildRequest(bucket, instIdList, clientCh, errMap); !ok {
-			logging.Errorf("Indexer::handleBuildIndex \n\tBuild Already In"+
-				"Progress. Bucket %v. Index in error %v", bucket, errMap)
-			if idx.enableManager {
-				delete(bucketIndexList, bucket)
+				delete(keyspaceIdIndexList, keyspaceId)
 				continue
 			} else {
 				return
 			}
 		}
 
+		inst := idx.indexInstMap[instIdList[0]]
+		collectionId := inst.Defn.CollectionId
+
 		cluster := idx.config["clusterAddr"].String()
 		numVbuckets := idx.config["numVbuckets"].Int()
-		//TODO pass collection ID
-		buildTs, err := GetCurrentKVTs(cluster, "default", bucket, "", numVbuckets)
+		buildTs, err := GetCurrentKVTs(cluster, "default", keyspaceId, collectionId, numVbuckets)
 		if err != nil {
 			errStr := fmt.Sprintf("Error Connecting KV %v Err %v",
 				idx.config["clusterAddr"].String(), err)
@@ -2615,7 +2604,7 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 				for _, instId := range instIdList {
 					errMap[instId] = &common.IndexerError{Reason: errStr, Code: common.TransientError}
 				}
-				delete(bucketIndexList, bucket)
+				delete(keyspaceIdIndexList, keyspaceId)
 				continue
 			} else if clientCh != nil {
 				clientCh <- &MsgError{
@@ -2628,9 +2617,9 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 		}
 
 		if len(instIdList) != 0 {
-			bucketIndexList[bucket] = instIdList
+			keyspaceIdIndexList[keyspaceId] = instIdList
 		} else {
-			delete(bucketIndexList, bucket)
+			delete(keyspaceIdIndexList, keyspaceId)
 			continue
 		}
 
@@ -2645,7 +2634,7 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 		idx.bulkUpdateState(instIdList, buildState)
 		idx.bulkUpdateRState(instIdList, msg.(*MsgBuildIndex).GetRequestCtx())
 
-		logging.Infof("Indexer::handleBuildIndex \n\tAdded Index: %v to Stream: %v State: %v",
+		logging.Infof("Indexer::handleBuildIndex Added Index: %v to Stream: %v State: %v",
 			instIdList, buildStream, buildState)
 
 		msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
@@ -2662,9 +2651,9 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 		}
 
 		//send Stream Update to workers
-		idx.sendStreamUpdateForBuildIndex(instIdList, buildStream, bucket, buildTs, clientCh)
+		idx.sendStreamUpdateForBuildIndex(instIdList, buildStream, keyspaceId, collectionId, buildTs, clientCh)
 
-		idx.setStreamKeyspaceIdState(buildStream, bucket, STREAM_ACTIVE)
+		idx.setStreamKeyspaceIdState(buildStream, keyspaceId, STREAM_ACTIVE)
 
 		//store updated state and streamId in meta store
 		if idx.enableManager {
@@ -2673,7 +2662,7 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 				common.CrashOnError(err)
 			}
 		} else {
-			idx.keyspaceIdCreateClientChMap[bucket] = clientCh
+			idx.keyspaceIdCreateClientChMap[keyspaceId] = clientCh
 			return
 		}
 	}
@@ -3836,17 +3825,15 @@ func (idx *indexer) Shutdown() Message {
 }
 
 func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstId,
-	buildStream common.StreamId, keyspaceId string, buildTs Timestamp, clientCh MsgChannel) bool {
+	buildStream common.StreamId, keyspaceId string, cid string, buildTs Timestamp, clientCh MsgChannel) bool {
 
 	var cmd Message
 	var indexList []common.IndexInst
 	var bucketUUIDList []string
-	var collId string
 	for _, instId := range instIdList {
 		indexInst := idx.indexInstMap[instId]
 		indexList = append(indexList, indexInst)
 		bucketUUIDList = append(bucketUUIDList, indexInst.Defn.BucketUUID)
-		collId = indexInst.Defn.CollectionId
 	}
 
 	respCh := make(MsgChannel)
@@ -3859,7 +3846,12 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 
 	sessionId := idx.genNextSessionId(buildStream, keyspaceId)
 
-	async := enableAsync && idx.clusterInfoClient.ClusterVersion() >= common.INDEXER_65_VERSION
+	clusterVer := idx.clusterInfoClient.ClusterVersion()
+	async := enableAsync && clusterVer >= common.INDEXER_65_VERSION
+
+	cid = idx.makeCollectionIdForStreamRequest(buildStream, keyspaceId, cid, clusterVer)
+	idx.streamKeyspaceIdCollectionId[buildStream][keyspaceId] = cid
+
 	cmd = &MsgStreamUpdate{mType: OPEN_STREAM,
 		streamId:           buildStream,
 		keyspaceId:         keyspaceId,
@@ -3870,7 +3862,8 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 		allowMarkFirstSnap: true,
 		rollbackTime:       idx.keyspaceIdRollbackTimes[keyspaceId],
 		async:              async,
-		sessionId:          sessionId}
+		sessionId:          sessionId,
+		collectionId:       cid}
 
 	//send stream update to timekeeper
 	if resp := idx.sendStreamUpdateToWorker(cmd, idx.tkCmdCh,
@@ -3929,7 +3922,7 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 					idx.injectRandomDelay(10)
 
 					logging.Infof("Indexer::sendStreamUpdateForBuildIndex Stream Request Success For "+
-						"Stream %v KeyspaceId %v SessionId %v", buildStream, keyspaceId, sessionId)
+						"Stream %v KeyspaceId %v Cid %v SessionId %v", buildStream, keyspaceId, cid, sessionId)
 
 					//once stream request is successful re-calculate the KV timestamp.
 					//This makes sure indexer doesn't use a timestamp which can never
@@ -3937,7 +3930,7 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 					//if there is a failover after this, it will be observed as a rollback
 
 					// Asyncronously compute the KV timestamp
-					go idx.computeKeyspaceBuildTsAsync(clustAddr, keyspaceId, collId, numVb, buildStream)
+					go idx.computeKeyspaceBuildTsAsync(clustAddr, keyspaceId, cid, numVb, buildStream)
 
 					idx.internalRecvCh <- &MsgStreamInfo{mType: STREAM_REQUEST_DONE,
 						streamId:   buildStream,
@@ -4004,6 +3997,27 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 	}(reqLock)
 
 	return true
+
+}
+
+func (idx *indexer) makeCollectionIdForStreamRequest(streamId common.StreamId,
+	keyspaceId string, collectionId string, clusterVer uint64) string {
+
+	if streamId == common.MAINT_STREAM {
+		//MAINT_STREAM always works at bucket level and
+		//collectionID is not required in stream request
+		return ""
+	} else if streamId == common.INIT_STREAM {
+		//INIT_STREAM works on collection level after
+		//cluster has fully upgraded to 7.0 or later
+		if clusterVer >= common.INDEXER_70_VERSION {
+			return collectionId
+		} else {
+			return ""
+		}
+	}
+
+	return ""
 
 }
 
@@ -4405,21 +4419,21 @@ func (idx *indexer) checkDuplicateIndex(indexInst common.IndexInst,
 	return true
 }
 
-//checkDuplicateInitialBuildRequest check if any other index on the given bucket
+//checkDuplicateInitialBuildRequest check if any other index on the given collection
 //is already building
-func (idx *indexer) checkDuplicateInitialBuildRequest(bucket string,
+func (idx *indexer) checkDuplicateInitialBuildRequest(keyspaceId string,
 	instIdList []common.IndexInstId, respCh MsgChannel, errMap map[common.IndexInstId]error) bool {
 
-	//if initial build is already running for some other index on this bucket,
+	//if initial build is already running for some other index on this collection,
 	//cannot start another one
 	for _, index := range idx.indexInstMap {
 
 		if (index.State == common.INDEX_STATE_INITIAL ||
 			index.State == common.INDEX_STATE_CATCHUP) &&
-			index.Defn.Bucket == bucket {
+			index.Defn.KeyspaceId(common.INIT_STREAM) == keyspaceId {
 
-			errStr := fmt.Sprintf("Build Already In Progress. Bucket %v", bucket)
-			logging.Errorf("Indexer::checkDuplicateInitialBuildRequest %v, %v", index, bucket)
+			errStr := fmt.Sprintf("Build Already In Progress. Keyspace %v", keyspaceId)
+			logging.Errorf("Indexer::checkDuplicateInitialBuildRequest %v, %v", index, keyspaceId)
 			if idx.enableManager {
 				idx.bulkUpdateError(instIdList, errStr)
 				for _, instId := range instIdList {
@@ -4677,7 +4691,6 @@ func (idx *indexer) processBuildDoneCatchup(streamId common.StreamId, keyspaceId
 		common.CrashOnError(respErr.cause)
 	}
 
-	clustAddr := idx.config["clusterAddr"].String()
 	bucket, _, _ := SplitKeyspaceId(keyspaceId)
 
 	reqLock := idx.acquireStreamRequestLock(keyspaceId, streamId)
@@ -5291,7 +5304,6 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 
 	var indexList []common.IndexInst
 	var bucketUUIDList []string
-	var collId string
 
 	switch streamId {
 
@@ -5323,7 +5335,6 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 					common.INDEX_STATE_CATCHUP:
 					indexList = append(indexList, indexInst)
 					bucketUUIDList = append(bucketUUIDList, indexInst.Defn.BucketUUID)
-					collId = indexInst.Defn.CollectionId
 				}
 			}
 		}
@@ -5364,8 +5375,23 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 	numVb := idx.config["numVbuckets"].Int()
 	enableAsync := idx.config["enableAsyncOpenStream"].Bool()
 
+	var clusterVer uint64
 	if !inRepair {
-		async = enableAsync && idx.clusterInfoClient.ClusterVersion() >= common.INDEXER_65_VERSION
+		clusterVer = idx.clusterInfoClient.ClusterVersion()
+		async = enableAsync && clusterVer >= common.INDEXER_65_VERSION
+	}
+
+	var cid string
+	var ok bool
+	if cid, ok = idx.streamKeyspaceIdCollectionId[streamId][keyspaceId]; !ok {
+		//if the cid has not been set e.g. in warmup, set it from the first index
+		if clusterVer == 0 {
+			clusterVer = clusterVersion(clustAddr)
+		}
+		//get cid of any index and determine if it needs to be used
+		cid = indexList[0].Defn.CollectionId
+		cid = idx.makeCollectionIdForStreamRequest(streamId, keyspaceId, cid, clusterVer)
+		idx.streamKeyspaceIdCollectionId[streamId][keyspaceId] = cid
 	}
 
 	cmd := &MsgStreamUpdate{mType: OPEN_STREAM,
@@ -5379,7 +5405,8 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 		rollbackTime:       idx.keyspaceIdRollbackTimes[keyspaceId],
 		keyspaceInRecovery: keyspaceInRecovery,
 		async:              async,
-		sessionId:          sessionId}
+		sessionId:          sessionId,
+		collectionId:       cid}
 
 	//send stream update to timekeeper
 	if resp := idx.sendStreamUpdateToWorker(cmd, idx.tkCmdCh,
@@ -5430,7 +5457,7 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 					idx.injectRandomDelay(10)
 
 					logging.Infof("Indexer::startKeyspaceIdStream Success "+
-						"Stream %v KeyspaceId %v SessionId %v", streamId, keyspaceId, sessionId)
+						"Stream %v KeyspaceId %v Cid %v SessionId %v", streamId, keyspaceId, cid, sessionId)
 
 					//once stream request is successful re-calculate the KV timestamp.
 					//This makes sure indexer doesn't use a timestamp which can never
@@ -5439,7 +5466,7 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 
 					if streamId == common.INIT_STREAM {
 						// Asyncronously compute the KV timestamp
-						go idx.computeKeyspaceBuildTsAsync(clustAddr, keyspaceId, collId, numVb, streamId)
+						go idx.computeKeyspaceBuildTsAsync(clustAddr, keyspaceId, cid, numVb, streamId)
 					}
 
 					idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_RECOVERY_DONE,
@@ -5559,6 +5586,13 @@ func (idx *indexer) initStreamPendBuildDone() {
 
 	for i := 0; i < int(common.ALL_STREAMS); i++ {
 		idx.streamKeyspaceIdPendBuildDone[common.StreamId(i)] = make(map[string]*buildDoneSpec)
+	}
+}
+
+func (idx *indexer) initStreamCollectionIdMap() {
+
+	for i := 0; i < int(common.ALL_STREAMS); i++ {
+		idx.streamKeyspaceIdCollectionId[common.StreamId(i)] = make(map[string]string)
 	}
 }
 
@@ -7249,7 +7283,7 @@ func (idx *indexer) checkKeyspaceIdInRecovery(keyspaceId string,
 	return false
 }
 
-func (idx *indexer) checkValidIndexInst(bucket string, instIdList []common.IndexInstId,
+func (idx *indexer) checkValidIndexInst(keyspaceId string, instIdList []common.IndexInstId,
 	clientCh MsgChannel, errMap map[common.IndexInstId]error) ([]common.IndexInstId, bool) {
 
 	if len(instIdList) == 0 {
@@ -7293,21 +7327,22 @@ func (idx *indexer) checkValidIndexInst(bucket string, instIdList []common.Index
 	return newList, len(newList) == len(instIdList)
 }
 
-func (idx *indexer) groupIndexListByBucket(instIdList []common.IndexInstId) map[string][]common.IndexInstId {
+func (idx *indexer) groupIndexListByKeyspaceId(instIdList []common.IndexInstId) map[string][]common.IndexInstId {
 
-	bucketInstList := make(map[string][]common.IndexInstId)
+	keyspaceIdInstList := make(map[string][]common.IndexInstId)
 	for _, instId := range instIdList {
 		indexInst := idx.indexInstMap[instId]
-		if instList, ok := bucketInstList[indexInst.Defn.Bucket]; ok {
+		keyspaceId := indexInst.Defn.KeyspaceId(common.INIT_STREAM)
+		if instList, ok := keyspaceIdInstList[keyspaceId]; ok {
 			instList = append(instList, indexInst.InstId)
-			bucketInstList[indexInst.Defn.Bucket] = instList
+			keyspaceIdInstList[keyspaceId] = instList
 		} else {
 			var newInstList []common.IndexInstId
 			newInstList = append(newInstList, indexInst.InstId)
-			bucketInstList[indexInst.Defn.Bucket] = newInstList
+			keyspaceIdInstList[keyspaceId] = newInstList
 		}
 	}
-	return bucketInstList
+	return keyspaceIdInstList
 
 }
 
@@ -7528,7 +7563,7 @@ func dumpMemProfile(filename string) bool {
 }
 
 func (idx *indexer) computeKeyspaceBuildTsAsync(clusterAddr string,
-	keyspaceId string, collId string, numVb int, streamId common.StreamId) {
+	keyspaceId string, cid string, numVb int, streamId common.StreamId) {
 
 	// Acquire the buildTsLock
 	// The buildTsLock is per bucket per stream lock. It serves two purposes:
@@ -7541,10 +7576,10 @@ func (idx *indexer) computeKeyspaceBuildTsAsync(clusterAddr string,
 	mutex.Lock()
 	defer mutex.Unlock()
 
-	buildTs, err := computeKeyspaceBuildTs(clusterAddr, keyspaceId, collId, numVb)
+	buildTs, err := computeKeyspaceBuildTs(clusterAddr, keyspaceId, cid, numVb)
 	if err != nil {
 		logging.Errorf("Indexer::computeBucketBuildTsAsync, stream: %v, keyspace: %v, "+
-			"collId: %v err: %v", streamId, keyspaceId, collId, err)
+			"cid: %v err: %v", streamId, keyspaceId, cid, err)
 	} else {
 		msgBuildTs := &MsgStreamUpdate{
 			mType:      INDEXER_UPDATE_BUILD_TS,
@@ -7558,21 +7593,20 @@ func (idx *indexer) computeKeyspaceBuildTsAsync(clusterAddr string,
 	}
 }
 
-//calculates buildTs for bucket. This is a blocking call
+//calculates buildTs for keyspace. This is a blocking call
 //which will keep trying till success as indexer cannot work
 //without a buildts.
 func computeKeyspaceBuildTs(clustAddr string, keyspaceId string,
-	collId string, numVb int) (buildTs Timestamp, err error) {
-
-	//TODO validate bucket and collection
-	bucket, _, _ := SplitKeyspaceId(keyspaceId)
+	cid string, numVb int) (buildTs Timestamp, err error) {
 
 kvtsloop:
 	for {
-		buildTs, err = GetCurrentKVTs(clustAddr, "default", bucket, collId, numVb)
+		buildTs, err = GetCurrentKVTs(clustAddr, "default", keyspaceId, cid, numVb)
+		//TODO Collections - handle the case when collection doesn't exist
 		if err != nil {
 			logging.Errorf("Indexer::computeKeyspaceBuildTs Error Fetching BuildTs %v", err)
 			var uuid string
+			bucket, _, _ := SplitKeyspaceId(keyspaceId)
 			uuid, err = common.GetBucketUUID(clustAddr, bucket)
 			if err == nil && uuid == common.BUCKET_UUID_NIL {
 				// BUCKET_UUID_NIL is returned in non-error case
@@ -8372,6 +8406,7 @@ func (idx *indexer) cleanupAllStreamKeyspaceIdState(
 	delete(idx.streamKeyspaceIdFlushInProgress[streamId], keyspaceId)
 	delete(idx.streamKeyspaceIdObserveFlushDone[streamId], keyspaceId)
 	delete(idx.streamKeyspaceIdPendBuildDone[streamId], keyspaceId)
+	delete(idx.streamKeyspaceIdCollectionId[streamId], keyspaceId)
 }
 
 func (idx *indexer) prepareStreamKeyspaceIdForFreshStart(
