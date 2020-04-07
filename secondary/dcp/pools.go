@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"math"
 	"math/rand"
 	"net"
 	"net/http"
@@ -558,6 +559,15 @@ func (p *Pool) refresh() (err error) {
 	p.BucketMap = make(map[string]Bucket)
 	p.Manifest = make(map[string]*collections.CollectionManifest)
 
+	// Compute the minimum version among all the nodes
+	version := (uint32)(math.MaxUint32)
+	for _, n := range p.Nodes {
+		v := uint32(n.ClusterCompatibility / 65536)
+		if v < version {
+			version = v
+		}
+	}
+
 loop:
 	buckets := []Bucket{}
 	err = p.client.parseURLResponse(p.BucketURL["uri"], &buckets)
@@ -580,19 +590,23 @@ loop:
 		b.init(nb)
 		p.BucketMap[b.Name] = b
 
-		// For each bucket, update collection manifest
-		manifest := &collections.CollectionManifest{}
-		err = p.client.parseURLResponse("pools/default/buckets/"+b.Name+"/collections", manifest)
-		if err != nil {
-			// bucket list is out of sync with cluster bucket list
-			// bucket might have got deleted.
-			if strings.Contains(err.Error(), "HTTP error 404") {
-				logging.Warnf("cluster_info: Out of sync for bucket %s. Retrying..", b.Name)
-				goto loop
+		// It is allowed to query the collections endpoint only if all
+		// the nodes in the cluster are upgraded to 7.0 version or later
+		if version >= 7 {
+			// For each bucket, update collection manifest
+			manifest := &collections.CollectionManifest{}
+			err = p.client.parseURLResponse("pools/default/buckets/"+b.Name+"/collections", manifest)
+			if err != nil {
+				// bucket list is out of sync with cluster bucket list
+				// bucket might have got deleted.
+				if strings.Contains(err.Error(), "HTTP error 404") {
+					logging.Warnf("cluster_info: Out of sync for bucket %s. Retrying..", b.Name)
+					goto loop
+				}
+				return err
 			}
-			return err
+			p.Manifest[b.Name] = manifest
 		}
-		p.Manifest[b.Name] = manifest
 	}
 	return nil
 }
