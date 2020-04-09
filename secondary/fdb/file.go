@@ -279,6 +279,20 @@ func (f *File) GetLatencyStats() (string, error) {
 	return statString, nil
 }
 
+func (f *File) SwitchCompactionMode(mode CompactOpt, threshold uint8) error {
+	f.Lock()
+	defer f.Unlock()
+
+	Log.Tracef("fdb_switch_compaction_mode call f:%p dbfile:%v mode:%v threshold",
+		f, f.dbfile, mode, threshold)
+	errNo := C.fdb_switch_compaction_mode(f.dbfile, C.uchar(mode), C.size_t(threshold))
+	Log.Tracef("fdb_switch_compaction_mode retn f:%p errNo:%v", f, errNo)
+	if errNo != RESULT_SUCCESS {
+		return Error(errNo)
+	}
+	return nil
+}
+
 func FdbFileVersionToString(version uint8) string {
 
 	if version == FdbV1FileVersion {

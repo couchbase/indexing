@@ -2325,7 +2325,7 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.metadata.compaction.threshold": ConfigValue{
-		0,
+		30,
 		"compaction threshold percentage",
 		30,    // 30%
 		false, // mutable

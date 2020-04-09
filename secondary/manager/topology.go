@@ -33,10 +33,12 @@ type IndexTopology struct {
 // TODO: Need to add Collection specific information in IndexDefnDistribution
 // This has dependency on Lifecycle Manager
 type IndexDefnDistribution struct {
-	Bucket    string                  `json:"bucket,omitempty"`
-	Name      string                  `json:"name,omitempty"`
-	DefnId    uint64                  `json:"defnId,omitempty"`
-	Instances []IndexInstDistribution `json:"instances,omitempty"`
+	Bucket     string                  `json:"bucket,omitempty"`
+	Scope      string                  `json:"scope,omitempty"`
+	Collection string                  `json:"collection,omitempty"`
+	Name       string                  `json:"name,omitempty"`
+	DefnId     uint64                  `json:"defnId,omitempty"`
+	Instances  []IndexInstDistribution `json:"instances,omitempty"`
 }
 
 type IndexInstDistribution struct {
@@ -122,8 +124,10 @@ func (g *GlobalTopology) RemoveTopologyKey(key string) {
 //
 // Add an index definition to Topology.
 //
-func (t *IndexTopology) AddIndexDefinition(bucket string, name string, defnId uint64, instId uint64, state uint32, indexerId string,
-	instVersion uint64, rState uint32, replicaId uint64, partitions []common.PartitionId, versions []int, numPartitions uint32,
+func (t *IndexTopology) AddIndexDefinition(bucket, scope, collection, name string,
+	defnId uint64, instId uint64, state uint32, indexerId string,
+	instVersion uint64, rState uint32, replicaId uint64, partitions []common.PartitionId,
+	versions []int, numPartitions uint32,
 	scheduled bool, storageMode string, realInstId uint64) {
 
 	t.RemoveIndexDefinitionById(common.IndexDefnId(defnId))
@@ -154,6 +158,8 @@ func (t *IndexTopology) AddIndexDefinition(bucket string, name string, defnId ui
 
 	defn := new(IndexDefnDistribution)
 	defn.Bucket = bucket
+	defn.Scope = scope
+	defn.Collection = collection
 	defn.Name = name
 	defn.DefnId = defnId
 	defn.Instances = append(defn.Instances, *inst)
@@ -214,10 +220,11 @@ func (t *IndexTopology) RemoveIndexDefinitionById(id common.IndexDefnId) {
 //
 // Get all index instance Id's for a specific defnition
 //
-func (t *IndexTopology) FindIndexDefinition(bucket string, name string) *IndexDefnDistribution {
+func (t *IndexTopology) FindIndexDefinition(bucket, scope, collection, name string) *IndexDefnDistribution {
 
 	for _, defnRef := range t.Definitions {
-		if defnRef.Bucket == bucket && defnRef.Name == name {
+		if defnRef.Bucket == bucket && defnRef.Scope == scope &&
+			defnRef.Collection == collection && defnRef.Name == name {
 			return &defnRef
 		}
 	}

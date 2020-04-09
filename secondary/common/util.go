@@ -4,7 +4,6 @@ import (
 	"errors"
 	"expvar"
 	"fmt"
-	"github.com/couchbase/indexing/secondary/common/collections"
 	"hash/crc64"
 	"io"
 	"io/ioutil"
@@ -25,6 +24,7 @@ import (
 
 	"github.com/couchbase/cbauth"
 	"github.com/couchbase/cbauth/cbauthimpl"
+	"github.com/couchbase/indexing/secondary/common/collections"
 	"github.com/couchbase/indexing/secondary/dcp"
 	"github.com/couchbase/indexing/secondary/dcp/transport/client"
 	"github.com/couchbase/indexing/secondary/logging"
@@ -1223,4 +1223,16 @@ func ExpvarHandler(rw http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(rw, "%q: %s", kv.Key, kv.Value)
 	})
 	fmt.Fprintf(rw, "\n}\n")
+}
+
+func GetCollectionDefaults(scope, collection string) (string, string) {
+	if scope == "" {
+		scope = DEFAULT_SCOPE
+	}
+
+	if collection == "" {
+		collection = DEFAULT_COLLECTION
+	}
+
+	return scope, collection
 }

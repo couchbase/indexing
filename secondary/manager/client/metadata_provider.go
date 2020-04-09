@@ -4191,6 +4191,9 @@ func (r *metadataRepo) unmarshallAndUpdateTopology(content []byte, indexerId c.I
 	if err != nil {
 		return err
 	}
+
+	// TODO (Collections): If indexer is old and query is new, scope/collection name will be empty
+	// Populate it with defaults
 	r.updateTopology(topology, indexerId)
 	return nil
 }

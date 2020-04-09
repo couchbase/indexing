@@ -272,6 +272,8 @@ func (idx IndexDefn) String() string {
 	str += fmt.Sprintf("Name: %v ", idx.Name)
 	str += fmt.Sprintf("Using: %v ", idx.Using)
 	str += fmt.Sprintf("Bucket: %v ", idx.Bucket)
+	str += fmt.Sprintf("Scope: %v ", idx.Scope)
+	str += fmt.Sprintf("Collection: %v ", idx.Collection)
 	str += fmt.Sprintf("IsPrimary: %v ", idx.IsPrimary)
 	str += fmt.Sprintf("NumReplica: %v ", idx.GetNumReplica())
 	str += fmt.Sprintf("InstVersion: %v ", idx.InstVersion)

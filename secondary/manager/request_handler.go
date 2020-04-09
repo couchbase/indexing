@@ -113,6 +113,8 @@ type IndexStatus struct {
 	InstId       common.IndexInstId `json:"instId,omitempty"`
 	Name         string             `json:"name,omitempty"`
 	Bucket       string             `json:"bucket,omitempty"`
+	Scope        string             `json:"scope,omitempty"`
+	Collection   string             `json:"collection,omitempty"`
 	IsPrimary    bool               `json:"isPrimary,omitempty"`
 	SecExprs     []string           `json:"secExprs,omitempty"`
 	WhereExpr    string             `json:"where,omitempty"`
@@ -381,6 +383,9 @@ func (m *requestHandlerContext) convertIndexRequest(r *http.Request) *IndexReque
 		return nil
 	}
 
+	// Set default scope and collection name if incoming request dont have them
+	req.Index.SetCollectionDefaults()
+
 	return req
 }
 
@@ -642,6 +647,8 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, bucket string
 								InstId:       common.IndexInstId(instance.InstId),
 								Name:         name,
 								Bucket:       defn.Bucket,
+								Scope:        defn.Scope,
+								Collection:   defn.Collection,
 								IsPrimary:    defn.IsPrimary,
 								SecExprs:     defn.SecExprs,
 								WhereExpr:    defn.WhereExpr,
@@ -1113,6 +1120,7 @@ func (m *requestHandlerContext) handleCachedStats(w http.ResponseWriter, r *http
 //    - Index defn of the same <bucket, name> exists.   It will rename the index to <index name>_restore_<seqNo>
 //    - Bucket does not exist.   It will restore an index defn with a non-existent bucket.
 //
+// TODO (Collections): Any changes necessary will be handled as part of Backup-Restore task
 func (m *requestHandlerContext) handleRestoreIndexMetadataRequest(w http.ResponseWriter, r *http.Request) {
 
 	creds, ok := doAuth(r, w)
@@ -1329,9 +1337,6 @@ func (m *requestHandlerContext) handlePlannerRequest(w http.ResponseWriter, r *h
 		return
 	}
 
-	// Override the storage mode for the local indexer.  Override will not take into effect until
-	// indexer has restarted manually by administrator.   During indexer bootstrap, it will upgrade/downgrade
-	// individual index to the override storage mode.
 	value := r.FormValue("excludeNode")
 	if value == "in" || value == "out" || value == "inout" || len(value) == 0 {
 		m.mgr.SetLocalValue("excludeNode", value)
@@ -1526,12 +1531,30 @@ func (s indexStatusSorter) Swap(i, j int) {
 	s[i], s[j] = s[j], s[i]
 }
 
+// TODO (Collections): Revisit scalabity of sorting with large number of indexes
+// Also, check if sorting still necessary.
 func (s indexStatusSorter) Less(i, j int) bool {
 	if s[i].Name < s[j].Name {
 		return true
 	}
 
 	if s[i].Name > s[j].Name {
+		return false
+	}
+
+	if s[i].Collection < s[j].Collection {
+		return true
+	}
+
+	if s[i].Collection > s[j].Collection {
+		return false
+	}
+
+	if s[i].Scope < s[j].Scope {
+		return true
+	}
+
+	if s[i].Scope > s[j].Scope {
 		return false
 	}
 

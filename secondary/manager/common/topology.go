@@ -32,10 +32,12 @@ type IndexTopology struct {
 // TODO: Need to add Collection specific information in IndexDefnDistribution
 // This has dependency on Lifecycle Manager
 type IndexDefnDistribution struct {
-	Bucket    string                  `json:"bucket,omitempty"`
-	Name      string                  `json:"name,omitempty"`
-	DefnId    uint64                  `json:"defnId,omitempty"`
-	Instances []IndexInstDistribution `json:"instances,omitempty"`
+	Bucket     string                  `json:"bucket,omitempty"`
+	Scope      string                  `json:"scope,omitempty"`
+	Collection string                  `json:"collection,omitempty"`
+	Name       string                  `json:"name,omitempty"`
+	DefnId     uint64                  `json:"defnId,omitempty"`
+	Instances  []IndexInstDistribution `json:"instances,omitempty"`
 }
 
 type IndexInstDistribution struct {

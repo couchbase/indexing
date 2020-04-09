@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io/ioutil"
+	"math"
 	"net/http"
 	"os"
 	"path"
@@ -62,6 +63,18 @@ func (s *BucketStats) Init() {
 	s.numMutationsQueued.Init()
 	s.tsQueueSize.Init()
 	s.numNonAlignTS.Init()
+}
+
+func (s *BucketStats) addBucketStatsToMap(statMap *StatsMap) {
+	statMap.AddStatValueFiltered("num_rollbacks", &s.numRollbacks)
+	statMap.AddStatValueFiltered("mutation_queue_size", &s.mutationQueueSize)
+	statMap.AddStatValueFiltered("num_mutations_queued", &s.numMutationsQueued)
+	statMap.AddStatValueFiltered("ts_queue_size", &s.tsQueueSize)
+	statMap.AddStatValueFiltered("num_nonalign_ts", &s.numNonAlignTS)
+
+	if st := common.BucketSeqsTiming(s.bucket); st != nil {
+		statMap.AddStatValueFiltered("timings/dcp_getseqs", st)
+	}
 }
 
 type IndexTimingStats struct {
@@ -213,6 +226,18 @@ type IndexStats struct {
 	avgScanLatency   stats.Int64Val
 
 	Timings IndexTimingStats
+
+	// Placeholder stats used during GetStats call.
+	flushQueue       stats.Int64Val
+	avgItemSize      stats.Int64Val
+	waitLat          stats.Int64Val
+	scanReqLat       stats.Int64Val
+	scanReqInitLat   stats.Int64Val
+	scanReqAllocLat  stats.Int64Val
+	docidCountHolder stats.Int64Val
+	avgArrLenHolder  stats.Int64Val
+	keySizeDist      stats.MapVal
+	arrKeySizeDist   stats.MapVal
 }
 
 type IndexerStatsHolder struct {
@@ -385,7 +410,54 @@ func (s *IndexStats) Init() {
 
 	s.Timings.Init()
 
+	s.flushQueue.Init()
+	s.avgItemSize.Init()
+	s.waitLat.Init()
+	s.scanReqLat.Init()
+	s.scanReqInitLat.Init()
+	s.scanReqAllocLat.Init()
+	s.docidCountHolder.Init()
+	s.avgArrLenHolder.Init()
+	s.keySizeDist.Init()
+	s.arrKeySizeDist.Init()
+
 	s.partitions = make(map[common.PartitionId]*IndexStats)
+
+	// Set filters
+	// Note that the filters will be set on both: instance level stats and
+	// partition level stats. Instance level filter map and the partition
+	// level filter map is the same for each stat value.
+	s.SetRebalancerFilters()
+	s.SetPlannerFilters()
+	s.SetIndexStatusFilters()
+}
+
+func (s *IndexStats) SetRebalancerFilters() {
+	s.numRequests.AddFilter(stats.RebalancerFilter)
+	s.numCompletedRequests.AddFilter(stats.RebalancerFilter)
+	s.numDocsPending.AddFilter(stats.RebalancerFilter)
+	s.numDocsQueued.AddFilter(stats.RebalancerFilter)
+	s.numDocsProcessed.AddFilter(stats.RebalancerFilter)
+}
+
+func (s *IndexStats) SetIndexStatusFilters() {
+	s.buildProgress.AddFilter(stats.IndexStatusFilter)
+	s.completionProgress.AddFilter(stats.IndexStatusFilter)
+	s.lastScanTime.AddFilter(stats.IndexStatusFilter)
+}
+
+func (s *IndexStats) SetPlannerFilters() {
+	s.itemsCount.AddFilter(stats.PlannerFilter)
+	s.buildProgress.AddFilter(stats.PlannerFilter)
+	s.residentPercent.AddFilter(stats.PlannerFilter)
+	s.dataSize.AddFilter(stats.PlannerFilter)
+	s.memUsed.AddFilter(stats.PlannerFilter)
+	s.avgDiskBps.AddFilter(stats.PlannerFilter)
+	s.avgDrainRate.AddFilter(stats.PlannerFilter)
+	s.avgMutationRate.AddFilter(stats.PlannerFilter)
+	s.numDocsFlushQueued.AddFilter(stats.PlannerFilter)
+	s.avgScanRate.AddFilter(stats.PlannerFilter)
+	s.numRowsReturned.AddFilter(stats.PlannerFilter)
 }
 
 func (s *IndexStats) getPartitions() []common.PartitionId {
@@ -521,6 +593,17 @@ type IndexerStats struct {
 	indexerState  stats.Int64Val
 	prjLatencyMap *LatencyMapHolder
 	nodeToHostMap *NodeToHostMapHolder
+
+	timestamp      stats.StringVal
+	uptime         stats.StringVal
+	storageMode    stats.StringVal
+	numCPU         stats.Int64Val
+	cpuUtilization stats.Int64Val
+	memoryRss      stats.Uint64Val
+	memoryFree     stats.Uint64Val
+	memoryTotal    stats.Uint64Val
+
+	indexerStateHolder stats.StringVal
 }
 
 func (s *IndexerStats) Init() {
@@ -541,6 +624,39 @@ func (s *IndexerStats) Init() {
 
 	s.nodeToHostMap = &NodeToHostMapHolder{}
 	s.nodeToHostMap.Init()
+
+	s.timestamp.Init()
+	s.uptime.Init()
+	s.storageMode.Init()
+	s.numCPU.Init()
+	s.cpuUtilization.Init()
+	s.memoryRss.Init()
+	s.memoryFree.Init()
+	s.memoryTotal.Init()
+	s.indexerStateHolder.Init()
+
+	s.SetPlannerFilters()
+	s.SetRebalanceFilters()
+	s.SetIndexStatusFilters()
+
+	// Set values of invarients on Init.
+	s.numCPU.Set(int64(num_cpu_core))
+}
+
+func (s *IndexerStats) SetRebalanceFilters() {
+	s.indexerStateHolder.AddFilter(stats.RebalancerFilter)
+}
+
+func (s *IndexerStats) SetIndexStatusFilters() {
+	s.indexerStateHolder.AddFilter(stats.IndexStatusFilter)
+}
+
+func (s *IndexerStats) SetPlannerFilters() {
+	s.memoryUsedStorage.AddFilter(stats.PlannerFilter)
+	s.memoryUsed.AddFilter(stats.PlannerFilter)
+	s.memoryQuota.AddFilter(stats.PlannerFilter)
+	s.uptime.AddFilter(stats.PlannerFilter)
+	s.cpuUtilization.AddFilter(stats.PlannerFilter)
 }
 
 func (s *IndexerStats) Reset() {
@@ -674,49 +790,53 @@ func (s *IndexStats) getArrKeySizeStats() map[string]interface{} {
 	return keySizeStats
 }
 
-func (is IndexerStats) GetStats(spec *statsSpec) common.Statistics {
+func (is IndexerStats) PopulateIndexerStats(statMap *StatsMap) {
+	statMap.AddStatValueFiltered("num_connections", &is.numConnections)
+	statMap.AddStatValueFiltered("index_not_found_errcount", &is.notFoundError)
+	statMap.AddStatValueFiltered("memory_quota", &is.memoryQuota)
+	statMap.AddStatValueFiltered("memory_used", &is.memoryUsed)
+	statMap.AddStatValueFiltered("memory_used_storage", &is.memoryUsedStorage)
+	statMap.AddStatValueFiltered("memory_total_storage", &is.memoryTotalStorage)
+	statMap.AddStatValueFiltered("memory_used_queue", &is.memoryUsedQueue)
+	statMap.AddStatValueFiltered("needs_restart", &is.needsRestart)
+	statMap.AddStatValueFiltered("num_cpu_core", &is.numCPU)
 
-	var prefix string
-	var instId string
+	strts := fmt.Sprintf("%v", time.Now().UnixNano())
+	is.timestamp.Set(&strts)
+	statMap.AddStatValueFiltered("timestamp", &is.timestamp)
 
-	statsMap := make(map[string]interface{})
-	addStat := func(k string, v interface{}) {
-		if !spec.skipEmpty {
-			statsMap[fmt.Sprintf("%s%s", prefix, k)] = v
-		} else if n, ok := v.(int64); ok && n != 0 {
-			statsMap[fmt.Sprintf("%s%s", prefix, k)] = v
-		} else if s, ok := v.(string); ok && len(s) != 0 && s != "0 0 0" && s != "0" {
-			statsMap[fmt.Sprintf("%s%s", prefix, k)] = v
-		}
+	strut := fmt.Sprintf("%s", time.Since(uptime))
+	is.uptime.Set(&strut)
+	statMap.AddStatValueFiltered("uptime", &is.uptime)
+
+	strmode := fmt.Sprintf("%s", common.GetStorageMode())
+	is.storageMode.Set(&strmode)
+	statMap.AddStatValueFiltered("storage_mode", &is.storageMode)
+
+	is.cpuUtilization.Set(int64(math.Float64bits(getCpuPercent())))
+	statMap.AddFloat64StatFiltered("cpu_utilization", &is.cpuUtilization)
+
+	is.memoryRss.Set(getRSS())
+	statMap.AddStatValueFiltered("memory_rss", &is.memoryRss)
+
+	is.memoryFree.Set(getMemFree())
+	statMap.AddStatValueFiltered("memory_free", &is.memoryFree)
+
+	is.memoryTotal.Set(getMemTotal())
+	statMap.AddStatValueFiltered("memory_total", &is.memoryTotal)
+
+	indexerState := common.IndexerState(is.indexerState.Value())
+	if indexerState == common.INDEXER_PREPARE_UNPAUSE {
+		indexerState = common.INDEXER_PAUSED
 	}
-	addStatByInstId := func(k string, v interface{}) {
-		if !spec.skipEmpty {
-			statsMap[fmt.Sprintf("%s%s", instId, k)] = v
-		} else if n, ok := v.(int64); ok && n != 0 {
-			statsMap[fmt.Sprintf("%s%s", instId, k)] = v
-		} else if s, ok := v.(string); ok && len(s) != 0 && s != "0 0 0" && s != "0" {
-			statsMap[fmt.Sprintf("%s%s", instId, k)] = v
-		}
-	}
+	strst := fmt.Sprintf("%s", indexerState)
+	is.indexerStateHolder.Set(&strst)
+	statMap.AddStatValueFiltered("indexer_state", &is.indexerStateHolder)
 
-	addStat("timestamp", fmt.Sprintf("%v", time.Now().UnixNano()))
-	addStat("uptime", fmt.Sprintf("%s", time.Since(uptime)))
-	addStat("num_connections", is.numConnections.Value())
-	addStat("index_not_found_errcount", is.notFoundError.Value())
-	addStat("memory_quota", is.memoryQuota.Value())
-	addStat("memory_used", is.memoryUsed.Value())
-	addStat("memory_used_storage", is.memoryUsedStorage.Value())
-	addStat("memory_total_storage", is.memoryTotalStorage.Value())
-	addStat("memory_used_queue", is.memoryUsedQueue.Value())
-	addStat("needs_restart", is.needsRestart.Value())
-	storageMode := fmt.Sprintf("%s", common.GetStorageMode())
-	addStat("storage_mode", storageMode)
-	addStat("num_cpu_core", num_cpu_core)
-	addStat("cpu_utilization", getCpuPercent())
-	addStat("memory_rss", getRSS())
-	addStat("memory_free", getMemFree())
-	addStat("memory_total", getMemTotal())
+	statMap.AddStatValueFiltered("timings/stats_response", &is.statsResponse)
+}
 
+func (is IndexerStats) PopulateProjectorLatencyStats(statMap *StatsMap) {
 	prjLatencyMap := is.prjLatencyMap.Get()
 	nodeToHostMap := is.nodeToHostMap.Get()
 	for prjAddr, prjLatency := range prjLatencyMap {
@@ -727,447 +847,20 @@ func (is IndexerStats) GetStats(spec *statsSpec) common.Statistics {
 		nodeUUID := prjAddrSplit[1]
 		if hostname, ok := nodeToHostMap[nodeUUID]; ok {
 			newPrjAddr := fmt.Sprintf("%v/%v", stream, hostname)
-			addStat(newPrjAddr+"/projector_latency", latency.Value())
+			statMap.AddStatValueFiltered(newPrjAddr+"/projector_latency", latency)
 		}
 	}
+}
 
-	indexerState := common.IndexerState(is.indexerState.Value())
-	if indexerState == common.INDEXER_PREPARE_UNPAUSE {
-		indexerState = common.INDEXER_PAUSED
-	}
-	addStat("indexer_state", fmt.Sprintf("%s", indexerState))
+func (is IndexerStats) GetStats(spec *statsSpec) common.Statistics {
+	var prefix string
+	var instId string
 
-	addStat("timings/stats_response", is.statsResponse.Value())
+	statMap := NewStatsMap(spec)
 
-	addIndexStats := func(s *IndexStats) {
+	is.PopulateIndexerStats(statMap)
 
-		var scanLat, waitLat, scanReqLat, scanReqInitLat, scanReqAllocLat int64
-		reqs := s.numRequests.Value()
-
-		if reqs > 0 {
-			scanDur := s.int64Stats(func(ss *IndexStats) int64 { return ss.scanDuration.Value() })
-			waitDur := s.int64Stats(func(ss *IndexStats) int64 { return ss.scanWaitDuration.Value() })
-			scanReqDur := s.int64Stats(func(ss *IndexStats) int64 { return ss.scanReqDuration.Value() })
-			scanReqInitDur := s.int64Stats(func(ss *IndexStats) int64 { return ss.scanReqInitDuration.Value() })
-			scanReqAllocDur := s.int64Stats(func(ss *IndexStats) int64 { return ss.scanReqAllocDuration.Value() })
-
-			reqsSince := reqs - s.lastNumRequests.Value()
-			if reqsSince > 0 {
-				currScanLat := (scanDur - s.lastScanDuration.Value()) / reqsSince
-				scanLat = (currScanLat + s.avgScanLatency.Value()) / 2
-				s.lastScanDuration.Set(scanDur)
-				s.lastNumRequests.Set(reqs)
-				s.avgScanLatency.Set(scanLat)
-			}
-
-			waitLat = waitDur / reqs
-			scanReqLat = scanReqDur / reqs
-			scanReqInitLat = scanReqInitDur / reqs
-			scanReqAllocLat = scanReqAllocDur / reqs
-		}
-
-		itemsCount := s.partnInt64Stats(func(ss *IndexStats) int64 {
-			return ss.itemsCount.Value()
-		})
-
-		rawDataSize := s.partnInt64Stats(func(ss *IndexStats) int64 {
-			return ss.rawDataSize.Value()
-		})
-
-		addStat("total_scan_duration",
-			s.int64Stats(func(ss *IndexStats) int64 {
-				return ss.scanDuration.Value()
-			}))
-		addStat("total_scan_request_duration",
-			s.int64Stats(func(ss *IndexStats) int64 {
-				return ss.scanReqDuration.Value()
-			}))
-		// partition stats
-		addStat("insert_bytes",
-			s.partnInt64Stats(func(ss *IndexStats) int64 {
-				return ss.insertBytes.Value()
-			}))
-		addStat("num_docs_pending",
-			s.int64Stats(func(ss *IndexStats) int64 {
-				return ss.numDocsPending.Value()
-			}))
-		addStat("scan_wait_duration",
-			s.int64Stats(func(ss *IndexStats) int64 {
-				return ss.scanWaitDuration.Value()
-			}))
-		// partition stats
-		addStat("num_docs_indexed",
-			s.partnInt64Stats(func(ss *IndexStats) int64 {
-				return ss.numDocsIndexed.Value()
-			}))
-		addStat("num_docs_processed",
-			s.int64Stats(func(ss *IndexStats) int64 {
-				return ss.numDocsProcessed.Value()
-			}))
-		// partition and index stats
-		addStat("num_requests", s.numRequests.Value())
-
-		addStat("last_known_scan_time", s.lastScanTime.Value())
-
-		// partition and index stats
-		addStat("num_completed_requests", s.numCompletedRequests.Value())
-		addStat("num_rows_returned",
-			s.int64Stats(func(ss *IndexStats) int64 {
-				return ss.numRowsReturned.Value()
-			}))
-		// partition stats
-		addStat("num_rows_scanned",
-			s.partnInt64Stats(func(ss *IndexStats) int64 {
-				return ss.numRowsScanned.Value()
-			}))
-
-		addStat("num_strict_cons_scans", s.numStrictConsReqs.Value())
-
-		// partition stats
-		addStat("disk_size",
-			s.partnInt64Stats(func(ss *IndexStats) int64 {
-				return ss.diskSize.Value()
-			}))
-		// partition stats
-		addStat("memory_used",
-			s.partnInt64Stats(func(ss *IndexStats) int64 {
-				return ss.memUsed.Value()
-			}))
-		addStat("build_progress",
-			s.int64Stats(func(ss *IndexStats) int64 {
-				return ss.buildProgress.Value()
-			}))
-		addStat("num_docs_queued",
-			s.int64Stats(func(ss *IndexStats) int64 {
-				return ss.numDocsQueued.Value()
-			}))
-		// partition stats
-		addStat("delete_bytes",
-			s.partnInt64Stats(func(ss *IndexStats) int64 {
-				return ss.deleteBytes.Value()
-			}))
-
-		// partition stats
-		addStat("data_size",
-			s.partnInt64Stats(func(ss *IndexStats) int64 {
-				return ss.dataSize.Value()
-			}))
-
-		// partition stats
-		addStat("data_size_on_disk",
-			s.partnInt64Stats(func(ss *IndexStats) int64 {
-				return ss.dataSizeOnDisk.Value()
-			}))
-		addStat("log_space_on_disk",
-			s.partnInt64Stats(func(ss *IndexStats) int64 {
-				return ss.logSpaceOnDisk.Value()
-			}))
-
-		// partition stats
-		addStat("raw_data_size", rawDataSize)
-
-		// partition stats
-		addStat("backstore_raw_data_size",
-			s.partnInt64Stats(func(ss *IndexStats) int64 {
-				return ss.backstoreRawDataSize.Value()
-			}))
-
-		addStat("avg_item_size", computeAvgItemSize(rawDataSize, itemsCount))
-
-		// partition stats
-		addStat("key_size_distribution", s.getKeySizeStats())
-
-		if s.isArrayIndex {
-			if common.GetStorageMode() == common.PLASMA {
-				addStat("arrkey_size_distribution", s.getArrKeySizeStats())
-			}
-
-			docidCount := s.partnInt64Stats(func(ss *IndexStats) int64 {
-				return ss.docidCount.Value()
-			})
-
-			// partition stats
-			addStat("docid_count", docidCount)
-			addStat("avg_array_length", computeAvgArrayLength(itemsCount, docidCount))
-		}
-
-		addStat("key_size_stats_since",
-			s.partnMaxInt64Stats(func(ss *IndexStats) int64 {
-				return ss.keySizeStatsSince.Value()
-			}))
-
-		// partition stats
-		addStat("frag_percent",
-			s.partnAvgInt64Stats(func(ss *IndexStats) int64 {
-				return ss.fragPercent.Value()
-			}))
-		addStat("scan_bytes_read",
-			s.int64Stats(func(ss *IndexStats) int64 {
-				return ss.scanBytesRead.Value()
-			}))
-		// partition stats
-		addStat("get_bytes",
-			s.partnInt64Stats(func(ss *IndexStats) int64 {
-				return ss.getBytes.Value()
-			}))
-		// partition stats
-		addStat("items_count", itemsCount)
-		addStat("avg_ts_interval",
-			s.int64Stats(func(ss *IndexStats) int64 {
-				return ss.avgTsInterval.Value()
-			}))
-		addStat("avg_ts_items_count",
-			s.int64Stats(func(ss *IndexStats) int64 {
-				return ss.avgTsItemsCount.Value()
-			}))
-		addStat("num_commits",
-			s.int64Stats(func(ss *IndexStats) int64 {
-				return ss.numCommits.Value()
-			}))
-		addStat("num_snapshots",
-			s.int64Stats(func(ss *IndexStats) int64 {
-				return ss.numSnapshots.Value()
-			}))
-		addStat("num_open_snapshots",
-			s.int64Stats(func(ss *IndexStats) int64 { // Partition and index stat
-				return ss.numOpenSnapshots.Value()
-			}))
-		addStat("num_compactions",
-			s.int64Stats(func(ss *IndexStats) int64 {
-				return ss.numCompactions.Value()
-			}))
-		// partition stats
-		addStat("flush_queue_size",
-			s.partnInt64Stats(func(ss *IndexStats) int64 {
-				return postiveNum(ss.numDocsFlushQueued.Value() - ss.numDocsIndexed.Value())
-			}))
-		// partition stats
-		addStat("num_items_flushed",
-			s.partnInt64Stats(func(ss *IndexStats) int64 {
-				return ss.numItemsFlushed.Value()
-			}))
-
-		addStat("avg_scan_latency", s.avgScanLatency.Value())
-		addStat("avg_scan_wait_latency", waitLat)
-		addStat("avg_scan_request_latency", scanReqLat)
-		// partition stats
-		addStat("num_flush_queued",
-			s.partnInt64Stats(func(ss *IndexStats) int64 {
-				return ss.numDocsFlushQueued.Value()
-			}))
-		addStat("since_last_snapshot",
-			s.int64Stats(func(ss *IndexStats) int64 {
-				return ss.sinceLastSnapshot.Value()
-			}))
-		addStat("num_snapshot_waiters",
-			s.int64Stats(func(ss *IndexStats) int64 {
-				return ss.numSnapshotWaiters.Value()
-			}))
-		addStat("num_last_snapshot_reply",
-			s.int64Stats(func(ss *IndexStats) int64 {
-				return ss.numLastSnapshotReply.Value()
-			}))
-		// partition stats
-		addStat("num_items_restored",
-			s.partnInt64Stats(func(ss *IndexStats) int64 {
-				return ss.numItemsRestored.Value()
-			}))
-		// partition stats
-		addStat("disk_store_duration",
-			s.partnAvgInt64Stats(func(ss *IndexStats) int64 {
-				return ss.diskSnapStoreDuration.Value()
-			}))
-		// partition stats
-		addStat("disk_load_duration",
-			s.partnAvgInt64Stats(func(ss *IndexStats) int64 {
-				return ss.diskSnapLoadDuration.Value()
-			}))
-		addStat("not_ready_errcount",
-			s.int64Stats(func(ss *IndexStats) int64 {
-				return ss.notReadyError.Value()
-			}))
-		addStat("client_cancel_errcount",
-			s.int64Stats(func(ss *IndexStats) int64 {
-				return ss.clientCancelError.Value()
-			}))
-		addStat("num_scan_timeouts",
-			s.int64Stats(func(ss *IndexStats) int64 {
-				return ss.numScanTimeouts.Value()
-			}))
-		addStat("num_scan_errors",
-			s.int64Stats(func(ss *IndexStats) int64 {
-				return ss.numScanErrors.Value()
-			}))
-		// partition stats
-		addStat("avg_scan_rate",
-			s.partnInt64Stats(func(ss *IndexStats) int64 {
-				return ss.avgScanRate.Value()
-			}))
-		// partition stats
-		addStat("avg_mutation_rate",
-			s.partnInt64Stats(func(ss *IndexStats) int64 {
-				return ss.avgMutationRate.Value()
-			}))
-		// partition stats
-		addStat("avg_drain_rate",
-			s.partnInt64Stats(func(ss *IndexStats) int64 {
-				return ss.avgDrainRate.Value()
-			}))
-		// partition stats
-		addStat("avg_disk_bps",
-			s.partnInt64Stats(func(ss *IndexStats) int64 {
-				return ss.avgDiskBps.Value()
-			}))
-		addStat("last_rollback_time", s.lastRollbackTime.Value())
-		addStat("progress_stat_time", s.progressStatTime.Value())
-		// partition stats
-		addStat("resident_percent",
-			s.partnAvgInt64Stats(func(ss *IndexStats) int64 {
-				return ss.residentPercent.Value()
-			}))
-		// partition stats
-		addStat("cache_hit_percent",
-			s.partnAvgInt64Stats(func(ss *IndexStats) int64 {
-				return ss.cacheHitPercent.Value()
-			}))
-		// partition stats
-		addStat("cache_hits",
-			s.partnInt64Stats(func(ss *IndexStats) int64 {
-				return ss.cacheHits.Value()
-			}))
-		// partition stats
-		addStat("cache_misses",
-			s.partnInt64Stats(func(ss *IndexStats) int64 {
-				return ss.cacheMisses.Value()
-			}))
-		// partition stats
-		addStat("recs_in_mem",
-			s.partnInt64Stats(func(ss *IndexStats) int64 {
-				return ss.numRecsInMem.Value()
-			}))
-		// partition stats
-		addStat("recs_on_disk",
-			s.partnInt64Stats(func(ss *IndexStats) int64 {
-				return ss.numRecsOnDisk.Value()
-			}))
-
-		if !spec.essential {
-
-			// Timing stats.  If timing stat is partitioned, the final value
-			// is aggreated across the partitions (sum, count, sumOfSq).
-			addStat("timings/dcp_getseqs",
-				s.partnTimingStats(func(ss *IndexStats) *stats.TimingStat {
-					return &ss.Timings.dcpSeqs
-				}))
-			addStat("timings/storage_clone_handle",
-				s.partnTimingStats(func(ss *IndexStats) *stats.TimingStat {
-					return &ss.Timings.stCloneHandle
-				}))
-			addStat("timings/storage_commit",
-				s.partnTimingStats(func(ss *IndexStats) *stats.TimingStat {
-					return &ss.Timings.stCommit
-				}))
-			addStat("timings/storage_new_iterator",
-				s.partnTimingStats(func(ss *IndexStats) *stats.TimingStat {
-					return &ss.Timings.stNewIterator
-				}))
-			addStat("timings/storage_snapshot_create",
-				s.partnTimingStats(func(ss *IndexStats) *stats.TimingStat {
-					return &ss.Timings.stSnapshotCreate
-				}))
-			addStat("timings/storage_snapshot_close",
-				s.partnTimingStats(func(ss *IndexStats) *stats.TimingStat {
-					return &ss.Timings.stSnapshotClose
-				}))
-			addStat("timings/storage_persist_snapshot_create",
-				s.partnTimingStats(func(ss *IndexStats) *stats.TimingStat {
-					return &ss.Timings.stPersistSnapshotCreate
-				}))
-			addStat("timings/storage_get",
-				s.partnTimingStats(func(ss *IndexStats) *stats.TimingStat {
-					return &ss.Timings.stKVGet
-				}))
-			addStat("timings/storage_set",
-				s.partnTimingStats(func(ss *IndexStats) *stats.TimingStat {
-					return &ss.Timings.stKVSet
-				}))
-			addStat("timings/storage_iterator_next",
-				s.partnTimingStats(func(ss *IndexStats) *stats.TimingStat {
-					return &ss.Timings.stIteratorNext
-				}))
-			addStat("timings/scan_pipeline_iterate",
-				s.partnTimingStats(func(ss *IndexStats) *stats.TimingStat {
-					return &ss.Timings.stScanPipelineIterate
-				}))
-			addStat("timings/storage_del",
-				s.partnTimingStats(func(ss *IndexStats) *stats.TimingStat {
-					return &ss.Timings.stKVDelete
-				}))
-			addStat("timings/storage_info",
-				s.partnTimingStats(func(ss *IndexStats) *stats.TimingStat {
-					return &ss.Timings.stKVInfo
-				}))
-			addStat("timings/storage_meta_get",
-				s.partnTimingStats(func(ss *IndexStats) *stats.TimingStat {
-					return &ss.Timings.stKVMetaGet
-				}))
-			addStat("timings/storage_meta_set",
-				s.partnTimingStats(func(ss *IndexStats) *stats.TimingStat {
-					return &ss.Timings.stKVMetaSet
-				}))
-			addStat("timings/n1ql_expr_eval",
-				s.partnTimingStats(func(ss *IndexStats) *stats.TimingStat {
-					return &ss.Timings.n1qlExpr
-				}))
-			addStat("avg_scan_request_init_latency", scanReqInitLat)
-			addStat("avg_scan_request_alloc_latency", scanReqAllocLat)
-			addStat("num_requests_range",
-				s.int64Stats(func(ss *IndexStats) int64 {
-					return ss.numRequestsRange.Value()
-				}))
-			addStat("num_completed_requests_range",
-				s.int64Stats(func(ss *IndexStats) int64 {
-					return ss.numCompletedRequestsRange.Value()
-				}))
-			addStat("num_rows_returned_range",
-				s.int64Stats(func(ss *IndexStats) int64 {
-					return ss.numRowsReturnedRange.Value()
-				}))
-			addStat("num_rows_scanned_range",
-				s.int64Stats(func(ss *IndexStats) int64 {
-					return ss.numRowsScannedRange.Value()
-				}))
-			addStat("scan_cache_hit_range",
-				s.int64Stats(func(ss *IndexStats) int64 {
-					return ss.scanCacheHitRange.Value()
-				}))
-			addStat("num_requests_aggr",
-				s.int64Stats(func(ss *IndexStats) int64 {
-					return ss.numRequestsAggr.Value()
-				}))
-			addStat("num_completed_requests_aggr",
-				s.int64Stats(func(ss *IndexStats) int64 {
-					return ss.numCompletedRequestsAggr.Value()
-				}))
-			addStat("num_rows_returned_aggr",
-				s.int64Stats(func(ss *IndexStats) int64 {
-					return ss.numRowsReturnedAggr.Value()
-				}))
-			addStat("num_rows_scanned_aggr",
-				s.int64Stats(func(ss *IndexStats) int64 {
-					return ss.numRowsScannedAggr.Value()
-				}))
-			addStat("scan_cache_hit_aggr",
-				s.int64Stats(func(ss *IndexStats) int64 {
-					return ss.scanCacheHitAggr.Value()
-				}))
-			addStatByInstId("completion_progress",
-				s.int64Stats(func(ss *IndexStats) int64 {
-					return ss.completionProgress.Value()
-				}))
-
-		}
-	}
+	is.PopulateProjectorLatencyStats(statMap)
 
 	addStatsForIndexInst := func(inst common.IndexInstId, s *IndexStats) {
 		var ok bool
@@ -1182,9 +875,10 @@ func (is IndexerStats) GetStats(spec *statsSpec) common.Statistics {
 		prefix = common.GetStatsPrefix(s.bucket, s.scope, s.collection, s.name,
 			s.replicaId, 0, false)
 		// prefix = fmt.Sprintf("%s:%s:", s.bucket, name)
+		statMap.SetPrefix(prefix)
 		instId = fmt.Sprintf("%v:", inst)
-
-		addIndexStats(s)
+		statMap.SetInstId(instId)
+		s.addIndexStatsToMap(statMap, spec)
 
 		if spec.partition {
 
@@ -1192,7 +886,8 @@ func (is IndexerStats) GetStats(spec *statsSpec) common.Statistics {
 				prefix = common.GetStatsPrefix(s.bucket, s.scope, s.collection,
 					s.name, s.replicaId, int(partnId), true)
 				// prefix = fmt.Sprintf("%s:%s:", s.bucket, name)
-				addIndexStats(ps)
+				statMap.SetPrefix(prefix)
+				ps.addIndexStatsToMap(statMap, spec)
 			}
 		}
 	}
@@ -1214,17 +909,11 @@ func (is IndexerStats) GetStats(spec *statsSpec) common.Statistics {
 
 	for _, s := range is.buckets {
 		prefix = fmt.Sprintf("%s:", s.bucket)
-		addStat("num_rollbacks", s.numRollbacks.Value())
-		addStat("mutation_queue_size", s.mutationQueueSize.Value())
-		addStat("num_mutations_queued", s.numMutationsQueued.Value())
-		addStat("ts_queue_size", s.tsQueueSize.Value())
-		addStat("num_nonalign_ts", s.numNonAlignTS.Value())
-		if st := common.BucketSeqsTiming(s.bucket); st != nil {
-			addStat("timings/dcp_getseqs", st.Value())
-		}
+		statMap.SetPrefix(prefix)
+		s.addBucketStatsToMap(statMap)
 	}
 
-	return statsMap
+	return statMap.GetMap()
 }
 
 func (is IndexerStats) GetVersionedStats(t *target) (common.Statistics, bool) {
@@ -1444,6 +1133,597 @@ func (s *IndexStats) constructIndexStats(skipEmpty bool, version string) common.
 	return indexStats
 }
 
+func (s *IndexStats) addIndexStatsToMap(statMap *StatsMap, spec *statsSpec) {
+	var scanLat, waitLat, scanReqLat, scanReqInitLat, scanReqAllocLat int64
+	reqs := s.numRequests.Value()
+
+	if reqs > 0 {
+		scanDur := s.int64Stats(func(ss *IndexStats) int64 { return ss.scanDuration.Value() })
+		waitDur := s.int64Stats(func(ss *IndexStats) int64 { return ss.scanWaitDuration.Value() })
+		scanReqDur := s.int64Stats(func(ss *IndexStats) int64 { return ss.scanReqDuration.Value() })
+		scanReqInitDur := s.int64Stats(func(ss *IndexStats) int64 { return ss.scanReqInitDuration.Value() })
+		scanReqAllocDur := s.int64Stats(func(ss *IndexStats) int64 { return ss.scanReqAllocDuration.Value() })
+
+		reqsSince := reqs - s.lastNumRequests.Value()
+		if reqsSince > 0 {
+			currScanLat := (scanDur - s.lastScanDuration.Value()) / reqsSince
+			scanLat = (currScanLat + s.avgScanLatency.Value()) / 2
+			s.lastScanDuration.Set(scanDur)
+			s.lastNumRequests.Set(reqs)
+			s.avgScanLatency.Set(scanLat)
+		}
+
+		waitLat = waitDur / reqs
+		scanReqLat = scanReqDur / reqs
+		scanReqInitLat = scanReqInitDur / reqs
+		scanReqAllocLat = scanReqAllocDur / reqs
+	}
+
+	// ----------------------
+	// All int64Stats
+	// ----------------------
+	statMap.AddAggrStatFiltered("total_scan_duration",
+		func(ss *IndexStats) int64 {
+			return ss.scanDuration.Value()
+		},
+		&s.scanDuration, s.int64Stats)
+
+	statMap.AddAggrStatFiltered("total_scan_request_duration",
+		func(ss *IndexStats) int64 {
+			return ss.scanReqDuration.Value()
+		},
+		&s.scanReqDuration, s.int64Stats)
+
+	statMap.AddAggrStatFiltered("num_docs_pending",
+		func(ss *IndexStats) int64 {
+			return ss.numDocsPending.Value()
+		},
+		&s.numDocsPending, s.int64Stats)
+
+	statMap.AddAggrStatFiltered("scan_wait_duration",
+		func(ss *IndexStats) int64 {
+			return ss.scanWaitDuration.Value()
+		},
+		&s.scanWaitDuration, s.int64Stats)
+
+	statMap.AddAggrStatFiltered("num_docs_processed",
+		func(ss *IndexStats) int64 {
+			return ss.numDocsProcessed.Value()
+		},
+		&s.numDocsProcessed, s.int64Stats)
+
+	statMap.AddAggrStatFiltered("num_rows_returned",
+		func(ss *IndexStats) int64 {
+			return ss.numRowsReturned.Value()
+		},
+		&s.numRowsReturned, s.int64Stats)
+
+	statMap.AddAggrStatFiltered("build_progress",
+		func(ss *IndexStats) int64 {
+			return ss.buildProgress.Value()
+		},
+		&s.buildProgress, s.int64Stats)
+
+	statMap.AddAggrStatFiltered("num_docs_queued",
+		func(ss *IndexStats) int64 {
+			return ss.numDocsQueued.Value()
+		},
+		&s.numDocsQueued, s.int64Stats)
+
+	statMap.AddAggrStatFiltered("scan_bytes_read",
+		func(ss *IndexStats) int64 {
+			return ss.scanBytesRead.Value()
+		},
+		&s.scanBytesRead, s.int64Stats)
+
+	statMap.AddAggrStatFiltered("avg_ts_interval",
+		func(ss *IndexStats) int64 {
+			return ss.avgTsInterval.Value()
+		},
+		&s.avgTsInterval, s.int64Stats)
+
+	statMap.AddAggrStatFiltered("avg_ts_items_count",
+		func(ss *IndexStats) int64 {
+			return ss.avgTsItemsCount.Value()
+		},
+		&s.avgTsItemsCount, s.int64Stats)
+
+	statMap.AddAggrStatFiltered("num_commits",
+		func(ss *IndexStats) int64 {
+			return ss.numCommits.Value()
+		},
+		&s.numCommits, s.int64Stats)
+
+	statMap.AddAggrStatFiltered("num_snapshots",
+		func(ss *IndexStats) int64 {
+			return ss.numSnapshots.Value()
+		},
+		&s.numSnapshots, s.int64Stats)
+
+	statMap.AddAggrStatFiltered("num_open_snapshots",
+		func(ss *IndexStats) int64 {
+			return ss.numOpenSnapshots.Value()
+		},
+		&s.numOpenSnapshots, s.int64Stats)
+
+	statMap.AddAggrStatFiltered("num_compactions",
+		func(ss *IndexStats) int64 {
+			return ss.numCompactions.Value()
+		},
+		&s.numCompactions, s.int64Stats)
+
+	// TODO: Does it need to be int64Stat?
+	statMap.AddAggrStatFiltered("since_last_snapshot",
+		func(ss *IndexStats) int64 {
+			return ss.sinceLastSnapshot.Value()
+		},
+		&s.sinceLastSnapshot, s.int64Stats)
+
+	statMap.AddAggrStatFiltered("num_snapshot_waiters",
+		func(ss *IndexStats) int64 {
+			return ss.numSnapshotWaiters.Value()
+		},
+		&s.numSnapshotWaiters, s.int64Stats)
+
+	statMap.AddAggrStatFiltered("num_last_snapshot_reply",
+		func(ss *IndexStats) int64 {
+			return ss.numLastSnapshotReply.Value()
+		},
+		&s.numLastSnapshotReply, s.int64Stats)
+
+	statMap.AddAggrStatFiltered("not_ready_errcount",
+		func(ss *IndexStats) int64 {
+			return ss.notReadyError.Value()
+		},
+		&s.notReadyError, s.int64Stats)
+
+	statMap.AddAggrStatFiltered("client_cancel_errcount",
+		func(ss *IndexStats) int64 {
+			return ss.clientCancelError.Value()
+		},
+		&s.clientCancelError, s.int64Stats)
+
+	statMap.AddAggrStatFiltered("num_scan_timeouts",
+		func(ss *IndexStats) int64 {
+			return ss.numScanTimeouts.Value()
+		},
+		&s.numScanTimeouts, s.int64Stats)
+
+	statMap.AddAggrStatFiltered("num_scan_errors",
+		func(ss *IndexStats) int64 {
+			return ss.numScanErrors.Value()
+		},
+		&s.numScanErrors, s.int64Stats)
+
+	// ----------------------
+	// All partnInt64Stats
+	// ----------------------
+	statMap.AddAggrStatFiltered("insert_bytes",
+		func(ss *IndexStats) int64 {
+			return ss.insertBytes.Value()
+		},
+		&s.insertBytes, s.partnInt64Stats)
+
+	statMap.AddAggrStatFiltered("num_docs_indexed",
+		func(ss *IndexStats) int64 {
+			return ss.numDocsIndexed.Value()
+		},
+		&s.numDocsIndexed, s.partnInt64Stats)
+
+	statMap.AddAggrStatFiltered("num_rows_scanned",
+		func(ss *IndexStats) int64 {
+			return ss.numRowsScanned.Value()
+		},
+		&s.numRowsScanned, s.partnInt64Stats)
+
+	statMap.AddAggrStatFiltered("disk_size",
+		func(ss *IndexStats) int64 {
+			return ss.diskSize.Value()
+		},
+		&s.diskSize, s.partnInt64Stats)
+
+	statMap.AddAggrStatFiltered("memory_used",
+		func(ss *IndexStats) int64 {
+			return ss.memUsed.Value()
+		},
+		&s.memUsed, s.partnInt64Stats)
+
+	statMap.AddAggrStatFiltered("delete_bytes",
+		func(ss *IndexStats) int64 {
+			return ss.deleteBytes.Value()
+		},
+		&s.deleteBytes, s.partnInt64Stats)
+
+	statMap.AddAggrStatFiltered("data_size",
+		func(ss *IndexStats) int64 {
+			return ss.dataSize.Value()
+		},
+		&s.dataSize, s.partnInt64Stats)
+
+	statMap.AddAggrStatFiltered("data_size_on_disk",
+		func(ss *IndexStats) int64 {
+			return ss.dataSizeOnDisk.Value()
+		},
+		&s.dataSizeOnDisk, s.partnInt64Stats)
+
+	statMap.AddAggrStatFiltered("log_space_on_disk",
+		func(ss *IndexStats) int64 {
+			return ss.logSpaceOnDisk.Value()
+		},
+		&s.logSpaceOnDisk, s.partnInt64Stats)
+
+	statMap.AddAggrStatFiltered("raw_data_size",
+		func(ss *IndexStats) int64 {
+			return ss.rawDataSize.Value()
+		},
+		&s.rawDataSize, s.partnInt64Stats)
+
+	statMap.AddAggrStatFiltered("backstore_raw_data_size",
+		func(ss *IndexStats) int64 {
+			return ss.backstoreRawDataSize.Value()
+		},
+		&s.backstoreRawDataSize, s.partnInt64Stats)
+
+	statMap.AddAggrStatFiltered("get_bytes",
+		func(ss *IndexStats) int64 {
+			return ss.getBytes.Value()
+		},
+		&s.getBytes, s.partnInt64Stats)
+
+	statMap.AddAggrStatFiltered("items_count",
+		func(ss *IndexStats) int64 {
+			return ss.itemsCount.Value()
+		},
+		&s.itemsCount, s.partnInt64Stats)
+
+	statMap.AddAggrStatFiltered("num_items_flushed",
+		func(ss *IndexStats) int64 {
+			return ss.numItemsFlushed.Value()
+		},
+		&s.numItemsFlushed, s.partnInt64Stats)
+
+	statMap.AddAggrStatFiltered("num_flush_queued",
+		func(ss *IndexStats) int64 {
+			return ss.numDocsFlushQueued.Value()
+		},
+		&s.numDocsFlushQueued, s.partnInt64Stats)
+
+	statMap.AddAggrStatFiltered("num_items_restored",
+		func(ss *IndexStats) int64 {
+			return ss.numItemsRestored.Value()
+		},
+		&s.numItemsRestored, s.partnInt64Stats)
+
+	statMap.AddAggrStatFiltered("avg_scan_rate",
+		func(ss *IndexStats) int64 {
+			return ss.avgScanRate.Value()
+		},
+		&s.avgScanRate, s.partnInt64Stats)
+
+	statMap.AddAggrStatFiltered("avg_mutation_rate",
+		func(ss *IndexStats) int64 {
+			return ss.avgMutationRate.Value()
+		},
+		&s.avgMutationRate, s.partnInt64Stats)
+
+	statMap.AddAggrStatFiltered("avg_drain_rate",
+		func(ss *IndexStats) int64 {
+			return ss.avgDrainRate.Value()
+		},
+		&s.avgDrainRate, s.partnInt64Stats)
+
+	statMap.AddAggrStatFiltered("avg_disk_bps",
+		func(ss *IndexStats) int64 {
+			return ss.avgDiskBps.Value()
+		},
+		&s.avgDiskBps, s.partnInt64Stats)
+
+	statMap.AddAggrStatFiltered("cache_hits",
+		func(ss *IndexStats) int64 {
+			return ss.cacheHits.Value()
+		},
+		&s.cacheHits, s.partnInt64Stats)
+
+	statMap.AddAggrStatFiltered("cache_misses",
+		func(ss *IndexStats) int64 {
+			return ss.cacheMisses.Value()
+		},
+		&s.cacheMisses, s.partnInt64Stats)
+
+	statMap.AddAggrStatFiltered("recs_in_mem",
+		func(ss *IndexStats) int64 {
+			return ss.numRecsInMem.Value()
+		},
+		&s.numRecsInMem, s.partnInt64Stats)
+
+	statMap.AddAggrStatFiltered("recs_on_disk",
+		func(ss *IndexStats) int64 {
+			return ss.numRecsOnDisk.Value()
+		},
+		&s.numRecsOnDisk, s.partnInt64Stats)
+
+	// -------------------------------
+	// All partition and index stats
+	// -------------------------------
+	statMap.AddStatValueFiltered("num_requests", &s.numRequests)
+	statMap.AddStatValueFiltered("last_known_scan_time", &s.lastScanTime)
+	statMap.AddStatValueFiltered("num_completed_requests", &s.numCompletedRequests)
+	statMap.AddStatValueFiltered("last_rollback_time", &s.lastRollbackTime)
+	statMap.AddStatValueFiltered("progress_stat_time", &s.progressStatTime)
+	statMap.AddStatValueFiltered("avg_scan_latency", &s.avgScanLatency)
+	statMap.AddStatValueFiltered("num_strict_cons_scans", &s.numStrictConsReqs)
+
+	rawDataSize := s.partnInt64Stats(func(ss *IndexStats) int64 {
+		return ss.rawDataSize.Value()
+	})
+
+	itemsCount := s.partnInt64Stats(func(ss *IndexStats) int64 {
+		return ss.itemsCount.Value()
+	})
+
+	flushQueue := s.partnInt64Stats(func(ss *IndexStats) int64 {
+		return postiveNum(ss.numDocsFlushQueued.Value() - ss.numDocsIndexed.Value())
+	})
+	s.flushQueue.Set(flushQueue)
+	statMap.AddStatValueFiltered("flush_queue_size", &s.flushQueue)
+
+	s.avgItemSize.Set(computeAvgItemSize(rawDataSize, itemsCount))
+	statMap.AddStatValueFiltered("avg_item_size", &s.avgItemSize)
+
+	s.waitLat.Set(waitLat)
+	statMap.AddStatValueFiltered("avg_scan_wait_latency", &s.waitLat)
+
+	s.scanReqLat.Set(scanReqLat)
+	statMap.AddStatValueFiltered("avg_scan_request_latency", &s.scanReqLat)
+
+	s.keySizeDist.Set(s.getKeySizeStats())
+	statMap.AddStatValueFiltered("key_size_distribution", &s.keySizeDist)
+
+	if s.isArrayIndex {
+		if common.GetStorageMode() == common.PLASMA {
+			s.arrKeySizeDist.Set(s.getArrKeySizeStats())
+			statMap.AddStatValueFiltered("arrkey_size_distribution", &s.arrKeySizeDist)
+		}
+
+		docidCount := s.partnInt64Stats(func(ss *IndexStats) int64 {
+			return ss.docidCount.Value()
+		})
+
+		s.docidCountHolder.Set(docidCount)
+		statMap.AddStatValueFiltered("docid_count", &s.docidCountHolder)
+
+		s.avgArrLenHolder.Set(computeAvgArrayLength(itemsCount, docidCount))
+		statMap.AddStatValueFiltered("avg_array_length", &s.avgArrLenHolder)
+	}
+
+	if !spec.essential {
+		s.scanReqInitLat.Set(scanReqInitLat)
+		statMap.AddStatValueFiltered("avg_scan_request_init_latency", &s.scanReqInitLat)
+
+		s.scanReqAllocLat.Set(scanReqAllocLat)
+		statMap.AddStatValueFiltered("avg_scan_request_alloc_latency", &s.scanReqAllocLat)
+	}
+
+	// -------------------------------
+	// All partnMaxInt64Stats
+	// -------------------------------
+	statMap.AddAggrStatFiltered("key_size_stats_since",
+		func(ss *IndexStats) int64 {
+			return ss.keySizeStatsSince.Value()
+		},
+		&s.keySizeStatsSince, s.partnMaxInt64Stats)
+
+	// -------------------------------
+	// All partnAvgInt64Stats
+	// -------------------------------
+	statMap.AddAggrStatFiltered("frag_percent",
+		func(ss *IndexStats) int64 {
+			return ss.fragPercent.Value()
+		},
+		&s.fragPercent, s.partnAvgInt64Stats)
+
+	statMap.AddAggrStatFiltered("disk_store_duration",
+		func(ss *IndexStats) int64 {
+			return ss.diskSnapStoreDuration.Value()
+		},
+		&s.diskSnapStoreDuration, s.partnAvgInt64Stats)
+
+	statMap.AddAggrStatFiltered("disk_load_duration",
+		func(ss *IndexStats) int64 {
+			return ss.diskSnapLoadDuration.Value()
+		},
+		&s.diskSnapLoadDuration, s.partnAvgInt64Stats)
+
+	statMap.AddAggrStatFiltered("resident_percent",
+		func(ss *IndexStats) int64 {
+			return ss.residentPercent.Value()
+		},
+		&s.residentPercent, s.partnAvgInt64Stats)
+
+	statMap.AddAggrStatFiltered("cache_hit_percent",
+		func(ss *IndexStats) int64 {
+			return ss.cacheHitPercent.Value()
+		},
+		&s.cacheHitPercent, s.partnAvgInt64Stats)
+
+	// TODO:
+	// Right now, there aren't any consumer specific stats that are essential.
+	// But there needs a better way to handle this. May be a separate consumer
+	// for non-essential/essential stats?
+	if !spec.essential {
+
+		// ------------------------------------------------------------
+		// All partnTimingStats
+		// If timing stat is partitioned, the final value
+		// is aggreated across the partitions (sum, count, sumOfSq).
+		// ------------------------------------------------------------
+		statMap.AddAggrTimingStatFiltered("timings/dcp_getseqs",
+			func(ss *IndexStats) *stats.TimingStat {
+				return &ss.Timings.dcpSeqs
+			},
+			&s.Timings.dcpSeqs, s.partnTimingStats)
+
+		statMap.AddAggrTimingStatFiltered("timings/storage_clone_handle",
+			func(ss *IndexStats) *stats.TimingStat {
+				return &ss.Timings.stCloneHandle
+			},
+			&s.Timings.stCloneHandle, s.partnTimingStats)
+
+		statMap.AddAggrTimingStatFiltered("timings/storage_commit",
+			func(ss *IndexStats) *stats.TimingStat {
+				return &ss.Timings.stCommit
+			},
+			&s.Timings.stCommit, s.partnTimingStats)
+
+		statMap.AddAggrTimingStatFiltered("timings/storage_new_iterator",
+			func(ss *IndexStats) *stats.TimingStat {
+				return &ss.Timings.stNewIterator
+			},
+			&s.Timings.stNewIterator, s.partnTimingStats)
+
+		statMap.AddAggrTimingStatFiltered("timings/storage_snapshot_create",
+			func(ss *IndexStats) *stats.TimingStat {
+				return &ss.Timings.stSnapshotCreate
+			},
+			&s.Timings.stSnapshotCreate, s.partnTimingStats)
+
+		statMap.AddAggrTimingStatFiltered("timings/storage_snapshot_close",
+			func(ss *IndexStats) *stats.TimingStat {
+				return &ss.Timings.stSnapshotClose
+			},
+			&s.Timings.stSnapshotClose, s.partnTimingStats)
+
+		statMap.AddAggrTimingStatFiltered("timings/storage_persist_snapshot_create",
+			func(ss *IndexStats) *stats.TimingStat {
+				return &ss.Timings.stPersistSnapshotCreate
+			},
+			&s.Timings.stPersistSnapshotCreate, s.partnTimingStats)
+
+		statMap.AddAggrTimingStatFiltered("timings/storage_get",
+			func(ss *IndexStats) *stats.TimingStat {
+				return &ss.Timings.stKVGet
+			},
+			&s.Timings.stKVGet, s.partnTimingStats)
+
+		statMap.AddAggrTimingStatFiltered("timings/storage_set",
+			func(ss *IndexStats) *stats.TimingStat {
+				return &ss.Timings.stKVSet
+			},
+			&s.Timings.stKVSet, s.partnTimingStats)
+
+		statMap.AddAggrTimingStatFiltered("timings/storage_iterator_next",
+			func(ss *IndexStats) *stats.TimingStat {
+				return &ss.Timings.stIteratorNext
+			},
+			&s.Timings.stIteratorNext, s.partnTimingStats)
+
+		statMap.AddAggrTimingStatFiltered("timings/scan_pipeline_iterate",
+			func(ss *IndexStats) *stats.TimingStat {
+				return &ss.Timings.stScanPipelineIterate
+			},
+			&s.Timings.stScanPipelineIterate, s.partnTimingStats)
+
+		statMap.AddAggrTimingStatFiltered("timings/storage_del",
+			func(ss *IndexStats) *stats.TimingStat {
+				return &ss.Timings.stKVDelete
+			},
+			&s.Timings.stKVDelete, s.partnTimingStats)
+
+		statMap.AddAggrTimingStatFiltered("timings/storage_info",
+			func(ss *IndexStats) *stats.TimingStat {
+				return &ss.Timings.stKVInfo
+			},
+			&s.Timings.stKVInfo, s.partnTimingStats)
+
+		statMap.AddAggrTimingStatFiltered("timings/storage_meta_get",
+			func(ss *IndexStats) *stats.TimingStat {
+				return &ss.Timings.stKVMetaGet
+			},
+			&s.Timings.stKVMetaGet, s.partnTimingStats)
+
+		statMap.AddAggrTimingStatFiltered("timings/storage_meta_set",
+			func(ss *IndexStats) *stats.TimingStat {
+				return &ss.Timings.stKVMetaSet
+			},
+			&s.Timings.stKVMetaSet, s.partnTimingStats)
+
+		statMap.AddAggrTimingStatFiltered("timings/n1ql_expr_eval",
+			func(ss *IndexStats) *stats.TimingStat {
+				return &ss.Timings.n1qlExpr
+			},
+			&s.Timings.n1qlExpr, s.partnTimingStats)
+
+		// -------------------------------
+		// All int64Stats
+		// -------------------------------
+		statMap.AddAggrStatFiltered("num_requests_range",
+			func(ss *IndexStats) int64 {
+				return ss.numRequestsRange.Value()
+			},
+			&s.numRequestsRange, s.int64Stats)
+
+		statMap.AddAggrStatFiltered("num_completed_requests_range",
+			func(ss *IndexStats) int64 {
+				return ss.numCompletedRequestsRange.Value()
+			},
+			&s.numCompletedRequestsRange, s.int64Stats)
+
+		statMap.AddAggrStatFiltered("num_rows_returned_range",
+			func(ss *IndexStats) int64 {
+				return ss.numRowsReturnedRange.Value()
+			},
+			&s.numRowsReturnedRange, s.int64Stats)
+
+		statMap.AddAggrStatFiltered("num_rows_scanned_range",
+			func(ss *IndexStats) int64 {
+				return ss.numRowsScannedRange.Value()
+			},
+			&s.numRowsScannedRange, s.int64Stats)
+
+		statMap.AddAggrStatFiltered("scan_cache_hit_range",
+			func(ss *IndexStats) int64 {
+				return ss.scanCacheHitRange.Value()
+			},
+			&s.scanCacheHitRange, s.int64Stats)
+
+		statMap.AddAggrStatFiltered("num_requests_aggr",
+			func(ss *IndexStats) int64 {
+				return ss.numRequestsAggr.Value()
+			},
+			&s.numRequestsAggr, s.int64Stats)
+
+		statMap.AddAggrStatFiltered("num_completed_requests_aggr",
+			func(ss *IndexStats) int64 {
+				return ss.numCompletedRequestsAggr.Value()
+			},
+			&s.numCompletedRequestsAggr, s.int64Stats)
+
+		statMap.AddAggrStatFiltered("num_rows_returned_aggr",
+			func(ss *IndexStats) int64 {
+				return ss.numRowsReturnedAggr.Value()
+			},
+			&s.numRowsReturnedAggr, s.int64Stats)
+
+		statMap.AddAggrStatFiltered("num_rows_scanned_aggr",
+			func(ss *IndexStats) int64 {
+				return ss.numRowsScannedAggr.Value()
+			},
+			&s.numRowsScannedAggr, s.int64Stats)
+
+		statMap.AddAggrStatFiltered("scan_cache_hit_aggr",
+			func(ss *IndexStats) int64 {
+				return ss.scanCacheHitAggr.Value()
+			},
+			&s.scanCacheHitAggr, s.int64Stats)
+
+		statMap.AddStatByInstIdFiltered("completion_progress",
+			func(ss *IndexStats) int64 {
+				return ss.completionProgress.Value()
+			},
+			&s.completionProgress, s.int64Stats)
+	}
+}
+
 func (is IndexerStats) MarshalJSON(spec *statsSpec) ([]byte, error) {
 	stats := is.GetStats(spec)
 
@@ -1485,23 +1765,166 @@ func NewIndexerStats() *IndexerStats {
 	return s
 }
 
+// ----------------------------------------------------------------------------
+// For many int64 stats, aggregation of the stats across partitions is
+// done for reporting the stat values. A generic format of the functions
+// used for stats aggregation is defined by StatAggrFunc.
+// ----------------------------------------------------------------------------
+type StatAggrFunc func(func(*IndexStats) int64) int64
+
+type TimingStatAggrFunc func(func(*IndexStats) *stats.TimingStat) string
+
+// ----------------------------------------------------------------------------
+// A map that holds the stats. This struct provides the necessary abstraction
+// for the stats map returned by IndexerStats::GetStats.
+// ----------------------------------------------------------------------------
+type StatsMap struct {
+	stMap  map[string]interface{}
+	prefix string
+	instId string
+	spec   *statsSpec
+}
+
+func NewStatsMap(spec *statsSpec) *StatsMap {
+	st := StatsMap{
+		stMap: make(map[string]interface{}),
+		spec:  spec,
+	}
+
+	return &st
+}
+
+func (st *StatsMap) GetMap() map[string]interface{} {
+	return st.stMap
+}
+
+func (st *StatsMap) SetInstId(instId string) {
+	st.instId = instId
+}
+
+func (st *StatsMap) SetPrefix(prefix string) {
+	st.prefix = prefix
+}
+
+func (st *StatsMap) AddStatValueFiltered(k string, stat stats.StatVal) {
+	if !stat.Map(st.spec.consumerFilter) {
+		return
+	}
+
+	st.AddStat(k, stat.GetValue())
+}
+
+func (st *StatsMap) AddStat(k string, v interface{}) {
+	if !st.spec.skipEmpty {
+		st.stMap[fmt.Sprintf("%s%s", st.prefix, k)] = v
+	} else if n, ok := v.(int64); ok && n != 0 {
+		st.stMap[fmt.Sprintf("%s%s", st.prefix, k)] = v
+	} else if s, ok := v.(string); ok && len(s) != 0 && s != "0 0 0" && s != "0" {
+		st.stMap[fmt.Sprintf("%s%s", st.prefix, k)] = v
+	}
+}
+
+func (st *StatsMap) AddStatByInstId(k string, v interface{}) {
+	if !st.spec.skipEmpty {
+		st.stMap[fmt.Sprintf("%s%s", st.instId, k)] = v
+	} else if n, ok := v.(int64); ok && n != 0 {
+		st.stMap[fmt.Sprintf("%s%s", st.instId, k)] = v
+	} else if s, ok := v.(string); ok && len(s) != 0 && s != "0 0 0" && s != "0" {
+		st.stMap[fmt.Sprintf("%s%s", st.instId, k)] = v
+	}
+}
+
+// The reference to the function passed to AddAggrStatFiltered (f) has to be a valid function.
+func (st *StatsMap) AddAggrStatFiltered(k string, f func(*IndexStats) int64,
+	stat stats.StatVal, aggr StatAggrFunc) {
+	if !stat.Map(st.spec.consumerFilter) {
+		return
+	}
+
+	var v interface{}
+	if aggr != nil {
+		v = aggr(f)
+	} else {
+		v = stat.GetValue()
+	}
+	st.AddStat(k, v)
+}
+
+// The reference to the function passed to AddAggrTimingStatFiltered (f) has to be a valid function.
+func (st *StatsMap) AddAggrTimingStatFiltered(k string, f func(*IndexStats) *stats.TimingStat,
+	stat stats.StatVal, aggr TimingStatAggrFunc) {
+	if !stat.Map(st.spec.consumerFilter) {
+		return
+	}
+
+	var v interface{}
+	if aggr != nil {
+		v = aggr(f)
+	} else {
+		v = stat.GetValue()
+	}
+	st.AddStat(k, v)
+}
+
+func (st *StatsMap) AddStatByInstIdFiltered(k string, f func(*IndexStats) int64,
+	stat stats.StatVal, aggr StatAggrFunc) {
+	if !stat.Map(st.spec.consumerFilter) {
+		return
+	}
+
+	v := aggr(f)
+	st.AddStatByInstId(k, v)
+}
+
+func (st *StatsMap) AddFloat64StatFiltered(k string, stat stats.StatVal) {
+	if !stat.Map(st.spec.consumerFilter) {
+		return
+	}
+
+	val := stat.GetValue().(int64)
+	st.AddStat(k, math.Float64frombits(uint64(val)))
+}
+
+//--------------------------------------------------------------------------
+// statsSpec can be used to specify which set of stats are to be returned.
+//--------------------------------------------------------------------------
 type statsSpec struct {
-	indexSpec *common.StatsIndexSpec
-	partition bool
-	pretty    bool
-	skipEmpty bool
-	essential bool
+	indexSpec      *common.StatsIndexSpec
+	partition      bool
+	pretty         bool
+	skipEmpty      bool
+	essential      bool
+	consumerFilter uint64
 }
 
 func NewStatsSpec(partition, pretty, skipEmpty, essential bool, indexSpec *common.StatsIndexSpec) *statsSpec {
 
 	return &statsSpec{
-		partition: partition,
-		pretty:    pretty,
-		skipEmpty: skipEmpty,
-		essential: essential,
-		indexSpec: indexSpec,
+		partition:      partition,
+		pretty:         pretty,
+		skipEmpty:      skipEmpty,
+		essential:      essential,
+		indexSpec:      indexSpec,
+		consumerFilter: stats.AllStatsFilter,
 	}
+}
+
+func (spec *statsSpec) OverrideFilter(filt string) {
+	var filter uint64
+	var ok bool
+
+	if filter, ok = statsFilterMap[filt]; ok {
+		spec.consumerFilter = filter
+	} else {
+		spec.consumerFilter = stats.AllStatsFilter
+	}
+}
+
+var statsFilterMap = map[string]uint64{
+	"planner":     stats.PlannerFilter,
+	"indexStatus": stats.IndexStatusFilter,
+	"rebalancer":  stats.RebalancerFilter,
+	"external":    stats.ExternalStatFilter,
 }
 
 type statsManager struct {
@@ -1612,6 +2035,7 @@ func (s *statsManager) handleStatsReq(w http.ResponseWriter, r *http.Request) {
 	partition := false
 	pretty := false
 	skipEmpty := false
+	consumerFilter := ""
 	if r.Method == "POST" || r.Method == "GET" {
 		if r.URL.Query().Get("async") == "false" {
 			sync = true
@@ -1625,6 +2049,8 @@ func (s *statsManager) handleStatsReq(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("skipEmpty") == "true" {
 			skipEmpty = true
 		}
+
+		consumerFilter = r.URL.Query().Get("consumerFilter")
 
 		var indexSpec *common.StatsIndexSpec
 		if r.ContentLength != 0 || r.Body != nil {
@@ -1648,6 +2074,9 @@ func (s *statsManager) handleStatsReq(w http.ResponseWriter, r *http.Request) {
 		}
 
 		spec := NewStatsSpec(partition, pretty, skipEmpty, false, indexSpec)
+		if consumerFilter != "" {
+			spec.OverrideFilter(consumerFilter)
+		}
 		stats := s.stats.Get()
 
 		t0 := time.Now()
