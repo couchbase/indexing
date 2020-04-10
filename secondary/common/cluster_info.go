@@ -345,27 +345,7 @@ func (c *ClusterInfoCache) fetchServerGroups() error {
 }
 
 func (c *ClusterInfoCache) GetClusterVersion() uint64 {
-	if c.version < 5 {
-		return INDEXER_45_VERSION
-	}
-	if c.version == 5 {
-		if c.minorVersion < 5 {
-			return INDEXER_50_VERSION
-		}
-		if c.minorVersion >= 5 {
-			return INDEXER_55_VERSION
-		}
-	}
-	if c.version == 6 {
-		if c.minorVersion >= 5 {
-			return INDEXER_65_VERSION
-		}
-		return INDEXER_55_VERSION // For 6.0, return 5.5 as indexer version
-	}
-	if c.version == 7 {
-		return INDEXER_70_VERSION
-	}
-	return INDEXER_CUR_VERSION
+	return GetVersion(c.version, c.minorVersion)
 }
 
 func (c *ClusterInfoCache) GetServerGroup(nid NodeId) string {
