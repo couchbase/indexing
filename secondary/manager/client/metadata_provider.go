@@ -480,7 +480,9 @@ func (o *MetadataProvider) makePrepareIndexRequest(defnId c.IndexDefnId, name st
 			}
 
 			if response != nil && response.Accept {
-				logging.Infof("Indexer %v accept prepare request. Index (%v, %v)", w.getAdminAddr(), bucket, name)
+				logging.Infof("Indexer %v accept prepare request. Index (%v, %v, %v, %v)",
+					w.getAdminAddr(), bucket, scope, collection, name)
+
 				atomic.AddUint32(&accept, 1)
 				return
 			}
@@ -686,7 +688,8 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn, plan map
 	if o.settings.AllowPartialQuorum() {
 		if len(idxDefn.Nodes) != 0 {
 			logging.Infof("As per the setting, allowing partial quorum for creation "+
-				"of the index name=%v, bucket=%v", idxDefn.Name, idxDefn.Bucket)
+				"of the index name=%v, bucket=%v, scope=%v, collection=%v",
+				idxDefn.Name, idxDefn.Bucket, idxDefn.Scope, idxDefn.Collection)
 		}
 		useNodes = idxDefn.Nodes
 	}
