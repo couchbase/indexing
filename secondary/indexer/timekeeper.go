@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/couchbase/indexing/secondary/common"
-	couchbase "github.com/couchbase/indexing/secondary/dcp"
 	"github.com/couchbase/indexing/secondary/logging"
 )
 
@@ -45,8 +44,7 @@ type timekeeper struct {
 	indexInstMap  common.IndexInstMap
 	indexPartnMap IndexPartnMap
 
-	statsLock  sync.Mutex
-	bucketConn map[string]*couchbase.Bucket
+	statsLock sync.Mutex
 
 	stats           IndexerStatsHolder
 	vbCheckerStopCh chan bool
@@ -91,7 +89,6 @@ func NewTimekeeper(supvCmdch MsgChannel, supvRespch MsgChannel,
 		indexInstMap:   make(common.IndexInstMap),
 		indexPartnMap:  make(IndexPartnMap),
 		indexBuildInfo: make(map[common.IndexInstId]*InitialBuildInfo),
-		bucketConn:     make(map[string]*couchbase.Bucket),
 	}
 
 	//start timekeeper loop which listens to commands from its supervisor
@@ -3143,15 +3140,17 @@ func (tk *timekeeper) repairStream(streamId common.StreamId,
 		respCh := make(MsgChannel)
 		stopCh := tk.ss.streamKeyspaceIdRepairStopCh[streamId][keyspaceId]
 		sessionId := tk.ss.getSessionId(streamId, keyspaceId)
+		cid := tk.ss.streamKeyspaceIdCollectionId[streamId][keyspaceId]
 
 		restartMsg := &MsgRestartVbuckets{streamId: streamId,
-			keyspaceId: keyspaceId,
-			restartTs:  repairTs,
-			respCh:     respCh,
-			stopCh:     stopCh,
-			connErrVbs: connErrVbs,
-			repairVbs:  repairVbs,
-			sessionId:  sessionId}
+			keyspaceId:   keyspaceId,
+			restartTs:    repairTs,
+			respCh:       respCh,
+			stopCh:       stopCh,
+			connErrVbs:   connErrVbs,
+			repairVbs:    repairVbs,
+			sessionId:    sessionId,
+			collectionId: cid}
 
 		go tk.sendRestartMsg(restartMsg)
 
@@ -3423,6 +3422,7 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 		}
 
 		bucket, _, _ := SplitKeyspaceId(keyspaceId)
+		//TODO Collections Validate scope and collection
 		if !ValidateBucket(tk.config["clusterAddr"].String(), bucket, bucketUUIDList) {
 			logging.Errorf("Timekeeper::sendRestartMsg Bucket Not Found "+
 				"For Stream %v KeyspaceId %v Bucket %v", streamId, keyspaceId, bucket)
@@ -3492,18 +3492,6 @@ func (tk *timekeeper) handleUpdateIndexInstMap(cmd Message) {
 	logging.Tracef("Timekeeper::handleUpdateIndexInstMap %v", cmd)
 	indexInstMap := req.GetIndexInstMap()
 
-	// Cleanup bucket conn cache for unused buckets
-	validBuckets := make(map[string]bool)
-	for _, inst := range indexInstMap {
-		validBuckets[inst.Defn.Bucket] = true
-	}
-
-	for _, inst := range tk.indexInstMap {
-		if _, ok := validBuckets[inst.Defn.Bucket]; !ok {
-			tk.removeBucketConn(inst.Defn.Bucket)
-		}
-	}
-
 	tk.stats.Set(req.GetStatsObject())
 	tk.indexInstMap = common.CopyIndexInstMap(indexInstMap)
 	tk.supvCmdch <- &MsgSuccess{}
@@ -3517,43 +3505,6 @@ func (tk *timekeeper) handleUpdateIndexPartnMap(cmd Message) {
 	indexPartnMap := cmd.(*MsgUpdatePartnMap).GetIndexPartnMap()
 	tk.indexPartnMap = CopyIndexPartnMap(indexPartnMap)
 	tk.supvCmdch <- &MsgSuccess{}
-}
-
-func (tk *timekeeper) removeBucketConn(name string) {
-	tk.statsLock.Lock()
-	defer tk.statsLock.Unlock()
-	tk.removeBucketConnUnlocked(name)
-}
-
-func (tk *timekeeper) removeBucketConnUnlocked(name string) {
-	if b, ok := tk.bucketConn[name]; ok {
-		b.Close()
-		delete(tk.bucketConn, name)
-	}
-}
-
-func (tk *timekeeper) getBucketConn(name string, refresh bool) (*couchbase.Bucket, error) {
-	var ok bool
-	var b *couchbase.Bucket
-	var err error
-
-	tk.statsLock.Lock()
-	defer tk.statsLock.Unlock()
-
-	b, ok = tk.bucketConn[name]
-	if ok && !refresh {
-		return b, nil
-	} else {
-		// Close the old bucket instance
-		tk.removeBucketConnUnlocked(name)
-		logging.Infof("Timekeeper::getBucketConn Creating new conn for bucket: %v", name)
-		b, err = common.ConnectBucket(tk.config["clusterAddr"].String(), "default", name)
-		if err != nil {
-			return nil, err
-		}
-		tk.bucketConn[name] = b
-		return b, nil
-	}
 }
 
 func (tk *timekeeper) handleStats(cmd Message) {
@@ -3574,8 +3525,8 @@ func (tk *timekeeper) handleStats(cmd Message) {
 			return
 		}
 
-		// Populate current KV timestamps for all buckets
-		bucketTsMap := make(map[string]Timestamp)
+		// Populate current KV timestamps for all keyspaces
+		keyspaceIdTsMap := make(map[string]Timestamp)
 		for _, inst := range indexInstMap {
 			//skip deleted indexes
 			if inst.State == common.INDEX_STATE_DELETED {
@@ -3585,12 +3536,13 @@ func (tk *timekeeper) handleStats(cmd Message) {
 			var kvTs Timestamp
 			var err error
 
-			if _, ok := bucketTsMap[inst.Defn.Bucket]; !ok {
+			keyspaceId := inst.Defn.KeyspaceId(inst.Stream)
+			if _, ok := keyspaceIdTsMap[keyspaceId]; !ok {
 				rh := common.NewRetryHelper(maxStatsRetries, time.Second, 1, func(a int, err error) error {
 					cluster := tk.config["clusterAddr"].String()
 					numVbuckets := tk.config["numVbuckets"].Int()
-					//TODO pass collection Id
-					kvTs, err = GetCurrentKVTs(cluster, "default", inst.Defn.Bucket, "", numVbuckets)
+					//TODO Collections pass collection Id
+					kvTs, err = GetCurrentKVTs(cluster, "default", keyspaceId, "", numVbuckets)
 					return err
 				})
 				if err = rh.Run(); err != nil {
@@ -3599,7 +3551,7 @@ func (tk *timekeeper) handleStats(cmd Message) {
 					return
 				}
 
-				bucketTsMap[inst.Defn.Bucket] = kvTs
+				keyspaceIdTsMap[keyspaceId] = kvTs
 			}
 		}
 
@@ -3613,9 +3565,10 @@ func (tk *timekeeper) handleStats(cmd Message) {
 				continue
 			}
 
+			keyspaceId := inst.Defn.KeyspaceId(inst.Stream)
 			idxStats := stats.indexes[inst.InstId]
 			flushedCount := uint64(0)
-			flushedTs := tk.ss.streamKeyspaceIdLastFlushedTsMap[inst.Stream][inst.Defn.KeyspaceId(inst.Stream)]
+			flushedTs := tk.ss.streamKeyspaceIdLastFlushedTsMap[inst.Stream][keyspaceId]
 			if flushedTs != nil {
 				for _, seqno := range flushedTs.Seqnos {
 					flushedCount += seqno
@@ -3623,7 +3576,7 @@ func (tk *timekeeper) handleStats(cmd Message) {
 			}
 
 			v := float64(flushedCount)
-			receivedTs := tk.ss.streamKeyspaceIdHWTMap[inst.Stream][inst.Defn.KeyspaceId(inst.Stream)]
+			receivedTs := tk.ss.streamKeyspaceIdHWTMap[inst.Stream][keyspaceId]
 			queued := uint64(0)
 			if receivedTs != nil {
 				for i, seqno := range receivedTs.Seqnos {
@@ -3637,7 +3590,7 @@ func (tk *timekeeper) handleStats(cmd Message) {
 			}
 
 			pending := uint64(0)
-			kvTs := bucketTsMap[inst.Defn.Bucket]
+			kvTs := keyspaceIdTsMap[keyspaceId]
 			for i, seqno := range kvTs {
 				recvdSeqno := uint64(0)
 				if receivedTs != nil {
@@ -3675,7 +3628,7 @@ func (tk *timekeeper) handleStats(cmd Message) {
 				idxStats.numDocsPending.Set(int64(pending))
 				idxStats.buildProgress.Set(int64(v))
 				idxStats.completionProgress.Set(int64(math.Float64bits(v)))
-				idxStats.lastRollbackTime.Set(tk.ss.keyspaceIdRollbackTime[inst.Defn.KeyspaceId(inst.Stream)])
+				idxStats.lastRollbackTime.Set(tk.ss.keyspaceIdRollbackTime[keyspaceId])
 				idxStats.progressStatTime.Set(time.Now().UnixNano())
 			}
 		}
