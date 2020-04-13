@@ -1423,7 +1423,7 @@ func (r *Rebalancer) getBuildProgressFromStatus(status *manager.IndexStatusRespo
 //
 func getLocalStats(addr string, partitioned bool) (*c.Statistics, error) {
 
-	queryStr := "/stats?async=true"
+	queryStr := "/stats?async=true&consumerFilter=rebalancer"
 	if partitioned {
 		queryStr += "&partition=true"
 	}
