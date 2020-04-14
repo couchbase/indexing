@@ -1,27 +1,32 @@
 package querycmd
 
-import json "github.com/couchbase/indexing/secondary/common/json"
-import "flag"
-import "fmt"
-import "io"
-import "bytes"
-import "strings"
-import "strconv"
-import "net"
-import "errors"
-import "time"
-import "net/http"
-import "io/ioutil"
-import "os"
+import (
+	"bytes"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"io/ioutil"
+	"net"
+	"net/http"
+	"os"
+	"strconv"
+	"strings"
+	"time"
 
-import "github.com/couchbase/cbauth"
-import "github.com/couchbase/indexing/secondary/logging"
-import "github.com/couchbase/indexing/secondary/security"
-import c "github.com/couchbase/indexing/secondary/common"
-import mclient "github.com/couchbase/indexing/secondary/manager/client"
-import qclient "github.com/couchbase/indexing/secondary/queryport/client"
-import "github.com/couchbase/query/expression"
-import "github.com/couchbase/query/parser/n1ql"
+	"github.com/couchbase/cbauth"
+	json "github.com/couchbase/indexing/secondary/common/json"
+	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/security"
+
+	c "github.com/couchbase/indexing/secondary/common"
+
+	mclient "github.com/couchbase/indexing/secondary/manager/client"
+
+	qclient "github.com/couchbase/indexing/secondary/queryport/client"
+	"github.com/couchbase/query/expression"
+	"github.com/couchbase/query/parser/n1ql"
+)
 
 // Command object containing parsed result from command-line
 // or program constructued list of args.
@@ -57,6 +62,9 @@ type Command struct {
 	ConfigKey string
 	ConfigVal string
 	Help      bool
+
+	Scope      string
+	Collection string
 }
 
 // ParseArgs into Command object, return the list of arguments,
@@ -96,6 +104,10 @@ func ParseArgs(arguments []string) (*Command, []string, *flag.FlagSet, error) {
 	fset.StringVar(&cmdOptions.ConfigKey, "ckey", "", "Config key")
 	fset.StringVar(&cmdOptions.ConfigVal, "cval", "", "Config value")
 	fset.StringVar(&cmdOptions.Using, "using", "gsi", "storage type to use")
+
+	//collection specific
+	fset.StringVar(&cmdOptions.Scope, "scope", "", "Scope name")
+	fset.StringVar(&cmdOptions.Collection, "collection", "", "Collection name")
 
 	// not useful to expose in sherlock
 	cmdOptions.ExprType = "N1QL"
@@ -172,6 +184,14 @@ func HandleCommand(
 	low, high, equal, incl := cmd.Low, cmd.High, cmd.Equal, cmd.Inclusion
 	cons := cmd.Consistency
 
+	scope, collection := cmd.Scope, cmd.Collection
+	if scope == "" {
+		scope = c.DEFAULT_SCOPE
+	}
+	if collection == "" {
+		collection = c.DEFAULT_COLLECTION
+	}
+
 	indexes, _, _, err := client.Refresh()
 
 	dataEncFmt := client.GetDataEncodingFormat()
@@ -239,9 +259,9 @@ func HandleCommand(
 		if len(cmd.SecStrs) == 0 && !cmd.IsPrimary || cmd.IndexName == "" {
 			return fmt.Errorf("createIndex(): required fields missing")
 		}
-		defnID, err = client.CreateIndex(
-			iname, bucket, cmd.Using, cmd.ExprType,
-			cmd.PartnStr, cmd.WhereStr, cmd.SecStrs, cmd.IsPrimary,
+		defnID, err = client.CreateIndex4(
+			iname, bucket, scope, collection, cmd.Using, cmd.ExprType,
+			cmd.WhereStr, cmd.SecStrs, nil, cmd.IsPrimary, c.SINGLE, nil,
 			[]byte(cmd.With))
 		if err == nil {
 			fmt.Fprintf(w, "Index created: %v with %q\n", defnID, cmd.With)
@@ -495,8 +515,8 @@ func HandleCommand(
 
 func printIndexInfo(w io.Writer, index *mclient.IndexMetadata) {
 	defn := index.Definition
-	fmt.Fprintf(w, "Index:%s/%s, Id:%v, Using:%s, Exprs:%v, isPrimary:%v\n",
-		defn.Bucket, defn.Name, defn.DefnId, defn.Using, defn.SecExprs,
+	fmt.Fprintf(w, "Index:%s/%s/%s/%s, Id:%v, Using:%s, Exprs:%v, isPrimary:%v\n",
+		defn.Bucket, defn.Scope, defn.Collection, defn.Name, defn.DefnId, defn.Using, defn.SecExprs,
 		defn.IsPrimary)
 	insts := index.Instances
 	if len(insts) < 1 {
