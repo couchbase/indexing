@@ -40,6 +40,7 @@ import (
 type LifecycleMgr struct {
 	repo             *MetadataRepo
 	cinfo            *common.ClusterInfoCache
+	cinfoClient      *common.ClusterInfoClient
 	notifier         MetadataNotifier
 	clusterURL       string
 	incomings        chan *requestHolder
@@ -145,7 +146,8 @@ type updator struct {
 // Lifecycle Mgr - event processing
 //////////////////////////////////////////////////////////////
 
-func NewLifecycleMgr(notifier MetadataNotifier, clusterURL string) (*LifecycleMgr, error) {
+func NewLifecycleMgr(notifier MetadataNotifier, clusterURL string,
+	cinfoClient *common.ClusterInfoClient) (*LifecycleMgr, error) {
 
 	cinfo, err := common.FetchNewClusterInfoCache(clusterURL, common.DEFAULT_POOL, "NewLifecycleMgr")
 	if err != nil {
@@ -155,6 +157,7 @@ func NewLifecycleMgr(notifier MetadataNotifier, clusterURL string) (*LifecycleMg
 
 	mgr := &LifecycleMgr{repo: nil,
 		cinfo:               cinfo,
+		cinfoClient:         cinfoClient,
 		notifier:            notifier,
 		clusterURL:          clusterURL,
 		incomings:           make(chan *requestHolder, 100000),
@@ -1276,16 +1279,10 @@ func (m *LifecycleMgr) setScopeIdAndCollectionId(defn *common.IndexDefn) error {
 
 	if atomic.LoadUint32(&m.collAwareCluster) == 0 {
 
-		// TODO (Collections): Use lifecycle manager's cluster info client
-		// once it is available
-		m.cinfo.Lock()
-		defer m.cinfo.Unlock()
+		// Get cluster version from common
+		clusterVersion := common.GetClusterVersion()
 
-		if err := m.cinfo.Fetch(); err != nil {
-			return err
-		}
-
-		if m.cinfo.GetClusterVersion() < common.INDEXER_70_VERSION {
+		if clusterVersion < (int64)(common.INDEXER_70_VERSION) {
 			// The cluster compatibiltity is less than 7.0
 			// ScopeId and CollectionId cannot be obtained during mixed mode,
 			// hence use default IDs and skip the verification
@@ -3531,15 +3528,21 @@ func (m *LifecycleMgr) getServiceMap() (*client.ServiceMap, error) {
 func (m *LifecycleMgr) getBucketUUID(bucket string) (string, error) {
 	count := 0
 RETRY:
-	uuid, err := common.GetBucketUUID(m.clusterURL, bucket)
-	if err != nil && count < 5 {
+	cinfo := m.cinfoClient.GetClusterInfoCache()
+
+	cinfo.RLock()
+	uuid := cinfo.GetBucketUUID(bucket)
+	cinfo.RUnlock()
+
+	if uuid == common.BUCKET_UUID_NIL && count < 5 {
 		count++
 		time.Sleep(time.Duration(100) * time.Millisecond)
+		// Force fetch cluster info client
+		err := m.cinfoClient.FetchWithLock()
+		if err != nil {
+			return common.BUCKET_UUID_NIL, err
+		}
 		goto RETRY
-	}
-
-	if err != nil {
-		return common.BUCKET_UUID_NIL, err
 	}
 
 	return uuid, nil
@@ -3551,19 +3554,23 @@ RETRY:
 func (m *LifecycleMgr) getCollectionID(bucket, scope, collection string) (string, error) {
 	count := 0
 RETRY:
-	//TODO Collections - change to use cinfo.GetCollectionID once streaming
-	//rest endpoint is available
-	colldId, err := common.GetCollectionID(m.clusterURL, bucket, scope, collection)
-	if err != nil && count < 5 {
+	cinfo := m.cinfoClient.GetClusterInfoCache()
+
+	cinfo.RLock()
+	colldId := cinfo.GetCollectionID(bucket, scope, collection)
+	cinfo.RUnlock()
+
+	if colldId == collections.COLLECTION_ID_NIL && count < 5 {
 		count++
 		time.Sleep(time.Duration(100) * time.Millisecond)
+
+		// Force fetch cluster infocache
+		err := m.cinfoClient.FetchWithLock()
+		if err != nil {
+			return collections.COLLECTION_ID_NIL, err
+		}
 		goto RETRY
 	}
-
-	if err != nil {
-		return "", err
-	}
-
 	return colldId, nil
 }
 
@@ -3573,15 +3580,21 @@ RETRY:
 func (m *LifecycleMgr) getScopeID(bucket, scope string) (string, error) {
 	count := 0
 RETRY:
-	scopeId, err := common.GetScopeID(m.clusterURL, bucket, scope)
-	if err != nil && count < 5 {
+	cinfo := m.cinfoClient.GetClusterInfoCache()
+
+	cinfo.RLock()
+	scopeId := cinfo.GetScopeID(bucket, scope)
+	cinfo.RUnlock()
+
+	if scopeId == collections.SCOPE_ID_NIL && count < 5 {
 		count++
 		time.Sleep(time.Duration(100) * time.Millisecond)
+		// Force fetch cluster info cache
+		err := m.cinfoClient.FetchWithLock()
+		if err != nil {
+			return collections.SCOPE_ID_NIL, err
+		}
 		goto RETRY
-	}
-
-	if err != nil {
-		return "", err
 	}
 
 	return scopeId, nil
@@ -3594,15 +3607,22 @@ RETRY:
 func (m *LifecycleMgr) getScopeAndCollectionID(bucket, scope, collection string) (string, string, error) {
 	count := 0
 RETRY:
-	scopeId, colldId, err := common.GetScopeAndCollectionID(m.clusterURL, bucket, scope, collection)
-	if err != nil && count < 5 {
+	cinfo := m.cinfoClient.GetClusterInfoCache()
+
+	cinfo.RLock()
+	scopeId, colldId := cinfo.GetScopeAndCollectionID(bucket, scope, collection)
+	cinfo.RUnlock()
+
+	if (scopeId == collections.SCOPE_ID_NIL || colldId == collections.COLLECTION_ID_NIL) && count < 5 {
 		count++
 		time.Sleep(time.Duration(100) * time.Millisecond)
-		goto RETRY
-	}
 
-	if err != nil {
-		return "", "", err
+		// Force fetch cluster info cache on errors
+		err := m.cinfoClient.FetchWithLock()
+		if err != nil {
+			return collections.SCOPE_ID_NIL, collections.COLLECTION_ID_NIL, err
+		}
+		goto RETRY
 	}
 
 	return scopeId, colldId, nil
