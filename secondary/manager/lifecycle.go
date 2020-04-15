@@ -39,6 +39,7 @@ import (
 type LifecycleMgr struct {
 	repo          *MetadataRepo
 	cinfo         *common.ClusterInfoCache
+	cinfoClient   *common.ClusterInfoClient
 	notifier      MetadataNotifier
 	clusterURL    string
 	incomings     chan *requestHolder
@@ -138,7 +139,8 @@ type updator struct {
 // Lifecycle Mgr - event processing
 //////////////////////////////////////////////////////////////
 
-func NewLifecycleMgr(notifier MetadataNotifier, clusterURL string) (*LifecycleMgr, error) {
+func NewLifecycleMgr(notifier MetadataNotifier, clusterURL string,
+	cinfoClient *common.ClusterInfoClient) (*LifecycleMgr, error) {
 
 	cinfo, err := common.FetchNewClusterInfoCache(clusterURL, common.DEFAULT_POOL)
 	if err != nil {
@@ -147,6 +149,7 @@ func NewLifecycleMgr(notifier MetadataNotifier, clusterURL string) (*LifecycleMg
 
 	mgr := &LifecycleMgr{repo: nil,
 		cinfo:        cinfo,
+		cinfoClient:  cinfoClient,
 		notifier:     notifier,
 		clusterURL:   clusterURL,
 		incomings:    make(chan *requestHolder, 100000),
@@ -3102,17 +3105,22 @@ func (m *LifecycleMgr) getServiceMap() (*client.ServiceMap, error) {
 func (m *LifecycleMgr) getBucketUUID(bucket string) (string, error) {
 	count := 0
 RETRY:
-	uuid, err := common.GetBucketUUID(m.clusterURL, bucket)
-	if err != nil && count < 5 {
+	cinfo := m.cinfoClient.GetClusterInfoCache()
+	cinfo.RLock()
+	uuid := cinfo.GetBucketUUID(bucket)
+	if uuid == common.BUCKET_UUID_NIL && count < 5 {
 		count++
+		cinfo.RUnlock()
 		time.Sleep(time.Duration(100) * time.Millisecond)
+		// Refresh cluster info cache
+		err := cinfo.FetchWithLock()
+		if err != nil {
+			return common.BUCKET_UUID_NIL, err
+		}
 		goto RETRY
 	}
 
-	if err != nil {
-		return common.BUCKET_UUID_NIL, err
-	}
-
+	defer cinfo.RUnlock()
 	return uuid, nil
 }
 
