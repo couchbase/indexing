@@ -21,8 +21,18 @@ import (
 	"net/http"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 )
+
+// ClusterInfoClient gets initialized in RetrievePlanFromCluster
+// when this method is invoked for the first time
+var cinfoClient *common.ClusterInfoClient
+
+// This mutex will protect cinfoClient from mulitple initializations
+// since it is possible for RetrievePlanFromCluster to get invoked
+// from multiple go-routines
+var cinfoClientMutex sync.Mutex
 
 //////////////////////////////////////////////////////////////
 // Concrete Type/Struct
@@ -57,22 +67,38 @@ func RetrievePlanFromCluster(clusterUrl string, hosts []string) (*Plan, error) {
 		return nil, err
 	}
 
-	indexers, err := getIndexLayout(clusterUrl, config, hosts)
+	// Initialize cluster info client at the first call of RetrievePlanFromCluster
+	cinfoClientMutex.Lock()
+	if cinfoClient == nil {
+		cinfoClient, err = common.NewClusterInfoClient(clusterUrl, "default", config)
+	}
+	cinfoClientMutex.Unlock()
+	if err != nil { // Error while initilizing clusterInfoClient
+		logging.Errorf("Planner::RetrievePlanFromCluster: Error while initializing cluster info client at %v. Error = %v", clusterUrl, err)
+		return nil, err
+	}
+
+	cinfo := cinfoClient.GetClusterInfoCache()
+	if err := cinfo.FetchWithLock(); err != nil {
+		return nil, err
+	}
+
+	indexers, err := getIndexLayout(config, hosts)
 	if err != nil {
 		return nil, err
 	}
 
-	if err := processCreateToken(clusterUrl, indexers, config); err != nil {
+	if err := processCreateToken(indexers, config); err != nil {
 		return nil, err
 	}
 
 	replicaMap := generateReplicaMap(indexers)
 
-	if err := processDeleteToken(clusterUrl, indexers, config); err != nil {
+	if err := processDeleteToken(indexers, config); err != nil {
 		return nil, err
 	}
 
-	if err := processDropInstanceToken(clusterUrl, indexers, config, replicaMap); err != nil {
+	if err := processDropInstanceToken(indexers, config, replicaMap); err != nil {
 		return nil, err
 	}
 
@@ -86,17 +112,17 @@ func RetrievePlanFromCluster(clusterUrl string, hosts []string) (*Plan, error) {
 		UsedReplicaIdMap: replicaMap,
 	}
 
-	err = getIndexStats(clusterUrl, plan, config)
+	err = getIndexStats(plan, config)
 	if err != nil {
 		return nil, err
 	}
 
-	err = getIndexSettings(clusterUrl, plan)
+	err = getIndexSettings(plan)
 	if err != nil {
 		return nil, err
 	}
 
-	err = getIndexNumReplica(clusterUrl, plan)
+	err = getIndexNumReplica(plan)
 	if err != nil {
 		return nil, err
 	}
@@ -131,14 +157,10 @@ func recalculateIndexerSize(plan *Plan) {
 //
 // This function retrieves the index layout.
 //
-func getIndexLayout(clusterUrl string, config common.Config, hosts []string) ([]*IndexerNode, error) {
-
-	// Fetch a new topology from the cluster.
-	cinfo, err := clusterInfoCache(clusterUrl)
-	if err != nil {
-		logging.Errorf("Planner::getIndexLayout: Error from connecting to cluster at %v. Error = %v", clusterUrl, err)
-		return nil, err
-	}
+func getIndexLayout(config common.Config, hosts []string) ([]*IndexerNode, error) {
+	cinfo := cinfoClient.GetClusterInfoCache()
+	cinfo.RLock()
+	defer cinfo.RUnlock()
 
 	// Find all nodes that has a index http service
 	// 1) This method will exclude inactive_failed node in the cluster.  But if a node failed after the topology is fetched, then
@@ -364,13 +386,11 @@ func ConvertToIndexUsage(config common.Config, defn *common.IndexDefn, localMeta
 //
 // This function retrieves the index stats.
 //
-func getIndexStats(clusterUrl string, plan *Plan, config common.Config) error {
+func getIndexStats(plan *Plan, config common.Config) error {
 
-	cinfo, err := clusterInfoCache(clusterUrl)
-	if err != nil {
-		logging.Errorf("Planner::getIndexStats: Error from connecting to cluster at %v. Error = %v", clusterUrl, err)
-		return err
-	}
+	cinfo := cinfoClient.GetClusterInfoCache()
+	cinfo.RLock()
+	defer cinfo.RUnlock()
 
 	clusterVersion := cinfo.GetClusterVersion()
 
@@ -801,13 +821,11 @@ func getIndexStats(clusterUrl string, plan *Plan, config common.Config) error {
 //
 // This function retrieves the index settings.
 //
-func getIndexSettings(clusterUrl string, plan *Plan) error {
+func getIndexSettings(plan *Plan) error {
 
-	cinfo, err := clusterInfoCache(clusterUrl)
-	if err != nil {
-		logging.Errorf("Planner::getIndexSettings: Error from connecting to cluster at %v. Error = %v", clusterUrl, err)
-		return err
-	}
+	cinfo := cinfoClient.GetClusterInfoCache()
+	cinfo.RLock()
+	defer cinfo.RUnlock()
 
 	// find all nodes that has a index http service
 	nids := cinfo.GetNodesByServiceType(common.INDEX_HTTP_SERVICE)
@@ -1212,13 +1230,11 @@ func findMaxVersionInst(indexers []*IndexerNode, defnId common.IndexDefnId, part
 //
 // There may be create token that has yet to process.  Update the indexer layout based on token information.
 //
-func processCreateToken(clusterUrl string, indexers []*IndexerNode, config common.Config) error {
+func processCreateToken(indexers []*IndexerNode, config common.Config) error {
 
-	cinfo, err := clusterInfoCache(clusterUrl)
-	if err != nil {
-		logging.Errorf("Planner::processCreateToken: Error from connecting to cluster at %v. Error = %v", clusterUrl, err)
-		return err
-	}
+	cinfo := cinfoClient.GetClusterInfoCache()
+	cinfo.RLock()
+	defer cinfo.RUnlock()
 
 	clusterVersion := cinfo.GetClusterVersion()
 	if clusterVersion < common.INDEXER_55_VERSION {
@@ -1342,13 +1358,11 @@ func processCreateToken(clusterUrl string, indexers []*IndexerNode, config commo
 //
 // There may be delete token that has yet to process.  Update the indexer layout based on token information.
 //
-func processDeleteToken(clusterUrl string, indexers []*IndexerNode, config common.Config) error {
+func processDeleteToken(indexers []*IndexerNode, config common.Config) error {
 
-	cinfo, err := clusterInfoCache(clusterUrl)
-	if err != nil {
-		logging.Errorf("Planner::processDeleteToken: Error from connecting to cluster at %v. Error = %v", clusterUrl, err)
-		return err
-	}
+	cinfo := cinfoClient.GetClusterInfoCache()
+	cinfo.RLock()
+	defer cinfo.RUnlock()
 
 	clusterVersion := cinfo.GetClusterVersion()
 	if clusterVersion < common.INDEXER_65_VERSION {
@@ -1421,14 +1435,12 @@ func processDeleteToken(clusterUrl string, indexers []*IndexerNode, config commo
 //
 // There may be drop instance token that has yet to process.  Update the indexer layout based on token information.
 //
-func processDropInstanceToken(clusterUrl string, indexers []*IndexerNode, config common.Config,
+func processDropInstanceToken(indexers []*IndexerNode, config common.Config,
 	replicaIdMap map[common.IndexDefnId]map[int]bool) error {
 
-	cinfo, err := clusterInfoCache(clusterUrl)
-	if err != nil {
-		logging.Errorf("Planner::processDropInstanceToken: Error from connecting to cluster at %v. Error = %v", clusterUrl, err)
-		return err
-	}
+	cinfo := cinfoClient.GetClusterInfoCache()
+	cinfo.RLock()
+	defer cinfo.RUnlock()
 
 	clusterVersion := cinfo.GetClusterVersion()
 	if clusterVersion < common.INDEXER_65_VERSION {
@@ -1509,13 +1521,10 @@ func processDropInstanceToken(clusterUrl string, indexers []*IndexerNode, config
 //
 // get index numReplica
 //
-func getIndexNumReplica(clusterUrl string, plan *Plan) error {
-
-	cinfo, err := clusterInfoCache(clusterUrl)
-	if err != nil {
-		logging.Errorf("Planner::getIndexNumReplica: Error from connecting to cluster at %v. Error = %v", clusterUrl, err)
-		return err
-	}
+func getIndexNumReplica(plan *Plan) error {
+	cinfo := cinfoClient.GetClusterInfoCache()
+	cinfo.RLock()
+	defer cinfo.RUnlock()
 
 	clusterVersion := cinfo.GetClusterVersion()
 	if clusterVersion < common.INDEXER_65_VERSION {
