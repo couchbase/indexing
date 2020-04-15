@@ -930,7 +930,7 @@ func getLocalMetadata(addr string) (*LocalIndexMetadata, error) {
 //
 func getLocalStats(addr string) (*common.Statistics, error) {
 
-	resp, err := getWithCbauth(addr + "/stats?async=false&partition=true")
+	resp, err := getWithCbauth(addr + "/stats?async=false&partition=true&consumerFilter=planner")
 	if err != nil {
 		logging.Warnf("Planner.getLocalStats(): Unable to get the most recent stats.  Try fetch cached stats.")
 		resp, err = getWithCbauth(addr + "/stats?async=true&partition=true")

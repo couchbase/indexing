@@ -525,6 +525,12 @@ func (m *LifecycleMgr) handleCommit(content []byte) ([]byte, error) {
 		return nil, err
 	}
 
+	for _, definitions := range commit.Definitions {
+		for i, _ := range definitions {
+			definitions[i].SetCollectionDefaults()
+		}
+	}
+
 	if commit.Op == client.NEW_INDEX {
 		return m.handleCommitCreateIndex(commit)
 	} else if commit.Op == client.ADD_REPLICA {
@@ -873,6 +879,7 @@ func (m *LifecycleMgr) handleUpdateReplicaCount(content []byte) error {
 		logging.Errorf("LifecycleMgr.handleUpdateReplicaCount() : Unable to unmarshall request. Reason = %v", err)
 		return err
 	}
+	defn.SetCollectionDefaults()
 
 	return m.updateIndexReplicaCount(defn.DefnId, defn.NumReplica2)
 }
@@ -1005,6 +1012,7 @@ func (m *LifecycleMgr) handleCreateIndex(key string, content []byte, reqCtx *com
 		logging.Errorf("LifecycleMgr.handleCreateIndex() : createIndex fails. Unable to unmarshall index definition. Reason = %v", err)
 		return err
 	}
+	defn.SetCollectionDefaults()
 
 	return m.CreateIndexOrInstance(defn, false, reqCtx)
 }
@@ -1017,6 +1025,7 @@ func (m *LifecycleMgr) handleCreateIndexScheduledBuild(key string, content []byt
 		logging.Errorf("LifecycleMgr.handleCreateIndexScheduledBuild() : createIndex fails. Unable to unmarshall index definition. Reason = %v", err)
 		return err
 	}
+	defn.SetCollectionDefaults()
 
 	// Create index with the scheduled flag.
 	return m.CreateIndexOrInstance(defn, true, reqCtx)

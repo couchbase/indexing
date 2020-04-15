@@ -1807,7 +1807,7 @@ func (m *requestHandlerContext) getStatsForNode(addr string, host string, cinfo 
 
 func (m *requestHandlerContext) getStatsFromREST(addr string, hostname string) (*common.Statistics, error) {
 
-	resp, err := getWithAuth(addr + "/stats?async=true")
+	resp, err := getWithAuth(addr + "/stats?async=true&consumerFilter=indexStatus")
 	defer func() {
 		if resp != nil && resp.Body != nil {
 			resp.Body.Close()
