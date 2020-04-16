@@ -1610,23 +1610,11 @@ func (feed *Feed) getLocalKVAddrs(
 	pooln, bucketn string, opaque uint16) (string, error) {
 
 	prefix := feed.logPrefix
-	url, err := c.ClusterAuthUrl(feed.config["clusterAddr"].String())
-	if err != nil {
-		fmsg := "%v ##%x ClusterAuthUrl(): %v\n"
-		logging.Errorf(fmsg, prefix, opaque, err)
-		return "", projC.ErrorClusterInfo
-	}
-	cinfo, err := c.NewClusterInfoCache(url, pooln)
-	if err != nil {
-		fmsg := "%v ##%x ClusterInfoCache(`%v`): %v\n"
-		logging.Errorf(fmsg, prefix, opaque, bucketn, err)
-		return "", projC.ErrorClusterInfo
-	}
-	if err := cinfo.Fetch(); err != nil {
-		fmsg := "%v ##%x cinfo.Fetch(`%v`): %v\n"
-		logging.Errorf(fmsg, prefix, opaque, bucketn, err)
-		return "", projC.ErrorClusterInfo
-	}
+	// Fetch the clusterInfoCache from clusterInfoClient at projector
+	cinfo := feed.projector.cinfoClient.GetClusterInfoCache()
+	cinfo.RLock()
+	defer cinfo.RUnlock()
+
 	kvaddr, err := cinfo.GetLocalServiceAddress("kv")
 	if err != nil {
 		fmsg := "%v ##%x cinfo.GetLocalServiceAddress(`kv`): %v\n"
@@ -1640,22 +1628,12 @@ func (feed *Feed) getLocalVbuckets(
 	pooln, bucketn string, opaque uint16) ([]uint16, error) {
 
 	prefix := feed.logPrefix
-	// gather vbnos based on colocation policy.
-	var cinfo *c.ClusterInfoCache
-	url, err := c.ClusterAuthUrl(feed.config["clusterAddr"].String())
-	if err == nil {
-		cinfo, err = c.NewClusterInfoCache(url, pooln)
-	}
-	if err != nil {
-		fmsg := "%v ##%x ClusterInfoCache(`%v`): %v\n"
-		logging.Errorf(fmsg, prefix, opaque, bucketn, err)
-		return nil, projC.ErrorClusterInfo
-	}
-	if err := cinfo.Fetch(); err != nil {
-		fmsg := "%v ##%x cinfo.Fetch(`%v`): %v\n"
-		logging.Errorf(fmsg, prefix, opaque, bucketn, err)
-		return nil, projC.ErrorClusterInfo
-	}
+
+	// Fetch the clusterInfoCache from clusterInfoClient at projector
+	cinfo := feed.projector.cinfoClient.GetClusterInfoCache()
+	cinfo.RLock()
+	defer cinfo.RUnlock()
+
 	nodeID := cinfo.GetCurrentNode()
 	vbnos32, err := cinfo.GetVBuckets(nodeID, bucketn)
 	if err != nil {
