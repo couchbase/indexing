@@ -134,7 +134,7 @@ func createCollection(bucketName, scopeName, collectionName, serverUserName, ser
 			bucketName, scopeName, collectionName)
 	}
 	// todo : error out if response is error
-	tc.HandleError(err, "Flush Bucket "+address)
+	tc.HandleError(err, "Create Collection "+address)
 	body, _ := ioutil.ReadAll(resp.Body)
 
 	log.Printf("Created collection succeeded for bucket: %v, scope: %v, collection: %v, body: %s", bucketName, scopeName, collectionName, body)
@@ -219,4 +219,25 @@ func GetScopeID(bucketName, scopeName, serverUserName, serverPassword, hostaddre
 		}
 	}
 	return ""
+}
+
+func DropAllScopesAndCollections(bucketName, serverUserName, serverPassword, hostaddress string, dropDefaultCollection bool) {
+
+	manifest := GetManifest(bucketName, serverUserName, serverPassword, hostaddress)
+	for _, scope := range manifest.Scopes {
+
+		if scope.Name != common.DEFAULT_SCOPE {
+			DropScope(bucketName, scope.Name, serverUserName, serverPassword, hostaddress)
+		} else {
+			for _, collection := range scope.Collections {
+				if collection.Name != common.DEFAULT_COLLECTION {
+					DropCollection(bucketName, scope.Name, collection.Name, serverUserName, serverPassword, hostaddress)
+				} else {
+					if dropDefaultCollection {
+						DropCollection(bucketName, scope.Name, collection.Name, serverUserName, serverPassword, hostaddress)
+					}
+				}
+			}
+		}
+	}
 }
