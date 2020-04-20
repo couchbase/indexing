@@ -2049,6 +2049,11 @@ func (tk *timekeeper) flushOrAbortInProgressTS(streamId common.StreamId,
 func (tk *timekeeper) checkInitialBuildDone(streamId common.StreamId,
 	keyspaceId string, flushTs *common.TsVbuuid) bool {
 
+	//TODO Collections - verify this. wait for stream request to be done
+	if ts, ok := tk.ss.streamKeyspaceIdOpenTsMap[streamId][keyspaceId]; !ok || ts == nil {
+		return false
+	}
+
 	for _, buildInfo := range tk.indexBuildInfo {
 
 		if buildInfo.waitForRecovery {
@@ -2160,6 +2165,7 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 	}
 
 	//INIT_STREAM cannot be merged to MAINT_STREAM if its not ACTIVE
+	//TODO Collections - Is this message required in CC?
 	if tk.ss.streamKeyspaceIdStatus[common.MAINT_STREAM][keyspaceId] != STREAM_ACTIVE {
 		logging.Infof("Timekeeper::checkInitStreamReadyToMerge MAINT_STREAM in %v. "+
 			"INIT_STREAM cannot be merged. Continue both streams for keyspaceId %v.",
