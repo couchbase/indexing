@@ -4912,6 +4912,7 @@ func (idx *indexer) handleBuildDoneNoCatchupAck(msg Message) {
 	keyspaceId := msg.(*MsgTKInitBuildDone).GetKeyspaceId()
 	flushTs := msg.(*MsgTKInitBuildDone).GetFlushTs()
 
+	//TODO Collections should this check cover MAINT_STREAM?
 	state := idx.getStreamKeyspaceIdState(streamId, keyspaceId)
 	if state != STREAM_INACTIVE {
 		logging.Fatalf("Indexer::handleBuildDoneNoCatchupAck Unexpected Stream State %v %v %v",
@@ -4923,11 +4924,13 @@ func (idx *indexer) handleBuildDoneNoCatchupAck(msg Message) {
 	logging.Infof("Indexer::handleBuildDoneNoCatchupAck %v %v", streamId, keyspaceId)
 
 	newStream := common.MAINT_STREAM
-	idx.prepareStreamKeyspaceIdForFreshStart(newStream, keyspaceId)
-	sessionId := idx.genNextSessionId(newStream, keyspaceId)
+	//MAINT_STREAM runs at bucket level
+	bucket, _, _ := SplitKeyspaceId(keyspaceId)
+	idx.prepareStreamKeyspaceIdForFreshStart(newStream, bucket)
+	sessionId := idx.genNextSessionId(newStream, bucket)
 
-	idx.setStreamKeyspaceIdState(newStream, keyspaceId, STREAM_ACTIVE)
-	idx.startKeyspaceIdStream(newStream, keyspaceId, flushTs, nil, nil, false, false, sessionId)
+	idx.setStreamKeyspaceIdState(newStream, bucket, STREAM_ACTIVE)
+	idx.startKeyspaceIdStream(newStream, bucket, flushTs, nil, nil, false, false, sessionId)
 }
 
 func (idx *indexer) handleMergeStream(msg Message) {
