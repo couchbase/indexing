@@ -6236,10 +6236,11 @@ func (idx *indexer) initFromPersistedState() error {
 		}
 
 		idx.internalRecvCh <- &MsgUpdateSnapMap{
-			idxInstId:  inst.InstId,
-			idxInst:    inst,
-			partnMap:   partnInstMap,
-			streamId:   common.ALL_STREAMS,
+			idxInstId: inst.InstId,
+			idxInst:   inst,
+			partnMap:  partnInstMap,
+			streamId:  common.ALL_STREAMS,
+			//TODO Collections verify this will work
 			keyspaceId: "",
 		}
 

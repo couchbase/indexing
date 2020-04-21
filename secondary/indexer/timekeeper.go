@@ -1792,7 +1792,7 @@ func (tk *timekeeper) handleStreamRequestDone(cmd Message) {
 	}
 
 	if openTs == nil {
-		openTs = common.NewTsVbuuid(keyspaceId, tk.config["numVbuckets"].Int())
+		openTs = common.NewTsVbuuid(GetBucketFromKeyspaceId(keyspaceId), tk.config["numVbuckets"].Int())
 	}
 
 	tk.ss.streamKeyspaceIdOpenTsMap[streamId][keyspaceId] = openTs
@@ -1861,7 +1861,7 @@ func (tk *timekeeper) handleRecoveryDone(cmd Message) {
 	}
 
 	if openTs == nil {
-		openTs = common.NewTsVbuuid(keyspaceId, tk.config["numVbuckets"].Int())
+		openTs = common.NewTsVbuuid(GetBucketFromKeyspaceId(keyspaceId), tk.config["numVbuckets"].Int())
 	}
 
 	tk.resetWaitForRecovery(streamId, keyspaceId)
@@ -1876,7 +1876,7 @@ func (tk *timekeeper) handleRecoveryDone(cmd Message) {
 			logging.Infof("Timekeeper::handleRecoveryDone %v %v. Received nil mergeTs. "+
 				"Considering it as rollback to 0", streamId, keyspaceId)
 			numVbuckets := tk.config["numVbuckets"].Int()
-			mergeTs = common.NewTsVbuuid(keyspaceId, numVbuckets)
+			mergeTs = common.NewTsVbuuid(GetBucketFromKeyspaceId(keyspaceId), numVbuckets)
 		}
 		tk.setMergeTs(streamId, keyspaceId, mergeTs)
 	}

@@ -405,8 +405,9 @@ func (r *mutationStreamReader) maybeSendSync(fastpath bool) bool {
 
 	r.queueMapLock.RLock()
 	for keyspaceId, _ := range r.keyspaceIdQueueMap {
-		hwt[keyspaceId] = common.NewTsVbuuidCached(keyspaceId, numVbuckets)
-		prevSnap[keyspaceId] = common.NewTsVbuuidCached(keyspaceId, numVbuckets)
+		//actual TS uses bucket as keyspaceId
+		hwt[keyspaceId] = common.NewTsVbuuidCached(GetBucketFromKeyspaceId(keyspaceId), numVbuckets)
+		prevSnap[keyspaceId] = common.NewTsVbuuidCached(GetBucketFromKeyspaceId(keyspaceId), numVbuckets)
 	}
 
 	nWrkr := r.numWorkers
@@ -845,8 +846,9 @@ func (w *streamWorker) initKeyspaceIdFilter(keyspaceIdFilter map[string]*common.
 					w.keyspaceIdFilter[b].Vbuuids[i] = 0
 				}
 			} else {
-				w.keyspaceIdFilter[b] = common.NewTsVbuuid(b, int(q.queue.GetNumVbuckets()))
-				w.keyspaceIdPrevSnapMap[b] = common.NewTsVbuuid(b, int(q.queue.GetNumVbuckets()))
+				//actual TS uses bucket as keyspaceId
+				w.keyspaceIdFilter[b] = common.NewTsVbuuid(GetBucketFromKeyspaceId(b), int(q.queue.GetNumVbuckets()))
+				w.keyspaceIdPrevSnapMap[b] = common.NewTsVbuuid(GetBucketFromKeyspaceId(b), int(q.queue.GetNumVbuckets()))
 			}
 
 			w.keyspaceIdSyncDue[b] = false

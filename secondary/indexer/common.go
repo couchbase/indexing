@@ -219,3 +219,8 @@ func SplitKeyspaceId(keyspaceId string) (string, string, string) {
 	}
 
 }
+
+func GetBucketFromKeyspaceId(keyspaceId string) string {
+	b, _, _ := SplitKeyspaceId(keyspaceId)
+	return b
+}

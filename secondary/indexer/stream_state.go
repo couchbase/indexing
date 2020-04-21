@@ -302,7 +302,7 @@ func (ss *StreamState) initKeyspaceIdInStream(streamId common.StreamId,
 	keyspaceId string) {
 
 	numVbuckets := ss.config["numVbuckets"].Int()
-	ss.streamKeyspaceIdHWTMap[streamId][keyspaceId] = common.NewTsVbuuid(keyspaceId, numVbuckets)
+	ss.streamKeyspaceIdHWTMap[streamId][keyspaceId] = common.NewTsVbuuid(GetBucketFromKeyspaceId(keyspaceId), numVbuckets)
 	ss.streamKeyspaceIdNeedsCommitMap[streamId][keyspaceId] = false
 	ss.streamKeyspaceIdHasBuildCompTSMap[streamId][keyspaceId] = false
 	ss.streamKeyspaceIdNewTsReqdMap[streamId][keyspaceId] = false
