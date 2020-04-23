@@ -1621,6 +1621,22 @@ func (feed *Feed) bucketFeed(
 
 	pooln, bucketn := reqTs.GetPool(), reqTs.GetBucket()
 
+	/* The bucketDetails call will retrieve failover logs from KV.
+
+	When there is a bucket flush, indexer would send a restart
+	vbuckets request to projector. If the stream request happens
+	while the vbuckets are in deleted state, KV would send
+	NOT_MY_VBUCKET as response to stream request.
+
+	In the absence of bucketDetails() call, this NOT_MY_VBUCKET
+	status comes in data path and it is not propagated back to
+	indexer. Therefore, indexer waits for `streamRepairWaitTime`
+	to repair the stream. This can cause inconsistent scan results
+	till the time stream is repaired.
+
+	Having bucketDetails() here would ensure that the NOT_MY_VBUCKETS
+	status (seen while retrieving failover logs) is returned as error
+	to restartVBuckets request and indexer retries again without wait */
 	vbnos := c.Vbno32to16(reqTs.GetVbnos())
 	_ /*vbuuids*/, err := feed.bucketDetails(pooln, bucketn, opaque, vbnos)
 	if err != nil {
