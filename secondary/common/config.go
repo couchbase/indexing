@@ -167,10 +167,10 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"projector.backChanSize": ConfigValue{
-		10000,
+		50000,
 		"channel size of projector feed's back-channel, " +
 			"changing this value does not affect existing feeds.",
-		10000,
+		50000,
 		false, // mutable
 		false, // case-insensitive
 	},
