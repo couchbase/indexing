@@ -132,6 +132,8 @@ func (ts *TsVbuuid) Clone() *TsVbuuid {
 	snapshots := ts.GetSnapshots()
 	manifests := ts.GetManifestUIDs()
 	newts := NewTsVbuuid(ts.GetPool(), ts.GetBucket(), len(vbnos))
+	newts.ScopeID = ts.ScopeID
+	newts.CollectionIDs = append(newts.CollectionIDs, ts.CollectionIDs...)
 	for i, vbno := range vbnos {
 		newts.Vbnos = append(newts.Vbnos, vbno)
 		newts.Seqnos = append(newts.Seqnos, seqnos[i])
@@ -239,6 +241,9 @@ func (ts *TsVbuuid) Union(other *TsVbuuid) *TsVbuuid {
 	maxVbuckets := len(ts.Seqnos)
 	newts := NewTsVbuuid(ts.GetPool(), ts.GetBucket(), maxVbuckets)
 
+	newts.ScopeID = ts.ScopeID
+	newts.CollectionIDs = append(newts.CollectionIDs, ts.CollectionIDs...)
+
 	// copy from other
 	newts.Vbnos = append(newts.Vbnos, other.Vbnos...)
 	newts.Seqnos = append(newts.Seqnos, other.Seqnos...)
@@ -276,6 +281,9 @@ func (ts *TsVbuuid) SelectByVbuckets(vbuckets []uint16) *TsVbuuid {
 
 	maxVbuckets := len(ts.Seqnos)
 	newts := NewTsVbuuid(ts.GetPool(), ts.GetBucket(), maxVbuckets)
+	newts.ScopeID = ts.ScopeID
+	newts.CollectionIDs = append(newts.CollectionIDs, ts.CollectionIDs...)
+
 	if len(ts.Vbnos) == 0 {
 		return newts
 	}
@@ -305,6 +313,9 @@ func (ts *TsVbuuid) FilterByVbuckets(vbuckets []uint16) *TsVbuuid {
 
 	maxVbuckets := len(ts.Seqnos)
 	newts := NewTsVbuuid(ts.GetPool(), ts.GetBucket(), maxVbuckets)
+	newts.ScopeID = ts.ScopeID
+	newts.CollectionIDs = append(newts.CollectionIDs, ts.CollectionIDs...)
+
 	if len(ts.Vbnos) == 0 {
 		return newts
 	}
@@ -346,6 +357,9 @@ func (ts *TsVbuuid) VerifyBranch(vbnos []uint16, vbuuids []uint64) bool {
 // failover logs obtained from ns_server.
 func (ts *TsVbuuid) ComputeFailoverTs(flogs couchbase.FailoverLog) *TsVbuuid {
 	failoverTs := NewTsVbuuid(ts.GetPool(), ts.GetBucket(), cap(ts.Vbnos))
+	failoverTs.ScopeID = ts.ScopeID
+	failoverTs.CollectionIDs = append(failoverTs.CollectionIDs, ts.CollectionIDs...)
+
 	for vbno, flog := range flogs {
 		x := flog[len(flog)-1]
 		vbuuid, seqno := x[0], x[1]
@@ -367,6 +381,9 @@ func (ts *TsVbuuid) InitialRestartTs(flogs couchbase.FailoverLog) *TsVbuuid {
 // and snapshot-end we can let go of this function.
 func (ts *TsVbuuid) ComputeRestartTs(flogs couchbase.FailoverLog) *TsVbuuid {
 	restartTs := NewTsVbuuid(ts.GetPool(), ts.GetBucket(), cap(ts.Vbnos))
+	restartTs.ScopeID = ts.ScopeID
+	restartTs.CollectionIDs = append(restartTs.CollectionIDs, ts.CollectionIDs...)
+
 	i := 0
 	for vbno, flog := range flogs {
 		vbuuid, _, _ := flog.Latest()
@@ -390,8 +407,8 @@ func (ts *TsVbuuid) SeqnoFor(vbno uint16) (uint64, error) {
 
 func (ts *TsVbuuid) Repr() string {
 	vbnos := ts.GetVbnos()
-	s := fmt.Sprintf("bucket: %v, vbuckets: %v -\n",
-		ts.GetBucket(), len(vbnos))
+	s := fmt.Sprintf("bucket: %v, scope %v:, collectionIDs: %v, vbuckets: %v -\n",
+		ts.GetBucket(), ts.GetScopeID(), ts.GetCollectionIDs(), len(vbnos))
 	seqnos, vbuuids := ts.GetSeqnos(), ts.GetVbuuids()
 	snapshots := ts.GetSnapshots()
 	manifests := ts.GetManifestUIDs()
