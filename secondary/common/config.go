@@ -167,10 +167,10 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"projector.backChanSize": ConfigValue{
-		10000,
+		50000,
 		"channel size of projector feed's back-channel, " +
 			"changing this value does not affect existing feeds.",
-		10000,
+		50000,
 		false, // mutable
 		false, // case-insensitive
 	},
@@ -1097,9 +1097,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.plasma.AutoTuneLSSCleaner": ConfigValue{
-		false,
+		true,
 		"Enable auto tuning of lss cleaning thresholds based on available free space",
-		false,
+		true,
 		false, // mutable,
 		false, // case-insensitive
 	},

@@ -48,28 +48,20 @@ type kvSender struct {
 	supvCmdch  MsgChannel //supervisor sends commands on this channel
 	supvRespch MsgChannel //channel to send any message to supervisor
 
-	cInfoCache *c.ClusterInfoCache
-	config     c.Config
-	monitor    *c.OperationsMonitor
+	cInfoClient *c.ClusterInfoClient
+	config      c.Config
+	monitor     *c.OperationsMonitor
 }
 
 func NewKVSender(supvCmdch MsgChannel, supvRespch MsgChannel,
-	config c.Config) (KVSender, Message) {
+	config c.Config, cic *c.ClusterInfoClient) (KVSender, Message) {
 
-	var cinfo *c.ClusterInfoCache
-	url, err := c.ClusterAuthUrl(config["clusterAddr"].String())
-	if err == nil {
-		cinfo, err = c.NewClusterInfoCache(url, DEFAULT_POOL)
-	}
-	if err != nil {
-		panic("Unable to initialize cluster_info - " + err.Error())
-	}
 	//Init the kvSender struct
 	k := &kvSender{
-		supvCmdch:  supvCmdch,
-		supvRespch: supvRespch,
-		cInfoCache: cinfo,
-		config:     config,
+		supvCmdch:   supvCmdch,
+		supvRespch:  supvRespch,
+		cInfoClient: cic,
+		config:      config,
 		monitor: c.NewOperationsMonitor(
 			"kvSender",
 			KV_SENDER_OP_MONITOR_SIZE,
@@ -78,8 +70,10 @@ func NewKVSender(supvCmdch MsgChannel, supvRespch MsgChannel,
 		),
 	}
 
-	k.cInfoCache.SetMaxRetries(MAX_CLUSTER_FETCH_RETRY)
-	k.cInfoCache.SetLogPrefix("KVSender: ")
+	cinfo := k.cInfoClient.GetClusterInfoCache()
+	cinfo.Lock()
+	defer cinfo.Unlock()
+	cinfo.SetMaxRetries(MAX_CLUSTER_FETCH_RETRY)
 	//start kvsender loop which listens to commands from its supervisor
 	go k.run()
 
@@ -264,7 +258,7 @@ func (k *kvSender) openMutationStream(streamId c.StreamId, indexInstList []c.Ind
 		return
 	}
 
-	protoInstList := convertIndexListToProto(k.config, k.cInfoCache, indexInstList, streamId)
+	protoInstList := convertIndexListToProto(k.config, k.cInfoClient, indexInstList, streamId)
 	bucket := indexInstList[0].Defn.Bucket
 
 	//use any bucket as list of vbs remain the same for all buckets
@@ -572,7 +566,7 @@ func (k *kvSender) addIndexForExistingBucket(streamId c.StreamId, bucket string,
 	}
 
 	var currentTs *protobuf.TsVbuuid
-	protoInstList := convertIndexListToProto(k.config, k.cInfoCache, indexInstList, streamId)
+	protoInstList := convertIndexListToProto(k.config, k.cInfoClient, indexInstList, streamId)
 	topic := getTopicForStreamId(streamId)
 
 	fn := func(r int, err error) error {
@@ -1220,16 +1214,12 @@ loop:
 
 func (k *kvSender) getAllVbucketsInCluster(bucket string) ([]uint32, []string, error) {
 
-	k.cInfoCache.Lock()
-	defer k.cInfoCache.Unlock()
-
-	err := k.cInfoCache.Fetch()
-	if err != nil {
-		return nil, nil, err
-	}
+	cinfo := k.cInfoClient.GetClusterInfoCache()
+	cinfo.RLock()
+	defer cinfo.RUnlock()
 
 	//get all kv nodes
-	nodes, err := k.cInfoCache.GetNodesByBucket(bucket)
+	nodes, err := cinfo.GetNodesByBucket(bucket)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1239,11 +1229,11 @@ func (k *kvSender) getAllVbucketsInCluster(bucket string) ([]uint32, []string, e
 
 	for _, nid := range nodes {
 		//get the list of vbnos for this kv
-		if vbnos, err := k.cInfoCache.GetVBuckets(nid, bucket); err != nil {
+		if vbnos, err := cinfo.GetVBuckets(nid, bucket); err != nil {
 			return nil, nil, err
 		} else {
 			vbs = append(vbs, vbnos...)
-			addr, err := k.cInfoCache.GetServiceAddress(nid, "projector")
+			addr, err := cinfo.GetServiceAddress(nid, "projector")
 			if err != nil {
 				return nil, nil, err
 			}
@@ -1257,19 +1247,15 @@ func (k *kvSender) getAllVbucketsInCluster(bucket string) ([]uint32, []string, e
 
 func (k *kvSender) getAllProjectorAddrs() ([]string, error) {
 
-	k.cInfoCache.Lock()
-	defer k.cInfoCache.Unlock()
+	cinfo := k.cInfoClient.GetClusterInfoCache()
+	cinfo.RLock()
+	defer cinfo.RUnlock()
 
-	err := k.cInfoCache.Fetch()
-	if err != nil {
-		return nil, err
-	}
-
-	nodes := k.cInfoCache.GetNodesByServiceType("projector")
+	nodes := cinfo.GetNodesByServiceType("projector")
 
 	var addrList []string
 	for _, nid := range nodes {
-		addr, err := k.cInfoCache.GetServiceAddress(nid, "projector")
+		addr, err := cinfo.GetServiceAddress(nid, "projector")
 		if err != nil {
 			return nil, err
 		}
@@ -1281,23 +1267,19 @@ func (k *kvSender) getAllProjectorAddrs() ([]string, error) {
 
 func (k *kvSender) getProjAddrsForVbuckets(bucket string, vbnos []Vbucket) ([]string, error) {
 
-	k.cInfoCache.Lock()
-	defer k.cInfoCache.Unlock()
-
-	err := k.cInfoCache.Fetch()
-	if err != nil {
-		return nil, err
-	}
+	cinfo := k.cInfoClient.GetClusterInfoCache()
+	cinfo.RLock()
+	defer cinfo.RUnlock()
 
 	var addrList []string
 
-	nodes, err := k.cInfoCache.GetNodesByBucket(bucket)
+	nodes, err := cinfo.GetNodesByBucket(bucket)
 	if err != nil {
 		return nil, err
 	}
 
 	for _, n := range nodes {
-		vbs, err := k.cInfoCache.GetVBuckets(n, bucket)
+		vbs, err := cinfo.GetVBuckets(n, bucket)
 		if err != nil {
 			return nil, err
 		}
@@ -1313,7 +1295,7 @@ func (k *kvSender) getProjAddrsForVbuckets(bucket string, vbnos []Vbucket) ([]st
 		}
 
 		if found {
-			addr, err := k.cInfoCache.GetServiceAddress(n, "projector")
+			addr, err := cinfo.GetServiceAddress(n, "projector")
 			if err != nil {
 				return nil, err
 			}
@@ -1333,12 +1315,12 @@ func (k *kvSender) handleConfigUpdate(cmd Message) {
 }
 
 // convert IndexInst to protobuf format
-func convertIndexListToProto(cfg c.Config, cinfo *c.ClusterInfoCache, indexList []c.IndexInst,
+func convertIndexListToProto(cfg c.Config, cic *c.ClusterInfoClient, indexList []c.IndexInst,
 	streamId c.StreamId) []*protobuf.Instance {
 
 	protoList := make([]*protobuf.Instance, 0)
 	for _, index := range indexList {
-		protoInst := convertIndexInstToProtoInst(cfg, cinfo, index, streamId)
+		protoInst := convertIndexInstToProtoInst(cfg, cic, index, streamId)
 		protoList = append(protoList, protoInst)
 	}
 
@@ -1346,7 +1328,7 @@ func convertIndexListToProto(cfg c.Config, cinfo *c.ClusterInfoCache, indexList 
 		if c.IsPartitioned(index.Defn.PartitionScheme) && index.RealInstId != 0 {
 			for _, protoInst := range protoList {
 				if protoInst.IndexInstance.GetInstId() == uint64(index.RealInstId) {
-					addPartnInfoToProtoInst(cfg, cinfo, index, streamId, protoInst.IndexInstance)
+					addPartnInfoToProtoInst(cfg, cic, index, streamId, protoInst.IndexInstance)
 				}
 			}
 		}
@@ -1357,13 +1339,13 @@ func convertIndexListToProto(cfg c.Config, cinfo *c.ClusterInfoCache, indexList 
 }
 
 // convert IndexInst to protobuf format
-func convertIndexInstToProtoInst(cfg c.Config, cinfo *c.ClusterInfoCache,
+func convertIndexInstToProtoInst(cfg c.Config, cic *c.ClusterInfoClient,
 	indexInst c.IndexInst, streamId c.StreamId) *protobuf.Instance {
 
 	protoDefn := convertIndexDefnToProtobuf(indexInst.Defn)
 	protoInst := convertIndexInstToProtobuf(cfg, indexInst, protoDefn)
 
-	addPartnInfoToProtoInst(cfg, cinfo, indexInst, streamId, protoInst)
+	addPartnInfoToProtoInst(cfg, cic, indexInst, streamId, protoInst)
 
 	return &protobuf.Instance{IndexInstance: protoInst}
 }
@@ -1412,7 +1394,7 @@ func convertIndexInstToProtobuf(cfg c.Config, indexInst c.IndexInst,
 	return instance
 }
 
-func addPartnInfoToProtoInst(cfg c.Config, cinfo *c.ClusterInfoCache,
+func addPartnInfoToProtoInst(cfg c.Config, cic *c.ClusterInfoClient,
 	indexInst c.IndexInst, streamId c.StreamId, protoInst *protobuf.IndexInst) {
 
 	switch partn := indexInst.Pc.(type) {
@@ -1424,11 +1406,9 @@ func addPartnInfoToProtoInst(cfg c.Config, cinfo *c.ClusterInfoCache,
 
 		//TODO move this to indexer init. These addresses cannot change.
 		//Better to get these once and store.
-		cinfo.Lock()
-		defer cinfo.Unlock()
-
-		err := cinfo.Fetch()
-		c.CrashOnError(err)
+		cinfo := cic.GetClusterInfoCache()
+		cinfo.RLock()
+		defer cinfo.RUnlock()
 
 		host, err := cinfo.GetLocalHostname()
 		c.CrashOnError(err)

@@ -1608,7 +1608,7 @@ func (mdb *plasmaSlice) resetStores() {
 		mdb.backstore.Close()
 	}
 
-	os.RemoveAll(mdb.path)
+	plasma.DestroyInstance(mdb.path)
 	mdb.newBorn = true
 	mdb.initStores()
 	mdb.startWriters(numWriters)
@@ -2158,7 +2158,8 @@ func (mdb *plasmaSlice) String() string {
 
 func tryDeleteplasmaSlice(mdb *plasmaSlice) {
 	//cleanup the disk directory
-	if err := os.RemoveAll(mdb.path); err != nil {
+
+	if err := plasma.DestroyInstance(mdb.path); err != nil {
 		logging.Errorf("plasmaSlice::Destroy Error Cleaning Up Slice Id %v, "+
 			"IndexInstId %v, PartitionId %v, IndexDefnId %v. Error %v", mdb.id, mdb.idxInstId, mdb.idxPartnId, mdb.idxDefnId, err)
 	}

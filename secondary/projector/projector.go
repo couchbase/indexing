@@ -46,6 +46,8 @@ type Projector struct {
 	cpuProfFd   *os.File
 	logPrefix   string
 
+	cinfoClient *c.ClusterInfoClient
+
 	certFile             string
 	keyFile              string
 	reqch                chan ap.Request
@@ -83,6 +85,11 @@ func NewProjector(maxvbs int, config c.Config, certFile string, keyFile string) 
 	p.adminport = pconfig["adminport.listenAddr"].String()
 	ef := config["projector.routerEndpointFactory"]
 	config["projector.routerEndpointFactory"] = ef
+
+	// Start cluster info client
+	cic, err := c.NewClusterInfoClient(p.clusterAddr, "default", config)
+	c.CrashOnError(err)
+	p.cinfoClient = cic
 
 	p.stats = NewProjectorStats()
 	p.statsMgr = NewStatsManager(p.statsCmdCh, p.statsStopCh, config)
@@ -988,21 +995,9 @@ func (p *Projector) getNodeUUID() (string, error) {
 	var nodeUUID string
 	prefix := p.logPrefix
 	fn := func(r int, err error) error {
-		var cinfo *c.ClusterInfoCache
-		url, err := c.ClusterAuthUrl(p.clusterAddr)
-		if err == nil {
-			cinfo, err = c.NewClusterInfoCache(url, p.pooln)
-		}
-		if err != nil {
-			fmsg := "%v ClusterInfoCache(): %v\n"
-			logging.Errorf(fmsg, prefix, err)
-			return err
-		}
-		if err := cinfo.Fetch(); err != nil {
-			fmsg := "%v cinfo.Fetch(): %v\n"
-			logging.Errorf(fmsg, prefix, err)
-			return err
-		}
+		cinfo := p.cinfoClient.GetClusterInfoCache()
+		cinfo.RLock()
+		defer cinfo.RUnlock()
 
 		if nodeUUID = cinfo.GetLocalNodeUUID(); nodeUUID == "" {
 			fmsg := "%v cinfo.GetLocalNodeUUID(): %v\n"

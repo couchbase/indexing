@@ -923,6 +923,63 @@ func (c *ClusterInfoClient) watchClusterChanges() {
 	}
 }
 
+func (cic *ClusterInfoClient) ValidateBucket(bucket string, uuids []string) bool {
+
+	cinfo := cic.GetClusterInfoCache()
+	cinfo.RLock()
+	defer cinfo.RUnlock()
+
+	if nids, err := cinfo.GetNodesByBucket(bucket); err == nil && len(nids) != 0 {
+		// verify UUID
+		currentUUID := cinfo.GetBucketUUID(bucket)
+		for _, uuid := range uuids {
+			if uuid != currentUUID {
+				return false
+			}
+		}
+		return true
+	} else {
+		logging.Fatalf("Error Fetching Bucket Info: %v Nids: %v", err, nids)
+		return false
+	}
+}
+
+func (cic *ClusterInfoClient) IsEphemeral(bucket string) (bool, error) {
+
+	cinfo := cic.GetClusterInfoCache()
+	cinfo.RLock()
+	defer cinfo.RUnlock()
+
+	return cinfo.IsEphemeral(bucket)
+}
+
+func (cic *ClusterInfoClient) GetBucketUUID(bucket string) (string, error) {
+
+	cinfo := cic.GetClusterInfoCache()
+	cinfo.RLock()
+	defer cinfo.RUnlock()
+
+	nids, err := cinfo.GetNodesByBucket(bucket)
+
+	if err == nil && len(nids) != 0 {
+		// verify UUID
+		return cinfo.GetBucketUUID(bucket), nil
+	} else if err == nil {
+		logging.Fatalf("Error Fetching Bucket Info: %v Nids: %v", err, nids)
+	}
+
+	return BUCKET_UUID_NIL, err
+}
+
+func (cic *ClusterInfoClient) ClusterVersion() uint64 {
+
+	cinfo := cic.GetClusterInfoCache()
+	cinfo.RLock()
+	defer cinfo.RUnlock()
+
+	return cinfo.GetClusterVersion()
+}
+
 func (c *ClusterInfoClient) Close() {
 	defer func() { recover() }() // in case async Close is called. Do we need this?
 
