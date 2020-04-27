@@ -1,11 +1,14 @@
 package projector
 
-import "fmt"
+import (
+	"fmt"
 
-import mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
-import c "github.com/couchbase/indexing/secondary/common"
-import "github.com/couchbase/indexing/secondary/logging"
-import mcd "github.com/couchbase/indexing/secondary/dcp/transport"
+	c "github.com/couchbase/indexing/secondary/common"
+	mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
+	"github.com/couchbase/indexing/secondary/logging"
+
+	mcd "github.com/couchbase/indexing/secondary/dcp/transport"
+)
 
 // Vbucket is immutable structure defined for each vbucket.
 type Vbucket struct {
@@ -189,7 +192,7 @@ func (v *Vbucket) makeUpdateSeqnoData(m *mc.DcpEvent, engines map[uint32]map[uin
 
 		} else {
 			seqno, collectionID := m.Seqno, m.CollectionID
-			logging.Debugf(seFormat, v.logPrefix, m.Opaque, seqno, collectionID)
+			logging.Debugf(usFormat, v.logPrefix, m.Opaque, seqno, collectionID)
 		}
 	}()
 

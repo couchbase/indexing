@@ -52,19 +52,22 @@
 
 package dataport
 
-import "errors"
-import "fmt"
-import "io"
-import "net"
-import "time"
-import "sync"
-import "syscall"
+import (
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"sync"
+	"syscall"
+	"time"
 
-import c "github.com/couchbase/indexing/secondary/common"
-import protobuf "github.com/couchbase/indexing/secondary/protobuf/data"
-import "github.com/couchbase/indexing/secondary/transport"
-import "github.com/couchbase/indexing/secondary/logging"
-import "github.com/couchbase/indexing/secondary/security"
+	c "github.com/couchbase/indexing/secondary/common"
+
+	"github.com/couchbase/indexing/secondary/logging"
+	protobuf "github.com/couchbase/indexing/secondary/protobuf/data"
+	"github.com/couchbase/indexing/secondary/security"
+	"github.com/couchbase/indexing/secondary/transport"
+)
 
 // Error codes
 
@@ -542,7 +545,7 @@ func (s *Server) logStats(hostUuids keeper) {
 	for keyspaceId, counts := range keyspaceIdkvs {
 		seqnos := keyspaceIdseqnos[keyspaceId]
 		fmsg := "%v keyspaceId: %v total received key-versions: %v\n"
-		logging.Infof(fmsg, s.logPrefix, counts)
+		logging.Infof(fmsg, s.logPrefix, keyspaceId, counts)
 		fmsg = "%v keyspaceId: %v latest sequence numbers: %v\n"
 		logging.Infof(fmsg, s.logPrefix, keyspaceId, seqnos)
 	}
