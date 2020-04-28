@@ -678,6 +678,13 @@ func (kvdata *KVData) scatterMutation(
 		}
 		kvdata.stats.seqnoAdvanced.Add(1)
 
+	case mcd.DCP_OSO_SNAPSHOT: // Propagate OsoSnapshotEvent to workers
+		// TODO (Collections): Add stats for DCP_OSO_SNAPSHOT
+		fmsg := "%v ##%x Received OSO Snapshot event: %v for vbucket: %v\n"
+		logging.Infof(fmsg, kvdata.logPrefix, m.Opaque, m.EventType, vbno)
+		if err := worker.Event(m); err != nil {
+			panic(err)
+		}
 	}
 	return
 }

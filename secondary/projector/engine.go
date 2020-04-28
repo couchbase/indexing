@@ -82,6 +82,13 @@ func (engine *Engine) SeqnoAdvancedData(
 	return engine.evaluator.SeqnoAdvancedData(m, vbno, vbuuid, seqno, opaque2)
 }
 
+// OSOSnapshot from this engine.
+func (engine *Engine) OSOSnapshotData(
+	m *mc.DcpEvent, vbno uint16, vbuuid, opaque2 uint64) interface{} {
+
+	return engine.evaluator.OSOSnapshotData(m, vbno, vbuuid, opaque2)
+}
+
 // StreamEndData from this engine.
 func (engine *Engine) StreamEndData(
 	vbno uint16, vbuuid, seqno uint64, opaque2 uint64) interface{} {

@@ -258,6 +258,17 @@ func (ie *IndexEvaluator) SeqnoAdvancedData(
 	return &c.DataportKeyVersions{keyspaceId, vbno, vbuuid, kv, opaque2}
 }
 
+// SeqnoAdvancedData implement Evaluator{} interface.
+func (ie *IndexEvaluator) OSOSnapshotData(
+	m *mc.DcpEvent, vbno uint16, vbuuid,
+	opaque2 uint64) (data interface{}) {
+
+	keyspaceId := ie.GetKeyspaceId()
+	kv := c.NewKeyVersions(0 /*seqno*/, nil, 1, 0)
+	kv.AddOSOSnapshot(m.EventType)
+	return &c.DataportKeyVersions{keyspaceId, vbno, vbuuid, kv, opaque2}
+}
+
 // StreamEndData implement Evaluator{} interface.
 func (ie *IndexEvaluator) StreamEndData(
 	vbno uint16, vbuuid, seqno uint64, opaque2 uint64) (data interface{}) {
