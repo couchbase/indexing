@@ -38,24 +38,25 @@ import (
 //////////////////////////////////////////////////////////////
 
 type LifecycleMgr struct {
-	repo          *MetadataRepo
-	cinfo         *common.ClusterInfoCache
-	notifier      MetadataNotifier
-	clusterURL    string
-	incomings     chan *requestHolder
-	expedites     chan *requestHolder
-	bootstraps    chan *requestHolder
-	outgoings     chan c.Packet
-	killch        chan bool
-	indexerReady  bool
-	builder       *builder
-	janitor       *janitor
-	updator       *updator
-	requestServer RequestServer
-	prepareLock   *client.PrepareCreateRequest
-	stats         StatsHolder
-	done          sync.WaitGroup
-	isDone        bool
+	repo             *MetadataRepo
+	cinfo            *common.ClusterInfoCache
+	notifier         MetadataNotifier
+	clusterURL       string
+	incomings        chan *requestHolder
+	expedites        chan *requestHolder
+	bootstraps       chan *requestHolder
+	outgoings        chan c.Packet
+	killch           chan bool
+	indexerReady     bool
+	builder          *builder
+	janitor          *janitor
+	updator          *updator
+	requestServer    RequestServer
+	prepareLock      *client.PrepareCreateRequest
+	stats            StatsHolder
+	done             sync.WaitGroup
+	isDone           bool
+	collAwareCluster uint32 // 0: false, 1: true
 }
 
 type requestHolder struct {
@@ -156,6 +157,10 @@ func NewLifecycleMgr(notifier MetadataNotifier, clusterURL string) (*LifecycleMg
 		killch:       make(chan bool),
 		bootstraps:   make(chan *requestHolder, 1000),
 		indexerReady: false}
+
+	if cinfo.GetClusterVersion() >= common.INDEXER_70_VERSION {
+		atomic.StoreUint32(&mgr.collAwareCluster, 1)
+	}
 	mgr.builder = newBuilder(mgr)
 	mgr.janitor = newJanitor(mgr)
 	mgr.updator = newUpdator(mgr)
@@ -1239,6 +1244,30 @@ func (m *LifecycleMgr) setBucketUUID(defn *common.IndexDefn) error {
 
 // TODO (Collections): Should verifyScopeAndCollection be done?
 func (m *LifecycleMgr) setScopeIdAndCollectionId(defn *common.IndexDefn) error {
+
+	if atomic.LoadUint32(&m.collAwareCluster) == 0 {
+
+		// TODO (Collections): Use lifecycle manager's cluster info client
+		// once it is available
+		m.cinfo.Lock()
+		defer m.cinfo.Unlock()
+
+		if err := m.cinfo.Fetch(); err != nil {
+			return err
+		}
+
+		if m.cinfo.GetClusterVersion() < common.INDEXER_70_VERSION {
+			// The cluster compatibiltity is less than 7.0
+			// ScopeId and CollectionId cannot be obtained during mixed mode,
+			// hence use default IDs and skip the verification
+			defn.ScopeId = common.DEFAULT_SCOPE_ID
+			defn.CollectionId = common.DEFAULT_COLLECTION_ID
+			return nil
+		} else {
+			// The cluster has now fully upgraded, cache this information
+			atomic.StoreUint32(&m.collAwareCluster, 1)
+		}
+	}
 
 	scopeId, err := m.getScopeID(defn.Bucket, defn.Scope)
 	if err != nil || scopeId == collections.SCOPE_ID_NIL {

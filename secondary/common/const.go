@@ -59,6 +59,8 @@ const INDEXER_CUR_VERSION = INDEXER_70_VERSION
 const DEFAULT_POOL = "default"
 const DEFAULT_SCOPE = "_default"
 const DEFAULT_COLLECTION = "_default"
+const DEFAULT_SCOPE_ID = "0"
+const DEFAULT_COLLECTION_ID = "0"
 
 const NON_PARTITION_ID = PartitionId(0)
 
