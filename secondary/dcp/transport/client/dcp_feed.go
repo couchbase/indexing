@@ -463,8 +463,10 @@ func (feed *DcpFeed) handlePacket(
 func (feed *DcpFeed) handleSystemEvent(pkt *transport.MCRequest, dcpEvent *DcpEvent, stream *DcpStream) {
 	extras := pkt.Extras
 	dcpEvent.Seqno = binary.BigEndian.Uint64(extras[0:8])
-	dcpEvent.ManifestUID = make([]byte, 8) // 8 byte Manifest UID
-	copy(dcpEvent.ManifestUID, pkt.Body[0:8])
+
+	uid := binary.BigEndian.Uint64(pkt.Body[0:8]) //8 byte Manifest UID
+	uidstr := strconv.FormatUint(uid, 16)         //convert to base 16 encoded string
+	dcpEvent.ManifestUID = []byte(uidstr)
 
 	systemEventType := transport.CollectionEvent(binary.BigEndian.Uint32(extras[8:12]))
 	dcpEvent.EventType = systemEventType
