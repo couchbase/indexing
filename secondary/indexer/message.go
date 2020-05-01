@@ -473,6 +473,7 @@ type MsgStreamUpdate struct {
 	allowMarkFirstSnap bool
 	keyspaceInRecovery bool
 	abortRecovery      bool
+	collectionAware    bool
 }
 
 func (m *MsgStreamUpdate) GetMsgType() MsgType {
@@ -535,6 +536,10 @@ func (m *MsgStreamUpdate) GetCollectionId() string {
 	return m.collectionId
 }
 
+func (m *MsgStreamUpdate) CollectionAware() bool {
+	return m.collectionAware
+}
+
 func (m *MsgStreamUpdate) String() string {
 
 	str := "\n\tMessage: MsgStreamUpdate"
@@ -546,6 +551,7 @@ func (m *MsgStreamUpdate) String() string {
 	str += fmt.Sprintf("\n\tAsync: %v", m.async)
 	str += fmt.Sprintf("\n\tSessionId: %v", m.sessionId)
 	str += fmt.Sprintf("\n\tCollectionId: %v", m.collectionId)
+	str += fmt.Sprintf("\n\tCollectionAware: %v", m.collectionAware)
 	str += fmt.Sprintf("\n\tRestartTs: %v", m.restartTs)
 	return str
 

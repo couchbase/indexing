@@ -153,6 +153,7 @@ func (k *kvSender) handleOpenStream(cmd Message) {
 	collectionId := cmd.(*MsgStreamUpdate).GetCollectionId()
 	async := cmd.(*MsgStreamUpdate).GetAsync()
 	sessionId := cmd.(*MsgStreamUpdate).GetSessionId()
+	collectionAware := cmd.(*MsgStreamUpdate).CollectionAware()
 
 	logging.LazyDebug(func() string {
 		return fmt.Sprintf("KVSender::handleOpenStream %v %v %v",
@@ -160,7 +161,8 @@ func (k *kvSender) handleOpenStream(cmd Message) {
 	})
 
 	go k.openMutationStream(streamId, keyspaceId, collectionId,
-		indexInstList, restartTs, async, sessionId, respCh, stopCh)
+		indexInstList, restartTs, async, sessionId, collectionAware,
+		respCh, stopCh)
 
 	k.supvCmdch <- &MsgSuccess{}
 
@@ -261,7 +263,7 @@ func (k *kvSender) handleRestartVbuckets(cmd Message) {
 
 func (k *kvSender) openMutationStream(streamId c.StreamId, keyspaceId string,
 	collectionId string, indexInstList []c.IndexInst, restartTs *c.TsVbuuid,
-	async bool, sessionId uint64, respCh MsgChannel, stopCh StopChannel) {
+	async bool, sessionId uint64, collectionAware bool, respCh MsgChannel, stopCh StopChannel) {
 
 	if len(indexInstList) == 0 {
 		logging.Warnf("KVSender::openMutationStream Empty IndexList. Nothing to do.")
@@ -330,7 +332,7 @@ func (k *kvSender) openMutationStream(streamId c.StreamId, keyspaceId string,
 						" creating HTTP client to %v", streamId, keyspaceId, ret, addr)
 					err = ret
 				} else if res, ret := k.sendMutationTopicRequest(ap, topic, keyspaceId,
-					restartTsList, protoInstList, async, sessionId); ret != nil {
+					restartTsList, protoInstList, async, sessionId, collectionAware); ret != nil {
 					//for all errors, retry
 					logging.Errorf("KVSender::openMutationStream %v %v Error Received %v from %v",
 						streamId, keyspaceId, ret, addr)
@@ -869,7 +871,7 @@ func (k *kvSender) closeMutationStream(streamId c.StreamId, keyspaceId string,
 //send the actual MutationStreamRequest on adminport
 func (k *kvSender) sendMutationTopicRequest(ap *projClient.Client, topic string,
 	keyspaceId string, reqTimestamps *protobuf.TsVbuuid, instances []*protobuf.Instance,
-	async bool, sessionId uint64) (*protobuf.TopicResponse, error) {
+	async bool, sessionId uint64, collectionAware bool) (*protobuf.TopicResponse, error) {
 
 	logging.Infof("KVSender::sendMutationTopicRequest Projector %v Topic %v %v \n\tInstances %v",
 		ap, topic, keyspaceId, formatInstances(instances))
@@ -880,7 +882,7 @@ func (k *kvSender) sendMutationTopicRequest(ap *projClient.Client, topic string,
 
 	if res, err := ap.MutationTopicRequest(topic, endpointType,
 		[]*protobuf.TsVbuuid{reqTimestamps}, instances, async,
-		sessionId, []string{keyspaceId}); err != nil {
+		sessionId, []string{keyspaceId}, collectionAware); err != nil {
 		logging.Errorf("KVSender::sendMutationTopicRequest Projector %v Topic %v %v \n\tUnexpected Error %v", ap,
 			topic, keyspaceId, err)
 

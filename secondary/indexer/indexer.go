@@ -3852,6 +3852,11 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 	cid = idx.makeCollectionIdForStreamRequest(buildStream, keyspaceId, cid, clusterVer)
 	idx.streamKeyspaceIdCollectionId[buildStream][keyspaceId] = cid
 
+	var collectionAware bool
+	if clusterVer >= common.INDEXER_70_VERSION {
+		collectionAware = true
+	}
+
 	cmd = &MsgStreamUpdate{mType: OPEN_STREAM,
 		streamId:           buildStream,
 		keyspaceId:         keyspaceId,
@@ -3863,7 +3868,8 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 		rollbackTime:       idx.keyspaceIdRollbackTimes[keyspaceId],
 		async:              async,
 		sessionId:          sessionId,
-		collectionId:       cid}
+		collectionId:       cid,
+		collectionAware:    collectionAware}
 
 	//send stream update to timekeeper
 	if resp := idx.sendStreamUpdateToWorker(cmd, idx.tkCmdCh,
@@ -5397,6 +5403,11 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 		idx.streamKeyspaceIdCollectionId[streamId][keyspaceId] = cid
 	}
 
+	var collectionAware bool
+	if clusterVer >= common.INDEXER_70_VERSION {
+		collectionAware = true
+	}
+
 	cmd := &MsgStreamUpdate{mType: OPEN_STREAM,
 		streamId:           streamId,
 		keyspaceId:         keyspaceId,
@@ -5409,7 +5420,8 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 		keyspaceInRecovery: keyspaceInRecovery,
 		async:              async,
 		sessionId:          sessionId,
-		collectionId:       cid}
+		collectionId:       cid,
+		collectionAware:    collectionAware}
 
 	//send stream update to timekeeper
 	if resp := idx.sendStreamUpdateToWorker(cmd, idx.tkCmdCh,
