@@ -853,7 +853,6 @@ func (feed *Feed) start(
 	req *protobuf.MutationTopicRequest, opaque uint16) (err error) {
 
 	feed.endpointType = req.GetEndpointType()
-	feed.version = req.GetVersion()
 	opaque2 := req.GetOpaque2()
 
 	keyspaceIdMap, err := req.GetKeyspaceIdMap()
@@ -861,9 +860,7 @@ func (feed *Feed) start(
 		return err
 	}
 
-	if feed.version >= protobuf.FeedVersion_cheshireCat {
-		feed.collectionsAware = true
-	}
+	feed.collectionsAware = req.GetCollectionAware()
 
 	// update engines and endpoints
 	if _, err = feed.processSubscribers(opaque, req, keyspaceIdMap); err != nil { // :SideEffect:
