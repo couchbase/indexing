@@ -849,15 +849,15 @@ func (feed *DcpFeed) doDcpRequestStream(
 			requestValue.ManifestUID = manifestUID
 			requestValue.ScopeID = scopeId
 			requestValue.CollectionIDs = collectionIds
-
-			body, _ := json.Marshal(requestValue)
-			rq.Body = body
 		} else {
 			// ScopeId being empty and no collectionId specified will
 			// open the stream for entire bucket. For such a
-			// scenario, it is not required to specify anything
-			// in request body
+			// scenario, only manifestUID is required to be specified
+			// in request body.
+			requestValue.ManifestUID = manifestUID
 		}
+		body, _ := json.Marshal(requestValue)
+		rq.Body = body
 	}
 
 	// Here, timeout can occur due to slow memcached. The error handling
