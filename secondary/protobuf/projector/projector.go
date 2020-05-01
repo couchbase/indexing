@@ -242,16 +242,17 @@ func (resp *FailoverLogResponse) ToFailoverLog(vbnos []uint16) couchbase.Failove
 // for `topic`.
 func NewMutationTopicRequest(
 	topic, endpointType string, instances []*Instance,
-	async bool, opaque2 uint64) *MutationTopicRequest {
+	async bool, opaque2 uint64, collectionAware bool) *MutationTopicRequest {
 
 	return &MutationTopicRequest{
-		Topic:         proto.String(topic),
-		EndpointType:  proto.String(endpointType),
-		ReqTimestamps: make([]*TsVbuuid, 0),
-		Instances:     instances,
-		Version:       FeedVersion_cheshireCat.Enum(),
-		Async:         proto.Bool(async),
-		Opaque2:       proto.Uint64(opaque2),
+		Topic:           proto.String(topic),
+		EndpointType:    proto.String(endpointType),
+		ReqTimestamps:   make([]*TsVbuuid, 0),
+		Instances:       instances,
+		Version:         FeedVersion_cheshireCat.Enum(),
+		Async:           proto.Bool(async),
+		Opaque2:         proto.Uint64(opaque2),
+		CollectionAware: proto.Bool(collectionAware),
 	}
 }
 

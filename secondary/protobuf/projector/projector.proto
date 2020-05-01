@@ -60,6 +60,7 @@ message MutationTopicRequest {
     optional bool        async        = 6;
     optional uint64      opaque2      = 7;
     repeated string      keyspaceIds  = 8;
+    optional bool        collectionAware = 9;
 }
 
 // Response back for
