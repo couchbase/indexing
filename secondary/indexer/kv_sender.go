@@ -271,7 +271,7 @@ func (k *kvSender) openMutationStream(streamId c.StreamId, keyspaceId string,
 		return
 	}
 
-	protoInstList := convertIndexListToProto(k.config, k.cInfoCache, indexInstList, streamId)
+	protoInstList := convertIndexListToProto(k.config, k.cInfoClient, indexInstList, streamId)
 
 	bucket, _, _ := SplitKeyspaceId(keyspaceId)
 
