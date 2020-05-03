@@ -475,21 +475,25 @@ func (feed *DcpFeed) handleSystemEvent(pkt *transport.MCRequest, dcpEvent *DcpEv
 	switch systemEventType {
 
 	case transport.COLLECTION_CREATE:
-		dcpEvent.ScopeID = make([]byte, 4) // 4 byte ScopeID
-		copy(dcpEvent.ScopeID, pkt.Body[8:12])
+		sid := binary.BigEndian.Uint32(pkt.Body[8:12]) //4 byte ScopeID
+		sidstr := strconv.FormatUint(uint64(sid), 16)  //convert to base 16 encoded string
+		dcpEvent.ScopeID = []byte(sidstr)
+
 		dcpEvent.CollectionID = binary.BigEndian.Uint32(pkt.Body[12:16])
 		if version == 1 { // Capture max ttl value of the collection if version is "1"
 			dcpEvent.MaxTTL = binary.BigEndian.Uint32(pkt.Body[16:20])
 		}
 
 	case transport.COLLECTION_DROP, transport.COLLECTION_FLUSH:
-		dcpEvent.ScopeID = make([]byte, 4) // 4 byte ScopeID
-		copy(dcpEvent.ScopeID, pkt.Body[8:12])
+		sid := binary.BigEndian.Uint32(pkt.Body[8:12]) //4 byte ScopeID
+		sidstr := strconv.FormatUint(uint64(sid), 16)  //convert to base 16 encoded string
+		dcpEvent.ScopeID = []byte(sidstr)
 		dcpEvent.CollectionID = binary.BigEndian.Uint32(pkt.Body[12:16])
 
 	case transport.SCOPE_CREATE, transport.SCOPE_DROP:
-		dcpEvent.ScopeID = make([]byte, 4) // 4 byte ScopeID
-		copy(dcpEvent.ScopeID, pkt.Body[8:12])
+		sid := binary.BigEndian.Uint32(pkt.Body[8:12]) //4 byte ScopeID
+		sidstr := strconv.FormatUint(uint64(sid), 16)  //convert to base 16 encoded string
+		dcpEvent.ScopeID = []byte(sidstr)
 
 	case transport.COLLECTION_CHANGED:
 		dcpEvent.CollectionID = binary.BigEndian.Uint32(pkt.Body[8:12])

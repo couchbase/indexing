@@ -1,8 +1,8 @@
 package protoProjector
 
 import (
-	"encoding/binary"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/couchbase/indexing/secondary/stats"
@@ -223,9 +223,8 @@ func (ie *IndexEvaluator) SystemEventData(
 
 	keyspaceId := ie.GetKeyspaceId()
 	kv := c.NewKeyVersions(seqno, nil, 1, m.Ctime)
-	cid := make([]byte, 4) // 4 bytes for collection ID
-	binary.BigEndian.PutUint32(cid, m.CollectionID)
-	kv.AddSystemEvent(m.EventType, m.ManifestUID, m.ScopeID, cid)
+	cid := strconv.FormatUint(uint64(m.CollectionID), 16) //transmit as base-16 string
+	kv.AddSystemEvent(m.EventType, m.ManifestUID, m.ScopeID, []byte(cid))
 	return &c.DataportKeyVersions{keyspaceId, vbno, vbuuid, kv, opaque2}
 }
 
