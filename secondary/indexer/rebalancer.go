@@ -27,7 +27,9 @@ import (
 
 	"github.com/couchbase/cbauth/metakv"
 	"github.com/couchbase/cbauth/service"
+	"github.com/couchbase/indexing/secondary/common"
 	c "github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 	l "github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager"
 	"github.com/couchbase/indexing/secondary/manager/client"
@@ -587,11 +589,14 @@ loop:
 			pending := float64(0)
 			for _, partitionId := range tt.IndexInst.Defn.Partitions {
 
-				partnName := c.FormatIndexPartnDisplayName(tt.IndexInst.Defn.Name, tt.IndexInst.ReplicaId, int(partitionId), true)
+				defn := tt.IndexInst.Defn
+				prefix := common.GetStatsPrefix(defn.Bucket, defn.Scope, defn.Collection,
+					defn.Name, tt.IndexInst.ReplicaId, int(partitionId), true)
 
-				sname := fmt.Sprintf("%s:%s:", tt.IndexInst.Defn.Bucket, partnName)
-				sname_completed := sname + "num_completed_requests"
-				sname_requests := sname + "num_requests"
+				logging.Infof("DEEP2 %v %v", defn, prefix)
+
+				sname_completed := common.GetIndexStatKey(prefix, "num_completed_requests")
+				sname_requests := common.GetIndexStatKey(prefix, "num_requests")
 
 				var num_completed, num_requests float64
 				if _, ok := statsMap[sname_completed]; ok {
@@ -971,10 +976,15 @@ loop:
 					l.Errorf("Rebalancer::waitForIndexBuild Error Fetching Index Status %v %v", r.localaddr, err)
 					break
 				}
+
+				defn := tt.IndexInst.Defn
+				prefix := common.GetStatsPrefix(defn.Bucket, defn.Scope, defn.Collection,
+					defn.Name, tt.IndexInst.ReplicaId, 0, false)
+
 				sname := fmt.Sprintf("%s:%s:", tt.IndexInst.Defn.Bucket, tt.IndexInst.DisplayName())
-				sname_pend := sname + "num_docs_pending"
-				sname_queued := sname + "num_docs_queued"
-				sname_processed := sname + "num_docs_processed"
+				sname_pend := common.GetIndexStatKey(prefix, "num_docs_pending")
+				sname_queued := common.GetIndexStatKey(prefix, "num_docs_queued")
+				sname_processed := common.GetIndexStatKey(prefix, "num_docs_processed")
 
 				var num_pend, num_queued, num_processed float64
 				if _, ok := statsMap[sname_pend]; ok {
