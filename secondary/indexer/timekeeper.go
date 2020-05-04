@@ -2087,8 +2087,9 @@ func (tk *timekeeper) checkInitialBuildDone(streamId common.StreamId,
 
 				sessionId := tk.ss.getSessionId(streamId, keyspaceId)
 
-				//if MAINT_STREAM doesn't exist for the keyspaceId, no catchup is required
-				status := tk.ss.streamKeyspaceIdStatus[common.MAINT_STREAM][keyspaceId]
+				//if MAINT_STREAM doesn't exist for the bucket, no catchup is required
+				bucket, _, _ := SplitKeyspaceId(keyspaceId)
+				status := tk.ss.streamKeyspaceIdStatus[common.MAINT_STREAM][bucket]
 				if status == STREAM_INACTIVE {
 
 					//cleanup all indexes for keyspaceId as build is done
@@ -2153,6 +2154,8 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 		return false
 	}
 
+	bucket, _, _ := SplitKeyspaceId(keyspaceId)
+
 	//if flushTs is not on snap boundary, merge cannot be done
 	if !initFlushTs.IsSnapAligned() {
 		hwt := tk.ss.streamKeyspaceIdHWTMap[streamId][keyspaceId]
@@ -2166,15 +2169,15 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 
 	//INIT_STREAM cannot be merged to MAINT_STREAM if its not ACTIVE
 	//TODO Collections - Is this message required in CC?
-	if tk.ss.streamKeyspaceIdStatus[common.MAINT_STREAM][keyspaceId] != STREAM_ACTIVE {
+	if tk.ss.streamKeyspaceIdStatus[common.MAINT_STREAM][bucket] != STREAM_ACTIVE {
 		logging.Infof("Timekeeper::checkInitStreamReadyToMerge MAINT_STREAM in %v. "+
 			"INIT_STREAM cannot be merged. Continue both streams for keyspaceId %v.",
-			tk.ss.streamKeyspaceIdStatus[common.MAINT_STREAM][keyspaceId], keyspaceId)
+			tk.ss.streamKeyspaceIdStatus[common.MAINT_STREAM][bucket], keyspaceId)
 		return false
 	}
 
 	//If any repair is going on, merge cannot happen
-	if stopCh, ok := tk.ss.streamKeyspaceIdRepairStopCh[common.MAINT_STREAM][keyspaceId]; ok && stopCh != nil {
+	if stopCh, ok := tk.ss.streamKeyspaceIdRepairStopCh[common.MAINT_STREAM][bucket]; ok && stopCh != nil {
 
 		logging.Infof("Timekeeper::checkInitStreamReadyToMerge MAINT_STREAM In Repair."+
 			"INIT_STREAM cannot be merged. Continue both streams for keyspaceId %v.", keyspaceId)
@@ -2211,7 +2214,7 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 
 				//disable flush for MAINT_STREAM for this keyspace, so it doesn't
 				//move ahead till merge is complete
-				tk.ss.streamKeyspaceIdFlushEnabledMap[common.MAINT_STREAM][keyspaceId] = false
+				tk.ss.streamKeyspaceIdFlushEnabledMap[common.MAINT_STREAM][bucket] = false
 
 				//if keyspace in INIT_STREAM is going to merge, disable flush. No need to waste
 				//resources on flush as these mutations will be flushed from MAINT_STREAM anyway.
@@ -2261,10 +2264,11 @@ func (tk *timekeeper) checkFlushTsValidForMerge(streamId common.StreamId, keyspa
 	//this index can be merged to MAINT_STREAM. If there is a flush in progress,
 	//it is important to use that for comparison as after merge MAINT_STREAM will
 	//include merged indexes after the in progress flush finishes.
-	if lts, ok := tk.ss.streamKeyspaceIdFlushInProgressTsMap[common.MAINT_STREAM][keyspaceId]; ok && lts != nil {
+	bucket, _, _ := SplitKeyspaceId(keyspaceId)
+	if lts, ok := tk.ss.streamKeyspaceIdFlushInProgressTsMap[common.MAINT_STREAM][bucket]; ok && lts != nil {
 		maintFlushTs = lts
 	} else {
-		maintFlushTs = tk.ss.streamKeyspaceIdLastFlushedTsMap[common.MAINT_STREAM][keyspaceId]
+		maintFlushTs = tk.ss.streamKeyspaceIdLastFlushedTsMap[common.MAINT_STREAM][bucket]
 	}
 
 	var maintTsSeq, initTsSeq Timestamp
@@ -3693,23 +3697,31 @@ func (tk *timekeeper) checkPendingStreamMerge(streamId common.StreamId,
 
 	logging.Debugf("Timekeeper::checkPendingStreamMerge Stream: %v KeyspaceId: %v", streamId, keyspaceId)
 
-	//for repair done of MAINT_STREAM, if there is any corresponding INIT_STREAM,
-	//check the possibility of merge
-	if streamId == common.MAINT_STREAM {
-		if tk.ss.streamKeyspaceIdStatus[common.INIT_STREAM][keyspaceId] == STREAM_ACTIVE {
-			streamId = common.INIT_STREAM
-		} else {
-			return
+	checkPendingMerge := func(streamId common.StreamId, keyspaceId string) {
+
+		if !tk.ss.checkAnyFlushPending(streamId, keyspaceId) &&
+			!tk.ss.checkAnyAbortPending(streamId, keyspaceId) {
+
+			lastFlushedTs := tk.ss.streamKeyspaceIdLastFlushedTsMap[streamId][keyspaceId]
+			tk.checkInitStreamReadyToMerge(streamId, keyspaceId, lastFlushedTs)
 		}
 	}
 
-	if !tk.ss.checkAnyFlushPending(streamId, keyspaceId) &&
-		!tk.ss.checkAnyAbortPending(streamId, keyspaceId) {
+	//for repair done of MAINT_STREAM, if there is any corresponding INIT_STREAM,
+	//check the possibility of merge
+	if streamId == common.MAINT_STREAM {
 
-		lastFlushedTs := tk.ss.streamKeyspaceIdLastFlushedTsMap[streamId][keyspaceId]
-		tk.checkInitStreamReadyToMerge(streamId, keyspaceId, lastFlushedTs)
-
+		keyspaceIdStatus := tk.ss.streamKeyspaceIdStatus[common.INIT_STREAM]
+		for ks, status := range keyspaceIdStatus {
+			bucket, _, _ := SplitKeyspaceId(ks)
+			if bucket == keyspaceId && status == STREAM_ACTIVE {
+				checkPendingMerge(common.INIT_STREAM, ks)
+			}
+		}
+	} else {
+		checkPendingMerge(streamId, keyspaceId)
 	}
+
 }
 
 //startTimer starts a per stream/keyspaceId timer to periodically check and

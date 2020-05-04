@@ -4540,7 +4540,8 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 	logging.Infof("Indexer::handleInitialBuildDone KeyspaceId: %v Stream: %v SessionId: %v",
 		keyspaceId, streamId, sessionId)
 
-	mState := idx.getStreamKeyspaceIdState(common.MAINT_STREAM, keyspaceId)
+	bucket, _, _ := SplitKeyspaceId(keyspaceId)
+	mState := idx.getStreamKeyspaceIdState(common.MAINT_STREAM, bucket)
 
 	//if MAINT_STREAM is not running, it needs to be started
 	if mState == STREAM_INACTIVE {
@@ -4677,9 +4678,12 @@ func (idx *indexer) processBuildDoneCatchup(streamId common.StreamId, keyspaceId
 	//Add index to MAINT_STREAM in Catchup State,
 	//so mutations for this index are already in queue to
 	//allow convergence with INIT_STREAM.
+
+	//use bucket as keyspaceId for MAINT_STREAM
+	bucket, _, _ := SplitKeyspaceId(keyspaceId)
 	cmd := &MsgStreamUpdate{mType: ADD_INDEX_LIST_TO_STREAM,
 		streamId:   common.MAINT_STREAM,
-		keyspaceId: keyspaceId,
+		keyspaceId: bucket,
 		indexList:  indexList,
 		respCh:     respCh,
 		stopCh:     stopCh,
@@ -4693,11 +4697,10 @@ func (idx *indexer) processBuildDoneCatchup(streamId common.StreamId, keyspaceId
 
 	//send stream update to mutation manager
 	if resp := idx.sendStreamUpdateToWorker(cmd, idx.mutMgrCmdCh, "MutationMgr"); resp.GetMsgType() != MSG_SUCCESS {
+
 		respErr := resp.(*MsgError).GetError()
 		common.CrashOnError(respErr.cause)
 	}
-
-	bucket, _, _ := SplitKeyspaceId(keyspaceId)
 
 	reqLock := idx.acquireStreamRequestLock(keyspaceId, streamId)
 	go func(reqLock *kvRequest) {
@@ -4964,7 +4967,8 @@ func (idx *indexer) handleMergeStream(msg Message) {
 
 	//MAINT_STREAM should already be running for this keyspaceId,
 	//as first index gets added to MAINT_STREAM always
-	if idx.checkKeyspaceIdExistsInStream(keyspaceId, common.MAINT_STREAM, true) == false {
+	bucket, _, _ := SplitKeyspaceId(keyspaceId)
+	if idx.checkKeyspaceIdExistsInStream(bucket, common.MAINT_STREAM, true) == false {
 		logging.Fatalf("Indexer::handleMergeStream MAINT_STREAM not enabled for KeyspaceId: %v ."+
 			"Cannot Process Merge Stream", keyspaceId)
 		common.CrashOnError(ErrMaintStreamMissingBucket)
@@ -5050,9 +5054,10 @@ func (idx *indexer) handleMergeInitStream(msg Message) {
 	idx.cleanupStreamKeyspaceIdState(streamId, keyspaceId)
 
 	//enable flush for this keyspaceId in MAINT_STREAM
+	bucket, _, _ := SplitKeyspaceId(keyspaceId)
 	idx.tkCmdCh <- &MsgTKToggleFlush{mType: TK_ENABLE_FLUSH,
 		streamId:   common.MAINT_STREAM,
-		keyspaceId: keyspaceId}
+		keyspaceId: bucket}
 	<-idx.tkCmdCh
 
 	//for cbq bridge, return response after merge is done and
