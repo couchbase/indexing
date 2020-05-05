@@ -6949,6 +6949,13 @@ func (idx *indexer) makeRestartTs(streamId common.StreamId) (map[string]*common.
 			}
 		}
 	}
+
+	//for pre 7.0 indexes, the manifestUID needs to be set to epoch
+	for _, ts := range restartTs {
+		if ts != nil {
+			ts.SetEpochManifestUIDIfEmpty()
+		}
+	}
 	return restartTs, allNilSnaps
 }
 

@@ -456,7 +456,7 @@ func (k *kvSender) restartVbuckets(streamId c.StreamId, keyspaceId string,
 			protoRestartTs.Vbnos = append(protoRestartTs.Vbnos, uint32(vbno))
 			protoRestartTs.Seqnos = append(protoRestartTs.Seqnos, 0)
 			protoRestartTs.Vbuuids = append(protoRestartTs.Vbuuids, 0)
-			protoRestartTs.ManifestUIDs = append(protoRestartTs.ManifestUIDs, collections.MANIFEST_UID_NIL)
+			protoRestartTs.ManifestUIDs = append(protoRestartTs.ManifestUIDs, collections.MANIFEST_UID_EPOCH)
 			protoRestartTs.Snapshots = append(protoRestartTs.Snapshots, protobuf.NewSnapshot(0, 0))
 		}
 	}
@@ -1163,7 +1163,7 @@ func (k *kvSender) makeInitialTs(bucket string, collectionId string,
 	ts := protobuf.NewTsVbuuid(DEFAULT_POOL, bucket, len(vbnos))
 
 	for vbno := range vbnos {
-		ts.Append(uint16(vbno), 0, 0, 0, 0, "")
+		ts.Append(uint16(vbno), 0, 0, 0, 0, collections.MANIFEST_UID_EPOCH)
 	}
 
 	if collectionId != "" {

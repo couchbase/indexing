@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/couchbase/indexing/secondary/common/collections"
 	"github.com/couchbase/indexing/secondary/logging"
 )
 
@@ -44,13 +45,15 @@ type TsVbuuid struct {
 // NewTsVbuuid returns reference to new instance of TsVbuuid.
 // `numVbuckets` is same as `maxVbuckets`.
 func NewTsVbuuid(bucket string, numVbuckets int) *TsVbuuid {
-	return &TsVbuuid{
+	ts := &TsVbuuid{
 		Bucket:       bucket,
 		Seqnos:       make([]uint64, numVbuckets),
 		Vbuuids:      make([]uint64, numVbuckets),
 		ManifestUIDs: make([]string, numVbuckets),
 		Snapshots:    make([][2]uint64, numVbuckets),
 	}
+	ts.SetEpochManifestUIDIfEmpty()
+	return ts
 }
 
 // NewTsVbuuid returns reference to new instance of TsVbuuid.
@@ -63,13 +66,15 @@ func NewTsVbuuid2(bucket string, seqnos, vbuuids []uint64) *TsVbuuid {
 }
 
 func newTsVbuuid() interface{} {
-	return &TsVbuuid{
+	ts := &TsVbuuid{
 		Bucket:       "",
 		Seqnos:       make([]uint64, NUM_VBUCKETS),
 		Vbuuids:      make([]uint64, NUM_VBUCKETS),
 		ManifestUIDs: make([]string, NUM_VBUCKETS),
 		Snapshots:    make([][2]uint64, NUM_VBUCKETS),
 	}
+	ts.SetEpochManifestUIDIfEmpty()
+	return ts
 }
 
 var tsVbuuidPool = sync.Pool{New: newTsVbuuid}
@@ -85,7 +90,7 @@ func NewTsVbuuidCached(bucket string, numVbuckets int) *TsVbuuid {
 	for i, _ := range ts.Vbuuids {
 		ts.Seqnos[i] = 0
 		ts.Vbuuids[i] = 0
-		ts.ManifestUIDs[i] = ""
+		ts.ManifestUIDs[i] = collections.MANIFEST_UID_EPOCH
 		ts.Snapshots[i][0] = 0
 		ts.Snapshots[i][1] = 0
 		ts.Crc64 = 0
@@ -109,6 +114,14 @@ func (ts *TsVbuuid) GetVbnos() []uint16 {
 		}
 	}
 	return vbnos
+}
+
+func (ts *TsVbuuid) SetEpochManifestUIDIfEmpty() {
+	for i := 0; i < len(ts.Vbuuids); i++ {
+		if ts.ManifestUIDs[i] == "" {
+			ts.ManifestUIDs[i] = collections.MANIFEST_UID_EPOCH
+		}
+	}
 }
 
 // CompareVbuuids will compare two timestamps for its bucket and vbuuids
