@@ -462,7 +462,9 @@ func (k *kvSender) restartVbuckets(streamId c.StreamId, keyspaceId string,
 	}
 	sort.Sort(protoRestartTs)
 
-	protoRestartTs.CollectionIDs = []string{collectionId}
+	if collectionId != "" {
+		protoRestartTs.CollectionIDs = []string{collectionId}
+	}
 
 	var rollbackTs *protobuf.TsVbuuid
 	var activeTs *protobuf.TsVbuuid
@@ -1164,7 +1166,9 @@ func (k *kvSender) makeInitialTs(bucket string, collectionId string,
 		ts.Append(uint16(vbno), 0, 0, 0, 0, "")
 	}
 
-	ts.CollectionIDs = []string{collectionId}
+	if collectionId != "" {
+		ts.CollectionIDs = []string{collectionId}
+	}
 
 	return ts, nil
 }
@@ -1194,9 +1198,9 @@ func makeRestartTsFromTsVbuuid(bucket string, collectionId string,
 			tsVbuuid.Vbuuids[vbno], tsVbuuid.Snapshots[vbno][0],
 			tsVbuuid.Snapshots[vbno][1], tsVbuuid.ManifestUIDs[vbno])
 	}
-
-	ts.CollectionIDs = []string{collectionId}
-
+	if collectionId != "" {
+		ts.CollectionIDs = []string{collectionId}
+	}
 	return ts, nil
 
 }

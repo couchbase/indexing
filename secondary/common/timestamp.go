@@ -432,7 +432,7 @@ func (ts *TsVbuuid) String() string {
 	for _, v := range vbnos {
 		start, end := ts.Snapshots[v][0], ts.Snapshots[v][1]
 		buf.WriteString(fmt.Sprintf("    {%5d %16x %v %10d %10d %10d}\n",
-			v, ts.Vbuuids[v], []byte(ts.ManifestUIDs[v]), ts.Seqnos[v], start, end))
+			v, ts.Vbuuids[v], ts.ManifestUIDs[v], ts.Seqnos[v], start, end))
 	}
 	return buf.String()
 }
