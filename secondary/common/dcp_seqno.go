@@ -473,8 +473,9 @@ func (r *vbSeqnosReader) processMinSeqNos() {
 func getKVFeeds(cluster, pooln, bucketn string) (map[string]*kvConn, error) {
 	var bucket *couchbase.Bucket
 	var err error
+	var clusterVersion int
 
-	bucket, err = ConnectBucket(cluster, pooln, bucketn)
+	bucket, clusterVersion, err = ConnectBucket2(cluster, pooln, bucketn)
 	if err != nil {
 		logging.Errorf("Unable to connect with bucket %q\n", bucketn)
 		return nil, err
@@ -526,12 +527,23 @@ func getKVFeeds(cluster, pooln, bucketn string) (map[string]*kvConn, error) {
 
 	// make sure a feed is available for all kv-nodes
 	var conn *memcached.Client
-
+	var connName string
 	for kvaddr := range m {
 		conn, err = bucket.GetMcConn(kvaddr)
 		if err != nil {
 			logging.Errorf("GetMcConn(): %v\n", err)
 			return nil, err
+		}
+
+		if clusterVersion >= INDEXER_70_VERSION {
+			connName, err = getConnName()
+			if err != nil {
+				return nil, err
+			}
+			err = conn.EnableCollections(connName)
+			if err != nil {
+				return nil, err
+			}
 		}
 		kvfeeds[kvaddr] = newKVConn(conn)
 	}
@@ -542,8 +554,9 @@ func getKVFeeds(cluster, pooln, bucketn string) (map[string]*kvConn, error) {
 
 func addDBSbucket(cluster, pooln, bucketn string) (err error) {
 	var bucket *couchbase.Bucket
+	var clusterVersion int
 
-	bucket, err = ConnectBucket(cluster, pooln, bucketn)
+	bucket, clusterVersion, err = ConnectBucket2(cluster, pooln, bucketn)
 	if err != nil {
 		logging.Errorf("Unable to connect with bucket %q\n", bucketn)
 		return err
@@ -603,12 +616,23 @@ func addDBSbucket(cluster, pooln, bucketn string) (err error) {
 
 	// make sure a feed is available for all kv-nodes
 	var conn *memcached.Client
-
+	var connName string
 	for kvaddr := range m {
 		conn, err = bucket.GetMcConn(kvaddr)
 		if err != nil {
 			logging.Errorf("GetMcConn(): %v\n", err)
 			return err
+		}
+
+		if clusterVersion >= INDEXER_70_VERSION {
+			connName, err = getConnName()
+			if err != nil {
+				return nil
+			}
+			err = conn.EnableCollections(connName)
+			if err != nil {
+				return err
+			}
 		}
 		kvfeeds[kvaddr] = newKVConn(conn)
 	}
@@ -784,6 +808,12 @@ func FetchSeqnos(kvfeeds map[string]*kvConn, cid string, bucketLevel bool) (l_se
 			if bucketLevel {
 				errors[index] = couchbase.GetSeqs(feed.mc, kv_seqnos_node[index], feed.tmpbuf)
 			} else {
+				// A call to CollectionSeqnos implies cluster is fully upgraded to 7.0
+				err = tryEnableCollection(feed.mc)
+				if err != nil {
+					errors[index] = err
+					return
+				}
 				errors[index] = couchbase.GetCollectionSeqs(feed.mc, kv_seqnos_node[index], feed.tmpbuf, cid)
 			}
 
@@ -1047,6 +1077,12 @@ func FetchMinSeqnos(kvfeeds map[string]*kvConn, cid string, bucketLevel bool) (l
 				errors[index] = couchbase.GetSeqsAllVbStates(feed.mc,
 					kv_seqnos_node[index], feed.tmpbuf)
 			} else {
+				// A call to CollectionMinSeqnos implies cluster is fully upgraded to 7.0
+				err = tryEnableCollection(feed.mc)
+				if err != nil {
+					errors[index] = err
+					return
+				}
 				errors[index] = couchbase.GetCollectionSeqsAllVbStates(feed.mc,
 					kv_seqnos_node[index], feed.tmpbuf, cid)
 			}
@@ -1202,4 +1238,32 @@ func randomNum(min, max int) int {
 	rand.Seed(time.Now().UnixNano())
 	Min, Max := float64(min), float64(max)
 	return int(rand.Float64()*(Max-Min) + Min)
+}
+
+func getConnName() (string, error) {
+	uuid, _ := NewUUID()
+	name := uuid.Str()
+	if name == "" {
+		err := fmt.Errorf("getConnName: invalid uuid.")
+
+		// probably not a good idea to fail if uuid
+		// based name fails. Can return const string
+		return "", err
+	}
+	connName := "secidx:getseqnos" + name
+	return connName, nil
+}
+
+func tryEnableCollection(conn *memcached.Client) error {
+	if !conn.IsCollectionsEnabled() {
+		connName, err := getConnName()
+		if err != nil {
+			return err
+		}
+		err = conn.EnableCollections(connName)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }

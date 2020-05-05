@@ -23,6 +23,10 @@ type Client struct {
 	conn    io.ReadWriteCloser
 	healthy bool
 
+	// Book-keeping to enable collections on connections later
+	// when the cluster is fully upgraded
+	collectionsEnabled uint32 // 0 => collections disabled, 1 => collections enabled
+
 	hdrBuf []byte
 }
 
@@ -64,6 +68,14 @@ func Wrap(rwc io.ReadWriteCloser) (rv *Client, err error) {
 // Close the connection when you're done.
 func (c *Client) Close() error {
 	return c.conn.Close()
+}
+
+func (c *Client) SetCollectionsEnabled() {
+	atomic.StoreUint32(&c.collectionsEnabled, 1)
+}
+
+func (c *Client) IsCollectionsEnabled() bool {
+	return (atomic.LoadUint32(&c.collectionsEnabled) == 1)
 }
 
 func (c *Client) SetDeadline(t time.Time) error {
@@ -652,18 +664,21 @@ func (c *Client) Hijack() io.ReadWriteCloser {
 }
 
 func (c *Client) EnableCollections(clientName string) error {
-	if resp, err := c.sendHeloCollections(clientName); err != nil {
-		return err
-	} else {
-		opcode := resp.Opcode
-		body := resp.Body
-		if opcode != transport.HELO {
-			logging.Errorf("Memcached HELO for %v (feature_collections) opcode = %v. Expecting opcode = 0x1f", clientName, opcode)
-			return ErrorEnableCollections
-		} else if (len(body) != 2) || (body[0] != 0x00 && body[1] != transport.FEATURE_COLLECTIONS) {
-			logging.Errorf("Memcached HELO for %v (feature_collections) body = %v. Expecting body = 0x0012", clientName, body)
-			return ErrorEnableCollections
+	if !c.IsCollectionsEnabled() {
+		if resp, err := c.sendHeloCollections(clientName); err != nil {
+			return err
+		} else {
+			opcode := resp.Opcode
+			body := resp.Body
+			if opcode != transport.HELO {
+				logging.Errorf("Memcached HELO for %v (feature_collections) opcode = %v. Expecting opcode = 0x1f", clientName, opcode)
+				return ErrorEnableCollections
+			} else if (len(body) != 2) || (body[0] != 0x00 && body[1] != transport.FEATURE_COLLECTIONS) {
+				logging.Errorf("Memcached HELO for %v (feature_collections) body = %v. Expecting body = 0x0012", clientName, body)
+				return ErrorCollectionsNotEnabled
+			}
 		}
+		c.SetCollectionsEnabled()
 	}
 	return nil
 }

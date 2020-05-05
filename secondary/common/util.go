@@ -7,6 +7,7 @@ import (
 	"hash/crc64"
 	"io"
 	"io/ioutil"
+	"math"
 	"math/big"
 	"net"
 	"net/http"
@@ -537,6 +538,54 @@ func ConnectBucket(cluster, pooln, bucketn string) (*couchbase.Bucket, error) {
 		return nil, err
 	}
 	return bucket, err
+}
+
+// ConnectBucket2 will instantiate a couchbase-bucket instance with cluster.
+// caller's responsibility to close the bucket. It also returns clusterVersion
+func ConnectBucket2(cluster, pooln, bucketn string) (*couchbase.Bucket,
+	int, error) {
+
+	if strings.HasPrefix(cluster, "http") {
+		u, err := url.Parse(cluster)
+		if err != nil {
+			return nil, 0, err
+		}
+		cluster = u.Host
+	}
+
+	ah := &CbAuthHandler{
+		Hostport: cluster,
+		Bucket:   bucketn,
+	}
+
+	couch, err := couchbase.ConnectWithAuth("http://"+cluster, ah)
+	if err != nil {
+		return nil, 0, err
+	}
+	pool, err := couch.GetPool(pooln)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	clusterCompat := math.MaxInt32
+	for _, node := range pool.Nodes {
+		if node.ClusterCompatibility < clusterCompat {
+			clusterCompat = node.ClusterCompatibility
+		}
+	}
+
+	clusterVersion := 0
+	if clusterCompat != math.MaxInt32 {
+		version := clusterCompat / 65536
+		minorVersion := clusterCompat - (version * 65536)
+		clusterVersion = int(GetVersion(uint32(version), uint32(minorVersion)))
+	}
+
+	bucket, err := pool.GetBucket(bucketn)
+	if err != nil {
+		return nil, 0, err
+	}
+	return bucket, clusterVersion, err
 }
 
 // MaxVbuckets return the number of vbuckets in bucket.
@@ -1235,4 +1284,30 @@ func GetCollectionDefaults(scope, collection string) (string, string) {
 	}
 
 	return scope, collection
+}
+
+// Mapping of major and minor versions to indexer's
+// internal representation of server versions
+func GetVersion(version, minorVersion uint32) uint64 {
+	if version < 5 {
+		return INDEXER_45_VERSION
+	}
+	if version == 5 {
+		if minorVersion < 5 {
+			return INDEXER_50_VERSION
+		}
+		if minorVersion >= 5 {
+			return INDEXER_55_VERSION
+		}
+	}
+	if version == 6 {
+		if minorVersion >= 5 {
+			return INDEXER_65_VERSION
+		}
+		return INDEXER_55_VERSION // For 6.0, return 5.5 as indexer version
+	}
+	if version == 7 {
+		return INDEXER_70_VERSION
+	}
+	return INDEXER_CUR_VERSION
 }
