@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -34,6 +35,7 @@ import (
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/stats"
 	"github.com/couchbase/indexing/secondary/stubs/nitro/mm"
+	"github.com/couchbase/logstats/logstats"
 	"github.com/golang/snappy"
 )
 
@@ -1927,6 +1929,61 @@ var statsFilterMap = map[string]uint64{
 	"external":    stats.ExternalStatFilter,
 }
 
+type statLogger struct {
+	s              *statsManager
+	enableStatsLog bool
+	sLogger        logstats.LogStats
+}
+
+func newStatLogger(s *statsManager, enableStatsLogger bool, sLogger logstats.LogStats) *statLogger {
+	return &statLogger{
+		s:              s,
+		enableStatsLog: enableStatsLogger,
+		sLogger:        sLogger,
+	}
+}
+
+func (l *statLogger) Write(stats *IndexerStats, essential, writeStorageStats bool) {
+	spec := NewStatsSpec(false, false, false, essential, nil)
+
+	var sbytes []byte
+	var err error
+	logSbytes := false
+
+	if l.enableStatsLog {
+		// TODO: As the stat logger doesn't work well with large log messages,
+		//       this needs to be improved where granular stats will be logged in
+		//       separate log messages.
+		st := stats.GetStats(spec)
+		err = l.sLogger.Write("PeriodicStats =", st)
+		if err != nil {
+			logging.Errorf("Error in writing logs to stats logger %v", err)
+		}
+	} else {
+		sbytes, _ = stats.MarshalJSON(spec)
+		logSbytes = true
+	}
+
+	var storageStats string
+	if writeStorageStats { //log storage stats every 15mins
+		if common.GetStorageMode() != common.FORESTDB {
+			storageStats = fmt.Sprintf("\n==== StorageStats ====\n%s", l.s.getStorageStats())
+		} else if logging.IsEnabled(logging.Timing) {
+			storageStats = fmt.Sprintf("\n==== StorageStats ====\n%s", l.s.getStorageStats())
+		}
+	} else {
+		storageStats = ""
+	}
+
+	if logSbytes {
+		logging.Infof("PeriodicStats = %s%s", string(sbytes), storageStats)
+	} else {
+		if len(storageStats) != 0 {
+			logging.Infof(storageStats)
+		}
+	}
+}
+
 type statsManager struct {
 	sync.Mutex
 	config                common.ConfigHolder
@@ -2314,29 +2371,68 @@ func (s *statsManager) handleConfigUpdate(cmd Message) {
 	s.supvCmdch <- &MsgSuccess{}
 }
 
+func (s *statsManager) tryEnableStatsLog() (bool, logstats.LogStats) {
+	conf := s.config.Load()
+
+	// Check if the stats logging is enabled
+	enable, ok := conf["statsLogEnable"]
+	if !ok {
+		return false, nil
+	}
+
+	enableStatsLog := enable.Bool()
+	if !enableStatsLog {
+		return false, nil
+	}
+
+	ldir, ok := conf["log_dir"]
+	if !ok {
+		return false, nil
+	}
+
+	logdir := ldir.String()
+	if len(logdir) == 0 {
+		return false, nil
+	}
+
+	fname, ok1 := conf["statsLogFname"]
+	fsize, ok2 := conf["statsLogFsize"]
+	fcount, ok3 := conf["statsLogFcount"]
+
+	if ok1 && ok2 && ok3 {
+		fpath := filepath.Join(logdir, fname.String())
+		format := "2006-01-02T15:04:05.000-07:00"
+		sLogger, err := logstats.NewDedupeLogStats(fpath, fsize.Int(), fcount.Int(), format)
+		if err != nil {
+			logging.Infof("Error in NewDedupeLogStats %v. Disabling stats logging.", err)
+			return false, nil
+		} else {
+			return true, sLogger
+		}
+	}
+
+	return false, nil
+}
+
 func (s *statsManager) runStatsDumpLogger() {
-	skipStorage := 0
+	writeStorageStats := 0
 	essential := true
+
+	enableStatsLog, sLogger := s.tryEnableStatsLog()
+	logger := newStatLogger(s, enableStatsLog, sLogger)
+
 	for {
 		stats := s.stats.Get()
 		if stats != nil {
 			if logging.IsEnabled(logging.Verbose) {
 				essential = false
 			}
-			spec := NewStatsSpec(false, false, false, essential, nil)
-			bytes, _ := stats.MarshalJSON(spec)
-			var storageStats string
-			if skipStorage > 15 { //log storage stats every 15mins
-				if common.GetStorageMode() != common.FORESTDB {
-					storageStats = fmt.Sprintf("\n==== StorageStats ====\n%s", s.getStorageStats())
-				} else if logging.IsEnabled(logging.Timing) {
-					storageStats = fmt.Sprintf("\n==== StorageStats ====\n%s", s.getStorageStats())
-				}
-				logging.Infof("PeriodicStats = %s%s", string(bytes), storageStats)
-				skipStorage = 0
+
+			logger.Write(stats, essential, writeStorageStats > 15)
+			if writeStorageStats > 15 {
+				writeStorageStats = 0
 			} else {
-				logging.Infof("PeriodicStats = %s", string(bytes))
-				skipStorage++
+				writeStorageStats++
 			}
 		}
 
