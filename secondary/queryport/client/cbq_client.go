@@ -58,6 +58,7 @@ func newCbqClient(cluster string) (*cbqClient, error) {
 	if err != nil {
 		return nil, err
 	}
+	cinfo.SetUserAgent("newCbqClient")
 	if err = cinfo.Fetch(); err != nil {
 		return nil, err
 	}

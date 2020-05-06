@@ -214,6 +214,7 @@ func IsEphemeral(cluster, bucket string) (bool, error) {
 		logging.Fatalf("Indexer::Fail to init ClusterInfoCache : %v", err)
 		common.CrashOnError(err)
 	}
+	cinfo.SetUserAgent("IsEphemeral")
 
 	cinfo.Lock()
 	defer cinfo.Unlock()
@@ -247,6 +248,7 @@ func clusterVersion(clusterAddr string) uint64 {
 	if err != nil {
 		return common.INDEXER_45_VERSION
 	}
+	cinfo.SetUserAgent("clusterVersion")
 
 	cinfo.Lock()
 	defer cinfo.Unlock()

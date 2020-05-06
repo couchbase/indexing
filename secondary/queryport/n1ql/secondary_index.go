@@ -1814,6 +1814,7 @@ func getClusterInfo(
 	if err != nil {
 		return nil, errors.NewError(err, fmt.Sprintf("ClusterInfo() failed"))
 	}
+	cinfo.SetUserAgent("n1ql::getClusterInfo")
 	if err := cinfo.Fetch(); err != nil {
 		msg := fmt.Sprintf("Fetch ClusterInfo() failed")
 		return nil, errors.NewError(err, msg)

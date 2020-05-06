@@ -307,6 +307,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	if err != nil {
 		common.CrashOnError(err)
 	}
+	idx.clusterInfoClient.SetUserAgent("indexer")
 
 	//Start Mutation Manager
 	idx.mutMgr, res = NewMutationManager(idx.mutMgrCmdCh, idx.wrkrRecvCh, idx.config)
@@ -460,7 +461,7 @@ func refreshSecurityContextOnTopology(clusterAddr string) error {
 		if err != nil {
 			return err
 		}
-
+		cinfo.SetUserAgent("Indexer::refreshSecurityContextOnTopology")
 		cinfo.Lock()
 		defer cinfo.Unlock()
 
@@ -8498,6 +8499,7 @@ func (idx *indexer) monitorKVNodes() {
 		selfRestart()
 		return
 	}
+	cinfo.SetUserAgent("MonitorKVNodes")
 
 	getActiveKVNodes := func() map[string]bool {
 
