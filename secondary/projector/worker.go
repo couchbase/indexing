@@ -567,6 +567,7 @@ func (worker *VbucketWorker) handleEvent(m *mc.DcpEvent) *Vbucket {
 			logging.Errorf(fmsg, logPrefix, m.Opaque, vbno)
 			return v
 		}
+		v.seqno = m.Seqno // update seqno for seqno advanced
 		if data := v.makeSeqnoAdvancedEvent(m, worker.engines); data != nil {
 			worker.broadcast2Endpoints(data)
 		} else {
