@@ -81,6 +81,11 @@ func RetrievePlanFromCluster(clusterUrl string, hosts []string) (*Plan, error) {
 		return nil, err
 	}
 
+	cinfo := cinfoClient.GetClusterInfoCache()
+	if err := cinfo.FetchWithLock(); err != nil {
+		return nil, err
+	}
+
 	indexers, err := getIndexLayout(config, hosts)
 	if err != nil {
 		return nil, err
