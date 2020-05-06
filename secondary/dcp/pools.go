@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strings"
 	"sync/atomic"
+	"time"
 	"unsafe"
 
 	"github.com/couchbase/indexing/secondary/dcp/transport/client"
@@ -31,6 +32,9 @@ var HTTPClient = &http.Client{Transport: HTTPTransport}
 
 // PoolSize is the size of each connection pool (per host).
 var PoolSize = 64
+
+// Timeout value for HTTP requests
+var HttpRequestTimeout = time.Duration(120) * time.Second
 
 // PoolOverflow is the number of overflow connections allowed in a
 // pool.
@@ -298,7 +302,8 @@ func queryRestAPI(
 	baseURL *url.URL,
 	path string,
 	authHandler AuthHandler,
-	out interface{}) error {
+	out interface{},
+	reqParams *security.RequestParams) error {
 	u := *baseURL
 	u.User = nil
 	if q := strings.Index(path, "?"); q > 0 {
@@ -308,7 +313,7 @@ func queryRestAPI(
 		u.Path = path
 	}
 
-	res, err := security.GetWithAuth(u.String(), nil)
+	res, err := security.GetWithAuth(u.String(), reqParams)
 	if err != nil {
 		return err
 	}
@@ -422,7 +427,7 @@ func (c *Client) runObserveStreamingEndpoint(path string,
 }
 
 func (c *Client) parseURLResponse(path string, out interface{}) error {
-	return queryRestAPI(c.BaseURL, path, c.ah, out)
+	return queryRestAPI(c.BaseURL, path, c.ah, out, &security.RequestParams{Timeout: HttpRequestTimeout})
 }
 
 func (b *Bucket) parseURLResponse(path string, out interface{}) error {
@@ -446,7 +451,7 @@ func (b *Bucket) parseURLResponse(path string, out interface{}) error {
 			Scheme: "http",
 		}
 
-		err := queryRestAPI(url, path, b.pool.client.ah, out)
+		err := queryRestAPI(url, path, b.pool.client.ah, out, &security.RequestParams{Timeout: HttpRequestTimeout})
 		if err == nil {
 			return err
 		}
