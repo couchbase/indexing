@@ -29,6 +29,8 @@ import (
 // TLS Connection
 /////////////////////////////////////////////
 
+var userAgentPrefix = "Go-http-client/1.1-indexer-"
+
 //
 // Setup client TLSConfig
 //
@@ -469,7 +471,8 @@ func MakeClient(u string) (*http.Client, error) {
 /////////////////////////////////////////////
 
 type RequestParams struct {
-	Timeout time.Duration
+	Timeout   time.Duration
+	UserAgent string
 }
 
 //
@@ -492,6 +495,10 @@ func GetWithAuth(u string, params *RequestParams) (*http.Response, error) {
 	req, err := http.NewRequest("GET", url.String(), nil)
 	if err != nil {
 		return nil, err
+	}
+
+	if params != nil && params.UserAgent != "" {
+		req.Header.Add("User-agent", userAgentPrefix+params.UserAgent)
 	}
 
 	err = cbauth.SetRequestAuthVia(req, nil)

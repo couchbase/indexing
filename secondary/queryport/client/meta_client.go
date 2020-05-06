@@ -1336,6 +1336,7 @@ func (b *metadataClient) updateIndexerList(discardExisting bool) error {
 	if err != nil {
 		return err
 	}
+	cinfo.SetUserAgent("updateIndexerList")
 	if err := cinfo.Fetch(); err != nil {
 		return err
 	}
@@ -1898,7 +1899,7 @@ func (b *metadataClient) watchClusterChanges() {
 			// refresh indexer version
 			b.mdClient.RefreshIndexerVersion()
 
-			cinfo, err := common.FetchNewClusterInfoCache(b.cluster, common.DEFAULT_POOL)
+			cinfo, err := common.FetchNewClusterInfoCache(b.cluster, common.DEFAULT_POOL, "")
 			if err != nil {
 				logging.Errorf("updateIndexerList(): %v\n", err)
 				selfRestart()

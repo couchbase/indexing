@@ -747,6 +747,7 @@ func GetBucketUUID(cluster, bucket string) (string, error) {
 	if err != nil {
 		return BUCKET_UUID_NIL, err
 	}
+	cinfo.SetUserAgent("GetBucketUUID")
 
 	cinfo.Lock()
 	defer cinfo.Unlock()

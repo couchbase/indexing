@@ -71,6 +71,9 @@ func RetrievePlanFromCluster(clusterUrl string, hosts []string) (*Plan, error) {
 	cinfoClientMutex.Lock()
 	if cinfoClient == nil {
 		cinfoClient, err = common.NewClusterInfoClient(clusterUrl, "default", config)
+		if err == nil {
+			cinfoClient.SetUserAgent("RetrievePlanFromCluster")
+		}
 	}
 	cinfoClientMutex.Unlock()
 	if err != nil { // Error while initilizing clusterInfoClient

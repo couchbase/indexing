@@ -1886,6 +1886,7 @@ func refreshSecurityContextOnTopology(clusterAddr string) error {
 		if err != nil {
 			return err
 		}
+		cinfo.SetUserAgent("client::refreshSecurityContextOnTopology")
 
 		cinfo.Lock()
 		defer cinfo.Unlock()

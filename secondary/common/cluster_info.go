@@ -57,6 +57,7 @@ type ClusterInfoCache struct {
 	url       string
 	poolName  string
 	logPrefix string
+	userAgent string
 	retries   int
 
 	useStaticPorts bool
@@ -99,7 +100,7 @@ func NewClusterInfoCache(clusterUrl string, pool string) (*ClusterInfoCache, err
 	return c, nil
 }
 
-func FetchNewClusterInfoCache(clusterUrl string, pool string) (*ClusterInfoCache, error) {
+func FetchNewClusterInfoCache(clusterUrl string, pool string, userAgent string) (*ClusterInfoCache, error) {
 
 	url, err := ClusterAuthUrl(clusterUrl)
 	if err != nil {
@@ -110,6 +111,8 @@ func FetchNewClusterInfoCache(clusterUrl string, pool string) (*ClusterInfoCache
 	if err != nil {
 		return nil, err
 	}
+
+	c.SetUserAgent(userAgent)
 
 	if ServiceAddrMap != nil {
 		c.SetServicePorts(ServiceAddrMap)
@@ -134,6 +137,10 @@ func (c *ClusterInfoCache) SetMaxRetries(r int) {
 	c.retries = r
 }
 
+func (c *ClusterInfoCache) SetUserAgent(userAgent string) {
+	c.userAgent = userAgent
+}
+
 func (c *ClusterInfoCache) SetServicePorts(portMap map[string]string) {
 
 	c.useStaticPorts = true
@@ -155,6 +162,8 @@ func (c *ClusterInfoCache) Fetch() error {
 		if err != nil {
 			return err
 		}
+
+		c.client.SetUserAgent(c.userAgent)
 
 		c.pool, err = c.client.GetPool(c.poolName)
 		if err != nil {
@@ -825,7 +834,7 @@ func NewClusterInfoClient(clusterURL string, pool string, config Config) (c *Clu
 	}
 	cic.servicesNotifierRetryTm = 1000 // TODO: read from config
 
-	cinfo, err := FetchNewClusterInfoCache(clusterURL, pool)
+	cinfo, err := FetchNewClusterInfoCache(clusterURL, pool, "")
 	if err != nil {
 		return nil, err
 	}
@@ -838,6 +847,14 @@ func NewClusterInfoClient(clusterURL string, pool string, config Config) (c *Clu
 // Consumer must lock returned cinfo before using it
 func (c *ClusterInfoClient) GetClusterInfoCache() *ClusterInfoCache {
 	return c.cinfo
+}
+
+func (c *ClusterInfoClient) SetUserAgent(userAgent string) {
+	cinfo := c.GetClusterInfoCache()
+	cinfo.Lock()
+	defer cinfo.Unlock()
+
+	cinfo.SetUserAgent(userAgent)
 }
 
 func (c *ClusterInfoClient) watchClusterChanges() {

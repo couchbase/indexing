@@ -154,6 +154,7 @@ func NewRebalanceMgr(supvCmdch MsgChannel, supvMsgch MsgChannel, config c.Config
 	}
 	cinfo.SetMaxRetries(MAX_CLUSTER_FETCH_RETRY)
 	cinfo.SetLogPrefix("ServiceMgr: ")
+	cinfo.SetUserAgent("ServiceMgr")
 
 	mgr.cinfo = cinfo
 
