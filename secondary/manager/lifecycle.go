@@ -142,10 +142,11 @@ type updator struct {
 func NewLifecycleMgr(notifier MetadataNotifier, clusterURL string,
 	cinfoClient *common.ClusterInfoClient) (*LifecycleMgr, error) {
 
-	cinfo, err := common.FetchNewClusterInfoCache(clusterURL, common.DEFAULT_POOL)
+	cinfo, err := common.FetchNewClusterInfoCache(clusterURL, common.DEFAULT_POOL, "NewLifecycleMgr")
 	if err != nil {
 		return nil, err
 	}
+	cinfo.SetUserAgent("LifecycleMgr")
 
 	mgr := &LifecycleMgr{repo: nil,
 		cinfo:        cinfo,

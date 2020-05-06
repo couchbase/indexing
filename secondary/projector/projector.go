@@ -93,6 +93,7 @@ func NewProjector(maxvbs int, config c.Config, certFile string, keyFile string) 
 	cic, err := c.NewClusterInfoClient(p.clusterAddr, "default", config)
 	c.CrashOnError(err)
 	p.cinfoClient = cic
+	p.cinfoClient.SetUserAgent("projector")
 
 	p.stats = NewProjectorStats()
 	p.statsMgr = NewStatsManager(p.statsCmdCh, p.statsStopCh, config)
@@ -971,6 +972,7 @@ func refreshSecurityContextOnTopology(clusterAddr string) error {
 		}
 
 		cinfo, err = c.NewClusterInfoCache(url, "default")
+		cinfo.SetUserAgent("projector::refreshSecurityContextOnTopology")
 		if err != nil {
 			return err
 		}

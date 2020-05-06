@@ -150,6 +150,7 @@ func NewIndexManagerInternal(config common.Config, storageMode common.StorageMod
 		return nil, err
 	}
 	mgr.cinfoClient = cic
+	mgr.cinfoClient.SetUserAgent("IndexMgr")
 
 	// Initialize LifecycleMgr.
 	lifecycleMgr, err := NewLifecycleMgr(nil, mgr.clusterURL, mgr.cinfoClient)
@@ -299,7 +300,7 @@ func (m *IndexManager) Close() {
 
 func (m *IndexManager) FetchNewClusterInfoCache() (*common.ClusterInfoCache, error) {
 
-	return common.FetchNewClusterInfoCache(m.clusterURL, common.DEFAULT_POOL)
+	return common.FetchNewClusterInfoCache(m.clusterURL, common.DEFAULT_POOL, "IndexMgr")
 }
 
 ///////////////////////////////////////////////////////

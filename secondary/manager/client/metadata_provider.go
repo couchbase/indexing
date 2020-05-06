@@ -200,7 +200,7 @@ func NewMetadataProvider(cluster string, providerId string, changeCh chan bool, 
 	}
 	logging.Debugf("MetadataProvider.NewMetadataProvider(): MetadataProvider follower ID %s", s.providerId)
 
-	cinfo, err := c.FetchNewClusterInfoCache(cluster, c.DEFAULT_POOL)
+	cinfo, err := c.FetchNewClusterInfoCache(cluster, c.DEFAULT_POOL, "NewMetaDataProvider")
 	if err != nil {
 		return nil, err
 	}
@@ -3492,7 +3492,7 @@ func (o *MetadataProvider) refreshStats(stats map[c.IndexInstId]map[c.PartitionI
 //
 func (o *MetadataProvider) checkClusterHealth() (bool, error) {
 
-	cinfo, err := c.FetchNewClusterInfoCache(o.clusterUrl, c.DEFAULT_POOL)
+	cinfo, err := c.FetchNewClusterInfoCache(o.clusterUrl, c.DEFAULT_POOL, "checkClusterHealth")
 	if err != nil {
 		return false, err
 	}
