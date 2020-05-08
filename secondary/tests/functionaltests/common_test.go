@@ -4,6 +4,7 @@ import (
 	"flag"
 	"io/ioutil"
 	"log" //"os"
+	"os"
 	"os/user"
 	"path/filepath"
 	"runtime"
@@ -17,7 +18,7 @@ import (
 	"github.com/couchbase/indexing/secondary/tests/framework/datautility"
 	"github.com/couchbase/indexing/secondary/tests/framework/kvutility"
 	"github.com/couchbase/indexing/secondary/tests/framework/secondaryindex"
-	"github.com/prataprc/goparsec"
+	parsec "github.com/prataprc/goparsec"
 	"github.com/prataprc/monster"
 	"github.com/prataprc/monster/common"
 )
@@ -32,8 +33,8 @@ var skipsetup bool
 var indexerLogLevel string
 var bucketOpWaitDur = time.Duration(15)
 
-func init() {
-	log.Printf("In init()")
+func TestMain(m *testing.M) {
+	log.Printf("In TestMain()")
 	logging.SetLogLevel(logging.Error)
 
 	var configpath string
@@ -115,6 +116,8 @@ func init() {
 		log.Printf("Populating the default bucket")
 		kvutility.SetKeyValues(docs, "default", "", clusterconfig.KVAddress)
 	}
+
+	os.Exit(m.Run())
 }
 
 func FailTestIfError(err error, msg string, t *testing.T) {
