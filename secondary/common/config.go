@@ -1529,6 +1529,20 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
+	"indexer.plasma.maxInstancePerShard": ConfigValue{
+		uint64(100),
+		"Maximum number of instances per shard",
+		uint64(100),
+		false,
+		false,
+	},
+	"indexer.plasma.maxDiskUsagePerShard": ConfigValue{
+		uint64(250 * 1024 * 1024 * 1024),
+		"Maximum disk usage per shard",
+		uint64(250 * 1024 * 1024 * 1024),
+		false,
+		false,
+	},
 
 	"indexer.stream_reader.plasma.workerBuffer": ConfigValue{
 		uint64(2000),
