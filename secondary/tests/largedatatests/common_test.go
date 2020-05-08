@@ -3,18 +3,20 @@ package largedatatests
 import (
 	"encoding/json"
 	"flag"
+	"io/ioutil"
+	"log"
+	"os"
+	"runtime"
+	"testing"
+	"time"
+
 	"github.com/couchbase/cbauth"
 	"github.com/couchbase/indexing/secondary/logging"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 	"github.com/couchbase/indexing/secondary/tests/framework/secondaryindex"
-	"github.com/prataprc/goparsec"
+	parsec "github.com/prataprc/goparsec"
 	"github.com/prataprc/monster"
 	"github.com/prataprc/monster/common"
-	"io/ioutil"
-	"log"
-	"runtime"
-	"testing"
-	"time"
 )
 
 var seed int
@@ -25,8 +27,8 @@ var proddir, bagdir string
 var defaultIndexActiveTimeout int64 = 900 // 15 mins to wait for index to become active
 var useClient string
 
-func init() {
-	log.Printf("In init()")
+func TestMain(m *testing.M) {
+	log.Printf("In TestMain()")
 
 	logging.SetLogLevel(logging.Error)
 	var configpath string
@@ -59,6 +61,8 @@ func init() {
 	}
 
 	time.Sleep(5 * time.Second)
+
+	os.Exit(m.Run())
 }
 
 func FailTestIfError(err error, msg string, t *testing.T) {
