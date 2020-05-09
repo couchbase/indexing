@@ -271,6 +271,7 @@ func (slice *plasmaSlice) initStores() error {
 	cfg.EnforceKeyRange = slice.sysconf["plasma.enforceKeyRange"].Bool()
 	cfg.MaxInstsPerShard = slice.sysconf["plasma.maxInstancePerShard"].Uint64()
 	cfg.MaxDiskPerShard = slice.sysconf["plasma.maxDiskUsagePerShard"].Uint64()
+	cfg.MinNumShard = slice.sysconf["plasma.minNumShard"].Uint64()
 	cfg.StorageDir = slice.storageDir
 
 	if slice.numPartitions != 1 {
@@ -2116,6 +2117,7 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 
 	mdb.mainstore.MaxInstsPerShard = mdb.sysconf["plasma.maxInstancePerShard"].Uint64()
 	mdb.mainstore.MaxDiskPerShard = mdb.sysconf["plasma.maxDiskUsagePerShard"].Uint64()
+	mdb.mainstore.MinNumShard = mdb.sysconf["plasma.minNumShard"].Uint64()
 
 	mdb.mainstore.UpdateConfig()
 
@@ -2144,6 +2146,7 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 
 		mdb.backstore.MaxInstsPerShard = mdb.sysconf["plasma.maxInstancePerShard"].Uint64()
 		mdb.backstore.MaxDiskPerShard = mdb.sysconf["plasma.maxDiskUsagePerShard"].Uint64()
+		mdb.backstore.MinNumShard = mdb.sysconf["plasma.minNumShard"].Uint64()
 
 		mdb.backstore.UpdateConfig()
 	}
