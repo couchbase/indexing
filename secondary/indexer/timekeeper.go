@@ -2167,9 +2167,11 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 		return false
 	}
 
-	//INIT_STREAM cannot be merged to MAINT_STREAM if its not ACTIVE
-	//TODO Collections - Is this message required in CC?
-	if tk.ss.streamKeyspaceIdStatus[common.MAINT_STREAM][bucket] != STREAM_ACTIVE {
+	//INIT_STREAM cannot be merged to MAINT_STREAM if it is in Recovery
+	mStatus := tk.ss.streamKeyspaceIdStatus[common.MAINT_STREAM][bucket]
+	if mStatus == STREAM_PREPARE_RECOVERY ||
+		mStatus == STREAM_PREPARE_DONE ||
+		mStatus == STREAM_RECOVERY {
 		logging.Infof("Timekeeper::checkInitStreamReadyToMerge MAINT_STREAM in %v. "+
 			"INIT_STREAM cannot be merged. Continue both streams for keyspaceId %v.",
 			tk.ss.streamKeyspaceIdStatus[common.MAINT_STREAM][bucket], keyspaceId)
