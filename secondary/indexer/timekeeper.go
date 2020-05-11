@@ -2258,7 +2258,7 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 }
 
 func (tk *timekeeper) checkFlushTsValidForMerge(streamId common.StreamId, keyspaceId string,
-	initFlushTs *common.TsVbuuid, minMergeTs *common.TsVbuuid) (bool, Timestamp) {
+	initFlushTs *common.TsVbuuid, minMergeTs *common.TsVbuuid) (bool, *common.TsVbuuid) {
 
 	var maintFlushTs *common.TsVbuuid
 
@@ -2275,9 +2275,10 @@ func (tk *timekeeper) checkFlushTsValidForMerge(streamId common.StreamId, keyspa
 
 	var maintTsSeq, initTsSeq Timestamp
 
-	//if no flush has happened from MAINT_STREAM, merge cannot happen
+	//if no flush has happened from MAINT_STREAM, it means it is not running.
+	//MAINT_STREAM needs to be started with lastFlushTs of INIT_STREAM
 	if maintFlushTs == nil {
-		return false, nil
+		return true, initFlushTs
 	}
 
 	//if initFlushTs is nil for INIT_STREAM and non-nil for MAINT_STREAM
@@ -2306,7 +2307,7 @@ func (tk *timekeeper) checkFlushTsValidForMerge(streamId common.StreamId, keyspa
 
 	maintTsSeq = getSeqTsFromTsVbuuid(maintFlushTs)
 	if initTsSeq.GreaterThanEqual(maintTsSeq) {
-		return true, initTsSeq
+		return true, initFlushTs
 	} else {
 		//if this stream is on a collection
 		cid := tk.ss.streamKeyspaceIdCollectionId[streamId][keyspaceId]
@@ -2331,7 +2332,7 @@ func (tk *timekeeper) checkFlushTsValidForMerge(streamId common.StreamId, keyspa
 			bucketTsSeq := Timestamp(currBTs)
 			if initTsSeq.GreaterThanEqual(Timestamp(currCTs)) &&
 				bucketTsSeq.GreaterThanEqual(maintTsSeq) {
-				return true, initTsSeq
+				return true, initFlushTs
 			}
 		}
 	}

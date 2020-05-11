@@ -3448,8 +3448,20 @@ func (idx *indexer) handleMergeStreamAck(msg Message) {
 
 	streamId := msg.(*MsgTKMergeStream).GetStreamId()
 	keyspaceId := msg.(*MsgTKMergeStream).GetKeyspaceId()
+	mergeTs := msg.(*MsgTKMergeStream).GetMergeTS()
 	sessionId := msg.(*MsgTKMergeStream).GetSessionId()
 	reqCh := msg.(*MsgTKMergeStream).GetRequestCh()
+
+	bucket, _, _ := SplitKeyspaceId(keyspaceId)
+	//if MAINT_STREAM is not running(e.g. last index dropped), it needs to be started here
+	if idx.getStreamKeyspaceIdState(common.MAINT_STREAM, bucket) == STREAM_INACTIVE {
+		idx.prepareStreamKeyspaceIdForFreshStart(common.MAINT_STREAM, bucket)
+		sid := idx.genNextSessionId(common.MAINT_STREAM, bucket)
+
+		idx.setStreamKeyspaceIdState(common.MAINT_STREAM, bucket, STREAM_ACTIVE)
+		//TODO Collections verify async flag
+		idx.startKeyspaceIdStream(common.MAINT_STREAM, bucket, mergeTs, nil, nil, false, false, sid)
+	}
 
 	if ok, currSid := idx.validateSessionId(streamId, keyspaceId, sessionId, false); !ok {
 		logging.Infof("Indexer::handleMergeStreamAck StreamId %v KeyspaceId %v SessionId %v. "+
@@ -4939,6 +4951,7 @@ func (idx *indexer) handleBuildDoneNoCatchupAck(msg Message) {
 	sessionId := idx.genNextSessionId(newStream, bucket)
 
 	idx.setStreamKeyspaceIdState(newStream, bucket, STREAM_ACTIVE)
+	//TODO Collections veirfy async flag
 	idx.startKeyspaceIdStream(newStream, bucket, flushTs, nil, nil, false, false, sessionId)
 }
 
@@ -4965,15 +4978,6 @@ func (idx *indexer) handleMergeStream(msg Message) {
 		return
 	}
 
-	//MAINT_STREAM should already be running for this keyspaceId,
-	//as first index gets added to MAINT_STREAM always
-	bucket, _, _ := SplitKeyspaceId(keyspaceId)
-	if idx.checkKeyspaceIdExistsInStream(bucket, common.MAINT_STREAM, true) == false {
-		logging.Fatalf("Indexer::handleMergeStream MAINT_STREAM not enabled for KeyspaceId: %v ."+
-			"Cannot Process Merge Stream", keyspaceId)
-		common.CrashOnError(ErrMaintStreamMissingBucket)
-	}
-
 	switch streamId {
 
 	case common.INIT_STREAM:
@@ -4990,6 +4994,7 @@ func (idx *indexer) handleMergeInitStream(msg Message) {
 
 	keyspaceId := msg.(*MsgTKMergeStream).GetKeyspaceId()
 	streamId := msg.(*MsgTKMergeStream).GetStreamId()
+	mergeTs := msg.(*MsgTKMergeStream).GetMergeTS()
 
 	sessionId := idx.getCurrentSessionId(streamId, keyspaceId)
 
@@ -5106,6 +5111,7 @@ func (idx *indexer) handleMergeInitStream(msg Message) {
 						mType:      TK_MERGE_STREAM_ACK,
 						streamId:   streamId,
 						keyspaceId: keyspaceId,
+						mergeTs:    mergeTs,
 						mergeList:  indexList,
 						sessionId:  sessionId,
 						reqCh:      stopCh}

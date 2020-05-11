@@ -802,7 +802,7 @@ type MsgTKMergeStream struct {
 	mType      MsgType
 	streamId   common.StreamId
 	keyspaceId string
-	mergeTs    Timestamp
+	mergeTs    *common.TsVbuuid
 	mergeList  []common.IndexInst
 	reqCh      StopChannel
 	sessionId  uint64
@@ -820,7 +820,7 @@ func (m *MsgTKMergeStream) GetKeyspaceId() string {
 	return m.keyspaceId
 }
 
-func (m *MsgTKMergeStream) GetMergeTS() Timestamp {
+func (m *MsgTKMergeStream) GetMergeTS() *common.TsVbuuid {
 	return m.mergeTs
 }
 
