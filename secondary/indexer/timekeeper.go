@@ -3554,8 +3554,11 @@ func (tk *timekeeper) handleStats(cmd Message) {
 				rh := common.NewRetryHelper(maxStatsRetries, time.Second, 1, func(a int, err error) error {
 					cluster := tk.config["clusterAddr"].String()
 					numVbuckets := tk.config["numVbuckets"].Int()
-					//TODO Collections pass collection Id
-					kvTs, err = GetCurrentKVTs(cluster, "default", keyspaceId, "", numVbuckets)
+					cid := ""
+					if inst.Stream == common.INIT_STREAM {
+						cid = inst.Defn.CollectionId
+					}
+					kvTs, err = GetCurrentKVTs(cluster, "default", keyspaceId, cid, numVbuckets)
 					return err
 				})
 				if err = rh.Run(); err != nil {
