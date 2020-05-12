@@ -3452,9 +3452,14 @@ func (idx *indexer) handleMergeStreamAck(msg Message) {
 	sessionId := msg.(*MsgTKMergeStream).GetSessionId()
 	reqCh := msg.(*MsgTKMergeStream).GetRequestCh()
 
+	logging.Infof("Indexer::handleMergeStreamAck StreamId %v KeyspaceId %v SessionId %v",
+		streamId, keyspaceId, sessionId)
+
 	bucket, _, _ := SplitKeyspaceId(keyspaceId)
 	//if MAINT_STREAM is not running(e.g. last index dropped), it needs to be started here
 	if idx.getStreamKeyspaceIdState(common.MAINT_STREAM, bucket) == STREAM_INACTIVE {
+		logging.Infof("Indexer::handleMergeStreamAck StreamId %v KeyspaceId %v SessionId %v",
+			streamId, keyspaceId, sessionId)
 		idx.prepareStreamKeyspaceIdForFreshStart(common.MAINT_STREAM, bucket)
 		sid := idx.genNextSessionId(common.MAINT_STREAM, bucket)
 
@@ -3468,9 +3473,6 @@ func (idx *indexer) handleMergeStreamAck(msg Message) {
 			"Skipped. Current SessionId %v.", streamId, keyspaceId, sessionId, currSid)
 		return
 	}
-
-	logging.Infof("Indexer::handleMergeStreamAck StreamId %v KeyspaceId %v SessionId %v",
-		streamId, keyspaceId, sessionId)
 
 	switch streamId {
 
@@ -4932,15 +4934,6 @@ func (idx *indexer) handleBuildDoneNoCatchupAck(msg Message) {
 	streamId := msg.(*MsgTKInitBuildDone).GetStreamId()
 	keyspaceId := msg.(*MsgTKInitBuildDone).GetKeyspaceId()
 	flushTs := msg.(*MsgTKInitBuildDone).GetFlushTs()
-
-	//TODO Collections should this check cover MAINT_STREAM?
-	state := idx.getStreamKeyspaceIdState(streamId, keyspaceId)
-	if state != STREAM_INACTIVE {
-		logging.Fatalf("Indexer::handleBuildDoneNoCatchupAck Unexpected Stream State %v %v %v",
-			streamId, keyspaceId, state)
-		common.CrashOnError(ErrInconsistentState)
-		return
-	}
 
 	logging.Infof("Indexer::handleBuildDoneNoCatchupAck %v %v", streamId, keyspaceId)
 
