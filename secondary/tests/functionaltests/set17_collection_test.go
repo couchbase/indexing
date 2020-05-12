@@ -176,7 +176,7 @@ func TestCollectionNonDefault(t *testing.T) {
 	kvutility.CreateCollection(bucket, scope, coll, clusterconfig.Username, clusterconfig.Password, kvaddress)
 	cid := kvutility.GetCollectionID(bucket, scope, coll, clusterconfig.Username, clusterconfig.Password, kvaddress)
 
-	time.Sleep(5 * time.Second)
+	time.Sleep(10 * time.Second)
 	masterDocs_c1 = CreateDocsForCollection(bucket, cid, 2000)
 
 	//Initial build on index on non-default collection in non-default scope.
@@ -265,6 +265,7 @@ func TestCollectionMetaAtSnapEnd(t *testing.T) {
 	scope := "s2"
 	coll := "c2"
 	kvutility.CreateCollection(bucket, scope, coll, clusterconfig.Username, clusterconfig.Password, kvaddress)
+	time.Sleep(10 * time.Second)
 	cid := kvutility.GetCollectionID(bucket, scope, coll, clusterconfig.Username, clusterconfig.Password, kvaddress)
 
 	//SYSTEM_EVENT Test
@@ -281,6 +282,7 @@ func TestCollectionMetaAtSnapEnd(t *testing.T) {
 	scope = "s2"
 	coll = "c3"
 	kvutility.CreateCollection(bucket, scope, coll, clusterconfig.Username, clusterconfig.Password, kvaddress)
+	time.Sleep(10 * time.Second)
 
 	//verify scan when snapshot end is meta
 	scanAllAndVerify(index1, bucket, "age", masterDocs_c2, t)
