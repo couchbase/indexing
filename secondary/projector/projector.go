@@ -380,7 +380,13 @@ func (p *Projector) doVbmapRequest(
 	}
 	defer bucket.Close()
 
-	bucket.Refresh()
+	err = bucket.Refresh()
+	if err != nil {
+		logging.Errorf("%v ##%x doVbMapRequest error during bucket.Refresh(), bucket: %v, err:%v\n", prefix, opaque, bucket.Name, err)
+		response.Err = protobuf.NewError(err)
+		return response
+	}
+
 	m, err := bucket.GetVBmap(kvaddrs)
 	if err != nil {
 		logging.Errorf("%v ##%x GetVBmap(): %v\n", prefix, opaque, err)
