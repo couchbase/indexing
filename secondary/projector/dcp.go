@@ -2,12 +2,15 @@
 
 package projector
 
-import "time"
+import (
+	"github.com/couchbase/indexing/secondary/logging"
+	"time"
 
-import mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
-import c "github.com/couchbase/indexing/secondary/common"
-import protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
-import "github.com/couchbase/indexing/secondary/dcp"
+	c "github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/dcp"
+	mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
+	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
+)
 
 // BucketAccess interface manage a subset of vbucket streams with mutiple KV
 // nodes. To be implemented by couchbase.Bucket type.
@@ -86,7 +89,10 @@ func (bdcp *bucketDcp) StartVbStreams(
 	var err error
 
 	if bdcp.bucket != nil {
-		bdcp.bucket.Refresh()
+		if err := bdcp.bucket.Refresh(); err != nil {
+			logging.Errorf("Error during bucket.Refresh() while starting vbstreams for bucket: %v, err: %v", bdcp.bucket.Name, err)
+			return err
+		}
 	}
 	vbnos := c.Vbno32to16(reqTs.GetVbnos())
 	vbuuids, seqnos := reqTs.GetVbuuids(), reqTs.GetSeqnos()
@@ -116,7 +122,10 @@ func (bdcp *bucketDcp) EndVbStreams(
 	opaque uint16, ts *protobuf.TsVbuuid) (err error) {
 
 	if bdcp.bucket != nil {
-		bdcp.bucket.Refresh()
+		if err := bdcp.bucket.Refresh(); err != nil {
+			logging.Errorf("Error during bucket.Refresh() while stopping vbstreams for bucket: %v, err: %v", bdcp.bucket.Name, err)
+			return err
+		}
 	}
 	vbnos := c.Vbno32to16(ts.GetVbnos())
 	for _, vbno := range vbnos {

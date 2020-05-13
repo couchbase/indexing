@@ -283,7 +283,11 @@ func GetKVAddrs(cluster, pooln, bucketn string) ([]string, error) {
 	}
 	defer b.Close()
 
-	b.Refresh()
+	if err := b.Refresh(); err != nil {
+		logging.Errorf("GetKVAddrs, error during bucket.Refresh() for bucket: %v, err: %v", b.Name, err)
+		return nil, err
+	}
+
 	m, err := b.GetVBmap(nil)
 	if err != nil {
 		return nil, err
