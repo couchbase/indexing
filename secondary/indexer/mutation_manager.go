@@ -19,6 +19,7 @@ import (
 
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/security"
 	Stats "github.com/couchbase/indexing/secondary/stats"
 )
 
@@ -113,6 +114,20 @@ func NewMutationManager(supvCmdch MsgChannel, supvRespch MsgChannel,
 		numVbsPerNode:  make(map[string]int64),
 	}
 	m.vbMap.Init()
+
+	err := m.checkPortAvailability()
+	if err != nil {
+		errMsg := &MsgError{
+			err: Error{
+				code:     ERROR_MUT_MGR_INTERNAL_ERROR,
+				severity: FATAL,
+				category: MUTATION_MANAGER,
+				cause:    err,
+			},
+		}
+
+		return nil, errMsg
+	}
 
 	//start Mutation Manager loop which listens to commands from its supervisor
 	go m.run()
@@ -369,6 +384,26 @@ func (m *mutationMgr) handleWorkerMessage(cmd Message) {
 		common.CrashOnError(errors.New("Unknown Message On Worker Channel"))
 	}
 
+}
+
+func (m *mutationMgr) checkPortAvailability() error {
+	logging.Infof("MutationMgr::checkPortAvailability for dataport servers ...")
+	for streamId, srvAddr := range StreamAddrMap {
+		lis, err := security.MakeListener(string(srvAddr))
+		if err != nil {
+			msg := fmt.Sprintf("Error in listening on network port %v for stream %v", srvAddr, streamId)
+			return fmt.Errorf("%v", msg)
+		}
+
+		err = lis.Close()
+		if err != nil {
+			msg := fmt.Sprintf("Error in closing the listener on network port %v for stream %v", srvAddr, streamId)
+			return fmt.Errorf("%v", msg)
+		}
+	}
+
+	logging.Infof("MutationMgr::checkPortAvailability all dataport server ports are available.")
+	return nil
 }
 
 //handleOpenStream creates a new MutationStreamReader and
