@@ -1060,7 +1060,7 @@ func getLocalNumReplicas(addr string) (map[common.IndexDefnId]common.Counter, er
 
 func getWithCbauth(url string) (*http.Response, error) {
 
-	params := &security.RequestParams{Timeout: time.Duration(10) * time.Second}
+	params := &security.RequestParams{Timeout: time.Duration(120) * time.Second}
 	response, err := security.GetWithAuth(url, params)
 	if err == nil && response.StatusCode != http.StatusOK {
 		return response, convertError(response)
