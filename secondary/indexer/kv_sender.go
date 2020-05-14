@@ -278,6 +278,10 @@ func (k *kvSender) openMutationStream(streamId c.StreamId, keyspaceId string,
 	//use any bucket as list of vbs remain the same for all buckets
 	vbnos, addrs, err := k.getAllVbucketsInCluster(bucket)
 	if err != nil {
+		// This failure could be due to stale cluster info cache
+		// Force fetch cluster info cache so that the next call
+		// might succeed
+		k.cInfoClient.FetchWithLock()
 		logging.Errorf("KVSender::openMutationStream %v %v Error in fetching vbuckets info %v",
 			streamId, bucket, err)
 		respCh <- &MsgError{
@@ -396,6 +400,11 @@ func (k *kvSender) openMutationStream(streamId c.StreamId, keyspaceId string,
 			keyspaceId: keyspaceId,
 			rollbackTs: nativeTs}
 	} else if err != nil {
+		// The failure could have been due to stale cluster info cache
+		// Force update cluster info cache on failure so that the next
+		// retry might succeed
+		k.cInfoClient.FetchWithLock()
+
 		logging.Errorf("KVSender::openMutationStream %v %v Error from Projector %v",
 			streamId, keyspaceId, err)
 		respCh <- &MsgError{
@@ -424,6 +433,8 @@ func (k *kvSender) restartVbuckets(streamId c.StreamId, keyspaceId string,
 	bucket, _, _ := SplitKeyspaceId(keyspaceId)
 	addrs, err := k.getProjAddrsForVbuckets(bucket, repairVbs)
 	if err != nil {
+		k.cInfoClient.FetchWithLock()
+
 		logging.Errorf("KVSender::restartVbuckets %v %v Error in fetching cluster info %v",
 			streamId, keyspaceId, err)
 		respCh <- &MsgError{
@@ -544,6 +555,11 @@ func (k *kvSender) restartVbuckets(streamId c.StreamId, keyspaceId string,
 				sessionId:  sessionId,
 			}
 		} else {
+			// The failure could have been due to stale cluster info cache
+			// Force update cluster info cache on failure so that the next
+			// retry might succeed
+			k.cInfoClient.FetchWithLock()
+
 			respCh <- &MsgError{
 				err: Error{code: ERROR_KVSENDER_STREAM_REQUEST_ERROR,
 					severity: FATAL,
@@ -577,6 +593,8 @@ func (k *kvSender) addIndexForExistingKeyspace(streamId c.StreamId, keyspaceId s
 	bucket, _, _ := SplitKeyspaceId(keyspaceId)
 	_, addrs, err := k.getAllVbucketsInCluster(bucket)
 	if err != nil {
+		k.cInfoClient.FetchWithLock()
+
 		logging.Errorf("KVSender::addIndexForExistingKeyspace %v %v Error in fetching cluster info %v",
 			streamId, keyspaceId, err)
 		respCh <- &MsgError{
@@ -635,6 +653,11 @@ func (k *kvSender) addIndexForExistingKeyspace(streamId c.StreamId, keyspaceId s
 	rh := c.NewRetryHelper(MAX_KV_REQUEST_RETRY, time.Second, BACKOFF_FACTOR, fn)
 	err = rh.Run()
 	if err != nil {
+		// The failure could have been due to stale cluster info cache
+		// Force update cluster info cache on failure so that the next
+		// retry might succeed
+		k.cInfoClient.FetchWithLock()
+
 		logging.Errorf("KVSender::addIndexForExistingKeyspace %v %v Error from Projector %v",
 			streamId, keyspaceId, err)
 		respCh <- &MsgError{
@@ -658,6 +681,8 @@ func (k *kvSender) deleteIndexesFromStream(streamId c.StreamId, keyspaceId strin
 
 	addrs, err := k.getAllProjectorAddrs()
 	if err != nil {
+		k.cInfoClient.FetchWithLock()
+
 		logging.Errorf("KVSender::deleteIndexesFromStream %v %v Error in fetching cluster info %v",
 			streamId, keyspaceId, err)
 		respCh <- &MsgError{
@@ -696,6 +721,7 @@ func (k *kvSender) deleteIndexesFromStream(streamId c.StreamId, keyspaceId strin
 						streamId, keyspaceId, ret, addr)
 					err = ret
 				} else if ret := sendDelInstancesRequest(ap, topic, keyspaceId, uuids); ret != nil {
+
 					logging.Errorf("KVSender::deleteIndexesFromStream %v %v Error Received %v from %v",
 						streamId, keyspaceId, ret, addr)
 					//Treat TopicMissing/GenServer.Closed/InvalidBucket as success
@@ -717,6 +743,11 @@ func (k *kvSender) deleteIndexesFromStream(streamId c.StreamId, keyspaceId strin
 	rh := c.NewRetryHelper(MAX_KV_REQUEST_RETRY, time.Second, BACKOFF_FACTOR, fn)
 	err = rh.Run()
 	if err != nil {
+		// The failure could have been due to stale cluster info cache
+		// Force update cluster info cache on failure so that the next
+		// retry might succeed
+		k.cInfoClient.FetchWithLock()
+
 		logging.Errorf("KVSender::deleteIndexesFromStream %v %v Error from Projector %v",
 			streamId, keyspaceId, err)
 		respCh <- &MsgError{
@@ -734,6 +765,8 @@ func (k *kvSender) deleteKeyspacesFromStream(streamId c.StreamId, keyspaceIds []
 
 	addrs, err := k.getAllProjectorAddrs()
 	if err != nil {
+		k.cInfoClient.FetchWithLock()
+
 		logging.Errorf("KVSender::deleteKeyspacesFromStream %v %v Error in fetching cluster info %v",
 			streamId, keyspaceIds, err)
 		respCh <- &MsgError{
@@ -787,6 +820,11 @@ func (k *kvSender) deleteKeyspacesFromStream(streamId c.StreamId, keyspaceIds []
 	rh := c.NewRetryHelper(MAX_KV_REQUEST_RETRY, time.Second, BACKOFF_FACTOR, fn)
 	err = rh.Run()
 	if err != nil {
+		// The failure could have been due to stale cluster info cache
+		// Force update cluster info cache on failure so that the next
+		// retry might succeed
+		k.cInfoClient.FetchWithLock()
+
 		logging.Errorf("KVSender::deleteKeyspacesFromStream %v %v Error from Projector %v",
 			streamId, keyspaceIds, err)
 		respCh <- &MsgError{
@@ -804,6 +842,8 @@ func (k *kvSender) closeMutationStream(streamId c.StreamId, keyspaceId string,
 
 	addrs, err := k.getAllProjectorAddrs()
 	if err != nil {
+		k.cInfoClient.FetchWithLock()
+
 		logging.Errorf("KVSender::closeMutationStream %v %v Error in fetching cluster info %v",
 			streamId, keyspaceId, err)
 		respCh <- &MsgError{
@@ -857,6 +897,11 @@ func (k *kvSender) closeMutationStream(streamId c.StreamId, keyspaceId string,
 	rh := c.NewRetryHelper(MAX_KV_REQUEST_RETRY, time.Second, BACKOFF_FACTOR, fn)
 	err = rh.Run()
 	if err != nil {
+		// The failure could have been due to stale cluster info cache
+		// Force update cluster info cache on failure so that the next
+		// retry might succeed
+		k.cInfoClient.FetchWithLock()
+
 		logging.Errorf("KVSender::closeMutationStream, %v %v Error from Projector %v",
 			streamId, keyspaceId, err)
 		respCh <- &MsgError{
@@ -1214,6 +1259,7 @@ func (k *kvSender) getFailoverLogs(bucket string,
 
 	addrs, err := k.getAllProjectorAddrs()
 	if err != nil {
+		k.cInfoClient.FetchWithLock()
 		return nil, err
 	}
 
@@ -1274,7 +1320,6 @@ func (k *kvSender) getAllVbucketsInCluster(bucket string) ([]uint32, []string, e
 
 		}
 	}
-
 	return vbs, addrList, nil
 }
 
@@ -1294,8 +1339,8 @@ func (k *kvSender) getAllProjectorAddrs() ([]string, error) {
 		}
 		addrList = append(addrList, addr)
 	}
-
 	return addrList, nil
+
 }
 
 func (k *kvSender) getProjAddrsForVbuckets(bucket string, vbnos []Vbucket) ([]string, error) {
@@ -1335,9 +1380,7 @@ func (k *kvSender) getProjAddrsForVbuckets(bucket string, vbnos []Vbucket) ([]st
 			addrList = append(addrList, addr)
 		}
 	}
-
 	return addrList, nil
-
 }
 
 func (k *kvSender) handleConfigUpdate(cmd Message) {

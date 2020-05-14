@@ -884,6 +884,19 @@ func (c *ClusterInfoClient) watchClusterChanges() {
 		return
 	}
 
+	// When this method starts due to selfRestart(), the cluster
+	// info cache could have missed the notificiations atlease since
+	// `servicesNotifierRetryTm` time interval. The next update happens
+	// only after 5 min if no other notification is received.
+	// Some queries to cluster info cache would return stale results
+	// and can fail some operations. To avoid such staleness, fetch
+	// cluster info cache at the beginning of this method
+	if err := c.cinfo.FetchWithLock(); err != nil {
+		logging.Errorf("cic.cinfo.FetchWithLock(): %v\n", err)
+		selfRestart()
+		return
+	}
+
 	scn, err := NewServicesChangeNotifier(clusterAuthURL, c.pool)
 	if err != nil {
 		logging.Errorf("ClusterInfoClient NewServicesChangeNotifier(): %v\n", err)
@@ -926,19 +939,32 @@ func (cic *ClusterInfoClient) ValidateBucket(bucket string, uuids []string) bool
 	cinfo.RLock()
 	defer cinfo.RUnlock()
 
-	if nids, err := cinfo.GetNodesByBucket(bucket); err == nil && len(nids) != 0 {
-		// verify UUID
-		currentUUID := cinfo.GetBucketUUID(bucket)
-		for _, uuid := range uuids {
-			if uuid != currentUUID {
-				return false
+	validateBucket := func() bool {
+		if nids, err := cinfo.GetNodesByBucket(bucket); err == nil && len(nids) != 0 {
+			// verify UUID
+			currentUUID := cinfo.GetBucketUUID(bucket)
+			for _, uuid := range uuids {
+				if uuid != currentUUID {
+					return false
+				}
 			}
+			return true
+		} else {
+			logging.Fatalf("Error Fetching Bucket Info: %v Nids: %v", err, nids)
+			return false
 		}
-		return true
-	} else {
-		logging.Fatalf("Error Fetching Bucket Info: %v Nids: %v", err, nids)
-		return false
 	}
+
+	resp := validateBucket()
+	if resp == false {
+		// Force fetch cluster info cache to avoid staleness in cluster info cache
+		cinfo.RUnlock()
+		err := cinfo.FetchWithLock()
+		cinfo.RLock()
+
+		return (err == nil) && validateBucket()
+	}
+	return resp
 }
 
 func (cic *ClusterInfoClient) IsEphemeral(bucket string) (bool, error) {
@@ -947,7 +973,19 @@ func (cic *ClusterInfoClient) IsEphemeral(bucket string) (bool, error) {
 	cinfo.RLock()
 	defer cinfo.RUnlock()
 
-	return cinfo.IsEphemeral(bucket)
+	ephemeral, err := cinfo.IsEphemeral(bucket)
+	if err != nil {
+		// Force fetch cluster info cache to avoid staleness in cluster info cache
+		cinfo.RUnlock()
+		err := cinfo.FetchWithLock()
+		cinfo.RLock()
+		if err != nil {
+			return false, err
+		} else {
+			return cinfo.IsEphemeral(bucket)
+		}
+	}
+	return ephemeral, nil
 }
 
 func (cic *ClusterInfoClient) GetBucketUUID(bucket string) (string, error) {
@@ -956,16 +994,32 @@ func (cic *ClusterInfoClient) GetBucketUUID(bucket string) (string, error) {
 	cinfo.RLock()
 	defer cinfo.RUnlock()
 
-	nids, err := cinfo.GetNodesByBucket(bucket)
+	getBucketUUID := func() (string, error) {
+		nids, err := cinfo.GetNodesByBucket(bucket)
 
-	if err == nil && len(nids) != 0 {
-		// verify UUID
-		return cinfo.GetBucketUUID(bucket), nil
-	} else if err == nil {
-		logging.Fatalf("Error Fetching Bucket Info: %v Nids: %v", err, nids)
+		if err == nil && len(nids) != 0 {
+			// verify UUID
+			return cinfo.GetBucketUUID(bucket), nil
+		} else if err == nil {
+			logging.Fatalf("Error Fetching Bucket Info: %v Nids: %v", err, nids)
+		}
+
+		return BUCKET_UUID_NIL, err
 	}
 
-	return BUCKET_UUID_NIL, err
+	uuid, err := getBucketUUID()
+	if err != nil || uuid == BUCKET_UUID_NIL {
+		// Force fetch cluster info cache to avoid staleness in cluster info cache
+		cinfo.RUnlock()
+		err := cinfo.FetchWithLock()
+		cinfo.RLock()
+		if err != nil {
+			return BUCKET_UUID_NIL, err
+		} else {
+			return getBucketUUID()
+		}
+	}
+	return uuid, nil
 }
 
 func (cic *ClusterInfoClient) ClusterVersion() uint64 {
@@ -975,6 +1029,10 @@ func (cic *ClusterInfoClient) ClusterVersion() uint64 {
 	defer cinfo.RUnlock()
 
 	return cinfo.GetClusterVersion()
+}
+
+func (c *ClusterInfoClient) FetchWithLock() error {
+	return c.cinfo.FetchWithLock()
 }
 
 func (c *ClusterInfoClient) Close() {
