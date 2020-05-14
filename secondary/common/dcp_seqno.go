@@ -1,16 +1,18 @@
 package common
 
-import "sync"
-import "time"
-import "fmt"
-import "sort"
-import "errors"
-import "math/rand"
+import (
+	"errors"
+	"fmt"
+	"math/rand"
+	"sort"
+	"sync"
+	"time"
 
-import "github.com/couchbase/indexing/secondary/stats"
-import "github.com/couchbase/indexing/secondary/dcp"
-import "github.com/couchbase/indexing/secondary/dcp/transport/client"
-import "github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/dcp"
+	"github.com/couchbase/indexing/secondary/dcp/transport/client"
+	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/stats"
+)
 
 const seqsReqChanSize = 20000
 const seqsBufSize = 64 * 1024
@@ -273,7 +275,7 @@ func newVbSeqnosReader(cluster, pooln, bucket string,
 		bucket:        bucket,
 		requestCh:     make(chan interface{}, seqsReqChanSize),
 		donech:        make(chan bool),
-		workers:       make([]*worker, 0),
+		workers:       make([]*worker, workersPerReader),
 		workerRespCh:  make(chan workerDoneMsg, 100),
 		dispatcherMap: make(map[string]int),
 		kvfeeds:       kvfeeds,
@@ -282,19 +284,43 @@ func newVbSeqnosReader(cluster, pooln, bucket string,
 
 	r.seqsTiming.Init()
 
+	mu := &sync.Mutex{}
+	errSlice := make([]error, workersPerReader)
+	var wg sync.WaitGroup
+
 	// Init the workers
 	for i := 0; i < workersPerReader; i++ {
-		kvfeeds, err := getKVFeeds(cluster, pooln, bucket)
-		if err != nil {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+			kvfeeds, err := getKVFeeds(cluster, pooln, bucket)
+			if err != nil {
+				mu.Lock()
+				errSlice[index] = err
+				mu.Unlock()
+				return
+			}
+			w := newWorker(index, bucket, r.workerRespCh, kvfeeds, &r.wg, r)
+			mu.Lock()
+			r.workers[index] = w
+			mu.Unlock()
+		}(i)
+	}
+	wg.Wait()
+
+	// Process the error map and close all workers in case
+	// an error was observed while opening feed for any worker
+	for _, errObs := range errSlice {
+		if errObs != nil {
 			for _, w := range r.workers {
-				for _, kvf := range w.kvfeeds {
-					kvf.mc.Close()
+				if w != nil {
+					for _, kvf := range w.kvfeeds {
+						kvf.mc.Close()
+					}
 				}
 			}
-			return nil, err
+			return nil, errObs
 		}
-		w := newWorker(i, bucket, r.workerRespCh, kvfeeds, &r.wg, r)
-		r.workers = append(r.workers, w)
 	}
 
 	go r.Routine()
