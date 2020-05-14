@@ -600,6 +600,13 @@ func (gsi *gsiKeyspace) SyncRefresh() errors.Error {
 	return gsi.Refresh()
 }
 
+func (gsi *gsiKeyspace) GetGsiClientConfig() map[string]interface{} {
+	conf := make(map[string]interface{})
+	key := "indexer.settings.storage_mode"
+	conf[key] = gsi.gsiClient.Settings().StorageMode()
+	return conf
+}
+
 //------------------------------------------
 // private functions for datastore.Indexer{}
 //------------------------------------------
