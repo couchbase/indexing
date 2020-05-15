@@ -4234,7 +4234,15 @@ func (r *metadataRepo) getValidDefnCount(indexerId c.IndexerId) int {
 	return count
 }
 
-func (r *metadataRepo) removeInstForIndexerNoLock(indexerId c.IndexerId, bucket string) {
+func (r *metadataRepo) removeInstForIndexerNoLock(indexerId c.IndexerId, bucket, scope, collection string) {
+
+	isBucketScopeCollEmpty := func() bool {
+		return (len(bucket) == 0 && len(scope) == 0 && len(collection) == 0)
+	}
+
+	checkDefn := func(defn *c.IndexDefn) bool {
+		return (defn != nil && defn.Bucket == bucket && defn.Scope == scope && defn.Collection == collection)
+	}
 
 	newInstsByDefnId := make(map[c.IndexDefnId]map[c.IndexInstId]map[c.PartitionId]map[uint64]*mc.IndexInstDistribution)
 	for defnId, instsByDefnId := range r.instances {
@@ -4251,7 +4259,7 @@ func (r *metadataRepo) removeInstForIndexerNoLock(indexerId c.IndexerId, bucket 
 
 					instIndexerId := instByVersion.FindIndexerId()
 
-					if instIndexerId == string(indexerId) && (len(bucket) == 0 || (defn != nil && defn.Bucket == bucket)) {
+					if instIndexerId == string(indexerId) && (isBucketScopeCollEmpty() || checkDefn(defn)) {
 						logging.Debugf("remove index for indexerId : defnId %v instId %v indexerId %v", defnId, instId, instIndexerId)
 					} else {
 						newInstsByVersion[version] = instByVersion
@@ -4285,14 +4293,21 @@ func (r *metadataRepo) removeInstForIndexerNoLock(indexerId c.IndexerId, bucket 
 // 3) If indexer node has failed over or rebalanced out of the cluster, the corresponding instance will be removed.
 //    If all instances are removed, the defn will be removed.
 //
-func (r *metadataRepo) cleanupOrphanDefnNoLock(indexerId c.IndexerId, bucket string) {
+func (r *metadataRepo) cleanupOrphanDefnNoLock(indexerId c.IndexerId, bucket, scope, collection string) {
 
 	deleteDefn := ([]c.IndexDefnId)(nil)
 
+	isBucketScopeCollEmpty := func() bool {
+		return (len(bucket) == 0 && len(scope) == 0 && len(collection) == 0)
+	}
+
+	checkDefn := func(defn *c.IndexDefn) bool {
+		return (defn != nil && defn.Bucket == bucket && defn.Scope == scope && defn.Collection == collection)
+	}
+
 	for defnId, _ := range r.topology[indexerId] {
 		if defn, ok := r.definitions[defnId]; ok {
-			// TODO: Need to make this function collection aware.
-			if len(bucket) == 0 || defn.Bucket == bucket {
+			if isBucketScopeCollEmpty() || checkDefn(defn) {
 
 				if len(r.instances[defnId]) == 0 {
 					deleteDefn = append(deleteDefn, defnId)
@@ -4321,8 +4336,8 @@ func (r *metadataRepo) cleanupIndicesForIndexer(indexerId c.IndexerId) {
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
 
-	r.removeInstForIndexerNoLock(indexerId, "")
-	r.cleanupOrphanDefnNoLock(indexerId, "")
+	r.removeInstForIndexerNoLock(indexerId, "", "", "")
+	r.cleanupOrphanDefnNoLock(indexerId, "", "", "")
 
 	for defnId, _ := range r.indices {
 		logging.Debugf("update topology during cleanup: defn %v", defnId)
@@ -4352,7 +4367,7 @@ func (r *metadataRepo) updateTopology(topology *mc.IndexTopology, indexerId c.In
 	//    during WatchMetadata (previous UnwatchMetadata haved removed metadata for same indexerId).
 	//
 	if len(indexerId) != 0 {
-		r.removeInstForIndexerNoLock(indexerId, topology.Bucket)
+		r.removeInstForIndexerNoLock(indexerId, topology.Bucket, topology.Scope, topology.Collection)
 	}
 
 	logging.Debugf("new topology change from %v", indexerId)
@@ -4397,7 +4412,7 @@ func (r *metadataRepo) updateTopology(topology *mc.IndexTopology, indexerId c.In
 	}
 
 	if len(indexerId) != 0 {
-		r.cleanupOrphanDefnNoLock(indexerId, topology.Bucket)
+		r.cleanupOrphanDefnNoLock(indexerId, topology.Bucket, topology.Scope, topology.Collection)
 	}
 
 	r.incrementVersion()
@@ -4432,8 +4447,30 @@ func (r *metadataRepo) unmarshallAndUpdateTopology(content []byte, indexerId c.I
 		return err
 	}
 
-	// TODO (Collections): If indexer is old and query is new, scope/collection name will be empty
+	// If indexer is old and query is new, scope/collection name will be empty
 	// Populate it with defaults
+	clusterVersion := r.provider.GetClusterVersion()
+	if clusterVersion < c.INDEXER_70_VERSION {
+		// In mixed mode, topology from old indexer nodes have empty scope/collection name.
+		// Populate it with defaults
+		if topology.Scope == "" {
+			topology.Scope = c.DEFAULT_SCOPE
+		}
+		if topology.Collection == "" {
+			topology.Collection = c.DEFAULT_COLLECTION
+		}
+
+		for i, _ := range topology.Definitions {
+			if topology.Definitions[i].Scope == "" {
+				topology.Definitions[i].Scope = c.DEFAULT_SCOPE
+			}
+
+			if topology.Definitions[i].Collection == "" {
+				topology.Definitions[i].Collection = c.DEFAULT_COLLECTION
+			}
+		}
+	}
+
 	r.updateTopology(topology, indexerId)
 	return nil
 }

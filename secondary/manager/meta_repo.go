@@ -10,7 +10,6 @@
 package manager
 
 import (
-	//"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,12 +26,19 @@ import (
 	"github.com/couchbase/indexing/secondary/manager/client"
 )
 
+const INDEX_TOPOLOGY_KEY_PREFIX = "IndexTopology"
+const INDEX_DEFN_KEY_PREFIX = "IndexDefinitionId"
+const GLOBAL_TOPOLOGY_KEY = "GlobalIndexTopology"
+
 type MetadataRepo struct {
-	repo       RepoRef
-	mutex      sync.Mutex
-	isClosed   bool
-	defnCache  map[common.IndexDefnId]*common.IndexDefn
-	topoCache  map[string]*IndexTopology
+	repo      RepoRef
+	mutex     sync.Mutex
+	isClosed  bool
+	defnCache map[common.IndexDefnId]*common.IndexDefn
+
+	// collection-level topology with key having bucket-scope-collection
+	topoCache map[string]*IndexTopology
+
 	globalTopo *GlobalTopology
 }
 
@@ -288,16 +294,75 @@ func (c *MetadataRepo) GetIndexDefnByName(bucket, scope, collection, name string
 //  Public Function : Index Topology
 ///////////////////////////////////////////////////////
 
-func (c *MetadataRepo) GetTopologyByBucket(bucket string) (*IndexTopology, error) {
+func (c *MetadataRepo) GetTopologiesByBucket(bucket string) ([]*IndexTopology, error) {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
-	topology, ok := c.topoCache[bucket]
+	topologies := make([]*IndexTopology, 0)
+
+	for _, topo := range c.topoCache {
+		if topo.Bucket == bucket {
+			topologies = append(topologies, topo)
+		}
+	}
+
+	if len(topologies) > 0 {
+		return topologies, nil
+	}
+
+	// If topoCache does not have any index for the bucket, iterate over topology
+	// keys in the repo and construct topology objects
+	lookupName := globalTopologyKey()
+	globalTopData, err := c.getMeta(lookupName)
+	if err != nil && strings.Contains(err.Error(), "FDB_RESULT_KEY_NOT_FOUND") {
+		return nil, nil
+	} else if err != nil {
+		return nil, err
+	}
+
+	globalTop, err := unmarshallGlobalTopology(globalTopData)
+	if err != nil {
+		return nil, err
+	}
+
+	if globalTop == nil {
+		return nil, nil
+	}
+
+	for _, key := range globalTop.TopologyKeys {
+		if getBucketFromTopologyKey(key) == bucket {
+
+			data, err := c.getMeta(key)
+			if err != nil && strings.Contains(err.Error(), "FDB_RESULT_KEY_NOT_FOUND") {
+				continue
+			} else if err != nil {
+				return nil, err
+			}
+
+			topology, err := unmarshallIndexTopology(data)
+			if err != nil {
+				return nil, err
+			}
+
+			c.topoCache[key] = topology
+			topologies = append(topologies, topology)
+		}
+	}
+
+	return topologies, nil
+}
+
+func (c *MetadataRepo) GetTopologyByCollection(bucket, scope, collection string) (*IndexTopology, error) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	lookupName := indexTopologyKey(bucket, scope, collection)
+
+	topology, ok := c.topoCache[lookupName]
 	if ok && topology != nil {
 		return topology, nil
 	}
 
-	lookupName := indexTopologyKey(bucket)
 	data, err := c.getMeta(lookupName)
 	if err != nil && strings.Contains(err.Error(), "FDB_RESULT_KEY_NOT_FOUND") {
 		return nil, nil
@@ -310,15 +375,15 @@ func (c *MetadataRepo) GetTopologyByBucket(bucket string) (*IndexTopology, error
 		return nil, err
 	}
 
-	c.topoCache[bucket] = topology
+	c.topoCache[lookupName] = topology
 	return topology, nil
 }
 
-func (c *MetadataRepo) CloneTopologyByBucket(bucket string) (*IndexTopology, error) {
+func (c *MetadataRepo) CloneTopologyByCollection(bucket, scope, collection string) (*IndexTopology, error) {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
-	lookupName := indexTopologyKey(bucket)
+	lookupName := indexTopologyKey(bucket, scope, collection)
 	data, err := c.getMeta(lookupName)
 	if err != nil && strings.Contains(err.Error(), "FDB_RESULT_KEY_NOT_FOUND") {
 		return nil, nil
@@ -334,7 +399,7 @@ func (c *MetadataRepo) CloneTopologyByBucket(bucket string) (*IndexTopology, err
 	return topology, nil
 }
 
-func (c *MetadataRepo) SetTopologyByBucket(bucket string, topology *IndexTopology) error {
+func (c *MetadataRepo) SetTopologyByCollection(bucket, scope, collection string, topology *IndexTopology) error {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
@@ -345,14 +410,14 @@ func (c *MetadataRepo) SetTopologyByBucket(bucket string, topology *IndexTopolog
 		return err
 	}
 
-	lookupName := indexTopologyKey(bucket)
+	lookupName := indexTopologyKey(bucket, scope, collection)
 	if err := c.setMeta(lookupName, data); err != nil {
 		// clear the cache if there is any error
-		delete(c.topoCache, bucket)
+		delete(c.topoCache, lookupName)
 		return err
 	}
 
-	c.topoCache[bucket] = topology
+	c.topoCache[lookupName] = topology
 	return nil
 }
 
@@ -577,8 +642,7 @@ func (c *MetadataRepo) loadTopology() error {
 				return err
 			}
 
-			bucket := getBucketFromTopologyKey(key)
-			c.topoCache[bucket] = topology
+			c.topoCache[key] = topology
 		}
 	}
 }
@@ -970,18 +1034,20 @@ func indexDefnId(key string) (common.IndexDefnId, error) {
 }
 
 func indexDefnKeyById(id common.IndexDefnId) string {
-	return fmt.Sprintf("IndexDefinitionId/%d", id)
+	return fmt.Sprintf("%s/%d", INDEX_DEFN_KEY_PREFIX, id)
 }
 
 func isIndexDefnKey(key string) bool {
-	return strings.Contains(key, "IndexDefinitionId/")
+	return strings.Contains(key, INDEX_DEFN_KEY_PREFIX+"/")
 }
 
 func indexDefnIdFromKey(key string) string {
 
-	i := strings.Index(key, "IndexDefinitionId/")
+	prefix := INDEX_DEFN_KEY_PREFIX + "/"
+
+	i := strings.Index(key, prefix)
 	if i != -1 {
-		return key[i+len("IndexDefinitionId/"):]
+		return key[i+len(prefix):]
 	}
 
 	return ""
@@ -991,21 +1057,34 @@ func indexDefnIdFromKey(key string) string {
 // package local function : Index Topology
 ///////////////////////////////////////////////////////
 
-func indexTopologyKey(bucket string) string {
-	return fmt.Sprintf("IndexTopology/%s", bucket)
+func indexTopologyKey(bucket, scope, collection string) string {
+	return fmt.Sprintf("%s/%s/%s/%s", INDEX_TOPOLOGY_KEY_PREFIX, bucket, scope, collection)
 }
 
 func getBucketFromTopologyKey(key string) string {
-	i := strings.Index(key, "IndexTopology/")
-	if i != -1 {
-		return key[i+len("IndexTopology/"):]
+
+	res := strings.Split(key, "/")
+	if len(res) == 4 {
+		return res[1]
 	}
 
 	return ""
 }
 
+func getBucketScopeCollectionFromTopologyKey(key string) (string, string, string) {
+
+	// Bucket, Scope, Collection names do not contain "/"
+	// So it is safe to split the key by "/"
+	res := strings.Split(key, "/")
+	if len(res) == 4 {
+		return res[1], res[2], res[3]
+	}
+
+	return "", "", ""
+}
+
 func isIndexTopologyKey(key string) bool {
-	return strings.Contains(key, "IndexTopology/")
+	return strings.Contains(key, INDEX_TOPOLOGY_KEY_PREFIX+"/")
 }
 
 func MarshallIndexTopology(topology *IndexTopology) ([]byte, error) {
@@ -1029,11 +1108,11 @@ func unmarshallIndexTopology(data []byte) (*IndexTopology, error) {
 }
 
 func globalTopologyKey() string {
-	return "GlobalIndexTopology"
+	return GLOBAL_TOPOLOGY_KEY
 }
 
 func isGlobalTopologyKey(key string) bool {
-	return strings.Contains(key, "GlobalIndexTopology")
+	return strings.Contains(key, GLOBAL_TOPOLOGY_KEY)
 }
 
 func marshallGlobalTopology(topology *GlobalTopology) ([]byte, error) {
@@ -1087,13 +1166,15 @@ func (m *MetadataRepo) addIndexToTopology(defn *common.IndexDefn, instId common.
 	partitions []common.PartitionId, versions []int, numPartitions uint32, realInstId common.IndexInstId, scheduled bool) error {
 
 	// get existing topology
-	topology, err := m.CloneTopologyByBucket(defn.Bucket)
+	topology, err := m.CloneTopologyByCollection(defn.Bucket, defn.Scope, defn.Collection)
 	if err != nil {
 		return err
 	}
 	if topology == nil {
 		topology = new(IndexTopology)
 		topology.Bucket = defn.Bucket
+		topology.Scope = defn.Scope
+		topology.Collection = defn.Collection
 		topology.Version = 0
 	}
 
@@ -1116,11 +1197,11 @@ func (m *MetadataRepo) addIndexToTopology(defn *common.IndexDefn, instId common.
 	// If it fails later to create bucket-level topology, it will have
 	// a dangling reference, but it is easier to discover this issue.  Otherwise,
 	// we can end up having a bucket-level topology without being referenced.
-	if err = m.addToGlobalTopologyIfNecessary(topology.Bucket); err != nil {
+	if err = m.addToGlobalTopologyIfNecessary(topology.Bucket, topology.Scope, topology.Collection); err != nil {
 		return err
 	}
 
-	if err = m.SetTopologyByBucket(topology.Bucket, topology); err != nil {
+	if err = m.SetTopologyByCollection(topology.Bucket, topology.Scope, topology.Collection, topology); err != nil {
 		return err
 	}
 
@@ -1134,13 +1215,15 @@ func (m *MetadataRepo) addInstanceToTopology(defn *common.IndexDefn, instId comm
 	partitions []common.PartitionId, versions []int, numPartitions uint32, realInstId common.IndexInstId, scheduled bool) error {
 
 	// get existing topology
-	topology, err := m.CloneTopologyByBucket(defn.Bucket)
+	topology, err := m.CloneTopologyByCollection(defn.Bucket, defn.Scope, defn.Collection)
 	if err != nil {
 		return err
 	}
 	if topology == nil {
 		topology = new(IndexTopology)
 		topology.Bucket = defn.Bucket
+		topology.Scope = defn.Scope
+		topology.Collection = defn.Collection
 		topology.Version = 0
 	}
 
@@ -1176,11 +1259,11 @@ func (m *MetadataRepo) addInstanceToTopology(defn *common.IndexDefn, instId comm
 	// If it fails later to create bucket-level topology, it will have
 	// a dangling reference, but it is easier to discover this issue.  Otherwise,
 	// we can end up having a bucket-level topology without being referenced.
-	if err = m.addToGlobalTopologyIfNecessary(topology.Bucket); err != nil {
+	if err = m.addToGlobalTopologyIfNecessary(topology.Bucket, topology.Scope, topology.Collection); err != nil {
 		return err
 	}
 
-	if err = m.SetTopologyByBucket(topology.Bucket, topology); err != nil {
+	if err = m.SetTopologyByCollection(topology.Bucket, topology.Scope, topology.Collection, topology); err != nil {
 		return err
 	}
 
@@ -1190,10 +1273,10 @@ func (m *MetadataRepo) addInstanceToTopology(defn *common.IndexDefn, instId comm
 //
 // Delete Index from Topology
 //
-func (m *MetadataRepo) deleteIndexFromTopology(bucket string, id common.IndexDefnId) error {
+func (m *MetadataRepo) deleteIndexFromTopology(bucket, scope, collection string, id common.IndexDefnId) error {
 
 	// get existing topology
-	topology, err := m.CloneTopologyByBucket(bucket)
+	topology, err := m.CloneTopologyByCollection(bucket, scope, collection)
 	if err != nil {
 		return err
 	}
@@ -1203,7 +1286,7 @@ func (m *MetadataRepo) deleteIndexFromTopology(bucket string, id common.IndexDef
 
 	topology.RemoveIndexDefinitionById(id)
 
-	if err = m.SetTopologyByBucket(topology.Bucket, topology); err != nil {
+	if err = m.SetTopologyByCollection(topology.Bucket, scope, collection, topology); err != nil {
 		return err
 	}
 
@@ -1213,10 +1296,10 @@ func (m *MetadataRepo) deleteIndexFromTopology(bucket string, id common.IndexDef
 //
 // Delete Index from Topology
 //
-func (m *MetadataRepo) deleteInstanceFromTopology(bucket string, id common.IndexDefnId, instId common.IndexInstId) error {
+func (m *MetadataRepo) deleteInstanceFromTopology(bucket, scope, collection string, id common.IndexDefnId, instId common.IndexInstId) error {
 
 	// get existing topology
-	topology, err := m.CloneTopologyByBucket(bucket)
+	topology, err := m.CloneTopologyByCollection(bucket, scope, collection)
 	if err != nil {
 		return err
 	}
@@ -1226,7 +1309,7 @@ func (m *MetadataRepo) deleteInstanceFromTopology(bucket string, id common.Index
 
 	topology.RemoveIndexInstanceById(id, instId)
 
-	if err = m.SetTopologyByBucket(topology.Bucket, topology); err != nil {
+	if err = m.SetTopologyByCollection(topology.Bucket, scope, collection, topology); err != nil {
 		return err
 	}
 
@@ -1236,11 +1319,11 @@ func (m *MetadataRepo) deleteInstanceFromTopology(bucket string, id common.Index
 //
 // Merge partitions from Topology
 //
-func (m *MetadataRepo) mergePartitionFromTopology(indexerId string, bucket string, id common.IndexDefnId, srcInstId common.IndexInstId,
+func (m *MetadataRepo) mergePartitionFromTopology(indexerId string, bucket, scope, collection string, id common.IndexDefnId, srcInstId common.IndexInstId,
 	srcRState common.RebalanceState, tgtInstId common.IndexInstId, tgtInstVersion uint64, tgtPartitions []uint64, tgtVersions []int) error {
 
 	// get existing topology
-	topology, err := m.CloneTopologyByBucket(bucket)
+	topology, err := m.CloneTopologyByCollection(bucket, scope, collection)
 	if err != nil {
 		return err
 	}
@@ -1255,7 +1338,7 @@ func (m *MetadataRepo) mergePartitionFromTopology(indexerId string, bucket strin
 	topology.AddPartitionsForIndexInst(id, tgtInstId, indexerId, tgtPartitions, tgtVersions)
 	topology.UpdateVersionForIndexInst(id, tgtInstId, tgtInstVersion)
 
-	if err = m.SetTopologyByBucket(topology.Bucket, topology); err != nil {
+	if err = m.SetTopologyByCollection(topology.Bucket, scope, collection, topology); err != nil {
 		return err
 	}
 
@@ -1265,11 +1348,11 @@ func (m *MetadataRepo) mergePartitionFromTopology(indexerId string, bucket strin
 //
 // Split partitions from Topology
 //
-func (m *MetadataRepo) splitPartitionFromTopology(bucket string, id common.IndexDefnId, instId common.IndexInstId, tombstoneInstId common.IndexInstId,
+func (m *MetadataRepo) splitPartitionFromTopology(bucket, scope, collection string, id common.IndexDefnId, instId common.IndexInstId, tombstoneInstId common.IndexInstId,
 	partitions []common.PartitionId) error {
 
 	// get existing topology
-	topology, err := m.CloneTopologyByBucket(bucket)
+	topology, err := m.CloneTopologyByCollection(bucket, scope, collection)
 	if err != nil {
 		return err
 	}
@@ -1279,7 +1362,7 @@ func (m *MetadataRepo) splitPartitionFromTopology(bucket string, id common.Index
 
 	topology.SplitPartitionsForIndexInst(id, instId, tombstoneInstId, partitions)
 
-	if err = m.SetTopologyByBucket(topology.Bucket, topology); err != nil {
+	if err = m.SetTopologyByCollection(topology.Bucket, scope, collection, topology); err != nil {
 		return err
 	}
 
@@ -1290,7 +1373,7 @@ func (m *MetadataRepo) splitPartitionFromTopology(bucket string, id common.Index
 // Add a reference of the bucket-level index topology to global topology.
 // If not exist, create a new one.
 //
-func (m *MetadataRepo) addToGlobalTopologyIfNecessary(bucket string) error {
+func (m *MetadataRepo) addToGlobalTopologyIfNecessary(bucket, scope, collection string) error {
 
 	globalTop, err := m.GetGlobalTopology()
 	if err != nil {
@@ -1300,7 +1383,7 @@ func (m *MetadataRepo) addToGlobalTopologyIfNecessary(bucket string) error {
 		globalTop = new(GlobalTopology)
 	}
 
-	if globalTop.AddTopologyKeyIfNecessary(indexTopologyKey(bucket)) {
+	if globalTop.AddTopologyKeyIfNecessary(indexTopologyKey(bucket, scope, collection)) {
 		return m.SetGlobalTopology(globalTop)
 	}
 

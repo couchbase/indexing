@@ -297,7 +297,7 @@ func ConvertToIndexUsages(config common.Config, localMeta *LocalIndexMetadata, n
 func ConvertToIndexUsage(config common.Config, defn *common.IndexDefn, localMeta *LocalIndexMetadata) ([]*IndexUsage, error) {
 
 	// find the topology metadata
-	topology := findTopologyByBucket(localMeta.IndexTopologies, defn.Bucket)
+	topology := findTopologyByCollection(localMeta.IndexTopologies, defn.Bucket, defn.Scope, defn.Collection)
 	if topology == nil {
 		logging.Errorf("Planner::getIndexLayout: Fail to find index topology for bucket %v.", defn.Bucket)
 		return nil, nil
@@ -871,12 +871,12 @@ func getIndexSettings(plan *Plan) error {
 }
 
 //
-// This function extract the topology metadata for a bucket.
+// This function extract the topology metadata for a bucket, scope and collection.
 //
-func findTopologyByBucket(topologies []mc.IndexTopology, bucket string) *mc.IndexTopology {
+func findTopologyByCollection(topologies []mc.IndexTopology, bucket, scope, collection string) *mc.IndexTopology {
 
 	for _, topology := range topologies {
-		if topology.Bucket == bucket {
+		if topology.Bucket == bucket && topology.Scope == scope && topology.Collection == collection {
 			return &topology
 		}
 	}

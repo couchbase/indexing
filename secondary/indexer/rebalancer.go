@@ -1369,9 +1369,10 @@ func getIndexStatusFromMeta(tt *c.TransferToken, localMeta *manager.LocalIndexMe
 
 	inst := tt.IndexInst
 
-	topology := findTopologyByBucket(localMeta.IndexTopologies, inst.Defn.Bucket)
+	topology := findTopologyByCollection(localMeta.IndexTopologies, inst.Defn.Bucket, inst.Defn.Scope, inst.Defn.Collection)
 	if topology == nil {
-		return c.INDEX_STATE_NIL, fmt.Sprintf("Topology Information Missing for %v Bucket", inst.Defn.Bucket)
+		return c.INDEX_STATE_NIL, fmt.Sprintf("Topology Information Missing for %v Bucket %v Scope %v Collection",
+			inst.Defn.Bucket, inst.Defn.Scope, inst.Defn.Collection)
 	}
 
 	state, msg := topology.GetStatusByInst(inst.Defn.DefnId, tt.InstId)

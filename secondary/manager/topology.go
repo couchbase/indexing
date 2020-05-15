@@ -22,16 +22,15 @@ type GlobalTopology struct {
 	TopologyKeys []string `json:"topologyKeys,omitempty"`
 }
 
-// TODO: Need to add Collection specific information in IndexTopology
-// This has dependency on Lifecycle Manager
+// A collection level Index topology
 type IndexTopology struct {
 	Version     uint64                  `json:"version,omitempty"`
 	Bucket      string                  `json:"bucket,omitempty"`
+	Scope       string                  `json:"scope,omitempty"`
+	Collection  string                  `json:"collection,omitempty"`
 	Definitions []IndexDefnDistribution `json:"definitions,omitempty"`
 }
 
-// TODO: Need to add Collection specific information in IndexDefnDistribution
-// This has dependency on Lifecycle Manager
 type IndexDefnDistribution struct {
 	Bucket     string                  `json:"bucket,omitempty"`
 	Scope      string                  `json:"scope,omitempty"`
@@ -690,6 +689,7 @@ func (t *IndexTopology) GetIndexInstancesByDefn(defnId common.IndexDefnId) []Ind
 	return nil
 }
 
+/*
 //
 // Get all index instance Id's for a specific defnition
 //
@@ -745,3 +745,4 @@ func GetAllDeletedIndexInstancesId(mgr *IndexManager, buckets []string) ([]uint6
 
 	return result, nil
 }
+*/

@@ -477,12 +477,14 @@ func (m *IndexManager) HandleBuildIndexDDL(indexIds client.IndexIdList) error {
 	return nil
 }
 
-func (m *IndexManager) UpdateIndexInstance(bucket string, defnId common.IndexDefnId, instId common.IndexInstId,
+func (m *IndexManager) UpdateIndexInstance(bucket, scope, collection string, defnId common.IndexDefnId, instId common.IndexInstId,
 	state common.IndexState, streamId common.StreamId, err string, buildTime []uint64, rState common.RebalanceState,
 	partitions []uint64, versions []int, instVersion int) error {
 
 	inst := &topologyChange{
 		Bucket:      bucket,
+		Scope:       scope,
+		Collection:  collection,
 		DefnId:      uint64(defnId),
 		InstId:      uint64(instId),
 		State:       uint32(state),
@@ -505,12 +507,14 @@ func (m *IndexManager) UpdateIndexInstance(bucket string, defnId common.IndexDef
 	return m.requestServer.MakeAsyncRequest(client.OPCODE_UPDATE_INDEX_INST, fmt.Sprintf("%v", defnId), buf)
 }
 
-func (m *IndexManager) UpdateIndexInstanceSync(bucket string, defnId common.IndexDefnId, instId common.IndexInstId,
+func (m *IndexManager) UpdateIndexInstanceSync(bucket, scope, collection string, defnId common.IndexDefnId, instId common.IndexInstId,
 	state common.IndexState, streamId common.StreamId, err string, buildTime []uint64, rState common.RebalanceState,
 	partitions []uint64, versions []int, instVersion int) error {
 
 	inst := &topologyChange{
 		Bucket:      bucket,
+		Scope:       scope,
+		Collection:  collection,
 		DefnId:      uint64(defnId),
 		InstId:      uint64(instId),
 		State:       uint32(state),
@@ -622,6 +626,13 @@ func (m *IndexManager) DeleteIndexForBucket(bucket string, streamId common.Strea
 	return m.requestServer.MakeAsyncRequest(client.OPCODE_DELETE_BUCKET, bucket, []byte{byte(streamId)})
 }
 
+func (m *IndexManager) DeleteIndexForCollection(bucket, scope, collection string, streamId common.StreamId) error {
+
+	key := bucket + "/" + scope + "/" + collection
+	logging.Debugf("IndexManager.DeleteIndexForCollection(): making request for deleting index for bucket")
+	return m.requestServer.MakeAsyncRequest(client.OPCODE_DELETE_COLLECTION, key, []byte{byte(streamId)})
+}
+
 func (m *IndexManager) CleanupIndex(index common.IndexInst) error {
 
 	index.Pc = nil
@@ -670,20 +681,9 @@ func (m *IndexManager) NotifyConfigUpdate(config common.Config) error {
 	return m.requestServer.MakeAsyncRequest(client.OPCODE_CONFIG_UPDATE, "", buf)
 }
 
-//
-// Get Topology from dictionary
-//
-func (m *IndexManager) GetTopologyByBucket(bucket string) (*IndexTopology, error) {
+func (m *IndexManager) GetTopologyByCollection(bucket, scope, collection string) (*IndexTopology, error) {
 
-	return m.repo.GetTopologyByBucket(bucket)
-}
-
-//
-// Set Topology to dictionary
-//
-func (m *IndexManager) SetTopologyByBucket(bucket string, topology *IndexTopology) error {
-
-	return m.repo.SetTopologyByBucket(bucket, topology)
+	return m.repo.GetTopologyByCollection(bucket, scope, collection)
 }
 
 //
@@ -740,10 +740,10 @@ func (m *IndexManager) getBucketForCleanup() ([]string, error) {
 	cinfo.RLock()
 	defer cinfo.RUnlock()
 
-	// iterate through each bucket
+	// iterate through each topologey key
 	for _, key := range globalTop.TopologyKeys {
 
-		bucket := getBucketFromTopologyKey(key)
+		bucket, scope, collection := getBucketScopeCollectionFromTopologyKey(key)
 
 		// Get bucket UUID. Bucket uuid is BUCKET_UUID_NIL for non-existent bucket.
 		currentUUID := cinfo.GetBucketUUID(bucket)
@@ -752,7 +752,7 @@ func (m *IndexManager) getBucketForCleanup() ([]string, error) {
 		// can result in stale results. Use common.GetCollectionID() till the time
 		// ns_server provices streaming rest endpoint for streaming collection manifest
 
-		topology, err := m.repo.GetTopologyByBucket(bucket)
+		topology, err := m.repo.GetTopologyByCollection(bucket, scope, collection)
 		if err == nil && topology != nil {
 
 			definitions := make([]IndexDefnDistribution, len(topology.Definitions))
