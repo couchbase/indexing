@@ -31,7 +31,7 @@ type MutationQueue interface {
 	//dequeue a vbucket's mutation and keep sending on a channel until stop signal
 	Dequeue(vbucket Vbucket) (<-chan *MutationKeys, chan<- bool, error)
 	//dequeue a vbucket's mutation upto seqno(wait if not available)
-	DequeueUptoSeqno(vbucket Vbucket, seqno Seqno) (<-chan *MutationKeys, chan bool, error)
+	DequeueUptoSeqno(vbucket Vbucket, seqno uint64) (<-chan *MutationKeys, chan bool, error)
 	//dequeue single element for a vbucket and return
 	DequeueSingleElement(vbucket Vbucket) *MutationKeys
 
@@ -81,11 +81,11 @@ type atomicMutationQueue struct {
 	numVbuckets uint16 //num vbuckets for the queue
 	isDestroyed bool
 
-	bucket string
+	keyspaceId string
 }
 
 //NewAtomicMutationQueue allocates a new Atomic Mutation Queue and initializes it
-func NewAtomicMutationQueue(bucket string, numVbuckets uint16, maxMemory *int64,
+func NewAtomicMutationQueue(keyspaceId string, numVbuckets uint16, maxMemory *int64,
 	memUsed *int64, config common.Config) *atomicMutationQueue {
 
 	q := &atomicMutationQueue{head: make([]unsafe.Pointer, numVbuckets),
@@ -100,7 +100,7 @@ func NewAtomicMutationQueue(bucket string, numVbuckets uint16, maxMemory *int64,
 		dequeuePollInterval: config["mutation_queue.dequeuePollInterval"].Uint64(),
 		resultChanSize:      config["mutation_queue.resultChanSize"].Uint64(),
 		minQueueLen:         config["settings.minVbQueueLength"].Uint64(),
-		bucket:              bucket,
+		keyspaceId:          keyspaceId,
 	}
 
 	var x uint16
@@ -171,7 +171,7 @@ func (q *atomicMutationQueue) Enqueue(mutation *MutationKeys,
 //the one specified as argument. This allow for multiple mutations with same
 //seqno (e.g. in case of multiple indexes)
 //It closes the mutation channel to indicate its done.
-func (q *atomicMutationQueue) DequeueUptoSeqno(vbucket Vbucket, seqno Seqno) (
+func (q *atomicMutationQueue) DequeueUptoSeqno(vbucket Vbucket, seqno uint64) (
 	<-chan *MutationKeys, chan bool, error) {
 
 	datach := make(chan *MutationKeys, q.resultChanSize)
@@ -183,10 +183,10 @@ func (q *atomicMutationQueue) DequeueUptoSeqno(vbucket Vbucket, seqno Seqno) (
 
 }
 
-func (q *atomicMutationQueue) dequeueUptoSeqno(vbucket Vbucket, seqno Seqno,
+func (q *atomicMutationQueue) dequeueUptoSeqno(vbucket Vbucket, seqno uint64,
 	datach chan *MutationKeys, errch chan bool) {
 
-	var dequeueSeq Seqno
+	var dequeueSeq uint64
 	var totalWait int
 
 	for {
@@ -194,8 +194,8 @@ func (q *atomicMutationQueue) dequeueUptoSeqno(vbucket Vbucket, seqno Seqno,
 		if totalWait > 30000 {
 			if totalWait%5000 == 0 {
 				logging.Warnf("Indexer::MutationQueue Dequeue Waiting For "+
-					"Seqno %v Bucket %v Vbucket %v for %v ms. Last Dequeue %v.", seqno,
-					q.bucket, vbucket, totalWait, dequeueSeq)
+					"Seqno %v KeyspaceId %v Vbucket %v for %v ms. Last Dequeue %v.", seqno,
+					q.keyspaceId, vbucket, totalWait, dequeueSeq)
 			}
 		}
 		for atomic.LoadPointer(&q.head[vbucket]) !=
@@ -216,8 +216,8 @@ func (q *atomicMutationQueue) dequeueUptoSeqno(vbucket Vbucket, seqno Seqno,
 				datach <- m
 			} else {
 				logging.Warnf("Indexer::MutationQueue Dequeue Aborted For "+
-					"Seqno %v Bucket %v Vbucket %v. Last Dequeue %v Head Seqno %v.", seqno,
-					q.bucket, vbucket, dequeueSeq, m.meta.seqno)
+					"Seqno %v KeyspaceId %v Vbucket %v. Last Dequeue %v Head Seqno %v.", seqno,
+					q.keyspaceId, vbucket, dequeueSeq, m.meta.seqno)
 				close(errch)
 				return
 			}
@@ -349,12 +349,12 @@ func (q *atomicMutationQueue) allocNode(vbucket Vbucket, appch StopChannel) *nod
 			}
 			if totalWait > 300000 { // 5mins
 				logging.Warnf("Indexer::MutationQueue Max Wait Period for Node "+
-					"Alloc Expired %v. Forcing Alloc. Bucket %v Vbucket %v", totalWait, q.bucket, vbucket)
+					"Alloc Expired %v. Forcing Alloc. KeyspaceId %v Vbucket %v", totalWait, q.keyspaceId, vbucket)
 				return &node{}
 			} else if totalWait > 5000 {
 				if totalWait%3000 == 0 {
 					logging.Warnf("Indexer::MutationQueue Waiting for Node "+
-						"Alloc for %v Milliseconds Bucket %v Vbucket %v", totalWait, q.bucket, vbucket)
+						"Alloc for %v Milliseconds KeyspaceId %v Vbucket %v", totalWait, q.keyspaceId, vbucket)
 				}
 			}
 

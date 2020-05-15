@@ -1,12 +1,15 @@
 package protoProjector
 
-import "errors"
-import "sort"
+import (
+	"errors"
+	"sort"
 
-import c "github.com/couchbase/indexing/secondary/common"
-import "github.com/couchbase/indexing/secondary/dcp"
-import mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
-import "github.com/golang/protobuf/proto"
+	c "github.com/couchbase/indexing/secondary/common"
+	couchbase "github.com/couchbase/indexing/secondary/dcp"
+
+	mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
+	"github.com/golang/protobuf/proto"
+)
 
 var ErrorInvalidVbmap = errors.New("protobuf.errorInvalidVbmap")
 
@@ -239,16 +242,17 @@ func (resp *FailoverLogResponse) ToFailoverLog(vbnos []uint16) couchbase.Failove
 // for `topic`.
 func NewMutationTopicRequest(
 	topic, endpointType string, instances []*Instance,
-	async bool, opaque2 uint64) *MutationTopicRequest {
+	async bool, opaque2 uint64, collectionAware bool) *MutationTopicRequest {
 
 	return &MutationTopicRequest{
-		Topic:         proto.String(topic),
-		EndpointType:  proto.String(endpointType),
-		ReqTimestamps: make([]*TsVbuuid, 0),
-		Instances:     instances,
-		Version:       FeedVersion_watson.Enum(),
-		Async:         proto.Bool(async),
-		Opaque2:       proto.Uint64(opaque2),
+		Topic:           proto.String(topic),
+		EndpointType:    proto.String(endpointType),
+		ReqTimestamps:   make([]*TsVbuuid, 0),
+		Instances:       instances,
+		Version:         FeedVersion_cheshireCat.Enum(),
+		Async:           proto.Bool(async),
+		Opaque2:         proto.Uint64(opaque2),
+		CollectionAware: proto.Bool(collectionAware),
 	}
 }
 
@@ -429,7 +433,7 @@ func (tsResp *TimestampResponse) AddCurrentTimestamp(
 
 	ts := NewTsVbuuid(pooln, bucketn, len(curSeqnos))
 	for vbno, seqno := range curSeqnos {
-		ts.Append(vbno, seqno, 0 /*vbuuid*/, 0 /*start*/, 0 /*end*/)
+		ts.Append(vbno, seqno, 0 /*vbuuid*/, 0 /*start*/, 0 /*end*/, "" /*manifest*/)
 	}
 	tsResp.CurrentTimestamps = append(tsResp.CurrentTimestamps, ts)
 	return tsResp
@@ -635,7 +639,7 @@ func NewAddBucketsRequest(
 		Topic:         proto.String(topic),
 		ReqTimestamps: make([]*TsVbuuid, 0),
 		Instances:     instances,
-		Version:       FeedVersion_watson.Enum(),
+		Version:       FeedVersion_cheshireCat.Enum(),
 	}
 }
 
@@ -705,11 +709,12 @@ func (req *AddBucketsRequest) GetKeyspaceIdMap() (map[string]string, error) {
 // NewDelBucketsRequest creates an DelBucketsRequest
 // for topic to add one or more new instances/engines to a topic.
 func NewDelBucketsRequest(
-	topic string, buckets []string) *DelBucketsRequest {
+	topic string, buckets []string, keyspaceIds []string) *DelBucketsRequest {
 
 	return &DelBucketsRequest{
-		Topic:   proto.String(topic),
-		Buckets: buckets,
+		Topic:       proto.String(topic),
+		Buckets:     buckets,
+		KeyspaceIds: keyspaceIds,
 	}
 }
 
@@ -780,7 +785,7 @@ func NewAddInstancesRequest(
 	return &AddInstancesRequest{
 		Topic:     proto.String(topic),
 		Instances: instances,
-		Version:   FeedVersion_watson.Enum(),
+		Version:   FeedVersion_cheshireCat.Enum(),
 	}
 }
 

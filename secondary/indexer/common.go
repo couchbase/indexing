@@ -11,6 +11,8 @@ package indexer
 
 import (
 	"fmt"
+	"strings"
+
 	"github.com/couchbase/indexing/secondary/common"
 )
 
@@ -156,7 +158,7 @@ func (s IndexStorageStats) GetInternalData() []string {
 	return s.Stats.InternalData
 }
 
-type VbStatus Seqno
+type VbStatus uint64
 
 const (
 	VBS_INIT = iota
@@ -202,3 +204,23 @@ const (
 )
 
 var gEncodeCompatMode EncodeCompatMode
+
+func SplitKeyspaceId(keyspaceId string) (string, string, string) {
+
+	var ret []string
+	ret = strings.Split(keyspaceId, ":")
+
+	if len(ret) == 3 {
+		return ret[0], ret[1], ret[2]
+	} else if len(ret) == 1 {
+		return ret[0], "", ""
+	} else {
+		return "", "", ""
+	}
+
+}
+
+func GetBucketFromKeyspaceId(keyspaceId string) string {
+	b, _, _ := SplitKeyspaceId(keyspaceId)
+	return b
+}

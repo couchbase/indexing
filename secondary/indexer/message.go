@@ -39,6 +39,7 @@ const (
 	STREAM_READER_SHUTDOWN
 	STREAM_READER_CONN_ERROR
 	STREAM_READER_HWT
+	STREAM_READER_SYSTEM_EVENT
 
 	//MUTATION_MANAGER
 	MUT_MGR_PERSIST_MUTATION_QUEUE
@@ -55,12 +56,13 @@ const (
 	TK_STABILITY_TIMESTAMP
 	TK_INIT_BUILD_DONE
 	TK_INIT_BUILD_DONE_ACK
+	TK_INIT_BUILD_DONE_NO_CATCHUP_ACK
 	TK_ADD_INSTANCE_FAIL
 	TK_ENABLE_FLUSH
 	TK_DISABLE_FLUSH
 	TK_MERGE_STREAM
 	TK_MERGE_STREAM_ACK
-	TK_GET_BUCKET_HWT
+	TK_GET_KEYSPACE_HWT
 
 	//STORAGE_MANAGER
 	STORAGE_MGR_SHUTDOWN
@@ -92,7 +94,8 @@ const (
 	CLUST_MGR_BUILD_INDEX_DDL_RESPONSE
 	CLUST_MGR_DROP_INDEX_DDL
 	CLUST_MGR_UPDATE_TOPOLOGY_FOR_INDEX
-	CLUST_MGR_RESET_INDEX
+	CLUST_MGR_RESET_INDEX_ON_UPGRADE
+	CLUST_MGR_RESET_INDEX_ON_ROLLBACK
 	CLUST_MGR_GET_GLOBAL_TOPOLOGY
 	CLUST_MGR_GET_LOCAL
 	CLUST_MGR_SET_LOCAL
@@ -136,6 +139,7 @@ const (
 	INDEXER_ABORT_RECOVERY
 	INDEXER_STORAGE_WARMUP_DONE
 	INDEXER_SECURITY_CHANGE
+	INDEXER_RESET_INDEX_DONE
 
 	//SCAN COORDINATOR
 	SCAN_COORD_SHUTDOWN
@@ -150,7 +154,7 @@ const (
 	OPEN_STREAM
 	ADD_INDEX_LIST_TO_STREAM
 	REMOVE_INDEX_LIST_FROM_STREAM
-	REMOVE_BUCKET_FROM_STREAM
+	REMOVE_KEYSPACE_FROM_STREAM
 	CLOSE_STREAM
 	CLEANUP_STREAM
 	CLEANUP_PRJ_STATS
@@ -269,13 +273,15 @@ func (m *MsgTimestamp) GetTimestamp() Timestamp {
 
 //Stream Reader Message
 type MsgStream struct {
-	mType    MsgType
-	streamId common.StreamId
-	node     []byte
-	meta     *MutationMeta
-	snapshot *MutationSnapshot
-	status   common.StreamStatus
-	errCode  byte
+	mType       MsgType
+	streamId    common.StreamId
+	node        []byte
+	meta        *MutationMeta
+	snapshot    *MutationSnapshot
+	status      common.StreamStatus
+	errCode     byte
+	eventType   byte
+	manifestuid string
 }
 
 func (m *MsgStream) GetMsgType() MsgType {
@@ -304,6 +310,14 @@ func (m *MsgStream) GetStatus() common.StreamStatus {
 
 func (m *MsgStream) GetErrorCode() byte {
 	return m.errCode
+}
+
+func (m *MsgStream) GetEventType() byte {
+	return m.eventType
+}
+
+func (m *MsgStream) GetManifestUID() string {
+	return m.manifestuid
 }
 
 func (m *MsgStream) String() string {
@@ -340,15 +354,15 @@ func (m *MsgStreamError) GetError() Error {
 //STREAM_READER_CONN_ERROR
 //STREAM_REQUEST_DONE
 type MsgStreamInfo struct {
-	mType     MsgType
-	streamId  common.StreamId
-	bucket    string
-	vbList    []Vbucket
-	buildTs   Timestamp
-	activeTs  *common.TsVbuuid
-	pendingTs *common.TsVbuuid
-	reqCh     StopChannel
-	sessionId uint64
+	mType      MsgType
+	streamId   common.StreamId
+	keyspaceId string
+	vbList     []Vbucket
+	buildTs    Timestamp
+	activeTs   *common.TsVbuuid
+	pendingTs  *common.TsVbuuid
+	reqCh      StopChannel
+	sessionId  uint64
 }
 
 func (m *MsgStreamInfo) GetMsgType() MsgType {
@@ -359,8 +373,8 @@ func (m *MsgStreamInfo) GetStreamId() common.StreamId {
 	return m.streamId
 }
 
-func (m *MsgStreamInfo) GetBucket() string {
-	return m.bucket
+func (m *MsgStreamInfo) GetKeyspaceId() string {
+	return m.keyspaceId
 }
 
 func (m *MsgStreamInfo) GetVbList() []Vbucket {
@@ -392,51 +406,51 @@ func (m *MsgStreamInfo) String() string {
 	str := "\n\tMessage: MsgStreamInfo"
 	str += fmt.Sprintf("\n\tType: %v", m.mType)
 	str += fmt.Sprintf("\n\tStream: %v", m.streamId)
-	str += fmt.Sprintf("\n\tBucket: %v", m.bucket)
+	str += fmt.Sprintf("\n\tKeyspaceId: %v", m.keyspaceId)
 	str += fmt.Sprintf("\n\tSessionId: %v", m.sessionId)
 	str += fmt.Sprintf("\n\tVbList: %v", m.vbList)
 	return str
 }
 
 //STREAM_READER_UPDATE_QUEUE_MAP
-type MsgUpdateBucketQueue struct {
-	bucketQueueMap  BucketQueueMap
-	stats           *IndexerStats
-	bucketFilter    map[string]*common.TsVbuuid
-	bucketSessionId BucketSessionId
+type MsgUpdateKeyspaceIdQueue struct {
+	keyspaceIdQueueMap  KeyspaceIdQueueMap
+	stats               *IndexerStats
+	keyspaceIdFilter    map[string]*common.TsVbuuid
+	keyspaceIdSessionId KeyspaceIdSessionId
 }
 
-func (m *MsgUpdateBucketQueue) GetMsgType() MsgType {
+func (m *MsgUpdateKeyspaceIdQueue) GetMsgType() MsgType {
 	return STREAM_READER_UPDATE_QUEUE_MAP
 }
 
-func (m *MsgUpdateBucketQueue) GetBucketQueueMap() BucketQueueMap {
-	return m.bucketQueueMap
+func (m *MsgUpdateKeyspaceIdQueue) GetKeyspaceIdQueueMap() KeyspaceIdQueueMap {
+	return m.keyspaceIdQueueMap
 }
 
-func (m *MsgUpdateBucketQueue) GetStatsObject() *IndexerStats {
+func (m *MsgUpdateKeyspaceIdQueue) GetStatsObject() *IndexerStats {
 	return m.stats
 }
 
-func (m *MsgUpdateBucketQueue) GetBucketFilter() map[string]*common.TsVbuuid {
-	return m.bucketFilter
+func (m *MsgUpdateKeyspaceIdQueue) GetKeyspaceIdFilter() map[string]*common.TsVbuuid {
+	return m.keyspaceIdFilter
 }
 
-func (m *MsgUpdateBucketQueue) GetBucketSessionId() BucketSessionId {
-	return m.bucketSessionId
+func (m *MsgUpdateKeyspaceIdQueue) GetKeyspaceIdSessionId() KeyspaceIdSessionId {
+	return m.keyspaceIdSessionId
 }
 
-func (m *MsgUpdateBucketQueue) String() string {
+func (m *MsgUpdateKeyspaceIdQueue) String() string {
 
-	str := "\n\tMessage: MsgUpdateBucketQueue"
-	str += fmt.Sprintf("\n\tBucketQueueMap: %v", m.bucketQueueMap)
+	str := "\n\tMessage: MsgUpdateKeyspaceIdQueue"
+	str += fmt.Sprintf("\n\tKeyspaceIdQueueMap: %v", m.keyspaceIdQueueMap)
 	return str
 
 }
 
 //OPEN_STREAM
 //ADD_INDEX_LIST_TO_STREAM
-//REMOVE_BUCKET_FROM_STREAM
+//REMOVE_KEYSPACE_FROM_STREAM
 //REMOVE_INDEX_LIST_FROM_STREAM
 //CLOSE_STREAM
 //CLEANUP_STREAM
@@ -449,15 +463,17 @@ type MsgStreamUpdate struct {
 	buildTs      Timestamp
 	respCh       MsgChannel
 	stopCh       StopChannel
-	bucket       string
+	keyspaceId   string
 	restartTs    *common.TsVbuuid
 	rollbackTime int64
 	async        bool
 	sessionId    uint64
+	collectionId string
 
 	allowMarkFirstSnap bool
-	bucketInRecovery   bool
+	keyspaceInRecovery bool
 	abortRecovery      bool
+	collectionAware    bool
 }
 
 func (m *MsgStreamUpdate) GetMsgType() MsgType {
@@ -484,8 +500,8 @@ func (m *MsgStreamUpdate) GetStopChannel() StopChannel {
 	return m.stopCh
 }
 
-func (m *MsgStreamUpdate) GetBucket() string {
-	return m.bucket
+func (m *MsgStreamUpdate) GetKeyspaceId() string {
+	return m.keyspaceId
 }
 
 func (m *MsgStreamUpdate) GetRestartTs() *common.TsVbuuid {
@@ -500,8 +516,8 @@ func (m *MsgStreamUpdate) AllowMarkFirstSnap() bool {
 	return m.allowMarkFirstSnap
 }
 
-func (m *MsgStreamUpdate) BucketInRecovery() bool {
-	return m.bucketInRecovery
+func (m *MsgStreamUpdate) KeyspaceInRecovery() bool {
+	return m.keyspaceInRecovery
 }
 
 func (m *MsgStreamUpdate) GetAsync() bool {
@@ -516,16 +532,26 @@ func (m *MsgStreamUpdate) AbortRecovery() bool {
 	return m.abortRecovery
 }
 
+func (m *MsgStreamUpdate) GetCollectionId() string {
+	return m.collectionId
+}
+
+func (m *MsgStreamUpdate) CollectionAware() bool {
+	return m.collectionAware
+}
+
 func (m *MsgStreamUpdate) String() string {
 
 	str := "\n\tMessage: MsgStreamUpdate"
 	str += fmt.Sprintf("\n\tType: %v", m.mType)
 	str += fmt.Sprintf("\n\tStream: %v", m.streamId)
-	str += fmt.Sprintf("\n\tBucket: %v", m.bucket)
+	str += fmt.Sprintf("\n\tKeyspaceId: %v", m.keyspaceId)
 	str += fmt.Sprintf("\n\tBuildTS: %v", m.buildTs)
 	str += fmt.Sprintf("\n\tIndexList: %v", m.indexList)
 	str += fmt.Sprintf("\n\tAsync: %v", m.async)
 	str += fmt.Sprintf("\n\tSessionId: %v", m.sessionId)
+	str += fmt.Sprintf("\n\tCollectionId: %v", m.collectionId)
+	str += fmt.Sprintf("\n\tCollectionAware: %v", m.collectionAware)
 	str += fmt.Sprintf("\n\tRestartTs: %v", m.restartTs)
 	return str
 
@@ -535,20 +561,20 @@ func (m *MsgStreamUpdate) String() string {
 //MUT_MGR_ABORT_PERSIST
 //MUT_MGR_DRAIN_MUTATION_QUEUE
 type MsgMutMgrFlushMutationQueue struct {
-	mType     MsgType
-	bucket    string
-	streamId  common.StreamId
-	ts        *common.TsVbuuid
-	changeVec []bool
-	hasAllSB  bool
+	mType      MsgType
+	keyspaceId string
+	streamId   common.StreamId
+	ts         *common.TsVbuuid
+	changeVec  []bool
+	hasAllSB   bool
 }
 
 func (m *MsgMutMgrFlushMutationQueue) GetMsgType() MsgType {
 	return m.mType
 }
 
-func (m *MsgMutMgrFlushMutationQueue) GetBucket() string {
-	return m.bucket
+func (m *MsgMutMgrFlushMutationQueue) GetKeyspaceId() string {
+	return m.keyspaceId
 }
 
 func (m *MsgMutMgrFlushMutationQueue) GetStreamId() common.StreamId {
@@ -571,7 +597,7 @@ func (m *MsgMutMgrFlushMutationQueue) String() string {
 
 	str := "\n\tMessage: MsgMutMgrFlushMutationQueue"
 	str += fmt.Sprintf("\n\tType: %v", m.mType)
-	str += fmt.Sprintf("\n\tBucket: %v", m.bucket)
+	str += fmt.Sprintf("\n\tKeyspaceId: %v", m.keyspaceId)
 	str += fmt.Sprintf("\n\tStream: %v", m.streamId)
 	return str
 
@@ -580,17 +606,17 @@ func (m *MsgMutMgrFlushMutationQueue) String() string {
 //MUT_MGR_GET_MUTATION_QUEUE_HWT
 //MUT_MGR_GET_MUTATION_QUEUE_LWT
 type MsgMutMgrGetTimestamp struct {
-	mType    MsgType
-	bucket   string
-	streamId common.StreamId
+	mType      MsgType
+	keyspaceId string
+	streamId   common.StreamId
 }
 
 func (m *MsgMutMgrGetTimestamp) GetMsgType() MsgType {
 	return m.mType
 }
 
-func (m *MsgMutMgrGetTimestamp) GetBucket() string {
-	return m.bucket
+func (m *MsgMutMgrGetTimestamp) GetKeyspaceId() string {
+	return m.keyspaceId
 }
 
 func (m *MsgMutMgrGetTimestamp) GetStreamId() common.StreamId {
@@ -684,12 +710,12 @@ func (m *MsgUpdateWorker) GetRespCh() chan error {
 //MUT_MGR_ABORT_DONE
 //STORAGE_SNAP_DONE
 type MsgMutMgrFlushDone struct {
-	mType    MsgType
-	ts       *common.TsVbuuid
-	streamId common.StreamId
-	bucket   string
-	aborted  bool
-	hasAllSB bool
+	mType      MsgType
+	ts         *common.TsVbuuid
+	streamId   common.StreamId
+	keyspaceId string
+	aborted    bool
+	hasAllSB   bool
 }
 
 func (m *MsgMutMgrFlushDone) GetMsgType() MsgType {
@@ -704,8 +730,8 @@ func (m *MsgMutMgrFlushDone) GetStreamId() common.StreamId {
 	return m.streamId
 }
 
-func (m *MsgMutMgrFlushDone) GetBucket() string {
-	return m.bucket
+func (m *MsgMutMgrFlushDone) GetKeyspaceId() string {
+	return m.keyspaceId
 }
 
 func (m *MsgMutMgrFlushDone) GetAborted() bool {
@@ -720,7 +746,7 @@ func (m *MsgMutMgrFlushDone) String() string {
 
 	str := "\n\tMessage: MsgMutMgrFlushDone"
 	str += fmt.Sprintf("\n\tStream: %v", m.streamId)
-	str += fmt.Sprintf("\n\tBucket: %v", m.bucket)
+	str += fmt.Sprintf("\n\tKeyspaceId: %v", m.keyspaceId)
 	str += fmt.Sprintf("\n\tTS: %v", m.ts)
 	str += fmt.Sprintf("\n\tAborted: %v", m.aborted)
 	return str
@@ -729,11 +755,11 @@ func (m *MsgMutMgrFlushDone) String() string {
 
 //TK_STABILITY_TIMESTAMP
 type MsgTKStabilityTS struct {
-	ts        *common.TsVbuuid
-	streamId  common.StreamId
-	bucket    string
-	changeVec []bool
-	hasAllSB  bool
+	ts         *common.TsVbuuid
+	streamId   common.StreamId
+	keyspaceId string
+	changeVec  []bool
+	hasAllSB   bool
 }
 
 func (m *MsgTKStabilityTS) GetMsgType() MsgType {
@@ -744,8 +770,8 @@ func (m *MsgTKStabilityTS) GetStreamId() common.StreamId {
 	return m.streamId
 }
 
-func (m *MsgTKStabilityTS) GetBucket() string {
-	return m.bucket
+func (m *MsgTKStabilityTS) GetKeyspaceId() string {
+	return m.keyspaceId
 }
 
 func (m *MsgTKStabilityTS) GetTimestamp() *common.TsVbuuid {
@@ -764,58 +790,22 @@ func (m *MsgTKStabilityTS) String() string {
 
 	str := "\n\tMessage: MsgTKStabilityTS"
 	str += fmt.Sprintf("\n\tStream: %v", m.streamId)
-	str += fmt.Sprintf("\n\tBucket: %v", m.bucket)
+	str += fmt.Sprintf("\n\tKeyspaceId: %v", m.keyspaceId)
 	str += fmt.Sprintf("\n\tTS: %v", m.ts)
 	return str
 
 }
 
-//TK_INIT_BUILD_DONE
-//TK_INIT_BUILD_DONE_ACK
-//TK_ADD_INSTANCE_FAIL
-type MsgTKInitBuildDone struct {
-	mType     MsgType
-	streamId  common.StreamId
-	buildTs   Timestamp
-	bucket    string
-	mergeTs   *common.TsVbuuid
-	sessionId uint64
-}
-
-func (m *MsgTKInitBuildDone) GetMsgType() MsgType {
-	return m.mType
-}
-
-func (m *MsgTKInitBuildDone) GetBucket() string {
-	return m.bucket
-}
-
-func (m *MsgTKInitBuildDone) GetTimestamp() Timestamp {
-	return m.buildTs
-}
-
-func (m *MsgTKInitBuildDone) GetStreamId() common.StreamId {
-	return m.streamId
-}
-
-func (m *MsgTKInitBuildDone) GetMergeTs() *common.TsVbuuid {
-	return m.mergeTs
-}
-
-func (m *MsgTKInitBuildDone) GetSessionId() uint64 {
-	return m.sessionId
-}
-
 //TK_MERGE_STREAM
 //TK_MERGE_STREAM_ACK
 type MsgTKMergeStream struct {
-	mType     MsgType
-	streamId  common.StreamId
-	bucket    string
-	mergeTs   Timestamp
-	mergeList []common.IndexInst
-	reqCh     StopChannel
-	sessionId uint64
+	mType      MsgType
+	streamId   common.StreamId
+	keyspaceId string
+	mergeTs    *common.TsVbuuid
+	mergeList  []common.IndexInst
+	reqCh      StopChannel
+	sessionId  uint64
 }
 
 func (m *MsgTKMergeStream) GetMsgType() MsgType {
@@ -826,11 +816,11 @@ func (m *MsgTKMergeStream) GetStreamId() common.StreamId {
 	return m.streamId
 }
 
-func (m *MsgTKMergeStream) GetBucket() string {
-	return m.bucket
+func (m *MsgTKMergeStream) GetKeyspaceId() string {
+	return m.keyspaceId
 }
 
-func (m *MsgTKMergeStream) GetMergeTS() Timestamp {
+func (m *MsgTKMergeStream) GetMergeTS() *common.TsVbuuid {
 	return m.mergeTs
 }
 
@@ -849,9 +839,9 @@ func (m *MsgTKMergeStream) GetSessionId() uint64 {
 //TK_ENABLE_FLUSH
 //TK_DISABLE_FLUSH
 type MsgTKToggleFlush struct {
-	mType    MsgType
-	streamId common.StreamId
-	bucket   string
+	mType      MsgType
+	streamId   common.StreamId
+	keyspaceId string
 }
 
 func (m *MsgTKToggleFlush) GetMsgType() MsgType {
@@ -862,8 +852,8 @@ func (m *MsgTKToggleFlush) GetStreamId() common.StreamId {
 	return m.streamId
 }
 
-func (m *MsgTKToggleFlush) GetBucket() string {
-	return m.bucket
+func (m *MsgTKToggleFlush) GetKeyspaceId() string {
+	return m.keyspaceId
 }
 
 //CBQ_CREATE_INDEX_DDL
@@ -1163,7 +1153,7 @@ func (m *MsgBuildIndexResponse) GetString() string {
 type MsgDropIndex struct {
 	mType       MsgType
 	indexInstId common.IndexInstId
-	bucket      string
+	keyspaceId  string
 	respCh      MsgChannel
 	reqCtx      *common.MetadataRequestContext
 }
@@ -1176,8 +1166,8 @@ func (m *MsgDropIndex) GetIndexInstId() common.IndexInstId {
 	return m.indexInstId
 }
 
-func (m *MsgDropIndex) GetBucket() string {
-	return m.bucket
+func (m *MsgDropIndex) GetKeyspaceId() string {
+	return m.keyspaceId
 }
 
 func (m *MsgDropIndex) GetResponseChannel() MsgChannel {
@@ -1196,46 +1186,46 @@ func (m *MsgDropIndex) GetString() string {
 	return str
 }
 
-//TK_GET_BUCKET_HWT
+//TK_GET_KEYSPACE_HWT
 //STREAM_READER_HWT
-type MsgBucketHWT struct {
-	mType     MsgType
-	streamId  common.StreamId
-	bucket    string
-	ts        *common.TsVbuuid
-	prevSnap  *common.TsVbuuid
-	sessionId uint64
+type MsgKeyspaceHWT struct {
+	mType      MsgType
+	streamId   common.StreamId
+	keyspaceId string
+	ts         *common.TsVbuuid
+	prevSnap   *common.TsVbuuid
+	sessionId  uint64
 }
 
-func (m *MsgBucketHWT) GetMsgType() MsgType {
+func (m *MsgKeyspaceHWT) GetMsgType() MsgType {
 	return m.mType
 }
 
-func (m *MsgBucketHWT) GetStreamId() common.StreamId {
+func (m *MsgKeyspaceHWT) GetStreamId() common.StreamId {
 	return m.streamId
 }
 
-func (m *MsgBucketHWT) GetBucket() string {
-	return m.bucket
+func (m *MsgKeyspaceHWT) GetKeyspaceId() string {
+	return m.keyspaceId
 }
 
-func (m *MsgBucketHWT) GetHWT() *common.TsVbuuid {
+func (m *MsgKeyspaceHWT) GetHWT() *common.TsVbuuid {
 	return m.ts
 }
 
-func (m *MsgBucketHWT) GetPrevSnap() *common.TsVbuuid {
+func (m *MsgKeyspaceHWT) GetPrevSnap() *common.TsVbuuid {
 	return m.prevSnap
 }
 
-func (m *MsgBucketHWT) GetSessionId() uint64 {
+func (m *MsgKeyspaceHWT) GetSessionId() uint64 {
 	return m.sessionId
 }
 
-func (m *MsgBucketHWT) String() string {
+func (m *MsgKeyspaceHWT) String() string {
 
-	str := "\n\tMessage: MsgBucketHWT "
+	str := "\n\tMessage: MsgKeyspaceHWT "
 	str += fmt.Sprintf("StreamId: %v ", m.streamId)
-	str += fmt.Sprintf("Bucket: %v ", m.bucket)
+	str += fmt.Sprintf("KeyspaceId: %v ", m.keyspaceId)
 	str += fmt.Sprintf("SessionId: %v ", m.sessionId)
 	return str
 
@@ -1243,14 +1233,15 @@ func (m *MsgBucketHWT) String() string {
 
 //KV_SENDER_RESTART_VBUCKETS
 type MsgRestartVbuckets struct {
-	streamId   common.StreamId
-	bucket     string
-	restartTs  *common.TsVbuuid
-	connErrVbs []Vbucket
-	repairVbs  []Vbucket
-	respCh     MsgChannel
-	stopCh     StopChannel
-	sessionId  uint64
+	streamId     common.StreamId
+	keyspaceId   string
+	restartTs    *common.TsVbuuid
+	connErrVbs   []Vbucket
+	repairVbs    []Vbucket
+	respCh       MsgChannel
+	stopCh       StopChannel
+	sessionId    uint64
+	collectionId string
 }
 
 func (m *MsgRestartVbuckets) GetMsgType() MsgType {
@@ -1261,8 +1252,8 @@ func (m *MsgRestartVbuckets) GetStreamId() common.StreamId {
 	return m.streamId
 }
 
-func (m *MsgRestartVbuckets) GetBucket() string {
-	return m.bucket
+func (m *MsgRestartVbuckets) GetKeyspaceId() string {
+	return m.keyspaceId
 }
 
 func (m *MsgRestartVbuckets) GetRestartTs() *common.TsVbuuid {
@@ -1289,22 +1280,27 @@ func (m *MsgRestartVbuckets) GetSessionId() uint64 {
 	return m.sessionId
 }
 
+func (m *MsgRestartVbuckets) GetCollectionId() string {
+	return m.collectionId
+}
+
 func (m *MsgRestartVbuckets) String() string {
 	str := "\n\tMessage: MsgRestartVbuckets"
 	str += fmt.Sprintf("\n\tStreamId: %v", m.streamId)
-	str += fmt.Sprintf("\n\tBucket: %v", m.bucket)
+	str += fmt.Sprintf("\n\tKeyspaceId: %v", m.keyspaceId)
 	str += fmt.Sprintf("\n\tSessionId: %v", m.sessionId)
+	str += fmt.Sprintf("\n\tCollectionId: %v", m.collectionId)
 	str += fmt.Sprintf("\n\tRestartTS: %v", m.restartTs)
 	return str
 }
 
 //KV_SENDER_RESTART_VBUCKETS_RESPONSE
 type MsgRestartVbucketsResponse struct {
-	streamId  common.StreamId
-	bucket    string
-	activeTs  *common.TsVbuuid
-	pendingTs *common.TsVbuuid
-	sessionId uint64
+	streamId   common.StreamId
+	keyspaceId string
+	activeTs   *common.TsVbuuid
+	pendingTs  *common.TsVbuuid
+	sessionId  uint64
 }
 
 func (m *MsgRestartVbucketsResponse) GetMsgType() MsgType {
@@ -1315,8 +1311,8 @@ func (m *MsgRestartVbucketsResponse) GetStreamId() common.StreamId {
 	return m.streamId
 }
 
-func (m *MsgRestartVbucketsResponse) GetBucket() string {
-	return m.bucket
+func (m *MsgRestartVbucketsResponse) GetKeyspaceId() string {
+	return m.keyspaceId
 }
 
 func (m *MsgRestartVbucketsResponse) GetActiveTs() *common.TsVbuuid {
@@ -1334,7 +1330,7 @@ func (m *MsgRestartVbucketsResponse) GetSessionId() uint64 {
 func (m *MsgRestartVbucketsResponse) String() string {
 	str := "\n\tMessage: MsgRestartVbucketsResponse"
 	str += fmt.Sprintf("\n\tStreamId: %v", m.streamId)
-	str += fmt.Sprintf("\n\tBucket: %v", m.bucket)
+	str += fmt.Sprintf("\n\tKeyspaceId: %v", m.keyspaceId)
 	str += fmt.Sprintf("\n\tSessionId: %v", m.sessionId)
 	str += fmt.Sprintf("\n\tActiveTS: %v", m.activeTs)
 	str += fmt.Sprintf("\n\tPendingTS: %v", m.pendingTs)
@@ -1375,17 +1371,17 @@ func (m *MsgRepairEndpoints) String() string {
 //INDEXER_MTR_FAIL
 //INDEXER_ABORT_RECOVERY
 type MsgRecovery struct {
-	mType     MsgType
-	streamId  common.StreamId
-	bucket    string
-	restartTs *common.TsVbuuid
-	buildTs   Timestamp
-	activeTs  *common.TsVbuuid
-	inMTR     bool
-	retryTs   *common.TsVbuuid
-	pendingTs *common.TsVbuuid
-	requestCh StopChannel
-	sessionId uint64
+	mType      MsgType
+	streamId   common.StreamId
+	keyspaceId string
+	restartTs  *common.TsVbuuid
+	buildTs    Timestamp
+	activeTs   *common.TsVbuuid
+	inMTR      bool
+	retryTs    *common.TsVbuuid
+	pendingTs  *common.TsVbuuid
+	requestCh  StopChannel
+	sessionId  uint64
 }
 
 func (m *MsgRecovery) GetMsgType() MsgType {
@@ -1396,8 +1392,8 @@ func (m *MsgRecovery) GetStreamId() common.StreamId {
 	return m.streamId
 }
 
-func (m *MsgRecovery) GetBucket() string {
-	return m.bucket
+func (m *MsgRecovery) GetKeyspaceId() string {
+	return m.keyspaceId
 }
 
 func (m *MsgRecovery) GetRestartTs() *common.TsVbuuid {
@@ -1434,7 +1430,7 @@ func (m *MsgRecovery) GetSessionId() uint64 {
 
 type MsgRollback struct {
 	streamId     common.StreamId
-	bucket       string
+	keyspaceId   string
 	rollbackTs   *common.TsVbuuid
 	rollbackTime int64
 	sessionId    uint64
@@ -1448,8 +1444,8 @@ func (m *MsgRollback) GetStreamId() common.StreamId {
 	return m.streamId
 }
 
-func (m *MsgRollback) GetBucket() string {
-	return m.bucket
+func (m *MsgRollback) GetKeyspaceId() string {
+	return m.keyspaceId
 }
 
 func (m *MsgRollback) GetRollbackTs() *common.TsVbuuid {
@@ -1465,11 +1461,11 @@ func (m *MsgRollback) GetSessionId() uint64 {
 }
 
 type MsgRollbackDone struct {
-	streamId  common.StreamId
-	bucket    string
-	restartTs *common.TsVbuuid
-	err       error
-	sessionId uint64
+	streamId   common.StreamId
+	keyspaceId string
+	restartTs  *common.TsVbuuid
+	err        error
+	sessionId  uint64
 }
 
 func (m *MsgRollbackDone) GetMsgType() MsgType {
@@ -1480,8 +1476,8 @@ func (m *MsgRollbackDone) GetStreamId() common.StreamId {
 	return m.streamId
 }
 
-func (m *MsgRollbackDone) GetBucket() string {
-	return m.bucket
+func (m *MsgRollbackDone) GetKeyspaceId() string {
+	return m.keyspaceId
 }
 
 func (m *MsgRollbackDone) GetRestartTs() *common.TsVbuuid {
@@ -1497,8 +1493,8 @@ func (m *MsgRollbackDone) GetSessionId() uint64 {
 }
 
 type MsgRepairAbort struct {
-	streamId common.StreamId
-	bucket   string
+	streamId   common.StreamId
+	keyspaceId string
 }
 
 func (m *MsgRepairAbort) GetMsgType() MsgType {
@@ -1509,16 +1505,16 @@ func (m *MsgRepairAbort) GetStreamId() common.StreamId {
 	return m.streamId
 }
 
-func (m *MsgRepairAbort) GetBucket() string {
-	return m.bucket
+func (m *MsgRepairAbort) GetKeyspaceId() string {
+	return m.keyspaceId
 }
 
 //POOL_CHANGE
 type MsgPoolChange struct {
-	mType    MsgType
-	nodes    map[string]bool
-	streamId common.StreamId
-	bucket   string
+	mType      MsgType
+	nodes      map[string]bool
+	streamId   common.StreamId
+	keyspaceId string
 }
 
 func (m *MsgPoolChange) GetMsgType() MsgType {
@@ -1533,8 +1529,50 @@ func (m *MsgPoolChange) GetStreamId() common.StreamId {
 	return m.streamId
 }
 
-func (m *MsgPoolChange) GetBucket() string {
-	return m.bucket
+func (m *MsgPoolChange) GetKeyspaceId() string {
+	return m.keyspaceId
+}
+
+//TK_INIT_BUILD_DONE
+//TK_INIT_BUILD_DONE_ACK
+//TK_INIT_BUILD_DONE_NO_CATCHUP_ACK
+//TK_ADD_INSTANCE_FAIL
+type MsgTKInitBuildDone struct {
+	mType      MsgType
+	streamId   common.StreamId
+	buildTs    Timestamp
+	keyspaceId string
+	mergeTs    *common.TsVbuuid
+	flushTs    *common.TsVbuuid
+	sessionId  uint64
+}
+
+func (m *MsgTKInitBuildDone) GetMsgType() MsgType {
+	return m.mType
+}
+
+func (m *MsgTKInitBuildDone) GetKeyspaceId() string {
+	return m.keyspaceId
+}
+
+func (m *MsgTKInitBuildDone) GetTimestamp() Timestamp {
+	return m.buildTs
+}
+
+func (m *MsgTKInitBuildDone) GetStreamId() common.StreamId {
+	return m.streamId
+}
+
+func (m *MsgTKInitBuildDone) GetMergeTs() *common.TsVbuuid {
+	return m.mergeTs
+}
+
+func (m *MsgTKInitBuildDone) GetFlushTs() *common.TsVbuuid {
+	return m.flushTs
+}
+
+func (m *MsgTKInitBuildDone) GetSessionId() uint64 {
+	return m.sessionId
 }
 
 type MsgIndexSnapRequest struct {
@@ -1612,11 +1650,11 @@ func (m *MsgIndexPruneSnapshot) GetPartitions() []common.PartitionId {
 
 //STORAGE_UPDATE_SNAP_MAP
 type MsgUpdateSnapMap struct {
-	idxInstId common.IndexInstId
-	idxInst   common.IndexInst
-	partnMap  PartitionInstMap
-	streamId  common.StreamId
-	bucket    string
+	idxInstId  common.IndexInstId
+	idxInst    common.IndexInst
+	partnMap   PartitionInstMap
+	streamId   common.StreamId
+	keyspaceId string
 }
 
 func (m *MsgUpdateSnapMap) GetMsgType() MsgType {
@@ -1636,8 +1674,8 @@ func (m *MsgUpdateSnapMap) GetPartnMap() PartitionInstMap {
 func (m *MsgUpdateSnapMap) GetStreamId() common.StreamId {
 	return m.streamId
 }
-func (m *MsgUpdateSnapMap) GetBucket() string {
-	return m.bucket
+func (m *MsgUpdateSnapMap) GetKeyspaceId() string {
+	return m.keyspaceId
 }
 
 type MsgIndexStorageStats struct {
@@ -1709,11 +1747,11 @@ func (m *MsgIndexCompact) GetMinFrag() int {
 
 //KV_STREAM_REPAIR
 type MsgKVStreamRepair struct {
-	streamId  common.StreamId
-	bucket    string
-	restartTs *common.TsVbuuid
-	async     bool
-	sessionId uint64
+	streamId   common.StreamId
+	keyspaceId string
+	restartTs  *common.TsVbuuid
+	async      bool
+	sessionId  uint64
 }
 
 func (m *MsgKVStreamRepair) GetMsgType() MsgType {
@@ -1724,8 +1762,8 @@ func (m *MsgKVStreamRepair) GetStreamId() common.StreamId {
 	return m.streamId
 }
 
-func (m *MsgKVStreamRepair) GetBucket() string {
-	return m.bucket
+func (m *MsgKVStreamRepair) GetKeyspaceId() string {
+	return m.keyspaceId
 }
 
 func (m *MsgKVStreamRepair) GetRestartTs() *common.TsVbuuid {
@@ -1740,17 +1778,58 @@ func (m *MsgKVStreamRepair) GetSessionId() uint64 {
 	return m.sessionId
 }
 
-//CLUST_MGR_RESET_INDEX
-type MsgClustMgrResetIndex struct {
+//CLUST_MGR_RESET_INDEX_ON_UPGRADE
+type MsgClustMgrResetIndexOnUpgrade struct {
 	inst common.IndexInst
 }
 
-func (m *MsgClustMgrResetIndex) GetMsgType() MsgType {
-	return CLUST_MGR_RESET_INDEX
+func (m *MsgClustMgrResetIndexOnUpgrade) GetMsgType() MsgType {
+	return CLUST_MGR_RESET_INDEX_ON_UPGRADE
 }
 
-func (m *MsgClustMgrResetIndex) GetIndex() common.IndexInst {
+func (m *MsgClustMgrResetIndexOnUpgrade) GetIndex() common.IndexInst {
 	return m.inst
+}
+
+//CLUST_MGR_RESET_INDEX_ON_ROLLBACK
+type MsgClustMgrResetIndexOnRollback struct {
+	inst   common.IndexInst
+	respch chan error
+}
+
+func (m *MsgClustMgrResetIndexOnRollback) GetMsgType() MsgType {
+	return CLUST_MGR_RESET_INDEX_ON_ROLLBACK
+}
+
+func (m *MsgClustMgrResetIndexOnRollback) GetIndex() common.IndexInst {
+	return m.inst
+}
+
+func (m *MsgClustMgrResetIndexOnRollback) GetRespch() chan error {
+	return m.respch
+}
+
+//INDEXER_RESET_INDEX_DONE
+type MsgResetIndexDone struct {
+	streamId   common.StreamId
+	keyspaceId string
+	sessionId  uint64
+}
+
+func (m *MsgResetIndexDone) GetMsgType() MsgType {
+	return INDEXER_RESET_INDEX_DONE
+}
+
+func (m *MsgResetIndexDone) GetStreamId() common.StreamId {
+	return m.streamId
+}
+
+func (m *MsgResetIndexDone) GetKeyspaceId() string {
+	return m.keyspaceId
+}
+
+func (m *MsgResetIndexDone) GetSessionId() uint64 {
+	return m.sessionId
 }
 
 //CLUST_MGR_UPDATE_TOPOLOGY_FOR_INDEX
@@ -2023,6 +2102,8 @@ func (m MsgType) String() string {
 		return "STREAM_READER_CONN_ERROR"
 	case STREAM_READER_HWT:
 		return "STREAM_READER_HWT"
+	case STREAM_READER_SYSTEM_EVENT:
+		return "STREAM_READER_SYSTEM_EVENT"
 
 	case MUT_MGR_PERSIST_MUTATION_QUEUE:
 		return "MUT_MGR_PERSIST_MUTATION_QUEUE"
@@ -2050,6 +2131,8 @@ func (m MsgType) String() string {
 		return "TK_INIT_BUILD_DONE"
 	case TK_INIT_BUILD_DONE_ACK:
 		return "TK_INIT_BUILD_DONE_ACK"
+	case TK_INIT_BUILD_DONE_NO_CATCHUP_ACK:
+		return "TK_INIT_BUILD_DONE_NO_CATCHUP_ACK"
 	case TK_ADD_INSTANCE_FAIL:
 		return "TK_ADD_INSTANCE_FAIL"
 	case TK_ENABLE_FLUSH:
@@ -2060,8 +2143,8 @@ func (m MsgType) String() string {
 		return "TK_MERGE_STREAM"
 	case TK_MERGE_STREAM_ACK:
 		return "TK_MERGE_STREAM_ACK"
-	case TK_GET_BUCKET_HWT:
-		return "TK_GET_BUCKET_HWT"
+	case TK_GET_KEYSPACE_HWT:
+		return "TK_GET_KEYSPACE_HWT"
 	case REPAIR_ABORT:
 		return "REPAIR_ABORT"
 	case POOL_CHANGE:
@@ -2147,8 +2230,8 @@ func (m MsgType) String() string {
 		return "ADD_INDEX_LIST_TO_STREAM"
 	case REMOVE_INDEX_LIST_FROM_STREAM:
 		return "REMOVE_INDEX_LIST_FROM_STREAM"
-	case REMOVE_BUCKET_FROM_STREAM:
-		return "REMOVE_BUCKET_FROM_STREAM"
+	case REMOVE_KEYSPACE_FROM_STREAM:
+		return "REMOVE_KEYSPACE_FROM_STREAM"
 	case CLOSE_STREAM:
 		return "CLOSE_STREAM"
 	case CLEANUP_STREAM:
@@ -2195,6 +2278,10 @@ func (m MsgType) String() string {
 		return "CLUST_MGR_MERGE_PARTITION"
 	case CLUST_MGR_PRUNE_PARTITION:
 		return "CLUST_MGR_PRUNE_PARTITION"
+	case CLUST_MGR_RESET_INDEX_ON_UPGRADE:
+		return "CLUST_MGR_RESET_INDEX_ON_UPGRADE"
+	case CLUST_MGR_RESET_INDEX_ON_ROLLBACK:
+		return "CLUST_MGR_RESET_INDEX_ON_ROLLBACK"
 
 	case CBQ_CREATE_INDEX_DDL:
 		return "CBQ_CREATE_INDEX_DDL"

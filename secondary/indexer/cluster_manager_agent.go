@@ -135,8 +135,11 @@ func (c *clustMgrAgent) handleSupvervisorCommands(cmd Message) {
 	case CLUST_MGR_UPDATE_TOPOLOGY_FOR_INDEX:
 		c.handleUpdateTopologyForIndex(cmd)
 
-	case CLUST_MGR_RESET_INDEX:
-		c.handleResetIndex(cmd)
+	case CLUST_MGR_RESET_INDEX_ON_UPGRADE:
+		c.handleResetIndexOnUpgrade(cmd)
+
+	case CLUST_MGR_RESET_INDEX_ON_ROLLBACK:
+		c.handleResetIndexOnRollback(cmd)
 
 	case CLUST_MGR_GET_GLOBAL_TOPOLOGY:
 		c.handleGetGlobalTopology(cmd)
@@ -300,15 +303,29 @@ func (c *clustMgrAgent) handleSecurityChange(cmd Message) {
 	c.supvCmdch <- &MsgSuccess{}
 }
 
-func (c *clustMgrAgent) handleResetIndex(cmd Message) {
+func (c *clustMgrAgent) handleResetIndexOnUpgrade(cmd Message) {
 
-	logging.Infof("ClustMgr:handleResetIndex %v", cmd)
+	logging.Infof("ClustMgr:handleResetIndexUpgrade %v", cmd)
 
-	index := cmd.(*MsgClustMgrResetIndex).GetIndex()
+	index := cmd.(*MsgClustMgrResetIndexOnUpgrade).GetIndex()
 
 	if err := c.mgr.ResetIndex(index); err != nil {
 		common.CrashOnError(err)
 	}
+
+	c.supvCmdch <- &MsgSuccess{}
+}
+
+func (c *clustMgrAgent) handleResetIndexOnRollback(cmd Message) {
+
+	logging.Infof("ClustMgr:handleResetIndexOnRollback %v", cmd)
+
+	index := cmd.(*MsgClustMgrResetIndexOnRollback).GetIndex()
+	respch := cmd.(*MsgClustMgrResetIndexOnRollback).GetRespch()
+
+	go func() {
+		respch <- c.mgr.ResetIndexOnRollback(index)
+	}()
 
 	c.supvCmdch <- &MsgSuccess{}
 }
@@ -721,7 +738,7 @@ func (meta *metaNotifier) OnIndexDelete(instId common.IndexInstId,
 	meta.adminCh <- &MsgDropIndex{mType: CLUST_MGR_DROP_INDEX_DDL,
 		indexInstId: instId,
 		respCh:      respCh,
-		bucket:      bucket,
+		keyspaceId:  bucket,
 		reqCtx:      reqCtx}
 
 	//wait for response

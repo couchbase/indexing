@@ -37,6 +37,7 @@ import "math"
 
 // formula to compute the default CPU allocation for projector.
 var projector_maxCpuPercent = int(math.Max(400.0, float64(runtime.NumCPU())*100.0*0.25))
+var plasma_minNumShard = uint64(math.Max(2.0, float64(runtime.NumCPU())*0.25))
 
 // Threadsafe config holder object
 type ConfigHolder struct {
@@ -1526,6 +1527,27 @@ var SystemConfig = Config{
 		600,
 		"Fast recovery checkpoint interval in seconds",
 		600,
+		false,
+		false,
+	},
+	"indexer.plasma.maxInstancePerShard": ConfigValue{
+		uint64(100),
+		"Maximum number of instances per shard",
+		uint64(100),
+		false,
+		false,
+	},
+	"indexer.plasma.maxDiskUsagePerShard": ConfigValue{
+		uint64(250 * 1024 * 1024 * 1024),
+		"Maximum disk usage per shard",
+		uint64(250 * 1024 * 1024 * 1024),
+		false,
+		false,
+	},
+	"indexer.plasma.minNumShard": ConfigValue{
+		plasma_minNumShard,
+		"Minimum number of shard",
+		plasma_minNumShard,
 		false,
 		false,
 	},

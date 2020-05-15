@@ -50,12 +50,12 @@ var StreamTopicName map[common.StreamId]string
 var ServiceAddrMap map[string]string
 var httpMux *http.ServeMux
 
-type BucketIndexCountMap map[string]int
-type BucketFlushInProgressMap map[string]bool
-type BucketObserveFlushDoneMap map[string]MsgChannel
-type BucketCurrRequest map[string]*currRequest
-type BucketRollbackTs map[string]*common.TsVbuuid
-type BucketRetryTs map[string]*common.TsVbuuid
+type KeyspaceIdIndexCountMap map[string]int
+type KeyspaceIdFlushInProgressMap map[string]bool
+type KeyspaceIdObserveFlushDoneMap map[string]MsgChannel
+type KeyspaceIdCurrRequest map[string]*currRequest
+type KeyspaceIdRollbackTs map[string]*common.TsVbuuid
+type KeyspaceIdRetryTs map[string]*common.TsVbuuid
 
 //mem stats
 var (
@@ -91,27 +91,30 @@ type indexer struct {
 	indexInstMap  common.IndexInstMap //map of indexInstId to IndexInst
 	indexPartnMap IndexPartnMap       //map of indexInstId to PartitionInst
 
-	streamBucketStatus map[common.StreamId]BucketStatus
+	streamKeyspaceIdStatus map[common.StreamId]KeyspaceIdStatus
 
-	streamBucketFlushInProgress  map[common.StreamId]BucketFlushInProgressMap
-	streamBucketObserveFlushDone map[common.StreamId]BucketObserveFlushDoneMap
+	streamKeyspaceIdFlushInProgress  map[common.StreamId]KeyspaceIdFlushInProgressMap
+	streamKeyspaceIdObserveFlushDone map[common.StreamId]KeyspaceIdObserveFlushDoneMap
 
-	streamBucketCurrRequest  map[common.StreamId]BucketCurrRequest
-	streamBucketRollbackTs   map[common.StreamId]BucketRollbackTs
-	streamBucketRetryTs      map[common.StreamId]BucketRetryTs
-	streamBucketRequestQueue map[common.StreamId]map[string]chan *kvRequest
-	streamBucketRequestLock  map[common.StreamId]map[string]chan *sync.Mutex
-	streamBucketSessionId    map[common.StreamId]map[string]uint64
+	streamKeyspaceIdCurrRequest  map[common.StreamId]KeyspaceIdCurrRequest
+	streamKeyspaceIdRollbackTs   map[common.StreamId]KeyspaceIdRollbackTs
+	streamKeyspaceIdRetryTs      map[common.StreamId]KeyspaceIdRetryTs
+	streamKeyspaceIdRequestQueue map[common.StreamId]map[string]chan *kvRequest
+	streamKeyspaceIdRequestLock  map[common.StreamId]map[string]chan *sync.Mutex
+	streamKeyspaceIdSessionId    map[common.StreamId]map[string]uint64
+	streamKeyspaceIdCollectionId map[common.StreamId]map[string]string
 
-	bucketRollbackTimes map[string]int64
+	streamKeyspaceIdPendBuildDone map[common.StreamId]map[string]*buildDoneSpec
 
-	bucketBuildTs map[string]Timestamp
-	buildTsLock   map[common.StreamId]map[string]*sync.Mutex
+	keyspaceIdRollbackTimes map[string]int64
+
+	keyspaceIdBuildTs map[string]Timestamp
+	buildTsLock       map[common.StreamId]map[string]*sync.Mutex
 
 	activeKVNodes map[string]bool // Key -> KV node UUID
 
 	//TODO Remove this once cbq bridge support goes away
-	bucketCreateClientChMap map[string]MsgChannel
+	keyspaceIdCreateClientChMap map[string]MsgChannel
 
 	wrkrRecvCh          MsgChannel //channel to receive messages from workers
 	internalRecvCh      MsgChannel //buffered channel to queue worker requests
@@ -149,7 +152,7 @@ type indexer struct {
 	config        common.Config
 
 	kvlock    sync.Mutex   //fine-grain lock for KVSender
-	stateLock sync.RWMutex //lock to protect the bucketStatus map
+	stateLock sync.RWMutex //lock to protect the keyspaceIdStatus map
 
 	stats *IndexerStats
 
@@ -176,13 +179,16 @@ type indexer struct {
 	clusterInfoClient *common.ClusterInfoClient
 
 	testServRunning bool
+
+	keyspaceIdResetList                map[string]resetList
+	keyspaceIdObserveFlushDoneForReset map[string]MsgChannel
 }
 
 type kvRequest struct {
-	lock     *sync.Mutex
-	bucket   string
-	streamId common.StreamId
-	grantCh  chan bool
+	lock       *sync.Mutex
+	keyspaceId string
+	streamId   common.StreamId
+	grantCh    chan bool
 }
 
 type mergeSpec struct {
@@ -202,6 +208,13 @@ type currRequest struct {
 	reqCh     StopChannel
 	sessionId uint64
 }
+
+type buildDoneSpec struct {
+	sessionId uint64
+	flushTs   *common.TsVbuuid
+}
+
+type resetList []common.IndexInstId
 
 func NewIndexer(config common.Config) (Indexer, Message) {
 
@@ -234,23 +247,28 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		merged: make(map[common.IndexInstId]common.IndexInst),
 		pruned: make(map[common.IndexInstId]common.IndexInst),
 
-		streamBucketStatus:           make(map[common.StreamId]BucketStatus),
-		streamBucketFlushInProgress:  make(map[common.StreamId]BucketFlushInProgressMap),
-		streamBucketObserveFlushDone: make(map[common.StreamId]BucketObserveFlushDoneMap),
-		streamBucketCurrRequest:      make(map[common.StreamId]BucketCurrRequest),
-		streamBucketRollbackTs:       make(map[common.StreamId]BucketRollbackTs),
-		streamBucketRetryTs:          make(map[common.StreamId]BucketRetryTs),
-		streamBucketRequestQueue:     make(map[common.StreamId]map[string]chan *kvRequest),
-		streamBucketRequestLock:      make(map[common.StreamId]map[string]chan *sync.Mutex),
-		streamBucketSessionId:        make(map[common.StreamId]map[string]uint64),
-		bucketBuildTs:                make(map[string]Timestamp),
-		buildTsLock:                  make(map[common.StreamId]map[string]*sync.Mutex),
-		bucketRollbackTimes:          make(map[string]int64),
-		bucketCreateClientChMap:      make(map[string]MsgChannel),
+		streamKeyspaceIdStatus:           make(map[common.StreamId]KeyspaceIdStatus),
+		streamKeyspaceIdFlushInProgress:  make(map[common.StreamId]KeyspaceIdFlushInProgressMap),
+		streamKeyspaceIdObserveFlushDone: make(map[common.StreamId]KeyspaceIdObserveFlushDoneMap),
+		streamKeyspaceIdCurrRequest:      make(map[common.StreamId]KeyspaceIdCurrRequest),
+		streamKeyspaceIdRollbackTs:       make(map[common.StreamId]KeyspaceIdRollbackTs),
+		streamKeyspaceIdRetryTs:          make(map[common.StreamId]KeyspaceIdRetryTs),
+		streamKeyspaceIdRequestQueue:     make(map[common.StreamId]map[string]chan *kvRequest),
+		streamKeyspaceIdRequestLock:      make(map[common.StreamId]map[string]chan *sync.Mutex),
+		streamKeyspaceIdSessionId:        make(map[common.StreamId]map[string]uint64),
+		streamKeyspaceIdCollectionId:     make(map[common.StreamId]map[string]string),
+		streamKeyspaceIdPendBuildDone:    make(map[common.StreamId]map[string]*buildDoneSpec),
+		keyspaceIdBuildTs:                make(map[string]Timestamp),
+		buildTsLock:                      make(map[common.StreamId]map[string]*sync.Mutex),
+		keyspaceIdRollbackTimes:          make(map[string]int64),
+		keyspaceIdCreateClientChMap:      make(map[string]MsgChannel),
 
 		activeKVNodes: make(map[string]bool),
 
 		enableSecurityChange: make(chan bool),
+
+		keyspaceIdResetList:                make(map[string]resetList),
+		keyspaceIdObserveFlushDoneForReset: make(map[string]MsgChannel),
 	}
 
 	logging.Infof("Indexer::NewIndexer Status Warmup")
@@ -518,7 +536,7 @@ func (idx *indexer) handleSecurityChange(msg Message) {
 
 	if refreshEncrypt {
 		// reset memcached connection
-		logging.Infof("handleSecurityChange: restarting bucket sequence cache")
+		logging.Infof("handleSecurityChange: restarting keyspace sequence cache")
 		common.ResetBucketSeqnos()
 	}
 
@@ -540,6 +558,8 @@ func (idx *indexer) initFromConfig() {
 	idx.initStreamFlushMap()
 	idx.initServiceAddressMap()
 	idx.initStreamSessionIdMap()
+	idx.initStreamPendBuildDone()
+	idx.initStreamCollectionIdMap()
 
 	idx.enableManager = idx.config["enableManager"].Bool()
 
@@ -725,34 +745,34 @@ func (idx *indexer) sendProgressStats() {
 	logging.Infof("send progress stats to clients")
 }
 
-func (idx *indexer) acquireStreamRequestLock(bucket string, streamId common.StreamId) *kvRequest {
+func (idx *indexer) acquireStreamRequestLock(keyspaceId string, streamId common.StreamId) *kvRequest {
 
 	// queue request
-	request := &kvRequest{grantCh: make(chan bool, 1), lock: nil, bucket: bucket, streamId: streamId}
+	request := &kvRequest{grantCh: make(chan bool, 1), lock: nil, keyspaceId: keyspaceId, streamId: streamId}
 
 	idx.kvlock.Lock()
 	defer idx.kvlock.Unlock()
 
 	// allocate the request queue
-	rq, ok := idx.streamBucketRequestQueue[streamId][bucket]
+	rq, ok := idx.streamKeyspaceIdRequestQueue[streamId][keyspaceId]
 	if !ok {
 		rq = make(chan *kvRequest, 5000)
 
-		if _, ok = idx.streamBucketRequestQueue[streamId]; !ok {
-			idx.streamBucketRequestQueue[streamId] = make(map[string]chan *kvRequest)
+		if _, ok = idx.streamKeyspaceIdRequestQueue[streamId]; !ok {
+			idx.streamKeyspaceIdRequestQueue[streamId] = make(map[string]chan *kvRequest)
 		}
-		idx.streamBucketRequestQueue[streamId][bucket] = rq
+		idx.streamKeyspaceIdRequestQueue[streamId][keyspaceId] = rq
 	}
 
 	// allocate the lock
-	lq, ok := idx.streamBucketRequestLock[streamId][bucket]
+	lq, ok := idx.streamKeyspaceIdRequestLock[streamId][keyspaceId]
 	if !ok {
 		lq = make(chan *sync.Mutex, 1) // hold one lock
 
-		if _, ok = idx.streamBucketRequestLock[streamId]; !ok {
-			idx.streamBucketRequestLock[streamId] = make(map[string]chan *sync.Mutex)
+		if _, ok = idx.streamKeyspaceIdRequestLock[streamId]; !ok {
+			idx.streamKeyspaceIdRequestLock[streamId] = make(map[string]chan *sync.Mutex)
 		}
-		idx.streamBucketRequestLock[streamId][bucket] = lq
+		idx.streamKeyspaceIdRequestLock[streamId][keyspaceId] = lq
 
 		// seed the lock
 		lq <- new(sync.Mutex)
@@ -786,18 +806,18 @@ func (idx *indexer) releaseStreamRequestLock(req *kvRequest) {
 	defer idx.kvlock.Unlock()
 
 	streamId := req.streamId
-	bucket := req.bucket
+	keyspaceId := req.keyspaceId
 
-	rq, ok := idx.streamBucketRequestQueue[streamId][bucket]
+	rq, ok := idx.streamKeyspaceIdRequestQueue[streamId][keyspaceId]
 	if ok && len(rq) != 0 {
 		next := <-rq
 		next.lock = req.lock
 		next.grantCh <- true
 	} else {
-		if lq, ok := idx.streamBucketRequestLock[streamId][bucket]; ok {
+		if lq, ok := idx.streamKeyspaceIdRequestLock[streamId][keyspaceId]; ok {
 			lq <- req.lock
 		} else {
-			common.CrashOnError(errors.New("releaseStreamRequestLock: streamBucketRequestLock is not initialized"))
+			common.CrashOnError(errors.New("releaseStreamRequestLock: streamKeyspaceIdRequestLock is not initialized"))
 		}
 	}
 }
@@ -904,7 +924,8 @@ func (idx *indexer) getBucketForAdminMsg(msg Message) []string {
 
 	case CLUST_MGR_DROP_INDEX_DDL, CBQ_DROP_INDEX_DDL:
 		dropMsg := msg.(*MsgDropIndex)
-		return []string{dropMsg.GetBucket()}
+		//TODO Collections verify this
+		return []string{dropMsg.GetKeyspaceId()}
 
 	default:
 		return nil
@@ -943,18 +964,12 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 
 	switch msg.GetMsgType() {
 
-	case STREAM_READER_HWT:
-		//fwd the message to timekeeper
-		idx.tkCmdCh <- msg
-		<-idx.tkCmdCh
-
-	case STREAM_READER_STREAM_BEGIN:
-
-		//fwd the message to timekeeper
-		idx.tkCmdCh <- msg
-		<-idx.tkCmdCh
-
-	case STREAM_READER_STREAM_END:
+	case STREAM_READER_HWT,
+		STREAM_READER_STREAM_BEGIN,
+		STREAM_READER_STREAM_END,
+		STREAM_READER_SNAPSHOT_MARKER,
+		STREAM_READER_CONN_ERROR,
+		STREAM_READER_SYSTEM_EVENT:
 
 		//fwd the message to timekeeper
 		idx.tkCmdCh <- msg
@@ -965,48 +980,37 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		logging.Warnf("Indexer::handleWorkerMsgs Received Drop Data "+
 			"From Mutation Mgr %v. Ignored.", msg)
 
-	case STREAM_READER_SNAPSHOT_MARKER:
-		//fwd the message to timekeeper
-		idx.tkCmdCh <- msg
-		<-idx.tkCmdCh
-
-	case STREAM_READER_CONN_ERROR:
-
-		//fwd the message to timekeeper
-		idx.tkCmdCh <- msg
-		<-idx.tkCmdCh
-
 	case TK_STABILITY_TIMESTAMP:
 		//send TS to Mutation Manager
 		ts := msg.(*MsgTKStabilityTS).GetTimestamp()
-		bucket := msg.(*MsgTKStabilityTS).GetBucket()
+		keyspaceId := msg.(*MsgTKStabilityTS).GetKeyspaceId()
 		streamId := msg.(*MsgTKStabilityTS).GetStreamId()
 		changeVec := msg.(*MsgTKStabilityTS).GetChangeVector()
 		hasAllSB := msg.(*MsgTKStabilityTS).HasAllSB()
 
-		if idx.getStreamBucketState(streamId, bucket) == STREAM_INACTIVE {
+		if idx.getStreamKeyspaceIdState(streamId, keyspaceId) == STREAM_INACTIVE {
 			logging.Warnf("Indexer: Skipped PersistTs for %v %v. "+
-				"STREAM_INACTIVE", streamId, bucket)
+				"STREAM_INACTIVE", streamId, keyspaceId)
 			return
 		}
 
-		idx.streamBucketFlushInProgress[streamId][bucket] = true
+		idx.streamKeyspaceIdFlushInProgress[streamId][keyspaceId] = true
 
 		if ts.GetSnapType() == common.FORCE_COMMIT {
 			idx.storageMgrCmdCh <- &MsgMutMgrFlushDone{mType: MUT_MGR_FLUSH_DONE,
-				streamId: streamId,
-				bucket:   bucket,
-				ts:       ts,
-				hasAllSB: hasAllSB}
+				streamId:   streamId,
+				keyspaceId: keyspaceId,
+				ts:         ts,
+				hasAllSB:   hasAllSB}
 			<-idx.storageMgrCmdCh
 		} else {
 			idx.mutMgrCmdCh <- &MsgMutMgrFlushMutationQueue{
-				mType:     MUT_MGR_PERSIST_MUTATION_QUEUE,
-				bucket:    bucket,
-				ts:        ts,
-				streamId:  streamId,
-				changeVec: changeVec,
-				hasAllSB:  hasAllSB}
+				mType:      MUT_MGR_PERSIST_MUTATION_QUEUE,
+				keyspaceId: keyspaceId,
+				ts:         ts,
+				streamId:   streamId,
+				changeVec:  changeVec,
+				hasAllSB:   hasAllSB}
 
 			<-idx.mutMgrCmdCh
 		}
@@ -1028,16 +1032,16 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 
 	case STORAGE_SNAP_DONE:
 
-		bucket := msg.(*MsgMutMgrFlushDone).GetBucket()
+		keyspaceId := msg.(*MsgMutMgrFlushDone).GetKeyspaceId()
 		streamId := msg.(*MsgMutMgrFlushDone).GetStreamId()
 
 		// consolidate partitions now
-		idx.mergePartitions(bucket, streamId)
-		idx.mergePartitionForIdleBuckets()
-		idx.prunePartitions(bucket, streamId)
-		idx.prunePartitionForIdleBuckets()
+		idx.mergePartitions(keyspaceId, streamId)
+		idx.mergePartitionForIdleKeyspaceIds()
+		idx.prunePartitions(keyspaceId, streamId)
+		idx.prunePartitionForIdleKeyspaceIds()
 
-		idx.streamBucketFlushInProgress[streamId][bucket] = false
+		idx.streamKeyspaceIdFlushInProgress[streamId][keyspaceId] = false
 
 		//if there is any observer for flush done, notify
 		idx.notifyFlushObserver(msg)
@@ -1119,7 +1123,7 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		<-idx.clustMgrAgentCmdCh
 
 	case INDEXER_BUCKET_NOT_FOUND:
-		idx.handleBucketNotFound(msg)
+		idx.handleKeyspaceIdNotFound(msg)
 
 	case INDEXER_MTR_FAIL:
 		idx.handleMTRFail(msg)
@@ -1189,6 +1193,12 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 	case POOL_CHANGE:
 		idx.tkCmdCh <- msg
 		<-idx.tkCmdCh
+
+	case TK_INIT_BUILD_DONE_NO_CATCHUP_ACK:
+		idx.handleBuildDoneNoCatchupAck(msg)
+
+	case INDEXER_RESET_INDEX_DONE:
+		idx.handleResetIndexDone(msg)
 
 	default:
 		logging.Fatalf("Indexer::handleWorkerMsgs Unknown Message %+v", msg)
@@ -1392,7 +1402,7 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 	}
 
 	if !idx.clusterInfoClient.ValidateBucket(indexInst.Defn.Bucket, []string{indexInst.Defn.BucketUUID}) {
-		logging.Errorf("Indexer::handleCreateIndex \n\t Bucket %v Not Found")
+		logging.Errorf("Indexer::handleCreateIndex Bucket %v Not Found")
 
 		if clientCh != nil {
 			clientCh <- &MsgError{
@@ -1503,8 +1513,8 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 	}
 
 	// update rollback time for the bucket
-	if _, ok := idx.bucketRollbackTimes[indexInst.Defn.Bucket]; !ok {
-		idx.bucketRollbackTimes[indexInst.Defn.Bucket] = time.Now().UnixNano()
+	if _, ok := idx.keyspaceIdRollbackTimes[indexInst.Defn.Bucket]; !ok {
+		idx.keyspaceIdRollbackTimes[indexInst.Defn.Bucket] = time.Now().UnixNano()
 	}
 
 	//update index maps with this index
@@ -1599,7 +1609,7 @@ func (idx *indexer) updateRStateOrMergePartition(srcInstId common.IndexInstId, t
 		}
 	}
 
-	idx.mergePartitionForIdleBuckets()
+	idx.mergePartitionForIdleKeyspaceIds()
 }
 
 // When a inst needs to be merged, one of the following can happens:
@@ -1611,7 +1621,7 @@ func (idx *indexer) updateRStateOrMergePartition(srcInstId common.IndexInstId, t
 //
 // For those merge that is postponed, indexer needs to retry when the bucket flush is idle.
 //
-func (idx *indexer) mergePartitionForIdleBuckets() {
+func (idx *indexer) mergePartitionForIdleKeyspaceIds() {
 
 	if len(idx.mergePartitionList) > 0 {
 		buckets := make(map[string]map[common.StreamId]bool)
@@ -1627,7 +1637,7 @@ func (idx *indexer) mergePartitionForIdleBuckets() {
 
 		for bucket, streams := range buckets {
 			for streamId, _ := range streams {
-				if !idx.streamBucketFlushInProgress[streamId][bucket] {
+				if !idx.streamKeyspaceIdFlushInProgress[streamId][bucket] {
 					idx.mergePartitions(bucket, streamId)
 				}
 			}
@@ -1730,7 +1740,7 @@ func (idx *indexer) preValidateMergePartition(srcInstId common.IndexInstId, tgtI
 // no stream update for deferred index.
 //
 //
-func (idx *indexer) mergePartitions(bucket string, streamId common.StreamId) {
+func (idx *indexer) mergePartitions(keyspaceId string, streamId common.StreamId) {
 
 	// Do not merge when indexer is not active
 	if is := idx.getIndexerState(); is != common.INDEXER_ACTIVE {
@@ -1743,12 +1753,12 @@ func (idx *indexer) mergePartitions(bucket string, streamId common.StreamId) {
 	}
 
 	// Do not merge during recovery
-	if streamId != common.NIL_STREAM && idx.getStreamBucketState(streamId, bucket) != STREAM_ACTIVE {
+	if streamId != common.NIL_STREAM && idx.getStreamKeyspaceIdState(streamId, keyspaceId) != STREAM_ACTIVE {
 		logging.Debugf("MergePartition.  Indexer in recovery.  Cannot merge instance.")
 		return
 	}
 
-	logging.Infof("MergePartitions: bucket %v streamId %v", bucket, streamId)
+	logging.Infof("MergePartitions: keyspaceId %v streamId %v", keyspaceId, streamId)
 
 	var remaining []mergeSpec
 	if len(idx.mergePartitionList) != 0 {
@@ -1761,7 +1771,7 @@ func (idx *indexer) mergePartitions(bucket string, streamId common.StreamId) {
 		targetId := spec.tgtInstId
 		respch := spec.respch
 
-		if !idx.mergePartition(bucket, streamId, sourceId, targetId, idx.merged, respch) {
+		if !idx.mergePartition(keyspaceId, streamId, sourceId, targetId, idx.merged, respch) {
 			remaining = append(remaining, spec)
 		}
 	}
@@ -1798,7 +1808,7 @@ func (idx *indexer) removeMergedIndexesFromStream(merged map[common.IndexInstId]
 					// removeIndexesFromStream() will send update to projector.  This function spawn a go-routine after
 					// acquiring the stream lock.   The stream lock ensure the projector update is executed on serial fashion.
 					// Therefore, if mergePartitions() is called multiple times, the projector update will be executed serially.
-					if streamId != common.NIL_STREAM && idx.getStreamBucketState(streamId, bucket) == STREAM_ACTIVE {
+					if streamId != common.NIL_STREAM && idx.getStreamKeyspaceIdState(streamId, bucket) == STREAM_ACTIVE {
 						idx.removeIndexesFromStream(list4, bucket, bucketUUID, streamId, state, nil)
 					}
 				}
@@ -1905,7 +1915,7 @@ func (idx *indexer) mergePartition(bucket string, streamId common.StreamId, sour
 		}
 
 		// Do not merge if recovery is going on.
-		if source.Stream != common.NIL_STREAM && idx.getStreamBucketState(source.Stream, source.Defn.Bucket) != STREAM_ACTIVE {
+		if source.Stream != common.NIL_STREAM && idx.getStreamKeyspaceIdState(source.Stream, source.Defn.Bucket) != STREAM_ACTIVE {
 			logging.Warnf("MergePartition: Source Index Instance %v with bucket stream in recovery.  Do not merge now.", source.InstId)
 			return false
 		}
@@ -2162,7 +2172,7 @@ func (idx *indexer) handlePrunePartition(msg Message) (resp Message) {
 
 		idx.prunePartitionList = append(idx.prunePartitionList, spec)
 
-		if ok, _ := idx.streamBucketFlushInProgress[inst.Stream][inst.Defn.Bucket]; !ok {
+		if ok, _ := idx.streamKeyspaceIdFlushInProgress[inst.Stream][inst.Defn.Bucket]; !ok {
 			idx.prunePartitions(inst.Defn.Bucket, inst.Stream)
 		}
 		resp = &MsgSuccessDrop{streamId: inst.Stream}
@@ -2171,7 +2181,7 @@ func (idx *indexer) handlePrunePartition(msg Message) (resp Message) {
 		resp = &MsgError{}
 	}
 
-	idx.prunePartitionForIdleBuckets()
+	idx.prunePartitionForIdleKeyspaceIds()
 
 	respch <- &MsgSuccess{}
 
@@ -2218,7 +2228,7 @@ func (idx *indexer) handlePrunePartition(msg Message) (resp Message) {
 // For deferred index, partitions can be pruned during recovery.   There is
 // no stream update for deferred index.
 //
-func (idx *indexer) prunePartitions(bucket string, streamId common.StreamId) {
+func (idx *indexer) prunePartitions(keyspaceId string, streamId common.StreamId) {
 
 	// nothing to prune
 	if len(idx.prunePartitionList) == 0 {
@@ -2232,12 +2242,12 @@ func (idx *indexer) prunePartitions(bucket string, streamId common.StreamId) {
 	}
 
 	// Do not prune during recovery
-	if streamId != common.NIL_STREAM && idx.getStreamBucketState(streamId, bucket) != STREAM_ACTIVE {
+	if streamId != common.NIL_STREAM && idx.getStreamKeyspaceIdState(streamId, keyspaceId) != STREAM_ACTIVE {
 		logging.Debugf("PrunePartition.  Indexer in recovery.  Cannot prune instance.")
 		return
 	}
 
-	logging.Infof("PrunePartitions: bucket %v stream %v", bucket, streamId)
+	logging.Infof("PrunePartitions: keyspaceId %v stream %v", keyspaceId, streamId)
 
 	var remaining []pruneSpec
 	if len(idx.prunePartitionList) != 0 {
@@ -2249,7 +2259,7 @@ func (idx *indexer) prunePartitions(bucket string, streamId common.StreamId) {
 		instId := spec.instId
 		partitions := spec.partitions
 
-		if !idx.prunePartition(bucket, streamId, instId, partitions, idx.pruned) {
+		if !idx.prunePartition(keyspaceId, streamId, instId, partitions, idx.pruned) {
 			remaining = append(remaining, spec)
 		}
 	}
@@ -2293,7 +2303,7 @@ func (idx *indexer) removePrunedIndexesFromStream(pruned map[common.IndexInstId]
 				//
 				// sendstreamUpdateForIndex will only retry for 10 times before it aborts.   If the indexer fails to update
 				// the projector, at worst, the projector will send more mutations to the indexer, but it will not skip mutation.
-				if streamId != common.NIL_STREAM && idx.getStreamBucketState(streamId, bucket) == STREAM_ACTIVE {
+				if streamId != common.NIL_STREAM && idx.getStreamKeyspaceIdState(streamId, bucket) == STREAM_ACTIVE {
 					idx.sendStreamUpdateForIndex(list3, bucket, bucketUUID, streamId)
 				}
 			}
@@ -2344,7 +2354,7 @@ func (idx *indexer) prunePartition(bucket string, streamId common.StreamId, inst
 		}
 
 		// Do not prune if recovery is going on.
-		if inst.Stream != common.NIL_STREAM && idx.getStreamBucketState(inst.Stream, inst.Defn.Bucket) != STREAM_ACTIVE {
+		if inst.Stream != common.NIL_STREAM && idx.getStreamKeyspaceIdState(inst.Stream, inst.Defn.Bucket) != STREAM_ACTIVE {
 			logging.Warnf("PrunePartition: Index Instance %v with bucket stream in recovery.  Do not prune now.", inst.InstId)
 			return false
 		}
@@ -2445,7 +2455,7 @@ func (idx *indexer) prunePartition(bucket string, streamId common.StreamId, inst
 //
 // For those prune that is postponed, indexer needs to retry when the bucket flush is idle.
 //
-func (idx *indexer) prunePartitionForIdleBuckets() {
+func (idx *indexer) prunePartitionForIdleKeyspaceIds() {
 
 	if len(idx.prunePartitionList) > 0 {
 		buckets := make(map[string]map[common.StreamId]bool)
@@ -2460,7 +2470,7 @@ func (idx *indexer) prunePartitionForIdleBuckets() {
 
 		for bucket, streams := range buckets {
 			for streamId, _ := range streams {
-				if !idx.streamBucketFlushInProgress[streamId][bucket] {
+				if !idx.streamKeyspaceIdFlushInProgress[streamId][bucket] {
 					idx.prunePartitions(bucket, streamId)
 				}
 			}
@@ -2548,19 +2558,18 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 
 	}
 
-	bucketIndexList := idx.groupIndexListByBucket(instIdList)
+	keyspaceIdIndexList := idx.groupIndexListByKeyspaceId(instIdList)
 	errMap := make(map[common.IndexInstId]error)
 
-	initialBuildReqd := true
-	for bucket, instIdList := range bucketIndexList {
+	for keyspaceId, instIdList := range keyspaceIdIndexList {
 
-		instIdList, ok := idx.checkValidIndexInst(bucket, instIdList, clientCh, errMap)
+		instIdList, ok := idx.checkValidIndexInst(keyspaceId, instIdList, clientCh, errMap)
 		if !ok {
-			logging.Errorf("Indexer::handleBuildIndex \n\tInvalid Index List "+
-				"Bucket %v. Index in error %v.", bucket, errMap)
+			logging.Errorf("Indexer::handleBuildIndex Invalid Index List "+
+				"KeyspaceId %v. Index in error %v.", keyspaceId, errMap)
 			if idx.enableManager {
 				if len(instIdList) == 0 {
-					delete(bucketIndexList, bucket)
+					delete(keyspaceIdIndexList, keyspaceId)
 					continue
 				}
 			} else {
@@ -2568,37 +2577,24 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 			}
 		}
 
-		instIdList, ok = idx.checkBucketExists(bucket, instIdList, clientCh, errMap)
-		if !ok {
-			logging.Errorf("Indexer::handleBuildIndex \n\tCannot Process Build Index."+
-				"Unknown Bucket %v.", bucket)
+		//check if Initial Build is already running for this index's keyspace
+		if ok := idx.checkDuplicateInitialBuildRequest(keyspaceId, instIdList, clientCh, errMap); !ok {
+			logging.Errorf("Indexer::handleBuildIndex Build Already In"+
+				"Progress. KeyspaceId %v. Index in error %v", keyspaceId, errMap)
 			if idx.enableManager {
-				if len(instIdList) == 0 {
-					delete(bucketIndexList, bucket)
-					continue
-				}
-			} else {
-				return
-			}
-		} else {
-			logging.Infof("Indexer::handleBuildIndex Bucket %v validation successful", bucket)
-		}
-
-		//check if Initial Build is already running for this index's bucket
-		if ok := idx.checkDuplicateInitialBuildRequest(bucket, instIdList, clientCh, errMap); !ok {
-			logging.Errorf("Indexer::handleBuildIndex \n\tBuild Already In"+
-				"Progress. Bucket %v. Index in error %v", bucket, errMap)
-			if idx.enableManager {
-				delete(bucketIndexList, bucket)
+				delete(keyspaceIdIndexList, keyspaceId)
 				continue
 			} else {
 				return
 			}
 		}
 
+		inst := idx.indexInstMap[instIdList[0]]
+		collectionId := inst.Defn.CollectionId
+
 		cluster := idx.config["clusterAddr"].String()
 		numVbuckets := idx.config["numVbuckets"].Int()
-		buildTs, err := GetCurrentKVTs(cluster, "default", bucket, numVbuckets)
+		buildTs, err := GetCurrentKVTs(cluster, "default", keyspaceId, collectionId, numVbuckets)
 		if err != nil {
 			errStr := fmt.Sprintf("Error Connecting KV %v Err %v",
 				idx.config["clusterAddr"].String(), err)
@@ -2608,7 +2604,7 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 				for _, instId := range instIdList {
 					errMap[instId] = &common.IndexerError{Reason: errStr, Code: common.TransientError}
 				}
-				delete(bucketIndexList, bucket)
+				delete(keyspaceIdIndexList, keyspaceId)
 				continue
 			} else if clientCh != nil {
 				clientCh <- &MsgError{
@@ -2621,37 +2617,24 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 		}
 
 		if len(instIdList) != 0 {
-			bucketIndexList[bucket] = instIdList
+			keyspaceIdIndexList[keyspaceId] = instIdList
 		} else {
-			delete(bucketIndexList, bucket)
+			delete(keyspaceIdIndexList, keyspaceId)
 			continue
 		}
 
-		//if there is already an index for this bucket in MAINT_STREAM,
-		//add this index to INIT_STREAM
-		var buildStream common.StreamId
-		if idx.checkBucketExistsInStream(bucket, common.MAINT_STREAM, false) {
-			buildStream = common.INIT_STREAM
-		} else {
-			buildStream = common.MAINT_STREAM
-		}
-
+		//all indexes get built using INIT_STREAM
+		var buildStream common.StreamId = common.INIT_STREAM
 		idx.bulkUpdateStream(instIdList, buildStream)
 
-		//if initial build TS is zero and index belongs to MAINT_STREAM
-		//initial build is not required.
-		var buildState common.IndexState
-		if buildTs.IsZeroTs() && buildStream == common.MAINT_STREAM {
-			initialBuildReqd = false
-		}
 		//always set state to Initial, once stream request/build is done,
 		//this will get changed to active
-		buildState = common.INDEX_STATE_INITIAL
+		var buildState common.IndexState = common.INDEX_STATE_INITIAL
 
 		idx.bulkUpdateState(instIdList, buildState)
 		idx.bulkUpdateRState(instIdList, msg.(*MsgBuildIndex).GetRequestCtx())
 
-		logging.Infof("Indexer::handleBuildIndex \n\tAdded Index: %v to Stream: %v State: %v",
+		logging.Infof("Indexer::handleBuildIndex Added Index: %v to Stream: %v State: %v",
 			instIdList, buildStream, buildState)
 
 		msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
@@ -2668,15 +2651,9 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 		}
 
 		//send Stream Update to workers
-		idx.sendStreamUpdateForBuildIndex(instIdList, buildStream, bucket, buildTs, clientCh)
+		idx.sendStreamUpdateForBuildIndex(instIdList, buildStream, keyspaceId, collectionId, buildTs, clientCh)
 
-		idx.stateLock.Lock()
-		if _, ok := idx.streamBucketStatus[buildStream]; !ok {
-			idx.streamBucketStatus[buildStream] = make(BucketStatus)
-		}
-		idx.stateLock.Unlock()
-
-		idx.setStreamBucketState(buildStream, bucket, STREAM_ACTIVE)
+		idx.setStreamKeyspaceIdState(buildStream, keyspaceId, STREAM_ACTIVE)
 
 		//store updated state and streamId in meta store
 		if idx.enableManager {
@@ -2685,14 +2662,7 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 				common.CrashOnError(err)
 			}
 		} else {
-
-			//if initial build is not being done, send success response,
-			//otherwise success response will be sent when initial build gets done
-			if !initialBuildReqd {
-				clientCh <- &MsgSuccess{}
-			} else {
-				idx.bucketCreateClientChMap[bucket] = clientCh
-			}
+			idx.keyspaceIdCreateClientChMap[keyspaceId] = clientCh
 			return
 		}
 	}
@@ -2806,18 +2776,6 @@ func (idx *indexer) handleDropIndex(msg Message) (resp Message) {
 		common.CrashOnError(err)
 	}
 
-	//if this is the last index for the bucket in MaintStream and the bucket exists
-	//in InitStream, don't cleanup bucket from stream. It is needed for merge to
-	//happen.
-	if indexInst.Stream == common.MAINT_STREAM &&
-		!idx.checkBucketExistsInStream(indexInst.Defn.Bucket, common.MAINT_STREAM, false) &&
-		idx.checkBucketExistsInStream(indexInst.Defn.Bucket, common.INIT_STREAM, false) {
-		logging.Infof("Indexer::handleDropIndex Pre-Catchup Index Found for %v "+
-			"%v. Stream Cleanup Skipped.", indexInst.Stream, indexInst.Defn.Bucket)
-		clientCh <- &MsgSuccess{}
-		return
-	}
-
 	//check if there is already a drop request waiting on this bucket
 	if ok := idx.checkDuplicateDropRequest(indexInst, clientCh); ok {
 		return
@@ -2828,9 +2786,9 @@ func (idx *indexer) handleDropIndex(msg Message) (resp Message) {
 	streamId := indexInst.Stream
 	bucket := indexInst.Defn.Bucket
 
-	if ok, _ := idx.streamBucketFlushInProgress[streamId][bucket]; ok {
+	if ok, _ := idx.streamKeyspaceIdFlushInProgress[streamId][bucket]; ok {
 		notifyCh := make(MsgChannel)
-		idx.streamBucketObserveFlushDone[streamId][bucket] = notifyCh
+		idx.streamKeyspaceIdObserveFlushDone[streamId][bucket] = notifyCh
 		go idx.processDropAfterFlushDone(indexInst, notifyCh, clientCh)
 	} else {
 		idx.cleanupIndex(indexInst, clientCh)
@@ -2844,43 +2802,43 @@ func (idx *indexer) handleDropIndex(msg Message) (resp Message) {
 func (idx *indexer) handlePrepareRecovery(msg Message) {
 
 	streamId := msg.(*MsgRecovery).GetStreamId()
-	bucket := msg.(*MsgRecovery).GetBucket()
+	keyspaceId := msg.(*MsgRecovery).GetKeyspaceId()
 	sessionId := msg.(*MsgRecovery).GetSessionId()
 
-	if ok, currSid := idx.validateSessionId(streamId, bucket, sessionId, true); !ok {
-		logging.Infof("Indexer::handlePrepareRecovery StreamId %v Bucket %v SessionId %v. "+
-			"Skipped. Current SessionId %v.", streamId, bucket, sessionId, currSid)
+	if ok, currSid := idx.validateSessionId(streamId, keyspaceId, sessionId, true); !ok {
+		logging.Infof("Indexer::handlePrepareRecovery StreamId %v KeyspaceId %v SessionId %v. "+
+			"Skipped. Current SessionId %v.", streamId, keyspaceId, sessionId, currSid)
 		return
 	}
 
-	logging.Infof("Indexer::handlePrepareRecovery StreamId %v Bucket %v",
-		streamId, bucket)
+	logging.Infof("Indexer::handlePrepareRecovery StreamId %v KeyspaceId %v",
+		streamId, keyspaceId)
 
-	idx.stopBucketStream(streamId, bucket)
+	idx.stopKeyspaceIdStream(streamId, keyspaceId)
 
 }
 
 func (idx *indexer) handleInitPrepRecovery(msg Message) {
 
-	bucket := msg.(*MsgRecovery).GetBucket()
+	keyspaceId := msg.(*MsgRecovery).GetKeyspaceId()
 	streamId := msg.(*MsgRecovery).GetStreamId()
 	rollbackTs := msg.(*MsgRecovery).GetRestartTs()
 	retryTs := msg.(*MsgRecovery).GetRetryTs()
 	requestCh := msg.(*MsgRecovery).GetRequestCh()
 	sessionId := msg.(*MsgRecovery).GetSessionId()
 
-	if ok, currSid := idx.validateSessionId(streamId, bucket, sessionId, true); !ok {
-		logging.Infof("Indexer::handleInitPrepRecovery StreamId %v Bucket %v SessionId %v. "+
-			"Skipped. Current SessionId %v.", streamId, bucket, sessionId, currSid)
+	if ok, currSid := idx.validateSessionId(streamId, keyspaceId, sessionId, true); !ok {
+		logging.Infof("Indexer::handleInitPrepRecovery StreamId %v KeyspaceId %v SessionId %v. "+
+			"Skipped. Current SessionId %v.", streamId, keyspaceId, sessionId, currSid)
 		return
 	}
 
 	//if the stream is inactive(e.g. all indexes get dropped)
-	if idx.getStreamBucketState(streamId, bucket) == STREAM_INACTIVE {
-		logging.Infof("Indexer::handleInitPrepRecovery StreamId %v Bucket %v "+
+	if idx.getStreamKeyspaceIdState(streamId, keyspaceId) == STREAM_INACTIVE {
+		logging.Infof("Indexer::handleInitPrepRecovery StreamId %v KeyspaceId %v "+
 			"State %v. Skipping INIT_PREPARE and Cleaning up.",
-			streamId, bucket, idx.getStreamBucketState(streamId, bucket))
-		idx.cleanupStreamBucketState(streamId, bucket)
+			streamId, keyspaceId, idx.getStreamKeyspaceIdState(streamId, keyspaceId))
+		idx.cleanupStreamKeyspaceIdState(streamId, keyspaceId)
 	} else {
 
 		allowRequest := true
@@ -2888,37 +2846,37 @@ func (idx *indexer) handleInitPrepRecovery(msg Message) {
 		// If this is a new recovery request
 		if requestCh == nil {
 			// Do not allow recovery if there is an MTR or recovery going on.
-			if idx.streamBucketCurrRequest[streamId][bucket] != nil ||
-				idx.getStreamBucketState(streamId, bucket) != STREAM_ACTIVE {
+			if idx.streamKeyspaceIdCurrRequest[streamId][keyspaceId] != nil ||
+				idx.getStreamKeyspaceIdState(streamId, keyspaceId) != STREAM_ACTIVE {
 				allowRequest = false
 			}
 		} else {
 			// If this is a recursive request, make sure it has the same requestStopCh.
-			req := idx.streamBucketCurrRequest[streamId][bucket]
+			req := idx.streamKeyspaceIdCurrRequest[streamId][keyspaceId]
 			if req.reqCh != requestCh {
 				allowRequest = false
 			}
 		}
 
 		if !allowRequest {
-			logging.Infof("Indexer::handleInitPrepRecovery StreamId %v Bucket %v "+
+			logging.Infof("Indexer::handleInitPrepRecovery StreamId %v KeyspaceId %v "+
 				"SessionId %v. Cannot initiate another recovery while previous "+
-				"recovery in progress.", streamId, bucket, sessionId)
+				"recovery in progress.", streamId, keyspaceId, sessionId)
 			return
 		}
 
 		if rollbackTs != nil {
-			idx.setRollbackTs(streamId, bucket, rollbackTs)
+			idx.setRollbackTs(streamId, keyspaceId, rollbackTs)
 		}
 
 		if retryTs != nil {
-			idx.setRetryTsForRecovery(streamId, bucket, retryTs)
+			idx.setRetryTsForRecovery(streamId, keyspaceId, retryTs)
 		}
 
-		idx.setStreamBucketState(streamId, bucket, STREAM_PREPARE_RECOVERY)
+		idx.setStreamKeyspaceIdState(streamId, keyspaceId, STREAM_PREPARE_RECOVERY)
 
-		logging.Infof("Indexer::handleInitPrepRecovery StreamId %v Bucket %v State %v "+
-			"SessionId %v", streamId, bucket, STREAM_PREPARE_RECOVERY, sessionId)
+		logging.Infof("Indexer::handleInitPrepRecovery StreamId %v KeyspaceId %v State %v "+
+			"SessionId %v", streamId, keyspaceId, STREAM_PREPARE_RECOVERY, sessionId)
 
 		//fwd the msg to timekeeper
 		idx.tkCmdCh <- msg
@@ -2946,28 +2904,28 @@ func (idx *indexer) handleUnpause(msg Message) {
 
 func (idx *indexer) handlePrepareDone(msg Message) {
 
-	bucket := msg.(*MsgRecovery).GetBucket()
+	keyspaceId := msg.(*MsgRecovery).GetKeyspaceId()
 	streamId := msg.(*MsgRecovery).GetStreamId()
 	sessionId := msg.(*MsgRecovery).GetSessionId()
 	reqCh := msg.(*MsgRecovery).GetRequestCh()
 
-	if ok, currSid := idx.validateSessionId(streamId, bucket, sessionId, true); !ok {
-		logging.Infof("Indexer::handlePrepareDone StreamId %v Bucket %v SessionId %v. "+
-			"Skipped. Current SessionId %v.", streamId, bucket, sessionId, currSid)
+	if ok, currSid := idx.validateSessionId(streamId, keyspaceId, sessionId, true); !ok {
+		logging.Infof("Indexer::handlePrepareDone StreamId %v KeyspaceId %v SessionId %v. "+
+			"Skipped. Current SessionId %v.", streamId, keyspaceId, sessionId, currSid)
 		return
 	}
 
-	logging.Infof("Indexer::handlePrepareDone StreamId %v Bucket %v",
-		streamId, bucket)
+	logging.Infof("Indexer::handlePrepareDone StreamId %v KeyspaceId %v",
+		streamId, keyspaceId)
 
 	//if the stream is inactive(e.g. all indexes get dropped)
-	if idx.getStreamBucketState(streamId, bucket) == STREAM_INACTIVE {
+	if idx.getStreamKeyspaceIdState(streamId, keyspaceId) == STREAM_INACTIVE {
 		logging.Infof("Indexer::handlePrepareDone Skip PREPARE_DONE for Inactive "+
-			"Bucket. StreamId %v Bucket %v.", streamId, bucket)
-		idx.cleanupStreamBucketState(streamId, bucket)
+			"KeyspaceId. StreamId %v KeyspaceId %v.", streamId, keyspaceId)
+		idx.cleanupStreamKeyspaceIdState(streamId, keyspaceId)
 		return
 	} else {
-		idx.deleteStreamBucketCurrRequest(streamId, bucket, msg, reqCh, sessionId)
+		idx.deleteStreamKeyspaceIdCurrRequest(streamId, keyspaceId, msg, reqCh, sessionId)
 	}
 
 	//fwd the msg to timekeeper
@@ -2979,79 +2937,81 @@ func (idx *indexer) handlePrepareDone(msg Message) {
 func (idx *indexer) handleInitRecovery(msg Message) {
 
 	streamId := msg.(*MsgRecovery).GetStreamId()
-	bucket := msg.(*MsgRecovery).GetBucket()
+	keyspaceId := msg.(*MsgRecovery).GetKeyspaceId()
 	restartTs := msg.(*MsgRecovery).GetRestartTs()
 	retryTs := msg.(*MsgRecovery).GetRetryTs()
 	sessionId := msg.(*MsgRecovery).GetSessionId()
 
-	if ok, currSid := idx.validateSessionId(streamId, bucket, sessionId, true); !ok {
-		logging.Infof("Indexer::handleInitRecovery StreamId %v Bucket %v SessionId %v. "+
-			"Skipped. Current SessionId %v.", streamId, bucket, sessionId, currSid)
+	if ok, currSid := idx.validateSessionId(streamId, keyspaceId, sessionId, true); !ok {
+		logging.Infof("Indexer::handleInitRecovery StreamId %v KeyspaceId %v SessionId %v. "+
+			"Skipped. Current SessionId %v.", streamId, keyspaceId, sessionId, currSid)
 		return
 	}
 
 	//if a recovery is in progress and all indexes get dropped, recovery needs to be
 	//aborted in timekeeper
-	if idx.getStreamBucketState(streamId, bucket) == STREAM_INACTIVE {
+	if idx.getStreamKeyspaceIdState(streamId, keyspaceId) == STREAM_INACTIVE {
 		logging.Infof("Indexer::handleInitRecovery Aborting Recovery for "+
-			"Stream: %v Bucket: %v. Bucket Inactive", streamId, bucket)
+			"Stream: %v KeyspaceId: %v. KeyspaceId Inactive", streamId, keyspaceId)
 
 		idx.tkCmdCh <- &MsgRecovery{mType: INDEXER_ABORT_RECOVERY,
-			streamId: streamId,
-			bucket:   bucket}
+			streamId:   streamId,
+			keyspaceId: keyspaceId}
 		<-idx.tkCmdCh
-		idx.cleanupStreamBucketState(streamId, bucket)
+		idx.cleanupStreamKeyspaceIdState(streamId, keyspaceId)
 		return
 	}
 
-	idx.setStreamBucketState(streamId, bucket, STREAM_RECOVERY)
+	idx.setStreamKeyspaceIdState(streamId, keyspaceId, STREAM_RECOVERY)
 
-	logging.Infof("Indexer::handleInitRecovery StreamId %v Bucket %v %v",
-		streamId, bucket, STREAM_RECOVERY)
+	logging.Infof("Indexer::handleInitRecovery StreamId %v KeyspaceId %v %v",
+		streamId, keyspaceId, STREAM_RECOVERY)
 
-	sessionId = idx.getNextSessionId(streamId, bucket)
+	sessionId = idx.genNextSessionId(streamId, keyspaceId)
 
 	//if there is a rollbackTs, process rollback
-	if ts, ok := idx.streamBucketRollbackTs[streamId][bucket]; ok && ts != nil {
+	if ts, ok := idx.streamKeyspaceIdRollbackTs[streamId][keyspaceId]; ok && ts != nil {
 		//if there is a retryTs, use that first
-		if rts, ok := idx.streamBucketRetryTs[streamId][bucket]; ok && rts != nil {
-			logging.Infof("Indexer::handleInitRecovery StreamId %v Bucket %v Using RetryTs %v",
-				streamId, bucket, rts)
-			idx.streamBucketRetryTs[streamId][bucket] = nil
-			idx.startBucketStream(streamId, bucket, rts, nil, nil, false, false, sessionId)
+		if rts, ok := idx.streamKeyspaceIdRetryTs[streamId][keyspaceId]; ok && rts != nil {
+			logging.Infof("Indexer::handleInitRecovery StreamId %v KeyspaceId %v Using RetryTs %v",
+				streamId, keyspaceId, rts)
+			idx.streamKeyspaceIdRetryTs[streamId][keyspaceId] = nil
+			idx.startKeyspaceIdStream(streamId, keyspaceId, rts, nil, nil, false, false, sessionId)
 		} else {
-			idx.processRollback(streamId, bucket, ts, sessionId)
+			idx.processRollback(streamId, keyspaceId, ts, sessionId)
 		}
 	} else {
-		idx.startBucketStream(streamId, bucket, restartTs, retryTs, nil, false, false, sessionId)
+		idx.startKeyspaceIdStream(streamId, keyspaceId, restartTs, retryTs, nil, false, false, sessionId)
 	}
 
 }
 
 func (idx *indexer) handleStorageRollbackDone(msg Message) {
 
-	bucket := msg.(*MsgRollbackDone).GetBucket()
+	keyspaceId := msg.(*MsgRollbackDone).GetKeyspaceId()
 	streamId := msg.(*MsgRollbackDone).GetStreamId()
 	restartTs := msg.(*MsgRollbackDone).GetRestartTs()
 	err := msg.(*MsgRollbackDone).GetError()
 	sessionId := msg.(*MsgRollbackDone).GetSessionId()
 
-	if ok, currSid := idx.validateSessionId(streamId, bucket, sessionId, false); !ok {
-		logging.Infof("Indexer::handleStoragRollbackDone StreamId %v Bucket %v SessionId %v. "+
-			"Skipped. Current SessionId %v.", streamId, bucket, sessionId, currSid)
+	if ok, currSid := idx.validateSessionId(streamId, keyspaceId, sessionId, false); !ok {
+		logging.Infof("Indexer::handleStoragRollbackDone StreamId %v KeyspaceId %v SessionId %v. "+
+			"Skipped. Current SessionId %v.", streamId, keyspaceId, sessionId, currSid)
 		return
 	}
 
 	//if a recovery is in progress and all indexes get dropped, recovery needs to be
 	//aborted in timekeeper
-	if idx.getStreamBucketState(streamId, bucket) == STREAM_INACTIVE {
+	if idx.getStreamKeyspaceIdState(streamId, keyspaceId) == STREAM_INACTIVE {
 		logging.Infof("Indexer::handleStorageRollbackDone Aborting Recovery for "+
-			"Stream: %v Bucket: %v. Bucket Inactive", streamId, bucket)
+			"Stream: %v KeyspaceId: %v. KeyspaceId Inactive", streamId, keyspaceId)
 
 		idx.tkCmdCh <- &MsgRecovery{mType: INDEXER_ABORT_RECOVERY,
-			streamId: streamId,
-			bucket:   bucket}
+			streamId:   streamId,
+			keyspaceId: keyspaceId}
 		<-idx.tkCmdCh
+		//any pending build done needs to be processed
+		idx.processPendingBuildDone(streamId, keyspaceId, sessionId)
 		return
 	}
 
@@ -3059,7 +3019,7 @@ func (idx *indexer) handleStorageRollbackDone(msg Message) {
 	if streamId == common.MAINT_STREAM {
 		idx.scanCoordCmdCh <- &MsgRollback{
 			streamId:     streamId,
-			bucket:       bucket,
+			keyspaceId:   keyspaceId,
 			rollbackTime: 0,
 		}
 		<-idx.scanCoordCmdCh
@@ -3070,36 +3030,255 @@ func (idx *indexer) handleStorageRollbackDone(msg Message) {
 		common.CrashOnError(err)
 	}
 
-	idx.startBucketStream(streamId, bucket, restartTs, nil, nil, false, false, sessionId)
+	//if index in MAINT_STREAM rollback to 0, reset state to created and
+	//schedule the build again
+	if restartTs == nil && streamId == common.MAINT_STREAM {
+		idx.resetIndexesOnRollback(streamId, keyspaceId, sessionId)
+		return
+	}
+
+	idx.startKeyspaceIdStream(streamId, keyspaceId, restartTs, nil, nil, false, false, sessionId)
 	go idx.collectProgressStats(true)
+
+}
+
+func (idx *indexer) resetIndexesOnRollback(streamId common.StreamId,
+	keyspaceId string, sessionId uint64) {
+
+	logging.Infof("Indexer::resetIndexesOnRollback %v %v %v", streamId, keyspaceId, sessionId)
+
+	if streamId != common.MAINT_STREAM {
+		logging.Warnf("Indexer::resetIndexesOnRollback Invalid call %v", streamId)
+		return
+	}
+
+	//get the list of instances to be reset(all indexes in the keyspace in MAINT_STREAM)
+	var rList resetList
+	for instId, index := range idx.indexInstMap {
+
+		if index.Stream == streamId &&
+			index.Defn.KeyspaceId(index.Stream) == keyspaceId &&
+			index.State != common.INDEX_STATE_DELETED {
+			logging.Infof("Indexer::resetIndexesOnRollback %v %v Adding %v to reset list",
+				streamId, keyspaceId, instId)
+			rList = append(rList, instId)
+		}
+	}
+
+	//for any partitioned index, if there is any instance
+	//in INIT_STREAM, it needs to be reset as well
+	var pList resetList
+	for _, instId := range rList {
+		index := idx.indexInstMap[instId]
+		if common.IsPartitioned(index.Defn.PartitionScheme) {
+			for pinstId, pindex := range idx.indexInstMap {
+				if pindex.RealInstId == index.InstId &&
+					pindex.Stream == common.INIT_STREAM {
+					logging.Infof("Indexer::resetIndexesOnRollback %v %v Adding %v to "+
+						"reset list. Found partitioned index in state %v.",
+						pindex.Stream, keyspaceId, pinstId, pindex.State)
+					rList = append(rList, pinstId)
+					pList = append(pList, pinstId)
+				}
+			}
+		}
+	}
+
+	if len(pList) != 0 {
+		//if a flush is in progress
+		if ok, _ := idx.streamKeyspaceIdFlushInProgress[common.INIT_STREAM][keyspaceId]; ok {
+			notifyCh := make(MsgChannel)
+			idx.keyspaceIdObserveFlushDoneForReset[keyspaceId] = notifyCh
+			idx.keyspaceIdResetList[keyspaceId] = rList
+			go idx.processResetAfterFlushDone(keyspaceId, sessionId, notifyCh)
+			return
+		}
+	}
+
+	if rList != nil {
+		idx.doResetIndexesOnRollback(keyspaceId, sessionId, rList)
+	}
+
+}
+
+func (idx *indexer) processResetAfterFlushDone(keyspaceId string, sessionId uint64, notifyCh MsgChannel) {
+
+	logging.Infof("Indexer::processResetAfterFlushDone %v %v %v", common.MAINT_STREAM,
+		keyspaceId, sessionId)
+
+	select {
+	case <-notifyCh:
+		idx.doResetIndexesOnRollback(keyspaceId, sessionId, idx.keyspaceIdResetList[keyspaceId])
+		idx.keyspaceIdResetList[keyspaceId] = nil
+	}
+
+	idx.keyspaceIdObserveFlushDoneForReset[keyspaceId] = nil
+
+	//indicate done
+	close(notifyCh)
+}
+
+func (idx *indexer) doResetIndexesOnRollback(keyspaceId string,
+	sessionId uint64, resetList resetList) {
+
+	logging.Infof("Indexer:doResetIndexesOnRollback %v %v %v ResetList %v",
+		common.MAINT_STREAM, keyspaceId, sessionId, resetList)
+
+	if len(resetList) == 0 {
+		logging.Infof("Indexer::doResetIndexesOnRollback %v %v %v Empty Reset List.",
+			common.MAINT_STREAM, keyspaceId, sessionId)
+		return
+	}
+
+	var wg sync.WaitGroup
+	for _, instId := range resetList {
+
+		if index, ok := idx.indexInstMap[instId]; ok {
+
+			if index.State != common.INDEX_STATE_DELETED {
+				idx.resetSingleIndexOnRollback(&index, &wg)
+				idx.indexInstMap[instId] = index
+			} else {
+				logging.Infof("Indexer::doResetIndexesOnRollback Index %v in %v state. Skipping.", instId, index.State)
+			}
+		} else {
+			logging.Infof("Indexer::doResetIndexesOnRollback Index %v not found. Possibly deleted. Skipping.", instId)
+		}
+	}
+
+	//send updated maps to all workers
+	msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
+
+	if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, nil); err != nil {
+		common.CrashOnError(err)
+	}
+
+	go idx.waitForIndexReset(keyspaceId, sessionId, &wg)
+}
+
+func (idx *indexer) resetSingleIndexOnRollback(inst *common.IndexInst,
+	wg *sync.WaitGroup) {
+
+	logging.Infof("Indexer::resetSingleIndexOnRollback Reset index %v %v %v %v",
+		inst.Defn.Bucket, inst.Defn.Scope, inst.Defn.Collection, inst.Defn.Name)
+
+	// update metadata
+	respch := make(chan error)
+	msg := &MsgClustMgrResetIndexOnRollback{
+		inst:   *inst,
+		respch: respch,
+	}
+
+	if err := idx.sendMsgToClusterMgr(msg); err != nil {
+		common.CrashOnError(err)
+	}
+
+	// update index instance
+	inst.State = common.INDEX_STATE_CREATED
+	inst.Stream = common.NIL_STREAM
+	inst.Error = ""
+
+	if wg == nil {
+		// The metadata commit is done asynchronously to avoid deadlock.
+		// If metadata update fails, indexer will restart so it can restore
+		//to a consistent state.
+		//TODO avoid a crash/restart loop
+		err := <-respch
+		if err != nil {
+			common.CrashOnError(err)
+		}
+		return
+	} else {
+
+		wg.Add(1)
+		go func() {
+
+			defer wg.Done()
+			// The metadata commit is done asynchronously to avoid deadlock.
+			// If metadata update fails, indexer will restart so it can restore
+			//to a consistent state.
+			//TODO avoid a crash/restart loop
+			err := <-respch
+			if err != nil {
+				common.CrashOnError(err)
+			}
+
+			logging.Infof("Indexer::resetSingleIndexOnRollback Reset done %v %v %v %v",
+				inst.Defn.Bucket, inst.Defn.Scope, inst.Defn.Collection, inst.Defn.Name)
+
+		}()
+	}
+}
+
+func (idx *indexer) waitForIndexReset(keyspaceId string, sessionId uint64, wg *sync.WaitGroup) {
+
+	//wait for all the metadata to be updated
+	wg.Wait()
+
+	idx.internalRecvCh <- &MsgResetIndexDone{
+		streamId:   common.MAINT_STREAM,
+		keyspaceId: keyspaceId,
+		sessionId:  sessionId,
+	}
+}
+
+func (idx *indexer) handleResetIndexDone(msg Message) {
+
+	streamId := msg.(*MsgResetIndexDone).GetStreamId()
+	keyspaceId := msg.(*MsgResetIndexDone).GetKeyspaceId()
+	sessionId := msg.(*MsgResetIndexDone).GetSessionId()
+
+	if ok, currSid := idx.validateSessionId(streamId, keyspaceId, sessionId, true); !ok {
+		logging.Warnf("Indexer::handleResetIndexDone StreamId %v KeyspaceId %v SessionId %v. "+
+			"Current SessionId %v.", streamId, keyspaceId, sessionId, currSid)
+	}
+
+	logging.Infof("Indexer::handleResetIndexDone %v %v %v",
+		streamId, keyspaceId, sessionId)
+
+	//sanity check, at this point there should be no active index in the stream
+	if idx.checkKeyspaceIdExistsInStream(keyspaceId, streamId, false) {
+		logging.Fatalf("Indexer::handleResetIndexDone %v %v Unexpected active index(es).",
+			streamId, keyspaceId)
+		common.CrashOnError(ErrInconsistentState)
+	}
+
+	idx.setStreamKeyspaceIdState(streamId, keyspaceId, STREAM_INACTIVE)
+
+	//TODO check if it is possible for deleted state indexes to
+	//be in the stream, if so handle the case
+
+	//process any pending build done.
+	idx.processPendingBuildDone(streamId, keyspaceId, sessionId)
 
 }
 
 func (idx *indexer) handleRecoveryDone(msg Message) {
 
-	bucket := msg.(*MsgRecovery).GetBucket()
+	keyspaceId := msg.(*MsgRecovery).GetKeyspaceId()
 	streamId := msg.(*MsgRecovery).GetStreamId()
 	sessionId := msg.(*MsgRecovery).GetSessionId()
 	reqCh := msg.(*MsgRecovery).GetRequestCh()
 
-	if ok, currSid := idx.validateSessionId(streamId, bucket, sessionId, true); !ok {
-		logging.Infof("Indexer::handleRecoveryDone StreamId %v Bucket %v SessionId %v. "+
-			"Skipped. Current SessionId %v.", streamId, bucket, sessionId, currSid)
+	if ok, currSid := idx.validateSessionId(streamId, keyspaceId, sessionId, true); !ok {
+		logging.Infof("Indexer::handleRecoveryDone StreamId %v KeyspaceId %v SessionId %v. "+
+			"Skipped. Current SessionId %v.", streamId, keyspaceId, sessionId, currSid)
 		return
 	}
 
-	logging.Infof("Indexer::handleRecoveryDone StreamId %v Bucket %v SessionId %v",
-		streamId, bucket, sessionId)
+	logging.Infof("Indexer::handleRecoveryDone StreamId %v KeyspaceId %v SessionId %v",
+		streamId, keyspaceId, sessionId)
 
-	idx.deleteStreamBucketCurrRequest(streamId, bucket, msg, reqCh, sessionId)
-	idx.cleanupStreamBucketRecoveryState(streamId, bucket)
+	idx.deleteStreamKeyspaceIdCurrRequest(streamId, keyspaceId, msg, reqCh, sessionId)
+	idx.cleanupStreamKeyspaceIdRecoveryState(streamId, keyspaceId)
 
-	//during recovery, if all indexes of a bucket gets dropped,
+	//during recovery, if all indexes of a keyspace gets dropped,
 	//further processing is not required. Stream cleanup is done by
 	//whoever is changing stream status to INACTIVE
-	if idx.getStreamBucketState(streamId, bucket) == STREAM_INACTIVE {
-		logging.Infof("Indexer::handleRecoveryDone Skip Recovery for Stream %v"+
-			"Inactive Bucket %v", streamId, bucket)
+	if idx.getStreamKeyspaceIdState(streamId, keyspaceId) == STREAM_INACTIVE {
+		logging.Infof("Indexer::handleRecoveryDone Skip Recovery for Stream %v. "+
+			"Inactive KeyspaceId %v", streamId, keyspaceId)
+		idx.processPendingBuildDone(streamId, keyspaceId, sessionId)
 		return
 	}
 
@@ -3107,38 +3286,42 @@ func (idx *indexer) handleRecoveryDone(msg Message) {
 	idx.tkCmdCh <- msg
 	<-idx.tkCmdCh
 
-	//during recovery, if all indexes of a bucket gets dropped,
-	//the stream needs to be stopped for that bucket.
-	if !idx.checkBucketExistsInStream(bucket, streamId, true) {
-		if idx.getStreamBucketState(streamId, bucket) != STREAM_INACTIVE {
-			logging.Infof("Indexer::handleRecoveryDone StreamId %v Bucket %v "+
-				"State %v. No Index Found. Cleaning up.", streamId, bucket,
-				idx.getStreamBucketState(streamId, bucket))
-			idx.stopBucketStream(streamId, bucket)
+	//TODO Collections is this check required as indexes can be dropped during recovery?
+	//if only a deleted index remains in the stream, how will pendBuild work
+	//during recovery, if all indexes of a keyspace gets dropped,
+	//the stream needs to be stopped for that keyspace.
+	if !idx.checkKeyspaceIdExistsInStream(keyspaceId, streamId, true) {
+		if idx.getStreamKeyspaceIdState(streamId, keyspaceId) != STREAM_INACTIVE {
+			logging.Infof("Indexer::handleRecoveryDone StreamId %v KeyspaceId %v "+
+				"State %v. No Index Found. Cleaning up.", streamId, keyspaceId,
+				idx.getStreamKeyspaceIdState(streamId, keyspaceId))
+			idx.stopKeyspaceIdStream(streamId, keyspaceId)
 
-			idx.setStreamBucketState(streamId, bucket, STREAM_INACTIVE)
+			idx.setStreamKeyspaceIdState(streamId, keyspaceId, STREAM_INACTIVE)
+			idx.processPendingBuildDone(streamId, keyspaceId, sessionId)
 		}
 	} else {
 		//change status to Active
-		idx.setStreamBucketState(streamId, bucket, STREAM_ACTIVE)
+		idx.setStreamKeyspaceIdState(streamId, keyspaceId, STREAM_ACTIVE)
+		idx.processPendingBuildDone(streamId, keyspaceId, sessionId)
 	}
 
-	logging.Infof("Indexer::handleRecoveryDone StreamId %v Bucket %v SessionId %v %v",
-		streamId, bucket, sessionId, idx.getStreamBucketState(streamId, bucket))
+	logging.Infof("Indexer::handleRecoveryDone StreamId %v KeyspaceId %v SessionId %v %v",
+		streamId, keyspaceId, sessionId, idx.getStreamKeyspaceIdState(streamId, keyspaceId))
 
 }
 
 func (idx *indexer) handleKVStreamRepair(msg Message) {
 
-	bucket := msg.(*MsgKVStreamRepair).GetBucket()
+	keyspaceId := msg.(*MsgKVStreamRepair).GetKeyspaceId()
 	streamId := msg.(*MsgKVStreamRepair).GetStreamId()
 	restartTs := msg.(*MsgKVStreamRepair).GetRestartTs()
 	async := msg.(*MsgKVStreamRepair).GetAsync()
 	sessionId := msg.(*MsgKVStreamRepair).GetSessionId()
 
-	if ok, currSid := idx.validateSessionId(streamId, bucket, sessionId, false); !ok {
-		logging.Infof("Indexer::handleKVStreamRepair StreamId %v Bucket %v SessionId %v. "+
-			"Skipped. Current SessionId %v.", streamId, bucket, sessionId, currSid)
+	if ok, currSid := idx.validateSessionId(streamId, keyspaceId, sessionId, false); !ok {
+		logging.Infof("Indexer::handleKVStreamRepair StreamId %v KeyspaceId %v SessionId %v. "+
+			"Skipped. Current SessionId %v.", streamId, keyspaceId, sessionId, currSid)
 		return
 	}
 
@@ -3149,24 +3332,24 @@ func (idx *indexer) handleKVStreamRepair(msg Message) {
 		return
 	}
 
-	//repair is not required for inactive/prepare recovery bucket streams
-	state := idx.getStreamBucketState(streamId, bucket)
+	//repair is not required for inactive/prepare recovery keyspace streams
+	state := idx.getStreamKeyspaceIdState(streamId, keyspaceId)
 	if state == STREAM_INACTIVE ||
 		state == STREAM_PREPARE_RECOVERY {
 		logging.Infof("Indexer::handleKVStreamRepair Skip KVStreamRepair %v %v %v",
-			streamId, bucket, state)
+			streamId, keyspaceId, state)
 		return
 	}
 
-	//if there is already a repair in progress for this bucket stream
+	//if there is already a repair in progress for this keyspace stream
 	//ignore the request
-	if idx.checkStreamRequestPending(streamId, bucket) == false {
-		logging.Infof("Indexer::handleKVStreamRepair Initiate Stream Repair %v Bucket %v "+
-			"StreamId %v", streamId, bucket, sessionId)
-		idx.startBucketStream(streamId, bucket, restartTs, nil, nil, true, async, sessionId)
+	if idx.checkStreamRequestPending(streamId, keyspaceId) == false {
+		logging.Infof("Indexer::handleKVStreamRepair Initiate Stream Repair %v KeyspaceId %v "+
+			"StreamId %v", streamId, keyspaceId, sessionId)
+		idx.startKeyspaceIdStream(streamId, keyspaceId, restartTs, nil, nil, true, async, sessionId)
 	} else {
 		logging.Infof("Indexer::handleKVStreamRepair Ignore Stream Repair Request for Stream "+
-			"%v Bucket %v. Request In Progress.", streamId, bucket)
+			"%v KeyspaceId %v. Request In Progress.", streamId, keyspaceId)
 	}
 
 }
@@ -3174,29 +3357,29 @@ func (idx *indexer) handleKVStreamRepair(msg Message) {
 func (idx *indexer) handleInitBuildDoneAck(msg Message) {
 
 	streamId := msg.(*MsgTKInitBuildDone).GetStreamId()
-	bucket := msg.(*MsgTKInitBuildDone).GetBucket()
+	keyspaceId := msg.(*MsgTKInitBuildDone).GetKeyspaceId()
 	sessionId := msg.(*MsgTKInitBuildDone).GetSessionId()
 
 	//skip processing initial build done ack for inactive or recovery streams.
 	//the streams would be restarted and then build done would get recomputed.
-	state := idx.getStreamBucketState(streamId, bucket)
+	state := idx.getStreamKeyspaceIdState(streamId, keyspaceId)
 
 	if state == STREAM_INACTIVE ||
 		state == STREAM_PREPARE_RECOVERY ||
 		state == STREAM_RECOVERY {
 		logging.Infof("Indexer::handleInitBuildDoneAck Skip InitBuildDoneAck %v %v %v",
-			streamId, bucket, state)
+			streamId, keyspaceId, state)
 		return
 	}
 
-	if ok, currSid := idx.validateSessionId(streamId, bucket, sessionId, true); !ok {
-		logging.Infof("Indexer::handleInitBuildDoneAck StreamId %v Bucket %v SessionId %v. "+
-			"Skipped. Current SessionId %v.", streamId, bucket, sessionId, currSid)
+	if ok, currSid := idx.validateSessionId(streamId, keyspaceId, sessionId, true); !ok {
+		logging.Infof("Indexer::handleInitBuildDoneAck StreamId %v KeyspaceId %v SessionId %v. "+
+			"Skipped. Current SessionId %v.", streamId, keyspaceId, sessionId, currSid)
 		return
 	}
 
-	logging.Infof("Indexer::handleInitBuildDoneAck StreamId %v Bucket %v SessionId %v",
-		streamId, bucket, sessionId)
+	logging.Infof("Indexer::handleInitBuildDoneAck StreamId %v KeyspaceId %v SessionId %v",
+		streamId, keyspaceId, sessionId)
 
 	switch streamId {
 
@@ -3208,7 +3391,7 @@ func (idx *indexer) handleInitBuildDoneAck(msg Message) {
 
 	default:
 		logging.Fatalf("Indexer::handleInitBuildDoneAck Unexpected Initial Build Ack Done "+
-			"Received for Stream %v Bucket %v", streamId, bucket)
+			"Received for Stream %v KeyspaceId %v", streamId, keyspaceId)
 		common.CrashOnError(errors.New("Unexpected Initial Build Ack Done"))
 	}
 
@@ -3217,11 +3400,11 @@ func (idx *indexer) handleInitBuildDoneAck(msg Message) {
 func (idx *indexer) handleAddInstanceFail(msg Message) {
 
 	streamId := msg.(*MsgTKInitBuildDone).GetStreamId()
-	bucket := msg.(*MsgTKInitBuildDone).GetBucket()
+	keyspaceId := msg.(*MsgTKInitBuildDone).GetKeyspaceId()
 	sessionId := msg.(*MsgTKInitBuildDone).GetSessionId()
 
-	logging.Infof("Indexer::handleAddInstanceFail StreamId %v Bucket %v SessionId %v",
-		streamId, bucket, sessionId)
+	logging.Infof("Indexer::handleAddInstanceFail StreamId %v KeyspaceId %v SessionId %v",
+		streamId, keyspaceId, sessionId)
 
 	switch streamId {
 
@@ -3237,26 +3420,26 @@ func (idx *indexer) handleAddInstanceFail(msg Message) {
 		//it is ok to skip ADD_FAIL if recovery is already in progess
 		//as at this point the index state change has already been
 		//picked up by MAINT_STREAM recovery
-		state := idx.getStreamBucketState(mergeStreamId, bucket)
+		state := idx.getStreamKeyspaceIdState(mergeStreamId, keyspaceId)
 
 		if state == STREAM_INACTIVE ||
 			state == STREAM_PREPARE_RECOVERY ||
 			state == STREAM_RECOVERY {
 			logging.Infof("Indexer::handleAddInstanceFail Skip Recovery %v %v %v",
-				mergeStreamId, bucket, state)
+				mergeStreamId, keyspaceId, state)
 			return
 		} else {
 			//use the current sessionId for MAINT_STREAM
-			maintSessionId := idx.getCurrentSessionId(mergeStreamId, bucket)
+			maintSessionId := idx.getCurrentSessionId(mergeStreamId, keyspaceId)
 			idx.handleInitPrepRecovery(&MsgRecovery{mType: INDEXER_INIT_PREP_RECOVERY,
-				streamId:  mergeStreamId,
-				bucket:    bucket,
-				sessionId: maintSessionId})
+				streamId:   mergeStreamId,
+				keyspaceId: keyspaceId,
+				sessionId:  maintSessionId})
 		}
 
 	default:
 		logging.Fatalf("Indexer::handleAddInstanceFail Unexpected Add Instance Fail "+
-			"Received for Stream %v Bucket %v", streamId, bucket)
+			"Received for Stream %v KeyspaceId %v", streamId, keyspaceId)
 		common.CrashOnError(errors.New("Unexpected Add Instance Fail"))
 	}
 }
@@ -3264,32 +3447,46 @@ func (idx *indexer) handleAddInstanceFail(msg Message) {
 func (idx *indexer) handleMergeStreamAck(msg Message) {
 
 	streamId := msg.(*MsgTKMergeStream).GetStreamId()
-	bucket := msg.(*MsgTKMergeStream).GetBucket()
+	keyspaceId := msg.(*MsgTKMergeStream).GetKeyspaceId()
+	mergeTs := msg.(*MsgTKMergeStream).GetMergeTS()
 	sessionId := msg.(*MsgTKMergeStream).GetSessionId()
 	reqCh := msg.(*MsgTKMergeStream).GetRequestCh()
 
-	if ok, currSid := idx.validateSessionId(streamId, bucket, sessionId, false); !ok {
-		logging.Infof("Indexer::handleMergeStreamAck StreamId %v Bucket %v SessionId %v. "+
-			"Skipped. Current SessionId %v.", streamId, bucket, sessionId, currSid)
-		return
+	logging.Infof("Indexer::handleMergeStreamAck StreamId %v KeyspaceId %v SessionId %v",
+		streamId, keyspaceId, sessionId)
+
+	bucket, _, _ := SplitKeyspaceId(keyspaceId)
+	//if MAINT_STREAM is not running(e.g. last index dropped), it needs to be started here
+	if idx.getStreamKeyspaceIdState(common.MAINT_STREAM, bucket) == STREAM_INACTIVE {
+		logging.Infof("Indexer::handleMergeStreamAck StreamId %v KeyspaceId %v SessionId %v",
+			streamId, keyspaceId, sessionId)
+		idx.prepareStreamKeyspaceIdForFreshStart(common.MAINT_STREAM, bucket)
+		sid := idx.genNextSessionId(common.MAINT_STREAM, bucket)
+
+		idx.setStreamKeyspaceIdState(common.MAINT_STREAM, bucket, STREAM_ACTIVE)
+		//TODO Collections verify async flag
+		idx.startKeyspaceIdStream(common.MAINT_STREAM, bucket, mergeTs, nil, nil, false, false, sid)
 	}
 
-	logging.Infof("Indexer::handleMergeStreamAck StreamId %v Bucket %v SessionId %v",
-		streamId, bucket, sessionId)
+	if ok, currSid := idx.validateSessionId(streamId, keyspaceId, sessionId, false); !ok {
+		logging.Infof("Indexer::handleMergeStreamAck StreamId %v KeyspaceId %v SessionId %v. "+
+			"Skipped. Current SessionId %v.", streamId, keyspaceId, sessionId, currSid)
+		return
+	}
 
 	switch streamId {
 
 	case common.INIT_STREAM:
-		idx.deleteStreamBucketCurrRequest(streamId, bucket, msg, reqCh, sessionId)
+		idx.deleteStreamKeyspaceIdCurrRequest(streamId, keyspaceId, msg, reqCh, sessionId)
 
-		state := idx.getStreamBucketState(streamId, bucket)
+		state := idx.getStreamKeyspaceIdState(streamId, keyspaceId)
 
 		//skip processing merge ack for inactive or recovery streams.
 		if state == STREAM_PREPARE_RECOVERY ||
 			state == STREAM_RECOVERY ||
 			state == STREAM_INACTIVE {
 			logging.Infof("Indexer::handleMergeStreamAck Skip MergeStreamAck %v %v %v",
-				streamId, bucket, state)
+				streamId, keyspaceId, state)
 			return
 		}
 
@@ -3299,7 +3496,7 @@ func (idx *indexer) handleMergeStreamAck(msg Message) {
 
 	default:
 		logging.Fatalf("Indexer::handleMergeStreamAck Unexpected Merge Stream Ack "+
-			"Received for Stream %v Bucket %v", streamId, bucket)
+			"Received for Stream %v KeyspaceId %v", streamId, keyspaceId)
 		common.CrashOnError(errors.New("Unexpected Merge Stream Ack"))
 	}
 
@@ -3308,101 +3505,107 @@ func (idx *indexer) handleMergeStreamAck(msg Message) {
 func (idx *indexer) handleStreamRequestDone(msg Message) {
 
 	streamId := msg.(*MsgStreamInfo).GetStreamId()
-	bucket := msg.(*MsgStreamInfo).GetBucket()
+	keyspaceId := msg.(*MsgStreamInfo).GetKeyspaceId()
 	sessionId := msg.(*MsgStreamInfo).GetSessionId()
 	reqCh := msg.(*MsgStreamInfo).GetRequestCh()
 
-	if ok, currSid := idx.validateSessionId(streamId, bucket, sessionId, true); !ok {
-		logging.Infof("Indexer::handleStreamRequestDone StreamId %v Bucket %v SessionId %v. "+
-			"Skipped. Current SessionId %v.", streamId, bucket, sessionId, currSid)
+	if ok, currSid := idx.validateSessionId(streamId, keyspaceId, sessionId, true); !ok {
+		logging.Infof("Indexer::handleStreamRequestDone StreamId %v KeyspaceId %v SessionId %v. "+
+			"Skipped. Current SessionId %v.", streamId, keyspaceId, sessionId, currSid)
 		return
 	}
 
-	logging.Infof("Indexer::handleStreamRequestDone StreamId %v Bucket %v",
-		streamId, bucket)
+	logging.Infof("Indexer::handleStreamRequestDone StreamId %v KeyspaceId %v",
+		streamId, keyspaceId)
 
 	//send the ack to timekeeper
 	idx.tkCmdCh <- msg
 	<-idx.tkCmdCh
 
-	idx.deleteStreamBucketCurrRequest(streamId, bucket, msg, reqCh, sessionId)
+	idx.deleteStreamKeyspaceIdCurrRequest(streamId, keyspaceId, msg, reqCh, sessionId)
 
 }
 
 func (idx *indexer) handleMTRFail(msg Message) {
 
 	streamId := msg.(*MsgRecovery).GetStreamId()
-	bucket := msg.(*MsgRecovery).GetBucket()
+	keyspaceId := msg.(*MsgRecovery).GetKeyspaceId()
 	sessionId := msg.(*MsgRecovery).GetSessionId()
 	reqCh := msg.(*MsgRecovery).GetRequestCh()
 
-	if ok, currSid := idx.validateSessionId(streamId, bucket, sessionId, true); !ok {
-		logging.Infof("Indexer::handleMTRFail StreamId %v Bucket %v SessionId %v. "+
-			"Skipped. Current SessionId %v.", streamId, bucket, sessionId, currSid)
+	if ok, currSid := idx.validateSessionId(streamId, keyspaceId, sessionId, true); !ok {
+		logging.Infof("Indexer::handleMTRFail StreamId %v KeyspaceId %v SessionId %v. "+
+			"Skipped. Current SessionId %v.", streamId, keyspaceId, sessionId, currSid)
 		return
 	}
 
-	logging.Infof("Indexer::handleMTRFail StreamId %v Bucket %v SessionId %v",
-		streamId, bucket, sessionId)
+	logging.Infof("Indexer::handleMTRFail StreamId %v KeyspaceId %v SessionId %v",
+		streamId, keyspaceId, sessionId)
 
 	//Cleanup any lock that indexer may be holding.
-	idx.deleteStreamBucketCurrRequest(streamId, bucket, msg, reqCh, sessionId)
+	idx.deleteStreamKeyspaceIdCurrRequest(streamId, keyspaceId, msg, reqCh, sessionId)
+
+	//check for any pending build done
+	if idx.getStreamKeyspaceIdState(streamId, keyspaceId) == STREAM_INACTIVE {
+		idx.processPendingBuildDone(streamId, keyspaceId, sessionId)
+		return
+	}
 
 }
 
-func (idx *indexer) handleBucketNotFound(msg Message) {
+func (idx *indexer) handleKeyspaceIdNotFound(msg Message) {
 
 	streamId := msg.(*MsgRecovery).GetStreamId()
-	bucket := msg.(*MsgRecovery).GetBucket()
+	keyspaceId := msg.(*MsgRecovery).GetKeyspaceId()
 	inMTR := msg.(*MsgRecovery).InMTR()
 	sessionId := msg.(*MsgRecovery).GetSessionId()
 
-	if ok, currSid := idx.validateSessionId(streamId, bucket, sessionId, true); !ok {
-		logging.Infof("Indexer::handleBucketNotFound StreamId %v Bucket %v SessionId %v. "+
-			"Skipped. Current SessionId %v.", streamId, bucket, sessionId, currSid)
+	if ok, currSid := idx.validateSessionId(streamId, keyspaceId, sessionId, true); !ok {
+		logging.Infof("Indexer::handleKeyspaceIdNotFound StreamId %v KeyspaceId %v SessionId %v. "+
+			"Skipped. Current SessionId %v.", streamId, keyspaceId, sessionId, currSid)
 		return
 	}
 
-	logging.Infof("Indexer::handleBucketNotFound StreamId %v Bucket %v SessionId %v",
-		streamId, bucket, sessionId)
+	logging.Infof("Indexer::handleKeyspaceIdNotFound StreamId %v KeyspaceId %v SessionId %v",
+		streamId, keyspaceId, sessionId)
 
 	// if in MTR, MTR must have stopped when recieving this message.
 	// Cleanup any lock that indexer may be holding.
 	if inMTR {
-		idx.cleanupStreamBucketState(streamId, bucket)
+		idx.cleanupStreamKeyspaceIdState(streamId, keyspaceId)
 	}
 
 	is := idx.getIndexerState()
 	if is == common.INDEXER_PREPARE_UNPAUSE {
-		logging.Warnf("Indexer::handleBucketNotFound Skipped Bucket Cleanup "+
+		logging.Warnf("Indexer::handleKeyspaceIdNotFound Skipped KeyspaceId Cleanup "+
 			"In %v state", is)
 		return
 	}
 
 	//If stream is inactive, no cleanup is required.
 	//If stream is prepare_recovery, recovery will take care of
-	//validating the bucket and taking corrective action.
-	state := idx.getStreamBucketState(streamId, bucket)
+	//validating the keyspaceId and taking corrective action.
+	state := idx.getStreamKeyspaceIdState(streamId, keyspaceId)
 
 	if state == STREAM_INACTIVE ||
 		state == STREAM_PREPARE_RECOVERY {
-		logging.Infof("Indexer::handleBucketNotFound Skip %v %v %v",
-			streamId, bucket, state)
+		logging.Infof("Indexer::handleKeyspaceIdNotFound Skip %v %v %v",
+			streamId, keyspaceId, state)
 		return
 	}
 
 	// delete index inst on the bucket from metadata repository and
 	// return the list of deleted inst
-	instIdList := idx.deleteIndexInstOnDeletedBucket(bucket, streamId)
+	instIdList := idx.deleteIndexInstOnDeletedBucket(keyspaceId, streamId)
 
 	if len(instIdList) == 0 {
-		logging.Infof("Indexer::handleBucketNotFound Empty IndexList %v %v. Nothing to do.",
-			streamId, bucket)
+		logging.Infof("Indexer::handleKeyspaceIdNotFound Empty IndexList %v %v. Nothing to do.",
+			streamId, keyspaceId)
 		return
 	}
 
 	idx.bulkUpdateState(instIdList, common.INDEX_STATE_DELETED)
-	logging.Infof("Indexer::handleBucketNotFound Updated Index State to DELETED %v",
+	logging.Infof("Indexer::handleKeyspaceIdNotFound Updated Index State to DELETED %v",
 		instIdList)
 
 	msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
@@ -3411,24 +3614,24 @@ func (idx *indexer) handleBucketNotFound(msg Message) {
 		common.CrashOnError(err)
 	}
 
-	idx.stopBucketStream(streamId, bucket)
+	idx.stopKeyspaceIdStream(streamId, keyspaceId)
 
-	//cleanup index data for all indexes in the bucket
+	//cleanup index data for all indexes in the keyspace
 	for _, instId := range instIdList {
 		index := idx.indexInstMap[instId]
 		idx.cleanupIndexData(index, nil)
 	}
 
-	idx.setStreamBucketState(streamId, bucket, STREAM_INACTIVE)
+	idx.setStreamKeyspaceIdState(streamId, keyspaceId, STREAM_INACTIVE)
 
-	logging.Infof("Indexer::handleBucketNotFound %v %v %v",
-		streamId, bucket, STREAM_INACTIVE)
+	logging.Infof("Indexer::handleKeyspaceIdNotFound %v %v %v",
+		streamId, keyspaceId, STREAM_INACTIVE)
 
 }
 
 func (idx indexer) newIndexInstMsg(m common.IndexInstMap) *MsgUpdateInstMap {
 	return &MsgUpdateInstMap{indexInstMap: m, stats: idx.stats.Clone(),
-		rollbackTimes: idx.bucketRollbackTimes}
+		rollbackTimes: idx.keyspaceIdRollbackTimes}
 }
 
 func (idx *indexer) cleanupIndexData(indexInst common.IndexInst,
@@ -3505,49 +3708,41 @@ func (idx *indexer) cleanupIndex(indexInst common.IndexInst,
 		}
 	}
 
-	// If INIT_STREAM is in STREAM_INACTIVE, then clean up instances in MAINT_STREAM
-	// that are in state INDEX_STATE_DELETED
-	bucket := indexInst.Defn.Bucket
-	if indexInst.Stream == common.INIT_STREAM &&
-		idx.getStreamBucketState(common.INIT_STREAM, bucket) == STREAM_INACTIVE {
-		logging.Infof("Indexer::cleanupIndex INIT_STREAM is in state STREAM_INACTIVE."+
-			" Attempting clean-up of MAINT_STREAM. Bucket: %v", bucket)
-		idx.cleanupMaintStream(bucket)
-	}
-
 	if clientCh != nil {
 		clientCh <- &MsgSuccess{}
 	}
 }
 
 func (idx *indexer) sendStreamUpdateForIndex(indexInstList []common.IndexInst,
-	bucket string, bucketUUID string, streamId common.StreamId) {
+	keyspaceId string, bucketUUID string, streamId common.StreamId) {
 
-	sessionId := idx.getCurrentSessionId(streamId, bucket)
+	sessionId := idx.getCurrentSessionId(streamId, keyspaceId)
 
 	respCh := make(MsgChannel)
 	stopCh := make(StopChannel)
 
 	cmd := &MsgStreamUpdate{
-		mType:     ADD_INDEX_LIST_TO_STREAM,
-		streamId:  streamId,
-		bucket:    bucket,
-		indexList: indexInstList,
-		respCh:    respCh,
-		stopCh:    stopCh,
-		sessionId: sessionId}
+		mType:      ADD_INDEX_LIST_TO_STREAM,
+		streamId:   streamId,
+		keyspaceId: keyspaceId,
+		indexList:  indexInstList,
+		respCh:     respCh,
+		stopCh:     stopCh,
+		sessionId:  sessionId}
 
 	retryCount := 0
 
-	reqLock := idx.acquireStreamRequestLock(bucket, streamId)
+	bucket, _, _ := SplitKeyspaceId(keyspaceId)
+
+	reqLock := idx.acquireStreamRequestLock(keyspaceId, streamId)
 	go func(reqLock *kvRequest) {
 		defer idx.releaseStreamRequestLock(reqLock)
 		idx.waitStreamRequestLock(reqLock)
 	retryloop:
 		for {
 			if !idx.clusterInfoClient.ValidateBucket(bucket, []string{bucketUUID}) {
-				logging.Errorf("Indexer::sendStreamUpdateForIndex \n\tBucket Not Found "+
-					"For Stream %v Bucket %v", streamId, bucket)
+				logging.Errorf("Indexer::sendStreamUpdateForIndex Bucket Not Found "+
+					"For Stream %v KeyspaceId %v", streamId, keyspaceId)
 				break retryloop
 			}
 			idx.sendMsgToKVSender(cmd)
@@ -3557,15 +3752,15 @@ func (idx *indexer) sendStreamUpdateForIndex(indexInstList []common.IndexInst,
 				switch resp.GetMsgType() {
 
 				case MSG_SUCCESS:
-					logging.Infof("Indexer::sendStreamUpdateForIndex Success Stream %v Bucket %v "+
-						"SessionId %v.", streamId, bucket, sessionId)
+					logging.Infof("Indexer::sendStreamUpdateForIndex Success Stream %v KeyspaceId %v "+
+						"SessionId %v.", streamId, keyspaceId, sessionId)
 					break retryloop
 
 				default:
-					if idx.getStreamBucketState(streamId, bucket) != STREAM_ACTIVE {
-						logging.Warnf("Indexer::sendStreamUpdateForIndex Stream %v Bucket %v "+
-							"SessionId %v. Bucket stream not active. Aborting.", streamId,
-							bucket, sessionId)
+					if idx.getStreamKeyspaceIdState(streamId, keyspaceId) != STREAM_ACTIVE {
+						logging.Warnf("Indexer::sendStreamUpdateForIndex Stream %v KeyspaceId %v "+
+							"SessionId %v. KeyspaceId stream not active. Aborting.", streamId,
+							keyspaceId, sessionId)
 						break retryloop
 					}
 
@@ -3577,21 +3772,21 @@ func (idx *indexer) sendStreamUpdateForIndex(indexInstList []common.IndexInst,
 					//released and MTR can proceed to repair the Topic.
 					if respErr.cause.Error() == common.ErrorClosed.Error() ||
 						respErr.cause.Error() == projClient.ErrorTopicMissing.Error() {
-						logging.Warnf("Indexer::sendStreamUpdateForIndex Stream %v Bucket %v "+
-							"SessionId %v. Error from Projector %v. Aborting.", streamId, bucket,
+						logging.Warnf("Indexer::sendStreamUpdateForIndex Stream %v KeyspaceId %v "+
+							"SessionId %v. Error from Projector %v. Aborting.", streamId, keyspaceId,
 							sessionId, respErr.cause)
 						break retryloop
 
 					} else if retryCount < 10 {
-						logging.Errorf("Indexer::sendStreamUpdateForIndex Stream %v Bucket %v "+
-							"SessionId %v. Error from Projector %v. Retrying.", streamId, bucket,
+						logging.Errorf("Indexer::sendStreamUpdateForIndex Stream %v KeyspaceId %v "+
+							"SessionId %v. Error from Projector %v. Retrying.", streamId, keyspaceId,
 							sessionId, respErr.cause)
 						retryCount++
 						time.Sleep(KV_RETRY_INTERVAL * time.Millisecond)
 					} else {
-						logging.Errorf("Indexer::sendStreamUpdateForIndex Stream %v Bucket %v "+
+						logging.Errorf("Indexer::sendStreamUpdateForIndex Stream %v keyspaceId %v "+
 							"SessionId %v. Error from Projector %v. Reach max retry count. Stop retrying.",
-							streamId, bucket, sessionId, respErr.cause)
+							streamId, keyspaceId, sessionId, respErr.cause)
 						break retryloop
 					}
 				}
@@ -3644,7 +3839,7 @@ func (idx *indexer) Shutdown() Message {
 }
 
 func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstId,
-	buildStream common.StreamId, bucket string, buildTs Timestamp, clientCh MsgChannel) bool {
+	buildStream common.StreamId, keyspaceId string, cid string, buildTs Timestamp, clientCh MsgChannel) bool {
 
 	var cmd Message
 	var indexList []common.IndexInst
@@ -3661,22 +3856,34 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 	numVb := idx.config["numVbuckets"].Int()
 	enableAsync := idx.config["enableAsyncOpenStream"].Bool()
 
-	idx.prepareStreamBucketForFreshStart(buildStream, bucket)
+	idx.prepareStreamKeyspaceIdForFreshStart(buildStream, keyspaceId)
 
-	sessionId := idx.getNextSessionId(buildStream, bucket)
+	sessionId := idx.genNextSessionId(buildStream, keyspaceId)
 
-	async := enableAsync && idx.clusterInfoClient.ClusterVersion() >= common.INDEXER_65_VERSION
+	clusterVer := idx.clusterInfoClient.ClusterVersion()
+	async := enableAsync && clusterVer >= common.INDEXER_65_VERSION
+
+	cid = idx.makeCollectionIdForStreamRequest(buildStream, keyspaceId, cid, clusterVer)
+	idx.streamKeyspaceIdCollectionId[buildStream][keyspaceId] = cid
+
+	var collectionAware bool
+	if clusterVer >= common.INDEXER_70_VERSION {
+		collectionAware = true
+	}
+
 	cmd = &MsgStreamUpdate{mType: OPEN_STREAM,
 		streamId:           buildStream,
-		bucket:             bucket,
+		keyspaceId:         keyspaceId,
 		indexList:          indexList,
 		buildTs:            buildTs,
 		respCh:             respCh,
 		restartTs:          nil,
 		allowMarkFirstSnap: true,
-		rollbackTime:       idx.bucketRollbackTimes[bucket],
+		rollbackTime:       idx.keyspaceIdRollbackTimes[keyspaceId],
 		async:              async,
-		sessionId:          sessionId}
+		sessionId:          sessionId,
+		collectionId:       cid,
+		collectionAware:    collectionAware}
 
 	//send stream update to timekeeper
 	if resp := idx.sendStreamUpdateToWorker(cmd, idx.tkCmdCh,
@@ -3698,13 +3905,15 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 		common.CrashOnError(respErr.cause)
 	}
 
-	idx.initBuildTsLock(buildStream, bucket)
+	idx.initBuildTsLock(buildStream, keyspaceId)
 
 	stopCh := make(StopChannel)
 
-	idx.setStreamBucketCurrRequest(buildStream, bucket, cmd, stopCh, sessionId)
+	idx.setStreamKeyspaceIdCurrRequest(buildStream, keyspaceId, cmd, stopCh, sessionId)
 
-	reqLock := idx.acquireStreamRequestLock(bucket, buildStream)
+	bucket, _, _ := SplitKeyspaceId(keyspaceId)
+
+	reqLock := idx.acquireStreamRequestLock(keyspaceId, buildStream)
 	go func(reqLock *kvRequest) {
 		defer idx.releaseStreamRequestLock(reqLock)
 		idx.waitStreamRequestLock(reqLock)
@@ -3713,13 +3922,13 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 	retryloop:
 		for {
 			if !idx.clusterInfoClient.ValidateBucket(bucket, bucketUUIDList) {
-				logging.Errorf("Indexer::sendStreamUpdateForBuildIndex \n\tBucket Not Found "+
-					"For Stream %v Bucket %v SessionId %v", buildStream, bucket, sessionId)
+				logging.Errorf("Indexer::sendStreamUpdateForBuildIndex Bucket Not Found "+
+					"For Stream %v KeyspaceId %v SessionId %v", buildStream, keyspaceId, sessionId)
 				idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_BUCKET_NOT_FOUND,
-					streamId:  buildStream,
-					bucket:    bucket,
-					inMTR:     true,
-					sessionId: sessionId}
+					streamId:   buildStream,
+					keyspaceId: keyspaceId,
+					inMTR:      true,
+					sessionId:  sessionId}
 				break retryloop
 			}
 			idx.sendMsgToKVSender(cmd)
@@ -3733,7 +3942,7 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 					idx.injectRandomDelay(10)
 
 					logging.Infof("Indexer::sendStreamUpdateForBuildIndex Stream Request Success For "+
-						"Stream %v Bucket %v SessionId %v", buildStream, bucket, sessionId)
+						"Stream %v KeyspaceId %v Cid %v SessionId %v", buildStream, keyspaceId, cid, sessionId)
 
 					//once stream request is successful re-calculate the KV timestamp.
 					//This makes sure indexer doesn't use a timestamp which can never
@@ -3741,15 +3950,15 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 					//if there is a failover after this, it will be observed as a rollback
 
 					// Asyncronously compute the KV timestamp
-					go idx.computeBucketBuildTsAsync(clustAddr, bucket, numVb, buildStream)
+					go idx.computeKeyspaceBuildTsAsync(clustAddr, keyspaceId, cid, numVb, buildStream)
 
 					idx.internalRecvCh <- &MsgStreamInfo{mType: STREAM_REQUEST_DONE,
-						streamId:  buildStream,
-						bucket:    bucket,
-						activeTs:  resp.(*MsgSuccessOpenStream).GetActiveTs(),
-						pendingTs: resp.(*MsgSuccessOpenStream).GetPendingTs(),
-						sessionId: sessionId,
-						reqCh:     stopCh,
+						streamId:   buildStream,
+						keyspaceId: keyspaceId,
+						activeTs:   resp.(*MsgSuccessOpenStream).GetActiveTs(),
+						pendingTs:  resp.(*MsgSuccessOpenStream).GetPendingTs(),
+						sessionId:  sessionId,
+						reqCh:      stopCh,
 					}
 					break retryloop
 
@@ -3764,40 +3973,40 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 					respErr := resp.(*MsgError).GetError()
 					count++
 
-					state := idx.getStreamBucketState(buildStream, bucket)
+					state := idx.getStreamKeyspaceIdState(buildStream, keyspaceId)
 
 					if state == STREAM_PREPARE_RECOVERY || state == STREAM_INACTIVE {
-						logging.Errorf("Indexer::sendStreamUpdateForBuildIndex Stream %v Bucket %v "+
+						logging.Errorf("Indexer::sendStreamUpdateForBuildIndex Stream %v KeyspaceId %v "+
 							"SessionId %v. Error from Projector %v. Not Retrying. State %v", buildStream,
-							bucket, sessionId, respErr.cause, state)
+							keyspaceId, sessionId, respErr.cause, state)
 
 						idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_MTR_FAIL,
-							streamId:  buildStream,
-							bucket:    bucket,
-							inMTR:     true,
-							requestCh: stopCh,
-							sessionId: sessionId}
+							streamId:   buildStream,
+							keyspaceId: keyspaceId,
+							inMTR:      true,
+							requestCh:  stopCh,
+							sessionId:  sessionId}
 
 						break retryloop
 
 					} else if count > MAX_PROJ_RETRY {
 						// Start recovery if max retries has reached. If the projector
 						// state is not correct, this ensures projector state will get cleaned up.
-						logging.Errorf("Indexer::sendStreamUpdateForBuildIndex Stream %v Bucket %v "+
+						logging.Errorf("Indexer::sendStreamUpdateForBuildIndex Stream %v KeyspaceId %v "+
 							"SessionId %v. Error from Projector %v. Start recovery after %v retries.",
-							buildStream, sessionId, bucket, respErr.cause, MAX_PROJ_RETRY)
+							buildStream, sessionId, keyspaceId, respErr.cause, MAX_PROJ_RETRY)
 
 						idx.internalRecvCh <- &MsgRecovery{
-							mType:     INDEXER_INIT_PREP_RECOVERY,
-							streamId:  buildStream,
-							bucket:    bucket,
-							requestCh: stopCh,
-							sessionId: sessionId,
+							mType:      INDEXER_INIT_PREP_RECOVERY,
+							streamId:   buildStream,
+							keyspaceId: keyspaceId,
+							requestCh:  stopCh,
+							sessionId:  sessionId,
 						}
 						break retryloop
 					} else {
-						logging.Errorf("Indexer::sendStreamUpdateForBuildIndex Stream %v Bucket %v "+
-							"SessionId %v. Error from Projector %v. Retrying %v.", buildStream, bucket,
+						logging.Errorf("Indexer::sendStreamUpdateForBuildIndex Stream %v KeyspaceId %v "+
+							"SessionId %v. Error from Projector %v. Retrying %v.", buildStream, keyspaceId,
 							sessionId, respErr.cause, count)
 
 						time.Sleep(KV_RETRY_INTERVAL * time.Millisecond)
@@ -3808,6 +4017,27 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 	}(reqLock)
 
 	return true
+
+}
+
+func (idx *indexer) makeCollectionIdForStreamRequest(streamId common.StreamId,
+	keyspaceId string, collectionId string, clusterVer uint64) string {
+
+	if streamId == common.MAINT_STREAM {
+		//MAINT_STREAM always works at bucket level and
+		//collectionID is not required in stream request
+		return ""
+	} else if streamId == common.INIT_STREAM {
+		//INIT_STREAM works on collection level after
+		//cluster has fully upgraded to 7.0 or later
+		if clusterVer >= common.INDEXER_70_VERSION {
+			return collectionId
+		} else {
+			return ""
+		}
+	}
+
+	return ""
 
 }
 
@@ -3861,7 +4091,7 @@ func (idx *indexer) sendStreamUpdateForDropIndex(indexInst common.IndexInst,
 }
 
 func (idx *indexer) removeIndexesFromStream(indexList []common.IndexInst,
-	bucket string,
+	keyspaceId string,
 	bucketUUID string,
 	streamId common.StreamId,
 	state common.IndexState,
@@ -3893,14 +4123,14 @@ func (idx *indexer) removeIndexesFromStream(indexList []common.IndexInst,
 
 		respCh := make(MsgChannel)
 
-		if idx.getStreamBucketState(streamId, bucket) == STREAM_INACTIVE {
-			logging.Warnf("Indexer::removeIndexesFromStream Stream %v Bucket %v "+
-				"Bucket stream not active. Skipping.", streamId, bucket)
+		if idx.getStreamKeyspaceIdState(streamId, keyspaceId) == STREAM_INACTIVE {
+			logging.Warnf("Indexer::removeIndexesFromStream Stream %v KeyspaceId %v "+
+				"KeyspaceId stream not active. Skipping.", streamId, keyspaceId)
 			continue
 		}
 
-		sessionId := idx.getCurrentSessionId(streamId, bucket)
-		if idx.checkBucketExistsInStream(bucket, streamId, false) {
+		sessionId := idx.getCurrentSessionId(streamId, keyspaceId)
+		if idx.checkKeyspaceIdExistsInStream(keyspaceId, streamId, false) {
 
 			cmd = &MsgStreamUpdate{mType: REMOVE_INDEX_LIST_FROM_STREAM,
 				streamId:  streamId,
@@ -3909,14 +4139,14 @@ func (idx *indexer) removeIndexesFromStream(indexList []common.IndexInst,
 				sessionId: sessionId,
 			}
 		} else {
-			cmd = &MsgStreamUpdate{mType: REMOVE_BUCKET_FROM_STREAM,
+			cmd = &MsgStreamUpdate{mType: REMOVE_KEYSPACE_FROM_STREAM,
 				streamId:      streamId,
-				bucket:        bucket,
+				keyspaceId:    keyspaceId,
 				respCh:        respCh,
 				sessionId:     sessionId,
 				abortRecovery: true,
 			}
-			idx.setStreamBucketState(streamId, bucket, STREAM_INACTIVE)
+			idx.setStreamKeyspaceIdState(streamId, keyspaceId, STREAM_INACTIVE)
 		}
 
 		//send stream update to mutation manager
@@ -3939,7 +4169,9 @@ func (idx *indexer) removeIndexesFromStream(indexList []common.IndexInst,
 			common.CrashOnError(respErr.cause)
 		}
 
-		reqLock := idx.acquireStreamRequestLock(bucket, streamId)
+		bucket, _, _ := SplitKeyspaceId(keyspaceId)
+
+		reqLock := idx.acquireStreamRequestLock(keyspaceId, streamId)
 		go func(reqLock *kvRequest) {
 			defer idx.releaseStreamRequestLock(reqLock)
 			idx.waitStreamRequestLock(reqLock)
@@ -3947,12 +4179,12 @@ func (idx *indexer) removeIndexesFromStream(indexList []common.IndexInst,
 			for {
 
 				if !idx.clusterInfoClient.ValidateBucket(bucket, []string{bucketUUID}) {
-					logging.Errorf("Indexer::removeIndexesFromStream \n\tBucket Not Found "+
+					logging.Errorf("Indexer::removeIndexesFromStream Bucket Not Found "+
 						"For Stream %v Bucket %v", streamId, bucket)
 					idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_BUCKET_NOT_FOUND,
-						streamId:  streamId,
-						bucket:    bucket,
-						sessionId: sessionId}
+						streamId:   streamId,
+						keyspaceId: keyspaceId,
+						sessionId:  sessionId}
 					break retryloop
 				}
 
@@ -3964,21 +4196,21 @@ func (idx *indexer) removeIndexesFromStream(indexList []common.IndexInst,
 
 					case MSG_SUCCESS:
 						logging.Infof("Indexer::removeIndexesFromStream Success Stream %v "+
-							"Bucket %v SessionId %v", streamId, bucket, sessionId)
+							"KeyspaceId %v SessionId %v", streamId, keyspaceId, sessionId)
 						break retryloop
 
 					default:
-						if idx.getStreamBucketState(streamId, bucket) != STREAM_ACTIVE {
-							logging.Warnf("Indexer::removeIndexesFromStream Stream %v Bucket %v "+
-								"SessionId %v Bucket stream not active. Aborting.", streamId,
-								bucket, sessionId)
+						if idx.getStreamKeyspaceIdState(streamId, keyspaceId) != STREAM_ACTIVE {
+							logging.Warnf("Indexer::removeIndexesFromStream Stream %v KeyspaceId %v "+
+								"SessionId %v KeyspaceId stream not active. Aborting.", streamId,
+								keyspaceId, sessionId)
 							break retryloop
 						}
 
 						//log and retry for all other responses
 						respErr := resp.(*MsgError).GetError()
-						logging.Errorf("Indexer::removeIndexesFromStream - Stream %v Bucket %v"+
-							"SessionId %v. Error from Projector %v. Retrying.", streamId, bucket,
+						logging.Errorf("Indexer::removeIndexesFromStream - Stream %v KeyspaceId %v"+
+							"SessionId %v. Error from Projector %v. Retrying.", streamId, keyspaceId,
 							sessionId, respErr.cause)
 						time.Sleep(KV_RETRY_INTERVAL * time.Millisecond)
 
@@ -4207,21 +4439,21 @@ func (idx *indexer) checkDuplicateIndex(indexInst common.IndexInst,
 	return true
 }
 
-//checkDuplicateInitialBuildRequest check if any other index on the given bucket
+//checkDuplicateInitialBuildRequest check if any other index on the given collection
 //is already building
-func (idx *indexer) checkDuplicateInitialBuildRequest(bucket string,
+func (idx *indexer) checkDuplicateInitialBuildRequest(keyspaceId string,
 	instIdList []common.IndexInstId, respCh MsgChannel, errMap map[common.IndexInstId]error) bool {
 
-	//if initial build is already running for some other index on this bucket,
+	//if initial build is already running for some other index on this collection,
 	//cannot start another one
 	for _, index := range idx.indexInstMap {
 
 		if (index.State == common.INDEX_STATE_INITIAL ||
 			index.State == common.INDEX_STATE_CATCHUP) &&
-			index.Defn.Bucket == bucket {
+			index.Defn.KeyspaceId(common.INIT_STREAM) == keyspaceId {
 
-			errStr := fmt.Sprintf("Build Already In Progress. Bucket %v", bucket)
-			logging.Errorf("Indexer::checkDuplicateInitialBuildRequest %v, %v", index, bucket)
+			errStr := fmt.Sprintf("Build Already In Progress. Keyspace %v", keyspaceId)
+			logging.Errorf("Indexer::checkDuplicateInitialBuildRequest %v, %v", index, keyspaceId)
 			if idx.enableManager {
 				idx.bulkUpdateError(instIdList, errStr)
 				for _, instId := range instIdList {
@@ -4296,52 +4528,114 @@ func (idx *indexer) handleUpdateIndexRState(msg Message) {
 
 func (idx *indexer) handleInitialBuildDone(msg Message) {
 
-	bucket := msg.(*MsgTKInitBuildDone).GetBucket()
+	keyspaceId := msg.(*MsgTKInitBuildDone).GetKeyspaceId()
 	streamId := msg.(*MsgTKInitBuildDone).GetStreamId()
 	sessionId := msg.(*MsgTKInitBuildDone).GetSessionId()
+	flushTs := msg.(*MsgTKInitBuildDone).GetFlushTs()
 
-	if ok, currSid := idx.validateSessionId(streamId, bucket, sessionId, true); !ok {
-		logging.Infof("Indexer::handleInitialBuildDone StreamId %v Bucket %v SessionId %v. "+
-			"Skipped. Current SessionId %v.", streamId, bucket, sessionId, currSid)
+	if ok, currSid := idx.validateSessionId(streamId, keyspaceId, sessionId, true); !ok {
+		logging.Infof("Indexer::handleInitialBuildDone StreamId %v KeyspaceId %v SessionId %v. "+
+			"Skipped. Current SessionId %v.", streamId, keyspaceId, sessionId, currSid)
 		return
 	}
 
 	//skip processing initial build done for inactive or recovery streams.
 	//the streams would be restarted and then build done would get recomputed.
-	state := idx.getStreamBucketState(streamId, bucket)
+	state := idx.getStreamKeyspaceIdState(streamId, keyspaceId)
 
 	if state == STREAM_INACTIVE ||
 		state == STREAM_PREPARE_RECOVERY ||
 		state == STREAM_RECOVERY {
 		logging.Infof("Indexer::handleInitialBuildDone Skip InitBuildDone %v %v %v",
-			streamId, bucket, state)
+			streamId, keyspaceId, state)
 		return
 	}
 
-	logging.Infof("Indexer::handleInitialBuildDone Bucket: %v Stream: %v SessionId: %v",
-		bucket, streamId, sessionId)
+	logging.Infof("Indexer::handleInitialBuildDone KeyspaceId: %v Stream: %v SessionId: %v",
+		keyspaceId, streamId, sessionId)
 
-	//MAINT_STREAM should already be running for this bucket,
-	//as first index gets added to MAINT_STREAM always
-	if idx.checkBucketExistsInStream(bucket, common.MAINT_STREAM, true) == false {
-		logging.Fatalf("Indexer::handleInitialBuildDone MAINT_STREAM not enabled for Bucket: %v. "+
-			"Cannot Process Initial Build Done.", bucket)
-		common.CrashOnError(ErrMaintStreamMissingBucket)
+	bucket, _, _ := SplitKeyspaceId(keyspaceId)
+	mState := idx.getStreamKeyspaceIdState(common.MAINT_STREAM, bucket)
+
+	//if MAINT_STREAM is not running, it needs to be started
+	if mState == STREAM_INACTIVE {
+		idx.processBuildDoneNoCatchup(streamId, keyspaceId, sessionId, flushTs)
+	} else if mState == STREAM_PREPARE_RECOVERY ||
+		mState == STREAM_RECOVERY {
+		//if MAINT_STREAM stream is in recovery, it cannot be determined if
+		//the stream will be active again or not (e.g. all indexes get dropped).
+		//add the state to pending build done and process it later
+		idx.processBuildDoneInRecovery(streamId, keyspaceId, sessionId, flushTs)
+	} else {
+		idx.processBuildDoneCatchup(streamId, keyspaceId, sessionId)
 	}
 
-	//get the list of indexes for this bucket and stream in INITIAL state
+}
+
+func (idx *indexer) processBuildDoneInRecovery(streamId common.StreamId,
+	keyspaceId string, sessionId uint64, flushTs *common.TsVbuuid) {
+
+	logging.Infof("Indexer::processBuildDoneInRecovery %v %v %v", streamId, keyspaceId,
+		sessionId)
+
+	//save the buildDone information for processing once the recovery finishes
+	spec := &buildDoneSpec{
+		sessionId: sessionId,
+		flushTs:   flushTs,
+	}
+	idx.streamKeyspaceIdPendBuildDone[streamId][keyspaceId] = spec
+
+}
+
+func (idx *indexer) processPendingBuildDone(streamId common.StreamId,
+	keyspaceId string, sessionId uint64) {
+
+	//pending build check is only to be done for MAINT_STREAM
+	if streamId != common.MAINT_STREAM {
+		return
+	}
+
+	logging.Infof("Indexer::processPendingBuildDone %v %v", streamId, keyspaceId)
+
+	if spec, ok := idx.streamKeyspaceIdPendBuildDone[common.INIT_STREAM][keyspaceId]; ok && spec != nil {
+
+		mState := idx.getStreamKeyspaceIdState(common.MAINT_STREAM, keyspaceId)
+
+		//if MAINT_STREAM is not running, it needs to be started
+		if mState == STREAM_INACTIVE {
+			idx.processBuildDoneNoCatchup(streamId, keyspaceId, sessionId, spec.flushTs)
+			delete(idx.streamKeyspaceIdPendBuildDone[streamId], keyspaceId)
+		} else if mState == STREAM_PREPARE_RECOVERY ||
+			mState == STREAM_RECOVERY {
+			//TODO Collections is this case possible as this function gets called on recovery done?
+			logging.Infof("Indexer::processPendingBuildDone %v %v. Maint Stream In %v state. "+
+				"Wait for next recovery done to trigger pending build done.", streamId, keyspaceId, mState)
+		} else {
+			idx.processBuildDoneCatchup(streamId, keyspaceId, sessionId)
+			delete(idx.streamKeyspaceIdPendBuildDone[streamId], keyspaceId)
+		}
+
+	} else {
+		logging.Infof("Indexer::processPendingBuildDone %v %v. No pending build done spec found.",
+			streamId, keyspaceId)
+	}
+
+}
+
+func (idx *indexer) processBuildDoneCatchup(streamId common.StreamId, keyspaceId string, sessionId uint64) {
+
+	logging.Infof("Indexer::processBuildDoneCatchup %v %v %v", streamId, keyspaceId,
+		sessionId)
+
+	//get the list of indexes for this keyspaceId and stream in INITIAL state
 	var indexList []common.IndexInst
 	var instIdList []common.IndexInstId
 	var bucketUUIDList []string
 	for _, index := range idx.indexInstMap {
-		if index.Defn.Bucket == bucket && index.Stream == streamId &&
+		if index.Defn.KeyspaceId(index.Stream) == keyspaceId && index.Stream == streamId &&
 			index.State == common.INDEX_STATE_INITIAL {
-			//index in INIT_STREAM move to Catchup state
-			if streamId == common.INIT_STREAM {
-				index.State = common.INDEX_STATE_CATCHUP
-			} else {
-				index.State = common.INDEX_STATE_ACTIVE
-			}
+			index.State = common.INDEX_STATE_CATCHUP
+
 			indexList = append(indexList, index)
 			instIdList = append(instIdList, index.InstId)
 			bucketUUIDList = append(bucketUUIDList, index.Defn.BucketUUID)
@@ -4349,8 +4643,8 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 	}
 
 	if len(instIdList) == 0 {
-		logging.Infof("Indexer::handleInitialBuildDone Empty IndexList %v %v. Nothing to do.",
-			streamId, bucket)
+		logging.Infof("Indexer::processBuildDoneCatchup Empty IndexList %v %v. Nothing to do.",
+			streamId, keyspaceId)
 		return
 	}
 
@@ -4366,7 +4660,7 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 		common.CrashOnError(err)
 	}
 
-	//if index is already in MAINT_STREAM, nothing more needs to be done
+	//update index state in metadata
 	if err := idx.updateMetaInfoForIndexList(instIdList, true, true, false, false, true, false, false, false, nil); err != nil {
 		common.CrashOnError(err)
 	}
@@ -4374,20 +4668,6 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 	// collect progress stats after initial is done or transition to catchup phase. This must be done
 	// after updating metaInfo.
 	idx.sendProgressStats()
-
-	if streamId == common.MAINT_STREAM {
-
-		//for cbq bridge, return response as index is ready to query
-		if !idx.enableManager {
-			if clientCh, ok := idx.bucketCreateClientChMap[bucket]; ok {
-				if clientCh != nil {
-					clientCh <- &MsgSuccess{}
-				}
-				delete(idx.bucketCreateClientChMap, bucket)
-			}
-		}
-		return
-	}
 
 	// If index is a proxy, add the real index instance to the list.  This will
 	// also update the partition list of the real index instance in projector.
@@ -4400,25 +4680,28 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 				indexList = append(indexList, realInst)
 			} else {
 				err := fmt.Errorf("Fail to find real index instance %v", index.RealInstId)
-				logging.Errorf("Indexer::handleInitialBuildDone. %v", err)
+				logging.Errorf("Indexer::processBuildDoneCatchup %v", err)
 				common.CrashOnError(err)
 			}
 		}
 	}
 
-	//Add index to MAINT_STREAM in Catchup State,
-	//so mutations for this index are already in queue to
-	//allow convergence with INIT_STREAM.
 	respCh := make(MsgChannel)
 	stopCh := make(StopChannel)
 
+	//Add index to MAINT_STREAM in Catchup State,
+	//so mutations for this index are already in queue to
+	//allow convergence with INIT_STREAM.
+
+	//use bucket as keyspaceId for MAINT_STREAM
+	bucket, _, _ := SplitKeyspaceId(keyspaceId)
 	cmd := &MsgStreamUpdate{mType: ADD_INDEX_LIST_TO_STREAM,
-		streamId:  common.MAINT_STREAM,
-		bucket:    bucket,
-		indexList: indexList,
-		respCh:    respCh,
-		stopCh:    stopCh,
-		sessionId: sessionId}
+		streamId:   common.MAINT_STREAM,
+		keyspaceId: bucket,
+		indexList:  indexList,
+		respCh:     respCh,
+		stopCh:     stopCh,
+		sessionId:  sessionId}
 
 	//send stream update to timekeeper
 	if resp := idx.sendStreamUpdateToWorker(cmd, idx.tkCmdCh, "Timekeeper"); resp.GetMsgType() != MSG_SUCCESS {
@@ -4428,11 +4711,12 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 
 	//send stream update to mutation manager
 	if resp := idx.sendStreamUpdateToWorker(cmd, idx.mutMgrCmdCh, "MutationMgr"); resp.GetMsgType() != MSG_SUCCESS {
+
 		respErr := resp.(*MsgError).GetError()
 		common.CrashOnError(respErr.cause)
 	}
 
-	reqLock := idx.acquireStreamRequestLock(bucket, streamId)
+	reqLock := idx.acquireStreamRequestLock(keyspaceId, streamId)
 	go func(reqLock *kvRequest) {
 		defer idx.releaseStreamRequestLock(reqLock)
 		idx.waitStreamRequestLock(reqLock)
@@ -4440,8 +4724,9 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 	retryloop:
 		for {
 			if !idx.clusterInfoClient.ValidateBucket(bucket, bucketUUIDList) {
-				logging.Errorf("Indexer::handleInitialBuildDone \n\tBucket Not Found "+
-					"For Stream %v Bucket %v SessionId %v", streamId, bucket, sessionId)
+				logging.Errorf("Indexer::processBuildDoneCatchup Bucket Not Found "+
+					"For Stream %v KeyspaceId %v SessionId %v", streamId, keyspaceId, sessionId)
+				//TODO need to send bucket not found?
 				break retryloop
 			}
 			idx.sendMsgToKVSender(cmd)
@@ -4454,17 +4739,17 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 
 					idx.injectRandomDelay(10)
 
-					logging.Infof("Indexer::handleInitialBuildDone Success Stream %v Bucket %v "+
-						"SessionId %v", streamId, bucket, sessionId)
+					logging.Infof("Indexer::processBuildDoneCatchup Success Stream %v KeyspaceId %v "+
+						"SessionId %v", streamId, keyspaceId, sessionId)
 
 					mergeTs := resp.(*MsgStreamUpdate).GetRestartTs()
 
 					idx.internalRecvCh <- &MsgTKInitBuildDone{
-						mType:     TK_INIT_BUILD_DONE_ACK,
-						streamId:  streamId,
-						bucket:    bucket,
-						mergeTs:   mergeTs,
-						sessionId: sessionId}
+						mType:      TK_INIT_BUILD_DONE_ACK,
+						streamId:   streamId,
+						keyspaceId: keyspaceId,
+						mergeTs:    mergeTs,
+						sessionId:  sessionId}
 					break retryloop
 
 				default:
@@ -4480,30 +4765,30 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 						//(depending on when it started). If the stream state is active right now, it is okay
 						//to generate ADD_FAIL message. If MAINT_STREAM recovery starts after that, it will
 						//pick up the state change.
-						mstate := idx.getStreamBucketState(common.MAINT_STREAM, bucket)
+						mstate := idx.getStreamKeyspaceIdState(common.MAINT_STREAM, keyspaceId)
 						if mstate == STREAM_PREPARE_RECOVERY || mstate == STREAM_RECOVERY {
-							logging.Infof("Indexer::handleInitialBuildDone Stream %v Bucket %v SessionId %v"+
+							logging.Infof("Indexer::processBuildDoneCatchup Stream %v KeyspaceId %v SessionId %v"+
 								"Detected MAINT_STREAM in %v state. Reset retry count.", streamId,
-								bucket, sessionId, mstate)
+								keyspaceId, sessionId, mstate)
 							count = 0
 						} else {
 							// Send message to main loop to start recovery if cannot add instances over threshold.
 							//If the projector state is not correct, this ensures projector state will get cleaned up.
-							logging.Errorf("Indexer::handleInitialBuildDone Stream %v Bucket %v SessionId %v"+
+							logging.Errorf("Indexer::processBuildDoneCatchup Stream %v KeyspaceId %v SessionId %v"+
 								"Error from Projector %v. Start recovery after %v retries.", streamId,
-								bucket, respErr.cause, sessionId, MAX_PROJ_RETRY)
+								keyspaceId, respErr.cause, sessionId, MAX_PROJ_RETRY)
 
 							idx.internalRecvCh <- &MsgTKInitBuildDone{
-								mType:     TK_ADD_INSTANCE_FAIL,
-								streamId:  streamId,
-								bucket:    bucket,
-								sessionId: sessionId,
+								mType:      TK_ADD_INSTANCE_FAIL,
+								streamId:   streamId,
+								keyspaceId: keyspaceId,
+								sessionId:  sessionId,
 							}
 							break retryloop
 						}
 					} else {
-						logging.Errorf("Indexer::handleInitialBuildDone Stream %v Bucket %v SessionId %v."+
-							"Error from Projector %v. Retrying.", streamId, bucket, sessionId, respErr.cause)
+						logging.Errorf("Indexer::processBuildDoneCatchup Stream %v KeyspaceId %v SessionId %v."+
+							"Error from Projector %v. Retrying.", streamId, keyspaceId, sessionId, respErr.cause)
 						time.Sleep(KV_RETRY_INTERVAL * time.Millisecond)
 					}
 				}
@@ -4513,35 +4798,177 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 
 }
 
+func (idx *indexer) processBuildDoneNoCatchup(streamId common.StreamId,
+	keyspaceId string, sessionId uint64, flushTs *common.TsVbuuid) {
+
+	logging.Infof("Indexer::processBuildDoneNoCatchup %v %v %v", streamId, keyspaceId,
+		sessionId)
+
+	//get the list of indexes for this keyspaceId and stream in INITIAL state
+	var indexList []common.IndexInst
+	var instIdList []common.IndexInstId
+	var bucketUUIDList []string
+	for _, index := range idx.indexInstMap {
+		if index.Defn.KeyspaceId(index.Stream) == keyspaceId && index.Stream == streamId &&
+			index.State == common.INDEX_STATE_INITIAL {
+
+			index.State = common.INDEX_STATE_ACTIVE
+			index.Stream = common.MAINT_STREAM
+
+			indexList = append(indexList, index)
+			instIdList = append(instIdList, index.InstId)
+			bucketUUIDList = append(bucketUUIDList, index.Defn.BucketUUID)
+
+		}
+	}
+
+	if len(instIdList) == 0 {
+		logging.Infof("Indexer::processBuildDoneNoCatchup Empty IndexList %v %v. Nothing to do.",
+			streamId, keyspaceId)
+		return
+	}
+
+	//update the IndexInstMap
+	for _, index := range indexList {
+		idx.indexInstMap[index.InstId] = index
+	}
+
+	//send updated maps to all workers
+	msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
+
+	if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, nil); err != nil {
+		common.CrashOnError(err)
+	}
+
+	//update index state in metadata
+	if err := idx.updateMetaInfoForIndexList(instIdList, true, true, false, false, true, false, false, false, nil); err != nil {
+		common.CrashOnError(err)
+	}
+
+	// collect progress stats after initial is done or transition to catchup phase. This must be done
+	// after updating metaInfo.
+	idx.sendProgressStats()
+
+	respCh := make(MsgChannel)
+	stopCh := make(StopChannel)
+
+	cmd := &MsgStreamUpdate{mType: REMOVE_KEYSPACE_FROM_STREAM,
+		streamId:      streamId,
+		keyspaceId:    keyspaceId,
+		respCh:        respCh,
+		stopCh:        stopCh,
+		abortRecovery: true,
+		sessionId:     sessionId,
+	}
+
+	//send stream update to timekeeper
+	if resp := idx.sendStreamUpdateToWorker(cmd, idx.tkCmdCh, "Timekeeper"); resp.GetMsgType() != MSG_SUCCESS {
+		respErr := resp.(*MsgError).GetError()
+		common.CrashOnError(respErr.cause)
+	}
+
+	//send stream update to mutation manager
+	if resp := idx.sendStreamUpdateToWorker(cmd, idx.mutMgrCmdCh, "MutationMgr"); resp.GetMsgType() != MSG_SUCCESS {
+		respErr := resp.(*MsgError).GetError()
+		common.CrashOnError(respErr.cause)
+	}
+
+	//at this point, the stream is inactive in all sub-components, so the status
+	//can be set to inactive.
+	idx.setStreamKeyspaceIdState(streamId, keyspaceId, STREAM_INACTIVE)
+	idx.cleanupStreamKeyspaceIdState(streamId, keyspaceId)
+
+	clustAddr := idx.config["clusterAddr"].String()
+	bucket, _, _ := SplitKeyspaceId(keyspaceId)
+
+	reqLock := idx.acquireStreamRequestLock(keyspaceId, streamId)
+	go func(reqLock *kvRequest) {
+		defer idx.releaseStreamRequestLock(reqLock)
+		idx.waitStreamRequestLock(reqLock)
+		count := 0
+	retryloop:
+		for {
+			if !ValidateBucket(clustAddr, bucket, bucketUUIDList) {
+				logging.Errorf("Indexer::processBuildDoneNoCatchup Bucket Not Found "+
+					"For Stream %v KeyspaceId %v SessionId %v", streamId, keyspaceId, sessionId)
+				break retryloop
+			}
+			idx.sendMsgToKVSender(cmd)
+
+			if resp, ok := <-respCh; ok {
+
+				switch resp.GetMsgType() {
+
+				case MSG_SUCCESS:
+
+					idx.injectRandomDelay(10)
+
+					logging.Infof("Indexer::processBuildDoneNoCatchup Success Stream %v KeyspaceId %v "+
+						"SessionId %v", streamId, keyspaceId, sessionId)
+
+					idx.internalRecvCh <- &MsgTKInitBuildDone{
+						mType:      TK_INIT_BUILD_DONE_NO_CATCHUP_ACK,
+						streamId:   streamId,
+						keyspaceId: keyspaceId,
+						flushTs:    flushTs,
+						sessionId:  sessionId}
+					break retryloop
+
+				default:
+					//log and retry for all other responses
+					respErr := resp.(*MsgError).GetError()
+					count++
+
+					logging.Errorf("Indexer::processBuildDoneNoCatchup Stream %v KeyspaceId %v SessionId %v."+
+						"Error from Projector %v. Retrying %v.", streamId, keyspaceId, sessionId, respErr.cause, count)
+					time.Sleep(KV_RETRY_INTERVAL * time.Millisecond)
+				}
+			}
+		}
+	}(reqLock)
+
+}
+
+func (idx *indexer) handleBuildDoneNoCatchupAck(msg Message) {
+
+	streamId := msg.(*MsgTKInitBuildDone).GetStreamId()
+	keyspaceId := msg.(*MsgTKInitBuildDone).GetKeyspaceId()
+	flushTs := msg.(*MsgTKInitBuildDone).GetFlushTs()
+
+	logging.Infof("Indexer::handleBuildDoneNoCatchupAck %v %v", streamId, keyspaceId)
+
+	newStream := common.MAINT_STREAM
+	//MAINT_STREAM runs at bucket level
+	bucket, _, _ := SplitKeyspaceId(keyspaceId)
+	idx.prepareStreamKeyspaceIdForFreshStart(newStream, bucket)
+	sessionId := idx.genNextSessionId(newStream, bucket)
+
+	idx.setStreamKeyspaceIdState(newStream, bucket, STREAM_ACTIVE)
+	//TODO Collections veirfy async flag
+	idx.startKeyspaceIdStream(newStream, bucket, flushTs, nil, nil, false, false, sessionId)
+}
+
 func (idx *indexer) handleMergeStream(msg Message) {
 
-	bucket := msg.(*MsgTKMergeStream).GetBucket()
+	keyspaceId := msg.(*MsgTKMergeStream).GetKeyspaceId()
 	streamId := msg.(*MsgTKMergeStream).GetStreamId()
 	sessionId := msg.(*MsgTKMergeStream).GetSessionId()
 
-	if ok, currSid := idx.validateSessionId(streamId, bucket, sessionId, true); !ok {
-		logging.Infof("Indexer::handleMergeStream StreamId %v Bucket %v SessionId %v. "+
-			"Skipped. Current SessionId %v.", streamId, bucket, sessionId, currSid)
+	if ok, currSid := idx.validateSessionId(streamId, keyspaceId, sessionId, true); !ok {
+		logging.Infof("Indexer::handleMergeStream StreamId %v KeyspaceId %v SessionId %v. "+
+			"Skipped. Current SessionId %v.", streamId, keyspaceId, sessionId, currSid)
 		return
 	}
 
 	//skip processing stream merge for inactive or recovery streams.
-	state := idx.getStreamBucketState(streamId, bucket)
+	state := idx.getStreamKeyspaceIdState(streamId, keyspaceId)
 
 	if state == STREAM_INACTIVE ||
 		state == STREAM_PREPARE_RECOVERY ||
 		state == STREAM_RECOVERY {
 		logging.Infof("Indexer::handleMergeStream Skip MergeStream %v %v %v",
-			streamId, bucket, state)
+			streamId, keyspaceId, state)
 		return
-	}
-
-	//MAINT_STREAM should already be running for this bucket,
-	//as first index gets added to MAINT_STREAM always
-	if idx.checkBucketExistsInStream(bucket, common.MAINT_STREAM, true) == false {
-		logging.Fatalf("Indexer::handleMergeStream \n\tMAINT_STREAM not enabled for Bucket: %v ."+
-			"Cannot Process Merge Stream", bucket)
-		common.CrashOnError(ErrMaintStreamMissingBucket)
 	}
 
 	switch streamId {
@@ -4550,7 +4977,7 @@ func (idx *indexer) handleMergeStream(msg Message) {
 		idx.handleMergeInitStream(msg)
 
 	default:
-		logging.Fatalf("Indexer::handleMergeStream \n\tOnly INIT_STREAM can be merged "+
+		logging.Fatalf("Indexer::handleMergeStream Only INIT_STREAM can be merged "+
 			"to MAINT_STREAM. Found Stream: %v.", streamId)
 		common.CrashOnError(ErrInvalidStream)
 	}
@@ -4558,19 +4985,20 @@ func (idx *indexer) handleMergeStream(msg Message) {
 
 func (idx *indexer) handleMergeInitStream(msg Message) {
 
-	bucket := msg.(*MsgTKMergeStream).GetBucket()
+	keyspaceId := msg.(*MsgTKMergeStream).GetKeyspaceId()
 	streamId := msg.(*MsgTKMergeStream).GetStreamId()
+	mergeTs := msg.(*MsgTKMergeStream).GetMergeTS()
 
-	sessionId := idx.getCurrentSessionId(streamId, bucket)
+	sessionId := idx.getCurrentSessionId(streamId, keyspaceId)
 
-	logging.Infof("Indexer::handleMergeInitStream Bucket: %v Stream: %v SessionId: %v",
-		bucket, streamId, sessionId)
+	logging.Infof("Indexer::handleMergeInitStream keyspaceId: %v Stream: %v SessionId: %v",
+		keyspaceId, streamId, sessionId)
 
-	//get the list of indexes for this bucket in CATCHUP state
+	//get the list of indexes for this keyspaceId in CATCHUP state
 	var indexList []common.IndexInst
 	var bucketUUIDList []string
 	for _, index := range idx.indexInstMap {
-		if index.Defn.Bucket == bucket && index.Stream == streamId &&
+		if index.Defn.KeyspaceId(index.Stream) == keyspaceId && index.Stream == streamId &&
 			index.State == common.INDEX_STATE_CATCHUP {
 
 			index.State = common.INDEX_STATE_ACTIVE
@@ -4595,11 +5023,11 @@ func (idx *indexer) handleMergeInitStream(msg Message) {
 	respCh := make(MsgChannel)
 	stopCh := make(StopChannel)
 
-	//remove bucket from INIT_STREAM
+	//remove keyspaceId from INIT_STREAM
 	var cmd Message
-	cmd = &MsgStreamUpdate{mType: REMOVE_BUCKET_FROM_STREAM,
+	cmd = &MsgStreamUpdate{mType: REMOVE_KEYSPACE_FROM_STREAM,
 		streamId:      streamId,
-		bucket:        bucket,
+		keyspaceId:    keyspaceId,
 		respCh:        respCh,
 		stopCh:        stopCh,
 		abortRecovery: true,
@@ -4620,23 +5048,24 @@ func (idx *indexer) handleMergeInitStream(msg Message) {
 
 	//at this point, the stream is inactive in all sub-components, so the status
 	//can be set to inactive.
-	idx.setStreamBucketState(streamId, bucket, STREAM_INACTIVE)
-	idx.cleanupStreamBucketState(streamId, bucket)
+	idx.setStreamKeyspaceIdState(streamId, keyspaceId, STREAM_INACTIVE)
+	idx.cleanupStreamKeyspaceIdState(streamId, keyspaceId)
 
-	//enable flush for this bucket in MAINT_STREAM
+	//enable flush for this keyspaceId in MAINT_STREAM
+	bucket, _, _ := SplitKeyspaceId(keyspaceId)
 	idx.tkCmdCh <- &MsgTKToggleFlush{mType: TK_ENABLE_FLUSH,
-		streamId: common.MAINT_STREAM,
-		bucket:   bucket}
+		streamId:   common.MAINT_STREAM,
+		keyspaceId: bucket}
 	<-idx.tkCmdCh
 
 	//for cbq bridge, return response after merge is done and
 	//index is ready to query
 	if !idx.enableManager {
-		if clientCh, ok := idx.bucketCreateClientChMap[bucket]; ok {
+		if clientCh, ok := idx.keyspaceIdCreateClientChMap[keyspaceId]; ok {
 			if clientCh != nil {
 				clientCh <- &MsgSuccess{}
 			}
-			delete(idx.bucketCreateClientChMap, bucket)
+			delete(idx.keyspaceIdCreateClientChMap, keyspaceId)
 		}
 	} else {
 		var instIdList []common.IndexInstId
@@ -4650,9 +5079,9 @@ func (idx *indexer) handleMergeInitStream(msg Message) {
 		}
 	}
 
-	idx.setStreamBucketCurrRequest(streamId, bucket, cmd, stopCh, sessionId)
+	idx.setStreamKeyspaceIdCurrRequest(streamId, keyspaceId, cmd, stopCh, sessionId)
 
-	reqLock := idx.acquireStreamRequestLock(bucket, streamId)
+	reqLock := idx.acquireStreamRequestLock(keyspaceId, streamId)
 	go func(reqLock *kvRequest) {
 		defer idx.releaseStreamRequestLock(reqLock)
 		idx.waitStreamRequestLock(reqLock)
@@ -4669,44 +5098,42 @@ func (idx *indexer) handleMergeInitStream(msg Message) {
 
 					idx.injectRandomDelay(10)
 
-					logging.Infof("Indexer::handleMergeInitStream Success Stream %v Bucket %v "+
-						"SessionId %v", streamId, bucket, sessionId)
+					logging.Infof("Indexer::handleMergeInitStream Success Stream %v KeyspaceId %v "+
+						"SessionId %v", streamId, keyspaceId, sessionId)
 					idx.internalRecvCh <- &MsgTKMergeStream{
-						mType:     TK_MERGE_STREAM_ACK,
-						streamId:  streamId,
-						bucket:    bucket,
-						mergeList: indexList,
-						sessionId: sessionId,
-						reqCh:     stopCh}
+						mType:      TK_MERGE_STREAM_ACK,
+						streamId:   streamId,
+						keyspaceId: keyspaceId,
+						mergeTs:    mergeTs,
+						mergeList:  indexList,
+						sessionId:  sessionId,
+						reqCh:      stopCh}
 					break retryloop
 
 				default:
 					//log and retry for all other responses
 					respErr := resp.(*MsgError).GetError()
-					logging.Errorf("Indexer::handleMergeInitStream Stream %v Bucket %v SessionId %v"+
-						"Error from Projector %v. Retrying.", streamId, bucket, sessionId, respErr.cause)
+					logging.Errorf("Indexer::handleMergeInitStream Stream %v KeyspaceId %v SessionId %v"+
+						"Error from Projector %v. Retrying.", streamId, keyspaceId, sessionId, respErr.cause)
 					time.Sleep(KV_RETRY_INTERVAL * time.Millisecond)
 				}
 			}
 		}
 	}(reqLock)
 
-	logging.Infof("Indexer::handleMergeInitStream Merge Done Bucket: %v Stream: %v SessionId %v",
-		bucket, streamId, sessionId)
+	logging.Infof("Indexer::handleMergeInitStream Merge Done KeyspaceId: %v Stream: %v SessionId %v",
+		keyspaceId, streamId, sessionId)
 
-	// On a successful merge, clean-up instances in MAINT_STREAM that are in state
-	// INDEX_STATE_DELETED
-	idx.cleanupMaintStream(bucket)
 }
 
 // cleanupMaintStream cleanes up all the instances in MAINT_STREAM which are in state
 // INDEX_STATE_DELETED when INIT_STREAM is in state STREAM_INACTIVE
-func (idx *indexer) cleanupMaintStream(bucket string) {
-	if idx.getStreamBucketState(common.INIT_STREAM, bucket) != STREAM_INACTIVE {
+func (idx *indexer) cleanupMaintStream(keyspaceId string) {
+	if idx.getStreamKeyspaceIdState(common.INIT_STREAM, keyspaceId) != STREAM_INACTIVE {
 		return
 	}
 
-	maintStreamInstList := idx.getIndexListForBucketAndStream(common.MAINT_STREAM, bucket)
+	maintStreamInstList := idx.getIndexListForKeyspaceIdAndStream(common.MAINT_STREAM, keyspaceId)
 	var cleanupInstList []common.IndexInst
 
 	for _, maintStreamInst := range maintStreamInstList {
@@ -4721,16 +5148,16 @@ func (idx *indexer) cleanupMaintStream(bucket string) {
 	}
 }
 
-//checkBucketExistsInStream returns true if there is no index in the given stream
-//which belongs to the given bucket, else false
-func (idx *indexer) checkBucketExistsInStream(bucket string, streamId common.StreamId, checkDelete bool) bool {
+//checkKeyspaceIdExistsInStream returns true if there is no index in the given stream
+//which belongs to the given keyspaceId, else false
+func (idx *indexer) checkKeyspaceIdExistsInStream(keyspaceId string, streamId common.StreamId, checkDelete bool) bool {
 
-	//check if any index of the given bucket is in the Stream
+	//check if any index of the given keyspaceId is in the Stream
 	for _, index := range idx.indexInstMap {
 
 		// use checkDelete to verify index in DELETED status.   If an index is dropped while
 		// there is concurrent build, the stream will not be cleaned up.
-		if index.Defn.Bucket == bucket && index.Stream == streamId &&
+		if index.Defn.KeyspaceId(index.Stream) == keyspaceId && index.Stream == streamId &&
 			(index.State == common.INDEX_STATE_ACTIVE ||
 				index.State == common.INDEX_STATE_CATCHUP ||
 				index.State == common.INDEX_STATE_INITIAL ||
@@ -4743,13 +5170,13 @@ func (idx *indexer) checkBucketExistsInStream(bucket string, streamId common.Str
 
 }
 
-//checkLastBucketInStream returns true if the given bucket is the only bucket
+//checkLastKeyspaceIdInStream returns true if the given keyspaceId is the only keyspaceId
 //active in the given stream, else false
-func (idx *indexer) checkLastBucketInStream(bucket string, streamId common.StreamId) bool {
+func (idx *indexer) checkLastKeyspaceIdInStream(keyspaceId string, streamId common.StreamId) bool {
 
 	for _, index := range idx.indexInstMap {
 
-		if index.Defn.Bucket != bucket && index.Stream == streamId &&
+		if index.Defn.KeyspaceId(index.Stream) != keyspaceId && index.Stream == streamId &&
 			(index.State == common.INDEX_STATE_ACTIVE ||
 				index.State == common.INDEX_STATE_CATCHUP ||
 				index.State == common.INDEX_STATE_INITIAL) {
@@ -4778,13 +5205,13 @@ func (idx *indexer) checkStreamEmpty(streamId common.StreamId) bool {
 
 }
 
-func (idx *indexer) getIndexListForBucketAndStream(streamId common.StreamId,
-	bucket string) []common.IndexInst {
+func (idx *indexer) getIndexListForKeyspaceIdAndStream(streamId common.StreamId,
+	keyspaceId string) []common.IndexInst {
 
 	indexList := make([]common.IndexInst, 0)
 	for _, idx := range idx.indexInstMap {
 
-		if idx.Stream == streamId && idx.Defn.Bucket == bucket {
+		if idx.Stream == streamId && idx.Defn.KeyspaceId(idx.Stream) == keyspaceId {
 
 			indexList = append(indexList, idx)
 
@@ -4795,21 +5222,21 @@ func (idx *indexer) getIndexListForBucketAndStream(streamId common.StreamId,
 
 }
 
-func (idx *indexer) stopBucketStream(streamId common.StreamId, bucket string) {
+func (idx *indexer) stopKeyspaceIdStream(streamId common.StreamId, keyspaceId string) {
 
-	sessionId := idx.getCurrentSessionId(streamId, bucket)
+	sessionId := idx.getCurrentSessionId(streamId, keyspaceId)
 
-	logging.Infof("Indexer::stopBucketStream Stream: %v Bucket %v SessionId %v",
-		streamId, bucket, sessionId)
+	logging.Infof("Indexer::stopKeyspaceIdStream Stream: %v KeyspaceId %v SessionId %v",
+		streamId, keyspaceId, sessionId)
 
-	idx.merged = idx.removePendingStreamUpdate(idx.merged, streamId, bucket)
-	idx.pruned = idx.removePendingStreamUpdate(idx.pruned, streamId, bucket)
+	idx.merged = idx.removePendingStreamUpdate(idx.merged, streamId, keyspaceId)
+	idx.pruned = idx.removePendingStreamUpdate(idx.pruned, streamId, keyspaceId)
 
 	//if the stream is inactive(e.g. all indexes get dropped)
-	if idx.getStreamBucketState(streamId, bucket) == STREAM_INACTIVE {
-		logging.Infof("Indexer::stopBucketStream StreamId %v Bucket %v State %v. "+
-			"Skip StopBucketStream.", streamId, bucket, idx.getStreamBucketState(streamId, bucket))
-		idx.cleanupStreamBucketState(streamId, bucket)
+	if idx.getStreamKeyspaceIdState(streamId, keyspaceId) == STREAM_INACTIVE {
+		logging.Infof("Indexer::stopKeyspaceIdStream StreamId %v KeyspaceId %v State %v. "+
+			"Skip StopKeyspaceIdStream.", streamId, keyspaceId, idx.getStreamKeyspaceIdState(streamId, keyspaceId))
+		idx.cleanupStreamKeyspaceIdState(streamId, keyspaceId)
 		return
 	}
 
@@ -4817,12 +5244,12 @@ func (idx *indexer) stopBucketStream(streamId common.StreamId, bucket string) {
 	stopCh := make(StopChannel)
 
 	var cmd Message
-	cmd = &MsgStreamUpdate{mType: REMOVE_BUCKET_FROM_STREAM,
-		streamId:  streamId,
-		bucket:    bucket,
-		respCh:    respCh,
-		stopCh:    stopCh,
-		sessionId: sessionId}
+	cmd = &MsgStreamUpdate{mType: REMOVE_KEYSPACE_FROM_STREAM,
+		streamId:   streamId,
+		keyspaceId: keyspaceId,
+		respCh:     respCh,
+		stopCh:     stopCh,
+		sessionId:  sessionId}
 
 	//send stream update to mutation manager
 	if resp := idx.sendStreamUpdateToWorker(cmd, idx.mutMgrCmdCh,
@@ -4838,9 +5265,9 @@ func (idx *indexer) stopBucketStream(streamId common.StreamId, bucket string) {
 		common.CrashOnError(respErr.cause)
 	}
 
-	idx.setStreamBucketCurrRequest(streamId, bucket, cmd, stopCh, sessionId)
+	idx.setStreamKeyspaceIdCurrRequest(streamId, keyspaceId, cmd, stopCh, sessionId)
 
-	reqLock := idx.acquireStreamRequestLock(bucket, streamId)
+	reqLock := idx.acquireStreamRequestLock(keyspaceId, streamId)
 	go func(reqLock *kvRequest) {
 		defer idx.releaseStreamRequestLock(reqLock)
 		idx.waitStreamRequestLock(reqLock)
@@ -4855,21 +5282,21 @@ func (idx *indexer) stopBucketStream(streamId common.StreamId, bucket string) {
 
 				case MSG_SUCCESS:
 					idx.injectRandomDelay(10)
-					logging.Infof("Indexer::stopBucketStream Success Stream %v Bucket %v "+
-						"SessionId %v", streamId, bucket, sessionId)
+					logging.Infof("Indexer::stopKeyspaceIdStream Success Stream %v KeyspaceId %v "+
+						"SessionId %v", streamId, keyspaceId, sessionId)
 					idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_PREPARE_DONE,
-						streamId:  streamId,
-						bucket:    bucket,
-						sessionId: sessionId,
-						requestCh: stopCh}
+						streamId:   streamId,
+						keyspaceId: keyspaceId,
+						sessionId:  sessionId,
+						requestCh:  stopCh}
 					break retryloop
 
 				default:
 					//log and retry for all other responses
 					respErr := resp.(*MsgError).GetError()
-					logging.Errorf("Indexer::stopBucketStream Stream %v Bucket %v "+
+					logging.Errorf("Indexer::stopKeyspaceIdStream Stream %v KeyspaceId %v "+
 						"SessionId %v. Error from Projector %v. Retrying.", streamId,
-						bucket, sessionId, respErr.cause)
+						keyspaceId, sessionId, respErr.cause)
 					time.Sleep(KV_RETRY_INTERVAL * time.Millisecond)
 
 				}
@@ -4878,15 +5305,15 @@ func (idx *indexer) stopBucketStream(streamId common.StreamId, bucket string) {
 	}(reqLock)
 }
 
-func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
+func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId string,
 	restartTs *common.TsVbuuid, retryTs *common.TsVbuuid, allNilSnapsOnWarmup map[string]bool,
 	inRepair bool, async bool, sessionId uint64) {
 
-	logging.Infof("Indexer::startBucketStream Stream: %v Bucket: %v SessionId %v RestartTS %v",
-		streamId, bucket, sessionId, restartTs)
+	logging.Infof("Indexer::startKeyspaceIdStream Stream: %v KeyspaceId: %v SessionId %v RestartTS %v",
+		streamId, keyspaceId, sessionId, restartTs)
 
-	idx.merged = idx.removePendingStreamUpdate(idx.merged, streamId, bucket)
-	idx.pruned = idx.removePendingStreamUpdate(idx.pruned, streamId, bucket)
+	idx.merged = idx.removePendingStreamUpdate(idx.merged, streamId, keyspaceId)
+	idx.pruned = idx.removePendingStreamUpdate(idx.pruned, streamId, keyspaceId)
 
 	var indexList []common.IndexInst
 	var bucketUUIDList []string
@@ -4897,10 +5324,9 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 
 		for _, indexInst := range idx.indexInstMap {
 
-			if indexInst.Defn.Bucket == bucket {
+			if indexInst.Defn.KeyspaceId(indexInst.Stream) == keyspaceId {
 				switch indexInst.State {
-				case common.INDEX_STATE_ACTIVE,
-					common.INDEX_STATE_INITIAL:
+				case common.INDEX_STATE_ACTIVE:
 					if indexInst.Stream == streamId {
 						indexList = append(indexList, indexInst)
 						bucketUUIDList = append(bucketUUIDList, indexInst.Defn.BucketUUID)
@@ -4915,7 +5341,7 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 	case common.INIT_STREAM:
 
 		for _, indexInst := range idx.indexInstMap {
-			if indexInst.Defn.Bucket == bucket &&
+			if indexInst.Defn.KeyspaceId(indexInst.Stream) == keyspaceId &&
 				indexInst.Stream == streamId {
 				switch indexInst.State {
 				case common.INDEX_STATE_INITIAL,
@@ -4927,15 +5353,16 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 		}
 
 	default:
-		logging.Fatalf("Indexer::startBucketStream \n\t Unsupported StreamId %v", streamId)
+		logging.Fatalf("Indexer::startKeyspaceIdStream Unsupported StreamId %v", streamId)
 		common.CrashOnError(ErrInvalidStream)
 
 	}
 
 	if len(indexList) == 0 {
-		logging.Infof("Indexer::startBucketStream Nothing to Start. Stream: %v Bucket: %v",
-			streamId, bucket)
-		idx.setStreamBucketState(streamId, bucket, STREAM_INACTIVE)
+		logging.Infof("Indexer::startKeyspaceIdStream Nothing to Start. Stream: %v KeyspaceId: %v",
+			streamId, keyspaceId)
+		idx.setStreamKeyspaceIdState(streamId, keyspaceId, STREAM_INACTIVE)
+		//TODO Collections add safety check if pendBuildDone exists
 		return
 	}
 
@@ -4944,41 +5371,61 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 
 	//allow first snap optimization when restarting from 0.
 	//this cannot be done when warming up if some indexes have nil snapshots
-	//in a bucket while others don't
+	//in a keyspaceId while others don't
 	allowMarkFirstSnap := false
 	if restartTs == nil {
-		if allNilSnapsOnWarmup == nil || (allNilSnapsOnWarmup != nil && allNilSnapsOnWarmup[bucket] == true) {
+		if allNilSnapsOnWarmup == nil || (allNilSnapsOnWarmup != nil && allNilSnapsOnWarmup[keyspaceId] == true) {
 			allowMarkFirstSnap = true
 		}
 	}
 
-	bucketInRecovery := false
-	if idx.getStreamBucketState(streamId, bucket) == STREAM_RECOVERY {
-		bucketInRecovery = true
+	keyspaceInRecovery := false
+	if idx.getStreamKeyspaceIdState(streamId, keyspaceId) == STREAM_RECOVERY {
+		keyspaceInRecovery = true
 	}
 
 	clustAddr := idx.config["clusterAddr"].String()
 	numVb := idx.config["numVbuckets"].Int()
 	enableAsync := idx.config["enableAsyncOpenStream"].Bool()
 
+	var clusterVer uint64
 	if !inRepair {
-		async = enableAsync && idx.clusterInfoClient.ClusterVersion() >= common.INDEXER_65_VERSION
+		clusterVer = idx.clusterInfoClient.ClusterVersion()
+		async = enableAsync && clusterVer >= common.INDEXER_65_VERSION
 	}
 
-	//diable first snapshot optimization when recovering indexes as
-	//plasma cannot deal with duplicate inserts
+	var cid string
+	var ok bool
+	if cid, ok = idx.streamKeyspaceIdCollectionId[streamId][keyspaceId]; !ok {
+		//if the cid has not been set e.g. in warmup, set it from the first index
+		if clusterVer == 0 {
+			clusterVer = clusterVersion(clustAddr)
+		}
+		//get cid of any index and determine if it needs to be used
+		cid = indexList[0].Defn.CollectionId
+		cid = idx.makeCollectionIdForStreamRequest(streamId, keyspaceId, cid, clusterVer)
+		idx.streamKeyspaceIdCollectionId[streamId][keyspaceId] = cid
+	}
+
+	var collectionAware bool
+	if clusterVer >= common.INDEXER_70_VERSION {
+		collectionAware = true
+	}
+
 	cmd := &MsgStreamUpdate{mType: OPEN_STREAM,
 		streamId:           streamId,
-		bucket:             bucket,
+		keyspaceId:         keyspaceId,
 		indexList:          indexList,
 		restartTs:          restartTs,
 		respCh:             respCh,
 		stopCh:             stopCh,
 		allowMarkFirstSnap: allowMarkFirstSnap,
-		rollbackTime:       idx.bucketRollbackTimes[bucket],
-		bucketInRecovery:   bucketInRecovery,
+		rollbackTime:       idx.keyspaceIdRollbackTimes[keyspaceId],
+		keyspaceInRecovery: keyspaceInRecovery,
 		async:              async,
-		sessionId:          sessionId}
+		sessionId:          sessionId,
+		collectionId:       cid,
+		collectionAware:    collectionAware}
 
 	//send stream update to timekeeper
 	if resp := idx.sendStreamUpdateToWorker(cmd, idx.tkCmdCh,
@@ -4994,10 +5441,12 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 		common.CrashOnError(respErr.cause)
 	}
 
-	idx.initBuildTsLock(streamId, bucket)
-	idx.setStreamBucketCurrRequest(streamId, bucket, cmd, stopCh, sessionId)
+	idx.initBuildTsLock(streamId, keyspaceId)
+	idx.setStreamKeyspaceIdCurrRequest(streamId, keyspaceId, cmd, stopCh, sessionId)
 
-	reqLock := idx.acquireStreamRequestLock(bucket, streamId)
+	bucket, _, _ := SplitKeyspaceId(keyspaceId)
+
+	reqLock := idx.acquireStreamRequestLock(keyspaceId, streamId)
 	go func(reqLock *kvRequest) {
 		defer idx.releaseStreamRequestLock(reqLock)
 		idx.waitStreamRequestLock(reqLock)
@@ -5006,13 +5455,13 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 		for {
 			//validate bucket before every try
 			if !idx.clusterInfoClient.ValidateBucket(bucket, bucketUUIDList) {
-				logging.Errorf("Indexer::startBucketStream \n\tBucket Not Found "+
-					"For Stream %v Bucket %v SessionId %v", streamId, bucket, sessionId)
+				logging.Errorf("Indexer::startKeyspaceIdStream Bucket Not Found "+
+					"For Stream %v KeyspaceId %v SessionId %v", streamId, keyspaceId, sessionId)
 				idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_BUCKET_NOT_FOUND,
-					streamId:  streamId,
-					bucket:    bucket,
-					inMTR:     true,
-					sessionId: sessionId}
+					streamId:   streamId,
+					keyspaceId: keyspaceId,
+					inMTR:      true,
+					sessionId:  sessionId}
 				break retryloop
 			}
 
@@ -5026,40 +5475,42 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 
 					idx.injectRandomDelay(10)
 
-					logging.Infof("Indexer::startBucketStream Success "+
-						"Stream %v Bucket %v SessionId %v", streamId, bucket, sessionId)
+					logging.Infof("Indexer::startKeyspaceIdStream Success "+
+						"Stream %v KeyspaceId %v Cid %v SessionId %v", streamId, keyspaceId, cid, sessionId)
 
 					//once stream request is successful re-calculate the KV timestamp.
 					//This makes sure indexer doesn't use a timestamp which can never
 					//be caught up to (due to kv rollback).
 					//if there is a failover after this, it will be observed as a rollback
 
-					// Asyncronously compute the KV timestamp
-					go idx.computeBucketBuildTsAsync(clustAddr, bucket, numVb, streamId)
+					if streamId == common.INIT_STREAM {
+						// Asyncronously compute the KV timestamp
+						go idx.computeKeyspaceBuildTsAsync(clustAddr, keyspaceId, cid, numVb, streamId)
+					}
 
 					idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_RECOVERY_DONE,
-						streamId:  streamId,
-						bucket:    bucket,
-						restartTs: restartTs,
-						activeTs:  resp.(*MsgSuccessOpenStream).GetActiveTs(),
-						pendingTs: resp.(*MsgSuccessOpenStream).GetPendingTs(),
-						sessionId: sessionId,
-						requestCh: stopCh,
+						streamId:   streamId,
+						keyspaceId: keyspaceId,
+						restartTs:  restartTs,
+						activeTs:   resp.(*MsgSuccessOpenStream).GetActiveTs(),
+						pendingTs:  resp.(*MsgSuccessOpenStream).GetPendingTs(),
+						sessionId:  sessionId,
+						requestCh:  stopCh,
 					}
 					break retryloop
 
 				case INDEXER_ROLLBACK:
-					logging.Infof("Indexer::startBucketStream Rollback from "+
-						"Projector For Stream %v Bucket %v SessionId %v", streamId,
-						bucket, sessionId)
+					logging.Infof("Indexer::startKeyspaceIdStream Rollback from "+
+						"Projector For Stream %v KeyspaceId %v SessionId %v", streamId,
+						keyspaceId, sessionId)
 					rollbackTs := resp.(*MsgRollback).GetRollbackTs()
 					idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_INIT_PREP_RECOVERY,
-						streamId:  streamId,
-						bucket:    bucket,
-						restartTs: rollbackTs,
-						retryTs:   retryTs,
-						requestCh: stopCh,
-						sessionId: sessionId}
+						streamId:   streamId,
+						keyspaceId: keyspaceId,
+						restartTs:  rollbackTs,
+						retryTs:    retryTs,
+						requestCh:  stopCh,
+						sessionId:  sessionId}
 					break retryloop
 
 				default:
@@ -5067,40 +5518,40 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 					respErr := resp.(*MsgError).GetError()
 					count++
 
-					state := idx.getStreamBucketState(streamId, bucket)
+					state := idx.getStreamKeyspaceIdState(streamId, keyspaceId)
 
 					if state == STREAM_PREPARE_RECOVERY || state == STREAM_INACTIVE {
-						logging.Errorf("Indexer::startBucketStream Stream %v Bucket %v SessionId %v "+
-							"Error from Projector %v. Not Retrying. State %v", streamId, bucket,
+						logging.Errorf("Indexer::startKeyspaceIdStream Stream %v KeyspaceId %v SessionId %v "+
+							"Error from Projector %v. Not Retrying. State %v", streamId, keyspaceId,
 							sessionId, respErr.cause, state)
 
 						idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_MTR_FAIL,
-							streamId:  streamId,
-							bucket:    bucket,
-							inMTR:     true,
-							requestCh: stopCh,
-							sessionId: sessionId}
+							streamId:   streamId,
+							keyspaceId: keyspaceId,
+							inMTR:      true,
+							requestCh:  stopCh,
+							sessionId:  sessionId}
 
 						break retryloop
 
 					} else if count > MAX_PROJ_RETRY {
 						// Start recovery if max retries has reached..  If the projector
 						// state is not correct, this ensures projector state will get cleaned up.
-						logging.Errorf("Indexer::startBucketStream Stream %v Bucket %v SessionId %v. "+
+						logging.Errorf("Indexer::startKeyspaceIdStream Stream %v KeyspaceId %v SessionId %v. "+
 							"Error from Projector %v. Start recovery after %v retries.", streamId,
-							bucket, sessionId, respErr.cause, MAX_PROJ_RETRY)
+							keyspaceId, sessionId, respErr.cause, MAX_PROJ_RETRY)
 
 						idx.internalRecvCh <- &MsgRecovery{
-							mType:     INDEXER_INIT_PREP_RECOVERY,
-							streamId:  streamId,
-							bucket:    bucket,
-							requestCh: stopCh,
-							sessionId: sessionId,
+							mType:      INDEXER_INIT_PREP_RECOVERY,
+							streamId:   streamId,
+							keyspaceId: keyspaceId,
+							requestCh:  stopCh,
+							sessionId:  sessionId,
 						}
 						break retryloop
 					} else {
-						logging.Errorf("Indexer::startBucketStream Stream %v Bucket %v "+
-							"SessionId %v. Error from Projector %v. Retrying %v.", streamId, bucket,
+						logging.Errorf("Indexer::startKeyspaceIdStream Stream %v KeyspaceId %v "+
+							"SessionId %v. Error from Projector %v. Retrying %v.", streamId, keyspaceId,
 							sessionId, respErr.cause, count)
 						time.Sleep(KV_RETRY_INTERVAL * time.Millisecond)
 					}
@@ -5111,17 +5562,17 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 }
 
 func (idx *indexer) processRollback(streamId common.StreamId,
-	bucket string, rollbackTs *common.TsVbuuid, sessionId uint64) {
+	keyspaceId string, rollbackTs *common.TsVbuuid, sessionId uint64) {
 
 	if streamId == common.MAINT_STREAM {
-		idx.bucketRollbackTimes[bucket] = time.Now().UnixNano()
+		idx.keyspaceIdRollbackTimes[keyspaceId] = time.Now().UnixNano()
 	}
 
 	//send to storage manager to rollback
 	msg := &MsgRollback{streamId: streamId,
-		bucket:       bucket,
+		keyspaceId:   keyspaceId,
 		rollbackTs:   rollbackTs,
-		rollbackTime: idx.bucketRollbackTimes[bucket],
+		rollbackTime: idx.keyspaceIdRollbackTimes[keyspaceId],
 		sessionId:    sessionId}
 
 	if streamId == common.MAINT_STREAM {
@@ -5138,31 +5589,54 @@ func (idx *indexer) processRollback(streamId common.StreamId,
 func (idx *indexer) initStreamFlushMap() {
 
 	for i := 0; i < int(common.ALL_STREAMS); i++ {
-		idx.streamBucketFlushInProgress[common.StreamId(i)] = make(BucketFlushInProgressMap)
-		idx.streamBucketObserveFlushDone[common.StreamId(i)] = make(BucketObserveFlushDoneMap)
+		idx.streamKeyspaceIdFlushInProgress[common.StreamId(i)] = make(KeyspaceIdFlushInProgressMap)
+		idx.streamKeyspaceIdObserveFlushDone[common.StreamId(i)] = make(KeyspaceIdObserveFlushDoneMap)
 	}
 }
 
 func (idx *indexer) initStreamSessionIdMap() {
 
 	for i := 0; i < int(common.ALL_STREAMS); i++ {
-		idx.streamBucketSessionId[common.StreamId(i)] = make(map[string]uint64)
-		idx.streamBucketSessionId[common.StreamId(i)] = make(map[string]uint64)
+		idx.streamKeyspaceIdSessionId[common.StreamId(i)] = make(map[string]uint64)
+	}
+}
+
+func (idx *indexer) initStreamPendBuildDone() {
+
+	for i := 0; i < int(common.ALL_STREAMS); i++ {
+		idx.streamKeyspaceIdPendBuildDone[common.StreamId(i)] = make(map[string]*buildDoneSpec)
+	}
+}
+
+func (idx *indexer) initStreamCollectionIdMap() {
+
+	for i := 0; i < int(common.ALL_STREAMS); i++ {
+		idx.streamKeyspaceIdCollectionId[common.StreamId(i)] = make(map[string]string)
 	}
 }
 
 func (idx *indexer) notifyFlushObserver(msg Message) {
 
 	//if there is any observer for flush, notify
-	bucket := msg.(*MsgMutMgrFlushDone).GetBucket()
+	keyspaceId := msg.(*MsgMutMgrFlushDone).GetKeyspaceId()
 	streamId := msg.(*MsgMutMgrFlushDone).GetStreamId()
 
-	if notifyCh, ok := idx.streamBucketObserveFlushDone[streamId][bucket]; ok {
+	if notifyCh, ok := idx.streamKeyspaceIdObserveFlushDone[streamId][keyspaceId]; ok {
 		if notifyCh != nil {
 			notifyCh <- msg
 			//wait for a sync response that cleanup is done.
 			//notification is sent one by one as there is no lock
 			<-notifyCh
+		}
+	}
+
+	if streamId == common.INIT_STREAM {
+		if notifyCh, ok := idx.keyspaceIdObserveFlushDoneForReset[keyspaceId]; ok {
+			if notifyCh != nil {
+				notifyCh <- msg
+				//wait for a sync response that reset is done.
+				<-notifyCh
+			}
 		}
 	}
 	return
@@ -5177,8 +5651,8 @@ func (idx *indexer) processDropAfterFlushDone(indexInst common.IndexInst,
 	}
 
 	streamId := indexInst.Stream
-	bucket := indexInst.Defn.Bucket
-	idx.streamBucketObserveFlushDone[streamId][bucket] = nil
+	keyspaceId := indexInst.Defn.KeyspaceId(streamId)
+	idx.streamKeyspaceIdObserveFlushDone[streamId][keyspaceId] = nil
 
 	//indicate done
 	close(notifyCh)
@@ -5187,11 +5661,11 @@ func (idx *indexer) processDropAfterFlushDone(indexInst common.IndexInst,
 func (idx *indexer) checkDuplicateDropRequest(indexInst common.IndexInst,
 	respCh MsgChannel) bool {
 
-	//if there is any observer for flush done for this stream/bucket,
+	//if there is any observer for flush done for this stream/keyspaceId,
 	//drop is already in progress
 	stream := indexInst.Stream
-	bucket := indexInst.Defn.Bucket
-	if obs, ok := idx.streamBucketObserveFlushDone[stream][bucket]; ok && obs != nil {
+	keyspaceId := indexInst.Defn.KeyspaceId(stream)
+	if obs, ok := idx.streamKeyspaceIdObserveFlushDone[stream][keyspaceId]; ok && obs != nil {
 
 		errStr := "Index Drop Already In Progress."
 
@@ -5256,6 +5730,7 @@ func (idx *indexer) bootstrap1(snapshotNotifych chan IndexSnapshot) error {
 		//Recover indexes from local metadata.
 		err := idx.initFromPersistedState()
 		if err != nil {
+			//sending error will cause indexer to restart
 			idx.internalRecvCh <- &MsgStorageWarmupDone{err: err, needsRestart: needsRestart}
 			return
 		}
@@ -5264,6 +5739,60 @@ func (idx *indexer) bootstrap1(snapshotNotifych chan IndexSnapshot) error {
 	}()
 
 	return nil
+
+}
+
+//if any index in MAINT_STREAM has nil snapshot, it needs
+//to be reset. The index was able to clear its snapshot
+//on rollback but couldn't reset the metadata before crash.
+//index disk snapshot is created for every index before
+//moving to active state.
+func (idx *indexer) findAndResetEmptySnapshotIndex() {
+
+	for instId, index := range idx.indexInstMap {
+
+		if index.Stream == common.MAINT_STREAM &&
+			index.State != common.INDEX_STATE_DELETED {
+
+			//ignore proxy instances as rebalancer will clean those up
+			if common.IsPartitioned(index.Defn.PartitionScheme) && index.RealInstId != 0 {
+				continue
+			}
+
+			anyPartnNonNil := false
+			anyPartnNil := false
+			if partnMap, ok := idx.indexPartnMap[instId]; ok {
+
+				for _, partnInst := range partnMap {
+
+					sc := partnInst.Sc
+
+					//there is only one slice for now
+					slice := sc.GetSliceById(0)
+
+					infos, err := slice.GetSnapshots()
+					// TODO: Proper error handling if possible
+					if err != nil {
+						panic("Unable read snapinfo -" + err.Error())
+					}
+
+					s := NewSnapshotInfoContainer(infos)
+					latestSnapInfo := s.GetLatest()
+					if latestSnapInfo != nil {
+						anyPartnNonNil = true
+					} else {
+						anyPartnNil = true
+					}
+				}
+			}
+
+			//if all partns are nil
+			if anyPartnNil && !anyPartnNonNil {
+				idx.resetSingleIndexOnRollback(&index, nil)
+				idx.indexInstMap[instId] = index
+			}
+		}
+	}
 
 }
 
@@ -5355,6 +5884,10 @@ func (idx *indexer) handleStorageWarmupDone(msg Message) {
 		idx.stats.needsRestart.Set(true)
 	}
 
+	//any index with nil snapshot should be moved to INIT_STREAM
+	//TODO optimize for case where keyspace has 0 documents
+	idx.findAndResetEmptySnapshotIndex()
+
 	//send updated maps
 	msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
 	msgUpdateIndexPartnMap := &MsgUpdatePartnMap{indexPartnMap: idx.indexPartnMap}
@@ -5374,7 +5907,7 @@ func (idx *indexer) handleStorageWarmupDone(msg Message) {
 		idx.stats.indexerState.Set(int64(common.INDEXER_ACTIVE))
 	}
 
-	idx.scanCoordCmdCh <- &MsgIndexerState{mType: INDEXER_RESUME, rollbackTimes: idx.bucketRollbackTimes}
+	idx.scanCoordCmdCh <- &MsgIndexerState{mType: INDEXER_RESUME, rollbackTimes: idx.keyspaceIdRollbackTimes}
 	<-idx.scanCoordCmdCh
 
 	// Persist node uuid in Metadata store
@@ -5564,21 +6097,21 @@ func (idx *indexer) handleUpdateMapToWorker(msg Message) {
 }
 
 func (idx *indexer) handleUpdateBuildTs(msg Message) {
-	bucket := msg.(*MsgStreamUpdate).GetBucket()
+	keyspaceId := msg.(*MsgStreamUpdate).GetKeyspaceId()
 	buildTs := msg.(*MsgStreamUpdate).GetTimestamp()
 	streamId := msg.(*MsgStreamUpdate).GetStreamId()
 
 	if buildTs != nil {
-		idx.bucketBuildTs[bucket] = buildTs
+		idx.keyspaceIdBuildTs[keyspaceId] = buildTs
 
-		streamState := idx.getStreamBucketState(streamId, bucket)
+		streamState := idx.getStreamKeyspaceIdState(streamId, keyspaceId)
 		if streamState != STREAM_INACTIVE {
 			// Update timekeeper with buildTs
 			idx.tkCmdCh <- msg
 			<-idx.tkCmdCh
 		} else {
-			logging.Infof("Indexer::handleUpdateBuildTs Skiping updateBuildTs message to "+
-				"timekeeper as stream: %v is in state: %v for bucket: %v", streamId, streamState, bucket)
+			logging.Infof("Indexer::handleUpdateBuildTs Skipping updateBuildTs message to "+
+				"timekeeper as stream: %v is in state: %v for keyspaceId: %v", streamId, streamState, keyspaceId)
 		}
 	}
 }
@@ -5693,7 +6226,7 @@ func (idx *indexer) initFromPersistedState() error {
 			idx.forceCleanupIndexPartition(&inst, failedPartnId, failedPartnInstance)
 			logging.Infof("Indexer::initFromPersistedState Done cleanup for %v", failedPartnInstance)
 
-			logMsg = "Cleaup done for index %v, partition id %v."
+			logMsg = "Cleanup done for index %v, partition id %v."
 			common.Console(idx.config["clusterAddr"].String(), logMsg, inst.Defn.Name, failedPartnId)
 		}
 
@@ -5723,7 +6256,8 @@ func (idx *indexer) initFromPersistedState() error {
 			idxInst:   inst,
 			partnMap:  partnInstMap,
 			streamId:  common.ALL_STREAMS,
-			bucket:    "",
+			//TODO Collections verify this will work
+			keyspaceId: "",
 		}
 
 		//update index maps in scan coordinator
@@ -6104,7 +6638,7 @@ func (idx *indexer) upgradeSingleIndex(inst *common.IndexInst, storageMode commo
 	}
 
 	// update metadata
-	msg := &MsgClustMgrResetIndex{
+	msg := &MsgClustMgrResetIndexOnUpgrade{
 		inst: *inst,
 	}
 	idx.sendMsgToClusterMgr(msg)
@@ -6172,6 +6706,7 @@ func (idx *indexer) validateIndexInstMap() {
 			continue
 		}
 
+		//TODO Validate collection/scope
 		//if bucket doesn't exist, cleanup
 		bucketUUID := index.Defn.Bucket + "::" + index.Defn.BucketUUID
 		if _, ok := bucketUUIDMap[bucketUUID]; !ok {
@@ -6201,7 +6736,7 @@ func (idx *indexer) validateIndexInstMap() {
 		}
 	}
 
-	idx.checkMissingMaintBucket()
+	idx.checkMaintStreamIndexBuild()
 
 }
 
@@ -6236,6 +6771,31 @@ func (idx *indexer) forceCleanupPartitionData(inst *common.IndexInst, partitionI
 	storage_dir := idx.config["storage_dir"].String()
 	path := filepath.Join(storage_dir, IndexPath(inst, partitionId, sliceId))
 	return os.RemoveAll(path)
+}
+
+//On warmup, if an index is found in MAINT_STREAM and state INITIAL
+//it needs to be moved to INIT_STREAM. Post 6.5, initial build of
+//an index never happens using MAINT_STREAM. During upgrade, it is
+//possible for such an index to exist.
+func (idx *indexer) checkMaintStreamIndexBuild() {
+
+	var updatedList []common.IndexInstId
+	for _, index := range idx.indexInstMap {
+		if index.Stream == common.MAINT_STREAM &&
+			index.State == common.INDEX_STATE_INITIAL {
+			index.Stream = common.INIT_STREAM
+			idx.indexInstMap[index.InstId] = index
+			updatedList = append(updatedList, index.InstId)
+		}
+	}
+
+	if idx.enableManager {
+		if err := idx.updateMetaInfoForIndexList(updatedList,
+			true, true, false, false, true, false, false, false, nil); err != nil {
+			common.CrashOnError(err)
+		}
+	}
+
 }
 
 //On recovery, deleted indexes are ignored. There can be
@@ -6309,30 +6869,26 @@ func (idx *indexer) startStreams() bool {
 	//Start MAINT_STREAM
 	restartTs, allNilSnaps := idx.makeRestartTs(common.MAINT_STREAM)
 
-	idx.stateLock.Lock()
-	idx.streamBucketStatus[common.MAINT_STREAM] = make(BucketStatus)
-	idx.stateLock.Unlock()
+	idx.initStreamKeyspaceIdState(common.MAINT_STREAM)
 
-	for bucket, ts := range restartTs {
-		idx.bucketRollbackTimes[bucket] = time.Now().UnixNano()
-		sessionId := idx.getNextSessionId(common.MAINT_STREAM, bucket)
-		idx.startBucketStream(common.MAINT_STREAM, bucket, ts, nil, allNilSnaps,
+	for keyspaceId, ts := range restartTs {
+		idx.keyspaceIdRollbackTimes[keyspaceId] = time.Now().UnixNano()
+		sessionId := idx.genNextSessionId(common.MAINT_STREAM, keyspaceId)
+		idx.startKeyspaceIdStream(common.MAINT_STREAM, keyspaceId, ts, nil, allNilSnaps,
 			false, false, sessionId)
-		idx.setStreamBucketState(common.MAINT_STREAM, bucket, STREAM_ACTIVE)
+		idx.setStreamKeyspaceIdState(common.MAINT_STREAM, keyspaceId, STREAM_ACTIVE)
 	}
 
 	//Start INIT_STREAM
 	restartTs, allNilSnaps = idx.makeRestartTs(common.INIT_STREAM)
 
-	idx.stateLock.Lock()
-	idx.streamBucketStatus[common.INIT_STREAM] = make(BucketStatus)
-	idx.stateLock.Unlock()
+	idx.initStreamKeyspaceIdState(common.INIT_STREAM)
 
-	for bucket, ts := range restartTs {
-		sessionId := idx.getNextSessionId(common.INIT_STREAM, bucket)
-		idx.startBucketStream(common.INIT_STREAM, bucket, ts, nil, allNilSnaps,
+	for keyspaceId, ts := range restartTs {
+		sessionId := idx.genNextSessionId(common.INIT_STREAM, keyspaceId)
+		idx.startKeyspaceIdStream(common.INIT_STREAM, keyspaceId, ts, nil, allNilSnaps,
 			false, false, sessionId)
-		idx.setStreamBucketState(common.INIT_STREAM, bucket, STREAM_ACTIVE)
+		idx.setStreamKeyspaceIdState(common.INIT_STREAM, keyspaceId, STREAM_ACTIVE)
 	}
 
 	return true
@@ -6365,30 +6921,38 @@ func (idx *indexer) makeRestartTs(streamId common.StreamId) (map[string]*common.
 				s := NewSnapshotInfoContainer(infos)
 				latestSnapInfo := s.GetLatest()
 
-				if _, ok := allNilSnaps[idxInst.Defn.Bucket]; !ok {
-					allNilSnaps[idxInst.Defn.Bucket] = true
+				keyspaceId := idxInst.Defn.KeyspaceId(idxInst.Stream)
+				if _, ok := allNilSnaps[keyspaceId]; !ok {
+					allNilSnaps[keyspaceId] = true
 				}
 
 				//There may not be a valid snapshot info if no flush
 				//happened for this index
 				if latestSnapInfo != nil {
-					allNilSnaps[idxInst.Defn.Bucket] = false
+					allNilSnaps[keyspaceId] = false
 					ts := latestSnapInfo.Timestamp()
-					if oldTs, ok := restartTs[idxInst.Defn.Bucket]; ok {
+					if oldTs, ok := restartTs[keyspaceId]; ok {
 						if oldTs == nil {
 							continue
 						}
 						if !ts.AsRecentTs(oldTs) {
-							restartTs[idxInst.Defn.Bucket] = ts
+							restartTs[keyspaceId] = ts
 						}
 					} else {
-						restartTs[idxInst.Defn.Bucket] = ts
+						restartTs[keyspaceId] = ts
 					}
 				} else {
-					//set restartTs to nil for this bucket
-					restartTs[idxInst.Defn.Bucket] = nil
+					//set restartTs to nil for this keyspace
+					restartTs[keyspaceId] = nil
 				}
 			}
+		}
+	}
+
+	//for pre 7.0 indexes, the manifestUID needs to be set to epoch
+	for _, ts := range restartTs {
+		if ts != nil {
+			ts.SetEpochManifestUIDIfEmpty()
 		}
 	}
 	return restartTs, allNilSnaps
@@ -6717,11 +7281,11 @@ func (idx *indexer) bulkUpdateBuildTs(instIdList []common.IndexInstId,
 	}
 }
 
-func (idx *indexer) checkBucketInRecovery(bucket string,
+func (idx *indexer) checkKeyspaceIdInRecovery(keyspaceId string,
 	instIdList []common.IndexInstId, clientCh MsgChannel, errMap map[common.IndexInstId]error) bool {
 
-	initState := idx.getStreamBucketState(common.INIT_STREAM, bucket)
-	maintState := idx.getStreamBucketState(common.MAINT_STREAM, bucket)
+	initState := idx.getStreamKeyspaceIdState(common.INIT_STREAM, keyspaceId)
+	maintState := idx.getStreamKeyspaceIdState(common.MAINT_STREAM, keyspaceId)
 
 	if initState == STREAM_RECOVERY ||
 		initState == STREAM_PREPARE_RECOVERY ||
@@ -6729,7 +7293,7 @@ func (idx *indexer) checkBucketInRecovery(bucket string,
 		maintState == STREAM_PREPARE_RECOVERY {
 
 		if idx.enableManager {
-			errStr := fmt.Sprintf("Bucket %v In Recovery", bucket)
+			errStr := fmt.Sprintf("KeyspaceId %v In Recovery", keyspaceId)
 			idx.bulkUpdateError(instIdList, errStr)
 			for _, instId := range instIdList {
 				errMap[instId] = &common.IndexerError{Reason: errStr, Code: common.IndexerInRecovery}
@@ -6746,7 +7310,7 @@ func (idx *indexer) checkBucketInRecovery(bucket string,
 	return false
 }
 
-func (idx *indexer) checkValidIndexInst(bucket string, instIdList []common.IndexInstId,
+func (idx *indexer) checkValidIndexInst(keyspaceId string, instIdList []common.IndexInstId,
 	clientCh MsgChannel, errMap map[common.IndexInstId]error) ([]common.IndexInstId, bool) {
 
 	if len(instIdList) == 0 {
@@ -6790,21 +7354,22 @@ func (idx *indexer) checkValidIndexInst(bucket string, instIdList []common.Index
 	return newList, len(newList) == len(instIdList)
 }
 
-func (idx *indexer) groupIndexListByBucket(instIdList []common.IndexInstId) map[string][]common.IndexInstId {
+func (idx *indexer) groupIndexListByKeyspaceId(instIdList []common.IndexInstId) map[string][]common.IndexInstId {
 
-	bucketInstList := make(map[string][]common.IndexInstId)
+	keyspaceIdInstList := make(map[string][]common.IndexInstId)
 	for _, instId := range instIdList {
 		indexInst := idx.indexInstMap[instId]
-		if instList, ok := bucketInstList[indexInst.Defn.Bucket]; ok {
+		keyspaceId := indexInst.Defn.KeyspaceId(common.INIT_STREAM)
+		if instList, ok := keyspaceIdInstList[keyspaceId]; ok {
 			instList = append(instList, indexInst.InstId)
-			bucketInstList[indexInst.Defn.Bucket] = instList
+			keyspaceIdInstList[keyspaceId] = instList
 		} else {
 			var newInstList []common.IndexInstId
 			newInstList = append(newInstList, indexInst.InstId)
-			bucketInstList[indexInst.Defn.Bucket] = newInstList
+			keyspaceIdInstList[keyspaceId] = newInstList
 		}
 	}
-	return bucketInstList
+	return keyspaceIdInstList
 
 }
 
@@ -6945,7 +7510,7 @@ func (idx *indexer) setProfilerOptions(config common.Config) {
 	}
 }
 
-func (idx *indexer) getIndexInstForBucket(bucket string) ([]common.IndexInstId, error) {
+func (idx *indexer) getIndexInstForKeyspaceId(keyspaceId string) ([]common.IndexInstId, error) {
 
 	idx.clustMgrAgentCmdCh <- &MsgClustMgrTopology{}
 	resp := <-idx.clustMgrAgentCmdCh
@@ -6956,7 +7521,7 @@ func (idx *indexer) getIndexInstForBucket(bucket string) ([]common.IndexInstId, 
 	case CLUST_MGR_GET_GLOBAL_TOPOLOGY:
 		instMap := resp.(*MsgClustMgrTopology).GetInstMap()
 		for id, inst := range instMap {
-			if inst.Defn.Bucket == bucket {
+			if inst.Defn.KeyspaceId(inst.Stream) == keyspaceId {
 				result = append(result, id)
 			}
 		}
@@ -6967,6 +7532,7 @@ func (idx *indexer) getIndexInstForBucket(bucket string) ([]common.IndexInstId, 
 	return result, nil
 }
 
+//TODO Collections - change this method to work with collections once manager changes are ready
 func (idx *indexer) deleteIndexInstOnDeletedBucket(bucket string, streamId common.StreamId) []common.IndexInstId {
 
 	var instIdList []common.IndexInstId = nil
@@ -7023,7 +7589,8 @@ func dumpMemProfile(filename string) bool {
 	return true
 }
 
-func (idx *indexer) computeBucketBuildTsAsync(clusterAddr string, bucket string, numVb int, streamId common.StreamId) {
+func (idx *indexer) computeKeyspaceBuildTsAsync(clusterAddr string,
+	keyspaceId string, cid string, numVb int, streamId common.StreamId) {
 
 	// Acquire the buildTsLock
 	// The buildTsLock is per bucket per stream lock. It serves two purposes:
@@ -7032,19 +7599,20 @@ func (idx *indexer) computeBucketBuildTsAsync(clusterAddr string, bucket string,
 	//     buildTs computed later by another go-routine
 	// (ii) Incase of any issues with KV, it prevents multiple go-routines to
 	//      flood the logs with error messages while fetching the KVT's
-	mutex := idx.buildTsLock[streamId][bucket]
+	mutex := idx.buildTsLock[streamId][keyspaceId]
 	mutex.Lock()
 	defer mutex.Unlock()
 
-	buildTs, err := computeBucketBuildTs(clusterAddr, bucket, numVb)
+	buildTs, err := computeKeyspaceBuildTs(clusterAddr, keyspaceId, cid, numVb)
 	if err != nil {
-		logging.Errorf("Indexer::computeBucketBuildTsAsync, stream: %v, bucket: %v, err: %v", streamId, bucket, err)
+		logging.Errorf("Indexer::computeBucketBuildTsAsync, stream: %v, keyspace: %v, "+
+			"cid: %v err: %v", streamId, keyspaceId, cid, err)
 	} else {
 		msgBuildTs := &MsgStreamUpdate{
-			mType:    INDEXER_UPDATE_BUILD_TS,
-			streamId: streamId,
-			bucket:   bucket,
-			buildTs:  buildTs,
+			mType:      INDEXER_UPDATE_BUILD_TS,
+			streamId:   streamId,
+			keyspaceId: keyspaceId,
+			buildTs:    buildTs,
 		}
 		// Send a message to indexer to update the buildTs.
 		// Indexer would forward this message to timekeeper
@@ -7052,16 +7620,20 @@ func (idx *indexer) computeBucketBuildTsAsync(clusterAddr string, bucket string,
 	}
 }
 
-//calculates buildTs for bucket. This is a blocking call
+//calculates buildTs for keyspace. This is a blocking call
 //which will keep trying till success as indexer cannot work
 //without a buildts.
-func computeBucketBuildTs(clustAddr string, bucket string, numVb int) (buildTs Timestamp, err error) {
+func computeKeyspaceBuildTs(clustAddr string, keyspaceId string,
+	cid string, numVb int) (buildTs Timestamp, err error) {
+
 kvtsloop:
 	for {
-		buildTs, err = GetCurrentKVTs(clustAddr, "default", bucket, numVb)
+		buildTs, err = GetCurrentKVTs(clustAddr, "default", keyspaceId, cid, numVb)
+		//TODO Collections - handle the case when collection doesn't exist
 		if err != nil {
-			logging.Errorf("Indexer::computeBucketBuildTs Error Fetching BuildTs %v", err)
+			logging.Errorf("Indexer::computeKeyspaceBuildTs Error Fetching BuildTs %v", err)
 			var uuid string
+			bucket, _, _ := SplitKeyspaceId(keyspaceId)
 			uuid, err = common.GetBucketUUID(clustAddr, bucket)
 			if err == nil && uuid == common.BUCKET_UUID_NIL {
 				// BUCKET_UUID_NIL is returned in non-error case
@@ -7097,19 +7669,30 @@ func (idx *indexer) updateSliceWithConfig(config common.Config) {
 
 }
 
-func (idx *indexer) getStreamBucketState(streamId common.StreamId, bucket string) StreamStatus {
-
-	idx.stateLock.RLock()
-	defer idx.stateLock.RUnlock()
-	return idx.streamBucketStatus[streamId][bucket]
-
-}
-
-func (idx *indexer) setStreamBucketState(streamId common.StreamId, bucket string, status StreamStatus) {
+func (idx *indexer) initStreamKeyspaceIdState(streamId common.StreamId) {
 
 	idx.stateLock.Lock()
 	defer idx.stateLock.Unlock()
-	idx.streamBucketStatus[streamId][bucket] = status
+
+	if _, ok := idx.streamKeyspaceIdStatus[streamId]; !ok {
+		idx.streamKeyspaceIdStatus[streamId] = make(KeyspaceIdStatus)
+	}
+
+}
+
+func (idx *indexer) getStreamKeyspaceIdState(streamId common.StreamId, keyspaceId string) StreamStatus {
+
+	idx.stateLock.RLock()
+	defer idx.stateLock.RUnlock()
+	return idx.streamKeyspaceIdStatus[streamId][keyspaceId]
+
+}
+
+func (idx *indexer) setStreamKeyspaceIdState(streamId common.StreamId, keyspaceId string, status StreamStatus) {
+
+	idx.stateLock.Lock()
+	defer idx.stateLock.Unlock()
+	idx.streamKeyspaceIdStatus[streamId][keyspaceId] = status
 
 }
 
@@ -7321,7 +7904,7 @@ func (idx *indexer) checkAnyStreamRequestPending() bool {
 	idx.stateLock.RLock()
 	defer idx.stateLock.RUnlock()
 
-	for s, bs := range idx.streamBucketStatus {
+	for s, bs := range idx.streamKeyspaceIdStatus {
 
 		for b, _ := range bs {
 			if idx.checkStreamRequestPending(s, b) {
@@ -7340,7 +7923,7 @@ func (idx *indexer) checkRecoveryInProgress() bool {
 	idx.stateLock.RLock()
 	defer idx.stateLock.RUnlock()
 
-	for s, bs := range idx.streamBucketStatus {
+	for s, bs := range idx.streamKeyspaceIdStatus {
 
 		for b, status := range bs {
 			if status == STREAM_PREPARE_RECOVERY ||
@@ -7665,62 +8248,62 @@ func (idx *indexer) getInstIdFromDefnId(defnId common.IndexDefnId) common.IndexI
 	return 0
 }
 
-func (idx *indexer) setRetryTsForRecovery(streamId common.StreamId, bucket string,
+func (idx *indexer) setRetryTsForRecovery(streamId common.StreamId, keyspaceId string,
 	retryTs *common.TsVbuuid) {
 
-	if _, ok := idx.streamBucketRetryTs[streamId]; ok {
-		idx.streamBucketRetryTs[streamId][bucket] = retryTs
+	if _, ok := idx.streamKeyspaceIdRetryTs[streamId]; ok {
+		idx.streamKeyspaceIdRetryTs[streamId][keyspaceId] = retryTs
 	} else {
-		bucketRetryTs := make(BucketRetryTs)
-		bucketRetryTs[bucket] = retryTs
-		idx.streamBucketRetryTs[streamId] = bucketRetryTs
+		keyspaceIdRetryTs := make(KeyspaceIdRetryTs)
+		keyspaceIdRetryTs[keyspaceId] = retryTs
+		idx.streamKeyspaceIdRetryTs[streamId] = keyspaceIdRetryTs
 	}
 }
 
-func (idx *indexer) setRollbackTs(streamId common.StreamId, bucket string,
+func (idx *indexer) setRollbackTs(streamId common.StreamId, keyspaceId string,
 	rollbackTs *common.TsVbuuid) {
 
-	if _, ok := idx.streamBucketRollbackTs[streamId]; ok {
-		idx.streamBucketRollbackTs[streamId][bucket] = rollbackTs
+	if _, ok := idx.streamKeyspaceIdRollbackTs[streamId]; ok {
+		idx.streamKeyspaceIdRollbackTs[streamId][keyspaceId] = rollbackTs
 	} else {
-		bucketRollbackTs := make(BucketRollbackTs)
-		bucketRollbackTs[bucket] = rollbackTs
-		idx.streamBucketRollbackTs[streamId] = bucketRollbackTs
+		keyspaceIdRollbackTs := make(KeyspaceIdRollbackTs)
+		keyspaceIdRollbackTs[keyspaceId] = rollbackTs
+		idx.streamKeyspaceIdRollbackTs[streamId] = keyspaceIdRollbackTs
 	}
 }
 
-func (idx *indexer) initBuildTsLock(streamId common.StreamId, bucket string) {
+func (idx *indexer) initBuildTsLock(streamId common.StreamId, keyspaceId string) {
 	if _, ok := idx.buildTsLock[streamId]; !ok {
 		idx.buildTsLock[streamId] = make(map[string]*sync.Mutex)
 	}
-	if _, ok := idx.buildTsLock[streamId][bucket]; !ok {
-		idx.buildTsLock[streamId][bucket] = &sync.Mutex{}
+	if _, ok := idx.buildTsLock[streamId][keyspaceId]; !ok {
+		idx.buildTsLock[streamId][keyspaceId] = &sync.Mutex{}
 	}
 }
 
 //sessionId helper functions. these functions can only be called from the genserver
 //as no sync mechanism is being used.
-func (idx *indexer) getNextSessionId(
+func (idx *indexer) genNextSessionId(
 	streamId common.StreamId,
-	bucket string) uint64 {
+	keyspaceId string) uint64 {
 
 	var sid uint64
 	var ok bool
 
-	if sid, ok = idx.streamBucketSessionId[streamId][bucket]; ok {
+	if sid, ok = idx.streamKeyspaceIdSessionId[streamId][keyspaceId]; ok {
 		sid++
 	} else {
 		sid = 1 //start with 1
 	}
-	idx.streamBucketSessionId[streamId][bucket] = sid
+	idx.streamKeyspaceIdSessionId[streamId][keyspaceId] = sid
 	return sid
 }
 
 func (idx *indexer) getCurrentSessionId(
 	streamId common.StreamId,
-	bucket string) uint64 {
+	keyspaceId string) uint64 {
 
-	if sid, ok := idx.streamBucketSessionId[streamId][bucket]; ok {
+	if sid, ok := idx.streamKeyspaceIdSessionId[streamId][keyspaceId]; ok {
 		return sid
 	} else {
 		return 0
@@ -7729,13 +8312,13 @@ func (idx *indexer) getCurrentSessionId(
 
 func (idx *indexer) validateSessionId(
 	streamId common.StreamId,
-	bucket string,
+	keyspaceId string,
 	sessionId uint64,
 	assert bool) (bool, uint64) {
 
 	valid := false
 	curr := uint64(0)
-	if cid, ok := idx.streamBucketSessionId[streamId][bucket]; ok {
+	if cid, ok := idx.streamKeyspaceIdSessionId[streamId][keyspaceId]; ok {
 		if sessionId == cid {
 			valid = true
 		}
@@ -7759,19 +8342,19 @@ func (idx *indexer) injectRandomDelay(max int) {
 	}
 }
 
-//streamBucketCurrRequest helper functions
-func (idx *indexer) setStreamBucketCurrRequest(
+//streamkeyspaceIdCurrRequest helper functions
+func (idx *indexer) setStreamKeyspaceIdCurrRequest(
 	streamId common.StreamId,
-	bucket string,
+	keyspaceId string,
 	cmd Message,
 	reqCh StopChannel,
 	sessionId uint64) {
 
-	if _, ok := idx.streamBucketCurrRequest[streamId]; !ok {
-		idx.streamBucketCurrRequest[streamId] = make(BucketCurrRequest)
+	if _, ok := idx.streamKeyspaceIdCurrRequest[streamId]; !ok {
+		idx.streamKeyspaceIdCurrRequest[streamId] = make(KeyspaceIdCurrRequest)
 	}
 
-	idx.streamBucketCurrRequest[streamId][bucket] = &currRequest{
+	idx.streamKeyspaceIdCurrRequest[streamId][keyspaceId] = &currRequest{
 		request:   cmd,
 		reqCh:     reqCh,
 		sessionId: sessionId,
@@ -7780,44 +8363,44 @@ func (idx *indexer) setStreamBucketCurrRequest(
 }
 
 //clear the currRequest
-func (idx *indexer) deleteStreamBucketCurrRequest(
+func (idx *indexer) deleteStreamKeyspaceIdCurrRequest(
 	streamId common.StreamId,
-	bucket string,
+	keyspaceId string,
 	cmd Message,
 	reqCh StopChannel,
 	sessionId uint64) {
 
 	var req *currRequest
-	if bCurrRequest, ok := idx.streamBucketCurrRequest[streamId]; ok {
-		req = bCurrRequest[bucket]
+	if bCurrRequest, ok := idx.streamKeyspaceIdCurrRequest[streamId]; ok {
+		req = bCurrRequest[keyspaceId]
 	}
 
 	//allow the caller to reset state if stopCh matches
 	if req.reqCh == reqCh {
-		delete(idx.streamBucketCurrRequest[streamId], bucket)
+		delete(idx.streamKeyspaceIdCurrRequest[streamId], keyspaceId)
 	} else {
-		logging.Infof("Indexer::deleteStreamBucketCurrRequest Not clearing "+
+		logging.Infof("Indexer::deleteStreamKeyspaceIdCurrRequest Not clearing "+
 			"Curr Request %v SessionId %v. Requested %v SessionId %v. %v %v.", req.request,
-			req.sessionId, cmd, sessionId, streamId, bucket)
+			req.sessionId, cmd, sessionId, streamId, keyspaceId)
 	}
 }
 
-func (idx *indexer) cleanupStreamBucketCurrRequest(
+func (idx *indexer) cleanupStreamKeyspaceIdCurrRequest(
 	streamId common.StreamId,
-	bucket string,
+	keyspaceId string,
 ) {
-	delete(idx.streamBucketCurrRequest[streamId], bucket)
+	delete(idx.streamKeyspaceIdCurrRequest[streamId], keyspaceId)
 }
 
 func (idx *indexer) checkStreamRequestPending(
 	streamId common.StreamId,
-	bucket string) bool {
+	keyspaceId string) bool {
 
-	if bCurrReq, ok := idx.streamBucketCurrRequest[streamId]; ok {
-		if req, ok := bCurrReq[bucket]; ok {
+	if bCurrReq, ok := idx.streamKeyspaceIdCurrRequest[streamId]; ok {
+		if req, ok := bCurrReq[keyspaceId]; ok {
 			if req != nil {
 				logging.Errorf("Indexer::checkStreamRequestPending %v %v %+v",
-					bucket, streamId, req)
+					keyspaceId, streamId, req)
 				return true
 			}
 		}
@@ -7826,45 +8409,49 @@ func (idx *indexer) checkStreamRequestPending(
 	return false
 }
 
-func (idx *indexer) cleanupStreamBucketState(
+func (idx *indexer) cleanupStreamKeyspaceIdState(
 	streamId common.StreamId,
-	bucket string) {
+	keyspaceId string) {
 
-	idx.cleanupStreamBucketRecoveryState(streamId, bucket)
-	idx.cleanupStreamBucketCurrRequest(streamId, bucket)
+	idx.cleanupStreamKeyspaceIdRecoveryState(streamId, keyspaceId)
+	idx.cleanupStreamKeyspaceIdCurrRequest(streamId, keyspaceId)
 }
 
-func (idx *indexer) cleanupStreamBucketRecoveryState(
+func (idx *indexer) cleanupStreamKeyspaceIdRecoveryState(
 	streamId common.StreamId,
-	bucket string) {
+	keyspaceId string) {
 
-	delete(idx.streamBucketRollbackTs[streamId], bucket)
-	delete(idx.streamBucketRetryTs[streamId], bucket)
+	delete(idx.streamKeyspaceIdRollbackTs[streamId], keyspaceId)
+	delete(idx.streamKeyspaceIdRetryTs[streamId], keyspaceId)
 }
 
-func (idx *indexer) cleanupAllStreamBucketState(
+func (idx *indexer) cleanupAllStreamKeyspaceIdState(
 	streamId common.StreamId,
-	bucket string) {
+	keyspaceId string) {
 
-	idx.cleanupStreamBucketState(streamId, bucket)
-	delete(idx.streamBucketFlushInProgress[streamId], bucket)
-	delete(idx.streamBucketObserveFlushDone[streamId], bucket)
+	idx.cleanupStreamKeyspaceIdState(streamId, keyspaceId)
+	delete(idx.streamKeyspaceIdFlushInProgress[streamId], keyspaceId)
+	delete(idx.streamKeyspaceIdObserveFlushDone[streamId], keyspaceId)
+	delete(idx.streamKeyspaceIdPendBuildDone[streamId], keyspaceId)
+	delete(idx.streamKeyspaceIdCollectionId[streamId], keyspaceId)
 }
 
-func (idx *indexer) prepareStreamBucketForFreshStart(
+func (idx *indexer) prepareStreamKeyspaceIdForFreshStart(
 	streamId common.StreamId,
-	bucket string) {
+	keyspaceId string) {
 
-	logging.Infof("Indexe::prepareStreamBucketForFreshStart %v %v", streamId, bucket)
+	logging.Infof("Indexer::prepareStreamKeyspaceIdForFreshStart %v %v", streamId, keyspaceId)
 
 	//clear all state before fresh start
-	idx.cleanupAllStreamBucketState(streamId, bucket)
+	idx.cleanupAllStreamKeyspaceIdState(streamId, keyspaceId)
+
+	idx.initStreamKeyspaceIdState(streamId)
 
 	//clear worker state
-	cmd := &MsgStreamUpdate{mType: REMOVE_BUCKET_FROM_STREAM,
+	cmd := &MsgStreamUpdate{mType: REMOVE_KEYSPACE_FROM_STREAM,
 		streamId:      streamId,
-		bucket:        bucket,
-		sessionId:     idx.getCurrentSessionId(streamId, bucket),
+		keyspaceId:    keyspaceId,
+		sessionId:     idx.getCurrentSessionId(streamId, keyspaceId),
 		abortRecovery: true,
 	}
 
@@ -7945,14 +8532,14 @@ func (idx *indexer) monitorKVNodes() {
 
 	sendKVNodes := func(kvNodeUUIDs map[string]bool) {
 		idx.stateLock.RLock()
-		for streamId, bucketStatus := range idx.streamBucketStatus {
-			for bucket, _ := range bucketStatus {
+		for streamId, keyspaceIdStatus := range idx.streamKeyspaceIdStatus {
+			for keyspaceId, _ := range keyspaceIdStatus {
 
 				poolChangeMsg := &MsgPoolChange{
-					mType:    POOL_CHANGE,
-					nodes:    kvNodeUUIDs,
-					streamId: streamId,
-					bucket:   bucket,
+					mType:      POOL_CHANGE,
+					nodes:      kvNodeUUIDs,
+					streamId:   streamId,
+					keyspaceId: keyspaceId,
 				}
 				idx.internalRecvCh <- poolChangeMsg
 			}

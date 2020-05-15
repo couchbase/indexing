@@ -27,28 +27,30 @@ import (
 type MutationManager interface {
 }
 
-//Map from bucket name to mutation queue
+//Map from keyspaceId to mutation queue
+type KeyspaceIdQueueMap map[string]IndexerMutationQueue
+
 type BucketQueueMap map[string]IndexerMutationQueue
 
-//Map from bucket name to flusher stop channel
-type BucketStopChMap map[string]StopChannel
+//Map from keyspaceId to flusher stop channel
+type KeyspaceIdStopChMap map[string]StopChannel
 
-// Bucket -> map of vbucket to hostname
+// KeyspaceId -> map of vbucket to hostname
 type VBMap map[string]map[Vbucket]string
 
 type mutationMgr struct {
 	memUsed   int64 //memory used by queue
 	maxMemory int64 //max memory to be used
 
-	streamBucketQueueMap map[common.StreamId]BucketQueueMap
-	streamIndexQueueMap  map[common.StreamId]IndexQueueMap
+	streamKeyspaceIdQueueMap map[common.StreamId]KeyspaceIdQueueMap
+	streamIndexQueueMap      map[common.StreamId]IndexQueueMap
 
 	streamReaderMap       map[common.StreamId]MutationStreamReader
 	streamReaderCmdChMap  map[common.StreamId]MsgChannel  //Command msg channel for StreamReader
 	streamReaderExitChMap map[common.StreamId]DoneChannel //Channel to indicate stream reader exited
 
-	streamFlusherStopChMap map[common.StreamId]BucketStopChMap //stop channels for flusher
-	streamBucketSessionId  map[common.StreamId]BucketSessionId
+	streamFlusherStopChMap    map[common.StreamId]KeyspaceIdStopChMap //stop channels for flusher
+	streamKeyspaceIdSessionId map[common.StreamId]KeyspaceIdSessionId
 
 	mutMgrRecvCh   MsgChannel //Receive msg channel for Mutation Manager
 	internalRecvCh MsgChannel //Buffered channel to queue worker messages
@@ -73,7 +75,7 @@ type mutationMgr struct {
 	stats  IndexerStatsHolder
 
 	vbMap         *VbMapHolder
-	numVbsPerNode map[string]int64 // NodeUUID -> Number of active vb's on the KV node across all buckets
+	numVbsPerNode map[string]int64 // NodeUUID -> Number of active vb's on the KV node across all keyspaceIds
 }
 
 //NewMutationManager creates a new Mutation Manager which listens for commands from
@@ -92,13 +94,13 @@ func NewMutationManager(supvCmdch MsgChannel, supvRespch MsgChannel,
 
 	//Init the mutationMgr struct
 	m := &mutationMgr{
-		streamBucketQueueMap:   make(map[common.StreamId]BucketQueueMap),
-		streamIndexQueueMap:    make(map[common.StreamId]IndexQueueMap),
-		streamReaderMap:        make(map[common.StreamId]MutationStreamReader),
-		streamReaderCmdChMap:   make(map[common.StreamId]MsgChannel),
-		streamReaderExitChMap:  make(map[common.StreamId]DoneChannel),
-		streamFlusherStopChMap: make(map[common.StreamId]BucketStopChMap),
-		streamBucketSessionId:  make(map[common.StreamId]BucketSessionId),
+		streamKeyspaceIdQueueMap:  make(map[common.StreamId]KeyspaceIdQueueMap),
+		streamIndexQueueMap:       make(map[common.StreamId]IndexQueueMap),
+		streamReaderMap:           make(map[common.StreamId]MutationStreamReader),
+		streamReaderCmdChMap:      make(map[common.StreamId]MsgChannel),
+		streamReaderExitChMap:     make(map[common.StreamId]DoneChannel),
+		streamFlusherStopChMap:    make(map[common.StreamId]KeyspaceIdStopChMap),
+		streamKeyspaceIdSessionId: make(map[common.StreamId]KeyspaceIdSessionId),
 
 		mutMgrRecvCh:   make(MsgChannel),
 		internalRecvCh: make(MsgChannel, WORKER_MSG_QUEUE_LEN),
@@ -278,8 +280,8 @@ func (m *mutationMgr) handleSupervisorCommands(cmd Message) {
 	case REMOVE_INDEX_LIST_FROM_STREAM:
 		m.handleRemoveIndexListFromStream(cmd)
 
-	case REMOVE_BUCKET_FROM_STREAM:
-		m.handleRemoveBucketFromStream(cmd)
+	case REMOVE_KEYSPACE_FROM_STREAM:
+		m.handleRemoveKeyspaceFromStream(cmd)
 
 	case CLOSE_STREAM:
 		m.handleCloseStream(cmd)
@@ -335,7 +337,8 @@ func (m *mutationMgr) handleWorkerMessage(cmd Message) {
 		STREAM_READER_STREAM_END,
 		STREAM_READER_ERROR,
 		STREAM_READER_CONN_ERROR,
-		STREAM_READER_HWT:
+		STREAM_READER_HWT,
+		STREAM_READER_SYSTEM_EVENT:
 		//send message to supervisor to take decision
 		logging.Tracef("MutationMgr::handleWorkerMessage Received %v from worker", cmd)
 		m.supvRespch <- cmd
@@ -380,13 +383,13 @@ func (m *mutationMgr) handleOpenStream(cmd Message) {
 
 	streamId := cmd.(*MsgStreamUpdate).GetStreamId()
 	indexList := cmd.(*MsgStreamUpdate).GetIndexList()
-	bucket := cmd.(*MsgStreamUpdate).GetBucket()
+	keyspaceId := cmd.(*MsgStreamUpdate).GetKeyspaceId()
 	restartTs := cmd.(*MsgStreamUpdate).GetRestartTs()
 	allowMarkFirsSnap := cmd.(*MsgStreamUpdate).AllowMarkFirstSnap()
 	sessionId := cmd.(*MsgStreamUpdate).GetSessionId()
 
-	bucketFilter := make(map[string]*common.TsVbuuid)
-	bucketFilter[bucket] = restartTs
+	keyspaceIdFilter := make(map[string]*common.TsVbuuid)
+	keyspaceIdFilter[keyspaceId] = restartTs
 
 	m.lock.Lock()
 	defer m.lock.Unlock()
@@ -394,23 +397,23 @@ func (m *mutationMgr) handleOpenStream(cmd Message) {
 	//if this stream is already open, add to existing stream
 	if _, ok := m.streamReaderMap[streamId]; ok {
 
-		respMsg := m.addIndexListToExistingStream(streamId, indexList, bucketFilter, sessionId)
+		respMsg := m.addIndexListToExistingStream(streamId, keyspaceId, indexList, keyspaceIdFilter, sessionId)
 		m.supvCmdch <- respMsg
 		return
 	}
 
-	bucketQueueMap := make(BucketQueueMap)
+	keyspaceIdQueueMap := make(KeyspaceIdQueueMap)
 	indexQueueMap := make(IndexQueueMap)
-	bucketSessionId := make(BucketSessionId)
+	keyspaceIdSessionId := make(KeyspaceIdSessionId)
 
 	//create a new mutation queue for the stream reader
-	//for each bucket, a separate queue is required
+	//for each keyspace, a separate queue is required
 	for _, i := range indexList {
 		//if there is no mutation queue for this index, allocate a new one
-		if _, ok := bucketQueueMap[i.Defn.Bucket]; !ok {
+		if _, ok := keyspaceIdQueueMap[keyspaceId]; !ok {
 			//init mutation queue
 			var queue MutationQueue
-			if queue = NewAtomicMutationQueue(i.Defn.Bucket, m.numVbuckets,
+			if queue = NewAtomicMutationQueue(keyspaceId, m.numVbuckets,
 				&m.maxMemory, &m.memUsed, m.config); queue == nil {
 				m.supvCmdch <- &MsgError{
 					err: Error{code: ERROR_MUTATION_QUEUE_INIT,
@@ -419,17 +422,17 @@ func (m *mutationMgr) handleOpenStream(cmd Message) {
 				return
 			}
 
-			bucketQueueMap[i.Defn.Bucket] = IndexerMutationQueue{
+			keyspaceIdQueueMap[keyspaceId] = IndexerMutationQueue{
 				queue: queue}
-			bucketSessionId[i.Defn.Bucket] = sessionId
+			keyspaceIdSessionId[keyspaceId] = sessionId
 		}
-		indexQueueMap[i.InstId] = bucketQueueMap[i.Defn.Bucket]
+		indexQueueMap[i.InstId] = keyspaceIdQueueMap[keyspaceId]
 	}
 	cmdCh := make(MsgChannel)
 
-	reader, errMsg := CreateMutationStreamReader(streamId, bucketQueueMap, bucketFilter,
+	reader, errMsg := CreateMutationStreamReader(streamId, keyspaceIdQueueMap, keyspaceIdFilter,
 		cmdCh, m.mutMgrRecvCh, getNumStreamWorkers(m.config), m.stats.Get(),
-		m.config, m.indexerState, allowMarkFirsSnap, m.vbMap, bucketSessionId)
+		m.config, m.indexerState, allowMarkFirsSnap, m.vbMap, keyspaceIdSessionId)
 
 	if reader == nil {
 		//send the error back on supv channel
@@ -437,16 +440,16 @@ func (m *mutationMgr) handleOpenStream(cmd Message) {
 	} else {
 		//update internal structs
 		m.streamReaderMap[streamId] = reader
-		m.streamBucketQueueMap[streamId] = bucketQueueMap
+		m.streamKeyspaceIdQueueMap[streamId] = keyspaceIdQueueMap
 		m.streamIndexQueueMap[streamId] = indexQueueMap
 		m.streamReaderCmdChMap[streamId] = cmdCh
 		m.streamReaderExitChMap[streamId] = make(DoneChannel)
-		m.streamBucketSessionId[streamId] = bucketSessionId
+		m.streamKeyspaceIdSessionId[streamId] = keyspaceIdSessionId
 
 		func() {
 			m.flock.Lock()
 			defer m.flock.Unlock()
-			m.streamFlusherStopChMap[streamId] = make(BucketStopChMap)
+			m.streamFlusherStopChMap[streamId] = make(KeyspaceIdStopChMap)
 		}()
 
 		//send success on supv channel
@@ -457,7 +460,7 @@ func (m *mutationMgr) handleOpenStream(cmd Message) {
 
 //handleAddIndexListToStream adds a list of indexes to an
 //already running MutationStreamReader. If the list has index
-//for a bucket for which there is no mutation queue, it will
+//for a keyspace for which there is no mutation queue, it will
 //be created.
 func (m *mutationMgr) handleAddIndexListToStream(cmd Message) {
 
@@ -466,6 +469,7 @@ func (m *mutationMgr) handleAddIndexListToStream(cmd Message) {
 	streamId := cmd.(*MsgStreamUpdate).GetStreamId()
 	indexList := cmd.(*MsgStreamUpdate).GetIndexList()
 	sessionId := cmd.(*MsgStreamUpdate).GetSessionId()
+	keyspaceId := cmd.(*MsgStreamUpdate).GetKeyspaceId()
 
 	m.lock.Lock()
 	defer m.lock.Unlock()
@@ -483,27 +487,27 @@ func (m *mutationMgr) handleAddIndexListToStream(cmd Message) {
 		return
 	}
 
-	respMsg := m.addIndexListToExistingStream(streamId, indexList, nil, sessionId)
+	respMsg := m.addIndexListToExistingStream(streamId, keyspaceId, indexList, nil, sessionId)
 	//send the message back on supv channel
 	m.supvCmdch <- respMsg
 
 }
 
 func (m *mutationMgr) addIndexListToExistingStream(streamId common.StreamId,
-	indexList []common.IndexInst, bucketFilter map[string]*common.TsVbuuid,
+	keyspaceId string, indexList []common.IndexInst, keyspaceIdFilter map[string]*common.TsVbuuid,
 	sessionId uint64) Message {
 
-	bucketQueueMap := m.streamBucketQueueMap[streamId]
+	keyspaceIdQueueMap := m.streamKeyspaceIdQueueMap[streamId]
 	indexQueueMap := m.streamIndexQueueMap[streamId]
-	bucketSessionId := m.streamBucketSessionId[streamId]
+	keyspaceIdSessionId := m.streamKeyspaceIdSessionId[streamId]
 
-	var bucketMapDirty bool
+	var keyspaceIdMapDirty bool
 	for _, i := range indexList {
 		//if there is no mutation queue for this index, allocate a new one
-		if _, ok := bucketQueueMap[i.Defn.Bucket]; !ok {
+		if _, ok := keyspaceIdQueueMap[keyspaceId]; !ok {
 			//init mutation queue
 			var queue MutationQueue
-			if queue = NewAtomicMutationQueue(i.Defn.Bucket, m.numVbuckets,
+			if queue = NewAtomicMutationQueue(keyspaceId, m.numVbuckets,
 				&m.maxMemory, &m.memUsed, m.config); queue == nil {
 				return &MsgError{
 					err: Error{code: ERROR_MUTATION_QUEUE_INIT,
@@ -511,23 +515,23 @@ func (m *mutationMgr) addIndexListToExistingStream(streamId common.StreamId,
 						category: MUTATION_QUEUE}}
 			}
 
-			bucketQueueMap[i.Defn.Bucket] = IndexerMutationQueue{
+			keyspaceIdQueueMap[keyspaceId] = IndexerMutationQueue{
 				queue: queue}
-			bucketSessionId[i.Defn.Bucket] = sessionId
-			bucketMapDirty = true
+			keyspaceIdSessionId[keyspaceId] = sessionId
+			keyspaceIdMapDirty = true
 		}
-		indexQueueMap[i.InstId] = bucketQueueMap[i.Defn.Bucket]
+		indexQueueMap[i.InstId] = keyspaceIdQueueMap[keyspaceId]
 	}
 
-	if bucketMapDirty {
+	if keyspaceIdMapDirty {
 		respMsg := m.sendMsgToStreamReader(streamId,
-			m.newUpdateBucketQueuesMsg(bucketQueueMap, bucketFilter, bucketSessionId))
+			m.newUpdateKeyspaceIdQueuesMsg(keyspaceIdQueueMap, keyspaceIdFilter, keyspaceIdSessionId))
 
 		if respMsg.GetMsgType() == MSG_SUCCESS {
 			//update internal structures
-			m.streamBucketQueueMap[streamId] = bucketQueueMap
+			m.streamKeyspaceIdQueueMap[streamId] = keyspaceIdQueueMap
 			m.streamIndexQueueMap[streamId] = indexQueueMap
-			m.streamBucketSessionId[streamId] = bucketSessionId
+			m.streamKeyspaceIdSessionId[streamId] = keyspaceIdSessionId
 		}
 		return respMsg
 	}
@@ -535,17 +539,17 @@ func (m *mutationMgr) addIndexListToExistingStream(streamId common.StreamId,
 	return &MsgSuccess{}
 }
 
-func (m *mutationMgr) newUpdateBucketQueuesMsg(bucketQueueMap BucketQueueMap,
-	bucketFilter map[string]*common.TsVbuuid, bucketSessionId BucketSessionId) *MsgUpdateBucketQueue {
-	return &MsgUpdateBucketQueue{bucketQueueMap: bucketQueueMap,
-		bucketFilter:    bucketFilter,
-		stats:           m.stats.Get(),
-		bucketSessionId: bucketSessionId}
+func (m *mutationMgr) newUpdateKeyspaceIdQueuesMsg(keyspaceIdQueueMap KeyspaceIdQueueMap,
+	keyspaceIdFilter map[string]*common.TsVbuuid, keyspaceIdSessionId KeyspaceIdSessionId) *MsgUpdateKeyspaceIdQueue {
+	return &MsgUpdateKeyspaceIdQueue{keyspaceIdQueueMap: keyspaceIdQueueMap,
+		keyspaceIdFilter:    keyspaceIdFilter,
+		stats:               m.stats.Get(),
+		keyspaceIdSessionId: keyspaceIdSessionId}
 }
 
 //handleRemoveIndexListFromStream removes a list of indexes from an
 //already running MutationStreamReader. If all the indexes for a
-//bucket get deleted, its mutation queue is dropped.
+//keyspace get deleted, its mutation queue is dropped.
 func (m *mutationMgr) handleRemoveIndexListFromStream(cmd Message) {
 
 	logging.Infof("MutationMgr::handleRemoveIndexListFromStream %v", cmd)
@@ -568,46 +572,46 @@ func (m *mutationMgr) handleRemoveIndexListFromStream(cmd Message) {
 
 	indexList := cmd.(*MsgStreamUpdate).GetIndexList()
 
-	bucketQueueMap := m.streamBucketQueueMap[streamId]
+	keyspaceIdQueueMap := m.streamKeyspaceIdQueueMap[streamId]
 	indexQueueMap := m.streamIndexQueueMap[streamId]
-	bucketSessionId := m.streamBucketSessionId[streamId]
+	keyspaceIdSessionId := m.streamKeyspaceIdSessionId[streamId]
 
 	//delete the given indexes from map
 	for _, i := range indexList {
 		delete(indexQueueMap, i.InstId)
 	}
 
-	var bucketMapDirty bool
-	//if all indexes for a bucket have been removed, drop the mutation queue
-	for b, bq := range bucketQueueMap {
-		dropBucket := true
+	var keyspaceIdMapDirty bool
+	//if all indexes for a keyspaceId have been removed, drop the mutation queue
+	for b, bq := range keyspaceIdQueueMap {
+		dropKeyspaceId := true
 		for _, iq := range indexQueueMap {
 			//bad check: if the queues match, it is still being used
-			//better way is to check with bucket
+			//better way is to check with keyspaceId
 			if bq == iq {
-				dropBucket = false
+				dropKeyspaceId = false
 				break
 			}
 		}
-		if dropBucket == true {
+		if dropKeyspaceId == true {
 			//destroy the queue explicitly so that
 			//any pending mutations in queue get freed
-			mq := bucketQueueMap[b].queue
+			mq := keyspaceIdQueueMap[b].queue
 			mq.Destroy()
-			delete(bucketQueueMap, b)
-			delete(bucketSessionId, b)
-			bucketMapDirty = true
+			delete(keyspaceIdQueueMap, b)
+			delete(keyspaceIdSessionId, b)
+			keyspaceIdMapDirty = true
 		}
 	}
 
-	if bucketMapDirty {
+	if keyspaceIdMapDirty {
 		respMsg := m.sendMsgToStreamReader(streamId,
-			m.newUpdateBucketQueuesMsg(bucketQueueMap, nil, bucketSessionId))
+			m.newUpdateKeyspaceIdQueuesMsg(keyspaceIdQueueMap, nil, keyspaceIdSessionId))
 		if respMsg.GetMsgType() == MSG_SUCCESS {
 			//update internal structures
-			m.streamBucketQueueMap[streamId] = bucketQueueMap
+			m.streamKeyspaceIdQueueMap[streamId] = keyspaceIdQueueMap
 			m.streamIndexQueueMap[streamId] = indexQueueMap
-			m.streamBucketSessionId[streamId] = bucketSessionId
+			m.streamKeyspaceIdSessionId[streamId] = keyspaceIdSessionId
 		}
 
 		//send the message back on supv channel
@@ -618,12 +622,12 @@ func (m *mutationMgr) handleRemoveIndexListFromStream(cmd Message) {
 
 }
 
-func (m *mutationMgr) handleRemoveBucketFromStream(cmd Message) {
+func (m *mutationMgr) handleRemoveKeyspaceFromStream(cmd Message) {
 
-	logging.Infof("MutationMgr::handleRemoveBucketFromStream %v", cmd)
+	logging.Infof("MutationMgr::handleRemoveKeyspaceFromStream %v", cmd)
 
 	streamId := cmd.(*MsgStreamUpdate).GetStreamId()
-	bucket := cmd.(*MsgStreamUpdate).GetBucket()
+	keyspaceId := cmd.(*MsgStreamUpdate).GetKeyspaceId()
 	abort := cmd.(*MsgStreamUpdate).AbortRecovery()
 
 	m.lock.Lock()
@@ -633,11 +637,11 @@ func (m *mutationMgr) handleRemoveBucketFromStream(cmd Message) {
 	if _, ok := m.streamReaderMap[streamId]; !ok {
 
 		if abort {
-			logging.Infof("MutationMgr::handleRemoveIndexListFromStream "+
+			logging.Infof("MutationMgr::handleRemoveKeyspaceFromStream "+
 				"Stream Already Closed %v", streamId)
 			m.supvCmdch <- &MsgSuccess{}
 		} else {
-			logging.Errorf("MutationMgr::handleRemoveIndexListFromStream "+
+			logging.Errorf("MutationMgr::handleRemoveKeyspaceFromStream "+
 				"Stream Already Closed %v", streamId)
 			m.supvCmdch <- &MsgError{
 				err: Error{code: ERROR_MUT_MGR_STREAM_ALREADY_CLOSED,
@@ -648,45 +652,45 @@ func (m *mutationMgr) handleRemoveBucketFromStream(cmd Message) {
 		return
 	}
 
-	bucketQueueMap := m.streamBucketQueueMap[streamId]
+	keyspaceIdQueueMap := m.streamKeyspaceIdQueueMap[streamId]
 	indexQueueMap := m.streamIndexQueueMap[streamId]
-	bucketSessionId := m.streamBucketSessionId[streamId]
+	keyspaceIdSessionId := m.streamKeyspaceIdSessionId[streamId]
 
-	var bucketMapDirty bool
+	var keyspaceIdMapDirty bool
 
-	//delete all indexes for given bucket from map
+	//delete all indexes for given keyspaceId from map
 	for _, inst := range m.indexInstMap {
-		if inst.Defn.Bucket == bucket {
-			bucketMapDirty = true
+		if inst.Defn.KeyspaceId(streamId) == keyspaceId {
+			keyspaceIdMapDirty = true
 			delete(indexQueueMap, inst.InstId)
 		}
 	}
 
-	if _, ok := bucketQueueMap[bucket]; ok {
-		bucketMapDirty = true
+	if _, ok := keyspaceIdQueueMap[keyspaceId]; ok {
+		keyspaceIdMapDirty = true
 		//destroy the queue explicitly so that
 		//any pending mutations in queue get freed
-		mq := bucketQueueMap[bucket].queue
+		mq := keyspaceIdQueueMap[keyspaceId].queue
 		mq.Destroy()
-		delete(bucketQueueMap, bucket)
-		delete(bucketSessionId, bucket)
+		delete(keyspaceIdQueueMap, keyspaceId)
+		delete(keyspaceIdSessionId, keyspaceId)
 	}
 
-	if len(bucketQueueMap) == 0 {
+	if len(keyspaceIdQueueMap) == 0 {
 		m.sendMsgToStreamReader(streamId,
 			&MsgGeneral{mType: STREAM_READER_SHUTDOWN})
 
 		m.cleanupStream(streamId)
 
 		m.supvCmdch <- &MsgSuccess{}
-	} else if bucketMapDirty {
+	} else if keyspaceIdMapDirty {
 		respMsg := m.sendMsgToStreamReader(streamId,
-			m.newUpdateBucketQueuesMsg(bucketQueueMap, nil, bucketSessionId))
+			m.newUpdateKeyspaceIdQueuesMsg(keyspaceIdQueueMap, nil, keyspaceIdSessionId))
 		if respMsg.GetMsgType() == MSG_SUCCESS {
 			//update internal structures
-			m.streamBucketQueueMap[streamId] = bucketQueueMap
+			m.streamKeyspaceIdQueueMap[streamId] = keyspaceIdQueueMap
 			m.streamIndexQueueMap[streamId] = indexQueueMap
-			m.streamBucketSessionId[streamId] = bucketSessionId
+			m.streamKeyspaceIdSessionId[streamId] = keyspaceIdSessionId
 		}
 
 		//send the message back on supv channel
@@ -794,8 +798,8 @@ func (m *mutationMgr) shutdown() Message {
 		defer m.flock.Unlock()
 
 		//send stop signal to all flushers
-		for _, bucketStopChMap := range m.streamFlusherStopChMap {
-			for _, stopch := range bucketStopChMap {
+		for _, keyspaceIdStopChMap := range m.streamFlusherStopChMap {
+			for _, stopch := range keyspaceIdStopChMap {
 				close(stopch)
 			}
 		}
@@ -871,7 +875,7 @@ func (m *mutationMgr) cleanupStream(streamId common.StreamId) {
 
 	//cleanup internal maps for this stream
 	delete(m.streamReaderMap, streamId)
-	delete(m.streamBucketQueueMap, streamId)
+	delete(m.streamKeyspaceIdQueueMap, streamId)
 	delete(m.streamIndexQueueMap, streamId)
 	delete(m.streamReaderCmdChMap, streamId)
 	delete(m.streamReaderExitChMap, streamId)
@@ -893,7 +897,7 @@ func (m *mutationMgr) handlePersistMutationQueue(cmd Message) {
 
 	logging.Tracef("MutationMgr::handlePersistMutationQueue %v", cmd)
 
-	bucket := cmd.(*MsgMutMgrFlushMutationQueue).GetBucket()
+	keyspaceId := cmd.(*MsgMutMgrFlushMutationQueue).GetKeyspaceId()
 	streamId := cmd.(*MsgMutMgrFlushMutationQueue).GetStreamId()
 	ts := cmd.(*MsgMutMgrFlushMutationQueue).GetTimestamp()
 	changeVec := cmd.(*MsgMutMgrFlushMutationQueue).GetChangeVector()
@@ -902,23 +906,23 @@ func (m *mutationMgr) handlePersistMutationQueue(cmd Message) {
 	m.lock.Lock()
 	defer m.lock.Unlock()
 
-	q := m.streamBucketQueueMap[streamId][bucket]
+	q := m.streamKeyspaceIdQueueMap[streamId][keyspaceId]
 	stats := m.stats.Get()
-	go m.persistMutationQueue(q, streamId, bucket, ts, changeVec, stats, hasAllSB)
+	go m.persistMutationQueue(q, streamId, keyspaceId, ts, changeVec, stats, hasAllSB)
 	m.supvCmdch <- &MsgSuccess{}
 
 }
 
 //persistMutationQueue implements the actual persist for the queue
 func (m *mutationMgr) persistMutationQueue(q IndexerMutationQueue,
-	streamId common.StreamId, bucket string, ts *common.TsVbuuid,
+	streamId common.StreamId, keyspaceId string, ts *common.TsVbuuid,
 	changeVec []bool, stats *IndexerStats, hasAllSB bool) {
 
 	m.flock.Lock()
 	defer m.flock.Unlock()
 
 	stopch := make(StopChannel)
-	m.streamFlusherStopChMap[streamId][bucket] = stopch
+	m.streamFlusherStopChMap[streamId][keyspaceId] = stopch
 	m.flusherWaitGroup.Add(1)
 
 	go func(config common.Config) {
@@ -926,7 +930,7 @@ func (m *mutationMgr) persistMutationQueue(q IndexerMutationQueue,
 
 		flusher := NewFlusher(config, stats)
 		sts := getSeqTsFromTsVbuuid(ts)
-		msgch := flusher.PersistUptoTS(q.queue, streamId, ts.Bucket,
+		msgch := flusher.PersistUptoTS(q.queue, streamId, keyspaceId,
 			m.indexInstMap, m.indexPartnMap, sts, changeVec, stopch)
 		//wait for flusher to finish
 		msg := <-msgch
@@ -937,7 +941,7 @@ func (m *mutationMgr) persistMutationQueue(q IndexerMutationQueue,
 			defer m.flock.Unlock()
 
 			//delete the stop channel from the map
-			delete(m.streamFlusherStopChMap[streamId], bucket)
+			delete(m.streamFlusherStopChMap[streamId], keyspaceId)
 		}()
 
 		stats.memoryUsedQueue.Set(atomic.LoadInt64(&m.memUsed))
@@ -945,16 +949,16 @@ func (m *mutationMgr) persistMutationQueue(q IndexerMutationQueue,
 		//send the response to supervisor
 		if msg.GetMsgType() == MSG_SUCCESS {
 			m.supvRespch <- &MsgMutMgrFlushDone{mType: MUT_MGR_FLUSH_DONE,
-				streamId: streamId,
-				bucket:   bucket,
-				ts:       ts,
-				hasAllSB: hasAllSB}
+				streamId:   streamId,
+				keyspaceId: keyspaceId,
+				ts:         ts,
+				hasAllSB:   hasAllSB}
 		} else {
 			m.supvRespch <- &MsgMutMgrFlushDone{mType: MUT_MGR_FLUSH_DONE,
-				streamId: streamId,
-				bucket:   bucket,
-				ts:       ts,
-				aborted:  true}
+				streamId:   streamId,
+				keyspaceId: keyspaceId,
+				ts:         ts,
+				aborted:    true}
 		}
 	}(m.config)
 
@@ -968,7 +972,7 @@ func (m *mutationMgr) handleDrainMutationQueue(cmd Message) {
 
 	logging.Tracef("MutationMgr::handleDrainMutationQueue %v", cmd)
 
-	bucket := cmd.(*MsgMutMgrFlushMutationQueue).GetBucket()
+	keyspaceId := cmd.(*MsgMutMgrFlushMutationQueue).GetKeyspaceId()
 	streamId := cmd.(*MsgMutMgrFlushMutationQueue).GetStreamId()
 	ts := cmd.(*MsgMutMgrFlushMutationQueue).GetTimestamp()
 	changeVec := cmd.(*MsgMutMgrFlushMutationQueue).GetChangeVector()
@@ -976,22 +980,22 @@ func (m *mutationMgr) handleDrainMutationQueue(cmd Message) {
 	m.lock.Lock()
 	defer m.lock.Unlock()
 
-	q := m.streamBucketQueueMap[streamId][bucket]
+	q := m.streamKeyspaceIdQueueMap[streamId][keyspaceId]
 	stats := m.stats.Get()
-	go m.drainMutationQueue(q, streamId, bucket, ts, changeVec, stats)
+	go m.drainMutationQueue(q, streamId, keyspaceId, ts, changeVec, stats)
 	m.supvCmdch <- &MsgSuccess{}
 }
 
 //drainMutationQueue implements the actual drain for the queue
 func (m *mutationMgr) drainMutationQueue(q IndexerMutationQueue,
-	streamId common.StreamId, bucket string, ts *common.TsVbuuid,
+	streamId common.StreamId, keyspaceId string, ts *common.TsVbuuid,
 	changeVec []bool, stats *IndexerStats) {
 
 	m.flock.Lock()
 	defer m.flock.Unlock()
 
 	stopch := make(StopChannel)
-	m.streamFlusherStopChMap[streamId][bucket] = stopch
+	m.streamFlusherStopChMap[streamId][keyspaceId] = stopch
 	m.flusherWaitGroup.Add(1)
 
 	go func(config common.Config) {
@@ -999,7 +1003,7 @@ func (m *mutationMgr) drainMutationQueue(q IndexerMutationQueue,
 
 		flusher := NewFlusher(config, stats)
 		sts := getSeqTsFromTsVbuuid(ts)
-		msgch := flusher.DrainUptoTS(q.queue, streamId, ts.Bucket,
+		msgch := flusher.DrainUptoTS(q.queue, streamId, keyspaceId,
 			sts, changeVec, stopch)
 		//wait for flusher to finish
 		msg := <-msgch
@@ -1010,7 +1014,7 @@ func (m *mutationMgr) drainMutationQueue(q IndexerMutationQueue,
 			defer m.flock.Unlock()
 
 			//delete the stop channel from the map
-			delete(m.streamFlusherStopChMap[streamId], bucket)
+			delete(m.streamFlusherStopChMap[streamId], keyspaceId)
 		}()
 
 		//send the response to supervisor
@@ -1019,19 +1023,47 @@ func (m *mutationMgr) drainMutationQueue(q IndexerMutationQueue,
 
 }
 
+func (m *mutationMgr) handleAbortPersist(cmd Message) {
+
+	logging.Infof("MutationMgr::handleAbortPersist %v", cmd)
+
+	keyspaceId := cmd.(*MsgMutMgrFlushMutationQueue).GetKeyspaceId()
+	streamId := cmd.(*MsgMutMgrFlushMutationQueue).GetStreamId()
+
+	go func() {
+		m.flock.Lock()
+		defer m.flock.Unlock()
+
+		//abort the flush for given stream and keyspaceId, if its in progress
+		if keyspaceIdStopChMap, ok := m.streamFlusherStopChMap[streamId]; ok {
+			if stopch, ok := keyspaceIdStopChMap[keyspaceId]; ok {
+				if stopch != nil {
+					close(stopch)
+				}
+			}
+		}
+		m.supvRespch <- &MsgMutMgrFlushDone{mType: MUT_MGR_ABORT_DONE,
+			keyspaceId: keyspaceId,
+			streamId:   streamId}
+	}()
+
+	m.supvCmdch <- &MsgSuccess{}
+
+}
+
 //handleGetMutationQueueHWT calculates HWT for a mutation queue
-//for a given stream and bucket
+//for a given stream and keyspaceId
 func (m *mutationMgr) handleGetMutationQueueHWT(cmd Message) {
 
 	logging.Tracef("MutationMgr::handleGetMutationQueueHWT %v", cmd)
 
-	bucket := cmd.(*MsgMutMgrGetTimestamp).GetBucket()
+	keyspaceId := cmd.(*MsgMutMgrGetTimestamp).GetKeyspaceId()
 	streamId := cmd.(*MsgMutMgrGetTimestamp).GetStreamId()
 
 	m.lock.Lock()
 	defer m.lock.Unlock()
 
-	q := m.streamBucketQueueMap[streamId][bucket]
+	q := m.streamKeyspaceIdQueueMap[streamId][keyspaceId]
 	stats := m.stats.Get()
 	go func(config common.Config) {
 		flusher := NewFlusher(config, stats)
@@ -1041,17 +1073,17 @@ func (m *mutationMgr) handleGetMutationQueueHWT(cmd Message) {
 }
 
 //handleGetMutationQueueLWT calculates LWT for a mutation queue
-//for a given stream and bucket
+//for a given stream and keyspaceId
 func (m *mutationMgr) handleGetMutationQueueLWT(cmd Message) {
 
 	logging.Tracef("MutationMgr::handleGetMutationQueueLWT %v", cmd)
-	bucket := cmd.(*MsgMutMgrGetTimestamp).GetBucket()
+	keyspaceId := cmd.(*MsgMutMgrGetTimestamp).GetKeyspaceId()
 	streamId := cmd.(*MsgMutMgrGetTimestamp).GetStreamId()
 
 	m.lock.Lock()
 	defer m.lock.Unlock()
 
-	q := m.streamBucketQueueMap[streamId][bucket]
+	q := m.streamKeyspaceIdQueueMap[streamId][keyspaceId]
 	stats := m.stats.Get()
 	go func(config common.Config) {
 		flusher := NewFlusher(config, stats)
@@ -1105,18 +1137,18 @@ func (m *mutationMgr) initLatencyObj(cmd Message) {
 	meta := cmd.(*MsgStream).GetMutationMeta()
 
 	vb := meta.vbucket
-	bucket := meta.bucket
+	keyspaceId := meta.keyspaceId
 	vbMap := m.vbMap.Clone()
 
 	perStreamCurrNode := fmt.Sprintf("%v/%s", streamId, node)
-	perStreamBucket := fmt.Sprintf("%v/%v", streamId, bucket)
+	perStreamKeyspaceId := fmt.Sprintf("%v/%v", streamId, keyspaceId)
 
-	if _, ok := vbMap[perStreamBucket]; !ok {
-		vbMap[perStreamBucket] = make(map[Vbucket]string)
+	if _, ok := vbMap[perStreamKeyspaceId]; !ok {
+		vbMap[perStreamKeyspaceId] = make(map[Vbucket]string)
 	}
 
 	// Check if vb belonged to a different node before
-	if perStreamPrevNode, ok := vbMap[perStreamBucket][vb]; ok &&
+	if perStreamPrevNode, ok := vbMap[perStreamKeyspaceId][vb]; ok &&
 		perStreamPrevNode != perStreamCurrNode {
 		// vb belonged to a different node before
 		m.numVbsPerNode[perStreamPrevNode]--
@@ -1138,7 +1170,7 @@ func (m *mutationMgr) initLatencyObj(cmd Message) {
 		m.numVbsPerNode[perStreamCurrNode]++
 	}
 
-	vbMap[perStreamBucket][vb] = perStreamCurrNode
+	vbMap[perStreamKeyspaceId][vb] = perStreamCurrNode
 	m.vbMap.Set(vbMap)
 
 	// Update prjLatencyMap only if there is a change
@@ -1164,43 +1196,6 @@ func (m *mutationMgr) cleanLatencyMap(streamId common.StreamId) {
 		}
 	}
 	stats.prjLatencyMap.Set(newPrjLatencyMap)
-}
-
-func CopyBucketQueueMap(inMap BucketQueueMap) BucketQueueMap {
-
-	outMap := make(BucketQueueMap)
-	for k, v := range inMap {
-		outMap[k] = v
-	}
-	return outMap
-}
-
-func (m *mutationMgr) handleAbortPersist(cmd Message) {
-
-	logging.Infof("MutationMgr::handleAbortPersist %v", cmd)
-
-	bucket := cmd.(*MsgMutMgrFlushMutationQueue).GetBucket()
-	streamId := cmd.(*MsgMutMgrFlushMutationQueue).GetStreamId()
-
-	go func() {
-		m.flock.Lock()
-		defer m.flock.Unlock()
-
-		//abort the flush for given stream and bucket, if its in progress
-		if bucketStopChMap, ok := m.streamFlusherStopChMap[streamId]; ok {
-			if stopch, ok := bucketStopChMap[bucket]; ok {
-				if stopch != nil {
-					close(stopch)
-				}
-			}
-		}
-		m.supvRespch <- &MsgMutMgrFlushDone{mType: MUT_MGR_ABORT_DONE,
-			bucket:   bucket,
-			streamId: streamId}
-	}()
-
-	m.supvCmdch <- &MsgSuccess{}
-
 }
 
 func (m *mutationMgr) handleConfigUpdate(cmd Message) {
@@ -1290,6 +1285,15 @@ func (m *mutationMgr) handleSecurityChange(cmd Message) {
 	}
 
 	m.supvCmdch <- msg
+}
+
+func CopyKeyspaceIdQueueMap(inMap KeyspaceIdQueueMap) KeyspaceIdQueueMap {
+
+	outMap := make(KeyspaceIdQueueMap)
+	for k, v := range inMap {
+		outMap[k] = v
+	}
+	return outMap
 }
 
 func getMutationQueueMemFrac(config common.Config) float64 {

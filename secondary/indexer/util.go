@@ -123,16 +123,23 @@ func GetRealIndexInstId(inst *common.IndexInst) common.IndexInstId {
 	return instId
 }
 
-func GetCurrentKVTs(cluster, pooln, bucketn string, numVbs int) (Timestamp, error) {
+func GetCurrentKVTs(cluster, pooln, keyspaceId, cid string, numVbs int) (Timestamp, error) {
 
 	var seqnos []uint64
+	bucketn, _, _ := SplitKeyspaceId(keyspaceId)
 
 	fn := func(r int, err error) error {
 		if r > 0 {
 			logging.Warnf("Indexer::getCurrentKVTs error=%v Retrying (%d)", err, r)
 		}
 
-		seqnos, err = common.BucketSeqnos(cluster, pooln, bucketn)
+		//if collection id has not been specified, use bucket level
+		if cid == "" {
+			seqnos, err = common.BucketSeqnos(cluster, pooln, bucketn)
+		} else {
+			seqnos, err = common.CollectionSeqnos(cluster, pooln, bucketn, cid)
+		}
+
 		return err
 	}
 
@@ -153,7 +160,7 @@ func GetCurrentKVTs(cluster, pooln, bucketn string, numVbs int) (Timestamp, erro
 
 	ts := NewTimestamp(numVbs)
 	for i := 0; i < numVbs; i++ {
-		ts[i] = Seqno(seqnos[i])
+		ts[i] = seqnos[i]
 	}
 
 	elapsed := time.Since(start)

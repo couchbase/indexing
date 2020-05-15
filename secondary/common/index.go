@@ -272,8 +272,8 @@ func (idx IndexDefn) String() string {
 	str += fmt.Sprintf("Name: %v ", idx.Name)
 	str += fmt.Sprintf("Using: %v ", idx.Using)
 	str += fmt.Sprintf("Bucket: %v ", idx.Bucket)
-	str += fmt.Sprintf("Scope: %v ", idx.Scope)
-	str += fmt.Sprintf("Collection: %v ", idx.Collection)
+	str += fmt.Sprintf("Scope/Id: %v/%v ", idx.Scope, idx.ScopeId)
+	str += fmt.Sprintf("Collection/Id: %v/%v ", idx.Collection, idx.CollectionId)
 	str += fmt.Sprintf("IsPrimary: %v ", idx.IsPrimary)
 	str += fmt.Sprintf("NumReplica: %v ", idx.GetNumReplica())
 	str += fmt.Sprintf("InstVersion: %v ", idx.InstVersion)
@@ -371,6 +371,27 @@ func (idx *IndexDefn) IndexOnCollection() bool {
 	}
 
 	return true
+}
+
+func (idx *IndexDefn) KeyspaceId(streamId StreamId) string {
+
+	//index created pre CC will have empty scope/collection
+	if idx.Scope == "" && idx.Collection == "" {
+		return idx.Bucket
+	}
+
+	if streamId == INIT_STREAM {
+		//for default scope/collection, always use bucket as keyspaceId for
+		//backward compatibility
+		if idx.Scope == DEFAULT_SCOPE && idx.Collection == DEFAULT_COLLECTION {
+			return idx.Bucket
+		} else {
+			return strings.Join([]string{idx.Bucket, idx.Scope, idx.Collection}, ":")
+		}
+	} else {
+		return idx.Bucket
+	}
+
 }
 
 func (idx IndexInst) IsProxy() bool {

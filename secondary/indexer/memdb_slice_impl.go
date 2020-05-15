@@ -1034,7 +1034,7 @@ func (mdb *memdbSlice) cleanupOldSnapshotFiles(keepn int) {
 		}
 
 		for i := 0; i < mdb.numVbuckets; i++ {
-			seqTs[i] = Seqno(seqnos[i])
+			seqTs[i] = seqnos[i]
 		}
 		break
 

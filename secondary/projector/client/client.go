@@ -62,16 +62,21 @@
 
 package client
 
-import "fmt"
-import "time"
-import "strings"
-import "errors"
+import (
+	"errors"
+	"fmt"
+	"strings"
+	"time"
 
-import "github.com/couchbase/indexing/secondary/logging"
-import ap "github.com/couchbase/indexing/secondary/adminport"
-import c "github.com/couchbase/indexing/secondary/common"
-import protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
-import "github.com/golang/protobuf/proto"
+	"github.com/couchbase/indexing/secondary/logging"
+
+	ap "github.com/couchbase/indexing/secondary/adminport"
+
+	c "github.com/couchbase/indexing/secondary/common"
+
+	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
+	"github.com/golang/protobuf/proto"
+)
 
 // error codes
 
@@ -252,14 +257,16 @@ func (client *Client) InitialTopicRequest(
 	topic, pooln, endpointType string,
 	instances []*protobuf.Instance,
 	async bool,
-	opaque2 uint64) (*protobuf.TopicResponse, error) {
+	opaque2 uint64,
+	collectionAware bool) (*protobuf.TopicResponse, error) {
 
 	buckets := make(map[string]bool, 0)
 	for _, instance := range instances {
 		buckets[instance.GetBucket()] = true
 	}
 
-	req := protobuf.NewMutationTopicRequest(topic, endpointType, instances, async, opaque2)
+	req := protobuf.NewMutationTopicRequest(topic, endpointType,
+		instances, async, opaque2, collectionAware)
 	for bucketn := range buckets {
 		ts, err := client.InitialRestartTimestamp(pooln, bucketn)
 		if err != nil {
@@ -318,11 +325,15 @@ func (client *Client) MutationTopicRequest(
 	reqTimestamps []*protobuf.TsVbuuid,
 	instances []*protobuf.Instance,
 	async bool,
-	opaque2 uint64) (*protobuf.TopicResponse, error) {
+	opaque2 uint64,
+	keyspaceIds []string,
+	collectionAware bool) (*protobuf.TopicResponse, error) {
 
 	req := protobuf.NewMutationTopicRequest(topic,
-		endpointType, instances, async, opaque2)
+		endpointType, instances, async, opaque2, collectionAware)
 	req.ReqTimestamps = reqTimestamps
+	req.KeyspaceIds = keyspaceIds
+
 	res := &protobuf.TopicResponse{}
 	err := client.withRetry(
 		func() error {
@@ -375,12 +386,15 @@ func (client *Client) MutationTopicRequest(
 // * rollback-timestamp contains vbucket entries that need rollback.
 func (client *Client) RestartVbuckets(
 	topic string, opaque2 uint64,
-	restartTimestamps []*protobuf.TsVbuuid) (*protobuf.TopicResponse, error) {
+	restartTimestamps []*protobuf.TsVbuuid,
+	keyspaceIds []string) (*protobuf.TopicResponse, error) {
 
 	req := protobuf.NewRestartVbucketsRequest(topic, opaque2)
 	for _, restartTs := range restartTimestamps {
 		req.Append(restartTs)
 	}
+	req.KeyspaceIds = keyspaceIds
+
 	res := &protobuf.TopicResponse{}
 	err := client.withRetry(
 		func() error {
@@ -425,12 +439,14 @@ func (client *Client) RestartVbuckets(
 //   entries only for successfully started {bucket,vbuckets}.
 // * rollback-timestamp contains vbucket entries that need rollback.
 func (client *Client) ShutdownVbuckets(
-	topic string, shutdownTimestamps []*protobuf.TsVbuuid) error {
+	topic string, shutdownTimestamps []*protobuf.TsVbuuid,
+	keyspaceIds []string) error {
 
 	req := protobuf.NewShutdownVbucketsRequest(topic)
 	for _, shutTs := range shutdownTimestamps {
 		req.Append(shutTs)
 	}
+	req.KeyspaceIds = keyspaceIds
 	res := &protobuf.Error{}
 	err := client.withRetry(
 		func() error {
@@ -478,10 +494,12 @@ func (client *Client) ShutdownVbuckets(
 // * rollback-timestamp contains vbucket entries that need rollback.
 func (client *Client) AddBuckets(
 	topic string, reqTimestamps []*protobuf.TsVbuuid,
-	instances []*protobuf.Instance) (*protobuf.TopicResponse, error) {
+	instances []*protobuf.Instance,
+	keyspaceIds []string) (*protobuf.TopicResponse, error) {
 
 	req := protobuf.NewAddBucketsRequest(topic, instances)
 	req.ReqTimestamps = reqTimestamps
+	req.KeyspaceIds = keyspaceIds
 	res := &protobuf.TopicResponse{}
 	err := client.withRetry(
 		func() error {
@@ -505,8 +523,11 @@ func (client *Client) AddBuckets(
 // Possible errors returned,
 // - http errors for transport related failures.
 // - ErrorTopicMissing if feed is not started.
-func (client *Client) DelBuckets(topic string, buckets []string) error {
-	req := protobuf.NewDelBucketsRequest(topic, buckets)
+func (client *Client) DelBuckets(topic string,
+	buckets []string,
+	keyspaceIds []string) error {
+	req := protobuf.NewDelBucketsRequest(topic, buckets, keyspaceIds)
+	req.KeyspaceIds = keyspaceIds
 	res := &protobuf.Error{}
 	err := client.withRetry(
 		func() error {
@@ -534,9 +555,11 @@ func (client *Client) DelBuckets(topic string, buckets []string) error {
 // - ErrorInconsistentFeed for malformed feed request.
 func (client *Client) AddInstances(
 	topic string,
-	instances []*protobuf.Instance) (*protobuf.TimestampResponse, error) {
+	instances []*protobuf.Instance,
+	keyspaceId string) (*protobuf.TimestampResponse, error) {
 
 	req := protobuf.NewAddInstancesRequest(topic, instances)
+	req.KeyspaceId = proto.String(keyspaceId)
 	res := &protobuf.TimestampResponse{}
 	err := client.withRetry(
 		func() error {
@@ -562,8 +585,11 @@ func (client *Client) AddInstances(
 // Possible errors returned,
 // - http errors for transport related failures.
 // - ErrorTopicMissing if feed is not started.
-func (client *Client) DelInstances(topic string, uuids []uint64) error {
+func (client *Client) DelInstances(topic string,
+	uuids []uint64,
+	keyspaceId string) error {
 	req := protobuf.NewDelInstancesRequest(topic, uuids)
+	req.KeyspaceId = proto.String(keyspaceId)
 	res := &protobuf.Error{}
 	err := client.withRetry(
 		func() error {

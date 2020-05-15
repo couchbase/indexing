@@ -1046,11 +1046,14 @@ func (s *scanCoordinator) handleIndexerRollback(cmd Message) {
 
 	msg := cmd.(*MsgRollback)
 
+	//TODO Collections are these changes required at collection level
+	bucket, _, _ := SplitKeyspaceId(msg.keyspaceId)
+
 	if msg.rollbackTime != 0 {
-		s.saveRollbackTime(msg.bucket, msg.rollbackTime)
-		s.setRollbackInProgress(msg.bucket, true)
+		s.saveRollbackTime(bucket, msg.rollbackTime)
+		s.setRollbackInProgress(bucket, true)
 	} else {
-		s.setRollbackInProgress(msg.bucket, false)
+		s.setRollbackInProgress(bucket, false)
 	}
 
 	s.supvCmdch <- &MsgSuccess{}

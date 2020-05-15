@@ -12,18 +12,18 @@ package indexer
 import "fmt"
 
 //list of seqno per vbucket
-type Timestamp []Seqno
+type Timestamp []uint64
 
 //Stability Timestamp
 type StabilityTimestamp Timestamp
 
 func NewTimestamp(numVbuckets int) Timestamp {
-	ts := make([]Seqno, numVbuckets)
+	ts := make([]uint64, numVbuckets)
 	return ts
 }
 
 func CopyTimestamp(ts Timestamp) Timestamp {
-	newTs := make([]Seqno, len(ts))
+	newTs := make([]uint64, len(ts))
 	copy(newTs, ts)
 	return newTs
 }
@@ -94,7 +94,7 @@ func (ts Timestamp) GreaterThan(ts1 Timestamp) bool {
 func (ts Timestamp) IsZeroTs() bool {
 
 	for _, t := range ts {
-		if t != Seqno(0) {
+		if t != 0 {
 			return false
 		}
 	}

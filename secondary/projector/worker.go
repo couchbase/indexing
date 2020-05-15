@@ -19,17 +19,23 @@
 
 package projector
 
-import "fmt"
-import "strconv"
+import (
+	"fmt"
+	"strconv"
 
-import qvalue "github.com/couchbase/query/value"
-import qexpr "github.com/couchbase/query/expression"
-import mcd "github.com/couchbase/indexing/secondary/dcp/transport"
-import mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
-import c "github.com/couchbase/indexing/secondary/common"
-import "github.com/couchbase/indexing/secondary/logging"
-import "github.com/couchbase/indexing/secondary/stats"
-import "os"
+	qexpr "github.com/couchbase/query/expression"
+	qvalue "github.com/couchbase/query/value"
+
+	mcd "github.com/couchbase/indexing/secondary/dcp/transport"
+
+	mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
+
+	"os"
+
+	c "github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/stats"
+)
 
 // VbucketWorker is immutable structure defined for each vbucket.
 type VbucketWorker struct {
@@ -547,6 +553,7 @@ func (worker *VbucketWorker) handleEvent(m *mc.DcpEvent) *Vbucket {
 			logging.Errorf(fmsg, logPrefix, m.Opaque, vbno)
 			return v
 		}
+		v.seqno = m.Seqno // update seqno for system event
 		if data := v.makeSystemEventData(m, worker.engines); data != nil {
 			worker.broadcast2Endpoints(data)
 		} else {
@@ -560,6 +567,7 @@ func (worker *VbucketWorker) handleEvent(m *mc.DcpEvent) *Vbucket {
 			logging.Errorf(fmsg, logPrefix, m.Opaque, vbno)
 			return v
 		}
+		v.seqno = m.Seqno // update seqno for seqno advanced
 		if data := v.makeSeqnoAdvancedEvent(m, worker.engines); data != nil {
 			worker.broadcast2Endpoints(data)
 		} else {

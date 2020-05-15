@@ -68,47 +68,9 @@ func CreateSecondaryIndex(
 	indexName, bucketName, server, whereExpr string, indexFields []string, isPrimary bool, with []byte,
 	skipIfExists bool, indexActiveTimeoutSeconds int64, client *qc.GsiClient) error {
 
-	if client == nil {
-		c, e := GetOrCreateClient(server, "2itest")
-		if e != nil {
-			return e
-		}
-		client = c
-	}
+	return CreateSecondaryIndex2(indexName, bucketName, server, whereExpr, indexFields, nil, isPrimary, with,
+		c.SINGLE, nil, skipIfExists, indexActiveTimeoutSeconds, client)
 
-	indexExists := IndexExistsWithClient(indexName, bucketName, server, client)
-	if skipIfExists == true && indexExists == true {
-		return nil
-	}
-	var secExprs []string
-	if isPrimary == false {
-		for _, indexField := range indexFields {
-			expr, err := n1ql.ParseExpression(indexField)
-			if err != nil {
-				log.Printf("Creating index %v. Error while parsing the expression (%v) : %v", indexName, indexField, err)
-			}
-
-			secExprs = append(secExprs, expression.NewStringer().Visit(expr))
-		}
-	}
-	exprType := "N1QL"
-	partnExp := ""
-
-	start := time.Now()
-	defnID, err := client.CreateIndex(indexName, bucketName, IndexUsing, exprType, partnExp, whereExpr, secExprs, isPrimary, with)
-	if err == nil {
-		log.Printf("Created the secondary index %v. Waiting for it become active", indexName)
-		e := WaitTillIndexActive(defnID, client, indexActiveTimeoutSeconds)
-		if e != nil {
-			return e
-		} else {
-			elapsed := time.Since(start)
-			tc.LogPerfStat("CreateAndBuildIndex", elapsed)
-			return nil
-		}
-	}
-
-	return err
 }
 
 // Creates an index and waits for it to become active
@@ -117,6 +79,17 @@ func CreateSecondaryIndex2(
 	partnScheme c.PartitionScheme, partnKeys []string, skipIfExists bool, indexActiveTimeoutSeconds int64,
 	client *qc.GsiClient) error {
 
+	return CreateSecondaryIndex3(indexName, bucketName, c.DEFAULT_SCOPE, c.DEFAULT_COLLECTION, server,
+		whereExpr, indexFields, desc, isPrimary, with, partnScheme, partnKeys,
+		skipIfExists, indexActiveTimeoutSeconds, client)
+}
+
+// Creates an index and waits for it to become active
+func CreateSecondaryIndex3(
+	indexName, bucketName, scopeName, collectionName, server, whereExpr string, indexFields []string,
+	desc []bool, isPrimary bool, with []byte, partnScheme c.PartitionScheme, partnKeys []string,
+	skipIfExists bool, indexActiveTimeoutSeconds int64, client *qc.GsiClient) error {
+
 	if client == nil {
 		c, e := GetOrCreateClient(server, "2itest")
 		if e != nil {
@@ -125,7 +98,7 @@ func CreateSecondaryIndex2(
 		client = c
 	}
 
-	indexExists := IndexExistsWithClient(indexName, bucketName, server, client)
+	indexExists := IndexExistsWithClient(indexName, bucketName, scopeName, collectionName, server, client)
 	if skipIfExists == true && indexExists == true {
 		return nil
 	}
@@ -143,9 +116,10 @@ func CreateSecondaryIndex2(
 	exprType := "N1QL"
 
 	start := time.Now()
-	defnID, err := client.CreateIndex3(indexName, bucketName, IndexUsing, exprType, whereExpr, secExprs, desc, isPrimary,
-		partnScheme, partnKeys, with)
-	if err == nil {
+	defnID, err := client.CreateIndex4(indexName, bucketName, scopeName, collectionName, IndexUsing, exprType,
+		whereExpr, secExprs, desc, isPrimary, partnScheme, partnKeys, with)
+
+	if indexActiveTimeoutSeconds != 0 && err == nil {
 		log.Printf("Created the secondary index %v. Waiting for it become active", indexName)
 		e := WaitTillIndexActive(defnID, client, indexActiveTimeoutSeconds)
 		if e != nil {
@@ -165,38 +139,8 @@ func CreateSecondaryIndexAsync(
 	indexName, bucketName, server, whereExpr string, indexFields []string, isPrimary bool, with []byte,
 	skipIfExists bool, client *qc.GsiClient) error {
 
-	if client == nil {
-		c, e := GetOrCreateClient(server, "2itest")
-		if e != nil {
-			return e
-		}
-		client = c
-	}
-
-	indexExists := IndexExistsWithClient(indexName, bucketName, server, client)
-	if skipIfExists == true && indexExists == true {
-		return nil
-	}
-	var secExprs []string
-	if isPrimary == false {
-		for _, indexField := range indexFields {
-			expr, err := n1ql.ParseExpression(indexField)
-			if err != nil {
-				log.Printf("Creating index %v. Error while parsing the expression (%v) : %v", indexName, indexField, err)
-			}
-
-			secExprs = append(secExprs, expression.NewStringer().Visit(expr))
-		}
-	}
-	exprType := "N1QL"
-	partnExp := ""
-
-	_, err := client.CreateIndex(indexName, bucketName, IndexUsing, exprType, partnExp, whereExpr, secExprs, isPrimary, with)
-	if err == nil {
-		log.Printf("Created the secondary index %v", indexName)
-		return nil
-	}
-	return err
+	return CreateSecondaryIndex(indexName, bucketName, server, whereExpr, indexFields, isPrimary, with,
+		skipIfExists, 0 /*timeout*/, client)
 }
 
 // Todo: Remove this function and update functional tests to use BuildIndexes
@@ -352,12 +296,14 @@ func IndexExists(indexName, bucketName, server string) (bool, error) {
 	return false, nil
 }
 
-func IndexExistsWithClient(indexName, bucketName, server string, client *qc.GsiClient) bool {
+func IndexExistsWithClient(indexName, bucketName, scopeName, collectionName,
+	server string, client *qc.GsiClient) bool {
 	indexes, _, _, err := client.Refresh()
 	tc.HandleError(err, "Error while listing the secondary indexes")
 	for _, index := range indexes {
 		defn := index.Definition
-		if defn.Name == indexName && defn.Bucket == bucketName {
+		if defn.Name == indexName && defn.Bucket == bucketName &&
+			defn.Scope == scopeName && defn.Collection == collectionName {
 			log.Printf("Index found:  %v", indexName)
 			return true
 		}
@@ -380,6 +326,12 @@ func ListAllSecondaryIndexes(header string, client *qc.GsiClient) error {
 }
 
 func DropSecondaryIndex(indexName, bucketName, server string) error {
+
+	return DropSecondaryIndex2(indexName, bucketName, c.DEFAULT_SCOPE, c.DEFAULT_COLLECTION, server)
+
+}
+
+func DropSecondaryIndex2(indexName, bucketName, scopeName, collectionName, server string) error {
 	log.Printf("Dropping the secondary index %v", indexName)
 	client, e := GetOrCreateClient(server, "2itest")
 	if e != nil {
@@ -390,7 +342,8 @@ func DropSecondaryIndex(indexName, bucketName, server string) error {
 	tc.HandleError(err, "Error while listing the secondary indexes")
 	for _, index := range indexes {
 		defn := index.Definition
-		if (defn.Name == indexName) && (defn.Bucket == bucketName) {
+		if (defn.Name == indexName) && (defn.Bucket == bucketName) &&
+			defn.Scope == scopeName && defn.Collection == collectionName {
 			start := time.Now()
 			e := client.DropIndex(uint64(defn.DefnId))
 			elapsed := time.Since(start)
@@ -437,7 +390,7 @@ func DropAllSecondaryIndexes(server string) error {
 	tc.HandleError(err, "Error while listing the secondary indexes")
 	for _, index := range indexes {
 		defn := index.Definition
-		exists := IndexExistsWithClient(defn.Name, defn.Bucket, server, client)
+		exists := IndexExistsWithClient(defn.Name, defn.Bucket, defn.Scope, defn.Collection, server, client)
 		if exists {
 			e := client.DropIndex(uint64(defn.DefnId))
 			if e != nil {
