@@ -643,13 +643,7 @@ func (gsi *gsiKeyspace) delIndex(id string) {
 func (gsi *gsiKeyspace) getIndexFromVersion(index *secondaryIndex,
 	clusterVersion uint64) datastore.Index {
 
-	if clusterVersion >= c.INDEXER_70_VERSION {
-		si2 := &secondaryIndex2{secondaryIndex: *index}
-		si3 := &secondaryIndex3{secondaryIndex2: *si2}
-		si4 := &secondaryIndex4{secondaryIndex3: *si3}
-		si5 := datastore.Index(&secondaryIndex5{secondaryIndex4: *si4})
-		return si5
-	} else if clusterVersion >= c.INDEXER_65_VERSION {
+	if clusterVersion >= c.INDEXER_65_VERSION {
 		si2 := &secondaryIndex2{secondaryIndex: *index}
 		si3 := &secondaryIndex3{secondaryIndex2: *si2}
 		si4 := datastore.Index(&secondaryIndex4{secondaryIndex3: *si3})
@@ -669,13 +663,7 @@ func (gsi *gsiKeyspace) getIndexFromVersion(index *secondaryIndex,
 func (gsi *gsiKeyspace) getPrimaryIndexFromVersion(index *secondaryIndex,
 	clusterVersion uint64) datastore.PrimaryIndex {
 
-	if clusterVersion >= c.INDEXER_70_VERSION {
-		si2 := &secondaryIndex2{secondaryIndex: *index}
-		si3 := &secondaryIndex3{secondaryIndex2: *si2}
-		si4 := &secondaryIndex4{secondaryIndex3: *si3}
-		si5 := datastore.PrimaryIndex(&secondaryIndex5{secondaryIndex4: *si4})
-		return si5
-	} else if clusterVersion >= c.INDEXER_65_VERSION {
+	if clusterVersion >= c.INDEXER_65_VERSION {
 		si2 := &secondaryIndex2{secondaryIndex: *index}
 		si3 := &secondaryIndex3{secondaryIndex2: *si2}
 		si4 := datastore.PrimaryIndex(&secondaryIndex4{secondaryIndex3: *si3})
@@ -798,6 +786,16 @@ func newSecondaryIndexFromMetaData(
 // KeyspaceId implement Index{} interface.
 func (si *secondaryIndex) KeyspaceId() string {
 	return si.gsi.KeyspaceId()
+}
+
+// BucketId implement Index{} interface.
+func (si *secondaryIndex) BucketId() string {
+	return si.gsi.bucket
+}
+
+// ScopeId implement Index{} interface.
+func (si *secondaryIndex) ScopeId() string {
+	return si.gsi.scope
 }
 
 // Indexer implement Index{} interface.
@@ -1361,27 +1359,6 @@ func (si *secondaryIndex4) StorageStatistics(requestid string) ([]map[datastore.
 
 //-------------------------------------
 // datastore API4 implementation end
-//-------------------------------------
-
-//-------------------------------------
-// datastore Index5 implementation
-//-------------------------------------
-
-// Implements Index5 interface
-type secondaryIndex5 struct {
-	secondaryIndex4
-}
-
-func (si *secondaryIndex5) BucketId() string {
-	return si.gsi.bucket
-}
-
-func (si *secondaryIndex5) ScopeId() string {
-	return si.gsi.scope
-}
-
-//-------------------------------------
-// datastore Index5 implementation end
 //-------------------------------------
 
 //-------------------------------------
