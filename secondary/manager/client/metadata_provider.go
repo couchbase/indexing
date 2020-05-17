@@ -148,6 +148,8 @@ type IndexMetadata struct {
 	InstsInRebalance []*InstanceDefn
 	State            c.IndexState
 	Error            string
+	Scheduled        bool
+	ScheduleFailed   bool
 }
 
 type InstanceDefn struct {
@@ -696,7 +698,6 @@ func (o *MetadataProvider) makeCommitIndexRequest(op CommitCreateRequestOp, idxD
 	return createErr
 }
 
-// TODO: This needs to check for StopScheduleCreateToken as well.
 func (o *MetadataProvider) verifyDuplicateScheduleToken(idxDefn *c.IndexDefn) error {
 	tokens, err := mc.ListAllScheduleCreateTokens()
 	if err != nil {
@@ -710,6 +711,16 @@ func (o *MetadataProvider) verifyDuplicateScheduleToken(idxDefn *c.IndexDefn) er
 			defn.Scope == idxDefn.Scope &&
 			defn.Collection == idxDefn.Collection &&
 			defn.Name == idxDefn.Name {
+
+			exists, err := mc.StopScheduleCreateTokenExist(defn.DefnId)
+			if err != nil {
+				logging.Errorf("verifyDuplicateScheduleToken:: error %v in StopScheduleCreateTokenExist", err)
+				return err
+			}
+
+			if exists {
+				continue
+			}
 
 			return fmt.Errorf("Duplicate index id %v is already scheduled for creation.", defn.DefnId)
 		}

@@ -90,7 +90,7 @@ func (b *cbqClient) Sync() error {
 }
 
 // Refresh implement BridgeAccessor{} interface.
-func (b *cbqClient) Refresh() ([]*mclient.IndexMetadata, uint64, uint64, error) {
+func (b *cbqClient) Refresh() ([]*mclient.IndexMetadata, uint64, uint64, bool, error) {
 	var resp *http.Response
 	var mresp indexMetaResponse
 
@@ -114,12 +114,12 @@ func (b *cbqClient) Refresh() ([]*mclient.IndexMetadata, uint64, uint64, error) 
 				b.rw.Lock()
 				defer b.rw.Unlock()
 				b.indexes = indexes
-				return indexes, 0, common.INDEXER_CUR_VERSION, nil
+				return indexes, 0, common.INDEXER_CUR_VERSION, true, nil
 			}
-			return nil, 0, common.INDEXER_CUR_VERSION, err
+			return nil, 0, common.INDEXER_CUR_VERSION, true, err
 		}
 	}
-	return nil, 0, common.INDEXER_CUR_VERSION, err
+	return nil, 0, common.INDEXER_CUR_VERSION, true, err
 }
 
 // Nodes implement BridgeAccessor{} interface.

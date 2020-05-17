@@ -76,7 +76,7 @@ func (api *testServer) validateAuth(w http.ResponseWriter, r *http.Request) (cba
 
 func (api *testServer) authorize(w http.ResponseWriter, creds cbauth.Creds) bool {
 
-	indexes, _, _, err := api.client.Refresh()
+	indexes, _, _, _, err := api.client.Refresh()
 	if err != nil {
 		log.Errorf("Fail to authorize.  Reason: unable to fetch index metadata.  %v", err)
 		http.Error(w, jsonstr("Authroziation check fails", err), http.StatusBadRequest)
@@ -456,7 +456,7 @@ func (api *testServer) doBuildOne(w http.ResponseWriter, request *http.Request) 
 
 //GET    /internal/index/{id}
 func (api *testServer) doGetAll(w http.ResponseWriter, request *http.Request) {
-	indexes, _, _, err := api.client.Refresh()
+	indexes, _, _, _, err := api.client.Refresh()
 	if err != nil {
 		msg := `cannot refresh metadata: %v`
 		http.Error(w, jsonstr(msg, err), http.StatusBadRequest)
@@ -1290,7 +1290,7 @@ func (api *testServer) getIndex(path string) (*mclient.IndexMetadata, string) {
 		return nil, jsonstr(`invalid index id, ParseUint failed %v`, err)
 	}
 
-	indexes, _, _, err := api.client.Refresh()
+	indexes, _, _, _, err := api.client.Refresh()
 	if err != nil {
 		return nil, jsonstr(`cannot refresh metadata: %v`, err)
 	}

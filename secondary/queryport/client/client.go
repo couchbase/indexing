@@ -150,7 +150,7 @@ type BridgeAccessor interface {
 
 	// Refresh shall refresh to latest set of index managed by GSI
 	// cluster, cache it locally and return the list of index.
-	Refresh() ([]*mclient.IndexMetadata, uint64, uint64, error)
+	Refresh() ([]*mclient.IndexMetadata, uint64, uint64, bool, error)
 
 	// Nodes shall return a map of adminport and queryport for indexer
 	// nodes.
@@ -416,7 +416,7 @@ func NewGsiClientWithSettings(
 
 	var clusterVer uint64
 	var refreshErr error
-	_, _, clusterVer, refreshErr = c.Refresh()
+	_, _, clusterVer, _, refreshErr = c.Refresh()
 	if refreshErr == nil {
 		c.UpdateDataEncodingFormat(clusterVer)
 	} else {
@@ -459,9 +459,9 @@ func (c *GsiClient) UpdateDataEncodingFormat(clusterVer uint64) {
 }
 
 // Refresh implements BridgeAccessor{} interface.
-func (c *GsiClient) Refresh() ([]*mclient.IndexMetadata, uint64, uint64, error) {
+func (c *GsiClient) Refresh() ([]*mclient.IndexMetadata, uint64, uint64, bool, error) {
 	if c.bridge == nil {
-		return nil, 0, 0, ErrorClientUninitialized
+		return nil, 0, 0, false, ErrorClientUninitialized
 	}
 	return c.bridge.Refresh()
 }

@@ -113,7 +113,7 @@ func NewDDLServiceMgr(indexerId common.IndexerId, supvCmdch MsgChannel, supvMsgc
 		donech:          nil,
 		killch:          make(chan bool),
 		allowDDL:        true,
-		commandListener: mc.NewCommandListener(donech, true, false, false, false, false),
+		commandListener: mc.NewCommandListener(donech, true, false, false, false, false, false),
 		listenerDonech:  donech,
 	}
 
@@ -125,6 +125,7 @@ func NewDDLServiceMgr(indexerId common.IndexerId, supvCmdch MsgChannel, supvMsgc
 	mux.HandleFunc("/listDeleteTokens", mgr.handleListDeleteTokens)
 	mux.HandleFunc("/listDropInstanceTokens", mgr.handleListDropInstanceTokens)
 	mux.HandleFunc("/listScheduleCreateTokens", mgr.handleListScheduleCreateTokens)
+	mux.HandleFunc("/listStopScheduleCreateTokens", mgr.handleListStopScheduleCreateTokens)
 
 	go mgr.run()
 
@@ -862,7 +863,7 @@ func (m *DDLServiceMgr) processCreateCommand() {
 		case _, ok := <-m.listenerDonech:
 			if !ok {
 				m.listenerDonech = make(chan bool)
-				m.commandListener = mc.NewCommandListener(m.listenerDonech, true, false, false, false, false)
+				m.commandListener = mc.NewCommandListener(m.listenerDonech, true, false, false, false, false, false)
 				m.commandListener.ListenTokens()
 			}
 
@@ -1335,7 +1336,46 @@ func (m *DDLServiceMgr) handleListScheduleCreateTokens(w http.ResponseWriter, r 
 
 		buf, err := mc.MarshallScheduleCreateTokenList(list)
 		if err != nil {
-			logging.Errorf("DDLServiceMgr::handleListDropInstanceTokens Error %v", err)
+			logging.Errorf("DDLServiceMgr::handleListScheduleCreateTokens Error %v", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(err.Error() + "\n"))
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+		w.Write(buf)
+	}
+}
+
+func (m *DDLServiceMgr) handleListStopScheduleCreateTokens(w http.ResponseWriter, r *http.Request) {
+
+	if !m.validateAuth(w, r) {
+		logging.Errorf("DDLServiceMgr::handleListStopScheduleCreateTokens Validation Failure for Request %v", r)
+		return
+	}
+
+	if r.Method == "GET" {
+
+		logging.Infof("DDLServiceMgr::handleListStopScheduleCreateTokens Processing Request %v", r)
+
+		scheduleTokens, err := mc.ListAllStopScheduleCreateTokens()
+		if err != nil {
+			logging.Errorf("DDLServiceMgr::handleListStopScheduleCreateTokens Error %v", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(err.Error() + "\n"))
+			return
+		}
+
+		list := &mc.StopScheduleCreateTokenList{}
+		list.Tokens = make([]mc.StopScheduleCreateToken, 0, len(scheduleTokens))
+
+		for _, token := range scheduleTokens {
+			list.Tokens = append(list.Tokens, *token)
+		}
+
+		buf, err := mc.MarshallStopScheduleCreateTokenList(list)
+		if err != nil {
+			logging.Errorf("DDLServiceMgr::handleListStopScheduleCreateTokens Error %v", err)
 			w.WriteHeader(http.StatusInternalServerError)
 			w.Write([]byte(err.Error() + "\n"))
 			return
