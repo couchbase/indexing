@@ -271,6 +271,8 @@ func (c *MetadataRepo) GetIndexDefnById(id common.IndexDefnId) (*common.IndexDef
 		return nil, err
 	}
 
+	defn.SetCollectionDefaults()
+
 	c.defnCache[id] = defn
 	return defn, nil
 }
@@ -344,6 +346,8 @@ func (c *MetadataRepo) GetTopologiesByBucket(bucket string) ([]*IndexTopology, e
 				return nil, err
 			}
 
+			upgradeIndexTopology(key, topology)
+
 			c.topoCache[key] = topology
 			topologies = append(topologies, topology)
 		}
@@ -375,6 +379,8 @@ func (c *MetadataRepo) GetTopologyByCollection(bucket, scope, collection string)
 		return nil, err
 	}
 
+	upgradeIndexTopology(lookupName, topology)
+
 	c.topoCache[lookupName] = topology
 	return topology, nil
 }
@@ -395,6 +401,8 @@ func (c *MetadataRepo) CloneTopologyByCollection(bucket, scope, collection strin
 	if err != nil {
 		return nil, err
 	}
+
+	upgradeIndexTopology(lookupName, topology)
 
 	return topology, nil
 }
@@ -616,6 +624,7 @@ func (c *MetadataRepo) loadDefn() error {
 					return err
 				}
 
+				defn.SetCollectionDefaults()
 				c.defnCache[defn.DefnId] = defn
 			}
 		}
@@ -641,6 +650,8 @@ func (c *MetadataRepo) loadTopology() error {
 			if err != nil {
 				return err
 			}
+
+			upgradeIndexTopology(key, topology)
 
 			c.topoCache[key] = topology
 		}
@@ -1057,14 +1068,20 @@ func indexDefnIdFromKey(key string) string {
 // package local function : Index Topology
 ///////////////////////////////////////////////////////
 
+// if scope/collection are defaults, create key of format IndexTopology/bucket
+// else. create key of format IndexTopology/bucket/scope/collection
 func indexTopologyKey(bucket, scope, collection string) string {
+
+	if scope == common.DEFAULT_SCOPE && collection == common.DEFAULT_COLLECTION {
+		return fmt.Sprintf("%s/%s", INDEX_TOPOLOGY_KEY_PREFIX, bucket)
+	}
 	return fmt.Sprintf("%s/%s/%s/%s", INDEX_TOPOLOGY_KEY_PREFIX, bucket, scope, collection)
 }
 
 func getBucketFromTopologyKey(key string) string {
 
 	res := strings.Split(key, "/")
-	if len(res) == 4 {
+	if len(res) <= 4 {
 		return res[1]
 	}
 
@@ -1076,7 +1093,9 @@ func getBucketScopeCollectionFromTopologyKey(key string) (string, string, string
 	// Bucket, Scope, Collection names do not contain "/"
 	// So it is safe to split the key by "/"
 	res := strings.Split(key, "/")
-	if len(res) == 4 {
+	if len(res) == 2 {
+		return res[1], common.DEFAULT_SCOPE, common.DEFAULT_COLLECTION
+	} else if len(res) == 4 {
 		return res[1], res[2], res[3]
 	}
 
@@ -1085,6 +1104,43 @@ func getBucketScopeCollectionFromTopologyKey(key string) (string, string, string
 
 func isIndexTopologyKey(key string) bool {
 	return strings.Contains(key, INDEX_TOPOLOGY_KEY_PREFIX+"/")
+}
+
+// Returns true if the key is of old format without
+// scope and collection components in the key
+func isDefaultIndexTopologyKey(key string) bool {
+
+	// Bucket, Scope, Collection names do not contain "/"
+	// So it is safe to split the key by "/"
+	res := strings.Split(key, "/")
+	if len(res) == 2 {
+		return true
+	}
+	return false
+}
+
+// If topology key is for default scope/collection,
+// then update scope and collection in topology's
+// definitions to defaults
+func upgradeIndexTopology(key string, topology *IndexTopology) {
+
+	if isDefaultIndexTopologyKey(key) {
+		if topology.Scope == "" {
+			topology.Scope = common.DEFAULT_SCOPE
+		}
+		if topology.Collection == "" {
+			topology.Collection = common.DEFAULT_COLLECTION
+		}
+
+		for i, _ := range topology.Definitions {
+			if topology.Definitions[i].Scope == "" {
+				topology.Definitions[i].Scope = common.DEFAULT_SCOPE
+			}
+			if topology.Definitions[i].Collection == "" {
+				topology.Definitions[i].Collection = common.DEFAULT_COLLECTION
+			}
+		}
+	}
 }
 
 func MarshallIndexTopology(topology *IndexTopology) ([]byte, error) {
