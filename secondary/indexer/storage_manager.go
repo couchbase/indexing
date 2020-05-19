@@ -697,6 +697,8 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 	}
 
 	if restartTs != nil {
+		//for pre 7.0 index snapshots, the manifestUID needs to be set to epoch
+		restartTs.SetEpochManifestUIDIfEmpty()
 		restartTs = sm.validateRestartTsVbuuid(keyspaceId, restartTs)
 	}
 
