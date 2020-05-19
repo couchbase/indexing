@@ -139,7 +139,9 @@ func (ts *TsVbuuid) Clone() *TsVbuuid {
 		newts.Seqnos = append(newts.Seqnos, seqnos[i])
 		newts.Vbuuids = append(newts.Vbuuids, vbuuids[i])
 		newts.Snapshots = append(newts.Snapshots, snapshots[i])
-		newts.ManifestUIDs = append(newts.ManifestUIDs, manifests[i])
+		if len(manifests) > 0 {
+			newts.ManifestUIDs = append(newts.ManifestUIDs, manifests[i])
+		}
 	}
 	return newts
 }
@@ -159,7 +161,10 @@ func (ts *TsVbuuid) Get(
 		if x == uint32(vbno) {
 			seqno, vbuuid, snapshot := seqnos[i], vbuuids[i], snapshots[i]
 			sStart, sEnd = snapshot.GetStart(), snapshot.GetEnd()
-			manifest := manifests[i]
+			manifest := ""
+			if len(manifests) > 0 {
+				manifest = manifests[i]
+			}
 			return seqno, vbuuid, sStart, sEnd, manifest, nil
 		}
 	}
@@ -178,6 +183,9 @@ func (ts *TsVbuuid) Set(
 	seqnos, vbuuids := ts.GetSeqnos(), ts.GetVbuuids()
 	snapshots := ts.GetSnapshots()
 	manifests := ts.GetManifestUIDs()
+	if len(manifests) == 0 {
+		manifests = make([]string, len(snapshots))
+	}
 	for i, x := range ts.GetVbnos() {
 		if x == uint32(vbno) {
 			seqnos[i], vbuuids[i], snapshots[i], manifests[i] = seqno, vbuuid, snapshot, manifest
@@ -208,7 +216,9 @@ func (ts *TsVbuuid) FromTsVbuuid(nativeTs *c.TsVbuuid) *TsVbuuid {
 		ts.Vbnos = append(ts.Vbnos, uint32(vbno))
 		ts.Seqnos = append(ts.Seqnos, nativeTs.Seqnos[vbno])
 		ts.Vbuuids = append(ts.Vbuuids, nativeTs.Vbuuids[vbno])
-		ts.ManifestUIDs = append(ts.ManifestUIDs, nativeTs.ManifestUIDs[vbno])
+		if len(nativeTs.ManifestUIDs) > 0 {
+			ts.ManifestUIDs = append(ts.ManifestUIDs, nativeTs.ManifestUIDs[vbno])
+		}
 	}
 	return ts
 }
@@ -222,7 +232,9 @@ func (ts *TsVbuuid) ToTsVbuuid(maxVbuckets int) *c.TsVbuuid {
 	for i, vbno := range ts.GetVbnos() {
 		nativeTs.Seqnos[vbno] = seqnos[i]
 		nativeTs.Vbuuids[vbno] = vbuuids[i]
-		nativeTs.ManifestUIDs[vbno] = manifests[i]
+		if len(manifests) > 0 {
+			nativeTs.ManifestUIDs[vbno] = manifests[i]
+		}
 		nativeTs.Snapshots[vbno] = [2]uint64{ss[i].GetStart(), ss[i].GetEnd()}
 	}
 	return nativeTs
@@ -248,8 +260,10 @@ func (ts *TsVbuuid) Union(other *TsVbuuid) *TsVbuuid {
 	newts.Vbnos = append(newts.Vbnos, other.Vbnos...)
 	newts.Seqnos = append(newts.Seqnos, other.Seqnos...)
 	newts.Vbuuids = append(newts.Vbuuids, other.Vbuuids...)
-	newts.ManifestUIDs = append(newts.ManifestUIDs, other.ManifestUIDs...)
 	newts.Snapshots = append(newts.Snapshots, other.Snapshots...)
+	if len(other.ManifestUIDs) > 0 {
+		newts.ManifestUIDs = append(newts.ManifestUIDs, other.ManifestUIDs...)
+	}
 
 	cache := make(map[uint32]bool)
 	for _, vbno := range other.Vbnos {
@@ -264,8 +278,10 @@ func (ts *TsVbuuid) Union(other *TsVbuuid) *TsVbuuid {
 		newts.Vbnos = append(newts.Vbnos, vbno)
 		newts.Seqnos = append(newts.Seqnos, ts.Seqnos[i])
 		newts.Vbuuids = append(newts.Vbuuids, ts.Vbuuids[i])
-		newts.ManifestUIDs = append(newts.ManifestUIDs, ts.ManifestUIDs[i])
 		newts.Snapshots = append(newts.Snapshots, ts.Snapshots[i])
+		if len(ts.ManifestUIDs) > 0 {
+			newts.ManifestUIDs = append(newts.ManifestUIDs, ts.ManifestUIDs[i])
+		}
 	}
 	sort.Sort(newts)
 	return newts
@@ -298,7 +314,9 @@ func (ts *TsVbuuid) SelectByVbuckets(vbuckets []uint16) *TsVbuuid {
 			newts.Vbuuids = append(newts.Vbuuids, ts.Vbuuids[i])
 			newts.Seqnos = append(newts.Seqnos, ts.Seqnos[i])
 			newts.Snapshots = append(newts.Snapshots, ts.Snapshots[i])
-			newts.ManifestUIDs = append(newts.ManifestUIDs, ts.ManifestUIDs[i])
+			if len(ts.ManifestUIDs) > 0 {
+				newts.ManifestUIDs = append(newts.ManifestUIDs, ts.ManifestUIDs[i])
+			}
 		}
 	}
 	return newts
@@ -332,7 +350,9 @@ func (ts *TsVbuuid) FilterByVbuckets(vbuckets []uint16) *TsVbuuid {
 		newts.Seqnos = append(newts.Seqnos, ts.Seqnos[i])
 		newts.Vbuuids = append(newts.Vbuuids, ts.Vbuuids[i])
 		newts.Snapshots = append(newts.Snapshots, ts.Snapshots[i])
-		newts.ManifestUIDs = append(newts.ManifestUIDs, ts.ManifestUIDs[i])
+		if len(ts.ManifestUIDs) > 0 {
+			newts.ManifestUIDs = append(newts.ManifestUIDs, ts.ManifestUIDs[i])
+		}
 	}
 	return newts
 }
@@ -414,9 +434,13 @@ func (ts *TsVbuuid) Repr() string {
 	manifests := ts.GetManifestUIDs()
 	s += fmt.Sprintf("    {vbno, vbuuid, manifest, seqno, snapshot-start, snapshot-end}\n")
 	for i := 0; i < len(vbnos); i++ {
+		manifest := ""
+		if len(manifests) > 0 {
+			manifest = manifests[i]
+		}
 		start, end := snapshots[i].GetStart(), snapshots[i].GetEnd()
 		s += fmt.Sprintf("    {%5d %16x %s %10d %10d %10d}\n",
-			vbnos[i], vbuuids[i], manifests[i], seqnos[i], start, end)
+			vbnos[i], vbuuids[i], manifest, seqnos[i], start, end)
 	}
 	return s
 }
@@ -436,5 +460,7 @@ func (ts *TsVbuuid) Swap(i, j int) {
 	ts.Seqnos[i], ts.Seqnos[j] = ts.Seqnos[j], ts.Seqnos[i]
 	ts.Vbuuids[i], ts.Vbuuids[j] = ts.Vbuuids[j], ts.Vbuuids[i]
 	ts.Snapshots[i], ts.Snapshots[j] = ts.Snapshots[j], ts.Snapshots[i]
-	ts.ManifestUIDs[i], ts.ManifestUIDs[j] = ts.ManifestUIDs[j], ts.ManifestUIDs[i]
+	if len(ts.ManifestUIDs) > 0 {
+		ts.ManifestUIDs[i], ts.ManifestUIDs[j] = ts.ManifestUIDs[j], ts.ManifestUIDs[i]
+	}
 }
