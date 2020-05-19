@@ -90,6 +90,7 @@ func NewProjector(maxvbs int, config c.Config, certFile string, keyFile string) 
 	cic, err := c.NewClusterInfoClient(p.clusterAddr, "default", config)
 	c.CrashOnError(err)
 	p.cinfoClient = cic
+	p.cinfoClient.SetUserAgent("projector")
 
 	p.stats = NewProjectorStats()
 	p.statsMgr = NewStatsManager(p.statsCmdCh, p.statsStopCh, config)
@@ -380,7 +381,13 @@ func (p *Projector) doVbmapRequest(
 	}
 	defer bucket.Close()
 
-	bucket.Refresh()
+	err = bucket.Refresh()
+	if err != nil {
+		logging.Errorf("%v ##%x doVbMapRequest error during bucket.Refresh(), bucket: %v, err:%v\n", prefix, opaque, bucket.Name, err)
+		response.Err = protobuf.NewError(err)
+		return response
+	}
+
 	m, err := bucket.GetVBmap(kvaddrs)
 	if err != nil {
 		logging.Errorf("%v ##%x GetVBmap(): %v\n", prefix, opaque, err)
@@ -971,6 +978,7 @@ func refreshSecurityContextOnTopology(clusterAddr string) error {
 		}
 
 		cinfo, err = c.NewClusterInfoCache(url, "default")
+		cinfo.SetUserAgent("projector::refreshSecurityContextOnTopology")
 		if err != nil {
 			return err
 		}

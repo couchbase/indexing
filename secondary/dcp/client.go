@@ -97,7 +97,10 @@ func (b *Bucket) Do(k string, f func(mc *memcached.Client, vb uint16) error) (er
 		}()
 
 		if retry {
-			b.Refresh()
+			if err := b.Refresh(); err != nil {
+				logging.Errorf("Client::Do, error during bucket refersh for bucket: %v, err: %v", b.Name, err)
+				return err
+			}
 		} else {
 			return err
 		}
@@ -227,7 +230,10 @@ func (b *Bucket) doBulkGet(vb uint16, keys []string,
 			case *transport.MCResponse:
 				st := err.(*transport.MCResponse).Status
 				if st == transport.NOT_MY_VBUCKET {
-					b.Refresh()
+					if err := b.Refresh(); err != nil {
+						logging.Errorf("Client::doBulkGet, error during bucket refersh for bucket: %v, err: %v", b.Name, err)
+						return err
+					}
 					// retry
 					err = nil
 				}
@@ -239,7 +245,10 @@ func (b *Bucket) doBulkGet(vb uint16, keys []string,
 					return err
 				}
 				logging.Warnf("Connection Error: %s. Refreshing bucket", err.Error())
-				b.Refresh()
+				if err := b.Refresh(); err != nil {
+					logging.Errorf("Client::Do, error during bucket refersh for bucket: %v, err: %v", b.Name, err)
+					return err
+				}
 				// retry
 				return nil
 			}

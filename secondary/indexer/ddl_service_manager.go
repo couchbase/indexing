@@ -1358,6 +1358,7 @@ func (m *DDLServiceMgr) newMetadataProvider(nodes map[service.NodeID]bool) (*cli
 	if err != nil {
 		return nil, nil, err
 	}
+	cinfo.SetUserAgent("newMetadataProvider")
 
 	if err := cinfo.Fetch(); err != nil {
 		return nil, nil, err

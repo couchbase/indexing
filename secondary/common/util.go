@@ -287,7 +287,11 @@ func GetKVAddrs(cluster, pooln, bucketn string) ([]string, error) {
 	}
 	defer b.Close()
 
-	b.Refresh()
+	if err := b.Refresh(); err != nil {
+		logging.Errorf("GetKVAddrs, error during bucket.Refresh() for bucket: %v, err: %v", b.Name, err)
+		return nil, err
+	}
+
 	m, err := b.GetVBmap(nil)
 	if err != nil {
 		return nil, err
@@ -807,6 +811,7 @@ func GetBucketUUID(cluster, bucket string) (string, error) {
 	if err != nil {
 		return BUCKET_UUID_NIL, err
 	}
+	cinfo.SetUserAgent("GetBucketUUID")
 
 	cinfo.Lock()
 	defer cinfo.Unlock()
@@ -832,6 +837,7 @@ func GetCollectionID(cluster, bucket, scope, collection string) (string, error) 
 	if err != nil {
 		return collections.COLLECTION_ID_NIL, err
 	}
+	cinfo.SetUserAgent("GetCollectionID")
 
 	cinfo.Lock()
 	defer cinfo.Unlock()
@@ -858,6 +864,7 @@ func GetScopeID(cluster, bucket, scope string) (string, error) {
 		return collections.SCOPE_ID_NIL, err
 	}
 
+	cinfo.SetUserAgent("GetScopeID")
 	cinfo.Lock()
 	defer cinfo.Unlock()
 
@@ -883,6 +890,8 @@ func GetScopeAndCollectionID(cluster, bucket, scope, collection string) (string,
 	if err != nil {
 		return collections.SCOPE_ID_NIL, collections.COLLECTION_ID_NIL, err
 	}
+
+	cinfo.SetUserAgent("GetScopeAndCollectionID")
 
 	cinfo.Lock()
 	defer cinfo.Unlock()

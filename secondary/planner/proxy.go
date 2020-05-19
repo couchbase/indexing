@@ -74,10 +74,18 @@ func RetrievePlanFromCluster(clusterUrl string, hosts []string) (*Plan, error) {
 	cinfoClientMutex.Lock()
 	if cinfoClient == nil {
 		cinfoClient, err = common.NewClusterInfoClient(clusterUrl, "default", config)
+		if err == nil {
+			cinfoClient.SetUserAgent("RetrievePlanFromCluster")
+		}
 	}
 	cinfoClientMutex.Unlock()
 	if err != nil { // Error while initilizing clusterInfoClient
 		logging.Errorf("Planner::RetrievePlanFromCluster: Error while initializing cluster info client at %v. Error = %v", clusterUrl, err)
+		return nil, err
+	}
+
+	cinfo := cinfoClient.GetClusterInfoCache()
+	if err := cinfo.FetchWithLock(); err != nil {
 		return nil, err
 	}
 
@@ -1060,7 +1068,7 @@ func getLocalNumReplicas(addr string) (map[common.IndexDefnId]common.Counter, er
 
 func getWithCbauth(url string) (*http.Response, error) {
 
-	params := &security.RequestParams{Timeout: time.Duration(10) * time.Second}
+	params := &security.RequestParams{Timeout: time.Duration(120) * time.Second}
 	response, err := security.GetWithAuth(url, params)
 	if err == nil && response.StatusCode != http.StatusOK {
 		return response, convertError(response)

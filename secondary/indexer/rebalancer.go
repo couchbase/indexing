@@ -1475,7 +1475,7 @@ func checkAllIndexersWarmedup(clusterURL string) (bool, []string) {
 
 	var pausedAddr []string
 
-	cinfo, err := c.FetchNewClusterInfoCache(clusterURL, c.DEFAULT_POOL)
+	cinfo, err := c.FetchNewClusterInfoCache(clusterURL, c.DEFAULT_POOL, "checkAllIndexersWarmedup")
 	if err != nil {
 		l.Errorf("Rebalancer::checkAllIndexersWarmedup Error Fetching Cluster Information %v", err)
 		return false, nil

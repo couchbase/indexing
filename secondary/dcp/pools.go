@@ -290,9 +290,14 @@ func (b Bucket) CommonAddressSuffix() string {
 // A Client is the starting point for all services across all buckets
 // in a Couchbase cluster.
 type Client struct {
-	BaseURL *url.URL
-	ah      AuthHandler
-	Info    Pools
+	BaseURL   *url.URL
+	ah        AuthHandler
+	Info      Pools
+	UserAgent string
+}
+
+func (c *Client) SetUserAgent(userAgent string) {
+	c.UserAgent = userAgent
 }
 
 func maybeAddAuth(req *http.Request, ah AuthHandler) {
@@ -432,7 +437,12 @@ func (c *Client) runObserveStreamingEndpoint(path string,
 }
 
 func (c *Client) parseURLResponse(path string, out interface{}) error {
-	return queryRestAPI(c.BaseURL, path, c.ah, out, &security.RequestParams{Timeout: HttpRequestTimeout})
+	params := &security.RequestParams{
+		Timeout:   HttpRequestTimeout,
+		UserAgent: c.UserAgent,
+	}
+	return queryRestAPI(c.BaseURL, path, c.ah, out, params)
+
 }
 
 func (b *Bucket) parseURLResponse(path string, out interface{}) error {
