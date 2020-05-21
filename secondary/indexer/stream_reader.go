@@ -755,11 +755,13 @@ func (w *streamWorker) handleSingleKeyVersion(keyspaceId string, vbucket Vbucket
 					"%v %v", w.streamId, keyspaceId, meta, kv.GetDocid())
 			}
 
+			/* Disable the log message till further investigation (MB-39494)
 			if byte(cmd) == common.SeqnoAdvanced && w.streamId == common.MAINT_STREAM {
 
 				logging.Fatalf("MutationStreamReader::handleSingleKeyVersion %v %v Unexpected SeqnoAdvanced "+
 					"%v %v", w.streamId, keyspaceId, meta, kv.GetDocid())
 			}
+			*/
 
 			skipMutation, _ := w.checkAndSetKeyspaceIdFilter(meta)
 
