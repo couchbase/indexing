@@ -3527,6 +3527,7 @@ func (tk *timekeeper) handleStats(cmd Message) {
 	replych := req.GetReplyChannel()
 
 	tk.lock.Lock()
+	keyspaceIdCollectionId := tk.ss.CloneCollectionIdMap(common.INIT_STREAM)
 	indexInstMap := common.CopyIndexInstMap(tk.indexInstMap)
 	tk.lock.Unlock()
 
@@ -3556,7 +3557,7 @@ func (tk *timekeeper) handleStats(cmd Message) {
 					numVbuckets := tk.config["numVbuckets"].Int()
 					cid := ""
 					if inst.Stream == common.INIT_STREAM {
-						cid = inst.Defn.CollectionId
+						cid = keyspaceIdCollectionId[keyspaceId]
 					}
 					kvTs, err = GetCurrentKVTs(cluster, "default", keyspaceId, cid, numVbuckets)
 					return err

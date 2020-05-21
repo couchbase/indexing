@@ -1576,3 +1576,13 @@ func (ss *StreamState) computeRetryTs(streamId common.StreamId,
 func (ss *StreamState) getSessionId(streamId common.StreamId, keyspaceId string) uint64 {
 	return ss.streamKeyspaceIdSessionId[streamId][keyspaceId]
 }
+
+func (ss *StreamState) CloneCollectionIdMap(streamId common.StreamId) KeyspaceIdCollectionId {
+
+	outMap := make(KeyspaceIdCollectionId)
+	for k, v := range ss.streamKeyspaceIdCollectionId[streamId] {
+		outMap[k] = v
+	}
+	return outMap
+
+}
