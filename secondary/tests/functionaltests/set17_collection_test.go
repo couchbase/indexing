@@ -52,16 +52,18 @@ func dropIndex(index, bucket, scope, coll string, t *testing.T) {
 	FailTestIfError(err, "Error in drop index", t)
 }
 
-func scanAllAndVerify(index, bucket, field string, masterDocs tc.KeyValues, t *testing.T) {
+func scanAllAndVerify(index, bucket, scope, collection, field string, masterDocs tc.KeyValues, t *testing.T) {
 	docScanResults := datautility.ExpectedScanAllResponse(masterDocs, field)
-	scanResults, err := secondaryindex.ScanAll(index, bucket, indexScanAddress, defaultlimit, c.SessionConsistency, nil)
+	scanResults, err := secondaryindex.ScanAll2(index, bucket, scope,
+		collection, indexScanAddress, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan ", t)
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
 }
 
-func scanAllAndVerifyCount(index, bucket string, masterDocs tc.KeyValues, t *testing.T) {
-	scanResults, err := secondaryindex.ScanAll(index, bucket, indexScanAddress, defaultlimit, c.SessionConsistency, nil)
+func scanAllAndVerifyCount(index, bucket, scope, collection string, masterDocs tc.KeyValues, t *testing.T) {
+	scanResults, err := secondaryindex.ScanAll2(index, bucket, scope,
+		collection, indexScanAddress, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan ", t)
 	if len(scanResults) != len(masterDocs) {
 		errMsg := fmt.Sprintf("Scan Count mismatch. Expected %v. Actual %v", len(masterDocs), len(scanResults))
@@ -111,31 +113,31 @@ func TestCollectionDefault(t *testing.T) {
 	//There are documents in default collection.
 	index1 := scope + "_" + coll + "_" + "i1"
 	createIndex(index1, bucket, scope, coll, []string{"age"}, t)
-	scanAllAndVerify(index1, bucket, "age", masterDocs_default, t)
+	scanAllAndVerify(index1, bucket, scope, coll, "age", masterDocs_default, t)
 
 	//Create 2nd index to check stream merge
 	index2 := scope + "_" + coll + "_" + "i2"
 	createIndex(index2, bucket, scope, coll, []string{"gender"}, t)
-	scanAllAndVerify(index2, bucket, "gender", masterDocs_default, t)
+	scanAllAndVerify(index2, bucket, scope, coll, "gender", masterDocs_default, t)
 
 	//Drop one index and check scan results
 	dropIndex(index1, bucket, scope, coll, t)
-	scanAllAndVerify(index2, bucket, "gender", masterDocs_default, t)
+	scanAllAndVerify(index2, bucket, scope, coll, "gender", masterDocs_default, t)
 
 	//Create index again
 	createIndex(index1, bucket, scope, coll, []string{"age"}, t)
-	scanAllAndVerify(index1, bucket, "age", masterDocs_default, t)
+	scanAllAndVerify(index1, bucket, scope, coll, "age", masterDocs_default, t)
 
 	//Drop both the index
 	dropIndex(index1, bucket, scope, coll, t)
 	dropIndex(index2, bucket, scope, coll, t)
 
 	createIndex(index1, bucket, scope, coll, []string{"age"}, t)
-	scanAllAndVerify(index1, bucket, "age", masterDocs_default, t)
+	scanAllAndVerify(index1, bucket, scope, coll, "age", masterDocs_default, t)
 
 	//Create 2nd index to check stream merge
 	createIndex(index2, bucket, scope, coll, []string{"gender"}, t)
-	scanAllAndVerify(index2, bucket, "gender", masterDocs_default, t)
+	scanAllAndVerify(index2, bucket, scope, coll, "gender", masterDocs_default, t)
 
 	//Drop both the index
 	dropIndex(index1, bucket, scope, coll, t)
@@ -150,8 +152,8 @@ func TestCollectionDefault(t *testing.T) {
 	incrdocs := CreateDocsForCollection(bucket, cid, 1000)
 	updateMasterDocSet(masterDocs_default, incrdocs)
 	time.Sleep(5 * time.Second)
-	scanAllAndVerify(index1, bucket, "age", masterDocs_default, t)
-	scanAllAndVerify(index2, bucket, "gender", masterDocs_default, t)
+	scanAllAndVerify(index1, bucket, scope, coll, "age", masterDocs_default, t)
+	scanAllAndVerify(index2, bucket, scope, coll, "gender", masterDocs_default, t)
 
 	//Drop one index
 	dropIndex(index1, bucket, scope, coll, t)
@@ -160,7 +162,7 @@ func TestCollectionDefault(t *testing.T) {
 	incrdocs = CreateDocsForCollection(bucket, cid, 1000)
 	updateMasterDocSet(masterDocs_default, incrdocs)
 	time.Sleep(5 * time.Second)
-	scanAllAndVerify(index2, bucket, "gender", masterDocs_default, t)
+	scanAllAndVerify(index2, bucket, scope, coll, "gender", masterDocs_default, t)
 
 	dropIndex(index2, bucket, scope, coll, t)
 
@@ -183,20 +185,20 @@ func TestCollectionNonDefault(t *testing.T) {
 	//There are documents in default collection.
 	index1 := scope + "_" + coll + "_" + "i1"
 	createIndex(index1, bucket, scope, coll, []string{"age"}, t)
-	scanAllAndVerify(index1, bucket, "age", masterDocs_c1, t)
+	scanAllAndVerify(index1, bucket, scope, coll, "age", masterDocs_c1, t)
 
 	//Create 2nd index to check stream merge
 	index2 := scope + "_" + coll + "_" + "i2"
 	createIndex(index2, bucket, scope, coll, []string{"gender"}, t)
-	scanAllAndVerify(index2, bucket, "gender", masterDocs_c1, t)
+	scanAllAndVerify(index2, bucket, scope, coll, "gender", masterDocs_c1, t)
 
 	//Drop one index and check scan results
 	dropIndex(index1, bucket, scope, coll, t)
-	scanAllAndVerify(index2, bucket, "gender", masterDocs_c1, t)
+	scanAllAndVerify(index2, bucket, scope, coll, "gender", masterDocs_c1, t)
 
 	//Create index again
 	createIndex(index1, bucket, scope, coll, []string{"age"}, t)
-	scanAllAndVerify(index1, bucket, "age", masterDocs_c1, t)
+	scanAllAndVerify(index1, bucket, scope, coll, "age", masterDocs_c1, t)
 
 	//Drop both the index
 	dropIndex(index1, bucket, scope, coll, t)
@@ -210,11 +212,11 @@ func TestCollectionNonDefault(t *testing.T) {
 
 	//Initial build on index on non-default collection in non-default scope
 	createIndex(index1, bucket, scope, coll, []string{"age"}, t)
-	scanAllAndVerify(index1, bucket, "age", masterDocs_c1, t)
+	scanAllAndVerify(index1, bucket, scope, coll, "age", masterDocs_c1, t)
 
 	//Create 2nd index to check stream merge
 	createIndex(index2, bucket, scope, coll, []string{"gender"}, t)
-	scanAllAndVerify(index2, bucket, "gender", masterDocs_c1, t)
+	scanAllAndVerify(index2, bucket, scope, coll, "gender", masterDocs_c1, t)
 
 	//Drop both the index
 	dropIndex(index1, bucket, scope, coll, t)
@@ -228,8 +230,8 @@ func TestCollectionNonDefault(t *testing.T) {
 	//Load more docs and scan
 	incrdocs := CreateDocsForCollection(bucket, cid, 1000)
 	updateMasterDocSet(masterDocs_c1, incrdocs)
-	scanAllAndVerify(index1, bucket, "age", masterDocs_c1, t)
-	scanAllAndVerify(index2, bucket, "gender", masterDocs_c1, t)
+	scanAllAndVerify(index1, bucket, scope, coll, "age", masterDocs_c1, t)
+	scanAllAndVerify(index2, bucket, scope, coll, "gender", masterDocs_c1, t)
 
 	//Drop one index
 	dropIndex(index1, bucket, scope, coll, t)
@@ -237,7 +239,7 @@ func TestCollectionNonDefault(t *testing.T) {
 	//Load more docs and scan
 	incrdocs = CreateDocsForCollection(bucket, cid, 1000)
 	updateMasterDocSet(masterDocs_c1, incrdocs)
-	scanAllAndVerify(index2, bucket, "gender", masterDocs_c1, t)
+	scanAllAndVerify(index2, bucket, scope, coll, "gender", masterDocs_c1, t)
 
 	/*
 		//Initial build on index on non-default collection in default scope
@@ -272,34 +274,31 @@ func TestCollectionMetaAtSnapEnd(t *testing.T) {
 	//create index on this collection
 	index1 := scope + "_" + coll + "_" + "i1"
 	createIndex(index1, bucket, scope, coll, []string{"age"}, t)
-	scanAllAndVerify(index1, bucket, "age", masterDocs_c2, t)
+	scanAllAndVerify(index1, bucket, scope, coll, "age", masterDocs_c2, t)
 
 	masterDocs_c2 = CreateDocsForCollection(bucket, cid, 2000)
-	scanAllAndVerify(index1, bucket, "age", masterDocs_c2, t)
+	scanAllAndVerify(index1, bucket, scope, coll, "age", masterDocs_c2, t)
 
 	//create an unrelated collection
-	bucket = "default"
-	scope = "s2"
-	coll = "c3"
-	kvutility.CreateCollection(bucket, scope, coll, clusterconfig.Username, clusterconfig.Password, kvaddress)
+	coll1 := "c3"
+	kvutility.CreateCollection(bucket, scope, coll1, clusterconfig.Username, clusterconfig.Password, kvaddress)
 	time.Sleep(10 * time.Second)
 
 	//verify scan when snapshot end is meta
-	scanAllAndVerify(index1, bucket, "age", masterDocs_c2, t)
+	scanAllAndVerify(index1, bucket, scope, coll, "age", masterDocs_c2, t)
 
 	//SEQNO_ADVANCED Test
 	//create one more index on collection
-	coll = "c2"
 	index2 := scope + "_" + coll + "_" + "i2"
 	createIndex(index2, bucket, scope, coll, []string{"gender"}, t)
-	scanAllAndVerify(index1, bucket, "age", masterDocs_c2, t)
-	scanAllAndVerify(index2, bucket, "gender", masterDocs_c2, t)
+	scanAllAndVerify(index1, bucket, scope, coll, "age", masterDocs_c2, t)
+	scanAllAndVerify(index2, bucket, scope, coll, "gender", masterDocs_c2, t)
 
 	incrdocs := CreateDocsForCollection(bucket, cid, 1000)
 	updateMasterDocSet(masterDocs_c2, incrdocs)
 	time.Sleep(5 * time.Second)
-	scanAllAndVerify(index1, bucket, "age", masterDocs_c2, t)
-	scanAllAndVerify(index2, bucket, "gender", masterDocs_c2, t)
+	scanAllAndVerify(index1, bucket, scope, coll, "age", masterDocs_c2, t)
+	scanAllAndVerify(index2, bucket, scope, coll, "gender", masterDocs_c2, t)
 
 	//do not drop indexes, used by the TestCollectionUpdateSeq
 
@@ -320,16 +319,16 @@ func TestCollectionUpdateSeq(t *testing.T) {
 	coll = "c2"
 	index1 := scope + "_" + coll + "_" + "i1"
 	index2 := scope + "_" + coll + "_" + "i2"
-	scanAllAndVerify(index1, bucket, "age", masterDocs_c2, t)
-	scanAllAndVerify(index2, bucket, "gender", masterDocs_c2, t)
+	scanAllAndVerify(index1, bucket, scope, coll, "age", masterDocs_c2, t)
+	scanAllAndVerify(index2, bucket, scope, coll, "gender", masterDocs_c2, t)
 
 	//add more docs to the collection for the index
 	cid = kvutility.GetCollectionID(bucket, scope, coll, clusterconfig.Username, clusterconfig.Password, kvaddress)
 	incrdocs := CreateDocsForCollection(bucket, cid, 1000)
 	updateMasterDocSet(masterDocs_c2, incrdocs)
 	time.Sleep(5 * time.Second)
-	scanAllAndVerify(index1, bucket, "age", masterDocs_c2, t)
-	scanAllAndVerify(index2, bucket, "gender", masterDocs_c2, t)
+	scanAllAndVerify(index1, bucket, scope, coll, "age", masterDocs_c2, t)
+	scanAllAndVerify(index2, bucket, scope, coll, "gender", masterDocs_c2, t)
 
 	dropIndex(index1, bucket, scope, coll, t)
 	dropIndex(index2, bucket, scope, coll, t)
@@ -347,7 +346,7 @@ func TestCollectionMultiple(t *testing.T) {
 
 	index1 := scope1 + "_" + coll1 + "_" + "i3"
 	createIndex(index1, bucket, scope1, coll1, []string{"age"}, t)
-	scanAllAndVerify(index1, bucket, "age", masterDocs_default, t)
+	scanAllAndVerify(index1, bucket, scope1, coll1, "age", masterDocs_default, t)
 
 	//create index on non-default collection and check stream merge
 	scope2 := "s1"
@@ -357,7 +356,7 @@ func TestCollectionMultiple(t *testing.T) {
 	//create index on this collection
 	index2 := scope2 + "_" + coll2 + "_" + "i4"
 	createIndex(index2, bucket, scope2, coll2, []string{"gender"}, t)
-	scanAllAndVerify(index2, bucket, "gender", masterDocs_c1, t)
+	scanAllAndVerify(index2, bucket, scope2, coll2, "gender", masterDocs_c1, t)
 
 	dropIndex(index1, bucket, scope1, coll1, t)
 	dropIndex(index2, bucket, scope2, coll2, t)
@@ -389,27 +388,27 @@ func TestCollectionNoDocs(t *testing.T) {
 	//create index on empty collection
 	index1 := scope + "_" + coll + "_" + "i1"
 	createIndex(index1, bucket, scope, coll, []string{"age"}, t)
-	scanAllAndVerify(index1, bucket, "age", masterDocs_c1, t)
+	scanAllAndVerify(index1, bucket, scope, coll, "age", masterDocs_c1, t)
 
 	//Create 2nd index to check stream merge
 	index2 := scope + "_" + coll + "_" + "i2"
 	createIndex(index2, bucket, scope, coll, []string{"gender"}, t)
-	scanAllAndVerify(index2, bucket, "gender", masterDocs_c1, t)
+	scanAllAndVerify(index2, bucket, scope, coll, "gender", masterDocs_c1, t)
 
 	//Drop one index and check scan results
 	dropIndex(index1, bucket, scope, coll, t)
-	scanAllAndVerify(index2, bucket, "gender", masterDocs_c1, t)
+	scanAllAndVerify(index2, bucket, scope, coll, "gender", masterDocs_c1, t)
 
 	//Create index again
 	createIndex(index1, bucket, scope, coll, []string{"age"}, t)
-	scanAllAndVerify(index1, bucket, "age", masterDocs_c1, t)
+	scanAllAndVerify(index1, bucket, scope, coll, "age", masterDocs_c1, t)
 
 	//load data to check incremental build
 	incrdocs := CreateDocsForCollection(bucket, cid, 1000)
 	updateMasterDocSet(masterDocs_c1, incrdocs)
 	time.Sleep(5 * time.Second)
-	scanAllAndVerify(index1, bucket, "age", masterDocs_c1, t)
-	scanAllAndVerify(index2, bucket, "gender", masterDocs_c1, t)
+	scanAllAndVerify(index1, bucket, scope, coll, "age", masterDocs_c1, t)
+	scanAllAndVerify(index2, bucket, scope, coll, "gender", masterDocs_c1, t)
 
 	//Drop both the index
 	dropIndex(index1, bucket, scope, coll, t)
@@ -430,31 +429,31 @@ func TestCollectionPrimaryIndex(t *testing.T) {
 	//create primary index
 	index1 := scope + "_" + coll + "_" + "i1"
 	createPrimaryIndex(index1, bucket, scope, coll, t)
-	scanAllAndVerifyCount(index1, bucket, masterDocs_c1, t)
+	scanAllAndVerifyCount(index1, bucket, scope, coll, masterDocs_c1, t)
 
 	//Create 2nd index to check stream merge
 	index2 := scope + "_" + coll + "_" + "i2"
 	createPrimaryIndex(index2, bucket, scope, coll, t)
-	scanAllAndVerifyCount(index2, bucket, masterDocs_c1, t)
+	scanAllAndVerifyCount(index2, bucket, scope, coll, masterDocs_c1, t)
 
 	//load data to check incremental build
 	incrdocs := CreateDocsForCollection(bucket, cid, 1000)
 	updateMasterDocSet(masterDocs_c1, incrdocs)
-	scanAllAndVerifyCount(index1, bucket, masterDocs_c1, t)
-	scanAllAndVerifyCount(index2, bucket, masterDocs_c1, t)
+	scanAllAndVerifyCount(index1, bucket, scope, coll, masterDocs_c1, t)
+	scanAllAndVerifyCount(index2, bucket, scope, coll, masterDocs_c1, t)
 
 	//Drop one index and check scan results
 	dropIndex(index1, bucket, scope, coll, t)
 
 	//create regular index and check results
 	createIndex(index1, bucket, scope, coll, []string{"age"}, t)
-	scanAllAndVerify(index1, bucket, "age", masterDocs_c1, t)
+	scanAllAndVerify(index1, bucket, scope, coll, "age", masterDocs_c1, t)
 
 	//load data to check incremental build
 	incrdocs = CreateDocsForCollection(bucket, cid, 1000)
 	updateMasterDocSet(masterDocs_c1, incrdocs)
-	scanAllAndVerify(index1, bucket, "age", masterDocs_c1, t)
-	scanAllAndVerifyCount(index2, bucket, masterDocs_c1, t)
+	scanAllAndVerify(index1, bucket, scope, coll, "age", masterDocs_c1, t)
+	scanAllAndVerifyCount(index2, bucket, scope, coll, masterDocs_c1, t)
 
 	//Drop both the index
 	dropIndex(index1, bucket, scope, coll, t)
