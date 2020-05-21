@@ -246,9 +246,16 @@ func Lookup(indexName, bucketName, server string, values []interface{},
 func ScanAll(indexName, bucketName, server string, limit int64,
 	consistency c.Consistency, vector *qc.TsConsistency) (tc.ScanResponseActual, error) {
 
+	return ScanAll2(indexName, bucketName, c.DEFAULT_SCOPE, c.DEFAULT_COLLECTION, server, limit,
+		consistency, vector)
+}
+
+func ScanAll2(indexName, bucketName, scopeName, collectionName, server string, limit int64,
+	consistency c.Consistency, vector *qc.TsConsistency) (tc.ScanResponseActual, error) {
+
 	if UseClient == "n1ql" {
 		log.Printf("Using n1ql client")
-		return N1QLScanAll(indexName, bucketName, server, limit, consistency, vector)
+		return N1QLScanAll(indexName, bucketName, scopeName, collectionName, server, limit, consistency, vector)
 	}
 
 	var scanErr error
