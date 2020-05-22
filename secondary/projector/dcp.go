@@ -107,7 +107,7 @@ func (bdcp *bucketDcp) StartVbStreams(
 		snapStart, snapEnd := snapshots[i].GetStart(), snapshots[i].GetEnd()
 
 		mid := ""
-		if manifestUIDs != nil {
+		if len(manifestUIDs) > 0 {
 			mid = manifestUIDs[i]
 		}
 

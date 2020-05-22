@@ -117,6 +117,11 @@ func (ts *TsVbuuid) GetVbnos() []uint16 {
 }
 
 func (ts *TsVbuuid) SetEpochManifestUIDIfEmpty() {
+
+	if ts.ManifestUIDs == nil {
+		ts.ManifestUIDs = make([]string, len(ts.Vbuuids))
+	}
+
 	for i := 0; i < len(ts.Vbuuids); i++ {
 		if ts.ManifestUIDs[i] == "" {
 			ts.ManifestUIDs[i] = collections.MANIFEST_UID_EPOCH

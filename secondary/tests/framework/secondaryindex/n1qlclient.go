@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -29,21 +30,35 @@ func init() {
 }
 
 func GetOrCreateN1QLClient(server, bucketName string) (datastore.Indexer, error) {
+
+	return GetOrCreateN1QLClient2(server, bucketName, c.DEFAULT_SCOPE, c.DEFAULT_COLLECTION)
+
+}
+
+func GetOrCreateN1QLClient2(server, bucketName, scopeName, collectionName string) (datastore.Indexer, error) {
 	var nc datastore.Indexer
 	var err error
 	var ok bool
 
+	var keyspaceId string
+
+	if scopeName == c.DEFAULT_SCOPE && collectionName == c.DEFAULT_COLLECTION {
+		keyspaceId = bucketName
+	} else {
+		keyspaceId = strings.Join([]string{bucketName, scopeName, collectionName}, ":")
+	}
+
 	clientMapLock.RLock()
-	nc, ok = n1qlClientMap[bucketName]
+	nc, ok = n1qlClientMap[keyspaceId]
 	clientMapLock.RUnlock()
 
 	if !ok { // Client does not exist, so create new
-		nc, err = nclient.NewGSIIndexer(server, "default", bucketName, nil)
+		nc, err = nclient.NewGSIIndexer2(server, "default", bucketName, scopeName, collectionName, nil)
 		if err != nil {
 			return nil, err
 		}
 		clientMapLock.Lock()
-		n1qlClientMap[bucketName] = nc
+		n1qlClientMap[keyspaceId] = nc
 		clientMapLock.Unlock()
 	}
 
@@ -184,10 +199,10 @@ func N1QLLookup(indexName, bucketName, server string, values []interface{},
 	return results, err2
 }
 
-func N1QLScanAll(indexName, bucketName, server string, limit int64,
+func N1QLScanAll(indexName, bucketName, scopeName, collectionName, server string, limit int64,
 	consistency c.Consistency, vector *qc.TsConsistency) (tc.ScanResponseActual, error) {
 
-	client, err := GetOrCreateN1QLClient(server, bucketName)
+	client, err := GetOrCreateN1QLClient2(server, bucketName, scopeName, collectionName)
 	if err != nil {
 		return nil, err
 	}

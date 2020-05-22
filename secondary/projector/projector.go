@@ -1008,9 +1008,15 @@ func (p *Projector) getNodeUUID() (string, error) {
 		defer cinfo.RUnlock()
 
 		if nodeUUID = cinfo.GetLocalNodeUUID(); nodeUUID == "" {
-			fmsg := "%v cinfo.GetLocalNodeUUID(): %v\n"
-			logging.Errorf(fmsg, prefix, err)
-			return err
+			// Force fetch cluster info cache so that
+			// next attempt might succeed
+			cinfo.RUnlock()
+			cinfo.FetchWithLock()
+			cinfo.RLock()
+
+			fmsg := "%v cinfo.GetLocalNodeUUID(), nodeUUID empty\n"
+			logging.Errorf(fmsg, prefix)
+			return fmt.Errorf(fmsg, prefix)
 		}
 		return nil
 	}

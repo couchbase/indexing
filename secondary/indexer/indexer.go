@@ -2595,7 +2595,14 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 
 		cluster := idx.config["clusterAddr"].String()
 		numVbuckets := idx.config["numVbuckets"].Int()
-		buildTs, err := GetCurrentKVTs(cluster, "default", keyspaceId, collectionId, numVbuckets)
+
+		//all indexes get built using INIT_STREAM
+		var buildStream common.StreamId = common.INIT_STREAM
+
+		clusterVer := idx.clusterInfoClient.ClusterVersion()
+		reqcid := idx.makeCollectionIdForStreamRequest(buildStream, keyspaceId, collectionId, clusterVer)
+
+		buildTs, err := GetCurrentKVTs(cluster, "default", keyspaceId, reqcid, numVbuckets)
 		if err != nil {
 			errStr := fmt.Sprintf("Error Connecting KV %v Err %v",
 				idx.config["clusterAddr"].String(), err)
@@ -2624,8 +2631,6 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 			continue
 		}
 
-		//all indexes get built using INIT_STREAM
-		var buildStream common.StreamId = common.INIT_STREAM
 		idx.bulkUpdateStream(instIdList, buildStream)
 
 		//always set state to Initial, once stream request/build is done,
@@ -2652,7 +2657,8 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 		}
 
 		//send Stream Update to workers
-		idx.sendStreamUpdateForBuildIndex(instIdList, buildStream, keyspaceId, collectionId, buildTs, clientCh)
+		idx.sendStreamUpdateForBuildIndex(instIdList, buildStream, keyspaceId,
+			reqcid, clusterVer, buildTs, clientCh)
 
 		idx.setStreamKeyspaceIdState(buildStream, keyspaceId, STREAM_ACTIVE)
 
@@ -3840,7 +3846,8 @@ func (idx *indexer) Shutdown() Message {
 }
 
 func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstId,
-	buildStream common.StreamId, keyspaceId string, cid string, buildTs Timestamp, clientCh MsgChannel) bool {
+	buildStream common.StreamId, keyspaceId string, cid string,
+	clusterVer uint64, buildTs Timestamp, clientCh MsgChannel) bool {
 
 	var cmd Message
 	var indexList []common.IndexInst
@@ -3861,10 +3868,8 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 
 	sessionId := idx.genNextSessionId(buildStream, keyspaceId)
 
-	clusterVer := idx.clusterInfoClient.ClusterVersion()
 	async := enableAsync && clusterVer >= common.INDEXER_65_VERSION
 
-	cid = idx.makeCollectionIdForStreamRequest(buildStream, keyspaceId, cid, clusterVer)
 	idx.streamKeyspaceIdCollectionId[buildStream][keyspaceId] = cid
 
 	var collectionAware bool

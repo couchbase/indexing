@@ -544,9 +544,8 @@ func (gsi *gsiKeyspace) Refresh() errors.Error {
 		si_s := make([]*secondaryIndex, 0, len(indexes))
 		for _, index := range indexes {
 
-			//TODO (Collections): Enhance the below check to include scope and
-			// collection name after index Definition is collection aware
-			if index.Definition.Bucket != gsi.bucket {
+			if index.Definition.Bucket != gsi.bucket || index.Definition.Scope != gsi.scope ||
+				index.Definition.Collection != gsi.keyspace {
 				continue
 			}
 			si, err := newSecondaryIndexFromMetaData(gsi, clusterVersion, index)
