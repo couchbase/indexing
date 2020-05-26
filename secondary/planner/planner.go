@@ -246,6 +246,7 @@ type IndexUsage struct {
 	NoUsageInfo       bool   `json:"NoUsageInfo"`
 	EstimatedMemUsage uint64 `json:"estimatedMemUsage"`
 	EstimatedDataSize uint64 `json:"estimatedDataSize"`
+	NeedsEstimate     bool   `json:"NeedsEstimate"`
 
 	// input: index definition (optional)
 	Instance *common.IndexInst `json:"instance,omitempty"`
@@ -1821,7 +1822,7 @@ func (s *Solution) PrintLayout() {
 			logging.Infof("\t\tIndex resident:%v%% build:%v%% estimated:%v equivCheck:%v pendingCreate:%v pendingDelete:%v",
 				uint64(index.GetResidentRatio(s.UseLiveData())),
 				index.GetBuildPercent(s.UseLiveData()),
-				index.NoUsageInfo && index.HasSizing(s.UseLiveData()),
+				index.NeedsEstimation() && index.HasSizing(s.UseLiveData()),
 				!index.suppressEquivIdxCheck,
 				index.pendingCreate, index.pendingDelete)
 		}
@@ -2752,7 +2753,7 @@ func (s *Solution) runSizeEstimation(placement PlacementMethod) {
 			}
 
 			for _, index := range indexer.Indexes {
-				if index.NoUsageInfo {
+				if index.NeedsEstimation() {
 					if index.state == common.INDEX_STATE_ACTIVE {
 						index.EstimatedDataSize = EMPTY_INDEX_DATASIZE
 						index.EstimatedMemUsage = EMPTY_INDEX_MEMUSAGE
@@ -2832,7 +2833,7 @@ func (s *Solution) runSizeEstimation(placement PlacementMethod) {
 
 		// count NoUsageInfo index.  This covers new index as well as existing index.
 		for _, index := range indexer.Indexes {
-			if index.NoUsageInfo {
+			if index.NeedsEstimation() {
 				insts[index.InstId] = index.Instance
 			}
 		}
@@ -2938,7 +2939,7 @@ func (s *Solution) estimationOn() {
 func (s *Solution) cleanupEstimation() {
 	for _, indexer := range s.Placement {
 		for _, index := range indexer.Indexes {
-			if index.NoUsageInfo {
+			if index.NeedsEstimation() {
 				indexer.SubtractMemUsageOverhead(s, index.EstimatedMemUsage, 0, index.EstimatedMemUsage)
 				indexer.SubtractDataSize(s, index.EstimatedDataSize)
 				index.EstimatedMemUsage = 0
@@ -4150,7 +4151,7 @@ func (o *IndexUsage) GetCpuUsage(useLive bool) float64 {
 //
 func (o *IndexUsage) GetMemUsage(useLive bool) uint64 {
 
-	if o.NoUsageInfo {
+	if o.NeedsEstimation() {
 		return o.EstimatedMemUsage
 	}
 
@@ -4178,7 +4179,7 @@ func (o *IndexUsage) GetMemOverhead(useLive bool) uint64 {
 //
 func (o *IndexUsage) GetMemTotal(useLive bool) uint64 {
 
-	if o.NoUsageInfo {
+	if o.NeedsEstimation() {
 		return o.EstimatedMemUsage
 	}
 
@@ -4194,7 +4195,7 @@ func (o *IndexUsage) GetMemTotal(useLive bool) uint64 {
 //
 func (o *IndexUsage) GetDataSize(useLive bool) uint64 {
 
-	if o.NoUsageInfo {
+	if o.NeedsEstimation() {
 		return o.EstimatedDataSize
 	}
 
@@ -4210,7 +4211,7 @@ func (o *IndexUsage) GetDataSize(useLive bool) uint64 {
 //
 func (o *IndexUsage) GetDiskUsage(useLive bool) uint64 {
 
-	if o.NoUsageInfo {
+	if o.NeedsEstimation() {
 		return 0
 	}
 
@@ -4226,7 +4227,7 @@ func (o *IndexUsage) GetDiskUsage(useLive bool) uint64 {
 //
 func (o *IndexUsage) GetScanRate(useLive bool) uint64 {
 
-	if o.NoUsageInfo {
+	if o.NeedsEstimation() {
 		return 0
 	}
 
@@ -4242,7 +4243,7 @@ func (o *IndexUsage) GetScanRate(useLive bool) uint64 {
 //
 func (o *IndexUsage) GetDrainRate(useLive bool) uint64 {
 
-	if o.NoUsageInfo {
+	if o.NeedsEstimation() {
 		return 0
 	}
 
@@ -4258,7 +4259,7 @@ func (o *IndexUsage) GetDrainRate(useLive bool) uint64 {
 //
 func (o *IndexUsage) GetMemMin(useLive bool) uint64 {
 
-	if o.NoUsageInfo {
+	if o.NeedsEstimation() {
 		return o.EstimatedMemUsage
 	}
 
@@ -4304,7 +4305,7 @@ func (o *IndexUsage) GetBuildPercent(useLive bool) uint64 {
 
 func (o *IndexUsage) HasSizing(useLive bool) bool {
 
-	if o.NoUsageInfo {
+	if o.NeedsEstimation() {
 		return o.EstimatedMemUsage != 0
 	}
 
@@ -4449,6 +4450,10 @@ func (o *IndexUsage) IsPlasma() bool {
 
 func (o *IndexUsage) IsNew() bool {
 	return o.initialNode == nil
+}
+
+func (o *IndexUsage) NeedsEstimation() bool {
+	return o.NoUsageInfo || o.NeedsEstimate
 }
 
 //////////////////////////////////////////////////////////////

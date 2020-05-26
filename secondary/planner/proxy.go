@@ -338,6 +338,9 @@ func ConvertToIndexUsage(config common.Config, defn *common.IndexDefn, localMeta
 				// This value will be reset in IndexUsage.ComputeSizing()
 				index.NoUsageInfo = defn.Deferred && (state == common.INDEX_STATE_READY || state == common.INDEX_STATE_CREATED)
 
+				// Ensure that the size estimation is always triggered for deferred indexes.
+				index.NeedsEstimate = index.NoUsageInfo
+
 				// update partition
 				numVbuckets := config["indexer.numVbuckets"].Int()
 				pc := common.NewKeyPartitionContainer(numVbuckets, int(inst.NumPartitions), defn.PartitionScheme, defn.HashScheme)
