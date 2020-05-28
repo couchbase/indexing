@@ -1560,6 +1560,10 @@ func (mdb *memdbSlice) Statistics() (StorageStatistics, error) {
 	internalData = append(internalData, fmt.Sprintf(`"data_size": %v`, mdb.mainstore.MemoryInUse()))
 	internalData = append(internalData, ",\n")
 	internalData = append(internalData, fmt.Sprintf(`"items_count": %v`, itemsCount))
+	internalData = append(internalData, ",\n")
+	internalData = append(internalData, fmt.Sprintf(`"lastGCSn": %v`, mdb.mainstore.GetLastGCSn()))
+	internalData = append(internalData, ",\n")
+	internalData = append(internalData, fmt.Sprintf(`"currSn": %v`, mdb.mainstore.GetCurrSn()))
 	internalData = append(internalData, "\n}")
 
 	sts.InternalData = internalData
