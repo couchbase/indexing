@@ -120,6 +120,14 @@ func Op2String(op common.OpCode) string {
 }
 
 /////////////////////////////////////////////////////////////////////////
+// Client Response Messages
+/////////////////////////////////////////////////////////////////////////
+var RespAnotherIndexCreation = "Another index creation is in progress"
+var RespRebalanceRunning = "Rebalance is running"
+var RespDuplicateIndex = "Duplicate index exists"
+var RespUnexpectedError = "Unexpected error"
+
+/////////////////////////////////////////////////////////////////////////
 // Index List
 ////////////////////////////////////////////////////////////////////////
 
@@ -179,7 +187,8 @@ type PrepareCreateRequest struct {
 
 type PrepareCreateResponse struct {
 	// Prepare
-	Accept bool `json:"accept,omitempty"`
+	Accept bool   `json:"accept,omitempty"`
+	Msg    string `json:"reason,omitempty"`
 }
 
 type CommitCreateRequestOp int
@@ -433,4 +442,10 @@ func MarshallCheckToken(checkToken *CheckToken) ([]byte, error) {
 	}
 
 	return buf, nil
+}
+
+type ScheduleCreateRequest struct {
+	Definition c.IndexDefn            `json:"defn,omitempty"`
+	Plan       map[string]interface{} `json:"plan,omitempty"`
+	IndexerId  c.IndexerId            `json:"indexerId,omitempty"`
 }

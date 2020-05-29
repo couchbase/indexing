@@ -4425,6 +4425,8 @@ func (idx *indexer) checkDuplicateIndex(indexInst common.IndexInst,
 
 			if index.Defn.Name == indexInst.Defn.Name &&
 				index.Defn.Bucket == indexInst.Defn.Bucket &&
+				index.Defn.Scope == indexInst.Defn.Scope &&
+				index.Defn.Collection == indexInst.Defn.Collection &&
 				index.State != common.INDEX_STATE_DELETED {
 
 				logging.Errorf("Indexer::checkDuplicateIndex Duplicate Index Name. "+

@@ -27,6 +27,7 @@ import (
 
 	"github.com/couchbase/cbauth"
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/common/collections"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager/client"
 	mc "github.com/couchbase/indexing/secondary/manager/common"
@@ -199,6 +200,7 @@ func registerRequestHandler(mgr *IndexManager, clusterUrl string, mux *http.Serv
 		mux.HandleFunc("/listReplicaCount", handlerContext.handleListLocalReplicaCountRequest)
 		mux.HandleFunc("/getCachedLocalIndexMetadata", handlerContext.handleCachedLocalIndexMetadataRequest)
 		mux.HandleFunc("/getCachedStats", handlerContext.handleCachedStats)
+		mux.HandleFunc("/postScheduleCreateRequest", handlerContext.handleScheduleCreateRequest)
 
 		cacheDir := path.Join(config["storage_dir"].String(), "cache")
 		handlerContext.metaDir = path.Join(cacheDir, "meta")
@@ -2021,6 +2023,222 @@ func (m *requestHandlerContext) runPersistor() {
 			return
 		}
 	}
+}
+
+func (m *requestHandlerContext) handleScheduleCreateRequest(w http.ResponseWriter, r *http.Request) {
+	creds, ok := doAuth(r, w)
+	if !ok {
+		return
+	}
+
+	buf := new(bytes.Buffer)
+	if _, err := buf.ReadFrom(r.Body); err != nil {
+		logging.Debugf("RequestHandler::handleScheduleCreateRequest: unable to read request body, err %v", err)
+		send(http.StatusBadRequest, w, "Unable to read request body")
+		return
+	}
+
+	req := &client.ScheduleCreateRequest{}
+	if err := json.Unmarshal(buf.Bytes(), req); err != nil {
+		logging.Debugf("RequestHandler::handleScheduleCreateRequest: unable to unmarshall request body. Buf = %s, err %v", logging.TagStrUD(buf), err)
+		send(http.StatusBadRequest, w, "Unable to unmarshall request body")
+		return
+	}
+
+	if req.Definition.DefnId == common.IndexDefnId(0) {
+		logging.Warnf("RequestHandler::handleScheduleCreateRequest: empty index definition")
+		send(http.StatusBadRequest, w, "Empty index definition")
+		return
+	}
+
+	// TODO: Scope and Collection GAR
+	permission := fmt.Sprintf("cluster.bucket[%s].n1ql.index!create", req.Definition.Bucket)
+	if !isAllowed(creds, []string{permission}, w) {
+		send(http.StatusForbidden, w, "Specified user cannot create an index on the bucket")
+		return
+	}
+
+	err := m.processScheduleCreateRequest(req)
+	if err != nil {
+		msg := fmt.Sprintf("Error in processing schedule create token: %v", err)
+		logging.Errorf("RequestHandler::handleScheduleCreateRequest: %v", msg)
+		send(http.StatusInternalServerError, w, msg)
+		return
+	}
+
+	send(http.StatusOK, w, "OK")
+}
+
+func (m *requestHandlerContext) validateScheduleCreateRequst(req *client.ScheduleCreateRequest) (string, string, string, error) {
+
+	// Check for all possible fail-fast situations. Fail scheduling of index
+	// creation if any of the required preconditions are not satisfied.
+
+	defn := req.Definition
+
+	if common.GetBuildMode() != common.ENTERPRISE {
+		if defn.NumReplica != 0 {
+			err := errors.New("Index Replica not supported in non-Enterprise Edition")
+			return "", "", "", err
+		}
+		if common.IsPartitioned(defn.PartitionScheme) {
+			err := errors.New("Index Partitining is not supported in non-Enterprise Edition")
+			return "", "", "", err
+		}
+	}
+
+	// Check for bucket, scope, collection to be present.
+	var bucketUUID, scopeId, collectionId string
+	var err error
+
+	bucketUUID, err = m.getBucketUUID(defn.Bucket)
+	if err != nil {
+		return "", "", "", err
+	}
+
+	if bucketUUID == common.BUCKET_UUID_NIL {
+		return "", "", "", fmt.Errorf("Bucket Not Found")
+	}
+
+	scopeId, collectionId, err = m.getScopeAndCollectionID(defn.Bucket, defn.Scope, defn.Collection)
+	if err != nil {
+		return "", "", "", err
+	}
+
+	if scopeId == collections.SCOPE_ID_NIL {
+		return "", "", "", fmt.Errorf("Scope Not Found")
+	}
+
+	if collectionId == collections.COLLECTION_ID_NIL {
+		return "", "", "", fmt.Errorf("Collection Not Found")
+	}
+
+	if common.GetStorageMode() == common.NOT_SET {
+		return "", "", "", fmt.Errorf("Please Set Indexer Storage Mode Before Create Index")
+	}
+
+	err = m.validateStorageMode(&defn)
+	if err != nil {
+		return "", "", "", err
+	}
+
+	// TODO: Check indexer state to be active
+
+	var ephimeral bool
+	ephimeral, err = m.isEphemeral(defn.Bucket)
+	if err != nil {
+		return "", "", "", err
+	}
+
+	if ephimeral && common.GetStorageMode() != common.MOI {
+		return "", "", "", fmt.Errorf("Bucket %v is Ephemeral but GSI storage is not MOI", defn.Bucket)
+	}
+
+	return bucketUUID, scopeId, collectionId, nil
+}
+
+func (m *requestHandlerContext) isEphemeral(bucket string) (bool, error) {
+	var cinfo *common.ClusterInfoCache
+	cinfo = m.mgr.cinfoClient.GetClusterInfoCache()
+
+	if cinfo == nil {
+		return false, errors.New("ClusterInfoCache unavailable in IndexManager")
+	}
+
+	return cinfo.IsEphemeral(bucket)
+}
+
+func (m *requestHandlerContext) validateStorageMode(defn *common.IndexDefn) error {
+
+	//if no index_type has been specified
+	if strings.ToLower(string(defn.Using)) == "gsi" {
+		if common.GetStorageMode() != common.NOT_SET {
+			//if there is a storage mode, default to that
+			defn.Using = common.IndexType(common.GetStorageMode().String())
+		} else {
+			//default to plasma
+			defn.Using = common.PlasmaDB
+		}
+	} else {
+		if common.IsValidIndexType(string(defn.Using)) {
+			defn.Using = common.IndexType(strings.ToLower(string(defn.Using)))
+		} else {
+			err := fmt.Sprintf("Create Index fails. Reason = Unsupported Using Clause %v", string(defn.Using))
+			return errors.New(err)
+		}
+	}
+
+	if common.IsPartitioned(defn.PartitionScheme) {
+		if defn.Using != common.PlasmaDB && defn.Using != common.MemDB && defn.Using != common.MemoryOptimized {
+			err := fmt.Sprintf("Create Index fails. Reason = Cannot create partitioned index using %v", string(defn.Using))
+			return errors.New(err)
+		}
+	}
+
+	if common.IndexTypeToStorageMode(defn.Using) != common.GetStorageMode() {
+		return fmt.Errorf("Cannot Create Index with Using %v. Indexer Storage Mode %v",
+			defn.Using, common.GetStorageMode())
+	}
+
+	return nil
+}
+
+// This function returns an error if it cannot connect for fetching bucket info.
+// It returns BUCKET_UUID_NIL (err == nil) if bucket does not exist.
+//
+func (m *requestHandlerContext) getBucketUUID(bucket string) (string, error) {
+	count := 0
+RETRY:
+	uuid, err := common.GetBucketUUID(m.clusterUrl, bucket)
+	if err != nil && count < 5 {
+		count++
+		time.Sleep(time.Duration(100) * time.Millisecond)
+		goto RETRY
+	}
+
+	if err != nil {
+		return common.BUCKET_UUID_NIL, err
+	}
+
+	return uuid, nil
+}
+
+// This function returns an error if it cannot connect for fetching manifest info.
+// It returns SCOPE_ID_NIL, COLLECTION_ID_NIL (err == nil) if scope, collection does
+// not exist.
+//
+func (m *requestHandlerContext) getScopeAndCollectionID(bucket, scope, collection string) (string, string, error) {
+	count := 0
+RETRY:
+	scopeId, colldId, err := common.GetScopeAndCollectionID(m.clusterUrl, bucket, scope, collection)
+	if err != nil && count < 5 {
+		count++
+		time.Sleep(time.Duration(100) * time.Millisecond)
+		goto RETRY
+	}
+
+	if err != nil {
+		return "", "", err
+	}
+
+	return scopeId, colldId, nil
+}
+
+func (m *requestHandlerContext) processScheduleCreateRequest(req *client.ScheduleCreateRequest) error {
+	bucketUUID, scopeId, collectionId, err := m.validateScheduleCreateRequst(req)
+	if err != nil {
+		logging.Errorf("requestHandlerContext: Error in validateScheduleCreateRequst %v", err)
+		return err
+	}
+
+	err = mc.PostScheduleCreateToken(req.Definition, req.Plan, bucketUUID, scopeId, collectionId,
+		req.IndexerId, time.Now().UnixNano())
+	if err != nil {
+		logging.Errorf("requestHandlerContext: Error in PostScheduleCreateToken %v", err)
+		return err
+	}
+
+	return nil
 }
 
 func host2file(hostname string) string {

@@ -2374,6 +2374,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.allowScheduleCreate": ConfigValue{
+		false,
+		"Allow scheduling index creation in the background",
+		false,
+		false,
+		false,
+	},
 	"indexer.debug.assertOnError": ConfigValue{
 		false,
 		"This flag is intended for use in test/debug setups. Certain " +

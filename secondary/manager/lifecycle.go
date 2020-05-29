@@ -466,7 +466,10 @@ func (m *LifecycleMgr) handlePrepareCreateIndex(content []byte) ([]byte, error) 
 				if m.prepareLock.Timeout > (time.Now().UnixNano() - m.prepareLock.StartTime) {
 					logging.Infof("LifecycleMgr.handlePrepareCreateIndex() : Reject %v because another index %v holding lock",
 						prepareCreateIndex.DefnId, m.prepareLock.DefnId)
-					response := &client.PrepareCreateResponse{Accept: false}
+					response := &client.PrepareCreateResponse{
+						Accept: false,
+						Msg:    client.RespAnotherIndexCreation,
+					}
 					return client.MarshallPrepareCreateResponse(response)
 				}
 				logging.Infof("LifecycleMgr.handlePrepareCreateIndex() : Prepare timeout for %v", m.prepareLock.DefnId)
@@ -475,7 +478,10 @@ func (m *LifecycleMgr) handlePrepareCreateIndex(content []byte) ([]byte, error) 
 
 		if _, err := m.repo.GetLocalValue("RebalanceRunning"); err == nil {
 			logging.Infof("LifecycleMgr.handlePrepareCreateIndex() : Reject %v because rebalance in progress", prepareCreateIndex.DefnId)
-			response := &client.PrepareCreateResponse{Accept: false}
+			response := &client.PrepareCreateResponse{
+				Accept: false,
+				Msg:    client.RespRebalanceRunning,
+			}
 			return client.MarshallPrepareCreateResponse(response)
 		}
 
@@ -488,7 +494,10 @@ func (m *LifecycleMgr) handlePrepareCreateIndex(content []byte) ([]byte, error) 
 				logging.Infof("LifecycleMgr.handlePrepareCreateIndex() : Reject "+
 					"%v because of error (%v) in GetIndexDefnByName", prepareCreateIndex.DefnId, err)
 
-				response := &client.PrepareCreateResponse{Accept: false}
+				response := &client.PrepareCreateResponse{
+					Accept: false,
+					Msg:    client.RespUnexpectedError,
+				}
 				return client.MarshallPrepareCreateResponse(response)
 			}
 
@@ -497,7 +506,10 @@ func (m *LifecycleMgr) handlePrepareCreateIndex(content []byte) ([]byte, error) 
 					"%v because of duplicate index name with existing defnId %v",
 					prepareCreateIndex.DefnId, existDefn.DefnId)
 
-				response := &client.PrepareCreateResponse{Accept: false}
+				response := &client.PrepareCreateResponse{
+					Accept: false,
+					Msg:    client.RespDuplicateIndex,
+				}
 				return client.MarshallPrepareCreateResponse(response)
 			}
 		}
@@ -1209,6 +1221,7 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scheduled bool,
 
 			if len(skipList) != 0 {
 				logging.Errorf("LifecycleMgr.CreateIndex() : build index fails due to internal errors.")
+
 				m.DeleteIndex(defn.DefnId, true, false, reqCtx)
 				return errors.New("Failed to create index due to internal build error.  Please retry the operation.")
 			}
@@ -3660,7 +3673,7 @@ func (m *janitor) run() {
 
 		case <-m.listenerDonech:
 			m.listenerDonech = make(chan bool)
-			m.commandListener = mc.NewCommandListener(m.listenerDonech, false, false, true, true)
+			m.commandListener = mc.NewCommandListener(m.listenerDonech, false, false, true, true, false)
 			m.commandListener.ListenTokens()
 		}
 	}
@@ -3679,7 +3692,7 @@ func newJanitor(mgr *LifecycleMgr) *janitor {
 
 	janitor := &janitor{
 		manager:         mgr,
-		commandListener: mc.NewCommandListener(donech, false, false, true, true),
+		commandListener: mc.NewCommandListener(donech, false, false, true, true, false),
 		listenerDonech:  donech,
 		runch:           make(chan bool),
 	}
@@ -3765,7 +3778,7 @@ func (s *builder) run() {
 
 		case <-s.listenerDonech:
 			s.listenerDonech = make(chan bool)
-			s.commandListener = mc.NewCommandListener(s.listenerDonech, false, true, false, false)
+			s.commandListener = mc.NewCommandListener(s.listenerDonech, false, true, false, false, false)
 			s.commandListener.ListenTokens()
 		}
 	}
@@ -4080,7 +4093,7 @@ func newBuilder(mgr *LifecycleMgr) *builder {
 		pendings:        make(map[string][]uint64),
 		notifych:        make(chan *common.IndexDefn, 10000),
 		batchSize:       int32(common.SystemConfig["indexer.settings.build.batch_size"].Int()),
-		commandListener: mc.NewCommandListener(donech, false, true, false, false),
+		commandListener: mc.NewCommandListener(donech, false, true, false, false, false),
 		listenerDonech:  donech,
 	}
 

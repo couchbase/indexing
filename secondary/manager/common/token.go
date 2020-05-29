@@ -49,6 +49,9 @@ const IndexerVersionTokenPath = InfoMetakvDir + IndexerVersionTokenTag
 const IndexerStorageModeTokenTag = "storageModeToken/"
 const IndexerStorageModeTokenPath = InfoMetakvDir + IndexerStorageModeTokenTag
 
+const ScheduleCreateTokenTag = "schedule/"
+const ScheduleCreateTokenPath = CommandMetakvDir + ScheduleCreateTokenTag
+
 //////////////////////////////////////////////////////////////
 // Concrete Type
 //
@@ -110,16 +113,33 @@ type IndexerStorageModeToken struct {
 	LocalStorageMode string
 }
 
+// TODO: Check if we can directly set UUIDs in the Defn itself.
+type ScheduleCreateToken struct {
+	Definition   c.IndexDefn
+	Plan         map[string]interface{}
+	BucketUUID   string
+	ScopeId      string
+	CollectionId string
+	IndexerId    c.IndexerId
+	Ctime        int64
+}
+
+type ScheduleCreateTokenList struct {
+	Tokens []ScheduleCreateToken
+}
+
 type CommandListener struct {
 	doCreate       bool
 	hasNewCreate   bool
 	doBuild        bool
 	doDelete       bool
 	doDropInst     bool
+	doSchedule     bool
 	createTokens   map[string]*CreateCommandToken
 	buildTokens    map[string]*BuildCommandToken
 	deleteTokens   map[string]*DeleteCommandToken
 	dropInstTokens map[string]*DropInstanceCommandToken
+	scheduleTokens map[string]*ScheduleCreateToken
 	mutex          sync.Mutex
 	cancelCh       chan struct{}
 	donech         chan bool
@@ -855,21 +875,114 @@ func MarshallIndexerStorageModeToken(r *IndexerStorageModeToken) ([]byte, error)
 	return buf, nil
 }
 
+//////////////////////////////////////////////////////////////////////////////
+// ScheduleCreateToken
+//
+// When two or more index creations cannot happen synchronously, index creation
+// can be scheduled in the background. Each of the tokens represent one index
+// creation request.
+//////////////////////////////////////////////////////////////////////////////
+
+func PostScheduleCreateToken(idxDefn c.IndexDefn, plan map[string]interface{},
+	bucketUUID, scopeId, collectionId string, indexerId c.IndexerId, ctime int64) error {
+
+	// TODO: Do we need bucket UUID? DDL service manager does overwrite bucket UUID in idxDefn
+	// if bucket UUID is changed.
+
+	token := &ScheduleCreateToken{
+		Definition:   idxDefn,
+		Plan:         plan,
+		BucketUUID:   bucketUUID,
+		ScopeId:      scopeId,
+		CollectionId: collectionId,
+		IndexerId:    indexerId,
+		Ctime:        ctime,
+	}
+
+	path := fmt.Sprintf("%v", idxDefn.DefnId)
+	return c.MetakvBigValueSet(ScheduleCreateTokenPath+path, token)
+}
+
+func DeleteScheduleCreateToken(defnId c.IndexDefnId) error {
+	path := fmt.Sprintf("%v", defnId)
+	return c.MetakvBigValueDel(ScheduleCreateTokenPath + path)
+}
+
+func ListAllScheduleCreateTokens() ([]*ScheduleCreateToken, error) {
+
+	// TODO: Check if these is any transfer limit.
+	// Or is it better to get one based in path?
+
+	paths, err := c.MetakvBigValueList(ScheduleCreateTokenPath)
+	if err != nil {
+		return nil, err
+	}
+
+	var result []*ScheduleCreateToken
+
+	if len(paths) != 0 {
+		result = make([]*ScheduleCreateToken, 0, len(paths))
+		for _, path := range paths {
+			token := &ScheduleCreateToken{}
+			exist, err := c.MetakvBigValueGet(path, token)
+			if err != nil {
+				return nil, err
+			}
+
+			if exist {
+				result = append(result, token)
+			}
+		}
+	}
+
+	return result, nil
+
+}
+
+func UnmarshallScheduleCreateToken(data []byte) (*ScheduleCreateToken, error) {
+
+	r := new(ScheduleCreateToken)
+	if err := json.Unmarshal(data, r); err != nil {
+		return nil, err
+	}
+
+	return r, nil
+}
+
+func ScheduleCreateTokenExist(defnId c.IndexDefnId) (bool, error) {
+
+	token := &ScheduleCreateToken{}
+	id := fmt.Sprintf("%v", defnId)
+	return c.MetakvBigValueGet(ScheduleCreateTokenPath+id, token)
+}
+
+func MarshallScheduleCreateTokenList(tokens *ScheduleCreateTokenList) ([]byte, error) {
+	buf, err := json.Marshal(&tokens)
+	if err != nil {
+		return nil, err
+	}
+
+	return buf, nil
+}
+
 //////////////////////////////////////////////////////////////
 // CommandListener
 //////////////////////////////////////////////////////////////
 
-func NewCommandListener(donech chan bool, doCreate bool, doBuild bool, doDelete bool, doDropInst bool) *CommandListener {
+func NewCommandListener(donech chan bool, doCreate bool, doBuild bool,
+	doDelete bool, doDropInst bool, doSchedule bool) *CommandListener {
 
 	return &CommandListener{
 		doCreate:       doCreate,
 		doBuild:        doBuild,
 		doDelete:       doDelete,
 		doDropInst:     doDropInst,
+		doSchedule:     doSchedule,
 		createTokens:   make(map[string]*CreateCommandToken),
 		buildTokens:    make(map[string]*BuildCommandToken),
 		deleteTokens:   make(map[string]*DeleteCommandToken),
 		dropInstTokens: make(map[string]*DropInstanceCommandToken),
+		scheduleTokens: make(map[string]*ScheduleCreateToken),
 		cancelCh:       make(chan struct{}),
 		donech:         donech,
 	}
@@ -971,6 +1084,25 @@ func (m *CommandListener) AddNewBuildToken(path string, token *BuildCommandToken
 	m.buildTokens[path] = token
 }
 
+func (m *CommandListener) GetNewScheduleCreateTokens() map[string]*ScheduleCreateToken {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
+	if len(m.scheduleTokens) != 0 {
+		result := m.scheduleTokens
+		m.scheduleTokens = make(map[string]*ScheduleCreateToken)
+		return result
+	}
+
+	return nil
+}
+
+func (m *CommandListener) AddNewScheduleCreateToken(path string, token *ScheduleCreateToken) {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	m.scheduleTokens[path] = token
+}
+
 func (m *CommandListener) ListenTokens() {
 
 	metaKVCallback := func(path string, value []byte, rev interface{}) error {
@@ -985,6 +1117,9 @@ func (m *CommandListener) ListenTokens() {
 
 		} else if strings.Contains(path, CreateDDLCommandTokenPath) {
 			m.handleNewCreateCommandToken(path, value)
+
+		} else if strings.Contains(path, ScheduleCreateTokenPath) {
+			m.handleNewScheduleCreateToken(path, value)
 		}
 
 		return nil
@@ -1096,4 +1231,24 @@ func (m *CommandListener) handleNewDropInstanceCommandToken(path string, value [
 	}
 
 	m.AddNewDropInstanceToken(path, token)
+}
+
+func (m *CommandListener) handleNewScheduleCreateToken(path string, value []byte) {
+
+	if !m.doSchedule {
+		return
+	}
+
+	if value == nil {
+		delete(m.scheduleTokens, path)
+		return
+	}
+
+	token, err := UnmarshallScheduleCreateToken(value)
+	if err != nil {
+		logging.Warnf("CommandListener: Failed to process schedule create token.  Skp %v.  Internal Error = %v.", path, err)
+		return
+	}
+
+	m.AddNewScheduleCreateToken(path, token)
 }
