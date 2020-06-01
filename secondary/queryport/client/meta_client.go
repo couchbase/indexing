@@ -1,26 +1,30 @@
 package client
 
-import "sync"
-import "fmt"
-import "errors"
-import "strings"
-import "math/rand"
-import "time"
-import "unsafe"
-import "sync/atomic"
-import "encoding/json"
-import "net/http"
-import "bytes"
-import "io/ioutil"
-import "io"
-import "math"
-import "strconv"
-import "sort"
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"io/ioutil"
+	"math"
+	"math/rand"
+	"net/http"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+	"unsafe"
 
-import "github.com/couchbase/indexing/secondary/logging"
-import "github.com/couchbase/indexing/secondary/security"
-import common "github.com/couchbase/indexing/secondary/common"
-import mclient "github.com/couchbase/indexing/secondary/manager/client"
+	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/security"
+
+	common "github.com/couchbase/indexing/secondary/common"
+
+	mclient "github.com/couchbase/indexing/secondary/manager/client"
+)
 
 type metadataClient struct {
 	cluster  string
@@ -538,12 +542,12 @@ func (b *metadataClient) computeEquivalents(topo map[common.IndexerId][]*mclient
 }
 
 // compare whether two index are equivalent.
-// TODO (Collections): Change this method to include scope & collection to
-// decide equivalence once Index Definition incorporates collection
 func (b *metadataClient) equivalentIndex(
 	index1, index2 *mclient.IndexMetadata) bool {
 	d1, d2 := index1.Definition, index2.Definition
 	if d1.Bucket != d2.Bucket ||
+		d1.Scope != d2.Scope ||
+		d1.Collection != d2.Collection ||
 		d1.IsPrimary != d2.IsPrimary ||
 		d1.ExprType != d2.ExprType ||
 		d1.PartitionScheme != d2.PartitionScheme ||
