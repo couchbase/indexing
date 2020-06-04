@@ -205,9 +205,10 @@ var SystemConfig = Config{
 		true,  // immutable
 		false, // case-insensitive
 	},
-	"projector.cpuProfFname": ConfigValue{
+	"projector.cpuProfDir": ConfigValue{
 		"",
-		"filename to dump cpu-profile for projector.",
+		"Directory at which cpu_profile will be generated for projector." +
+			"Name of the generated cpu_profile file: projector_cpu.pprof",
 		"",
 		false, // mutable
 		true,  // case-sensitive
@@ -219,9 +220,10 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
-	"projector.memProfFname": ConfigValue{
+	"projector.memProfDir": ConfigValue{
 		"",
-		"filename to dump mem-profile for projector.",
+		"Directory at which mem-profile will be generated for projector." +
+			"Name of the generated mem_profile file: projector_mem.pprof",
 		"",
 		false, // mutable
 		true,  // case-sensitive
@@ -1861,9 +1863,10 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 
-	"indexer.settings.cpuProfFname": ConfigValue{
+	"indexer.settings.cpuProfDir": ConfigValue{
 		"",
-		"filename to dump cpu-profile for indexer.",
+		"Directory at which cpu-profile will be generated for indexer." +
+			"Name of the generated cpu_profile file: indexer_cpu.pprof",
 		"",
 		false, // mutable
 		true,  // case-sensitive
@@ -1875,9 +1878,10 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
-	"indexer.settings.memProfFname": ConfigValue{
+	"indexer.settings.memProfDir": ConfigValue{
 		"",
-		"filename to dump mem-profile for indexer.",
+		"Directory at which mem-profile will be generated for indexer." +
+			"Name of the generated mem_profile file: indexer_mem.pprof",
 		"",
 		false, // mutable
 		true,  // case-sensitive

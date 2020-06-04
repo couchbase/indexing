@@ -1,26 +1,29 @@
 package projector
 
-import "expvar"
-import "fmt"
-import "sync"
-import "io"
-import "time"
-import "os"
-import "net/http"
-import "strings"
-import "encoding/json"
-import "runtime"
-import "runtime/pprof"
-import "runtime/debug"
+import (
+	"encoding/json"
+	"expvar"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
+	"runtime"
+	"runtime/debug"
+	"runtime/pprof"
+	"strings"
+	"sync"
+	"time"
 
-import ap "github.com/couchbase/indexing/secondary/adminport"
-import c "github.com/couchbase/indexing/secondary/common"
-import mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
-import projC "github.com/couchbase/indexing/secondary/projector/client"
-import protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
-import "github.com/golang/protobuf/proto"
-import "github.com/couchbase/indexing/secondary/logging"
-import "github.com/couchbase/indexing/secondary/security"
+	ap "github.com/couchbase/indexing/secondary/adminport"
+	c "github.com/couchbase/indexing/secondary/common"
+	mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
+	"github.com/couchbase/indexing/secondary/logging"
+	projC "github.com/couchbase/indexing/secondary/projector/client"
+	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
+	"github.com/couchbase/indexing/secondary/security"
+	"github.com/golang/protobuf/proto"
+)
 
 // UUID of the node on which the projector process executes
 var nodeUUID string
@@ -196,15 +199,13 @@ func (p *Projector) ResetConfig(config c.Config) {
 	// CPU-profiling
 	cpuProfile, ok := config["projector.cpuProfile"]
 	if ok && cpuProfile.Bool() && p.cpuProfFd == nil {
-		cpuProfFname, ok := config["projector.cpuProfFname"]
-		if ok {
-			fname := cpuProfFname.String()
-			logging.Infof("%v cpu profiling => %q\n", p.logPrefix, fname)
-			p.cpuProfFd = p.startCPUProfile(fname)
-
-		} else {
-			logging.Errorf("Missing cpu-profile o/p filename\n")
+		cpuProfDir, ok := config["projector.cpuProfDir"]
+		fname := "projector_cpu.pprof"
+		if ok && cpuProfDir.String() != "" {
+			fname = filepath.Join(cpuProfDir.String(), fname)
 		}
+		logging.Infof("%v cpu profiling => %q\n", p.logPrefix, fname)
+		p.cpuProfFd = p.startCPUProfile(fname)
 
 	} else if ok && !cpuProfile.Bool() {
 		if p.cpuProfFd != nil {
@@ -220,14 +221,13 @@ func (p *Projector) ResetConfig(config c.Config) {
 	// MEM-profiling
 	memProfile, ok := config["projector.memProfile"]
 	if ok && memProfile.Bool() {
-		memProfFname, ok := config["projector.memProfFname"]
-		if ok {
-			fname := memProfFname.String()
-			if p.takeMEMProfile(fname) {
-				logging.Infof("%v mem profile => %q\n", p.logPrefix, fname)
-			}
-		} else {
-			logging.Errorf("Missing mem-profile o/p filename\n")
+		memProfDir, ok := config["projector.memProfDir"]
+		fname := "projector_mem.pprof"
+		if ok && memProfDir.String() != "" {
+			fname = filepath.Join(memProfDir.String(), fname)
+		}
+		if p.takeMEMProfile(fname) {
+			logging.Infof("%v mem profile => %q\n", p.logPrefix, fname)
 		}
 	}
 
