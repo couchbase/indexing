@@ -2028,9 +2028,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.statsLogEnable": ConfigValue{
-		false,
+		true,
 		"When enabled, indexer stats will be logged to a different log file.",
-		false,
+		true,
 		false, // mutable
 		false, // case-insensitive
 	},
