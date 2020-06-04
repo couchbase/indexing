@@ -647,7 +647,7 @@ func (idx *indexer) initHttpServer() error {
 		Handler:      GetHTTPMux(),
 	}
 
-	lsnr, err := net.Listen("tcp", addr)
+	lsnr, err := security.MakeProtocolAwareTCPListener(addr)
 	if err != nil {
 		return fmt.Errorf("Error in creating TCP Listener: %v", err)
 	}

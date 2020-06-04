@@ -4419,6 +4419,8 @@ func (r *metadataRepo) unmarshallAndAddDefn(content []byte) error {
 	if err != nil {
 		return err
 	}
+
+	defn.SetCollectionDefaults()
 	r.addDefn(defn)
 	return nil
 }

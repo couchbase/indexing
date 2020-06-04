@@ -835,6 +835,13 @@ var SystemConfig = Config{
 		true, // immutable
 		true, // case-sensitive
 	},
+	"indexer.log_dir": ConfigValue{
+		"",
+		"Index log directory",
+		"",
+		true, // immutable
+		true, // case-sensitive
+	},
 	"indexer.nodeuuid": ConfigValue{
 		"",
 		"Indexer node UUID",
@@ -2017,6 +2024,34 @@ var SystemConfig = Config{
 		uint64(60),
 		"Periodic stats dump logging interval in seconds",
 		uint64(60),
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.statsLogEnable": ConfigValue{
+		false,
+		"When enabled, indexer stats will be logged to a different log file.",
+		false,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.statsLogFname": ConfigValue{
+		"indexer_stats.log",
+		"Name of the log file to log indexer stats.",
+		"indexer_stats.log",
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.statsLogFcount": ConfigValue{
+		10,
+		"Number of log files (for log rotation) to log indexer stats.",
+		10,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.statsLogFsize": ConfigValue{
+		32 * 1024 * 1024,
+		"Size of one log file to log indexer stats.",
+		32 * 1024 * 1024,
 		false, // mutable
 		false, // case-insensitive
 	},
