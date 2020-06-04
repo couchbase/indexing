@@ -6909,36 +6909,31 @@ func (idx *indexer) setProfilerOptions(config common.Config) {
 	// CPU-profiling
 	cpuProfile, ok := config["settings.cpuProfile"]
 	if ok && cpuProfile.Bool() && idx.cpuProfFd == nil {
-		cpuProfFname, ok := config["settings.cpuProfFname"]
-		if ok {
-			fname := cpuProfFname.String()
-			logging.Infof("Indexer:: cpu profiling => %q\n", fname)
-			idx.cpuProfFd = startCPUProfile(fname)
-
-		} else {
-			logging.Errorf("Indexer:: Missing cpu-profile o/p filename\n")
+		cpuProfDir, ok := config["settings.cpuProfDir"]
+		fname := "indexer_cpu.prof"
+		if ok && cpuProfDir.String() != "" {
+			fname = filepath.Join(cpuProfDir.String(), fname)
 		}
-
+		logging.Infof("Indexer:: cpu profiling => %q\n", fname)
+		idx.cpuProfFd = startCPUProfile(fname)
 	} else if ok && !cpuProfile.Bool() {
 		if idx.cpuProfFd != nil {
 			pprof.StopCPUProfile()
 			logging.Infof("Indexer:: cpu profiling stopped\n")
 		}
 		idx.cpuProfFd = nil
-
 	}
 
 	// MEM-profiling
 	memProfile, ok := config["settings.memProfile"]
 	if ok && memProfile.Bool() {
-		memProfFname, ok := config["settings.memProfFname"]
-		if ok {
-			fname := memProfFname.String()
-			if dumpMemProfile(fname) {
-				logging.Infof("Indexer:: mem profile => %q\n", fname)
-			}
-		} else {
-			logging.Errorf("Indexer:: Missing mem-profile o/p filename\n")
+		memProfDir, ok := config["settings.memProfDir"]
+		fname := "indexer_mem.pprof"
+		if ok && memProfDir.String() != "" {
+			fname = filepath.Join(memProfDir.String(), fname)
+		}
+		if dumpMemProfile(fname) {
+			logging.Infof("Indexer:: mem profile => %q\n", fname)
 		}
 	}
 }
