@@ -1647,8 +1647,7 @@ func makeResponsehandler(
 			atomic.AddInt64(&backfillEntries, 1)
 
 		} else {
-			fmsg := "%v response cap:%v len:%v entries:%v\n"
-			l.Tracef(fmsg, lprefix, cp, ln, skeys.GetLength())
+			l.Tracef("%v response cap:%v len:%v entries:%v\n", lprefix, cp, ln, skeys.GetLength())
 			if primed == false {
 				atomic.AddInt64(&si.gsi.primedur, int64(time.Since(starttm)))
 				primed = true
@@ -1808,7 +1807,7 @@ func string2defnID(id string) uint64 {
 }
 
 func vector2ts(vector timestamp.Vector) *qclient.TsConsistency {
-	if vector == nil {
+	if vector == nil || len(vector.Entries()) == 0 {
 		return nil
 	}
 	vbnos := make([]uint16, 0, 1024)

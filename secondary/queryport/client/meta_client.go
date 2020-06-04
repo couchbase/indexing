@@ -233,8 +233,7 @@ RETRY:
 		secExprs, desc, isPrimary, scheme, partitionKeys, plan)
 
 	if needRefresh && refreshCnt == 0 {
-		fmsg := "GsiClient: Indexer Node List is out-of-date.  Require refresh."
-		logging.Debugf(fmsg)
+		logging.Debugf("GsiClient: Indexer Node List is out-of-date.  Require refresh.")
 		if err := b.updateIndexerList(false); err != nil {
 			logging.Errorf("updateIndexerList(): %v\n", err)
 			return uint64(defnID), err
@@ -354,7 +353,7 @@ func (b *metadataClient) GetScanport(defnID uint64, excludes map[common.IndexDef
 		return nil, 0, nil, nil, nil, 0, false
 	}
 
-	var replicas [128]uint64
+	replicas := make([]uint64, len(currmeta.replicas[common.IndexDefnId(defnID)]))
 	n := 0
 	for _, replicaID := range currmeta.replicas[common.IndexDefnId(defnID)] {
 		replicas[n] = uint64(replicaID)
@@ -417,8 +416,7 @@ func (b *metadataClient) GetScanport(defnID uint64, excludes map[common.IndexDef
 		}
 	}
 
-	fmsg := "Scan port %s for index defnID %d of equivalent index defnId %d"
-	logging.Debugf(fmsg, qp, targetDefnID, defnID)
+	logging.Debugf("Scan port %s for index defnID %d of equivalent index defnId %d", qp, targetDefnID, defnID)
 	return qp, targetDefnID, in, rt, pid, numPartitions, true
 }
 
