@@ -533,6 +533,7 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, bucket string
 			}
 
 			for _, defn := range localMeta.IndexDefinitions {
+				defn.SetCollectionDefaults()
 
 				if len(bucket) != 0 && bucket != defn.Bucket {
 					continue
@@ -1514,8 +1515,10 @@ func postWithAuth(url string, bodyType string, body io.Reader) (*http.Response, 
 func findTopologyByCollection(topologies []IndexTopology, bucket, scope, collection string) *IndexTopology {
 
 	for _, topology := range topologies {
-		if topology.Bucket == bucket && topology.Scope == scope && topology.Collection == collection {
-			return &topology
+		t := &topology
+		t.SetCollectionDefaults()
+		if t.Bucket == bucket && t.Scope == scope && t.Collection == collection {
+			return t
 		}
 	}
 
