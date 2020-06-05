@@ -131,3 +131,13 @@ func (t *IndexTopology) GetStatusByInst(defnId c.IndexDefnId, instId c.IndexInst
 	}
 	return c.INDEX_STATE_NIL, ""
 }
+
+func (t *IndexTopology) SetCollectionDefaults() {
+	if t.Scope == "" {
+		t.Scope = c.DEFAULT_SCOPE
+	}
+
+	if t.Collection == "" {
+		t.Collection = c.DEFAULT_COLLECTION
+	}
+}

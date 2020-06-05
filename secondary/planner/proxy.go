@@ -876,8 +876,10 @@ func getIndexSettings(plan *Plan) error {
 func findTopologyByCollection(topologies []mc.IndexTopology, bucket, scope, collection string) *mc.IndexTopology {
 
 	for _, topology := range topologies {
-		if topology.Bucket == bucket && topology.Scope == scope && topology.Collection == collection {
-			return &topology
+		t := &topology
+		t.SetCollectionDefaults()
+		if t.Bucket == bucket && t.Scope == scope && t.Collection == collection {
+			return t
 		}
 	}
 
