@@ -35,7 +35,7 @@ import (
 	"github.com/couchbase/cbauth/metakv"
 	"github.com/couchbase/cbauth/service"
 	c "github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/fdb"
+	forestdb "github.com/couchbase/indexing/secondary/fdb"
 	l "github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager"
 	"github.com/couchbase/indexing/secondary/manager/client"
@@ -2314,7 +2314,6 @@ func (m *ServiceMgr) handleMoveIndex(w http.ResponseWriter, r *http.Request) {
 		for _, localMeta := range topology.Metadata {
 			bTopology := findTopologyByCollection(localMeta.IndexTopologies, bucket, scope, collection)
 			if bTopology != nil {
-				// TODO (Collections): Pass scope & collection name to below method
 				defn = bTopology.FindIndexDefinition(bucket, scope, collection, index)
 			}
 			if defn != nil {
