@@ -367,6 +367,16 @@ func (c *ClusterInfoCache) GetNodeUUID(nid NodeId) string {
 	return c.nodes[nid].NodeUUID
 }
 
+func (c *ClusterInfoCache) GetNodeIdByUUID(uuid string) (NodeId, bool) {
+	for nid, node := range c.nodes {
+		if node.NodeUUID == uuid {
+			return NodeId(nid), true
+		}
+	}
+
+	return NodeId(-1), false
+}
+
 func (c *ClusterInfoCache) GetNodesByServiceType(srvc string) (nids []NodeId) {
 	for i, svs := range c.nodesvs {
 		if _, ok := svs.Services[srvc]; ok {

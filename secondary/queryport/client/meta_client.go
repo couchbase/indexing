@@ -27,7 +27,6 @@ import (
 	mc "github.com/couchbase/indexing/secondary/manager/common"
 )
 
-var MAX_SCHEDULE_TOKENS = 10000
 var SCHED_TOKEN_CHECK_INTERVAL = 5000 // Milliseconds
 
 type metadataClient struct {
@@ -2009,11 +2008,11 @@ func newSchedTokenMonitor() *schedTokenMonitor {
 		clCloseCh = make(chan bool)
 		cListener = mc.NewCommandListener(clCloseCh, false, false, false, false, true, true)
 		uCloseCh = make(chan bool)
-		cIndexes = make([]*mclient.IndexMetadata, 0, MAX_SCHEDULE_TOKENS)
+		cIndexes = make([]*mclient.IndexMetadata, 0)
 	}
 
 	s := &schedTokenMonitor{
-		indexes:   make([]*mclient.IndexMetadata, 0, MAX_SCHEDULE_TOKENS),
+		indexes:   make([]*mclient.IndexMetadata, 0),
 		listener:  listener,
 		lCloseCh:  lCloseCh,
 		processed: make(map[string]bool),
@@ -2072,7 +2071,7 @@ func (s *schedTokenMonitor) markProcessed(key string, cached bool) {
 func (s *schedTokenMonitor) getIndexesFromTokens(createTokens map[string]*mc.ScheduleCreateToken,
 	stopTokens map[string]*mc.StopScheduleCreateToken, cached bool) []*mclient.IndexMetadata {
 
-	indexes := make([]*mclient.IndexMetadata, 0, MAX_SCHEDULE_TOKENS)
+	indexes := make([]*mclient.IndexMetadata, 0, len(createTokens))
 
 	for key, token := range createTokens {
 		if s.checkProcessed(key, cached) {
@@ -2135,14 +2134,14 @@ func (s *schedTokenMonitor) clenseIndexes(indexes []*mclient.IndexMetadata,
 }
 
 func (s *schedTokenMonitor) getIndexes() ([]*mclient.IndexMetadata, bool) {
-	createTokens := s.listener.GetNewScheduleCreateTokens()
-	stopTokens := s.listener.GetNewStopScheduleCreateTokens()
-	delPaths := s.listener.GetDeletesdScheduleCreateTokenPaths()
-
-	indexes := s.getIndexesFromTokens(createTokens, stopTokens, false)
-
 	s.lock.Lock()
 	defer s.lock.Unlock()
+
+	createTokens := s.listener.GetNewScheduleCreateTokens()
+	stopTokens := s.listener.GetNewStopScheduleCreateTokens()
+	delPaths := s.listener.GetDeletedScheduleCreateTokenPaths()
+
+	indexes := s.getIndexesFromTokens(createTokens, stopTokens, false)
 
 	indexes = append(indexes, s.indexes...)
 	s.indexes = indexes
@@ -2166,7 +2165,7 @@ func (s *schedTokenMonitor) getIndexesCached() []*mclient.IndexMetadata {
 func (s *schedTokenMonitor) update() {
 	createTokens := s.listener.GetNewScheduleCreateTokens()
 	stopTokens := s.listener.GetNewStopScheduleCreateTokens()
-	delPaths := s.listener.GetDeletesdScheduleCreateTokenPaths()
+	delPaths := s.listener.GetDeletedScheduleCreateTokenPaths()
 
 	indexes := s.getIndexesFromTokens(createTokens, stopTokens, true)
 
