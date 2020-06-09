@@ -76,7 +76,7 @@ type plasmaSlice struct {
 	numPartitions int
 	isCompacting  bool
 
-	cmdCh  []chan indexMutation
+	cmdCh  []chan *indexMutation
 	stopCh []DoneChannel
 
 	workerDone []chan bool
@@ -497,7 +497,7 @@ func (mdb *plasmaSlice) Insert(key []byte, docid []byte, meta *MutationMeta) err
 		op = opInsert
 	}
 
-	mut := indexMutation{
+	mut := &indexMutation{
 		op:    op,
 		key:   key,
 		docid: docid,
@@ -514,7 +514,7 @@ func (mdb *plasmaSlice) Delete(docid []byte, meta *MutationMeta) error {
 	if !meta.firstSnap {
 		atomic.AddInt64(&mdb.qCount, 1)
 		mdb.idxStats.numDocsFlushQueued.Add(1)
-		mdb.cmdCh[int(meta.vbucket)%mdb.numWriters] <- indexMutation{op: opDelete, docid: docid}
+		mdb.cmdCh[int(meta.vbucket)%mdb.numWriters] <- &indexMutation{op: opDelete, docid: docid}
 	}
 	return mdb.fatalDbErr
 }
@@ -522,7 +522,7 @@ func (mdb *plasmaSlice) Delete(docid []byte, meta *MutationMeta) error {
 func (mdb *plasmaSlice) handleCommandsWorker(workerId int) {
 	var start time.Time
 	var elapsed time.Duration
-	var icmd indexMutation
+	var icmd *indexMutation
 
 	defer func() {
 		if r := recover(); r != nil {
@@ -2659,7 +2659,7 @@ func (slice *plasmaSlice) setupWriters() {
 	slice.keySzConf = make([]keySizeConfig, 0, slice.maxNumWriters)
 
 	// initialize comand handler
-	slice.cmdCh = make([]chan indexMutation, 0, slice.maxNumWriters)
+	slice.cmdCh = make([]chan *indexMutation, 0, slice.maxNumWriters)
 	slice.workerDone = make([]chan bool, 0, slice.maxNumWriters)
 	slice.stopCh = make([]DoneChannel, 0, slice.maxNumWriters)
 
@@ -2712,7 +2712,7 @@ func (slice *plasmaSlice) initWriters(numWriters int) {
 	slice.workerDone = slice.workerDone[:numWriters]
 	slice.stopCh = slice.stopCh[:numWriters]
 	for i := curNumWriters; i < numWriters; i++ {
-		slice.cmdCh[i] = make(chan indexMutation, queueSize)
+		slice.cmdCh[i] = make(chan *indexMutation, queueSize)
 		slice.workerDone[i] = make(chan bool)
 		slice.stopCh[i] = make(DoneChannel)
 
