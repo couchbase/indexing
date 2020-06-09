@@ -78,6 +78,8 @@ func (h *StatsHolder) Set(s *common.Statistics) {
 
 type topologyChange struct {
 	Bucket      string   `json:"bucket,omitempty"`
+	Scope       string   `json:"scope,omitempty"`
+	Collection  string   `json:"collection,omitempty"`
 	DefnId      uint64   `json:"defnId,omitempty"`
 	InstId      uint64   `json:"instId,omitempty"`
 	State       uint32   `json:"state,omitempty"`
@@ -109,7 +111,7 @@ type mergePartition struct {
 
 type builder struct {
 	manager   *LifecycleMgr
-	pendings  map[string][]uint64
+	pendings  map[string][]uint64 // Map of bucket/scope/collection to list of index defns
 	notifych  chan *common.IndexDefn
 	batchSize int32
 	disable   int32
@@ -230,6 +232,7 @@ func (m *LifecycleMgr) OnNewRequest(fid string, request protocol.RequestMsg) {
 		if !m.indexerReady {
 			if op == client.OPCODE_UPDATE_INDEX_INST ||
 				op == client.OPCODE_DELETE_BUCKET ||
+				op == client.OPCODE_DELETE_COLLECTION ||
 				op == client.OPCODE_CLEANUP_INDEX ||
 				op == client.OPCODE_CLEANUP_PARTITION ||
 				op == client.OPCODE_RESET_INDEX ||
@@ -374,6 +377,8 @@ func (m *LifecycleMgr) dispatchRequest(request *requestHolder, factory *message.
 		result, err = m.handleServiceMap(content)
 	case client.OPCODE_DELETE_BUCKET:
 		err = m.handleDeleteBucket(key, content)
+	case client.OPCODE_DELETE_COLLECTION:
+		err = m.handleDeleteCollection(key, content)
 	case client.OPCODE_CLEANUP_INDEX:
 		err = m.handleCleanupIndexMetadata(content)
 	case client.OPCODE_CLEANUP_DEFER_INDEX:
@@ -1116,7 +1121,7 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scheduled bool,
 	}
 
 	if realInstId != 0 {
-		realInst, err := m.FindLocalIndexInst(defn.Bucket, defn.DefnId, realInstId)
+		realInst, err := m.FindLocalIndexInst(defn.Bucket, defn.Scope, defn.Collection, defn.DefnId, realInstId)
 		if err != nil {
 			logging.Errorf("LifecycleMgr.CreateIndex() : CreateIndex fails. Reason = %v", err)
 			return err
@@ -1127,7 +1132,7 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scheduled bool,
 		// not exist, we can simply delete the index instance without notifying indexer.
 		if realInst != nil && common.IndexState(realInst.State) == common.INDEX_STATE_DELETED {
 			logging.Infof("LifecycleMgr.CreateIndex() : Remove deleted index instances for index %v", defn.DefnId)
-			m.repo.deleteIndexFromTopology(defn.Bucket, defn.DefnId)
+			m.repo.deleteIndexFromTopology(defn.Bucket, defn.Scope, defn.Collection, defn.DefnId)
 			realInst = nil
 		}
 
@@ -1192,7 +1197,7 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scheduled bool,
 	// Metadata cleanup is not atomic.  The index is effectively "deleted" if it is able to drop
 	// the index definition from repository. If drop index is not successful during cleanup,
 	// the index will be repaired upon bootstrap or cleanup by janitor.
-	if err := m.updateIndexState(defn.Bucket, defn.DefnId, instId, common.INDEX_STATE_READY); err != nil {
+	if err := m.updateIndexState(defn.Bucket, defn.Scope, defn.Collection, defn.DefnId, instId, common.INDEX_STATE_READY); err != nil {
 		logging.Errorf("LifecycleMgr.CreateIndex() : createIndex fails. Reason = %v", err)
 		m.DeleteIndex(defn.DefnId, true, false, reqCtx)
 		return err
@@ -1434,7 +1439,7 @@ func (m *LifecycleMgr) verifyDuplicateInstance(defn *common.IndexDefn, reqCtx *c
 
 	if existDefn != nil {
 		// The index already exist in this node.  Make sure there is no overlapping partition.
-		topology, err := m.repo.GetTopologyByBucket(existDefn.Bucket)
+		topology, err := m.repo.GetTopologyByCollection(existDefn.Bucket, existDefn.Scope, existDefn.Collection)
 		if err != nil {
 			logging.Errorf("LifecycleMgr.CreateIndexInstance() : fails to find index instance. Reason = %v", err)
 			return err
@@ -1468,7 +1473,7 @@ func (m *LifecycleMgr) verifyDuplicateDefn(defn *common.IndexDefn, reqCtx *commo
 
 	if existDefn != nil {
 
-		topology, err := m.repo.GetTopologyByBucket(existDefn.Bucket)
+		topology, err := m.repo.GetTopologyByCollection(existDefn.Bucket, existDefn.Scope, existDefn.Collection)
 		if err != nil {
 			logging.Errorf("LifecycleMgr.verifyDuplicateDefn() : fails to find index instance. Reason = %v", err)
 			return nil, err
@@ -1659,9 +1664,9 @@ func (m *LifecycleMgr) BuildIndexes(ids []common.IndexDefnId,
 			continue
 		}
 
-		insts, err := m.FindAllLocalIndexInst(defn.Bucket, id)
+		insts, err := m.FindAllLocalIndexInst(defn.Bucket, defn.Scope, defn.Collection, id)
 		if len(insts) == 0 || err != nil {
-			logging.Errorf("LifecycleMgr.handleBuildIndexes: Failed to find index instance (%v, %v).  Skip this index.", defn.Name, defn.Bucket)
+			logging.Errorf("LifecycleMgr.handleBuildIndexes: Failed to find index instance (%v, %v, %v, %v).  Skip this index.", defn.Name, defn.Bucket, defn.Scope, defn.Collection)
 			skipList = append(skipList, id)
 			continue
 		}
@@ -1675,13 +1680,14 @@ func (m *LifecycleMgr) BuildIndexes(ids []common.IndexDefnId,
 			}
 
 			//Schedule the build
-			if err := m.SetScheduledFlag(defn.Bucket, id, common.IndexInstId(inst.InstId), true); err != nil {
-				msg := fmt.Sprintf("LifecycleMgr.handleBuildIndexes: Unable to set scheduled flag in index instance (%v, %v).", defn.Name, defn.Bucket)
+			if err := m.SetScheduledFlag(defn.Bucket, defn.Scope, defn.Collection, id, common.IndexInstId(inst.InstId), true); err != nil {
+				msg := fmt.Sprintf("LifecycleMgr.handleBuildIndexes: Unable to set scheduled flag in index instance (%v, %v, %v, %v).",
+					defn.Name, defn.Bucket, defn.Scope, defn.Collection)
 				logging.Warnf("%v  Will try to build index now, but it will not be able to retry index build upon server restart.", msg)
 			}
 
 			// Reset any previous error
-			m.UpdateIndexInstance(defn.Bucket, id, common.IndexInstId(inst.InstId), common.INDEX_STATE_NIL, common.NIL_STREAM, "", nil,
+			m.UpdateIndexInstance(defn.Bucket, defn.Scope, defn.Collection, id, common.IndexInstId(inst.InstId), common.INDEX_STATE_NIL, common.NIL_STREAM, "", nil,
 				inst.RState, nil, nil, -1)
 
 			instIdList = append(instIdList, common.IndexInstId(inst.InstId))
@@ -1719,16 +1725,16 @@ func (m *LifecycleMgr) BuildIndexes(ids []common.IndexDefnId,
 					continue
 				}
 
-				inst, err := m.FindLocalIndexInst(defn.Bucket, defnId, instId)
+				inst, err := m.FindLocalIndexInst(defn.Bucket, defn.Scope, defn.Collection, defnId, instId)
 				if inst != nil && err == nil {
 					if m.canRetryBuildError(inst, build_err, retry) {
 						build_err = errors.New(fmt.Sprintf("Index %v will retry building in the background for reason: %v.", defn.Name, build_err.Error()))
 					}
-					m.UpdateIndexInstance(defn.Bucket, defnId, common.IndexInstId(inst.InstId), common.INDEX_STATE_NIL,
+					m.UpdateIndexInstance(defn.Bucket, defn.Scope, defn.Collection, defnId, common.IndexInstId(inst.InstId), common.INDEX_STATE_NIL,
 						common.NIL_STREAM, build_err.Error(), nil, inst.RState, nil, nil, -1)
 				} else {
-					logging.Infof("LifecycleMgr.handleBuildIndexes() : Failed to persist, error in index instance (%v, %v, %v).",
-						defn.Bucket, defn.Name, inst.ReplicaId)
+					logging.Infof("LifecycleMgr.handleBuildIndexes() : Failed to persist, error in index instance (%v, %v, %v, %v, %v).",
+						defn.Bucket, defn.Scope, defn.Collection, defn.Name, inst.ReplicaId)
 				}
 
 				if m.canRetryBuildError(inst, build_err, retry) {
@@ -1736,9 +1742,9 @@ func (m *LifecycleMgr) BuildIndexes(ids []common.IndexDefnId,
 						defn.Bucket, defn.Name, inst.ReplicaId)
 
 					if inst != nil && !inst.Scheduled {
-						if err := m.SetScheduledFlag(defn.Bucket, defnId, common.IndexInstId(inst.InstId), true); err != nil {
-							msg := fmt.Sprintf("LifecycleMgr.handleBuildIndexes: Unable to set scheduled flag in index instance (%v, %v, %v).",
-								defn.Name, defn.Bucket, inst.ReplicaId)
+						if err := m.SetScheduledFlag(defn.Bucket, defn.Scope, defn.Collection, defnId, common.IndexInstId(inst.InstId), true); err != nil {
+							msg := fmt.Sprintf("LifecycleMgr.handleBuildIndexes: Unable to set scheduled flag in index instance (%v, %v, %v, %v, %v).",
+								defn.Name, defn.Bucket, defn.Scope, defn.Collection, inst.ReplicaId)
 							logging.Warnf("%v  Will try to build index now, but it will not be able to retry index build upon server restart.", msg)
 						}
 					}
@@ -1798,7 +1804,7 @@ func (m *LifecycleMgr) DeleteIndex(id common.IndexDefnId, notify bool, updateSta
 	// 2) Cannot create another index of the same name until all insts are marked deleted
 	// 3) Deleted instances will be removed during bootstrap
 	//
-	insts, err := m.FindAllLocalIndexInst(defn.Bucket, id)
+	insts, err := m.FindAllLocalIndexInst(defn.Bucket, defn.Scope, defn.Collection, id)
 	if err != nil {
 		// Cannot read bucket topology.  Likely a transient error.  But without index inst, we cannot
 		// proceed without letting indexer to clean up.
@@ -1809,7 +1815,7 @@ func (m *LifecycleMgr) DeleteIndex(id common.IndexDefnId, notify bool, updateSta
 	hasError := false
 	for _, inst := range insts {
 		// updateIndexState will not return an error if there is no index inst
-		if err := m.updateIndexState(defn.Bucket, defn.DefnId, common.IndexInstId(inst.InstId), common.INDEX_STATE_DELETED); err != nil {
+		if err := m.updateIndexState(defn.Bucket, defn.Scope, defn.Collection, defn.DefnId, common.IndexInstId(inst.InstId), common.INDEX_STATE_DELETED); err != nil {
 			hasError = true
 		}
 	}
@@ -1824,7 +1830,7 @@ func (m *LifecycleMgr) DeleteIndex(id common.IndexDefnId, notify bool, updateSta
 	}
 
 	if notify && m.notifier != nil {
-		insts, err := m.FindAllLocalIndexInst(defn.Bucket, id)
+		insts, err := m.FindAllLocalIndexInst(defn.Bucket, defn.Scope, defn.Collection, id)
 		if err != nil {
 			// Cannot read bucket topology.  Likely a transient error.  But without index inst, we cannot
 			// proceed without letting indexer to clean up.
@@ -1868,10 +1874,10 @@ func (m *LifecycleMgr) DeleteIndex(id common.IndexDefnId, notify bool, updateSta
 
 	// If indexer crashes at this point, there is a chance topology may leave a orphan index
 	// instance.  But this index will consider invalid (state=DELETED + no index definition).
-	m.repo.deleteIndexFromTopology(defn.Bucket, defn.DefnId)
+	m.repo.deleteIndexFromTopology(defn.Bucket, defn.Scope, defn.Collection, defn.DefnId)
 
-	logging.Debugf("LifecycleMgr.DeleteIndex() : deleted index:  bucket : %v bucket uuid %v name %v",
-		defn.Bucket, defn.BucketUUID, defn.Name)
+	logging.Debugf("LifecycleMgr.DeleteIndex() : deleted index:  bucket : %v bucket uuid %v scope %v collection %v name %v",
+		defn.Bucket, defn.BucketUUID, defn.Scope, defn.Collection, defn.Name)
 	return nil
 }
 
@@ -1911,7 +1917,8 @@ func (m *LifecycleMgr) handleTopologyChange(content []byte) error {
 	}
 
 	// Find out the current index instance state
-	inst, err := m.FindLocalIndexInst(change.Bucket, common.IndexDefnId(change.DefnId), common.IndexInstId(change.InstId))
+	inst, err := m.FindLocalIndexInst(change.Bucket, change.Scope, change.Collection,
+		common.IndexDefnId(change.DefnId), common.IndexInstId(change.InstId))
 	if err != nil {
 		return err
 	}
@@ -1923,9 +1930,10 @@ func (m *LifecycleMgr) handleTopologyChange(content []byte) error {
 	scheduled := inst.Scheduled
 
 	// update the index instance
-	if err := m.UpdateIndexInstance(change.Bucket, common.IndexDefnId(change.DefnId), common.IndexInstId(change.InstId),
-		common.IndexState(change.State), common.StreamId(change.StreamId), change.Error, change.BuildTime, change.RState, change.Partitions,
-		change.Versions, change.InstVersion); err != nil {
+	if err := m.UpdateIndexInstance(change.Bucket, change.Scope, change.Collection,
+		common.IndexDefnId(change.DefnId), common.IndexInstId(change.InstId),
+		common.IndexState(change.State), common.StreamId(change.StreamId), change.Error,
+		change.BuildTime, change.RState, change.Partitions, change.Versions, change.InstVersion); err != nil {
 		return err
 	}
 
@@ -1962,46 +1970,47 @@ func (m *LifecycleMgr) handleDeleteBucket(bucket string, content []byte) error {
 	//
 	// Remove index from repository
 	//
-	topology, err := m.repo.GetTopologyByBucket(bucket)
-	if err == nil && topology != nil {
+	topologies, err := m.repo.GetTopologiesByBucket(bucket)
+	if err == nil && len(topologies) > 0 {
+		for _, topology := range topologies {
+			definitions := make([]IndexDefnDistribution, len(topology.Definitions))
+			copy(definitions, topology.Definitions)
 
-		definitions := make([]IndexDefnDistribution, len(topology.Definitions))
-		copy(definitions, topology.Definitions)
+			for _, defnRef := range definitions {
 
-		for _, defnRef := range definitions {
+				if defn, err := m.repo.GetIndexDefnById(common.IndexDefnId(defnRef.DefnId)); err == nil && defn != nil {
 
-			if defn, err := m.repo.GetIndexDefnById(common.IndexDefnId(defnRef.DefnId)); err == nil && defn != nil {
+					// Remove the index definition if:
+					// 1) StreamId is NIL_STREAM (any stream)
+					// 2) index has at least one inst matching the given stream
+					// 3) index has at least one inst with NIL_STREAM
 
-				// Remove the index definition if:
-				// 1) StreamId is NIL_STREAM (any stream)
-				// 2) index has at least one inst matching the given stream
-				// 3) index has at least one inst with NIL_STREAM
+					if streamId == common.NIL_STREAM {
+						if err := m.DeleteIndex(common.IndexDefnId(defn.DefnId), false, false, nil); err != nil {
+							result = err
+						}
+						mc.DeleteAllCreateCommandToken(common.IndexDefnId(defn.DefnId))
 
-				if streamId == common.NIL_STREAM {
-					if err := m.DeleteIndex(common.IndexDefnId(defn.DefnId), false, false, nil); err != nil {
-						result = err
-					}
-					mc.DeleteAllCreateCommandToken(common.IndexDefnId(defn.DefnId))
+					} else {
+						for _, instRef := range defnRef.Instances {
 
-				} else {
-					for _, instRef := range defnRef.Instances {
+							if common.StreamId(instRef.StreamId) == streamId || common.StreamId(instRef.StreamId) == common.NIL_STREAM {
 
-						if common.StreamId(instRef.StreamId) == streamId || common.StreamId(instRef.StreamId) == common.NIL_STREAM {
+								logging.Debugf("LifecycleMgr.handleDeleteBucket() : index instance : id %v, streamId %v.",
+									instRef.InstId, instRef.StreamId)
 
-							logging.Debugf("LifecycleMgr.handleDeleteBucket() : index instance : id %v, streamId %v.",
-								instRef.InstId, instRef.StreamId)
+								if err := m.DeleteIndex(common.IndexDefnId(defn.DefnId), false, false, nil); err != nil {
+									result = err
+								}
+								mc.DeleteAllCreateCommandToken(common.IndexDefnId(defn.DefnId))
 
-							if err := m.DeleteIndex(common.IndexDefnId(defn.DefnId), false, false, nil); err != nil {
-								result = err
+								break
 							}
-							mc.DeleteAllCreateCommandToken(common.IndexDefnId(defn.DefnId))
-
-							break
 						}
 					}
+				} else {
+					logging.Debugf("LifecycleMgr.handleDeleteBucket() : Cannot find index %v.  Skip.", defnRef.DefnId)
 				}
-			} else {
-				logging.Debugf("LifecycleMgr.handleDeleteBucket() : Cannot find index %v.  Skip.", defnRef.DefnId)
 			}
 		}
 	} else if err != fdb.FDB_RESULT_KEY_NOT_FOUND {
@@ -2059,6 +2068,135 @@ func (m *LifecycleMgr) deleteCreateTokenForBucket(bucket string) error {
 }
 
 //-----------------------------------------------------------
+// Delete Collection
+//-----------------------------------------------------------
+
+func (m *LifecycleMgr) handleDeleteCollection(key string, content []byte) error {
+
+	result := error(nil)
+
+	input := strings.Split(key, "/")
+	if len(input) != 3 {
+		return errors.New(fmt.Sprintf("LifecycleMgr.handleDeleteCollection() invalid key %v", key))
+	}
+	bucket, scope, collection := input[0], input[1], input[2]
+
+	if len(content) == 0 {
+		return errors.New("invalid argument")
+	}
+
+	streamId := common.StreamId(content[0])
+
+	//
+	// Remove index from repository
+	//
+	topology, err := m.repo.GetTopologyByCollection(bucket, scope, collection)
+	if err == nil && topology != nil {
+
+		definitions := make([]IndexDefnDistribution, len(topology.Definitions))
+		copy(definitions, topology.Definitions)
+
+		for _, defnRef := range definitions {
+
+			if defn, err := m.repo.GetIndexDefnById(common.IndexDefnId(defnRef.DefnId)); err == nil && defn != nil {
+
+				// Remove the index definition if:
+				// 1) StreamId is NIL_STREAM (any stream)
+				// 2) index has at least one inst matching the given stream
+				// 3) index has at least one inst with NIL_STREAM
+
+				if streamId == common.NIL_STREAM {
+					if err := m.DeleteIndex(common.IndexDefnId(defn.DefnId), false, false, nil); err != nil {
+						result = err
+					}
+					mc.DeleteAllCreateCommandToken(common.IndexDefnId(defn.DefnId))
+
+				} else {
+					for _, instRef := range defnRef.Instances {
+
+						if common.StreamId(instRef.StreamId) == streamId || common.StreamId(instRef.StreamId) == common.NIL_STREAM {
+
+							logging.Debugf("LifecycleMgr.handleDeleteCollection() : index instance : id %v, streamId %v.",
+								instRef.InstId, instRef.StreamId)
+
+							if err := m.DeleteIndex(common.IndexDefnId(defn.DefnId), false, false, nil); err != nil {
+								result = err
+							}
+							mc.DeleteAllCreateCommandToken(common.IndexDefnId(defn.DefnId))
+
+							break
+						}
+					}
+				}
+			} else {
+				logging.Debugf("LifecycleMgr.handleDeleteCollection() : Cannot find index %v.  Skip.", defnRef.DefnId)
+			}
+		}
+
+	} else if err != fdb.FDB_RESULT_KEY_NOT_FOUND {
+		result = err
+	}
+
+	//
+	// Drop create token
+	//
+	result = m.deleteCreateTokenForCollection(bucket, scope, collection)
+
+	return result
+}
+
+func (m *LifecycleMgr) deleteCreateTokenForCollection(bucket, scope, collection string) error {
+
+	var result error
+
+	entries, err := mc.ListCreateCommandToken()
+	if err != nil {
+		logging.Warnf("LifecycleMgr.deleteCreateTokenForCollection: Failed to fetch token from metakv.  Internal Error = %v", err)
+		return err
+	}
+
+	for _, entry := range entries {
+
+		defnId, requestId, err := mc.GetDefnIdFromCreateCommandTokenPath(entry)
+		if err != nil {
+			logging.Warnf("LifecycleMgr: Failed to process create index token %v.  Internal Error = %v.", entry, err)
+			result = err
+			continue
+		}
+
+		token, err := mc.FetchCreateCommandToken(defnId, requestId)
+		if err != nil {
+			logging.Warnf("LifecycleMgr: Failed to process create index token %v.  Internal Error = %v.", entry, err)
+			result = err
+			continue
+		}
+
+		if token != nil {
+			for _, definitions := range token.Definitions {
+				if len(definitions) > 0 {
+					tokenScope, tokenCollection := definitions[0].Scope, definitions[0].Collection
+					if tokenScope == "" {
+						tokenScope = common.DEFAULT_SCOPE
+					}
+					if tokenCollection == "" {
+						tokenCollection = common.DEFAULT_COLLECTION
+					}
+					if definitions[0].Bucket == bucket && tokenScope == scope && tokenCollection == collection {
+						if err := mc.DeleteCreateCommandToken(definitions[0].DefnId, requestId); err != nil {
+							logging.Warnf("LifecycleMgr: Failed to delete create index token %v.  Internal Error = %v.", entry, err)
+							result = err
+						}
+						break
+					}
+				}
+			}
+		}
+	}
+
+	return result
+}
+
+//-----------------------------------------------------------
 // Cleanup Defer Index
 //-----------------------------------------------------------
 
@@ -2074,49 +2212,50 @@ func (m *LifecycleMgr) handleCleanupDeferIndexFromBucket(bucket string) error {
 		return nil
 	}
 
-	topology, err := m.repo.GetTopologyByBucket(bucket)
-	if err == nil && topology != nil {
-
-		hasValidActiveIndex := false
-		for _, defnRef := range topology.Definitions {
-			// Check for index with active stream.  If there is any index with active stream, all
-			// index in the bucket will be deleted when the stream is closed due to bucket delete.
-
-			for _, instRef := range defnRef.Instances {
-				if instRef.State != uint32(common.INDEX_STATE_DELETED) &&
-					common.StreamId(instRef.StreamId) != common.NIL_STREAM {
-					hasValidActiveIndex = true
-					break
-				}
-			}
-		}
-
-		if !hasValidActiveIndex {
-			deleteToken := false
-
+	topologies, err := m.repo.GetTopologiesByBucket(bucket)
+	if err == nil && len(topologies) > 0 {
+		for _, topology := range topologies {
+			hasValidActiveIndex := false
 			for _, defnRef := range topology.Definitions {
-				if defn, err := m.repo.GetIndexDefnById(common.IndexDefnId(defnRef.DefnId)); err == nil && defn != nil {
-					if defn.BucketUUID != currentUUID {
-						for _, instRef := range defnRef.Instances {
-							if instRef.State != uint32(common.INDEX_STATE_DELETED) &&
-								common.StreamId(instRef.StreamId) == common.NIL_STREAM {
-								deleteToken = true
-								if err := m.DeleteIndex(common.IndexDefnId(defn.DefnId), true, false, common.NewUserRequestContext()); err != nil {
-									logging.Errorf("LifecycleMgr.handleCleanupDeferIndexFromBucket: Encountered error %v", err)
-									continue
-								}
-								mc.DeleteAllCreateCommandToken(common.IndexDefnId(defn.DefnId))
-								break
-							}
-						}
+				// Check for index with active stream.  If there is any index with active stream, all
+				// index in the bucket will be deleted when the stream is closed due to bucket delete.
+
+				for _, instRef := range defnRef.Instances {
+					if instRef.State != uint32(common.INDEX_STATE_DELETED) &&
+						common.StreamId(instRef.StreamId) != common.NIL_STREAM {
+						hasValidActiveIndex = true
+						break
 					}
 				}
 			}
 
-			// VerifyBucket ensures that all index have the same bucket UUID.  So if one index has bucket UUID mismatch, then all
-			// can be deleted.
-			if deleteToken {
-				m.deleteCreateTokenForBucket(bucket)
+			if !hasValidActiveIndex {
+				deleteToken := false
+
+				for _, defnRef := range topology.Definitions {
+					if defn, err := m.repo.GetIndexDefnById(common.IndexDefnId(defnRef.DefnId)); err == nil && defn != nil {
+						if defn.BucketUUID != currentUUID {
+							for _, instRef := range defnRef.Instances {
+								if instRef.State != uint32(common.INDEX_STATE_DELETED) &&
+									common.StreamId(instRef.StreamId) == common.NIL_STREAM {
+									deleteToken = true
+									if err := m.DeleteIndex(common.IndexDefnId(defn.DefnId), true, false, common.NewUserRequestContext()); err != nil {
+										logging.Errorf("LifecycleMgr.handleCleanupDeferIndexFromBucket: Encountered error %v", err)
+										continue
+									}
+									mc.DeleteAllCreateCommandToken(common.IndexDefnId(defn.DefnId))
+									break
+								}
+							}
+						}
+					}
+				}
+
+				// VerifyBucket ensures that all index have the same bucket UUID.  So if one index has bucket UUID mismatch, then all
+				// can be deleted.
+				if deleteToken {
+					m.deleteCreateTokenForBucket(bucket)
+				}
 			}
 		}
 	}
@@ -2211,7 +2350,8 @@ func (m *LifecycleMgr) handleResetIndex(content []byte) error {
 	//
 
 	if err := m.repo.UpdateIndex(defn); err != nil {
-		logging.Errorf("LifecycleMgr.handleResetIndex() : Fails to upgrade index (%v, %v). Reason = %v", defn.Bucket, defn.Name, err)
+		logging.Errorf("LifecycleMgr.handleResetIndex() : Fails to upgrade index (%v, %v, %v, %v). Reason = %v",
+			defn.Bucket, defn.Scope, defn.Collection, defn.Name, err)
 		return err
 	}
 
@@ -2219,20 +2359,23 @@ func (m *LifecycleMgr) handleResetIndex(content []byte) error {
 	// Restore index instance (as if index is created again)
 	//
 
-	topology, err := m.repo.CloneTopologyByBucket(defn.Bucket)
+	topology, err := m.repo.CloneTopologyByCollection(defn.Bucket, defn.Scope, defn.Collection)
 	if err != nil {
-		logging.Errorf("LifecycleMgr.handleResetIndex() : Fails to upgrade index (%v, %v). Reason = %v", defn.Bucket, defn.Name, err)
+		logging.Errorf("LifecycleMgr.handleResetIndex() : Fails to upgrade index (%v, %v, %v, %v). Reason = %v",
+			defn.Bucket, defn.Scope, defn.Collection, defn.Name, err)
 		return err
 	}
 
-	rinst, err := m.FindLocalIndexInst(defn.Bucket, defn.DefnId, inst.InstId)
+	rinst, err := m.FindLocalIndexInst(defn.Bucket, defn.Scope, defn.Collection, defn.DefnId, inst.InstId)
 	if err != nil {
-		logging.Errorf("LifecycleMgr.handleResetIndex() : Fails to upgrade index (%v, %v). Reason = %v", defn.Bucket, defn.Name, err)
+		logging.Errorf("LifecycleMgr.handleResetIndex() : Fails to upgrade index (%v, %v, %v, %v). Reason = %v",
+			defn.Bucket, defn.Scope, defn.Collection, defn.Name, err)
 		return err
 	}
 
 	if rinst == nil {
-		logging.Errorf("LifecycleMgr.handleResetIndex() : Fails to upgrade index (%v, %v). Index instance does not exist.", defn.Bucket, defn.Name)
+		logging.Errorf("LifecycleMgr.handleResetIndex() : Fails to upgrade index (%v, %v, %v, %v). Index instance does not exist.",
+			defn.Bucket, defn.Scope, defn.Collection, defn.Name)
 		return nil
 	}
 
@@ -2249,9 +2392,10 @@ func (m *LifecycleMgr) handleResetIndex(content []byte) error {
 	topology.SetErrorForIndexInst(defn.DefnId, inst.InstId, "")
 	topology.UpdateStreamForIndexInst(defn.DefnId, inst.InstId, common.NIL_STREAM)
 
-	if err := m.repo.SetTopologyByBucket(defn.Bucket, topology); err != nil {
-		// Topology update is in place.  If there is any error, SetTopologyByBucket will purge the cache copy.
-		logging.Errorf("LifecycleMgr.handleResetIndex() : index instance (%v, %v) update fails. Reason = %v", defn.Bucket, defn.Name, err)
+	if err := m.repo.SetTopologyByCollection(defn.Bucket, defn.Scope, defn.Collection, topology); err != nil {
+		// Topology update is in place.  If there is any error, SetTopologyByCollection will purge the cache copy.
+		logging.Errorf("LifecycleMgr.handleResetIndex() : index instance (%v, %v, %v, %v) update fails. Reason = %v",
+			defn.Bucket, defn.Scope, defn.Collection, defn.Name, err)
 		return err
 	}
 
@@ -2278,20 +2422,23 @@ func (m *LifecycleMgr) handleResetIndexOnRollback(content []byte) error {
 	// Restore index instance (as if index is created again)
 	//
 
-	topology, err := m.repo.CloneTopologyByBucket(defn.Bucket)
+	topology, err := m.repo.CloneTopologyByCollection(defn.Bucket, defn.Scope, defn.Collection)
 	if err != nil {
-		logging.Errorf("LifecycleMgr.handleResetIndexOnRollback() : Fails to reset index (%v, %v). Reason = %v", defn.Bucket, defn.Name, err)
+		logging.Errorf("LifecycleMgr.handleResetIndexOnRollback() : Fails to reset index (%v, %v, %v, %v). Reason = %v",
+			defn.Bucket, defn.Scope, defn.Collection, defn.Name, err)
 		return err
 	}
 
-	rinst, err := m.FindLocalIndexInst(defn.Bucket, defn.DefnId, inst.InstId)
+	rinst, err := m.FindLocalIndexInst(defn.Bucket, defn.Scope, defn.Collection, defn.DefnId, inst.InstId)
 	if err != nil {
-		logging.Errorf("LifecycleMgr.handleResetIndexOnRollback() : Fails to reset index (%v, %v). Reason = %v", defn.Bucket, defn.Name, err)
+		logging.Errorf("LifecycleMgr.handleResetIndexOnRollback() : Fails to reset index (%v, %v, %v, %v). Reason = %v",
+			defn.Bucket, defn.Scope, defn.Collection, defn.Name, err)
 		return err
 	}
 
 	if rinst == nil {
-		logging.Errorf("LifecycleMgr.handleResetIndexOnRollback() : Fails to reset index (%v, %v). Index instance does not exist.", defn.Bucket, defn.Name)
+		logging.Errorf("LifecycleMgr.handleResetIndexOnRollback() : Fails to reset index (%v, %v, %v, %v). Index instance does not exist.",
+			defn.Bucket, defn.Scope, defn.Collection, defn.Name)
 		return nil
 	}
 
@@ -2303,9 +2450,10 @@ func (m *LifecycleMgr) handleResetIndexOnRollback(content []byte) error {
 		topology.SetErrorForIndexInst(defn.DefnId, inst.InstId, "")
 		topology.UpdateStreamForIndexInst(defn.DefnId, inst.InstId, common.NIL_STREAM)
 
-		if err := m.repo.SetTopologyByBucket(defn.Bucket, topology); err != nil {
-			// Topology update is in place.  If there is any error, SetTopologyByBucket will purge the cache copy.
-			logging.Errorf("LifecycleMgr.handleResetIndexOnRollback() : index instance (%v, %v) update fails. Reason = %v", defn.Bucket, defn.Name, err)
+		if err := m.repo.SetTopologyByCollection(defn.Bucket, defn.Scope, defn.Collection, topology); err != nil {
+			// Topology update is in place.  If there is any error, SetTopologyByCollection will purge the cache copy.
+			logging.Errorf("LifecycleMgr.handleResetIndexOnRollback() : index instance (%v, %v, %v, %v) update fails. Reason = %v",
+				defn.Bucket, defn.Scope, defn.Collection, defn.Name, err)
 			return err
 		}
 
@@ -2373,7 +2521,7 @@ func (m *LifecycleMgr) CreateIndexInstance(defn *common.IndexDefn, scheduled boo
 	partitions, versions, numPartitions := m.setPartition(defn)
 
 	if realInstId != 0 {
-		realInst, err := m.FindLocalIndexInst(defn.Bucket, defn.DefnId, realInstId)
+		realInst, err := m.FindLocalIndexInst(defn.Bucket, defn.Scope, defn.Collection, defn.DefnId, realInstId)
 		if err != nil {
 			logging.Errorf("LifecycleMgr.CreateIndexInstance() : CreateIndexInstance fails. Reason = %v", err)
 			return err
@@ -2440,7 +2588,7 @@ func (m *LifecycleMgr) CreateIndexInstance(defn *common.IndexDefn, scheduled boo
 	// Metadata cleanup is not atomic.  The index is effectively "deleted" if it is able to drop
 	// the index definition from repository. If drop index is not successful during cleanup,
 	// the index will be repaired upon bootstrap or cleanup by janitor.
-	if err := m.updateIndexState(defn.Bucket, defn.DefnId, instId, common.INDEX_STATE_READY); err != nil {
+	if err := m.updateIndexState(defn.Bucket, defn.Scope, defn.Collection, defn.DefnId, instId, common.INDEX_STATE_READY); err != nil {
 		logging.Errorf("LifecycleMgr.CreateIndexInstance() : CreateIndexInstance fails. Reason = %v", err)
 		m.DeleteIndexInstance(defn.DefnId, instId, false, false, false, reqCtx)
 		return err
@@ -2501,7 +2649,7 @@ func (m *LifecycleMgr) verifyOverlapPartition(defn *common.IndexDefn, reqCtx *co
 
 		if existDefn != nil {
 			// The index already exist in this node.  Make sure there is no overlapping partition.
-			topology, err := m.repo.GetTopologyByBucket(existDefn.Bucket)
+			topology, err := m.repo.GetTopologyByCollection(existDefn.Bucket, existDefn.Scope, existDefn.Collection)
 			if err != nil {
 				logging.Errorf("LifecycleMgr.CreateIndexInstance() : fails to find index instance. Reason = %v", err)
 				return err
@@ -2609,14 +2757,14 @@ func (m *LifecycleMgr) DeleteOrPruneIndexInstance(defn common.IndexDefn, notify 
 
 	stream := common.NIL_STREAM
 
-	inst, err := m.FindLocalIndexInst(defn.Bucket, id, instId)
+	inst, err := m.FindLocalIndexInst(defn.Bucket, defn.Scope, defn.Collection, id, instId)
 	if err != nil {
 		logging.Errorf("LifecycleMgr.DeleteOrPruneIndexInstance() : Encountered error during delete index. Error = %v", err)
 		return err
 	}
 
 	if inst == nil {
-		inst, err := m.FindLocalIndexInst(defn.Bucket, id, defn.RealInstId)
+		inst, err := m.FindLocalIndexInst(defn.Bucket, defn.Scope, defn.Collection, id, defn.RealInstId)
 		if err != nil {
 			logging.Errorf("LifecycleMgr.DeleteOrPruneIndexInstance() : Encountered error during delete index. Error = %v", err)
 			return err
@@ -2660,7 +2808,7 @@ func (m *LifecycleMgr) DeleteIndexInstance(id common.IndexDefnId, instId common.
 		return nil
 	}
 
-	insts, err := m.FindAllLocalIndexInst(defn.Bucket, id)
+	insts, err := m.FindAllLocalIndexInst(defn.Bucket, defn.Scope, defn.Collection, id)
 	if err != nil {
 		// Cannot read bucket topology.  Likely a transient error.  But without index inst, we cannot
 		// proceed without letting indexer to clean up.
@@ -2692,7 +2840,7 @@ func (m *LifecycleMgr) DeleteIndexInstance(id common.IndexDefnId, instId common.
 	}
 
 	// updateIndexState will not return an error if there is no index inst
-	if err := m.updateIndexState(defn.Bucket, id, instId, common.INDEX_STATE_DELETED); err != nil {
+	if err := m.updateIndexState(defn.Bucket, defn.Scope, defn.Collection, id, instId, common.INDEX_STATE_DELETED); err != nil {
 		logging.Errorf("LifecycleMgr.DeleteIndexInstance() : fails to update index state to DELETED. Reason = %v", err)
 		return err
 	}
@@ -2719,7 +2867,7 @@ func (m *LifecycleMgr) DeleteIndexInstance(id common.IndexDefnId, instId common.
 	}
 
 	// Remove the index instance from metadata.
-	m.repo.deleteInstanceFromTopology(defn.Bucket, id, instId)
+	m.repo.deleteInstanceFromTopology(defn.Bucket, defn.Scope, defn.Collection, id, instId)
 
 	// Remove the real proxy if necessary
 	m.deleteRealIndexInstIfNecessary(defn, inst, notify, updateStatusOnly, instanceOnly, reqCtx)
@@ -2736,7 +2884,7 @@ func (m *LifecycleMgr) deleteRealIndexInstIfNecessary(defn *common.IndexDefn, in
 	}
 
 	// Find the real inst
-	realInst, err := m.FindLocalIndexInst(defn.Bucket, defn.DefnId, common.IndexInstId(inst.RealInstId))
+	realInst, err := m.FindLocalIndexInst(defn.Bucket, defn.Scope, defn.Collection, defn.DefnId, common.IndexInstId(inst.RealInstId))
 	if err != nil {
 		logging.Errorf("LifecycleMgr.deleteRealIndexInstIfNecessary() : Encountered error during delete index. Error = %v", err)
 		return err
@@ -2749,7 +2897,7 @@ func (m *LifecycleMgr) deleteRealIndexInstIfNecessary(defn *common.IndexDefn, in
 
 	// Find if there is any proxy depends on real instance.  This only covers proxy that has yet
 	// to be merged to this instance.
-	numProxy, err := m.findNumValidProxy(defn.Bucket, defn.DefnId, common.IndexInstId(realInst.InstId))
+	numProxy, err := m.findNumValidProxy(defn.Bucket, defn.Scope, defn.Collection, defn.DefnId, common.IndexInstId(realInst.InstId))
 	if err != nil {
 		return err
 	}
@@ -2797,7 +2945,7 @@ func (m *LifecycleMgr) MergePartition(id common.IndexDefnId, srcInstId common.In
 	}
 
 	// Check if the source inst still exist
-	inst, err := m.FindLocalIndexInst(defn.Bucket, id, srcInstId)
+	inst, err := m.FindLocalIndexInst(defn.Bucket, defn.Scope, defn.Collection, id, srcInstId)
 	if err != nil {
 		// Cannot read bucket topology.  Likely a transient error.  But without index inst, we cannot
 		// proceed without letting indexer to clean up.
@@ -2810,7 +2958,7 @@ func (m *LifecycleMgr) MergePartition(id common.IndexDefnId, srcInstId common.In
 	}
 
 	// Check if the target inst still exist
-	inst, err = m.FindLocalIndexInst(defn.Bucket, id, tgtInstId)
+	inst, err = m.FindLocalIndexInst(defn.Bucket, defn.Scope, defn.Collection, id, tgtInstId)
 	if err != nil {
 		// Cannot read bucket topology.  Likely a transient error.  But without index inst, we cannot
 		// proceed without letting indexer to clean up.
@@ -2828,7 +2976,7 @@ func (m *LifecycleMgr) MergePartition(id common.IndexDefnId, srcInstId common.In
 		return err
 	}
 
-	m.repo.mergePartitionFromTopology(string(indexerId), defn.Bucket, id, srcInstId, srcRState, tgtInstId, tgtInstVersion,
+	m.repo.mergePartitionFromTopology(string(indexerId), defn.Bucket, defn.Scope, defn.Collection, id, srcInstId, srcRState, tgtInstId, tgtInstVersion,
 		tgtPartitions, tgtVersions)
 
 	return nil
@@ -2853,7 +3001,7 @@ func (m *LifecycleMgr) PruneIndexInstance(id common.IndexDefnId, instId common.I
 		return nil
 	}
 
-	inst, err := m.FindLocalIndexInst(defn.Bucket, id, instId)
+	inst, err := m.FindLocalIndexInst(defn.Bucket, defn.Scope, defn.Collection, id, instId)
 	if err != nil {
 		// Cannot read bucket topology.  Likely a transient error.  But without index inst, we cannot
 		// proceed without letting indexer to clean up.
@@ -2877,7 +3025,7 @@ func (m *LifecycleMgr) PruneIndexInstance(id common.IndexDefnId, instId common.I
 
 	// Find if there is any proxy depends on this instance.  This only covers proxy that has yet
 	// to be merged to this instance.
-	numProxy, err := m.findNumValidProxy(defn.Bucket, id, instId)
+	numProxy, err := m.findNumValidProxy(defn.Bucket, defn.Scope, defn.Collection, id, instId)
 	if err != nil {
 		return err
 	}
@@ -2908,7 +3056,7 @@ func (m *LifecycleMgr) PruneIndexInstance(id common.IndexDefnId, instId common.I
 		return err
 	}
 
-	if err := m.repo.splitPartitionFromTopology(defn.Bucket, id, instId, tombstoneInstId, newPartitions); err != nil {
+	if err := m.repo.splitPartitionFromTopology(defn.Bucket, defn.Scope, defn.Collection, id, instId, tombstoneInstId, newPartitions); err != nil {
 		logging.Errorf("LifecycleMgr.PrunePartition() : Failed to find split index.  Reason = %v", err)
 		return err
 	}
@@ -2948,9 +3096,10 @@ func (m *LifecycleMgr) PruneIndexInstance(id common.IndexDefnId, instId common.I
 //
 // This function will only return proxy belong to (1)
 //
-func (m *LifecycleMgr) findNumValidProxy(bucket string, defnId common.IndexDefnId, instId common.IndexInstId) (int, error) {
+func (m *LifecycleMgr) findNumValidProxy(bucket, scope, collection string,
+	defnId common.IndexDefnId, instId common.IndexInstId) (int, error) {
 
-	insts, err := m.FindAllLocalIndexInst(bucket, defnId)
+	insts, err := m.FindAllLocalIndexInst(bucket, scope, collection, defnId)
 	if err != nil {
 		return -1, err
 	}
@@ -3007,11 +3156,11 @@ func (m *LifecycleMgr) canRetryCreateError(err error) bool {
 	return true
 }
 
-func (m *LifecycleMgr) UpdateIndexInstance(bucket string, defnId common.IndexDefnId, instId common.IndexInstId,
+func (m *LifecycleMgr) UpdateIndexInstance(bucket, scope, collection string, defnId common.IndexDefnId, instId common.IndexInstId,
 	state common.IndexState, streamId common.StreamId, errStr string, buildTime []uint64, rState uint32,
 	partitions []uint64, versions []int, version int) error {
 
-	topology, err := m.repo.CloneTopologyByBucket(bucket)
+	topology, err := m.repo.CloneTopologyByCollection(bucket, scope, collection)
 	if err != nil {
 		logging.Errorf("LifecycleMgr.UpdateIndexInstance() : index instance update fails. Reason = %v", err)
 		return err
@@ -3072,8 +3221,8 @@ func (m *LifecycleMgr) UpdateIndexInstance(bucket string, defnId common.IndexDef
 	}
 
 	if changed {
-		if err := m.repo.SetTopologyByBucket(bucket, topology); err != nil {
-			// Topology update is in place.  If there is any error, SetTopologyByBucket will purge the cache copy.
+		if err := m.repo.SetTopologyByCollection(bucket, defn.Scope, defn.Collection, topology); err != nil {
+			// Topology update is in place.  If there is any error, SetTopologyByCollection will purge the cache copy.
 			logging.Errorf("LifecycleMgr.handleTopologyChange() : index instance update fails. Reason = %v", err)
 			return err
 		}
@@ -3082,9 +3231,10 @@ func (m *LifecycleMgr) UpdateIndexInstance(bucket string, defnId common.IndexDef
 	return nil
 }
 
-func (m *LifecycleMgr) SetScheduledFlag(bucket string, defnId common.IndexDefnId, instId common.IndexInstId, scheduled bool) error {
+func (m *LifecycleMgr) SetScheduledFlag(bucket, scope, collection string, defnId common.IndexDefnId,
+	instId common.IndexInstId, scheduled bool) error {
 
-	topology, err := m.repo.CloneTopologyByBucket(bucket)
+	topology, err := m.repo.CloneTopologyByCollection(bucket, scope, collection)
 	if err != nil {
 		logging.Errorf("LifecycleMgr.SetScheduledFlag() : index instance update fails. Reason = %v", err)
 		return err
@@ -3097,8 +3247,8 @@ func (m *LifecycleMgr) SetScheduledFlag(bucket string, defnId common.IndexDefnId
 	changed := topology.UpdateScheduledFlagForIndexInst(defnId, instId, scheduled)
 
 	if changed {
-		if err := m.repo.SetTopologyByBucket(bucket, topology); err != nil {
-			// Topology update is in place.  If there is any error, SetTopologyByBucket will purge the cache copy.
+		if err := m.repo.SetTopologyByCollection(bucket, scope, collection, topology); err != nil {
+			// Topology update is in place.  If there is any error, SetTopologyByCollection will purge the cache copy.
 			logging.Errorf("LifecycleMgr.SetScheduledFlag() : index instance update fails. Reason = %v", err)
 			return err
 		}
@@ -3107,24 +3257,25 @@ func (m *LifecycleMgr) SetScheduledFlag(bucket string, defnId common.IndexDefnId
 	return nil
 }
 
-func (m *LifecycleMgr) FindAllLocalIndexInst(bucket string, defnId common.IndexDefnId) ([]IndexInstDistribution, error) {
+func (m *LifecycleMgr) FindAllLocalIndexInst(bucket, scope, collection string,
+	defnId common.IndexDefnId) ([]IndexInstDistribution, error) {
 
-	topology, err := m.repo.GetTopologyByBucket(bucket)
+	topology, err := m.repo.GetTopologyByCollection(bucket, scope, collection)
 	if err != nil {
 		logging.Errorf("LifecycleMgr.FindAllLocalIndexInst() : Cannot read topology metadata. Reason = %v", err)
 		return nil, err
 	}
 	if topology == nil {
-		logging.Infof("LifecycleMgr.FindAllLocalIndexInst() : Index Inst does not exist %v", defnId)
 		return nil, nil
 	}
 
 	return topology.GetIndexInstancesByDefn(defnId), nil
 }
 
-func (m *LifecycleMgr) FindLocalIndexInst(bucket string, defnId common.IndexDefnId, instId common.IndexInstId) (*IndexInstDistribution, error) {
+func (m *LifecycleMgr) FindLocalIndexInst(bucket, scope, collection string,
+	defnId common.IndexDefnId, instId common.IndexInstId) (*IndexInstDistribution, error) {
 
-	insts, err := m.FindAllLocalIndexInst(bucket, defnId)
+	insts, err := m.FindAllLocalIndexInst(bucket, scope, collection, defnId)
 	if err != nil {
 		logging.Errorf("LifecycleMgr.FindLocalIndexInst() : Cannot read topology metadata. Reason = %v", err)
 		return nil, err
@@ -3139,9 +3290,9 @@ func (m *LifecycleMgr) FindLocalIndexInst(bucket string, defnId common.IndexDefn
 	return nil, nil
 }
 
-func (m *LifecycleMgr) updateIndexState(bucket string, defnId common.IndexDefnId, instId common.IndexInstId, state common.IndexState) error {
+func (m *LifecycleMgr) updateIndexState(bucket, scope, collection string, defnId common.IndexDefnId, instId common.IndexInstId, state common.IndexState) error {
 
-	topology, err := m.repo.CloneTopologyByBucket(bucket)
+	topology, err := m.repo.CloneTopologyByCollection(bucket, scope, collection)
 	if err != nil {
 		logging.Errorf("LifecycleMgr.updateIndexState() : fails to find index instance. Reason = %v", err)
 		return err
@@ -3153,8 +3304,8 @@ func (m *LifecycleMgr) updateIndexState(bucket string, defnId common.IndexDefnId
 
 	changed := topology.UpdateStateForIndexInst(defnId, instId, state)
 	if changed {
-		if err := m.repo.SetTopologyByBucket(bucket, topology); err != nil {
-			// Topology update is in place.  If there is any error, SetTopologyByBucket will purge the cache copy.
+		if err := m.repo.SetTopologyByCollection(bucket, scope, collection, topology); err != nil {
+			// Topology update is in place.  If there is any error, SetTopologyByCollection will purge the cache copy.
 			logging.Errorf("LifecycleMgr.updateIndexState() : fail to update state of index instance.  Reason = %v", err)
 			return err
 		}
@@ -3163,9 +3314,9 @@ func (m *LifecycleMgr) updateIndexState(bucket string, defnId common.IndexDefnId
 	return nil
 }
 
-func (m *LifecycleMgr) canBuildIndex(bucket string) bool {
+func (m *LifecycleMgr) canBuildIndex(bucket, scope, collection string) bool {
 
-	t, _ := m.repo.GetTopologyByBucket(bucket)
+	t, _ := m.repo.GetTopologyByCollection(bucket, scope, collection)
 	if t == nil {
 		return true
 	}
@@ -3356,29 +3507,32 @@ func (m *LifecycleMgr) verifyBucket(bucket string) (string, error) {
 		return common.BUCKET_UUID_NIL, err
 	}
 
-	topology, err := m.repo.GetTopologyByBucket(bucket)
+	topologies, err := m.repo.GetTopologiesByBucket(bucket)
 	if err != nil {
 		return common.BUCKET_UUID_NIL, err
 	}
 
-	if topology != nil {
-		for _, defnRef := range topology.Definitions {
-			valid := false
-			insts := topology.GetIndexInstancesByDefn(common.IndexDefnId(defnRef.DefnId))
-			for _, inst := range insts {
-				state, _ := topology.GetStatusByInst(common.IndexDefnId(defnRef.DefnId), common.IndexInstId(inst.InstId))
-				if state != common.INDEX_STATE_DELETED {
-					valid = true
-					break
+	if len(topologies) > 0 {
+		for i, _ := range topologies {
+			topology := topologies[i]
+			for _, defnRef := range topology.Definitions {
+				valid := false
+				insts := topology.GetIndexInstancesByDefn(common.IndexDefnId(defnRef.DefnId))
+				for _, inst := range insts {
+					state, _ := topology.GetStatusByInst(common.IndexDefnId(defnRef.DefnId), common.IndexInstId(inst.InstId))
+					if state != common.INDEX_STATE_DELETED {
+						valid = true
+						break
+					}
 				}
-			}
 
-			if valid {
-				if defn, err := m.repo.GetIndexDefnById(common.IndexDefnId(defnRef.DefnId)); err == nil && defn != nil {
-					if defn.BucketUUID != currentUUID {
-						return common.BUCKET_UUID_NIL,
-							errors.New("Bucket does not exist or temporarily unavailable for creating new index." +
-								" Please retry the operation at a later time.")
+				if valid {
+					if defn, err := m.repo.GetIndexDefnById(common.IndexDefnId(defnRef.DefnId)); err == nil && defn != nil {
+						if defn.BucketUUID != currentUUID {
+							return common.BUCKET_UUID_NIL,
+								errors.New("Bucket does not exist or temporarily unavailable for creating new index." +
+									" Please retry the operation at a later time.")
+						}
 					}
 				}
 			}
@@ -3403,7 +3557,7 @@ func (m *LifecycleMgr) verifyScopeAndCollection(bucket, scope, collection string
 		return collections.SCOPE_ID_NIL, collections.COLLECTION_ID_NIL, err
 	}
 
-	topology, err := m.repo.GetTopologyByBucket(bucket)
+	topology, err := m.repo.GetTopologyByCollection(bucket, scope, collection)
 	if err != nil {
 		return collections.SCOPE_ID_NIL, collections.COLLECTION_ID_NIL, err
 	}
@@ -3521,7 +3675,7 @@ func (m *janitor) cleanup() {
 			continue
 		}
 
-		inst, err := m.manager.FindLocalIndexInst(defn.Bucket, command.DefnId, command.InstId)
+		inst, err := m.manager.FindLocalIndexInst(defn.Bucket, defn.Scope, defn.Collection, command.DefnId, command.InstId)
 		if err != nil {
 			retryList2[entry] = command
 			logging.Warnf("janitor: Failed to find index instance (%v, %v) during cleanup. Internal error = %v.  Skipping.", defn.Bucket, defn.Name, err)
@@ -3605,7 +3759,7 @@ func (m *janitor) cleanup() {
 
 	for _, defn, err := metaIter.Next(); err == nil; _, defn, err = metaIter.Next() {
 
-		insts, err := m.manager.FindAllLocalIndexInst(defn.Bucket, defn.DefnId)
+		insts, err := m.manager.FindAllLocalIndexInst(defn.Bucket, defn.Scope, defn.Collection, defn.DefnId)
 		if err != nil {
 			logging.Warnf("janitor: Failed to find index instance (%v, %v) during cleanup. Internal error = %v.  Skipping.", defn.Bucket, defn.Name, err)
 			continue
@@ -3741,8 +3895,10 @@ func (s *builder) run() {
 	for {
 		select {
 		case defn := <-s.notifych:
-			logging.Infof("builder:  Received new index build request %v.  Schedule to build index for bucket %v", defn.DefnId, defn.Bucket)
-			s.addPending(defn.Bucket, uint64(defn.DefnId))
+			logging.Infof("builder:  Received new index build request %v.  "+
+				"Schedule to build index for bucket: %v, scope: %v, collection: %v",
+				defn.DefnId, defn.Bucket, defn.Scope, defn.Collection)
+			s.addPending(defn.Bucket, defn.Scope, defn.Collection, uint64(defn.DefnId))
 
 		case <-ticker.C:
 			processed := s.processBuildToken(false)
@@ -3767,8 +3923,8 @@ func (s *builder) run() {
 
 			buildList, quota := s.getBuildList()
 
-			for _, bucket := range buildList {
-				quota = s.tryBuildIndex(bucket, quota)
+			for _, key := range buildList {
+				quota = s.tryBuildIndex(key, quota)
 			}
 
 		case <-s.manager.killch:
@@ -3789,21 +3945,21 @@ func (s *builder) getBuildList() ([]string, int32) {
 	// get quota
 	quota, skipList := s.getQuota()
 
-	// filter bucket that is not available
+	// filter collection that is not available
 	buildList := ([]string)(nil)
-	for bucket, _ := range s.pendings {
-		if _, ok := skipList[bucket]; !ok {
-			buildList = append(buildList, bucket)
+	for key, _ := range s.pendings {
+		if _, ok := skipList[key]; !ok {
+			buildList = append(buildList, key)
 		}
 	}
 
 	// sort buildList by ascending order
 	for i := 0; i < len(buildList)-1; i++ {
 		for j := i + 1; j < len(buildList); j++ {
-			bucket_i := buildList[i]
-			bucket_j := buildList[j]
+			key_i := buildList[i]
+			key_j := buildList[j]
 
-			if len(s.pendings[bucket_i]) < len(s.pendings[bucket_j]) {
+			if len(s.pendings[key_i]) < len(s.pendings[key_j]) {
 				tmp := buildList[i]
 				buildList[i] = buildList[j]
 				buildList[j] = tmp
@@ -3814,10 +3970,10 @@ func (s *builder) getBuildList() ([]string, int32) {
 	// sort buildList based on closest to quota
 	for i := 0; i < len(buildList)-1; i++ {
 		for j := i + 1; j < len(buildList); j++ {
-			bucket_i := buildList[i]
-			bucket_j := buildList[j]
+			key_i := buildList[i]
+			key_j := buildList[j]
 
-			if math.Abs(float64(len(s.pendings[bucket_i])-int(quota))) > math.Abs(float64(len(s.pendings[bucket_j])-int(quota))) {
+			if math.Abs(float64(len(s.pendings[key_i])-int(quota))) > math.Abs(float64(len(s.pendings[key_j])-int(quota))) {
 				tmp := buildList[i]
 				buildList[i] = buildList[j]
 				buildList[j] = tmp
@@ -3828,27 +3984,28 @@ func (s *builder) getBuildList() ([]string, int32) {
 	return buildList, quota
 }
 
-func (s *builder) addPending(bucket string, id uint64) bool {
-
-	for _, id2 := range s.pendings[bucket] {
+func (s *builder) addPending(bucket, scope, collection string, id uint64) bool {
+	key := getPendingKey(bucket, scope, collection)
+	for _, id2 := range s.pendings[key] {
 		if id2 == id {
 			return false
 		}
 	}
 
-	s.pendings[bucket] = append(s.pendings[bucket], uint64(id))
+	s.pendings[key] = append(s.pendings[key], uint64(id))
 	return true
 }
 
-func (s *builder) tryBuildIndex(bucket string, quota int32) int32 {
+func (s *builder) tryBuildIndex(pendingKey string, quota int32) int32 {
 
+	bucket, scope, collection := getCollectionFromKey(pendingKey)
 	newQuota := quota
 
-	defnIds := s.pendings[bucket]
+	defnIds := s.pendings[pendingKey]
 	if len(defnIds) != 0 {
 		// This is a pre-cautionary check if there is any index being
-		// built for the bucket.   The authortative check is done by indexer.
-		if s.manager.canBuildIndex(bucket) {
+		// built for the collection. The authortative check is done by indexer.
+		if s.manager.canBuildIndex(bucket, scope, collection) {
 
 			buildList := ([]uint64)(nil)
 			buildMap := make(map[uint64]bool)
@@ -3870,7 +4027,7 @@ func (s *builder) tryBuildIndex(bucket string, quota int32) int32 {
 					continue
 				}
 
-				insts, err := s.manager.FindAllLocalIndexInst(bucket, common.IndexDefnId(defnId))
+				insts, err := s.manager.FindAllLocalIndexInst(bucket, scope, collection, common.IndexDefnId(defnId))
 				if len(insts) == 0 || err != nil {
 					logging.Warnf("builder: Failed to find index instance (%v, %v).  Skipping.", defnId, bucket)
 					continue
@@ -3917,11 +4074,12 @@ func (s *builder) tryBuildIndex(bucket string, quota int32) int32 {
 					return quota
 				}
 
-				logging.Infof("builder: Try build index for bucket %v. Index %v", bucket, idList)
+				logging.Infof("builder: Try build index for bucket: %v, scope: %v, collection: %v. Index %v",
+					bucket, scope, collection, idList)
 
 				// Clean up the map.  If there is any index that needs retry, they will be put into the notifych again.
 				// Once this function is done, the map will be populated again from the notifych.
-				s.pendings[bucket] = pendingList
+				s.pendings[pendingKey] = pendingList
 
 				// If any of the index cannot be built, those index will be skipped by lifecycle manager, so it
 				// will send the rest of the indexes to the indexer.  An index cannot be built if it does not have
@@ -3936,7 +4094,7 @@ func (s *builder) tryBuildIndex(bucket string, quota int32) int32 {
 
 				// Clean up the map.  If there is any index that needs retry, they will be put into the notifych again.
 				// Once this function is done, the map will be populated again from the notifych.
-				s.pendings[bucket] = pendingList
+				s.pendings[pendingKey] = pendingList
 			}
 		}
 	}
@@ -3958,17 +4116,18 @@ func (s *builder) getQuota() (int32, map[string]bool) {
 
 	for _, defn, err := metaIter.Next(); err == nil; _, defn, err = metaIter.Next() {
 
-		insts, err := s.manager.FindAllLocalIndexInst(defn.Bucket, defn.DefnId)
+		insts, err := s.manager.FindAllLocalIndexInst(defn.Bucket, defn.Scope, defn.Collection, defn.DefnId)
 		if len(insts) == 0 || err != nil {
-			logging.Warnf("builder.getQuota: Unable to read index instance for definition (%v, %v).   Skipping index for quota check",
-				defn.Bucket, defn.Name)
+			logging.Warnf("builder.getQuota: Unable to read index instance for definition (%v, %v, %v, %v).   Skipping index for quota check",
+				defn.Bucket, defn.Scope, defn.Collection, defn.Name)
 			continue
 		}
 
 		for _, inst := range insts {
 			if inst.State == uint32(common.INDEX_STATE_INITIAL) || inst.State == uint32(common.INDEX_STATE_CATCHUP) {
 				quota = quota - 1
-				skipList[defn.Bucket] = true
+				key := getPendingKey(defn.Bucket, defn.Scope, defn.Collection)
+				skipList[key] = true
 			}
 		}
 	}
@@ -3996,11 +4155,11 @@ func (s *builder) processBuildToken(bootstrap bool) bool {
 			continue
 		}
 
-		insts, err := s.manager.FindAllLocalIndexInst(defn.Bucket, defn.DefnId)
+		insts, err := s.manager.FindAllLocalIndexInst(defn.Bucket, defn.Scope, defn.Collection, defn.DefnId)
 		if err != nil {
 			retryList[entry] = command
-			logging.Warnf("builder: Unable to read index instance for definition (%v, %v).   Skipping ...",
-				defn.Bucket, defn.Name)
+			logging.Warnf("builder: Unable to read index instance for definition (%v, %v, %v, %v).   Skipping ...",
+				defn.Bucket, defn.Scope, defn.Collection, defn.Name)
 			continue
 		}
 
@@ -4009,8 +4168,9 @@ func (s *builder) processBuildToken(bootstrap bool) bool {
 			if inst.State == uint32(common.INDEX_STATE_READY) {
 				logging.Infof("builder: Processing build token %v", entry)
 
-				if s.addPending(defn.Bucket, uint64(defn.DefnId)) {
-					logging.Infof("builder: Schedule index build for (%v, %v).", defn.Bucket, defn.Name)
+				if s.addPending(defn.Bucket, defn.Scope, defn.Collection, uint64(defn.DefnId)) {
+					logging.Infof("builder: Schedule index build for (%v, %v, %v, %v).",
+						defn.Bucket, defn.Scope, defn.Collection, defn.Name)
 					processed = true
 				}
 			}
@@ -4045,18 +4205,19 @@ func (s *builder) recover() {
 
 	for _, defn, err := metaIter.Next(); err == nil; _, defn, err = metaIter.Next() {
 
-		insts, err := s.manager.FindAllLocalIndexInst(defn.Bucket, defn.DefnId)
+		insts, err := s.manager.FindAllLocalIndexInst(defn.Bucket, defn.Scope, defn.Collection, defn.DefnId)
 		if len(insts) == 0 || err != nil {
-			logging.Errorf("builder: Unable to read index instance for definition (%v, %v).   Skipping ...",
-				defn.Bucket, defn.Name)
+			logging.Errorf("builder: Unable to read index instance for definition (%v, %v, %v, %v).   Skipping ...",
+				defn.Bucket, defn.Scope, defn.Collection, defn.Name)
 			continue
 		}
 
 		for _, inst := range insts {
 
 			if inst.Scheduled && inst.State == uint32(common.INDEX_STATE_READY) {
-				if s.addPending(defn.Bucket, uint64(defn.DefnId)) {
-					logging.Infof("builder: Schedule index build for (%v, %v, %v).", defn.Bucket, defn.Name, inst.ReplicaId)
+				if s.addPending(defn.Bucket, defn.Scope, defn.Collection, uint64(defn.DefnId)) {
+					logging.Infof("builder: Schedule index build for (%v, %v, %v, %v, %v).",
+						defn.Bucket, defn.Scope, defn.Collection, defn.Name, inst.ReplicaId)
 				}
 			}
 		}
@@ -4104,6 +4265,18 @@ func newBuilder(mgr *LifecycleMgr) *builder {
 		atomic.StoreInt32(&builder.disable, int32(0))
 	}
 	return builder
+}
+
+func getPendingKey(bucket, scope, collection string) string {
+	return bucket + "/" + scope + "/" + collection
+}
+
+func getCollectionFromKey(pendingKey string) (string, string, string) {
+	input := strings.Split(pendingKey, "/")
+	if len(input) == 3 {
+		return input[0], input[1], input[2]
+	}
+	return "", "", ""
 }
 
 //////////////////////////////////////////////////////////////

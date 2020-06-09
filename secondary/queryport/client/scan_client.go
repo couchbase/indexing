@@ -1341,8 +1341,7 @@ func (c *GsiScanClient) streamResponse(
 
 	} else if resp == nil {
 		finish = true
-		fmsg := "%v req(%v) connection %q received StreamEndResponse"
-		logging.Tracef(fmsg, c.logPrefix, requestId, laddr)
+		logging.Tracef("%v req(%v) connection %q received StreamEndResponse", c.logPrefix, requestId, laddr)
 		callb(&protobuf.StreamEndResponse{}) // callback most likely return true
 		cont, healthy = false, true
 
@@ -1376,8 +1375,7 @@ func (c *GsiScanClient) closeStream(
 		return
 	}
 
-	fmsg := "%v req(%v) connection %q transmitted protobuf.EndStreamRequest"
-	logging.Tracef(fmsg, c.logPrefix, requestId, laddr)
+	logging.Tracef("%v req(%v) connection %q transmitted protobuf.EndStreamRequest", c.logPrefix, requestId, laddr)
 
 	// flush the connection until stream has ended.
 	for true {

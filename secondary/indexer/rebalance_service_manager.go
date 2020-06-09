@@ -35,7 +35,7 @@ import (
 	"github.com/couchbase/cbauth/metakv"
 	"github.com/couchbase/cbauth/service"
 	c "github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/fdb"
+	forestdb "github.com/couchbase/indexing/secondary/fdb"
 	l "github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager"
 	"github.com/couchbase/indexing/secondary/manager/client"
@@ -2263,13 +2263,25 @@ func (m *ServiceMgr) handleMoveIndex(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		var bucket, index string
+		var bucket, scope, collection, index string
 		var ok bool
 		var nodes interface{}
 
 		if bucket, ok = in["bucket"].(string); !ok {
 			send(http.StatusBadRequest, w, "Bad Request - Bucket Information Missing")
 			return
+		}
+
+		if scope, ok = in["scope"].(string); !ok {
+			// TODO (Collections): Should this be made a mandatory parameter?
+			// default the scope
+			scope = c.DEFAULT_SCOPE
+		}
+
+		if collection, ok = in["collection"].(string); !ok {
+			// TODO (Collections): Should this be made a mandatory parameter?
+			// default the collection
+			collection = c.DEFAULT_COLLECTION
 		}
 
 		if index, ok = in["index"].(string); !ok {
@@ -2300,10 +2312,9 @@ func (m *ServiceMgr) handleMoveIndex(w http.ResponseWriter, r *http.Request) {
 
 		var defn *manager.IndexDefnDistribution
 		for _, localMeta := range topology.Metadata {
-			bTopology := findTopologyByBucket(localMeta.IndexTopologies, bucket)
+			bTopology := findTopologyByCollection(localMeta.IndexTopologies, bucket, scope, collection)
 			if bTopology != nil {
-				// TODO (Collections): Pass scope & collection name to below method
-				defn = bTopology.FindIndexDefinition(bucket, c.DEFAULT_SCOPE, c.DEFAULT_COLLECTION, index)
+				defn = bTopology.FindIndexDefinition(bucket, scope, collection, index)
 			}
 			if defn != nil {
 				break
@@ -2580,7 +2591,7 @@ func (m *ServiceMgr) generateTransferTokenForMoveIndex(req *manager.IndexRequest
 					}
 				}
 
-				topology := findTopologyByBucket(localMeta.IndexTopologies, index.Bucket)
+				topology := findTopologyByCollection(localMeta.IndexTopologies, index.Bucket, index.Scope, index.Collection)
 				if topology == nil {
 					err := errors.New(fmt.Sprintf("Fail to find index topology for bucket %v for node %v.", index.Bucket, localMeta.NodeUUID))
 					l.Errorf("ServiceMgr::generateTransferTokenForMoveIndex %v", err)
@@ -2956,10 +2967,11 @@ func sendHttpError(w http.ResponseWriter, reason string, code int) {
 	http.Error(w, reason, code)
 }
 
-func findTopologyByBucket(topologies []manager.IndexTopology, bucket string) *manager.IndexTopology {
+func findTopologyByCollection(topologies []manager.IndexTopology, bucket,
+	scope, collection string) *manager.IndexTopology {
 
 	for _, topology := range topologies {
-		if topology.Bucket == bucket {
+		if topology.Bucket == bucket && topology.Scope == scope && topology.Collection == collection {
 			return &topology
 		}
 	}

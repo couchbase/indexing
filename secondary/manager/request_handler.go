@@ -545,7 +545,8 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, bucket string
 
 				mergeCounter(defn.DefnId, defn.NumReplica2)
 
-				if topology := findTopologyByBucket(localMeta.IndexTopologies, defn.Bucket); topology != nil {
+				if topology := findTopologyByCollection(localMeta.IndexTopologies,
+					defn.Bucket, defn.Scope, defn.Collection); topology != nil {
 
 					instances := topology.GetIndexInstancesByDefn(defn.DefnId)
 					for _, instance := range instances {
@@ -1510,10 +1511,10 @@ func postWithAuth(url string, bodyType string, body io.Reader) (*http.Response, 
 	return security.PostWithAuth(url, bodyType, body, params)
 }
 
-func findTopologyByBucket(topologies []IndexTopology, bucket string) *IndexTopology {
+func findTopologyByCollection(topologies []IndexTopology, bucket, scope, collection string) *IndexTopology {
 
 	for _, topology := range topologies {
-		if topology.Bucket == bucket {
+		if topology.Bucket == bucket && topology.Scope == scope && topology.Collection == collection {
 			return &topology
 		}
 	}

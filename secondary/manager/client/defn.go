@@ -53,6 +53,7 @@ const (
 	OPCODE_GET_REPLICA_COUNT                        = OPCODE_UPDATE_REPLICA_COUNT + 1
 	OPCODE_CHECK_TOKEN_EXIST                        = OPCODE_GET_REPLICA_COUNT + 1
 	OPCODE_RESET_INDEX_ON_ROLLBACK                  = OPCODE_CHECK_TOKEN_EXIST + 1
+	OPCODE_DELETE_COLLECTION                        = OPCODE_RESET_INDEX_ON_ROLLBACK + 1
 )
 
 func Op2String(op common.OpCode) string {
@@ -115,6 +116,8 @@ func Op2String(op common.OpCode) string {
 		return "OPCODE_CHECK_TOKEN_EXIST"
 	case OPCODE_RESET_INDEX_ON_ROLLBACK:
 		return "OPCODE_RESET_INDEX_ON_ROLLBACK"
+	case OPCODE_DELETE_COLLECTION:
+		return "OPCODE_DELETE_COLLECTION"
 	}
 	return fmt.Sprintf("%v", op)
 }

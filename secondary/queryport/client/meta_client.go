@@ -1,26 +1,30 @@
 package client
 
-import "sync"
-import "fmt"
-import "errors"
-import "strings"
-import "math/rand"
-import "time"
-import "unsafe"
-import "sync/atomic"
-import "encoding/json"
-import "net/http"
-import "bytes"
-import "io/ioutil"
-import "io"
-import "math"
-import "strconv"
-import "sort"
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"io/ioutil"
+	"math"
+	"math/rand"
+	"net/http"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+	"unsafe"
 
-import "github.com/couchbase/indexing/secondary/logging"
-import "github.com/couchbase/indexing/secondary/security"
-import common "github.com/couchbase/indexing/secondary/common"
-import mclient "github.com/couchbase/indexing/secondary/manager/client"
+	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/security"
+
+	common "github.com/couchbase/indexing/secondary/common"
+
+	mclient "github.com/couchbase/indexing/secondary/manager/client"
+)
 
 type metadataClient struct {
 	cluster  string
@@ -229,8 +233,7 @@ RETRY:
 		secExprs, desc, isPrimary, scheme, partitionKeys, plan)
 
 	if needRefresh && refreshCnt == 0 {
-		fmsg := "GsiClient: Indexer Node List is out-of-date.  Require refresh."
-		logging.Debugf(fmsg)
+		logging.Debugf("GsiClient: Indexer Node List is out-of-date.  Require refresh.")
 		if err := b.updateIndexerList(false); err != nil {
 			logging.Errorf("updateIndexerList(): %v\n", err)
 			return uint64(defnID), err
@@ -350,7 +353,7 @@ func (b *metadataClient) GetScanport(defnID uint64, excludes map[common.IndexDef
 		return nil, 0, nil, nil, nil, 0, false
 	}
 
-	var replicas [128]uint64
+	replicas := make([]uint64, len(currmeta.replicas[common.IndexDefnId(defnID)]))
 	n := 0
 	for _, replicaID := range currmeta.replicas[common.IndexDefnId(defnID)] {
 		replicas[n] = uint64(replicaID)
@@ -413,8 +416,7 @@ func (b *metadataClient) GetScanport(defnID uint64, excludes map[common.IndexDef
 		}
 	}
 
-	fmsg := "Scan port %s for index defnID %d of equivalent index defnId %d"
-	logging.Debugf(fmsg, qp, targetDefnID, defnID)
+	logging.Debugf("Scan port %s for index defnID %d of equivalent index defnId %d", qp, targetDefnID, defnID)
 	return qp, targetDefnID, in, rt, pid, numPartitions, true
 }
 
@@ -538,12 +540,12 @@ func (b *metadataClient) computeEquivalents(topo map[common.IndexerId][]*mclient
 }
 
 // compare whether two index are equivalent.
-// TODO (Collections): Change this method to include scope & collection to
-// decide equivalence once Index Definition incorporates collection
 func (b *metadataClient) equivalentIndex(
 	index1, index2 *mclient.IndexMetadata) bool {
 	d1, d2 := index1.Definition, index2.Definition
 	if d1.Bucket != d2.Bucket ||
+		d1.Scope != d2.Scope ||
+		d1.Collection != d2.Collection ||
 		d1.IsPrimary != d2.IsPrimary ||
 		d1.ExprType != d2.ExprType ||
 		d1.PartitionScheme != d2.PartitionScheme ||

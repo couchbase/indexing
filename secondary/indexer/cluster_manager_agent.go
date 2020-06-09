@@ -231,15 +231,15 @@ func (c *clustMgrAgent) handleUpdateTopologyForIndex(cmd Message) {
 		var err error
 		if syncUpdate {
 			go func() {
-				err = c.mgr.UpdateIndexInstanceSync(index.Defn.Bucket, index.Defn.DefnId, index.InstId,
-					updatedState, updatedStream, updatedError, updatedBuildTs, updatedRState, updatedPartitions,
-					updatedVersions, updatedInstVersion)
+				err = c.mgr.UpdateIndexInstanceSync(index.Defn.Bucket, index.Defn.Scope, index.Defn.Collection,
+					index.Defn.DefnId, index.InstId, updatedState, updatedStream, updatedError, updatedBuildTs,
+					updatedRState, updatedPartitions, updatedVersions, updatedInstVersion)
 				respCh <- err
 			}()
 		} else {
-			err = c.mgr.UpdateIndexInstance(index.Defn.Bucket, index.Defn.DefnId, index.InstId,
-				updatedState, updatedStream, updatedError, updatedBuildTs, updatedRState, updatedPartitions,
-				updatedVersions, updatedInstVersion)
+			err = c.mgr.UpdateIndexInstance(index.Defn.Bucket, index.Defn.Scope, index.Defn.Collection,
+				index.Defn.DefnId, index.InstId, updatedState, updatedStream, updatedError, updatedBuildTs,
+				updatedRState, updatedPartitions, updatedVersions, updatedInstVersion)
 		}
 		common.CrashOnError(err)
 	}
@@ -396,7 +396,7 @@ func (c *clustMgrAgent) handleGetGlobalTopology(cmd Message) {
 		var idxDefn common.IndexDefn
 		idxDefn = *defn
 
-		t, e := c.mgr.GetTopologyByBucket(idxDefn.Bucket)
+		t, e := c.mgr.GetTopologyByCollection(idxDefn.Bucket, idxDefn.Scope, idxDefn.Collection)
 		if e != nil {
 			common.CrashOnError(e)
 		}

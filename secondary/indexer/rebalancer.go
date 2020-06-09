@@ -29,7 +29,6 @@ import (
 	"github.com/couchbase/cbauth/service"
 	"github.com/couchbase/indexing/secondary/common"
 	c "github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/logging"
 	l "github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager"
 	"github.com/couchbase/indexing/secondary/manager/client"
@@ -586,14 +585,15 @@ loop:
 				break
 			}
 
+			tt.IndexInst.Defn.SetCollectionDefaults()
+
 			pending := float64(0)
 			for _, partitionId := range tt.IndexInst.Defn.Partitions {
 
 				defn := tt.IndexInst.Defn
+
 				prefix := common.GetStatsPrefix(defn.Bucket, defn.Scope, defn.Collection,
 					defn.Name, tt.IndexInst.ReplicaId, int(partitionId), true)
-
-				logging.Infof("DEEP2 %v %v", defn, prefix)
 
 				sname_completed := common.GetIndexStatKey(prefix, "num_completed_requests")
 				sname_requests := common.GetIndexStatKey(prefix, "num_requests")
@@ -618,7 +618,7 @@ loop:
 			}
 
 			if pending > 0 {
-				l.Infof("Rebalancer::dropIndexWhenIdle Index %v:%v Pending Scan %v", tt.IndexInst.Defn.Bucket, tt.IndexInst.Defn.Name, pending)
+				l.Infof("Rebalancer::dropIndexWhenIdle Index %v:%v:%v:%v Pending Scan %v", tt.IndexInst.Defn.Bucket, tt.IndexInst.Defn.Scope, tt.IndexInst.Defn.Collection, tt.IndexInst.Defn.Name, pending)
 				break
 			}
 
@@ -715,6 +715,8 @@ func (r *Rebalancer) processTokenAsDest(ttid string, tt *c.TransferToken) bool {
 	case c.TransferTokenCreated:
 
 		indexDefn := tt.IndexInst.Defn
+		indexDefn.SetCollectionDefaults()
+
 		indexDefn.Nodes = nil
 		indexDefn.Deferred = true
 		indexDefn.InstId = tt.InstId
@@ -978,6 +980,8 @@ loop:
 				}
 
 				defn := tt.IndexInst.Defn
+				defn.SetCollectionDefaults()
+
 				prefix := common.GetStatsPrefix(defn.Bucket, defn.Scope, defn.Collection,
 					defn.Name, tt.IndexInst.ReplicaId, 0, false)
 
@@ -1369,9 +1373,10 @@ func getIndexStatusFromMeta(tt *c.TransferToken, localMeta *manager.LocalIndexMe
 
 	inst := tt.IndexInst
 
-	topology := findTopologyByBucket(localMeta.IndexTopologies, inst.Defn.Bucket)
+	topology := findTopologyByCollection(localMeta.IndexTopologies, inst.Defn.Bucket, inst.Defn.Scope, inst.Defn.Collection)
 	if topology == nil {
-		return c.INDEX_STATE_NIL, fmt.Sprintf("Topology Information Missing for %v Bucket", inst.Defn.Bucket)
+		return c.INDEX_STATE_NIL, fmt.Sprintf("Topology Information Missing for Bucket %v Scope %v Collection %v",
+			inst.Defn.Bucket, inst.Defn.Scope, inst.Defn.Collection)
 	}
 
 	state, msg := topology.GetStatusByInst(inst.Defn.DefnId, tt.InstId)
