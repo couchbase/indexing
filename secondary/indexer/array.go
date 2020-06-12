@@ -10,9 +10,7 @@
 package indexer
 
 import (
-	"bytes"
 	"errors"
-	"sort"
 
 	"github.com/couchbase/indexing/secondary/collatejson"
 	"github.com/couchbase/indexing/secondary/common"
@@ -132,54 +130,63 @@ func ArrayIndexItems(bs []byte, arrPos int, buf []byte,
 		items = append(items, buf[from:l])
 	}
 
-	arrayKey := items
-	arrayItemsWithCount := make([][]byte, 0, len(arrayKey))
-	keyCount := make([]int, 0, len(arrayKey))
-	sort.Sort(common.ByteSlices(arrayKey))
-	// Compress and count
-	i := 0
-	for i < len(arrayKey) {
-		var count int
-		count = 1
-		j := i + 1
-		for ; j < len(arrayKey); j++ {
-			if bytes.Equal(arrayKey[i], arrayKey[j]) {
-				count++
-			} else {
-				break
+	arrayItemsWithCount := make([][]byte, 0, len(items))
+	keyCount := make([]int, 0, len(items))
+
+	// Note: This map is built on top of converting byte slice to string without
+	// allocating additional memory. So, escaping this map out of this method
+	// can lead of violation of immutability property of the string. Hence,
+	// using this map here only as a placeholder to compute arrayItemsWithCount
+	// optimally even though some optimisations are possible by escaping this map
+	// out of this method (E.g., there is no need to do additional conversion in
+	// CompareArrayEntriesWithCount method, if we return map here)
+	// key -> item as string; value -> item's position in arrayItemsWithCount
+	groupedItems := make(map[string]int)
+
+	for _, item := range items {
+		str := common.ByteSliceToString(item)
+		if index, ok := groupedItems[str]; !ok {
+			index = len(arrayItemsWithCount)
+			arrayItemsWithCount = append(arrayItemsWithCount, item)
+			keyCount = append(keyCount, 1)
+			groupedItems[str] = index
+		} else {
+			if !isDistinct {
+				keyCount[index]++
 			}
 		}
-		arrayItemsWithCount = append(arrayItemsWithCount, arrayKey[i])
-		keyCount = append(keyCount, count)
-		i = j
 	}
 
-	if isDistinct {
-		for i, _ := range arrayItemsWithCount {
-			keyCount[i] = 1
-		}
-	}
 	return arrayItemsWithCount, keyCount, len(buf), nil
+
 }
 
 // Compare two arrays of byte arrays
 // and find out diff of which byte entry
 // needs to be deleted and which needs to be inserted
+// Both the byte arrays are expected to have unique entries
 func CompareArrayEntriesWithCount(newKey, oldKey [][]byte, newKeyCount, oldKeyCount []int) ([][]byte, [][]byte) {
-	// Find out all entries to be added and deleted
-	for i := 0; i < len(newKey); i++ {
-		found := false
-		for j := 0; j < len(oldKey); j++ {
-			if bytes.Compare(newKey[i], oldKey[j]) == 0 && newKeyCount[i] == oldKeyCount[j] {
-				// The item is present in both old and new with same counts
-				// Mark the element in old as nil
-				oldKey[j] = nil
-				found = true
-			}
+	// Convert newKey into map[string]int
+	// key to this map -> byte slice converted to string
+	// value of this map -> index of entry in newKey
+	newKeyMap := make(map[string]int)
+	for newItemIndex, newItem := range newKey {
+		str := common.ByteSliceToString(newItem)
+		newKeyMap[str] = newItemIndex
+	}
+
+	newEntriesToBeDeleted := make([]int, 0)
+	for oldItemIndex, oldItem := range oldKey {
+		str := common.ByteSliceToString(oldItem)
+		if newItemIndex, ok := newKeyMap[str]; ok && newKeyCount[newItemIndex] == oldKeyCount[oldItemIndex] {
+			// Item exists in both oldKey and newKey
+			newEntriesToBeDeleted = append(newEntriesToBeDeleted, newItemIndex)
+			oldKey[oldItemIndex] = nil
 		}
-		if found == true {
-			newKey[i] = nil // The item is present in both old and new. Mark the element in new as nil
-		}
+	}
+
+	for _, index := range newEntriesToBeDeleted {
+		newKey[index] = nil
 	}
 	return newKey, oldKey
 }
