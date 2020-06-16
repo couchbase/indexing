@@ -536,6 +536,8 @@ type streamWorker struct {
 
 	reader *mutationStreamReader
 
+	meta *MutationMeta
+
 	markFirstSnap       bool
 	keyspaceIdFirstSnap map[string]firstSnapFlag
 
@@ -558,6 +560,8 @@ func newStreamWorker(streamId common.StreamId, numWorkers int, workerId int, con
 		vbMap:                 vbMap,
 		keyspaceIdSessionId:   make(KeyspaceIdSessionId),
 	}
+
+	w.meta = &MutationMeta{}
 
 	if allowMarkFirstSnap {
 		w.markFirstSnap = getMarkFirstSnap(config)
@@ -609,7 +613,8 @@ func (w *streamWorker) handleKeyVersions(keyspaceId string, vbucket Vbucket, vbu
 func (w *streamWorker) handleSingleKeyVersion(keyspaceId string, vbucket Vbucket, vbuuid Vbuuid,
 	opaque uint64, kv *protobuf.KeyVersions, projVer common.ProjectorVersion) {
 
-	meta := NewMutationMeta()
+	meta := w.meta
+
 	meta.keyspaceId = keyspaceId
 	meta.vbucket = vbucket
 	meta.vbuuid = vbuuid
@@ -617,7 +622,7 @@ func (w *streamWorker) handleSingleKeyVersion(keyspaceId string, vbucket Vbucket
 	meta.projVer = projVer
 	meta.opaque = opaque
 
-	defer meta.Free()
+	defer meta.Reset()
 
 	var mutk *MutationKeys
 	w.skipMutation = false
