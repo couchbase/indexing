@@ -979,6 +979,37 @@ func MarshallScheduleCreateTokenList(tokens *ScheduleCreateTokenList) ([]byte, e
 	return buf, nil
 }
 
+func FetchScheduleCreateToken(path string) (*ScheduleCreateToken, error) {
+
+	token := &ScheduleCreateToken{}
+	exists, err := c.MetakvBigValueGet(path, token)
+	if err != nil {
+		return nil, err
+	}
+
+	if !exists {
+		return nil, nil
+	}
+
+	return token, nil
+}
+
+func GetPrefixFromScheduleCreateTokenPath(path string) (string, error) {
+
+	if len(path) <= len(ScheduleCreateTokenPath) {
+		return "", fmt.Errorf("Invalid path %v", path)
+	}
+
+	l := len(ScheduleCreateTokenPath)
+	id := path[l:]
+
+	if loc := strings.Index(id, "/"); loc != -1 {
+		return path[:l+loc], nil
+	} else {
+		return path, nil
+	}
+}
+
 func PostStopScheduleCreateToken(defnId c.IndexDefnId, reason string, ctime int64) error {
 
 	token := &StopScheduleCreateToken{
@@ -1361,19 +1392,35 @@ func (m *CommandListener) handleNewScheduleCreateToken(path string, value []byte
 		return
 	}
 
-	if value == nil {
-		m.AddDeletedScheduleCreateToken(path)
-		delete(m.scheduleTokens, path)
-		return
-	}
+	// Note that in case of Big Value for the token, following steps will be
+	// executed multiple times, once for each part. But these steps are idempotent.
+	// The behavior is same as CreateCommandToken
 
-	token, err := UnmarshallScheduleCreateToken(value)
+	prefix, err := GetPrefixFromScheduleCreateTokenPath(path)
 	if err != nil {
 		logging.Warnf("CommandListener: Failed to process schedule create token.  Skp %v.  Internal Error = %v.", path, err)
 		return
 	}
 
-	m.AddNewScheduleCreateToken(path, token)
+	if value == nil {
+		m.AddDeletedScheduleCreateToken(prefix)
+		delete(m.scheduleTokens, prefix)
+		return
+	}
+
+	var token *ScheduleCreateToken
+	token, err = FetchScheduleCreateToken(prefix)
+	if err != nil {
+		logging.Warnf("CommandListener: Failed to process schedule create token.  Skp %v.  Internal Error = %v.", path, err)
+		return
+	}
+
+	if token == nil {
+		logging.Warnf("CommandListener: Failed to process schedule create token.  Skp %v.  Internal Error = %v.", path, fmt.Errorf("Nil token."))
+		return
+	}
+
+	m.AddNewScheduleCreateToken(prefix, token)
 }
 
 func (m *CommandListener) handleNewStopScheduleCreateToken(path string, value []byte) {
