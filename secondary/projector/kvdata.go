@@ -83,6 +83,15 @@ type KvdataStats struct {
 	vbseqnos      []stats.Uint64Val
 	kvdata        *KVData  // Handle to KVData
 	vbseqnos_copy []uint64 // Cached version of vbseqnos. Used only by stats_manager
+
+	// Collection specific
+	collectionCreate  stats.Uint64Val
+	collectionDrop    stats.Uint64Val
+	collectionFlush   stats.Uint64Val
+	scopeCreate       stats.Uint64Val
+	scopeDrop         stats.Uint64Val
+	collectionChanged stats.Uint64Val
+	seqnoAdvanced     stats.Uint64Val
 }
 
 func (kvstats *KvdataStats) Init(numVbuckets int, kvdata *KVData) {
@@ -104,6 +113,14 @@ func (kvstats *KvdataStats) Init(numVbuckets int, kvdata *KVData) {
 	}
 	kvstats.kvdata = kvdata
 	kvstats.vbseqnos_copy = make([]uint64, numVbuckets)
+
+	kvstats.collectionCreate.Init()
+	kvstats.collectionDrop.Init()
+	kvstats.collectionFlush.Init()
+	kvstats.scopeCreate.Init()
+	kvstats.scopeDrop.Init()
+	kvstats.collectionChanged.Init()
+	kvstats.seqnoAdvanced.Init()
 }
 
 func (kvstats *KvdataStats) IsClosed() bool {
@@ -111,7 +128,7 @@ func (kvstats *KvdataStats) IsClosed() bool {
 }
 
 func (stats *KvdataStats) String() (string, string) {
-	var stitems [16]string
+	var stitems [23]string
 	var vbseqnos string
 	var numDocsProcessed, numDocsPending uint64
 
@@ -131,6 +148,14 @@ func (stats *KvdataStats) String() (string, string) {
 	stitems[13] = `"tsCount":` + strconv.FormatUint(stats.tsCount.Value(), 10)
 	stitems[14] = `"mutChLen":` + strconv.FormatUint((uint64)(len(stats.mutch)), 10)
 
+	stitems[15] = `"collectionCreate":` + strconv.FormatUint(stats.collectionCreate.Value(), 10)
+	stitems[16] = `"collectionDrop":` + strconv.FormatUint(stats.collectionDrop.Value(), 10)
+	stitems[17] = `"collectionFlush":` + strconv.FormatUint(stats.collectionFlush.Value(), 10)
+	stitems[18] = `"scopeCreate":` + strconv.FormatUint(stats.scopeCreate.Value(), 10)
+	stitems[19] = `"scopeDrop":` + strconv.FormatUint(stats.scopeDrop.Value(), 10)
+	stitems[20] = `"collectionChanged":` + strconv.FormatUint(stats.collectionChanged.Value(), 10)
+	stitems[21] = `"seqnoAdvanced":` + strconv.FormatUint(stats.seqnoAdvanced.Value(), 10)
+
 	// A copy of vbseqnos is made so that numDocsProcessed can be consistent
 	// with the sum of logged vbseqnos. Also, it helps to compute the numDocsPending
 	// as stats.vbseqnos can move ahead of retrieved bucket seqnos (from getKVTs())
@@ -141,7 +166,7 @@ func (stats *KvdataStats) String() (string, string) {
 		numDocsProcessed += stats.vbseqnos_copy[i]
 	}
 
-	stitems[15] = `"numDocsProcessed":` + strconv.FormatUint(numDocsProcessed, 10)
+	stitems[22] = `"numDocsProcessed":` + strconv.FormatUint(numDocsProcessed, 10)
 	statjson := strings.Join(stitems[:], ",")
 
 	cluster := stats.kvdata.config["clusterAddr"].String()
@@ -620,22 +645,35 @@ func (kvdata *KVData) scatterMutation(
 		}
 
 	case mcd.DCP_SYSTEM_EVENT: // Propagate system events to workers
-		// TODO (Collections): Add stats for DCP_SYSTEM_EVENTS?
 		fmsg := "%v ##%x SystemEvent: %v\n"
 		logging.Tracef(fmsg, kvdata.logPrefix, m.Opaque, m)
 		seqno = m.Seqno
 		if err := worker.Event(m); err != nil {
 			panic(err)
 		}
+		switch m.EventType {
+		case mcd.COLLECTION_CREATE:
+			kvdata.stats.collectionCreate.Add(1)
+		case mcd.COLLECTION_DROP:
+			kvdata.stats.collectionDrop.Add(1)
+		case mcd.COLLECTION_FLUSH:
+			kvdata.stats.collectionFlush.Add(1)
+		case mcd.SCOPE_CREATE:
+			kvdata.stats.scopeCreate.Add(1)
+		case mcd.SCOPE_DROP:
+			kvdata.stats.scopeDrop.Add(1)
+		case mcd.COLLECTION_CHANGED:
+			kvdata.stats.collectionChanged.Add(1)
+		}
 
 	case mcd.DCP_SEQNO_ADVANCED: // Propagate SeqnoAdvancedEvent to workers
-		// TODO (Collections): Add stats for DCP_SEQNO_ADVANCED
 		fmsg := "%v ##%x SeqnoAdvanced event: %v\n"
 		logging.Tracef(fmsg, kvdata.logPrefix, m.Opaque, m)
 		seqno = m.Seqno
 		if err := worker.Event(m); err != nil {
 			panic(err)
 		}
+		kvdata.stats.seqnoAdvanced.Add(1)
 
 	}
 	return
