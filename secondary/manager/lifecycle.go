@@ -3827,7 +3827,7 @@ func (m *janitor) run() {
 
 		case <-m.listenerDonech:
 			m.listenerDonech = make(chan bool)
-			m.commandListener = mc.NewCommandListener(m.listenerDonech, false, false, true, true, false)
+			m.commandListener = mc.NewCommandListener(m.listenerDonech, false, false, true, true, false, false)
 			m.commandListener.ListenTokens()
 		}
 	}
@@ -3846,7 +3846,7 @@ func newJanitor(mgr *LifecycleMgr) *janitor {
 
 	janitor := &janitor{
 		manager:         mgr,
-		commandListener: mc.NewCommandListener(donech, false, false, true, true, false),
+		commandListener: mc.NewCommandListener(donech, false, false, true, true, false, false),
 		listenerDonech:  donech,
 		runch:           make(chan bool),
 	}
@@ -3934,7 +3934,7 @@ func (s *builder) run() {
 
 		case <-s.listenerDonech:
 			s.listenerDonech = make(chan bool)
-			s.commandListener = mc.NewCommandListener(s.listenerDonech, false, true, false, false, false)
+			s.commandListener = mc.NewCommandListener(s.listenerDonech, false, true, false, false, false, false)
 			s.commandListener.ListenTokens()
 		}
 	}
@@ -4254,7 +4254,7 @@ func newBuilder(mgr *LifecycleMgr) *builder {
 		pendings:        make(map[string][]uint64),
 		notifych:        make(chan *common.IndexDefn, 10000),
 		batchSize:       int32(common.SystemConfig["indexer.settings.build.batch_size"].Int()),
-		commandListener: mc.NewCommandListener(donech, false, true, false, false, false),
+		commandListener: mc.NewCommandListener(donech, false, true, false, false, false, false),
 		listenerDonech:  donech,
 	}
 

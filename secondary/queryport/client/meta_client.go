@@ -24,7 +24,11 @@ import (
 	common "github.com/couchbase/indexing/secondary/common"
 
 	mclient "github.com/couchbase/indexing/secondary/manager/client"
+	mc "github.com/couchbase/indexing/secondary/manager/common"
 )
+
+var MAX_SCHEDULE_TOKENS = 10000
+var SCHED_TOKEN_CHECK_INTERVAL = 5000 // Milliseconds
 
 type metadataClient struct {
 	cluster  string
@@ -48,6 +52,8 @@ type metadataClient struct {
 	refreshCond    *sync.Cond
 	refreshCnt     int
 	refreshWaitCnt int
+
+	schedTokenMon *schedTokenMonitor
 }
 
 // sherlock topology management, multi-node & single-partition.
@@ -72,13 +78,15 @@ func newMetaBridgeClient(
 	cluster string, config common.Config, metaCh chan bool, settings *ClientSettings) (c *metadataClient, err error) {
 
 	b := &metadataClient{
-		cluster:    cluster,
-		finch:      make(chan bool),
-		metaCh:     metaCh,
-		mdNotifyCh: make(chan bool, 1),
-		stNotifyCh: make(chan map[common.IndexInstId]map[common.PartitionId]common.Statistics, 1),
-		settings:   settings,
+		cluster:       cluster,
+		finch:         make(chan bool),
+		metaCh:        metaCh,
+		mdNotifyCh:    make(chan bool, 1),
+		stNotifyCh:    make(chan map[common.IndexInstId]map[common.PartitionId]common.Statistics, 1),
+		settings:      settings,
+		schedTokenMon: newSchedTokenMonitor(),
 	}
+
 	b.refreshCond = sync.NewCond(&b.refreshLock)
 	b.refreshCnt = 0
 
@@ -118,7 +126,7 @@ func (b *metadataClient) Sync() error {
 }
 
 // Refresh implement BridgeAccessor{} interface.
-func (b *metadataClient) Refresh() ([]*mclient.IndexMetadata, uint64, uint64, error) {
+func (b *metadataClient) Refresh() ([]*mclient.IndexMetadata, uint64, uint64, bool, error) {
 
 	currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
 
@@ -147,7 +155,32 @@ func (b *metadataClient) Refresh() ([]*mclient.IndexMetadata, uint64, uint64, er
 		currmeta = (*indexTopology)(atomic.LoadPointer(&b.indexers))
 	}
 
-	return currmeta.allIndexes, currmeta.version, b.mdClient.GetClusterVersion(), nil
+	schedIndexes, forceRefresh := b.schedTokenMon.getIndexes()
+
+	if len(schedIndexes) == 0 {
+		return currmeta.allIndexes, currmeta.version, b.mdClient.GetClusterVersion(), false, nil
+	}
+
+	allIndexIds := make(map[common.IndexDefnId]bool)
+	for _, idx := range currmeta.allIndexes {
+		if idx.Definition == nil {
+			continue
+		}
+
+		allIndexIds[idx.Definition.DefnId] = true
+	}
+
+	newSchedIndexes := make([]*mclient.IndexMetadata, 0, len(schedIndexes))
+	for _, idx := range schedIndexes {
+		if _, ok := allIndexIds[idx.Definition.DefnId]; ok {
+			continue
+		}
+
+		newSchedIndexes = append(newSchedIndexes, idx)
+	}
+
+	newSchedIndexes = append(newSchedIndexes, currmeta.allIndexes...)
+	return newSchedIndexes, currmeta.version, b.mdClient.GetClusterVersion(), forceRefresh, nil
 }
 
 // Nodes implement BridgeAccessor{} interface.
@@ -464,6 +497,7 @@ func (b *metadataClient) Close() {
 	defer func() { recover() }() // in case async Close is called.
 	b.mdClient.Close()
 	close(b.finch)
+	b.schedTokenMon.Close()
 }
 
 //--------------------------------
@@ -1944,4 +1978,226 @@ func postWithAuth(url string, bodyType string, body io.Reader, timeout time.Dura
 func getWithAuth(url string) (*http.Response, error) {
 	params := &security.RequestParams{Timeout: time.Duration(10) * time.Second}
 	return security.GetWithAuth(url, params)
+}
+
+type schedTokenMonitor struct {
+	indexes   []*mclient.IndexMetadata
+	listener  *mc.CommandListener
+	lock      sync.Mutex
+	lCloseCh  chan bool
+	processed map[string]bool
+
+	useCache   bool
+	cIndexes   []*mclient.IndexMetadata
+	cListener  *mc.CommandListener
+	cLock      sync.Mutex
+	clCloseCh  chan bool
+	uCloseCh   chan bool
+	cProcessed map[string]bool
+}
+
+func newSchedTokenMonitor() *schedTokenMonitor {
+	useCache := false
+
+	lCloseCh := make(chan bool)
+	listener := mc.NewCommandListener(lCloseCh, false, false, false, false, true, true)
+
+	var clCloseCh, uCloseCh chan bool
+	var cListener *mc.CommandListener
+	var cIndexes []*mclient.IndexMetadata
+	if useCache {
+		clCloseCh = make(chan bool)
+		cListener = mc.NewCommandListener(clCloseCh, false, false, false, false, true, true)
+		uCloseCh = make(chan bool)
+		cIndexes = make([]*mclient.IndexMetadata, 0, MAX_SCHEDULE_TOKENS)
+	}
+
+	s := &schedTokenMonitor{
+		indexes:   make([]*mclient.IndexMetadata, 0, MAX_SCHEDULE_TOKENS),
+		listener:  listener,
+		lCloseCh:  lCloseCh,
+		processed: make(map[string]bool),
+
+		useCache:   useCache,
+		cListener:  cListener,
+		cIndexes:   cIndexes,
+		clCloseCh:  clCloseCh,
+		uCloseCh:   uCloseCh,
+		cProcessed: make(map[string]bool),
+	}
+
+	s.listener.ListenTokens()
+
+	if useCache {
+		go s.updater()
+	}
+
+	return s
+}
+
+func (s *schedTokenMonitor) makeIndexMetadata(token *mc.ScheduleCreateToken) *mclient.IndexMetadata {
+	return &mclient.IndexMetadata{
+		Definition: &token.Definition,
+		State:      common.INDEX_STATE_NIL,
+		Error:      "",
+		Scheduled:  true,
+	}
+}
+
+func (s *schedTokenMonitor) checkProcessed(key string, cached bool) bool {
+
+	if cached {
+		if _, ok := s.cProcessed[key]; ok {
+			return true
+		}
+
+		return false
+	} else {
+		if _, ok := s.processed[key]; ok {
+			return true
+		}
+
+		return false
+	}
+}
+
+func (s *schedTokenMonitor) markProcessed(key string, cached bool) {
+	if cached {
+		s.cProcessed[key] = true
+	} else {
+		s.processed[key] = true
+	}
+}
+
+func (s *schedTokenMonitor) getIndexesFromTokens(createTokens map[string]*mc.ScheduleCreateToken,
+	stopTokens map[string]*mc.StopScheduleCreateToken, cached bool) []*mclient.IndexMetadata {
+
+	indexes := make([]*mclient.IndexMetadata, 0, MAX_SCHEDULE_TOKENS)
+
+	for key, token := range createTokens {
+		if s.checkProcessed(key, cached) {
+			continue
+		}
+
+		if _, ok := stopTokens[key]; ok {
+			continue
+		}
+
+		indexes = append(indexes, s.makeIndexMetadata(token))
+		s.markProcessed(key, cached)
+	}
+
+	for key, token := range stopTokens {
+		ct, ok := createTokens[key]
+		if !ok {
+			continue
+		}
+
+		if s.checkProcessed(key, cached) {
+			continue
+		}
+
+		idx := s.makeIndexMetadata(ct)
+		idx.ScheduleFailed = true
+		idx.Error = token.Reason
+		idx.State = common.INDEX_STATE_ERROR
+
+		indexes = append(indexes, idx)
+		s.markProcessed(key, cached)
+	}
+
+	return indexes
+}
+
+func (s *schedTokenMonitor) clenseIndexes(indexes []*mclient.IndexMetadata,
+	stopTokens map[string]*mc.StopScheduleCreateToken, delPaths map[string]bool) []*mclient.IndexMetadata {
+
+	newIndexes := make([]*mclient.IndexMetadata, 0, len(indexes))
+	for _, idx := range indexes {
+		path := fmt.Sprintf("%v", idx.Definition.DefnId)
+
+		if _, ok := delPaths[path]; ok {
+			continue
+		}
+
+		if _, ok := stopTokens[path]; ok {
+			if !idx.ScheduleFailed {
+				continue
+			} else {
+				newIndexes = append(newIndexes, idx)
+			}
+		} else {
+			newIndexes = append(newIndexes, idx)
+		}
+	}
+
+	return newIndexes
+}
+
+func (s *schedTokenMonitor) getIndexes() ([]*mclient.IndexMetadata, bool) {
+	createTokens := s.listener.GetNewScheduleCreateTokens()
+	stopTokens := s.listener.GetNewStopScheduleCreateTokens()
+	delPaths := s.listener.GetDeletesdScheduleCreateTokenPaths()
+
+	indexes := s.getIndexesFromTokens(createTokens, stopTokens, false)
+
+	s.lock.Lock()
+	defer s.lock.Unlock()
+
+	indexes = append(indexes, s.indexes...)
+	s.indexes = indexes
+	s.indexes = s.clenseIndexes(s.indexes, stopTokens, delPaths)
+
+	forceRefresh := true
+	if len(createTokens) == 0 && len(stopTokens) == 0 && len(delPaths) == 0 {
+		forceRefresh = false
+	}
+
+	return s.indexes, forceRefresh
+}
+
+func (s *schedTokenMonitor) getIndexesCached() []*mclient.IndexMetadata {
+	s.cLock.Lock()
+	defer s.cLock.Unlock()
+
+	return s.cIndexes
+}
+
+func (s *schedTokenMonitor) update() {
+	createTokens := s.listener.GetNewScheduleCreateTokens()
+	stopTokens := s.listener.GetNewStopScheduleCreateTokens()
+	delPaths := s.listener.GetDeletesdScheduleCreateTokenPaths()
+
+	indexes := s.getIndexesFromTokens(createTokens, stopTokens, true)
+
+	s.cLock.Lock()
+	defer s.cLock.Unlock()
+
+	s.cIndexes = append(s.cIndexes, indexes...)
+	s.cIndexes = s.clenseIndexes(s.cIndexes, stopTokens, delPaths)
+}
+
+func (s *schedTokenMonitor) updater() {
+	s.cListener.ListenTokens()
+
+	ticker := time.NewTicker(time.Duration(SCHED_TOKEN_CHECK_INTERVAL) * time.Millisecond)
+
+	for {
+		select {
+		case <-ticker.C:
+			s.update()
+
+		case <-s.uCloseCh:
+			return
+		}
+	}
+}
+
+func (s *schedTokenMonitor) Close() {
+	close(s.lCloseCh)
+
+	if s.useCache {
+		close(s.clCloseCh)
+		close(s.uCloseCh)
+	}
 }

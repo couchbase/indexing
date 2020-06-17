@@ -689,6 +689,16 @@ func (t *IndexTopology) GetIndexInstancesByDefn(defnId common.IndexDefnId) []Ind
 	return nil
 }
 
+func (t *IndexTopology) SetCollectionDefaults() {
+	if t.Scope == "" {
+		t.Scope = common.DEFAULT_SCOPE
+	}
+
+	if t.Collection == "" {
+		t.Collection = common.DEFAULT_COLLECTION
+	}
+}
+
 /*
 //
 // Get all index instance Id's for a specific defnition

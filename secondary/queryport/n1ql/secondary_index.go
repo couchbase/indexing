@@ -56,6 +56,20 @@ var n1ql2GsiInclusion = map[datastore.Inclusion]qclient.Inclusion{
 	datastore.HIGH:    qclient.High,
 	datastore.BOTH:    qclient.Both,
 }
+
+var ErrorScheduledCreate = fmt.Errorf("This index is scheduled for background creation." +
+	" The operation is not allowed on this index at this time. Please wait until the index is created.")
+
+var ErrorScheduledCreateFailed = fmt.Errorf("This index was scheduled for background creation" +
+	" but the background creation has failed. Please drop and recreate this index.")
+
+// TODO: Right now, using index state nil for index scheduled for background
+// creation. This maps to datastore OFFLINE state. But here the OFFLINE state
+// is overloaded. Can not use PENDING state as well as it will break workflow
+// for "build all unbuilt indexes".
+//
+// There is a need for new datastore state to represent index scheduled for
+// background creation.
 var gsi2N1QLState = map[c.IndexState]datastore.IndexState{
 	c.INDEX_STATE_CREATED: datastore.PENDING, // might also be DEFERRED
 	c.INDEX_STATE_READY:   datastore.PENDING, // might also be DEFERRED
@@ -64,8 +78,9 @@ var gsi2N1QLState = map[c.IndexState]datastore.IndexState{
 	c.INDEX_STATE_ACTIVE:  datastore.ONLINE,
 	c.INDEX_STATE_DELETED: datastore.OFFLINE,
 	c.INDEX_STATE_ERROR:   datastore.OFFLINE,
-	// c.INDEX_STATE_NIL:     datastore.OFFLINE, TODO: uncomment this.
+	c.INDEX_STATE_NIL:     datastore.OFFLINE,
 }
+
 var n1ql2GsiConsistency = map[datastore.ScanConsistency]c.Consistency{
 	datastore.UNBOUNDED: c.AnyConsistency,
 	datastore.SCAN_PLUS: c.SessionConsistency,
@@ -517,6 +532,19 @@ func (gsi *gsiKeyspace) BuildIndexes(requestId string, names ...string) errors.E
 		if err != nil {
 			return errors.NewError(err, "BuildIndexes")
 		}
+
+		// Please note that the gsiKeyspace uses datastore.Index to cache
+		// the index objects of type secondaryIndex*. But datastore.Index
+		// interface doesn't provide CheckScheduled API. So, typecasting is
+		// required.
+		// Whenever a new type (liike secondaryIndex5) is introduced, this
+		// typecasting code needs to be fixed.
+		if idx, ok := index.(*secondaryIndex4); ok {
+			if err := idx.CheckScheduled(); err != nil {
+				return errors.NewError(fmt.Errorf("%v: %v", err.Error(), name), "BuildIndexes")
+			}
+		}
+
 		defnIDs[i] = string2defnID(index.Id())
 	}
 	err := gsi.gsiClient.BuildIndexes(defnIDs)
@@ -529,7 +557,7 @@ func (gsi *gsiKeyspace) BuildIndexes(requestId string, names ...string) errors.E
 // Refresh list of indexes and scanner clients.
 func (gsi *gsiKeyspace) Refresh() errors.Error {
 	l.Tracef("%v gsiKeyspace.Refresh()", gsi.logPrefix)
-	indexes, version, clusterVersion, err := gsi.gsiClient.Refresh()
+	indexes, version, clusterVersion, forceRefresh, err := gsi.gsiClient.Refresh()
 	if err != nil {
 		return errors.NewError(err, "GSI Refresh()")
 	}
@@ -538,7 +566,7 @@ func (gsi *gsiKeyspace) Refresh() errors.Error {
 	cachedClusterVersion := atomic.LoadUint64(&gsi.clusterVersion)
 
 	// has metadata version changed?
-	if cachedVersion < version || cachedClusterVersion < clusterVersion {
+	if cachedVersion < version || cachedClusterVersion < clusterVersion || forceRefresh {
 		gsi.gsiClient.UpdateDataEncodingFormat(clusterVersion)
 
 		si_s := make([]*secondaryIndex, 0, len(indexes))
@@ -724,6 +752,9 @@ type secondaryIndex struct {
 	state     datastore.IndexState
 	err       string
 	deferred  bool
+
+	scheduled bool
+	schedFail bool
 }
 
 // for metadata-provider.
@@ -732,9 +763,12 @@ func newSecondaryIndexFromMetaData(
 	version uint64,
 	imd *mclient.IndexMetadata) (si *secondaryIndex, err errors.Error) {
 
-	if len(imd.Instances) < 1 && len(imd.InstsInRebalance) < 1 {
-		return nil, errors.NewError(nil, "no instance are created by GSI")
+	if !imd.Scheduled && !imd.ScheduleFailed {
+		if len(imd.Instances) < 1 && len(imd.InstsInRebalance) < 1 {
+			return nil, errors.NewError(nil, "no instance are created by GSI")
+		}
 	}
+
 	indexDefn := imd.Definition
 	defnID := uint64(indexDefn.DefnId)
 	si = &secondaryIndex{
@@ -748,6 +782,8 @@ func newSecondaryIndexFromMetaData(
 		state:     gsi2N1QLState[imd.State],
 		err:       imd.Error,
 		deferred:  indexDefn.Deferred,
+		scheduled: imd.Scheduled,
+		schedFail: imd.ScheduleFailed,
 	}
 
 	if indexDefn.SecExprs != nil {
@@ -858,7 +894,12 @@ func (si *secondaryIndex) Statistics(
 	if si == nil {
 		return nil, ErrorIndexEmpty
 	}
+
 	client := si.gsi.gsiClient
+
+	if err := si.CheckScheduled(); err != nil {
+		return nil, n1qlError(client, err)
+	}
 
 	defnID := si.defnID
 	if span.Seek != nil {
@@ -887,7 +928,12 @@ func (si *secondaryIndex) Count(span *datastore.Span,
 	if si == nil {
 		return 0, ErrorIndexEmpty
 	}
+
 	client := si.gsi.gsiClient
+
+	if err := si.CheckScheduled(); err != nil {
+		return 0, n1qlError(client, err)
+	}
 
 	if span.Seek != nil {
 		seek := values2SKey(span.Seek)
@@ -914,6 +960,7 @@ func (si *secondaryIndex) Drop(requestId string) errors.Error {
 	if si == nil {
 		return ErrorIndexEmpty
 	}
+
 	if err := si.gsi.gsiClient.DropIndex(si.defnID); err != nil {
 		return errors.NewError(err, "GSI Drop()")
 	}
@@ -961,6 +1008,12 @@ func (si *secondaryIndex) Scan(
 	starttm := time.Now()
 
 	client, cnf := si.gsi.gsiClient, si.gsi.config
+
+	if err := si.CheckScheduled(); err != nil {
+		conn.Error(n1qlError(client, err))
+		return
+	}
+
 	if span.Seek != nil {
 		seek := values2SKey(span.Seek)
 		broker = makeRequestBroker(requestId, si, client, conn, cnf, &waitGroup, &backfillSync, sender.Capacity())
@@ -1008,6 +1061,12 @@ func (si *secondaryIndex) ScanEntries(
 	starttm := time.Now()
 
 	client, cnf := si.gsi.gsiClient, si.gsi.config
+
+	if err := si.CheckScheduled(); err != nil {
+		conn.Error(n1qlError(client, err))
+		return
+	}
+
 	broker = makeRequestBroker(requestId, si, client, conn, cnf, &waitGroup, &backfillSync, sender.Capacity())
 	err := client.ScanAllInternal(
 		si.defnID, requestId, limit,
@@ -1018,6 +1077,18 @@ func (si *secondaryIndex) ScanEntries(
 
 	atomic.AddInt64(&si.gsi.totalscans, 1)
 	atomic.AddInt64(&si.gsi.scandur, int64(time.Since(starttm)))
+}
+
+func (si *secondaryIndex) CheckScheduled() error {
+	if si.schedFail {
+		return ErrorScheduledCreateFailed
+	}
+
+	if si.scheduled {
+		return ErrorScheduledCreate
+	}
+
+	return nil
 }
 
 //--------------------
@@ -1058,6 +1129,11 @@ func (si *secondaryIndex2) Scan2(
 	starttm := time.Now()
 
 	client, cnf := si.gsi.gsiClient, si.gsi.config
+
+	if err := si.CheckScheduled(); err != nil {
+		conn.Error(n1qlError(client, err))
+		return
+	}
 
 	gsiscans := n1qlspanstogsi(spans)
 	gsiprojection := n1qlprojectiontogsi(projection)
@@ -1113,6 +1189,10 @@ func (si *secondaryIndex2) Count2(requestId string, spans datastore.Spans2,
 	}
 	client := si.gsi.gsiClient
 
+	if err := si.CheckScheduled(); err != nil {
+		return 0, n1qlError(client, err)
+	}
+
 	gsiscans := n1qlspanstogsi(spans)
 
 	count, e := client.MultiScanCount(si.defnID, requestId, gsiscans, false,
@@ -1136,6 +1216,10 @@ func (si *secondaryIndex2) CountDistinct(requestId string, spans datastore.Spans
 		return 0, ErrorIndexEmpty
 	}
 	client := si.gsi.gsiClient
+
+	if err := si.CheckScheduled(); err != nil {
+		return 0, n1qlError(client, err)
+	}
 
 	gsiscans := n1qlspanstogsi(spans)
 
@@ -1220,6 +1304,11 @@ func (si *secondaryIndex3) Scan3(
 
 	client, cnf := si.gsi.gsiClient, si.gsi.config
 
+	if err := si.CheckScheduled(); err != nil {
+		conn.Error(n1qlError(client, err))
+		return
+	}
+
 	gsiscans := n1qlspanstogsi(spans)
 	gsiprojection := n1qlprojectiontogsi(projection)
 	gsigroupaggr := n1qlgroupaggrtogsi(groupAggs)
@@ -1247,6 +1336,11 @@ func (si *secondaryIndex3) Alter(requestId string, with value.Value) (
 
 	if with == nil {
 		return datastore.Index(si), nil
+	}
+
+	if err := si.CheckScheduled(); err != nil {
+		client := si.gsi.gsiClient
+		return nil, n1qlError(client, err)
 	}
 
 	var ErrorMarshalWith = "GSI AlterIndex() Error marshalling WITH clause"
@@ -1347,6 +1441,10 @@ func (si *secondaryIndex4) StorageStatistics(requestid string) ([]map[datastore.
 		return nil, ErrorIndexEmpty
 	}
 	client := si.gsi.gsiClient
+
+	if err := si.CheckScheduled(); err != nil {
+		return nil, n1qlError(client, err)
+	}
 
 	stats, e := client.StorageStatistics(si.defnID, requestid)
 	if e != nil {

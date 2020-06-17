@@ -5396,9 +5396,8 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 	numVb := idx.config["numVbuckets"].Int()
 	enableAsync := idx.config["enableAsyncOpenStream"].Bool()
 
-	var clusterVer uint64
+	clusterVer := idx.clusterInfoClient.ClusterVersion()
 	if !inRepair {
-		clusterVer = idx.clusterInfoClient.ClusterVersion()
 		async = enableAsync && clusterVer >= common.INDEXER_65_VERSION
 	}
 
@@ -5406,9 +5405,6 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 	var ok bool
 	if cid, ok = idx.streamKeyspaceIdCollectionId[streamId][keyspaceId]; !ok {
 		//if the cid has not been set e.g. in warmup, set it from the first index
-		if clusterVer == 0 {
-			clusterVer = clusterVersion(clustAddr)
-		}
 		//get cid of any index and determine if it needs to be used
 		cid = indexList[0].Defn.CollectionId
 		cid = idx.makeCollectionIdForStreamRequest(streamId, keyspaceId, cid, clusterVer)

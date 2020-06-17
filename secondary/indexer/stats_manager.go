@@ -42,6 +42,9 @@ import (
 var uptime time.Time
 var num_cpu_core int
 
+const APPROX_METRIC_SIZE = 100
+const APPROX_METRIC_COUNT = 25
+
 func init() {
 	uptime = time.Now()
 	num_cpu_core = runtime.NumCPU()
@@ -118,7 +121,7 @@ func (it *IndexTimingStats) Init() {
 }
 
 type IndexStats struct {
-	name, scope, collection, bucket string
+	name, scope, collection, bucket, dispName string
 
 	replicaId    int
 	isArrayIndex bool
@@ -432,6 +435,7 @@ func (s *IndexStats) Init() {
 	s.SetRebalancerFilters()
 	s.SetPlannerFilters()
 	s.SetIndexStatusFilters()
+	s.dispName = common.FormatIndexInstDisplayName(s.name, s.replicaId)
 }
 
 func (s *IndexStats) SetRebalancerFilters() {
@@ -1000,6 +1004,8 @@ func (is IndexerStats) constructIndexerStats(skipEmpty bool, version string) com
 }
 
 func (s *IndexStats) constructIndexStats(skipEmpty bool, version string) common.Statistics {
+	s.initializeScanStats()
+
 	indexStats := make(map[string]interface{})
 	addStat := addStatFactory(skipEmpty, indexStats)
 
@@ -1135,7 +1141,7 @@ func (s *IndexStats) constructIndexStats(skipEmpty bool, version string) common.
 	return indexStats
 }
 
-func (s *IndexStats) addIndexStatsToMap(statMap *StatsMap, spec *statsSpec) {
+func (s *IndexStats) initializeScanStats() {
 	var scanLat, waitLat, scanReqLat, scanReqInitLat, scanReqAllocLat int64
 	reqs := s.numRequests.Value()
 
@@ -1160,6 +1166,15 @@ func (s *IndexStats) addIndexStatsToMap(statMap *StatsMap, spec *statsSpec) {
 		scanReqInitLat = scanReqInitDur / reqs
 		scanReqAllocLat = scanReqAllocDur / reqs
 	}
+
+	s.waitLat.Set(waitLat)
+	s.scanReqLat.Set(scanReqLat)
+	s.scanReqInitLat.Set(scanReqInitLat)
+	s.scanReqAllocLat.Set(scanReqAllocLat)
+}
+
+func (s *IndexStats) addIndexStatsToMap(statMap *StatsMap, spec *statsSpec) {
+	s.initializeScanStats()
 
 	// ----------------------
 	// All int64Stats
@@ -1472,10 +1487,8 @@ func (s *IndexStats) addIndexStatsToMap(statMap *StatsMap, spec *statsSpec) {
 	s.avgItemSize.Set(computeAvgItemSize(rawDataSize, itemsCount))
 	statMap.AddStatValueFiltered("avg_item_size", &s.avgItemSize)
 
-	s.waitLat.Set(waitLat)
 	statMap.AddStatValueFiltered("avg_scan_wait_latency", &s.waitLat)
 
-	s.scanReqLat.Set(scanReqLat)
 	statMap.AddStatValueFiltered("avg_scan_request_latency", &s.scanReqLat)
 
 	s.keySizeDist.Set(s.getKeySizeStats())
@@ -1499,10 +1512,7 @@ func (s *IndexStats) addIndexStatsToMap(statMap *StatsMap, spec *statsSpec) {
 	}
 
 	if !spec.essential {
-		s.scanReqInitLat.Set(scanReqInitLat)
 		statMap.AddStatValueFiltered("avg_scan_request_init_latency", &s.scanReqInitLat)
-
-		s.scanReqAllocLat.Set(scanReqAllocLat)
 		statMap.AddStatValueFiltered("avg_scan_request_alloc_latency", &s.scanReqAllocLat)
 	}
 
@@ -1724,6 +1734,117 @@ func (s *IndexStats) addIndexStatsToMap(statMap *StatsMap, spec *statsSpec) {
 			},
 			&s.completionProgress, s.int64Stats)
 	}
+}
+
+func (s *IndexStats) populateMetrics(st []byte) []byte {
+	s.initializeScanStats()
+
+	var str, collectionLabels string
+	fmtStr := "%v{bucket=\"%v\", %vindex=\"%v\"} %v\n"
+
+	if (s.scope == "" || s.scope == common.DEFAULT_SCOPE) &&
+		(s.collection == "" || s.collection == common.DEFAULT_COLLECTION) {
+
+		collectionLabels = ""
+	} else {
+		collectionLabels = fmt.Sprintf("scope=\"%v\", collection=\"%v\", ", s.scope, s.collection)
+	}
+
+	rawDataSize := s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.rawDataSize.Value() })
+	str = fmt.Sprintf(fmtStr, "raw_data_size", s.bucket, collectionLabels, s.dispName, rawDataSize)
+	st = append(st, []byte(str)...)
+
+	itemsCount := s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.itemsCount.Value() })
+	str = fmt.Sprintf(fmtStr, "items_count", s.bucket, collectionLabels, s.dispName, itemsCount)
+	st = append(st, []byte(str)...)
+
+	scanDuration := s.int64Stats(func(ss *IndexStats) int64 { return ss.scanDuration.Value() })
+	str = fmt.Sprintf(fmtStr, "total_scan_duration", s.bucket, collectionLabels, s.dispName, scanDuration)
+	st = append(st, []byte(str)...)
+
+	numRowsScanned := s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.numRowsScanned.Value() })
+	str = fmt.Sprintf(fmtStr, "num_rows_scanned", s.bucket, collectionLabels, s.dispName, numRowsScanned)
+	st = append(st, []byte(str)...)
+
+	diskSize := s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.diskSize.Value() })
+	str = fmt.Sprintf(fmtStr, "disk_size", s.bucket, collectionLabels, s.dispName, diskSize)
+	st = append(st, []byte(str)...)
+
+	dataSize := s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.dataSize.Value() })
+	str = fmt.Sprintf(fmtStr, "data_size", s.bucket, collectionLabels, s.dispName, dataSize)
+	st = append(st, []byte(str)...)
+
+	scanBytesRead := s.int64Stats(func(ss *IndexStats) int64 { return ss.scanBytesRead.Value() })
+	str = fmt.Sprintf(fmtStr, "scan_bytes_read", s.bucket, collectionLabels, s.dispName, scanBytesRead)
+	st = append(st, []byte(str)...)
+
+	memUsed := s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.memUsed.Value() })
+	str = fmt.Sprintf(fmtStr, "memory_used", s.bucket, collectionLabels, s.dispName, memUsed)
+	st = append(st, []byte(str)...)
+
+	numRowsReturned := s.int64Stats(func(ss *IndexStats) int64 { return ss.numRowsReturned.Value() })
+	str = fmt.Sprintf(fmtStr, "num_rows_returned", s.bucket, collectionLabels, s.dispName, numRowsReturned)
+	st = append(st, []byte(str)...)
+
+	numDocsPending := s.int64Stats(func(ss *IndexStats) int64 { return ss.numDocsPending.Value() })
+	str = fmt.Sprintf(fmtStr, "num_docs_pending", s.bucket, collectionLabels, s.dispName, numDocsPending)
+	st = append(st, []byte(str)...)
+
+	numDocsIndexed := s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.numDocsIndexed.Value() })
+	str = fmt.Sprintf(fmtStr, "num_docs_indexed", s.bucket, collectionLabels, s.dispName, numDocsIndexed)
+	st = append(st, []byte(str)...)
+
+	str = fmt.Sprintf(fmtStr, "num_requests", s.bucket, collectionLabels, s.dispName, s.numRequests.Value())
+	st = append(st, []byte(str)...)
+
+	numDocsQueued := s.int64Stats(func(ss *IndexStats) int64 { return ss.numDocsQueued.Value() })
+	str = fmt.Sprintf(fmtStr, "num_docs_queued", s.bucket, collectionLabels, s.dispName, numDocsQueued)
+	st = append(st, []byte(str)...)
+
+	cacheHits := s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.cacheHits.Value() })
+	str = fmt.Sprintf(fmtStr, "cache_hits", s.bucket, collectionLabels, s.dispName, cacheHits)
+	st = append(st, []byte(str)...)
+
+	cacheMisses := s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.cacheMisses.Value() })
+	str = fmt.Sprintf(fmtStr, "cache_misses", s.bucket, collectionLabels, s.dispName, cacheMisses)
+	st = append(st, []byte(str)...)
+
+	dataSizeOnDisk := s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.dataSizeOnDisk.Value() })
+	str = fmt.Sprintf(fmtStr, "data_size_on_disk", s.bucket, collectionLabels, s.dispName, dataSizeOnDisk)
+	st = append(st, []byte(str)...)
+
+	logSpaceOnDisk := s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.logSpaceOnDisk.Value() })
+	str = fmt.Sprintf(fmtStr, "log_space_on_disk", s.bucket, collectionLabels, s.dispName, logSpaceOnDisk)
+	st = append(st, []byte(str)...)
+
+	numRecsInMem := s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.numRecsInMem.Value() })
+	str = fmt.Sprintf(fmtStr, "recs_in_mem", s.bucket, collectionLabels, s.dispName, numRecsInMem)
+	st = append(st, []byte(str)...)
+
+	numRecsOnDisk := s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.numRecsOnDisk.Value() })
+	str = fmt.Sprintf(fmtStr, "recs_on_disk", s.bucket, collectionLabels, s.dispName, numRecsOnDisk)
+	st = append(st, []byte(str)...)
+
+	avgItemSize := computeAvgItemSize(rawDataSize, itemsCount)
+	str = fmt.Sprintf(fmtStr, "avg_item_size", s.bucket, collectionLabels, s.dispName, avgItemSize)
+	st = append(st, []byte(str)...)
+
+	str = fmt.Sprintf(fmtStr, "avg_scan_latency", s.bucket, collectionLabels, s.dispName, s.avgScanLatency.Value())
+	st = append(st, []byte(str)...)
+
+	fragPercent := s.partnAvgInt64Stats(func(ss *IndexStats) int64 { return ss.fragPercent.Value() })
+	str = fmt.Sprintf(fmtStr, "frag_percent", s.bucket, collectionLabels, s.dispName, fragPercent)
+	st = append(st, []byte(str)...)
+
+	avgDrainRate := s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.avgDrainRate.Value() })
+	str = fmt.Sprintf(fmtStr, "avg_drain_rate", s.bucket, collectionLabels, s.dispName, avgDrainRate)
+	st = append(st, []byte(str)...)
+
+	residentPercent := s.partnAvgInt64Stats(func(ss *IndexStats) int64 { return ss.residentPercent.Value() })
+	str = fmt.Sprintf(fmtStr, "resident_percent", s.bucket, collectionLabels, s.dispName, residentPercent)
+	st = append(st, []byte(str)...)
+
+	return st
 }
 
 func (is IndexerStats) MarshalJSON(spec *statsSpec) ([]byte, error) {
@@ -2028,6 +2149,8 @@ func (s *statsManager) RegisterRestEndpoints() {
 	mux.HandleFunc("/stats/storage/mm", s.handleStorageMMStatsReq)
 	mux.HandleFunc("/stats/storage", s.handleStorageStatsReq)
 	mux.HandleFunc("/stats/reset", s.handleStatsResetReq)
+	mux.HandleFunc("/_prometheusMetrics", s.handleMetrics)
+	mux.HandleFunc("/_prometheusMetricsHigh", s.handleMetricsHigh)
 }
 
 func (s *statsManager) tryUpdateStats(sync bool) {
@@ -2150,6 +2273,53 @@ func (s *statsManager) handleStatsReq(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(400)
 		w.Write([]byte("Unsupported method"))
 	}
+}
+
+func (s *statsManager) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	_, valid, _ := common.IsAuthValid(r)
+	if !valid {
+		w.WriteHeader(401)
+		w.Write([]byte("401 Unauthorized"))
+		return
+	}
+
+	is := s.stats.Get()
+	if is == nil {
+		w.WriteHeader(200)
+		w.Write([]byte(""))
+		return
+	}
+
+	out := make([]byte, 0, 256)
+	out = append(out, []byte(fmt.Sprintf("memory_quota %v\n", is.memoryQuota.Value()))...)
+	out = append(out, []byte(fmt.Sprintf("memory_used %v\n", is.memoryUsed.Value()))...)
+
+	w.WriteHeader(200)
+	w.Write([]byte(out))
+}
+
+func (s *statsManager) handleMetricsHigh(w http.ResponseWriter, r *http.Request) {
+	_, valid, _ := common.IsAuthValid(r)
+	if !valid {
+		w.WriteHeader(401)
+		w.Write([]byte("401 Unauthorized"))
+		return
+	}
+
+	is := s.stats.Get()
+	if is == nil {
+		w.WriteHeader(200)
+		w.Write([]byte(""))
+		return
+	}
+
+	out := make([]byte, 0, len(is.indexes)*APPROX_METRIC_SIZE*APPROX_METRIC_COUNT)
+	for _, s := range is.indexes {
+		out = s.populateMetrics(out)
+	}
+
+	w.WriteHeader(200)
+	w.Write(out)
 }
 
 func (s *statsManager) handleMemStatsReq(w http.ResponseWriter, r *http.Request) {

@@ -192,7 +192,7 @@ func HandleCommand(
 		collection = c.DEFAULT_COLLECTION
 	}
 
-	indexes, _, _, err := client.Refresh()
+	indexes, _, _, _, err := client.Refresh()
 
 	dataEncFmt := client.GetDataEncodingFormat()
 
@@ -245,7 +245,7 @@ func HandleCommand(
 
 	case "list":
 		time.Sleep(2 * time.Second)
-		indexes, _, _, err = client.Refresh()
+		indexes, _, _, _, err = client.Refresh()
 		if err != nil {
 			return err
 		}
@@ -531,7 +531,7 @@ func GetIndex(
 	client *qclient.GsiClient,
 	bucket, indexName string) (*mclient.IndexMetadata, bool) {
 
-	indexes, _, _, err := client.Refresh()
+	indexes, _, _, _, err := client.Refresh()
 	if err != nil {
 		logging.Fatalf("%v\n", err)
 		os.Exit(1)

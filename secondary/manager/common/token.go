@@ -52,6 +52,9 @@ const IndexerStorageModeTokenPath = InfoMetakvDir + IndexerStorageModeTokenTag
 const ScheduleCreateTokenTag = "schedule/"
 const ScheduleCreateTokenPath = CommandMetakvDir + ScheduleCreateTokenTag
 
+const StopScheduleCreateTokenTag = "stopSchedule/"
+const StopScheduleCreateTokenPath = CommandMetakvDir + StopScheduleCreateTokenTag
+
 //////////////////////////////////////////////////////////////
 // Concrete Type
 //
@@ -128,21 +131,33 @@ type ScheduleCreateTokenList struct {
 	Tokens []ScheduleCreateToken
 }
 
+type StopScheduleCreateToken struct {
+	Ctime  int64
+	Reason string
+}
+
+type StopScheduleCreateTokenList struct {
+	Tokens []StopScheduleCreateToken
+}
+
 type CommandListener struct {
-	doCreate       bool
-	hasNewCreate   bool
-	doBuild        bool
-	doDelete       bool
-	doDropInst     bool
-	doSchedule     bool
-	createTokens   map[string]*CreateCommandToken
-	buildTokens    map[string]*BuildCommandToken
-	deleteTokens   map[string]*DeleteCommandToken
-	dropInstTokens map[string]*DropInstanceCommandToken
-	scheduleTokens map[string]*ScheduleCreateToken
-	mutex          sync.Mutex
-	cancelCh       chan struct{}
-	donech         chan bool
+	doCreate        bool
+	hasNewCreate    bool
+	doBuild         bool
+	doDelete        bool
+	doDropInst      bool
+	doSchedule      bool
+	doStopSched     bool
+	createTokens    map[string]*CreateCommandToken
+	buildTokens     map[string]*BuildCommandToken
+	deleteTokens    map[string]*DeleteCommandToken
+	dropInstTokens  map[string]*DropInstanceCommandToken
+	scheduleTokens  map[string]*ScheduleCreateToken
+	stopSchedTokens map[string]*StopScheduleCreateToken
+	schedTokensDel  map[string]bool
+	mutex           sync.Mutex
+	cancelCh        chan struct{}
+	donech          chan bool
 }
 
 //////////////////////////////////////////////////////////////
@@ -936,7 +951,6 @@ func ListAllScheduleCreateTokens() ([]*ScheduleCreateToken, error) {
 	}
 
 	return result, nil
-
 }
 
 func UnmarshallScheduleCreateToken(data []byte) (*ScheduleCreateToken, error) {
@@ -965,26 +979,93 @@ func MarshallScheduleCreateTokenList(tokens *ScheduleCreateTokenList) ([]byte, e
 	return buf, nil
 }
 
+func PostStopScheduleCreateToken(defnId c.IndexDefnId, reason string, ctime int64) error {
+
+	token := &StopScheduleCreateToken{
+		Reason: reason,
+		Ctime:  ctime,
+	}
+
+	path := fmt.Sprintf("%v", defnId)
+	return c.MetakvSet(StopScheduleCreateTokenPath+path, token)
+}
+
+func ListAllStopScheduleCreateTokens() ([]*StopScheduleCreateToken, error) {
+
+	paths, err := c.MetakvList(StopScheduleCreateTokenPath)
+	if err != nil {
+		return nil, err
+	}
+
+	var result []*StopScheduleCreateToken
+
+	if len(paths) != 0 {
+		result = make([]*StopScheduleCreateToken, 0, len(paths))
+		for _, path := range paths {
+			token := &StopScheduleCreateToken{}
+			exist, err := c.MetakvGet(path, token)
+			if err != nil {
+				return nil, err
+			}
+
+			if exist {
+				result = append(result, token)
+			}
+		}
+	}
+
+	return result, nil
+}
+
+func UnmarshallStopScheduleCreateToken(data []byte) (*StopScheduleCreateToken, error) {
+
+	r := new(StopScheduleCreateToken)
+	if err := json.Unmarshal(data, r); err != nil {
+		return nil, err
+	}
+
+	return r, nil
+}
+
+func StopScheduleCreateTokenExist(defnId c.IndexDefnId) (bool, error) {
+
+	token := &StopScheduleCreateToken{}
+	id := fmt.Sprintf("%v", defnId)
+	return c.MetakvGet(ScheduleCreateTokenPath+id, token)
+}
+
+func MarshallStopScheduleCreateTokenList(tokens *StopScheduleCreateTokenList) ([]byte, error) {
+	buf, err := json.Marshal(&tokens)
+	if err != nil {
+		return nil, err
+	}
+
+	return buf, nil
+}
+
 //////////////////////////////////////////////////////////////
 // CommandListener
 //////////////////////////////////////////////////////////////
 
 func NewCommandListener(donech chan bool, doCreate bool, doBuild bool,
-	doDelete bool, doDropInst bool, doSchedule bool) *CommandListener {
+	doDelete bool, doDropInst bool, doSchedule bool, doStopSched bool) *CommandListener {
 
 	return &CommandListener{
-		doCreate:       doCreate,
-		doBuild:        doBuild,
-		doDelete:       doDelete,
-		doDropInst:     doDropInst,
-		doSchedule:     doSchedule,
-		createTokens:   make(map[string]*CreateCommandToken),
-		buildTokens:    make(map[string]*BuildCommandToken),
-		deleteTokens:   make(map[string]*DeleteCommandToken),
-		dropInstTokens: make(map[string]*DropInstanceCommandToken),
-		scheduleTokens: make(map[string]*ScheduleCreateToken),
-		cancelCh:       make(chan struct{}),
-		donech:         donech,
+		doCreate:        doCreate,
+		doBuild:         doBuild,
+		doDelete:        doDelete,
+		doDropInst:      doDropInst,
+		doSchedule:      doSchedule,
+		doStopSched:     doStopSched,
+		createTokens:    make(map[string]*CreateCommandToken),
+		buildTokens:     make(map[string]*BuildCommandToken),
+		deleteTokens:    make(map[string]*DeleteCommandToken),
+		dropInstTokens:  make(map[string]*DropInstanceCommandToken),
+		scheduleTokens:  make(map[string]*ScheduleCreateToken),
+		stopSchedTokens: make(map[string]*StopScheduleCreateToken),
+		schedTokensDel:  make(map[string]bool),
+		cancelCh:        make(chan struct{}),
+		donech:          donech,
 	}
 }
 
@@ -1103,6 +1184,44 @@ func (m *CommandListener) AddNewScheduleCreateToken(path string, token *Schedule
 	m.scheduleTokens[path] = token
 }
 
+func (m *CommandListener) GetNewStopScheduleCreateTokens() map[string]*StopScheduleCreateToken {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
+	if len(m.scheduleTokens) != 0 {
+		result := m.stopSchedTokens
+		m.stopSchedTokens = make(map[string]*StopScheduleCreateToken)
+		return result
+	}
+
+	return nil
+}
+
+func (m *CommandListener) AddNewStopScheduleCreateToken(path string, token *StopScheduleCreateToken) {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	m.stopSchedTokens[path] = token
+}
+
+func (m *CommandListener) GetDeletesdScheduleCreateTokenPaths() map[string]bool {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
+	if len(m.schedTokensDel) != 0 {
+		result := m.schedTokensDel
+		m.schedTokensDel = make(map[string]bool)
+		return result
+	}
+
+	return nil
+}
+
+func (m *CommandListener) AddDeletedScheduleCreateToken(path string) {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	m.schedTokensDel[path] = true
+}
+
 func (m *CommandListener) ListenTokens() {
 
 	metaKVCallback := func(path string, value []byte, rev interface{}) error {
@@ -1120,6 +1239,9 @@ func (m *CommandListener) ListenTokens() {
 
 		} else if strings.Contains(path, ScheduleCreateTokenPath) {
 			m.handleNewScheduleCreateToken(path, value)
+
+		} else if strings.Contains(path, StopScheduleCreateTokenPath) {
+			m.handleNewStopScheduleCreateToken(path, value)
 		}
 
 		return nil
@@ -1240,6 +1362,7 @@ func (m *CommandListener) handleNewScheduleCreateToken(path string, value []byte
 	}
 
 	if value == nil {
+		m.AddDeletedScheduleCreateToken(path)
 		delete(m.scheduleTokens, path)
 		return
 	}
@@ -1251,4 +1374,24 @@ func (m *CommandListener) handleNewScheduleCreateToken(path string, value []byte
 	}
 
 	m.AddNewScheduleCreateToken(path, token)
+}
+
+func (m *CommandListener) handleNewStopScheduleCreateToken(path string, value []byte) {
+
+	if !m.doStopSched {
+		return
+	}
+
+	if value == nil {
+		delete(m.stopSchedTokens, path)
+		return
+	}
+
+	token, err := UnmarshallStopScheduleCreateToken(value)
+	if err != nil {
+		logging.Warnf("CommandListener: Failed to process stop schedule create token.  Skp %v.  Internal Error = %v.", path, err)
+		return
+	}
+
+	m.AddNewStopScheduleCreateToken(path, token)
 }

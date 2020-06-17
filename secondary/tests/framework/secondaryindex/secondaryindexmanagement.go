@@ -52,7 +52,7 @@ func CreateClient(server, serviceAddr string) (*qc.GsiClient, error) {
 }
 
 func GetDefnID(client *qc.GsiClient, bucket, indexName string) (defnID uint64, ok bool) {
-	indexes, _, _, err := client.Refresh()
+	indexes, _, _, _, err := client.Refresh()
 	tc.HandleError(err, "Error while listing the indexes")
 	for _, index := range indexes {
 		defn := index.Definition
@@ -284,7 +284,7 @@ func IndexExists(indexName, bucketName, server string) (bool, error) {
 		return false, e
 	}
 
-	indexes, _, _, err := client.Refresh()
+	indexes, _, _, _, err := client.Refresh()
 	tc.HandleError(err, "Error while listing the secondary indexes")
 	for _, index := range indexes {
 		defn := index.Definition
@@ -298,7 +298,7 @@ func IndexExists(indexName, bucketName, server string) (bool, error) {
 
 func IndexExistsWithClient(indexName, bucketName, scopeName, collectionName,
 	server string, client *qc.GsiClient) bool {
-	indexes, _, _, err := client.Refresh()
+	indexes, _, _, _, err := client.Refresh()
 	tc.HandleError(err, "Error while listing the secondary indexes")
 	for _, index := range indexes {
 		defn := index.Definition
@@ -312,7 +312,7 @@ func IndexExistsWithClient(indexName, bucketName, scopeName, collectionName,
 }
 
 func ListAllSecondaryIndexes(header string, client *qc.GsiClient) error {
-	indexes, _, _, err := client.Refresh()
+	indexes, _, _, _, err := client.Refresh()
 	if err != nil {
 		log.Printf("ListAllSecondaryIndexes() %v: Error from client.Refresh(): %v ", header, err)
 		return err
@@ -338,7 +338,7 @@ func DropSecondaryIndex2(indexName, bucketName, scopeName, collectionName, serve
 		return e
 	}
 
-	indexes, _, _, err := client.Refresh()
+	indexes, _, _, _, err := client.Refresh()
 	tc.HandleError(err, "Error while listing the secondary indexes")
 	for _, index := range indexes {
 		defn := index.Definition
@@ -360,7 +360,7 @@ func DropSecondaryIndex2(indexName, bucketName, scopeName, collectionName, serve
 
 func DropSecondaryIndexWithClient(indexName, bucketName, server string, client *qc.GsiClient) error {
 	log.Printf("Dropping the secondary index %v", indexName)
-	indexes, _, _, err := client.Refresh()
+	indexes, _, _, _, err := client.Refresh()
 	tc.HandleError(err, "Error while listing the secondary indexes")
 	for _, index := range indexes {
 		defn := index.Definition
@@ -386,7 +386,7 @@ func DropAllSecondaryIndexes(server string) error {
 		return e
 	}
 
-	indexes, _, _, err := client.Refresh()
+	indexes, _, _, _, err := client.Refresh()
 	tc.HandleError(err, "Error while listing the secondary indexes")
 	for _, index := range indexes {
 		defn := index.Definition
@@ -424,7 +424,7 @@ func BuildAllSecondaryIndexes(server string, indexActiveTimeoutSeconds int64) er
 		return e
 	}
 
-	indexes, _, _, err := client.Refresh()
+	indexes, _, _, _, err := client.Refresh()
 	tc.HandleError(err, "Error while listing the secondary indexes")
 	for i, index := range indexes {
 		defn := index.Definition
