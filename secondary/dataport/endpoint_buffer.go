@@ -35,7 +35,7 @@ func (b *endpointBuffers) addKeyVersions(
 				vbuuid, opaque2, nMuts)
 		}
 		b.vbs[uuid].AddKeyVersions(kv)
-		// update statistics
+		// update statistics.
 		for _, cmd := range kv.Commands {
 			switch cmd {
 			case c.Upsert:
@@ -52,7 +52,22 @@ func (b *endpointBuffers) addKeyVersions(
 				endpoint.stats.endCount.Add(1)
 			case c.Snapshot:
 				endpoint.stats.snapCount.Add(1)
-				// TODO (Collections): Add collection event specific stats
+			case c.CollectionCreate:
+				endpoint.stats.collectionCreate.Add(1)
+			case c.CollectionDrop:
+				endpoint.stats.collectionCreate.Add(1)
+			case c.CollectionFlush:
+				endpoint.stats.collectionFlush.Add(1)
+			case c.ScopeCreate:
+				endpoint.stats.scopeCreate.Add(1)
+			case c.ScopeDrop:
+				endpoint.stats.scopeDrop.Add(1)
+			case c.CollectionChanged:
+				endpoint.stats.collectionChanged.Add(1)
+			case c.UpdateSeqno:
+				endpoint.stats.updateSeqno.Add(1)
+			case c.SeqnoAdvanced:
+				endpoint.stats.seqnoAdvanced.Add(1)
 			}
 		}
 		endpoint.stats.mutCount.Add(1)
