@@ -1124,6 +1124,20 @@ func (m *DDLServiceMgr) handleListMetadataTokens(w http.ResponseWriter, r *http.
 			return
 		}
 
+		scheduleTokens, err3 := mc.ListAllScheduleCreateTokens()
+		if err3 != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(err3.Error() + "\n"))
+			return
+		}
+
+		stopScheduleTokens, err4 := mc.ListAllStopScheduleCreateTokens()
+		if err4 != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(err4.Error() + "\n"))
+			return
+		}
+
 		header := w.Header()
 		header["Content-Type"] = []string{"application/json"}
 
@@ -1169,6 +1183,44 @@ func (m *DDLServiceMgr) handleListMetadataTokens(w http.ResponseWriter, r *http.
 			}
 
 			w.Write([]byte(entry + " - "))
+			w.Write(buf)
+			w.Write([]byte("\n"))
+		}
+
+		for _, token := range scheduleTokens {
+			if token == nil {
+				continue
+			}
+
+			path := mc.GetScheduleCreateTokenPathFromDefnId(token.Definition.DefnId)
+
+			buf, err := json.Marshal(token)
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				w.Write([]byte(err.Error() + "\n"))
+				return
+			}
+
+			w.Write([]byte(path + " - "))
+			w.Write(buf)
+			w.Write([]byte("\n"))
+		}
+
+		for _, token := range stopScheduleTokens {
+			if token == nil {
+				continue
+			}
+
+			path := mc.GetStopScheduleCreateTokenPathFromDefnId(token.DefnId)
+
+			buf, err := json.Marshal(token)
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				w.Write([]byte(err.Error() + "\n"))
+				return
+			}
+
+			w.Write([]byte(path + " - "))
 			w.Write(buf)
 			w.Write([]byte("\n"))
 		}

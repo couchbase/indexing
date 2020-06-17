@@ -134,6 +134,7 @@ type ScheduleCreateTokenList struct {
 type StopScheduleCreateToken struct {
 	Ctime  int64
 	Reason string
+	DefnId c.IndexDefnId
 }
 
 type StopScheduleCreateTokenList struct {
@@ -1010,11 +1011,16 @@ func GetPrefixFromScheduleCreateTokenPath(path string) (string, error) {
 	}
 }
 
+func GetScheduleCreateTokenPathFromDefnId(defnId c.IndexDefnId) string {
+	return ScheduleCreateTokenPath + fmt.Sprintf("%v", defnId)
+}
+
 func PostStopScheduleCreateToken(defnId c.IndexDefnId, reason string, ctime int64) error {
 
 	token := &StopScheduleCreateToken{
 		Reason: reason,
 		Ctime:  ctime,
+		DefnId: defnId,
 	}
 
 	path := fmt.Sprintf("%v", defnId)
@@ -1072,6 +1078,10 @@ func MarshallStopScheduleCreateTokenList(tokens *StopScheduleCreateTokenList) ([
 	}
 
 	return buf, nil
+}
+
+func GetStopScheduleCreateTokenPathFromDefnId(defnId c.IndexDefnId) string {
+	return ScheduleCreateTokenPath + fmt.Sprintf("%v", defnId)
 }
 
 //////////////////////////////////////////////////////////////
