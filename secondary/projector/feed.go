@@ -766,24 +766,24 @@ func (feed *Feed) handleCommand(msg []interface{}) (status string) {
 		feedStats.Init()
 		// For this feed, iterate through all buckets
 		for bucket, kvdata := range feed.kvdata {
-			bucketStats := &BucketStats{}
-			bucketStats.topic = feed.topic
-			bucketStats.bucket = bucket
-			bucketStats.opaque = kvdata.opaque
+			keyspaceIdStats := &KeyspaceIdStats{}
+			keyspaceIdStats.topic = feed.topic
+			keyspaceIdStats.keyspaceId = kvdata.keyspaceId
+			keyspaceIdStats.opaque = kvdata.opaque
 
 			if feeder := feed.feeders[bucket]; feeder != nil {
-				bucketStats.dcpStats = feeder.GetStats()
+				keyspaceIdStats.dcpStats = feeder.GetStats()
 			}
 
 			// For this bucket, get kvstats
-			bucketStats.kvstats = kvdata.GetKVStats()
+			keyspaceIdStats.kvstats = kvdata.GetKVStats()
 
 			// For this bucket, get workerStats
-			bucketStats.wrkrStats = kvdata.GetWorkerStats()
+			keyspaceIdStats.wrkrStats = kvdata.GetWorkerStats()
 
 			// For this bucket, get evaluator stats
 			engines := feed.engines[bucket]
-			bucketStats.evaluatorStats = make(map[string]interface{})
+			keyspaceIdStats.evaluatorStats = make(map[string]interface{})
 			for _, engine := range engines {
 				indexname := engine.GetIndexName()
 				bucketname := engine.Bucket()
@@ -795,11 +795,11 @@ func (feed *Feed) handleCommand(msg []interface{}) (status string) {
 				} else {
 					key = fmt.Sprintf("%v:%v:%v:%v", bucketname, scopename, collectionname, indexname)
 				}
-				bucketStats.evaluatorStats[key] = engine.GetEvaluatorStats()
+				keyspaceIdStats.evaluatorStats[key] = engine.GetEvaluatorStats()
 			}
 
 			// Update feed stats for this bucket
-			feedStats.bucketStats[bucket] = bucketStats
+			feedStats.keyspaceIdStats[bucket] = keyspaceIdStats
 		}
 
 		for _, value := range feed.endpoints {
