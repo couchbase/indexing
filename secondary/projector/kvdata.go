@@ -39,14 +39,15 @@ import (
 // KVData captures an instance of data-path for single kv-node
 // from upstream connection.
 type KVData struct {
-	feed       *Feed
-	topic      string // immutable
-	bucket     string // immutable
-	keyspaceId string // immutable
-	opaque     uint16
-	workers    []*VbucketWorker
-	config     c.Config
-	async      bool
+	feed         *Feed
+	topic        string // immutable
+	bucket       string // immutable
+	keyspaceId   string // immutable
+	collectionId string // immutable. Takes empty value for MAINT_STREAM
+	opaque       uint16
+	workers      []*VbucketWorker
+	config       c.Config
+	async        bool
 
 	// evaluators and subscribers
 	engines   map[uint64]*Engine
@@ -171,7 +172,7 @@ func (stats *KvdataStats) String() (string, string) {
 
 	cluster := stats.kvdata.config["clusterAddr"].String()
 	// Get seqnos only for the vbuckets owned by the KV on this node
-	seqnos, err := getKVTs(stats.kvdata.bucket, cluster, stats.kvdata.kvaddr)
+	seqnos, err := getKVTs(stats.kvdata.bucket, cluster, stats.kvdata.kvaddr, stats.kvdata.collectionId)
 
 	// numDocsPending is logged only when there is no error in retrieving the bucket seqnos
 	if err == nil {
@@ -195,6 +196,7 @@ func (stats *KvdataStats) String() (string, string) {
 func NewKVData(
 	feed *Feed,
 	bucket, keyspaceId string,
+	collectionId string,
 	opaque uint16,
 	reqTs *protobuf.TsVbuuid,
 	engines map[uint64]*Engine,
@@ -206,14 +208,15 @@ func NewKVData(
 	opaque2 uint64) (*KVData, error) {
 
 	kvdata := &KVData{
-		feed:       feed,
-		opaque:     opaque,
-		topic:      feed.topic,
-		bucket:     bucket,
-		keyspaceId: keyspaceId,
-		config:     config,
-		engines:    make(map[uint64]*Engine),
-		endpoints:  make(map[string]c.RouterEndpoint),
+		feed:         feed,
+		opaque:       opaque,
+		topic:        feed.topic,
+		bucket:       bucket,
+		keyspaceId:   keyspaceId,
+		collectionId: collectionId,
+		config:       config,
+		engines:      make(map[uint64]*Engine),
+		endpoints:    make(map[string]c.RouterEndpoint),
 		// 16 is enough, there can't be more than that many out-standing
 		// control calls on this feed.
 		sbch:    make(chan []interface{}, 16),
@@ -737,11 +740,13 @@ func (kvdata *KVData) newStats() c.Statistics {
 // If there is any connection issue with memcached, the go-routine spawned
 // to get the bucket seqnos will eventually return as the connection to
 // memcached times-out
-func getKVTs(bucket, cluster, kvaddr string) ([]uint64, error) {
+func getKVTs(bucket, cluster, kvaddr, cid string) ([]uint64, error) {
 	respch := make(chan []interface{})
 
 	go func() {
-		seqnos, err := BucketSeqnosLocal(cluster, "default", bucket, kvaddr)
+		// Retrieves bucketSeqnos if cid is "". Otherwise, retrieves
+		// corresponding collection seqnos
+		seqnos, err := SeqnosLocal(cluster, "default", bucket, cid, kvaddr)
 		respch <- []interface{}{seqnos, err}
 	}()
 
