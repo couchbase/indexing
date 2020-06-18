@@ -115,6 +115,16 @@ func (engine *Engine) Bucket() string {
 	return engine.evaluator.Bucket()
 }
 
+// Get name of the scope
+func (engine *Engine) Scope() string {
+	return engine.evaluator.Scope()
+}
+
+// Get name of the collection
+func (engine *Engine) Collection() string {
+	return engine.evaluator.Collection()
+}
+
 func (engine *Engine) GetCollectionID() string {
 	return engine.evaluator.GetCollectionID()
 }

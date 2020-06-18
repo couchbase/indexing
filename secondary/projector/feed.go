@@ -787,7 +787,14 @@ func (feed *Feed) handleCommand(msg []interface{}) (status string) {
 			for _, engine := range engines {
 				indexname := engine.GetIndexName()
 				bucketname := engine.Bucket()
-				key := fmt.Sprintf("%v:%v", bucketname, indexname)
+				scopename := engine.Scope()
+				collectionname := engine.Collection()
+				var key string
+				if scopename == "" && collectionname == "" {
+					key = fmt.Sprintf("%v:%v", bucketname, indexname)
+				} else {
+					key = fmt.Sprintf("%v:%v:%v:%v", bucketname, scopename, collectionname, indexname)
+				}
 				bucketStats.evaluatorStats[key] = engine.GetEvaluatorStats()
 			}
 
