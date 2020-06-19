@@ -2038,7 +2038,7 @@ func newSchedTokenMonitor() *schedTokenMonitor {
 func (s *schedTokenMonitor) makeIndexMetadata(token *mc.ScheduleCreateToken) *mclient.IndexMetadata {
 	return &mclient.IndexMetadata{
 		Definition: &token.Definition,
-		State:      common.INDEX_STATE_NIL,
+		State:      common.INDEX_STATE_SCHEDULED,
 		Error:      "",
 		Scheduled:  true,
 	}

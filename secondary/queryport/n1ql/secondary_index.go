@@ -71,14 +71,14 @@ var ErrorScheduledCreateFailed = fmt.Errorf("This index was scheduled for backgr
 // There is a need for new datastore state to represent index scheduled for
 // background creation.
 var gsi2N1QLState = map[c.IndexState]datastore.IndexState{
-	c.INDEX_STATE_CREATED: datastore.PENDING, // might also be DEFERRED
-	c.INDEX_STATE_READY:   datastore.PENDING, // might also be DEFERRED
-	c.INDEX_STATE_INITIAL: datastore.BUILDING,
-	c.INDEX_STATE_CATCHUP: datastore.BUILDING,
-	c.INDEX_STATE_ACTIVE:  datastore.ONLINE,
-	c.INDEX_STATE_DELETED: datastore.OFFLINE,
-	c.INDEX_STATE_ERROR:   datastore.OFFLINE,
-	c.INDEX_STATE_NIL:     datastore.OFFLINE,
+	c.INDEX_STATE_CREATED:   datastore.PENDING, // might also be DEFERRED
+	c.INDEX_STATE_READY:     datastore.PENDING, // might also be DEFERRED
+	c.INDEX_STATE_INITIAL:   datastore.BUILDING,
+	c.INDEX_STATE_CATCHUP:   datastore.BUILDING,
+	c.INDEX_STATE_ACTIVE:    datastore.ONLINE,
+	c.INDEX_STATE_DELETED:   datastore.OFFLINE,
+	c.INDEX_STATE_ERROR:     datastore.OFFLINE,
+	c.INDEX_STATE_SCHEDULED: datastore.SCHEDULED,
 }
 
 var n1ql2GsiConsistency = map[datastore.ScanConsistency]c.Consistency{
