@@ -5815,9 +5815,9 @@ func (idx *indexer) createRealInstIdMap() common.IndexInstMap {
 
 func (idx *indexer) cleanupOrphanIndexes() {
 	storageDir := idx.config["storage_dir"].String()
-	pattern := GetIndexPathPattern()
 
-	flist, err := filepath.Glob(filepath.Join(storageDir, pattern))
+	mode := common.GetStorageMode()
+	flist, err := ListSlices(mode, storageDir)
 	if err != nil {
 		logging.Warnf("Error %v during cleaning up the orphan indexes.", err)
 		return
@@ -5865,7 +5865,7 @@ func (idx *indexer) cleanupOrphanIndexes() {
 
 	go func() {
 		for _, f := range orphanIndexList {
-			if err := os.RemoveAll(f); err != nil {
+			if err := DestroySlice(mode, f); err != nil {
 				logging.Warnf("Error %v while removing orphan index data for %v.", err, f)
 			} else {
 				logging.Infof("Cleaned up the orphan index slice %v.", f)
@@ -6637,7 +6637,7 @@ func (idx *indexer) upgradeSingleIndex(inst *common.IndexInst, storageMode commo
 	partnDefnList := inst.Pc.GetAllPartitions()
 	for _, partnDefn := range partnDefnList {
 		path := filepath.Join(storage_dir, IndexPath(inst, partnDefn.GetPartitionId(), SliceId(0)))
-		if err := os.RemoveAll(path); err != nil {
+		if err := DestroySlice(common.IndexTypeToStorageMode(inst.Defn.Using), path); err != nil {
 			common.CrashOnError(err)
 		}
 	}
@@ -6775,7 +6775,7 @@ func (idx *indexer) forceCleanupPartitionData(inst *common.IndexInst, partitionI
 
 	storage_dir := idx.config["storage_dir"].String()
 	path := filepath.Join(storage_dir, IndexPath(inst, partitionId, sliceId))
-	return os.RemoveAll(path)
+	return DestroySlice(common.IndexTypeToStorageMode(inst.Defn.Using), path)
 }
 
 //On warmup, if an index is found in MAINT_STREAM and state INITIAL
@@ -7475,6 +7475,34 @@ func NewSlice(id SliceId, indInst *common.IndexInst, partnInst *PartitionInst,
 	}
 
 	return
+}
+
+func DestroySlice(mode common.StorageMode, path string) error {
+
+	switch mode {
+	case common.MOI, common.FORESTDB, common.NOT_SET:
+		return os.RemoveAll(path)
+	case common.PLASMA:
+		return DestroyPlasmaSlice(path)
+	}
+
+	return fmt.Errorf("unable to delete instance %v : unrecognized storage type %v", path, mode)
+}
+
+func ListSlices(mode common.StorageMode, storageDir string) ([]string, error) {
+
+	listFiles := func() ([]string, error) {
+		pattern := GetIndexPathPattern()
+		return filepath.Glob(filepath.Join(storageDir, pattern))
+	}
+
+	switch mode {
+	case common.MOI, common.FORESTDB, common.NOT_SET:
+		return listFiles()
+	case common.PLASMA:
+		return ListPlasmaSlices()
+	}
+	return nil, fmt.Errorf("unable to list instance : unrecognized storage type %v", mode)
 }
 
 func (idx *indexer) setProfilerOptions(config common.Config) {

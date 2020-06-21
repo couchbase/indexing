@@ -26,3 +26,13 @@ func NewPlasmaSlice(storage_dir string, path string, sliceId SliceId, idxDefn co
 func deleteFreeWriters(instId common.IndexInstId) {
 	// do nothing
 }
+
+func DestroyPlasmaSlice(path string) error {
+	// do nothing
+	return nil
+}
+
+func ListPlasmaSlices() ([]string, error) {
+	// do nothing
+	return nil, nil
+}

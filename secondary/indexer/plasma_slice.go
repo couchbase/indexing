@@ -243,6 +243,14 @@ func newPlasmaSlice(storage_dir string, path string, sliceId SliceId, idxDefn co
 	return slice, nil
 }
 
+func destroyPlasmaSlice(path string) error {
+	return plasma.DestroyInstance(path)
+}
+
+func listPlasmaSlices() ([]string, error) {
+	return plasma.ListInstancePaths(), nil
+}
+
 func (slice *plasmaSlice) initStores() error {
 	var err error
 	cfg := plasma.DefaultConfig()
