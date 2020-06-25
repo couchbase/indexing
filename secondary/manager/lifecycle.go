@@ -382,7 +382,7 @@ func (m *LifecycleMgr) dispatchRequest(request *requestHolder, factory *message.
 	case client.OPCODE_CLEANUP_INDEX:
 		err = m.handleCleanupIndexMetadata(content)
 	case client.OPCODE_CLEANUP_DEFER_INDEX:
-		err = m.handleCleanupDeferIndexFromBucket(key)
+		err = m.handleCleanupDeferIndexFromKeyspace(key)
 	case client.OPCODE_CREATE_INDEX_REBAL:
 		err = m.handleCreateIndexScheduledBuild(key, content, common.NewRebalanceRequestContext())
 	case client.OPCODE_BUILD_INDEX_REBAL:
@@ -2201,9 +2201,11 @@ func (m *LifecycleMgr) deleteCreateTokenForCollection(bucket, scope, collection 
 //-----------------------------------------------------------
 
 //
-// Cleanup any defer index from invalid bucket.
+// Cleanup any defer index from invalid keyspace.
 //
-func (m *LifecycleMgr) handleCleanupDeferIndexFromBucket(bucket string) error {
+func (m *LifecycleMgr) handleCleanupDeferIndexFromKeyspace(keyspace string) error {
+
+	bucket, scope, collection := SplitKeyspaceId(keyspace)
 
 	// Get bucket UUID.  if err==nil, bucket uuid is BUCKET_UUID_NIL for non-existent bucket.
 	currentUUID, err := m.getBucketUUID(bucket)
@@ -2212,50 +2214,54 @@ func (m *LifecycleMgr) handleCleanupDeferIndexFromBucket(bucket string) error {
 		return nil
 	}
 
-	topologies, err := m.repo.GetTopologiesByBucket(bucket)
-	if err == nil && len(topologies) > 0 {
-		for _, topology := range topologies {
-			hasValidActiveIndex := false
-			for _, defnRef := range topology.Definitions {
-				// Check for index with active stream.  If there is any index with active stream, all
-				// index in the bucket will be deleted when the stream is closed due to bucket delete.
+	collectionID, err := m.getCollectionID(bucket, scope, collection)
+	if err != nil {
+		// If err != nil, then cannot connect to fetch collection info.  Do not attempt to delete index.
+		return nil
+	}
 
-				for _, instRef := range defnRef.Instances {
-					if instRef.State != uint32(common.INDEX_STATE_DELETED) &&
-						common.StreamId(instRef.StreamId) != common.NIL_STREAM {
-						hasValidActiveIndex = true
-						break
-					}
+	topology, err := m.repo.GetTopologyByCollection(bucket, scope, collection)
+	if err == nil && topology != nil {
+		hasValidActiveIndex := false
+		for _, defnRef := range topology.Definitions {
+			// Check for index with active stream.  If there is any index with active stream, all
+			// index in the bucket will be deleted when the stream is closed due to bucket delete.
+
+			for _, instRef := range defnRef.Instances {
+				if instRef.State != uint32(common.INDEX_STATE_DELETED) &&
+					common.StreamId(instRef.StreamId) != common.NIL_STREAM {
+					hasValidActiveIndex = true
+					break
 				}
 			}
+		}
 
-			if !hasValidActiveIndex {
-				deleteToken := false
+		if !hasValidActiveIndex {
+			deleteToken := false
 
-				for _, defnRef := range topology.Definitions {
-					if defn, err := m.repo.GetIndexDefnById(common.IndexDefnId(defnRef.DefnId)); err == nil && defn != nil {
-						if defn.BucketUUID != currentUUID {
-							for _, instRef := range defnRef.Instances {
-								if instRef.State != uint32(common.INDEX_STATE_DELETED) &&
-									common.StreamId(instRef.StreamId) == common.NIL_STREAM {
-									deleteToken = true
-									if err := m.DeleteIndex(common.IndexDefnId(defn.DefnId), true, false, common.NewUserRequestContext()); err != nil {
-										logging.Errorf("LifecycleMgr.handleCleanupDeferIndexFromBucket: Encountered error %v", err)
-										continue
-									}
-									mc.DeleteAllCreateCommandToken(common.IndexDefnId(defn.DefnId))
-									break
+			for _, defnRef := range topology.Definitions {
+				if defn, err := m.repo.GetIndexDefnById(common.IndexDefnId(defnRef.DefnId)); err == nil && defn != nil {
+					if defn.BucketUUID != currentUUID || defn.CollectionId != collectionID {
+						for _, instRef := range defnRef.Instances {
+							if instRef.State != uint32(common.INDEX_STATE_DELETED) &&
+								common.StreamId(instRef.StreamId) == common.NIL_STREAM {
+								deleteToken = true
+								if err := m.DeleteIndex(common.IndexDefnId(defn.DefnId), true, false, common.NewUserRequestContext()); err != nil {
+									logging.Errorf("LifecycleMgr.handleCleanupDeferIndexFromKeyspace: Encountered error %v", err)
+									continue
 								}
+								mc.DeleteAllCreateCommandToken(common.IndexDefnId(defn.DefnId))
+								break
 							}
 						}
 					}
 				}
+			}
 
-				// VerifyBucket ensures that all index have the same bucket UUID.  So if one index has bucket UUID mismatch, then all
-				// can be deleted.
-				if deleteToken {
-					m.deleteCreateTokenForBucket(bucket)
-				}
+			// VerifyBucket ensures that all index have the same bucket UUID.  So if one index has bucket UUID mismatch, then all
+			// can be deleted.
+			if deleteToken {
+				m.deleteCreateTokenForCollection(bucket, scope, collection)
 			}
 		}
 	}
@@ -3438,6 +3444,8 @@ RETRY:
 func (m *LifecycleMgr) getCollectionID(bucket, scope, collection string) (string, error) {
 	count := 0
 RETRY:
+	//TODO Collections - change to use cinfo.GetCollectionID once streaming
+	//rest endpoint is available
 	colldId, err := common.GetCollectionID(m.clusterURL, bucket, scope, collection)
 	if err != nil && count < 5 {
 		count++
@@ -4351,4 +4359,19 @@ func (m *updator) checkServiceMap(update bool) {
 			return
 		}
 	}
+}
+
+func SplitKeyspaceId(keyspaceId string) (string, string, string) {
+
+	var ret []string
+	ret = strings.Split(keyspaceId, ":")
+
+	if len(ret) == 3 {
+		return ret[0], ret[1], ret[2]
+	} else if len(ret) == 1 {
+		return ret[0], "", ""
+	} else {
+		return "", "", ""
+	}
+
 }
