@@ -3572,6 +3572,8 @@ func (tk *timekeeper) handleStats(cmd Message) {
 			}
 		}
 
+		progressStatTime := time.Now().UnixNano()
+
 		tk.lock.Lock()
 		defer tk.lock.Unlock()
 
@@ -3646,7 +3648,7 @@ func (tk *timekeeper) handleStats(cmd Message) {
 				idxStats.buildProgress.Set(int64(v))
 				idxStats.completionProgress.Set(int64(math.Float64bits(v)))
 				idxStats.lastRollbackTime.Set(tk.ss.keyspaceIdRollbackTime[keyspaceId])
-				idxStats.progressStatTime.Set(time.Now().UnixNano())
+				idxStats.progressStatTime.Set(progressStatTime)
 			}
 		}
 
