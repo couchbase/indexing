@@ -309,6 +309,8 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	}
 	idx.clusterInfoClient.SetUserAgent("indexer")
 
+	go common.WatchClusterVersionChanges(idx.config["clusterAddr"].String())
+
 	//Start Mutation Manager
 	idx.mutMgr, res = NewMutationManager(idx.mutMgrCmdCh, idx.wrkrRecvCh, idx.config)
 	if res.GetMsgType() != MSG_SUCCESS {
