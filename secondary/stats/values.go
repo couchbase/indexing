@@ -11,7 +11,7 @@ const AllStatsFilter = 0x1
 const PlannerFilter = 0x2
 const IndexStatusFilter = 0x4
 const RebalancerFilter = 0x8
-const ExternalStatFilter = 0xF
+const GSIClientFilter = 0x10
 
 // TODO: ns_server to provide a list of stats that will be
 // categorised as ExternalStats

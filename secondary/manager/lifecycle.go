@@ -2278,19 +2278,7 @@ func (m *LifecycleMgr) handleNotifyStats(buf []byte) {
 	if len(buf) > 0 {
 		stats := make(common.Statistics)
 		if err := json.Unmarshal(buf, &stats); err == nil {
-
-			filtered := make(common.Statistics)
-			for key, value := range stats {
-				if strings.Contains(key, "num_docs_pending") ||
-					strings.Contains(key, "num_docs_queued") ||
-					strings.Contains(key, "last_rollback_time") ||
-					strings.Contains(key, "progress_stat_time") {
-
-					filtered[key] = value
-				}
-			}
-			m.stats.Set(&filtered)
-
+			m.stats.Set(&stats)
 		} else {
 			logging.Errorf("lifecycleMgr: fail to marshall index stats.  Error = %v", err)
 		}

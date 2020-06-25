@@ -435,6 +435,7 @@ func (s *IndexStats) Init() {
 	s.SetRebalancerFilters()
 	s.SetPlannerFilters()
 	s.SetIndexStatusFilters()
+	s.SetGSIClientFilters()
 	s.dispName = common.FormatIndexInstDisplayName(s.name, s.replicaId)
 }
 
@@ -450,6 +451,13 @@ func (s *IndexStats) SetIndexStatusFilters() {
 	s.buildProgress.AddFilter(stats.IndexStatusFilter)
 	s.completionProgress.AddFilter(stats.IndexStatusFilter)
 	s.lastScanTime.AddFilter(stats.IndexStatusFilter)
+}
+
+func (s *IndexStats) SetGSIClientFilters() {
+	s.numDocsPending.AddFilter(stats.GSIClientFilter)
+	s.numDocsQueued.AddFilter(stats.GSIClientFilter)
+	s.lastRollbackTime.AddFilter(stats.GSIClientFilter)
+	s.progressStatTime.AddFilter(stats.GSIClientFilter)
 }
 
 func (s *IndexStats) SetPlannerFilters() {
@@ -2047,7 +2055,7 @@ var statsFilterMap = map[string]uint64{
 	"planner":     stats.PlannerFilter,
 	"indexStatus": stats.IndexStatusFilter,
 	"rebalancer":  stats.RebalancerFilter,
-	"external":    stats.ExternalStatFilter,
+	"gsiClient":   stats.GSIClientFilter,
 }
 
 const ST_TYPE_INDEXER = "indexer"
