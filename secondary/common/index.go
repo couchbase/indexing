@@ -500,7 +500,8 @@ func (idx IndexInstMap) String() string {
 	for i, index := range idx {
 		str += fmt.Sprintf("\tInstanceId: %v ", i)
 		str += fmt.Sprintf("Name: %v ", index.Defn.Name)
-		str += fmt.Sprintf("Bucket: %v ", index.Defn.Bucket)
+		str += fmt.Sprintf("Keyspace: %v/%v/%v ", index.Defn.Bucket,
+			index.Defn.Scope, index.Defn.Collection)
 		str += fmt.Sprintf("State: %v ", index.State)
 		str += fmt.Sprintf("Stream: %v ", index.Stream)
 		str += fmt.Sprintf("RState: %v ", index.RState)
