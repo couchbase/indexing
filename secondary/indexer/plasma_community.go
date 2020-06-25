@@ -36,3 +36,8 @@ func ListPlasmaSlices() ([]string, error) {
 	// do nothing
 	return nil, nil
 }
+
+func BackupCorruptedPlasmaSlice(string, func(string) (string, error), func(string)) error {
+	// do nothing
+	return nil
+}

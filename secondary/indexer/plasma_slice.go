@@ -251,6 +251,10 @@ func listPlasmaSlices() ([]string, error) {
 	return plasma.ListInstancePaths(), nil
 }
 
+func backupCorruptedPlasmaSlice(prefix string, rename func(string) (string, error), clean func(string)) error {
+	return plasma.BackupCorruptedInstance(prefix, rename, clean)
+}
+
 func (slice *plasmaSlice) initStores() error {
 	var err error
 	cfg := plasma.DefaultConfig()

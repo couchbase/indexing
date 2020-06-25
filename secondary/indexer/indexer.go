@@ -6345,53 +6345,12 @@ func (idx *indexer) backupCorruptIndexDataFiles(indexInst *common.IndexInst,
 		return
 	}
 
-	indexPath := IndexPath(indexInst, partnId, sliceId)
-
-	// delete old backups if any
-	deleteOldBackups := func() error {
-		files, err := ioutil.ReadDir(corruptDataDir)
-		if err != nil {
-			logging.Errorf("Indexer::backupCorruptIndexDataFiles %v %v error %v while taking backup:ReadDir %v",
-				indexInst.InstId, partnId, err, corruptDataDir)
-			return err
-		}
-
-		for _, f := range files {
-			if strings.HasSuffix(f.Name(), indexPath) {
-				fpath := filepath.Join(corruptDataDir, f.Name())
-				logging.Infof("Indexer::backupCorruptIndexDataFiles %v %v deleting path %v",
-					indexInst.InstId, partnId, fpath)
-				if err = os.RemoveAll(fpath); err != nil {
-					logging.Errorf("Indexer::backupCorruptIndexDataFiles %v %v error %v while removing old backup",
-						indexInst.InstId, partnId, err, corruptDataDir)
-					return err
-				}
-			}
-		}
-		return nil
-	}
-
-	if err := deleteOldBackups(); err != nil {
+	err := MoveSlice(common.IndexTypeToStorageMode(indexInst.Defn.Using), indexInst, partnId, sliceId, storageDir, corruptDataDir)
+	if err != nil {
 		needsDataCleanup = true
 		return
 	}
 
-	srcPath := filepath.Join(storageDir, indexPath)
-	t := time.Now()
-	strTime := fmt.Sprintf("%d-%02d-%02dT%02d-%02d-%02d-%03d", t.Year(), t.Month(),
-		t.Day(), t.Hour(), t.Minute(), t.Second(), t.Nanosecond()/1000/1000)
-	destIndexPath := strTime + "_" + indexPath
-	destPath := filepath.Join(corruptDataDir, destIndexPath)
-
-	if err := os.Rename(srcPath, destPath); err != nil {
-		logging.Errorf("Indexer::backupCorruptIndexDataFiles %v %v error %v while taking backup:Rename(%v, %v)",
-			indexInst.InstId, partnId, err, srcPath, destPath)
-		needsDataCleanup = true
-		return
-	}
-
-	logging.Infof("Indexer::backupCorruptIndexDataFiles %v %v backup is stroed at %v",
-		indexInst.InstId, partnId, destPath)
 	needsDataCleanup = false
 	return
 }
@@ -7503,6 +7462,135 @@ func ListSlices(mode common.StorageMode, storageDir string) ([]string, error) {
 		return ListPlasmaSlices()
 	}
 	return nil, fmt.Errorf("unable to list instance : unrecognized storage type %v", mode)
+}
+
+func MoveSlice(mode common.StorageMode, indexInst *common.IndexInst, partnId common.PartitionId, sliceId SliceId, sourceDir string, targetDir string) error {
+
+	// Given any path, rename() will add a timestamp to the first sub-directory
+	// after sourceDir.  The renamed sub-directory will be added to the targetDir
+	// to form a full path (as the backup dir).  This function expects that the
+	// first sub-directory is distinctive enough to differentiate among different
+	// index files. This function call needs to be stable since it can be called
+	// multiple times for the same path during each bootstrap.  So it uses
+	// indexer uptime as timestamp.
+	rename := func(path string) (string, error) {
+
+		if !strings.HasPrefix(path, sourceDir) {
+			return "", fmt.Errorf("path (%v) does not contain source directory (%v)", path, sourceDir)
+		}
+
+		sourceDirLen := len(sourceDir)
+		if path[sourceDirLen] == filepath.Separator {
+			sourceDirLen++
+		}
+
+		if len(path) <= sourceDirLen {
+			return "", fmt.Errorf("path (%v) does not contain source directory (%v)", path, sourceDir)
+		}
+
+		indexPath := path[sourceDirLen:]
+
+		strTime := fmt.Sprintf("%d-%02d-%02dT%02d-%02d-%02d-%03d", uptime.Year(), uptime.Month(),
+			uptime.Day(), uptime.Hour(), uptime.Minute(), uptime.Second(), uptime.Nanosecond()/1000/1000)
+
+		destIndexPath := strTime + "_" + indexPath
+		return filepath.Join(targetDir, destIndexPath), nil
+	}
+
+	clean := func(srcPath string) {
+		deleteOldBackups(targetDir, sourceDir, srcPath)
+	}
+
+	switch mode {
+	case common.MOI, common.FORESTDB, common.NOT_SET:
+		return moveIndexFile(indexInst, partnId, sliceId, sourceDir, targetDir)
+	case common.PLASMA:
+		indexPath := IndexPath(indexInst, partnId, sliceId)
+		srcPath := filepath.Join(sourceDir, indexPath)
+		return BackupCorruptedPlasmaSlice(srcPath, rename, clean)
+	}
+	return fmt.Errorf("unable to move instance : unrecognized storage type %v", mode)
+}
+
+func moveIndexFile(indexInst *common.IndexInst, partnId common.PartitionId, sliceId SliceId, sourceDir string, targetDir string) error {
+	indexPath := IndexPath(indexInst, partnId, sliceId)
+	srcPath := filepath.Join(sourceDir, indexPath)
+
+	if err := deleteOldBackups(targetDir, sourceDir, srcPath); err != nil {
+		logging.Errorf("Indexer::moveIndexFile %v %v error %v while taking backup %v",
+			indexInst.InstId, partnId, err, targetDir)
+		return err
+	}
+
+	t := time.Now()
+	strTime := fmt.Sprintf("%d-%02d-%02dT%02d-%02d-%02d-%03d", t.Year(), t.Month(),
+		t.Day(), t.Hour(), t.Minute(), t.Second(), t.Nanosecond()/1000/1000)
+	destIndexPath := strTime + "_" + indexPath
+	destPath := filepath.Join(targetDir, destIndexPath)
+
+	if err := os.Rename(srcPath, destPath); err != nil {
+		logging.Errorf("Indexer::moveIndexFile %v %v error %v while taking backup:Rename(%v, %v)",
+			indexInst.InstId, partnId, err, srcPath, destPath)
+		return err
+	}
+
+	logging.Infof("Indexer::moveIndexFile %v %v is moved to %v",
+		indexInst.InstId, partnId, destPath)
+
+	return nil
+}
+
+// This function deletes old backups if any.  This function works in a pair with rename function in MoveSlice().
+// 1) Given any path, it finds the first sub-directory after the sourceDir.
+// 2) It will then iterate through the sub-directories under targetDir.
+// 3) If the target sub-directory name matches the sub-directory in (1), then it creates a new path using the target sub-directory name.
+// 4) The new path in (4) is removed.
+func deleteOldBackups(targetDir string, sourceDir string, srcPath string) error {
+
+	strip := func(prefix string, paths []string) []string {
+		dirs := strings.Split(prefix, string(filepath.Separator))
+		return paths[len(dirs):]
+	}
+
+	join := func(prefix string, paths []string, startPos int) string {
+		if len(paths) <= startPos {
+			return filepath.Join(targetDir, prefix)
+		}
+
+		paths = paths[startPos:]
+		result := filepath.Join(targetDir, prefix)
+		for _, path := range paths {
+			result = filepath.Join(result, path)
+		}
+		return result
+	}
+
+	if strings.HasPrefix(srcPath, sourceDir) {
+		return fmt.Errorf("path (%v) does not contain source directory (%v)", srcPath, sourceDir)
+	}
+
+	indexPaths := strings.Split(srcPath, string(filepath.Separator))
+	indexPaths = strip(sourceDir, indexPaths)
+
+	files, err := ioutil.ReadDir(targetDir)
+	if err != nil {
+		logging.Errorf("Indexer::deleteOldBackups encounter error %v while taking backup:ReadDir %v",
+			err, targetDir)
+		return err
+	}
+
+	for _, f := range files {
+		if strings.HasSuffix(f.Name(), indexPaths[0]) {
+			fpath := join(f.Name(), indexPaths, 1)
+			logging.Infof("Indexer::deleteOldBackups deleting path %v", fpath)
+			if err = os.RemoveAll(fpath); err != nil {
+				logging.Errorf("Indexer::deleteOldBackups error %v while removing old backup %v",
+					err, fpath)
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (idx *indexer) setProfilerOptions(config common.Config) {

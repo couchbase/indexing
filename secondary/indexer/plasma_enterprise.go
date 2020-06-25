@@ -34,3 +34,7 @@ func DestroyPlasmaSlice(path string) error {
 func ListPlasmaSlices() ([]string, error) {
 	return listPlasmaSlices()
 }
+
+func BackupCorruptedPlasmaSlice(prefix string, rename func(string) (string, error), clean func(string)) error {
+	return backupCorruptedPlasmaSlice(prefix, rename, clean)
+}
