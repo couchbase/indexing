@@ -7029,9 +7029,9 @@ func (idx *indexer) updateMetaInfoForIndexList(instIdList []common.IndexInstId,
 
 }
 
-func (idx *indexer) updateMetaInfoForDeleteBucket(bucket string, streamId common.StreamId) error {
+func (idx *indexer) updateMetaInfoForDeleteBucket(keyspaceId string, streamId common.StreamId) error {
 
-	msg := &MsgClustMgrUpdate{mType: CLUST_MGR_DEL_BUCKET, bucket: bucket, streamId: streamId}
+	msg := &MsgClustMgrUpdate{mType: CLUST_MGR_DEL_KEYSPACE, keyspaceId: keyspaceId, streamId: streamId}
 	return idx.sendMsgToClusterMgr(msg)
 }
 

@@ -153,8 +153,8 @@ func (c *clustMgrAgent) handleSupvervisorCommands(cmd Message) {
 	case CLUST_MGR_DEL_LOCAL:
 		c.handleDelLocalValue(cmd)
 
-	case CLUST_MGR_DEL_BUCKET:
-		c.handleDeleteBucket(cmd)
+	case CLUST_MGR_DEL_KEYSPACE:
+		c.handleDeleteKeyspace(cmd)
 
 	case CLUST_MGR_CLEANUP_INDEX:
 		c.handleCleanupIndex(cmd)
@@ -522,12 +522,14 @@ func (c *clustMgrAgent) handleDelLocalValue(cmd Message) {
 
 }
 
-func (c *clustMgrAgent) handleDeleteBucket(cmd Message) {
+func (c *clustMgrAgent) handleDeleteKeyspace(cmd Message) {
 
-	logging.Infof("ClustMgr:handleDeleteBucket %v", cmd)
+	logging.Infof("ClustMgr:handleDeleteKeyspace %v", cmd)
 
-	bucket := cmd.(*MsgClustMgrUpdate).GetBucket()
+	keyspaceId := cmd.(*MsgClustMgrUpdate).GetKeyspaceId()
 	streamId := cmd.(*MsgClustMgrUpdate).GetStreamId()
+
+	bucket, _, _ := SplitKeyspaceId(keyspaceId)
 
 	err := c.mgr.DeleteIndexForBucket(bucket, streamId)
 	common.CrashOnError(err)

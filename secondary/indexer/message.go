@@ -100,7 +100,7 @@ const (
 	CLUST_MGR_GET_LOCAL
 	CLUST_MGR_SET_LOCAL
 	CLUST_MGR_DEL_LOCAL
-	CLUST_MGR_DEL_BUCKET
+	CLUST_MGR_DEL_KEYSPACE
 	CLUST_MGR_INDEXER_READY
 	CLUST_MGR_REBALANCE_RUNNING
 	CLUST_MGR_CLEANUP_INDEX
@@ -1837,7 +1837,7 @@ type MsgClustMgrUpdate struct {
 	mType         MsgType
 	indexList     []common.IndexInst
 	updatedFields MetaUpdateFields
-	bucket        string
+	keyspaceId    string
 	streamId      common.StreamId
 	syncUpdate    bool
 	respCh        chan error
@@ -1855,8 +1855,8 @@ func (m *MsgClustMgrUpdate) GetUpdatedFields() MetaUpdateFields {
 	return m.updatedFields
 }
 
-func (m *MsgClustMgrUpdate) GetBucket() string {
-	return m.bucket
+func (m *MsgClustMgrUpdate) GetKeyspaceId() string {
+	return m.keyspaceId
 }
 
 func (m *MsgClustMgrUpdate) GetStreamId() common.StreamId {
@@ -2264,8 +2264,8 @@ func (m MsgType) String() string {
 		return "CLUST_MGR_SET_LOCAL"
 	case CLUST_MGR_DEL_LOCAL:
 		return "CLUST_MGR_DEL_LOCAL"
-	case CLUST_MGR_DEL_BUCKET:
-		return "CLUST_MGR_DEL_BUCKET"
+	case CLUST_MGR_DEL_KEYSPACE:
+		return "CLUST_MGR_DEL_KEYSPACE"
 	case CLUST_MGR_INDEXER_READY:
 		return "CLUST_MGR_INDEXER_READY"
 	case CLUST_MGR_REBALANCE_RUNNING:
