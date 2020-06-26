@@ -431,7 +431,6 @@ func (feed *DcpFeed) handlePacket(
 		logging.Fatalf(fmsg, prefix, stream.AppOpaque)
 
 	case transport.DCP_SYSTEM_EVENT:
-		// TODO (Collections): Add stats for DCP system events
 		event = newDcpEvent(pkt, stream)
 		stream.Seqno = event.Seqno
 		feed.handleSystemEvent(pkt, event, stream)
@@ -441,6 +440,7 @@ func (feed *DcpFeed) handlePacket(
 
 	case transport.DCP_SEQNO_ADVANCED:
 		event = newDcpEvent(pkt, stream)
+		feed.stats.SeqnoAdvanced.Add(1)
 
 		if len(pkt.Extras) == dcpSeqnoAdvExtrasLen {
 			event.Seqno = binary.BigEndian.Uint64(pkt.Extras)
@@ -483,20 +483,33 @@ func (feed *DcpFeed) handleSystemEvent(pkt *transport.MCRequest, dcpEvent *DcpEv
 		if version == 1 { // Capture max ttl value of the collection if version is "1"
 			dcpEvent.MaxTTL = binary.BigEndian.Uint32(pkt.Body[16:20])
 		}
+		feed.stats.CollectionCreate.Add(1)
 
 	case transport.COLLECTION_DROP, transport.COLLECTION_FLUSH:
 		sid := binary.BigEndian.Uint32(pkt.Body[8:12]) //4 byte ScopeID
 		sidstr := strconv.FormatUint(uint64(sid), 16)  //convert to base 16 encoded string
 		dcpEvent.ScopeID = []byte(sidstr)
 		dcpEvent.CollectionID = binary.BigEndian.Uint32(pkt.Body[12:16])
+		if systemEventType == transport.COLLECTION_DROP {
+			feed.stats.CollectionDrop.Add(1)
+		} else {
+			feed.stats.CollectionFlush.Add(1)
+		}
 
 	case transport.SCOPE_CREATE, transport.SCOPE_DROP:
 		sid := binary.BigEndian.Uint32(pkt.Body[8:12]) //4 byte ScopeID
 		sidstr := strconv.FormatUint(uint64(sid), 16)  //convert to base 16 encoded string
 		dcpEvent.ScopeID = []byte(sidstr)
 
+		if systemEventType == transport.SCOPE_CREATE {
+			feed.stats.ScopeCreate.Add(1)
+		} else {
+			feed.stats.ScopeDrop.Add(1)
+		}
+
 	case transport.COLLECTION_CHANGED:
 		dcpEvent.CollectionID = binary.BigEndian.Uint32(pkt.Body[8:12])
+		feed.stats.CollectionChanged.Add(1)
 
 	default:
 		logging.Fatalf("%v ##%x Unknown system event type: %v", feed.logPrefix, stream.AppOpaque, systemEventType)
@@ -1268,6 +1281,15 @@ type DcpStats struct {
 	LastMsgSend  stats.Int64Val
 	LastMsgRecv  stats.Int64Val
 
+	// Collections related
+	CollectionCreate  stats.Uint64Val
+	CollectionDrop    stats.Uint64Val
+	CollectionFlush   stats.Uint64Val
+	ScopeCreate       stats.Uint64Val
+	ScopeDrop         stats.Uint64Val
+	CollectionChanged stats.Uint64Val
+	SeqnoAdvanced     stats.Uint64Val
+
 	rcvch      chan []interface{}
 	Dcplatency stats.Average
 	// This stat help to determine the drain rate of dcp feed
@@ -1292,6 +1314,15 @@ func (dcpStats *DcpStats) Init() {
 	dcpStats.LastMsgRecv.Init()
 	dcpStats.Dcplatency.Init()
 	dcpStats.IncomingMsg.Init()
+
+	// Collections related stats
+	dcpStats.CollectionCreate.Init()
+	dcpStats.CollectionDrop.Init()
+	dcpStats.CollectionFlush.Init()
+	dcpStats.ScopeCreate.Init()
+	dcpStats.ScopeDrop.Init()
+	dcpStats.CollectionChanged.Init()
+	dcpStats.SeqnoAdvanced.Init()
 }
 
 func (stats *DcpStats) IsClosed() bool {
@@ -1307,22 +1338,31 @@ func (stats *DcpStats) String() (string, string) {
 		return now.Sub(time.Unix(0, t))
 	}
 
-	var stitems [15]string
+	var stitems [22]string
 	stitems[0] = `"bytes":` + strconv.FormatUint(stats.TotalBytes.Value(), 10)
 	stitems[1] = `"bufferacks":` + strconv.FormatUint(stats.TotalBufferAckSent.Value(), 10)
 	stitems[2] = `"toAckBytes":` + strconv.FormatUint(stats.ToAckBytes.Value(), 10)
 	stitems[3] = `"streamreqs":` + strconv.FormatUint(stats.TotalStreamReq.Value(), 10)
 	stitems[4] = `"snapshots":` + strconv.FormatUint(stats.TotalSnapShot.Value(), 10)
 	stitems[5] = `"mutations":` + strconv.FormatUint(stats.TotalMutation.Value(), 10)
-	stitems[6] = `"streamends":` + strconv.FormatUint(stats.TotalStreamEnd.Value(), 10)
-	stitems[7] = `"closestreams":` + strconv.FormatUint(stats.TotalCloseStream.Value(), 10)
-	stitems[8] = `"lastAckTime":` + getTimeDur(stats.LastAckTime.Value()).String()
-	stitems[9] = `"lastNoopSend":` + getTimeDur(stats.LastNoopSend.Value()).String()
-	stitems[10] = `"lastNoopRecv":` + getTimeDur(stats.LastNoopRecv.Value()).String()
-	stitems[11] = `"lastMsgSend":` + getTimeDur(stats.LastMsgSend.Value()).String()
-	stitems[12] = `"lastMsgRecv":` + getTimeDur(stats.LastMsgRecv.Value()).String()
-	stitems[13] = `"rcvchLen":` + strconv.FormatUint((uint64)(len(stats.rcvch)), 10)
-	stitems[14] = `"incomingMsg":` + strconv.FormatUint(stats.IncomingMsg.Value(), 10)
+
+	stitems[6] = `"collectionCreate":` + strconv.FormatUint(stats.CollectionCreate.Value(), 10)
+	stitems[7] = `"collectionDrop":` + strconv.FormatUint(stats.CollectionDrop.Value(), 10)
+	stitems[8] = `"collectionFlush":` + strconv.FormatUint(stats.CollectionFlush.Value(), 10)
+	stitems[9] = `"scopeCreate":` + strconv.FormatUint(stats.ScopeCreate.Value(), 10)
+	stitems[10] = `"scopeDrop":` + strconv.FormatUint(stats.ScopeDrop.Value(), 10)
+	stitems[11] = `"collectionChanged":` + strconv.FormatUint(stats.CollectionChanged.Value(), 10)
+	stitems[12] = `"seqnoAdvanced":` + strconv.FormatUint(stats.SeqnoAdvanced.Value(), 10)
+
+	stitems[13] = `"streamends":` + strconv.FormatUint(stats.TotalStreamEnd.Value(), 10)
+	stitems[14] = `"closestreams":` + strconv.FormatUint(stats.TotalCloseStream.Value(), 10)
+	stitems[15] = `"lastAckTime":` + getTimeDur(stats.LastAckTime.Value()).String()
+	stitems[16] = `"lastNoopSend":` + getTimeDur(stats.LastNoopSend.Value()).String()
+	stitems[17] = `"lastNoopRecv":` + getTimeDur(stats.LastNoopRecv.Value()).String()
+	stitems[18] = `"lastMsgSend":` + getTimeDur(stats.LastMsgSend.Value()).String()
+	stitems[19] = `"lastMsgRecv":` + getTimeDur(stats.LastMsgRecv.Value()).String()
+	stitems[20] = `"rcvchLen":` + strconv.FormatUint((uint64)(len(stats.rcvch)), 10)
+	stitems[21] = `"incomingMsg":` + strconv.FormatUint(stats.IncomingMsg.Value(), 10)
 	statjson := strings.Join(stitems[:], ",")
 
 	statsStr := fmt.Sprintf("{%v}", statjson)

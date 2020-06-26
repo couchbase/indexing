@@ -46,6 +46,16 @@ func (m *MutationMeta) SetVBId(vbid int) {
 	m.vbucket = Vbucket(vbid)
 }
 
+func (m *MutationMeta) Reset() {
+	m.keyspaceId = ""
+	m.vbucket = 0
+	m.vbuuid = 0
+	m.seqno = 0
+	m.firstSnap = false
+	m.projVer = c.ProjVer_5_1_0
+	m.opaque = 0
+}
+
 func (m *MutationMeta) Clone() *MutationMeta {
 	meta := NewMutationMeta()
 	meta.keyspaceId = m.keyspaceId

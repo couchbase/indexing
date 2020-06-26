@@ -72,6 +72,18 @@ type EndpointStats struct {
 	flushCount  stats.Uint64Val
 	prjLatency  stats.Average
 	endpCh      chan []interface{}
+
+	// Collections specific
+	collectionCreate  stats.Uint64Val
+	collectionDrop    stats.Uint64Val
+	collectionFlush   stats.Uint64Val
+	scopeCreate       stats.Uint64Val
+	scopeDrop         stats.Uint64Val
+	collectionChanged stats.Uint64Val
+	updateSeqno       stats.Uint64Val
+	seqnoAdvanced     stats.Uint64Val
+
+	cmdStats map[byte]*stats.Uint64Val
 }
 
 func (stats *EndpointStats) Init() {
@@ -86,6 +98,15 @@ func (stats *EndpointStats) Init() {
 	stats.snapCount.Init()
 	stats.flushCount.Init()
 	stats.prjLatency.Init()
+
+	stats.collectionCreate.Init()
+	stats.collectionDrop.Init()
+	stats.collectionFlush.Init()
+	stats.scopeCreate.Init()
+	stats.scopeDrop.Init()
+	stats.collectionChanged.Init()
+	stats.updateSeqno.Init()
+	stats.seqnoAdvanced.Init()
 }
 
 func (stats *EndpointStats) IsClosed() bool {
@@ -93,7 +114,7 @@ func (stats *EndpointStats) IsClosed() bool {
 }
 
 func (stats *EndpointStats) String() string {
-	var stitems [14]string
+	var stitems [22]string
 	stitems[0] = `"mutCount":` + strconv.FormatUint(stats.mutCount.Value(), 10)
 	stitems[1] = `"upsertCount":` + strconv.FormatUint(stats.upsertCount.Value(), 10)
 	stitems[2] = `"deleteCount":` + strconv.FormatUint(stats.deleteCount.Value(), 10)
@@ -103,11 +124,21 @@ func (stats *EndpointStats) String() string {
 	stitems[6] = `"endCount":` + strconv.FormatUint(stats.endCount.Value(), 10)
 	stitems[7] = `"snapCount":` + strconv.FormatUint(stats.snapCount.Value(), 10)
 	stitems[8] = `"flushCount":` + strconv.FormatUint(stats.flushCount.Value(), 10)
-	stitems[9] = `"latency.min":` + strconv.FormatInt(stats.prjLatency.Min(), 10)
-	stitems[10] = `"latency.max":` + strconv.FormatInt(stats.prjLatency.Max(), 10)
-	stitems[11] = `"latency.avg":` + strconv.FormatInt(stats.prjLatency.Mean(), 10)
-	stitems[12] = `"latency.movingAvg":` + strconv.FormatInt(stats.prjLatency.MovingAvg(), 10)
-	stitems[13] = `"endpChLen":` + strconv.FormatUint((uint64)(len(stats.endpCh)), 10)
+
+	stitems[9] = `"collectionCreate":` + strconv.FormatUint(stats.collectionCreate.Value(), 10)
+	stitems[10] = `"collectionDrop":` + strconv.FormatUint(stats.collectionDrop.Value(), 10)
+	stitems[11] = `"collectionFlush":` + strconv.FormatUint(stats.collectionFlush.Value(), 10)
+	stitems[12] = `"scopeCreate":` + strconv.FormatUint(stats.scopeCreate.Value(), 10)
+	stitems[13] = `"scopeDrop":` + strconv.FormatUint(stats.scopeDrop.Value(), 10)
+	stitems[14] = `"collectionChanged":` + strconv.FormatUint(stats.collectionChanged.Value(), 10)
+	stitems[15] = `"updateSeqno":` + strconv.FormatUint(stats.updateSeqno.Value(), 10)
+	stitems[16] = `"seqnoAdvanced":` + strconv.FormatUint(stats.seqnoAdvanced.Value(), 10)
+
+	stitems[17] = `"latency.min":` + strconv.FormatInt(stats.prjLatency.Min(), 10)
+	stitems[18] = `"latency.max":` + strconv.FormatInt(stats.prjLatency.Max(), 10)
+	stitems[19] = `"latency.avg":` + strconv.FormatInt(stats.prjLatency.Mean(), 10)
+	stitems[20] = `"latency.movingAvg":` + strconv.FormatInt(stats.prjLatency.MovingAvg(), 10)
+	stitems[21] = `"endpChLen":` + strconv.FormatUint((uint64)(len(stats.endpCh)), 10)
 	statjson := strings.Join(stitems[:], ",")
 	return fmt.Sprintf("{%v}", statjson)
 }

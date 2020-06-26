@@ -766,33 +766,40 @@ func (feed *Feed) handleCommand(msg []interface{}) (status string) {
 		feedStats.Init()
 		// For this feed, iterate through all buckets
 		for bucket, kvdata := range feed.kvdata {
-			bucketStats := &BucketStats{}
-			bucketStats.topic = feed.topic
-			bucketStats.bucket = bucket
-			bucketStats.opaque = kvdata.opaque
+			keyspaceIdStats := &KeyspaceIdStats{}
+			keyspaceIdStats.topic = feed.topic
+			keyspaceIdStats.keyspaceId = kvdata.keyspaceId
+			keyspaceIdStats.opaque = kvdata.opaque
 
 			if feeder := feed.feeders[bucket]; feeder != nil {
-				bucketStats.dcpStats = feeder.GetStats()
+				keyspaceIdStats.dcpStats = feeder.GetStats()
 			}
 
 			// For this bucket, get kvstats
-			bucketStats.kvstats = kvdata.GetKVStats()
+			keyspaceIdStats.kvstats = kvdata.GetKVStats()
 
 			// For this bucket, get workerStats
-			bucketStats.wrkrStats = kvdata.GetWorkerStats()
+			keyspaceIdStats.wrkrStats = kvdata.GetWorkerStats()
 
 			// For this bucket, get evaluator stats
 			engines := feed.engines[bucket]
-			bucketStats.evaluatorStats = make(map[string]interface{})
+			keyspaceIdStats.evaluatorStats = make(map[string]interface{})
 			for _, engine := range engines {
 				indexname := engine.GetIndexName()
 				bucketname := engine.Bucket()
-				key := fmt.Sprintf("%v:%v", bucketname, indexname)
-				bucketStats.evaluatorStats[key] = engine.GetEvaluatorStats()
+				scopename := engine.Scope()
+				collectionname := engine.Collection()
+				var key string
+				if scopename == "" && collectionname == "" {
+					key = fmt.Sprintf("%v:%v", bucketname, indexname)
+				} else {
+					key = fmt.Sprintf("%v:%v:%v:%v", bucketname, scopename, collectionname, indexname)
+				}
+				keyspaceIdStats.evaluatorStats[key] = engine.GetEvaluatorStats()
 			}
 
 			// Update feed stats for this bucket
-			feedStats.bucketStats[bucket] = bucketStats
+			feedStats.keyspaceIdStats[bucket] = keyspaceIdStats
 		}
 
 		for _, value := range feed.endpoints {
@@ -902,14 +909,17 @@ func (feed *Feed) start(
 			continue
 		}
 		feed.feeders[keyspaceId] = feeder // :SideEffect:
+
 		// open data-path, if not already open.
-		kvdata, e := feed.startDataPath(bucketn, keyspaceId, feeder,
+		cid := getCollectionIdFromReqTs(ts)
+		kvdata, e := feed.startDataPath(bucketn, keyspaceId, cid, feeder,
 			opaque, ts, opaque2)
 		if e != nil {
 			err = e
 			feed.cleanupKeyspace(keyspaceId, false)
 			continue
 		}
+
 		engines, _ := feed.engines[keyspaceId]
 		kvdata.AddEngines(opaque, engines, feed.endpoints)
 		feed.kvdata[keyspaceId] = kvdata // :SideEffect:
@@ -1027,8 +1037,9 @@ func (feed *Feed) restartVbuckets(
 			continue
 		}
 		feed.feeders[keyspaceId] = feeder // :SideEffect:
+		cid := getCollectionIdFromReqTs(ts)
 		// open data-path, if not already open.
-		kvdata, e := feed.startDataPath(bucketn, keyspaceId, feeder, opaque, ts, opaque2)
+		kvdata, e := feed.startDataPath(bucketn, keyspaceId, cid, feeder, opaque, ts, opaque2)
 		if e != nil { // all feed errors are fatal, skip this bucket.
 			err = e
 			feed.cleanupKeyspace(keyspaceId, false)
@@ -1223,8 +1234,9 @@ func (feed *Feed) addBuckets(
 		}
 		feed.feeders[keyspaceId] = feeder // :SideEffect:
 
+		cid := getCollectionIdFromReqTs(ts)
 		// open data-path, if not already open.
-		kvdata, e := feed.startDataPath(bucketn, keyspaceId, feeder, opaque, ts, opaque2)
+		kvdata, e := feed.startDataPath(bucketn, keyspaceId, cid, feeder, opaque, ts, opaque2)
 		if e != nil { // all feed errors are fatal, skip this bucket.
 			err = e
 			feed.cleanupKeyspace(keyspaceId, false)
@@ -1748,6 +1760,7 @@ func (feed *Feed) getLocalVbuckets(
 // start data-path each kvaddr
 func (feed *Feed) startDataPath(
 	bucketn, keyspaceId string,
+	collectionId string,
 	feeder BucketFeeder,
 	opaque uint16,
 	ts *protobuf.TsVbuuid,
@@ -1761,7 +1774,7 @@ func (feed *Feed) startDataPath(
 	} else { // pass engines & endpoints to kvdata.
 		engs, ends := feed.engines[keyspaceId], feed.endpoints
 		kvdata, err = NewKVData(
-			feed, bucketn, keyspaceId, opaque, ts, engs, ends, mutch,
+			feed, bucketn, keyspaceId, collectionId, opaque, ts, engs, ends, mutch,
 			feed.kvaddr, feed.config, feed.async, opaque2)
 	}
 	return kvdata, err
@@ -2128,6 +2141,16 @@ func (feed *Feed) connectBucket(
 		return nil, projC.ErrorDCPBucket
 	}
 	return bucket, nil
+}
+
+func getCollectionIdFromReqTs(reqTs *protobuf.TsVbuuid) string {
+	cids := reqTs.GetCollectionIDs()
+	if len(cids) == 0 {
+		return ""
+	}
+	// All vb's are expected to have the same collectionID for a collection
+	// Return the CID of first vb
+	return cids[0]
 }
 
 func getCidAsUint32(collId string) uint32 {

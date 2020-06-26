@@ -180,6 +180,14 @@ func (ie *IndexEvaluator) Bucket() string {
 	return ie.instance.GetDefinition().GetBucket()
 }
 
+func (ie *IndexEvaluator) Scope() string {
+	return ie.instance.GetDefinition().GetScope()
+}
+
+func (ie *IndexEvaluator) Collection() string {
+	return ie.instance.GetDefinition().GetCollection()
+}
+
 func (ie *IndexEvaluator) GetKeyspaceId() string {
 	return ie.keyspaceId
 }

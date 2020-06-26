@@ -10,6 +10,12 @@ type Evaluator interface {
 	// Return the bucket name for which this evaluator is applicable.
 	Bucket() string
 
+	// Return the scope name for which this evaluator is applicable.
+	Scope() string
+
+	// Return the collection name for which this evaluator is applicable.
+	Collection() string
+
 	// StreamBeginData is generated for downstream.
 	StreamBeginData(vbno uint16, vbuuid, seqno uint64, nodeUUID string,
 		status, code byte, opaque2 uint64) (data interface{})

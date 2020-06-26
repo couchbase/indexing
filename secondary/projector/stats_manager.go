@@ -19,10 +19,10 @@ const (
 	VBSEQNOS_LOG_INTERVAL_UPDATE
 )
 
-type BucketStats struct {
-	bucket string
-	topic  string
-	opaque uint16
+type KeyspaceIdStats struct {
+	keyspaceId string
+	topic      string
+	opaque     uint16
 
 	// Key -> Log prefix of DCP Feed
 	// Value -> Pointer to stats object of DCP feed
@@ -41,67 +41,67 @@ type BucketStats struct {
 	evaluatorStats map[string]interface{}
 }
 
-func (bs *BucketStats) Init() {
-	bs.dcpStats = make(map[string]interface{}, 0)
-	bs.kvstats = make(map[string]interface{}, 0)
-	bs.wrkrStats = make(map[string][]interface{}, 0)
-	bs.evaluatorStats = make(map[string]interface{})
+func (ks *KeyspaceIdStats) Init() {
+	ks.dcpStats = make(map[string]interface{}, 0)
+	ks.kvstats = make(map[string]interface{}, 0)
+	ks.wrkrStats = make(map[string][]interface{}, 0)
+	ks.evaluatorStats = make(map[string]interface{})
 }
 
-func (bs *BucketStats) clone() *BucketStats {
-	cbs := &BucketStats{}
-	cbs.Init()
-	cbs.topic = bs.topic
-	cbs.bucket = bs.bucket
-	cbs.opaque = bs.opaque
-	for key, value := range bs.dcpStats {
+func (ks *KeyspaceIdStats) clone() *KeyspaceIdStats {
+	cks := &KeyspaceIdStats{}
+	cks.Init()
+	cks.topic = ks.topic
+	cks.keyspaceId = ks.keyspaceId
+	cks.opaque = ks.opaque
+	for key, value := range ks.dcpStats {
 		if value != nil {
-			cbs.dcpStats[key] = value
+			cks.dcpStats[key] = value
 		}
 	}
 
-	for key, value := range bs.kvstats {
+	for key, value := range ks.kvstats {
 		if value != nil {
-			cbs.kvstats[key] = value
+			cks.kvstats[key] = value
 		}
 	}
 
-	for key, value := range bs.wrkrStats {
+	for key, value := range ks.wrkrStats {
 		if value != nil {
 			wrkrstat := make([]interface{}, 0)
 			for _, stat := range value {
 				wrkrstat = append(wrkrstat, stat)
 			}
-			cbs.wrkrStats[key] = wrkrstat
+			cks.wrkrStats[key] = wrkrstat
 		}
 	}
 
-	for key, value := range bs.evaluatorStats {
+	for key, value := range ks.evaluatorStats {
 		if value != nil {
-			cbs.evaluatorStats[key] = value
+			cks.evaluatorStats[key] = value
 		}
 	}
-	return cbs
+	return cks
 }
 
 type FeedStats struct {
-	bucketStats map[string]*BucketStats
-	endpStats   map[string]interface{}
+	keyspaceIdStats map[string]*KeyspaceIdStats
+	endpStats       map[string]interface{}
 
 	// For other topic level stats
 }
 
 func (fs *FeedStats) Init() {
-	fs.bucketStats = make(map[string]*BucketStats, 0)
+	fs.keyspaceIdStats = make(map[string]*KeyspaceIdStats, 0)
 	fs.endpStats = make(map[string]interface{}, 0)
 }
 
 func (fs *FeedStats) clone() *FeedStats {
 	cfs := &FeedStats{}
 	cfs.Init()
-	for key, value := range fs.bucketStats {
+	for key, value := range fs.keyspaceIdStats {
 		if value != nil {
-			cfs.bucketStats[key] = value.clone()
+			cfs.keyspaceIdStats[key] = value.clone()
 		}
 	}
 
@@ -257,10 +257,10 @@ func (sm *statsManager) logger() {
 			// For each topic
 			for _, feedStats := range ps.feedStats {
 				// For each bucket
-				for _, bucketStats := range feedStats.bucketStats {
+				for _, keyspaceIdStats := range feedStats.keyspaceIdStats {
 					kvdataClosed := false
 					if logStats {
-						for key, value := range bucketStats.dcpStats {
+						for key, value := range keyspaceIdStats.dcpStats {
 							switch value.(type) {
 							case *memcached.DcpStats:
 								val := value.(*memcached.DcpStats)
@@ -277,7 +277,7 @@ func (sm *statsManager) logger() {
 							}
 						}
 
-						for key, value := range bucketStats.kvstats {
+						for key, value := range keyspaceIdStats.kvstats {
 							switch (value).(type) {
 							case *KvdataStats:
 								val := (value).(*KvdataStats)
@@ -294,7 +294,7 @@ func (sm *statsManager) logger() {
 							}
 						}
 
-						for key, value := range bucketStats.wrkrStats {
+						for key, value := range keyspaceIdStats.wrkrStats {
 							// Get the type of any worker
 							switch (value[0]).(type) {
 							case *WorkerStats:
@@ -311,7 +311,7 @@ func (sm *statsManager) logger() {
 
 					// Log vbseqno's for every "vbseqnosLogInterval" seconds
 					if logVbsenos {
-						for key, value := range bucketStats.kvstats {
+						for key, value := range keyspaceIdStats.kvstats {
 							switch (value).(type) {
 							case *KvdataStats:
 								val := (value).(*KvdataStats)
@@ -331,11 +331,11 @@ func (sm *statsManager) logger() {
 					// Log eval stats for every evalStatsLogInterval
 					if logEvalStats && !kvdataClosed {
 						// As of this commit, only IndexEvaluatorStats are supported
-						logPrefix := fmt.Sprintf("EVAL[%v #%v] ##%x ", bucketStats.bucket, bucketStats.topic, bucketStats.opaque)
+						logPrefix := fmt.Sprintf("EVAL[%v #%v] ##%x ", keyspaceIdStats.keyspaceId, keyspaceIdStats.topic, keyspaceIdStats.opaque)
 						var evalStats string
 						var skippedStr string
 
-						for key, value := range bucketStats.evaluatorStats {
+						for key, value := range keyspaceIdStats.evaluatorStats {
 							switch (value).(type) {
 							case *protobuf.IndexEvaluatorStats:
 								keyStr := fmt.Sprintf("%v", key)

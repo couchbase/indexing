@@ -2050,6 +2050,11 @@ var statsFilterMap = map[string]uint64{
 	"external":    stats.ExternalStatFilter,
 }
 
+const ST_TYPE_INDEXER = "indexer"
+const ST_TYPE_INDEX = "index_"
+const ST_TYPE_BUCKET = "bucket_"
+const ST_TYPE_PROJ_LAT = "projlat"
+
 type statLogger struct {
 	s              *statsManager
 	enableStatsLog bool
@@ -2064,22 +2069,60 @@ func newStatLogger(s *statsManager, enableStatsLogger bool, sLogger logstats.Log
 	}
 }
 
+func (l *statLogger) writeIndexerStats(stats *IndexerStats, spec *statsSpec) {
+
+	// Indexer Stats
+	statMap := NewStatsMap(spec)
+	stats.PopulateIndexerStats(statMap)
+	err := l.sLogger.Write(ST_TYPE_INDEXER, statMap.GetMap())
+	if err != nil {
+		logging.Errorf("Error in writing logs to stats logger type:%v, err:%v", ST_TYPE_INDEXER, err)
+	}
+
+	// Index Stats
+	// In case of stats logging, spec.partition is false.
+	for instId, is := range stats.indexes {
+		statMap = NewStatsMap(spec)
+		statMap.SetInstId(fmt.Sprintf("%v:", instId))
+
+		prefix := common.GetStatsPrefix(is.bucket, is.scope, is.collection, is.name, is.replicaId, 0, false)
+		sType := ST_TYPE_INDEX + prefix[:len(prefix)-1]
+
+		is.addIndexStatsToMap(statMap, spec)
+		err = l.sLogger.Write(sType, statMap.GetMap())
+		if err != nil {
+			logging.Errorf("Error in writing logs to stats logger type:%v, err:%v", sType, err)
+		}
+	}
+
+	// Bucket Stats
+	for _, bs := range stats.buckets {
+		statMap = NewStatsMap(spec)
+		bs.addBucketStatsToMap(statMap)
+		sType := ST_TYPE_BUCKET + bs.bucket
+		err = l.sLogger.Write(sType, statMap.GetMap())
+		if err != nil {
+			logging.Errorf("Error in writing logs to stats logger type:%v, err:%v", sType, err)
+		}
+	}
+
+	// Projector Latency Stats
+	statMap = NewStatsMap(spec)
+	stats.PopulateProjectorLatencyStats(statMap)
+	err = l.sLogger.Write(ST_TYPE_PROJ_LAT, statMap.GetMap())
+	if err != nil {
+		logging.Errorf("Error in writing logs to stats logger type:%v, err:%v", ST_TYPE_PROJ_LAT, err)
+	}
+}
+
 func (l *statLogger) Write(stats *IndexerStats, essential, writeStorageStats bool) {
 	spec := NewStatsSpec(false, false, false, essential, nil)
 
 	var sbytes []byte
-	var err error
 	logSbytes := false
 
 	if l.enableStatsLog {
-		// TODO: As the stat logger doesn't work well with large log messages,
-		//       this needs to be improved where granular stats will be logged in
-		//       separate log messages.
-		st := stats.GetStats(spec)
-		err = l.sLogger.Write("PeriodicStats =", st)
-		if err != nil {
-			logging.Errorf("Error in writing logs to stats logger %v", err)
-		}
+		l.writeIndexerStats(stats, spec)
 	} else {
 		sbytes, _ = stats.MarshalJSON(spec)
 		logSbytes = true
