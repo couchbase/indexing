@@ -5747,10 +5747,11 @@ func (idx *indexer) bootstrap1(snapshotNotifych chan IndexSnapshot) error {
 }
 
 //if any index in MAINT_STREAM has nil snapshot, it needs
-//to be reset. The index was able to clear its snapshot
-//on rollback but couldn't reset the metadata before crash.
-//index disk snapshot is created for every index before
-//moving to active state.
+//to be reset. Either:
+//1. The index was able to clear its snapshot on rollback
+//but couldn't reset the metadata before crash.
+//2. The index never created a disk snapshot as the disk
+//snapshot happens only at 10mins interval.
 func (idx *indexer) findAndResetEmptySnapshotIndex() {
 
 	for instId, index := range idx.indexInstMap {
