@@ -273,15 +273,17 @@ func (m *MsgTimestamp) GetTimestamp() Timestamp {
 
 //Stream Reader Message
 type MsgStream struct {
-	mType       MsgType
-	streamId    common.StreamId
-	node        []byte
-	meta        *MutationMeta
-	snapshot    *MutationSnapshot
-	status      common.StreamStatus
-	errCode     byte
-	eventType   byte
-	manifestuid string
+	mType        MsgType
+	streamId     common.StreamId
+	node         []byte
+	meta         *MutationMeta
+	snapshot     *MutationSnapshot
+	status       common.StreamStatus
+	errCode      byte
+	eventType    byte
+	manifestuid  string
+	scopeId      string
+	collectionId string
 }
 
 func (m *MsgStream) GetMsgType() MsgType {
@@ -318,6 +320,14 @@ func (m *MsgStream) GetEventType() byte {
 
 func (m *MsgStream) GetManifestUID() string {
 	return m.manifestuid
+}
+
+func (m *MsgStream) GetScopeId() string {
+	return m.scopeId
+}
+
+func (m *MsgStream) GetCollectionId() string {
+	return m.collectionId
 }
 
 func (m *MsgStream) String() string {

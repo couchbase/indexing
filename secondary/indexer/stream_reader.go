@@ -781,7 +781,11 @@ func (w *streamWorker) handleSingleKeyVersion(keyspaceId string, vbucket Vbucket
 			common.ScopeCreate, common.ScopeDrop:
 
 			manifestuid := string(kv.GetKeys()[i])
-			w.processDcpSystemEvent(meta, byte(cmd), manifestuid)
+			scopeId := string(kv.GetOldkeys()[i])
+			collectionId := string(kv.GetPartnkeys()[i])
+
+			w.processDcpSystemEvent(meta, byte(cmd),
+				manifestuid, scopeId, collectionId)
 
 			skipMutation, _ := w.checkAndSetKeyspaceIdFilter(meta)
 
@@ -1070,15 +1074,18 @@ func (w *streamWorker) updateVbuuidInFilter(meta *MutationMeta) {
 
 }
 
-func (w *streamWorker) processDcpSystemEvent(meta *MutationMeta, eventType byte, manifestuid string) {
+func (w *streamWorker) processDcpSystemEvent(meta *MutationMeta,
+	eventType byte, manifestuid, scopeId, collectionId string) {
 
 	//send message to supervisor to take decision
 	msg := &MsgStream{
-		mType:       STREAM_READER_SYSTEM_EVENT,
-		streamId:    w.streamId,
-		meta:        meta.Clone(),
-		eventType:   eventType,
-		manifestuid: manifestuid,
+		mType:        STREAM_READER_SYSTEM_EVENT,
+		streamId:     w.streamId,
+		meta:         meta.Clone(),
+		eventType:    eventType,
+		manifestuid:  manifestuid,
+		scopeId:      scopeId,
+		collectionId: collectionId,
 	}
 	w.reader.supvRespch <- msg
 
