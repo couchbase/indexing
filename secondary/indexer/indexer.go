@@ -6309,6 +6309,10 @@ func (idx *indexer) broadcastBootstrapStats(stats *IndexerStats,
 	id common.IndexInstId) {
 
 	idxStats := stats.indexes[id]
+
+	state := idx.indexInstMap[id].State
+	idxStats.indexState.Set((uint64)(state))
+
 	idxStats.numDocsPending.Set(math.MaxInt64)
 	idxStats.numDocsQueued.Set(math.MaxInt64)
 	idxStats.lastRollbackTime.Set(time.Now().UnixNano())
