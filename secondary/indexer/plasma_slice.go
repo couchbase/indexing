@@ -355,7 +355,7 @@ func (slice *plasmaSlice) initStores() error {
 	go func() {
 		defer wg.Done()
 
-		slice.mainstore, mErr = plasma.New(mCfg)
+		slice.mainstore, mErr = plasma.New2(mCfg, slice.idxDefn.IndexOnCollection())
 		if mErr != nil {
 			mErr = fmt.Errorf("Unable to initialize %s, err = %v", mCfg.File, mErr)
 			return
@@ -367,7 +367,7 @@ func (slice *plasmaSlice) initStores() error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			slice.backstore, bErr = plasma.New(bCfg)
+			slice.backstore, bErr = plasma.New2(bCfg, slice.idxDefn.IndexOnCollection())
 			if bErr != nil {
 				bErr = fmt.Errorf("Unable to initialize %s, err = %v", bCfg.File, bErr)
 				return
