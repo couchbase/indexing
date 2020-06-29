@@ -1420,3 +1420,7 @@ func WatchClusterVersionChanges(clusterAddr string) {
 		UpdateClusterVersion((int64)(clustVer))
 	}
 }
+
+func GetClusterVersion() int64 {
+	return atomic.LoadInt64(&clusterVersion)
+}

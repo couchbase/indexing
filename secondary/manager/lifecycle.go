@@ -2297,11 +2297,21 @@ func (m *LifecycleMgr) broadcastStats() {
 	for {
 		select {
 		case <-ticker.C:
+
+			clusterVersion := common.GetClusterVersion()
+
 			filtered := m.stats.Get()
 			if filtered != nil {
-				idxStats := &client.IndexStats{Stats: *filtered}
-				if err := m.repo.BroadcastIndexStats(idxStats); err != nil {
-					logging.Errorf("lifecycleMgr: fail to send index stats.  Error = %v", err)
+				if clusterVersion < (int64)(common.INDEXER_70_VERSION) {
+					idxStats := &client.IndexStats{Stats: *filtered}
+					if err := m.repo.BroadcastIndexStats(idxStats); err != nil {
+						logging.Errorf("lifecycleMgr: fail to send index stats.  Error = %v", err)
+					}
+				} else {
+					idxStats2 := convertToIndexStats2(*filtered)
+					if err := m.repo.BroadcastIndexStats2(idxStats2); err != nil {
+						logging.Errorf("lifecycleMgr: fail to send indexStats2.  Error = %v", err)
+					}
 				}
 			}
 
@@ -2311,6 +2321,52 @@ func (m *LifecycleMgr) broadcastStats() {
 			return
 		}
 	}
+}
+
+// This method takes in common.Statistics as input,
+// de-duplicates the stats and converts them to client.IndexStats2 format
+func convertToIndexStats2(stats common.Statistics) *client.IndexStats2 {
+
+	// Returns the fully qualified index name and bucket name
+	getIndexAndBucketName := func(indexName string) (string, string) {
+		split := strings.Split(indexName, ":")
+		return strings.Join(split[0:len(split)-1], ":"), split[0]
+	}
+
+	clearIndexFromStats := func(indexName string) {
+		delete(stats, indexName+":num_docs_pending")
+		delete(stats, indexName+":num_docs_queued")
+		delete(stats, indexName+":last_rollback_time")
+		delete(stats, indexName+":progress_stat_time")
+		delete(stats, indexName+":index_state")
+	}
+
+	indexStats2 := &client.IndexStats2{}
+	indexStats2.Stats = make(map[string]*client.DedupedIndexStats)
+
+	for key, _ := range stats {
+		indexName, bucketName := getIndexAndBucketName(key)
+		if status, ok := stats[indexName+":index_state"]; ok {
+			if status.(float64) != (float64)(common.INDEX_STATE_ACTIVE) {
+				// Delete all stats beloning to this index as index is not ready for scans
+				clearIndexFromStats(indexName)
+			} else {
+				if _, ok := indexStats2.Stats[bucketName]; !ok {
+					indexStats2.Stats[bucketName] = &client.DedupedIndexStats{}
+					indexStats2.Stats[bucketName].Indexes = make(map[string]*client.PerIndexStats)
+				}
+
+				indexStats2.Stats[bucketName].NumDocsPending = stats[indexName+":num_docs_pending"].(float64)
+				indexStats2.Stats[bucketName].NumDocsQueued = stats[indexName+":num_docs_queued"].(float64)
+				indexStats2.Stats[bucketName].LastRollbackTime = stats[indexName+":last_rollback_time"].(string)
+				indexStats2.Stats[bucketName].ProgressStatTime = stats[indexName+":progress_stat_time"].(string)
+				indexStats2.Stats[bucketName].Indexes[indexName] = nil
+
+				clearIndexFromStats(indexName)
+			}
+		}
+	}
+	return indexStats2
 }
 
 //-----------------------------------------------------------

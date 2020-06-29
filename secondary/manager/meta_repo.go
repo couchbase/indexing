@@ -506,6 +506,21 @@ func (c *MetadataRepo) BroadcastIndexStats(stats *client.IndexStats) error {
 	return nil
 }
 
+func (c *MetadataRepo) BroadcastIndexStats2(stats *client.IndexStats2) error {
+
+	data, err := client.MarshallIndexStats2(stats)
+	if err != nil {
+		return err
+	}
+
+	lookupName := indexStats2Key()
+	if err := c.broadcast(lookupName, data); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 ///////////////////////////////////////////////////////
 //  Public Function : Index DDL
 ///////////////////////////////////////////////////////
@@ -1208,7 +1223,15 @@ func indexStatsKey() string {
 }
 
 func isIndexStats(key string) bool {
-	return strings.Contains(key, "IndexStats")
+	return key == "IndexStats"
+}
+
+func indexStats2Key() string {
+	return "IndexStats2"
+}
+
+func isIndexStats2(key string) bool {
+	return key == "IndexStats2"
 }
 
 ///////////////////////////////////////////////////////////
