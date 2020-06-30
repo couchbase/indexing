@@ -12,6 +12,8 @@ package client
 import (
 	"encoding/json"
 	"fmt"
+	"sync/atomic"
+	"unsafe"
 
 	"github.com/couchbase/gometa/common"
 	c "github.com/couchbase/indexing/secondary/common"
@@ -54,6 +56,7 @@ const (
 	OPCODE_CHECK_TOKEN_EXIST                        = OPCODE_GET_REPLICA_COUNT + 1
 	OPCODE_RESET_INDEX_ON_ROLLBACK                  = OPCODE_CHECK_TOKEN_EXIST + 1
 	OPCODE_DELETE_COLLECTION                        = OPCODE_RESET_INDEX_ON_ROLLBACK + 1
+	OPCODE_CLIENT_STATS                             = OPCODE_DELETE_COLLECTION + 1
 )
 
 func Op2String(op common.OpCode) string {
@@ -118,6 +121,8 @@ func Op2String(op common.OpCode) string {
 		return "OPCODE_RESET_INDEX_ON_ROLLBACK"
 	case OPCODE_DELETE_COLLECTION:
 		return "OPCODE_DELETE_COLLECTION"
+	case OPCODE_CLIENT_STATS:
+		return "OPCODE_CLIENT_STATS"
 	}
 	return fmt.Sprintf("%v", op)
 }
@@ -183,6 +188,49 @@ type DedupedIndexStats struct {
 type PerIndexStats struct {
 	// Nothing for now. With CBO, num_docs_indexed,
 	// resident_percent and other stats will come here
+}
+
+type IndexStats2Holder struct {
+	ptr unsafe.Pointer
+}
+
+func (p *IndexStats2Holder) Get() *IndexStats2 {
+	val := (atomic.LoadPointer(&p.ptr))
+	if val == nil {
+		return &IndexStats2{}
+	}
+	return (*IndexStats2)(val)
+}
+
+func (p *IndexStats2Holder) Set(s *IndexStats2) {
+	atomic.StorePointer(&p.ptr, unsafe.Pointer(s))
+}
+
+func (p *PerIndexStats) Clone() *PerIndexStats {
+	// TODO: Update when adding stats to PerIndexStats
+	return nil
+}
+
+func (d *DedupedIndexStats) Clone() *DedupedIndexStats {
+	clone := &DedupedIndexStats{}
+	clone.NumDocsPending = d.NumDocsPending
+	clone.NumDocsQueued = d.NumDocsQueued
+	clone.LastRollbackTime = d.LastRollbackTime
+	clone.ProgressStatTime = d.ProgressStatTime
+	clone.Indexes = make(map[string]*PerIndexStats)
+	for index, perIndexStats := range d.Indexes {
+		clone.Indexes[index] = perIndexStats.Clone()
+	}
+	return clone
+}
+
+func (s *IndexStats2) Clone() *IndexStats2 {
+	clone := &IndexStats2{}
+	clone.Stats = make(map[string]*DedupedIndexStats)
+	for bucket, stats := range s.Stats {
+		clone.Stats[bucket] = stats.Clone()
+	}
+	return clone
 }
 
 /////////////////////////////////////////////////////////////////////////

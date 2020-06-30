@@ -57,6 +57,9 @@ type LifecycleMgr struct {
 	done             sync.WaitGroup
 	isDone           bool
 	collAwareCluster uint32 // 0: false, 1: true
+
+	lastSendClientStats *client.IndexStats2
+	clientStatsMutex    sync.Mutex
 }
 
 type requestHolder struct {
@@ -151,15 +154,17 @@ func NewLifecycleMgr(notifier MetadataNotifier, clusterURL string) (*LifecycleMg
 	cinfo.SetUserAgent("LifecycleMgr")
 
 	mgr := &LifecycleMgr{repo: nil,
-		cinfo:        cinfo,
-		notifier:     notifier,
-		clusterURL:   clusterURL,
-		incomings:    make(chan *requestHolder, 100000),
-		expedites:    make(chan *requestHolder, 100000),
-		outgoings:    make(chan c.Packet, 100000),
-		killch:       make(chan bool),
-		bootstraps:   make(chan *requestHolder, 1000),
-		indexerReady: false}
+		cinfo:               cinfo,
+		notifier:            notifier,
+		clusterURL:          clusterURL,
+		incomings:           make(chan *requestHolder, 100000),
+		expedites:           make(chan *requestHolder, 100000),
+		outgoings:           make(chan c.Packet, 100000),
+		killch:              make(chan bool),
+		bootstraps:          make(chan *requestHolder, 1000),
+		indexerReady:        false,
+		lastSendClientStats: &client.IndexStats2{},
+	}
 
 	if cinfo.GetClusterVersion() >= common.INDEXER_70_VERSION {
 		atomic.StoreUint32(&mgr.collAwareCluster, 1)
@@ -423,6 +428,8 @@ func (m *LifecycleMgr) dispatchRequest(request *requestHolder, factory *message.
 		result, err = m.handleGetIndexReplicaCount(content)
 	case client.OPCODE_CHECK_TOKEN_EXIST:
 		result, err = m.handleCheckTokenExist(content)
+	case client.OPCODE_CLIENT_STATS:
+		result, err = m.handleClientStats(content)
 	}
 
 	logging.Debugf("LifecycleMgr.dispatchRequest () : send response for requestId %d, op %d, len(result) %d", reqId, op, len(result))
@@ -2309,7 +2316,13 @@ func (m *LifecycleMgr) broadcastStats() {
 					}
 				} else {
 					idxStats2 := convertToIndexStats2(*filtered)
-					if err := m.repo.BroadcastIndexStats2(idxStats2); err != nil {
+					statsToBroadCast := m.GetDiffFromLastSent(idxStats2)
+
+					m.clientStatsMutex.Lock()
+					m.lastSendClientStats = idxStats2
+					m.clientStatsMutex.Unlock()
+
+					if err := m.repo.BroadcastIndexStats2(statsToBroadCast); err != nil {
 						logging.Errorf("lifecycleMgr: fail to send indexStats2.  Error = %v", err)
 					}
 				}
@@ -2321,6 +2334,46 @@ func (m *LifecycleMgr) broadcastStats() {
 			return
 		}
 	}
+}
+
+// TODO: This method can further be optimized to broadcast only incremental changes.
+// The IndexStats2 data structure must be modified to contain deleted indexes list
+// and current indexes map with storage stats
+// Currently, this method broadcasts full set of stats if there is any change in buckets
+// or indexes per bucket
+func (m *LifecycleMgr) GetDiffFromLastSent(currStats *client.IndexStats2) *client.IndexStats2 {
+	m.clientStatsMutex.Lock()
+	defer m.clientStatsMutex.Unlock()
+
+	if len(m.lastSendClientStats.Stats) != len(currStats.Stats) {
+		return currStats
+	}
+
+	statsToBroadCast := &client.IndexStats2{}
+	statsToBroadCast.Stats = make(map[string]*client.DedupedIndexStats)
+
+	for bucket, lastSentDeduped := range m.lastSendClientStats.Stats {
+		if currDeduped, ok := currStats.Stats[bucket]; !ok {
+			return currStats
+		} else {
+			if len(currDeduped.Indexes) != len(lastSentDeduped.Indexes) {
+				return currStats
+			}
+			for indexName, _ := range lastSentDeduped.Indexes {
+				if _, ok := currDeduped.Indexes[indexName]; !ok {
+					return currStats
+				}
+			}
+		}
+		statsToBroadCast.Stats[bucket] = &client.DedupedIndexStats{}
+		statsToBroadCast.Stats[bucket].NumDocsPending = currStats.Stats[bucket].NumDocsPending
+		statsToBroadCast.Stats[bucket].NumDocsQueued = currStats.Stats[bucket].NumDocsQueued
+		statsToBroadCast.Stats[bucket].LastRollbackTime = currStats.Stats[bucket].LastRollbackTime
+		statsToBroadCast.Stats[bucket].ProgressStatTime = currStats.Stats[bucket].ProgressStatTime
+		statsToBroadCast.Stats[bucket].Indexes = nil
+	}
+
+	return statsToBroadCast
 }
 
 // This method takes in common.Statistics as input,
@@ -2367,6 +2420,16 @@ func convertToIndexStats2(stats common.Statistics) *client.IndexStats2 {
 		}
 	}
 	return indexStats2
+}
+
+//-----------------------------------------------------------
+// Client Stats
+//-----------------------------------------------------------
+func (m *LifecycleMgr) handleClientStats(content []byte) ([]byte, error) {
+	m.clientStatsMutex.Lock()
+	defer m.clientStatsMutex.Unlock()
+
+	return client.MarshallIndexStats2(m.lastSendClientStats)
 }
 
 //-----------------------------------------------------------
