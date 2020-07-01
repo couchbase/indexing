@@ -7565,7 +7565,7 @@ func deleteOldBackups(targetDir string, sourceDir string, srcPath string) error 
 		return result
 	}
 
-	if strings.HasPrefix(srcPath, sourceDir) {
+	if !strings.HasPrefix(srcPath, sourceDir) {
 		return fmt.Errorf("path (%v) does not contain source directory (%v)", srcPath, sourceDir)
 	}
 
