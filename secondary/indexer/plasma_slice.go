@@ -2109,6 +2109,10 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 	mdb.mainstore.PurgeCompactRatio = mdb.sysconf["plasma.purger.compactRatio"].Float64()
 	mdb.mainstore.EnableLSSPageSMO = mdb.sysconf["plasma.enableLSSPageSMO"].Bool()
 
+	mdb.mainstore.EnablePageBloomFilter = mdb.sysconf["plasma.mainIndex.enablePageBloomFilter"].Bool()
+	mdb.mainstore.BloomFilterFalsePositiveRate = mdb.sysconf["plasma.mainIndex.bloomFilterFalsePositiveRate"].Float64()
+	mdb.mainstore.BloomFilterExpectedMaxItems = mdb.sysconf["plasma.mainIndex.bloomFilterExpectedMaxItems"].Uint64()
+
 	if !mdb.isPrimary {
 		mdb.backstore.AutoTuneLSSCleaning = cfg["plasma.AutoTuneLSSCleaner"].Bool()
 		mdb.backstore.MaxPageSize = cfg["plasma.MaxPageSize"].Int()
@@ -2131,6 +2135,10 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 		mdb.backstore.PurgeLowThreshold = mdb.sysconf["plasma.purger.lowThreshold"].Float64()
 		mdb.backstore.PurgeCompactRatio = mdb.sysconf["plasma.purger.compactRatio"].Float64()
 		mdb.backstore.EnableLSSPageSMO = mdb.sysconf["plasma.enableLSSPageSMO"].Bool()
+
+		mdb.backstore.EnablePageBloomFilter = mdb.sysconf["plasma.backIndex.enablePageBloomFilter"].Bool()
+		mdb.backstore.BloomFilterFalsePositiveRate = mdb.sysconf["plasma.backIndex.bloomFilterFalsePositiveRate"].Float64()
+		mdb.backstore.BloomFilterExpectedMaxItems = mdb.sysconf["plasma.backIndex.bloomFilterExpectedMaxItems"].Uint64()
 	}
 	mdb.maxRollbacks = cfg["settings.plasma.recovery.max_rollbacks"].Int()
 	mdb.maxDiskSnaps = cfg["recovery.max_disksnaps"].Int()
