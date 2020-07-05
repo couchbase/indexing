@@ -974,6 +974,10 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		STREAM_READER_CONN_ERROR,
 		STREAM_READER_SYSTEM_EVENT:
 
+		if msg.GetMsgType() == STREAM_READER_SYSTEM_EVENT {
+			idx.handleDcpSystemEvent(msg)
+		}
+
 		//fwd the message to timekeeper
 		idx.tkCmdCh <- msg
 		<-idx.tkCmdCh
@@ -2790,6 +2794,7 @@ func (idx *indexer) handleDropIndex(msg Message) (resp Message) {
 		return
 	}
 
+	//TODO Collections use keyspaceId instead of bucket
 	//if there is a flush in progress for this index's bucket and stream
 	//wait for the flush to finish before drop
 	streamId := indexInst.Stream
@@ -3636,6 +3641,82 @@ func (idx *indexer) handleKeyspaceIdNotFound(msg Message) {
 
 	logging.Infof("Indexer::handleKeyspaceIdNotFound %v %v %v",
 		streamId, keyspaceId, STREAM_INACTIVE)
+
+}
+
+func (idx *indexer) handleDcpSystemEvent(cmd Message) {
+
+	eventType := cmd.(*MsgStream).GetEventType()
+	streamId := cmd.(*MsgStream).GetStreamId()
+	meta := cmd.(*MsgStream).GetMutationMeta()
+	scopeId := cmd.(*MsgStream).GetScopeId()
+	collectionId := cmd.(*MsgStream).GetCollectionId()
+
+	if eventType == common.CollectionDrop {
+		idx.processCollectionDrop(streamId,
+			meta.keyspaceId, scopeId, collectionId)
+	}
+
+	return
+
+}
+
+func (idx *indexer) processCollectionDrop(streamId common.StreamId,
+	keyspaceId, scopeId, collectionId string) {
+
+	logging.Infof("Indexer::processCollectionDrop %v %v %v %v", streamId,
+		keyspaceId, scopeId, collectionId)
+
+	//get the collection name from index inst map(this may already be gone from manifest)
+	var collection, scope, bucket, bucketUUID string
+	for _, index := range idx.indexInstMap {
+		if index.Defn.CollectionId == collectionId &&
+			index.Stream == streamId &&
+			index.State != common.INDEX_STATE_DELETED {
+			collection = index.Defn.Collection
+			scope = index.Defn.Scope
+			bucket = index.Defn.Bucket
+			bucketUUID = index.Defn.BucketUUID
+			break
+		}
+	}
+
+	if collection == "" {
+		logging.Infof("Indexer::processCollectionDrop No Index Found for Stream %v Collection Id %v.",
+			streamId, collectionId)
+		return
+	}
+
+	// delete index inst on the keyspace from metadata repository and
+	// return the list of deleted inst
+	instIdList := idx.deleteIndexInstOnDeletedKeyspace(bucket, scope, collection, streamId)
+
+	if len(instIdList) == 0 {
+		logging.Infof("Indexer::processCollectionDrop Empty IndexList %v %v. Nothing to do.",
+			streamId, collection)
+		return
+	}
+
+	idx.bulkUpdateState(instIdList, common.INDEX_STATE_DELETED)
+	logging.Infof("Indexer::processCollectionDrop Updated Index State to DELETED %v",
+		instIdList)
+
+	msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
+
+	if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, nil); err != nil {
+		common.CrashOnError(err)
+	}
+
+	//cleanup index data for all indexes in the keyspace
+	indexList := make([]common.IndexInst, 0)
+	for _, instId := range instIdList {
+		index := idx.indexInstMap[instId]
+		idx.cleanupIndexData(index, nil)
+		indexList = append(indexList, index)
+	}
+
+	idx.removeIndexesFromStream(indexList, keyspaceId,
+		bucketUUID, streamId, common.INDEX_STATE_ACTIVE, nil)
 
 }
 
