@@ -3605,7 +3605,8 @@ func (idx *indexer) handleKeyspaceIdNotFound(msg Message) {
 
 	// delete index inst on the bucket from metadata repository and
 	// return the list of deleted inst
-	instIdList := idx.deleteIndexInstOnDeletedBucket(keyspaceId, streamId)
+	bucket, scope, collection := SplitKeyspaceId(keyspaceId)
+	instIdList := idx.deleteIndexInstOnDeletedKeyspace(bucket, scope, collection, streamId)
 
 	if len(instIdList) == 0 {
 		logging.Infof("Indexer::handleKeyspaceIdNotFound Empty IndexList %v %v. Nothing to do.",
@@ -6695,7 +6696,7 @@ func (idx *indexer) validateIndexInstMap() {
 	// handle bucket that fails validation
 	for bucket, valid := range bucketValid {
 		if !valid {
-			instList := idx.deleteIndexInstOnDeletedBucket(bucket, common.NIL_STREAM)
+			instList := idx.deleteIndexInstOnDeletedKeyspace(bucket, "", "", common.NIL_STREAM)
 			for _, instId := range instList {
 				index := idx.indexInstMap[instId]
 				logging.Warnf("Indexer::validateIndexInstMap \n\t Bucket %v Not Found."+
@@ -7028,9 +7029,16 @@ func (idx *indexer) updateMetaInfoForIndexList(instIdList []common.IndexInstId,
 
 }
 
-func (idx *indexer) updateMetaInfoForDeleteBucket(keyspaceId string, streamId common.StreamId) error {
+func (idx *indexer) updateMetaInfoForDeleteKeyspace(bucket,
+	scope, collection string, streamId common.StreamId) error {
 
-	msg := &MsgClustMgrUpdate{mType: CLUST_MGR_DEL_KEYSPACE, keyspaceId: keyspaceId, streamId: streamId}
+	msg := &MsgClustMgrUpdate{
+		mType:      CLUST_MGR_DEL_KEYSPACE,
+		bucket:     bucket,
+		scope:      scope,
+		collection: collection,
+		streamId:   streamId}
+
 	return idx.sendMsgToClusterMgr(msg)
 }
 
@@ -7653,29 +7661,47 @@ func (idx *indexer) getIndexInstForKeyspaceId(keyspaceId string) ([]common.Index
 	return result, nil
 }
 
-//TODO Collections - change this method to work with collections once manager changes are ready
-func (idx *indexer) deleteIndexInstOnDeletedBucket(bucket string, streamId common.StreamId) []common.IndexInstId {
+func (idx *indexer) deleteIndexInstOnDeletedKeyspace(bucket,
+	scope, collection string, streamId common.StreamId) []common.IndexInstId {
 
 	var instIdList []common.IndexInstId = nil
 
 	if idx.enableManager {
-		if err := idx.updateMetaInfoForDeleteBucket(bucket, streamId); err != nil {
+		if err := idx.updateMetaInfoForDeleteKeyspace(bucket,
+			scope, collection, streamId); err != nil {
 			common.CrashOnError(err)
 		}
 	}
 
-	// Only mark index inst as DELETED if it is actually got deleted in metadata.
-	for _, index := range idx.indexInstMap {
-		if index.Defn.Bucket == bucket &&
-			(streamId == common.NIL_STREAM || (index.Stream == streamId ||
-				index.Stream == common.NIL_STREAM)) {
+	if collection == "" {
+		// Only mark index inst as DELETED if it is actually got deleted in metadata.
+		for _, index := range idx.indexInstMap {
+			if index.Defn.Bucket == bucket &&
+				(streamId == common.NIL_STREAM || (index.Stream == streamId ||
+					index.Stream == common.NIL_STREAM)) {
 
-			instIdList = append(instIdList, index.InstId)
+				instIdList = append(instIdList, index.InstId)
 
-			idx.stats.RemoveIndex(index.InstId)
+				idx.stats.RemoveIndex(index.InstId)
+			}
 		}
-	}
 
+	} else {
+		// Only mark index inst as DELETED if it is actually got deleted in metadata.
+		for _, index := range idx.indexInstMap {
+			if index.Defn.Bucket == bucket &&
+				index.Defn.Scope == scope &&
+				index.Defn.Collection == collection &&
+				(streamId == common.NIL_STREAM || (index.Stream == streamId ||
+					index.Stream == common.NIL_STREAM)) {
+
+				instIdList = append(instIdList, index.InstId)
+
+				idx.stats.RemoveIndex(index.InstId)
+			}
+		}
+
+	}
 	return instIdList
 }
 

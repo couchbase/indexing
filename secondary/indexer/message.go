@@ -1847,7 +1847,9 @@ type MsgClustMgrUpdate struct {
 	mType         MsgType
 	indexList     []common.IndexInst
 	updatedFields MetaUpdateFields
-	keyspaceId    string
+	bucket        string
+	scope         string
+	collection    string
 	streamId      common.StreamId
 	syncUpdate    bool
 	respCh        chan error
@@ -1865,8 +1867,16 @@ func (m *MsgClustMgrUpdate) GetUpdatedFields() MetaUpdateFields {
 	return m.updatedFields
 }
 
-func (m *MsgClustMgrUpdate) GetKeyspaceId() string {
-	return m.keyspaceId
+func (m *MsgClustMgrUpdate) GetBucket() string {
+	return m.bucket
+}
+
+func (m *MsgClustMgrUpdate) GetScope() string {
+	return m.scope
+}
+
+func (m *MsgClustMgrUpdate) GetCollection() string {
+	return m.collection
 }
 
 func (m *MsgClustMgrUpdate) GetStreamId() common.StreamId {

@@ -526,12 +526,18 @@ func (c *clustMgrAgent) handleDeleteKeyspace(cmd Message) {
 
 	logging.Infof("ClustMgr:handleDeleteKeyspace %v", cmd)
 
-	keyspaceId := cmd.(*MsgClustMgrUpdate).GetKeyspaceId()
+	bucket := cmd.(*MsgClustMgrUpdate).GetBucket()
+	scope := cmd.(*MsgClustMgrUpdate).GetScope()
+	collection := cmd.(*MsgClustMgrUpdate).GetCollection()
 	streamId := cmd.(*MsgClustMgrUpdate).GetStreamId()
 
-	bucket, _, _ := SplitKeyspaceId(keyspaceId)
+	var err error
+	if collection == "" {
+		err = c.mgr.DeleteIndexForBucket(bucket, streamId)
+	} else {
+		err = c.mgr.DeleteIndexForCollection(bucket, scope, collection, streamId)
+	}
 
-	err := c.mgr.DeleteIndexForBucket(bucket, streamId)
 	common.CrashOnError(err)
 
 	c.supvCmdch <- &MsgSuccess{}
