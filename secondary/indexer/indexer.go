@@ -4888,7 +4888,6 @@ func (idx *indexer) processBuildDoneNoCatchup(streamId common.StreamId,
 	idx.setStreamKeyspaceIdState(streamId, keyspaceId, STREAM_INACTIVE)
 	idx.cleanupStreamKeyspaceIdState(streamId, keyspaceId)
 
-	clustAddr := idx.config["clusterAddr"].String()
 	bucket, _, _ := SplitKeyspaceId(keyspaceId)
 
 	reqLock := idx.acquireStreamRequestLock(keyspaceId, streamId)
@@ -4898,7 +4897,7 @@ func (idx *indexer) processBuildDoneNoCatchup(streamId common.StreamId,
 		count := 0
 	retryloop:
 		for {
-			if !ValidateBucket(clustAddr, bucket, bucketUUIDList) {
+			if !idx.clusterInfoClient.ValidateBucket(bucket, bucketUUIDList) {
 				logging.Errorf("Indexer::processBuildDoneNoCatchup Bucket Not Found "+
 					"For Stream %v KeyspaceId %v SessionId %v", streamId, keyspaceId, sessionId)
 				break retryloop
