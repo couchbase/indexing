@@ -6697,8 +6697,15 @@ func (idx *indexer) upgradeSingleIndex(inst *common.IndexInst, storageMode commo
 
 func (idx *indexer) validateIndexInstMap() {
 
+	clusterAddr := idx.config["clusterAddr"].String()
+
 	bucketUUIDMap := make(map[string]bool)
 	bucketValid := make(map[string]bool)
+
+	keyspaceMap := make(map[string]bool)
+	keyspaceValid := make(map[string]bool)
+
+	clusterVer := idx.clusterInfoClient.ClusterVersion()
 
 	for instId, index := range idx.indexInstMap {
 
@@ -6757,7 +6764,6 @@ func (idx *indexer) validateIndexInstMap() {
 			continue
 		}
 
-		//TODO Validate collection/scope
 		//if bucket doesn't exist, cleanup
 		bucketUUID := index.Defn.Bucket + "::" + index.Defn.BucketUUID
 		if _, ok := bucketUUIDMap[bucketUUID]; !ok {
@@ -6772,6 +6778,31 @@ func (idx *indexer) validateIndexInstMap() {
 				bucketValid[bucket] = bucketUUIDValid
 			}
 		}
+
+		if clusterVer >= common.INDEXER_65_VERSION {
+
+			keyspace := strings.Join([]string{index.Defn.Bucket,
+				index.Defn.Scope, index.Defn.Collection}, ":")
+			if _, ok := keyspaceMap[keyspace]; !ok {
+
+				//TODO Collections - change to use cinfo.GetCollectionID once streaming
+				//rest endpoint is available
+				cid, _ := common.GetCollectionID(clusterAddr,
+					index.Defn.Bucket, index.Defn.Scope, index.Defn.Collection)
+
+				cidValid := false
+				if cid == index.Defn.CollectionId {
+					cidValid = true
+				}
+
+				if _, ok := keyspaceValid[keyspace]; ok {
+					keyspaceValid[keyspace] = keyspaceValid[keyspace] && cidValid
+				} else {
+					keyspaceValid[keyspace] = cidValid
+				}
+
+			}
+		}
 	}
 
 	// handle bucket that fails validation
@@ -6780,13 +6811,26 @@ func (idx *indexer) validateIndexInstMap() {
 			instList := idx.deleteIndexInstOnDeletedKeyspace(bucket, "", "", common.NIL_STREAM)
 			for _, instId := range instList {
 				index := idx.indexInstMap[instId]
-				logging.Warnf("Indexer::validateIndexInstMap \n\t Bucket %v Not Found."+
+				logging.Warnf("Indexer::validateIndexInstMap Bucket %v Not Found."+
 					"Not Recovering Index %v", bucket, index)
 				delete(idx.indexInstMap, instId)
 			}
 		}
 	}
 
+	// handle collection that fails validation
+	for keyspace, valid := range keyspaceValid {
+		if !valid {
+			bucket, scope, collection := SplitKeyspaceId(keyspace)
+			instList := idx.deleteIndexInstOnDeletedKeyspace(bucket, scope, collection, common.NIL_STREAM)
+			for _, instId := range instList {
+				index := idx.indexInstMap[instId]
+				logging.Warnf("Indexer::validateIndexInstMap Keyspace %v Not Found."+
+					"Not Recovering Index %v", keyspace, index)
+				delete(idx.indexInstMap, instId)
+			}
+		}
+	}
 	idx.checkMaintStreamIndexBuild()
 
 }
