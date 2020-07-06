@@ -39,6 +39,7 @@ type ClientSettings struct {
 	allowCJsonScanFormat uint32
 	allowPartialQuorum   uint32
 	allowScheduleCreate  uint32
+	listSchedIndexes     uint32
 }
 
 func NewClientSettings(needRefresh bool) *ClientSettings {
@@ -201,6 +202,18 @@ func (s *ClientSettings) handleSettings(config common.Config) {
 		atomic.StoreUint32(&s.allowScheduleCreate, 0)
 	}
 
+	listSchedIndexes, ok := config["queryport.client.listSchedIndexes"]
+	if ok {
+		if listSchedIndexes.Bool() {
+			atomic.StoreUint32(&s.listSchedIndexes, 1)
+		} else {
+			atomic.StoreUint32(&s.listSchedIndexes, 0)
+		}
+	} else {
+		logging.Errorf("ClientSettings: missing listSchedIndexes")
+		atomic.StoreUint32(&s.listSchedIndexes, 1)
+	}
+
 	usePlanner, ok := config["queryport.client.usePlanner"]
 	if ok {
 		if usePlanner.Bool() {
@@ -284,6 +297,10 @@ func (s *ClientSettings) AllowPartialQuorum() bool {
 
 func (s *ClientSettings) AllowScheduleCreate() bool {
 	return atomic.LoadUint32(&s.allowScheduleCreate) == 1
+}
+
+func (s *ClientSettings) ListSchedIndexes() bool {
+	return atomic.LoadUint32(&s.listSchedIndexes) == 1
 }
 
 func (s *ClientSettings) UsePlanner() bool {

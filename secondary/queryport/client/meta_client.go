@@ -158,6 +158,10 @@ func (b *metadataClient) Refresh() ([]*mclient.IndexMetadata, uint64, uint64, bo
 		currmeta = (*indexTopology)(atomic.LoadPointer(&b.indexers))
 	}
 
+	if !b.settings.ListSchedIndexes() {
+		return currmeta.allIndexes, currmeta.version, b.mdClient.GetClusterVersion(), false, nil
+	}
+
 	return b.reconcileIndexList(currmeta)
 }
 
