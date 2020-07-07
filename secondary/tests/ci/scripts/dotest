@@ -160,6 +160,22 @@ export LD_LIBRARY_PATH=$WORKSPACE/install/lib
 cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/tests
 go get -t ./... 1>/dev/null 2>&1
 
+AMDDIR=/home/buildbot/akhilmd/$(date +%m%d-%H%M%S)
+mkdir -p $AMDDIR
+test_and_prof() {
+    TESTNAME=$1
+
+    # Run test and generate profile
+    GOMAXPROCS=4 ./plasma.test \
+    -test.blockprofile $AMDDIR/ci-block-$TESTNAME.prof \
+    -test.cpuprofile $AMDDIR/ci-cpu-$TESTNAME.prof \
+    -test.memprofile $AMDDIR/ci-mem-$TESTNAME.prof \
+    -test.mutexprofile $AMDDIR/ci-mutex-$TESTNAME.prof \
+    -test.timeout 4h \
+    -test.v \
+    -test.run $TESTNAME 2>&1 | tee -a $WORKSPACE/test.log
+}
+
 export phase=unit
 if [[ "$MODE" == *"$phase"* ]]; then
   echo "</pre><h4>Unit tests</h4><pre>"
@@ -172,21 +188,29 @@ if [[ "$MODE" == *"$phase"* ]]; then
       GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
 
   elif [ "$STORAGE" = "plasma" ]; then
-      cd $WORKSPACE/goproj/src/github.com/couchbase/nitro/skiplist
-      GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
+      # cd $WORKSPACE/goproj/src/github.com/couchbase/nitro/skiplist
+      # GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
 
       cd $WORKSPACE/goproj/src/github.com/couchbase/plasma
-      GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
+      # GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
+
+      # Compile test binary plasma.test
+      go test -c
+      cp plasma.test $AMDDIR/
+
+      test_and_prof TestShardRecoveryShared
+      test_and_prof TestShardRecoveryRecoveryLogAhead
+      test_and_prof TestShardRecoveryDataLogAhead
   fi
 
-  cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/collatejson
-  GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
+  # cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/collatejson
+  # GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
 
-  cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/indexer
-  GOMAXPROCS=16 go test -vet=off -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
+  # cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/indexer
+  # GOMAXPROCS=16 go test -vet=off -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
 
-  cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/queryport/client
-  GOMAXPROCS=16 go test -timeout 15m -v 2>&1 | tee -a $WORKSPACE/test.log
+  # cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/queryport/client
+  # GOMAXPROCS=16 go test -timeout 15m -v 2>&1 | tee -a $WORKSPACE/test.log
 fi
 
 export phase=functional
