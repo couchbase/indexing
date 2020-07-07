@@ -1463,6 +1463,9 @@ func TestOrphanIndexCleanup(t *testing.T) {
 		"", []string{"company"}, false, nil, false, 60, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
+	// Let the persistent snapshot complete.
+	time.Sleep(10 * time.Second)
+
 	// Verify the index is queryable
 	_, err = secondaryindex.Range("idx1_age_regular", "default", indexScanAddress, []interface{}{35},
 		[]interface{}{40}, 1, false, defaultlimit, c.SessionConsistency, nil)
@@ -1519,6 +1522,9 @@ func TestOrphanPartitionCleanup(t *testing.T) {
 		"", []string{"age"}, []bool{false}, false, nil, c.KEY, []string{"age"}, false, 60, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
+	// Let the persistent snapshot complete.
+	time.Sleep(10 * time.Second)
+
 	// Verify the index is queryable
 	_, err = secondaryindex.Range("idx3_age_regular", "default", indexScanAddress, []interface{}{35},
 		[]interface{}{40}, 1, false, defaultlimit, c.SessionConsistency, nil)
@@ -1539,7 +1545,7 @@ func TestOrphanPartitionCleanup(t *testing.T) {
 	// restart the indexer
 	forceKillIndexer()
 
-	// Verify that the idexer has come up - and query on non-orphan index succeeds.
+	// Verify that the indexer has come up - and query on non-orphan index succeeds.
 	_, err = secondaryindex.Range("idx3_age_regular", "default", indexScanAddress, []interface{}{35},
 		[]interface{}{40}, 1, false, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in range scan after indexer restart", t)
