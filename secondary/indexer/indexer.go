@@ -3823,16 +3823,14 @@ func (idx *indexer) sendStreamUpdateForIndex(indexInstList []common.IndexInst,
 
 	retryCount := 0
 
-	bucket, _, _ := SplitKeyspaceId(keyspaceId)
-
 	reqLock := idx.acquireStreamRequestLock(keyspaceId, streamId)
 	go func(reqLock *kvRequest) {
 		defer idx.releaseStreamRequestLock(reqLock)
 		idx.waitStreamRequestLock(reqLock)
 	retryloop:
 		for {
-			if !idx.clusterInfoClient.ValidateBucket(bucket, []string{bucketUUID}) {
-				logging.Errorf("Indexer::sendStreamUpdateForIndex Bucket Not Found "+
+			if !idx.ValidateKeyspace(streamId, keyspaceId, []string{bucketUUID}) {
+				logging.Errorf("Indexer::sendStreamUpdateForIndex Keyspace Not Found "+
 					"For Stream %v KeyspaceId %v", streamId, keyspaceId)
 				break retryloop
 			}
@@ -4001,8 +3999,6 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 
 	idx.setStreamKeyspaceIdCurrRequest(buildStream, keyspaceId, cmd, stopCh, sessionId)
 
-	bucket, _, _ := SplitKeyspaceId(keyspaceId)
-
 	reqLock := idx.acquireStreamRequestLock(keyspaceId, buildStream)
 	go func(reqLock *kvRequest) {
 		defer idx.releaseStreamRequestLock(reqLock)
@@ -4011,8 +4007,8 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 
 	retryloop:
 		for {
-			if !idx.clusterInfoClient.ValidateBucket(bucket, bucketUUIDList) {
-				logging.Errorf("Indexer::sendStreamUpdateForBuildIndex Bucket Not Found "+
+			if !idx.ValidateKeyspace(buildStream, keyspaceId, bucketUUIDList) {
+				logging.Errorf("Indexer::sendStreamUpdateForBuildIndex Keyspace Not Found "+
 					"For Stream %v KeyspaceId %v SessionId %v", buildStream, keyspaceId, sessionId)
 				idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_BUCKET_NOT_FOUND,
 					streamId:   buildStream,
@@ -4259,8 +4255,6 @@ func (idx *indexer) removeIndexesFromStream(indexList []common.IndexInst,
 			common.CrashOnError(respErr.cause)
 		}
 
-		bucket, _, _ := SplitKeyspaceId(keyspaceId)
-
 		reqLock := idx.acquireStreamRequestLock(keyspaceId, streamId)
 		go func(reqLock *kvRequest) {
 			defer idx.releaseStreamRequestLock(reqLock)
@@ -4268,9 +4262,9 @@ func (idx *indexer) removeIndexesFromStream(indexList []common.IndexInst,
 		retryloop:
 			for {
 
-				if !idx.clusterInfoClient.ValidateBucket(bucket, []string{bucketUUID}) {
-					logging.Errorf("Indexer::removeIndexesFromStream Bucket Not Found "+
-						"For Stream %v Bucket %v", streamId, bucket)
+				if !idx.ValidateKeyspace(streamId, keyspaceId, []string{bucketUUID}) {
+					logging.Errorf("Indexer::removeIndexesFromStream Keyspace Not Found "+
+						"For Stream %v KeyspaceId %v", streamId, keyspaceId)
 					idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_BUCKET_NOT_FOUND,
 						streamId:   streamId,
 						keyspaceId: keyspaceId,
@@ -4815,8 +4809,8 @@ func (idx *indexer) processBuildDoneCatchup(streamId common.StreamId, keyspaceId
 		count := 0
 	retryloop:
 		for {
-			if !idx.clusterInfoClient.ValidateBucket(bucket, bucketUUIDList) {
-				logging.Errorf("Indexer::processBuildDoneCatchup Bucket Not Found "+
+			if !idx.ValidateKeyspace(common.MAINT_STREAM, bucket, bucketUUIDList) {
+				logging.Errorf("Indexer::processBuildDoneCatchup Keyspace Not Found "+
 					"For Stream %v KeyspaceId %v SessionId %v", streamId, keyspaceId, sessionId)
 				//TODO need to send bucket not found?
 				break retryloop
@@ -4970,8 +4964,6 @@ func (idx *indexer) processBuildDoneNoCatchup(streamId common.StreamId,
 	idx.setStreamKeyspaceIdState(streamId, keyspaceId, STREAM_INACTIVE)
 	idx.cleanupStreamKeyspaceIdState(streamId, keyspaceId)
 
-	bucket, _, _ := SplitKeyspaceId(keyspaceId)
-
 	reqLock := idx.acquireStreamRequestLock(keyspaceId, streamId)
 	go func(reqLock *kvRequest) {
 		defer idx.releaseStreamRequestLock(reqLock)
@@ -4979,8 +4971,8 @@ func (idx *indexer) processBuildDoneNoCatchup(streamId common.StreamId,
 		count := 0
 	retryloop:
 		for {
-			if !idx.clusterInfoClient.ValidateBucket(bucket, bucketUUIDList) {
-				logging.Errorf("Indexer::processBuildDoneNoCatchup Bucket Not Found "+
+			if !idx.ValidateKeyspace(streamId, keyspaceId, bucketUUIDList) {
+				logging.Errorf("Indexer::processBuildDoneNoCatchup Keyspace Not Found "+
 					"For Stream %v KeyspaceId %v SessionId %v", streamId, keyspaceId, sessionId)
 				break retryloop
 			}
@@ -5531,8 +5523,6 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 	idx.initBuildTsLock(streamId, keyspaceId)
 	idx.setStreamKeyspaceIdCurrRequest(streamId, keyspaceId, cmd, stopCh, sessionId)
 
-	bucket, _, _ := SplitKeyspaceId(keyspaceId)
-
 	reqLock := idx.acquireStreamRequestLock(keyspaceId, streamId)
 	go func(reqLock *kvRequest) {
 		defer idx.releaseStreamRequestLock(reqLock)
@@ -5540,9 +5530,9 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 		count := 0
 	retryloop:
 		for {
-			//validate bucket before every try
-			if !idx.clusterInfoClient.ValidateBucket(bucket, bucketUUIDList) {
-				logging.Errorf("Indexer::startKeyspaceIdStream Bucket Not Found "+
+			//validate keyspace before every try
+			if !idx.ValidateKeyspace(streamId, keyspaceId, bucketUUIDList) {
+				logging.Errorf("Indexer::startKeyspaceIdStream Keyspace Not Found "+
 					"For Stream %v KeyspaceId %v SessionId %v", streamId, keyspaceId, sessionId)
 				idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_BUCKET_NOT_FOUND,
 					streamId:   streamId,
@@ -8911,4 +8901,38 @@ func (idx *indexer) monitorKVNodes() {
 			return
 		}
 	}
+}
+
+func (idx *indexer) ValidateKeyspace(streamId common.StreamId, keyspaceId string,
+	bucketUUIDs []string) bool {
+
+	clusterAddr := idx.config["clusterAddr"].String()
+
+	collectionId := idx.streamKeyspaceIdCollectionId[streamId][keyspaceId]
+
+	bucket, scope, collection := SplitKeyspaceId(keyspaceId)
+
+	//if the stream is using a cid, validate collection.
+	//otherwise only validate the bucket
+	if collectionId == "" {
+		if !idx.clusterInfoClient.ValidateBucket(bucket, bucketUUIDs) {
+			return false
+		}
+	} else {
+
+		if scope == "" && collection == "" {
+			scope = common.DEFAULT_SCOPE
+			collection = common.DEFAULT_COLLECTION
+		}
+
+		//TODO Collections - change to use cinfo.GetCollectionID once streaming
+		//rest endpoint is available
+		cid, _ := common.GetCollectionID(clusterAddr,
+			bucket, scope, collection)
+		if cid != collectionId {
+			return false
+		}
+	}
+	return true
+
 }
