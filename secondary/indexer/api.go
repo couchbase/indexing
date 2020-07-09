@@ -13,7 +13,8 @@ import "github.com/couchbase/cbauth"
 type target struct {
 	version   string
 	level     string
-	resource  string
+	bucket    string
+	index     string
 	skipEmpty bool
 	partition bool
 	pretty    bool
@@ -123,20 +124,21 @@ func (api *restServer) statsHandler(req request) {
 		}
 		stats := api.statsMgr.stats.Get()
 		segs := strings.Split(req.url, "/")
-		t := &target{version: req.version, skipEmpty:skipEmpty,
-			partition:partition, pretty:pretty,}
+		t := &target{version: req.version, skipEmpty: skipEmpty,
+			partition: partition, pretty: pretty}
 		switch req.version {
 		case "v1":
 			if len(segs) == 3 { // Indexer node level stats
 				t.level = "indexer"
 			} else if len(segs) == 4 { // Bucket level stats
-				errStr := fmt.Sprintf("Bucket-Level statistics are unavailable" +
+				errStr := fmt.Sprintf("Bucket-Level statistics are unavailable"+
 					"\nPlease retry at Indexer Node or Index granularity \n%s", req.r.URL.Path)
 				http.Error(req.w, errStr, 404)
 				return
 			} else if len(segs) == 5 { // Index level stats
 				t.level = "index"
-				t.resource = segs[4]
+				t.bucket = segs[3]
+				t.index = segs[4]
 			} else {
 				http.Error(req.w, req.r.URL.Path, 404)
 				return
@@ -171,11 +173,11 @@ func (api *restServer) authorizeStats(req request, t *target) bool {
 	case "indexer":
 		permissions = append(permissions, "cluster.n1ql.meta!read")
 	case "bucket":
-		permission := fmt.Sprintf("cluster.bucket[%s].n1ql.index!list", t.resource)
+		permission := fmt.Sprintf("cluster.bucket[%s].n1ql.index!list", t.bucket)
 		permissions = append(permissions, permission)
 		break
 	case "index":
-		permission := fmt.Sprintf("cluster.bucket[%s].n1ql.index!list", t.resource)
+		permission := fmt.Sprintf("cluster.bucket[%s].n1ql.index!list", t.bucket)
 		permissions = append(permissions, permission)
 		break
 	default:

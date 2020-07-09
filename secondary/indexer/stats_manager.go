@@ -949,7 +949,7 @@ func (is IndexerStats) GetVersionedStats(t *target) (common.Statistics, bool) {
 		found = true
 	} else if t.level == "index" {
 		for _, s := range is.indexes {
-			if strings.EqualFold(s.name, t.resource) {
+			if s.name == t.index && s.bucket == t.bucket {
 				name := common.FormatIndexInstDisplayName(s.name, s.replicaId)
 				key = fmt.Sprintf("%s:%s", s.bucket, name)
 				statsMap[key] = s.constructIndexStats(t.skipEmpty, t.version)
