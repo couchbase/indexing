@@ -104,9 +104,9 @@ git pull 1>>$WORKSPACE/make.log 2>&1 || error_exit "git pull"
 note_version indexing $WORKSPACE/goproj/src/github.com/couchbase/indexing
 
 cd $WORKSPACE/goproj/src/github.com/couchbase/plasma
-echo "Switching plasma to 64a4532"
-git checkout 64a4532 1>>$WORKSPACE/make.log 2>&1 || error_exit "git checkout 64a4532"
-#git pull 1>>$WORKSPACE/make.log 2>&1 || error_exit "git pull"
+echo "Switching plasma to $BRANCH"
+git checkout $BRANCH 1>>$WORKSPACE/make.log 2>&1 || error_exit "git checkout $BRANCH"
+git pull 1>>$WORKSPACE/make.log 2>&1 || error_exit "git pull"
 note_version plasma $WORKSPACE/goproj/src/github.com/couchbase/plasma
 
 cd $WORKSPACE/goproj/src/github.com/couchbase/nitro

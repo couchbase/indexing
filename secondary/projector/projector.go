@@ -202,6 +202,10 @@ func (p *Projector) ResetConfig(config c.Config) {
 		value := cv.Int()
 		p.statsCmdCh <- []interface{}{VBSEQNOS_LOG_INTERVAL_UPDATE, value}
 	}
+	if cv, ok := config["projector.evalStatLoggingThreshold"]; ok {
+		value := cv.Int()
+		p.statsCmdCh <- []interface{}{EVAL_STAT_LOGGING_THRESHOLD, value}
+	}
 	p.config = p.config.Override(config)
 
 	// CPU-profiling

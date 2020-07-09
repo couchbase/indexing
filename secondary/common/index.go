@@ -100,6 +100,9 @@ const (
 	INDEX_STATE_ERROR
 	// Nil State (used for no-op / invalid) -- not a persistent state
 	INDEX_STATE_NIL
+	// Scheduled state: used for the indexes scheduled for creation.
+	// Not a persistent state.
+	INDEX_STATE_SCHEDULED
 )
 
 func (s IndexState) String() string {
@@ -119,6 +122,8 @@ func (s IndexState) String() string {
 		return "INDEX_STATE_DELETED"
 	case INDEX_STATE_ERROR:
 		return "INDEX_STATE_ERROR"
+	case INDEX_STATE_SCHEDULED:
+		return "INDEX_STATE_SCHEDULED"
 	default:
 		return "INDEX_STATE_UNKNOWN"
 	}
@@ -495,7 +500,8 @@ func (idx IndexInstMap) String() string {
 	for i, index := range idx {
 		str += fmt.Sprintf("\tInstanceId: %v ", i)
 		str += fmt.Sprintf("Name: %v ", index.Defn.Name)
-		str += fmt.Sprintf("Bucket: %v ", index.Defn.Bucket)
+		str += fmt.Sprintf("Keyspace: %v/%v/%v ", index.Defn.Bucket,
+			index.Defn.Scope, index.Defn.Collection)
 		str += fmt.Sprintf("State: %v ", index.State)
 		str += fmt.Sprintf("Stream: %v ", index.Stream)
 		str += fmt.Sprintf("RState: %v ", index.RState)

@@ -26,3 +26,15 @@ func NewPlasmaSlice(storage_dir string, path string, sliceId SliceId, idxDefn co
 		idxDefn, idxInstId, partitionId, isPrimary, numPartitions,
 		sysconf, idxStats, indexerStats)
 }
+
+func DestroyPlasmaSlice(path string) error {
+	return destroyPlasmaSlice(path)
+}
+
+func ListPlasmaSlices() ([]string, error) {
+	return listPlasmaSlices()
+}
+
+func BackupCorruptedPlasmaSlice(prefix string, rename func(string) (string, error), clean func(string)) error {
+	return backupCorruptedPlasmaSlice(prefix, rename, clean)
+}

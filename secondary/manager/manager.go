@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -196,9 +197,9 @@ func NewIndexManagerInternal(config common.Config, storageMode common.StorageMod
 	// coordinator
 	mgr.coordinator = nil
 
-	// monitor bucket
+	// monitor keyspace
 	mgr.monitorKillch = make(chan bool)
-	go mgr.monitorBucket(mgr.monitorKillch)
+	go mgr.monitorKeyspace(mgr.monitorKillch)
 
 	return mgr, nil
 }
@@ -695,10 +696,10 @@ func (m *IndexManager) GetGlobalTopology() (*GlobalTopology, error) {
 }
 
 ///////////////////////////////////////////////////////
-// public function - Bucket Monitor
+// public function - Keyspace Monitor
 ///////////////////////////////////////////////////////
 
-func (m *IndexManager) monitorBucket(killch chan bool) {
+func (m *IndexManager) monitorKeyspace(killch chan bool) {
 
 	ticker := time.NewTicker(time.Second * 10)
 	defer ticker.Stop()
@@ -706,16 +707,16 @@ func (m *IndexManager) monitorBucket(killch chan bool) {
 	for {
 		select {
 		case <-ticker.C:
-			buckets, err := m.getBucketForCleanup()
+			keyspaceList, err := m.getKeyspaceForCleanup()
 			if err == nil {
-				for _, bucket := range buckets {
-					logging.Infof("IndexManager.MonitorBucket(): making request for deleting defer index for bucket %v", bucket)
+				for _, keyspace := range keyspaceList {
+					logging.Infof("IndexManager.MonitorKeyspace(): making request for deleting defer index for keyspace %v", keyspace)
 					// Make sure it is making a synchronous request.  So if indexer main loop cannot proceed to delete the indexes
 					// (e.g. indexer is slow or blocked), it won't keep generating new request.
-					m.requestServer.MakeRequest(client.OPCODE_CLEANUP_DEFER_INDEX, bucket, []byte{})
+					m.requestServer.MakeRequest(client.OPCODE_CLEANUP_DEFER_INDEX, keyspace, []byte{})
 				}
 			} else {
-				logging.Errorf("IndexManager.MonitorBucket(): Error occurred while getting buckets for cleanup %v", err)
+				logging.Errorf("IndexManager.MonitorKeyspace(): Error occurred while getting keyspace list for cleanup %v", err)
 			}
 		case <-killch:
 			return
@@ -723,7 +724,7 @@ func (m *IndexManager) monitorBucket(killch chan bool) {
 	}
 }
 
-func (m *IndexManager) getBucketForCleanup() ([]string, error) {
+func (m *IndexManager) getKeyspaceForCleanup() ([]string, error) {
 
 	var result []string = nil
 
@@ -751,6 +752,10 @@ func (m *IndexManager) getBucketForCleanup() ([]string, error) {
 		// Note: Do not call cinfo.GetCollectionID() to retrieve collectionID as it
 		// can result in stale results. Use common.GetCollectionID() till the time
 		// ns_server provices streaming rest endpoint for streaming collection manifest
+
+		//TODO Collections - change to use cinfo.GetCollectionID once streaming
+		//rest endpoint is available
+		collectionID, _ := common.GetCollectionID(m.clusterURL, bucket, scope, collection)
 
 		topology, err := m.repo.GetTopologyByCollection(bucket, scope, collection)
 		if err == nil && topology != nil {
@@ -780,7 +785,8 @@ func (m *IndexManager) getBucketForCleanup() ([]string, error) {
 
 						// If there is any index in CREATED or PENDING state from a non-existent bucket.
 						// If so, this could be a candidate for cleanup.
-						if defn.BucketUUID != currentUUID &&
+						if (defn.BucketUUID != currentUUID ||
+							defn.CollectionId != collectionID) &&
 							instRef.State != uint32(common.INDEX_STATE_DELETED) &&
 							common.StreamId(instRef.StreamId) == common.NIL_STREAM {
 							hasInvalidDeferIndex = true
@@ -794,7 +800,8 @@ func (m *IndexManager) getBucketForCleanup() ([]string, error) {
 			}
 
 			if !hasValidActiveIndex && hasInvalidDeferIndex {
-				result = append(result, bucket)
+				keyspace := strings.Join([]string{bucket, scope, collection}, ":")
+				result = append(result, keyspace)
 			}
 		}
 	}

@@ -385,6 +385,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"projector.evalStatLoggingThreshold": ConfigValue{
+		200, // 200 microseconds
+		"Threshold after which index evaluator stats will be logged in projector logs (In microseconds)",
+		200,   // 200 microseconds
+		false, // mutable
+		false, // case-insensitive
+	},
 	"projector.gogc": ConfigValue{
 		100, // 100 percent
 		"set GOGC percent",

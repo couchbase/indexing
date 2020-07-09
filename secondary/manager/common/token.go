@@ -1244,7 +1244,7 @@ func (m *CommandListener) AddNewStopScheduleCreateToken(path string, token *Stop
 	m.stopSchedTokens[path] = token
 }
 
-func (m *CommandListener) GetDeletesdScheduleCreateTokenPaths() map[string]bool {
+func (m *CommandListener) GetDeletedScheduleCreateTokenPaths() map[string]bool {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 

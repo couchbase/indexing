@@ -13,10 +13,16 @@ import (
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
 )
 
+const defaultEvalStatLoggingThreshold = 200
+const defaultStatsLogDumpInterval = 60
+const defaultEvalStatsLogInterval = 300
+const defaultVbseqnosLogInterval = 5 * defaultStatsLogDumpInterval
+
 const (
 	UPDATE_STATS_MAP byte = iota + 1
 	STATS_LOG_INTERVAL_UPDATE
 	VBSEQNOS_LOG_INTERVAL_UPDATE
+	EVAL_STAT_LOGGING_THRESHOLD
 )
 
 type KeyspaceIdStats struct {
@@ -162,15 +168,16 @@ func (p *ProjectorStatsHolder) Set(s *ProjectorStats) {
 }
 
 type statsManager struct {
-	stats                ProjectorStatsHolder
-	cmdCh                chan []interface{}
-	stopCh               chan bool
-	stopLogger           int32
-	statsLogDumpInterval int64
-	vbseqnosLogInterval  int64
-	evalStatsLogInterval int64
-	lastStatTime         time.Time
-	config               common.ConfigHolder
+	stats                    ProjectorStatsHolder
+	cmdCh                    chan []interface{}
+	stopCh                   chan bool
+	stopLogger               int32
+	statsLogDumpInterval     int64
+	vbseqnosLogInterval      int64
+	evalStatsLogInterval     int64
+	evalStatLoggingThreshold int64
+	lastStatTime             time.Time
+	config                   common.ConfigHolder
 }
 
 func NewStatsManager(cmdCh chan []interface{}, stopCh chan bool, config common.Config) *statsManager {
@@ -184,7 +191,7 @@ func NewStatsManager(cmdCh chan []interface{}, stopCh chan bool, config common.C
 		atomic.StoreInt64(&sm.statsLogDumpInterval, int64(val.Int()))
 	} else {
 		// Use default value of 60 seconds
-		atomic.StoreInt64(&sm.statsLogDumpInterval, int64(60))
+		atomic.StoreInt64(&sm.statsLogDumpInterval, int64(defaultStatsLogDumpInterval))
 	}
 
 	si := atomic.LoadInt64(&sm.statsLogDumpInterval)
@@ -192,15 +199,23 @@ func NewStatsManager(cmdCh chan []interface{}, stopCh chan bool, config common.C
 		atomic.StoreInt64(&sm.vbseqnosLogInterval, int64(val.Int())*si)
 	} else {
 		// Use default value of 5 * statsLogDumpInterval seconds
-		atomic.StoreInt64(&sm.vbseqnosLogInterval, 5*si)
+		atomic.StoreInt64(&sm.vbseqnosLogInterval, int64(defaultVbseqnosLogInterval))
+	}
+
+	if val, ok := config["projector.evalStatLoggingThreshold"]; ok {
+		atomic.StoreInt64(&sm.evalStatLoggingThreshold, int64(val.Int()))
+	} else {
+		// Use default value of 60 seconds
+		atomic.StoreInt64(&sm.evalStatLoggingThreshold, int64(defaultEvalStatLoggingThreshold))
 	}
 
 	// Use default value of 300 seconds
-	atomic.StoreInt64(&sm.evalStatsLogInterval, int64(300))
+	atomic.StoreInt64(&sm.evalStatsLogInterval, int64(defaultEvalStatsLogInterval))
 
 	logging.Infof("StatsManager: Stats logging interval set to: %v seconds", atomic.LoadInt64(&sm.statsLogDumpInterval))
 	logging.Infof("StatsManager: vbseqnos logging interval set to: %v seconds", atomic.LoadInt64(&sm.vbseqnosLogInterval))
 	logging.Infof("StatsManager: eval stats logging interval set to: %v seconds", atomic.LoadInt64(&sm.evalStatsLogInterval))
+	logging.Infof("StatsManager: eval stats logging threshold set to: %v microseconds", atomic.LoadInt64(&sm.evalStatLoggingThreshold))
 
 	sm.config.Store(config)
 	go sm.run()
@@ -222,6 +237,9 @@ func (sm *statsManager) run() {
 			case VBSEQNOS_LOG_INTERVAL_UPDATE:
 				val := msg[1].(int)
 				atomic.StoreInt64(&sm.vbseqnosLogInterval, int64(val)*atomic.LoadInt64(&sm.statsLogDumpInterval))
+			case EVAL_STAT_LOGGING_THRESHOLD:
+				val := msg[1].(int)
+				atomic.StoreInt64(&sm.evalStatLoggingThreshold, int64(val))
 			}
 		case <-sm.stopCh:
 			atomic.StoreInt32(&sm.stopLogger, 1)
@@ -253,6 +271,8 @@ func (sm *statsManager) logger() {
 				logEvalStats = true
 				ps.evalStatsLogTime = now
 			}
+
+			evalStatLoggingThreshold := atomic.LoadInt64(&sm.evalStatLoggingThreshold) * 1000
 
 			// For each topic
 			for _, feedStats := range ps.feedStats {
@@ -340,10 +360,16 @@ func (sm *statsManager) logger() {
 							case *protobuf.IndexEvaluatorStats:
 								keyStr := fmt.Sprintf("%v", key)
 								avg := value.(*protobuf.IndexEvaluatorStats).MovingAvg()
-								evalStats += fmt.Sprintf("\"%v\":%v,", keyStr+":avgLatency", avg)
+
+								if avg > evalStatLoggingThreshold {
+									evalStats += fmt.Sprintf("\"%v\":%v,", keyStr+":avgLatency", avg)
+								}
+
 								errSkip := value.(*protobuf.IndexEvaluatorStats).GetAndResetErrorSkip()
 								errSkipAll := value.(*protobuf.IndexEvaluatorStats).GetErrorSkipAll()
-								evalStats += fmt.Sprintf("\"%v\":%v,", keyStr+":skipCount", errSkipAll)
+								if errSkipAll > 0 {
+									evalStats += fmt.Sprintf("\"%v\":%v,", keyStr+":skipCount", errSkipAll)
+								}
 								if errSkip != 0 {
 									if len(skippedStr) == 0 {
 										skippedStr = fmt.Sprintf("In last %v, projector skipped "+

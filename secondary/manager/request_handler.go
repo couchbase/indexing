@@ -168,6 +168,8 @@ type requestHandlerContext struct {
 
 	mutex  sync.RWMutex
 	doneCh chan bool
+
+	schedTokenMon *schedTokenMonitor
 }
 
 var handlerContext requestHandlerContext
@@ -216,6 +218,8 @@ func registerRequestHandler(mgr *IndexManager, clusterUrl string, mux *http.Serv
 		handlerContext.metaCache = make(map[string]*LocalIndexMetadata)
 		handlerContext.statsCache = make(map[string]*common.Statistics)
 
+		handlerContext.schedTokenMon = newSchedTokenMonitor(mgr)
+
 		go handlerContext.runPersistor()
 	})
 
@@ -226,7 +230,9 @@ func registerRequestHandler(mgr *IndexManager, clusterUrl string, mux *http.Serv
 func (m *requestHandlerContext) Close() {
 	m.finalizer.Do(func() {
 		close(m.doneCh)
+		m.schedTokenMon.Close()
 	})
+
 }
 
 ///////////////////////////////////////////////////////
@@ -725,6 +731,18 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, bucket string
 	if !getAll {
 		list = m.consolideIndexStatus(list)
 	}
+
+	schedIndexes := m.schedTokenMon.getIndexes()
+	schedIndexList := make([]IndexStatus, 0, len(schedIndexes))
+	for _, idx := range schedIndexes {
+		if _, ok := defns[idx.DefnId]; ok {
+			continue
+		}
+
+		schedIndexList = append(schedIndexList, *idx)
+	}
+
+	list = append(list, schedIndexList...)
 
 	// persist local meta and stats to disk cache
 	m.metaCh <- metaToCache
@@ -2251,4 +2269,207 @@ func host2file(hostname string) string {
 	hostname = strings.Replace(hostname, ":", "_", -1)
 
 	return hostname
+}
+
+var SCHED_TOKEN_CHECK_INTERVAL = 5000 // Milliseconds
+
+type schedTokenMonitor struct {
+	indexes   []*IndexStatus
+	listener  *mc.CommandListener
+	lock      sync.Mutex
+	lCloseCh  chan bool
+	processed map[string]bool
+
+	cinfo *common.ClusterInfoCache
+	mgr   *IndexManager
+}
+
+func newSchedTokenMonitor(mgr *IndexManager) *schedTokenMonitor {
+
+	lCloseCh := make(chan bool)
+	listener := mc.NewCommandListener(lCloseCh, false, false, false, false, true, true)
+
+	s := &schedTokenMonitor{
+		indexes:   make([]*IndexStatus, 0),
+		listener:  listener,
+		lCloseCh:  lCloseCh,
+		processed: make(map[string]bool),
+		mgr:       mgr,
+	}
+
+	s.listener.ListenTokens()
+
+	cinfo := s.mgr.cinfoClient.GetClusterInfoCache()
+	if cinfo == nil {
+		logging.Fatalf("newSchedTokenMonitor: ClusterInfoCache unavailable")
+		return s
+	}
+
+	s.cinfo = cinfo
+	return s
+}
+
+func (s *schedTokenMonitor) makeIndexStatus(token *mc.ScheduleCreateToken) *IndexStatus {
+
+	if s.cinfo == nil {
+		s.cinfo = s.mgr.cinfoClient.GetClusterInfoCache()
+		if s.cinfo == nil {
+			logging.Fatalf("schedTokenMonitor:makeIndexStatus ClusterInfoCache unavailable")
+			return nil
+		}
+	}
+
+	nodeUUID := fmt.Sprintf("%v", token.IndexerId)
+	nid, found := s.cinfo.GetNodeIdByUUID(nodeUUID)
+	if !found {
+		logging.Fatalf("schedTokenMonitor:makeIndexStatus node id for uiuid %v not found", nodeUUID)
+		return nil
+	}
+
+	mgmtAddr, err := s.cinfo.GetServiceAddress(nid, "mgmt")
+	if err != nil {
+		logging.Fatalf("schedTokenMonitor:makeIndexStatus error in getting mgmtAddr for node %v, err: %v", nid, err)
+		return nil
+	}
+
+	defn := &token.Definition
+	numPartitons := defn.NumPartitions
+	stmt := common.IndexStatement(*defn, int(numPartitons), -1, true)
+
+	// TODO: Scheduled: Should we rename it to ScheduledBuild ?
+
+	// Use DefnId for InstId as a placeholder value because InstId cannot zero.
+	return &IndexStatus{
+		DefnId:       defn.DefnId,
+		InstId:       common.IndexInstId(defn.DefnId),
+		Name:         defn.Name,
+		Bucket:       defn.Bucket,
+		Scope:        defn.Scope,
+		Collection:   defn.Collection,
+		IsPrimary:    defn.IsPrimary,
+		SecExprs:     defn.SecExprs,
+		WhereExpr:    defn.WhereExpr,
+		IndexType:    common.GetStorageMode().String(),
+		Status:       "Scheduled for Creation",
+		Definition:   stmt,
+		Completion:   0,
+		Progress:     0,
+		Scheduled:    false,
+		Partitioned:  common.IsPartitioned(defn.PartitionScheme),
+		NumPartition: int(numPartitons),
+		PartitionMap: nil,
+		NumReplica:   defn.GetNumReplica(),
+		IndexName:    defn.Name,
+		LastScanTime: "NA",
+		Error:        "",
+		Hosts:        []string{mgmtAddr},
+	}
+}
+
+func (s *schedTokenMonitor) checkProcessed(key string) bool {
+
+	// TODO: this needs to be updated/fixed to handle rebalance use case.
+	if _, ok := s.processed[key]; ok {
+		return true
+	}
+
+	return false
+}
+
+func (s *schedTokenMonitor) markProcessed(key string) {
+	s.processed[key] = true
+}
+
+func (s *schedTokenMonitor) getIndexesFromTokens(createTokens map[string]*mc.ScheduleCreateToken,
+	stopTokens map[string]*mc.StopScheduleCreateToken) []*IndexStatus {
+
+	indexes := make([]*IndexStatus, 0, len(createTokens))
+
+	for key, token := range createTokens {
+		if s.checkProcessed(key) {
+			continue
+		}
+
+		if _, ok := stopTokens[key]; ok {
+			continue
+		}
+
+		idx := s.makeIndexStatus(token)
+		if idx == nil {
+			continue
+		}
+
+		indexes = append(indexes, idx)
+		s.markProcessed(key)
+	}
+
+	for key, token := range stopTokens {
+		ct, ok := createTokens[key]
+		if !ok {
+			continue
+		}
+
+		if s.checkProcessed(key) {
+			continue
+		}
+
+		idx := s.makeIndexStatus(ct)
+		if idx == nil {
+			continue
+		}
+
+		idx.Status = "Error"
+		idx.Error = token.Reason
+
+		indexes = append(indexes, idx)
+		s.markProcessed(key)
+	}
+
+	return indexes
+}
+
+func (s *schedTokenMonitor) clenseIndexes(indexes []*IndexStatus,
+	stopTokens map[string]*mc.StopScheduleCreateToken, delPaths map[string]bool) []*IndexStatus {
+
+	newIndexes := make([]*IndexStatus, 0, len(indexes))
+	for _, idx := range indexes {
+		path := fmt.Sprintf("%v", idx.DefnId)
+
+		if _, ok := delPaths[path]; ok {
+			continue
+		}
+
+		if _, ok := stopTokens[path]; ok {
+			if idx.Status != "Error" {
+				continue
+			} else {
+				newIndexes = append(newIndexes, idx)
+			}
+		} else {
+			newIndexes = append(newIndexes, idx)
+		}
+	}
+
+	return newIndexes
+}
+
+func (s *schedTokenMonitor) getIndexes() []*IndexStatus {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+
+	createTokens := s.listener.GetNewScheduleCreateTokens()
+	stopTokens := s.listener.GetNewStopScheduleCreateTokens()
+	delPaths := s.listener.GetDeletedScheduleCreateTokenPaths()
+
+	indexes := s.getIndexesFromTokens(createTokens, stopTokens)
+
+	indexes = append(indexes, s.indexes...)
+	s.indexes = indexes
+	s.indexes = s.clenseIndexes(s.indexes, stopTokens, delPaths)
+
+	return s.indexes
+}
+
+func (s *schedTokenMonitor) Close() {
+	close(s.lCloseCh)
 }
