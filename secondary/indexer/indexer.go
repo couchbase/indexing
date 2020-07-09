@@ -1129,8 +1129,8 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		idx.clustMgrAgentCmdCh <- msg
 		<-idx.clustMgrAgentCmdCh
 
-	case INDEXER_BUCKET_NOT_FOUND:
-		idx.handleKeyspaceIdNotFound(msg)
+	case INDEXER_KEYSPACE_NOT_FOUND:
+		idx.handleKeyspaceNotFound(msg)
 
 	case INDEXER_MTR_FAIL:
 		idx.handleMTRFail(msg)
@@ -3567,7 +3567,7 @@ func (idx *indexer) handleMTRFail(msg Message) {
 
 }
 
-func (idx *indexer) handleKeyspaceIdNotFound(msg Message) {
+func (idx *indexer) handleKeyspaceNotFound(msg Message) {
 
 	streamId := msg.(*MsgRecovery).GetStreamId()
 	keyspaceId := msg.(*MsgRecovery).GetKeyspaceId()
@@ -3575,12 +3575,12 @@ func (idx *indexer) handleKeyspaceIdNotFound(msg Message) {
 	sessionId := msg.(*MsgRecovery).GetSessionId()
 
 	if ok, currSid := idx.validateSessionId(streamId, keyspaceId, sessionId, true); !ok {
-		logging.Infof("Indexer::handleKeyspaceIdNotFound StreamId %v KeyspaceId %v SessionId %v. "+
+		logging.Infof("Indexer::handleKeyspaceNotFound StreamId %v KeyspaceId %v SessionId %v. "+
 			"Skipped. Current SessionId %v.", streamId, keyspaceId, sessionId, currSid)
 		return
 	}
 
-	logging.Infof("Indexer::handleKeyspaceIdNotFound StreamId %v KeyspaceId %v SessionId %v",
+	logging.Infof("Indexer::handleKeyspaceNotFound StreamId %v KeyspaceId %v SessionId %v",
 		streamId, keyspaceId, sessionId)
 
 	// if in MTR, MTR must have stopped when recieving this message.
@@ -3591,7 +3591,7 @@ func (idx *indexer) handleKeyspaceIdNotFound(msg Message) {
 
 	is := idx.getIndexerState()
 	if is == common.INDEXER_PREPARE_UNPAUSE {
-		logging.Warnf("Indexer::handleKeyspaceIdNotFound Skipped KeyspaceId Cleanup "+
+		logging.Warnf("Indexer::handleKeyspaceNotFound Skipped KeyspaceId Cleanup "+
 			"In %v state", is)
 		return
 	}
@@ -3603,7 +3603,7 @@ func (idx *indexer) handleKeyspaceIdNotFound(msg Message) {
 
 	if state == STREAM_INACTIVE ||
 		state == STREAM_PREPARE_RECOVERY {
-		logging.Infof("Indexer::handleKeyspaceIdNotFound Skip %v %v %v",
+		logging.Infof("Indexer::handleKeyspaceNotFound Skip %v %v %v",
 			streamId, keyspaceId, state)
 		return
 	}
@@ -3614,13 +3614,13 @@ func (idx *indexer) handleKeyspaceIdNotFound(msg Message) {
 	instIdList := idx.deleteIndexInstOnDeletedKeyspace(bucket, scope, collection, streamId)
 
 	if len(instIdList) == 0 {
-		logging.Infof("Indexer::handleKeyspaceIdNotFound Empty IndexList %v %v. Nothing to do.",
+		logging.Infof("Indexer::handleKeyspaceNotFound Empty IndexList %v %v. Nothing to do.",
 			streamId, keyspaceId)
 		return
 	}
 
 	idx.bulkUpdateState(instIdList, common.INDEX_STATE_DELETED)
-	logging.Infof("Indexer::handleKeyspaceIdNotFound Updated Index State to DELETED %v",
+	logging.Infof("Indexer::handleKeyspaceNotFound Updated Index State to DELETED %v",
 		instIdList)
 
 	msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
@@ -3639,7 +3639,7 @@ func (idx *indexer) handleKeyspaceIdNotFound(msg Message) {
 
 	idx.setStreamKeyspaceIdState(streamId, keyspaceId, STREAM_INACTIVE)
 
-	logging.Infof("Indexer::handleKeyspaceIdNotFound %v %v %v",
+	logging.Infof("Indexer::handleKeyspaceNotFound %v %v %v",
 		streamId, keyspaceId, STREAM_INACTIVE)
 
 }
@@ -4010,7 +4010,7 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 			if !idx.ValidateKeyspace(buildStream, keyspaceId, bucketUUIDList) {
 				logging.Errorf("Indexer::sendStreamUpdateForBuildIndex Keyspace Not Found "+
 					"For Stream %v KeyspaceId %v SessionId %v", buildStream, keyspaceId, sessionId)
-				idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_BUCKET_NOT_FOUND,
+				idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_KEYSPACE_NOT_FOUND,
 					streamId:   buildStream,
 					keyspaceId: keyspaceId,
 					inMTR:      true,
@@ -4265,7 +4265,7 @@ func (idx *indexer) removeIndexesFromStream(indexList []common.IndexInst,
 				if !idx.ValidateKeyspace(streamId, keyspaceId, []string{bucketUUID}) {
 					logging.Errorf("Indexer::removeIndexesFromStream Keyspace Not Found "+
 						"For Stream %v KeyspaceId %v", streamId, keyspaceId)
-					idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_BUCKET_NOT_FOUND,
+					idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_KEYSPACE_NOT_FOUND,
 						streamId:   streamId,
 						keyspaceId: keyspaceId,
 						sessionId:  sessionId}
@@ -5534,7 +5534,7 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 			if !idx.ValidateKeyspace(streamId, keyspaceId, bucketUUIDList) {
 				logging.Errorf("Indexer::startKeyspaceIdStream Keyspace Not Found "+
 					"For Stream %v KeyspaceId %v SessionId %v", streamId, keyspaceId, sessionId)
-				idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_BUCKET_NOT_FOUND,
+				idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_KEYSPACE_NOT_FOUND,
 					streamId:   streamId,
 					keyspaceId: keyspaceId,
 					inMTR:      true,

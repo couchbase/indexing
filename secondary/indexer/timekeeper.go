@@ -3451,7 +3451,7 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 			delete(tk.ss.streamKeyspaceIdRepairStopCh[streamId], keyspaceId)
 			tk.ss.streamKeyspaceIdStatus[streamId][keyspaceId] = STREAM_INACTIVE
 
-			tk.supvRespch <- &MsgRecovery{mType: INDEXER_BUCKET_NOT_FOUND,
+			tk.supvRespch <- &MsgRecovery{mType: INDEXER_KEYSPACE_NOT_FOUND,
 				streamId:   streamId,
 				keyspaceId: keyspaceId,
 				sessionId:  currSessionId}
