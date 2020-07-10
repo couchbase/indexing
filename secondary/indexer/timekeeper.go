@@ -3435,15 +3435,14 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 		}
 
 		bucket, _, _ := SplitKeyspaceId(keyspaceId)
-		//TODO Collections Validate scope and collection
-		if !ValidateBucket(tk.config["clusterAddr"].String(), bucket, bucketUUIDList) {
-			logging.Errorf("Timekeeper::sendRestartMsg Bucket Not Found "+
+		if !tk.ValidateKeyspace(streamId, keyspaceId, bucketUUIDList) {
+			logging.Errorf("Timekeeper::sendRestartMsg Keyspace Not Found "+
 				"For Stream %v KeyspaceId %v Bucket %v", streamId, keyspaceId, bucket)
 
 			tk.lock.Lock()
 			defer tk.lock.Unlock()
 
-			if !validateStreamStatusAndSessionId(streamId, keyspaceId, sessionId, "Bucket Not Found") {
+			if !validateStreamStatusAndSessionId(streamId, keyspaceId, sessionId, "Keyspace Not Found") {
 				return
 			}
 
@@ -4047,4 +4046,38 @@ func (tk *timekeeper) handlePoolChange(cmd Message) {
 	} else {
 		tk.supvCmdch <- &MsgSuccess{}
 	}
+}
+
+func (tk *timekeeper) ValidateKeyspace(streamId common.StreamId, keyspaceId string,
+	bucketUUIDs []string) bool {
+
+	clusterAddr := tk.config["clusterAddr"].String()
+
+	collectionId := tk.ss.streamKeyspaceIdCollectionId[streamId][keyspaceId]
+
+	bucket, scope, collection := SplitKeyspaceId(keyspaceId)
+
+	//if the stream is using a cid, validate collection.
+	//otherwise only validate the bucket
+	if collectionId == "" {
+		if !ValidateBucket(clusterAddr, bucket, bucketUUIDs) {
+			return false
+		}
+	} else {
+
+		if scope == "" && collection == "" {
+			scope = common.DEFAULT_SCOPE
+			collection = common.DEFAULT_COLLECTION
+		}
+
+		//TODO Collections - change to use cinfo.GetCollectionID once streaming
+		//rest endpoint is available
+		cid, _ := common.GetCollectionID(clusterAddr,
+			bucket, scope, collection)
+		if cid != collectionId {
+			return false
+		}
+	}
+	return true
+
 }
