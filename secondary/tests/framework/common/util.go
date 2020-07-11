@@ -253,6 +253,14 @@ func GetIndexSlicePath(indexName, bucketName, dirPath string, partnId c.Partitio
 	indexSuffix := fmt.Sprintf("_%d.index", partnId)
 
 	walkFn := func(pth string, finfo os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		if finfo == nil {
+			return fmt.Errorf("Nil finifo for path %v", pth)
+		}
+
 		if !finfo.IsDir() {
 			return nil
 		}
