@@ -11,13 +11,15 @@ import c "github.com/couchbase/indexing/secondary/common"
 import "github.com/couchbase/cbauth"
 
 type target struct {
-	version   string
-	level     string
-	bucket    string
-	index     string
-	skipEmpty bool
-	partition bool
-	pretty    bool
+	version    string
+	level      string
+	bucket     string
+	index      string
+	scope      string
+	collection string
+	skipEmpty  bool
+	partition  bool
+	pretty     bool
 }
 
 type restServer struct {
@@ -139,6 +141,8 @@ func (api *restServer) statsHandler(req request) {
 				t.level = "index"
 				t.bucket = segs[3]
 				t.index = segs[4]
+				t.scope = c.DEFAULT_SCOPE
+				t.collection = c.DEFAULT_COLLECTION
 			} else {
 				http.Error(req.w, req.r.URL.Path, 404)
 				return
