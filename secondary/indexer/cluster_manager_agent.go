@@ -153,8 +153,8 @@ func (c *clustMgrAgent) handleSupvervisorCommands(cmd Message) {
 	case CLUST_MGR_DEL_LOCAL:
 		c.handleDelLocalValue(cmd)
 
-	case CLUST_MGR_DEL_BUCKET:
-		c.handleDeleteBucket(cmd)
+	case CLUST_MGR_DEL_KEYSPACE:
+		c.handleDeleteKeyspace(cmd)
 
 	case CLUST_MGR_CLEANUP_INDEX:
 		c.handleCleanupIndex(cmd)
@@ -355,6 +355,7 @@ func (c *clustMgrAgent) handleStatsInternal() {
 	stats := c.stats.Get()
 	if stats != nil {
 		spec := NewStatsSpec(false, false, false, false, nil)
+		spec.OverrideFilter("gsiClient") // Get only the stats related to GSI client
 		c.mgr.NotifyStats(stats.GetStats(spec))
 	}
 }
@@ -521,14 +522,22 @@ func (c *clustMgrAgent) handleDelLocalValue(cmd Message) {
 
 }
 
-func (c *clustMgrAgent) handleDeleteBucket(cmd Message) {
+func (c *clustMgrAgent) handleDeleteKeyspace(cmd Message) {
 
-	logging.Infof("ClustMgr:handleDeleteBucket %v", cmd)
+	logging.Infof("ClustMgr:handleDeleteKeyspace %v", cmd)
 
 	bucket := cmd.(*MsgClustMgrUpdate).GetBucket()
+	scope := cmd.(*MsgClustMgrUpdate).GetScope()
+	collection := cmd.(*MsgClustMgrUpdate).GetCollection()
 	streamId := cmd.(*MsgClustMgrUpdate).GetStreamId()
 
-	err := c.mgr.DeleteIndexForBucket(bucket, streamId)
+	var err error
+	if collection == "" {
+		err = c.mgr.DeleteIndexForBucket(bucket, streamId)
+	} else {
+		err = c.mgr.DeleteIndexForCollection(bucket, scope, collection, streamId)
+	}
+
 	common.CrashOnError(err)
 
 	c.supvCmdch <- &MsgSuccess{}

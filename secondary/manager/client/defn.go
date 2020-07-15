@@ -165,6 +165,27 @@ type IndexStats struct {
 }
 
 /////////////////////////////////////////////////////////////////////////
+// Index Stats 2
+////////////////////////////////////////////////////////////////////////
+
+type IndexStats2 struct {
+	Stats map[string]*DedupedIndexStats `json:"stats,omitempty"`
+}
+
+type DedupedIndexStats struct {
+	NumDocsPending   float64                   `json:"num_docs_pending,omitempty"`
+	NumDocsQueued    float64                   `json:"num_docs_queued,omitempty"`
+	LastRollbackTime string                    `json:"last_rollback_time,omitempty"`
+	ProgressStatTime string                    `json:"progress_stat_time,omitempty"`
+	Indexes          map[string]*PerIndexStats `json:"indexes,omitempty"`
+}
+
+type PerIndexStats struct {
+	// Nothing for now. With CBO, num_docs_indexed,
+	// resident_percent and other stats will come here
+}
+
+/////////////////////////////////////////////////////////////////////////
 // Create/Alter Index
 ////////////////////////////////////////////////////////////////////////
 
@@ -319,6 +340,18 @@ func UnmarshallIndexStats(data []byte) (*IndexStats, error) {
 	return stats, nil
 }
 
+func UnmarshallIndexStats2(data []byte) (*IndexStats2, error) {
+
+	logging.Debugf("UnmarshallIndexStats: %v", string(data))
+
+	stats := new(IndexStats2)
+	if err := json.Unmarshal(data, stats); err != nil {
+		return nil, err
+	}
+
+	return stats, nil
+}
+
 func MarshallIndexStats(stats *IndexStats) ([]byte, error) {
 
 	buf, err := json.Marshal(&stats)
@@ -327,6 +360,18 @@ func MarshallIndexStats(stats *IndexStats) ([]byte, error) {
 	}
 
 	logging.Debugf("MarshallIndexStats: %v", string(buf))
+
+	return buf, nil
+}
+
+func MarshallIndexStats2(stats *IndexStats2) ([]byte, error) {
+
+	buf, err := json.Marshal(&stats)
+	if err != nil {
+		return nil, err
+	}
+
+	logging.Debugf("MarshallIndexStats2: %v", string(buf))
 
 	return buf, nil
 }

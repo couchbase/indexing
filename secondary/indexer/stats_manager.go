@@ -123,6 +123,8 @@ func (it *IndexTimingStats) Init() {
 type IndexStats struct {
 	name, scope, collection, bucket, dispName string
 
+	indexState stats.Uint64Val // Only used by lifecycle manager to filter indexes in MAINT_STREAM
+
 	replicaId    int
 	isArrayIndex bool
 
@@ -312,6 +314,7 @@ func (n *NodeToHostMapHolder) Get() map[string]string {
 }
 
 func (s *IndexStats) Init() {
+	s.indexState.Init()
 	s.scanDuration.Init()
 	s.scanReqDuration.Init()
 	s.scanReqInitDuration.Init()
@@ -435,6 +438,7 @@ func (s *IndexStats) Init() {
 	s.SetRebalancerFilters()
 	s.SetPlannerFilters()
 	s.SetIndexStatusFilters()
+	s.SetGSIClientFilters()
 	s.dispName = common.FormatIndexInstDisplayName(s.name, s.replicaId)
 }
 
@@ -450,6 +454,14 @@ func (s *IndexStats) SetIndexStatusFilters() {
 	s.buildProgress.AddFilter(stats.IndexStatusFilter)
 	s.completionProgress.AddFilter(stats.IndexStatusFilter)
 	s.lastScanTime.AddFilter(stats.IndexStatusFilter)
+}
+
+func (s *IndexStats) SetGSIClientFilters() {
+	s.numDocsPending.AddFilter(stats.GSIClientFilter)
+	s.numDocsQueued.AddFilter(stats.GSIClientFilter)
+	s.lastRollbackTime.AddFilter(stats.GSIClientFilter)
+	s.progressStatTime.AddFilter(stats.GSIClientFilter)
+	s.indexState.AddFilter(stats.GSIClientFilter)
 }
 
 func (s *IndexStats) SetPlannerFilters() {
@@ -1175,6 +1187,8 @@ func (s *IndexStats) initializeScanStats() {
 
 func (s *IndexStats) addIndexStatsToMap(statMap *StatsMap, spec *statsSpec) {
 	s.initializeScanStats()
+
+	statMap.AddStatValueFiltered("index_state", &s.indexState)
 
 	// ----------------------
 	// All int64Stats
@@ -2047,7 +2061,7 @@ var statsFilterMap = map[string]uint64{
 	"planner":     stats.PlannerFilter,
 	"indexStatus": stats.IndexStatusFilter,
 	"rebalancer":  stats.RebalancerFilter,
-	"external":    stats.ExternalStatFilter,
+	"gsiClient":   stats.GSIClientFilter,
 }
 
 const ST_TYPE_INDEXER = "indexer"

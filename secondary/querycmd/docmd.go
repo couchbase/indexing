@@ -274,12 +274,25 @@ func HandleCommand(
 			if len(v) < 0 {
 				return fmt.Errorf("invalid index specified : %v", bindex)
 			}
-			bucket, iname = v[0], v[1]
-			index, ok := GetIndex(client, bucket, iname)
+
+			scope = ""
+			collection = ""
+			if len(v) == 4 {
+				bucket, scope, collection, iname = v[0], v[1], v[2], v[3]
+			} else if len(v) == 2 {
+				bucket, iname = v[0], v[1]
+			}
+			if scope == "" {
+				scope = c.DEFAULT_SCOPE
+			}
+			if collection == "" {
+				collection = c.DEFAULT_COLLECTION
+			}
+			index, ok := GetIndex(client, bucket, scope, collection, iname)
 			if ok {
 				defnIDs = append(defnIDs, uint64(index.Definition.DefnId))
 			} else {
-				err = fmt.Errorf("index %v/%v unknown", bucket, iname)
+				err = fmt.Errorf("index %v/%v/%v/%v unknown", bucket, scope, collection, iname)
 				break
 			}
 		}
@@ -289,7 +302,7 @@ func HandleCommand(
 		}
 
 	case "move":
-		index, ok := GetIndex(client, cmd.Bucket, cmd.IndexName)
+		index, ok := GetIndex(client, cmd.Bucket, scope, collection, cmd.IndexName)
 		if !ok {
 			return fmt.Errorf("invalid index specified : %v", cmd.IndexName)
 		}
@@ -303,15 +316,15 @@ func HandleCommand(
 		}
 
 	case "drop":
-		index, ok := GetIndex(client, cmd.Bucket, cmd.IndexName)
+		index, ok := GetIndex(client, cmd.Bucket, scope, collection, cmd.IndexName)
 		if !ok {
 			return fmt.Errorf("invalid index specified : %v", cmd.IndexName)
 		}
 		err = client.DropIndex(uint64(index.Definition.DefnId))
 		if err == nil {
-			fmt.Fprintf(w, "Index dropped %v/%v\n", bucket, iname)
+			fmt.Fprintf(w, "Index dropped %v/%v/%v/%v\n", bucket, scope, collection, iname)
 		} else {
-			err = fmt.Errorf("index %v/%v drop failed", bucket, iname)
+			err = fmt.Errorf("index %v/%v/%v/%v drop failed", bucket, scope, collection, iname)
 			break
 		}
 
@@ -323,7 +336,7 @@ func HandleCommand(
 			qclient.PutInPools(tmpbuf, tmpbufPoolIdx)
 		}()
 
-		index, _ := GetIndex(client, bucket, iname)
+		index, _ := GetIndex(client, bucket, scope, collection, iname)
 		defnID := uint64(index.Definition.DefnId)
 		fmt.Fprintln(w, "Scan index:")
 		_, err = WaitUntilIndexState(
@@ -355,7 +368,7 @@ func HandleCommand(
 			qclient.PutInPools(tmpbuf, tmpbufPoolIdx)
 		}()
 
-		index, found := GetIndex(client, bucket, iname)
+		index, found := GetIndex(client, bucket, scope, collection, iname)
 		if !found {
 			fmt.Fprintln(w, "Index not found")
 			os.Exit(1)
@@ -381,7 +394,7 @@ func HandleCommand(
 		var state c.IndexState
 		var statsResp c.IndexStatistics
 
-		index, _ := GetIndex(client, bucket, iname)
+		index, _ := GetIndex(client, bucket, scope, collection, iname)
 		defnID := uint64(index.Definition.DefnId)
 		_, err = WaitUntilIndexState(
 			client, []uint64{defnID}, c.INDEX_STATE_ACTIVE,
@@ -403,7 +416,7 @@ func HandleCommand(
 		var state c.IndexState
 		var count int64
 
-		index, _ := GetIndex(client, bucket, iname)
+		index, _ := GetIndex(client, bucket, scope, collection, iname)
 		defnID := uint64(index.Definition.DefnId)
 		_, err = WaitUntilIndexState(
 			client, []uint64{defnID}, c.INDEX_STATE_ACTIVE,
@@ -416,14 +429,16 @@ func HandleCommand(
 			equals := []c.SecondaryKey{cmd.Equal}
 			count, err := client.CountLookup(uint64(defnID), "", equals, cons, nil)
 			if err == nil {
-				fmt.Fprintf(w, "Index %q/%q has %v entries\n", bucket, iname, count)
+				fmt.Fprintf(w, "Index %q/%q/%q/%q has %v entries\n", bucket,
+					scope, collection, iname, count)
 			}
 
 		} else {
 			fmt.Fprintln(w, "CountRange:")
 			count, err = client.CountRange(uint64(defnID), "", low, high, incl, cons, nil)
 			if err == nil {
-				fmt.Fprintf(w, "Index %q/%q has %v entries\n", bucket, iname, count)
+				fmt.Fprintf(w, "Index %q/%q/%q/%q has %v entries\n", bucket,
+					scope, collection, iname, count)
 			}
 		}
 
@@ -529,7 +544,7 @@ func printIndexInfo(w io.Writer, index *mclient.IndexMetadata) {
 // GetIndex for bucket/indexName.
 func GetIndex(
 	client *qclient.GsiClient,
-	bucket, indexName string) (*mclient.IndexMetadata, bool) {
+	bucket, scope, collection, indexName string) (*mclient.IndexMetadata, bool) {
 
 	indexes, _, _, _, err := client.Refresh()
 	if err != nil {
@@ -538,7 +553,8 @@ func GetIndex(
 	}
 	for _, index := range indexes {
 		defn := index.Definition
-		if defn.Bucket == bucket && defn.Name == indexName {
+		if defn.Bucket == bucket && defn.Scope == scope &&
+			defn.Collection == collection && defn.Name == indexName {
 			return index, true
 			//return uint64(index.Definition.DefnId), true
 		}

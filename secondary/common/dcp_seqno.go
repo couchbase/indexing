@@ -1,11 +1,18 @@
 package common
 
 import (
+	"bufio"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/couchbase/indexing/secondary/security"
+	"io"
+	"io/ioutil"
+	"math"
 	"math/rand"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/couchbase/indexing/secondary/dcp"
@@ -21,6 +28,8 @@ const seqsBufSize = 64 * 1024
 const workersPerReader = 10
 
 const BUCKET_ID string = ""
+
+var clusterVersion int64
 
 var errConnClosed = errors.New("dcpSeqnos - conn closed already")
 var errFetchSeqnosPanic = errors.New("Recovered from an error in FetchSeqnos")
@@ -499,14 +508,15 @@ func (r *vbSeqnosReader) processMinSeqNos() {
 func getKVFeeds(cluster, pooln, bucketn string) (map[string]*kvConn, error) {
 	var bucket *couchbase.Bucket
 	var err error
-	var clusterVersion int
+	var clustVer int
 
-	bucket, clusterVersion, err = ConnectBucket2(cluster, pooln, bucketn)
+	bucket, clustVer, err = ConnectBucket2(cluster, pooln, bucketn)
 	if err != nil {
 		logging.Errorf("Unable to connect with bucket %q\n", bucketn)
 		return nil, err
 	}
 
+	UpdateClusterVersion((int64)(clustVer))
 	kvfeeds := make(map[string]*kvConn)
 
 	defer func() {
@@ -561,7 +571,7 @@ func getKVFeeds(cluster, pooln, bucketn string) (map[string]*kvConn, error) {
 			return nil, err
 		}
 
-		if clusterVersion >= INDEXER_70_VERSION {
+		if clustVer >= INDEXER_70_VERSION {
 			connName, err = getConnName()
 			if err != nil {
 				return nil, err
@@ -580,13 +590,14 @@ func getKVFeeds(cluster, pooln, bucketn string) (map[string]*kvConn, error) {
 
 func addDBSbucket(cluster, pooln, bucketn string) (err error) {
 	var bucket *couchbase.Bucket
-	var clusterVersion int
+	var clustVer int
 
-	bucket, clusterVersion, err = ConnectBucket2(cluster, pooln, bucketn)
+	bucket, clustVer, err = ConnectBucket2(cluster, pooln, bucketn)
 	if err != nil {
 		logging.Errorf("Unable to connect with bucket %q\n", bucketn)
 		return err
 	}
+	UpdateClusterVersion((int64)(clustVer))
 
 	kvfeeds := make(map[string]*kvConn)
 
@@ -650,7 +661,7 @@ func addDBSbucket(cluster, pooln, bucketn string) (err error) {
 			return err
 		}
 
-		if clusterVersion >= INDEXER_70_VERSION {
+		if clustVer >= INDEXER_70_VERSION {
 			connName, err = getConnName()
 			if err != nil {
 				return nil
@@ -783,6 +794,32 @@ func CollectionSeqnos(cluster, pooln, bucketn string,
 
 	l_seqnos, err = reader.GetCollectionSeqnos(cid)
 	return
+}
+
+func GetSeqnos(cluster, pool, bucket, cid string) (l_seqnos []uint64, err error) {
+
+	if cid != DEFAULT_COLLECTION_ID {
+		return CollectionSeqnos(cluster, pool, bucket, cid)
+	} else {
+		globalClustVer := atomic.LoadInt64(&clusterVersion)
+		if globalClustVer >= INDEXER_70_VERSION {
+			return CollectionSeqnos(cluster, pool, bucket, cid)
+		}
+	}
+	return BucketSeqnos(cluster, pool, bucket)
+}
+
+func GetMinSeqnos(cluster, pool, bucket, cid string) (l_seqnos []uint64, err error) {
+
+	if cid != DEFAULT_COLLECTION_ID {
+		return CollectionMinSeqnos(cluster, pool, bucket, cid)
+	} else {
+		globalClustVer := atomic.LoadInt64(&clusterVersion)
+		if globalClustVer >= INDEXER_70_VERSION {
+			return CollectionMinSeqnos(cluster, pool, bucket, cid)
+		}
+	}
+	return BucketMinSeqnos(cluster, pool, bucket)
 }
 
 func ResetBucketSeqnos() error {
@@ -1292,4 +1329,98 @@ func tryEnableCollection(conn *memcached.Client) error {
 		}
 	}
 	return nil
+}
+
+func UpdateClusterVersion(clustVer int64) {
+	for {
+		globalClustVer := atomic.LoadInt64(&clusterVersion)
+		if clustVer > globalClustVer {
+			atomic.CompareAndSwapInt64(&clusterVersion, globalClustVer, clustVer)
+		} else {
+			return
+		}
+	}
+}
+
+// This method is a light weight version of serviceChangeNotifier
+// only used to retrieve and update cluster version.
+// Session consistent scans will use this cluster version information
+// to choose between retrieving CollectionSeqnos and BucketSeqnos
+func WatchClusterVersionChanges(clusterAddr string) {
+
+	selfRestart := func() {
+		time.Sleep(10 * time.Millisecond)
+		go WatchClusterVersionChanges(clusterAddr)
+		return
+	}
+
+	path := "/poolsStreaming/" + DEFAULT_POOL
+	params := &security.RequestParams{
+		UserAgent: "WatchClusterVersionChanges",
+	}
+	res, err := security.GetWithAuth(clusterAddr+path, params)
+	if err != nil {
+		logging.Errorf("WatchClusterVersionChanges: Error while getting with auth, err: %v", err)
+		selfRestart()
+		return
+	}
+
+	if res.StatusCode != 200 {
+		bod, _ := ioutil.ReadAll(io.LimitReader(res.Body, 512))
+		res.Body.Close()
+
+		logging.Errorf("WatchClusterVersionChanges: HTTP error %v getting %q: %s", res.Status, path, bod)
+		selfRestart()
+		return
+	}
+
+	var p couchbase.Pool
+
+	reader := bufio.NewReader(res.Body)
+	defer res.Body.Close()
+	for {
+
+		if atomic.LoadInt64(&clusterVersion) >= INDEXER_70_VERSION {
+			logging.Infof("WatchClusterVersionChanges: Cluster version is >= INDEXER_70_VERSION")
+			return
+		}
+
+		bs, err := reader.ReadBytes('\n')
+		if err != nil {
+			logging.Errorf("WatchClusterVersionChanges: Error while reading body, err: %v", err)
+			selfRestart()
+			return
+		}
+		if len(bs) == 1 && bs[0] == '\n' {
+			continue
+		}
+
+		err = json.Unmarshal(bs, &p)
+		if err != nil {
+			logging.Errorf("WatchClusterVersionChanges: Error while unmarshalling pools, err: %v", err)
+			selfRestart()
+			return
+		}
+
+		clusterCompat := math.MaxInt32
+		for _, node := range p.Nodes {
+			if node.ClusterCompatibility < clusterCompat {
+				clusterCompat = node.ClusterCompatibility
+			}
+		}
+
+		clustVer := 0
+		if clusterCompat != math.MaxInt32 {
+			version := clusterCompat / 65536
+			minorVersion := clusterCompat - (version * 65536)
+			clustVer = int(GetVersion(uint32(version), uint32(minorVersion)))
+		}
+
+		// Will update cluster version only if there is a change
+		UpdateClusterVersion((int64)(clustVer))
+	}
+}
+
+func GetClusterVersion() int64 {
+	return atomic.LoadInt64(&clusterVersion)
 }

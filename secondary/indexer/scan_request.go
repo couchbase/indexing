@@ -47,6 +47,7 @@ type ScanRequest struct {
 	IndexInstId  common.IndexInstId
 	IndexName    string
 	Bucket       string
+	CollectionId string
 	PartitionIds []common.PartitionId
 	Ts           *common.TsVbuuid
 	Low          IndexKey
@@ -1156,7 +1157,7 @@ func (r *ScanRequest) setConsistency(cons common.Consistency, vector *protobuf.T
 		r.Ts = &common.TsVbuuid{}
 		t0 := time.Now()
 		r.Ts.Seqnos, localErr = bucketSeqsWithRetry(cfg["settings.scan_getseqnos_retries"].Int(),
-			r.LogPrefix, cluster, r.Bucket, cfg["numVbuckets"].Int())
+			r.LogPrefix, cluster, r.Bucket, cfg["numVbuckets"].Int(), r.CollectionId)
 		if localErr == nil && r.Stats != nil {
 			r.Stats.Timings.dcpSeqs.Put(time.Since(t0))
 		}
@@ -1177,6 +1178,7 @@ func (r *ScanRequest) setIndexParams() (localErr error) {
 	if localErr == nil {
 		r.isPrimary = indexInst.Defn.IsPrimary
 		r.IndexName, r.Bucket = indexInst.Defn.Name, indexInst.Defn.Bucket
+		r.CollectionId = indexInst.Defn.CollectionId
 		r.IndexInstId = indexInst.InstId
 		r.IndexInst = *indexInst
 

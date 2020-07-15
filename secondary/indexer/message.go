@@ -100,7 +100,7 @@ const (
 	CLUST_MGR_GET_LOCAL
 	CLUST_MGR_SET_LOCAL
 	CLUST_MGR_DEL_LOCAL
-	CLUST_MGR_DEL_BUCKET
+	CLUST_MGR_DEL_KEYSPACE
 	CLUST_MGR_INDEXER_READY
 	CLUST_MGR_REBALANCE_RUNNING
 	CLUST_MGR_CLEANUP_INDEX
@@ -119,7 +119,7 @@ const (
 	INDEXER_PREPARE_DONE
 	INDEXER_INITIATE_RECOVERY
 	INDEXER_RECOVERY_DONE
-	INDEXER_BUCKET_NOT_FOUND
+	INDEXER_KEYSPACE_NOT_FOUND
 	INDEXER_ROLLBACK
 	STORAGE_ROLLBACK_DONE
 	STREAM_REQUEST_DONE
@@ -273,15 +273,17 @@ func (m *MsgTimestamp) GetTimestamp() Timestamp {
 
 //Stream Reader Message
 type MsgStream struct {
-	mType       MsgType
-	streamId    common.StreamId
-	node        []byte
-	meta        *MutationMeta
-	snapshot    *MutationSnapshot
-	status      common.StreamStatus
-	errCode     byte
-	eventType   byte
-	manifestuid string
+	mType        MsgType
+	streamId     common.StreamId
+	node         []byte
+	meta         *MutationMeta
+	snapshot     *MutationSnapshot
+	status       common.StreamStatus
+	errCode      byte
+	eventType    byte
+	manifestuid  string
+	scopeId      string
+	collectionId string
 }
 
 func (m *MsgStream) GetMsgType() MsgType {
@@ -318,6 +320,14 @@ func (m *MsgStream) GetEventType() byte {
 
 func (m *MsgStream) GetManifestUID() string {
 	return m.manifestuid
+}
+
+func (m *MsgStream) GetScopeId() string {
+	return m.scopeId
+}
+
+func (m *MsgStream) GetCollectionId() string {
+	return m.collectionId
 }
 
 func (m *MsgStream) String() string {
@@ -1367,7 +1377,7 @@ func (m *MsgRepairEndpoints) String() string {
 //INDEXER_PREPARE_DONE
 //INDEXER_INITIATE_RECOVERY
 //INDEXER_RECOVERY_DONE
-//INDEXER_BUCKET_NOT_FOUND
+//INDEXER_KEYSPACE_NOT_FOUND
 //INDEXER_MTR_FAIL
 //INDEXER_ABORT_RECOVERY
 type MsgRecovery struct {
@@ -1838,6 +1848,8 @@ type MsgClustMgrUpdate struct {
 	indexList     []common.IndexInst
 	updatedFields MetaUpdateFields
 	bucket        string
+	scope         string
+	collection    string
 	streamId      common.StreamId
 	syncUpdate    bool
 	respCh        chan error
@@ -1857,6 +1869,14 @@ func (m *MsgClustMgrUpdate) GetUpdatedFields() MetaUpdateFields {
 
 func (m *MsgClustMgrUpdate) GetBucket() string {
 	return m.bucket
+}
+
+func (m *MsgClustMgrUpdate) GetScope() string {
+	return m.scope
+}
+
+func (m *MsgClustMgrUpdate) GetCollection() string {
+	return m.collection
 }
 
 func (m *MsgClustMgrUpdate) GetStreamId() common.StreamId {
@@ -2177,8 +2197,8 @@ func (m MsgType) String() string {
 		return "INDEXER_INITIATE_RECOVERY"
 	case INDEXER_RECOVERY_DONE:
 		return "INDEXER_RECOVERY_DONE"
-	case INDEXER_BUCKET_NOT_FOUND:
-		return "INDEXER_BUCKET_NOT_FOUND"
+	case INDEXER_KEYSPACE_NOT_FOUND:
+		return "INDEXER_KEYSPACE_NOT_FOUND"
 	case INDEXER_ABORT_RECOVERY:
 		return "INDEXER_ABORT_RECOVERY"
 	case INDEXER_ROLLBACK:
@@ -2264,8 +2284,8 @@ func (m MsgType) String() string {
 		return "CLUST_MGR_SET_LOCAL"
 	case CLUST_MGR_DEL_LOCAL:
 		return "CLUST_MGR_DEL_LOCAL"
-	case CLUST_MGR_DEL_BUCKET:
-		return "CLUST_MGR_DEL_BUCKET"
+	case CLUST_MGR_DEL_KEYSPACE:
+		return "CLUST_MGR_DEL_KEYSPACE"
 	case CLUST_MGR_INDEXER_READY:
 		return "CLUST_MGR_INDEXER_READY"
 	case CLUST_MGR_REBALANCE_RUNNING:

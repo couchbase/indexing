@@ -4720,6 +4720,52 @@ func (r *metadataRepo) resolveIndexStats(indexerId c.IndexerId, stats c.Statisti
 	return result
 }
 
+func (r *metadataRepo) resolveIndexStats2(indexerId c.IndexerId, stats map[string]*DedupedIndexStats) map[c.IndexInstId]map[c.PartitionId]c.Statistics {
+
+	r.mutex.RLock()
+	defer r.mutex.RUnlock()
+
+	if len(indexerId) == 0 {
+		return (map[c.IndexInstId]map[c.PartitionId]c.Statistics)(nil)
+	}
+
+	result := make(map[c.IndexInstId]map[c.PartitionId]c.Statistics)
+
+	// if the index is being rebalanced, this will only look at the active instance with the highest instance version.
+	for _, meta := range r.indices {
+		for _, inst := range meta.Instances {
+
+			prefix := c.GetStatsPrefix(meta.Definition.Bucket, meta.Definition.Scope,
+				meta.Definition.Collection, meta.Definition.Name, int(inst.ReplicaId), 0, false)
+
+			prefix = prefix[0 : len(prefix)-1] // Get the fully qualified index name
+
+			if dedupedIndexStats, ok := stats[meta.Definition.Bucket]; !ok {
+				return result
+			} else {
+				if _, exists := dedupedIndexStats.Indexes[prefix]; exists {
+					for partitionId, indexerId2 := range inst.IndexerId {
+						if indexerId == indexerId2 {
+							if _, ok := result[inst.InstId]; !ok {
+								result[inst.InstId] = make(map[c.PartitionId]c.Statistics)
+							}
+							if _, ok := result[inst.InstId][partitionId]; !ok {
+								result[inst.InstId][partitionId] = make(c.Statistics)
+							}
+							result[inst.InstId][partitionId].Set("num_docs_pending", interface{}(dedupedIndexStats.NumDocsPending))
+							result[inst.InstId][partitionId].Set("num_docs_queued", interface{}(dedupedIndexStats.NumDocsQueued))
+							result[inst.InstId][partitionId].Set("last_rollback_time", interface{}(dedupedIndexStats.LastRollbackTime))
+							result[inst.InstId][partitionId].Set("progress_stat_time", interface{}(dedupedIndexStats.ProgressStatTime))
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return result
+}
+
 func (r *metadataRepo) waitForEvent(defnId c.IndexDefnId, status []c.IndexState, topology map[int]map[c.PartitionId]c.IndexerId) error {
 
 	event := &event{defnId: defnId, status: status, notifyCh: make(chan error, 1), topology: topology}
@@ -5030,6 +5076,19 @@ func (w *watcher) updateIndexStatsNoLock(indexerId c.IndexerId, indexStats *Inde
 	stats := (map[c.IndexInstId]map[c.PartitionId]c.Statistics)(nil)
 	if indexStats != nil && len(indexStats.Stats) != 0 {
 		stats = w.provider.repo.resolveIndexStats(indexerId, indexStats.Stats)
+		if len(stats) == 0 {
+			stats = nil
+		}
+	}
+
+	return stats
+}
+
+func (w *watcher) updateIndexStats2NoLock(indexerId c.IndexerId, indexStats2 *IndexStats2) map[c.IndexInstId]map[c.PartitionId]c.Statistics {
+
+	stats := (map[c.IndexInstId]map[c.PartitionId]c.Statistics)(nil)
+	if indexStats2 != nil && len(indexStats2.Stats) != 0 {
+		stats = w.provider.repo.resolveIndexStats2(indexerId, indexStats2.Stats)
 		if len(stats) == 0 {
 			stats = nil
 		}
@@ -5356,7 +5415,11 @@ func isServiceMapKey(key string) bool {
 }
 
 func isIndexStats(key string) bool {
-	return strings.Contains(key, "IndexStats")
+	return key == "IndexStats"
+}
+
+func isIndexStats2(key string) bool {
+	return key == "IndexStats2"
 }
 
 ///////////////////////////////////////////////////////
@@ -5680,6 +5743,19 @@ func (w *watcher) processChange(txid common.Txnid, op uint32, key string, conten
 
 			needRefresh := w.updateServiceMapNoLock(indexerId, serviceMap)
 			return needRefresh, nil, nil
+
+		} else if isIndexStats2(key) {
+			if len(content) == 0 {
+				logging.Debugf("watcher.processChange(): content of key = %v is empty.", key)
+			}
+
+			indexStats2, err := UnmarshallIndexStats2(content)
+			if err != nil {
+				return false, nil, err
+			}
+
+			stats := w.updateIndexStats2NoLock(indexerId, indexStats2)
+			return false, stats, nil
 
 		} else if isIndexStats(key) {
 			if len(content) == 0 {

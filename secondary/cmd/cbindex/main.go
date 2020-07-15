@@ -31,7 +31,7 @@ func usage(fset *flag.FlagSet) {
 - Create/Drop
     cbindex -auth user:pass -type create -bucket default -using memdb -index first_name -fields=first_name,last_name
     cbindex -auth user:pass -type create -bucket default -primary=true -index primary
-    cbindex -auth user:pass -type drop -instanceid 1234
+    cbindex -auth user:pass -type drop -bucket default -index first_name 
 
 - List
     cbindex -auth user:pass -type list

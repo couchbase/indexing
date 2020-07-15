@@ -475,3 +475,55 @@ func SkipTestCollectionWhereClause(t *testing.T) {
 	- restart indexer(disk recovery) [for both maint/init stream] -- Add to test plan
 	- drop index while build is in progress
 */
+
+func TestCollectionDrop(t *testing.T) {
+
+	log.Printf("In TestCollectionDrop()")
+
+	//At this point following, scope/collection are available
+	//s1.c1, s2.c2, s2.c3, default
+
+	bucket := "default"
+
+	//Create couple of indexes on all collections
+	create2Indexes := func(scope, coll string) {
+		index1 := scope + "_" + coll + "_" + "i1"
+		createIndex(index1, bucket, scope, coll, []string{"age"}, t)
+		index2 := scope + "_" + coll + "_" + "i2"
+		createIndex(index2, bucket, scope, coll, []string{"age"}, t)
+	}
+
+	create2Indexes("s1", "c1")
+	create2Indexes("s2", "c2")
+	create2Indexes("s2", "c3")
+	create2Indexes("_default", "_default")
+
+	//drop one collection
+	scope := "s1"
+	coll := "c1"
+	kvutility.DropCollection(bucket, scope, coll, clusterconfig.Username, clusterconfig.Password, kvaddress)
+	time.Sleep(5 * time.Second)
+	scanResults, err := secondaryindex.ScanAll2(scope+"_"+coll+"_"+"i1", bucket, scope,
+		coll, indexScanAddress, defaultlimit, c.SessionConsistency, nil)
+	if err == nil {
+		t.Fatal("Error expected when scanning for dropped index but scan didn't fail \n")
+		log.Printf("Length of scanResults = %v", len(scanResults))
+	} else {
+		log.Printf("Scan failed as expected with error: %v\n", err)
+	}
+
+	//drop one scope with 2 collections
+	scope = "s2"
+	coll = "c1"
+	kvutility.DropScope(bucket, scope, clusterconfig.Username, clusterconfig.Password, kvaddress)
+	time.Sleep(5 * time.Second)
+	scanResults, err = secondaryindex.ScanAll2(scope+"_"+coll+"_"+"i1", bucket, scope,
+		coll, indexScanAddress, defaultlimit, c.SessionConsistency, nil)
+	if err == nil {
+		t.Fatal("Error expected when scanning for dropped index but scan didn't fail \n")
+		log.Printf("Length of scanResults = %v", len(scanResults))
+	} else {
+		log.Printf("Scan failed as expected with error: %v\n", err)
+	}
+
+}

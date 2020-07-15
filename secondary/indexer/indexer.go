@@ -309,6 +309,8 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	}
 	idx.clusterInfoClient.SetUserAgent("indexer")
 
+	go common.WatchClusterVersionChanges(idx.config["clusterAddr"].String())
+
 	//Start Mutation Manager
 	idx.mutMgr, res = NewMutationManager(idx.mutMgrCmdCh, idx.wrkrRecvCh, idx.config)
 	if res.GetMsgType() != MSG_SUCCESS {
@@ -972,6 +974,10 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		STREAM_READER_CONN_ERROR,
 		STREAM_READER_SYSTEM_EVENT:
 
+		if msg.GetMsgType() == STREAM_READER_SYSTEM_EVENT {
+			idx.handleDcpSystemEvent(msg)
+		}
+
 		//fwd the message to timekeeper
 		idx.tkCmdCh <- msg
 		<-idx.tkCmdCh
@@ -1123,8 +1129,8 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		idx.clustMgrAgentCmdCh <- msg
 		<-idx.clustMgrAgentCmdCh
 
-	case INDEXER_BUCKET_NOT_FOUND:
-		idx.handleKeyspaceIdNotFound(msg)
+	case INDEXER_KEYSPACE_NOT_FOUND:
+		idx.handleKeyspaceNotFound(msg)
 
 	case INDEXER_MTR_FAIL:
 		idx.handleMTRFail(msg)
@@ -2788,6 +2794,7 @@ func (idx *indexer) handleDropIndex(msg Message) (resp Message) {
 		return
 	}
 
+	//TODO Collections use keyspaceId instead of bucket
 	//if there is a flush in progress for this index's bucket and stream
 	//wait for the flush to finish before drop
 	streamId := indexInst.Stream
@@ -3560,7 +3567,7 @@ func (idx *indexer) handleMTRFail(msg Message) {
 
 }
 
-func (idx *indexer) handleKeyspaceIdNotFound(msg Message) {
+func (idx *indexer) handleKeyspaceNotFound(msg Message) {
 
 	streamId := msg.(*MsgRecovery).GetStreamId()
 	keyspaceId := msg.(*MsgRecovery).GetKeyspaceId()
@@ -3568,12 +3575,12 @@ func (idx *indexer) handleKeyspaceIdNotFound(msg Message) {
 	sessionId := msg.(*MsgRecovery).GetSessionId()
 
 	if ok, currSid := idx.validateSessionId(streamId, keyspaceId, sessionId, true); !ok {
-		logging.Infof("Indexer::handleKeyspaceIdNotFound StreamId %v KeyspaceId %v SessionId %v. "+
+		logging.Infof("Indexer::handleKeyspaceNotFound StreamId %v KeyspaceId %v SessionId %v. "+
 			"Skipped. Current SessionId %v.", streamId, keyspaceId, sessionId, currSid)
 		return
 	}
 
-	logging.Infof("Indexer::handleKeyspaceIdNotFound StreamId %v KeyspaceId %v SessionId %v",
+	logging.Infof("Indexer::handleKeyspaceNotFound StreamId %v KeyspaceId %v SessionId %v",
 		streamId, keyspaceId, sessionId)
 
 	// if in MTR, MTR must have stopped when recieving this message.
@@ -3584,7 +3591,7 @@ func (idx *indexer) handleKeyspaceIdNotFound(msg Message) {
 
 	is := idx.getIndexerState()
 	if is == common.INDEXER_PREPARE_UNPAUSE {
-		logging.Warnf("Indexer::handleKeyspaceIdNotFound Skipped KeyspaceId Cleanup "+
+		logging.Warnf("Indexer::handleKeyspaceNotFound Skipped KeyspaceId Cleanup "+
 			"In %v state", is)
 		return
 	}
@@ -3596,23 +3603,24 @@ func (idx *indexer) handleKeyspaceIdNotFound(msg Message) {
 
 	if state == STREAM_INACTIVE ||
 		state == STREAM_PREPARE_RECOVERY {
-		logging.Infof("Indexer::handleKeyspaceIdNotFound Skip %v %v %v",
+		logging.Infof("Indexer::handleKeyspaceNotFound Skip %v %v %v",
 			streamId, keyspaceId, state)
 		return
 	}
 
 	// delete index inst on the bucket from metadata repository and
 	// return the list of deleted inst
-	instIdList := idx.deleteIndexInstOnDeletedBucket(keyspaceId, streamId)
+	bucket, scope, collection := SplitKeyspaceId(keyspaceId)
+	instIdList := idx.deleteIndexInstOnDeletedKeyspace(bucket, scope, collection, streamId)
 
 	if len(instIdList) == 0 {
-		logging.Infof("Indexer::handleKeyspaceIdNotFound Empty IndexList %v %v. Nothing to do.",
+		logging.Infof("Indexer::handleKeyspaceNotFound Empty IndexList %v %v. Nothing to do.",
 			streamId, keyspaceId)
 		return
 	}
 
 	idx.bulkUpdateState(instIdList, common.INDEX_STATE_DELETED)
-	logging.Infof("Indexer::handleKeyspaceIdNotFound Updated Index State to DELETED %v",
+	logging.Infof("Indexer::handleKeyspaceNotFound Updated Index State to DELETED %v",
 		instIdList)
 
 	msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
@@ -3631,8 +3639,84 @@ func (idx *indexer) handleKeyspaceIdNotFound(msg Message) {
 
 	idx.setStreamKeyspaceIdState(streamId, keyspaceId, STREAM_INACTIVE)
 
-	logging.Infof("Indexer::handleKeyspaceIdNotFound %v %v %v",
+	logging.Infof("Indexer::handleKeyspaceNotFound %v %v %v",
 		streamId, keyspaceId, STREAM_INACTIVE)
+
+}
+
+func (idx *indexer) handleDcpSystemEvent(cmd Message) {
+
+	eventType := cmd.(*MsgStream).GetEventType()
+	streamId := cmd.(*MsgStream).GetStreamId()
+	meta := cmd.(*MsgStream).GetMutationMeta()
+	scopeId := cmd.(*MsgStream).GetScopeId()
+	collectionId := cmd.(*MsgStream).GetCollectionId()
+
+	if eventType == common.CollectionDrop {
+		idx.processCollectionDrop(streamId,
+			meta.keyspaceId, scopeId, collectionId)
+	}
+
+	return
+
+}
+
+func (idx *indexer) processCollectionDrop(streamId common.StreamId,
+	keyspaceId, scopeId, collectionId string) {
+
+	logging.Infof("Indexer::processCollectionDrop %v %v %v %v", streamId,
+		keyspaceId, scopeId, collectionId)
+
+	//get the collection name from index inst map(this may already be gone from manifest)
+	var collection, scope, bucket, bucketUUID string
+	for _, index := range idx.indexInstMap {
+		if index.Defn.CollectionId == collectionId &&
+			index.Stream == streamId &&
+			index.State != common.INDEX_STATE_DELETED {
+			collection = index.Defn.Collection
+			scope = index.Defn.Scope
+			bucket = index.Defn.Bucket
+			bucketUUID = index.Defn.BucketUUID
+			break
+		}
+	}
+
+	if collection == "" {
+		logging.Infof("Indexer::processCollectionDrop No Index Found for Stream %v Collection Id %v.",
+			streamId, collectionId)
+		return
+	}
+
+	// delete index inst on the keyspace from metadata repository and
+	// return the list of deleted inst
+	instIdList := idx.deleteIndexInstOnDeletedKeyspace(bucket, scope, collection, streamId)
+
+	if len(instIdList) == 0 {
+		logging.Infof("Indexer::processCollectionDrop Empty IndexList %v %v. Nothing to do.",
+			streamId, collection)
+		return
+	}
+
+	idx.bulkUpdateState(instIdList, common.INDEX_STATE_DELETED)
+	logging.Infof("Indexer::processCollectionDrop Updated Index State to DELETED %v",
+		instIdList)
+
+	msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
+
+	if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, nil); err != nil {
+		common.CrashOnError(err)
+	}
+
+	//cleanup index data for all indexes in the keyspace
+	indexList := make([]common.IndexInst, 0)
+	for _, instId := range instIdList {
+		index := idx.indexInstMap[instId]
+		idx.cleanupIndexData(index, nil)
+		indexList = append(indexList, index)
+	}
+
+	idx.removeIndexesFromStream(indexList, keyspaceId,
+		bucketUUID, streamId, common.INDEX_STATE_ACTIVE, nil)
 
 }
 
@@ -3739,16 +3823,14 @@ func (idx *indexer) sendStreamUpdateForIndex(indexInstList []common.IndexInst,
 
 	retryCount := 0
 
-	bucket, _, _ := SplitKeyspaceId(keyspaceId)
-
 	reqLock := idx.acquireStreamRequestLock(keyspaceId, streamId)
 	go func(reqLock *kvRequest) {
 		defer idx.releaseStreamRequestLock(reqLock)
 		idx.waitStreamRequestLock(reqLock)
 	retryloop:
 		for {
-			if !idx.clusterInfoClient.ValidateBucket(bucket, []string{bucketUUID}) {
-				logging.Errorf("Indexer::sendStreamUpdateForIndex Bucket Not Found "+
+			if !idx.ValidateKeyspace(streamId, keyspaceId, []string{bucketUUID}) {
+				logging.Errorf("Indexer::sendStreamUpdateForIndex Keyspace Not Found "+
 					"For Stream %v KeyspaceId %v", streamId, keyspaceId)
 				break retryloop
 			}
@@ -3917,8 +3999,6 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 
 	idx.setStreamKeyspaceIdCurrRequest(buildStream, keyspaceId, cmd, stopCh, sessionId)
 
-	bucket, _, _ := SplitKeyspaceId(keyspaceId)
-
 	reqLock := idx.acquireStreamRequestLock(keyspaceId, buildStream)
 	go func(reqLock *kvRequest) {
 		defer idx.releaseStreamRequestLock(reqLock)
@@ -3927,10 +4007,10 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 
 	retryloop:
 		for {
-			if !idx.clusterInfoClient.ValidateBucket(bucket, bucketUUIDList) {
-				logging.Errorf("Indexer::sendStreamUpdateForBuildIndex Bucket Not Found "+
+			if !idx.ValidateKeyspace(buildStream, keyspaceId, bucketUUIDList) {
+				logging.Errorf("Indexer::sendStreamUpdateForBuildIndex Keyspace Not Found "+
 					"For Stream %v KeyspaceId %v SessionId %v", buildStream, keyspaceId, sessionId)
-				idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_BUCKET_NOT_FOUND,
+				idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_KEYSPACE_NOT_FOUND,
 					streamId:   buildStream,
 					keyspaceId: keyspaceId,
 					inMTR:      true,
@@ -4175,8 +4255,6 @@ func (idx *indexer) removeIndexesFromStream(indexList []common.IndexInst,
 			common.CrashOnError(respErr.cause)
 		}
 
-		bucket, _, _ := SplitKeyspaceId(keyspaceId)
-
 		reqLock := idx.acquireStreamRequestLock(keyspaceId, streamId)
 		go func(reqLock *kvRequest) {
 			defer idx.releaseStreamRequestLock(reqLock)
@@ -4184,10 +4262,10 @@ func (idx *indexer) removeIndexesFromStream(indexList []common.IndexInst,
 		retryloop:
 			for {
 
-				if !idx.clusterInfoClient.ValidateBucket(bucket, []string{bucketUUID}) {
-					logging.Errorf("Indexer::removeIndexesFromStream Bucket Not Found "+
-						"For Stream %v Bucket %v", streamId, bucket)
-					idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_BUCKET_NOT_FOUND,
+				if !idx.ValidateKeyspace(streamId, keyspaceId, []string{bucketUUID}) {
+					logging.Errorf("Indexer::removeIndexesFromStream Keyspace Not Found "+
+						"For Stream %v KeyspaceId %v", streamId, keyspaceId)
+					idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_KEYSPACE_NOT_FOUND,
 						streamId:   streamId,
 						keyspaceId: keyspaceId,
 						sessionId:  sessionId}
@@ -4731,8 +4809,8 @@ func (idx *indexer) processBuildDoneCatchup(streamId common.StreamId, keyspaceId
 		count := 0
 	retryloop:
 		for {
-			if !idx.clusterInfoClient.ValidateBucket(bucket, bucketUUIDList) {
-				logging.Errorf("Indexer::processBuildDoneCatchup Bucket Not Found "+
+			if !idx.ValidateKeyspace(common.MAINT_STREAM, bucket, bucketUUIDList) {
+				logging.Errorf("Indexer::processBuildDoneCatchup Keyspace Not Found "+
 					"For Stream %v KeyspaceId %v SessionId %v", streamId, keyspaceId, sessionId)
 				//TODO need to send bucket not found?
 				break retryloop
@@ -4886,9 +4964,6 @@ func (idx *indexer) processBuildDoneNoCatchup(streamId common.StreamId,
 	idx.setStreamKeyspaceIdState(streamId, keyspaceId, STREAM_INACTIVE)
 	idx.cleanupStreamKeyspaceIdState(streamId, keyspaceId)
 
-	clustAddr := idx.config["clusterAddr"].String()
-	bucket, _, _ := SplitKeyspaceId(keyspaceId)
-
 	reqLock := idx.acquireStreamRequestLock(keyspaceId, streamId)
 	go func(reqLock *kvRequest) {
 		defer idx.releaseStreamRequestLock(reqLock)
@@ -4896,8 +4971,8 @@ func (idx *indexer) processBuildDoneNoCatchup(streamId common.StreamId,
 		count := 0
 	retryloop:
 		for {
-			if !ValidateBucket(clustAddr, bucket, bucketUUIDList) {
-				logging.Errorf("Indexer::processBuildDoneNoCatchup Bucket Not Found "+
+			if !idx.ValidateKeyspace(streamId, keyspaceId, bucketUUIDList) {
+				logging.Errorf("Indexer::processBuildDoneNoCatchup Keyspace Not Found "+
 					"For Stream %v KeyspaceId %v SessionId %v", streamId, keyspaceId, sessionId)
 				break retryloop
 			}
@@ -5448,8 +5523,6 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 	idx.initBuildTsLock(streamId, keyspaceId)
 	idx.setStreamKeyspaceIdCurrRequest(streamId, keyspaceId, cmd, stopCh, sessionId)
 
-	bucket, _, _ := SplitKeyspaceId(keyspaceId)
-
 	reqLock := idx.acquireStreamRequestLock(keyspaceId, streamId)
 	go func(reqLock *kvRequest) {
 		defer idx.releaseStreamRequestLock(reqLock)
@@ -5457,11 +5530,11 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 		count := 0
 	retryloop:
 		for {
-			//validate bucket before every try
-			if !idx.clusterInfoClient.ValidateBucket(bucket, bucketUUIDList) {
-				logging.Errorf("Indexer::startKeyspaceIdStream Bucket Not Found "+
+			//validate keyspace before every try
+			if !idx.ValidateKeyspace(streamId, keyspaceId, bucketUUIDList) {
+				logging.Errorf("Indexer::startKeyspaceIdStream Keyspace Not Found "+
 					"For Stream %v KeyspaceId %v SessionId %v", streamId, keyspaceId, sessionId)
-				idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_BUCKET_NOT_FOUND,
+				idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_KEYSPACE_NOT_FOUND,
 					streamId:   streamId,
 					keyspaceId: keyspaceId,
 					inMTR:      true,
@@ -6309,6 +6382,10 @@ func (idx *indexer) broadcastBootstrapStats(stats *IndexerStats,
 	id common.IndexInstId) {
 
 	idxStats := stats.indexes[id]
+
+	state := idx.indexInstMap[id].State
+	idxStats.indexState.Set((uint64)(state))
+
 	idxStats.numDocsPending.Set(math.MaxInt64)
 	idxStats.numDocsQueued.Set(math.MaxInt64)
 	idxStats.lastRollbackTime.Set(time.Now().UnixNano())
@@ -6610,8 +6687,15 @@ func (idx *indexer) upgradeSingleIndex(inst *common.IndexInst, storageMode commo
 
 func (idx *indexer) validateIndexInstMap() {
 
+	clusterAddr := idx.config["clusterAddr"].String()
+
 	bucketUUIDMap := make(map[string]bool)
 	bucketValid := make(map[string]bool)
+
+	keyspaceMap := make(map[string]bool)
+	keyspaceValid := make(map[string]bool)
+
+	clusterVer := idx.clusterInfoClient.ClusterVersion()
 
 	for instId, index := range idx.indexInstMap {
 
@@ -6670,7 +6754,6 @@ func (idx *indexer) validateIndexInstMap() {
 			continue
 		}
 
-		//TODO Validate collection/scope
 		//if bucket doesn't exist, cleanup
 		bucketUUID := index.Defn.Bucket + "::" + index.Defn.BucketUUID
 		if _, ok := bucketUUIDMap[bucketUUID]; !ok {
@@ -6685,21 +6768,59 @@ func (idx *indexer) validateIndexInstMap() {
 				bucketValid[bucket] = bucketUUIDValid
 			}
 		}
+
+		if clusterVer >= common.INDEXER_65_VERSION {
+
+			keyspace := strings.Join([]string{index.Defn.Bucket,
+				index.Defn.Scope, index.Defn.Collection}, ":")
+			if _, ok := keyspaceMap[keyspace]; !ok {
+
+				//TODO Collections - change to use cinfo.GetCollectionID once streaming
+				//rest endpoint is available
+				cid, _ := common.GetCollectionID(clusterAddr,
+					index.Defn.Bucket, index.Defn.Scope, index.Defn.Collection)
+
+				cidValid := false
+				if cid == index.Defn.CollectionId {
+					cidValid = true
+				}
+
+				if _, ok := keyspaceValid[keyspace]; ok {
+					keyspaceValid[keyspace] = keyspaceValid[keyspace] && cidValid
+				} else {
+					keyspaceValid[keyspace] = cidValid
+				}
+
+			}
+		}
 	}
 
 	// handle bucket that fails validation
 	for bucket, valid := range bucketValid {
 		if !valid {
-			instList := idx.deleteIndexInstOnDeletedBucket(bucket, common.NIL_STREAM)
+			instList := idx.deleteIndexInstOnDeletedKeyspace(bucket, "", "", common.NIL_STREAM)
 			for _, instId := range instList {
 				index := idx.indexInstMap[instId]
-				logging.Warnf("Indexer::validateIndexInstMap \n\t Bucket %v Not Found."+
+				logging.Warnf("Indexer::validateIndexInstMap Bucket %v Not Found."+
 					"Not Recovering Index %v", bucket, index)
 				delete(idx.indexInstMap, instId)
 			}
 		}
 	}
 
+	// handle collection that fails validation
+	for keyspace, valid := range keyspaceValid {
+		if !valid {
+			bucket, scope, collection := SplitKeyspaceId(keyspace)
+			instList := idx.deleteIndexInstOnDeletedKeyspace(bucket, scope, collection, common.NIL_STREAM)
+			for _, instId := range instList {
+				index := idx.indexInstMap[instId]
+				logging.Warnf("Indexer::validateIndexInstMap Keyspace %v Not Found."+
+					"Not Recovering Index %v", keyspace, index)
+				delete(idx.indexInstMap, instId)
+			}
+		}
+	}
 	idx.checkMaintStreamIndexBuild()
 
 }
@@ -7023,9 +7144,16 @@ func (idx *indexer) updateMetaInfoForIndexList(instIdList []common.IndexInstId,
 
 }
 
-func (idx *indexer) updateMetaInfoForDeleteBucket(bucket string, streamId common.StreamId) error {
+func (idx *indexer) updateMetaInfoForDeleteKeyspace(bucket,
+	scope, collection string, streamId common.StreamId) error {
 
-	msg := &MsgClustMgrUpdate{mType: CLUST_MGR_DEL_BUCKET, bucket: bucket, streamId: streamId}
+	msg := &MsgClustMgrUpdate{
+		mType:      CLUST_MGR_DEL_KEYSPACE,
+		bucket:     bucket,
+		scope:      scope,
+		collection: collection,
+		streamId:   streamId}
+
 	return idx.sendMsgToClusterMgr(msg)
 }
 
@@ -7648,29 +7776,47 @@ func (idx *indexer) getIndexInstForKeyspaceId(keyspaceId string) ([]common.Index
 	return result, nil
 }
 
-//TODO Collections - change this method to work with collections once manager changes are ready
-func (idx *indexer) deleteIndexInstOnDeletedBucket(bucket string, streamId common.StreamId) []common.IndexInstId {
+func (idx *indexer) deleteIndexInstOnDeletedKeyspace(bucket,
+	scope, collection string, streamId common.StreamId) []common.IndexInstId {
 
 	var instIdList []common.IndexInstId = nil
 
 	if idx.enableManager {
-		if err := idx.updateMetaInfoForDeleteBucket(bucket, streamId); err != nil {
+		if err := idx.updateMetaInfoForDeleteKeyspace(bucket,
+			scope, collection, streamId); err != nil {
 			common.CrashOnError(err)
 		}
 	}
 
-	// Only mark index inst as DELETED if it is actually got deleted in metadata.
-	for _, index := range idx.indexInstMap {
-		if index.Defn.Bucket == bucket &&
-			(streamId == common.NIL_STREAM || (index.Stream == streamId ||
-				index.Stream == common.NIL_STREAM)) {
+	if collection == "" {
+		// Only mark index inst as DELETED if it is actually got deleted in metadata.
+		for _, index := range idx.indexInstMap {
+			if index.Defn.Bucket == bucket &&
+				(streamId == common.NIL_STREAM || (index.Stream == streamId ||
+					index.Stream == common.NIL_STREAM)) {
 
-			instIdList = append(instIdList, index.InstId)
+				instIdList = append(instIdList, index.InstId)
 
-			idx.stats.RemoveIndex(index.InstId)
+				idx.stats.RemoveIndex(index.InstId)
+			}
 		}
-	}
 
+	} else {
+		// Only mark index inst as DELETED if it is actually got deleted in metadata.
+		for _, index := range idx.indexInstMap {
+			if index.Defn.Bucket == bucket &&
+				index.Defn.Scope == scope &&
+				index.Defn.Collection == collection &&
+				(streamId == common.NIL_STREAM || (index.Stream == streamId ||
+					index.Stream == common.NIL_STREAM)) {
+
+				instIdList = append(instIdList, index.InstId)
+
+				idx.stats.RemoveIndex(index.InstId)
+			}
+		}
+
+	}
 	return instIdList
 }
 
@@ -8755,4 +8901,38 @@ func (idx *indexer) monitorKVNodes() {
 			return
 		}
 	}
+}
+
+func (idx *indexer) ValidateKeyspace(streamId common.StreamId, keyspaceId string,
+	bucketUUIDs []string) bool {
+
+	clusterAddr := idx.config["clusterAddr"].String()
+
+	collectionId := idx.streamKeyspaceIdCollectionId[streamId][keyspaceId]
+
+	bucket, scope, collection := SplitKeyspaceId(keyspaceId)
+
+	//if the stream is using a cid, validate collection.
+	//otherwise only validate the bucket
+	if collectionId == "" {
+		if !idx.clusterInfoClient.ValidateBucket(bucket, bucketUUIDs) {
+			return false
+		}
+	} else {
+
+		if scope == "" && collection == "" {
+			scope = common.DEFAULT_SCOPE
+			collection = common.DEFAULT_COLLECTION
+		}
+
+		//TODO Collections - change to use cinfo.GetCollectionID once streaming
+		//rest endpoint is available
+		cid, _ := common.GetCollectionID(clusterAddr,
+			bucket, scope, collection)
+		if cid != collectionId {
+			return false
+		}
+	}
+	return true
+
 }
