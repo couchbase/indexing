@@ -2287,8 +2287,11 @@ func (tk *timekeeper) checkFlushTsValidForMerge(streamId common.StreamId, keyspa
 		return false, nil
 	}
 
+	cluster := tk.config["clusterAddr"].String()
+
 	initTsSeq = getSeqTsFromTsVbuuid(initFlushTs)
 	minMergeTsSeq := getSeqTsFromTsVbuuid(minMergeTs)
+
 	//if INIT_STREAM has not caught upto minMergeTs
 	flushedPastMinMergeTs := tk.ss.streamKeyspaceIdPastMinMergeTs[streamId][keyspaceId]
 	if !flushedPastMinMergeTs {
@@ -2296,6 +2299,22 @@ func (tk *timekeeper) checkFlushTsValidForMerge(streamId common.StreamId, keyspa
 		if initTsSeq.GreaterThanEqual(minMergeTsSeq) {
 			tk.ss.streamKeyspaceIdPastMinMergeTs[streamId][keyspaceId] = true
 		} else {
+			cid := tk.ss.streamKeyspaceIdCollectionId[streamId][keyspaceId]
+			if cid != "" {
+				//vbuuids need to match for index merge
+				if !initFlushTs.CompareVbuuids(maintFlushTs) {
+					return false, nil
+				}
+				currCTs, err := common.CollectionSeqnos(cluster, "default", bucket, cid)
+				if err != nil {
+					logging.Infof("Timekeeper::checkFlushTsValidForMerge CollectionSeqnos err %v. Skipping stream merge.", err)
+					return false, nil
+				}
+				//if the collection high seqno has been reached
+				if initTsSeq.GreaterThanEqual(Timestamp(currCTs)) {
+					return true, initFlushTs
+				}
+			}
 			return false, nil
 		}
 	}
@@ -2312,9 +2331,6 @@ func (tk *timekeeper) checkFlushTsValidForMerge(streamId common.StreamId, keyspa
 		//if this stream is on a collection
 		cid := tk.ss.streamKeyspaceIdCollectionId[streamId][keyspaceId]
 		if cid != "" {
-
-			cluster := tk.config["clusterAddr"].String()
-			bucket, _, _ := SplitKeyspaceId(keyspaceId)
 
 			//TODO Collections compute the seqnos asynchronously
 			currBTs, err := common.BucketSeqnos(cluster, "default", bucket)
