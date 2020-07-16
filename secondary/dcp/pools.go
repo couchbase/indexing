@@ -100,6 +100,10 @@ type Pool struct {
 	client Client
 }
 
+type SaslBucket struct {
+	Buckets []Bucket `json:"buckets"`
+}
+
 // VBucketServerMap is the a mapping of vbuckets to nodes.
 type VBucketServerMap struct {
 	HashAlgorithm string   `json:"hashAlgorithm"`
@@ -376,6 +380,36 @@ func (c *Client) RunObserveNodeServices(pool string, callb func(interface{}) err
 	return c.runObserveStreamingEndpoint(path, decoder, callb, cancel)
 }
 
+func (c *Client) RunObserveBuckets(pool string, callb func(interface{}) error, cancel chan bool) error {
+
+	path := "/pools/" + pool + "/saslBucketsStreaming"
+	decoder := func(bs []byte) (interface{}, error) {
+		var buckets SaslBucket
+		var err error
+		if err = json.Unmarshal(bs, &buckets); err != nil {
+			logging.Errorf("RunObserveBuckets: Error while decoding the response from path: %s, response body: %s, err: %v", path, string(bs), err)
+		}
+		return &buckets, err
+	}
+
+	return c.runObserveStreamingEndpoint(path, decoder, callb, cancel)
+}
+
+func (c *Client) RunObserveCollectionManifestChanges(pool, bucket string, callb func(interface{}) error, cancel chan bool) error {
+
+	path := "/pools/" + pool + "/bs/" + bucket
+	decoder := func(bs []byte) (interface{}, error) {
+		var b Bucket
+		var err error
+		if err = json.Unmarshal(bs, &b); err != nil {
+			logging.Errorf("RunObserveCollectionManifestChanges: Error while decoding the response from path: %s, response body: %s, err: %v", path, string(bs), err)
+		}
+		return &b, err
+	}
+
+	return c.runObserveStreamingEndpoint(path, decoder, callb, cancel)
+}
+
 // Helper for observing and calling back streaming endpoint
 func (c *Client) runObserveStreamingEndpoint(path string,
 	decoder func([]byte) (interface{}, error),
@@ -630,6 +664,29 @@ loop:
 			p.Manifest[b.Name] = manifest
 		}
 	}
+	return nil
+}
+
+func (p *Pool) RefreshManifest(bucket string) error {
+	retryCount := 0
+retry:
+	manifest := &collections.CollectionManifest{}
+	err := p.client.parseURLResponse("pools/default/buckets/"+bucket+"/collections", manifest)
+	if err != nil {
+		// bucket list is out of sync with cluster bucket list
+		// bucket might have got deleted.
+		if strings.Contains(err.Error(), "HTTP error 404") {
+			logging.Warnf("cluster_info: Out of sync for bucket %s. Retrying..", bucket)
+			time.Sleep(1 * time.Millisecond)
+			retryCount++
+			if retryCount > 5 {
+				return err
+			}
+			goto retry
+		}
+		return err
+	}
+	p.Manifest[bucket] = manifest
 	return nil
 }
 

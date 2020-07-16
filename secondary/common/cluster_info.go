@@ -261,6 +261,14 @@ func (c *ClusterInfoCache) FetchWithLock() error {
 	return c.Fetch()
 }
 
+func (c *ClusterInfoCache) FetchManifestInfo(bucketName string) error {
+	c.Lock()
+	defer c.Unlock()
+
+	pool := &c.pool
+	return pool.RefreshManifest(bucketName)
+}
+
 func (c *ClusterInfoCache) buildEncryptPortMapping() {
 	mapping := make(map[string]string)
 
@@ -922,10 +930,30 @@ func (c *ClusterInfoClient) watchClusterChanges() {
 	ch := scn.GetNotifyCh()
 	for {
 		select {
-		case _, ok := <-ch:
+		case notif, ok := <-ch:
 			if !ok {
 				selfRestart()
 				return
+			}
+			if notif.Type == CollectionManifestChangeNotification {
+				// Read the bucket info from msg and fetch bucket information for that bucket
+				switch (notif.Msg).(type) {
+				case *couchbase.Bucket:
+					bucket := (notif.Msg).(*couchbase.Bucket)
+					if err := c.cinfo.FetchManifestInfo(bucket.Name); err != nil {
+						logging.Errorf("cic.cinfo.FetchManifestInfo(): %v\n", err)
+						selfRestart()
+						return
+					}
+				default:
+					logging.Errorf("ClusterInfoClient(%v): Invalid CollectionManifestChangeNotification type", c.cinfo.userAgent)
+					// Fetch full cluster info cache
+					if err := c.cinfo.FetchWithLock(); err != nil {
+						logging.Errorf("cic.cinfo.FetchWithLock(): %v\n", err)
+						selfRestart()
+						return
+					}
+				}
 			} else if err := c.cinfo.FetchWithLock(); err != nil {
 				logging.Errorf("cic.cinfo.FetchWithLock(): %v\n", err)
 				selfRestart()
