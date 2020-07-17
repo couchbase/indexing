@@ -1130,12 +1130,20 @@ func (m *mutationMgr) handleGetMutationQueueLWT(cmd Message) {
 //handleUpdateIndexInstMap updates the indexInstMap
 func (m *mutationMgr) handleUpdateIndexInstMap(cmd Message) {
 
-	logging.Infof("MutationMgr::handleUpdateIndexInstMap %v", cmd)
+	req := cmd.(*MsgUpdateInstMap)
+	updatedInsts := req.GetUpdatedInsts()
+	if len(updatedInsts) > 0 {
+		logging.Infof("MutationMgr::handleUpdateIndexInstMap, updated instances: %v", updatedInsts)
+	}
+	deletedInsts := req.GetDeletedInstIds()
+	if len(deletedInsts) > 0 {
+		logging.Infof("MutationMgr::handleUpdateIndexInstMap, deleted instance id's: %v", deletedInsts)
+	}
+	logging.Tracef("MutationMgr::handleUpdateIndexInstMap %v", cmd)
 
 	m.lock.Lock()
 	defer m.lock.Unlock()
 
-	req := cmd.(*MsgUpdateInstMap)
 	indexInstMap := req.GetIndexInstMap()
 	m.indexInstMap = common.CopyIndexInstMap2(indexInstMap)
 	m.stats.Set(req.GetStatsObject())
@@ -1146,7 +1154,16 @@ func (m *mutationMgr) handleUpdateIndexInstMap(cmd Message) {
 //handleUpdateIndexPartnMap updates the indexPartnMap
 func (m *mutationMgr) handleUpdateIndexPartnMap(cmd Message) {
 
-	logging.Infof("MutationMgr::handleUpdateIndexPartnMap %v", cmd)
+	req := cmd.(*MsgUpdatePartnMap)
+	updatedPartnMap := req.GetUpdatedPartnMap()
+	if len(updatedPartnMap) > 0 {
+		logging.Infof("MutationMgr::handleUpdateIndexPartnMap, updated paritionMap: %v", updatedPartnMap)
+	}
+	deletedInstId := req.GetDeletedInstId()
+	if deletedInstId > 0 {
+		logging.Infof("MutationMgr::handleUpdateIndexPartnMap, deleted instance id: %v", deletedInstId)
+	}
+	logging.Tracef("MutationMgr::handleUpdateIndexPartnMap %v", cmd)
 
 	m.lock.Lock()
 	defer m.lock.Unlock()

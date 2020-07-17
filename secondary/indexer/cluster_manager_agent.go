@@ -332,7 +332,16 @@ func (c *clustMgrAgent) handleResetIndexOnRollback(cmd Message) {
 
 func (c *clustMgrAgent) handleIndexMap(cmd Message) {
 
-	logging.Infof("ClustMgr:handleIndexMap %v", cmd)
+	req := cmd.(*MsgUpdateInstMap)
+	updatedInsts := req.GetUpdatedInsts()
+	if len(updatedInsts) > 0 {
+		logging.Infof("ClustMgr::handleIndexMap, updated instances: %v", updatedInsts)
+	}
+	deletedInsts := req.GetDeletedInstIds()
+	if len(deletedInsts) > 0 {
+		logging.Infof("ClustMgr::handleIndexMap, deleted instance id's: %v", deletedInsts)
+	}
+	logging.Tracef("ClustMgr:handleIndexMap %v", cmd)
 
 	statsObj := cmd.(*MsgUpdateInstMap).GetStatsObject()
 	if statsObj != nil {

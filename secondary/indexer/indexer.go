@@ -1529,7 +1529,10 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 	idx.indexPartnMap[indexInst.InstId] = partnInstMap
 
 	msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
+	msgUpdateIndexInstMap.AppendUpdatedInsts(common.IndexInstList{indexInst})
+
 	msgUpdateIndexPartnMap := &MsgUpdatePartnMap{indexPartnMap: idx.indexPartnMap}
+	msgUpdateIndexPartnMap.SetUpdatedPartnMap(partnInstMap)
 
 	if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, msgUpdateIndexPartnMap); err != nil {
 		if clientCh != nil {
@@ -2155,7 +2158,10 @@ func (idx *indexer) cleanupIndexAfterMerge(inst common.IndexInst, merged map[com
 
 	// Update index maps with this index
 	msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
+	msgUpdateIndexInstMap.AppendDeletedInstIds([]common.IndexInstId{inst.InstId})
+
 	msgUpdateIndexPartnMap := &MsgUpdatePartnMap{indexPartnMap: idx.indexPartnMap}
+	msgUpdateIndexPartnMap.SetDeletedInstId(inst.InstId)
 	if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, msgUpdateIndexPartnMap); err != nil {
 		common.CrashOnError(err)
 	}
@@ -2414,7 +2420,10 @@ func (idx *indexer) prunePartition(bucket string, streamId common.StreamId, inst
 
 			// Update index maps with this index
 			msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
+			msgUpdateIndexInstMap.AppendUpdatedInsts(common.IndexInstList{inst})
 			msgUpdateIndexPartnMap := &MsgUpdatePartnMap{indexPartnMap: idx.indexPartnMap}
+			msgUpdateIndexPartnMap.SetUpdatedPartnMap(idx.indexPartnMap[inst.InstId])
+
 			if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, msgUpdateIndexPartnMap); err != nil {
 				common.CrashOnError(err)
 			}
@@ -2650,6 +2659,8 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 			instIdList, buildStream, buildState)
 
 		msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
+		updatedIndexes := idx.getUpdatedInsts(instIdList)
+		msgUpdateIndexInstMap.AppendUpdatedInsts(updatedIndexes)
 
 		if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, nil); err != nil {
 			if clientCh != nil {
@@ -2779,6 +2790,7 @@ func (idx *indexer) handleDropIndex(msg Message) (resp Message) {
 	idx.indexInstMap[indexInst.InstId] = indexInst
 
 	msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
+	msgUpdateIndexInstMap.AppendUpdatedInsts(common.IndexInstList{indexInst})
 
 	if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, nil); err != nil {
 		clientCh <- &MsgError{
@@ -3145,6 +3157,7 @@ func (idx *indexer) doResetIndexesOnRollback(keyspaceId string,
 	}
 
 	var wg sync.WaitGroup
+	updatedInstances := make([]common.IndexInst, 0)
 	for _, instId := range resetList {
 
 		if index, ok := idx.indexInstMap[instId]; ok {
@@ -3152,6 +3165,7 @@ func (idx *indexer) doResetIndexesOnRollback(keyspaceId string,
 			if index.State != common.INDEX_STATE_DELETED {
 				idx.resetSingleIndexOnRollback(&index, &wg)
 				idx.indexInstMap[instId] = index
+				updatedInstances = append(updatedInstances, index)
 			} else {
 				logging.Infof("Indexer::doResetIndexesOnRollback Index %v in %v state. Skipping.", instId, index.State)
 			}
@@ -3162,6 +3176,7 @@ func (idx *indexer) doResetIndexesOnRollback(keyspaceId string,
 
 	//send updated maps to all workers
 	msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
+	msgUpdateIndexInstMap.AppendUpdatedInsts(updatedInstances)
 
 	if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, nil); err != nil {
 		common.CrashOnError(err)
@@ -3624,6 +3639,8 @@ func (idx *indexer) handleKeyspaceNotFound(msg Message) {
 		instIdList)
 
 	msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
+	updatedInstances := idx.getUpdatedInsts(instIdList)
+	msgUpdateIndexInstMap.AppendUpdatedInsts(updatedInstances)
 
 	if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, nil); err != nil {
 		common.CrashOnError(err)
@@ -3702,6 +3719,8 @@ func (idx *indexer) processCollectionDrop(streamId common.StreamId,
 		instIdList)
 
 	msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
+	updatedInstances := idx.getUpdatedInsts(instIdList)
+	msgUpdateIndexInstMap.AppendUpdatedInsts(updatedInstances)
 
 	if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, nil); err != nil {
 		common.CrashOnError(err)
@@ -3737,7 +3756,9 @@ func (idx *indexer) cleanupIndexData(indexInst common.IndexInst,
 	deleteFreeWriters(indexInst.InstId)
 
 	msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
+	msgUpdateIndexInstMap.AppendDeletedInstIds([]common.IndexInstId{indexInstId})
 	msgUpdateIndexPartnMap := &MsgUpdatePartnMap{indexPartnMap: idx.indexPartnMap}
+	msgUpdateIndexPartnMap.SetDeletedInstId(indexInstId)
 
 	if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap,
 		msgUpdateIndexPartnMap); err != nil {
@@ -4741,6 +4762,7 @@ func (idx *indexer) processBuildDoneCatchup(streamId common.StreamId, keyspaceId
 
 	//send updated maps to all workers
 	msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
+	msgUpdateIndexInstMap.AppendUpdatedInsts(indexList)
 
 	if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, nil); err != nil {
 		common.CrashOnError(err)
@@ -4921,6 +4943,7 @@ func (idx *indexer) processBuildDoneNoCatchup(streamId common.StreamId,
 
 	//send updated maps to all workers
 	msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
+	msgUpdateIndexInstMap.AppendUpdatedInsts(indexList)
 
 	if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, nil); err != nil {
 		common.CrashOnError(err)
@@ -5098,6 +5121,7 @@ func (idx *indexer) handleMergeInitStream(msg Message) {
 
 	//send updated maps to all workers
 	msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
+	msgUpdateIndexInstMap.AppendUpdatedInsts(indexList)
 
 	if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, nil); err != nil {
 		common.CrashOnError(err)
@@ -5825,7 +5849,8 @@ func (idx *indexer) bootstrap1(snapshotNotifych chan IndexSnapshot) error {
 //but couldn't reset the metadata before crash.
 //2. The index never created a disk snapshot as the disk
 //snapshot happens only at 10mins interval.
-func (idx *indexer) findAndResetEmptySnapshotIndex() {
+func (idx *indexer) findAndResetEmptySnapshotIndex() common.IndexInstList {
+	updatedInsts := make(common.IndexInstList, 0)
 
 	for instId, index := range idx.indexInstMap {
 
@@ -5868,10 +5893,11 @@ func (idx *indexer) findAndResetEmptySnapshotIndex() {
 			if anyPartnNil && !anyPartnNonNil {
 				idx.resetSingleIndexOnRollback(&index, nil)
 				idx.indexInstMap[instId] = index
+				updatedInsts = append(updatedInsts, index)
 			}
 		}
 	}
-
+	return updatedInsts
 }
 
 func (idx *indexer) createRealInstIdMap() common.IndexInstMap {
@@ -5964,10 +5990,11 @@ func (idx *indexer) handleStorageWarmupDone(msg Message) {
 
 	//any index with nil snapshot should be moved to INIT_STREAM
 	//TODO optimize for case where keyspace has 0 documents
-	idx.findAndResetEmptySnapshotIndex()
+	updatedInsts := idx.findAndResetEmptySnapshotIndex()
 
 	//send updated maps
 	msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
+	msgUpdateIndexInstMap.AppendUpdatedInsts(updatedInsts)
 	msgUpdateIndexPartnMap := &MsgUpdatePartnMap{indexPartnMap: idx.indexPartnMap}
 
 	// Distribute current stats object and index information
@@ -7323,6 +7350,16 @@ func (idx *indexer) updateError(instId common.IndexInstId,
 	idxInst.Error = errStr
 	idx.indexInstMap[instId] = idxInst
 
+}
+
+func (idx *indexer) getUpdatedInsts(instIdList []common.IndexInstId) []common.IndexInst {
+
+	updInsts := make([]common.IndexInst, 0)
+	for _, instId := range instIdList {
+		idxInst := idx.indexInstMap[instId]
+		updInsts = append(updInsts, idxInst)
+	}
+	return updInsts
 }
 
 func (idx *indexer) bulkUpdateState(instIdList []common.IndexInstId,
