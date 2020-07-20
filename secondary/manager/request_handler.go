@@ -2471,5 +2471,5 @@ func (s *schedTokenMonitor) getIndexes() []*IndexStatus {
 }
 
 func (s *schedTokenMonitor) Close() {
-	close(s.lCloseCh)
+	s.listener.Close()
 }
