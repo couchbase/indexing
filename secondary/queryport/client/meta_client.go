@@ -604,35 +604,66 @@ func (b *metadataClient) computeReplicas(topo map[common.IndexerId][]*mclient.In
 func (b *metadataClient) computeEquivalents(topo map[common.IndexerId][]*mclient.IndexMetadata) map[common.IndexDefnId][]common.IndexDefnId {
 
 	equivalentMap := make(map[common.IndexDefnId][]common.IndexDefnId)
+	indexMap := make(map[string]map[string]map[string]map[common.IndexDefnId]*mclient.IndexMetadata)
 
-	for _, indexes1 := range topo { // go through the indexes for each indexer
-		for _, index1 := range indexes1 {
-
-			if _, ok := equivalentMap[index1.Definition.DefnId]; ok { // skip replica
+	// Parse the list of indexes and segregate them according to bucket, scope and collection
+	for _, indexes := range topo {
+		for _, index := range indexes {
+			bucket := index.Definition.Bucket
+			scope := index.Definition.Scope
+			collection := index.Definition.Collection
+			if _, ok := indexMap[bucket]; !ok {
+				indexMap[bucket] = make(map[string]map[string]map[common.IndexDefnId]*mclient.IndexMetadata)
+			}
+			if _, ok := indexMap[bucket][scope]; !ok {
+				indexMap[bucket][scope] = make(map[string]map[common.IndexDefnId]*mclient.IndexMetadata)
+			}
+			if _, ok := indexMap[bucket][scope][collection]; !ok {
+				indexMap[bucket][scope][collection] = make(map[common.IndexDefnId]*mclient.IndexMetadata)
+			}
+			if _, ok := indexMap[bucket][scope][collection][index.Definition.DefnId]; ok { // skip replica
 				continue
 			}
+			indexMap[bucket][scope][collection][index.Definition.DefnId] = index
+		}
+	}
 
-			// add myself
-			seen := make(map[common.IndexDefnId]bool)
-			seen[index1.Definition.DefnId] = true
-			equivalentMap[index1.Definition.DefnId] = []common.IndexDefnId{index1.Definition.DefnId}
+	// Compute equivalent map based on hierMap
+	for _, scopeMap := range indexMap {
+		for _, collMap := range scopeMap {
+			for _, metaMap := range collMap {
 
-			for _, indexes2 := range topo { // go through the indexes for each indexer
+				for _, index1 := range metaMap {
+					if len(equivalentMap[index1.Definition.DefnId]) == 0 {
+						equivalentMap[index1.Definition.DefnId] = []common.IndexDefnId{index1.Definition.DefnId}
+						for _, index2 := range metaMap {
+							if index1.Definition.DefnId == index2.Definition.DefnId {
+								continue
+							}
 
-				for _, index2 := range indexes2 {
-					if seen[index2.Definition.DefnId] {
-						continue
+							if b.equivalentIndex(index1, index2) {
+								// If index1 is equivalent to index2, then index2 is equivalent to index1.
+								// So, update the equivalentMap of index2 as well. When index2 is visited in the
+								// outer for loop, it would simply copy all the equivalent definition ID's from index1
+								// thereby avoiding the traversal of entire index list
+								equivalentMap[index1.Definition.DefnId] = append(equivalentMap[index1.Definition.DefnId], index2.Definition.DefnId)
+								equivalentMap[index2.Definition.DefnId] = append(equivalentMap[index2.Definition.DefnId], index1.Definition.DefnId)
+							}
+						}
+					} else {
+						// If index1 has equivalents: index1, index2, index5, index8,
+						// then for index2 there is no need to traverse the entire list
+						// of indexes. Copying the equivalent index list of indexes from
+						// index1 would be sufficient
+						indexDefnId := equivalentMap[index1.Definition.DefnId][0]
+						equivalentMap[index1.Definition.DefnId] = make([]common.IndexDefnId, len(equivalentMap[indexDefnId]))
+						copy(equivalentMap[index1.Definition.DefnId], equivalentMap[indexDefnId])
 					}
-					seen[index2.Definition.DefnId] = true
-
-					if b.equivalentIndex(index1, index2) { // pick equivalents
-						equivalentMap[index1.Definition.DefnId] = append(equivalentMap[index1.Definition.DefnId], index2.Definition.DefnId)
-					}
+					delete(metaMap, index1.Definition.DefnId)
 				}
 			}
 		}
 	}
-
 	return equivalentMap
 }
 
