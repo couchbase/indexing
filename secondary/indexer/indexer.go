@@ -4172,7 +4172,7 @@ func (idx *indexer) sendStreamUpdateForDropIndex(indexInst common.IndexInst,
 	var indexList []common.IndexInst
 	indexList = append(indexList, indexInst)
 
-	return idx.removeIndexesFromStream(indexList, indexInst.Defn.Bucket,
+	return idx.removeIndexesFromStream(indexList, indexInst.Defn.KeyspaceId(indexInst.Stream),
 		indexInst.Defn.BucketUUID, indexInst.Stream, indexInst.State, clientCh)
 }
 
