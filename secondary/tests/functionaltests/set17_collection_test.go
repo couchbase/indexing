@@ -536,11 +536,11 @@ func TestCollectionDDLWithConcurrentSystemEvents(t *testing.T) {
 	coll := "cc"
 
 	kvutility.CreateCollection(bucket, scope, coll, clusterconfig.Username, clusterconfig.Password, kvaddress)
-	time.Sleep(2 * time.Second)
+	time.Sleep(10 * time.Second)
 	createPrimaryIndex(scope+"_"+coll+"_"+"i1", bucket, scope, coll, t)
 	index1 := scope + "_" + coll + "_" + "i2"
 	createDeferIndex(index1, bucket, scope, coll, []string{"age"}, t)
-	time.Sleep(1 * time.Second)
+	time.Sleep(2 * time.Second)
 
 	var wg sync.WaitGroup
 	wg.Add(2)
