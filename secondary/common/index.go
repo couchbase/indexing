@@ -271,6 +271,9 @@ type IndexInst struct {
 //IndexInstMap is a map from IndexInstanceId to IndexInstance
 type IndexInstMap map[IndexInstId]IndexInst
 
+// IndexInstList is a list of IndexInstances
+type IndexInstList []IndexInst
+
 func (idx IndexDefn) String() string {
 
 	str := fmt.Sprintf("DefnId: %v ", idx.DefnId)
@@ -499,6 +502,25 @@ func (idx IndexInstMap) String() string {
 	str := "\n"
 	for i, index := range idx {
 		str += fmt.Sprintf("\tInstanceId: %v ", i)
+		str += fmt.Sprintf("Name: %v ", index.Defn.Name)
+		str += fmt.Sprintf("Keyspace: %v/%v/%v ", index.Defn.Bucket,
+			index.Defn.Scope, index.Defn.Collection)
+		str += fmt.Sprintf("State: %v ", index.State)
+		str += fmt.Sprintf("Stream: %v ", index.Stream)
+		str += fmt.Sprintf("RState: %v ", index.RState)
+		str += fmt.Sprintf("Version: %v ", index.Version)
+		str += fmt.Sprintf("ReplicaId: %v ", index.ReplicaId)
+		str += "\n"
+	}
+	return str
+
+}
+
+func (idx IndexInstList) String() string {
+
+	str := "\n"
+	for _, index := range idx {
+		str += fmt.Sprintf("\tInstanceId: %v ", index.InstId)
 		str += fmt.Sprintf("Name: %v ", index.Defn.Name)
 		str += fmt.Sprintf("Keyspace: %v/%v/%v ", index.Defn.Bucket,
 			index.Defn.Scope, index.Defn.Collection)

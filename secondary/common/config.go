@@ -686,6 +686,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"queryport.client.listSchedIndexes": ConfigValue{
+		true,
+		"When true, queryport client will return the list of indexes scheduled for creation.",
+		true,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.allowPartialQuorum": ConfigValue{
 		false,
 		"This boolean flag, when set, allows index creation with partial quorum. " +

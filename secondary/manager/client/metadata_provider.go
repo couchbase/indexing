@@ -136,6 +136,8 @@ type watcher struct {
 	incomingReqs chan *protocol.RequestHandle
 	pendingReqs  map[uint64]*protocol.RequestHandle // key : request id
 	loggedReqs   map[common.Txnid]*protocol.RequestHandle
+
+	clientStats IndexStats2Holder
 }
 
 // With partitioning, index instance is distributed among indexer nodes.
@@ -4933,6 +4935,13 @@ RETRY2:
 		err = w.updateServiceMap(addr)
 	}
 
+	if err == nil {
+		clusterVersion := w.getClusterVersion()
+		if clusterVersion >= c.INDEXER_70_VERSION {
+			err = w.getClientStats()
+		}
+	}
+
 	if err != nil && retry != 0 {
 		ticker := time.NewTicker(time.Duration(500) * time.Millisecond)
 		select {
@@ -5086,12 +5095,47 @@ func (w *watcher) updateIndexStatsNoLock(indexerId c.IndexerId, indexStats *Inde
 
 func (w *watcher) updateIndexStats2NoLock(indexerId c.IndexerId, indexStats2 *IndexStats2) map[c.IndexInstId]map[c.PartitionId]c.Statistics {
 
+	useCached := false
+	for _, dedupedIndexStats := range indexStats2.Stats {
+		if len(dedupedIndexStats.Indexes) == 0 {
+			useCached = true
+			break
+		}
+	}
+
+	// Check if the cached client stats are updated from OPCODE_CLIENT_STATS
+	// It is possible that client is yet to receive the response to OPCODE_CLIENT_STATS
+	// while watcher has already got a notification for stats (a corner case)
+	clientStats := w.clientStats.Get()
+	if useCached == true {
+		if len(clientStats.Stats) == 0 {
+			return nil
+		} else {
+			for _, clientIndexStats := range clientStats.Stats {
+				if len(clientIndexStats.Indexes) == 0 {
+					return nil
+				}
+			}
+		}
+	}
+
+	if useCached {
+		// Update the Indexes list from cached version
+		for bucket, dedupedIndexStats := range indexStats2.Stats {
+			dedupedIndexStats.Indexes = clientStats.Stats[bucket].Indexes
+		}
+	}
+
 	stats := (map[c.IndexInstId]map[c.PartitionId]c.Statistics)(nil)
 	if indexStats2 != nil && len(indexStats2.Stats) != 0 {
 		stats = w.provider.repo.resolveIndexStats2(indexerId, indexStats2.Stats)
 		if len(stats) == 0 {
 			stats = nil
 		}
+	}
+
+	if useCached == false {
+		w.clientStats.Set(indexStats2.Clone())
 	}
 
 	return stats
@@ -5250,6 +5294,25 @@ func (w *watcher) refreshServiceMap() error {
 	defer w.mutex.Unlock()
 
 	w.serviceMap = srvMap
+	return nil
+}
+
+func (w *watcher) getClientStats() error {
+
+	content, err := w.makeRequest(OPCODE_CLIENT_STATS, "Client Stats", []byte(""))
+	if err != nil {
+		logging.Errorf("watcher.getClientStats() %s", err)
+		return err
+	}
+
+	clientStats, err := UnmarshallIndexStats2(content)
+	if err != nil {
+		logging.Errorf("watcher.getClientStats() %s", err)
+		return err
+	}
+
+	w.clientStats.Set(clientStats)
+
 	return nil
 }
 

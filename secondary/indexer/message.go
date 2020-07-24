@@ -635,9 +635,11 @@ func (m *MsgMutMgrGetTimestamp) GetStreamId() common.StreamId {
 
 //UPDATE_INSTANCE_MAP
 type MsgUpdateInstMap struct {
-	indexInstMap  common.IndexInstMap
-	stats         *IndexerStats
-	rollbackTimes map[string]int64
+	indexInstMap   common.IndexInstMap
+	stats          *IndexerStats
+	rollbackTimes  map[string]int64
+	updatedInsts   common.IndexInstList
+	deletedInstIds []common.IndexInstId
 }
 
 func (m *MsgUpdateInstMap) GetMsgType() MsgType {
@@ -656,6 +658,22 @@ func (m *MsgUpdateInstMap) GetRollbackTimes() map[string]int64 {
 	return m.rollbackTimes
 }
 
+func (m *MsgUpdateInstMap) GetUpdatedInsts() common.IndexInstList {
+	return m.updatedInsts
+}
+
+func (m *MsgUpdateInstMap) AppendUpdatedInsts(insts common.IndexInstList) {
+	m.updatedInsts = append(m.updatedInsts, insts...)
+}
+
+func (m *MsgUpdateInstMap) GetDeletedInstIds() []common.IndexInstId {
+	return m.deletedInstIds
+}
+
+func (m *MsgUpdateInstMap) AppendDeletedInstIds(instIds []common.IndexInstId) {
+	m.deletedInstIds = append(m.deletedInstIds, instIds...)
+}
+
 func (m *MsgUpdateInstMap) String() string {
 
 	str := "\n\tMessage: MsgUpdateInstMap"
@@ -665,7 +683,9 @@ func (m *MsgUpdateInstMap) String() string {
 
 //UPDATE_PARTITION_MAP
 type MsgUpdatePartnMap struct {
-	indexPartnMap IndexPartnMap
+	indexPartnMap   IndexPartnMap
+	updatedPartnMap PartitionInstMap
+	deletedInstId   common.IndexInstId
 }
 
 func (m *MsgUpdatePartnMap) GetMsgType() MsgType {
@@ -674,6 +694,22 @@ func (m *MsgUpdatePartnMap) GetMsgType() MsgType {
 
 func (m *MsgUpdatePartnMap) GetIndexPartnMap() IndexPartnMap {
 	return m.indexPartnMap
+}
+
+func (m *MsgUpdatePartnMap) GetUpdatedPartnMap() PartitionInstMap {
+	return m.updatedPartnMap
+}
+
+func (m *MsgUpdatePartnMap) SetUpdatedPartnMap(partnMap PartitionInstMap) {
+	m.updatedPartnMap = partnMap
+}
+
+func (m *MsgUpdatePartnMap) GetDeletedInstId() common.IndexInstId {
+	return m.deletedInstId
+}
+
+func (m *MsgUpdatePartnMap) SetDeletedInstId(instId common.IndexInstId) {
+	m.deletedInstId = instId
 }
 
 func (m *MsgUpdatePartnMap) String() string {

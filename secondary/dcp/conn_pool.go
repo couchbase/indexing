@@ -9,7 +9,7 @@ import (
 	"encoding/binary"
 
 	"github.com/couchbase/indexing/secondary/dcp/transport"
-	"github.com/couchbase/indexing/secondary/dcp/transport/client"
+	memcached "github.com/couchbase/indexing/secondary/dcp/transport/client"
 )
 
 var errClosedPool = errors.New("the pool is closed")
@@ -299,7 +299,7 @@ func GetSeqs(mc *memcached.Client, seqnos []uint64, buf []byte) error {
 		err := fmt.Errorf(fmsg, len(res.Body))
 		return err
 	}
-	for i := 0; i < 1024; i++ {
+	for i := 0; i < len(seqnos); i++ {
 		seqnos[i] = 0
 	}
 
@@ -340,7 +340,7 @@ func GetSeqsAllVbStates(mc *memcached.Client, seqnos []uint64, buf []byte) error
 		err := fmt.Errorf(fmsg, len(res.Body))
 		return err
 	}
-	for i := 0; i < 1024; i++ {
+	for i := 0; i < len(seqnos); i++ {
 		seqnos[i] = 0
 	}
 
@@ -414,7 +414,7 @@ func GetSeqsWithExtras(mc *memcached.Client, seqnos []uint64, buf []byte,
 		err := fmt.Errorf(fmsg, len(res.Body))
 		return err
 	}
-	for i := 0; i < 1024; i++ {
+	for i := 0; i < len(seqnos); i++ {
 		seqnos[i] = 0
 	}
 

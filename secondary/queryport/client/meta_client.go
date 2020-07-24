@@ -53,6 +53,9 @@ type metadataClient struct {
 	refreshWaitCnt int
 
 	schedTokenMon *schedTokenMonitor
+	indexList     unsafe.Pointer
+	indexListMut  sync.Mutex
+	schedRefresh  uint32
 }
 
 // sherlock topology management, multi-node & single-partition.
@@ -130,6 +133,7 @@ func (b *metadataClient) Refresh() ([]*mclient.IndexMetadata, uint64, uint64, bo
 	currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
 
 	if currmeta.version < b.mdClient.GetMetadataVersion() {
+
 		b.refreshLock.Lock()
 
 		if b.refreshCnt > 0 {
@@ -154,32 +158,92 @@ func (b *metadataClient) Refresh() ([]*mclient.IndexMetadata, uint64, uint64, bo
 		currmeta = (*indexTopology)(atomic.LoadPointer(&b.indexers))
 	}
 
-	schedIndexes, forceRefresh := b.schedTokenMon.getIndexes()
-
-	if len(schedIndexes) == 0 {
+	if !b.settings.ListSchedIndexes() {
 		return currmeta.allIndexes, currmeta.version, b.mdClient.GetClusterVersion(), false, nil
 	}
 
-	allIndexIds := make(map[common.IndexDefnId]bool)
-	for _, idx := range currmeta.allIndexes {
-		if idx.Definition == nil {
+	return b.reconcileIndexList(currmeta)
+}
+
+func (b *metadataClient) reconcileIndexList(currmeta *indexTopology) ([]*mclient.IndexMetadata,
+	uint64, uint64, bool, error) {
+
+	if b.indexList == nil {
+		atomic.StorePointer(&b.indexList, unsafe.Pointer(&currmeta.allIndexes))
+	}
+
+	// Note:
+	// The list of scheduled indexes needs to be reconciled with the list
+	// of the indexes from currmeta.
+	// But, Refresh() is not the only caller for currmeta update. Any other
+	// caller calling safeupdate can trigger the change in currmeta.allIndexes.
+	// So, Refresh() needs to force reconcile if safeupdate was called any caller.
+
+	// Use simple double-check locking
+	schedRefresh := atomic.LoadUint32(&b.schedRefresh)
+	newTokens := b.schedTokenMon.newTokensExist()
+	idxList := atomic.LoadPointer(&b.indexList)
+
+	// Fast path
+	// If currmeta hasn't changed && there aren't any changes to sched tokens.
+	if schedRefresh == 0 && newTokens == 0 {
+		return *(*[]*mclient.IndexMetadata)(idxList), currmeta.version, b.mdClient.GetClusterVersion(), false, nil
+	}
+
+	// Slow path
+	b.indexListMut.Lock()
+	defer b.indexListMut.Unlock()
+
+	for {
+		schedRefresh = atomic.LoadUint32(&b.schedRefresh)
+		newTokens = b.schedTokenMon.newTokensExist()
+		idxList = atomic.LoadPointer(&b.indexList)
+
+		if schedRefresh == 0 && newTokens == 0 {
+			return *(*[]*mclient.IndexMetadata)(idxList), currmeta.version, b.mdClient.GetClusterVersion(), false, nil
+		}
+
+		schedIndexes := b.schedTokenMon.getIndexesCached()
+
+		// At this point, without a doubt, there are some updates either to
+		// currmeta.allIndexes or to scheduled indexes, since the last Refresh().
+		// Following code ignores all the cached information (i.e. current value
+		// of b.indexList) and re-appends all the scheduled tokens (if any), and
+		// caches new value of b.indexList.
+		// Here, a new list of mclient.IndexMetadata pointer will be generated.
+		// With large number of indexes, the new list generation can lead to some
+		// slowness, but this will happen only if there are updates to existing
+		// list of schedule tokens. Having said that, this type of slowness
+		// should be fine as long as currmeta.allIndexes remains untarnished by
+		// the scheduled tokens.
+
+		newSchedIndexes := make([]*mclient.IndexMetadata, 0, len(schedIndexes))
+		for _, idx := range schedIndexes {
+			if _, ok := currmeta.defns[idx.Definition.DefnId]; ok {
+				continue
+			}
+
+			newSchedIndexes = append(newSchedIndexes, idx)
+		}
+
+		newSchedIndexes = append(newSchedIndexes, currmeta.allIndexes...)
+		atomic.StorePointer(&b.indexList, unsafe.Pointer(&newSchedIndexes))
+
+		// If CAS on schedRefresh or setNewTokensProcessed doesn't succeed,
+		// it means that there were more changes since this index reconciliation
+		// has started. To avoid missing updates that have happened asynchronously,
+		// entire recociliation needs to be retried.
+
+		if !atomic.CompareAndSwapUint32(&b.schedRefresh, schedRefresh, 0) {
 			continue
 		}
 
-		allIndexIds[idx.Definition.DefnId] = true
-	}
-
-	newSchedIndexes := make([]*mclient.IndexMetadata, 0, len(schedIndexes))
-	for _, idx := range schedIndexes {
-		if _, ok := allIndexIds[idx.Definition.DefnId]; ok {
+		if !b.schedTokenMon.setNewTokensProcessed(newTokens) {
 			continue
 		}
 
-		newSchedIndexes = append(newSchedIndexes, idx)
+		return newSchedIndexes, currmeta.version, b.mdClient.GetClusterVersion(), true, nil
 	}
-
-	newSchedIndexes = append(newSchedIndexes, currmeta.allIndexes...)
-	return newSchedIndexes, currmeta.version, b.mdClient.GetClusterVersion(), forceRefresh, nil
 }
 
 // Nodes implement BridgeAccessor{} interface.
@@ -540,35 +604,66 @@ func (b *metadataClient) computeReplicas(topo map[common.IndexerId][]*mclient.In
 func (b *metadataClient) computeEquivalents(topo map[common.IndexerId][]*mclient.IndexMetadata) map[common.IndexDefnId][]common.IndexDefnId {
 
 	equivalentMap := make(map[common.IndexDefnId][]common.IndexDefnId)
+	indexMap := make(map[string]map[string]map[string]map[common.IndexDefnId]*mclient.IndexMetadata)
 
-	for _, indexes1 := range topo { // go through the indexes for each indexer
-		for _, index1 := range indexes1 {
-
-			if _, ok := equivalentMap[index1.Definition.DefnId]; ok { // skip replica
+	// Parse the list of indexes and segregate them according to bucket, scope and collection
+	for _, indexes := range topo {
+		for _, index := range indexes {
+			bucket := index.Definition.Bucket
+			scope := index.Definition.Scope
+			collection := index.Definition.Collection
+			if _, ok := indexMap[bucket]; !ok {
+				indexMap[bucket] = make(map[string]map[string]map[common.IndexDefnId]*mclient.IndexMetadata)
+			}
+			if _, ok := indexMap[bucket][scope]; !ok {
+				indexMap[bucket][scope] = make(map[string]map[common.IndexDefnId]*mclient.IndexMetadata)
+			}
+			if _, ok := indexMap[bucket][scope][collection]; !ok {
+				indexMap[bucket][scope][collection] = make(map[common.IndexDefnId]*mclient.IndexMetadata)
+			}
+			if _, ok := indexMap[bucket][scope][collection][index.Definition.DefnId]; ok { // skip replica
 				continue
 			}
+			indexMap[bucket][scope][collection][index.Definition.DefnId] = index
+		}
+	}
 
-			// add myself
-			seen := make(map[common.IndexDefnId]bool)
-			seen[index1.Definition.DefnId] = true
-			equivalentMap[index1.Definition.DefnId] = []common.IndexDefnId{index1.Definition.DefnId}
+	// Compute equivalent map based on hierMap
+	for _, scopeMap := range indexMap {
+		for _, collMap := range scopeMap {
+			for _, metaMap := range collMap {
 
-			for _, indexes2 := range topo { // go through the indexes for each indexer
+				for _, index1 := range metaMap {
+					if len(equivalentMap[index1.Definition.DefnId]) == 0 {
+						equivalentMap[index1.Definition.DefnId] = []common.IndexDefnId{index1.Definition.DefnId}
+						for _, index2 := range metaMap {
+							if index1.Definition.DefnId == index2.Definition.DefnId {
+								continue
+							}
 
-				for _, index2 := range indexes2 {
-					if seen[index2.Definition.DefnId] {
-						continue
+							if b.equivalentIndex(index1, index2) {
+								// If index1 is equivalent to index2, then index2 is equivalent to index1.
+								// So, update the equivalentMap of index2 as well. When index2 is visited in the
+								// outer for loop, it would simply copy all the equivalent definition ID's from index1
+								// thereby avoiding the traversal of entire index list
+								equivalentMap[index1.Definition.DefnId] = append(equivalentMap[index1.Definition.DefnId], index2.Definition.DefnId)
+								equivalentMap[index2.Definition.DefnId] = append(equivalentMap[index2.Definition.DefnId], index1.Definition.DefnId)
+							}
+						}
+					} else {
+						// If index1 has equivalents: index1, index2, index5, index8,
+						// then for index2 there is no need to traverse the entire list
+						// of indexes. Copying the equivalent index list of indexes from
+						// index1 would be sufficient
+						indexDefnId := equivalentMap[index1.Definition.DefnId][0]
+						equivalentMap[index1.Definition.DefnId] = make([]common.IndexDefnId, len(equivalentMap[indexDefnId]))
+						copy(equivalentMap[index1.Definition.DefnId], equivalentMap[indexDefnId])
 					}
-					seen[index2.Definition.DefnId] = true
-
-					if b.equivalentIndex(index1, index2) { // pick equivalents
-						equivalentMap[index1.Definition.DefnId] = append(equivalentMap[index1.Definition.DefnId], index2.Definition.DefnId)
-					}
+					delete(metaMap, index1.Definition.DefnId)
 				}
 			}
 		}
 	}
-
 	return equivalentMap
 }
 
@@ -1656,6 +1751,8 @@ func (b *metadataClient) safeupdate(
 			return
 		}
 
+		atomic.AddUint32(&b.schedRefresh, 1)
+
 		// if adminport is nil, then safeupdate is not triggered by
 		// topology change.  Get the adminports from currmeta.
 		if currmeta != nil && adminports == nil {
@@ -1985,51 +2082,26 @@ type schedTokenMonitor struct {
 	lock      sync.Mutex
 	lCloseCh  chan bool
 	processed map[string]bool
-
-	useCache   bool
-	cIndexes   []*mclient.IndexMetadata
-	cListener  *mc.CommandListener
-	cLock      sync.Mutex
-	clCloseCh  chan bool
-	uCloseCh   chan bool
-	cProcessed map[string]bool
+	newTokens uint32
+	uCloseCh  chan bool
 }
 
 func newSchedTokenMonitor() *schedTokenMonitor {
-	useCache := false
 
 	lCloseCh := make(chan bool)
 	listener := mc.NewCommandListener(lCloseCh, false, false, false, false, true, true)
-
-	var clCloseCh, uCloseCh chan bool
-	var cListener *mc.CommandListener
-	var cIndexes []*mclient.IndexMetadata
-	if useCache {
-		clCloseCh = make(chan bool)
-		cListener = mc.NewCommandListener(clCloseCh, false, false, false, false, true, true)
-		uCloseCh = make(chan bool)
-		cIndexes = make([]*mclient.IndexMetadata, 0)
-	}
 
 	s := &schedTokenMonitor{
 		indexes:   make([]*mclient.IndexMetadata, 0),
 		listener:  listener,
 		lCloseCh:  lCloseCh,
 		processed: make(map[string]bool),
-
-		useCache:   useCache,
-		cListener:  cListener,
-		cIndexes:   cIndexes,
-		clCloseCh:  clCloseCh,
-		uCloseCh:   uCloseCh,
-		cProcessed: make(map[string]bool),
 	}
 
 	s.listener.ListenTokens()
 
-	if useCache {
-		go s.updater()
-	}
+	s.uCloseCh = make(chan bool)
+	go s.updater()
 
 	return s
 }
@@ -2043,38 +2115,27 @@ func (s *schedTokenMonitor) makeIndexMetadata(token *mc.ScheduleCreateToken) *mc
 	}
 }
 
-func (s *schedTokenMonitor) checkProcessed(key string, cached bool) bool {
+func (s *schedTokenMonitor) checkProcessed(key string) bool {
 
-	if cached {
-		if _, ok := s.cProcessed[key]; ok {
-			return true
-		}
-
-		return false
-	} else {
-		if _, ok := s.processed[key]; ok {
-			return true
-		}
-
-		return false
+	if _, ok := s.processed[key]; ok {
+		return true
 	}
+
+	return false
 }
 
-func (s *schedTokenMonitor) markProcessed(key string, cached bool) {
-	if cached {
-		s.cProcessed[key] = true
-	} else {
-		s.processed[key] = true
-	}
+func (s *schedTokenMonitor) markProcessed(key string) {
+
+	s.processed[key] = true
 }
 
 func (s *schedTokenMonitor) getIndexesFromTokens(createTokens map[string]*mc.ScheduleCreateToken,
-	stopTokens map[string]*mc.StopScheduleCreateToken, cached bool) []*mclient.IndexMetadata {
+	stopTokens map[string]*mc.StopScheduleCreateToken) []*mclient.IndexMetadata {
 
 	indexes := make([]*mclient.IndexMetadata, 0, len(createTokens))
 
 	for key, token := range createTokens {
-		if s.checkProcessed(key, cached) {
+		if s.checkProcessed(key) {
 			continue
 		}
 
@@ -2083,7 +2144,7 @@ func (s *schedTokenMonitor) getIndexesFromTokens(createTokens map[string]*mc.Sch
 		}
 
 		indexes = append(indexes, s.makeIndexMetadata(token))
-		s.markProcessed(key, cached)
+		s.markProcessed(key)
 	}
 
 	for key, token := range stopTokens {
@@ -2092,7 +2153,7 @@ func (s *schedTokenMonitor) getIndexesFromTokens(createTokens map[string]*mc.Sch
 			continue
 		}
 
-		if s.checkProcessed(key, cached) {
+		if s.checkProcessed(key) {
 			continue
 		}
 
@@ -2102,7 +2163,7 @@ func (s *schedTokenMonitor) getIndexesFromTokens(createTokens map[string]*mc.Sch
 		idx.State = common.INDEX_STATE_ERROR
 
 		indexes = append(indexes, idx)
-		s.markProcessed(key, cached)
+		s.markProcessed(key)
 	}
 
 	return indexes
@@ -2133,7 +2194,12 @@ func (s *schedTokenMonitor) clenseIndexes(indexes []*mclient.IndexMetadata,
 	return newIndexes
 }
 
+/*
 func (s *schedTokenMonitor) getIndexes() ([]*mclient.IndexMetadata, bool) {
+	if s.useCache {
+		return s.getIndexesCached()
+	}
+
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
@@ -2141,7 +2207,7 @@ func (s *schedTokenMonitor) getIndexes() ([]*mclient.IndexMetadata, bool) {
 	stopTokens := s.listener.GetNewStopScheduleCreateTokens()
 	delPaths := s.listener.GetDeletedScheduleCreateTokenPaths()
 
-	indexes := s.getIndexesFromTokens(createTokens, stopTokens, false)
+	indexes := s.getIndexesFromTokens(createTokens, stopTokens)
 
 	indexes = append(indexes, s.indexes...)
 	s.indexes = indexes
@@ -2150,16 +2216,27 @@ func (s *schedTokenMonitor) getIndexes() ([]*mclient.IndexMetadata, bool) {
 	forceRefresh := true
 	if len(createTokens) == 0 && len(stopTokens) == 0 && len(delPaths) == 0 {
 		forceRefresh = false
+	} else {
+		atomic.StoreUint32(&s.newTokens, 1)
 	}
 
 	return s.indexes, forceRefresh
 }
+*/
+
+func (s *schedTokenMonitor) newTokensExist() uint32 {
+	return atomic.LoadUint32(&s.newTokens)
+}
+
+func (s *schedTokenMonitor) setNewTokensProcessed(old uint32) bool {
+	return atomic.CompareAndSwapUint32(&s.newTokens, old, 0)
+}
 
 func (s *schedTokenMonitor) getIndexesCached() []*mclient.IndexMetadata {
-	s.cLock.Lock()
-	defer s.cLock.Unlock()
+	s.lock.Lock()
+	defer s.lock.Unlock()
 
-	return s.cIndexes
+	return s.indexes
 }
 
 func (s *schedTokenMonitor) update() {
@@ -2167,17 +2244,21 @@ func (s *schedTokenMonitor) update() {
 	stopTokens := s.listener.GetNewStopScheduleCreateTokens()
 	delPaths := s.listener.GetDeletedScheduleCreateTokenPaths()
 
-	indexes := s.getIndexesFromTokens(createTokens, stopTokens, true)
+	if len(createTokens) != 0 || len(stopTokens) != 0 || len(delPaths) != 0 {
+		atomic.AddUint32(&s.newTokens, 1)
+	}
 
-	s.cLock.Lock()
-	defer s.cLock.Unlock()
+	s.lock.Lock()
+	defer s.lock.Unlock()
 
-	s.cIndexes = append(s.cIndexes, indexes...)
-	s.cIndexes = s.clenseIndexes(s.cIndexes, stopTokens, delPaths)
+	indexes := s.getIndexesFromTokens(createTokens, stopTokens)
+
+	s.indexes = append(s.indexes, indexes...)
+	s.indexes = s.clenseIndexes(s.indexes, stopTokens, delPaths)
 }
 
 func (s *schedTokenMonitor) updater() {
-	s.cListener.ListenTokens()
+	s.listener.ListenTokens()
 
 	ticker := time.NewTicker(time.Duration(SCHED_TOKEN_CHECK_INTERVAL) * time.Millisecond)
 
@@ -2194,9 +2275,5 @@ func (s *schedTokenMonitor) updater() {
 
 func (s *schedTokenMonitor) Close() {
 	close(s.lCloseCh)
-
-	if s.useCache {
-		close(s.clCloseCh)
-		close(s.uCloseCh)
-	}
+	close(s.uCloseCh)
 }

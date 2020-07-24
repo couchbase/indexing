@@ -949,9 +949,15 @@ func (is IndexerStats) GetVersionedStats(t *target) (common.Statistics, bool) {
 		found = true
 	} else if t.level == "index" {
 		for _, s := range is.indexes {
-			if strings.EqualFold(s.name, t.resource) {
-				name := common.FormatIndexInstDisplayName(s.name, s.replicaId)
-				key = fmt.Sprintf("%s:%s", s.bucket, name)
+			if s.name == t.index &&
+				s.bucket == t.bucket &&
+				s.scope == t.scope &&
+				s.collection == t.collection {
+
+				prefix := common.GetStatsPrefix(s.bucket, s.scope, s.collection,
+					s.name, s.replicaId, 0, false)
+				key := prefix[:len(prefix)-1]
+
 				statsMap[key] = s.constructIndexStats(t.skipEmpty, t.version)
 				if t.partition {
 					for partnId, ps := range s.partitions {

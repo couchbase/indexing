@@ -144,9 +144,17 @@ func NewIndexManagerInternal(config common.Config, storageMode common.StorageMod
 		return nil, err
 	}
 
-	// Initialize LifecycleMgr.
 	mgr.clusterURL = config["clusterAddr"].String()
-	lifecycleMgr, err := NewLifecycleMgr(nil, mgr.clusterURL)
+	cic, err := common.NewClusterInfoClient(mgr.clusterURL, common.DEFAULT_POOL, config)
+	if err != nil {
+		mgr.Close()
+		return nil, err
+	}
+	mgr.cinfoClient = cic
+	mgr.cinfoClient.SetUserAgent("IndexMgr")
+
+	// Initialize LifecycleMgr.
+	lifecycleMgr, err := NewLifecycleMgr(nil, mgr.clusterURL, mgr.cinfoClient)
 	if err != nil {
 		mgr.Close()
 		return nil, err
@@ -160,14 +168,6 @@ func NewIndexManagerInternal(config common.Config, storageMode common.StorageMod
 	mgr.basepath = config["storage_dir"].String()
 	os.Mkdir(mgr.basepath, 0755)
 	mgr.repoName = filepath.Join(mgr.basepath, gometaC.REPOSITORY_NAME)
-
-	cic, err := common.NewClusterInfoClient(mgr.clusterURL, common.DEFAULT_POOL, config)
-	if err != nil {
-		mgr.Close()
-		return nil, err
-	}
-	mgr.cinfoClient = cic
-	mgr.cinfoClient.SetUserAgent("IndexMgr")
 
 	cinfo := cic.GetClusterInfoCache()
 	cinfo.RLock()

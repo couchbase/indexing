@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/couchbase/indexing/secondary/security"
 	"io"
 	"io/ioutil"
 	"math"
@@ -15,8 +14,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/couchbase/indexing/secondary/dcp"
-	"github.com/couchbase/indexing/secondary/dcp/transport/client"
+	"github.com/couchbase/indexing/secondary/security"
+
+	couchbase "github.com/couchbase/indexing/secondary/dcp"
+	memcached "github.com/couchbase/indexing/secondary/dcp/transport/client"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/stats"
 )
@@ -63,8 +64,8 @@ type kvConn struct {
 	tmpbuf  []byte
 }
 
-func newKVConn(mc *memcached.Client) *kvConn {
-	return &kvConn{mc: mc, seqsbuf: make([]uint64, 1024), tmpbuf: make([]byte, seqsBufSize)}
+func newKVConn(mc *memcached.Client, numVbs int) *kvConn {
+	return &kvConn{mc: mc, seqsbuf: make([]uint64, numVbs), tmpbuf: make([]byte, seqsBufSize)}
 }
 
 type vbSeqnosRequest struct {
@@ -581,7 +582,7 @@ func getKVFeeds(cluster, pooln, bucketn string) (map[string]*kvConn, error) {
 				return nil, err
 			}
 		}
-		kvfeeds[kvaddr] = newKVConn(conn)
+		kvfeeds[kvaddr] = newKVConn(conn, dcp_buckets_seqnos.numVbs)
 	}
 
 	logging.Infof("{bucket,feeds} %q created for dcp_seqno worker cache...\n", bucketn)
@@ -671,7 +672,7 @@ func addDBSbucket(cluster, pooln, bucketn string) (err error) {
 				return err
 			}
 		}
-		kvfeeds[kvaddr] = newKVConn(conn)
+		kvfeeds[kvaddr] = newKVConn(conn, dcp_buckets_seqnos.numVbs)
 	}
 
 	logging.Infof("{bucket,feeds} %q created for dcp_seqno cache...\n", bucketn)

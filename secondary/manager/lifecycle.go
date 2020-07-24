@@ -40,6 +40,7 @@ import (
 type LifecycleMgr struct {
 	repo             *MetadataRepo
 	cinfo            *common.ClusterInfoCache
+	cinfoClient      *common.ClusterInfoClient
 	notifier         MetadataNotifier
 	clusterURL       string
 	incomings        chan *requestHolder
@@ -57,6 +58,9 @@ type LifecycleMgr struct {
 	done             sync.WaitGroup
 	isDone           bool
 	collAwareCluster uint32 // 0: false, 1: true
+
+	lastSendClientStats *client.IndexStats2
+	clientStatsMutex    sync.Mutex
 }
 
 type requestHolder struct {
@@ -142,7 +146,8 @@ type updator struct {
 // Lifecycle Mgr - event processing
 //////////////////////////////////////////////////////////////
 
-func NewLifecycleMgr(notifier MetadataNotifier, clusterURL string) (*LifecycleMgr, error) {
+func NewLifecycleMgr(notifier MetadataNotifier, clusterURL string,
+	cinfoClient *common.ClusterInfoClient) (*LifecycleMgr, error) {
 
 	cinfo, err := common.FetchNewClusterInfoCache(clusterURL, common.DEFAULT_POOL, "NewLifecycleMgr")
 	if err != nil {
@@ -151,15 +156,18 @@ func NewLifecycleMgr(notifier MetadataNotifier, clusterURL string) (*LifecycleMg
 	cinfo.SetUserAgent("LifecycleMgr")
 
 	mgr := &LifecycleMgr{repo: nil,
-		cinfo:        cinfo,
-		notifier:     notifier,
-		clusterURL:   clusterURL,
-		incomings:    make(chan *requestHolder, 100000),
-		expedites:    make(chan *requestHolder, 100000),
-		outgoings:    make(chan c.Packet, 100000),
-		killch:       make(chan bool),
-		bootstraps:   make(chan *requestHolder, 1000),
-		indexerReady: false}
+		cinfo:               cinfo,
+		cinfoClient:         cinfoClient,
+		notifier:            notifier,
+		clusterURL:          clusterURL,
+		incomings:           make(chan *requestHolder, 100000),
+		expedites:           make(chan *requestHolder, 100000),
+		outgoings:           make(chan c.Packet, 100000),
+		killch:              make(chan bool),
+		bootstraps:          make(chan *requestHolder, 1000),
+		indexerReady:        false,
+		lastSendClientStats: &client.IndexStats2{},
+	}
 
 	if cinfo.GetClusterVersion() >= common.INDEXER_70_VERSION {
 		atomic.StoreUint32(&mgr.collAwareCluster, 1)
@@ -423,6 +431,8 @@ func (m *LifecycleMgr) dispatchRequest(request *requestHolder, factory *message.
 		result, err = m.handleGetIndexReplicaCount(content)
 	case client.OPCODE_CHECK_TOKEN_EXIST:
 		result, err = m.handleCheckTokenExist(content)
+	case client.OPCODE_CLIENT_STATS:
+		result, err = m.handleClientStats(content)
 	}
 
 	logging.Debugf("LifecycleMgr.dispatchRequest () : send response for requestId %d, op %d, len(result) %d", reqId, op, len(result))
@@ -1269,16 +1279,10 @@ func (m *LifecycleMgr) setScopeIdAndCollectionId(defn *common.IndexDefn) error {
 
 	if atomic.LoadUint32(&m.collAwareCluster) == 0 {
 
-		// TODO (Collections): Use lifecycle manager's cluster info client
-		// once it is available
-		m.cinfo.Lock()
-		defer m.cinfo.Unlock()
+		// Get cluster version from common
+		clusterVersion := common.GetClusterVersion()
 
-		if err := m.cinfo.Fetch(); err != nil {
-			return err
-		}
-
-		if m.cinfo.GetClusterVersion() < common.INDEXER_70_VERSION {
+		if clusterVersion < (int64)(common.INDEXER_70_VERSION) {
 			// The cluster compatibiltity is less than 7.0
 			// ScopeId and CollectionId cannot be obtained during mixed mode,
 			// hence use default IDs and skip the verification
@@ -2309,7 +2313,13 @@ func (m *LifecycleMgr) broadcastStats() {
 					}
 				} else {
 					idxStats2 := convertToIndexStats2(*filtered)
-					if err := m.repo.BroadcastIndexStats2(idxStats2); err != nil {
+					statsToBroadCast := m.GetDiffFromLastSent(idxStats2)
+
+					m.clientStatsMutex.Lock()
+					m.lastSendClientStats = idxStats2
+					m.clientStatsMutex.Unlock()
+
+					if err := m.repo.BroadcastIndexStats2(statsToBroadCast); err != nil {
 						logging.Errorf("lifecycleMgr: fail to send indexStats2.  Error = %v", err)
 					}
 				}
@@ -2321,6 +2331,46 @@ func (m *LifecycleMgr) broadcastStats() {
 			return
 		}
 	}
+}
+
+// TODO: This method can further be optimized to broadcast only incremental changes.
+// The IndexStats2 data structure must be modified to contain deleted indexes list
+// and current indexes map with storage stats
+// Currently, this method broadcasts full set of stats if there is any change in buckets
+// or indexes per bucket
+func (m *LifecycleMgr) GetDiffFromLastSent(currStats *client.IndexStats2) *client.IndexStats2 {
+	m.clientStatsMutex.Lock()
+	defer m.clientStatsMutex.Unlock()
+
+	if len(m.lastSendClientStats.Stats) != len(currStats.Stats) {
+		return currStats
+	}
+
+	statsToBroadCast := &client.IndexStats2{}
+	statsToBroadCast.Stats = make(map[string]*client.DedupedIndexStats)
+
+	for bucket, lastSentDeduped := range m.lastSendClientStats.Stats {
+		if currDeduped, ok := currStats.Stats[bucket]; !ok {
+			return currStats
+		} else {
+			if len(currDeduped.Indexes) != len(lastSentDeduped.Indexes) {
+				return currStats
+			}
+			for indexName, _ := range lastSentDeduped.Indexes {
+				if _, ok := currDeduped.Indexes[indexName]; !ok {
+					return currStats
+				}
+			}
+		}
+		statsToBroadCast.Stats[bucket] = &client.DedupedIndexStats{}
+		statsToBroadCast.Stats[bucket].NumDocsPending = currStats.Stats[bucket].NumDocsPending
+		statsToBroadCast.Stats[bucket].NumDocsQueued = currStats.Stats[bucket].NumDocsQueued
+		statsToBroadCast.Stats[bucket].LastRollbackTime = currStats.Stats[bucket].LastRollbackTime
+		statsToBroadCast.Stats[bucket].ProgressStatTime = currStats.Stats[bucket].ProgressStatTime
+		statsToBroadCast.Stats[bucket].Indexes = nil
+	}
+
+	return statsToBroadCast
 }
 
 // This method takes in common.Statistics as input,
@@ -2367,6 +2417,16 @@ func convertToIndexStats2(stats common.Statistics) *client.IndexStats2 {
 		}
 	}
 	return indexStats2
+}
+
+//-----------------------------------------------------------
+// Client Stats
+//-----------------------------------------------------------
+func (m *LifecycleMgr) handleClientStats(content []byte) ([]byte, error) {
+	m.clientStatsMutex.Lock()
+	defer m.clientStatsMutex.Unlock()
+
+	return client.MarshallIndexStats2(m.lastSendClientStats)
 }
 
 //-----------------------------------------------------------
@@ -3468,15 +3528,21 @@ func (m *LifecycleMgr) getServiceMap() (*client.ServiceMap, error) {
 func (m *LifecycleMgr) getBucketUUID(bucket string) (string, error) {
 	count := 0
 RETRY:
-	uuid, err := common.GetBucketUUID(m.clusterURL, bucket)
-	if err != nil && count < 5 {
+	cinfo := m.cinfoClient.GetClusterInfoCache()
+
+	cinfo.RLock()
+	uuid := cinfo.GetBucketUUID(bucket)
+	cinfo.RUnlock()
+
+	if uuid == common.BUCKET_UUID_NIL && count < 5 {
 		count++
 		time.Sleep(time.Duration(100) * time.Millisecond)
+		// Force fetch cluster info client
+		err := m.cinfoClient.FetchWithLock()
+		if err != nil {
+			return common.BUCKET_UUID_NIL, err
+		}
 		goto RETRY
-	}
-
-	if err != nil {
-		return common.BUCKET_UUID_NIL, err
 	}
 
 	return uuid, nil
@@ -3488,19 +3554,23 @@ RETRY:
 func (m *LifecycleMgr) getCollectionID(bucket, scope, collection string) (string, error) {
 	count := 0
 RETRY:
-	//TODO Collections - change to use cinfo.GetCollectionID once streaming
-	//rest endpoint is available
-	colldId, err := common.GetCollectionID(m.clusterURL, bucket, scope, collection)
-	if err != nil && count < 5 {
+	cinfo := m.cinfoClient.GetClusterInfoCache()
+
+	cinfo.RLock()
+	colldId := cinfo.GetCollectionID(bucket, scope, collection)
+	cinfo.RUnlock()
+
+	if colldId == collections.COLLECTION_ID_NIL && count < 5 {
 		count++
 		time.Sleep(time.Duration(100) * time.Millisecond)
+
+		// Force fetch cluster infocache
+		err := m.cinfoClient.FetchWithLock()
+		if err != nil {
+			return collections.COLLECTION_ID_NIL, err
+		}
 		goto RETRY
 	}
-
-	if err != nil {
-		return "", err
-	}
-
 	return colldId, nil
 }
 
@@ -3510,15 +3580,21 @@ RETRY:
 func (m *LifecycleMgr) getScopeID(bucket, scope string) (string, error) {
 	count := 0
 RETRY:
-	scopeId, err := common.GetScopeID(m.clusterURL, bucket, scope)
-	if err != nil && count < 5 {
+	cinfo := m.cinfoClient.GetClusterInfoCache()
+
+	cinfo.RLock()
+	scopeId := cinfo.GetScopeID(bucket, scope)
+	cinfo.RUnlock()
+
+	if scopeId == collections.SCOPE_ID_NIL && count < 5 {
 		count++
 		time.Sleep(time.Duration(100) * time.Millisecond)
+		// Force fetch cluster info cache
+		err := m.cinfoClient.FetchWithLock()
+		if err != nil {
+			return collections.SCOPE_ID_NIL, err
+		}
 		goto RETRY
-	}
-
-	if err != nil {
-		return "", err
 	}
 
 	return scopeId, nil
@@ -3531,15 +3607,22 @@ RETRY:
 func (m *LifecycleMgr) getScopeAndCollectionID(bucket, scope, collection string) (string, string, error) {
 	count := 0
 RETRY:
-	scopeId, colldId, err := common.GetScopeAndCollectionID(m.clusterURL, bucket, scope, collection)
-	if err != nil && count < 5 {
+	cinfo := m.cinfoClient.GetClusterInfoCache()
+
+	cinfo.RLock()
+	scopeId, colldId := cinfo.GetScopeAndCollectionID(bucket, scope, collection)
+	cinfo.RUnlock()
+
+	if (scopeId == collections.SCOPE_ID_NIL || colldId == collections.COLLECTION_ID_NIL) && count < 5 {
 		count++
 		time.Sleep(time.Duration(100) * time.Millisecond)
-		goto RETRY
-	}
 
-	if err != nil {
-		return "", "", err
+		// Force fetch cluster info cache on errors
+		err := m.cinfoClient.FetchWithLock()
+		if err != nil {
+			return collections.SCOPE_ID_NIL, collections.COLLECTION_ID_NIL, err
+		}
+		goto RETRY
 	}
 
 	return scopeId, colldId, nil
