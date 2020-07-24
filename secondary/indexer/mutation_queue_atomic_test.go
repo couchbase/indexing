@@ -314,6 +314,7 @@ func TestDequeueUptoFreelistMultVbA(t *testing.T) {
 		}
 	}
 }
+
 func TestConcurrentEnqueueDequeueA(t *testing.T) {
 
 	maxMemory = 100 * 1024 * 1024
@@ -416,6 +417,129 @@ func TestEnqueueAppCh(t *testing.T) {
 	time.Sleep(time.Second * 1)
 	checkSizeA(t, q, 0, 20)
 
+}
+
+func TestDequeueN(t *testing.T) {
+
+	maxMemory = 100 * 1024 * 1024
+	conf := common.SystemConfig.SectionConfig("indexer.", true /*trim*/)
+
+	q := NewAtomicMutationQueue("default", 1, &maxMemory, &memUsed, conf)
+
+	mut := make([]*MutationKeys, 20)
+	for i := 0; i < 20; i++ {
+		mut[i] = &MutationKeys{meta: &MutationMeta{vbucket: 0,
+			seqno: uint64(i)}}
+	}
+	checkSizeA(t, q, 0, 0)
+
+	for i := 0; i < 10; i++ {
+		q.Enqueue(mut[i], 0, nil)
+	}
+
+	checkSizeA(t, q, 0, 10)
+
+	//dequeue 5
+	retch, _, _ := q.DequeueN(0, 5)
+	i := 0
+	for p := range retch {
+		checkItemA(t, mut[i], p)
+		i++
+	}
+	checkSizeA(t, q, 0, 5)
+
+	//dequeue 5
+	retch, _, _ = q.DequeueN(0, 5)
+	for p := range retch {
+		checkItemA(t, mut[i], p)
+		i++
+	}
+	checkSizeA(t, q, 0, 0)
+
+	for j := 10; j < 20; j++ {
+		q.Enqueue(mut[j], 0, nil)
+	}
+
+	//dequeue 10
+	retch, _, _ = q.DequeueN(0, 10)
+	for p := range retch {
+		checkItemA(t, mut[i], p)
+		i++
+	}
+	checkSizeA(t, q, 0, 0)
+}
+
+func TestConcurrentEnqueueDequeueN(t *testing.T) {
+
+	maxMemory = 100 * 1024 * 1024
+	conf := common.SystemConfig.SectionConfig("indexer.", true /*trim*/)
+
+	q := NewAtomicMutationQueue("default", 1, &maxMemory, &memUsed, conf)
+
+	m := make([]*MutationKeys, 100)
+	go func() {
+		for i := 0; i < 100; i++ {
+			m[i] = &MutationKeys{meta: &MutationMeta{vbucket: 0,
+				seqno: uint64(i)}}
+			q.Enqueue(m[i], 0, nil)
+		}
+	}()
+
+	dequeueCount := 0
+	for i := 0; i < 100; i++ {
+		if (i+1)%10 == 0 {
+			//time.Sleep(time.Second * 1)
+			//checkSizeA(t, q, 0, 10)
+			retch, _, _ := q.DequeueN(0, 10)
+			j := 0
+			for d := range retch {
+				checkItemA(t, d, m[(i-9)+j])
+				j += 1
+				dequeueCount++
+			}
+		}
+	}
+
+	if dequeueCount != 100 {
+		t.Errorf("Unexpected Dequeue Count %v, expected %v", dequeueCount, 100)
+	}
+}
+
+func TestConcurrentEnqueueDequeueN1(t *testing.T) {
+
+	maxMemory = 1
+	conf := common.SystemConfig.SectionConfig("indexer.", true /*trim*/)
+	conf.SetValue("settings.minVbQueueLength", 10)
+
+	q := NewAtomicMutationQueue("default", 1, &maxMemory, &memUsed, conf)
+
+	m := make([]*MutationKeys, 100)
+	go func() {
+		for i := 0; i < 100; i++ {
+			m[i] = &MutationKeys{meta: &MutationMeta{vbucket: 0,
+				seqno: uint64(i)}}
+			q.Enqueue(m[i], 0, nil)
+		}
+	}()
+
+	dequeueCount := 0
+	for i := 0; i < 100; i++ {
+		if (i+1)%10 == 0 {
+			time.Sleep(time.Second * 1)
+			checkSizeA(t, q, 0, 10)
+			retch, _, _ := q.DequeueN(0, 10)
+			j := 0
+			for d := range retch {
+				checkItemA(t, d, m[(i-9)+j])
+				j += 1
+				dequeueCount++
+			}
+		}
+	}
+
+	if dequeueCount != 100 {
+		t.Errorf("Unexpected Dequeue Count %v, expected %v", dequeueCount, 100)
+	}
 }
 
 /*
