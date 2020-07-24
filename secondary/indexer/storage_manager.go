@@ -204,6 +204,8 @@ func (s *storageMgr) handleSupvervisorCommands(cmd Message) {
 	case STORAGE_UPDATE_SNAP_MAP:
 		s.handleUpdateIndexSnapMapForIndex(cmd)
 
+	case INDEXER_ACTIVE:
+		s.handleRecoveryDone()
 	}
 }
 
@@ -1217,6 +1219,27 @@ func (s *storageMgr) getIndexStorageStats() []IndexStorageStats {
 	}
 
 	return stats
+}
+
+func (s *storageMgr) handleRecoveryDone() {
+	s.supvCmdch <- &MsgSuccess{}
+
+	for idxInstId, partnMap := range s.indexPartnMap {
+
+		inst, ok := s.indexInstMap[idxInstId]
+		//skip deleted indexes
+		if !ok || inst.State == common.INDEX_STATE_DELETED {
+			continue
+		}
+
+		for _, partnInst := range partnMap {
+
+			slices := partnInst.Sc.GetAllSlices()
+			for _, slice := range slices {
+				slice.RecoveryDone()
+			}
+		}
+	}
 }
 
 func (s *storageMgr) handleIndexMergeSnapshot(cmd Message) {

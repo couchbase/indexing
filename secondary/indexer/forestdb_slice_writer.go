@@ -1828,3 +1828,7 @@ func (fdb *fdbSlice) cancelCompact() {
 	logging.Infof("ForestDBSlice::Cancel Compaction Returns err %v "+
 		"Slice Id %v, IndexInstId %v ", err, fdb.id, fdb.idxInstId)
 }
+
+func (fdb *fdbSlice) RecoveryDone() {
+	// done nothing
+}

@@ -1643,6 +1643,10 @@ func (mdb *memdbSlice) logWriterStat() {
 
 }
 
+func (mdb *memdbSlice) RecoveryDone() {
+	// nothing to do
+}
+
 func (info *memdbSnapshotInfo) Timestamp() *common.TsVbuuid {
 	return info.Ts
 }

@@ -6010,6 +6010,10 @@ func (idx *indexer) handleStorageWarmupDone(msg Message) {
 	if idx.getIndexerState() == common.INDEXER_BOOTSTRAP {
 		idx.setIndexerState(common.INDEXER_ACTIVE)
 		idx.stats.indexerState.Set(int64(common.INDEXER_ACTIVE))
+
+		// notify storage manager that indexer has become active
+		idx.storageMgrCmdCh <- &MsgIndexerState{mType: INDEXER_ACTIVE}
+		<-idx.storageMgrCmdCh
 	}
 
 	idx.scanCoordCmdCh <- &MsgIndexerState{mType: INDEXER_RESUME, rollbackTimes: idx.keyspaceIdRollbackTimes}

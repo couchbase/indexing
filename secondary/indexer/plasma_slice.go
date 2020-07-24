@@ -2224,6 +2224,10 @@ func (mdb *plasmaSlice) logWriterStat() {
 
 }
 
+func (mdb *plasmaSlice) RecoveryDone() {
+	plasma.RecoveryDone()
+}
+
 func (info *plasmaSnapshotInfo) Timestamp() *common.TsVbuuid {
 	return info.Ts
 }
