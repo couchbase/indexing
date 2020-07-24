@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"math/rand"
+	"os"
 	"runtime"
 	"sync"
 	"testing"
@@ -17,12 +18,13 @@ var N *int
 var isPrimary *bool
 var lockThreads *bool
 
-func init() {
+func TestMain(m *testing.M) {
 	N = flag.Int("n", 10000000, "total number of docs")
 	isPrimary = flag.Bool("primary", false, "Is primary index")
 	lockThreads = flag.Bool("lockThreads", false, "Lock worker goroutines to a thread")
 	flag.Parse()
 	logging.SetLogLevel(logging.Error)
+	os.Exit(m.Run())
 }
 
 const keySize = 25
