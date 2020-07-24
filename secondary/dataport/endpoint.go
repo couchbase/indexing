@@ -82,6 +82,8 @@ type EndpointStats struct {
 	collectionChanged stats.Uint64Val
 	updateSeqno       stats.Uint64Val
 	seqnoAdvanced     stats.Uint64Val
+	osoSnapshotStart  stats.Uint64Val
+	osoSnapshotEnd    stats.Uint64Val
 
 	cmdStats map[byte]*stats.Uint64Val
 }
@@ -107,6 +109,8 @@ func (stats *EndpointStats) Init() {
 	stats.collectionChanged.Init()
 	stats.updateSeqno.Init()
 	stats.seqnoAdvanced.Init()
+	stats.osoSnapshotStart.Init()
+	stats.osoSnapshotEnd.Init()
 }
 
 func (stats *EndpointStats) IsClosed() bool {
@@ -114,7 +118,7 @@ func (stats *EndpointStats) IsClosed() bool {
 }
 
 func (stats *EndpointStats) String() string {
-	var stitems [22]string
+	var stitems [24]string
 	stitems[0] = `"mutCount":` + strconv.FormatUint(stats.mutCount.Value(), 10)
 	stitems[1] = `"upsertCount":` + strconv.FormatUint(stats.upsertCount.Value(), 10)
 	stitems[2] = `"deleteCount":` + strconv.FormatUint(stats.deleteCount.Value(), 10)
@@ -133,12 +137,14 @@ func (stats *EndpointStats) String() string {
 	stitems[14] = `"collectionChanged":` + strconv.FormatUint(stats.collectionChanged.Value(), 10)
 	stitems[15] = `"updateSeqno":` + strconv.FormatUint(stats.updateSeqno.Value(), 10)
 	stitems[16] = `"seqnoAdvanced":` + strconv.FormatUint(stats.seqnoAdvanced.Value(), 10)
+	stitems[17] = `"osoSnapshotStart":` + strconv.FormatUint(stats.osoSnapshotStart.Value(), 10)
+	stitems[18] = `"osoSnapshotEnd":` + strconv.FormatUint(stats.osoSnapshotEnd.Value(), 10)
 
-	stitems[17] = `"latency.min":` + strconv.FormatInt(stats.prjLatency.Min(), 10)
-	stitems[18] = `"latency.max":` + strconv.FormatInt(stats.prjLatency.Max(), 10)
-	stitems[19] = `"latency.avg":` + strconv.FormatInt(stats.prjLatency.Mean(), 10)
-	stitems[20] = `"latency.movingAvg":` + strconv.FormatInt(stats.prjLatency.MovingAvg(), 10)
-	stitems[21] = `"endpChLen":` + strconv.FormatUint((uint64)(len(stats.endpCh)), 10)
+	stitems[19] = `"latency.min":` + strconv.FormatInt(stats.prjLatency.Min(), 10)
+	stitems[20] = `"latency.max":` + strconv.FormatInt(stats.prjLatency.Max(), 10)
+	stitems[21] = `"latency.avg":` + strconv.FormatInt(stats.prjLatency.Mean(), 10)
+	stitems[22] = `"latency.movingAvg":` + strconv.FormatInt(stats.prjLatency.MovingAvg(), 10)
+	stitems[23] = `"endpChLen":` + strconv.FormatUint((uint64)(len(stats.endpCh)), 10)
 	statjson := strings.Join(stitems[:], ",")
 	return fmt.Sprintf("{%v}", statjson)
 }

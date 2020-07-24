@@ -463,12 +463,16 @@ func (feed *DcpFeed) handlePacket(
 			eventType := binary.BigEndian.Uint32(pkt.Extras)
 			if eventType == 0x01 {
 				event.EventType = transport.OSO_SNAPSHOT_START
+				feed.stats.OsoSnapshotStart.Add(1)
 			} else if eventType == 0x02 {
 				event.EventType = transport.OSO_SNAPSHOT_END
+				feed.stats.OsoSnapshotEnd.Add(1)
 			} else {
 				fmsg := "%v ##%x DCP_OSO_SNAPSHOT for vb %d. Expected extras value: 0x01 (or) 0x02, received: %v\n"
 				logging.Fatalf(fmsg, prefix, stream.AppOpaque, vb, pkt.Extras)
 			}
+			fmsg := "%v ##%x DCP_OSO_SNAPSHOT for vb %d, eventType: %v\n"
+			logging.Debugf(fmsg, prefix, stream.AppOpaque, vb, event.EventType)
 		} else {
 			fmsg := "%v ##%x DCP_OSO_SNAPSHOT for vb %d. Expected extras len: %v, received: %v\n"
 			logging.Fatalf(fmsg, prefix, stream.AppOpaque, vb, osoSnapshotExtrasLen, len(pkt.Extras))
@@ -1362,6 +1366,8 @@ type DcpStats struct {
 	ScopeDrop         stats.Uint64Val
 	CollectionChanged stats.Uint64Val
 	SeqnoAdvanced     stats.Uint64Val
+	OsoSnapshotStart  stats.Uint64Val
+	OsoSnapshotEnd    stats.Uint64Val
 
 	rcvch      chan []interface{}
 	Dcplatency stats.Average
@@ -1396,6 +1402,8 @@ func (dcpStats *DcpStats) Init() {
 	dcpStats.ScopeDrop.Init()
 	dcpStats.CollectionChanged.Init()
 	dcpStats.SeqnoAdvanced.Init()
+	dcpStats.OsoSnapshotStart.Init()
+	dcpStats.OsoSnapshotEnd.Init()
 }
 
 func (stats *DcpStats) IsClosed() bool {
@@ -1411,7 +1419,7 @@ func (stats *DcpStats) String() (string, string) {
 		return now.Sub(time.Unix(0, t))
 	}
 
-	var stitems [22]string
+	var stitems [24]string
 	stitems[0] = `"bytes":` + strconv.FormatUint(stats.TotalBytes.Value(), 10)
 	stitems[1] = `"bufferacks":` + strconv.FormatUint(stats.TotalBufferAckSent.Value(), 10)
 	stitems[2] = `"toAckBytes":` + strconv.FormatUint(stats.ToAckBytes.Value(), 10)
@@ -1426,16 +1434,18 @@ func (stats *DcpStats) String() (string, string) {
 	stitems[10] = `"scopeDrop":` + strconv.FormatUint(stats.ScopeDrop.Value(), 10)
 	stitems[11] = `"collectionChanged":` + strconv.FormatUint(stats.CollectionChanged.Value(), 10)
 	stitems[12] = `"seqnoAdvanced":` + strconv.FormatUint(stats.SeqnoAdvanced.Value(), 10)
+	stitems[13] = `"osoSnapshotStart":` + strconv.FormatUint(stats.OsoSnapshotStart.Value(), 10)
+	stitems[14] = `"osoSnapshotEnd":` + strconv.FormatUint(stats.OsoSnapshotEnd.Value(), 10)
 
-	stitems[13] = `"streamends":` + strconv.FormatUint(stats.TotalStreamEnd.Value(), 10)
-	stitems[14] = `"closestreams":` + strconv.FormatUint(stats.TotalCloseStream.Value(), 10)
-	stitems[15] = `"lastAckTime":` + getTimeDur(stats.LastAckTime.Value()).String()
-	stitems[16] = `"lastNoopSend":` + getTimeDur(stats.LastNoopSend.Value()).String()
-	stitems[17] = `"lastNoopRecv":` + getTimeDur(stats.LastNoopRecv.Value()).String()
-	stitems[18] = `"lastMsgSend":` + getTimeDur(stats.LastMsgSend.Value()).String()
-	stitems[19] = `"lastMsgRecv":` + getTimeDur(stats.LastMsgRecv.Value()).String()
-	stitems[20] = `"rcvchLen":` + strconv.FormatUint((uint64)(len(stats.rcvch)), 10)
-	stitems[21] = `"incomingMsg":` + strconv.FormatUint(stats.IncomingMsg.Value(), 10)
+	stitems[15] = `"streamends":` + strconv.FormatUint(stats.TotalStreamEnd.Value(), 10)
+	stitems[16] = `"closestreams":` + strconv.FormatUint(stats.TotalCloseStream.Value(), 10)
+	stitems[17] = `"lastAckTime":` + getTimeDur(stats.LastAckTime.Value()).String()
+	stitems[18] = `"lastNoopSend":` + getTimeDur(stats.LastNoopSend.Value()).String()
+	stitems[19] = `"lastNoopRecv":` + getTimeDur(stats.LastNoopRecv.Value()).String()
+	stitems[20] = `"lastMsgSend":` + getTimeDur(stats.LastMsgSend.Value()).String()
+	stitems[21] = `"lastMsgRecv":` + getTimeDur(stats.LastMsgRecv.Value()).String()
+	stitems[22] = `"rcvchLen":` + strconv.FormatUint((uint64)(len(stats.rcvch)), 10)
+	stitems[23] = `"incomingMsg":` + strconv.FormatUint(stats.IncomingMsg.Value(), 10)
 	statjson := strings.Join(stitems[:], ",")
 
 	statsStr := fmt.Sprintf("{%v}", statjson)

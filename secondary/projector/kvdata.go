@@ -93,6 +93,8 @@ type KvdataStats struct {
 	scopeDrop         stats.Uint64Val
 	collectionChanged stats.Uint64Val
 	seqnoAdvanced     stats.Uint64Val
+	osoSnapshotStart  stats.Uint64Val
+	osoSnapshotEnd    stats.Uint64Val
 }
 
 func (kvstats *KvdataStats) Init(numVbuckets int, kvdata *KVData) {
@@ -122,6 +124,8 @@ func (kvstats *KvdataStats) Init(numVbuckets int, kvdata *KVData) {
 	kvstats.scopeDrop.Init()
 	kvstats.collectionChanged.Init()
 	kvstats.seqnoAdvanced.Init()
+	kvstats.osoSnapshotStart.Init()
+	kvstats.osoSnapshotEnd.Init()
 }
 
 func (kvstats *KvdataStats) IsClosed() bool {
@@ -129,7 +133,7 @@ func (kvstats *KvdataStats) IsClosed() bool {
 }
 
 func (stats *KvdataStats) String() (string, string) {
-	var stitems [23]string
+	var stitems [25]string
 	var vbseqnos string
 	var numDocsProcessed, numDocsPending uint64
 
@@ -156,6 +160,8 @@ func (stats *KvdataStats) String() (string, string) {
 	stitems[19] = `"scopeDrop":` + strconv.FormatUint(stats.scopeDrop.Value(), 10)
 	stitems[20] = `"collectionChanged":` + strconv.FormatUint(stats.collectionChanged.Value(), 10)
 	stitems[21] = `"seqnoAdvanced":` + strconv.FormatUint(stats.seqnoAdvanced.Value(), 10)
+	stitems[22] = `"osoSnapshotStart":` + strconv.FormatUint(stats.osoSnapshotStart.Value(), 10)
+	stitems[23] = `"osoSnapshotEnd":` + strconv.FormatUint(stats.osoSnapshotEnd.Value(), 10)
 
 	// A copy of vbseqnos is made so that numDocsProcessed can be consistent
 	// with the sum of logged vbseqnos. Also, it helps to compute the numDocsPending
@@ -167,7 +173,7 @@ func (stats *KvdataStats) String() (string, string) {
 		numDocsProcessed += stats.vbseqnos_copy[i]
 	}
 
-	stitems[22] = `"numDocsProcessed":` + strconv.FormatUint(numDocsProcessed, 10)
+	stitems[24] = `"numDocsProcessed":` + strconv.FormatUint(numDocsProcessed, 10)
 	statjson := strings.Join(stitems[:], ",")
 
 	cluster := stats.kvdata.config["clusterAddr"].String()
@@ -679,11 +685,17 @@ func (kvdata *KVData) scatterMutation(
 		kvdata.stats.seqnoAdvanced.Add(1)
 
 	case mcd.DCP_OSO_SNAPSHOT: // Propagate OsoSnapshotEvent to workers
-		// TODO (Collections): Add stats for DCP_OSO_SNAPSHOT
+
 		fmsg := "%v ##%x Received OSO Snapshot event: %v for vbucket: %v\n"
 		logging.Infof(fmsg, kvdata.logPrefix, m.Opaque, m.EventType, vbno)
 		if err := worker.Event(m); err != nil {
 			panic(err)
+		}
+		switch m.EventType {
+		case mcd.OSO_SNAPSHOT_START:
+			kvdata.stats.osoSnapshotStart.Add(1)
+		case mcd.OSO_SNAPSHOT_END:
+			kvdata.stats.osoSnapshotEnd.Add(1)
 		}
 	}
 	return
