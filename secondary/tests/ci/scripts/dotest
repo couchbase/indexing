@@ -128,8 +128,6 @@ fi
 
 stop_cluster
 rm -f $WORKSPACE/logs.tar.* $WORKSPACE/test.log $WORKSPACE/run.log /tmp/core-*
-find ~/testdata/* -mtime +1 -exec rm {} \; 1>/dev/null 2>&1
-> $WORKSPACE/test.log
 
 export phase=sanity
 if [[ "$MODE" == *"$phase"* ]]; then
