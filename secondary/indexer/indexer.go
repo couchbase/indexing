@@ -1341,6 +1341,8 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 	<-idx.rebalMgrCmdCh
 	idx.ddlSrvMgrCmdCh <- msg
 	<-idx.ddlSrvMgrCmdCh
+	idx.schedIdxCreatorCmdCh <- msg
+	<-idx.schedIdxCreatorCmdCh
 	idx.clustMgrAgentCmdCh <- msg
 	<-idx.clustMgrAgentCmdCh
 	idx.updateSliceWithConfig(newConfig)
@@ -3945,6 +3947,10 @@ func (idx *indexer) shutdownWorkers() {
 	// shutdown ddl manager
 	idx.ddlSrvMgrCmdCh <- &MsgGeneral{mType: ADMIN_MGR_SHUTDOWN}
 	<-idx.ddlSrvMgrCmdCh
+
+	// shutdown scheduled index creator
+	idx.schedIdxCreatorCmdCh <- &MsgGeneral{mType: ADMIN_MGR_SHUTDOWN}
+	<-idx.schedIdxCreatorCmdCh
 }
 
 func (idx *indexer) Shutdown() Message {

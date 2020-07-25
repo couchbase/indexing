@@ -13,7 +13,8 @@ import (
 	"unsafe"
 )
 
-var SCHED_TOKEN_CHECK_INTERVAL = 5000 // Milliseconds
+var SCHED_TOKEN_CHECK_INTERVAL = 5000   // Milliseconds
+var SCHED_TOKEN_PROCESS_INTERVAL = 5000 // Milliseconds
 
 /////////////////////////////////////////////////////////////////////
 // Global Variables
@@ -47,8 +48,7 @@ func getSchedIndexCreator() *schedIndexCreator {
 //
 // Scheduled index creator (schedIndexCreator), checks up on the scheduled
 // create tokens and tries to create index with the help of metadata provider.
-// 1. If the index creation succeeds, corresponding stop schedule create token
-//    is posted and scheduled create token is deleted.
+// 1. If the index creation succeeds, scheduled create token is deleted.
 // 2. If the index creation fails, the index creation will be retried, based
 //    on the reason for failure.
 // 3. The retry count is tracked in memory and after the retry limit is reached
@@ -119,14 +119,13 @@ type schedTokenMonitor struct {
 //
 type schedIndexQueue []*scheduledIndex
 
-/////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////
 // Constructor and member functions for schedIndexCreator
 /////////////////////////////////////////////////////////////////////
 
 func NewSchedIndexCreator(indexerId common.IndexerId, supvCmdch MsgChannel,
 	supvMsgch MsgChannel, config common.Config) (*schedIndexCreator, Message) {
 
-	// TODO: Make indexer start sched index creator
 	addr := config["clusterAddr"].String()
 	numReplica := int32(config["settings.num_replica"].Int())
 	settings := &ddlSettings{numReplica: numReplica}
@@ -171,8 +170,7 @@ loop:
 		case cmd, ok := <-m.supvCmdch:
 			if ok {
 				if cmd.GetMsgType() == ADMIN_MGR_SHUTDOWN {
-					logging.Infof("schedIndexCreator: Shutting Down ...")
-					close(m.killch)
+					m.Close()
 					m.supvCmdch <- &MsgSuccess{}
 					break loop
 				}
@@ -189,7 +187,6 @@ loop:
 func (m *schedIndexCreator) handleSupervisorCommands(cmd Message) {
 	switch cmd.GetMsgType() {
 
-	// TODO: Make indexer send this message
 	case CONFIG_SETTINGS_UPDATE:
 		cfgUpdate := cmd.(*MsgConfigUpdate)
 		m.config.Store(cfgUpdate.GetConfig())
@@ -203,14 +200,19 @@ func (m *schedIndexCreator) handleSupervisorCommands(cmd Message) {
 }
 
 func (m *schedIndexCreator) stopProcessDDL() {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
-	m.allowDDL = false
+
+	func() {
+		m.mutex.Lock()
+		defer m.mutex.Unlock()
+
+		m.allowDDL = false
+	}()
 }
 
 func (m *schedIndexCreator) canProcessDDL() bool {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
+
 	return m.allowDDL
 }
 
@@ -218,12 +220,14 @@ func (m *schedIndexCreator) startProcessDDL() {
 	func() {
 		m.mutex.Lock()
 		defer m.mutex.Unlock()
+
 		m.allowDDL = true
 	}()
 
 	func() {
 		m.proMutex.Lock()
 		defer m.proMutex.Unlock()
+
 		m.provider = nil
 	}()
 }
@@ -237,7 +241,7 @@ func (m *schedIndexCreator) rebalanceDone() {
 func (m *schedIndexCreator) processSchedIndexes() {
 
 	// Check for new indexes to be created every 5 seconds
-	ticker := time.NewTicker(time.Duration(SCHED_TOKEN_CHECK_INTERVAL) * time.Millisecond)
+	ticker := time.NewTicker(time.Duration(SCHED_TOKEN_PROCESS_INTERVAL) * time.Millisecond)
 
 	for {
 		select {
@@ -262,21 +266,27 @@ func (m *schedIndexCreator) processSchedIndexes() {
 				if err != nil {
 					retry := m.handleError(index, err)
 					if retry {
-						logging.Errorf("schedIndexCreator: error(%v) while creating index %v. The operation will be retried. Current retry counts (%v,%v)",
+						logging.Errorf("schedIndexCreator: error(%v) while creating index %v. The operation will be retried. Current retry counts (%v,%v).",
 							err, index.token.Definition.DefnId, index.state.retryCount, index.state.nRetryCount)
 						m.pushQ(index)
 					} else {
 						// TODO: Check if we need a console log
-						logging.Errorf("schedIndexCreator: error(%v) while creating index %v. The operation failed after retry counts (%v,%v)",
+						logging.Errorf("schedIndexCreator: error(%v) while creating index %v. The operation failed after retry counts (%v,%v).",
 							err, index.token.Definition.DefnId, index.state.retryCount, index.state.nRetryCount)
+
 						err := mc.PostStopScheduleCreateToken(index.token.Definition.DefnId, err.Error(), time.Now().UnixNano())
 						if err != nil {
-							logging.Errorf("schedIndexCreator: error (%v) in postnig the stop schedule create token for %v",
+							logging.Errorf("schedIndexCreator: error (%v) in posting the stop schedule create token for %v",
 								err, index.token.Definition.DefnId)
 						}
 					}
 				} else {
 					logging.Infof("schedIndexCreator: successfully created index %v", index.token.Definition.DefnId)
+					if !index.token.Definition.Deferred {
+						logging.Infof("schedIndexCreator: index %v was created with non-deferred build. "+
+							"DDL service manager will build the index", index.token.Definition.DefnId)
+					}
+
 					// TODO: Check if this doesn't error out in case of key not found.
 					err := mc.DeleteScheduleCreateToken(index.token.Definition.DefnId)
 					if err != nil {
@@ -318,16 +328,14 @@ func (m *schedIndexCreator) getMetadataProvider() (*client.MetadataProvider, err
 		m.provider = provider
 	}
 
-	// TODO: need to refresh provider on Reabalance.
-
 	return m.provider, nil
 }
 
 func (m *schedIndexCreator) tryCreateIndex(index *scheduledIndex) error {
 	exists, err := mc.StopScheduleCreateTokenExist(index.token.Definition.DefnId)
 	if err != nil {
-		logging.Errorf("schedIndexCreator:tryCreateIndex Error in getting stop schedule create token for %v",
-			index.token.Definition.DefnId)
+		logging.Errorf("schedIndexCreator:tryCreateIndex error (%v) in getting stop schedule create token for %v",
+			err, index.token.Definition.DefnId)
 		return err
 	}
 
@@ -339,15 +347,15 @@ func (m *schedIndexCreator) tryCreateIndex(index *scheduledIndex) error {
 
 	if m.backoff > 0 {
 		logging.Debugf("schedIndexCreator:tryCreateIndex using %v backoff for index %v",
-			m.backoff, index.token.Definition.DefnId)
+			time.Duration(m.backoff), index.token.Definition.DefnId)
 		time.Sleep(time.Duration(m.backoff))
 	}
 
 	var provider *client.MetadataProvider
 	provider, err = m.getMetadataProvider()
 	if err != nil {
-		logging.Errorf("schedIndexCreator:tryCreateIndex Error in getting getMetadataProvider for %v",
-			index.token.Definition.DefnId)
+		logging.Errorf("schedIndexCreator:tryCreateIndex error (%v) in getting getMetadataProvider for %v",
+			err, index.token.Definition.DefnId)
 		return err
 	}
 
@@ -379,6 +387,11 @@ func (m *schedIndexCreator) popQ() *scheduledIndex {
 	}
 
 	return si
+}
+
+func (m *schedIndexCreator) Close() {
+	logging.Infof("schedIndexCreator: Shutting Down ...")
+	close(m.killch)
 }
 
 /////////////////////////////////////////////////////////////////////
@@ -441,8 +454,6 @@ func (s *schedTokenMonitor) markProcessed(key string) {
 
 func (s *schedTokenMonitor) update() {
 	createTokens := s.commandListener.GetNewScheduleCreateTokens()
-
-	// TODO: This can be optimised for the first call by sending a batch of tokens.
 	for key, token := range createTokens {
 		if s.checkProcessed(key) {
 			continue
@@ -492,6 +503,10 @@ func (s *schedTokenMonitor) Close() {
 
 /////////////////////////////////////////////////////////////////////
 // Member functions (heap implementation) for schedIndexQueue
+// As the schedIndexQueue is implemented as a container/heap,
+// following methods are the exposed methods and will be called
+// from the golang container/heap library. Please don't call
+// these methods directly.
 /////////////////////////////////////////////////////////////////////
 
 func (q schedIndexQueue) Len() int {
