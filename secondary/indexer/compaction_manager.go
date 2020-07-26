@@ -557,59 +557,27 @@ func (cd *compactionDaemon) updateIndexInstMap(indexInstMap common.IndexInstMap)
 	compactions := make(map[string]*indexCompaction)
 	history := make(map[string]*indexCompaction)
 
-	// prune running compaction from non-existent index
-	for name, compaction := range cd.compactions {
-		found := false
-		for instId, inst := range indexInstMap {
-			for _, partn := range inst.Pc.GetAllPartitions() {
-				if instId == compaction.instId && partn.GetPartitionId() == compaction.partitionId {
-					found = true
-					break
-				}
-			}
-
-			if found {
-				break
-			}
-		}
-
-		if found {
-			compactions[name] = compaction
-		}
-	}
-
-	// prune compaction history from non-existent index
-	for name, hist := range cd.history {
-		found := false
-		for instId, inst := range indexInstMap {
-			for _, partn := range inst.Pc.GetAllPartitions() {
-				if instId == hist.instId && partn.GetPartitionId() == hist.partitionId {
-					found = true
-					break
-				}
-			}
-
-			if found {
-				break
-			}
-		}
-
-		if found {
-			history[name] = hist
-		}
-	}
-
-	// add compaction history for new index
-	for _, inst := range indexInstMap {
+	for instId, inst := range indexInstMap {
 		for _, partn := range inst.Pc.GetAllPartitions() {
-			name := indexCompactionName(inst.InstId, partn.GetPartitionId())
-			if _, ok := cd.history[name]; !ok {
+			name := indexCompactionName(instId, partn.GetPartitionId())
+
+			// prune running compaction from non-existent index
+			if compaction, ok := cd.compactions[name]; ok {
+				compactions[name] = compaction
+			}
+
+			// prune compaction history from non-existent index
+			if hist, ok := cd.history[name]; ok {
+				history[name] = hist
+			} else {
+				// add compaction history for new index
 				history[name] = &indexCompaction{
 					instId:      inst.InstId,
 					partitionId: partn.GetPartitionId(),
 					endTime:     math.MaxInt64,
 				}
 			}
+
 		}
 	}
 
