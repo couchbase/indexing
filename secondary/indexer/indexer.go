@@ -4794,6 +4794,11 @@ func (idx *indexer) processBuildDoneCatchup(streamId common.StreamId, keyspaceId
 		}
 	}
 
+	idx.tkCmdCh <- &MsgTKToggleFlush{mType: TK_ENABLE_FLUSH,
+		streamId:   streamId,
+		keyspaceId: keyspaceId}
+	<-idx.tkCmdCh
+
 	respCh := make(MsgChannel)
 	stopCh := make(StopChannel)
 
