@@ -101,8 +101,26 @@ func (r *vbSeqnosReader) GetSeqnos() (seqs []uint64, err error) {
 
 func (r *vbSeqnosReader) enqueueRequest(req interface{}) () {
 	defer func() {
-		if r := recover(); r != nil {
+		if rec := recover(); rec != nil {
 			//if requestCh is closed, reader has closed already
+			logging.Errorf("vbSeqnosReader::enqueueRequest Request channel closed for bucket: %v", r.bucket)
+			// Respond back to outstanding callers
+			response := &vbSeqnosResponse{
+				seqnos: nil,
+				err:    errConnClosed,
+			}
+			switch req.(type) {
+
+			case vbSeqnosRequest:
+				//repond to same request type
+				inReq := req.(vbSeqnosRequest)
+				inReq.Reply(response)
+
+			case vbMinSeqnosRequest:
+				//anything else goes back
+				inReq := req.(vbMinSeqnosRequest)
+				inReq.Reply(response)
+			}
 		}
 	}()
 
