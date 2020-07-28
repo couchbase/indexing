@@ -2806,15 +2806,14 @@ func (idx *indexer) handleDropIndex(msg Message) (resp Message) {
 		return
 	}
 
-	//TODO Collections use keyspaceId instead of bucket
 	//if there is a flush in progress for this index's bucket and stream
 	//wait for the flush to finish before drop
 	streamId := indexInst.Stream
-	bucket := indexInst.Defn.Bucket
+	keyspaceId := indexInst.Defn.KeyspaceId(streamId)
 
-	if ok, _ := idx.streamKeyspaceIdFlushInProgress[streamId][bucket]; ok {
+	if ok, _ := idx.streamKeyspaceIdFlushInProgress[streamId][keyspaceId]; ok {
 		notifyCh := make(MsgChannel)
-		idx.streamKeyspaceIdObserveFlushDone[streamId][bucket] = notifyCh
+		idx.streamKeyspaceIdObserveFlushDone[streamId][keyspaceId] = notifyCh
 		go idx.processDropAfterFlushDone(indexInst, notifyCh, clientCh)
 	} else {
 		idx.cleanupIndex(indexInst, clientCh)
