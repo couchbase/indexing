@@ -477,6 +477,43 @@ func SkipTestCollectionWhereClause(t *testing.T) {
 	- drop index while build is in progress
 */
 
+func TestCollectionMultipleBuilds(t *testing.T) {
+
+	bucket := "default"
+	scope := "s1"
+	coll := "c1"
+
+	index1 := scope + "_" + coll + "_" + "i1"
+	index2 := scope + "_" + coll + "_" + "i2"
+	createDeferIndex(index1, bucket, scope, coll, []string{"age"}, t)
+	createDeferIndex(index2, bucket, scope, coll, []string{"gender"}, t)
+
+	scope = "s2"
+	coll = "c2"
+	index3 := scope + "_" + coll + "_" + "i3"
+	index4 := scope + "_" + coll + "_" + "i4"
+	createDeferIndex(index3, bucket, scope, coll, []string{"age"}, t)
+	createDeferIndex(index4, bucket, scope, coll, []string{"gender"}, t)
+
+	secondaryindex.BuildIndexes([]string{index1, index2, index3, index4}, bucket,
+		indexManagementAddress, defaultIndexActiveTimeout)
+
+	scanAllAndVerify(index1, bucket, scope, coll, "age", masterDocs_c1, t)
+	scanAllAndVerify(index2, bucket, scope, coll, "gender", masterDocs_c1, t)
+
+	scanAllAndVerify(index3, bucket, scope, coll, "age", masterDocs_c2, t)
+	scanAllAndVerify(index4, bucket, scope, coll, "gender", masterDocs_c2, t)
+
+	//Drop all indexes
+	dropIndex(index3, bucket, scope, coll, t)
+	dropIndex(index4, bucket, scope, coll, t)
+
+	scope = "s1"
+	coll = "c1"
+	dropIndex(index1, bucket, scope, coll, t)
+	dropIndex(index2, bucket, scope, coll, t)
+}
+
 func TestCollectionDrop(t *testing.T) {
 
 	log.Printf("In TestCollectionDrop()")
