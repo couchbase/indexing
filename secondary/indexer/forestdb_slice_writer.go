@@ -1481,6 +1481,9 @@ snaploop:
 	return err
 }
 
+func (fdb *fdbSlice) PrepareStats() {
+}
+
 func (fdb *fdbSlice) Statistics() (StorageStatistics, error) {
 	var sts StorageStatistics
 

@@ -2025,6 +2025,10 @@ func (mdb *plasmaSlice) Compact(abortTime time.Time, minFrag int) error {
 	return err
 }
 
+func (mdb *plasmaSlice) PrepareStats() {
+	plasma.PrepareStats()
+}
+
 func (mdb *plasmaSlice) Statistics() (StorageStatistics, error) {
 	var sts StorageStatistics
 
@@ -2032,7 +2036,7 @@ func (mdb *plasmaSlice) Statistics() (StorageStatistics, error) {
 
 	var numRecsMem, numRecsDisk, cacheHits, cacheMiss, docidCount int64
 	var msCompressionRatio, bsCompressionRatio float64
-	pStats := mdb.mainstore.GetStats()
+	pStats := mdb.mainstore.GetPreparedStats()
 
 	docidCount = pStats.ItemsCount
 	numRecsMem += pStats.NumRecordAllocs - pStats.NumRecordFrees
@@ -2047,7 +2051,7 @@ func (mdb *plasmaSlice) Statistics() (StorageStatistics, error) {
 
 	internalData = append(internalData, fmt.Sprintf("{\n\"MainStore\":\n%s", pStats))
 	if !mdb.isPrimary {
-		pStats := mdb.backstore.GetStats()
+		pStats := mdb.backstore.GetPreparedStats()
 		docidCount = pStats.ItemsCount
 		sts.MemUsed += pStats.MemSz + pStats.MemSzIndex
 		internalData = append(internalData, fmt.Sprintf(",\n\"BackStore\":\n%s", pStats))

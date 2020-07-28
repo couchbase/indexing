@@ -1155,6 +1155,8 @@ func (s *storageMgr) getIndexStorageStats() []IndexStorageStats {
 	var err error
 	var sts StorageStatistics
 
+	doPrepare := true
+
 	for idxInstId, partnMap := range s.indexPartnMap {
 
 		inst, ok := s.indexInstMap[idxInstId]
@@ -1173,6 +1175,13 @@ func (s *storageMgr) getIndexStorageStats() []IndexStorageStats {
 			slices := partnInst.Sc.GetAllSlices()
 			nslices += int64(len(slices))
 			for _, slice := range slices {
+
+				// Prepare stats once
+				if doPrepare {
+					slice.PrepareStats()
+					doPrepare = false
+				}
+
 				sts, err = slice.Statistics()
 				if err != nil {
 					break

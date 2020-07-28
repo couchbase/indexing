@@ -1536,6 +1536,9 @@ func (mdb *memdbSlice) Compact(abortTime time.Time, minFrag int) error {
 	return nil
 }
 
+func (mdb *memdbSlice) PrepareStats() {
+}
+
 func (mdb *memdbSlice) Statistics() (StorageStatistics, error) {
 	var sts StorageStatistics
 
