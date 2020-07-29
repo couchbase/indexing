@@ -882,28 +882,24 @@ func (idx *indexer) listenAdminMsgs() {
 					// bucket (on both streams).   The lock is FIFO, so if this function
 					// can get a lock, it will mean that previous stream request would have
 					// been cleared.
-					buckets := idx.getBucketForAdminMsg(msg)
-					for _, bucket := range buckets {
-						f := func(streamId common.StreamId, bucket string) {
-							lock := idx.acquireStreamRequestLock(bucket, streamId)
-							defer idx.releaseStreamRequestLock(lock)
-							idx.waitStreamRequestLock(lock)
-						}
 
-						//create and build don't need to be checked
-						//create don't take stream lock. build only works
-						//on a fresh stream.
-						if msg.GetMsgType() == CLUST_MGR_DROP_INDEX_DDL ||
-							msg.GetMsgType() == CLUST_MGR_PRUNE_PARTITION {
-							//check the stream used for the operation
-							if resp.GetMsgType() == MSG_SUCCESS_DROP {
-								streamId := resp.(*MsgSuccessDrop).GetStreamId()
-								if streamId == common.MAINT_STREAM ||
-									streamId == common.INIT_STREAM {
-									f(streamId, bucket)
-								}
+					//create and build don't need to be checked
+					//create doesn't take stream lock. build only works
+					//on a fresh stream.
+					if msg.GetMsgType() == CLUST_MGR_DROP_INDEX_DDL ||
+						msg.GetMsgType() == CLUST_MGR_PRUNE_PARTITION {
 
+						if resp.GetMsgType() == MSG_SUCCESS_DROP {
+							streamId := resp.(*MsgSuccessDrop).GetStreamId()
+							keyspaceId := resp.(*MsgSuccessDrop).GetKeyspaceId()
+
+							f := func(streamId common.StreamId, keyspaceId string) {
+								lock := idx.acquireStreamRequestLock(keyspaceId, streamId)
+								defer idx.releaseStreamRequestLock(lock)
+								idx.waitStreamRequestLock(lock)
 							}
+
+							f(streamId, keyspaceId)
 						}
 					}
 				}
@@ -914,7 +910,7 @@ func (idx *indexer) listenAdminMsgs() {
 	}
 }
 
-func (idx *indexer) getBucketForAdminMsg(msg Message) []string {
+func (idx *indexer) getKeyspaceIdForAdminMsg(msg Message) []string {
 	switch msg.GetMsgType() {
 
 	case CLUST_MGR_CREATE_INDEX_DDL, CBQ_CREATE_INDEX_DDL:
@@ -927,7 +923,6 @@ func (idx *indexer) getBucketForAdminMsg(msg Message) []string {
 
 	case CLUST_MGR_DROP_INDEX_DDL, CBQ_DROP_INDEX_DDL:
 		dropMsg := msg.(*MsgDropIndex)
-		//TODO Collections verify this
 		return []string{dropMsg.GetKeyspaceId()}
 
 	default:
@@ -2188,7 +2183,10 @@ func (idx *indexer) handlePrunePartition(msg Message) (resp Message) {
 		if ok, _ := idx.streamKeyspaceIdFlushInProgress[inst.Stream][inst.Defn.Bucket]; !ok {
 			idx.prunePartitions(inst.Defn.Bucket, inst.Stream)
 		}
-		resp = &MsgSuccessDrop{streamId: inst.Stream}
+		resp = &MsgSuccessDrop{
+			streamId:   inst.Stream,
+			keyspaceId: inst.Defn.Bucket,
+		}
 	} else {
 		logging.Warnf("PrunePartition.  Index instance %v not found. Skip", instId)
 		resp = &MsgError{}
@@ -2819,7 +2817,10 @@ func (idx *indexer) handleDropIndex(msg Message) (resp Message) {
 		idx.cleanupIndex(indexInst, clientCh)
 	}
 
-	resp = &MsgSuccessDrop{streamId: streamId}
+	resp = &MsgSuccessDrop{
+		streamId:   streamId,
+		keyspaceId: keyspaceId,
+	}
 	return
 
 }

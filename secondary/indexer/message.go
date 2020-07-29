@@ -247,7 +247,8 @@ func (m *MsgSuccessOpenStream) GetPendingTs() *common.TsVbuuid {
 
 //Success Message
 type MsgSuccessDrop struct {
-	streamId common.StreamId
+	streamId   common.StreamId
+	keyspaceId string
 }
 
 func (m *MsgSuccessDrop) GetMsgType() MsgType {
@@ -256,6 +257,10 @@ func (m *MsgSuccessDrop) GetMsgType() MsgType {
 
 func (m *MsgSuccessDrop) GetStreamId() common.StreamId {
 	return m.streamId
+}
+
+func (m *MsgSuccessDrop) GetKeyspaceId() string {
+	return m.keyspaceId
 }
 
 //Timestamp Message
