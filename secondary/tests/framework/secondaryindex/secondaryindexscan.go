@@ -267,7 +267,7 @@ func ScanAll2(indexName, bucketName, scopeName, collectionName, server string, l
 		return nil, e
 	}
 
-	defnID, _ := GetDefnID(client, bucketName, indexName)
+	defnID, _ := GetDefnID2(client, bucketName, scopeName, collectionName, indexName)
 	scanResults := make(tc.ScanResponseActual)
 
 	tmpbuf, tmpbufPoolIdx := qc.GetFromPools()

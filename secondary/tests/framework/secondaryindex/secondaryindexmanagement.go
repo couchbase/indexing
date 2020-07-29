@@ -52,11 +52,21 @@ func CreateClient(server, serviceAddr string) (*qc.GsiClient, error) {
 }
 
 func GetDefnID(client *qc.GsiClient, bucket, indexName string) (defnID uint64, ok bool) {
+
+	return GetDefnID2(client, bucket, c.DEFAULT_SCOPE, c.DEFAULT_COLLECTION, indexName)
+}
+
+func GetDefnID2(client *qc.GsiClient, bucket, scopeName,
+	collectionName, indexName string) (defnID uint64, ok bool) {
+
 	indexes, _, _, _, err := client.Refresh()
 	tc.HandleError(err, "Error while listing the indexes")
 	for _, index := range indexes {
 		defn := index.Definition
-		if defn.Bucket == bucket && defn.Name == indexName {
+		if defn.Bucket == bucket &&
+			defn.Scope == scopeName &&
+			defn.Collection == collectionName &&
+			defn.Name == indexName {
 			return uint64(index.Definition.DefnId), true
 		}
 	}
@@ -172,6 +182,11 @@ func BuildIndex(indexName, bucketName, server string, indexActiveTimeoutSeconds 
 }
 
 func BuildIndexes(indexNames []string, bucketName, server string, indexActiveTimeoutSeconds int64) error {
+
+	return BuildIndexes2(indexNames, bucketName, c.DEFAULT_SCOPE, c.DEFAULT_COLLECTION, server, indexActiveTimeoutSeconds)
+}
+
+func BuildIndexes2(indexNames []string, bucketName, scopeName, collectionName, server string, indexActiveTimeoutSeconds int64) error {
 	client, e := GetOrCreateClient(server, "2itest")
 	if e != nil {
 		return e
@@ -179,7 +194,7 @@ func BuildIndexes(indexNames []string, bucketName, server string, indexActiveTim
 
 	defnIds := make([]uint64, len(indexNames))
 	for i := range indexNames {
-		defnIds[i], _ = GetDefnID(client, bucketName, indexNames[i])
+		defnIds[i], _ = GetDefnID2(client, bucketName, scopeName, collectionName, indexNames[i])
 	}
 	err := client.BuildIndexes(defnIds)
 	log.Printf("Build command issued for the deferred indexes %v", indexNames)
