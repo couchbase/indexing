@@ -147,7 +147,7 @@ func TestCollectionDefault(t *testing.T) {
 	//Create multiple indexes with defer build
 	createDeferIndex(index1, bucket, scope, coll, []string{"age"}, t)
 	createDeferIndex(index2, bucket, scope, coll, []string{"gender"}, t)
-	secondaryindex.BuildIndexes([]string{index1, index2}, bucket, indexManagementAddress, defaultIndexActiveTimeout)
+	secondaryindex.BuildIndexes2([]string{index1, index2}, bucket, scope, coll, indexManagementAddress, defaultIndexActiveTimeout)
 
 	//Load more docs and scan
 	incrdocs := CreateDocsForCollection(bucket, cid, 1000)
@@ -226,7 +226,7 @@ func TestCollectionNonDefault(t *testing.T) {
 	//Create multiple indexes with defer build
 	createDeferIndex(index1, bucket, scope, coll, []string{"age"}, t)
 	createDeferIndex(index2, bucket, scope, coll, []string{"gender"}, t)
-	secondaryindex.BuildIndexes([]string{index1, index2}, bucket, indexManagementAddress, defaultIndexActiveTimeout)
+	secondaryindex.BuildIndexes2([]string{index1, index2}, bucket, scope, coll, indexManagementAddress, defaultIndexActiveTimeout)
 
 	//Load more docs and scan
 	incrdocs := CreateDocsForCollection(bucket, cid, 1000)
@@ -488,6 +488,11 @@ func TestCollectionMultipleBuilds(t *testing.T) {
 	createDeferIndex(index1, bucket, scope, coll, []string{"age"}, t)
 	createDeferIndex(index2, bucket, scope, coll, []string{"gender"}, t)
 
+	client, err := secondaryindex.GetOrCreateClient(indexManagementAddress, "test4client")
+	defn1, _ := secondaryindex.GetDefnID2(client, bucket, scope, coll, index1)
+	defn2, _ := secondaryindex.GetDefnID2(client, bucket, scope, coll, index2)
+	defnIds_c1 := []uint64{defn1, defn2}
+
 	scope = "s2"
 	coll = "c2"
 	index3 := scope + "_" + coll + "_" + "i3"
@@ -495,12 +500,31 @@ func TestCollectionMultipleBuilds(t *testing.T) {
 	createDeferIndex(index3, bucket, scope, coll, []string{"age"}, t)
 	createDeferIndex(index4, bucket, scope, coll, []string{"gender"}, t)
 
-	secondaryindex.BuildIndexes([]string{index1, index2, index3, index4}, bucket,
-		indexManagementAddress, defaultIndexActiveTimeout)
+	defn3, _ := secondaryindex.GetDefnID2(client, bucket, scope, coll, index3)
+	defn4, _ := secondaryindex.GetDefnID2(client, bucket, scope, coll, index4)
+	defnIds_c2 := []uint64{defn3, defn4}
 
+	err = secondaryindex.BuildIndexesAsync(defnIds_c1, indexManagementAddress, defaultIndexActiveTimeout)
+	FailTestIfError(err, "Error from BuildIndexesAsync", t)
+
+	err = secondaryindex.BuildIndexesAsync(defnIds_c2, indexManagementAddress, defaultIndexActiveTimeout)
+	FailTestIfError(err, "Error from BuildIndexesAsync", t)
+
+	defnIds := append(defnIds_c1, defnIds_c2...)
+	for _, defnId := range defnIds {
+		err = secondaryindex.WaitTillIndexActive(defnId, client, defaultIndexActiveTimeout)
+		if err != nil {
+			FailTestIfError(err, "Error in WaitTillIndexActive for index2", t)
+		}
+	}
+
+	scope = "s1"
+	coll = "c1"
 	scanAllAndVerify(index1, bucket, scope, coll, "age", masterDocs_c1, t)
 	scanAllAndVerify(index2, bucket, scope, coll, "gender", masterDocs_c1, t)
 
+	scope = "s2"
+	coll = "c2"
 	scanAllAndVerify(index3, bucket, scope, coll, "age", masterDocs_c2, t)
 	scanAllAndVerify(index4, bucket, scope, coll, "gender", masterDocs_c2, t)
 
@@ -512,6 +536,86 @@ func TestCollectionMultipleBuilds(t *testing.T) {
 	coll = "c1"
 	dropIndex(index1, bucket, scope, coll, t)
 	dropIndex(index2, bucket, scope, coll, t)
+}
+
+func TestCollectionIndexDropConcurrentBuild(t *testing.T) {
+
+	log.Printf("In TestCollectionIndexDropConcurrentBuild()")
+
+	bucket := "default"
+	scope := "s1"
+	coll := "c1"
+
+	index1 := scope + "_" + coll + "_" + "i1"
+	index2 := scope + "_" + coll + "_" + "i2"
+	createDeferIndex(index1, bucket, scope, coll, []string{"age"}, t)
+	createDeferIndex(index2, bucket, scope, coll, []string{"gender"}, t)
+
+	client, err := secondaryindex.GetOrCreateClient(indexManagementAddress, "test4client")
+	defn1, _ := secondaryindex.GetDefnID2(client, bucket, scope, coll, index1)
+	defn2, _ := secondaryindex.GetDefnID2(client, bucket, scope, coll, index2)
+	defnIds := []uint64{defn1, defn2}
+
+	err = secondaryindex.BuildIndexesAsync(defnIds, indexManagementAddress, defaultIndexActiveTimeout)
+	FailTestIfError(err, "Error from BuildIndexesAsync", t)
+	time.Sleep(1 * time.Second)
+
+	dropIndex(index1, bucket, scope, coll, t)
+
+	err = secondaryindex.WaitTillIndexActive(defn2, client, defaultIndexActiveTimeout)
+	if err != nil {
+		FailTestIfError(err, "Error in WaitTillIndexActive for index2", t)
+	}
+
+	scanAllAndVerify(index2, bucket, scope, coll, "gender", masterDocs_c1, t)
+	dropIndex(index2, bucket, scope, coll, t)
+
+}
+
+func TestCollectionIndexDropConcurrentBuild2(t *testing.T) {
+
+	log.Printf("In TestCollectionIndexDropConcurrentBuild2()")
+
+	bucket := "default"
+	scope := "s1"
+	coll := "c1"
+
+	index1 := scope + "_" + coll + "_" + "i1"
+	index2 := scope + "_" + coll + "_" + "i2"
+	createDeferIndex(index1, bucket, scope, coll, []string{"age"}, t)
+	createDeferIndex(index2, bucket, scope, coll, []string{"gender"}, t)
+
+	index3 := scope + "_" + coll + "_" + "i3"
+	createIndex(index3, bucket, scope, coll, []string{"age"}, t)
+	scanAllAndVerify(index3, bucket, scope, coll, "age", masterDocs_c1, t)
+
+	client, err := secondaryindex.GetOrCreateClient(indexManagementAddress, "test4client")
+	defn1, _ := secondaryindex.GetDefnID2(client, bucket, scope, coll, index1)
+	defn2, _ := secondaryindex.GetDefnID2(client, bucket, scope, coll, index2)
+	defnIds := []uint64{defn1, defn2}
+
+	err = secondaryindex.BuildIndexesAsync(defnIds, indexManagementAddress, defaultIndexActiveTimeout)
+	FailTestIfError(err, "Error from BuildIndexesAsync", t)
+	time.Sleep(1 * time.Second)
+
+	dropIndex(index3, bucket, scope, coll, t)
+
+	err = secondaryindex.WaitTillIndexActive(defn1, client, defaultIndexActiveTimeout)
+	if err != nil {
+		FailTestIfError(err, "Error in WaitTillIndexActive for index1", t)
+	}
+
+	err = secondaryindex.WaitTillIndexActive(defn2, client, defaultIndexActiveTimeout)
+	if err != nil {
+		FailTestIfError(err, "Error in WaitTillIndexActive for index2", t)
+	}
+
+	scanAllAndVerify(index1, bucket, scope, coll, "age", masterDocs_c1, t)
+	scanAllAndVerify(index2, bucket, scope, coll, "gender", masterDocs_c1, t)
+
+	dropIndex(index1, bucket, scope, coll, t)
+	dropIndex(index2, bucket, scope, coll, t)
+
 }
 
 func TestCollectionDrop(t *testing.T) {
@@ -592,7 +696,7 @@ func TestCollectionDDLWithConcurrentSystemEvents(t *testing.T) {
 
 	go func() {
 		defer wg.Done()
-		secondaryindex.BuildIndexes([]string{index1}, bucket, kvaddress, 60)
+		secondaryindex.BuildIndexes2([]string{index1}, bucket, scope, coll, kvaddress, 60)
 	}()
 	wg.Wait()
 
