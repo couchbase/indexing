@@ -392,6 +392,7 @@ type GsiClient struct {
 	numScans     int64
 	scanResponse int64
 	dataEncFmt   uint32
+	qcLock       sync.Mutex
 }
 
 // NewGsiClient returns client to access GSI cluster.
@@ -1350,10 +1351,59 @@ func (c *GsiClient) Close() {
 	close(c.killch)
 }
 
+//
+// This function updates the scan clients based on the list of available
+// scan ports. The list of scan ports is maintained by looking at the
+// indexer nodes from the cluster topology (currmeta).
+// Note that this function is not responsible for updating currmeta itself.
+//
 func (c *GsiClient) updateScanClients() {
+
 	newclients, staleclients := map[string]bool{}, map[string]bool{}
+
+	needsRefresh := func() bool {
+		qcs := *((*map[string]*GsiScanClient)(atomic.LoadPointer(&c.queryClients)))
+		scanPorts := c.bridge.GetScanports()
+		if len(qcs) != len(scanPorts) {
+			return true
+		}
+
+		cache := map[string]bool{}
+		for _, queryport := range scanPorts {
+			cache[queryport] = true
+			if _, ok := qcs[queryport]; !ok {
+				return true
+			}
+		}
+
+		for queryport, _ := range qcs {
+			if _, ok := cache[queryport]; !ok {
+				return true
+			}
+		}
+
+		return false
+	}
+
+	if !needsRefresh() {
+		return
+	}
+
+	// With respect to the performance, taking a lock here should be fine as
+	// 1. This happens only in case of replica retry or topology change.
+	// 2. needsRefresh avoids unnecessary locks.
+	// 3. Double check locking approach helps in avoiding multiple threads
+	//    performing the same steps for keeping queryClients list updated.
+	// Also note that, the steps for keeping queryClients list updated have
+	// side effect. For example, it is not a good idea that multiple threads
+	// trying to close the scan client concurrently.
+
+	c.qcLock.Lock()
+	defer c.qcLock.Unlock()
+
 	cache := map[string]bool{}
-	qcs := *((*map[string]*GsiScanClient)(atomic.LoadPointer(&c.queryClients)))
+	qcsPtr := atomic.LoadPointer(&c.queryClients)
+	qcs := *((*map[string]*GsiScanClient)(qcsPtr))
 	// add new indexer-nodes
 	for _, queryport := range c.bridge.GetScanports() {
 		cache[queryport] = true
