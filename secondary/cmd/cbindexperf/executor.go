@@ -226,8 +226,17 @@ func RunCommands(cluster string, cfg *Config, statsW io.Writer) (*Result, error)
 			spec.Id = uint64(i)
 		}
 
+		if spec.Scope == "" {
+			spec.Scope = c.DEFAULT_SCOPE
+		}
+		if spec.Collection == "" {
+			spec.Collection = c.DEFAULT_COLLECTION
+		}
+
 		for _, index := range indexes {
 			if index.Definition.Bucket == spec.Bucket &&
+				index.Definition.Scope == spec.Scope &&
+				index.Definition.Collection == spec.Collection &&
 				index.Definition.Name == spec.Index {
 				spec.DefnId = uint64(index.Definition.DefnId)
 			}
