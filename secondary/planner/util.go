@@ -310,6 +310,10 @@ func getEligibleIndexes(indexes []*IndexUsage, eligibles []*IndexUsage) []*Index
 //
 func isEligibleIndex(index *IndexUsage, eligibles map[*IndexUsage]bool) bool {
 
+	if index.eligible {
+		return true
+	}
+
 	return eligibles[index]
 }
 

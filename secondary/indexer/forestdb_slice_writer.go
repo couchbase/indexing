@@ -1481,6 +1481,9 @@ snaploop:
 	return err
 }
 
+func (fdb *fdbSlice) PrepareStats() {
+}
+
 func (fdb *fdbSlice) Statistics() (StorageStatistics, error) {
 	var sts StorageStatistics
 
@@ -1827,4 +1830,8 @@ func (fdb *fdbSlice) cancelCompact() {
 
 	logging.Infof("ForestDBSlice::Cancel Compaction Returns err %v "+
 		"Slice Id %v, IndexInstId %v ", err, fdb.id, fdb.idxInstId)
+}
+
+func (fdb *fdbSlice) RecoveryDone() {
+	// done nothing
 }

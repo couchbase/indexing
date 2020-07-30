@@ -35,6 +35,9 @@ const bufferAckPeriod = 20
 // Length of extras when DCP seqno message is received
 const dcpSeqnoAdvExtrasLen = 8
 
+// Length of extras when DCP oso snapshot message is received
+const osoSnapshotExtrasLen = 4
+
 // error codes
 var ErrorInvalidLog = errors.New("couchbase.errorInvalidLog")
 
@@ -63,6 +66,7 @@ type DcpFeed struct {
 	logPrefix string
 	// Collections
 	collectionsAware bool
+	osoSnapshot      bool
 	// stats
 	toAckBytes         uint32    // bytes client has read
 	maxAckBytes        uint32    // Max buffer control ack bytes
@@ -104,6 +108,10 @@ func NewDcpFeed(
 
 	if _, ok := config["collectionsAware"]; ok {
 		feed.collectionsAware = config["collectionsAware"].(bool)
+	}
+
+	if _, ok := config["osoSnapshot"]; ok {
+		feed.osoSnapshot = config["osoSnapshot"].(bool)
 	}
 
 	go feed.genServer(opaque, feed.reqch, feed.finch, rcvch, config)
@@ -447,6 +455,27 @@ func (feed *DcpFeed) handlePacket(
 		} else {
 			fmsg := "%v ##%x DCP_SEQNO_ADVANCED for vb %d. Expected extras len: %v, received: %v\n"
 			logging.Fatalf(fmsg, prefix, stream.AppOpaque, vb, dcpSeqnoAdvExtrasLen, len(pkt.Extras))
+		}
+	case transport.DCP_OSO_SNAPSHOT:
+		event = newDcpEvent(pkt, stream)
+
+		if len(pkt.Extras) == osoSnapshotExtrasLen {
+			eventType := binary.BigEndian.Uint32(pkt.Extras)
+			if eventType == 0x01 {
+				event.EventType = transport.OSO_SNAPSHOT_START
+				feed.stats.OsoSnapshotStart.Add(1)
+			} else if eventType == 0x02 {
+				event.EventType = transport.OSO_SNAPSHOT_END
+				feed.stats.OsoSnapshotEnd.Add(1)
+			} else {
+				fmsg := "%v ##%x DCP_OSO_SNAPSHOT for vb %d. Expected extras value: 0x01 (or) 0x02, received: %v\n"
+				logging.Fatalf(fmsg, prefix, stream.AppOpaque, vb, pkt.Extras)
+			}
+			fmsg := "%v ##%x DCP_OSO_SNAPSHOT for vb %d, eventType: %v\n"
+			logging.Debugf(fmsg, prefix, stream.AppOpaque, vb, event.EventType)
+		} else {
+			fmsg := "%v ##%x DCP_OSO_SNAPSHOT for vb %d. Expected extras len: %v, received: %v\n"
+			logging.Fatalf(fmsg, prefix, stream.AppOpaque, vb, osoSnapshotExtrasLen, len(pkt.Extras))
 		}
 	default:
 		fmsg := "%v opcode %v not known for vbucket %d\n"
@@ -835,6 +864,13 @@ func (feed *DcpFeed) doDcpOpen(
 		fmsg := "%v ##%x received response for set_noop_interval"
 		logging.Infof(fmsg, prefix, opaque)
 	}
+
+	if feed.osoSnapshot {
+		if err := feed.enableOSOSnapshot(rcvch); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -969,6 +1005,47 @@ func (feed *DcpFeed) enableCollections(rcvch chan []interface{}) error {
 	}
 
 	fmsg := "%v ##%x received response for DCP_HELO (feature_collections)"
+	logging.Infof(fmsg, prefix, opaque)
+	return nil
+}
+
+func (feed *DcpFeed) enableOSOSnapshot(rcvch chan []interface{}) error {
+	prefix := feed.logPrefix
+	opaque := feed.opaque
+
+	rq := &transport.MCRequest{
+		Opcode: transport.DCP_CONTROL,
+		Key:    []byte("enable_out_of_order_snapshots"),
+		Body:   []byte("true"),
+	}
+	if err := feed.conn.Transmit(rq); err != nil {
+		fmsg := "%v ##%x doDcpOpen.Transmit DCP_CONTROL (enable_out_of_order_snapshots): %v"
+		logging.Errorf(fmsg, prefix, opaque, err)
+		return err
+	}
+	feed.stats.LastMsgSend.Set(time.Now().UnixNano())
+	logging.Infof("%v ##%x sending DCP_CONTROL (enable_out_of_order_snapshots)", prefix, opaque)
+	msg, ok := <-rcvch
+	if !ok {
+		fmsg := "%v ##%x doDcpOpen.rcvch (enable_out_of_order_snapshots) closed"
+		logging.Errorf(fmsg, prefix, opaque)
+		return ErrorConnection
+	}
+	feed.stats.LastMsgRecv.Set(time.Now().UnixNano())
+
+	pkt := msg[0].(*transport.MCRequest)
+	opcode, status := pkt.Opcode, transport.Status(pkt.VBucket)
+	if opcode != transport.DCP_CONTROL {
+		fmsg := "%v ##%x DCP_CONTROL (enable_out_of_order_snapshots) != #%v"
+		logging.Errorf(fmsg, prefix, opaque, opcode)
+		return ErrorConnection
+	} else if status != transport.SUCCESS {
+		fmsg := "%v ##%x doDcpOpen (enable_out_of_order_snapshots) response status %v"
+		logging.Errorf(fmsg, prefix, opaque, status)
+		return ErrorConnection
+	}
+
+	fmsg := "%v ##%x received response for DCP_CONTROL (enable_out_of_order_snapshots)"
 	logging.Infof(fmsg, prefix, opaque)
 	return nil
 }
@@ -1142,7 +1219,7 @@ type DcpEvent struct {
 	ScopeID      []byte // For DCP_SYSTEM_EVENT
 	CollectionID uint32 // For DCP_SYSTEM_EVENT, Mutations
 
-	EventType transport.CollectionEvent // For DCP_SYSTEM_EVENT type
+	EventType transport.CollectionEvent // For DCP_SYSTEM_EVENT, DCP_OSO_SNAPSHOT types
 	// For DCP_SYSTEM_EVENT, MaxTTL is maximum ttl value of the collection
 	// As of v7.0, this value is not propagated down-stream (i.e. to indexer)
 	MaxTTL uint32
@@ -1289,6 +1366,8 @@ type DcpStats struct {
 	ScopeDrop         stats.Uint64Val
 	CollectionChanged stats.Uint64Val
 	SeqnoAdvanced     stats.Uint64Val
+	OsoSnapshotStart  stats.Uint64Val
+	OsoSnapshotEnd    stats.Uint64Val
 
 	rcvch      chan []interface{}
 	Dcplatency stats.Average
@@ -1323,6 +1402,8 @@ func (dcpStats *DcpStats) Init() {
 	dcpStats.ScopeDrop.Init()
 	dcpStats.CollectionChanged.Init()
 	dcpStats.SeqnoAdvanced.Init()
+	dcpStats.OsoSnapshotStart.Init()
+	dcpStats.OsoSnapshotEnd.Init()
 }
 
 func (stats *DcpStats) IsClosed() bool {
@@ -1338,7 +1419,7 @@ func (stats *DcpStats) String() (string, string) {
 		return now.Sub(time.Unix(0, t))
 	}
 
-	var stitems [22]string
+	var stitems [24]string
 	stitems[0] = `"bytes":` + strconv.FormatUint(stats.TotalBytes.Value(), 10)
 	stitems[1] = `"bufferacks":` + strconv.FormatUint(stats.TotalBufferAckSent.Value(), 10)
 	stitems[2] = `"toAckBytes":` + strconv.FormatUint(stats.ToAckBytes.Value(), 10)
@@ -1353,16 +1434,18 @@ func (stats *DcpStats) String() (string, string) {
 	stitems[10] = `"scopeDrop":` + strconv.FormatUint(stats.ScopeDrop.Value(), 10)
 	stitems[11] = `"collectionChanged":` + strconv.FormatUint(stats.CollectionChanged.Value(), 10)
 	stitems[12] = `"seqnoAdvanced":` + strconv.FormatUint(stats.SeqnoAdvanced.Value(), 10)
+	stitems[13] = `"osoSnapshotStart":` + strconv.FormatUint(stats.OsoSnapshotStart.Value(), 10)
+	stitems[14] = `"osoSnapshotEnd":` + strconv.FormatUint(stats.OsoSnapshotEnd.Value(), 10)
 
-	stitems[13] = `"streamends":` + strconv.FormatUint(stats.TotalStreamEnd.Value(), 10)
-	stitems[14] = `"closestreams":` + strconv.FormatUint(stats.TotalCloseStream.Value(), 10)
-	stitems[15] = `"lastAckTime":` + getTimeDur(stats.LastAckTime.Value()).String()
-	stitems[16] = `"lastNoopSend":` + getTimeDur(stats.LastNoopSend.Value()).String()
-	stitems[17] = `"lastNoopRecv":` + getTimeDur(stats.LastNoopRecv.Value()).String()
-	stitems[18] = `"lastMsgSend":` + getTimeDur(stats.LastMsgSend.Value()).String()
-	stitems[19] = `"lastMsgRecv":` + getTimeDur(stats.LastMsgRecv.Value()).String()
-	stitems[20] = `"rcvchLen":` + strconv.FormatUint((uint64)(len(stats.rcvch)), 10)
-	stitems[21] = `"incomingMsg":` + strconv.FormatUint(stats.IncomingMsg.Value(), 10)
+	stitems[15] = `"streamends":` + strconv.FormatUint(stats.TotalStreamEnd.Value(), 10)
+	stitems[16] = `"closestreams":` + strconv.FormatUint(stats.TotalCloseStream.Value(), 10)
+	stitems[17] = `"lastAckTime":` + getTimeDur(stats.LastAckTime.Value()).String()
+	stitems[18] = `"lastNoopSend":` + getTimeDur(stats.LastNoopSend.Value()).String()
+	stitems[19] = `"lastNoopRecv":` + getTimeDur(stats.LastNoopRecv.Value()).String()
+	stitems[20] = `"lastMsgSend":` + getTimeDur(stats.LastMsgSend.Value()).String()
+	stitems[21] = `"lastMsgRecv":` + getTimeDur(stats.LastMsgRecv.Value()).String()
+	stitems[22] = `"rcvchLen":` + strconv.FormatUint((uint64)(len(stats.rcvch)), 10)
+	stitems[23] = `"incomingMsg":` + strconv.FormatUint(stats.IncomingMsg.Value(), 10)
 	statjson := strings.Join(stitems[:], ",")
 
 	statsStr := fmt.Sprintf("{%v}", statjson)

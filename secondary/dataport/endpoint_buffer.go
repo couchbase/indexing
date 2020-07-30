@@ -68,6 +68,10 @@ func (b *endpointBuffers) addKeyVersions(
 				endpoint.stats.updateSeqno.Add(1)
 			case c.SeqnoAdvanced:
 				endpoint.stats.seqnoAdvanced.Add(1)
+			case c.OSOSnapshotStart:
+				endpoint.stats.osoSnapshotStart.Add(1)
+			case c.OSOSnapshotEnd:
+				endpoint.stats.osoSnapshotEnd.Add(1)
 			}
 		}
 		endpoint.stats.mutCount.Add(1)

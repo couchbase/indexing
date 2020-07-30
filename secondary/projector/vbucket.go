@@ -244,6 +244,39 @@ func (v *Vbucket) makeSeqnoAdvancedEvent(m *mc.DcpEvent, engines map[uint32]map[
 	return nil
 }
 
+var osoFormat = "%v ##%x received OSOSnapshot %v %v %v\n"
+
+func (v *Vbucket) makeOSOSnapshotEvent(m *mc.DcpEvent, engines map[uint32]map[uint64]*Engine) (data interface{}) {
+	defer func() {
+		if r := recover(); r != nil {
+			fmsg := "%v ##%x OSOSnapshot crashed: %v\n"
+			logging.Fatalf(fmsg, v.logPrefix, v.opaque, r)
+			logging.Errorf("%s", logging.StackTrace())
+
+		} else if data == nil {
+			fmsg := "%v ##%x OSOSnapshot NOT PUBLISHED\n"
+			logging.Errorf(fmsg, v.logPrefix, m.Opaque)
+
+		} else {
+			logging.Debugf(osoFormat, v.logPrefix, m.Opaque, m.VBucket, m.VBuuid)
+		}
+	}()
+
+	if len(engines) == 0 {
+		return nil
+	}
+	// using the first engine that is capable of it.
+	for _, enginesPerColl := range engines {
+		for _, engine := range enginesPerColl {
+			data := engine.OSOSnapshotData(m, v.vbno, v.vbuuid, v.opaque2)
+			if data != nil {
+				return data
+			}
+		}
+	}
+	return nil
+}
+
 func (v *Vbucket) makeStreamEndData(
 	engines map[uint32]map[uint64]*Engine) (data interface{}) {
 

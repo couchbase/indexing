@@ -74,6 +74,7 @@ type Feed struct {
 
 	// Collections
 	collectionsAware bool
+	osoSnapshot      bool
 
 	// config params
 	reqTimeout time.Duration
@@ -869,6 +870,8 @@ func (feed *Feed) start(
 
 	feed.collectionsAware = req.GetCollectionAware()
 
+	feed.osoSnapshot = req.GetOsoSnapshot()
+
 	// update engines and endpoints
 	if _, err = feed.processSubscribers(opaque, req, keyspaceIdMap); err != nil { // :SideEffect:
 		return err
@@ -1604,7 +1607,9 @@ func (feed *Feed) openFeeder(
 		"latencyTick":      feed.config["dcp.latencyTick"].Int(),
 		"activeVbOnly":     feed.config["dcp.activeVbOnly"].Bool(),
 		"collectionsAware": feed.collectionsAware,
+		"osoSnapshot":      feed.osoSnapshot,
 	}
+
 	kvaddr, err := feed.getLocalKVAddrs(pooln, bucketn, opaque)
 	if err != nil {
 		return nil, err

@@ -48,8 +48,10 @@ const (
 	ScopeDrop         // control command
 	CollectionChanged // control command
 
-	UpdateSeqno   // control command
-	SeqnoAdvanced // control command
+	UpdateSeqno      // control command
+	SeqnoAdvanced    // control command
+	OSOSnapshotStart // control command
+	OSOSnapshotEnd   // control command
 
 	Filler // filler command for flusher(only used internally by indexer)
 )
@@ -356,6 +358,16 @@ func (kv *KeyVersions) AddUpdateSeqno() {
 // AddSeqnoAdvanced adds SeqnoAdvanced command
 func (kv *KeyVersions) AddSeqnoAdvanced() {
 	kv.addKey(0, SeqnoAdvanced, nil, nil, nil)
+}
+
+// AddOSOSnapshot adds OSOSnapshot command
+func (kv *KeyVersions) AddOSOSnapshot(eventType transport.CollectionEvent) {
+	switch eventType {
+	case transport.OSO_SNAPSHOT_START:
+		kv.addKey(0, OSOSnapshotStart, nil, nil, nil)
+	case transport.OSO_SNAPSHOT_END:
+		kv.addKey(0, OSOSnapshotEnd, nil, nil, nil)
+	}
 }
 
 func (kv *KeyVersions) String() string {

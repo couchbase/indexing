@@ -86,6 +86,7 @@ const (
 	DCP_CONTROL        = CommandCode(0x5e) // Set flow controlparams
 	DCP_SYSTEM_EVENT   = CommandCode(0x5f) // DCP system events for collection lifecycle messages
 	DCP_SEQNO_ADVANCED = CommandCode(0x64) // DCP event which indicates the change in seqno for a vbucket
+	DCP_OSO_SNAPSHOT   = CommandCode(0x65) // DCP event which indicates the start/stop of OSO snapshot
 
 	SELECT_BUCKET = CommandCode(0x89) // Select bucket
 
@@ -103,6 +104,9 @@ const (
 	SCOPE_CREATE       = CollectionEvent(0x03) // Scope has been created
 	SCOPE_DROP         = CollectionEvent(0x04) // Scope has been dropped
 	COLLECTION_CHANGED = CollectionEvent(0x05) // Collection has changed
+
+	OSO_SNAPSHOT_START = CollectionEvent(0x06) // OSO snapshot start
+	OSO_SNAPSHOT_END   = CollectionEvent(0x07) // OSO snapshot end
 )
 
 // Status field for memcached response.

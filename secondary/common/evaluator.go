@@ -35,6 +35,9 @@ type Evaluator interface {
 	// SeqnoAdvancedData is generated for downstream.
 	SeqnoAdvancedData(m *mc.DcpEvent, vbno uint16, vbuuid, seqno, opaque2 uint64) interface{}
 
+	// OSOSnapshotData is generated for downstream.
+	OSOSnapshotData(m *mc.DcpEvent, vbno uint16, vbuuid, opaque2 uint64) interface{}
+
 	// StreamEnd is generated for downstream.
 	StreamEndData(vbno uint16, vbuuid, seqno, opaque2 uint64) (data interface{})
 

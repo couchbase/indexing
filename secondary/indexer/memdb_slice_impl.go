@@ -1536,6 +1536,9 @@ func (mdb *memdbSlice) Compact(abortTime time.Time, minFrag int) error {
 	return nil
 }
 
+func (mdb *memdbSlice) PrepareStats() {
+}
+
 func (mdb *memdbSlice) Statistics() (StorageStatistics, error) {
 	var sts StorageStatistics
 
@@ -1641,6 +1644,10 @@ func (mdb *memdbSlice) logWriterStat() {
 			count, mdb.getCmdsCount())
 	}
 
+}
+
+func (mdb *memdbSlice) RecoveryDone() {
+	// nothing to do
 }
 
 func (info *memdbSnapshotInfo) Timestamp() *common.TsVbuuid {

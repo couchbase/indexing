@@ -2087,37 +2087,10 @@ func (tk *timekeeper) checkInitialBuildDone(streamId common.StreamId,
 
 				sessionId := tk.ss.getSessionId(streamId, keyspaceId)
 
-				//if MAINT_STREAM doesn't exist for the bucket, no catchup is required
-				bucket, _, _ := SplitKeyspaceId(keyspaceId)
-				status := tk.ss.streamKeyspaceIdStatus[common.MAINT_STREAM][bucket]
-				if status == STREAM_INACTIVE {
-
-					//cleanup all indexes for keyspaceId as build is done
-					for _, buildInfo := range tk.indexBuildInfo {
-						idx := buildInfo.indexInst
-						if idx.Defn.KeyspaceId(idx.Stream) == keyspaceId {
-							logging.Infof("Timekeeper::checkInitialBuildDone remove "+
-								"index %v from stream %v keyspaceId %v", idx.InstId,
-								streamId, keyspaceId)
-							delete(tk.indexBuildInfo, idx.InstId)
-						}
-					}
-
-					//stop further stream processing as indexes will move to MAINT_STREAM
-					logging.Infof("Timekeeper::checkInitialBuildDone Stream %v "+
-						"KeyspaceId %v State Changed to INACTIVE", streamId, keyspaceId)
-
-					//TODO Collections is it safe to stop mutation processing without clearing
-					//the mutation queue. This can potentially block the stream
-					//reader if the mutation queue gets full.
-					tk.stopTimer(streamId, keyspaceId)
-					tk.ss.cleanupKeyspaceIdFromStream(streamId, keyspaceId)
-
-				} else {
-					//change all indexes of this keyspaceId to Catchup state
-					tk.changeIndexStateForKeyspaceId(keyspaceId, common.INDEX_STATE_CATCHUP)
-					tk.setAddInstPending(streamId, keyspaceId, true)
-				}
+				//change all indexes of this keyspaceId to Catchup state.
+				tk.changeIndexStateForKeyspaceId(keyspaceId, common.INDEX_STATE_CATCHUP)
+				tk.setAddInstPending(streamId, keyspaceId, true)
+				tk.ss.streamKeyspaceIdFlushEnabledMap[streamId][keyspaceId] = false
 
 				logging.Infof("Timekeeper::checkInitialBuildDone Initial Build Done Index: %v "+
 					"Stream: %v KeyspaceId: %v Session: %v BuildTS: %v", idx.InstId, streamId,

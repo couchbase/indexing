@@ -75,6 +75,9 @@ type IndexWriter interface {
 	// Statistics used for compaction trigger
 	Statistics() (StorageStatistics, error)
 
+	// Prepare stats for efficient
+	PrepareStats()
+
 	// Perform file compaction
 	Compact(abortTime time.Time, minFrag int) error
 

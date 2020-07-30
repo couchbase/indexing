@@ -55,12 +55,13 @@ message MutationTopicRequest {
     required string   endpointType  = 2; // settings to RouterEndpointFactory
     repeated TsVbuuid reqTimestamps = 3; // list of timestamps, per bucket
     // initial list of instances applicable for this topic
-    repeated Instance    instances    = 4;
-    optional FeedVersion version      = 5 [default=sherlock];
-    optional bool        async        = 6;
-    optional uint64      opaque2      = 7;
-    repeated string      keyspaceIds  = 8;
+    repeated Instance    instances       = 4;
+    optional FeedVersion version         = 5 [default=sherlock];
+    optional bool        async           = 6;
+    optional uint64      opaque2         = 7;
+    repeated string      keyspaceIds     = 8;
     optional bool        collectionAware = 9;
+    optional bool        osoSnapshot     = 10;
 }
 
 // Response back for
