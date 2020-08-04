@@ -52,6 +52,7 @@ type mutationMgr struct {
 
 	streamFlusherStopChMap    map[common.StreamId]KeyspaceIdStopChMap //stop channels for flusher
 	streamKeyspaceIdSessionId map[common.StreamId]KeyspaceIdSessionId
+	streamKeyspaceIdEnableOSO map[common.StreamId]KeyspaceIdEnableOSO
 
 	mutMgrRecvCh   MsgChannel //Receive msg channel for Mutation Manager
 	internalRecvCh MsgChannel //Buffered channel to queue worker messages
@@ -102,6 +103,7 @@ func NewMutationManager(supvCmdch MsgChannel, supvRespch MsgChannel,
 		streamReaderExitChMap:     make(map[common.StreamId]DoneChannel),
 		streamFlusherStopChMap:    make(map[common.StreamId]KeyspaceIdStopChMap),
 		streamKeyspaceIdSessionId: make(map[common.StreamId]KeyspaceIdSessionId),
+		streamKeyspaceIdEnableOSO: make(map[common.StreamId]KeyspaceIdEnableOSO),
 
 		mutMgrRecvCh:   make(MsgChannel),
 		internalRecvCh: make(MsgChannel, WORKER_MSG_QUEUE_LEN),
@@ -422,6 +424,7 @@ func (m *mutationMgr) handleOpenStream(cmd Message) {
 	restartTs := cmd.(*MsgStreamUpdate).GetRestartTs()
 	allowMarkFirsSnap := cmd.(*MsgStreamUpdate).AllowMarkFirstSnap()
 	sessionId := cmd.(*MsgStreamUpdate).GetSessionId()
+	enableOSO := cmd.(*MsgStreamUpdate).EnableOSO()
 
 	keyspaceIdFilter := make(map[string]*common.TsVbuuid)
 	keyspaceIdFilter[keyspaceId] = restartTs
@@ -432,7 +435,8 @@ func (m *mutationMgr) handleOpenStream(cmd Message) {
 	//if this stream is already open, add to existing stream
 	if _, ok := m.streamReaderMap[streamId]; ok {
 
-		respMsg := m.addIndexListToExistingStream(streamId, keyspaceId, indexList, keyspaceIdFilter, sessionId)
+		respMsg := m.addIndexListToExistingStream(streamId,
+			keyspaceId, indexList, keyspaceIdFilter, sessionId, enableOSO)
 		m.supvCmdch <- respMsg
 		return
 	}
@@ -440,6 +444,7 @@ func (m *mutationMgr) handleOpenStream(cmd Message) {
 	keyspaceIdQueueMap := make(KeyspaceIdQueueMap)
 	indexQueueMap := make(IndexQueueMap)
 	keyspaceIdSessionId := make(KeyspaceIdSessionId)
+	keyspaceIdEnableOSO := make(KeyspaceIdEnableOSO)
 
 	//create a new mutation queue for the stream reader
 	//for each keyspace, a separate queue is required
@@ -460,6 +465,7 @@ func (m *mutationMgr) handleOpenStream(cmd Message) {
 			keyspaceIdQueueMap[keyspaceId] = IndexerMutationQueue{
 				queue: queue}
 			keyspaceIdSessionId[keyspaceId] = sessionId
+			keyspaceIdEnableOSO[keyspaceId] = enableOSO
 		}
 		indexQueueMap[i.InstId] = keyspaceIdQueueMap[keyspaceId]
 	}
@@ -467,7 +473,7 @@ func (m *mutationMgr) handleOpenStream(cmd Message) {
 
 	reader, errMsg := CreateMutationStreamReader(streamId, keyspaceIdQueueMap, keyspaceIdFilter,
 		cmdCh, m.mutMgrRecvCh, getNumStreamWorkers(m.config), m.stats.Get(),
-		m.config, m.indexerState, allowMarkFirsSnap, m.vbMap, keyspaceIdSessionId)
+		m.config, m.indexerState, allowMarkFirsSnap, m.vbMap, keyspaceIdSessionId, keyspaceIdEnableOSO)
 
 	if reader == nil {
 		//send the error back on supv channel
@@ -480,6 +486,7 @@ func (m *mutationMgr) handleOpenStream(cmd Message) {
 		m.streamReaderCmdChMap[streamId] = cmdCh
 		m.streamReaderExitChMap[streamId] = make(DoneChannel)
 		m.streamKeyspaceIdSessionId[streamId] = keyspaceIdSessionId
+		m.streamKeyspaceIdEnableOSO[streamId] = keyspaceIdEnableOSO
 
 		func() {
 			m.flock.Lock()
@@ -505,6 +512,7 @@ func (m *mutationMgr) handleAddIndexListToStream(cmd Message) {
 	indexList := cmd.(*MsgStreamUpdate).GetIndexList()
 	sessionId := cmd.(*MsgStreamUpdate).GetSessionId()
 	keyspaceId := cmd.(*MsgStreamUpdate).GetKeyspaceId()
+	enableOSO := cmd.(*MsgStreamUpdate).EnableOSO()
 
 	m.lock.Lock()
 	defer m.lock.Unlock()
@@ -522,7 +530,8 @@ func (m *mutationMgr) handleAddIndexListToStream(cmd Message) {
 		return
 	}
 
-	respMsg := m.addIndexListToExistingStream(streamId, keyspaceId, indexList, nil, sessionId)
+	respMsg := m.addIndexListToExistingStream(streamId,
+		keyspaceId, indexList, nil, sessionId, enableOSO)
 	//send the message back on supv channel
 	m.supvCmdch <- respMsg
 
@@ -530,11 +539,12 @@ func (m *mutationMgr) handleAddIndexListToStream(cmd Message) {
 
 func (m *mutationMgr) addIndexListToExistingStream(streamId common.StreamId,
 	keyspaceId string, indexList []common.IndexInst, keyspaceIdFilter map[string]*common.TsVbuuid,
-	sessionId uint64) Message {
+	sessionId uint64, enableOSO bool) Message {
 
 	keyspaceIdQueueMap := m.streamKeyspaceIdQueueMap[streamId]
 	indexQueueMap := m.streamIndexQueueMap[streamId]
 	keyspaceIdSessionId := m.streamKeyspaceIdSessionId[streamId]
+	keyspaceIdEnableOSO := m.streamKeyspaceIdEnableOSO[streamId]
 
 	var keyspaceIdMapDirty bool
 	for _, i := range indexList {
@@ -553,6 +563,7 @@ func (m *mutationMgr) addIndexListToExistingStream(streamId common.StreamId,
 			keyspaceIdQueueMap[keyspaceId] = IndexerMutationQueue{
 				queue: queue}
 			keyspaceIdSessionId[keyspaceId] = sessionId
+			keyspaceIdEnableOSO[keyspaceId] = enableOSO
 			keyspaceIdMapDirty = true
 		}
 		indexQueueMap[i.InstId] = keyspaceIdQueueMap[keyspaceId]
@@ -560,13 +571,18 @@ func (m *mutationMgr) addIndexListToExistingStream(streamId common.StreamId,
 
 	if keyspaceIdMapDirty {
 		respMsg := m.sendMsgToStreamReader(streamId,
-			m.newUpdateKeyspaceIdQueuesMsg(keyspaceIdQueueMap, keyspaceIdFilter, keyspaceIdSessionId))
+			m.newUpdateKeyspaceIdQueuesMsg(
+				keyspaceIdQueueMap,
+				keyspaceIdFilter,
+				keyspaceIdSessionId,
+				keyspaceIdEnableOSO))
 
 		if respMsg.GetMsgType() == MSG_SUCCESS {
 			//update internal structures
 			m.streamKeyspaceIdQueueMap[streamId] = keyspaceIdQueueMap
 			m.streamIndexQueueMap[streamId] = indexQueueMap
 			m.streamKeyspaceIdSessionId[streamId] = keyspaceIdSessionId
+			m.streamKeyspaceIdEnableOSO[streamId] = keyspaceIdEnableOSO
 		}
 		return respMsg
 	}
@@ -575,11 +591,15 @@ func (m *mutationMgr) addIndexListToExistingStream(streamId common.StreamId,
 }
 
 func (m *mutationMgr) newUpdateKeyspaceIdQueuesMsg(keyspaceIdQueueMap KeyspaceIdQueueMap,
-	keyspaceIdFilter map[string]*common.TsVbuuid, keyspaceIdSessionId KeyspaceIdSessionId) *MsgUpdateKeyspaceIdQueue {
+	keyspaceIdFilter map[string]*common.TsVbuuid,
+	keyspaceIdSessionId KeyspaceIdSessionId,
+	keyspaceIdEnableOSO KeyspaceIdEnableOSO) *MsgUpdateKeyspaceIdQueue {
+
 	return &MsgUpdateKeyspaceIdQueue{keyspaceIdQueueMap: keyspaceIdQueueMap,
 		keyspaceIdFilter:    keyspaceIdFilter,
 		stats:               m.stats.Get(),
-		keyspaceIdSessionId: keyspaceIdSessionId}
+		keyspaceIdSessionId: keyspaceIdSessionId,
+		keyspaceIdEnableOSO: keyspaceIdEnableOSO}
 }
 
 //handleRemoveIndexListFromStream removes a list of indexes from an
@@ -610,6 +630,7 @@ func (m *mutationMgr) handleRemoveIndexListFromStream(cmd Message) {
 	keyspaceIdQueueMap := m.streamKeyspaceIdQueueMap[streamId]
 	indexQueueMap := m.streamIndexQueueMap[streamId]
 	keyspaceIdSessionId := m.streamKeyspaceIdSessionId[streamId]
+	keyspaceIdEnableOSO := m.streamKeyspaceIdEnableOSO[streamId]
 
 	//delete the given indexes from map
 	for _, i := range indexList {
@@ -635,18 +656,25 @@ func (m *mutationMgr) handleRemoveIndexListFromStream(cmd Message) {
 			mq.Destroy()
 			delete(keyspaceIdQueueMap, b)
 			delete(keyspaceIdSessionId, b)
+			delete(keyspaceIdEnableOSO, b)
 			keyspaceIdMapDirty = true
 		}
 	}
 
 	if keyspaceIdMapDirty {
 		respMsg := m.sendMsgToStreamReader(streamId,
-			m.newUpdateKeyspaceIdQueuesMsg(keyspaceIdQueueMap, nil, keyspaceIdSessionId))
+			m.newUpdateKeyspaceIdQueuesMsg(
+				keyspaceIdQueueMap,
+				nil,
+				keyspaceIdSessionId,
+				keyspaceIdEnableOSO))
+
 		if respMsg.GetMsgType() == MSG_SUCCESS {
 			//update internal structures
 			m.streamKeyspaceIdQueueMap[streamId] = keyspaceIdQueueMap
 			m.streamIndexQueueMap[streamId] = indexQueueMap
 			m.streamKeyspaceIdSessionId[streamId] = keyspaceIdSessionId
+			m.streamKeyspaceIdEnableOSO[streamId] = keyspaceIdEnableOSO
 		}
 
 		//send the message back on supv channel
@@ -690,6 +718,7 @@ func (m *mutationMgr) handleRemoveKeyspaceFromStream(cmd Message) {
 	keyspaceIdQueueMap := m.streamKeyspaceIdQueueMap[streamId]
 	indexQueueMap := m.streamIndexQueueMap[streamId]
 	keyspaceIdSessionId := m.streamKeyspaceIdSessionId[streamId]
+	keyspaceIdEnableOSO := m.streamKeyspaceIdEnableOSO[streamId]
 
 	var keyspaceIdMapDirty bool
 
@@ -709,6 +738,7 @@ func (m *mutationMgr) handleRemoveKeyspaceFromStream(cmd Message) {
 		mq.Destroy()
 		delete(keyspaceIdQueueMap, keyspaceId)
 		delete(keyspaceIdSessionId, keyspaceId)
+		delete(keyspaceIdEnableOSO, keyspaceId)
 	}
 
 	if len(keyspaceIdQueueMap) == 0 {
@@ -720,12 +750,17 @@ func (m *mutationMgr) handleRemoveKeyspaceFromStream(cmd Message) {
 		m.supvCmdch <- &MsgSuccess{}
 	} else if keyspaceIdMapDirty {
 		respMsg := m.sendMsgToStreamReader(streamId,
-			m.newUpdateKeyspaceIdQueuesMsg(keyspaceIdQueueMap, nil, keyspaceIdSessionId))
+			m.newUpdateKeyspaceIdQueuesMsg(
+				keyspaceIdQueueMap,
+				nil,
+				keyspaceIdSessionId,
+				keyspaceIdEnableOSO))
 		if respMsg.GetMsgType() == MSG_SUCCESS {
 			//update internal structures
 			m.streamKeyspaceIdQueueMap[streamId] = keyspaceIdQueueMap
 			m.streamIndexQueueMap[streamId] = indexQueueMap
 			m.streamKeyspaceIdSessionId[streamId] = keyspaceIdSessionId
+			m.streamKeyspaceIdEnableOSO[streamId] = keyspaceIdEnableOSO
 		}
 
 		//send the message back on supv channel
@@ -914,6 +949,8 @@ func (m *mutationMgr) cleanupStream(streamId common.StreamId) {
 	delete(m.streamIndexQueueMap, streamId)
 	delete(m.streamReaderCmdChMap, streamId)
 	delete(m.streamReaderExitChMap, streamId)
+	delete(m.streamKeyspaceIdSessionId, streamId)
+	delete(m.streamKeyspaceIdEnableOSO, streamId)
 
 	// Send a message to clean-up latency map
 	m.internalRecvCh <- &MsgStream{mType: CLEANUP_PRJ_STATS, streamId: streamId}
