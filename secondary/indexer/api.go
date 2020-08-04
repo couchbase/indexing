@@ -132,20 +132,57 @@ func (api *restServer) statsHandler(req request) {
 		case "v1":
 			if len(segs) == 3 { // Indexer node level stats
 				t.level = "indexer"
-			} else if len(segs) == 4 { // Bucket level stats
-				errStr := fmt.Sprintf("Bucket-Level statistics are unavailable"+
-					"\nPlease retry at Indexer Node or Index granularity \n%s", req.r.URL.Path)
-				http.Error(req.w, errStr, 404)
-				return
-			} else if len(segs) == 5 { // Index level stats
-				t.level = "index"
-				t.bucket = segs[3]
-				t.index = segs[4]
-				t.scope = c.DEFAULT_SCOPE
-				t.collection = c.DEFAULT_COLLECTION
 			} else {
-				http.Error(req.w, req.r.URL.Path, 404)
-				return
+				// bucket or scope or collection or index level stats
+				if len(segs) == 4 || len(segs) == 5 {
+					bucket := "[a-zA-Z0-9_\\-.%]+" // A bucket can containing "." should be enclosed in back-tick(`) characters
+					bucketScopeColl := "[a-zA-Z0-9_\\-%]+"
+					keyspaceName := fmt.Sprintf("^(\\`(%s)\\`|(%s))($|\\.(%s)$|\\.(%s)\\.(%s)$)", bucket,
+						bucketScopeColl, bucketScopeColl, bucketScopeColl, bucketScopeColl)
+					exp := re.MustCompile(keyspaceName)
+					substrings := exp.FindStringSubmatch(segs[3]) // On a successful match, substrings list will have 8 strings
+
+					if len(substrings) == 0 || len(substrings) != 8 {
+						http.Error(req.w, genErrStr(segs[3]), 404)
+						return
+					} else {
+						// Extract bucket name
+						if substrings[2] != "" {
+							t.bucket = substrings[2]
+						} else {
+							t.bucket = substrings[3]
+						}
+						if substrings[7] == "" { // collection name is empty
+							t.scope = substrings[5]
+						} else {
+							t.scope = substrings[6]
+							t.collection = substrings[7]
+						}
+					}
+					if len(segs) == 5 {
+						if t.scope == "" && t.collection == "" { // Return from default scope and default collection
+							t.scope = c.DEFAULT_SCOPE
+							t.collection = c.DEFAULT_COLLECTION
+						} else if t.scope == "" || t.collection == "" {
+							// It is invalid to specify only scope or only collection name for index level stats
+							http.Error(req.w, genErrStr(segs[3]), 404)
+							return
+						}
+						t.level = "index"
+						t.index = segs[4]
+					} else {
+						if t.scope == "" {
+							t.level = "bucket"
+						} else if t.collection == "" {
+							t.level = "scope"
+						} else {
+							t.level = "collection"
+						}
+					}
+				} else {
+					http.Error(req.w, req.r.URL.Path, 404)
+					return
+				}
 			}
 			if !api.authorizeStats(req, t) {
 				return
@@ -180,8 +217,16 @@ func (api *restServer) authorizeStats(req request, t *target) bool {
 		permission := fmt.Sprintf("cluster.bucket[%s].n1ql.index!list", t.bucket)
 		permissions = append(permissions, permission)
 		break
+	case "scope":
+		permission := fmt.Sprintf("cluster.scope[%s:%s].n1ql.index!list", t.bucket, t.scope)
+		permissions = append(permissions, permission)
+		break
+	case "collection":
+		permission := fmt.Sprintf("cluster.collection[%s:%s:%s].n1ql.index!list", t.bucket, t.scope, t.collection)
+		permissions = append(permissions, permission)
+		break
 	case "index":
-		permission := fmt.Sprintf("cluster.bucket[%s].n1ql.index!list", t.bucket)
+		permission := fmt.Sprintf("cluster.collection[%s:%s:%s].n1ql.index!list", t.bucket, t.scope, t.collection)
 		permissions = append(permissions, permission)
 		break
 	default:
@@ -206,4 +251,23 @@ func (api *restServer) validateAuth(w http.ResponseWriter, r *http.Request) (cba
 		w.Write([]byte("401 Unauthorized\n"))
 	}
 	return creds, valid
+}
+
+func genErrStr(keyspaceName string) string {
+	errStr := fmt.Sprintf("The keyspace name: %s does not qualify for a valid keyspace name.\n"+
+		"Rules for specifying keyspace name: \n"+
+		"a. The bucket/scope/collection names should be valid as per the naming semantics\n"+
+		"b. When bucket name contains '.' character, it has to be enclosed in back-tick(`) characters in the URL\n"+
+		"   E.g., api/v1/stats/`test.1`.test_scope/\n"+
+		"c. The keyspace name should be either <bucket_name> (or) <bucket_name>.<scope_name> (or) <bucket_name>.<scope_name>.<collection_name>\n"+
+		"   E.g., api/v1/stats/test_bucket\n"+
+		"    	  api/v1/stats/test_bucket.test_scope\n"+
+		"		  api/v1/stats/test_bucket.test_scope.test_coll are valid\n"+
+		"d. When retrieving index level stats, both scope name and collection name are to be specified (except for default scope and default collection)\n"+
+		"Specifying only one is not valid\n"+
+		"   E.g., api/v1/stats/test_bucket.test_scope/idx_1 is invalid\n"+
+		"         api/vi/stats/test_bucket/idx_1 will return index stats from default scope and default collection\n"+
+		"         api/vi/stats/test_bucket.test_scope.test_collection/idx_1 will return index stats from  test_scope and test_collection",
+		keyspaceName)
+	return errStr
 }

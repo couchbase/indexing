@@ -941,6 +941,21 @@ func (is IndexerStats) GetVersionedStats(t *target) (common.Statistics, bool) {
 	statsMap := make(map[string]interface{})
 	var found bool
 
+	addToStatsMap := func(s *IndexStats) {
+		prefix := common.GetStatsPrefix(s.bucket, s.scope, s.collection,
+			s.name, s.replicaId, 0, false)
+		key := prefix[:len(prefix)-1]
+
+		statsMap[key] = s.constructIndexStats(t.skipEmpty, t.version)
+		if t.partition {
+			for partnId, ps := range s.partitions {
+				key = fmt.Sprintf("Partition-%d", int(partnId))
+				statsMap[key] = ps.constructIndexStats(t.skipEmpty, t.version)
+			}
+		}
+		found = true
+	}
+
 	if t.level == "indexer" {
 		statsMap["indexer"] = is.constructIndexerStats(t.skipEmpty, t.version)
 		for _, s := range is.indexes {
@@ -949,25 +964,34 @@ func (is IndexerStats) GetVersionedStats(t *target) (common.Statistics, bool) {
 			statsMap[key] = s.constructIndexStats(t.skipEmpty, t.version)
 		}
 		found = true
+	} else if t.level == "bucket" {
+		for _, s := range is.indexes {
+			if s.bucket == t.bucket {
+				addToStatsMap(s)
+			}
+		}
+	} else if t.level == "scope" {
+		for _, s := range is.indexes {
+			if s.bucket == t.bucket &&
+				s.scope == t.scope {
+				addToStatsMap(s)
+			}
+		}
+	} else if t.level == "collection" {
+		for _, s := range is.indexes {
+			if s.bucket == t.bucket &&
+				s.scope == t.scope &&
+				s.collection == t.collection {
+				addToStatsMap(s)
+			}
+		}
 	} else if t.level == "index" {
 		for _, s := range is.indexes {
 			if s.name == t.index &&
 				s.bucket == t.bucket &&
 				s.scope == t.scope &&
 				s.collection == t.collection {
-
-				prefix := common.GetStatsPrefix(s.bucket, s.scope, s.collection,
-					s.name, s.replicaId, 0, false)
-				key := prefix[:len(prefix)-1]
-
-				statsMap[key] = s.constructIndexStats(t.skipEmpty, t.version)
-				if t.partition {
-					for partnId, ps := range s.partitions {
-						key = fmt.Sprintf("Partition-%d", int(partnId))
-						statsMap[key] = ps.constructIndexStats(t.skipEmpty, t.version)
-					}
-				}
-				found = true
+				addToStatsMap(s)
 				break
 			}
 		}
