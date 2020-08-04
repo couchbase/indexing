@@ -105,6 +105,7 @@ type KeyspaceIdTimerStopCh map[string]StopChannel
 type KeyspaceIdLastPersistTime map[string]time.Time
 type KeyspaceIdSkippedInMemTs map[string]uint64
 type KeyspaceIdSessionId map[string]uint64
+type KeyspaceIdEnableOSO map[string]bool
 type KeyspaceIdCollectionId map[string]string
 type KeyspaceIdPastMinMergeTs map[string]bool
 

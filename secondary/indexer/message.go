@@ -434,6 +434,7 @@ type MsgUpdateKeyspaceIdQueue struct {
 	stats               *IndexerStats
 	keyspaceIdFilter    map[string]*common.TsVbuuid
 	keyspaceIdSessionId KeyspaceIdSessionId
+	keyspaceIdEnableOSO KeyspaceIdEnableOSO
 }
 
 func (m *MsgUpdateKeyspaceIdQueue) GetMsgType() MsgType {
@@ -454,6 +455,10 @@ func (m *MsgUpdateKeyspaceIdQueue) GetKeyspaceIdFilter() map[string]*common.TsVb
 
 func (m *MsgUpdateKeyspaceIdQueue) GetKeyspaceIdSessionId() KeyspaceIdSessionId {
 	return m.keyspaceIdSessionId
+}
+
+func (m *MsgUpdateKeyspaceIdQueue) GetKeyspaceIdEnableOSO() KeyspaceIdEnableOSO {
+	return m.keyspaceIdEnableOSO
 }
 
 func (m *MsgUpdateKeyspaceIdQueue) String() string {
@@ -490,6 +495,7 @@ type MsgStreamUpdate struct {
 	keyspaceInRecovery bool
 	abortRecovery      bool
 	collectionAware    bool
+	enableOSO          bool
 }
 
 func (m *MsgStreamUpdate) GetMsgType() MsgType {
@@ -556,6 +562,10 @@ func (m *MsgStreamUpdate) CollectionAware() bool {
 	return m.collectionAware
 }
 
+func (m *MsgStreamUpdate) EnableOSO() bool {
+	return m.enableOSO
+}
+
 func (m *MsgStreamUpdate) String() string {
 
 	str := "\n\tMessage: MsgStreamUpdate"
@@ -568,6 +578,7 @@ func (m *MsgStreamUpdate) String() string {
 	str += fmt.Sprintf("\n\tSessionId: %v", m.sessionId)
 	str += fmt.Sprintf("\n\tCollectionId: %v", m.collectionId)
 	str += fmt.Sprintf("\n\tCollectionAware: %v", m.collectionAware)
+	str += fmt.Sprintf("\n\tEnableOSO: %v", m.enableOSO)
 	str += fmt.Sprintf("\n\tRestartTs: %v", m.restartTs)
 	return str
 
