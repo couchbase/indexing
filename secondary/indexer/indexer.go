@@ -7610,6 +7610,8 @@ func NewSlice(id SliceId, indInst *common.IndexInst, partnInst *PartitionInst,
 	numPartitions := indInst.Pc.GetNumPartitions()
 	instId := GetRealIndexInstId(indInst)
 
+	log_dir := conf["log_dir"].String()
+
 	switch indInst.Defn.Using {
 	case common.MemDB, common.MemoryOptimized:
 		slice, err = NewMemDBSlice(path, id, indInst.Defn, instId, partitionId, indInst.Defn.IsPrimary, !ephemeral, numPartitions, conf,
@@ -7618,7 +7620,7 @@ func NewSlice(id SliceId, indInst *common.IndexInst, partnInst *PartitionInst,
 		slice, err = NewForestDBSlice(path, id, indInst.Defn, instId, partitionId, indInst.Defn.IsPrimary, numPartitions, conf,
 			stats.GetPartitionStats(indInst.InstId, partitionId))
 	case common.PlasmaDB:
-		slice, err = NewPlasmaSlice(storage_dir, path, id, indInst.Defn, instId, partitionId, indInst.Defn.IsPrimary, numPartitions, conf,
+		slice, err = NewPlasmaSlice(storage_dir, log_dir, path, id, indInst.Defn, instId, partitionId, indInst.Defn.IsPrimary, numPartitions, conf,
 			stats.GetPartitionStats(indInst.InstId, partitionId), stats)
 	}
 

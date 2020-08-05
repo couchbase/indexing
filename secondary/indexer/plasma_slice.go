@@ -48,6 +48,7 @@ type plasmaSlice struct {
 
 	path       string
 	storageDir string
+	logDir     string
 	id         SliceId
 
 	refCount int
@@ -159,7 +160,7 @@ type plasmaSlice struct {
 	numKeysSkipped int32
 }
 
-func newPlasmaSlice(storage_dir string, path string, sliceId SliceId, idxDefn common.IndexDefn,
+func newPlasmaSlice(storage_dir string, log_dir string, path string, sliceId SliceId, idxDefn common.IndexDefn,
 	idxInstId common.IndexInstId, partitionId common.PartitionId,
 	isPrimary bool, numPartitions int,
 	sysconf common.Config, idxStats *IndexStats, indexerStats *IndexerStats) (*plasmaSlice, error) {
@@ -183,6 +184,7 @@ func newPlasmaSlice(storage_dir string, path string, sliceId SliceId, idxDefn co
 	slice.sysconf = sysconf
 	slice.path = path
 	slice.storageDir = storage_dir
+	slice.logDir = log_dir
 	slice.idxInstId = idxInstId
 	slice.idxDefnId = idxDefn.DefnId
 	slice.idxPartnId = partitionId
@@ -285,6 +287,7 @@ func (slice *plasmaSlice) initStores() error {
 	cfg.MaxDiskPerShard = slice.sysconf["plasma.maxDiskUsagePerShard"].Uint64()
 	cfg.MinNumShard = slice.sysconf["plasma.minNumShard"].Uint64()
 	cfg.StorageDir = slice.storageDir
+	cfg.LogDir = slice.logDir
 
 	if slice.numPartitions != 1 {
 		cfg.LSSCleanerConcurrency = 1
