@@ -69,7 +69,8 @@ type mutationStreamReader struct {
 func CreateMutationStreamReader(streamId common.StreamId, keyspaceIdQueueMap KeyspaceIdQueueMap,
 	keyspaceIdFilter map[string]*common.TsVbuuid, supvCmdch MsgChannel, supvRespch MsgChannel,
 	numWorkers int, stats *IndexerStats, config common.Config, is common.IndexerState,
-	allowMarkFirstSnap bool, vbMap *VbMapHolder, keyspaceIdSessionId KeyspaceIdSessionId) (
+	allowMarkFirstSnap bool, vbMap *VbMapHolder, keyspaceIdSessionId KeyspaceIdSessionId,
+	keyspaceIdEnableOSO KeyspaceIdEnableOSO) (
 	MutationStreamReader, Message) {
 
 	//start a new mutation stream
@@ -117,7 +118,7 @@ func CreateMutationStreamReader(streamId common.StreamId, keyspaceIdQueueMap Key
 
 	for i := 0; i < numWorkers; i++ {
 		r.streamWorkers[i] = newStreamWorker(streamId, numWorkers, i, config, r,
-			keyspaceIdFilter, allowMarkFirstSnap, vbMap, keyspaceIdSessionId)
+			keyspaceIdFilter, allowMarkFirstSnap, vbMap, keyspaceIdSessionId, keyspaceIdEnableOSO)
 		go r.streamWorkers[i].start()
 	}
 
@@ -296,8 +297,10 @@ func (r *mutationStreamReader) handleSupervisorCommands(cmd Message) Message {
 
 		keyspaceIdFilter := req.GetKeyspaceIdFilter()
 		keyspaceIdSessionId := req.GetKeyspaceIdSessionId()
+		keyspaceIdEnableOSO := req.GetKeyspaceIdEnableOSO()
 		for i := 0; i < r.numWorkers; i++ {
-			r.streamWorkers[i].initKeyspaceIdFilter(keyspaceIdFilter, keyspaceIdSessionId)
+			r.streamWorkers[i].initKeyspaceIdFilter(keyspaceIdFilter,
+				keyspaceIdSessionId, keyspaceIdEnableOSO)
 		}
 
 		r.stopch = make(StopChannel)
@@ -517,7 +520,10 @@ type streamWorker struct {
 	workerch            chan *protobuf.VbKeyVersions //buffered channel for each worker
 	workerStopCh        StopChannel                  //stop channels of workers
 	keyspaceIdFilter    map[string]*common.TsVbuuid
+	keyspaceIdOSOFilter map[string]*common.TsVbuuid
+
 	keyspaceIdSessionId KeyspaceIdSessionId
+	keyspaceIdEnableOSO KeyspaceIdEnableOSO
 
 	keyspaceIdPrevSnapMap map[string]*common.TsVbuuid
 	keyspaceIdSyncDue     map[string]bool
@@ -546,19 +552,21 @@ type streamWorker struct {
 
 func newStreamWorker(streamId common.StreamId, numWorkers int, workerId int, config common.Config,
 	reader *mutationStreamReader, keyspaceIdFilter map[string]*common.TsVbuuid, allowMarkFirstSnap bool,
-	vbMap *VbMapHolder, keyspaceIdSessionId KeyspaceIdSessionId) *streamWorker {
+	vbMap *VbMapHolder, keyspaceIdSessionId KeyspaceIdSessionId, keyspaceIdEnableOSO KeyspaceIdEnableOSO) *streamWorker {
 
 	w := &streamWorker{streamId: streamId,
 		workerId:              workerId,
 		workerch:              make(chan *protobuf.VbKeyVersions, getWorkerBufferSize(config)/uint64(numWorkers)),
 		workerStopCh:          make(StopChannel),
 		keyspaceIdFilter:      make(map[string]*common.TsVbuuid),
+		keyspaceIdOSOFilter:   make(map[string]*common.TsVbuuid),
 		keyspaceIdPrevSnapMap: make(map[string]*common.TsVbuuid),
 		keyspaceIdSyncDue:     make(map[string]bool),
 		reader:                reader,
 		keyspaceIdFirstSnap:   make(map[string]firstSnapFlag),
 		vbMap:                 vbMap,
 		keyspaceIdSessionId:   make(KeyspaceIdSessionId),
+		keyspaceIdEnableOSO:   make(KeyspaceIdEnableOSO),
 	}
 
 	w.meta = &MutationMeta{}
@@ -567,7 +575,7 @@ func newStreamWorker(streamId common.StreamId, numWorkers int, workerId int, con
 		w.markFirstSnap = getMarkFirstSnap(config)
 	}
 
-	w.initKeyspaceIdFilter(keyspaceIdFilter, keyspaceIdSessionId)
+	w.initKeyspaceIdFilter(keyspaceIdFilter, keyspaceIdSessionId, keyspaceIdEnableOSO)
 	return w
 
 }
@@ -598,6 +606,7 @@ func (w *streamWorker) handleKeyVersions(keyspaceId string, vbucket Vbucket, vbu
 
 	for _, kv := range kvs {
 		w.handleSingleKeyVersion(keyspaceId, vbucket, vbuuid, opaque, kv, projVer)
+
 		if kv.GetPrjMovingAvg() > 0 {
 			avg := w.getLatencyObj(keyspaceId, vbucket)
 			if avg != nil {
@@ -794,6 +803,7 @@ func (w *streamWorker) handleSingleKeyVersion(keyspaceId string, vbucket Vbucket
 			if !skipMutation {
 				mutk = allocateFillerMutation(meta, kv.GetDocid())
 			}
+
 		}
 	}
 
@@ -834,7 +844,7 @@ func (w *streamWorker) handleSingleMutation(mut *MutationKeys, stopch StopChanne
 
 //initKeyspaceIdFilter initializes the keyspaceId filter
 func (w *streamWorker) initKeyspaceIdFilter(keyspaceIdFilter map[string]*common.TsVbuuid,
-	keyspaceIdSessionId KeyspaceIdSessionId) {
+	keyspaceIdSessionId KeyspaceIdSessionId, keyspaceIdEnableOSO KeyspaceIdEnableOSO) {
 
 	w.lock.Lock()
 	defer w.lock.Unlock()
@@ -860,11 +870,15 @@ func (w *streamWorker) initKeyspaceIdFilter(keyspaceIdFilter map[string]*common.
 				//actual TS uses bucket as keyspaceId
 				w.keyspaceIdFilter[b] = common.NewTsVbuuid(GetBucketFromKeyspaceId(b), int(q.queue.GetNumVbuckets()))
 				w.keyspaceIdPrevSnapMap[b] = common.NewTsVbuuid(GetBucketFromKeyspaceId(b), int(q.queue.GetNumVbuckets()))
+				if keyspaceIdEnableOSO[b] {
+					w.keyspaceIdOSOFilter[b] = common.NewTsVbuuid(GetBucketFromKeyspaceId(b), int(q.queue.GetNumVbuckets()))
+				}
 			}
 
 			w.keyspaceIdSyncDue[b] = false
 			w.keyspaceIdFirstSnap[b] = make(firstSnapFlag, int(q.queue.GetNumVbuckets()))
 			w.keyspaceIdSessionId[b] = keyspaceIdSessionId[b]
+			w.keyspaceIdEnableOSO[b] = keyspaceIdEnableOSO[b]
 
 			//reset stat for bucket
 			stats := w.reader.stats.Get()
@@ -884,6 +898,7 @@ func (w *streamWorker) initKeyspaceIdFilter(keyspaceIdFilter map[string]*common.
 			delete(w.keyspaceIdSyncDue, b)
 			delete(w.keyspaceIdFirstSnap, b)
 			delete(w.keyspaceIdSessionId, b)
+			delete(w.keyspaceIdOSOFilter, b)
 		}
 	}
 
