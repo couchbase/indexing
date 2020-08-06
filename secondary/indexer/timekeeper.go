@@ -994,12 +994,12 @@ func (tk *timekeeper) handleGetKeyspaceHWT(cmd Message) {
 
 	//set the return ts to nil
 	msg := cmd.(*MsgKeyspaceHWT)
-	msg.ts = nil
+	msg.hwt = nil
 
 	if keyspaceIdHWTMap, ok := tk.ss.streamKeyspaceIdHWTMap[streamId]; ok {
 		if ts, ok := keyspaceIdHWTMap[keyspaceId]; ok {
 			newTs := ts.Copy()
-			msg.ts = newTs
+			msg.hwt = newTs
 		}
 	}
 	tk.supvCmdch <- msg

@@ -1256,7 +1256,8 @@ type MsgKeyspaceHWT struct {
 	mType      MsgType
 	streamId   common.StreamId
 	keyspaceId string
-	ts         *common.TsVbuuid
+	hwt        *common.TsVbuuid
+	hwtOSO     *common.TsVbuuid
 	prevSnap   *common.TsVbuuid
 	sessionId  uint64
 }
@@ -1274,7 +1275,11 @@ func (m *MsgKeyspaceHWT) GetKeyspaceId() string {
 }
 
 func (m *MsgKeyspaceHWT) GetHWT() *common.TsVbuuid {
-	return m.ts
+	return m.hwt
+}
+
+func (m *MsgKeyspaceHWT) GetHWTOSO() *common.TsVbuuid {
+	return m.hwtOSO
 }
 
 func (m *MsgKeyspaceHWT) GetPrevSnap() *common.TsVbuuid {
