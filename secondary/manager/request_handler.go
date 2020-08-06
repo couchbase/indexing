@@ -425,6 +425,17 @@ func (m *requestHandlerContext) handleIndexStatusRequest(w http.ResponseWriter, 
 	}
 
 	bucket := m.getBucket(r)
+	scope := m.getScope(r)
+	collection := m.getCollection(r)
+	index := m.getIndex(r)
+
+	t, err := validateRequest(bucket, scope, collection, index)
+	if err != nil {
+		logging.Debugf("RequestHandler::handleIndexStatusRequest: Error %v", err)
+		resp := &IndexStatusResponse{Code: RESP_ERROR, Error: err.Error()}
+		send(http.StatusInternalServerError, w, resp)
+		return
+	}
 
 	getAll := false
 	val := r.FormValue("getAll")
@@ -432,7 +443,7 @@ func (m *requestHandlerContext) handleIndexStatusRequest(w http.ResponseWriter, 
 		getAll = true
 	}
 
-	list, failedNodes, err := m.getIndexStatus(creds, bucket, getAll)
+	list, failedNodes, err := m.getIndexStatus(creds, t, getAll)
 	if err == nil && len(failedNodes) == 0 {
 		sort.Sort(indexStatusSorter(list))
 		resp := &IndexStatusResponse{Code: RESP_SUCCESS, Status: list}
@@ -466,7 +477,7 @@ func (m *requestHandlerContext) getIndex(r *http.Request) string {
 	return r.FormValue("index")
 }
 
-func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, bucket string, getAll bool) ([]IndexStatus, []string, error) {
+func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, t *target, getAll bool) ([]IndexStatus, []string, error) {
 
 	var cinfo *common.ClusterInfoCache
 	cinfo = m.mgr.cinfoClient.GetClusterInfoCache()
@@ -542,6 +553,8 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, bucket string
 
 			stale := false
 			metaToCache[u.Host] = nil
+			// TODO: It is not required to fetch metadata for entire node when target is for a specific
+			// bucket or collection
 			localMeta, latest, err := m.getLocalMetadataForNode(addr, u.Host, cinfo)
 			if localMeta == nil || err != nil {
 				logging.Debugf("RequestHandler::getIndexStatus: Error while retrieving %v with auth %v", addr+"/getLocalIndexMetadata", err)
@@ -572,10 +585,11 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, bucket string
 			for _, defn := range localMeta.IndexDefinitions {
 				defn.SetCollectionDefaults()
 
-				if len(bucket) != 0 && bucket != defn.Bucket {
+				if !shouldProcess(t, defn.Bucket, defn.Scope, defn.Collection, defn.Name) {
 					continue
 				}
 
+				// TODO: Update RBAC permissions
 				permission := fmt.Sprintf("cluster.bucket[%s].n1ql.index!list", defn.Bucket)
 				if !isAllowed(creds, []string{permission}, nil) {
 					continue
@@ -862,8 +876,19 @@ func (m *requestHandlerContext) handleIndexStatementRequest(w http.ResponseWrite
 	}
 
 	bucket := m.getBucket(r)
+	scope := m.getScope(r)
+	collection := m.getCollection(r)
+	index := m.getIndex(r)
 
-	list, err := m.getIndexStatement(creds, bucket)
+	t, err := validateRequest(bucket, scope, collection, index)
+	if err != nil {
+		logging.Debugf("RequestHandler::handleIndexMetadataRequest: err %v", err)
+		resp := &BackupResponse{Code: RESP_ERROR, Error: err.Error()}
+		send(http.StatusInternalServerError, w, resp)
+		return
+	}
+
+	list, err := m.getIndexStatement(creds, t)
 	if err == nil {
 		sort.Strings(list)
 		send(http.StatusOK, w, list)
@@ -872,9 +897,9 @@ func (m *requestHandlerContext) handleIndexStatementRequest(w http.ResponseWrite
 	}
 }
 
-func (m *requestHandlerContext) getIndexStatement(creds cbauth.Creds, bucket string) ([]string, error) {
+func (m *requestHandlerContext) getIndexStatement(creds cbauth.Creds, t *target) ([]string, error) {
 
-	indexes, failedNodes, err := m.getIndexStatus(creds, bucket, false)
+	indexes, failedNodes, err := m.getIndexStatus(creds, t, false)
 	if err != nil {
 		return nil, err
 	}
