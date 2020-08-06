@@ -91,39 +91,47 @@ func (api *testServer) authorize(w http.ResponseWriter, creds cbauth.Creds) bool
 	for _, index := range indexes {
 
 		bucket := index.Definition.Bucket
+		scope := index.Definition.Scope
+		if scope == "" {
+			scope = c.DEFAULT_SCOPE
+		}
+		collection := index.Definition.Collection
+		if collection == "" {
+			collection = c.DEFAULT_COLLECTION
+		}
 		if _, ok := seen[bucket]; !ok {
 
-			permission := fmt.Sprintf("cluster.bucket[%s].data.docs!write", bucket)
+			permission := fmt.Sprintf("cluster.collection[%s:%s:%s].data.docs!write", bucket, scope, collection)
 			permissions = append(permissions, permission)
 
-			permission = fmt.Sprintf("cluster.bucket[%s].data.docs!read", bucket)
+			permission = fmt.Sprintf("cluster.collection[%s:%s:%s].data.docs!read", bucket, scope, collection)
 			permissions = append(permissions, permission)
 
-			permission = fmt.Sprintf("cluster.bucket[%s].n1ql.select!execute", bucket)
+			permission = fmt.Sprintf("cluster.collection[%s:%s:%s].n1ql.select!execute", bucket, scope, collection)
 			permissions = append(permissions, permission)
 
-			permission = fmt.Sprintf("cluster.bucket[%s].n1ql.update!execute", bucket)
+			permission = fmt.Sprintf("cluster.collection[%s:%s:%s].n1ql.update!execute", bucket, scope, collection)
 			permissions = append(permissions, permission)
 
-			permission = fmt.Sprintf("cluster.bucket[%s].n1ql.insert!execute", bucket)
+			permission = fmt.Sprintf("cluster.collection[%s:%s:%s].n1ql.insert!execute", bucket, scope, collection)
 			permissions = append(permissions, permission)
 
-			permission = fmt.Sprintf("cluster.bucket[%s].n1ql.delete!execute", bucket)
+			permission = fmt.Sprintf("cluster.collection[%s:%s:%s].n1ql.delete!execute", bucket, scope, collection)
 			permissions = append(permissions, permission)
 
-			permission = fmt.Sprintf("cluster.bucket[%s].n1ql.index!build", bucket)
+			permission = fmt.Sprintf("cluster.collection[%s:%s:%s].n1ql.index!build", bucket, scope, collection)
 			permissions = append(permissions, permission)
 
-			permission = fmt.Sprintf("cluster.bucket[%s].n1ql.index!create", bucket)
+			permission = fmt.Sprintf("cluster.collection[%s:%s:%s].n1ql.index!create", bucket, scope, collection)
 			permissions = append(permissions, permission)
 
-			permission = fmt.Sprintf("cluster.bucket[%s].n1ql.index!alter", bucket)
+			permission = fmt.Sprintf("cluster.collection[%s:%s:%s].n1ql.index!alter", bucket, scope, collection)
 			permissions = append(permissions, permission)
 
-			permission = fmt.Sprintf("cluster.bucket[%s].n1ql.index!drop", bucket)
+			permission = fmt.Sprintf("cluster.collection[%s:%s:%s].n1ql.index!drop", bucket, scope, collection)
 			permissions = append(permissions, permission)
 
-			permission = fmt.Sprintf("cluster.bucket[%s].n1ql.index!list", bucket)
+			permission = fmt.Sprintf("cluster.collection[%s:%s:%s].n1ql.index!list", bucket, scope, collection)
 			permissions = append(permissions, permission)
 		}
 	}
