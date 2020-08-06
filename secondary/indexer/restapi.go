@@ -270,7 +270,7 @@ func (api *testServer) doCreate(w http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	var indexname, bucket string
+	var indexname, bucket, scope, collection string
 	var secExprs []string
 	var with []byte
 	var desc []bool
@@ -293,6 +293,22 @@ func (api *testServer) doCreate(w http.ResponseWriter, request *http.Request) {
 		return
 	} else if bucket = value.(string); bucket == "" {
 		msg := `empty field bucket`
+		http.Error(w, jsonstr(msg), http.StatusBadRequest)
+		return
+	}
+
+	if value, ok := params["scope"]; !ok {
+		scope = c.DEFAULT_SCOPE
+	} else if scope = value.(string); value == "" {
+		msg := `empty field scope`
+		http.Error(w, jsonstr(msg), http.StatusBadRequest)
+		return
+	}
+
+	if value, ok := params["collection"]; !ok {
+		scope = c.DEFAULT_SCOPE
+	} else if scope = value.(string); value == "" {
+		msg := `empty field collection`
 		http.Error(w, jsonstr(msg), http.StatusBadRequest)
 		return
 	}
@@ -384,8 +400,8 @@ func (api *testServer) doCreate(w http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	defnId, err := api.client.CreateIndex3(
-		indexname, bucket, using, exprtype, whereExpr, secExprs,
+	defnId, err := api.client.CreateIndex4(
+		indexname, bucket, scope, collection, using, exprtype, whereExpr, secExprs,
 		desc, isPrimary, partnScheme, partnExprs, with)
 	if err != nil {
 		http.Error(w, jsonstr("%v", err), http.StatusInternalServerError)
