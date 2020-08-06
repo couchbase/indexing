@@ -41,6 +41,7 @@ type GsiScanClient struct {
 	relConnBatchSize   int32
 
 	serverVersion uint32
+	closed        uint32
 }
 
 func NewGsiScanClient(queryport string, config common.Config) (*GsiScanClient, error) {
@@ -1232,7 +1233,12 @@ func (c *GsiScanClient) Scan3Primary(
 }
 
 func (c *GsiScanClient) Close() error {
+	atomic.StoreUint32(&c.closed, 1)
 	return c.pool.Close()
+}
+
+func (c *GsiScanClient) IsClosed() bool {
+	return atomic.LoadUint32(&c.closed) == uint32(1)
 }
 
 func (c *GsiScanClient) doRequestResponse(

@@ -1348,7 +1348,7 @@ func (c *GsiClient) Close() {
 //
 func (c *GsiClient) updateScanClients() {
 
-	newclients, staleclients := map[string]bool{}, map[string]bool{}
+	newclients, staleclients, closedclients := map[string]bool{}, map[string]bool{}, map[string]bool{}
 
 	needsRefresh := func() bool {
 		qcs := *((*map[string]*GsiScanClient)(atomic.LoadPointer(&c.queryClients)))
@@ -1365,8 +1365,12 @@ func (c *GsiClient) updateScanClients() {
 			}
 		}
 
-		for queryport, _ := range qcs {
+		for queryport, qc := range qcs {
 			if _, ok := cache[queryport]; !ok {
+				return true
+			}
+
+			if qc.IsClosed() {
 				return true
 			}
 		}
@@ -1396,8 +1400,12 @@ func (c *GsiClient) updateScanClients() {
 	// add new indexer-nodes
 	for _, queryport := range c.bridge.GetScanports() {
 		cache[queryport] = true
-		if _, ok := qcs[queryport]; !ok {
+		if qc, ok := qcs[queryport]; !ok {
 			newclients[queryport] = true
+		} else {
+			if qc.IsClosed() {
+				closedclients[queryport] = true
+			}
 		}
 	}
 	// forget stale indexer-nodes.
@@ -1407,15 +1415,28 @@ func (c *GsiClient) updateScanClients() {
 			staleclients[queryport] = true
 		}
 	}
-	if len(newclients) > 0 || len(staleclients) > 0 {
+	if len(newclients) > 0 || len(staleclients) > 0 || len(closedclients) > 0 {
 		clients := make(map[string]*GsiScanClient)
 		for queryport, qc := range qcs {
 			if _, ok := staleclients[queryport]; ok {
 				continue
 			}
+
+			if qc.IsClosed() {
+				logging.Infof("Found a closed scanclient for %v. Initializing a new scan client.", queryport)
+				if qc, err := NewGsiScanClient(queryport, c.config); err == nil {
+					clients[queryport] = qc
+				} else {
+					logging.Errorf("Unable to initialize gsi scanclient (%v)", err)
+				}
+				continue
+			}
+
+			// If the client is not stale and not closed, try to refresh server version.
 			qc.RefreshServerVersion()
 			clients[queryport] = qc
 		}
+
 		for queryport := range newclients {
 			if qc, err := NewGsiScanClient(queryport, c.config); err == nil {
 				clients[queryport] = qc
