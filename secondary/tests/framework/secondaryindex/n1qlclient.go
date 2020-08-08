@@ -699,6 +699,10 @@ func (ctxt *testContext) MaxParallelism() int {
 	return 1
 }
 
+func (ctxt *testContext) GetReqDeadline() time.Time {
+	return time.Time{}
+}
+
 func WaitForIndexOnline(n1qlclient datastore.Indexer, indexName string, index datastore.Index) (datastore.Index, error) {
 
 	var err error
