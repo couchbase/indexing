@@ -373,8 +373,8 @@ func verifyDuplicateIndex(plan *Plan, indexSpecs []*IndexSpec) error {
 				if index.Name == spec.Name && index.Bucket == spec.Bucket &&
 					index.Scope == spec.Scope && index.Collection == spec.Collection {
 
-					errMsg := fmt.Sprintf("Index already exist.  Fail to create %v in bucket %v, scope %v, collection %v",
-						spec.Name, spec.Bucket, spec.Scope, spec.Collection)
+					errMsg := fmt.Sprintf("%v.  Fail to create %v in bucket %v, scope %v, collection %v",
+						common.ErrIndexAlreadyExists.Error(), spec.Name, spec.Bucket, spec.Scope, spec.Collection)
 					return errors.New(errMsg)
 				}
 			}

@@ -2119,7 +2119,7 @@ func (m *requestHandlerContext) validateScheduleCreateRequst(req *client.Schedul
 	}
 
 	if bucketUUID == common.BUCKET_UUID_NIL {
-		return "", "", "", fmt.Errorf("Bucket Not Found")
+		return "", "", "", common.ErrBucketNotFound
 	}
 
 	scopeId, collectionId, err = m.getScopeAndCollectionID(defn.Bucket, defn.Scope, defn.Collection)
@@ -2128,11 +2128,11 @@ func (m *requestHandlerContext) validateScheduleCreateRequst(req *client.Schedul
 	}
 
 	if scopeId == collections.SCOPE_ID_NIL {
-		return "", "", "", fmt.Errorf("Scope Not Found")
+		return "", "", "", common.ErrScopeNotFound
 	}
 
 	if collectionId == collections.COLLECTION_ID_NIL {
-		return "", "", "", fmt.Errorf("Collection Not Found")
+		return "", "", "", common.ErrCollectionNotFound
 	}
 
 	if common.GetStorageMode() == common.NOT_SET {

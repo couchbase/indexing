@@ -1265,7 +1265,7 @@ func (m *LifecycleMgr) setBucketUUID(defn *common.IndexDefn) error {
 	bucketUUID, err := m.verifyBucket(defn.Bucket)
 	if err != nil || bucketUUID == common.BUCKET_UUID_NIL {
 		if err == nil {
-			err = errors.New("Bucket not found")
+			err = common.ErrBucketNotFound
 		}
 		return fmt.Errorf("Bucket does not exist or temporarily unavailable for creating new index."+
 			" Please retry the operation at a later time (err=%v).", err)
@@ -1303,7 +1303,7 @@ func (m *LifecycleMgr) setScopeIdAndCollectionId(defn *common.IndexDefn) error {
 	scopeId, err := m.getScopeID(defn.Bucket, defn.Scope)
 	if err != nil || scopeId == collections.SCOPE_ID_NIL {
 		if err == nil {
-			err = errors.New("Scope not found")
+			err = common.ErrScopeNotFound
 		}
 		return fmt.Errorf("Error encountered while retrieving ScopeID. Bucket = %v Scope = %v"+
 			". Please retry the operation at a later time (err=%v).", defn.Bucket, defn.Scope, err)
@@ -1312,7 +1312,7 @@ func (m *LifecycleMgr) setScopeIdAndCollectionId(defn *common.IndexDefn) error {
 	collectionID, err := m.getCollectionID(defn.Bucket, defn.Scope, defn.Collection)
 	if err != nil || collectionID == collections.COLLECTION_ID_NIL {
 		if err == nil {
-			err = errors.New("Collection not found")
+			err = common.ErrCollectionNotFound
 		}
 		return fmt.Errorf("Error encountered while retrieving CollectionID. Bucket = %v Scope = %v Collection = %v"+
 			" Please retry the operation at a later time (err=%v).", defn.Bucket, defn.Scope, defn.Collection, err)

@@ -8,13 +8,26 @@ import (
 
 	"container/heap"
 	"errors"
+	"io"
+	"math/rand"
+	"strings"
 	"sync"
+	"syscall"
 	"time"
 	"unsafe"
 )
 
 var SCHED_TOKEN_CHECK_INTERVAL = 5000   // Milliseconds
 var SCHED_TOKEN_PROCESS_INTERVAL = 5000 // Milliseconds
+
+var RETRYABLE_ERROR_BACKOFF = int64(5 * time.Second)
+var NON_RETRYABLE_ERROR_BACKOFF = int64(5 * time.Second)
+var NETWORK_ERROR_BACKOFF = int64(5 * time.Second)
+
+var RANDOM_BACKOFF_START = 50 // Milliseconds
+var RANDOM_BACKOFF_END = 5000 // Milliseconds
+
+var MAX_CREATION_RETRIES = 100
 
 /////////////////////////////////////////////////////////////////////
 // Global Variables
@@ -304,14 +317,90 @@ func (m *schedIndexCreator) processSchedIndexes() {
 }
 
 func (m *schedIndexCreator) handleError(index *scheduledIndex, err error) bool {
-	// TODO: Handle following scnearios.
-	// 1. Network errors - esp in newMetadataProvider
-	// 2. Ongoing DDL
-	// 3. Duplicate index
-	// 4. Unknown Errors
-	// Set backoff based on the error
+	index.state.lastError = err
 
-	return false
+	checkErr := func(knownErrs []error) bool {
+		for _, e := range knownErrs {
+			if strings.Contains(err.Error(), e.Error()) {
+				return true
+			}
+		}
+
+		return false
+	}
+
+	retryable := false
+	network := false
+
+	setBackoff := func() {
+		if strings.Contains(err.Error(), common.ErrAnotherIndexCreation.Error()) {
+
+			// TODO: The value of this backoff should be a function of
+			//       network latency and number of indexer nodes.
+
+			diff := RANDOM_BACKOFF_END - RANDOM_BACKOFF_START
+			b := rand.Intn(diff) + RANDOM_BACKOFF_START
+			m.backoff = int64(b * 1000 * 1000)
+			return
+		}
+
+		if retryable {
+			if network {
+				m.backoff = NETWORK_ERROR_BACKOFF
+				return
+			}
+
+			m.backoff = RETRYABLE_ERROR_BACKOFF
+			return
+		}
+
+		m.backoff = NON_RETRYABLE_ERROR_BACKOFF
+	}
+
+	defer setBackoff()
+
+	// Check for known non-retryable errors.
+	if checkErr(common.NonRetryableErrorsInCreate) {
+
+		// TODO: Fix non-retryable error retry count.
+
+		index.state.nRetryCount++
+		return false
+	}
+
+	retryable = true
+	index.state.retryCount++
+	if index.state.retryCount > MAX_CREATION_RETRIES {
+		return false
+	}
+
+	// Check for known retryable error
+	if checkErr(common.RetryableErrorsInCreate) {
+		return true
+	}
+
+	isNetworkError := func() bool {
+		// Because the exact error may have got embedded in the error
+		// received, need to check for substring. If any of the following
+		// substring is found, most likely the error is network error.
+		if strings.Contains(err.Error(), io.EOF.Error()) ||
+			strings.Contains(err.Error(), syscall.ECONNRESET.Error()) ||
+			strings.Contains(err.Error(), syscall.EPIPE.Error()) ||
+			strings.Contains(err.Error(), "i/o timeout") {
+
+			return true
+		}
+
+		return false
+	}
+
+	if isNetworkError() {
+		network = true
+		return true
+	}
+
+	// Treat all unknown erros as retryable errors
+	return true
 }
 
 func (m *schedIndexCreator) getMetadataProvider() (*client.MetadataProvider, error) {
@@ -349,6 +438,9 @@ func (m *schedIndexCreator) tryCreateIndex(index *scheduledIndex) error {
 		logging.Debugf("schedIndexCreator:tryCreateIndex using %v backoff for index %v",
 			time.Duration(m.backoff), index.token.Definition.DefnId)
 		time.Sleep(time.Duration(m.backoff))
+
+		// Reset the backoff for the next attempt
+		m.backoff = 0
 	}
 
 	var provider *client.MetadataProvider

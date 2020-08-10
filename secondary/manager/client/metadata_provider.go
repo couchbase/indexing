@@ -458,6 +458,7 @@ func (o *MetadataProvider) makePrepareIndexRequest(defnId c.IndexDefnId, name st
 	var accept uint32
 	var schedule uint32
 	var duplicate uint32
+	var rebalance uint32
 
 	watcherMap := make(map[c.IndexerId]int)
 
@@ -514,6 +515,10 @@ func (o *MetadataProvider) makePrepareIndexRequest(defnId c.IndexDefnId, name st
 					return
 				}
 
+				if response.Msg == RespRebalanceRunning {
+					atomic.AddUint32(&rebalance, 1)
+					return
+				}
 			}
 		}(w)
 	}
@@ -522,16 +527,18 @@ func (o *MetadataProvider) makePrepareIndexRequest(defnId c.IndexDefnId, name st
 
 	if accept < uint32(len(watcherMap)) {
 		if atomic.LoadUint32(&duplicate) > 0 {
-			errStr := "Create index cannot proceed due to presence of duplicate index name."
-			return watcherMap, errors.New(errStr), false
-		} else if (atomic.LoadUint32(&schedule) + accept) < uint32(len(watcherMap)) {
-			errStr := "Create index or Alter replica cannot proceed due to rebalance in progress, " +
-				"network partition, node failover or indexer failure."
-			return watcherMap, errors.New(errStr), false
-		} else {
-			errStr := "Create index or Alter replica cannot proceed due to another concurrent create index request."
-			return watcherMap, errors.New(errStr), true
+			return watcherMap, c.ErrDuplicateIndex, false
 		}
+
+		if atomic.LoadUint32(&rebalance) > 0 {
+			return watcherMap, c.ErrRebalanceRunning, false
+		}
+
+		if (atomic.LoadUint32(&schedule) + accept) < uint32(len(watcherMap)) {
+			return watcherMap, c.ErrNetworkPartition, false
+		}
+
+		return watcherMap, c.ErrAnotherIndexCreation, true
 	}
 
 	return watcherMap, nil, false
@@ -725,7 +732,7 @@ func (o *MetadataProvider) verifyDuplicateScheduleToken(idxDefn *c.IndexDefn) er
 				continue
 			}
 
-			return fmt.Errorf("Duplicate index id %v is already scheduled for creation.", defn.DefnId)
+			return fmt.Errorf("%v DefnId = %v.", c.ErrDuplicateCreateToken.Error(), defn.DefnId)
 		}
 	}
 
@@ -2451,7 +2458,7 @@ RETRY1:
 	}
 
 	if errCode == 1 {
-		stmt1 := "Fails to create index.  There is no available index service that can process this request at this time."
+		stmt1 := fmt.Sprintf("%v", c.ErrIndexerNotAvailable.Error())
 		stmt2 := "Index Service can be in bootstrap, recovery, or non-reachable."
 		stmt3 := "Please retry the operation at a later time."
 		return nil, errors.New(fmt.Sprintf("%s %s %s", stmt1, stmt2, stmt3)), false
@@ -2461,9 +2468,9 @@ RETRY1:
 		return nil, errors.New(fmt.Sprintf(stmt1, nodes)), true
 
 	} else if errCode == 3 {
-		stmt1 := "Fails to create index.  There are not enough indexer nodes to create index with replica count of %v. "
+		stmt1 := fmt.Sprintf("%v count of %v. ", c.ErrNotEnoughIndexers.Error(), numReplica)
 		stmt2 := stmt1 + "Some indexer nodes may be marked as excluded."
-		return nil, errors.New(fmt.Sprintf(stmt2, numReplica)), true
+		return nil, errors.New(stmt2), true
 	}
 
 	return watchers, nil, false
