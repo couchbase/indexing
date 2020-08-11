@@ -1068,7 +1068,13 @@ func StopScheduleCreateTokenExist(defnId c.IndexDefnId) (bool, error) {
 
 	token := &StopScheduleCreateToken{}
 	id := fmt.Sprintf("%v", defnId)
-	return c.MetakvGet(ScheduleCreateTokenPath+id, token)
+	return c.MetakvGet(StopScheduleCreateTokenPath+id, token)
+}
+
+func DeleteStopScheduleCreateToken(defnId c.IndexDefnId) error {
+
+	id := fmt.Sprintf("%v", defnId)
+	return c.MetakvDel(StopScheduleCreateTokenPath + id)
 }
 
 func MarshallStopScheduleCreateTokenList(tokens *StopScheduleCreateTokenList) ([]byte, error) {
@@ -1081,7 +1087,7 @@ func MarshallStopScheduleCreateTokenList(tokens *StopScheduleCreateTokenList) ([
 }
 
 func GetStopScheduleCreateTokenPathFromDefnId(defnId c.IndexDefnId) string {
-	return ScheduleCreateTokenPath + fmt.Sprintf("%v", defnId)
+	return StopScheduleCreateTokenPath + fmt.Sprintf("%v", defnId)
 }
 
 //////////////////////////////////////////////////////////////

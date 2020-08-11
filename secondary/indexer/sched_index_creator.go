@@ -19,6 +19,8 @@ import (
 
 var SCHED_TOKEN_CHECK_INTERVAL = 5000   // Milliseconds
 var SCHED_TOKEN_PROCESS_INTERVAL = 5000 // Milliseconds
+var STOP_TOKEN_CLEANER_INITERVAL = 60   // Seconds
+var STOP_TOKEN_RETENTION_TIME = 600     // Seconds
 
 var RETRYABLE_ERROR_BACKOFF = int64(5 * time.Second)
 var NON_RETRYABLE_ERROR_BACKOFF = int64(5 * time.Second)
@@ -66,9 +68,12 @@ func getSchedIndexCreator() *schedIndexCreator {
 //    on the reason for failure.
 // 3. The retry count is tracked in memory and after the retry limit is reached
 //    the stop schedule create token will be posted with last error.
+// 3.1. Once the stop schedule create token is posted, the index creation will
+//      not be retried again (until indexer restarts). The schedule create token
+//      will NOT be deleted. Failed index will continue to show on UI (in Error
+//      state), until the user explicitly deletes the failed index.
 // 4. Similar to DDL service manager, scheduled index creator observes mutual
 //    exclusion with rebalance operation.
-//
 type schedIndexCreator struct {
 	indexerId   common.IndexerId
 	config      common.ConfigHolder
@@ -85,6 +90,7 @@ type schedIndexCreator struct {
 	indexQueue  *schedIndexQueue
 	queueMutex  sync.Mutex
 	backoff     int64 // random backoff in nanoseconds before the next request.
+	cleanerStop chan bool
 }
 
 //
@@ -155,6 +161,7 @@ func NewSchedIndexCreator(indexerId common.IndexerId, supvCmdch MsgChannel,
 		killch:      make(chan bool),
 		allowDDL:    true,
 		indexQueue:  &iq,
+		cleanerStop: make(chan bool),
 	}
 
 	mgr.mon = NewSchedTokenMonitor(mgr, indexerId)
@@ -162,6 +169,7 @@ func NewSchedIndexCreator(indexerId common.IndexerId, supvCmdch MsgChannel,
 	mgr.config.Store(config)
 
 	go mgr.run()
+	go mgr.stopTokenCleaner()
 
 	gSchedIndexCreatorLck.Lock()
 	defer gSchedIndexCreatorLck.Unlock()
@@ -275,7 +283,7 @@ func (m *schedIndexCreator) processSchedIndexes() {
 				}
 
 				logging.Infof("schedIndexCreator: Trying to create index %v", index.token.Definition.DefnId)
-				err := m.tryCreateIndex(index)
+				err, success := m.tryCreateIndex(index)
 				if err != nil {
 					retry := m.handleError(index, err)
 					if retry {
@@ -300,11 +308,13 @@ func (m *schedIndexCreator) processSchedIndexes() {
 							"DDL service manager will build the index", index.token.Definition.DefnId)
 					}
 
-					// TODO: Check if this doesn't error out in case of key not found.
-					err := mc.DeleteScheduleCreateToken(index.token.Definition.DefnId)
-					if err != nil {
-						logging.Errorf("schedIndexCreator: error (%v) in deleting the schedule create token for %v",
-							err, index.token.Definition.DefnId)
+					if success {
+						// TODO: Check if this doesn't error out in case of key not found.
+						err := mc.DeleteScheduleCreateToken(index.token.Definition.DefnId)
+						if err != nil {
+							logging.Errorf("schedIndexCreator: error (%v) in deleting the schedule create token for %v",
+								err, index.token.Definition.DefnId)
+						}
 					}
 				}
 			}
@@ -420,18 +430,18 @@ func (m *schedIndexCreator) getMetadataProvider() (*client.MetadataProvider, err
 	return m.provider, nil
 }
 
-func (m *schedIndexCreator) tryCreateIndex(index *scheduledIndex) error {
+func (m *schedIndexCreator) tryCreateIndex(index *scheduledIndex) (error, bool) {
 	exists, err := mc.StopScheduleCreateTokenExist(index.token.Definition.DefnId)
 	if err != nil {
 		logging.Errorf("schedIndexCreator:tryCreateIndex error (%v) in getting stop schedule create token for %v",
 			err, index.token.Definition.DefnId)
-		return err
+		return err, false
 	}
 
 	if exists {
 		logging.Debugf("schedIndexCreator:tryCreateIndex stop schedule token exists for %v",
 			index.token.Definition.DefnId)
-		return nil
+		return nil, false
 	}
 
 	if m.backoff > 0 {
@@ -448,14 +458,14 @@ func (m *schedIndexCreator) tryCreateIndex(index *scheduledIndex) error {
 	if err != nil {
 		logging.Errorf("schedIndexCreator:tryCreateIndex error (%v) in getting getMetadataProvider for %v",
 			err, index.token.Definition.DefnId)
-		return err
+		return err, false
 	}
 
 	// TODO: Check if index already exists in metadata provider. If yes, then the
 	// index was successfully created earlier, but the token deletion may
 	// have failed.
 
-	return provider.CreateIndexWithDefnAndPlan(&index.token.Definition, index.token.Plan)
+	return provider.CreateIndexWithDefnAndPlan(&index.token.Definition, index.token.Plan), true
 }
 
 func (m *schedIndexCreator) pushQ(item *scheduledIndex) {
@@ -481,9 +491,52 @@ func (m *schedIndexCreator) popQ() *scheduledIndex {
 	return si
 }
 
+func (m *schedIndexCreator) stopTokenCleaner() {
+	ticker := time.NewTicker(time.Duration(STOP_TOKEN_CLEANER_INITERVAL) * time.Second)
+	retention := int64(STOP_TOKEN_RETENTION_TIME) * int64(time.Second)
+
+	for {
+		select {
+		case <-ticker.C:
+			stopTokens, err := mc.ListAllStopScheduleCreateTokens()
+			if err != nil {
+				logging.Errorf("schedIndexCreator:stopTokenCleaner error in getting stop schedule create tokens: %v", err)
+				continue
+			}
+
+			for _, token := range stopTokens {
+				exists, err := mc.ScheduleCreateTokenExist(token.DefnId)
+				if err != nil {
+					logging.Infof("schedIndexCreator:stopTokenCleaner error (%v) in ScheduleCreateTokenExist for %v", err, token.DefnId)
+					continue
+				}
+
+				if exists {
+					logging.Debugf("schedIndexCreator:stopTokenCleaner schedule create token exists for defnId %v", token.DefnId)
+					continue
+				}
+
+				if (time.Now().UnixNano() - retention) > token.Ctime {
+					logging.Infof("schedIndexCreator:stopTokenCleaner deleting stop create token for %v", token.DefnId)
+					// TODO: Avoid deletion by all indexers.
+					err := mc.DeleteStopScheduleCreateToken(token.DefnId)
+					if err != nil {
+						logging.Errorf("schedIndexCreator:stopTokenCleaner error (%v) in deleting stop create token for %v", err, token.DefnId)
+					}
+				}
+			}
+
+		case <-m.cleanerStop:
+			logging.Infof("schedIndexCreator: Stoppinig stopTokenCleaner routine")
+			return
+		}
+	}
+}
+
 func (m *schedIndexCreator) Close() {
 	logging.Infof("schedIndexCreator: Shutting Down ...")
 	close(m.killch)
+	close(m.cleanerStop)
 }
 
 /////////////////////////////////////////////////////////////////////
