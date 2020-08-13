@@ -203,6 +203,11 @@ func stopDDLProcessing() {
 	if mgr != nil {
 		mgr.stopProcessDDL()
 	}
+
+	sic := getSchedIndexCreator()
+	if sic != nil {
+		sic.stopProcessDDL()
+	}
 }
 
 func resumeDDLProcessing() {
@@ -210,6 +215,11 @@ func resumeDDLProcessing() {
 	mgr := getDDLServiceMgr()
 	if mgr != nil {
 		mgr.startProcessDDL()
+	}
+
+	sic := getSchedIndexCreator()
+	if sic != nil {
+		sic.startProcessDDL()
 	}
 }
 
@@ -222,6 +232,11 @@ func notifyRebalanceDone(change *service.TopologyChange, isCancel bool) {
 	mgr := getDDLServiceMgr()
 	if mgr != nil {
 		mgr.rebalanceDone(change, isCancel)
+	}
+
+	sic := getSchedIndexCreator()
+	if sic != nil {
+		sic.rebalanceDone()
 	}
 }
 
@@ -572,7 +587,7 @@ func (m *DDLServiceMgr) handleCreateCommand(needRefresh bool) {
 	// able to start.  But once the metadata provider is able to fetch metadata for all the nodes, the
 	// metadata will be cached locally even if there is network partitioning afterwards.
 	//
-	provider, _, err := m.newMetadataProvider(nil)
+	provider, _, err := newMetadataProvider(m.clusterAddr, nil, m.settings, "DDLServiceMgr")
 	if err != nil {
 		logging.Debugf("DDLServiceMgr: Failed to start metadata provider.  Internal Error = %v", err)
 		return
@@ -1469,7 +1484,7 @@ func (m *DDLServiceMgr) refreshMetadataProvider() (map[string]string, error) {
 	// nodes can be empty but it cannot be nil.
 	// If emtpy, then no node will be considered.
 	// If nil, all nodes will be considered.
-	provider, httpAddrMap, err := m.newMetadataProvider(nodes)
+	provider, httpAddrMap, err := newMetadataProvider(m.clusterAddr, nodes, m.settings, "DDLServiceMgr")
 	if err != nil {
 		return nil, err
 	}
@@ -1478,10 +1493,11 @@ func (m *DDLServiceMgr) refreshMetadataProvider() (map[string]string, error) {
 	return httpAddrMap, nil
 }
 
-func (m *DDLServiceMgr) newMetadataProvider(nodes map[service.NodeID]bool) (*client.MetadataProvider, map[string]string, error) {
+func newMetadataProvider(clusterAddr string, nodes map[service.NodeID]bool, settings *ddlSettings,
+	logPrefix string) (*client.MetadataProvider, map[string]string, error) {
 
 	// initialize ClusterInfoCache
-	url, err := common.ClusterAuthUrl(m.clusterAddr)
+	url, err := common.ClusterAuthUrl(clusterAddr)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1490,7 +1506,7 @@ func (m *DDLServiceMgr) newMetadataProvider(nodes map[service.NodeID]bool) (*cli
 	if err != nil {
 		return nil, nil, err
 	}
-	cinfo.SetUserAgent("newMetadataProvider")
+	cinfo.SetUserAgent(fmt.Sprintf("newMetadataProvider:%v", logPrefix))
 
 	if err := cinfo.Fetch(); err != nil {
 		return nil, nil, err
@@ -1536,7 +1552,7 @@ func (m *DDLServiceMgr) newMetadataProvider(nodes map[service.NodeID]bool) (*cli
 
 		if len(nodes) != 0 {
 			return nil, nil, errors.New(
-				fmt.Sprintf("DDLServiceMgr: Failed to initialize metadata provider.  Unknown host=%v", nodes))
+				fmt.Sprintf("%v: Failed to initialize metadata provider.  Unknown host=%v", logPrefix, nodes))
 		}
 	} else {
 		// Find all nodes that has a index http service
@@ -1561,11 +1577,11 @@ func (m *DDLServiceMgr) newMetadataProvider(nodes map[service.NodeID]bool) (*cli
 	// initialize a new MetadataProvider
 	ustr, err := common.NewUUID()
 	if err != nil {
-		return nil, nil, errors.New(fmt.Sprintf("DDLServiceMgr: Failed to initialize metadata provider.  Internal Error = %v", err))
+		return nil, nil, errors.New(fmt.Sprintf("%v: Failed to initialize metadata provider.  Internal Error = %v", logPrefix, err))
 	}
 	providerId := ustr.Str()
 
-	provider, err := client.NewMetadataProvider(m.clusterAddr, providerId, nil, nil, m.settings)
+	provider, err := client.NewMetadataProvider(clusterAddr, providerId, nil, nil, settings)
 	if err != nil {
 		if provider != nil {
 			provider.Close()
@@ -1575,7 +1591,7 @@ func (m *DDLServiceMgr) newMetadataProvider(nodes map[service.NodeID]bool) (*cli
 
 	// Watch Metadata
 	for _, addr := range adminAddrMap {
-		logging.Infof("DDLServiceMgr: connecting to node %v", addr)
+		logging.Infof("%v: connecting to node %v", logPrefix, addr)
 		provider.WatchMetadata(addr, nil, len(adminAddrMap))
 	}
 
@@ -1597,12 +1613,13 @@ func (m *DDLServiceMgr) newMetadataProvider(nodes map[service.NodeID]bool) (*cli
 			if retry == 0 {
 				for nodeUUID, adminport := range adminAddrMap {
 					if !provider.IsWatcherAlive(nodeUUID) {
-						logging.Warnf("DDLServiceMgr: cannot connect to node %v", adminport)
+						logging.Warnf("%v: cannot connect to node %v", logPrefix, adminport)
 					}
 				}
 
 				provider.Close()
-				return nil, nil, errors.New("DDLServiceMgr: Failed to initialize metadata provider.  Unable to connect to all indexer nodes within 500ms.")
+				return nil, nil, errors.New(fmt.Sprintf("%v: Failed to initialize metadata provider.  "+
+					"Unable to connect to all indexer nodes within 500ms.", logPrefix))
 			}
 		}
 	}

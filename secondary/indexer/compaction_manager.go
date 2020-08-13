@@ -716,6 +716,12 @@ loop:
 					cd.ResetConfig(cfg)
 					cm.supvCmdCh <- &MsgSuccess{}
 				} else if cmd.GetMsgType() == UPDATE_INDEX_INSTANCE_MAP {
+					// Disable compaction manager processing for MOI storage
+					if common.GetStorageMode() == common.MOI {
+						cm.supvCmdCh <- &MsgSuccess{}
+						continue
+					}
+
 					stats := cmd.(*MsgUpdateInstMap).GetStatsObject()
 					indexInstMap := cmd.(*MsgUpdateInstMap).GetIndexInstMap()
 					clone := common.CopyIndexInstMap(indexInstMap)

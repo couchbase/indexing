@@ -124,32 +124,34 @@ type indexer struct {
 	shutdownInitCh      MsgChannel //internal shutdown channel for indexer
 	shutdownCompleteCh  MsgChannel //indicate shutdown completion
 
-	mutMgrCmdCh        MsgChannel //channel to send commands to mutation manager
-	storageMgrCmdCh    MsgChannel //channel to send commands to storage manager
-	tkCmdCh            MsgChannel //channel to send commands to timekeeper
-	rebalMgrCmdCh      MsgChannel //channel to send commands to rebalance manager
-	ddlSrvMgrCmdCh     MsgChannel //channel to send commands to ddl service manager
-	compactMgrCmdCh    MsgChannel //channel to send commands to compaction manager
-	clustMgrAgentCmdCh MsgChannel //channel to send messages to index coordinator
-	kvSenderCmdCh      MsgChannel //channel to send messages to kv sender
-	settingsMgrCmdCh   MsgChannel
-	statsMgrCmdCh      MsgChannel
-	scanCoordCmdCh     MsgChannel //chhannel to send messages to scan coordinator
+	mutMgrCmdCh          MsgChannel //channel to send commands to mutation manager
+	storageMgrCmdCh      MsgChannel //channel to send commands to storage manager
+	tkCmdCh              MsgChannel //channel to send commands to timekeeper
+	rebalMgrCmdCh        MsgChannel //channel to send commands to rebalance manager
+	ddlSrvMgrCmdCh       MsgChannel //channel to send commands to ddl service manager
+	schedIdxCreatorCmdCh MsgChannel // channel to send commands to sheduled index creator
+	compactMgrCmdCh      MsgChannel //channel to send commands to compaction manager
+	clustMgrAgentCmdCh   MsgChannel //channel to send messages to index coordinator
+	kvSenderCmdCh        MsgChannel //channel to send messages to kv sender
+	settingsMgrCmdCh     MsgChannel
+	statsMgrCmdCh        MsgChannel
+	scanCoordCmdCh       MsgChannel //chhannel to send messages to scan coordinator
 
 	mutMgrExitCh MsgChannel //channel to indicate mutation manager exited
 
-	tk            Timekeeper        //handle to timekeeper
-	storageMgr    StorageManager    //handle to storage manager
-	compactMgr    CompactionManager //handle to compaction manager
-	mutMgr        MutationManager   //handle to mutation manager
-	rebalMgr      RebalanceMgr      //handle to rebalance manager
-	ddlSrvMgr     *DDLServiceMgr    //handle to ddl service manager
-	clustMgrAgent ClustMgrAgent     //handle to ClustMgrAgent
-	kvSender      KVSender          //handle to KVSender
-	settingsMgr   settingsManager
-	statsMgr      *statsManager
-	scanCoord     ScanCoordinator //handle to ScanCoordinator
-	config        common.Config
+	tk              Timekeeper         //handle to timekeeper
+	storageMgr      StorageManager     //handle to storage manager
+	compactMgr      CompactionManager  //handle to compaction manager
+	mutMgr          MutationManager    //handle to mutation manager
+	rebalMgr        RebalanceMgr       //handle to rebalance manager
+	ddlSrvMgr       *DDLServiceMgr     //handle to ddl service manager
+	schedIdxCreator *schedIndexCreator // handle to scheduled index creator
+	clustMgrAgent   ClustMgrAgent      //handle to ClustMgrAgent
+	kvSender        KVSender           //handle to KVSender
+	settingsMgr     settingsManager
+	statsMgr        *statsManager
+	scanCoord       ScanCoordinator //handle to ScanCoordinator
+	config          common.Config
 
 	kvlock    sync.Mutex   //fine-grain lock for KVSender
 	stateLock sync.RWMutex //lock to protect the keyspaceIdStatus map
@@ -227,17 +229,18 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		shutdownInitCh:      make(MsgChannel),
 		shutdownCompleteCh:  make(MsgChannel),
 
-		mutMgrCmdCh:        make(MsgChannel),
-		storageMgrCmdCh:    make(MsgChannel),
-		tkCmdCh:            make(MsgChannel),
-		rebalMgrCmdCh:      make(MsgChannel),
-		ddlSrvMgrCmdCh:     make(MsgChannel),
-		compactMgrCmdCh:    make(MsgChannel),
-		clustMgrAgentCmdCh: make(MsgChannel),
-		kvSenderCmdCh:      make(MsgChannel),
-		settingsMgrCmdCh:   make(MsgChannel),
-		statsMgrCmdCh:      make(MsgChannel),
-		scanCoordCmdCh:     make(MsgChannel),
+		mutMgrCmdCh:          make(MsgChannel),
+		storageMgrCmdCh:      make(MsgChannel),
+		tkCmdCh:              make(MsgChannel),
+		rebalMgrCmdCh:        make(MsgChannel),
+		ddlSrvMgrCmdCh:       make(MsgChannel),
+		schedIdxCreatorCmdCh: make(MsgChannel),
+		compactMgrCmdCh:      make(MsgChannel),
+		clustMgrAgentCmdCh:   make(MsgChannel),
+		kvSenderCmdCh:        make(MsgChannel),
+		settingsMgrCmdCh:     make(MsgChannel),
+		statsMgrCmdCh:        make(MsgChannel),
+		scanCoordCmdCh:       make(MsgChannel),
 
 		mutMgrExitCh: make(MsgChannel),
 
@@ -395,6 +398,12 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	idx.ddlSrvMgr, res = NewDDLServiceMgr(common.IndexerId(idx.id), idx.ddlSrvMgrCmdCh, idx.wrkrRecvCh, idx.config)
 	if res.GetMsgType() != MSG_SUCCESS {
 		logging.Fatalf("Indexer::NewIndexer DDL Service Manager Init Error %+v", res)
+		return nil, res
+	}
+
+	idx.schedIdxCreator, res = NewSchedIndexCreator(common.IndexerId(idx.id), idx.schedIdxCreatorCmdCh, idx.wrkrRecvCh, idx.config)
+	if res.GetMsgType() != MSG_SUCCESS {
+		logging.Fatalf("Indexer::NewIndexer Scheduled Index Creator Init Error %+v", res)
 		return nil, res
 	}
 
@@ -1332,6 +1341,8 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 	<-idx.rebalMgrCmdCh
 	idx.ddlSrvMgrCmdCh <- msg
 	<-idx.ddlSrvMgrCmdCh
+	idx.schedIdxCreatorCmdCh <- msg
+	<-idx.schedIdxCreatorCmdCh
 	idx.clustMgrAgentCmdCh <- msg
 	<-idx.clustMgrAgentCmdCh
 	idx.updateSliceWithConfig(newConfig)
@@ -3936,6 +3947,10 @@ func (idx *indexer) shutdownWorkers() {
 	// shutdown ddl manager
 	idx.ddlSrvMgrCmdCh <- &MsgGeneral{mType: ADMIN_MGR_SHUTDOWN}
 	<-idx.ddlSrvMgrCmdCh
+
+	// shutdown scheduled index creator
+	idx.schedIdxCreatorCmdCh <- &MsgGeneral{mType: ADMIN_MGR_SHUTDOWN}
+	<-idx.schedIdxCreatorCmdCh
 }
 
 func (idx *indexer) Shutdown() Message {

@@ -409,7 +409,7 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 		}
 	} else {
 		scheduleOnFailure := o.settings.AllowScheduleCreate()
-		if err := o.recoverableCreateIndex(idxDefn, plan, scheduleOnFailure); err != nil {
+		if err := o.recoverableCreateIndex(idxDefn, plan, scheduleOnFailure, false); err != nil {
 			return c.IndexDefnId(0), err, false
 		}
 	}
@@ -580,7 +580,7 @@ func (o *MetadataProvider) cancelPrepareIndexRequest(defnId c.IndexDefnId, watch
 // This function makes a call to create index using new protocol (vulcan).
 //
 func (o *MetadataProvider) makeCommitIndexRequest(op CommitCreateRequestOp, idxDefn *c.IndexDefn, requestId uint64,
-	definitions map[c.IndexerId][]c.IndexDefn, watcherMap map[c.IndexerId]int) error {
+	definitions map[c.IndexerId][]c.IndexDefn, watcherMap map[c.IndexerId]int, asyncCreate bool) error {
 
 	request := &CommitCreateRequest{
 		Op:          op,
@@ -588,6 +588,7 @@ func (o *MetadataProvider) makeCommitIndexRequest(op CommitCreateRequestOp, idxD
 		RequesterId: o.providerId,
 		Definitions: definitions,
 		RequestId:   requestId,
+		AsyncCreate: asyncCreate,
 	}
 
 	requestMsg, err := MarshallCommitCreateRequest(request)
@@ -878,19 +879,19 @@ func (o *MetadataProvider) waitForScheduleCreateToken(defnId c.IndexDefnId) erro
 }
 
 // This should be called for the defn, that is not yet persisted in index metadata.
+// This function doesn't trigger the index build, even if the deferred flag is false.
 func (o *MetadataProvider) CreateIndexWithDefnAndPlan(idxDefn *c.IndexDefn,
 	plan map[string]interface{}) error {
 
 	// TODO: Check for existing idxDefn.DefnId.
-	// This will be called from metadata_provider.
-	return o.recoverableCreateIndex(idxDefn, plan, false)
+	return o.recoverableCreateIndex(idxDefn, plan, false, true)
 }
 
 //
 // This function create index using new protocol (vulcan).
 //
 func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn,
-	plan map[string]interface{}, scheduleOnFailure bool) error {
+	plan map[string]interface{}, scheduleOnFailure bool, asyncCreate bool) error {
 
 	//
 	// Prepare Phase.  This is to seek full quorum from all the indexers.
@@ -1000,7 +1001,7 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn,
 	// The first indexer that responds with success will create a token so that it can roll forward even if this
 	// metadata provider has died.  Other indexer will observe the token and proceed with the request.
 	//
-	err = o.makeCommitIndexRequest(NEW_INDEX, idxDefn, 0, definitions, watcherMap)
+	err = o.makeCommitIndexRequest(NEW_INDEX, idxDefn, 0, definitions, watcherMap, asyncCreate)
 	if err != nil {
 		logging.Errorf("Fail to create index: %v", err)
 		return err
@@ -1023,7 +1024,7 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn,
 	}
 
 	var states []c.IndexState
-	if !idxDefn.Deferred {
+	if !idxDefn.Deferred && !asyncCreate {
 		states = []c.IndexState{c.INDEX_STATE_ACTIVE, c.INDEX_STATE_DELETED}
 	} else {
 		states = []c.IndexState{c.INDEX_STATE_READY, c.INDEX_STATE_ACTIVE, c.INDEX_STATE_DELETED}
@@ -3057,7 +3058,7 @@ func (o *MetadataProvider) addReplica(idxDefn *c.IndexDefn, watcherMap map[c.Ind
 		o.cancelPrepareIndexRequest(idxDefn.DefnId, watcherMap)
 		return err
 	}
-	err = o.makeCommitIndexRequest(ADD_REPLICA, idxDefn, uint64(requestId), definitions, watcherMap)
+	err = o.makeCommitIndexRequest(ADD_REPLICA, idxDefn, uint64(requestId), definitions, watcherMap, false)
 	if err != nil {
 		logging.Errorf("Fail to alter index: %v", err)
 		return err
@@ -3118,7 +3119,7 @@ func (o *MetadataProvider) removeReplica(idxDefn *c.IndexDefn, watcherMap map[c.
 	// The first indexer that responds with success will create a token so that it can roll forward even if this
 	// metadata provider has died.  Other indexer will observe the token and proceed with the request.
 	//
-	err = o.makeCommitIndexRequest(DROP_REPLICA, idxDefn, 0, definitionsMap, watcherMap)
+	err = o.makeCommitIndexRequest(DROP_REPLICA, idxDefn, 0, definitionsMap, watcherMap, false)
 	if err != nil {
 		logging.Errorf("Fail to alter index: %v", err)
 		return err

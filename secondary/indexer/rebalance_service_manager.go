@@ -1144,7 +1144,7 @@ func (m *ServiceMgr) cleanupRebalanceRunning() error {
 
 	m.rebalanceRunning = false
 
-	// notify DDLServiceManager
+	// notify DDLServiceManager and SchedIndexCreator
 	resumeDDLProcessing()
 
 	return nil

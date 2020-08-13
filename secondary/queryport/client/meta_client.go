@@ -2098,8 +2098,6 @@ func newSchedTokenMonitor() *schedTokenMonitor {
 		processed: make(map[string]bool),
 	}
 
-	s.listener.ListenTokens()
-
 	s.uCloseCh = make(chan bool)
 	go s.updater()
 
@@ -2274,6 +2272,6 @@ func (s *schedTokenMonitor) updater() {
 }
 
 func (s *schedTokenMonitor) Close() {
-	close(s.lCloseCh)
+	s.listener.Close()
 	close(s.uCloseCh)
 }

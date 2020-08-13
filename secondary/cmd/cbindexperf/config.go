@@ -10,14 +10,15 @@ import (
 	"github.com/couchbase/indexing/secondary/stats"
 )
 
-
 type TestConfig struct {
-	RandomKeyLen    uint32
+	RandomKeyLen uint32
 }
 
 type ScanConfig struct {
 	Id              uint64
 	Bucket          string
+	Scope           string
+	Collection      string
 	Index           string
 	DefnId          uint64
 	Type            string

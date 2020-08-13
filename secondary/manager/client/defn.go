@@ -277,6 +277,7 @@ type CommitCreateRequest struct {
 	RequesterId string                        `json:"requesterId,omitempty"`
 	Definitions map[c.IndexerId][]c.IndexDefn `json:"definitions,omitempty"`
 	RequestId   uint64                        `json:"requestId,omitempty"`
+	AsyncCreate bool                          `json:"asyncCreate,omitempty"`
 }
 
 type CommitCreateResponse struct {

@@ -606,8 +606,9 @@ func (m *LifecycleMgr) handleCommitCreateIndex(commitCreateIndex *client.CommitC
 	defnId := commitCreateIndex.DefnId
 	definitions := commitCreateIndex.Definitions
 	m.prepareLock = nil
+	asyncCreate := commitCreateIndex.AsyncCreate
 
-	commit, bucketUUID, scopeId, collectionId, err := m.processCommitToken(defnId, definitions)
+	commit, bucketUUID, scopeId, collectionId, err := m.processCommitToken(defnId, definitions, asyncCreate)
 	if commit {
 		// If fails to post the command token, the return failure.  If none of the indexer can post the command token,
 		// the command token will be malformed and it will get cleaned up by DDLServiceMgr upon rebalancing.
@@ -661,7 +662,7 @@ func (m *LifecycleMgr) handleRebalanceRunning(content []byte) error {
 // Process commit token
 //
 func (m *LifecycleMgr) processCommitToken(defnId common.IndexDefnId,
-	layout map[common.IndexerId][]common.IndexDefn) (bool, string, string, string, error) {
+	layout map[common.IndexerId][]common.IndexDefn, asyncCreate bool) (bool, string, string, string, error) {
 
 	indexerId, err := m.repo.GetLocalIndexerId()
 	if err != nil {
@@ -676,14 +677,14 @@ func (m *LifecycleMgr) processCommitToken(defnId common.IndexDefnId,
 		// Create the index instance.   This is to ensure that definiton passes invariant validation (e.g bucket exists).
 		// If create index fails due to transient error (indexer in recovery), a token will be placed to retry the operation
 		// later.  The definiton is always deleted upon error.
-		if err := m.CreateIndexOrInstance(&defn, false, reqCtx); err != nil {
+		if err := m.CreateIndexOrInstance(&defn, false, reqCtx, asyncCreate); err != nil {
 			// If there is error, the defintion will not be created.
 			// But if it is recoverable error, then we still want to create the commit token.
 			logging.Errorf("LifecycleMgr.processCommitToken() : build index fails.  Reason = %v", err)
 			return m.canRetryCreateError(err), "", "", "", err
 		}
 
-		if !definitions[0].Deferred && len(definitions) == 1 {
+		if !definitions[0].Deferred && len(definitions) == 1 && !asyncCreate {
 			// If there is only one definition, then try to do the build as well.
 			retryList, skipList, errList := m.BuildIndexes([]common.IndexDefnId{defnId}, reqCtx, false)
 
@@ -1050,7 +1051,7 @@ func (m *LifecycleMgr) handleCreateIndex(key string, content []byte, reqCtx *com
 	}
 	defn.SetCollectionDefaults()
 
-	return m.CreateIndexOrInstance(defn, false, reqCtx)
+	return m.CreateIndexOrInstance(defn, false, reqCtx, false)
 }
 
 func (m *LifecycleMgr) handleCreateIndexScheduledBuild(key string, content []byte,
@@ -1064,11 +1065,11 @@ func (m *LifecycleMgr) handleCreateIndexScheduledBuild(key string, content []byt
 	defn.SetCollectionDefaults()
 
 	// Create index with the scheduled flag.
-	return m.CreateIndexOrInstance(defn, true, reqCtx)
+	return m.CreateIndexOrInstance(defn, true, reqCtx, false)
 }
 
 func (m *LifecycleMgr) CreateIndexOrInstance(defn *common.IndexDefn, scheduled bool,
-	reqCtx *common.MetadataRequestContext) error {
+	reqCtx *common.MetadataRequestContext, asyncCreate bool) error {
 
 	if common.GetBuildMode() != common.ENTERPRISE {
 		if defn.NumReplica != 0 {
@@ -1096,14 +1097,14 @@ func (m *LifecycleMgr) CreateIndexOrInstance(defn *common.IndexDefn, scheduled b
 	isPartitioned := common.IsPartitioned(defn.PartitionScheme)
 
 	if isPartitioned && hasIndex {
-		return m.CreateIndexInstance(defn, scheduled, reqCtx)
+		return m.CreateIndexInstance(defn, scheduled, reqCtx, asyncCreate)
 	}
 
-	return m.CreateIndex(defn, scheduled, reqCtx)
+	return m.CreateIndex(defn, scheduled, reqCtx, asyncCreate)
 }
 
 func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scheduled bool,
-	reqCtx *common.MetadataRequestContext) error {
+	reqCtx *common.MetadataRequestContext, asyncCreate bool) error {
 
 	/////////////////////////////////////////////////////
 	// Verify input parameters
@@ -1218,7 +1219,7 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scheduled bool,
 	/////////////////////////////////////////////////////
 
 	// Run index build
-	if !defn.Deferred && scheduled {
+	if !defn.Deferred && scheduled && !asyncCreate {
 		if m.notifier != nil {
 			logging.Debugf("LifecycleMgr.CreateIndex() : start Index Build")
 
@@ -2595,7 +2596,7 @@ func (m *LifecycleMgr) handleConfigUpdate(content []byte) error {
 //-----------------------------------------------------------
 
 func (m *LifecycleMgr) CreateIndexInstance(defn *common.IndexDefn, scheduled bool,
-	reqCtx *common.MetadataRequestContext) error {
+	reqCtx *common.MetadataRequestContext, asyncCreate bool) error {
 
 	/////////////////////////////////////////////////////
 	// Verify input parameters
@@ -2709,7 +2710,7 @@ func (m *LifecycleMgr) CreateIndexInstance(defn *common.IndexDefn, scheduled boo
 	/////////////////////////////////////////////////////
 
 	// Run index build
-	if !defn.Deferred && scheduled {
+	if !defn.Deferred && scheduled && !asyncCreate {
 		if m.notifier != nil {
 			logging.Debugf("LifecycleMgr.CreateIndexInstance() : start Index Build")
 

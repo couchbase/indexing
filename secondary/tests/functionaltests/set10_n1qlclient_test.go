@@ -410,6 +410,10 @@ func (ctxt *qcmdContext) MaxParallelism() int {
 	return 1
 }
 
+func (ctxt *qcmdContext) GetReqDeadline() time.Time {
+	return time.Time{}
+}
+
 func cleanbackfillFiles() {
 	dir := backfillDir()
 	files, err := ioutil.ReadDir(dir)
