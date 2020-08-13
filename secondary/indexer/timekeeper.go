@@ -165,6 +165,9 @@ func (tk *timekeeper) handleSupervisorCommands(cmd Message) {
 	case STREAM_READER_SYSTEM_EVENT:
 		tk.handleDcpSystemEvent(cmd)
 
+	case STREAM_READER_OSO_SNAPSHOT_MARKER:
+		tk.handleOSOSnapshotMarker(cmd)
+
 	case POOL_CHANGE:
 		tk.handlePoolChange(cmd)
 
@@ -538,6 +541,7 @@ func (tk *timekeeper) handleSync(cmd Message) {
 	streamId := cmd.(*MsgKeyspaceHWT).GetStreamId()
 	keyspaceId := cmd.(*MsgKeyspaceHWT).GetKeyspaceId()
 	hwt := cmd.(*MsgKeyspaceHWT).GetHWT()
+	hwtOSO := cmd.(*MsgKeyspaceHWT).GetHWTOSO()
 	prevSnap := cmd.(*MsgKeyspaceHWT).GetPrevSnap()
 	sessionId := cmd.(*MsgKeyspaceHWT).GetSessionId()
 
@@ -577,9 +581,12 @@ func (tk *timekeeper) handleSync(cmd Message) {
 	}
 
 	//update HWT for the keyspaceId
-	tk.ss.updateHWT(streamId, keyspaceId, hwt, prevSnap)
+	tk.ss.updateHWT(streamId, keyspaceId, hwt, hwtOSO, prevSnap)
 	hwt.Free()
 	prevSnap.Free()
+	if hwtOSO != nil {
+		hwtOSO.Free()
+	}
 
 	tk.supvCmdch <- &MsgSuccess{}
 
@@ -1667,6 +1674,75 @@ func (tk *timekeeper) handleDcpSystemEvent(cmd Message) {
 
 }
 
+func (tk *timekeeper) handleOSOSnapshotMarker(cmd Message) {
+
+	streamId := cmd.(*MsgStream).GetStreamId()
+	meta := cmd.(*MsgStream).GetMutationMeta()
+	eventType := cmd.(*MsgStream).GetEventType()
+
+	defer meta.Free()
+
+	logging.Infof("TK OSOSnapshot %v %v %v %v %v %v %v", streamId, meta.keyspaceId,
+		meta.vbucket, meta.vbuuid, meta.seqno, meta.opaque, eventType)
+
+	tk.lock.Lock()
+	defer tk.lock.Unlock()
+
+	if tk.indexerState == INDEXER_PREPARE_UNPAUSE {
+		logging.Warnf("Timekeeper::handleOSOSnapshotMarker Received OSO Snapshot In "+
+			"Prepare Unpause State. KeyspaceId %v Stream %v. Ignored.", meta.keyspaceId, streamId)
+		tk.supvCmdch <- &MsgSuccess{}
+		return
+	}
+
+	//check if keyspace is active in stream
+	if tk.checkKeyspaceActiveInStream(streamId, meta.keyspaceId) == false {
+		logging.Warnf("Timekeeper::handleOSOSnapshotMarker Received OSO Snapshot for "+
+			"Inactive KeyspaceId %v Stream %v. Ignored.", meta.keyspaceId, streamId)
+		return
+	}
+
+	//if there are no indexes for this keyspace and stream, ignore
+	if c, ok := tk.ss.streamKeyspaceIdIndexCountMap[streamId][meta.keyspaceId]; !ok || c <= 0 {
+		logging.Warnf("Timekeeper::handleOSOSnapshotMarker Ignore OSO Snapshot for StreamId %v "+
+			"KeyspaceId %v. IndexCount %v. ", streamId, meta.keyspaceId, c)
+		tk.supvCmdch <- &MsgSuccess{}
+		return
+	}
+
+	//if the session doesn't match, ignore
+	sessionId := tk.ss.getSessionId(streamId, meta.keyspaceId)
+	if meta.opaque != 0 && sessionId != meta.opaque {
+		logging.Warnf("Timekeeper::handleOSOSnapshotMarker Ignore OSO Snapshot for StreamId %v "+
+			"KeyspaceId %v. SessionId %v. Current Session %v ", streamId, meta.keyspaceId,
+			meta.opaque, sessionId)
+		tk.supvCmdch <- &MsgSuccess{}
+		return
+	}
+
+	state := tk.ss.streamKeyspaceIdStatus[streamId][meta.keyspaceId]
+
+	switch state {
+
+	case STREAM_ACTIVE:
+		if tk.checkAnyInitialStateIndex(meta.keyspaceId) {
+			//TODO Collections - generate stream reset message
+
+		}
+
+	case STREAM_PREPARE_RECOVERY, STREAM_PREPARE_DONE, STREAM_INACTIVE:
+		logging.Verbosef("Timekeeper::handleOSOSnapshotMarker Ignore OSO Snapshot "+
+			"for StreamId %v KeyspaceId %v State %v", streamId, meta.keyspaceId, state)
+
+	default:
+		logging.Errorf("Timekeeper::handleOSOSnapshotMarker Invalid Stream State "+
+			"StreamId %v KeyspaceId %v State %v", streamId, meta.keyspaceId, state)
+	}
+
+	tk.supvCmdch <- &MsgSuccess{}
+
+}
+
 func (tk *timekeeper) handleInitBuildDoneAck(cmd Message) {
 
 	streamId := cmd.(*MsgTKInitBuildDone).GetStreamId()
@@ -2341,7 +2417,8 @@ func (tk *timekeeper) checkCatchupStreamReadyToMerge(cmd Message) bool {
 		var maintTs *common.TsVbuuid
 		if tsList.Len() > 0 {
 			e := tsList.Front()
-			maintTs = e.Value.(*common.TsVbuuid)
+			tsElem := e.Value.(*TsListElem)
+			maintTs = tsElem.ts
 		} else {
 			return false
 		}
@@ -2388,29 +2465,38 @@ func (tk *timekeeper) generateNewStabilityTS(streamId common.StreamId,
 	}
 
 	if tk.ss.checkNewTSDue(streamId, keyspaceId) {
-		tsVbuuid := tk.ss.getNextStabilityTS(streamId, keyspaceId)
+		tsElem := tk.ss.getNextStabilityTS(streamId, keyspaceId)
 
 		//persist TS which completes the build
-		if tk.isBuildCompletionTs(streamId, keyspaceId, tsVbuuid) {
+		if tk.isBuildCompletionTs(streamId, keyspaceId, tsElem.ts) {
 
 			if hasTS, ok := tk.ss.streamKeyspaceIdHasBuildCompTSMap[streamId][keyspaceId]; !ok || !hasTS {
-				logging.Infof("timekeeper::generateNewStability: setting snapshot type as DISK_SNAP due to BuildCompletionTS")
-				tsVbuuid.SetSnapType(common.DISK_SNAP)
+
+				enableOSO := tk.ss.streamKeyspaceIdEnableOSO[streamId][keyspaceId]
+				if enableOSO {
+					logging.Infof("Timekeeper::generateNewStability %v %v setting snapshot "+
+						"type as DISK_SNAP_OSO due to BuildCompletionTS", streamId, keyspaceId)
+					tsElem.ts.SetSnapType(common.DISK_SNAP_OSO)
+				} else {
+					logging.Infof("Timekeeper::generateNewStability %v %v setting snapshot "+
+						"type as DISK_SNAP due to BuildCompletionTS", streamId, keyspaceId)
+					tsElem.ts.SetSnapType(common.DISK_SNAP)
+				}
 				tk.ss.streamKeyspaceIdHasBuildCompTSMap[streamId][keyspaceId] = true
 			}
 		}
 
 		if tk.ss.canFlushNewTS(streamId, keyspaceId) {
-			tk.sendNewStabilityTS(tsVbuuid, keyspaceId, streamId)
+			tk.sendNewStabilityTS(tsElem, keyspaceId, streamId)
 		} else {
 			//store the ts in list
 			logging.LazyTrace(func() string {
 				return fmt.Sprintf(
 					"Timekeeper::generateNewStabilityTS %v %v Added TS to Pending List "+
-						"%v ", keyspaceId, streamId, tsVbuuid)
+						"%v ", keyspaceId, streamId, tsElem.ts)
 			})
 			tsList := tk.ss.streamKeyspaceIdTsListMap[streamId][keyspaceId]
-			tsList.PushBack(tsVbuuid)
+			tsList.PushBack(tsElem)
 			stats := tk.stats.Get()
 			if stat, ok := stats.buckets[keyspaceId]; ok {
 				stat.tsQueueSize.Set(int64(tsList.Len()))
@@ -2429,7 +2515,7 @@ func (tk *timekeeper) generateNewStabilityTS(streamId common.StreamId,
 				logging.Infof("Timekeeper:: %v %v Forcing Overdue Commit", streamId, keyspaceId)
 				tsVbuuid.SetSnapType(common.FORCE_COMMIT)
 				tk.ss.streamKeyspaceIdLastPersistTime[streamId][keyspaceId] = time.Now()
-				tk.sendNewStabilityTS(tsVbuuid, keyspaceId, streamId)
+				tk.sendNewStabilityTS(&TsListElem{ts: tsVbuuid}, keyspaceId, streamId)
 			}
 		}
 	}
@@ -2448,7 +2534,8 @@ func (tk *timekeeper) maybeMergeTs(streamId common.StreamId,
 	//get the last generated but not yet processed timestamp
 	if tsList.Len() > 0 {
 		e := tsList.Back()
-		lts = e.Value.(*common.TsVbuuid)
+		tsElem := e.Value.(*TsListElem)
+		lts = tsElem.ts
 	}
 
 	//if either of the last generated or newTs has a large snapshot,
@@ -2470,7 +2557,7 @@ func (tk *timekeeper) maybeMergeTs(streamId common.StreamId,
 		tsList.Init()
 	}
 
-	tsList.PushBack(newTs)
+	tsList.PushBack(&TsListElem{ts: newTs})
 
 }
 
@@ -2494,7 +2581,8 @@ func (tk *timekeeper) processPendingTS(streamId common.StreamId, keyspaceId stri
 
 	if tsList.Len() > 0 {
 		e := tsList.Front()
-		tsVbuuid := e.Value.(*common.TsVbuuid)
+		tsElem := e.Value.(*TsListElem)
+		tsVbuuid := tsElem.ts
 		tsList.Remove(e)
 		ts := getSeqTsFromTsVbuuid(tsVbuuid)
 
@@ -2504,6 +2592,7 @@ func (tk *timekeeper) processPendingTS(streamId common.StreamId, keyspaceId stri
 			tsVbuuidHWT := tk.ss.streamKeyspaceIdHWTMap[streamId][keyspaceId]
 			tsHWT := getSeqTsFromTsVbuuid(tsVbuuidHWT)
 
+			//TODO Collections Handle OSO HWT
 			//if HWT is greater than flush TS, this TS can be flush
 			if tsHWT.GreaterThanEqual(ts) {
 				logging.LazyDebug(func() string {
@@ -2525,7 +2614,7 @@ func (tk *timekeeper) processPendingTS(streamId common.StreamId, keyspaceId stri
 			}
 
 		}
-		tk.sendNewStabilityTS(tsVbuuid, keyspaceId, streamId)
+		tk.sendNewStabilityTS(tsElem, keyspaceId, streamId)
 		//update tsQueueSize when processing queued TS
 		stats := tk.stats.Get()
 		if stat, ok := stats.buckets[keyspaceId]; ok {
@@ -2538,9 +2627,10 @@ func (tk *timekeeper) processPendingTS(streamId common.StreamId, keyspaceId stri
 }
 
 //sendNewStabilityTS sends the given TS to supervisor
-func (tk *timekeeper) sendNewStabilityTS(flushTs *common.TsVbuuid, keyspaceId string,
+func (tk *timekeeper) sendNewStabilityTS(tsElem *TsListElem, keyspaceId string,
 	streamId common.StreamId) {
 
+	flushTs := tsElem.ts
 	logging.LazyTrace(func() string {
 		return fmt.Sprintf("Timekeeper::sendNewStabilityTS KeyspaceId: %v "+
 			"Stream: %v TS: %v", keyspaceId, streamId, flushTs)
@@ -2550,9 +2640,10 @@ func (tk *timekeeper) sendNewStabilityTS(flushTs *common.TsVbuuid, keyspaceId st
 	tk.ensureMonotonicTs(streamId, keyspaceId, flushTs)
 
 	var changeVec []bool
+	var countVec []uint64
 	if flushTs.GetSnapType() != common.FORCE_COMMIT {
 		var noChange bool
-		changeVec, noChange = tk.ss.computeTsChangeVec(streamId, keyspaceId, flushTs)
+		changeVec, noChange, countVec = tk.ss.computeTsChangeVec(streamId, keyspaceId, tsElem)
 		if noChange {
 			return
 		}
@@ -2587,6 +2678,7 @@ func (tk *timekeeper) sendNewStabilityTS(flushTs *common.TsVbuuid, keyspaceId st
 			streamId:   streamId,
 			changeVec:  changeVec,
 			hasAllSB:   hasAllSB,
+			countVec:   countVec,
 		}
 
 		if monitor_ts {
@@ -2670,6 +2762,19 @@ func (tk *timekeeper) setSnapshotType(streamId common.StreamId, keyspaceId strin
 			//create disk snapshot based on wall clock time
 			if time.Since(lastPersistTime) > persistDuration {
 				flushTs.SetSnapType(common.DISK_SNAP)
+				tk.ss.streamKeyspaceIdLastPersistTime[streamId][keyspaceId] = time.Now()
+			}
+		} else if flushTs.GetSnapType() == common.NO_SNAP_OSO {
+			// if storage type is MOI, generate snapshot during initial build.
+			if common.GetStorageMode() == common.MOI {
+				flushTs.SetSnapType(common.INMEM_SNAP_OSO)
+			}
+
+			snapPersistInterval := tk.getPersistIntervalInitBuild()
+			persistDuration := time.Duration(snapPersistInterval) * time.Millisecond
+			//create disk snapshot based on wall clock time
+			if time.Since(lastPersistTime) > persistDuration {
+				flushTs.SetSnapType(common.DISK_SNAP_OSO)
 				tk.ss.streamKeyspaceIdLastPersistTime[streamId][keyspaceId] = time.Now()
 			}
 		}
@@ -2807,6 +2912,16 @@ func (tk *timekeeper) ensureMonotonicTs(streamId common.StreamId, keyspaceId str
 	if lts, ok := tk.ss.streamKeyspaceIdLastFlushedTsMap[streamId][keyspaceId]; ok && lts != nil {
 
 		for i, s := range flushTs.Seqnos {
+
+			enableOSO := tk.ss.streamKeyspaceIdEnableOSO[streamId][keyspaceId]
+			if enableOSO {
+				//oso can be non-monotonic
+				if flushTs.Snapshots[i][0] == 0 &&
+					s != 0 {
+					continue
+				}
+			}
+
 			//if flushTs has a smaller seqno than lastFlushTs
 			if s < lts.Seqnos[i] {
 
@@ -2849,7 +2964,7 @@ func (tk *timekeeper) maybeSplitTs(ts *common.TsVbuuid, keyspaceId string,
 
 	if newTs != nil {
 		tsList := tk.ss.streamKeyspaceIdTsListMap[streamId][keyspaceId]
-		tsList.PushFront(ts)
+		tsList.PushFront(&TsListElem{ts: newTs})
 		return newTs
 	} else {
 		return ts

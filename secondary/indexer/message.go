@@ -824,6 +824,7 @@ type MsgTKStabilityTS struct {
 	keyspaceId string
 	changeVec  []bool
 	hasAllSB   bool
+	countVec   []uint64
 }
 
 func (m *MsgTKStabilityTS) GetMsgType() MsgType {
@@ -848,6 +849,10 @@ func (m *MsgTKStabilityTS) GetChangeVector() []bool {
 
 func (m *MsgTKStabilityTS) HasAllSB() bool {
 	return m.hasAllSB
+}
+
+func (m *MsgTKStabilityTS) GetCountVector() []uint64 {
+	return m.countVec
 }
 
 func (m *MsgTKStabilityTS) String() string {
