@@ -76,6 +76,8 @@ type StreamState struct {
 	streamKeyspaceIdVBMap map[common.StreamId]KeyspaceIdVBMap
 
 	keyspaceIdRollbackTime map[string]int64
+
+	streamKeyspaceIdEnableOSO map[common.StreamId]KeyspaceIdEnableOSO
 }
 
 type KeyspaceIdHWTMap map[string]*common.TsVbuuid
@@ -175,6 +177,7 @@ func InitStreamState(config common.Config) *StreamState {
 		streamKeyspaceIdCollectionId:       make(map[common.StreamId]KeyspaceIdCollectionId),
 		streamKeyspaceIdPastMinMergeTs:     make(map[common.StreamId]KeyspaceIdPastMinMergeTs),
 		streamKeyspaceIdVBMap:              make(map[common.StreamId]KeyspaceIdVBMap),
+		streamKeyspaceIdEnableOSO:          make(map[common.StreamId]KeyspaceIdEnableOSO),
 	}
 
 	return ss
@@ -295,6 +298,9 @@ func (ss *StreamState) initNewStream(streamId common.StreamId) {
 	keyspaceIdVBMap := make(KeyspaceIdVBMap)
 	ss.streamKeyspaceIdVBMap[streamId] = keyspaceIdVBMap
 
+	keyspaceIdEnableOSO := make(KeyspaceIdEnableOSO)
+	ss.streamKeyspaceIdEnableOSO[streamId] = keyspaceIdEnableOSO
+
 	ss.streamStatus[streamId] = STREAM_ACTIVE
 
 }
@@ -339,6 +345,7 @@ func (ss *StreamState) initKeyspaceIdInStream(streamId common.StreamId,
 	ss.streamKeyspaceIdKVPendingTsMap[streamId][keyspaceId] = common.NewTsVbuuid(keyspaceId, numVbuckets)
 	ss.streamKeyspaceIdRepairStateMap[streamId][keyspaceId] = make([]RepairState, numVbuckets)
 	ss.streamKeyspaceIdVBMap[streamId][keyspaceId] = make(map[Vbucket]string)
+	ss.streamKeyspaceIdEnableOSO[streamId][keyspaceId] = false
 
 	ss.streamKeyspaceIdStatus[streamId][keyspaceId] = STREAM_ACTIVE
 
@@ -389,6 +396,7 @@ func (ss *StreamState) cleanupKeyspaceIdFromStream(streamId common.StreamId,
 	delete(ss.streamKeyspaceIdKVPendingTsMap[streamId], keyspaceId)
 	delete(ss.streamKeyspaceIdRepairStateMap[streamId], keyspaceId)
 	delete(ss.streamKeyspaceIdVBMap[streamId], keyspaceId)
+	delete(ss.streamKeyspaceIdEnableOSO[streamId], keyspaceId)
 
 	if donech, ok := ss.streamKeyspaceIdFlushDone[streamId][keyspaceId]; ok && donech != nil {
 		close(donech)
@@ -442,6 +450,7 @@ func (ss *StreamState) resetStreamState(streamId common.StreamId) {
 	delete(ss.streamKeyspaceIdKVPendingTsMap, streamId)
 	delete(ss.streamKeyspaceIdRepairStateMap, streamId)
 	delete(ss.streamKeyspaceIdVBMap, streamId)
+	delete(ss.streamKeyspaceIdEnableOSO, streamId)
 
 	ss.streamStatus[streamId] = STREAM_INACTIVE
 

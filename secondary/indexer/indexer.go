@@ -3981,6 +3981,13 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 	clustAddr := idx.config["clusterAddr"].String()
 	numVb := idx.config["numVbuckets"].Int()
 	enableAsync := idx.config["enableAsyncOpenStream"].Bool()
+	enableOSO := idx.config["build.enableOSO"].Bool()
+
+	if enableOSO && buildStream == common.INIT_STREAM {
+		enableOSO = true
+	} else {
+		enableOSO = false
+	}
 
 	idx.prepareStreamKeyspaceIdForFreshStart(buildStream, keyspaceId)
 
@@ -4007,7 +4014,8 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 		async:              async,
 		sessionId:          sessionId,
 		collectionId:       cid,
-		collectionAware:    collectionAware}
+		collectionAware:    collectionAware,
+		enableOSO:          enableOSO}
 
 	//send stream update to timekeeper
 	if resp := idx.sendStreamUpdateToWorker(cmd, idx.tkCmdCh,
@@ -5520,6 +5528,13 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 		async = enableAsync && clusterVer >= common.INDEXER_65_VERSION
 	}
 
+	enableOSO := idx.config["build.enableOSO"].Bool()
+	if enableOSO && streamId == common.INIT_STREAM {
+		enableOSO = true
+	} else {
+		enableOSO = false
+	}
+
 	var cid string
 	var ok bool
 	if cid, ok = idx.streamKeyspaceIdCollectionId[streamId][keyspaceId]; !ok {
@@ -5548,7 +5563,8 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 		async:              async,
 		sessionId:          sessionId,
 		collectionId:       cid,
-		collectionAware:    collectionAware}
+		collectionAware:    collectionAware,
+		enableOSO:          enableOSO}
 
 	//send stream update to timekeeper
 	if resp := idx.sendStreamUpdateToWorker(cmd, idx.tkCmdCh,

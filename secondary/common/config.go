@@ -12,16 +12,19 @@
 
 package common
 
-import "encoding/json"
-import "strings"
-import "fmt"
-import "reflect"
-import "errors"
-import "github.com/couchbase/indexing/secondary/logging"
-import "sync/atomic"
-import "unsafe"
-import "runtime"
-import "math"
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"math"
+	"reflect"
+	"runtime"
+	"strings"
+	"sync/atomic"
+	"unsafe"
+
+	"github.com/couchbase/indexing/secondary/logging"
+)
 
 // NOTE:
 // following settings are related to each other.
@@ -2366,6 +2369,13 @@ var SystemConfig = Config{
 	"indexer.build.background.disable": ConfigValue{
 		false,
 		"Disable background index build, except during upgrade",
+		false,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.build.enableOSO": ConfigValue{
+		false,
+		"Use OSO mode for Initial Index Build",
 		false,
 		false, // mutable
 		false, // case-insensitive
