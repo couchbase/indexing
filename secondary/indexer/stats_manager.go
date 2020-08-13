@@ -2406,29 +2406,29 @@ func (s *statsManager) handleMemStatsReq(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *statsManager) getStorageStats() string {
-	var result string
+	var result strings.Builder
 	replych := make(chan []IndexStorageStats)
 	statReq := &MsgIndexStorageStats{respch: replych}
 	s.supvMsgch <- statReq
 	res := <-replych
 
-	result += "[\n"
+	result.WriteString("[\n")
 	for i, sts := range res {
 		if i > 0 {
-			result += ","
+			result.WriteString(",")
 		}
-		result += fmt.Sprintf("{\n\"Index\": \"%s:%s\", \"Id\": %d, \"PartitionId\": %d,\n",
-			sts.Bucket, sts.Name, sts.InstId, sts.PartnId)
-		result += fmt.Sprintf("\"Stats\":\n")
+		result.WriteString(fmt.Sprintf("{\n\"Index\": \"%s:%s\", \"Id\": %d, \"PartitionId\": %d,\n",
+			sts.Bucket, sts.Name, sts.InstId, sts.PartnId))
+		result.WriteString(fmt.Sprintf("\"Stats\":\n"))
 		for _, data := range sts.GetInternalData() {
-			result += data
+			result.WriteString(data)
 		}
-		result += "}\n"
+		result.WriteString("}\n")
 	}
 
-	result += "]"
+	result.WriteString("]")
 
-	return result
+	return result.String()
 }
 
 func (s *statsManager) handleStorageStatsReq(w http.ResponseWriter, r *http.Request) {
