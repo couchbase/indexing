@@ -1071,6 +1071,22 @@ func StopScheduleCreateTokenExist(defnId c.IndexDefnId) (bool, error) {
 	return c.MetakvGet(StopScheduleCreateTokenPath+id, token)
 }
 
+func GetStopScheduleCreateToken(defnId c.IndexDefnId) (*StopScheduleCreateToken, error) {
+
+	token := &StopScheduleCreateToken{}
+	id := fmt.Sprintf("%v", defnId)
+	success, err := c.MetakvGet(StopScheduleCreateTokenPath+id, token)
+	if err != nil {
+		return nil, err
+	}
+
+	if !success {
+		return nil, nil
+	}
+
+	return token, nil
+}
+
 func DeleteStopScheduleCreateToken(defnId c.IndexDefnId) error {
 
 	id := fmt.Sprintf("%v", defnId)
@@ -1235,7 +1251,7 @@ func (m *CommandListener) GetNewStopScheduleCreateTokens() map[string]*StopSched
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 
-	if len(m.scheduleTokens) != 0 {
+	if len(m.stopSchedTokens) != 0 {
 		result := m.stopSchedTokens
 		m.stopSchedTokens = make(map[string]*StopScheduleCreateToken)
 		return result
