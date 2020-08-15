@@ -477,33 +477,8 @@ func (m *LifecycleMgr) handlePrepareCreateIndex(content []byte) ([]byte, error) 
 	prepareCreateIndex.Scope, prepareCreateIndex.Collection = common.GetCollectionDefaults(prepareCreateIndex.Scope,
 		prepareCreateIndex.Collection)
 
+	// Check for duplicate index before proceeding further.
 	if prepareCreateIndex.Op == client.PREPARE {
-		if m.prepareLock != nil {
-			if m.prepareLock.RequesterId != prepareCreateIndex.RequesterId ||
-				m.prepareLock.DefnId != prepareCreateIndex.DefnId {
-
-				if m.prepareLock.Timeout > (time.Now().UnixNano() - m.prepareLock.StartTime) {
-					logging.Infof("LifecycleMgr.handlePrepareCreateIndex() : Reject %v because another index %v holding lock",
-						prepareCreateIndex.DefnId, m.prepareLock.DefnId)
-					response := &client.PrepareCreateResponse{
-						Accept: false,
-						Msg:    client.RespAnotherIndexCreation,
-					}
-					return client.MarshallPrepareCreateResponse(response)
-				}
-				logging.Infof("LifecycleMgr.handlePrepareCreateIndex() : Prepare timeout for %v", m.prepareLock.DefnId)
-			}
-		}
-
-		if _, err := m.repo.GetLocalValue("RebalanceRunning"); err == nil {
-			logging.Infof("LifecycleMgr.handlePrepareCreateIndex() : Reject %v because rebalance in progress", prepareCreateIndex.DefnId)
-			response := &client.PrepareCreateResponse{
-				Accept: false,
-				Msg:    client.RespRebalanceRunning,
-			}
-			return client.MarshallPrepareCreateResponse(response)
-		}
-
 		if prepareCreateIndex.Name != "" && prepareCreateIndex.Bucket != "" {
 			// Check for duplicate index name only if name and bucket name
 			// are specified in the request
@@ -531,6 +506,34 @@ func (m *LifecycleMgr) handlePrepareCreateIndex(content []byte) ([]byte, error) 
 				}
 				return client.MarshallPrepareCreateResponse(response)
 			}
+		}
+	}
+
+	if prepareCreateIndex.Op == client.PREPARE {
+		if m.prepareLock != nil {
+			if m.prepareLock.RequesterId != prepareCreateIndex.RequesterId ||
+				m.prepareLock.DefnId != prepareCreateIndex.DefnId {
+
+				if m.prepareLock.Timeout > (time.Now().UnixNano() - m.prepareLock.StartTime) {
+					logging.Infof("LifecycleMgr.handlePrepareCreateIndex() : Reject %v because another index %v holding lock",
+						prepareCreateIndex.DefnId, m.prepareLock.DefnId)
+					response := &client.PrepareCreateResponse{
+						Accept: false,
+						Msg:    client.RespAnotherIndexCreation,
+					}
+					return client.MarshallPrepareCreateResponse(response)
+				}
+				logging.Infof("LifecycleMgr.handlePrepareCreateIndex() : Prepare timeout for %v", m.prepareLock.DefnId)
+			}
+		}
+
+		if _, err := m.repo.GetLocalValue("RebalanceRunning"); err == nil {
+			logging.Infof("LifecycleMgr.handlePrepareCreateIndex() : Reject %v because rebalance in progress", prepareCreateIndex.DefnId)
+			response := &client.PrepareCreateResponse{
+				Accept: false,
+				Msg:    client.RespRebalanceRunning,
+			}
+			return client.MarshallPrepareCreateResponse(response)
 		}
 
 		m.prepareLock = prepareCreateIndex
