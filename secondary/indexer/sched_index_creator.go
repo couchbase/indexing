@@ -444,6 +444,19 @@ func (m *schedIndexCreator) tryCreateIndex(index *scheduledIndex) (error, bool) 
 		return nil, false
 	}
 
+	exists, err = mc.DeleteCommandTokenExist(index.token.Definition.DefnId)
+	if err != nil {
+		logging.Errorf("schedIndexCreator:tryCreateIndex error (%v) in getting delete command token for %v",
+			err, index.token.Definition.DefnId)
+		return err, false
+	}
+
+	if exists {
+		logging.Infof("schedIndexCreator:tryCreateIndex delete command token exists for %v",
+			index.token.Definition.DefnId)
+		return nil, false
+	}
+
 	if m.backoff > 0 {
 		logging.Debugf("schedIndexCreator:tryCreateIndex using %v backoff for index %v",
 			time.Duration(m.backoff), index.token.Definition.DefnId)
@@ -461,9 +474,18 @@ func (m *schedIndexCreator) tryCreateIndex(index *scheduledIndex) (error, bool) 
 		return err, false
 	}
 
-	// TODO: Check if index already exists in metadata provider. If yes, then the
-	// index was successfully created earlier, but the token deletion may
-	// have failed.
+	// Following check is an effort to check if index was created but the
+	// schedule create token was not deleted.
+	if provider.FindIndexIgnoreStatus(index.token.Definition.DefnId) != nil {
+		logging.Infof("schedIndexCreator:tryCreateIndex index %v is already created", index.token.Definition.DefnId)
+		return nil, false
+	}
+
+	// If the bucket/scope/collection was dropped after the token creation,
+	// the index creation should fail due to id mismatch.
+	index.token.Definition.BucketUUID = index.token.BucketUUID
+	index.token.Definition.ScopeId = index.token.ScopeId
+	index.token.Definition.CollectionId = index.token.CollectionId
 
 	return provider.CreateIndexWithDefnAndPlan(&index.token.Definition, index.token.Plan), true
 }
