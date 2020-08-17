@@ -510,6 +510,15 @@ func (m *LifecycleMgr) handlePrepareCreateIndex(content []byte) ([]byte, error) 
 	}
 
 	if prepareCreateIndex.Op == client.PREPARE {
+		if _, err := m.repo.GetLocalValue("RebalanceRunning"); err == nil {
+			logging.Infof("LifecycleMgr.handlePrepareCreateIndex() : Reject %v because rebalance in progress", prepareCreateIndex.DefnId)
+			response := &client.PrepareCreateResponse{
+				Accept: false,
+				Msg:    client.RespRebalanceRunning,
+			}
+			return client.MarshallPrepareCreateResponse(response)
+		}
+
 		if m.prepareLock != nil {
 			if m.prepareLock.RequesterId != prepareCreateIndex.RequesterId ||
 				m.prepareLock.DefnId != prepareCreateIndex.DefnId {
@@ -525,15 +534,6 @@ func (m *LifecycleMgr) handlePrepareCreateIndex(content []byte) ([]byte, error) 
 				}
 				logging.Infof("LifecycleMgr.handlePrepareCreateIndex() : Prepare timeout for %v", m.prepareLock.DefnId)
 			}
-		}
-
-		if _, err := m.repo.GetLocalValue("RebalanceRunning"); err == nil {
-			logging.Infof("LifecycleMgr.handlePrepareCreateIndex() : Reject %v because rebalance in progress", prepareCreateIndex.DefnId)
-			response := &client.PrepareCreateResponse{
-				Accept: false,
-				Msg:    client.RespRebalanceRunning,
-			}
-			return client.MarshallPrepareCreateResponse(response)
 		}
 
 		m.prepareLock = prepareCreateIndex
