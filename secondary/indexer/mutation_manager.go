@@ -974,6 +974,7 @@ func (m *mutationMgr) handlePersistMutationQueue(cmd Message) {
 	streamId := cmd.(*MsgMutMgrFlushMutationQueue).GetStreamId()
 	ts := cmd.(*MsgMutMgrFlushMutationQueue).GetTimestamp()
 	changeVec := cmd.(*MsgMutMgrFlushMutationQueue).GetChangeVector()
+	countVec := cmd.(*MsgMutMgrFlushMutationQueue).GetCountVector()
 	hasAllSB := cmd.(*MsgMutMgrFlushMutationQueue).HasAllSB()
 
 	m.lock.Lock()
@@ -981,7 +982,7 @@ func (m *mutationMgr) handlePersistMutationQueue(cmd Message) {
 
 	q := m.streamKeyspaceIdQueueMap[streamId][keyspaceId]
 	stats := m.stats.Get()
-	go m.persistMutationQueue(q, streamId, keyspaceId, ts, changeVec, stats, hasAllSB)
+	go m.persistMutationQueue(q, streamId, keyspaceId, ts, changeVec, countVec, stats, hasAllSB)
 	m.supvCmdch <- &MsgSuccess{}
 
 }
@@ -989,7 +990,7 @@ func (m *mutationMgr) handlePersistMutationQueue(cmd Message) {
 //persistMutationQueue implements the actual persist for the queue
 func (m *mutationMgr) persistMutationQueue(q IndexerMutationQueue,
 	streamId common.StreamId, keyspaceId string, ts *common.TsVbuuid,
-	changeVec []bool, stats *IndexerStats, hasAllSB bool) {
+	changeVec []bool, countVec []uint64, stats *IndexerStats, hasAllSB bool) {
 
 	m.flock.Lock()
 	defer m.flock.Unlock()
@@ -1004,7 +1005,7 @@ func (m *mutationMgr) persistMutationQueue(q IndexerMutationQueue,
 		flusher := NewFlusher(config, stats)
 		sts := getSeqTsFromTsVbuuid(ts)
 		msgch := flusher.PersistUptoTS(q.queue, streamId, keyspaceId,
-			m.indexInstMap, m.indexPartnMap, sts, changeVec, stopch)
+			m.indexInstMap, m.indexPartnMap, sts, changeVec, countVec, stopch)
 		//wait for flusher to finish
 		msg := <-msgch
 

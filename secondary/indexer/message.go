@@ -595,6 +595,7 @@ type MsgMutMgrFlushMutationQueue struct {
 	ts         *common.TsVbuuid
 	changeVec  []bool
 	hasAllSB   bool
+	countVec   []uint64
 }
 
 func (m *MsgMutMgrFlushMutationQueue) GetMsgType() MsgType {
@@ -619,6 +620,10 @@ func (m *MsgMutMgrFlushMutationQueue) GetChangeVector() []bool {
 
 func (m *MsgMutMgrFlushMutationQueue) HasAllSB() bool {
 	return m.hasAllSB
+}
+
+func (m *MsgMutMgrFlushMutationQueue) GetCountVector() []uint64 {
+	return m.countVec
 }
 
 func (m *MsgMutMgrFlushMutationQueue) String() string {

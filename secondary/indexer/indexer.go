@@ -998,6 +998,7 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		keyspaceId := msg.(*MsgTKStabilityTS).GetKeyspaceId()
 		streamId := msg.(*MsgTKStabilityTS).GetStreamId()
 		changeVec := msg.(*MsgTKStabilityTS).GetChangeVector()
+		countVec := msg.(*MsgTKStabilityTS).GetCountVector()
 		hasAllSB := msg.(*MsgTKStabilityTS).HasAllSB()
 
 		if idx.getStreamKeyspaceIdState(streamId, keyspaceId) == STREAM_INACTIVE {
@@ -1022,6 +1023,7 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 				ts:         ts,
 				streamId:   streamId,
 				changeVec:  changeVec,
+				countVec:   countVec,
 				hasAllSB:   hasAllSB}
 
 			<-idx.mutMgrCmdCh

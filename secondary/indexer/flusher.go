@@ -94,7 +94,7 @@ func NewFlusher(config common.Config, stats *IndexerStats) *flusher {
 //about shutdown completion.
 func (f *flusher) PersistUptoTS(q MutationQueue, streamId common.StreamId,
 	keyspaceId string, indexInstMap common.IndexInstMap, indexPartnMap IndexPartnMap,
-	ts Timestamp, changeVec []bool, stopch StopChannel) MsgChannel {
+	ts Timestamp, changeVec []bool, countVec []uint64, stopch StopChannel) MsgChannel {
 
 	logging.Verbosef("Flusher::PersistUptoTS %v %v Timestamp: %v PartnMap %v",
 		streamId, keyspaceId, ts, indexPartnMap)
@@ -103,7 +103,7 @@ func (f *flusher) PersistUptoTS(q MutationQueue, streamId common.StreamId,
 	f.indexPartnMap = CopyIndexPartnMap(indexPartnMap)
 
 	msgch := make(MsgChannel)
-	go f.flushQueue(q, streamId, keyspaceId, ts, changeVec, true, stopch, msgch)
+	go f.flushQueue(q, streamId, keyspaceId, ts, changeVec, countVec, true, stopch, msgch)
 	return msgch
 }
 
@@ -121,7 +121,7 @@ func (f *flusher) DrainUptoTS(q MutationQueue, streamId common.StreamId,
 		streamId, keyspaceId, ts)
 
 	msgch := make(MsgChannel)
-	go f.flushQueue(q, streamId, keyspaceId, ts, changeVec, false, stopch, msgch)
+	go f.flushQueue(q, streamId, keyspaceId, ts, changeVec, nil, false, stopch, msgch)
 	return msgch
 }
 
@@ -143,7 +143,7 @@ func (f *flusher) Persist(q MutationQueue, streamId common.StreamId,
 	f.indexPartnMap = CopyIndexPartnMap(indexPartnMap)
 
 	msgch := make(MsgChannel)
-	go f.flushQueue(q, streamId, keyspaceId, nil, nil, true, stopch, msgch)
+	go f.flushQueue(q, streamId, keyspaceId, nil, nil, nil, true, stopch, msgch)
 	return msgch
 }
 
@@ -159,7 +159,7 @@ func (f *flusher) Drain(q MutationQueue, streamId common.StreamId,
 	logging.Verbosef("Flusher::Drain %v %v", streamId, keyspaceId)
 
 	msgch := make(MsgChannel)
-	go f.flushQueue(q, streamId, keyspaceId, nil, nil, false, stopch, msgch)
+	go f.flushQueue(q, streamId, keyspaceId, nil, nil, nil, false, stopch, msgch)
 	return msgch
 }
 
@@ -167,7 +167,7 @@ func (f *flusher) Drain(q MutationQueue, streamId common.StreamId,
 //This function will close the done channel once all workers have finished.
 //It also listens on the stop channel and will stop all workers if stop signal is received.
 func (f *flusher) flushQueue(q MutationQueue, streamId common.StreamId, keyspaceId string,
-	ts Timestamp, changeVec []bool, persist bool, stopch StopChannel, msgch MsgChannel) {
+	ts Timestamp, changeVec []bool, countVec []uint64, persist bool, stopch StopChannel, msgch MsgChannel) {
 
 	var wg sync.WaitGroup
 	var i uint16
