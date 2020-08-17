@@ -229,13 +229,15 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 	snapType := tsVbuuid.GetSnapType()
 	tsVbuuid.Crc64 = common.HashVbuuid(tsVbuuid.Vbuuids)
 
-	if snapType == common.NO_SNAP {
+	if snapType == common.NO_SNAP || snapType == common.NO_SNAP_OSO {
 		logging.Debugf("StorageMgr::handleCreateSnapshot Skip Snapshot For %v "+
 			"%v SnapType %v", streamId, keyspaceId, snapType)
 
 		s.muSnap.Lock()
 		defer s.muSnap.Unlock()
 
+		//TODO Collections create a filtered copy of maps based on keyspace
+		//or store map of per stream/keyspaceId
 		indexInstMap := common.CopyIndexInstMap(s.indexInstMap)
 		indexPartnMap := CopyIndexPartnMap(s.indexPartnMap)
 
@@ -270,7 +272,8 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, keyspaceId s
 	var needsCommit bool
 	var forceCommit bool
 	snapType := tsVbuuid.GetSnapType()
-	if snapType == common.DISK_SNAP {
+	if snapType == common.DISK_SNAP ||
+		snapType == common.DISK_SNAP_OSO {
 		needsCommit = true
 	} else if snapType == common.FORCE_COMMIT {
 		forceCommit = true
