@@ -651,7 +651,7 @@ func (tk *timekeeper) handleFlushDone(cmd Message) {
 		tk.handleFlushDoneInitStream(cmd)
 
 	default:
-		logging.Errorf("Timekeeper::handleFlushDone \n\tInvalid StreamId %v ", streamId)
+		logging.Errorf("Timekeeper::handleFlushDone Invalid StreamId %v ", streamId)
 	}
 
 }
@@ -3783,12 +3783,22 @@ func (tk *timekeeper) updateTimestampStats() {
 func (tk *timekeeper) isBuildCompletionTs(streamId common.StreamId,
 	keyspaceId string, flushTs *common.TsVbuuid) bool {
 
+	if streamId != common.INIT_STREAM {
+		return false
+	}
+
 	for _, buildInfo := range tk.indexBuildInfo {
 		//if index belongs to the flushed keyspaceId and in INITIAL state
 		idx := buildInfo.indexInst
 		if idx.Defn.KeyspaceId(idx.Stream) == keyspaceId &&
 			idx.Stream == streamId &&
 			idx.State == common.INDEX_STATE_INITIAL {
+
+			enableOSO := tk.ss.streamKeyspaceIdEnableOSO[streamId][keyspaceId]
+			//build is not complete till all OSO Snap Ends have been received
+			if enableOSO && flushTs.HasOpenOSOSnap() {
+				return false
+			}
 
 			if buildInfo.buildTs != nil {
 				//if flushTs is greater than or equal to buildTs

@@ -1716,6 +1716,7 @@ func (ss *StreamState) setCountForOSOTs(streamId common.StreamId,
 
 	ts := tsElem.ts
 	for i, sn := range ts.Snapshots {
+
 		//if vb got an OSO Snapshot
 		if hwtOSO.Snapshots[i][0] == 0 &&
 			hwtOSO.Seqnos[i] != 0 {
@@ -1735,6 +1736,11 @@ func (ss *StreamState) setCountForOSOTs(streamId common.StreamId,
 					tsElem.osoCount = make([]uint64, len(hwtOSO.Seqnos))
 				}
 				tsElem.osoCount[i] = hwtOSO.Vbuuids[i] //count
+
+				//if this is an open OSO snap(i.e. OSO End has not been received)
+				if ts.Snapshots[i][1] != 1 {
+					ts.SetOpenOSOSnap(true)
+				}
 			}
 		}
 	}
