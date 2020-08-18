@@ -1203,10 +1203,12 @@ func (s *storageMgr) getIndexStorageStats() []IndexStorageStats {
 
 			if err == nil {
 				stat := IndexStorageStats{
-					InstId:  idxInstId,
-					PartnId: partnInst.Defn.GetPartitionId(),
-					Name:    inst.Defn.Name,
-					Bucket:  inst.Defn.Bucket,
+					InstId:     idxInstId,
+					PartnId:    partnInst.Defn.GetPartitionId(),
+					Name:       inst.Defn.Name,
+					Bucket:     inst.Defn.Bucket,
+					Scope:      inst.Defn.Scope,
+					Collection: inst.Defn.Collection,
 					Stats: StorageStatistics{
 						DataSize:          dataSz,
 						DataSizeOnDisk:    dataSzOnDisk,

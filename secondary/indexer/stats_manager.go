@@ -2443,8 +2443,20 @@ func (s *statsManager) getStorageStats() string {
 		if i > 0 {
 			result.WriteString(",")
 		}
-		result.WriteString(fmt.Sprintf("{\n\"Index\": \"%s:%s\", \"Id\": %d, \"PartitionId\": %d,\n",
-			sts.Bucket, sts.Name, sts.InstId, sts.PartnId))
+
+		scope := sts.Scope
+		collection := sts.Collection
+		if scope == common.DEFAULT_SCOPE && collection == common.DEFAULT_COLLECTION {
+			result.WriteString(fmt.Sprintf("{\n\"Index\": \"%s:%s\", \"Id\": %d, \"PartitionId\": %d,\n",
+				sts.Bucket, sts.Name, sts.InstId, sts.PartnId))
+		} else if scope == "" && collection == "" {
+			result.WriteString(fmt.Sprintf("{\n\"Index\": \"%s:%s\", \"Id\": %d, \"PartitionId\": %d,\n",
+				sts.Bucket, sts.Name, sts.InstId, sts.PartnId))
+		} else {
+			result.WriteString(fmt.Sprintf("{\n\"Index\": \"%s:%s:%s:%s\", \"Id\": %d, \"PartitionId\": %d,\n",
+				sts.Bucket, sts.Scope, sts.Collection, sts.Name, sts.InstId, sts.PartnId))
+		}
+
 		result.WriteString(fmt.Sprintf("\"Stats\":\n"))
 		for _, data := range sts.GetInternalData() {
 			result.WriteString(data)
