@@ -523,7 +523,7 @@ func (m *LifecycleMgr) handlePrepareCreateIndex(content []byte) ([]byte, error) 
 			if m.prepareLock.RequesterId != prepareCreateIndex.RequesterId ||
 				m.prepareLock.DefnId != prepareCreateIndex.DefnId {
 
-				if m.prepareLock.Timeout > (time.Now().UnixNano() - m.prepareLock.StartTime) {
+				if !m.isHigherPriorityRequest(prepareCreateIndex) {
 					logging.Infof("LifecycleMgr.handlePrepareCreateIndex() : Reject %v because another index %v holding lock",
 						prepareCreateIndex.DefnId, m.prepareLock.DefnId)
 					response := &client.PrepareCreateResponse{
@@ -532,7 +532,6 @@ func (m *LifecycleMgr) handlePrepareCreateIndex(content []byte) ([]byte, error) 
 					}
 					return client.MarshallPrepareCreateResponse(response)
 				}
-				logging.Infof("LifecycleMgr.handlePrepareCreateIndex() : Prepare timeout for %v", m.prepareLock.DefnId)
 			}
 		}
 
@@ -555,6 +554,53 @@ func (m *LifecycleMgr) handlePrepareCreateIndex(content []byte) ([]byte, error) 
 	}
 
 	return nil, fmt.Errorf("Unknown operation %v for prepare create index", prepareCreateIndex.Op)
+}
+
+//
+// Following function takes a prepare create request as input and returns
+// a boolean value base on the priority of the current in-progress request
+// and the new incoming request. Returns true if the new incoming request
+// has higher priority than the current in-progress request.
+//
+func (m *LifecycleMgr) isHigherPriorityRequest(req *client.PrepareCreateRequest) bool {
+	if m.prepareLock == nil {
+		return true
+	}
+
+	// Don't look at the actual request priorities if the current in-progress
+	// request has timed out.
+	// TODO: Need to increase timeout as planner can take more time with large
+	//       number of indexes.
+	if m.prepareLock.Timeout < (time.Now().UnixNano() - m.prepareLock.StartTime) {
+		logging.Infof("LifecycleMgr.handlePrepareCreateIndex() : Prepare timeout for %v", m.prepareLock.DefnId)
+		return true
+	}
+
+	if m.prepareLock.Ctime == 0 {
+		logging.Debugf("LifecycleMgr.handlePrepareCreateIndex() : Rejecting request for %v:%v"+
+			" as the ongoing request (%v, %v) has equal or higher priority.", req.DefnId, req.Ctime,
+			m.prepareLock.DefnId, m.prepareLock.Ctime)
+		return false
+	}
+
+	if req.Ctime == 0 {
+		logging.Infof("LifecycleMgr.handlePrepareCreateIndex() : Prioritising  request %v:%v"+
+			" over the ongoing request (%v, %v) as it has equal or higher priority.", req.DefnId, req.Ctime,
+			m.prepareLock.DefnId, m.prepareLock.Ctime)
+		return true
+	}
+
+	if m.prepareLock.Ctime > req.Ctime {
+		logging.Infof("LifecycleMgr.handlePrepareCreateIndex() : Prioritising  request %v:%v"+
+			" over the ongoing request (%v, %v) as it has equal or higher priority.", req.DefnId, req.Ctime,
+			m.prepareLock.DefnId, m.prepareLock.Ctime)
+		return true
+	}
+
+	logging.Debugf("LifecycleMgr.handlePrepareCreateIndex() : Rejecting request for %v:%v"+
+		" as the ongoing request (%v, %v) has equal or higher priority.", req.DefnId, req.Ctime,
+		m.prepareLock.DefnId, m.prepareLock.Ctime)
+	return false
 }
 
 //

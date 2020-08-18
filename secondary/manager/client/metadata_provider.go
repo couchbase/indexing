@@ -409,7 +409,7 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 		}
 	} else {
 		scheduleOnFailure := o.settings.AllowScheduleCreate()
-		if err := o.recoverableCreateIndex(idxDefn, plan, scheduleOnFailure, false); err != nil {
+		if err := o.recoverableCreateIndex(idxDefn, plan, scheduleOnFailure, false, 0); err != nil {
 			return c.IndexDefnId(0), err, false
 		}
 	}
@@ -422,7 +422,7 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 //
 func (o *MetadataProvider) makePrepareIndexRequest(defnId c.IndexDefnId, name string,
 	bucket, scope, collection string, nodes []string, partitionScheme c.PartitionScheme,
-	numReplica int, checkDuplicateIndex bool) (map[c.IndexerId]int, error, bool) {
+	numReplica int, checkDuplicateIndex bool, ctime int64) (map[c.IndexerId]int, error, bool) {
 
 	// do a preliminary check
 	watchers, err, _ := o.findWatchersWithRetry(nodes, numReplica, c.IsPartitioned(partitionScheme), false)
@@ -440,6 +440,7 @@ func (o *MetadataProvider) makePrepareIndexRequest(defnId c.IndexDefnId, name st
 		DefnId:      defnId,
 		RequesterId: o.providerId,
 		Timeout:     int64(time.Duration(3) * time.Minute),
+		Ctime:       ctime,
 	}
 
 	if checkDuplicateIndex {
@@ -888,17 +889,17 @@ func (o *MetadataProvider) waitForScheduleCreateToken(defnId c.IndexDefnId) erro
 // This should be called for the defn, that is not yet persisted in index metadata.
 // This function doesn't trigger the index build, even if the deferred flag is false.
 func (o *MetadataProvider) CreateIndexWithDefnAndPlan(idxDefn *c.IndexDefn,
-	plan map[string]interface{}) error {
+	plan map[string]interface{}, ctime int64) error {
 
 	// TODO: Check for existing idxDefn.DefnId.
-	return o.recoverableCreateIndex(idxDefn, plan, false, true)
+	return o.recoverableCreateIndex(idxDefn, plan, false, true, ctime)
 }
 
 //
 // This function create index using new protocol (vulcan).
 //
 func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn,
-	plan map[string]interface{}, scheduleOnFailure bool, asyncCreate bool) error {
+	plan map[string]interface{}, scheduleOnFailure bool, asyncCreate bool, ctime int64) error {
 
 	//
 	// Prepare Phase.  This is to seek full quorum from all the indexers.
@@ -927,7 +928,7 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn,
 
 	watcherMap, err, canSchedule := o.makePrepareIndexRequest(idxDefn.DefnId, idxDefn.Name,
 		idxDefn.Bucket, idxDefn.Scope, idxDefn.Collection, useNodes,
-		idxDefn.PartitionScheme, int(idxDefn.NumReplica), true)
+		idxDefn.PartitionScheme, int(idxDefn.NumReplica), true, ctime)
 
 	if err != nil {
 		o.cancelPrepareIndexRequest(idxDefn.DefnId, watcherMap)
@@ -2960,7 +2961,7 @@ func (o *MetadataProvider) AlterReplicaCount(action string, defnId c.IndexDefnId
 	defn := *idxMeta.Definition
 	numPartition := idxMeta.numPartitions()
 	watcherMap, err, _ := o.makePrepareIndexRequest(defn.DefnId, defn.Name, defn.Bucket,
-		defn.Scope, defn.Collection, nil, defn.PartitionScheme, count, false)
+		defn.Scope, defn.Collection, nil, defn.PartitionScheme, count, false, 0)
 
 	if err != nil {
 		o.cancelPrepareIndexRequest(defn.DefnId, watcherMap)

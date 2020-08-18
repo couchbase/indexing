@@ -282,7 +282,7 @@ func (m *schedIndexCreator) processSchedIndexes() {
 					break innerLoop
 				}
 
-				logging.Infof("schedIndexCreator: Trying to create index %v", index.token.Definition.DefnId)
+				logging.Infof("schedIndexCreator: Trying to create index %v, %v", index.token.Definition.DefnId, index.token.Ctime)
 				err, success := m.tryCreateIndex(index)
 				if err != nil {
 					retry := m.handleError(index, err)
@@ -487,7 +487,12 @@ func (m *schedIndexCreator) tryCreateIndex(index *scheduledIndex) (error, bool) 
 	index.token.Definition.ScopeId = index.token.ScopeId
 	index.token.Definition.CollectionId = index.token.CollectionId
 
-	return provider.CreateIndexWithDefnAndPlan(&index.token.Definition, index.token.Plan), true
+	err = provider.CreateIndexWithDefnAndPlan(&index.token.Definition, index.token.Plan, index.token.Ctime)
+	if err != nil {
+		return err, false
+	}
+
+	return nil, true
 }
 
 func (m *schedIndexCreator) pushQ(item *scheduledIndex) {
