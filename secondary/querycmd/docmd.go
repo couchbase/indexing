@@ -1,6 +1,7 @@
 package querycmd
 
 import (
+	"bufio"
 	"bytes"
 	"errors"
 	"flag"
@@ -27,6 +28,8 @@ import (
 	"github.com/couchbase/query/expression"
 	"github.com/couchbase/query/parser/n1ql"
 )
+
+var batchProcess bool
 
 // Command object containing parsed result from command-line
 // or program constructued list of args.
@@ -68,6 +71,9 @@ type Command struct {
 
 	// Refresh settings during startup
 	RefreshSettings bool
+
+	// Batch process cbindex commands
+	BatchProcessFile string
 }
 
 // ParseArgs into Command object, return the list of arguments,
@@ -85,7 +91,7 @@ func ParseArgs(arguments []string) (*Command, []string, *flag.FlagSet, error) {
 	fset.StringVar(&cmdOptions.Server, "server", "127.0.0.1:8091", "Cluster server address")
 	fset.StringVar(&cmdOptions.Auth, "auth", "", "Auth user and password")
 	fset.StringVar(&cmdOptions.Bucket, "bucket", "", "Bucket name")
-	fset.StringVar(&cmdOptions.OpType, "type", "", "Command: scan|stats|scanAll|count|nodes|create|build|move|drop|list|config")
+	fset.StringVar(&cmdOptions.OpType, "type", "", "Command: scan|stats|scanAll|count|nodes|create|build|move|drop|list|config|batch_process")
 	fset.StringVar(&cmdOptions.IndexName, "index", "", "Index name")
 	// options for create-index
 	fset.StringVar(&cmdOptions.WhereStr, "where", "", "where clause for create index")
@@ -113,6 +119,9 @@ func ParseArgs(arguments []string) (*Command, []string, *flag.FlagSet, error) {
 	fset.StringVar(&cmdOptions.Collection, "collection", "", "Collection name")
 
 	fset.BoolVar(&cmdOptions.RefreshSettings, "refresh_settings", false, "When true, will read settings from metakv when instantiating client")
+
+	// Input file for batch processing
+	fset.StringVar(&cmdOptions.BatchProcessFile, "input", "", "Path to the file containing batch processing commands")
 
 	// not useful to expose in sherlock
 	cmdOptions.ExprType = "N1QL"
@@ -529,6 +538,53 @@ func HandleCommand(
 			pretty = strings.Replace(string(nbody), ",\"", ",\n\"", -1)
 			fmt.Printf("New Settings:\n%s\n", string(pretty))
 		}
+
+	case "batch_process":
+		if batchProcess == false {
+			batchProcess = true
+		} else {
+			err := fmt.Errorf("Nested batch processing is not supported")
+			logging.Errorf(err.Error())
+			return err
+		}
+		// Read input file from input option
+		if cmd.BatchProcessFile == "" {
+			fmsg := "Empty file name for batch processing\n"
+			logging.Errorf(fmsg)
+			return nil
+		}
+		fd, err := os.Open(cmd.BatchProcessFile)
+		if err != nil {
+			logging.Errorf("Unable to open commands file %q, err: %v\n", cmd.BatchProcessFile, err)
+			return err
+		}
+
+		scanner := bufio.NewScanner(fd)
+		for scanner.Scan() {
+			line := scanner.Text()
+			// Commented lines
+			if strings.HasPrefix(line, "#") {
+				continue
+			}
+
+			args := strings.Fields(line)
+
+			if strings.Contains(line, "-auth") == false {
+				args = append([]string{"-auth", cmd.Auth}, args...)
+			}
+
+			inputCmd, _, _, err := ParseArgs(args)
+			if err != nil {
+				logging.Fatalf("Error while parsing command: %v", line)
+				return err
+			} else {
+				logging.Warnf("cbindex processing command: %v", line)
+				if err = HandleCommand(client, inputCmd, false, os.Stdout); err != nil {
+					logging.Fatalf("Error occured while executing command %v, err: %v\n", line, err)
+					return err // Fail fast
+				}
+			}
+		}
 	}
 	return err
 }
@@ -675,6 +731,10 @@ func validate(cmd *Command, fset *flag.FlagSet) error {
 	case "config":
 		have = []string{"type", "server", "auth"}
 		dont = []string{"h", "index", "bucket", "where", "fields", "primary", "with", "indexes", "low", "high", "equal", "incl", "limit", "distinct"}
+
+	case "batch_process":
+		have = []string{"type", "auth", "input"}
+		dont = []string{"index", "bucket", "where", "fields", "primary", "with", "indexes", "low", "high", "equal", "incl", "limit", "distinct", "ckey", "cval"}
 
 	default:
 		return fmt.Errorf("Specified operation type '%s' has no validation rule. Please add one to use.", cmd.OpType)
