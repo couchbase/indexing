@@ -399,7 +399,13 @@ type GsiClient struct {
 func NewGsiClient(
 	cluster string, config common.Config) (c *GsiClient, err error) {
 
-	return NewGsiClientWithSettings(cluster, config, false, true)
+	// needsRefresh is set to true by cbindex tool
+	needsRefresh := false
+	if val, ok := config["needsRefresh"]; ok {
+		needsRefresh = val.Bool()
+	}
+
+	return NewGsiClientWithSettings(cluster, config, needsRefresh, true)
 }
 
 func NewGsiClientWithSettings(

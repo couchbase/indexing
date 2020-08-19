@@ -65,6 +65,9 @@ type Command struct {
 
 	Scope      string
 	Collection string
+
+	// Refresh settings during startup
+	RefreshSettings bool
 }
 
 // ParseArgs into Command object, return the list of arguments,
@@ -108,6 +111,8 @@ func ParseArgs(arguments []string) (*Command, []string, *flag.FlagSet, error) {
 	//collection specific
 	fset.StringVar(&cmdOptions.Scope, "scope", "", "Scope name")
 	fset.StringVar(&cmdOptions.Collection, "collection", "", "Collection name")
+
+	fset.BoolVar(&cmdOptions.RefreshSettings, "refresh_settings", false, "When true, will read settings from metakv when instantiating client")
 
 	// not useful to expose in sherlock
 	cmdOptions.ExprType = "N1QL"
@@ -625,7 +630,7 @@ func validate(cmd *Command, fset *flag.FlagSet) error {
 	switch cmd.OpType {
 	case "":
 		have = []string{}
-		dont = []string{"type", "index", "bucket", "where", "fields", "primary", "with", "indexes", "low", "high", "equal", "incl", "limit", "distinct", "ckey", "cval"}
+		dont = []string{"type", "index", "bucket", "where", "fields", "primary", "with", "indexes", "low", "high", "equal", "incl", "limit", "distinct", "ckey", "cval", "refresh_settings"}
 
 	case "nodes":
 		have = []string{"type", "server", "auth"}
