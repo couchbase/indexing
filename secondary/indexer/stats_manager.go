@@ -45,6 +45,8 @@ var num_cpu_core int
 const APPROX_METRIC_SIZE = 100
 const APPROX_METRIC_COUNT = 25
 
+var METRICS_PREFIX = "index_"
+
 func init() {
 	uptime = time.Now()
 	num_cpu_core = runtime.NumCPU()
@@ -1760,7 +1762,7 @@ func (s *IndexStats) populateMetrics(st []byte) []byte {
 	s.initializeScanStats()
 
 	var str, collectionLabels string
-	fmtStr := "%v{bucket=\"%v\", %vindex=\"%v\"} %v\n"
+	fmtStr := "%v%v{bucket=\"%v\", %vindex=\"%v\"} %v\n"
 
 	if (s.scope == "" || s.scope == common.DEFAULT_SCOPE) &&
 		(s.collection == "" || s.collection == common.DEFAULT_COLLECTION) {
@@ -1771,97 +1773,97 @@ func (s *IndexStats) populateMetrics(st []byte) []byte {
 	}
 
 	rawDataSize := s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.rawDataSize.Value() })
-	str = fmt.Sprintf(fmtStr, "raw_data_size", s.bucket, collectionLabels, s.dispName, rawDataSize)
+	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "raw_data_size", s.bucket, collectionLabels, s.dispName, rawDataSize)
 	st = append(st, []byte(str)...)
 
 	itemsCount := s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.itemsCount.Value() })
-	str = fmt.Sprintf(fmtStr, "items_count", s.bucket, collectionLabels, s.dispName, itemsCount)
+	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "items_count", s.bucket, collectionLabels, s.dispName, itemsCount)
 	st = append(st, []byte(str)...)
 
 	scanDuration := s.int64Stats(func(ss *IndexStats) int64 { return ss.scanDuration.Value() })
-	str = fmt.Sprintf(fmtStr, "total_scan_duration", s.bucket, collectionLabels, s.dispName, scanDuration)
+	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "total_scan_duration", s.bucket, collectionLabels, s.dispName, scanDuration)
 	st = append(st, []byte(str)...)
 
 	numRowsScanned := s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.numRowsScanned.Value() })
-	str = fmt.Sprintf(fmtStr, "num_rows_scanned", s.bucket, collectionLabels, s.dispName, numRowsScanned)
+	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "num_rows_scanned", s.bucket, collectionLabels, s.dispName, numRowsScanned)
 	st = append(st, []byte(str)...)
 
 	diskSize := s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.diskSize.Value() })
-	str = fmt.Sprintf(fmtStr, "disk_size", s.bucket, collectionLabels, s.dispName, diskSize)
+	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "disk_size", s.bucket, collectionLabels, s.dispName, diskSize)
 	st = append(st, []byte(str)...)
 
 	dataSize := s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.dataSize.Value() })
-	str = fmt.Sprintf(fmtStr, "data_size", s.bucket, collectionLabels, s.dispName, dataSize)
+	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "data_size", s.bucket, collectionLabels, s.dispName, dataSize)
 	st = append(st, []byte(str)...)
 
 	scanBytesRead := s.int64Stats(func(ss *IndexStats) int64 { return ss.scanBytesRead.Value() })
-	str = fmt.Sprintf(fmtStr, "scan_bytes_read", s.bucket, collectionLabels, s.dispName, scanBytesRead)
+	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "scan_bytes_read", s.bucket, collectionLabels, s.dispName, scanBytesRead)
 	st = append(st, []byte(str)...)
 
 	memUsed := s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.memUsed.Value() })
-	str = fmt.Sprintf(fmtStr, "memory_used", s.bucket, collectionLabels, s.dispName, memUsed)
+	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "memory_used", s.bucket, collectionLabels, s.dispName, memUsed)
 	st = append(st, []byte(str)...)
 
 	numRowsReturned := s.int64Stats(func(ss *IndexStats) int64 { return ss.numRowsReturned.Value() })
-	str = fmt.Sprintf(fmtStr, "num_rows_returned", s.bucket, collectionLabels, s.dispName, numRowsReturned)
+	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "num_rows_returned", s.bucket, collectionLabels, s.dispName, numRowsReturned)
 	st = append(st, []byte(str)...)
 
 	numDocsPending := s.int64Stats(func(ss *IndexStats) int64 { return ss.numDocsPending.Value() })
-	str = fmt.Sprintf(fmtStr, "num_docs_pending", s.bucket, collectionLabels, s.dispName, numDocsPending)
+	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "num_docs_pending", s.bucket, collectionLabels, s.dispName, numDocsPending)
 	st = append(st, []byte(str)...)
 
 	numDocsIndexed := s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.numDocsIndexed.Value() })
-	str = fmt.Sprintf(fmtStr, "num_docs_indexed", s.bucket, collectionLabels, s.dispName, numDocsIndexed)
+	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "num_docs_indexed", s.bucket, collectionLabels, s.dispName, numDocsIndexed)
 	st = append(st, []byte(str)...)
 
-	str = fmt.Sprintf(fmtStr, "num_requests", s.bucket, collectionLabels, s.dispName, s.numRequests.Value())
+	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "num_requests", s.bucket, collectionLabels, s.dispName, s.numRequests.Value())
 	st = append(st, []byte(str)...)
 
 	numDocsQueued := s.int64Stats(func(ss *IndexStats) int64 { return ss.numDocsQueued.Value() })
-	str = fmt.Sprintf(fmtStr, "num_docs_queued", s.bucket, collectionLabels, s.dispName, numDocsQueued)
+	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "num_docs_queued", s.bucket, collectionLabels, s.dispName, numDocsQueued)
 	st = append(st, []byte(str)...)
 
 	cacheHits := s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.cacheHits.Value() })
-	str = fmt.Sprintf(fmtStr, "cache_hits", s.bucket, collectionLabels, s.dispName, cacheHits)
+	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "cache_hits", s.bucket, collectionLabels, s.dispName, cacheHits)
 	st = append(st, []byte(str)...)
 
 	cacheMisses := s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.cacheMisses.Value() })
-	str = fmt.Sprintf(fmtStr, "cache_misses", s.bucket, collectionLabels, s.dispName, cacheMisses)
+	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "cache_misses", s.bucket, collectionLabels, s.dispName, cacheMisses)
 	st = append(st, []byte(str)...)
 
 	dataSizeOnDisk := s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.dataSizeOnDisk.Value() })
-	str = fmt.Sprintf(fmtStr, "data_size_on_disk", s.bucket, collectionLabels, s.dispName, dataSizeOnDisk)
+	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "data_size_on_disk", s.bucket, collectionLabels, s.dispName, dataSizeOnDisk)
 	st = append(st, []byte(str)...)
 
 	logSpaceOnDisk := s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.logSpaceOnDisk.Value() })
-	str = fmt.Sprintf(fmtStr, "log_space_on_disk", s.bucket, collectionLabels, s.dispName, logSpaceOnDisk)
+	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "log_space_on_disk", s.bucket, collectionLabels, s.dispName, logSpaceOnDisk)
 	st = append(st, []byte(str)...)
 
 	numRecsInMem := s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.numRecsInMem.Value() })
-	str = fmt.Sprintf(fmtStr, "recs_in_mem", s.bucket, collectionLabels, s.dispName, numRecsInMem)
+	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "recs_in_mem", s.bucket, collectionLabels, s.dispName, numRecsInMem)
 	st = append(st, []byte(str)...)
 
 	numRecsOnDisk := s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.numRecsOnDisk.Value() })
-	str = fmt.Sprintf(fmtStr, "recs_on_disk", s.bucket, collectionLabels, s.dispName, numRecsOnDisk)
+	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "recs_on_disk", s.bucket, collectionLabels, s.dispName, numRecsOnDisk)
 	st = append(st, []byte(str)...)
 
 	avgItemSize := computeAvgItemSize(rawDataSize, itemsCount)
-	str = fmt.Sprintf(fmtStr, "avg_item_size", s.bucket, collectionLabels, s.dispName, avgItemSize)
+	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "avg_item_size", s.bucket, collectionLabels, s.dispName, avgItemSize)
 	st = append(st, []byte(str)...)
 
-	str = fmt.Sprintf(fmtStr, "avg_scan_latency", s.bucket, collectionLabels, s.dispName, s.avgScanLatency.Value())
+	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "avg_scan_latency", s.bucket, collectionLabels, s.dispName, s.avgScanLatency.Value())
 	st = append(st, []byte(str)...)
 
 	fragPercent := s.partnAvgInt64Stats(func(ss *IndexStats) int64 { return ss.fragPercent.Value() })
-	str = fmt.Sprintf(fmtStr, "frag_percent", s.bucket, collectionLabels, s.dispName, fragPercent)
+	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "frag_percent", s.bucket, collectionLabels, s.dispName, fragPercent)
 	st = append(st, []byte(str)...)
 
 	avgDrainRate := s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.avgDrainRate.Value() })
-	str = fmt.Sprintf(fmtStr, "avg_drain_rate", s.bucket, collectionLabels, s.dispName, avgDrainRate)
+	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "avg_drain_rate", s.bucket, collectionLabels, s.dispName, avgDrainRate)
 	st = append(st, []byte(str)...)
 
 	residentPercent := s.partnAvgInt64Stats(func(ss *IndexStats) int64 { return ss.residentPercent.Value() })
-	str = fmt.Sprintf(fmtStr, "resident_percent", s.bucket, collectionLabels, s.dispName, residentPercent)
+	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "resident_percent", s.bucket, collectionLabels, s.dispName, residentPercent)
 	st = append(st, []byte(str)...)
 
 	return st
@@ -2354,8 +2356,8 @@ func (s *statsManager) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	out := make([]byte, 0, 256)
-	out = append(out, []byte(fmt.Sprintf("memory_quota %v\n", is.memoryQuota.Value()))...)
-	out = append(out, []byte(fmt.Sprintf("memory_used %v\n", is.memoryUsed.Value()))...)
+	out = append(out, []byte(fmt.Sprintf("%vmemory_quota %v\n", METRICS_PREFIX, is.memoryQuota.Value()))...)
+	out = append(out, []byte(fmt.Sprintf("%vmemory_used_total %v\n", METRICS_PREFIX, is.memoryUsed.Value()))...)
 
 	w.WriteHeader(200)
 	w.Write([]byte(out))
@@ -2406,29 +2408,29 @@ func (s *statsManager) handleMemStatsReq(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *statsManager) getStorageStats() string {
-	var result string
+	var result strings.Builder
 	replych := make(chan []IndexStorageStats)
 	statReq := &MsgIndexStorageStats{respch: replych}
 	s.supvMsgch <- statReq
 	res := <-replych
 
-	result += "[\n"
+	result.WriteString("[\n")
 	for i, sts := range res {
 		if i > 0 {
-			result += ","
+			result.WriteString(",")
 		}
-		result += fmt.Sprintf("{\n\"Index\": \"%s:%s\", \"Id\": %d, \"PartitionId\": %d,\n",
-			sts.Bucket, sts.Name, sts.InstId, sts.PartnId)
-		result += fmt.Sprintf("\"Stats\":\n")
+		result.WriteString(fmt.Sprintf("{\n\"Index\": \"%s:%s\", \"Id\": %d, \"PartitionId\": %d,\n",
+			sts.Bucket, sts.Name, sts.InstId, sts.PartnId))
+		result.WriteString(fmt.Sprintf("\"Stats\":\n"))
 		for _, data := range sts.GetInternalData() {
-			result += data
+			result.WriteString(data)
 		}
-		result += "}\n"
+		result.WriteString("}\n")
 	}
 
-	result += "]"
+	result.WriteString("]")
 
-	return result
+	return result.String()
 }
 
 func (s *statsManager) handleStorageStatsReq(w http.ResponseWriter, r *http.Request) {

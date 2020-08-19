@@ -2003,7 +2003,7 @@ func FilterLessThan(x, y Filter) bool {
 /////////////////////////////////////////////////////////////////////////
 
 const (
-	ScanBufPoolSize = DEFAULT_MAX_SEC_KEY_LEN + MAX_DOCID_LEN + 2
+	ScanBufPoolSize = DEFAULT_MAX_SEC_KEY_LEN_SCAN + MAX_DOCID_LEN + 2
 )
 
 const (
