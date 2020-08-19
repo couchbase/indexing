@@ -133,7 +133,7 @@ func TestStatIndexInstFilter(t *testing.T) {
 	ok := verifyStatsWithIndexInstFilter([]string{includePrefix}, []string{excludePrefix}, result)
 
 	if !ok {
-		msg := fmt.Sprintf("Stats verification for index inst filter failed include = %v, " +
+		msg := fmt.Sprintf("Stats verification for index inst filter failed include = %v, "+
 			"exclude = %v, stats = %v", includePrefix, excludePrefix, result)
 		err = errors.New(msg)
 		FailTestIfError(err, "Error in TestStatIndexInstFilter verifyStatsWithIndexInstFilter", t)
@@ -654,6 +654,8 @@ func restful_stats(indexes map[string]interface{}) error {
 	noAuth = append(noAuth, noAuth_indexer)
 	done := make(map[string]bool)
 	// Bucket and Index level stats
+	scope := "_default"
+	collection := "_default"
 	for _, index := range indexes {
 		definitions := index.(map[string]interface{})["definitions"]
 		info := definitions.(map[string]interface{})
@@ -664,7 +666,7 @@ func restful_stats(indexes map[string]interface{}) error {
 			return err
 		}
 		if _, ok := done[auth_bucket_1]; !ok {
-			invalids = append(invalids, auth_bucket_1)
+			auth = append(auth, auth_bucket_1)
 			done[auth_bucket_1] = true
 		}
 		auth_bucket_2, err := makeurl(fmt.Sprintf("/api/stats/%s/", bucket))
@@ -672,9 +674,84 @@ func restful_stats(indexes map[string]interface{}) error {
 			return err
 		}
 		if _, ok := done[auth_bucket_2]; !ok {
-			invalids = append(invalids, auth_bucket_2)
+			auth = append(auth, auth_bucket_2)
 			done[auth_bucket_2] = true
 		}
+		auth_bucket_3, err := makeurl(fmt.Sprintf("/api/stats/`%s`", bucket))
+		if err != nil {
+			return err
+		}
+		if _, ok := done[auth_bucket_3]; !ok {
+			auth = append(auth, auth_bucket_3)
+			done[auth_bucket_3] = true
+		}
+
+		auth_scope_1, err := makeurl(fmt.Sprintf("/api/stats/%s.%s", bucket, scope))
+		if err != nil {
+			return err
+		}
+		if _, ok := done[auth_scope_1]; !ok {
+			auth = append(auth, auth_scope_1)
+			done[auth_scope_1] = true
+		}
+		auth_scope_2, err := makeurl(fmt.Sprintf("/api/stats/%s.%s/", bucket, scope))
+		if err != nil {
+			return err
+		}
+		if _, ok := done[auth_scope_2]; !ok {
+			auth = append(auth, auth_scope_2)
+			done[auth_scope_2] = true
+		}
+		auth_scope_3, err := makeurl(fmt.Sprintf("/api/stats/`%s`.%s/", bucket, scope))
+		if err != nil {
+			return err
+		}
+		if _, ok := done[auth_scope_3]; !ok {
+			auth = append(auth, auth_scope_3)
+			done[auth_scope_3] = true
+		}
+		auth_scope_4, err := makeurl(fmt.Sprintf("/api/stats/`%s`.`%s`/", bucket, scope))
+		if err != nil {
+			return err
+		}
+		if _, ok := done[auth_scope_4]; !ok {
+			invalids = append(invalids, auth_scope_4)
+			done[auth_scope_4] = true
+		}
+
+		auth_collection_1, err := makeurl(fmt.Sprintf("/api/stats/%s.%s.%s", bucket, scope, collection))
+		if err != nil {
+			return err
+		}
+		if _, ok := done[auth_collection_1]; !ok {
+			auth = append(auth, auth_collection_1)
+			done[auth_collection_1] = true
+		}
+		auth_collection_2, err := makeurl(fmt.Sprintf("/api/stats/%s.%s.%s/", bucket, scope, collection))
+		if err != nil {
+			return err
+		}
+		if _, ok := done[auth_collection_2]; !ok {
+			auth = append(auth, auth_collection_2)
+			done[auth_collection_2] = true
+		}
+		auth_collection_3, err := makeurl(fmt.Sprintf("/api/stats/`%s`.%s.%s", bucket, scope, collection))
+		if err != nil {
+			return err
+		}
+		if _, ok := done[auth_collection_3]; !ok {
+			auth = append(auth, auth_collection_3)
+			done[auth_collection_3] = true
+		}
+		auth_collection_4, err := makeurl(fmt.Sprintf("/api/stats/`%s`.%s.`%s`", bucket, scope, collection))
+		if err != nil {
+			return err
+		}
+		if _, ok := done[auth_collection_4]; !ok {
+			invalids = append(invalids, auth_collection_4)
+			done[auth_collection_4] = true
+		}
+
 		auth_index_1, err := makeurl(fmt.Sprintf("/api/stats/%s/%s", bucket, name))
 		if err != nil {
 			return err
@@ -691,6 +768,23 @@ func restful_stats(indexes map[string]interface{}) error {
 			auth = append(auth, auth_index_2)
 			done[auth_index_2] = true
 		}
+		auth_index_3, err := makeurl(fmt.Sprintf("/api/stats/%s.%s.%s/%s/", bucket, scope, collection, name))
+		if err != nil {
+			return err
+		}
+		if _, ok := done[auth_index_3]; !ok {
+			auth = append(auth, auth_index_3)
+			done[auth_index_3] = true
+		}
+		auth_index_4, err := makeurl(fmt.Sprintf("/api/stats/%s.%s/%s", bucket, scope, name))
+		if err != nil {
+			return err
+		}
+		if _, ok := done[auth_index_4]; !ok {
+			invalids = append(invalids, auth_index_4)
+			done[auth_index_4] = true
+		}
+
 		noAuth_bucket, err := noauthurl(fmt.Sprintf("/api/stats/%s", bucket))
 		if err != nil {
 			return err
