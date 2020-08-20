@@ -282,41 +282,7 @@ func (m *schedIndexCreator) processSchedIndexes() {
 					break innerLoop
 				}
 
-				logging.Infof("schedIndexCreator: Trying to create index %v, %v", index.token.Definition.DefnId, index.token.Ctime)
-				err, success := m.tryCreateIndex(index)
-				if err != nil {
-					retry := m.handleError(index, err)
-					if retry {
-						logging.Errorf("schedIndexCreator: error(%v) while creating index %v. The operation will be retried. Current retry counts (%v,%v).",
-							err, index.token.Definition.DefnId, index.state.retryCount, index.state.nRetryCount)
-						m.pushQ(index)
-					} else {
-						// TODO: Check if we need a console log
-						logging.Errorf("schedIndexCreator: error(%v) while creating index %v. The operation failed after retry counts (%v,%v).",
-							err, index.token.Definition.DefnId, index.state.retryCount, index.state.nRetryCount)
-
-						err := mc.PostStopScheduleCreateToken(index.token.Definition.DefnId, err.Error(), time.Now().UnixNano())
-						if err != nil {
-							logging.Errorf("schedIndexCreator: error (%v) in posting the stop schedule create token for %v",
-								err, index.token.Definition.DefnId)
-						}
-					}
-				} else {
-					if success {
-						logging.Infof("schedIndexCreator: successfully created index %v", index.token.Definition.DefnId)
-						if !index.token.Definition.Deferred {
-							logging.Infof("schedIndexCreator: index %v was created with non-deferred build. "+
-								"DDL service manager will build the index", index.token.Definition.DefnId)
-						}
-
-						// TODO: Check if this doesn't error out in case of key not found.
-						err := mc.DeleteScheduleCreateToken(index.token.Definition.DefnId)
-						if err != nil {
-							logging.Errorf("schedIndexCreator: error (%v) in deleting the schedule create token for %v",
-								err, index.token.Definition.DefnId)
-						}
-					}
-				}
+				m.processIndex(index)
 			}
 
 		case <-m.killch:
@@ -326,7 +292,54 @@ func (m *schedIndexCreator) processSchedIndexes() {
 	}
 }
 
-func (m *schedIndexCreator) handleError(index *scheduledIndex, err error) bool {
+func (m *schedIndexCreator) processIndex(index *scheduledIndex) {
+	logging.Infof("schedIndexCreator: Trying to create index %v, %v", index.token.Definition.DefnId, index.token.Ctime)
+	err, success := m.tryCreateIndex(index)
+	if err != nil {
+		retry, dropToken := m.handleError(index, err)
+		if retry {
+			logging.Errorf("schedIndexCreator: error(%v) while creating index %v. The operation will be retried. Current retry counts (%v,%v).",
+				err, index.token.Definition.DefnId, index.state.retryCount, index.state.nRetryCount)
+			m.pushQ(index)
+		} else {
+			// TODO: Check if we need a console log
+			logging.Errorf("schedIndexCreator: error(%v) while creating index %v. The operation failed after retry counts (%v,%v).",
+				err, index.token.Definition.DefnId, index.state.retryCount, index.state.nRetryCount)
+
+			if !dropToken {
+				err := mc.PostStopScheduleCreateToken(index.token.Definition.DefnId, err.Error(), time.Now().UnixNano())
+				if err != nil {
+					logging.Errorf("schedIndexCreator: error (%v) in posting the stop schedule create token for %v",
+						err, index.token.Definition.DefnId)
+				}
+			} else {
+				err := mc.DeleteScheduleCreateToken(index.token.Definition.DefnId)
+				if err != nil {
+					logging.Errorf("schedIndexCreator: error (%v) in deleting the schedule create token for %v",
+						err, index.token.Definition.DefnId)
+				}
+			}
+		}
+	} else {
+		if success {
+			logging.Infof("schedIndexCreator: successfully created index %v", index.token.Definition.DefnId)
+			if !index.token.Definition.Deferred {
+				logging.Infof("schedIndexCreator: index %v was created with non-deferred build. "+
+					"DDL service manager will build the index", index.token.Definition.DefnId)
+			}
+
+			// TODO: Check if this doesn't error out in case of key not found.
+			err := mc.DeleteScheduleCreateToken(index.token.Definition.DefnId)
+			if err != nil {
+				logging.Errorf("schedIndexCreator: error (%v) in deleting the schedule create token for %v",
+					err, index.token.Definition.DefnId)
+			}
+		}
+	}
+
+}
+
+func (m *schedIndexCreator) handleError(index *scheduledIndex, err error) (bool, bool) {
 	index.state.lastError = err
 
 	checkErr := func(knownErrs []error) bool {
@@ -371,22 +384,24 @@ func (m *schedIndexCreator) handleError(index *scheduledIndex, err error) bool {
 
 	// Check for known non-retryable errors.
 	if checkErr(common.NonRetryableErrorsInCreate) {
-
 		// TODO: Fix non-retryable error retry count.
-
 		index.state.nRetryCount++
-		return false
+
+		if checkErr(common.KeyspaceDeletedErrorsInCreate) {
+			return false, true
+		}
+		return false, false
 	}
 
 	retryable = true
 	index.state.retryCount++
 	if index.state.retryCount > MAX_CREATION_RETRIES {
-		return false
+		return false, false
 	}
 
 	// Check for known retryable error
 	if checkErr(common.RetryableErrorsInCreate) {
-		return true
+		return true, false
 	}
 
 	isNetworkError := func() bool {
@@ -406,11 +421,11 @@ func (m *schedIndexCreator) handleError(index *scheduledIndex, err error) bool {
 
 	if isNetworkError() {
 		network = true
-		return true
+		return true, false
 	}
 
 	// Treat all unknown erros as retryable errors
-	return true
+	return true, false
 }
 
 func (m *schedIndexCreator) getMetadataProvider() (*client.MetadataProvider, error) {
@@ -478,7 +493,7 @@ func (m *schedIndexCreator) tryCreateIndex(index *scheduledIndex) (error, bool) 
 	// schedule create token was not deleted.
 	if provider.FindIndexIgnoreStatus(index.token.Definition.DefnId) != nil {
 		logging.Infof("schedIndexCreator:tryCreateIndex index %v is already created", index.token.Definition.DefnId)
-		return nil, false
+		return nil, true
 	}
 
 	// If the bucket/scope/collection was dropped after the token creation,
