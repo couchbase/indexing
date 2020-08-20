@@ -154,7 +154,7 @@ func NewIndexManagerInternal(config common.Config, storageMode common.StorageMod
 	mgr.cinfoClient.SetUserAgent("IndexMgr")
 
 	// Initialize LifecycleMgr.
-	lifecycleMgr, err := NewLifecycleMgr(nil, mgr.clusterURL, mgr.cinfoClient)
+	lifecycleMgr, err := NewLifecycleMgr(nil, mgr.clusterURL)
 	if err != nil {
 		mgr.Close()
 		return nil, err
