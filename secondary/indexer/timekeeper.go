@@ -251,6 +251,7 @@ func (tk *timekeeper) handleStreamOpen(cmd Message) {
 	async := cmd.(*MsgStreamUpdate).GetAsync()
 	sessionId := cmd.(*MsgStreamUpdate).GetSessionId()
 	collectionId := cmd.(*MsgStreamUpdate).GetCollectionId()
+	enableOSO := cmd.(*MsgStreamUpdate).EnableOSO()
 
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
@@ -276,6 +277,7 @@ func (tk *timekeeper) handleStreamOpen(cmd Message) {
 		tk.ss.streamKeyspaceIdAsyncMap[streamId][keyspaceId] = async
 		tk.ss.streamKeyspaceIdSessionId[streamId][keyspaceId] = sessionId
 		tk.ss.streamKeyspaceIdCollectionId[streamId][keyspaceId] = collectionId
+		tk.ss.streamKeyspaceIdEnableOSO[streamId][keyspaceId] = enableOSO
 		tk.addIndextoStream(cmd)
 		tk.startTimer(streamId, keyspaceId)
 
