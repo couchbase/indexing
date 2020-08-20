@@ -2477,6 +2477,29 @@ RETRY1:
 	return watchers, nil, false
 }
 
+func (o *MetadataProvider) deleteScheduleTokens(defnID c.IndexDefnId) (bool, bool, error) {
+	var schedToken, stopToken bool
+	var err error
+	if schedToken, err = mc.ScheduleCreateTokenExist(defnID); err != nil {
+		return schedToken, stopToken, fmt.Errorf("ScheduleCreateTokenExist:%v:%v", defnID, err)
+	}
+
+	if stopToken, err = mc.StopScheduleCreateTokenExist(defnID); err != nil {
+		return schedToken, stopToken, fmt.Errorf("ScheduleCreateTokenExist:%v:%v", defnID, err)
+	}
+
+	// Best effort deletion - if the token is not present, the operation will not fail.
+	if err = mc.DeleteScheduleCreateToken(defnID); err != nil {
+		return schedToken, stopToken, fmt.Errorf("DeleteScheduleCreateToken:%v:%v", defnID, err)
+	}
+
+	if err = mc.DeleteStopScheduleCreateToken(defnID); err != nil {
+		return schedToken, stopToken, fmt.Errorf("DeleteStopScheduleCreateToken:%v:%v", defnID, err)
+	}
+
+	return schedToken, stopToken, nil
+}
+
 func (o *MetadataProvider) DropIndex(defnID c.IndexDefnId) error {
 
 	// place token for recovery.  Even if the index does not exist, the delete token will
@@ -2486,10 +2509,35 @@ func (o *MetadataProvider) DropIndex(defnID c.IndexDefnId) error {
 		return errors.New(fmt.Sprintf("Fail to Drop Index due to internal errors.  Error=%v.", err))
 	}
 
+	var schedToken, stopToken bool
+	var tokenErr error
+	if schedToken, stopToken, tokenErr = o.deleteScheduleTokens(defnID); tokenErr != nil {
+		return errors.New(fmt.Sprintf("Fail to Drop Index due to internal errors. "+
+			"Cleanup may happen in the background.  Error=%v.", tokenErr))
+	}
+
 	// find index -- this method will not return the index if the index is in DELETED
 	// status (but defn exists).
 	meta := o.findIndex(defnID)
 	if meta == nil {
+		// If both schedule create token and stop schedule create token exist,
+		// and the metadata is not present, it is safe to return success for
+		// drop index just after dropping the tokens.
+		if schedToken && stopToken {
+			return nil
+		}
+
+		// If only schedule create token exists, and stop schedule token or
+		// the metadata doesn't exists, then there is a possible race condition.
+		// If the scheduled index creator finds the delete command token before
+		// it tries to create the index, it will not create the index. But if
+		// the scheduled index creator creates the index, then lifecycle manager
+		// will drop the index. At this point, there is no easy way to know this.
+		if schedToken && !stopToken {
+			return errors.New("The index was scheduled for background creation." +
+				"The cleanup will happen in the background.")
+		}
+
 		return errors.New("Index does not exist.")
 	}
 
