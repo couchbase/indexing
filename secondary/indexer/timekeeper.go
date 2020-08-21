@@ -2131,7 +2131,7 @@ func (tk *timekeeper) checkInitialBuildDone(streamId common.StreamId,
 	if ts, ok := tk.ss.streamKeyspaceIdOpenTsMap[streamId][keyspaceId]; !ok || ts == nil {
 		return false
 	}
-
+	enableOSO := tk.ss.streamKeyspaceIdEnableOSO[streamId][keyspaceId]
 	for _, buildInfo := range tk.indexBuildInfo {
 
 		if buildInfo.waitForRecovery {
@@ -2151,7 +2151,10 @@ func (tk *timekeeper) checkInitialBuildDone(streamId common.StreamId,
 				initBuildDone = true
 			} else if flushTs == nil {
 				initBuildDone = false
-			} else if !flushTs.IsSnapAligned() {
+			} else if enableOSO && (flushTs.HasOpenOSOSnap() || !flushTs.IsSnapAligned()) {
+				//build is not complete till all OSO Snap Ends have been received
+				initBuildDone = false
+			} else if !enableOSO && !flushTs.IsSnapAligned() {
 				initBuildDone = false
 			} else {
 				//check if the flushTS is greater than buildTS
