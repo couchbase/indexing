@@ -18,7 +18,7 @@ import (
 
 var errStorageCorrupted = fmt.Errorf("Storage corrupted and unrecoverable")
 
-func NewPlasmaSlice(storage_dir string, path string, sliceId SliceId, idxDefn common.IndexDefn,
+func NewPlasmaSlice(storage_dir string, log_dir string, path string, sliceId SliceId, idxDefn common.IndexDefn,
 	idxInstId common.IndexInstId, partitionId common.PartitionId, isPrimary bool, numPartitions int,
 	sysconf common.Config, idxStats *IndexStats, indexerStats *IndexerStats) (Slice, error) {
 	panic("Plasma is only supported in Enterprise Edition")

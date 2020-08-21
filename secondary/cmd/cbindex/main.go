@@ -78,6 +78,11 @@ func main() {
 	}
 
 	config := c.SystemConfig.SectionConfig("queryport.client.", true)
+
+	if cmdOptions.RefreshSettings {
+		config.Set("needsRefresh", c.ConfigValue{true, "read upto date settings from metakv", true, false, false})
+	}
+
 	client, err := qclient.NewGsiClient(cmdOptions.Server, config)
 	if err != nil {
 		logging.Fatalf("%v\n", err)

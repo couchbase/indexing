@@ -146,8 +146,7 @@ type updator struct {
 // Lifecycle Mgr - event processing
 //////////////////////////////////////////////////////////////
 
-func NewLifecycleMgr(notifier MetadataNotifier, clusterURL string,
-	cinfoClient *common.ClusterInfoClient) (*LifecycleMgr, error) {
+func NewLifecycleMgr(notifier MetadataNotifier, clusterURL string) (*LifecycleMgr, error) {
 
 	cinfo, err := common.FetchNewClusterInfoCache(clusterURL, common.DEFAULT_POOL, "NewLifecycleMgr")
 	if err != nil {
@@ -157,7 +156,6 @@ func NewLifecycleMgr(notifier MetadataNotifier, clusterURL string,
 
 	mgr := &LifecycleMgr{repo: nil,
 		cinfo:               cinfo,
-		cinfoClient:         cinfoClient,
 		notifier:            notifier,
 		clusterURL:          clusterURL,
 		incomings:           make(chan *requestHolder, 100000),
@@ -168,6 +166,12 @@ func NewLifecycleMgr(notifier MetadataNotifier, clusterURL string,
 		indexerReady:        false,
 		lastSendClientStats: &client.IndexStats2{},
 	}
+
+	mgr.cinfoClient, err = common.NewClusterInfoClient(clusterURL, common.DEFAULT_POOL, nil)
+	if err != nil {
+		return nil, err
+	}
+	mgr.cinfoClient.SetUserAgent("LifecycleMgr")
 
 	if cinfo.GetClusterVersion() >= common.INDEXER_70_VERSION {
 		atomic.StoreUint32(&mgr.collAwareCluster, 1)

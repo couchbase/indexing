@@ -48,6 +48,7 @@ type plasmaSlice struct {
 
 	path       string
 	storageDir string
+	logDir     string
 	id         SliceId
 
 	refCount int
@@ -159,7 +160,7 @@ type plasmaSlice struct {
 	numKeysSkipped int32
 }
 
-func newPlasmaSlice(storage_dir string, path string, sliceId SliceId, idxDefn common.IndexDefn,
+func newPlasmaSlice(storage_dir string, log_dir string, path string, sliceId SliceId, idxDefn common.IndexDefn,
 	idxInstId common.IndexInstId, partitionId common.PartitionId,
 	isPrimary bool, numPartitions int,
 	sysconf common.Config, idxStats *IndexStats, indexerStats *IndexerStats) (*plasmaSlice, error) {
@@ -183,6 +184,7 @@ func newPlasmaSlice(storage_dir string, path string, sliceId SliceId, idxDefn co
 	slice.sysconf = sysconf
 	slice.path = path
 	slice.storageDir = storage_dir
+	slice.logDir = log_dir
 	slice.idxInstId = idxInstId
 	slice.idxDefnId = idxDefn.DefnId
 	slice.idxPartnId = partitionId
@@ -284,7 +286,18 @@ func (slice *plasmaSlice) initStores() error {
 	cfg.MaxInstsPerShard = slice.sysconf["plasma.maxInstancePerShard"].Uint64()
 	cfg.MaxDiskPerShard = slice.sysconf["plasma.maxDiskUsagePerShard"].Uint64()
 	cfg.MinNumShard = slice.sysconf["plasma.minNumShard"].Uint64()
+
+	cfg.StatsRunInterval = time.Duration(slice.sysconf["plasma.stats.runInterval"].Uint64()) * time.Second
+	cfg.StatsLogInterval = time.Duration(slice.sysconf["plasma.stats.logInterval"].Uint64()) * time.Second
+	cfg.StatsKeySizeThreshold = slice.sysconf["plasma.stats.threshold.keySize"].Uint64()
+	cfg.StatsPercentileThreshold = slice.sysconf["plasma.stats.threshold.percentile"].Float64()
+	cfg.StatsNumInstsThreshold = slice.sysconf["plasma.stats.threshold.numInstances"].Int()
+	cfg.StatsLoggerFileName = slice.sysconf["plasma.stats.logger.fileName"].String()
+	cfg.StatsLoggerFileSize = slice.sysconf["plasma.stats.logger.fileSize"].Uint64()
+	cfg.StatsLoggerFileCount = slice.sysconf["plasma.stats.logger.fileCount"].Uint64()
+
 	cfg.StorageDir = slice.storageDir
+	cfg.LogDir = slice.logDir
 
 	if slice.numPartitions != 1 {
 		cfg.LSSCleanerConcurrency = 1
@@ -2049,12 +2062,17 @@ func (mdb *plasmaSlice) Statistics() (StorageStatistics, error) {
 	checkpointFileSize := pStats.CheckpointSize
 	msCompressionRatio = getCompressionRatio(pStats)
 
-	internalData = append(internalData, fmt.Sprintf("{\n\"MainStore\":\n%s", pStats))
+	if pStats.StatsLoggingEnabled {
+		internalData = append(internalData, fmt.Sprintf("{\n\"MainStore\":\n%s", pStats))
+	}
+
 	if !mdb.isPrimary {
 		pStats := mdb.backstore.GetPreparedStats()
 		docidCount = pStats.ItemsCount
 		sts.MemUsed += pStats.MemSz + pStats.MemSzIndex
-		internalData = append(internalData, fmt.Sprintf(",\n\"BackStore\":\n%s", pStats))
+		if pStats.StatsLoggingEnabled {
+			internalData = append(internalData, fmt.Sprintf(",\n\"BackStore\":\n%s", pStats))
+		}
 		sts.InsertBytes += pStats.BytesWritten
 		sts.GetBytes += pStats.LSSBlkReadBytes
 		checkpointFileSize += pStats.CheckpointSize
@@ -2139,6 +2157,15 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 	mdb.mainstore.MaxDiskPerShard = mdb.sysconf["plasma.maxDiskUsagePerShard"].Uint64()
 	mdb.mainstore.MinNumShard = mdb.sysconf["plasma.minNumShard"].Uint64()
 
+	mdb.mainstore.StatsRunInterval = time.Duration(cfg["plasma.stats.runInterval"].Uint64()) * time.Second
+	mdb.mainstore.StatsLogInterval = time.Duration(cfg["plasma.stats.logInterval"].Uint64()) * time.Second
+	mdb.mainstore.StatsKeySizeThreshold = cfg["plasma.stats.threshold.keySize"].Uint64()
+	mdb.mainstore.StatsPercentileThreshold = cfg["plasma.stats.threshold.percentile"].Float64()
+	mdb.mainstore.StatsNumInstsThreshold = cfg["plasma.stats.threshold.numInstances"].Int()
+	mdb.mainstore.StatsLoggerFileName = cfg["plasma.stats.logger.fileName"].String()
+	mdb.mainstore.StatsLoggerFileSize = cfg["plasma.stats.logger.fileSize"].Uint64()
+	mdb.mainstore.StatsLoggerFileCount = cfg["plasma.stats.logger.fileCount"].Uint64()
+
 	mdb.mainstore.UpdateConfig()
 
 	if !mdb.isPrimary {
@@ -2171,6 +2198,15 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 		mdb.backstore.MaxInstsPerShard = mdb.sysconf["plasma.maxInstancePerShard"].Uint64()
 		mdb.backstore.MaxDiskPerShard = mdb.sysconf["plasma.maxDiskUsagePerShard"].Uint64()
 		mdb.backstore.MinNumShard = mdb.sysconf["plasma.minNumShard"].Uint64()
+
+		mdb.backstore.StatsRunInterval = time.Duration(cfg["plasma.stats.runInterval"].Uint64()) * time.Second
+		mdb.backstore.StatsLogInterval = time.Duration(cfg["plasma.stats.logInterval"].Uint64()) * time.Second
+		mdb.backstore.StatsKeySizeThreshold = cfg["plasma.stats.threshold.keySize"].Uint64()
+		mdb.backstore.StatsPercentileThreshold = cfg["plasma.stats.threshold.percentile"].Float64()
+		mdb.backstore.StatsNumInstsThreshold = cfg["plasma.stats.threshold.numInstances"].Int()
+		mdb.backstore.StatsLoggerFileName = cfg["plasma.stats.logger.fileName"].String()
+		mdb.backstore.StatsLoggerFileSize = cfg["plasma.stats.logger.fileSize"].Uint64()
+		mdb.backstore.StatsLoggerFileCount = cfg["plasma.stats.logger.fileCount"].Uint64()
 
 		mdb.backstore.UpdateConfig()
 	}

@@ -125,11 +125,13 @@ func (m MutationSnapshot) CanProcess() bool {
 
 // Represents storage stats for an index instance
 type IndexStorageStats struct {
-	InstId  common.IndexInstId
-	PartnId common.PartitionId
-	Name    string
-	Bucket  string
-	Stats   StorageStatistics
+	InstId     common.IndexInstId
+	PartnId    common.PartitionId
+	Name       string
+	Bucket     string
+	Scope      string
+	Collection string
+	Stats      StorageStatistics
 }
 
 func (s IndexStorageStats) String() string {
