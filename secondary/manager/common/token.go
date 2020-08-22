@@ -995,6 +995,11 @@ func FetchScheduleCreateToken(path string) (*ScheduleCreateToken, error) {
 	return token, nil
 }
 
+func GetScheduleCreateToken(defnId c.IndexDefnId) (*ScheduleCreateToken, error) {
+	id := fmt.Sprintf("%v", defnId)
+	return FetchScheduleCreateToken(ScheduleCreateTokenPath + id)
+}
+
 func GetPrefixFromScheduleCreateTokenPath(path string) (string, error) {
 
 	if len(path) <= len(ScheduleCreateTokenPath) {
@@ -1013,6 +1018,11 @@ func GetPrefixFromScheduleCreateTokenPath(path string) (string, error) {
 
 func GetScheduleCreateTokenPathFromDefnId(defnId c.IndexDefnId) string {
 	return ScheduleCreateTokenPath + fmt.Sprintf("%v", defnId)
+}
+
+func UpdateScheduleCreateToken(token *ScheduleCreateToken) error {
+	path := fmt.Sprintf("%v", token.Definition.DefnId)
+	return c.MetakvBigValueSet(ScheduleCreateTokenPath+path, token)
 }
 
 func PostStopScheduleCreateToken(defnId c.IndexDefnId, reason string, ctime int64) error {

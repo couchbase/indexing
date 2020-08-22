@@ -28,6 +28,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/ioutil"
 	"net"
 	"net/http"
 	"strings"
@@ -126,6 +127,7 @@ func NewDDLServiceMgr(indexerId common.IndexerId, supvCmdch MsgChannel, supvMsgc
 	mux.HandleFunc("/listDropInstanceTokens", mgr.handleListDropInstanceTokens)
 	mux.HandleFunc("/listScheduleCreateTokens", mgr.handleListScheduleCreateTokens)
 	mux.HandleFunc("/listStopScheduleCreateTokens", mgr.handleListStopScheduleCreateTokens)
+	mux.HandleFunc("/transferScheduleCreateTokens", mgr.handleTransferScheduleCreateTokens)
 
 	go mgr.run()
 
@@ -318,6 +320,18 @@ func (m *DDLServiceMgr) cleanupDropCommand() {
 			command, err := mc.UnmarshallDeleteCommandToken(entry.Value)
 			if err != nil {
 				logging.Warnf("DDLServiceMgr: Failed to clean delete index token upon rebalancing.  Skp command %v.  Internal Error = %v.", entry.Path, err)
+				continue
+			}
+
+			// Delete the schedule create token
+			if err := mc.DeleteScheduleCreateToken(command.DefnId); err != nil {
+				logging.Warnf("DDLServiceMgr: Failed to delete schedule create token upon rebalancing.  Skp command %v.  Internal Error = %v.", entry.Path, err)
+				continue
+			}
+
+			// Delete the stop schedule create token
+			if err := mc.DeleteStopScheduleCreateToken(command.DefnId); err != nil {
+				logging.Warnf("DDLServiceMgr: Failed to delete stop schedule create token upon rebalancing.  Skp command %v.  Internal Error = %v.", entry.Path, err)
 				continue
 			}
 
@@ -1451,6 +1465,50 @@ func (m *DDLServiceMgr) handleListStopScheduleCreateTokens(w http.ResponseWriter
 		w.WriteHeader(http.StatusOK)
 		w.Write(buf)
 	}
+}
+
+func (m *DDLServiceMgr) handleTransferScheduleCreateTokens(w http.ResponseWriter, r *http.Request) {
+	valid := m.validateAuth(w, r)
+	if !valid {
+		logging.Errorf("DDLServiceMgr::handleTransferScheduleCreateTokens Validation Failure for Request %v", logging.TagUD(r))
+		return
+	}
+
+	if r.Method == "POST" {
+		bytes, _ := ioutil.ReadAll(r.Body)
+		tokens := make([]mc.ScheduleCreateToken, 0)
+		if err := json.Unmarshal(bytes, &tokens); err != nil {
+			logging.Errorf("DDLServiceMgr::handleTransferScheduleCreateTokens error in json.Unmarshal %v", err)
+			send(http.StatusBadRequest, w, err)
+			return
+		}
+
+		if err := m.transferScheduleCreateTokens(tokens); err != nil {
+			errStr := fmt.Sprintf("Error while transferring scheduled create tokens %v", err)
+			send(http.StatusInternalServerError, w, errStr)
+		} else {
+			send(http.StatusOK, w, "")
+		}
+
+	} else {
+		send(http.StatusBadRequest, w, fmt.Errorf("Unsupported Method"))
+		return
+	}
+}
+
+func (m *DDLServiceMgr) transferScheduleCreateTokens(tokens []mc.ScheduleCreateToken) error {
+
+	for _, token := range tokens {
+		logging.Infof("transferScheduleCreateTokens:: DefnId %v, old indexer %v, new indexer %v",
+			token.Definition.DefnId, token.IndexerId, m.indexerId)
+		token.IndexerId = m.indexerId
+		err := mc.UpdateScheduleCreateToken(&token)
+		if err != nil {
+			return fmt.Errorf("Error (%v) in UpdateScheduleCreateToken for %v", err, token.Definition.DefnId)
+		}
+	}
+
+	return nil
 }
 
 func (m *DDLServiceMgr) validateAuth(w http.ResponseWriter, r *http.Request) bool {

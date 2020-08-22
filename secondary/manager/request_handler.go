@@ -2497,7 +2497,7 @@ type schedTokenMonitor struct {
 	listener  *mc.CommandListener
 	lock      sync.Mutex
 	lCloseCh  chan bool
-	processed map[string]bool
+	processed map[string]common.IndexerId
 
 	cinfo *common.ClusterInfoCache
 	mgr   *IndexManager
@@ -2512,7 +2512,7 @@ func newSchedTokenMonitor(mgr *IndexManager) *schedTokenMonitor {
 		indexes:   make([]*IndexStatus, 0),
 		listener:  listener,
 		lCloseCh:  lCloseCh,
-		processed: make(map[string]bool),
+		processed: make(map[string]common.IndexerId),
 		mgr:       mgr,
 	}
 
@@ -2528,26 +2528,28 @@ func newSchedTokenMonitor(mgr *IndexManager) *schedTokenMonitor {
 	return s
 }
 
-func (s *schedTokenMonitor) makeIndexStatus(token *mc.ScheduleCreateToken) *IndexStatus {
-
+func (s *schedTokenMonitor) getNodeAddr(token *mc.ScheduleCreateToken) (string, error) {
 	if s.cinfo == nil {
 		s.cinfo = s.mgr.reqcic.GetClusterInfoCache()
 		if s.cinfo == nil {
-			logging.Fatalf("schedTokenMonitor:makeIndexStatus ClusterInfoCache unavailable")
-			return nil
+			return "", fmt.Errorf("ClusterInfoCache unavailable")
 		}
 	}
 
 	nodeUUID := fmt.Sprintf("%v", token.IndexerId)
 	nid, found := s.cinfo.GetNodeIdByUUID(nodeUUID)
 	if !found {
-		logging.Fatalf("schedTokenMonitor:makeIndexStatus node id for uiuid %v not found", nodeUUID)
-		return nil
+		return "", fmt.Errorf("node id for %v not found", nodeUUID)
 	}
 
-	mgmtAddr, err := s.cinfo.GetServiceAddress(nid, "mgmt")
+	return s.cinfo.GetServiceAddress(nid, "mgmt")
+}
+
+func (s *schedTokenMonitor) makeIndexStatus(token *mc.ScheduleCreateToken) *IndexStatus {
+
+	mgmtAddr, err := s.getNodeAddr(token)
 	if err != nil {
-		logging.Fatalf("schedTokenMonitor:makeIndexStatus error in getting mgmtAddr for node %v, err: %v", nid, err)
+		logging.Errorf("schedTokenMonitor:makeIndexStatus error in getNodeAddr: %v", err)
 		return nil
 	}
 
@@ -2585,18 +2587,25 @@ func (s *schedTokenMonitor) makeIndexStatus(token *mc.ScheduleCreateToken) *Inde
 	}
 }
 
-func (s *schedTokenMonitor) checkProcessed(key string) bool {
+func (s *schedTokenMonitor) checkProcessed(key string, token *mc.ScheduleCreateToken) (bool, bool) {
 
-	// TODO: this needs to be updated/fixed to handle rebalance use case.
-	if _, ok := s.processed[key]; ok {
-		return true
+	if indexerId, ok := s.processed[key]; ok {
+		if token == nil {
+			return true, false
+		}
+
+		if indexerId == token.IndexerId {
+			return true, true
+		}
+
+		return true, false
 	}
 
-	return false
+	return false, false
 }
 
-func (s *schedTokenMonitor) markProcessed(key string) {
-	s.processed[key] = true
+func (s *schedTokenMonitor) markProcessed(key string, indexerId common.IndexerId) {
+	s.processed[key] = indexerId
 }
 
 func (s *schedTokenMonitor) getIndexesFromTokens(createTokens map[string]*mc.ScheduleCreateToken,
@@ -2605,7 +2614,10 @@ func (s *schedTokenMonitor) getIndexesFromTokens(createTokens map[string]*mc.Sch
 	indexes := make([]*IndexStatus, 0, len(createTokens))
 
 	for key, token := range createTokens {
-		if s.checkProcessed(key) {
+		if marked, match := s.checkProcessed(key, token); marked && match {
+			continue
+		} else if marked && !match {
+			s.updateIndex(token)
 			continue
 		}
 
@@ -2627,7 +2639,7 @@ func (s *schedTokenMonitor) getIndexesFromTokens(createTokens map[string]*mc.Sch
 		if stopToken != nil {
 			logging.Debugf("schedTokenMonitor:getIndexesFromTokens stop schedule token exists for %v",
 				token.Definition.DefnId)
-			if s.checkProcessed(key) {
+			if marked, _ := s.checkProcessed(key, token); marked {
 				marked := s.markIndexFailed(stopToken)
 				if marked {
 					continue
@@ -2648,7 +2660,7 @@ func (s *schedTokenMonitor) getIndexesFromTokens(createTokens map[string]*mc.Sch
 		}
 
 		indexes = append(indexes, idx)
-		s.markProcessed(key)
+		s.markProcessed(key, token.IndexerId)
 	}
 
 	for key, token := range stopTokens {
@@ -2656,7 +2668,7 @@ func (s *schedTokenMonitor) getIndexesFromTokens(createTokens map[string]*mc.Sch
 		// index as failed.
 		marked := s.markIndexFailed(token)
 		if marked {
-			s.markProcessed(key)
+			s.markProcessed(key, common.IndexerId(""))
 			continue
 		}
 
@@ -2666,7 +2678,7 @@ func (s *schedTokenMonitor) getIndexesFromTokens(createTokens map[string]*mc.Sch
 			continue
 		}
 
-		if s.checkProcessed(key) {
+		if marked, _ := s.checkProcessed(key, nil); marked {
 			continue
 		}
 
@@ -2679,7 +2691,7 @@ func (s *schedTokenMonitor) getIndexesFromTokens(createTokens map[string]*mc.Sch
 		idx.Error = token.Reason
 
 		indexes = append(indexes, idx)
-		s.markProcessed(key)
+		s.markProcessed(key, common.IndexerId(""))
 	}
 
 	return indexes
@@ -2697,6 +2709,25 @@ func (s *schedTokenMonitor) markIndexFailed(token *mc.StopScheduleCreateToken) b
 	}
 
 	return false
+}
+
+func (s *schedTokenMonitor) updateIndex(token *mc.ScheduleCreateToken) {
+	for _, index := range s.indexes {
+		if index.DefnId == token.Definition.DefnId {
+			mgmtAddr, err := s.getNodeAddr(token)
+			if err != nil {
+				logging.Errorf("schedTokenMonitor:updateIndex error in getNodeAddr: %v", err)
+				return
+			}
+			index.Hosts = []string{mgmtAddr}
+			return
+		}
+	}
+
+	logging.Warnf("schedTokenMonitor:getIndexesFromTokens failed to update index for %v",
+		token.Definition.DefnId)
+
+	return
 }
 
 func (s *schedTokenMonitor) clenseIndexes(indexes []*IndexStatus,
