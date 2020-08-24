@@ -2292,6 +2292,13 @@ func (info *plasmaSnapshotInfo) Stats() map[string]interface{} {
 	return info.IndexStats
 }
 
+func (info *plasmaSnapshotInfo) IsOSOSnap() bool {
+	if info.Ts != nil && info.Ts.GetSnapType() == common.DISK_SNAP_OSO {
+		return true
+	}
+	return false
+}
+
 func (info *plasmaSnapshotInfo) String() string {
 	return fmt.Sprintf("SnapshotInfo: count:%v committed:%v", info.Count, info.Committed)
 }

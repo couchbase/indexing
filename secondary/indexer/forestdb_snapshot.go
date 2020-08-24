@@ -17,7 +17,7 @@ import (
 	"time"
 
 	"github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/fdb"
+	forestdb "github.com/couchbase/indexing/secondary/fdb"
 	"github.com/couchbase/indexing/secondary/logging"
 )
 
@@ -42,6 +42,13 @@ func (info *fdbSnapshotInfo) IsCommitted() bool {
 
 func (info *fdbSnapshotInfo) Stats() map[string]interface{} {
 	return info.stats
+}
+
+func (info *fdbSnapshotInfo) IsOSOSnap() bool {
+	if info.Ts != nil && info.Ts.GetSnapType() == common.DISK_SNAP_OSO {
+		return true
+	}
+	return false
 }
 
 func (info *fdbSnapshotInfo) String() string {

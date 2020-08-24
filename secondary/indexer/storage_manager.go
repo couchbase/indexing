@@ -764,6 +764,14 @@ func (sm *storageMgr) findRollbackSnapshot(slice Slice,
 	}
 	s := NewSnapshotInfoContainer(infos)
 
+	//DCP doesn't allow using incomplete OSO snapshots
+	//for stream restart
+	for _, si := range s.List() {
+		if si.IsOSOSnap() {
+			return nil
+		}
+	}
+
 	//if dcp has requested rollback to 0 for any vb, it is better to
 	//try with all available disk snapshots. The rollback could be
 	//due to vbuuid mismatch and using an older disk snapshot may work.

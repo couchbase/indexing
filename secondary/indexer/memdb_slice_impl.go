@@ -1656,6 +1656,13 @@ func (info *memdbSnapshotInfo) Stats() map[string]interface{} {
 	return info.IndexStats
 }
 
+func (info *memdbSnapshotInfo) IsOSOSnap() bool {
+	if info.Ts != nil && info.Ts.GetSnapType() == common.DISK_SNAP_OSO {
+		return true
+	}
+	return false
+}
+
 func (info *memdbSnapshotInfo) String() string {
 	if info.MainSnap == nil {
 		return fmt.Sprintf("SnapInfo: file: %s", info.dataPath)
