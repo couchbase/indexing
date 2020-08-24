@@ -2477,16 +2477,11 @@ func (tk *timekeeper) generateNewStabilityTS(streamId common.StreamId,
 
 			if hasTS, ok := tk.ss.streamKeyspaceIdHasBuildCompTSMap[streamId][keyspaceId]; !ok || !hasTS {
 
-				enableOSO := tk.ss.streamKeyspaceIdEnableOSO[streamId][keyspaceId]
-				if enableOSO {
-					logging.Infof("Timekeeper::generateNewStability %v %v setting snapshot "+
-						"type as DISK_SNAP_OSO due to BuildCompletionTS", streamId, keyspaceId)
-					tsElem.ts.SetSnapType(common.DISK_SNAP_OSO)
-				} else {
-					logging.Infof("Timekeeper::generateNewStability %v %v setting snapshot "+
-						"type as DISK_SNAP due to BuildCompletionTS", streamId, keyspaceId)
-					tsElem.ts.SetSnapType(common.DISK_SNAP)
-				}
+				//NOTE For OSO mode, it is fine to create snap as DISK type, as there is no
+				//open OSO snapshot at this stage. This snapshot is eligible for recovery.
+				logging.Infof("Timekeeper::generateNewStability %v %v setting snapshot "+
+					"type as DISK_SNAP due to BuildCompletionTS", streamId, keyspaceId)
+				tsElem.ts.SetSnapType(common.DISK_SNAP)
 				tk.ss.streamKeyspaceIdHasBuildCompTSMap[streamId][keyspaceId] = true
 			}
 		}
