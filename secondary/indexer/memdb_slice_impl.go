@@ -640,10 +640,15 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 		oldEntriesBytes[i] = oldEntriesBytes[i][:e.lenKey()]
 	}
 
-	//get keys in original form
+	// For DESC field, newEntriesBytes will not be reverse collate encoded
+	// and oldEntriesBytes (from storage) will be reverse collate encoded.
+	// For comparison in CompareArrayEntriesWithCount, both must
+	// be in the same format. Note that storage returns pointer to actual
+	// data and items in oldEntriesBytes must not be modified.
 	if mdb.idxDefn.Desc != nil {
-		for _, item := range oldEntriesBytes {
-			_, err = jsonEncoder.ReverseCollate(item, mdb.idxDefn.Desc)
+		for i, item := range newEntriesBytes {
+			newEntriesBytes[i], err = jsonEncoder.ReverseCollate(item, mdb.idxDefn.Desc)
+
 			// If error From ReverseCollate here, crash as old key is not expected
 			// to fail in ReverseCollate. It can indicate storage corruption
 			common.CrashOnError(err)
@@ -665,17 +670,6 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 		}
 		mdb.isDirty = true
 		return 0
-	}
-
-	//convert to storage format
-	if mdb.idxDefn.Desc != nil {
-		for _, item := range list.Keys() {
-			_, err = jsonEncoder.ReverseCollate(item, mdb.idxDefn.Desc)
-			// If error From ReverseCollate here, crash as old key is not expected
-			// to fail in ReverseCollate. It can indicate storage corruption
-			common.CrashOnError(err)
-		}
-
 	}
 
 	// Delete each entry in entryBytesToDeleted
@@ -705,7 +699,7 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 			t0 := time.Now()
 			mdb.encodeBuf[workerId] = resizeEncodeBuf(mdb.encodeBuf[workerId], len(key), szConf.allowLargeKeys)
 			entry, err := NewSecondaryIndexEntry(key, docid, false,
-				newKeyCount[i], mdb.idxDefn.Desc, mdb.encodeBuf[workerId][:0], meta, szConf)
+				newKeyCount[i], nil, mdb.encodeBuf[workerId][:0], meta, szConf)
 			if err != nil {
 				logging.Errorf("MemDBSlice::insertSecArrayIndex Slice Id %v IndexInstId %v PartitionId %v "+
 					"Skipping docid:%s (%v)", mdb.Id, mdb.idxInstId, mdb.idxPartnId, logging.TagStrUD(docid), err)
