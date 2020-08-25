@@ -4119,15 +4119,17 @@ func (s *builder) run() {
 			//build error if builder initiates few requests.
 			if processed {
 
-				timer := time.NewTimer(time.Second * 30)
-				defer timer.Stop()
-				select {
-				case <-timer.C:
-				case <-s.manager.killch:
-					s.commandListener.Close()
-					logging.Infof("builder: go-routine terminates.")
-					return
-				}
+				func() {
+					timer := time.NewTimer(time.Second * 30)
+					defer timer.Stop()
+					select {
+					case <-timer.C:
+					case <-s.manager.killch:
+						s.commandListener.Close()
+						logging.Infof("builder: go-routine terminates.")
+						return
+					}
+				}()
 			}
 
 			buildList, quota := s.getBuildList()
