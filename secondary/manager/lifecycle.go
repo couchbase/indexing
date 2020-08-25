@@ -4132,10 +4132,12 @@ func (s *builder) run() {
 				}()
 			}
 
-			buildList, quota := s.getBuildList()
+			if len(s.pendings) > 0 {
+				buildList, quota := s.getBuildList()
 
-			for _, key := range buildList {
-				quota = s.tryBuildIndex(key, quota)
+				for _, key := range buildList {
+					quota = s.tryBuildIndex(key, quota)
+				}
 			}
 
 		case <-s.manager.killch:
