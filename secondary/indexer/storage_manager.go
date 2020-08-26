@@ -1651,6 +1651,24 @@ func (s *storageMgr) updateIndexSnapMapForIndex(idxInstId common.IndexInstId, id
 		if partnSnapMap == nil {
 			break
 		}
+
+		//if OSO snapshot, rollback all partitions to 0
+		if tsVbuuid != nil && tsVbuuid.GetSnapType() == common.DISK_SNAP_OSO {
+			for _, partnInst := range partnMap {
+				partnId := partnInst.Defn.GetPartitionId()
+				sc := partnInst.Sc
+
+				for _, slice := range sc.GetAllSlices() {
+					_, err := s.rollbackToSnapshot(idxInstId, partnId,
+						slice, nil, false)
+					if err != nil {
+						panic("Unable to rollback to 0 - " + err.Error())
+					}
+				}
+			}
+			partnSnapMap = nil
+			break
+		}
 	}
 
 	bucket, _, _ := SplitKeyspaceId(keyspaceId)

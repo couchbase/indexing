@@ -5531,8 +5531,14 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 		async = enableAsync && clusterVer >= common.INDEXER_65_VERSION
 	}
 
+	//on warmup, OSO can only be allowed if all snapshots are nil
+	allowOSO := false
+	if allNilSnapsOnWarmup == nil || (allNilSnapsOnWarmup != nil && allNilSnapsOnWarmup[keyspaceId] == true) {
+		allowOSO = true
+	}
+
 	enableOSO := idx.config["build.enableOSO"].Bool()
-	if enableOSO && streamId == common.INIT_STREAM {
+	if enableOSO && allowOSO && streamId == common.INIT_STREAM {
 		enableOSO = true
 	} else {
 		enableOSO = false
