@@ -3986,7 +3986,9 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 	enableAsync := idx.config["enableAsyncOpenStream"].Bool()
 	enableOSO := idx.config["build.enableOSO"].Bool()
 
-	if enableOSO && buildStream == common.INIT_STREAM {
+	if enableOSO &&
+		clusterVer >= common.INDEXER_70_VERSION &&
+		buildStream == common.INIT_STREAM {
 		enableOSO = true
 	} else {
 		enableOSO = false
@@ -5538,7 +5540,10 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 	}
 
 	enableOSO := idx.config["build.enableOSO"].Bool()
-	if enableOSO && allowOSO && streamId == common.INIT_STREAM {
+	if enableOSO &&
+		allowOSO &&
+		clusterVer >= common.INDEXER_70_VERSION &&
+		streamId == common.INIT_STREAM {
 		enableOSO = true
 	} else {
 		enableOSO = false
