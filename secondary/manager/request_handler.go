@@ -533,6 +533,22 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, t *target, ge
 		defnToHostMap[defnId] = append(defnToHostMap[defnId], hostAddr)
 	}
 
+	buildTopologyMapPerCollection := func(topologies []IndexTopology) map[string]map[string]map[string]*IndexTopology {
+		topoMap := make(map[string]map[string]map[string]*IndexTopology)
+		for _, topology := range topologies {
+			t := &topology
+			t.SetCollectionDefaults()
+			if _, ok := topoMap[t.Bucket]; !ok {
+				topoMap[t.Bucket] = make(map[string]map[string]*IndexTopology)
+			}
+			if _, ok := topoMap[t.Bucket][t.Scope]; !ok {
+				topoMap[t.Bucket][t.Scope] = make(map[string]*IndexTopology)
+			}
+			topoMap[t.Bucket][t.Scope][t.Collection] = t
+		}
+		return topoMap
+	}
+
 	for _, nid := range nids {
 
 		mgmtAddr, err := cinfo.GetServiceAddress(nid, "mgmt")
@@ -562,6 +578,7 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, t *target, ge
 				continue
 			}
 
+			topoMap := buildTopologyMapPerCollection(localMeta.IndexTopologies)
 			if !latest {
 				stale = true
 			} else {
@@ -596,8 +613,7 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, t *target, ge
 
 				mergeCounter(defn.DefnId, defn.NumReplica2)
 
-				if topology := findTopologyByCollection(localMeta.IndexTopologies,
-					defn.Bucket, defn.Scope, defn.Collection); topology != nil {
+				if topology, ok := topoMap[defn.Bucket][defn.Scope][defn.Collection]; ok && topology != nil {
 
 					instances := topology.GetIndexInstancesByDefn(defn.DefnId)
 					for _, instance := range instances {
