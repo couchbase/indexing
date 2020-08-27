@@ -2804,7 +2804,7 @@ func (o *MetadataProvider) findIndexByName(name, bucket, scope, collection strin
 	o.mutex.Lock()
 	defer o.mutex.Unlock()
 
-	indices, _ := o.repo.listDefnWithValidInstNoLock()
+	indices, _ := o.repo.listDefnWithValidInst()
 	for _, meta := range indices {
 		if meta.Definition.Name == name &&
 			meta.Definition.Bucket == bucket &&
