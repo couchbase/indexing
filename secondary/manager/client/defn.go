@@ -255,6 +255,7 @@ type PrepareCreateRequest struct {
 	Name        string        `json:"Name,omitempty"`
 	Scope       string        `json:"Scope,omitempty"`
 	Collection  string        `json:"Collection,omitempty"`
+	Ctime       int64         `json:"ctime,omitempty"`
 }
 
 type PrepareCreateResponse struct {

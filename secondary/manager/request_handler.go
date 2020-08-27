@@ -2119,7 +2119,7 @@ func (m *requestHandlerContext) validateScheduleCreateRequst(req *client.Schedul
 	}
 
 	if bucketUUID == common.BUCKET_UUID_NIL {
-		return "", "", "", fmt.Errorf("Bucket Not Found")
+		return "", "", "", common.ErrBucketNotFound
 	}
 
 	scopeId, collectionId, err = m.getScopeAndCollectionID(defn.Bucket, defn.Scope, defn.Collection)
@@ -2128,11 +2128,11 @@ func (m *requestHandlerContext) validateScheduleCreateRequst(req *client.Schedul
 	}
 
 	if scopeId == collections.SCOPE_ID_NIL {
-		return "", "", "", fmt.Errorf("Scope Not Found")
+		return "", "", "", common.ErrScopeNotFound
 	}
 
 	if collectionId == collections.COLLECTION_ID_NIL {
-		return "", "", "", fmt.Errorf("Collection Not Found")
+		return "", "", "", common.ErrCollectionNotFound
 	}
 
 	if common.GetStorageMode() == common.NOT_SET {
@@ -2390,7 +2390,36 @@ func (s *schedTokenMonitor) getIndexesFromTokens(createTokens map[string]*mc.Sch
 			continue
 		}
 
-		if _, ok := stopTokens[key]; ok {
+		stopKey := mc.GetStopScheduleCreateTokenPathFromDefnId(token.Definition.DefnId)
+		if _, ok := stopTokens[stopKey]; ok {
+			continue
+		}
+
+		// TODO: Check for the index in s.indexes, before checking for stop token.
+
+		// Explicitly check for stop token.
+		stopToken, err := mc.GetStopScheduleCreateToken(token.Definition.DefnId)
+		if err != nil {
+			logging.Errorf("schedTokenMonitor:getIndexesFromTokens error (%v) in getting stop schedule create token for %v",
+				err, token.Definition.DefnId)
+			continue
+		}
+
+		if stopToken != nil {
+			logging.Debugf("schedTokenMonitor:getIndexesFromTokens stop schedule token exists for %v",
+				token.Definition.DefnId)
+			if s.checkProcessed(key) {
+				marked := s.markIndexFailed(stopToken)
+				if marked {
+					continue
+				} else {
+					// This is unexpected as checkProcessed for this key true.
+					// Which means the index should have been found in the s.indexrs.
+					logging.Warnf("schedTokenMonitor:getIndexesFromTokens failed to mark index as failed for %v",
+						token.Definition.DefnId)
+				}
+			}
+
 			continue
 		}
 
@@ -2404,7 +2433,16 @@ func (s *schedTokenMonitor) getIndexesFromTokens(createTokens map[string]*mc.Sch
 	}
 
 	for key, token := range stopTokens {
-		ct, ok := createTokens[key]
+		// If create token was already processed, then just mark the
+		// index as failed.
+		marked := s.markIndexFailed(token)
+		if marked {
+			s.markProcessed(key)
+			continue
+		}
+
+		scheduleKey := mc.GetScheduleCreateTokenPathFromDefnId(token.DefnId)
+		ct, ok := createTokens[scheduleKey]
 		if !ok {
 			continue
 		}
@@ -2426,6 +2464,20 @@ func (s *schedTokenMonitor) getIndexesFromTokens(createTokens map[string]*mc.Sch
 	}
 
 	return indexes
+}
+
+func (s *schedTokenMonitor) markIndexFailed(token *mc.StopScheduleCreateToken) bool {
+	// Note that this is an idempotent operation - as long as the value
+	// of the token doesn't change.
+	for _, index := range s.indexes {
+		if index.DefnId == token.DefnId {
+			index.Status = "Error"
+			index.Error = token.Reason
+			return true
+		}
+	}
+
+	return false
 }
 
 func (s *schedTokenMonitor) clenseIndexes(indexes []*IndexStatus,

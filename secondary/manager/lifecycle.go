@@ -477,33 +477,8 @@ func (m *LifecycleMgr) handlePrepareCreateIndex(content []byte) ([]byte, error) 
 	prepareCreateIndex.Scope, prepareCreateIndex.Collection = common.GetCollectionDefaults(prepareCreateIndex.Scope,
 		prepareCreateIndex.Collection)
 
+	// Check for duplicate index before proceeding further.
 	if prepareCreateIndex.Op == client.PREPARE {
-		if m.prepareLock != nil {
-			if m.prepareLock.RequesterId != prepareCreateIndex.RequesterId ||
-				m.prepareLock.DefnId != prepareCreateIndex.DefnId {
-
-				if m.prepareLock.Timeout > (time.Now().UnixNano() - m.prepareLock.StartTime) {
-					logging.Infof("LifecycleMgr.handlePrepareCreateIndex() : Reject %v because another index %v holding lock",
-						prepareCreateIndex.DefnId, m.prepareLock.DefnId)
-					response := &client.PrepareCreateResponse{
-						Accept: false,
-						Msg:    client.RespAnotherIndexCreation,
-					}
-					return client.MarshallPrepareCreateResponse(response)
-				}
-				logging.Infof("LifecycleMgr.handlePrepareCreateIndex() : Prepare timeout for %v", m.prepareLock.DefnId)
-			}
-		}
-
-		if _, err := m.repo.GetLocalValue("RebalanceRunning"); err == nil {
-			logging.Infof("LifecycleMgr.handlePrepareCreateIndex() : Reject %v because rebalance in progress", prepareCreateIndex.DefnId)
-			response := &client.PrepareCreateResponse{
-				Accept: false,
-				Msg:    client.RespRebalanceRunning,
-			}
-			return client.MarshallPrepareCreateResponse(response)
-		}
-
 		if prepareCreateIndex.Name != "" && prepareCreateIndex.Bucket != "" {
 			// Check for duplicate index name only if name and bucket name
 			// are specified in the request
@@ -532,6 +507,33 @@ func (m *LifecycleMgr) handlePrepareCreateIndex(content []byte) ([]byte, error) 
 				return client.MarshallPrepareCreateResponse(response)
 			}
 		}
+	}
+
+	if prepareCreateIndex.Op == client.PREPARE {
+		if _, err := m.repo.GetLocalValue("RebalanceRunning"); err == nil {
+			logging.Infof("LifecycleMgr.handlePrepareCreateIndex() : Reject %v because rebalance in progress", prepareCreateIndex.DefnId)
+			response := &client.PrepareCreateResponse{
+				Accept: false,
+				Msg:    client.RespRebalanceRunning,
+			}
+			return client.MarshallPrepareCreateResponse(response)
+		}
+
+		if m.prepareLock != nil {
+			if m.prepareLock.RequesterId != prepareCreateIndex.RequesterId ||
+				m.prepareLock.DefnId != prepareCreateIndex.DefnId {
+
+				if !m.isHigherPriorityRequest(prepareCreateIndex) {
+					logging.Infof("LifecycleMgr.handlePrepareCreateIndex() : Reject %v because another index %v holding lock",
+						prepareCreateIndex.DefnId, m.prepareLock.DefnId)
+					response := &client.PrepareCreateResponse{
+						Accept: false,
+						Msg:    client.RespAnotherIndexCreation,
+					}
+					return client.MarshallPrepareCreateResponse(response)
+				}
+			}
+		}
 
 		m.prepareLock = prepareCreateIndex
 		m.prepareLock.StartTime = time.Now().UnixNano()
@@ -552,6 +554,53 @@ func (m *LifecycleMgr) handlePrepareCreateIndex(content []byte) ([]byte, error) 
 	}
 
 	return nil, fmt.Errorf("Unknown operation %v for prepare create index", prepareCreateIndex.Op)
+}
+
+//
+// Following function takes a prepare create request as input and returns
+// a boolean value base on the priority of the current in-progress request
+// and the new incoming request. Returns true if the new incoming request
+// has higher priority than the current in-progress request.
+//
+func (m *LifecycleMgr) isHigherPriorityRequest(req *client.PrepareCreateRequest) bool {
+	if m.prepareLock == nil {
+		return true
+	}
+
+	// Don't look at the actual request priorities if the current in-progress
+	// request has timed out.
+	// TODO: Need to increase timeout as planner can take more time with large
+	//       number of indexes.
+	if m.prepareLock.Timeout < (time.Now().UnixNano() - m.prepareLock.StartTime) {
+		logging.Infof("LifecycleMgr.handlePrepareCreateIndex() : Prepare timeout for %v", m.prepareLock.DefnId)
+		return true
+	}
+
+	if m.prepareLock.Ctime == 0 {
+		logging.Debugf("LifecycleMgr.handlePrepareCreateIndex() : Rejecting request for %v:%v"+
+			" as the ongoing request (%v, %v) has equal or higher priority.", req.DefnId, req.Ctime,
+			m.prepareLock.DefnId, m.prepareLock.Ctime)
+		return false
+	}
+
+	if req.Ctime == 0 {
+		logging.Infof("LifecycleMgr.handlePrepareCreateIndex() : Prioritising  request %v:%v"+
+			" over the ongoing request (%v, %v) as it has equal or higher priority.", req.DefnId, req.Ctime,
+			m.prepareLock.DefnId, m.prepareLock.Ctime)
+		return true
+	}
+
+	if m.prepareLock.Ctime > req.Ctime {
+		logging.Infof("LifecycleMgr.handlePrepareCreateIndex() : Prioritising  request %v:%v"+
+			" over the ongoing request (%v, %v) as it has equal or higher priority.", req.DefnId, req.Ctime,
+			m.prepareLock.DefnId, m.prepareLock.Ctime)
+		return true
+	}
+
+	logging.Debugf("LifecycleMgr.handlePrepareCreateIndex() : Rejecting request for %v:%v"+
+		" as the ongoing request (%v, %v) has equal or higher priority.", req.DefnId, req.Ctime,
+		m.prepareLock.DefnId, m.prepareLock.Ctime)
+	return false
 }
 
 //
@@ -1265,7 +1314,7 @@ func (m *LifecycleMgr) setBucketUUID(defn *common.IndexDefn) error {
 	bucketUUID, err := m.verifyBucket(defn.Bucket)
 	if err != nil || bucketUUID == common.BUCKET_UUID_NIL {
 		if err == nil {
-			err = errors.New("Bucket not found")
+			err = common.ErrBucketNotFound
 		}
 		return fmt.Errorf("Bucket does not exist or temporarily unavailable for creating new index."+
 			" Please retry the operation at a later time (err=%v).", err)
@@ -1303,7 +1352,7 @@ func (m *LifecycleMgr) setScopeIdAndCollectionId(defn *common.IndexDefn) error {
 	scopeId, err := m.getScopeID(defn.Bucket, defn.Scope)
 	if err != nil || scopeId == collections.SCOPE_ID_NIL {
 		if err == nil {
-			err = errors.New("Scope not found")
+			err = common.ErrScopeNotFound
 		}
 		return fmt.Errorf("Error encountered while retrieving ScopeID. Bucket = %v Scope = %v"+
 			". Please retry the operation at a later time (err=%v).", defn.Bucket, defn.Scope, err)
@@ -1312,7 +1361,7 @@ func (m *LifecycleMgr) setScopeIdAndCollectionId(defn *common.IndexDefn) error {
 	collectionID, err := m.getCollectionID(defn.Bucket, defn.Scope, defn.Collection)
 	if err != nil || collectionID == collections.COLLECTION_ID_NIL {
 		if err == nil {
-			err = errors.New("Collection not found")
+			err = common.ErrCollectionNotFound
 		}
 		return fmt.Errorf("Error encountered while retrieving CollectionID. Bucket = %v Scope = %v Collection = %v"+
 			" Please retry the operation at a later time (err=%v).", defn.Bucket, defn.Scope, defn.Collection, err)

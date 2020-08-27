@@ -409,7 +409,7 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 		}
 	} else {
 		scheduleOnFailure := o.settings.AllowScheduleCreate()
-		if err := o.recoverableCreateIndex(idxDefn, plan, scheduleOnFailure, false); err != nil {
+		if err := o.recoverableCreateIndex(idxDefn, plan, scheduleOnFailure, false, 0); err != nil {
 			return c.IndexDefnId(0), err, false
 		}
 	}
@@ -422,7 +422,7 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 //
 func (o *MetadataProvider) makePrepareIndexRequest(defnId c.IndexDefnId, name string,
 	bucket, scope, collection string, nodes []string, partitionScheme c.PartitionScheme,
-	numReplica int, checkDuplicateIndex bool) (map[c.IndexerId]int, error, bool) {
+	numReplica int, checkDuplicateIndex bool, ctime int64) (map[c.IndexerId]int, error, bool) {
 
 	// do a preliminary check
 	watchers, err, _ := o.findWatchersWithRetry(nodes, numReplica, c.IsPartitioned(partitionScheme), false)
@@ -440,6 +440,7 @@ func (o *MetadataProvider) makePrepareIndexRequest(defnId c.IndexDefnId, name st
 		DefnId:      defnId,
 		RequesterId: o.providerId,
 		Timeout:     int64(time.Duration(3) * time.Minute),
+		Ctime:       ctime,
 	}
 
 	if checkDuplicateIndex {
@@ -458,6 +459,7 @@ func (o *MetadataProvider) makePrepareIndexRequest(defnId c.IndexDefnId, name st
 	var accept uint32
 	var schedule uint32
 	var duplicate uint32
+	var rebalance uint32
 
 	watcherMap := make(map[c.IndexerId]int)
 
@@ -514,6 +516,10 @@ func (o *MetadataProvider) makePrepareIndexRequest(defnId c.IndexDefnId, name st
 					return
 				}
 
+				if response.Msg == RespRebalanceRunning {
+					atomic.AddUint32(&rebalance, 1)
+					return
+				}
 			}
 		}(w)
 	}
@@ -522,16 +528,18 @@ func (o *MetadataProvider) makePrepareIndexRequest(defnId c.IndexDefnId, name st
 
 	if accept < uint32(len(watcherMap)) {
 		if atomic.LoadUint32(&duplicate) > 0 {
-			errStr := "Create index cannot proceed due to presence of duplicate index name."
-			return watcherMap, errors.New(errStr), false
-		} else if (atomic.LoadUint32(&schedule) + accept) < uint32(len(watcherMap)) {
-			errStr := "Create index or Alter replica cannot proceed due to rebalance in progress, " +
-				"network partition, node failover or indexer failure."
-			return watcherMap, errors.New(errStr), false
-		} else {
-			errStr := "Create index or Alter replica cannot proceed due to another concurrent create index request."
-			return watcherMap, errors.New(errStr), true
+			return watcherMap, c.ErrDuplicateIndex, false
 		}
+
+		if atomic.LoadUint32(&rebalance) > 0 {
+			return watcherMap, c.ErrRebalanceRunning, false
+		}
+
+		if (atomic.LoadUint32(&schedule) + accept) < uint32(len(watcherMap)) {
+			return watcherMap, c.ErrNetworkPartition, false
+		}
+
+		return watcherMap, c.ErrAnotherIndexCreation, true
 	}
 
 	return watcherMap, nil, false
@@ -725,7 +733,7 @@ func (o *MetadataProvider) verifyDuplicateScheduleToken(idxDefn *c.IndexDefn) er
 				continue
 			}
 
-			return fmt.Errorf("Duplicate index id %v is already scheduled for creation.", defn.DefnId)
+			return fmt.Errorf("%v DefnId = %v.", c.ErrDuplicateCreateToken.Error(), defn.DefnId)
 		}
 	}
 
@@ -881,17 +889,17 @@ func (o *MetadataProvider) waitForScheduleCreateToken(defnId c.IndexDefnId) erro
 // This should be called for the defn, that is not yet persisted in index metadata.
 // This function doesn't trigger the index build, even if the deferred flag is false.
 func (o *MetadataProvider) CreateIndexWithDefnAndPlan(idxDefn *c.IndexDefn,
-	plan map[string]interface{}) error {
+	plan map[string]interface{}, ctime int64) error {
 
 	// TODO: Check for existing idxDefn.DefnId.
-	return o.recoverableCreateIndex(idxDefn, plan, false, true)
+	return o.recoverableCreateIndex(idxDefn, plan, false, true, ctime)
 }
 
 //
 // This function create index using new protocol (vulcan).
 //
 func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn,
-	plan map[string]interface{}, scheduleOnFailure bool, asyncCreate bool) error {
+	plan map[string]interface{}, scheduleOnFailure bool, asyncCreate bool, ctime int64) error {
 
 	//
 	// Prepare Phase.  This is to seek full quorum from all the indexers.
@@ -920,7 +928,7 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn,
 
 	watcherMap, err, canSchedule := o.makePrepareIndexRequest(idxDefn.DefnId, idxDefn.Name,
 		idxDefn.Bucket, idxDefn.Scope, idxDefn.Collection, useNodes,
-		idxDefn.PartitionScheme, int(idxDefn.NumReplica), true)
+		idxDefn.PartitionScheme, int(idxDefn.NumReplica), true, ctime)
 
 	if err != nil {
 		o.cancelPrepareIndexRequest(idxDefn.DefnId, watcherMap)
@@ -2451,7 +2459,7 @@ RETRY1:
 	}
 
 	if errCode == 1 {
-		stmt1 := "Fails to create index.  There is no available index service that can process this request at this time."
+		stmt1 := fmt.Sprintf("%v", c.ErrIndexerNotAvailable.Error())
 		stmt2 := "Index Service can be in bootstrap, recovery, or non-reachable."
 		stmt3 := "Please retry the operation at a later time."
 		return nil, errors.New(fmt.Sprintf("%s %s %s", stmt1, stmt2, stmt3)), false
@@ -2461,9 +2469,9 @@ RETRY1:
 		return nil, errors.New(fmt.Sprintf(stmt1, nodes)), true
 
 	} else if errCode == 3 {
-		stmt1 := "Fails to create index.  There are not enough indexer nodes to create index with replica count of %v. "
+		stmt1 := fmt.Sprintf("%v count of %v. ", c.ErrNotEnoughIndexers.Error(), numReplica)
 		stmt2 := stmt1 + "Some indexer nodes may be marked as excluded."
-		return nil, errors.New(fmt.Sprintf(stmt2, numReplica)), true
+		return nil, errors.New(stmt2), true
 	}
 
 	return watchers, nil, false
@@ -2953,7 +2961,7 @@ func (o *MetadataProvider) AlterReplicaCount(action string, defnId c.IndexDefnId
 	defn := *idxMeta.Definition
 	numPartition := idxMeta.numPartitions()
 	watcherMap, err, _ := o.makePrepareIndexRequest(defn.DefnId, defn.Name, defn.Bucket,
-		defn.Scope, defn.Collection, nil, defn.PartitionScheme, count, false)
+		defn.Scope, defn.Collection, nil, defn.PartitionScheme, count, false, 0)
 
 	if err != nil {
 		o.cancelPrepareIndexRequest(defn.DefnId, watcherMap)

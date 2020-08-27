@@ -49,6 +49,40 @@ var ErrClientCancel = errors.New("Client requested cancel")
 
 var ErrIndexerInBootstrap = errors.New("Indexer In Warmup State. Please retry the request later.")
 
+//
+// List of errors leading to failure of index creation
+//
+var ErrAnotherIndexCreation = errors.New("Create index or Alter replica cannot proceed due to another concurrent create index request.")
+var ErrRebalanceRunning = errors.New("Create index or Alter replica cannot proceed due to rebalance in progress")
+var ErrNetworkPartition = errors.New("Create index or Alter replica cannot proceed due to network partition, node failover or indexer failure.")
+var ErrDuplicateIndex = errors.New("Create index cannot proceed due to presence of duplicate index name.")
+var ErrIndexAlreadyExists = errors.New("Index already exist.")
+var ErrBucketNotFound = errors.New("Bucket Not Found")
+var ErrScopeNotFound = errors.New("Scope Not Found")
+var ErrCollectionNotFound = errors.New("Collection Not Found")
+var ErrDuplicateCreateToken = errors.New("Duplicate index is already scheduled for creation.")
+var ErrIndexerNotAvailable = errors.New("Fails to create index.  There is no available index service that can process this request at this time.")
+var ErrNotEnoughIndexers = errors.New("Fails to create index.  There are not enough indexer nodes to create index with replica")
+var ErrIndexerConnection = errors.New("Unable to connect to all indexer nodes")
+
+var NonRetryableErrorsInCreate = []error{
+	ErrDuplicateIndex,
+	ErrIndexAlreadyExists,
+	ErrBucketNotFound,
+	ErrScopeNotFound,
+	ErrCollectionNotFound,
+	ErrDuplicateCreateToken,
+}
+
+var RetryableErrorsInCreate = []error{
+	ErrAnotherIndexCreation,
+	ErrRebalanceRunning,
+	ErrNetworkPartition,
+	ErrIndexerNotAvailable,
+	ErrNotEnoughIndexers,
+	ErrIndexerConnection,
+}
+
 const INDEXER_45_VERSION = 1
 const INDEXER_50_VERSION = 2
 const INDEXER_55_VERSION = 3

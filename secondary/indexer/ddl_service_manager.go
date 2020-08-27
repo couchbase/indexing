@@ -1619,7 +1619,7 @@ func newMetadataProvider(clusterAddr string, nodes map[service.NodeID]bool, sett
 
 				provider.Close()
 				return nil, nil, errors.New(fmt.Sprintf("%v: Failed to initialize metadata provider.  "+
-					"Unable to connect to all indexer nodes within 500ms.", logPrefix))
+					"%v within 500ms.", logPrefix, common.ErrIndexerConnection.Error()))
 			}
 		}
 	}
