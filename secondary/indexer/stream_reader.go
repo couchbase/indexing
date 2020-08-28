@@ -569,8 +569,9 @@ type streamWorker struct {
 	keyspaceIdFilter    map[string]*common.TsVbuuid
 	keyspaceIdFilterOSO map[string]*common.TsVbuuid
 
-	keyspaceIdSessionId KeyspaceIdSessionId
-	keyspaceIdEnableOSO KeyspaceIdEnableOSO
+	keyspaceIdSessionId    KeyspaceIdSessionId
+	keyspaceIdEnableOSO    KeyspaceIdEnableOSO
+	keyspaceIdOSOException map[string]bool
 
 	keyspaceIdPrevSnapMap map[string]*common.TsVbuuid
 	keyspaceIdSyncDue     map[string]bool
@@ -602,18 +603,19 @@ func newStreamWorker(streamId common.StreamId, numWorkers int, workerId int, con
 	vbMap *VbMapHolder, keyspaceIdSessionId KeyspaceIdSessionId, keyspaceIdEnableOSO KeyspaceIdEnableOSO) *streamWorker {
 
 	w := &streamWorker{streamId: streamId,
-		workerId:              workerId,
-		workerch:              make(chan *protobuf.VbKeyVersions, getWorkerBufferSize(config)/uint64(numWorkers)),
-		workerStopCh:          make(StopChannel),
-		keyspaceIdFilter:      make(map[string]*common.TsVbuuid),
-		keyspaceIdFilterOSO:   make(map[string]*common.TsVbuuid),
-		keyspaceIdPrevSnapMap: make(map[string]*common.TsVbuuid),
-		keyspaceIdSyncDue:     make(map[string]bool),
-		reader:                reader,
-		keyspaceIdFirstSnap:   make(map[string]firstSnapFlag),
-		vbMap:                 vbMap,
-		keyspaceIdSessionId:   make(KeyspaceIdSessionId),
-		keyspaceIdEnableOSO:   make(KeyspaceIdEnableOSO),
+		workerId:               workerId,
+		workerch:               make(chan *protobuf.VbKeyVersions, getWorkerBufferSize(config)/uint64(numWorkers)),
+		workerStopCh:           make(StopChannel),
+		keyspaceIdFilter:       make(map[string]*common.TsVbuuid),
+		keyspaceIdFilterOSO:    make(map[string]*common.TsVbuuid),
+		keyspaceIdPrevSnapMap:  make(map[string]*common.TsVbuuid),
+		keyspaceIdSyncDue:      make(map[string]bool),
+		reader:                 reader,
+		keyspaceIdFirstSnap:    make(map[string]firstSnapFlag),
+		vbMap:                  vbMap,
+		keyspaceIdSessionId:    make(KeyspaceIdSessionId),
+		keyspaceIdEnableOSO:    make(KeyspaceIdEnableOSO),
+		keyspaceIdOSOException: make(map[string]bool),
 	}
 
 	w.meta = &MutationMeta{}
@@ -920,15 +922,16 @@ func (w *streamWorker) initKeyspaceIdFilter(keyspaceIdFilter map[string]*common.
 				//actual TS uses bucket as keyspaceId
 				w.keyspaceIdFilter[b] = common.NewTsVbuuid(GetBucketFromKeyspaceId(b), int(q.queue.GetNumVbuckets()))
 				w.keyspaceIdPrevSnapMap[b] = common.NewTsVbuuid(GetBucketFromKeyspaceId(b), int(q.queue.GetNumVbuckets()))
-				if keyspaceIdEnableOSO[b] {
-					w.keyspaceIdFilterOSO[b] = common.NewTsVbuuid(GetBucketFromKeyspaceId(b), int(q.queue.GetNumVbuckets()))
-				}
 			}
 
 			w.keyspaceIdSyncDue[b] = false
 			w.keyspaceIdFirstSnap[b] = make(firstSnapFlag, int(q.queue.GetNumVbuckets()))
 			w.keyspaceIdSessionId[b] = keyspaceIdSessionId[b]
 			w.keyspaceIdEnableOSO[b] = keyspaceIdEnableOSO[b]
+			if keyspaceIdEnableOSO[b] {
+				w.keyspaceIdFilterOSO[b] = common.NewTsVbuuid(GetBucketFromKeyspaceId(b), int(q.queue.GetNumVbuckets()))
+			}
+			w.keyspaceIdOSOException[b] = false
 
 			//reset stat for bucket
 			stats := w.reader.stats.Get()
@@ -950,6 +953,7 @@ func (w *streamWorker) initKeyspaceIdFilter(keyspaceIdFilter map[string]*common.
 			delete(w.keyspaceIdSessionId, b)
 			delete(w.keyspaceIdFilterOSO, b)
 			delete(w.keyspaceIdEnableOSO, b)
+			delete(w.keyspaceIdOSOException, b)
 		}
 	}
 
@@ -984,6 +988,9 @@ func (w *streamWorker) checkAndSetKeyspaceIdFilter(meta *MutationMeta) (bool, bo
 	w.lock.Lock()
 	defer w.lock.Unlock()
 
+	if w.keyspaceIdOSOException[meta.keyspaceId] {
+		return true /* skip */, false /* firstSnap */
+	}
 	if enable, ok := w.keyspaceIdEnableOSO[meta.keyspaceId]; ok && enable {
 		filterOSO, _ := w.keyspaceIdFilterOSO[meta.keyspaceId]
 		//if OSO snapshot is being processed
@@ -1092,7 +1099,6 @@ func (w *streamWorker) updateOSOMarkerInFilter(meta *MutationMeta, eventType byt
 	w.lock.Lock()
 	defer w.lock.Unlock()
 
-	resetStream := false
 	if filter, ok := w.keyspaceIdFilter[meta.keyspaceId]; ok {
 
 		filterOSO := w.keyspaceIdFilterOSO[meta.keyspaceId]
@@ -1103,13 +1109,25 @@ func (w *streamWorker) updateOSOMarkerInFilter(meta *MutationMeta, eventType byt
 			return
 		}
 
+		resetStream := func() {
+			logging.Infof("MutationStreamReader::updateOSOMarkerInFilter %v %v.",
+				" Resetting Stream.", w.streamId, meta.keyspaceId)
+			w.keyspaceIdOSOException[meta.keyspaceId] = true
+			w.reader.supvRespch <- &MsgStreamUpdate{
+				mType:      RESET_STREAM,
+				streamId:   w.streamId,
+				keyspaceId: meta.keyspaceId,
+				sessionId:  w.keyspaceIdSessionId[meta.keyspaceId],
+			}
+		}
+
 		enableOSO := w.keyspaceIdEnableOSO[meta.keyspaceId]
 		if !enableOSO {
 			logging.Errorf("MutationStreamReader::updateOSOMarkerInFilter %v %v "+
 				"Received OSO Marker for Vbucket %v. OSO is disabled.", w.streamId,
 				meta.keyspaceId, meta.vbucket)
-
-			//TODO Collections, reset stream
+			resetStream()
+			return
 		}
 
 		if eventType == common.OSOSnapshotStart {
@@ -1119,7 +1137,8 @@ func (w *streamWorker) updateOSOMarkerInFilter(meta *MutationMeta, eventType byt
 					"Received OSO Start For Vbucket %v after DCP snapshot %v-%v Seqno %v", w.streamId,
 					meta.keyspaceId, meta.vbucket, filter.Snapshots[meta.vbucket][0],
 					filter.Snapshots[meta.vbucket][1], filter.Seqnos[meta.vbucket])
-				resetStream = true
+				resetStream()
+				return
 			}
 
 			logging.Infof("MutationStreamReader::updateOSOMarkerInFilter %v %v "+
@@ -1137,16 +1156,12 @@ func (w *streamWorker) updateOSOMarkerInFilter(meta *MutationMeta, eventType byt
 					meta.keyspaceId, meta.vbucket, filterOSO.Seqnos[meta.vbucket],
 					filterOSO.Vbuuids[meta.vbucket], filterOSO.Snapshots[meta.vbucket][0],
 					filterOSO.Snapshots[meta.vbucket][1])
-				resetStream = true
+				resetStream()
+				return
+
 			} else {
 				filterOSO.Snapshots[meta.vbucket][0] = 1 //snapshot[0] stores OSO Start
 				filterOSO.Snapshots[meta.vbucket][1] = 0 //snapshot[1] stores OSO End
-			}
-
-			if resetStream {
-				logging.Infof("MutationStreamReader::updateOSOMarkerInFilter %v %v.",
-					" Resetting Stream.")
-				//TODO Collections send message to reset stream
 			}
 
 			if w.markFirstSnap &&
