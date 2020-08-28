@@ -161,6 +161,7 @@ const (
 	CLEANUP_STREAM
 	CLEANUP_PRJ_STATS
 	INDEXER_UPDATE_BUILD_TS
+	RESET_STREAM
 
 	CONFIG_SETTINGS_UPDATE
 
@@ -478,6 +479,7 @@ func (m *MsgUpdateKeyspaceIdQueue) String() string {
 //CLEANUP_STREAM
 //CLEANUP_PRJ_STATS
 //INDEXER_UPDATE_BUILD_TS
+//RESET_STREAM
 type MsgStreamUpdate struct {
 	mType        MsgType
 	streamId     common.StreamId
@@ -2331,6 +2333,8 @@ func (m MsgType) String() string {
 		return "CLEANUP_PRJ_STATS"
 	case INDEXER_UPDATE_BUILD_TS:
 		return "INDEXER_UPDATE_BUILD_TS"
+	case RESET_STREAM:
+		return "RESET_STREAM"
 
 	case KV_SENDER_RESTART_VBUCKETS:
 		return "KV_SENDER_RESTART_VBUCKETS"

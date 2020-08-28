@@ -1159,7 +1159,7 @@ func (tk *timekeeper) handleStreamBegin(cmd Message) {
 			tk.ss.clearRepairState(streamId, meta.keyspaceId, meta.vbucket)
 
 			if tk.ss.getVbRefCount(streamId, meta.keyspaceId, meta.vbucket) > 1 {
-				logging.Infof("Timekeeper::handleStreamBegin \n\tOwner count > 1. Treat as CONN_ERR. "+
+				logging.Infof("Timekeeper::handleStreamBegin Owner count > 1. Treat as CONN_ERR. "+
 					"StreamId %v MutationMeta %v", streamId, meta)
 
 				// This will trigger repairStream, as well as replying to supervisor channel
@@ -1284,7 +1284,7 @@ func (tk *timekeeper) handleStreamEnd(cmd Message) {
 				// residue StreamEnd from old master can still arrive.   Therefore, after
 				// CONN_ERROR, the total number of StreamEnd > total number of StreamBegin,
 				// and count will be negative in this case.
-				logging.Infof("Timekeeper::handleStreamEnd \n\tOwner count < 0. Treat as CONN_ERR. "+
+				logging.Infof("Timekeeper::handleStreamEnd Owner count < 0. Treat as CONN_ERR. "+
 					"StreamId %v MutationMeta %v", streamId, meta)
 
 				tk.handleStreamConnErrorInternal(streamId, meta.keyspaceId, []Vbucket{meta.vbucket})
@@ -1345,7 +1345,7 @@ func (tk *timekeeper) handleStreamConnError(cmd Message) {
 	}
 
 	if tk.vbCheckerStopCh == nil {
-		logging.Infof("Timekeeper::handleStreamConnError \n\t Call RepairMissingStreamBegin to check for vbucket for repair. "+
+		logging.Infof("Timekeeper::handleStreamConnError Call RepairMissingStreamBegin to check for vbucket for repair. "+
 			"StreamId %v KeyspaceId %v", streamId, keyspaceId)
 		tk.vbCheckerStopCh = make(chan bool)
 		go tk.repairMissingStreamBegin(streamId)
@@ -1504,7 +1504,7 @@ func (tk *timekeeper) handleStreamConnErrorInternal(streamId common.StreamId, ke
 
 	//check if keyspaceId is active in stream
 	if tk.checkKeyspaceActiveInStream(streamId, keyspaceId) == false {
-		logging.Warnf("Timekeeper::handleStreamConnError \n\tReceived ConnError for "+
+		logging.Warnf("Timekeeper::handleStreamConnError Received ConnError for "+
 			"Inactive KeyspaceId %v Stream %v. Ignored.", keyspaceId, streamId)
 		return
 	}
@@ -1854,12 +1854,38 @@ func (tk *timekeeper) handleStreamRequestDone(cmd Message) {
 	keyspaceId := cmd.(*MsgStreamInfo).GetKeyspaceId()
 	activeTs := cmd.(*MsgStreamInfo).GetActiveTs()
 	pendingTs := cmd.(*MsgStreamInfo).GetPendingTs()
+	sessionId := cmd.(*MsgStreamInfo).GetSessionId()
 
 	logging.Infof("Timekeeper::handleStreamRequestDone StreamId %v KeyspaceId %v",
 		streamId, keyspaceId)
 
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
+
+	//check if keyspace is active in stream
+	if tk.checkKeyspaceActiveInStream(streamId, keyspaceId) == false {
+		logging.Warnf("Timekeeper::handleStreamRequestDone Received StreamRequestDone for "+
+			"Inactive KeyspaceId %v Stream %v. Ignored.", keyspaceId, streamId)
+		return
+	}
+
+	//if there are no indexes for this keyspace and stream, ignore
+	if c, ok := tk.ss.streamKeyspaceIdIndexCountMap[streamId][keyspaceId]; !ok || c <= 0 {
+		logging.Warnf("Timekeeper::handleStreamRequestDone Ignore StreamRequestDone for StreamId %v "+
+			"KeyspaceId %v. IndexCount %v. ", streamId, keyspaceId, c)
+		tk.supvCmdch <- &MsgSuccess{}
+		return
+	}
+
+	//if the session doesn't match, ignore
+	currSessionId := tk.ss.getSessionId(streamId, keyspaceId)
+	if sessionId != 0 && sessionId != currSessionId {
+		logging.Warnf("Timekeeper::handleStreamRequestDone Ignore StreamRequestDone for StreamId %v "+
+			"KeyspaceId %v. SessionId %v. Current Session %v ", streamId, keyspaceId,
+			sessionId, currSessionId)
+		tk.supvCmdch <- &MsgSuccess{}
+		return
+	}
 
 	tk.ss.streamKeyspaceIdKVActiveTsMap[streamId][keyspaceId] = activeTs
 	openTs := activeTs
@@ -1923,12 +1949,38 @@ func (tk *timekeeper) handleRecoveryDone(cmd Message) {
 	mergeTs := cmd.(*MsgRecovery).GetRestartTs()
 	activeTs := cmd.(*MsgRecovery).GetActiveTs()
 	pendingTs := cmd.(*MsgRecovery).GetPendingTs()
+	sessionId := cmd.(*MsgRecovery).GetSessionId()
 
 	logging.Infof("Timekeeper::handleRecoveryDone StreamId %v KeyspaceId %v",
 		streamId, keyspaceId)
 
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
+
+	//check if keyspace is active in stream
+	if tk.checkKeyspaceActiveInStream(streamId, keyspaceId) == false {
+		logging.Warnf("Timekeeper::handleRecoveryDone Received RecoveryDone for "+
+			"Inactive KeyspaceId %v Stream %v. Ignored.", keyspaceId, streamId)
+		return
+	}
+
+	//if there are no indexes for this keyspace and stream, ignore
+	if c, ok := tk.ss.streamKeyspaceIdIndexCountMap[streamId][keyspaceId]; !ok || c <= 0 {
+		logging.Warnf("Timekeeper::handleRecoveryDone Ignore RecoveryDone for StreamId %v "+
+			"KeyspaceId %v. IndexCount %v. ", streamId, keyspaceId, c)
+		tk.supvCmdch <- &MsgSuccess{}
+		return
+	}
+
+	//if the session doesn't match, ignore
+	currSessionId := tk.ss.getSessionId(streamId, keyspaceId)
+	if sessionId != 0 && sessionId != currSessionId {
+		logging.Warnf("Timekeeper::handleRecoveryDone Ignore RecoveryDone for StreamId %v "+
+			"KeyspaceId %v. SessionId %v. Current Session %v ", streamId, keyspaceId,
+			sessionId, currSessionId)
+		tk.supvCmdch <- &MsgSuccess{}
+		return
+	}
 
 	tk.ss.streamKeyspaceIdKVActiveTsMap[streamId][keyspaceId] = activeTs
 	openTs := activeTs
@@ -2200,7 +2252,7 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 	keyspaceId string, initFlushTs *common.TsVbuuid) bool {
 
 	logging.LazyTrace(func() string {
-		return fmt.Sprintf("Timekeeper::checkInitStreamReadyToMerge \n\t Stream %v KeyspaceId %v len(buildInfo) %v "+
+		return fmt.Sprintf("Timekeeper::checkInitStreamReadyToMerge Stream %v KeyspaceId %v len(buildInfo) %v "+
 			"FlushTs %v", streamId, keyspaceId, len(tk.indexBuildInfo), initFlushTs)
 	})
 
@@ -2294,7 +2346,7 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 					mergeTs:    initTsSeq,
 					sessionId:  sessionId}
 
-				logging.Infof("Timekeeper::checkInitStreamReadyToMerge \n\t Stream %v "+
+				logging.Infof("Timekeeper::checkInitStreamReadyToMerge Stream %v "+
 					"KeyspaceId %v State Changed to INACTIVE", streamId, keyspaceId)
 				tk.stopTimer(streamId, keyspaceId)
 				tk.ss.cleanupKeyspaceIdFromStream(streamId, keyspaceId)
