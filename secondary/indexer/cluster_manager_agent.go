@@ -363,9 +363,14 @@ func (c *clustMgrAgent) handleStatsInternal() {
 
 	stats := c.stats.Get()
 	if stats != nil {
-		spec := NewStatsSpec(false, false, false, false, nil)
+		spec := NewStatsSpec(false, false, false, false, false, nil)
 		spec.OverrideFilter("gsiClient") // Get only the stats related to GSI client
-		c.mgr.NotifyStats(stats.GetStats(spec))
+		filteredStats := stats.GetStats(spec)
+		if val, ok := filteredStats.(map[string]interface{}); ok {
+			c.mgr.NotifyStats(val)
+		} else {
+			logging.Fatalf("clustMgrAgent:handleStatsInternal, Invalid type of stats, for spec: %v", spec)
+		}
 	}
 }
 
