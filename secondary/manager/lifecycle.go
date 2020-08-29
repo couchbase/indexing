@@ -1328,7 +1328,6 @@ func (m *LifecycleMgr) setBucketUUID(defn *common.IndexDefn) error {
 	return nil
 }
 
-// TODO (Collections): Should verifyScopeAndCollection be done?
 func (m *LifecycleMgr) setScopeIdAndCollectionId(defn *common.IndexDefn) error {
 
 	if atomic.LoadUint32(&m.collAwareCluster) == 0 {
@@ -1349,20 +1348,19 @@ func (m *LifecycleMgr) setScopeIdAndCollectionId(defn *common.IndexDefn) error {
 		}
 	}
 
-	scopeId, err := m.getScopeID(defn.Bucket, defn.Scope)
-	if err != nil || scopeId == collections.SCOPE_ID_NIL {
-		if err == nil {
-			err = common.ErrScopeNotFound
-		}
+	scopeId, collectionId, err := m.verifyScopeAndCollection(defn.Bucket, defn.Scope, defn.Collection)
+	if err != nil {
+		return err
+	}
+
+	if scopeId == collections.SCOPE_ID_NIL {
+		err = common.ErrScopeNotFound
 		return fmt.Errorf("Error encountered while retrieving ScopeID. Bucket = %v Scope = %v"+
 			". Please retry the operation at a later time (err=%v).", defn.Bucket, defn.Scope, err)
 	}
 
-	collectionID, err := m.getCollectionID(defn.Bucket, defn.Scope, defn.Collection)
-	if err != nil || collectionID == collections.COLLECTION_ID_NIL {
-		if err == nil {
-			err = common.ErrCollectionNotFound
-		}
+	if collectionId == collections.COLLECTION_ID_NIL {
+		err = common.ErrCollectionNotFound
 		return fmt.Errorf("Error encountered while retrieving CollectionID. Bucket = %v Scope = %v Collection = %v"+
 			" Please retry the operation at a later time (err=%v).", defn.Bucket, defn.Scope, defn.Collection, err)
 	}
@@ -1371,12 +1369,12 @@ func (m *LifecycleMgr) setScopeIdAndCollectionId(defn *common.IndexDefn) error {
 		return common.ErrScopeIdChanged
 	}
 
-	if len(defn.CollectionId) != 0 && defn.CollectionId != collectionID {
+	if len(defn.CollectionId) != 0 && defn.CollectionId != collectionId {
 		return common.ErrCollectionIdChanged
 	}
 
 	defn.ScopeId = scopeId
-	defn.CollectionId = collectionID
+	defn.CollectionId = collectionId
 	return nil
 }
 
