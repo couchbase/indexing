@@ -2062,7 +2062,11 @@ func (mdb *plasmaSlice) Statistics() (StorageStatistics, error) {
 	checkpointFileSize := pStats.CheckpointSize
 	msCompressionRatio = getCompressionRatio(pStats)
 
+	mainStoreStatsLoggingEnabled := false
+	backStoreStatsLoggingEnabled := false
+
 	if pStats.StatsLoggingEnabled {
+		mainStoreStatsLoggingEnabled = true
 		internalData = append(internalData, fmt.Sprintf("{\n\"MainStore\":\n%s", pStats))
 	}
 
@@ -2071,7 +2075,13 @@ func (mdb *plasmaSlice) Statistics() (StorageStatistics, error) {
 		docidCount = pStats.ItemsCount
 		sts.MemUsed += pStats.MemSz + pStats.MemSzIndex
 		if pStats.StatsLoggingEnabled {
-			internalData = append(internalData, fmt.Sprintf(",\n\"BackStore\":\n%s", pStats))
+			backStoreStatsLoggingEnabled = true
+			if mainStoreStatsLoggingEnabled {
+				internalData = append(internalData, fmt.Sprintf(",\n\"BackStore\":\n%s", pStats))
+			} else {
+				logging.Warnf("PlasmaSlice::Statistics Mainstore logging disbaled for instance: %v", mdb.IndexInstId)
+				internalData = append(internalData, fmt.Sprintf("{\n\"BackStore\":\n%s", pStats))
+			}
 		}
 		sts.InsertBytes += pStats.BytesWritten
 		sts.GetBytes += pStats.LSSBlkReadBytes
@@ -2079,7 +2089,9 @@ func (mdb *plasmaSlice) Statistics() (StorageStatistics, error) {
 		bsCompressionRatio = getCompressionRatio(pStats)
 	}
 
-	internalData = append(internalData, "}\n")
+	if mainStoreStatsLoggingEnabled || backStoreStatsLoggingEnabled {
+		internalData = append(internalData, "}\n")
+	}
 
 	sts.InternalData = internalData
 	if mdb.hasPersistence {
