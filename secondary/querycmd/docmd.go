@@ -578,7 +578,7 @@ func HandleCommand(
 				logging.Fatalf("Error while parsing command: %v", line)
 				return err
 			} else {
-				logging.Warnf("cbindex processing command: %v", line)
+				fmt.Fprintf(w, "cbindex processing command: %v", line)
 				if err = HandleCommand(client, inputCmd, false, os.Stdout); err != nil {
 					logging.Fatalf("Error occured while executing command %v, err: %v\n", line, err)
 					return err // Fail fast
