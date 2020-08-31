@@ -885,10 +885,10 @@ var SystemConfig = Config{
 	},
 
 	"indexer.stats_cache_timeout": ConfigValue{
-		uint64(3000),
+		uint64(30000),
 		"Stats cache ttl in millis",
-		uint64(3000),
-		true,  // immutable
+		uint64(30000),
+		false, // mutable
 		false, // case-insensitive
 	},
 	"indexer.statsPersistenceInterval": ConfigValue{
