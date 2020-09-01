@@ -32,7 +32,6 @@ import (
 	l "github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager"
 	"github.com/couchbase/indexing/secondary/manager/client"
-	mc "github.com/couchbase/indexing/secondary/manager/common"
 	"github.com/couchbase/indexing/secondary/planner"
 )
 
@@ -231,9 +230,16 @@ func (r *Rebalancer) finish(err error) {
 		// tokens, which are not owned by keep nodes. Ownership of other
 		// tokens remains unchanged.
 
+		keepNodes := make(map[string]bool)
+		for _, node := range r.change.KeepNodes {
+			keepNodes[string(node.NodeInfo.NodeID)] = true
+		}
+
+		cfg := r.config.Load()
+
 		// Suppress error if any. The background task to handle failover
 		// will do necessary retry for transferring ownership.
-		r.transferScheduleTokens()
+		_ = transferScheduleTokens(keepNodes, cfg["clusterAddr"].String())
 	}
 
 	r.retErr = err
@@ -1442,153 +1448,6 @@ func (r *Rebalancer) getBuildProgressFromStatus(status *manager.IndexStatusRespo
 		return p
 	}
 	return 0.0
-}
-
-func (r *Rebalancer) transferScheduleTokens() error {
-
-	getTokensToTransfer := func() ([]*mc.ScheduleCreateToken, error) {
-		keepnids := make(map[string]bool)
-		for _, n := range r.change.KeepNodes {
-			keepnids[string(n.NodeInfo.NodeID)] = true
-		}
-
-		tokensToTransfer := make([]*mc.ScheduleCreateToken, 0)
-
-		tokens, err := mc.ListAllScheduleCreateTokens()
-		if err != nil {
-			return nil, err
-		}
-
-		for _, token := range tokens {
-			if _, ok := keepnids[string(token.IndexerId)]; !ok {
-				tokensToTransfer = append(tokensToTransfer, token)
-			}
-		}
-
-		return tokensToTransfer, nil
-	}
-
-	// TODO: Progress update?
-
-	// TODO: Failover
-
-	tokens, err := getTokensToTransfer()
-	if err != nil {
-		l.Errorf("transferScheduleTokens: Error in getTokensToTransfer %v", err)
-		return err
-	}
-
-	getTransferMap := func(tokens []*mc.ScheduleCreateToken) map[string][]*mc.ScheduleCreateToken {
-
-		// Use Round Robin
-
-		// Note that the list of nodes provided by the user in with nodes
-		// clause is ignored here as - even for alreeady created indexes,
-		// that clause is not enforced during rebalance.
-		transferMap := make(map[string][]*mc.ScheduleCreateToken)
-		numNodes := len(r.change.KeepNodes)
-		for i, token := range tokens {
-			nodeId := string(r.change.KeepNodes[i%numNodes].NodeInfo.NodeID)
-			if _, ok := transferMap[nodeId]; !ok {
-				transferMap[nodeId] = make([]*mc.ScheduleCreateToken, 0)
-			}
-
-			transferMap[nodeId] = append(transferMap[nodeId], token)
-		}
-
-		return transferMap
-	}
-
-	transferMap := getTransferMap(tokens)
-
-	if err := r.postSchedTransferMap(transferMap); err != nil {
-		l.Errorf("transferScheduleTokens: Error in postTransferMap %v", err)
-		return err
-	}
-
-	if err := r.verifySchedTransfer(transferMap); err != nil {
-		// No need to fail the entire successful rebalance operation just
-		// becasue the verification has failed. The verification can fail due
-		// to the consistency model of token store.
-		l.Warnf("transferScheduleTokens: failed verification of the transfer "+
-			"with error %v. The operation may have been successful. Please check later.", err)
-		return err
-	}
-
-	return nil
-}
-
-func (r *Rebalancer) postSchedTransferMap(transferMap map[string][]*mc.ScheduleCreateToken) error {
-	cfg := r.config.Load()
-	cinfo, err := c.FetchNewClusterInfoCache(cfg["clusterAddr"].String(), c.DEFAULT_POOL, "transferScheduleTokens")
-	if err != nil {
-		return fmt.Errorf("Error Fetching Cluster Information %v", err)
-	}
-
-	for nodeUUID, tokens := range transferMap {
-		nid, found := cinfo.GetNodeIdByUUID(nodeUUID)
-		if !found {
-			return fmt.Errorf("node with uuiid %v not found in cluster info cache", nodeUUID)
-		}
-
-		addr, err := cinfo.GetServiceAddress(nid, c.INDEX_HTTP_SERVICE)
-		if err != nil {
-			return fmt.Errorf("error in GetServiceAddress %v", err)
-		}
-
-		var body []byte
-		body, err = json.Marshal(&tokens)
-		if err != nil {
-			return fmt.Errorf("error in json.Marshal %v", err)
-		}
-
-		bodybuf := bytes.NewBuffer(body)
-
-		resp, err := postWithAuth(addr+"/transferScheduleCreateTokens", "application/json", bodybuf)
-		if err != nil {
-			return fmt.Errorf("error in postWithAuth %v", err)
-		}
-
-		if resp != nil && resp.StatusCode != 200 {
-			return fmt.Errorf("HTTP status (%v)", resp.Status)
-		}
-
-		l.Infof("Rebalancer::transferScheduleTokens Posted %v tokens to node %v", len(tokens), addr)
-	}
-
-	return nil
-}
-
-func (r *Rebalancer) verifySchedTransfer(transferMap map[string][]*mc.ScheduleCreateToken) error {
-	// TODO: This can be done in a loop - for limited number of iterations.
-
-	defns := make([]string, 0)
-
-	time.Sleep(5 * time.Second)
-	for nodeUUID, tokens := range transferMap {
-		for _, t := range tokens {
-			token, err := mc.GetScheduleCreateToken(t.Definition.DefnId)
-			if err != nil {
-				return err
-			}
-
-			if token == nil {
-				l.Warnf("Rebalancer:verifySchedTransfer: Nil token is observed for %v."+
-					" Index may have got dropped.", t.Definition.DefnId)
-				defns = append(defns, fmt.Sprintf("%v", t.Definition.DefnId))
-			}
-
-			if nodeUUID != string(token.IndexerId) {
-				defns = append(defns, fmt.Sprintf("%v", t.Definition.DefnId))
-			}
-		}
-	}
-
-	if len(defns) != 0 {
-		return fmt.Errorf("Transfer verification failed for %v", strings.Join(defns, ", "))
-	}
-
-	return nil
 }
 
 //

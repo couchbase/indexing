@@ -10,6 +10,7 @@ import (
 	"errors"
 	"io"
 	"math/rand"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -20,6 +21,7 @@ import (
 var SCHED_TOKEN_CHECK_INTERVAL = 5000   // Milliseconds
 var SCHED_TOKEN_PROCESS_INTERVAL = 5000 // Milliseconds
 var STOP_TOKEN_CLEANER_INITERVAL = 60   // Seconds
+var TOKEN_MOVER_INTERVAL = 60           // Seconds
 var STOP_TOKEN_RETENTION_TIME = 600     // Seconds
 
 var RETRYABLE_ERROR_BACKOFF = int64(5 * time.Second)
@@ -90,7 +92,8 @@ type schedIndexCreator struct {
 	indexQueue  *schedIndexQueue
 	queueMutex  sync.Mutex
 	backoff     int64 // random backoff in nanoseconds before the next request.
-	cleanerStop chan bool
+	stopCleaner chan bool
+	stopMover   chan bool
 }
 
 //
@@ -161,7 +164,8 @@ func NewSchedIndexCreator(indexerId common.IndexerId, supvCmdch MsgChannel,
 		killch:      make(chan bool),
 		allowDDL:    true,
 		indexQueue:  &iq,
-		cleanerStop: make(chan bool),
+		stopCleaner: make(chan bool),
+		stopMover:   make(chan bool),
 	}
 
 	mgr.mon = NewSchedTokenMonitor(mgr, indexerId)
@@ -170,6 +174,7 @@ func NewSchedIndexCreator(indexerId common.IndexerId, supvCmdch MsgChannel,
 
 	go mgr.run()
 	go mgr.stopTokenCleaner()
+	go mgr.orphanTokenMover()
 
 	gSchedIndexCreatorLck.Lock()
 	defer gSchedIndexCreatorLck.Unlock()
@@ -568,17 +573,108 @@ func (m *schedIndexCreator) stopTokenCleaner() {
 				}
 			}
 
-		case <-m.cleanerStop:
+		case <-m.stopCleaner:
 			logging.Infof("schedIndexCreator: Stoppinig stopTokenCleaner routine")
 			return
 		}
 	}
 }
 
+//
+// orphanTokenMover is used to transfer the ownership of the orphan tokens.
+// Orphan tokens could get created due to node failover. orphanTokenMover is
+// responsible for not letting any tokens remain orphan for a long time.
+//
+func (m *schedIndexCreator) orphanTokenMover() {
+	ticker := time.NewTicker(time.Duration(TOKEN_MOVER_INTERVAL) * time.Second)
+
+	cfg := m.config.Load()
+	clusterURL := cfg["clusterAddr"].String()
+	cinfo, err := common.FetchNewClusterInfoCache(clusterURL, common.DEFAULT_POOL, "schedIndexCreator")
+	if err != nil {
+		logging.Warnf("schedIndexCreator:orphanTokenMover error in getting cluster info client %v", err)
+	}
+
+	if cinfo == nil {
+		logging.Warnf("schedIndexCreator:orphanTokenMover nil cluster info client")
+	}
+
+	for {
+		select {
+		case <-ticker.C:
+			// Don't proceed with orphan token processing if rebalance is running.
+			if !m.canProcessDDL() {
+				continue
+			}
+
+			if cinfo == nil {
+				var err error
+				cinfo, err = common.FetchNewClusterInfoCache(clusterURL, common.DEFAULT_POOL, "schedIndexCreator")
+				if err != nil {
+					logging.Warnf("schedIndexCreator:orphanTokenMover error in getting cluster info client %v. Skipping iteration.", err)
+					continue
+				}
+
+				if cinfo == nil {
+					logging.Warnf("schedIndexCreator:orphanTokenMover nil cluster info client. Skipping iteration.")
+					continue
+				}
+			}
+
+			// Fetch the current cluster info
+			cinfo.FetchWithLock()
+
+			keepNodes := make(map[string]bool)
+			runIter := func() bool {
+				cinfo.RLock()
+				defer cinfo.RUnlock()
+
+				activeNodes := cinfo.GetActiveIndexerNodes()
+				if len(activeNodes) <= 0 {
+					return false
+				}
+
+				uuids := make([]string, 0, len(activeNodes))
+				for _, node := range activeNodes {
+					uuids = append(uuids, node.NodeUUID)
+					keepNodes[node.NodeUUID] = true
+				}
+
+				sort.Strings(uuids)
+				if uuids[0] == string(m.indexerId) {
+					// Only indexer with smallest uuid runs the orphan token mover
+					return true
+				}
+
+				return false
+			}()
+
+			if !runIter {
+				logging.Debugf("schedIndexCreator:orphanTokenMover nothing to do. Skipping iteration.")
+				continue
+			}
+
+			err := transferScheduleTokens(keepNodes, clusterURL)
+			if err != nil {
+				logging.Errorf("schedIndexCreator:orphanTokenMover error in transferScheduleTokens %v", err)
+			} else {
+				logging.Debugf("schedIndexCreator:orphanTokenMover iteration done.")
+			}
+
+		case <-m.stopMover:
+			logging.Infof("schedIndexCreator: Stoppinig orphanTokenMover routine")
+			return
+		}
+	}
+
+}
+
 func (m *schedIndexCreator) Close() {
 	logging.Infof("schedIndexCreator: Shutting Down ...")
 	close(m.killch)
-	close(m.cleanerStop)
+	close(m.stopCleaner)
+	close(m.stopMover)
+	m.mon.Close()
 }
 
 /////////////////////////////////////////////////////////////////////
