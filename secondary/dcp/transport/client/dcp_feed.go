@@ -440,8 +440,8 @@ func (feed *DcpFeed) handlePacket(
 
 	case transport.DCP_SYSTEM_EVENT:
 		event = newDcpEvent(pkt, stream)
-		stream.Seqno = event.Seqno
 		feed.handleSystemEvent(pkt, event, stream)
+		stream.Seqno = event.Seqno
 		sendAck = true
 		fmsg := "%v ##%x DCP_SYSTEM_EVENT for vb %d, eventType: %v, manifestUID: %s, scopeId: %s, collectionId: %x\n"
 		logging.Debugf(fmsg, prefix, stream.AppOpaque, vb, event.EventType, event.ManifestUID, event.ScopeID, event.CollectionID)
