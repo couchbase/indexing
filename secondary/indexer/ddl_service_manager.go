@@ -1872,35 +1872,73 @@ func postSchedTransferMap(transferMap map[string][]*mc.ScheduleCreateToken, clus
 		return fmt.Errorf("postSchedTransferMap: Error Fetching Cluster Information %v", err)
 	}
 
+	var wg sync.WaitGroup
+	var mu sync.RWMutex
+	errMap := make(map[string]error)
+
+	postTokens := func(nodeUUID string, tokens []*mc.ScheduleCreateToken) {
+
+		defer wg.Done()
+
+		err := func() error {
+			nid, found := cinfo.GetNodeIdByUUID(nodeUUID)
+			if !found {
+				return fmt.Errorf("node with uuiid %v not found in cluster info cache", nodeUUID)
+			}
+
+			addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE)
+			if err != nil {
+				return fmt.Errorf("error in GetServiceAddress %v", err)
+			}
+
+			var body []byte
+			body, err = json.Marshal(&tokens)
+			if err != nil {
+				return fmt.Errorf("error in json.Marshal %v", err)
+			}
+
+			bodybuf := bytes.NewBuffer(body)
+
+			resp, err := postWithAuth(addr+"/transferScheduleCreateTokens", "application/json", bodybuf)
+			if err != nil {
+				return fmt.Errorf("error in postWithAuth %v", err)
+			}
+
+			if resp != nil && resp.StatusCode != 200 {
+				return fmt.Errorf("HTTP status (%v)", resp.Status)
+			}
+
+			logging.Infof("postSchedTransferMap: Posted %v tokens to node %v", len(tokens), addr)
+			return nil
+		}()
+
+		if err != nil {
+			func() {
+				mu.Lock()
+				defer mu.Unlock()
+
+				errMap[nodeUUID] = err
+			}()
+		}
+	}
+
 	for nodeUUID, tokens := range transferMap {
-		nid, found := cinfo.GetNodeIdByUUID(nodeUUID)
-		if !found {
-			return fmt.Errorf("node with uuiid %v not found in cluster info cache", nodeUUID)
+		wg.Add(1)
+		go postTokens(nodeUUID, tokens)
+	}
+
+	wg.Wait()
+
+	mu.RLock()
+	defer mu.RUnlock()
+
+	if len(errMap) != 0 {
+		logging.Errorf("postSchedTransferMap: error map %v", errMap)
+
+		// return any one error
+		for _, err := range errMap {
+			return err
 		}
-
-		addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE)
-		if err != nil {
-			return fmt.Errorf("error in GetServiceAddress %v", err)
-		}
-
-		var body []byte
-		body, err = json.Marshal(&tokens)
-		if err != nil {
-			return fmt.Errorf("error in json.Marshal %v", err)
-		}
-
-		bodybuf := bytes.NewBuffer(body)
-
-		resp, err := postWithAuth(addr+"/transferScheduleCreateTokens", "application/json", bodybuf)
-		if err != nil {
-			return fmt.Errorf("error in postWithAuth %v", err)
-		}
-
-		if resp != nil && resp.StatusCode != 200 {
-			return fmt.Errorf("HTTP status (%v)", resp.Status)
-		}
-
-		logging.Infof("postSchedTransferMap: Posted %v tokens to node %v", len(tokens), addr)
 	}
 
 	return nil
