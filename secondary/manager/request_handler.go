@@ -535,8 +535,8 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, t *target, ge
 
 	buildTopologyMapPerCollection := func(topologies []IndexTopology) map[string]map[string]map[string]*IndexTopology {
 		topoMap := make(map[string]map[string]map[string]*IndexTopology)
-		for _, topology := range topologies {
-			t := &topology
+		for i, _ := range topologies {
+			t := &topologies[i]
 			t.SetCollectionDefaults()
 			if _, ok := topoMap[t.Bucket]; !ok {
 				topoMap[t.Bucket] = make(map[string]map[string]*IndexTopology)
