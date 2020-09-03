@@ -4314,43 +4314,38 @@ func (r *metadataRepo) removeInstForIndexerNoLock(indexerId c.IndexerId, bucket,
 		return (defn != nil && defn.Bucket == bucket && defn.Scope == scope && defn.Collection == collection)
 	}
 
-	newInstsByDefnId := make(map[c.IndexDefnId]map[c.IndexInstId]map[c.PartitionId]map[uint64]*mc.IndexInstDistribution)
 	for defnId, instsByDefnId := range r.instances {
 		defn := r.definitions[defnId]
 
-		newInstsByInstId := make(map[c.IndexInstId]map[c.PartitionId]map[uint64]*mc.IndexInstDistribution)
+		// Do not process indexes belonging to a different topology
+		if (isBucketScopeCollEmpty() || checkDefn(defn)) == false {
+			continue
+		}
 		for instId, instsByInstId := range instsByDefnId {
 
-			newInstsByPartitionId := make(map[c.PartitionId]map[uint64]*mc.IndexInstDistribution)
 			for partnId, instsByPartitionId := range instsByInstId {
 
-				newInstsByVersion := make(map[uint64]*mc.IndexInstDistribution)
 				for version, instByVersion := range instsByPartitionId {
 
 					instIndexerId := instByVersion.FindIndexerId()
 
-					if instIndexerId == string(indexerId) && (isBucketScopeCollEmpty() || checkDefn(defn)) {
+					if instIndexerId == string(indexerId) {
+						delete(r.instances[defnId][instId][partnId], version)
 						logging.Debugf("remove index for indexerId : defnId %v instId %v indexerId %v", defnId, instId, instIndexerId)
-					} else {
-						newInstsByVersion[version] = instByVersion
 					}
 				}
-
-				if len(newInstsByVersion) != 0 {
-					newInstsByPartitionId[partnId] = newInstsByVersion
+				if len(r.instances[defnId][instId][partnId]) == 0 {
+					delete(r.instances[defnId][instId], partnId)
 				}
 			}
-
-			if len(newInstsByPartitionId) != 0 {
-				newInstsByInstId[instId] = newInstsByPartitionId
+			if len(r.instances[defnId][instId]) == 0 {
+				delete(r.instances[defnId], instId)
 			}
 		}
-		if len(newInstsByInstId) != 0 {
-			newInstsByDefnId[defnId] = newInstsByInstId
+		if len(r.instances[defnId]) == 0 {
+			delete(r.instances, defnId)
 		}
 	}
-
-	r.instances = newInstsByDefnId
 }
 
 // Removing an index with no index instance:
