@@ -74,6 +74,9 @@ type Command struct {
 
 	// Batch process cbindex commands
 	BatchProcessFile string
+
+	// Time to wait until client bootstraps
+	WaitForClientBootstrap int64
 }
 
 // ParseArgs into Command object, return the list of arguments,
@@ -122,6 +125,8 @@ func ParseArgs(arguments []string) (*Command, []string, *flag.FlagSet, error) {
 
 	// Input file for batch processing
 	fset.StringVar(&cmdOptions.BatchProcessFile, "input", "", "Path to the file containing batch processing commands")
+
+	fset.Int64Var(&cmdOptions.WaitForClientBootstrap, "bootstrap_wait", 60, "Time (in seconds) cbindex will wait for client bootstrap")
 
 	// not useful to expose in sherlock
 	cmdOptions.ExprType = "N1QL"
@@ -559,6 +564,15 @@ func HandleCommand(
 			return err
 		}
 
+		if cmd.WaitForClientBootstrap > 0 {
+			// TODO: This sleep is added only to allow perf QE team to get
+			// unblocked. Should be removed after client side logic is modified
+			// to handle watcher sync-up with index metadata
+			fmt.Fprintf(w, "cbindex Sleeping for %v seconds to allow client to catch-up with index meta", cmd.WaitForClientBootstrap)
+			time.Sleep(time.Duration(cmd.WaitForClientBootstrap) * time.Second)
+			fmt.Fprintf(w, "cbindex starting to process batch file: %v", cmd.BatchProcessFile)
+		}
+
 		scanner := bufio.NewScanner(fd)
 		for scanner.Scan() {
 			line := scanner.Text()
@@ -578,7 +592,7 @@ func HandleCommand(
 				logging.Fatalf("Error while parsing command: %v", line)
 				return err
 			} else {
-				logging.Warnf("cbindex processing command: %v", line)
+				fmt.Fprintf(w, "cbindex processing command: %v", line)
 				if err = HandleCommand(client, inputCmd, false, os.Stdout); err != nil {
 					logging.Fatalf("Error occured while executing command %v, err: %v\n", line, err)
 					return err // Fail fast

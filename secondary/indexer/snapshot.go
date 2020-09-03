@@ -33,5 +33,6 @@ type Snapshot interface {
 type SnapshotInfo interface {
 	Timestamp() *common.TsVbuuid
 	IsCommitted() bool
+	IsOSOSnap() bool
 	Stats() map[string]interface{}
 }

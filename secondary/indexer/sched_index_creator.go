@@ -302,13 +302,13 @@ func (m *schedIndexCreator) processSchedIndexes() {
 						}
 					}
 				} else {
-					logging.Infof("schedIndexCreator: successfully created index %v", index.token.Definition.DefnId)
-					if !index.token.Definition.Deferred {
-						logging.Infof("schedIndexCreator: index %v was created with non-deferred build. "+
-							"DDL service manager will build the index", index.token.Definition.DefnId)
-					}
-
 					if success {
+						logging.Infof("schedIndexCreator: successfully created index %v", index.token.Definition.DefnId)
+						if !index.token.Definition.Deferred {
+							logging.Infof("schedIndexCreator: index %v was created with non-deferred build. "+
+								"DDL service manager will build the index", index.token.Definition.DefnId)
+						}
+
 						// TODO: Check if this doesn't error out in case of key not found.
 						err := mc.DeleteScheduleCreateToken(index.token.Definition.DefnId)
 						if err != nil {

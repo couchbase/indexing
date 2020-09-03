@@ -2299,7 +2299,7 @@ func (m *ServiceMgr) handleMoveIndex(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		permission := fmt.Sprintf("cluster.bucket[%s].n1ql.index!alter", bucket)
+		permission := fmt.Sprintf("cluster.collection[%s:%s:%s].n1ql.index!alter", bucket, scope, collection)
 		if !c.IsAllowed(creds, []string{permission}, w) {
 			return
 		}
@@ -2368,7 +2368,17 @@ func (m *ServiceMgr) handleMoveIndexInternal(w http.ResponseWriter, r *http.Requ
 			return
 		}
 
-		permission := fmt.Sprintf("cluster.bucket[%s].n1ql.index!alter", req.Index.Bucket)
+		// Populate scope and collection defaults
+		scope := req.Index.Scope
+		if scope == "" {
+			scope = c.DEFAULT_SCOPE
+		}
+		collection := req.Index.Collection
+		if collection == "" {
+			collection = c.DEFAULT_COLLECTION
+		}
+
+		permission := fmt.Sprintf("cluster.collection[%s:%s:%s].n1ql.index!alter", req.Index.Bucket, scope, collection)
 		if !c.IsAllowed(creds, []string{permission}, w) {
 			return
 		}

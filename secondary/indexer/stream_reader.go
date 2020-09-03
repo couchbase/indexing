@@ -46,6 +46,8 @@ type mutationStreamReader struct {
 
 	keyspaceIdQueueMap KeyspaceIdQueueMap //keyspaceId to mutation queue map
 
+	keyspaceIdEnableOSO KeyspaceIdEnableOSO
+
 	killch chan bool // kill chan for the main loop
 
 	stats IndexerStatsHolder
@@ -69,7 +71,8 @@ type mutationStreamReader struct {
 func CreateMutationStreamReader(streamId common.StreamId, keyspaceIdQueueMap KeyspaceIdQueueMap,
 	keyspaceIdFilter map[string]*common.TsVbuuid, supvCmdch MsgChannel, supvRespch MsgChannel,
 	numWorkers int, stats *IndexerStats, config common.Config, is common.IndexerState,
-	allowMarkFirstSnap bool, vbMap *VbMapHolder, keyspaceIdSessionId KeyspaceIdSessionId) (
+	allowMarkFirstSnap bool, vbMap *VbMapHolder, keyspaceIdSessionId KeyspaceIdSessionId,
+	keyspaceIdEnableOSO KeyspaceIdEnableOSO) (
 	MutationStreamReader, Message) {
 
 	//start a new mutation stream
@@ -97,18 +100,23 @@ func CreateMutationStreamReader(streamId common.StreamId, keyspaceIdQueueMap Key
 
 	//init the reader
 	r := &mutationStreamReader{streamId: streamId,
-		stream:             stream,
-		streamMutch:        streamMutch,
-		supvCmdch:          supvCmdch,
-		supvRespch:         supvRespch,
-		syncStopCh:         make(StopChannel),
-		keyspaceIdQueueMap: CopyKeyspaceIdQueueMap(keyspaceIdQueueMap),
-		killch:             make(chan bool),
-		syncBatchInterval:  getSyncBatchInterval(config),
-		stopch:             make(StopChannel),
-		streamWorkers:      make([]*streamWorker, numWorkers),
-		numWorkers:         numWorkers,
-		config:             config,
+		stream:              stream,
+		streamMutch:         streamMutch,
+		supvCmdch:           supvCmdch,
+		supvRespch:          supvRespch,
+		syncStopCh:          make(StopChannel),
+		keyspaceIdQueueMap:  CopyKeyspaceIdQueueMap(keyspaceIdQueueMap),
+		keyspaceIdEnableOSO: make(KeyspaceIdEnableOSO),
+		killch:              make(chan bool),
+		syncBatchInterval:   getSyncBatchInterval(config),
+		stopch:              make(StopChannel),
+		streamWorkers:       make([]*streamWorker, numWorkers),
+		numWorkers:          numWorkers,
+		config:              config,
+	}
+
+	for ks, enable := range keyspaceIdEnableOSO {
+		r.keyspaceIdEnableOSO[ks] = enable
 	}
 
 	r.stats.Set(stats)
@@ -117,7 +125,7 @@ func CreateMutationStreamReader(streamId common.StreamId, keyspaceIdQueueMap Key
 
 	for i := 0; i < numWorkers; i++ {
 		r.streamWorkers[i] = newStreamWorker(streamId, numWorkers, i, config, r,
-			keyspaceIdFilter, allowMarkFirstSnap, vbMap, keyspaceIdSessionId)
+			keyspaceIdFilter, allowMarkFirstSnap, vbMap, keyspaceIdSessionId, keyspaceIdEnableOSO)
 		go r.streamWorkers[i].start()
 	}
 
@@ -296,8 +304,15 @@ func (r *mutationStreamReader) handleSupervisorCommands(cmd Message) Message {
 
 		keyspaceIdFilter := req.GetKeyspaceIdFilter()
 		keyspaceIdSessionId := req.GetKeyspaceIdSessionId()
+		keyspaceIdEnableOSO := req.GetKeyspaceIdEnableOSO()
+
+		for ks, enable := range keyspaceIdEnableOSO {
+			r.keyspaceIdEnableOSO[ks] = enable
+		}
+
 		for i := 0; i < r.numWorkers; i++ {
-			r.streamWorkers[i].initKeyspaceIdFilter(keyspaceIdFilter, keyspaceIdSessionId)
+			r.streamWorkers[i].initKeyspaceIdFilter(keyspaceIdFilter,
+				keyspaceIdSessionId, keyspaceIdEnableOSO)
 		}
 
 		r.stopch = make(StopChannel)
@@ -401,6 +416,9 @@ func (r *mutationStreamReader) maybeSendSync(fastpath bool) bool {
 	prevSnap := make(map[string]*common.TsVbuuid)
 	numVbuckets := r.config["numVbuckets"].Int()
 
+	var hwtOSOMap map[string]*common.TsVbuuid
+	var hwtOSO *common.TsVbuuid
+
 	sent := false
 
 	r.queueMapLock.RLock()
@@ -408,11 +426,19 @@ func (r *mutationStreamReader) maybeSendSync(fastpath bool) bool {
 		//actual TS uses bucket as keyspaceId
 		hwt[keyspaceId] = common.NewTsVbuuidCached(GetBucketFromKeyspaceId(keyspaceId), numVbuckets)
 		prevSnap[keyspaceId] = common.NewTsVbuuidCached(GetBucketFromKeyspaceId(keyspaceId), numVbuckets)
+		if r.keyspaceIdEnableOSO[keyspaceId] {
+			if hwtOSOMap == nil {
+				hwtOSOMap = make(map[string]*common.TsVbuuid)
+			}
+			hwtOSOMap[keyspaceId] = common.NewTsVbuuidCached(GetBucketFromKeyspaceId(keyspaceId), numVbuckets)
+		}
 	}
 
 	nWrkr := r.numWorkers
 	for keyspaceId, _ := range hwt {
 		needSync := false
+		hasOSO := false
+		enableOSO := false
 		sessionId := uint64(0)
 		for i := 0; i < nWrkr; i++ {
 
@@ -420,6 +446,9 @@ func (r *mutationStreamReader) maybeSendSync(fastpath bool) bool {
 
 			if r.streamWorkers[i].keyspaceIdSyncDue[keyspaceId] {
 				needSync = true
+			}
+			if r.streamWorkers[i].keyspaceIdEnableOSO[keyspaceId] {
+				enableOSO = true
 			}
 			//all workers have same sessionId, it is ok to overwrite
 			sessionId = r.streamWorkers[i].keyspaceIdSessionId[keyspaceId]
@@ -429,15 +458,32 @@ func (r *mutationStreamReader) maybeSendSync(fastpath bool) bool {
 			for {
 				vb = loopCnt*nWrkr + i
 				if vb < numVbuckets {
-					hwt[keyspaceId].Seqnos[vb] = r.streamWorkers[i].keyspaceIdFilter[keyspaceId].Seqnos[vb]
-					hwt[keyspaceId].Vbuuids[vb] = r.streamWorkers[i].keyspaceIdFilter[keyspaceId].Vbuuids[vb]
-					hwt[keyspaceId].Snapshots[vb] = r.streamWorkers[i].keyspaceIdFilter[keyspaceId].Snapshots[vb]
-					prevSnap[keyspaceId].Seqnos[vb] = r.streamWorkers[i].keyspaceIdPrevSnapMap[keyspaceId].Seqnos[vb]
-					prevSnap[keyspaceId].Vbuuids[vb] = r.streamWorkers[i].keyspaceIdPrevSnapMap[keyspaceId].Vbuuids[vb]
-					prevSnap[keyspaceId].Snapshots[vb] = r.streamWorkers[i].keyspaceIdPrevSnapMap[keyspaceId].Snapshots[vb]
+
+					filter := r.streamWorkers[i].keyspaceIdFilter[keyspaceId]
+					filterOSO := r.streamWorkers[i].keyspaceIdFilterOSO[keyspaceId]
+
+					//if OSO snapshot
+					if enableOSO &&
+						filterOSO.Snapshots[vb][0] == 1 {
+						hwtOSOMap[keyspaceId].Seqnos[vb] = filterOSO.Seqnos[vb]
+						hwtOSOMap[keyspaceId].Vbuuids[vb] = filterOSO.Vbuuids[vb]
+						hwtOSOMap[keyspaceId].Snapshots[vb][1] = filterOSO.Snapshots[vb][1]
+						hasOSO = true
+					}
+
+					//regular snapshot
+					hwt[keyspaceId].Seqnos[vb] = filter.Seqnos[vb]
+					hwt[keyspaceId].Vbuuids[vb] = filter.Vbuuids[vb]
+					hwt[keyspaceId].Snapshots[vb] = filter.Snapshots[vb]
+
+					prevSnapMap := r.streamWorkers[i].keyspaceIdPrevSnapMap[keyspaceId]
+					prevSnap[keyspaceId].Seqnos[vb] = prevSnapMap.Seqnos[vb]
+					prevSnap[keyspaceId].Vbuuids[vb] = prevSnapMap.Vbuuids[vb]
+					prevSnap[keyspaceId].Snapshots[vb][0] = prevSnapMap.Snapshots[vb][0]
+					prevSnap[keyspaceId].Snapshots[vb][1] = prevSnapMap.Snapshots[vb][1]
 
 					if !hwt[keyspaceId].DisableAlign {
-						hwt[keyspaceId].DisableAlign = r.streamWorkers[i].keyspaceIdFilter[keyspaceId].DisableAlign
+						hwt[keyspaceId].DisableAlign = filter.DisableAlign
 					}
 				} else {
 					break
@@ -448,11 +494,15 @@ func (r *mutationStreamReader) maybeSendSync(fastpath bool) bool {
 			r.streamWorkers[i].keyspaceIdFilter[keyspaceId].DisableAlign = false
 			r.streamWorkers[i].lock.Unlock()
 		}
+		if hasOSO && hwtOSOMap != nil {
+			hwtOSO = hwtOSOMap[keyspaceId]
+		}
 		if needSync {
 			r.supvRespch <- &MsgKeyspaceHWT{mType: STREAM_READER_HWT,
 				streamId:   r.streamId,
 				keyspaceId: keyspaceId,
-				ts:         hwt[keyspaceId],
+				hwt:        hwt[keyspaceId],
+				hwtOSO:     hwtOSO,
 				prevSnap:   prevSnap[keyspaceId],
 				sessionId:  sessionId,
 			}
@@ -517,7 +567,11 @@ type streamWorker struct {
 	workerch            chan *protobuf.VbKeyVersions //buffered channel for each worker
 	workerStopCh        StopChannel                  //stop channels of workers
 	keyspaceIdFilter    map[string]*common.TsVbuuid
-	keyspaceIdSessionId KeyspaceIdSessionId
+	keyspaceIdFilterOSO map[string]*common.TsVbuuid
+
+	keyspaceIdSessionId    KeyspaceIdSessionId
+	keyspaceIdEnableOSO    KeyspaceIdEnableOSO
+	keyspaceIdOSOException map[string]bool
 
 	keyspaceIdPrevSnapMap map[string]*common.TsVbuuid
 	keyspaceIdSyncDue     map[string]bool
@@ -546,19 +600,22 @@ type streamWorker struct {
 
 func newStreamWorker(streamId common.StreamId, numWorkers int, workerId int, config common.Config,
 	reader *mutationStreamReader, keyspaceIdFilter map[string]*common.TsVbuuid, allowMarkFirstSnap bool,
-	vbMap *VbMapHolder, keyspaceIdSessionId KeyspaceIdSessionId) *streamWorker {
+	vbMap *VbMapHolder, keyspaceIdSessionId KeyspaceIdSessionId, keyspaceIdEnableOSO KeyspaceIdEnableOSO) *streamWorker {
 
 	w := &streamWorker{streamId: streamId,
-		workerId:              workerId,
-		workerch:              make(chan *protobuf.VbKeyVersions, getWorkerBufferSize(config)/uint64(numWorkers)),
-		workerStopCh:          make(StopChannel),
-		keyspaceIdFilter:      make(map[string]*common.TsVbuuid),
-		keyspaceIdPrevSnapMap: make(map[string]*common.TsVbuuid),
-		keyspaceIdSyncDue:     make(map[string]bool),
-		reader:                reader,
-		keyspaceIdFirstSnap:   make(map[string]firstSnapFlag),
-		vbMap:                 vbMap,
-		keyspaceIdSessionId:   make(KeyspaceIdSessionId),
+		workerId:               workerId,
+		workerch:               make(chan *protobuf.VbKeyVersions, getWorkerBufferSize(config)/uint64(numWorkers)),
+		workerStopCh:           make(StopChannel),
+		keyspaceIdFilter:       make(map[string]*common.TsVbuuid),
+		keyspaceIdFilterOSO:    make(map[string]*common.TsVbuuid),
+		keyspaceIdPrevSnapMap:  make(map[string]*common.TsVbuuid),
+		keyspaceIdSyncDue:      make(map[string]bool),
+		reader:                 reader,
+		keyspaceIdFirstSnap:    make(map[string]firstSnapFlag),
+		vbMap:                  vbMap,
+		keyspaceIdSessionId:    make(KeyspaceIdSessionId),
+		keyspaceIdEnableOSO:    make(KeyspaceIdEnableOSO),
+		keyspaceIdOSOException: make(map[string]bool),
 	}
 
 	w.meta = &MutationMeta{}
@@ -567,7 +624,7 @@ func newStreamWorker(streamId common.StreamId, numWorkers int, workerId int, con
 		w.markFirstSnap = getMarkFirstSnap(config)
 	}
 
-	w.initKeyspaceIdFilter(keyspaceIdFilter, keyspaceIdSessionId)
+	w.initKeyspaceIdFilter(keyspaceIdFilter, keyspaceIdSessionId, keyspaceIdEnableOSO)
 	return w
 
 }
@@ -598,6 +655,7 @@ func (w *streamWorker) handleKeyVersions(keyspaceId string, vbucket Vbucket, vbu
 
 	for _, kv := range kvs {
 		w.handleSingleKeyVersion(keyspaceId, vbucket, vbuuid, opaque, kv, projVer)
+
 		if kv.GetPrjMovingAvg() > 0 {
 			avg := w.getLatencyObj(keyspaceId, vbucket)
 			if avg != nil {
@@ -794,6 +852,10 @@ func (w *streamWorker) handleSingleKeyVersion(keyspaceId string, vbucket Vbucket
 			if !skipMutation {
 				mutk = allocateFillerMutation(meta, kv.GetDocid())
 			}
+
+		case common.OSOSnapshotStart, common.OSOSnapshotEnd:
+			w.updateOSOMarkerInFilter(meta, byte(cmd))
+			w.processDcpOSOMarker(meta, byte(cmd))
 		}
 	}
 
@@ -834,7 +896,7 @@ func (w *streamWorker) handleSingleMutation(mut *MutationKeys, stopch StopChanne
 
 //initKeyspaceIdFilter initializes the keyspaceId filter
 func (w *streamWorker) initKeyspaceIdFilter(keyspaceIdFilter map[string]*common.TsVbuuid,
-	keyspaceIdSessionId KeyspaceIdSessionId) {
+	keyspaceIdSessionId KeyspaceIdSessionId, keyspaceIdEnableOSO KeyspaceIdEnableOSO) {
 
 	w.lock.Lock()
 	defer w.lock.Unlock()
@@ -865,6 +927,11 @@ func (w *streamWorker) initKeyspaceIdFilter(keyspaceIdFilter map[string]*common.
 			w.keyspaceIdSyncDue[b] = false
 			w.keyspaceIdFirstSnap[b] = make(firstSnapFlag, int(q.queue.GetNumVbuckets()))
 			w.keyspaceIdSessionId[b] = keyspaceIdSessionId[b]
+			w.keyspaceIdEnableOSO[b] = keyspaceIdEnableOSO[b]
+			if keyspaceIdEnableOSO[b] {
+				w.keyspaceIdFilterOSO[b] = common.NewTsVbuuid(GetBucketFromKeyspaceId(b), int(q.queue.GetNumVbuckets()))
+			}
+			w.keyspaceIdOSOException[b] = false
 
 			//reset stat for bucket
 			stats := w.reader.stats.Get()
@@ -884,6 +951,9 @@ func (w *streamWorker) initKeyspaceIdFilter(keyspaceIdFilter map[string]*common.
 			delete(w.keyspaceIdSyncDue, b)
 			delete(w.keyspaceIdFirstSnap, b)
 			delete(w.keyspaceIdSessionId, b)
+			delete(w.keyspaceIdFilterOSO, b)
+			delete(w.keyspaceIdEnableOSO, b)
+			delete(w.keyspaceIdOSOException, b)
 		}
 	}
 
@@ -917,6 +987,22 @@ func (w *streamWorker) checkAndSetKeyspaceIdFilter(meta *MutationMeta) (bool, bo
 
 	w.lock.Lock()
 	defer w.lock.Unlock()
+
+	if w.keyspaceIdOSOException[meta.keyspaceId] {
+		return true /* skip */, false /* firstSnap */
+	}
+	if enable, ok := w.keyspaceIdEnableOSO[meta.keyspaceId]; ok && enable {
+		filterOSO, _ := w.keyspaceIdFilterOSO[meta.keyspaceId]
+		//if OSO snapshot is being processed
+		if filterOSO.Snapshots[meta.vbucket][0] == 1 &&
+			filterOSO.Snapshots[meta.vbucket][1] == 0 {
+			return w.checkAndSetKeyspaceIdFilterOSO(meta)
+		}
+	}
+	return w.checkAndSetKeyspaceIdFilterDefault(meta)
+}
+
+func (w *streamWorker) checkAndSetKeyspaceIdFilterDefault(meta *MutationMeta) (bool, bool) {
 
 	if filter, ok := w.keyspaceIdFilter[meta.keyspaceId]; ok {
 
@@ -968,6 +1054,141 @@ func (w *streamWorker) checkAndSetKeyspaceIdFilter(meta *MutationMeta) (bool, bo
 	}
 }
 
+func (w *streamWorker) checkAndSetKeyspaceIdFilterOSO(meta *MutationMeta) (bool, bool) {
+
+	if filter, ok := w.keyspaceIdFilter[meta.keyspaceId]; ok {
+
+		filterOSO, _ := w.keyspaceIdFilterOSO[meta.keyspaceId]
+
+		//validate sessionId. allow opaque==0 for backward compat
+		if meta.opaque != 0 &&
+			meta.opaque != w.keyspaceIdSessionId[meta.keyspaceId] {
+			//skip the mutation
+			return true, false
+		}
+
+		if filter.Vbuuids[meta.vbucket] == 0 {
+			logging.Warnf("MutationStreamReader::checkAndSetKeyspaceIdFilterOSO Skipped "+
+				"Mutation %v for KeyspaceId %v Stream %v. Vbuuid %v", meta,
+				meta.keyspaceId, w.streamId, filter.Vbuuids[meta.vbucket])
+			return true, false
+		}
+
+		//Vbuuid is used to store count of mutations in OSO filter
+		filterOSO.Vbuuids[meta.vbucket]++
+
+		//Seqnos is used to store the highest seqno in OSO filter
+		if uint64(meta.seqno) > filterOSO.Seqnos[meta.vbucket] {
+			filterOSO.Seqnos[meta.vbucket] = uint64(meta.seqno)
+		}
+
+		filter.Vbuuids[meta.vbucket] = uint64(meta.vbuuid)
+
+		w.keyspaceIdSyncDue[meta.keyspaceId] = true
+		return false, w.keyspaceIdFirstSnap[meta.keyspaceId][meta.vbucket]
+
+	} else {
+		logging.Debugf("MutationStreamReader::checkAndSetKeyspaceIdFilterOSO Missing"+
+			"keyspaceId %v in Filter for Stream %v", meta.keyspaceId, w.streamId)
+		return true, false
+	}
+}
+
+func (w *streamWorker) updateOSOMarkerInFilter(meta *MutationMeta, eventType byte) {
+
+	w.lock.Lock()
+	defer w.lock.Unlock()
+
+	if filter, ok := w.keyspaceIdFilter[meta.keyspaceId]; ok {
+
+		filterOSO := w.keyspaceIdFilterOSO[meta.keyspaceId]
+
+		//validate sessionId. allow opaque==0 for backward compat
+		if meta.opaque != 0 &&
+			meta.opaque != w.keyspaceIdSessionId[meta.keyspaceId] {
+			return
+		}
+
+		resetStream := func() {
+			logging.Infof("MutationStreamReader::updateOSOMarkerInFilter %v %v.",
+				" Resetting Stream.", w.streamId, meta.keyspaceId)
+			w.keyspaceIdOSOException[meta.keyspaceId] = true
+			w.reader.supvRespch <- &MsgStreamUpdate{
+				mType:      RESET_STREAM,
+				streamId:   w.streamId,
+				keyspaceId: meta.keyspaceId,
+				sessionId:  w.keyspaceIdSessionId[meta.keyspaceId],
+			}
+		}
+
+		enableOSO := w.keyspaceIdEnableOSO[meta.keyspaceId]
+		if !enableOSO {
+			logging.Errorf("MutationStreamReader::updateOSOMarkerInFilter %v %v "+
+				"Received OSO Marker for Vbucket %v. OSO is disabled.", w.streamId,
+				meta.keyspaceId, meta.vbucket)
+			resetStream()
+			return
+		}
+
+		if eventType == common.OSOSnapshotStart {
+			//if filter already has a snapshot
+			if filter.Snapshots[meta.vbucket][1] != 0 {
+				logging.Infof("MutationStreamReader::updateOSOMarkerInFilter %v %v "+
+					"Received OSO Start For Vbucket %v after DCP snapshot %v-%v Seqno %v", w.streamId,
+					meta.keyspaceId, meta.vbucket, filter.Snapshots[meta.vbucket][0],
+					filter.Snapshots[meta.vbucket][1], filter.Seqnos[meta.vbucket])
+				resetStream()
+				return
+			}
+
+			logging.Infof("MutationStreamReader::updateOSOMarkerInFilter %v %v "+
+				"Received OSO Start For Vbucket %v. Seqno %v. "+
+				"Count %v. OSO Start %v. OSO End %v.", w.streamId,
+				meta.keyspaceId, meta.vbucket, filterOSO.Seqnos[meta.vbucket],
+				filterOSO.Vbuuids[meta.vbucket], filterOSO.Snapshots[meta.vbucket][0],
+				filterOSO.Snapshots[meta.vbucket][1])
+
+			if filterOSO.Snapshots[meta.vbucket][0] == 1 &&
+				filterOSO.Snapshots[meta.vbucket][1] == 0 {
+				logging.Errorf("MutationStreamReader::updateOSOMarkerInFilter %v %v "+
+					"Received OSO Start For Vbucket %v without OSO End. Seqno %v. "+
+					"Count %v. OSO Start %v. OSO End %v.", w.streamId,
+					meta.keyspaceId, meta.vbucket, filterOSO.Seqnos[meta.vbucket],
+					filterOSO.Vbuuids[meta.vbucket], filterOSO.Snapshots[meta.vbucket][0],
+					filterOSO.Snapshots[meta.vbucket][1])
+				resetStream()
+				return
+
+			} else {
+				filterOSO.Snapshots[meta.vbucket][0] = 1 //snapshot[0] stores OSO Start
+				filterOSO.Snapshots[meta.vbucket][1] = 0 //snapshot[1] stores OSO End
+			}
+
+			if w.markFirstSnap &&
+				filter.Snapshots[meta.vbucket][1] == 0 &&
+				filter.Seqnos[meta.vbucket] == 0 &&
+				filterOSO.Seqnos[meta.vbucket] == 0 {
+				w.keyspaceIdFirstSnap[meta.keyspaceId][meta.vbucket] = true
+			} else {
+				w.keyspaceIdFirstSnap[meta.keyspaceId][meta.vbucket] = false
+			}
+		} else if eventType == common.OSOSnapshotEnd {
+			logging.Infof("MutationStreamReader::updateOSOMarkerInFilter %v %v "+
+				"Received OSO End For Vbucket %v. Seqno %v. "+
+				"Count %v. OSO Start %v. OSO End %v.", w.streamId,
+				meta.keyspaceId, meta.vbucket, filterOSO.Seqnos[meta.vbucket],
+				filterOSO.Vbuuids[meta.vbucket], filterOSO.Snapshots[meta.vbucket][0],
+				filterOSO.Snapshots[meta.vbucket][1])
+			filterOSO.Snapshots[meta.vbucket][1] = 1 //snapshot[1] stores OSO End
+			w.keyspaceIdFirstSnap[meta.keyspaceId][meta.vbucket] = false
+		}
+	} else {
+		logging.Debugf("MutationStreamReader::updateOSOMarkerInFilter Missing"+
+			"keyspaceId %v in Filter for Stream %v", meta.keyspaceId, w.streamId)
+	}
+
+}
+
 //updates snapshot information in keyspaceId filter
 func (w *streamWorker) updateSnapInFilter(meta *MutationMeta,
 	snapStart uint64, snapEnd uint64) {
@@ -1003,6 +1224,50 @@ func (w *streamWorker) updateSnapInFilter(meta *MutationMeta,
 		if snapEnd > filter.Snapshots[meta.vbucket][1] &&
 			filter.Vbuuids[meta.vbucket] != 0 {
 
+			enableOSO := w.keyspaceIdEnableOSO[meta.keyspaceId]
+			if enableOSO {
+
+				filterOSO := w.keyspaceIdFilter[meta.keyspaceId]
+
+				//first regular snapshot after OSO
+				if filter.Snapshots[meta.vbucket][0] == 0 &&
+					filter.Snapshots[meta.vbucket][1] == 0 &&
+					filterOSO.Snapshots[meta.vbucket][0] == 1 {
+
+					if filterOSO.Snapshots[meta.vbucket][1] != 1 {
+						logging.Errorf("MutationStreamReader::updateSnapInFilter %v %v "+
+							"Received Snapshot For Vbucket %v without OSO End. Seqno %v. "+
+							"Count %v. OSO Start %v. OSO End %v. Snapshot %v-%v.", w.streamId,
+							meta.keyspaceId, meta.vbucket, filterOSO.Seqnos[meta.vbucket],
+							filterOSO.Vbuuids[meta.vbucket], filterOSO.Snapshots[meta.vbucket][0],
+							filterOSO.Snapshots[meta.vbucket][1], snapStart, snapEnd)
+						//TODO Collections reset stream
+					}
+
+					if snapStart < filterOSO.Seqnos[meta.vbucket] {
+
+						logging.Errorf("MutationStreamReader::updateSnapInFilter %v %v "+
+							"Received Snapshot For Vbucket %v lower than last seqno. Seqno %v. "+
+							"Count %v. OSO Start %v. OSO End %v. Snapshot %v-%v.", w.streamId,
+							meta.keyspaceId, meta.vbucket, filterOSO.Seqnos[meta.vbucket],
+							filterOSO.Vbuuids[meta.vbucket], filterOSO.Snapshots[meta.vbucket][0],
+							filterOSO.Snapshots[meta.vbucket][1], snapStart, snapEnd)
+						//TODO Collections reset stream
+					}
+
+					prevSnap := w.keyspaceIdPrevSnapMap[meta.keyspaceId]
+					prevSnap.Snapshots[meta.vbucket][1] = filterOSO.Snapshots[meta.vbucket][1]
+					prevSnap.Seqnos[meta.vbucket] = filterOSO.Seqnos[meta.vbucket]
+
+					//filterOSO Vbuuid represents the count, filter has the actual vbuuid
+					prevSnap.Vbuuids[meta.vbucket] = filter.Vbuuids[meta.vbucket]
+
+					filter.Snapshots[meta.vbucket][0] = snapStart
+					filter.Snapshots[meta.vbucket][1] = snapEnd
+					return
+				}
+			}
+
 			//store the existing snap marker in prevSnap map
 			prevSnap := w.keyspaceIdPrevSnapMap[meta.keyspaceId]
 			prevSnap.Snapshots[meta.vbucket][0] = filter.Snapshots[meta.vbucket][0]
@@ -1022,7 +1287,6 @@ func (w *streamWorker) updateSnapInFilter(meta *MutationMeta,
 				//subsequent complete snapshots can overwrite the partial snapshot
 				//information. Store it separately for sync message.
 				filter.DisableAlign = true
-
 			}
 
 			filter.Snapshots[meta.vbucket][0] = snapStart
@@ -1071,6 +1335,18 @@ func (w *streamWorker) updateVbuuidInFilter(meta *MutationMeta) {
 			"keyspaceId %v vb %v vbuuid %v in Filter for Stream %v", meta.keyspaceId,
 			meta.vbucket, meta.vbuuid, w.streamId)
 	}
+
+}
+
+func (w *streamWorker) processDcpOSOMarker(meta *MutationMeta, eventType byte) {
+
+	msg := &MsgStream{
+		mType:     STREAM_READER_OSO_SNAPSHOT_MARKER,
+		streamId:  w.streamId,
+		meta:      meta.Clone(),
+		eventType: eventType,
+	}
+	w.reader.supvRespch <- msg
 
 }
 

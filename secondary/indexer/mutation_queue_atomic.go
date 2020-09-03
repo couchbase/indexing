@@ -34,6 +34,8 @@ type MutationQueue interface {
 	DequeueUptoSeqno(vbucket Vbucket, seqno uint64) (<-chan *MutationKeys, chan bool, error)
 	//dequeue single element for a vbucket and return
 	DequeueSingleElement(vbucket Vbucket) *MutationKeys
+	//dequeue N elements for a vbucket and return
+	DequeueN(vbucket Vbucket, count uint64) (<-chan *MutationKeys, chan bool, error)
 
 	//return reference to a vbucket's mutation at Tail of queue without dequeue
 	PeekTail(vbucket Vbucket) *MutationKeys
@@ -294,6 +296,69 @@ func (q *atomicMutationQueue) DequeueSingleElement(vbucket Vbucket) *MutationKey
 		return m
 	}
 	return nil
+}
+
+//DequeueN returns a channel on which it will return mutation reference
+//for specified vbucket upto the count of mutations specified.
+//This function will keep polling till mutations upto count are available
+//to be sent. It terminates when it has sent the number of mutations
+//specified as argument.
+//It closes the mutation channel to indicate its done.
+func (q *atomicMutationQueue) DequeueN(vbucket Vbucket, count uint64) (
+	<-chan *MutationKeys, chan bool, error) {
+
+	datach := make(chan *MutationKeys, q.resultChanSize)
+	errch := make(chan bool)
+
+	go q.dequeueN(vbucket, count, datach, errch)
+
+	return datach, errch, nil
+
+}
+
+func (q *atomicMutationQueue) dequeueN(vbucket Vbucket, count uint64,
+	datach chan *MutationKeys, errch chan bool) {
+
+	var dequeueSeq uint64
+	var totalWait int
+	var currCount uint64
+
+	for {
+		totalWait += int(q.dequeuePollInterval)
+		if totalWait > 30000 {
+			if totalWait%5000 == 0 {
+				logging.Warnf("Indexer::MutationQueue Dequeue Waiting For "+
+					"Count %v KeyspaceId %v Vbucket %v for %v ms. Curr Count %v Seq %v. ",
+					count, q.keyspaceId, vbucket, totalWait, currCount, dequeueSeq)
+			}
+		}
+		for atomic.LoadPointer(&q.head[vbucket]) !=
+			atomic.LoadPointer(&q.tail[vbucket]) { //if queue is nonempty
+
+			head := (*node)(atomic.LoadPointer(&q.head[vbucket]))
+			//copy the mutation pointer
+			m := head.next.mutation
+			if currCount < count {
+				//free mutation pointer
+				head.next.mutation = nil
+				//move head to next
+				atomic.StorePointer(&q.head[vbucket], unsafe.Pointer(head.next))
+				atomic.AddInt64(&q.size[vbucket], -1)
+				atomic.AddInt64(q.memUsed, -m.Size())
+				//send mutation to caller
+				dequeueSeq = m.meta.seqno
+				currCount++
+				datach <- m
+			}
+
+			//once count is reached, close the channel
+			if currCount >= count {
+				close(datach)
+				return
+			}
+		}
+		time.Sleep(time.Millisecond * time.Duration(q.dequeuePollInterval))
+	}
 }
 
 //PeekTail returns reference to a vbucket's mutation at tail of queue without dequeue

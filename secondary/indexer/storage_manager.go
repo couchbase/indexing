@@ -229,13 +229,15 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 	snapType := tsVbuuid.GetSnapType()
 	tsVbuuid.Crc64 = common.HashVbuuid(tsVbuuid.Vbuuids)
 
-	if snapType == common.NO_SNAP {
+	if snapType == common.NO_SNAP || snapType == common.NO_SNAP_OSO {
 		logging.Debugf("StorageMgr::handleCreateSnapshot Skip Snapshot For %v "+
 			"%v SnapType %v", streamId, keyspaceId, snapType)
 
 		s.muSnap.Lock()
 		defer s.muSnap.Unlock()
 
+		//TODO Collections create a filtered copy of maps based on keyspace
+		//or store map of per stream/keyspaceId
 		indexInstMap := common.CopyIndexInstMap(s.indexInstMap)
 		indexPartnMap := CopyIndexPartnMap(s.indexPartnMap)
 
@@ -270,7 +272,8 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, keyspaceId s
 	var needsCommit bool
 	var forceCommit bool
 	snapType := tsVbuuid.GetSnapType()
-	if snapType == common.DISK_SNAP {
+	if snapType == common.DISK_SNAP ||
+		snapType == common.DISK_SNAP_OSO {
 		needsCommit = true
 	} else if snapType == common.FORCE_COMMIT {
 		forceCommit = true
@@ -760,6 +763,14 @@ func (sm *storageMgr) findRollbackSnapshot(slice Slice,
 		panic("Unable read snapinfo -" + err.Error())
 	}
 	s := NewSnapshotInfoContainer(infos)
+
+	//DCP doesn't allow using incomplete OSO snapshots
+	//for stream restart
+	for _, si := range s.List() {
+		if si.IsOSOSnap() {
+			return nil
+		}
+	}
 
 	//if dcp has requested rollback to 0 for any vb, it is better to
 	//try with all available disk snapshots. The rollback could be
@@ -1638,6 +1649,24 @@ func (s *storageMgr) updateIndexSnapMapForIndex(idxInstId common.IndexInstId, id
 		}
 
 		if partnSnapMap == nil {
+			break
+		}
+
+		//if OSO snapshot, rollback all partitions to 0
+		if tsVbuuid != nil && tsVbuuid.GetSnapType() == common.DISK_SNAP_OSO {
+			for _, partnInst := range partnMap {
+				partnId := partnInst.Defn.GetPartitionId()
+				sc := partnInst.Sc
+
+				for _, slice := range sc.GetAllSlices() {
+					_, err := s.rollbackToSnapshot(idxInstId, partnId,
+						slice, nil, false)
+					if err != nil {
+						panic("Unable to rollback to 0 - " + err.Error())
+					}
+				}
+			}
+			partnSnapMap = nil
 			break
 		}
 	}

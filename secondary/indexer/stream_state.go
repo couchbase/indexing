@@ -76,6 +76,10 @@ type StreamState struct {
 	streamKeyspaceIdVBMap map[common.StreamId]KeyspaceIdVBMap
 
 	keyspaceIdRollbackTime map[string]int64
+
+	streamKeyspaceIdEnableOSO map[common.StreamId]KeyspaceIdEnableOSO
+
+	streamKeyspaceIdHWTOSO map[common.StreamId]KeyspaceIdHWTOSO
 }
 
 type KeyspaceIdHWTMap map[string]*common.TsVbuuid
@@ -105,6 +109,7 @@ type KeyspaceIdTimerStopCh map[string]StopChannel
 type KeyspaceIdLastPersistTime map[string]time.Time
 type KeyspaceIdSkippedInMemTs map[string]uint64
 type KeyspaceIdSessionId map[string]uint64
+type KeyspaceIdEnableOSO map[string]bool
 type KeyspaceIdCollectionId map[string]string
 type KeyspaceIdPastMinMergeTs map[string]bool
 
@@ -119,6 +124,13 @@ type KeyspaceIdStreamRepairStateMap map[string][]RepairState
 type KeyspaceIdStatus map[string]StreamStatus
 
 type KeyspaceIdVBMap map[string]map[Vbucket]string
+
+type KeyspaceIdHWTOSO map[string]*common.TsVbuuid
+
+type TsListElem struct {
+	ts       *common.TsVbuuid
+	osoCount []uint64
+}
 
 type RepairState byte
 
@@ -174,6 +186,8 @@ func InitStreamState(config common.Config) *StreamState {
 		streamKeyspaceIdCollectionId:       make(map[common.StreamId]KeyspaceIdCollectionId),
 		streamKeyspaceIdPastMinMergeTs:     make(map[common.StreamId]KeyspaceIdPastMinMergeTs),
 		streamKeyspaceIdVBMap:              make(map[common.StreamId]KeyspaceIdVBMap),
+		streamKeyspaceIdEnableOSO:          make(map[common.StreamId]KeyspaceIdEnableOSO),
+		streamKeyspaceIdHWTOSO:             make(map[common.StreamId]KeyspaceIdHWTOSO),
 	}
 
 	return ss
@@ -294,6 +308,12 @@ func (ss *StreamState) initNewStream(streamId common.StreamId) {
 	keyspaceIdVBMap := make(KeyspaceIdVBMap)
 	ss.streamKeyspaceIdVBMap[streamId] = keyspaceIdVBMap
 
+	keyspaceIdEnableOSO := make(KeyspaceIdEnableOSO)
+	ss.streamKeyspaceIdEnableOSO[streamId] = keyspaceIdEnableOSO
+
+	keyspaceIdHWTOSO := make(KeyspaceIdHWTOSO)
+	ss.streamKeyspaceIdHWTOSO[streamId] = keyspaceIdHWTOSO
+
 	ss.streamStatus[streamId] = STREAM_ACTIVE
 
 }
@@ -338,6 +358,8 @@ func (ss *StreamState) initKeyspaceIdInStream(streamId common.StreamId,
 	ss.streamKeyspaceIdKVPendingTsMap[streamId][keyspaceId] = common.NewTsVbuuid(keyspaceId, numVbuckets)
 	ss.streamKeyspaceIdRepairStateMap[streamId][keyspaceId] = make([]RepairState, numVbuckets)
 	ss.streamKeyspaceIdVBMap[streamId][keyspaceId] = make(map[Vbucket]string)
+	ss.streamKeyspaceIdEnableOSO[streamId][keyspaceId] = false
+	ss.streamKeyspaceIdHWTOSO[streamId][keyspaceId] = common.NewTsVbuuid(keyspaceId, numVbuckets)
 
 	ss.streamKeyspaceIdStatus[streamId][keyspaceId] = STREAM_ACTIVE
 
@@ -388,6 +410,8 @@ func (ss *StreamState) cleanupKeyspaceIdFromStream(streamId common.StreamId,
 	delete(ss.streamKeyspaceIdKVPendingTsMap[streamId], keyspaceId)
 	delete(ss.streamKeyspaceIdRepairStateMap[streamId], keyspaceId)
 	delete(ss.streamKeyspaceIdVBMap[streamId], keyspaceId)
+	delete(ss.streamKeyspaceIdEnableOSO[streamId], keyspaceId)
+	delete(ss.streamKeyspaceIdHWTOSO[streamId], keyspaceId)
 
 	if donech, ok := ss.streamKeyspaceIdFlushDone[streamId][keyspaceId]; ok && donech != nil {
 		close(donech)
@@ -441,6 +465,8 @@ func (ss *StreamState) resetStreamState(streamId common.StreamId) {
 	delete(ss.streamKeyspaceIdKVPendingTsMap, streamId)
 	delete(ss.streamKeyspaceIdRepairStateMap, streamId)
 	delete(ss.streamKeyspaceIdVBMap, streamId)
+	delete(ss.streamKeyspaceIdEnableOSO, streamId)
+	delete(ss.streamKeyspaceIdHWTOSO, streamId)
 
 	ss.streamStatus[streamId] = STREAM_INACTIVE
 
@@ -1225,14 +1251,30 @@ func (ss *StreamState) checkAnyAbortPending(streamId common.StreamId,
 //updateHWT will update the HW Timestamp for a keyspaceId in the stream
 //based on the Sync message received.
 func (ss *StreamState) updateHWT(streamId common.StreamId,
-	keyspaceId string, hwt *common.TsVbuuid, prevSnap *common.TsVbuuid) {
+	keyspaceId string, hwt *common.TsVbuuid, hwtOSO *common.TsVbuuid, prevSnap *common.TsVbuuid) {
 
 	ts := ss.streamKeyspaceIdHWTMap[streamId][keyspaceId]
 	partialSnap := false
 
 	for i, seq := range hwt.Seqnos {
-		//if seqno has incremented, update it
-		if seq > ts.Seqnos[i] {
+
+		//update OSO bookkeeping
+		if hwtOSO != nil {
+			tsOSO := ss.streamKeyspaceIdHWTOSO[streamId][keyspaceId]
+			//if mutation count has incremented
+			if hwtOSO.Vbuuids[i] > tsOSO.Vbuuids[i] {
+				tsOSO.Seqnos[i] = hwtOSO.Seqnos[i]   //high seqno
+				tsOSO.Vbuuids[i] = hwtOSO.Vbuuids[i] //Vbuuid stores count for OSO
+				ss.streamKeyspaceIdNewTsReqdMap[streamId][keyspaceId] = true
+			}
+			//OSO Snap End
+			if hwtOSO.Snapshots[i][1] > tsOSO.Snapshots[i][1] {
+				tsOSO.Snapshots[i][1] = hwtOSO.Snapshots[i][1]
+				ss.streamKeyspaceIdNewTsReqdMap[streamId][keyspaceId] = true
+			}
+		}
+
+		if seq > ts.Seqnos[i] { //if seqno has incremented, update it
 			ts.Seqnos[i] = seq
 			ss.streamKeyspaceIdNewTsReqdMap[streamId][keyspaceId] = true
 		}
@@ -1250,7 +1292,8 @@ func (ss *StreamState) updateHWT(streamId common.StreamId,
 			ts.Snapshots[i][1] = hwt.Snapshots[i][1]
 			//	ts.Vbuuids[i] = hwt.Vbuuids[i]
 			ss.streamKeyspaceIdNewTsReqdMap[streamId][keyspaceId] = true
-			if prevSnap.Seqnos[i] != prevSnap.Snapshots[i][1] {
+			if prevSnap.Seqnos[i] != prevSnap.Snapshots[i][1] &&
+				prevSnap.Snapshots[i][0] != 0 {
 				logging.Warnf("StreamState::updateHWT Received Partial Last Snapshot in HWT "+
 					"KeyspaceId %v StreamId %v vbucket %v Snapshot %v-%v Seqno %v Vbuuid %v lastSnap %v-%v lastSnapSeqno %v",
 					keyspaceId, streamId, i, hwt.Snapshots[i][0], hwt.Snapshots[i][1], hwt.Seqnos[i], ts.Vbuuids[i],
@@ -1316,34 +1359,59 @@ func (ss *StreamState) checkCommitOverdue(streamId common.StreamId, keyspaceId s
 
 //gets the stability timestamp based on the current HWT
 func (ss *StreamState) getNextStabilityTS(streamId common.StreamId,
-	keyspaceId string) *common.TsVbuuid {
+	keyspaceId string) *TsListElem {
 
 	//generate new stability timestamp
 	tsVbuuid := ss.streamKeyspaceIdHWTMap[streamId][keyspaceId].Copy()
 
-	tsVbuuid.SetSnapType(common.NO_SNAP)
+	tsElem := &TsListElem{
+		ts: tsVbuuid,
+	}
 
-	ss.alignSnapBoundary(streamId, keyspaceId, tsVbuuid)
+	enableOSO := ss.streamKeyspaceIdEnableOSO[streamId][keyspaceId]
+	if enableOSO {
+		tsElem.ts.SetSnapType(common.NO_SNAP_OSO)
+		hwtOSO := ss.streamKeyspaceIdHWTOSO[streamId][keyspaceId]
+		ss.setCountForOSOTs(streamId, keyspaceId, tsElem, hwtOSO)
+	} else {
+		tsElem.ts.SetSnapType(common.NO_SNAP)
+	}
+
+	ss.alignSnapBoundary(streamId, keyspaceId, tsElem, enableOSO)
 
 	//reset state for next TS
 	ss.streamKeyspaceIdNewTsReqdMap[streamId][keyspaceId] = false
 
-	if tsVbuuid.CheckSnapAligned() {
-		tsVbuuid.SetSnapAligned(true)
+	if tsElem.ts.CheckSnapAligned() {
+		tsElem.ts.SetSnapAligned(true)
 	}
 
-	return tsVbuuid
+	return tsElem
 }
 
 //align the snap boundary of TS if the seqno of the TS falls within the range of
 //last snap marker
 func (ss *StreamState) alignSnapBoundary(streamId common.StreamId,
-	keyspaceId string, ts *common.TsVbuuid) {
+	keyspaceId string, tsElem *TsListElem, enableOSO bool) {
 
 	smallSnap := ss.config["settings.smallSnapshotThreshold"].Uint64()
 	lastSnap := ss.streamKeyspaceIdLastSnapMarker[streamId][keyspaceId]
 
+	ts := tsElem.ts
 	for i, s := range ts.Snapshots {
+
+		//if ts has OSO snapshot, skip
+		if s[0] == 0 {
+			continue
+		}
+
+		//if lastSnap OSO, skip
+		if lastSnap.Snapshots[i][0] == 0 &&
+			lastSnap.Snapshots[i][1] == 1 &&
+			lastSnap.Seqnos[i] != 0 {
+			continue
+		}
+
 		//if seqno is not between snap boundary
 		if !(ts.Seqnos[i] >= s[0] && ts.Seqnos[i] <= s[1]) {
 
@@ -1426,16 +1494,55 @@ func (ss *StreamState) canFlushNewTS(streamId common.StreamId,
 
 //computes which vbuckets have mutations compared to last flush
 func (ss *StreamState) computeTsChangeVec(streamId common.StreamId,
-	keyspaceId string, ts *common.TsVbuuid) ([]bool, bool) {
+	keyspaceId string, tsElem *TsListElem) ([]bool, bool, []uint64) {
+
+	ts := tsElem.ts
 
 	numVbuckets := len(ts.Snapshots)
 	changeVec := make([]bool, numVbuckets)
 	noChange := true
 
+	var countVec []uint64
+	enableOSO := ss.streamKeyspaceIdEnableOSO[streamId][keyspaceId]
+	if enableOSO {
+		countVec = make([]uint64, numVbuckets)
+	}
+
 	//if there is a lastFlushedTs, compare with that
 	if lts, ok := ss.streamKeyspaceIdLastFlushedTsMap[streamId][keyspaceId]; ok && lts != nil {
 
 		for i, s := range ts.Seqnos {
+
+			//if OSO snapshot
+			if enableOSO && ts.Snapshots[i][0] == 0 && s != 0 {
+				//if lastFlushedTs has an incomplete oso snapshot
+				if lts.Snapshots[i][0] == 0 &&
+					lts.Snapshots[i][1] == 0 {
+
+					if tsElem.osoCount[i] > lts.Seqnos[i] {
+						changeVec[i] = true
+						noChange = false
+						countVec[i] = tsElem.osoCount[i] - lts.Seqnos[i] //count to be flushed
+
+					}
+					//if flushTs has incomplete oso snapshot
+					//use count as seqno
+					if ts.Snapshots[i][1] == 0 {
+						ts.Seqnos[i] = tsElem.osoCount[i]
+					} else {
+						//once the OSO snapshot is complete
+						//update the snapshot, seqno to high seqno
+						ts.Snapshots[i][0] = ts.Seqnos[i]
+						ts.Snapshots[i][1] = ts.Seqnos[i]
+					}
+				} else {
+					//use seqno to mark complete snapshot
+					//once lastFlushedTs has flushed till OSO end
+					ts.Snapshots[i][0] = ts.Seqnos[i]
+					ts.Snapshots[i][1] = ts.Seqnos[i]
+				}
+				continue
+			}
 			//if currentTs has seqno greater than last flushed
 			if s > lts.Seqnos[i] {
 				changeVec[i] = true
@@ -1452,14 +1559,31 @@ func (ss *StreamState) computeTsChangeVec(streamId common.StreamId,
 
 		//if this is the first ts, check seqno > 0
 		for i, s := range ts.Seqnos {
-			if s > 0 {
+			//if OSO snapshot
+			if enableOSO && ts.Snapshots[i][0] == 0 && s != 0 {
+				changeVec[i] = true
+				noChange = false
+				countVec[i] = tsElem.osoCount[i] //count to be flushed
+
+				//if flushTs has incomplete oso snapshot
+				//use count as seqno
+				if ts.Snapshots[i][1] == 0 {
+					ts.Seqnos[i] = tsElem.osoCount[i]
+				} else {
+					//once the OSO snapshot is complete
+					//update the snapshot, seqno to high seqno
+					ts.Snapshots[i][0] = ts.Seqnos[i]
+					ts.Snapshots[i][1] = ts.Seqnos[i]
+				}
+
+			} else if s > 0 {
 				changeVec[i] = true
 				noChange = false
 			}
 		}
 	}
 
-	return changeVec, noChange
+	return changeVec, noChange, countVec
 }
 
 func (ss *StreamState) UpdateConfig(cfg common.Config) {
@@ -1585,4 +1709,39 @@ func (ss *StreamState) CloneCollectionIdMap(streamId common.StreamId) KeyspaceId
 	}
 	return outMap
 
+}
+
+func (ss *StreamState) setCountForOSOTs(streamId common.StreamId,
+	keyspaceId string, tsElem *TsListElem, hwtOSO *common.TsVbuuid) {
+
+	ts := tsElem.ts
+	for i, sn := range ts.Snapshots {
+
+		//if vb got an OSO Snapshot
+		if hwtOSO.Snapshots[i][0] == 0 &&
+			hwtOSO.Seqnos[i] != 0 {
+			//if there is a regular snapshot with mutations
+			if sn[0] != 0 && ts.Seqnos[i] != 0 {
+				//use latest snapshot information already in ts
+			} else {
+				//NOTE if OSO has ended and the next snapshot marker has come in
+				//but no new mutations, then that TS still needs to go out with count
+
+				hwtOSO := ss.streamKeyspaceIdHWTOSO[streamId][keyspaceId]
+				ts.Seqnos[i] = hwtOSO.Seqnos[i] //high seqno
+				ts.Snapshots[i][0] = hwtOSO.Snapshots[i][0]
+				ts.Snapshots[i][1] = hwtOSO.Snapshots[i][1]
+
+				if tsElem.osoCount == nil {
+					tsElem.osoCount = make([]uint64, len(hwtOSO.Seqnos))
+				}
+				tsElem.osoCount[i] = hwtOSO.Vbuuids[i] //count
+
+				//if this is an open OSO snap(i.e. OSO End has not been received)
+				if ts.Snapshots[i][1] != 1 {
+					ts.SetOpenOSOSnap(true)
+				}
+			}
+		}
+	}
 }

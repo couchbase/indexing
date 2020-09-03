@@ -749,13 +749,8 @@ func (m *IndexManager) getKeyspaceForCleanup() ([]string, error) {
 		// Get bucket UUID. Bucket uuid is BUCKET_UUID_NIL for non-existent bucket.
 		currentUUID := cinfo.GetBucketUUID(bucket)
 
-		// Note: Do not call cinfo.GetCollectionID() to retrieve collectionID as it
-		// can result in stale results. Use common.GetCollectionID() till the time
-		// ns_server provices streaming rest endpoint for streaming collection manifest
-
-		//TODO Collections - change to use cinfo.GetCollectionID once streaming
-		//rest endpoint is available
-		collectionID, _ := common.GetCollectionID(m.clusterURL, bucket, scope, collection)
+		// Get CollectionID. CollectionID is COLLECTION_ID_NIL for non-existing collection
+		collectionID := cinfo.GetCollectionID(bucket, scope, collection)
 
 		topology, err := m.repo.GetTopologyByCollection(bucket, scope, collection)
 		if err == nil && topology != nil {

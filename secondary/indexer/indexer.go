@@ -103,6 +103,7 @@ type indexer struct {
 	streamKeyspaceIdRequestLock  map[common.StreamId]map[string]chan *sync.Mutex
 	streamKeyspaceIdSessionId    map[common.StreamId]map[string]uint64
 	streamKeyspaceIdCollectionId map[common.StreamId]map[string]string
+	streamKeyspaceIdOSOException map[common.StreamId]map[string]bool
 
 	streamKeyspaceIdPendBuildDone map[common.StreamId]map[string]*buildDoneSpec
 
@@ -260,6 +261,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		streamKeyspaceIdRequestLock:      make(map[common.StreamId]map[string]chan *sync.Mutex),
 		streamKeyspaceIdSessionId:        make(map[common.StreamId]map[string]uint64),
 		streamKeyspaceIdCollectionId:     make(map[common.StreamId]map[string]string),
+		streamKeyspaceIdOSOException:     make(map[common.StreamId]map[string]bool),
 		streamKeyspaceIdPendBuildDone:    make(map[common.StreamId]map[string]*buildDoneSpec),
 		keyspaceIdBuildTs:                make(map[string]Timestamp),
 		buildTsLock:                      make(map[common.StreamId]map[string]*sync.Mutex),
@@ -976,7 +978,8 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		STREAM_READER_STREAM_END,
 		STREAM_READER_SNAPSHOT_MARKER,
 		STREAM_READER_CONN_ERROR,
-		STREAM_READER_SYSTEM_EVENT:
+		STREAM_READER_SYSTEM_EVENT,
+		STREAM_READER_OSO_SNAPSHOT_MARKER:
 
 		if msg.GetMsgType() == STREAM_READER_SYSTEM_EVENT {
 			idx.handleDcpSystemEvent(msg)
@@ -997,6 +1000,7 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		keyspaceId := msg.(*MsgTKStabilityTS).GetKeyspaceId()
 		streamId := msg.(*MsgTKStabilityTS).GetStreamId()
 		changeVec := msg.(*MsgTKStabilityTS).GetChangeVector()
+		countVec := msg.(*MsgTKStabilityTS).GetCountVector()
 		hasAllSB := msg.(*MsgTKStabilityTS).HasAllSB()
 
 		if idx.getStreamKeyspaceIdState(streamId, keyspaceId) == STREAM_INACTIVE {
@@ -1021,6 +1025,7 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 				ts:         ts,
 				streamId:   streamId,
 				changeVec:  changeVec,
+				countVec:   countVec,
 				hasAllSB:   hasAllSB}
 
 			<-idx.mutMgrCmdCh
@@ -1210,6 +1215,9 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 
 	case INDEXER_RESET_INDEX_DONE:
 		idx.handleResetIndexDone(msg)
+
+	case RESET_STREAM:
+		idx.handleResetStream(msg)
 
 	default:
 		logging.Fatalf("Indexer::handleWorkerMsgs Unknown Message %+v", msg)
@@ -2922,6 +2930,65 @@ func (idx *indexer) handleInitPrepRecovery(msg Message) {
 	}
 }
 
+func (idx *indexer) handleResetStream(msg Message) {
+
+	keyspaceId := msg.(*MsgStreamUpdate).GetKeyspaceId()
+	streamId := msg.(*MsgStreamUpdate).GetStreamId()
+	sessionId := msg.(*MsgStreamUpdate).GetSessionId()
+
+	logging.Infof("Indexer::handleResetStream %v %v %v", streamId, keyspaceId, sessionId)
+
+	if ok, currSid := idx.validateSessionId(streamId, keyspaceId, sessionId, true); !ok {
+		logging.Infof("Indexer::handleResetStream StreamId %v KeyspaceId %v SessionId %v. "+
+			"Skipped. Current SessionId %v.", streamId, keyspaceId, sessionId, currSid)
+		return
+	}
+
+	//if the stream is inactive(e.g. all indexes get dropped)
+	if idx.getStreamKeyspaceIdState(streamId, keyspaceId) == STREAM_INACTIVE {
+		logging.Infof("Indexer::handleResetStream StreamId %v KeyspaceId %v "+
+			"State %v. Skipping Reset Stream and Cleaning up.",
+			streamId, keyspaceId, idx.getStreamKeyspaceIdState(streamId, keyspaceId))
+		idx.cleanupStreamKeyspaceIdState(streamId, keyspaceId)
+	} else {
+
+		//if OSO Exception has already been recorded, ignore the message
+		if idx.streamKeyspaceIdOSOException[streamId][keyspaceId] {
+			logging.Infof("Indexer::handleResetStream StreamId %v KeyspaceId %v "+
+				"OSOException Already Seen. Skipping Reset Stream.",
+				streamId, keyspaceId)
+		} else {
+
+			//check if a recovery is already in progress. This case should not happen.
+			//this is just for safety and debug information.
+			if idx.getStreamKeyspaceIdState(streamId, keyspaceId) != STREAM_ACTIVE {
+				logging.Warnf("Indexer::handleResetStream StreamId %v KeyspaceId %v "+
+					"ResetStream received during recovery.", streamId, keyspaceId)
+			}
+
+			idx.streamKeyspaceIdOSOException[streamId][keyspaceId] = true
+
+			idx.setStreamKeyspaceIdState(streamId, keyspaceId, STREAM_PREPARE_RECOVERY)
+			logging.Infof("Indexer::handleResetStream StreamId %v KeyspaceId %v State %v "+
+				"SessionId %v. Initiate Recovery.", streamId, keyspaceId, STREAM_PREPARE_RECOVERY, sessionId)
+
+			//create zero ts for rollback to 0
+			numVbuckets := idx.config["numVbuckets"].Int()
+			restartTs := common.NewTsVbuuid(GetBucketFromKeyspaceId(keyspaceId), numVbuckets)
+
+			//send recovery message to timekeeper
+			idx.tkCmdCh <- &MsgRecovery{mType: INDEXER_INIT_PREP_RECOVERY,
+				streamId:   streamId,
+				keyspaceId: keyspaceId,
+				sessionId:  sessionId,
+				restartTs:  restartTs,
+			}
+			<-idx.tkCmdCh
+
+		}
+	}
+}
+
 func (idx *indexer) handlePrepareUnpause(msg Message) {
 
 	logging.Infof("Indexer::handlePrepareUnpause %v", idx.getIndexerState())
@@ -3981,6 +4048,15 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 	clustAddr := idx.config["clusterAddr"].String()
 	numVb := idx.config["numVbuckets"].Int()
 	enableAsync := idx.config["enableAsyncOpenStream"].Bool()
+	enableOSO := idx.config["build.enableOSO"].Bool()
+
+	if enableOSO &&
+		clusterVer >= common.INDEXER_70_VERSION &&
+		buildStream == common.INIT_STREAM {
+		enableOSO = true
+	} else {
+		enableOSO = false
+	}
 
 	idx.prepareStreamKeyspaceIdForFreshStart(buildStream, keyspaceId)
 
@@ -4007,7 +4083,8 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 		async:              async,
 		sessionId:          sessionId,
 		collectionId:       cid,
-		collectionAware:    collectionAware}
+		collectionAware:    collectionAware,
+		enableOSO:          enableOSO}
 
 	//send stream update to timekeeper
 	if resp := idx.sendStreamUpdateToWorker(cmd, idx.tkCmdCh,
@@ -5520,6 +5597,22 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 		async = enableAsync && clusterVer >= common.INDEXER_65_VERSION
 	}
 
+	//on warmup, OSO can only be allowed if all snapshots are nil
+	allowOSO := false
+	if allNilSnapsOnWarmup == nil || (allNilSnapsOnWarmup != nil && allNilSnapsOnWarmup[keyspaceId] == true) {
+		allowOSO = true
+	}
+
+	enableOSO := idx.config["build.enableOSO"].Bool()
+	if enableOSO &&
+		allowOSO &&
+		clusterVer >= common.INDEXER_70_VERSION &&
+		streamId == common.INIT_STREAM {
+		enableOSO = true
+	} else {
+		enableOSO = false
+	}
+
 	var cid string
 	var ok bool
 	if cid, ok = idx.streamKeyspaceIdCollectionId[streamId][keyspaceId]; !ok {
@@ -5548,7 +5641,8 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 		async:              async,
 		sessionId:          sessionId,
 		collectionId:       cid,
-		collectionAware:    collectionAware}
+		collectionAware:    collectionAware,
+		enableOSO:          enableOSO}
 
 	//send stream update to timekeeper
 	if resp := idx.sendStreamUpdateToWorker(cmd, idx.tkCmdCh,
@@ -5733,6 +5827,7 @@ func (idx *indexer) initStreamCollectionIdMap() {
 
 	for i := 0; i < int(common.ALL_STREAMS); i++ {
 		idx.streamKeyspaceIdCollectionId[common.StreamId(i)] = make(map[string]string)
+		idx.streamKeyspaceIdOSOException[common.StreamId(i)] = make(map[string]bool)
 	}
 }
 
@@ -8759,6 +8854,7 @@ func (idx *indexer) cleanupAllStreamKeyspaceIdState(
 	delete(idx.streamKeyspaceIdObserveFlushDone[streamId], keyspaceId)
 	delete(idx.streamKeyspaceIdPendBuildDone[streamId], keyspaceId)
 	delete(idx.streamKeyspaceIdCollectionId[streamId], keyspaceId)
+	delete(idx.streamKeyspaceIdOSOException[streamId], keyspaceId)
 }
 
 func (idx *indexer) prepareStreamKeyspaceIdForFreshStart(

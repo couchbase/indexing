@@ -74,7 +74,7 @@ type Feed struct {
 
 	// Collections
 	collectionsAware bool
-	osoSnapshot      bool
+	osoSnapshot      map[string]bool //keyspaceId -> osoSnapshot
 
 	// config params
 	reqTimeout time.Duration
@@ -109,6 +109,8 @@ func NewFeed(
 		opaque:    opaque,
 		projector: projector,
 		async:     async,
+
+		osoSnapshot: make(map[string]bool),
 
 		// upstream
 		reqTss:  make(map[string]*protobuf.TsVbuuid),
@@ -870,8 +872,6 @@ func (feed *Feed) start(
 
 	feed.collectionsAware = req.GetCollectionAware()
 
-	feed.osoSnapshot = req.GetOsoSnapshot()
-
 	// update engines and endpoints
 	if _, err = feed.processSubscribers(opaque, req, keyspaceIdMap); err != nil { // :SideEffect:
 		return err
@@ -879,6 +879,8 @@ func (feed *Feed) start(
 	for _, ts := range req.GetReqTimestamps() {
 		pooln, bucketn := ts.GetPool(), ts.GetBucket()
 		keyspaceId := keyspaceIdMap[bucketn]
+
+		feed.osoSnapshot[keyspaceId] = req.GetOsoSnapshot()
 
 		vbnos, e := feed.getLocalVbuckets(pooln, bucketn, opaque)
 		if e != nil {
@@ -1576,6 +1578,7 @@ func (feed *Feed) cleanupKeyspace(keyspaceId string, enginesOk bool) {
 		kvdata.Close()
 	}
 	delete(feed.kvdata, keyspaceId) // :SideEffect:
+	delete(feed.osoSnapshot, keyspaceId)
 
 	fmsg := "%v ##%x keyspace %v removed ..."
 	logging.Infof(fmsg, feed.logPrefix, feed.opaque, keyspaceId)
@@ -1607,7 +1610,7 @@ func (feed *Feed) openFeeder(
 		"latencyTick":      feed.config["dcp.latencyTick"].Int(),
 		"activeVbOnly":     feed.config["dcp.activeVbOnly"].Bool(),
 		"collectionsAware": feed.collectionsAware,
-		"osoSnapshot":      feed.osoSnapshot,
+		"osoSnapshot":      feed.osoSnapshot[keyspaceId],
 	}
 
 	kvaddr, err := feed.getLocalKVAddrs(pooln, bucketn, opaque)

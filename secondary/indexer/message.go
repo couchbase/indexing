@@ -40,6 +40,7 @@ const (
 	STREAM_READER_CONN_ERROR
 	STREAM_READER_HWT
 	STREAM_READER_SYSTEM_EVENT
+	STREAM_READER_OSO_SNAPSHOT_MARKER
 
 	//MUTATION_MANAGER
 	MUT_MGR_PERSIST_MUTATION_QUEUE
@@ -160,6 +161,7 @@ const (
 	CLEANUP_STREAM
 	CLEANUP_PRJ_STATS
 	INDEXER_UPDATE_BUILD_TS
+	RESET_STREAM
 
 	CONFIG_SETTINGS_UPDATE
 
@@ -434,6 +436,7 @@ type MsgUpdateKeyspaceIdQueue struct {
 	stats               *IndexerStats
 	keyspaceIdFilter    map[string]*common.TsVbuuid
 	keyspaceIdSessionId KeyspaceIdSessionId
+	keyspaceIdEnableOSO KeyspaceIdEnableOSO
 }
 
 func (m *MsgUpdateKeyspaceIdQueue) GetMsgType() MsgType {
@@ -456,6 +459,10 @@ func (m *MsgUpdateKeyspaceIdQueue) GetKeyspaceIdSessionId() KeyspaceIdSessionId 
 	return m.keyspaceIdSessionId
 }
 
+func (m *MsgUpdateKeyspaceIdQueue) GetKeyspaceIdEnableOSO() KeyspaceIdEnableOSO {
+	return m.keyspaceIdEnableOSO
+}
+
 func (m *MsgUpdateKeyspaceIdQueue) String() string {
 
 	str := "\n\tMessage: MsgUpdateKeyspaceIdQueue"
@@ -472,6 +479,7 @@ func (m *MsgUpdateKeyspaceIdQueue) String() string {
 //CLEANUP_STREAM
 //CLEANUP_PRJ_STATS
 //INDEXER_UPDATE_BUILD_TS
+//RESET_STREAM
 type MsgStreamUpdate struct {
 	mType        MsgType
 	streamId     common.StreamId
@@ -490,6 +498,7 @@ type MsgStreamUpdate struct {
 	keyspaceInRecovery bool
 	abortRecovery      bool
 	collectionAware    bool
+	enableOSO          bool
 }
 
 func (m *MsgStreamUpdate) GetMsgType() MsgType {
@@ -556,6 +565,10 @@ func (m *MsgStreamUpdate) CollectionAware() bool {
 	return m.collectionAware
 }
 
+func (m *MsgStreamUpdate) EnableOSO() bool {
+	return m.enableOSO
+}
+
 func (m *MsgStreamUpdate) String() string {
 
 	str := "\n\tMessage: MsgStreamUpdate"
@@ -568,6 +581,7 @@ func (m *MsgStreamUpdate) String() string {
 	str += fmt.Sprintf("\n\tSessionId: %v", m.sessionId)
 	str += fmt.Sprintf("\n\tCollectionId: %v", m.collectionId)
 	str += fmt.Sprintf("\n\tCollectionAware: %v", m.collectionAware)
+	str += fmt.Sprintf("\n\tEnableOSO: %v", m.enableOSO)
 	str += fmt.Sprintf("\n\tRestartTs: %v", m.restartTs)
 	return str
 
@@ -583,6 +597,7 @@ type MsgMutMgrFlushMutationQueue struct {
 	ts         *common.TsVbuuid
 	changeVec  []bool
 	hasAllSB   bool
+	countVec   []uint64
 }
 
 func (m *MsgMutMgrFlushMutationQueue) GetMsgType() MsgType {
@@ -607,6 +622,10 @@ func (m *MsgMutMgrFlushMutationQueue) GetChangeVector() []bool {
 
 func (m *MsgMutMgrFlushMutationQueue) HasAllSB() bool {
 	return m.hasAllSB
+}
+
+func (m *MsgMutMgrFlushMutationQueue) GetCountVector() []uint64 {
+	return m.countVec
 }
 
 func (m *MsgMutMgrFlushMutationQueue) String() string {
@@ -812,6 +831,7 @@ type MsgTKStabilityTS struct {
 	keyspaceId string
 	changeVec  []bool
 	hasAllSB   bool
+	countVec   []uint64
 }
 
 func (m *MsgTKStabilityTS) GetMsgType() MsgType {
@@ -836,6 +856,10 @@ func (m *MsgTKStabilityTS) GetChangeVector() []bool {
 
 func (m *MsgTKStabilityTS) HasAllSB() bool {
 	return m.hasAllSB
+}
+
+func (m *MsgTKStabilityTS) GetCountVector() []uint64 {
+	return m.countVec
 }
 
 func (m *MsgTKStabilityTS) String() string {
@@ -1244,7 +1268,8 @@ type MsgKeyspaceHWT struct {
 	mType      MsgType
 	streamId   common.StreamId
 	keyspaceId string
-	ts         *common.TsVbuuid
+	hwt        *common.TsVbuuid
+	hwtOSO     *common.TsVbuuid
 	prevSnap   *common.TsVbuuid
 	sessionId  uint64
 }
@@ -1262,7 +1287,11 @@ func (m *MsgKeyspaceHWT) GetKeyspaceId() string {
 }
 
 func (m *MsgKeyspaceHWT) GetHWT() *common.TsVbuuid {
-	return m.ts
+	return m.hwt
+}
+
+func (m *MsgKeyspaceHWT) GetHWTOSO() *common.TsVbuuid {
+	return m.hwtOSO
 }
 
 func (m *MsgKeyspaceHWT) GetPrevSnap() *common.TsVbuuid {
@@ -2166,6 +2195,8 @@ func (m MsgType) String() string {
 		return "STREAM_READER_HWT"
 	case STREAM_READER_SYSTEM_EVENT:
 		return "STREAM_READER_SYSTEM_EVENT"
+	case STREAM_READER_OSO_SNAPSHOT_MARKER:
+		return "STREAM_READER_OSO_SNAPSHOT_MARKER"
 
 	case MUT_MGR_PERSIST_MUTATION_QUEUE:
 		return "MUT_MGR_PERSIST_MUTATION_QUEUE"
@@ -2302,6 +2333,8 @@ func (m MsgType) String() string {
 		return "CLEANUP_PRJ_STATS"
 	case INDEXER_UPDATE_BUILD_TS:
 		return "INDEXER_UPDATE_BUILD_TS"
+	case RESET_STREAM:
+		return "RESET_STREAM"
 
 	case KV_SENDER_RESTART_VBUCKETS:
 		return "KV_SENDER_RESTART_VBUCKETS"

@@ -40,6 +40,7 @@ type TsVbuuid struct {
 	LargeSnap    bool
 	SnapAligned  bool
 	DisableAlign bool
+	OpenOSOSnap  bool
 }
 
 // NewTsVbuuid returns reference to new instance of TsVbuuid.
@@ -98,6 +99,7 @@ func NewTsVbuuidCached(bucket string, numVbuckets int) *TsVbuuid {
 	ts.Bucket = bucket
 	ts.ScopeId = ""
 	ts.CollectionId = ""
+	ts.OpenOSOSnap = false
 	return ts
 }
 
@@ -294,6 +296,14 @@ func (ts *TsVbuuid) SetDisableAlign(disable bool) {
 	ts.DisableAlign = disable
 }
 
+func (ts *TsVbuuid) HasOpenOSOSnap() bool {
+	return ts.OpenOSOSnap
+}
+
+func (ts *TsVbuuid) SetOpenOSOSnap(open bool) {
+	ts.OpenOSOSnap = open
+}
+
 func (ts *TsVbuuid) GetCrc64() uint64 {
 
 	if ts == nil {
@@ -317,6 +327,7 @@ func (ts *TsVbuuid) Copy() *TsVbuuid {
 
 	newTs.ScopeId = ts.ScopeId
 	newTs.CollectionId = ts.CollectionId
+	newTs.OpenOSOSnap = ts.OpenOSOSnap
 	return newTs
 }
 
@@ -331,6 +342,7 @@ func (ts *TsVbuuid) CopyFrom(src *TsVbuuid) {
 	ts.Crc64 = src.Crc64
 	ts.ScopeId = src.ScopeId
 	ts.CollectionId = src.CollectionId
+	ts.OpenOSOSnap = src.OpenOSOSnap
 }
 
 // Equal returns whether `ts` and `other` compare equal.

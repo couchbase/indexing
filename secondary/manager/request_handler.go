@@ -149,6 +149,22 @@ const (
 	RESP_ERROR   string = "error"
 )
 
+const (
+	INDEXER_LEVEL    string = "indexer"
+	BUCKET_LEVEL     string = "bucket"
+	SCOPE_LEVEL      string = "scope"
+	COLLECTION_LEVEL string = "collection"
+	INDEX_LEVEL      string = "index"
+)
+
+type target struct {
+	bucket     string
+	scope      string
+	collection string
+	index      string
+	level      string
+}
+
 //
 // Internal data structure
 //
@@ -265,7 +281,7 @@ func (m *requestHandlerContext) doCreateIndex(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	permission := fmt.Sprintf("cluster.bucket[%s].n1ql.index!create", request.Index.Bucket)
+	permission := fmt.Sprintf("cluster.collection[%s:%s:%s].n1ql.index!create", request.Index.Bucket, request.Index.Scope, request.Index.Collection)
 	if !isAllowed(creds, []string{permission}, w) {
 		return
 	}
@@ -316,7 +332,7 @@ func (m *requestHandlerContext) dropIndexRequest(w http.ResponseWriter, r *http.
 		return
 	}
 
-	permission := fmt.Sprintf("cluster.bucket[%s].n1ql.index!drop", request.Index.Bucket)
+	permission := fmt.Sprintf("cluster.collection[%s:%s:%s].n1ql.index!drop", request.Index.Bucket, request.Index.Scope, request.Index.Collection)
 	if !isAllowed(creds, []string{permission}, w) {
 		return
 	}
@@ -360,7 +376,7 @@ func (m *requestHandlerContext) buildIndexRequest(w http.ResponseWriter, r *http
 		return
 	}
 
-	permission := fmt.Sprintf("cluster.bucket[%s].n1ql.index!build", request.Index.Bucket)
+	permission := fmt.Sprintf("cluster.collection[%s:%s:%s].n1ql.index!build", request.Index.Bucket, request.Index.Scope, request.Index.Collection)
 	if !isAllowed(creds, []string{permission}, w) {
 		return
 	}
@@ -409,6 +425,17 @@ func (m *requestHandlerContext) handleIndexStatusRequest(w http.ResponseWriter, 
 	}
 
 	bucket := m.getBucket(r)
+	scope := m.getScope(r)
+	collection := m.getCollection(r)
+	index := m.getIndex(r)
+
+	t, err := validateRequest(bucket, scope, collection, index)
+	if err != nil {
+		logging.Debugf("RequestHandler::handleIndexStatusRequest: Error %v", err)
+		resp := &IndexStatusResponse{Code: RESP_ERROR, Error: err.Error()}
+		send(http.StatusInternalServerError, w, resp)
+		return
+	}
 
 	getAll := false
 	val := r.FormValue("getAll")
@@ -416,7 +443,7 @@ func (m *requestHandlerContext) handleIndexStatusRequest(w http.ResponseWriter, 
 		getAll = true
 	}
 
-	list, failedNodes, err := m.getIndexStatus(creds, bucket, getAll)
+	list, failedNodes, err := m.getIndexStatus(creds, t, getAll)
 	if err == nil && len(failedNodes) == 0 {
 		sort.Sort(indexStatusSorter(list))
 		resp := &IndexStatusResponse{Code: RESP_SUCCESS, Status: list}
@@ -435,7 +462,22 @@ func (m *requestHandlerContext) getBucket(r *http.Request) string {
 	return r.FormValue("bucket")
 }
 
-func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, bucket string, getAll bool) ([]IndexStatus, []string, error) {
+func (m *requestHandlerContext) getScope(r *http.Request) string {
+
+	return r.FormValue("scope")
+}
+
+func (m *requestHandlerContext) getCollection(r *http.Request) string {
+
+	return r.FormValue("collection")
+}
+
+func (m *requestHandlerContext) getIndex(r *http.Request) string {
+
+	return r.FormValue("index")
+}
+
+func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, t *target, getAll bool) ([]IndexStatus, []string, error) {
 
 	var cinfo *common.ClusterInfoCache
 	cinfo = m.mgr.cinfoClient.GetClusterInfoCache()
@@ -491,6 +533,22 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, bucket string
 		defnToHostMap[defnId] = append(defnToHostMap[defnId], hostAddr)
 	}
 
+	buildTopologyMapPerCollection := func(topologies []IndexTopology) map[string]map[string]map[string]*IndexTopology {
+		topoMap := make(map[string]map[string]map[string]*IndexTopology)
+		for i, _ := range topologies {
+			t := &topologies[i]
+			t.SetCollectionDefaults()
+			if _, ok := topoMap[t.Bucket]; !ok {
+				topoMap[t.Bucket] = make(map[string]map[string]*IndexTopology)
+			}
+			if _, ok := topoMap[t.Bucket][t.Scope]; !ok {
+				topoMap[t.Bucket][t.Scope] = make(map[string]*IndexTopology)
+			}
+			topoMap[t.Bucket][t.Scope][t.Collection] = t
+		}
+		return topoMap
+	}
+
 	for _, nid := range nids {
 
 		mgmtAddr, err := cinfo.GetServiceAddress(nid, "mgmt")
@@ -511,6 +569,8 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, bucket string
 
 			stale := false
 			metaToCache[u.Host] = nil
+			// TODO: It is not required to fetch metadata for entire node when target is for a specific
+			// bucket or collection
 			localMeta, latest, err := m.getLocalMetadataForNode(addr, u.Host, cinfo)
 			if localMeta == nil || err != nil {
 				logging.Debugf("RequestHandler::getIndexStatus: Error while retrieving %v with auth %v", addr+"/getLocalIndexMetadata", err)
@@ -518,6 +578,7 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, bucket string
 				continue
 			}
 
+			topoMap := buildTopologyMapPerCollection(localMeta.IndexTopologies)
 			if !latest {
 				stale = true
 			} else {
@@ -541,19 +602,18 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, bucket string
 			for _, defn := range localMeta.IndexDefinitions {
 				defn.SetCollectionDefaults()
 
-				if len(bucket) != 0 && bucket != defn.Bucket {
+				if !shouldProcess(t, defn.Bucket, defn.Scope, defn.Collection, defn.Name) {
 					continue
 				}
 
-				permission := fmt.Sprintf("cluster.bucket[%s].n1ql.index!list", defn.Bucket)
+				permission := fmt.Sprintf("cluster.collection[%s:%s:%s].n1ql.index!list", defn.Bucket, defn.Scope, defn.Collection)
 				if !isAllowed(creds, []string{permission}, nil) {
 					continue
 				}
 
 				mergeCounter(defn.DefnId, defn.NumReplica2)
 
-				if topology := findTopologyByCollection(localMeta.IndexTopologies,
-					defn.Bucket, defn.Scope, defn.Collection); topology != nil {
+				if topology, ok := topoMap[defn.Bucket][defn.Scope][defn.Collection]; ok && topology != nil {
 
 					instances := topology.GetIndexInstancesByDefn(defn.DefnId)
 					for _, instance := range instances {
@@ -831,8 +891,19 @@ func (m *requestHandlerContext) handleIndexStatementRequest(w http.ResponseWrite
 	}
 
 	bucket := m.getBucket(r)
+	scope := m.getScope(r)
+	collection := m.getCollection(r)
+	index := m.getIndex(r)
 
-	list, err := m.getIndexStatement(creds, bucket)
+	t, err := validateRequest(bucket, scope, collection, index)
+	if err != nil {
+		logging.Debugf("RequestHandler::handleIndexMetadataRequest: err %v", err)
+		resp := &BackupResponse{Code: RESP_ERROR, Error: err.Error()}
+		send(http.StatusInternalServerError, w, resp)
+		return
+	}
+
+	list, err := m.getIndexStatement(creds, t)
 	if err == nil {
 		sort.Strings(list)
 		send(http.StatusOK, w, list)
@@ -841,9 +912,9 @@ func (m *requestHandlerContext) handleIndexStatementRequest(w http.ResponseWrite
 	}
 }
 
-func (m *requestHandlerContext) getIndexStatement(creds cbauth.Creds, bucket string) ([]string, error) {
+func (m *requestHandlerContext) getIndexStatement(creds cbauth.Creds, t *target) ([]string, error) {
 
-	indexes, failedNodes, err := m.getIndexStatus(creds, bucket, false)
+	indexes, failedNodes, err := m.getIndexStatus(creds, t, false)
 	if err != nil {
 		return nil, err
 	}
@@ -875,8 +946,26 @@ func (m *requestHandlerContext) handleIndexMetadataRequest(w http.ResponseWriter
 	}
 
 	bucket := m.getBucket(r)
+	scope := m.getScope(r)
+	collection := m.getCollection(r)
 
-	meta, err := m.getIndexMetadata(creds, bucket)
+	index := m.getIndex(r)
+	if len(index) != 0 {
+		err := errors.New("RequestHandler::handleIndexMetadataRequest, err: Index level metadata requests are not supported")
+		resp := &BackupResponse{Code: RESP_ERROR, Error: err.Error()}
+		send(http.StatusInternalServerError, w, resp)
+		return
+	}
+
+	t, err := validateRequest(bucket, scope, collection, index)
+	if err != nil {
+		logging.Debugf("RequestHandler::handleIndexMetadataRequest: err %v", err)
+		resp := &BackupResponse{Code: RESP_ERROR, Error: err.Error()}
+		send(http.StatusInternalServerError, w, resp)
+		return
+	}
+
+	meta, err := m.getIndexMetadata(creds, t)
 	if err == nil {
 		resp := &BackupResponse{Code: RESP_SUCCESS, Result: *meta}
 		send(http.StatusOK, w, resp)
@@ -887,7 +976,7 @@ func (m *requestHandlerContext) handleIndexMetadataRequest(w http.ResponseWriter
 	}
 }
 
-func (m *requestHandlerContext) getIndexMetadata(creds cbauth.Creds, bucket string) (*ClusterIndexMetadata, error) {
+func (m *requestHandlerContext) getIndexMetadata(creds cbauth.Creds, t *target) (*ClusterIndexMetadata, error) {
 
 	cinfo, err := m.mgr.FetchNewClusterInfoCache()
 	if err != nil {
@@ -905,8 +994,17 @@ func (m *requestHandlerContext) getIndexMetadata(creds cbauth.Creds, bucket stri
 		if err == nil {
 
 			url := "/getLocalIndexMetadata"
-			if len(bucket) != 0 {
-				url += "?bucket=" + bucket
+			if len(t.bucket) != 0 {
+				url += "?bucket=" + t.bucket
+			}
+			if len(t.scope) != 0 {
+				url += "&scope=" + t.scope
+			}
+			if len(t.collection) != 0 {
+				url += "&collection=" + t.collection
+			}
+			if len(t.index) != 0 {
+				url += "&index=" + t.index
 			}
 
 			resp, err := getWithAuth(addr + url)
@@ -929,14 +1027,15 @@ func (m *requestHandlerContext) getIndexMetadata(creds cbauth.Creds, bucket stri
 			}
 
 			for _, topology := range localMeta.IndexTopologies {
-				permission := fmt.Sprintf("cluster.bucket[%s].n1ql.index!list", topology.Bucket)
+				permission := fmt.Sprintf("cluster.collection[%s:%s:%s].n1ql.index!list", topology.Bucket, topology.Scope, topology.Collection)
 				if isAllowed(creds, []string{permission}, nil) {
 					newLocalMeta.IndexTopologies = append(newLocalMeta.IndexTopologies, topology)
 				}
 			}
 
 			for _, defn := range localMeta.IndexDefinitions {
-				permission := fmt.Sprintf("cluster.bucket[%s].n1ql.index!list", defn.Bucket)
+				// TODO: Update RBAC permissions
+				permission := fmt.Sprintf("cluster.collection[%s:%s:%s].n1ql.index!list", defn.Bucket, defn.Scope, defn.Collection)
 				if isAllowed(creds, []string{permission}, nil) {
 					newLocalMeta.IndexDefinitions = append(newLocalMeta.IndexDefinitions, defn)
 				}
@@ -981,6 +1080,40 @@ func (m *requestHandlerContext) convertIndexMetadataRequest(r *http.Request) *Cl
 	return meta
 }
 
+func validateRequest(bucket, scope, collection, index string) (*target, error) {
+	// When bucket is not specified, return indexer level stats
+	if len(bucket) == 0 {
+		if len(scope) == 0 && len(collection) == 0 && len(index) == 0 {
+			return &target{level: INDEXER_LEVEL}, nil
+		}
+		return nil, errors.New("Missing bucket parameter as scope/collection/index are specified")
+	} else {
+		// When bucket is specified and scope, collection are empty, return results
+		// from all indexes belonging to that bucket
+		if len(scope) == 0 && len(collection) == 0 {
+			if len(index) != 0 {
+				return nil, errors.New("Missing scope and collection parameters as index parameter is specified")
+			}
+			return &target{bucket: bucket, level: BUCKET_LEVEL}, nil
+		} else if len(scope) != 0 && len(collection) == 0 {
+			if len(index) != 0 {
+				return nil, errors.New("Missing collection parameter as index parameter is specified")
+			}
+
+			return &target{bucket: bucket, scope: scope, level: SCOPE_LEVEL}, nil
+		} else if len(scope) == 0 && len(collection) != 0 {
+			return nil, errors.New("Missing scope parameter as collection paramter is specified")
+		} else { // Both collection and scope are specified
+			if len(index) != 0 {
+				return &target{bucket: bucket, scope: scope, collection: collection, index: index, level: INDEX_LEVEL}, nil
+			}
+			return &target{bucket: bucket, scope: scope, collection: collection, level: COLLECTION_LEVEL}, nil
+		}
+		return nil, errors.New("Missing scope or collection parameters")
+	}
+	return nil, nil
+}
+
 ///////////////////////////////////////////////////////
 // LocalIndexMetadata
 ///////////////////////////////////////////////////////
@@ -993,8 +1126,25 @@ func (m *requestHandlerContext) handleLocalIndexMetadataRequest(w http.ResponseW
 	}
 
 	bucket := m.getBucket(r)
+	scope := m.getScope(r)
+	collection := m.getCollection(r)
+	index := m.getIndex(r)
+	if len(index) != 0 {
+		err := errors.New("RequestHandler::handleLocalIndexMetadataRequest, err: Index level metadata requests are not supported")
+		resp := &BackupResponse{Code: RESP_ERROR, Error: err.Error()}
+		send(http.StatusInternalServerError, w, resp)
+		return
+	}
 
-	meta, err := m.getLocalIndexMetadata(creds, bucket)
+	t, err := validateRequest(bucket, scope, collection, index)
+	if err != nil {
+		logging.Debugf("RequestHandler::handleLocalIndexMetadataRequest: err %v", err)
+		errStr := fmt.Sprintf(" Unable to retrieve local index metadata due to: %v", err.Error())
+		sendHttpError(w, errStr, http.StatusInternalServerError)
+		return
+	}
+
+	meta, err := m.getLocalIndexMetadata(creds, t)
 	if err == nil {
 		send(http.StatusOK, w, meta)
 	} else {
@@ -1003,7 +1153,7 @@ func (m *requestHandlerContext) handleLocalIndexMetadataRequest(w http.ResponseW
 	}
 }
 
-func (m *requestHandlerContext) getLocalIndexMetadata(creds cbauth.Creds, bucket string) (meta *LocalIndexMetadata, err error) {
+func (m *requestHandlerContext) getLocalIndexMetadata(creds cbauth.Creds, t *target) (meta *LocalIndexMetadata, err error) {
 
 	repo := m.mgr.getMetadataRepo()
 
@@ -1038,8 +1188,8 @@ func (m *requestHandlerContext) getLocalIndexMetadata(creds cbauth.Creds, bucket
 	var defn *common.IndexDefn
 	_, defn, err = iter.Next()
 	for err == nil {
-		if len(bucket) == 0 || bucket == defn.Bucket {
-			permission := fmt.Sprintf("cluster.bucket[%s].n1ql.index!list", defn.Bucket)
+		if shouldProcess(t, defn.Bucket, defn.Scope, defn.Collection, defn.Name) {
+			permission := fmt.Sprintf("cluster.collection[%s:%s:%s].n1ql.index!list", defn.Bucket, defn.Scope, defn.Collection)
 			if isAllowed(creds, []string{permission}, nil) {
 				meta.IndexDefinitions = append(meta.IndexDefinitions, *defn)
 			}
@@ -1056,8 +1206,9 @@ func (m *requestHandlerContext) getLocalIndexMetadata(creds cbauth.Creds, bucket
 	var topology *IndexTopology
 	topology, err = iter1.Next()
 	for err == nil {
-		if len(bucket) == 0 || bucket == topology.Bucket {
-			permission := fmt.Sprintf("cluster.bucket[%s].n1ql.index!list", topology.Bucket)
+		// Specify empty index name in shouldProcess as indexLevel metadata requests are not supported
+		if shouldProcess(t, topology.Bucket, topology.Scope, topology.Collection, "") {
+			permission := fmt.Sprintf("cluster.collection[%s:%s:%s].n1ql.index!list", topology.Bucket, topology.Scope, topology.Collection)
 			if isAllowed(creds, []string{permission}, nil) {
 				meta.IndexTopologies = append(meta.IndexTopologies, *topology)
 			}
@@ -1066,6 +1217,25 @@ func (m *requestHandlerContext) getLocalIndexMetadata(creds cbauth.Creds, bucket
 	}
 
 	return meta, nil
+}
+
+func shouldProcess(t *target, defnBucket, defnScope, defnColl, defnName string) bool {
+	if t.level == INDEXER_LEVEL {
+		return true
+	}
+	if t.level == BUCKET_LEVEL && (t.bucket == defnBucket) {
+		return true
+	}
+	if t.level == SCOPE_LEVEL && (t.bucket == defnBucket) && t.scope == defnScope {
+		return true
+	}
+	if t.level == COLLECTION_LEVEL && (t.bucket == defnBucket) && t.scope == defnScope && t.collection == defnColl {
+		return true
+	}
+	if t.level == INDEX_LEVEL && (t.bucket == defnBucket) && t.scope == defnScope && t.collection == defnColl && t.index == defnName {
+		return true
+	}
+	return false
 }
 
 ///////////////////////////////////////////////////////
@@ -1089,14 +1259,14 @@ func (m *requestHandlerContext) handleCachedLocalIndexMetadataRequest(w http.Res
 		newMeta.IndexTopologies = make([]IndexTopology, 0, len(meta.IndexTopologies))
 
 		for _, defn := range meta.IndexDefinitions {
-			permission := fmt.Sprintf("cluster.bucket[%s].n1ql.index!list", defn.Bucket)
+			permission := fmt.Sprintf("cluster.collection[%s:%s:%s].n1ql.index!list", defn.Bucket, defn.Scope, defn.Collection)
 			if isAllowed(creds, []string{permission}, nil) {
 				newMeta.IndexDefinitions = append(newMeta.IndexDefinitions, defn)
 			}
 		}
 
 		for _, topology := range meta.IndexTopologies {
-			permission := fmt.Sprintf("cluster.bucket[%s].n1ql.index!list", topology.Bucket)
+			permission := fmt.Sprintf("cluster.collection[%s:%s:%s].n1ql.index!list", topology.Bucket, topology.Scope, topology.Collection)
 			if isAllowed(creds, []string{permission}, nil) {
 				newMeta.IndexTopologies = append(newMeta.IndexTopologies, topology)
 			}
@@ -1159,14 +1329,14 @@ func (m *requestHandlerContext) handleRestoreIndexMetadataRequest(w http.Respons
 
 	for _, localMeta := range image.Metadata {
 		for _, topology := range localMeta.IndexTopologies {
-			permission := fmt.Sprintf("cluster.bucket[%s].n1ql.index!create", topology.Bucket)
+			permission := fmt.Sprintf("cluster.collection[%s:%s:%s].n1ql.index!create", topology.Bucket, topology.Scope, topology.Collection)
 			if !isAllowed(creds, []string{permission}, w) {
 				return
 			}
 		}
 
 		for _, defn := range localMeta.IndexDefinitions {
-			permission := fmt.Sprintf("cluster.bucket[%s].n1ql.index!create", defn.Bucket)
+			permission := fmt.Sprintf("cluster.collection[%s:%s:%s].n1ql.index!create", defn.Bucket, defn.Scope, defn.Collection)
 			if !isAllowed(creds, []string{permission}, w) {
 				return
 			}
@@ -1404,12 +1574,13 @@ func (m *requestHandlerContext) getLocalReplicaCount(creds cbauth.Creds) (map[co
 
 	_, defn, err = iter.Next()
 	for err == nil {
-		if _, ok := permissions[defn.Bucket]; !ok {
-			permission := fmt.Sprintf("cluster.bucket[%s].n1ql.index!list", defn.Bucket)
+		keyspace := fmt.Sprintf("%s:%s:%s", defn.Bucket, defn.Scope, defn.Collection)
+		if _, ok := permissions[keyspace]; !ok {
+			permission := fmt.Sprintf("cluster.collection[%s].n1ql.index!list", keyspace)
 			if !isAllowed(creds, []string{permission}, nil) {
-				return nil, fmt.Errorf("Permission denied on reading metadata for bucket %v", defn.Bucket)
+				return nil, fmt.Errorf("Permission denied on reading metadata for keyspace %v", keyspace)
 			}
-			permissions[defn.Bucket] = true
+			permissions[keyspace] = true
 		}
 
 		var numReplica *common.Counter
@@ -2073,8 +2244,7 @@ func (m *requestHandlerContext) handleScheduleCreateRequest(w http.ResponseWrite
 		return
 	}
 
-	// TODO: Scope and Collection GAR
-	permission := fmt.Sprintf("cluster.bucket[%s].n1ql.index!create", req.Definition.Bucket)
+	permission := fmt.Sprintf("cluster.collection[%s:%s:%s].n1ql.index!create", req.Definition.Bucket, req.Definition.Scope, req.Definition.Collection)
 	if !isAllowed(creds, []string{permission}, w) {
 		send(http.StatusForbidden, w, "Specified user cannot create an index on the bucket")
 		return

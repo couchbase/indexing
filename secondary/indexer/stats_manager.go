@@ -2461,7 +2461,12 @@ func (s *statsManager) getStorageStats() string {
 		for _, data := range sts.GetInternalData() {
 			result.WriteString(data)
 		}
+		// No data from storage slice. Add '{' to make it valid JSON
+		if len(sts.GetInternalData()) == 0 {
+			result.WriteString("{\n")
+		}
 		result.WriteString("}\n")
+
 	}
 
 	result.WriteString("]")

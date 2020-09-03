@@ -3817,6 +3817,11 @@ func (m *janitor) cleanup() {
 
 		logging.Infof("janitor: Processing delete token %v", entry)
 
+		if err := m.deleteScheduleTokens(command.DefnId); err != nil {
+			logging.Errorf("janitor: Failed to delete scheduled tokens upon cleanup for %v.  Internal Error = %v.", entry, err)
+			retryList[entry] = command
+		}
+
 		defn, err := m.manager.repo.GetIndexDefnById(command.DefnId)
 		if err != nil {
 			retryList[entry] = command
@@ -3986,6 +3991,21 @@ func (m *janitor) cleanup() {
 	}
 }
 
+func (m *janitor) deleteScheduleTokens(defnID common.IndexDefnId) error {
+
+	// TODO: Avoid these calls if these calls were successful once.
+
+	if err := mc.DeleteScheduleCreateToken(defnID); err != nil {
+		return fmt.Errorf("DeleteScheduleCreateToken:%v:%v", defnID, err)
+	}
+
+	if err := mc.DeleteStopScheduleCreateToken(defnID); err != nil {
+		return fmt.Errorf("DeleteStopScheduleCreateToken:%v:%v", defnID, err)
+	}
+
+	return nil
+}
+
 func (m *janitor) run() {
 
 	m.manager.done.Add(1)
@@ -4099,21 +4119,25 @@ func (s *builder) run() {
 			//build error if builder initiates few requests.
 			if processed {
 
-				timer := time.NewTimer(time.Second * 30)
-				defer timer.Stop()
-				select {
-				case <-timer.C:
-				case <-s.manager.killch:
-					s.commandListener.Close()
-					logging.Infof("builder: go-routine terminates.")
-					return
-				}
+				func() {
+					timer := time.NewTimer(time.Second * 30)
+					defer timer.Stop()
+					select {
+					case <-timer.C:
+					case <-s.manager.killch:
+						s.commandListener.Close()
+						logging.Infof("builder: go-routine terminates.")
+						return
+					}
+				}()
 			}
 
-			buildList, quota := s.getBuildList()
+			if len(s.pendings) > 0 {
+				buildList, quota := s.getBuildList()
 
-			for _, key := range buildList {
-				quota = s.tryBuildIndex(key, quota)
+				for _, key := range buildList {
+					quota = s.tryBuildIndex(key, quota)
+				}
 			}
 
 		case <-s.manager.killch:

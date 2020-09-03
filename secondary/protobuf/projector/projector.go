@@ -242,7 +242,8 @@ func (resp *FailoverLogResponse) ToFailoverLog(vbnos []uint16) couchbase.Failove
 // for `topic`.
 func NewMutationTopicRequest(
 	topic, endpointType string, instances []*Instance,
-	async bool, opaque2 uint64, collectionAware bool) *MutationTopicRequest {
+	async bool, opaque2 uint64, collectionAware bool,
+	enableOSO bool) *MutationTopicRequest {
 
 	return &MutationTopicRequest{
 		Topic:           proto.String(topic),
@@ -253,6 +254,7 @@ func NewMutationTopicRequest(
 		Async:           proto.Bool(async),
 		Opaque2:         proto.Uint64(opaque2),
 		CollectionAware: proto.Bool(collectionAware),
+		OsoSnapshot:     proto.Bool(enableOSO),
 	}
 }
 

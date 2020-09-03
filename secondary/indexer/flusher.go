@@ -94,7 +94,7 @@ func NewFlusher(config common.Config, stats *IndexerStats) *flusher {
 //about shutdown completion.
 func (f *flusher) PersistUptoTS(q MutationQueue, streamId common.StreamId,
 	keyspaceId string, indexInstMap common.IndexInstMap, indexPartnMap IndexPartnMap,
-	ts Timestamp, changeVec []bool, stopch StopChannel) MsgChannel {
+	ts Timestamp, changeVec []bool, countVec []uint64, stopch StopChannel) MsgChannel {
 
 	logging.Verbosef("Flusher::PersistUptoTS %v %v Timestamp: %v PartnMap %v",
 		streamId, keyspaceId, ts, indexPartnMap)
@@ -103,7 +103,7 @@ func (f *flusher) PersistUptoTS(q MutationQueue, streamId common.StreamId,
 	f.indexPartnMap = CopyIndexPartnMap(indexPartnMap)
 
 	msgch := make(MsgChannel)
-	go f.flushQueue(q, streamId, keyspaceId, ts, changeVec, true, stopch, msgch)
+	go f.flushQueue(q, streamId, keyspaceId, ts, changeVec, countVec, true, stopch, msgch)
 	return msgch
 }
 
@@ -121,7 +121,7 @@ func (f *flusher) DrainUptoTS(q MutationQueue, streamId common.StreamId,
 		streamId, keyspaceId, ts)
 
 	msgch := make(MsgChannel)
-	go f.flushQueue(q, streamId, keyspaceId, ts, changeVec, false, stopch, msgch)
+	go f.flushQueue(q, streamId, keyspaceId, ts, changeVec, nil, false, stopch, msgch)
 	return msgch
 }
 
@@ -143,7 +143,7 @@ func (f *flusher) Persist(q MutationQueue, streamId common.StreamId,
 	f.indexPartnMap = CopyIndexPartnMap(indexPartnMap)
 
 	msgch := make(MsgChannel)
-	go f.flushQueue(q, streamId, keyspaceId, nil, nil, true, stopch, msgch)
+	go f.flushQueue(q, streamId, keyspaceId, nil, nil, nil, true, stopch, msgch)
 	return msgch
 }
 
@@ -159,7 +159,7 @@ func (f *flusher) Drain(q MutationQueue, streamId common.StreamId,
 	logging.Verbosef("Flusher::Drain %v %v", streamId, keyspaceId)
 
 	msgch := make(MsgChannel)
-	go f.flushQueue(q, streamId, keyspaceId, nil, nil, false, stopch, msgch)
+	go f.flushQueue(q, streamId, keyspaceId, nil, nil, nil, false, stopch, msgch)
 	return msgch
 }
 
@@ -167,7 +167,7 @@ func (f *flusher) Drain(q MutationQueue, streamId common.StreamId,
 //This function will close the done channel once all workers have finished.
 //It also listens on the stop channel and will stop all workers if stop signal is received.
 func (f *flusher) flushQueue(q MutationQueue, streamId common.StreamId, keyspaceId string,
-	ts Timestamp, changeVec []bool, persist bool, stopch StopChannel, msgch MsgChannel) {
+	ts Timestamp, changeVec []bool, countVec []uint64, persist bool, stopch StopChannel, msgch MsgChannel) {
 
 	var wg sync.WaitGroup
 	var i uint16
@@ -192,8 +192,13 @@ func (f *flusher) flushQueue(q MutationQueue, streamId common.StreamId, keyspace
 				wg.Add(1)
 				stopch := make(StopChannel)
 				workerStopChannels = append(workerStopChannels, stopch)
-				go f.flushSingleVbucketUptoSeqno(q, streamId, keyspaceId, Vbucket(i),
-					ts[i], persist, stopch, workerMsgCh, &wg)
+				if countVec != nil && countVec[i] != 0 {
+					go f.flushSingleVbucketN(q, streamId, keyspaceId, Vbucket(i),
+						countVec[i], persist, stopch, workerMsgCh, &wg)
+				} else {
+					go f.flushSingleVbucketUptoSeqno(q, streamId, keyspaceId, Vbucket(i),
+						ts[i], persist, stopch, workerMsgCh, &wg)
+				}
 			}
 		}
 	}
@@ -294,6 +299,52 @@ func (f *flusher) flushSingleVbucketUptoSeqno(q MutationQueue, streamId common.S
 	})
 
 	mutch, errch, err := q.DequeueUptoSeqno(vbucket, seqno)
+	if err != nil {
+		//TODO
+	}
+
+	ok := true
+	var mut *MutationKeys
+	bucketStats := f.stats.buckets[keyspaceId]
+
+	//Read till the channel is closed by queue indicating it has sent all the
+	//sequence numbers requested
+	for ok {
+		select {
+		case mut, ok = <-mutch:
+			if ok {
+				if !persist {
+					//No persistence is required. Just skip this mutation.
+					continue
+				}
+				f.flushSingleMutation(mut, streamId)
+				mut.Free()
+				if bucketStats != nil {
+					bucketStats.mutationQueueSize.Add(-1)
+				}
+			}
+		case <-errch:
+			workerMsgCh <- &MsgError{}
+			return
+
+		}
+	}
+}
+
+//flushSingleVbucketN is the actual implementation which flushes the given queue
+//for a single vbucket for the specified count or till the stop signal(whichever is earlier)
+func (f *flusher) flushSingleVbucketN(q MutationQueue, streamId common.StreamId,
+	keyspaceId string, vbucket Vbucket, count uint64, persist bool, stopch StopChannel,
+	workerMsgCh MsgChannel, wg *sync.WaitGroup) {
+
+	defer wg.Done()
+
+	logging.LazyTrace(func() string {
+		return fmt.Sprintf("Flusher::flushSingleVbucketUptoSeqno Started worker to flush vbucket: "+
+			"%v Count: %v for Stream: %v KeyspaceId: %v", vbucket, count, streamId, keyspaceId)
+	})
+
+	mutch, errch, err := q.DequeueN(vbucket, count)
 	if err != nil {
 		//TODO
 	}
