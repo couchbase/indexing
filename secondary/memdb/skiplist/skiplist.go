@@ -24,6 +24,7 @@ type FreeFn func(unsafe.Pointer)
 
 type Config struct {
 	ItemSize ItemSizeFn
+	VerifyOrder func(curr, next *Node) bool
 
 	UseMemoryMgmt     bool
 	Malloc            MallocFn
@@ -39,6 +40,9 @@ func DefaultConfig() Config {
 	return Config{
 		ItemSize:      defaultItemSize,
 		UseMemoryMgmt: false,
+		VerifyOrder:   func(curr, next *Node) bool {
+			return true
+		},
 	}
 }
 
