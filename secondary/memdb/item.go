@@ -97,6 +97,14 @@ func (m *MemDB) DecodeItem(ver int, buf []byte, r io.Reader) (*Item, uint32, err
 	return nil, checksum, nil
 }
 
+// Return copy of bytes
+func (itm *Item) BytesCopy() []byte {
+	bs := append([]byte{}, itm.Bytes()...)
+
+	return bs
+}
+
+// Return pointer to bytes
 func (itm *Item) Bytes() (bs []byte) {
 	l := itm.dataLen
 	dataOffset := uintptr(unsafe.Pointer(itm)) + itemHeaderSize

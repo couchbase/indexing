@@ -43,7 +43,8 @@ func (it *Iterator) Valid() bool {
 }
 
 func (it *Iterator) Get() []byte {
-	return (*Item)(it.iter.Get()).Bytes()
+	// Exposed to GSI slice iterator, return copy
+	return (*Item)(it.iter.Get()).BytesCopy()
 }
 
 func (it *Iterator) GetNode() *skiplist.Node {

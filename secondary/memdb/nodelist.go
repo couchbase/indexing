@@ -18,7 +18,9 @@ func NewNodeList(head *skiplist.Node) *NodeList {
 func (l *NodeList) Keys() (keys [][]byte) {
 	node := l.head
 	for node != nil {
-		key := (*Item)(node.Item()).Bytes()
+		// Exposed to GSI slice mutation path, return copy
+		key := (*Item)(node.Item()).BytesCopy()
+
 		keys = append(keys, key)
 		node = node.GetLink()
 	}
