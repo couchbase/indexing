@@ -86,6 +86,7 @@ func hashDocId(entry []byte) uint32 {
 	return crc32.ChecksumIEEE(docIdFromEntryBytes(entry))
 }
 
+// Used to check for equality when there is hash collision in node table.
 func nodeEquality(p unsafe.Pointer, entry []byte) bool {
 	node := (*skiplist.Node)(p)
 	docid1 := docIdFromEntryBytes(entry)
@@ -1278,7 +1279,7 @@ func (mdb *memdbSlice) loadSnapshot(snapInfo *memdbSnapshotInfo) (err error) {
 				defer wg.Done()
 				for entry := range partShardCh[i] {
 					if !mdb.isPrimary {
-						entryBytes := entry.Item().Bytes()
+						entryBytes := entry.Item().BytesCopy()
 						if updated, oldPtr := mdb.back[i].Update(entryBytes, unsafe.Pointer(entry.Node())); updated {
 							oldNode := (*skiplist.Node)(oldPtr)
 							entry.Node().SetLink(oldNode)
