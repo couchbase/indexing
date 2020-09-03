@@ -168,49 +168,25 @@ func getIndexLayout(config common.Config, hosts []string) ([]*IndexerNode, error
 	cinfo.RLock()
 	defer cinfo.RUnlock()
 
-	// Find all nodes that has a index http service
-	// 1) This method will exclude inactive_failed node in the cluster.  But if a node failed after the topology is fetched, then
-	//    the following code could fail (if cannot connect to indexer service).  Note that ns-server will shutdown indexer
-	//    service due to failed over.
-	// 2) For rebalancing, the planner will also skip failed nodes, even if this method succeed.
-	// 3) Note that if the planner is invoked by the rebalancer, the rebalancer will receive callback ns_server if there is
-	//    an indexer node fails over while planning is happening.
-	// 4) This method will exclude inactive_new node in the cluster.
-	// 5) This may include unhealthy node since unhealthiness is not a cluster membership state (need verification).  This
-	//    function can fail if it cannot reach the unhealthy node.
-	//
-	nids := cinfo.GetNodesByServiceType(common.INDEX_HTTP_SERVICE)
-
-	if len(nids) == 0 {
-		return nil, errors.New("No indexing service available.")
-	}
-
 	list := make([]*IndexerNode, 0)
 	numIndexes := 0
 
-	for _, nid := range nids {
+	resp, err := restHelper(getLocalMetadataResp, hosts, cinfo)
+	if err != nil {
+		return nil, err
+	}
+
+	for nid, res := range resp {
+		localMeta := new(LocalIndexMetadata)
+		if err := convertResponse(res, localMeta); err != nil {
+			return nil, err
+		}
 
 		// create an empty indexer object using the indexer host name
 		node, err := createIndexerNode(cinfo, nid)
 		if err != nil {
 			logging.Errorf("Planner::getIndexLayout: Error from initializing indexer node. Error = %v", err)
 			return nil, err
-		}
-
-		// If a host list is given, then only consider those hosts.  For planning, this is to
-		// ensure that planner only consider those nodes that have acquired locks.
-		if len(hosts) != 0 {
-			found := false
-			for _, host := range hosts {
-				if strings.ToLower(host) == strings.ToLower(node.NodeId) {
-					found = true
-				}
-			}
-
-			if !found {
-				logging.Infof("Planner:Skip node %v since it is not in the given host list %v", node.NodeId, hosts)
-				continue
-			}
 		}
 
 		// assign server group
@@ -223,13 +199,6 @@ func getIndexLayout(config common.Config, hosts []string) ([]*IndexerNode, error
 			return nil, err
 		}
 		node.RestUrl = addr
-
-		// Read the index metadata from the indexer node.
-		localMeta, err := getLocalMetadata(addr)
-		if err != nil {
-			logging.Errorf("Planner::getIndexLayout: Error from reading index metadata for node %v. Error = %v", node.NodeId, err)
-			return nil, err
-		}
 
 		// get the node UUID
 		node.NodeUUID = localMeta.NodeUUID
@@ -960,6 +929,19 @@ func getLocalMetadata(addr string) (*LocalIndexMetadata, error) {
 }
 
 //
+// This function gets the marshalled metadata for a specific indexer host.
+//
+func getLocalMetadataResp(addr string) (*http.Response, error) {
+
+	resp, err := getWithCbauth(addr + "/getLocalIndexMetadata")
+	if err != nil {
+		return nil, err
+	}
+
+	return resp, nil
+}
+
+//
 // This function gets the indexer stats for a specific indexer host.
 //
 func getLocalStats(addr string) (*common.Statistics, error) {
@@ -1614,4 +1596,105 @@ func generateReplicaMap(indexers []*IndexerNode) map[common.IndexDefnId]map[int]
 	}
 
 	return result
+}
+
+//
+// Helper function for sending REST requests in parallel to indexer nodes.
+// This function assumes that the cinfoClient is already initialised and
+// the latest information is fetched. All the callers use the same cache.
+//
+// IMP: Note that the callers of this function should hold cinfo lock
+//
+func restHelper(rest func(string) (*http.Response, error), hosts []string,
+	cinfo *common.ClusterInfoCache) (map[common.NodeId]*http.Response, error) {
+
+	// Find all nodes that has a index http service
+	// 1) This method will exclude inactive_failed node in the cluster.  But if a node failed after the topology is fetched, then
+	//    the following code could fail (if cannot connect to indexer service).  Note that ns-server will shutdown indexer
+	//    service due to failed over.
+	// 2) For rebalancing, the planner will also skip failed nodes, even if this method succeed.
+	// 3) Note that if the planner is invoked by the rebalancer, the rebalancer will receive callback ns_server if there is
+	//    an indexer node fails over while planning is happening.
+	// 4) This method will exclude inactive_new node in the cluster.
+	// 5) This may include unhealthy node since unhealthiness is not a cluster membership state (need verification).  This
+	//    function can fail if it cannot reach the unhealthy node.
+	//
+	nodes := cinfo.GetNodesByServiceType(common.INDEX_HTTP_SERVICE)
+
+	if len(nodes) == 0 {
+		return nil, errors.New("No indexing service available.")
+	}
+
+	var nids []common.NodeId
+	if len(hosts) != 0 {
+		nids = make([]common.NodeId, 0)
+		for _, nid := range nodes {
+			nodeId, err := getIndexerHost(cinfo, nid)
+			if err != nil {
+				return nil, err
+			}
+
+			found := false
+			for _, host := range hosts {
+				if strings.ToLower(host) == strings.ToLower(nodeId) {
+					found = true
+				}
+			}
+
+			if !found {
+				logging.Infof("Planner:Skip node %v since it is not in the given host list %v", nodeId, hosts)
+				continue
+			}
+
+			nids = append(nids, nid)
+		}
+	} else {
+		nids = nodes
+	}
+
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
+	errMap := make(map[common.NodeId]error)
+	respMap := make(map[common.NodeId]*http.Response)
+
+	for _, nid := range nids {
+		// obtain the admin port for the indexer node
+		addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE)
+		if err != nil {
+			logging.Errorf("Planner::restHelper: Error from getting service address for node %v. Error = %v", nid, err)
+			return nil, err
+		}
+
+		restCall := func(nid common.NodeId, addr string) {
+			defer wg.Done()
+			resp, err := rest(addr)
+
+			mu.Lock()
+			defer mu.Unlock()
+
+			if err != nil {
+				errMap[nid] = err
+				respMap[nid] = nil
+			} else {
+				respMap[nid] = resp
+			}
+		}
+
+		wg.Add(1)
+		go restCall(nid, addr)
+	}
+
+	wg.Wait()
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if len(errMap) != 0 {
+		for _, err := range errMap {
+			return nil, err
+		}
+	}
+
+	return respMap, nil
 }
