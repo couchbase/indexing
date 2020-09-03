@@ -2735,12 +2735,13 @@ func (s *schedTokenMonitor) clenseIndexes(indexes []*IndexStatus,
 
 	newIndexes := make([]*IndexStatus, 0, len(indexes))
 	for _, idx := range indexes {
-		path := fmt.Sprintf("%v", idx.DefnId)
+		path := mc.GetScheduleCreateTokenPathFromDefnId(idx.DefnId)
 
 		if _, ok := delPaths[path]; ok {
 			continue
 		}
 
+		path = mc.GetStopScheduleCreateTokenPathFromDefnId(idx.DefnId)
 		if _, ok := stopTokens[path]; ok {
 			if idx.Status != "Error" {
 				continue
