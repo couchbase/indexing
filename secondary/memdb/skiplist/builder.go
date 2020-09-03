@@ -67,6 +67,10 @@ func (b *Builder) Assemble(segments ...*Segment) *Skiplist {
 	for _, seg := range segments {
 		for l := 0; l <= MaxLevel; l++ {
 			if tail[l] != nil && seg.head[l] != nil {
+				if !b.store.VerifyOrder(tail[l], seg.head[l]) {
+					return nil
+				}
+
 				tail[l].setNext(l, seg.head[l], false)
 			} else if head[l] == nil && seg.head[l] != nil {
 				head[l] = seg.head[l]
