@@ -484,7 +484,7 @@ func (m *requestHandlerContext) getIndex(r *http.Request) string {
 func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, t *target, getAll bool) ([]IndexStatus, []string, error) {
 
 	var cinfo *common.ClusterInfoCache
-	cinfo = m.mgr.cinfoClient.GetClusterInfoCache()
+	cinfo = m.mgr.reqcic.GetClusterInfoCache()
 
 	if cinfo == nil {
 		return nil, nil, errors.New("ClusterInfoCache unavailable in IndexManager")
@@ -2377,11 +2377,14 @@ func (m *requestHandlerContext) validateScheduleCreateRequst(req *client.Schedul
 
 func (m *requestHandlerContext) isEphemeral(bucket string) (bool, error) {
 	var cinfo *common.ClusterInfoCache
-	cinfo = m.mgr.cinfoClient.GetClusterInfoCache()
+	cinfo = m.mgr.reqcic.GetClusterInfoCache()
 
 	if cinfo == nil {
 		return false, errors.New("ClusterInfoCache unavailable in IndexManager")
 	}
+
+	cinfo.RLock()
+	defer cinfo.RUnlock()
 
 	return cinfo.IsEphemeral(bucket)
 }
@@ -2515,7 +2518,7 @@ func newSchedTokenMonitor(mgr *IndexManager) *schedTokenMonitor {
 
 	s.listener.ListenTokens()
 
-	cinfo := s.mgr.cinfoClient.GetClusterInfoCache()
+	cinfo := s.mgr.reqcic.GetClusterInfoCache()
 	if cinfo == nil {
 		logging.Fatalf("newSchedTokenMonitor: ClusterInfoCache unavailable")
 		return s
@@ -2528,7 +2531,7 @@ func newSchedTokenMonitor(mgr *IndexManager) *schedTokenMonitor {
 func (s *schedTokenMonitor) makeIndexStatus(token *mc.ScheduleCreateToken) *IndexStatus {
 
 	if s.cinfo == nil {
-		s.cinfo = s.mgr.cinfoClient.GetClusterInfoCache()
+		s.cinfo = s.mgr.reqcic.GetClusterInfoCache()
 		if s.cinfo == nil {
 			logging.Fatalf("schedTokenMonitor:makeIndexStatus ClusterInfoCache unavailable")
 			return nil

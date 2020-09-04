@@ -39,6 +39,7 @@ type IndexManager struct {
 	eventMgr      *eventManager
 	lifecycleMgr  *LifecycleMgr
 	cinfoClient   *common.ClusterInfoClient
+	reqcic        *common.ClusterInfoClient
 	requestServer RequestServer
 	basepath      string
 	quota         uint64
@@ -145,6 +146,7 @@ func NewIndexManagerInternal(config common.Config, storageMode common.StorageMod
 	}
 
 	mgr.clusterURL = config["clusterAddr"].String()
+
 	cic, err := common.NewClusterInfoClient(mgr.clusterURL, common.DEFAULT_POOL, config)
 	if err != nil {
 		mgr.Close()
@@ -152,6 +154,15 @@ func NewIndexManagerInternal(config common.Config, storageMode common.StorageMod
 	}
 	mgr.cinfoClient = cic
 	mgr.cinfoClient.SetUserAgent("IndexMgr")
+
+	// Another ClusterInfoClient for RequestHandler to avoid waiting due to locks of cinfoClient.
+	reqcic, err := common.NewClusterInfoClient(mgr.clusterURL, common.DEFAULT_POOL, config)
+	if err != nil {
+		mgr.Close()
+		return nil, err
+	}
+	mgr.reqcic = reqcic
+	mgr.reqcic.SetUserAgent("IndexRequestHandler")
 
 	// Initialize LifecycleMgr.
 	lifecycleMgr, err := NewLifecycleMgr(nil, mgr.clusterURL)
@@ -290,6 +301,10 @@ func (m *IndexManager) Close() {
 
 	if m.cinfoClient != nil {
 		m.cinfoClient.Close()
+	}
+
+	if m.reqcic != nil {
+		m.reqcic.Close()
 	}
 
 	if m.monitorKillch != nil {
