@@ -2817,9 +2817,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.build.enableOSO": ConfigValue{
-		false,
+		true,
 		"Use OSO mode for Initial Index Build",
-		false,
+		true,
 		false, // mutable
 		false, // case-insensitive
 	},
