@@ -1092,7 +1092,8 @@ func (s *storageMgr) handleGetIndexStorageStats(cmd Message) {
 	s.supvCmdch <- &MsgSuccess{}
 	req := cmd.(*MsgIndexStorageStats)
 	replych := req.GetReplyChannel()
-	stats := s.getIndexStorageStats()
+	spec := req.GetStatsSpec()
+	stats := s.getIndexStorageStats(spec)
 	replych <- stats
 }
 
@@ -1101,7 +1102,7 @@ func (s *storageMgr) handleStats(cmd Message) {
 
 	req := cmd.(*MsgStatsRequest)
 	replych := req.GetReplyChannel()
-	storageStats := s.getIndexStorageStats()
+	storageStats := s.getIndexStorageStats(nil)
 
 	stats := s.stats.Get()
 	for _, st := range storageStats {
@@ -1161,14 +1162,31 @@ func (s *storageMgr) handleStats(cmd Message) {
 	replych <- true
 }
 
-func (s *storageMgr) getIndexStorageStats() []IndexStorageStats {
+func (s *storageMgr) getIndexStorageStats(spec *statsSpec) []IndexStorageStats {
 	var stats []IndexStorageStats
 	var err error
 	var sts StorageStatistics
 
 	doPrepare := true
 
+	instIDMap := make(map[common.IndexInstId]bool)
+	if spec != nil && spec.indexSpec != nil && len(spec.indexSpec.GetInstances()) > 0 {
+		insts := spec.indexSpec.GetInstances()
+		for _, instId := range insts {
+			instIDMap[instId] = true
+		}
+	}
+
 	for idxInstId, partnMap := range s.indexPartnMap {
+
+		// If list of instances are specified in the request and the current
+		// instance does not match the instance specified in request, do not
+		// process storage statistics for that instance
+		if len(instIDMap) > 0 {
+			if _, ok := instIDMap[idxInstId]; !ok {
+				continue
+			}
+		}
 
 		inst, ok := s.indexInstMap[idxInstId]
 		//skip deleted indexes

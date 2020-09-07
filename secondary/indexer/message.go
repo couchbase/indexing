@@ -1761,6 +1761,7 @@ func (m *MsgUpdateSnapMap) GetKeyspaceId() string {
 
 type MsgIndexStorageStats struct {
 	respch chan []IndexStorageStats
+	spec   *statsSpec
 }
 
 func (m *MsgIndexStorageStats) GetMsgType() MsgType {
@@ -1769,6 +1770,10 @@ func (m *MsgIndexStorageStats) GetMsgType() MsgType {
 
 func (m *MsgIndexStorageStats) GetReplyChannel() chan []IndexStorageStats {
 	return m.respch
+}
+
+func (m *MsgIndexStorageStats) GetStatsSpec() *statsSpec {
+	return m.spec
 }
 
 type MsgStatsRequest struct {
