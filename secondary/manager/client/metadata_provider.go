@@ -2451,7 +2451,7 @@ RETRY1:
 		}
 	}
 
-	if errCode != 0 && count < 20 && !o.AllWatchersAlive() {
+	if errCode != 0 && count < 50 && !o.AllWatchersAlive() {
 		logging.Debugf("MetadataProvider:findWatcherWithRetry(): cannot find available watcher. Retrying ...")
 		time.Sleep(time.Duration(500) * time.Millisecond)
 		count++

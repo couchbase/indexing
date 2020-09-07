@@ -64,6 +64,9 @@ var ErrDuplicateCreateToken = errors.New("Duplicate index is already scheduled f
 var ErrIndexerNotAvailable = errors.New("Fails to create index.  There is no available index service that can process this request at this time.")
 var ErrNotEnoughIndexers = errors.New("Fails to create index.  There are not enough indexer nodes to create index with replica")
 var ErrIndexerConnection = errors.New("Unable to connect to all indexer nodes")
+var ErrBucketUUIDChanged = errors.New("Bucket UUID has changed. Bucket may have been dropped and recreated.")
+var ErrScopeIdChanged = errors.New("ScopeId has changed. Scope may have been dropped and recreated.")
+var ErrCollectionIdChanged = errors.New("CollectionId has changed. Collection may have been dropped and recreated.")
 
 var NonRetryableErrorsInCreate = []error{
 	ErrDuplicateIndex,
@@ -72,6 +75,9 @@ var NonRetryableErrorsInCreate = []error{
 	ErrScopeNotFound,
 	ErrCollectionNotFound,
 	ErrDuplicateCreateToken,
+	ErrBucketUUIDChanged,
+	ErrScopeIdChanged,
+	ErrCollectionIdChanged,
 }
 
 var RetryableErrorsInCreate = []error{
@@ -81,6 +87,15 @@ var RetryableErrorsInCreate = []error{
 	ErrIndexerNotAvailable,
 	ErrNotEnoughIndexers,
 	ErrIndexerConnection,
+}
+
+var KeyspaceDeletedErrorsInCreate = []error{
+	ErrBucketNotFound,
+	ErrScopeNotFound,
+	ErrCollectionNotFound,
+	ErrBucketUUIDChanged,
+	ErrScopeIdChanged,
+	ErrCollectionIdChanged,
 }
 
 const INDEXER_45_VERSION = 1

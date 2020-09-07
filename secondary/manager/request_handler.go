@@ -140,6 +140,10 @@ type IndexStatus struct {
 
 type indexStatusSorter []IndexStatus
 
+type permissionsCache struct {
+	permissions map[string]bool
+}
+
 //
 // Response
 //
@@ -501,6 +505,7 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, t *target, ge
 
 	defnToHostMap := make(map[common.IndexDefnId][]string)
 	isInstanceDeferred := make(map[common.IndexInstId]bool)
+	permissionCache := initPermissionsCache()
 
 	mergeCounter := func(defnId common.IndexDefnId, counter common.Counter) {
 		if current, ok := numReplicas[defnId]; ok {
@@ -606,8 +611,8 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, t *target, ge
 					continue
 				}
 
-				permission := fmt.Sprintf("cluster.collection[%s:%s:%s].n1ql.index!list", defn.Bucket, defn.Scope, defn.Collection)
-				if !isAllowed(creds, []string{permission}, nil) {
+				accessAllowed := permissionCache.isAllowed(creds, defn.Bucket, defn.Scope, defn.Collection)
+				if !accessAllowed {
 					continue
 				}
 
@@ -983,6 +988,8 @@ func (m *requestHandlerContext) getIndexMetadata(creds cbauth.Creds, t *target) 
 		return nil, err
 	}
 
+	permissionsCache := initPermissionsCache()
+
 	// find all nodes that has a index http service
 	nids := cinfo.GetNodesByServiceType(common.INDEX_HTTP_SERVICE)
 
@@ -1027,16 +1034,13 @@ func (m *requestHandlerContext) getIndexMetadata(creds cbauth.Creds, t *target) 
 			}
 
 			for _, topology := range localMeta.IndexTopologies {
-				permission := fmt.Sprintf("cluster.collection[%s:%s:%s].n1ql.index!list", topology.Bucket, topology.Scope, topology.Collection)
-				if isAllowed(creds, []string{permission}, nil) {
+				if permissionsCache.isAllowed(creds, topology.Bucket, topology.Scope, topology.Collection) {
 					newLocalMeta.IndexTopologies = append(newLocalMeta.IndexTopologies, topology)
 				}
 			}
 
 			for _, defn := range localMeta.IndexDefinitions {
-				// TODO: Update RBAC permissions
-				permission := fmt.Sprintf("cluster.collection[%s:%s:%s].n1ql.index!list", defn.Bucket, defn.Scope, defn.Collection)
-				if isAllowed(creds, []string{permission}, nil) {
+				if permissionsCache.isAllowed(creds, defn.Bucket, defn.Scope, defn.Collection) {
 					newLocalMeta.IndexDefinitions = append(newLocalMeta.IndexDefinitions, defn)
 				}
 			}
@@ -1156,6 +1160,7 @@ func (m *requestHandlerContext) handleLocalIndexMetadataRequest(w http.ResponseW
 func (m *requestHandlerContext) getLocalIndexMetadata(creds cbauth.Creds, t *target) (meta *LocalIndexMetadata, err error) {
 
 	repo := m.mgr.getMetadataRepo()
+	permissionsCache := initPermissionsCache()
 
 	meta = &LocalIndexMetadata{IndexTopologies: nil, IndexDefinitions: nil}
 	indexerId, err := repo.GetLocalIndexerId()
@@ -1189,8 +1194,7 @@ func (m *requestHandlerContext) getLocalIndexMetadata(creds cbauth.Creds, t *tar
 	_, defn, err = iter.Next()
 	for err == nil {
 		if shouldProcess(t, defn.Bucket, defn.Scope, defn.Collection, defn.Name) {
-			permission := fmt.Sprintf("cluster.collection[%s:%s:%s].n1ql.index!list", defn.Bucket, defn.Scope, defn.Collection)
-			if isAllowed(creds, []string{permission}, nil) {
+			if permissionsCache.isAllowed(creds, defn.Bucket, defn.Scope, defn.Collection) {
 				meta.IndexDefinitions = append(meta.IndexDefinitions, *defn)
 			}
 		}
@@ -1208,8 +1212,7 @@ func (m *requestHandlerContext) getLocalIndexMetadata(creds cbauth.Creds, t *tar
 	for err == nil {
 		// Specify empty index name in shouldProcess as indexLevel metadata requests are not supported
 		if shouldProcess(t, topology.Bucket, topology.Scope, topology.Collection, "") {
-			permission := fmt.Sprintf("cluster.collection[%s:%s:%s].n1ql.index!list", topology.Bucket, topology.Scope, topology.Collection)
-			if isAllowed(creds, []string{permission}, nil) {
+			if permissionsCache.isAllowed(creds, topology.Bucket, topology.Scope, topology.Collection) {
 				meta.IndexTopologies = append(meta.IndexTopologies, *topology)
 			}
 		}
@@ -1238,6 +1241,56 @@ func shouldProcess(t *target, defnBucket, defnScope, defnColl, defnName string) 
 	return false
 }
 
+func initPermissionsCache() *permissionsCache {
+	p := &permissionsCache{}
+	p.permissions = make(map[string]bool)
+	return p
+}
+
+func (p *permissionsCache) isAllowed(creds cbauth.Creds, bucket, scope, collection string) bool {
+
+	checkAndAddBucketLevelPermission := func(bucket string) bool {
+		if bucketLevelPermission, ok := p.permissions[bucket]; ok {
+			return bucketLevelPermission
+		} else {
+			permission := fmt.Sprintf("cluster.bucket[%s].n1ql.index!list", bucket)
+			p.permissions[bucket] = isAllowed(creds, []string{permission}, nil)
+			return p.permissions[bucket]
+		}
+	}
+
+	checkAndAddScopeLevelPermission := func(bucket, scope string) bool {
+		scopeLevel := fmt.Sprintf("%s:%s", bucket, scope)
+		if scopeLevelPermission, ok := p.permissions[scopeLevel]; ok {
+			return scopeLevelPermission
+		} else {
+			permission := fmt.Sprintf("cluster.scope[%s].n1ql.index!list", scopeLevel)
+			p.permissions[scopeLevel] = isAllowed(creds, []string{permission}, nil)
+			return p.permissions[scopeLevel]
+		}
+	}
+
+	checkAndAddCollectionLevelPermission := func(bucket, scope, collection string) bool {
+		collectionLevel := fmt.Sprintf("%s:%s:%s", bucket, scope, collection)
+		if collectionLevelPermission, ok := p.permissions[collectionLevel]; ok {
+			return collectionLevelPermission
+		} else {
+			permission := fmt.Sprintf("cluster.collection[%s].n1ql.index!list", collectionLevel)
+			p.permissions[collectionLevel] = isAllowed(creds, []string{permission}, nil)
+			return p.permissions[collectionLevel]
+		}
+	}
+
+	if checkAndAddBucketLevelPermission(bucket) {
+		return true
+	} else if checkAndAddScopeLevelPermission(bucket, scope) {
+		return true
+	} else if checkAndAddCollectionLevelPermission(bucket, scope, collection) {
+		return true
+	}
+	return false
+}
+
 ///////////////////////////////////////////////////////
 // Cached LocalIndexMetadata and Stats
 ///////////////////////////////////////////////////////
@@ -1249,6 +1302,7 @@ func (m *requestHandlerContext) handleCachedLocalIndexMetadataRequest(w http.Res
 		return
 	}
 
+	permissionsCache := initPermissionsCache()
 	host := r.FormValue("host")
 	host = strings.Trim(host, "\"")
 
@@ -1259,15 +1313,13 @@ func (m *requestHandlerContext) handleCachedLocalIndexMetadataRequest(w http.Res
 		newMeta.IndexTopologies = make([]IndexTopology, 0, len(meta.IndexTopologies))
 
 		for _, defn := range meta.IndexDefinitions {
-			permission := fmt.Sprintf("cluster.collection[%s:%s:%s].n1ql.index!list", defn.Bucket, defn.Scope, defn.Collection)
-			if isAllowed(creds, []string{permission}, nil) {
+			if permissionsCache.isAllowed(creds, defn.Bucket, defn.Scope, defn.Collection) {
 				newMeta.IndexDefinitions = append(newMeta.IndexDefinitions, defn)
 			}
 		}
 
 		for _, topology := range meta.IndexTopologies {
-			permission := fmt.Sprintf("cluster.collection[%s:%s:%s].n1ql.index!list", topology.Bucket, topology.Scope, topology.Collection)
-			if isAllowed(creds, []string{permission}, nil) {
+			if permissionsCache.isAllowed(creds, topology.Bucket, topology.Scope, topology.Collection) {
 				newMeta.IndexTopologies = append(newMeta.IndexTopologies, topology)
 			}
 		}
@@ -1320,6 +1372,7 @@ func (m *requestHandlerContext) handleRestoreIndexMetadataRequest(w http.Respons
 		return
 	}
 
+	permissionsCache := initPermissionsCache()
 	// convert backup image into runtime data structure
 	image := m.convertIndexMetadataRequest(r)
 	if image == nil {
@@ -1329,15 +1382,13 @@ func (m *requestHandlerContext) handleRestoreIndexMetadataRequest(w http.Respons
 
 	for _, localMeta := range image.Metadata {
 		for _, topology := range localMeta.IndexTopologies {
-			permission := fmt.Sprintf("cluster.collection[%s:%s:%s].n1ql.index!create", topology.Bucket, topology.Scope, topology.Collection)
-			if !isAllowed(creds, []string{permission}, w) {
+			if !permissionsCache.isAllowed(creds, topology.Bucket, topology.Scope, topology.Collection) {
 				return
 			}
 		}
 
 		for _, defn := range localMeta.IndexDefinitions {
-			permission := fmt.Sprintf("cluster.collection[%s:%s:%s].n1ql.index!create", defn.Bucket, defn.Scope, defn.Collection)
-			if !isAllowed(creds, []string{permission}, w) {
+			if !permissionsCache.isAllowed(creds, defn.Bucket, defn.Scope, defn.Collection) {
 				return
 			}
 		}
@@ -1570,17 +1621,12 @@ func (m *requestHandlerContext) getLocalReplicaCount(creds cbauth.Creds) (map[co
 	defer iter.Close()
 
 	var defn *common.IndexDefn
-	permissions := make(map[string]bool)
+	permissionsCache := initPermissionsCache()
 
 	_, defn, err = iter.Next()
 	for err == nil {
-		keyspace := fmt.Sprintf("%s:%s:%s", defn.Bucket, defn.Scope, defn.Collection)
-		if _, ok := permissions[keyspace]; !ok {
-			permission := fmt.Sprintf("cluster.collection[%s].n1ql.index!list", keyspace)
-			if !isAllowed(creds, []string{permission}, nil) {
-				return nil, fmt.Errorf("Permission denied on reading metadata for keyspace %v", keyspace)
-			}
-			permissions[keyspace] = true
+		if !permissionsCache.isAllowed(creds, defn.Bucket, defn.Scope, defn.Collection) {
+			return nil, fmt.Errorf("Permission denied on reading metadata for keyspace %v:%v:%v", defn.Bucket, defn.Scope, defn.Collection)
 		}
 
 		var numReplica *common.Counter

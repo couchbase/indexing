@@ -1321,7 +1321,7 @@ func (m *LifecycleMgr) setBucketUUID(defn *common.IndexDefn) error {
 	}
 
 	if len(defn.BucketUUID) != 0 && defn.BucketUUID != bucketUUID {
-		return fmt.Errorf("Bucket UUID has changed. Bucket may have been dropped and recreated.")
+		return common.ErrBucketUUIDChanged
 	}
 
 	defn.BucketUUID = bucketUUID
@@ -1368,11 +1368,11 @@ func (m *LifecycleMgr) setScopeIdAndCollectionId(defn *common.IndexDefn) error {
 	}
 
 	if len(defn.ScopeId) != 0 && defn.ScopeId != scopeId {
-		return fmt.Errorf("ScopeId has changed. Scope may have been dropped and recreated.")
+		return common.ErrScopeIdChanged
 	}
 
 	if len(defn.CollectionId) != 0 && defn.CollectionId != collectionID {
-		return fmt.Errorf("CollectionId has changed. Collection may have been dropped and recreated.")
+		return common.ErrCollectionIdChanged
 	}
 
 	defn.ScopeId = scopeId
