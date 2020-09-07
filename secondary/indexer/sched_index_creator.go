@@ -23,6 +23,7 @@ var SCHED_TOKEN_PROCESS_INTERVAL = 5000 // Milliseconds
 var STOP_TOKEN_CLEANER_INITERVAL = 60   // Seconds
 var TOKEN_MOVER_INTERVAL = 60           // Seconds
 var STOP_TOKEN_RETENTION_TIME = 600     // Seconds
+var SCHED_PROCESS_INIT_INTERVAL = 60    // Seconds
 
 var RETRYABLE_ERROR_BACKOFF = int64(5 * time.Second)
 var NON_RETRYABLE_ERROR_BACKOFF = int64(5 * time.Second)
@@ -262,9 +263,10 @@ func (m *schedIndexCreator) rebalanceDone() {
 	// TODO: Need to check if provider needs to be reset.
 }
 
-// TODO: Integrate with rebalance start / finish
-
 func (m *schedIndexCreator) processSchedIndexes() {
+
+	// Sleep for some time before starting.
+	time.Sleep(time.Duration(SCHED_PROCESS_INIT_INTERVAL) * time.Second)
 
 	// Check for new indexes to be created every 5 seconds
 	ticker := time.NewTicker(time.Duration(SCHED_TOKEN_PROCESS_INTERVAL) * time.Millisecond)
@@ -539,6 +541,9 @@ func (m *schedIndexCreator) popQ() *scheduledIndex {
 }
 
 func (m *schedIndexCreator) stopTokenCleaner() {
+	// Sleep for some time before starting.
+	time.Sleep(time.Duration(SCHED_PROCESS_INIT_INTERVAL) * time.Second)
+
 	ticker := time.NewTicker(time.Duration(STOP_TOKEN_CLEANER_INITERVAL) * time.Second)
 	retention := int64(STOP_TOKEN_RETENTION_TIME) * int64(time.Second)
 
@@ -586,6 +591,9 @@ func (m *schedIndexCreator) stopTokenCleaner() {
 // responsible for not letting any tokens remain orphan for a long time.
 //
 func (m *schedIndexCreator) orphanTokenMover() {
+	// Sleep for some time before starting.
+	time.Sleep(time.Duration(SCHED_PROCESS_INIT_INTERVAL) * time.Second)
+
 	ticker := time.NewTicker(time.Duration(TOKEN_MOVER_INTERVAL) * time.Second)
 
 	cfg := m.config.Load()
@@ -764,6 +772,9 @@ func (s *schedTokenMonitor) update() {
 }
 
 func (s *schedTokenMonitor) updater() {
+	// Sleep for some time before starting.
+	time.Sleep(time.Duration(SCHED_PROCESS_INIT_INTERVAL) * time.Second)
+
 	s.commandListener.ListenTokens()
 
 	ticker := time.NewTicker(time.Duration(SCHED_TOKEN_CHECK_INTERVAL) * time.Millisecond)
