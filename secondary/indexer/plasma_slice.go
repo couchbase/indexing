@@ -2071,7 +2071,7 @@ func (mdb *plasmaSlice) Statistics(consumerFilter uint64) (StorageStatistics, er
 	mainStoreStatsLoggingEnabled := false
 	backStoreStatsLoggingEnabled := false
 
-	if pStats.StatsLoggingEnabled {
+	if pStats.StatsLoggingEnabled || (consumerFilter == statsMgmt.AllStatsFilter) {
 		mainStoreStatsLoggingEnabled = true
 		internalData = append(internalData, fmt.Sprintf("{\n\"MainStore\":\n%s", pStats))
 	}
@@ -2082,10 +2082,9 @@ func (mdb *plasmaSlice) Statistics(consumerFilter uint64) (StorageStatistics, er
 		sts.MemUsed += pStats.MemSz + pStats.MemSzIndex
 		if pStats.StatsLoggingEnabled {
 			backStoreStatsLoggingEnabled = true
-			if mainStoreStatsLoggingEnabled {
+			if mainStoreStatsLoggingEnabled || (consumerFilter == statsMgmt.AllStatsFilter) {
 				internalData = append(internalData, fmt.Sprintf(",\n\"BackStore\":\n%s", pStats))
 			} else {
-				logging.Warnf("PlasmaSlice::Statistics Mainstore logging disbaled for instance: %v", mdb.IndexInstId)
 				internalData = append(internalData, fmt.Sprintf("{\n\"BackStore\":\n%s", pStats))
 			}
 		}
