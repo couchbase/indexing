@@ -1232,7 +1232,7 @@ func (c *GsiClient) StorageStatistics(defnID uint64, requestId string) ([]map[st
 		for _, qp := range queryports {
 			for _, n := range nodes {
 				if qp == n.Queryport {
-					url := "http://" + n.Httpport + "/stats/storage"
+					url := "http://" + n.Httpport + "/stats/storage?consumerFilter=n1qlStorageStats"
 					statUrls = append(statUrls, url)
 				}
 			}

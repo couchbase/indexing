@@ -34,6 +34,7 @@ import (
 	"github.com/couchbase/indexing/secondary/memdb"
 	"github.com/couchbase/indexing/secondary/memdb/nodetable"
 	"github.com/couchbase/indexing/secondary/memdb/skiplist"
+	statsMgmt "github.com/couchbase/indexing/secondary/stats"
 	"github.com/couchbase/indexing/secondary/stubs/nitro/mm"
 )
 
@@ -1533,10 +1534,16 @@ func (mdb *memdbSlice) Compact(abortTime time.Time, minFrag int) error {
 func (mdb *memdbSlice) PrepareStats() {
 }
 
-func (mdb *memdbSlice) Statistics() (StorageStatistics, error) {
+func (mdb *memdbSlice) Statistics(consumerFilter uint64) (StorageStatistics, error) {
+
+	if consumerFilter == statsMgmt.N1QLStorageStatsFilter {
+		return mdb.handleN1QLStorageStatistics()
+	}
+
 	var sts StorageStatistics
 
 	var internalData []string
+
 	var ntMemUsed int64
 
 	itemsCount := mdb.mainstore.ItemsCount()
@@ -1573,6 +1580,17 @@ func (mdb *memdbSlice) Statistics() (StorageStatistics, error) {
 	// and for MOI it's always 100%. So an approximate number is fine as numRecsOnDisk will always be 0
 	mdb.idxStats.numRecsInMem.Set(itemsCount)
 
+	return sts, nil
+}
+
+func (mdb *memdbSlice) handleN1QLStorageStatistics() (StorageStatistics, error) {
+	var sts StorageStatistics
+	internalData := fmt.Sprintf("{\n"+
+		"\"items_count\":%v,\n"+
+		"\"data_size\":%v\n}",
+		mdb.mainstore.MemoryInUse(),
+		mdb.mainstore.ItemsCount())
+	sts.InternalData = []string{internalData}
 	return sts, nil
 }
 

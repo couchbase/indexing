@@ -1177,6 +1177,11 @@ func (s *storageMgr) getIndexStorageStats(spec *statsSpec) []IndexStorageStats {
 		}
 	}
 
+	var consumerFilter uint64
+	if spec != nil {
+		consumerFilter = spec.consumerFilter
+	}
+
 	for idxInstId, partnMap := range s.indexPartnMap {
 
 		// If list of instances are specified in the request and the current
@@ -1211,7 +1216,7 @@ func (s *storageMgr) getIndexStorageStats(spec *statsSpec) []IndexStorageStats {
 					doPrepare = false
 				}
 
-				sts, err = slice.Statistics()
+				sts, err = slice.Statistics(consumerFilter)
 				if err != nil {
 					break
 				}

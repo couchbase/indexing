@@ -2164,10 +2164,11 @@ func (spec *statsSpec) OverrideFilter(filt string) {
 }
 
 var statsFilterMap = map[string]uint64{
-	"planner":     stats.PlannerFilter,
-	"indexStatus": stats.IndexStatusFilter,
-	"rebalancer":  stats.RebalancerFilter,
-	"gsiClient":   stats.GSIClientFilter,
+	"planner":          stats.PlannerFilter,
+	"indexStatus":      stats.IndexStatusFilter,
+	"rebalancer":       stats.RebalancerFilter,
+	"gsiClient":        stats.GSIClientFilter,
+	"n1qlStorageStats": stats.N1QLStorageStatsFilter,
 }
 
 const ST_TYPE_INDEXER = "indexer"
@@ -2565,6 +2566,8 @@ func (s *statsManager) handleStorageStatsReq(w http.ResponseWriter, r *http.Requ
 
 		stats := s.stats.Get()
 
+		consumerFilter := r.URL.Query().Get("consumerFilter")
+
 		var indexSpec *common.StatsIndexSpec
 		if r.ContentLength != 0 || r.Body != nil {
 
@@ -2587,6 +2590,9 @@ func (s *statsManager) handleStorageStatsReq(w http.ResponseWriter, r *http.Requ
 		}
 
 		spec := NewStatsSpec(false, false, false, false, false, indexSpec)
+		if consumerFilter != "" {
+			spec.OverrideFilter(consumerFilter)
+		}
 
 		if common.IndexerState(stats.indexerState.Value()) != common.INDEXER_BOOTSTRAP {
 			w.WriteHeader(200)

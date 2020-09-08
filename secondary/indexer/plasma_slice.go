@@ -29,6 +29,7 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/common/queryutil"
 	"github.com/couchbase/indexing/secondary/logging"
+	statsMgmt "github.com/couchbase/indexing/secondary/stats"
 	"github.com/couchbase/plasma"
 )
 
@@ -2042,7 +2043,12 @@ func (mdb *plasmaSlice) PrepareStats() {
 	plasma.PrepareStats()
 }
 
-func (mdb *plasmaSlice) Statistics() (StorageStatistics, error) {
+func (mdb *plasmaSlice) Statistics(consumerFilter uint64) (StorageStatistics, error) {
+
+	if consumerFilter == statsMgmt.N1QLStorageStatsFilter {
+		return mdb.handleN1QLStorageStatistics()
+	}
+
 	var sts StorageStatistics
 
 	var internalData []string
@@ -2116,6 +2122,38 @@ func (mdb *plasmaSlice) Statistics() (StorageStatistics, error) {
 	mdb.idxStats.cacheMisses.Set(cacheMiss)
 	mdb.idxStats.numRecsInMem.Set(numRecsMem)
 	mdb.idxStats.numRecsOnDisk.Set(numRecsDisk)
+	return sts, nil
+}
+
+func (mdb *plasmaSlice) handleN1QLStorageStatistics() (StorageStatistics, error) {
+	var sts StorageStatistics
+
+	pstats := mdb.mainstore.GetPreparedStats()
+	var avg_item_size, avg_page_size int64
+	if atomic.LoadInt64(&pstats.ItemCnt) > 0 {
+		avg_item_size = atomic.LoadInt64(&pstats.PageBytes) / atomic.LoadInt64(&pstats.ItemCnt)
+	}
+	if atomic.LoadInt64(&pstats.PageCnt) > 0 {
+		avg_page_size = atomic.LoadInt64(&pstats.PageBytes) / atomic.LoadInt64(&pstats.PageCnt)
+	}
+	internalData := fmt.Sprintf("{\n\"MainStore\":\n"+
+		"{\n"+
+		"\"num_pages\":%d,\n"+
+		"\"items_count\":%d,\n"+
+		"\"resident_ratio\":%.5f,\n"+
+		"\"inserts\":%d,\n"+
+		"\"deletes\":%d,\n"+
+		"\"avg_item_size\":%d,\n"+
+		"\"avg_page_size\":%d\n}\n}",
+		pstats.NumPages,
+		pstats.ItemsCount,
+		pstats.ResidentRatio,
+		pstats.Inserts,
+		pstats.Deletes,
+		avg_item_size,
+		avg_page_size)
+
+	sts.InternalData = []string{internalData}
 	return sts, nil
 }
 
