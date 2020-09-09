@@ -32,7 +32,7 @@ var NETWORK_ERROR_BACKOFF = int64(5 * time.Second)
 var RANDOM_BACKOFF_START = 50 // Milliseconds
 var RANDOM_BACKOFF_END = 5000 // Milliseconds
 
-var MAX_CREATION_RETRIES = 100
+var MAX_CREATION_RETRIES = 1000
 
 /////////////////////////////////////////////////////////////////////
 // Global Variables
