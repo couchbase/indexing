@@ -1583,6 +1583,12 @@ func (ss *StreamState) computeTsChangeVec(streamId common.StreamId,
 		}
 	}
 
+	if enableOSO {
+		if ts.CheckSnapAligned() {
+			ts.SetSnapAligned(true)
+		}
+	}
+
 	return changeVec, noChange, countVec
 }
 
