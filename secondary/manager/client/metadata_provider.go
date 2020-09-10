@@ -939,9 +939,9 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn,
 		if scheduleOnFailure && canSchedule && clusterVersion >= c.INDEXER_70_VERSION {
 			scheduleErr := o.scheduleIndexCreation(idxDefn, plan)
 			if scheduleErr == nil {
-				msg += "\n\t Scheduled the index creation in the background."
-				logging.Warnf("%v", msg)
-				return fmt.Errorf("%v", msg)
+				message := "The index is scheduled for background creation. " + msg
+				logging.Warnf("%v", message)
+				return fmt.Errorf("%v", message)
 			} else {
 				if scheduleErr.Error() == ErrWaitScheduleTimeout.Error() {
 					msg += fmt.Sprintf("\n\t Scheduling of index creation was attempted. Please check for index status later.")
