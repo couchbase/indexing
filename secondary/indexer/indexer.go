@@ -6536,11 +6536,15 @@ func (idx *indexer) broadcastBootstrapStats(stats *IndexerStats,
 	idxStats.numDocsQueued.Set(math.MaxInt64)
 	idxStats.lastRollbackTime.Set(time.Now().UnixNano())
 	idxStats.progressStatTime.Set(time.Now().UnixNano())
-	spec := NewStatsSpec(false, false, false, false, nil)
+	spec := NewStatsSpec(false, false, false, false, false, nil)
 	notifyStats := stats.GetStats(spec)
-	idx.internalRecvCh <- &MsgStatsRequest{
-		mType: INDEX_STATS_BROADCAST,
-		stats: notifyStats,
+	if val, ok := notifyStats.(map[string]interface{}); ok {
+		idx.internalRecvCh <- &MsgStatsRequest{
+			mType: INDEX_STATS_BROADCAST,
+			stats: val,
+		}
+	} else {
+		logging.Fatalf("Indexer::broadcastBootstrapStats, Invalid stats type for spec: %v", spec)
 	}
 }
 

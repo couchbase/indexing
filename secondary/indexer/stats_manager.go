@@ -872,7 +872,7 @@ func (is IndexerStats) PopulateProjectorLatencyStats(statMap *StatsMap) {
 	}
 }
 
-func (is IndexerStats) GetStats(spec *statsSpec) common.Statistics {
+func (is IndexerStats) GetStats(spec *statsSpec) interface{} {
 	var prefix string
 	var instId string
 
@@ -933,7 +933,15 @@ func (is IndexerStats) GetStats(spec *statsSpec) common.Statistics {
 		s.addBucketStatsToMap(statMap)
 	}
 
-	return statMap.GetMap()
+	if spec.marshalToByteSlice {
+		// Replace last "," with "}"
+		if len(statMap.byteSlice) > 1 {
+			statMap.byteSlice[len(statMap.byteSlice)-1] = byte('}')
+		}
+		return statMap.byteSlice
+	} else {
+		return statMap.GetMap()
+	}
 }
 
 func (is IndexerStats) GetVersionedStats(t *target) (common.Statistics, bool) {
@@ -1896,10 +1904,22 @@ func (s *IndexStats) populateMetrics(st []byte) []byte {
 func (is IndexerStats) MarshalJSON(spec *statsSpec) ([]byte, error) {
 	stats := is.GetStats(spec)
 
-	if !spec.pretty {
-		return json.Marshal(stats)
+	if spec.pretty {
+		if val, ok := stats.(map[string]interface{}); ok {
+			return json.MarshalIndent(val, "", "   ")
+		} else {
+			err := fmt.Errorf("StatsManger:MarshalJSON Invalid type for stats, spec: %v", spec)
+			logging.Fatalf(err.Error())
+			return nil, err
+		}
 	} else {
-		return json.MarshalIndent(stats, "", "   ")
+		if val, ok := stats.([]byte); ok {
+			return val, nil
+		} else {
+			err := fmt.Errorf("StatsManger:MarshalJSON Invalid type for stats, spec: %v", spec)
+			logging.Fatalf(err.Error())
+			return nil, err
+		}
 	}
 }
 
@@ -1948,17 +1968,22 @@ type TimingStatAggrFunc func(func(*IndexStats) *stats.TimingStat) string
 // for the stats map returned by IndexerStats::GetStats.
 // ----------------------------------------------------------------------------
 type StatsMap struct {
-	stMap  map[string]interface{}
-	prefix string
-	instId string
-	spec   *statsSpec
+	stMap map[string]interface{}
+	// Generating marshalled data in byte slice will avoid
+	// JSON marshalling
+	byteSlice []byte
+	prefix    string
+	instId    string
+	spec      *statsSpec
 }
 
 func NewStatsMap(spec *statsSpec) *StatsMap {
 	st := StatsMap{
-		stMap: make(map[string]interface{}),
-		spec:  spec,
+		stMap:     make(map[string]interface{}),
+		byteSlice: make([]byte, 0),
+		spec:      spec,
 	}
+	st.byteSlice = append(st.byteSlice, '{')
 
 	return &st
 }
@@ -1984,22 +2009,69 @@ func (st *StatsMap) AddStatValueFiltered(k string, stat stats.StatVal) {
 }
 
 func (st *StatsMap) AddStat(k string, v interface{}) {
-	if !st.spec.skipEmpty {
-		st.stMap[fmt.Sprintf("%s%s", st.prefix, k)] = v
-	} else if n, ok := v.(int64); ok && n != 0 {
-		st.stMap[fmt.Sprintf("%s%s", st.prefix, k)] = v
-	} else if s, ok := v.(string); ok && len(s) != 0 && s != "0 0 0" && s != "0" {
-		st.stMap[fmt.Sprintf("%s%s", st.prefix, k)] = v
+
+	addMapValToByteSlice := func(mapKey string, mapVal map[string]interface{}) {
+		mapSlice := make([]byte, 0)
+		mapSlice = append(mapSlice, []byte(fmt.Sprintf("\"%v\":", mapKey))...)
+		mapSlice = append(mapSlice, '{')
+		for key, val := range mapVal {
+			mapSlice = append(mapSlice, []byte(fmt.Sprintf("\"%v\":%v,", key, val))...)
+		}
+		if len(mapSlice) > 1 {
+			mapSlice[len(mapSlice)-1] = '}'
+		}
+		mapSlice = append(mapSlice, ',')
+		st.byteSlice = append(st.byteSlice, mapSlice...)
+	}
+
+	if st.spec.marshalToByteSlice {
+		if !st.spec.skipEmpty {
+			if str, ok := v.(string); ok {
+				st.byteSlice = append(st.byteSlice, []byte(fmt.Sprintf("\"%s%s\":\"%v\",", st.prefix, k, str))...)
+			} else if mapVal, ok := v.(map[string]interface{}); ok {
+				addMapValToByteSlice(k, mapVal)
+			} else {
+				st.byteSlice = append(st.byteSlice, []byte(fmt.Sprintf("\"%s%s\":%v,", st.prefix, k, v))...)
+			}
+		} else if n, ok := v.(int64); ok && n != 0 {
+			st.byteSlice = append(st.byteSlice, []byte(fmt.Sprintf("\"%s%s\":%v,", st.prefix, k, v))...)
+		} else if s, ok := v.(string); ok && len(s) != 0 && s != "0 0 0" && s != "0" {
+			st.byteSlice = append(st.byteSlice, []byte(fmt.Sprintf("\"%s%s\":\"%v\",", st.prefix, k, v))...)
+		} else if mapVal, ok := v.(map[string]interface{}); ok && len(mapVal) != 0 {
+			addMapValToByteSlice(k, mapVal)
+		}
+	} else {
+		if !st.spec.skipEmpty {
+			st.stMap[fmt.Sprintf("%s%s", st.prefix, k)] = v
+		} else if n, ok := v.(int64); ok && n != 0 {
+			st.stMap[fmt.Sprintf("%s%s", st.prefix, k)] = v
+		} else if s, ok := v.(string); ok && len(s) != 0 && s != "0 0 0" && s != "0" {
+			st.stMap[fmt.Sprintf("%s%s", st.prefix, k)] = v
+		}
 	}
 }
 
 func (st *StatsMap) AddStatByInstId(k string, v interface{}) {
-	if !st.spec.skipEmpty {
-		st.stMap[fmt.Sprintf("%s%s", st.instId, k)] = v
-	} else if n, ok := v.(int64); ok && n != 0 {
-		st.stMap[fmt.Sprintf("%s%s", st.instId, k)] = v
-	} else if s, ok := v.(string); ok && len(s) != 0 && s != "0 0 0" && s != "0" {
-		st.stMap[fmt.Sprintf("%s%s", st.instId, k)] = v
+	if st.spec.marshalToByteSlice {
+		if !st.spec.skipEmpty {
+			if str, ok := v.(string); ok {
+				st.byteSlice = append(st.byteSlice, []byte(fmt.Sprintf("\"%s%s\":\"%v\",", st.instId, k, str))...)
+			} else {
+				st.byteSlice = append(st.byteSlice, []byte(fmt.Sprintf("\"%s%s\":%v,", st.instId, k, v))...)
+			}
+		} else if n, ok := v.(int64); ok && n != 0 {
+			st.byteSlice = append(st.byteSlice, []byte(fmt.Sprintf("\"%s%s\":%v,", st.instId, k, v))...)
+		} else if s, ok := v.(string); ok && len(s) != 0 && s != "0 0 0" && s != "0" {
+			st.byteSlice = append(st.byteSlice, []byte(fmt.Sprintf("\"%s%s\":\"%v\",", st.instId, k, v))...)
+		}
+	} else {
+		if !st.spec.skipEmpty {
+			st.stMap[fmt.Sprintf("%s%s", st.prefix, k)] = v
+		} else if n, ok := v.(int64); ok && n != 0 {
+			st.stMap[fmt.Sprintf("%s%s", st.prefix, k)] = v
+		} else if s, ok := v.(string); ok && len(s) != 0 && s != "0 0 0" && s != "0" {
+			st.stMap[fmt.Sprintf("%s%s", st.prefix, k)] = v
+		}
 	}
 }
 
@@ -2058,23 +2130,25 @@ func (st *StatsMap) AddFloat64StatFiltered(k string, stat stats.StatVal) {
 // statsSpec can be used to specify which set of stats are to be returned.
 //--------------------------------------------------------------------------
 type statsSpec struct {
-	indexSpec      *common.StatsIndexSpec
-	partition      bool
-	pretty         bool
-	skipEmpty      bool
-	essential      bool
-	consumerFilter uint64
+	indexSpec          *common.StatsIndexSpec
+	partition          bool
+	pretty             bool
+	skipEmpty          bool
+	essential          bool
+	marshalToByteSlice bool // set to true to marshal to byte slice
+	consumerFilter     uint64
 }
 
-func NewStatsSpec(partition, pretty, skipEmpty, essential bool, indexSpec *common.StatsIndexSpec) *statsSpec {
+func NewStatsSpec(partition, pretty, skipEmpty, essential, marshalToByteSlice bool, indexSpec *common.StatsIndexSpec) *statsSpec {
 
 	return &statsSpec{
-		partition:      partition,
-		pretty:         pretty,
-		skipEmpty:      skipEmpty,
-		essential:      essential,
-		indexSpec:      indexSpec,
-		consumerFilter: stats.AllStatsFilter,
+		partition:          partition,
+		pretty:             pretty,
+		skipEmpty:          skipEmpty,
+		essential:          essential,
+		marshalToByteSlice: marshalToByteSlice,
+		indexSpec:          indexSpec,
+		consumerFilter:     stats.AllStatsFilter,
 	}
 }
 
@@ -2162,7 +2236,9 @@ func (l *statLogger) writeIndexerStats(stats *IndexerStats, spec *statsSpec) {
 }
 
 func (l *statLogger) Write(stats *IndexerStats, essential, writeStorageStats bool) {
-	spec := NewStatsSpec(false, false, false, essential, nil)
+	// Use statsMap instead of byte slice when stats are being deduped
+	marshalToByteSlice := !l.enableStatsLog
+	spec := NewStatsSpec(false, false, false, essential, marshalToByteSlice, nil)
 
 	var sbytes []byte
 	logSbytes := false
@@ -2342,7 +2418,11 @@ func (s *statsManager) handleStatsReq(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		spec := NewStatsSpec(partition, pretty, skipEmpty, false, indexSpec)
+		// Marhsal stats to byte slice when pretty is not required
+		// Otherwise, marshal to statsMap and JSON marshal will take care of
+		// making the output pretty
+		marshalToByteSlice := !pretty
+		spec := NewStatsSpec(partition, pretty, skipEmpty, false, marshalToByteSlice, indexSpec)
 		if consumerFilter != "" {
 			spec.OverrideFilter(consumerFilter)
 		}
@@ -2461,12 +2541,11 @@ func (s *statsManager) getStorageStats() string {
 		for _, data := range sts.GetInternalData() {
 			result.WriteString(data)
 		}
-		// No data from storage slice. Add '{' to make it valid JSON
+		// No data from storage slice. Add '{}' to make it valid JSON
 		if len(sts.GetInternalData()) == 0 {
-			result.WriteString("{\n")
+			result.WriteString("{\n}\n")
 		}
 		result.WriteString("}\n")
-
 	}
 
 	result.WriteString("]")
