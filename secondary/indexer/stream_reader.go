@@ -1181,6 +1181,7 @@ func (w *streamWorker) updateOSOMarkerInFilter(meta *MutationMeta, eventType byt
 				filterOSO.Snapshots[meta.vbucket][1])
 			filterOSO.Snapshots[meta.vbucket][1] = 1 //snapshot[1] stores OSO End
 			w.keyspaceIdFirstSnap[meta.keyspaceId][meta.vbucket] = false
+			w.keyspaceIdSyncDue[meta.keyspaceId] = true
 		}
 	} else {
 		logging.Debugf("MutationStreamReader::updateOSOMarkerInFilter Missing"+
