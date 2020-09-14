@@ -884,6 +884,13 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 
+	"indexer.client_stats_refresh_interval": ConfigValue{
+		uint64(5000),
+		"Periodic interval (in milliseconds) at which indexer broadcasts stats to GSI client",
+		uint64(5000),
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.stats_cache_timeout": ConfigValue{
 		uint64(30000),
 		"Stats cache ttl in millis",

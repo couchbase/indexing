@@ -2278,6 +2278,7 @@ type statsManager struct {
 	supvCmdch             MsgChannel
 	supvMsgch             MsgChannel
 	lastStatTime          time.Time
+	lastProgressStatTime  time.Time
 	cacheUpdateInProgress bool
 	statsLogDumpInterval  uint64
 
@@ -2323,9 +2324,11 @@ func (s *statsManager) tryUpdateStats(sync bool) {
 	waitCh := make(chan struct{})
 	conf := s.config.Load()
 	timeout := time.Millisecond * time.Duration(conf["stats_cache_timeout"].Uint64())
+	progressStatsTimeout := time.Millisecond * time.Duration(conf["client_stats_refresh_interval"].Uint64())
 
 	s.Lock()
 	cacheTime := s.lastStatTime
+	lastProgressStatTime := s.lastProgressStatTime
 	shouldUpdate := !s.cacheUpdateInProgress
 
 	if s.lastStatTime.Unix() == 0 {
@@ -2333,13 +2336,20 @@ func (s *statsManager) tryUpdateStats(sync bool) {
 	}
 
 	// Refresh cache if cache ttl has expired
-	if shouldUpdate && time.Now().Sub(cacheTime) > timeout || sync {
+	allStatsCacheRefreshRequired := time.Now().Sub(cacheTime) > timeout
+	progressStatsCacheRefreshRequired := time.Now().Sub(lastProgressStatTime) > progressStatsTimeout
+	if shouldUpdate && ((allStatsCacheRefreshRequired || sync) || progressStatsCacheRefreshRequired) {
 		s.cacheUpdateInProgress = true
 		s.Unlock()
 
 		go func() {
 
-			stats_list := []MsgType{STORAGE_STATS, SCAN_STATS, INDEX_PROGRESS_STATS, INDEXER_STATS}
+			var stats_list []MsgType
+			if allStatsCacheRefreshRequired || sync {
+				stats_list = []MsgType{STORAGE_STATS, SCAN_STATS, INDEX_PROGRESS_STATS, INDEXER_STATS}
+			} else { // Refresh progress stats cache every 3 seconds for effective load balancing at client
+				stats_list = []MsgType{INDEX_PROGRESS_STATS}
+			}
 			for _, t := range stats_list {
 				ch := make(chan bool)
 				msg := &MsgStatsRequest{
@@ -2355,7 +2365,10 @@ func (s *statsManager) tryUpdateStats(sync bool) {
 			s.supvMsgch <- &MsgStatsRequest{mType: INDEX_STATS_DONE, respch: nil}
 
 			s.Lock()
-			s.lastStatTime = time.Now()
+			if allStatsCacheRefreshRequired || sync {
+				s.lastStatTime = time.Now()
+			}
+			s.lastProgressStatTime = time.Now()
 			s.cacheUpdateInProgress = false
 			s.Unlock()
 			close(waitCh)

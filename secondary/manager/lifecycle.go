@@ -59,6 +59,8 @@ type LifecycleMgr struct {
 	isDone           bool
 	collAwareCluster uint32 // 0: false, 1: true
 
+	clientStatsRefreshInterval uint64
+
 	lastSendClientStats *client.IndexStats2
 	clientStatsMutex    sync.Mutex
 }
@@ -155,16 +157,17 @@ func NewLifecycleMgr(notifier MetadataNotifier, clusterURL string) (*LifecycleMg
 	cinfo.SetUserAgent("LifecycleMgr")
 
 	mgr := &LifecycleMgr{repo: nil,
-		cinfo:               cinfo,
-		notifier:            notifier,
-		clusterURL:          clusterURL,
-		incomings:           make(chan *requestHolder, 100000),
-		expedites:           make(chan *requestHolder, 100000),
-		outgoings:           make(chan c.Packet, 100000),
-		killch:              make(chan bool),
-		bootstraps:          make(chan *requestHolder, 1000),
-		indexerReady:        false,
-		lastSendClientStats: &client.IndexStats2{},
+		cinfo:                      cinfo,
+		notifier:                   notifier,
+		clusterURL:                 clusterURL,
+		incomings:                  make(chan *requestHolder, 100000),
+		expedites:                  make(chan *requestHolder, 100000),
+		outgoings:                  make(chan c.Packet, 100000),
+		killch:                     make(chan bool),
+		bootstraps:                 make(chan *requestHolder, 1000),
+		indexerReady:               false,
+		lastSendClientStats:        &client.IndexStats2{},
+		clientStatsRefreshInterval: 5000,
 	}
 
 	mgr.cinfoClient, err = common.NewClusterInfoClient(clusterURL, common.DEFAULT_POOL, nil)
@@ -2344,10 +2347,18 @@ func (m *LifecycleMgr) handleNotifyStats(buf []byte) {
 // Broadcast stats in a go-routine
 func (m *LifecycleMgr) broadcastStats() {
 
+	// stats_manager refreshes progress stats every "client_stats_refresh_interval"
+	// and this method also broadcasts stats for the same period. To avoid any race
+	// condition between these two methods, sleep for 1 sec here so that
+	// stats_manager is ahead and by the time lifecycle manager reads the stats
+	// for broadcast, it contains latest stats
+	time.Sleep(1 * time.Second)
+
 	m.done.Add(1)
 	defer m.done.Done()
 
-	ticker := time.NewTicker(time.Second * 5)
+	refreshInterval := atomic.LoadUint64(&m.clientStatsRefreshInterval)
+	ticker := time.NewTicker(time.Millisecond * time.Duration(refreshInterval))
 	defer ticker.Stop()
 
 	for {
@@ -2375,6 +2386,11 @@ func (m *LifecycleMgr) broadcastStats() {
 						logging.Errorf("lifecycleMgr: fail to send indexStats2.  Error = %v", err)
 					}
 				}
+			}
+
+			if refreshInterval != atomic.LoadUint64(&m.clientStatsRefreshInterval) {
+				ticker.Stop()
+				ticker = time.NewTicker(time.Millisecond * time.Duration(atomic.LoadUint64(&m.clientStatsRefreshInterval)))
 			}
 
 		case <-m.killch:
@@ -2639,6 +2655,11 @@ func (m *LifecycleMgr) handleConfigUpdate(content []byte) error {
 	}
 
 	m.builder.configUpdate(config)
+
+	if val, ok := (*config)["client_stats_refresh_interval"]; ok {
+		atomic.StoreUint64(&m.clientStatsRefreshInterval, uint64(val.Float64()))
+	}
+
 	return nil
 }
 
