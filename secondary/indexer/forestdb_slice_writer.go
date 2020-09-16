@@ -1484,7 +1484,7 @@ snaploop:
 func (fdb *fdbSlice) PrepareStats() {
 }
 
-func (fdb *fdbSlice) Statistics() (StorageStatistics, error) {
+func (fdb *fdbSlice) Statistics(consumerFilter uint64) (StorageStatistics, error) {
 	var sts StorageStatistics
 
 	sz, err := common.FileSize(fdb.currfile)

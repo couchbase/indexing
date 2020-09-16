@@ -8,24 +8,28 @@
 // and limitations under the License.
 package client
 
-import "time"
-import "unsafe"
-import "io"
-import "net"
-import "sync/atomic"
-import "fmt"
-import "syscall"
-import "strings"
-import "sync"
-import "io/ioutil"
-import "errors"
-import commonjson "github.com/couchbase/indexing/secondary/common/json"
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
+	commonjson "github.com/couchbase/indexing/secondary/common/json"
+	"io"
+	"io/ioutil"
+	"net"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"syscall"
+	"time"
+	"unsafe"
 
-import "github.com/couchbase/indexing/secondary/logging"
-import "github.com/couchbase/indexing/secondary/common"
-import "github.com/couchbase/indexing/secondary/security"
-import mclient "github.com/couchbase/indexing/secondary/manager/client"
-import "github.com/couchbase/query/value"
+	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
+	mclient "github.com/couchbase/indexing/secondary/manager/client"
+	"github.com/couchbase/indexing/secondary/security"
+	"github.com/couchbase/query/value"
+)
 
 // TODO:
 // - Timeit() uses the wall-clock time instead of process-time to compute
@@ -1228,7 +1232,7 @@ func (c *GsiClient) StorageStatistics(defnID uint64, requestId string) ([]map[st
 		for _, qp := range queryports {
 			for _, n := range nodes {
 				if qp == n.Queryport {
-					url := "http://" + n.Httpport + "/stats/storage"
+					url := "http://" + n.Httpport + "/stats/storage?consumerFilter=n1qlStorageStats"
 					statUrls = append(statUrls, url)
 				}
 			}
@@ -1247,10 +1251,23 @@ func (c *GsiClient) StorageStatistics(defnID uint64, requestId string) ([]map[st
 func getStatsFromIndexerNodes(statUrls []string, targetInstIds []uint64,
 	partitions [][]common.PartitionId, storageMode string) ([]map[string]interface{}, error) {
 
+	statsSpec := &common.StatsIndexSpec{}
+	for _, targetInst := range targetInstIds {
+		statsSpec.Instances = append(statsSpec.Instances, common.IndexInstId(targetInst))
+	}
+
+	instBytes, err := json.Marshal(statsSpec)
+	if err != nil {
+		errStr := fmt.Sprintf("Error marshalling instIDs : %v, err: %v", targetInstIds, err)
+		return nil, errors.New(errStr)
+	}
+
+	bodyBuf := bytes.NewBuffer(instBytes)
+
 	storageStats := make([]map[string]interface{}, 0)
 	for i, statUrl := range statUrls {
 
-		resp, err := getWithAuth(statUrl)
+		resp, err := postWithAuth(statUrl, "application/json", bodyBuf, time.Duration(10)*time.Second)
 		if err != nil {
 			return nil, err
 		}

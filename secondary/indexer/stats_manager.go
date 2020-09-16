@@ -2164,10 +2164,11 @@ func (spec *statsSpec) OverrideFilter(filt string) {
 }
 
 var statsFilterMap = map[string]uint64{
-	"planner":     stats.PlannerFilter,
-	"indexStatus": stats.IndexStatusFilter,
-	"rebalancer":  stats.RebalancerFilter,
-	"gsiClient":   stats.GSIClientFilter,
+	"planner":          stats.PlannerFilter,
+	"indexStatus":      stats.IndexStatusFilter,
+	"rebalancer":       stats.RebalancerFilter,
+	"gsiClient":        stats.GSIClientFilter,
+	"n1qlStorageStats": stats.N1QLStorageStatsFilter,
 }
 
 const ST_TYPE_INDEXER = "indexer"
@@ -2253,9 +2254,9 @@ func (l *statLogger) Write(stats *IndexerStats, essential, writeStorageStats boo
 	var storageStats string
 	if writeStorageStats { //log storage stats every 15mins
 		if common.GetStorageMode() != common.FORESTDB {
-			storageStats = fmt.Sprintf("\n==== StorageStats ====\n%s", l.s.getStorageStats())
+			storageStats = fmt.Sprintf("\n==== StorageStats ====\n%s", l.s.getStorageStats(nil))
 		} else if logging.IsEnabled(logging.Timing) {
-			storageStats = fmt.Sprintf("\n==== StorageStats ====\n%s", l.s.getStorageStats())
+			storageStats = fmt.Sprintf("\n==== StorageStats ====\n%s", l.s.getStorageStats(nil))
 		}
 	} else {
 		storageStats = ""
@@ -2511,10 +2512,10 @@ func (s *statsManager) handleMemStatsReq(w http.ResponseWriter, r *http.Request)
 	}
 }
 
-func (s *statsManager) getStorageStats() string {
+func (s *statsManager) getStorageStats(spec *statsSpec) string {
 	var result strings.Builder
 	replych := make(chan []IndexStorageStats)
-	statReq := &MsgIndexStorageStats{respch: replych}
+	statReq := &MsgIndexStorageStats{respch: replych, spec: spec}
 	s.supvMsgch <- statReq
 	res := <-replych
 
@@ -2565,9 +2566,37 @@ func (s *statsManager) handleStorageStatsReq(w http.ResponseWriter, r *http.Requ
 
 		stats := s.stats.Get()
 
+		consumerFilter := r.URL.Query().Get("consumerFilter")
+
+		var indexSpec *common.StatsIndexSpec
+		if r.ContentLength != 0 || r.Body != nil {
+
+			// In case of error in reading the request body, return stats for all indexes
+			indexSpecError := false
+			buf := new(bytes.Buffer)
+			if _, err := buf.ReadFrom(r.Body); err != nil {
+				logging.Errorf("handleStorageStatsReq: unable to read request body, err %v", err)
+				indexSpecError = true
+			}
+
+			if !indexSpecError && buf.Len() != 0 {
+				indexSpec = &common.StatsIndexSpec{}
+				if err := commonjson.Unmarshal(buf.Bytes(), indexSpec); err != nil {
+					logging.Errorf("handleStorageStatsReq: unable to unmarshall request body. Buf = %s, err %v",
+						logging.TagStrUD(buf), err)
+					indexSpec = nil
+				}
+			}
+		}
+
+		spec := NewStatsSpec(false, false, false, false, false, indexSpec)
+		if consumerFilter != "" {
+			spec.OverrideFilter(consumerFilter)
+		}
+
 		if common.IndexerState(stats.indexerState.Value()) != common.INDEXER_BOOTSTRAP {
 			w.WriteHeader(200)
-			w.Write([]byte(s.getStorageStats()))
+			w.Write([]byte(s.getStorageStats(spec)))
 		} else {
 			w.WriteHeader(200)
 			w.Write([]byte("Indexer In Warmup. Please try again later."))

@@ -13,6 +13,9 @@ const IndexStatusFilter = 0x4
 const RebalancerFilter = 0x8
 const GSIClientFilter = 0x10
 
+// This filter is only used for storage stats
+const N1QLStorageStatsFilter = 0x20
+
 // TODO: ns_server to provide a list of stats that will be
 // categorised as ExternalStats
 

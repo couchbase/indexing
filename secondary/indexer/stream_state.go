@@ -1614,7 +1614,8 @@ func (ss *StreamState) disableSnapAlignForPendingTs(streamId common.StreamId, ke
 	tsList := ss.streamKeyspaceIdTsListMap[streamId][keyspaceId]
 	disableCount := 0
 	for e := tsList.Front(); e != nil; e = e.Next() {
-		ts := e.Value.(*common.TsVbuuid)
+		tsElem := e.Value.(*TsListElem)
+		ts := tsElem.ts
 		ts.SetDisableAlign(true)
 		disableCount++
 	}

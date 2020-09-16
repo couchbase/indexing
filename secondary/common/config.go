@@ -2494,9 +2494,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.allowScheduleCreate": ConfigValue{
-		false,
+		true,
 		"Allow scheduling index creation in the background",
-		false,
+		true,
 		false,
 		false,
 	},

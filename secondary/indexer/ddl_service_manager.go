@@ -28,6 +28,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/ioutil"
 	"net"
 	"net/http"
 	"strings"
@@ -126,6 +127,7 @@ func NewDDLServiceMgr(indexerId common.IndexerId, supvCmdch MsgChannel, supvMsgc
 	mux.HandleFunc("/listDropInstanceTokens", mgr.handleListDropInstanceTokens)
 	mux.HandleFunc("/listScheduleCreateTokens", mgr.handleListScheduleCreateTokens)
 	mux.HandleFunc("/listStopScheduleCreateTokens", mgr.handleListStopScheduleCreateTokens)
+	mux.HandleFunc("/transferScheduleCreateTokens", mgr.handleTransferScheduleCreateTokens)
 
 	go mgr.run()
 
@@ -318,6 +320,18 @@ func (m *DDLServiceMgr) cleanupDropCommand() {
 			command, err := mc.UnmarshallDeleteCommandToken(entry.Value)
 			if err != nil {
 				logging.Warnf("DDLServiceMgr: Failed to clean delete index token upon rebalancing.  Skp command %v.  Internal Error = %v.", entry.Path, err)
+				continue
+			}
+
+			// Delete the schedule create token
+			if err := mc.DeleteScheduleCreateToken(command.DefnId); err != nil {
+				logging.Warnf("DDLServiceMgr: Failed to delete schedule create token upon rebalancing.  Skp command %v.  Internal Error = %v.", entry.Path, err)
+				continue
+			}
+
+			// Delete the stop schedule create token
+			if err := mc.DeleteStopScheduleCreateToken(command.DefnId); err != nil {
+				logging.Warnf("DDLServiceMgr: Failed to delete stop schedule create token upon rebalancing.  Skp command %v.  Internal Error = %v.", entry.Path, err)
 				continue
 			}
 
@@ -1453,6 +1467,50 @@ func (m *DDLServiceMgr) handleListStopScheduleCreateTokens(w http.ResponseWriter
 	}
 }
 
+func (m *DDLServiceMgr) handleTransferScheduleCreateTokens(w http.ResponseWriter, r *http.Request) {
+	valid := m.validateAuth(w, r)
+	if !valid {
+		logging.Errorf("DDLServiceMgr::handleTransferScheduleCreateTokens Validation Failure for Request %v", logging.TagUD(r))
+		return
+	}
+
+	if r.Method == "POST" {
+		bytes, _ := ioutil.ReadAll(r.Body)
+		tokens := make([]mc.ScheduleCreateToken, 0)
+		if err := json.Unmarshal(bytes, &tokens); err != nil {
+			logging.Errorf("DDLServiceMgr::handleTransferScheduleCreateTokens error in json.Unmarshal %v", err)
+			send(http.StatusBadRequest, w, err)
+			return
+		}
+
+		if err := m.transferScheduleCreateTokens(tokens); err != nil {
+			errStr := fmt.Sprintf("Error while transferring scheduled create tokens %v", err)
+			send(http.StatusInternalServerError, w, errStr)
+		} else {
+			send(http.StatusOK, w, "")
+		}
+
+	} else {
+		send(http.StatusBadRequest, w, fmt.Errorf("Unsupported Method"))
+		return
+	}
+}
+
+func (m *DDLServiceMgr) transferScheduleCreateTokens(tokens []mc.ScheduleCreateToken) error {
+
+	for _, token := range tokens {
+		logging.Infof("transferScheduleCreateTokens:: DefnId %v, old indexer %v, new indexer %v",
+			token.Definition.DefnId, token.IndexerId, m.indexerId)
+		token.IndexerId = m.indexerId
+		err := mc.UpdateScheduleCreateToken(&token)
+		if err != nil {
+			return fmt.Errorf("Error (%v) in UpdateScheduleCreateToken for %v", err, token.Definition.DefnId)
+		}
+	}
+
+	return nil
+}
+
 func (m *DDLServiceMgr) validateAuth(w http.ResponseWriter, r *http.Request) bool {
 	_, valid, err := common.IsAuthValid(r)
 	if err != nil {
@@ -1718,4 +1776,202 @@ func (s *ddlSettings) handleSettings(config common.Config) {
 			s.storageMode = storageMode
 		}()
 	}
+}
+
+//
+// Utilityfunctions used for trasferring scheduled create tokens.
+//
+func transferScheduleTokens(keepNodes map[string]bool, clusterAddr string) error {
+
+	if len(keepNodes) <= 0 {
+		// Nothing to do.
+		return nil
+	}
+
+	getTokensToTransfer := func() ([]*mc.ScheduleCreateToken, error) {
+		tokensToTransfer := make([]*mc.ScheduleCreateToken, 0)
+
+		tokens, err := mc.ListAllScheduleCreateTokens()
+		if err != nil {
+			return nil, err
+		}
+
+		for _, token := range tokens {
+			if _, ok := keepNodes[string(token.IndexerId)]; !ok {
+				tokensToTransfer = append(tokensToTransfer, token)
+			}
+		}
+
+		return tokensToTransfer, nil
+	}
+
+	// TODO: Progress update for rebalace?
+
+	tokens, err := getTokensToTransfer()
+	if err != nil {
+		logging.Errorf("transferScheduleTokens: Error in getTokensToTransfer %v", err)
+		return err
+	}
+
+	if len(tokens) <= 0 {
+		return nil
+	}
+
+	getTransferMap := func(tokens []*mc.ScheduleCreateToken) map[string][]*mc.ScheduleCreateToken {
+
+		// Use Round Robin
+
+		// Note that the list of nodes provided by the user in with nodes
+		// clause is ignored here as - even for alreeady created indexes,
+		// that clause is not enforced during rebalance.
+		transferMap := make(map[string][]*mc.ScheduleCreateToken)
+		numNodes := len(keepNodes)
+
+		targetNodes := make([]string, 0, numNodes)
+		for node, _ := range keepNodes {
+			targetNodes = append(targetNodes, node)
+		}
+
+		for i, token := range tokens {
+			nodeId := string(targetNodes[i%numNodes])
+			if _, ok := transferMap[nodeId]; !ok {
+				transferMap[nodeId] = make([]*mc.ScheduleCreateToken, 0)
+			}
+
+			transferMap[nodeId] = append(transferMap[nodeId], token)
+		}
+
+		return transferMap
+	}
+
+	transferMap := getTransferMap(tokens)
+	if len(transferMap) == 0 {
+		return nil
+	}
+
+	if err := postSchedTransferMap(transferMap, clusterAddr); err != nil {
+		logging.Errorf("transferScheduleTokens: Error in postTransferMap %v", err)
+		return err
+	}
+
+	if err := verifySchedTransfer(transferMap); err != nil {
+		// No need to fail the entire successful rebalance operation just
+		// becasue the verification has failed. The verification can fail due
+		// to the consistency model of token store.
+		logging.Warnf("transferScheduleTokens: failed verification of the transfer "+
+			"with error %v. The operation may have been successful. Please check later.", err)
+		return err
+	}
+
+	return nil
+}
+
+func postSchedTransferMap(transferMap map[string][]*mc.ScheduleCreateToken, clusterAddr string) error {
+	cinfo, err := common.FetchNewClusterInfoCache(clusterAddr, common.DEFAULT_POOL, "transferScheduleTokens")
+	if err != nil {
+		return fmt.Errorf("postSchedTransferMap: Error Fetching Cluster Information %v", err)
+	}
+
+	var wg sync.WaitGroup
+	var mu sync.RWMutex
+	errMap := make(map[string]error)
+
+	postTokens := func(nodeUUID string, tokens []*mc.ScheduleCreateToken) {
+
+		defer wg.Done()
+
+		err := func() error {
+			nid, found := cinfo.GetNodeIdByUUID(nodeUUID)
+			if !found {
+				return fmt.Errorf("node with uuiid %v not found in cluster info cache", nodeUUID)
+			}
+
+			addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE)
+			if err != nil {
+				return fmt.Errorf("error in GetServiceAddress %v", err)
+			}
+
+			var body []byte
+			body, err = json.Marshal(&tokens)
+			if err != nil {
+				return fmt.Errorf("error in json.Marshal %v", err)
+			}
+
+			bodybuf := bytes.NewBuffer(body)
+
+			resp, err := postWithAuth(addr+"/transferScheduleCreateTokens", "application/json", bodybuf)
+			if err != nil {
+				return fmt.Errorf("error in postWithAuth %v", err)
+			}
+
+			if resp != nil && resp.StatusCode != 200 {
+				return fmt.Errorf("HTTP status (%v)", resp.Status)
+			}
+
+			logging.Infof("postSchedTransferMap: Posted %v tokens to node %v", len(tokens), addr)
+			return nil
+		}()
+
+		if err != nil {
+			func() {
+				mu.Lock()
+				defer mu.Unlock()
+
+				errMap[nodeUUID] = err
+			}()
+		}
+	}
+
+	for nodeUUID, tokens := range transferMap {
+		wg.Add(1)
+		go postTokens(nodeUUID, tokens)
+	}
+
+	wg.Wait()
+
+	mu.RLock()
+	defer mu.RUnlock()
+
+	if len(errMap) != 0 {
+		logging.Errorf("postSchedTransferMap: error map %v", errMap)
+
+		// return any one error
+		for _, err := range errMap {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func verifySchedTransfer(transferMap map[string][]*mc.ScheduleCreateToken) error {
+	// TODO: This can be done in a loop - for limited number of iterations.
+
+	defns := make([]string, 0)
+
+	time.Sleep(5 * time.Second)
+	for nodeUUID, tokens := range transferMap {
+		for _, t := range tokens {
+			token, err := mc.GetScheduleCreateToken(t.Definition.DefnId)
+			if err != nil {
+				return err
+			}
+
+			if token == nil {
+				logging.Warnf("verifySchedTransfer: Nil token is observed for %v."+
+					" Index may have got dropped.", t.Definition.DefnId)
+				defns = append(defns, fmt.Sprintf("%v", t.Definition.DefnId))
+			}
+
+			if nodeUUID != string(token.IndexerId) {
+				defns = append(defns, fmt.Sprintf("%v", t.Definition.DefnId))
+			}
+		}
+	}
+
+	if len(defns) != 0 {
+		return fmt.Errorf("Transfer verification failed for %v", strings.Join(defns, ", "))
+	}
+
+	return nil
 }

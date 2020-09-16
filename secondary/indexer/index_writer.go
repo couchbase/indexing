@@ -73,7 +73,7 @@ type IndexWriter interface {
 	SetLastRollbackTs(ts *common.TsVbuuid)
 
 	// Statistics used for compaction trigger
-	Statistics() (StorageStatistics, error)
+	Statistics(consumerFilter uint64) (StorageStatistics, error)
 
 	// Prepare stats for efficient
 	PrepareStats()

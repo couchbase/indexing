@@ -225,6 +225,23 @@ func (r *Rebalancer) Cancel() {
 
 func (r *Rebalancer) finish(err error) {
 
+	if err == nil && r.master && r.change != nil {
+		// Note that this function tansfers the ownership of only those
+		// tokens, which are not owned by keep nodes. Ownership of other
+		// tokens remains unchanged.
+
+		keepNodes := make(map[string]bool)
+		for _, node := range r.change.KeepNodes {
+			keepNodes[string(node.NodeInfo.NodeID)] = true
+		}
+
+		cfg := r.config.Load()
+
+		// Suppress error if any. The background task to handle failover
+		// will do necessary retry for transferring ownership.
+		_ = transferScheduleTokens(keepNodes, cfg["clusterAddr"].String())
+	}
+
 	r.retErr = err
 	r.cleanupOnce.Do(r.doFinish)
 
