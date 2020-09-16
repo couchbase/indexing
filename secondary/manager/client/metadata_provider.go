@@ -865,8 +865,9 @@ func (o *MetadataProvider) makeScheduleCreateRequest(idxDefn *c.IndexDefn,
 		return err
 	}
 
-	logging.Infof("Indexer %v has posted schedule create token for index (%v, %v, %v, %v)",
-		indexer.getIndexerId(), idxDefn.Bucket, idxDefn.Scope, idxDefn.Collection, idxDefn.Name)
+	logging.Infof("Indexer %v has posted schedule create token for index (%v, %v, %v, %v, %v)",
+		indexer.getIndexerId(), idxDefn.Bucket, idxDefn.Scope, idxDefn.Collection, idxDefn.Name,
+		idxDefn.DefnId)
 
 	return nil
 }
