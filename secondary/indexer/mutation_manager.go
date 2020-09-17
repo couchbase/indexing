@@ -58,6 +58,7 @@ type mutationMgr struct {
 	internalRecvCh MsgChannel //Buffered channel to queue worker messages
 	supvCmdch      MsgChannel //supervisor sends commands on this channel
 	supvRespch     MsgChannel //channel to send any message to supervisor
+	streamBeginCh  MsgChannel // channel to process StreamBegin messages
 
 	shutdownCh DoneChannel //internal channel indicating shutdown
 
@@ -107,6 +108,7 @@ func NewMutationManager(supvCmdch MsgChannel, supvRespch MsgChannel,
 
 		mutMgrRecvCh:   make(MsgChannel),
 		internalRecvCh: make(MsgChannel, WORKER_MSG_QUEUE_LEN),
+		streamBeginCh:  make(MsgChannel, WORKER_MSG_QUEUE_LEN),
 		shutdownCh:     make(DoneChannel),
 		supvCmdch:      supvCmdch,
 		supvRespch:     supvRespch,
@@ -149,6 +151,7 @@ func (m *mutationMgr) run() {
 
 	go m.handleWorkerMsgs()
 	go m.listenWorkerMsgs()
+	go m.processStreamBegins()
 
 	//main Mutation Manager loop
 loop:
@@ -365,24 +368,7 @@ func (m *mutationMgr) handleWorkerMessage(cmd Message) {
 		//send message to supervisor to take decision
 		logging.Tracef("MutationMgr::handleWorkerMessage Received %v from worker", cmd)
 		m.supvRespch <- cmd
-
-		// Initialize latency object
-		node := cmd.(*MsgStream).GetNode()
-		streamId := cmd.(*MsgStream).GetStreamId()
-		if node != nil {
-			m.lock.Lock()
-			_, streamExists := m.streamReaderMap[streamId]
-			m.lock.Unlock()
-
-			// Initialize the latency object only if the stream exists
-			if streamExists {
-				m.initLatencyObj(cmd)
-			}
-		}
-
-	case CLEANUP_PRJ_STATS:
-		streamId := cmd.(*MsgStream).GetStreamId()
-		m.cleanLatencyMap(streamId)
+		m.streamBeginCh <- cmd
 
 	default:
 		logging.Fatalf("MutationMgr::handleWorkerMessage Received unhandled "+
@@ -390,6 +376,42 @@ func (m *mutationMgr) handleWorkerMessage(cmd Message) {
 		common.CrashOnError(errors.New("Unknown Message On Worker Channel"))
 	}
 
+}
+
+// This method will process stream begin messages and initializes latency
+// object for the corresponding stream
+func (m *mutationMgr) processStreamBegins() {
+	for {
+		select {
+		case cmd := <-m.streamBeginCh:
+			switch cmd.GetMsgType() {
+
+			case STREAM_READER_STREAM_BEGIN:
+				// Initialize latency object
+				node := cmd.(*MsgStream).GetNode()
+				streamId := cmd.(*MsgStream).GetStreamId()
+				if node != nil {
+					m.lock.Lock()
+					_, streamExists := m.streamReaderMap[streamId]
+					m.lock.Unlock()
+
+					// Initialize the latency object only if the stream exists
+					if streamExists {
+						m.initLatencyObj(cmd)
+					}
+				}
+
+			case CLEANUP_PRJ_STATS:
+				streamId := cmd.(*MsgStream).GetStreamId()
+				m.cleanLatencyMap(streamId)
+			}
+		case _, ok := <-m.shutdownCh:
+			if !ok {
+				//shutdown signalled. exit this loop.
+				return
+			}
+		}
+	}
 }
 
 func (m *mutationMgr) checkPortAvailability() error {
@@ -954,7 +976,7 @@ func (m *mutationMgr) cleanupStream(streamId common.StreamId) {
 	delete(m.streamKeyspaceIdEnableOSO, streamId)
 
 	// Send a message to clean-up latency map
-	m.internalRecvCh <- &MsgStream{mType: CLEANUP_PRJ_STATS, streamId: streamId}
+	m.streamBeginCh <- &MsgStream{mType: CLEANUP_PRJ_STATS, streamId: streamId}
 
 	m.flock.Lock()
 	defer m.flock.Unlock()

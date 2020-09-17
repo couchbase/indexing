@@ -13,6 +13,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/couchbase/cbauth"
@@ -77,6 +78,8 @@ type Command struct {
 
 	// Time to wait until client bootstraps
 	WaitForClientBootstrap int64
+
+	NumBuilds int64
 }
 
 // ParseArgs into Command object, return the list of arguments,
@@ -94,7 +97,7 @@ func ParseArgs(arguments []string) (*Command, []string, *flag.FlagSet, error) {
 	fset.StringVar(&cmdOptions.Server, "server", "127.0.0.1:8091", "Cluster server address")
 	fset.StringVar(&cmdOptions.Auth, "auth", "", "Auth user and password")
 	fset.StringVar(&cmdOptions.Bucket, "bucket", "", "Bucket name")
-	fset.StringVar(&cmdOptions.OpType, "type", "", "Command: scan|stats|scanAll|count|nodes|create|build|move|drop|list|config|batch_process")
+	fset.StringVar(&cmdOptions.OpType, "type", "", "Command: scan|stats|scanAll|count|nodes|create|build|move|drop|list|config|batch_process|batch_build")
 	fset.StringVar(&cmdOptions.IndexName, "index", "", "Index name")
 	// options for create-index
 	fset.StringVar(&cmdOptions.WhereStr, "where", "", "where clause for create index")
@@ -127,6 +130,7 @@ func ParseArgs(arguments []string) (*Command, []string, *flag.FlagSet, error) {
 	fset.StringVar(&cmdOptions.BatchProcessFile, "input", "", "Path to the file containing batch processing commands")
 
 	fset.Int64Var(&cmdOptions.WaitForClientBootstrap, "bootstrap_wait", 60, "Time (in seconds) cbindex will wait for client bootstrap")
+	fset.Int64Var(&cmdOptions.NumBuilds, "num_builds", 10, "Number of builds that can happen simultaneously across multiple collections")
 
 	// not useful to expose in sherlock
 	cmdOptions.ExprType = "N1QL"
@@ -250,6 +254,58 @@ func HandleCommand(
 		return true
 	}
 
+	processIndexName := func(indexName string) (string, string, string, string, error) {
+		v := strings.Split(indexName, ":")
+		if len(v) < 0 {
+			return "", "", "", "", fmt.Errorf("invalid index specified : %v", indexName)
+		}
+
+		scope = ""
+		collection = ""
+		if len(v) == 4 {
+			bucket, scope, collection, iname = v[0], v[1], v[2], v[3]
+		} else if len(v) == 2 {
+			bucket, iname = v[0], v[1]
+		}
+		if scope == "" {
+			scope = c.DEFAULT_SCOPE
+		}
+		if collection == "" {
+			collection = c.DEFAULT_COLLECTION
+		}
+		return bucket, scope, collection, iname, nil
+	}
+
+	validateBatchFile := func(cmd *Command) (*os.File, error) {
+		if batchProcess == false {
+			batchProcess = true
+		} else {
+			err := fmt.Errorf("Nested batch processing is not supported")
+			logging.Errorf(err.Error())
+			return nil, err
+		}
+		// Read input file from input option
+		if cmd.BatchProcessFile == "" {
+			fmsg := "Empty file name for batch processing\n"
+			logging.Errorf(fmsg)
+			return nil, err
+		}
+		fd, err := os.Open(cmd.BatchProcessFile)
+		if err != nil {
+			logging.Errorf("Unable to open commands file %q, err: %v\n", cmd.BatchProcessFile, err)
+			return nil, err
+		}
+		if cmd.WaitForClientBootstrap > 0 {
+			// TODO: This sleep is added only to allow perf QE team to get
+			// unblocked. Should be removed after client side logic is modified
+			// to handle watcher sync-up with index metadata
+			fmt.Fprintf(w, "cbindex Sleeping for %v seconds to allow client to catch-up with index meta", cmd.WaitForClientBootstrap)
+			time.Sleep(time.Duration(cmd.WaitForClientBootstrap) * time.Second)
+			fmt.Fprintf(w, "cbindex starting to process batch file: %v", cmd.BatchProcessFile)
+		}
+		return fd, nil
+	}
+
 	switch cmd.OpType {
 	case "nodes":
 		fmt.Fprintln(w, "List of nodes:")
@@ -289,24 +345,11 @@ func HandleCommand(
 	case "build":
 		defnIDs := make([]uint64, 0, len(cmd.Bindexes))
 		for _, bindex := range cmd.Bindexes {
-			v := strings.Split(bindex, ":")
-			if len(v) < 0 {
-				return fmt.Errorf("invalid index specified : %v", bindex)
+			bucket, scope, collection, iname, err := processIndexName(bindex)
+			if err != nil {
+				break
 			}
 
-			scope = ""
-			collection = ""
-			if len(v) == 4 {
-				bucket, scope, collection, iname = v[0], v[1], v[2], v[3]
-			} else if len(v) == 2 {
-				bucket, iname = v[0], v[1]
-			}
-			if scope == "" {
-				scope = c.DEFAULT_SCOPE
-			}
-			if collection == "" {
-				collection = c.DEFAULT_COLLECTION
-			}
 			index, ok := GetIndex(client, bucket, scope, collection, iname)
 			if ok {
 				defnIDs = append(defnIDs, uint64(index.Definition.DefnId))
@@ -545,32 +588,10 @@ func HandleCommand(
 		}
 
 	case "batch_process":
-		if batchProcess == false {
-			batchProcess = true
-		} else {
-			err := fmt.Errorf("Nested batch processing is not supported")
-			logging.Errorf(err.Error())
-			return err
-		}
-		// Read input file from input option
-		if cmd.BatchProcessFile == "" {
-			fmsg := "Empty file name for batch processing\n"
-			logging.Errorf(fmsg)
-			return nil
-		}
-		fd, err := os.Open(cmd.BatchProcessFile)
-		if err != nil {
-			logging.Errorf("Unable to open commands file %q, err: %v\n", cmd.BatchProcessFile, err)
-			return err
-		}
 
-		if cmd.WaitForClientBootstrap > 0 {
-			// TODO: This sleep is added only to allow perf QE team to get
-			// unblocked. Should be removed after client side logic is modified
-			// to handle watcher sync-up with index metadata
-			fmt.Fprintf(w, "cbindex Sleeping for %v seconds to allow client to catch-up with index meta", cmd.WaitForClientBootstrap)
-			time.Sleep(time.Duration(cmd.WaitForClientBootstrap) * time.Second)
-			fmt.Fprintf(w, "cbindex starting to process batch file: %v", cmd.BatchProcessFile)
+		fd, err := validateBatchFile(cmd)
+		if err != nil {
+			return err
 		}
 
 		scanner := bufio.NewScanner(fd)
@@ -599,6 +620,103 @@ func HandleCommand(
 				}
 			}
 		}
+
+	case "batch_build":
+		buildCh := make(chan bool, cmd.NumBuilds)
+		errCh := make(chan error, cmd.NumBuilds*10)
+		stopCh := make(chan bool)
+
+		fd, err := validateBatchFile(cmd)
+		if err != nil {
+			return err
+		}
+
+		go func() {
+			for {
+				select {
+				case err := <-errCh:
+					logging.Errorf("cbindex, error observed: %v", err)
+				case <-stopCh:
+					return
+				}
+			}
+		}()
+
+		var wg sync.WaitGroup
+
+		// Check if batch file contains only build commands
+		scanner := bufio.NewScanner(fd)
+		for scanner.Scan() {
+			line := scanner.Text()
+			// Commented lines
+			if strings.HasPrefix(line, "#") {
+				continue
+			}
+			args := strings.Fields(line)
+
+			if strings.Contains(line, "-auth") == false {
+				args = append([]string{"-auth", cmd.Auth}, args...)
+			}
+
+			inputCmd, _, _, err := ParseArgs(args)
+			if err != nil {
+				logging.Fatalf("Error while parsing command: %v", line)
+				return err
+			} else {
+				if inputCmd.OpType != "build" {
+					err := fmt.Errorf("Commands other than buildTyte are not allowed with batch_build type, line: %v, inputCmd type: %v\n", line, inputCmd.OpType)
+					logging.Fatalf(err.Error())
+					return err
+				}
+
+				select {
+				// Allow only 10 index builds to happen simultaneously
+				// After one build is done, spawn a go-routine to queue another build
+				case buildCh <- true:
+					wg.Add(1)
+					go func(cmd *Command, line string) {
+						defer func() {
+							wg.Done()
+							<-buildCh
+						}()
+
+						fmt.Fprintf(w, "cbindex processing command: %v\n", line)
+						if err = HandleCommand(client, cmd, false, os.Stdout); err != nil {
+							errStr := fmt.Errorf("Error occured while executing command %v, err: %v\n", line, err)
+							errCh <- errStr
+							return
+						}
+
+						defnIDs := make([]uint64, 0)
+						for _, bindex := range cmd.Bindexes {
+							bucket, scope, collection, iname, err := processIndexName(bindex)
+							index, ok := GetIndex(client, bucket, scope, collection, iname)
+							if ok {
+								defnIDs = append(defnIDs, uint64(index.Definition.DefnId))
+							} else {
+								err = fmt.Errorf("index %v/%v/%v/%v unknown for command: %v", bucket, scope, collection, iname, line)
+								errCh <- err
+								break
+							}
+						}
+
+						// Try every 1 sec and and wait for index build to finish in 1-hour
+						_, err = WaitUntilIndexState(client, defnIDs, c.INDEX_STATE_ACTIVE, 1000, 3600000)
+						if err != nil {
+							errStr := fmt.Errorf("Error occurred while processing command: %v, err: %v", line, err)
+							errCh <- errStr
+						} else {
+							fmt.Fprintf(w, "cbindex finished processing command: %v\n", line)
+						}
+					}(inputCmd, line)
+				}
+			}
+		}
+		// wait for the last set of builds to be done
+		wg.Wait()
+		close(stopCh)
+		close(buildCh)
+		close(errCh)
 	}
 	return err
 }
@@ -747,6 +865,10 @@ func validate(cmd *Command, fset *flag.FlagSet) error {
 		dont = []string{"h", "index", "bucket", "where", "fields", "primary", "with", "indexes", "low", "high", "equal", "incl", "limit", "distinct"}
 
 	case "batch_process":
+		have = []string{"type", "auth", "input"}
+		dont = []string{"index", "bucket", "where", "fields", "primary", "with", "indexes", "low", "high", "equal", "incl", "limit", "distinct", "ckey", "cval"}
+
+	case "batch_build":
 		have = []string{"type", "auth", "input"}
 		dont = []string{"index", "bucket", "where", "fields", "primary", "with", "indexes", "low", "high", "equal", "incl", "limit", "distinct", "ckey", "cval"}
 
