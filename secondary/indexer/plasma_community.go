@@ -12,6 +12,7 @@ package indexer
 // and limitations under the License.
 
 import (
+	"fmt"
 	"github.com/couchbase/indexing/secondary/common"
 )
 
