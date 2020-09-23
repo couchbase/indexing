@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"reflect"
 	"runtime"
 	"strings"
 	"sync"
@@ -171,7 +172,7 @@ func getIndexLayout(config common.Config, hosts []string) ([]*IndexerNode, error
 	list := make([]*IndexerNode, 0)
 	numIndexes := 0
 
-	resp, err := restHelper(getLocalMetadataResp, hosts, cinfo)
+	resp, err := restHelperNoLock(getLocalMetadataResp, hosts, nil, cinfo)
 	if err != nil {
 		return nil, err
 	}
@@ -392,9 +393,17 @@ func getIndexStats(plan *Plan, config common.Config) error {
 		return errors.New("No indexing service available.")
 	}
 
-	for _, nid := range nids {
+	resp, err := restHelperNoLock(getLocalStatsResp, nil, plan.Placement, cinfo)
+	if err != nil {
+		return err
+	}
 
-		// Find the indexer host name
+	for nid, res := range resp {
+		stats := new(common.Statistics)
+		if err := convertResponse(res, stats); err != nil {
+			return err
+		}
+
 		nodeId, err := getIndexerHost(cinfo, nid)
 		if err != nil {
 			logging.Errorf("Planner::getIndexStats: Error from initializing indexer node. Error = %v", err)
@@ -404,23 +413,10 @@ func getIndexStats(plan *Plan, config common.Config) error {
 		// look up the corresponding indexer object based on the nodeId
 		indexer := findIndexerByNodeId(plan.Placement, nodeId)
 		if indexer == nil {
-			logging.Verbosef("Planner::getIndexStats: Skip indexer %v since it is not in the included list")
 			continue
 		}
 
-		// obtain the admin port for the indexer node
-		addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE)
-		if err != nil {
-			logging.Errorf("Planner::getIndexStats: Error from getting service address for node %v. Error = %v", nodeId, err)
-			return err
-		}
-
 		// Read the index stats from the indexer node.
-		stats, err := getLocalStats(addr)
-		if err != nil {
-			logging.Errorf("Planner::getIndexStats: Error from reading index stats for node %v. Error = %v", nodeId, err)
-			return err
-		}
 		statsMap := stats.ToMap()
 
 		/*
@@ -795,33 +791,14 @@ func getIndexSettings(plan *Plan) error {
 		return errors.New("No indexing service available.")
 	}
 
-	for _, nid := range nids {
+	resp, err := restHelperNoLock(getLocalSettingsResp, nil, plan.Placement, cinfo)
+	if err != nil {
+		return err
+	}
 
-		// Find the indexer host name
-		nodeId, err := getIndexerHost(cinfo, nid)
-		if err != nil {
-			logging.Errorf("Planner::getIndexSettings: Error from initializing indexer node. Error = %v", err)
-			return err
-		}
-
-		// look up the corresponding indexer object based on the nodeId
-		indexer := findIndexerByNodeId(plan.Placement, nodeId)
-		if indexer == nil {
-			logging.Verbosef("Planner::getIndexSettings: Skip indexer %v since it is not in the included list")
-			continue
-		}
-
-		// obtain the admin port for the indexer node
-		addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE)
-		if err != nil {
-			logging.Errorf("Planner::getIndexSettings: Error from getting service address for node %v. Error = %v", nodeId, err)
-			return err
-		}
-
-		// Read the index settings from the indexer node.
-		settings, err := getLocalSettings(addr)
-		if err != nil {
-			logging.Errorf("Planner::getIndexSettings: Error from reading index settings for node %v. Error = %v", nodeId, err)
+	for _, res := range resp {
+		settings := make(map[string]interface{})
+		if err := convertResponse(res, &settings); err != nil {
 			return err
 		}
 
@@ -949,7 +926,7 @@ func getLocalStats(addr string) (*common.Statistics, error) {
 	resp, err := getWithCbauth(addr + "/stats?async=false&partition=true&consumerFilter=planner")
 	if err != nil {
 		logging.Warnf("Planner.getLocalStats(): Unable to get the most recent stats.  Try fetch cached stats.")
-		resp, err = getWithCbauth(addr + "/stats?async=true&partition=true")
+		resp, err = getWithCbauth(addr + "/stats?async=true&partition=true&consumerFilter=planner")
 		if err != nil {
 			return nil, err
 		}
@@ -961,6 +938,23 @@ func getLocalStats(addr string) (*common.Statistics, error) {
 	}
 
 	return stats, nil
+}
+
+//
+// This function gets the marshalled index stats from a specific indexer host.
+//
+func getLocalStatsResp(addr string) (*http.Response, error) {
+
+	resp, err := getWithCbauth(addr + "/stats?async=false&partition=true&consumerFilter=planner")
+	if err != nil {
+		logging.Warnf("Planner.getLocalStats(): Unable to get the most recent stats for node %v.  Try fetch cached stats.", addr)
+		resp, err = getWithCbauth(addr + "/stats?async=true&partition=true&consumerFilter=planner")
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return resp, nil
 }
 
 //
@@ -982,6 +976,19 @@ func getLocalCreateTokens(addr string) (*mc.CreateCommandTokenList, error) {
 }
 
 //
+// This function gets the marshalled list of create tokens for a specific indexer host.
+//
+func getLocalCreateTokensResp(addr string) (*http.Response, error) {
+
+	resp, err := getWithCbauth(addr + "/listCreateTokens")
+	if err != nil {
+		return nil, err
+	}
+
+	return resp, nil
+}
+
+//
 // This function gets the delete tokens for a specific indexer host.
 //
 func getLocalDeleteTokens(addr string) (*mc.DeleteCommandTokenList, error) {
@@ -997,6 +1004,19 @@ func getLocalDeleteTokens(addr string) (*mc.DeleteCommandTokenList, error) {
 	}
 
 	return tokens, nil
+}
+
+//
+// This function gets the marshalled list of delete tokens for a specific indexer host.
+//
+func getLocalDeleteTokensResp(addr string) (*http.Response, error) {
+
+	resp, err := getWithCbauth(addr + "/listDeleteTokens")
+	if err != nil {
+		return nil, err
+	}
+
+	return resp, nil
 }
 
 //
@@ -1018,6 +1038,19 @@ func getLocalDropInstanceTokens(addr string) (*mc.DropInstanceCommandTokenList, 
 }
 
 //
+// This function gets the marshalled list of drop instance tokens for a specific indexer host.
+//
+func getLocalDropInstanceTokensResp(addr string) (*http.Response, error) {
+
+	resp, err := getWithCbauth(addr + "/listDropInstanceTokens")
+	if err != nil {
+		return nil, err
+	}
+
+	return resp, nil
+}
+
+//
 // This function gets the indexer settings for a specific indexer host.
 //
 func getLocalSettings(addr string) (map[string]interface{}, error) {
@@ -1036,6 +1069,19 @@ func getLocalSettings(addr string) (map[string]interface{}, error) {
 }
 
 //
+// This function gets the marshalled indexer settings for a specific indexer host.
+//
+func getLocalSettingsResp(addr string) (*http.Response, error) {
+
+	resp, err := getWithCbauth(addr + "/settings")
+	if err != nil {
+		return nil, err
+	}
+
+	return resp, nil
+}
+
+//
 // This function gets the num replica for a specific indexer host.
 //
 func getLocalNumReplicas(addr string) (map[common.IndexDefnId]common.Counter, error) {
@@ -1051,6 +1097,19 @@ func getLocalNumReplicas(addr string) (map[common.IndexDefnId]common.Counter, er
 	}
 
 	return numReplicas, nil
+}
+
+//
+// This function gets the marshalled num replica for a specific indexer host.
+//
+func getLocalNumReplicasResp(addr string) (*http.Response, error) {
+
+	resp, err := getWithCbauth(addr + "/listReplicaCount")
+	if err != nil {
+		return nil, err
+	}
+
+	return resp, nil
 }
 
 func getWithCbauth(url string) (*http.Response, error) {
@@ -1220,40 +1279,26 @@ func processCreateToken(indexers []*IndexerNode, config common.Config) error {
 		return nil
 	}
 
-	// find all nodes that has a index http service
-	nids := cinfo.GetNodesByServiceType(common.INDEX_HTTP_SERVICE)
+	// Read the create token from the indexer node using REST.  This is to ensure that it can read the token from the node
+	// that place the token.   If that node is partitioned away, then it will rely on other nodes that have got the token.
+	// If there is no node that can provide the token,
+	// 1) the planner will not consider those pending-create index for planning
+	// 2) the planner will not move those pending-create index from the out-node.
+	resp, err := restHelperNoLock(getLocalCreateTokensResp, nil, indexers, cinfo)
+	if err != nil {
+		return err
+	}
 
-	for _, nid := range nids {
+	for nid, res := range resp {
+		tokens := new(mc.CreateCommandTokenList)
+		if err := convertResponse(res, tokens); err != nil {
+			return err
+		}
 
 		// Find the indexer host name
 		nodeId, err := getIndexerHost(cinfo, nid)
 		if err != nil {
 			logging.Errorf("Planner::processCreateToken: Error from initializing indexer node. Error = %v", err)
-			return err
-		}
-
-		// look up the corresponding indexer object based on the nodeId
-		indexer := findIndexerByNodeId(indexers, nodeId)
-		if indexer == nil {
-			logging.Verbosef("Planner::processCreateToken: Skip indexer %v since it is not in the included list")
-			continue
-		}
-
-		// obtain the admin port for the indexer node
-		addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE)
-		if err != nil {
-			logging.Errorf("Planner::processCreateToken: Error from getting service address for node %v. Error = %v", nodeId, err)
-			return err
-		}
-
-		// Read the create token from the indexer node using REST.  This is to ensure that it can read the token from the node
-		// that place the token.   If that node is partitioned away, then it will rely on other nodes that have got the token.
-		// If there is no node that can provide the token,
-		// 1) the planner will not consider those pending-create index for planning
-		// 2) the planner will not move those pending-create index from the out-node.
-		tokens, err := getLocalCreateTokens(addr)
-		if err != nil {
-			logging.Errorf("Planner::processCreateToken: Error from reading create tokens for node %v. Error = %v", nodeId, err)
 			return err
 		}
 
@@ -1350,40 +1395,26 @@ func processDeleteToken(indexers []*IndexerNode, config common.Config) error {
 		return nil
 	}
 
-	// find all nodes that has a index http service
-	nids := cinfo.GetNodesByServiceType(common.INDEX_HTTP_SERVICE)
+	// Read the delete token from the indexer node using REST.  This is to ensure that it can read the token from the node
+	// that place the token.   If that node is partitioned away, then it will rely on other nodes that have got the token.
+	// If there is no node that can provide the token,
+	// 1) the planner will not consider those pending-delete index for planning
+	// 2) the planner could end up repairing replica for those definitions
+	resp, err := restHelperNoLock(getLocalDeleteTokensResp, nil, indexers, cinfo)
+	if err != nil {
+		return err
+	}
 
-	for _, nid := range nids {
+	for nid, res := range resp {
+		tokens := new(mc.DeleteCommandTokenList)
+		if err := convertResponse(res, tokens); err != nil {
+			return err
+		}
 
 		// Find the indexer host name
 		nodeId, err := getIndexerHost(cinfo, nid)
 		if err != nil {
 			logging.Errorf("Planner::processDeleteToken: Error from initializing indexer node. Error = %v", err)
-			return err
-		}
-
-		// look up the corresponding indexer object based on the nodeId
-		indexer := findIndexerByNodeId(indexers, nodeId)
-		if indexer == nil {
-			logging.Verbosef("Planner::processDeleteToken: Skip indexer %v since it is not in the included list")
-			continue
-		}
-
-		// obtain the admin port for the indexer node
-		addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE)
-		if err != nil {
-			logging.Errorf("Planner::processDeleteToken: Error from getting service address for node %v. Error = %v", nodeId, err)
-			return err
-		}
-
-		// Read the delete token from the indexer node using REST.  This is to ensure that it can read the token from the node
-		// that place the token.   If that node is partitioned away, then it will rely on other nodes that have got the token.
-		// If there is no node that can provide the token,
-		// 1) the planner will not consider those pending-delete index for planning
-		// 2) the planner could end up repairing replica for those definitions
-		tokens, err := getLocalDeleteTokens(addr)
-		if err != nil {
-			logging.Errorf("Planner::processDeleteToken: Error from reading delete tokens for node %v. Error = %v", nodeId, err)
 			return err
 		}
 
@@ -1429,41 +1460,27 @@ func processDropInstanceToken(indexers []*IndexerNode, config common.Config,
 		return nil
 	}
 
-	// find all nodes that has a index http service
-	nids := cinfo.GetNodesByServiceType(common.INDEX_HTTP_SERVICE)
+	// Read the drop instance token from the indexer node using REST.  This is to ensure that it can read the token from the node
+	// that place the token.   If that node is partitioned away, then it will rely on other nodes that have got the token.
+	// If there is no node that can provide the token,
+	// 1) the planner will not consider those pending-delete index for planning
+	// 2) the planner could end up repairing replica for those definitions
+	// 3) when handling drop replica, it may not drop an already deleted replica
+	resp, err := restHelperNoLock(getLocalDropInstanceTokensResp, nil, indexers, cinfo)
+	if err != nil {
+		return err
+	}
 
-	for _, nid := range nids {
+	for nid, res := range resp {
+		tokens := new(mc.DropInstanceCommandTokenList)
+		if err := convertResponse(res, tokens); err != nil {
+			return err
+		}
 
 		// Find the indexer host name
 		nodeId, err := getIndexerHost(cinfo, nid)
 		if err != nil {
 			logging.Errorf("Planner::processDropInstanceToken: Error from initializing indexer node. Error = %v", err)
-			return err
-		}
-
-		// look up the corresponding indexer object based on the nodeId
-		indexer := findIndexerByNodeId(indexers, nodeId)
-		if indexer == nil {
-			logging.Verbosef("Planner::processDropInstanceToken: Skip indexer %v since it is not in the included list")
-			continue
-		}
-
-		// obtain the admin port for the indexer node
-		addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE)
-		if err != nil {
-			logging.Errorf("Planner::processDropInstanceToken: Error from getting service address for node %v. Error = %v", nodeId, err)
-			return err
-		}
-
-		// Read the drop instance token from the indexer node using REST.  This is to ensure that it can read the token from the node
-		// that place the token.   If that node is partitioned away, then it will rely on other nodes that have got the token.
-		// If there is no node that can provide the token,
-		// 1) the planner will not consider those pending-delete index for planning
-		// 2) the planner could end up repairing replica for those definitions
-		// 3) when handling drop replica, it may not drop an already deleted replica
-		tokens, err := getLocalDropInstanceTokens(addr)
-		if err != nil {
-			logging.Errorf("Planner::processDropInstanceToken: Error from reading drop instance tokens for node %v. Error = %v", nodeId, err)
 			return err
 		}
 
@@ -1514,41 +1531,22 @@ func getIndexNumReplica(plan *Plan) error {
 		return nil
 	}
 
-	// find all nodes that has a index http service
-	nids := cinfo.GetNodesByServiceType(common.INDEX_HTTP_SERVICE)
-
-	if len(nids) == 0 {
-		return errors.New("No indexing service available.")
+	resp, err := restHelperNoLock(getLocalNumReplicasResp, nil, plan.Placement, cinfo)
+	if err != nil {
+		return err
 	}
 
 	numReplicas := make(map[common.IndexDefnId]common.Counter)
-
-	for _, nid := range nids {
+	for nid, res := range resp {
+		localNumReplicas := make(map[common.IndexDefnId]common.Counter)
+		if err := convertResponse(res, &localNumReplicas); err != nil {
+			return err
+		}
 
 		// Find the indexer host name
 		nodeId, err := getIndexerHost(cinfo, nid)
 		if err != nil {
 			logging.Errorf("Planner::getIndexNumReplica: Error from initializing indexer node. Error = %v", err)
-			return err
-		}
-
-		// look up the corresponding indexer object based on the nodeId
-		indexer := findIndexerByNodeId(plan.Placement, nodeId)
-		if indexer == nil {
-			logging.Verbosef("Planner::getIndexNumReplica: Skip indexer %v since it is not in the included list")
-			continue
-		}
-
-		// obtain the admin port for the indexer node
-		addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE)
-		if err != nil {
-			logging.Errorf("Planner::getIndexNumReplica: Error from getting service address for node %v. Error = %v", nodeId, err)
-			return err
-		}
-
-		localNumReplicas, err := getLocalNumReplicas(addr)
-		if err != nil {
-			logging.Errorf("Planner::getIndexNumReplica: Error from reading index num replica for node %v. Error = %v", nodeId, err)
 			return err
 		}
 
@@ -1605,8 +1603,8 @@ func generateReplicaMap(indexers []*IndexerNode) map[common.IndexDefnId]map[int]
 //
 // IMP: Note that the callers of this function should hold cinfo lock
 //
-func restHelper(rest func(string) (*http.Response, error), hosts []string,
-	cinfo *common.ClusterInfoCache) (map[common.NodeId]*http.Response, error) {
+func restHelperNoLock(rest func(string) (*http.Response, error), hosts []string,
+	indexers []*IndexerNode, cinfo *common.ClusterInfoCache) (map[common.NodeId]*http.Response, error) {
 
 	// Find all nodes that has a index http service
 	// 1) This method will exclude inactive_failed node in the cluster.  But if a node failed after the topology is fetched, then
@@ -1652,6 +1650,26 @@ func restHelper(rest func(string) (*http.Response, error), hosts []string,
 		nids = nodes
 	}
 
+	if len(indexers) != 0 {
+		for _, nid := range nodes {
+			nodeId, err := getIndexerHost(cinfo, nid)
+			if err != nil {
+				return nil, err
+			}
+
+			indexer := findIndexerByNodeId(indexers, nodeId)
+			if indexer == nil {
+				logging.Verbosef("Planner::%v: Skip indexer %v since it is not in the included list",
+					runtime.FuncForPC(reflect.ValueOf(rest).Pointer()).Name(), nid)
+				continue
+			}
+
+			nids = append(nids, nid)
+		}
+	} else {
+		nids = nodes
+	}
+
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 
@@ -1662,7 +1680,7 @@ func restHelper(rest func(string) (*http.Response, error), hosts []string,
 		// obtain the admin port for the indexer node
 		addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE)
 		if err != nil {
-			logging.Errorf("Planner::restHelper: Error from getting service address for node %v. Error = %v", nid, err)
+			logging.Errorf("Planner::restHelperNoLock: Error from getting service address for node %v. Error = %v", nid, err)
 			return nil, err
 		}
 
