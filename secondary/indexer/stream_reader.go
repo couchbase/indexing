@@ -1110,7 +1110,7 @@ func (w *streamWorker) updateOSOMarkerInFilter(meta *MutationMeta, eventType byt
 		}
 
 		resetStream := func() {
-			logging.Infof("MutationStreamReader::updateOSOMarkerInFilter %v %v.",
+			logging.Infof("MutationStreamReader::updateOSOMarkerInFilter %v %v."+
 				" Resetting Stream.", w.streamId, meta.keyspaceId)
 			w.keyspaceIdOSOException[meta.keyspaceId] = true
 			w.reader.supvRespch <- &MsgStreamUpdate{
