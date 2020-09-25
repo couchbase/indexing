@@ -7668,11 +7668,15 @@ func (idx *indexer) checkBucketExists(bucket string,
 func (idx *indexer) handleStats(cmd Message) {
 	req := cmd.(*MsgStatsRequest)
 	replych := req.GetReplyChannel()
+
 	total, idle, storage := idx.memoryUsed(false)
 	used := total - idle
 	idx.stats.memoryUsed.Set(int64(used))
 	idx.stats.memoryTotalStorage.Set(int64(storage))
 	idx.stats.memoryUsedStorage.Set(idx.memoryUsedStorage())
+
+	idx.updateStatsFromMemStats()
+
 	replych <- true
 }
 
@@ -8360,6 +8364,12 @@ func (idx *indexer) checkRecoveryInProgress() bool {
 
 	return false
 
+}
+
+func (idx *indexer) updateStatsFromMemStats() {
+	gMemstatLock.RLock()
+	idx.stats.pauseTotalNs.Set(gMemstatCache.PauseTotalNs)
+	gMemstatLock.RUnlock()
 }
 
 //memoryUsed returns the memory usage reported by
