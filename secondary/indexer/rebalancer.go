@@ -1016,15 +1016,14 @@ loop:
 			r.mu.Unlock()
 
 			if allTokensReady {
-				break
+				l.Infof("Rebalancer::waitForIndexBuild Batch Done")
+				break loop
 			}
 
 			time.Sleep(3 * time.Second)
 		}
 
 	}
-
-	r.acceptedTokens = make(map[string]*c.TransferToken)
 
 }
 
