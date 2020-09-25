@@ -538,14 +538,7 @@ func GetBucketList(baseU string) (bInfo []BucketInfo, err error) {
 func (b *Bucket) Refresh() error {
 	pool := b.pool
 	tmpb := &Bucket{}
-
-	// Unescape the b.URI as it pool.client.parseURLResponse will again escape it.
-	bucketURI, err1 := url.PathUnescape(b.URI)
-	if err1 != nil {
-		return fmt.Errorf("Malformed bucket URI path %v, error %v", b.URI, err1)
-	}
-
-	err := pool.client.parseURLResponse(bucketURI, tmpb)
+	err := pool.client.parseURLResponse(b.URI, tmpb)
 	if err != nil {
 		return err
 	}
