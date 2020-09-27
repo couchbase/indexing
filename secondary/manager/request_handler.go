@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -1118,6 +1119,161 @@ func validateRequest(bucket, scope, collection, index string) (*target, error) {
 	return nil, nil
 }
 
+func getFilters(t *target, r *http.Request) (map[string]bool, string, error) {
+	// Validation rules:
+	//
+	// 1. When include or exclude filter is specified, scope and collection
+	//    parameters should NOT be specified.
+	// 2. When include or exclude filter is specified, bucket parameter
+	//    SHOULD be specified.
+	// 3. Either include or exclude should be specified. Not both.
+
+	include := r.FormValue("include")
+	exclude := r.FormValue("exclude")
+	bucket := r.FormValue("bucket")
+	scope := r.FormValue("scope")
+	collection := r.FormValue("collection")
+
+	if len(include) != 0 || len(exclude) != 0 {
+		if len(bucket) == 0 {
+			return nil, "", fmt.Errorf("Malformed input: include/exclude parameters are specified without bucket.")
+		}
+
+		if len(scope) != 0 || len(collection) != 0 {
+			return nil, "", fmt.Errorf("Malformed input: include/exclude parameters are specified with scope/collection.")
+		}
+	}
+
+	if len(include) != 0 && len(exclude) != 0 {
+		return nil, "", fmt.Errorf("Malformed input: include and exclude both parameters are specified.")
+	}
+
+	getFilter := func(s string) string {
+		comp := strings.Split(s, ".")
+		if len(comp) == 1 || len(comp) == 2 {
+			return s
+		}
+
+		return ""
+	}
+
+	filterType := ""
+	filters := make(map[string]bool)
+
+	if len(include) != 0 {
+		filterType = "include"
+		incl := strings.Split(include, ",")
+		for _, inc := range incl {
+			filter := getFilter(inc)
+			if filter == "" {
+				return nil, "", fmt.Errorf("Malformed input: include filter is malformed (%v) (%v)", incl, inc)
+			}
+
+			filters[filter] = true
+		}
+	}
+
+	if len(exclude) != 0 {
+		filterType = "exclude"
+		excl := strings.Split(exclude, ",")
+		for _, exc := range excl {
+			filter := getFilter(exc)
+			if filter == "" {
+				return nil, "", fmt.Errorf("Malformed input: exclude filter is malformed (%v) (%v)", excl, exc)
+			}
+
+			filters[filter] = true
+		}
+	}
+
+	// TODO: Do we need any more validations?
+	return filters, filterType, nil
+}
+
+func applyFilterToDefn(bucket string, filters map[string]bool, filterType string,
+	defn *common.IndexDefn) bool {
+
+	if bucket == "" {
+		return true
+	}
+
+	if defn.Bucket != bucket {
+		return false
+	}
+
+	if filterType == "" {
+		return true
+	}
+
+	if _, ok := filters[defn.Scope]; ok {
+		if filterType == "include" {
+			return true
+		} else {
+			return false
+		}
+	}
+
+	if _, ok := filters[fmt.Sprintf("%v.%v", defn.Scope, defn.Collection)]; ok {
+		if filterType == "include" {
+			return true
+		} else {
+			return false
+		}
+	}
+
+	if _, ok := filters[fmt.Sprintf("%v.%v.%v", defn.Scope, defn.Collection, defn.Name)]; ok {
+		if filterType == "include" {
+			return true
+		} else {
+			return false
+		}
+	}
+
+	if filterType == "include" {
+		return false
+	}
+
+	return true
+}
+
+func applyFilterToTopology(bucket string, filters map[string]bool, filterType string,
+	topo *IndexTopology) bool {
+
+	if bucket == "" {
+		return true
+	}
+
+	if topo.Bucket != bucket {
+		return false
+	}
+
+	if filterType == "" {
+		return true
+	}
+
+	if _, ok := filters[topo.Scope]; ok {
+		if filterType == "include" {
+			return true
+		} else {
+			return false
+		}
+	}
+
+	if _, ok := filters[fmt.Sprintf("%v.%v", topo.Scope, topo.Collection)]; ok {
+		if filterType == "include" {
+			return true
+		} else {
+			return false
+		}
+	}
+
+	if filterType == "include" {
+		return false
+	}
+
+	return true
+}
+
 ///////////////////////////////////////////////////////
 // LocalIndexMetadata
 ///////////////////////////////////////////////////////
@@ -1136,7 +1292,7 @@ func (m *requestHandlerContext) handleLocalIndexMetadataRequest(w http.ResponseW
 	if len(index) != 0 {
 		err := errors.New("RequestHandler::handleLocalIndexMetadataRequest, err: Index level metadata requests are not supported")
 		resp := &BackupResponse{Code: RESP_ERROR, Error: err.Error()}
-		send(http.StatusInternalServerError, w, resp)
+		send(http.StatusBadRequest, w, resp)
 		return
 	}
 
@@ -1144,11 +1300,34 @@ func (m *requestHandlerContext) handleLocalIndexMetadataRequest(w http.ResponseW
 	if err != nil {
 		logging.Debugf("RequestHandler::handleLocalIndexMetadataRequest: err %v", err)
 		errStr := fmt.Sprintf(" Unable to retrieve local index metadata due to: %v", err.Error())
-		sendHttpError(w, errStr, http.StatusInternalServerError)
+		sendHttpError(w, errStr, http.StatusBadRequest)
 		return
 	}
 
-	meta, err := m.getLocalIndexMetadata(creds, t)
+	var filters map[string]bool
+	var filterType string
+	filters, filterType, err = getFilters(t, r)
+	if err != nil {
+		logging.Infof("RequestHandler::handleLocalIndexMetadataRequest: err %v", err)
+		errStr := fmt.Sprintf(" Unable to retrieve local index metadata due to: %v", err.Error())
+		sendHttpError(w, errStr, http.StatusBadRequest)
+		return
+	}
+
+	if len(filters) == 0 {
+		if t.level == SCOPE_LEVEL {
+			filterType = "include"
+			filters[t.scope] = true
+		} else if t.level == COLLECTION_LEVEL {
+			filterType = "include"
+			filters[fmt.Sprintf("%v.%v", t.scope, t.collection)] = true
+		} else if t.level == INDEX_LEVEL {
+			filterType = "include"
+			filters[fmt.Sprintf("%v.%v.%v", t.scope, t.collection, t.index)] = true
+		}
+	}
+
+	meta, err := m.getLocalIndexMetadata(creds, bucket, filters, filterType)
 	if err == nil {
 		send(http.StatusOK, w, meta)
 	} else {
@@ -1157,7 +1336,8 @@ func (m *requestHandlerContext) handleLocalIndexMetadataRequest(w http.ResponseW
 	}
 }
 
-func (m *requestHandlerContext) getLocalIndexMetadata(creds cbauth.Creds, t *target) (meta *LocalIndexMetadata, err error) {
+func (m *requestHandlerContext) getLocalIndexMetadata(creds cbauth.Creds,
+	bucket string, filters map[string]bool, filterType string) (meta *LocalIndexMetadata, err error) {
 
 	repo := m.mgr.getMetadataRepo()
 	permissionsCache := initPermissionsCache()
@@ -1193,7 +1373,7 @@ func (m *requestHandlerContext) getLocalIndexMetadata(creds cbauth.Creds, t *tar
 	var defn *common.IndexDefn
 	_, defn, err = iter.Next()
 	for err == nil {
-		if shouldProcess(t, defn.Bucket, defn.Scope, defn.Collection, defn.Name) {
+		if applyFilterToDefn(bucket, filters, filterType, defn) {
 			if permissionsCache.isAllowed(creds, defn.Bucket, defn.Scope, defn.Collection) {
 				meta.IndexDefinitions = append(meta.IndexDefinitions, *defn)
 			}
@@ -1210,8 +1390,7 @@ func (m *requestHandlerContext) getLocalIndexMetadata(creds cbauth.Creds, t *tar
 	var topology *IndexTopology
 	topology, err = iter1.Next()
 	for err == nil {
-		// Specify empty index name in shouldProcess as indexLevel metadata requests are not supported
-		if shouldProcess(t, topology.Bucket, topology.Scope, topology.Collection, "") {
+		if applyFilterToTopology(bucket, filters, filterType, topology) {
 			if permissionsCache.isAllowed(creds, topology.Bucket, topology.Scope, topology.Collection) {
 				meta.IndexTopologies = append(meta.IndexTopologies, *topology)
 			}
@@ -1732,6 +1911,8 @@ func doAuth(r *http.Request, w http.ResponseWriter) (cbauth.Creds, bool) {
 	return creds, true
 }
 
+// TODO: This function shouldn't always return IndexResponse on error in
+// verifying auth. It should depend on the caller.
 func isAllowed(creds cbauth.Creds, permissions []string, w http.ResponseWriter) bool {
 
 	allow := false
@@ -2507,6 +2688,208 @@ func (m *requestHandlerContext) processScheduleCreateRequest(req *client.Schedul
 	return nil
 }
 
+//
+// Handle backup of a bucket.
+// Note that this function does not verify auths or RBAC
+//
+func (m *requestHandlerContext) bucketBackupHandler(bucket, include, exclude string) (*ClusterIndexMetadata, error) {
+	cinfo, err := m.mgr.FetchNewClusterInfoCache()
+	if err != nil {
+		return nil, err
+	}
+
+	// find all nodes that has a index http service
+	nids := cinfo.GetNodesByServiceType(common.INDEX_HTTP_SERVICE)
+
+	clusterMeta := &ClusterIndexMetadata{Metadata: make([]LocalIndexMetadata, len(nids))}
+
+	respMap := make(map[common.NodeId]*http.Response)
+	errMap := make(map[common.NodeId]error)
+
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
+	for _, nid := range nids {
+
+		getLocalMeta := func(nid common.NodeId) {
+			defer wg.Done()
+
+			cinfo.RLock()
+			defer cinfo.RUnlock()
+
+			addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE)
+			if err == nil {
+				url := "/getLocalIndexMetadata?bucket=" + bucket
+				if len(include) != 0 {
+					url += "&include=" + include
+				}
+
+				if len(exclude) != 0 {
+					url += "&exclude=" + exclude
+				}
+
+				resp, err := getWithAuth(addr + url)
+				mu.Lock()
+				defer mu.Unlock()
+
+				if err != nil {
+					logging.Debugf("RequestHandler::bucketBackupHandler: Error while retrieving %v with auth %v", addr+"/getLocalIndexMetadata", err)
+					errMap[nid] = errors.New(fmt.Sprintf("Fail to retrieve index definition from url %s: err = %v", addr, err))
+					respMap[nid] = nil
+				} else {
+					respMap[nid] = resp
+				}
+			} else {
+				mu.Lock()
+				defer mu.Unlock()
+
+				errMap[nid] = errors.New(fmt.Sprintf("Fail to retrieve http endpoint for index node"))
+			}
+		}
+
+		wg.Add(1)
+		go getLocalMeta(nid)
+	}
+
+	wg.Wait()
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	for _, resp := range respMap {
+		if resp != nil && resp.Body != nil {
+			defer resp.Body.Close()
+		}
+	}
+
+	if len(errMap) != 0 {
+		for _, err := range errMap {
+			return nil, err
+		}
+	}
+
+	cinfo.RLock()
+	defer cinfo.RUnlock()
+
+	i := 0
+	for nid, resp := range respMap {
+
+		localMeta := new(LocalIndexMetadata)
+		status := convertResponse(resp, localMeta)
+		if status == RESP_ERROR {
+			addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE)
+			if err != nil {
+				return nil, errors.New(fmt.Sprintf("Fail to retrieve local metadata from url %v.", nid))
+			} else {
+				return nil, errors.New(fmt.Sprintf("Fail to retrieve local metadata from url %v.", addr))
+			}
+		}
+
+		newLocalMeta := LocalIndexMetadata{
+			IndexerId:   localMeta.IndexerId,
+			NodeUUID:    localMeta.NodeUUID,
+			StorageMode: localMeta.StorageMode,
+		}
+
+		for _, topology := range localMeta.IndexTopologies {
+			newLocalMeta.IndexTopologies = append(newLocalMeta.IndexTopologies, topology)
+		}
+
+		for _, defn := range localMeta.IndexDefinitions {
+			newLocalMeta.IndexDefinitions = append(newLocalMeta.IndexDefinitions, defn)
+		}
+
+		clusterMeta.Metadata[i] = newLocalMeta
+		i++
+	}
+
+	return clusterMeta, nil
+}
+
+func (m *requestHandlerContext) bucketReqHandler(w http.ResponseWriter, r *http.Request, creds cbauth.Creds) {
+	url := filepath.Clean(r.URL.Path)
+	segs := strings.Split(url, "/")
+	if len(segs) != 6 {
+		resp := &BackupResponse{Code: RESP_ERROR, Error: fmt.Sprintf("Malformed url %v", r.URL.Path)}
+		send(http.StatusBadRequest, w, resp)
+		return
+	}
+
+	bucket := segs[4]
+	function := segs[5]
+
+	switch function {
+
+	case "backup":
+		// Note that bucketReqHandler does not validate input. Input validation is
+		// in the local RPC implementation on each node. The local RPC handler
+		// cannot skip the input validation, so it can be avoided in the handler.
+
+		include := r.FormValue("include")
+		exclude := r.FormValue("exclude")
+
+		// Basic RBAC.
+		// 1. If include filter is specified, verify user has permissions to get
+		//    index list created on all component scopes and collections.
+		// 2. If include filter is not specified, verify user has permissions to
+		//    get the index list for the bucket.
+		//
+		// Local index metadata call can peform RBAC based filtering. So, in case of
+		// unauthorized access, backup service will get appropriate error.
+
+		if len(include) == 0 {
+			permission := fmt.Sprintf("cluster.bucket[%s].n1ql.index!list", bucket)
+			if !isAllowed(creds, []string{permission}, w) {
+				return
+			}
+		} else {
+			incls := strings.Split(include, ",")
+			for _, incl := range incls {
+				inc := strings.Split(incl, ".")
+				if len(inc) == 1 {
+					scope := fmt.Sprintf("%s:%s", bucket, inc[0])
+					permission := fmt.Sprintf("cluster.scope[%s].n1ql.index!list", scope)
+					if !isAllowed(creds, []string{permission}, w) {
+						return
+					}
+				} else if len(inc) == 2 {
+					collection := fmt.Sprintf("%s:%s:%s", bucket, inc[0], inc[1])
+					permission := fmt.Sprintf("cluster.collection[%s].n1ql.index!list", collection)
+					if !isAllowed(creds, []string{permission}, w) {
+						return
+					}
+				} else {
+					resp := &BackupResponse{Code: RESP_ERROR, Error: fmt.Sprintf("Malformed url %v, include %v", r.URL.Path, include)}
+					send(http.StatusBadRequest, w, resp)
+					return
+				}
+			}
+		}
+
+		if r.Method == "GET" {
+			// Backup
+			clusterMeta, err := m.bucketBackupHandler(bucket, include, exclude)
+			if err == nil {
+				resp := &BackupResponse{Code: RESP_SUCCESS, Result: *clusterMeta}
+				send(http.StatusOK, w, resp)
+			} else {
+				logging.Infof("RequestHandler::bucketBackupHandler: err %v", err)
+				resp := &BackupResponse{Code: RESP_ERROR, Error: err.Error()}
+				send(http.StatusInternalServerError, w, resp)
+			}
+		} else if r.Method == "POST" {
+			// Restore
+		} else {
+			resp := &BackupResponse{Code: RESP_ERROR, Error: fmt.Sprintf("Unsupported method %v", r.Method)}
+			send(http.StatusBadRequest, w, resp)
+		}
+
+	default:
+		resp := &BackupResponse{Code: RESP_ERROR, Error: fmt.Sprintf("Malformed URL %v", r.URL.Path)}
+		send(http.StatusBadRequest, w, resp)
+	}
+}
+
 func host2file(hostname string) string {
 
 	hostname = strings.Replace(hostname, ".", "_", -1)
@@ -2515,6 +2898,16 @@ func host2file(hostname string) string {
 	return hostname
 }
 
+//
+// Handler for /api/v1/bucket/<bucket-name>/<function-name>
+//
+func BucketRequestHandler(w http.ResponseWriter, r *http.Request, creds cbauth.Creds) {
+	handlerContext.bucketReqHandler(w, r, creds)
+}
+
+//
+// Schedule tokens
+//
 var SCHED_TOKEN_CHECK_INTERVAL = 5000 // Milliseconds
 
 type schedTokenMonitor struct {
