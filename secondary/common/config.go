@@ -1548,6 +1548,13 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
+	"indexer.plasma.PageStatsSamplePercent": ConfigValue{
+		float64(0.1),
+		"percentage of total pages used in page stats computation",
+		float64(0.1),
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.plasma.logReadAheadSize": ConfigValue{
 		1024 * 1024,
 		"Log read ahead size",
