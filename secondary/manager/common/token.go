@@ -1289,9 +1289,7 @@ func (m *CommandListener) GetDeletedScheduleCreateTokenPaths() map[string]bool {
 	return nil
 }
 
-func (m *CommandListener) AddDeletedScheduleCreateToken(path string) {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
+func (m *CommandListener) AddDeletedScheduleCreateTokenNoLock(path string) {
 	m.schedTokensDel[path] = true
 }
 
@@ -1346,7 +1344,13 @@ func (m *CommandListener) handleNewCreateCommandToken(path string, value []byte)
 	}
 
 	if value == nil {
-		delete(m.createTokens, path)
+		func() {
+			m.mutex.Lock()
+			defer m.mutex.Unlock()
+
+			delete(m.createTokens, path)
+		}()
+
 		return
 	}
 
@@ -1375,7 +1379,13 @@ func (m *CommandListener) handleNewBuildCommandToken(path string, value []byte) 
 	}
 
 	if value == nil {
-		delete(m.buildTokens, path)
+		func() {
+			m.mutex.Lock()
+			defer m.mutex.Unlock()
+
+			delete(m.buildTokens, path)
+		}()
+
 		return
 	}
 
@@ -1395,7 +1405,13 @@ func (m *CommandListener) handleNewDeleteCommandToken(path string, value []byte)
 	}
 
 	if value == nil {
-		delete(m.deleteTokens, path)
+		func() {
+			m.mutex.Lock()
+			defer m.mutex.Unlock()
+
+			delete(m.deleteTokens, path)
+		}()
+
 		return
 	}
 
@@ -1415,7 +1431,13 @@ func (m *CommandListener) handleNewDropInstanceCommandToken(path string, value [
 	}
 
 	if value == nil {
-		delete(m.dropInstTokens, path)
+		func() {
+			m.mutex.Lock()
+			defer m.mutex.Unlock()
+
+			delete(m.dropInstTokens, path)
+		}()
+
 		return
 	}
 
@@ -1445,8 +1467,14 @@ func (m *CommandListener) handleNewScheduleCreateToken(path string, value []byte
 	}
 
 	if value == nil {
-		m.AddDeletedScheduleCreateToken(prefix)
-		delete(m.scheduleTokens, prefix)
+		func() {
+			m.mutex.Lock()
+			defer m.mutex.Unlock()
+
+			m.AddDeletedScheduleCreateTokenNoLock(prefix)
+			delete(m.scheduleTokens, path)
+		}()
+
 		return
 	}
 
@@ -1472,7 +1500,13 @@ func (m *CommandListener) handleNewStopScheduleCreateToken(path string, value []
 	}
 
 	if value == nil {
-		delete(m.stopSchedTokens, path)
+		func() {
+			m.mutex.Lock()
+			defer m.mutex.Unlock()
+
+			delete(m.stopSchedTokens, path)
+		}()
+
 		return
 	}
 
