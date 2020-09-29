@@ -1073,7 +1073,13 @@ func (m *CommandListener) handleNewCreateCommandToken(path string, value []byte)
 	}
 
 	if value == nil {
-		delete(m.createTokens, path)
+		func() {
+			m.mutex.Lock()
+			defer m.mutex.Unlock()
+
+			delete(m.createTokens, path)
+		}()
+
 		return
 	}
 
@@ -1102,7 +1108,13 @@ func (m *CommandListener) handleNewBuildCommandToken(path string, value []byte) 
 	}
 
 	if value == nil {
-		delete(m.buildTokens, path)
+		func() {
+			m.mutex.Lock()
+			defer m.mutex.Unlock()
+
+			delete(m.buildTokens, path)
+		}()
+
 		return
 	}
 
@@ -1122,7 +1134,13 @@ func (m *CommandListener) handleNewDeleteCommandToken(path string, value []byte)
 	}
 
 	if value == nil {
-		delete(m.deleteTokens, path)
+		func() {
+			m.mutex.Lock()
+			defer m.mutex.Unlock()
+
+			delete(m.deleteTokens, path)
+		}()
+
 		return
 	}
 
@@ -1142,7 +1160,13 @@ func (m *CommandListener) handleNewDropInstanceCommandToken(path string, value [
 	}
 
 	if value == nil {
-		delete(m.dropInstTokens, path)
+		func() {
+			m.mutex.Lock()
+			defer m.mutex.Unlock()
+
+			delete(m.dropInstTokens, path)
+		}()
+
 		return
 	}
 
