@@ -1404,12 +1404,37 @@ func (m *requestHandlerContext) handleRestoreIndexMetadataRequest(w http.Respons
 		send(http.StatusInternalServerError, w, &RestoreResponse{Code: RESP_ERROR, Error: fmt.Sprintf("Unable to restore metadata.  Error=%v", err)})
 	}
 
-	for host, indexes := range hostIndexMap {
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
+	errMap := make(map[string]bool)
+
+	restoreIndexes := func(host string, indexes []*common.IndexDefn) {
+		defer wg.Done()
+
 		for _, index := range indexes {
 			if !m.makeCreateIndexRequest(*index, host) {
-				send(http.StatusInternalServerError, w, &RestoreResponse{Code: RESP_ERROR, Error: "Unable to restore metadata."})
+				mu.Lock()
+				defer mu.Unlock()
+
+				errMap[host] = true
+				return
 			}
 		}
+	}
+
+	for host, indexes := range hostIndexMap {
+		wg.Add(1)
+		go restoreIndexes(host, indexes)
+	}
+
+	wg.Wait()
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(errMap) != 0 {
+		send(http.StatusInternalServerError, w, &RestoreResponse{Code: RESP_ERROR, Error: "Unable to restore metadata."})
+		return
 	}
 
 	send(http.StatusOK, w, &RestoreResponse{Code: RESP_SUCCESS})
