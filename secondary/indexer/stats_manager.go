@@ -519,6 +519,8 @@ type IndexerStats struct {
 	indexerState  stats.Int64Val
 	prjLatencyMap *LatencyMapHolder
 	nodeToHostMap *NodeToHostMapHolder
+
+	pauseTotalNs stats.Uint64Val
 }
 
 func (s *IndexerStats) Init() {
@@ -539,6 +541,7 @@ func (s *IndexerStats) Init() {
 
 	s.nodeToHostMap = &NodeToHostMapHolder{}
 	s.nodeToHostMap.Init()
+	s.pauseTotalNs.Init()
 }
 
 func (s *IndexerStats) Reset() {
@@ -1265,6 +1268,7 @@ func (is IndexerStats) constructIndexerStats(skipEmpty bool, version string) com
 		addStat("memory_quota", is.memoryQuota.Value())
 		addStat("memory_used", is.memoryUsed.Value())
 		addStat("memory_total_storage", is.memoryTotalStorage.Value())
+		addStat("total_indexer_gc_pause_ns", is.pauseTotalNs.Value())
 
 		indexerState := common.IndexerState(is.indexerState.Value())
 		if indexerState == common.INDEXER_PREPARE_UNPAUSE {
@@ -1313,6 +1317,13 @@ func (s *IndexStats) constructIndexStats(skipEmpty bool, version string) common.
 		s.int64Stats(func(ss *IndexStats) int64 {
 			return ss.numRowsReturned.Value()
 		}))
+
+	// partition stats
+	addStat("memory_used",
+		s.partnInt64Stats(func(ss *IndexStats) int64 {
+			return ss.memUsed.Value()
+		}))
+
 	// partition stats
 	addStat("disk_size",
 		s.partnInt64Stats(func(ss *IndexStats) int64 {
