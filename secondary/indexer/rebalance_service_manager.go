@@ -1434,7 +1434,7 @@ func (m *ServiceMgr) registerGlobalRebalanceToken(change service.TopologyChange)
 
 			if isSingleNodeRebal(change) {
 				l.Infof("ServiceMgr::registerGlobalRebalanceToken ClusterInfo Node List doesn't "+
-					"match Known Nodes in Rebalance Request. Skip Rebalance. cinfo %v, change %v", m.cinfo, change)
+					"match Known Nodes in Rebalance Request. Skip Rebalance. cinfo.nodes : %v, change : %v", m.cinfo.Nodes(), change)
 				return nil, true
 			}
 
@@ -1447,7 +1447,7 @@ func (m *ServiceMgr) registerGlobalRebalanceToken(change service.TopologyChange)
 	}
 
 	if !valid {
-		l.Errorf("ServiceMgr::registerGlobalRebalanceToken cinfo %v change %v", m.cinfo, change)
+		l.Errorf("ServiceMgr::registerGlobalRebalanceToken cinfo.nodes : %v, change : %v", m.cinfo.Nodes(), change)
 		return err, true
 	}
 

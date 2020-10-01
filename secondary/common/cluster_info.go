@@ -385,6 +385,10 @@ func (c *ClusterInfoCache) GetNodeIdByUUID(uuid string) (NodeId, bool) {
 	return NodeId(-1), false
 }
 
+func (c *ClusterInfoCache) Nodes() []couchbase.Node {
+	return c.nodes
+}
+
 func (c *ClusterInfoCache) GetNodesByServiceType(srvc string) (nids []NodeId) {
 	for i, svs := range c.nodesvs {
 		if _, ok := svs.Services[srvc]; ok {

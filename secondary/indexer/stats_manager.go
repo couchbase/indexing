@@ -622,6 +622,7 @@ type IndexerStats struct {
 	memoryRss      stats.Uint64Val
 	memoryFree     stats.Uint64Val
 	memoryTotal    stats.Uint64Val
+	pauseTotalNs   stats.Uint64Val
 
 	indexerStateHolder stats.StringVal
 }
@@ -654,6 +655,7 @@ func (s *IndexerStats) Init() {
 	s.memoryFree.Init()
 	s.memoryTotal.Init()
 	s.indexerStateHolder.Init()
+	s.pauseTotalNs.Init()
 
 	s.SetPlannerFilters()
 	s.SetRebalanceFilters()
@@ -1044,6 +1046,7 @@ func (is IndexerStats) constructIndexerStats(skipEmpty bool, version string) com
 		addStat("memory_quota", is.memoryQuota.Value())
 		addStat("memory_used", is.memoryUsed.Value())
 		addStat("memory_total_storage", is.memoryTotalStorage.Value())
+		addStat("total_indexer_gc_pause_ns", is.pauseTotalNs.Value())
 
 		indexerState := common.IndexerState(is.indexerState.Value())
 		if indexerState == common.INDEXER_PREPARE_UNPAUSE {
@@ -1094,6 +1097,13 @@ func (s *IndexStats) constructIndexStats(skipEmpty bool, version string) common.
 		s.int64Stats(func(ss *IndexStats) int64 {
 			return ss.numRowsReturned.Value()
 		}))
+
+	// partition stats
+	addStat("memory_used",
+		s.partnInt64Stats(func(ss *IndexStats) int64 {
+			return ss.memUsed.Value()
+		}))
+
 	// partition stats
 	addStat("disk_size",
 		s.partnInt64Stats(func(ss *IndexStats) int64 {

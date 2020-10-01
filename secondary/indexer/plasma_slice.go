@@ -2197,6 +2197,7 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 	mdb.mainstore.PurgeLowThreshold = mdb.sysconf["plasma.purger.lowThreshold"].Float64()
 	mdb.mainstore.PurgeCompactRatio = mdb.sysconf["plasma.purger.compactRatio"].Float64()
 	mdb.mainstore.EnableLSSPageSMO = mdb.sysconf["plasma.enableLSSPageSMO"].Bool()
+	mdb.mainstore.PageStatsSamplePercent = mdb.sysconf["plasma.PageStatsSamplePercent"].Float64()
 
 	mdb.mainstore.EnablePageBloomFilter = mdb.sysconf["plasma.mainIndex.enablePageBloomFilter"].Bool()
 	mdb.mainstore.BloomFilterFalsePositiveRate = mdb.sysconf["plasma.mainIndex.bloomFilterFalsePositiveRate"].Float64()
@@ -2239,6 +2240,7 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 		mdb.backstore.PurgeLowThreshold = mdb.sysconf["plasma.purger.lowThreshold"].Float64()
 		mdb.backstore.PurgeCompactRatio = mdb.sysconf["plasma.purger.compactRatio"].Float64()
 		mdb.backstore.EnableLSSPageSMO = mdb.sysconf["plasma.enableLSSPageSMO"].Bool()
+		mdb.backstore.PageStatsSamplePercent = mdb.sysconf["plasma.PageStatsSamplePercent"].Float64()
 
 		mdb.backstore.EnablePageBloomFilter = mdb.sysconf["plasma.backIndex.enablePageBloomFilter"].Bool()
 		mdb.backstore.BloomFilterFalsePositiveRate = mdb.sysconf["plasma.backIndex.bloomFilterFalsePositiveRate"].Float64()

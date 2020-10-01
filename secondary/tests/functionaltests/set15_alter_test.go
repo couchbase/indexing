@@ -232,12 +232,11 @@ func waitForReplicaDrop(index, bucket string, replicaId int) bool {
 // for which stats have been received will be picked up for scan and the
 // test fails with zero scan requests for other replicas.
 //
-// To avoid such a failure, sleep for 5 seconds after the index is built
-// so that the client has updated stats from all indexer nodes. As lifecycle
-// manager waits for 1 sec before starting to broadcast stats, wait for little
-// longer than 6 sec for guaranteed broadcast of stats
+// To avoid such a failure, sleep for 10 seconds after the index is built
+// so that the client has updated stats from all indexer nodes.
+
 func waitForStatsUpdate() {
-	time.Sleep(6100 * time.Millisecond)
+	time.Sleep(10100 * time.Millisecond)
 }
 
 // scanIndexReplicas scan's the index and validates if all the replica's of the index are retruning
