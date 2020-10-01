@@ -1752,6 +1752,10 @@ func (s *ddlSettings) AllowScheduleCreate() bool {
 	return false
 }
 
+func (s *ddlSettings) AllowScheduleCreateRebal() bool {
+	return false
+}
+
 func (s *ddlSettings) handleSettings(config common.Config) {
 
 	numReplica := int32(config["settings.num_replica"].Int())

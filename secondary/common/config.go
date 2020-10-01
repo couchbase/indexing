@@ -2514,6 +2514,13 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
+	"indexer.allowScheduleCreateRebal": ConfigValue{
+		true,
+		"Allow scheduling of index creation in the background during rebalance",
+		true,
+		false,
+		false,
+	},
 	"indexer.debug.assertOnError": ConfigValue{
 		false,
 		"This flag is intended for use in test/debug setups. Certain " +
