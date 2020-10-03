@@ -164,15 +164,15 @@ type plasmaSlice struct {
 func newPlasmaSlice(storage_dir string, log_dir string, path string, sliceId SliceId, idxDefn common.IndexDefn,
 	idxInstId common.IndexInstId, partitionId common.PartitionId,
 	isPrimary bool, numPartitions int,
-	sysconf common.Config, idxStats *IndexStats, indexerStats *IndexerStats) (*plasmaSlice, error) {
+	sysconf common.Config, idxStats *IndexStats, indexerStats *IndexerStats, isNew bool) (*plasmaSlice, error) {
 
 	slice := &plasmaSlice{}
 
-	_, err := os.Stat(path)
+	err := createSliceDir(storage_dir, path, isNew)
 	if err != nil {
-		os.Mkdir(path, 0777)
-		slice.newBorn = true
+		return nil, err
 	}
+	slice.newBorn = isNew
 
 	slice.idxStats = idxStats
 	slice.indexerStats = indexerStats
@@ -227,6 +227,9 @@ func newPlasmaSlice(storage_dir string, log_dir string, path string, sliceId Sli
 			logging.Errorf("plasmaSlice:NewplasmaSlice Id %v IndexInstId %v PartitionId %v "+
 				"fatal error occured: %v", sliceId, idxInstId, partitionId, err)
 		}
+		if isNew {
+			destroyPlasmaSlice(storage_dir, path)
+		}
 		return nil, err
 	}
 
@@ -246,16 +249,37 @@ func newPlasmaSlice(storage_dir string, log_dir string, path string, sliceId Sli
 	return slice, nil
 }
 
-func destroyPlasmaSlice(path string) error {
-	return plasma.DestroyInstance(path)
+func createSliceDir(storageDir string, path string, isNew bool) error {
+
+	_, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			os.Mkdir(path, 0777)
+			return nil
+		}
+	} else if isNew {
+		// if we expect a new instance but there is residual file, destroy old data.
+		err = plasma.DestroyInstance(storageDir, path)
+	}
+
+	return err
+}
+
+func destroyPlasmaSlice(storageDir string, path string) error {
+	if err := plasma.DestroyInstance(storageDir, path); err != nil {
+		return err
+	}
+
+	// remove directory created in newPlasmaSlice()
+	return os.RemoveAll(path)
 }
 
 func listPlasmaSlices() ([]string, error) {
 	return plasma.ListInstancePaths(), nil
 }
 
-func backupCorruptedPlasmaSlice(prefix string, rename func(string) (string, error), clean func(string)) error {
-	return plasma.BackupCorruptedInstance(prefix, rename, clean)
+func backupCorruptedPlasmaSlice(storageDir string, prefix string, rename func(string) (string, error), clean func(string)) error {
+	return plasma.BackupCorruptedInstance(storageDir, prefix, rename, clean)
 }
 
 func (slice *plasmaSlice) initStores() error {
@@ -369,7 +393,7 @@ func (slice *plasmaSlice) initStores() error {
 	go func() {
 		defer wg.Done()
 
-		slice.mainstore, mErr = plasma.New2(mCfg, slice.idxDefn.IndexOnCollection())
+		slice.mainstore, mErr = plasma.New2(mCfg, slice.idxDefn.IndexOnCollection(), slice.newBorn)
 		if mErr != nil {
 			mErr = fmt.Errorf("Unable to initialize %s, err = %v", mCfg.File, mErr)
 			return
@@ -381,7 +405,7 @@ func (slice *plasmaSlice) initStores() error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			slice.backstore, bErr = plasma.New2(bCfg, slice.idxDefn.IndexOnCollection())
+			slice.backstore, bErr = plasma.New2(bCfg, slice.idxDefn.IndexOnCollection(), slice.newBorn)
 			if bErr != nil {
 				bErr = fmt.Errorf("Unable to initialize %s, err = %v", bCfg.File, bErr)
 				return
@@ -486,7 +510,9 @@ func (mdb *plasmaSlice) doRecovery() error {
 	if len(snaps) == 0 {
 		logging.Infof("plasmaSlice::doRecovery SliceId %v IndexInstId %v PartitionId %v Unable to find recovery point. Resetting store ..",
 			mdb.id, mdb.idxInstId, mdb.idxPartnId)
-		mdb.resetStores()
+		if err := mdb.resetStores(); err != nil {
+			return err
+		}
 	} else {
 		err := mdb.restore(snaps[0])
 		return err
@@ -1623,7 +1649,7 @@ func (mdb *plasmaSlice) GetCommittedCount() uint64 {
 	return atomic.LoadUint64(&mdb.committedCount)
 }
 
-func (mdb *plasmaSlice) resetStores() {
+func (mdb *plasmaSlice) resetStores() error {
 	// Clear all readers
 	for i := 0; i < cap(mdb.readers); i++ {
 		<-mdb.readers
@@ -1637,13 +1663,21 @@ func (mdb *plasmaSlice) resetStores() {
 		mdb.backstore.Close()
 	}
 
-	plasma.DestroyInstance(mdb.path)
+	if err := plasma.DestroyInstance(mdb.storageDir, mdb.path); err != nil {
+		return err
+	}
+
 	mdb.newBorn = true
-	mdb.initStores()
+	if err := mdb.initStores(); err != nil {
+		return err
+	}
+
 	mdb.startWriters(numWriters)
 	mdb.setCommittedCount()
 
 	mdb.resetStats()
+
+	return nil
 }
 
 func (mdb *plasmaSlice) resetStats() {
@@ -1771,7 +1805,9 @@ func (mdb *plasmaSlice) RollbackToZero() error {
 	mdb.waitPersist()
 	mdb.waitForPersistorThread()
 
-	mdb.resetStores()
+	if err := mdb.resetStores(); err != nil {
+		return err
+	}
 
 	mdb.lastRollbackTs = nil
 
@@ -2285,7 +2321,7 @@ func (mdb *plasmaSlice) String() string {
 func tryDeleteplasmaSlice(mdb *plasmaSlice) {
 	//cleanup the disk directory
 
-	if err := plasma.DestroyInstance(mdb.path); err != nil {
+	if err := destroyPlasmaSlice(mdb.storageDir, mdb.path); err != nil {
 		logging.Errorf("plasmaSlice::Destroy Error Cleaning Up Slice Id %v, "+
 			"IndexInstId %v, PartitionId %v, IndexDefnId %v. Error %v", mdb.id, mdb.idxInstId, mdb.idxPartnId, mdb.idxDefnId, err)
 	}
