@@ -181,6 +181,9 @@ type memdbSlice struct {
 	//This count is used to log message to console logs
 	//The count is reset when messages are logged to console
 	numKeysSkipped int32
+
+	// Used to request copy of item from storage instead of actual item
+	exposeItemCopy bool
 }
 
 func NewMemDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
@@ -215,6 +218,7 @@ func NewMemDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	slice.maxDiskSnaps = sysconf["recovery.max_disksnaps"].Int()
 	slice.numVbuckets = sysconf["numVbuckets"].Int()
 	slice.clusterAddr = sysconf["clusterAddr"].String()
+	slice.exposeItemCopy = sysconf["moi.exposeItemCopy"].Bool()
 
 	sliceBufSize := sysconf["settings.sliceBufSize"].Uint64()
 	if sliceBufSize < uint64(slice.numWriters) {
@@ -315,6 +319,8 @@ func (slice *memdbSlice) initStores() {
 	if slice.sysconf["moi.useDeltaInterleaving"].Bool() {
 		cfg.UseDeltaInterleaving()
 	}
+
+	cfg.SetExposeItemCopy(slice.exposeItemCopy)
 
 	cfg.SetKeyComparator(byteItemCompare)
 	slice.mainstore = memdb.NewWithConfig(cfg)
@@ -633,7 +639,7 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 	mdb.idxStats.backstoreRawDataSize.Add(0 - int64(len(lookupentry)))
 	mdb.idxStats.rawDataSize.Add(0 - int64(len(lookupentry)))
 
-	list := memdb.NewNodeList((*skiplist.Node)(ptr))
+	list := memdb.NewNodeList((*skiplist.Node)(ptr), mdb.exposeItemCopy)
 	oldEntriesBytes := list.Keys()
 	oldKeyCount := make([]int, len(oldEntriesBytes))
 	for i, _ := range oldEntriesBytes {
@@ -805,7 +811,7 @@ func (mdb *memdbSlice) deleteSecArrayIndex(docid []byte, workerId int) (nmut int
 	if ptr == nil {
 		return
 	}
-	list := memdb.NewNodeList(ptr)
+	list := memdb.NewNodeList(ptr, mdb.exposeItemCopy)
 	oldEntriesBytes := list.Keys()
 
 	t0 := time.Now()
@@ -1277,9 +1283,17 @@ func (mdb *memdbSlice) loadSnapshot(snapInfo *memdbSnapshotInfo) (err error) {
 			partShardCh[wId] = make(chan *memdb.ItemEntry, 1000)
 			go func(i int, wg *sync.WaitGroup) {
 				defer wg.Done()
+
+				var entryBytes []byte
+
 				for entry := range partShardCh[i] {
 					if !mdb.isPrimary {
-						entryBytes := entry.Item().BytesCopy()
+						if mdb.exposeItemCopy {
+							entryBytes = entry.Item().BytesCopy()
+						} else {
+							entryBytes = entry.Item().Bytes()
+						}
+
 						if updated, oldPtr := mdb.back[i].Update(entryBytes, unsafe.Pointer(entry.Node())); updated {
 							oldNode := (*skiplist.Node)(oldPtr)
 							entry.Node().SetLink(oldNode)
@@ -1603,6 +1617,9 @@ func (mdb *memdbSlice) UpdateConfig(cfg common.Config) {
 	mdb.sysconf = cfg
 	mdb.maxRollbacks = cfg["settings.moi.recovery.max_rollbacks"].Int()
 	mdb.maxDiskSnaps = cfg["recovery.max_disksnaps"].Int()
+
+	mdb.exposeItemCopy = cfg["moi.exposeItemCopy"].Bool()
+	mdb.mainstore.SetExposeItemCopy(mdb.exposeItemCopy)
 
 	if keySizeConfigUpdated(cfg, oldCfg) {
 		for i := 0; i < len(mdb.keySzConfChanged); i++ {

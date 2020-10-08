@@ -280,6 +280,8 @@ type Config struct {
 	useDeltaFiles bool
 	mallocFun     skiplist.MallocFn
 	freeFun       skiplist.FreeFn
+
+	exposeItemCopy bool
 }
 
 func (cfg *Config) SetKeyComparator(cmp KeyCompare) {
@@ -314,6 +316,10 @@ func (cfg *Config) UseMemoryMgmt(malloc skiplist.MallocFn, free skiplist.FreeFn)
 
 func (cfg *Config) UseDeltaInterleaving() {
 	cfg.useDeltaFiles = true
+}
+
+func (cfg *Config) SetExposeItemCopy(exposeItemCopy bool) {
+	cfg.exposeItemCopy = exposeItemCopy
 }
 
 type restoreStats struct {
