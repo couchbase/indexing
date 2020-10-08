@@ -6,20 +6,30 @@ import (
 )
 
 type NodeList struct {
-	head *skiplist.Node
+	head           *skiplist.Node
+	exposeItemCopy bool
 }
 
-func NewNodeList(head *skiplist.Node) *NodeList {
+func NewNodeList(head *skiplist.Node, exposeItemCopy bool) *NodeList {
 	return &NodeList{
-		head: head,
+		head:           head,
+		exposeItemCopy: exposeItemCopy,
 	}
 }
 
 func (l *NodeList) Keys() (keys [][]byte) {
+	var key []byte
+	var itm *Item
+
 	node := l.head
 	for node != nil {
-		// Exposed to GSI slice mutation path, return copy
-		key := (*Item)(node.Item()).BytesCopy()
+		itm = (*Item)(node.Item())
+		if l.exposeItemCopy {
+			// Exposed to GSI slice mutation path, return copy
+			key = itm.BytesCopy()
+		} else {
+			key = itm.Bytes()
+		}
 
 		keys = append(keys, key)
 		node = node.GetLink()

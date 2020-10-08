@@ -1007,6 +1007,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.moi.exposeItemCopy": ConfigValue{
+		false,
+		"Expose item copy from storage to GSI during scans and mutations",
+		false,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.useMutationSyncPool": ConfigValue{
 		false,
 		"Use sync pool for mutations",
