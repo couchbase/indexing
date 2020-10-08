@@ -2357,6 +2357,15 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.settings.rebalance.redistribute_indexes": ConfigValue{
+		false, // keep in sync with index_settings_manager.erl
+		"redistribute indexes for optimal placement during rebalance." +
+			"If false, indexes will only be moved from ejected nodes " +
+			"or missing replicas will be repaired.",
+		false,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.settings.storage_mode.disable_upgrade": ConfigValue{
 		false,
 		"Disable upgrading storage mode. This is checked on every indexer restart, " +
