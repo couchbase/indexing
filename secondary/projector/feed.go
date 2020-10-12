@@ -1753,6 +1753,13 @@ func (feed *Feed) getLocalKVAddrs(
 	if err != nil {
 		fmsg := "%v ##%x cinfo.GetLocalServiceAddress(`kv`): %v\n"
 		logging.Errorf(fmsg, prefix, opaque, err)
+
+		// Force fetch cluster info cache incase it was not syncronized properly,
+		// so that next call to this method can succeed
+		cinfo.RUnlock()
+		cinfo.FetchWithLock()
+		cinfo.RLock()
+
 		return "", projC.ErrorClusterInfo
 	}
 	return kvaddr, nil
@@ -1773,6 +1780,13 @@ func (feed *Feed) getLocalVbuckets(
 	if err != nil {
 		fmsg := "%v ##%x cinfo.GetVBuckets(%d, `%v`): %v\n"
 		logging.Errorf(fmsg, prefix, opaque, nodeID, bucketn, err)
+
+		// Force fetch cluster info cache incase it was not syncronized properly,
+		// so that next call to this method can succeed
+		cinfo.RUnlock()
+		cinfo.FetchWithLock()
+		cinfo.RLock()
+
 		return nil, projC.ErrorClusterInfo
 	}
 	vbnos := c.Vbno32to16(vbnos32)
