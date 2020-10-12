@@ -344,9 +344,9 @@ func (k *kvSender) openMutationStream(streamId c.StreamId, keyspaceId string,
 						streamId, keyspaceId, ret, addr)
 					err = ret
 				} else {
-					activeTs = updateActiveTsFromResponse(bucket, activeTs, res)
-					rollbackTs = updateRollbackTsFromResponse(bucket, rollbackTs, res)
-					pendingTs = updatePendingTsFromResponse(bucket, pendingTs, res)
+					activeTs = updateActiveTsFromResponse(keyspaceId, activeTs, res)
+					rollbackTs = updateRollbackTsFromResponse(keyspaceId, rollbackTs, res)
+					pendingTs = updatePendingTsFromResponse(keyspaceId, pendingTs, res)
 					if rollbackTs != nil {
 						logging.Infof("KVSender::openMutationStream %v %v Projector %v Rollback Received %v",
 							streamId, keyspaceId, addr, rollbackTs)
@@ -1135,12 +1135,21 @@ func (k *kvSender) makeRestartTsForVbs(bucket string, collectionId string,
 	return ts, nil
 }
 
-func updateActiveTsFromResponse(bucket string,
+func updateActiveTsFromResponse(keyspaceId string,
 	activeTs *protobuf.TsVbuuid, res *protobuf.TopicResponse) *protobuf.TsVbuuid {
 
 	activeTsList := res.GetActiveTimestamps()
-	for _, ts := range activeTsList {
-		if ts != nil && !ts.IsEmpty() && ts.GetBucket() == bucket {
+	respKeyspaceIds := res.GetKeyspaceIds()
+
+	var respKeyspaceId string
+	for i, ts := range activeTsList {
+		if respKeyspaceIds != nil {
+			respKeyspaceId = respKeyspaceIds[i]
+		} else {
+			//backward compatible
+			respKeyspaceId = ts.GetBucket()
+		}
+		if ts != nil && !ts.IsEmpty() && respKeyspaceId == keyspaceId {
 			if activeTs == nil {
 				activeTs = ts.Clone()
 			} else {
@@ -1152,12 +1161,21 @@ func updateActiveTsFromResponse(bucket string,
 
 }
 
-func updateRollbackTsFromResponse(bucket string,
+func updateRollbackTsFromResponse(keyspaceId string,
 	rollbackTs *protobuf.TsVbuuid, res *protobuf.TopicResponse) *protobuf.TsVbuuid {
 
 	rollbackTsList := res.GetRollbackTimestamps()
-	for _, ts := range rollbackTsList {
-		if ts != nil && !ts.IsEmpty() && ts.GetBucket() == bucket {
+	respKeyspaceIds := res.GetKeyspaceIds()
+
+	var respKeyspaceId string
+	for i, ts := range rollbackTsList {
+		if respKeyspaceIds != nil {
+			respKeyspaceId = respKeyspaceIds[i]
+		} else {
+			//backward compatible
+			respKeyspaceId = ts.GetBucket()
+		}
+		if ts != nil && !ts.IsEmpty() && respKeyspaceId == keyspaceId {
 			if rollbackTs == nil {
 				rollbackTs = ts.Clone()
 			} else {
@@ -1170,12 +1188,21 @@ func updateRollbackTsFromResponse(bucket string,
 
 }
 
-func updatePendingTsFromResponse(bucket string,
+func updatePendingTsFromResponse(keyspaceId string,
 	pendingTs *protobuf.TsVbuuid, res *protobuf.TopicResponse) *protobuf.TsVbuuid {
 
 	pendingTsList := res.GetPendingTimestamps()
-	for _, ts := range pendingTsList {
-		if ts != nil && !ts.IsEmpty() && ts.GetBucket() == bucket {
+	respKeyspaceIds := res.GetKeyspaceIds()
+
+	var respKeyspaceId string
+	for i, ts := range pendingTsList {
+		if respKeyspaceIds != nil {
+			respKeyspaceId = respKeyspaceIds[i]
+		} else {
+			//backward compatible
+			respKeyspaceId = ts.GetBucket()
+		}
+		if ts != nil && !ts.IsEmpty() && respKeyspaceId == keyspaceId {
 			if pendingTs == nil {
 				pendingTs = ts.Clone()
 			} else {
@@ -1187,12 +1214,21 @@ func updatePendingTsFromResponse(bucket string,
 	return pendingTs
 }
 
-func updateCurrentTsFromResponse(bucket string,
+func updateCurrentTsFromResponse(keyspaceId string,
 	currentTs *protobuf.TsVbuuid, res *protobuf.TimestampResponse) *protobuf.TsVbuuid {
 
 	currentTsList := res.GetCurrentTimestamps()
-	for _, ts := range currentTsList {
-		if ts != nil && !ts.IsEmpty() && ts.GetBucket() == bucket {
+	respKeyspaceIds := res.GetKeyspaceIds()
+
+	var respKeyspaceId string
+	for i, ts := range currentTsList {
+		if respKeyspaceIds != nil {
+			respKeyspaceId = respKeyspaceIds[i]
+		} else {
+			//backward compatible
+			respKeyspaceId = ts.GetBucket()
+		}
+		if ts != nil && !ts.IsEmpty() && respKeyspaceId == keyspaceId {
 			if currentTs == nil {
 				currentTs = ts.Clone()
 			} else {
