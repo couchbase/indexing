@@ -280,8 +280,7 @@ func (ie *IndexEvaluator) StreamEndData(
 }
 
 func (ie *IndexEvaluator) processEvent(m *mc.DcpEvent, encodeBuf []byte,
-	docval qvalue.AnnotatedValue, context qexpr.Context,
-	meta map[string]interface{}) (npkey, opkey, nkey, okey, newBuf []byte,
+	docval qvalue.AnnotatedValue, context qexpr.Context) (npkey, opkey, nkey, okey, newBuf []byte,
 	where bool, opcode mcd.CommandCode, err error) {
 
 	defer func() { // panic safe
@@ -309,8 +308,7 @@ func (ie *IndexEvaluator) processEvent(m *mc.DcpEvent, encodeBuf []byte,
 		docval = qvalue.NewAnnotatedValue(nvalue)
 	}
 
-	ie.dcpEvent2Meta(m, meta)
-	docval.SetAttachment("meta", meta)
+	ie.dcpEvent2Meta(m, docval)
 	where, err = ie.wherePredicate(m, docval, context, encodeBuf)
 	if err != nil {
 		return npkey, opkey, nkey, okey, newBuf, where, opcode, err
@@ -329,13 +327,13 @@ func (ie *IndexEvaluator) processEvent(m *mc.DcpEvent, encodeBuf []byte,
 	}
 	if len(m.OldValue) > 0 { // project old secondary key
 		nvalue := qvalue.NewParsedValueWithOptions(m.OldValue, true, true)
-		docval = qvalue.NewAnnotatedValue(nvalue)
-		docval.SetAttachment("meta", meta)
-		opkey, err = ie.partitionKey(m, m.Key, docval, context, encodeBuf)
+		oldval := qvalue.NewAnnotatedValue(nvalue)
+		oldval.ShareAnnotations(docval)
+		opkey, err = ie.partitionKey(m, m.Key, oldval, context, encodeBuf)
 		if err != nil {
 			return npkey, opkey, nkey, okey, newBuf, where, opcode, err
 		}
-		okey, newBuf, err = ie.evaluate(m, m.Key, docval, context, encodeBuf)
+		okey, newBuf, err = ie.evaluate(m, m.Key, oldval, context, encodeBuf)
 		if err != nil {
 			return npkey, opkey, nkey, okey, newBuf, where, opcode, err
 		}
@@ -347,7 +345,7 @@ func (ie *IndexEvaluator) processEvent(m *mc.DcpEvent, encodeBuf []byte,
 // TransformRoute implement Evaluator{} interface.
 func (ie *IndexEvaluator) TransformRoute(
 	vbuuid uint64, m *mc.DcpEvent, data map[string]interface{}, encodeBuf []byte,
-	docval qvalue.AnnotatedValue, context qexpr.Context, meta map[string]interface{},
+	docval qvalue.AnnotatedValue, context qexpr.Context,
 	numIndexes int, opaque2 uint64) ([]byte, error) {
 
 	var err error
@@ -358,7 +356,7 @@ func (ie *IndexEvaluator) TransformRoute(
 
 	forceUpsertDeletion := false
 	npkey, opkey, nkey, okey, newBuf, where, opcode, err = ie.processEvent(m,
-		encodeBuf, docval, context, meta)
+		encodeBuf, docval, context)
 	if err != nil {
 		forceUpsertDeletion = true
 	}
@@ -547,7 +545,7 @@ func (ie *IndexEvaluator) wherePredicate(
 }
 
 // helper functions
-func (ie *IndexEvaluator) dcpEvent2Meta(m *mc.DcpEvent, meta map[string]interface{}) {
+func (ie *IndexEvaluator) dcpEvent2Meta(m *mc.DcpEvent, docval qvalue.AnnotatedValue) {
 	// If index is defined on xattr (either where-expression, part-expression
 	// or secondary-expression) then unmarshall XATTR, and only one for this
 	// event, and only used XATTRs. Cache the results for reuse.
@@ -570,7 +568,7 @@ func (ie *IndexEvaluator) dcpEvent2Meta(m *mc.DcpEvent, meta map[string]interfac
 		}
 	}
 
-	meta["id"] = string(m.Key)
+	meta := docval.NewMeta()
 	meta["byseqno"] = m.Seqno
 	meta["revseqno"] = m.RevSeqno
 	meta["flags"] = m.Flags
@@ -579,6 +577,7 @@ func (ie *IndexEvaluator) dcpEvent2Meta(m *mc.DcpEvent, meta map[string]interfac
 	meta["nru"] = m.Nru
 	meta["cas"] = m.Cas
 	meta["xattrs"] = m.ParsedXATTR
+	docval.SetId(string(m.Key))
 }
 
 // GetIndexName implements Evaluator{} interface.

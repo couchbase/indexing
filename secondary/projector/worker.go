@@ -61,7 +61,6 @@ type VbucketWorker struct {
 	opaque2     uint64 //client opaque
 
 	encodeBuf []byte
-	meta      map[string]interface{}
 	stats     *WorkerStats
 }
 
@@ -115,7 +114,6 @@ func NewVbucketWorker(
 	fmsg := "WRKR[%v<-%v<-%v #%v]"
 	worker.logPrefix = fmt.Sprintf(fmsg, id, keyspaceId, feed.cluster, feed.topic)
 	worker.mutChanSize = mutChanSize
-	worker.meta = make(map[string]interface{}, 9)
 	go worker.run(worker.datach, worker.sbch)
 	return worker
 }
@@ -501,7 +499,7 @@ func (worker *VbucketWorker) handleEvent(m *mc.DcpEvent) *Vbucket {
 				// therefore reduces the garbage generated.
 				newBuf, err := engine.TransformRoute(
 					v.vbuuid, m, dataForEndpoints, worker.encodeBuf, docval, context,
-					worker.meta, len(engines), worker.opaque2,
+					len(engines), worker.opaque2,
 				)
 				if err != nil {
 					fmsg := "%v ##%x TransformRoute: %v for index %v docid %s\n"
