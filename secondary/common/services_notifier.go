@@ -181,6 +181,9 @@ func (instance *serviceNotifierInstance) RunObserveCollectionManifestChanges(buc
 }
 
 func (instance *serviceNotifierInstance) cleanup() {
+	singletonServicesContainer.Lock()
+	defer singletonServicesContainer.Unlock()
+
 	instance.Lock()
 	defer instance.Unlock()
 	if !instance.valid {
@@ -188,12 +191,10 @@ func (instance *serviceNotifierInstance) cleanup() {
 	}
 
 	instance.valid = false
-	singletonServicesContainer.Lock()
 	for _, w := range instance.waiters {
 		close(w)
 	}
 	delete(singletonServicesContainer.notifiers, instance.id)
-	singletonServicesContainer.Unlock()
 }
 
 func (instance *serviceNotifierInstance) DebugStr() string {
