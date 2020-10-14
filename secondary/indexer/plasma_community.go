@@ -20,7 +20,7 @@ var errStorageCorrupted = fmt.Errorf("Storage corrupted and unrecoverable")
 
 func NewPlasmaSlice(storage_dir string, log_dir string, path string, sliceId SliceId, idxDefn common.IndexDefn,
 	idxInstId common.IndexInstId, partitionId common.PartitionId, isPrimary bool, numPartitions int,
-	sysconf common.Config, idxStats *IndexStats, indexerStats *IndexerStats) (Slice, error) {
+	sysconf common.Config, idxStats *IndexStats, indexerStats *IndexerStats, isNew bool) (Slice, error) {
 	panic("Plasma is only supported in Enterprise Edition")
 }
 
@@ -28,7 +28,7 @@ func deleteFreeWriters(instId common.IndexInstId) {
 	// do nothing
 }
 
-func DestroyPlasmaSlice(path string) error {
+func DestroyPlasmaSlice(storageDir string, path string) error {
 	// do nothing
 	return nil
 }
@@ -38,7 +38,7 @@ func ListPlasmaSlices() ([]string, error) {
 	return nil, nil
 }
 
-func BackupCorruptedPlasmaSlice(string, func(string) (string, error), func(string)) error {
+func BackupCorruptedPlasmaSlice(string, string, func(string) (string, error), func(string)) error {
 	// do nothing
 	return nil
 }
