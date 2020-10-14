@@ -538,6 +538,72 @@ func TestCollectionMultipleBuilds(t *testing.T) {
 	dropIndex(index2, bucket, scope, coll, t)
 }
 
+func TestCollectionMultipleBuilds2(t *testing.T) {
+
+	bucket := "default"
+
+	defnIds := make([]uint64, 0)
+	client, err := secondaryindex.GetOrCreateClient(indexManagementAddress, "test4client")
+
+	//Create couple of indexes on all collections
+	create2Indexes := func(scope, coll string) {
+		index1 := scope + "_" + coll + "_" + "i1"
+		createDeferIndex(index1, bucket, scope, coll, []string{"age"}, t)
+		index2 := scope + "_" + coll + "_" + "i2"
+		createDeferIndex(index2, bucket, scope, coll, []string{"gender"}, t)
+		defn1, _ := secondaryindex.GetDefnID2(client, bucket, scope, coll, index1)
+		defnIds = append(defnIds, defn1)
+		defn2, _ := secondaryindex.GetDefnID2(client, bucket, scope, coll, index2)
+		defnIds = append(defnIds, defn2)
+	}
+
+	create2Indexes("s1", "c1")
+	create2Indexes("s2", "c2")
+	create2Indexes("s2", "c3")
+	create2Indexes("_default", "_default")
+
+	err = secondaryindex.BuildIndexesAsync(defnIds, indexManagementAddress, defaultIndexActiveTimeout)
+	FailTestIfError(err, "Error from BuildIndexesAsync", t)
+
+	for _, defnId := range defnIds {
+		err = secondaryindex.WaitTillIndexActive(defnId, client, defaultIndexActiveTimeout)
+		if err != nil {
+			FailTestIfError(err, "Error in WaitTillIndexActive for index2", t)
+		}
+	}
+
+	scanIndexes := func(scope, coll string, masterDocs tc.KeyValues) {
+		index1 := scope + "_" + coll + "_" + "i1"
+		index2 := scope + "_" + coll + "_" + "i2"
+		scanAllAndVerify(index1, bucket, scope, coll, "age", masterDocs, t)
+		scanAllAndVerify(index2, bucket, scope, coll, "gender", masterDocs, t)
+
+	}
+
+	scanIndexes("s1", "c1", masterDocs_c1)
+	scanIndexes("s2", "c2", masterDocs_c2)
+	scanIndexes("s2", "c3", masterDocs_c3)
+	scanIndexes("_default", "_default", masterDocs_default)
+
+	//Load more docs and scan
+	cid := kvutility.GetCollectionID(bucket, "s1", "c1", clusterconfig.Username, clusterconfig.Password, kvaddress)
+	incrdocs := CreateDocsForCollection(bucket, cid, 1000)
+	updateMasterDocSet(masterDocs_c1, incrdocs)
+	scanIndexes("s1", "c1", masterDocs_c1)
+
+	dropIndexes := func(scope, coll string) {
+		index1 := scope + "_" + coll + "_" + "i1"
+		index2 := scope + "_" + coll + "_" + "i2"
+		dropIndex(index1, bucket, scope, coll, t)
+		dropIndex(index2, bucket, scope, coll, t)
+	}
+
+	dropIndexes("s1", "c1")
+	dropIndexes("s2", "c2")
+	dropIndexes("s2", "c3")
+	dropIndexes("_default", "_default")
+}
+
 func TestCollectionIndexDropConcurrentBuild(t *testing.T) {
 
 	log.Printf("In TestCollectionIndexDropConcurrentBuild()")
