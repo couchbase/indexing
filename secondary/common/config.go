@@ -2358,11 +2358,11 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.settings.rebalance.redistribute_indexes": ConfigValue{
-		false, // keep in sync with index_settings_manager.erl
+		true, // keep in sync with index_settings_manager.erl
 		"redistribute indexes for optimal placement during rebalance." +
 			"If false, indexes will only be moved from ejected nodes " +
 			"or missing replicas will be repaired.",
-		false,
+		true,
 		false, // mutable
 		false, // case-insensitive
 	},
