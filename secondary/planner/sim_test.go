@@ -11,11 +11,12 @@ package planner
 
 import (
 	"flag"
-	"github.com/couchbase/cbauth"
-	"github.com/couchbase/indexing/secondary/logging"
 	"math"
 	"strings"
 	"testing"
+
+	"github.com/couchbase/cbauth"
+	"github.com/couchbase/indexing/secondary/logging"
 )
 
 //////////////////////////////////////////////////////////////
@@ -134,7 +135,7 @@ func TestSimulation(t *testing.T) {
 
 		plan, err = RetrievePlanFromCluster(gClusterUrl, nil)
 		if err != nil {
-			t.Fatal("Unable to read index layout from cluster %v. err = %s", gClusterUrl, err)
+			t.Fatalf("Unable to read index layout from cluster %v. err = %s", gClusterUrl, err)
 		}
 	}
 

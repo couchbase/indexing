@@ -4441,7 +4441,8 @@ func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 			indexInst.InstId, partnInst)
 
 		//add a single slice per partition for now
-		if slice, err := NewSlice(SliceId(0), &indexInst, &partnInst, idx.config, idx.stats, idx.clusterInfoClient); err == nil {
+		if slice, err := NewSlice(SliceId(0), &indexInst, &partnInst, idx.config, idx.stats,
+			idx.clusterInfoClient, !bootstrapPhase); err == nil {
 			partnInst.Sc.AddSlice(0, slice)
 			logging.Infof("Indexer::initPartnInstance Initialized Slice: \n\t Index: %v Slice: %v",
 				indexInst.InstId, slice)
@@ -6079,7 +6080,7 @@ func (idx *indexer) cleanupOrphanIndexes() {
 
 	go func() {
 		for _, f := range orphanIndexList {
-			if err := DestroySlice(mode, f); err != nil {
+			if err := DestroySlice(mode, storageDir, f); err != nil {
 				logging.Warnf("Error %v while removing orphan index data for %v.", err, f)
 			} else {
 				logging.Infof("Cleaned up the orphan index slice %v.", f)
@@ -6572,7 +6573,8 @@ func (idx *indexer) backupCorruptIndexDataFiles(indexInst *common.IndexInst,
 		return
 	}
 
-	err := MoveSlice(common.IndexTypeToStorageMode(indexInst.Defn.Using), indexInst, partnId, sliceId, storageDir, corruptDataDir)
+	err := MoveSlice(common.IndexTypeToStorageMode(indexInst.Defn.Using), indexInst, partnId, sliceId,
+		storageDir, storageDir, corruptDataDir)
 	if err != nil {
 		needsDataCleanup = true
 		return
@@ -6823,7 +6825,7 @@ func (idx *indexer) upgradeSingleIndex(inst *common.IndexInst, storageMode commo
 	partnDefnList := inst.Pc.GetAllPartitions()
 	for _, partnDefn := range partnDefnList {
 		path := filepath.Join(storage_dir, IndexPath(inst, partnDefn.GetPartitionId(), SliceId(0)))
-		if err := DestroySlice(common.IndexTypeToStorageMode(inst.Defn.Using), path); err != nil {
+		if err := DestroySlice(common.IndexTypeToStorageMode(inst.Defn.Using), storage_dir, path); err != nil {
 			common.CrashOnError(err)
 		}
 	}
@@ -7005,7 +7007,7 @@ func (idx *indexer) forceCleanupPartitionData(inst *common.IndexInst, partitionI
 
 	storage_dir := idx.config["storage_dir"].String()
 	path := filepath.Join(storage_dir, IndexPath(inst, partitionId, sliceId))
-	return DestroySlice(common.IndexTypeToStorageMode(inst.Defn.Using), path)
+	return DestroySlice(common.IndexTypeToStorageMode(inst.Defn.Using), storage_dir, path)
 }
 
 //On warmup, if an index is found in MAINT_STREAM and state INITIAL
@@ -7694,7 +7696,7 @@ func (idx *indexer) memoryUsedStorage() int64 {
 }
 
 func NewSlice(id SliceId, indInst *common.IndexInst, partnInst *PartitionInst,
-	conf common.Config, stats *IndexerStats, cic *common.ClusterInfoClient) (slice Slice, err error) {
+	conf common.Config, stats *IndexerStats, cic *common.ClusterInfoClient, isNew bool) (slice Slice, err error) {
 	// Default storage is forestdb
 	storage_dir := conf["storage_dir"].String()
 	os.Mkdir(storage_dir, 0755)
@@ -7724,19 +7726,19 @@ func NewSlice(id SliceId, indInst *common.IndexInst, partnInst *PartitionInst,
 			stats.GetPartitionStats(indInst.InstId, partitionId))
 	case common.PlasmaDB:
 		slice, err = NewPlasmaSlice(storage_dir, log_dir, path, id, indInst.Defn, instId, partitionId, indInst.Defn.IsPrimary, numPartitions, conf,
-			stats.GetPartitionStats(indInst.InstId, partitionId), stats)
+			stats.GetPartitionStats(indInst.InstId, partitionId), stats, isNew)
 	}
 
 	return
 }
 
-func DestroySlice(mode common.StorageMode, path string) error {
+func DestroySlice(mode common.StorageMode, storageDir string, path string) error {
 
 	switch mode {
 	case common.MOI, common.FORESTDB, common.NOT_SET:
 		return os.RemoveAll(path)
 	case common.PLASMA:
-		return DestroyPlasmaSlice(path)
+		return DestroyPlasmaSlice(storageDir, path)
 	}
 
 	return fmt.Errorf("unable to delete instance %v : unrecognized storage type %v", path, mode)
@@ -7753,12 +7755,13 @@ func ListSlices(mode common.StorageMode, storageDir string) ([]string, error) {
 	case common.MOI, common.FORESTDB, common.NOT_SET:
 		return listFiles()
 	case common.PLASMA:
-		return ListPlasmaSlices()
+		return listFiles()
 	}
 	return nil, fmt.Errorf("unable to list instance : unrecognized storage type %v", mode)
 }
 
-func MoveSlice(mode common.StorageMode, indexInst *common.IndexInst, partnId common.PartitionId, sliceId SliceId, sourceDir string, targetDir string) error {
+func MoveSlice(mode common.StorageMode, indexInst *common.IndexInst, partnId common.PartitionId, sliceId SliceId,
+	storageDir string, sourceDir string, targetDir string) error {
 
 	// Given any path, rename() will add a timestamp to the first sub-directory
 	// after sourceDir.  The renamed sub-directory will be added to the targetDir
@@ -7801,7 +7804,7 @@ func MoveSlice(mode common.StorageMode, indexInst *common.IndexInst, partnId com
 	case common.PLASMA:
 		indexPath := IndexPath(indexInst, partnId, sliceId)
 		srcPath := filepath.Join(sourceDir, indexPath)
-		return BackupCorruptedPlasmaSlice(srcPath, rename, clean)
+		return BackupCorruptedPlasmaSlice(storageDir, srcPath, rename, clean)
 	}
 	return fmt.Errorf("unable to move instance : unrecognized storage type %v", mode)
 }

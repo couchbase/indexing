@@ -21,20 +21,20 @@ var errStorageCorrupted = fmt.Errorf("Storage corrupted and unrecoverable")
 func NewPlasmaSlice(storage_dir string, log_dir string, path string, sliceId SliceId, idxDefn common.IndexDefn,
 	idxInstId common.IndexInstId, partitionId common.PartitionId,
 	isPrimary bool, numPartitions int,
-	sysconf common.Config, idxStats *IndexStats, indexerStats *IndexerStats) (*plasmaSlice, error) {
+	sysconf common.Config, idxStats *IndexStats, indexerStats *IndexerStats, isNew bool) (*plasmaSlice, error) {
 	return newPlasmaSlice(storage_dir, log_dir, path, sliceId,
 		idxDefn, idxInstId, partitionId, isPrimary, numPartitions,
-		sysconf, idxStats, indexerStats)
+		sysconf, idxStats, indexerStats, isNew)
 }
 
-func DestroyPlasmaSlice(path string) error {
-	return destroyPlasmaSlice(path)
+func DestroyPlasmaSlice(storageDir string, path string) error {
+	return destroyPlasmaSlice(storageDir, path)
 }
 
 func ListPlasmaSlices() ([]string, error) {
 	return listPlasmaSlices()
 }
 
-func BackupCorruptedPlasmaSlice(prefix string, rename func(string) (string, error), clean func(string)) error {
-	return backupCorruptedPlasmaSlice(prefix, rename, clean)
+func BackupCorruptedPlasmaSlice(storageDir string, prefix string, rename func(string) (string, error), clean func(string)) error {
+	return backupCorruptedPlasmaSlice(storageDir, prefix, rename, clean)
 }

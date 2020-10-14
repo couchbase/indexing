@@ -40,6 +40,8 @@ type ClientSettings struct {
 	allowPartialQuorum   uint32
 	allowScheduleCreate  uint32
 	listSchedIndexes     uint32
+
+	allowScheduleCreateRebal uint32
 }
 
 func NewClientSettings(needRefresh bool) *ClientSettings {
@@ -202,6 +204,18 @@ func (s *ClientSettings) handleSettings(config common.Config) {
 		atomic.StoreUint32(&s.allowScheduleCreate, 0)
 	}
 
+	allowScheduleCreateRebal, ok := config["indexer.allowScheduleCreateRebal"]
+	if ok {
+		if allowScheduleCreateRebal.Bool() {
+			atomic.StoreUint32(&s.allowScheduleCreateRebal, 1)
+		} else {
+			atomic.StoreUint32(&s.allowScheduleCreateRebal, 0)
+		}
+	} else {
+		logging.Errorf("ClientSettings: missing allowScheduleCreateRebal")
+		atomic.StoreUint32(&s.allowScheduleCreateRebal, 0)
+	}
+
 	listSchedIndexes, ok := config["queryport.client.listSchedIndexes"]
 	if ok {
 		if listSchedIndexes.Bool() {
@@ -301,6 +315,10 @@ func (s *ClientSettings) AllowScheduleCreate() bool {
 
 func (s *ClientSettings) ListSchedIndexes() bool {
 	return atomic.LoadUint32(&s.listSchedIndexes) == 1
+}
+
+func (s *ClientSettings) AllowScheduleCreateRebal() bool {
+	return atomic.LoadUint32(&s.allowScheduleCreateRebal) == 1
 }
 
 func (s *ClientSettings) UsePlanner() bool {

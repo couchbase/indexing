@@ -185,10 +185,20 @@ func (r *Rebalancer) initRebalAsync() {
 					l.Infof("Rebalancer::initRebalAsync Global Topology %v", topology)
 
 					onEjectOnly := cfg["rebalance.node_eject_only"].Bool()
+					optimizePlacement := cfg["settings.rebalance.redistribute_indexes"].Bool()
 					disableReplicaRepair := cfg["rebalance.disable_replica_repair"].Bool()
 					timeout := cfg["planner.timeout"].Int()
 					threshold := cfg["planner.variationThreshold"].Float64()
 					cpuProfile := cfg["planner.cpuProfile"].Bool()
+
+					//user setting redistribute_indexes overrides the internal setting
+					//onEjectOnly. onEjectOnly is not expected to be used in production
+					//as this is not documented.
+					if optimizePlacement {
+						onEjectOnly = false
+					} else {
+						onEjectOnly = true
+					}
 
 					start := time.Now()
 					r.transferTokens, err = planner.ExecuteRebalance(cfg["clusterAddr"].String(), *r.change,

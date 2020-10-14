@@ -53,6 +53,7 @@ type Settings interface {
 	UsePlanner() bool
 	AllowPartialQuorum() bool
 	AllowScheduleCreate() bool
+	AllowScheduleCreateRebal() bool
 }
 
 ///////////////////////////////////////////////////////
@@ -422,12 +423,12 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 //
 func (o *MetadataProvider) makePrepareIndexRequest(defnId c.IndexDefnId, name string,
 	bucket, scope, collection string, nodes []string, partitionScheme c.PartitionScheme,
-	numReplica int, checkDuplicateIndex bool, ctime int64) (map[c.IndexerId]int, error, bool) {
+	numReplica int, checkDuplicateIndex bool, ctime int64) (map[c.IndexerId]int, error, bool, bool) {
 
 	// do a preliminary check
 	watchers, err, _ := o.findWatchersWithRetry(nodes, numReplica, c.IsPartitioned(partitionScheme), false)
 	if err != nil {
-		return nil, err, false
+		return nil, err, false, false
 	}
 
 	if len(nodes) == 0 {
@@ -452,7 +453,7 @@ func (o *MetadataProvider) makePrepareIndexRequest(defnId c.IndexDefnId, name st
 
 	requestMsg, err := MarshallPrepareCreateRequest(request)
 	if err != nil {
-		return nil, err, false
+		return nil, err, false, false
 	}
 
 	var wg *sync.WaitGroup = new(sync.WaitGroup)
@@ -528,21 +529,24 @@ func (o *MetadataProvider) makePrepareIndexRequest(defnId c.IndexDefnId, name st
 
 	if accept < uint32(len(watcherMap)) {
 		if atomic.LoadUint32(&duplicate) > 0 {
-			return watcherMap, c.ErrDuplicateIndex, false
+			return watcherMap, c.ErrDuplicateIndex, false, false
 		}
 
-		if atomic.LoadUint32(&rebalance) > 0 {
-			return watcherMap, c.ErrRebalanceRunning, false
+		rebal := atomic.LoadUint32(&rebalance)
+		sched := atomic.LoadUint32(&schedule)
+
+		if (sched + rebal + accept) < uint32(len(watcherMap)) {
+			return watcherMap, c.ErrNetworkPartition, false, false
 		}
 
-		if (atomic.LoadUint32(&schedule) + accept) < uint32(len(watcherMap)) {
-			return watcherMap, c.ErrNetworkPartition, false
+		if rebal > 0 {
+			return watcherMap, c.ErrRebalanceRunning, true, true
 		}
 
-		return watcherMap, c.ErrAnotherIndexCreation, true
+		return watcherMap, c.ErrAnotherIndexCreation, true, false
 	}
 
-	return watcherMap, nil, false
+	return watcherMap, nil, false, false
 }
 
 //
@@ -927,20 +931,35 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn,
 		useNodes = idxDefn.Nodes
 	}
 
-	watcherMap, err, canSchedule := o.makePrepareIndexRequest(idxDefn.DefnId, idxDefn.Name,
+	watcherMap, err, canSchedule, rebalRunning := o.makePrepareIndexRequest(idxDefn.DefnId, idxDefn.Name,
 		idxDefn.Bucket, idxDefn.Scope, idxDefn.Collection, useNodes,
 		idxDefn.PartitionScheme, int(idxDefn.NumReplica), true, ctime)
 
 	if err != nil {
 		o.cancelPrepareIndexRequest(idxDefn.DefnId, watcherMap)
 		msg := fmt.Sprintf("Index creation for index %v, bucket %v, scope %v, collection %v"+
-			" cannot start. Reason: %v", idxDefn.Name, idxDefn.Bucket, idxDefn.Scope, idxDefn.Collection, err)
+			" cannot start. Reason: %v.", idxDefn.Name, idxDefn.Bucket, idxDefn.Scope, idxDefn.Collection, err)
+
+		sched := false
 
 		clusterVersion := o.GetClusterVersion()
 		if scheduleOnFailure && canSchedule && clusterVersion >= c.INDEXER_70_VERSION {
+			// Check if background creation is allowed or needded.
+			sched = true
+		}
+
+		if rebalRunning && !o.settings.AllowScheduleCreateRebal() {
+			// Check if background creation is allowed during rebalance
+			sched = false
+		}
+
+		if sched {
 			scheduleErr := o.scheduleIndexCreation(idxDefn, plan)
 			if scheduleErr == nil {
 				message := "The index is scheduled for background creation. " + msg
+				if rebalRunning {
+					message = message + " The index will be created in the background after the ongoing rebalance."
+				}
 				logging.Warnf("%v", message)
 				return fmt.Errorf("%v", message)
 			} else {
@@ -3009,7 +3028,7 @@ func (o *MetadataProvider) AlterReplicaCount(action string, defnId c.IndexDefnId
 	//
 	defn := *idxMeta.Definition
 	numPartition := idxMeta.numPartitions()
-	watcherMap, err, _ := o.makePrepareIndexRequest(defn.DefnId, defn.Name, defn.Bucket,
+	watcherMap, err, _, _ := o.makePrepareIndexRequest(defn.DefnId, defn.Name, defn.Bucket,
 		defn.Scope, defn.Collection, nil, defn.PartitionScheme, count, false, 0)
 
 	if err != nil {

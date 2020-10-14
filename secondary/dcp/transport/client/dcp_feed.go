@@ -449,6 +449,7 @@ func (feed *DcpFeed) handlePacket(
 	case transport.DCP_SEQNO_ADVANCED:
 		event = newDcpEvent(pkt, stream)
 		feed.stats.SeqnoAdvanced.Add(1)
+		sendAck = true
 
 		if len(pkt.Extras) == dcpSeqnoAdvExtrasLen {
 			event.Seqno = binary.BigEndian.Uint64(pkt.Extras)
@@ -458,6 +459,7 @@ func (feed *DcpFeed) handlePacket(
 		}
 	case transport.DCP_OSO_SNAPSHOT:
 		event = newDcpEvent(pkt, stream)
+		sendAck = true
 
 		if len(pkt.Extras) == osoSnapshotExtrasLen {
 			eventType := binary.BigEndian.Uint32(pkt.Extras)

@@ -43,7 +43,14 @@ func (it *Iterator) Valid() bool {
 }
 
 func (it *Iterator) Get() []byte {
-	return (*Item)(it.iter.Get()).Bytes()
+	itm := (*Item)(it.iter.Get())
+
+	if it.snap.db.exposeItemCopy {
+		// Exposed to GSI slice iterator, return copy
+		return itm.BytesCopy()
+	}
+
+	return itm.Bytes()
 }
 
 func (it *Iterator) GetNode() *skiplist.Node {

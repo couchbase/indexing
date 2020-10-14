@@ -53,7 +53,7 @@ var ErrIndexerInBootstrap = errors.New("Indexer In Warmup State. Please retry th
 // List of errors leading to failure of index creation
 //
 var ErrAnotherIndexCreation = errors.New("Create index or Alter replica cannot proceed due to another concurrent create index request.")
-var ErrRebalanceRunning = errors.New("Create index or Alter replica cannot proceed due to rebalance in progress")
+var ErrRebalanceRunning = errors.New("Create index or Alter replica cannot proceed due to rebalance in progress.")
 var ErrNetworkPartition = errors.New("Create index or Alter replica cannot proceed due to network partition, node failover or indexer failure.")
 var ErrDuplicateIndex = errors.New("Create index cannot proceed due to presence of duplicate index name.")
 var ErrIndexAlreadyExists = errors.New("Index already exist.")

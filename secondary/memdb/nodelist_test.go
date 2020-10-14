@@ -15,7 +15,7 @@ func TestNodeList(t *testing.T) {
 	for i := 0; i < n; i++ {
 		ptr := w.Put2([]byte(fmt.Sprintf("%010d", i)))
 		if list == nil {
-			list = NewNodeList(ptr)
+			list = NewNodeList(ptr, false)
 		} else {
 			list.Add(ptr)
 		}

@@ -280,6 +280,8 @@ type Config struct {
 	useDeltaFiles bool
 	mallocFun     skiplist.MallocFn
 	freeFun       skiplist.FreeFn
+
+	exposeItemCopy bool
 }
 
 func (cfg *Config) SetKeyComparator(cmp KeyCompare) {
@@ -314,6 +316,10 @@ func (cfg *Config) UseMemoryMgmt(malloc skiplist.MallocFn, free skiplist.FreeFn)
 
 func (cfg *Config) UseDeltaInterleaving() {
 	cfg.useDeltaFiles = true
+}
+
+func (cfg *Config) SetExposeItemCopy(exposeItemCopy bool) {
+	cfg.exposeItemCopy = exposeItemCopy
 }
 
 type restoreStats struct {
@@ -377,6 +383,33 @@ func (m *MemDB) newStoreConfig() skiplist.Config {
 		slCfg.BarrierDestructor = m.newBSDestructor()
 
 	}
+
+	slCfg.VerifyOrder = func(curr, next *skiplist.Node) bool {
+		if curr == nil || next == nil {
+			return true
+		}
+
+		cItem := curr.Item()
+		nItem := next.Item()
+		if cItem == nil {
+			if nItem != nil {
+				// next cannot be nil if curr is nil
+				return false
+			}
+			return true
+		} else if nItem == nil {
+			return true
+		}
+
+		// curr can be == next, curr can be < next
+		// return false if curr > next
+		if bytes.Compare((*Item)(cItem).Bytes(), (*Item)(nItem).Bytes()) > 0 {
+			return false
+		}
+
+		return true
+	}
+
 	return slCfg
 }
 
@@ -1094,7 +1127,11 @@ func (m *MemDB) LoadFromDisk(dir string, concurr int, callb ItemCallback) (*Snap
 		}
 	}
 
-	m.store = b.Assemble(segments...)
+	assembledStore := b.Assemble(segments...)
+	if assembledStore == nil {
+		return nil, ErrCorruptSnapshot
+	}
+	m.store = assembledStore
 
 	// Delta processing
 	if m.useDeltaFiles {

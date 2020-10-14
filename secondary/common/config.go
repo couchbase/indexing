@@ -1039,6 +1039,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.moi.exposeItemCopy": ConfigValue{
+		false,
+		"Expose item copy from storage to GSI during scans and mutations",
+		false,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.useMutationSyncPool": ConfigValue{
 		false,
 		"Use sync pool for mutations",
@@ -2350,6 +2357,15 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.settings.rebalance.redistribute_indexes": ConfigValue{
+		false, // keep in sync with index_settings_manager.erl
+		"redistribute indexes for optimal placement during rebalance." +
+			"If false, indexes will only be moved from ejected nodes " +
+			"or missing replicas will be repaired.",
+		false,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.settings.storage_mode.disable_upgrade": ConfigValue{
 		false,
 		"Disable upgrading storage mode. This is checked on every indexer restart, " +
@@ -2510,6 +2526,13 @@ var SystemConfig = Config{
 	"indexer.allowScheduleCreate": ConfigValue{
 		true,
 		"Allow scheduling index creation in the background",
+		true,
+		false,
+		false,
+	},
+	"indexer.allowScheduleCreateRebal": ConfigValue{
+		true,
+		"Allow scheduling of index creation in the background during rebalance",
 		true,
 		false,
 		false,
