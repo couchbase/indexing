@@ -522,10 +522,14 @@ func (t *IndexTopology) RemovePartitionsFromTombstone(defnId common.IndexDefnId,
 					t.Definitions[i].Instances[j].State == uint32(common.INDEX_STATE_DELETED) &&
 					t.Definitions[i].Instances[j].RState == uint32(common.REBAL_PENDING_DELETE) {
 
+					logging.Infof("IndexTopology::RemovePartitionsFromTombstone Considering DefnId %v InstId %v Partitions %v", defnId, t.Definitions[i].Instances[j].InstId, t.Definitions[i].Instances[j].Partitions)
+
 					for _, partnId := range partitions {
 						for k, partition := range t.Definitions[i].Instances[j].Partitions {
 							if partnId == partition.PartId {
 								change = true
+
+								logging.Infof("IndexTopology::RemovePartitionsFromTombstone Removing DefnId %v InstId %v Partitions %v", defnId, t.Definitions[i].Instances[j].InstId, partnId)
 
 								// remove partition from the existing instance
 								if k == len(t.Definitions[i].Instances[j].Partitions)-1 {
@@ -542,13 +546,12 @@ func (t *IndexTopology) RemovePartitionsFromTombstone(defnId common.IndexDefnId,
 						t.Definitions[i].Instances[j].Partitions = nil
 					}
 
-					return change
 				}
 			}
 		}
 	}
 
-	return false
+	return change
 }
 
 func (t *IndexTopology) DeleteAllPartitionsForIndexInst(defnId common.IndexDefnId, instId common.IndexInstId) bool {
