@@ -32,7 +32,7 @@ var NETWORK_ERROR_BACKOFF = int64(5 * time.Second)
 var RANDOM_BACKOFF_START = 50 // Milliseconds
 var RANDOM_BACKOFF_END = 5000 // Milliseconds
 
-var MAX_CREATION_RETRIES = 1000
+var DEFAULT_MAX_CREATION_RETRIES = 1000
 
 /////////////////////////////////////////////////////////////////////
 // Global Variables
@@ -278,10 +278,26 @@ func (m *schedIndexCreator) processSchedIndexes() {
 				continue
 			}
 
+			cfg := m.config.Load()
+			enabled, ok := cfg["debug.enableBackgroundIndexCreation"]
+			if ok {
+				if !enabled.Bool() {
+					continue
+				}
+			}
+
 		innerLoop:
 			for {
 				if !m.canProcessDDL() {
 					break innerLoop
+				}
+
+				cfg := m.config.Load()
+				enabled, ok := cfg["debug.enableBackgroundIndexCreation"]
+				if ok {
+					if !enabled.Bool() {
+						break innerLoop
+					}
 				}
 
 				index := m.popQ()
@@ -402,7 +418,17 @@ func (m *schedIndexCreator) handleError(index *scheduledIndex, err error) (bool,
 
 	retryable = true
 	index.state.retryCount++
-	if index.state.retryCount > MAX_CREATION_RETRIES {
+
+	var maxRetries int
+	cfg := m.config.Load()
+	maxRetriesVal, ok := cfg["scheduleCreateRetries"]
+	if !ok {
+		maxRetries = DEFAULT_MAX_CREATION_RETRIES
+	} else {
+		maxRetries = maxRetriesVal.Int()
+	}
+
+	if index.state.retryCount > maxRetries {
 		return false, false
 	}
 

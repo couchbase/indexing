@@ -2537,6 +2537,24 @@ var SystemConfig = Config{
 		false,
 		false,
 	},
+	"indexer.scheduleCreateRetries": ConfigValue{
+		1000,
+		"Number of retries - per index - for background index creation.",
+		1000,
+		false,
+		false,
+	},
+	"indexer.debug.enableBackgroundIndexCreation": ConfigValue{
+		true,
+		"This is an internal-use-only flag to enable/disable background index creation." +
+			"If this flag is false, indexes scheduled for background creation " +
+			"will not get created in the background. But the indexes will get " +
+			"scheduled for background creation based on flags indexer.allowScheduleCreate" +
+			"and indexer.allowScheduleCreateRebal.",
+		true,
+		false,
+		false,
+	},
 	"indexer.debug.assertOnError": ConfigValue{
 		false,
 		"This flag is intended for use in test/debug setups. Certain " +
