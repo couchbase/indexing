@@ -416,6 +416,9 @@ func (idx IndexInst) String() string {
 	str += fmt.Sprintf("\tStream: %v\n", idx.Stream)
 	str += fmt.Sprintf("\tVersion: %v\n", idx.Version)
 	str += fmt.Sprintf("\tReplicaId: %v\n", idx.ReplicaId)
+	if idx.RealInstId != 0 {
+		str += fmt.Sprintf("\tRealInstId: %v\n", idx.RealInstId)
+	}
 	str += fmt.Sprintf("\tPartitionContainer: %v", idx.Pc)
 	return str
 
@@ -510,6 +513,9 @@ func (idx IndexInstMap) String() string {
 		str += fmt.Sprintf("RState: %v ", index.RState)
 		str += fmt.Sprintf("Version: %v ", index.Version)
 		str += fmt.Sprintf("ReplicaId: %v ", index.ReplicaId)
+		if index.RealInstId != 0 {
+			str += fmt.Sprintf("RealInstId: %v ", index.RealInstId)
+		}
 		str += "\n"
 	}
 	return str
