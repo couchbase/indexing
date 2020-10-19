@@ -82,7 +82,8 @@ type LocalIndexMetadata struct {
 }
 
 type ClusterIndexMetadata struct {
-	Metadata []LocalIndexMetadata `json:"metadata,omitempty"`
+	Metadata    []LocalIndexMetadata                           `json:"metadata,omitempty"`
+	SchedTokens map[common.IndexDefnId]*mc.ScheduleCreateToken `json:"schedTokens,omitempty"`
 }
 
 type BackupResponse struct {
@@ -2779,7 +2780,7 @@ func (m *requestHandlerContext) bucketBackupHandler(bucket, include, exclude str
 		if status == RESP_ERROR {
 			addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE)
 			if err != nil {
-				return nil, errors.New(fmt.Sprintf("Fail to retrieve local metadata from url %v.", nid))
+				return nil, errors.New(fmt.Sprintf("Fail to retrieve local metadata from node id %v.", nid))
 			} else {
 				return nil, errors.New(fmt.Sprintf("Fail to retrieve local metadata from url %v.", addr))
 			}
@@ -2803,7 +2804,42 @@ func (m *requestHandlerContext) bucketBackupHandler(bucket, include, exclude str
 		i++
 	}
 
+	schedTokens, err := m.getSchedCreateTokens()
+	if err != nil {
+		return nil, err
+	}
+
+	clusterMeta.SchedTokens = schedTokens
+
 	return clusterMeta, nil
+}
+
+func (m *requestHandlerContext) getSchedCreateTokens() (map[common.IndexDefnId]*mc.ScheduleCreateToken, error) {
+
+	schedTokensMap := make(map[common.IndexDefnId]*mc.ScheduleCreateToken)
+	stopSchedTokensMap := make(map[common.IndexDefnId]bool)
+
+	scheduleTokens, err := mc.ListAllScheduleCreateTokens()
+	if err != nil {
+		return nil, err
+	}
+
+	stopScheduleTokens, err1 := mc.ListAllStopScheduleCreateTokens()
+	if err1 != nil {
+		return nil, err1
+	}
+
+	for _, token := range stopScheduleTokens {
+		stopSchedTokensMap[token.DefnId] = true
+	}
+
+	for _, token := range scheduleTokens {
+		if _, ok := stopSchedTokensMap[token.Definition.DefnId]; !ok {
+			schedTokensMap[token.Definition.DefnId] = token
+		}
+	}
+
+	return schedTokensMap, nil
 }
 
 func (m *requestHandlerContext) bucketReqHandler(w http.ResponseWriter, r *http.Request, creds cbauth.Creds) {
