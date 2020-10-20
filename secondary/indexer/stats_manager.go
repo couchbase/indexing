@@ -947,7 +947,6 @@ func (is IndexerStats) GetStats(spec *statsSpec) interface{} {
 }
 
 func (is IndexerStats) GetVersionedStats(t *target) (common.Statistics, bool) {
-	var key string
 	statsMap := make(map[string]interface{})
 	var found bool
 
@@ -969,9 +968,7 @@ func (is IndexerStats) GetVersionedStats(t *target) (common.Statistics, bool) {
 	if t.level == "indexer" {
 		statsMap["indexer"] = is.constructIndexerStats(t.skipEmpty, t.version)
 		for _, s := range is.indexes {
-			name := common.FormatIndexInstDisplayName(s.name, s.replicaId)
-			key = fmt.Sprintf("%s:%s", s.bucket, name)
-			statsMap[key] = s.constructIndexStats(t.skipEmpty, t.version)
+			addToStatsMap(s)
 		}
 		found = true
 	} else if t.level == "bucket" {
