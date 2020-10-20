@@ -121,7 +121,7 @@ echo "Using storage type: $STORAGE"
 
  # Get ulimit -n: If less than 1024, set it to 1024.
 ulimitVal=$(ulimit -n)
-if [ 0 -gt $ulimitVal ]; then
+if [ $ulimitVal -gt 0 ]; then
   echo "Setting ulimit to 200000"
   ulimit -n 200000
 fi
