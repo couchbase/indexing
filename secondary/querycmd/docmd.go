@@ -354,7 +354,7 @@ func HandleCommand(
 			if ok {
 				defnIDs = append(defnIDs, uint64(index.Definition.DefnId))
 			} else {
-				err = fmt.Errorf("index %v/%v/%v/%v unknown", bucket, scope, collection, iname)
+				err = fmt.Errorf("Index %v/%v/%v/%v unknown", bucket, scope, collection, iname)
 				break
 			}
 		}
@@ -366,7 +366,7 @@ func HandleCommand(
 	case "move":
 		index, ok := GetIndex(client, cmd.Bucket, scope, collection, cmd.IndexName)
 		if !ok {
-			return fmt.Errorf("invalid index specified : %v", cmd.IndexName)
+			return fmt.Errorf("Index %v/%v/%v/%v unknown", cmd.Bucket, scope, collection, cmd.IndexName)
 		}
 
 		if err == nil {
@@ -380,8 +380,9 @@ func HandleCommand(
 	case "drop":
 		index, ok := GetIndex(client, cmd.Bucket, scope, collection, cmd.IndexName)
 		if !ok {
-			return fmt.Errorf("invalid index specified : %v", cmd.IndexName)
+			return fmt.Errorf("Index %v/%v/%v/%v unknown", cmd.Bucket, scope, collection, cmd.IndexName)
 		}
+
 		err = client.DropIndex(uint64(index.Definition.DefnId))
 		if err == nil {
 			fmt.Fprintf(w, "Index dropped %v/%v/%v/%v\n", bucket, scope, collection, iname)
@@ -398,7 +399,11 @@ func HandleCommand(
 			qclient.PutInPools(tmpbuf, tmpbufPoolIdx)
 		}()
 
-		index, _ := GetIndex(client, bucket, scope, collection, iname)
+		index, ok := GetIndex(client, bucket, scope, collection, iname)
+		if !ok {
+			return fmt.Errorf("Index %v/%v/%v/%v unknown", bucket, scope, collection, iname)
+		}
+
 		defnID := uint64(index.Definition.DefnId)
 		fmt.Fprintln(w, "Scan index:")
 		_, err = WaitUntilIndexState(
@@ -432,8 +437,7 @@ func HandleCommand(
 
 		index, found := GetIndex(client, bucket, scope, collection, iname)
 		if !found {
-			fmt.Fprintln(w, "Index not found")
-			os.Exit(1)
+			return fmt.Errorf("Index %v/%v/%v/%v unknown", bucket, scope, collection, iname)
 		}
 
 		defnID := uint64(index.Definition.DefnId)
@@ -456,7 +460,11 @@ func HandleCommand(
 		var state c.IndexState
 		var statsResp c.IndexStatistics
 
-		index, _ := GetIndex(client, bucket, scope, collection, iname)
+		index, ok := GetIndex(client, bucket, scope, collection, iname)
+		if !ok {
+			return fmt.Errorf("Index %v/%v/%v/%v unknown", bucket, scope, collection, iname)
+		}
+
 		defnID := uint64(index.Definition.DefnId)
 		_, err = WaitUntilIndexState(
 			client, []uint64{defnID}, c.INDEX_STATE_ACTIVE,
@@ -478,7 +486,10 @@ func HandleCommand(
 		var state c.IndexState
 		var count int64
 
-		index, _ := GetIndex(client, bucket, scope, collection, iname)
+		index, ok := GetIndex(client, bucket, scope, collection, iname)
+		if !ok {
+			return fmt.Errorf("Index %v/%v/%v/%v unknown", bucket, scope, collection, iname)
+		}
 		defnID := uint64(index.Definition.DefnId)
 		_, err = WaitUntilIndexState(
 			client, []uint64{defnID}, c.INDEX_STATE_ACTIVE,
@@ -694,7 +705,7 @@ func HandleCommand(
 							if ok {
 								defnIDs = append(defnIDs, uint64(index.Definition.DefnId))
 							} else {
-								err = fmt.Errorf("index %v/%v/%v/%v unknown for command: %v", bucket, scope, collection, iname, line)
+								err = fmt.Errorf("Index %v/%v/%v/%v unknown for command: %v", bucket, scope, collection, iname, line)
 								errCh <- err
 								break
 							}
