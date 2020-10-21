@@ -6986,6 +6986,20 @@ func (idx *indexer) forceCleanupIndexData(inst *common.IndexInst, sliceId SliceI
 		partnDefnList := inst.Pc.GetAllPartitions()
 		for _, partnDefn := range partnDefnList {
 
+			//if RState is REBAL_PENDING_DELETE(i.e. tombstone) and partition is a valid partition
+			//for RealInstId, skip the cleanup (see MB-42108 for details)
+			if inst.IsProxy() && inst.RState == common.REBAL_PENDING_DELETE {
+				if realInst, ok := idx.indexInstMap[inst.RealInstId]; ok {
+					if exists := realInst.Pc.CheckPartitionExists(partnDefn.GetPartitionId()); exists {
+						partitionIDs, _ := realInst.Pc.GetAllPartitionIds()
+						logging.Infof("Skip cleanup for proxy InstId %v Partition %v. Valid partition"+
+							" found for Real InstId %v Partitions %v", inst.InstId, partnDefn.GetPartitionId(),
+							inst.RealInstId, partitionIDs)
+						continue
+					}
+				}
+			}
+
 			logging.Infof("Indexer::forceCleanupIndexData Cleaning Up partition %v, "+
 				"IndexInstId %v, IndexDefnId %v ", partnDefn.GetPartitionId(), inst.InstId, inst.Defn.DefnId)
 
