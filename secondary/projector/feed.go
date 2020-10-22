@@ -2114,13 +2114,13 @@ func (feed *Feed) topicResponse() *protobuf.TopicResponse {
 	}
 	ys := make([]*protobuf.TsVbuuid, 0, len(feed.rollTss))
 	for _, ts := range feed.rollTss {
-		if ts != nil && !ts.IsEmpty() {
+		if ts != nil {
 			ys = append(ys, ts.Clone())
 		}
 	}
 	zs := make([]*protobuf.TsVbuuid, 0, len(feed.reqTss))
 	for _, ts := range feed.reqTss {
-		if ts != nil && !ts.IsEmpty() {
+		if ts != nil {
 			zs = append(zs, ts.Clone())
 		}
 	}
