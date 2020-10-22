@@ -14,6 +14,7 @@ import (
 	"encoding/gob"
 	"errors"
 	"fmt"
+	"github.com/couchbase/plasma"
 	"math"
 	"os"
 	"sort"
@@ -1269,21 +1270,8 @@ func (s *storageMgr) getIndexStorageStats(spec *statsSpec) []IndexStorageStats {
 func (s *storageMgr) handleRecoveryDone() {
 	s.supvCmdch <- &MsgSuccess{}
 
-	for idxInstId, partnMap := range s.indexPartnMap {
-
-		inst, ok := s.indexInstMap[idxInstId]
-		//skip deleted indexes
-		if !ok || inst.State == common.INDEX_STATE_DELETED {
-			continue
-		}
-
-		for _, partnInst := range partnMap {
-
-			slices := partnInst.Sc.GetAllSlices()
-			for _, slice := range slices {
-				slice.RecoveryDone()
-			}
-		}
+	if common.GetStorageMode() == common.PLASMA {
+		plasma.RecoveryDone()
 	}
 }
 
