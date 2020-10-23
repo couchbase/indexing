@@ -1120,7 +1120,7 @@ func validateRequest(bucket, scope, collection, index string) (*target, error) {
 	return nil, nil
 }
 
-func getFilters(t *target, r *http.Request, bucket string) (map[string]bool, string, error) {
+func getFilters(r *http.Request, bucket string) (map[string]bool, string, error) {
 	// Validation rules:
 	//
 	// 1. When include or exclude filter is specified, scope and collection
@@ -1368,7 +1368,7 @@ func (m *requestHandlerContext) handleLocalIndexMetadataRequest(w http.ResponseW
 
 	var filters map[string]bool
 	var filterType string
-	filters, filterType, err = getFilters(t, r, bucket)
+	filters, filterType, err = getFilters(r, bucket)
 	if err != nil {
 		logging.Infof("RequestHandler::handleLocalIndexMetadataRequest: err %v", err)
 		errStr := fmt.Sprintf(" Unable to retrieve local index metadata due to: %v", err.Error())
@@ -2762,20 +2762,15 @@ func (m *requestHandlerContext) processScheduleCreateRequest(req *client.Schedul
 //
 func (m *requestHandlerContext) bucketRestoreHandler(bucket, include, exclude string, r *http.Request) (int, string) {
 
-	t := &target{
-		level:  BUCKET_LEVEL,
-		bucket: bucket,
-	}
-
-	filters, filterType, err := getFilters(t, r, bucket)
+	filters, filterType, err := getFilters(r, bucket)
 	if err != nil {
-		logging.Errorf("RequestHandler::bucketBackupHandler: err in getFilters %v", err)
+		logging.Errorf("RequestHandler::bucketRestoreHandler: err in getFilters %v", err)
 		return http.StatusBadRequest, err.Error()
 	}
 
 	remap, err1 := getRestoreRemapParam(r)
 	if err1 != nil {
-		logging.Errorf("RequestHandler::bucketBackupHandler: err in getRestoreRemapParam %v", err1)
+		logging.Errorf("RequestHandler::bucketRestoreHandler: err in getRestoreRemapParam %v", err1)
 		return http.StatusBadRequest, err1.Error()
 	}
 
@@ -2789,12 +2784,12 @@ func (m *requestHandlerContext) bucketRestoreHandler(bucket, include, exclude st
 	context := createRestoreContext(image, m.clusterUrl, bucket, filters, filterType, remap)
 	hostIndexMap, err2 := context.computeIndexLayout()
 	if err2 != nil {
-		logging.Errorf("RequestHandler::bucketBackupHandler: err in computeIndexLayout %v", err2)
+		logging.Errorf("RequestHandler::bucketRestoreHandler: err in computeIndexLayout %v", err2)
 		return http.StatusInternalServerError, err2.Error()
 	}
 
 	if !m.restoreIndexMetadataToNodes(hostIndexMap) {
-		return http.StatusInternalServerError, err2.Error()
+		return http.StatusInternalServerError, "Unable to restore metadata."
 	}
 
 	return http.StatusOK, ""
@@ -2804,7 +2799,9 @@ func (m *requestHandlerContext) bucketRestoreHandler(bucket, include, exclude st
 // Handle backup of a bucket.
 // Note that this function does not verify auths or RBAC
 //
-func (m *requestHandlerContext) bucketBackupHandler(bucket, include, exclude string) (*ClusterIndexMetadata, error) {
+func (m *requestHandlerContext) bucketBackupHandler(bucket, include, exclude string,
+	r *http.Request) (*ClusterIndexMetadata, error) {
+
 	cinfo, err := m.mgr.FetchNewClusterInfoCache()
 	if err != nil {
 		return nil, err
@@ -2915,7 +2912,7 @@ func (m *requestHandlerContext) bucketBackupHandler(bucket, include, exclude str
 		i++
 	}
 
-	schedTokens, err := m.getSchedCreateTokens()
+	schedTokens, err := m.getSchedCreateTokens(bucket, include, exclude, r)
 	if err != nil {
 		return nil, err
 	}
@@ -2925,7 +2922,13 @@ func (m *requestHandlerContext) bucketBackupHandler(bucket, include, exclude str
 	return clusterMeta, nil
 }
 
-func (m *requestHandlerContext) getSchedCreateTokens() (map[common.IndexDefnId]*mc.ScheduleCreateToken, error) {
+func (m *requestHandlerContext) getSchedCreateTokens(bucket, include, exclude string,
+	r *http.Request) (map[common.IndexDefnId]*mc.ScheduleCreateToken, error) {
+
+	filters, filterType, err := getFilters(r, bucket)
+	if err != nil {
+		return nil, err
+	}
 
 	schedTokensMap := make(map[common.IndexDefnId]*mc.ScheduleCreateToken)
 	stopSchedTokensMap := make(map[common.IndexDefnId]bool)
@@ -2946,6 +2949,10 @@ func (m *requestHandlerContext) getSchedCreateTokens() (map[common.IndexDefnId]*
 
 	for _, token := range scheduleTokens {
 		if _, ok := stopSchedTokensMap[token.Definition.DefnId]; !ok {
+			if !applyFilterToDefn(bucket, filters, filterType, &token.Definition) {
+				continue
+			}
+
 			schedTokensMap[token.Definition.DefnId] = token
 		}
 	}
@@ -2957,14 +2964,14 @@ func (m *requestHandlerContext) authorizeBucketRequest(w http.ResponseWriter,
 	r *http.Request, creds cbauth.Creds, bucket, include, exclude string) bool {
 
 	// Basic RBAC.
-	// 1. If include filter is specified, verify user has permissions to get
-	//    index list created on all component scopes and collections.
+	// 1. If include filter is specified, verify user has permissions to access
+	//    indexes created on all component scopes and collections.
 	// 2. If include filter is not specified, verify user has permissions to
-	//    get the index list for the bucket.
+	//    access the indexes for the bucket.
 	//
 	// During backup, Local index metadata call can peform RBAC based filtering.
 	// So, in case of unauthorized access to a specific scope / collection,
-	// backup service will get appropriate error.
+	// backup service will get an appropriate error.
 
 	var op string
 	switch r.Method {
@@ -3020,8 +3027,7 @@ func (m *requestHandlerContext) authorizeBucketRequest(w http.ResponseWriter,
 					return false
 				}
 			} else {
-				resp := &BackupResponse{Code: RESP_ERROR, Error: fmt.Sprintf("Malformed url %v, include %v", r.URL.Path, include)}
-				send(http.StatusBadRequest, w, resp)
+				send(http.StatusBadRequest, w, fmt.Sprintf("Malformed url %v, include %v", r.URL.Path, include))
 				return false
 			}
 		}
@@ -3061,8 +3067,7 @@ func (m *requestHandlerContext) bucketReqHandler(w http.ResponseWriter, r *http.
 	case "backup":
 		// Note that for backup, bucketReqHandler does not validate input. Input
 		// validation is performed in the local RPC implementation on each node.
-		// The local RPC handler should not skip the input validation, as it can be
-		// avoided in the handler.
+		// The local RPC handler should not skip the input validation.
 
 		include := r.FormValue("include")
 		exclude := r.FormValue("exclude")
@@ -3077,7 +3082,7 @@ func (m *requestHandlerContext) bucketReqHandler(w http.ResponseWriter, r *http.
 
 		case "GET":
 			// Backup
-			clusterMeta, err := m.bucketBackupHandler(bucket, include, exclude)
+			clusterMeta, err := m.bucketBackupHandler(bucket, include, exclude, r)
 			if err == nil {
 				resp := &BackupResponse{Code: RESP_SUCCESS, Result: *clusterMeta}
 				send(http.StatusOK, w, resp)
