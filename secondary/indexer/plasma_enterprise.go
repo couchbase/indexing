@@ -14,6 +14,7 @@ package indexer
 import (
 	"fmt"
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/plasma"
 )
 
 var errStorageCorrupted = fmt.Errorf("Storage corrupted and unrecoverable")
@@ -37,4 +38,8 @@ func ListPlasmaSlices() ([]string, error) {
 
 func BackupCorruptedPlasmaSlice(storageDir string, prefix string, rename func(string) (string, error), clean func(string)) error {
 	return backupCorruptedPlasmaSlice(storageDir, prefix, rename, clean)
+}
+
+func RecoveryDone() {
+	plasma.RecoveryDone()
 }
