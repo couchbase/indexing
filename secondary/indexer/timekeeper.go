@@ -2265,8 +2265,11 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 	//if flushTs is not on snap boundary, merge cannot be done
 	if !initFlushTs.IsSnapAligned() {
 		hwt := tk.ss.streamKeyspaceIdHWTMap[streamId][keyspaceId]
+		tsList := tk.ss.streamKeyspaceIdTsListMap[streamId][keyspaceId]
+		tsListMaint := tk.ss.streamKeyspaceIdTsListMap[streamId][bucket]
 		logging.Infof("Timekeeper::checkInitStreamReadyToMerge FlushTs Not Snapshot "+
-			"Aligned. Continue both streams for keyspaceId %v.", keyspaceId)
+			"Aligned. Continue both streams for keyspaceId %v. INIT PendTsCount %v. "+
+			"MAINT PendTsCount %v.", keyspaceId, len(tsList), len(tsListMaint))
 		logging.LazyVerbose(func() string {
 			return fmt.Sprintf("Timekeeper::checkInitStreamReadyToMerge FlushTs %v\n HWT %v", initFlushTs, hwt)
 		})

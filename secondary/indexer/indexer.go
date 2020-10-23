@@ -7532,7 +7532,7 @@ func (idx *indexer) bulkUpdateRState(instIdList []common.IndexInstId, reqCtx *co
 			idxInst.RState = common.REBAL_PENDING
 		} else {
 			idxInst.RState = common.REBAL_ACTIVE
-			logging.Infof("bulkUpdateRState: Index instance %v rstate moved to ACTIVE", idxInst.RState)
+			logging.Infof("bulkUpdateRState: Index instance %v rstate moved to ACTIVE", instId)
 		}
 		idx.indexInstMap[instId] = idxInst
 	}
