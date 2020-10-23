@@ -14,7 +14,6 @@ import (
 	"encoding/gob"
 	"errors"
 	"fmt"
-	"github.com/couchbase/plasma"
 	"math"
 	"os"
 	"sort"
@@ -1271,7 +1270,7 @@ func (s *storageMgr) handleRecoveryDone() {
 	s.supvCmdch <- &MsgSuccess{}
 
 	if common.GetStorageMode() == common.PLASMA {
-		plasma.RecoveryDone()
+		RecoveryDone()
 	}
 }
 

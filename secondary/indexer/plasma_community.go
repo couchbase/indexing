@@ -42,3 +42,6 @@ func BackupCorruptedPlasmaSlice(string, string, func(string) (string, error), fu
 	// do nothing
 	return nil
 }
+
+func RecoveryDone() {
+}
