@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
+	mc "github.com/couchbase/indexing/secondary/manager/common"
 	"github.com/couchbase/indexing/secondary/planner"
 	"strings"
 	"unsafe"
@@ -34,6 +35,7 @@ type RestoreContext struct {
 	filters      map[string]bool
 	filterType   string
 	remap        map[string]string
+	schedTokens  map[common.IndexDefnId]*mc.ScheduleCreateToken
 }
 
 //////////////////////////////////////////////////////////////
@@ -85,6 +87,13 @@ func (m *RestoreContext) computeIndexLayout() (map[string][]*common.IndexDefn, e
 		return nil, err
 	}
 	m.current = current
+
+	var schedTokens map[common.IndexDefnId]*mc.ScheduleCreateToken
+	schedTokens, err = getSchedCreateTokens(m.target, m.filters, m.filterType)
+	if err != nil {
+		return nil, err
+	}
+	m.schedTokens = schedTokens
 
 	// find index to restore
 	if err := m.findIndexToRestore(); err != nil {
@@ -305,7 +314,55 @@ func (m *RestoreContext) findIndexToRestore() error {
 					index.Name = defnId2NameMap[index.DefnId]
 					index.Instance.Defn.Name = defnId2NameMap[index.DefnId]
 				}
+			} else {
+
+				// Note that there is an inherent race between index creation and
+				// restore where cluster may end up having duplicate index name.
+				// This race exists even without the presence of schedule create tokens.
+
+				// There isn't any matching instance in the current metadata.
+				// Check if there is any valid schedule create token with same index name.
+
+				if token := findMatchingSchedToken(m.schedTokens, index.Bucket, index.Scope,
+					index.Collection, index.Name); token != nil {
+
+					// Check if it is an equivalent index.
+					if common.IsEquivalentIndex(&token.Definition, &index.Instance.Defn) {
+						// Prioritise the existing token over the index being restored, as
+						// it was created before the restore was triggered.
+						//
+						// As existing token is not yet built (otherwise findMatchingInst
+						// would have returned an instance), there is no question of
+						// missing replica or partition.
+
+						logging.Infof("RestoreContext:  Find schedule create token in the target cluster with the same bucket, scope, collection, name. "+
+							"Skip restoring index (%v, %v, %v, %v, %v, %v).", index.Bucket, index.Scope, index.Collection, index.Name,
+							index.PartnId, index.Instance.ReplicaId)
+						continue
+					}
+
+					// There is another index with the same name or bucket but different definition.  Re-name the index to restore.
+					if _, ok := defnId2NameMap[index.DefnId]; !ok {
+						for count := 0; true; count++ {
+							newName := fmt.Sprintf("%v_%v", index.Name, count)
+							if findMatchingInst(m.current, index.Bucket, index.Scope, index.Collection, newName) == nil {
+								defnId2NameMap[index.DefnId] = newName
+								break
+							}
+						}
+					}
+
+					logging.Infof("RestoreContext:  Find schedule create token (with different defn) in the target cluster with the same bucket and index name .  "+
+						" Renaming index from (%v, %v, %v, %v, %v) to (%v, %v, %v).",
+						index.Bucket, index.Scope, index.Collection, index.Name, index.Instance.ReplicaId, index.Bucket, defnId2NameMap[index.DefnId], index.Instance.ReplicaId)
+
+					index.Name = defnId2NameMap[index.DefnId]
+					index.Instance.Defn.Name = defnId2NameMap[index.DefnId]
+				}
 			}
+
+			// For existing schedule create token (with same name), findAnyReplica will return nil
+			// and hence new instId will be generated and used.
 
 			// Find if there is a replica in the existing cluster with the same replicaId (regardless of partition)
 			instId := common.IndexInstId(0)
@@ -876,4 +933,23 @@ func findNumReplica(indexers []*planner.IndexerNode, defnId common.IndexDefnId) 
 	}
 
 	return len(replicaMap)
+}
+
+//
+// Find valid matching schedule create token
+//
+func findMatchingSchedToken(tokens map[common.IndexDefnId]*mc.ScheduleCreateToken,
+	bucket, scope, collection, name string) *mc.ScheduleCreateToken {
+
+	for _, token := range tokens {
+		if token.Definition.Bucket == bucket &&
+			token.Definition.Scope == scope &&
+			token.Definition.Collection == collection &&
+			token.Definition.Name == name {
+
+			return token
+		}
+	}
+
+	return nil
 }

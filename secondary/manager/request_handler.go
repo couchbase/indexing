@@ -2918,9 +2918,14 @@ func (m *requestHandlerContext) bucketBackupHandler(bucket, include, exclude str
 		i++
 	}
 
-	schedTokens, err := m.getSchedCreateTokens(bucket, include, exclude, r)
+	filters, filterType, err := getFilters(r, bucket)
 	if err != nil {
 		return nil, err
+	}
+
+	schedTokens, err1 := getSchedCreateTokens(bucket, filters, filterType)
+	if err1 != nil {
+		return nil, err1
 	}
 
 	clusterMeta.SchedTokens = schedTokens
@@ -2928,13 +2933,8 @@ func (m *requestHandlerContext) bucketBackupHandler(bucket, include, exclude str
 	return clusterMeta, nil
 }
 
-func (m *requestHandlerContext) getSchedCreateTokens(bucket, include, exclude string,
-	r *http.Request) (map[common.IndexDefnId]*mc.ScheduleCreateToken, error) {
-
-	filters, filterType, err := getFilters(r, bucket)
-	if err != nil {
-		return nil, err
-	}
+func getSchedCreateTokens(bucket string, filters map[string]bool, filterType string) (
+	map[common.IndexDefnId]*mc.ScheduleCreateToken, error) {
 
 	schedTokensMap := make(map[common.IndexDefnId]*mc.ScheduleCreateToken)
 	stopSchedTokensMap := make(map[common.IndexDefnId]bool)
