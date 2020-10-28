@@ -4305,6 +4305,37 @@ func (o *IndexerNode) computeFreeMemPerEmptyIndex(s *Solution, maxThreshold uint
 	return memPerEmpIndex
 }
 
+//
+// Set Indexes to the node
+//
+func (o *IndexerNode) SetIndexes(indexes []*IndexUsage) {
+	o.Indexes = indexes
+
+	for _, index := range indexes {
+		index.initialNode = o
+	}
+}
+
+//
+// Add Indexes to the node
+//
+func (o *IndexerNode) AddIndexes(indexes []*IndexUsage) {
+	o.Indexes = append(o.Indexes, indexes...)
+
+	for _, index := range indexes {
+		index.initialNode = o
+	}
+}
+
+//
+// Compute Size of the node using sizing
+//
+func (o *IndexerNode) ComputeSizing(sizing SizingMethod) {
+	if sizing != nil {
+		sizing.ComputeIndexerSize(o)
+	}
+}
+
 //////////////////////////////////////////////////////////////
 // IndexUsage
 //////////////////////////////////////////////////////////////
@@ -6132,6 +6163,10 @@ func newGeneralSizingMethod() *GeneralSizingMethod {
 		MOI:    newMOISizingMethod(),
 		Plasma: newPlasmaSizingMethod(),
 	}
+}
+
+func GetNewGeneralSizingMethod() *GeneralSizingMethod {
+	return newGeneralSizingMethod()
 }
 
 //

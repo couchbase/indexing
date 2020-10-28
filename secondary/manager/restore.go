@@ -36,6 +36,9 @@ type RestoreContext struct {
 	filterType   string
 	remap        map[string]string
 	schedTokens  map[common.IndexDefnId]*mc.ScheduleCreateToken
+	tokToRestore map[common.IndexDefnId]*mc.ScheduleCreateToken
+	defnInImage  map[common.IndexDefnId]bool
+	origBucket   map[string]bool
 }
 
 //////////////////////////////////////////////////////////////
@@ -58,6 +61,9 @@ func createRestoreContext(image *ClusterIndexMetadata, clusterUrl string, bucket
 		filters:      filters,
 		filterType:   filterType,
 		remap:        remap,
+		defnInImage:  make(map[common.IndexDefnId]bool),
+		origBucket:   make(map[string]bool),
+		tokToRestore: make(map[common.IndexDefnId]*mc.ScheduleCreateToken),
 	}
 
 	return context
@@ -88,6 +94,7 @@ func (m *RestoreContext) computeIndexLayout() (map[string][]*common.IndexDefn, e
 	}
 	m.current = current
 
+	// Get schedule create tokens from current cluster
 	var schedTokens map[common.IndexDefnId]*mc.ScheduleCreateToken
 	schedTokens, err = getSchedCreateTokens(m.target, m.filters, m.filterType)
 	if err != nil {
@@ -97,6 +104,11 @@ func (m *RestoreContext) computeIndexLayout() (map[string][]*common.IndexDefn, e
 
 	// find index to restore
 	if err := m.findIndexToRestore(); err != nil {
+		return nil, err
+	}
+
+	// find schedule create tokens to restore.
+	if err := m.findSchedTokensToRestore(); err != nil {
 		return nil, err
 	}
 
@@ -123,6 +135,10 @@ func (m *RestoreContext) convertStorageMode() error {
 			defn := &meta.IndexDefinitions[j]
 			defn.Using = "gsi"
 		}
+	}
+
+	for _, token := range m.image.SchedTokens {
+		token.Definition.Using = "gsi"
 	}
 
 	return nil
@@ -162,9 +178,13 @@ func (m *RestoreContext) convertImage() error {
 				if index.Instance != nil {
 					logging.Infof("RestoreContext:  Processing index in backup image (%v, %v, %v, %v %v, %v).",
 						index.Bucket, index.Scope, index.Collection, index.Name, index.PartnId, index.Instance.ReplicaId)
+
+					m.defnInImage[index.Instance.Defn.DefnId] = true
 				} else {
 					logging.Infof("RestoreContext:  Processing index in backup image (%v, %v, %v, %v).",
 						index.Bucket, index.Scope, index.Collection, index.Name)
+
+					m.defnInImage[defn.DefnId] = true
 				}
 
 				m.idxFromImage[common.IndexerId(meta.IndexerId)] = append(m.idxFromImage[common.IndexerId(meta.IndexerId)], index)
@@ -222,8 +242,6 @@ func (m *RestoreContext) cleanseBackupMetadata() {
 //
 func (m *RestoreContext) findIndexToRestore() error {
 
-	origBucket := make(map[string]bool)
-
 	defnId2NameMap := make(map[common.IndexDefnId]string)
 	replicaToRestore := make(map[common.IndexDefnId]map[int]common.IndexInstId)
 
@@ -231,8 +249,8 @@ func (m *RestoreContext) findIndexToRestore() error {
 
 		for _, index := range indexes {
 
-			origBucket[index.Bucket] = true
-			if len(m.target) != 0 && len(origBucket) > 1 {
+			m.origBucket[index.Bucket] = true
+			if len(m.target) != 0 && len(m.origBucket) > 1 {
 				return fmt.Errorf("Backup metadata has indexes from multiple buckets.  Cannot restore indexes to a single bucket %v", m.target)
 			}
 
@@ -297,22 +315,14 @@ func (m *RestoreContext) findIndexToRestore() error {
 					}
 				} else {
 					// There is another index with the same name or bucket but different definition.  Re-name the index to restore.
-					if _, ok := defnId2NameMap[index.DefnId]; !ok {
-						for count := 0; true; count++ {
-							newName := fmt.Sprintf("%v_%v", index.Name, count)
-							if findMatchingInst(m.current, index.Bucket, index.Scope, index.Collection, newName) == nil {
-								defnId2NameMap[index.DefnId] = newName
-								break
-							}
-						}
-					}
+					newName := m.getNewName(&defnId2NameMap, index)
 
 					logging.Infof("RestoreContext:  Find index (with different defn) in the target cluster with the same bucket and index name .  "+
 						" Renaming index from (%v, %v, %v, %v, %v) to (%v, %v, %v).",
 						index.Bucket, index.Scope, index.Collection, index.Name, index.Instance.ReplicaId, index.Bucket, defnId2NameMap[index.DefnId], index.Instance.ReplicaId)
 
-					index.Name = defnId2NameMap[index.DefnId]
-					index.Instance.Defn.Name = defnId2NameMap[index.DefnId]
+					index.Name = newName
+					index.Instance.Defn.Name = newName
 				}
 			} else {
 
@@ -332,8 +342,8 @@ func (m *RestoreContext) findIndexToRestore() error {
 						// it was created before the restore was triggered.
 						//
 						// As existing token is not yet built (otherwise findMatchingInst
-						// would have returned an instance), there is no question of
-						// missing replica or partition.
+						// would have returned an instance), missing replica or partition
+						// are irrelevant.
 
 						logging.Infof("RestoreContext:  Find schedule create token in the target cluster with the same bucket, scope, collection, name. "+
 							"Skip restoring index (%v, %v, %v, %v, %v, %v).", index.Bucket, index.Scope, index.Collection, index.Name,
@@ -342,22 +352,14 @@ func (m *RestoreContext) findIndexToRestore() error {
 					}
 
 					// There is another index with the same name or bucket but different definition.  Re-name the index to restore.
-					if _, ok := defnId2NameMap[index.DefnId]; !ok {
-						for count := 0; true; count++ {
-							newName := fmt.Sprintf("%v_%v", index.Name, count)
-							if findMatchingInst(m.current, index.Bucket, index.Scope, index.Collection, newName) == nil {
-								defnId2NameMap[index.DefnId] = newName
-								break
-							}
-						}
-					}
+					newName := m.getNewName(&defnId2NameMap, index)
 
 					logging.Infof("RestoreContext:  Find schedule create token (with different defn) in the target cluster with the same bucket and index name .  "+
 						" Renaming index from (%v, %v, %v, %v, %v) to (%v, %v, %v).",
 						index.Bucket, index.Scope, index.Collection, index.Name, index.Instance.ReplicaId, index.Bucket, defnId2NameMap[index.DefnId], index.Instance.ReplicaId)
 
-					index.Name = defnId2NameMap[index.DefnId]
-					index.Instance.Defn.Name = defnId2NameMap[index.DefnId]
+					index.Name = newName
+					index.Instance.Defn.Name = newName
 				}
 			}
 
@@ -396,6 +398,96 @@ func (m *RestoreContext) findIndexToRestore() error {
 			m.idxToRestore[common.IndexerId(indexerId)] = append(m.idxToRestore[common.IndexerId(indexerId)], &temp)
 		}
 	}
+
+	return nil
+}
+
+func (m *RestoreContext) findSchedTokensToRestore() error {
+
+	// This function checks for existing indexes and existing schedule create
+	// tokens in the target cluser. So, missing replicas and partitions are irrelevant.
+
+	// TODO: defnId2NameMap isn't really required here
+	defnId2NameMap := make(map[common.IndexDefnId]string)
+
+	for defnId, token := range m.image.SchedTokens {
+		logging.Infof("RestoreContext:  Processing schedule create token in backup image (%v, %v, %v, %v).",
+			token.Definition.Bucket, token.Definition.Scope, token.Definition.Collection, token.Definition.Name)
+
+		m.origBucket[token.Definition.Bucket] = true
+
+		if len(m.target) != 0 && len(m.origBucket) > 1 {
+			return fmt.Errorf("Backup metadata have indexes from multiple buckets.  Cannot restore indexes to a single bucket %v", m.target)
+		}
+
+		// Apply Filter
+		if !applyFilterToDefn(m.target, m.filters, m.filterType, &token.Definition) {
+			logging.Debugf("RestoreContext:  Skip restoring index (%v, %v, %v, %v) due to filters.",
+				token.Definition.Bucket, token.Definition.Scope, token.Definition.Collection, token.Definition.Name)
+			continue
+		}
+
+		// Remap
+		if err := m.remapToken(&token.Definition); err != nil {
+			return err
+		}
+
+		// Check for existing instance/token
+		anyInst := findMatchingInst(m.current, token.Definition.Bucket, token.Definition.Scope,
+			token.Definition.Collection, token.Definition.Name)
+		if anyInst != nil {
+			// if there is matching index, check if it has the same definition.
+			if common.IsEquivalentIndex(&anyInst.Instance.Defn, &token.Definition) {
+				logging.Infof("RestoreContext:  Find index in the target cluster with the same bucket, name and definition. "+
+					"Skip restoring schedule create token (%v, %v, %v, %v).", token.Definition.Bucket, token.Definition.Scope,
+					token.Definition.Collection, token.Definition.Name)
+				continue
+			}
+
+			// There is another index with the same name or bucket but different definition.  Re-name the index to restore.
+			newName := m.getNewNameForToken(&defnId2NameMap, token)
+
+			logging.Infof("RestoreContext:  Find schedule create token (with different defn) in the target cluster with the same bucket and index name .  "+
+				" Renaming token from (%v, %v, %v, %v) to (%v, %v).",
+				token.Definition.Bucket, token.Definition.Scope, token.Definition.Collection, token.Definition.Name, token.Definition.Bucket, newName)
+
+			token.Definition.Name = newName
+			m.tokToRestore[defnId] = token
+
+		} else {
+
+			if existToken := findMatchingSchedToken(m.schedTokens, token.Definition.Bucket, token.Definition.Scope,
+				token.Definition.Collection, token.Definition.Name); existToken != nil {
+
+				// Check if it is an equivalent index.
+				if common.IsEquivalentIndex(&existToken.Definition, &token.Definition) {
+					// Prioritise the existing token over the schedule create token
+					// being restored.
+
+					logging.Infof("RestoreContext:  Find schedule create token in the target cluster with the same bucket, scope, collection, name. "+
+						"Skip restoring schedule create token (%v, %v, %v, %v).", token.Definition.Bucket, token.Definition.Scope, token.Definition.Collection,
+						token.Definition.Name)
+					continue
+				}
+
+				// There is another index with the same name or bucket but different definition.  Re-name the index to restore.
+				newName := m.getNewNameForToken(&defnId2NameMap, token)
+
+				logging.Infof("RestoreContext:  Find schedule create token (with different defn) in the target cluster with the same bucket and index name .  "+
+					" Renaming token from (%v, %v, %v, %v) to (%v, %v).",
+					token.Definition.Bucket, token.Definition.Scope, token.Definition.Collection, token.Definition.Name, token.Definition.Bucket, newName)
+
+				token.Definition.Name = newName
+				m.tokToRestore[defnId] = token
+			} else {
+				// Neither a matching instance nor a matching schedule create token exists
+				m.tokToRestore[defnId] = token
+			}
+
+		}
+	}
+
+	// TODO: Check for number of replicas and check if there are enough number of indexer nodes
 
 	return nil
 }
@@ -462,6 +554,20 @@ func (m *RestoreContext) updateIndexDefnId() error {
 		}
 	}
 
+	newTokToRestore := make(map[common.IndexDefnId]*mc.ScheduleCreateToken)
+	for _, token := range m.tokToRestore {
+		newDefnId, err := common.NewIndexDefnId()
+		if err != nil {
+			logging.Errorf("RestoreContext: Cannot restore schedule create token for (%v, %v, %v, %v) due to error in NewIndexDefnId %v.",
+				token.Definition.Bucket, token.Definition.Scope, token.Definition.Collection, token.Definition.Name, err)
+			return err
+		}
+
+		token.Definition.DefnId = newDefnId
+		newTokToRestore[newDefnId] = token
+	}
+	m.tokToRestore = newTokToRestore
+
 	return nil
 }
 
@@ -493,9 +599,56 @@ func (m *RestoreContext) placeIndex() (map[string][]*common.IndexDefn, error) {
 		newNodeIds = append(newNodeIds, indexer.NodeId)
 	}
 
+	// Restore the schedule create tokens as indexes. This ensures simplicity
+	// of the manual steps required after restore as lifecycle of schedule
+	// create tokens is different from regular indexes being restored.
+
+	// Create a new ejected node if required and if none exists.
+	newNodeForced := false
+	if len(newNodes) == 0 && len(m.tokToRestore) != 0 {
+		newIndexerId, err := common.NewUUID()
+		if err != nil {
+			return nil, err
+		}
+
+		newNodeForced = true
+		indexer := createNewEjectedNode(nil, common.IndexerId(newIndexerId.Str()))
+		newNodes = append(newNodes, indexer)
+		newNodeIds = append(newNodeIds, indexer.NodeId)
+		logging.Infof("RestoreContext: Created new ejected node %v for schedule create tokens", indexer)
+	}
+
+	// Place all indexes from schedule tokens on ejected nodes with
+	// round robin.
+	i := 0
+	var sizing planner.SizingMethod
+	tokIndexes := make([]*planner.IndexUsage, 0, len(m.tokToRestore))
+	for _, token := range m.tokToRestore {
+		spec := prepareIndexSpec(&token.Definition)
+		sizing = planner.GetNewGeneralSizingMethod()
+		idxUsages, err := planner.IndexUsagesFromSpec(sizing, []*planner.IndexSpec{spec})
+		if err != nil {
+			return nil, err
+		}
+
+		if !newNodeForced {
+			newNodes[i].AddIndexes(idxUsages)
+			i = (i + 1) % len(newNodes)
+		} else {
+			tokIndexes = append(tokIndexes, idxUsages...)
+		}
+	}
+
+	if newNodeForced {
+		newNodes[0].SetIndexes(tokIndexes)
+	}
+
 	// add new nodes to current plan
 	for _, indexer := range newNodes {
 		m.current.Placement = append(m.current.Placement, indexer)
+
+		// ComputeSizing is an idempotent operation.
+		indexer.ComputeSizing(sizing)
 	}
 
 	logging.Infof("RestoreContext:  Index Layout before planning")
@@ -581,10 +734,52 @@ func (m *RestoreContext) buildIndexHostMapping(solution *planner.Solution) map[s
 
 							result[indexer.RestUrl] = append(result[indexer.RestUrl], &index.Instance.Defn)
 						} else {
-							logging.Errorf("RestoreContext:  Cannot sestoring index (%v, %v, %v, %v, %v, %v) at indexer %v because index instance is missing.",
+							logging.Errorf("RestoreContext:  Cannot restore index (%v, %v, %v, %v, %v, %v) at indexer %v because index instance is missing.",
 								index.Bucket, index.Scope, index.Collection, index.Name, index.PartnId, index.Instance.ReplicaId, indexer.NodeId)
 						}
 					}
+				}
+			}
+		}
+	}
+
+	// Find new home for all the replicas and partitions of the schedule create tokens.
+	defnMap := make(map[common.IndexDefnId]map[string]*common.IndexDefn)
+	for _, indexer := range solution.Placement {
+		for _, index := range indexer.Indexes {
+			if token, ok := m.tokToRestore[index.DefnId]; ok {
+				if index.Instance == nil {
+					logging.Errorf("RestoreContext: Cannot restore schedule create token for (%v, %v, %v, %v, %v) at indexer %v as index instance is missinig.",
+						token.Definition.Bucket, token.Definition.Scope, token.Definition.Collection, token.Definition.Name, index.PartnId, indexer)
+					continue
+				}
+
+				var indexerMap map[string]*common.IndexDefn
+				var ok bool
+				if indexerMap, ok = defnMap[index.DefnId]; !ok {
+					indexerMap = make(map[string]*common.IndexDefn)
+					defnMap[index.DefnId] = indexerMap
+				}
+
+				if defn, ok := indexerMap[indexer.RestUrl]; !ok {
+					instId, err := common.NewIndexInstId()
+					if err != nil {
+						logging.Errorf("RestoreContext: Cannot restore schedule create token for (%v, %v, %v, %v, %v) at indexer %v due to error in NewIndexInstId %v.",
+							token.Definition.Bucket, token.Definition.Scope, token.Definition.Collection, token.Definition.Name, index.PartnId, indexer, err)
+						continue
+					}
+
+					defn := &token.Definition
+					temp := *defn
+					temp.InstId = instId
+					temp.ReplicaId = index.Instance.ReplicaId
+					temp.Partitions = []common.PartitionId{index.PartnId}
+					temp.Versions = []int{0}
+					indexerMap[indexer.RestUrl] = &temp
+					result[indexer.RestUrl] = append(result[indexer.RestUrl], &temp)
+				} else {
+					defn.Partitions = append(defn.Partitions, index.PartnId)
+					defn.Versions = append(defn.Versions, 0)
 				}
 			}
 		}
@@ -683,6 +878,98 @@ func (m *RestoreContext) remapIndex(index *planner.IndexUsage) error {
 	}
 
 	return nil
+}
+
+// TODO: Avoid code duplication across remapIndex and remapToken.
+// Note that the tokens won't have instance.
+func (m *RestoreContext) remapToken(index *common.IndexDefn) error {
+
+	// Remap bucket, if required
+	if len(m.target) != 0 && index.Bucket != m.target {
+		logging.Infof("RestoreContext:  convert index %v from bucket %v scope %v collection %v "+
+			"to target bucket (%v)",
+			index.Name, index.Bucket, index.Scope, index.Collection, m.target)
+		index.Bucket = m.target
+	}
+
+	// Input validation ensures non-overlapping scope and collection remaps
+	// Remap scope, if required
+	if newScope, ok := m.remap[index.Scope]; ok {
+		logging.Infof("RestoreContext:  convert index %v from bucket %v scope %v collection %v "+
+			"to target bucket, scope (%v, %v)", index.Name, index.Bucket, index.Scope, index.Collection,
+			m.target, newScope)
+
+		index.Scope = newScope
+	}
+
+	// Remap collection, if required
+	if newColl, ok := m.remap[fmt.Sprintf("%v.%v", index.Scope, index.Collection)]; ok {
+		sc := strings.Split(newColl, ".")
+		if len(sc) != 2 {
+			err := fmt.Errorf("Error in restoring index %v:%v:%v:%v due to malformed remap",
+				index.Bucket, index.Scope, index.Collection, index.Name)
+			logging.Errorf(err.Error())
+			return err
+		}
+
+		logging.Infof("RestoreContext:  convert index %v from bucket %v scope %v collection %v "+
+			"to target bucket, scope, collection (%v, %v, %v)", index.Name, index.Bucket, index.Scope, index.Collection,
+			m.target, sc[0], sc[1])
+
+		index.Scope = sc[0]
+		index.Collection = sc[1]
+	}
+
+	return nil
+}
+
+//
+// Get new name for the schedule create token
+//
+func (m *RestoreContext) getNewNameForToken(defnId2NameMap *map[common.IndexDefnId]string, token *mc.ScheduleCreateToken) string {
+
+	if _, ok := (*defnId2NameMap)[token.Definition.DefnId]; !ok {
+		for count := 0; true; count++ {
+			newName := fmt.Sprintf("%v_%v", token.Definition.Name, count)
+			if findMatchingInst(m.current, token.Definition.Bucket, token.Definition.Scope, token.Definition.Collection, newName) != nil {
+				continue
+			}
+
+			if findMatchingSchedToken(m.schedTokens, token.Definition.Bucket, token.Definition.Scope, token.Definition.Collection, newName) != nil {
+				continue
+			}
+
+			(*defnId2NameMap)[token.Definition.DefnId] = newName
+			break
+		}
+	}
+
+	return (*defnId2NameMap)[token.Definition.DefnId]
+}
+
+//
+// Get new name for the index
+// TODO: Avoid duplicate code between getNewNameForToken and getNewName.
+//
+func (m *RestoreContext) getNewName(defnId2NameMap *map[common.IndexDefnId]string, index *planner.IndexUsage) string {
+
+	if _, ok := (*defnId2NameMap)[index.DefnId]; !ok {
+		for count := 0; true; count++ {
+			newName := fmt.Sprintf("%v_%v", index.Name, count)
+			if findMatchingInst(m.current, index.Bucket, index.Scope, index.Collection, newName) != nil {
+				continue
+			}
+
+			if findMatchingSchedToken(m.schedTokens, index.Bucket, index.Scope, index.Collection, newName) != nil {
+				continue
+			}
+
+			(*defnId2NameMap)[index.DefnId] = newName
+			break
+		}
+	}
+
+	return (*defnId2NameMap)[index.DefnId]
 }
 
 //////////////////////////////////////////////////////////////
@@ -952,4 +1239,44 @@ func findMatchingSchedToken(tokens map[common.IndexDefnId]*mc.ScheduleCreateToke
 	}
 
 	return nil
+}
+
+//
+// Prepare the index specs
+//
+func prepareIndexSpec(defn *common.IndexDefn) *planner.IndexSpec {
+
+	var spec planner.IndexSpec
+	spec.DefnId = defn.DefnId
+	spec.Name = defn.Name
+	spec.Bucket = defn.Bucket
+	spec.Scope = defn.Scope
+	spec.Collection = defn.Collection
+	spec.IsPrimary = defn.IsPrimary
+	spec.SecExprs = defn.SecExprs
+	spec.WhereExpr = defn.WhereExpr
+	spec.Deferred = defn.Deferred
+	spec.Immutable = defn.Immutable
+	spec.IsArrayIndex = defn.IsArrayIndex
+	spec.Desc = defn.Desc
+	spec.NumPartition = uint64(defn.NumPartitions)
+	spec.PartitionScheme = string(defn.PartitionScheme)
+	spec.HashScheme = uint64(defn.HashScheme)
+	spec.PartitionKeys = defn.PartitionKeys
+	spec.Replica = uint64(defn.NumReplica) + 1
+	spec.RetainDeletedXATTR = defn.RetainDeletedXATTR
+	spec.ExprType = string(defn.ExprType)
+
+	spec.NumDoc = defn.NumDoc
+	spec.DocKeySize = defn.DocKeySize
+	spec.SecKeySize = defn.SecKeySize
+	spec.ArrKeySize = defn.SecKeySize
+	spec.ArrSize = defn.ArrSize
+	spec.ResidentRatio = defn.ResidentRatio
+	spec.MutationRate = 0
+	spec.ScanRate = 0
+
+	// TODO: Set storage mode correcly.
+
+	return &spec
 }

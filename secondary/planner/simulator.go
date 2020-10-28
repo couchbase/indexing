@@ -342,7 +342,7 @@ func (t *simulator) RunSingleTest(config *RunConfig, command CommandType, spec *
 			}
 
 		} else if indexSpecs != nil {
-			indexes, err = indexUsagesFromSpec(sizing, indexSpecs)
+			indexes, err = IndexUsagesFromSpec(sizing, indexSpecs)
 			if err != nil {
 				return nil, nil, err
 			}
