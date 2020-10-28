@@ -2036,7 +2036,7 @@ func (st *StatsMap) AddStat(k string, v interface{}) {
 			if str, ok := v.(string); ok {
 				st.byteSlice = append(st.byteSlice, []byte(fmt.Sprintf("\"%s%s\":\"%v\",", st.prefix, k, str))...)
 			} else if mapVal, ok := v.(map[string]interface{}); ok {
-				addMapValToByteSlice(k, mapVal)
+				addMapValToByteSlice(st.prefix+k, mapVal)
 			} else {
 				st.byteSlice = append(st.byteSlice, []byte(fmt.Sprintf("\"%s%s\":%v,", st.prefix, k, v))...)
 			}
@@ -2045,7 +2045,7 @@ func (st *StatsMap) AddStat(k string, v interface{}) {
 		} else if s, ok := v.(string); ok && len(s) != 0 && s != "0 0 0" && s != "0" {
 			st.byteSlice = append(st.byteSlice, []byte(fmt.Sprintf("\"%s%s\":\"%v\",", st.prefix, k, v))...)
 		} else if mapVal, ok := v.(map[string]interface{}); ok && len(mapVal) != 0 {
-			addMapValToByteSlice(k, mapVal)
+			addMapValToByteSlice(st.prefix+k, mapVal)
 		}
 	} else {
 		if !st.spec.skipEmpty {
