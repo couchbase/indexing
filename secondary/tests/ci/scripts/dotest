@@ -154,11 +154,11 @@ export PATH=$PATH:$GOROOT/bin
 export C_INCLUDE_PATH=$WORKSPACE/platform/include/:$WORKSPACE/install/include:$WORKSPACE/forestdb/include:$WORKSPACE/build/tlm/deps/curl.exploded/include:$WORKSPACE/sigar/include
 export CGO_LDFLAGS="-L $WORKSPACE/install/lib"
 export LD_LIBRARY_PATH=$WORKSPACE/install/lib
+export GO111MODULE=off
 
 cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/tests
 go get -t ./... 1>/dev/null 2>&1
 
-export GO111MODULE=off
 export phase=unit
 if [[ "$MODE" == *"$phase"* ]]; then
   echo "</pre><h4>Unit tests</h4><pre>"
