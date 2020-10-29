@@ -158,6 +158,7 @@ export LD_LIBRARY_PATH=$WORKSPACE/install/lib
 cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/tests
 go get -t ./... 1>/dev/null 2>&1
 
+export GO111MODULE=off
 export phase=unit
 if [[ "$MODE" == *"$phase"* ]]; then
   echo "</pre><h4>Unit tests</h4><pre>"
