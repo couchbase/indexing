@@ -3461,14 +3461,17 @@ func (idx *indexer) cleanupIndexData(indexInst common.IndexInst,
 	if indexInst.RState != common.REBAL_MERGED {
 		for _, partnInst := range idxPartnInfo {
 			sc := partnInst.Sc
+			pid := partnInst.Defn.GetPartitionId()
 			//close all the slices
 			for _, slice := range sc.GetAllSlices() {
 				go func() {
 					slice.Close()
-					logging.Infof("Indexer::cleanupIndexData %v Close Done", slice.IndexInstId())
+					logging.Infof("Indexer::cleanupIndexData IndexInst %v Partition %v Close Done",
+						slice.IndexInstId(), pid)
 					//wipe the physical files
 					slice.Destroy()
-					logging.Infof("Indexer::cleanupIndexData %v Destroy Done", slice.IndexInstId())
+					logging.Infof("Indexer::cleanupIndexData IndexInst %v Partition %v Destroy Done",
+						slice.IndexInstId(), pid)
 				}()
 			}
 		}
