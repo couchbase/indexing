@@ -39,6 +39,7 @@ type RestoreContext struct {
 	tokToRestore map[common.IndexDefnId]*mc.ScheduleCreateToken
 	defnInImage  map[common.IndexDefnId]bool
 	origBucket   map[string]bool
+	instNameMap  map[string]*planner.IndexUsage
 }
 
 //////////////////////////////////////////////////////////////
@@ -64,6 +65,7 @@ func createRestoreContext(image *ClusterIndexMetadata, clusterUrl string, bucket
 		defnInImage:  make(map[common.IndexDefnId]bool),
 		origBucket:   make(map[string]bool),
 		tokToRestore: make(map[common.IndexDefnId]*mc.ScheduleCreateToken),
+		instNameMap:  make(map[string]*planner.IndexUsage),
 	}
 
 	return context
@@ -101,6 +103,8 @@ func (m *RestoreContext) computeIndexLayout() (map[string][]*common.IndexDefn, e
 		return nil, err
 	}
 	m.schedTokens = schedTokens
+
+	m.prepareInstNameMap()
 
 	// find index to restore
 	if err := m.findIndexToRestore(); err != nil {
@@ -238,6 +242,20 @@ func (m *RestoreContext) cleanseBackupMetadata() {
 }
 
 //
+// Prepare a map of index name to any instance of that index in the current placement
+//
+func (m *RestoreContext) prepareInstNameMap() {
+	for _, indexers := range m.current.Placement {
+		for _, index := range indexers.Indexes {
+			if index.Instance != nil {
+				key := fmt.Sprintf("%v:%v:%v:%v", index.Bucket, index.Scope, index.Collection, index.Name)
+				m.instNameMap[key] = index
+			}
+		}
+	}
+}
+
+//
 // Pick out the indexes that are not yet created in the existing cluster.
 //
 func (m *RestoreContext) findIndexToRestore() error {
@@ -276,7 +294,7 @@ func (m *RestoreContext) findIndexToRestore() error {
 			}
 
 			// Find if the index already exist in the current cluster with matching name, bucket, scope and collection.
-			anyInst := findMatchingInst(m.current, index.Bucket, index.Scope, index.Collection, index.Name)
+			anyInst := findMatchingInst(m.instNameMap, index.Bucket, index.Scope, index.Collection, index.Name)
 			if anyInst != nil {
 
 				// if there is matching index, check if it has the same definition.
@@ -435,7 +453,7 @@ func (m *RestoreContext) findSchedTokensToRestore() error {
 		}
 
 		// Check for existing instance/token
-		anyInst := findMatchingInst(m.current, token.Definition.Bucket, token.Definition.Scope,
+		anyInst := findMatchingInst(m.instNameMap, token.Definition.Bucket, token.Definition.Scope,
 			token.Definition.Collection, token.Definition.Name)
 		if anyInst != nil {
 			// if there is matching index, check if it has the same definition.
@@ -892,7 +910,7 @@ func (m *RestoreContext) getNewNameForToken(defnId2NameMap *map[common.IndexDefn
 	if _, ok := (*defnId2NameMap)[token.Definition.DefnId]; !ok {
 		for count := 0; true; count++ {
 			newName := fmt.Sprintf("%v_%v", token.Definition.Name, count)
-			if findMatchingInst(m.current, token.Definition.Bucket, token.Definition.Scope, token.Definition.Collection, newName) != nil {
+			if findMatchingInst(m.instNameMap, token.Definition.Bucket, token.Definition.Scope, token.Definition.Collection, newName) != nil {
 				continue
 			}
 
@@ -917,7 +935,7 @@ func (m *RestoreContext) getNewName(defnId2NameMap *map[common.IndexDefnId]strin
 	if _, ok := (*defnId2NameMap)[index.DefnId]; !ok {
 		for count := 0; true; count++ {
 			newName := fmt.Sprintf("%v_%v", index.Name, count)
-			if findMatchingInst(m.current, index.Bucket, index.Scope, index.Collection, newName) != nil {
+			if findMatchingInst(m.instNameMap, index.Bucket, index.Scope, index.Collection, newName) != nil {
 				continue
 			}
 
@@ -967,20 +985,11 @@ func findMaxVersionInst(metadata map[common.IndexerId][]*planner.IndexUsage, def
 //
 // Find any instance in the metadata, regardless of its partitionId, version or RState
 //
-func findMatchingInst(current *planner.Plan, bucket, scope, collection, name string) *planner.IndexUsage {
+func findMatchingInst(instNameMap map[string]*planner.IndexUsage, bucket, scope, collection, name string) *planner.IndexUsage {
 
-	for _, indexers := range current.Placement {
-		for _, index := range indexers.Indexes {
-			if index.Instance != nil {
-				if index.Bucket == bucket &&
-					index.Name == name &&
-					index.Scope == scope &&
-					index.Collection == collection {
-
-					return index
-				}
-			}
-		}
+	key := fmt.Sprintf("%v:%v:%v:%v", bucket, scope, collection, name)
+	if inst, ok := instNameMap[key]; ok {
+		return inst
 	}
 
 	return nil
