@@ -1196,14 +1196,14 @@ func getFilters(r *http.Request, bucket string) (map[string]bool, string, error)
 	return filters, filterType, nil
 }
 
-func applyFilterToDefn(bucket string, filters map[string]bool, filterType string,
-	defn *common.IndexDefn) bool {
+func applyFilters(bucket, idxBucket, scope, collection, name string,
+	filters map[string]bool, filterType string) bool {
 
 	if bucket == "" {
 		return true
 	}
 
-	if defn.Bucket != bucket {
+	if idxBucket != bucket {
 		return false
 	}
 
@@ -1211,7 +1211,7 @@ func applyFilterToDefn(bucket string, filters map[string]bool, filterType string
 		return true
 	}
 
-	if _, ok := filters[defn.Scope]; ok {
+	if _, ok := filters[scope]; ok {
 		if filterType == "include" {
 			return true
 		} else {
@@ -1219,7 +1219,7 @@ func applyFilterToDefn(bucket string, filters map[string]bool, filterType string
 		}
 	}
 
-	if _, ok := filters[fmt.Sprintf("%v.%v", defn.Scope, defn.Collection)]; ok {
+	if _, ok := filters[fmt.Sprintf("%v.%v", scope, collection)]; ok {
 		if filterType == "include" {
 			return true
 		} else {
@@ -1227,49 +1227,13 @@ func applyFilterToDefn(bucket string, filters map[string]bool, filterType string
 		}
 	}
 
-	if _, ok := filters[fmt.Sprintf("%v.%v.%v", defn.Scope, defn.Collection, defn.Name)]; ok {
-		if filterType == "include" {
-			return true
-		} else {
-			return false
-		}
-	}
-
-	if filterType == "include" {
-		return false
-	}
-
-	return true
-}
-
-func applyFilterToTopology(bucket string, filters map[string]bool, filterType string,
-	topo *IndexTopology) bool {
-
-	if bucket == "" {
-		return true
-	}
-
-	if topo.Bucket != bucket {
-		return false
-	}
-
-	if filterType == "" {
-		return true
-	}
-
-	if _, ok := filters[topo.Scope]; ok {
-		if filterType == "include" {
-			return true
-		} else {
-			return false
-		}
-	}
-
-	if _, ok := filters[fmt.Sprintf("%v.%v", topo.Scope, topo.Collection)]; ok {
-		if filterType == "include" {
-			return true
-		} else {
-			return false
+	if name != "" {
+		if _, ok := filters[fmt.Sprintf("%v.%v.%v", scope, collection, name)]; ok {
+			if filterType == "include" {
+				return true
+			} else {
+				return false
+			}
 		}
 	}
 
@@ -1441,7 +1405,7 @@ func (m *requestHandlerContext) getLocalIndexMetadata(creds cbauth.Creds,
 	var defn *common.IndexDefn
 	_, defn, err = iter.Next()
 	for err == nil {
-		if applyFilterToDefn(bucket, filters, filterType, defn) {
+		if applyFilters(bucket, defn.Bucket, defn.Scope, defn.Collection, defn.Name, filters, filterType) {
 			if permissionsCache.isAllowed(creds, defn.Bucket, defn.Scope, defn.Collection, "list") {
 				meta.IndexDefinitions = append(meta.IndexDefinitions, *defn)
 			}
@@ -1458,7 +1422,7 @@ func (m *requestHandlerContext) getLocalIndexMetadata(creds cbauth.Creds,
 	var topology *IndexTopology
 	topology, err = iter1.Next()
 	for err == nil {
-		if applyFilterToTopology(bucket, filters, filterType, topology) {
+		if applyFilters(bucket, topology.Bucket, topology.Scope, topology.Collection, "", filters, filterType) {
 			if permissionsCache.isAllowed(creds, topology.Bucket, topology.Scope, topology.Collection, "list") {
 				meta.IndexTopologies = append(meta.IndexTopologies, *topology)
 			}
@@ -2955,7 +2919,9 @@ func getSchedCreateTokens(bucket string, filters map[string]bool, filterType str
 
 	for _, token := range scheduleTokens {
 		if _, ok := stopSchedTokensMap[token.Definition.DefnId]; !ok {
-			if !applyFilterToDefn(bucket, filters, filterType, &token.Definition) {
+			if !applyFilters(bucket, token.Definition.Bucket, token.Definition.Scope,
+				token.Definition.Collection, "", filters, filterType) {
+
 				continue
 			}
 

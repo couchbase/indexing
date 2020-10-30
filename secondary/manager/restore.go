@@ -255,7 +255,7 @@ func (m *RestoreContext) findIndexToRestore() error {
 			}
 
 			// Apply filters
-			if !m.applyFilterToIndexUsage(index) {
+			if !applyFilters(m.target, index.Bucket, index.Scope, index.Collection, "", m.filters, m.filterType) {
 				logging.Debugf("RestoreContext:  Skip restoring index (%v, %v, %v, %v) due to filters.",
 					index.Bucket, index.Scope, index.Collection, index.Name)
 				continue
@@ -421,7 +421,9 @@ func (m *RestoreContext) findSchedTokensToRestore() error {
 		}
 
 		// Apply Filter
-		if !applyFilterToDefn(m.target, m.filters, m.filterType, &token.Definition) {
+		if !applyFilters(m.target, token.Definition.Bucket, token.Definition.Scope,
+			token.Definition.Collection, "", m.filters, m.filterType) {
+
 			logging.Debugf("RestoreContext:  Skip restoring index (%v, %v, %v, %v) due to filters.",
 				token.Definition.Bucket, token.Definition.Scope, token.Definition.Collection, token.Definition.Name)
 			continue
@@ -786,47 +788,6 @@ func (m *RestoreContext) buildIndexHostMapping(solution *planner.Solution) map[s
 	}
 
 	return result
-}
-
-//
-// Apply filter to IndexUsage
-//
-func (m *RestoreContext) applyFilterToIndexUsage(index *planner.IndexUsage) bool {
-	bucket := m.target
-
-	if bucket == "" {
-		return true
-	}
-
-	if index.Bucket != bucket {
-		return false
-	}
-
-	if m.filterType == "" {
-		return true
-	}
-
-	if _, ok := m.filters[index.Scope]; ok {
-		if m.filterType == "include" {
-			return true
-		} else {
-			return false
-		}
-	}
-
-	if _, ok := m.filters[fmt.Sprintf("%v.%v", index.Scope, index.Collection)]; ok {
-		if m.filterType == "include" {
-			return true
-		} else {
-			return false
-		}
-	}
-
-	if m.filterType == "include" {
-		return false
-	}
-
-	return true
 }
 
 func (m *RestoreContext) remapIndex(index *planner.IndexUsage) error {
