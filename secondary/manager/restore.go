@@ -333,7 +333,8 @@ func (m *RestoreContext) findIndexToRestore() error {
 					}
 				} else {
 					// There is another index with the same name or bucket but different definition.  Re-name the index to restore.
-					newName := m.getNewName(&defnId2NameMap, index)
+					newName := m.getNewName(&defnId2NameMap, index.Bucket, index.Scope,
+						index.Collection, index.Name, index.DefnId)
 
 					logging.Infof("RestoreContext:  Find index (with different defn) in the target cluster with the same bucket and index name .  "+
 						" Renaming index from (%v, %v, %v, %v, %v) to (%v, %v, %v).",
@@ -370,7 +371,8 @@ func (m *RestoreContext) findIndexToRestore() error {
 					}
 
 					// There is another index with the same name or bucket but different definition.  Re-name the index to restore.
-					newName := m.getNewName(&defnId2NameMap, index)
+					newName := m.getNewName(&defnId2NameMap, index.Bucket, index.Scope,
+						index.Collection, index.Name, index.DefnId)
 
 					logging.Infof("RestoreContext:  Find schedule create token (with different defn) in the target cluster with the same bucket and index name .  "+
 						" Renaming index from (%v, %v, %v, %v, %v) to (%v, %v, %v).",
@@ -465,7 +467,8 @@ func (m *RestoreContext) findSchedTokensToRestore() error {
 			}
 
 			// There is another index with the same name or bucket but different definition.  Re-name the index to restore.
-			newName := m.getNewNameForToken(&defnId2NameMap, token)
+			newName := m.getNewName(&defnId2NameMap, token.Definition.Bucket, token.Definition.Scope,
+				token.Definition.Collection, token.Definition.Name, token.Definition.DefnId)
 
 			logging.Infof("RestoreContext:  Find schedule create token (with different defn) in the target cluster with the same bucket and index name .  "+
 				" Renaming token from (%v, %v, %v, %v) to (%v, %v).",
@@ -491,7 +494,8 @@ func (m *RestoreContext) findSchedTokensToRestore() error {
 				}
 
 				// There is another index with the same name or bucket but different definition.  Re-name the index to restore.
-				newName := m.getNewNameForToken(&defnId2NameMap, token)
+				newName := m.getNewName(&defnId2NameMap, token.Definition.Bucket, token.Definition.Scope,
+					token.Definition.Collection, token.Definition.Name, token.Definition.DefnId)
 
 				logging.Infof("RestoreContext:  Find schedule create token (with different defn) in the target cluster with the same bucket and index name .  "+
 					" Renaming token from (%v, %v, %v, %v) to (%v, %v).",
@@ -903,52 +907,28 @@ func (m *RestoreContext) remapToken(index *common.IndexDefn) error {
 }
 
 //
-// Get new name for the schedule create token
-//
-func (m *RestoreContext) getNewNameForToken(defnId2NameMap *map[common.IndexDefnId]string, token *mc.ScheduleCreateToken) string {
-
-	if _, ok := (*defnId2NameMap)[token.Definition.DefnId]; !ok {
-		for count := 0; true; count++ {
-			newName := fmt.Sprintf("%v_%v", token.Definition.Name, count)
-			if findMatchingInst(m.instNameMap, token.Definition.Bucket, token.Definition.Scope, token.Definition.Collection, newName) != nil {
-				continue
-			}
-
-			if findMatchingSchedToken(m.schedTokens, token.Definition.Bucket, token.Definition.Scope, token.Definition.Collection, newName) != nil {
-				continue
-			}
-
-			(*defnId2NameMap)[token.Definition.DefnId] = newName
-			break
-		}
-	}
-
-	return (*defnId2NameMap)[token.Definition.DefnId]
-}
-
-//
 // Get new name for the index
-// TODO: Avoid duplicate code between getNewNameForToken and getNewName.
 //
-func (m *RestoreContext) getNewName(defnId2NameMap *map[common.IndexDefnId]string, index *planner.IndexUsage) string {
+func (m *RestoreContext) getNewName(defnId2NameMap *map[common.IndexDefnId]string,
+	bucket, scope, collection, name string, defnId common.IndexDefnId) string {
 
-	if _, ok := (*defnId2NameMap)[index.DefnId]; !ok {
+	if _, ok := (*defnId2NameMap)[defnId]; !ok {
 		for count := 0; true; count++ {
-			newName := fmt.Sprintf("%v_%v", index.Name, count)
-			if findMatchingInst(m.instNameMap, index.Bucket, index.Scope, index.Collection, newName) != nil {
+			newName := fmt.Sprintf("%v_%v", name, count)
+			if findMatchingInst(m.instNameMap, bucket, scope, collection, newName) != nil {
 				continue
 			}
 
-			if findMatchingSchedToken(m.schedTokens, index.Bucket, index.Scope, index.Collection, newName) != nil {
+			if findMatchingSchedToken(m.schedTokens, bucket, scope, collection, newName) != nil {
 				continue
 			}
 
-			(*defnId2NameMap)[index.DefnId] = newName
+			(*defnId2NameMap)[defnId] = newName
 			break
 		}
 	}
 
-	return (*defnId2NameMap)[index.DefnId]
+	return (*defnId2NameMap)[defnId]
 }
 
 //////////////////////////////////////////////////////////////
