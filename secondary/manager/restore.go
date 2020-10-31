@@ -430,6 +430,8 @@ func (m *RestoreContext) findSchedTokensToRestore() error {
 	// TODO: defnId2NameMap isn't really required here
 	defnId2NameMap := make(map[common.IndexDefnId]string)
 
+	maxReplicas := len(m.current.Placement) - 1
+
 	for defnId, token := range m.image.SchedTokens {
 		logging.Infof("RestoreContext:  Processing schedule create token in backup image (%v, %v, %v, %v).",
 			token.Definition.Bucket, token.Definition.Scope, token.Definition.Collection, token.Definition.Name)
@@ -452,6 +454,17 @@ func (m *RestoreContext) findSchedTokensToRestore() error {
 		// Remap
 		if err := m.remapToken(&token.Definition); err != nil {
 			return err
+		}
+
+		// Update num replica as per cluster topology
+		if token.Definition.GetNumReplica() >= len(m.current.Placement) {
+			logging.Infof("RestoreContext: For index (%v, %v, %v, %v), setting num replica to %v, based on cluster topology.",
+				token.Definition.Bucket, token.Definition.Scope, token.Definition.Collection,
+				token.Definition.Name, maxReplicas)
+
+			// There aren't any other versions/instanced of token.Definition.
+			// So just update the NumReplica.
+			token.Definition.NumReplica = uint32(maxReplicas)
 		}
 
 		// Check for existing instance/token
