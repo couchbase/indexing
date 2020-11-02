@@ -947,7 +947,6 @@ func (is IndexerStats) GetStats(spec *statsSpec) interface{} {
 }
 
 func (is IndexerStats) GetVersionedStats(t *target) (common.Statistics, bool) {
-	var key string
 	statsMap := make(map[string]interface{})
 	var found bool
 
@@ -969,9 +968,7 @@ func (is IndexerStats) GetVersionedStats(t *target) (common.Statistics, bool) {
 	if t.level == "indexer" {
 		statsMap["indexer"] = is.constructIndexerStats(t.skipEmpty, t.version)
 		for _, s := range is.indexes {
-			name := common.FormatIndexInstDisplayName(s.name, s.replicaId)
-			key = fmt.Sprintf("%s:%s", s.bucket, name)
-			statsMap[key] = s.constructIndexStats(t.skipEmpty, t.version)
+			addToStatsMap(s)
 		}
 		found = true
 	} else if t.level == "bucket" {
@@ -2039,7 +2036,7 @@ func (st *StatsMap) AddStat(k string, v interface{}) {
 			if str, ok := v.(string); ok {
 				st.byteSlice = append(st.byteSlice, []byte(fmt.Sprintf("\"%s%s\":\"%v\",", st.prefix, k, str))...)
 			} else if mapVal, ok := v.(map[string]interface{}); ok {
-				addMapValToByteSlice(k, mapVal)
+				addMapValToByteSlice(st.prefix+k, mapVal)
 			} else {
 				st.byteSlice = append(st.byteSlice, []byte(fmt.Sprintf("\"%s%s\":%v,", st.prefix, k, v))...)
 			}
@@ -2048,7 +2045,7 @@ func (st *StatsMap) AddStat(k string, v interface{}) {
 		} else if s, ok := v.(string); ok && len(s) != 0 && s != "0 0 0" && s != "0" {
 			st.byteSlice = append(st.byteSlice, []byte(fmt.Sprintf("\"%s%s\":\"%v\",", st.prefix, k, v))...)
 		} else if mapVal, ok := v.(map[string]interface{}); ok && len(mapVal) != 0 {
-			addMapValToByteSlice(k, mapVal)
+			addMapValToByteSlice(st.prefix+k, mapVal)
 		}
 	} else {
 		if !st.spec.skipEmpty {

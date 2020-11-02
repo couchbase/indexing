@@ -8,6 +8,7 @@ import "fmt"
 
 import log "github.com/couchbase/indexing/secondary/logging"
 import c "github.com/couchbase/indexing/secondary/common"
+import "github.com/couchbase/indexing/secondary/manager"
 import "github.com/couchbase/cbauth"
 
 type target struct {
@@ -45,6 +46,7 @@ func initHandlers(api *restServer) {
 	versionRx = re.MustCompile("v\\d+")
 	staticRoutes = make(map[string]reqHandler)
 	staticRoutes["stats"] = api.statsHandler
+	staticRoutes["bucket"] = bucketHandler
 }
 
 func NewRestServer(cluster string, stMgr *statsManager) (*restServer, Message) {
@@ -270,4 +272,17 @@ func genErrStr(keyspaceName string) string {
 		"         api/vi/stats/test_bucket.test_scope.test_collection/idx_1 will return index stats from  test_scope and test_collection",
 		keyspaceName)
 	return errStr
+}
+
+//
+// Bucket Handler. All bucket level APIs called using /api/v1/bucket
+// will be handled by this handler. Expected format for the url is
+//
+// /api/v1/bucket/<bucket-name>/<function-name>
+//
+// Following is the list of supported APIs.
+// /api/v1/bucket/<bucket-name>/backup
+//
+func bucketHandler(req request) {
+	manager.BucketRequestHandler(req.w, req.r, req.creds)
 }
