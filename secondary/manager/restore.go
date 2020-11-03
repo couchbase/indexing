@@ -273,7 +273,15 @@ func (m *RestoreContext) findIndexToRestore() error {
 			}
 
 			// Apply filters
-			if !applyFilters(m.target, index.Bucket, index.Scope, index.Collection, "", m.filters, m.filterType) {
+			// For bucket level filter, don't filter anything if target bucket is not
+			// specified. If target bucket is specified, then don't apply bucket level
+			// filter.
+			filtBucket := ""
+			if len(m.target) != 0 {
+				filtBucket = index.Bucket
+			}
+
+			if !applyFilters(filtBucket, index.Bucket, index.Scope, index.Collection, "", m.filters, m.filterType) {
 				logging.Debugf("RestoreContext:  Skip restoring index (%v, %v, %v, %v) due to filters.",
 					index.Bucket, index.Scope, index.Collection, index.Name)
 				continue
@@ -443,7 +451,15 @@ func (m *RestoreContext) findSchedTokensToRestore() error {
 		}
 
 		// Apply Filter
-		if !applyFilters(m.target, token.Definition.Bucket, token.Definition.Scope,
+		// For bucket level filter, don't filter anything if target bucket is not
+		// specified. If target bucket is specified, then don't apply bucket level
+		// filter.
+		filtBucket := ""
+		if len(m.target) != 0 {
+			filtBucket = token.Definition.Bucket
+		}
+
+		if !applyFilters(filtBucket, token.Definition.Bucket, token.Definition.Scope,
 			token.Definition.Collection, "", m.filters, m.filterType) {
 
 			logging.Debugf("RestoreContext:  Skip restoring index (%v, %v, %v, %v) due to filters.",
