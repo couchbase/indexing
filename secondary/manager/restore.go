@@ -15,6 +15,7 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/planner"
+	"strings"
 	"unsafe"
 )
 
@@ -30,6 +31,9 @@ type RestoreContext struct {
 	idxFromImage map[common.IndexerId][]*planner.IndexUsage
 	idxToRestore map[common.IndexerId][]*planner.IndexUsage
 	indexerMap   map[common.IndexerId]common.IndexerId
+	filters      map[string]bool
+	filterType   string
+	remap        map[string]string
 }
 
 //////////////////////////////////////////////////////////////
@@ -39,7 +43,8 @@ type RestoreContext struct {
 //
 // Initialize restore context
 //
-func createRestoreContext(image *ClusterIndexMetadata, clusterUrl string, bucket string) *RestoreContext {
+func createRestoreContext(image *ClusterIndexMetadata, clusterUrl string, bucket string,
+	filters map[string]bool, filterType string, remap map[string]string) *RestoreContext {
 
 	context := &RestoreContext{
 		clusterUrl:   clusterUrl,
@@ -48,6 +53,9 @@ func createRestoreContext(image *ClusterIndexMetadata, clusterUrl string, bucket
 		idxFromImage: make(map[common.IndexerId][]*planner.IndexUsage),
 		idxToRestore: make(map[common.IndexerId][]*planner.IndexUsage),
 		indexerMap:   make(map[common.IndexerId]common.IndexerId),
+		filters:      filters,
+		filterType:   filterType,
+		remap:        remap,
 	}
 
 	return context
@@ -122,7 +130,6 @@ func (m *RestoreContext) convertImage() error {
 		return err
 	}
 
-	origBucket := make(map[string]bool)
 	for _, meta := range m.image.Metadata {
 		for _, defn := range meta.IndexDefinitions {
 
@@ -151,25 +158,9 @@ func (m *RestoreContext) convertImage() error {
 						index.Bucket, index.Scope, index.Collection, index.Name)
 				}
 
-				if len(m.target) != 0 && index.Bucket != m.target {
-					// TODO: This may need to change as per collection aware target.
-					logging.Infof("RestoreContext:  convert index %v from bucket %v scope %v collection %v "+
-						"to target bucket (%v)",
-						index.Name, index.Bucket, index.Scope, index.Collection, m.target)
-					origBucket[index.Bucket] = true
-					index.Bucket = m.target
-					if index.Instance != nil {
-						index.Instance.Defn.Bucket = m.target
-					}
-				}
-
 				m.idxFromImage[common.IndexerId(meta.IndexerId)] = append(m.idxFromImage[common.IndexerId(meta.IndexerId)], index)
 			}
 		}
-	}
-
-	if len(m.target) != 0 && len(origBucket) > 1 {
-		return fmt.Errorf("Backup metadata has indexes from multiple buckets.  Cannot restore indexes to a single bucket %v", m.target)
 	}
 
 	return nil
@@ -222,12 +213,32 @@ func (m *RestoreContext) cleanseBackupMetadata() {
 //
 func (m *RestoreContext) findIndexToRestore() error {
 
+	origBucket := make(map[string]bool)
+
 	defnId2NameMap := make(map[common.IndexDefnId]string)
 	replicaToRestore := make(map[common.IndexDefnId]map[int]common.IndexInstId)
 
 	for indexerId, indexes := range m.idxFromImage {
 
 		for _, index := range indexes {
+
+			origBucket[index.Bucket] = true
+			if len(m.target) != 0 && len(origBucket) > 1 {
+				return fmt.Errorf("Backup metadata has indexes from multiple buckets.  Cannot restore indexes to a single bucket %v", m.target)
+			}
+
+			// Apply filters
+			if !m.applyFilterToIndexUsage(index) {
+				logging.Debugf("RestoreContext:  Skip restoring index (%v, %v, %v, %v) due to filters.",
+					index.Bucket, index.Scope, index.Collection, index.Name)
+				continue
+			}
+
+			// Remap the bucket, scope, collection if needed.
+			err := m.remapIndex(index)
+			if err != nil {
+				return err
+			}
 
 			// ignore any index with RState being pending
 			// **For pre-spock backup, RState of an instance is ACTIVE (0).
@@ -523,6 +534,98 @@ func (m *RestoreContext) buildIndexHostMapping(solution *planner.Solution) map[s
 	}
 
 	return result
+}
+
+//
+// Apply filter to IndexUsage
+//
+func (m *RestoreContext) applyFilterToIndexUsage(index *planner.IndexUsage) bool {
+	bucket := m.target
+
+	if bucket == "" {
+		return true
+	}
+
+	if index.Bucket != bucket {
+		return false
+	}
+
+	if m.filterType == "" {
+		return true
+	}
+
+	if _, ok := m.filters[index.Scope]; ok {
+		if m.filterType == "include" {
+			return true
+		} else {
+			return false
+		}
+	}
+
+	if _, ok := m.filters[fmt.Sprintf("%v.%v", index.Scope, index.Collection)]; ok {
+		if m.filterType == "include" {
+			return true
+		} else {
+			return false
+		}
+	}
+
+	if m.filterType == "include" {
+		return false
+	}
+
+	return true
+}
+
+func (m *RestoreContext) remapIndex(index *planner.IndexUsage) error {
+
+	// Remap bucket, if required
+	if len(m.target) != 0 && index.Bucket != m.target {
+		logging.Infof("RestoreContext:  convert index %v from bucket %v scope %v collection %v "+
+			"to target bucket (%v)",
+			index.Name, index.Bucket, index.Scope, index.Collection, m.target)
+		index.Bucket = m.target
+		if index.Instance != nil {
+			index.Instance.Defn.Bucket = m.target
+		}
+	}
+
+	// Input validation ensures non-overlapping scope and collection remaps
+	// Remap scope, if required
+	if newScope, ok := m.remap[index.Scope]; ok {
+		logging.Infof("RestoreContext:  convert index %v from bucket %v scope %v collection %v "+
+			"to target bucket, scope (%v, %v)", index.Name, index.Bucket, index.Scope, index.Collection,
+			m.target, newScope)
+
+		index.Scope = newScope
+		if index.Instance != nil {
+			index.Instance.Defn.Scope = newScope
+		}
+	}
+
+	// Remap collection, if required
+	if newColl, ok := m.remap[fmt.Sprintf("%v.%v", index.Scope, index.Collection)]; ok {
+		sc := strings.Split(newColl, ".")
+		if len(sc) != 2 {
+			err := fmt.Errorf("Error in restoring index %v:%v:%v:%v due to malformed remap",
+				index.Bucket, index.Scope, index.Collection, index.Name)
+			logging.Errorf(err.Error())
+			return err
+		}
+
+		logging.Infof("RestoreContext:  convert index %v from bucket %v scope %v collection %v "+
+			"to target bucket, scope, collection (%v, %v, %v)", index.Name, index.Bucket, index.Scope, index.Collection,
+			m.target, sc[0], sc[1])
+
+		index.Scope = sc[0]
+		index.Collection = sc[1]
+		if index.Instance != nil {
+			index.Instance.Defn.Scope = sc[0]
+			index.Instance.Defn.Collection = sc[1]
+		}
+	}
+
+	return nil
 }
 
 //////////////////////////////////////////////////////////////
