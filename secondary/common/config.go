@@ -1257,9 +1257,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.plasma.mainIndex.evictSweepInterval": ConfigValue{
-		600,
+		300,
 		"Time interval to sweep through all pages in an index (in sec)",
-		600,
+		300,
 		false, // mutable
 		false, // case-insensitive
 	},
@@ -1369,9 +1369,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.plasma.backIndex.evictSweepInterval": ConfigValue{
-		600,
+		300,
 		"Time interval to sweep through all pages in an index (in sec)",
-		600,
+		300,
 		false, // mutable
 		false, // case-insensitive
 	},
