@@ -363,6 +363,7 @@ func (slice *plasmaSlice) initStores() error {
 	mCfg.EnablePageBloomFilter = slice.sysconf["plasma.mainIndex.enablePageBloomFilter"].Bool()
 	mCfg.BloomFilterFalsePositiveRate = slice.sysconf["plasma.mainIndex.bloomFilterFalsePositiveRate"].Float64()
 	mCfg.BloomFilterExpectedMaxItems = slice.sysconf["plasma.mainIndex.bloomFilterExpectedMaxItems"].Uint64()
+	mCfg.EnableInMemoryCompression = slice.sysconf["plasma.mainIndex.enableInMemoryCompression"].Bool()
 
 	bCfg.MaxDeltaChainLen = slice.sysconf["plasma.backIndex.maxNumPageDeltas"].Int()
 	bCfg.MaxPageItems = slice.sysconf["plasma.backIndex.pageSplitThreshold"].Int()
@@ -381,6 +382,7 @@ func (slice *plasmaSlice) initStores() error {
 	bCfg.EnablePageBloomFilter = slice.sysconf["plasma.backIndex.enablePageBloomFilter"].Bool()
 	bCfg.BloomFilterFalsePositiveRate = slice.sysconf["plasma.backIndex.bloomFilterFalsePositiveRate"].Float64()
 	bCfg.BloomFilterExpectedMaxItems = slice.sysconf["plasma.backIndex.bloomFilterExpectedMaxItems"].Uint64()
+	bCfg.EnableInMemoryCompression = slice.sysconf["plasma.backIndex.enableInMemoryCompression"].Bool()
 
 	if slice.hasPersistence {
 		mCfg.File = filepath.Join(slice.path, "mainIndex")
@@ -2272,6 +2274,8 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 	mdb.mainstore.StatsLoggerFileSize = cfg["plasma.stats.logger.fileSize"].Uint64()
 	mdb.mainstore.StatsLoggerFileCount = cfg["plasma.stats.logger.fileCount"].Uint64()
 
+	mdb.mainstore.EnableInMemoryCompression = mdb.sysconf["plasma.mainIndex.enableInMemoryCompression"].Bool()
+
 	mdb.mainstore.UpdateConfig()
 
 	if !mdb.isPrimary {
@@ -2314,6 +2318,8 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 		mdb.backstore.StatsLoggerFileName = cfg["plasma.stats.logger.fileName"].String()
 		mdb.backstore.StatsLoggerFileSize = cfg["plasma.stats.logger.fileSize"].Uint64()
 		mdb.backstore.StatsLoggerFileCount = cfg["plasma.stats.logger.fileCount"].Uint64()
+
+		mdb.backstore.EnableInMemoryCompression = mdb.sysconf["plasma.backIndex.enableInMemoryCompression"].Bool()
 
 		mdb.backstore.UpdateConfig()
 	}

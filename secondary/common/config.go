@@ -1277,6 +1277,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.plasma.mainIndex.enableInMemoryCompression": ConfigValue{
+		false,
+		"Enable compression of memory resident items",
+		false,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.plasma.mainIndex.enablePageBloomFilter": ConfigValue{
 		false,
 		"Enable maintenance and use of bloom filter for lookup of swapped out items",
@@ -1386,6 +1393,13 @@ var SystemConfig = Config{
 		true,
 		"enable eviction to estimate if index memory can fit into quota",
 		true,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.backIndex.enableInMemoryCompression": ConfigValue{
+		false,
+		"Enable compression of memory resident items",
+		false,
 		false, // mutable
 		false, // case-insensitive
 	},
