@@ -603,7 +603,7 @@ func (m *DDLServiceMgr) handleCreateCommand(needRefresh bool) {
 	//
 	provider, _, err := newMetadataProvider(m.clusterAddr, nil, m.settings, "DDLServiceMgr")
 	if err != nil {
-		logging.Debugf("DDLServiceMgr: Failed to start metadata provider.  Internal Error = %v", err)
+		logging.Errorf("DDLServiceMgr: Failed to start metadata provider.  Internal Error = %v", err)
 		return
 	}
 	defer provider.Close()

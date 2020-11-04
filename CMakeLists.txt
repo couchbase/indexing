@@ -106,7 +106,7 @@ GoInstall (TARGET indexer PACKAGE github.com/couchbase/indexing/secondary/cmd/in
   GOVERSION 1.13.7)
 
 ADD_DEPENDENCIES(indexer sigar forestdb platform)
-ADD_DEPENDENCIES(indexer proto-generated)
+ADD_DEPENDENCIES(indexer proto-generated n1ql-yacc)
 
 GoInstall (TARGET projector PACKAGE github.com/couchbase/indexing/secondary/cmd/projector
   GOPATH "${PROJECT_SOURCE_DIR}/../../../.." "${GODEPSDIR}"
@@ -146,4 +146,3 @@ GoInstall (TARGET cbindexplan PACKAGE github.com/couchbase/indexing/secondary/cm
   LDFLAGS "${LDFLAGS}"
   INSTALL_PATH bin OUTPUT cbindexplan
   GOVERSION 1.13.7)
-

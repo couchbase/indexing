@@ -1561,8 +1561,8 @@ func (s *storageMgr) openSnapshot(idxInstId common.IndexInstId, partnInst Partit
 	var tsVbuuid *common.TsVbuuid
 	for _, snapInfo := range allSnapShots {
 		snapFound = true
-		logging.Infof("StorageMgr::openAnySnapshot IndexInst:%v Attempting to open snapshot (%v)",
-			idxInstId, snapInfo)
+		logging.Infof("StorageMgr::openSnapshot IndexInst:%v Partition:%v Attempting to open snapshot (%v)",
+			idxInstId, pid, snapInfo)
 		usableSnapshot, err := slice.OpenSnapshot(snapInfo)
 		if err != nil {
 			if err == errStorageCorrupted {
@@ -1594,11 +1594,15 @@ func (s *storageMgr) openSnapshot(idxInstId common.IndexInstId, partnInst Partit
 	}
 
 	if !snapFound {
+		logging.Infof("StorageMgr::openSnapshot IndexInst:%v Partition:%v No Snapshot Found.",
+			idxInstId, pid)
 		partnSnapMap = nil
 		return partnSnapMap, tsVbuuid, nil
 	}
 
 	if !usableSnapFound {
+		logging.Infof("StorageMgr::openSnapshot IndexInst:%v Partition:%v No Usable Snapshot Found.",
+			idxInstId, pid)
 		return partnSnapMap, nil, errStorageCorrupted
 	}
 
@@ -1626,6 +1630,10 @@ func (s *storageMgr) updateIndexSnapMap(indexPartnMap IndexPartnMap,
 // locking and subsequent unlocking of muSnap
 func (s *storageMgr) updateIndexSnapMapForIndex(idxInstId common.IndexInstId, idxInst common.IndexInst,
 	partnMap PartitionInstMap, streamId common.StreamId, keyspaceId string) {
+
+	partitionIDs, _ := idxInst.Pc.GetAllPartitionIds()
+	logging.Infof("StorageMgr::updateIndexSnapMapForIndex IndexInst %v Partitions %v",
+		idxInstId, partitionIDs)
 
 	needRestart := false
 	//if keyspace and stream have been provided
@@ -1691,6 +1699,8 @@ func (s *storageMgr) updateIndexSnapMapForIndex(idxInstId common.IndexInstId, id
 		s.indexSnapMap[idxInstId] = is
 		s.notifySnapshotCreation(is)
 	} else {
+		logging.Infof("StorageMgr::updateIndexSnapMapForIndex IndexInst %v Adding Nil Snapshot.",
+			idxInstId)
 		s.addNilSnapshot(idxInstId, bucket)
 	}
 
