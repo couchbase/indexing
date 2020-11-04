@@ -3707,8 +3707,12 @@ func (idx *indexer) handleKeyspaceNotFound(msg Message) {
 	instIdList := idx.deleteIndexInstOnDeletedKeyspace(bucket, scope, collection, streamId)
 
 	if len(instIdList) == 0 {
-		logging.Infof("Indexer::handleKeyspaceNotFound Empty IndexList %v %v. Nothing to do.",
+		logging.Infof("Indexer::handleKeyspaceNotFound Empty IndexList. Stopping the keyspaceId stream %v %v",
 			streamId, keyspaceId)
+
+		idx.stopKeyspaceIdStream(streamId, keyspaceId)
+		idx.setStreamKeyspaceIdState(streamId, keyspaceId, STREAM_INACTIVE)
+
 		return
 	}
 
