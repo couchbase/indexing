@@ -702,3 +702,72 @@ func TestCollectionDDLWithConcurrentSystemEvents(t *testing.T) {
 
 	scanAllAndVerifyCount(index1, bucket, scope, coll, nil, t)
 }
+
+func TestCollectionDropWithMultipleBuckets(t *testing.T) {
+	log.Printf("In TestCollectionWithDropMultipleBuckets()")
+	log.Printf("This test will create a collection across multiple buckets and ")
+	log.Printf("drops a collection on one bucket. Indexer should not drop indexes")
+	log.Printf("with same CollectionID but different buckets")
+
+	test_bucket_1 := "test_bucket_1"
+	test_bucket_2 := "test_bucket_2"
+	scope := "_default"
+	collection := "test"
+	index := "idx_1"
+
+	log.Printf("Creating %v", test_bucket_1)
+	kvutility.CreateBucket(test_bucket_1, "sasl", "", clusterconfig.Username, clusterconfig.Password, kvaddress, "100", "11213")
+	time.Sleep(10 * time.Second)
+	log.Printf("Creating %v", test_bucket_2)
+	kvutility.CreateBucket(test_bucket_2, "sasl", "", clusterconfig.Username, clusterconfig.Password, kvaddress, "100", "11213")
+	time.Sleep(10 * time.Second)
+	log.Printf("Creating collection: %v for bucket: %v", collection, test_bucket_1)
+	kvutility.CreateCollection(test_bucket_1, scope, collection, clusterconfig.Username, clusterconfig.Password, kvaddress)
+	log.Printf("Creating collection: %v for bucket: %v", collection, test_bucket_2)
+	kvutility.CreateCollection(test_bucket_2, scope, collection, clusterconfig.Username, clusterconfig.Password, kvaddress)
+	time.Sleep(10 * time.Second)
+
+	log.Printf("Creating Index: %v on scope: %v collection: %v for bucket: %v", index, scope, collection, test_bucket_1)
+	// Create indexes on test collection on both buckets
+	createIndex(index, test_bucket_1, scope, collection, []string{"age"}, t)
+	time.Sleep(5 * time.Second)
+	log.Printf("Creating Index: %v on scope: %v collection: %v for bucket: %v", index, scope, collection, test_bucket_2)
+	createIndex(index, test_bucket_2, scope, collection, []string{"age"}, t)
+	time.Sleep(5 * time.Second)
+
+	//Drop collection for bucket2
+	log.Printf("Dropping collection: %v for bucket: %v", collection, test_bucket_1)
+	kv.DropCollection(test_bucket_1, scope, collection, clusterconfig.Username, clusterconfig.Password, kvaddress)
+	time.Sleep(2 * time.Second)
+
+	// The index idx_1 should exist on test_bucket_2
+	log.Printf("Scanning index: %v, bucket: %v", index, test_bucket_2)
+	scanAllAndVerifyCount(index, test_bucket_2, scope, collection, nil, t)
+
+	// Now, delete test_bucket_2, add it back
+	log.Printf("Deleting bucket: %v", test_bucket_2)
+	kvutility.DeleteBucket(test_bucket_2, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+	time.Sleep(5 * time.Second)
+
+	log.Printf("Creating %v", test_bucket_2)
+	kvutility.CreateBucket(test_bucket_2, "sasl", "", clusterconfig.Username, clusterconfig.Password, kvaddress, "100", "11213")
+	time.Sleep(10 * time.Second)
+	log.Printf("Creating collection: %v for bucket: %v", collection, test_bucket_2)
+	kvutility.CreateCollection(test_bucket_2, scope, collection, clusterconfig.Username, clusterconfig.Password, kvaddress)
+	time.Sleep(10 * time.Second)
+
+	// This index creation should not block
+	log.Printf("Creating Index: %v on scope: %v collection: %v for bucket: %v", index, scope, collection, test_bucket_2)
+	createDeferIndex(index, test_bucket_2, scope, collection, []string{"age"}, t)
+	time.Sleep(5 * time.Second)
+	secondaryindex.BuildIndexes2([]string{index}, test_bucket_2, scope, collection, indexManagementAddress, defaultIndexActiveTimeout)
+
+	log.Printf("Scanning index: %v, bucket: %v", index, test_bucket_2)
+	// The index idx_1 should exist on test_bucket_2
+	scanAllAndVerifyCount(index, test_bucket_2, scope, collection, nil, t)
+
+	// Delete both the buckets
+	kvutility.DeleteBucket(test_bucket_1, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+	kvutility.DeleteBucket(test_bucket_2, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+	time.Sleep(5 * time.Second)
+}
