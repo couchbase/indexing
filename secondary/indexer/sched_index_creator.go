@@ -8,6 +8,7 @@ import (
 
 	"container/heap"
 	"errors"
+	"fmt"
 	"io"
 	"math/rand"
 	"sort"
@@ -24,6 +25,7 @@ var STOP_TOKEN_CLEANER_INITERVAL = 60   // Seconds
 var TOKEN_MOVER_INTERVAL = 60           // Seconds
 var STOP_TOKEN_RETENTION_TIME = 600     // Seconds
 var SCHED_PROCESS_INIT_INTERVAL = 60    // Seconds
+var KEYSPACE_CLEANER_INTERVAL = 20      // Seconds
 
 var RETRYABLE_ERROR_BACKOFF = int64(5 * time.Second)
 var NON_RETRYABLE_ERROR_BACKOFF = int64(5 * time.Second)
@@ -78,23 +80,26 @@ func getSchedIndexCreator() *schedIndexCreator {
 // 4. Similar to DDL service manager, scheduled index creator observes mutual
 //    exclusion with rebalance operation.
 type schedIndexCreator struct {
-	indexerId   common.IndexerId
-	config      common.ConfigHolder
-	provider    *client.MetadataProvider
-	proMutex    sync.Mutex
-	supvCmdch   MsgChannel //supervisor sends commands on this channel
-	supvMsgch   MsgChannel //channel to send any message to supervisor
-	clusterAddr string
-	settings    *ddlSettings
-	killch      chan bool
-	allowDDL    bool
-	mutex       sync.Mutex
-	mon         *schedTokenMonitor
-	indexQueue  *schedIndexQueue
-	queueMutex  sync.Mutex
-	backoff     int64 // random backoff in nanoseconds before the next request.
-	stopCleaner chan bool
-	stopMover   chan bool
+	indexerId       common.IndexerId
+	config          common.ConfigHolder
+	provider        *client.MetadataProvider
+	proMutex        sync.Mutex
+	supvCmdch       MsgChannel //supervisor sends commands on this channel
+	supvMsgch       MsgChannel //channel to send any message to supervisor
+	clusterAddr     string
+	settings        *ddlSettings
+	killch          chan bool
+	allowDDL        bool
+	mutex           sync.Mutex
+	mon             *schedTokenMonitor
+	indexQueue      *schedIndexQueue
+	queueMutex      sync.Mutex
+	backoff         int64 // random backoff in nanoseconds before the next request.
+	stopCleaner     chan bool
+	stopMover       chan bool
+	stopKeyspaceMon chan bool
+	cinfoClient     *common.ClusterInfoClient
+	cinfoLock       sync.Mutex
 }
 
 //
@@ -157,25 +162,31 @@ func NewSchedIndexCreator(indexerId common.IndexerId, supvCmdch MsgChannel,
 	heap.Init(&iq)
 
 	mgr := &schedIndexCreator{
-		indexerId:   indexerId,
-		supvCmdch:   supvCmdch,
-		supvMsgch:   supvMsgch,
-		clusterAddr: addr,
-		settings:    settings,
-		killch:      make(chan bool),
-		allowDDL:    true,
-		indexQueue:  &iq,
-		stopCleaner: make(chan bool),
-		stopMover:   make(chan bool),
+		indexerId:       indexerId,
+		supvCmdch:       supvCmdch,
+		supvMsgch:       supvMsgch,
+		clusterAddr:     addr,
+		settings:        settings,
+		killch:          make(chan bool),
+		allowDDL:        true,
+		indexQueue:      &iq,
+		stopCleaner:     make(chan bool),
+		stopMover:       make(chan bool),
+		stopKeyspaceMon: make(chan bool),
 	}
 
 	mgr.mon = NewSchedTokenMonitor(mgr, indexerId)
 
 	mgr.config.Store(config)
 
+	mgr.cinfoLock.Lock()
+	defer mgr.cinfoLock.Unlock()
+	mgr.cinfoClient = mgr.getCinfoNoLock()
+
 	go mgr.run()
 	go mgr.stopTokenCleaner()
 	go mgr.orphanTokenMover()
+	go mgr.keyspaceMonitor()
 
 	gSchedIndexCreatorLck.Lock()
 	defer gSchedIndexCreatorLck.Unlock()
@@ -620,18 +631,10 @@ func (m *schedIndexCreator) orphanTokenMover() {
 	// Sleep for some time before starting.
 	time.Sleep(time.Duration(SCHED_PROCESS_INIT_INTERVAL) * time.Second)
 
-	ticker := time.NewTicker(time.Duration(TOKEN_MOVER_INTERVAL) * time.Second)
-
 	cfg := m.config.Load()
 	clusterURL := cfg["clusterAddr"].String()
-	cinfo, err := common.FetchNewClusterInfoCache(clusterURL, common.DEFAULT_POOL, "schedIndexCreator")
-	if err != nil {
-		logging.Warnf("schedIndexCreator:orphanTokenMover error in getting cluster info client %v", err)
-	}
 
-	if cinfo == nil {
-		logging.Warnf("schedIndexCreator:orphanTokenMover nil cluster info client")
-	}
+	ticker := time.NewTicker(time.Duration(TOKEN_MOVER_INTERVAL) * time.Second)
 
 	for {
 		select {
@@ -641,29 +644,32 @@ func (m *schedIndexCreator) orphanTokenMover() {
 				continue
 			}
 
-			if cinfo == nil {
-				var err error
-				cinfo, err = common.FetchNewClusterInfoCache(clusterURL, common.DEFAULT_POOL, "schedIndexCreator")
-				if err != nil {
-					logging.Warnf("schedIndexCreator:orphanTokenMover error in getting cluster info client %v. Skipping iteration.", err)
-					continue
-				}
+			skipIter := false
+			func() {
+				m.cinfoLock.Lock()
+				defer m.cinfoLock.Unlock()
 
-				if cinfo == nil {
-					logging.Warnf("schedIndexCreator:orphanTokenMover nil cluster info client. Skipping iteration.")
-					continue
+				if m.cinfoClient == nil {
+					m.cinfoClient = m.getCinfoNoLock()
+					if m.cinfoClient == nil {
+						logging.Warnf("schedIndexCreator:orphanTokenMover nil cluster info. Skipping iteration.")
+						skipIter = true
+					}
 				}
+			}()
+
+			if skipIter {
+				continue
 			}
 
-			// Fetch the current cluster info
-			cinfo.FetchWithLock()
+			cinfoCache := m.cinfoClient.GetClusterInfoCache()
 
 			keepNodes := make(map[string]bool)
 			runIter := func() bool {
-				cinfo.RLock()
-				defer cinfo.RUnlock()
+				cinfoCache.RLock()
+				defer cinfoCache.RUnlock()
 
-				activeNodes := cinfo.GetActiveIndexerNodes()
+				activeNodes := cinfoCache.GetActiveIndexerNodes()
 				if len(activeNodes) <= 0 {
 					return false
 				}
@@ -696,11 +702,157 @@ func (m *schedIndexCreator) orphanTokenMover() {
 			}
 
 		case <-m.stopMover:
-			logging.Infof("schedIndexCreator: Stoppinig orphanTokenMover routine")
+			logging.Infof("schedIndexCreator: Stopping orphanTokenMover routine")
 			return
 		}
 	}
 
+}
+
+//
+// keyspaceMonitor is responsible to cleanup of schedule tokens
+// which failed during creation.
+//
+// When indexes scheduled for creation get KeyspaceDeletedErrors, the schedule
+// create token will be dropped for those indexes. But the indexes which are
+// already errored (i.e. exhaused all the retries), may never get cleaned up.
+//
+func (m *schedIndexCreator) keyspaceMonitor() {
+	// Sleep for some time before starting.
+	time.Sleep(time.Duration(SCHED_PROCESS_INIT_INTERVAL) * time.Second)
+
+	ticker := time.NewTicker(time.Duration(KEYSPACE_CLEANER_INTERVAL) * time.Second)
+
+	for {
+		select {
+		case <-ticker.C:
+			stopTokens, err := mc.ListAllStopScheduleCreateTokens()
+			if err != nil {
+				logging.Errorf("schedIndexCreator:keyspaceMonitor error in getting stop schedule create tokens: %v", err)
+				continue
+			}
+
+			skipIter := false
+			func() {
+				m.cinfoLock.Lock()
+				defer m.cinfoLock.Unlock()
+
+				if m.cinfoClient == nil {
+					m.cinfoClient = m.getCinfoNoLock()
+					if m.cinfoClient == nil {
+						logging.Warnf("schedIndexCreator:keyspaceMonitor nil cluster info. Skipping iteration.")
+						skipIter = true
+					}
+				}
+			}()
+
+			if skipIter {
+				continue
+			}
+
+			cinfoCache := m.cinfoClient.GetClusterInfoCache()
+
+			buckets := make(map[string]string)
+			scopes := make(map[string]string)
+			collections := make(map[string]string)
+
+			for _, stopToken := range stopTokens {
+				schedToken, err := mc.GetScheduleCreateToken(stopToken.DefnId)
+				if err != nil {
+					logging.Infof("schedIndexCreator:keyspaceMonitor error (%v) in GetScheduleCreateToken for %v", err, stopToken.DefnId)
+					continue
+				}
+
+				if schedToken == nil {
+					logging.Debugf("schedIndexCreator:keyspaceMonitor GetScheduleCreateToken returned nil token for %v", err, stopToken.DefnId)
+					continue
+				}
+
+				defn := schedToken.Definition
+
+				scopeKey := fmt.Sprintf("%v:%v", defn.Bucket, defn.Scope)
+				collectionKey := fmt.Sprintf("%v:%v:%v", defn.Bucket, defn.Scope, defn.Collection)
+
+				var bucketUuid, scopeId, collectionId string
+				var ok bool
+				if bucketUuid, ok = buckets[defn.Bucket]; !ok {
+					func() {
+						cinfoCache.RLock()
+						defer cinfoCache.RUnlock()
+
+						bucketUuid = cinfoCache.GetBucketUUID(defn.Bucket)
+						buckets[defn.Bucket] = bucketUuid
+					}()
+				}
+
+				if scopeId, ok = scopes[scopeKey]; !ok {
+					func() {
+						cinfoCache.RLock()
+						defer cinfoCache.RUnlock()
+
+						scopeId = cinfoCache.GetScopeID(defn.Bucket, defn.Scope)
+						scopes[scopeKey] = scopeId
+					}()
+				}
+
+				if collectionId, ok = collections[collectionKey]; !ok {
+					func() {
+						cinfoCache.RLock()
+						defer cinfoCache.RUnlock()
+
+						collectionId = cinfoCache.GetCollectionID(defn.Bucket, defn.Scope, defn.Collection)
+						collections[collectionKey] = collectionId
+					}()
+				}
+
+				if bucketUuid != schedToken.BucketUUID ||
+					scopeId != schedToken.ScopeId ||
+					collectionId != schedToken.CollectionId {
+
+					m.cleanupTokens(defn.DefnId)
+				}
+			}
+
+		case <-m.stopKeyspaceMon:
+			logging.Infof("schedIndexCreator: Stopping keyspaceMonitor routine")
+			return
+		}
+	}
+}
+
+func (m *schedIndexCreator) cleanupTokens(defnId common.IndexDefnId) {
+
+	logging.Infof("schedIndexCreator:cleanupTokens cleaning tokens for %v", defnId)
+
+	if err := mc.DeleteScheduleCreateToken(defnId); err != nil {
+		logging.Errorf("schedIndexCreator:cleanupTokens error in DeleteScheduleCreateToken:%v:%v", defnId, err)
+		return
+	}
+
+	if err := mc.DeleteStopScheduleCreateToken(defnId); err != nil {
+		logging.Errorf("schedIndexCreator:cleanupTokens error in DeleteStopScheduleCreateToken:%v:%v", defnId, err)
+	}
+}
+
+func (m *schedIndexCreator) getCinfoNoLock() *common.ClusterInfoClient {
+	cfg := m.config.Load()
+	clusterURL := cfg["clusterAddr"].String()
+	cinfoClient, err := common.NewClusterInfoClient(clusterURL, common.DEFAULT_POOL, nil)
+	if err != nil {
+		logging.Warnf("schedIndexCreator:getCinfoNoLock error in getting cluster info client %v", err)
+		return nil
+	}
+
+	if cinfoClient == nil {
+		logging.Warnf("schedIndexCreator:getCinfoNoLock nil cluster info client")
+		return nil
+	}
+
+	if cinfoClient != nil {
+		cinfoClient.SetUserAgent("schedIndexCreator")
+	}
+
+	return cinfoClient
 }
 
 func (m *schedIndexCreator) Close() {
@@ -708,6 +860,7 @@ func (m *schedIndexCreator) Close() {
 	close(m.killch)
 	close(m.stopCleaner)
 	close(m.stopMover)
+	close(m.stopKeyspaceMon)
 	m.mon.Close()
 }
 
