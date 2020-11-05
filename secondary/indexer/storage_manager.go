@@ -44,8 +44,8 @@ type storageMgr struct {
 
 	snapshotNotifych chan IndexSnapshot
 
-	indexInstMap  common.IndexInstMap
-	indexPartnMap IndexPartnMap
+	indexInstMap  IndexInstMapHolder
+	indexPartnMap IndexPartnMapHolder
 
 	// Latest readable index snapshot for each index instance
 	indexSnapMap map[common.IndexInstId]IndexSnapshot
@@ -116,6 +116,8 @@ func NewStorageManager(supvCmdch MsgChannel, supvRespch MsgChannel,
 		waitersMap:       make(map[common.IndexInstId][]*snapshotWaiter),
 		config:           config,
 	}
+	s.indexInstMap.Init()
+	s.indexPartnMap.Init()
 
 	//if manager is not enabled, create meta file
 	if config["enableManager"].Bool() == false {
@@ -233,13 +235,10 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 		logging.Debugf("StorageMgr::handleCreateSnapshot Skip Snapshot For %v "+
 			"%v SnapType %v", streamId, keyspaceId, snapType)
 
-		s.muSnap.Lock()
-		defer s.muSnap.Unlock()
-
 		//TODO Collections create a filtered copy of maps based on keyspace
 		//or store map of per stream/keyspaceId
-		indexInstMap := common.CopyIndexInstMap(s.indexInstMap)
-		indexPartnMap := CopyIndexPartnMap(s.indexPartnMap)
+		indexInstMap := s.indexInstMap.Get()
+		indexPartnMap := s.indexPartnMap.Get()
 
 		go s.flushDone(streamId, keyspaceId, indexInstMap, indexPartnMap,
 			tsVbuuid, flushWasAborted, hasAllSB)
@@ -253,8 +252,8 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 	//pass copy of maps to worker
 	//TODO Collections create a filtered copy of maps based on keyspace
 	indexSnapMap := copyIndexSnapMap(s.indexSnapMap)
-	indexInstMap := common.CopyIndexInstMap(s.indexInstMap)
-	indexPartnMap := CopyIndexPartnMap(s.indexPartnMap)
+	indexInstMap := s.indexInstMap.Get()
+	indexPartnMap := s.indexPartnMap.Get()
 	stats := s.stats.Get()
 
 	go s.createSnapshotWorker(streamId, keyspaceId, tsVbuuid, indexSnapMap,
@@ -636,9 +635,11 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 	var err error
 	var restartTs *common.TsVbuuid
 
+	indexInstMap := sm.indexInstMap.Get()
+	indexPartnMap := sm.indexPartnMap.Get()
 	//for every index managed by this indexer
-	for idxInstId, partnMap := range sm.indexPartnMap {
-		idxInst := sm.indexInstMap[idxInstId]
+	for idxInstId, partnMap := range indexPartnMap {
+		idxInst := indexInstMap[idxInstId]
 
 		//if this keyspace in stream needs to be rolled back
 		if idxInst.Defn.KeyspaceId(idxInst.Stream) == keyspaceId &&
@@ -677,7 +678,7 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 		// and stream with error
 		stats := sm.stats.Get()
 		for idxInstId, waiters := range sm.waitersMap {
-			idxInst := sm.indexInstMap[idxInstId]
+			idxInst := sm.indexInstMap.Get()[idxInstId]
 			idxStats := stats.indexes[idxInst.InstId]
 			if idxInst.Defn.KeyspaceId(idxInst.Stream) == keyspaceId &&
 				idxInst.Stream == streamId {
@@ -693,7 +694,7 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 		}
 	}()
 
-	sm.updateIndexSnapMap(sm.indexPartnMap, streamId, keyspaceId)
+	sm.updateIndexSnapMap(sm.indexPartnMap.Get(), streamId, keyspaceId)
 
 	bucket, _, _ := SplitKeyspaceId(keyspaceId)
 	stats := sm.stats.Get()
@@ -859,8 +860,10 @@ func (sm *storageMgr) rollbackAllToZero(streamId common.StreamId,
 
 	logging.Infof("StorageMgr::rollbackAllToZero %v %v", streamId, keyspaceId)
 
-	for idxInstId, partnMap := range sm.indexPartnMap {
-		idxInst := sm.indexInstMap[idxInstId]
+	indexPartnMap := sm.indexPartnMap.Get()
+	indexInstMap := sm.indexInstMap.Get()
+	for idxInstId, partnMap := range indexPartnMap {
+		idxInst := indexInstMap[idxInstId]
 
 		//if this keyspace in stream needs to be rolled back
 		if idxInst.Defn.KeyspaceId(idxInst.Stream) == keyspaceId &&
@@ -967,15 +970,17 @@ func (s *storageMgr) handleUpdateIndexInstMap(cmd Message) {
 	logging.Tracef("StorageMgr::handleUpdateIndexInstMap %v", cmd)
 	req := cmd.(*MsgUpdateInstMap)
 	indexInstMap := req.GetIndexInstMap()
+	copyIndexInstMap := common.CopyIndexInstMap(indexInstMap)
 	s.stats.Set(req.GetStatsObject())
-	s.indexInstMap = common.CopyIndexInstMap(indexInstMap)
+	s.indexInstMap.Set(copyIndexInstMap)
 
 	s.muSnap.Lock()
 	defer s.muSnap.Unlock()
 
+	indexInstMap = s.indexInstMap.Get()
 	// Remove all snapshot waiters for indexes that do not exist anymore
 	for id, ws := range s.waitersMap {
-		if inst, ok := s.indexInstMap[id]; !ok ||
+		if inst, ok := indexInstMap[id]; !ok ||
 			inst.State == common.INDEX_STATE_DELETED {
 			for _, w := range ws {
 				w.Error(common.ErrIndexNotFound)
@@ -986,7 +991,7 @@ func (s *storageMgr) handleUpdateIndexInstMap(cmd Message) {
 
 	// Cleanup all invalid index's snapshots
 	for idxInstId, is := range s.indexSnapMap {
-		if inst, ok := s.indexInstMap[idxInstId]; !ok ||
+		if inst, ok := indexInstMap[idxInstId]; !ok ||
 			inst.State == common.INDEX_STATE_DELETED {
 			DestroyIndexSnapshot(is)
 			delete(s.indexSnapMap, idxInstId)
@@ -995,7 +1000,7 @@ func (s *storageMgr) handleUpdateIndexInstMap(cmd Message) {
 	}
 
 	// Add 0 items index snapshots for newly added indexes
-	for idxInstId, inst := range s.indexInstMap {
+	for idxInstId, inst := range indexInstMap {
 		s.addNilSnapshot(idxInstId, inst.Defn.Bucket)
 	}
 
@@ -1003,7 +1008,7 @@ func (s *storageMgr) handleUpdateIndexInstMap(cmd Message) {
 	//meta file
 	if s.config["enableManager"].Bool() == false {
 
-		instMap := common.CopyIndexInstMap(s.indexInstMap)
+		instMap := indexInstMap
 
 		for id, inst := range instMap {
 			inst.Pc = nil
@@ -1036,7 +1041,8 @@ func (s *storageMgr) handleUpdateIndexPartnMap(cmd Message) {
 
 	logging.Tracef("StorageMgr::handleUpdateIndexPartnMap %v", cmd)
 	indexPartnMap := cmd.(*MsgUpdatePartnMap).GetIndexPartnMap()
-	s.indexPartnMap = CopyIndexPartnMap(indexPartnMap)
+	copyIndexPartnMap := CopyIndexPartnMap(indexPartnMap)
+	s.indexPartnMap.Set(copyIndexPartnMap)
 
 	s.supvCmdch <- &MsgSuccess{}
 }
@@ -1051,7 +1057,7 @@ func (s *storageMgr) handleGetIndexSnapshot(cmd Message) {
 	s.supvCmdch <- &MsgSuccess{}
 
 	req := cmd.(*MsgIndexSnapRequest)
-	inst, found := s.indexInstMap[req.GetIndexId()]
+	inst, found := s.indexInstMap.Get()[req.GetIndexId()]
 	if !found || inst.State == common.INDEX_STATE_DELETED {
 		req.respch <- common.ErrIndexNotFound
 		return
@@ -1105,8 +1111,9 @@ func (s *storageMgr) handleStats(cmd Message) {
 	storageStats := s.getIndexStorageStats(nil)
 
 	stats := s.stats.Get()
+	indexInstMap := s.indexInstMap.Get()
 	for _, st := range storageStats {
-		inst := s.indexInstMap[st.InstId]
+		inst := indexInstMap[st.InstId]
 		if inst.State == common.INDEX_STATE_DELETED {
 			continue
 		}
@@ -1182,7 +1189,9 @@ func (s *storageMgr) getIndexStorageStats(spec *statsSpec) []IndexStorageStats {
 		consumerFilter = spec.consumerFilter
 	}
 
-	for idxInstId, partnMap := range s.indexPartnMap {
+	indexInstMap := s.indexInstMap.Get()
+	indexPartnMap := s.indexPartnMap.Get()
+	for idxInstId, partnMap := range indexPartnMap {
 
 		// If list of instances are specified in the request and the current
 		// instance does not match the instance specified in request, do not
@@ -1193,7 +1202,7 @@ func (s *storageMgr) getIndexStorageStats(spec *statsSpec) []IndexStorageStats {
 			}
 		}
 
-		inst, ok := s.indexInstMap[idxInstId]
+		inst, ok := indexInstMap[idxInstId]
 		//skip deleted indexes
 		if !ok || inst.State == common.INDEX_STATE_DELETED {
 			continue
@@ -1507,14 +1516,14 @@ func (s *storageMgr) handleIndexCompaction(cmd Message) {
 	minFrag := req.GetMinFrag()
 	var slices []Slice
 
-	inst, ok := s.indexInstMap[req.GetInstId()]
+	inst, ok := s.indexInstMap.Get()[req.GetInstId()]
 	stats := s.stats.Get()
 	if !ok || inst.State == common.INDEX_STATE_DELETED {
 		errch <- common.ErrIndexNotFound
 		return
 	}
 
-	partnMap, _ := s.indexPartnMap[req.GetInstId()]
+	partnMap, _ := s.indexPartnMap.Get()[req.GetInstId()]
 	idxStats := stats.indexes[req.GetInstId()]
 	idxStats.numCompactions.Add(1)
 
@@ -1627,7 +1636,7 @@ func (s *storageMgr) updateIndexSnapMap(indexPartnMap IndexPartnMap,
 	defer s.muSnap.Unlock()
 
 	for idxInstId, partnMap := range indexPartnMap {
-		idxInst := s.indexInstMap[idxInstId]
+		idxInst := s.indexInstMap.Get()[idxInstId]
 		s.updateIndexSnapMapForIndex(idxInstId, idxInst, partnMap, streamId, keyspaceId)
 	}
 }
