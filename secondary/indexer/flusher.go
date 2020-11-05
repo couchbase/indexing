@@ -99,8 +99,8 @@ func (f *flusher) PersistUptoTS(q MutationQueue, streamId common.StreamId,
 	logging.Verbosef("Flusher::PersistUptoTS %v %v Timestamp: %v PartnMap %v",
 		streamId, keyspaceId, ts, indexPartnMap)
 
-	f.indexInstMap = common.CopyIndexInstMap(indexInstMap)
-	f.indexPartnMap = CopyIndexPartnMap(indexPartnMap)
+	f.indexInstMap = indexInstMap
+	f.indexPartnMap = indexPartnMap
 
 	msgch := make(MsgChannel)
 	go f.flushQueue(q, streamId, keyspaceId, ts, changeVec, countVec, true, stopch, msgch)

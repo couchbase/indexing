@@ -62,8 +62,8 @@ type mutationMgr struct {
 
 	shutdownCh DoneChannel //internal channel indicating shutdown
 
-	indexInstMap  common.IndexInstMap
-	indexPartnMap IndexPartnMap
+	indexInstMap  IndexInstMapHolder
+	indexPartnMap IndexPartnMapHolder
 
 	numVbuckets uint16 //number of vbuckets
 
@@ -120,6 +120,8 @@ func NewMutationManager(supvCmdch MsgChannel, supvRespch MsgChannel,
 		numVbsPerNode:  make(map[string]int64),
 	}
 	m.vbMap.Init()
+	m.indexInstMap.Init()
+	m.indexPartnMap.Init()
 
 	err := m.checkPortAvailability()
 	if err != nil {
@@ -746,8 +748,9 @@ func (m *mutationMgr) handleRemoveKeyspaceFromStream(cmd Message) {
 
 	var keyspaceIdMapDirty bool
 
+	indexInstMap := m.indexInstMap.Get()
 	//delete all indexes for given keyspaceId from map
-	for _, inst := range m.indexInstMap {
+	for _, inst := range indexInstMap {
 		if inst.Defn.KeyspaceId(streamId) == keyspaceId {
 			keyspaceIdMapDirty = true
 			delete(indexQueueMap, inst.InstId)
@@ -1028,7 +1031,7 @@ func (m *mutationMgr) persistMutationQueue(q IndexerMutationQueue,
 		flusher := NewFlusher(config, stats)
 		sts := getSeqTsFromTsVbuuid(ts)
 		msgch := flusher.PersistUptoTS(q.queue, streamId, keyspaceId,
-			m.indexInstMap, m.indexPartnMap, sts, changeVec, countVec, stopch)
+			m.indexInstMap.Get(), m.indexPartnMap.Get(), sts, changeVec, countVec, stopch)
 		//wait for flusher to finish
 		msg := <-msgch
 
@@ -1203,12 +1206,11 @@ func (m *mutationMgr) handleUpdateIndexInstMap(cmd Message) {
 	}
 	logging.Tracef("MutationMgr::handleUpdateIndexInstMap %v", cmd)
 
-	m.lock.Lock()
-	defer m.lock.Unlock()
-
 	indexInstMap := req.GetIndexInstMap()
-	m.indexInstMap = common.CopyIndexInstMap2(indexInstMap)
+	copyIndexInstMap := common.CopyIndexInstMap2(indexInstMap)
+	m.indexInstMap.Set(copyIndexInstMap)
 	m.stats.Set(req.GetStatsObject())
+
 	m.supvCmdch <- &MsgSuccess{}
 
 }
@@ -1227,11 +1229,9 @@ func (m *mutationMgr) handleUpdateIndexPartnMap(cmd Message) {
 	}
 	logging.Tracef("MutationMgr::handleUpdateIndexPartnMap %v", cmd)
 
-	m.lock.Lock()
-	defer m.lock.Unlock()
-
 	indexPartnMap := cmd.(*MsgUpdatePartnMap).GetIndexPartnMap()
-	m.indexPartnMap = CopyIndexPartnMap(indexPartnMap)
+	copyIndexPartnMap := CopyIndexPartnMap(indexPartnMap)
+	m.indexPartnMap.Set(copyIndexPartnMap)
 
 	m.supvCmdch <- &MsgSuccess{}
 
