@@ -3707,8 +3707,12 @@ func (idx *indexer) handleKeyspaceNotFound(msg Message) {
 	instIdList := idx.deleteIndexInstOnDeletedKeyspace(bucket, scope, collection, streamId)
 
 	if len(instIdList) == 0 {
-		logging.Infof("Indexer::handleKeyspaceNotFound Empty IndexList %v %v. Nothing to do.",
+		logging.Infof("Indexer::handleKeyspaceNotFound Empty IndexList. Stopping the keyspaceId stream %v %v",
 			streamId, keyspaceId)
+
+		idx.stopKeyspaceIdStream(streamId, keyspaceId)
+		idx.setStreamKeyspaceIdState(streamId, keyspaceId, STREAM_INACTIVE)
+
 		return
 	}
 
@@ -3762,15 +3766,21 @@ func (idx *indexer) processCollectionDrop(streamId common.StreamId,
 	logging.Infof("Indexer::processCollectionDrop %v %v %v %v", streamId,
 		keyspaceId, scopeId, collectionId)
 
+	// Get bucket from keyspaceId
+	bucket, _, _ := SplitKeyspaceId(keyspaceId)
+
+	bucketUUID, _ := idx.clusterInfoClient.GetBucketUUID(bucket)
+
 	//get the collection name from index inst map(this may already be gone from manifest)
-	var collection, scope, bucket, bucketUUID string
+	var collection, scope string
 	for _, index := range idx.indexInstMap {
 		if index.Defn.CollectionId == collectionId &&
 			index.Stream == streamId &&
-			index.State != common.INDEX_STATE_DELETED {
+			index.State != common.INDEX_STATE_DELETED &&
+			index.Defn.Bucket == bucket &&
+			(bucketUUID == common.BUCKET_UUID_NIL || bucketUUID == index.Defn.BucketUUID) {
 			collection = index.Defn.Collection
 			scope = index.Defn.Scope
-			bucket = index.Defn.Bucket
 			bucketUUID = index.Defn.BucketUUID
 			break
 		}
