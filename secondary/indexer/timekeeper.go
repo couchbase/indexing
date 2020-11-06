@@ -2265,11 +2265,19 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 	//if flushTs is not on snap boundary, merge cannot be done
 	if !initFlushTs.IsSnapAligned() {
 		hwt := tk.ss.streamKeyspaceIdHWTMap[streamId][keyspaceId]
+
+		var lenInitTs, lenMaintTs int
 		tsList := tk.ss.streamKeyspaceIdTsListMap[streamId][keyspaceId]
-		tsListMaint := tk.ss.streamKeyspaceIdTsListMap[streamId][bucket]
+		if tsList != nil {
+			lenInitTs = tsList.Len()
+		}
+		tsListMaint := tk.ss.streamKeyspaceIdTsListMap[common.MAINT_STREAM][bucket]
+		if tsListMaint != nil {
+			lenMaintTs = tsListMaint.Len()
+		}
 		logging.Infof("Timekeeper::checkInitStreamReadyToMerge FlushTs Not Snapshot "+
 			"Aligned. Continue both streams for keyspaceId %v. INIT PendTsCount %v. "+
-			"MAINT PendTsCount %v.", keyspaceId, len(tsList), len(tsListMaint))
+			"MAINT PendTsCount %v.", keyspaceId, lenInitTs, lenMaintTs)
 		logging.LazyVerbose(func() string {
 			return fmt.Sprintf("Timekeeper::checkInitStreamReadyToMerge FlushTs %v\n HWT %v", initFlushTs, hwt)
 		})
@@ -2895,11 +2903,12 @@ func (tk *timekeeper) checkMergeCandidateTs(streamId common.StreamId,
 	//this index can be merged to MAINT_STREAM. If there is a flush in progress,
 	//it is important to use that for comparison as after merge MAINT_STREAM will
 	//include merged indexes after the in progress flush finishes.
+	bucket, _, _ := SplitKeyspaceId(keyspaceId)
 	var lastFlushedTsVbuuid *common.TsVbuuid
-	if lts, ok := tk.ss.streamKeyspaceIdFlushInProgressTsMap[common.MAINT_STREAM][keyspaceId]; ok && lts != nil {
+	if lts, ok := tk.ss.streamKeyspaceIdFlushInProgressTsMap[common.MAINT_STREAM][bucket]; ok && lts != nil {
 		lastFlushedTsVbuuid = lts
 	} else {
-		lastFlushedTsVbuuid = tk.ss.streamKeyspaceIdLastFlushedTsMap[common.MAINT_STREAM][keyspaceId]
+		lastFlushedTsVbuuid = tk.ss.streamKeyspaceIdLastFlushedTsMap[common.MAINT_STREAM][bucket]
 	}
 
 	mergeCandidate := false
