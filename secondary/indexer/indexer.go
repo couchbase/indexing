@@ -333,7 +333,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	}
 
 	//Start Timekeeper
-	idx.tk, res = NewTimekeeper(idx.tkCmdCh, idx.wrkrRecvCh, idx.config)
+	idx.tk, res = NewTimekeeper(idx.tkCmdCh, idx.wrkrRecvCh, idx.config, idx.clusterInfoClient)
 	if res.GetMsgType() != MSG_SUCCESS {
 		logging.Fatalf("Indexer::NewIndexer Timekeeper Init Error %+v", res)
 		return nil, res
@@ -6872,8 +6872,6 @@ func (idx *indexer) upgradeSingleIndex(inst *common.IndexInst, storageMode commo
 
 func (idx *indexer) validateIndexInstMap() {
 
-	clusterAddr := idx.config["clusterAddr"].String()
-
 	bucketUUIDMap := make(map[string]bool)
 	bucketValid := make(map[string]bool)
 
@@ -6960,15 +6958,8 @@ func (idx *indexer) validateIndexInstMap() {
 				index.Defn.Scope, index.Defn.Collection}, ":")
 			if _, ok := keyspaceMap[keyspace]; !ok {
 
-				//TODO Collections - change to use cinfo.GetCollectionID once streaming
-				//rest endpoint is available
-				cid, _ := common.GetCollectionID(clusterAddr,
-					index.Defn.Bucket, index.Defn.Scope, index.Defn.Collection)
-
-				cidValid := false
-				if cid == index.Defn.CollectionId {
-					cidValid = true
-				}
+				cidValid := idx.clusterInfoClient.ValidateCollectionID(index.Defn.Bucket,
+					index.Defn.Scope, index.Defn.Collection, index.Defn.CollectionId)
 
 				if _, ok := keyspaceValid[keyspace]; ok {
 					keyspaceValid[keyspace] = keyspaceValid[keyspace] && cidValid
@@ -9130,8 +9121,6 @@ func (idx *indexer) monitorKVNodes() {
 func (idx *indexer) ValidateKeyspace(streamId common.StreamId, keyspaceId string,
 	bucketUUIDs []string) bool {
 
-	clusterAddr := idx.config["clusterAddr"].String()
-
 	collectionId := idx.streamKeyspaceIdCollectionId[streamId][keyspaceId]
 
 	bucket, scope, collection := SplitKeyspaceId(keyspaceId)
@@ -9149,11 +9138,8 @@ func (idx *indexer) ValidateKeyspace(streamId common.StreamId, keyspaceId string
 			collection = common.DEFAULT_COLLECTION
 		}
 
-		//TODO Collections - change to use cinfo.GetCollectionID once streaming
-		//rest endpoint is available
-		cid, _ := common.GetCollectionID(clusterAddr,
-			bucket, scope, collection)
-		if cid != collectionId {
+		if !idx.clusterInfoClient.ValidateCollectionID(bucket,
+			scope, collection, collectionId) {
 			return false
 		}
 	}

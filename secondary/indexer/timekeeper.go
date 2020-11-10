@@ -52,6 +52,8 @@ type timekeeper struct {
 	lock sync.RWMutex //lock to protect this structure
 
 	indexerState common.IndexerState
+
+	clusterInfoClient *common.ClusterInfoClient
 }
 
 type InitialBuildInfo struct {
@@ -78,18 +80,19 @@ const REPAIR_RETRY_BEFORE_SHUTDOWN = 5
 //Any async response to supervisor is sent to supvRespch.
 //If supvCmdch get closed, storageMgr will shut itself down.
 func NewTimekeeper(supvCmdch MsgChannel, supvRespch MsgChannel,
-	config common.Config) (Timekeeper, Message) {
+	config common.Config, c *common.ClusterInfoClient) (Timekeeper, Message) {
 
 	//Init the timekeeper struct
 	tk := &timekeeper{
-		supvCmdch:       supvCmdch,
-		supvRespch:      supvRespch,
-		ss:              InitStreamState(config),
-		config:          config,
-		indexInstMap:    make(common.IndexInstMap),
-		indexPartnMap:   make(IndexPartnMap),
-		indexBuildInfo:  make(map[common.IndexInstId]*InitialBuildInfo),
-		vbCheckerStopCh: make(map[common.StreamId]chan bool),
+		supvCmdch:         supvCmdch,
+		supvRespch:        supvRespch,
+		ss:                InitStreamState(config),
+		config:            config,
+		indexInstMap:      make(common.IndexInstMap),
+		indexPartnMap:     make(IndexPartnMap),
+		indexBuildInfo:    make(map[common.IndexInstId]*InitialBuildInfo),
+		vbCheckerStopCh:   make(map[common.StreamId]chan bool),
+		clusterInfoClient: c,
 	}
 
 	//start timekeeper loop which listens to commands from its supervisor
@@ -4240,8 +4243,6 @@ func (tk *timekeeper) handlePoolChange(cmd Message) {
 func (tk *timekeeper) ValidateKeyspace(streamId common.StreamId, keyspaceId string,
 	bucketUUIDs []string) bool {
 
-	clusterAddr := tk.config["clusterAddr"].String()
-
 	collectionId := tk.ss.streamKeyspaceIdCollectionId[streamId][keyspaceId]
 
 	bucket, scope, collection := SplitKeyspaceId(keyspaceId)
@@ -4249,7 +4250,7 @@ func (tk *timekeeper) ValidateKeyspace(streamId common.StreamId, keyspaceId stri
 	//if the stream is using a cid, validate collection.
 	//otherwise only validate the bucket
 	if collectionId == "" {
-		if !ValidateBucket(clusterAddr, bucket, bucketUUIDs) {
+		if !tk.clusterInfoClient.ValidateBucket(bucket, bucketUUIDs) {
 			return false
 		}
 	} else {
@@ -4259,11 +4260,8 @@ func (tk *timekeeper) ValidateKeyspace(streamId common.StreamId, keyspaceId stri
 			collection = common.DEFAULT_COLLECTION
 		}
 
-		//TODO Collections - change to use cinfo.GetCollectionID once streaming
-		//rest endpoint is available
-		cid, _ := common.GetCollectionID(clusterAddr,
-			bucket, scope, collection)
-		if cid != collectionId {
+		if !tk.clusterInfoClient.ValidateCollectionID(bucket, scope,
+			collection, collectionId) {
 			return false
 		}
 	}
