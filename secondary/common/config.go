@@ -2030,6 +2030,14 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.force_fast_flush": ConfigValue{
+		false,
+		"Force fast flush mode for memdb/plasma." +
+			"By default, fast flush is ON for forestdb only.",
+		false,
+		false, // mutable
+		false, // case-insensitive
+	},
 
 	//fdb specific settings
 	"indexer.settings.persisted_snapshot.fdb.interval": ConfigValue{
