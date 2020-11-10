@@ -408,9 +408,12 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, keyspaceId s
 								snap: latestSnapshot,
 							}
 							sliceSnaps[slice.Id()] = ss
-							logging.Debugf("StorageMgr::handleCreateSnapshot Skipped Creating New Snapshot for Index %v "+
-								"PartitionId %v SliceId %v. No New Mutations. IsDirty %v", idxInstId, partnId, slice.Id(), slice.IsDirty())
-							logging.Debugf("StorageMgr::handleCreateSnapshot SnapTs %v FlushTs %v", snapTs, ts)
+
+							if logging.IsEnabled(logging.Debug) {
+								logging.Debugf("StorageMgr::handleCreateSnapshot Skipped Creating New Snapshot for Index %v "+
+									"PartitionId %v SliceId %v. No New Mutations. IsDirty %v", idxInstId, partnId, slice.Id(), slice.IsDirty())
+								logging.Debugf("StorageMgr::handleCreateSnapshot SnapTs %v FlushTs %v", snapTs, ts)
+							}
 							continue
 						}
 					}
