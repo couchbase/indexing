@@ -63,6 +63,7 @@ type LifecycleMgr struct {
 
 	lastSendClientStats *client.IndexStats2
 	clientStatsMutex    sync.Mutex
+	acceptedNames       map[string]*indexNameRequest
 }
 
 type requestHolder struct {
@@ -168,6 +169,7 @@ func NewLifecycleMgr(notifier MetadataNotifier, clusterURL string) (*LifecycleMg
 		indexerReady:               false,
 		lastSendClientStats:        &client.IndexStats2{},
 		clientStatsRefreshInterval: 5000,
+		acceptedNames:              make(map[string]*indexNameRequest),
 	}
 
 	mgr.cinfoClient, err = common.NewClusterInfoClient(clusterURL, common.DEFAULT_POOL, nil)
@@ -482,33 +484,27 @@ func (m *LifecycleMgr) handlePrepareCreateIndex(content []byte) ([]byte, error) 
 
 	// Check for duplicate index before proceeding further.
 	if prepareCreateIndex.Op == client.PREPARE {
-		if prepareCreateIndex.Name != "" && prepareCreateIndex.Bucket != "" {
-			// Check for duplicate index name only if name and bucket name
-			// are specified in the request
-			existDefn, err := m.repo.GetIndexDefnByName(prepareCreateIndex.Bucket, prepareCreateIndex.Scope,
-				prepareCreateIndex.Collection, prepareCreateIndex.Name)
-			if err != nil {
-				logging.Infof("LifecycleMgr.handlePrepareCreateIndex() : Reject "+
-					"%v because of error (%v) in GetIndexDefnByName", prepareCreateIndex.DefnId, err)
+		exists, err := m.checkDuplicateIndex(prepareCreateIndex)
+		if err != nil {
+			logging.Infof("LifecycleMgr.handlePrepareCreateIndex() : Reject "+
+				"%v because of error (%v) in GetIndexDefnByName", prepareCreateIndex.DefnId, err)
 
-				response := &client.PrepareCreateResponse{
-					Accept: false,
-					Msg:    client.RespUnexpectedError,
-				}
-				return client.MarshallPrepareCreateResponse(response)
+			response := &client.PrepareCreateResponse{
+				Accept: false,
+				Msg:    client.RespUnexpectedError,
 			}
+			return client.MarshallPrepareCreateResponse(response)
+		}
 
-			if existDefn != nil {
-				logging.Infof("LifecycleMgr.handlePrepareCreateIndex() : Reject "+
-					"%v because of duplicate index name with existing defnId %v",
-					prepareCreateIndex.DefnId, existDefn.DefnId)
+		if exists {
+			logging.Infof("LifecycleMgr.handlePrepareCreateIndex() : Reject "+
+				"%v because of duplicate index name.", prepareCreateIndex.DefnId)
 
-				response := &client.PrepareCreateResponse{
-					Accept: false,
-					Msg:    client.RespDuplicateIndex,
-				}
-				return client.MarshallPrepareCreateResponse(response)
+			response := &client.PrepareCreateResponse{
+				Accept: false,
+				Msg:    client.RespDuplicateIndex,
 			}
+			return client.MarshallPrepareCreateResponse(response)
 		}
 	}
 
@@ -659,6 +655,13 @@ func (m *LifecycleMgr) handleCommitCreateIndex(commitCreateIndex *client.CommitC
 		return client.MarshallPrepareCreateResponse(response)
 	}
 
+	// Verify and release the indexNames lock.
+	if msg := m.verifyDuplicateIndexCommit(commitCreateIndex); msg != "" {
+		logging.Infof("LifecycleMgr.handleCommitCreateIndex() : Reject %v because %v", commitCreateIndex.DefnId, msg)
+		response := &client.CommitCreateResponse{Accept: false}
+		return client.MarshallCommitCreateResponse(response)
+	}
+
 	defnId := commitCreateIndex.DefnId
 	definitions := commitCreateIndex.Definitions
 	m.prepareLock = nil
@@ -699,6 +702,123 @@ func (m *LifecycleMgr) handleCommitCreateIndex(commitCreateIndex *client.CommitC
 	response := &client.CommitCreateResponse{Accept: false}
 	msg, _ := client.MarshallCommitCreateResponse(response)
 	return msg, err
+}
+
+//
+// Check for duplicate index name; returns true if duplicate index exists
+//
+// This function checks if an index with same name/keyspace is either
+// 1. already created and corresponding entry exists in the metadata repo OR
+// 2. accepted for creation.
+//
+// This function acquires the indexNames lock if it isn't alreday acquired by
+// some other request. The indexNames lock will be released only when the index
+// definition is being committed.
+//
+// TODO:
+// As the indexNames lock is released only during commit, in case of scheduled
+// creation + drop before create, the lock won't be overwritten until the timeout.
+// So, user needs to wait until the timeout to create index with same name on
+// same keyspace. This can be avoided if during checkDuplicateIndex below,
+// the metakv tokens are also checked - assuming the consistent metakv is
+// not far away in the future. But checking metakv tokens here is an costly
+// operation and will holdup lifecycle manager for a long time.
+//
+// In case of lock timeout, the new request will forcefully hold the lock and
+// the older request will fail to release the lock during commit phase.
+//
+func (m *LifecycleMgr) checkDuplicateIndex(req *client.PrepareCreateRequest) (exists bool, err error) {
+
+	key := fmt.Sprintf("%v:%v:%v:%v", req.Bucket, req.Scope, req.Collection, req.Name)
+
+	acquire := false
+
+	defer func() {
+		if acquire && !exists {
+			// Acquire indexNames lock
+			startTime := time.Now().UnixNano()
+			ireq := &indexNameRequest{
+				startTime: startTime,
+				defnId:    req.DefnId,
+				timeout:   req.Timeout,
+			}
+			m.acceptedNames[key] = ireq
+		}
+	}()
+
+	if req.Op != client.PREPARE {
+		return false, nil
+	}
+
+	// Check for duplicate index name only if name and bucket name
+	// are specified in the request
+	if req.Name == "" || req.Bucket == "" {
+		return exists, nil
+	}
+
+	// Check for the index with same name and same keyspace in meta repo.
+	var existDefn *common.IndexDefn
+	existDefn, err = m.repo.GetIndexDefnByName(req.Bucket, req.Scope, req.Collection, req.Name)
+	if err != nil {
+		return exists, err
+	}
+
+	if existDefn != nil {
+		exists = true
+		return exists, nil
+	}
+
+	// Check for an index name and keyspace in the list of already accepted reqs
+	accReq, ok := m.acceptedNames[key]
+	if ok {
+		// If it is the same index (same DefnId), then treat it as it is not a duplicate.
+		if accReq.defnId == req.DefnId {
+			return exists, nil
+		}
+
+		// Check for lock timeout
+		if accReq.timeout < (time.Now().UnixNano() - accReq.startTime) {
+			acquire = true
+			logging.Infof("LifecycleMgr.handlePrepareCreateIndex() : Index name conflict timeout."+
+				"Prioritizing request %v with %v.", accReq.defnId, req.DefnId)
+			return exists, nil
+		}
+
+		exists = true
+	}
+
+	acquire = true
+
+	return exists, nil
+}
+
+func (m *LifecycleMgr) verifyDuplicateIndexCommit(commitCreateIndex *client.CommitCreateRequest) string {
+
+	key := ""
+
+loop:
+	for _, defns := range commitCreateIndex.Definitions {
+		// Assuming that the index name and keyspace doesn't change across definitions.
+		for _, defn := range defns {
+			key = fmt.Sprintf("%v:%v:%v:%v", defn.Bucket, defn.Scope, defn.Collection, defn.Name)
+			break loop
+		}
+	}
+
+	if key == "" {
+		return "of missing index definitions in commit request."
+	}
+
+	accReq, ok := m.acceptedNames[key]
+	if ok {
+		if accReq.defnId == commitCreateIndex.DefnId {
+			// Release the lock
+			delete(m.acceptedNames, key)
+			return ""
+		}
+	}
+
+	return fmt.Sprintf("the index name lock is not acquired by defnId %v", commitCreateIndex.DefnId)
 }
 
 //
@@ -4598,4 +4718,10 @@ func SplitKeyspaceId(keyspaceId string) (string, string, string) {
 		return "", "", ""
 	}
 
+}
+
+type indexNameRequest struct {
+	defnId    common.IndexDefnId
+	startTime int64
+	timeout   int64
 }
