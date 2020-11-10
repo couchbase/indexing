@@ -254,9 +254,10 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 	indexSnapMap := copyIndexSnapMap(s.indexSnapMap)
 	indexInstMap := s.indexInstMap.Get()
 	indexPartnMap := s.indexPartnMap.Get()
+	tsVbuuid_copy := tsVbuuid.Copy()
 	stats := s.stats.Get()
 
-	go s.createSnapshotWorker(streamId, keyspaceId, tsVbuuid, indexSnapMap,
+	go s.createSnapshotWorker(streamId, keyspaceId, tsVbuuid_copy, indexSnapMap,
 		numVbuckets, indexInstMap, indexPartnMap, stats, flushWasAborted, hasAllSB)
 
 }
@@ -335,10 +336,12 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, keyspaceId s
 
 						//if flush timestamp is greater than last
 						//snapshot timestamp, create a new snapshot
-						snapTs := NewTimestamp(numVbuckets)
+						var snapTs Timestamp
 						if latestSnapshot != nil {
 							snapTsVbuuid := latestSnapshot.Timestamp()
 							snapTs = getSeqTsFromTsVbuuid(snapTsVbuuid)
+						} else {
+							snapTs = NewTimestamp(numVbuckets)
 						}
 
 						ts := getSeqTsFromTsVbuuid(tsVbuuid)
@@ -349,7 +352,7 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, keyspaceId s
 						if latestSnapshot == nil || (ts.GreaterThan(snapTs) &&
 							(slice.IsDirty() || needsCommit)) || forceCommit {
 
-							newTsVbuuid := tsVbuuid.Copy()
+							newTsVbuuid := tsVbuuid
 							var err error
 							var info SnapshotInfo
 							var newSnapshot Snapshot
@@ -427,7 +430,7 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, keyspaceId s
 
 				is := &indexSnapshot{
 					instId: idxInstId,
-					ts:     tsVbuuid.Copy(),
+					ts:     tsVbuuid,
 					partns: partnSnaps,
 				}
 
