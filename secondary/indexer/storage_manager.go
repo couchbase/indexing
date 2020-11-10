@@ -339,12 +339,13 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, keyspaceId s
 						var snapTs Timestamp
 						if latestSnapshot != nil {
 							snapTsVbuuid := latestSnapshot.Timestamp()
-							snapTs = getSeqTsFromTsVbuuid(snapTsVbuuid)
+							snapTs = Timestamp(snapTsVbuuid.Seqnos)
 						} else {
 							snapTs = NewTimestamp(numVbuckets)
 						}
 
-						ts := getSeqTsFromTsVbuuid(tsVbuuid)
+						// Get Seqnos from TsVbuuid
+						ts := Timestamp(tsVbuuid.Seqnos)
 
 						//if the flush TS is greater than the last snapshot TS
 						//and slice has some changes. Skip only in-memory snapshot
