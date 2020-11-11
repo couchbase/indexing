@@ -136,14 +136,14 @@ type IndexStatus struct {
 	// telling which partition(s) are on which node(s). If an
 	// index is not partitioned, it will have a single
 	// partition with ID 0.
-	PartitionMap map[string][]int   `json:"partitionMap"`
+	PartitionMap map[string][]int `json:"partitionMap"`
 
-	NodeUUID     string             `json:"nodeUUID,omitempty"`
-	NumReplica   int                `json:"numReplica"`
-	IndexName    string             `json:"indexName"`
-	ReplicaId    int                `json:"replicaId"`
-	Stale        bool               `json:"stale"`
-	LastScanTime string             `json:"lastScanTime,omitempty"`
+	NodeUUID     string `json:"nodeUUID,omitempty"`
+	NumReplica   int    `json:"numReplica"`
+	IndexName    string `json:"indexName"`
+	ReplicaId    int    `json:"replicaId"`
+	Stale        bool   `json:"stale"`
+	LastScanTime string `json:"lastScanTime,omitempty"`
 }
 
 type indexStatusSorter []IndexStatus
@@ -1854,6 +1854,16 @@ func (m *requestHandlerContext) handleListLocalReplicaCountRequest(w http.Respon
 
 func (m *requestHandlerContext) getLocalReplicaCount(creds cbauth.Creds) (map[common.IndexDefnId]common.Counter, error) {
 
+	createCommandTokenMap, err := mc.FetchIndexDefnToCreateCommandTokensMap()
+	if err != nil {
+		return nil, err
+	}
+
+	dropInstanceCommandTokenMap, err := mc.FetchIndexDefnToDropInstanceCommandTokenMap()
+	if err != nil {
+		return nil, err
+	}
+
 	result := make(map[common.IndexDefnId]common.Counter)
 
 	repo := m.mgr.getMetadataRepo()
@@ -1872,8 +1882,11 @@ func (m *requestHandlerContext) getLocalReplicaCount(creds cbauth.Creds) (map[co
 			return nil, fmt.Errorf("Permission denied on reading metadata for keyspace %v:%v:%v", defn.Bucket, defn.Scope, defn.Collection)
 		}
 
+		createTokenList := createCommandTokenMap[defn.DefnId]
+		dropInstTokenList := dropInstanceCommandTokenMap[defn.DefnId]
+
 		var numReplica *common.Counter
-		numReplica, err = GetLatestReplicaCount(defn)
+		numReplica, err = GetLatestReplicaCountFromTokens(defn, createTokenList, dropInstTokenList)
 		if err != nil {
 			return nil, fmt.Errorf("Fail to retreive replica count.  Error: %v", err)
 		}
