@@ -1361,6 +1361,16 @@ func (m *requestHandlerContext) handleListLocalReplicaCountRequest(w http.Respon
 
 func (m *requestHandlerContext) getLocalReplicaCount(creds cbauth.Creds) (map[common.IndexDefnId]common.Counter, error) {
 
+	createCommandTokenMap, err := mc.FetchIndexDefnToCreateCommandTokensMap()
+	if err != nil {
+		return nil, err
+	}
+
+	dropInstanceCommandTokenMap, err := mc.FetchIndexDefnToDropInstanceCommandTokenMap()
+	if err != nil {
+		return nil, err
+	}
+
 	result := make(map[common.IndexDefnId]common.Counter)
 
 	repo := m.mgr.getMetadataRepo()
@@ -1383,8 +1393,11 @@ func (m *requestHandlerContext) getLocalReplicaCount(creds cbauth.Creds) (map[co
 			permissions[defn.Bucket] = true
 		}
 
+		createTokenList := createCommandTokenMap[defn.DefnId]
+		dropInstTokenList := dropInstanceCommandTokenMap[defn.DefnId]
+
 		var numReplica *common.Counter
-		numReplica, err = GetLatestReplicaCount(defn)
+		numReplica, err = GetLatestReplicaCountFromTokens(defn, createTokenList, dropInstTokenList)
 		if err != nil {
 			return nil, fmt.Errorf("Fail to retreive replica count.  Error: %v", err)
 		}

@@ -13,13 +13,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/couchbase/cbauth/metakv"
-	c "github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/logging"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/couchbase/cbauth/metakv"
+	c "github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 )
 
 /////////////////////////////////////////////////////////////////////////
@@ -216,6 +217,40 @@ func FetchCreateCommandToken(defnId c.IndexDefnId, requestId uint64) (*CreateCom
 	}
 
 	return token, nil
+}
+
+// FetchIndexDefnToCreateCommandTokensMap will get a map of all Index Definition & CreateCommand
+// tokens present in metakv
+func FetchIndexDefnToCreateCommandTokensMap() (map[c.IndexDefnId][]*CreateCommandToken, error) {
+
+	paths, err := c.MetakvBigValueList(CreateDDLCommandTokenPath)
+	if err != nil {
+		return nil, err
+	}
+
+	var result map[c.IndexDefnId][]*CreateCommandToken
+	if len(paths) > 0 {
+		result = make(map[c.IndexDefnId][]*CreateCommandToken)
+		for _, path := range paths {
+			defnID, requestID, err := GetDefnIdFromCreateCommandTokenPath(path)
+			if err != nil {
+				logging.Warnf("FetchIndexDefnToCreateCommandTokenMap: Failed to process create index token %v.  Internal Error = %v.", path, err)
+				continue
+			}
+
+			token, err := FetchCreateCommandToken(defnID, requestID)
+			if err != nil {
+				logging.Warnf("FetchIndexDefnToCreateCommandTokenMap: Failed to process create index token %v.  Internal Error = %v.", path, err)
+				continue
+			}
+
+			if token != nil {
+				result[defnID] = append(result[defnID], token)
+			}
+		}
+	}
+
+	return result, nil
 }
 
 func ListCreateCommandToken() ([]string, error) {
@@ -580,6 +615,34 @@ func ListAndFetchAllDropInstanceCommandToken() ([]*DropInstanceCommandToken, err
 
 			if exists {
 				result = append(result, token)
+			}
+		}
+	}
+
+	return result, nil
+}
+
+// FetchIndexDefnToDropInstanceCommandTokenMap will get a map of all Index Definition & CreateCommand
+// tokens present in metakv
+func FetchIndexDefnToDropInstanceCommandTokenMap() (map[c.IndexDefnId][]*DropInstanceCommandToken, error) {
+	paths, err := c.MetakvBigValueList(DropInstanceDDLCommandTokenPath)
+	if err != nil {
+		return nil, err
+	}
+
+	var result map[c.IndexDefnId][]*DropInstanceCommandToken
+	if len(paths) > 0 {
+		result = make(map[c.IndexDefnId][]*DropInstanceCommandToken)
+		for _, path := range paths {
+			token := &DropInstanceCommandToken{}
+			exists, err := c.MetakvBigValueGet(path, token)
+			if err != nil {
+				logging.Errorf("ListAllDropInstanceCommandToken: path %v err %v", path, err)
+				return nil, err
+			}
+
+			if exists {
+				result[token.DefnId] = append(result[token.DefnId], token)
 			}
 		}
 	}
