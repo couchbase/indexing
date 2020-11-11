@@ -3532,20 +3532,21 @@ func (idx *indexer) handleAddInstanceFail(msg Message) {
 		//it is ok to skip ADD_FAIL if recovery is already in progess
 		//as at this point the index state change has already been
 		//picked up by MAINT_STREAM recovery
-		state := idx.getStreamKeyspaceIdState(mergeStreamId, keyspaceId)
+		bucket := GetBucketFromKeyspaceId(keyspaceId)
+		state := idx.getStreamKeyspaceIdState(mergeStreamId, bucket)
 
 		if state == STREAM_INACTIVE ||
 			state == STREAM_PREPARE_RECOVERY ||
 			state == STREAM_RECOVERY {
 			logging.Infof("Indexer::handleAddInstanceFail Skip Recovery %v %v %v",
-				mergeStreamId, keyspaceId, state)
+				mergeStreamId, bucket, state)
 			return
 		} else {
 			//use the current sessionId for MAINT_STREAM
-			maintSessionId := idx.getCurrentSessionId(mergeStreamId, keyspaceId)
+			maintSessionId := idx.getCurrentSessionId(mergeStreamId, bucket)
 			idx.handleInitPrepRecovery(&MsgRecovery{mType: INDEXER_INIT_PREP_RECOVERY,
 				streamId:   mergeStreamId,
-				keyspaceId: keyspaceId,
+				keyspaceId: bucket,
 				sessionId:  maintSessionId})
 		}
 
@@ -5003,7 +5004,8 @@ func (idx *indexer) processBuildDoneCatchup(streamId common.StreamId, keyspaceId
 						//(depending on when it started). If the stream state is active right now, it is okay
 						//to generate ADD_FAIL message. If MAINT_STREAM recovery starts after that, it will
 						//pick up the state change.
-						mstate := idx.getStreamKeyspaceIdState(common.MAINT_STREAM, keyspaceId)
+						bucket := GetBucketFromKeyspaceId(keyspaceId)
+						mstate := idx.getStreamKeyspaceIdState(common.MAINT_STREAM, bucket)
 						if mstate == STREAM_PREPARE_RECOVERY || mstate == STREAM_RECOVERY {
 							logging.Infof("Indexer::processBuildDoneCatchup Stream %v KeyspaceId %v SessionId %v"+
 								"Detected MAINT_STREAM in %v state. Reset retry count.", streamId,
@@ -5370,7 +5372,8 @@ func (idx *indexer) cleanupMaintStream(keyspaceId string) {
 		return
 	}
 
-	maintStreamInstList := idx.getIndexListForKeyspaceIdAndStream(common.MAINT_STREAM, keyspaceId)
+	bucket := GetBucketFromKeyspaceId(keyspaceId)
+	maintStreamInstList := idx.getIndexListForKeyspaceIdAndStream(common.MAINT_STREAM, bucket)
 	var cleanupInstList []common.IndexInst
 
 	for _, maintStreamInst := range maintStreamInstList {
@@ -7577,7 +7580,9 @@ func (idx *indexer) checkKeyspaceIdInRecovery(keyspaceId string,
 	instIdList []common.IndexInstId, clientCh MsgChannel, errMap map[common.IndexInstId]error) bool {
 
 	initState := idx.getStreamKeyspaceIdState(common.INIT_STREAM, keyspaceId)
-	maintState := idx.getStreamKeyspaceIdState(common.MAINT_STREAM, keyspaceId)
+
+	bucket := GetBucketFromKeyspaceId(keyspaceId)
+	maintState := idx.getStreamKeyspaceIdState(common.MAINT_STREAM, bucket)
 
 	if initState == STREAM_RECOVERY ||
 		initState == STREAM_PREPARE_RECOVERY ||
