@@ -106,6 +106,7 @@ type indexer struct {
 	streamKeyspaceIdOSOException map[common.StreamId]map[string]bool
 
 	streamKeyspaceIdPendBuildDone map[common.StreamId]map[string]*buildDoneSpec
+	streamKeyspaceIdPendStart     map[common.StreamId]map[string]bool
 
 	keyspaceIdRollbackTimes map[string]int64
 
@@ -263,6 +264,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		streamKeyspaceIdCollectionId:     make(map[common.StreamId]map[string]string),
 		streamKeyspaceIdOSOException:     make(map[common.StreamId]map[string]bool),
 		streamKeyspaceIdPendBuildDone:    make(map[common.StreamId]map[string]*buildDoneSpec),
+		streamKeyspaceIdPendStart:        make(map[common.StreamId]map[string]bool),
 		keyspaceIdBuildTs:                make(map[string]Timestamp),
 		buildTsLock:                      make(map[common.StreamId]map[string]*sync.Mutex),
 		keyspaceIdRollbackTimes:          make(map[string]int64),
@@ -4770,15 +4772,19 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 	bucket, _, _ := SplitKeyspaceId(keyspaceId)
 	mState := idx.getStreamKeyspaceIdState(common.MAINT_STREAM, bucket)
 
-	//if MAINT_STREAM is not running, it needs to be started
-	if mState == STREAM_INACTIVE {
-		idx.processBuildDoneNoCatchup(streamId, keyspaceId, sessionId, flushTs)
-	} else if mState == STREAM_PREPARE_RECOVERY ||
-		mState == STREAM_RECOVERY {
-		//if MAINT_STREAM stream is in recovery, it cannot be determined if
-		//the stream will be active again or not (e.g. all indexes get dropped).
-		//add the state to pending build done and process it later
+	maintPendStart := idx.streamKeyspaceIdPendStart[common.MAINT_STREAM][bucket]
+
+	//if MAINT_STREAM stream is in recovery or pending start, it cannot be determined if
+	//the stream will be active again or not (e.g. all indexes get dropped).
+	//add the state to pending build done and process it later
+	if mState == STREAM_PREPARE_RECOVERY ||
+		mState == STREAM_RECOVERY ||
+		maintPendStart {
 		idx.processBuildDoneInRecovery(streamId, keyspaceId, sessionId, flushTs)
+	} else if mState == STREAM_INACTIVE {
+		//if MAINT_STREAM is not running, it needs to be started
+		idx.streamKeyspaceIdPendStart[common.MAINT_STREAM][bucket] = true
+		idx.processBuildDoneNoCatchup(streamId, keyspaceId, sessionId, flushTs)
 	} else {
 		idx.processBuildDoneCatchup(streamId, keyspaceId, sessionId)
 	}
@@ -4816,6 +4822,7 @@ func (idx *indexer) processPendingBuildDone(streamId common.StreamId,
 
 		//if MAINT_STREAM is not running, it needs to be started
 		if mState == STREAM_INACTIVE {
+			idx.streamKeyspaceIdPendStart[common.MAINT_STREAM][keyspaceId] = true
 			idx.processBuildDoneNoCatchup(streamId, keyspaceId, sessionId, spec.flushTs)
 			delete(idx.streamKeyspaceIdPendBuildDone[streamId], keyspaceId)
 		} else if mState == STREAM_PREPARE_RECOVERY ||
@@ -5834,6 +5841,7 @@ func (idx *indexer) initStreamPendBuildDone() {
 
 	for i := 0; i < int(common.ALL_STREAMS); i++ {
 		idx.streamKeyspaceIdPendBuildDone[common.StreamId(i)] = make(map[string]*buildDoneSpec)
+		idx.streamKeyspaceIdPendStart[common.StreamId(i)] = make(map[string]bool)
 	}
 }
 
@@ -8897,6 +8905,7 @@ func (idx *indexer) cleanupAllStreamKeyspaceIdState(
 	delete(idx.streamKeyspaceIdFlushInProgress[streamId], keyspaceId)
 	delete(idx.streamKeyspaceIdObserveFlushDone[streamId], keyspaceId)
 	delete(idx.streamKeyspaceIdPendBuildDone[streamId], keyspaceId)
+	delete(idx.streamKeyspaceIdPendStart[streamId], keyspaceId)
 	delete(idx.streamKeyspaceIdCollectionId[streamId], keyspaceId)
 	delete(idx.streamKeyspaceIdOSOException[streamId], keyspaceId)
 }
