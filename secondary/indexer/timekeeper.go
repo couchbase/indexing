@@ -47,7 +47,7 @@ type timekeeper struct {
 	statsLock sync.Mutex
 
 	stats           IndexerStatsHolder
-	vbCheckerStopCh chan bool
+	vbCheckerStopCh map[common.StreamId]chan bool
 
 	lock sync.RWMutex //lock to protect this structure
 
@@ -82,13 +82,14 @@ func NewTimekeeper(supvCmdch MsgChannel, supvRespch MsgChannel,
 
 	//Init the timekeeper struct
 	tk := &timekeeper{
-		supvCmdch:      supvCmdch,
-		supvRespch:     supvRespch,
-		ss:             InitStreamState(config),
-		config:         config,
-		indexInstMap:   make(common.IndexInstMap),
-		indexPartnMap:  make(IndexPartnMap),
-		indexBuildInfo: make(map[common.IndexInstId]*InitialBuildInfo),
+		supvCmdch:       supvCmdch,
+		supvRespch:      supvRespch,
+		ss:              InitStreamState(config),
+		config:          config,
+		indexInstMap:    make(common.IndexInstMap),
+		indexPartnMap:   make(IndexPartnMap),
+		indexBuildInfo:  make(map[common.IndexInstId]*InitialBuildInfo),
+		vbCheckerStopCh: make(map[common.StreamId]chan bool),
 	}
 
 	//start timekeeper loop which listens to commands from its supervisor
@@ -112,7 +113,11 @@ loop:
 				if cmd.GetMsgType() == TK_SHUTDOWN {
 					logging.Infof("Timekeeper::run Shutting Down")
 					tk.supvCmdch <- &MsgSuccess{}
-					close(tk.vbCheckerStopCh)
+					for _, stopCh := range tk.vbCheckerStopCh {
+						if stopCh != nil {
+							close(stopCh)
+						}
+					}
 					break loop
 				}
 				tk.handleSupervisorCommands(cmd)
@@ -1344,10 +1349,10 @@ func (tk *timekeeper) handleStreamConnError(cmd Message) {
 		tk.supvCmdch <- &MsgSuccess{}
 	}
 
-	if tk.vbCheckerStopCh == nil {
+	if stopCh, ok := tk.vbCheckerStopCh[streamId]; stopCh == nil || !ok {
 		logging.Infof("Timekeeper::handleStreamConnError Call RepairMissingStreamBegin to check for vbucket for repair. "+
 			"StreamId %v KeyspaceId %v", streamId, keyspaceId)
-		tk.vbCheckerStopCh = make(chan bool)
+		tk.vbCheckerStopCh[streamId] = make(chan bool)
 		go tk.repairMissingStreamBegin(streamId)
 	}
 }
@@ -1384,7 +1389,7 @@ func (tk *timekeeper) repairMissingStreamBegin(streamId common.StreamId) {
 	defer func() {
 		tk.lock.Lock()
 		defer tk.lock.Unlock()
-		tk.vbCheckerStopCh = nil
+		tk.vbCheckerStopCh[streamId] = nil
 	}()
 
 	// compute any vb that is missing StreamBegin
@@ -1401,7 +1406,7 @@ func (tk *timekeeper) repairMissingStreamBegin(streamId common.StreamId) {
 		// let's wait a little longer for TK to recieve those in-flight streamBegin.
 		ticker := time.After(2 * time.Second)
 		select {
-		case <-tk.vbCheckerStopCh:
+		case <-tk.vbCheckerStopCh[streamId]:
 			return
 		case <-ticker:
 		}
@@ -1932,10 +1937,10 @@ func (tk *timekeeper) handleStreamRequestDone(cmd Message) {
 	}
 
 	// Check if the stream needs repair for missing streamBegin
-	if tk.vbCheckerStopCh == nil {
+	if stopCh, ok := tk.vbCheckerStopCh[streamId]; stopCh == nil || !ok {
 		logging.Infof("Timekeeper::handleStreamRequestDone Call RepairMissingStreamBegin to check for vbucket for repair. "+
 			"StreamId %v keyspaceId %v", streamId, keyspaceId)
-		tk.vbCheckerStopCh = make(chan bool)
+		tk.vbCheckerStopCh[streamId] = make(chan bool)
 		go tk.repairMissingStreamBegin(streamId)
 	}
 
@@ -2041,10 +2046,10 @@ func (tk *timekeeper) handleRecoveryDone(cmd Message) {
 	}
 
 	// Check if the stream needs repair for missing streamBegin
-	if tk.vbCheckerStopCh == nil {
+	if stopCh, ok := tk.vbCheckerStopCh[streamId]; stopCh == nil || !ok {
 		logging.Infof("Timekeeper::handleRecoveryDone Call RepairMissingStreamBegin to check for vbucket for repair. "+
 			"StreamId %v keyspaceId %v", streamId, keyspaceId)
-		tk.vbCheckerStopCh = make(chan bool)
+		tk.vbCheckerStopCh[streamId] = make(chan bool)
 		go tk.repairMissingStreamBegin(streamId)
 	}
 
@@ -2265,8 +2270,19 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 	//if flushTs is not on snap boundary, merge cannot be done
 	if !initFlushTs.IsSnapAligned() {
 		hwt := tk.ss.streamKeyspaceIdHWTMap[streamId][keyspaceId]
+
+		var lenInitTs, lenMaintTs int
+		tsList := tk.ss.streamKeyspaceIdTsListMap[streamId][keyspaceId]
+		if tsList != nil {
+			lenInitTs = tsList.Len()
+		}
+		tsListMaint := tk.ss.streamKeyspaceIdTsListMap[common.MAINT_STREAM][bucket]
+		if tsListMaint != nil {
+			lenMaintTs = tsListMaint.Len()
+		}
 		logging.Infof("Timekeeper::checkInitStreamReadyToMerge FlushTs Not Snapshot "+
-			"Aligned. Continue both streams for keyspaceId %v.", keyspaceId)
+			"Aligned. Continue both streams for keyspaceId %v. INIT PendTsCount %v. "+
+			"MAINT PendTsCount %v.", keyspaceId, lenInitTs, lenMaintTs)
 		logging.LazyVerbose(func() string {
 			return fmt.Sprintf("Timekeeper::checkInitStreamReadyToMerge FlushTs %v\n HWT %v", initFlushTs, hwt)
 		})
@@ -2892,11 +2908,12 @@ func (tk *timekeeper) checkMergeCandidateTs(streamId common.StreamId,
 	//this index can be merged to MAINT_STREAM. If there is a flush in progress,
 	//it is important to use that for comparison as after merge MAINT_STREAM will
 	//include merged indexes after the in progress flush finishes.
+	bucket, _, _ := SplitKeyspaceId(keyspaceId)
 	var lastFlushedTsVbuuid *common.TsVbuuid
-	if lts, ok := tk.ss.streamKeyspaceIdFlushInProgressTsMap[common.MAINT_STREAM][keyspaceId]; ok && lts != nil {
+	if lts, ok := tk.ss.streamKeyspaceIdFlushInProgressTsMap[common.MAINT_STREAM][bucket]; ok && lts != nil {
 		lastFlushedTsVbuuid = lts
 	} else {
-		lastFlushedTsVbuuid = tk.ss.streamKeyspaceIdLastFlushedTsMap[common.MAINT_STREAM][keyspaceId]
+		lastFlushedTsVbuuid = tk.ss.streamKeyspaceIdLastFlushedTsMap[common.MAINT_STREAM][bucket]
 	}
 
 	mergeCandidate := false

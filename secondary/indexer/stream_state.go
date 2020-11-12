@@ -1400,16 +1400,19 @@ func (ss *StreamState) alignSnapBoundary(streamId common.StreamId,
 	ts := tsElem.ts
 	for i, s := range ts.Snapshots {
 
-		//if ts has OSO snapshot, skip
-		if s[0] == 0 {
-			continue
-		}
+		if enableOSO {
 
-		//if lastSnap OSO, skip
-		if lastSnap.Snapshots[i][0] == 0 &&
-			lastSnap.Snapshots[i][1] == 1 &&
-			lastSnap.Seqnos[i] != 0 {
-			continue
+			//if ts has OSO snapshot, skip
+			if s[0] == 0 {
+				continue
+			}
+
+			//if lastSnap OSO, skip
+			if lastSnap.Snapshots[i][0] == 0 &&
+				lastSnap.Snapshots[i][1] == 1 &&
+				lastSnap.Seqnos[i] != 0 {
+				continue
+			}
 		}
 
 		//if seqno is not between snap boundary

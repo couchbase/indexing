@@ -106,6 +106,7 @@ type indexer struct {
 	streamKeyspaceIdOSOException map[common.StreamId]map[string]bool
 
 	streamKeyspaceIdPendBuildDone map[common.StreamId]map[string]*buildDoneSpec
+	streamKeyspaceIdPendStart     map[common.StreamId]map[string]bool
 
 	keyspaceIdRollbackTimes map[string]int64
 
@@ -263,6 +264,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		streamKeyspaceIdCollectionId:     make(map[common.StreamId]map[string]string),
 		streamKeyspaceIdOSOException:     make(map[common.StreamId]map[string]bool),
 		streamKeyspaceIdPendBuildDone:    make(map[common.StreamId]map[string]*buildDoneSpec),
+		streamKeyspaceIdPendStart:        make(map[common.StreamId]map[string]bool),
 		keyspaceIdBuildTs:                make(map[string]Timestamp),
 		buildTsLock:                      make(map[common.StreamId]map[string]*sync.Mutex),
 		keyspaceIdRollbackTimes:          make(map[string]int64),
@@ -3496,6 +3498,9 @@ func (idx *indexer) handleInitBuildDoneAck(msg Message) {
 		idx.tkCmdCh <- msg
 		<-idx.tkCmdCh
 
+		bucket := GetBucketFromKeyspaceId(keyspaceId)
+		idx.processPendingBuildDone(common.MAINT_STREAM, bucket, sessionId)
+
 	default:
 		logging.Fatalf("Indexer::handleInitBuildDoneAck Unexpected Initial Build Ack Done "+
 			"Received for Stream %v KeyspaceId %v", streamId, keyspaceId)
@@ -4770,15 +4775,19 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 	bucket, _, _ := SplitKeyspaceId(keyspaceId)
 	mState := idx.getStreamKeyspaceIdState(common.MAINT_STREAM, bucket)
 
-	//if MAINT_STREAM is not running, it needs to be started
-	if mState == STREAM_INACTIVE {
-		idx.processBuildDoneNoCatchup(streamId, keyspaceId, sessionId, flushTs)
-	} else if mState == STREAM_PREPARE_RECOVERY ||
-		mState == STREAM_RECOVERY {
-		//if MAINT_STREAM stream is in recovery, it cannot be determined if
-		//the stream will be active again or not (e.g. all indexes get dropped).
-		//add the state to pending build done and process it later
+	maintPendStart := idx.streamKeyspaceIdPendStart[common.MAINT_STREAM][bucket]
+
+	//if MAINT_STREAM stream is in recovery or pending start, it cannot be determined if
+	//the stream will be active again or not (e.g. all indexes get dropped).
+	//add the state to pending build done and process it later
+	if mState == STREAM_PREPARE_RECOVERY ||
+		mState == STREAM_RECOVERY ||
+		maintPendStart {
 		idx.processBuildDoneInRecovery(streamId, keyspaceId, sessionId, flushTs)
+	} else if mState == STREAM_INACTIVE {
+		//if MAINT_STREAM is not running, it needs to be started
+		idx.streamKeyspaceIdPendStart[common.MAINT_STREAM][bucket] = true
+		idx.processBuildDoneNoCatchup(streamId, keyspaceId, sessionId, flushTs)
 	} else {
 		idx.processBuildDoneCatchup(streamId, keyspaceId, sessionId)
 	}
@@ -4801,38 +4810,48 @@ func (idx *indexer) processBuildDoneInRecovery(streamId common.StreamId,
 }
 
 func (idx *indexer) processPendingBuildDone(streamId common.StreamId,
-	keyspaceId string, sessionId uint64) {
+	bucket string, sessionId uint64) {
 
 	//pending build check is only to be done for MAINT_STREAM
 	if streamId != common.MAINT_STREAM {
 		return
 	}
 
-	logging.Infof("Indexer::processPendingBuildDone %v %v", streamId, keyspaceId)
+	logging.Infof("Indexer::processPendingBuildDone %v %v %v", streamId, bucket, sessionId)
 
-	if spec, ok := idx.streamKeyspaceIdPendBuildDone[common.INIT_STREAM][keyspaceId]; ok && spec != nil {
+	pendStreamId := common.INIT_STREAM
 
-		mState := idx.getStreamKeyspaceIdState(common.MAINT_STREAM, keyspaceId)
+	//consider all keyspaceIds for the bucket
+	for keyspaceId, spec := range idx.streamKeyspaceIdPendBuildDone[pendStreamId] {
 
-		//if MAINT_STREAM is not running, it needs to be started
-		if mState == STREAM_INACTIVE {
-			idx.processBuildDoneNoCatchup(streamId, keyspaceId, sessionId, spec.flushTs)
-			delete(idx.streamKeyspaceIdPendBuildDone[streamId], keyspaceId)
-		} else if mState == STREAM_PREPARE_RECOVERY ||
-			mState == STREAM_RECOVERY {
-			//TODO Collections is this case possible as this function gets called on recovery done?
-			logging.Infof("Indexer::processPendingBuildDone %v %v. Maint Stream In %v state. "+
-				"Wait for next recovery done to trigger pending build done.", streamId, keyspaceId, mState)
-		} else {
-			idx.processBuildDoneCatchup(streamId, keyspaceId, sessionId)
-			delete(idx.streamKeyspaceIdPendBuildDone[streamId], keyspaceId)
+		if spec != nil &&
+			GetBucketFromKeyspaceId(keyspaceId) == bucket {
+
+			logging.Infof("Indexer::processPendingBuildDone Processing %v %v ", pendStreamId, keyspaceId)
+
+			mState := idx.getStreamKeyspaceIdState(streamId, bucket)
+
+			maintPendStart := idx.streamKeyspaceIdPendStart[streamId][bucket]
+			if mState == STREAM_PREPARE_RECOVERY ||
+				mState == STREAM_RECOVERY ||
+				maintPendStart {
+				//TODO Collections is this case possible as this function gets called on recovery done?
+				logging.Infof("Indexer::processPendingBuildDone %v %v. Maint Stream In %v state."+
+					" PendStart %v. Wait for next recovery done to trigger pending build done.",
+					pendStreamId, keyspaceId, mState, maintPendStart)
+			} else if mState == STREAM_INACTIVE {
+				//if MAINT_STREAM is not running, it needs to be started
+				idx.streamKeyspaceIdPendStart[streamId][bucket] = true
+				idx.processBuildDoneNoCatchup(pendStreamId, keyspaceId, spec.sessionId, spec.flushTs)
+				delete(idx.streamKeyspaceIdPendBuildDone[pendStreamId], keyspaceId)
+			} else {
+				idx.processBuildDoneCatchup(pendStreamId, keyspaceId, spec.sessionId)
+				delete(idx.streamKeyspaceIdPendBuildDone[pendStreamId], keyspaceId)
+			}
+			//process one pending build at a time
+			break
 		}
-
-	} else {
-		logging.Infof("Indexer::processPendingBuildDone %v %v. No pending build done spec found.",
-			streamId, keyspaceId)
 	}
-
 }
 
 func (idx *indexer) processBuildDoneCatchup(streamId common.StreamId, keyspaceId string, sessionId uint64) {
@@ -5834,6 +5853,7 @@ func (idx *indexer) initStreamPendBuildDone() {
 
 	for i := 0; i < int(common.ALL_STREAMS); i++ {
 		idx.streamKeyspaceIdPendBuildDone[common.StreamId(i)] = make(map[string]*buildDoneSpec)
+		idx.streamKeyspaceIdPendStart[common.StreamId(i)] = make(map[string]bool)
 	}
 }
 
@@ -7532,7 +7552,7 @@ func (idx *indexer) bulkUpdateRState(instIdList []common.IndexInstId, reqCtx *co
 			idxInst.RState = common.REBAL_PENDING
 		} else {
 			idxInst.RState = common.REBAL_ACTIVE
-			logging.Infof("bulkUpdateRState: Index instance %v rstate moved to ACTIVE", idxInst.RState)
+			logging.Infof("bulkUpdateRState: Index instance %v rstate moved to ACTIVE", instId)
 		}
 		idx.indexInstMap[instId] = idxInst
 	}
@@ -8897,6 +8917,7 @@ func (idx *indexer) cleanupAllStreamKeyspaceIdState(
 	delete(idx.streamKeyspaceIdFlushInProgress[streamId], keyspaceId)
 	delete(idx.streamKeyspaceIdObserveFlushDone[streamId], keyspaceId)
 	delete(idx.streamKeyspaceIdPendBuildDone[streamId], keyspaceId)
+	delete(idx.streamKeyspaceIdPendStart[streamId], keyspaceId)
 	delete(idx.streamKeyspaceIdCollectionId[streamId], keyspaceId)
 	delete(idx.streamKeyspaceIdOSOException[streamId], keyspaceId)
 }
