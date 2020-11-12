@@ -2214,7 +2214,8 @@ func (l *statLogger) writeIndexerStats(stats *IndexerStats, spec *statsSpec) {
 		statMap.SetInstId(fmt.Sprintf("%v:", instId))
 
 		prefix := common.GetStatsPrefix(is.bucket, is.scope, is.collection, is.name, is.replicaId, 0, false)
-		sType := ST_TYPE_INDEX + prefix[:len(prefix)-1]
+		prefix += fmt.Sprintf("%v", instId)
+		sType := ST_TYPE_INDEX + prefix
 
 		is.addIndexStatsToMap(statMap, spec)
 		err = l.sLogger.Write(sType, statMap.GetMap())
