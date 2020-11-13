@@ -12,9 +12,10 @@ package indexer
 import (
 	"container/list"
 	"fmt"
+	"time"
+
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
-	"time"
 )
 
 type StreamState struct {
@@ -52,6 +53,7 @@ type StreamState struct {
 	streamBucketTimerStopCh     map[common.StreamId]BucketTimerStopCh
 	streamBucketLastPersistTime map[common.StreamId]BucketLastPersistTime
 	streamBucketSkippedInMemTs  map[common.StreamId]BucketSkippedInMemTs
+	streamBucketHasInMemSnap    map[common.StreamId]BucketHasInMemSnap
 	streamBucketSessionId       map[common.StreamId]BucketSessionId
 
 	streamBucketAsyncMap map[common.StreamId]BucketStreamAsyncMap
@@ -101,6 +103,7 @@ type BucketRepairStopCh map[string]StopChannel
 type BucketTimerStopCh map[string]StopChannel
 type BucketLastPersistTime map[string]time.Time
 type BucketSkippedInMemTs map[string]uint64
+type BucketHasInMemSnap map[string]bool
 type BucketSessionId map[string]uint64
 
 type BucketStreamAsyncMap map[string]bool
@@ -155,6 +158,7 @@ func InitStreamState(config common.Config) *StreamState {
 		streamBucketTimerStopCh:        make(map[common.StreamId]BucketTimerStopCh),
 		streamBucketLastPersistTime:    make(map[common.StreamId]BucketLastPersistTime),
 		streamBucketSkippedInMemTs:     make(map[common.StreamId]BucketSkippedInMemTs),
+		streamBucketHasInMemSnap:       make(map[common.StreamId]BucketHasInMemSnap),
 		streamBucketLastSnapMarker:     make(map[common.StreamId]BucketLastSnapMarker),
 		streamBucketLastMutationVbuuid: make(map[common.StreamId]BucketLastMutationVbuuid),
 		bucketRollbackTime:             make(map[string]int64),
@@ -245,6 +249,9 @@ func (ss *StreamState) initNewStream(streamId common.StreamId) {
 	bucketSkippedInMemTs := make(BucketSkippedInMemTs)
 	ss.streamBucketSkippedInMemTs[streamId] = bucketSkippedInMemTs
 
+	bucketHasInMemSnap := make(BucketHasInMemSnap)
+	ss.streamBucketHasInMemSnap[streamId] = bucketHasInMemSnap
+
 	bucketSessionId := make(BucketSessionId)
 	ss.streamBucketSessionId[streamId] = bucketSessionId
 
@@ -312,6 +319,7 @@ func (ss *StreamState) initBucketInStream(streamId common.StreamId,
 	ss.streamBucketOpenTsMap[streamId][bucket] = nil
 	ss.streamBucketStartTimeMap[streamId][bucket] = uint64(0)
 	ss.streamBucketSkippedInMemTs[streamId][bucket] = 0
+	ss.streamBucketHasInMemSnap[streamId][bucket] = false
 	ss.streamBucketSessionId[streamId][bucket] = 0
 	ss.streamBucketLastSnapMarker[streamId][bucket] = common.NewTsVbuuid(bucket, numVbuckets)
 	ss.streamBucketLastMutationVbuuid[streamId][bucket] = common.NewTsVbuuid(bucket, numVbuckets)
@@ -362,6 +370,7 @@ func (ss *StreamState) cleanupBucketFromStream(streamId common.StreamId,
 	delete(ss.streamBucketLastSnapMarker[streamId], bucket)
 	delete(ss.streamBucketLastMutationVbuuid[streamId], bucket)
 	delete(ss.streamBucketSkippedInMemTs[streamId], bucket)
+	delete(ss.streamBucketHasInMemSnap[streamId], bucket)
 	delete(ss.streamBucketSessionId[streamId], bucket)
 	delete(ss.streamBucketAsyncMap[streamId], bucket)
 	delete(ss.streamBucketLastBeginTime[streamId], bucket)
@@ -411,6 +420,7 @@ func (ss *StreamState) resetStreamState(streamId common.StreamId) {
 	delete(ss.streamBucketOpenTsMap, streamId)
 	delete(ss.streamBucketStartTimeMap, streamId)
 	delete(ss.streamBucketSkippedInMemTs, streamId)
+	delete(ss.streamBucketHasInMemSnap, streamId)
 	delete(ss.streamBucketSessionId, streamId)
 	delete(ss.streamBucketLastSnapMarker, streamId)
 	delete(ss.streamBucketLastMutationVbuuid, streamId)
