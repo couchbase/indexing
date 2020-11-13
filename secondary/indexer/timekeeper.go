@@ -2559,9 +2559,12 @@ func (tk *timekeeper) setSnapshotType(streamId common.StreamId, bucket string,
 			tk.ss.streamBucketSkippedInMemTs[streamId][bucket] = 0
 		} else {
 			fastFlush := tk.config["settings.fast_flush_mode"].Bool()
-			if fastFlush {
+			hasInMemSnap := tk.ss.streamBucketHasInMemSnap[streamId][bucket]
+			if fastFlush && hasInMemSnap {
 				//if fast flush mode is enabled, skip in-mem snapshots based
 				//on number of pending ts to be processed.
+				//skip in-mem snapshots only if there is atleast one in-mem snapshot
+				//merge of a partitioned index expects a storage snapshot to be available
 				skipFactor := tk.calcSkipFactorForFastFlush(streamId, bucket)
 				if skipFactor != 0 && (tk.ss.streamBucketSkippedInMemTs[streamId][bucket] < skipFactor) {
 					tk.ss.streamBucketSkippedInMemTs[streamId][bucket]++
@@ -2573,6 +2576,7 @@ func (tk *timekeeper) setSnapshotType(streamId common.StreamId, bucket string,
 			} else {
 				flushTs.SetSnapType(common.INMEM_SNAP)
 				tk.ss.streamBucketSkippedInMemTs[streamId][bucket] = 0
+				tk.ss.streamBucketHasInMemSnap[streamId][bucket] = true
 			}
 		}
 	} else {
