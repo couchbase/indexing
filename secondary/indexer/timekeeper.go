@@ -2861,9 +2861,7 @@ func (tk *timekeeper) setSnapshotType(streamId common.StreamId, keyspaceId strin
 			tk.ss.streamKeyspaceIdSkippedInMemTs[streamId][keyspaceId] = 0
 		} else {
 			fastFlush := tk.config["settings.fast_flush_mode"].Bool()
-			//use fast flush only for forestdb. memdb and plasma have very cheap
-			//in-memory snaphots.
-			if fastFlush && common.GetStorageMode() == common.FORESTDB {
+			if fastFlush {
 				//if fast flush mode is enabled, skip in-mem snapshots based
 				//on number of pending ts to be processed.
 				skipFactor := tk.calcSkipFactorForFastFlush(streamId, keyspaceId)
