@@ -53,6 +53,7 @@ type StreamState struct {
 	streamKeyspaceIdTimerStopCh     map[common.StreamId]KeyspaceIdTimerStopCh
 	streamKeyspaceIdLastPersistTime map[common.StreamId]KeyspaceIdLastPersistTime
 	streamKeyspaceIdSkippedInMemTs  map[common.StreamId]KeyspaceIdSkippedInMemTs
+	streamKeyspaceIdHasInMemSnap    map[common.StreamId]KeyspaceIdHasInMemSnap
 	streamKeyspaceIdSessionId       map[common.StreamId]KeyspaceIdSessionId
 	streamKeyspaceIdCollectionId    map[common.StreamId]KeyspaceIdCollectionId
 	streamKeyspaceIdPastMinMergeTs  map[common.StreamId]KeyspaceIdPastMinMergeTs
@@ -108,6 +109,7 @@ type KeyspaceIdRepairStopCh map[string]StopChannel
 type KeyspaceIdTimerStopCh map[string]StopChannel
 type KeyspaceIdLastPersistTime map[string]time.Time
 type KeyspaceIdSkippedInMemTs map[string]uint64
+type KeyspaceIdHasInMemSnap map[string]bool
 type KeyspaceIdSessionId map[string]uint64
 type KeyspaceIdEnableOSO map[string]bool
 type KeyspaceIdCollectionId map[string]string
@@ -172,6 +174,7 @@ func InitStreamState(config common.Config) *StreamState {
 		streamKeyspaceIdTimerStopCh:        make(map[common.StreamId]KeyspaceIdTimerStopCh),
 		streamKeyspaceIdLastPersistTime:    make(map[common.StreamId]KeyspaceIdLastPersistTime),
 		streamKeyspaceIdSkippedInMemTs:     make(map[common.StreamId]KeyspaceIdSkippedInMemTs),
+		streamKeyspaceIdHasInMemSnap:       make(map[common.StreamId]KeyspaceIdHasInMemSnap),
 		streamKeyspaceIdLastSnapMarker:     make(map[common.StreamId]KeyspaceIdLastSnapMarker),
 		streamKeyspaceIdLastMutationVbuuid: make(map[common.StreamId]KeyspaceIdLastMutationVbuuid),
 		keyspaceIdRollbackTime:             make(map[string]int64),
@@ -266,6 +269,9 @@ func (ss *StreamState) initNewStream(streamId common.StreamId) {
 	keyspaceIdSkippedInMemTs := make(KeyspaceIdSkippedInMemTs)
 	ss.streamKeyspaceIdSkippedInMemTs[streamId] = keyspaceIdSkippedInMemTs
 
+	keyspaceIdHasInMemSnap := make(KeyspaceIdHasInMemSnap)
+	ss.streamKeyspaceIdHasInMemSnap[streamId] = keyspaceIdHasInMemSnap
+
 	keyspaceIdSessionId := make(KeyspaceIdSessionId)
 	ss.streamKeyspaceIdSessionId[streamId] = keyspaceIdSessionId
 
@@ -345,6 +351,7 @@ func (ss *StreamState) initKeyspaceIdInStream(streamId common.StreamId,
 	ss.streamKeyspaceIdOpenTsMap[streamId][keyspaceId] = nil
 	ss.streamKeyspaceIdStartTimeMap[streamId][keyspaceId] = uint64(0)
 	ss.streamKeyspaceIdSkippedInMemTs[streamId][keyspaceId] = 0
+	ss.streamKeyspaceIdHasInMemSnap[streamId][keyspaceId] = false
 	ss.streamKeyspaceIdSessionId[streamId][keyspaceId] = 0
 	ss.streamKeyspaceIdCollectionId[streamId][keyspaceId] = ""
 	ss.streamKeyspaceIdPastMinMergeTs[streamId][keyspaceId] = false
@@ -399,6 +406,7 @@ func (ss *StreamState) cleanupKeyspaceIdFromStream(streamId common.StreamId,
 	delete(ss.streamKeyspaceIdLastSnapMarker[streamId], keyspaceId)
 	delete(ss.streamKeyspaceIdLastMutationVbuuid[streamId], keyspaceId)
 	delete(ss.streamKeyspaceIdSkippedInMemTs[streamId], keyspaceId)
+	delete(ss.streamKeyspaceIdHasInMemSnap[streamId], keyspaceId)
 	delete(ss.streamKeyspaceIdSessionId[streamId], keyspaceId)
 	delete(ss.streamKeyspaceIdCollectionId[streamId], keyspaceId)
 	delete(ss.streamKeyspaceIdPastMinMergeTs[streamId], keyspaceId)
@@ -452,6 +460,7 @@ func (ss *StreamState) resetStreamState(streamId common.StreamId) {
 	delete(ss.streamKeyspaceIdOpenTsMap, streamId)
 	delete(ss.streamKeyspaceIdStartTimeMap, streamId)
 	delete(ss.streamKeyspaceIdSkippedInMemTs, streamId)
+	delete(ss.streamKeyspaceIdHasInMemSnap, streamId)
 	delete(ss.streamKeyspaceIdSessionId, streamId)
 	delete(ss.streamKeyspaceIdCollectionId, streamId)
 	delete(ss.streamKeyspaceIdPastMinMergeTs, streamId)
