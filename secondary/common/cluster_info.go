@@ -975,6 +975,22 @@ func (c *ClusterInfoClient) watchClusterChanges() {
 	}
 }
 
+// ValidateCollectionID will get CollectionID for a given bucket, scope
+// and collection and check if its equal to a given collnID
+func (c *ClusterInfoClient) ValidateCollectionID(bucket, scope,
+	collection, collnID string) bool {
+
+	cinfo := c.GetClusterInfoCache()
+	cinfo.RLock()
+	defer cinfo.RUnlock()
+
+	cid := cinfo.GetCollectionID(bucket, scope, collection)
+	if cid != collnID {
+		return false
+	}
+	return true
+}
+
 func (cic *ClusterInfoClient) ValidateBucket(bucket string, uuids []string) bool {
 
 	cinfo := cic.GetClusterInfoCache()

@@ -964,16 +964,16 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn,
 				return fmt.Errorf("%v", message)
 			} else {
 				if scheduleErr.Error() == ErrWaitScheduleTimeout.Error() {
-					msg += fmt.Sprintf("\n\t Scheduling of index creation was attempted. Please check for index status later.")
+					msg += fmt.Sprintf(" Scheduling of index creation was attempted. Please check for index status later.")
 				} else {
-					msg += fmt.Sprintf("\n\t Could not schedule index creation in the background. Reason: %v", scheduleErr)
+					msg += fmt.Sprintf(" Could not schedule index creation in the background. Reason: %v", scheduleErr)
 					logging.Errorf("%v", msg)
 				}
 			}
 		}
 
 		logging.Errorf("Fail to create index: %v", err)
-		return err
+		return fmt.Errorf("%v", msg)
 	}
 
 	//

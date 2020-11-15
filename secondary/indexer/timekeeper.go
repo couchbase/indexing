@@ -52,6 +52,8 @@ type timekeeper struct {
 	lock sync.RWMutex //lock to protect this structure
 
 	indexerState common.IndexerState
+
+	clusterInfoClient *common.ClusterInfoClient
 }
 
 type InitialBuildInfo struct {
@@ -78,18 +80,19 @@ const REPAIR_RETRY_BEFORE_SHUTDOWN = 5
 //Any async response to supervisor is sent to supvRespch.
 //If supvCmdch get closed, storageMgr will shut itself down.
 func NewTimekeeper(supvCmdch MsgChannel, supvRespch MsgChannel,
-	config common.Config) (Timekeeper, Message) {
+	config common.Config, c *common.ClusterInfoClient) (Timekeeper, Message) {
 
 	//Init the timekeeper struct
 	tk := &timekeeper{
-		supvCmdch:       supvCmdch,
-		supvRespch:      supvRespch,
-		ss:              InitStreamState(config),
-		config:          config,
-		indexInstMap:    make(common.IndexInstMap),
-		indexPartnMap:   make(IndexPartnMap),
-		indexBuildInfo:  make(map[common.IndexInstId]*InitialBuildInfo),
-		vbCheckerStopCh: make(map[common.StreamId]chan bool),
+		supvCmdch:         supvCmdch,
+		supvRespch:        supvRespch,
+		ss:                InitStreamState(config),
+		config:            config,
+		indexInstMap:      make(common.IndexInstMap),
+		indexPartnMap:     make(IndexPartnMap),
+		indexBuildInfo:    make(map[common.IndexInstId]*InitialBuildInfo),
+		vbCheckerStopCh:   make(map[common.StreamId]chan bool),
+		clusterInfoClient: c,
 	}
 
 	//start timekeeper loop which listens to commands from its supervisor
@@ -2858,26 +2861,25 @@ func (tk *timekeeper) setSnapshotType(streamId common.StreamId, keyspaceId strin
 			tk.ss.streamKeyspaceIdSkippedInMemTs[streamId][keyspaceId] = 0
 		} else {
 			fastFlush := tk.config["settings.fast_flush_mode"].Bool()
-			forceFastFlush := tk.config["force_fast_flush"].Bool()
+			hasInMemSnap := tk.ss.streamKeyspaceIdHasInMemSnap[streamId][keyspaceId]
 
-			//use fast flush only for forestdb. memdb and plasma have very cheap
-			//in-memory snaphots.
-			skipped := false
-			if fastFlush {
-				if common.GetStorageMode() == common.FORESTDB || forceFastFlush {
-					//if fast flush mode is enabled, skip in-mem snapshots based
-					//on number of pending ts to be processed.
-					skipFactor := tk.calcSkipFactorForFastFlush(streamId, keyspaceId)
-					if skipFactor != 0 && (tk.ss.streamKeyspaceIdSkippedInMemTs[streamId][keyspaceId] < skipFactor) {
-						skipped = true
-						tk.ss.streamKeyspaceIdSkippedInMemTs[streamId][keyspaceId]++
-						flushTs.SetSnapType(common.NO_SNAP)
-					}
+			if fastFlush && hasInMemSnap {
+				//if fast flush mode is enabled, skip in-mem snapshots based
+				//on number of pending ts to be processed.
+				//skip in-mem snapshots only if there is atleast one in-mem snapshot
+				//merge of a partitioned index expects a storage snapshot to be available
+				skipFactor := tk.calcSkipFactorForFastFlush(streamId, keyspaceId)
+				if skipFactor != 0 && (tk.ss.streamKeyspaceIdSkippedInMemTs[streamId][keyspaceId] < skipFactor) {
+					tk.ss.streamKeyspaceIdSkippedInMemTs[streamId][keyspaceId]++
+					flushTs.SetSnapType(common.NO_SNAP)
+				} else {
+					flushTs.SetSnapType(common.INMEM_SNAP)
+					tk.ss.streamKeyspaceIdSkippedInMemTs[streamId][keyspaceId] = 0
 				}
-			}
-			if !skipped {
+			} else {
 				flushTs.SetSnapType(common.INMEM_SNAP)
 				tk.ss.streamKeyspaceIdSkippedInMemTs[streamId][keyspaceId] = 0
+				tk.ss.streamKeyspaceIdHasInMemSnap[streamId][keyspaceId] = true
 			}
 		}
 	} else {
@@ -4240,8 +4242,6 @@ func (tk *timekeeper) handlePoolChange(cmd Message) {
 func (tk *timekeeper) ValidateKeyspace(streamId common.StreamId, keyspaceId string,
 	bucketUUIDs []string) bool {
 
-	clusterAddr := tk.config["clusterAddr"].String()
-
 	collectionId := tk.ss.streamKeyspaceIdCollectionId[streamId][keyspaceId]
 
 	bucket, scope, collection := SplitKeyspaceId(keyspaceId)
@@ -4249,7 +4249,7 @@ func (tk *timekeeper) ValidateKeyspace(streamId common.StreamId, keyspaceId stri
 	//if the stream is using a cid, validate collection.
 	//otherwise only validate the bucket
 	if collectionId == "" {
-		if !ValidateBucket(clusterAddr, bucket, bucketUUIDs) {
+		if !tk.clusterInfoClient.ValidateBucket(bucket, bucketUUIDs) {
 			return false
 		}
 	} else {
@@ -4259,11 +4259,8 @@ func (tk *timekeeper) ValidateKeyspace(streamId common.StreamId, keyspaceId stri
 			collection = common.DEFAULT_COLLECTION
 		}
 
-		//TODO Collections - change to use cinfo.GetCollectionID once streaming
-		//rest endpoint is available
-		cid, _ := common.GetCollectionID(clusterAddr,
-			bucket, scope, collection)
-		if cid != collectionId {
+		if !tk.clusterInfoClient.ValidateCollectionID(bucket, scope,
+			collection, collectionId) {
 			return false
 		}
 	}
