@@ -2387,13 +2387,14 @@ func (m *LifecycleMgr) handleCleanupDeferIndexFromKeyspace(keyspace string) erro
 	bucket, scope, collection := SplitKeyspaceId(keyspace)
 
 	// Get bucket UUID.  if err==nil, bucket uuid is BUCKET_UUID_NIL for non-existent bucket.
-	currentUUID, err := m.getBucketUUID(bucket)
+	currentUUID, err := m.getBucketUUID(bucket, false)
 	if err != nil {
+		logging.Errorf("LifecycleMgr::handleCleanupDeferIndexFromKeyspace Error while fetching bucketUUID from cinfocache, err: %v")
 		// If err != nil, then cannot connect to fetch bucket info.  Do not attempt to delete index.
 		return nil
 	}
 
-	collectionID, err := m.getCollectionID(bucket, scope, collection)
+	collectionID, err := m.getCollectionID(bucket, scope, collection, false)
 	if err != nil {
 		// If err != nil, then cannot connect to fetch collection info.  Do not attempt to delete index.
 		return nil
@@ -3718,7 +3719,7 @@ func (m *LifecycleMgr) getServiceMap() (*client.ServiceMap, error) {
 // This function returns an error if it cannot connect for fetching bucket info.
 // It returns BUCKET_UUID_NIL (err == nil) if bucket does not exist.
 //
-func (m *LifecycleMgr) getBucketUUID(bucket string) (string, error) {
+func (m *LifecycleMgr) getBucketUUID(bucket string, retry bool) (string, error) {
 	count := 0
 RETRY:
 	cinfo := m.cinfoClient.GetClusterInfoCache()
@@ -3727,7 +3728,7 @@ RETRY:
 	uuid := cinfo.GetBucketUUID(bucket)
 	cinfo.RUnlock()
 
-	if uuid == common.BUCKET_UUID_NIL && count < 5 {
+	if uuid == common.BUCKET_UUID_NIL && count < 5 && retry {
 		count++
 		time.Sleep(time.Duration(100) * time.Millisecond)
 		// Force fetch cluster info client
@@ -3744,7 +3745,7 @@ RETRY:
 // This function returns an error if it cannot connect for fetching manifest info.
 // It returns COLLECTION_ID_NIL (err == nil) if collection does not exist.
 //
-func (m *LifecycleMgr) getCollectionID(bucket, scope, collection string) (string, error) {
+func (m *LifecycleMgr) getCollectionID(bucket, scope, collection string, retry bool) (string, error) {
 	count := 0
 RETRY:
 	cinfo := m.cinfoClient.GetClusterInfoCache()
@@ -3753,11 +3754,11 @@ RETRY:
 	colldId := cinfo.GetCollectionID(bucket, scope, collection)
 	cinfo.RUnlock()
 
-	if colldId == collections.COLLECTION_ID_NIL && count < 5 {
+	if colldId == collections.COLLECTION_ID_NIL && count < 5 && retry {
 		count++
 		time.Sleep(time.Duration(100) * time.Millisecond)
 
-		// Force fetch cluster infocache
+		// Force fetch cluster info cache
 		err := m.cinfoClient.FetchWithLock()
 		if err != nil {
 			return collections.COLLECTION_ID_NIL, err
@@ -3830,7 +3831,7 @@ func (m *LifecycleMgr) verifyBucket(bucket string) (string, error) {
 
 	// If this function returns an error, then it cannot fetch bucket UUID.
 	// Otherwise, if it returns BUCKET_UUID_NIL, it means none of the node recognize this bucket.
-	currentUUID, err := m.getBucketUUID(bucket)
+	currentUUID, err := m.getBucketUUID(bucket, true)
 	if err != nil {
 		return common.BUCKET_UUID_NIL, err
 	}
