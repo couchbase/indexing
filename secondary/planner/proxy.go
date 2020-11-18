@@ -185,11 +185,16 @@ func getIndexLayout(config common.Config, hosts []string) ([]*IndexerNode, error
 	numIndexes := 0
 
 	resp, err := restHelperNoLock(getLocalMetadataResp, hosts, nil, cinfo)
+
+	defer closeRespMap(resp)
+
 	if err != nil {
 		return nil, err
 	}
 
 	for nid, res := range resp {
+		delete(resp, nid)
+
 		localMeta := new(LocalIndexMetadata)
 		if err := convertResponse(res, localMeta); err != nil {
 			return nil, err
@@ -418,11 +423,16 @@ func getIndexStats(plan *Plan, config common.Config) error {
 	}
 
 	resp, err := restHelperNoLock(getLocalStatsResp, nil, plan.Placement, cinfo)
+
+	defer closeRespMap(resp)
+
 	if err != nil {
 		return err
 	}
 
 	for nid, res := range resp {
+		delete(resp, nid)
+
 		stats := new(common.Statistics)
 		if err := convertResponse(res, stats); err != nil {
 			return err
@@ -816,11 +826,16 @@ func getIndexSettings(plan *Plan) error {
 	}
 
 	resp, err := restHelperNoLock(getLocalSettingsResp, nil, plan.Placement, cinfo)
+
+	defer closeRespMap(resp)
+
 	if err != nil {
 		return err
 	}
 
-	for _, res := range resp {
+	for nid, res := range resp {
+		delete(resp, nid)
+
 		settings := make(map[string]interface{})
 		if err := convertResponse(res, &settings); err != nil {
 			return err
@@ -1310,11 +1325,16 @@ func processCreateToken(indexers []*IndexerNode, config common.Config) error {
 	// 1) the planner will not consider those pending-create index for planning
 	// 2) the planner will not move those pending-create index from the out-node.
 	resp, err := restHelperNoLock(getLocalCreateTokensResp, nil, indexers, cinfo)
+
+	defer closeRespMap(resp)
+
 	if err != nil {
 		return err
 	}
 
 	for nid, res := range resp {
+		delete(resp, nid)
+
 		tokens := new(mc.CreateCommandTokenList)
 		if err := convertResponse(res, tokens); err != nil {
 			return err
@@ -1426,11 +1446,16 @@ func processDeleteToken(indexers []*IndexerNode, config common.Config) error {
 	// 1) the planner will not consider those pending-delete index for planning
 	// 2) the planner could end up repairing replica for those definitions
 	resp, err := restHelperNoLock(getLocalDeleteTokensResp, nil, indexers, cinfo)
+
+	defer closeRespMap(resp)
+
 	if err != nil {
 		return err
 	}
 
 	for nid, res := range resp {
+		delete(resp, nid)
+
 		tokens := new(mc.DeleteCommandTokenList)
 		if err := convertResponse(res, tokens); err != nil {
 			return err
@@ -1492,11 +1517,16 @@ func processDropInstanceToken(indexers []*IndexerNode, config common.Config,
 	// 2) the planner could end up repairing replica for those definitions
 	// 3) when handling drop replica, it may not drop an already deleted replica
 	resp, err := restHelperNoLock(getLocalDropInstanceTokensResp, nil, indexers, cinfo)
+
+	defer closeRespMap(resp)
+
 	if err != nil {
 		return err
 	}
 
 	for nid, res := range resp {
+		delete(resp, nid)
+
 		tokens := new(mc.DropInstanceCommandTokenList)
 		if err := convertResponse(res, tokens); err != nil {
 			return err
@@ -1557,12 +1587,17 @@ func getIndexNumReplica(plan *Plan) error {
 	}
 
 	resp, err := restHelperNoLock(getLocalNumReplicasResp, nil, plan.Placement, cinfo)
+
+	defer closeRespMap(resp)
+
 	if err != nil {
 		return err
 	}
 
 	numReplicas := make(map[common.IndexDefnId]common.Counter)
 	for nid, res := range resp {
+		delete(resp, nid)
+
 		localNumReplicas := make(map[common.IndexDefnId]common.Counter)
 		if err := convertResponse(res, &localNumReplicas); err != nil {
 			return err
@@ -1740,4 +1775,15 @@ func restHelperNoLock(rest func(string) (*http.Response, error), hosts []string,
 	}
 
 	return respMap, nil
+}
+
+func closeRespMap(respMap map[common.NodeId]*http.Response) {
+	for _, resp := range respMap {
+		if resp != nil && resp.Body != nil {
+			defer resp.Body.Close()
+
+			buf := new(bytes.Buffer)
+			_, _ = buf.ReadFrom(resp.Body)
+		}
+	}
 }
