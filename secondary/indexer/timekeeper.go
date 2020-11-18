@@ -41,9 +41,10 @@ type timekeeper struct {
 
 	config common.Config
 
-	indexInstMap  common.IndexInstMap
-	indexPartnMap IndexPartnMap
+	indexInstMap  IndexInstMapHolder
+	indexPartnMap IndexPartnMapHolder
 
+	// Lock to protect simultaneous update of stats by multiple go-routines
 	statsLock sync.Mutex
 
 	stats           IndexerStatsHolder
@@ -88,12 +89,13 @@ func NewTimekeeper(supvCmdch MsgChannel, supvRespch MsgChannel,
 		supvRespch:        supvRespch,
 		ss:                InitStreamState(config),
 		config:            config,
-		indexInstMap:      make(common.IndexInstMap),
-		indexPartnMap:     make(IndexPartnMap),
 		indexBuildInfo:    make(map[common.IndexInstId]*InitialBuildInfo),
 		vbCheckerStopCh:   make(map[common.StreamId]chan bool),
 		clusterInfoClient: c,
 	}
+
+	tk.indexInstMap.Init()
+	tk.indexPartnMap.Init()
 
 	//start timekeeper loop which listens to commands from its supervisor
 	go tk.run()
@@ -3607,8 +3609,9 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 			return
 		}
 
+		indexInstMap := tk.indexInstMap.Get()
 		var bucketUUIDList []string
-		for _, indexInst := range tk.indexInstMap {
+		for _, indexInst := range indexInstMap {
 			if indexInst.Defn.KeyspaceId(indexInst.Stream) == keyspaceId && indexInst.Stream == streamId &&
 				indexInst.State != common.INDEX_STATE_DELETED {
 				bucketUUIDList = append(bucketUUIDList, indexInst.Defn.BucketUUID)
@@ -3686,7 +3689,7 @@ func (tk *timekeeper) handleUpdateIndexInstMap(cmd Message) {
 	indexInstMap := req.GetIndexInstMap()
 
 	tk.stats.Set(req.GetStatsObject())
-	tk.indexInstMap = common.CopyIndexInstMap(indexInstMap)
+	tk.indexInstMap.Set(common.CopyIndexInstMap(indexInstMap))
 	tk.supvCmdch <- &MsgSuccess{}
 }
 
@@ -3696,7 +3699,7 @@ func (tk *timekeeper) handleUpdateIndexPartnMap(cmd Message) {
 
 	logging.Tracef("Timekeeper::handleUpdateIndexPartnMap %v", cmd)
 	indexPartnMap := cmd.(*MsgUpdatePartnMap).GetIndexPartnMap()
-	tk.indexPartnMap = CopyIndexPartnMap(indexPartnMap)
+	tk.indexPartnMap.Set(CopyIndexPartnMap(indexPartnMap))
 	tk.supvCmdch <- &MsgSuccess{}
 }
 
@@ -3708,8 +3711,9 @@ func (tk *timekeeper) handleStats(cmd Message) {
 
 	tk.lock.Lock()
 	keyspaceIdCollectionId := tk.ss.CloneCollectionIdMap(common.INIT_STREAM)
-	indexInstMap := common.CopyIndexInstMap(tk.indexInstMap)
 	tk.lock.Unlock()
+
+	indexInstMap := tk.indexInstMap.Get()
 
 	go func() {
 
@@ -3719,8 +3723,10 @@ func (tk *timekeeper) handleStats(cmd Message) {
 			return
 		}
 
+		tk.statsLock.Lock()
+		defer tk.statsLock.Unlock()
 		// Populate current KV timestamps for all keyspaces
-		keyspaceIdTsMap := make(map[string]Timestamp)
+		keyspaceIdTsMap := make(map[common.StreamId]map[string]Timestamp)
 		for _, inst := range indexInstMap {
 			//skip deleted indexes
 			if inst.State == common.INDEX_STATE_DELETED {
@@ -3731,12 +3737,16 @@ func (tk *timekeeper) handleStats(cmd Message) {
 			var err error
 
 			keyspaceId := inst.Defn.KeyspaceId(inst.Stream)
-			if _, ok := keyspaceIdTsMap[keyspaceId]; !ok {
+			stream := inst.Stream
+			if _, ok := keyspaceIdTsMap[stream]; !ok {
+				keyspaceIdTsMap[stream] = make(map[string]Timestamp)
+			}
+			if _, ok := keyspaceIdTsMap[stream][keyspaceId]; !ok {
 				rh := common.NewRetryHelper(maxStatsRetries, time.Second, 1, func(a int, err error) error {
 					cluster := tk.config["clusterAddr"].String()
 					numVbuckets := tk.config["numVbuckets"].Int()
 					cid := ""
-					if inst.Stream == common.INIT_STREAM {
+					if inst.Stream == common.INIT_STREAM && inst.Defn.KeyspaceId(inst.Stream) != inst.Defn.Bucket {
 						cid = keyspaceIdCollectionId[keyspaceId]
 					}
 					kvTs, err = GetCurrentKVTs(cluster, "default", keyspaceId, cid, numVbuckets)
@@ -3748,72 +3758,113 @@ func (tk *timekeeper) handleStats(cmd Message) {
 					return
 				}
 
-				keyspaceIdTsMap[keyspaceId] = kvTs
+				keyspaceIdTsMap[stream][keyspaceId] = kvTs
 			}
 		}
 
 		progressStatTime := time.Now().UnixNano()
+		var rollbackTimeMap map[string]int64
+		flushedCountMap := make(map[common.StreamId]map[string]uint64)
+		queuedMap := make(map[common.StreamId]map[string]uint64)
+		pendingMap := make(map[common.StreamId]map[string]uint64)
+		totalTobeFlushedMap := make(map[common.StreamId]map[string]uint64)
 
-		tk.lock.Lock()
-		defer tk.lock.Unlock()
+		func() {
+			tk.lock.Lock()
+			defer tk.lock.Unlock()
+			flushedTsMap := tk.ss.streamKeyspaceIdLastFlushedTsMap
+			receivedTsMap := tk.ss.streamKeyspaceIdHWTMap
+			rollbackTimeMap = tk.ss.CloneKeyspaceIdRollbackTime()
+
+			// Pre-compute flushedCount for all streams and keyspaceId's
+			for stream, keyspaceIdMap := range flushedTsMap {
+				if _, ok := flushedCountMap[stream]; !ok {
+					flushedCountMap[stream] = make(map[string]uint64)
+				}
+
+				for keyspaceId, flushedTs := range keyspaceIdMap {
+					flushedCount := uint64(0)
+					if flushedTs != nil {
+						for _, seqno := range flushedTs.Seqnos {
+							flushedCount += seqno
+						}
+					}
+					flushedCountMap[stream][keyspaceId] = flushedCount
+				}
+			}
+
+			// Pre-compute queuedCount for all streams and keyspaceId's
+			for stream, keyspaceIdMap := range receivedTsMap {
+				if _, ok := queuedMap[stream]; !ok {
+					queuedMap[stream] = make(map[string]uint64)
+				}
+
+				for keyspaceId, receivedTs := range keyspaceIdMap {
+					queued := uint64(0)
+					if receivedTs != nil {
+						for _, seqno := range receivedTs.Seqnos {
+							queued += seqno
+						}
+					}
+
+					flushedCount := flushedCountMap[stream][keyspaceId]
+					queuedMap[stream][keyspaceId] = queued - flushedCount
+				}
+			}
+
+			// Pre-compute pending count for all streams and keyspaceIds
+			for stream, keyspaceIdMap := range keyspaceIdTsMap {
+				if _, ok := pendingMap[stream]; !ok {
+					pendingMap[stream] = make(map[string]uint64)
+					totalTobeFlushedMap[stream] = make(map[string]uint64)
+				}
+
+				for keyspaceId, kvTs := range keyspaceIdMap {
+					pending := uint64(0)
+					sum := uint64(0)
+					if kvTs != nil {
+
+						// Get receivedTs for this keyspaceId
+						receivedTs := receivedTsMap[stream][keyspaceId]
+
+						for i, seqno := range kvTs {
+							sum += seqno
+							receivedSeqno := uint64(0)
+							if receivedTs != nil {
+								receivedSeqno = receivedTs.Seqnos[i]
+							}
+							// By the time we compute index stats, kv timestamp would have
+							// become old.
+							if uint64(seqno) > receivedSeqno {
+								pending += uint64(seqno) - receivedSeqno
+							}
+						}
+					}
+					pendingMap[stream][keyspaceId] = pending
+					totalTobeFlushedMap[stream][keyspaceId] = sum
+				}
+			}
+		}()
 
 		stats := tk.stats.Get()
-		for _, inst := range tk.indexInstMap {
+		for instId, inst := range indexInstMap {
 			//skip deleted indexes
 			if inst.State == common.INDEX_STATE_DELETED {
 				continue
 			}
 
+			stream := inst.Stream
 			keyspaceId := inst.Defn.KeyspaceId(inst.Stream)
-			idxStats := stats.indexes[inst.InstId]
-			flushedCount := uint64(0)
-			flushedTs := tk.ss.streamKeyspaceIdLastFlushedTsMap[inst.Stream][keyspaceId]
-			if flushedTs != nil {
-				for _, seqno := range flushedTs.Seqnos {
-					flushedCount += seqno
-				}
-			}
-
-			v := float64(flushedCount)
-			receivedTs := tk.ss.streamKeyspaceIdHWTMap[inst.Stream][keyspaceId]
-			queued := uint64(0)
-			if receivedTs != nil {
-				for i, seqno := range receivedTs.Seqnos {
-					flushSeqno := uint64(0)
-					if flushedTs != nil {
-						flushSeqno = flushedTs.Seqnos[i]
-					}
-
-					queued += seqno - flushSeqno
-				}
-			}
-
-			pending := uint64(0)
-			kvTs := keyspaceIdTsMap[keyspaceId]
-			for i, seqno := range kvTs {
-				recvdSeqno := uint64(0)
-				if receivedTs != nil {
-					recvdSeqno = receivedTs.Seqnos[i]
-				}
-
-				// By the time we compute index stats, kv timestamp would have
-				// become old.
-				if uint64(seqno) > recvdSeqno {
-					pending += uint64(seqno) - recvdSeqno
-				}
-			}
-
+			idxStats := stats.indexes[instId]
+			v := float64(0)
 			switch inst.State {
 			default:
 				v = 0.00
 			case common.INDEX_STATE_ACTIVE:
 				v = 100.00
 			case common.INDEX_STATE_INITIAL, common.INDEX_STATE_CATCHUP:
-				totalToBeflushed := uint64(0)
-				for _, seqno := range kvTs {
-					totalToBeflushed += uint64(seqno)
-				}
-
+				totalToBeflushed := totalTobeFlushedMap[stream][keyspaceId]
+				flushedCount := flushedCountMap[stream][keyspaceId]
 				if totalToBeflushed > flushedCount {
 					v = float64(flushedCount) * 100.00 / float64(totalToBeflushed)
 				} else {
@@ -3823,12 +3874,12 @@ func (tk *timekeeper) handleStats(cmd Message) {
 
 			if idxStats != nil {
 				idxStats.indexState.Set((uint64)(inst.State))
-				idxStats.numDocsProcessed.Set(int64(flushedCount))
-				idxStats.numDocsQueued.Set(int64(queued))
-				idxStats.numDocsPending.Set(int64(pending))
+				idxStats.numDocsProcessed.Set(int64(flushedCountMap[stream][keyspaceId]))
+				idxStats.numDocsQueued.Set(int64(queuedMap[stream][keyspaceId]))
+				idxStats.numDocsPending.Set(int64(pendingMap[stream][keyspaceId]))
 				idxStats.buildProgress.Set(int64(v))
 				idxStats.completionProgress.Set(int64(math.Float64bits(v)))
-				idxStats.lastRollbackTime.Set(tk.ss.keyspaceIdRollbackTime[keyspaceId])
+				idxStats.lastRollbackTime.Set(rollbackTimeMap[keyspaceId])
 				idxStats.progressStatTime.Set(progressStatTime)
 			}
 		}
@@ -3839,11 +3890,17 @@ func (tk *timekeeper) handleStats(cmd Message) {
 
 func (tk *timekeeper) updateTimestampStats() {
 
-	tk.lock.Lock()
-	defer tk.lock.Unlock()
+	var rollbackTimeMap map[string]int64
+
+	func() {
+		tk.lock.Lock()
+		defer tk.lock.Unlock()
+		rollbackTimeMap = tk.ss.CloneKeyspaceIdRollbackTime()
+	}()
+	indexInstMap := tk.indexInstMap.Get()
 
 	stats := tk.stats.Get()
-	for _, inst := range tk.indexInstMap {
+	for _, inst := range indexInstMap {
 		//skip deleted indexes
 		if inst.State == common.INDEX_STATE_DELETED {
 			continue
@@ -3851,7 +3908,7 @@ func (tk *timekeeper) updateTimestampStats() {
 
 		idxStats := stats.indexes[inst.InstId]
 		if idxStats != nil {
-			idxStats.lastRollbackTime.Set(tk.ss.keyspaceIdRollbackTime[inst.Defn.KeyspaceId(inst.Stream)])
+			idxStats.lastRollbackTime.Set(rollbackTimeMap[inst.Defn.KeyspaceId(inst.Stream)])
 			idxStats.progressStatTime.Set(time.Now().UnixNano())
 		}
 	}
