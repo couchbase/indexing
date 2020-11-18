@@ -69,6 +69,8 @@ type plasmaSlice struct {
 	idxInstId  common.IndexInstId
 	idxPartnId common.PartitionId
 
+	flushActive uint32
+
 	status        SliceStatus
 	isActive      bool
 	isDirty       bool
@@ -557,6 +559,7 @@ func (mdb *plasmaSlice) Insert(key []byte, docid []byte, meta *MutationMeta) err
 	}
 
 	atomic.AddInt64(&mdb.qCount, 1)
+	atomic.StoreUint32(&mdb.flushActive, 1)
 	mdb.cmdCh[int(meta.vbucket)%mdb.numWriters] <- mut
 	mdb.idxStats.numDocsFlushQueued.Add(1)
 	return mdb.fatalDbErr
@@ -566,6 +569,7 @@ func (mdb *plasmaSlice) Delete(docid []byte, meta *MutationMeta) error {
 	if !meta.firstSnap {
 		atomic.AddInt64(&mdb.qCount, 1)
 		mdb.idxStats.numDocsFlushQueued.Add(1)
+		atomic.StoreUint32(&mdb.flushActive, 1)
 		mdb.cmdCh[int(meta.vbucket)%mdb.numWriters] <- &indexMutation{op: opDelete, docid: docid}
 	}
 	return mdb.fatalDbErr
@@ -1861,6 +1865,9 @@ func (mdb *plasmaSlice) NewSnapshot(ts *common.TsVbuuid, commit bool) (SnapshotI
 
 	mdb.isDirty = false
 
+	// Coming here means that cmdCh is empty and flush has finished for this index
+	atomic.StoreUint32(&mdb.flushActive, 0)
+
 	newSnapshotInfo := &plasmaSnapshotInfo{
 		Ts:        ts,
 		Committed: commit,
@@ -1991,7 +1998,19 @@ func (mdb *plasmaSlice) IndexDefnId() common.IndexDefnId {
 
 // IsDirty returns true if there has been any change in
 // in the slice storage after last in-mem/persistent snapshot
+//
+// flushActive will be true if there are going to be any
+// messages in the cmdCh of slice after flush is done.
+// It will be cleared during snapshot generation as the
+// cmdCh would be empty at the time of snapshot generation
 func (mdb *plasmaSlice) IsDirty() bool {
+	flushActive := atomic.LoadUint32(&mdb.flushActive)
+	if flushActive == 0 { // No flush happening
+		return false
+	}
+
+	// Flush in progress - wait till all commands on cmdCh
+	// are processed
 	mdb.waitPersist()
 	return mdb.isDirty
 }
