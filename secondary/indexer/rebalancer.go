@@ -151,7 +151,7 @@ func NewRebalancer(transferTokens map[string]*c.TransferToken, rebalToken *Rebal
 func (r *Rebalancer) initRebalAsync() {
 
 	//short circuit
-	if r.transferTokens == nil && !r.runPlanner {
+	if len(r.transferTokens) == 0 && !r.runPlanner {
 		r.cb.progress(1.0, r.cancel)
 		r.finish(nil)
 		return
@@ -208,9 +208,11 @@ func (r *Rebalancer) initRebalAsync() {
 						go r.finish(err)
 						return
 					}
+
 					if len(r.transferTokens) == 0 {
 						r.transferTokens = nil
 					}
+
 					elapsed := time.Since(start)
 					l.Infof("Rebalancer::initRebalAsync Planner Time Taken %v", elapsed)
 					break loop
