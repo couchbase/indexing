@@ -603,7 +603,7 @@ func execute(config *RunConfig, command CommandType, p *Plan, indexSpecs []*Inde
 
 	if command == CommandPlan {
 		if indexSpecs != nil {
-			indexes, err = indexUsagesFromSpec(sizing, indexSpecs)
+			indexes, err = IndexUsagesFromSpec(sizing, indexSpecs)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -1347,7 +1347,7 @@ func setInitialLayoutStats(s *RunStats,
 // Index Generation (from Index Spec)
 /////////////////////////////////////////////////////////////
 
-func indexUsagesFromSpec(sizing SizingMethod, specs []*IndexSpec) ([]*IndexUsage, error) {
+func IndexUsagesFromSpec(sizing SizingMethod, specs []*IndexSpec) ([]*IndexUsage, error) {
 
 	var indexes []*IndexUsage
 	for _, spec := range specs {
