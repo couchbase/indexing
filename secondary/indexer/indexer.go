@@ -2622,6 +2622,18 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 			}
 		}
 
+		if ok := idx.checkParallelCollectionBuilds(keyspaceId, instIdList, clientCh, errMap); !ok {
+			maxParallelCollectionBuilds := idx.config["max_parallel_collection_builds"].Int()
+			logging.Errorf("Indexer::handleBuildIndex Build is already in progress for %v collections."+
+				" KeyspaceID: %v. Instances in error: %v", maxParallelCollectionBuilds, instIdList, keyspaceId)
+			if idx.enableManager {
+				delete(keyspaceIdIndexList, keyspaceId)
+				continue
+			} else {
+				return
+			}
+		}
+
 		inst := idx.indexInstMap[instIdList[0]]
 		collectionId := inst.Defn.CollectionId
 
@@ -4731,6 +4743,58 @@ func (idx *indexer) checkDuplicateInitialBuildRequest(keyspaceId string,
 		}
 	}
 
+	return true
+}
+
+// checkParallelCollectionBuilds returns false if the current number of keyspaces
+// on which index builds are happening is greater than the configuration value
+// "max_parallel_collection_builds".
+
+// The caller should schedule building the indexes in background when this method
+// returns false
+func (idx *indexer) checkParallelCollectionBuilds(keyspaceId string,
+	instIdList []common.IndexInstId, respCh MsgChannel, errMap map[common.IndexInstId]error) bool {
+
+	maxParallelCollectionBuilds := idx.config["max_parallel_collection_builds"].Int()
+
+	parallelCollectionBuildMap := make(map[string]bool)
+	// Find all the keyspaces on which initial build is in progress
+	for _, index := range idx.indexInstMap {
+
+		if index.State == common.INDEX_STATE_INITIAL ||
+			index.State == common.INDEX_STATE_CATCHUP {
+			keyspaceId := index.Defn.KeyspaceId(common.INIT_STREAM)
+			if _, ok := parallelCollectionBuildMap[keyspaceId]; !ok {
+				parallelCollectionBuildMap[keyspaceId] = true
+			}
+		}
+	}
+	currParallelCollectionBuilds := len(parallelCollectionBuildMap)
+
+	if currParallelCollectionBuilds >= maxParallelCollectionBuilds {
+		// These instances can not be built now as the limit on maxParallelCollectionBuilds
+		// has been reached. Add all the instances to errMap for scheduling their build
+		// in the background
+		errStr := fmt.Sprintf("Build Already In Progress for %v collections.", currParallelCollectionBuilds)
+		logging.Errorf("Indexer::checkParallelCollectionBuilds %v, %v. "+
+			"Current collection build map: %v", instIdList, keyspaceId, parallelCollectionBuildMap)
+		if idx.enableManager {
+			idx.bulkUpdateError(instIdList, errStr)
+			for _, instId := range instIdList {
+				errMap[instId] = &common.IndexerError{Reason: errStr, Code: common.MaxParallelCollectionBuilds}
+			}
+			return false
+		} else {
+			if respCh != nil {
+				respCh <- &MsgError{
+					err: Error{code: ERROR_MAX_PARALLEL_COLLECTION_BUILDS,
+						severity: NORMAL,
+						cause:    errors.New(errStr),
+						category: INDEXER}}
+			}
+			return false
+		}
+	}
 	return true
 }
 

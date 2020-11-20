@@ -70,6 +70,7 @@ const (
 	ERROR_INDEXER_IN_RECOVERY
 	ERROR_INDEXER_NOT_ACTIVE
 	ERROR_INDEXER_REBALANCE_IN_PROGRESS
+	ERROR_MAX_PARALLEL_COLLECTION_BUILDS
 
 	//STORAGE_MGR
 	ERROR_STORAGE_MGR_ROLLBACK_FAIL
@@ -146,6 +147,8 @@ func (e Error) convertError() common.IndexerErrCode {
 		return common.RebalanceInProgress
 	case ERROR_BUCKET_EPHEMERAL:
 		return common.BucketEphemeral
+	case ERROR_MAX_PARALLEL_COLLECTION_BUILDS:
+		return common.MaxParallelCollectionBuilds
 	}
 
 	return common.TransientError
