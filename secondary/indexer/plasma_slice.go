@@ -250,7 +250,7 @@ func newPlasmaSlice(storage_dir string, log_dir string, path string, sliceId Sli
 	slice.setupWriters()
 
 	logging.Infof("plasmaSlice:NewplasmaSlice Created New Slice Id %v IndexInstId %v partitionId %v "+
-		"WriterThreads %v cleaner %v", sliceId, idxInstId, partitionId, slice.numWriters, slice.mainstore.LSSCleanerConcurrency)
+		"WriterThreads %v", sliceId, idxInstId, partitionId, slice.numWriters)
 
 	slice.setCommittedCount()
 	return slice, nil
@@ -330,10 +330,6 @@ func (slice *plasmaSlice) initStores() error {
 
 	cfg.StorageDir = slice.storageDir
 	cfg.LogDir = slice.logDir
-
-	if slice.numPartitions != 1 {
-		cfg.LSSCleanerConcurrency = 1
-	}
 
 	var mode plasma.IOMode
 
