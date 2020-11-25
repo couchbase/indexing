@@ -1502,6 +1502,10 @@ func (m *DDLServiceMgr) transferScheduleCreateTokens(tokens []mc.ScheduleCreateT
 		logging.Infof("transferScheduleCreateTokens:: DefnId %v, old indexer %v, new indexer %v",
 			token.Definition.DefnId, token.IndexerId, m.indexerId)
 		token.IndexerId = m.indexerId
+
+		// Reset the nodes param for the token
+		resetNodesParam(&token)
+
 		err := mc.UpdateScheduleCreateToken(&token)
 		if err != nil {
 			return fmt.Errorf("Error (%v) in UpdateScheduleCreateToken for %v", err, token.Definition.DefnId)
@@ -1787,39 +1791,84 @@ func (s *ddlSettings) handleSettings(config common.Config) {
 //
 func transferScheduleTokens(keepNodes map[string]bool, clusterAddr string) error {
 
+	//
+	// transferScheduleTokens gets called on topology change triggered either
+	// due to rebalance or due to failover. So, nodes param specified by user
+	// may get invalidated.
+	//
+	// So, need to reset all the with nodes values from all the tokens.
+	//
+
 	if len(keepNodes) <= 0 {
 		// Nothing to do.
 		return nil
 	}
 
-	getTokensToTransfer := func() ([]*mc.ScheduleCreateToken, error) {
+	//
+	// To avoid multiple updates to a single token, transfer tokens will be
+	// undergo reset of nodes param during token transfer. On the other hand,
+	// the tokens which do not need any transfer, will undergo reset of nodes
+	// param before token transfer begins.
+	//
+
+	getTokensToUpdate := func() ([]*mc.ScheduleCreateToken, []*mc.ScheduleCreateToken, error) {
 		tokensToTransfer := make([]*mc.ScheduleCreateToken, 0)
+		tokensWithNodes := make([]*mc.ScheduleCreateToken, 0)
 
 		tokens, err := mc.ListAllScheduleCreateTokens()
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 
 		for _, token := range tokens {
 			if _, ok := keepNodes[string(token.IndexerId)]; !ok {
 				tokensToTransfer = append(tokensToTransfer, token)
+				continue
+			}
+
+			if len(token.Definition.Nodes) != 0 {
+				tokensWithNodes = append(tokensWithNodes, token)
+				continue
+			}
+
+			if token.Plan != nil {
+				if _, ok := token.Plan["nodes"]; ok {
+					tokensWithNodes = append(tokensWithNodes, token)
+					continue
+				}
 			}
 		}
 
-		return tokensToTransfer, nil
+		return tokensToTransfer, tokensWithNodes, nil
 	}
 
 	// TODO: Progress update for rebalace?
 
-	tokens, err := getTokensToTransfer()
+	transTokens, nodesTokens, err := getTokensToUpdate()
 	if err != nil {
 		logging.Errorf("transferScheduleTokens: Error in getTokensToTransfer %v", err)
 		return err
 	}
 
-	if len(tokens) <= 0 {
+	if len(transTokens) <= 0 && len(nodesTokens) == 0 {
 		return nil
 	}
+
+	// Reset the nodes param from the tokens
+	for _, token := range nodesTokens {
+		resetNodesParam(token)
+		err := mc.UpdateScheduleCreateToken(token)
+		if err != nil {
+			// Log error. Don't return the error just now. Let the overall transfer finish.
+			logging.Errorf("transferScheduleTokens: Error in UpdateScheduleCreateToken %v", err)
+		}
+	}
+
+	if len(transTokens) == 0 {
+		return nil
+	}
+
+	// Transfer the tokens.
 
 	getTransferMap := func(tokens []*mc.ScheduleCreateToken) map[string][]*mc.ScheduleCreateToken {
 
@@ -1848,7 +1897,7 @@ func transferScheduleTokens(keepNodes map[string]bool, clusterAddr string) error
 		return transferMap
 	}
 
-	transferMap := getTransferMap(tokens)
+	transferMap := getTransferMap(transTokens)
 	if len(transferMap) == 0 {
 		return nil
 	}
@@ -1978,4 +2027,14 @@ func verifySchedTransfer(transferMap map[string][]*mc.ScheduleCreateToken) error
 	}
 
 	return nil
+}
+
+func resetNodesParam(token *mc.ScheduleCreateToken) {
+	// Update index Definition
+	token.Definition.Nodes = nil
+
+	// Update the plan
+	if _, ok := token.Plan["nodes"]; ok {
+		delete(token.Plan, "nodes")
+	}
 }
