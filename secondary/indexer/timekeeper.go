@@ -2451,10 +2451,17 @@ func (tk *timekeeper) checkFlushTsValidForMerge(streamId common.StreamId, keyspa
 		return false, nil
 	}
 
+	tsList := tk.ss.streamKeyspaceIdTsListMap[streamId][keyspaceId]
+	lenInitTs := tsList.Len()
+
 	maintTsSeq = getSeqTsFromTsVbuuid(maintFlushTs)
 	if initTsSeq.GreaterThanEqual(maintTsSeq) {
 		return true, initFlushTs
-	} else {
+	} else if lenInitTs == 0 {
+		//If there are mutations pending for the INIT_STREAM, avoid the expensive
+		//call to get KV seqnum. Instead, check for stream merge based on
+		//the seqnum of received mutations.
+
 		//if this stream is on a collection
 		cid := tk.ss.streamKeyspaceIdCollectionId[streamId][keyspaceId]
 		if cid != "" {
