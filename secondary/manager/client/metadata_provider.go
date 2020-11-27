@@ -1267,7 +1267,7 @@ func (o *MetadataProvider) plan(defn *c.IndexDefn, plan map[string]interface{},
 
 	if len(defn.Nodes) == 0 {
 		// If user does not specify a node list, then get the node list where we have acquired locks.
-		nodes := make([]string, 0, len(watcherMap))
+		nodes = make([]string, 0, len(watcherMap))
 		for indexerId, _ := range watcherMap {
 			watcher, err := o.findWatcherByIndexerId(indexerId)
 			if err != nil {
