@@ -40,6 +40,11 @@ func init() {
 	plasma.SetLogger(&logging.SystemLogger)
 }
 
+const (
+	MAIN_INDEX plasma.InstanceGroup = iota + 1
+	BACK_INDEX
+)
+
 type plasmaSlice struct {
 	newBorn                               bool
 	get_bytes, insert_bytes, delete_bytes int64
@@ -68,6 +73,8 @@ type plasmaSlice struct {
 	idxDefnId  common.IndexDefnId
 	idxInstId  common.IndexInstId
 	idxPartnId common.PartitionId
+
+	flushActive uint32
 
 	status        SliceStatus
 	isActive      bool
@@ -243,7 +250,7 @@ func newPlasmaSlice(storage_dir string, log_dir string, path string, sliceId Sli
 	slice.setupWriters()
 
 	logging.Infof("plasmaSlice:NewplasmaSlice Created New Slice Id %v IndexInstId %v partitionId %v "+
-		"WriterThreads %v cleaner %v", sliceId, idxInstId, partitionId, slice.numWriters, slice.mainstore.LSSCleanerConcurrency)
+		"WriterThreads %v", sliceId, idxInstId, partitionId, slice.numWriters)
 
 	slice.setCommittedCount()
 	return slice, nil
@@ -324,10 +331,6 @@ func (slice *plasmaSlice) initStores() error {
 	cfg.StorageDir = slice.storageDir
 	cfg.LogDir = slice.logDir
 
-	if slice.numPartitions != 1 {
-		cfg.LSSCleanerConcurrency = 1
-	}
-
 	var mode plasma.IOMode
 
 	if slice.sysconf["plasma.useMmapReads"].Bool() {
@@ -393,7 +396,7 @@ func (slice *plasmaSlice) initStores() error {
 	go func() {
 		defer wg.Done()
 
-		slice.mainstore, mErr = plasma.New2(mCfg, slice.idxDefn.IndexOnCollection(), slice.newBorn)
+		slice.mainstore, mErr = plasma.New3(mCfg, slice.idxDefn.IndexOnCollection(), slice.newBorn, MAIN_INDEX)
 		if mErr != nil {
 			mErr = fmt.Errorf("Unable to initialize %s, err = %v", mCfg.File, mErr)
 			return
@@ -405,7 +408,7 @@ func (slice *plasmaSlice) initStores() error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			slice.backstore, bErr = plasma.New2(bCfg, slice.idxDefn.IndexOnCollection(), slice.newBorn)
+			slice.backstore, bErr = plasma.New3(bCfg, slice.idxDefn.IndexOnCollection(), slice.newBorn, BACK_INDEX)
 			if bErr != nil {
 				bErr = fmt.Errorf("Unable to initialize %s, err = %v", bCfg.File, bErr)
 				return
@@ -557,6 +560,7 @@ func (mdb *plasmaSlice) Insert(key []byte, docid []byte, meta *MutationMeta) err
 	}
 
 	atomic.AddInt64(&mdb.qCount, 1)
+	atomic.StoreUint32(&mdb.flushActive, 1)
 	mdb.cmdCh[int(meta.vbucket)%mdb.numWriters] <- mut
 	mdb.idxStats.numDocsFlushQueued.Add(1)
 	return mdb.fatalDbErr
@@ -566,6 +570,7 @@ func (mdb *plasmaSlice) Delete(docid []byte, meta *MutationMeta) error {
 	if !meta.firstSnap {
 		atomic.AddInt64(&mdb.qCount, 1)
 		mdb.idxStats.numDocsFlushQueued.Add(1)
+		atomic.StoreUint32(&mdb.flushActive, 1)
 		mdb.cmdCh[int(meta.vbucket)%mdb.numWriters] <- &indexMutation{op: opDelete, docid: docid}
 	}
 	return mdb.fatalDbErr
@@ -1861,6 +1866,9 @@ func (mdb *plasmaSlice) NewSnapshot(ts *common.TsVbuuid, commit bool) (SnapshotI
 
 	mdb.isDirty = false
 
+	// Coming here means that cmdCh is empty and flush has finished for this index
+	atomic.StoreUint32(&mdb.flushActive, 0)
+
 	newSnapshotInfo := &plasmaSnapshotInfo{
 		Ts:        ts,
 		Committed: commit,
@@ -1991,7 +1999,19 @@ func (mdb *plasmaSlice) IndexDefnId() common.IndexDefnId {
 
 // IsDirty returns true if there has been any change in
 // in the slice storage after last in-mem/persistent snapshot
+//
+// flushActive will be true if there are going to be any
+// messages in the cmdCh of slice after flush is done.
+// It will be cleared during snapshot generation as the
+// cmdCh would be empty at the time of snapshot generation
 func (mdb *plasmaSlice) IsDirty() bool {
+	flushActive := atomic.LoadUint32(&mdb.flushActive)
+	if flushActive == 0 { // No flush happening
+		return false
+	}
+
+	// Flush in progress - wait till all commands on cmdCh
+	// are processed
 	mdb.waitPersist()
 	return mdb.isDirty
 }

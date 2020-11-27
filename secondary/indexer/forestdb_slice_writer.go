@@ -24,7 +24,7 @@ import (
 
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/common/queryutil"
-	"github.com/couchbase/indexing/secondary/fdb"
+	forestdb "github.com/couchbase/indexing/secondary/fdb"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/natsort"
 )
@@ -230,6 +230,8 @@ type fdbSlice struct {
 	idxDefnId common.IndexDefnId
 	idxInstId common.IndexInstId
 
+	flushActive uint32
+
 	status        SliceStatus
 	isActive      bool
 	isDirty       bool
@@ -303,6 +305,7 @@ func (fdb *fdbSlice) Insert(rawKey []byte, docid []byte, meta *MutationMeta) err
 
 	fdb.idxStats.numDocsFlushQueued.Add(1)
 	atomic.AddInt64(&fdb.qCount, 1)
+	atomic.StoreUint32(&fdb.flushActive, 1)
 	fdb.cmdCh <- &indexItem{key: key, rawKey: rawKey, docid: docid}
 	return fdb.fatalDbErr
 }
@@ -315,6 +318,7 @@ func (fdb *fdbSlice) Delete(docid []byte, meta *MutationMeta) error {
 	fdb.updateSliceBuffers()
 	fdb.idxStats.numDocsFlushQueued.Add(1)
 	atomic.AddInt64(&fdb.qCount, 1)
+	atomic.StoreUint32(&fdb.flushActive, 1)
 	fdb.cmdCh <- docid
 	return fdb.fatalDbErr
 }
@@ -1176,6 +1180,9 @@ func (fdb *fdbSlice) NewSnapshot(ts *common.TsVbuuid, commit bool) (SnapshotInfo
 
 	fdb.isDirty = false
 
+	// Coming here means that cmdCh is empty and flush has finished for this index
+	atomic.StoreUint32(&fdb.flushActive, 0)
+
 	t0 := time.Now()
 	mainDbInfo, err := fdb.main[0].Info()
 	if err != nil {
@@ -1366,7 +1373,18 @@ func (fdb *fdbSlice) GetSnapshots() ([]SnapshotInfo, error) {
 
 // IsDirty returns true if there has been any change in
 // in the slice storage after last in-mem/persistent snapshot
+//
+// flushActive will be true if there are going to be any
+// messages in the cmdCh of slice after flush is done.
+// It will be cleared during snapshot generation as the
+// cmdCh would be empty at the time of snapshot generation
 func (fdb *fdbSlice) IsDirty() bool {
+	flushActive := atomic.LoadUint32(&fdb.flushActive)
+	if flushActive == 0 { // No flush happening
+		return false
+	}
+	// Flush in progress - wait till all commands on cmdCh
+	// are processed
 	fdb.waitPersist()
 	return fdb.isDirty
 }

@@ -352,11 +352,12 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, keyspaceId s
 					// Get Seqnos from TsVbuuid
 					ts := Timestamp(tsVbuuid.Seqnos)
 
-					//if the flush TS is greater than the last snapshot TS
-					//and slice has some changes. Skip only in-memory snapshot
-					//in case of unchanged data.
-					if latestSnapshot == nil || (ts.GreaterThan(snapTs) &&
-						(slice.IsDirty() || needsCommit)) || forceCommit {
+					//if flush is active for an instance and the flush TS is
+					// greater than the last snapshot TS and slice has some changes.
+					// Skip only in-memory snapshot in case of unchanged data.
+					if latestSnapshot == nil ||
+						((slice.IsDirty() || needsCommit) && ts.GreaterThan(snapTs)) ||
+						forceCommit {
 
 						newTsVbuuid := tsVbuuid
 						var err error

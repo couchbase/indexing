@@ -1730,6 +1730,15 @@ func (ss *StreamState) CloneCollectionIdMap(streamId common.StreamId) KeyspaceId
 
 }
 
+func (ss *StreamState) CloneKeyspaceIdRollbackTime() map[string]int64 {
+
+	outMap := make(map[string]int64)
+	for k, v := range ss.keyspaceIdRollbackTime {
+		outMap[k] = v
+	}
+	return outMap
+}
+
 func (ss *StreamState) setCountForOSOTs(streamId common.StreamId,
 	keyspaceId string, tsElem *TsListElem, hwtOSO *common.TsVbuuid) {
 
