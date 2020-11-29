@@ -75,7 +75,9 @@ func (m *RestoreContext) computeIndexLayout() (map[string][]*common.IndexDefn, e
 	m.current = current
 
 	// find index to restore
-	m.findIndexToRestore()
+	if err := m.findIndexToRestore(); err != nil {
+		return nil, err
+	}
 
 	// associate indexer from image to current cluster
 	m.buildIndexerMapping()
@@ -192,7 +194,7 @@ func (m *RestoreContext) cleanseBackupMetadata() {
 //
 // Pick out the indexes that are not yet created in the existing cluster.
 //
-func (m *RestoreContext) findIndexToRestore() {
+func (m *RestoreContext) findIndexToRestore() error {
 
 	defnId2NameMap := make(map[common.IndexDefnId]string)
 	instPartnCount := make(map[common.IndexInstId]int)
@@ -255,7 +257,31 @@ func (m *RestoreContext) findIndexToRestore() {
 				}
 			}
 
-			m.idxToRestore[common.IndexerId(indexerId)] = append(m.idxToRestore[common.IndexerId(indexerId)], index)
+			// Find if there is a replica in the existing cluster with the same replicaId (regardless of partition)
+			instId := common.IndexInstId(0)
+			anyReplica := findAnyReplica(m.current, index.Bucket, index.Name, index.Instance.ReplicaId)
+			if anyReplica != nil {
+				// There is already a replica with the same replicaId, then use the same InstId
+				instId = anyReplica.InstId
+
+			} else {
+				// This is a new replica to restore
+				if instId == common.IndexInstId(0) {
+					var err error
+					instId, err = common.NewIndexInstId()
+					if err != nil {
+						return err
+					}
+				}
+			}
+
+			temp := *index
+			temp.InstId = instId
+			if temp.Instance != nil {
+				temp.Instance.InstId = instId
+			}
+
+			m.idxToRestore[common.IndexerId(indexerId)] = append(m.idxToRestore[common.IndexerId(indexerId)], &temp)
 			instPartnCount[index.InstId] = instPartnCount[index.InstId] + 1
 		}
 	}
@@ -282,6 +308,8 @@ func (m *RestoreContext) findIndexToRestore() {
 
 		m.idxToRestore[indexerId] = newIndexes
 	}
+
+	return nil
 }
 
 //
@@ -527,6 +555,24 @@ func findMatchingReplica(current *planner.Plan, bucket string, name string, part
 		for _, index := range indexers.Indexes {
 			if index.Instance != nil {
 				if index.Bucket == bucket && index.Name == name && index.PartnId == partnId && index.Instance.ReplicaId == replicaId {
+					return index
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+//
+// Find any replica in the metadata, regardless of its partitionId, version or RState
+//
+func findAnyReplica(current *planner.Plan, bucket string, name string, replicaId int) *planner.IndexUsage {
+
+	for _, indexers := range current.Placement {
+		for _, index := range indexers.Indexes {
+			if index.Instance != nil {
+				if index.Bucket == bucket && index.Name == name && index.Instance.ReplicaId == replicaId {
 					return index
 				}
 			}
