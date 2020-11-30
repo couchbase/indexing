@@ -452,15 +452,16 @@ func FormatIndexPartnDisplayName(name string, replicaId int, partitionId int, is
 	return name
 }
 
-//StreamId represents the possible mutation streams
+// StreamId represents the possible logical mutation streams (IDs defined below).
 type StreamId uint16
 
+// Logical stream types (StreamId values)
 const (
-	NIL_STREAM StreamId = iota
+	NIL_STREAM StreamId = iota // must be first (for loops)
 	MAINT_STREAM
 	CATCHUP_STREAM
 	INIT_STREAM
-	ALL_STREAMS
+	ALL_STREAMS // a dummy; must be last (for loops)
 )
 
 func (s StreamId) String() string {

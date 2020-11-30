@@ -245,7 +245,8 @@ func (f *flusher) flushQueue(q MutationQueue, streamId common.StreamId, keyspace
 }
 
 //flushSingleVbucket is the actual implementation which flushes the given queue
-//for a single vbucket till stop signal
+//for a single vbucket till stop signal.
+//(Currently not used.)
 func (f *flusher) flushSingleVbucket(q MutationQueue, streamId common.StreamId,
 	keyspaceId string, vbucket Vbucket, persist bool, stopch StopChannel,
 	workerMsgCh MsgChannel, wg *sync.WaitGroup) {
@@ -262,8 +263,8 @@ func (f *flusher) flushSingleVbucket(q MutationQueue, streamId common.StreamId,
 
 	ok := true
 	var mut *MutationKeys
+	keyspaceStats := f.stats.keyspaceStats[streamId][keyspaceId]
 
-	bucketStats := f.stats.buckets[mut.meta.keyspaceId]
 	//Process till supervisor asks to stop on the channel
 	for ok {
 		select {
@@ -274,8 +275,9 @@ func (f *flusher) flushSingleVbucket(q MutationQueue, streamId common.StreamId,
 					continue
 				}
 				f.flushSingleMutation(mut, streamId)
-				if bucketStats != nil {
-					bucketStats.mutationQueueSize.Add(-1)
+				mut.Free()
+				if keyspaceStats != nil {
+					keyspaceStats.mutationQueueSize.Add(-1)
 				}
 			}
 		case <-stopch:
@@ -285,7 +287,7 @@ func (f *flusher) flushSingleVbucket(q MutationQueue, streamId common.StreamId,
 	}
 }
 
-//flushSingleVbucket is the actual implementation which flushes the given queue
+//flushSingleVbucketUptoSeqno is the actual implementation which flushes the given queue
 //for a single vbucket till the given seqno or till the stop signal(whichever is earlier)
 func (f *flusher) flushSingleVbucketUptoSeqno(q MutationQueue, streamId common.StreamId,
 	keyspaceId string, vbucket Vbucket, seqno uint64, persist bool, stopch StopChannel,
@@ -305,7 +307,7 @@ func (f *flusher) flushSingleVbucketUptoSeqno(q MutationQueue, streamId common.S
 
 	ok := true
 	var mut *MutationKeys
-	bucketStats := f.stats.buckets[keyspaceId]
+	keyspaceStats := f.stats.keyspaceStats[streamId][keyspaceId]
 
 	//Read till the channel is closed by queue indicating it has sent all the
 	//sequence numbers requested
@@ -319,8 +321,8 @@ func (f *flusher) flushSingleVbucketUptoSeqno(q MutationQueue, streamId common.S
 				}
 				f.flushSingleMutation(mut, streamId)
 				mut.Free()
-				if bucketStats != nil {
-					bucketStats.mutationQueueSize.Add(-1)
+				if keyspaceStats != nil {
+					keyspaceStats.mutationQueueSize.Add(-1)
 				}
 			}
 		case <-errch:
@@ -351,7 +353,7 @@ func (f *flusher) flushSingleVbucketN(q MutationQueue, streamId common.StreamId,
 
 	ok := true
 	var mut *MutationKeys
-	bucketStats := f.stats.buckets[keyspaceId]
+	keyspaceStats := f.stats.keyspaceStats[streamId][keyspaceId]
 
 	//Read till the channel is closed by queue indicating it has sent all the
 	//sequence numbers requested
@@ -365,8 +367,8 @@ func (f *flusher) flushSingleVbucketN(q MutationQueue, streamId common.StreamId,
 				}
 				f.flushSingleMutation(mut, streamId)
 				mut.Free()
-				if bucketStats != nil {
-					bucketStats.mutationQueueSize.Add(-1)
+				if keyspaceStats != nil {
+					keyspaceStats.mutationQueueSize.Add(-1)
 				}
 			}
 		case <-errch:
@@ -488,7 +490,7 @@ func (f *flusher) processUpsert(mut *Mutation, docid []byte, meta *MutationMeta)
 	}
 
 	if partnInst, ok := partnInstMap[partnId]; ok {
-		slice := partnInst.Sc.GetSliceByIndexKey(common.IndexKey(mut.key))
+		slice := partnInst.Sc.GetSliceByIndexKey(mut.key)
 		if err := slice.Insert(mut.key, docid, meta); err != nil {
 			logging.Errorf("Flusher::processUpsert Error indexing Key: %s "+
 				"docid: %s in Slice: %v. Error: %v. Skipped.",
@@ -519,7 +521,7 @@ func (f *flusher) processDelete(mut *Mutation, docid []byte, meta *MutationMeta)
 	}
 
 	for _, partnInst := range partnInstMap {
-		slice := partnInst.Sc.GetSliceByIndexKey(common.IndexKey(mut.key))
+		slice := partnInst.Sc.GetSliceByIndexKey(mut.key)
 		if err := slice.Delete(docid, meta); err != nil {
 			logging.Errorf("Flusher::processDelete Error Deleting DocId: %v "+
 				"from Slice: %v", logging.TagStrUD(docid), slice.Id())
@@ -546,7 +548,7 @@ func (f *flusher) processUpsertDelete(mut *Mutation, docid []byte, meta *Mutatio
 
 	partnId := idxInst.Pc.GetPartitionIdByPartitionKey(mut.partnkey)
 	if partnInst, ok := partnInstMap[partnId]; ok {
-		slice := partnInst.Sc.GetSliceByIndexKey(common.IndexKey(mut.key))
+		slice := partnInst.Sc.GetSliceByIndexKey(mut.key)
 		if err := slice.Delete(docid, meta); err != nil {
 			logging.Errorf("Flusher::processDelete Error Deleting DocId: %v "+
 				"from Slice: %v", logging.TagStrUD(docid), slice.Id())

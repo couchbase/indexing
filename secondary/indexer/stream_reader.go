@@ -881,17 +881,16 @@ func (w *streamWorker) handleSingleMutation(mut *MutationKeys, stopch StopChanne
 		q.queue.Enqueue(mut, mut.meta.vbucket, stopch)
 
 		stats := w.reader.stats.Get()
-		//TODO Collections stats should work with keyspaceId
-		if rstats, ok := stats.buckets[mut.meta.keyspaceId]; ok {
-			rstats.mutationQueueSize.Add(1)
-			rstats.numMutationsQueued.Add(1)
+		keyspaceStats := stats.keyspaceStats[w.streamId][mut.meta.keyspaceId]
+		if keyspaceStats != nil {
+			keyspaceStats.mutationQueueSize.Add(1)
+			keyspaceStats.numMutationsQueued.Add(1)
 		}
 
 	} else {
 		logging.Warnf("MutationStreamReader::handleSingleMutation got mutation for "+
 			"unknown keyspaceId:. Skipped  %v", logging.TagUD(mut))
 	}
-
 }
 
 //initKeyspaceIdFilter initializes the keyspaceId filter
@@ -935,8 +934,9 @@ func (w *streamWorker) initKeyspaceIdFilter(keyspaceIdFilter map[string]*common.
 
 			//reset stat for bucket
 			stats := w.reader.stats.Get()
-			if rstats, ok := stats.buckets[b]; ok {
-				rstats.mutationQueueSize.Set(0)
+			keyspaceStats := stats.keyspaceStats[w.streamId][b]
+			if keyspaceStats != nil {
+				keyspaceStats.mutationQueueSize.Set(0)
 			}
 		}
 	}
@@ -967,7 +967,7 @@ func (w *streamWorker) setKeyspaceIdFilter(meta *MutationMeta) {
 	defer w.lock.Unlock()
 
 	if filter, ok := w.keyspaceIdFilter[meta.keyspaceId]; ok {
-		filter.Seqnos[meta.vbucket] = uint64(meta.seqno)
+		filter.Seqnos[meta.vbucket] = meta.seqno
 		filter.Vbuuids[meta.vbucket] = uint64(meta.vbuuid)
 		logging.Tracef("MutationStreamReader::setKeyspaceIdFilter Vbucket %v "+
 			"Seqno %v KeyspaceId %v Stream %v", meta.vbucket, meta.seqno, meta.keyspaceId, w.streamId)
@@ -1013,14 +1013,14 @@ func (w *streamWorker) checkAndSetKeyspaceIdFilterDefault(meta *MutationMeta) (b
 			return true, false
 		}
 
-		if uint64(meta.seqno) < filter.Snapshots[meta.vbucket][0] ||
-			uint64(meta.seqno) > filter.Snapshots[meta.vbucket][1] {
+		if meta.seqno < filter.Snapshots[meta.vbucket][0] ||
+			meta.seqno > filter.Snapshots[meta.vbucket][1] {
 
 			logging.Debugf("MutationStreamReader::checkAndSetKeyspaceIdFilter Out-of-bound Seqno. "+
 				"Snapshot %v-%v for vb %v %v %v. New seqno %v vbuuid %v.  Current Seqno %v vbuuid %v",
 				filter.Snapshots[meta.vbucket][0], filter.Snapshots[meta.vbucket][1],
 				meta.vbucket, meta.keyspaceId, w.streamId,
-				uint64(meta.seqno), uint64(meta.vbuuid),
+				meta.seqno, uint64(meta.vbuuid),
 				filter.Seqnos[meta.vbucket], filter.Vbuuids[meta.vbucket])
 
 			w.keyspaceIdFirstSnap[meta.keyspaceId][meta.vbucket] = false //for safety
@@ -1034,9 +1034,9 @@ func (w *streamWorker) checkAndSetKeyspaceIdFilterDefault(meta *MutationMeta) (b
 		//a keyspace gets deleted from stream in case of multiple keyspaceIds.
 		//The vbuuid doesn't get reset after StreamEnd/StreamBegin. The
 		//filter can be extended for that check if required.
-		if uint64(meta.seqno) > filter.Seqnos[meta.vbucket] &&
+		if meta.seqno > filter.Seqnos[meta.vbucket] &&
 			filter.Vbuuids[meta.vbucket] != 0 {
-			filter.Seqnos[meta.vbucket] = uint64(meta.seqno)
+			filter.Seqnos[meta.vbucket] = meta.seqno
 			filter.Vbuuids[meta.vbucket] = uint64(meta.vbuuid)
 			w.keyspaceIdSyncDue[meta.keyspaceId] = true
 			return false, w.keyspaceIdFirstSnap[meta.keyspaceId][meta.vbucket]
@@ -1078,8 +1078,8 @@ func (w *streamWorker) checkAndSetKeyspaceIdFilterOSO(meta *MutationMeta) (bool,
 		filterOSO.Vbuuids[meta.vbucket]++
 
 		//Seqnos is used to store the highest seqno in OSO filter
-		if uint64(meta.seqno) > filterOSO.Seqnos[meta.vbucket] {
-			filterOSO.Seqnos[meta.vbucket] = uint64(meta.seqno)
+		if meta.seqno > filterOSO.Seqnos[meta.vbucket] {
+			filterOSO.Seqnos[meta.vbucket] = meta.seqno
 		}
 
 		filter.Vbuuids[meta.vbucket] = uint64(meta.vbuuid)

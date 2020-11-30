@@ -2578,8 +2578,9 @@ func (tk *timekeeper) generateNewStabilityTS(streamId common.StreamId,
 			tsList := tk.ss.streamKeyspaceIdTsListMap[streamId][keyspaceId]
 			tsList.PushBack(tsElem)
 			stats := tk.stats.Get()
-			if stat, ok := stats.buckets[keyspaceId]; ok {
-				stat.tsQueueSize.Set(int64(tsList.Len()))
+			keyspaceStats := stats.keyspaceStats[streamId][keyspaceId]
+			if keyspaceStats != nil {
+				keyspaceStats.tsQueueSize.Set(int64(tsList.Len()))
 			}
 
 		}
@@ -2599,7 +2600,6 @@ func (tk *timekeeper) generateNewStabilityTS(streamId common.StreamId,
 			}
 		}
 	}
-
 }
 
 //merge a new Ts with one already pending for the stream-bucket,
@@ -2697,12 +2697,12 @@ func (tk *timekeeper) processPendingTS(streamId common.StreamId, keyspaceId stri
 		tk.sendNewStabilityTS(tsElem, keyspaceId, streamId)
 		//update tsQueueSize when processing queued TS
 		stats := tk.stats.Get()
-		if stat, ok := stats.buckets[keyspaceId]; ok {
-			stat.tsQueueSize.Set(int64(tsList.Len()))
+		keyspaceStats := stats.keyspaceStats[streamId][keyspaceId]
+		if keyspaceStats != nil {
+			keyspaceStats.tsQueueSize.Set(int64(tsList.Len()))
 		}
 		return true
 	}
-
 	return false
 }
 
@@ -2893,11 +2893,11 @@ func (tk *timekeeper) setSnapshotType(streamId common.StreamId, keyspaceId strin
 		}
 	} else {
 		stats := tk.stats.Get()
-		if stat, ok := stats.buckets[keyspaceId]; ok {
-			stat.numNonAlignTS.Add(1)
+		keyspaceStats := stats.keyspaceStats[streamId][keyspaceId]
+		if keyspaceStats != nil {
+			keyspaceStats.numNonAlignTS.Add(1)
 		}
 	}
-
 }
 
 //checkMergeCandidateTs check if a TS is a candidate for merge with

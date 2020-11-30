@@ -207,6 +207,12 @@ const (
 
 var gEncodeCompatMode EncodeCompatMode
 
+// SplitKeyspaceId will return all three parts of a
+// bucket:scope:collection key. If only the bucket name is
+// present, the last two return values will be empty.
+// If you only need the bucket name, use GetBucketFromKeyspaceId
+// instead as it will perform better, especially when the
+// input is a 3-part key.
 func SplitKeyspaceId(keyspaceId string) (string, string, string) {
 
 	var ret []string
@@ -222,7 +228,9 @@ func SplitKeyspaceId(keyspaceId string) (string, string, string) {
 
 }
 
+// GetBucketFromKeyspaceId will return the bucket name from
+// either a 1-part ("bucket") or 3-part ("bucket:scope:collection")
+// key. It is optimized to stop splitting at the first colon.
 func GetBucketFromKeyspaceId(keyspaceId string) string {
-	b, _, _ := SplitKeyspaceId(keyspaceId)
-	return b
+	return strings.SplitN(keyspaceId, ":", 2)[0]
 }

@@ -1524,9 +1524,7 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 
 	partitions := indexInst.Pc.GetAllPartitions()
 	for _, partnDefn := range partitions {
-		idx.stats.AddPartition(indexInst.InstId, indexInst.Defn.Bucket, indexInst.Defn.Scope,
-			indexInst.Defn.Collection, indexInst.Defn.Name, indexInst.ReplicaId,
-			partnDefn.GetPartitionId(), indexInst.Defn.IsArrayIndex)
+		idx.stats.AddPartitionStats(indexInst, partnDefn.GetPartitionId())
 	}
 
 	//allocate partition/slice
@@ -2149,7 +2147,7 @@ func (idx *indexer) mergePartition(bucket string, streamId common.StreamId, sour
 }
 
 //
-// Clean up index instance without removing the data.
+// cleanupIndexAfterMerge cleans up the index instance w/o removing the data.
 // Note that the source instance is already marked as DELETED in metadata
 // (through MsgClustMgrMergePartition).
 //
@@ -2170,7 +2168,7 @@ func (idx *indexer) cleanupIndexAfterMerge(inst common.IndexInst, merged map[com
 	delete(idx.indexPartnMap, inst.InstId)
 
 	// remove stats
-	idx.stats.RemoveIndex(inst.InstId)
+	idx.stats.RemoveIndexStats(inst)
 
 	// Update index maps with this index
 	msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
@@ -2715,7 +2713,6 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 	} else {
 		clientCh <- &MsgSuccess{}
 	}
-
 }
 
 func (idx *indexer) handleDropIndex(msg Message) (resp Message) {
@@ -2783,7 +2780,7 @@ func (idx *indexer) handleDropIndex(msg Message) (resp Message) {
 
 	}
 
-	idx.stats.RemoveIndex(indexInst.InstId)
+	idx.stats.RemoveIndexStats(indexInst)
 
 	//if the index state is Created/Ready/Deleted, only data cleanup is
 	//required. No stream updates are required.
@@ -2843,7 +2840,6 @@ func (idx *indexer) handleDropIndex(msg Message) (resp Message) {
 		keyspaceId: keyspaceId,
 	}
 	return
-
 }
 
 func (idx *indexer) handlePrepareRecovery(msg Message) {
@@ -4049,6 +4045,9 @@ func (idx *indexer) Shutdown() Message {
 	return nil
 }
 
+// sendStreamUpdateForBuildIndex starts the logical stream for a given keyspaceId
+// in the particular case of an index build. (startKeyspaceIdStream does this for
+// all other cases.)
 func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstId,
 	buildStream common.StreamId, keyspaceId string, cid string,
 	clusterVer uint64, buildTs Timestamp, clientCh MsgChannel) bool {
@@ -4104,6 +4103,9 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 		collectionId:       cid,
 		collectionAware:    collectionAware,
 		enableOSO:          enableOSO}
+
+	// Create the corresponding KeyspaceStats object before starting the stream
+	idx.stats.AddKeyspaceStats(buildStream, keyspaceId)
 
 	//send stream update to timekeeper
 	if resp := idx.sendStreamUpdateToWorker(cmd, idx.tkCmdCh,
@@ -4268,6 +4270,8 @@ func (idx *indexer) sendMsgToKVSender(cmd Message) {
 	<-idx.kvSenderCmdCh
 }
 
+// sendStreamUpdateToWorker synchronously sends a message to a worker and awaits the
+// reply or channel death, logging and returning an error unless it receives a success message.
 func (idx *indexer) sendStreamUpdateToWorker(cmd Message, workerCmdCh MsgChannel,
 	workerStr string) Message {
 
@@ -4308,6 +4312,12 @@ func (idx *indexer) sendStreamUpdateForDropIndex(indexInst common.IndexInst,
 		indexInst.Defn.BucketUUID, indexInst.Stream, indexInst.State, clientCh)
 }
 
+// removeIndexesFromStream is called for a list of indexes that are all in the same keyspace and
+// are all assumed to be in DELETED state.
+// o If any active indexes still exist in that keyspace, it removes only the listed indexes from
+//   the stream. Since these are in DELETED state, the active indexes must be other ones, so the
+//   keyspace is kept alive.
+// o Else the request for DCP records for the entire keyspace is removed from the logical stream.
 func (idx *indexer) removeIndexesFromStream(indexList []common.IndexInst,
 	keyspaceId string,
 	bucketUUID string,
@@ -4348,6 +4358,7 @@ func (idx *indexer) removeIndexesFromStream(indexList []common.IndexInst,
 		}
 
 		sessionId := idx.getCurrentSessionId(streamId, keyspaceId)
+		isRemoveKeyspace := false
 		if idx.checkKeyspaceIdExistsInStream(keyspaceId, streamId, false) {
 
 			cmd = &MsgStreamUpdate{mType: REMOVE_INDEX_LIST_FROM_STREAM,
@@ -4365,6 +4376,7 @@ func (idx *indexer) removeIndexesFromStream(indexList []common.IndexInst,
 				abortRecovery: true,
 			}
 			idx.setStreamKeyspaceIdState(streamId, keyspaceId, STREAM_INACTIVE)
+			isRemoveKeyspace = true
 		}
 
 		//send stream update to mutation manager
@@ -4385,6 +4397,11 @@ func (idx *indexer) removeIndexesFromStream(indexList []common.IndexInst,
 			}
 			respErr := resp.(*MsgError).GetError()
 			common.CrashOnError(respErr.cause)
+		}
+
+		// If removing entire keyspace, also remove the stats for it
+		if isRemoveKeyspace {
+			idx.stats.RemoveKeyspaceStats(streamId, keyspaceId)
 		}
 
 		reqLock := idx.acquireStreamRequestLock(keyspaceId, streamId)
@@ -4933,7 +4950,7 @@ func (idx *indexer) processBuildDoneCatchup(streamId common.StreamId, keyspaceId
 	//allow convergence with INIT_STREAM.
 
 	//use bucket as keyspaceId for MAINT_STREAM
-	bucket, _, _ := SplitKeyspaceId(keyspaceId)
+	bucket := GetBucketFromKeyspaceId(keyspaceId)
 	cmd := &MsgStreamUpdate{mType: ADD_INDEX_LIST_TO_STREAM,
 		streamId:   common.MAINT_STREAM,
 		keyspaceId: bucket,
@@ -5118,6 +5135,7 @@ func (idx *indexer) processBuildDoneNoCatchup(streamId common.StreamId,
 	//can be set to inactive.
 	idx.setStreamKeyspaceIdState(streamId, keyspaceId, STREAM_INACTIVE)
 	idx.cleanupStreamKeyspaceIdState(streamId, keyspaceId)
+	idx.stats.RemoveKeyspaceStats(streamId, keyspaceId)
 
 	reqLock := idx.acquireStreamRequestLock(keyspaceId, streamId)
 	go func(reqLock *kvRequest) {
@@ -5221,6 +5239,8 @@ func (idx *indexer) handleMergeStream(msg Message) {
 	}
 }
 
+// handleMergeInitStream switches index maintenance for a keyspaceId from
+// one stream to another (e.g. INIT_STREAM or CATCHUP_STREAM to MAINT_STREAM).
 func (idx *indexer) handleMergeInitStream(msg Message) {
 
 	keyspaceId := msg.(*MsgTKMergeStream).GetKeyspaceId()
@@ -5289,9 +5309,10 @@ func (idx *indexer) handleMergeInitStream(msg Message) {
 	//can be set to inactive.
 	idx.setStreamKeyspaceIdState(streamId, keyspaceId, STREAM_INACTIVE)
 	idx.cleanupStreamKeyspaceIdState(streamId, keyspaceId)
+	idx.stats.RemoveKeyspaceStats(streamId, keyspaceId)
 
 	//enable flush for this keyspaceId in MAINT_STREAM
-	bucket, _, _ := SplitKeyspaceId(keyspaceId)
+	bucket := GetBucketFromKeyspaceId(keyspaceId)
 	idx.tkCmdCh <- &MsgTKToggleFlush{mType: TK_ENABLE_FLUSH,
 		streamId:   common.MAINT_STREAM,
 		keyspaceId: bucket}
@@ -5388,8 +5409,7 @@ func (idx *indexer) cleanupMaintStream(keyspaceId string) {
 	}
 }
 
-//checkKeyspaceIdExistsInStream returns true if there is no index in the given stream
-//which belongs to the given keyspaceId, else false
+// checkKeyspaceIdExistsInStream determines whether the stream has any index we need DCP records for.
 func (idx *indexer) checkKeyspaceIdExistsInStream(keyspaceId string, streamId common.StreamId, checkDelete bool) bool {
 
 	//check if any index of the given keyspaceId is in the Stream
@@ -5462,6 +5482,8 @@ func (idx *indexer) getIndexListForKeyspaceIdAndStream(streamId common.StreamId,
 
 }
 
+// stopKeyspaceIdStream removes the request to receive DCP records of given keyspaceId
+// from a given streamId. Used during recovery so does not call cleanupStreamKeyspaceIdState.
 func (idx *indexer) stopKeyspaceIdStream(streamId common.StreamId, keyspaceId string) {
 
 	sessionId := idx.getCurrentSessionId(streamId, keyspaceId)
@@ -5505,6 +5527,8 @@ func (idx *indexer) stopKeyspaceIdStream(streamId common.StreamId, keyspaceId st
 		common.CrashOnError(respErr.cause)
 	}
 
+	idx.stats.RemoveKeyspaceStats(streamId, keyspaceId)
+
 	idx.setStreamKeyspaceIdCurrRequest(streamId, keyspaceId, cmd, stopCh, sessionId)
 
 	reqLock := idx.acquireStreamRequestLock(keyspaceId, streamId)
@@ -5545,6 +5569,9 @@ func (idx *indexer) stopKeyspaceIdStream(streamId common.StreamId, keyspaceId st
 	}(reqLock)
 }
 
+// startKeyspaceIdStream starts the logical stream for a given keyspaceId (except for the
+// case of an index build, where this is done by sendStreamUpdateForBuildIndex instead).
+// Used during recovery.
 func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId string,
 	restartTs *common.TsVbuuid, retryTs *common.TsVbuuid, allNilSnapsOnWarmup map[string]bool,
 	inRepair bool, async bool, sessionId uint64) {
@@ -5679,6 +5706,9 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 		collectionId:       cid,
 		collectionAware:    collectionAware,
 		enableOSO:          enableOSO}
+
+	// Create the corresponding KeyspaceStats object before starting the stream
+	idx.stats.AddKeyspaceStats(streamId, keyspaceId)
 
 	//send stream update to timekeeper
 	if resp := idx.sendStreamUpdateToWorker(cmd, idx.tkCmdCh,
@@ -6449,14 +6479,10 @@ func (idx *indexer) initFromPersistedState() error {
 	for _, inst := range idx.indexInstMap {
 		if inst.State != common.INDEX_STATE_DELETED {
 			for _, partnDefn := range inst.Pc.GetAllPartitions() {
-				idx.stats.AddPartition(inst.InstId, inst.Defn.Bucket, inst.Defn.Scope,
-					inst.Defn.Collection, inst.Defn.Name, inst.ReplicaId, partnDefn.GetPartitionId(),
-					inst.Defn.IsArrayIndex)
+				idx.stats.AddPartitionStats(inst, partnDefn.GetPartitionId())
 
 				// Since bootstrapStats does not have index stats yet, initialize index and partition stats
-				bootstrapStats.AddPartition(inst.InstId, inst.Defn.Bucket, inst.Defn.Scope,
-					inst.Defn.Collection, inst.Defn.Name, inst.ReplicaId, partnDefn.GetPartitionId(),
-					inst.Defn.IsArrayIndex)
+				bootstrapStats.AddPartitionStats(inst, partnDefn.GetPartitionId())
 			}
 		}
 	}
@@ -6494,7 +6520,7 @@ func (idx *indexer) initFromPersistedState() error {
 		// If there are no partitions left, don't add this index instance to the indexInstMap
 		if len(failedPartnInstances) != 0 && len(inst.Pc.GetAllPartitions()) == 0 {
 			logging.Infof("Indexer::initFromPersistedState Skipping index instance %v", inst.InstId)
-			idx.stats.RemoveIndex(inst.InstId)
+			idx.stats.RemoveIndexStats(inst)
 			delete(idx.indexInstMap, inst.InstId)
 			delete(idx.indexPartnMap, inst.InstId)
 			continue
@@ -7236,20 +7262,23 @@ func (idx *indexer) makeRestartTs(streamId common.StreamId) (map[string]*common.
 	return restartTs, allNilSnaps
 }
 
+// closeAllStreams sequentially sends CLOSE_STREAM commands to KVSender for MAINT_STREAM
+// and INIT_STREAM and waits forever for a response for each. It is only called during
+// indexer bootstrap to close any outstanding streams in projectors.
 func (idx *indexer) closeAllStreams() {
 
 	respCh := make(MsgChannel)
 
-	for i := 0; i < int(common.ALL_STREAMS); i++ {
+	for streamId := common.NIL_STREAM; streamId < common.ALL_STREAMS; streamId++ {
 
 		//skip for nil and catchup stream
-		if i == int(common.NIL_STREAM) ||
-			i == int(common.CATCHUP_STREAM) {
+		if streamId == common.NIL_STREAM ||
+			streamId == common.CATCHUP_STREAM {
 			continue
 		}
 
 		cmd := &MsgStreamUpdate{mType: CLOSE_STREAM,
-			streamId: common.StreamId(i),
+			streamId: streamId,
 			respCh:   respCh,
 		}
 
@@ -7272,17 +7301,18 @@ func (idx *indexer) closeAllStreams() {
 					if count > MAX_PROJ_RETRY {
 						logging.Fatalf("Indexer::closeAllStreams Stream %v "+
 							"Projector health check needed, indexer can not proceed, Error received %v. Retrying (%v).",
-							common.StreamId(i), respErr.cause, count)
+							streamId, respErr.cause, count)
 					} else {
 						logging.Warnf("Indexer::closeAllStreams Stream %v "+
 							"Projector health check needed, indexer can not proceed, Error received %v. Retrying (%v).",
-							common.StreamId(i), respErr.cause, count)
+							streamId, respErr.cause, count)
 					}
 
 					time.Sleep(KV_RETRY_INTERVAL * time.Millisecond)
 				}
 			}
 		}
+		idx.stats.RemoveKeyspaceStatsAll(streamId)
 	}
 }
 
@@ -7569,7 +7599,7 @@ func (idx *indexer) bulkUpdateBuildTs(instIdList []common.IndexInstId,
 		idxInst := idx.indexInstMap[instId]
 		buildTs := make([]uint64, len(buildTs))
 		for i, ts := range buildTs {
-			buildTs[i] = uint64(ts)
+			buildTs[i] = ts
 		}
 		idxInst.BuildTs = buildTs
 		idx.indexInstMap[instId] = idxInst
@@ -7734,7 +7764,7 @@ func (idx *indexer) handleResetStats() {
 }
 
 func (idx *indexer) memoryUsedStorage() int64 {
-	mem_used := int64(forestdb.BufferCacheUsed()) + int64(memdb.MemoryInUse()) + int64(plasma.MemoryInUse()) + int64(nodetable.MemoryInUse())
+	mem_used := int64(forestdb.BufferCacheUsed()) + memdb.MemoryInUse() + plasma.MemoryInUse() + nodetable.MemoryInUse()
 	return mem_used
 }
 
@@ -8009,7 +8039,7 @@ func (idx *indexer) deleteIndexInstOnDeletedKeyspace(bucket,
 
 				instIdList = append(instIdList, index.InstId)
 
-				idx.stats.RemoveIndex(index.InstId)
+				idx.stats.RemoveIndexStats(index)
 			}
 		}
 
@@ -8024,10 +8054,9 @@ func (idx *indexer) deleteIndexInstOnDeletedKeyspace(bucket,
 
 				instIdList = append(instIdList, index.InstId)
 
-				idx.stats.RemoveIndex(index.InstId)
+				idx.stats.RemoveIndexStats(index)
 			}
 		}
-
 	}
 	return instIdList
 }
@@ -8889,6 +8918,9 @@ func (idx *indexer) checkStreamRequestPending(
 	return false
 }
 
+// cleanupStreamKeyspaceIdState
+// Recovery flows do not call this; streams are stopped and started
+// during recovery without state cleanup.
 func (idx *indexer) cleanupStreamKeyspaceIdState(
 	streamId common.StreamId,
 	keyspaceId string) {
@@ -8905,6 +8937,9 @@ func (idx *indexer) cleanupStreamKeyspaceIdRecoveryState(
 	delete(idx.streamKeyspaceIdRetryTs[streamId], keyspaceId)
 }
 
+// cleanupAllStreamKeyspaceIdState
+// Recovery flows do not call this; streams are stopped and started
+// during recovery without state cleanup.
 func (idx *indexer) cleanupAllStreamKeyspaceIdState(
 	streamId common.StreamId,
 	keyspaceId string) {
@@ -8942,6 +8977,8 @@ func (idx *indexer) prepareStreamKeyspaceIdForFreshStart(
 
 	idx.mutMgrCmdCh <- cmd
 	<-idx.mutMgrCmdCh
+
+	idx.stats.RemoveKeyspaceStats(streamId, keyspaceId)
 }
 
 func (idx *indexer) monitorKVNodes() {
