@@ -3829,9 +3829,13 @@ func (idx *indexer) processCollectionDrop(streamId common.StreamId,
 
 }
 
-func (idx indexer) newIndexInstMsg(m common.IndexInstMap) *MsgUpdateInstMap {
+func (idx *indexer) newIndexInstMsg(m common.IndexInstMap) *MsgUpdateInstMap {
 	return &MsgUpdateInstMap{indexInstMap: m, stats: idx.stats.Clone(),
 		rollbackTimes: idx.keyspaceIdRollbackTimes}
+}
+
+func (idx *indexer) newKeyspaceStatsMsg() *MsgUpdateKeyspaceStatsMap {
+	return &MsgUpdateKeyspaceStatsMap{keyspaceStatsMap: idx.stats.GetKeyspaceStats().Clone()}
 }
 
 func (idx *indexer) cleanupIndexData(indexInst common.IndexInst,
@@ -4106,6 +4110,7 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 
 	// Create the corresponding KeyspaceStats object before starting the stream
 	idx.stats.AddKeyspaceStats(buildStream, keyspaceId)
+	idx.distributeKeyspaceStatsMapsToWorkers()
 
 	//send stream update to timekeeper
 	if resp := idx.sendStreamUpdateToWorker(cmd, idx.tkCmdCh,
@@ -4402,6 +4407,7 @@ func (idx *indexer) removeIndexesFromStream(indexList []common.IndexInst,
 		// If removing entire keyspace, also remove the stats for it
 		if isRemoveKeyspace {
 			idx.stats.RemoveKeyspaceStats(streamId, keyspaceId)
+			idx.distributeKeyspaceStatsMapsToWorkers()
 		}
 
 		reqLock := idx.acquireStreamRequestLock(keyspaceId, streamId)
@@ -4594,6 +4600,48 @@ func (idx *indexer) sendUpdatedIndexMapToWorker(msgUpdateIndexInstMap Message,
 
 	return nil
 
+}
+
+// distributeKeyspaceStatsMapsToWorkers sends a clone of current KeyspaceStatsMap to local consumers that need it.
+func (idx *indexer) distributeKeyspaceStatsMapsToWorkers() error {
+	msg := idx.newKeyspaceStatsMsg()
+
+	// Mutation Manager will pass this on to Stream Reader children it manages
+	if err := idx.sendUpdatedKeyspaceStatsMapToWorker(msg, idx.mutMgrCmdCh, "MutationMgr"); err != nil {
+		return err
+	}
+
+	if err := idx.sendUpdatedKeyspaceStatsMapToWorker(msg, idx.storageMgrCmdCh, "StorageMgr"); err != nil {
+		return err
+	}
+
+	if err := idx.sendUpdatedKeyspaceStatsMapToWorker(msg, idx.tkCmdCh, "Timekeeper"); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// sendUpdatedKeyspaceStatsMapToWorker synchronously sends updated keyspace stats pointer to consumers.
+func (idx *indexer) sendUpdatedKeyspaceStatsMapToWorker(msgUpdateKeyspaceStatsMap Message,
+	workerCmdCh chan Message, workerStr string) error {
+
+	workerCmdCh <- msgUpdateKeyspaceStatsMap
+	if resp, ok := <-workerCmdCh; ok {
+
+		if resp.GetMsgType() == MSG_ERROR {
+			logging.Errorf("Indexer::sendUpdatedKeyspaceStatsMapToWorker - Error received from %v processing "+
+				"Msg %v Err %v. Aborted.", workerStr, msgUpdateKeyspaceStatsMap, resp)
+			respErr := resp.(*MsgError).GetError()
+			return respErr.cause
+		}
+	} else {
+		logging.Errorf("Indexer::sendUpdatedKeyspaceStatsMapToWorker - Error communicating with %v "+
+			"processing Msg %v. Aborted.", workerStr, msgUpdateKeyspaceStatsMap)
+		return ErrFatalComm
+	}
+
+	return nil
 }
 
 func (idx *indexer) initStreamAddressMap() {
@@ -5136,6 +5184,7 @@ func (idx *indexer) processBuildDoneNoCatchup(streamId common.StreamId,
 	idx.setStreamKeyspaceIdState(streamId, keyspaceId, STREAM_INACTIVE)
 	idx.cleanupStreamKeyspaceIdState(streamId, keyspaceId)
 	idx.stats.RemoveKeyspaceStats(streamId, keyspaceId)
+	idx.distributeKeyspaceStatsMapsToWorkers()
 
 	reqLock := idx.acquireStreamRequestLock(keyspaceId, streamId)
 	go func(reqLock *kvRequest) {
@@ -5310,6 +5359,7 @@ func (idx *indexer) handleMergeInitStream(msg Message) {
 	idx.setStreamKeyspaceIdState(streamId, keyspaceId, STREAM_INACTIVE)
 	idx.cleanupStreamKeyspaceIdState(streamId, keyspaceId)
 	idx.stats.RemoveKeyspaceStats(streamId, keyspaceId)
+	idx.distributeKeyspaceStatsMapsToWorkers()
 
 	//enable flush for this keyspaceId in MAINT_STREAM
 	bucket := GetBucketFromKeyspaceId(keyspaceId)
@@ -5528,6 +5578,7 @@ func (idx *indexer) stopKeyspaceIdStream(streamId common.StreamId, keyspaceId st
 	}
 
 	idx.stats.RemoveKeyspaceStats(streamId, keyspaceId)
+	idx.distributeKeyspaceStatsMapsToWorkers()
 
 	idx.setStreamKeyspaceIdCurrRequest(streamId, keyspaceId, cmd, stopCh, sessionId)
 
@@ -5709,6 +5760,7 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 
 	// Create the corresponding KeyspaceStats object before starting the stream
 	idx.stats.AddKeyspaceStats(streamId, keyspaceId)
+	idx.distributeKeyspaceStatsMapsToWorkers()
 
 	//send stream update to timekeeper
 	if resp := idx.sendStreamUpdateToWorker(cmd, idx.tkCmdCh,
@@ -7312,7 +7364,8 @@ func (idx *indexer) closeAllStreams() {
 				}
 			}
 		}
-		idx.stats.RemoveKeyspaceStatsAll(streamId)
+		// Do not need to update and distribute keyspace stats here as this function is bootstrap-only, so they are
+		// empty, and recipients are not all started yet so attempted forward will wait forever for response.
 	}
 }
 
@@ -8979,6 +9032,7 @@ func (idx *indexer) prepareStreamKeyspaceIdForFreshStart(
 	<-idx.mutMgrCmdCh
 
 	idx.stats.RemoveKeyspaceStats(streamId, keyspaceId)
+	idx.distributeKeyspaceStatsMapsToWorkers()
 }
 
 func (idx *indexer) monitorKVNodes() {

@@ -185,6 +185,9 @@ func (s *storageMgr) handleSupvervisorCommands(cmd Message) {
 	case UPDATE_INDEX_PARTITION_MAP:
 		s.handleUpdateIndexPartnMap(cmd)
 
+	case UPDATE_KEYSPACE_STATS_MAP:
+		s.handleUpdateKeyspaceStatsMap(cmd)
+
 	case STORAGE_INDEX_SNAP_REQUEST:
 		s.handleGetIndexSnapshot(cmd)
 
@@ -710,8 +713,7 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 
 	bucket := GetBucketFromKeyspaceId(keyspaceId)
 
-	stats := sm.stats.Get()
-	keyspaceStats := stats.keyspaceStats[streamId][bucket]
+	keyspaceStats := (*sm.stats.GetKeyspaceStats())[streamId][bucket]
 	if keyspaceStats != nil {
 		keyspaceStats.numRollbacks.Add(1)
 	}
@@ -1057,6 +1059,18 @@ func (s *storageMgr) handleUpdateIndexPartnMap(cmd Message) {
 	indexPartnMap := cmd.(*MsgUpdatePartnMap).GetIndexPartnMap()
 	copyIndexPartnMap := CopyIndexPartnMap(indexPartnMap)
 	s.indexPartnMap.Set(copyIndexPartnMap)
+
+	s.supvCmdch <- &MsgSuccess{}
+}
+
+// handleUpdateKeyspaceStatsMap atomically swaps in the pointer to a new KeyspaceStatsMap.
+func (s *storageMgr) handleUpdateKeyspaceStatsMap(cmd Message) {
+	logging.Tracef("StorageMgr::handleUpdateKeyspaceStatsMap %v", cmd)
+	req := cmd.(*MsgUpdateKeyspaceStatsMap)
+	stats := s.stats.Get()
+	if stats != nil {
+		stats.keyspaceStatsMap.Set(req.GetStatsObject())
+	}
 
 	s.supvCmdch <- &MsgSuccess{}
 }

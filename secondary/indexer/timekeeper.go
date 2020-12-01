@@ -73,7 +73,7 @@ const REPAIR_BATCH_TIMEOUT = 1000
 const KV_RETRY_INTERVAL = 5000
 
 //const REPAIR_RETRY_INTERVAL = 5000
-const REPAIR_RETRY_BEFORE_SHUTDOWN = 5
+//const REPAIR_RETRY_BEFORE_SHUTDOWN = 5
 
 //NewTimekeeper returns an instance of timekeeper or err message.
 //It listens on supvCmdch for command and every command is followed
@@ -226,6 +226,9 @@ func (tk *timekeeper) handleSupervisorCommands(cmd Message) {
 	case UPDATE_INDEX_PARTITION_MAP:
 		tk.handleUpdateIndexPartnMap(cmd)
 
+	case UPDATE_KEYSPACE_STATS_MAP:
+		tk.handleUpdateKeyspaceStatsMap(cmd)
+
 	case INDEX_PROGRESS_STATS:
 		tk.handleStats(cmd)
 
@@ -316,7 +319,7 @@ func (tk *timekeeper) handleStreamClose(cmd Message) {
 	defer tk.lock.Unlock()
 
 	//cleanup all keyspaceIds from stream
-	for keyspaceId, _ := range tk.ss.streamKeyspaceIdStatus[streamId] {
+	for keyspaceId := range tk.ss.streamKeyspaceIdStatus[streamId] {
 		tk.removeKeyspaceFromStream(streamId, keyspaceId, false)
 	}
 
@@ -973,7 +976,7 @@ func (tk *timekeeper) handleFlushStateChange(cmd Message) {
 		//if keyspaceId is empty, enable for all keyspaceIds in the stream
 		keyspaceIdFlushEnabledMap := tk.ss.streamKeyspaceIdFlushEnabledMap[streamId]
 		if keyspaceId == "" {
-			for keyspaceId, _ := range keyspaceIdFlushEnabledMap {
+			for keyspaceId := range keyspaceIdFlushEnabledMap {
 				keyspaceIdFlushEnabledMap[keyspaceId] = true
 				//if there are any pending TS, send that
 				tk.processPendingTS(streamId, keyspaceId)
@@ -990,7 +993,7 @@ func (tk *timekeeper) handleFlushStateChange(cmd Message) {
 		//if keyspaceId is empty, disable for all keyspaceIds in the stream
 		keyspaceIdFlushEnabledMap := tk.ss.streamKeyspaceIdFlushEnabledMap[streamId]
 		if keyspaceId == "" {
-			for keyspaceId, _ := range keyspaceIdFlushEnabledMap {
+			for keyspaceId := range keyspaceIdFlushEnabledMap {
 				keyspaceIdFlushEnabledMap[keyspaceId] = false
 			}
 		} else {
@@ -1162,7 +1165,7 @@ func (tk *timekeeper) handleStreamBegin(cmd Message) {
 			tk.ss.streamKeyspaceIdLastBeginTime[streamId][meta.keyspaceId] = uint64(time.Now().UnixNano())
 
 			//  record ActiveTs
-			tk.ss.addKVActiveTs(streamId, meta.keyspaceId, meta.vbucket, uint64(meta.seqno), uint64(meta.vbuuid))
+			tk.ss.addKVActiveTs(streamId, meta.keyspaceId, meta.vbucket, meta.seqno, uint64(meta.vbuuid))
 			tk.ss.clearKVRollbackTs(streamId, meta.keyspaceId, meta.vbucket)
 			tk.ss.clearKVPendingTs(streamId, meta.keyspaceId, meta.vbucket)
 			tk.ss.clearLastRepairTime(streamId, meta.keyspaceId, meta.vbucket)
@@ -1196,7 +1199,7 @@ func (tk *timekeeper) handleStreamBegin(cmd Message) {
 			}
 
 			// record the rollback Ts
-			tk.ss.addKVRollbackTs(streamId, meta.keyspaceId, meta.vbucket, uint64(meta.seqno), uint64(meta.vbuuid))
+			tk.ss.addKVRollbackTs(streamId, meta.keyspaceId, meta.vbucket, meta.seqno, uint64(meta.vbuuid))
 			tk.ss.clearKVActiveTs(streamId, meta.keyspaceId, meta.vbucket)
 			tk.ss.clearKVPendingTs(streamId, meta.keyspaceId, meta.vbucket)
 			tk.ss.clearLastRepairTime(streamId, meta.keyspaceId, meta.vbucket)
@@ -1471,7 +1474,7 @@ func (tk *timekeeper) repairMissingStreamBegin(streamId common.StreamId) {
 
 					// If there is missing vb and timekeeper has not received StreamBegin for any vb for over the threshold,
 					// then raise an error on those vbs.
-					if now-uint64(tk.ss.streamKeyspaceIdLastBeginTime[streamId][keyspaceId]) > uint64(maxInterval) {
+					if now-tk.ss.streamKeyspaceIdLastBeginTime[streamId][keyspaceId] > maxInterval {
 
 						//flag the missing vb as error and repair stream.  Do not raise connection error.
 						for _, vb := range vbList {
@@ -2577,8 +2580,7 @@ func (tk *timekeeper) generateNewStabilityTS(streamId common.StreamId,
 			})
 			tsList := tk.ss.streamKeyspaceIdTsListMap[streamId][keyspaceId]
 			tsList.PushBack(tsElem)
-			stats := tk.stats.Get()
-			keyspaceStats := stats.keyspaceStats[streamId][keyspaceId]
+			keyspaceStats := (*tk.stats.GetKeyspaceStats())[streamId][keyspaceId]
 			if keyspaceStats != nil {
 				keyspaceStats.tsQueueSize.Set(int64(tsList.Len()))
 			}
@@ -2696,8 +2698,7 @@ func (tk *timekeeper) processPendingTS(streamId common.StreamId, keyspaceId stri
 		}
 		tk.sendNewStabilityTS(tsElem, keyspaceId, streamId)
 		//update tsQueueSize when processing queued TS
-		stats := tk.stats.Get()
-		keyspaceStats := stats.keyspaceStats[streamId][keyspaceId]
+		keyspaceStats := (*tk.stats.GetKeyspaceStats())[streamId][keyspaceId]
 		if keyspaceStats != nil {
 			keyspaceStats.tsQueueSize.Set(int64(tsList.Len()))
 		}
@@ -2892,8 +2893,7 @@ func (tk *timekeeper) setSnapshotType(streamId common.StreamId, keyspaceId strin
 			}
 		}
 	} else {
-		stats := tk.stats.Get()
-		keyspaceStats := stats.keyspaceStats[streamId][keyspaceId]
+		keyspaceStats := (*tk.stats.GetKeyspaceStats())[streamId][keyspaceId]
 		if keyspaceStats != nil {
 			keyspaceStats.numNonAlignTS.Add(1)
 		}
@@ -3676,7 +3676,7 @@ func (tk *timekeeper) repairStreamWithMTR(streamId common.StreamId, keyspaceId s
 
 	// Update repair state of each vb now, even though MTR has not completed yet, since
 	// repairStream will terminate after this function.
-	for i, _ := range tk.ss.streamKeyspaceIdRepairStateMap[streamId][keyspaceId] {
+	for i := range tk.ss.streamKeyspaceIdRepairStateMap[streamId][keyspaceId] {
 		if tk.ss.streamKeyspaceIdRepairStateMap[streamId][keyspaceId][i] == REPAIR_SHUTDOWN_VB {
 			logging.Infof("timekeeper::repairStreamWithMTR - set repair state to REPAIR_MTR for %v keyspaceId %v vb %v", streamId, keyspaceId, i)
 			tk.ss.streamKeyspaceIdRepairStateMap[streamId][keyspaceId][i] = REPAIR_MTR
@@ -3707,6 +3707,18 @@ func (tk *timekeeper) handleUpdateIndexPartnMap(cmd Message) {
 	logging.Tracef("Timekeeper::handleUpdateIndexPartnMap %v", cmd)
 	indexPartnMap := cmd.(*MsgUpdatePartnMap).GetIndexPartnMap()
 	tk.indexPartnMap.Set(CopyIndexPartnMap(indexPartnMap))
+	tk.supvCmdch <- &MsgSuccess{}
+}
+
+// handleUpdateKeyspaceStatsMap atomically swaps in the pointer to a new KeyspaceStatsMap.
+func (tk *timekeeper) handleUpdateKeyspaceStatsMap(cmd Message) {
+	logging.Tracef("Timekeeper::handleUpdateKeyspaceStatsMap %v", cmd)
+	req := cmd.(*MsgUpdateKeyspaceStatsMap)
+	stats := tk.stats.Get()
+	if stats != nil {
+		stats.keyspaceStatsMap.Set(req.GetStatsObject())
+	}
+
 	tk.supvCmdch <- &MsgSuccess{}
 }
 
@@ -3842,8 +3854,8 @@ func (tk *timekeeper) handleStats(cmd Message) {
 							}
 							// By the time we compute index stats, kv timestamp would have
 							// become old.
-							if uint64(seqno) > receivedSeqno {
-								pending += uint64(seqno) - receivedSeqno
+							if seqno > receivedSeqno {
+								pending += seqno - receivedSeqno
 							}
 						}
 					}
@@ -4173,7 +4185,7 @@ func (tk *timekeeper) doUnpause() {
 	ticker := time.NewTicker(time.Second * 1)
 	defer ticker.Stop()
 
-	for _ = range ticker.C {
+	for range ticker.C {
 
 		if tk.checkAnyRepairPending() {
 			logging.Infof("Timekeeper::doUnpause Dropping Request to Unpause. " +
@@ -4192,7 +4204,7 @@ func (tk *timekeeper) checkAnyRepairPending() bool {
 	defer tk.lock.Unlock()
 	for s, bs := range tk.ss.streamKeyspaceIdStatus {
 
-		for b, _ := range bs {
+		for b := range bs {
 			if tk.ss.streamKeyspaceIdRepairStopCh[s][b] != nil {
 				return true
 			}

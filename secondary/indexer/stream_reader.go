@@ -337,6 +337,15 @@ func (r *mutationStreamReader) handleSupervisorCommands(cmd Message) Message {
 		}
 		return &MsgSuccess{}
 
+	case UPDATE_KEYSPACE_STATS_MAP:
+		logging.Infof("MutationStreamReader::handleUpdateKeyspaceStatsMap")
+		req := cmd.(*MsgUpdateKeyspaceStatsMap)
+		stats := r.stats.Get()
+		if stats != nil {
+			stats.keyspaceStatsMap.Set(req.GetStatsObject())
+		}
+		return &MsgSuccess{}
+
 	default:
 		logging.Errorf("MutationStreamReader::handleSupervisorCommands Received Unknown Command %v", cmd)
 		return &MsgError{
@@ -422,7 +431,7 @@ func (r *mutationStreamReader) maybeSendSync(fastpath bool) bool {
 	sent := false
 
 	r.queueMapLock.RLock()
-	for keyspaceId, _ := range r.keyspaceIdQueueMap {
+	for keyspaceId := range r.keyspaceIdQueueMap {
 		//actual TS uses bucket as keyspaceId
 		hwt[keyspaceId] = common.NewTsVbuuidCached(GetBucketFromKeyspaceId(keyspaceId), numVbuckets)
 		prevSnap[keyspaceId] = common.NewTsVbuuidCached(GetBucketFromKeyspaceId(keyspaceId), numVbuckets)
@@ -435,7 +444,7 @@ func (r *mutationStreamReader) maybeSendSync(fastpath bool) bool {
 	}
 
 	nWrkr := r.numWorkers
-	for keyspaceId, _ := range hwt {
+	for keyspaceId := range hwt {
 		needSync := false
 		hasOSO := false
 		enableOSO := false
@@ -521,7 +530,7 @@ func (r *mutationStreamReader) checkAnySyncDue() bool {
 	syncDue := false
 	r.queueMapLock.RLock()
 loop:
-	for keyspaceId, _ := range r.keyspaceIdQueueMap {
+	for keyspaceId := range r.keyspaceIdQueueMap {
 		for i := 0; i < r.numWorkers; i++ {
 			r.streamWorkers[i].lock.Lock()
 			if r.streamWorkers[i].keyspaceIdSyncDue[keyspaceId] {
@@ -880,8 +889,7 @@ func (w *streamWorker) handleSingleMutation(mut *MutationKeys, stopch StopChanne
 	if q, ok := w.reader.keyspaceIdQueueMap[mut.meta.keyspaceId]; ok {
 		q.queue.Enqueue(mut, mut.meta.vbucket, stopch)
 
-		stats := w.reader.stats.Get()
-		keyspaceStats := stats.keyspaceStats[w.streamId][mut.meta.keyspaceId]
+		keyspaceStats := (*w.reader.stats.GetKeyspaceStats())[w.streamId][mut.meta.keyspaceId]
 		if keyspaceStats != nil {
 			keyspaceStats.mutationQueueSize.Add(1)
 			keyspaceStats.numMutationsQueued.Add(1)
@@ -933,8 +941,7 @@ func (w *streamWorker) initKeyspaceIdFilter(keyspaceIdFilter map[string]*common.
 			w.keyspaceIdOSOException[b] = false
 
 			//reset stat for bucket
-			stats := w.reader.stats.Get()
-			keyspaceStats := stats.keyspaceStats[w.streamId][b]
+			keyspaceStats := (*w.reader.stats.GetKeyspaceStats())[w.streamId][b]
 			if keyspaceStats != nil {
 				keyspaceStats.mutationQueueSize.Set(0)
 			}
@@ -942,7 +949,7 @@ func (w *streamWorker) initKeyspaceIdFilter(keyspaceIdFilter map[string]*common.
 	}
 
 	//remove the keyspaceId filters for which keyspace doesn't exist anymore
-	for b, _ := range w.keyspaceIdFilter {
+	for b := range w.keyspaceIdFilter {
 		if _, ok := w.reader.keyspaceIdQueueMap[b]; !ok {
 			logging.Debugf("MutationStreamReader::initKeyspaceIdFilter Deleted filter "+
 				"for KeyspaceId %v Stream %v", b, w.streamId)

@@ -151,6 +151,7 @@ const (
 	//COMMON
 	UPDATE_INDEX_INSTANCE_MAP
 	UPDATE_INDEX_PARTITION_MAP
+	UPDATE_KEYSPACE_STATS_MAP
 	UPDATE_MAP_WORKER
 
 	OPEN_STREAM
@@ -658,7 +659,7 @@ func (m *MsgMutMgrGetTimestamp) GetStreamId() common.StreamId {
 	return m.streamId
 }
 
-//UPDATE_INSTANCE_MAP
+//UPDATE_INDEX_INSTANCE_MAP
 type MsgUpdateInstMap struct {
 	indexInstMap   common.IndexInstMap
 	stats          *IndexerStats
@@ -706,7 +707,7 @@ func (m *MsgUpdateInstMap) String() string {
 	return str
 }
 
-//UPDATE_PARTITION_MAP
+//UPDATE_INDEX_PARTITION_MAP
 type MsgUpdatePartnMap struct {
 	indexPartnMap   IndexPartnMap
 	updatedPartnMap PartitionInstMap
@@ -741,6 +742,26 @@ func (m *MsgUpdatePartnMap) String() string {
 
 	str := "\n\tMessage: MsgUpdatePartnMap"
 	str += fmt.Sprintf("%v", m.indexPartnMap)
+	return str
+}
+
+//UPDATE_KEYSPACE_STATS_MAP
+type MsgUpdateKeyspaceStatsMap struct {
+	keyspaceStatsMap *KeyspaceStatsMap
+}
+
+func (m *MsgUpdateKeyspaceStatsMap) GetMsgType() MsgType {
+	return UPDATE_KEYSPACE_STATS_MAP
+}
+
+func (m *MsgUpdateKeyspaceStatsMap) GetStatsObject() *KeyspaceStatsMap {
+	return m.keyspaceStatsMap
+}
+
+func (m *MsgUpdateKeyspaceStatsMap) String() string {
+
+	str := "\n\tMessage: MsgUpdateKeyspaceStatsMap"
+	str += fmt.Sprintf("%v", m.keyspaceStatsMap)
 	return str
 }
 
@@ -2166,12 +2187,10 @@ func (m *MsgStorageWarmupDone) NeedsRestart() bool {
 	return m.needsRestart
 }
 
-//Helper function to return string for message type
-
+//MsgType.String is a helper function to return string for message type.
 func (m MsgType) String() string {
 
 	switch m {
-
 	case MSG_SUCCESS:
 		return "MSG_SUCCESS"
 	case MSG_ERROR:
@@ -2319,6 +2338,8 @@ func (m MsgType) String() string {
 		return "UPDATE_INDEX_INSTANCE_MAP"
 	case UPDATE_INDEX_PARTITION_MAP:
 		return "UPDATE_INDEX_PARTITION_MAP"
+	case UPDATE_KEYSPACE_STATS_MAP:
+		return "UPDATE_KEYSPACE_STATS_MAP"
 	case UPDATE_MAP_WORKER:
 		return "UPDATE_MAP_WORKER"
 
