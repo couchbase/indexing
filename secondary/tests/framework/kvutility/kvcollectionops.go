@@ -66,7 +66,7 @@ func DeleteKeysFromCollection(keyValues tc.KeyValues, bucketName, collectionID, 
 
 func GetManifest(bucketName string, serverUserName, serverPassword, hostaddress string) *collections.CollectionManifest {
 	client := &http.Client{}
-	address := "http://" + hostaddress + "/pools/default/buckets/" + bucketName + "/collections"
+	address := "http://" + hostaddress + "/pools/default/buckets/" + bucketName + "/scopes"
 
 	req, _ := http.NewRequest("GET", address, nil)
 	req.SetBasicAuth(serverUserName, serverPassword)
@@ -98,7 +98,7 @@ func GetScopes(bucketName, serverUserName, serverPassword, hostaddress string) [
 
 func createScope(bucketName, scopeName, serverUserName, serverPassword, hostaddress string) {
 	client := &http.Client{}
-	address := "http://" + hostaddress + "/pools/default/buckets/" + bucketName + "/collections/"
+	address := "http://" + hostaddress + "/pools/default/buckets/" + bucketName + "/scopes"
 	data := url.Values{"name": {scopeName}}
 	req, _ := http.NewRequest("POST", address, strings.NewReader(data.Encode()))
 	req.SetBasicAuth(serverUserName, serverPassword)
@@ -122,7 +122,7 @@ func createScope(bucketName, scopeName, serverUserName, serverPassword, hostaddr
 
 func createCollection(bucketName, scopeName, collectionName, serverUserName, serverPassword, hostaddress string) {
 	client := &http.Client{}
-	address := "http://" + hostaddress + "/pools/default/buckets/" + bucketName + "/collections/" + scopeName + "/"
+	address := "http://" + hostaddress + "/pools/default/buckets/" + bucketName + "/scopes/" + scopeName + "/collections"
 	data := url.Values{"name": {collectionName}}
 	req, _ := http.NewRequest("POST", address, strings.NewReader(data.Encode()))
 	req.SetBasicAuth(serverUserName, serverPassword)
@@ -164,7 +164,7 @@ func CreateCollection(bucketName, scope, collection, serverUsername, serverPassw
 
 func DropScope(bucketName, scopeName, serverUserName, serverPassword, hostaddress string) {
 	client := &http.Client{}
-	address := "http://" + hostaddress + "/pools/default/buckets/" + bucketName + "/collections/" + scopeName
+	address := "http://" + hostaddress + "/pools/default/buckets/" + bucketName + "/scopes/" + scopeName
 	req, _ := http.NewRequest("DELETE", address, nil)
 	req.SetBasicAuth(serverUserName, serverPassword)
 	req.Header.Add("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
@@ -184,7 +184,7 @@ func DropScope(bucketName, scopeName, serverUserName, serverPassword, hostaddres
 
 func DropCollection(bucketName, scopeName, collectionName, serverUserName, serverPassword, hostaddress string) {
 	client := &http.Client{}
-	address := "http://" + hostaddress + "/pools/default/buckets/" + bucketName + "/collections/" + scopeName + "/" + collectionName
+	address := "http://" + hostaddress + "/pools/default/buckets/" + bucketName + "/scopes/" + scopeName + "/collections/" + collectionName
 	req, _ := http.NewRequest("DELETE", address, nil)
 	req.SetBasicAuth(serverUserName, serverPassword)
 	req.Header.Add("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
