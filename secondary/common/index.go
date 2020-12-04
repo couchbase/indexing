@@ -241,18 +241,18 @@ type IndexDefn struct {
 
 	// transient field (not part of index metadata)
 	// These fields are used for create index during DDL, rebalance, or restore
-	InstVersion   int           `json:"instanceVersion,omitempty"`
-	ReplicaId     int           `json:"replicaId,omitempty"`
-	InstId        IndexInstId   `json:"instanceId,omitempty"`
+	InstVersion int         `json:"instanceVersion,omitempty"`
+	ReplicaId   int         `json:"replicaId,omitempty"`
+	InstId      IndexInstId `json:"instanceId,omitempty"`
 
 	// Partitions contains either the IDs of all partitions in the
 	// index, or in the case of a rebalance only that subset of IDs
 	// of the specific partitions being moved by the current TransferToken.
-	Partitions    []PartitionId `json:"partitions,omitempty"`
+	Partitions []PartitionId `json:"partitions,omitempty"`
 
-	Versions      []int         `json:"versions,omitempty"`
-	NumPartitions uint32        `json:"numPartitions,omitempty"`
-	RealInstId    IndexInstId   `json:"realInstId,omitempty"`
+	Versions      []int       `json:"versions,omitempty"`
+	NumPartitions uint32      `json:"numPartitions,omitempty"`
+	RealInstId    IndexInstId `json:"realInstId,omitempty"`
 }
 
 //IndexInst is an instance of an Index(aka replica)
@@ -511,7 +511,7 @@ func (idx IndexInstMap) String() string {
 	for i, index := range idx {
 		str += fmt.Sprintf("\tInstanceId: %v ", i)
 		str += fmt.Sprintf("Name: %v ", index.Defn.Name)
-		str += fmt.Sprintf("Keyspace: %v/%v/%v ", index.Defn.Bucket,
+		str += fmt.Sprintf("Keyspace: %v:%v:%v ", index.Defn.Bucket,
 			index.Defn.Scope, index.Defn.Collection)
 		str += fmt.Sprintf("State: %v ", index.State)
 		str += fmt.Sprintf("Stream: %v ", index.Stream)
@@ -533,7 +533,7 @@ func (idx IndexInstList) String() string {
 	for _, index := range idx {
 		str += fmt.Sprintf("\tInstanceId: %v ", index.InstId)
 		str += fmt.Sprintf("Name: %v ", index.Defn.Name)
-		str += fmt.Sprintf("Keyspace: %v/%v/%v ", index.Defn.Bucket,
+		str += fmt.Sprintf("Keyspace: %v:%v:%v ", index.Defn.Bucket,
 			index.Defn.Scope, index.Defn.Collection)
 		str += fmt.Sprintf("State: %v ", index.State)
 		str += fmt.Sprintf("Stream: %v ", index.Stream)
