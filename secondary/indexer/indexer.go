@@ -3835,7 +3835,7 @@ func (idx *indexer) newIndexInstMsg(m common.IndexInstMap) *MsgUpdateInstMap {
 }
 
 func (idx *indexer) newKeyspaceStatsMsg() *MsgUpdateKeyspaceStatsMap {
-	return &MsgUpdateKeyspaceStatsMap{keyspaceStatsMap: idx.stats.GetKeyspaceStats().Clone()}
+	return &MsgUpdateKeyspaceStatsMap{keyspaceStatsMap: idx.stats.GetKeyspaceStatsMap().Clone()}
 }
 
 func (idx *indexer) cleanupIndexData(indexInst common.IndexInst,
@@ -4563,43 +4563,14 @@ func (idx *indexer) distributeIndexMapsToWorkers(msgUpdateIndexInstMap Message,
 func (idx *indexer) sendUpdatedIndexMapToWorker(msgUpdateIndexInstMap Message,
 	msgUpdateIndexPartnMap Message, workerCmdCh chan Message, workerStr string) error {
 
-	if msgUpdateIndexInstMap != nil {
-		workerCmdCh <- msgUpdateIndexInstMap
-
-		if resp, ok := <-workerCmdCh; ok {
-
-			if resp.GetMsgType() == MSG_ERROR {
-				logging.Errorf("Indexer::sendUpdatedIndexMapToWorker - Error received from %v processing "+
-					"Msg %v Err %v. Aborted.", workerStr, msgUpdateIndexInstMap, resp)
-				respErr := resp.(*MsgError).GetError()
-				return respErr.cause
-			}
-		} else {
-			logging.Errorf("Indexer::sendUpdatedIndexMapToWorker - Error communicating with %v "+
-				"processing Msg %v. Aborted.", workerStr, msgUpdateIndexInstMap)
-			return ErrFatalComm
-		}
+	if err := idx.sendMessageToWorker(msgUpdateIndexInstMap, workerCmdCh, workerStr); err != nil {
+		return err
 	}
-
-	if msgUpdateIndexPartnMap != nil {
-		workerCmdCh <- msgUpdateIndexPartnMap
-		if resp, ok := <-workerCmdCh; ok {
-
-			if resp.GetMsgType() == MSG_ERROR {
-				logging.Errorf("Indexer::sendUpdatedIndexMapToWorker - Error received from %v processing "+
-					"Msg %v Err %v. Aborted.", workerStr, msgUpdateIndexPartnMap, resp)
-				respErr := resp.(*MsgError).GetError()
-				return respErr.cause
-			}
-		} else {
-			logging.Errorf("Indexer::sendUpdatedIndexMapToWorker - Error communicating with %v "+
-				"processing Msg %v. Aborted.", workerStr, msgUpdateIndexPartnMap, resp)
-			return ErrFatalComm
-		}
+	if err := idx.sendMessageToWorker(msgUpdateIndexPartnMap, workerCmdCh, workerStr); err != nil {
+		return err
 	}
 
 	return nil
-
 }
 
 // distributeKeyspaceStatsMapsToWorkers sends a clone of current KeyspaceStatsMap to local consumers that need it.
@@ -4622,25 +4593,31 @@ func (idx *indexer) distributeKeyspaceStatsMapsToWorkers() error {
 	return nil
 }
 
-// sendUpdatedKeyspaceStatsMapToWorker synchronously sends updated keyspace stats pointer to consumers.
+// sendUpdatedKeyspaceStatsMapToWorker synchronously sends updated keyspace stats pointer.
 func (idx *indexer) sendUpdatedKeyspaceStatsMapToWorker(msgUpdateKeyspaceStatsMap Message,
 	workerCmdCh chan Message, workerStr string) error {
 
-	workerCmdCh <- msgUpdateKeyspaceStatsMap
-	if resp, ok := <-workerCmdCh; ok {
+	return idx.sendMessageToWorker(msgUpdateKeyspaceStatsMap, workerCmdCh, workerStr)
+}
 
-		if resp.GetMsgType() == MSG_ERROR {
-			logging.Errorf("Indexer::sendUpdatedKeyspaceStatsMapToWorker - Error received from %v processing "+
-				"Msg %v Err %v. Aborted.", workerStr, msgUpdateKeyspaceStatsMap, resp)
-			respErr := resp.(*MsgError).GetError()
-			return respErr.cause
+// sendMessageToWorker synchronously sends a message a worker and logs errors in detail.
+func (idx *indexer) sendMessageToWorker(msg Message, workerCmdCh chan Message, workerStr string) error {
+
+	if msg != nil {
+		workerCmdCh <- msg
+		if resp, ok := <-workerCmdCh; ok {
+			if resp.GetMsgType() == MSG_ERROR {
+				logging.Errorf("Indexer::sendMessageToWorker - Error received from %v processing "+
+					"Msg %v Err %v. Aborted.", workerStr, msg, resp)
+				respErr := resp.(*MsgError).GetError()
+				return respErr.cause
+			}
+		} else {
+			logging.Errorf("Indexer::sendMessageToWorker - Error communicating with %v "+
+				"processing Msg %v. Aborted.", workerStr, msg)
+			return ErrFatalComm
 		}
-	} else {
-		logging.Errorf("Indexer::sendUpdatedKeyspaceStatsMapToWorker - Error communicating with %v "+
-			"processing Msg %v. Aborted.", workerStr, msgUpdateKeyspaceStatsMap)
-		return ErrFatalComm
 	}
-
 	return nil
 }
 

@@ -711,9 +711,7 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 
 	sm.updateIndexSnapMap(sm.indexPartnMap.Get(), streamId, keyspaceId)
 
-	bucket := GetBucketFromKeyspaceId(keyspaceId)
-
-	keyspaceStats := (*sm.stats.GetKeyspaceStats())[streamId][bucket]
+	keyspaceStats := sm.stats.GetKeyspaceStats(streamId, keyspaceId)
 	if keyspaceStats != nil {
 		keyspaceStats.numRollbacks.Add(1)
 	}

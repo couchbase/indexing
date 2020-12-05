@@ -67,7 +67,8 @@ type KeyspaceStats struct {
 }
 
 // KeyspaceStats.Init initializes a per-keyspace stats object.
-func (s *KeyspaceStats) Init() {
+func (s *KeyspaceStats) Init(keyspaceId string) {
+	s.keyspaceId = keyspaceId
 	s.numRollbacks.Init()
 	s.mutationQueueSize.Init()
 	s.numMutationsQueued.Init()
@@ -82,7 +83,8 @@ func (s *KeyspaceStats) addKeyspaceStatsToStatsMap(statMap *StatsMap) {
 	statMap.AddStatValueFiltered("ts_queue_size", &s.tsQueueSize)
 	statMap.AddStatValueFiltered("num_nonalign_ts", &s.numNonAlignTS)
 
-	if st := common.BucketSeqsTiming(s.keyspaceId); st != nil {
+	bucket := GetBucketFromKeyspaceId(s.keyspaceId)
+	if st := common.BucketSeqsTiming(bucket); st != nil {
 		statMap.AddStatValueFiltered("timings/dcp_getseqs", st)
 	}
 }
@@ -264,26 +266,37 @@ func (h *IndexerStatsHolder) Set(s *IndexerStats) {
 	atomic.StorePointer(&h.ptr, unsafe.Pointer(s))
 }
 
-func (h *IndexerStatsHolder) GetKeyspaceStats() *KeyspaceStatsMap {
-	return h.Get().GetKeyspaceStats()
+func (h *IndexerStatsHolder) GetKeyspaceStats(streamId common.StreamId, keyspaceId string) *KeyspaceStats {
+	return h.GetKeyspaceStatsMap()[streamId][keyspaceId]
 }
 
-func (s *IndexerStats) GetKeyspaceStats() *KeyspaceStatsMap {
+func (h *IndexerStatsHolder) GetKeyspaceStatsMap() KeyspaceStatsMap {
+	return h.Get().GetKeyspaceStatsMap()
+}
+
+func (s *IndexerStats) GetKeyspaceStats(streamId common.StreamId, keyspaceId string) *KeyspaceStats {
+	return s.GetKeyspaceStatsMap()[streamId][keyspaceId]
+}
+
+func (s *IndexerStats) GetKeyspaceStatsMap() KeyspaceStatsMap {
 	return s.keyspaceStatsMap.Get()
 }
 
 // KeyspaceStatsMap holds a map of stream IDs to maps of keyspace IDs to per-keyspace
 // stats. The outer map avoids key collisions between streams. Only INIT_STREAM
-// and MAINT_STREAM have entries as other streams do not keep these stats.
+// and MAINT_STREAM have entries as other streams do not keep these stats. These two
+// stream maps are always present (see NewKeyspaceStatsMap immediately below). The
+// code should never try to get a map for any other stream, and nil is not checked
+// for lookups of the streamId dimension.
 type KeyspaceStatsMap map[common.StreamId]map[string]*KeyspaceStats
 
-func NewKeyspaceStatsMap() *KeyspaceStatsMap {
+func NewKeyspaceStatsMap() KeyspaceStatsMap {
 	var ksm KeyspaceStatsMap = make(map[common.StreamId]map[string]*KeyspaceStats)
 
 	ksm[common.INIT_STREAM] = make(map[string]*KeyspaceStats)
 	ksm[common.MAINT_STREAM] = make(map[string]*KeyspaceStats)
 
-	return &ksm
+	return ksm
 }
 
 // KeyspaceStatsMapHolder holds an atomic pointer to a KeyspaceStatsMap.
@@ -295,12 +308,12 @@ func (h *KeyspaceStatsMapHolder) Init() {
 	h.Set(NewKeyspaceStatsMap())
 }
 
-func (h *KeyspaceStatsMapHolder) Get() *KeyspaceStatsMap {
-	return (*KeyspaceStatsMap)(atomic.LoadPointer(&h.ptr))
+func (h *KeyspaceStatsMapHolder) Get() KeyspaceStatsMap {
+	return *(*KeyspaceStatsMap)(atomic.LoadPointer(&h.ptr))
 }
 
-func (h *KeyspaceStatsMapHolder) Set(s *KeyspaceStatsMap) {
-	atomic.StorePointer(&h.ptr, unsafe.Pointer(s))
+func (h *KeyspaceStatsMapHolder) Set(s KeyspaceStatsMap) {
+	atomic.StorePointer(&h.ptr, unsafe.Pointer(&s))
 }
 
 type LatencyMapHolder struct {
@@ -639,10 +652,10 @@ func (s *IndexStats) partnTimingStats(f func(*IndexStats) *stats.TimingStat) str
 }
 
 type IndexerStats struct {
-	// indexes is a map of index IDs to per-index stats.
+	// indexes is a map of index IDs to per-index stats. Never nil.
 	indexes map[common.IndexInstId]*IndexStats
 
-	// keyspaceStatsMap wraps per-keyspace stats.
+	// keyspaceStatsMap wraps per-keyspace stats. Never nil.
 	keyspaceStatsMap KeyspaceStatsMapHolder
 
 	numConnections     stats.Int64Val
@@ -747,7 +760,7 @@ func (s *IndexerStats) Reset() {
 	}
 
 	// Recreate KeyspaceStats objects
-	for streamId, ksStats := range (*old.GetKeyspaceStats()) {
+	for streamId, ksStats := range old.GetKeyspaceStatsMap() {
 		for keyspaceId := range ksStats {
 			s.AddKeyspaceStats(streamId, keyspaceId)
 		}
@@ -757,18 +770,18 @@ func (s *IndexerStats) Reset() {
 // AddKeyspaceStats adds or reinitializes an entry to the per-keyspace stats map
 // with populated metadata but empty stats values.
 func (s *IndexerStats) AddKeyspaceStats(streamId common.StreamId, keyspaceId string) {
-	_, ok := (*s.GetKeyspaceStats())[streamId][keyspaceId]
+	_, ok := s.GetKeyspaceStatsMap()[streamId][keyspaceId]
 	if !ok {
-		ksStats := &KeyspaceStats{keyspaceId: keyspaceId}
-		ksStats.Init()
-		(*s.GetKeyspaceStats())[streamId][keyspaceId] = ksStats
+		ksStats := &KeyspaceStats{}
+		ksStats.Init(keyspaceId)
+		s.GetKeyspaceStatsMap()[streamId][keyspaceId] = ksStats
 	}
 }
 
 // RemoveKeyspaceStats deletes one entry from the per-keyspace stats map.
 // NO-OP if entry did not exist.
 func (s *IndexerStats) RemoveKeyspaceStats(streamId common.StreamId, keyspaceId string) {
-	delete((*s.GetKeyspaceStats())[streamId], keyspaceId)
+	delete(s.GetKeyspaceStatsMap()[streamId], keyspaceId)
 }
 
 // addIndexStats adds or reinitializes an entry to the per-index
@@ -1005,7 +1018,7 @@ func (is IndexerStats) GetStats(spec *statsSpec) interface{} {
 		}
 	}
 
-	for streamId, ksStats := range (*is.GetKeyspaceStats()) {
+	for streamId, ksStats := range is.GetKeyspaceStatsMap() {
 		for keyspaceId, ks := range ksStats {
 			prefix = fmt.Sprintf("%s:%s:", streamId, keyspaceId)
 			statMap.SetPrefix(prefix)
@@ -2028,18 +2041,19 @@ func (s IndexerStats) Clone() *IndexerStats {
 		clone.indexes[k] = v.clone()
 	}
 
-	clone.keyspaceStatsMap.Set(s.GetKeyspaceStats().Clone())
+	clone.keyspaceStatsMap.Set(s.GetKeyspaceStatsMap().Clone())
 
 	return &clone
 }
 
-// KeyspaceStatsMap.Clone creates a new version of the KeyspaceStatsMap object with new
-// maps that point to the existing stats objects.
-func (ksm *KeyspaceStatsMap) Clone() *KeyspaceStatsMap {
+// KeyspaceStatsMap.Clone creates a new version of the KeyspaceStatsMap object
+// with new maps that point to the existing stats objects. Intentionally value
+// receiver and return since maps are passed by reference in Go.
+func (ksm KeyspaceStatsMap) Clone() KeyspaceStatsMap {
 	clone := NewKeyspaceStatsMap()
 
-	for streamId, cloneStats := range *clone {
-		for k, v := range (*ksm)[streamId] {
+	for streamId, cloneStats := range clone {
+		for k, v := range ksm[streamId] {
 			cloneStats[k] = v
 		}
 	}
@@ -2317,11 +2331,11 @@ func (l *statLogger) writeIndexerStats(stats *IndexerStats, spec *statsSpec) {
 	}
 
 	// Keyspace Stats
-	for streamId, ksStats := range (*stats.GetKeyspaceStats()) {
+	for streamId, ksStats := range stats.GetKeyspaceStatsMap() {
 		for keyspaceId, ks := range ksStats {
 			statMap = NewStatsMap(spec)
 			ks.addKeyspaceStatsToStatsMap(statMap)
-			sType := fmt.Sprintf("%s_%s_%s", streamId, ST_TYPE_KEYSPACE, keyspaceId)
+			sType := fmt.Sprintf("%v_%v_%v", streamId, ST_TYPE_KEYSPACE, keyspaceId)
 			err = l.sLogger.Write(sType, statMap.GetMap())
 			if err != nil {
 				logging.Errorf("Error in writing logs to stats logger type:%v, err:%v",

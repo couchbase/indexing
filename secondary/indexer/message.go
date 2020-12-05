@@ -157,7 +157,7 @@ const (
 	OPEN_STREAM
 	ADD_INDEX_LIST_TO_STREAM
 	REMOVE_INDEX_LIST_FROM_STREAM
-	REMOVE_KEYSPACE_FROM_STREAM // stop sending DCP recs for anything in keyspace
+	REMOVE_KEYSPACE_FROM_STREAM // stop sending mutations for anything in keyspace
 	CLOSE_STREAM
 	CLEANUP_STREAM
 	CLEANUP_PRJ_STATS
@@ -747,14 +747,14 @@ func (m *MsgUpdatePartnMap) String() string {
 
 //UPDATE_KEYSPACE_STATS_MAP
 type MsgUpdateKeyspaceStatsMap struct {
-	keyspaceStatsMap *KeyspaceStatsMap
+	keyspaceStatsMap KeyspaceStatsMap
 }
 
 func (m *MsgUpdateKeyspaceStatsMap) GetMsgType() MsgType {
 	return UPDATE_KEYSPACE_STATS_MAP
 }
 
-func (m *MsgUpdateKeyspaceStatsMap) GetStatsObject() *KeyspaceStatsMap {
+func (m *MsgUpdateKeyspaceStatsMap) GetStatsObject() KeyspaceStatsMap {
 	return m.keyspaceStatsMap
 }
 

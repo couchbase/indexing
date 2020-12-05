@@ -889,7 +889,7 @@ func (w *streamWorker) handleSingleMutation(mut *MutationKeys, stopch StopChanne
 	if q, ok := w.reader.keyspaceIdQueueMap[mut.meta.keyspaceId]; ok {
 		q.queue.Enqueue(mut, mut.meta.vbucket, stopch)
 
-		keyspaceStats := (*w.reader.stats.GetKeyspaceStats())[w.streamId][mut.meta.keyspaceId]
+		keyspaceStats := w.reader.stats.GetKeyspaceStats(w.streamId, mut.meta.keyspaceId)
 		if keyspaceStats != nil {
 			keyspaceStats.mutationQueueSize.Add(1)
 			keyspaceStats.numMutationsQueued.Add(1)
@@ -941,7 +941,7 @@ func (w *streamWorker) initKeyspaceIdFilter(keyspaceIdFilter map[string]*common.
 			w.keyspaceIdOSOException[b] = false
 
 			//reset stat for bucket
-			keyspaceStats := (*w.reader.stats.GetKeyspaceStats())[w.streamId][b]
+			keyspaceStats := w.reader.stats.GetKeyspaceStats(w.streamId, b)
 			if keyspaceStats != nil {
 				keyspaceStats.mutationQueueSize.Set(0)
 			}

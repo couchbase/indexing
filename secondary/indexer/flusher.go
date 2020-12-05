@@ -263,7 +263,7 @@ func (f *flusher) flushSingleVbucket(q MutationQueue, streamId common.StreamId,
 
 	ok := true
 	var mut *MutationKeys
-	keyspaceStats := (*f.stats.GetKeyspaceStats())[streamId][keyspaceId]
+	keyspaceStats := f.stats.GetKeyspaceStats(streamId, keyspaceId)
 
 	//Process till supervisor asks to stop on the channel
 	for ok {
@@ -307,7 +307,7 @@ func (f *flusher) flushSingleVbucketUptoSeqno(q MutationQueue, streamId common.S
 
 	ok := true
 	var mut *MutationKeys
-	keyspaceStats := (*f.stats.GetKeyspaceStats())[streamId][keyspaceId]
+	keyspaceStats := f.stats.GetKeyspaceStats(streamId, keyspaceId)
 
 	//Read till the channel is closed by queue indicating it has sent all the
 	//sequence numbers requested
@@ -353,7 +353,7 @@ func (f *flusher) flushSingleVbucketN(q MutationQueue, streamId common.StreamId,
 
 	ok := true
 	var mut *MutationKeys
-	keyspaceStats := (*f.stats.GetKeyspaceStats())[streamId][keyspaceId]
+	keyspaceStats := f.stats.GetKeyspaceStats(streamId, keyspaceId)
 
 	//Read till the channel is closed by queue indicating it has sent all the
 	//sequence numbers requested

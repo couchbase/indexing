@@ -2580,7 +2580,7 @@ func (tk *timekeeper) generateNewStabilityTS(streamId common.StreamId,
 			})
 			tsList := tk.ss.streamKeyspaceIdTsListMap[streamId][keyspaceId]
 			tsList.PushBack(tsElem)
-			keyspaceStats := (*tk.stats.GetKeyspaceStats())[streamId][keyspaceId]
+			keyspaceStats := tk.stats.GetKeyspaceStats(streamId, keyspaceId)
 			if keyspaceStats != nil {
 				keyspaceStats.tsQueueSize.Set(int64(tsList.Len()))
 			}
@@ -2698,7 +2698,7 @@ func (tk *timekeeper) processPendingTS(streamId common.StreamId, keyspaceId stri
 		}
 		tk.sendNewStabilityTS(tsElem, keyspaceId, streamId)
 		//update tsQueueSize when processing queued TS
-		keyspaceStats := (*tk.stats.GetKeyspaceStats())[streamId][keyspaceId]
+		keyspaceStats := tk.stats.GetKeyspaceStats(streamId, keyspaceId)
 		if keyspaceStats != nil {
 			keyspaceStats.tsQueueSize.Set(int64(tsList.Len()))
 		}
@@ -2893,7 +2893,7 @@ func (tk *timekeeper) setSnapshotType(streamId common.StreamId, keyspaceId strin
 			}
 		}
 	} else {
-		keyspaceStats := (*tk.stats.GetKeyspaceStats())[streamId][keyspaceId]
+		keyspaceStats := tk.stats.GetKeyspaceStats(streamId, keyspaceId)
 		if keyspaceStats != nil {
 			keyspaceStats.numNonAlignTS.Add(1)
 		}
