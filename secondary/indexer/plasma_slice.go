@@ -2136,9 +2136,9 @@ func (mdb *plasmaSlice) Statistics(consumerFilter uint64) (StorageStatistics, er
 		pStats := mdb.backstore.GetPreparedStats()
 		docidCount = pStats.ItemsCount
 		sts.MemUsed += pStats.MemSz + pStats.MemSzIndex
-		if pStats.StatsLoggingEnabled {
+		if pStats.StatsLoggingEnabled || (consumerFilter == statsMgmt.AllStatsFilter) {
 			backStoreStatsLoggingEnabled = true
-			if mainStoreStatsLoggingEnabled || (consumerFilter == statsMgmt.AllStatsFilter) {
+			if mainStoreStatsLoggingEnabled {
 				internalData = append(internalData, fmt.Sprintf(",\n\"BackStore\":\n%s", pStats))
 			} else {
 				internalData = append(internalData, fmt.Sprintf("{\n\"BackStore\":\n%s", pStats))
