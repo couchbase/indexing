@@ -470,8 +470,8 @@ func (feed *DcpFeed) dcpRequestStream(
 			vb, opaque, flags, vbuuid, startSequence, endSequence,
 			snapStart, snapEnd)
 		if err != nil {
-			fmsg := "%v ##%x DcpFeed %v failed, trying next"
-			logging.Errorf(fmsg, prefix, opaque, singleFeed.dcpFeed.Name())
+			fmsg := "%v ##%x DcpFeed %v failed, trying next, err: %v"
+			logging.Errorf(fmsg, prefix, opaque, singleFeed.dcpFeed.Name(), err)
 			feed.nodeFeeds[master] = purgeFeed(feed.nodeFeeds[master], singleFeed)
 			continue
 		}
@@ -580,7 +580,9 @@ func addtofeed(nodeFeeds []*FeedInfo) (*FeedInfo, bool) {
 			feedinfo = fi
 		}
 	}
-	return feedinfo, true
+	// It is possible that all the nodeFeeds available are nil
+	// and therefore feedinfo can be nil
+	return feedinfo, (feedinfo != nil)
 }
 
 func removefromfeed(nodeFeeds []*FeedInfo, forvb uint16) (*FeedInfo, bool) {
