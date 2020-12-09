@@ -47,6 +47,7 @@ type StreamState struct {
 	streamKeyspaceIdFlushEnabledMap      map[common.StreamId]KeyspaceIdFlushEnabledMap
 	streamKeyspaceIdDrainEnabledMap      map[common.StreamId]KeyspaceIdDrainEnabledMap
 	streamKeyspaceIdFlushDone            map[common.StreamId]KeyspaceIdFlushDone
+	streamKeyspaceIdForceRecovery        map[common.StreamId]KeyspaceIdForceRecovery
 
 	streamKeyspaceIdIndexCountMap   map[common.StreamId]KeyspaceIdIndexCountMap
 	streamKeyspaceIdRepairStopCh    map[common.StreamId]KeyspaceIdRepairStopCh
@@ -100,6 +101,7 @@ type KeyspaceIdAbortInProgressMap map[string]bool
 type KeyspaceIdFlushEnabledMap map[string]bool
 type KeyspaceIdDrainEnabledMap map[string]bool
 type KeyspaceIdFlushDone map[string]DoneChannel
+type KeyspaceIdForceRecovery map[string]bool
 
 type KeyspaceIdRestartVbTsMap map[string]*common.TsVbuuid
 
@@ -164,6 +166,7 @@ func InitStreamState(config common.Config) *StreamState {
 		streamKeyspaceIdFlushEnabledMap:    make(map[common.StreamId]KeyspaceIdFlushEnabledMap),
 		streamKeyspaceIdDrainEnabledMap:    make(map[common.StreamId]KeyspaceIdDrainEnabledMap),
 		streamKeyspaceIdFlushDone:          make(map[common.StreamId]KeyspaceIdFlushDone),
+		streamKeyspaceIdForceRecovery:      make(map[common.StreamId]KeyspaceIdForceRecovery),
 		streamKeyspaceIdVbStatusMap:        make(map[common.StreamId]KeyspaceIdVbStatusMap),
 		streamKeyspaceIdVbRefCountMap:      make(map[common.StreamId]KeyspaceIdVbRefCountMap),
 		streamKeyspaceIdRestartVbTsMap:     make(map[common.StreamId]KeyspaceIdRestartVbTsMap),
@@ -244,6 +247,9 @@ func (ss *StreamState) initNewStream(streamId common.StreamId) {
 
 	keyspaceIdFlushDone := make(KeyspaceIdFlushDone)
 	ss.streamKeyspaceIdFlushDone[streamId] = keyspaceIdFlushDone
+
+	keyspaceIdForceRecovery := make(KeyspaceIdForceRecovery)
+	ss.streamKeyspaceIdForceRecovery[streamId] = keyspaceIdForceRecovery
 
 	keyspaceIdVbStatusMap := make(KeyspaceIdVbStatusMap)
 	ss.streamKeyspaceIdVbStatusMap[streamId] = keyspaceIdVbStatusMap
@@ -340,6 +346,7 @@ func (ss *StreamState) initKeyspaceIdInStream(streamId common.StreamId,
 	ss.streamKeyspaceIdFlushEnabledMap[streamId][keyspaceId] = true
 	ss.streamKeyspaceIdDrainEnabledMap[streamId][keyspaceId] = true
 	ss.streamKeyspaceIdFlushDone[streamId][keyspaceId] = nil
+	ss.streamKeyspaceIdForceRecovery[streamId][keyspaceId] = false
 	ss.streamKeyspaceIdVbStatusMap[streamId][keyspaceId] = NewTimestamp(numVbuckets)
 	ss.streamKeyspaceIdVbRefCountMap[streamId][keyspaceId] = NewTimestamp(numVbuckets)
 	ss.streamKeyspaceIdRestartVbTsMap[streamId][keyspaceId] = nil
@@ -425,6 +432,7 @@ func (ss *StreamState) cleanupKeyspaceIdFromStream(streamId common.StreamId,
 		close(donech)
 	}
 	delete(ss.streamKeyspaceIdFlushDone[streamId], keyspaceId)
+	delete(ss.streamKeyspaceIdForceRecovery[streamId], keyspaceId)
 
 	if bs, ok := ss.streamKeyspaceIdStatus[streamId]; ok && bs != nil {
 		bs[keyspaceId] = STREAM_INACTIVE
@@ -450,6 +458,7 @@ func (ss *StreamState) resetStreamState(streamId common.StreamId) {
 	delete(ss.streamKeyspaceIdFlushEnabledMap, streamId)
 	delete(ss.streamKeyspaceIdDrainEnabledMap, streamId)
 	delete(ss.streamKeyspaceIdFlushDone, streamId)
+	delete(ss.streamKeyspaceIdForceRecovery, streamId)
 	delete(ss.streamKeyspaceIdVbStatusMap, streamId)
 	delete(ss.streamKeyspaceIdVbRefCountMap, streamId)
 	delete(ss.streamKeyspaceIdRestartVbTsMap, streamId)

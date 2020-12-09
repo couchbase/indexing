@@ -682,6 +682,12 @@ func (tk *timekeeper) processFlushAbort(streamId common.StreamId, keyspaceId str
 
 	keyspaceIdFlushInProgressTsMap[keyspaceId] = nil
 
+	//disable further processing for this stream
+	tk.ss.streamKeyspaceIdFlushEnabledMap[streamId][keyspaceId] = false
+
+	//after this point, a recovery must happen.
+	tk.ss.streamKeyspaceIdForceRecovery[streamId][keyspaceId] = true
+
 	tsList := tk.ss.streamKeyspaceIdTsListMap[streamId][keyspaceId]
 	tsList.Init()
 
@@ -698,6 +704,7 @@ func (tk *timekeeper) processFlushAbort(streamId common.StreamId, keyspaceId str
 		tk.supvRespch <- &MsgRecovery{mType: INDEXER_INIT_PREP_RECOVERY,
 			streamId:   streamId,
 			keyspaceId: keyspaceId,
+			restartTs:  tk.ss.computeRestartTs(streamId, keyspaceId),
 			sessionId:  sessionId}
 
 	case STREAM_PREPARE_RECOVERY:
@@ -1993,6 +2000,23 @@ func (tk *timekeeper) handleRecoveryDone(cmd Message) {
 			sessionId, currSessionId)
 		tk.supvCmdch <- &MsgSuccess{}
 		return
+	}
+
+	if tk.ss.streamKeyspaceIdForceRecovery[streamId][keyspaceId] {
+
+		sessionId := tk.ss.getSessionId(streamId, keyspaceId)
+
+		logging.Infof("Timekeeper::handleRecoveryDone %v %v. Initiate Recovery "+
+			"due to Force Recovery Flag. SessionId %v.", streamId, keyspaceId, sessionId)
+
+		tk.supvRespch <- &MsgRecovery{mType: INDEXER_INIT_PREP_RECOVERY,
+			streamId:   streamId,
+			keyspaceId: keyspaceId,
+			restartTs:  tk.ss.computeRestartTs(streamId, keyspaceId),
+			sessionId:  sessionId}
+		tk.supvCmdch <- &MsgSuccess{}
+		return
+
 	}
 
 	tk.ss.streamKeyspaceIdKVActiveTsMap[streamId][keyspaceId] = activeTs
