@@ -200,10 +200,12 @@ func ChangeIndexerSettings(configKey string, configValue interface{}, serverUser
 		preq, err := http.NewRequest("POST", url, bytes.NewBuffer(pbody))
 		preq.SetBasicAuth(serverUserName, serverPassword)
 
-		_, err = client.Do(preq)
+		resp, err := client.Do(preq)
 		if err != nil {
 			return err
 		}
+		defer resp.Body.Close()
+		ioutil.ReadAll(resp.Body)
 	}
 
 	return nil
