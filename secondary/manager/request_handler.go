@@ -1535,7 +1535,7 @@ func getWithAuth(url string) (*http.Response, error) {
 }
 
 func postWithAuth(url string, bodyType string, body io.Reader) (*http.Response, error) {
-	params := &security.RequestParams{Timeout: time.Duration(10) * time.Second}
+	params := &security.RequestParams{Timeout: time.Duration(120) * time.Second}
 	return security.PostWithAuth(url, bodyType, body, params)
 }
 
