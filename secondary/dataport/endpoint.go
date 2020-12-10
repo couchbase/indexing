@@ -30,6 +30,7 @@ import "github.com/couchbase/indexing/secondary/transport"
 import "github.com/couchbase/indexing/secondary/logging"
 import "github.com/couchbase/indexing/secondary/security"
 import "github.com/couchbase/indexing/secondary/stats"
+import dcpTransport "github.com/couchbase/indexing/secondary/dcp/transport"
 
 // RouterEndpoint structure, per topic, to gather key-versions / mutations
 // from one or more vbuckets and push them downstream to a
@@ -57,6 +58,10 @@ type RouterEndpoint struct {
 	conn net.Conn
 	// statistics
 	stats *EndpointStats
+
+	// Book-keeping for verifying sequence order.
+	// TODO: This introduces a map lookup in mutation path. Need to anlayse perf implication.
+	seqOrders map[string]dcpTransport.SeqOrderState
 }
 
 type EndpointStats struct {
@@ -135,6 +140,7 @@ func NewRouterEndpoint(
 		bufferTm:   time.Duration(config["bufferTimeout"].Int()),
 		harakiriTm: time.Duration(config["harakiriTimeout"].Int()),
 		stats:      &EndpointStats{},
+		seqOrders:  make(map[string]dcpTransport.SeqOrderState),
 	}
 	endpoint.ch = make(chan []interface{}, endpoint.keyChSize)
 	endpoint.conn = conn
