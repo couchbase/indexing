@@ -10,8 +10,10 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"strings"
 
 	"github.com/couchbase/indexing/secondary/dcp/transport"
+	"github.com/couchbase/indexing/secondary/logging"
 )
 
 // Stream Response Status Code
@@ -329,6 +331,13 @@ func (kv *KeyVersions) AddSnapshot(typ uint32, start, end uint64) {
 	kv.addKey(uint64(typ), Snapshot, key[:8], okey[:8], nil)
 }
 
+func (kv *KeyVersions) GetSnapshot() (uint32, uint64, uint64) {
+	start := binary.BigEndian.Uint64(kv.Keys[0])
+	end := binary.BigEndian.Uint64(kv.Oldkeys[0])
+	typ := uint32(kv.Uuids[0])
+	return typ, start, end
+}
+
 // In case of collection system events: key, oldKey, partnKey are mis-interpreted to
 // represent manifestUID, scopeID, collectionID
 func (kv *KeyVersions) AddSystemEvent(eventType transport.CollectionEvent,
@@ -376,6 +385,38 @@ func (kv *KeyVersions) String() string {
 		s += fmt.Sprintf("    %v Cmd(%v) `%s`",
 			uuid, kv.Commands[i], string(kv.Keys[i]))
 	}
+	return s
+}
+
+func (kv *KeyVersions) GetDebugInfo() string {
+	s := fmt.Sprintf("Docidx %v, Seqno %v, Ctime %v, Uuids %v, Commands %v",
+		logging.TagStrUD(kv.Docid), kv.Seqno, kv.Ctime, kv.Uuids, kv.Commands)
+
+	s += "\n"
+
+	// Add Keys
+	ss := make([]string, 0)
+	for _, k := range kv.Keys {
+		ss = append(ss, fmt.Sprintf("Key %v", logging.TagStrUD(k)))
+	}
+	s += strings.Join(ss, ", ")
+
+	s += "\n"
+
+	// Add OldKeys
+	ss = make([]string, 0)
+	for _, k := range kv.Oldkeys {
+		ss = append(ss, fmt.Sprintf("Key %v", logging.TagStrUD(k)))
+	}
+	s += strings.Join(ss, ", ")
+
+	// AddPartnKeys
+	ss = make([]string, 0)
+	for _, k := range kv.Partnkeys {
+		ss = append(ss, fmt.Sprintf("Key %v", logging.TagStrUD(k)))
+	}
+	s += strings.Join(ss, ", ")
+
 	return s
 }
 
