@@ -663,6 +663,20 @@ func (c *Client) Hijack() io.ReadWriteCloser {
 	return c.conn
 }
 
+func (c *Client) GetLocalAddr() string {
+	if c != nil && c.conn != nil {
+		return c.conn.(net.Conn).LocalAddr().String()
+	}
+	return ""
+}
+
+func (c *Client) GetRemoteAddr() string {
+	if c != nil && c.conn != nil {
+		return c.conn.(net.Conn).RemoteAddr().String()
+	}
+	return ""
+}
+
 func (c *Client) EnableCollections(clientName string) error {
 	if !c.IsCollectionsEnabled() {
 		if resp, err := c.sendHeloCollections(clientName); err != nil {
