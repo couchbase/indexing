@@ -155,8 +155,47 @@ func newWorker(workerid int, bucket string, dispCh chan workerDoneMsg,
 // 3. donech: shutdown message from dispatcher (vbSeqnosReader)
 func (w *worker) processRequest() {
 
-	defer w.wg.Done()
-	defer close(w.workerQueue)
+	processResponse := func(resp workerResult) {
+		cid := resp.cid
+		queuedReqs := w.workerMap[cid]
+		delete(w.workerMap, cid)
+
+		response := &vbSeqnosResponse{
+			seqnos: resp.seqs,
+			err:    resp.err,
+		}
+
+		if resp.err != nil {
+			dcp_buckets_seqnos.rw.Lock()
+			dcp_buckets_seqnos.errors[w.bucket] = resp.err
+			dcp_buckets_seqnos.rw.Unlock()
+		}
+
+		for i := 0; i < resp.numQueued; i++ {
+			queuedReqs[i].Reply(response)
+		}
+	}
+
+	defer func() {
+		// Close workerQueue so that it will not accept any new requests
+		close(w.workerQueue)
+
+		// Respond back to all out-standing requests in internalCh
+		for response := range w.internalCh {
+			processResponse(response)
+		}
+
+		// Respond back to all out-standing requests in worker reqCh
+		for req := range w.reqCh {
+			resp := &vbSeqnosResponse{
+				seqnos: nil,
+				err:    errors.New("vbSeqnosWorker is closed. Retry the operation"),
+			}
+			req.Reply(resp)
+		}
+
+		w.wg.Done()
+	}()
 
 loop:
 	for {
@@ -176,29 +215,13 @@ loop:
 			}
 		case resp, ok := <-w.internalCh:
 			if ok {
-				cid := resp.cid
-				queuedReqs := w.workerMap[cid]
-				delete(w.workerMap, cid)
-
-				response := &vbSeqnosResponse{
-					seqnos: resp.seqs,
-					err:    resp.err,
-				}
-
-				if resp.err != nil {
-					dcp_buckets_seqnos.rw.Lock()
-					dcp_buckets_seqnos.errors[w.bucket] = resp.err
-					dcp_buckets_seqnos.rw.Unlock()
-				}
-
-				for i := 0; i < resp.numQueued; i++ {
-					queuedReqs[i].Reply(response)
-				}
+				queuedReqs := w.workerMap[resp.cid]
+				processResponse(resp)
 
 				newQueuedReqs := queuedReqs[resp.numQueued:]
 				l := len(newQueuedReqs)
 				if l == 0 {
-					w.dispatcherCh <- workerDoneMsg{cid: cid, workerId: w.workerId}
+					w.dispatcherCh <- workerDoneMsg{cid: resp.cid, workerId: w.workerId}
 				} else {
 					lastReq := newQueuedReqs[l-1]
 					w.workerMap[lastReq.cid] = newQueuedReqs
@@ -219,7 +242,19 @@ loop:
 // 2. donech: shutdown message from dispatcher (vbSeqnosReader)
 func (w *worker) fetchSeqnos() {
 
-	defer close(w.internalCh)
+	defer func() {
+		// Close internalCh so that no new results can be pushed
+		close(w.internalCh)
+
+		// Respond back to all out-standing requests in workerQueu
+		for req := range w.workerQueue {
+			resp := &vbSeqnosResponse{
+				seqnos: nil,
+				err:    errors.New("vbSeqnosWorker is closed. Retry the operation"),
+			}
+			req.Reply(resp)
+		}
+	}()
 
 loop:
 	for {
