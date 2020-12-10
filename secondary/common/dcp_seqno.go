@@ -1201,8 +1201,9 @@ func FetchMinSeqnos(kvfeeds map[string]*kvConn, cid string, bucketLevel bool) (l
 	var wg sync.WaitGroup
 
 	// Buffer for storing kv_seqs from each node
-	kv_seqnos_node := make([][]uint64, len(kvfeeds))
-	errors := make([]error, len(kvfeeds))
+	kv_seqnos_node := make(map[string][]uint64)
+	errors := make(map[string]error, len(kvfeeds))
+	var mu sync.Mutex
 
 	if len(kvfeeds) == 0 {
 		err = fmt.Errorf("Empty kvfeeds")
@@ -1210,37 +1211,58 @@ func FetchMinSeqnos(kvfeeds map[string]*kvConn, cid string, bucketLevel bool) (l
 		return nil, err
 	}
 
-	i := 0
-	for _, feed := range kvfeeds {
+	for kvaddr, feed := range kvfeeds {
 		wg.Add(1)
-		go func(index int, feed *kvConn) {
+		go func(kvaddress string, feed *kvConn) {
 			defer wg.Done()
-			kv_seqnos_node[index] = feed.seqsbuf
+
 			if bucketLevel {
-				errors[index] = couchbase.GetSeqsAllVbStates(feed.mc,
-					kv_seqnos_node[index], feed.tmpbuf)
-			} else {
-				// A call to CollectionMinSeqnos implies cluster is fully upgraded to 7.0
-				err = tryEnableCollection(feed.mc)
+				err := couchbase.GetSeqsAllVbStates(feed.mc,
+					feed.seqsbuf, feed.tmpbuf)
 				if err != nil {
-					errors[index] = err
+					mu.Lock()
+					errors[kvaddress] = err
+					mu.Unlock()
 					return
 				}
-				errors[index] = couchbase.GetCollectionSeqsAllVbStates(feed.mc,
-					kv_seqnos_node[index], feed.tmpbuf, cid)
+			} else {
+				// A call to CollectionMinSeqnos implies cluster is fully upgraded to 7.0
+				err := tryEnableCollection(feed.mc)
+				if err != nil {
+					mu.Lock()
+					errors[kvaddress] = err
+					mu.Unlock()
+					return
+				}
+				err = couchbase.GetCollectionSeqsAllVbStates(feed.mc,
+					feed.seqsbuf, feed.tmpbuf, cid)
+				if err != nil {
+					mu.Lock()
+					errors[kvaddress] = err
+					mu.Unlock()
+					return
+				}
 			}
 
-		}(i, feed)
-		i++
+			mu.Lock()
+			kv_seqnos_node[kvaddress] = feed.seqsbuf
+			mu.Unlock()
+
+		}(kvaddr, feed)
 	}
 
 	wg.Wait()
 
-	seqnos := kv_seqnos_node[0]
-	for i, kv_seqnos := range kv_seqnos_node {
-		err := errors[i]
+	i := 0
+	var seqnos []uint64
+	for kvaddr, kv_seqnos := range kv_seqnos_node {
+		if i == 0 {
+			seqnos = kv_seqnos_node[kvaddr]
+		}
+		err := errors[kvaddr]
 		if err != nil {
-			logging.Errorf("feed.FetchMinSeqnos(): %v\n", err)
+			conn := kvfeeds[kvaddr].mc
+			logging.Errorf("feed.FetchMinSeqnos(): %v from node: %v\n", err, conn.GetRemoteAddr())
 			return nil, err
 		}
 
