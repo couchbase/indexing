@@ -68,6 +68,9 @@ func defaultMkConn(
 		}
 	}()
 
+	conn.SetMcdConnectionDeadline()
+	defer conn.ResetMcdConnectionDeadline()
+
 	if gah, ok := ah.(GenericMcdAuthHandler); ok {
 		err = gah.AuthenticateMemcachedConn(host, conn)
 		return

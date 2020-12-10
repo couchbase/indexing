@@ -617,8 +617,8 @@ func getKVFeeds(cluster, pooln, bucketn string) (map[string]*kvConn, error) {
 
 	// make sure a feed is available for all kv-nodes
 	var conn *memcached.Client
-	var connName string
 	for kvaddr := range m {
+
 		conn, err = bucket.GetMcConn(kvaddr)
 		if err != nil {
 			logging.Errorf("GetMcConn(): %v\n", err)
@@ -626,11 +626,7 @@ func getKVFeeds(cluster, pooln, bucketn string) (map[string]*kvConn, error) {
 		}
 
 		if clustVer >= INDEXER_70_VERSION {
-			connName, err = getConnName()
-			if err != nil {
-				return nil, err
-			}
-			err = conn.EnableCollections(connName)
+			err := tryEnableCollection(conn)
 			if err != nil {
 				return nil, err
 			}
@@ -1373,10 +1369,15 @@ func getConnName() (string, error) {
 
 func tryEnableCollection(conn *memcached.Client) error {
 	if !conn.IsCollectionsEnabled() {
+
 		connName, err := getConnName()
 		if err != nil {
 			return err
 		}
+
+		conn.SetMcdConnectionDeadline()
+		defer conn.ResetMcdConnectionDeadline()
+
 		err = conn.EnableCollections(connName)
 		if err != nil {
 			return err
