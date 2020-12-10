@@ -554,11 +554,11 @@ func HandleCommand(
 		if err != nil {
 			return err
 		}
+		defer oresp.Body.Close()
 		obody, err := ioutil.ReadAll(oresp.Body)
 		if err != nil {
 			return err
 		}
-		oresp.Body.Close()
 
 		pretty := strings.Replace(string(obody), ",\"", ",\n\"", -1)
 		fmt.Printf("Current Settings:\n%s\n", string(pretty))
@@ -582,14 +582,18 @@ func HandleCommand(
 				up := strings.Split(cmd.Auth, ":")
 				preq.SetBasicAuth(up[0], up[1])
 			}
-			_, err = client.Do(preq)
+			presp, err := client.Do(preq)
 			if err != nil {
 				return err
 			}
+			defer presp.Body.Close()
+			ioutil.ReadAll(presp.Body)
+
 			nresp, err := client.Do(oreq)
 			if err != nil {
 				return err
 			}
+			defer nresp.Body.Close()
 			nbody, err := ioutil.ReadAll(nresp.Body)
 			if err != nil {
 				return err
