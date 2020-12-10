@@ -708,9 +708,9 @@ func addDBSbucket(cluster, pooln, bucketn string) (err error) {
 		return
 	}
 
+	connMap := make(map[string]string)
 	// make sure a feed is available for all kv-nodes
 	var conn *memcached.Client
-	var connName string
 	for kvaddr := range m {
 		conn, err = bucket.GetMcConn(kvaddr)
 		if err != nil {
@@ -718,12 +718,12 @@ func addDBSbucket(cluster, pooln, bucketn string) (err error) {
 			return err
 		}
 
+		if conn.GetLocalAddr() != "" {
+			connMap[conn.GetLocalAddr()] = conn.GetRemoteAddr()
+		}
+
 		if clustVer >= INDEXER_70_VERSION {
-			connName, err = getConnName()
-			if err != nil {
-				return nil
-			}
-			err = conn.EnableCollections(connName)
+			err = tryEnableCollection(conn)
 			if err != nil {
 				return err
 			}
@@ -731,7 +731,7 @@ func addDBSbucket(cluster, pooln, bucketn string) (err error) {
 		kvfeeds[kvaddr] = newKVConn(conn, dcp_buckets_seqnos.numVbs)
 	}
 
-	logging.Infof("{bucket,feeds} %q created for dcp_seqno cache...\n", bucketn)
+	logging.Infof("{bucket,feeds} %q created for dcp_seqno cache..., established connections: %v\n", bucketn, connMap)
 	return nil
 }
 
