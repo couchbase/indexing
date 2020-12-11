@@ -292,6 +292,33 @@ func noauthurl(path string) (string, error) {
 		"nouser", "nopwd", indexers[0], path), nil
 }
 
+// doHttpRequest is a helper that makes an HTTP request, then consumes and closes the body of the
+// response to avoid leaking the TCP connection.
+func doHttpRequest(req *http.Request) (resp *http.Response, err error) {
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		return resp, err
+	}
+	defer resp.Body.Close()
+	_, err = ioutil.ReadAll(resp.Body)
+
+	return resp, err
+}
+
+// doHttpRequestReturnBody is a helper that makes an HTTP request, then retrieves the contents of and
+// closes the body of the response to avoid leaking the TCP connection. On success both the response
+// and the contents of the body are returned.
+func doHttpRequestReturnBody(req *http.Request) (resp *http.Response, respbody []byte, err error) {
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		return resp, nil, err
+	}
+	defer resp.Body.Close()
+	respbody, err = ioutil.ReadAll(resp.Body)
+
+	return resp, respbody, err
+}
+
 func restful_getall() (map[string]interface{}, error) {
 	url, err := makeurl("/internal/indexes")
 	if err != nil {
@@ -331,7 +358,7 @@ func restful_drop(ids []string) error {
 			return err
 		}
 
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := doHttpRequest(req)
 		if err != nil {
 			return err
 		}
@@ -499,7 +526,7 @@ func restful_create_andbuild() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := doHttpRequest(req)
 	if err != nil {
 		return nil, err
 	}
@@ -522,11 +549,10 @@ func restful_create_andbuild() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	resp, err = http.DefaultClient.Do(req)
+	resp, respbody, err := doHttpRequestReturnBody(req)
 	if err != nil {
 		return nil, err
 	}
-	respbody, _ := ioutil.ReadAll(resp.Body)
 	log.Printf("%v %v\n", resp.Status, string(respbody))
 	if restful_checkstatus(resp.Status) == true {
 		return nil, fmt.Errorf("restful_getall() status: %v", resp.Status)
@@ -554,6 +580,7 @@ func restful_lookup(ids []string) error {
 		if err != nil {
 			return nil, err
 		}
+		defer resp.Body.Close()
 		log.Printf("status : %v\n", resp.Status)
 
 		dec := json.NewDecoder(resp.Body)
@@ -864,6 +891,7 @@ func restful_rangescan(ids []string) error {
 		if err != nil {
 			return nil, err
 		}
+		defer resp.Body.Close()
 		log.Printf("Status : %v\n", resp.Status)
 
 		dec := json.NewDecoder(resp.Body)
@@ -991,6 +1019,7 @@ func restful_fulltablescan(ids []string) error {
 		if err != nil {
 			return nil, err
 		}
+		defer resp.Body.Close()
 		log.Printf("Status : %v\n", resp.Status)
 
 		dec := json.NewDecoder(resp.Body)
@@ -1057,7 +1086,7 @@ func restful_countscan(ids []string) error {
 		if err != nil {
 			return 0, err
 		}
-		resp, err := http.DefaultClient.Do(req)
+		resp, respbody, err := doHttpRequestReturnBody(req)
 		if err != nil {
 			return 0, err
 		}
@@ -1065,7 +1094,6 @@ func restful_countscan(ids []string) error {
 
 		var result interface{}
 
-		respbody, _ := ioutil.ReadAll(resp.Body)
 		if len(respbody) == 0 {
 			return 0, nil
 		}
@@ -1260,6 +1288,7 @@ func getscans(id string, body map[string]interface{}) ([]interface{}, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer resp.Body.Close()
 	log.Printf("getscans status : %v\n", resp.Status)
 
 	dec := json.NewDecoder(resp.Body)
@@ -1293,7 +1322,7 @@ func getscanscount(id string, body map[string]interface{}) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, respbody, err := doHttpRequestReturnBody(req)
 	if err != nil {
 		return 0, err
 	}
@@ -1301,7 +1330,6 @@ func getscanscount(id string, body map[string]interface{}) (int, error) {
 
 	var result interface{}
 
-	respbody, _ := ioutil.ReadAll(resp.Body)
 	if len(respbody) == 0 {
 		return 0, nil
 	}
