@@ -1161,12 +1161,9 @@ func TestDeleteBucketWhileInitialIndexBuild(t *testing.T) {
 	log.Printf("============== DBG: Drop all indexes in all buckets")
 	e := secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
 	FailTestIfError(e, "Error in DropAllSecondaryIndexes", t)
-	log.Printf("============== DBG: Flush bucket %v", bucketNames[0])
-	kvutility.FlushBucket(bucketNames[0], "", clusterconfig.Username, clusterconfig.Password, kvaddress)
-	kvutility.EditBucket(bucketNames[0], "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256")
 	tc.ClearMap(docs)
 
-	for i := 1; i < numOfBuckets; i++ {
+	for i := 0; i < numOfBuckets; i++ {
 		log.Printf("============== DBG: Delete bucket %v", bucketNames[i])
 		kvutility.DeleteBucket(bucketNames[i], "", clusterconfig.Username, clusterconfig.Password, kvaddress)
 		secondaryindex.RemoveClientForBucket(kvaddress, bucketNames[i])
