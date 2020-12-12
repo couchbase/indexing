@@ -684,7 +684,7 @@ func (ctxt *testContext) GetScanCap() int64 {
 
 func (ctxt *testContext) Error(err errors.Error) {
 	fmt.Printf("Scan error: %v\n", err)
-	ctxt.err = err.Cause()
+	ctxt.err = err.GetICause()
 }
 
 func (ctxt *testContext) Warning(wrn errors.Error) {
