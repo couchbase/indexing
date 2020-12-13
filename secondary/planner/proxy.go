@@ -257,7 +257,7 @@ func ConvertToIndexUsages(config common.Config, localMeta *LocalIndexMetadata, n
 		defn := &localMeta.IndexDefinitions[i]
 		defn.SetCollectionDefaults()
 
-		indexes, err := ConvertToIndexUsage(config, defn, localMeta)
+		indexes, err := ConvertToIndexUsage(config, defn, localMeta, nil, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -276,7 +276,9 @@ func ConvertToIndexUsages(config common.Config, localMeta *LocalIndexMetadata, n
 //
 // This function convert a single index defintion to IndexUsage.
 //
-func ConvertToIndexUsage(config common.Config, defn *common.IndexDefn, localMeta *LocalIndexMetadata) ([]*IndexUsage, error) {
+func ConvertToIndexUsage(config common.Config, defn *common.IndexDefn, localMeta *LocalIndexMetadata,
+	buildTokens map[common.IndexDefnId]*mc.BuildCommandToken,
+	delTokens map[common.IndexDefnId]*mc.DeleteCommandToken) ([]*IndexUsage, error) {
 
 	// find the topology metadata
 	topology := findTopologyByCollection(localMeta.IndexTopologies, defn.Bucket, defn.Scope, defn.Collection)
@@ -333,16 +335,26 @@ func ConvertToIndexUsage(config common.Config, defn *common.IndexDefn, localMeta
 				pc := common.NewKeyPartitionContainer(numVbuckets, int(inst.NumPartitions), defn.PartitionScheme, defn.HashScheme)
 
 				// Is the index being deleted by user?   This will read the delete token from metakv.  If untable read from metakv,
-				// pendingDelete is false (cannot assert index is to-be-delete).
-				pendingDelete, err := mc.DeleteCommandTokenExist(defn.DefnId)
-				if err != nil {
-					return nil, err
+				// pendingDelete is false (cannot assert index is to-be-delete).s
+				if delTokens != nil {
+					_, index.pendingDelete = delTokens[defn.DefnId]
+				} else {
+					pendingDelete, err := mc.DeleteCommandTokenExist(defn.DefnId)
+					if err != nil {
+						return nil, err
+					}
+					index.pendingDelete = pendingDelete
 				}
-				index.pendingDelete = pendingDelete
 
-				pendingBuild, err := mc.BuildCommandTokenExist(defn.DefnId)
-				if err != nil {
-					return nil, err
+				var pendingBuild bool
+				if buildTokens != nil {
+					_, pendingBuild = buildTokens[defn.DefnId]
+				} else {
+					var err error
+					pendingBuild, err = mc.BuildCommandTokenExist(defn.DefnId)
+					if err != nil {
+						return nil, err
+					}
 				}
 
 				//index can be scheduled without a build token for cases like

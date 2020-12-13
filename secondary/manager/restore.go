@@ -159,6 +159,20 @@ func (m *RestoreContext) convertImage() error {
 		return err
 	}
 
+	var delTokens map[common.IndexDefnId]*mc.DeleteCommandToken
+	delTokens, err = mc.FetchIndexDefnToDeleteCommandTokensMap()
+	if err != nil {
+		logging.Errorf("RestoreContext: Error in FetchIndexDefnToDeleteCommandTokensMap %v", err)
+		return err
+	}
+
+	var buildTokens map[common.IndexDefnId]*mc.BuildCommandToken
+	buildTokens, err = mc.FetchIndexDefnToBuildCommandTokensMap()
+	if err != nil {
+		logging.Errorf("RestoreContext: Error in FetchIndexDefnToBuildCommandTokensMap %v", err)
+		return err
+	}
+
 	for _, meta := range m.image.Metadata {
 		for _, defn := range meta.IndexDefinitions {
 
@@ -166,7 +180,8 @@ func (m *RestoreContext) convertImage() error {
 
 			// If the index is in CREATED state, this will return nil.  So if there is any create index in flight,
 			// it could be excluded by restore.
-			indexes, err := planner.ConvertToIndexUsage(config, &defn, (*planner.LocalIndexMetadata)(unsafe.Pointer(&meta)))
+			indexes, err := planner.ConvertToIndexUsage(config, &defn, (*planner.LocalIndexMetadata)(unsafe.Pointer(&meta)),
+				buildTokens, delTokens)
 			if err != nil {
 				return err
 			}

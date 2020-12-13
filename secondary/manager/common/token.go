@@ -480,6 +480,31 @@ func MarshallDeleteCommandTokenList(r *DeleteCommandTokenList) ([]byte, error) {
 	return buf, nil
 }
 
+func FetchIndexDefnToDeleteCommandTokensMap() (map[c.IndexDefnId]*DeleteCommandToken, error) {
+	paths, err := c.MetakvList(DeleteDDLCommandTokenPath)
+	if err != nil {
+		return nil, err
+	}
+
+	// Do not return a nil result, even if there aren't any tokens.
+	result := make(map[c.IndexDefnId]*DeleteCommandToken)
+	if len(paths) != 0 {
+		for _, path := range paths {
+			token := &DeleteCommandToken{}
+			exist, err := c.MetakvGet(path, token)
+			if err != nil {
+				return nil, err
+			}
+
+			if exist {
+				result[token.DefnId] = token
+			}
+		}
+	}
+
+	return result, nil
+}
+
 /////////////////////////////////////////////////////////////
 // Build Token Management
 //////////////////////////////////////////////////////////////
@@ -535,6 +560,31 @@ func MarshallBuildCommandToken(r *BuildCommandToken) ([]byte, error) {
 	}
 
 	return buf, nil
+}
+
+func FetchIndexDefnToBuildCommandTokensMap() (map[c.IndexDefnId]*BuildCommandToken, error) {
+	paths, err := c.MetakvList(BuildDDLCommandTokenPath)
+	if err != nil {
+		return nil, err
+	}
+
+	// Do not return a nil result, even if there aren't any tokens.
+	result := make(map[c.IndexDefnId]*BuildCommandToken)
+	if len(paths) != 0 {
+		for _, path := range paths {
+			token := &BuildCommandToken{}
+			exist, err := c.MetakvGet(path, token)
+			if err != nil {
+				return nil, err
+			}
+
+			if exist {
+				result[token.DefnId] = token
+			}
+		}
+	}
+
+	return result, nil
 }
 
 //////////////////////////////////////////////////////////////
