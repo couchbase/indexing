@@ -22,10 +22,10 @@ func Set(key string, v interface{}, bucketName string, password string, hostaddr
 
 	b, err := c.ConnectBucket(url, "default", bucketName)
 	tc.HandleError(err, "bucket")
+	defer b.Close()
 
 	err = b.Set(key, 0, v)
 	tc.HandleError(err, "set")
-	b.Close()
 }
 
 func SetKeyValues(keyValues tc.KeyValues, bucketName string, password string, hostaddress string) {
@@ -33,12 +33,12 @@ func SetKeyValues(keyValues tc.KeyValues, bucketName string, password string, ho
 
 	b, err := c.ConnectBucket(url, "default", bucketName)
 	tc.HandleError(err, "bucket")
+	defer b.Close()
 
 	for key, value := range keyValues {
 		err = b.Set(key, 0, value)
 		tc.HandleError(err, "set")
 	}
-	b.Close()
 }
 
 func GetBytes(key interface{}) ([]byte, error) {
@@ -74,6 +74,7 @@ func SetBinaryValues(keyValues tc.KeyValues, bucketName string, password string,
 
 	b, err := c.ConnectBucket(url, "default", bucketName)
 	tc.HandleError(err, "bucket")
+	defer b.Close()
 
 	for key, value := range keyValues {
 		if bytes, err := GetBytes(value); err == nil {
@@ -81,7 +82,6 @@ func SetBinaryValues(keyValues tc.KeyValues, bucketName string, password string,
 		}
 		tc.HandleError(err, "setRaw")
 	}
-	b.Close()
 }
 
 func Get(key string, rv interface{}, bucketName string, password string, hostaddress string) {
@@ -89,6 +89,7 @@ func Get(key string, rv interface{}, bucketName string, password string, hostadd
 
 	b, err := c.ConnectBucket(url, "default", bucketName)
 	tc.HandleError(err, "bucket")
+	defer b.Close()
 
 	err = b.Get(key, &rv)
 	tc.HandleError(err, "get")
@@ -99,10 +100,10 @@ func Delete(key string, bucketName string, password string, hostaddress string) 
 
 	b, err := c.ConnectBucket(url, "default", bucketName)
 	tc.HandleError(err, "bucket")
+	defer b.Close()
 
 	err = b.Delete(key)
 	tc.HandleError(err, "delete")
-	b.Close()
 }
 
 func DeleteKeys(keyValues tc.KeyValues, bucketName string, password string, hostaddress string) {
@@ -110,12 +111,12 @@ func DeleteKeys(keyValues tc.KeyValues, bucketName string, password string, host
 
 	b, err := c.ConnectBucket(url, "default", bucketName)
 	tc.HandleError(err, "bucket")
+	defer b.Close()
 
 	for key, _ := range keyValues {
 		err = b.Delete(key)
 		tc.HandleError(err, "delete")
 	}
-	b.Close()
 }
 
 func CreateBucket(bucketName, authenticationType, saslBucketPassword, serverUserName, serverPassword, hostaddress, bucketRamQuota, proxyPort string) {
@@ -134,7 +135,9 @@ func CreateBucket(bucketName, authenticationType, saslBucketPassword, serverUser
 	}
 	// todo : error out if response is error
 	tc.HandleError(err, "Create Bucket")
-	log.Printf("Created bucket %v", bucketName)
+	defer resp.Body.Close()
+	responseBody, _ := ioutil.ReadAll(resp.Body)
+	log.Printf("Created bucket %v, responseBody: %s", bucketName, responseBody)
 }
 
 func DeleteBucket(bucketName, bucketPassword, serverUserName, serverPassword, hostaddress string) {
@@ -152,7 +155,9 @@ func DeleteBucket(bucketName, bucketPassword, serverUserName, serverPassword, ho
 	}
 	// todo : error out if response is error
 	tc.HandleError(err, "Delete Bucket "+address)
-	log.Printf("Deleted bucket %v", bucketName)
+	defer resp.Body.Close()
+	responseBody, _ := ioutil.ReadAll(resp.Body)
+	log.Printf("Deleted bucket %v, responseBody: %s", bucketName, responseBody)
 }
 
 func EnableBucketFlush(bucketName, bucketPassword, serverUserName, serverPassword, hostaddress string) {
@@ -173,8 +178,10 @@ func EnableBucketFlush(bucketName, bucketPassword, serverUserName, serverPasswor
 	}
 	// todo : error out if response is error
 	tc.HandleError(err, "Enable Bucket")
+	defer resp.Body.Close()
+	responseBody, _ := ioutil.ReadAll(resp.Body)
 	time.Sleep(3 * time.Second)
-	log.Printf("Flush Enabled on bucket %v", bucketName)
+	log.Printf("Flush Enabled on bucket %v, responseBody: %s", bucketName, responseBody)
 }
 
 func FlushBucket(bucketName, bucketPassword, serverUserName, serverPassword, hostaddress string) {
@@ -192,8 +199,10 @@ func FlushBucket(bucketName, bucketPassword, serverUserName, serverPassword, hos
 	}
 	// todo : error out if response is error
 	tc.HandleError(err, "Flush Bucket "+address)
+	defer resp.Body.Close()
+	responseBody, _ := ioutil.ReadAll(resp.Body)
 	time.Sleep(30 * time.Second)
-	log.Printf("Flushed the bucket %v", bucketName)
+	log.Printf("Flushed the bucket %v, Response body: %s", bucketName, responseBody)
 }
 
 func EditBucket(bucketName, bucketPassword, serverUserName, serverPassword, hostaddress, bucketRamQuota string) {
@@ -213,8 +222,10 @@ func EditBucket(bucketName, bucketPassword, serverUserName, serverPassword, host
 	}
 	// todo : error out if response is error
 	tc.HandleError(err, "Edit Bucket")
+	defer resp.Body.Close()
+	responseBody, _ := ioutil.ReadAll(resp.Body)
 	time.Sleep(3 * time.Second)
-	log.Printf("Modified parameters of bucket %v", bucketName)
+	log.Printf("Modified parameters of bucket %v, responseBody: %s", bucketName, responseBody)
 }
 
 func GetItemCountInBucket(bucketName, bucketPassword, serverUserName, serverPassword, hostaddress string) int {
@@ -234,9 +245,9 @@ func GetItemCountInBucket(bucketName, bucketPassword, serverUserName, serverPass
 	// todo : error out if response is error
 	tc.HandleError(err, "Get Bucket")
 	defer resp.Body.Close()
+	body, _ := ioutil.ReadAll(resp.Body)
 
 	response := make(map[string]interface{})
-	body, _ := ioutil.ReadAll(resp.Body)
 	err = json.Unmarshal(body, &response)
 	if err != nil {
 		tc.HandleError(err, "Get Bucket :: Unmarshal of response body")

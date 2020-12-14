@@ -19,6 +19,7 @@ func SetKeyValuesForCollection(keyValues tc.KeyValues, bucketName, collectionID,
 
 	b, err := common.ConnectBucket(url, "default", bucketName)
 	tc.HandleError(err, "bucket")
+	defer b.Close()
 
 	for key, value := range keyValues {
 		// The vb mapping for a key is independent of collections.
@@ -26,7 +27,6 @@ func SetKeyValuesForCollection(keyValues tc.KeyValues, bucketName, collectionID,
 		err = b.SetC(key, collectionID, 0, value)
 		tc.HandleError(err, "set")
 	}
-	b.Close()
 }
 
 func GetFromCollection(key string, rv interface{}, bucketName, collectionID, password, hostaddress string) {
@@ -34,6 +34,7 @@ func GetFromCollection(key string, rv interface{}, bucketName, collectionID, pas
 
 	b, err := common.ConnectBucket(url, "default", bucketName)
 	tc.HandleError(err, "bucket")
+	defer b.Close()
 
 	err = b.GetC(key, collectionID, &rv)
 	tc.HandleError(err, "get")
@@ -44,10 +45,10 @@ func DeleteFromCollection(key string, bucketName, collectionID, password, hostad
 
 	b, err := common.ConnectBucket(url, "default", bucketName)
 	tc.HandleError(err, "bucket")
+	defer b.Close()
 
 	err = b.DeleteC(key, collectionID)
 	tc.HandleError(err, "delete")
-	b.Close()
 }
 
 func DeleteKeysFromCollection(keyValues tc.KeyValues, bucketName, collectionID, password, hostaddress string) {
@@ -55,17 +56,17 @@ func DeleteKeysFromCollection(keyValues tc.KeyValues, bucketName, collectionID, 
 
 	b, err := common.ConnectBucket(url, "default", bucketName)
 	tc.HandleError(err, "bucket")
+	defer b.Close()
 
 	for key, _ := range keyValues {
 		err = b.DeleteC(key, collectionID)
 		tc.HandleError(err, "delete")
 	}
-	b.Close()
 }
 
 func GetManifest(bucketName string, serverUserName, serverPassword, hostaddress string) *collections.CollectionManifest {
 	client := &http.Client{}
-	address := "http://" + hostaddress + "/pools/default/buckets/" + bucketName + "/collections"
+	address := "http://" + hostaddress + "/pools/default/buckets/" + bucketName + "/scopes"
 
 	req, _ := http.NewRequest("GET", address, nil)
 	req.SetBasicAuth(serverUserName, serverPassword)
@@ -97,7 +98,7 @@ func GetScopes(bucketName, serverUserName, serverPassword, hostaddress string) [
 
 func createScope(bucketName, scopeName, serverUserName, serverPassword, hostaddress string) {
 	client := &http.Client{}
-	address := "http://" + hostaddress + "/pools/default/buckets/" + bucketName + "/collections/"
+	address := "http://" + hostaddress + "/pools/default/buckets/" + bucketName + "/scopes"
 	data := url.Values{"name": {scopeName}}
 	req, _ := http.NewRequest("POST", address, strings.NewReader(data.Encode()))
 	req.SetBasicAuth(serverUserName, serverPassword)
@@ -112,6 +113,7 @@ func createScope(bucketName, scopeName, serverUserName, serverPassword, hostaddr
 	}
 	// todo : error out if response is error
 	tc.HandleError(err, "Create scope "+address)
+	defer resp.Body.Close()
 	body, _ := ioutil.ReadAll(resp.Body)
 
 	log.Printf("Create scope succeeded for bucket %v, scopeName: %v, body: %s \n", bucketName, scopeName, body)
@@ -120,7 +122,7 @@ func createScope(bucketName, scopeName, serverUserName, serverPassword, hostaddr
 
 func createCollection(bucketName, scopeName, collectionName, serverUserName, serverPassword, hostaddress string) {
 	client := &http.Client{}
-	address := "http://" + hostaddress + "/pools/default/buckets/" + bucketName + "/collections/" + scopeName + "/"
+	address := "http://" + hostaddress + "/pools/default/buckets/" + bucketName + "/scopes/" + scopeName + "/collections"
 	data := url.Values{"name": {collectionName}}
 	req, _ := http.NewRequest("POST", address, strings.NewReader(data.Encode()))
 	req.SetBasicAuth(serverUserName, serverPassword)
@@ -135,6 +137,7 @@ func createCollection(bucketName, scopeName, collectionName, serverUserName, ser
 	}
 	// todo : error out if response is error
 	tc.HandleError(err, "Create Collection "+address)
+	defer resp.Body.Close()
 	body, _ := ioutil.ReadAll(resp.Body)
 
 	log.Printf("Created collection succeeded for bucket: %v, scope: %v, collection: %v, body: %s", bucketName, scopeName, collectionName, body)
@@ -161,7 +164,7 @@ func CreateCollection(bucketName, scope, collection, serverUsername, serverPassw
 
 func DropScope(bucketName, scopeName, serverUserName, serverPassword, hostaddress string) {
 	client := &http.Client{}
-	address := "http://" + hostaddress + "/pools/default/buckets/" + bucketName + "/collections/" + scopeName
+	address := "http://" + hostaddress + "/pools/default/buckets/" + bucketName + "/scopes/" + scopeName
 	req, _ := http.NewRequest("DELETE", address, nil)
 	req.SetBasicAuth(serverUserName, serverPassword)
 	req.Header.Add("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
@@ -174,13 +177,14 @@ func DropScope(bucketName, scopeName, serverUserName, serverPassword, hostaddres
 	}
 	// todo : error out if response is error
 	tc.HandleError(err, "Drop scope "+address)
+	defer resp.Body.Close()
 	body, _ := ioutil.ReadAll(resp.Body)
 	log.Printf("Dropped scope %v for bucket: %v, body: %s", scopeName, bucketName, body)
 }
 
 func DropCollection(bucketName, scopeName, collectionName, serverUserName, serverPassword, hostaddress string) {
 	client := &http.Client{}
-	address := "http://" + hostaddress + "/pools/default/buckets/" + bucketName + "/collections/" + scopeName + "/" + collectionName
+	address := "http://" + hostaddress + "/pools/default/buckets/" + bucketName + "/scopes/" + scopeName + "/collections/" + collectionName
 	req, _ := http.NewRequest("DELETE", address, nil)
 	req.SetBasicAuth(serverUserName, serverPassword)
 	req.Header.Add("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
@@ -193,6 +197,7 @@ func DropCollection(bucketName, scopeName, collectionName, serverUserName, serve
 	}
 	// todo : error out if response is error
 	tc.HandleError(err, "Drop scope "+address)
+	defer resp.Body.Close()
 	body, _ := ioutil.ReadAll(resp.Body)
 	log.Printf("Dropped collection %v for bucket: %v, scope: %v, body: %s", collectionName, bucketName, scopeName, body)
 }

@@ -22,7 +22,7 @@ import (
 	"unsafe"
 
 	"github.com/couchbase/indexing/secondary/common/collections"
-	"github.com/couchbase/indexing/secondary/dcp/transport/client"
+	memcached "github.com/couchbase/indexing/secondary/dcp/transport/client"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/security"
 )
@@ -651,7 +651,7 @@ loop:
 		if version >= 7 {
 			// For each bucket, update collection manifest
 			manifest := &collections.CollectionManifest{}
-			err = p.client.parseURLResponse("pools/default/buckets/"+b.Name+"/collections", manifest)
+			err = p.client.parseURLResponse("pools/default/buckets/"+b.Name+"/scopes", manifest)
 			if err != nil {
 				// bucket list is out of sync with cluster bucket list
 				// bucket might have got deleted.
@@ -671,7 +671,7 @@ func (p *Pool) RefreshManifest(bucket string) error {
 	retryCount := 0
 retry:
 	manifest := &collections.CollectionManifest{}
-	err := p.client.parseURLResponse("pools/default/buckets/"+bucket+"/collections", manifest)
+	err := p.client.parseURLResponse("pools/default/buckets/"+bucket+"/scopes", manifest)
 	if err != nil {
 		// bucket list is out of sync with cluster bucket list
 		// bucket might have got deleted.
