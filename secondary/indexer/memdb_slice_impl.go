@@ -634,9 +634,11 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 	// Remove should be done before performing delete of nodes (SMR)
 	// Otherwise, by the time back update happens the pointing node
 	// may be freed and update operation may crash.
-	_, ptr := mdb.back[workerId].Remove(lookupentry)
-	mdb.idxStats.backstoreRawDataSize.Add(0 - int64(len(lookupentry)))
-	mdb.idxStats.rawDataSize.Add(0 - int64(len(lookupentry)))
+	success, ptr := mdb.back[workerId].Remove(lookupentry)
+	if success {
+		mdb.idxStats.backstoreRawDataSize.Add(0 - int64(len(lookupentry)))
+		mdb.idxStats.rawDataSize.Add(0 - int64(len(lookupentry)))
+	}
 
 	list := memdb.NewNodeList((*skiplist.Node)(ptr), mdb.exposeItemCopy)
 	oldEntriesBytes := list.Keys()
@@ -671,9 +673,11 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 		for _, item := range entriesToRemove {
 			node := list.Remove(item)
 			oldSz := getNodeItemSize(node)
-			mdb.main[workerId].DeleteNode(node)
-			mdb.idxStats.rawDataSize.Add(0 - int64(oldSz))
-			subtractKeySizeStat(mdb.idxStats, oldSz)
+			success := mdb.main[workerId].DeleteNode(node)
+			if success {
+				mdb.idxStats.rawDataSize.Add(0 - int64(oldSz))
+				subtractKeySizeStat(mdb.idxStats, oldSz)
+			}
 		}
 		mdb.isDirty = true
 		return 0
@@ -693,9 +697,11 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 			}
 			oldSz := len(entry)
 			node := list.Remove(entry)
-			mdb.main[workerId].DeleteNode(node)
-			mdb.idxStats.rawDataSize.Add(0 - int64(oldSz))
-			subtractKeySizeStat(mdb.idxStats, oldSz)
+			success := mdb.main[workerId].DeleteNode(node)
+			if success {
+				mdb.idxStats.rawDataSize.Add(0 - int64(oldSz))
+				subtractKeySizeStat(mdb.idxStats, oldSz)
+			}
 			nmut++
 		}
 	}
@@ -730,10 +736,13 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 	}
 
 	// Update back index entry
-	mdb.back[workerId].Update(lookupentry, unsafe.Pointer(list.Head()))
+	updated, _ := mdb.back[workerId].Update(lookupentry, unsafe.Pointer(list.Head()))
 
-	mdb.idxStats.backstoreRawDataSize.Add(int64(len(lookupentry)))
-	mdb.idxStats.rawDataSize.Add(int64(len(lookupentry)))
+	// 'updated' is set to false if an entry is inserted
+	if !updated {
+		mdb.idxStats.backstoreRawDataSize.Add(int64(len(lookupentry)))
+		mdb.idxStats.rawDataSize.Add(int64(len(lookupentry)))
+	}
 	mdb.isDirty = true
 	return nmut
 }
@@ -814,20 +823,24 @@ func (mdb *memdbSlice) deleteSecArrayIndex(docid []byte, workerId int) (nmut int
 	oldEntriesBytes := list.Keys()
 
 	t0 := time.Now()
-	mdb.back[workerId].Remove(lookupentry)
+	success, _ := mdb.back[workerId].Remove(lookupentry)
 	mdb.idxStats.Timings.stKVDelete.Put(time.Since(t0))
 
-	mdb.idxStats.backstoreRawDataSize.Add(0 - int64(len(lookupentry)))
-	mdb.idxStats.rawDataSize.Add(0 - int64(len(lookupentry)))
-	atomic.AddInt64(&mdb.delete_bytes, int64(len(lookupentry)))
+	if success {
+		mdb.idxStats.backstoreRawDataSize.Add(0 - int64(len(lookupentry)))
+		mdb.idxStats.rawDataSize.Add(0 - int64(len(lookupentry)))
+		atomic.AddInt64(&mdb.delete_bytes, int64(len(lookupentry)))
+	}
 
 	// Delete each entry in oldEntriesBytes
 	for _, item := range oldEntriesBytes {
 		node := list.Remove(item)
 		oldSz := getNodeItemSize(node)
-		mdb.main[workerId].DeleteNode(node)
-		mdb.idxStats.rawDataSize.Add(0 - int64(oldSz))
-		subtractKeySizeStat(mdb.idxStats, oldSz)
+		success := mdb.main[workerId].DeleteNode(node)
+		if success {
+			mdb.idxStats.rawDataSize.Add(0 - int64(oldSz))
+			subtractKeySizeStat(mdb.idxStats, oldSz)
+		}
 	}
 
 	mdb.isDirty = true

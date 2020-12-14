@@ -683,10 +683,12 @@ func (mdb *plasmaSlice) insertPrimaryIndex(key []byte, docid []byte, workerId in
 	_, err = mdb.main[workerId].LookupKV(entry)
 	if err == plasma.ErrItemNotFound {
 		t0 := time.Now()
-		mdb.main[workerId].InsertKV(entry, nil)
+		err = mdb.main[workerId].InsertKV(entry, nil)
 		mdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
-		atomic.AddInt64(&mdb.insert_bytes, int64(len(entry)))
-		mdb.idxStats.rawDataSize.Add(int64(len(entry)))
+		if err == nil {
+			atomic.AddInt64(&mdb.insert_bytes, int64(len(entry)))
+			mdb.idxStats.rawDataSize.Add(int64(len(entry)))
+		}
 		mdb.isDirty = true
 		return 1
 	}
@@ -725,17 +727,23 @@ func (mdb *plasmaSlice) insertSecIndex(key []byte, docid []byte, workerId int, i
 		mdb.back[workerId].Begin()
 		defer mdb.back[workerId].End()
 
-		mdb.main[workerId].InsertKV(entry, nil)
+		err = mdb.main[workerId].InsertKV(entry, nil)
+		if err == nil {
+			mdb.idxStats.rawDataSize.Add(int64(len(entry)))
+			addKeySizeStat(mdb.idxStats, len(entry))
+			atomic.AddInt64(&mdb.insert_bytes, int64(len(entry)))
+		}
+
 		// entry2BackEntry overwrites the buffer to remove docid
 		backEntry := entry2BackEntry(entry)
-		mdb.back[workerId].InsertKV(docid, backEntry)
+		err = mdb.back[workerId].InsertKV(docid, backEntry)
 		mdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
 
-		mdb.idxStats.backstoreRawDataSize.Add(int64(len(docid) + len(backEntry)))
-		// rawDataSize is the sum of all data inserted into main store and back store
-		mdb.idxStats.rawDataSize.Add(int64(len(docid) + len(backEntry) + len(entry)))
-		addKeySizeStat(mdb.idxStats, len(entry))
-		atomic.AddInt64(&mdb.insert_bytes, int64(len(docid)+len(entry)))
+		if err == nil {
+			// rawDataSize is the sum of all data inserted into main store and back store
+			mdb.idxStats.backstoreRawDataSize.Add(int64(len(docid) + len(backEntry)))
+			mdb.idxStats.rawDataSize.Add(int64(len(docid) + len(backEntry)))
+		}
 
 		if int64(len(key)) > atomic.LoadInt64(&mdb.maxKeySizeInLastInterval) {
 			atomic.StoreInt64(&mdb.maxKeySizeInLastInterval, int64(len(key)))
@@ -855,9 +863,11 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 					oldKeyCount[i], mdb.idxDefn.Desc, mdb.encodeBuf[workerId][:0], nil, szConf)
 				common.CrashOnError(err)
 				// Add back
-				mdb.main[workerId].InsertKV(entry, nil)
-				mdb.idxStats.rawDataSize.Add(int64(len(entry)))
-				addKeySizeStat(mdb.idxStats, len(entry))
+				err = mdb.main[workerId].InsertKV(entry, nil)
+				if err == nil {
+					mdb.idxStats.rawDataSize.Add(int64(len(entry)))
+					addKeySizeStat(mdb.idxStats, len(entry))
+				}
 			}
 		}
 	}
@@ -871,9 +881,11 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 				common.CrashOnError(err)
 				// Delete back
 				entrySz := len(entry)
-				mdb.main[workerId].DeleteKV(entry)
-				mdb.idxStats.rawDataSize.Add(0 - int64(entrySz))
-				subtractKeySizeStat(mdb.idxStats, entrySz)
+				err = mdb.main[workerId].DeleteKV(entry)
+				if err == nil {
+					mdb.idxStats.rawDataSize.Add(0 - int64(entrySz))
+					subtractKeySizeStat(mdb.idxStats, entrySz)
+				}
 			}
 		}
 	}
@@ -896,12 +908,14 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 			keyDelSz := len(keyToBeDeleted)
 
 			t0 := time.Now()
-			mdb.main[workerId].DeleteKV(keyToBeDeleted)
+			err = mdb.main[workerId].DeleteKV(keyToBeDeleted)
 			mdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
 
-			mdb.idxStats.rawDataSize.Add(0 - int64(keyDelSz))
-			subtractKeySizeStat(mdb.idxStats, keyDelSz)
-			atomic.AddInt64(&mdb.delete_bytes, int64(keyDelSz))
+			if err == nil {
+				mdb.idxStats.rawDataSize.Add(0 - int64(keyDelSz))
+				subtractKeySizeStat(mdb.idxStats, keyDelSz)
+				atomic.AddInt64(&mdb.delete_bytes, int64(keyDelSz))
+			}
 			nmut++
 		}
 	}
@@ -924,12 +938,14 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 			}
 
 			t0 := time.Now()
-			mdb.main[workerId].InsertKV(keyToBeAdded, nil)
+			err = mdb.main[workerId].InsertKV(keyToBeAdded, nil)
 			mdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
 
-			mdb.idxStats.rawDataSize.Add(int64(len(keyToBeAdded)))
-			addKeySizeStat(mdb.idxStats, len(keyToBeAdded))
-			atomic.AddInt64(&mdb.insert_bytes, int64(len(keyToBeAdded)))
+			if err == nil {
+				mdb.idxStats.rawDataSize.Add(int64(len(keyToBeAdded)))
+				addKeySizeStat(mdb.idxStats, len(keyToBeAdded))
+				atomic.AddInt64(&mdb.insert_bytes, int64(len(keyToBeAdded)))
+			}
 
 			if int64(len(keyToBeAdded)) > atomic.LoadInt64(&mdb.maxKeySizeInLastInterval) {
 				atomic.StoreInt64(&mdb.maxKeySizeInLastInterval, int64(len(keyToBeAdded)))
@@ -944,13 +960,15 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 		if oldkey != nil {
 			t0 := time.Now()
 			oldSz := len(oldkey)
-			mdb.back[workerId].DeleteKV(docid)
+			err := mdb.back[workerId].DeleteKV(docid)
 			mdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
 
-			mdb.idxStats.backstoreRawDataSize.Add(0 - int64(len(docid)+oldSz))
-			mdb.idxStats.rawDataSize.Add(0 - int64(len(docid)+oldSz))
-			subtractArrayKeySizeStat(mdb.idxStats, oldSz)
-			atomic.AddInt64(&mdb.delete_bytes, int64(len(docid)))
+			if err == nil {
+				mdb.idxStats.backstoreRawDataSize.Add(0 - int64(len(docid)+oldSz))
+				mdb.idxStats.rawDataSize.Add(0 - int64(len(docid)+oldSz))
+				subtractArrayKeySizeStat(mdb.idxStats, oldSz)
+				atomic.AddInt64(&mdb.delete_bytes, int64(len(docid)))
+			}
 		}
 	} else { //set the back index entry <docid, encodedkey>
 
@@ -973,23 +991,27 @@ func (mdb *plasmaSlice) insertSecArrayIndex(key []byte, docid []byte, workerId i
 		if oldkey != nil {
 			t0 := time.Now()
 			oldSz := len(oldkey)
-			mdb.back[workerId].DeleteKV(docid)
+			err := mdb.back[workerId].DeleteKV(docid)
 			mdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
 
-			mdb.idxStats.backstoreRawDataSize.Add(0 - int64(len(docid)+oldSz))
-			mdb.idxStats.rawDataSize.Add(0 - int64(len(docid)+oldSz))
-			subtractArrayKeySizeStat(mdb.idxStats, oldSz)
-			atomic.AddInt64(&mdb.delete_bytes, int64(len(docid)))
+			if err == nil {
+				mdb.idxStats.backstoreRawDataSize.Add(0 - int64(len(docid)+oldSz))
+				mdb.idxStats.rawDataSize.Add(0 - int64(len(docid)+oldSz))
+				subtractArrayKeySizeStat(mdb.idxStats, oldSz)
+				atomic.AddInt64(&mdb.delete_bytes, int64(len(docid)))
+			}
 		}
 
 		t0 := time.Now()
-		mdb.back[workerId].InsertKV(docid, key)
+		err = mdb.back[workerId].InsertKV(docid, key)
 		mdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
 
-		mdb.idxStats.backstoreRawDataSize.Add(int64(len(docid) + len(key)))
-		mdb.idxStats.rawDataSize.Add(int64(len(docid) + len(key)))
-		addArrayKeySizeStat(mdb.idxStats, len(key))
-		atomic.AddInt64(&mdb.insert_bytes, int64(len(docid)+len(key)))
+		if err == nil {
+			mdb.idxStats.backstoreRawDataSize.Add(int64(len(docid) + len(key)))
+			mdb.idxStats.rawDataSize.Add(int64(len(docid) + len(key)))
+			addArrayKeySizeStat(mdb.idxStats, len(key))
+			atomic.AddInt64(&mdb.insert_bytes, int64(len(docid)+len(key)))
+		}
 	}
 
 	mdb.isDirty = true
@@ -1029,11 +1051,13 @@ func (mdb *plasmaSlice) deletePrimaryIndex(docid []byte, workerId int) (nmut int
 	defer mdb.main[workerId].End()
 
 	if _, err := mdb.main[workerId].LookupKV(entry); err == plasma.ErrItemNoValue {
-		mdb.main[workerId].DeleteKV(itm)
+		err1 := mdb.main[workerId].DeleteKV(itm)
 		mdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
 
-		mdb.idxStats.rawDataSize.Add(0 - int64(len(entry.Bytes())))
-		atomic.AddInt64(&mdb.delete_bytes, int64(len(entry.Bytes())))
+		if err1 == nil {
+			mdb.idxStats.rawDataSize.Add(0 - int64(len(entry.Bytes())))
+			atomic.AddInt64(&mdb.delete_bytes, int64(len(entry.Bytes())))
+		}
 
 		mdb.isDirty = true
 		return 1
@@ -1063,16 +1087,21 @@ func (mdb *plasmaSlice) deleteSecIndex(docid []byte, compareKey []byte, workerId
 		atomic.AddInt64(&mdb.delete_bytes, int64(len(docid)))
 		mdb.main[workerId].Begin()
 		defer mdb.main[workerId].End()
-		mdb.back[workerId].DeleteKV(docid)
-		mdb.idxStats.backstoreRawDataSize.Add(0 - int64(len(docid)+len(backEntry)))
+		err = mdb.back[workerId].DeleteKV(docid)
+		if err == nil {
+			mdb.idxStats.backstoreRawDataSize.Add(0 - int64(len(docid)+len(backEntry)))
+			mdb.idxStats.rawDataSize.Add(0 - int64(len(docid)+len(backEntry)))
+		}
 
 		entry := backEntry2entry(docid, backEntry, buf, mdb.keySzConf[workerId])
 		entrySz := len(entry)
-		mdb.main[workerId].DeleteKV(entry)
+		err = mdb.main[workerId].DeleteKV(entry)
 		mdb.idxStats.Timings.stKVDelete.Put(time.Since(t0))
 
-		mdb.idxStats.rawDataSize.Add(0 - int64(len(docid)+len(backEntry)+entrySz))
-		subtractKeySizeStat(mdb.idxStats, entrySz)
+		if err == nil {
+			mdb.idxStats.rawDataSize.Add(0 - int64(entrySz))
+			subtractKeySizeStat(mdb.idxStats, entrySz)
+		}
 	}
 
 	mdb.isDirty = true
@@ -1145,24 +1174,28 @@ func (mdb *plasmaSlice) deleteSecArrayIndexNoTx(docid []byte, workerId int) (nmu
 		}
 		t0 := time.Now()
 		keyDelSz := len(keyToBeDeleted)
-		mdb.main[workerId].DeleteKV(keyToBeDeleted)
+		err = mdb.main[workerId].DeleteKV(keyToBeDeleted)
 		mdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
 
-		mdb.idxStats.rawDataSize.Add(0 - int64(keyDelSz))
-		subtractKeySizeStat(mdb.idxStats, keyDelSz)
-		atomic.AddInt64(&mdb.delete_bytes, int64(keyDelSz))
+		if err == nil {
+			mdb.idxStats.rawDataSize.Add(0 - int64(keyDelSz))
+			subtractKeySizeStat(mdb.idxStats, keyDelSz)
+			atomic.AddInt64(&mdb.delete_bytes, int64(keyDelSz))
+		}
 	}
 
 	//delete from the back index
 	t0 = time.Now()
 	oldSz := len(olditm)
-	mdb.back[workerId].DeleteKV(docid)
+	err = mdb.back[workerId].DeleteKV(docid)
 	mdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
 
-	mdb.idxStats.backstoreRawDataSize.Add(0 - int64(len(docid)+oldSz))
-	mdb.idxStats.rawDataSize.Add(0 - int64(len(docid)+oldSz))
-	subtractArrayKeySizeStat(mdb.idxStats, oldSz)
-	atomic.AddInt64(&mdb.delete_bytes, int64(len(docid)))
+	if err == nil {
+		mdb.idxStats.backstoreRawDataSize.Add(0 - int64(len(docid)+oldSz))
+		mdb.idxStats.rawDataSize.Add(0 - int64(len(docid)+oldSz))
+		subtractArrayKeySizeStat(mdb.idxStats, oldSz)
+		atomic.AddInt64(&mdb.delete_bytes, int64(len(docid)))
+	}
 
 	mdb.isDirty = true
 	return len(indexEntriesToBeDeleted)
