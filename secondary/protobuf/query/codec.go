@@ -2,10 +2,12 @@
 
 package protoQuery
 
-import "errors"
+import (
+	"errors"
 
-import c "github.com/couchbase/indexing/secondary/common"
-import "github.com/golang/protobuf/proto"
+	c "github.com/couchbase/indexing/secondary/common"
+	"github.com/golang/protobuf/proto"
+)
 
 // ErrorTransportVersion
 var ErrorTransportVersion = errors.New("dataport.transportVersion")
@@ -101,8 +103,6 @@ func ProtobufDecode(data []byte) (value interface{}, err error) {
 	} else if val := pl.GetStream(); val != nil {
 		return val, nil
 	} else if val := pl.GetCountResponse(); val != nil {
-		return val, nil
-	} else if val := pl.GetEndStream(); val != nil {
 		return val, nil
 	} else if val := pl.GetStreamEnd(); val != nil {
 		return val, nil
