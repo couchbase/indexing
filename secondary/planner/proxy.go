@@ -19,6 +19,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/couchbase/indexing/secondary/common"
@@ -35,6 +36,17 @@ var cinfoClient *common.ClusterInfoClient
 // since it is possible for RetrievePlanFromCluster to get invoked
 // from multiple go-routines
 var cinfoClientMutex sync.Mutex
+
+// restRequestTimeout in Seconds
+var restRequestTimeout uint32 = 120
+
+func GetRestRequestTimeout() uint32 {
+	return atomic.LoadUint32(&restRequestTimeout)
+}
+
+func SetRestRequestTimeout(val uint32) {
+	atomic.StoreUint32(&restRequestTimeout, val)
+}
 
 //////////////////////////////////////////////////////////////
 // Concrete Type/Struct
@@ -1114,7 +1126,8 @@ func getLocalNumReplicasResp(addr string) (*http.Response, error) {
 
 func getWithCbauth(url string) (*http.Response, error) {
 
-	params := &security.RequestParams{Timeout: time.Duration(120) * time.Second}
+	t := GetRestRequestTimeout()
+	params := &security.RequestParams{Timeout: time.Duration(t) * time.Second}
 	response, err := security.GetWithAuth(url, params)
 	if err == nil && response.StatusCode != http.StatusOK {
 		return response, convertError(response)
