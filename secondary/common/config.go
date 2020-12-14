@@ -678,6 +678,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"queryport.client.restRequestTimeout": ConfigValue{
+		120, // value
+		"timeout, in seconds, is timeout for REST calls in GetWithCbauth Function of Index Planner.", //help
+		120,   // default
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.allowPartialQuorum": ConfigValue{
 		false,
 		"This boolean flag, when set, allows index creation with partial quorum. " +
