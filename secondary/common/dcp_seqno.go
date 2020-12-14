@@ -1,15 +1,21 @@
 package common
 
-import "sync"
-import "time"
-import "fmt"
-import "sort"
-import "errors"
+import (
+	"errors"
+	"fmt"
+	"sort"
+	"sync"
+	"sync/atomic"
+	"time"
+	"unsafe"
 
-import "github.com/couchbase/indexing/secondary/stats"
-import "github.com/couchbase/indexing/secondary/dcp"
-import "github.com/couchbase/indexing/secondary/dcp/transport/client"
-import "github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/stats"
+
+	couchbase "github.com/couchbase/indexing/secondary/dcp"
+
+	memcached "github.com/couchbase/indexing/secondary/dcp/transport/client"
+	"github.com/couchbase/indexing/secondary/logging"
+)
 
 const seqsReqChanSize = 20000
 const seqsBufSize = 64 * 1024
@@ -24,15 +30,47 @@ var dcp_buckets_seqnos struct {
 	numVbs    int
 	buckets   map[string]*couchbase.Bucket // bucket ->*couchbase.Bucket
 	errors    map[string]error             // bucket -> error
-	readerMap map[string]*vbSeqnosReader   // bucket->*vbSeqnosReader
+	readerMap VbSeqnosReaderHolder         // bucket->*vbSeqnosReader
 }
 
 func init() {
 	dcp_buckets_seqnos.buckets = make(map[string]*couchbase.Bucket)
 	dcp_buckets_seqnos.errors = make(map[string]error)
-	dcp_buckets_seqnos.readerMap = make(map[string]*vbSeqnosReader)
+	dcp_buckets_seqnos.readerMap.Init()
 
 	go pollForDeletedBuckets()
+}
+
+// Holder for VbSeqnosReaderHolder
+type VbSeqnosReaderHolder struct {
+	ptr *unsafe.Pointer
+}
+
+func (readerHolder *VbSeqnosReaderHolder) Init() {
+	readerHolder.ptr = new(unsafe.Pointer)
+}
+
+func (readerHolder *VbSeqnosReaderHolder) Set(vbseqnosReaderMap map[string]*vbSeqnosReader) {
+	atomic.StorePointer(readerHolder.ptr, unsafe.Pointer(&vbseqnosReaderMap))
+}
+
+func (readerHolder *VbSeqnosReaderHolder) Get() map[string]*vbSeqnosReader {
+	if ptr := atomic.LoadPointer(readerHolder.ptr); ptr != nil {
+		return *(*map[string]*vbSeqnosReader)(ptr)
+	} else {
+		return make(map[string]*vbSeqnosReader)
+	}
+}
+
+func (readerHolder *VbSeqnosReaderHolder) Clone() map[string]*vbSeqnosReader {
+	clone := make(map[string]*vbSeqnosReader)
+	if ptr := atomic.LoadPointer(readerHolder.ptr); ptr != nil {
+		currMap := *(*map[string]*vbSeqnosReader)(ptr)
+		for bucket, reader := range currMap {
+			clone[bucket] = reader
+		}
+	}
+	return clone
 }
 
 type vbSeqnosResponse struct {
@@ -99,7 +137,7 @@ func (r *vbSeqnosReader) GetSeqnos() (seqs []uint64, err error) {
 	return
 }
 
-func (r *vbSeqnosReader) enqueueRequest(req interface{}) () {
+func (r *vbSeqnosReader) enqueueRequest(req interface{}) {
 	defer func() {
 		if rec := recover(); rec != nil {
 			//if requestCh is closed, reader has closed already
@@ -226,7 +264,11 @@ func addDBSbucket(cluster, pooln, bucketn string) (err error) {
 	defer func() {
 		if err == nil {
 			dcp_buckets_seqnos.buckets[bucketn] = bucket
-			dcp_buckets_seqnos.readerMap[bucketn] = newVbSeqnosReader(bucketn, kvfeeds)
+			reader := newVbSeqnosReader(bucketn, kvfeeds)
+			cloneReaderMap := dcp_buckets_seqnos.readerMap.Clone()
+			cloneReaderMap[bucketn] = reader
+			dcp_buckets_seqnos.readerMap.Set(cloneReaderMap)
+
 		} else {
 			for _, kvfeed := range kvfeeds {
 				kvfeed.mc.Close()
@@ -303,23 +345,23 @@ func delDBSbucket(bucketn string, checkErr bool) {
 		}
 		delete(dcp_buckets_seqnos.buckets, bucketn)
 
-		reader, ok := dcp_buckets_seqnos.readerMap[bucketn]
+		cloneReaderMap := dcp_buckets_seqnos.readerMap.Clone()
+		reader, ok := cloneReaderMap[bucketn]
 		if ok && reader != nil {
 			reader.Close()
 		}
-		delete(dcp_buckets_seqnos.readerMap, bucketn)
+		delete(cloneReaderMap, bucketn)
+		dcp_buckets_seqnos.readerMap.Set(cloneReaderMap)
 
 		delete(dcp_buckets_seqnos.errors, bucketn)
 	}
 }
 
 func BucketSeqsTiming(bucket string) *stats.TimingStat {
-	dcp_buckets_seqnos.rw.RLock()
-	defer dcp_buckets_seqnos.rw.RUnlock()
-	if reader, ok := dcp_buckets_seqnos.readerMap[bucket]; ok {
+	readerMap := dcp_buckets_seqnos.readerMap.Get()
+	if reader, ok := readerMap[bucket]; ok {
 		return &reader.seqsTiming
 	}
-
 	return nil
 }
 
@@ -341,21 +383,22 @@ func BucketSeqnos(cluster, pooln, bucketn string) (l_seqnos []uint64, err error)
 	var reader *vbSeqnosReader
 
 	reader, err = func() (*vbSeqnosReader, error) {
-		dcp_buckets_seqnos.rw.RLock()
-		reader, ok := dcp_buckets_seqnos.readerMap[bucketn]
-		dcp_buckets_seqnos.rw.RUnlock()
+		readerMap := dcp_buckets_seqnos.readerMap.Get()
+		reader, ok := readerMap[bucketn]
 		if !ok { // no {bucket,kvfeeds} found, create!
 			dcp_buckets_seqnos.rw.Lock()
 			defer dcp_buckets_seqnos.rw.Unlock()
 
 			// Recheck if reader is still not present since we acquired write lock
 			// after releasing the read lock.
-			if reader, ok = dcp_buckets_seqnos.readerMap[bucketn]; !ok {
+			readerMap = dcp_buckets_seqnos.readerMap.Get()
+			if reader, ok = readerMap[bucketn]; !ok {
 				if err = addDBSbucket(cluster, pooln, bucketn); err != nil {
 					return nil, err
 				}
+				readerMap = dcp_buckets_seqnos.readerMap.Get()
 				// addDBSbucket has populated the reader
-				reader = dcp_buckets_seqnos.readerMap[bucketn]
+				reader = readerMap[bucketn]
 			}
 		}
 		return reader, nil
@@ -485,11 +528,12 @@ func pollForDeletedBuckets() {
 				}
 				dcp_buckets_seqnos.rw.RUnlock()
 			}()
+			readerMap := dcp_buckets_seqnos.readerMap.Get()
 			for bucketn, bucket = range dcp_buckets_seqnos.buckets {
 				if m, err := bucket.GetVBmap(nil); err != nil {
 					// idle detect failures.
 					todels = append(todels, bucketn)
-				} else if len(m) != len(dcp_buckets_seqnos.readerMap[bucketn].kvfeeds) {
+				} else if len(m) != len(readerMap[bucketn].kvfeeds) {
 					// lazy detect kv-rebalance
 					todels = append(todels, bucketn)
 				}
@@ -536,21 +580,22 @@ func BucketMinSeqnos(cluster, pooln, bucketn string) (l_seqnos []uint64, err err
 	var reader *vbSeqnosReader
 
 	reader, err = func() (*vbSeqnosReader, error) {
-		dcp_buckets_seqnos.rw.RLock()
-		reader, ok := dcp_buckets_seqnos.readerMap[bucketn]
-		dcp_buckets_seqnos.rw.RUnlock()
+		readerMap := dcp_buckets_seqnos.readerMap.Get()
+		reader, ok := readerMap[bucketn]
 		if !ok { // no {bucket,kvfeeds} found, create!
 			dcp_buckets_seqnos.rw.Lock()
 			defer dcp_buckets_seqnos.rw.Unlock()
 
 			// Recheck if reader is still not present since we acquired write lock
 			// after releasing the read lock.
-			if reader, ok = dcp_buckets_seqnos.readerMap[bucketn]; !ok {
+			readerMap = dcp_buckets_seqnos.readerMap.Get()
+			if reader, ok = readerMap[bucketn]; !ok {
 				if err = addDBSbucket(cluster, pooln, bucketn); err != nil {
 					return nil, err
 				}
+				readerMap = dcp_buckets_seqnos.readerMap.Get()
 				// addDBSbucket has populated the reader
-				reader = dcp_buckets_seqnos.readerMap[bucketn]
+				reader = readerMap[bucketn]
 			}
 		}
 		return reader, nil
