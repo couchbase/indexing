@@ -957,24 +957,14 @@ func (fdb *fdbSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 	snapInfo := info.(*fdbSnapshotInfo)
 
 	var s *fdbSnapshot
-	if fdb.isPrimary {
-		s = &fdbSnapshot{slice: fdb,
-			idxDefnId:  fdb.idxDefnId,
-			idxInstId:  fdb.idxInstId,
-			main:       fdb.main[0],
-			ts:         snapInfo.Timestamp(),
-			mainSeqNum: snapInfo.MainSeq,
-			committed:  info.IsCommitted(),
-		}
-	} else {
-		s = &fdbSnapshot{slice: fdb,
-			idxDefnId:  fdb.idxDefnId,
-			idxInstId:  fdb.idxInstId,
-			main:       fdb.main[0],
-			ts:         snapInfo.Timestamp(),
-			mainSeqNum: snapInfo.MainSeq,
-			committed:  info.IsCommitted(),
-		}
+
+	s = &fdbSnapshot{slice: fdb,
+		idxDefnId:  fdb.idxDefnId,
+		idxInstId:  fdb.idxInstId,
+		main:       fdb.main[0],
+		ts:         snapInfo.Timestamp(),
+		mainSeqNum: snapInfo.MainSeq,
+		committed:  info.IsCommitted(),
 	}
 
 	if info.IsCommitted() {
