@@ -10,13 +10,15 @@
 package client
 
 import (
-	"github.com/couchbase/cbauth/metakv"
-	"github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/logging"
 	"math"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/couchbase/cbauth/metakv"
+	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/planner"
 )
 
 type ClientSettings struct {
@@ -208,6 +210,11 @@ func (s *ClientSettings) handleSettings(config common.Config) {
 			defer s.mutex.Unlock()
 			s.storageMode = storageMode
 		}()
+	}
+
+	restRequestTimeout, ok := config["queryport.client.restRequestTimeout"]
+	if ok {
+		planner.SetRestRequestTimeout(uint32(restRequestTimeout.Int()))
 	}
 
 	if s.needRefresh {
