@@ -572,10 +572,8 @@ func (r *Rebalancer) dropIndexWhenIdle(ttid string, tt *c.TransferToken, notifyc
 	defer r.wg.Done()
 	defer func() {
 		if notifych != nil {
-			switch {
-			case <-notifych:
-			default:
-			}
+			// Blocking wait to ensure indexes are dropped sequentially
+			<-notifych
 		}
 	}()
 
@@ -1045,8 +1043,8 @@ loop:
 					remainingBuildTime = 0
 				}
 
-				l.Infof("Rebalancer::waitForIndexBuild Index: %v:%v:%v:%v State: %v" +
-						" Pending: %v EstTime: %v Partitions: %v Destination: %v",
+				l.Infof("Rebalancer::waitForIndexBuild Index: %v:%v:%v:%v State: %v"+
+					" Pending: %v EstTime: %v Partitions: %v Destination: %v",
 					defn.Bucket, defn.Scope, defn.Collection, defn.Name, c.IndexState(status),
 					tot_remaining, remainingBuildTime, defn.Partitions, r.localaddr)
 
@@ -1452,8 +1450,8 @@ func (r *Rebalancer) getBuildProgressFromStatus(status *manager.IndexStatusRespo
 					}
 
 					destNode := getDestNode(defn.Partitions[0], idx.PartitionMap)
-					l.Infof("Rebalancer::getBuildProgressFromStatus Index: %v:%v:%v:%v" +
-							" Progress: %v InstId: %v RealInstId: %v Partitions: %v Destination: %v",
+					l.Infof("Rebalancer::getBuildProgressFromStatus Index: %v:%v:%v:%v"+
+						" Progress: %v InstId: %v RealInstId: %v Partitions: %v Destination: %v",
 						defn.Bucket, defn.Scope, defn.Collection, defn.Name,
 						progress, idx.InstId, realInstId, defn.Partitions, destNode)
 
