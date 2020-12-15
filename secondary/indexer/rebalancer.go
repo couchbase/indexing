@@ -1443,7 +1443,8 @@ func (r *Rebalancer) getBuildProgressFromStatus(status *manager.IndexStatusRespo
 				// This function is called for every transfer token before it has becomes COMMITTED or DELETED.
 				// The index may have not be in REAL_PENDING state but the token has not yet moved to COMMITTED/DELETED state.
 				// So we need to return progress even if it is not replicating.
-				if idx.Status == "Replicating" || idx.NodeUUID == destId {
+				// Pre-7.0 nodes will report "Replicating" instead of "Moving" so check for both.
+				if idx.Status == "Moving" || idx.Status == "Replicating" || idx.NodeUUID == destId {
 					progress, ok := r.lastKnownProgress[id]
 					if !ok || idx.Progress > 0 {
 						progress = idx.Progress
