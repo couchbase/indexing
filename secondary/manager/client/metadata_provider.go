@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/ioutil"
 	"math"
 	"math/rand"
 	"net"
@@ -842,8 +843,11 @@ func (o *MetadataProvider) makeScheduleCreateRequest(idxDefn *c.IndexDefn,
 			err, idxDefn.Bucket, idxDefn.Scope, idxDefn.Collection, idxDefn.Name)
 		return err
 	}
+	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode == http.StatusOK {
+		ioutil.ReadAll(resp.Body)
+	} else {
 		logging.Errorf("MetadataProvider::makeScheduleCreateRequest: unexpected http status: %v, for index (%v, %v, %v, %v)",
 			resp.StatusCode, idxDefn.Bucket, idxDefn.Scope, idxDefn.Collection, idxDefn.Name)
 

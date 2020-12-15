@@ -1,13 +1,16 @@
 package main
 
-import "fmt"
-import "log"
-import "os"
-import "time"
+import (
+	"fmt"
+	"log"
+	"os"
+	"time"
 
-import c "github.com/couchbase/indexing/secondary/common"
-import qclient "github.com/couchbase/indexing/secondary/queryport/client"
-import "github.com/couchbase/indexing/secondary/querycmd"
+	c "github.com/couchbase/indexing/secondary/common"
+
+	"github.com/couchbase/indexing/secondary/querycmd"
+	qclient "github.com/couchbase/indexing/secondary/queryport/client"
+)
 
 func doScanRetry(cluster string, client *qclient.GsiClient) (err error) {
 
@@ -26,8 +29,8 @@ func doScanRetry(cluster string, client *qclient.GsiClient) (err error) {
 	for {
 		index, _ := querycmd.GetIndex(client, cmd.Bucket, cmd.IndexName)
 		if index == nil {
-			continue
 			time.Sleep(5 * time.Second)
+			continue
 		}
 		defnID := uint64(index.Definition.DefnId)
 

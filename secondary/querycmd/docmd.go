@@ -339,7 +339,8 @@ func HandleCommand(
 			cmd.WhereStr, cmd.SecStrs, nil, cmd.IsPrimary, c.SINGLE, nil,
 			[]byte(cmd.With))
 		if err == nil {
-			fmt.Fprintf(w, "Index created: %v with %q\n", defnID, cmd.With)
+			fmt.Fprintf(w, "Index created: name: %q, ID: %v, WITH clause used: %q\n",
+				iname, defnID, cmd.With)
 		}
 
 	case "build":
