@@ -23,6 +23,7 @@ import (
 	"github.com/couchbase/indexing/secondary/manager"
 	"github.com/couchbase/indexing/secondary/manager/client"
 	mc "github.com/couchbase/indexing/secondary/manager/common"
+
 	//"github.com/couchbase/indexing/secondary/planner"
 	"bytes"
 	"encoding/json"
@@ -1443,11 +1444,11 @@ func (m *DDLServiceMgr) newMetadataProvider(nodes map[service.NodeID]bool) (*cli
 	}
 
 	// Make sure that the metadata provider is synchronized with the index.
-	// If it cannot synchronized with 500ms, then return error.
+	// If it cannot synchronize within 5sec, then return error.
 	if !provider.AllWatchersAlive() {
 
 		// Wait for initialization complete
-		ticker := time.NewTicker(time.Millisecond * 50)
+		ticker := time.NewTicker(time.Millisecond * 500)
 		defer ticker.Stop()
 		retry := 10
 
@@ -1465,7 +1466,7 @@ func (m *DDLServiceMgr) newMetadataProvider(nodes map[service.NodeID]bool) (*cli
 				}
 
 				provider.Close()
-				return nil, nil, errors.New("DDLServiceMgr: Failed to initialize metadata provider.  Unable to connect to all indexer nodes within 500ms.")
+				return nil, nil, errors.New("DDLServiceMgr: Failed to initialize metadata provider.  Unable to connect to all indexer nodes within 5 seconds.")
 			}
 		}
 	}
