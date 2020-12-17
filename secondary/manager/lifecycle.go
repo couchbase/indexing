@@ -1685,7 +1685,33 @@ func (m *LifecycleMgr) verifyDuplicateDefn(defn *common.IndexDefn, reqCtx *commo
 	return existDefn, nil
 }
 
+// GetLatestReplicaCount will fetch CreateCommand and DropInstance tokens from metakv and get latest replica count.
 func GetLatestReplicaCount(defn *common.IndexDefn) (*common.Counter, error) {
+
+	defnID := defn.DefnId
+
+	// Check if there is any create token.  If so, it means that there is a pending create or alter index.
+	// The create token should contain the latest numReplica.
+	createTokenList, err := mc.ListAndFetchCreateCommandToken(defnID)
+	if err != nil {
+		logging.Errorf("LifecycleMgr.GetLatestReplicaCount(): Fail to retrieve create token for index %v: %v", defnID, err)
+		return nil, err
+	}
+
+	// Get numReplica from drop instance token.
+	dropInstTokenList, err := mc.ListAndFetchDropInstanceCommandToken(defnID)
+	if err != nil {
+		logging.Errorf("LifecycleMgr.GetLatestReplicaCount(): Fail to retrieve drop instance token for index %v: %v", defnID, err)
+		return nil, err
+	}
+
+	return GetLatestReplicaCountFromTokens(defn, createTokenList, dropInstTokenList)
+}
+
+// GetLatestReplicaCountFromTokens will merge the replica count from given set of tokens and index definition.
+func GetLatestReplicaCountFromTokens(defn *common.IndexDefn,
+	createTokenList []*mc.CreateCommandToken,
+	dropInstTokenList []*mc.DropInstanceCommandToken) (*common.Counter, error) {
 
 	merge := func(numReplica *common.Counter, defn *common.IndexDefn) (*common.Counter, error) {
 
@@ -1710,23 +1736,17 @@ func GetLatestReplicaCount(defn *common.IndexDefn) (*common.Counter, error) {
 	}
 
 	numReplica := &common.Counter{}
-	defnId := defn.DefnId
+	defnID := defn.DefnId
 
-	// Check if there is any create token.  If so, it means that there is a pending create or alter index.
-	// The create token should contain the latest numReplica.
-	tokens2, err := mc.ListAndFetchCreateCommandToken(defnId)
-	if err != nil {
-		logging.Errorf("LifecycleMgr.GetLatestReplicaCount(): Fail to retrieve create token for index %v: %v", defnId, err)
-		return nil, err
-	}
+	var err error
 
-	for _, token := range tokens2 {
+	for _, token := range createTokenList {
 		// Get the numReplica from the create command token.
 		for _, definitions := range token.Definitions {
 			if len(definitions) != 0 {
 				numReplica, err = merge(numReplica, &definitions[0])
 				if err != nil {
-					logging.Errorf("LifecycleMgr.GetLatestReplicaCount(): Fail to merge counter with create token for index %v: %v", defnId, err)
+					logging.Errorf("LifecycleMgr.GetLatestReplicaCountFromTokens(): Fail to merge counter with create token for index %v: %v", defnID, err)
 					return nil, err
 				}
 				break
@@ -1734,24 +1754,17 @@ func GetLatestReplicaCount(defn *common.IndexDefn) (*common.Counter, error) {
 		}
 	}
 
-	// Get numReplica from drop instance token.
-	tokens, err := mc.ListAndFetchDropInstanceCommandToken(defnId)
-	if err != nil {
-		logging.Errorf("LifecycleMgr.GetLatestReplicaCount(): Fail to retrieve drop instance token for index %v: %v", defnId, err)
-		return nil, err
-	}
-
-	for _, token := range tokens {
+	for _, token := range dropInstTokenList {
 		numReplica, err = merge(numReplica, &token.Defn)
 		if err != nil {
-			logging.Errorf("LifecycleMgr.GetLatestReplicaCount(): Fail to merge counter with drop instance token for index %v: %v", defnId, err)
+			logging.Errorf("LifecycleMgr.GetLatestReplicaCountFromTokens(): Fail to merge counter with drop instance token for index %v: %v", defnID, err)
 			return nil, err
 		}
 	}
 
 	numReplica, err = merge(numReplica, defn)
 	if err != nil {
-		logging.Errorf("LifecycleMgr.GetLatestReplicaCount(): Fail to merge counter with index definition for index %v: %v", defnId, err)
+		logging.Errorf("LifecycleMgr.GetLatestReplicaCountFromTokens(): Fail to merge counter with index definition for index %v: %v", defnID, err)
 		return nil, err
 	}
 
