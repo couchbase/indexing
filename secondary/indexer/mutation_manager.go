@@ -71,7 +71,7 @@ type mutationMgr struct {
 
 	indexerState common.IndexerState
 
-	lock  sync.Mutex //lock to protect this structure
+	lock  sync.Mutex //lock to protect this structure (including map reads/writes)
 	flock sync.Mutex //fine-grain lock for streamFlusherStopChMap
 
 	config common.Config
@@ -328,6 +328,9 @@ func (m *mutationMgr) handleSupervisorCommands(cmd Message) {
 
 	case UPDATE_INDEX_PARTITION_MAP:
 		m.handleUpdateIndexPartnMap(cmd)
+
+	case UPDATE_KEYSPACE_STATS_MAP:
+		m.handleUpdateKeyspaceStatsMap(cmd)
 
 	case MUT_MGR_ABORT_PERSIST:
 		m.handleAbortPersist(cmd)
@@ -869,7 +872,7 @@ func (m *mutationMgr) shutdown() Message {
 		m.lock.Lock()
 		defer m.lock.Unlock()
 		//send shutdown message to all stream readers
-		for streamId, _ := range m.streamReaderCmdChMap {
+		for streamId := range m.streamReaderCmdChMap {
 
 			respMsg := m.sendMsgToStreamReader(streamId,
 				&MsgGeneral{mType: STREAM_READER_SHUTDOWN})
@@ -1237,6 +1240,40 @@ func (m *mutationMgr) handleUpdateIndexPartnMap(cmd Message) {
 
 }
 
+// handleUpdateKeyspaceStatsMap atomically swaps in the pointer to a new KeyspaceStatsMap and forwards
+// it on to the stream readers. Any failure messages from stream readers are returned to supervisor.
+func (m *mutationMgr) handleUpdateKeyspaceStatsMap(cmd Message) {
+	logging.Tracef("MutationMgr::handleUpdateKeyspaceStatsMap %v", cmd)
+	var msg Message
+
+	// Local stats pointer update
+	req := cmd.(*MsgUpdateKeyspaceStatsMap)
+	stats := m.stats.Get()
+	if stats != nil {
+		stats.keyspaceStatsMap.Set(req.GetStatsObject())
+
+		// Forward to stream readers
+		m.lock.Lock()
+		defer m.lock.Unlock()
+		for streamId := range m.streamReaderMap {
+			respMsg := m.sendMsgToStreamReader(streamId, cmd)
+			if respMsg.GetMsgType() == MSG_SUCCESS {
+				logging.Infof("MutationMgr::handleUpdateKeyspaceStatsMap Stream %v Succceed", streamId)
+			} else {
+				logging.Errorf("MutationMgr::handleUpdateKeyspaceStatsMap Fatal Error %v %v", streamId,
+					respMsg.(*MsgError).GetError())
+				msg = respMsg
+			}
+		}
+	}
+
+	if msg == nil {
+		msg = &MsgSuccess{}
+	}
+
+	m.supvCmdch <- msg
+}
+
 func (m *mutationMgr) initLatencyObj(cmd Message) {
 	stats := m.stats.Get()
 	if stats == nil {
@@ -1303,7 +1340,7 @@ func (m *mutationMgr) cleanLatencyMap(streamId common.StreamId) {
 	newPrjLatencyMap := stats.prjLatencyMap.Clone()
 
 	streamStr := fmt.Sprintf("%v", streamId)
-	for k, _ := range newPrjLatencyMap {
+	for k := range newPrjLatencyMap {
 		subStrs := strings.Split(k, "/")
 		if len(subStrs) > 0 && subStrs[0] == streamStr {
 			delete(newPrjLatencyMap, k)
@@ -1345,7 +1382,7 @@ func (m *mutationMgr) handleIndexerPause(cmd Message) {
 
 	m.indexerState = common.INDEXER_PAUSED
 
-	for streamId, _ := range m.streamReaderMap {
+	for streamId := range m.streamReaderMap {
 
 		respMsg := m.sendMsgToStreamReader(streamId, cmd)
 
@@ -1381,7 +1418,7 @@ func (m *mutationMgr) handleSecurityChange(cmd Message) {
 
 	var msg Message
 
-	for streamId, _ := range m.streamReaderMap {
+	for streamId := range m.streamReaderMap {
 
 		respMsg := m.sendMsgToStreamReader(streamId, cmd)
 

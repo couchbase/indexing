@@ -52,19 +52,23 @@ func init() {
 	num_cpu_core = runtime.NumCPU()
 }
 
-type BucketStats struct {
-	bucket     string
-	indexCount int
+// KeyspaceStats tracks statistics of all indexes in a given keyspace in a stream.
+// It is used internally for debugging and available in unspecified format under the
+// "GET /api/v1/stats" REST API but is not used by the UI.
+type KeyspaceStats struct {
+	keyspaceId         string
 
-	numRollbacks       stats.Int64Val
+	// Statistics in alphabetical order
 	mutationQueueSize  stats.Int64Val
 	numMutationsQueued stats.Int64Val
-
-	tsQueueSize   stats.Int64Val
-	numNonAlignTS stats.Int64Val
+	numNonAlignTS      stats.Int64Val
+	numRollbacks       stats.Int64Val
+	tsQueueSize        stats.Int64Val
 }
 
-func (s *BucketStats) Init() {
+// KeyspaceStats.Init initializes a per-keyspace stats object.
+func (s *KeyspaceStats) Init(keyspaceId string) {
+	s.keyspaceId = keyspaceId
 	s.numRollbacks.Init()
 	s.mutationQueueSize.Init()
 	s.numMutationsQueued.Init()
@@ -72,14 +76,15 @@ func (s *BucketStats) Init() {
 	s.numNonAlignTS.Init()
 }
 
-func (s *BucketStats) addBucketStatsToMap(statMap *StatsMap) {
+func (s *KeyspaceStats) addKeyspaceStatsToStatsMap(statMap *StatsMap) {
 	statMap.AddStatValueFiltered("num_rollbacks", &s.numRollbacks)
 	statMap.AddStatValueFiltered("mutation_queue_size", &s.mutationQueueSize)
 	statMap.AddStatValueFiltered("num_mutations_queued", &s.numMutationsQueued)
 	statMap.AddStatValueFiltered("ts_queue_size", &s.tsQueueSize)
 	statMap.AddStatValueFiltered("num_nonalign_ts", &s.numNonAlignTS)
 
-	if st := common.BucketSeqsTiming(s.bucket); st != nil {
+	bucket := GetBucketFromKeyspaceId(s.keyspaceId)
+	if st := common.BucketSeqsTiming(bucket); st != nil {
 		statMap.AddStatValueFiltered("timings/dcp_getseqs", st)
 	}
 }
@@ -253,12 +258,62 @@ type IndexerStatsHolder struct {
 	ptr unsafe.Pointer
 }
 
-func (h IndexerStatsHolder) Get() *IndexerStats {
+func (h *IndexerStatsHolder) Get() *IndexerStats {
 	return (*IndexerStats)(atomic.LoadPointer(&h.ptr))
 }
 
 func (h *IndexerStatsHolder) Set(s *IndexerStats) {
 	atomic.StorePointer(&h.ptr, unsafe.Pointer(s))
+}
+
+func (h *IndexerStatsHolder) GetKeyspaceStats(streamId common.StreamId, keyspaceId string) *KeyspaceStats {
+	return h.GetKeyspaceStatsMap()[streamId][keyspaceId]
+}
+
+func (h *IndexerStatsHolder) GetKeyspaceStatsMap() KeyspaceStatsMap {
+	return h.Get().GetKeyspaceStatsMap()
+}
+
+func (s *IndexerStats) GetKeyspaceStats(streamId common.StreamId, keyspaceId string) *KeyspaceStats {
+	return s.GetKeyspaceStatsMap()[streamId][keyspaceId]
+}
+
+func (s *IndexerStats) GetKeyspaceStatsMap() KeyspaceStatsMap {
+	return s.keyspaceStatsMap.Get()
+}
+
+// KeyspaceStatsMap holds a map of stream IDs to maps of keyspace IDs to per-keyspace
+// stats. The outer map avoids key collisions between streams. Only INIT_STREAM
+// and MAINT_STREAM have entries as other streams do not keep these stats. These two
+// stream maps are always present (see NewKeyspaceStatsMap immediately below). The
+// code should never try to get a map for any other stream, and nil is not checked
+// for lookups of the streamId dimension.
+type KeyspaceStatsMap map[common.StreamId]map[string]*KeyspaceStats
+
+func NewKeyspaceStatsMap() KeyspaceStatsMap {
+	var ksm KeyspaceStatsMap = make(map[common.StreamId]map[string]*KeyspaceStats)
+
+	ksm[common.INIT_STREAM] = make(map[string]*KeyspaceStats)
+	ksm[common.MAINT_STREAM] = make(map[string]*KeyspaceStats)
+
+	return ksm
+}
+
+// KeyspaceStatsMapHolder holds an atomic pointer to a KeyspaceStatsMap.
+type KeyspaceStatsMapHolder struct {
+	ptr unsafe.Pointer
+}
+
+func (h *KeyspaceStatsMapHolder) Init() {
+	h.Set(NewKeyspaceStatsMap())
+}
+
+func (h *KeyspaceStatsMapHolder) Get() KeyspaceStatsMap {
+	return *(*KeyspaceStatsMap)(atomic.LoadPointer(&h.ptr))
+}
+
+func (h *KeyspaceStatsMapHolder) Set(s KeyspaceStatsMap) {
+	atomic.StorePointer(&h.ptr, unsafe.Pointer(&s))
 }
 
 type LatencyMapHolder struct {
@@ -483,7 +538,7 @@ func (s *IndexStats) SetPlannerFilters() {
 func (s *IndexStats) getPartitions() []common.PartitionId {
 
 	partitions := make([]common.PartitionId, 0, len(s.partitions))
-	for id, _ := range s.partitions {
+	for id := range s.partitions {
 		partitions = append(partitions, id)
 	}
 	return partitions
@@ -597,8 +652,11 @@ func (s *IndexStats) partnTimingStats(f func(*IndexStats) *stats.TimingStat) str
 }
 
 type IndexerStats struct {
+	// indexes is a map of index IDs to per-index stats. Never nil.
 	indexes map[common.IndexInstId]*IndexStats
-	buckets map[string]*BucketStats
+
+	// keyspaceStatsMap wraps per-keyspace stats. Never nil.
+	keyspaceStatsMap KeyspaceStatsMapHolder
 
 	numConnections     stats.Int64Val
 	memoryQuota        stats.Int64Val
@@ -629,7 +687,7 @@ type IndexerStats struct {
 
 func (s *IndexerStats) Init() {
 	s.indexes = make(map[common.IndexInstId]*IndexStats)
-	s.buckets = make(map[string]*BucketStats)
+	s.keyspaceStatsMap.Init()
 	s.numConnections.Init()
 	s.memoryQuota.Init()
 	s.memoryUsed.Init()
@@ -681,27 +739,60 @@ func (s *IndexerStats) SetPlannerFilters() {
 	s.cpuUtilization.AddFilter(stats.PlannerFilter)
 }
 
+// Reset recreates empty IndexStats and KeyspaceStats for each one that existed
+// before. This approach avoids resetting structured data types inside the old
+// objects while other routines are accessing them concurrently. This routine is
+// only called by a stats REST API that few currently use.
 func (s *IndexerStats) Reset() {
 	old := *s
-	*s = IndexerStats{}
+	*s = IndexerStats{} // overwrite old self pointer
 	s.Init()
-	for k, v := range old.indexes {
-		s.AddIndex(k, v.bucket, v.scope, v.collection, v.name, v.replicaId, v.isArrayIndex)
+
+	// Recreate per-index objects
+	for instId, iStats := range old.indexes {
+		indexStats := s.addIndexStats(instId, iStats.bucket, iStats.scope, iStats.collection, iStats.name,
+			iStats.replicaId, iStats.isArrayIndex)
+
+		// Recreate per-partition subobjects
+		for partnId := range iStats.partitions {
+			indexStats.addPartition(partnId)
+		}
+	}
+
+	// Recreate KeyspaceStats objects
+	for streamId, ksStats := range old.GetKeyspaceStatsMap() {
+		for keyspaceId := range ksStats {
+			s.AddKeyspaceStats(streamId, keyspaceId)
+		}
 	}
 }
 
-func (s *IndexerStats) AddIndex(id common.IndexInstId, bucket, scope, collection, name string,
-	replicaId int, isArrIndex bool) {
-
-	b, ok := s.buckets[bucket]
+// AddKeyspaceStats adds or reinitializes an entry to the per-keyspace stats map
+// with populated metadata but empty stats values.
+func (s *IndexerStats) AddKeyspaceStats(streamId common.StreamId, keyspaceId string) {
+	_, ok := s.GetKeyspaceStatsMap()[streamId][keyspaceId]
 	if !ok {
-		b = &BucketStats{bucket: bucket}
-		b.Init()
-		s.buckets[bucket] = b
+		ksStats := &KeyspaceStats{}
+		ksStats.Init(keyspaceId)
+		s.GetKeyspaceStatsMap()[streamId][keyspaceId] = ksStats
 	}
+}
 
-	if _, ok := s.indexes[id]; !ok {
-		idxStats := &IndexStats{
+// RemoveKeyspaceStats deletes one entry from the per-keyspace stats map.
+// NO-OP if entry did not exist.
+func (s *IndexerStats) RemoveKeyspaceStats(streamId common.StreamId, keyspaceId string) {
+	delete(s.GetKeyspaceStatsMap()[streamId], keyspaceId)
+}
+
+// addIndexStats adds or reinitializes an entry to the per-index
+// stats map with populated metadata but empty stats values.
+func (s *IndexerStats) addIndexStats(instId common.IndexInstId,
+	bucket string, scope string, collection string, name string,
+	replicaId int, isArrIndex bool) *IndexStats {
+
+	idxStats, ok := s.indexes[instId]
+	if !ok {
+		idxStats = &IndexStats{
 			name:         name,
 			bucket:       bucket,
 			scope:        scope,
@@ -710,20 +801,21 @@ func (s *IndexerStats) AddIndex(id common.IndexInstId, bucket, scope, collection
 			isArrayIndex: isArrIndex,
 		}
 		idxStats.Init()
-		s.indexes[id] = idxStats
-
-		b.indexCount++
+		s.indexes[instId] = idxStats
 	}
+	return idxStats
 }
 
-func (s *IndexerStats) AddPartition(id common.IndexInstId, bucket, scope string,
-	collection, name string, replicaId int, partitionId common.PartitionId, isArrIndex bool) {
+// AddPartitionStats adds stats to the per-index stats map.
+func (s *IndexerStats) AddPartitionStats(indexInst common.IndexInst, partitionId common.PartitionId) {
+	instId := indexInst.InstId
+	defn := indexInst.Defn
 
-	if _, ok := s.indexes[id]; !ok {
-		s.AddIndex(id, bucket, scope, collection, name, replicaId, isArrIndex)
+	if _, ok := s.indexes[instId]; !ok {
+		s.addIndexStats(instId, defn.Bucket, defn.Scope, defn.Collection, defn.Name,
+			indexInst.ReplicaId, defn.IsArrayIndex)
 	}
-
-	s.indexes[id].addPartition(partitionId)
+	s.indexes[instId].addPartition(partitionId)
 }
 
 func (s *IndexerStats) GetPartitionStats(id common.IndexInstId, partnId common.PartitionId) *IndexStats {
@@ -749,17 +841,14 @@ func (s *IndexerStats) RemovePartitionStats(id common.IndexInstId, partnId commo
 	}
 }
 
-func (s *IndexerStats) RemoveIndex(id common.IndexInstId) {
-	idx, ok := s.indexes[id]
+// RemoveIndexStats removes stats from the per-index stats map.
+func (s *IndexerStats) RemoveIndexStats(indexInst common.IndexInst) {
+	instId := indexInst.InstId
+	_, ok := s.indexes[instId]
 	if !ok {
 		return
 	}
-	delete(s.indexes, id)
-	b := s.buckets[idx.bucket]
-	b.indexCount--
-	if b.indexCount == 0 {
-		delete(s.buckets, idx.bucket)
-	}
+	delete(s.indexes, instId)
 }
 
 func (s *IndexStats) getKeySizeStats() map[string]interface{} {
@@ -929,10 +1018,12 @@ func (is IndexerStats) GetStats(spec *statsSpec) interface{} {
 		}
 	}
 
-	for _, s := range is.buckets {
-		prefix = fmt.Sprintf("%s:", s.bucket)
-		statMap.SetPrefix(prefix)
-		s.addBucketStatsToMap(statMap)
+	for streamId, ksStats := range is.GetKeyspaceStatsMap() {
+		for keyspaceId, ks := range ksStats {
+			prefix = fmt.Sprintf("%s:%s:", streamId, keyspaceId)
+			statMap.SetPrefix(prefix)
+			ks.addKeyspaceStatsToStatsMap(statMap)
+		}
 	}
 
 	if spec.marshalToByteSlice {
@@ -1940,19 +2031,34 @@ func (is IndexerStats) VersionedJSON(t *target) ([]byte, error) {
 	return json.MarshalIndent(statsMap, "", "   ")
 }
 
+// IndexerStats.Clone creates a new version of the IndexerStats object with new maps that
+// point to the existing stats objects.
 func (s IndexerStats) Clone() *IndexerStats {
-	var clone IndexerStats
-	clone = s
+	clone := s
+
 	clone.indexes = make(map[common.IndexInstId]*IndexStats)
-	clone.buckets = make(map[string]*BucketStats)
 	for k, v := range s.indexes {
 		clone.indexes[k] = v.clone()
 	}
-	for k, v := range s.buckets {
-		clone.buckets[k] = v
-	}
+
+	clone.keyspaceStatsMap.Set(s.GetKeyspaceStatsMap().Clone())
 
 	return &clone
+}
+
+// KeyspaceStatsMap.Clone creates a new version of the KeyspaceStatsMap object
+// with new maps that point to the existing stats objects. Intentionally value
+// receiver and return since maps are passed by reference in Go.
+func (ksm KeyspaceStatsMap) Clone() KeyspaceStatsMap {
+	clone := NewKeyspaceStatsMap()
+
+	for streamId, cloneStats := range clone {
+		for k, v := range ksm[streamId] {
+			cloneStats[k] = v
+		}
+	}
+
+	return clone
 }
 
 func NewIndexerStats() *IndexerStats {
@@ -2180,7 +2286,7 @@ var statsFilterMap = map[string]uint64{
 
 const ST_TYPE_INDEXER = "indexer"
 const ST_TYPE_INDEX = "index_"
-const ST_TYPE_BUCKET = "bucket_"
+const ST_TYPE_KEYSPACE = "keyspace"
 const ST_TYPE_PROJ_LAT = "projlat"
 
 type statLogger struct {
@@ -2224,14 +2330,17 @@ func (l *statLogger) writeIndexerStats(stats *IndexerStats, spec *statsSpec) {
 		}
 	}
 
-	// Bucket Stats
-	for _, bs := range stats.buckets {
-		statMap = NewStatsMap(spec)
-		bs.addBucketStatsToMap(statMap)
-		sType := ST_TYPE_BUCKET + bs.bucket
-		err = l.sLogger.Write(sType, statMap.GetMap())
-		if err != nil {
-			logging.Errorf("Error in writing logs to stats logger type:%v, err:%v", sType, err)
+	// Keyspace Stats
+	for streamId, ksStats := range stats.GetKeyspaceStatsMap() {
+		for keyspaceId, ks := range ksStats {
+			statMap = NewStatsMap(spec)
+			ks.addKeyspaceStatsToStatsMap(statMap)
+			sType := fmt.Sprintf("%v_%v_%v", streamId, ST_TYPE_KEYSPACE, keyspaceId)
+			err = l.sLogger.Write(sType, statMap.GetMap())
+			if err != nil {
+				logging.Errorf("Error in writing logs to stats logger type:%v, err:%v",
+					sType, err)
+			}
 		}
 	}
 
