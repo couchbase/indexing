@@ -23,6 +23,7 @@ import (
 	"github.com/couchbase/indexing/secondary/manager"
 	"github.com/couchbase/indexing/secondary/manager/client"
 	mc "github.com/couchbase/indexing/secondary/manager/common"
+
 	//"github.com/couchbase/indexing/secondary/planner"
 	"bytes"
 	"encoding/json"
@@ -1658,11 +1659,11 @@ func newMetadataProvider(clusterAddr string, nodes map[service.NodeID]bool, sett
 	}
 
 	// Make sure that the metadata provider is synchronized with the index.
-	// If it cannot synchronized with 500ms, then return error.
+	// If it cannot synchronize within 5sec, then return error.
 	if !provider.AllWatchersAlive() {
 
 		// Wait for initialization complete
-		ticker := time.NewTicker(time.Millisecond * 50)
+		ticker := time.NewTicker(time.Millisecond * 500)
 		defer ticker.Stop()
 		retry := 10
 
@@ -1681,7 +1682,7 @@ func newMetadataProvider(clusterAddr string, nodes map[service.NodeID]bool, sett
 
 				provider.Close()
 				return nil, nil, errors.New(fmt.Sprintf("%v: Failed to initialize metadata provider.  "+
-					"%v within 500ms.", logPrefix, common.ErrIndexerConnection.Error()))
+					"%v within 5 seconds.", logPrefix, common.ErrIndexerConnection.Error()))
 			}
 		}
 	}

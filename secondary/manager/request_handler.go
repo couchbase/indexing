@@ -650,7 +650,7 @@ func (m *requestHandlerContext) getIndexStatus(creds cbauth.Creds, t *target, ge
 							}
 
 							if instance.RState == uint32(common.REBAL_PENDING) && state != common.INDEX_STATE_READY {
-								stateStr = "Replicating"
+								stateStr = "Moving"
 							}
 
 							if state == common.INDEX_STATE_INITIAL || state == common.INDEX_STATE_CATCHUP {
@@ -884,8 +884,8 @@ func (m *requestHandlerContext) consolideStateStr(str1 string, str2 string) stri
 		return "Building"
 	}
 
-	if str1 == "Replicating" || str2 == "Replicating" {
-		return "Replicating"
+	if str1 == "Moving" || str2 == "Moving" {
+		return "Moving"
 	}
 
 	// must be ready
