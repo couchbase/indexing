@@ -819,7 +819,10 @@ func CollectionSeqnos(cluster, pooln, bucketn string,
 	// any type of error will cleanup the bucket and its kvfeeds.
 	defer func() {
 		if err != nil {
-			delDBSbucket(bucketn, true)
+			// Do not close DCP connections for unknown scope or collection error
+			if memcached.IsUnknownScopeOrCollection(err) == false {
+				delDBSbucket(bucketn, true)
+			}
 		}
 	}()
 
@@ -1118,7 +1121,10 @@ func CollectionMinSeqnos(cluster, pooln, bucketn string, cid string) (l_seqnos [
 	// any type of error will cleanup the bucket and its kvfeeds.
 	defer func() {
 		if err != nil {
-			delDBSbucket(bucketn, true)
+			// Do not close DCP connections for unknown scope or collection error
+			if memcached.IsUnknownScopeOrCollection(err) == false {
+				delDBSbucket(bucketn, true)
+			}
 		}
 	}()
 

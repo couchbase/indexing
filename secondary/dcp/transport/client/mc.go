@@ -221,6 +221,10 @@ func (c *Client) Get(vb uint16, key string) (*transport.MCResponse, error) {
 	})
 }
 
+func IsUnknownScopeOrCollection(e error) bool {
+	return transport.IsUnknownScopeOrCollection(e)
+}
+
 // Del deletes a key.
 func (c *Client) Del(vb uint16, key string) (*transport.MCResponse, error) {
 	return c.Send(&transport.MCRequest{
