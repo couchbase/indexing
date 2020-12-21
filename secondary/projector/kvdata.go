@@ -187,7 +187,7 @@ func (stats *KvdataStats) String() (string, string) {
 				numDocsPending += seqnos[i] - v
 			}
 		}
-		statjson = fmt.Sprintf("%v,`\"numDocsPending\":`%v", statjson, strconv.FormatUint(numDocsPending, 10))
+		statjson = fmt.Sprintf("%v,\"numDocsPending\":%v", statjson, strconv.FormatUint(numDocsPending, 10))
 	} else {
 		fmsg := "KVDT[<-%v<-%v #%v] ##%x"
 		key := fmt.Sprintf(fmsg, stats.kvdata.bucket, stats.kvdata.feed.cluster, stats.kvdata.topic, stats.kvdata.opaque)
