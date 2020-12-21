@@ -262,13 +262,19 @@ func ResetCluster(serverAddr, username, password string, dropNodes []string, kee
 	if err := waitForRebalanceFinish(serverAddr, username, password); err != nil {
 		return fmt.Errorf("Error in resetCluster, err: %v", err)
 	}
-	// Sleep for 10 seconds between rebalance so that couchbase-server gets sufficent
-	// time to go down and come back online
-	time.Sleep(10 * time.Second)
 
 	for node, role := range keepNodes {
-		if err := AddNode(serverAddr, username, password, node, role); err != nil {
-			return fmt.Errorf("Error while adding node: %v (role: %v) to cluster, err: %v", node, role, err)
+		for retries := 0; ; retries++ {
+			err := AddNode(serverAddr, username, password, node, role)
+			if err == nil {
+				break
+			}
+			// Retries allow time for the node to come back up without a mandatory long sleep.
+			// Plain 10-second sleep was not always long enough.
+			if retries >= 30 {
+				return fmt.Errorf("Error while adding node: %v (role: %v) to cluster, err: %v", node, role, err)
+			}
+			time.Sleep(1 * time.Second)
 		}
 	}
 	return nil
