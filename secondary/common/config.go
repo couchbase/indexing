@@ -926,6 +926,15 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.max_parallel_collection_builds": ConfigValue{
+		10,
+		"Maximum number of collections that can be built simultaneously." +
+			"Note: This setting does not limit the number of indexes that are being " +
+			"built in each collection",
+		10,
+		false, // mutable
+		false, // case-insensitive
+	},
 
 	//fdb specific config
 	"indexer.stream_reader.fdb.syncBatchInterval": ConfigValue{

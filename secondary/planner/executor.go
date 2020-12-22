@@ -194,7 +194,14 @@ func ExecuteRebalanceInternal(clusterUrl string,
 		return nil, err
 	}
 
-	return genTransferToken(p.Result, masterId, topologyChange, deleteNodes)
+	transferTokens, err := genTransferToken(p.Result, masterId, topologyChange, deleteNodes)
+	if err != nil {
+		return nil, err
+	}
+
+	// Filter the transfer tokens to avoid swap rebalancing of replica partitions
+	transferTokens = filterTransferTokens(transferTokens)
+	return transferTokens, nil
 }
 
 func genTransferToken(solution *Solution, masterId string, topologyChange service.TopologyChange,
@@ -321,13 +328,91 @@ func genTransferToken(solution *Solution, masterId string, topologyChange servic
 		result[ttid] = token
 
 		if len(token.SourceId) != 0 {
-			logging.Infof("Generating Transfer Token for rebalance (%v)", token)
+			logging.Infof("Generating Transfer Token (%v) for rebalance (%v)", ttid, token)
 		} else {
-			logging.Infof("Generating Transfer Token for rebuilding lost replica (%v)", token)
+			logging.Infof("Generating Transfer Token (%v) for rebuilding lost replica (%v)", ttid, token)
 		}
 	}
 
 	return result, nil
+}
+
+// This method will filter all the replica instances (and partitions)
+// that share the same definition ID and partition ID but are being
+// swapped between nodes. Swapping replicas between nodes will not offer
+// any advantage as GSI replication is master-master in nature.
+
+// If replica instances are not filtered, then it can cause rebalance
+// failures, add un-necessary load to the system by re-building the
+// instances etc.
+func filterTransferTokens(transferTokens map[string]*common.TransferToken) map[string]*common.TransferToken {
+
+	// key -> DefnId:SourceId:DestId:PartnId, value -> Transfer token ID
+	groupedTransferTokens := make(map[string]string)
+	for tid, token := range transferTokens {
+		for _, partnId := range token.IndexInst.Defn.Partitions {
+			groupedKey := fmt.Sprintf("%v:%v:%v:%v", token.IndexInst.Defn.DefnId, token.SourceId, token.DestId, partnId)
+			groupedTransferTokens[groupedKey] = tid
+		}
+	}
+
+	// For each token, this map maintains a list of all partitions that
+	// have to be filtered out if they are being swapped across nodes
+	filteredPartnMap := make(map[string][]common.PartitionId)
+	for tid1, token := range transferTokens {
+		for _, partnId := range token.IndexInst.Defn.Partitions {
+
+			// For this partition, check if there is any replica that
+			// is being swapped i.e. if a token tid2 exists such that
+			// tid1.sourceId == tid2.DestId and tid1.DestId == tid2.sourceId
+			swappedKey := fmt.Sprintf("%v:%v:%v:%v", token.IndexInst.Defn.DefnId, token.DestId, token.SourceId, partnId)
+
+			if tid2, ok := groupedTransferTokens[swappedKey]; ok && tid1 != tid2 {
+				// Replicas are being swapped
+				logging.Infof("Rebalancer::filterTransferTokens Partition: %v for defnId: %v "+
+					"is being swapped through tokens: %v, %v", partnId, token.IndexInst.Defn.DefnId, tid1, tid2)
+				filteredPartnMap[tid1] = append(filteredPartnMap[tid1], partnId)
+				filteredPartnMap[tid2] = append(filteredPartnMap[tid2], partnId)
+			}
+		}
+	}
+
+	if len(filteredPartnMap) == 0 {
+		logging.Infof("Rebalancer::filterTransferTokens Nothing to filter")
+		return transferTokens
+	}
+
+	getValidPartns := func(filteredPartns []common.PartitionId, partnsInToken []common.PartitionId) []common.PartitionId {
+		validPartns := make([]common.PartitionId, 0)
+		partnMap := make(map[common.PartitionId]bool)
+		for _, partnId := range filteredPartns {
+			partnMap[partnId] = true
+		}
+
+		for _, partnId := range partnsInToken {
+			if _, ok := partnMap[partnId]; !ok { // This partition is not being filtered
+				validPartns = append(validPartns, partnId)
+			}
+		}
+		return validPartns
+	}
+
+	// Remove the partitions that are being swapped
+	for tid, swappedPartns := range filteredPartnMap {
+		if token, ok := transferTokens[tid]; ok {
+			validPartns := getValidPartns(swappedPartns, token.IndexInst.Defn.Partitions)
+			// All the partitions in this token are being swapped. Delete the token
+			if len(validPartns) == 0 {
+				delete(transferTokens, tid)
+				logging.Infof("Rebalancer::filterTransferTokens Removing the transfer token: %v "+
+					"as all the partitions are being swapped", tid)
+			} else {
+				token.IndexInst.Defn.Partitions = validPartns
+				logging.Infof("Rebalancer::filterTransferTokens Updated the transfer token: %v after filtering the swapped partitions. Updated token: %v", tid, token)
+			}
+		}
+	}
+	return transferTokens
 }
 
 //////////////////////////////////////////////////////////////

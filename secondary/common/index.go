@@ -763,6 +763,7 @@ const (
 	DropIndexInProgress
 	IndexInvalidState
 	BucketEphemeral
+	MaxParallelCollectionBuilds
 )
 
 type IndexerError struct {
