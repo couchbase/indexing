@@ -605,13 +605,11 @@ func (c *clustMgrAgent) panicHandler() {
 		logging.Fatalf("ClusterMgrAgent Panic Err %v", err)
 		logging.Fatalf("%s", logging.StackTrace())
 
-		//panic, propagate to supervisor
-		msg := &MsgError{
-			err: Error{code: ERROR_INDEX_MANAGER_PANIC,
-				severity: FATAL,
-				category: CLUSTER_MGR,
-				cause:    err}}
-		c.supvRespch <- msg
+		//at this point, the state of index metadata is unknown.
+		//restart indexer to return to a stable state.
+		//the only action supervisor can take at this point is
+		//to restart as well.
+		panic(rc)
 	}
 
 }
