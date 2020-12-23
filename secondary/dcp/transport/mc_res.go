@@ -59,6 +59,17 @@ func IsFatal(e error) bool {
 	return true
 }
 
+func IsUnknownScopeOrCollection(e error) bool {
+	if e == nil {
+		return false
+	}
+	switch errStatus(e) {
+	case UNKNOWN_COLLECTION, UNKNOWN_SCOPE:
+		return true
+	}
+	return false
+}
+
 // Size is number of bytes this response consumes on the wire.
 func (res *MCResponse) Size() int {
 	return HDR_LEN + len(res.Extras) + len(res.Key) + len(res.Body)

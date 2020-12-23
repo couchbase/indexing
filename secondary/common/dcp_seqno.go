@@ -155,8 +155,47 @@ func newWorker(workerid int, bucket string, dispCh chan workerDoneMsg,
 // 3. donech: shutdown message from dispatcher (vbSeqnosReader)
 func (w *worker) processRequest() {
 
-	defer w.wg.Done()
-	defer close(w.workerQueue)
+	processResponse := func(resp workerResult) {
+		cid := resp.cid
+		queuedReqs := w.workerMap[cid]
+		delete(w.workerMap, cid)
+
+		response := &vbSeqnosResponse{
+			seqnos: resp.seqs,
+			err:    resp.err,
+		}
+
+		if resp.err != nil {
+			dcp_buckets_seqnos.rw.Lock()
+			dcp_buckets_seqnos.errors[w.bucket] = resp.err
+			dcp_buckets_seqnos.rw.Unlock()
+		}
+
+		for i := 0; i < resp.numQueued; i++ {
+			queuedReqs[i].Reply(response)
+		}
+	}
+
+	defer func() {
+		// Close workerQueue so that it will not accept any new requests
+		close(w.workerQueue)
+
+		// Respond back to all out-standing requests in internalCh
+		for response := range w.internalCh {
+			processResponse(response)
+		}
+
+		// Respond back to all out-standing requests in worker reqCh
+		for req := range w.reqCh {
+			resp := &vbSeqnosResponse{
+				seqnos: nil,
+				err:    errors.New("vbSeqnosWorker is closed. Retry the operation"),
+			}
+			req.Reply(resp)
+		}
+
+		w.wg.Done()
+	}()
 
 loop:
 	for {
@@ -176,29 +215,13 @@ loop:
 			}
 		case resp, ok := <-w.internalCh:
 			if ok {
-				cid := resp.cid
-				queuedReqs := w.workerMap[cid]
-				delete(w.workerMap, cid)
-
-				response := &vbSeqnosResponse{
-					seqnos: resp.seqs,
-					err:    resp.err,
-				}
-
-				if resp.err != nil {
-					dcp_buckets_seqnos.rw.Lock()
-					dcp_buckets_seqnos.errors[w.bucket] = resp.err
-					dcp_buckets_seqnos.rw.Unlock()
-				}
-
-				for i := 0; i < resp.numQueued; i++ {
-					queuedReqs[i].Reply(response)
-				}
+				queuedReqs := w.workerMap[resp.cid]
+				processResponse(resp)
 
 				newQueuedReqs := queuedReqs[resp.numQueued:]
 				l := len(newQueuedReqs)
 				if l == 0 {
-					w.dispatcherCh <- workerDoneMsg{cid: cid, workerId: w.workerId}
+					w.dispatcherCh <- workerDoneMsg{cid: resp.cid, workerId: w.workerId}
 				} else {
 					lastReq := newQueuedReqs[l-1]
 					w.workerMap[lastReq.cid] = newQueuedReqs
@@ -219,7 +242,19 @@ loop:
 // 2. donech: shutdown message from dispatcher (vbSeqnosReader)
 func (w *worker) fetchSeqnos() {
 
-	defer close(w.internalCh)
+	defer func() {
+		// Close internalCh so that no new results can be pushed
+		close(w.internalCh)
+
+		// Respond back to all out-standing requests in workerQueu
+		for req := range w.workerQueue {
+			resp := &vbSeqnosResponse{
+				seqnos: nil,
+				err:    errors.New("vbSeqnosWorker is closed. Retry the operation"),
+			}
+			req.Reply(resp)
+		}
+	}()
 
 loop:
 	for {
@@ -582,28 +617,31 @@ func getKVFeeds(cluster, pooln, bucketn string) (map[string]*kvConn, error) {
 
 	// make sure a feed is available for all kv-nodes
 	var conn *memcached.Client
-	var connName string
+	connMap := make(map[string]string) // key-> local addr, value -> remote addr
 	for kvaddr := range m {
+
 		conn, err = bucket.GetMcConn(kvaddr)
 		if err != nil {
 			logging.Errorf("GetMcConn(): %v\n", err)
 			return nil, err
 		}
 
+		if conn.GetLocalAddr() != "" {
+			connMap[conn.GetLocalAddr()] = conn.GetRemoteAddr()
+		}
+
 		if clustVer >= INDEXER_70_VERSION {
-			connName, err = getConnName()
+			err := tryEnableCollection(conn)
 			if err != nil {
-				return nil, err
-			}
-			err = conn.EnableCollections(connName)
-			if err != nil {
+				logging.Errorf("feed.DcpGetSeqnos() error while enabling collection for connection: %v -> %v",
+					conn.GetLocalAddr(), conn.GetRemoteAddr())
 				return nil, err
 			}
 		}
 		kvfeeds[kvaddr] = newKVConn(conn, dcp_buckets_seqnos.numVbs)
 	}
 
-	logging.Infof("{bucket,feeds} %q created for dcp_seqno worker cache...\n", bucketn)
+	logging.Infof("{bucket,feeds} %q created for dcp_seqno worker cache..., established connections: %v\n", bucketn, connMap)
 	return kvfeeds, nil
 }
 
@@ -670,9 +708,9 @@ func addDBSbucket(cluster, pooln, bucketn string) (err error) {
 		return
 	}
 
+	connMap := make(map[string]string)
 	// make sure a feed is available for all kv-nodes
 	var conn *memcached.Client
-	var connName string
 	for kvaddr := range m {
 		conn, err = bucket.GetMcConn(kvaddr)
 		if err != nil {
@@ -680,12 +718,12 @@ func addDBSbucket(cluster, pooln, bucketn string) (err error) {
 			return err
 		}
 
+		if conn.GetLocalAddr() != "" {
+			connMap[conn.GetLocalAddr()] = conn.GetRemoteAddr()
+		}
+
 		if clustVer >= INDEXER_70_VERSION {
-			connName, err = getConnName()
-			if err != nil {
-				return nil
-			}
-			err = conn.EnableCollections(connName)
+			err = tryEnableCollection(conn)
 			if err != nil {
 				return err
 			}
@@ -693,7 +731,7 @@ func addDBSbucket(cluster, pooln, bucketn string) (err error) {
 		kvfeeds[kvaddr] = newKVConn(conn, dcp_buckets_seqnos.numVbs)
 	}
 
-	logging.Infof("{bucket,feeds} %q created for dcp_seqno cache...\n", bucketn)
+	logging.Infof("{bucket,feeds} %q created for dcp_seqno cache..., established connections: %v\n", bucketn, connMap)
 	return nil
 }
 
@@ -781,7 +819,10 @@ func CollectionSeqnos(cluster, pooln, bucketn string,
 	// any type of error will cleanup the bucket and its kvfeeds.
 	defer func() {
 		if err != nil {
-			delDBSbucket(bucketn, true)
+			// Do not close DCP connections for unknown scope or collection error
+			if memcached.IsUnknownScopeOrCollection(err) == false {
+				delDBSbucket(bucketn, true)
+			}
 		}
 	}()
 
@@ -872,8 +913,9 @@ func FetchSeqnos(kvfeeds map[string]*kvConn, cid string, bucketLevel bool) (l_se
 	var wg sync.WaitGroup
 
 	// Buffer for storing kv_seqs from each node
-	kv_seqnos_node := make([][]uint64, len(kvfeeds))
-	errors := make([]error, len(kvfeeds))
+	kv_seqnos_node := make(map[string][]uint64)
+	errors := make(map[string]error, len(kvfeeds))
+	var mu sync.Mutex
 
 	if len(kvfeeds) == 0 {
 		err = fmt.Errorf("Empty kvfeeds")
@@ -881,35 +923,56 @@ func FetchSeqnos(kvfeeds map[string]*kvConn, cid string, bucketLevel bool) (l_se
 		return nil, err
 	}
 
-	i := 0
-	for _, feed := range kvfeeds {
+	for kvaddr, feed := range kvfeeds {
 		wg.Add(1)
-		go func(index int, feed *kvConn) {
+		go func(kvaddress string, feed *kvConn) {
 			defer wg.Done()
-			kv_seqnos_node[index] = feed.seqsbuf
+
 			if bucketLevel {
-				errors[index] = couchbase.GetSeqs(feed.mc, kv_seqnos_node[index], feed.tmpbuf)
-			} else {
-				// A call to CollectionSeqnos implies cluster is fully upgraded to 7.0
-				err = tryEnableCollection(feed.mc)
+				err := couchbase.GetSeqs(feed.mc, feed.seqsbuf, feed.tmpbuf)
 				if err != nil {
-					errors[index] = err
+					mu.Lock()
+					errors[kvaddress] = err
+					mu.Unlock()
 					return
 				}
-				errors[index] = couchbase.GetCollectionSeqs(feed.mc, kv_seqnos_node[index], feed.tmpbuf, cid)
+			} else {
+				// A call to CollectionSeqnos implies cluster is fully upgraded to 7.0
+				err := tryEnableCollection(feed.mc)
+				if err != nil {
+					mu.Lock()
+					errors[kvaddress] = err
+					mu.Unlock()
+					return
+				}
+				err = couchbase.GetCollectionSeqs(feed.mc, feed.seqsbuf, feed.tmpbuf, cid)
+				if err != nil {
+					mu.Lock()
+					errors[kvaddress] = err
+					mu.Unlock()
+					return
+				}
 			}
 
-		}(i, feed)
-		i++
+			mu.Lock()
+			kv_seqnos_node[kvaddress] = feed.seqsbuf
+			mu.Unlock()
+
+		}(kvaddr, feed)
 	}
 
 	wg.Wait()
 
-	seqnos := kv_seqnos_node[0]
-	for i, kv_seqnos := range kv_seqnos_node {
-		err := errors[i]
+	var seqnos []uint64
+	i := 0
+	for kvaddr, kv_seqnos := range kv_seqnos_node {
+		if i == 0 {
+			seqnos = kv_seqnos
+		}
+		err := errors[kvaddr]
 		if err != nil {
-			logging.Errorf("feed.DcpGetSeqnos(): %v\n", err)
+			conn := kvfeeds[kvaddr].mc
+			logging.Errorf("feed.DcpGetSeqnos(): %v from node: %v\n", err, conn.GetRemoteAddr())
 			return nil, err
 		}
 
@@ -919,6 +982,7 @@ func FetchSeqnos(kvfeeds map[string]*kvConn, cid string, bucketLevel bool) (l_se
 				seqnos[vbno] = seqno
 			}
 		}
+		i++
 	}
 	// The following code is to detect rebalance or recovery !!
 	// this is not yet supported in KV, GET_SEQNOS returns all
@@ -1057,7 +1121,10 @@ func CollectionMinSeqnos(cluster, pooln, bucketn string, cid string) (l_seqnos [
 	// any type of error will cleanup the bucket and its kvfeeds.
 	defer func() {
 		if err != nil {
-			delDBSbucket(bucketn, true)
+			// Do not close DCP connections for unknown scope or collection error
+			if memcached.IsUnknownScopeOrCollection(err) == false {
+				delDBSbucket(bucketn, true)
+			}
 		}
 	}()
 
@@ -1140,8 +1207,9 @@ func FetchMinSeqnos(kvfeeds map[string]*kvConn, cid string, bucketLevel bool) (l
 	var wg sync.WaitGroup
 
 	// Buffer for storing kv_seqs from each node
-	kv_seqnos_node := make([][]uint64, len(kvfeeds))
-	errors := make([]error, len(kvfeeds))
+	kv_seqnos_node := make(map[string][]uint64)
+	errors := make(map[string]error, len(kvfeeds))
+	var mu sync.Mutex
 
 	if len(kvfeeds) == 0 {
 		err = fmt.Errorf("Empty kvfeeds")
@@ -1149,37 +1217,58 @@ func FetchMinSeqnos(kvfeeds map[string]*kvConn, cid string, bucketLevel bool) (l
 		return nil, err
 	}
 
-	i := 0
-	for _, feed := range kvfeeds {
+	for kvaddr, feed := range kvfeeds {
 		wg.Add(1)
-		go func(index int, feed *kvConn) {
+		go func(kvaddress string, feed *kvConn) {
 			defer wg.Done()
-			kv_seqnos_node[index] = feed.seqsbuf
+
 			if bucketLevel {
-				errors[index] = couchbase.GetSeqsAllVbStates(feed.mc,
-					kv_seqnos_node[index], feed.tmpbuf)
-			} else {
-				// A call to CollectionMinSeqnos implies cluster is fully upgraded to 7.0
-				err = tryEnableCollection(feed.mc)
+				err := couchbase.GetSeqsAllVbStates(feed.mc,
+					feed.seqsbuf, feed.tmpbuf)
 				if err != nil {
-					errors[index] = err
+					mu.Lock()
+					errors[kvaddress] = err
+					mu.Unlock()
 					return
 				}
-				errors[index] = couchbase.GetCollectionSeqsAllVbStates(feed.mc,
-					kv_seqnos_node[index], feed.tmpbuf, cid)
+			} else {
+				// A call to CollectionMinSeqnos implies cluster is fully upgraded to 7.0
+				err := tryEnableCollection(feed.mc)
+				if err != nil {
+					mu.Lock()
+					errors[kvaddress] = err
+					mu.Unlock()
+					return
+				}
+				err = couchbase.GetCollectionSeqsAllVbStates(feed.mc,
+					feed.seqsbuf, feed.tmpbuf, cid)
+				if err != nil {
+					mu.Lock()
+					errors[kvaddress] = err
+					mu.Unlock()
+					return
+				}
 			}
 
-		}(i, feed)
-		i++
+			mu.Lock()
+			kv_seqnos_node[kvaddress] = feed.seqsbuf
+			mu.Unlock()
+
+		}(kvaddr, feed)
 	}
 
 	wg.Wait()
 
-	seqnos := kv_seqnos_node[0]
-	for i, kv_seqnos := range kv_seqnos_node {
-		err := errors[i]
+	i := 0
+	var seqnos []uint64
+	for kvaddr, kv_seqnos := range kv_seqnos_node {
+		if i == 0 {
+			seqnos = kv_seqnos_node[kvaddr]
+		}
+		err := errors[kvaddr]
 		if err != nil {
-			logging.Errorf("feed.FetchMinSeqnos(): %v\n", err)
+			conn := kvfeeds[kvaddr].mc
+			logging.Errorf("feed.FetchMinSeqnos(): %v from node: %v\n", err, conn.GetRemoteAddr())
 			return nil, err
 		}
 
@@ -1338,10 +1427,15 @@ func getConnName() (string, error) {
 
 func tryEnableCollection(conn *memcached.Client) error {
 	if !conn.IsCollectionsEnabled() {
+
 		connName, err := getConnName()
 		if err != nil {
 			return err
 		}
+
+		conn.SetMcdConnectionDeadline()
+		defer conn.ResetMcdConnectionDeadline()
+
 		err = conn.EnableCollections(connName)
 		if err != nil {
 			return err

@@ -221,6 +221,10 @@ func (c *Client) Get(vb uint16, key string) (*transport.MCResponse, error) {
 	})
 }
 
+func IsUnknownScopeOrCollection(e error) bool {
+	return transport.IsUnknownScopeOrCollection(e)
+}
+
 // Del deletes a key.
 func (c *Client) Del(vb uint16, key string) (*transport.MCResponse, error) {
 	return c.Send(&transport.MCRequest{
@@ -661,6 +665,20 @@ func (c *Client) StatsMap(key string) (map[string]string, error) {
 func (c *Client) Hijack() io.ReadWriteCloser {
 	c.healthy = false
 	return c.conn
+}
+
+func (c *Client) GetLocalAddr() string {
+	if c != nil && c.conn != nil {
+		return c.conn.(net.Conn).LocalAddr().String()
+	}
+	return ""
+}
+
+func (c *Client) GetRemoteAddr() string {
+	if c != nil && c.conn != nil {
+		return c.conn.(net.Conn).RemoteAddr().String()
+	}
+	return ""
 }
 
 func (c *Client) EnableCollections(clientName string) error {

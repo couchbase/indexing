@@ -265,7 +265,7 @@ func (gsi *gsiKeyspace) IndexById(id string) (datastore.Index, errors.Error) {
 		if !ok {
 			errmsg := fmt.Sprintf("GSI index id %v not found.", id)
 			err := errors.NewError(nil, errmsg)
-			return nil, err
+			return nil, errors.NewCbIndexNotFoundError(err)
 		}
 	}
 	arg1 := l.TagUD(index)
@@ -290,7 +290,7 @@ func (gsi *gsiKeyspace) IndexByName(name string) (datastore.Index, errors.Error)
 		}
 	}
 	err := errors.NewError(nil, fmt.Sprintf("GSI index %v not found.", name))
-	return nil, err
+	return nil, errors.NewCbIndexNotFoundError(err)
 }
 
 // Indexes implements datastore.Indexer{} interface. Return the latest
