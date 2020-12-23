@@ -124,16 +124,16 @@ func (req *vbSeqnosRequest) Response() ([]uint64, error) {
 type worker struct {
 	bucket       string
 	workerId     int
-	reqCh        chan vbSeqnosRequest // channel on which reader (dispatcher) sends msg on
-	internalCh   chan workerResult    // communication channel between two worker routines
-	workerQueue  chan vbSeqnosRequest // channel on which processRequest sends request to fetchSeqnos
-	dispatcherCh chan workerDoneMsg   // channel on worker communicates back with dispatcher (reader)
+	reqCh        chan *vbSeqnosRequest // channel on which reader (dispatcher) sends msg on
+	internalCh   chan *workerResult    // communication channel between two worker routines
+	workerQueue  chan *vbSeqnosRequest // channel on which processRequest sends request to fetchSeqnos
+	dispatcherCh chan *workerDoneMsg   // channel on worker communicates back with dispatcher (reader)
 
-	kvfeeds   map[string]*kvConn           // Map of kvaddr -> mc conn
-	workerMap map[string][]vbSeqnosRequest // Map collId to list of requests containing response channels
-	reader    *vbSeqnosReader              // The dispatcher (reader) which owns the worker
-	donech    chan bool                    // Indicate done to worker routines processRequest and fetchSeqnos
-	wg        *sync.WaitGroup              // Indicate that worker is done on this WaitGroup
+	kvfeeds   map[string]*kvConn            // Map of kvaddr -> mc conn
+	workerMap map[string][]*vbSeqnosRequest // Map collId to list of requests containing response channels
+	reader    *vbSeqnosReader               // The dispatcher (reader) which owns the worker
+	donech    chan bool                     // Indicate done to worker routines processRequest and fetchSeqnos
+	wg        *sync.WaitGroup               // Indicate that worker is done on this WaitGroup
 }
 
 // a workerDoneMsg message is sent from worker's processRequest
@@ -155,19 +155,19 @@ type workerResult struct {
 // create a new worker with its own set of kvfeeds
 // Start two goroutines: one to process request from dispatcher
 // and the other to fetch seqnos from KV
-func newWorker(workerid int, bucket string, dispCh chan workerDoneMsg,
+func newWorker(workerid int, bucket string, dispCh chan *workerDoneMsg,
 	feeds map[string]*kvConn, wg *sync.WaitGroup, vbsr *vbSeqnosReader) *worker {
 
 	w := &worker{
 		workerId:     workerid,
 		bucket:       bucket,
-		reqCh:        make(chan vbSeqnosRequest, seqsReqChanSize),
-		internalCh:   make(chan workerResult, seqsReqChanSize),
-		workerQueue:  make(chan vbSeqnosRequest, seqsReqChanSize),
+		reqCh:        make(chan *vbSeqnosRequest, seqsReqChanSize),
+		internalCh:   make(chan *workerResult, seqsReqChanSize),
+		workerQueue:  make(chan *vbSeqnosRequest, seqsReqChanSize),
 		dispatcherCh: dispCh,
 
 		kvfeeds:   feeds,
-		workerMap: make(map[string][]vbSeqnosRequest),
+		workerMap: make(map[string][]*vbSeqnosRequest),
 		reader:    vbsr,
 		donech:    make(chan bool),
 		wg:        wg,
@@ -188,7 +188,7 @@ func newWorker(workerid int, bucket string, dispCh chan workerDoneMsg,
 // 3. donech: shutdown message from dispatcher (vbSeqnosReader)
 func (w *worker) processRequest() {
 
-	processResponse := func(resp workerResult) {
+	processResponse := func(resp *workerResult) {
 		cid := resp.cid
 		queuedReqs := w.workerMap[cid]
 		delete(w.workerMap, cid)
@@ -239,7 +239,7 @@ loop:
 					queuedReqs = append(queuedReqs, req)
 					w.workerMap[req.cid] = queuedReqs
 				} else {
-					queuedReqs := make([]vbSeqnosRequest, 0)
+					queuedReqs := make([]*vbSeqnosRequest, 0)
 					queuedReqs = append(queuedReqs, req)
 					w.workerMap[req.cid] = queuedReqs
 					req.numQueued = len(queuedReqs)
@@ -254,7 +254,7 @@ loop:
 				newQueuedReqs := queuedReqs[resp.numQueued:]
 				l := len(newQueuedReqs)
 				if l == 0 {
-					w.dispatcherCh <- workerDoneMsg{cid: resp.cid, workerId: w.workerId}
+					w.dispatcherCh <- &workerDoneMsg{cid: resp.cid, workerId: w.workerId}
 				} else {
 					lastReq := newQueuedReqs[l-1]
 					w.workerMap[lastReq.cid] = newQueuedReqs
@@ -300,7 +300,7 @@ loop:
 				t0 := time.Now()
 				seqnos, err := FetchSeqnos(w.kvfeeds, cid, req.bucketLevel)
 				w.reader.seqsTiming.Put(time.Since(t0))
-				w.internalCh <- workerResult{
+				w.internalCh <- &workerResult{
 					cid:       cid,
 					seqs:      seqnos,
 					numQueued: req.numQueued,
@@ -331,18 +331,18 @@ type vbSeqnosReader struct {
 	bucket     string
 	seqsTiming stats.TimingStat
 
-	requestCh    chan interface{}   // request channel for Seqnos processing
-	donech       chan bool          // channel used to shut down the vbSeqnosReader main routine
-	workers      []*worker          // list of workers who actually process Seqnos
-	workerRespCh chan workerDoneMsg // channel on which workers communicate back with dispatcher
-	wg           sync.WaitGroup     // Wait group to track completion of all workers
+	requestCh    chan interface{}    // request channel for Seqnos processing
+	donech       chan bool           // channel used to shut down the vbSeqnosReader main routine
+	workers      []*worker           // list of workers who actually process Seqnos
+	workerRespCh chan *workerDoneMsg // channel on which workers communicate back with dispatcher
+	wg           sync.WaitGroup      // Wait group to track completion of all workers
 
 	// Book keeping information about whether a task
 	// is currently queued in any worker for processing
 	dispatcherMap map[string]int
 
-	kvfeeds     map[string]*kvConn      // Connections used for MinSeqnos processings
-	minSeqReqCh chan vbMinSeqnosRequest // request channel for MinSeqnos processing
+	kvfeeds     map[string]*kvConn       // Connections used for MinSeqnos processings
+	minSeqReqCh chan *vbMinSeqnosRequest // request channel for MinSeqnos processing
 
 }
 
@@ -354,10 +354,10 @@ func newVbSeqnosReader(cluster, pooln, bucket string,
 		requestCh:     make(chan interface{}, seqsReqChanSize),
 		donech:        make(chan bool),
 		workers:       make([]*worker, workersPerReader),
-		workerRespCh:  make(chan workerDoneMsg, 100),
+		workerRespCh:  make(chan *workerDoneMsg, 100),
 		dispatcherMap: make(map[string]int),
 		kvfeeds:       kvfeeds,
-		minSeqReqCh:   make(chan vbMinSeqnosRequest, seqsReqChanSize),
+		minSeqReqCh:   make(chan *vbMinSeqnosRequest, seqsReqChanSize),
 	}
 
 	r.seqsTiming.Init()
@@ -421,7 +421,7 @@ func (r *vbSeqnosReader) GetBucketSeqnos() (seqs []uint64, err error) {
 		}
 	}()
 
-	req := vbSeqnosRequest{
+	req := &vbSeqnosRequest{
 		cid:         BUCKET_ID,
 		bucketLevel: true,
 		respCh:      make(chan *vbSeqnosResponse, 1),
@@ -439,7 +439,7 @@ func (r *vbSeqnosReader) GetCollectionSeqnos(cid string) (seqs []uint64, err err
 		}
 	}()
 
-	req := vbSeqnosRequest{
+	req := &vbSeqnosRequest{
 		cid:         cid,
 		bucketLevel: false,
 		respCh:      make(chan *vbSeqnosResponse, 1),
@@ -462,14 +462,14 @@ func (r *vbSeqnosReader) enqueueRequest(req interface{}) {
 			}
 			switch req.(type) {
 
-			case vbSeqnosRequest:
+			case *vbSeqnosRequest:
 				//repond to same request type
-				inReq := req.(vbSeqnosRequest)
+				inReq := req.(*vbSeqnosRequest)
 				inReq.Reply(response)
 
-			case vbMinSeqnosRequest:
+			case *vbMinSeqnosRequest:
 				//anything else goes back
-				inReq := req.(vbMinSeqnosRequest)
+				inReq := req.(*vbMinSeqnosRequest)
 				inReq.Reply(response)
 			}
 		}
@@ -503,11 +503,11 @@ func (r *vbSeqnosReader) Routine() {
 				err:    errors.New("vbSeqnosReader is closed. Retry the operation"),
 			}
 			switch req.(type) {
-			case vbSeqnosRequest:
-				sreq := req.(vbSeqnosRequest)
+			case *vbSeqnosRequest:
+				sreq := req.(*vbSeqnosRequest)
 				sreq.Reply(resp)
-			case vbMinSeqnosRequest:
-				sreq := req.(vbMinSeqnosRequest)
+			case *vbMinSeqnosRequest:
+				sreq := req.(*vbMinSeqnosRequest)
 				sreq.Reply(resp)
 			}
 		}
@@ -520,8 +520,8 @@ loop:
 			if ok {
 				switch req.(type) {
 
-				case vbSeqnosRequest:
-					sreq := req.(vbSeqnosRequest)
+				case *vbSeqnosRequest:
+					sreq := req.(*vbSeqnosRequest)
 
 					// If cid is being processed by a worker,
 					// dispatch this request to that worker.
@@ -533,8 +533,8 @@ loop:
 						r.workers[workerId].reqCh <- sreq
 						r.dispatcherMap[sreq.cid] = workerId
 					}
-				case vbMinSeqnosRequest:
-					sreq := req.(vbMinSeqnosRequest)
+				case *vbMinSeqnosRequest:
+					sreq := req.(*vbMinSeqnosRequest)
 					r.minSeqReqCh <- sreq
 				}
 			}
@@ -1205,7 +1205,7 @@ func (r *vbSeqnosReader) GetBucketMinSeqnos() (seqs []uint64, err error) {
 		}
 	}()
 
-	req := vbMinSeqnosRequest{
+	req := &vbMinSeqnosRequest{
 		cid:         BUCKET_ID,
 		bucketLevel: true,
 		respCh:      make(chan *vbSeqnosResponse, 1),
@@ -1223,7 +1223,7 @@ func (r *vbSeqnosReader) GetCollectionMinSeqnos(cid string) (seqs []uint64, err 
 		}
 	}()
 
-	req := vbMinSeqnosRequest{
+	req := &vbMinSeqnosRequest{
 		cid:         cid,
 		bucketLevel: false,
 		respCh:      make(chan *vbSeqnosResponse, 1),
