@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/couchbase/indexing/secondary/dcp"
+	couchbase "github.com/couchbase/indexing/secondary/dcp"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/security"
 )
@@ -977,18 +977,31 @@ func (c *ClusterInfoClient) watchClusterChanges() {
 
 // ValidateCollectionID will get CollectionID for a given bucket, scope
 // and collection and check if its equal to a given collnID
-func (c *ClusterInfoClient) ValidateCollectionID(bucket, scope,
+func (cic *ClusterInfoClient) ValidateCollectionID(bucket, scope,
 	collection, collnID string) bool {
 
-	cinfo := c.GetClusterInfoCache()
+	cinfo := cic.GetClusterInfoCache()
 	cinfo.RLock()
 	defer cinfo.RUnlock()
 
-	cid := cinfo.GetCollectionID(bucket, scope, collection)
-	if cid != collnID {
-		return false
+	validateKeyspace := func() bool {
+		cid := cinfo.GetCollectionID(bucket, scope, collection)
+		if cid != collnID {
+			return false
+		}
+		return true
 	}
-	return true
+
+	resp := validateKeyspace()
+	if resp == false {
+		// Force fetch cluster info cache to avoid staleness in cluster info cache
+		cinfo.RUnlock()
+		err := cinfo.FetchWithLock()
+		cinfo.RLock()
+
+		return (err == nil) && validateKeyspace()
+	}
+	return resp
 }
 
 func (cic *ClusterInfoClient) ValidateBucket(bucket string, uuids []string) bool {
