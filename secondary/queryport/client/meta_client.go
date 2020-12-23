@@ -938,13 +938,12 @@ func (b *loadStats) updateStatsTime(partitionId common.PartitionId, value int64)
 }
 
 func (b *loadStats) isAllStatsCurrent() bool {
-
-	current := true
 	for _, stale := range b.staleCount {
-		current = current && stale < 10
+		if stale >= 10 {
+			return false
+		}
 	}
-
-	return current
+	return true
 }
 
 func (b *loadStats) isStatsCurrent(partitionId common.PartitionId) bool {
@@ -1375,53 +1374,73 @@ loop:
 }
 
 func (b *metadataClient) printstats() {
-
-	s := make([]string, 0, 16)
+	var s []string
 	currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
+	verbose := logging.IsEnabled(logging.Verbose)
 
 	logging.Infof("connected with %v indexers\n", len(currmeta.topology))
-	for id, replicas := range currmeta.replicas {
-		logging.Infof("index %v has replicas %v: \n", id, replicas)
-	}
-	for id, equivalents := range currmeta.equivalents {
-		logging.Infof("index %v has equivalents %v: \n", id, equivalents)
-	}
-	// currmeta.loads is immutable
-	for id, _ := range currmeta.insts {
-		load := currmeta.loads[id]
-		s = append(s, fmt.Sprintf(`"%v": %v`, id, load.getAvgLoad()))
-	}
-	logging.Infof("client load stats {%v}", strings.Join(s, ","))
 
-	s = make([]string, 0, 16)
-	for id, _ := range currmeta.insts {
-		load := currmeta.loads[id]
-		s = append(s, fmt.Sprintf(`"%v": %v`, id, load.getAvgHit()))
-	}
-	logging.Infof("client hit stats {%v}", strings.Join(s, ","))
+	if verbose {
+		for id, replicas := range currmeta.replicas {
+			logging.Verbosef("index %v has replicas %v: \n", id, replicas)
+		}
+		for id, equivalents := range currmeta.equivalents {
+			logging.Verbosef("index %v has equivalents %v: \n", id, equivalents)
+		}
 
-	s = make([]string, 0, 16)
-	for id, _ := range currmeta.insts {
-		load := currmeta.loads[id]
-		s = append(s, fmt.Sprintf(`"%v": %v`, id, load.getStats().getTotalPendingItems()))
-	}
-	logging.Infof("client pending item stats {%v}", strings.Join(s, ","))
-
-	/*
+		// currmeta.loads is immutable
 		s = make([]string, 0, 16)
 		for id, _ := range currmeta.insts {
-			load := currmeta.loads[id]
-			s = append(s, fmt.Sprintf(`"%v": %v`, id, load.getStats().getRollbackTime()))
+			s = append(s, fmt.Sprintf(`"%v": %v`,
+				id, currmeta.loads[id].getAvgLoad()))
 		}
-		logging.Infof("client rollback times {%v}", strings.Join(s, ","))
-	*/
+		logging.Verbosef("client load stats {%v}", strings.Join(s, ","))
 
-	s = make([]string, 0, 16)
-	for id, _ := range currmeta.insts {
-		load := currmeta.loads[id]
-		s = append(s, fmt.Sprintf(`"%v": %v`, id, load.getStats().isAllStatsCurrent()))
+		s = make([]string, 0, 16)
+		for id, _ := range currmeta.insts {
+			s = append(s, fmt.Sprintf(`"%v": %v`,
+				id, currmeta.loads[id].getAvgHit()))
+		}
+		logging.Verbosef("client hit stats {%v}", strings.Join(s, ","))
+
+		s = make([]string, 0, 16)
+		for id, _ := range currmeta.insts {
+			s = append(s, fmt.Sprintf(`"%v": %v`,
+				id, currmeta.loads[id].getStats().getTotalPendingItems()))
+		}
+		logging.Verbosef("client pending item stats {%v}", strings.Join(s, ","))
+
+		/*
+			s = make([]string, 0, 16)
+			for id, _ := range currmeta.insts {
+				s = append(s, fmt.Sprintf(`"%v": %v`,
+					id, currmeta.loads[id].getStats().getRollbackTime()))
+			}
+			logging.Verbosef("client rollback times {%v}", strings.Join(s, ","))
+		*/
 	}
-	logging.Infof("client stats current {%v}", strings.Join(s, ","))
+
+	current := 0
+	notCurrent := 0
+	if verbose {
+		s = make([]string, 0, 16)
+	}
+	for id, _ := range currmeta.insts {
+		isAllStatsCurrent := currmeta.loads[id].getStats().isAllStatsCurrent()
+		if isAllStatsCurrent {
+			current++
+		} else {
+			notCurrent++
+		}
+		if verbose {
+			s = append(s, fmt.Sprintf(`"%v": %v`, id, isAllStatsCurrent))
+		}
+	}
+	logging.Infof("client stats current counts: current: %v, not current: %v",
+		current, notCurrent)
+	if verbose {
+		logging.Verbosef("client stats current {%v}", strings.Join(s, ","))
+	}
 }
 
 // unprotected access to shared structures.
