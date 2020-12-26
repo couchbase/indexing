@@ -4416,6 +4416,14 @@ func (r *metadataRepo) cleanupOrphanDefnNoLock(indexerId c.IndexerId, bucket, sc
 		delete(r.instances, defnId)
 		delete(r.indices, defnId)
 		delete(r.topology[indexerId], defnId)
+
+		// Notify any outstanding subscribers that are waiting for
+		// a notification on this definition
+		if event, ok := r.notifiers[defnId]; ok {
+			delete(r.notifiers, defnId)
+			close(event.notifyCh)
+			logging.Infof("Notifying outstanding waiters due to orphan definition removal. DefnId: %v", defnId)
+		}
 	}
 
 	if len(r.topology[indexerId]) == 0 {
