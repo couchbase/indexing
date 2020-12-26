@@ -603,7 +603,7 @@ func HandleCommand(
 			fmt.Printf("New Settings:\n%s\n", string(pretty))
 		}
 
-	case "batch_process":
+	case "batch_process", "batch_build":
 
 		fd, err := validateBatchFile(cmd)
 		if err != nil {
@@ -631,13 +631,12 @@ func HandleCommand(
 			} else {
 				fmt.Fprintf(w, "cbindex processing command: %v", line)
 				if err = HandleCommand(client, inputCmd, false, os.Stdout); err != nil {
-					logging.Fatalf("Error occured while executing command %v, err: %v\n", line, err)
-					return err // Fail fast
+					logging.Errorf("Error occured while executing command %v, err: %v\n", line, err)
 				}
 			}
 		}
 
-	case "batch_build":
+	case "batch_build_schedule":
 		buildCh := make(chan bool, cmd.NumBuilds)
 		errCh := make(chan error, cmd.NumBuilds*10)
 		stopCh := make(chan bool)
