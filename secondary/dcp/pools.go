@@ -84,6 +84,7 @@ type Node struct {
 	ThisNode             bool               `json:"thisNode,omitempty"`
 	Services             []string           `json:"services,omitempty"`
 	NodeUUID             string             `json:"nodeUUID,omitempty"`
+	AddressFamily        string             `json:"addressFamily,omitempty"`
 }
 
 // A Pool of nodes and buckets.

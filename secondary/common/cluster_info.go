@@ -41,6 +41,7 @@ const (
 	INDEX_DATA_INIT     = "indexStreamInit"
 	INDEX_DATA_MAINT    = "indexStreamMaint"
 	INDEX_DATA_CATUP    = "indexStreamCatchup"
+	NODE_IPV6           = "inet6"
 )
 
 const CLUSTER_INFO_DEFAULT_RETRIES = 300
@@ -814,9 +815,11 @@ func (c *ClusterInfoCache) validateCache(isIPv6 bool) bool {
 	}
 
 	var hostList1 []string
+	var addressFamily []string
 
 	for _, n := range c.nodes {
 		hostList1 = append(hostList1, n.Hostname)
+		addressFamily = append(addressFamily, n.AddressFamily)
 	}
 
 	for i, svc := range c.nodesvs {
@@ -824,7 +827,7 @@ func (c *ClusterInfoCache) validateCache(isIPv6 bool) bool {
 		p := svc.Services["mgmt"]
 
 		if h == "" {
-			h = GetLocalIpAddr(isIPv6)
+			h = GetLocalIpAddr(isIPv6 || (addressFamily[i] == NODE_IPV6))
 		}
 
 		hp := net.JoinHostPort(h, fmt.Sprint(p))
