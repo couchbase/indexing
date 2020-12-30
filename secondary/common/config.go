@@ -1169,6 +1169,41 @@ var SystemConfig = Config{
 		false, // mutable,
 		false, // case-insensitive
 	},
+	"indexer.plasma.AutoTuneDiskQuota": ConfigValue{
+		uint64(0),
+		"Disk Quota for LSS frag ratio tuning",
+		uint64(0),
+		false, // mutable,
+		false, // case-insensitive
+	},
+	"indexer.plasma.AutoTuneCleanerTargetFragRatio": ConfigValue{
+		50,
+		"Target LSS Cleaner fragmentation ratio for auto tuning",
+		50,
+		false, // mutable,
+		false, // case-insensitive
+	},
+	"indexer.plasma.AutoTuneCleanerMinBandwidthRatio": ConfigValue{
+		float64(0.1),
+		"Minimum bandwidth (percentage) allocated for LSS cleaning with auto tuning",
+		float64(0.1),
+		false, // mutable,
+		false, // case-insensitive
+	},
+	"indexer.plasma.AutoTuneDiskFullTimeLimit": ConfigValue{
+		3600,
+		"time allowance (in second) before disk is full",
+		3600,
+		false, // mutable,
+		false, // case-insensitive
+	},
+	"indexer.plasma.AutoTuneAvailDiskLimit": ConfigValue{
+		float64(0.9),
+		"percentage of available disk space reserved for plasma",
+		float64(0.9),
+		false, // mutable,
+		false, // case-insensitive
+	},
 	"indexer.plasma.MaxPageSize": ConfigValue{
 		192 * 1024,
 		"Used with AutoTuneLSSCleaner; target page size limit",
