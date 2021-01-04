@@ -75,7 +75,7 @@ type ServiceMgr struct {
 
 	moveStatusCh chan error
 
-	cleanupPending bool
+	cleanupPending bool // prior rebalance or move did not finish and will be cleaned up
 	indexerReady   bool
 
 	p runParams
@@ -172,6 +172,9 @@ func NewRebalanceMgr(supvCmdch MsgChannel, supvMsgch MsgChannel, config c.Config
 
 	if rebalanceToken != nil {
 		mgr.cleanupPending = true
+		if rebalanceToken.Source == RebalSourceClusterOp { // rebalance, not move
+			mgr.isBalanced = false
+		}
 	}
 
 	go mgr.run()
@@ -392,6 +395,9 @@ func (m *ServiceMgr) PrepareTopologyChange(change service.TopologyChange) error 
 
 	if m.state.rebalanceID != "" {
 		l.Errorf("ServiceMgr::PrepareTopologyChange err %v %v", service.ErrConflict, m.state.rebalanceID)
+		if (change.Type == service.TopologyChangeTypeRebalance) {
+			m.isBalanced = false
+		}
 		return service.ErrConflict
 	}
 
@@ -400,6 +406,9 @@ func (m *ServiceMgr) PrepareTopologyChange(change service.TopologyChange) error 
 		err = m.prepareFailover(change)
 	} else if change.Type == service.TopologyChangeTypeRebalance {
 		err = m.prepareRebalance(change)
+		if err != nil {
+			m.isBalanced = false
+		}
 	} else {
 		err = service.ErrNotSupported
 	}
@@ -419,7 +428,6 @@ func (m *ServiceMgr) PrepareTopologyChange(change service.TopologyChange) error 
 	})
 
 	return nil
-
 }
 
 func (m *ServiceMgr) prepareFailover(change service.TopologyChange) error {
@@ -584,6 +592,9 @@ func (m *ServiceMgr) StartTopologyChange(change service.TopologyChange) error {
 	if m.state.rebalanceID != change.ID || m.rebalancer != nil {
 		l.Errorf("ServiceMgr::StartTopologyChange err %v %v %v %v", service.ErrConflict,
 			m.state.rebalanceID, change.ID, m.rebalancer)
+		if change.Type == service.TopologyChangeTypeRebalance {
+			m.isBalanced = false
+		}
 		return service.ErrConflict
 	}
 
@@ -592,6 +603,9 @@ func (m *ServiceMgr) StartTopologyChange(change service.TopologyChange) error {
 		if haveRev != m.state.rev {
 			l.Errorf("ServiceMgr::StartTopologyChange err %v %v %v", service.ErrConflict,
 				haveRev, m.state.rev)
+			if change.Type == service.TopologyChangeTypeRebalance {
+				m.isBalanced = false
+			}
 			return service.ErrConflict
 		}
 	}
@@ -601,6 +615,9 @@ func (m *ServiceMgr) StartTopologyChange(change service.TopologyChange) error {
 		err = m.startFailover(change)
 	} else if change.Type == service.TopologyChangeTypeRebalance {
 		err = m.startRebalance(change)
+		if err != nil {
+			m.isBalanced = false
+		}
 	} else {
 		err = service.ErrNotSupported
 	}
@@ -1556,15 +1573,16 @@ func (m *ServiceMgr) rebalanceDoneCallback(err error, cancel <-chan struct{}) {
 			}()
 		}
 
-		m.onRebalanceDoneLOCKED(err)
+		m.onRebalanceDoneLOCKED(err, false)
 	})
 }
 
-func (m *ServiceMgr) onRebalanceDoneLOCKED(err error) {
+func (m *ServiceMgr) onRebalanceDoneLOCKED(err error, cancelRebalance bool) {
+	logPrefix := "ServiceMgr::onRebalanceDoneLOCKED"
+	l.Infof("%s Rebalance Done, cancel: %v, err: %v", logPrefix, cancelRebalance, err)
 
-	l.Infof("ServiceMgr::onRebalanceDoneLOCKED Rebalance Done %v", err)
-
-	if m.rebalancer != nil {
+	isMaster := m.rebalancer != nil
+	if isMaster {
 		newTask := (*service.Task)(nil)
 		if err != nil {
 			ctx := m.rebalanceCtx
@@ -1583,10 +1601,17 @@ func (m *ServiceMgr) onRebalanceDoneLOCKED(err error) {
 					"rebalanceId": ctx.change.ID,
 				},
 			}
+			m.isBalanced = false
+		} else if cancelRebalance == true {
+			m.isBalanced = false
+		} else {
+			m.isBalanced = true
 		}
 
 		if !m.cleanupPending {
-			m.runCleanupPhaseLOCKED(RebalanceTokenPath, true)
+			if m.runCleanupPhaseLOCKED(RebalanceTokenPath, isMaster) != nil {
+				m.isBalanced = false
+			}
 		}
 
 		m.rebalanceCtx = nil
@@ -1595,13 +1620,13 @@ func (m *ServiceMgr) onRebalanceDoneLOCKED(err error) {
 			s.rebalanceTask = newTask
 			s.rebalanceID = ""
 		})
-	} else {
-		m.runCleanupPhaseLOCKED(RebalanceTokenPath, false)
+	} else if m.runCleanupPhaseLOCKED(RebalanceTokenPath, isMaster) != nil {
+			m.isBalanced = false
 	}
 
 	m.rebalancer = nil
 	m.rebalancerF = nil
-
+	l.Infof("%s isBalanced: %v, isMaster: %v", logPrefix, m.isBalanced, isMaster)
 }
 
 func (m *ServiceMgr) notifyWaitersLOCKED() {
@@ -1730,7 +1755,7 @@ func (m *ServiceMgr) cancelRebalanceTaskLOCKED(task *service.Task) error {
 
 func (m *ServiceMgr) cancelRunningRebalanceTaskLOCKED() error {
 	m.rebalancer.Cancel()
-	m.onRebalanceDoneLOCKED(nil)
+	m.onRebalanceDoneLOCKED(nil, true)
 
 	return nil
 }
@@ -1789,6 +1814,8 @@ func stateToTaskList(s state) *service.TaskList {
 	return tasks
 }
 
+// recoverRebalance is called only during bootstrap to clean up any prior
+// failed rebalances or index moves.
 func (m *ServiceMgr) recoverRebalance() {
 
 	m.mu.Lock()
@@ -1969,6 +1996,7 @@ func (m *ServiceMgr) handleCleanupRebalance(w http.ResponseWriter, r *http.Reque
 
 		if rtokens != nil {
 			if rtokens.RT != nil {
+				m.isBalanced = false
 				err = m.runCleanupPhaseLOCKED(RebalanceTokenPath, true)
 				if err != nil {
 					l.Errorf("ServiceMgr::handleCleanupRebalance RebalanceTokenPath Error %v", err)
@@ -1994,9 +2022,7 @@ func (m *ServiceMgr) handleCleanupRebalance(w http.ResponseWriter, r *http.Reque
 
 	} else {
 		m.writeError(w, errors.New("Unsupported method"))
-		return
 	}
-
 }
 
 func (m *ServiceMgr) handleNodeuuid(w http.ResponseWriter, r *http.Request) {
@@ -2010,10 +2036,8 @@ func (m *ServiceMgr) handleNodeuuid(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "GET" || r.Method == "POST" {
 		l.Infof("ServiceMgr::handleNodeuuid Processing Request %v", l.TagUD(r))
 		m.writeBytes(w, []byte(m.nodeInfo.NodeID))
-		return
 	} else {
 		m.writeError(w, errors.New("Unsupported method"))
-		return
 	}
 }
 
@@ -2345,6 +2369,7 @@ func (m *ServiceMgr) handleMoveIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 }
+
 func (m *ServiceMgr) handleMoveIndexInternal(w http.ResponseWriter, r *http.Request) {
 
 	creds, ok := m.validateAuth(w, r)
