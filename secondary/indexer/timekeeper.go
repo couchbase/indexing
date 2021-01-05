@@ -2312,6 +2312,7 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 		if tsListMaint != nil {
 			lenMaintTs = tsListMaint.Len()
 		}
+
 		logging.Infof("Timekeeper::checkInitStreamReadyToMerge FlushTs Not Snapshot "+
 			"Aligned. Continue both streams for keyspaceId %v. INIT PendTsCount %v. "+
 			"MAINT PendTsCount %v.", keyspaceId, lenInitTs, lenMaintTs)
@@ -2742,7 +2743,7 @@ func (tk *timekeeper) sendNewStabilityTS(tsElem *TsListElem, keyspaceId string,
 	})
 
 	tk.mayBeMakeSnapAligned(streamId, keyspaceId, flushTs)
-	tk.ensureMonotonicTs(streamId, keyspaceId, flushTs)
+	tk.ensureMonotonicTs(streamId, keyspaceId, tsElem)
 
 	var changeVec []bool
 	var countVec []uint64
@@ -3013,7 +3014,9 @@ func (tk *timekeeper) mayBeMakeSnapAligned(streamId common.StreamId,
 }
 
 func (tk *timekeeper) ensureMonotonicTs(streamId common.StreamId, keyspaceId string,
-	flushTs *common.TsVbuuid) {
+	tsElem *TsListElem) {
+
+	flushTs := tsElem.ts
 
 	// Seqno should be monotonically increasing when it comes to mutation queue.
 	// For pre-caution, if we detect a flushTS that is smaller than LastFlushTS,
@@ -3024,12 +3027,11 @@ func (tk *timekeeper) ensureMonotonicTs(streamId common.StreamId, keyspaceId str
 		for i, s := range flushTs.Seqnos {
 
 			enableOSO := tk.ss.streamKeyspaceIdEnableOSO[streamId][keyspaceId]
-			if enableOSO {
-				//oso can be non-monotonic
-				if flushTs.Snapshots[i][0] == 0 &&
-					s != 0 {
-					continue
-				}
+			//oso can be non-monotonic
+			if enableOSO &&
+				tsElem.osoCount != nil &&
+				tsElem.osoCount[i] != 0 {
+				continue
 			}
 
 			//if flushTs has a smaller seqno than lastFlushTs
