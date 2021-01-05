@@ -1257,9 +1257,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.plasma.mainIndex.evictSweepInterval": ConfigValue{
-		600,
+		300,
 		"Time interval to sweep through all pages in an index (in sec)",
-		600,
+		300,
 		false, // mutable
 		false, // case-insensitive
 	},
@@ -1274,6 +1274,13 @@ var SystemConfig = Config{
 		true,
 		"enable eviction to estimate if index memory can fit into quota",
 		true,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.mainIndex.enableInMemoryCompression": ConfigValue{
+		false,
+		"Enable compression of memory resident items",
+		false,
 		false, // mutable
 		false, // case-insensitive
 	},
@@ -1369,9 +1376,9 @@ var SystemConfig = Config{
 		false, // case-insensitive
 	},
 	"indexer.plasma.backIndex.evictSweepInterval": ConfigValue{
-		600,
+		300,
 		"Time interval to sweep through all pages in an index (in sec)",
-		600,
+		300,
 		false, // mutable
 		false, // case-insensitive
 	},
@@ -1386,6 +1393,13 @@ var SystemConfig = Config{
 		true,
 		"enable eviction to estimate if index memory can fit into quota",
 		true,
+		false, // mutable
+		false, // case-insensitive
+	},
+	"indexer.plasma.backIndex.enableInMemoryCompression": ConfigValue{
+		false,
+		"Enable compression of memory resident items",
+		false,
 		false, // mutable
 		false, // case-insensitive
 	},

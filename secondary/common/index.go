@@ -365,10 +365,12 @@ func (idx *IndexDefn) GetNumReplica() int {
 func (idx *IndexDefn) SetCollectionDefaults() {
 	if idx.Scope == "" {
 		idx.Scope = DEFAULT_SCOPE
+		idx.ScopeId = DEFAULT_SCOPE_ID
 	}
 
 	if idx.Collection == "" {
 		idx.Collection = DEFAULT_COLLECTION
+		idx.CollectionId = DEFAULT_COLLECTION_ID
 	}
 }
 
