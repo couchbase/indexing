@@ -446,6 +446,8 @@ func (ts *TsVbuuid) Clone() *TsVbuuid {
 	other.Crc64 = ts.Crc64
 	other.ScopeId = ts.ScopeId
 	other.CollectionId = ts.CollectionId
+	other.SnapAligned = ts.SnapAligned
+	other.OpenOSOSnap = ts.OpenOSOSnap
 
 	return other
 }
