@@ -20,10 +20,12 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/couchbase/cbauth"
@@ -198,6 +200,8 @@ type requestHandlerContext struct {
 	doneCh chan bool
 
 	schedTokenMon *schedTokenMonitor
+
+	stReqRecCount uint64
 }
 
 var handlerContext requestHandlerContext
@@ -430,6 +434,16 @@ func (m *requestHandlerContext) convertIndexRequest(r *http.Request) *IndexReque
 ///////////////////////////////////////////////////////
 
 func (m *requestHandlerContext) handleIndexStatusRequest(w http.ResponseWriter, r *http.Request) {
+
+	defer func() {
+		if r := recover(); r != nil {
+			count := atomic.AddUint64(&m.stReqRecCount, 1)
+			if count%40 == 1 {
+				logging.Fatalf("handleIndexStatusRequest:: Recovered from panic %v. Stacktrace %v",
+					count, string(debug.Stack()))
+			}
+		}
+	}()
 
 	creds, ok := doAuth(r, w)
 	if !ok {
