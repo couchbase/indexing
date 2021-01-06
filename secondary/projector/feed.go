@@ -1590,6 +1590,9 @@ func (feed *Feed) cleanupKeyspace(keyspaceId string, enginesOk bool) {
 	// close upstream
 	feeder, ok := feed.feeders[keyspaceId]
 	if ok {
+		if kvdata, ok := feed.kvdata[keyspaceId]; ok {
+			kvdata.StopScatter()
+		}
 		// drain the .C channel until it gets closed or if this feed
 		// happends to get closed.
 		go func(C <-chan *mc.DcpEvent, finch chan bool) {
