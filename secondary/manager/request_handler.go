@@ -1629,28 +1629,28 @@ func (m *requestHandlerContext) handleRestoreIndexMetadataRequest(w http.Respons
 		send(http.StatusInternalServerError, w, &RestoreResponse{Code: RESP_ERROR, Error: fmt.Sprintf("Unable to restore metadata.  Error=%v", err)})
 	}
 
-	if m.restoreIndexMetadataToNodes(hostIndexMap) {
+	if err := m.restoreIndexMetadataToNodes(hostIndexMap); err == nil {
 		send(http.StatusOK, w, &RestoreResponse{Code: RESP_SUCCESS})
 	} else {
-		send(http.StatusInternalServerError, w, &RestoreResponse{Code: RESP_ERROR, Error: "Unable to restore metadata."})
+		send(http.StatusInternalServerError, w, &RestoreResponse{Code: RESP_ERROR, Error: fmt.Sprintf("%v", err)})
 	}
 }
-func (m *requestHandlerContext) restoreIndexMetadataToNodes(hostIndexMap map[string][]*common.IndexDefn) bool {
+func (m *requestHandlerContext) restoreIndexMetadataToNodes(hostIndexMap map[string][]*common.IndexDefn) error {
 
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 
-	errMap := make(map[string]bool)
+	errMap := make(map[string]error)
 
 	restoreIndexes := func(host string, indexes []*common.IndexDefn) {
 		defer wg.Done()
 
 		for _, index := range indexes {
-			if !m.makeCreateIndexRequest(*index, host) {
+			if err := m.makeCreateIndexRequest(*index, host); err != nil {
 				mu.Lock()
 				defer mu.Unlock()
 
-				errMap[host] = true
+				errMap[host] = err
 				return
 			}
 		}
@@ -1665,14 +1665,14 @@ func (m *requestHandlerContext) restoreIndexMetadataToNodes(hostIndexMap map[str
 
 	mu.Lock()
 	defer mu.Unlock()
-	if len(errMap) != 0 {
-		return false
+	for _, err := range errMap {
+		return err
 	}
 
-	return true
+	return nil
 }
 
-func (m *requestHandlerContext) makeCreateIndexRequest(defn common.IndexDefn, host string) bool {
+func (m *requestHandlerContext) makeCreateIndexRequest(defn common.IndexDefn, host string) error {
 
 	// deferred build for restore
 	defn.Deferred = true
@@ -1681,7 +1681,7 @@ func (m *requestHandlerContext) makeCreateIndexRequest(defn common.IndexDefn, ho
 	body, err := json.Marshal(&req)
 	if err != nil {
 		logging.Errorf("requestHandler.makeCreateIndexRequest(): cannot marshall create index request %v", err)
-		return false
+		return err
 	}
 
 	bodybuf := bytes.NewBuffer(body)
@@ -1689,7 +1689,7 @@ func (m *requestHandlerContext) makeCreateIndexRequest(defn common.IndexDefn, ho
 	resp, err := postWithAuth(host+"/createIndex", "application/json", bodybuf)
 	if err != nil {
 		logging.Errorf("requestHandler.makeCreateIndexRequest(): create index request fails for %v/createIndex. Error=%v", host, err)
-		return false
+		return err
 	}
 	defer resp.Body.Close()
 
@@ -1697,10 +1697,10 @@ func (m *requestHandlerContext) makeCreateIndexRequest(defn common.IndexDefn, ho
 	status := convertResponse(resp, response)
 	if status == RESP_ERROR || response.Code == RESP_ERROR {
 		logging.Errorf("requestHandler.makeCreateIndexRequest(): create index request fails. Error=%v", response.Error)
-		return false
+		return fmt.Errorf("%v: %v", response.Error, response.Message)
 	}
 
-	return true
+	return nil
 }
 
 //////////////////////////////////////////////////////
@@ -2785,8 +2785,8 @@ func (m *requestHandlerContext) bucketRestoreHandler(bucket, include, exclude st
 		return http.StatusInternalServerError, err2.Error()
 	}
 
-	if !m.restoreIndexMetadataToNodes(hostIndexMap) {
-		return http.StatusInternalServerError, "Unable to restore metadata."
+	if err := m.restoreIndexMetadataToNodes(hostIndexMap); err != nil {
+		return http.StatusInternalServerError, fmt.Sprintf("%v", err)
 	}
 
 	return http.StatusOK, ""
