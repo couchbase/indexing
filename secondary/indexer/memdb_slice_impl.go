@@ -385,10 +385,12 @@ func (mdb *memdbSlice) Insert(key []byte, docid []byte, meta *MutationMeta) erro
 }
 
 func (mdb *memdbSlice) Delete(docid []byte, meta *MutationMeta) error {
-	mdb.idxStats.numDocsFlushQueued.Add(1)
-	atomic.AddInt64(&mdb.qCount, 1)
-	atomic.StoreUint32(&mdb.flushActive, 1)
-	mdb.cmdCh[int(meta.vbucket)%mdb.numWriters] <- &indexMutation{op: opDelete, docid: docid}
+	if !meta.firstSnap {
+		mdb.idxStats.numDocsFlushQueued.Add(1)
+		atomic.AddInt64(&mdb.qCount, 1)
+		atomic.StoreUint32(&mdb.flushActive, 1)
+		mdb.cmdCh[int(meta.vbucket)%mdb.numWriters] <- &indexMutation{op: opDelete, docid: docid}
+	}
 	return mdb.fatalDbErr
 }
 

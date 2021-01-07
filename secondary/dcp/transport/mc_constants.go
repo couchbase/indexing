@@ -147,6 +147,9 @@ var CommandNames map[CommandCode]string
 // StatusNames human readable names for memcached response.
 var StatusNames map[Status]string
 
+// Human readable names for memcached collection events
+var CollectionEventNames map[CollectionEvent]string
+
 func init() {
 	CommandNames = make(map[CommandCode]string)
 	CommandNames[GET] = "GET"
@@ -218,6 +221,9 @@ func init() {
 	CommandNames[DCP_BUFFERACK] = "DCP_BUFFERACK"
 	CommandNames[DCP_CONTROL] = "DCP_CONTROL"
 	CommandNames[DCP_GET_SEQNO] = "DCP_GET_SEQNO"
+	CommandNames[DCP_SYSTEM_EVENT] = "DCP_SYSTEM_EVENT"
+	CommandNames[DCP_SEQNO_ADVANCED] = "DCP_SEQNO_ADVANCED"
+	CommandNames[DCP_OSO_SNAPSHOT] = "DCP_OSO_SNAPSHOT"
 
 	StatusNames = make(map[Status]string)
 	StatusNames[SUCCESS] = "SUCCESS"
@@ -236,6 +242,16 @@ func init() {
 	StatusNames[UNKNOWN_COLLECTION] = "UNKNOWN_COLLECTION"
 	StatusNames[MANIFEST_AHEAD] = "MANIFEST_AHEAD"
 	StatusNames[UNKNOWN_SCOPE] = "UNKNOWN_SCOPE"
+
+	CollectionEventNames = make(map[CollectionEvent]string)
+	CollectionEventNames[COLLECTION_CREATE] = "COLLECTION_CREATE"
+	CollectionEventNames[COLLECTION_DROP] = "COLLECTION_DROP"
+	CollectionEventNames[COLLECTION_FLUSH] = "COLLECTION_FLUSH"
+	CollectionEventNames[SCOPE_CREATE] = "SCOPE_CREATE"
+	CollectionEventNames[SCOPE_DROP] = "SCOPE_DROP"
+	CollectionEventNames[COLLECTION_CHANGED] = "COLLECTION_CHANGED"
+	CollectionEventNames[OSO_SNAPSHOT_START] = "OSO_SNAPSHOT_START"
+	CollectionEventNames[OSO_SNAPSHOT_END] = "OSO_SNAPSHOT_END"
 }
 
 // String an op code.

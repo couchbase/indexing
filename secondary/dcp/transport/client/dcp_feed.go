@@ -74,6 +74,10 @@ type DcpFeed struct {
 	stats              *DcpStats // Stats for dcp client
 	done               uint32
 	enableReadDeadline int32 // 0 => Read deadline is disabled in doReceive, 1 => enabled
+
+	// Book-keeping for verifying sequence order.
+	// TODO: This introduces a map lookup in mutation path. Need to anlayse perf implication.
+	seqOrders map[uint16]transport.SeqOrderState // vb ==> state maintained for checking seq order
 }
 
 // NewDcpFeed creates a new DCP Feed.
@@ -96,6 +100,7 @@ func NewDcpFeed(
 		// TODO: would be nice to add host-addr as part of prefix.
 		logPrefix: fmt.Sprintf("DCPT[%s]", name),
 		stats:     &DcpStats{},
+		seqOrders: make(map[uint16]transport.SeqOrderState),
 	}
 
 	mc.Hijack()
@@ -378,6 +383,7 @@ func (feed *DcpFeed) handlePacket(
 		event = newDcpEvent(pkt, stream)
 		feed.handleStreamRequest(res, vb, stream, event)
 		feed.stats.TotalStreamReq.Add(1)
+		feed.seqOrders[vb] = transport.NewSeqOrderState()
 
 	case transport.DCP_MUTATION, transport.DCP_DELETION,
 		transport.DCP_EXPIRATION:
@@ -385,6 +391,14 @@ func (feed *DcpFeed) handlePacket(
 		stream.Seqno = event.Seqno
 		feed.stats.TotalMutation.Add(1)
 		sendAck = true
+
+		if s, ok := feed.seqOrders[vb]; ok && s != nil {
+			if !s.ProcessSeqno(event.Seqno) {
+				logging.Fatalf("%v seq order violation for vb = %v, seq = %v, opcode = %v, "+
+					"orderState = %v, event = %v", prefix, vb, event.Seqno, pkt.Opcode,
+					s.GetInfo(), event.GetDebugInfo())
+			}
+		}
 
 	case transport.DCP_STREAMEND:
 		event = newDcpEvent(pkt, stream)
@@ -394,6 +408,11 @@ func (feed *DcpFeed) handlePacket(
 		fmsg := "%v ##%x DCP_STREAMEND for vb %d\n"
 		logging.Debugf(fmsg, prefix, stream.AppOpaque, vb)
 		feed.stats.TotalStreamEnd.Add(1)
+
+		if s, ok := feed.seqOrders[vb]; ok && s != nil && s.GetErrCount() != 0 {
+			logging.Fatalf("%v error count for sequence number ordering is %v", prefix, s.GetErrCount())
+		}
+		feed.seqOrders[vb] = nil
 
 	case transport.DCP_SNAPSHOT:
 		event = newDcpEvent(pkt, stream)
@@ -411,6 +430,10 @@ func (feed *DcpFeed) handlePacket(
 		fmsg := "%v ##%x DCP_SNAPSHOT for vb %d\n"
 		logging.Debugf(fmsg, prefix, stream.AppOpaque, vb)
 
+		if s, ok := feed.seqOrders[vb]; ok && s != nil {
+			s.ProcessSnapshot(event.SnapstartSeq, event.SnapendSeq)
+		}
+
 	case transport.DCP_FLUSH:
 		event = newDcpEvent(pkt, stream) // special processing ?
 
@@ -427,6 +450,7 @@ func (feed *DcpFeed) handlePacket(
 		fmsg := "%v ##%x DCP_CLOSESTREAM for vb %d\n"
 		logging.Debugf(fmsg, prefix, stream.AppOpaque, vb)
 		feed.stats.TotalCloseStream.Add(1)
+		feed.seqOrders[vb] = nil
 
 	case transport.DCP_CONTROL, transport.DCP_BUFFERACK:
 		if res.Status != transport.SUCCESS {
@@ -457,6 +481,7 @@ func (feed *DcpFeed) handlePacket(
 			fmsg := "%v ##%x DCP_SEQNO_ADVANCED for vb %d. Expected extras len: %v, received: %v\n"
 			logging.Fatalf(fmsg, prefix, stream.AppOpaque, vb, dcpSeqnoAdvExtrasLen, len(pkt.Extras))
 		}
+
 	case transport.DCP_OSO_SNAPSHOT:
 		event = newDcpEvent(pkt, stream)
 		sendAck = true
@@ -1245,6 +1270,7 @@ func newDcpEvent(rq *transport.MCRequest, stream *DcpStream) (event *DcpEvent) {
 			event.Datatype &= ^(dcpXATTR | dcpJSON)
 		}
 	}()
+
 	event = &DcpEvent{
 		Cas:      rq.Cas,
 		Datatype: rq.Datatype,
@@ -1294,6 +1320,7 @@ func newDcpEvent(rq *transport.MCRequest, stream *DcpStream) (event *DcpEvent) {
 		event.SnapstartSeq = binary.BigEndian.Uint64(rq.Extras[:8])
 		event.SnapendSeq = binary.BigEndian.Uint64(rq.Extras[8:16])
 		event.SnapshotType = binary.BigEndian.Uint32(rq.Extras[16:20])
+
 	}
 
 	if (event.Opcode == transport.DCP_MUTATION ||
@@ -1337,6 +1364,19 @@ func (event *DcpEvent) String() string {
 		name = fmt.Sprintf("#%d", event.Opcode)
 	}
 	return name
+}
+
+func (event *DcpEvent) GetDebugInfo() string {
+	fmtStr := "Opcode %v, Status %v, Datatype %v, VBucket %v, Opaque %v, VBuuid %v, "
+	fmtStr += "Key %v, Cas %v, Seqno %v, RevSeqno %v, Flags %v, "
+	fmtStr += "Expiry %v, LockTime %v, Nru %v, SnapstartSeq %v, SnapendSeq %v, "
+	fmtStr += "SnapshotType %v, FailoverLog %v, Error %v, Ctime %v"
+
+	return fmt.Sprintf(fmtStr, event.Opcode, event.Status, event.Datatype, event.VBucket,
+		event.Opaque, event.VBuuid, logging.TagStrUD(event.Key), event.Cas, event.Seqno,
+		event.RevSeqno, event.Flags, event.Expiry, event.LockTime, event.Nru,
+		event.SnapstartSeq, event.SnapendSeq, event.SnapshotType, event.FailoverLog,
+		event.Error, event.Ctime)
 }
 
 // DcpStats on mutations/snapshots/buff-acks.
