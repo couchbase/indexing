@@ -1278,18 +1278,24 @@ func (ss *StreamState) updateHWT(streamId common.StreamId,
 
 		//update OSO bookkeeping
 		if hwtOSO != nil {
+
 			tsOSO := ss.streamKeyspaceIdHWTOSO[streamId][keyspaceId]
+
 			//if mutation count has incremented
 			if hwtOSO.Vbuuids[i] > tsOSO.Vbuuids[i] {
 				tsOSO.Seqnos[i] = hwtOSO.Seqnos[i]   //high seqno
 				tsOSO.Vbuuids[i] = hwtOSO.Vbuuids[i] //Vbuuid stores count for OSO
 				ss.streamKeyspaceIdNewTsReqdMap[streamId][keyspaceId] = true
 			}
+
+			//OSO Snap Start
+			tsOSO.Snapshots[i][0] = hwtOSO.Snapshots[i][0]
+
 			//OSO Snap End
 			if hwtOSO.Snapshots[i][1] > tsOSO.Snapshots[i][1] {
-				tsOSO.Snapshots[i][1] = hwtOSO.Snapshots[i][1]
 				ss.streamKeyspaceIdNewTsReqdMap[streamId][keyspaceId] = true
 			}
+			tsOSO.Snapshots[i][1] = hwtOSO.Snapshots[i][1]
 		}
 
 		if seq > ts.Seqnos[i] { //if seqno has incremented, update it
@@ -1421,14 +1427,16 @@ func (ss *StreamState) alignSnapBoundary(streamId common.StreamId,
 		if enableOSO {
 
 			//if ts has OSO snapshot, skip
-			if s[0] == 0 {
+			if tsElem.osoCount != nil &&
+				tsElem.osoCount[i] != 0 &&
+				s[0] == 1 {
 				continue
 			}
 
 			//if lastSnap OSO, skip
-			if lastSnap.Snapshots[i][0] == 0 &&
+			if lastSnap.Snapshots[i][0] == 1 &&
 				lastSnap.Snapshots[i][1] == 1 &&
-				lastSnap.Seqnos[i] != 0 {
+				lastSnap.Seqnos[i] > lastSnap.Snapshots[i][1] {
 				continue
 			}
 		}
@@ -1535,9 +1543,14 @@ func (ss *StreamState) computeTsChangeVec(streamId common.StreamId,
 		for i, s := range ts.Seqnos {
 
 			//if OSO snapshot
-			if enableOSO && ts.Snapshots[i][0] == 0 && s != 0 {
-				//if lastFlushedTs has an incomplete oso snapshot
-				if lts.Snapshots[i][0] == 0 &&
+			if enableOSO &&
+				tsElem.osoCount != nil &&
+				tsElem.osoCount[i] != 0 &&
+				ts.Snapshots[i][0] == 1 &&
+				s != 0 {
+				//if lastFlushedTs has an incomplete or no oso snapshot
+				if (lts.Snapshots[i][0] == 0 ||
+					lts.Snapshots[i][0] == 1) &&
 					lts.Snapshots[i][1] == 0 {
 
 					if tsElem.osoCount[i] > lts.Seqnos[i] {
@@ -1555,6 +1568,10 @@ func (ss *StreamState) computeTsChangeVec(streamId common.StreamId,
 						//update the snapshot, seqno to high seqno
 						ts.Snapshots[i][0] = ts.Seqnos[i]
 						ts.Snapshots[i][1] = ts.Seqnos[i]
+
+						//count OSO End as change. Build is only
+						//considered done when all OSO End markers have arrived.
+						noChange = false
 					}
 				} else {
 					//use seqno to mark complete snapshot
@@ -1581,7 +1598,12 @@ func (ss *StreamState) computeTsChangeVec(streamId common.StreamId,
 		//if this is the first ts, check seqno > 0
 		for i, s := range ts.Seqnos {
 			//if OSO snapshot
-			if enableOSO && ts.Snapshots[i][0] == 0 && s != 0 {
+			if enableOSO &&
+				tsElem.osoCount != nil &&
+				tsElem.osoCount[i] != 0 &&
+				ts.Snapshots[i][0] == 1 &&
+				s != 0 {
+
 				changeVec[i] = true
 				noChange = false
 				countVec[i] = tsElem.osoCount[i] //count to be flushed
@@ -1755,10 +1777,10 @@ func (ss *StreamState) setCountForOSOTs(streamId common.StreamId,
 	for i, sn := range ts.Snapshots {
 
 		//if vb got an OSO Snapshot
-		if hwtOSO.Snapshots[i][0] == 0 &&
+		if hwtOSO.Snapshots[i][0] == 1 &&
 			hwtOSO.Seqnos[i] != 0 {
 			//if there is a regular snapshot with mutations
-			if sn[0] != 0 && ts.Seqnos[i] != 0 {
+			if sn[1] != 0 && ts.Seqnos[i] != 0 {
 				//use latest snapshot information already in ts
 			} else {
 				//NOTE if OSO has ended and the next snapshot marker has come in

@@ -476,6 +476,7 @@ func (r *mutationStreamReader) maybeSendSync(fastpath bool) bool {
 						filterOSO.Snapshots[vb][0] == 1 {
 						hwtOSOMap[keyspaceId].Seqnos[vb] = filterOSO.Seqnos[vb]
 						hwtOSOMap[keyspaceId].Vbuuids[vb] = filterOSO.Vbuuids[vb]
+						hwtOSOMap[keyspaceId].Snapshots[vb][0] = filterOSO.Snapshots[vb][0]
 						hwtOSOMap[keyspaceId].Snapshots[vb][1] = filterOSO.Snapshots[vb][1]
 						hasOSO = true
 					}
@@ -1158,7 +1159,7 @@ func (w *streamWorker) updateOSOMarkerInFilter(meta *MutationMeta, eventType byt
 			if filterOSO.Snapshots[meta.vbucket][0] == 1 &&
 				filterOSO.Snapshots[meta.vbucket][1] == 0 {
 				logging.Errorf("MutationStreamReader::updateOSOMarkerInFilter %v %v "+
-					"Received OSO Start For Vbucket %v without OSO End. Seqno %v. "+
+					"Received OSO Start For Vbucket %v without previous OSO End. Seqno %v. "+
 					"Count %v. OSO Start %v. OSO End %v.", w.streamId,
 					meta.keyspaceId, meta.vbucket, filterOSO.Seqnos[meta.vbucket],
 					filterOSO.Vbuuids[meta.vbucket], filterOSO.Snapshots[meta.vbucket][0],
@@ -1264,6 +1265,7 @@ func (w *streamWorker) updateSnapInFilter(meta *MutationMeta,
 					}
 
 					prevSnap := w.keyspaceIdPrevSnapMap[meta.keyspaceId]
+					prevSnap.Snapshots[meta.vbucket][0] = filterOSO.Snapshots[meta.vbucket][0]
 					prevSnap.Snapshots[meta.vbucket][1] = filterOSO.Snapshots[meta.vbucket][1]
 					prevSnap.Seqnos[meta.vbucket] = filterOSO.Seqnos[meta.vbucket]
 

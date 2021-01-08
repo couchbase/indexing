@@ -371,7 +371,7 @@ func statsSingleSlice(request *ScanRequest, ctx IndexReaderContext, snap SliceSn
 	var err error
 	var cnt uint64
 
-	if request.Low.Bytes() == nil && request.Low.Bytes() == nil {
+	if request.Low.Bytes() == nil && request.High.Bytes() == nil {
 		cnt, err = snap.Snapshot().StatCountTotal()
 	} else {
 		cnt, err = snap.Snapshot().CountRange(ctx, request.Low, request.High, request.Incl, stopch)
