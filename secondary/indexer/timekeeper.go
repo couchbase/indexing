@@ -699,6 +699,10 @@ func (tk *timekeeper) processFlushAbort(streamId common.StreamId, keyspaceId str
 
 	case STREAM_ACTIVE, STREAM_RECOVERY:
 
+		if tk.resetStreamIfOSOEnabled(streamId, keyspaceId, sessionId) {
+			break
+		}
+
 		logging.Infof("Timekeeper::processFlushAbort %v %v %v Generate InitPrepRecovery",
 			streamId, keyspaceId, sessionId)
 		tk.supvRespch <- &MsgRecovery{mType: INDEXER_INIT_PREP_RECOVERY,
@@ -2009,14 +2013,18 @@ func (tk *timekeeper) handleRecoveryDone(cmd Message) {
 		logging.Infof("Timekeeper::handleRecoveryDone %v %v. Initiate Recovery "+
 			"due to Force Recovery Flag. SessionId %v.", streamId, keyspaceId, sessionId)
 
-		tk.supvRespch <- &MsgRecovery{mType: INDEXER_INIT_PREP_RECOVERY,
-			streamId:   streamId,
-			keyspaceId: keyspaceId,
-			restartTs:  tk.ss.computeRestartTs(streamId, keyspaceId),
-			sessionId:  sessionId}
-		tk.supvCmdch <- &MsgSuccess{}
-		return
+		if tk.resetStreamIfOSOEnabled(streamId, keyspaceId, sessionId) {
+			return
+		} else {
+			tk.supvRespch <- &MsgRecovery{mType: INDEXER_INIT_PREP_RECOVERY,
+				streamId:   streamId,
+				keyspaceId: keyspaceId,
+				restartTs:  tk.ss.computeRestartTs(streamId, keyspaceId),
+				sessionId:  sessionId}
+			tk.supvCmdch <- &MsgSuccess{}
+			return
 
+		}
 	}
 
 	tk.ss.streamKeyspaceIdKVActiveTsMap[streamId][keyspaceId] = activeTs
@@ -3329,20 +3337,26 @@ func (tk *timekeeper) repairStream(streamId common.StreamId,
 	if canRollback {
 
 		sessionId := tk.ss.getSessionId(streamId, keyspaceId)
-		logging.Infof("Timekeeper::repairStream need rollback for %v %v %v. "+
-			"Sending Init Prepare.", streamId, keyspaceId, sessionId)
+		if tk.resetStreamIfOSOEnabled(streamId, keyspaceId, sessionId) {
+			delete(tk.ss.streamKeyspaceIdRepairStopCh[streamId], keyspaceId)
+			return
 
-		// Initiate recovery.   It will reset keyspaceId book keeping upon prepare recovery.
-		tk.supvRespch <- &MsgRecovery{
-			mType:      INDEXER_INIT_PREP_RECOVERY,
-			streamId:   streamId,
-			keyspaceId: keyspaceId,
-			restartTs:  tk.ss.computeRollbackTs(streamId, keyspaceId),
-			sessionId:  sessionId,
+		} else {
+			logging.Infof("Timekeeper::repairStream need rollback for %v %v %v. "+
+				"Sending Init Prepare.", streamId, keyspaceId, sessionId)
+
+			// Initiate recovery.   It will reset keyspaceId book keeping upon prepare recovery.
+			tk.supvRespch <- &MsgRecovery{
+				mType:      INDEXER_INIT_PREP_RECOVERY,
+				streamId:   streamId,
+				keyspaceId: keyspaceId,
+				restartTs:  tk.ss.computeRollbackTs(streamId, keyspaceId),
+				sessionId:  sessionId,
+			}
+			delete(tk.ss.streamKeyspaceIdRepairStopCh[streamId], keyspaceId)
+			return
 		}
 
-		delete(tk.ss.streamKeyspaceIdRepairStopCh[streamId], keyspaceId)
-		return
 	}
 
 	// Start MTR if necessary.  This happens if indexer has not received any new StreamBegin over max wait time, and there
@@ -3352,36 +3366,48 @@ func (tk *timekeeper) repairStream(streamId common.StreamId,
 		logging.Infof("Timekeeper::repairStream need MTR for %v %v. Sending StreamRepair.", streamId, keyspaceId)
 
 		sessionId := tk.ss.getSessionId(streamId, keyspaceId)
-		resp := &MsgKVStreamRepair{
-			streamId:   streamId,
-			keyspaceId: keyspaceId,
-			sessionId:  sessionId,
-		}
 
-		tk.repairStreamWithMTR(streamId, keyspaceId, resp)
-		return
+		if tk.resetStreamIfOSOEnabled(streamId, keyspaceId, sessionId) {
+			delete(tk.ss.streamKeyspaceIdRepairStopCh[streamId], keyspaceId)
+			return
+		} else {
+			resp := &MsgKVStreamRepair{
+				streamId:   streamId,
+				keyspaceId: keyspaceId,
+				sessionId:  sessionId,
+			}
+
+			tk.repairStreamWithMTR(streamId, keyspaceId, resp)
+			return
+		}
 	}
 
 	//prepare repairTs with all vbs in STREAM_END, REPAIR status and
 	//send that to KVSender to repair
 	if repairTs, needRepair, connErrVbs, repairVbs := tk.ss.getRepairTsForKeyspaceId(streamId, keyspaceId); needRepair {
 
-		respCh := make(MsgChannel)
-		stopCh := tk.ss.streamKeyspaceIdRepairStopCh[streamId][keyspaceId]
 		sessionId := tk.ss.getSessionId(streamId, keyspaceId)
-		cid := tk.ss.streamKeyspaceIdCollectionId[streamId][keyspaceId]
 
-		restartMsg := &MsgRestartVbuckets{streamId: streamId,
-			keyspaceId:   keyspaceId,
-			restartTs:    repairTs,
-			respCh:       respCh,
-			stopCh:       stopCh,
-			connErrVbs:   connErrVbs,
-			repairVbs:    repairVbs,
-			sessionId:    sessionId,
-			collectionId: cid}
+		if tk.resetStreamIfOSOEnabled(streamId, keyspaceId, sessionId) {
+			delete(tk.ss.streamKeyspaceIdRepairStopCh[streamId], keyspaceId)
+			return
+		} else {
+			respCh := make(MsgChannel)
+			stopCh := tk.ss.streamKeyspaceIdRepairStopCh[streamId][keyspaceId]
+			cid := tk.ss.streamKeyspaceIdCollectionId[streamId][keyspaceId]
 
-		go tk.sendRestartMsg(restartMsg)
+			restartMsg := &MsgRestartVbuckets{streamId: streamId,
+				keyspaceId:   keyspaceId,
+				restartTs:    repairTs,
+				respCh:       respCh,
+				stopCh:       stopCh,
+				connErrVbs:   connErrVbs,
+				repairVbs:    repairVbs,
+				sessionId:    sessionId,
+				collectionId: cid}
+
+			go tk.sendRestartMsg(restartMsg)
+		}
 
 	} else if needsRollback {
 		go tk.repairStream(streamId, keyspaceId)
@@ -4368,4 +4394,24 @@ func (tk *timekeeper) ValidateKeyspace(streamId common.StreamId, keyspaceId stri
 	}
 	return true
 
+}
+
+func (tk *timekeeper) resetStreamIfOSOEnabled(streamId common.StreamId,
+	keyspaceId string, sessionId uint64) bool {
+
+	if tk.ss.streamKeyspaceIdEnableOSO[streamId][keyspaceId] {
+		logging.Infof("Timekeeper::resetStreamIfOSOEnabled %v %v %v. Reset Stream. ",
+			streamId, keyspaceId, sessionId)
+
+		tk.ss.streamKeyspaceIdForceRecovery[streamId][keyspaceId] = true
+
+		tk.supvRespch <- &MsgStreamUpdate{
+			mType:      RESET_STREAM,
+			streamId:   streamId,
+			keyspaceId: keyspaceId,
+			sessionId:  sessionId,
+		}
+		return true
+	}
+	return false
 }

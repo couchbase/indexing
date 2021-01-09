@@ -2979,7 +2979,6 @@ func (idx *indexer) handleResetStream(msg Message) {
 
 			idx.streamKeyspaceIdOSOException[streamId][keyspaceId] = true
 
-			idx.setStreamKeyspaceIdState(streamId, keyspaceId, STREAM_PREPARE_RECOVERY)
 			logging.Infof("Indexer::handleResetStream StreamId %v KeyspaceId %v State %v "+
 				"SessionId %v. Initiate Recovery.", streamId, keyspaceId, STREAM_PREPARE_RECOVERY, sessionId)
 
@@ -2987,15 +2986,11 @@ func (idx *indexer) handleResetStream(msg Message) {
 			numVbuckets := idx.config["numVbuckets"].Int()
 			restartTs := common.NewTsVbuuid(GetBucketFromKeyspaceId(keyspaceId), numVbuckets)
 
-			//send recovery message to timekeeper
-			idx.tkCmdCh <- &MsgRecovery{mType: INDEXER_INIT_PREP_RECOVERY,
+			idx.handleInitPrepRecovery(&MsgRecovery{mType: INDEXER_INIT_PREP_RECOVERY,
 				streamId:   streamId,
 				keyspaceId: keyspaceId,
 				sessionId:  sessionId,
-				restartTs:  restartTs,
-			}
-			<-idx.tkCmdCh
-
+				restartTs:  restartTs})
 		}
 	}
 }
@@ -4234,12 +4229,22 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 							"SessionId %v. Error from Projector %v. Start recovery after %v retries.",
 							buildStream, sessionId, keyspaceId, respErr.cause, MAX_PROJ_RETRY)
 
-						idx.internalRecvCh <- &MsgRecovery{
-							mType:      INDEXER_INIT_PREP_RECOVERY,
-							streamId:   buildStream,
-							keyspaceId: keyspaceId,
-							requestCh:  stopCh,
-							sessionId:  sessionId,
+						//Reset Stream if OSO
+						if enableOSO {
+							idx.internalRecvCh <- &MsgStreamUpdate{
+								mType:      RESET_STREAM,
+								streamId:   buildStream,
+								keyspaceId: keyspaceId,
+								sessionId:  sessionId,
+							}
+						} else {
+							idx.internalRecvCh <- &MsgRecovery{
+								mType:      INDEXER_INIT_PREP_RECOVERY,
+								streamId:   buildStream,
+								keyspaceId: keyspaceId,
+								requestCh:  stopCh,
+								sessionId:  sessionId,
+							}
 						}
 						break retryloop
 					} else {
@@ -5769,6 +5774,13 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 		enableOSO = false
 	}
 
+	//if OSO exception has been recorded, disable OSO and use regular mode
+	if idx.streamKeyspaceIdOSOException[streamId][keyspaceId] {
+		logging.Infof("Indexer::startKeyspaceIdStream %v %v. Disable OSO due to "+
+			"exception.", streamId, keyspaceId)
+		enableOSO = false
+	}
+
 	var cid string
 	var ok bool
 	if cid, ok = idx.streamKeyspaceIdCollectionId[streamId][keyspaceId]; !ok {
@@ -5878,14 +5890,26 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 					logging.Infof("Indexer::startKeyspaceIdStream Rollback from "+
 						"Projector For Stream %v KeyspaceId %v SessionId %v", streamId,
 						keyspaceId, sessionId)
-					rollbackTs := resp.(*MsgRollback).GetRollbackTs()
-					idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_INIT_PREP_RECOVERY,
-						streamId:   streamId,
-						keyspaceId: keyspaceId,
-						restartTs:  rollbackTs,
-						retryTs:    retryTs,
-						requestCh:  stopCh,
-						sessionId:  sessionId}
+
+					//Reset Stream if OSO
+					if enableOSO {
+						idx.internalRecvCh <- &MsgStreamUpdate{
+							mType:      RESET_STREAM,
+							streamId:   streamId,
+							keyspaceId: keyspaceId,
+							sessionId:  sessionId,
+						}
+
+					} else {
+						rollbackTs := resp.(*MsgRollback).GetRollbackTs()
+						idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_INIT_PREP_RECOVERY,
+							streamId:   streamId,
+							keyspaceId: keyspaceId,
+							restartTs:  rollbackTs,
+							retryTs:    retryTs,
+							requestCh:  stopCh,
+							sessionId:  sessionId}
+					}
 					break retryloop
 
 				default:
@@ -5916,12 +5940,22 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 							"Error from Projector %v. Start recovery after %v retries.", streamId,
 							keyspaceId, sessionId, respErr.cause, MAX_PROJ_RETRY)
 
-						idx.internalRecvCh <- &MsgRecovery{
-							mType:      INDEXER_INIT_PREP_RECOVERY,
-							streamId:   streamId,
-							keyspaceId: keyspaceId,
-							requestCh:  stopCh,
-							sessionId:  sessionId,
+						//Reset Stream if OSO
+						if enableOSO {
+							idx.internalRecvCh <- &MsgStreamUpdate{
+								mType:      RESET_STREAM,
+								streamId:   streamId,
+								keyspaceId: keyspaceId,
+								sessionId:  sessionId,
+							}
+						} else {
+							idx.internalRecvCh <- &MsgRecovery{
+								mType:      INDEXER_INIT_PREP_RECOVERY,
+								streamId:   streamId,
+								keyspaceId: keyspaceId,
+								requestCh:  stopCh,
+								sessionId:  sessionId,
+							}
 						}
 						break retryloop
 					} else {
