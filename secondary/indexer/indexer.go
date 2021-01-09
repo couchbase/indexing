@@ -656,10 +656,11 @@ func (idx *indexer) initHttpServer() error {
 	logging.Infof("indexer:: Staring http server : %v", addr)
 
 	srv := &http.Server{
-		ReadTimeout:  time.Duration(idx.config["http.readTimeout"].Int()) * time.Second,
-		WriteTimeout: time.Duration(idx.config["http.writeTimeout"].Int()) * time.Second,
-		Addr:         addr,
-		Handler:      GetHTTPMux(),
+		ReadTimeout:       time.Duration(idx.config["http.readTimeout"].Int()) * time.Second,
+		WriteTimeout:      time.Duration(idx.config["http.writeTimeout"].Int()) * time.Second,
+		ReadHeaderTimeout: time.Duration(idx.config["http.readHeaderTimeout"].Int()) * time.Second,
+		Addr:              addr,
+		Handler:           GetHTTPMux(),
 	}
 
 	lsnr, err := security.MakeProtocolAwareTCPListener(addr)
