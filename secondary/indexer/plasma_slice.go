@@ -311,6 +311,11 @@ func (slice *plasmaSlice) initStores() error {
 	cfg.CheckpointInterval = time.Second * time.Duration(slice.sysconf["plasma.checkpointInterval"].Int())
 	cfg.LSSCleanerConcurrency = slice.sysconf["plasma.LSSCleanerConcurrency"].Int()
 	cfg.AutoTuneLSSCleaning = slice.sysconf["plasma.AutoTuneLSSCleaner"].Bool()
+	cfg.AutoTuneDiskQuota = int64(slice.sysconf["plasma.AutoTuneDiskQuota"].Uint64())
+	cfg.AutoTuneCleanerTargetFragRatio = slice.sysconf["plasma.AutoTuneCleanerTargetFragRatio"].Int()
+	cfg.AutoTuneCleanerMinBandwidthRatio = slice.sysconf["plasma.AutoTuneCleanerMinBandwidthRatio"].Float64()
+	cfg.AutoTuneDiskFullTimeLimit = slice.sysconf["plasma.AutoTuneDiskFullTimeLimit"].Int()
+	cfg.AutoTuneAvailDiskLimit = slice.sysconf["plasma.AutoTuneAvailDiskLimit"].Float64()
 	cfg.Compression = slice.sysconf["plasma.compression"].String()
 	cfg.MaxPageSize = slice.sysconf["plasma.MaxPageSize"].Int()
 	cfg.AutoLSSCleaning = !slice.sysconf["settings.compaction.plasma.manual"].Bool()
@@ -2267,6 +2272,11 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 
 	updatePlasmaConfig(cfg)
 	mdb.mainstore.AutoTuneLSSCleaning = cfg["plasma.AutoTuneLSSCleaner"].Bool()
+	mdb.mainstore.AutoTuneDiskQuota = int64(cfg["plasma.AutoTuneDiskQuota"].Uint64())
+	mdb.mainstore.AutoTuneCleanerTargetFragRatio = cfg["plasma.AutoTuneCleanerTargetFragRatio"].Int()
+	mdb.mainstore.AutoTuneCleanerMinBandwidthRatio = cfg["plasma.AutoTuneCleanerMinBandwidthRatio"].Float64()
+	mdb.mainstore.AutoTuneDiskFullTimeLimit = cfg["plasma.AutoTuneDiskFullTimeLimit"].Int()
+	mdb.mainstore.AutoTuneAvailDiskLimit = cfg["plasma.AutoTuneAvailDiskLimit"].Float64()
 	mdb.mainstore.MaxPageSize = cfg["plasma.MaxPageSize"].Int()
 	mdb.mainstore.EnforceKeyRange = cfg["plasma.enforceKeyRange"].Bool()
 
@@ -2313,6 +2323,11 @@ func (mdb *plasmaSlice) UpdateConfig(cfg common.Config) {
 
 	if !mdb.isPrimary {
 		mdb.backstore.AutoTuneLSSCleaning = cfg["plasma.AutoTuneLSSCleaner"].Bool()
+		mdb.backstore.AutoTuneDiskQuota = int64(cfg["plasma.AutoTuneDiskQuota"].Uint64())
+		mdb.backstore.AutoTuneCleanerTargetFragRatio = cfg["plasma.AutoTuneCleanerTargetFragRatio"].Int()
+		mdb.backstore.AutoTuneCleanerMinBandwidthRatio = cfg["plasma.AutoTuneCleanerMinBandwidthRatio"].Float64()
+		mdb.backstore.AutoTuneDiskFullTimeLimit = cfg["plasma.AutoTuneDiskFullTimeLimit"].Int()
+		mdb.backstore.AutoTuneAvailDiskLimit = cfg["plasma.AutoTuneAvailDiskLimit"].Float64()
 		mdb.backstore.MaxPageSize = cfg["plasma.MaxPageSize"].Int()
 		mdb.backstore.EnforceKeyRange = cfg["plasma.enforceKeyRange"].Bool()
 		mdb.backstore.CheckpointInterval = mdb.mainstore.CheckpointInterval

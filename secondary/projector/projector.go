@@ -15,7 +15,8 @@ import (
 	"sync"
 	"time"
 
-	ap "github.com/couchbase/indexing/secondary/adminport"
+	apcommon "github.com/couchbase/indexing/secondary/adminport/common"
+	apserver "github.com/couchbase/indexing/secondary/adminport/server"
 	c "github.com/couchbase/indexing/secondary/common"
 	mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
 	"github.com/couchbase/indexing/secondary/logging"
@@ -34,7 +35,7 @@ const MAX_CINFO_CACHES_RETRIES = 100
 // one or more upstream kv-nodes. Works in tandem with
 // projector's adminport.
 type Projector struct {
-	admind ap.Server // admin-port server
+	admind apcommon.Server // admin-port server
 	// lock protected fields.
 	rw             sync.RWMutex
 	topics         map[string]*Feed // active topics
@@ -53,7 +54,7 @@ type Projector struct {
 
 	certFile             string
 	keyFile              string
-	reqch                chan ap.Request
+	reqch                chan apcommon.Request
 	enableSecurityChange chan bool
 	//Statistics
 	stats       *ProjectorStats
@@ -152,8 +153,8 @@ func (p *Projector) setupHTTP() {
 		apConfig := p.config.SectionConfig("projector.adminport.", true)
 		apConfig.SetValue("name", "PRAM")
 
-		p.reqch = make(chan ap.Request)
-		p.admind, err = ap.NewHTTPServer(apConfig, p.reqch)
+		p.reqch = make(chan apcommon.Request)
+		p.admind, err = apserver.NewHTTPServer(apConfig, p.reqch)
 		return err
 	}
 	helper := c.NewRetryHelper(10, time.Second, 1, fn)
@@ -362,7 +363,7 @@ func (p *Projector) UpdateStatsMgr(clone *ProjectorStats) {
 
 // - return couchbase SDK error if any.
 func (p *Projector) doVbmapRequest(
-	request *protobuf.VbmapRequest, opaque uint16) ap.MessageMarshaller {
+	request *protobuf.VbmapRequest, opaque uint16) apcommon.MessageMarshaller {
 
 	response := &protobuf.VbmapResponse{}
 
@@ -412,7 +413,7 @@ func (p *Projector) doVbmapRequest(
 
 // - return couchbase SDK error if any.
 func (p *Projector) doFailoverLog(
-	request *protobuf.FailoverLogRequest, opaque uint16) ap.MessageMarshaller {
+	request *protobuf.FailoverLogRequest, opaque uint16) apcommon.MessageMarshaller {
 
 	response := &protobuf.FailoverLogResponse{}
 
@@ -474,7 +475,7 @@ func (p *Projector) doFailoverLog(
 // - return ErrorResponseTimeout if request is not completed within timeout.
 func (p *Projector) doMutationTopic(
 	request *protobuf.MutationTopicRequest,
-	opaque uint16) ap.MessageMarshaller {
+	opaque uint16) apcommon.MessageMarshaller {
 
 	topic := request.GetTopic()
 
@@ -511,7 +512,7 @@ func (p *Projector) doMutationTopic(
 // - return ErrorResponseTimeout if request is not completed within timeout.
 func (p *Projector) doRestartVbuckets(
 	request *protobuf.RestartVbucketsRequest,
-	opaque uint16) ap.MessageMarshaller {
+	opaque uint16) apcommon.MessageMarshaller {
 
 	topic := request.GetTopic()
 
@@ -546,7 +547,7 @@ func (p *Projector) doRestartVbuckets(
 // - return ErrorResponseTimeout if request is not completed within timeout.
 func (p *Projector) doShutdownVbuckets(
 	request *protobuf.ShutdownVbucketsRequest,
-	opaque uint16) ap.MessageMarshaller {
+	opaque uint16) apcommon.MessageMarshaller {
 
 	topic := request.GetTopic()
 
@@ -573,7 +574,7 @@ func (p *Projector) doShutdownVbuckets(
 // - return dcp-client failures.
 // - return ErrorResponseTimeout if request is not completed within timeout.
 func (p *Projector) doAddBuckets(
-	request *protobuf.AddBucketsRequest, opaque uint16) ap.MessageMarshaller {
+	request *protobuf.AddBucketsRequest, opaque uint16) apcommon.MessageMarshaller {
 
 	topic := request.GetTopic()
 
@@ -607,7 +608,7 @@ func (p *Projector) doAddBuckets(
 // - return dcp-client failures.
 // - return ErrorResponseTimeout if request is not completed within timeout.
 func (p *Projector) doDelBuckets(
-	request *protobuf.DelBucketsRequest, opaque uint16) ap.MessageMarshaller {
+	request *protobuf.DelBucketsRequest, opaque uint16) apcommon.MessageMarshaller {
 
 	topic := request.GetTopic()
 
@@ -632,7 +633,7 @@ func (p *Projector) doDelBuckets(
 // - return ErrorInconsistentFeed for malformed feed request
 // - otherwise, error is empty string.
 func (p *Projector) doAddInstances(
-	request *protobuf.AddInstancesRequest, opaque uint16) ap.MessageMarshaller {
+	request *protobuf.AddInstancesRequest, opaque uint16) apcommon.MessageMarshaller {
 
 	topic := request.GetTopic()
 
@@ -659,7 +660,7 @@ func (p *Projector) doAddInstances(
 // - return ErrorTopicMissing if feed is not started.
 // - otherwise, error is empty string.
 func (p *Projector) doDelInstances(
-	request *protobuf.DelInstancesRequest, opaque uint16) ap.MessageMarshaller {
+	request *protobuf.DelInstancesRequest, opaque uint16) apcommon.MessageMarshaller {
 
 	topic := request.GetTopic()
 
@@ -684,7 +685,7 @@ func (p *Projector) doDelInstances(
 // - otherwise, error is empty string.
 func (p *Projector) doRepairEndpoints(
 	request *protobuf.RepairEndpointsRequest,
-	opaque uint16) ap.MessageMarshaller {
+	opaque uint16) apcommon.MessageMarshaller {
 
 	topic := request.GetTopic()
 
@@ -709,7 +710,7 @@ func (p *Projector) doRepairEndpoints(
 // - otherwise, error is empty string.
 func (p *Projector) doShutdownTopic(
 	request *protobuf.ShutdownTopicRequest,
-	opaque uint16) ap.MessageMarshaller {
+	opaque uint16) apcommon.MessageMarshaller {
 
 	topic := request.GetTopic()
 

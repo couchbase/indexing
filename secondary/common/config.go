@@ -308,6 +308,15 @@ var SystemConfig = Config{
 		true,  // immutable
 		false, // case-insensitive
 	},
+	"projector.adminport.readHeaderTimeout": ConfigValue{
+		5 * 1000,
+		"timeout in milliseconds, is http server's read header timeout, " +
+			"also refer to projector.dataport.harakiriTimeout, " +
+			"projector.adminport.readTimeout and indexer.dataport.tcpReadDeadline",
+		5 * 1000,
+		true,  // immutable
+		false, // case-insensitive
+	},
 	"projector.adminport.writeTimeout": ConfigValue{
 		0,
 		"timeout in milliseconds, is http server's write timeout",
@@ -1157,6 +1166,41 @@ var SystemConfig = Config{
 		true,
 		"Enable auto tuning of lss cleaning thresholds based on available free space",
 		true,
+		false, // mutable,
+		false, // case-insensitive
+	},
+	"indexer.plasma.AutoTuneDiskQuota": ConfigValue{
+		uint64(0),
+		"Disk Quota for LSS frag ratio tuning",
+		uint64(0),
+		false, // mutable,
+		false, // case-insensitive
+	},
+	"indexer.plasma.AutoTuneCleanerTargetFragRatio": ConfigValue{
+		50,
+		"Target LSS Cleaner fragmentation ratio for auto tuning",
+		50,
+		false, // mutable,
+		false, // case-insensitive
+	},
+	"indexer.plasma.AutoTuneCleanerMinBandwidthRatio": ConfigValue{
+		float64(0.1),
+		"Minimum bandwidth (percentage) allocated for LSS cleaning with auto tuning",
+		float64(0.1),
+		false, // mutable,
+		false, // case-insensitive
+	},
+	"indexer.plasma.AutoTuneDiskFullTimeLimit": ConfigValue{
+		3600,
+		"time allowance (in second) before disk is full",
+		3600,
+		false, // mutable,
+		false, // case-insensitive
+	},
+	"indexer.plasma.AutoTuneAvailDiskLimit": ConfigValue{
+		float64(0.9),
+		"percentage of available disk space reserved for plasma",
+		float64(0.9),
 		false, // mutable,
 		false, // case-insensitive
 	},
