@@ -1214,6 +1214,17 @@ func (w *streamWorker) updateSnapInFilter(meta *MutationMeta,
 		logging.Infof("MutationStreamReader::updateSnapInFilter Huge Snapshot Received "+
 			"for %v %v %v %v-%v", meta.keyspaceId, meta.vbucket, w.streamId, snapStart, snapEnd)
 	}
+	resetStream := func() {
+		logging.Infof("MutationStreamReader::updateSnapInFilter %v %v."+
+			" Resetting Stream.", w.streamId, meta.keyspaceId)
+		w.keyspaceIdOSOException[meta.keyspaceId] = true
+		w.reader.supvRespch <- &MsgStreamUpdate{
+			mType:      RESET_STREAM,
+			streamId:   w.streamId,
+			keyspaceId: meta.keyspaceId,
+			sessionId:  w.keyspaceIdSessionId[meta.keyspaceId],
+		}
+	}
 
 	if filter, ok := w.keyspaceIdFilter[meta.keyspaceId]; ok {
 
@@ -1250,7 +1261,7 @@ func (w *streamWorker) updateSnapInFilter(meta *MutationMeta,
 							meta.keyspaceId, meta.vbucket, filterOSO.Seqnos[meta.vbucket],
 							filterOSO.Vbuuids[meta.vbucket], filterOSO.Snapshots[meta.vbucket][0],
 							filterOSO.Snapshots[meta.vbucket][1], snapStart, snapEnd)
-						//TODO Collections reset stream
+						resetStream()
 					}
 
 					if snapStart < filterOSO.Seqnos[meta.vbucket] {
@@ -1261,7 +1272,7 @@ func (w *streamWorker) updateSnapInFilter(meta *MutationMeta,
 							meta.keyspaceId, meta.vbucket, filterOSO.Seqnos[meta.vbucket],
 							filterOSO.Vbuuids[meta.vbucket], filterOSO.Snapshots[meta.vbucket][0],
 							filterOSO.Snapshots[meta.vbucket][1], snapStart, snapEnd)
-						//TODO Collections reset stream
+						resetStream()
 					}
 
 					prevSnap := w.keyspaceIdPrevSnapMap[meta.keyspaceId]
