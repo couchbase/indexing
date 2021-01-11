@@ -1004,21 +1004,29 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn,
 	// The planner will use nodes that metadta provider sees for planning.  All inactive_failed, inactive_new and unhealthy
 	// nodes will be excluded from planning.    If the user provides a specific node list, those nodes will be used.
 	//
-	layout, definitions, err := o.plan(idxDefn, plan, watcherMap)
-	if err != nil && strings.Contains(err.Error(), "Index already exist") {
-		o.cancelPrepareIndexRequest(idxDefn.DefnId, watcherMap)
-		return err
+
+	var layout map[int]map[c.IndexerId][]c.PartitionId
+	var definitions map[c.IndexerId][]c.IndexDefn
+
+	if o.canSkipPlanner(watcherMap, idxDefn) {
+		logging.Infof("Skipping planner for creation of the index %v:%v:%v:%v", idxDefn.Bucket,
+			idxDefn.Scope, idxDefn.Collection, idxDefn.Name)
+		layout, definitions, err = o.getIndexLayoutWithoutPlanner(watcherMap, idxDefn)
+		if err != nil {
+			logging.Errorf("Fail to create index: %v", err)
+			return err
+		}
+	} else {
+		layout, definitions, err = o.plan(idxDefn, plan, watcherMap)
+		if err != nil && strings.Contains(err.Error(), "Index already exist") {
+			o.cancelPrepareIndexRequest(idxDefn.DefnId, watcherMap)
+			return err
+		}
 	}
 
 	if err != nil {
 		logging.Errorf("Encounter planner error.  Use round robin strategy for planning. Error: %v", err)
-		indexerIds := make([]c.IndexerId, 0, len(watcherMap))
-		for indexerId, _ := range watcherMap {
-			indexerIds = append(indexerIds, indexerId)
-		}
-
-		layout = o.createLayoutWithRoundRobin(idxDefn, indexerIds)
-		definitions, err = o.getDefinitionsFromLayout(layout, idxDefn)
+		layout, definitions, err = o.getIndexLayoutWithoutPlanner(watcherMap, idxDefn)
 		if err != nil {
 			logging.Errorf("Fail to create index: %v", err)
 			return err
@@ -1068,6 +1076,62 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn,
 	}
 
 	return nil
+}
+
+func (o *MetadataProvider) canSkipPlanner(watcherMap map[c.IndexerId]int,
+	idxDefn *c.IndexDefn) bool {
+
+	// The planner can be skipped if planner is always going to yield the same
+	// output for any kind of current index layout or any type of load generated
+	// by the application. This holds true when
+	// 1. There is only one node in the cluster.
+	// 2. User has specified only one node as input
+	// 3. The index is NOT partitioned and
+	//    3.1. There are exact same number of nodes as that of instances
+	//    3.2. The user has specified exact same number of nodes in the
+	//         input as that of instances.
+
+	if len(watcherMap) == 1 {
+		return true
+	}
+
+	if len(idxDefn.Nodes) == 1 {
+		return true
+	}
+
+	// If index is partitioned and more than 1 node is present in the cluster,
+	// then always use planner as the planner will yield an optimal partition
+	// placement.
+	if c.IsPartitioned(idxDefn.PartitionScheme) {
+		return false
+	}
+
+	if len(watcherMap) == idxDefn.GetNumReplica()+1 {
+		return true
+	}
+
+	if len(idxDefn.Nodes) == idxDefn.GetNumReplica()+1 {
+		return true
+	}
+
+	return false
+}
+
+func (o *MetadataProvider) getIndexLayoutWithoutPlanner(watcherMap map[c.IndexerId]int,
+	idxDefn *c.IndexDefn) (map[int]map[c.IndexerId][]c.PartitionId, map[c.IndexerId][]c.IndexDefn, error) {
+
+	indexerIds := make([]c.IndexerId, 0, len(watcherMap))
+	for indexerId, _ := range watcherMap {
+		indexerIds = append(indexerIds, indexerId)
+	}
+
+	layout := o.createLayoutWithRoundRobin(idxDefn, indexerIds)
+	definitions, err := o.getDefinitionsFromLayout(layout, idxDefn)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return layout, definitions, nil
 }
 
 //
