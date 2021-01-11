@@ -1120,9 +1120,32 @@ func (o *MetadataProvider) canSkipPlanner(watcherMap map[c.IndexerId]int,
 func (o *MetadataProvider) getIndexLayoutWithoutPlanner(watcherMap map[c.IndexerId]int,
 	idxDefn *c.IndexDefn) (map[int]map[c.IndexerId][]c.PartitionId, map[c.IndexerId][]c.IndexDefn, error) {
 
-	indexerIds := make([]c.IndexerId, 0, len(watcherMap))
-	for indexerId, _ := range watcherMap {
-		indexerIds = append(indexerIds, indexerId)
+	var indexerIds []c.IndexerId
+	if len(idxDefn.Nodes) == 0 {
+		indexerIds = make([]c.IndexerId, 0, len(watcherMap))
+		for indexerId, _ := range watcherMap {
+			indexerIds = append(indexerIds, indexerId)
+		}
+	} else {
+		names := make(map[string]*watcher)
+		for _, watcher := range o.watchers {
+			if watcher.serviceMap.ExcludeNode != "in" &&
+				watcher.serviceMap.ExcludeNode != "inout" {
+
+				names[strings.ToLower(watcher.getNodeAddr())] = watcher
+			}
+		}
+
+		for _, node := range idxDefn.Nodes {
+			if watcher, ok := names[strings.ToLower(node)]; !ok {
+				fmtMsg := "Indexer node (%v) not found. The node may be failed or " +
+					"under rebalance or network partitioned from query process."
+
+				return nil, nil, errors.New(fmt.Sprintf(fmtMsg, node))
+			} else {
+				indexerIds = append(indexerIds, watcher.getIndexerId())
+			}
+		}
 	}
 
 	layout := o.createLayoutWithRoundRobin(idxDefn, indexerIds)
