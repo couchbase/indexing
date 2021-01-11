@@ -3037,8 +3037,8 @@ func (tk *timekeeper) ensureMonotonicTs(streamId common.StreamId, keyspaceId str
 			enableOSO := tk.ss.streamKeyspaceIdEnableOSO[streamId][keyspaceId]
 			//oso can be non-monotonic
 			if enableOSO &&
-				tsElem.osoCount != nil &&
-				tsElem.osoCount[i] != 0 {
+				flushTs.OSOCount != nil &&
+				flushTs.OSOCount[i] != 0 {
 				continue
 			}
 

@@ -34,6 +34,7 @@ type TsVbuuid struct {
 	Seqnos       []uint64
 	Vbuuids      []uint64
 	ManifestUIDs []string
+	OSOCount     []uint64
 	Crc64        uint64
 	Snapshots    [][2]uint64
 	SnapType     IndexSnapType
@@ -320,6 +321,7 @@ func (ts *TsVbuuid) Copy() *TsVbuuid {
 	copy(newTs.Vbuuids, ts.Vbuuids)
 	copy(newTs.ManifestUIDs, ts.ManifestUIDs)
 	copy(newTs.Snapshots, ts.Snapshots)
+	copy(newTs.OSOCount, ts.OSOCount)
 	newTs.SnapType = ts.SnapType
 	newTs.LargeSnap = ts.LargeSnap
 	newTs.SnapAligned = ts.SnapAligned
@@ -336,6 +338,7 @@ func (ts *TsVbuuid) CopyFrom(src *TsVbuuid) {
 	copy(ts.Vbuuids, src.Vbuuids)
 	copy(ts.ManifestUIDs, src.ManifestUIDs)
 	copy(ts.Snapshots, src.Snapshots)
+	copy(ts.OSOCount, src.OSOCount)
 	ts.SnapType = src.SnapType
 	ts.LargeSnap = src.LargeSnap
 	ts.SnapAligned = src.SnapAligned
