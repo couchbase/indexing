@@ -23,6 +23,7 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -56,7 +57,7 @@ func init() {
 // It is used internally for debugging and available in unspecified format under the
 // "GET /api/v1/stats" REST API but is not used by the UI.
 type KeyspaceStats struct {
-	keyspaceId         string
+	keyspaceId string
 
 	// Statistics in alphabetical order
 	mutationQueueSize  stats.Int64Val
@@ -2403,6 +2404,8 @@ type statsManager struct {
 	statsPersistenceInterval uint64
 	exitPersister            uint64
 	statsUpdaterStopCh       chan bool
+
+	stReqRecCount uint64
 }
 
 func NewStatsManager(supvCmdch MsgChannel,
@@ -2500,6 +2503,16 @@ func (s *statsManager) tryUpdateStats(sync bool) {
 }
 
 func (s *statsManager) handleStatsReq(w http.ResponseWriter, r *http.Request) {
+	defer func() {
+		if r := recover(); r != nil {
+			count := atomic.AddUint64(&s.stReqRecCount, 1)
+			if count%60 == 1 {
+				logging.Fatalf("handleStatsReq:: Recovered from panic %v. Stacktrace %v",
+					count, string(debug.Stack()))
+			}
+		}
+	}()
+
 	_, valid, _ := common.IsAuthValid(r)
 	if !valid {
 		w.WriteHeader(401)

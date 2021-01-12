@@ -22,6 +22,7 @@ import "strconv"
 import "io/ioutil"
 import "sync/atomic"
 import "net/url"
+import "runtime/debug"
 
 import l "github.com/couchbase/indexing/secondary/logging"
 import c "github.com/couchbase/indexing/secondary/common"
@@ -45,6 +46,8 @@ const BACKFILLPREFIX = "scan-results"
 // ErrorIndexEmpty is index not initialized.
 var ErrorIndexEmpty = errors.NewError(
 	fmt.Errorf("gsi.indexEmpty"), "Fatal null reference to index")
+
+var ErrorInternal = errors.NewError(fmt.Errorf("Internal Error"), "Internal Error")
 
 // ErrorIndexNotAvailable means client indexes list needs to be
 // refreshed.
@@ -345,7 +348,15 @@ func (gsi *gsiKeyspace) CreatePrimaryIndex(
 // index on this keyspace
 func (gsi *gsiKeyspace) CreatePrimaryIndex3(
 	requestId, name string, indexPartition *datastore.IndexPartition,
-	with value.Value) (datastore.PrimaryIndex, errors.Error) {
+	with value.Value) (pi datastore.PrimaryIndex, retErr errors.Error) {
+
+	defer func() {
+		if r := recover(); r != nil {
+			pi = nil
+			retErr = ErrorInternal
+			l.Errorf("CreatePrimaryIndex3::Recovered from panic. Stacktrace %v", string(debug.Stack()))
+		}
+	}()
 
 	var withJSON []byte
 	var err error
@@ -398,7 +409,15 @@ func (gsi *gsiKeyspace) CreatePrimaryIndex3(
 func (gsi *gsiKeyspace) CreateIndex(
 	requestId, name string, seekKey, rangeKey expression.Expressions,
 	where expression.Expression, with value.Value) (
-	datastore.Index, errors.Error) {
+	si datastore.Index, retErr errors.Error) {
+
+	defer func() {
+		if r := recover(); r != nil {
+			si = nil
+			retErr = ErrorInternal
+			l.Errorf("CreateIndex::Recovered from panic. Stacktrace %v", string(debug.Stack()))
+		}
+	}()
 
 	var partnStr string
 	if seekKey != nil && len(seekKey) > 0 {
@@ -455,7 +474,15 @@ func (gsi *gsiKeyspace) CreateIndex2(
 // index on this keyspace
 func (gsi *gsiKeyspace) CreateIndex3(
 	requestId, name string, rangeKey datastore.IndexKeys, indexPartition *datastore.IndexPartition,
-	where expression.Expression, with value.Value) (datastore.Index, errors.Error) {
+	where expression.Expression, with value.Value) (si datastore.Index, retErr errors.Error) {
+
+	defer func() {
+		if r := recover(); r != nil {
+			si = nil
+			retErr = ErrorInternal
+			l.Errorf("CreateIndex3::Recovered from panic. Stacktrace %v", string(debug.Stack()))
+		}
+	}()
 
 	// where
 	var whereStr string
@@ -525,7 +552,15 @@ func partitionKey(partitionType datastore.PartitionType) c.PartitionScheme {
 }
 
 // BuildIndexes implements datastore.Indexer{} interface.
-func (gsi *gsiKeyspace) BuildIndexes(requestId string, names ...string) errors.Error {
+func (gsi *gsiKeyspace) BuildIndexes(requestId string, names ...string) (retErr errors.Error) {
+
+	defer func() {
+		if r := recover(); r != nil {
+			retErr = ErrorInternal
+			l.Errorf("BuildIndexes::Recovered from panic. Stacktrace %v", string(debug.Stack()))
+		}
+	}()
+
 	defnIDs := make([]uint64, len(names))
 	for i, name := range names {
 		index, err := gsi.IndexByName(name)
