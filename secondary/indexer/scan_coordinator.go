@@ -60,6 +60,7 @@ type scanCoordinator struct {
 	mu            sync.RWMutex
 	indexInstMap  common.IndexInstMap
 	indexPartnMap IndexPartnMap
+	indexDefnMap  map[common.IndexDefnId][]common.IndexInstId
 
 	reqCounter uint64
 	config     common.ConfigHolder
@@ -992,6 +993,12 @@ func (s *scanCoordinator) handleUpdateIndexInstMap(cmd Message) {
 	s.stats.Set(req.GetStatsObject())
 	s.indexInstMap = common.CopyIndexInstMap(indexInstMap)
 
+	// Re-initialize indexDefnMap
+	s.indexDefnMap = make(map[common.IndexDefnId][]common.IndexInstId)
+	for instId, inst := range s.indexInstMap {
+		s.indexDefnMap[inst.Defn.DefnId] = append(s.indexDefnMap[inst.Defn.DefnId], instId)
+	}
+
 	if len(req.GetRollbackTimes()) != 0 {
 		logging.Infof("ScanCoordinator::initialize rollback times on new index inst map: %v", req.GetRollbackTimes())
 		s.initRollbackTimes(req.GetRollbackTimes())
@@ -1261,7 +1268,11 @@ func (s *scanCoordinator) findIndexInstance(
 	indexInstMap := s.indexInstMap
 	indexPartnMap := s.indexPartnMap
 
-	for _, inst := range indexInstMap {
+	// Get all instanceId's of interest
+	instIdList := s.indexDefnMap[common.IndexDefnId(defnID)]
+
+	for _, instId := range instIdList {
+		inst := indexInstMap[instId]
 		// Allow REBAL_PENDING to be scanned.  During merge partition, the metadata is updated before inst map is broadcasted.  So
 		// there is a chance that cbq is aware of the metadata change ahead of scan coorindator.
 		if inst.State != common.INDEX_STATE_ACTIVE || (inst.RState != common.REBAL_ACTIVE && inst.RState != common.REBAL_PENDING) {
