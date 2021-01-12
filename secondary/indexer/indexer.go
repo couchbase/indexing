@@ -340,7 +340,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	}
 
 	//Start Scan Coordinator
-	snapshotNotifych := make(chan IndexSnapshot, 100)
+	snapshotNotifych := make(chan IndexSnapshot, 100000)
 	idx.scanCoord, res = NewScanCoordinator(idx.scanCoordCmdCh, idx.wrkrRecvCh,
 		idx.config, snapshotNotifych, idx.stats.Clone())
 	if res.GetMsgType() != MSG_SUCCESS {
