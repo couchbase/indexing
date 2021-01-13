@@ -1549,10 +1549,15 @@ func (ss *StreamState) computeTsChangeVec(streamId common.StreamId,
 				ts.Snapshots[i][0] == 1 &&
 				s != 0 {
 
-				if ts.OSOCount[i] > lts.OSOCount[i] {
+				var ltsCount uint64
+				if lts.OSOCount != nil {
+					ltsCount = lts.OSOCount[i]
+				}
+
+				if ts.OSOCount[i] > ltsCount {
 					changeVec[i] = true
 					noChange = false
-					countVec[i] = ts.OSOCount[i] - lts.OSOCount[i] //count to be flushed
+					countVec[i] = ts.OSOCount[i] - ltsCount //count to be flushed
 
 				}
 				if ts.Snapshots[i][1] == 1 {
