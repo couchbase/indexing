@@ -4218,10 +4218,12 @@ func (tk *timekeeper) handleIndexerResume(cmd Message) {
 			if status != STREAM_INACTIVE {
 				tk.ss.streamKeyspaceIdFlushEnabledMap[s][b] = false
 				sessionId := tk.ss.getSessionId(s, b)
-				tk.supvRespch <- &MsgRecovery{mType: INDEXER_INIT_PREP_RECOVERY,
-					streamId:   s,
-					keyspaceId: b,
-					sessionId:  sessionId,
+				if !tk.resetStreamIfOSOEnabled(s, b, sessionId) {
+					tk.supvRespch <- &MsgRecovery{mType: INDEXER_INIT_PREP_RECOVERY,
+						streamId:   s,
+						keyspaceId: b,
+						sessionId:  sessionId,
+					}
 				}
 			}
 		}
