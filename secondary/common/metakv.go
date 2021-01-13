@@ -75,7 +75,7 @@ func MetakvRecurciveDel(dirpath string) error {
 
 	err := metakv.RecursiveDelete(dirpath)
 	if err != nil {
-		logging.Fatalf("MetakvRecurciveDel: Failed to delete %s: %s", dirpath, err.Error())
+		logging.Errorf("MetakvRecurciveDel: Failed to delete %s: %s", dirpath, err.Error())
 	}
 	return err
 }

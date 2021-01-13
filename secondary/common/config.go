@@ -1921,6 +1921,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.http.readHeaderTimeout": ConfigValue{
+		5,
+		"timeout in seconds, is indexer http server's read timeout to read request headers",
+		5,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.http.writeTimeout": ConfigValue{
 		1200,
 		"timeout in seconds, is indexer http server's write timeout",

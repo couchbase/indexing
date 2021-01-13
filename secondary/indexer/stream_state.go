@@ -1427,8 +1427,8 @@ func (ss *StreamState) alignSnapBoundary(streamId common.StreamId,
 		if enableOSO {
 
 			//if ts has OSO snapshot, skip
-			if tsElem.osoCount != nil &&
-				tsElem.osoCount[i] != 0 &&
+			if ts.OSOCount != nil &&
+				ts.OSOCount[i] != 0 &&
 				s[0] == 1 {
 				continue
 			}
@@ -1544,40 +1544,28 @@ func (ss *StreamState) computeTsChangeVec(streamId common.StreamId,
 
 			//if OSO snapshot
 			if enableOSO &&
-				tsElem.osoCount != nil &&
-				tsElem.osoCount[i] != 0 &&
+				ts.OSOCount != nil &&
+				ts.OSOCount[i] != 0 &&
 				ts.Snapshots[i][0] == 1 &&
 				s != 0 {
-				//if lastFlushedTs has an incomplete or no oso snapshot
-				if (lts.Snapshots[i][0] == 0 ||
-					lts.Snapshots[i][0] == 1) &&
-					lts.Snapshots[i][1] == 0 {
 
-					if tsElem.osoCount[i] > lts.Seqnos[i] {
-						changeVec[i] = true
-						noChange = false
-						countVec[i] = tsElem.osoCount[i] - lts.Seqnos[i] //count to be flushed
+				if ts.OSOCount[i] > lts.OSOCount[i] {
+					changeVec[i] = true
+					noChange = false
+					countVec[i] = ts.OSOCount[i] - lts.OSOCount[i] //count to be flushed
 
-					}
-					//if flushTs has incomplete oso snapshot
-					//use count as seqno
-					if ts.Snapshots[i][1] == 0 {
-						ts.Seqnos[i] = tsElem.osoCount[i]
-					} else {
-						//once the OSO snapshot is complete
-						//update the snapshot, seqno to high seqno
-						ts.Snapshots[i][0] = ts.Seqnos[i]
-						ts.Snapshots[i][1] = ts.Seqnos[i]
-
-						//count OSO End as change. Build is only
-						//considered done when all OSO End markers have arrived.
-						noChange = false
-					}
-				} else {
-					//use seqno to mark complete snapshot
-					//once lastFlushedTs has flushed till OSO end
+				}
+				if ts.Snapshots[i][1] == 1 {
+					//once the OSO snapshot is complete
+					//update the snapshot, seqno to high seqno
 					ts.Snapshots[i][0] = ts.Seqnos[i]
 					ts.Snapshots[i][1] = ts.Seqnos[i]
+
+					//consider OSO End as change. Build is only
+					//considered done when all OSO End markers have arrived.
+					if lts.Snapshots[i][1] == 0 {
+						noChange = false
+					}
 				}
 				continue
 			}
@@ -1599,22 +1587,18 @@ func (ss *StreamState) computeTsChangeVec(streamId common.StreamId,
 		for i, s := range ts.Seqnos {
 			//if OSO snapshot
 			if enableOSO &&
-				tsElem.osoCount != nil &&
-				tsElem.osoCount[i] != 0 &&
+				ts.OSOCount != nil &&
+				ts.OSOCount[i] != 0 &&
 				ts.Snapshots[i][0] == 1 &&
 				s != 0 {
 
 				changeVec[i] = true
 				noChange = false
-				countVec[i] = tsElem.osoCount[i] //count to be flushed
+				countVec[i] = ts.OSOCount[i] //count to be flushed
 
-				//if flushTs has incomplete oso snapshot
-				//use count as seqno
-				if ts.Snapshots[i][1] == 0 {
-					ts.Seqnos[i] = tsElem.osoCount[i]
-				} else {
-					//once the OSO snapshot is complete
-					//update the snapshot, seqno to high seqno
+				//once the OSO snapshot is complete
+				//update the snapshot, seqno to high seqno
+				if ts.Snapshots[i][1] == 1 {
 					ts.Snapshots[i][0] = ts.Seqnos[i]
 					ts.Snapshots[i][1] = ts.Seqnos[i]
 				}
@@ -1791,10 +1775,10 @@ func (ss *StreamState) setCountForOSOTs(streamId common.StreamId,
 				ts.Snapshots[i][0] = hwtOSO.Snapshots[i][0]
 				ts.Snapshots[i][1] = hwtOSO.Snapshots[i][1]
 
-				if tsElem.osoCount == nil {
-					tsElem.osoCount = make([]uint64, len(hwtOSO.Seqnos))
+				if ts.OSOCount == nil {
+					ts.OSOCount = make([]uint64, len(hwtOSO.Seqnos))
 				}
-				tsElem.osoCount[i] = hwtOSO.Vbuuids[i] //count
+				ts.OSOCount[i] = hwtOSO.Vbuuids[i] //count
 
 				//if this is an open OSO snap(i.e. OSO End has not been received)
 				if ts.Snapshots[i][1] != 1 {
