@@ -1333,6 +1333,18 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 		}
 	}
 
+	if newConfig["settings.max_cpu_percent"].Int() !=
+		idx.config["settings.max_cpu_percent"].Int() {
+		value := common.ConfigValue{
+			Value:         uint64(math.Max(2.0, float64(runtime.GOMAXPROCS(0))*0.25)),
+			Help:          "Minimum number of shard",
+			DefaultVal:    uint64(math.Max(2.0, float64(runtime.GOMAXPROCS(0))*0.25)),
+			Immutable:     false,
+			Casesensitive: false,
+		}
+		newConfig["plasma.minNumShard"] = value
+	}
+
 	memdb.Debug(idx.config["settings.moi.debug"].Bool())
 	idx.setProfilerOptions(newConfig)
 	idx.config = newConfig
