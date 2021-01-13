@@ -34,7 +34,7 @@ type TsVbuuid struct {
 	Seqnos       []uint64
 	Vbuuids      []uint64
 	ManifestUIDs []string
-	OSOCount     []uint64
+	OSOCount     []uint64 `json:"-"` //excluded from json marshal
 	Crc64        uint64
 	Snapshots    [][2]uint64
 	SnapType     IndexSnapType
