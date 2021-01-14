@@ -88,8 +88,6 @@ type plasmaSlice struct {
 	cmdCh  []chan *indexMutation
 	stopCh []DoneChannel
 
-	workerDone []chan bool
-
 	fatalDbErr error
 
 	numWriters    int
@@ -637,9 +635,6 @@ loop:
 				mdb.stopCh[workerId] <- true
 			}
 			break loop
-
-		case <-mdb.workerDone[workerId]:
-			mdb.workerDone[workerId] <- true
 
 		}
 	}
@@ -1945,13 +1940,6 @@ func (mdb *plasmaSlice) checkAllWorkersDone() bool {
 		return false
 	}
 
-	//worker queue is empty, make sure both workers are done
-	//processing the last mutation
-	for i := 0; i < mdb.numWriters; i++ {
-		mdb.workerDone[i] <- true
-		<-mdb.workerDone[i]
-	}
-
 	return true
 }
 
@@ -2892,7 +2880,6 @@ func (slice *plasmaSlice) setupWriters() {
 
 	// initialize comand handler
 	slice.cmdCh = make([]chan *indexMutation, 0, slice.maxNumWriters)
-	slice.workerDone = make([]chan bool, 0, slice.maxNumWriters)
 	slice.stopCh = make([]DoneChannel, 0, slice.maxNumWriters)
 
 	// initialize writers
@@ -2941,11 +2928,9 @@ func (slice *plasmaSlice) initWriters(numWriters int) {
 	// initialize command handler
 	queueSize := slice.defaultCmdQueueSize()
 	slice.cmdCh = slice.cmdCh[:numWriters]
-	slice.workerDone = slice.workerDone[:numWriters]
 	slice.stopCh = slice.stopCh[:numWriters]
 	for i := curNumWriters; i < numWriters; i++ {
 		slice.cmdCh[i] = make(chan *indexMutation, queueSize)
-		slice.workerDone[i] = make(chan bool)
 		slice.stopCh[i] = make(DoneChannel)
 
 		go slice.handleCommandsWorker(i)
@@ -3027,7 +3012,6 @@ func (slice *plasmaSlice) freeAllWriters() {
 	slice.keySzConf = slice.keySzConf[:0]
 
 	slice.cmdCh = slice.cmdCh[:0]
-	slice.workerDone = slice.workerDone[:0]
 	slice.stopCh = slice.stopCh[:0]
 
 	slice.main = slice.main[:0]

@@ -142,8 +142,6 @@ type memdbSlice struct {
 	cmdCh  []chan *indexMutation
 	stopCh []DoneChannel
 
-	workerDone []chan bool
-
 	fatalDbErr error
 
 	clusterAddr string
@@ -245,7 +243,6 @@ func NewMemDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 		}
 		slice.keySzConf[i] = keyCfg
 	}
-	slice.workerDone = make([]chan bool, slice.numWriters)
 	slice.stopCh = make([]DoneChannel, slice.numWriters)
 
 	slice.isPrimary = isPrimary
@@ -272,7 +269,6 @@ func NewMemDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 
 	for i := 0; i < slice.numWriters; i++ {
 		slice.stopCh[i] = make(DoneChannel)
-		slice.workerDone[i] = make(chan bool)
 		go slice.handleCommandsWorker(i)
 	}
 
@@ -441,9 +437,6 @@ loop:
 		case <-mdb.stopCh[workerId]:
 			mdb.stopCh[workerId] <- true
 			break loop
-
-		case <-mdb.workerDone[workerId]:
-			mdb.workerDone[workerId] <- true
 
 		}
 	}
@@ -1468,12 +1461,6 @@ func (mdb *memdbSlice) checkAllWorkersDone() bool {
 		return false
 	}
 
-	//worker queue is empty, make sure both workers are done
-	//processing the last mutation
-	for i := 0; i < mdb.numWriters; i++ {
-		mdb.workerDone[i] <- true
-		<-mdb.workerDone[i]
-	}
 	return true
 }
 
