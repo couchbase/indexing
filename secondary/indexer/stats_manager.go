@@ -554,9 +554,10 @@ func (s *IndexStats) addPartition(id common.PartitionId) {
 	}
 }
 
-func (s IndexStats) clone() *IndexStats {
-	var clone IndexStats
-	clone = s
+// IndexStats.Clone creates a new copy of the IndexStats object with a new
+// partitions map that points to the original stats objects.
+func (s *IndexStats) clone() *IndexStats {
+	var clone IndexStats = *s // shallow copy
 
 	clone.partitions = make(map[common.PartitionId]*IndexStats)
 	for k, v := range s.partitions {
@@ -902,7 +903,7 @@ func (s *IndexStats) getArrKeySizeStats() map[string]interface{} {
 	return keySizeStats
 }
 
-func (is IndexerStats) PopulateIndexerStats(statMap *StatsMap) {
+func (is *IndexerStats) PopulateIndexerStats(statMap *StatsMap) {
 	statMap.AddStatValueFiltered("num_connections", &is.numConnections)
 	statMap.AddStatValueFiltered("index_not_found_errcount", &is.notFoundError)
 	statMap.AddStatValueFiltered("memory_quota", &is.memoryQuota)
@@ -948,7 +949,7 @@ func (is IndexerStats) PopulateIndexerStats(statMap *StatsMap) {
 	statMap.AddStatValueFiltered("timings/stats_response", &is.statsResponse)
 }
 
-func (is IndexerStats) PopulateProjectorLatencyStats(statMap *StatsMap) {
+func (is *IndexerStats) PopulateProjectorLatencyStats(statMap *StatsMap) {
 	prjLatencyMap := is.prjLatencyMap.Get()
 	nodeToHostMap := is.nodeToHostMap.Get()
 	for prjAddr, prjLatency := range prjLatencyMap {
@@ -964,7 +965,7 @@ func (is IndexerStats) PopulateProjectorLatencyStats(statMap *StatsMap) {
 	}
 }
 
-func (is IndexerStats) GetStats(spec *statsSpec) interface{} {
+func (is *IndexerStats) GetStats(spec *statsSpec) interface{} {
 	var prefix string
 	var instId string
 
@@ -1038,7 +1039,7 @@ func (is IndexerStats) GetStats(spec *statsSpec) interface{} {
 	}
 }
 
-func (is IndexerStats) GetVersionedStats(t *target) (common.Statistics, bool) {
+func (is *IndexerStats) GetVersionedStats(t *target) (common.Statistics, bool) {
 	statsMap := make(map[string]interface{})
 	var found bool
 
@@ -1126,7 +1127,7 @@ func computeAvgArrayLength(itemsCount, docidCount int64) int64 {
 	return 0
 }
 
-func (is IndexerStats) constructIndexerStats(skipEmpty bool, version string) common.Statistics {
+func (is *IndexerStats) constructIndexerStats(skipEmpty bool, version string) common.Statistics {
 	indexerStats := make(map[string]interface{})
 	addStat := addStatFactory(skipEmpty, indexerStats)
 
@@ -2000,7 +2001,7 @@ func (s *IndexStats) populateMetrics(st []byte) []byte {
 	return st
 }
 
-func (is IndexerStats) MarshalJSON(spec *statsSpec) ([]byte, error) {
+func (is *IndexerStats) MarshalJSON(spec *statsSpec) ([]byte, error) {
 	stats := is.GetStats(spec)
 
 	if spec.pretty {
@@ -2022,7 +2023,7 @@ func (is IndexerStats) MarshalJSON(spec *statsSpec) ([]byte, error) {
 	}
 }
 
-func (is IndexerStats) VersionedJSON(t *target) ([]byte, error) {
+func (is *IndexerStats) VersionedJSON(t *target) ([]byte, error) {
 	statsMap, found := is.GetVersionedStats(t)
 	if !found {
 		return nil, errors.New("404")
@@ -2032,10 +2033,10 @@ func (is IndexerStats) VersionedJSON(t *target) ([]byte, error) {
 	return json.MarshalIndent(statsMap, "", "   ")
 }
 
-// IndexerStats.Clone creates a new version of the IndexerStats object with new maps that
-// point to the existing stats objects.
-func (s IndexerStats) Clone() *IndexerStats {
-	clone := s
+// IndexerStats.Clone creates a new copy of the IndexerStats object
+// with new maps that point to the original stats objects.
+func (s *IndexerStats) Clone() *IndexerStats {
+	var clone IndexerStats = *s // shallow copy
 
 	clone.indexes = make(map[common.IndexInstId]*IndexStats)
 	for k, v := range s.indexes {
