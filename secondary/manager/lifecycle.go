@@ -254,7 +254,8 @@ func (m *LifecycleMgr) OnNewRequest(fid string, request protocol.RequestMsg) {
 				op == client.OPCODE_CLEANUP_PARTITION ||
 				op == client.OPCODE_RESET_INDEX ||
 				op == client.OPCODE_RESET_INDEX_ON_ROLLBACK ||
-				op == client.OPCODE_BROADCAST_STATS {
+				op == client.OPCODE_BROADCAST_STATS ||
+				op == client.OPCODE_REBALANCE_RUNNING {
 				m.bootstraps <- req
 				return
 			}
@@ -264,8 +265,7 @@ func (m *LifecycleMgr) OnNewRequest(fid string, request protocol.RequestMsg) {
 			op == client.OPCODE_DROP_OR_PRUNE_INSTANCE ||
 			op == client.OPCODE_MERGE_PARTITION ||
 			op == client.OPCODE_PREPARE_CREATE_INDEX ||
-			op == client.OPCODE_COMMIT_CREATE_INDEX ||
-			op == client.OPCODE_REBALANCE_RUNNING {
+			op == client.OPCODE_COMMIT_CREATE_INDEX {
 			m.expedites <- req
 
 		} else {

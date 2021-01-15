@@ -36,6 +36,7 @@ import (
 	"github.com/couchbase/cbauth/service"
 	c "github.com/couchbase/indexing/secondary/common"
 	forestdb "github.com/couchbase/indexing/secondary/fdb"
+	"github.com/couchbase/indexing/secondary/logging"
 	l "github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager"
 	"github.com/couchbase/indexing/secondary/manager/client"
@@ -395,7 +396,7 @@ func (m *ServiceMgr) PrepareTopologyChange(change service.TopologyChange) error 
 
 	if m.state.rebalanceID != "" {
 		l.Errorf("ServiceMgr::PrepareTopologyChange err %v %v", service.ErrConflict, m.state.rebalanceID)
-		if (change.Type == service.TopologyChangeTypeRebalance) {
+		if change.Type == service.TopologyChangeTypeRebalance {
 			m.isBalanced = false
 		}
 		return service.ErrConflict
@@ -427,6 +428,7 @@ func (m *ServiceMgr) PrepareTopologyChange(change service.TopologyChange) error 
 		s.servers = nodeList
 	})
 
+	logging.Infof("ServiceMgr::PrepareTopologyChange Success. isBalanced %v", m.isBalanced)
 	return nil
 }
 
@@ -622,6 +624,7 @@ func (m *ServiceMgr) StartTopologyChange(change service.TopologyChange) error {
 		err = service.ErrNotSupported
 	}
 
+	logging.Infof("ServiceMgr::StartTopologyChange returns Error %v. isBalanced %v.", err, m.isBalanced)
 	return err
 }
 
@@ -1621,7 +1624,7 @@ func (m *ServiceMgr) onRebalanceDoneLOCKED(err error, cancelRebalance bool) {
 			s.rebalanceID = ""
 		})
 	} else if m.runCleanupPhaseLOCKED(RebalanceTokenPath, isMaster) != nil {
-			m.isBalanced = false
+		m.isBalanced = false
 	}
 
 	m.rebalancer = nil
