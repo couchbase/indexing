@@ -163,14 +163,12 @@ retry:
 
 	sliceBufSize := sysconf["settings.sliceBufSize"].Uint64()
 	slice.cmdCh = make(chan interface{}, sliceBufSize)
-	slice.workerDone = make([]chan bool, slice.numWriters)
 	slice.stopCh = make([]DoneChannel, slice.numWriters)
 
 	slice.isPrimary = isPrimary
 
 	for i := 0; i < slice.numWriters; i++ {
 		slice.stopCh[i] = make(DoneChannel)
-		slice.workerDone[i] = make(chan bool)
 		go slice.handleCommandsWorker(i)
 	}
 	slice.keySzConf = getKeySizeConfig(slice.sysconf)
@@ -242,8 +240,6 @@ type fdbSlice struct {
 
 	cmdCh  chan interface{} //internal channel to buffer commands
 	stopCh []DoneChannel    //internal channel to signal shutdown
-
-	workerDone []chan bool //worker status check channel
 
 	fatalDbErr error //store any fatal DB error
 
@@ -367,11 +363,6 @@ loop:
 		case <-fdb.stopCh[workerId]:
 			fdb.stopCh[workerId] <- true
 			break loop
-
-			//worker gets a status check message on this channel, it responds
-			//when its not processing any mutation
-		case <-fdb.workerDone[workerId]:
-			fdb.workerDone[workerId] <- true
 
 		}
 	}
@@ -1266,12 +1257,6 @@ func (fdb *fdbSlice) checkAllWorkersDone() bool {
 		return false
 	}
 
-	//worker queue is empty, make sure both workers are done
-	//processing the last mutation
-	for i := 0; i < fdb.numWriters; i++ {
-		fdb.workerDone[i] <- true
-		<-fdb.workerDone[i]
-	}
 	return true
 }
 

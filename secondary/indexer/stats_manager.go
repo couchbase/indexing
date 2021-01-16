@@ -2514,8 +2514,12 @@ func (s *statsManager) handleStatsReq(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	_, valid, _ := common.IsAuthValid(r)
-	if !valid {
+	_, valid, err := common.IsAuthValid(r)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(err.Error() + "\n"))
+		return
+	} else if !valid {
 		w.WriteHeader(401)
 		w.Write([]byte("401 Unauthorized"))
 		return
@@ -2590,8 +2594,12 @@ func (s *statsManager) handleStatsReq(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *statsManager) handleMetrics(w http.ResponseWriter, r *http.Request) {
-	_, valid, _ := common.IsAuthValid(r)
-	if !valid {
+	_, valid, err := common.IsAuthValid(r)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(err.Error() + "\n"))
+		return
+	} else if !valid {
 		w.WriteHeader(401)
 		w.Write([]byte("401 Unauthorized"))
 		return
@@ -2613,8 +2621,12 @@ func (s *statsManager) handleMetrics(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *statsManager) handleMetricsHigh(w http.ResponseWriter, r *http.Request) {
-	_, valid, _ := common.IsAuthValid(r)
-	if !valid {
+	_, valid, err := common.IsAuthValid(r)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(err.Error() + "\n"))
+		return
+	} else if !valid {
 		w.WriteHeader(401)
 		w.Write([]byte("401 Unauthorized"))
 		return
@@ -2637,8 +2649,12 @@ func (s *statsManager) handleMetricsHigh(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *statsManager) handleMemStatsReq(w http.ResponseWriter, r *http.Request) {
-	_, valid, _ := common.IsAuthValid(r)
-	if !valid {
+	_, valid, err := common.IsAuthValid(r)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(err.Error() + "\n"))
+		return
+	} else if !valid {
 		w.WriteHeader(401)
 		w.Write([]byte("401 Unauthorized"))
 		return
@@ -2699,8 +2715,12 @@ func (s *statsManager) getStorageStats(spec *statsSpec) string {
 }
 
 func (s *statsManager) handleStorageStatsReq(w http.ResponseWriter, r *http.Request) {
-	_, valid, _ := common.IsAuthValid(r)
-	if !valid {
+	_, valid, err := common.IsAuthValid(r)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(err.Error() + "\n"))
+		return
+	} else if !valid {
 		w.WriteHeader(401)
 		w.Write([]byte("401 Unauthorized"))
 		return
@@ -2752,8 +2772,12 @@ func (s *statsManager) handleStorageStatsReq(w http.ResponseWriter, r *http.Requ
 }
 
 func (s *statsManager) handleStorageMMStatsReq(w http.ResponseWriter, r *http.Request) {
-	_, valid, _ := common.IsAuthValid(r)
-	if !valid {
+	_, valid, err := common.IsAuthValid(r)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(err.Error() + "\n"))
+		return
+	} else if !valid {
 		w.WriteHeader(401)
 		w.Write([]byte("401 Unauthorized"))
 		return
@@ -2771,8 +2795,12 @@ func (s *statsManager) handleStorageMMStatsReq(w http.ResponseWriter, r *http.Re
 }
 
 func (s *statsManager) handleStatsResetReq(w http.ResponseWriter, r *http.Request) {
-	_, valid, _ := common.IsAuthValid(r)
-	if !valid {
+	_, valid, err := common.IsAuthValid(r)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(err.Error() + "\n"))
+		return
+	} else if !valid {
 		w.WriteHeader(401)
 		w.Write([]byte("401 Unauthorized"))
 		return

@@ -1966,7 +1966,8 @@ func doAuth(r *http.Request, w http.ResponseWriter) (cbauth.Creds, bool) {
 
 	creds, valid, err := common.IsAuthValid(r)
 	if err != nil {
-		sendIndexResponseWithError(http.StatusInternalServerError, w, err.Error())
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(err.Error() + "\n"))
 		return nil, false
 	} else if valid == false {
 		w.WriteHeader(401)
