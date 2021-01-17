@@ -1350,12 +1350,23 @@ func (s *scanCoordinator) updateLastSnapshotMap() {
 	}
 
 	// Delete instances that got deleted
-	for instId, _ := range lastSnapshot {
+	for instId, sc := range lastSnapshot {
 		if inst, ok := s.indexInstMap[instId]; ok {
 			if inst.State == common.INDEX_STATE_DELETED {
+
+				sc.Lock()
+				DestroyIndexSnapshot(sc.snap)
+				sc.snap = nil
+				sc.Unlock()
+
 				delete(lastSnapshot, instId)
 			}
 		} else {
+			sc.Lock()
+			DestroyIndexSnapshot(sc.snap)
+			sc.snap = nil
+			sc.Unlock()
+
 			delete(lastSnapshot, instId)
 		}
 	}
