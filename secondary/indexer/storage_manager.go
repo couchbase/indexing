@@ -1776,6 +1776,16 @@ func copyIndexSnapMap(inMap IndexSnapMap) IndexSnapMap {
 
 }
 
+func copyIndexSnapMap2(inMap IndexSnapMap2) IndexSnapMap2 {
+
+	outMap := make(IndexSnapMap2)
+	for k, v := range inMap {
+		outMap[k] = v
+	}
+	return outMap
+
+}
+
 func destroyIndexSnapMap(ism IndexSnapMap) {
 
 	for _, v := range ism {

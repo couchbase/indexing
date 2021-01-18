@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/couchbase/indexing/secondary/common"
@@ -53,8 +54,9 @@ type KVData struct {
 	engines   map[uint64]*Engine
 	endpoints map[string]c.RouterEndpoint
 	// server channels
-	sbch  chan []interface{}
-	finch chan bool
+	sbch        chan []interface{}
+	finch       chan bool
+	stopScatter uint32
 	// misc.
 	syncTimeout time.Duration // in milliseconds
 	logPrefix   string
@@ -346,6 +348,11 @@ func (kvdata *KVData) Close() error {
 	return err
 }
 
+// Stop scattering the mutations to workers.
+func (kvdata *KVData) StopScatter() {
+	atomic.StoreUint32(&kvdata.stopScatter, 1)
+}
+
 func (kvdata *KVData) GetKVStats() map[string]interface{} {
 	if kvdata.stats.IsClosed() {
 		return nil
@@ -416,7 +423,8 @@ loop:
 
 		select {
 		case m, ok := <-mutch:
-			if ok == false { // upstream has closed
+			// upstream has closed (or) feed is cleaning up keyspace
+			if ok == false || atomic.LoadUint32(&kvdata.stopScatter) == 1 {
 				break loop
 			}
 			kvdata.stats.eventCount.Add(1)

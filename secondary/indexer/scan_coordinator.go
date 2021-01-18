@@ -49,7 +49,7 @@ type scanCoordinator struct {
 	supvCmdch        MsgChannel //supervisor sends commands on this channel
 	supvMsgch        MsgChannel //channel to send any async message to supervisor
 	snapshotNotifych chan IndexSnapshot
-	lastSnapshot     map[common.IndexInstId]IndexSnapshot
+	lastSnapshot     IndexSnapMap2Holder
 	rollbackTimes    unsafe.Pointer
 
 	rollbackInProgress unsafe.Pointer
@@ -60,6 +60,7 @@ type scanCoordinator struct {
 	mu            sync.RWMutex
 	indexInstMap  common.IndexInstMap
 	indexPartnMap IndexPartnMap
+	indexDefnMap  map[common.IndexDefnId][]common.IndexInstId
 
 	reqCounter uint64
 	config     common.ConfigHolder
@@ -84,7 +85,6 @@ func NewScanCoordinator(supvCmdch MsgChannel, supvMsgch MsgChannel,
 	s := &scanCoordinator{
 		supvCmdch:        supvCmdch,
 		supvMsgch:        supvMsgch,
-		lastSnapshot:     make(map[common.IndexInstId]IndexSnapshot),
 		snapshotNotifych: snapshotNotifych,
 		logPrefix:        "ScanCoordinator",
 		reqCounter:       0,
@@ -92,6 +92,7 @@ func NewScanCoordinator(supvCmdch MsgChannel, supvMsgch MsgChannel,
 
 	s.config.Store(config)
 	s.initRollbackInProgress()
+	s.lastSnapshot.Init()
 
 	addr := net.JoinHostPort("", config["scanPort"].String())
 	queryportCfg := config.SectionConfig("queryport.", true)
@@ -142,20 +143,28 @@ loop:
 func (s *scanCoordinator) listenSnapshot() {
 	for snapshot := range s.snapshotNotifych {
 		func(ss IndexSnapshot) {
-			s.mu.Lock()
-			defer s.mu.Unlock()
 
-			if oldSnap, ok := s.lastSnapshot[ss.IndexInstId()]; ok {
-				delete(s.lastSnapshot, ss.IndexInstId())
+			lastSnapshot := s.lastSnapshot.Get()
+
+			if snapContainer, ok := lastSnapshot[ss.IndexInstId()]; ok {
+				snapContainer.Lock()
+				defer snapContainer.Unlock()
+				oldSnap := snapContainer.snap
 				if oldSnap != nil {
 					DestroyIndexSnapshot(oldSnap)
 				}
-			}
 
-			if ss.Timestamp() != nil {
-				s.lastSnapshot[ss.IndexInstId()] = ss
+				if ss.Timestamp() != nil {
+					snapContainer.snap = ss
+				}
+			} else {
+				// No-op here
+				// If an instance does not exist in indexInstMap, then
+				// it will not exist in lastSnapshot map as well as both
+				// the map's get updated at the same time.
+				// Scan will not proceed if an index does not exist in
+				// indexInstMap. Hence, just ignore the snapshot
 			}
-
 		}(snapshot)
 	}
 }
@@ -615,12 +624,20 @@ func (s *scanCoordinator) handleStatsRequest(req *ScanRequest, w ScanResponseWri
 func (s *scanCoordinator) getRequestedIndexSnapshot(r *ScanRequest) (snap IndexSnapshot, err error) {
 
 	snapshot, err := func() (IndexSnapshot, error) {
-		s.mu.RLock()
-		defer s.mu.RUnlock()
 
-		ss, ok := s.lastSnapshot[r.IndexInstId]
+		lastSnapshot := s.lastSnapshot.Get()
+
+		sc, ok := lastSnapshot[r.IndexInstId]
 		cons := *r.Consistency
-		if ok && ss != nil {
+		if ok && sc != nil {
+			sc.Lock()
+			defer sc.Unlock()
+
+			ss := sc.snap
+			if ss == nil {
+				return nil, nil
+			}
+
 			cfg := s.config.Load()
 			if !cfg["enable_session_consistency_strict"].Bool() || cons != common.SessionConsistency {
 				if isSnapshotConsistent(ss, cons, r.Ts) {
@@ -992,6 +1009,14 @@ func (s *scanCoordinator) handleUpdateIndexInstMap(cmd Message) {
 	s.stats.Set(req.GetStatsObject())
 	s.indexInstMap = common.CopyIndexInstMap(indexInstMap)
 
+	// Re-initialize indexDefnMap
+	s.indexDefnMap = make(map[common.IndexDefnId][]common.IndexInstId)
+	for instId, inst := range s.indexInstMap {
+		s.indexDefnMap[inst.Defn.DefnId] = append(s.indexDefnMap[inst.Defn.DefnId], instId)
+	}
+
+	s.updateLastSnapshotMap()
+
 	if len(req.GetRollbackTimes()) != 0 {
 		logging.Infof("ScanCoordinator::initialize rollback times on new index inst map: %v", req.GetRollbackTimes())
 		s.initRollbackTimes(req.GetRollbackTimes())
@@ -1261,7 +1286,11 @@ func (s *scanCoordinator) findIndexInstance(
 	indexInstMap := s.indexInstMap
 	indexPartnMap := s.indexPartnMap
 
-	for _, inst := range indexInstMap {
+	// Get all instanceId's of interest
+	instIdList := s.indexDefnMap[common.IndexDefnId(defnID)]
+
+	for _, instId := range instIdList {
+		inst := indexInstMap[instId]
 		// Allow REBAL_PENDING to be scanned.  During merge partition, the metadata is updated before inst map is broadcasted.  So
 		// there is a chance that cbq is aware of the metadata change ahead of scan coorindator.
 		if inst.State != common.INDEX_STATE_ACTIVE || (inst.RState != common.REBAL_ACTIVE && inst.RState != common.REBAL_PENDING) {
@@ -1307,6 +1336,30 @@ func (s *scanCoordinator) findIndexInstance(
 	}
 
 	return nil, nil, common.ErrIndexNotFound
+}
+
+func (s *scanCoordinator) updateLastSnapshotMap() {
+	lastSnapshot := s.lastSnapshot.Clone()
+
+	// Add any new indexes that got added
+	for instId, _ := range s.indexInstMap {
+		if _, ok := lastSnapshot[instId]; !ok {
+			sc := &IndexSnapshotContainer{}
+			lastSnapshot[instId] = sc
+		}
+	}
+
+	// Delete instances that got deleted
+	for instId, _ := range lastSnapshot {
+		if inst, ok := s.indexInstMap[instId]; ok {
+			if inst.State == common.INDEX_STATE_DELETED {
+				delete(lastSnapshot, instId)
+			}
+		} else {
+			delete(lastSnapshot, instId)
+		}
+	}
+	s.lastSnapshot.Set(lastSnapshot)
 }
 
 // Helper method to pretty print timestamp
