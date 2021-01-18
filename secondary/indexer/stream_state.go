@@ -1571,6 +1571,8 @@ func (ss *StreamState) computeTsChangeVec(streamId common.StreamId,
 					if lts.Snapshots[i][1] == 0 {
 						noChange = false
 					}
+				} else {
+					ts.Seqnos[i] = ts.OSOCount[i]
 				}
 				continue
 			}
@@ -1606,6 +1608,8 @@ func (ss *StreamState) computeTsChangeVec(streamId common.StreamId,
 				if ts.Snapshots[i][1] == 1 {
 					ts.Snapshots[i][0] = ts.Seqnos[i]
 					ts.Snapshots[i][1] = ts.Seqnos[i]
+				} else {
+					ts.Seqnos[i] = ts.OSOCount[i]
 				}
 
 			} else if s > 0 {
