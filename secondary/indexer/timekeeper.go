@@ -2325,6 +2325,19 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 		return false
 	}
 
+	enableOSO := tk.ss.streamKeyspaceIdEnableOSO[streamId][keyspaceId]
+	if enableOSO && initFlushTs.HasOpenOSOSnap() {
+
+		logging.Infof("Timekeeper::checkInitStreamReadyToMerge INIT_STREAM has open OSO Snapshot."+
+			"INIT_STREAM cannot be merged. Continue both streams for keyspaceId %v.", keyspaceId)
+
+		logging.LazyVerbose(func() string {
+			hwt := tk.ss.streamKeyspaceIdHWTMap[streamId][keyspaceId]
+			return fmt.Sprintf("Timekeeper::checkInitStreamReadyToMerge FlushTs %v\n HWT %v", initFlushTs, hwt)
+		})
+		return false
+	}
+
 	bucket, _, _ := SplitKeyspaceId(keyspaceId)
 
 	//if flushTs is not on snap boundary, merge cannot be done
