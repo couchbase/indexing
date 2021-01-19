@@ -2921,7 +2921,12 @@ func (tk *timekeeper) setSnapshotType(streamId common.StreamId, keyspaceId strin
 			persistDuration := time.Duration(snapPersistInterval) * time.Millisecond
 			//create disk snapshot based on wall clock time
 			if time.Since(lastPersistTime) > persistDuration {
-				flushTs.SetSnapType(common.DISK_SNAP_OSO)
+				if flushTs.HasOpenOSOSnap() {
+					flushTs.SetSnapType(common.DISK_SNAP_OSO)
+				} else {
+					//if there is no open OSO snapshot, it is eligible for recovery
+					flushTs.SetSnapType(common.DISK_SNAP)
+				}
 				tk.ss.streamKeyspaceIdLastPersistTime[streamId][keyspaceId] = time.Now()
 			}
 		}
