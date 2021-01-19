@@ -1911,6 +1911,26 @@ func (tk *timekeeper) handleStreamRequestDone(cmd Message) {
 		return
 	}
 
+	if tk.ss.streamKeyspaceIdForceRecovery[streamId][keyspaceId] {
+
+		sessionId := tk.ss.getSessionId(streamId, keyspaceId)
+
+		logging.Infof("Timekeeper::handleStreamRequestDone %v %v. Initiate Recovery "+
+			"due to Force Recovery Flag. SessionId %v.", streamId, keyspaceId, sessionId)
+
+		if tk.resetStreamIfOSOEnabled(streamId, keyspaceId, sessionId) {
+			return
+		} else {
+			tk.supvRespch <- &MsgRecovery{mType: INDEXER_INIT_PREP_RECOVERY,
+				streamId:   streamId,
+				keyspaceId: keyspaceId,
+				restartTs:  tk.ss.computeRestartTs(streamId, keyspaceId),
+				sessionId:  sessionId}
+			tk.supvCmdch <- &MsgSuccess{}
+			return
+		}
+	}
+
 	tk.ss.streamKeyspaceIdKVActiveTsMap[streamId][keyspaceId] = activeTs
 	openTs := activeTs
 

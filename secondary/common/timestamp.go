@@ -34,7 +34,7 @@ type TsVbuuid struct {
 	Seqnos       []uint64
 	Vbuuids      []uint64
 	ManifestUIDs []string
-	OSOCount     []uint64
+	OSOCount     []uint64 `json:"-"` //excluded from json marshal
 	Crc64        uint64
 	Snapshots    [][2]uint64
 	SnapType     IndexSnapType
@@ -462,12 +462,24 @@ func (ts *TsVbuuid) String() string {
 	fmsg := "bucket: %v, scopeId: %v, collectionId: %v, vbuckets: %v Crc64: %v snapType %v -\n"
 	buf.WriteString(fmt.Sprintf(fmsg, ts.Bucket, ts.ScopeId, ts.CollectionId,
 		len(vbnos), ts.Crc64, ts.SnapType))
-	fmsg = "    {vbno, vbuuid, manifest, seqno, snapshot-start, snapshot-end}\n"
-	buf.WriteString(fmt.Sprintf(fmsg))
-	for _, v := range vbnos {
-		start, end := ts.Snapshots[v][0], ts.Snapshots[v][1]
-		buf.WriteString(fmt.Sprintf("    {%5d %16x %v %10d %10d %10d}\n",
-			v, ts.Vbuuids[v], ts.ManifestUIDs[v], ts.Seqnos[v], start, end))
+
+	if ts.OSOCount == nil {
+		fmsg = "    {vbno, vbuuid, manifest, seqno, snapshot-start, snapshot-end}\n"
+		buf.WriteString(fmt.Sprintf(fmsg))
+		for _, v := range vbnos {
+			start, end := ts.Snapshots[v][0], ts.Snapshots[v][1]
+			buf.WriteString(fmt.Sprintf("    {%5d %16x %v %10d %10d %10d}\n",
+				v, ts.Vbuuids[v], ts.ManifestUIDs[v], ts.Seqnos[v], start, end))
+		}
+	} else {
+		fmsg = "    {vbno, vbuuid, manifest, seqno, oscount, snapshot-start, snapshot-end}\n"
+		buf.WriteString(fmt.Sprintf(fmsg))
+		for _, v := range vbnos {
+			start, end := ts.Snapshots[v][0], ts.Snapshots[v][1]
+			buf.WriteString(fmt.Sprintf("    {%5d %16x %v %10d %10d %10d %10d}\n",
+				v, ts.Vbuuids[v], ts.ManifestUIDs[v], ts.Seqnos[v], ts.OSOCount[v], start, end))
+		}
+
 	}
 	return buf.String()
 }
