@@ -1393,13 +1393,13 @@ func (m *DDLServiceMgr) handleListDropInstanceTokens(w http.ResponseWriter, r *h
 func (m *DDLServiceMgr) handleListScheduleCreateTokens(w http.ResponseWriter, r *http.Request) {
 
 	if !m.validateAuth(w, r) {
-		logging.Errorf("DDLServiceMgr::handleListScheduleCreateTokens Validation Failure for Request %v", r)
+		logging.Errorf("DDLServiceMgr::handleListScheduleCreateTokens Validation Failure req: %v", common.GetHTTPReqInfo(r))
 		return
 	}
 
 	if r.Method == "GET" {
 
-		logging.Infof("DDLServiceMgr::handleListScheduleCreateTokens Processing Request %v", r)
+		logging.Infof("DDLServiceMgr::handleListScheduleCreateTokens Processing Request req: %v", common.GetHTTPReqInfo(r))
 
 		scheduleTokens, err := mc.ListAllScheduleCreateTokens()
 		if err != nil {
@@ -1432,13 +1432,13 @@ func (m *DDLServiceMgr) handleListScheduleCreateTokens(w http.ResponseWriter, r 
 func (m *DDLServiceMgr) handleListStopScheduleCreateTokens(w http.ResponseWriter, r *http.Request) {
 
 	if !m.validateAuth(w, r) {
-		logging.Errorf("DDLServiceMgr::handleListStopScheduleCreateTokens Validation Failure for Request %v", r)
+		logging.Errorf("DDLServiceMgr::handleListStopScheduleCreateTokens Validation Failure req: %v", common.GetHTTPReqInfo(r))
 		return
 	}
 
 	if r.Method == "GET" {
 
-		logging.Infof("DDLServiceMgr::handleListStopScheduleCreateTokens Processing Request %v", r)
+		logging.Infof("DDLServiceMgr::handleListStopScheduleCreateTokens Processing Request req: %v", common.GetHTTPReqInfo(r))
 
 		scheduleTokens, err := mc.ListAllStopScheduleCreateTokens()
 		if err != nil {
@@ -1471,7 +1471,7 @@ func (m *DDLServiceMgr) handleListStopScheduleCreateTokens(w http.ResponseWriter
 func (m *DDLServiceMgr) handleTransferScheduleCreateTokens(w http.ResponseWriter, r *http.Request) {
 	valid := m.validateAuth(w, r)
 	if !valid {
-		logging.Errorf("DDLServiceMgr::handleTransferScheduleCreateTokens Validation Failure for Request %v", logging.TagUD(r))
+		logging.Errorf("DDLServiceMgr::handleTransferScheduleCreateTokens Validation Failure req: %v", common.GetHTTPReqInfo(r))
 		return
 	}
 
