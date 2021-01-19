@@ -964,7 +964,7 @@ func Console(clusterAddr string, format string, v ...interface{}) error {
 
 	params := &security.RequestParams{Timeout: time.Duration(10) * time.Second}
 	res, err := security.PostWithAuth(clusterAddr, "application/x-www-form-urlencoded", reader, params)
-	if (err == nil) {
+	if err == nil {
 		ioutil.ReadAll(res.Body)
 		res.Body.Close()
 	}
@@ -1168,6 +1168,11 @@ func validateAuth(w http.ResponseWriter, r *http.Request) bool {
 		w.Write([]byte("401 Unauthorized\n"))
 	}
 	return valid
+}
+
+func GetHTTPReqInfo(r *http.Request) string {
+	return fmt.Sprintf("Method %v, Host %v, ContentLength %v, UserAgent %v, RemoteAddr %v",
+		r.Method, r.Host, r.ContentLength, r.UserAgent(), r.RemoteAddr)
 }
 
 func GrHandler(rw http.ResponseWriter, r *http.Request) {
