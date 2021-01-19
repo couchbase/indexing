@@ -1020,6 +1020,11 @@ func validateAuth(w http.ResponseWriter, r *http.Request) bool {
 	return valid
 }
 
+func GetHTTPReqInfo(r *http.Request) string {
+	return fmt.Sprintf("Method %v, Host %v, ContentLength %v, UserAgent %v, RemoteAddr %v",
+		r.Method, r.Host, r.ContentLength, r.UserAgent(), r.RemoteAddr)
+}
+
 func GrHandler(rw http.ResponseWriter, r *http.Request) {
 
 	valid := validateAuth(rw, r)
