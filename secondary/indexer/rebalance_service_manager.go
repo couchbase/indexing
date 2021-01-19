@@ -1916,13 +1916,13 @@ func (m *ServiceMgr) handleListRebalanceTokens(w http.ResponseWriter, r *http.Re
 
 	_, ok := m.validateAuth(w, r)
 	if !ok {
-		l.Errorf("ServiceMgr::handleListRebalanceTokens Validation Failure for Request %v", l.TagUD(r))
+		l.Errorf("ServiceMgr::handleListRebalanceTokens Validation Failure req: %v", c.GetHTTPReqInfo(r))
 		return
 	}
 
 	if r.Method == "GET" {
 
-		l.Infof("ServiceMgr::handleListRebalanceTokens Processing Request %v", r)
+		l.Infof("ServiceMgr::handleListRebalanceTokens Processing Request req: %v", c.GetHTTPReqInfo(r))
 		rinfo, err := m.getCurrRebalTokens()
 		if err != nil {
 			l.Errorf("ServiceMgr::handleListRebalanceTokens Error %v", err)
@@ -1947,13 +1947,13 @@ func (m *ServiceMgr) handleCleanupRebalance(w http.ResponseWriter, r *http.Reque
 
 	_, ok := m.validateAuth(w, r)
 	if !ok {
-		l.Errorf("ServiceMgr::handleCleanupRebalance Validation Failure for Request %v", l.TagUD(r))
+		l.Errorf("ServiceMgr::handleCleanupRebalance Validation Failure req: %v", c.GetHTTPReqInfo(r))
 		return
 	}
 
 	if r.Method == "GET" || r.Method == "POST" {
 
-		l.Infof("ServiceMgr::handleCleanupRebalance Processing Request %v", l.TagUD(r))
+		l.Infof("ServiceMgr::handleCleanupRebalance Processing Request req: %v", c.GetHTTPReqInfo(r))
 		m.mu.Lock()
 		defer m.mu.Unlock()
 
@@ -2004,12 +2004,12 @@ func (m *ServiceMgr) handleNodeuuid(w http.ResponseWriter, r *http.Request) {
 
 	_, ok := m.validateAuth(w, r)
 	if !ok {
-		l.Errorf("ServiceMgr::handleNodeuuid Validation Failure for Request %v", l.TagUD(r))
+		l.Errorf("ServiceMgr::handleNodeuuid Validation Failure req: %v", c.GetHTTPReqInfo(r))
 		return
 	}
 
 	if r.Method == "GET" || r.Method == "POST" {
-		l.Infof("ServiceMgr::handleNodeuuid Processing Request %v", l.TagUD(r))
+		l.Infof("ServiceMgr::handleNodeuuid Processing Request req: %v", c.GetHTTPReqInfo(r))
 		m.writeBytes(w, []byte(m.nodeInfo.NodeID))
 		return
 	} else {
@@ -2063,7 +2063,7 @@ func (m *ServiceMgr) handleRegisterRebalanceToken(w http.ResponseWriter, r *http
 
 	_, ok := m.validateAuth(w, r)
 	if !ok {
-		l.Errorf("ServiceMgr::handleRegisterRebalanceToken Validation Failure for Request %v", r)
+		l.Errorf("ServiceMgr::handleRegisterRebalanceToken Validation Failure req: %v", c.GetHTTPReqInfo(r))
 		return
 	}
 
@@ -2250,7 +2250,7 @@ func (m *ServiceMgr) handleMoveIndex(w http.ResponseWriter, r *http.Request) {
 
 	creds, ok := m.validateAuth(w, r)
 	if !ok {
-		l.Errorf("ServiceMgr::handleMoveIndex Validation Failure for Request %v", r)
+		l.Errorf("ServiceMgr::handleMoveIndex Validation Failure req: %v", c.GetHTTPReqInfo(r))
 		return
 	}
 
@@ -2338,7 +2338,7 @@ func (m *ServiceMgr) handleMoveIndexInternal(w http.ResponseWriter, r *http.Requ
 
 	creds, ok := m.validateAuth(w, r)
 	if !ok {
-		l.Errorf("ServiceMgr::handleMoveIndexInternal Validation Failure for Request %v", r)
+		l.Errorf("ServiceMgr::handleMoveIndexInternal Validation Failure req: %v", c.GetHTTPReqInfo(r))
 		return
 	}
 
