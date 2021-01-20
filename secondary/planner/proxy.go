@@ -79,7 +79,7 @@ func RetrievePlanFromCluster(clusterUrl string, hosts []string) (*Plan, error) {
 
 	config, err := common.GetSettingsConfig(common.SystemConfig)
 	if err != nil {
-		logging.Errorf("Planner::getIndexLayout: Error from retrieving indexer settings. Error = %v", err)
+		logging.Errorf("Planner::getIndexLayout: Error from retrieving indexer settings, err: %v", err)
 		return nil, err
 	}
 
@@ -93,7 +93,7 @@ func RetrievePlanFromCluster(clusterUrl string, hosts []string) (*Plan, error) {
 	}
 	cinfoClientMutex.Unlock()
 	if err != nil { // Error while initilizing clusterInfoClient
-		logging.Errorf("Planner::RetrievePlanFromCluster: Error while initializing cluster info client at %v. Error = %v", clusterUrl, err)
+		logging.Errorf("Planner::RetrievePlanFromCluster: Error while initializing cluster info client at %v, err:  %v", clusterUrl, err)
 		return nil, err
 	}
 
@@ -195,15 +195,16 @@ func getIndexLayout(config common.Config, hosts []string) ([]*IndexerNode, error
 	for nid, res := range resp {
 		delete(resp, nid)
 
-		localMeta := new(LocalIndexMetadata)
-		if err := convertResponse(res, localMeta); err != nil {
-			return nil, err
-		}
-
 		// create an empty indexer object using the indexer host name
 		node, err := createIndexerNode(cinfo, nid)
 		if err != nil {
-			logging.Errorf("Planner::getIndexLayout: Error from initializing indexer node. Error = %v", err)
+			logging.Errorf("Planner::getIndexLayout: Error from initializing indexer nodeId: %v, err: %v", nid, err)
+			return nil, err
+		}
+
+		localMeta := new(LocalIndexMetadata)
+		if err := convertResponse(res, localMeta); err != nil {
+			logging.Errorf("Planner::getIndexLayout: Error when converting localMeta from node: %v, err: %v", node.NodeId, err)
 			return nil, err
 		}
 
@@ -213,7 +214,7 @@ func getIndexLayout(config common.Config, hosts []string) ([]*IndexerNode, error
 		// obtain the admin port for the indexer node
 		addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE)
 		if err != nil {
-			logging.Errorf("Planner::getIndexLayout: Error from getting service address for node %v. Error = %v", node.NodeId, err)
+			logging.Errorf("Planner::getIndexLayout: Error from getting service address for node %v, err: = %v", node.NodeId, err)
 			return nil, err
 		}
 		node.RestUrl = addr
@@ -227,7 +228,7 @@ func getIndexLayout(config common.Config, hosts []string) ([]*IndexerNode, error
 		// convert from LocalIndexMetadata to IndexUsage
 		indexes, err := ConvertToIndexUsages(config, localMeta, node)
 		if err != nil {
-			logging.Errorf("Planner::getIndexLayout: Error for converting index metadata to index usage for node %v. Error = %v", node.NodeId, err)
+			logging.Errorf("Planner::getIndexLayout: Error for converting index metadata to index usage for node %v, err: %v", node.NodeId, err)
 			return nil, err
 		}
 
@@ -433,14 +434,15 @@ func getIndexStats(plan *Plan, config common.Config) error {
 	for nid, res := range resp {
 		delete(resp, nid)
 
-		stats := new(common.Statistics)
-		if err := convertResponse(res, stats); err != nil {
+		nodeId, err := getIndexerHost(cinfo, nid)
+		if err != nil {
+			logging.Errorf("Planner::getIndexStats: Error from initializing indexer nodeId: %v, err: %v", nid, err)
 			return err
 		}
 
-		nodeId, err := getIndexerHost(cinfo, nid)
-		if err != nil {
-			logging.Errorf("Planner::getIndexStats: Error from initializing indexer node. Error = %v", err)
+		stats := new(common.Statistics)
+		if err := convertResponse(res, stats); err != nil {
+			logging.Errorf("Planner::getIndexStats: Error when converting response from node: %v, err: %v", nodeId, err)
 			return err
 		}
 
@@ -836,8 +838,15 @@ func getIndexSettings(plan *Plan) error {
 	for nid, res := range resp {
 		delete(resp, nid)
 
+		host, err := getIndexerHost(cinfo, nid)
+		if err != nil {
+			logging.Errorf("Planner::getLocalSettings: Error when trying to get indexer host for nodeId: %v, err: %v", nid, err)
+			return err
+		}
+
 		settings := make(map[string]interface{})
 		if err := convertResponse(res, &settings); err != nil {
+			logging.Errorf("Planner::getIndexSettings. Error observed when converting response from node: %v, err: %v", host, err)
 			return err
 		}
 
@@ -933,11 +942,13 @@ func getLocalMetadata(addr string) (*LocalIndexMetadata, error) {
 
 	resp, err := getWithCbauth(addr + "/getLocalIndexMetadata")
 	if err != nil {
+		logging.Errorf("Planner.getLocalIndexMetadata(): Unable to get local index metadata from node: %v, err: %v", addr, err)
 		return nil, err
 	}
 
 	localMeta := new(LocalIndexMetadata)
 	if err := convertResponse(resp, localMeta); err != nil {
+		logging.Errorf("Planner.getLocalIndexMetadata(): Unable to convertResponse from node: %v, err: %v", addr, err)
 		return nil, err
 	}
 
@@ -951,6 +962,7 @@ func getLocalMetadataResp(addr string) (*http.Response, error) {
 
 	resp, err := getWithCbauth(addr + "/getLocalIndexMetadata")
 	if err != nil {
+		logging.Errorf("Planner.getLocalMetadataResp(): Unable to get local index metadata from node: %v, err: %v", addr, err)
 		return nil, err
 	}
 
@@ -964,15 +976,18 @@ func getLocalStats(addr string) (*common.Statistics, error) {
 
 	resp, err := getWithCbauth(addr + "/stats?async=false&partition=true&consumerFilter=planner")
 	if err != nil {
-		logging.Warnf("Planner.getLocalStats(): Unable to get the most recent stats.  Try fetch cached stats.")
+		logging.Warnf("Planner.getLocalStats(): Unable to get the most recent stats from node: %v, err: %v"+
+			" Try fetch cached stats.", addr, err)
 		resp, err = getWithCbauth(addr + "/stats?async=true&partition=true&consumerFilter=planner")
 		if err != nil {
+			logging.Errorf("Planner.getLocalStats(): Unable to get stats from node: %v, err: %v", addr, err)
 			return nil, err
 		}
 	}
 
 	stats := new(common.Statistics)
 	if err := convertResponse(resp, stats); err != nil {
+		logging.Errorf("Planner.getLocalStats(): Error while converting response from node: %v, err: %v", addr, err)
 		return nil, err
 	}
 
@@ -986,9 +1001,11 @@ func getLocalStatsResp(addr string) (*http.Response, error) {
 
 	resp, err := getWithCbauth(addr + "/stats?async=false&partition=true&consumerFilter=planner")
 	if err != nil {
-		logging.Warnf("Planner.getLocalStats(): Unable to get the most recent stats for node %v.  Try fetch cached stats.", addr)
+		logging.Warnf("Planner.getLocalStats(): Unable to get the most recent stats from node: %v, err: %v"+
+			" Try fetch cached stats.", addr, err)
 		resp, err = getWithCbauth(addr + "/stats?async=true&partition=true&consumerFilter=planner")
 		if err != nil {
+			logging.Errorf("Planner.getLocalStats(): Unable to get stats from node: %v, err: %v", addr, err)
 			return nil, err
 		}
 	}
@@ -1003,11 +1020,13 @@ func getLocalCreateTokens(addr string) (*mc.CreateCommandTokenList, error) {
 
 	resp, err := getWithCbauth(addr + "/listCreateTokens")
 	if err != nil {
+		logging.Errorf("Planner.getLocalCreateTokens(): Unable to get create tokens from node: %v, err: %v", addr, err)
 		return nil, err
 	}
 
 	tokens := new(mc.CreateCommandTokenList)
 	if err := convertResponse(resp, tokens); err != nil {
+		logging.Errorf("Planner.getLocalCreateTokens(): Error while converting response from node: %v, err: %v", addr, err)
 		return nil, err
 	}
 
@@ -1021,6 +1040,7 @@ func getLocalCreateTokensResp(addr string) (*http.Response, error) {
 
 	resp, err := getWithCbauth(addr + "/listCreateTokens")
 	if err != nil {
+		logging.Errorf("Planner.getLocalCreateTokensResp(): Unable to get create tokens from node: %v, err: %v", addr, err)
 		return nil, err
 	}
 
@@ -1034,11 +1054,13 @@ func getLocalDeleteTokens(addr string) (*mc.DeleteCommandTokenList, error) {
 
 	resp, err := getWithCbauth(addr + "/listDeleteTokens")
 	if err != nil {
+		logging.Errorf("Planner.getLocalDeleteTokens(): Unable to get delete tokens from node: %v, err: %v", addr, err)
 		return nil, err
 	}
 
 	tokens := new(mc.DeleteCommandTokenList)
 	if err := convertResponse(resp, tokens); err != nil {
+		logging.Errorf("Planner.getLocalDeleteTokens(): Error while converting response from node: %v, err: %v", addr, err)
 		return nil, err
 	}
 
@@ -1052,6 +1074,7 @@ func getLocalDeleteTokensResp(addr string) (*http.Response, error) {
 
 	resp, err := getWithCbauth(addr + "/listDeleteTokens")
 	if err != nil {
+		logging.Errorf("Planner.getLocalDeleteTokensResp(): Unable to get delete tokens from node: %v, err: %v", addr, err)
 		return nil, err
 	}
 
@@ -1065,11 +1088,13 @@ func getLocalDropInstanceTokens(addr string) (*mc.DropInstanceCommandTokenList, 
 
 	resp, err := getWithCbauth(addr + "/listDropInstanceTokens")
 	if err != nil {
+		logging.Errorf("Planner.getLocalDropInstanceTokens(): Unable to get drop instance tokens from node: %v, err: %v", addr, err)
 		return nil, err
 	}
 
 	tokens := new(mc.DropInstanceCommandTokenList)
 	if err := convertResponse(resp, tokens); err != nil {
+		logging.Errorf("Planner.getLocalDropInstanceTokens(): Error while converting response from node: %v, err: %v", addr, err)
 		return nil, err
 	}
 
@@ -1083,6 +1108,7 @@ func getLocalDropInstanceTokensResp(addr string) (*http.Response, error) {
 
 	resp, err := getWithCbauth(addr + "/listDropInstanceTokens")
 	if err != nil {
+		logging.Errorf("Planner.getLocalDropInstanceTokensResp(): Unable to get drop instance tokens from node: %v, err: %v", addr, err)
 		return nil, err
 	}
 
@@ -1096,11 +1122,13 @@ func getLocalSettings(addr string) (map[string]interface{}, error) {
 
 	resp, err := getWithCbauth(addr + "/settings")
 	if err != nil {
+		logging.Errorf("Planner.getLocalSettings(): Unable to get settings from node: %v, err: %v", addr, err)
 		return nil, err
 	}
 
 	settings := make(map[string]interface{})
 	if err := convertResponse(resp, &settings); err != nil {
+		logging.Errorf("Planner.getLocalSettings(): Error while converting response from node: %v, err: %v", addr, err)
 		return nil, err
 	}
 
@@ -1114,6 +1142,7 @@ func getLocalSettingsResp(addr string) (*http.Response, error) {
 
 	resp, err := getWithCbauth(addr + "/settings")
 	if err != nil {
+		logging.Errorf("Planner.getLocalSettingsResp(): Unable to get settings from node: %v, err: %v", addr, err)
 		return nil, err
 	}
 
@@ -1127,11 +1156,13 @@ func getLocalNumReplicas(addr string) (map[common.IndexDefnId]common.Counter, er
 
 	resp, err := getWithCbauth(addr + "/listReplicaCount")
 	if err != nil {
+		logging.Errorf("Planner.getLocalNumReplicas(): Unable to get num replicas from node: %v, err: %v", addr, err)
 		return nil, err
 	}
 
 	numReplicas := make(map[common.IndexDefnId]common.Counter)
 	if err := convertResponse(resp, &numReplicas); err != nil {
+		logging.Errorf("Planner.getLocalNumReplicas(): Error while converting response from node: %v, err: %v", addr, err)
 		return nil, err
 	}
 
@@ -1145,6 +1176,7 @@ func getLocalNumReplicasResp(addr string) (*http.Response, error) {
 
 	resp, err := getWithCbauth(addr + "/listReplicaCount")
 	if err != nil {
+		logging.Errorf("Planner.getLocalNumReplicasResp(): Unable to get num replicas from node: %v, err: %v", addr, err)
 		return nil, err
 	}
 
@@ -1335,21 +1367,22 @@ func processCreateToken(indexers []*IndexerNode, config common.Config) error {
 	for nid, res := range resp {
 		delete(resp, nid)
 
-		tokens := new(mc.CreateCommandTokenList)
-		if err := convertResponse(res, tokens); err != nil {
-			return err
-		}
-
 		// Find the indexer host name
 		nodeId, err := getIndexerHost(cinfo, nid)
 		if err != nil {
-			logging.Errorf("Planner::processCreateToken: Error from initializing indexer node. Error = %v", err)
+			logging.Errorf("Planner::processCreateToken: Error while getting host for nodeId: %v, err: %v", nid, err)
+			return err
+		}
+
+		tokens := new(mc.CreateCommandTokenList)
+		if err := convertResponse(res, tokens); err != nil {
+			logging.Errorf("Planner::processCreateToken: Error when converting response from node: %v, err: %v", nodeId, err)
 			return err
 		}
 
 		// nothing to do
 		if len(tokens.Tokens) == 0 {
-			logging.Infof("Planner::processCreateToken: There is no create token to process for node %v", nodeId)
+			logging.Infof("Planner::processCreateToken: There is no create token to process for node: %v", nodeId)
 			continue
 		}
 
@@ -1404,7 +1437,7 @@ func processCreateToken(indexers []*IndexerNode, config common.Config) error {
 
 		for _, token := range tokens.Tokens {
 
-			logging.Verbosef("Planner: Processing create token for index %v from node %v", token.DefnId, nodeId)
+			logging.Verbosef("Planner: Processing create token for index %v from node: %v", token.DefnId, nodeId)
 
 			for indexerId, definitions := range token.Definitions {
 				for _, defn := range definitions {
@@ -1456,21 +1489,22 @@ func processDeleteToken(indexers []*IndexerNode, config common.Config) error {
 	for nid, res := range resp {
 		delete(resp, nid)
 
-		tokens := new(mc.DeleteCommandTokenList)
-		if err := convertResponse(res, tokens); err != nil {
-			return err
-		}
-
 		// Find the indexer host name
 		nodeId, err := getIndexerHost(cinfo, nid)
 		if err != nil {
-			logging.Errorf("Planner::processDeleteToken: Error from initializing indexer node. Error = %v", err)
+			logging.Errorf("Planner::processDeleteToken: Error while getting host from nodeId: %v, err: %v", nid, err)
+			return err
+		}
+
+		tokens := new(mc.DeleteCommandTokenList)
+		if err := convertResponse(res, tokens); err != nil {
+			logging.Errorf("Planner::processDeleteToken: Error when converting response from node: %v, err: %v", nodeId, err)
 			return err
 		}
 
 		// nothing to do
 		if len(tokens.Tokens) == 0 {
-			logging.Infof("Planner::processDeleteToken: There is no delete token to process for node %v", nodeId)
+			logging.Infof("Planner::processDeleteToken: There is no delete token to process for node: %v", nodeId)
 			continue
 		}
 
@@ -1527,21 +1561,22 @@ func processDropInstanceToken(indexers []*IndexerNode, config common.Config,
 	for nid, res := range resp {
 		delete(resp, nid)
 
-		tokens := new(mc.DropInstanceCommandTokenList)
-		if err := convertResponse(res, tokens); err != nil {
-			return err
-		}
-
 		// Find the indexer host name
 		nodeId, err := getIndexerHost(cinfo, nid)
 		if err != nil {
-			logging.Errorf("Planner::processDropInstanceToken: Error from initializing indexer node. Error = %v", err)
+			logging.Errorf("Planner::processDropInstanceToken: Error while getting host from nodeId: %v, err: %v", nid, err)
+			return err
+		}
+
+		tokens := new(mc.DropInstanceCommandTokenList)
+		if err := convertResponse(res, tokens); err != nil {
+			logging.Errorf("Planner::processDropInstanceToken: Error when converting response from node: %v, err: %v", nodeId, err)
 			return err
 		}
 
 		// nothing to do
 		if len(tokens.Tokens) == 0 {
-			logging.Infof("Planner::processDropInstanceToken: There is no drop instance token to process for node %v", nodeId)
+			logging.Infof("Planner::processDropInstanceToken: There is no drop instance token to process for node: %v", nodeId)
 			continue
 		}
 
@@ -1598,15 +1633,16 @@ func getIndexNumReplica(plan *Plan) error {
 	for nid, res := range resp {
 		delete(resp, nid)
 
-		localNumReplicas := make(map[common.IndexDefnId]common.Counter)
-		if err := convertResponse(res, &localNumReplicas); err != nil {
-			return err
-		}
-
 		// Find the indexer host name
 		nodeId, err := getIndexerHost(cinfo, nid)
 		if err != nil {
-			logging.Errorf("Planner::getIndexNumReplica: Error from initializing indexer node. Error = %v", err)
+			logging.Errorf("Planner::getIndexNumReplica: Error while getting host from nodeId: %v, err: %v", nid, err)
+			return err
+		}
+
+		localNumReplicas := make(map[common.IndexDefnId]common.Counter)
+		if err := convertResponse(res, &localNumReplicas); err != nil {
+			logging.Errorf("Planner::getIndexNumReplica: Error when converting response from node: %v, err: %v", nodeId, err)
 			return err
 		}
 
@@ -1616,7 +1652,7 @@ func getIndexNumReplica(plan *Plan) error {
 			} else {
 				newNumReplica, merged, err := numReplica2.MergeWith(numReplica1)
 				if err != nil {
-					logging.Errorf("Planner::getIndexNumReplica: Error merging num replica for node %v. Error = %v", nodeId, err)
+					logging.Errorf("Planner::getIndexNumReplica: Error merging num replica for node: %v, err: %v", nodeId, err)
 					return err
 				}
 				if merged {
