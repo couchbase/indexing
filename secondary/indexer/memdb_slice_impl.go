@@ -1009,7 +1009,7 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot) {
 			if err == nil {
 				err = os.Rename(tmpdir, dir)
 				if err == nil {
-					mdb.cleanupOldSnapshotFiles(mdb.maxRollbacks)
+					mdb.cleanupOldSnapshotFiles(mdb.maxRollbacks, s.info)
 				}
 			}
 		}
@@ -1032,26 +1032,38 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot) {
 	}
 }
 
-func (mdb *memdbSlice) cleanupOldSnapshotFiles(keepn int) {
+func (mdb *memdbSlice) cleanupOldSnapshotFiles(keepn int, sinfo *memdbSnapshotInfo) {
 
-	seqTs := NewTimestamp(mdb.numVbuckets)
+	var seqTs Timestamp
 
-	for i := 0; i < MAX_GETSEQS_RETRIES; i++ {
+	if !sinfo.IsOSOSnap() {
 
-		seqnos, err := common.BucketMinSeqnos(mdb.clusterAddr, "default", mdb.idxDefn.Bucket)
-		if err != nil {
-			logging.Errorf("MemDBSlice Slice Id %v, IndexInstId %v, PartitionId %v "+
-				"Error collecting cluster seqnos %v",
-				mdb.id, mdb.idxInstId, mdb.idxPartnId, err)
-			time.Sleep(time.Second)
-			continue
+		seqTs = NewTimestamp(mdb.numVbuckets)
+		for i := 0; i < MAX_GETSEQS_RETRIES; i++ {
+
+			seqnos, err := common.BucketMinSeqnos(mdb.clusterAddr, "default", mdb.idxDefn.Bucket)
+			if err != nil {
+				logging.Errorf("MemDBSlice Slice Id %v, IndexInstId %v, PartitionId %v "+
+					"Error collecting cluster seqnos %v",
+					mdb.id, mdb.idxInstId, mdb.idxPartnId, err)
+				time.Sleep(time.Second)
+				continue
+			}
+
+			for i := 0; i < mdb.numVbuckets; i++ {
+				seqTs[i] = seqnos[i]
+			}
+			break
+
 		}
+	}
 
-		for i := 0; i < mdb.numVbuckets; i++ {
-			seqTs[i] = seqnos[i]
-		}
-		break
-
+	//discard old disk snapshots for OSO as those cannot be
+	//used for recovery
+	maxDiskSnaps := mdb.maxDiskSnaps
+	if sinfo.IsOSOSnap() {
+		maxDiskSnaps = 1
+		keepn = 1
 	}
 
 	infos, manifests, _ := mdb.getSnapshots()
@@ -1064,9 +1076,10 @@ func (mdb *memdbSlice) cleanupOldSnapshotFiles(keepn int) {
 			snapInfo := infos[len(infos)-i-1]
 			snapTsVbuuid := snapInfo.Timestamp()
 			snapTs := getSeqTsFromTsVbuuid(snapTsVbuuid)
+
 			if (seqTs.GreaterThanEqual(snapTs) && //min cluster seqno is greater than snap ts
 				mdb.lastRollbackTs == nil) || //last rollback was successful
-				len(manifests)-i > mdb.maxDiskSnaps { //num snapshots is more than max disk snapshots
+				len(manifests)-i > maxDiskSnaps { //num snapshots is more than max disk snapshots
 				dir := filepath.Dir(file)
 				logging.Infof("MemDBSlice Slice Id %v, IndexInstId %v, PartitionId %v "+
 					"Removing disk snapshot %v. Num snapshots %v.", mdb.id, mdb.idxInstId,
