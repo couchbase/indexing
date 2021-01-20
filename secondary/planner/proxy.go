@@ -1742,11 +1742,7 @@ func restHelperNoLock(rest func(string) (*http.Response, error), hosts []string,
 
 			nids = append(nids, nid)
 		}
-	} else {
-		nids = nodes
-	}
-
-	if len(indexers) != 0 {
+	} else if len(indexers) != 0 {
 		for _, nid := range nodes {
 			nodeId, err := getIndexerHost(cinfo, nid)
 			if err != nil {
