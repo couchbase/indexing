@@ -13,14 +13,15 @@ package planner
 import (
 	"errors"
 	"fmt"
-	"github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/logging"
 	"math"
 	"math/rand"
 	"sort"
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 )
 
 //TODO
@@ -260,6 +261,10 @@ type IndexUsage struct {
 	// input: node where index initially placed (optional)
 	// for new indexes to be placed on an existing topology (e.g. live cluster), this must not be set.
 	initialNode *IndexerNode
+
+	// The node to which planner moves this index from initialNode
+	// Equals "initialNode" if planner does not move the index
+	destNode *IndexerNode
 
 	// input: flag to indicate if the index in delete or create token
 	pendingDelete bool // true if there is a delete token associated with this index
