@@ -5701,7 +5701,7 @@ func (idx *indexer) startKeyspaceIdStream(streamId common.StreamId, keyspaceId s
 
 		for _, indexInst := range idx.indexInstMap {
 
-			if indexInst.Defn.KeyspaceId(indexInst.Stream) == keyspaceId {
+			if indexInst.Defn.KeyspaceId(streamId) == keyspaceId {
 				switch indexInst.State {
 				case common.INDEX_STATE_ACTIVE:
 					if indexInst.Stream == streamId {

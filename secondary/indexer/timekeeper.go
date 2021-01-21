@@ -4147,7 +4147,7 @@ func (tk *timekeeper) setMergeTs(streamId common.StreamId, keyspaceId string,
 	mergeTs *common.TsVbuuid) {
 
 	for _, buildInfo := range tk.indexBuildInfo {
-		if buildInfo.indexInst.Defn.KeyspaceId(buildInfo.indexInst.Stream) == keyspaceId &&
+		if buildInfo.indexInst.Defn.KeyspaceId(streamId) == keyspaceId &&
 			buildInfo.indexInst.State == common.INDEX_STATE_CATCHUP &&
 			buildInfo.addInstPending == false {
 			buildInfo.buildDoneAckReceived = true
