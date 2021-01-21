@@ -2007,9 +2007,9 @@ func (feed *Feed) connectBucket(
 		logging.Errorf(fmsg, feed.logPrefix, opaque, bucketn, err)
 		return nil, projC.ErrorDCPConnection
 	}
-	pool, err := couch.GetPool(pooln)
+	pool, err := couch.GetPoolWithBucket(pooln, bucketn)
 	if err != nil {
-		fmsg := "%v ##%x GetPool(`%v`): %v"
+		fmsg := "%v ##%x GetPoolWithBucket(`%v`): %v"
 		logging.Errorf(fmsg, feed.logPrefix, opaque, pooln, err)
 		return nil, projC.ErrorDCPPool
 	}
