@@ -1125,13 +1125,13 @@ func (m *DDLServiceMgr) updateStorageMode(storageMode common.StorageMode, httpAd
 func (m *DDLServiceMgr) handleListMetadataTokens(w http.ResponseWriter, r *http.Request) {
 
 	if !m.validateAuth(w, r) {
-		logging.Errorf("DDLServiceMgr::handleListMetadataTokens Validation Failure for Request %v", r)
+		logging.Errorf("DDLServiceMgr::handleListMetadataTokens Validation Failure req: %v", common.GetHTTPReqInfo(r))
 		return
 	}
 
 	if r.Method == "GET" {
 
-		logging.Infof("DDLServiceMgr::handleListMetadataTokens Processing Request %v", r)
+		logging.Infof("DDLServiceMgr::handleListMetadataTokens Processing Request req: %v", common.GetHTTPReqInfo(r))
 
 		buildTokens, err := metakv.ListAllChildren(mc.BuildDDLCommandTokenPath)
 		if err != nil {
@@ -1262,13 +1262,13 @@ func (m *DDLServiceMgr) handleListMetadataTokens(w http.ResponseWriter, r *http.
 func (m *DDLServiceMgr) handleListCreateTokens(w http.ResponseWriter, r *http.Request) {
 
 	if !m.validateAuth(w, r) {
-		logging.Errorf("DDLServiceMgr::handleListCreateTokens Validation Failure for Request %v", r)
+		logging.Errorf("DDLServiceMgr::handleListCreateTokens Validation Failure req: %v", common.GetHTTPReqInfo(r))
 		return
 	}
 
 	if r.Method == "GET" {
 
-		logging.Infof("DDLServiceMgr::handleListCreateTokens Processing Request %v", r)
+		logging.Infof("DDLServiceMgr::handleListCreateTokens Processing Request req: %v", common.GetHTTPReqInfo(r))
 
 		createTokens, err := mc.ListCreateCommandToken()
 		if err != nil {
@@ -1315,13 +1315,13 @@ func (m *DDLServiceMgr) handleListCreateTokens(w http.ResponseWriter, r *http.Re
 func (m *DDLServiceMgr) handleListDeleteTokens(w http.ResponseWriter, r *http.Request) {
 
 	if !m.validateAuth(w, r) {
-		logging.Errorf("DDLServiceMgr::handleListDeleteTokens Validation Failure for Request %v", r)
+		logging.Errorf("DDLServiceMgr::handleListDeleteTokens Validation Failure req: %v", common.GetHTTPReqInfo(r))
 		return
 	}
 
 	if r.Method == "GET" {
 
-		logging.Infof("DDLServiceMgr::handleListDeleteTokens Processing Request %v", r)
+		logging.Infof("DDLServiceMgr::handleListDeleteTokens Processing Request req: %v", common.GetHTTPReqInfo(r))
 
 		deleteTokens, err := mc.ListDeleteCommandToken()
 		if err != nil {
@@ -1354,13 +1354,13 @@ func (m *DDLServiceMgr) handleListDeleteTokens(w http.ResponseWriter, r *http.Re
 func (m *DDLServiceMgr) handleListDropInstanceTokens(w http.ResponseWriter, r *http.Request) {
 
 	if !m.validateAuth(w, r) {
-		logging.Errorf("DDLServiceMgr::handleListDropInstanceTokens Validation Failure for Request %v", r)
+		logging.Errorf("DDLServiceMgr::handleListDropInstanceTokens Validation Failure req: %v", common.GetHTTPReqInfo(r))
 		return
 	}
 
 	if r.Method == "GET" {
 
-		logging.Infof("DDLServiceMgr::handleListDropInstanceTokens Processing Request %v", r)
+		logging.Infof("DDLServiceMgr::handleListDropInstanceTokens Processing Request req: %v", common.GetHTTPReqInfo(r))
 
 		deleteTokens, err := mc.ListAndFetchAllDropInstanceCommandToken()
 		if err != nil {
@@ -1393,13 +1393,13 @@ func (m *DDLServiceMgr) handleListDropInstanceTokens(w http.ResponseWriter, r *h
 func (m *DDLServiceMgr) handleListScheduleCreateTokens(w http.ResponseWriter, r *http.Request) {
 
 	if !m.validateAuth(w, r) {
-		logging.Errorf("DDLServiceMgr::handleListScheduleCreateTokens Validation Failure for Request %v", r)
+		logging.Errorf("DDLServiceMgr::handleListScheduleCreateTokens Validation Failure req: %v", common.GetHTTPReqInfo(r))
 		return
 	}
 
 	if r.Method == "GET" {
 
-		logging.Infof("DDLServiceMgr::handleListScheduleCreateTokens Processing Request %v", r)
+		logging.Infof("DDLServiceMgr::handleListScheduleCreateTokens Processing Request req: %v", common.GetHTTPReqInfo(r))
 
 		scheduleTokens, err := mc.ListAllScheduleCreateTokens()
 		if err != nil {
@@ -1432,13 +1432,13 @@ func (m *DDLServiceMgr) handleListScheduleCreateTokens(w http.ResponseWriter, r 
 func (m *DDLServiceMgr) handleListStopScheduleCreateTokens(w http.ResponseWriter, r *http.Request) {
 
 	if !m.validateAuth(w, r) {
-		logging.Errorf("DDLServiceMgr::handleListStopScheduleCreateTokens Validation Failure for Request %v", r)
+		logging.Errorf("DDLServiceMgr::handleListStopScheduleCreateTokens Validation Failure req: %v", common.GetHTTPReqInfo(r))
 		return
 	}
 
 	if r.Method == "GET" {
 
-		logging.Infof("DDLServiceMgr::handleListStopScheduleCreateTokens Processing Request %v", r)
+		logging.Infof("DDLServiceMgr::handleListStopScheduleCreateTokens Processing Request req: %v", common.GetHTTPReqInfo(r))
 
 		scheduleTokens, err := mc.ListAllStopScheduleCreateTokens()
 		if err != nil {
@@ -1471,7 +1471,7 @@ func (m *DDLServiceMgr) handleListStopScheduleCreateTokens(w http.ResponseWriter
 func (m *DDLServiceMgr) handleTransferScheduleCreateTokens(w http.ResponseWriter, r *http.Request) {
 	valid := m.validateAuth(w, r)
 	if !valid {
-		logging.Errorf("DDLServiceMgr::handleTransferScheduleCreateTokens Validation Failure for Request %v", logging.TagUD(r))
+		logging.Errorf("DDLServiceMgr::handleTransferScheduleCreateTokens Validation Failure req: %v", common.GetHTTPReqInfo(r))
 		return
 	}
 
