@@ -612,10 +612,7 @@ func (b *Bucket) init(nb *Bucket) {
 	atomic.StorePointer(&b.nodeList, unsafe.Pointer(&nb.NodesJSON))
 }
 
-func (p *Pool) refresh() (err error) {
-	p.BucketMap = make(map[string]Bucket)
-	p.Manifest = make(map[string]*collections.CollectionManifest)
-
+func (p *Pool) getVersion() uint32 {
 	// Compute the minimum version among all the nodes
 	version := (uint32)(math.MaxUint32)
 	for _, n := range p.Nodes {
@@ -624,6 +621,81 @@ func (p *Pool) refresh() (err error) {
 			version = v
 		}
 	}
+	return version
+}
+
+func (p *Pool) getTerseBucket(bucketn string) (bool, *Bucket, error) {
+	retry := false
+	nb := &Bucket{}
+	err := p.client.parseURLResponse(p.BucketURL["terseBucketsBase"]+bucketn, nb)
+	if err != nil {
+		// bucket list is out of sync with cluster bucket list
+		// bucket might have got deleted.
+		if strings.Contains(err.Error(), "HTTP error 404") {
+			retry = true
+			return retry, nil, err
+		}
+		return retry, nil, err
+	}
+	return retry, nb, nil
+}
+
+func (p *Pool) getCollectionManifest(bucketn string, version uint32) (retry bool,
+	manifest *collections.CollectionManifest, err error) {
+
+	// It is allowed to query the collections endpoint only if all
+	// the nodes in the cluster are upgraded to 7.0 version or later
+	if version >= 7 {
+		// For each bucket, update collection manifest
+		manifest = &collections.CollectionManifest{}
+		err = p.client.parseURLResponse("pools/default/buckets/"+bucketn+"/scopes", manifest)
+		if err != nil {
+			// bucket list is out of sync with cluster bucket list
+			// bucket might have got deleted.
+			if strings.Contains(err.Error(), "HTTP error 404") {
+				retry = true
+				return
+			}
+			return
+		}
+	}
+
+	return
+}
+
+// refreshBucket only calls terseBucket endpoint to fetch the bucket info.
+func (p *Pool) refreshBucket(bucketn string) error {
+	p.BucketMap = make(map[string]Bucket)
+	retryCount := 0
+loop:
+	retry, nb, err := p.getTerseBucket(bucketn)
+	if retry {
+		retryCount++
+		if retryCount > 5 {
+			return err
+		}
+		logging.Warnf("cluster_info: Out of sync for bucket %s. Retrying to getTerseBucket. retry count %v", nb.Name, retryCount)
+		time.Sleep(5 * time.Millisecond)
+		goto loop
+	}
+	if err != nil {
+		return err
+	}
+	nb.pool = p
+	nb.init(nb)
+	p.BucketMap[nb.Name] = *nb
+
+	return nil
+}
+
+// refresh calls pools/default/buckets to get data and list of buckets
+// calls terseBucket and scopes endpoint for bucket info and manifest.
+func (p *Pool) refresh() (err error) {
+	p.BucketMap = make(map[string]Bucket)
+	p.Manifest = make(map[string]*collections.CollectionManifest)
+
+	// Compute the minimum version among all the nodes
+	version := p.getVersion()
 
 loop:
 	buckets := []Bucket{}
@@ -632,39 +704,31 @@ loop:
 		return err
 	}
 	for _, b := range buckets {
-		nb := &Bucket{}
-		err = p.client.parseURLResponse(p.BucketURL["terseBucketsBase"]+b.Name, nb)
+		retry, nb, err := p.getTerseBucket(b.Name)
+		if retry {
+			logging.Warnf("cluster_info: Out of sync for bucket %s. Retrying for getTerseBucket..", b.Name)
+			time.Sleep(5 * time.Millisecond)
+			goto loop
+		}
 		if err != nil {
-			// bucket list is out of sync with cluster bucket list
-			// bucket might have got deleted.
-			if strings.Contains(err.Error(), "HTTP error 404") {
-				logging.Warnf("cluster_info: Out of sync for bucket %s. Retrying..", b.Name)
-				goto loop
-			}
 			return err
 		}
 		b.pool = p
 		b.init(nb)
 		p.BucketMap[b.Name] = b
 
-		// It is allowed to query the collections endpoint only if all
-		// the nodes in the cluster are upgraded to 7.0 version or later
-		if version >= 7 {
-			// For each bucket, update collection manifest
-			manifest := &collections.CollectionManifest{}
-			err = p.client.parseURLResponse("pools/default/buckets/"+b.Name+"/scopes", manifest)
-			if err != nil {
-				// bucket list is out of sync with cluster bucket list
-				// bucket might have got deleted.
-				if strings.Contains(err.Error(), "HTTP error 404") {
-					logging.Warnf("cluster_info: Out of sync for bucket %s. Retrying..", b.Name)
-					goto loop
-				}
-				return err
-			}
-			p.Manifest[b.Name] = manifest
+		retry, manifest, err := p.getCollectionManifest(b.Name, version)
+		if retry {
+			logging.Warnf("cluster_info: Out of sync for bucket %s. Retrying for getBucketManifest..", b.Name)
+			time.Sleep(5 * time.Millisecond)
+			goto loop
 		}
+		if err != nil {
+			return err
+		}
+		p.Manifest[b.Name] = manifest
 	}
+
 	return nil
 }
 
@@ -696,6 +760,29 @@ func (p *Pool) GetServerGroups() (groups ServerGroups, err error) {
 	err = p.client.parseURLResponse(p.ServerGroupsUri, &groups)
 	return
 
+}
+
+// GetPoolWithBucket gets a pool from pool URI and calls ns_server terseBucket endpoint
+// API to get info for only given bucket
+func (c *Client) GetPoolWithBucket(name string, bucketn string) (p Pool, err error) {
+	var poolURI string
+	for _, p := range c.Info.Pools {
+		if p.Name == name {
+			poolURI = p.URI
+		}
+	}
+	if poolURI == "" {
+		return p, errors.New("No pool named " + name)
+	}
+
+	if err = c.parseURLResponse(poolURI, &p); err != nil {
+		return
+	}
+
+	p.client = *c
+
+	err = p.refreshBucket(bucketn)
+	return
 }
 
 // GetPool gets a pool from within the couchbase cluster (usually
