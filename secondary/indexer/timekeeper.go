@@ -1919,6 +1919,7 @@ func (tk *timekeeper) handleStreamRequestDone(cmd Message) {
 			"due to Force Recovery Flag. SessionId %v.", streamId, keyspaceId, sessionId)
 
 		if tk.resetStreamIfOSOEnabled(streamId, keyspaceId, sessionId) {
+			tk.supvCmdch <- &MsgSuccess{}
 			return
 		} else {
 			tk.supvRespch <- &MsgRecovery{mType: INDEXER_INIT_PREP_RECOVERY,
@@ -2034,6 +2035,7 @@ func (tk *timekeeper) handleRecoveryDone(cmd Message) {
 			"due to Force Recovery Flag. SessionId %v.", streamId, keyspaceId, sessionId)
 
 		if tk.resetStreamIfOSOEnabled(streamId, keyspaceId, sessionId) {
+			tk.supvCmdch <- &MsgSuccess{}
 			return
 		} else {
 			tk.supvRespch <- &MsgRecovery{mType: INDEXER_INIT_PREP_RECOVERY,
