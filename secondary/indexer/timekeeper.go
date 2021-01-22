@@ -1919,6 +1919,7 @@ func (tk *timekeeper) handleStreamRequestDone(cmd Message) {
 			"due to Force Recovery Flag. SessionId %v.", streamId, keyspaceId, sessionId)
 
 		if tk.resetStreamIfOSOEnabled(streamId, keyspaceId, sessionId) {
+			tk.supvCmdch <- &MsgSuccess{}
 			return
 		} else {
 			tk.supvRespch <- &MsgRecovery{mType: INDEXER_INIT_PREP_RECOVERY,
@@ -2034,6 +2035,7 @@ func (tk *timekeeper) handleRecoveryDone(cmd Message) {
 			"due to Force Recovery Flag. SessionId %v.", streamId, keyspaceId, sessionId)
 
 		if tk.resetStreamIfOSOEnabled(streamId, keyspaceId, sessionId) {
+			tk.supvCmdch <- &MsgSuccess{}
 			return
 		} else {
 			tk.supvRespch <- &MsgRecovery{mType: INDEXER_INIT_PREP_RECOVERY,
@@ -2322,6 +2324,19 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 	})
 
 	if streamId != common.INIT_STREAM {
+		return false
+	}
+
+	enableOSO := tk.ss.streamKeyspaceIdEnableOSO[streamId][keyspaceId]
+	if enableOSO && initFlushTs.HasOpenOSOSnap() {
+
+		logging.Infof("Timekeeper::checkInitStreamReadyToMerge INIT_STREAM has open OSO Snapshot."+
+			"INIT_STREAM cannot be merged. Continue both streams for keyspaceId %v.", keyspaceId)
+
+		logging.LazyVerbose(func() string {
+			hwt := tk.ss.streamKeyspaceIdHWTMap[streamId][keyspaceId]
+			return fmt.Sprintf("Timekeeper::checkInitStreamReadyToMerge FlushTs %v\n HWT %v", initFlushTs, hwt)
+		})
 		return false
 	}
 
@@ -2908,7 +2923,12 @@ func (tk *timekeeper) setSnapshotType(streamId common.StreamId, keyspaceId strin
 			persistDuration := time.Duration(snapPersistInterval) * time.Millisecond
 			//create disk snapshot based on wall clock time
 			if time.Since(lastPersistTime) > persistDuration {
-				flushTs.SetSnapType(common.DISK_SNAP_OSO)
+				if flushTs.HasOpenOSOSnap() {
+					flushTs.SetSnapType(common.DISK_SNAP_OSO)
+				} else {
+					//if there is no open OSO snapshot, it is eligible for recovery
+					flushTs.SetSnapType(common.DISK_SNAP)
+				}
 				tk.ss.streamKeyspaceIdLastPersistTime[streamId][keyspaceId] = time.Now()
 			}
 		}
@@ -4129,7 +4149,7 @@ func (tk *timekeeper) setMergeTs(streamId common.StreamId, keyspaceId string,
 	mergeTs *common.TsVbuuid) {
 
 	for _, buildInfo := range tk.indexBuildInfo {
-		if buildInfo.indexInst.Defn.KeyspaceId(buildInfo.indexInst.Stream) == keyspaceId &&
+		if buildInfo.indexInst.Defn.KeyspaceId(streamId) == keyspaceId &&
 			buildInfo.indexInst.State == common.INDEX_STATE_CATCHUP &&
 			buildInfo.addInstPending == false {
 			buildInfo.buildDoneAckReceived = true
