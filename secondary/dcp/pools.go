@@ -726,7 +726,10 @@ loop:
 		if err != nil {
 			return err
 		}
-		p.Manifest[b.Name] = manifest
+
+		if version >= 7 {
+			p.Manifest[b.Name] = manifest
+		}
 	}
 
 	return nil
