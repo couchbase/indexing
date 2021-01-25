@@ -2469,6 +2469,9 @@ func (s *Solution) SatisfyClusterConstraint() bool {
 	return true
 }
 
+//
+// findServerGroup gets called only if solution.numServerGroup > 1
+//
 func (s *Solution) findServerGroup(defnId common.IndexDefnId, partnId common.PartitionId, replicaId int) (string, bool) {
 
 	findSG := func(sgMap ServerGroupMap) (string, bool) {
@@ -2495,6 +2498,8 @@ func (s *Solution) findServerGroup(defnId common.IndexDefnId, partnId common.Par
 
 //
 // Check if there is any replica (excluding self) in the server group
+//
+// hasReplicaInServerGroup gets called only if solution.numServerGroup > 1
 //
 func (s *Solution) hasReplicaInServerGroup(u *IndexUsage, group string) bool {
 
@@ -2539,6 +2544,8 @@ func (s *Solution) hasReplicaInServerGroup(u *IndexUsage, group string) bool {
 //
 // Get server groups having replicas for this index (excluding self)
 //
+// getServerGroupsWithReplica gets called only if solution.numServerGroup > 1
+//
 func (s *Solution) getServerGroupsWithReplica(u *IndexUsage) map[string]bool {
 
 	getSGWithReplica := func(replicaM ReplicaMap) map[string]bool {
@@ -2579,6 +2586,8 @@ func (s *Solution) getServerGroupsWithReplica(u *IndexUsage) map[string]bool {
 
 //
 // Check if any server group without this replica (excluding self)
+//
+// hasServerGroupWithNoReplica gets called only if solution.numServerGroup > 1
 //
 func (s *Solution) hasServerGroupWithNoReplica(u *IndexUsage) bool {
 
@@ -2735,6 +2744,10 @@ func (s *Solution) hasDeletedNodes() bool {
 // Update SG mapping for index
 //
 func (s *Solution) updateServerGroupMap(index *IndexUsage, indexer *IndexerNode) {
+
+	if s.numServerGroup <= 1 {
+		return
+	}
 
 	updateSGMap := func(sgMap ServerGroupMap) {
 		if index.Instance != nil {
