@@ -298,6 +298,11 @@ func (ts *TsVbuuid) SetDisableAlign(disable bool) {
 }
 
 func (ts *TsVbuuid) HasOpenOSOSnap() bool {
+
+	if ts == nil {
+		return false
+	}
+
 	return ts.OpenOSOSnap
 }
 
