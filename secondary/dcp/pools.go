@@ -674,7 +674,7 @@ loop:
 		if retryCount > 5 {
 			return err
 		}
-		logging.Warnf("cluster_info: Out of sync for bucket %s. Retrying to getTerseBucket. retry count %v", nb.Name, retryCount)
+		logging.Warnf("cluster_info: Out of sync for bucket %s. Retrying to getTerseBucket. retry count %v", bucketn, retryCount)
 		time.Sleep(5 * time.Millisecond)
 		goto loop
 	}
