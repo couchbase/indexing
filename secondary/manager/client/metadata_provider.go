@@ -1031,7 +1031,8 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn,
 	}
 
 	if err != nil {
-		logging.Errorf("Encounter planner error.  Use round robin strategy for planning. Error: %v", err)
+		logging.Errorf("Encounter planner error for index.  Use round robin strategy for planning. Error: %v: Index:%v, %v, %v, %v",
+			err, idxDefn.Bucket, idxDefn.Scope, idxDefn.Collection, idxDefn.Name)
 		layout, definitions, err = o.getIndexLayoutWithoutPlanner(watcherMap, idxDefn, allowLostReplica, actualNumReplica)
 		if err != nil {
 			logging.Errorf("Fail to create index: %v", err)
