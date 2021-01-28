@@ -107,7 +107,7 @@ type RequestBroker struct {
 	defn           *common.IndexDefn
 	limit          int64
 	offset         int64
-	sorted         bool
+	sorted         bool  // return rows in sorted order?
 	pushdownLimit  int64
 	pushdownOffset int64
 	pushdownSorted bool
@@ -115,7 +115,7 @@ type RequestBroker struct {
 	grpAggr        *GroupAggr
 	projections    *IndexProjection
 	indexOrder     *IndexKeyOrder
-	projDesc       []bool
+	projDesc       []bool  // projection descending sort keys
 	distinct       bool
 
 	// Additional key positions (not in projection list) added due to
@@ -852,6 +852,14 @@ func (c *RequestBroker) scatterCount(client []*GsiScanClient, index *common.Inde
 	return
 }
 
+// sort bubble sorts the heads of all queues into the rows
+// argument. If all queues have entries, it returns true and
+// the rows values will be fully sorted; otherwise it returns
+// false and the rows values will not be fully sorted.
+//
+// This function is only called to initialize the ordering.
+// Subsequently the closely related pick function is called to
+// consume rows one by one and incrementally update the sort.
 func (c *RequestBroker) sort(rows []Row, sorted []int) bool {
 
 	size := len(c.queues)
@@ -1085,8 +1093,8 @@ func (c *RequestBroker) forward(donech chan bool) {
 	defer close(donech)
 
 	// initial sort (only the first row from each indexer)
-	// This is just to make sure that we have recieve at
-	// least one row before streaming response back.
+	// This is just to make sure that we have received at
+	// least one row from each before streaming response back.
 	isSorted := false
 	for !isSorted {
 		if c.IsClose() {
@@ -1178,7 +1186,7 @@ func (c *RequestBroker) forward(donech chan bool) {
 	}
 }
 
-// This function compares two set of secondart key values.
+// This function compares two sets of secondary key values.
 // Returns –int, 0 or +int depending on if key1
 // sorts less than, equal to, or greater than key2.
 //
@@ -1189,9 +1197,11 @@ func (c *RequestBroker) forward(donech chan bool) {
 //
 func (c *RequestBroker) compareKey(key1, key2 []value.Value) int {
 
-	ln := len(key1)
-	if len(key2) < ln {
-		ln = len(key2)
+	// Find shorter key len ln. Save key lens ln1, ln2 to avoid recomputes.
+	ln1, ln2 := len(key1), len(key2)
+	ln := ln1
+	if ln2 < ln {
+		ln = ln2
 	}
 
 	for i := 0; i < ln; i++ {
@@ -1213,7 +1223,7 @@ func (c *RequestBroker) compareKey(key1, key2 []value.Value) int {
 		}
 	}
 
-	return len(key1) - len(key2)
+	return ln1 - ln2
 }
 
 // This function compares the primary key.
@@ -2006,10 +2016,12 @@ func (c *RequestBroker) analyzeProjection(partitions [][]common.PartitionId, num
 		return
 	}
 
-	// 1) If there is order-by, the projection list should not be empty
-	//    since cbq will add order-by keys to projection list.
-	// 2) order-by is pushed down only if order-by keys match leading index keys
+	// order-by is pushed down only if order-by keys match leading index keys
 	//
+	// If there is a projection list, cbq will have added any order-by keys
+	// to it (handled by "if" block). "Else if" block handles the special
+	// case where there is an order-by but no projection list because primary
+	// key and all index keys are selected.
 	if c.projections != nil && len(c.projections.EntryKeys) != 0 {
 
 		pos := make([]int, len(c.projections.EntryKeys))
@@ -2028,6 +2040,11 @@ func (c *RequestBroker) analyzeProjection(partitions [][]common.PartitionId, num
 				// skipped in the returned result.
 				c.projDesc[i] = index.Desc[position]
 			}
+		}
+	} else if c.projections == nil && c.indexOrder != nil {
+		c.projDesc = make([]bool, len(index.SecExprs))
+		for _, position := range c.indexOrder.KeyPos {
+			c.projDesc[position] = index.Desc[position]
 		}
 	}
 }

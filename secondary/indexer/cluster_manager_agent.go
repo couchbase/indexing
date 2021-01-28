@@ -429,7 +429,7 @@ func (c *clustMgrAgent) handleGetGlobalTopology(cmd Message) {
 			continue
 		}
 
-		//init Desc for pre-Spock indexes
+		// init Desc if missing (pre-Spock indexes did not have it)
 		if idxDefn.Desc == nil {
 			idxDefn.Desc = make([]bool, len(idxDefn.SecExprs))
 		}
