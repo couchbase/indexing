@@ -6,6 +6,7 @@ import (
 	"sort"
 
 	c "github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/common/collections"
 	couchbase "github.com/couchbase/indexing/secondary/dcp"
 	"github.com/golang/protobuf/proto"
 )
@@ -141,6 +142,8 @@ func (ts *TsVbuuid) Clone() *TsVbuuid {
 		newts.Snapshots = append(newts.Snapshots, snapshots[i])
 		if len(manifests) > 0 {
 			newts.ManifestUIDs = append(newts.ManifestUIDs, manifests[i])
+		} else {
+			newts.ManifestUIDs = append(newts.ManifestUIDs, collections.MANIFEST_UID_EPOCH)
 		}
 	}
 	return newts
@@ -218,6 +221,8 @@ func (ts *TsVbuuid) FromTsVbuuid(nativeTs *c.TsVbuuid) *TsVbuuid {
 		ts.Vbuuids = append(ts.Vbuuids, nativeTs.Vbuuids[vbno])
 		if len(nativeTs.ManifestUIDs) > 0 {
 			ts.ManifestUIDs = append(ts.ManifestUIDs, nativeTs.ManifestUIDs[vbno])
+		} else {
+			ts.ManifestUIDs = append(ts.ManifestUIDs, collections.MANIFEST_UID_EPOCH)
 		}
 	}
 	return ts
@@ -263,6 +268,10 @@ func (ts *TsVbuuid) Union(other *TsVbuuid) *TsVbuuid {
 	newts.Snapshots = append(newts.Snapshots, other.Snapshots...)
 	if len(other.ManifestUIDs) > 0 {
 		newts.ManifestUIDs = append(newts.ManifestUIDs, other.ManifestUIDs...)
+	} else {
+		for i := 0; i < len(other.Vbnos); i++ {
+			newts.ManifestUIDs = append(newts.ManifestUIDs, collections.MANIFEST_UID_EPOCH)
+		}
 	}
 
 	cache := make(map[uint32]bool)
@@ -281,6 +290,8 @@ func (ts *TsVbuuid) Union(other *TsVbuuid) *TsVbuuid {
 		newts.Snapshots = append(newts.Snapshots, ts.Snapshots[i])
 		if len(ts.ManifestUIDs) > 0 {
 			newts.ManifestUIDs = append(newts.ManifestUIDs, ts.ManifestUIDs[i])
+		} else {
+			newts.ManifestUIDs = append(newts.ManifestUIDs, collections.MANIFEST_UID_EPOCH)
 		}
 	}
 	sort.Sort(newts)
@@ -316,6 +327,8 @@ func (ts *TsVbuuid) SelectByVbuckets(vbuckets []uint16) *TsVbuuid {
 			newts.Snapshots = append(newts.Snapshots, ts.Snapshots[i])
 			if len(ts.ManifestUIDs) > 0 {
 				newts.ManifestUIDs = append(newts.ManifestUIDs, ts.ManifestUIDs[i])
+			} else {
+				newts.ManifestUIDs = append(newts.ManifestUIDs, collections.MANIFEST_UID_EPOCH)
 			}
 		}
 	}
@@ -352,6 +365,8 @@ func (ts *TsVbuuid) FilterByVbuckets(vbuckets []uint16) *TsVbuuid {
 		newts.Snapshots = append(newts.Snapshots, ts.Snapshots[i])
 		if len(ts.ManifestUIDs) > 0 {
 			newts.ManifestUIDs = append(newts.ManifestUIDs, ts.ManifestUIDs[i])
+		} else {
+			newts.ManifestUIDs = append(newts.ManifestUIDs, collections.MANIFEST_UID_EPOCH)
 		}
 	}
 	return newts

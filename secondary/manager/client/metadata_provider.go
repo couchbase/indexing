@@ -926,6 +926,20 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn,
 	// Note: Even in case of plan having with "nodes" clause, a full quorum will be sought.
 	//       This can be disabled with the help of AllowPartialQuorum setting.
 
+	//
+	// Validate idxDefn.Nodes before starting with the index creation
+	//
+	if len(idxDefn.Nodes) != 0 {
+		// If specified, validate if all the input nodes are available.
+		valid, err := o.validateNodes(idxDefn.Nodes)
+		if !valid {
+			return err
+		}
+		if err != nil {
+			return err
+		}
+	}
+
 	useNodes := ([]string)(nil)
 	if o.settings.AllowPartialQuorum() {
 		if len(idxDefn.Nodes) != 0 {
@@ -992,25 +1006,6 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn,
 	}
 
 	//
-	// Validate idxDefn.Nodes
-	//
-	if len(idxDefn.Nodes) != 0 {
-		// If specified, validate if all the input nodes are available.
-		// Since makePrepareIndexRequest is called with empty nodes list,
-		// it gets list of all available nodes, ignoring the input nodes
-		// list. So, explicit validation is needed.
-		valid, err := o.validateNodes(idxDefn.Nodes, watcherMap)
-		if !valid {
-			o.cancelPrepareIndexRequest(idxDefn.DefnId, watcherMap)
-			return err
-		}
-		if err != nil {
-			o.cancelPrepareIndexRequest(idxDefn.DefnId, watcherMap)
-			return err
-		}
-	}
-
-	//
 	// Plan Phase.
 	// The planner will use nodes that metadta provider sees for planning.  All inactive_failed, inactive_new and unhealthy
 	// nodes will be excluded from planning.    If the user provides a specific node list, those nodes will be used.
@@ -1036,7 +1031,8 @@ func (o *MetadataProvider) recoverableCreateIndex(idxDefn *c.IndexDefn,
 	}
 
 	if err != nil {
-		logging.Errorf("Encounter planner error.  Use round robin strategy for planning. Error: %v", err)
+		logging.Errorf("Encounter planner error for index.  Use round robin strategy for planning. Error: %v: Index:%v, %v, %v, %v",
+			err, idxDefn.Bucket, idxDefn.Scope, idxDefn.Collection, idxDefn.Name)
 		layout, definitions, err = o.getIndexLayoutWithoutPlanner(watcherMap, idxDefn, allowLostReplica, actualNumReplica)
 		if err != nil {
 			logging.Errorf("Fail to create index: %v", err)
@@ -1201,14 +1197,12 @@ func (o *MetadataProvider) getDefinitionsFromLayout(layout map[int]map[c.Indexer
 	return definitions, nil
 }
 
-func (o *MetadataProvider) validateNodes(nodes []string, watcherMap map[c.IndexerId]int) (bool, error) {
+func (o *MetadataProvider) validateNodes(nodes []string) (bool, error) {
 	availableNodes := make(map[string]bool)
 
-	for indexerId, _ := range watcherMap {
-		watcher, err := o.findWatcherByIndexerId(indexerId)
-		if err != nil {
-			return false, err
-		}
+	watchers := o.getAllAvailWatchers()
+
+	for _, watcher := range watchers {
 		availableNodes[strings.ToLower(watcher.getNodeAddr())] = true
 	}
 

@@ -2152,12 +2152,15 @@ func (s *schedTokenMonitor) getIndexesFromTokens(createTokens map[string]*mc.Sch
 	indexes := make([]*mclient.IndexMetadata, 0, len(createTokens))
 
 	for key, token := range createTokens {
+		logging.Debugf("schedTokenMonitor::getIndexesFromTokens new schedule create token %v", key)
 		if s.checkProcessed(key) {
+			logging.Debugf("schedTokenMonitor::getIndexesFromTokens skip processing schedule create token %v as it is already processed.", key)
 			continue
 		}
 
 		stopKey := mc.GetStopScheduleCreateTokenPathFromDefnId(token.Definition.DefnId)
 		if _, ok := stopTokens[stopKey]; ok {
+			logging.Debugf("schedTokenMonitor::getIndexesFromTokens skip processing schedule create token %v as as stop schedule create token is seen.", key)
 			continue
 		}
 
@@ -2175,6 +2178,7 @@ func (s *schedTokenMonitor) getIndexesFromTokens(createTokens map[string]*mc.Sch
 			logging.Debugf("schedTokenMonitor:getIndexesFromTokens stop schedule token exists for %v",
 				token.Definition.DefnId)
 			if s.checkProcessed(key) {
+				logging.Debugf("schedTokenMonitor::getIndexesFromTokens marking index as failed for %v", key)
 				marked := s.markIndexFailed(stopToken)
 				if marked {
 					continue
@@ -2196,6 +2200,7 @@ func (s *schedTokenMonitor) getIndexesFromTokens(createTokens map[string]*mc.Sch
 	for key, token := range stopTokens {
 		// If create token was already processed, then just mark the
 		// index as failed.
+		logging.Debugf("schedTokenMonitor::getIndexesFromTokens new stop schedule create token %v", key)
 		marked := s.markIndexFailed(token)
 		if marked {
 			s.markProcessed(key)
@@ -2205,10 +2210,12 @@ func (s *schedTokenMonitor) getIndexesFromTokens(createTokens map[string]*mc.Sch
 		scheduleKey := mc.GetScheduleCreateTokenPathFromDefnId(token.DefnId)
 		ct, ok := createTokens[scheduleKey]
 		if !ok {
+			logging.Debugf("schedTokenMonitor::getIndexesFromTokens skip processing stop schedule create token %v as schedule create token does not exist", key)
 			continue
 		}
 
 		if s.checkProcessed(key) {
+			logging.Debugf("schedTokenMonitor::getIndexesFromTokens skip processing stop schedule create token %v as it is already processed", key)
 			continue
 		}
 
@@ -2247,6 +2254,7 @@ func (s *schedTokenMonitor) clenseIndexes(indexes []*mclient.IndexMetadata,
 		path := mc.GetScheduleCreateTokenPathFromDefnId(idx.Definition.DefnId)
 
 		if _, ok := delPaths[path]; ok {
+			logging.Debugf("schedTokenMonitor::clenseIndexes skip processing index %v as the key is deleted.", path)
 			continue
 		}
 
@@ -2311,6 +2319,9 @@ func (s *schedTokenMonitor) getIndexesCached() []*mclient.IndexMetadata {
 }
 
 func (s *schedTokenMonitor) update() {
+	logging.Debugf("schedTokenMonitor updating ...")
+	defer logging.Debugf("schedTokenMonitor done updating ...")
+
 	createTokens := s.listener.GetNewScheduleCreateTokens()
 	stopTokens := s.listener.GetNewStopScheduleCreateTokens()
 	delPaths := s.listener.GetDeletedScheduleCreateTokenPaths()
