@@ -234,14 +234,14 @@ func FetchIndexDefnToCreateCommandTokensMap() (map[c.IndexDefnId][]*CreateComman
 		for _, path := range paths {
 			defnID, requestID, err := GetDefnIdFromCreateCommandTokenPath(path)
 			if err != nil {
-				logging.Warnf("FetchIndexDefnToCreateCommandTokenMap: Failed to process create index token %v.  Internal Error = %v.", path, err)
-				continue
+				logging.Errorf("FetchIndexDefnToCreateCommandTokenMap: Failed to process create index token %v.  Internal Error = %v.", path, err)
+				return nil, err
 			}
 
 			token, err := FetchCreateCommandToken(defnID, requestID)
 			if err != nil {
-				logging.Warnf("FetchIndexDefnToCreateCommandTokenMap: Failed to process create index token %v.  Internal Error = %v.", path, err)
-				continue
+				logging.Errorf("FetchIndexDefnToCreateCommandTokenMap: Failed to process create index token %v.  Internal Error = %v.", path, err)
+				return nil, err
 			}
 
 			if token != nil {
@@ -637,7 +637,7 @@ func FetchIndexDefnToDropInstanceCommandTokenMap() (map[c.IndexDefnId][]*DropIns
 			token := &DropInstanceCommandToken{}
 			exists, err := c.MetakvBigValueGet(path, token)
 			if err != nil {
-				logging.Errorf("ListAllDropInstanceCommandToken: path %v err %v", path, err)
+				logging.Errorf("FetchIndexDefnToDropInstanceCommandTokenMap: path %v err %v", path, err)
 				return nil, err
 			}
 
