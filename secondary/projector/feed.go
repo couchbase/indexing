@@ -2212,7 +2212,7 @@ func getTssAsStr(ts map[string]*protobuf.TsVbuuid) string {
 // NOTE: be careful while changing the DCP name, it might affect other
 // parts of the system. ref: https://issues.couchbase.com/browse/MB-14300
 func newDCPConnectionName(keyspaceId, topic string, uuid uint64) couchbase.DcpFeedName {
-	return couchbase.NewDcpFeedName(fmt.Sprintf("proj-%s-%s-%v", keyspaceId, topic, uuid))
+	return couchbase.NewDcpFeedName(fmt.Sprintf("%v%v-%s-%v", mc.DcpFeedNameCompPrefix, keyspaceId, topic, uuid))
 }
 
 //---- endpoint watcher

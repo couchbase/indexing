@@ -38,7 +38,7 @@ type FailoverLog map[uint16]memcached.FailoverLog
 type DcpFeedName string
 
 func NewDcpFeedName(name string) DcpFeedName {
-	return DcpFeedName("secidx:" + name)
+	return DcpFeedName(memcached.DcpFeedNamePrefix + name)
 }
 
 // GetFailoverLogs get the failover logs for a set of vbucket ids
