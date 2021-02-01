@@ -1027,7 +1027,7 @@ func (feed *DcpFeed) enableCollections(rcvch chan []interface{}) error {
 		return ErrorEnableCollections
 	} else if (len(body) != 2) || (body[0] != 0x00 && body[1] != transport.FEATURE_COLLECTIONS) {
 		fmsg := "%v ##%x DCP_HELO (feature_collections) body = %v. Expecting body = 0x0012"
-		logging.Errorf(fmsg, prefix, opaque, opcode)
+		logging.Errorf(fmsg, prefix, opaque, body)
 		return ErrorCollectionsNotEnabled
 	}
 
