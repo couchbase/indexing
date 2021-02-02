@@ -500,6 +500,7 @@ type MsgStreamUpdate struct {
 	abortRecovery      bool
 	collectionAware    bool
 	enableOSO          bool
+	ignoreOSOException bool
 }
 
 func (m *MsgStreamUpdate) GetMsgType() MsgType {
@@ -568,6 +569,10 @@ func (m *MsgStreamUpdate) CollectionAware() bool {
 
 func (m *MsgStreamUpdate) EnableOSO() bool {
 	return m.enableOSO
+}
+
+func (m *MsgStreamUpdate) IgnoreOSOException() bool {
+	return m.ignoreOSOException
 }
 
 func (m *MsgStreamUpdate) String() string {

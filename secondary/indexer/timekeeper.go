@@ -699,7 +699,7 @@ func (tk *timekeeper) processFlushAbort(streamId common.StreamId, keyspaceId str
 
 	case STREAM_ACTIVE, STREAM_RECOVERY:
 
-		if tk.resetStreamIfOSOEnabled(streamId, keyspaceId, sessionId) {
+		if tk.resetStreamIfOSOEnabled(streamId, keyspaceId, sessionId, false) {
 			break
 		}
 
@@ -1918,7 +1918,7 @@ func (tk *timekeeper) handleStreamRequestDone(cmd Message) {
 		logging.Infof("Timekeeper::handleStreamRequestDone %v %v. Initiate Recovery "+
 			"due to Force Recovery Flag. SessionId %v.", streamId, keyspaceId, sessionId)
 
-		if tk.resetStreamIfOSOEnabled(streamId, keyspaceId, sessionId) {
+		if tk.resetStreamIfOSOEnabled(streamId, keyspaceId, sessionId, true) {
 			tk.supvCmdch <- &MsgSuccess{}
 			return
 		} else {
@@ -2034,7 +2034,7 @@ func (tk *timekeeper) handleRecoveryDone(cmd Message) {
 		logging.Infof("Timekeeper::handleRecoveryDone %v %v. Initiate Recovery "+
 			"due to Force Recovery Flag. SessionId %v.", streamId, keyspaceId, sessionId)
 
-		if tk.resetStreamIfOSOEnabled(streamId, keyspaceId, sessionId) {
+		if tk.resetStreamIfOSOEnabled(streamId, keyspaceId, sessionId, true) {
 			tk.supvCmdch <- &MsgSuccess{}
 			return
 		} else {
@@ -3377,7 +3377,7 @@ func (tk *timekeeper) repairStream(streamId common.StreamId,
 	if canRollback {
 
 		sessionId := tk.ss.getSessionId(streamId, keyspaceId)
-		if tk.resetStreamIfOSOEnabled(streamId, keyspaceId, sessionId) {
+		if tk.resetStreamIfOSOEnabled(streamId, keyspaceId, sessionId, false) {
 			delete(tk.ss.streamKeyspaceIdRepairStopCh[streamId], keyspaceId)
 			return
 
@@ -3407,7 +3407,7 @@ func (tk *timekeeper) repairStream(streamId common.StreamId,
 
 		sessionId := tk.ss.getSessionId(streamId, keyspaceId)
 
-		if tk.resetStreamIfOSOEnabled(streamId, keyspaceId, sessionId) {
+		if tk.resetStreamIfOSOEnabled(streamId, keyspaceId, sessionId, false) {
 			delete(tk.ss.streamKeyspaceIdRepairStopCh[streamId], keyspaceId)
 			return
 		} else {
@@ -3428,7 +3428,7 @@ func (tk *timekeeper) repairStream(streamId common.StreamId,
 
 		sessionId := tk.ss.getSessionId(streamId, keyspaceId)
 
-		if tk.resetStreamIfOSOEnabled(streamId, keyspaceId, sessionId) {
+		if tk.resetStreamIfOSOEnabled(streamId, keyspaceId, sessionId, false) {
 			delete(tk.ss.streamKeyspaceIdRepairStopCh[streamId], keyspaceId)
 			return
 		} else {
@@ -4258,7 +4258,7 @@ func (tk *timekeeper) handleIndexerResume(cmd Message) {
 			if status != STREAM_INACTIVE {
 				tk.ss.streamKeyspaceIdFlushEnabledMap[s][b] = false
 				sessionId := tk.ss.getSessionId(s, b)
-				if !tk.resetStreamIfOSOEnabled(s, b, sessionId) {
+				if !tk.resetStreamIfOSOEnabled(s, b, sessionId, false) {
 					tk.supvRespch <- &MsgRecovery{mType: INDEXER_INIT_PREP_RECOVERY,
 						streamId:   s,
 						keyspaceId: b,
@@ -4438,20 +4438,26 @@ func (tk *timekeeper) ValidateKeyspace(streamId common.StreamId, keyspaceId stri
 
 }
 
+//ignoreException flag can be used by callers to instruct indexer to ignore
+//any already recorded exception and always initiate recovery.
+//This is useful in cases where the stream request is going to terminate, and
+//there is no further trigger to initiate recovery which got skipped due to
+//OSO exception.
 func (tk *timekeeper) resetStreamIfOSOEnabled(streamId common.StreamId,
-	keyspaceId string, sessionId uint64) bool {
+	keyspaceId string, sessionId uint64, ignoreException bool) bool {
 
 	if tk.ss.streamKeyspaceIdEnableOSO[streamId][keyspaceId] {
-		logging.Infof("Timekeeper::resetStreamIfOSOEnabled %v %v %v. Reset Stream. ",
-			streamId, keyspaceId, sessionId)
+		logging.Infof("Timekeeper::resetStreamIfOSOEnabled %v %v %v %v. Reset Stream. ",
+			streamId, keyspaceId, sessionId, ignoreException)
 
 		tk.ss.streamKeyspaceIdForceRecovery[streamId][keyspaceId] = true
 
 		tk.supvRespch <- &MsgStreamUpdate{
-			mType:      RESET_STREAM,
-			streamId:   streamId,
-			keyspaceId: keyspaceId,
-			sessionId:  sessionId,
+			mType:              RESET_STREAM,
+			streamId:           streamId,
+			keyspaceId:         keyspaceId,
+			sessionId:          sessionId,
+			ignoreOSOException: ignoreException,
 		}
 		return true
 	}

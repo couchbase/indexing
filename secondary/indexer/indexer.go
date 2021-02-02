@@ -2958,8 +2958,12 @@ func (idx *indexer) handleResetStream(msg Message) {
 	keyspaceId := msg.(*MsgStreamUpdate).GetKeyspaceId()
 	streamId := msg.(*MsgStreamUpdate).GetStreamId()
 	sessionId := msg.(*MsgStreamUpdate).GetSessionId()
+	ignoreOSOException := msg.(*MsgStreamUpdate).IgnoreOSOException()
 
-	logging.Infof("Indexer::handleResetStream %v %v %v", streamId, keyspaceId, sessionId)
+	exception := idx.streamKeyspaceIdOSOException[streamId][keyspaceId]
+
+	logging.Infof("Indexer::handleResetStream %v %v %v %v %v", streamId,
+		keyspaceId, sessionId, ignoreOSOException, exception)
 
 	if ok, currSid := idx.validateSessionId(streamId, keyspaceId, sessionId, true); !ok {
 		logging.Infof("Indexer::handleResetStream StreamId %v KeyspaceId %v SessionId %v. "+
@@ -2975,8 +2979,9 @@ func (idx *indexer) handleResetStream(msg Message) {
 		idx.cleanupStreamKeyspaceIdState(streamId, keyspaceId)
 	} else {
 
-		//if OSO Exception has already been recorded, ignore the message
-		if idx.streamKeyspaceIdOSOException[streamId][keyspaceId] {
+		//if OSO Exception has already been recorded and the flag to ignore exception
+		//has not been set, ignore the message
+		if idx.streamKeyspaceIdOSOException[streamId][keyspaceId] && !ignoreOSOException {
 			logging.Infof("Indexer::handleResetStream StreamId %v KeyspaceId %v "+
 				"OSOException Already Seen. Skipping Reset Stream.",
 				streamId, keyspaceId)
