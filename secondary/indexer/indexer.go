@@ -1247,8 +1247,9 @@ func (idx *indexer) updateStorageMode(newConfig common.Config) {
 		if confStorageMode != "" {
 			if idx.canSetStorageMode(confStorageMode) {
 				if common.SetStorageModeStr(confStorageMode) {
-					logging.Infof("Indexer::updateStorageMode Storage Mode Set %v", common.GetStorageMode())
+					logging.Infof("Indexer::updateStorageMode Storage Mode Set %v. Restarting indexer", common.GetStorageMode())
 					idx.stats.needsRestart.Set(true)
+					os.Exit(0)
 				} else {
 					logging.Infof("Indexer::updateStorageMode Invalid Storage Mode %v", confStorageMode)
 				}
@@ -1262,8 +1263,9 @@ func (idx *indexer) updateStorageMode(newConfig common.Config) {
 					confStorageMode, common.GetStorageMode())
 			} else {
 				if common.SetStorageModeStr(confStorageMode) {
-					logging.Infof("Indexer::updateStorageMode Storage Mode Set %v", common.GetStorageMode())
+					logging.Infof("Indexer::updateStorageMode Storage Mode Set %v. Restarting indexer", common.GetStorageMode())
 					idx.stats.needsRestart.Set(true)
+					os.Exit(0)
 				} else {
 					logging.Infof("Indexer::updateStorageMode Invalid Storage Mode %v", confStorageMode)
 				}
@@ -1290,6 +1292,7 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 			common.GetStorageMode() == common.NOT_SET {
 			logging.Infof("Indexer::handleConfigUpdate restart indexer due to memory_quota")
 			idx.stats.needsRestart.Set(true)
+			os.Exit(0)
 		}
 	}
 	if common.GetStorageMode() == common.MOI {
@@ -1310,6 +1313,7 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 		idx.config["settings.compaction.plasma.manual"].Bool() {
 		logging.Infof("Indexer::handleConfigUpdate restart indexer due to compaction.plasma.manual")
 		idx.stats.needsRestart.Set(true)
+		os.Exit(0)
 	}
 
 	if percent, ok := newConfig["settings.gc_percent"]; ok && percent.Int() > 0 {
@@ -6313,6 +6317,7 @@ func (idx *indexer) handleStorageWarmupDone(msg Message) {
 	if needsRestart {
 		logging.Infof("Restarting indexer after storage upgrade")
 		idx.stats.needsRestart.Set(true)
+		os.Exit(0)
 	}
 
 	//any index with nil snapshot should be moved to INIT_STREAM
