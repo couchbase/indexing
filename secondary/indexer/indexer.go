@@ -6630,9 +6630,6 @@ func (idx *indexer) initFromPersistedState() error {
 		if inst.State != common.INDEX_STATE_DELETED {
 			for _, partnDefn := range inst.Pc.GetAllPartitions() {
 				idx.stats.AddPartitionStats(inst, partnDefn.GetPartitionId())
-
-				// Since bootstrapStats does not have index stats yet, initialize index and partition stats
-				bootstrapStats.AddPartitionStats(inst, partnDefn.GetPartitionId())
 			}
 		}
 	}
@@ -6645,6 +6642,12 @@ func (idx *indexer) initFromPersistedState() error {
 	localIndexPartnMap := make(IndexPartnMap)
 
 	for _, inst := range idx.indexInstMap {
+
+		for _, partnDefn := range inst.Pc.GetAllPartitions() {
+			// Since bootstrapStats does not have index stats yet, initialize index and partition stats
+			bootstrapStats.AddPartitionStats(inst, partnDefn.GetPartitionId())
+		}
+
 		//allocate partition/slice
 		var partnInstMap PartitionInstMap
 		var failedPartnInstances PartitionInstMap
@@ -6749,7 +6752,9 @@ func (idx *indexer) broadcastBootstrapStats(stats *IndexerStats,
 	idxStats.numDocsQueued.Set(math.MaxInt64)
 	idxStats.lastRollbackTime.Set(time.Now().UnixNano())
 	idxStats.progressStatTime.Set(time.Now().UnixNano())
+	// Marshall stats to byte slice
 	spec := NewStatsSpec(false, false, false, false, false, nil)
+	spec.OverrideFilter("gsiClient")
 	notifyStats := stats.GetStats(spec)
 	if val, ok := notifyStats.(map[string]interface{}); ok {
 		idx.internalRecvCh <- &MsgStatsRequest{
