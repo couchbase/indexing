@@ -51,6 +51,10 @@ var ErrorInvalidFeed = errors.New("dcp.invalidFeed")
 var ErrorEnableCollections = errors.New("dcp.EnableCollections")
 var ErrorCollectionsNotEnabled = errors.New("dcp.ErrorCollectionsNotEnabled")
 
+var DcpFeedNamePrefix = "secidx:"
+var DcpFeedNameCompPrefix = "proj-"
+var DcpFeedPrefix = DcpFeedNamePrefix + DcpFeedNameCompPrefix
+
 // DcpFeed represents an DCP feed. A feed contains a connection to a single
 // host and multiple vBuckets
 type DcpFeed struct {
@@ -78,6 +82,8 @@ type DcpFeed struct {
 	// Book-keeping for verifying sequence order.
 	// TODO: This introduces a map lookup in mutation path. Need to anlayse perf implication.
 	seqOrders map[uint16]transport.SeqOrderState // vb ==> state maintained for checking seq order
+
+	truncName string
 }
 
 // NewDcpFeed creates a new DCP Feed.
@@ -101,6 +107,18 @@ func NewDcpFeed(
 		logPrefix: fmt.Sprintf("DCPT[%s]", name),
 		stats:     &DcpStats{},
 		seqOrders: make(map[uint16]transport.SeqOrderState),
+	}
+
+	feed.truncName = name
+	newFeedName, err := truncFeedName(name)
+	if err != nil {
+		logging.Infof("%v ##%x NewDcpFeed error truncating feed name %v", feed.logPrefix, opaque, name)
+		return nil, err
+	}
+
+	if newFeedName != name {
+		logging.Infof("%v ##%x NewDcpFeed using new feed name %v for feed %v", feed.logPrefix, opaque, newFeedName, name)
+		feed.truncName = newFeedName
 	}
 
 	mc.Hijack()
@@ -720,6 +738,8 @@ func (feed *DcpFeed) doDcpOpen(
 	opaque uint16,
 	rcvch chan []interface{}) error {
 
+	prefix := feed.logPrefix
+
 	// Enable read deadline at function exit
 	// As this method is called only once (i.e. at the start of DCP feed),
 	// it is ok to set the value of readDeadline to "1" and not reset it later
@@ -739,15 +759,13 @@ func (feed *DcpFeed) doDcpOpen(
 
 	rq := &transport.MCRequest{
 		Opcode: transport.DCP_OPEN,
-		Key:    []byte(name),
+		Key:    []byte(feed.truncName),
 		Opaque: opaqueOpen,
 	}
 	rq.Extras = make([]byte, 8)
 	flags = flags | openConnFlag | includeXATTR
 	binary.BigEndian.PutUint32(rq.Extras[:4], sequence)
 	binary.BigEndian.PutUint32(rq.Extras[4:], flags) // we are consumer
-
-	prefix := feed.logPrefix
 
 	if err := feed.conn.Transmit(rq); err != nil {
 		return err
@@ -1001,9 +1019,10 @@ func (feed *DcpFeed) enableCollections(rcvch chan []interface{}) error {
 
 	rq := &transport.MCRequest{
 		Opcode: transport.HELO,
-		Key:    []byte(feed.name),
+		Key:    []byte(feed.truncName),
 		Body:   []byte{0x00, transport.FEATURE_COLLECTIONS},
 	}
+
 	if err := feed.conn.Transmit(rq); err != nil {
 		fmsg := "%v ##%x doDcpOpen.Transmit DCP_HELO (feature_collections): %v"
 		logging.Errorf(fmsg, prefix, opaque, err)
@@ -1027,7 +1046,7 @@ func (feed *DcpFeed) enableCollections(rcvch chan []interface{}) error {
 		return ErrorEnableCollections
 	} else if (len(body) != 2) || (body[0] != 0x00 && body[1] != transport.FEATURE_COLLECTIONS) {
 		fmsg := "%v ##%x DCP_HELO (feature_collections) body = %v. Expecting body = 0x0012"
-		logging.Errorf(fmsg, prefix, opaque, opcode)
+		logging.Errorf(fmsg, prefix, opaque, body)
 		return ErrorCollectionsNotEnabled
 	}
 
@@ -1708,4 +1727,28 @@ loop:
 			}
 		}
 	}
+}
+
+//
+// Truncate Feed Name:
+// The input name should follow following format.
+//     DcpFeedPrefix<keyspaceId>-<topic>-<uuid>/<connectionNumber>
+//
+// truncFeedName removes the keyspaceId from the feed name.
+//
+func truncFeedName(name string) (string, error) {
+	if !strings.HasPrefix(name, DcpFeedPrefix) {
+		return name, nil
+	}
+
+	pfxLen := len(DcpFeedPrefix)
+	n1 := name[pfxLen:]
+	comps := strings.Split(n1, "-")
+	if len(comps) < 3 {
+		return "", fmt.Errorf("Malformed Dcp Feed Name %v", name)
+	}
+
+	ncomp := len(comps)
+	n3 := comps[ncomp-2] + "-" + comps[ncomp-1]
+	return DcpFeedPrefix + n3, nil
 }

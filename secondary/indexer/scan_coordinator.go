@@ -156,6 +156,8 @@ func (s *scanCoordinator) listenSnapshot() {
 
 				if ss.Timestamp() != nil {
 					snapContainer.snap = ss
+				} else {
+					snapContainer.snap = nil
 				}
 			} else {
 				// No-op here
@@ -1351,23 +1353,18 @@ func (s *scanCoordinator) updateLastSnapshotMap() {
 
 	// Delete instances that got deleted
 	for instId, sc := range lastSnapshot {
-		if inst, ok := s.indexInstMap[instId]; ok {
-			if inst.State == common.INDEX_STATE_DELETED {
+		if inst, ok := s.indexInstMap[instId]; !ok || inst.State == common.INDEX_STATE_DELETED {
 
+			func() {
 				sc.Lock()
-				DestroyIndexSnapshot(sc.snap)
-				sc.snap = nil
-				sc.Unlock()
+				defer sc.Unlock()
+				if sc.snap != nil {
+					DestroyIndexSnapshot(sc.snap)
+					sc.snap = nil
+				}
 
 				delete(lastSnapshot, instId)
-			}
-		} else {
-			sc.Lock()
-			DestroyIndexSnapshot(sc.snap)
-			sc.snap = nil
-			sc.Unlock()
-
-			delete(lastSnapshot, instId)
+			}()
 		}
 	}
 	s.lastSnapshot.Set(lastSnapshot)

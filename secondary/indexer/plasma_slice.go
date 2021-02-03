@@ -2199,13 +2199,15 @@ func (mdb *plasmaSlice) Statistics(consumerFilter uint64) (StorageStatistics, er
 
 	sts.InternalData = internalData
 	if mdb.hasPersistence {
-		sts.DiskSize = mdb.mainstore.GetLSSUsedSpace()
-		_, sts.DataSizeOnDisk, sts.LogSpace = mdb.mainstore.GetLSSInfo()
+		sts.DiskSize = mdb.mainstore.LSSDiskSize()
+		sts.DataSizeOnDisk = mdb.mainstore.LSSDataSize()
+		sts.LogSpace = mdb.mainstore.LSSUsedSpace()
 		sts.DataSize = (int64)((float64)(sts.DataSizeOnDisk) * msCompressionRatio)
 		if !mdb.isPrimary {
-			bsDiskSz := mdb.backstore.GetLSSUsedSpace()
+			bsDiskSz := mdb.backstore.LSSDiskSize()
 			sts.DiskSize += bsDiskSz
-			_, bsDataSize, bsLogSpace := mdb.backstore.GetLSSInfo()
+			bsDataSize := mdb.backstore.LSSDataSize()
+			bsLogSpace := mdb.backstore.LSSUsedSpace()
 			sts.DataSizeOnDisk += bsDataSize
 			sts.DataSize += (int64)((float64)(bsDataSize) * bsCompressionRatio)
 			sts.LogSpace += bsLogSpace
