@@ -64,6 +64,7 @@ type KeyspaceStats struct {
 	numMutationsQueued stats.Int64Val
 	numNonAlignTS      stats.Int64Val
 	numRollbacks       stats.Int64Val
+	numRollbacksToZero stats.Int64Val
 	tsQueueSize        stats.Int64Val
 }
 
@@ -71,6 +72,7 @@ type KeyspaceStats struct {
 func (s *KeyspaceStats) Init(keyspaceId string) {
 	s.keyspaceId = keyspaceId
 	s.numRollbacks.Init()
+	s.numRollbacksToZero.Init()
 	s.mutationQueueSize.Init()
 	s.numMutationsQueued.Init()
 	s.tsQueueSize.Init()
@@ -79,6 +81,7 @@ func (s *KeyspaceStats) Init(keyspaceId string) {
 
 func (s *KeyspaceStats) addKeyspaceStatsToStatsMap(statMap *StatsMap) {
 	statMap.AddStatValueFiltered("num_rollbacks", &s.numRollbacks)
+	statMap.AddStatValueFiltered("num_rollbacks_to_zero", &s.numRollbacksToZero)
 	statMap.AddStatValueFiltered("mutation_queue_size", &s.mutationQueueSize)
 	statMap.AddStatValueFiltered("num_mutations_queued", &s.numMutationsQueued)
 	statMap.AddStatValueFiltered("ts_queue_size", &s.tsQueueSize)
