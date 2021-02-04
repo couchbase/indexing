@@ -21,10 +21,11 @@ func init() {
 }
 
 type FileWriter interface {
-	Open(path string) error
+	Open() error
 	WriteItem(*Item) error
 	Checksum() uint32
 	Close() error
+	FlushAndClose() error
 }
 
 type FileReader interface {
@@ -34,12 +35,12 @@ type FileReader interface {
 	Close() error
 }
 
-func (m *MemDB) newFileWriter(t FileType) FileWriter {
+func (m *MemDB) newFileWriter(t FileType, path string) FileWriter {
 	var w FileWriter
 	if t == RawdbFile {
-		w = &rawFileWriter{db: m}
+		w = &rawFileWriter{db: m, path: path}
 	} else if t == ForestdbFile {
-		w = &forestdbFileWriter{db: m}
+		w = &forestdbFileWriter{db: m, path: path}
 	}
 	return w
 }
@@ -63,14 +64,36 @@ type rawFileWriter struct {
 	checksum uint32
 }
 
-func (f *rawFileWriter) Open(path string) error {
+func (f *rawFileWriter) Open() error {
 	var err error
-	f.fd, err = os.OpenFile(path, os.O_WRONLY|os.O_CREATE, 0755)
+	f.fd, err = os.OpenFile(f.path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0755)
 	if err == nil {
-		f.buf = make([]byte, encodeBufSize)
+		if f.buf == nil {
+			f.buf = make([]byte, encodeBufSize)
+		}
+
 		f.w = bufio.NewWriterSize(f.fd, DiskBlockSize)
 	}
 	return err
+}
+
+func (f *rawFileWriter) FlushAndClose() (reterr error) {
+
+	if f.w != nil {
+		if err := f.w.Flush(); err != nil {
+			reterr = err
+		}
+	}
+	f.w = nil
+
+	if f.fd != nil {
+		if err := f.fd.Close(); err != nil {
+			reterr = err
+		}
+	}
+	f.fd = nil
+
+	return reterr
 }
 
 func (f *rawFileWriter) WriteItem(itm *Item) error {
@@ -83,15 +106,35 @@ func (f *rawFileWriter) Checksum() uint32 {
 	return f.checksum
 }
 
-func (f *rawFileWriter) Close() error {
-	terminator := &Item{}
+func (f *rawFileWriter) Close() (reterr error) {
 
-	if err := f.WriteItem(terminator); err != nil {
-		return err
+	if f.fd == nil {
+		if err := f.Open(); err != nil {
+			reterr = err
+			return
+		}
 	}
 
-	f.w.Flush()
-	return f.fd.Close()
+	terminator := &Item{}
+	if err := f.WriteItem(terminator); err != nil {
+		reterr = err
+	}
+
+	if f.w != nil {
+		if err := f.w.Flush(); err != nil {
+			reterr = err
+		}
+	}
+	f.w = nil
+
+	if f.fd != nil {
+		if err := f.fd.Close(); err != nil {
+			reterr = err
+		}
+	}
+	f.fd = nil
+
+	return reterr
 }
 
 type rawFileReader struct {
@@ -137,11 +180,12 @@ type forestdbFileWriter struct {
 	buf      []byte
 	wbuf     bytes.Buffer
 	checksum uint32
+	path     string
 }
 
-func (f *forestdbFileWriter) Open(path string) error {
+func (f *forestdbFileWriter) Open() error {
 	var err error
-	f.file, err = forestdb.Open(path, forestdbConfig)
+	f.file, err = forestdb.Open(f.path, forestdbConfig)
 	if err == nil {
 		f.buf = make([]byte, encodeBufSize)
 		f.store, err = f.file.OpenKVStoreDefault(nil)
@@ -165,16 +209,30 @@ func (f *forestdbFileWriter) Checksum() uint32 {
 	return f.checksum
 }
 
-func (f *forestdbFileWriter) Close() error {
-	err := f.file.Commit(forestdb.COMMIT_NORMAL)
-	if err == nil {
-		err = f.store.Close()
-		if err == nil {
-			err = f.file.Close()
+func (f *forestdbFileWriter) FlushAndClose() error {
+	return f.Close()
+}
+
+func (f *forestdbFileWriter) Close() (reterr error) {
+	if f.file != nil {
+		if err := f.file.Commit(forestdb.COMMIT_NORMAL); err != nil {
+			reterr = err
 		}
 	}
 
-	return err
+	if f.store != nil {
+		if err := f.store.Close(); err != nil {
+			reterr = err
+		}
+	}
+	f.store = nil
+
+	if f.file != nil {
+		reterr = f.file.Close()
+	}
+	f.file = nil
+
+	return reterr
 }
 
 type forestdbFileReader struct {

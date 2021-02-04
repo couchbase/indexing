@@ -2324,6 +2324,16 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.moi.persistence.io_concurrency": ConfigValue{
+		float64(0.7),
+		"Number of concurrent disk operations during persistence. On linux, if it is smaller than 1, " +
+			"this parameter specifies io concurrency as a percentage of max file descriptor limit.  On other " +
+			"platforms, it is a percentage of default file descriptor limit.   If the value of this parameter is " +
+			"greater than 1, it specifies the absolute value of io concurrency independent of system limit.",
+		float64(0.7),
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.settings.storage_mode": ConfigValue{
 		"",
 		"Storage Type e.g. forestdb, memory_optimized",

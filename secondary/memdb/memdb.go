@@ -53,9 +53,14 @@ type CheckPointCallback func()
 type FileType int
 
 const (
-	encodeBufSize      = 4
-	readerBufSize      = 10000
-	defaultRefreshRate = 10000
+	encodeBufSize        = 4
+	readerBufSize        = 10000
+	defaultRefreshRate   = 10000
+	deltaFlushThreshold  = DiskBlockSize
+	maxThreadLimit       = 10000 // golang 10k thread limit
+	threadFDMultiplier   = 1.4
+	defaultIOConcurrency = 0.7
+	defaultThreadLimit   = 7200 // maxThreadLimit / threadFDMultiplier
 )
 
 const (
@@ -68,6 +73,7 @@ const gcchanBufSize = 256
 var (
 	dbInstances      *skiplist.Skiplist
 	dbInstancesCount int64
+	gWriteBarrier    *writeBarrier
 )
 
 func init() {
@@ -133,6 +139,49 @@ const (
 	dwStateTerminate
 )
 
+type writeBarrier struct {
+	concurrency int
+	semaphores  chan bool
+}
+
+func (m *MemDB) initWriteBarrier(concurrency float64) {
+	init := func() {
+
+		n := GetIOConcurrency(concurrency)
+		fmt.Println(fmt.Sprintf("Set IO Concurrency: %v", n))
+
+		gWriteBarrier = &writeBarrier{
+			semaphores:  make(chan bool, n),
+			concurrency: n,
+		}
+
+		for i := 0; i < n; i++ {
+			gWriteBarrier.semaphores <- true
+		}
+	}
+
+	m.initializer.Do(init)
+}
+
+func (w *writeBarrier) get() bool {
+
+	success := false
+	select {
+	case <-w.semaphores:
+		success = true
+	default:
+	}
+
+	return success
+}
+
+func (w *writeBarrier) release() {
+	select {
+	case w.semaphores <- true:
+	default:
+	}
+}
+
 type deltaWrContext struct {
 	state        int
 	closed       chan struct{}
@@ -148,6 +197,11 @@ func (ctx *deltaWrContext) Init() {
 	ctx.closed = make(chan struct{})
 }
 
+type flushNode struct {
+	itm  *Item
+	next *flushNode
+}
+
 type Writer struct {
 	dwrCtx deltaWrContext // Used for cooperative disk snapshotting
 
@@ -161,6 +215,10 @@ type Writer struct {
 	resSts                 restoreStats
 	count                  int64
 
+	flushHead *flushNode
+	flushTail *flushNode
+	flushSz   int64
+
 	*MemDB
 }
 
@@ -172,8 +230,61 @@ func (w *Writer) doCheckpoint() {
 		ctx.notifyStatus <- nil
 		ctx.err = nil
 	case dwStateTerminate:
+		w.doDeltaFlush(true)
 		ctx.state = dwStateInactive
 		ctx.notifyStatus <- ctx.err
+	}
+}
+
+func (w *Writer) addFlushNode(itm *Item) {
+
+	itm = w.MemDB.CopyItem(itm)
+	n := &flushNode{
+		itm: itm,
+	}
+
+	if w.flushTail != nil {
+		w.flushTail.next = n
+	}
+	w.flushTail = n
+
+	if w.flushHead == nil {
+		w.flushHead = n
+	}
+
+	w.flushSz += int64(itm.dataLen) + 4
+}
+
+func (w *Writer) doDeltaFlush(force bool) {
+	ctx := &w.dwrCtx
+	if w.flushHead != nil && (force || gWriteBarrier.get()) {
+
+		defer func() {
+			if !force {
+				gWriteBarrier.release()
+			}
+
+			w.flushSz = 0
+			w.flushHead = nil
+			w.flushTail = nil
+		}()
+
+		if err := ctx.fw.Open(); err != nil {
+			ctx.err = err
+			return
+		}
+
+		for ptr := w.flushHead; ptr != nil; ptr = ptr.next {
+			if err := ctx.fw.WriteItem(ptr.itm); err != nil {
+				ctx.err = err
+			}
+			w.MemDB.freeItem(ptr.itm)
+			ptr.itm = nil
+		}
+
+		if err := ctx.fw.FlushAndClose(); err != nil {
+			ctx.err = err
+		}
 	}
 }
 
@@ -181,9 +292,10 @@ func (w *Writer) doDeltaWrite(itm *Item) {
 	ctx := &w.dwrCtx
 	if ctx.state == dwStateActive {
 		if itm.bornSn <= ctx.sn && itm.deadSn > ctx.sn {
-			if err := ctx.fw.WriteItem(itm); err != nil {
-				ctx.err = err
+			if w.flushSz+int64(itm.dataLen)+4 >= deltaFlushThreshold {
+				w.doDeltaFlush(false)
 			}
+			w.addFlushNode(itm)
 		}
 	}
 }
@@ -282,6 +394,8 @@ type Config struct {
 	freeFun       skiplist.FreeFn
 
 	exposeItemCopy bool
+
+	ioConcurrency float64
 }
 
 func (cfg *Config) SetKeyComparator(cmp KeyCompare) {
@@ -289,6 +403,10 @@ func (cfg *Config) SetKeyComparator(cmp KeyCompare) {
 	cfg.insCmp = newInsertCompare(cmp)
 	cfg.iterCmp = newIterCompare(cmp)
 	cfg.existCmp = newExistCompare(cmp)
+}
+
+func (cfg *Config) SetIOConcurrency(c float64) {
+	cfg.ioConcurrency = c
 }
 
 func (cfg *Config) SetFileType(t FileType) error {
@@ -348,6 +466,12 @@ type MemDB struct {
 	shutdownWg1 sync.WaitGroup // GC workers and StoreToDisk task
 	shutdownWg2 sync.WaitGroup // Free workers
 
+	deltaWriters []FileWriter
+	deltaFiles   []string
+	persistSnap  Snapshot
+
+	initializer sync.Once
+
 	Config
 	restoreStats
 }
@@ -361,6 +485,8 @@ func NewWithConfig(cfg Config) *MemDB {
 		gcchan:      make(chan *skiplist.Node, gcchanBufSize),
 		id:          int(atomic.AddInt64(&dbInstancesCount, 1)),
 	}
+
+	m.initWriteBarrier(cfg.ioConcurrency)
 
 	m.freechan = make(chan *skiplist.Node, gcchanBufSize)
 	m.store = skiplist.NewWithConfig(m.newStoreConfig())
@@ -881,6 +1007,39 @@ func (m *MemDB) changeDeltaWrState(state int,
 	return err
 }
 
+func (m *MemDB) PreparePersistence(dir string, snap *Snapshot) (err error) {
+
+	// Initialize and setup delta processing
+	if m.useDeltaFiles {
+		m.deltaWriters = make([]FileWriter, m.numWriters())
+		m.deltaFiles = make([]string, m.numWriters())
+
+		deltadir := filepath.Join(dir, "delta")
+		os.MkdirAll(deltadir, 0755)
+		for id := 0; id < m.numWriters(); id++ {
+			file := fmt.Sprintf("shard-%d", id)
+			deltafile := filepath.Join(deltadir, file)
+			dw := m.newFileWriter(m.fileType, deltafile)
+			m.deltaWriters[id] = dw
+			m.deltaFiles[id] = file
+		}
+
+		if err = m.changeDeltaWrState(dwStateInit, m.deltaWriters, snap); err != nil {
+			return err
+		}
+
+		// Create a placeholder snapshot object. We are decoupled from holding snapshot items
+		// The fakeSnap object is to use the same iterator without any special handling for
+		// usual refcount based freeing.
+
+		snap.Close()
+		m.persistSnap = *snap
+		m.persistSnap.refCount = 1
+	}
+
+	return nil
+}
+
 func (m *MemDB) StoreToDisk(dir string, snap *Snapshot, concurr int, itmCallback ItemCallback) (err error) {
 
 	var snapClosed bool
@@ -920,10 +1079,10 @@ func (m *MemDB) StoreToDisk(dir string, snap *Snapshot, concurr int, itmCallback
 	}()
 
 	for shard := 0; shard < shards; shard++ {
-		w := m.newFileWriter(m.fileType)
 		file := fmt.Sprintf("shard-%d", shard)
 		datafile := filepath.Join(datadir, file)
-		if err := w.Open(datafile); err != nil {
+		w := m.newFileWriter(m.fileType, datafile)
+		if err := w.Open(); err != nil {
 			return err
 		}
 
@@ -933,50 +1092,27 @@ func (m *MemDB) StoreToDisk(dir string, snap *Snapshot, concurr int, itmCallback
 
 	// Initialize and setup delta processing
 	if m.useDeltaFiles {
-		deltaWriters := make([]FileWriter, m.numWriters())
-		deltaFiles := make([]string, m.numWriters())
-		deltaChecksums := make([]uint32, m.numWriters())
 		defer func() {
-			for _, w := range deltaWriters {
+			for _, w := range m.deltaWriters {
 				if w != nil {
 					w.Close()
 				}
 			}
+			m.deltaFiles = nil
+			m.deltaWriters = nil
 		}()
 
-		deltadir := filepath.Join(dir, "delta")
-		os.MkdirAll(deltadir, 0755)
-		for id := 0; id < m.numWriters(); id++ {
-			dw := m.newFileWriter(m.fileType)
-			file := fmt.Sprintf("shard-%d", id)
-			deltafile := filepath.Join(deltadir, file)
-			if err = dw.Open(deltafile); err != nil {
-				return err
-			}
-			deltaWriters[id] = dw
-			deltaFiles[id] = file
-		}
-
-		if err = m.changeDeltaWrState(dwStateInit, deltaWriters, snap); err != nil {
-			return err
-		}
-
-		// Create a placeholder snapshot object. We are decoupled from holding snapshot items
-		// The fakeSnap object is to use the same iterator without any special handling for
-		// usual refcount based freeing.
-
-		snap.Close()
 		snapClosed = true
-		fakeSnap := *snap
-		fakeSnap.refCount = 1
-		snap = &fakeSnap
+		snap = &m.persistSnap
 
 		defer func() {
 			if err = m.changeDeltaWrState(dwStateTerminate, nil, nil); err == nil {
-				bs, _ := json.Marshal(deltaFiles)
+				deltadir := filepath.Join(dir, "delta")
+				deltaChecksums := make([]uint32, m.numWriters())
+				bs, _ := json.Marshal(m.deltaFiles)
 				err = ioutil.WriteFile(filepath.Join(deltadir, "files.json"), bs, 0660)
 				if err == nil {
-					for id, dwr := range deltaWriters {
+					for id, dwr := range m.deltaWriters {
 						deltaChecksums[id] = dwr.Checksum()
 					}
 					bs, _ = json.Marshal(deltaChecksums)

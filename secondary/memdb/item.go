@@ -104,6 +104,13 @@ func (itm *Item) BytesCopy() []byte {
 	return bs
 }
 
+func (m *MemDB) CopyItem(src *Item) *Item {
+	dst := m.newItem(src.Bytes(), m.useMemoryMgmt)
+	dst.bornSn = src.bornSn
+	dst.deadSn = src.deadSn
+	return dst
+}
+
 // Return pointer to bytes
 func (itm *Item) Bytes() (bs []byte) {
 	l := itm.dataLen

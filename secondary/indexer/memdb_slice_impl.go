@@ -319,6 +319,7 @@ func (slice *memdbSlice) initStores() {
 	}
 
 	cfg.SetExposeItemCopy(slice.exposeItemCopy)
+	cfg.SetIOConcurrency(slice.sysconf["moi.persistence.io_concurrency"].Float64())
 
 	cfg.SetKeyComparator(byteItemCompare)
 	slice.mainstore = memdb.NewWithConfig(cfg)
@@ -963,25 +964,18 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot) {
 
 		mdb.confLock.RUnlock()
 
+		// Prepare for persistence.
+		mdb.mainstore.PreparePersistence(tmpdir, s.info.MainSnap)
+
 		// StoreToDisk call below will spawn 'concurrency' go routines to write
 		// and will wait for this group to complete.
 		// To ensure that CPU isn't overwhelmed, we limit how many such groups
 		// can run in parallel.
-		// To avoid holding a snapshot we must limit the caller via the item callback,
-		// But as this callback is invoked per item, per writer,
-		// it is enough to throttle just one writer go routine of each batch.
-		var throttleToken int64
-		limitWriterThreads := func(itm *memdb.ItemEntry) {
-			if atomic.CompareAndSwapInt64(&throttleToken, 0, 1) {
-				moiWriterSemaphoreCh <- true
-			}
-		}
+		moiWriterSemaphoreCh <- true
 		defer func() {
-			if throttleToken == 1 { // Only post if callback above ran
-				<-moiWriterSemaphoreCh
-			}
+			<-moiWriterSemaphoreCh
 		}()
-		err := mdb.mainstore.StoreToDisk(tmpdir, s.info.MainSnap, concurrency, limitWriterThreads)
+		err := mdb.mainstore.StoreToDisk(tmpdir, s.info.MainSnap, concurrency, nil)
 		if err == nil {
 			var fd *os.File
 			var bs []byte
@@ -1653,6 +1647,7 @@ func (mdb *memdbSlice) UpdateConfig(cfg common.Config) {
 
 	mdb.exposeItemCopy = cfg["moi.exposeItemCopy"].Bool()
 	mdb.mainstore.SetExposeItemCopy(mdb.exposeItemCopy)
+	mdb.mainstore.SetIOConcurrency(cfg["moi.persistence.io_concurrency"].Float64())
 
 	if keySizeConfigUpdated(cfg, oldCfg) {
 		for i := 0; i < len(mdb.keySzConfChanged); i++ {
