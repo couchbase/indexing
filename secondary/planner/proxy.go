@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"reflect"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -62,6 +63,13 @@ type LocalIndexMetadata struct {
 	LocalSettings    map[string]string  `json:"localSettings,omitempty"`
 	IndexTopologies  []mc.IndexTopology `json:"topologies,omitempty"`
 	IndexDefinitions []common.IndexDefn `json:"definitions,omitempty"`
+}
+
+// tokenKey holds match fields from tokens in a type that can
+// be used as a map key.
+type tokenKey struct {
+	DefnId common.IndexDefnId
+	InstId common.IndexInstId
 }
 
 ///////////////////////////////////////////////////////
@@ -113,11 +121,11 @@ func RetrievePlanFromCluster(clusterUrl string, hosts []string) (*Plan, error) {
 
 	replicaMap := generateReplicaMap(indexers)
 
-	if err := processDeleteToken(indexers, config); err != nil {
+	if err := processDeleteToken(indexers); err != nil {
 		return nil, err
 	}
 
-	if err := processDropInstanceToken(indexers, config, replicaMap); err != nil {
+	if err := processDropInstanceToken(indexers, replicaMap); err != nil {
 		return nil, err
 	}
 
@@ -413,7 +421,6 @@ func getIndexStats(plan *Plan, config common.Config) error {
 	cinfo := cinfoClient.GetClusterInfoCache()
 	cinfo.RLock()
 	defer cinfo.RUnlock()
-
 	clusterVersion := cinfo.GetClusterVersion()
 
 	// find all nodes that has a index http service
@@ -881,22 +888,6 @@ func findTopologyByCollection(topologies []mc.IndexTopology, bucket, scope, coll
 }
 
 //
-// This function finds the index instance id from bucket topology.
-//
-func findIndexInstId(topology *mc.IndexTopology, defnId common.IndexDefnId) (common.IndexInstId, error) {
-
-	for _, defnRef := range topology.Definitions {
-		if defnRef.DefnId == uint64(defnId) {
-			for _, inst := range defnRef.Instances {
-				return common.IndexInstId(inst.InstId), nil
-			}
-		}
-	}
-
-	return common.IndexInstId(0), errors.New(fmt.Sprintf("Cannot find index instance id for defnition %v", defnId))
-}
-
-//
 // This function creates an indexer node for plan
 //
 func createIndexerNode(cinfo *common.ClusterInfoCache, nid common.NodeId) (*IndexerNode, error) {
@@ -936,62 +927,17 @@ func getIndexerHost(cinfo *common.ClusterInfoCache, nid common.NodeId) (string, 
 }
 
 //
-// This function gets the metadata for a specific indexer host.
-//
-func getLocalMetadata(addr string) (*LocalIndexMetadata, error) {
-
-	resp, err := getWithCbauth(addr + "/getLocalIndexMetadata")
-	if err != nil {
-		logging.Errorf("Planner.getLocalIndexMetadata(): Unable to get local index metadata from node: %v, err: %v", addr, err)
-		return nil, err
-	}
-
-	localMeta := new(LocalIndexMetadata)
-	if err := convertResponse(resp, localMeta); err != nil {
-		logging.Errorf("Planner.getLocalIndexMetadata(): Unable to convertResponse from node: %v, err: %v", addr, err)
-		return nil, err
-	}
-
-	return localMeta, nil
-}
-
-//
 // This function gets the marshalled metadata for a specific indexer host.
 //
 func getLocalMetadataResp(addr string) (*http.Response, error) {
 
 	resp, err := getWithCbauth(addr + "/getLocalIndexMetadata")
 	if err != nil {
-		logging.Errorf("Planner.getLocalMetadataResp(): Unable to get local index metadata from node: %v, err: %v", addr, err)
+		logging.Errorf("Planner::getLocalMetadataResp: Failed to get local index metadata from node: %v, err: %v", addr, err)
 		return nil, err
 	}
 
 	return resp, nil
-}
-
-//
-// This function gets the indexer stats for a specific indexer host.
-//
-func getLocalStats(addr string) (*common.Statistics, error) {
-
-	resp, err := getWithCbauth(addr + "/stats?async=false&partition=true&consumerFilter=planner")
-	if err != nil {
-		logging.Warnf("Planner.getLocalStats(): Unable to get the most recent stats from node: %v, err: %v"+
-			" Try fetch cached stats.", addr, err)
-		resp, err = getWithCbauth(addr + "/stats?async=true&partition=true&consumerFilter=planner")
-		if err != nil {
-			logging.Errorf("Planner.getLocalStats(): Unable to get stats from node: %v, err: %v", addr, err)
-			return nil, err
-		}
-	}
-
-	stats := new(common.Statistics)
-	if err := convertResponse(resp, stats); err != nil {
-		logging.Errorf("Planner.getLocalStats(): Error while converting response from node: %v, err: %v", addr, err)
-		return nil, err
-	}
-
-	return stats, nil
 }
 
 //
@@ -1001,11 +947,11 @@ func getLocalStatsResp(addr string) (*http.Response, error) {
 
 	resp, err := getWithCbauth(addr + "/stats?async=false&partition=true&consumerFilter=planner")
 	if err != nil {
-		logging.Warnf("Planner.getLocalStats(): Unable to get the most recent stats from node: %v, err: %v"+
+		logging.Warnf("Planner::getLocalStatsResp: Failed to get the most recent stats from node: %v, err: %v"+
 			" Try fetch cached stats.", addr, err)
 		resp, err = getWithCbauth(addr + "/stats?async=true&partition=true&consumerFilter=planner")
 		if err != nil {
-			logging.Errorf("Planner.getLocalStats(): Unable to get stats from node: %v, err: %v", addr, err)
+			logging.Errorf("Planner::getLocalStatsResp: Failed to get stats from node: %v, err: %v", addr, err)
 			return nil, err
 		}
 	}
@@ -1014,33 +960,14 @@ func getLocalStatsResp(addr string) (*http.Response, error) {
 }
 
 //
-// This function gets the create tokens for a specific indexer host.
-//
-func getLocalCreateTokens(addr string) (*mc.CreateCommandTokenList, error) {
-
-	resp, err := getWithCbauth(addr + "/listCreateTokens")
-	if err != nil {
-		logging.Errorf("Planner.getLocalCreateTokens(): Unable to get create tokens from node: %v, err: %v", addr, err)
-		return nil, err
-	}
-
-	tokens := new(mc.CreateCommandTokenList)
-	if err := convertResponse(resp, tokens); err != nil {
-		logging.Errorf("Planner.getLocalCreateTokens(): Error while converting response from node: %v, err: %v", addr, err)
-		return nil, err
-	}
-
-	return tokens, nil
-}
-
-//
-// This function gets the marshalled list of create tokens for a specific indexer host.
+// This function gets the marshalled list of create tokens in metakv
+// on a specific indexer host.
 //
 func getLocalCreateTokensResp(addr string) (*http.Response, error) {
 
 	resp, err := getWithCbauth(addr + "/listCreateTokens")
 	if err != nil {
-		logging.Errorf("Planner.getLocalCreateTokensResp(): Unable to get create tokens from node: %v, err: %v", addr, err)
+		logging.Errorf("Planner::getLocalCreateTokensResp: Failed to get create tokens from node: %v, err: %v", addr, err)
 		return nil, err
 	}
 
@@ -1048,33 +975,14 @@ func getLocalCreateTokensResp(addr string) (*http.Response, error) {
 }
 
 //
-// This function gets the delete tokens for a specific indexer host.
-//
-func getLocalDeleteTokens(addr string) (*mc.DeleteCommandTokenList, error) {
-
-	resp, err := getWithCbauth(addr + "/listDeleteTokens")
-	if err != nil {
-		logging.Errorf("Planner.getLocalDeleteTokens(): Unable to get delete tokens from node: %v, err: %v", addr, err)
-		return nil, err
-	}
-
-	tokens := new(mc.DeleteCommandTokenList)
-	if err := convertResponse(resp, tokens); err != nil {
-		logging.Errorf("Planner.getLocalDeleteTokens(): Error while converting response from node: %v, err: %v", addr, err)
-		return nil, err
-	}
-
-	return tokens, nil
-}
-
-//
-// This function gets the marshalled list of delete tokens for a specific indexer host.
+// getLocalDeleteTokensResp gets the marshalled list of delete tokens from metakv
+// on a specific indexer host. Used only in pre-7.0 clusters.
 //
 func getLocalDeleteTokensResp(addr string) (*http.Response, error) {
 
 	resp, err := getWithCbauth(addr + "/listDeleteTokens")
 	if err != nil {
-		logging.Errorf("Planner.getLocalDeleteTokensResp(): Unable to get delete tokens from node: %v, err: %v", addr, err)
+		logging.Errorf("Planner::getLocalDeleteTokensResp: Failed to get delete tokens from node: %v, err: %v", addr, err)
 		return nil, err
 	}
 
@@ -1082,57 +990,36 @@ func getLocalDeleteTokensResp(addr string) (*http.Response, error) {
 }
 
 //
-// This function gets the drop instance tokens for a specific indexer host.
+// getLocalDeleteTokenPathsResp gets the marshalled list of delete token paths
+// from metakv on a specific indexer host. All the needed info is in the paths,
+// so we do not need to retrieve the tokens, which is much more expensive.
 //
-func getLocalDropInstanceTokens(addr string) (*mc.DropInstanceCommandTokenList, error) {
+func getLocalDeleteTokenPathsResp(addr string) (*http.Response, error) {
 
-	resp, err := getWithCbauth(addr + "/listDropInstanceTokens")
+	resp, err := getWithCbauth(addr + "/listDeleteTokenPaths")
 	if err != nil {
-		logging.Errorf("Planner.getLocalDropInstanceTokens(): Unable to get drop instance tokens from node: %v, err: %v", addr, err)
+		logging.Errorf(
+			"Planner::getLocalDeleteTokenPathsResp: Failed to get delete token paths from node: %v, err: %v",
+			addr, err)
 		return nil, err
 	}
 
-	tokens := new(mc.DropInstanceCommandTokenList)
-	if err := convertResponse(resp, tokens); err != nil {
-		logging.Errorf("Planner.getLocalDropInstanceTokens(): Error while converting response from node: %v, err: %v", addr, err)
-		return nil, err
-	}
-
-	return tokens, nil
+	return resp, nil
 }
 
 //
-// This function gets the marshalled list of drop instance tokens for a specific indexer host.
+// This function gets the marshalled list of drop instance tokens in metakv
+// on a specific indexer host.
 //
 func getLocalDropInstanceTokensResp(addr string) (*http.Response, error) {
 
 	resp, err := getWithCbauth(addr + "/listDropInstanceTokens")
 	if err != nil {
-		logging.Errorf("Planner.getLocalDropInstanceTokensResp(): Unable to get drop instance tokens from node: %v, err: %v", addr, err)
+		logging.Errorf("Planner::getLocalDropInstanceTokensResp: Failed to get drop instance tokens from node: %v, err: %v", addr, err)
 		return nil, err
 	}
 
 	return resp, nil
-}
-
-//
-// This function gets the indexer settings for a specific indexer host.
-//
-func getLocalSettings(addr string) (map[string]interface{}, error) {
-
-	resp, err := getWithCbauth(addr + "/settings")
-	if err != nil {
-		logging.Errorf("Planner.getLocalSettings(): Unable to get settings from node: %v, err: %v", addr, err)
-		return nil, err
-	}
-
-	settings := make(map[string]interface{})
-	if err := convertResponse(resp, &settings); err != nil {
-		logging.Errorf("Planner.getLocalSettings(): Error while converting response from node: %v, err: %v", addr, err)
-		return nil, err
-	}
-
-	return settings, nil
 }
 
 //
@@ -1142,31 +1029,11 @@ func getLocalSettingsResp(addr string) (*http.Response, error) {
 
 	resp, err := getWithCbauth(addr + "/settings")
 	if err != nil {
-		logging.Errorf("Planner.getLocalSettingsResp(): Unable to get settings from node: %v, err: %v", addr, err)
+		logging.Errorf("Planner::getLocalSettingsResp: Failed to get settings from node: %v, err: %v", addr, err)
 		return nil, err
 	}
 
 	return resp, nil
-}
-
-//
-// This function gets the num replica for a specific indexer host.
-//
-func getLocalNumReplicas(addr string) (map[common.IndexDefnId]common.Counter, error) {
-
-	resp, err := getWithCbauth(addr + "/listReplicaCount")
-	if err != nil {
-		logging.Errorf("Planner.getLocalNumReplicas(): Unable to get num replicas from node: %v, err: %v", addr, err)
-		return nil, err
-	}
-
-	numReplicas := make(map[common.IndexDefnId]common.Counter)
-	if err := convertResponse(resp, &numReplicas); err != nil {
-		logging.Errorf("Planner.getLocalNumReplicas(): Error while converting response from node: %v, err: %v", addr, err)
-		return nil, err
-	}
-
-	return numReplicas, nil
 }
 
 //
@@ -1176,7 +1043,7 @@ func getLocalNumReplicasResp(addr string) (*http.Response, error) {
 
 	resp, err := getWithCbauth(addr + "/listReplicaCount")
 	if err != nil {
-		logging.Errorf("Planner.getLocalNumReplicasResp(): Unable to get num replicas from node: %v, err: %v", addr, err)
+		logging.Errorf("Planner::getLocalNumReplicasResp: Failed to get num replicas from node: %v, err: %v", addr, err)
 		return nil, err
 	}
 
@@ -1193,28 +1060,6 @@ func getWithCbauth(url string) (*http.Response, error) {
 	}
 
 	return response, err
-}
-
-//
-// This function gets a pointer to clusterInfoCache.
-//
-func clusterInfoCache(clusterUrl string) (*common.ClusterInfoCache, error) {
-
-	url, err := common.ClusterAuthUrl(clusterUrl)
-	if err != nil {
-		return nil, err
-	}
-
-	cinfo, err := common.NewClusterInfoCache(url, "default")
-	if err != nil {
-		return nil, err
-	}
-
-	if err := cinfo.Fetch(); err != nil {
-		return nil, err
-	}
-
-	return cinfo, nil
 }
 
 //
@@ -1357,9 +1202,7 @@ func processCreateToken(indexers []*IndexerNode, config common.Config) error {
 	// 1) the planner will not consider those pending-create index for planning
 	// 2) the planner will not move those pending-create index from the out-node.
 	resp, err := restHelperNoLock(getLocalCreateTokensResp, nil, indexers, cinfo)
-
 	defer closeRespMap(resp)
-
 	if err != nil {
 		return err
 	}
@@ -1435,9 +1278,16 @@ func processCreateToken(indexers []*IndexerNode, config common.Config) error {
 			return false
 		}
 
-		for _, token := range tokens.Tokens {
+		logging.Infof("Planner::processCreateToken: processing %v tokens for node %v",
+			len(tokens.Tokens), nodeId)
 
-			logging.Verbosef("Planner: Processing create token for index %v from node: %v", token.DefnId, nodeId)
+		verbose := logging.IsEnabled(logging.Verbose)
+		for _, token := range tokens.Tokens {
+			if verbose {
+				logging.Verbosef(
+					"Planner::processCreateToken: Processing create token for index %v from node: %v",
+					token.DefnId, nodeId)
+			}
 
 			for indexerId, definitions := range token.Definitions {
 				for _, defn := range definitions {
@@ -1446,7 +1296,7 @@ func processCreateToken(indexers []*IndexerNode, config common.Config) error {
 					for _, partition := range defn.Partitions {
 						if !findPartition(defn.InstId, partition) {
 							if addIndex(indexerId, makeIndexUsage(&defn, partition)) {
-								logging.Infof("Planner: Add index (%v, %v, %v) from create token.", defn.DefnId, defn.InstId, partition)
+								logging.Infof("Planner::processCreateToken: Add index (%v, %v, %v)", defn.DefnId, defn.InstId, partition)
 							}
 						}
 					}
@@ -1458,10 +1308,21 @@ func processCreateToken(indexers []*IndexerNode, config common.Config) error {
 	return nil
 }
 
+// getDefnIdFromDeleteTokenPath extracts the IndexDefnId from the
+// metakv path (key) of a delete token.
+func getDefnIdFromDeleteTokenPath(path string) (common.IndexDefnId, error) {
+	pieces := strings.Split(path, "/") // even empty string will return one piece
+	defnId, err := strconv.ParseUint(pieces[len(pieces) - 1], 10, 64)
+	if err != nil {
+		return 0, err
+	}
+	return common.IndexDefnId(defnId), nil
+}
+
 //
 // There may be delete token that has yet to process.  Update the indexer layout based on token information.
 //
-func processDeleteToken(indexers []*IndexerNode, config common.Config) error {
+func processDeleteToken(indexers []*IndexerNode) error {
 
 	cinfo := cinfoClient.GetClusterInfoCache()
 	cinfo.RLock()
@@ -1478,10 +1339,14 @@ func processDeleteToken(indexers []*IndexerNode, config common.Config) error {
 	// If there is no node that can provide the token,
 	// 1) the planner will not consider those pending-delete index for planning
 	// 2) the planner could end up repairing replica for those definitions
-	resp, err := restHelperNoLock(getLocalDeleteTokensResp, nil, indexers, cinfo)
-
+	var getterFunc func(addr string) (*http.Response, error)  // fn to retrieve token paths or tokens
+	if clusterVersion >= common.INDEXER_70_VERSION {
+		getterFunc = getLocalDeleteTokenPathsResp
+	} else {
+		getterFunc = getLocalDeleteTokensResp
+	}
+	resp, err := restHelperNoLock(getterFunc, nil, indexers, cinfo)
 	defer closeRespMap(resp)
-
 	if err != nil {
 		return err
 	}
@@ -1496,42 +1361,97 @@ func processDeleteToken(indexers []*IndexerNode, config common.Config) error {
 			return err
 		}
 
-		tokens := new(mc.DeleteCommandTokenList)
-		if err := convertResponse(res, tokens); err != nil {
-			logging.Errorf("Planner::processDeleteToken: Error when converting response from node: %v, err: %v", nodeId, err)
+		// Create lookup map of deleted DefnIds from token paths or tokens
+		tokenMap, err := getDeletedDefnIds(res, clusterVersion, nodeId)
+		if err != nil {
 			return err
 		}
 
 		// nothing to do
-		if len(tokens.Tokens) == 0 {
+		if len(tokenMap) == 0 {
 			logging.Infof("Planner::processDeleteToken: There is no delete token to process for node: %v", nodeId)
 			continue
 		}
 
-		for _, token := range tokens.Tokens {
-			logging.Verbosef("Planner: Processing delete token for index %v from node %v", token.DefnId, nodeId)
-			for _, indexer := range indexers {
-				indexes := make([]*IndexUsage, 0, len(indexer.Indexes))
-				for _, index := range indexer.Indexes {
-					if index.DefnId != token.DefnId {
-						indexes = append(indexes, index)
-					} else {
-						logging.Infof("Planner: Remove index (%v, %v, %v, %v) due to delete token.",
-							index.GetDisplayName(), index.Bucket, index.Scope, index.Collection)
-					}
+		logging.Infof("Planner::processDeleteToken: processing %v tokens for node %v",
+			len(tokenMap), nodeId)
+
+		// Remove any deleted indexes from indexer.Indexes
+		for _, indexer := range indexers {
+			indexes := make([]*IndexUsage, 0, len(indexer.Indexes))
+			for _, index := range indexer.Indexes {
+				_, exists := tokenMap[index.DefnId]
+				if !exists {
+					indexes = append(indexes, index)
+				} else { // token matches index
+					logging.Infof(
+						"Planner::processDeleteToken: Remove index (%v, %v, %v, %v)",
+						index.GetDisplayName(), index.Bucket, index.Scope, index.Collection)
 				}
-				indexer.Indexes = indexes
 			}
+			indexer.Indexes = indexes
 		}
 	}
 
 	return nil
 }
 
+// getDeletedDefnIds is a helper for processDeleteToken that returns a map whose
+// keys are the DefnIds of indexes deleted by the delete tokens. In a pre-7.0
+// cluster it has to retrieve full tokens to fill this, but starting in 7.0 it
+// retrieves only token paths, as these have the DefnId as the last field.
+func getDeletedDefnIds(res *http.Response, clusterVersion uint64, nodeId string) (
+	map[common.IndexDefnId]bool, error) {
+
+	var tokenPaths *mc.TokenPathList // delete token paths in 7.0 and up
+	var tokens *mc.DeleteCommandTokenList // delete tokens in pre-7.0
+	var err error
+
+	tokenMap := make(map[common.IndexDefnId]bool) // return value
+
+	// Extract token paths or full tokens from HTTP response
+	if clusterVersion >= common.INDEXER_70_VERSION {
+		tokenPaths = new(mc.TokenPathList)
+		err = convertResponse(res, tokenPaths)
+	} else {
+		tokens = new(mc.DeleteCommandTokenList)
+		err = convertResponse(res, tokens)
+	}
+	if err != nil {
+		logging.Errorf("Planner::getDeletedDefnIds: Error when converting response from node: %v, err: %v", nodeId, err)
+		return nil, err
+	}
+
+	// Extract defnIds and put into lookup map
+	verbose := logging.IsEnabled(logging.Verbose)
+	if clusterVersion >= common.INDEXER_70_VERSION {
+		for _, path := range tokenPaths.Paths {
+			defnId, err := getDefnIdFromDeleteTokenPath(path)
+			if err != nil {
+				logging.Errorf("Planner::getDeletedDefnIds: Error extracting DefnId from path %v from node %v", path, nodeId)
+				return nil, err
+			}
+			tokenMap[defnId] = true
+			if verbose {
+				logging.Verbosef("Planner::getDeletedDefnIds: Received delete token for index %v from node %v", defnId, nodeId)
+			}
+		}
+	} else { // pre-7.0 cluster
+		for _, token := range tokens.Tokens {
+			tokenMap[token.DefnId] = true
+			if verbose {
+				logging.Verbosef("Planner::getDeletedDefnIds: Received delete token for index %v from node %v", token.DefnId, nodeId)
+			}
+		}
+	}
+
+	return tokenMap, nil
+}
+
 //
 // There may be drop instance token that has yet to process.  Update the indexer layout based on token information.
 //
-func processDropInstanceToken(indexers []*IndexerNode, config common.Config,
+func processDropInstanceToken(indexers []*IndexerNode,
 	replicaIdMap map[common.IndexDefnId]map[int]bool) error {
 
 	cinfo := cinfoClient.GetClusterInfoCache()
@@ -1551,9 +1471,7 @@ func processDropInstanceToken(indexers []*IndexerNode, config common.Config,
 	// 2) the planner could end up repairing replica for those definitions
 	// 3) when handling drop replica, it may not drop an already deleted replica
 	resp, err := restHelperNoLock(getLocalDropInstanceTokensResp, nil, indexers, cinfo)
-
 	defer closeRespMap(resp)
-
 	if err != nil {
 		return err
 	}
@@ -1580,27 +1498,35 @@ func processDropInstanceToken(indexers []*IndexerNode, config common.Config,
 			continue
 		}
 
-		for _, token := range tokens.Tokens {
-			logging.Verbosef("Planner: Processing drop instance token for index %v (replicaId %v inst %v) from node %v",
-				token.DefnId, token.ReplicaId, token.InstId, nodeId)
-			found := false
-			for _, indexer := range indexers {
-				indexes := make([]*IndexUsage, 0, len(indexer.Indexes))
-				for _, index := range indexer.Indexes {
-					if index.DefnId != token.DefnId || index.InstId != token.InstId {
-						indexes = append(indexes, index)
-					} else {
-						found = true
-						logging.Infof("Planner: Remove index (%v, %v, %v, %v) due to drop instance token.",
-							index.GetDisplayName(), index.Bucket, index.Scope, index.Collection)
-					}
-				}
-				indexer.Indexes = indexes
-			}
+		logging.Infof("Planner::processDropInstanceToken: processing %v tokens for node %v",
+			len(tokens.Tokens), nodeId)
 
-			if found {
-				replicaIdMap[token.DefnId][token.ReplicaId] = true
+		// Create lookup map of the token keys, cashing ReplicaId in the value
+		tokenMap := make(map[tokenKey]int, len(tokens.Tokens))
+		verbose := logging.IsEnabled(logging.Verbose)
+		for _, token := range tokens.Tokens {
+			tokenMap[tokenKey{token.DefnId, token.InstId}] = token.ReplicaId
+			if verbose {
+				logging.Verbosef("Planner::processDropInstanceToken: Received drop instance token for index %v (replicaId %v inst %v) from node %v",
+					token.DefnId, token.ReplicaId, token.InstId, nodeId)
 			}
+		}
+
+		// Remove any dropped instances from indexer.Indexes and update replicaIdMap
+		for _, indexer := range indexers {
+			indexes := make([]*IndexUsage, 0, len(indexer.Indexes))
+			for _, index := range indexer.Indexes {
+				replicaId, exists := tokenMap[tokenKey{index.DefnId, index.InstId}]
+				if !exists {
+					indexes = append(indexes, index)
+				} else { // token matches index
+					replicaIdMap[index.DefnId][replicaId] = true
+					logging.Infof(
+						"Planner::processDropInstanceToken: Remove index (%v, %v, %v, %v)",
+						index.GetDisplayName(), index.Bucket, index.Scope, index.Collection)
+				}
+			}
+			indexer.Indexes = indexes
 		}
 	}
 

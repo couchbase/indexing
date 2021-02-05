@@ -141,6 +141,12 @@ type StopScheduleCreateTokenList struct {
 	Tokens []StopScheduleCreateToken
 }
 
+// TokenPathList holds a slice of string token keys as stored
+// in metakv. It is used for JSON un/marshalling.
+type TokenPathList struct {
+	Paths []string
+}
+
 type CommandListener struct {
 	doCreate        bool
 	hasNewCreate    bool
@@ -442,11 +448,11 @@ func DeleteCommandTokenExist(defnId c.IndexDefnId) (bool, error) {
 }
 
 //
-// Return the list of delete token
+// ListDeleteCommandToken returns all delete tokens for this indexer host.
 //
 func ListDeleteCommandToken() ([]*DeleteCommandToken, error) {
 
-	paths, err := c.MetakvList(DeleteDDLCommandTokenPath)
+	paths, err := ListDeleteCommandTokenPaths()
 	if err != nil {
 		return nil, err
 	}
@@ -469,6 +475,14 @@ func ListDeleteCommandToken() ([]*DeleteCommandToken, error) {
 	}
 
 	return result, nil
+}
+
+//
+// ListDeleteCommandTokenPaths returns the metakv paths (keys)
+// of all delete tokens for this indexer host.
+//
+func ListDeleteCommandTokenPaths() ([]string, error) {
+	return c.MetakvList(DeleteDDLCommandTokenPath)
 }
 
 //
@@ -505,6 +519,28 @@ func UnmarshallDeleteCommandTokenList(data []byte) (*DeleteCommandTokenList, err
 }
 
 func MarshallDeleteCommandTokenList(r *DeleteCommandTokenList) ([]byte, error) {
+
+	buf, err := json.Marshal(&r)
+	if err != nil {
+		return nil, err
+	}
+
+	return buf, nil
+}
+
+// UnmarshallTokenPathList unmarshalls a generic list of token paths.
+func UnmarshallTokenPathList(data []byte) (*TokenPathList, error) {
+
+	r := new(TokenPathList)
+	if err := json.Unmarshal(data, r); err != nil {
+		return nil, err
+	}
+
+	return r, nil
+}
+
+// MarshallTokenPathList marshalls a generic list of token paths.
+func MarshallTokenPathList(r *TokenPathList) ([]byte, error) {
 
 	buf, err := json.Marshal(&r)
 	if err != nil {
@@ -686,9 +722,11 @@ func ListAndFetchDropInstanceCommandToken(defnId c.IndexDefnId) ([]*DropInstance
 	return result, nil
 }
 
+// ListAndFetchAllDropInstanceCommandToken returns all drop instance
+// tokens for this indexer host.
 func ListAndFetchAllDropInstanceCommandToken() ([]*DropInstanceCommandToken, error) {
 
-	paths, err := c.MetakvBigValueList(DropInstanceDDLCommandTokenPath)
+	paths, err := ListDropInstanceCommandTokenPaths()
 	if err != nil {
 		return nil, err
 	}
@@ -711,6 +749,12 @@ func ListAndFetchAllDropInstanceCommandToken() ([]*DropInstanceCommandToken, err
 	}
 
 	return result, nil
+}
+
+// ListDropInstanceCommandTokenPaths returns the metakv paths (keys)
+// of all drop instance tokens for this indexer host.
+func ListDropInstanceCommandTokenPaths() ([]string, error) {
+	return c.MetakvBigValueList(DropInstanceDDLCommandTokenPath)
 }
 
 // FetchIndexDefnToDropInstanceCommandTokenMap will get a map of all Index Definition & CreateCommand
