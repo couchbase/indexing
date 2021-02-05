@@ -3,10 +3,14 @@
 
 package projector
 
-import qvalue "github.com/couchbase/query/value"
-import qexpr "github.com/couchbase/query/expression"
-import mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
-import c "github.com/couchbase/indexing/secondary/common"
+import (
+	qexpr "github.com/couchbase/query/expression"
+	qvalue "github.com/couchbase/query/value"
+
+	mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
+
+	c "github.com/couchbase/indexing/secondary/common"
+)
 
 // IMPORTANT: concurrent access to be expected for Engine object.
 
@@ -37,10 +41,10 @@ func (engine *Engine) Endpoints() []string {
 // StreamBeginData from this engine.
 func (engine *Engine) StreamBeginData(
 	vbno uint16, vbuuid, seqno uint64, status byte,
-	code byte, opaque2 uint64) interface{} {
+	code byte, opaque2 uint64, oso bool) interface{} {
 
 	return engine.evaluator.StreamBeginData(vbno, vbuuid, seqno,
-		GetNodeUUID(), status, code, opaque2)
+		GetNodeUUID(), status, code, opaque2, oso)
 }
 
 // SyncData from this engine.
@@ -53,9 +57,10 @@ func (engine *Engine) SyncData(
 // SnapshotData from this engine.
 func (engine *Engine) SnapshotData(
 	m *mc.DcpEvent, vbno uint16, vbuuid,
-	seqno uint64, opaque2 uint64) interface{} {
+	seqno uint64, opaque2 uint64, oso bool) interface{} {
 
-	return engine.evaluator.SnapshotData(m, vbno, vbuuid, seqno, opaque2)
+	return engine.evaluator.SnapshotData(m, vbno, vbuuid, seqno,
+		opaque2, oso)
 }
 
 // SystemEventData from this engine.
@@ -91,19 +96,19 @@ func (engine *Engine) OSOSnapshotData(
 
 // StreamEndData from this engine.
 func (engine *Engine) StreamEndData(
-	vbno uint16, vbuuid, seqno uint64, opaque2 uint64) interface{} {
+	vbno uint16, vbuuid, seqno uint64, opaque2 uint64, oso bool) interface{} {
 
-	return engine.evaluator.StreamEndData(vbno, vbuuid, seqno, opaque2)
+	return engine.evaluator.StreamEndData(vbno, vbuuid, seqno, opaque2, oso)
 }
 
 // TransformRoute data to endpoints.
 func (engine *Engine) TransformRoute(
 	vbuuid uint64, m *mc.DcpEvent, data map[string]interface{}, encodeBuf []byte,
 	docval qvalue.AnnotatedValue, context qexpr.Context,
-	numIndexes int, opaque2 uint64) ([]byte, error) {
+	numIndexes int, opaque2 uint64, oso bool) ([]byte, error) {
 
 	return engine.evaluator.TransformRoute(
-		vbuuid, m, data, encodeBuf, docval, context, numIndexes, opaque2,
+		vbuuid, m, data, encodeBuf, docval, context, numIndexes, opaque2, oso,
 	)
 }
 

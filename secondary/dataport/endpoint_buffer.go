@@ -1,23 +1,28 @@
 package dataport
 
-import "net"
-import "strconv"
-import "time"
+import (
+	"net"
+	"strconv"
+	"time"
 
-import c "github.com/couchbase/indexing/secondary/common"
-import "github.com/couchbase/indexing/secondary/logging"
-import "github.com/couchbase/indexing/secondary/transport"
-import dcpTransport "github.com/couchbase/indexing/secondary/dcp/transport"
+	c "github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/transport"
+
+	dcpTransport "github.com/couchbase/indexing/secondary/dcp/transport"
+)
 
 type endpointBuffers struct {
 	raddr       string
 	vbs         map[string]*c.VbKeyVersions // uuid -> VbKeyVersions
+	oso         map[string]bool             // uuid -> osoSnapshot
 	lastAvgSent int64
 }
 
 func newEndpointBuffers(raddr string) *endpointBuffers {
 	vbs := make(map[string]*c.VbKeyVersions)
-	b := &endpointBuffers{raddr: raddr, vbs: vbs}
+	oso := make(map[string]bool)
+	b := &endpointBuffers{raddr: raddr, vbs: vbs, oso: oso}
 	return b
 }
 
@@ -27,6 +32,7 @@ func (b *endpointBuffers) addKeyVersions(
 	vbno uint16,
 	vbuuid uint64,
 	opaque2 uint64,
+	oso bool,
 	kv *c.KeyVersions,
 	endpoint *RouterEndpoint) {
 
@@ -36,6 +42,7 @@ func (b *endpointBuffers) addKeyVersions(
 			nMuts := 16 // to avoid reallocs.
 			b.vbs[uuid] = c.NewVbKeyVersions(keyspaceId, vbno,
 				vbuuid, opaque2, nMuts)
+			b.oso[uuid] = oso
 		}
 		b.vbs[uuid].AddKeyVersions(kv)
 		// update statistics.
@@ -92,7 +99,7 @@ func (b *endpointBuffers) flushBuffers(
 	}
 
 	vbs := make([]*c.VbKeyVersions, 0, len(b.vbs))
-	for _, vb := range b.vbs {
+	for uuid, vb := range b.vbs {
 		vbs = append(vbs, vb)
 		key := getKey(vb.KeyspaceId, vb.Vbucket)
 		for _, kv := range vb.Kvs {
@@ -110,10 +117,13 @@ func (b *endpointBuffers) flushBuffers(
 				}
 			}
 
-			b.checkSeqOrder(kv, endpoint, key)
+			if !b.oso[uuid] {
+				b.checkSeqOrder(kv, endpoint, key)
+			}
 		}
 	}
 	b.vbs = make(map[string]*c.VbKeyVersions)
+	b.oso = make(map[string]bool)
 
 	if err := pkt.Send(conn, vbs); err != nil {
 		return err

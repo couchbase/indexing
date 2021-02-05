@@ -195,12 +195,12 @@ func (ie *IndexEvaluator) GetKeyspaceId() string {
 // StreamBeginData implement Evaluator{} interface.
 func (ie *IndexEvaluator) StreamBeginData(
 	vbno uint16, vbuuid, seqno uint64, nodeUUID string,
-	status byte, code byte, opaque2 uint64) (data interface{}) {
+	status byte, code byte, opaque2 uint64, oso bool) (data interface{}) {
 
 	keyspaceId := ie.GetKeyspaceId()
 	kv := c.NewKeyVersions(seqno, []byte(nodeUUID), 1, 0 /*ctime*/)
 	kv.AddStreamBegin(status, code)
-	return &c.DataportKeyVersions{keyspaceId, vbno, vbuuid, kv, opaque2}
+	return &c.DataportKeyVersions{keyspaceId, vbno, vbuuid, kv, opaque2, oso}
 }
 
 // SyncData implement Evaluator{} interface.
@@ -210,18 +210,18 @@ func (ie *IndexEvaluator) SyncData(
 	keyspaceId := ie.GetKeyspaceId()
 	kv := c.NewKeyVersions(seqno, nil, 1, 0 /*ctime*/)
 	kv.AddSync()
-	return &c.DataportKeyVersions{keyspaceId, vbno, vbuuid, kv, opaque2}
+	return &c.DataportKeyVersions{keyspaceId, vbno, vbuuid, kv, opaque2, false}
 }
 
 // SnapshotData implement Evaluator{} interface.
 func (ie *IndexEvaluator) SnapshotData(
 	m *mc.DcpEvent, vbno uint16, vbuuid, seqno uint64,
-	opaque2 uint64) (data interface{}) {
+	opaque2 uint64, oso bool) (data interface{}) {
 
 	keyspaceId := ie.GetKeyspaceId()
 	kv := c.NewKeyVersions(seqno, nil, 1, m.Ctime)
 	kv.AddSnapshot(m.SnapshotType, m.SnapstartSeq, m.SnapendSeq)
-	return &c.DataportKeyVersions{keyspaceId, vbno, vbuuid, kv, opaque2}
+	return &c.DataportKeyVersions{keyspaceId, vbno, vbuuid, kv, opaque2, oso}
 }
 
 // SystemEventData implement Evaluator{} interface.
@@ -233,7 +233,7 @@ func (ie *IndexEvaluator) SystemEventData(
 	kv := c.NewKeyVersions(seqno, nil, 1, m.Ctime)
 	cid := strconv.FormatUint(uint64(m.CollectionID), 16) //transmit as base-16 string
 	kv.AddSystemEvent(m.EventType, m.ManifestUID, m.ScopeID, []byte(cid))
-	return &c.DataportKeyVersions{keyspaceId, vbno, vbuuid, kv, opaque2}
+	return &c.DataportKeyVersions{keyspaceId, vbno, vbuuid, kv, opaque2, false}
 }
 
 // UpdateSeqnoData implement Evaluator{} interface.
@@ -244,7 +244,7 @@ func (ie *IndexEvaluator) UpdateSeqnoData(
 	keyspaceId := ie.GetKeyspaceId()
 	kv := c.NewKeyVersions(seqno, nil, 1, 0)
 	kv.AddUpdateSeqno()
-	return &c.DataportKeyVersions{keyspaceId, vbno, vbuuid, kv, opaque2}
+	return &c.DataportKeyVersions{keyspaceId, vbno, vbuuid, kv, opaque2, false}
 }
 
 // SeqnoAdvancedData implement Evaluator{} interface.
@@ -255,7 +255,7 @@ func (ie *IndexEvaluator) SeqnoAdvancedData(
 	keyspaceId := ie.GetKeyspaceId()
 	kv := c.NewKeyVersions(seqno, nil, 1, 0)
 	kv.AddSeqnoAdvanced()
-	return &c.DataportKeyVersions{keyspaceId, vbno, vbuuid, kv, opaque2}
+	return &c.DataportKeyVersions{keyspaceId, vbno, vbuuid, kv, opaque2, false}
 }
 
 // SeqnoAdvancedData implement Evaluator{} interface.
@@ -266,17 +266,18 @@ func (ie *IndexEvaluator) OSOSnapshotData(
 	keyspaceId := ie.GetKeyspaceId()
 	kv := c.NewKeyVersions(0 /*seqno*/, nil, 1, 0)
 	kv.AddOSOSnapshot(m.EventType)
-	return &c.DataportKeyVersions{keyspaceId, vbno, vbuuid, kv, opaque2}
+	return &c.DataportKeyVersions{keyspaceId, vbno, vbuuid, kv, opaque2, false}
 }
 
 // StreamEndData implement Evaluator{} interface.
 func (ie *IndexEvaluator) StreamEndData(
-	vbno uint16, vbuuid, seqno uint64, opaque2 uint64) (data interface{}) {
+	vbno uint16, vbuuid, seqno uint64, opaque2 uint64,
+	oso bool) (data interface{}) {
 
 	keyspaceId := ie.GetKeyspaceId()
 	kv := c.NewKeyVersions(seqno, nil, 1, 0 /*ctime*/)
 	kv.AddStreamEnd()
-	return &c.DataportKeyVersions{keyspaceId, vbno, vbuuid, kv, opaque2}
+	return &c.DataportKeyVersions{keyspaceId, vbno, vbuuid, kv, opaque2, oso}
 }
 
 func (ie *IndexEvaluator) processEvent(m *mc.DcpEvent, encodeBuf []byte,
@@ -346,7 +347,7 @@ func (ie *IndexEvaluator) processEvent(m *mc.DcpEvent, encodeBuf []byte,
 func (ie *IndexEvaluator) TransformRoute(
 	vbuuid uint64, m *mc.DcpEvent, data map[string]interface{}, encodeBuf []byte,
 	docval qvalue.AnnotatedValue, context qexpr.Context,
-	numIndexes int, opaque2 uint64) ([]byte, error) {
+	numIndexes int, opaque2 uint64, oso bool) ([]byte, error) {
 
 	var err error
 	var npkey /*new-partition*/, opkey /*old-partition*/, nkey, okey []byte
@@ -362,7 +363,7 @@ func (ie *IndexEvaluator) TransformRoute(
 	}
 
 	err1 := ie.populateData(vbuuid, m, data, numIndexes, npkey, opkey, nkey, okey,
-		where, opcode, opaque2, forceUpsertDeletion)
+		where, opcode, opaque2, forceUpsertDeletion, oso)
 
 	if err == nil && err1 != nil {
 		err = err1
@@ -381,7 +382,7 @@ func (ie *IndexEvaluator) TransformRoute(
 func (ie *IndexEvaluator) populateData(vbuuid uint64, m *mc.DcpEvent,
 	data map[string]interface{}, numIndexes int, npkey, opkey []byte,
 	nkey, okey []byte, where bool, opcode mcd.CommandCode, opaque2 uint64,
-	forceUpsertDeletion bool) (err error) {
+	forceUpsertDeletion bool, oso bool) (err error) {
 
 	defer func() { // panic safe
 		if r := recover(); r != nil {
@@ -406,7 +407,8 @@ func (ie *IndexEvaluator) populateData(vbuuid uint64, m *mc.DcpEvent,
 			if !ok {
 				kv := c.NewKeyVersions(seqno, m.Key, numIndexes, m.Ctime)
 				kv.AddUpsert(uuid, nkey, okey, npkey)
-				dkv = &c.DataportKeyVersions{keyspaceId, vbno, vbuuid, kv, opaque2}
+				dkv = &c.DataportKeyVersions{keyspaceId, vbno, vbuuid,
+					kv, opaque2, oso}
 			} else {
 				dkv.Kv.AddUpsert(uuid, nkey, okey, npkey)
 			}
@@ -421,7 +423,8 @@ func (ie *IndexEvaluator) populateData(vbuuid uint64, m *mc.DcpEvent,
 			if !ok {
 				kv := c.NewKeyVersions(seqno, m.Key, numIndexes, m.Ctime)
 				kv.AddUpsertDeletion(uuid, okey, npkey)
-				dkv = &c.DataportKeyVersions{keyspaceId, vbno, vbuuid, kv, opaque2}
+				dkv = &c.DataportKeyVersions{keyspaceId, vbno, vbuuid,
+					kv, opaque2, oso}
 			} else {
 				dkv.Kv.AddUpsertDeletion(uuid, okey, npkey)
 			}
@@ -436,7 +439,8 @@ func (ie *IndexEvaluator) populateData(vbuuid uint64, m *mc.DcpEvent,
 			if !ok {
 				kv := c.NewKeyVersions(seqno, m.Key, numIndexes, m.Ctime)
 				kv.AddDeletion(uuid, okey, npkey)
-				dkv = &c.DataportKeyVersions{keyspaceId, vbno, vbuuid, kv, opaque2}
+				dkv = &c.DataportKeyVersions{keyspaceId, vbno, vbuuid,
+					kv, opaque2, oso}
 			} else {
 				dkv.Kv.AddDeletion(uuid, okey, npkey)
 			}

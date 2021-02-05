@@ -12,14 +12,15 @@ import (
 
 // Vbucket is immutable structure defined for each vbucket.
 type Vbucket struct {
-	bucket     string // immutable
-	keyspaceId string // immutable
-	opaque     uint16 // immutable
-	vbno       uint16 // immutable
-	vbuuid     uint64 // immutable
-	seqno      uint64
-	logPrefix  string // immutable
-	opaque2    uint64 // immutable
+	bucket      string // immutable
+	keyspaceId  string // immutable
+	opaque      uint16 // immutable
+	vbno        uint16 // immutable
+	vbuuid      uint64 // immutable
+	seqno       uint64
+	logPrefix   string // immutable
+	opaque2     uint64 // immutable
+	osoSnapshot bool   // immutable
 	// stats
 	sshotCount    uint64
 	mutationCount uint64
@@ -28,17 +29,19 @@ type Vbucket struct {
 
 // NewVbucket creates a new routine to handle this vbucket stream.
 func NewVbucket(
-	cluster, topic, bucket, keyspaceId string, opaque, vbno uint16,
-	vbuuid, startSeqno uint64, config c.Config, opaque2 uint64) *Vbucket {
+	cluster, topic, bucket, keyspaceId string,
+	opaque, vbno uint16, vbuuid, startSeqno uint64,
+	config c.Config, opaque2 uint64, osoSnapshot bool) *Vbucket {
 
 	v := &Vbucket{
-		bucket:     bucket,
-		keyspaceId: keyspaceId,
-		opaque:     opaque,
-		vbno:       vbno,
-		vbuuid:     vbuuid,
-		seqno:      startSeqno,
-		opaque2:    opaque2,
+		bucket:      bucket,
+		keyspaceId:  keyspaceId,
+		opaque:      opaque,
+		vbno:        vbno,
+		vbuuid:      vbuuid,
+		seqno:       startSeqno,
+		opaque2:     opaque2,
+		osoSnapshot: osoSnapshot,
 	}
 	fmsg := "VBRT[<-%v<-%v<-%v #%v]"
 	v.logPrefix = fmt.Sprintf(fmsg, vbno, keyspaceId, cluster, topic)
@@ -70,7 +73,7 @@ func (v *Vbucket) makeStreamBeginData(
 	for _, enginesPerColl := range engines {
 		for _, engine := range enginesPerColl {
 			data := engine.StreamBeginData(v.vbno, v.vbuuid,
-				v.seqno, status, code, v.opaque2)
+				v.seqno, status, code, v.opaque2, v.osoSnapshot)
 			if data != nil {
 				return data
 			}
@@ -134,7 +137,8 @@ func (v *Vbucket) makeSnapshotData(
 	// using the first engine that is capable of it.
 	for _, enginesPerColl := range engines {
 		for _, engine := range enginesPerColl {
-			data := engine.SnapshotData(m, v.vbno, v.vbuuid, v.seqno, v.opaque2)
+			data := engine.SnapshotData(m, v.vbno, v.vbuuid,
+				v.seqno, v.opaque2, v.osoSnapshot)
 			if data != nil {
 				return data
 			}
@@ -301,7 +305,8 @@ func (v *Vbucket) makeStreamEndData(
 	// using the first engine that is capable of it.
 	for _, enginesPerColl := range engines {
 		for _, engine := range enginesPerColl {
-			data := engine.StreamEndData(v.vbno, v.vbuuid, v.seqno, v.opaque2)
+			data := engine.StreamEndData(v.vbno, v.vbuuid,
+				v.seqno, v.opaque2, v.osoSnapshot)
 			if data != nil {
 				return data
 			}
