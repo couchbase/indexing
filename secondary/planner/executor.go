@@ -188,7 +188,7 @@ func ExecuteRebalanceInternal(clusterUrl string,
 	config.MinIterPerTemp = minIterPerTemp
 	config.MaxIterPerTemp = maxIterPerTemp
 
-	p, _, err := execute(config, CommandRebalance, plan, nil, deleteNodes)
+	p, _, err := executeRebal(config, CommandRebalance, plan, nil, deleteNodes)
 	if p != nil && detail {
 		logging.Infof("************ Indexer Layout *************")
 		p.Print()
@@ -664,7 +664,7 @@ func ExecutePlanWithOptions(plan *Plan, indexSpecs []*IndexSpec, detail bool, ge
 	config.AllowUnpin = allowUnpin
 	config.UseLive = useLive
 
-	p, _, err := execute(config, CommandPlan, plan, indexSpecs, ([]string)(nil))
+	p, _, err := executePlan(config, CommandPlan, plan, indexSpecs, ([]string)(nil))
 	if p != nil && detail {
 		logging.Infof("************ Indexer Layout *************")
 		p.Print()
@@ -672,7 +672,7 @@ func ExecutePlanWithOptions(plan *Plan, indexSpecs []*IndexSpec, detail bool, ge
 	}
 
 	if p != nil {
-		return p.Result, err
+		return p.GetResult(), err
 	}
 
 	return nil, err
@@ -691,7 +691,7 @@ func ExecuteRebalanceWithOptions(plan *Plan, indexSpecs []*IndexSpec, detail boo
 	config.CpuQuota = cpuQuota
 	config.AllowUnpin = allowUnpin
 
-	p, _, err := execute(config, CommandRebalance, plan, indexSpecs, deletedNodes)
+	p, _, err := executeRebal(config, CommandRebalance, plan, indexSpecs, deletedNodes)
 
 	if detail {
 		logging.Infof("************ Indexer Layout *************")
@@ -719,7 +719,7 @@ func ExecuteSwapWithOptions(plan *Plan, detail bool, genStmt string,
 	config.CpuQuota = cpuQuota
 	config.AllowUnpin = allowUnpin
 
-	p, _, err := execute(config, CommandSwap, plan, nil, deletedNodes)
+	p, _, err := executeRebal(config, CommandSwap, plan, nil, deletedNodes)
 
 	if detail {
 		logging.Infof("************ Indexer Layout *************")
@@ -734,40 +734,37 @@ func ExecuteSwapWithOptions(plan *Plan, detail bool, genStmt string,
 	return nil, err
 }
 
-func execute(config *RunConfig, command CommandType, p *Plan, indexSpecs []*IndexSpec, deletedNodes []string) (*SAPlanner, *RunStats, error) {
+func executePlan(config *RunConfig, command CommandType, p *Plan, indexSpecs []*IndexSpec, deletedNodes []string) (Planner, *RunStats, error) {
 
 	var indexes []*IndexUsage
 	var err error
 
 	sizing := newGeneralSizingMethod()
 
-	if command == CommandPlan {
-		if indexSpecs != nil {
-			indexes, err = IndexUsagesFromSpec(sizing, indexSpecs)
-			if err != nil {
-				return nil, nil, err
-			}
-		} else {
-			return nil, nil, errors.New("missing argument: index spec must be present")
+	if indexSpecs != nil {
+		indexes, err = IndexUsagesFromSpec(sizing, indexSpecs)
+		if err != nil {
+			return nil, nil, err
 		}
-
-		return plan(config, p, indexes)
-
-	} else if command == CommandRebalance || command == CommandSwap {
-		if p == nil {
-			return nil, nil, errors.New("missing argument: either workload or plan must be present")
-		}
-
-		return rebalance(command, config, p, indexes, deletedNodes)
-
 	} else {
-		panic(fmt.Sprintf("unknown command: %v", command))
+		return nil, nil, errors.New("missing argument: index spec must be present")
 	}
 
-	return nil, nil, nil
+	return plan(config, p, indexes)
 }
 
-func plan(config *RunConfig, plan *Plan, indexes []*IndexUsage) (*SAPlanner, *RunStats, error) {
+func executeRebal(config *RunConfig, command CommandType, p *Plan, indexSpecs []*IndexSpec, deletedNodes []string) (*SAPlanner, *RunStats, error) {
+
+	var indexes []*IndexUsage
+
+	if p == nil {
+		return nil, nil, errors.New("missing argument: either workload or plan must be present")
+	}
+
+	return rebalance(command, config, p, indexes, deletedNodes)
+}
+
+func plan(config *RunConfig, plan *Plan, indexes []*IndexUsage) (Planner, *RunStats, error) {
 
 	var constraint ConstraintMethod
 	var sizing SizingMethod
@@ -783,10 +780,11 @@ func plan(config *RunConfig, plan *Plan, indexes []*IndexUsage) (*SAPlanner, *Ru
 	s := &RunStats{}
 	setIndexPlacementStats(s, indexes, false)
 
+	var movedIndex, movedData uint64
+
 	// create a solution
 	if plan != nil {
 		// create a solution from plan
-		var movedIndex, movedData uint64
 		solution, constraint, initialIndexes, movedIndex, movedData = solutionFromPlan(CommandPlan, config, sizing, plan)
 		setInitialLayoutStats(s, config, constraint, solution, initialIndexes, movedIndex, movedData, false)
 
@@ -811,19 +809,24 @@ func plan(config *RunConfig, plan *Plan, indexes []*IndexUsage) (*SAPlanner, *Ru
 
 	// Compute Index Sizing info and add them to solution
 	computeNewIndexSizingInfo(solution, indexes)
-	if err := placement.Add(solution, indexes); err != nil {
+
+	cost = newUsageBasedCostMethod(constraint, config.DataCostWeight, config.CpuCostWeight, config.MemCostWeight)
+
+	planner, err := NewPlannerForCommandPlan(config, indexes, movedIndex, movedData, solution, cost, constraint, placement, sizing)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	param := make(map[string]interface{})
+	param["MinIterPerTemp"] = config.MinIterPerTemp
+	param["MaxIterPerTemp"] = config.MaxIterPerTemp
+	if err := planner.SetParam(param); err != nil {
 		return nil, nil, err
 	}
 
 	// run planner
-	cost = newUsageBasedCostMethod(constraint, config.DataCostWeight, config.CpuCostWeight, config.MemCostWeight)
-	planner := newSAPlanner(cost, constraint, placement, sizing)
-
-	planner.SetMinIterPerTemp(config.MinIterPerTemp)
-	planner.SetMaxIterPerTemp(config.MaxIterPerTemp)
-
 	if _, err := planner.Plan(CommandPlan, solution); err != nil {
-		return planner, s, err
+		return nil, nil, err
 	}
 
 	// save result
@@ -831,13 +834,13 @@ func plan(config *RunConfig, plan *Plan, indexes []*IndexUsage) (*SAPlanner, *Ru
 	s.CpuQuota = constraint.GetCpuQuota()
 
 	if config.Output != "" {
-		if err := savePlan(config.Output, planner.Result, constraint); err != nil {
+		if err := savePlan(config.Output, planner.GetResult(), constraint); err != nil {
 			return nil, nil, err
 		}
 	}
 
 	if config.GenStmt != "" {
-		if err := genCreateIndexDDL(config.GenStmt, planner.Result); err != nil {
+		if err := genCreateIndexDDL(config.GenStmt, planner.GetResult()); err != nil {
 			return nil, nil, err
 		}
 	}
@@ -912,8 +915,14 @@ func rebalance(command CommandType, config *RunConfig, plan *Plan, indexes []*In
 	planner.SetTimeout(config.Timeout)
 	planner.SetRuntime(config.Runtime)
 	planner.SetVariationThreshold(config.Threshold)
-	planner.SetMinIterPerTemp(config.MinIterPerTemp)
-	planner.SetMaxIterPerTemp(config.MaxIterPerTemp)
+
+	param := make(map[string]interface{})
+	param["MinIterPerTemp"] = config.MinIterPerTemp
+	param["MaxIterPerTemp"] = config.MaxIterPerTemp
+	if err := planner.SetParam(param); err != nil {
+		return nil, nil, err
+	}
+
 	planner.SetCpuProfile(config.CpuProfile)
 	if config.Detail {
 		logging.Infof("************ Index Layout Before Rebalance *************")
