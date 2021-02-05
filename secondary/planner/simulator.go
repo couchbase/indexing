@@ -160,8 +160,13 @@ func (t *simulator) RunSimulation(count int, config *RunConfig, command CommandT
 	detail := config.Detail
 	scores := make([]float64, count)
 
+	// TODO: Fix this.
+	if command == CommandPlan {
+		return fmt.Errorf("RunSimulation does not support %v", CommandPlan)
+	}
+
 	for i := 0; i < count; i++ {
-		p, s, err := t.RunSingleTest(config, command, spec, plan, indexSpecs)
+		p, s, err := t.RunSingleTestRebal(config, command, spec, plan, indexSpecs)
 		if err != nil {
 			if _, ok := err.(*Violations); ok {
 				logging.Infof("Cluster Violations: number of retry %v", p.Try)
@@ -326,37 +331,43 @@ func (t *simulator) RunSimulation(count int, config *RunConfig, command CommandT
 	return nil
 }
 
-func (t *simulator) RunSingleTest(config *RunConfig, command CommandType, spec *WorkloadSpec, p *Plan, indexSpecs []*IndexSpec) (*SAPlanner, *RunStats, error) {
+func (t *simulator) RunSingleTestPlan(config *RunConfig, spec *WorkloadSpec, p *Plan, indexSpecs []*IndexSpec) (Planner, *RunStats, error) {
+	var indexes []*IndexUsage
+	var err error
+
+	sizing := newGeneralSizingMethod()
+
+	if spec != nil {
+		indexes, err = t.indexUsages(sizing, spec)
+		if err != nil {
+			return nil, nil, err
+		}
+
+	} else if indexSpecs != nil {
+		indexes, err = IndexUsagesFromSpec(sizing, indexSpecs)
+		if err != nil {
+			return nil, nil, err
+		}
+
+	} else {
+		return nil, nil, errors.New("missing argument:  workload or indexes must be present")
+	}
+
+	if p != nil {
+		t.setStorageType(p)
+	}
+
+	return plan(config, p, indexes)
+}
+
+func (t *simulator) RunSingleTestRebal(config *RunConfig, command CommandType, spec *WorkloadSpec, p *Plan, indexSpecs []*IndexSpec) (*SAPlanner, *RunStats, error) {
 
 	var indexes []*IndexUsage
 	var err error
 
 	sizing := newGeneralSizingMethod()
 
-	if command == CommandPlan {
-		if spec != nil {
-			indexes, err = t.indexUsages(sizing, spec)
-			if err != nil {
-				return nil, nil, err
-			}
-
-		} else if indexSpecs != nil {
-			indexes, err = IndexUsagesFromSpec(sizing, indexSpecs)
-			if err != nil {
-				return nil, nil, err
-			}
-
-		} else {
-			return nil, nil, errors.New("missing argument:  workload or indexes must be present")
-		}
-
-		if p != nil {
-			t.setStorageType(p)
-		}
-
-		return plan(config, p, indexes)
-
-	} else if command == CommandRebalance || command == CommandSwap {
+	if command == CommandRebalance || command == CommandSwap {
 		if spec != nil {
 			indexes, err = t.indexUsages(sizing, spec)
 			if err != nil {

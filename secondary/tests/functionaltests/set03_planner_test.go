@@ -189,20 +189,20 @@ func initialPlacementTest(t *testing.T) {
 		indexSpecs, err := planner.ReadIndexSpecs(testcase.indexSpec)
 		FailTestIfError(err, "Fail to read index spec", t)
 
-		p, _, err := s.RunSingleTest(config, planner.CommandPlan, spec, nil, indexSpecs)
+		p, _, err := s.RunSingleTestPlan(config, spec, nil, indexSpecs)
 		FailTestIfError(err, "Error in planner test", t)
 
 		p.PrintCost()
 
-		memMean, memDev := p.Result.ComputeMemUsage()
-		cpuMean, cpuDev := p.Result.ComputeCpuUsage()
+		memMean, memDev := p.GetResult().ComputeMemUsage()
+		cpuMean, cpuDev := p.GetResult().ComputeCpuUsage()
 
 		if memDev/memMean > testcase.memScore || math.Floor(cpuDev/cpuMean) > testcase.cpuScore {
-			p.Result.PrintLayout()
+			p.GetResult().PrintLayout()
 			t.Fatal("Score exceed acceptance threshold")
 		}
 
-		if err := planner.ValidateSolution(p.Result); err != nil {
+		if err := planner.ValidateSolution(p.GetResult()); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -233,20 +233,20 @@ func incrPlacementTest(t *testing.T) {
 		indexSpecs, err := planner.ReadIndexSpecs(testcase.indexSpec)
 		FailTestIfError(err, "Fail to read index spec", t)
 
-		p, _, err := s.RunSingleTest(config, planner.CommandPlan, nil, plan, indexSpecs)
+		p, _, err := s.RunSingleTestPlan(config, nil, plan, indexSpecs)
 		FailTestIfError(err, "Error in planner test", t)
 
 		p.PrintCost()
 
-		memMean, memDev := p.Result.ComputeMemUsage()
-		cpuMean, cpuDev := p.Result.ComputeCpuUsage()
+		memMean, memDev := p.GetResult().ComputeMemUsage()
+		cpuMean, cpuDev := p.GetResult().ComputeCpuUsage()
 
 		if memDev/memMean > testcase.memScore || math.Floor(cpuDev/cpuMean) > testcase.cpuScore {
-			p.Result.PrintLayout()
+			p.GetResult().PrintLayout()
 			t.Fatal("Score exceed acceptance threshold")
 		}
 
-		if err := planner.ValidateSolution(p.Result); err != nil {
+		if err := planner.ValidateSolution(p.GetResult()); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -276,20 +276,20 @@ func rebalanceTest(t *testing.T) {
 		plan, err := planner.ReadPlan(testcase.plan)
 		FailTestIfError(err, "Fail to read plan", t)
 
-		p, _, err := s.RunSingleTest(config, planner.CommandRebalance, nil, plan, nil)
+		p, _, err := s.RunSingleTestRebal(config, planner.CommandRebalance, nil, plan, nil)
 		FailTestIfError(err, "Error in planner test", t)
 
 		p.PrintCost()
 
-		memMean, memDev := p.Result.ComputeMemUsage()
-		cpuMean, cpuDev := p.Result.ComputeCpuUsage()
+		memMean, memDev := p.GetResult().ComputeMemUsage()
+		cpuMean, cpuDev := p.GetResult().ComputeCpuUsage()
 
 		if memDev/memMean > testcase.memScore || math.Floor(cpuDev/cpuMean) > testcase.cpuScore {
-			p.Result.PrintLayout()
+			p.GetResult().PrintLayout()
 			t.Fatal("Score exceed acceptance threshold")
 		}
 
-		if err := planner.ValidateSolution(p.Result); err != nil {
+		if err := planner.ValidateSolution(p.GetResult()); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -320,11 +320,11 @@ func minMemoryTest(t *testing.T) {
 		config.Resize = false
 
 		s := planner.NewSimulator()
-		p, _, err := s.RunSingleTest(config, planner.CommandRebalance, nil, plan, nil)
+		p, _, err := s.RunSingleTestRebal(config, planner.CommandRebalance, nil, plan, nil)
 		FailTestIfError(err, "Error in planner test", t)
 
 		// check if the indexers have equal number of indexes
-		if len(p.Result.Placement[0].Indexes) != len(p.Result.Placement[1].Indexes) {
+		if len(p.GetResult().Placement[0].Indexes) != len(p.GetResult().Placement[1].Indexes) {
 			t.Fatal("rebalance does not spread indexes equally")
 		}
 	}()
@@ -342,11 +342,11 @@ func minMemoryTest(t *testing.T) {
 		config.Resize = false
 
 		s := planner.NewSimulator()
-		p, _, err := s.RunSingleTest(config, planner.CommandRebalance, nil, plan, nil)
+		p, _, err := s.RunSingleTestRebal(config, planner.CommandRebalance, nil, plan, nil)
 		FailTestIfError(err, "Error in planner test", t)
 
 		// check if index violates memory constraint
-		for _, indexer := range p.Result.Placement {
+		for _, indexer := range p.GetResult().Placement {
 			minMemory := uint64(0)
 			for _, index := range indexer.Indexes {
 				minMemory += index.ActualMemMin
@@ -373,11 +373,11 @@ func minMemoryTest(t *testing.T) {
 		config.Resize = false
 
 		s := planner.NewSimulator()
-		p, _, err := s.RunSingleTest(config, planner.CommandRebalance, nil, plan, nil)
+		p, _, err := s.RunSingleTestRebal(config, planner.CommandRebalance, nil, plan, nil)
 		FailTestIfError(err, "Error in planner test", t)
 
 		// check if the indexers have equal number of indexes
-		if len(p.Result.Placement[0].Indexes) != len(p.Result.Placement[1].Indexes) {
+		if len(p.GetResult().Placement[0].Indexes) != len(p.GetResult().Placement[1].Indexes) {
 			t.Fatal("rebalance does not spread indexes equally")
 		}
 	}()
@@ -394,11 +394,11 @@ func minMemoryTest(t *testing.T) {
 		config.Resize = false
 
 		s := planner.NewSimulator()
-		p, _, err := s.RunSingleTest(config, planner.CommandRebalance, nil, plan, nil)
+		p, _, err := s.RunSingleTestRebal(config, planner.CommandRebalance, nil, plan, nil)
 		FailTestIfError(err, "Error in planner test", t)
 
 		// check the total number of indexes
-		for _, indexer := range p.Result.Placement {
+		for _, indexer := range p.GetResult().Placement {
 			if len(indexer.Indexes) != 1 {
 				t.Fatal("There is more than 1 index per node")
 			}
@@ -418,12 +418,12 @@ func minMemoryTest(t *testing.T) {
 		config.Resize = false
 
 		s := planner.NewSimulator()
-		p, _, err := s.RunSingleTest(config, planner.CommandRebalance, nil, plan, nil)
+		p, _, err := s.RunSingleTestRebal(config, planner.CommandRebalance, nil, plan, nil)
 		FailTestIfError(err, "Error in planner test", t)
 
 		// check the total number of indexes
 		total := 0
-		for _, indexer := range p.Result.Placement {
+		for _, indexer := range p.GetResult().Placement {
 			total += len(indexer.Indexes)
 		}
 		if total != 4 {
@@ -446,15 +446,15 @@ func minMemoryTest(t *testing.T) {
 		config.Resize = false
 
 		s := planner.NewSimulator()
-		p, _, err := s.RunSingleTest(config, planner.CommandRebalance, nil, plan, nil)
+		p, _, err := s.RunSingleTestRebal(config, planner.CommandRebalance, nil, plan, nil)
 		FailTestIfError(err, "Error in planner test", t)
 
-		if count1 != len(p.Result.Placement[0].Indexes) {
-			t.Fatal(fmt.Sprintf("Index count for indexer1 has changed %v != %v", count1, len(p.Result.Placement[0].Indexes)))
+		if count1 != len(p.GetResult().Placement[0].Indexes) {
+			t.Fatal(fmt.Sprintf("Index count for indexer1 has changed %v != %v", count1, len(p.GetResult().Placement[0].Indexes)))
 		}
 
-		if count2 != len(p.Result.Placement[1].Indexes) {
-			t.Fatal(fmt.Sprintf("Index count for indexer2 has changed %v != %v", count2, len(p.Result.Placement[1].Indexes)))
+		if count2 != len(p.GetResult().Placement[1].Indexes) {
+			t.Fatal(fmt.Sprintf("Index count for indexer2 has changed %v != %v", count2, len(p.GetResult().Placement[1].Indexes)))
 		}
 	}()
 
@@ -477,15 +477,15 @@ func minMemoryTest(t *testing.T) {
 		config.Resize = false
 
 		s := planner.NewSimulator()
-		p, _, err := s.RunSingleTest(config, planner.CommandRebalance, nil, plan, nil)
+		p, _, err := s.RunSingleTestRebal(config, planner.CommandRebalance, nil, plan, nil)
 		FailTestIfError(err, "Error in planner test", t)
 
-		if len(p.Result.Placement) != 1 {
+		if len(p.GetResult().Placement) != 1 {
 			t.Fatal("There is more than 1 node after rebalance-out")
 		}
 
 		count2 := 0
-		for _, indexer := range p.Result.Placement {
+		for _, indexer := range p.GetResult().Placement {
 			count2 += len(indexer.Indexes)
 		}
 
@@ -527,11 +527,11 @@ func minMemoryTest(t *testing.T) {
 		spec.Using = string(common.PlasmaDB)
 
 		s := planner.NewSimulator()
-		p, _, err := s.RunSingleTest(config, planner.CommandPlan, nil, plan, []*planner.IndexSpec{&spec})
+		p, _, err := s.RunSingleTestPlan(config, nil, plan, []*planner.IndexSpec{&spec})
 		FailTestIfError(err, "Error in planner test", t)
 
 		found := false
-		for _, indexer := range p.Result.Placement {
+		for _, indexer := range p.GetResult().Placement {
 			for _, index := range indexer.Indexes {
 				if index.DefnId == spec.DefnId {
 					found = true
@@ -559,7 +559,7 @@ func minMemoryTest(t *testing.T) {
 		config.Resize = false
 
 		s := planner.NewSimulator()
-		_, _, err = s.RunSingleTest(config, planner.CommandRebalance, nil, plan, nil)
+		_, _, err = s.RunSingleTestRebal(config, planner.CommandRebalance, nil, plan, nil)
 		FailTestIfError(err, "Error in planner test", t)
 	}()
 
@@ -596,11 +596,11 @@ func minMemoryTest(t *testing.T) {
 		spec.Using = string(common.PlasmaDB)
 
 		s := planner.NewSimulator()
-		p, _, err := s.RunSingleTest(config, planner.CommandPlan, nil, plan, []*planner.IndexSpec{&spec})
+		p, _, err := s.RunSingleTestPlan(config, nil, plan, []*planner.IndexSpec{&spec})
 		FailTestIfError(err, "Error in planner test", t)
 
 		success := true
-		for _, indexer := range p.Result.Placement {
+		for _, indexer := range p.GetResult().Placement {
 			if len(indexer.Indexes) != 1 {
 				success = false
 				p.Print()
@@ -641,7 +641,7 @@ func minMemoryTest(t *testing.T) {
 //
 func iterationTest(t *testing.T) {
 	for _, testcase := range iterationTestCases {
-		var p *planner.SAPlanner
+		var p planner.Planner
 
 		log.Printf("-------------------------------------------")
 		log.Printf("iterationTest :: %v", testcase.comment)
@@ -656,10 +656,10 @@ func iterationTest(t *testing.T) {
 			plan, err := planner.ReadPlan(testcase.indexers)
 			FailTestIfError(err, "Fail to read plan", t)
 
-			p, _, err = s.RunSingleTest(config, planner.CommandPlan, spec, plan, nil)
+			p, _, err = s.RunSingleTestPlan(config, spec, plan, nil)
 			FailTestIfError(err, "Error in planner test", t)
 
-			if err := planner.ValidateSolution(p.Result); err != nil {
+			if err := planner.ValidateSolution(p.GetResult()); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -671,9 +671,9 @@ func iterationTest(t *testing.T) {
 		switch testcase.action {
 
 		case "Remove 1":
-			p.Result.Placement[0].MarkDeleted()
+			p.GetResult().Placement[0].MarkDeleted()
 			newPlan = &planner.Plan{
-				Placement: p.Result.Placement,
+				Placement: p.GetResult().Placement,
 				MemQuota:  5302940000000,
 			}
 
@@ -695,7 +695,7 @@ func iterationTest(t *testing.T) {
 		config1.Threshold = testcase.threshold
 
 		s1 := planner.NewSimulator()
-		p1, _, err := s1.RunSingleTest(config1, planner.CommandRebalance, nil, newPlan, nil)
+		p1, _, err := s1.RunSingleTestRebal(config1, planner.CommandRebalance, nil, newPlan, nil)
 
 		// p1.Print()
 
@@ -713,7 +713,7 @@ func iterationTest(t *testing.T) {
 
 		if testcase.action == "Lost index" {
 			count := 0
-			for _, node := range p1.Result.Placement {
+			for _, node := range p1.GetResult().Placement {
 				count += len(node.Indexes)
 			}
 
