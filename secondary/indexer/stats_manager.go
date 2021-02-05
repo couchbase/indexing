@@ -1899,13 +1899,16 @@ func (s *IndexStats) populateMetrics(st []byte) []byte {
 	var str, collectionLabels string
 	fmtStr := "%v%v{bucket=\"%v\", %vindex=\"%v\"} %v\n"
 
-	if (s.scope == "" || s.scope == common.DEFAULT_SCOPE) &&
-		(s.collection == "" || s.collection == common.DEFAULT_COLLECTION) {
-
-		collectionLabels = ""
-	} else {
-		collectionLabels = fmt.Sprintf("scope=\"%v\", collection=\"%v\", ", s.scope, s.collection)
+	scope := s.scope
+	if scope == "" {
+		scope = common.DEFAULT_SCOPE
 	}
+
+	collection := s.collection
+	if collection == "" {
+		collection = common.DEFAULT_COLLECTION
+	}
+	collectionLabels = fmt.Sprintf("scope=\"%v\", collection=\"%v\", ", scope, collection)
 
 	rawDataSize := s.partnInt64Stats(func(ss *IndexStats) int64 { return ss.rawDataSize.Value() })
 	str = fmt.Sprintf(fmtStr, METRICS_PREFIX, "raw_data_size", s.bucket, collectionLabels, s.dispName, rawDataSize)
