@@ -21,6 +21,7 @@ import (
 	"runtime"
 	"strings"
 	"sync/atomic"
+	"time"
 	"unsafe"
 
 	"github.com/couchbase/indexing/secondary/logging"
@@ -1725,6 +1726,13 @@ var SystemConfig = Config{
 		uint64(10),
 		"number of the plasma stats file",
 		uint64(10),
+		false,
+		false,
+	},
+	"indexer.plasma.recovery.checkpointInterval": ConfigValue{
+		uint64(15 * time.Minute),
+		"max interval for recovery log checkpoint",
+		uint64(15 * time.Minute),
 		false,
 		false,
 	},

@@ -649,6 +649,7 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 
 	var err error
 	var restartTs *common.TsVbuuid
+	var rollbackToZero bool
 
 	indexInstMap := sm.indexInstMap.Get()
 	indexPartnMap := sm.indexPartnMap.Get()
@@ -681,6 +682,7 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 						sessionId:  sessionId}
 					return
 				}
+				rollbackToZero = true
 				break
 			}
 		}
@@ -714,6 +716,9 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 	keyspaceStats := sm.stats.GetKeyspaceStats(streamId, keyspaceId)
 	if keyspaceStats != nil {
 		keyspaceStats.numRollbacks.Add(1)
+		if rollbackToZero {
+			keyspaceStats.numRollbacksToZero.Add(1)
+		}
 	}
 
 	if restartTs != nil {
