@@ -427,4 +427,5 @@ type DataportKeyVersions struct {
 	Vbuuid     uint64
 	Kv         *KeyVersions
 	Opaque2    uint64
+	OSO        bool
 }

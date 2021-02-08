@@ -59,6 +59,7 @@ type VbucketWorker struct {
 	logPrefix   string
 	mutChanSize int
 	opaque2     uint64 //client opaque
+	osoSnapshot bool
 
 	encodeBuf []byte
 	stats     *WorkerStats
@@ -111,6 +112,7 @@ func NewVbucketWorker(
 	}
 	worker.stats.Init()
 	worker.stats.datach = worker.datach
+	worker.osoSnapshot = feed.osoSnapshot[keyspaceId]
 	fmsg := "WRKR[%v<-%v<-%v #%v]"
 	worker.logPrefix = fmt.Sprintf(fmsg, id, keyspaceId, feed.cluster, feed.topic)
 	worker.mutChanSize = mutChanSize
@@ -438,7 +440,7 @@ func (worker *VbucketWorker) handleEvent(m *mc.DcpEvent) *Vbucket {
 		keyspaceId := worker.keyspaceId
 		config, opaque, vbuuid := worker.config, m.Opaque, m.VBuuid
 		v = NewVbucket(cluster, topic, bucket, keyspaceId, opaque, vbno, vbuuid,
-			m.Seqno, config, worker.opaque2)
+			m.Seqno, config, worker.opaque2, worker.osoSnapshot)
 
 		if m.Status == mcd.SUCCESS {
 			worker.vbuckets[vbno] = v
@@ -499,7 +501,7 @@ func (worker *VbucketWorker) handleEvent(m *mc.DcpEvent) *Vbucket {
 				// therefore reduces the garbage generated.
 				newBuf, err := engine.TransformRoute(
 					v.vbuuid, m, dataForEndpoints, worker.encodeBuf, docval, context,
-					len(engines), worker.opaque2,
+					len(engines), worker.opaque2, worker.osoSnapshot,
 				)
 				if err != nil {
 					fmsg := "%v ##%x TransformRoute: %v for index %v docid %s\n"

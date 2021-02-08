@@ -18,19 +18,22 @@
 
 package dataport
 
-import "fmt"
-import "net"
-import "time"
-import "strconv"
-import "strings"
-import "sync/atomic"
+import (
+	"fmt"
+	"net"
+	"strconv"
+	"strings"
+	"sync/atomic"
+	"time"
 
-import c "github.com/couchbase/indexing/secondary/common"
-import "github.com/couchbase/indexing/secondary/transport"
-import "github.com/couchbase/indexing/secondary/logging"
-import "github.com/couchbase/indexing/secondary/security"
-import "github.com/couchbase/indexing/secondary/stats"
-import dcpTransport "github.com/couchbase/indexing/secondary/dcp/transport"
+	c "github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/security"
+	"github.com/couchbase/indexing/secondary/stats"
+	"github.com/couchbase/indexing/secondary/transport"
+
+	dcpTransport "github.com/couchbase/indexing/secondary/dcp/transport"
+)
 
 // RouterEndpoint structure, per topic, to gather key-versions / mutations
 // from one or more vbuckets and push them downstream to a
@@ -342,7 +345,7 @@ loop:
 				kv := data.Kv
 				buffers.addKeyVersions(
 					data.KeyspaceId, data.Vbno, data.Vbuuid,
-					data.Opaque2, kv, endpoint)
+					data.Opaque2, data.OSO, kv, endpoint)
 				logging.Tracef("%v added %v keyversions <%v:%v:%v> to %q\n",
 					endpoint.logPrefix, kv.Length(), data.Vbno, kv.Seqno,
 					kv.Commands, buffers.raddr)

@@ -401,7 +401,10 @@ func (feed *DcpFeed) handlePacket(
 		event = newDcpEvent(pkt, stream)
 		feed.handleStreamRequest(res, vb, stream, event)
 		feed.stats.TotalStreamReq.Add(1)
-		feed.seqOrders[vb] = transport.NewSeqOrderState()
+
+		if !feed.osoSnapshot {
+			feed.seqOrders[vb] = transport.NewSeqOrderState()
+		}
 
 	case transport.DCP_MUTATION, transport.DCP_DELETION,
 		transport.DCP_EXPIRATION:
@@ -410,11 +413,13 @@ func (feed *DcpFeed) handlePacket(
 		feed.stats.TotalMutation.Add(1)
 		sendAck = true
 
-		if s, ok := feed.seqOrders[vb]; ok && s != nil {
-			if !s.ProcessSeqno(event.Seqno) {
-				logging.Fatalf("%v seq order violation for vb = %v, seq = %v, opcode = %v, "+
-					"orderState = %v, event = %v", prefix, vb, event.Seqno, pkt.Opcode,
-					s.GetInfo(), event.GetDebugInfo())
+		if !feed.osoSnapshot {
+			if s, ok := feed.seqOrders[vb]; ok && s != nil {
+				if !s.ProcessSeqno(event.Seqno) {
+					logging.Fatalf("%v seq order violation for vb = %v, seq = %v, opcode = %v, "+
+						"orderState = %v, event = %v", prefix, vb, event.Seqno, pkt.Opcode,
+						s.GetInfo(), event.GetDebugInfo())
+				}
 			}
 		}
 
@@ -427,10 +432,12 @@ func (feed *DcpFeed) handlePacket(
 		logging.Debugf(fmsg, prefix, stream.AppOpaque, vb)
 		feed.stats.TotalStreamEnd.Add(1)
 
-		if s, ok := feed.seqOrders[vb]; ok && s != nil && s.GetErrCount() != 0 {
-			logging.Fatalf("%v error count for sequence number ordering is %v", prefix, s.GetErrCount())
+		if !feed.osoSnapshot {
+			if s, ok := feed.seqOrders[vb]; ok && s != nil && s.GetErrCount() != 0 {
+				logging.Fatalf("%v error count for sequence number ordering is %v", prefix, s.GetErrCount())
+			}
+			feed.seqOrders[vb] = nil
 		}
-		feed.seqOrders[vb] = nil
 
 	case transport.DCP_SNAPSHOT:
 		event = newDcpEvent(pkt, stream)
@@ -448,8 +455,10 @@ func (feed *DcpFeed) handlePacket(
 		fmsg := "%v ##%x DCP_SNAPSHOT for vb %d\n"
 		logging.Debugf(fmsg, prefix, stream.AppOpaque, vb)
 
-		if s, ok := feed.seqOrders[vb]; ok && s != nil {
-			s.ProcessSnapshot(event.SnapstartSeq, event.SnapendSeq)
+		if !feed.osoSnapshot {
+			if s, ok := feed.seqOrders[vb]; ok && s != nil {
+				s.ProcessSnapshot(event.SnapstartSeq, event.SnapendSeq)
+			}
 		}
 
 	case transport.DCP_FLUSH:
@@ -468,7 +477,9 @@ func (feed *DcpFeed) handlePacket(
 		fmsg := "%v ##%x DCP_CLOSESTREAM for vb %d\n"
 		logging.Debugf(fmsg, prefix, stream.AppOpaque, vb)
 		feed.stats.TotalCloseStream.Add(1)
-		feed.seqOrders[vb] = nil
+		if !feed.osoSnapshot {
+			feed.seqOrders[vb] = nil
+		}
 
 	case transport.DCP_CONTROL, transport.DCP_BUFFERACK:
 		if res.Status != transport.SUCCESS {
