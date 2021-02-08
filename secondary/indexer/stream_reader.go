@@ -871,6 +871,7 @@ func (w *streamWorker) handleSingleKeyVersion(keyspaceId string, vbucket Vbucket
 
 	//place secKey in the right worker's queue
 	if mutk != nil {
+		mutk.size = mutk.Size()
 		w.handleSingleMutation(mutk, w.reader.stopch)
 	}
 
