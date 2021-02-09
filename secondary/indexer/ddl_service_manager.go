@@ -125,7 +125,9 @@ func NewDDLServiceMgr(indexerId common.IndexerId, supvCmdch MsgChannel, supvMsgc
 	mux.HandleFunc("/listMetadataTokens", mgr.handleListMetadataTokens)
 	mux.HandleFunc("/listCreateTokens", mgr.handleListCreateTokens)
 	mux.HandleFunc("/listDeleteTokens", mgr.handleListDeleteTokens)
+	mux.HandleFunc("/listDeleteTokenPaths", mgr.handleListDeleteTokenPaths)
 	mux.HandleFunc("/listDropInstanceTokens", mgr.handleListDropInstanceTokens)
+	mux.HandleFunc("/listDropInstanceTokenPaths", mgr.handleListDropInstanceTokenPaths)
 	mux.HandleFunc("/listScheduleCreateTokens", mgr.handleListScheduleCreateTokens)
 	mux.HandleFunc("/listStopScheduleCreateTokens", mgr.handleListStopScheduleCreateTokens)
 	mux.HandleFunc("/transferScheduleCreateTokens", mgr.handleTransferScheduleCreateTokens)
@@ -1312,6 +1314,8 @@ func (m *DDLServiceMgr) handleListCreateTokens(w http.ResponseWriter, r *http.Re
 	}
 }
 
+// handleListDeleteTokens responds to /listDeleteTokens REST endpoint
+// with a list of all delete tokens in metakv on this indexer host.
 func (m *DDLServiceMgr) handleListDeleteTokens(w http.ResponseWriter, r *http.Request) {
 
 	if !m.validateAuth(w, r) {
@@ -1351,6 +1355,60 @@ func (m *DDLServiceMgr) handleListDeleteTokens(w http.ResponseWriter, r *http.Re
 	}
 }
 
+// handleListGenericTokenPaths is a helper for all handlers that need only a
+// list of token paths rather than the tokens themselves. callerName is used
+// for logging. listerFunc is the function in token.go to get the path list
+// from metakv for the specific token type desired.
+func (m *DDLServiceMgr) handleListGenericTokenPaths(w http.ResponseWriter,
+	r *http.Request, callerName string, listerFunc func()([]string, error)) {
+
+	if !m.validateAuth(w, r) {
+		logging.Errorf("DDLServiceMgr::handleListGenericTokenPaths Validation Failure caller: %v, req: %v", callerName, common.GetHTTPReqInfo(r))
+		return
+	}
+
+	if r.Method == "GET" {
+
+		logging.Infof("DDLServiceMgr::handleListGenericTokenPaths Processing Request caller: %v, req: %v", callerName, common.GetHTTPReqInfo(r))
+
+		tokenPaths, err := listerFunc()
+		if err != nil {
+			logging.Errorf("DDLServiceMgr::handleListGenericTokenPaths caller %v, error %v", callerName, err)
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(err.Error() + "\n"))
+			return
+		}
+
+		list := &mc.TokenPathList{}
+		list.Paths = make([]string, 0, len(tokenPaths))
+
+		for _, path := range tokenPaths {
+			list.Paths = append(list.Paths, path)
+		}
+
+		buf, err := mc.MarshallTokenPathList(list)
+		if err != nil {
+			logging.Errorf("DDLServiceMgr::handleListGenericTokenPaths caller %v, error %v", callerName, err)
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(err.Error() + "\n"))
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+		w.Write(buf)
+	}
+}
+
+// handleListDeleteTokenPaths responds to /listDeleteTokenPaths REST endpoint with
+// a list of the paths (keys) of all delete tokens in metakv on this indexer host.
+func (m *DDLServiceMgr) handleListDeleteTokenPaths(w http.ResponseWriter, r *http.Request) {
+
+	m.handleListGenericTokenPaths(w, r,
+		"handleListDeleteTokenPaths", mc.ListDeleteCommandTokenPaths)
+}
+
+// handleListDropInstanceTokens responds to /listDropInstanceTokens REST endpoint
+// with a list of all drop instance tokens in metakv on this indexer host.
 func (m *DDLServiceMgr) handleListDropInstanceTokens(w http.ResponseWriter, r *http.Request) {
 
 	if !m.validateAuth(w, r) {
@@ -1388,6 +1446,13 @@ func (m *DDLServiceMgr) handleListDropInstanceTokens(w http.ResponseWriter, r *h
 		w.WriteHeader(http.StatusOK)
 		w.Write(buf)
 	}
+}
+
+// handleListDropInstanceTokenPaths responds to /listDropInstanceTokenPaths REST endpoint
+// with a list of the paths (keys) of all drop instance tokens in metakv on this indexer host.
+func (m *DDLServiceMgr) handleListDropInstanceTokenPaths(w http.ResponseWriter, r *http.Request) {
+	m.handleListGenericTokenPaths(w, r,
+		"handleListDropInstanceTokenPaths", mc.ListDropInstanceCommandTokenPaths)
 }
 
 func (m *DDLServiceMgr) handleListScheduleCreateTokens(w http.ResponseWriter, r *http.Request) {

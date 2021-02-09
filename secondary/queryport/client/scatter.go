@@ -114,8 +114,8 @@ type RequestBroker struct {
 	scans          Scans
 	grpAggr        *GroupAggr
 	projections    *IndexProjection
-	indexOrder     *IndexKeyOrder
-	projDesc       []bool  // projection descending sort keys
+	indexOrder     *IndexKeyOrder // ordering of index key parts
+	projDesc       []bool  // which returned fields (in projection order) are indexed descending
 	distinct       bool
 
 	// Additional key positions (not in projection list) added due to
@@ -2041,11 +2041,8 @@ func (c *RequestBroker) analyzeProjection(partitions [][]common.PartitionId, num
 				c.projDesc[i] = index.Desc[position]
 			}
 		}
-	} else if c.projections == nil && c.indexOrder != nil {
-		c.projDesc = make([]bool, len(index.SecExprs))
-		for _, position := range c.indexOrder.KeyPos {
-			c.projDesc[position] = index.Desc[position]
-		}
+	} else {
+		c.projDesc = index.Desc
 	}
 }
 
