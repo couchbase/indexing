@@ -74,6 +74,8 @@ type ddlSettings struct {
 
 	storageMode string
 	mutex       sync.RWMutex
+
+	allowPartialQuorum uint32
 }
 
 //////////////////////////////////////////////////////////////
@@ -1360,7 +1362,7 @@ func (m *DDLServiceMgr) handleListDeleteTokens(w http.ResponseWriter, r *http.Re
 // for logging. listerFunc is the function in token.go to get the path list
 // from metakv for the specific token type desired.
 func (m *DDLServiceMgr) handleListGenericTokenPaths(w http.ResponseWriter,
-	r *http.Request, callerName string, listerFunc func()([]string, error)) {
+	r *http.Request, callerName string, listerFunc func() ([]string, error)) {
 
 	if !m.validateAuth(w, r) {
 		logging.Errorf("DDLServiceMgr::handleListGenericTokenPaths Validation Failure caller: %v, req: %v", callerName, common.GetHTTPReqInfo(r))
@@ -1812,10 +1814,8 @@ func (s *ddlSettings) UsePlanner() bool {
 	return true
 }
 
-// DDLServiceMgr does not trigger recoverableCreateIndex for index creation.
-// So, this setting will not be used by DDLServiceMgr.
 func (s *ddlSettings) AllowPartialQuorum() bool {
-	return false
+	return atomic.LoadUint32(&s.allowPartialQuorum) == 1
 }
 
 func (s *ddlSettings) AllowScheduleCreate() bool {
@@ -1849,6 +1849,11 @@ func (s *ddlSettings) handleSettings(config common.Config) {
 			defer s.mutex.Unlock()
 			s.storageMode = storageMode
 		}()
+	}
+
+	allowPartialQuorum := config["allowPartialQuorum"].Bool()
+	if allowPartialQuorum {
+		atomic.StoreUint32(&s.allowPartialQuorum, 1)
 	}
 }
 

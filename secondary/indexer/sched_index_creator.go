@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 	"unsafe"
@@ -156,7 +157,17 @@ func NewSchedIndexCreator(indexerId common.IndexerId, supvCmdch MsgChannel,
 
 	addr := config["clusterAddr"].String()
 	numReplica := int32(config["settings.num_replica"].Int())
-	settings := &ddlSettings{numReplica: numReplica}
+	numPartition := int32(config["numPartitions"].Int())
+
+	settings := &ddlSettings{
+		numReplica:   numReplica,
+		numPartition: numPartition,
+	}
+
+	allowPartialQuorum := config["allowPartialQuorum"].Bool()
+	if allowPartialQuorum {
+		atomic.StoreUint32(&settings.allowPartialQuorum, 1)
+	}
 
 	iq := make(schedIndexQueue, 0)
 	heap.Init(&iq)
