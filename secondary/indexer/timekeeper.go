@@ -2815,10 +2815,12 @@ func (tk *timekeeper) sendNewStabilityTS(tsElem *TsListElem, keyspaceId string,
 	}
 
 	hasAllSB := false
+	needsReset := tk.ss.streamKeyspaceIdNeedsLastRollbackReset[streamId][keyspaceId]
 	vbmap := tk.ss.streamKeyspaceIdVBMap[streamId][keyspaceId]
 	//if all stream begins have been seen atleast once after stream start
-	if len(vbmap) == len(flushTs.Vbuuids) {
+	if needsReset && len(vbmap) == len(flushTs.Vbuuids) {
 		hasAllSB = true
+		tk.ss.streamKeyspaceIdNeedsLastRollbackReset[streamId][keyspaceId] = false
 	}
 
 	go func() {
