@@ -192,6 +192,7 @@ func (q *atomicMutationQueue) dequeueUptoSeqno(vbucket Vbucket, seqno uint64,
 	var totalWait int
 
 	for {
+		memReleased := int64(0)
 		totalWait += int(q.dequeuePollInterval)
 		if totalWait > 30000 {
 			if totalWait%5000 == 0 {
@@ -212,7 +213,7 @@ func (q *atomicMutationQueue) dequeueUptoSeqno(vbucket Vbucket, seqno uint64,
 				//move head to next
 				atomic.StorePointer(&q.head[vbucket], unsafe.Pointer(head.next))
 				atomic.AddInt64(&q.size[vbucket], -1)
-				atomic.AddInt64(q.memUsed, -m.Size())
+				memReleased += m.Size()
 				//send mutation to caller
 				dequeueSeq = m.meta.seqno
 				datach <- m
@@ -220,16 +221,19 @@ func (q *atomicMutationQueue) dequeueUptoSeqno(vbucket Vbucket, seqno uint64,
 				logging.Warnf("Indexer::MutationQueue Dequeue Aborted For "+
 					"Seqno %v KeyspaceId %v Vbucket %v. Last Dequeue %v Head Seqno %v.", seqno,
 					q.keyspaceId, vbucket, dequeueSeq, m.meta.seqno)
+				atomic.AddInt64(q.memUsed, -memReleased)
 				close(errch)
 				return
 			}
 
 			//once the seqno is reached, close the channel
 			if seqno <= dequeueSeq {
+				atomic.AddInt64(q.memUsed, -memReleased)
 				close(datach)
 				return
 			}
 		}
+		atomic.AddInt64(q.memUsed, -memReleased)
 		time.Sleep(time.Millisecond * time.Duration(q.dequeuePollInterval))
 	}
 }
@@ -324,6 +328,7 @@ func (q *atomicMutationQueue) dequeueN(vbucket Vbucket, count uint64,
 	var currCount uint64
 
 	for {
+		memReleased := int64(0)
 		totalWait += int(q.dequeuePollInterval)
 		if totalWait > 30000 {
 			if totalWait%5000 == 0 {
@@ -344,7 +349,7 @@ func (q *atomicMutationQueue) dequeueN(vbucket Vbucket, count uint64,
 				//move head to next
 				atomic.StorePointer(&q.head[vbucket], unsafe.Pointer(head.next))
 				atomic.AddInt64(&q.size[vbucket], -1)
-				atomic.AddInt64(q.memUsed, -m.Size())
+				memReleased += m.Size()
 				//send mutation to caller
 				dequeueSeq = m.meta.seqno
 				currCount++
@@ -353,10 +358,12 @@ func (q *atomicMutationQueue) dequeueN(vbucket Vbucket, count uint64,
 
 			//once count is reached, close the channel
 			if currCount >= count {
+				atomic.AddInt64(q.memUsed, -memReleased)
 				close(datach)
 				return
 			}
 		}
+		atomic.AddInt64(q.memUsed, -memReleased)
 		time.Sleep(time.Millisecond * time.Duration(q.dequeuePollInterval))
 	}
 }
